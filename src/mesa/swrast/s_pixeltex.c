@@ -1,10 +1,10 @@
-/* $Id: s_pixeltex.c,v 1.3 2001/03/12 00:48:42 gareth Exp $ */
+/* $Id: s_pixeltex.c,v 1.6 2002/01/28 04:25:56 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -35,47 +35,92 @@
 
 #include "glheader.h"
 #include "colormac.h"
+#include "mem.h"
 
 #include "s_context.h"
 #include "s_pixeltex.h"
+#include "s_texture.h"
 
 
 /*
  * Convert RGBA values into strq texture coordinates.
  */
-void
-_mesa_pixeltexgen(GLcontext *ctx, GLuint n, const GLchan rgba[][4],
-                  GLfloat s[], GLfloat t[], GLfloat r[], GLfloat q[])
+static void
+pixeltexgen(GLcontext *ctx, GLuint n, const GLchan rgba[][4],
+            GLfloat texcoord[][4])
 {
    if (ctx->Pixel.FragmentRgbSource == GL_CURRENT_RASTER_COLOR) {
       GLuint i;
       for (i = 0; i < n; i++) {
-         s[i] = ctx->Current.RasterColor[RCOMP];
-         t[i] = ctx->Current.RasterColor[GCOMP];
-         r[i] = ctx->Current.RasterColor[BCOMP];
+         texcoord[i][0] = ctx->Current.RasterColor[RCOMP];
+         texcoord[i][1] = ctx->Current.RasterColor[GCOMP];
+         texcoord[i][2] = ctx->Current.RasterColor[BCOMP];
       }
    }
    else {
       GLuint i;
       ASSERT(ctx->Pixel.FragmentRgbSource == GL_PIXEL_GROUP_COLOR_SGIS);
       for (i = 0; i < n; i++) {
-         s[i] = CHAN_TO_FLOAT(rgba[i][RCOMP]);
-         t[i] = CHAN_TO_FLOAT(rgba[i][GCOMP]);
-         r[i] = CHAN_TO_FLOAT(rgba[i][BCOMP]);
+         texcoord[i][0] = CHAN_TO_FLOAT(rgba[i][RCOMP]);
+         texcoord[i][1] = CHAN_TO_FLOAT(rgba[i][GCOMP]);
+         texcoord[i][2] = CHAN_TO_FLOAT(rgba[i][BCOMP]);
       }
    }
 
    if (ctx->Pixel.FragmentAlphaSource == GL_CURRENT_RASTER_COLOR) {
       GLuint i;
       for (i = 0; i < n; i++) {
-         q[i] = ctx->Current.RasterColor[ACOMP];
+         texcoord[i][3] = ctx->Current.RasterColor[ACOMP];
       }
    }
    else {
       GLuint i;
       ASSERT(ctx->Pixel.FragmentAlphaSource == GL_PIXEL_GROUP_COLOR_SGIS);
       for (i = 0; i < n; i++) {
-         q[i] = CHAN_TO_FLOAT(rgba[i][ACOMP]);
+         texcoord[i][3] = CHAN_TO_FLOAT(rgba[i][ACOMP]);
       }
+   }
+}
+
+
+
+/*
+ * Used byglDraw/CopyPixels: the incoming image colors are treated
+ * as texture coordinates.  Use those coords to texture the image.
+ * This is for GL_SGIS_pixel_texture / GL_SGIX_pixel_texture.
+ */
+void
+_swrast_pixel_texture(GLcontext *ctx, struct sw_span *span)
+{
+   if (ctx->Texture._ReallyEnabled & ~TEXTURE0_ANY) {
+      /* multitexture! */
+      GLchan primary_rgba[MAX_WIDTH][4];
+      GLuint unit;
+
+      MEMCPY(primary_rgba, span->color.rgba, 4 * span->end * sizeof(GLchan));
+      
+      for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {
+         if (ctx->Texture.Unit[unit]._ReallyEnabled) {
+            pixeltexgen(ctx, span->end,
+                        (const GLchan (*)[4]) span->color.rgba,
+                        span->texcoords[unit]);
+            _swrast_texture_fragments(ctx, unit, span->end,
+                                          span->texcoords[unit],
+                                          span->lambda[unit],
+                                          (CONST GLchan (*)[4]) primary_rgba,
+                                          span->color.rgba);
+         }
+      }
+   }
+   else {
+      /* single texture, unit 0 */
+      ASSERT(ctx->Texture._ReallyEnabled & TEXTURE0_ANY);
+      pixeltexgen(ctx, span->end,
+                  (const GLchan (*)[4]) span->color.rgba,
+                  span->texcoords[0]);
+      _swrast_texture_fragments(ctx, 0, span->end,
+                                    span->texcoords[0], span->lambda[0],
+                                    (CONST GLchan (*)[4]) span->color.rgba,
+                                    (GLchan (*)[4]) span->color.rgba);
    }
 }

@@ -1,4 +1,4 @@
-# $Id: Makefile.X11,v 1.62 2001/12/20 15:30:45 keithw Exp $
+# $Id: Makefile.X11,v 1.64 2002/01/15 18:30:58 kschultz Exp $
 
 # Mesa 3-D graphics library
 # Version:  4.1
@@ -25,7 +25,6 @@ CORE_SOURCES = \
 	vpparse.c \
 	vpstate.c \
 	api_arrayelt.c \
-	api_compat.c \
 	api_loopback.c \
 	api_noop.c \
 	api_validate.c \
@@ -279,7 +278,7 @@ VPFILES = \
 	src/tnl/t_vb_program.c \
 	tests/vptest1.c \
 	tests/vptest2.c
-	
+
 vptar:
 	cd .. ; tar cvf vpfiles.tar $(VPFILES) ; gzip vpfiles.tar
 

@@ -1,10 +1,10 @@
-/* $Id: s_alpha.h,v 1.3 2001/03/12 00:48:41 gareth Exp $ */
+/* $Id: s_alpha.h,v 1.5 2002/01/31 00:27:43 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -34,9 +34,14 @@
 
 
 extern GLint
-_mesa_alpha_test( const GLcontext *ctx, GLuint n,
-                  CONST GLchan rgba[][4], GLubyte mask[] );
+_old_alpha_test( const GLcontext *ctx, GLuint n,
+		 CONST GLchan rgba[][4], GLubyte mask[] );
 
-
+extern GLint
+_mesa_alpha_test( const GLcontext *ctx, struct sw_span *span );
 
 #endif
+
+
+
+

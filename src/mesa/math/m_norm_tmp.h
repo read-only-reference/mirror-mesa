@@ -1,10 +1,10 @@
-/* $Id: m_norm_tmp.h,v 1.8 2001/06/28 17:34:14 keithw Exp $ */
+/* $Id: m_norm_tmp.h,v 1.10 2002/01/05 20:51:12 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -28,25 +28,38 @@
  * New (3.1) transformation code written by Keith Whitwell.
  */
 
+/* Functions to tranform a vector of normals.  This includes applying
+ * the transformation matrix, rescaling and normalization.
+ */
+
 #include <math.h>
 #include "m_vertices.h"
 
+
+/*
+ * mat - the 4x4 transformation matrix
+ * scale - uniform scale factor of the transformation matrix (not always used)
+ * in - the source vector of normals
+ * lengths - length of each incoming normal (may be NULL) (a display list
+ *           optimization)
+ * dest - the destination vector of normals
+ */
 static void _XFORMAPI
 TAG(transform_normalize_normals)( const GLmatrix *mat,
                                   GLfloat scale,
-                                  const GLvector3f *in,
+                                  const GLvector4f *in,
                                   const GLfloat *lengths,
-                                  GLvector3f *dest )
+                                  GLvector4f *dest )
 {
-   GLuint i;
+   GLfloat (*out)[4] = (GLfloat (*)[4])dest->start;
    const GLfloat *from = in->start;
-   GLuint stride = in->stride;
-   GLuint count = in->count;
-   GLfloat (*out)[3] = (GLfloat (*)[3])dest->start;
-   GLfloat *m = mat->inv;
+   const GLuint stride = in->stride;
+   const GLuint count = in->count;
+   const GLfloat *m = mat->inv;
    GLfloat m0 = m[0],  m4 = m[4],  m8 = m[8];
    GLfloat m1 = m[1],  m5 = m[5],  m9 = m[9];
    GLfloat m2 = m[2],  m6 = m[6],  m10 = m[10];
+   GLuint i;
 
    if (!lengths) {
       STRIDE_LOOP {
@@ -65,8 +78,7 @@ TAG(transform_normalize_normals)( const GLmatrix *mat,
 	       out[i][1] = (GLfloat) (ty * scale);
 	       out[i][2] = (GLfloat) (tz * scale);
 	    }
-	    else
-	    {
+	    else {
 	       out[i][0] = out[i][1] = out[i][2] = 0;
 	    }
 	 }
@@ -102,19 +114,20 @@ TAG(transform_normalize_normals)( const GLmatrix *mat,
 static void _XFORMAPI
 TAG(transform_normalize_normals_no_rot)( const GLmatrix *mat,
                                          GLfloat scale,
-                                         const GLvector3f *in,
+                                         const GLvector4f *in,
                                          const GLfloat *lengths,
-                                         GLvector3f *dest )
+                                         GLvector4f *dest )
 {
-   GLuint i;
+   GLfloat (*out)[4] = (GLfloat (*)[4])dest->start;
    const GLfloat *from = in->start;
-   GLuint stride = in->stride;
-   GLuint count = in->count;
-   GLfloat (*out)[3] = (GLfloat (*)[3])dest->start;
-   GLfloat *m = mat->inv;
+   const GLuint stride = in->stride;
+   const GLuint count = in->count;
+   const GLfloat *m = mat->inv;
    GLfloat m0 = m[0];
    GLfloat m5 = m[5];
    GLfloat m10 = m[10];
+   GLuint i;
+
    if (!lengths) {
       STRIDE_LOOP {
 	 GLfloat tx, ty, tz;
@@ -132,8 +145,7 @@ TAG(transform_normalize_normals_no_rot)( const GLmatrix *mat,
 	       out[i][1] = (GLfloat) (ty * scale);
 	       out[i][2] = (GLfloat) (tz * scale);
 	    }
-	    else
-	    {
+	    else {
 	       out[i][0] = out[i][1] = out[i][2] = 0;
 	    }
 	 }
@@ -167,20 +179,22 @@ TAG(transform_normalize_normals_no_rot)( const GLmatrix *mat,
 static void _XFORMAPI
 TAG(transform_rescale_normals_no_rot)( const GLmatrix *mat,
                                        GLfloat scale,
-                                       const GLvector3f *in,
+                                       const GLvector4f *in,
                                        const GLfloat *lengths,
-                                       GLvector3f *dest )
+                                       GLvector4f *dest )
 {
-   GLuint i;
+   GLfloat (*out)[4] = (GLfloat (*)[4])dest->start;
    const GLfloat *from = in->start;
-   GLuint stride = in->stride;
-   GLuint count = in->count;
-   GLfloat (*out)[3] = (GLfloat (*)[3])dest->start;
+   const GLuint stride = in->stride;
+   const GLuint count = in->count;
    const GLfloat *m = mat->inv;
-   GLfloat m0 = scale*m[0];
-   GLfloat m5 = scale*m[5];
-   GLfloat m10 = scale*m[10];
+   const GLfloat m0 = scale*m[0];
+   const GLfloat m5 = scale*m[5];
+   const GLfloat m10 = scale*m[10];
+   GLuint i;
+
    (void) lengths;
+
    STRIDE_LOOP {
       GLfloat ux = from[0],  uy = from[1],  uz = from[2];
       out[i][0] = ux * m0;
@@ -190,26 +204,29 @@ TAG(transform_rescale_normals_no_rot)( const GLmatrix *mat,
    dest->count = in->count;
 }
 
+
 static void _XFORMAPI
 TAG(transform_rescale_normals)( const GLmatrix *mat,
                                 GLfloat scale,
-                                const GLvector3f *in,
+                                const GLvector4f *in,
                                 const GLfloat *lengths,
-                                GLvector3f *dest )
+                                GLvector4f *dest )
 {
-   GLuint i;
+   GLfloat (*out)[4] = (GLfloat (*)[4])dest->start;
    const GLfloat *from = in->start;
-   GLuint stride = in->stride;
-   GLuint count = in->count;
-   GLfloat (*out)[3] = (GLfloat (*)[3])dest->start;
+   const GLuint stride = in->stride;
+   const GLuint count = in->count;
    /* Since we are unlikely to have < 3 vertices in the buffer,
     * it makes sense to pre-multiply by scale.
     */
    const GLfloat *m = mat->inv;
-   GLfloat m0 = scale*m[0],  m4 = scale*m[4],  m8 = scale*m[8];
-   GLfloat m1 = scale*m[1],  m5 = scale*m[5],  m9 = scale*m[9];
-   GLfloat m2 = scale*m[2],  m6 = scale*m[6],  m10 = scale*m[10];
+   const GLfloat m0 = scale*m[0],  m4 = scale*m[4],  m8 = scale*m[8];
+   const GLfloat m1 = scale*m[1],  m5 = scale*m[5],  m9 = scale*m[9];
+   const GLfloat m2 = scale*m[2],  m6 = scale*m[6],  m10 = scale*m[10];
+   GLuint i;
+
    (void) lengths;
+
    STRIDE_LOOP {
       GLfloat ux = from[0],  uy = from[1],  uz = from[2];
       out[i][0] = ux * m0 + uy * m1 + uz * m2;
@@ -223,21 +240,23 @@ TAG(transform_rescale_normals)( const GLmatrix *mat,
 static void _XFORMAPI
 TAG(transform_normals_no_rot)( const GLmatrix *mat,
 			       GLfloat scale,
-			       const GLvector3f *in,
+			       const GLvector4f *in,
 			       const GLfloat *lengths,
-			       GLvector3f *dest )
+			       GLvector4f *dest )
 {
-   GLuint i;
+   GLfloat (*out)[4] = (GLfloat (*)[4])dest->start;
    const GLfloat *from = in->start;
-   GLuint stride = in->stride;
-   GLuint count = in->count;
-   GLfloat (*out)[3] = (GLfloat (*)[3])dest->start;
+   const GLuint stride = in->stride;
+   const GLuint count = in->count;
    const GLfloat *m = mat->inv;
-   GLfloat m0 = m[0];
-   GLfloat m5 = m[5];
-   GLfloat m10 = m[10];
+   const GLfloat m0 = m[0];
+   const GLfloat m5 = m[5];
+   const GLfloat m10 = m[10];
+   GLuint i;
+
    (void) scale;
    (void) lengths;
+
    STRIDE_LOOP {
       GLfloat ux = from[0],  uy = from[1],  uz = from[2];
       out[i][0] = ux * m0;
@@ -251,21 +270,23 @@ TAG(transform_normals_no_rot)( const GLmatrix *mat,
 static void _XFORMAPI
 TAG(transform_normals)( const GLmatrix *mat,
                         GLfloat scale,
-                        const GLvector3f *in,
+                        const GLvector4f *in,
                         const GLfloat *lengths,
-                        GLvector3f *dest )
+                        GLvector4f *dest )
 {
-   GLuint i;
+   GLfloat (*out)[4] = (GLfloat (*)[4])dest->start;
    const GLfloat *from = in->start;
-   GLuint stride = in->stride;
-   GLuint count = in->count;
-   GLfloat (*out)[3] = (GLfloat (*)[3])dest->start;
+   const GLuint stride = in->stride;
+   const GLuint count = in->count;
    const GLfloat *m = mat->inv;
-   GLfloat m0 = m[0],  m4 = m[4],  m8 = m[8];
-   GLfloat m1 = m[1],  m5 = m[5],  m9 = m[9];
-   GLfloat m2 = m[2],  m6 = m[6],  m10 = m[10];
+   const GLfloat m0 = m[0],  m4 = m[4],  m8 = m[8];
+   const GLfloat m1 = m[1],  m5 = m[5],  m9 = m[9];
+   const GLfloat m2 = m[2],  m6 = m[6],  m10 = m[10];
+   GLuint i;
+
    (void) scale;
    (void) lengths;
+
    STRIDE_LOOP {
       GLfloat ux = from[0],  uy = from[1],  uz = from[2];
       out[i][0] = ux * m0 + uy * m1 + uz * m2;
@@ -279,17 +300,19 @@ TAG(transform_normals)( const GLmatrix *mat,
 static void _XFORMAPI
 TAG(normalize_normals)( const GLmatrix *mat,
                         GLfloat scale,
-                        const GLvector3f *in,
+                        const GLvector4f *in,
                         const GLfloat *lengths,
-                        GLvector3f *dest )
+                        GLvector4f *dest )
 {
-   GLuint i;
+   GLfloat (*out)[4] = (GLfloat (*)[4])dest->start;
    const GLfloat *from = in->start;
-   GLuint stride = in->stride;
-   GLuint count = in->count;
-   GLfloat (*out)[3] = (GLfloat (*)[3])dest->start;
+   const GLuint stride = in->stride;
+   const GLuint count = in->count;
+   GLuint i;
+
    (void) mat;
    (void) scale;
+
    if (lengths) {
       STRIDE_LOOP {
 	 const GLfloat x = from[0], y = from[1], z = from[2];
@@ -323,17 +346,19 @@ TAG(normalize_normals)( const GLmatrix *mat,
 static void _XFORMAPI
 TAG(rescale_normals)( const GLmatrix *mat,
                       GLfloat scale,
-                      const GLvector3f *in,
+                      const GLvector4f *in,
                       const GLfloat *lengths,
-                      GLvector3f *dest )
+                      GLvector4f *dest )
 {
-   GLuint i;
+   GLfloat (*out)[4] = (GLfloat (*)[4])dest->start;
    const GLfloat *from = in->start;
-   GLuint stride = in->stride;
-   GLuint count = in->count;
-   GLfloat (*out)[3] = (GLfloat (*)[3])dest->start;
+   const GLuint stride = in->stride;
+   const GLuint count = in->count;
+   GLuint i;
+
    (void) mat;
    (void) lengths;
+
    STRIDE_LOOP {
       SCALE_SCALAR_3V( out[i], scale, from );
    }

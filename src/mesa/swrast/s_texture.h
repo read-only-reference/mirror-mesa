@@ -1,10 +1,10 @@
-/* $Id: s_texture.h,v 1.7 2001/12/17 04:54:35 brianp Exp $ */
+/* $Id: s_texture.h,v 1.11 2002/01/28 04:25:56 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -38,16 +38,13 @@ _swrast_choose_texture_sample_func( GLcontext *ctx,
 				    GLuint texUnit,
 				    const struct gl_texture_object *tObj );
 
+extern void
+_swrast_texture_fragments( GLcontext *ctx, GLuint texSet, GLuint n,
+			       GLfloat texcoords[][4], GLfloat lambda[],
+			       CONST GLchan primary_rgba[][4],
+                               GLchan rgba[][4] );
 
 extern void
-_swrast_texture_fragments( GLcontext *ctx, GLuint texSet,
-                           struct sw_span *span,
-			   GLchan rgba[][4] );
-
-extern void
-_old_swrast_texture_fragments( GLcontext *ctx, GLuint texSet, GLuint n,
-			       GLfloat texcoords[][3], GLfloat lambda[],
-			       CONST GLchan primary_rgba[][4], GLchan rgba[][4] );
-
+_swrast_multitexture_fragments( GLcontext *ctx, struct sw_span *span );
 
 #endif

@@ -1,10 +1,10 @@
-/* $Id: s_aatritemp.h,v 1.23 2001/12/17 04:54:35 brianp Exp $ */
+/* $Id: s_aatritemp.h,v 1.26 2002/01/28 03:42:28 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -57,11 +57,9 @@
    
 #ifdef DO_Z
    GLfloat zPlane[4];
-   GLdepth z[MAX_WIDTH];
 #endif
 #ifdef DO_FOG
    GLfloat fogPlane[4];
-   GLfloat fog[MAX_WIDTH];
 #else
    GLfloat *fog = NULL;
 #endif
@@ -70,9 +68,6 @@
 #endif
 #ifdef DO_INDEX
    GLfloat iPlane[4];
-   GLint icoverageSpan[MAX_WIDTH];
-#else
-   GLfloat coverageSpan[MAX_WIDTH];
 #endif
 #ifdef DO_SPEC
    GLfloat srPlane[4], sgPlane[4], sbPlane[4];
@@ -90,6 +85,9 @@
    GLfloat bf = SWRAST_CONTEXT(ctx)->_backface_sign;
    
    
+   INIT_SPAN(span);
+   span.arrayMask |= SPAN_COVERAGE;
+
    /* determine bottom to top order of vertices */
    {
       GLfloat y0 = v0->win[1];
@@ -143,9 +141,11 @@
     */
 #ifdef DO_Z
    compute_plane(p0, p1, p2, p0[2], p1[2], p2[2], zPlane);
+   span.arrayMask |= SPAN_Z;
 #endif
 #ifdef DO_FOG
    compute_plane(p0, p1, p2, v0->fog, v1->fog, v2->fog, fogPlane);
+   span.arrayMask |= SPAN_FOG;
 #endif
 #ifdef DO_RGBA
    if (ctx->Light.ShadeModel == GL_SMOOTH) {
@@ -160,6 +160,7 @@
       constant_plane(v2->color[BCOMP], bPlane);
       constant_plane(v2->color[ACOMP], aPlane);
    }
+   span.arrayMask |= SPAN_RGBA;
 #endif
 #ifdef DO_INDEX
    if (ctx->Light.ShadeModel == GL_SMOOTH) {
@@ -169,6 +170,7 @@
    else {
       constant_plane((GLfloat) v2->index, iPlane);
    }
+   span.arrayMask |= SPAN_INDEX;
 #endif
 #ifdef DO_SPEC
    if (ctx->Light.ShadeModel == GL_SMOOTH) {
@@ -181,6 +183,7 @@
       constant_plane(v2->specular[GCOMP], sgPlane);
       constant_plane(v2->specular[BCOMP], sbPlane);
    }
+   span.arrayMask |= SPAN_SPEC;
 #endif
 #ifdef DO_TEX
    {
@@ -208,6 +211,7 @@
       texWidth = (GLfloat) texImage->Width;
       texHeight = (GLfloat) texImage->Height;
    }
+   span.arrayMask |= (SPAN_TEXTURE | SPAN_LAMBDA);
 #elif defined(DO_MULTITEX)
    {
       GLuint u;
@@ -239,6 +243,7 @@
          }
       }
    }
+   span.arrayMask |= (SPAN_TEXTURE | SPAN_LAMBDA);
 #endif
 
    /* Begin bottom-to-top scan over the triangle.
@@ -263,9 +268,8 @@
       GLint iy;
       for (iy = iyMin; iy < iyMax; iy++, x += dxdy) {
          GLint ix, startX = (GLint) (x - xAdj);
-         GLuint count, n;
+         GLuint count;
          GLfloat coverage = 0.0F;
-         SW_SPAN_RESET(span);
 
          /* skip over fragments with zero coverage */
          while (startX < MAX_WIDTH) {
@@ -282,15 +286,15 @@
             /* (cx,cy) = center of fragment */
             const GLfloat cx = ix + 0.5F, cy = iy + 0.5F;
 #ifdef DO_INDEX
-            icoverageSpan[count] = compute_coveragei(pMin, pMid, pMax, ix, iy);
+            span.coverage[count] = (GLfloat) compute_coveragei(pMin, pMid, pMax, ix, iy);
 #else
-            coverageSpan[count] = coverage;
+            span.coverage[count] = coverage;
 #endif
 #ifdef DO_Z
-            z[count] = (GLdepth) solve_plane(cx, cy, zPlane);
+            span.zArray[count] = (GLdepth) solve_plane(cx, cy, zPlane);
 #endif
 #ifdef DO_FOG
-	    fog[count] = solve_plane(cx, cy, fogPlane);
+	    span.fogArray[count] = solve_plane(cx, cy, fogPlane);
 #endif
 #ifdef DO_RGBA
             span.color.rgba[count][RCOMP] = solve_plane_chan(cx, cy, rPlane);
@@ -302,9 +306,9 @@
             span.color.index[count] = (GLint) solve_plane(cx, cy, iPlane);
 #endif
 #ifdef DO_SPEC
-            span.specular[count][RCOMP] = solve_plane_chan(cx, cy, srPlane);
-            span.specular[count][GCOMP] = solve_plane_chan(cx, cy, sgPlane);
-            span.specular[count][BCOMP] = solve_plane_chan(cx, cy, sbPlane);
+            span.specArray[count][RCOMP] = solve_plane_chan(cx, cy, srPlane);
+            span.specArray[count][GCOMP] = solve_plane_chan(cx, cy, sgPlane);
+            span.specArray[count][BCOMP] = solve_plane_chan(cx, cy, sbPlane);
 #endif
 #ifdef DO_TEX
             {
@@ -338,42 +342,16 @@
          if (ix <= startX)
             continue;
          
-         n = (GLuint) ix - (GLuint) startX;
-
-#ifdef DO_MULTITEX
-#  ifdef DO_SPEC
-         _old_write_multitexture_span(ctx, n, startX, iy, z, fog,
-				      span.texcoords,
-				      span.lambda, span.color.rgba,
-				      span.specular,
-				      coverageSpan,  GL_POLYGON);
-#  else
-         _old_write_multitexture_span(ctx, n, startX, iy, z, fog,
-				      span.texcoords,
-				      span.lambda, span.color.rgba,
-				      NULL, coverageSpan,
-				      GL_POLYGON);
-#  endif
-#elif defined(DO_TEX)
-#  ifdef DO_SPEC
-         _old_write_texture_span(ctx, n, startX, iy, z, fog,
-				 span.texcoords[0],
-				 span.lambda[0], span.color.rgba,
-                                 span.specular,
-				 coverageSpan, GL_POLYGON);
-#  else
-         _old_write_texture_span(ctx, n, startX, iy, z, fog,
-				 span.texcoords[0],
-				 span.lambda[0],
-				 span.color.rgba, NULL,
-				 coverageSpan, GL_POLYGON);
-#  endif
+         span.x = startX;
+         span.y = iy;
+         span.end = (GLuint) ix - (GLuint) startX;
+         ASSERT(span.interpMask == 0);
+#if defined(DO_MULTITEX) || defined(DO_TEX)
+         _mesa_write_texture_span(ctx, &span, GL_POLYGON);
 #elif defined(DO_RGBA)
-         _old_write_rgba_span(ctx, n, startX, iy, z, fog, span.color.rgba,
-                              coverageSpan, GL_POLYGON);
+         _mesa_write_rgba_span(ctx, &span, GL_POLYGON);
 #elif defined(DO_INDEX)
-         _old_write_index_span(ctx, n, startX, iy, z, fog, span.color.index,
-                               icoverageSpan, GL_POLYGON);
+         _mesa_write_index_span(ctx, &span, GL_POLYGON);
 #endif
       }
    }
@@ -411,15 +389,15 @@
             /* (cx,cy) = center of fragment */
             const GLfloat cx = ix + 0.5F, cy = iy + 0.5F;
 #ifdef DO_INDEX
-            icoverageSpan[ix] = compute_coveragei(pMin, pMid, pMax, ix, iy);
+            span.coverage[ix] = (GLfloat) compute_coveragei(pMin, pMax, pMid, ix, iy);
 #else
-            coverageSpan[ix] = coverage;
+            span.coverage[ix] = coverage;
 #endif
 #ifdef DO_Z
-            z[ix] = (GLdepth) solve_plane(cx, cy, zPlane);
+            span.zArray[ix] = (GLdepth) solve_plane(cx, cy, zPlane);
 #endif
 #ifdef DO_FOG
-            fog[ix] = solve_plane(cx, cy, fogPlane);
+            span.fogArray[ix] = solve_plane(cx, cy, fogPlane);
 #endif
 #ifdef DO_RGBA
             span.color.rgba[ix][RCOMP] = solve_plane_chan(cx, cy, rPlane);
@@ -431,9 +409,9 @@
             span.color.index[ix] = (GLint) solve_plane(cx, cy, iPlane);
 #endif
 #ifdef DO_SPEC
-            span.specular[ix][RCOMP] = solve_plane_chan(cx, cy, srPlane);
-            span.specular[ix][GCOMP] = solve_plane_chan(cx, cy, sgPlane);
-            span.specular[ix][BCOMP] = solve_plane_chan(cx, cy, sbPlane);
+            span.specArray[ix][RCOMP] = solve_plane_chan(cx, cy, srPlane);
+            span.specArray[ix][GCOMP] = solve_plane_chan(cx, cy, sgPlane);
+            span.specArray[ix][BCOMP] = solve_plane_chan(cx, cy, sbPlane);
 #endif
 #ifdef DO_TEX
             {
@@ -473,7 +451,38 @@
          n = (GLuint) startX - (GLuint) ix;
 
          left = ix + 1;
+
+         /* shift all values to the left */
+         /* XXX this is temporary */
+         {
+            GLint j;
+            for (j = 0; j < (GLint) n; j++) {
+#ifdef DO_RGBA
+               COPY_4V(span.color.rgba[j], span.color.rgba[j + left]);
+#endif
+#ifdef DO_SPEC
+               COPY_4V(span.specArray[j], span.specArray[j + left]);
+#endif
+#ifdef DO_INDEX
+               span.color.index[j] = span.color.index[j + left];
+#endif
+#ifdef DO_Z
+               span.zArray[j] = span.zArray[j + left];
+#endif
+#ifdef DO_FOG
+               span.fogArray[j] = span.fogArray[j + left];
+#endif
+#ifdef DO_TEX
+               COPY_4V(span.texcoords[0][j], span.texcoords[0][j + left]);
+#endif
+#if defined(DO_MULTITEX) || defined(DO_TEX)
+               span.lambda[0][j] = span.lambda[0][j + left];
+#endif
+               span.coverage[j] = span.coverage[j + left];
+            }
+         }
 #ifdef DO_MULTITEX
+         /* shift texcoords */
          {
             GLuint unit;
             for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {
@@ -488,47 +497,21 @@
                }
             }
          }
-#  ifdef DO_SPEC
-         _old_write_multitexture_span(ctx, n, left, iy, z + left, fog + left,
-				      span.texcoords, span.lambda,
-				      span.color.rgba + left,
-				      span.specular + left,
-				      coverageSpan + left,
-				      GL_POLYGON);
-#  else
-         _old_write_multitexture_span(ctx, n, left, iy, z + left, fog + left,
-				      span.texcoords, span.lambda,
-				      span.color.rgba + left, NULL,
-				      coverageSpan + left,
-				      GL_POLYGON);
-#  endif
-#elif defined(DO_TEX)
-#  ifdef DO_SPEC
-         _old_write_texture_span(ctx, n, left, iy, z + left, fog + left,
-				 span.texcoords[0] + left,
-				 span.lambda[0] + left,
-				 span.color.rgba + left,
-				 span.specular + left, coverageSpan + left,
-				 GL_POLYGON);
-#  else
-         _old_write_texture_span(ctx, n, left, iy, z + left, fog + left,
-				 span.texcoords[0] + left,
-				 span.lambda[0] + left,
-				 span.color.rgba + left, NULL,
-				 coverageSpan + left, GL_POLYGON);
-#  endif
+#endif
+
+         span.x = left;
+         span.y = iy;
+         span.end = n;
+         ASSERT(span.interpMask == 0);
+#if defined(DO_MULTITEX) || defined(DO_TEX)
+         _mesa_write_texture_span(ctx, &span, GL_POLYGON);
 #elif defined(DO_RGBA)
-         _old_write_rgba_span(ctx, n, left, iy, z + left, fog + left,
-                              span.color.rgba + left, coverageSpan + left, GL_POLYGON);
+         _mesa_write_rgba_span(ctx, &span, GL_POLYGON);
 #elif defined(DO_INDEX)
-         _old_write_index_span(ctx, n, left, iy, z + left, fog + left,
-                               span.color.index + left,
-			       icoverageSpan + left, GL_POLYGON);
+         _mesa_write_index_span(ctx, &span, GL_POLYGON);
 #endif
       }
    }
-
-
 }
 
 

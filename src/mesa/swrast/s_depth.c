@@ -1,10 +1,10 @@
-/* $Id: s_depth.c,v 1.10 2001/12/17 04:54:35 brianp Exp $ */
+/* $Id: s_depth.c,v 1.13 2002/01/28 00:07:33 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -572,10 +572,7 @@ _mesa_depth_test_span( GLcontext *ctx, struct sw_span *span)
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
 
-   ASSERT(span->activeMask & SPAN_Z);
-   ASSERT(span->filledMask == GL_TRUE);
-   ASSERT(span->filledDepth == GL_TRUE);
-   SW_SPAN_SET_FLAG(span->testedDepth);
+   ASSERT(span->arrayMask & SPAN_Z);
    
    if (swrast->Driver.ReadDepthSpan) {
       /* hardware-based depth buffer */
@@ -583,11 +580,11 @@ _mesa_depth_test_span( GLcontext *ctx, struct sw_span *span)
       GLuint passed;
       (*swrast->Driver.ReadDepthSpan)(ctx, span->end, span->x, span->y, zbuffer);
       passed = depth_test_span32(ctx, span->end, span->x, span->y,
-	                         zbuffer, span->depth, span->mask);
+	                         zbuffer, span->zArray, span->mask);
       ASSERT(swrast->Driver.WriteDepthSpan);
       (*swrast->Driver.WriteDepthSpan)(ctx, span->end, span->x, span->y, zbuffer, span->mask);
       if (passed < span->end)
-         span->write_all = GL_FALSE;
+         span->writeAll = GL_FALSE;
       return passed;
    }
    else {
@@ -595,14 +592,14 @@ _mesa_depth_test_span( GLcontext *ctx, struct sw_span *span)
       /* software depth buffer */
       if (ctx->Visual.depthBits <= 16) {
          GLushort *zptr = (GLushort *) Z_ADDRESS16(ctx, span->x, span->y);
-         passed = depth_test_span16(ctx, span->end, span->x, span->y, zptr, span->depth, span->mask);
+         passed = depth_test_span16(ctx, span->end, span->x, span->y, zptr, span->zArray, span->mask);
       }
       else {
          GLuint *zptr = (GLuint *) Z_ADDRESS32(ctx, span->x, span->y);
-         passed = depth_test_span32(ctx, span->end, span->x, span->y, zptr, span->depth, span->mask);
+         passed = depth_test_span32(ctx, span->end, span->x, span->y, zptr, span->zArray, span->mask);
       }
       if (passed < span->end)
-         span->write_all = GL_FALSE;
+         span->writeAll = GL_FALSE;
       return passed;
    }
 }

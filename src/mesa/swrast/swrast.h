@@ -1,10 +1,10 @@
-/* $Id: swrast.h,v 1.13 2001/12/17 04:54:35 brianp Exp $ */
+/* $Id: swrast.h,v 1.19 2002/01/28 04:25:56 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -31,7 +31,6 @@
 #define SWRAST_H
 
 #include "mtypes.h"
-
 
 
 /* The software rasterizer now uses this format for vertices.  Thus a
@@ -68,11 +67,14 @@ typedef struct {
 
 
 /*
- * The sw_span structure is used by the triangle template code in
- * s_tritemp.h.  It describes how colors, Z, texcoords, etc are to be
- * interpolated across each scanline of triangle.
- * With this structure it's easy to hand-off span rasterization to a
- * subroutine instead of doing it all inline like we used to do.
+ * The sw_span structure describes the colors, Z, fogcoord, texcoords,
+ * etc for a horizontal run of pixels.  We can either specify a base/step
+ * to indicate interpolated values, or fill in arrays of values.
+ * The interpMask and arrayMask bitfields indicate which are active.
+ *
+ * With this structure it's easy to hand-off span rasterization to
+ * subroutines instead of doing it all inline in the triangle functions
+ * like we used to do.
  * It also cleans up the local variable namespace a great deal.
  *
  * It would be interesting to experiment with multiprocessor rasterization
@@ -82,9 +84,7 @@ typedef struct {
  */
 
 
-/* When the sw_span struct is initialized, these flags indicates
- * which values are needed for rendering the triangle.
- */
+/* Values for interpMask and arrayMask */
 #define SPAN_RGBA         0x001
 #define SPAN_SPEC         0x002
 #define SPAN_INDEX        0x004
@@ -93,14 +93,25 @@ typedef struct {
 #define SPAN_TEXTURE      0x020
 #define SPAN_INT_TEXTURE  0x040
 #define SPAN_LAMBDA       0x080
-#define SPAN_FLAT         0x100  /* flat shading? */
+#define SPAN_COVERAGE     0x100
+#define SPAN_FLAT         0x200  /* flat shading? */
 
 
 struct sw_span {
    GLint x, y;
-   GLuint start, end;  /* start=first pixel in span, end=last pixel in span*/
-                       /* only end is used until now.(end was before called count) */
-   GLuint activeMask;  /* OR of the SPAN_* flags */
+
+   /* only need to process pixels between start <= i < end */
+   GLuint start, end;
+
+   /* This flag indicates that only a part of the span is visible */
+   GLboolean writeAll;
+
+   /**
+    * This bitmask (of SPAN_* flags) indicates which of the x/xStep
+    * variables are relevant.
+    */
+   GLuint interpMask;
+
 #if CHAN_TYPE == GL_FLOAT
    GLfloat red, redStep;
    GLfloat green, greenStep;
@@ -123,48 +134,43 @@ struct sw_span {
    GLfloat fog, fogStep;
    GLfloat tex[MAX_TEXTURE_UNITS][4], texStep[MAX_TEXTURE_UNITS][4];
    GLfixed intTex[2], intTexStep[2];
-   /* Needed for texture lambda (LOD) computation */
-   GLfloat rho[MAX_TEXTURE_UNITS];
-   GLfloat texWidth[MAX_TEXTURE_UNITS], texHeight[MAX_TEXTURE_UNITS];
+   GLfloat rho[MAX_TEXTURE_UNITS]; /* for texture lambda/lod computation */
 
-   GLboolean write_all;   /* This flag indicates that only a part of */
-                          /*the span is visible. */
-#ifdef DEBUG
-   GLboolean filledDepth, filledMask, filledAlpha;
-   GLboolean filledColor, filledSpecular;
-   GLboolean filledLambda[MAX_TEXTURE_UNITS], filledTex[MAX_TEXTURE_UNITS];
-   GLboolean testedDepth, testedAlpha;
-#endif
-   /* The interpolated fragment values */
-   GLdepth depth[MAX_WIDTH];
+   /**
+    * This bitmask (of SPAN_* flags) indicates which of the fragment arrays
+    * are relevant.
+    */
+   GLuint arrayMask;
+
+   /**
+    * Arrays of fragment values.  These will either be computed from the
+    * x/xStep values above or filled in by glDraw/CopyPixels, etc.
+    */
    union {
       GLchan rgb[MAX_WIDTH][3];
       GLchan rgba[MAX_WIDTH][4];
       GLuint index[MAX_WIDTH];
    } color;
-   GLchan specular[MAX_WIDTH][4];
-   GLint   itexcoords[MAX_WIDTH][2];                       /* s, t    */
-   GLfloat texcoords[MAX_TEXTURE_UNITS][MAX_WIDTH][3];     /* s, t, r */
+   GLchan  specArray[MAX_WIDTH][4];
+   GLdepth zArray[MAX_WIDTH];
+   GLfloat fogArray[MAX_WIDTH];
+   GLfloat texcoords[MAX_TEXTURE_UNITS][MAX_WIDTH][4];
    GLfloat lambda[MAX_TEXTURE_UNITS][MAX_WIDTH];
    GLfloat coverage[MAX_WIDTH];
+
+   /* This mask indicates if fragment is alive or culled */
    GLubyte mask[MAX_WIDTH];
 };
 
-#ifdef DEBUG
-#define SW_SPAN_SET_FLAG(flag) {ASSERT((flag) == GL_FALSE);(flag) = GL_TRUE;}
-#define SW_SPAN_RESET(span) {                                        \
-         (span).filledDepth = (span).filledMask = (span).filledAlpha \
-         = (span).filledColor = (span).filledSpecular                \
-         = (span).testedDepth = (span).testedAlpha = GL_FALSE;       \
-         MEMSET((span).filledTex, GL_FALSE,                          \
-		MAX_TEXTURE_UNITS*sizeof(GLboolean));                \
-         MEMSET((span).filledLambda, GL_FALSE,                       \
-		MAX_TEXTURE_UNITS*sizeof(GLboolean));                \
-         (span).start = 0; (span).write_all = GL_TRUE;}
-#else
-#define SW_SPAN_SET_FLAG(flag) ;
-#define SW_SPAN_RESET(span) {(span).start = 0;(span).write_all = GL_TRUE;}
-#endif
+
+#define INIT_SPAN(S)	\
+do {			\
+   S.interpMask = 0;	\
+   S.arrayMask = 0;	\
+   S.start = S.end = 0;	\
+} while (0)
+
+
 
 struct swrast_device_driver;
 
@@ -276,19 +282,19 @@ _swrast_print_vertex( GLcontext *ctx, const SWvertex *v );
  * Imaging fallbacks (a better solution should be found, perhaps
  * moving all the imaging fallback code to a new module) 
  */
-void
+extern void
 _swrast_CopyConvolutionFilter2D(GLcontext *ctx, GLenum target, 
 				GLenum internalFormat, 
 				GLint x, GLint y, GLsizei width, 
 				GLsizei height);
-void
+extern void
 _swrast_CopyConvolutionFilter1D(GLcontext *ctx, GLenum target, 
 				GLenum internalFormat, 
 				GLint x, GLint y, GLsizei width);
-void
+extern void
 _swrast_CopyColorSubTable( GLcontext *ctx,GLenum target, GLsizei start,
 			   GLint x, GLint y, GLsizei width);
-void
+extern void
 _swrast_CopyColorTable( GLcontext *ctx, 
 			GLenum target, GLenum internalformat,
 			GLint x, GLint y, GLsizei width);
@@ -300,31 +306,31 @@ _swrast_CopyColorTable( GLcontext *ctx,
  */
 extern void
 _swrast_copy_teximage1d(GLcontext *ctx, GLenum target, GLint level,
-                      GLenum internalFormat,
-                      GLint x, GLint y, GLsizei width, GLint border);
+                        GLenum internalFormat,
+                        GLint x, GLint y, GLsizei width, GLint border);
 
 extern void
 _swrast_copy_teximage2d(GLcontext *ctx, GLenum target, GLint level,
-                      GLenum internalFormat,
-                      GLint x, GLint y, GLsizei width, GLsizei height,
-                      GLint border);
+                        GLenum internalFormat,
+                        GLint x, GLint y, GLsizei width, GLsizei height,
+                        GLint border);
 
 
 extern void
 _swrast_copy_texsubimage1d(GLcontext *ctx, GLenum target, GLint level,
-                         GLint xoffset, GLint x, GLint y, GLsizei width);
+                           GLint xoffset, GLint x, GLint y, GLsizei width);
 
 extern void
 _swrast_copy_texsubimage2d(GLcontext *ctx,
-                         GLenum target, GLint level,
-                         GLint xoffset, GLint yoffset,
-                         GLint x, GLint y, GLsizei width, GLsizei height);
+                           GLenum target, GLint level,
+                           GLint xoffset, GLint yoffset,
+                           GLint x, GLint y, GLsizei width, GLsizei height);
 
 extern void
 _swrast_copy_texsubimage3d(GLcontext *ctx,
-                         GLenum target, GLint level,
-                         GLint xoffset, GLint yoffset, GLint zoffset,
-                         GLint x, GLint y, GLsizei width, GLsizei height);
+                           GLenum target, GLint level,
+                           GLint xoffset, GLint yoffset, GLint zoffset,
+                           GLint x, GLint y, GLsizei width, GLsizei height);
 
 
 
