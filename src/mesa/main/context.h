@@ -1,10 +1,10 @@
-/* $Id: context.h,v 1.8 1999/12/17 17:01:31 brianp Exp $ */
+/* $Id: context.h,v 1.12 2000/01/28 20:17:42 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -97,11 +97,17 @@ extern GLcontext *gl_create_context( GLvisual *visual,
                                      void *driver_ctx,
                                      GLboolean direct);
 
+extern GLboolean gl_initialize_context_data( GLcontext *ctx,
+                                             GLvisual *visual,
+                                             GLcontext *share_list,
+                                             void *driver_ctx,
+                                             GLboolean direct );
+
+extern void gl_free_context_data( GLcontext *ctx );
+
 extern void gl_destroy_context( GLcontext *ctx );
 
-/* Called by the driver after both the context and driver are fully
- * initialized.  Currently just reads the config file.
- */
+
 extern void gl_context_initialize( GLcontext *ctx );
 
 
@@ -123,9 +129,10 @@ extern GLcontext *gl_get_current_context(void);
  */
 #ifdef THREADS
 
-#define GET_CURRENT_CONTEXT(C)	GLcontext *C = (GLcontext *) (_glapi_ThreadSafe ? _glapi_get_current_context() : _glapi_CurrentContext)
+#define GET_CURRENT_CONTEXT(C)	GLcontext *C = (GLcontext *) (_glapi_Context ? _glapi_Context : _glapi_get_context())
 
-#define GET_IMMEDIATE  struct immediate *IM = ((GLcontext *) (_glapi_ThreadSafe ? _glapi_get_current_context() : _glapi_CurrentContext))->input;
+#define GET_IMMEDIATE  struct immediate *IM = ((GLcontext *) (_glapi_Context ? _glapi_Context : _glapi_get_context()))->input
+
 #define SET_IMMEDIATE(ctx, im)		\
 do {					\
    ctx->input = im;			\
@@ -133,13 +140,16 @@ do {					\
 
 #else
 
-extern struct immediate *CURRENT_INPUT;
-#define GET_CURRENT_CONTEXT(C)  GLcontext *C = _glapi_CurrentContext
-#define GET_IMMEDIATE struct immediate *IM = CURRENT_INPUT
+extern struct immediate *_mesa_CurrentInput;
+
+#define GET_CURRENT_CONTEXT(C)  GLcontext *C = _glapi_Context
+
+#define GET_IMMEDIATE struct immediate *IM = _mesa_CurrentInput
+
 #define SET_IMMEDIATE(ctx, im)		\
 do {					\
    ctx->input = im;			\
-   CURRENT_INPUT = im;			\
+   _mesa_CurrentInput = im;		\
 } while (0)
 
 #endif

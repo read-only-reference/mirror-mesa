@@ -1,9 +1,9 @@
-# $Id: Makefile.X11,v 1.14 1999/11/24 21:17:32 brianp Exp $
+# $Id: Makefile.X11,v 1.17 2000/01/27 00:11:49 brianp Exp $
 
 # Mesa 3-D graphics library
 # Version:  3.3
 # 
-# Copyright (C) 1999  Brian Paul   All Rights Reserved.
+# Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the "Software"),
@@ -66,10 +66,10 @@ default:
 	@echo "  make irix6-64             for SGI systems with IRIX 6.x, make 64-bit libs"
 	@echo "  make irix6-64-dso         for SGI systems with IRIX 6.x, make 64-bit DSOs"
 
-	@echo "  make linux                for Linux systems, make static .a libs"
-	@echo "  make linux-elf            for Linux systems, make ELF shared libs"
-	@echo "  make linux-386            for Linux w/ Intel assembly"
-	@echo "  make linux-386-elf        for Linux w/ Intel assembly, make ELF shared libs"
+	@echo "  make linux                for Linux systems, make shared .so libs"
+	@echo "  make linux-static         for Linux systems, make static .a libs"
+	@echo "  make linux-386            for Linux on Intel, make shared .so libs"
+	@echo "  make linux-386-static     for Linux on Intel, make static .a libs"
 	@echo "  make linux-ggi            for Linux systems with libggi"
 	@echo "  make linux-386-ggi        for Linux systems with libggi w/ Intel assembly"
 	@echo "  make linux-alpha          for Linux on Alpha systems"
@@ -84,9 +84,8 @@ default:
 	@echo "  make linux-3dnow-glide    for Linux on AMD w/ 3DNow! for Glide"
 	@echo "  make linux-katmai         for Linux on PentiumIII w/ SSE"
 	@echo "  make linux-katmai-glide   for Linux on PentiumIII w/ SSE for Glide"
-	@echo "  make linux-386-pthread    for Linux w/ Intel assembly and linuxthreads"
-	@echo "  make linux-386-pthread-shared  for Linux w/ Intel assembly and linuxthreads"
-	@echo "  make linux-386-pthread-shared-glide  for Linux w/ Intel assembly, linuxthreads, and 3Dfx Glide driver"
+	@echo "  make linux-386-pthread    for Linux on Intel, thread safety"
+	@echo "  make linux-386-pthread-glide  for Linux on Intel, thread safety, Glide"
 	@echo "  make linux-sparc          for Linux on Sparc systems"
 	@echo "  make linux-sparc5-elf     for Sparc5 systems, make ELF shared libs"
 	@echo "  make linux-sparc-ultra    for UltraSparc systems, make ELF shared libs"
@@ -142,15 +141,16 @@ aix aix-sl amix bsdos bsdos4 dgux freebsd freebsd-386 gcc \
 hpux9 hpux9-sl hpux9-gcc hpux9-gcc-sl \
 hpux10 hpux10-sl hpux10-gcc hpux10-gcc-sl \
 irix4 irix5 irix5-gcc irix5-dso irix6-o32 irix6-o32-dso \
-linux linux-debug linux-prof linux-elf linux-elf-debug linux-glide-debug \
+linux-static-debug linux-elf-debug linux-prof linux-glide-debug \
+linux linux-static \
+linux-386 linux-386-static \
 linux-glide linux-386-glide linux-386-opt-glide \
 linux-386-opt-V2-glide \
-linux-386 linux-386-elf \
 linux-3dnow linux-3dnow-glide \
 linux-katmai linux-katmai-glide \
 linux-alpha linux-alpha-elf \
 linux-ppc linux-ppc-so \
-linux-386-pthread linux-386-pthread-shared linux-386-pthread-shared-glide \
+linux-386-pthread linux-386-pthread-glide \
 linux-sparc \
 linux-sparc5-elf \
 linux-sparc-ultra \
@@ -368,7 +368,7 @@ LIB_FILES =	\
 	$(DIRECTORY)/include/GL/Makefile.in	\
 	$(DIRECTORY)/include/GL/Makefile.am	\
 	$(DIRECTORY)/include/GL/dosmesa.h	\
-	$(DIRECTORY)/include/GL/foomesa.h	\
+	$(DIRECTORY)/include/GL/amesa.h		\
 	$(DIRECTORY)/include/GL/fxmesa.h	\
 	$(DIRECTORY)/include/GL/ggimesa.h	\
 	$(DIRECTORY)/include/GL/gl.h		\
@@ -433,56 +433,68 @@ LIB_FILES =	\
 	$(DIRECTORY)/src/GGI/include/ggi/mesa/Makefile.am	\
 	$(DIRECTORY)/src/GGI/include/ggi/mesa/Makefile.in	\
 	$(DIRECTORY)/src/GGI/include/ggi/mesa/*.h		\
-	$(DIRECTORY)/src/KNOWN_BUGS		\
-	$(DIRECTORY)/src/MGL/*.[ch]		\
-	$(DIRECTORY)/src/MGL/*.txt		\
-	$(DIRECTORY)/src/OSmesa/Makefile.am	\
-	$(DIRECTORY)/src/OSmesa/Makefile.in	\
-	$(DIRECTORY)/src/OSmesa/*.[ch]		\
-	$(DIRECTORY)/src/S3/*.[ch]		\
-	$(DIRECTORY)/src/S3/*.def		\
-	$(DIRECTORY)/src/S3/*.mak		\
-	$(DIRECTORY)/src/S3/*.rc		\
-	$(DIRECTORY)/src/SVGA/Makefile.am	\
-	$(DIRECTORY)/src/SVGA/Makefile.in	\
-	$(DIRECTORY)/src/SVGA/*.[ch]		\
-	$(DIRECTORY)/src/Windows/*.[ch]		\
-	$(DIRECTORY)/src/Windows/*.def		\
-	$(DIRECTORY)/src/X/Makefile.am		\
-	$(DIRECTORY)/src/X/Makefile.in		\
-	$(DIRECTORY)/src/X/*.[ch]		\
-	$(DIRECTORY)/src/X86/*.[ch]		\
-	$(DIRECTORY)/src/X86/Makefile.am	\
-	$(DIRECTORY)/src/X86/Makefile.in	\
-	$(DIRECTORY)/src/X86/*.m4		\
-	$(DIRECTORY)/src/X86/*.S		\
-	$(DIRECTORY)/src/*.dja			\
-	$(DIRECTORY)/src-glu/README[12]		\
-	$(DIRECTORY)/src-glu/Makefile*		\
-	$(DIRECTORY)/src-glu/descrip.mms	\
-	$(DIRECTORY)/src-glu/mms_depend		\
-	$(DIRECTORY)/src-glu/*.def		\
-	$(DIRECTORY)/src-glu/*.dja		\
-	$(DIRECTORY)/src-glu/depend		\
-	$(DIRECTORY)/src-glu/*.[ch]		\
-	$(DIRECTORY)/widgets-mesa		\
-	$(DIRECTORY)/widgets-sgi		\
-	$(DIRECTORY)/util/README		\
-	$(DIRECTORY)/util/Makefile.am		\
-	$(DIRECTORY)/util/Makefile.in		\
-	$(DIRECTORY)/util/*.[ch]		\
-	$(DIRECTORY)/util/sampleMakefile	\
-	$(DIRECTORY)/BeOS/Makefile		\
-	$(DIRECTORY)/BeOS/*.cpp			
-
-# old stuff
-#	$(DIRECTORY)/Win32			\
-#	$(DIRECTORY)/win32
-
-#	$(DIRECTORY)/OpenStep			\
-#
-#
-
+	$(DIRECTORY)/src/KNOWN_BUGS				\
+	$(DIRECTORY)/src/MGL/*.[ch]				\
+	$(DIRECTORY)/src/MGL/*.txt				\
+	$(DIRECTORY)/src/OSmesa/Makefile.am			\
+	$(DIRECTORY)/src/OSmesa/Makefile.in			\
+	$(DIRECTORY)/src/OSmesa/*.[ch]				\
+	$(DIRECTORY)/src/S3/*.[ch]				\
+	$(DIRECTORY)/src/S3/*.def				\
+	$(DIRECTORY)/src/S3/*.mak				\
+	$(DIRECTORY)/src/S3/*.rc				\
+	$(DIRECTORY)/src/SVGA/Makefile.am			\
+	$(DIRECTORY)/src/SVGA/Makefile.in			\
+	$(DIRECTORY)/src/SVGA/*.[ch]				\
+	$(DIRECTORY)/src/Windows/*.[ch]				\
+	$(DIRECTORY)/src/Windows/*.def				\
+	$(DIRECTORY)/src/X/Makefile.am				\
+	$(DIRECTORY)/src/X/Makefile.in				\
+	$(DIRECTORY)/src/X/*.[ch]				\
+	$(DIRECTORY)/src/X86/*.[ch]				\
+	$(DIRECTORY)/src/X86/Makefile.am			\
+	$(DIRECTORY)/src/X86/Makefile.in			\
+	$(DIRECTORY)/src/X86/*.m4				\
+	$(DIRECTORY)/src/X86/*.S				\
+	$(DIRECTORY)/src/*.dja					\
+	$(DIRECTORY)/src-glu/README[12]				\
+	$(DIRECTORY)/src-glu/Makefile*				\
+	$(DIRECTORY)/src-glu/descrip.mms			\
+	$(DIRECTORY)/src-glu/mms_depend				\
+	$(DIRECTORY)/src-glu/*.def				\
+	$(DIRECTORY)/src-glu/*.dja				\
+	$(DIRECTORY)/src-glu/depend				\
+	$(DIRECTORY)/src-glu/*.[ch]				\
+	$(DIRECTORY)/widgets-mesa				\
+	$(DIRECTORY)/widgets-sgi				\
+	$(DIRECTORY)/util/README				\
+	$(DIRECTORY)/util/Makefile.am				\
+	$(DIRECTORY)/util/Makefile.in				\
+	$(DIRECTORY)/util/*.[ch]				\
+	$(DIRECTORY)/util/sampleMakefile			\
+	$(DIRECTORY)/BeOS/Makefile				\
+	$(DIRECTORY)/BeOS/*.cpp					\
+	$(DIRECTORY)/WIN32/NMAKE.MAK				\
+	$(DIRECTORY)/WIN32/NMAKE.MIF				\
+	$(DIRECTORY)/WIN32/RES/*rc				\
+	$(DIRECTORY)/WIN32/RES/*def				\
+	$(DIRECTORY)/WIN32/RULES/lib.*				\
+	$(DIRECTORY)/WIN32/RULES/progs.*			\
+	$(DIRECTORY)/macos/README				\
+	$(DIRECTORY)/macos/gli_api/*.h				\
+	$(DIRECTORY)/macos/cglpane/CGLPane.*			\
+	$(DIRECTORY)/macos/include-mac/*.h			\
+	$(DIRECTORY)/macos/libraries/*.stub			\
+	$(DIRECTORY)/macos/libraries/*Stub			\
+	$(DIRECTORY)/macos/projects/*.mcp			\
+	$(DIRECTORY)/macos/projects/*.exp			\
+	$(DIRECTORY)/macos/projects/*.h				\
+	$(DIRECTORY)/macos/resources/*.c			\
+	$(DIRECTORY)/macos/resources/*.r			\
+	$(DIRECTORY)/macos/resources/*.rsrc			\
+	$(DIRECTORY)/macos/src-agl/*.exp			\
+	$(DIRECTORY)/macos/src-agl/*.[ch]			\
+	$(DIRECTORY)/macos/src-gli/*.[ch]
 
 DEMO_FILES =	\
 	$(DIRECTORY)/include/GL/glut.h		\

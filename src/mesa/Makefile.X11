@@ -1,8 +1,8 @@
-# $Id: Makefile.X11,v 1.12 1999/12/17 15:15:46 brianp Exp $
+# $Id: Makefile.X11,v 1.15 2000/01/28 22:18:03 brianp Exp $
 
 # Mesa 3-D graphics library
 # Version:  3.3
-# Copyright (C) 1995-1999  Brian Paul
+# Copyright (C) 1995-2000  Brian Paul
 
 # Makefile for core library
 
@@ -60,8 +60,8 @@ CORE_SOURCES = \
 	mem.c \
 	mmath.c \
 	pb.c \
-	pixel.c \
 	pipeline.c \
+	pixel.c \
 	points.c \
 	polygon.c \
 	quads.c \
@@ -106,6 +106,11 @@ DRIVER_SOURCES = \
 	X/xmesa4.c \
 	OSmesa/osmesa.c \
 	SVGA/svgamesa.c \
+	SVGA/svgamesa8.c \
+	SVGA/svgamesa15.c \
+	SVGA/svgamesa16.c \
+	SVGA/svgamesa24.c \
+	SVGA/svgamesa32.c \
 	FX/fxapi.c \
 	FX/fxclip.c \
 	FX/fxcva.c \
@@ -120,8 +125,7 @@ DRIVER_SOURCES = \
 	FX/fxtexman.c \
 	FX/fxtrifuncs.c \
 	FX/fxvsetup.c \
-	FX/fxglidew.c 
-#	GGI/ggimesa.c
+	FX/fxglidew.c
 
 ASM_SOURCES = 
 
@@ -139,7 +143,7 @@ OBJECTS = $(ASM_SOURCES:.S=.o) \
 	$(CC) -c -I. -I$(INCDIR) $(CFLAGS) $< -o $@
 
 .S.o:
-	$(CC) -c $(CFLAGS) $< -o $@
+	$(CC) -c -I. $(CFLAGS) $< -o $@
 
 
 # UGH! These rules shouldn't be needed but IRIX's make (and others?) needs them

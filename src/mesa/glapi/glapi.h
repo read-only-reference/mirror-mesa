@@ -1,10 +1,10 @@
-/* $Id: glapi.h,v 1.11 1999/12/17 14:51:29 brianp Exp $ */
+/* $Id: glapi.h,v 1.14 2000/01/28 20:17:42 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -34,9 +34,9 @@
 struct _glapi_table;
 
 
-extern GLboolean _glapi_ThreadSafe;
+extern void *_glapi_Context;
 
-extern void *_glapi_CurrentContext;
+extern struct _glapi_table *_glapi_Dispatch;
 
 
 extern void
@@ -44,11 +44,11 @@ _glapi_check_multithread(void);
 
 
 extern void
-_glapi_set_current_context(void *context);
+_glapi_set_context(void *context);
 
 
 extern void *
-_glapi_get_current_context(void);
+_glapi_get_context(void);
 
 
 extern void

@@ -1,10 +1,10 @@
-/* $Id: glapitable.h,v 1.5 1999/12/16 12:36:54 brianp Exp $ */
+/* $Id: glapitable.h,v 1.7 2000/01/31 22:52:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -51,6 +51,12 @@
  * This struct contains pointers for all the GL API entrypoints
  * plus some reserved slots for dynamic extensions.
  *
+ * Strictly speaking, this struct isn't needed if we have assembly
+ * language entrypoint functions since no knowledge of function
+ * arguments is needed.
+ *
+ * This struct may be replaced by an automatically-generated struct
+ * using the spec files in the OpenGL SI.
  */
 struct _glapi_table
 {
@@ -505,7 +511,7 @@ struct _glapi_table
 
    /* 6. GL_EXT_texture3D */
    void (*CopyTexSubImage3DEXT)(GLenum, GLint, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei);
-   void (*TexImage3DEXT)(GLenum, GLint, GLint, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum, const GLvoid *);
+   void (*TexImage3DEXT)(GLenum, GLint, GLenum, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum, const GLvoid *);
    void (*TexSubImage3DEXT)(GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLenum, const GLvoid *);
 
    /* 7. GL_SGI_texture_filter4 */
@@ -588,7 +594,7 @@ struct _glapi_table
 
    /* 21. GL_SGIS_detail_texture */
    void (*DetailTexFuncSGIS)(GLenum, GLsizei, const GLfloat *);
-   void (*GetDetailTexFuncSGIS)(GLenum target, GLfloat *);
+   void (*GetDetailTexFuncSGIS)(GLenum, GLfloat *);
 
    /* 22. GL_SGIS_sharpen_texture */
    void (*GetSharpenTexFuncSGIS)(GLenum, GLfloat *);

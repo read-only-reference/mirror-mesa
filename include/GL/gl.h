@@ -1,10 +1,10 @@
-/* $Id: gl.h,v 1.24 1999/12/10 19:54:50 brianp Exp $ */
+/* $Id: gl.h,v 1.28 2000/01/17 18:05:24 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -794,6 +794,14 @@ typedef double		GLclampd;	/* double precision float in [0,1] */
 #define GL_TEXTURE_MAX_LOD			0x813B
 #define GL_TEXTURE_BASE_LEVEL			0x813C
 #define GL_TEXTURE_MAX_LEVEL			0x813D
+#define GL_SMOOTH_POINT_SIZE_RANGE		0x0B12
+#define GL_SMOOTH_POINT_SIZE_GRANULARITY	0x0B13
+#define GL_SMOOTH_LINE_WIDTH_RANGE		0x0B22
+#define GL_SMOOTH_LINE_WIDTH_GRANULARITY	0x0B23
+#define GL_ALIASED_POINT_SIZE_RANGE		0x846D
+#define GL_ALIASED_LINE_WIDTH_RANGE		0x846E
+
+
 
 /*
  * OpenGL 1.2 imaging subset (NOT IMPLEMENTED BY MESA)
@@ -2053,6 +2061,8 @@ GLAPI void GLAPIENTRY glPointParameterfvEXT( GLenum pname, const GLfloat *params
 #define GL_BACK_NORMALS_HINT_PGI		107043
 #define GL_NATIVE_GRAPHICS_HANDLE_PGI		107010
 
+GLAPI void GLAPIENTRY glHintPGI(GLenum target, GLint mode);
+
 #endif /* GL_PGI_misc_hints */
 
 
@@ -2323,11 +2333,10 @@ GLAPI void GLAPIENTRY glResizeBuffersMESA( void );
 #ifndef GL_ARB_transpose_matrix
 #define GL_ARB_transpose_matrix 1
 
-/* XXX these aren't the final enum values!!! */
-#define GL_TRANSPOSE_MODELVIEW_MATRIX_ARB		0xffff0001
-#define GL_TRANSPOSE_PROJECTION_MATRIX_ARB		0xffff0002
-#define GL_TRANSPOSE_TEXTURE_MATRIX_ARB			0xffff0003
-#define GL_TRANSPOSE_COLOR_MATRIX_ARB			0xffff0004
+#define GL_TRANSPOSE_MODELVIEW_MATRIX_ARB		0x84E3
+#define GL_TRANSPOSE_PROJECTION_MATRIX_ARB		0x84E4
+#define GL_TRANSPOSE_TEXTURE_MATRIX_ARB			0x84E5
+#define GL_TRANSPOSE_COLOR_MATRIX_ARB			0x84E6
 
 GLAPI void GLAPIENTRY glLoadTransposeMatrixdARB( const GLdouble m[16] );
 GLAPI void GLAPIENTRY glLoadTransposeMatrixfARB( const GLfloat m[16] );

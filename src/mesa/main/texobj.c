@@ -1,10 +1,10 @@
-/* $Id: texobj.c,v 1.10 1999/12/01 21:10:08 brianp Exp $ */
+/* $Id: texobj.c,v 1.13 2000/01/31 23:11:39 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -84,13 +84,15 @@ gl_alloc_texture_object( struct gl_shared_state *shared, GLuint name,
 
       /* insert into linked list */
       if (shared) {
+         _glthread_LOCK_MUTEX(shared->Mutex);
          obj->Next = shared->TexObjectList;
          shared->TexObjectList = obj;
+         _glthread_UNLOCK_MUTEX(shared->Mutex);
       }
 
       if (name > 0) {
          /* insert into hash table */
-         HashInsert(shared->TexObjects, name, obj);
+         _mesa_HashInsert(shared->TexObjects, name, obj);
       }
    }
    return obj;
@@ -118,6 +120,7 @@ void gl_free_texture_object( struct gl_shared_state *shared,
 
    /* unlink t from the linked list */
    if (shared) {
+      _glthread_LOCK_MUTEX(shared->Mutex);
       tprev = NULL;
       tcurr = shared->TexObjectList;
       while (tcurr) {
@@ -133,11 +136,12 @@ void gl_free_texture_object( struct gl_shared_state *shared,
          tprev = tcurr;
          tcurr = tcurr->Next;
       }
+      _glthread_UNLOCK_MUTEX(shared->Mutex);
    }
 
    if (t->Name) {
       /* remove from hash table */
-      HashRemove(shared->TexObjects, t->Name);
+      _mesa_HashRemove(shared->TexObjects, t->Name);
    }
 
    /* free texture image */
@@ -338,7 +342,7 @@ _mesa_GenTextures( GLsizei n, GLuint *texName )
       return;
    }
 
-   first = HashFindFreeKeyBlock(ctx->Shared->TexObjects, n);
+   first = _mesa_HashFindFreeKeyBlock(ctx->Shared->TexObjects, n);
 
    /* Return the texture names */
    for (i=0;i<n;i++) {
@@ -370,7 +374,7 @@ _mesa_DeleteTextures( GLsizei n, const GLuint *texName)
       struct gl_texture_object *t;
       if (texName[i]>0) {
          t = (struct gl_texture_object *)
-            HashLookup(ctx->Shared->TexObjects, texName[i]);
+            _mesa_HashLookup(ctx->Shared->TexObjects, texName[i]);
          if (t) {
             GLuint u;
             for (u=0; u<MAX_TEXTURE_UNITS; u++) {
@@ -443,8 +447,8 @@ _mesa_BindTexture( GLenum target, GLuint texName )
    if (texName == 0) 
       newTexObj = ctx->Shared->DefaultD[dim];
    else {
-      struct HashTable *hash = ctx->Shared->TexObjects;
-      newTexObj = (struct gl_texture_object *) HashLookup(hash, texName);
+      struct _mesa_HashTable *hash = ctx->Shared->TexObjects;
+      newTexObj = (struct gl_texture_object *) _mesa_HashLookup(hash, texName);
 
       if (!newTexObj)
 	 newTexObj = gl_alloc_texture_object(ctx->Shared, texName, dim);
@@ -523,7 +527,7 @@ _mesa_PrioritizeTextures( GLsizei n, const GLuint *texName,
       struct gl_texture_object *t;
       if (texName[i]>0) {
          t = (struct gl_texture_object *)
-            HashLookup(ctx->Shared->TexObjects, texName[i]);
+            _mesa_HashLookup(ctx->Shared->TexObjects, texName[i]);
          if (t) {
             t->Priority = CLAMP( priorities[i], 0.0F, 1.0F );
 
@@ -562,7 +566,7 @@ _mesa_AreTexturesResident( GLsizei n, const GLuint *texName,
          return GL_FALSE;
       }
       t = (struct gl_texture_object *)
-         HashLookup(ctx->Shared->TexObjects, texName[i]);
+         _mesa_HashLookup(ctx->Shared->TexObjects, texName[i]);
       if (t) {
 	 if (ctx->Driver.IsTextureResident)
 	    residences[i] = ctx->Driver.IsTextureResident( ctx, t );
@@ -588,7 +592,7 @@ _mesa_IsTexture( GLuint texture )
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, "glIsTextures",
 						  GL_FALSE);
-   if (texture>0 && HashLookup(ctx->Shared->TexObjects, texture)) {
+   if (texture>0 && _mesa_HashLookup(ctx->Shared->TexObjects, texture)) {
       return GL_TRUE;
    }
    else {

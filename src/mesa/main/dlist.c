@@ -1,10 +1,10 @@
-/* $Id: dlist.c,v 1.22 1999/12/15 12:55:54 brianp Exp $ */
+/* $Id: dlist.c,v 1.26 2000/01/31 23:09:51 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -175,6 +175,7 @@ typedef enum {
 	OPCODE_FRONT_FACE,
 	OPCODE_FRUSTUM,
 	OPCODE_HINT,
+	OPCODE_HINT_PGI,
 	OPCODE_INDEX_MASK,
 	OPCODE_INIT_NAMES,
 	OPCODE_LIGHT,
@@ -338,7 +339,7 @@ void gl_destroy_list( GLcontext *ctx, GLuint list )
    if (list==0)
       return;
 
-   block = (Node *) HashLookup(ctx->Shared->DisplayList, list);
+   block = (Node *) _mesa_HashLookup(ctx->Shared->DisplayList, list);
    n = block;
 
    done = block ? GL_FALSE : GL_TRUE;
@@ -418,7 +419,7 @@ void gl_destroy_list( GLcontext *ctx, GLuint list )
       }
    }
 
-   HashRemove(ctx->Shared->DisplayList, list);
+   _mesa_HashRemove(ctx->Shared->DisplayList, list);
 }
 
 
@@ -534,6 +535,7 @@ void gl_init_lists( void )
       InstSize[OPCODE_FRONT_FACE] = 2;
       InstSize[OPCODE_FRUSTUM] = 7;
       InstSize[OPCODE_HINT] = 3;
+      InstSize[OPCODE_HINT_PGI] = 3;
       InstSize[OPCODE_INDEX_MASK] = 2;
       InstSize[OPCODE_INIT_NAMES] = 1;
       InstSize[OPCODE_LIGHT] = 7;
@@ -1387,7 +1389,7 @@ static void save_Fogiv(GLenum pname, const GLint *params )
 }
 
 
-void save_Fogi(GLenum pname, GLint param )
+static void save_Fogi(GLenum pname, GLint param )
 {
    save_Fogiv(pname, &param);
 }
@@ -1445,6 +1447,22 @@ static void save_Hint( GLenum target, GLenum mode )
    }
 }
 
+
+/* GL_PGI_misc_hints*/
+static void save_HintPGI( GLenum target, GLint mode )
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   FLUSH_VB(ctx, "dlist");
+   n = alloc_instruction( ctx, OPCODE_HINT_PGI, 2 );
+   if (n) {
+      n[1].e = target;
+      n[2].i = mode;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec.HintPGI)( target, mode );
+   }
+}
 
 
 static void save_IndexMask( GLuint mask )
@@ -2284,117 +2302,117 @@ static void save_RasterPos4f( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
    }
 }
 
-void save_RasterPos2d(GLdouble x, GLdouble y)
+static void save_RasterPos2d(GLdouble x, GLdouble y)
 {
    save_RasterPos4f(x, y, 0.0F, 1.0F);
 }
 
-void save_RasterPos2f(GLfloat x, GLfloat y)
+static void save_RasterPos2f(GLfloat x, GLfloat y)
 {
    save_RasterPos4f(x, y, 0.0F, 1.0F);
 }
 
-void save_RasterPos2i(GLint x, GLint y)
+static void save_RasterPos2i(GLint x, GLint y)
 {
    save_RasterPos4f(x, y, 0.0F, 1.0F);
 }
 
-void save_RasterPos2s(GLshort x, GLshort y)
+static void save_RasterPos2s(GLshort x, GLshort y)
 {
    save_RasterPos4f(x, y, 0.0F, 1.0F);
 }
 
-void save_RasterPos3d(GLdouble x, GLdouble y, GLdouble z)
+static void save_RasterPos3d(GLdouble x, GLdouble y, GLdouble z)
 {
    save_RasterPos4f(x, y, z, 1.0F);
 }
 
-void save_RasterPos3f(GLfloat x, GLfloat y, GLfloat z)
+static void save_RasterPos3f(GLfloat x, GLfloat y, GLfloat z)
 {
    save_RasterPos4f(x, y, z, 1.0F);
 }
 
-void save_RasterPos3i(GLint x, GLint y, GLint z)
+static void save_RasterPos3i(GLint x, GLint y, GLint z)
 {
    save_RasterPos4f(x, y, z, 1.0F);
 }
 
-void save_RasterPos3s(GLshort x, GLshort y, GLshort z)
+static void save_RasterPos3s(GLshort x, GLshort y, GLshort z)
 {
    save_RasterPos4f(x, y, z, 1.0F);
 }
 
-void save_RasterPos4d(GLdouble x, GLdouble y, GLdouble z, GLdouble w)
+static void save_RasterPos4d(GLdouble x, GLdouble y, GLdouble z, GLdouble w)
 {
    save_RasterPos4f(x, y, z, w);
 }
 
-void save_RasterPos4i(GLint x, GLint y, GLint z, GLint w)
+static void save_RasterPos4i(GLint x, GLint y, GLint z, GLint w)
 {
    save_RasterPos4f(x, y, z, w);
 }
 
-void save_RasterPos4s(GLshort x, GLshort y, GLshort z, GLshort w)
+static void save_RasterPos4s(GLshort x, GLshort y, GLshort z, GLshort w)
 {
    save_RasterPos4f(x, y, z, w);
 }
 
-void save_RasterPos2dv(const GLdouble *v)
+static void save_RasterPos2dv(const GLdouble *v)
 {
    save_RasterPos4f(v[0], v[1], 0.0F, 1.0F);
 }
 
-void save_RasterPos2fv(const GLfloat *v)
+static void save_RasterPos2fv(const GLfloat *v)
 {
    save_RasterPos4f(v[0], v[1], 0.0F, 1.0F);
 }
 
-void save_RasterPos2iv(const GLint *v)
+static void save_RasterPos2iv(const GLint *v)
 {
    save_RasterPos4f(v[0], v[1], 0.0F, 1.0F);
 }
 
-void save_RasterPos2sv(const GLshort *v)
+static void save_RasterPos2sv(const GLshort *v)
 {
    save_RasterPos4f(v[0], v[1], 0.0F, 1.0F);
 }
 
-void save_RasterPos3dv(const GLdouble *v)
+static void save_RasterPos3dv(const GLdouble *v)
 {
    save_RasterPos4f(v[0], v[1], v[2], 1.0F);
 }
 
-void save_RasterPos3fv(const GLfloat *v)
+static void save_RasterPos3fv(const GLfloat *v)
 {
    save_RasterPos4f(v[0], v[1], v[2], 1.0F);
 }
 
-void save_RasterPos3iv(const GLint *v)
+static void save_RasterPos3iv(const GLint *v)
 {
    save_RasterPos4f(v[0], v[1], v[2], 1.0F);
 }
 
-void save_RasterPos3sv(const GLshort *v)
+static void save_RasterPos3sv(const GLshort *v)
 {
    save_RasterPos4f(v[0], v[1], v[2], 1.0F);
 }
 
-void save_RasterPos4dv(const GLdouble *v)
+static void save_RasterPos4dv(const GLdouble *v)
 {
    save_RasterPos4f(v[0], v[1], v[2], v[3]);
 }
 
-void save_RasterPos4fv(const GLfloat *v)
+static void save_RasterPos4fv(const GLfloat *v)
 {
    save_RasterPos4f(v[0], v[1], v[2], v[3]);
 }
 
-void save_RasterPos4iv(const GLint *v)
+static void save_RasterPos4iv(const GLint *v)
 {
    save_RasterPos4f(v[0], v[1], v[2], v[3]);
 }
 
-void save_RasterPos4sv(const GLshort *v)
+static void save_RasterPos4sv(const GLshort *v)
 {
    save_RasterPos4f(v[0], v[1], v[2], v[3]);
 }
@@ -2875,6 +2893,17 @@ static void save_TexImage3D( GLenum target,
 }
 
 
+static void save_TexImage3DEXT( GLenum target,
+                                GLint level, GLenum components,
+                                GLsizei width, GLsizei height, GLsizei depth,
+                                GLint border, GLenum format, GLenum type,
+                                const GLvoid *pixels )
+{
+   save_TexImage3D(target, level, (GLint) components, width, height,
+                   depth, border, format, type, pixels);
+}
+
+
 static void save_TexSubImage1D( GLenum target, GLint level, GLint xoffset,
                                 GLsizei width, GLenum format, GLenum type,
                                 const GLvoid *pixels )
@@ -3172,7 +3201,7 @@ void gl_save_error( GLcontext *ctx, GLenum error, const char *s )
 static GLboolean
 islist(GLcontext *ctx, GLuint list)
 {
-   if (list > 0 && HashLookup(ctx->Shared->DisplayList, list)) {
+   if (list > 0 && _mesa_HashLookup(ctx->Shared->DisplayList, list)) {
       return GL_TRUE;
    }
    else {
@@ -3206,7 +3235,7 @@ static void execute_list( GLcontext *ctx, GLuint list )
 
    ctx->CallDepth++;
 
-   n = (Node *) HashLookup(ctx->Shared->DisplayList, list);
+   n = (Node *) _mesa_HashLookup(ctx->Shared->DisplayList, list);
 
    done = GL_FALSE;
    while (!done) {
@@ -3423,6 +3452,9 @@ static void execute_list( GLcontext *ctx, GLuint list )
             break;
 	 case OPCODE_HINT:
 	    (*ctx->Exec.Hint)( n[1].e, n[2].e );
+	    break;
+	 case OPCODE_HINT_PGI:
+	    (*ctx->Exec.HintPGI)( n[1].e, n[2].i );
 	    break;
 	 case OPCODE_INDEX_MASK:
 	    (*ctx->Exec.IndexMask)( n[1].ui );
@@ -3828,12 +3860,12 @@ _mesa_GenLists(GLsizei range )
       return 0;
    }
 
-   base = HashFindFreeKeyBlock(ctx->Shared->DisplayList, range);
+   base = _mesa_HashFindFreeKeyBlock(ctx->Shared->DisplayList, range);
    if (base) {
       /* reserve the list IDs by with empty/dummy lists */
       GLint i;
       for (i=0; i<range; i++) {
-         HashInsert(ctx->Shared->DisplayList, base+i, make_empty_list());
+         _mesa_HashInsert(ctx->Shared->DisplayList, base+i, make_empty_list());
       }
    }
    return base;
@@ -3913,7 +3945,7 @@ _mesa_EndList( void )
    /* Destroy old list, if any */
    gl_destroy_list(ctx, ctx->CurrentListNum);
    /* Install the list */
-   HashInsert(ctx->Shared->DisplayList, ctx->CurrentListNum, ctx->CurrentListPtr);
+   _mesa_HashInsert(ctx->Shared->DisplayList, ctx->CurrentListNum, ctx->CurrentListPtr);
 
 
    if (MESA_VERBOSE & VERBOSE_DISPLAY_LIST)
@@ -4415,6 +4447,11 @@ _mesa_init_dlist_table( struct _glapi_table *table )
    table->ResetMinmax = _mesa_ResetMinmax;
    table->SeparableFilter2D = _mesa_SeparableFilter2D;
 
+   /* 6. GL_EXT_texture3d */
+   table->CopyTexSubImage3DEXT = save_CopyTexSubImage3D;
+   table->TexImage3DEXT = save_TexImage3DEXT;
+   table->TexSubImage3DEXT = save_TexSubImage3D;
+
    /* GL_EXT_paletted_texture */
    table->ColorTableEXT = save_ColorTableEXT;
    table->ColorSubTableEXT = save_ColorSubTableEXT;
@@ -4429,6 +4466,9 @@ _mesa_init_dlist_table( struct _glapi_table *table )
    /* GL_EXT_point_parameters */
    table->PointParameterfEXT = save_PointParameterfEXT;
    table->PointParameterfvEXT = save_PointParameterfvEXT;
+
+   /* GL_PGI_misc_hints */
+   table->HintPGI = save_HintPGI;
 
    /* GL_EXT_polygon_offset */
    table->PolygonOffsetEXT = save_PolygonOffsetEXT;
@@ -4518,7 +4558,7 @@ static void print_list( GLcontext *ctx, FILE *f, GLuint list )
       return;
    }
 
-   n = (Node *) HashLookup(ctx->Shared->DisplayList, list);
+   n = (Node *) _mesa_HashLookup(ctx->Shared->DisplayList, list);
 
    fprintf( f, "START-LIST %u, address %p\n", list, (void*)n );
 

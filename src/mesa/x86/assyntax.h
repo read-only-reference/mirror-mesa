@@ -190,7 +190,15 @@
 #define	DR6	%db6
 #define	DR7	%db7
 /* Floating-point Stack */
-#define	ST	%st
+#define _STX0 	%st(0)
+#define _STX1 	%st(1)
+#define _STX2 	%st(2)
+#define _STX3 	%st(3)
+#define _STX4 	%st(4)
+#define _STX5 	%st(5)
+#define _STX6 	%st(6)
+#define _STX7 	%st(7)
+#define ST(x) 	CONCAT(_STX,x)
 /* MMX Registers */
 #define MM0 	%mm0
 #define MM1 	%mm1
@@ -1032,10 +1040,10 @@ SECTION _DATA public align=16 class=DATA use32 flat
 #define B_REGDB(d, b) 	BYTE_PTR [b + d]
 
 /* Variable indirect: */
-#define VARINDIRECT(var) 	[var]
+#define VARINDIRECT(var) 	var
 
 /* Use register contents as jump/call target: */
-#define CODEPTR(reg) 	[reg]
+#define CODEPTR(reg) 	reg
 
 /*
  * 	Redefine assembler commands
@@ -1567,6 +1575,7 @@ SECTION _DATA public align=16 class=DATA use32 flat
 
 #define FEMMS	femms
 #define PREFETCH(a) 	prefetch P_ARG1(a)
+#define PREFETCHW(a)    prefetchw P_ARG1(a)
 
 /* Intel SSE */
 #define ADDPS(a, b)	addps P_ARG2(a, b)
