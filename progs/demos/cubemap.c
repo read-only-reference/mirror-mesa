@@ -1,4 +1,4 @@
-/* $Id: cubemap.c,v 1.1 2000/05/30 01:18:29 brianp Exp $ */
+/* $Id: cubemap.c,v 1.3 2000/06/27 17:04:43 brianp Exp $ */
 
 /*
  * GL_ARB_texture_cube_map demo
@@ -37,6 +37,7 @@
 
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "GL/glut.h"
@@ -203,12 +204,15 @@ static void init( void )
                    GL_RGB, GL_UNSIGNED_BYTE, image);
    }
 
-   /*
-   glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-   glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-   */
+#if 1
    glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
    glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+#else
+   glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+   glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+#endif
+   glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+   glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
    glEnable(GL_TEXTURE_CUBE_MAP_ARB);
 

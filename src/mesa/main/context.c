@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.70 2000/05/26 14:44:59 brianp Exp $ */
+/* $Id: context.c,v 1.77 2000/06/30 22:11:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -594,6 +594,23 @@ init_texture_unit( GLcontext *ctx, GLuint unit )
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
 
    texUnit->EnvMode = GL_MODULATE;
+   texUnit->CombineModeRGB = GL_MODULATE;
+   texUnit->CombineModeA = GL_MODULATE;
+   texUnit->CombineSourceRGB[0] = GL_TEXTURE;
+   texUnit->CombineSourceRGB[1] = GL_PREVIOUS_EXT;
+   texUnit->CombineSourceRGB[2] = GL_CONSTANT_EXT;
+   texUnit->CombineSourceA[0] = GL_TEXTURE;
+   texUnit->CombineSourceA[1] = GL_PREVIOUS_EXT;
+   texUnit->CombineSourceA[2] = GL_CONSTANT_EXT;
+   texUnit->CombineOperandRGB[0] = GL_SRC_COLOR;
+   texUnit->CombineOperandRGB[1] = GL_SRC_COLOR;
+   texUnit->CombineOperandRGB[2] = GL_SRC_ALPHA;
+   texUnit->CombineOperandA[0] = GL_SRC_ALPHA;
+   texUnit->CombineOperandA[1] = GL_SRC_ALPHA;
+   texUnit->CombineOperandA[2] = GL_SRC_ALPHA;
+   texUnit->CombineScaleShiftRGB = 0;
+   texUnit->CombineScaleShiftA = 0;
+
    ASSIGN_4V( texUnit->EnvColor, 0.0, 0.0, 0.0, 0.0 );
    texUnit->TexGenEnabled = 0;
    texUnit->GenModeS = GL_EYE_LINEAR;
@@ -763,10 +780,11 @@ init_attrib_groups( GLcontext *ctx )
    }
 
    /* Texture matrix */
-   for (i=0; i<MAX_TEXTURE_UNITS; i++) {
+   for (i = 0; i < MAX_TEXTURE_UNITS; i++) {
       gl_matrix_ctr( &ctx->TextureMatrix[i] );
       ctx->TextureStackDepth[i] = 0;
       for (j = 0; j < MAX_TEXTURE_STACK_DEPTH - 1; j++) {
+         gl_matrix_ctr( &ctx->TextureStack[i][j] );
          ctx->TextureStack[i][j].inv = 0;
       }
    }
@@ -988,6 +1006,11 @@ init_attrib_groups( GLcontext *ctx )
       ctx->ShineTable[i]->refcount++;
    }
 
+   gl_compute_shine_table( ctx, 0, ctx->Light.Material[0].Shininess );
+   gl_compute_shine_table( ctx, 2, ctx->Light.Material[0].Shininess * .5 );
+   gl_compute_shine_table( ctx, 1, ctx->Light.Material[1].Shininess );
+   gl_compute_shine_table( ctx, 3, ctx->Light.Material[1].Shininess * .5 );
+
 
    /* Line group */
    ctx->Line.SmoothFlag = GL_FALSE;
@@ -1050,6 +1073,10 @@ init_attrib_groups( GLcontext *ctx )
    ASSIGN_4V(ctx->Pixel.PostColorMatrixBias, 0.0, 0.0, 0.0, 0.0);
    ASSIGN_4V(ctx->Pixel.ColorTableScale, 1.0, 1.0, 1.0, 1.0);
    ASSIGN_4V(ctx->Pixel.ColorTableBias, 0.0, 0.0, 0.0, 0.0);
+   ASSIGN_4V(ctx->Pixel.PCCTscale, 1.0, 1.0, 1.0, 1.0);
+   ASSIGN_4V(ctx->Pixel.PCCTbias, 0.0, 0.0, 0.0, 0.0);
+   ASSIGN_4V(ctx->Pixel.PCMCTscale, 1.0, 1.0, 1.0, 1.0);
+   ASSIGN_4V(ctx->Pixel.PCMCTbias, 0.0, 0.0, 0.0, 0.0);
    ctx->Pixel.ColorTableEnabled = GL_FALSE;
    ctx->Pixel.PostConvolutionColorTableEnabled = GL_FALSE;
    ctx->Pixel.PostColorMatrixColorTableEnabled = GL_FALSE;
@@ -1067,6 +1094,7 @@ init_attrib_groups( GLcontext *ctx )
 
    /* Point group */
    ctx->Point.SmoothFlag = GL_FALSE;
+   ctx->Point.UserSize = 1.0;
    ctx->Point.Size = 1.0;
    ctx->Point.Params[0] = 1.0;
    ctx->Point.Params[1] = 0.0;
@@ -1373,7 +1401,7 @@ _mesa_initialize_context( GLcontext *ctx,
 
    ctx->PB = gl_alloc_pb();
    if (!ctx->PB) {
-      FREE( ctx->VB );
+      ALIGN_FREE( ctx->VB );
       FREE( ctx );
       return GL_FALSE;
    }
@@ -1386,9 +1414,9 @@ _mesa_initialize_context( GLcontext *ctx,
       /* allocate new group of display lists */
       ctx->Shared = alloc_shared_state();
       if (!ctx->Shared) {
-         FREE(ctx->VB);
-         FREE(ctx->PB);
-         FREE(ctx);
+         ALIGN_FREE( ctx->VB );
+         FREE( ctx->PB );
+         FREE( ctx );
          return GL_FALSE;
       }
    }
@@ -1418,9 +1446,9 @@ _mesa_initialize_context( GLcontext *ctx,
 
    if (!alloc_proxy_textures(ctx)) {
       free_shared_state(ctx, ctx->Shared);
-      FREE(ctx->VB);
-      FREE(ctx->PB);
-      FREE(ctx);
+      ALIGN_FREE( ctx->VB );
+      FREE( ctx->PB );
+      FREE( ctx );
       return GL_FALSE;
    }
 
@@ -1447,11 +1475,11 @@ _mesa_initialize_context( GLcontext *ctx,
    ctx->Save = (struct _glapi_table *) CALLOC(dispatchSize * sizeof(void*));
    if (!ctx->Exec || !ctx->Save) {
       free_shared_state(ctx, ctx->Shared);
-      FREE(ctx->VB);
-      FREE(ctx->PB);
+      ALIGN_FREE( ctx->VB );
+      FREE( ctx->PB );
       if (ctx->Exec)
-         FREE(ctx->Exec);
-      FREE(ctx);
+         FREE( ctx->Exec );
+      FREE( ctx );
    }
    _mesa_init_exec_table(ctx->Exec, dispatchSize);
    _mesa_init_dlist_table(ctx->Save, dispatchSize);
@@ -1594,7 +1622,7 @@ gl_free_context_data( GLcontext *ctx )
    /* Free cache of immediate buffers. */
    while (ctx->nr_im_queued-- > 0) {
       struct immediate * next = ctx->freed_im_queue->next;
-      FREE( ctx->freed_im_queue );
+      ALIGN_FREE( ctx->freed_im_queue );
       ctx->freed_im_queue = next;
    }
    gl_extensions_dtr(ctx);
@@ -1940,6 +1968,9 @@ void gl_error( GLcontext *ctx, GLenum error, const char *s )
 	 case GL_OUT_OF_MEMORY:
 	    strcpy( errstr, "GL_OUT_OF_MEMORY" );
 	    break;
+         case GL_TABLE_TOO_LARGE:
+            strcpy( errstr, "GL_TABLE_TOO_LARGE" );
+            break;
 	 default:
 	    strcpy( errstr, "unknown" );
 	    break;

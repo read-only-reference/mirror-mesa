@@ -1,4 +1,4 @@
-/* $Id: state.c,v 1.15 2000/05/26 14:44:59 brianp Exp $ */
+/* $Id: state.c,v 1.21 2000/06/30 14:14:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -540,6 +540,14 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->GetPixelTexGenParameterivSGIS = _mesa_GetPixelTexGenParameterivSGIS;
    exec->GetPixelTexGenParameterfvSGIS = _mesa_GetPixelTexGenParameterfvSGIS;
 
+   /* 30. GL_EXT_vertex_array */
+   exec->ColorPointerEXT = _mesa_ColorPointerEXT;
+   exec->EdgeFlagPointerEXT = _mesa_EdgeFlagPointerEXT;
+   exec->IndexPointerEXT = _mesa_IndexPointerEXT;
+   exec->NormalPointerEXT = _mesa_NormalPointerEXT;
+   exec->TexCoordPointerEXT = _mesa_TexCoordPointerEXT;
+   exec->VertexPointerEXT = _mesa_VertexPointerEXT;
+
    /* 37. GL_EXT_blend_minmax */
 #if 0
    exec->BlendEquationEXT = _mesa_BlendEquationEXT;
@@ -838,17 +846,15 @@ static void update_rasterflags( GLcontext *ctx )
       ctx->RasterMask |= MULTI_DRAW_BIT;
       ctx->TriangleCaps |= DD_MULTIDRAW;
    }
-   else if (ctx->Visual->RGBAflag && ctx->Color.ColorMask==0) {
+   else if (ctx->Visual->RGBAflag && *((GLuint *) ctx->Color.ColorMask) == 0) {
       /* all RGBA channels disabled */
       ctx->RasterMask |= MULTI_DRAW_BIT;
       ctx->TriangleCaps |= DD_MULTIDRAW;
-      ctx->Color.DrawDestMask = 0;
    }
    else if (!ctx->Visual->RGBAflag && ctx->Color.IndexMask==0) {
       /* all color index bits disabled */
       ctx->RasterMask |= MULTI_DRAW_BIT;
       ctx->TriangleCaps |= DD_MULTIDRAW;
-      ctx->Color.DrawDestMask = 0;
    }
 }
 
@@ -1055,11 +1061,6 @@ void gl_update_state( GLcontext *ctx )
 	     ctx->Polygon.OffsetLine ||
 	     ctx->Polygon.OffsetFill)
 	    ctx->TriangleCaps |= DD_TRI_OFFSET;
-
-	 /* reset Z offsets now */
-	 ctx->PointZoffset   = 0.0;
-	 ctx->LineZoffset    = 0.0;
-	 ctx->PolygonZoffset = 0.0;
       }
    }
 
@@ -1176,14 +1177,13 @@ void gl_update_state( GLcontext *ctx )
       ctx->NeedEyeNormals = GL_FALSE;
 
       if (ctx->Light.Enabled) {
-	 if (ctx->Light.Flags & LIGHT_POSITIONAL) {
-	    /* Need length for attenuation */
-	    if (!TEST_MAT_FLAGS( &ctx->ModelView, MAT_FLAGS_LENGTH_PRESERVING))
-	       ctx->NeedEyeCoords = GL_TRUE;
-	 } else if (ctx->Light.NeedVertices) {
-	    /* Need angle for spot calculations */
-	    if (!TEST_MAT_FLAGS( &ctx->ModelView, MAT_FLAGS_ANGLE_PRESERVING))
-	       ctx->NeedEyeCoords = GL_TRUE;
+	 if ((ctx->Light.Flags & LIGHT_POSITIONAL) ||
+             ctx->Light.NeedVertices ||
+             !TEST_MAT_FLAGS( &ctx->ModelView, MAT_FLAGS_LENGTH_PRESERVING)) {
+            /* Need length for attenuation or need angle for spotlights
+             * or non-uniform scale matrix
+             */
+            ctx->NeedEyeCoords = GL_TRUE;
 	 }
 	 ctx->NeedEyeNormals = ctx->NeedEyeCoords;
       }

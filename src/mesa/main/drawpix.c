@@ -1,4 +1,4 @@
-/* $Id: drawpix.c,v 1.22 2000/05/04 13:48:49 brianp Exp $ */
+/* $Id: drawpix.c,v 1.26 2000/06/30 22:19:41 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -122,6 +122,7 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
        && ctx->ColorMatrix.type == MATRIX_IDENTITY
        && !ctx->Pixel.ColorTableEnabled
        && !ctx->Pixel.PostColorMatrixColorTableEnabled
+       && ctx->Pixel.PostConvolutionColorTableEnabled
        && !ctx->Pixel.MinMaxEnabled
        && !ctx->Pixel.HistogramEnabled
        && ctx->Pixel.IndexShift==0 && ctx->Pixel.IndexOffset==0
@@ -512,11 +513,11 @@ draw_depth_pixels( GLcontext *ctx, GLint x, GLint y,
    GLuint ispan[MAX_WIDTH];
    GLint drawWidth = (width > MAX_WIDTH) ? MAX_WIDTH : width;
 
-   if (type != GL_UNSIGNED_BYTE
+   if (type != GL_BYTE
        && type != GL_UNSIGNED_BYTE
+       && type != GL_SHORT
        && type != GL_UNSIGNED_SHORT
-       && type != GL_UNSIGNED_SHORT
-       && type != GL_UNSIGNED_INT
+       && type != GL_INT
        && type != GL_UNSIGNED_INT
        && type != GL_FLOAT) {
       gl_error(ctx, GL_INVALID_ENUM, "glDrawPixels(type)");
@@ -653,17 +654,23 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
                   pixels, width, height, format, type, 0, row, 0);
          _mesa_unpack_ubyte_color_span(ctx, width, GL_RGBA, (void*) rgba,
                    format, type, source, unpack, GL_TRUE);
-         if (ctx->Pixel.MinMaxEnabled && ctx->MinMax.Sink)
+         if ((ctx->Pixel.MinMaxEnabled && ctx->MinMax.Sink) ||
+             (ctx->Pixel.HistogramEnabled && ctx->Histogram.Sink))
             continue;
 
          if (ctx->Texture.ReallyEnabled && ctx->Pixel.PixelTextureEnabled) {
             GLfloat s[MAX_WIDTH], t[MAX_WIDTH], r[MAX_WIDTH], q[MAX_WIDTH];
+            GLubyte primary_rgba[MAX_WIDTH][4];
             GLuint unit;
             /* XXX not sure how multitexture is supposed to work here */
+
+            MEMCPY(primary_rgba, rgba, 4 * width * sizeof(GLubyte));
+
             for (unit = 0; unit < MAX_TEXTURE_UNITS; unit++) {
                _mesa_pixeltexgen(ctx, width, (const GLubyte (*)[4]) rgba,
                                  s, t, r, q);
-               gl_texture_pixels(ctx, unit, width, s, t, r, NULL, rgba);
+               gl_texture_pixels(ctx, unit, width, s, t, r, NULL,
+                                 primary_rgba, rgba);
             }
          }
 
