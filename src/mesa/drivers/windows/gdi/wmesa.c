@@ -1,4 +1,4 @@
-/* $Id: wmesa.c,v 1.44 2003/03/01 01:50:24 brianp Exp $ */
+/* $Id: wmesa.c,v 1.1 2003/07/24 03:47:46 kschultz Exp $ */
 
 /*
  * Windows (Win32) device driver for Mesa 3.4
@@ -27,7 +27,7 @@
 
 #include "wmesadef.h"
 #include <GL/wmesa.h>
-#include "mesa_extend.h"
+//#include "mesa_extend.h"
 
 #include "glheader.h"
 #include "colors.h"
@@ -41,6 +41,7 @@
 #include "matrix.h"
 #include "mtypes.h"
 #include "texformat.h"
+#include "teximage.h"
 #include "texstore.h"
 #include "array_cache/acache.h"
 #include "swrast/swrast.h"
@@ -68,17 +69,26 @@
 #endif
 
 /* Stereo and parallel not tested for Mesa 4.0. */
+#define NO_STEREO
 #if !defined(NO_STEREO)
 #include "gl\glu.h"
 #include "stereo.h"
 #endif
 
+#define NO_PARALLEL
 #if !defined(NO_PARALLEL)
 #include "parallel.h"
 #endif
 
 
 /* File global varaibles */
+struct DISPLAY_OPTIONS {
+	int  stereo;
+	int  fullScreen;
+	int	 mode;
+	int	 bpp;
+};
+
 struct DISPLAY_OPTIONS displayOptions = 
 {
 	0,		// stereo
@@ -409,7 +419,7 @@ static clear(GLcontext* ctx, GLbitfield mask,
   if ((mask & (DD_FRONT_LEFT_BIT | DD_BACK_LEFT_BIT)) &&
       ctx->DrawBuffer->UseSoftwareAlphaBuffers &&
       ctx->Color.ColorMask[ACOMP]) {
-      _mesa_clear_alpha_buffers( ctx );
+      _swrast_clear_alpha_buffers( ctx );
   }
 
   if (*colorMask == 0xffffffff && ctx->Color.IndexMask == 0xffffffff) { 

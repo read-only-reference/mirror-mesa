@@ -24,6 +24,9 @@
 
 /*
  * $Log: colors.h,v $
+ * Revision 1.1  2003/07/24 03:47:46  kschultz
+ * Source code for GDI driver.
+ *
  * Revision 1.3  2002/01/15 18:14:34  kschultz
  * Fixed pixel color component problem and clear code for 24-bit Windows
  *   devices.  (Jeff Lewis)
@@ -46,6 +49,9 @@
 
 /*
  * $Log: colors.h,v $
+ * Revision 1.1  2003/07/24 03:47:46  kschultz
+ * Source code for GDI driver.
+ *
  * Revision 1.3  2002/01/15 18:14:34  kschultz
  * Fixed pixel color component problem and clear code for 24-bit Windows
  *   devices.  (Jeff Lewis)
@@ -68,6 +74,9 @@
  
 /*
  * $Log: colors.h,v $
+ * Revision 1.1  2003/07/24 03:47:46  kschultz
+ * Source code for GDI driver.
+ *
  * Revision 1.3  2002/01/15 18:14:34  kschultz
  * Fixed pixel color component problem and clear code for 24-bit Windows
  *   devices.  (Jeff Lewis)

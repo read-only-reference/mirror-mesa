@@ -24,7 +24,7 @@
 
 
 /*
- * \brief Functions to implement the GL_ARB_occlusion_query extension.
+ * Functions to implement the GL_ARB_occlusion_query extension.
  */
 
 
@@ -51,6 +51,20 @@ struct occlusion_query
    GLuint PassedCounter;
    GLboolean Active;
 };
+
+
+
+void
+_mesa_init_occlude(GLcontext *ctx)
+{
+#if FEATURE_ARB_occlusion_query
+   ctx->Occlusion.QueryObjects = _mesa_NewHashTable();
+#endif
+
+   ctx->OcclusionResult = GL_FALSE;
+   ctx->OcclusionResultSaved = GL_FALSE;
+}
+
 
 
 /**

@@ -1,3 +1,8 @@
+/**
+ * \file get.c
+ * State query functions.
+ */
+
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -107,6 +112,18 @@ pixel_texgen_mode(const GLcontext *ctx)
 }
 
 
+/**
+ * Get the value(s) of a selected parameter.
+ *
+ * \param pname parameter to be returned.
+ * \param params will hold the value(s) of the speficifed parameter.
+ *
+ * \sa glGetBooleanv().
+ *
+ * Tries to get the specified parameter via dd_function_table::GetBooleanv,
+ * otherwise gets the specified parameter from the current context, converting
+ * it value into GLboolean.
+ */
 void
 _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 {
@@ -119,13 +136,15 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
    if (!params)
       return;
 
-   /* We need this in order to get correct results for
-    * GL_OCCLUSION_TEST_RESULT_HP.  There might be other important cases.
-    */
-   FLUSH_VERTICES(ctx, 0);
-
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glGetBooleanv %s\n", _mesa_lookup_enum_by_nr(pname));
+
+   if (!ctx->_CurrentProgram) {
+      /* We need this in order to get correct results for
+       * GL_OCCLUSION_TEST_RESULT_HP.  There might be other important cases.
+       */
+      FLUSH_VERTICES(ctx, 0);
+   }
 
    if (ctx->Driver.GetBooleanv
        && (*ctx->Driver.GetBooleanv)(ctx, pname, params))
@@ -1613,12 +1632,43 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          params[1] = FLOAT_TO_BOOL(ctx->Depth.BoundsMax);
          break;
 
+#if FEATURE_MESA_program_debug
+      case GL_FRAGMENT_PROGRAM_CALLBACK_MESA:
+         CHECK_EXTENSION_B(MESA_program_debug, pname);
+         *params = ctx->FragmentProgram.CallbackEnabled;
+         break;
+      case GL_VERTEX_PROGRAM_CALLBACK_MESA:
+         CHECK_EXTENSION_B(MESA_program_debug, pname);
+         *params = ctx->VertexProgram.CallbackEnabled;
+         break;
+      case GL_FRAGMENT_PROGRAM_POSITION_MESA:
+         CHECK_EXTENSION_B(MESA_program_debug, pname);
+         *params = INT_TO_BOOL(ctx->FragmentProgram.CurrentPosition);
+         break;
+      case GL_VERTEX_PROGRAM_POSITION_MESA:
+         CHECK_EXTENSION_B(MESA_program_debug, pname);
+         *params = INT_TO_BOOL(ctx->VertexProgram.CurrentPosition);
+         break;
+#endif
+
       default:
          _mesa_error(ctx, GL_INVALID_ENUM, "glGetBooleanv(pname=0x%x)", pname);
    }
 }
 
 
+/**
+ * Get the value(s) of a selected parameter.
+ *
+ * \param pname parameter to be returned.
+ * \param params will hold the value(s) of the speficifed parameter.
+ *
+ * \sa glGetDoublev().
+ *
+ * Tries to get the specified parameter via dd_function_table::GetDoublev,
+ * otherwise gets the specified parameter from the current context, converting
+ * it value into GLdouble.
+ */
 void
 _mesa_GetDoublev( GLenum pname, GLdouble *params )
 {
@@ -1631,13 +1681,15 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
    if (!params)
       return;
 
-   /* We need this in order to get correct results for
-    * GL_OCCLUSION_TEST_RESULT_HP.  There might be other important cases.
-    */
-   FLUSH_VERTICES(ctx, 0);
-
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glGetDoublev %s\n", _mesa_lookup_enum_by_nr(pname));
+
+   if (!ctx->_CurrentProgram) {
+      /* We need this in order to get correct results for
+       * GL_OCCLUSION_TEST_RESULT_HP.  There might be other important cases.
+       */
+      FLUSH_VERTICES(ctx, 0);
+   }
 
    if (ctx->Driver.GetDoublev && (*ctx->Driver.GetDoublev)(ctx, pname, params))
       return;
@@ -3119,12 +3171,43 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          params[1] = ctx->Depth.BoundsMax;
          break;
 
+#if FEATURE_MESA_program_debug
+      case GL_FRAGMENT_PROGRAM_CALLBACK_MESA:
+         CHECK_EXTENSION_D(MESA_program_debug, pname);
+         *params = (GLdouble) ctx->FragmentProgram.CallbackEnabled;
+         break;
+      case GL_VERTEX_PROGRAM_CALLBACK_MESA:
+         CHECK_EXTENSION_D(MESA_program_debug, pname);
+         *params = (GLdouble) ctx->VertexProgram.CallbackEnabled;
+         break;
+      case GL_FRAGMENT_PROGRAM_POSITION_MESA:
+         CHECK_EXTENSION_D(MESA_program_debug, pname);
+         *params = (GLdouble) ctx->FragmentProgram.CurrentPosition;
+         break;
+      case GL_VERTEX_PROGRAM_POSITION_MESA:
+         CHECK_EXTENSION_D(MESA_program_debug, pname);
+         *params = (GLdouble) ctx->VertexProgram.CurrentPosition;
+         break;
+#endif
+
       default:
          _mesa_error(ctx, GL_INVALID_ENUM, "glGetDoublev(pname=0x%x)", pname);
    }
 }
 
 
+/**
+ * Get the value(s) of a selected parameter.
+ *
+ * \param pname parameter to be returned.
+ * \param params will hold the value(s) of the speficifed parameter.
+ *
+ * \sa glGetFloatv().
+ *
+ * Tries to get the specified parameter via dd_function_table::GetFloatv,
+ * otherwise gets the specified parameter from the current context, converting
+ * it value into GLfloat.
+ */
 void
 _mesa_GetFloatv( GLenum pname, GLfloat *params )
 {
@@ -3137,13 +3220,15 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
    if (!params)
       return;
 
-   /* We need this in order to get correct results for
-    * GL_OCCLUSION_TEST_RESULT_HP.  There might be other important cases.
-    */
-   FLUSH_VERTICES(ctx, 0);
-
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glGetFloatv %s\n", _mesa_lookup_enum_by_nr(pname));
+
+   if (!ctx->_CurrentProgram) {
+      /* We need this in order to get correct results for
+       * GL_OCCLUSION_TEST_RESULT_HP.  There might be other important cases.
+       */
+      FLUSH_VERTICES(ctx, 0);
+   }
 
    if (ctx->Driver.GetFloatv && (*ctx->Driver.GetFloatv)(ctx, pname, params))
       return;
@@ -4601,12 +4686,43 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          params[1] = ctx->Depth.BoundsMax;
          break;
 
+#if FEATURE_MESA_program_debug
+      case GL_FRAGMENT_PROGRAM_CALLBACK_MESA:
+         CHECK_EXTENSION_F(MESA_program_debug, pname);
+         *params = (GLfloat) ctx->FragmentProgram.CallbackEnabled;
+         break;
+      case GL_VERTEX_PROGRAM_CALLBACK_MESA:
+         CHECK_EXTENSION_F(MESA_program_debug, pname);
+         *params = (GLfloat) ctx->VertexProgram.CallbackEnabled;
+         break;
+      case GL_FRAGMENT_PROGRAM_POSITION_MESA:
+         CHECK_EXTENSION_F(MESA_program_debug, pname);
+         *params = (GLfloat) ctx->FragmentProgram.CurrentPosition;
+         break;
+      case GL_VERTEX_PROGRAM_POSITION_MESA:
+         CHECK_EXTENSION_F(MESA_program_debug, pname);
+         *params = (GLfloat) ctx->VertexProgram.CurrentPosition;
+         break;
+#endif
+
       default:
          _mesa_error(ctx, GL_INVALID_ENUM, "glGetFloatv(0x%x)", pname);
    }
 }
 
 
+/**
+ * Get the value(s) of a selected parameter.
+ *
+ * \param pname parameter to be returned.
+ * \param params will hold the value(s) of the speficifed parameter.
+ *
+ * \sa glGetIntegerv().
+ *
+ * Tries to get the specified parameter via dd_function_table::GetIntegerv,
+ * otherwise gets the specified parameter from the current context, converting
+ * it value into GLinteger.
+ */
 void
 _mesa_GetIntegerv( GLenum pname, GLint *params )
 {
@@ -4619,13 +4735,15 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
    if (!params)
       return;
 
-   /* We need this in order to get correct results for
-    * GL_OCCLUSION_TEST_RESULT_HP.  There might be other important cases.
-    */
-   FLUSH_VERTICES(ctx, 0);
-
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glGetIntegerv %s\n", _mesa_lookup_enum_by_nr(pname));
+
+   if (!ctx->_CurrentProgram) {
+      /* We need this in order to get correct results for
+       * GL_OCCLUSION_TEST_RESULT_HP.  There might be other important cases.
+       */
+      FLUSH_VERTICES(ctx, 0);
+   }
 
    if (ctx->Driver.GetIntegerv
        && (*ctx->Driver.GetIntegerv)(ctx, pname, params))
@@ -6121,13 +6239,42 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          params[1] = (GLint) ctx->Depth.BoundsMax;
          break;
 
+#if FEATURE_MESA_program_debug
+      case GL_FRAGMENT_PROGRAM_CALLBACK_MESA:
+         CHECK_EXTENSION_I(MESA_program_debug, pname);
+         *params = (GLint) ctx->FragmentProgram.CallbackEnabled;
+         break;
+      case GL_VERTEX_PROGRAM_CALLBACK_MESA:
+         CHECK_EXTENSION_I(MESA_program_debug, pname);
+         *params = (GLint) ctx->VertexProgram.CallbackEnabled;
+         break;
+      case GL_FRAGMENT_PROGRAM_POSITION_MESA:
+         CHECK_EXTENSION_I(MESA_program_debug, pname);
+         *params = (GLint) ctx->FragmentProgram.CurrentPosition;
+         break;
+      case GL_VERTEX_PROGRAM_POSITION_MESA:
+         CHECK_EXTENSION_I(MESA_program_debug, pname);
+         *params = (GLint) ctx->VertexProgram.CurrentPosition;
+         break;
+#endif
+
       default:
          _mesa_error(ctx, GL_INVALID_ENUM, "glGetIntegerv(pname=0x%x)", pname);
    }
 }
 
 
-
+/**
+ * Get the address of a selected pointer.
+ *
+ * \param pname array or buffer to be returned.
+ * \param params will hold the pointer speficifed by \p pname.
+ *
+ * \sa glGetPointerv().
+ *
+ * Tries to get the specified pointer via dd_function_table::GetPointerv,
+ * otherwise gets the specified pointer from the current context.
+ */
 void
 _mesa_GetPointerv( GLenum pname, GLvoid **params )
 {
@@ -6176,6 +6323,36 @@ _mesa_GetPointerv( GLenum pname, GLvoid **params )
       case GL_SELECTION_BUFFER_POINTER:
          *params = ctx->Select.Buffer;
          break;
+#if FEATURE_MESA_program_debug
+      case GL_FRAGMENT_PROGRAM_CALLBACK_FUNC_MESA:
+         if (!ctx->Extensions.MESA_program_debug) {
+            _mesa_error(ctx, GL_INVALID_ENUM, "glGetPointerv");
+            return;
+         }
+         *params = (GLvoid *) ctx->FragmentProgram.Callback;
+         break;
+      case GL_FRAGMENT_PROGRAM_CALLBACK_DATA_MESA:
+         if (!ctx->Extensions.MESA_program_debug) {
+            _mesa_error(ctx, GL_INVALID_ENUM, "glGetPointerv");
+            return;
+         }
+         *params = ctx->FragmentProgram.CallbackData;
+         break;
+      case GL_VERTEX_PROGRAM_CALLBACK_FUNC_MESA:
+         if (!ctx->Extensions.MESA_program_debug) {
+            _mesa_error(ctx, GL_INVALID_ENUM, "glGetPointerv");
+            return;
+         }
+         *params = (GLvoid *) ctx->VertexProgram.Callback;
+         break;
+      case GL_VERTEX_PROGRAM_CALLBACK_DATA_MESA:
+         if (!ctx->Extensions.MESA_program_debug) {
+            _mesa_error(ctx, GL_INVALID_ENUM, "glGetPointerv");
+            return;
+         }
+         *params = ctx->VertexProgram.CallbackData;
+         break;
+#endif
       default:
          _mesa_error( ctx, GL_INVALID_ENUM, "glGetPointerv" );
          return;
@@ -6183,7 +6360,16 @@ _mesa_GetPointerv( GLenum pname, GLvoid **params )
 }
 
 
-
+/**
+ * Get a string describing the current GL connection.
+ *
+ * \param name name symbolic constant.
+ *
+ * \sa glGetString().
+ *
+ * Tries to get the string from dd_function_table::GetString, otherwise returns
+ * the hardcoded strings.
+ */
 const GLubyte *
 _mesa_GetString( GLenum name )
 {
@@ -6243,7 +6429,9 @@ _mesa_GetString( GLenum name )
                return (const GLubyte *) version_1_2;
             }
          case GL_EXTENSIONS:
-            return (const GLubyte *) _mesa_extensions_get_string(ctx);
+            if (!ctx->Extensions.String)
+               ctx->Extensions.String = _mesa_make_extension_string(ctx);
+            return (const GLubyte *) ctx->Extensions.String;
 #if FEATURE_NV_fragment_program
          case GL_PROGRAM_ERROR_STRING_NV:
             if (ctx->Extensions.NV_fragment_program) {
@@ -6259,8 +6447,12 @@ _mesa_GetString( GLenum name )
 }
 
 
-/*
- * Execute a glGetError command
+/**
+ * Execute a glGetError() command.
+ *
+ * \return error number.
+ *
+ * Returns __GLcontextRec::ErrorValue.
  */
 GLenum
 _mesa_GetError( void )

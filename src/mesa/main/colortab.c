@@ -92,26 +92,6 @@ base_colortab_format( GLenum format )
 }
 
 
-void
-_mesa_init_colortable( struct gl_color_table *p )
-{
-   p->FloatTable = GL_FALSE;
-   p->Table = NULL;
-   p->Size = 0;
-   p->IntFormat = GL_RGBA;
-}
-
-
-
-void
-_mesa_free_colortable_data( struct gl_color_table *p )
-{
-   if (p->Table) {
-      FREE(p->Table);
-      p->Table = NULL;
-   }
-}
-
 
 /*
  * Examine table's format and set the component sizes accordingly.
@@ -1344,4 +1324,58 @@ _mesa_GetColorTableParameteriv( GLenum target, GLenum pname, GLint *params )
          _mesa_error(ctx, GL_INVALID_ENUM, "glGetColorTableParameteriv(pname)" );
          return;
    }
+}
+
+/**********************************************************************/
+/*****                      Initialization                        *****/
+/**********************************************************************/
+
+
+void
+_mesa_init_colortable( struct gl_color_table *p )
+{
+   p->FloatTable = GL_FALSE;
+   p->Table = NULL;
+   p->Size = 0;
+   p->IntFormat = GL_RGBA;
+}
+
+
+
+void
+_mesa_free_colortable_data( struct gl_color_table *p )
+{
+   if (p->Table) {
+      FREE(p->Table);
+      p->Table = NULL;
+   }
+}
+
+
+/*
+ * Initialize all colortables for a context.
+ */
+void _mesa_init_colortables( GLcontext * ctx )
+{
+   /* Color tables */
+   _mesa_init_colortable(&ctx->ColorTable);
+   _mesa_init_colortable(&ctx->ProxyColorTable);
+   _mesa_init_colortable(&ctx->PostConvolutionColorTable);
+   _mesa_init_colortable(&ctx->ProxyPostConvolutionColorTable);
+   _mesa_init_colortable(&ctx->PostColorMatrixColorTable);
+   _mesa_init_colortable(&ctx->ProxyPostColorMatrixColorTable);
+}
+
+
+/*
+ * Free all colortable data for a context
+ */
+void _mesa_free_colortables_data( GLcontext *ctx )
+{
+   _mesa_free_colortable_data(&ctx->ColorTable);
+   _mesa_free_colortable_data(&ctx->ProxyColorTable);
+   _mesa_free_colortable_data(&ctx->PostConvolutionColorTable);
+   _mesa_free_colortable_data(&ctx->ProxyPostConvolutionColorTable);
+   _mesa_free_colortable_data(&ctx->PostColorMatrixColorTable);
+   _mesa_free_colortable_data(&ctx->ProxyPostColorMatrixColorTable);
 }

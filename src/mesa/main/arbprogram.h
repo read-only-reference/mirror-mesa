@@ -26,6 +26,11 @@
 #ifndef ARBPROGRAM_H
 #define ARBPROGRAM_H
 
+#include "mtypes.h"
+
+extern void
+_mesa_init_program(GLcontext *ctx);
+
 
 extern void
 _mesa_EnableVertexAttribArrayARB(GLuint index);
@@ -125,5 +130,12 @@ extern void
 _mesa_GetProgramStringARB(GLenum target, GLenum pname, GLvoid *string);
 
 
-#endif
+extern void
+_mesa_ProgramCallbackMESA(GLenum target, GLprogramcallbackMESA callback,
+                          GLvoid *data);
 
+extern void
+_mesa_GetProgramRegisterfvMESA(GLenum target, GLsizei len,
+                               const GLubyte *registerName, GLfloat *v);
+
+#endif
