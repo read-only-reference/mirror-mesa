@@ -1,4 +1,4 @@
-/* $Id: t_context.c,v 1.26 2002/04/19 12:32:14 brianp Exp $ */
+/* $Id: t_context.c,v 1.28 2002/08/21 13:05:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -194,6 +194,11 @@ _tnl_wakeup_exec( GLcontext *ctx )
     */
    _tnl_InvalidateState( ctx, ~0 );
    tnl->pipeline.run_input_changes = ~0;
+
+   if (ctx->Light.ColorMaterialEnabled) {
+      _mesa_update_color_material( ctx, ctx->Current.Attrib[VERT_ATTRIB_COLOR0] );
+   }
+
 }
 
 
