@@ -1,4 +1,4 @@
-/* $Id: s_drawpix.c,v 1.28 2002/01/31 00:27:43 brianp Exp $ */
+/* $Id: s_drawpix.c,v 1.31 2002/02/17 17:30:23 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -37,7 +37,6 @@
 
 #include "s_context.h"
 #include "s_drawpix.h"
-#include "s_fog.h"
 #include "s_pixeltex.h"
 #include "s_span.h"
 #include "s_stencil.h"
@@ -117,7 +116,7 @@ fast_draw_pixels(GLcontext *ctx, GLint x, GLint y,
    if (ctx->Fog.Enabled)
       _mesa_span_default_fog(ctx, &span);
 
-   if ((SWRAST_CONTEXT(ctx)->_RasterMask&(~(SCISSOR_BIT|WINCLIP_BIT)))==0
+   if ((SWRAST_CONTEXT(ctx)->_RasterMask & ~CLIP_BIT) == 0
        && ctx->Texture._ReallyEnabled == 0
        && unpack->Alignment == 1
        && !unpack->SwapBytes
@@ -635,21 +634,20 @@ draw_depth_pixels( GLcontext *ctx, GLint x, GLint y,
    if (ctx->Fog.Enabled)
       _mesa_span_default_fog(ctx, &span);
 
-   if (type==GL_UNSIGNED_SHORT && sizeof(GLdepth)==sizeof(GLushort)
+   if (type==GL_UNSIGNED_SHORT && ctx->Visual.depthBits == 16
        && !bias_or_scale && !zoom && ctx->Visual.rgbMode) {
       /* Special case: directly write 16-bit depth values */
       GLint row;
-      for (row = 0; row < height; row++, y++) {
+      span.x = x;
+      span.y = y;
+      span.end = drawWidth;
+      for (row = 0; row < height; row++, span.y++) {
          const GLushort *zptr = (const GLushort *)
             _mesa_image_address(&ctx->Unpack, pixels, width, height,
                                 GL_DEPTH_COMPONENT, type, 0, row, 0);
          GLint i;
          for (i = 0; i < drawWidth; i++)
             span.zArray[i] = zptr[i];
-
-         span.x = x;
-         span.y = y;
-         span.end = drawWidth;
          _mesa_write_rgba_span(ctx, &span, GL_BITMAP);
       }
    }
@@ -657,25 +655,24 @@ draw_depth_pixels( GLcontext *ctx, GLint x, GLint y,
        && !bias_or_scale && !zoom && ctx->Visual.rgbMode) {
       /* Special case: directly write 32-bit depth values */
       GLint row;
-      for (row = 0; row < height; row++, y++) {
+      span.x = x;
+      span.y = y;
+      span.end = drawWidth;
+      for (row = 0; row < height; row++, span.y++) {
          const GLuint *zptr = (const GLuint *)
             _mesa_image_address(&ctx->Unpack, pixels, width, height,
                                 GL_DEPTH_COMPONENT, type, 0, row, 0);
-
-         /* XXX get rid of this loop.  use zArray pointer in span */
-         GLint i;
-         for (i = 0; i < drawWidth; i++)
-            span.zArray[i] = zptr[i];
-         span.x = x;
-         span.y = y;
-         span.end = drawWidth;
+         MEMCPY(span.zArray, zptr, drawWidth * sizeof(GLdepth));
          _mesa_write_rgba_span(ctx, &span, GL_BITMAP);
       }
    }
    else {
       /* General case */
       GLint row;
-      for (row = 0; row < height; row++, y++) {
+      span.x = x;
+      span.y = y;
+      span.end = drawWidth;
+      for (row = 0; row < height; row++, span.y++) {
          GLfloat fspan[MAX_WIDTH];
          const GLvoid *src = _mesa_image_address(&ctx->Unpack,
                 pixels, width, height, GL_DEPTH_COMPONENT, type, 0, row, 0);
@@ -686,13 +683,9 @@ draw_depth_pixels( GLcontext *ctx, GLint x, GLint y,
             const GLfloat zs = ctx->DepthMaxF;
             GLint i;
             for (i = 0; i < drawWidth; i++) {
-               span.zArray[i] = (GLdepth) (fspan[i] * zs);
+               span.zArray[i] = (GLdepth) (fspan[i] * zs + 0.5F);
             }
          }
-
-         span.x = x;
-         span.y = y;
-         span.end = drawWidth;
          if (ctx->Visual.rgbMode) {
             if (zoom)
                _mesa_write_zoomed_rgba_span(ctx, &span,
@@ -740,27 +733,10 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
    if (fast_draw_pixels(ctx, x, y, width, height, format, type, pixels))
       return;
 
-   /* Fragment depth values */
-   if (ctx->Depth.Test || ctx->Fog.Enabled) {
-      /* fill in array of z values */
-      GLdepth z = (GLdepth) (ctx->Current.RasterPos[2] * ctx->DepthMaxF);
-      GLfloat fog;
-      GLint i;
-
-      if (ctx->Fog.FogCoordinateSource == GL_FOG_COORDINATE_EXT)
-         fog = _mesa_z_to_fogfactor(ctx, ctx->Current.RasterFogCoord);
-      else
-         fog = _mesa_z_to_fogfactor(ctx, ctx->Current.RasterDistance);
-
-      for (i=0;i<width;i++) {
-	 span.zArray[i] = z;
-         span.fogArray[i] = fog;
-      }
-   }
-
+   if (ctx->Depth.Test)
+      _mesa_span_default_z(ctx, &span);
    if (ctx->Fog.Enabled)
       _mesa_span_default_fog(ctx, &span);
-   span.arrayMask |= SPAN_Z;
 
    if (SWRAST_CONTEXT(ctx)->_RasterMask == 0 && !zoom && x >= 0 && y >= 0
        && x + width <= ctx->DrawBuffer->Width

@@ -1,10 +1,10 @@
-/* $Id: s_blend.c,v 1.10 2001/12/13 16:14:26 brianp Exp $ */
+/* $Id: s_blend.c,v 1.13 2002/02/12 16:45:22 kschultz Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -33,7 +33,6 @@
 #include "s_alphabuf.h"
 #include "s_blend.h"
 #include "s_context.h"
-#include "s_pb.h"
 #include "s_span.h"
 
 
@@ -53,7 +52,7 @@ static void _BLENDAPI
 blend_noop( GLcontext *ctx, GLuint n, const GLubyte mask[],
             GLchan rgba[][4], CONST GLchan dest[][4] )
 {
-   int i;
+   GLuint i;
    ASSERT(ctx->Color.BlendEquation==GL_FUNC_ADD_EXT);
    ASSERT(ctx->Color.BlendSrcRGB==GL_ZERO);
    ASSERT(ctx->Color.BlendDstRGB==GL_ONE);
@@ -668,58 +667,37 @@ void _swrast_choose_blend_func( GLcontext *ctx )
 
 /*
  * Apply the blending operator to a span of pixels.
- * Input:  n - number of pixels in span
- *         x, y - location of leftmost pixel in span in window coords.
- *         mask - boolean mask indicating which pixels to blend.
- * In/Out:  rgba - pixel values
+ * We can handle horizontal runs of pixels (spans) or arrays of x/y
+ * pixel coordinates.
  */
 void
-_mesa_blend_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
-                  GLchan rgba[][4], const GLubyte mask[] )
-{
-   GLchan dest[MAX_WIDTH][4];
-
-   /* Check if device driver can do the work */
-   if (ctx->Color.BlendEquation==GL_LOGIC_OP &&
-       !ctx->Color.ColorLogicOpEnabled) {
-      return;
-   }
-
-   /* Read span of current frame buffer pixels */
-   _mesa_read_rgba_span( ctx, ctx->DrawBuffer, n, x, y, dest );
-
-   SWRAST_CONTEXT(ctx)->BlendFunc( ctx, n, mask, rgba,
-				   (const GLchan (*)[4]) dest );
-}
-
-
-
-/*
- * Apply the blending operator to an array of pixels.
- * Input:  n - number of pixels in span
- *         x, y - array of pixel locations
- *         mask - boolean mask indicating which pixels to blend.
- * In/Out:  rgba - pixel values
- */
-void
-_mesa_blend_pixels( GLcontext *ctx,
-                    GLuint n, const GLint x[], const GLint y[],
-                    GLchan rgba[][4], const GLubyte mask[] )
+_mesa_blend_span( GLcontext *ctx, const struct sw_span *span,
+                  GLchan rgba[][4] )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
-   GLchan dest[PB_SIZE][4];
+   GLchan framebuffer[MAX_WIDTH][4];
 
-   /* Check if device driver can do the work */
-   if (ctx->Color.BlendEquation==GL_LOGIC_OP &&
-       !ctx->Color.ColorLogicOpEnabled) {
-      return;
+   ASSERT(span->end < MAX_WIDTH);
+   ASSERT(span->arrayMask & SPAN_RGBA);
+   ASSERT(!ctx->Color.ColorLogicOpEnabled);
+
+   /* Read span of current frame buffer pixels */
+   if (span->arrayMask & SPAN_XY) {
+      /* array of x/y pixel coords */
+      (*swrast->Driver.ReadRGBAPixels)( ctx, span->end,
+                                        span->xArray, span->yArray,
+                                        framebuffer, span->mask );
+      if (swrast->_RasterMask & ALPHABUF_BIT) {
+         _mesa_read_alpha_pixels( ctx, span->end, span->xArray, span->yArray,
+                                  framebuffer, span->mask );
+      }
+   }
+   else {
+      /* horizontal run of pixels */
+      _mesa_read_rgba_span( ctx, ctx->DrawBuffer, span->end,
+                            span->x, span->y, framebuffer );
    }
 
-   /* Read pixels from current color buffer */
-   (*swrast->Driver.ReadRGBAPixels)( ctx, n, x, y, dest, mask );
-   if (swrast->_RasterMask & ALPHABUF_BIT) {
-      _mesa_read_alpha_pixels( ctx, n, x, y, dest, mask );
-   }
-
-   swrast->BlendFunc( ctx, n, mask, rgba, (const GLchan (*)[4])dest );
+   SWRAST_CONTEXT(ctx)->BlendFunc( ctx, span->end, span->mask, rgba,
+				   (const GLchan (*)[4]) framebuffer );
 }

@@ -1,0 +1,134 @@
+		    Mesa 4.0.1 DOS/DJGPP Port version 0.2
+		    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+Description:
+~~~~~~~~~~~~
+
+This is the DOS port of MESA 4.0, for DJGPP programmers... It features some
+sort of hardware acceleration, but it's pretty thin: it is entirely based on
+VBEAF.DRV from the FreeBE/AF project (http://www.talula.demon.co.uk/freebe/).
+Note that SciTech's driver isn't supported because I hate the `nearptr' hack.
+Anyway, these drivers don't provide ANY 3D function :-( Moreover, it seems to
+me the FreeBE/AF project is not really up to date... Well, it's not much, my
+intention was to open the door ;-)
+
+
+
+Legal:
+~~~~~~
+
+MESA copyright applies.
+
+
+
+Installation:
+~~~~~~~~~~~~~
+
+Type "make -f Makefile.DJ" to compile the libraries. Long filename support is
+required during compilation. The examples are not built automagically (see
+Pitfalls below).
+
+Tested on:
+	CPU:		Intel Pentium w/ MMX @166 MHz
+	Mainboard:	ViA Apollo VP2 w/ 128 MB SDRAM
+	Video card:	Matrox Millenium 2064W w/ 2048 kB WRAM, BIOS v3.0
+	DJGPP:		djdev 2.03
+			gcc v3.0.3
+			make v3.79
+
+
+
+libGL (the core):
+~~~~~~~~~~~~~~~~~
+
+Of course, MESA 4.0 core sources are required. It will probably work with
+MESA 3.5, but not a chance with earlier versions due to major changes to the
+MESA driver interface and the directory tree. All should compile succesfully.
+
+The driver has its origins in ddsample.c, written by Brian Paul and found by
+me in MESA 3.4.2. I touched almost all the functions, changing the coding
+style :-( Sorry!
+
+Pitfalls:
+1. The current version supports only RGB[A] modes, for it made no sense to me
+   to endorse color-index (aka palette) modes.
+2. Double-buffered uses page flipping if acceleration is available, else falls
+   back to virtual buffer.
+3. Single-buffered is not allowed with 24-bit modes, because direct access was
+   wrong and fixing it would mean to slow down the other routines; until this
+   is really, really necessary, it won't get reimplemented.
+4. Another weird "feature" is that buffer width must be multiple of 4 (I'm a
+   lazy programmer and I found that the easiest way to keep buffer handling at
+   peak performance ;-).
+5. The FreeBE/AF driver is searched in the current directory only; therefore,
+   to disable hardware acceleration, make sure you don't have VBEAF.DRV where
+   your application resides.
+
+
+
+libGLU:
+~~~~~~~
+
+Mesa GLU sources are required. No comment!
+
+
+
+libGLUT (the toolkit):
+~~~~~~~~~~~~~~~~~~~~~~
+
+Well, this "skeletal" GLUT implementation is not mine. Thanks should go to
+Bernhard Tschirren, Mark Kilgard, Brian Paul and probably others (or probably
+not ;-). I only changed it to be self-standing (Allegro-free). The keyboard,
+mouse and timer drivers were inspired from an old project of mine (D3Xl) and
+fixed with some Allegro "infusions"; I deeply thank to Shawn Hargreaves et co.
+
+My keyboard driver used only scancodes, but since GLUT requires ASCII values
+for keys, I borrowed the translation tables (and maybe more) from Allegro.
+Ctrl-Alt-Del (plus Ctrl-Alt-End, for Windows users) will shut down the GLUT
+engine unconditionally: it will raise SIGINT, which in turn will call the
+destructors (let's hope), thus cleaning up your/my mess ;-)
+
+The mouse driver is far from complete (lack of positioning, drawing, etc),
+but is enough to make almost all the demos work.
+
+The timer is pretty versatile for it supports multiple timers with different
+frequencies. It may not be the most accurate timer in the known universe, but
+I think it's OK. Take this example: you have timer A with a very high rate,
+and then you have timer B with very low rate compared to A; now, A ticks OK,
+but timer B will probably loose precision!
+
+As an addition, stdout and stderr are redirected and dumped upon exit. This
+means that printf can be safely called during graphics, but all messages come
+in bulk! A bit of a hack, I know, but I think it's better than to miss them
+at all.
+
+Window creating defaults: 640x480x16 at (0,0), 8-bit stencil, 16-bit accum.
+However, the video mode is chosen in such a way that first window will fit.
+
+
+
+History:
+~~~~~~~~
+
+v0.1	feb-2002	initial release
+v0.2	feb-2002	+ fast triangle rasterizers
+			+ enabled sw and 1.3 extensions
+			+ hardware acceleration: FreeBE/AF
+			+ single-buffer modes (15-, 16-, and 32-bit)
+			* video mode is set by CreateVisual, not MakeCurrent
+			* internal changes to support multi-buf (unfinished)
+			! fixed some alpha issues... (thanks, Brian)
+			+ glut has now an internal timer
+			* glut changed to support multi-window (unfinished)
+			! minor PC_HW corrections
+
+
+
+Contact:
+~~~~~~~~
+
+Name:   Borca Daniel
+E-mail: dborca@yahoo.com
+WWW:    http://www.geocities.com/dborca/

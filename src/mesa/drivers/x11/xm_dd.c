@@ -1,10 +1,10 @@
-/* $Id: xm_dd.c,v 1.26 2001/09/12 03:32:29 brianp Exp $ */
+/* $Id: xm_dd.c,v 1.28 2002/02/15 19:15:33 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -267,6 +267,7 @@ index_mask( GLcontext *ctx, GLuint mask )
       else {
          m = (unsigned long) mask;
       }
+      XMesaSetPlaneMask( xmesa->display, xmesa->xm_buffer->gc, m );
       XMesaSetPlaneMask( xmesa->display, xmesa->xm_buffer->cleargc, m );
    }
 }
@@ -281,8 +282,7 @@ color_mask(GLcontext *ctx,
    int xclass = GET_VISUAL_CLASS(xmesa->xm_visual);
    (void) amask;
 
-   if (xmesa->xm_buffer->buffer != XIMAGE
-       && (xclass == TrueColor || xclass == DirectColor)) {
+   if (xclass == TrueColor || xclass == DirectColor) {
       unsigned long m;
       if (rmask && gmask && bmask) {
          m = ((unsigned long)~0L);
@@ -293,6 +293,7 @@ color_mask(GLcontext *ctx,
          if (gmask)   m |= GET_GREENMASK(xmesa->xm_visual);
          if (bmask)   m |= GET_BLUEMASK(xmesa->xm_visual);
       }
+      XMesaSetPlaneMask( xmesa->display, xmesa->xm_buffer->gc, m );
       XMesaSetPlaneMask( xmesa->display, xmesa->xm_buffer->cleargc, m );
    }
 }
@@ -854,7 +855,7 @@ get_string( GLcontext *ctx, GLenum name )
 #endif
       case GL_VENDOR:
 #ifdef XFree86Server
-         return (const GLubyte *) "VA Linux Systems, Inc.";
+         return (const GLubyte *) "Mesa project: www.mesa3d.org";
 #else
          return NULL;
 #endif

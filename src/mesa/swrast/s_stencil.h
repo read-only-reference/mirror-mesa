@@ -1,10 +1,10 @@
-/* $Id: s_stencil.h,v 1.4 2001/12/17 04:54:35 brianp Exp $ */
+/* $Id: s_stencil.h,v 1.6 2002/02/02 21:40:34 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -33,17 +33,10 @@
 #include "swrast.h"
 
 
-extern GLboolean
-_old_stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
-                              const GLdepth z[], GLubyte mask[] );
+
 extern GLboolean
 _mesa_stencil_and_ztest_span(GLcontext *ctx, struct sw_span *span);
 
-
-extern GLboolean
-_mesa_stencil_and_ztest_pixels( GLcontext *ctx, GLuint n,
-                                const GLint x[], const GLint y[],
-                                const GLdepth z[], GLubyte mask[] );
 
 
 extern void
