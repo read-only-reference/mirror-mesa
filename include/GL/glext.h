@@ -3,9 +3,10 @@
 
 
 /*
- * XXX Many extensions need to be added yet.
  * XXX Some token values aren't known (grep for ?)
  * XXX This file may be automatically generated in the future.
+ * XXX There are some doubly-defined tokens with different values!  Search
+ *     for "DUPLICATE".
  */
 
 
@@ -44,8 +45,15 @@ extern "C" {
  *      Now have all extenions up to number 197
  *   5. Brian Paul, 27 Mar 2000
  *      Added GL_ARB_texture_compression
+ *   6. Brian Paul, 5 Apr 2000
+ *      Added GL_ARB_multisample tokens, added GL_ARB_texture_env_add
+ *   7. Brian Paul, 7 Apr 2000
+ *      Minor clean-ups, temporary token values for GL_SGIS_pixel_texture
+ *   8. Brian Paul, 15 Apr 2000
+ *      Added GL_EXT_texture_cube_map, GL_NV_texgen_emboss, adding some
+ *      missing tokens values.
  */
-#define GL_GLEXT_VERSION_EXT 5
+#define GL_GLEXT_VERSION_EXT 8
 
 
 /*
@@ -377,22 +385,22 @@ typedef void (APIENTRY * PFNGLSEPARABLEFILTER2DEXTPROC) (GLenum target, GLenum i
 #ifndef GL_SGI_color_table
 #define GL_SGI_color_table 1
 
-#define COLOR_TABLE_SGI				0x80D0
-#define POST_CONVOLUTION_COLOR_TABLE_SGI	0x80D1
-#define POST_COLOR_MATRIX_COLOR_TABLE_SGI	0x80D2
-#define PROXY_COLOR_TABLE_SGI			0x80D3
-#define PROXY_POST_CONVOLUTION_COLOR_TABLE_SGI	0x80D4
-#define PROXY_POST_COLOR_MATRIX_COLOR_TABLE_SGI	0x80D5
-#define COLOR_TABLE_SCALE_SGI			0x80D6
-#define COLOR_TABLE_BIAS_SGI			0x80D7
-#define COLOR_TABLE_FORMAT_SGI			0x80D8
-#define COLOR_TABLE_WIDTH_SGI			0x80D9
-#define COLOR_TABLE_RED_SIZE_SGI		0x80DA
-#define COLOR_TABLE_GREEN_SIZE_SGI		0x80DB
-#define COLOR_TABLE_BLUE_SIZE_SGI		0x80DC
-#define COLOR_TABLE_ALPHA_SIZE_SGI		0x80DD
-#define COLOR_TABLE_LUMINANCE_SIZE_SGI		0x80DE
-#define COLOR_TABLE_INTENSITY_SIZE_SGI		0x80DF
+#define GL_COLOR_TABLE_SGI				0x80D0 /* DUPLICATE! */
+#define GL_POST_CONVOLUTION_COLOR_TABLE_SGI		0x80D1
+#define GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI		0x80D2
+#define GL_PROXY_COLOR_TABLE_SGI			0x80D3
+#define GL_PROXY_POST_CONVOLUTION_COLOR_TABLE_SGI	0x80D4
+#define GL_PROXY_POST_COLOR_MATRIX_COLOR_TABLE_SGI	0x80D5
+#define GL_COLOR_TABLE_SCALE_SGI			0x80D6
+#define GL_COLOR_TABLE_BIAS_SGI				0x80D7
+#define GL_COLOR_TABLE_FORMAT_SGI			0x80D8
+#define GL_COLOR_TABLE_WIDTH_SGI			0x80D9
+#define GL_COLOR_TABLE_RED_SIZE_SGI			0x80DA
+#define GL_COLOR_TABLE_GREEN_SIZE_SGI			0x80DB
+#define GL_COLOR_TABLE_BLUE_SIZE_SGI			0x80DC
+#define GL_COLOR_TABLE_ALPHA_SIZE_SGI			0x80DD
+#define GL_COLOR_TABLE_LUMINANCE_SIZE_SGI		0x80DE
+#define GL_COLOR_TABLE_INTENSITY_SIZE_SGI		0x80DF
 
 GLAPI void APIENTRY glColorTableParameterfvSGI(GLenum target, GLenum pname, const GLfloat *params);
 GLAPI void APIENTRY glColorTableParameterivSGI(GLenum target, GLenum pname, const GLint *params);
@@ -437,10 +445,10 @@ typedef void (APIENTRY * PFNGLPIXELTEXGENSGIXPROC) (GLenum mode);
 #ifndef GL_SGIS_pixel_texture
 #define GL_SGIS_pixel_texture 1
 
-#define GL_PIXEL_TEXTURE_SGIS			?
-#define GL_PIXEL_FRAGMENT_RGB_SOURCE_SGIS	?
-#define GL_PIXEL_FRAGMENT_ALPHA_SOURCE_SGIS	?
-#define GL_PIXEL_GROUP_COLOR_SGIS		?
+#define GL_PIXEL_TEXTURE_SGIS			0x1000  /*?*/
+#define GL_PIXEL_FRAGMENT_RGB_SOURCE_SGIS	0x1001  /*?*/
+#define GL_PIXEL_FRAGMENT_ALPHA_SOURCE_SGIS	0x1002  /*?*/
+#define GL_PIXEL_GROUP_COLOR_SGIS		0x1003  /*?*/
 
 GLAPI void APIENTRY glPixelTexGenParameterfSGIS(GLenum target, GLfloat value);
 GLAPI void APIENTRY glPixelTexGenParameterfvSGIS(GLenum target, const GLfloat *value);
@@ -493,7 +501,7 @@ typedef void (APIENTRY * PFNGLTEXSUBIMAGE4DSGISPROC) (GLenum target, GLint level
 #ifndef GL_SGI_texture_color_table
 #define GL_SGI_texture_color_table 1
 
-#define GL_COLOR_TABLE_SGI			0x80BC
+#define GL_COLOR_TABLE_SGI_80BC			0x80BC /* DUPLICATE! */
 #define GL_PROXY_TEXTURE_COLOR_TABLE_SGI	0x80BD
 
 #endif /* GL_SGI_texture_color_table */
@@ -761,7 +769,7 @@ typedef void (APIENTRY * PFNGLVERTEXPOINTEREXTPROC) (GLint size, GLenum type, GL
 #ifndef GL_EXT_misc_attribute
 #define GL_EXT_misc_attribute 1
 
-#define MISC_BIT_EXT				?
+#define GL_MISC_BIT_EXT				?
 
 #endif /* GL_EXT_misc_attribute */
 
@@ -1025,7 +1033,7 @@ typedef void (APIENTRY * PFNGLREADINSTRUMENTSSGIXPROC) (GLint marker);
 typedef void (APIENTRY * PFNGLSTARTINSTRUMENTSSGIXPROC) (void);
 typedef void (APIENTRY * PFNGLSTOPINSTRUMENTSSGIXPROC) (GLint marker);
 
-#endif
+#endif /* GL_SGIX_instruments */
 
 
 
@@ -1254,7 +1262,7 @@ GLAPI void APIENTRY glCopyColorSubTableEXT(GLenum target, GLsizei start, GLint x
 typedef void (APIENTRY * PFNGLCOLORSUBTABLEEXTPROC) (GLenum target, GLsizei start, GLsizei count, GLenum format, GLenum type, const void *data);
 typedef void (APIENTRY * PFNGLCOPYCOLORSUBTABLEEXTPROC) (GLenum target, GLsizei start, GLint x, GLint y, GLsizei width);
 
-#endif
+#endif /* GL_EXT_color_subtable */
 
 
 
@@ -1317,7 +1325,6 @@ typedef void (APIENTRY * PFNGLCOPYCOLORSUBTABLEEXTPROC) (GLenum target, GLsizei 
 #define GL_ALLOW_DRAW_OBJ_HINT_PGI		107022
 #define GL_ALLOW_DRAW_WIN_HINT_PGI		107023
 #define GL_ALLOW_DRAW_FRG_HINT_PGI		107024
-#define GL_ALLOW_DRAW_SPN_HINT_PGI		107024
 #define GL_ALLOW_DRAW_MEM_HINT_PGI		107025
 #define GL_CLIP_NEAR_HINT_PGI			107040
 #define GL_CLIP_FAR_HINT_PGI			107041
@@ -1724,11 +1731,8 @@ typedef void (APIENTRY * PFNGLDRAWRANGEELEMENTSEXTPROC) (GLenum mode, GLuint sta
 
 #define GL_FRAGMENT_MATERIAL_EXT		0x8349
 #define GL_FRAGMENT_NORMAL_EXT			0x834A
-/* XXX this symbol collides with the same in GL_EXT_fog_coord and they
-** have different values!  We're disabling this one since it's the less
-** common of the two extensions.
-#define GL_FRAGMENT_DEPTH_EXT			0x834B
-**/
+
+#define GL_FRAGMENT_DEPTH_EXT_834B		0x834B /* DUPLICATE! */
 #define GL_FRAGMENT_COLOR_EXT			0x834C
 #define GL_ATTENUATION_EXT			0x834D
 #define GL_SHADOW_ATTENUATION_EXT	        0x834E
@@ -1817,10 +1821,10 @@ typedef void (APIENTRY * PFNGLTEXTUREMATERIALEXTPROC) (GLenum face, GLenum mode)
 #ifndef GL_INTEL_texture_scissor
 #define GL_INTEL_texture_scissor 1
 
-#define TEXTURE_SCISSOR_INTEL			?
-#define TEXTURE_SCISSOR_S_INTEL			?
-#define TEXTURE_SCISSOR_T_INTEL			?
-#define TEXTURE_SCISSOR_R_INTEL 		?
+#define GL_TEXTURE_SCISSOR_INTEL			?
+#define GL_TEXTURE_SCISSOR_S_INTEL			?
+#define GL_TEXTURE_SCISSOR_T_INTEL			?
+#define GL_TEXTURE_SCISSOR_R_INTEL			?
 
 GLAPI void APIENTRY glTexScissorINTEL(GLenum target, GLclampf tlow, GLclampf thigh);
 GLAPI void APIENTRY glTexScissorFuncINTEL(GLenum target, GLenum lfunc, GLenum hfunc);
@@ -1907,7 +1911,7 @@ GLAPI void APIENTRY glGetPixelTransformParameterfvEXT(GLenum target, GLenum pnam
 #define GL_PIXEL_TRANSFORM_COLOR_TABLE_EXT		?
 #define GL_PROXY_PIXEL_TRANSFORM_COLOR_TABLE_EXT	?
 
-#endif
+#endif /* GL_EXT_pixel_transform_color_table */
 
 
 
@@ -1956,7 +1960,7 @@ GLAPI void APIENTRY glGetPixelTransformParameterfvEXT(GLenum target, GLenum pnam
 #ifndef GL_EXT_secondary_color
 #define GL_EXT_secondary_color 1
 
-#define GLCOLOR_SUM_EXT				0x8458
+#define GL_COLOR_SUM_EXT			0x8458
 #define GL_CURRENT_SECONDARY_COLOR_EXT		0x8459
 #define GL_SECONDARY_COLOR_ARRAY_SIZE_EXT	0x845A
 #define GL_SECONDARY_COLOR_ARRAY_TYPE_EXT	0x845B
@@ -2078,7 +2082,7 @@ typedef void (APIENTRY * PFNGLMULTIDRAWARRAYSEXT) (GLenum mode, GLint *first, GL
 
 #define GL_FOG_COORDINATE_SOURCE_EXT		0x8450
 #define GL_FOG_COORDINATE_EXT			0x8451
-#define GL_FRAGMENT_DEPTH_EXT			0x8452
+#define GL_FRAGMENT_DEPTH_EXT			0x8452 /* DUPLICATE! */
 #define GL_CURRENT_FOG_COORDINATE_EXT		0x8453
 #define GL_FOG_COORDINATE_ARRAY_TYPE_EXT	0x8454
 #define GL_FOG_COORDINATE_ARRAY_STRIDE_EXT	0x8455
@@ -2640,8 +2644,8 @@ typedef void (APIENTRY * PFNGLBLENDFUNCSEPARATEINGRPROC) (GLenum sfactorRGB, GLe
 #ifndef GL_EXT_texture_filter_anisotropic
 #define GL_EXT_texture_filter_anisotropic 1
 
-#define GL_TEXTURE_MAX_ANISOTROPY_EXT		0x84fe
-#define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT	0x84ff
+#define GL_TEXTURE_MAX_ANISOTROPY_EXT		0x84FE
+#define GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT	0x84FF
 
 #endif /* GL_EXT_texture_filter_anisotropic */
 
@@ -2655,12 +2659,12 @@ typedef void (APIENTRY * PFNGLBLENDFUNCSEPARATEINGRPROC) (GLenum sfactorRGB, GLe
 
 #define GL_VERTEX_WEIGHTING_EXT			0x8509
 #define GL_MODELVIEW0_EXT			0x1700
-#define GL_MODELVIEW1_EXT			0x850a
-#define GL_CURRENT_VERTEX_WEIGHT_EXT		0x850b
-#define GL_VERTEX_WEIGHT_ARRAY_EXT		0x850c
-#define GL_VERTEX_WEIGHT_ARRAY_SIZE_EXT		0x850d
-#define GL_VERTEX_WEIGHT_ARRAY_TYPE_EXT		0x850e
-#define GL_VERTEX_WEIGHT_ARRAY_STRIDE_EXT	0x850f
+#define GL_MODELVIEW1_EXT			0x850A
+#define GL_CURRENT_VERTEX_WEIGHT_EXT		0x850B
+#define GL_VERTEX_WEIGHT_ARRAY_EXT		0x850C
+#define GL_VERTEX_WEIGHT_ARRAY_SIZE_EXT		0x850D
+#define GL_VERTEX_WEIGHT_ARRAY_TYPE_EXT		0x850E
+#define GL_VERTEX_WEIGHT_ARRAY_STRIDE_EXT	0x850F
 #define GL_MODELVIEW0_STACK_DEPTH_EXT		0x0BA3
 #define GL_MODELVIEW1_STACK_DEPTH_EXT		0x8502
 #define GL_VERTEX_WEIGHT_ARRAY_POINTER_EXT	0x8510
@@ -2673,7 +2677,7 @@ typedef void (APIENTRY * PFNGLVERTEXWEIGHTFEXTPROC) (GLfloat weight);
 typedef void (APIENTRY * PFNGLVERTEXWEIGHTFVEXTPROC) (const GLfloat *weight);
 typedef void (APIENTRY * PFNGLVERTEXWEIGHTPOINTEREXTPROC) (GLint size, GLenum type, GLsizei stride, const GLvoid *pointer);
 
-#endif
+#endif /* GL_EXT_vertex_weighting */
 
 
 
@@ -2686,7 +2690,7 @@ typedef void (APIENTRY * PFNGLVERTEXWEIGHTPOINTEREXTPROC) (GLint size, GLenum ty
 #define GL_MAX_SHININESS_NV			0x8507
 #define GL_MAX_SPOT_EXPONENT_NV			0x8508
 
-#endif
+#endif /* GL_NV_light_max_exponent */
 
 
 
@@ -2696,7 +2700,11 @@ typedef void (APIENTRY * PFNGLVERTEXWEIGHTPOINTEREXTPROC) (GLint size, GLenum ty
 #ifndef GL_NV_vertex_array_range
 #define GL_NV_vertex_array_range 1
 
-/* TOKENS? */
+#define GL_VERTEX_ARRAY_RANGE_NV		0x851D
+#define GL_VERTEX_ARRAY_RANGE_LENGTH_NV		0x851E
+#define GL_VERTEX_ARRAY_RANGE_VALID_NV		0x851F
+#define GL_MAX_VERTEX_ARRAY_RANGE_ELEMENT_NV	0x8520
+#define GL_VERTEX_ARRAY_RANGE_POINTER_NV	0x8521
 
 GLAPI void APIENTRY glFlushVertexArrayRangeNV(void);
 GLAPI void APIENTRY glVertexArrayRangeNV(GLsizei size, const GLvoid * pointer);
@@ -2704,7 +2712,7 @@ GLAPI void APIENTRY glVertexArrayRangeNV(GLsizei size, const GLvoid * pointer);
 typedef void (APIENTRY * PFNGLFLUSHVERTEXARRAYRANGENVPROC) (void);
 typedef void (APIENTRY * PFNGLVERTEXARRAYRANGENV) (GLsizei size, const GLvoid * pointer);
 
-#endif
+#endif /* GL_NV_vertex_array_range */
 
 
 
@@ -2714,7 +2722,57 @@ typedef void (APIENTRY * PFNGLVERTEXARRAYRANGENV) (GLsizei size, const GLvoid * 
 #ifndef GL_NV_register_combiners
 #define GL_NV_register_combiners 1
 
-/* TOKENS? */
+#define GL_REGISTER_COMBINERS_NV		0x8522
+#define GL_COMBINER0_NV				0x8550
+#define GL_COMBINER1_NV				0x8551
+#define GL_COMBINER2_NV				0x8552
+#define GL_COMBINER3_NV				0x8553
+#define GL_COMBINER4_NV				0x8554
+#define GL_COMBINER5_NV				0x8555
+#define GL_COMBINER6_NV				0x8556
+#define GL_COMBINER7_NV				0x8557
+#define GL_VARIABLE_A_NV			0x8523
+#define GL_VARIABLE_B_NV			0x8524
+#define GL_VARIABLE_C_NV			0x8525
+#define GL_VARIABLE_D_NV			0x8526
+#define GL_VARIABLE_E_NV			0x8527
+#define GL_VARIABLE_F_NV			0x8528
+#define GL_VARIABLE_G_NV			0x8529
+#define GL_CONSTANT_COLOR0_NV			0x852A
+#define GL_CONSTANT_COLOR1_NV			0x852B
+#define GL_PRIMARY_COLOR_NV			0x852C
+#define GL_SECONDARY_COLOR_NV			0x852D
+#define GL_SPARE0_NV				0x852E
+#define GL_SPARE1_NV				0x852F
+#define GL_UNSIGNED_IDENTITY_NV			0x8536
+#define GL_UNSIGNED_INVERT_NV			0x8537
+#define GL_EXPAND_NORMAL_NV			0x8538
+#define GL_EXPAND_NEGATE_NV			0x8539
+#define GL_HALF_BIAS_NORMAL_NV			0x853A
+#define GL_HALF_BIAS_NEGATE_NV			0x853B
+#define GL_SIGNED_IDENTITY_NV			0x853C
+#define GL_SIGNED_NEGATE_NV			0x853D
+#define GL_E_TIMES_F_NV				0x8531
+#define GL_SPARE0_PLUS_SECONDARY_COLOR_NV	0x8532
+#define GL_SCALE_BY_TWO_NV			0x853E
+#define GL_SCALE_BY_FOUR_NV			0x853F
+#define GL_SCALE_BY_ONE_HALF_NV			0x8540
+#define GL_BIAS_BY_NEGATIVE_ONE_HALF_NV		0x8541
+#define GL_DISCARD_NV				0x8530
+#define GL_COMBINER_INPUT_NV			0x8542
+#define GL_COMBINER_MAPPING_NV			0x8543
+#define GL_COMBINER_COMPONENT_USAGE_NV		0x8544
+#define GL_COMBINER_AB_DOT_PRODUCT_NV		0x8545
+#define GL_COMBINER_CD_DOT_PRODUCT_NV		0x8546
+#define GL_COMBINER_MUX_SUM_NV			0x8547
+#define GL_COMBINER_SCALE_NV			0x8548
+#define GL_COMBINER_BIAS_NV			0x8549
+#define GL_COMBINER_AB_OUTPUT_NV		0x854A
+#define GL_COMBINER_CD_OUTPUT_NV		0x854B
+#define GL_COMBINER_SUM_OUTPUT_NV		0x854C
+#define GL_NUM_GENERAL_COMBINERS_NV		0x854E
+#define GL_COLOR_SUM_CLAMP_NV			0x854F
+#define GL_MAX_GENERAL_COMBINERS_NV		0x854D
 
 #ifdef VMS
 /*VMS only allows externals of maximal 31 characters! */
@@ -2763,9 +2821,9 @@ typedef void (APIENTRY * PFNGLGETFINALCOMBINERINPUTPARAMETERIVNVPROC) (GLenum va
 #ifndef GL_NV_fog_distance
 #define GL_NV_fog_distance 1
 
-#define GL_FOG_DISTANCE_MODE_NV			0x855a
-#define GL_EYE_RADIAL_NV			0x855b
-#define GL_EYE_PLANE_ABSOLUTE_NV		0x855c
+#define GL_FOG_DISTANCE_MODE_NV			0x855A
+#define GL_EYE_RADIAL_NV			0x855B
+#define GL_EYE_PLANE_ABSOLUTE_NV		0x855C
 
 #endif /* GL_NV_fog_distance*/
 
@@ -2879,7 +2937,7 @@ typedef void (APIENTRY * PFNGLWINDOWPOS4DVMESAPROC) (const GLdouble *p);
 
 
 /*
- * ARB 0. GL_ARB_multitexture
+ * ARB 1. GL_ARB_multitexture
  */
 #ifndef GL_ARB_multitexture
 #define GL_ARB_multitexture 1
@@ -2995,7 +3053,12 @@ typedef void (APIENTRY * PFNGLMULTITEXCOORD4SVARBPROC) (GLenum target, const GLs
 
 
 /*
- * ARB 2. GL_ARB_tranpose_matrix
+ * ARB 2. GLX_ARB_get_proc_address
+ */
+
+
+/*
+ * ARB 3. GL_ARB_tranpose_matrix
  */
 #ifndef GL_ARB_transpose_matrix
 #define GL_ARB_transpose_matrix 1
@@ -3020,10 +3083,36 @@ typedef void (APIENTRY * PFNGLMULTTRANSPOSEMATRIXFARBPROC) ( const GLfloat m[16]
 
 
 /*
- * ARB 4. GL_ARB_multisample
+ * ARB 4. WGL_ARB_buffer_region
+ */
+
+
+
+/*
+ * ARB 5. GL_ARB_multisample
  */
 #ifndef GL_ARB_multisample
 #define GL_ARB_multisample 1
+
+#define GL_MULTISAMPLE_ARBfunda			0x809D
+#define GL_SAMPLE_ALPHA_TO_COVERAGE_ARB		0x809E
+#define GL_SAMPLE_ALPHA_TO_ONE_ARB		0x809F
+#define GL_SAMPLE_COVERAGE_ARB			0x80A0
+#define GL_MULTISAMPLE_BIT_ARB			0x20000000
+#define GL_1PASS_ARB				0x80A1
+#define GL_2PASS_0_ARB				0x80A2
+#define GL_2PASS_1_ARB				0x80A3
+#define GL_4PASS_0_ARB				0x80A4
+#define GL_4PASS_1_ARB				0x80A5
+#define GL_4PASS_2_ARB				0x80A6
+#define GL_4PASS_3_ARB				0x80A7
+#define GL_SAMPLE_BUFFERS_ARB			0x80A8
+#define GL_SAMPLES_ARB				0x80A9
+#define GL_SAMPLE_MAX_PASSES_ARB		0x84E7
+#define GL_SAMPLE_PASS_ARB			0x84E8
+#define GL_SAMPLE_COVERAGE_VALUE_ARB		0x80AA
+#define GL_SAMPLE_COVERAGE_INVERT_ARB		0x80AB
+/* Note: there are more tokens for GLX and WGL */
 
 GLAPI void APIENTRY glSamplePassARB(GLenum pass);
 GLAPI void APIENTRY glSampleCoverageARB(GLclampf value, GLboolean invert);
@@ -3032,6 +3121,18 @@ typedef void (APIENTRY * PFNGLSAMPLEPASSARBPROC) (GLenum pass);
 typedef void (APIENTRY * PFNGLSAMPLECOVERAGEARBPROC) (GLclampf value, GLboolean invert);
 
 #endif /* GL_ARB_multisample */
+
+
+
+/*
+ * ARB 6. GL_ARB_texture_env_add
+ */
+#ifndef GL_ARB_texture_env_add
+#define GL_ARB_texture_env_add 1
+
+/* No new tokens or functions */
+
+#endif /* GL_ARB_texture_env_add */
 
 
 
@@ -3074,6 +3175,44 @@ typedef void (APIENTRY * PFNGLGETCOMPRESSEDTEXIMAGEARBPROC) (GLenum target, GLin
 
 
 /*
+ * ?. GL_EXT_texture_cube_map
+ */
+#ifndef GL_EXT_texture_cube_map
+#define GL_EXT_texture_cube_map 1
+
+#define GL_NORMAL_MAP_EXT			0x8511
+#define GL_REFLECTION_MAP_EXT			0x8512
+#define GL_TEXTURE_CUBE_MAP_EXT			0x8513
+#define GL_TEXTURE_BINDING_CUBE_MAP_EXT		0x8514
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_X_EXT	0x8515
+#define GL_TEXTURE_CUBE_MAP_NEGATIVE_X_EXT	0x8516
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_Y_EXT	0x8517
+#define GL_TEXTURE_CUBE_MAP_NEGATIVE_Y_EXT	0x8518
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_Z_EXT	0x8519
+#define GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_EXT	0x851A
+#define GL_PROXY_TEXTURE_CUBE_MAP_EXT		0x851B 
+#define GL_MAX_CUBE_MAP_TEXTURE_SIZE_EXT	0x851C
+
+#endif /* GL_EXT_texture_cube_map */
+
+
+
+/*
+ * ? GL_NV_texgen_emboss
+ */
+
+#ifndef GL_NV_texgen_emboss
+#define GL_NV_texgen_emboss 1
+
+#define GL_EMBOSS_MAP_NV			0x855F
+#define GL_EMBOSS_LIGHT_NV			0x855D
+#define GL_EMBOSS_CONSTANT_NV			0x855E
+
+#endif /* GL_NV_texgen_emboss */
+
+
+
+/*
  * ??. GL_WIN_swap_hint
  */
 #ifndef GL_WIN_swap_hint
@@ -3093,7 +3232,7 @@ typedef void (APIENTRY * PFNGLADDSWAPHINTRECTWINPROC) (GLint x, GLint y, GLsizei
 #ifndef GL_IBM_cull_vertex
 #define GL_IBM_cull_vertex 1
 
-#define GL_CULL_VERTEX_IBM			103050
+#define GL_CULL_VERTEX_IBM			0x1928A
 
 #endif /* GL_IBM_cull_vertex */
 
@@ -3105,8 +3244,8 @@ typedef void (APIENTRY * PFNGLADDSWAPHINTRECTWINPROC) (GLint x, GLint y, GLsizei
 #ifndef GL_IBM_static_data
 #define GL_IBM_static_data 1
 
-#define GL_ALL_STATIC_DATA_IBM			103060
-#define GL_STATIC_VERTEX_ARRAY_IBM		103061
+#define GL_ALL_STATIC_DATA_IBM			0x19294
+#define GL_STATIC_VERTEX_ARRAY_IBM		0x19295
 
 GLAPI void APIENTRY glFlushStaticDataIBM(GLenum target);
 

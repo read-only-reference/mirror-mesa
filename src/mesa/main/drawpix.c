@@ -1,4 +1,4 @@
-/* $Id: drawpix.c,v 1.15 2000/03/21 01:03:40 brianp Exp $ */
+/* $Id: drawpix.c,v 1.21 2000/04/18 14:32:10 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -37,9 +37,11 @@
 #include "mem.h"
 #include "mmath.h"
 #include "pixel.h"
+#include "pixeltex.h"
 #include "span.h"
 #include "state.h"
 #include "stencil.h"
+#include "texture.h"
 #include "types.h"
 #include "zoom.h"
 #endif
@@ -114,17 +116,16 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
       return GL_TRUE;
    }
 
-   if (ctx->NewState) {
-      gl_update_state(ctx);
-   }
-
    if ((ctx->RasterMask&(~(SCISSOR_BIT|WINCLIP_BIT)))==0
-       && ctx->Pixel.RedBias==0.0 && ctx->Pixel.RedScale==1.0
-       && ctx->Pixel.GreenBias==0.0 && ctx->Pixel.GreenScale==1.0
-       && ctx->Pixel.BlueBias==0.0 && ctx->Pixel.BlueScale==1.0
-       && ctx->Pixel.AlphaBias==0.0 && ctx->Pixel.AlphaScale==1.0
+       && !ctx->Pixel.ScaleOrBiasRGBA
+       && !ctx->Pixel.ScaleOrBiasRGBApcm
+       && ctx->ColorMatrix.type == MATRIX_IDENTITY
+       && !ctx->Pixel.ColorTableEnabled
+       && !ctx->Pixel.PostColorMatrixColorTableEnabled
+       && !ctx->Pixel.MinMaxEnabled
        && ctx->Pixel.IndexShift==0 && ctx->Pixel.IndexOffset==0
        && ctx->Pixel.MapColorFlag==0
+       && ctx->Texture.ReallyEnabled == 0
        && unpack->Alignment==1
        && !unpack->SwapBytes
        && !unpack->LsbFirst) {
@@ -342,7 +343,7 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
                GLint row;
                for (row=0; row<drawHeight; row++) {
                   assert(drawWidth < MAX_WIDTH);
-                  gl_map_ci8_to_rgba(ctx, drawWidth, src, rgba);
+                  _mesa_map_ci8_to_rgba(ctx, drawWidth, src, rgba);
                   (*ctx->Driver.WriteRGBASpan)(ctx, drawWidth, destX, destY,
                                                (const GLubyte (*)[4])rgba, 
 					       NULL);
@@ -356,7 +357,7 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
                GLint row;
                for (row=0; row<drawHeight; row++) {
                   assert(drawWidth < MAX_WIDTH);
-                  gl_map_ci8_to_rgba(ctx, drawWidth, src, rgba);
+                  _mesa_map_ci8_to_rgba(ctx, drawWidth, src, rgba);
                   gl_write_zoomed_rgba_span(ctx, drawWidth, destX, destY,
                                             zSpan, (void *) rgba, zoomY0);
                   src += rowLength;
@@ -450,6 +451,7 @@ draw_stencil_pixels( GLcontext *ctx, GLint x, GLint y,
                      GLenum type, const GLvoid *pixels )
 {
    const GLboolean zoom = ctx->Pixel.ZoomX!=1.0 || ctx->Pixel.ZoomY!=1.0;
+   const GLboolean shift_or_offset = ctx->Pixel.IndexShift || ctx->Pixel.IndexOffset;
    const GLint desty = y;
    GLint row, drawWidth;
 
@@ -474,14 +476,20 @@ draw_stencil_pixels( GLcontext *ctx, GLint x, GLint y,
       const GLvoid *source = _mesa_image_address(&ctx->Unpack,
                     pixels, width, height, GL_COLOR_INDEX, type, 0, row, 0);
       _mesa_unpack_index_span(ctx, drawWidth, destType, values,
-                              type, source, &ctx->Unpack, GL_TRUE);
+                              type, source, &ctx->Unpack, GL_FALSE);
+      if (shift_or_offset) {
+         _mesa_shift_and_offset_stencil( ctx, drawWidth, values );
+      }
+      if (ctx->Pixel.MapStencilFlag) {
+         _mesa_map_stencil( ctx, drawWidth, values );
+      }
 
       if (zoom) {
          gl_write_zoomed_stencil_span( ctx, (GLuint) drawWidth, x, y,
                                        values, desty );
       }
       else {
-         gl_write_stencil_span( ctx, (GLuint) drawWidth, x, y, values );
+         _mesa_write_stencil_span( ctx, (GLuint) drawWidth, x, y, values );
       }
    }
 }
@@ -644,6 +652,19 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
                   pixels, width, height, format, type, 0, row, 0);
          _mesa_unpack_ubyte_color_span(ctx, width, GL_RGBA, (void*) rgba,
                    format, type, source, unpack, GL_TRUE);
+         if (ctx->Pixel.MinMaxEnabled && ctx->MinMax.Sink)
+            continue;
+
+         if (ctx->Texture.ReallyEnabled && ctx->Pixel.PixelTextureEnabled) {
+            GLfloat s[MAX_WIDTH], t[MAX_WIDTH], r[MAX_WIDTH], q[MAX_WIDTH];
+            GLuint unit;
+            /* XXX not sure how multitexture is supposed to work here */
+            for (unit = 0; unit < MAX_TEXTURE_UNITS; unit++) {
+               _mesa_pixeltexgen(ctx, width, (const GLubyte (*)[4]) rgba,
+                                 s, t, r, q);
+               gl_texture_pixels(ctx, unit, width, s, t, r, NULL, rgba);
+            }
+         }
 
          if (quickDraw) {
             (*ctx->Driver.WriteRGBASpan)( ctx, width, x, y,
@@ -678,8 +699,14 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
 	 return;
       }
 
+      if (ctx->NewState) {
+         gl_update_state(ctx);
+      }
+
       x = (GLint) (ctx->Current.RasterPos[0] + 0.5F);
       y = (GLint) (ctx->Current.RasterPos[1] + 0.5F);
+
+      ctx->OcclusionResult = GL_TRUE;
 
       /* see if device driver can do the drawpix */
       if (ctx->Driver.DrawPixels

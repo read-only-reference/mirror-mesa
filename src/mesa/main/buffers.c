@@ -1,4 +1,4 @@
-/* $Id: buffers.c,v 1.3 2000/02/02 22:16:04 brianp Exp $ */
+/* $Id: buffers.c,v 1.7 2000/04/22 01:03:22 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -110,7 +110,7 @@ clear_color_buffer_with_masking( GLcontext *ctx )
             rgba[j][BCOMP] = b;
             rgba[j][ACOMP] = a;
          }
-         gl_mask_rgba_span( ctx, width, x, y + i, rgba );
+         _mesa_mask_rgba_span( ctx, width, x, y + i, rgba );
          (*ctx->Driver.WriteRGBASpan)( ctx, width, x, y + i,
 				       (CONST GLubyte (*)[4])rgba, NULL );
       }
@@ -125,7 +125,7 @@ clear_color_buffer_with_masking( GLcontext *ctx )
          for (j=0;j<width;j++) {
             span[j] = ctx->Color.ClearIndex;
          }
-         gl_mask_index_span( ctx, width, x, y + i, span );
+         _mesa_mask_index_span( ctx, width, x, y + i, span );
          (*ctx->Driver.WriteCI32Span)( ctx, width, x, y + i, span, mask );
       }
    }
@@ -240,9 +240,6 @@ void
 _mesa_Clear( GLbitfield mask )
 {
    GET_CURRENT_CONTEXT(ctx);
-#ifdef PROFILE
-   GLdouble t0 = gl_time();
-#endif
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glClear");
 
    if (MESA_VERBOSE & VERBOSE_API)
@@ -291,22 +288,17 @@ _mesa_Clear( GLbitfield mask )
 
       /* do software clearing here */
       if (newMask) {
-         if (newMask & ctx->Color.DrawDestMask)   clear_color_buffers( ctx );
-         if (newMask & GL_DEPTH_BUFFER_BIT)    _mesa_clear_depth_buffer( ctx );
-         if (newMask & GL_ACCUM_BUFFER_BIT)    _mesa_clear_accum_buffer( ctx );
-         if (newMask & GL_STENCIL_BUFFER_BIT)  gl_clear_stencil_buffer( ctx );
+         if (newMask & ctx->Color.DrawDestMask)   clear_color_buffers(ctx);
+         if (newMask & GL_DEPTH_BUFFER_BIT)    _mesa_clear_depth_buffer(ctx);
+         if (newMask & GL_ACCUM_BUFFER_BIT)    _mesa_clear_accum_buffer(ctx);
+         if (newMask & GL_STENCIL_BUFFER_BIT)  _mesa_clear_stencil_buffer(ctx);
       }
 
       /* clear software-based alpha buffer(s) */
       if ( (mask & GL_COLOR_BUFFER_BIT) && ctx->Visual->SoftwareAlpha
            && ctx->Color.ColorMask[RCOMP]) {
-         gl_clear_alpha_buffers( ctx );
+         _mesa_clear_alpha_buffers( ctx );
       }
-
-#ifdef PROFILE
-      ctx->ClearTime += gl_time() - t0;
-      ctx->ClearCount++;
-#endif
    }
 }
 
@@ -553,12 +545,12 @@ _mesa_ResizeBuffersMESA( void )
       _mesa_alloc_depth_buffer( ctx );
    }
    if (ctx->DrawBuffer->UseSoftwareStencilBuffer) {
-      gl_alloc_stencil_buffer( ctx );
+      _mesa_alloc_stencil_buffer( ctx );
    }
    if (ctx->DrawBuffer->UseSoftwareAccumBuffer) {
       _mesa_alloc_accum_buffer( ctx );
    }
    if (ctx->Visual->SoftwareAlpha) {
-      gl_alloc_alpha_buffers( ctx );
+      _mesa_alloc_alpha_buffers( ctx );
    }
 }

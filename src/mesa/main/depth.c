@@ -1,4 +1,4 @@
-/* $Id: depth.c,v 1.15 2000/03/19 01:10:11 brianp Exp $ */
+/* $Id: depth.c,v 1.17 2000/04/11 20:42:22 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -382,7 +382,7 @@ depth_test_span16( GLcontext *ctx, GLuint n, GLint x, GLint y,
 	 }
 	 break;
       case GL_NEVER:
-         MEMSET(mask, 0, n * sizeof(GLubyte));
+         BZERO(mask, n * sizeof(GLubyte));
 	 break;
       default:
          gl_problem(ctx, "Bad depth func in depth_test_span16");
@@ -611,7 +611,7 @@ depth_test_span32( GLcontext *ctx, GLuint n, GLint x, GLint y,
 	 }
 	 break;
       case GL_NEVER:
-         MEMSET(mask, 0, n * sizeof(GLubyte));
+         BZERO(mask, n * sizeof(GLubyte));
 	 break;
       default:
          gl_problem(ctx, "Bad depth func in depth_test_span32");
@@ -894,7 +894,7 @@ software_depth_test_pixels16( GLcontext *ctx, GLuint n,
 	 break;
       case GL_NEVER:
 	 /* depth test never passes */
-         MEMSET(mask, 0, n * sizeof(GLubyte));
+         BZERO(mask, n * sizeof(GLubyte));
 	 break;
       default:
          gl_problem(ctx, "Bad depth func in software_depth_test_pixels");
@@ -1140,7 +1140,7 @@ software_depth_test_pixels32( GLcontext *ctx, GLuint n,
 	 break;
       case GL_NEVER:
 	 /* depth test never passes */
-         MEMSET(mask, 0, n * sizeof(GLubyte));
+         BZERO(mask, n * sizeof(GLubyte));
 	 break;
       default:
          gl_problem(ctx, "Bad depth func in software_depth_test_pixels");
@@ -1374,7 +1374,7 @@ hardware_depth_test_pixels( GLcontext *ctx, GLuint n, GLdepth zbuffer[],
 	 break;
       case GL_NEVER:
 	 /* depth test never passes */
-         MEMSET(mask, 0, n * sizeof(GLubyte));
+         BZERO(mask, n * sizeof(GLubyte));
 	 break;
       default:
          gl_problem(ctx, "Bad depth func in hardware_depth_test_pixels");
@@ -1418,6 +1418,74 @@ _mesa_depth_test_pixels( GLcontext *ctx,
 
 
 /*
+ * Read a span of depth values from the depth buffer.
+ * This function does clipping before calling the device driver function.
+ */
+void
+_mesa_read_depth_span( GLcontext *ctx,
+                       GLint n, GLint x, GLint y, GLdepth depth[] )
+{
+   if (y < 0 || y >= ctx->DrawBuffer->Height ||
+       x + (GLint) n <= 0 || x >= ctx->DrawBuffer->Width) {
+      /* span is completely outside framebuffer */
+      GLint i;
+      for (i = 0; i < n; i++)
+         depth[i] = 0;
+      return;
+   }
+
+   if (x < 0) {
+      GLint dx = -x;
+      GLint i;
+      for (i = 0; i < dx; i++)
+         depth[i] = 0;
+      x = 0;
+      n -= dx;
+      depth += dx;
+   }
+   if (x + n > ctx->DrawBuffer->Width) {
+      GLint dx = x + n - ctx->DrawBuffer->Width;
+      GLint i;
+      for (i = 0; i < dx; i++)
+         depth[n - i - 1] = 0;
+      n -= dx;
+   }
+   if (n <= 0) {
+      return;
+   }
+
+   if (ctx->DrawBuffer->DepthBuffer) {
+      /* read from software depth buffer */
+      if (ctx->Visual->DepthBits <= 16) {
+         const GLushort *zptr = Z_ADDRESS16( ctx, x, y );
+         GLuint i;
+         for (i = 0; i < n; i++) {
+            depth[i] = zptr[i];
+         }
+      }
+      else {
+         const GLuint *zptr = Z_ADDRESS32( ctx, x, y );
+         GLuint i;
+         for (i = 0; i < n; i++) {
+            depth[i] = zptr[i];
+         }
+      }
+   }
+   else if (ctx->Driver.ReadDepthSpan) {
+      /* read from hardware depth buffer */
+      (*ctx->Driver.ReadDepthSpan)( ctx, n, x, y, depth );
+   }
+   else {
+      /* no depth buffer */
+      BZERO(depth, n * sizeof(GLfloat));
+   }
+
+}
+
+
+
+
+/*
  * Return a span of depth values from the depth buffer as floats in [0,1].
  * This is used for both hardware and software depth buffers.
  * Input:  n - how many pixels
@@ -1425,10 +1493,38 @@ _mesa_depth_test_pixels( GLcontext *ctx,
  * Output:  depth - the array of depth values
  */
 void
-_mesa_read_depth_span_float( GLcontext* ctx,
-                             GLuint n, GLint x, GLint y, GLfloat depth[] )
+_mesa_read_depth_span_float( GLcontext *ctx,
+                             GLint n, GLint x, GLint y, GLfloat depth[] )
 {
    const GLfloat scale = 1.0F / ctx->Visual->DepthMaxF;
+
+   if (y < 0 || y >= ctx->DrawBuffer->Height ||
+       x + (GLint) n <= 0 || x >= ctx->DrawBuffer->Width) {
+      /* span is completely outside framebuffer */
+      GLint i;
+      for (i = 0; i < n; i++)
+         depth[i] = 0.0F;
+      return;
+   }
+
+   if (x < 0) {
+      GLint dx = -x;
+      GLint i;
+      for (i = 0; i < dx; i++)
+         depth[i] = 0.0F;
+      n -= dx;
+      x = 0;
+   }
+   if (x + n > ctx->DrawBuffer->Width) {
+      GLint dx = x + n - ctx->DrawBuffer->Width;
+      GLint i;
+      for (i = 0; i < dx; i++)
+         depth[n - i - 1] = 0.0F;
+      n -= dx;
+   }
+   if (n <= 0) {
+      return;
+   }
 
    if (ctx->DrawBuffer->DepthBuffer) {
       /* read from software depth buffer */
@@ -1459,7 +1555,7 @@ _mesa_read_depth_span_float( GLcontext* ctx,
    }
    else {
       /* no depth buffer */
-      MEMSET(depth, 0, n * sizeof(GLfloat));
+      BZERO(depth, n * sizeof(GLfloat));
    }
 }
 
@@ -1565,9 +1661,15 @@ _mesa_clear_depth_buffer( GLcontext *ctx )
       if (ctx->Visual->DepthBits <= 16) {
          const GLushort clearValue = (GLushort) (ctx->Depth.Clear * ctx->Visual->DepthMax);
          if ((clearValue & 0xff) == (clearValue >> 8)) {
-            /* lower and upper bytes of clear_value are same, use MEMSET */
-            MEMSET( ctx->DrawBuffer->DepthBuffer, clearValue & 0xff,
-                    2 * ctx->DrawBuffer->Width * ctx->DrawBuffer->Height);
+            if (clearValue == 0) {
+               BZERO(ctx->DrawBuffer->DepthBuffer,
+                     2*ctx->DrawBuffer->Width*ctx->DrawBuffer->Height);
+            }
+            else {
+               /* lower and upper bytes of clear_value are same, use MEMSET */
+               MEMSET( ctx->DrawBuffer->DepthBuffer, clearValue & 0xff,
+                       2 * ctx->DrawBuffer->Width * ctx->DrawBuffer->Height);
+            }
          }
          else {
             GLushort *d = (GLushort *) ctx->DrawBuffer->DepthBuffer;
@@ -1592,24 +1694,30 @@ _mesa_clear_depth_buffer( GLcontext *ctx )
       }
       else {
          /* >16 bit depth buffer */
-         GLuint *d = (GLuint *) ctx->DrawBuffer->DepthBuffer;
          const GLuint clearValue = (GLuint) (ctx->Depth.Clear * ctx->Visual->DepthMax);
-         GLint n = ctx->DrawBuffer->Width * ctx->DrawBuffer->Height;
-         while (n >= 16) {
-            d[0] = clearValue;    d[1] = clearValue;
-            d[2] = clearValue;    d[3] = clearValue;
-            d[4] = clearValue;    d[5] = clearValue;
-            d[6] = clearValue;    d[7] = clearValue;
-            d[8] = clearValue;    d[9] = clearValue;
-            d[10] = clearValue;   d[11] = clearValue;
-            d[12] = clearValue;   d[13] = clearValue;
-            d[14] = clearValue;   d[15] = clearValue;
-            d += 16;
-            n -= 16;
+         if (clearValue == 0) {
+            BZERO(ctx->DrawBuffer->DepthBuffer,
+                ctx->DrawBuffer->Width*ctx->DrawBuffer->Height*sizeof(GLuint));
          }
-         while (n > 0) {
-            *d++ = clearValue;
-            n--;
+         else {
+            GLint n = ctx->DrawBuffer->Width * ctx->DrawBuffer->Height;
+            GLuint *d = (GLuint *) ctx->DrawBuffer->DepthBuffer;
+            while (n >= 16) {
+               d[0] = clearValue;    d[1] = clearValue;
+               d[2] = clearValue;    d[3] = clearValue;
+               d[4] = clearValue;    d[5] = clearValue;
+               d[6] = clearValue;    d[7] = clearValue;
+               d[8] = clearValue;    d[9] = clearValue;
+               d[10] = clearValue;   d[11] = clearValue;
+               d[12] = clearValue;   d[13] = clearValue;
+               d[14] = clearValue;   d[15] = clearValue;
+               d += 16;
+               n -= 16;
+            }
+            while (n > 0) {
+               *d++ = clearValue;
+               n--;
+            }
          }
       }
    }

@@ -1,4 +1,4 @@
-/* $Id: config.h,v 1.8 2000/03/16 07:36:33 keithw Exp $ */
+/* $Id: config.h,v 1.11 2000/04/12 00:27:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -52,6 +52,9 @@
 /* Maximum texture matrix stack depth: */
 #define MAX_TEXTURE_STACK_DEPTH 10
 
+/* Maximum color matrix stack depth: */
+#define MAX_COLOR_STACK_DEPTH 4
+
 /* Maximum attribute stack depth: */
 #define MAX_ATTRIB_STACK_DEPTH 16
 
@@ -93,8 +96,8 @@
 #define MAX_LINE_WIDTH 10.0
 #define LINE_WIDTH_GRANULARITY 0.1
 
-/* Max texture palette size */
-#define MAX_TEXTURE_PALETTE_SIZE 256
+/* Max texture palette / color table size */
+#define MAX_COLOR_TABLE_SIZE 256
 
 /* Number of texture levels */
 #define MAX_TEXTURE_LEVELS 12
@@ -111,6 +114,9 @@
 
 /* Subpixel precision for antialiasing, window coordinate snapping */
 #define SUB_PIXEL_BITS 4
+
+/* Size of histogram tables */
+#define HISTOGRAM_TABLE_SIZE 256
 
 
 

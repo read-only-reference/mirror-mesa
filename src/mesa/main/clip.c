@@ -1,4 +1,4 @@
-/* $Id: clip.c,v 1.6 2000/02/25 03:55:39 keithw Exp $ */
+/* $Id: clip.c,v 1.8 2000/04/17 18:18:00 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -302,10 +302,12 @@ GLuint gl_userclip_point( GLcontext* ctx, const GLfloat v[] )
 
 
 
-#if defined(__i386__)
+#if 0
 #define NEGATIVE(x) ((*(int *)&x)<0)
+#define DIFFERENT_SIGNS(a,b) ((a*b) < 0)
 #else
 #define NEGATIVE(x) (x < 0)
+#define DIFFERENT_SIGNS(a,b) ((a*b) < 0)
 #endif
 
 
@@ -375,13 +377,10 @@ void gl_update_clipmask( GLcontext *ctx )
 
    if (ctx->Visual->RGBAflag) 
    {
-      if (ctx->Light.ShadeModel==GL_SMOOTH) 
-      {
-	 mask |= CLIP_RGBA0;
+      mask |= CLIP_RGBA0;
       
-	 if (ctx->TriangleCaps & (DD_TRI_LIGHT_TWOSIDE|DD_SEPERATE_SPECULAR))
-	    mask |= CLIP_RGBA1;
-      }
+      if (ctx->TriangleCaps & (DD_TRI_LIGHT_TWOSIDE|DD_SEPERATE_SPECULAR))
+         mask |= CLIP_RGBA1;
 
       if (ctx->Texture.ReallyEnabled & 0xf0)
 	 mask |= CLIP_TEX1|CLIP_TEX0;

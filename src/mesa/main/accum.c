@@ -1,10 +1,10 @@
-/* $Id: accum.c,v 1.18 2000/03/31 01:04:52 brianp Exp $ */
+/* $Id: accum.c,v 1.20 2000/04/05 14:40:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -375,7 +375,7 @@ _mesa_Accum( GLenum op, GLfloat value )
                   rgba[i][ACOMP] = multTable[acc[i4+3]];
                }
                if (ctx->Color.SWmasking) {
-                  gl_mask_rgba_span( ctx, width, xpos, ypos, rgba );
+                  _mesa_mask_rgba_span( ctx, width, xpos, ypos, rgba );
                }
                (*ctx->Driver.WriteRGBASpan)( ctx, width, xpos, ypos, 
                                              (const GLubyte (*)[4])rgba, NULL );
@@ -402,7 +402,7 @@ _mesa_Accum( GLenum op, GLfloat value )
                   rgba[i][ACOMP] = CLAMP( a, 0, iChanMax );
                }
                if (ctx->Color.SWmasking) {
-                  gl_mask_rgba_span( ctx, width, xpos, ypos, rgba );
+                  _mesa_mask_rgba_span( ctx, width, xpos, ypos, rgba );
                }
                (*ctx->Driver.WriteRGBASpan)( ctx, width, xpos, ypos, 
                                              (const GLubyte (*)[4])rgba, NULL );
@@ -487,7 +487,7 @@ _mesa_clear_accum_buffer( GLcontext *ctx )
 	     ctx->Accum.ClearColor[2]==0.0 &&
 	     ctx->Accum.ClearColor[3]==0.0) {
 	    /* Black */
-	    MEMSET( ctx->DrawBuffer->Accum, 0, buffersize * 4 * sizeof(GLaccum) );
+	    BZERO( ctx->DrawBuffer->Accum, buffersize * 4 * sizeof(GLaccum) );
 	 }
 	 else {
 	    /* Not black */

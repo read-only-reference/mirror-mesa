@@ -1,4 +1,4 @@
-/* $Id: get.c,v 1.16 2000/03/31 01:04:52 brianp Exp $ */
+/* $Id: get.c,v 1.21 2000/04/12 00:27:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -56,6 +56,28 @@
 #define ENUM_TO_FLOAT(X) ((GLfloat)(X))
 #define ENUM_TO_DOUBLE(X) ((GLdouble)(X))
 #endif
+
+
+static GLenum
+pixel_texgen_mode(const GLcontext *ctx)
+{
+   if (ctx->Pixel.FragmentRgbSource == GL_CURRENT_RASTER_POSITION) {
+      if (ctx->Pixel.FragmentAlphaSource == GL_CURRENT_RASTER_POSITION) {
+         return GL_RGBA;
+      }
+      else {
+         return GL_RGB;
+      }
+   }
+   else {
+      if (ctx->Pixel.FragmentAlphaSource == GL_CURRENT_RASTER_POSITION) {
+         return GL_ALPHA;
+      }
+      else {
+         return GL_NONE;
+      }
+   }
+}
 
 
 
@@ -941,12 +963,12 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 break;
       case GL_ALWAYS_FAST_HINT_PGI:
 	 *params = (GLboolean) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawSpn == GL_FALSE && 
+			      ctx->Hint.AllowDrawFrg == GL_FALSE && 
 			      ctx->Hint.AllowDrawMem == GL_FALSE);
 	 break;
       case GL_ALWAYS_SOFT_HINT_PGI:
 	 *params = (GLboolean) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawSpn == GL_TRUE && 
+			      ctx->Hint.AllowDrawFrg == GL_TRUE && 
 			      ctx->Hint.AllowDrawMem == GL_TRUE);
 	 break;
       case GL_ALLOW_DRAW_OBJ_HINT_PGI:
@@ -955,8 +977,8 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
       case GL_ALLOW_DRAW_WIN_HINT_PGI:
 	 *params = (GLboolean) ctx->Hint.AllowDrawWin;
 	 break;
-      case GL_ALLOW_DRAW_SPN_HINT_PGI:
-	 *params = (GLboolean) ctx->Hint.AllowDrawSpn;
+      case GL_ALLOW_DRAW_FRG_HINT_PGI:
+	 *params = (GLboolean) ctx->Hint.AllowDrawFrg;
 	 break;
       case GL_ALLOW_DRAW_MEM_HINT_PGI:
 	 *params = (GLboolean) ctx->Hint.AllowDrawMem;
@@ -1029,13 +1051,79 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          return;
       case GL_OCCLUSION_TEST_RESULT_HP:
          if (ctx->Extensions.HaveHpOcclusionTest) {
-            *params = ctx->OcclusionResult;
-            ctx->OcclusionResult = GL_FALSE; /* reset now */
+            if (ctx->Depth.OcclusionTest)
+               *params = ctx->OcclusionResult;
+            else
+               *params = ctx->OcclusionResultSaved;
+            /* reset flag now */
+            ctx->OcclusionResult = GL_FALSE;
+            ctx->OcclusionResultSaved = GL_FALSE;
          }
          else {
             gl_error( ctx, GL_INVALID_ENUM, "glGetBooleanv" );
          }
          return;
+
+      /* GL_SGIS_pixel_texture */
+      case GL_PIXEL_TEXTURE_SGIS:
+         *params = ctx->Pixel.PixelTextureEnabled;
+         break;
+
+      /* GL_SGIX_pixel_texture */
+      case GL_PIXEL_TEX_GEN_SGIX:
+         *params = ctx->Pixel.PixelTextureEnabled;
+         break;
+      case GL_PIXEL_TEX_GEN_MODE_SGIX:
+         *params = (GLboolean) pixel_texgen_mode(ctx);
+         break;
+
+      /* GL_SGI_color_matrix (also in 1.2 imaging) */
+      case GL_COLOR_MATRIX_SGI:
+         for (i=0;i<16;i++) {
+	    params[i] = FLOAT_TO_BOOL(ctx->ColorMatrix.m[i]);
+	 }
+	 break;
+      case GL_COLOR_MATRIX_STACK_DEPTH_SGI:
+         *params = INT_TO_BOOL(ctx->ColorStackDepth + 1);
+         break;
+      case GL_MAX_COLOR_MATRIX_STACK_DEPTH_SGI:
+         *params = FLOAT_TO_BOOL(MAX_COLOR_STACK_DEPTH);
+         break;
+      case GL_POST_COLOR_MATRIX_RED_SCALE_SGI:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixRedScale);
+         break;
+      case GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixGreenScale);
+         break;
+      case GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixBlueScale);
+         break;
+      case GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixAlphaScale);
+         break;
+      case GL_POST_COLOR_MATRIX_RED_BIAS_SGI:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixRedBias);
+         break;
+      case GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixGreenBias);
+         break;
+      case GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixBlueBias);
+         break;
+      case GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixAlphaBias);
+         break;
+
+      /* GL_SGI_color_table (also in 1.2 imaging */
+      case GL_COLOR_TABLE_SGI:
+         *params = ctx->Pixel.ColorTableEnabled;
+         break;
+      case GL_POST_CONVOLUTION_COLOR_TABLE_SGI:
+         *params = ctx->Pixel.PostConvolutionColorTableEnabled;
+         break;
+      case GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI:
+         *params = ctx->Pixel.PostColorMatrixColorTableEnabled;
+         break;
 
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glGetBooleanv" );
@@ -1928,12 +2016,12 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 break;
       case GL_ALWAYS_FAST_HINT_PGI:
 	 *params = (GLdouble) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawSpn == GL_FALSE && 
+			      ctx->Hint.AllowDrawFrg == GL_FALSE && 
 			      ctx->Hint.AllowDrawMem == GL_FALSE);
 	 break;
       case GL_ALWAYS_SOFT_HINT_PGI:
 	 *params = (GLdouble) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawSpn == GL_TRUE && 
+			      ctx->Hint.AllowDrawFrg == GL_TRUE && 
 			      ctx->Hint.AllowDrawMem == GL_TRUE);
 	 break;
       case GL_ALLOW_DRAW_OBJ_HINT_PGI:
@@ -1942,8 +2030,8 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       case GL_ALLOW_DRAW_WIN_HINT_PGI:
 	 *params = (GLdouble) ctx->Hint.AllowDrawWin;
 	 break;
-      case GL_ALLOW_DRAW_SPN_HINT_PGI:
-	 *params = (GLdouble) ctx->Hint.AllowDrawSpn;
+      case GL_ALLOW_DRAW_FRG_HINT_PGI:
+	 *params = (GLdouble) ctx->Hint.AllowDrawFrg;
 	 break;
       case GL_ALLOW_DRAW_MEM_HINT_PGI:
 	 *params = (GLdouble) ctx->Hint.AllowDrawMem;
@@ -2016,13 +2104,79 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          return;
       case GL_OCCLUSION_TEST_RESULT_HP:
          if (ctx->Extensions.HaveHpOcclusionTest) {
-            *params = (GLdouble) ctx->OcclusionResult;
-            ctx->OcclusionResult = GL_FALSE; /* reset now */
+            if (ctx->Depth.OcclusionTest)
+               *params = (GLdouble) ctx->OcclusionResult;
+            else
+               *params = (GLdouble) ctx->OcclusionResultSaved;
+            /* reset flag now */
+            ctx->OcclusionResult = GL_FALSE;
+            ctx->OcclusionResultSaved = GL_FALSE;
          }
          else {
             gl_error( ctx, GL_INVALID_ENUM, "glGetDoublev" );
          }
          return;
+
+      /* GL_SGIS_pixel_texture */
+      case GL_PIXEL_TEXTURE_SGIS:
+         *params = (GLdouble) ctx->Pixel.PixelTextureEnabled;
+         break;
+
+      /* GL_SGIX_pixel_texture */
+      case GL_PIXEL_TEX_GEN_SGIX:
+         *params = (GLdouble) ctx->Pixel.PixelTextureEnabled;
+         break;
+      case GL_PIXEL_TEX_GEN_MODE_SGIX:
+         *params = (GLdouble) pixel_texgen_mode(ctx);
+         break;
+
+      /* GL_SGI_color_matrix (also in 1.2 imaging) */
+      case GL_COLOR_MATRIX_SGI:
+         for (i=0;i<16;i++) {
+	    params[i] = (GLdouble) ctx->ColorMatrix.m[i];
+	 }
+	 break;
+      case GL_COLOR_MATRIX_STACK_DEPTH_SGI:
+         *params = (GLdouble) (ctx->ColorStackDepth + 1);
+         break;
+      case GL_MAX_COLOR_MATRIX_STACK_DEPTH_SGI:
+         *params = (GLdouble) MAX_COLOR_STACK_DEPTH;
+         break;
+      case GL_POST_COLOR_MATRIX_RED_SCALE_SGI:
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixRedScale;
+         break;
+      case GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI:
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixGreenScale;
+         break;
+      case GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI:
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixBlueScale;
+         break;
+      case GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI:
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixAlphaScale;
+         break;
+      case GL_POST_COLOR_MATRIX_RED_BIAS_SGI:
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixRedBias;
+         break;
+      case GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI:
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixGreenBias;
+         break;
+      case GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI:
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixBlueBias;
+         break;
+      case GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI:
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixAlphaBias;
+         break;
+
+      /* GL_SGI_color_table (also in 1.2 imaging */
+      case GL_COLOR_TABLE_SGI:
+         *params = (GLdouble) ctx->Pixel.ColorTableEnabled;
+         break;
+      case GL_POST_CONVOLUTION_COLOR_TABLE_SGI:
+         *params = (GLdouble) ctx->Pixel.PostConvolutionColorTableEnabled;
+         break;
+      case GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI:
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixColorTableEnabled;
+         break;
 
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glGetDoublev" );
@@ -2913,12 +3067,12 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 break;
       case GL_ALWAYS_FAST_HINT_PGI:
 	 *params = (GLfloat) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawSpn == GL_FALSE && 
+			      ctx->Hint.AllowDrawFrg == GL_FALSE && 
 			      ctx->Hint.AllowDrawMem == GL_FALSE);
 	 break;
       case GL_ALWAYS_SOFT_HINT_PGI:
 	 *params = (GLfloat) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawSpn == GL_TRUE && 
+			      ctx->Hint.AllowDrawFrg == GL_TRUE && 
 			      ctx->Hint.AllowDrawMem == GL_TRUE);
 	 break;
       case GL_ALLOW_DRAW_OBJ_HINT_PGI:
@@ -2927,8 +3081,8 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_ALLOW_DRAW_WIN_HINT_PGI:
 	 *params = (GLfloat) ctx->Hint.AllowDrawWin;
 	 break;
-      case GL_ALLOW_DRAW_SPN_HINT_PGI:
-	 *params = (GLfloat) ctx->Hint.AllowDrawSpn;
+      case GL_ALLOW_DRAW_FRG_HINT_PGI:
+	 *params = (GLfloat) ctx->Hint.AllowDrawFrg;
 	 break;
       case GL_ALLOW_DRAW_MEM_HINT_PGI:
 	 *params = (GLfloat) ctx->Hint.AllowDrawMem;
@@ -2980,13 +3134,79 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          return;
       case GL_OCCLUSION_TEST_RESULT_HP:
          if (ctx->Extensions.HaveHpOcclusionTest) {
-            *params = (GLfloat) ctx->OcclusionResult;
-            ctx->OcclusionResult = GL_FALSE; /* reset now */
+            if (ctx->Depth.OcclusionTest)
+               *params = (GLfloat) ctx->OcclusionResult;
+            else
+               *params = (GLfloat) ctx->OcclusionResultSaved;
+            /* reset flag now */
+            ctx->OcclusionResult = GL_FALSE;
+            ctx->OcclusionResultSaved = GL_FALSE;
          }
          else {
             gl_error( ctx, GL_INVALID_ENUM, "glGetFloatv" );
          }
          return;
+
+      /* GL_SGIS_pixel_texture */
+      case GL_PIXEL_TEXTURE_SGIS:
+         *params = (GLfloat) ctx->Pixel.PixelTextureEnabled;
+         break;
+
+      /* GL_SGIX_pixel_texture */
+      case GL_PIXEL_TEX_GEN_SGIX:
+         *params = (GLfloat) ctx->Pixel.PixelTextureEnabled;
+         break;
+      case GL_PIXEL_TEX_GEN_MODE_SGIX:
+         *params = (GLfloat) pixel_texgen_mode(ctx);
+         break;
+
+      /* GL_SGI_color_matrix (also in 1.2 imaging) */
+      case GL_COLOR_MATRIX_SGI:
+         for (i=0;i<16;i++) {
+	    params[i] = ctx->ColorMatrix.m[i];
+	 }
+	 break;
+      case GL_COLOR_MATRIX_STACK_DEPTH_SGI:
+         *params = (GLfloat) (ctx->ColorStackDepth + 1);
+         break;
+      case GL_MAX_COLOR_MATRIX_STACK_DEPTH_SGI:
+         *params = (GLfloat) MAX_COLOR_STACK_DEPTH;
+         break;
+      case GL_POST_COLOR_MATRIX_RED_SCALE_SGI:
+         *params = ctx->Pixel.PostColorMatrixRedScale;
+         break;
+      case GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI:
+         *params = ctx->Pixel.PostColorMatrixGreenScale;
+         break;
+      case GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI:
+         *params = ctx->Pixel.PostColorMatrixBlueScale;
+         break;
+      case GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI:
+         *params = ctx->Pixel.PostColorMatrixAlphaScale;
+         break;
+      case GL_POST_COLOR_MATRIX_RED_BIAS_SGI:
+         *params = ctx->Pixel.PostColorMatrixRedBias;
+         break;
+      case GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI:
+         *params = ctx->Pixel.PostColorMatrixGreenBias;
+         break;
+      case GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI:
+         *params = ctx->Pixel.PostColorMatrixBlueBias;
+         break;
+      case GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI:
+         *params = ctx->Pixel.PostColorMatrixAlphaBias;
+         break;
+
+      /* GL_SGI_color_table (also in 1.2 imaging */
+      case GL_COLOR_TABLE_SGI:
+         *params = (GLfloat) ctx->Pixel.ColorTableEnabled;
+         break;
+      case GL_POST_CONVOLUTION_COLOR_TABLE_SGI:
+         *params = (GLfloat) ctx->Pixel.PostConvolutionColorTableEnabled;
+         break;
+      case GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI:
+         *params = (GLfloat) ctx->Pixel.PostColorMatrixColorTableEnabled;
+         break;
 
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glGetFloatv" );
@@ -3879,12 +4099,12 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 break;
       case GL_ALWAYS_FAST_HINT_PGI:
 	 *params = (ctx->Hint.AllowDrawWin == GL_TRUE &&
-		    ctx->Hint.AllowDrawSpn == GL_FALSE && 
+		    ctx->Hint.AllowDrawFrg == GL_FALSE && 
 		    ctx->Hint.AllowDrawMem == GL_FALSE);
 	 break;
       case GL_ALWAYS_SOFT_HINT_PGI:
 	 *params =  (ctx->Hint.AllowDrawWin == GL_TRUE &&
-		     ctx->Hint.AllowDrawSpn == GL_TRUE && 
+		     ctx->Hint.AllowDrawFrg == GL_TRUE && 
 		     ctx->Hint.AllowDrawMem == GL_TRUE);
 	 break;
       case GL_ALLOW_DRAW_OBJ_HINT_PGI:
@@ -3893,8 +4113,8 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       case GL_ALLOW_DRAW_WIN_HINT_PGI:
 	 *params = ctx->Hint.AllowDrawWin;
 	 break;
-      case GL_ALLOW_DRAW_SPN_HINT_PGI:
-	 *params = ctx->Hint.AllowDrawSpn;
+      case GL_ALLOW_DRAW_FRG_HINT_PGI:
+	 *params = ctx->Hint.AllowDrawFrg;
 	 break;
       case GL_ALLOW_DRAW_MEM_HINT_PGI:
 	 *params = ctx->Hint.AllowDrawMem;
@@ -3967,13 +4187,79 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          return;
       case GL_OCCLUSION_TEST_RESULT_HP:
          if (ctx->Extensions.HaveHpOcclusionTest) {
-            *params = (GLint) ctx->OcclusionResult;
-            ctx->OcclusionResult = GL_FALSE; /* reset now */
+            if (ctx->Depth.OcclusionTest)
+               *params = (GLint) ctx->OcclusionResult;
+            else
+               *params = (GLint) ctx->OcclusionResultSaved;
+            /* reset flag now */
+            ctx->OcclusionResult = GL_FALSE;
+            ctx->OcclusionResultSaved = GL_FALSE;
          }
          else {
             gl_error( ctx, GL_INVALID_ENUM, "glGetIntegerv" );
          }
          return;
+
+      /* GL_SGIS_pixel_texture */
+      case GL_PIXEL_TEXTURE_SGIS:
+         *params = (GLint) ctx->Pixel.PixelTextureEnabled;
+         break;
+
+      /* GL_SGIX_pixel_texture */
+      case GL_PIXEL_TEX_GEN_SGIX:
+         *params = (GLint) ctx->Pixel.PixelTextureEnabled;
+         break;
+      case GL_PIXEL_TEX_GEN_MODE_SGIX:
+         *params = (GLint) pixel_texgen_mode(ctx);
+         break;
+
+      /* GL_SGI_color_matrix (also in 1.2 imaging) */
+      case GL_COLOR_MATRIX_SGI:
+         for (i=0;i<16;i++) {
+	    params[i] = (GLint) ctx->ColorMatrix.m[i];
+	 }
+	 break;
+      case GL_COLOR_MATRIX_STACK_DEPTH_SGI:
+         *params = ctx->ColorStackDepth + 1;
+         break;
+      case GL_MAX_COLOR_MATRIX_STACK_DEPTH_SGI:
+         *params = MAX_COLOR_STACK_DEPTH;
+         break;
+      case GL_POST_COLOR_MATRIX_RED_SCALE_SGI:
+         *params = (GLint) ctx->Pixel.PostColorMatrixRedScale;
+         break;
+      case GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI:
+         *params = (GLint) ctx->Pixel.PostColorMatrixGreenScale;
+         break;
+      case GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI:
+         *params = (GLint) ctx->Pixel.PostColorMatrixBlueScale;
+         break;
+      case GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI:
+         *params = (GLint) ctx->Pixel.PostColorMatrixAlphaScale;
+         break;
+      case GL_POST_COLOR_MATRIX_RED_BIAS_SGI:
+         *params = (GLint) ctx->Pixel.PostColorMatrixRedBias;
+         break;
+      case GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI:
+         *params = (GLint) ctx->Pixel.PostColorMatrixGreenBias;
+         break;
+      case GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI:
+         *params = (GLint) ctx->Pixel.PostColorMatrixBlueBias;
+         break;
+      case GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI:
+         *params = (GLint) ctx->Pixel.PostColorMatrixAlphaBias;
+         break;
+
+      /* GL_SGI_color_table (also in 1.2 imaging */
+      case GL_COLOR_TABLE_SGI:
+         *params = (GLint) ctx->Pixel.ColorTableEnabled;
+         break;
+      case GL_POST_CONVOLUTION_COLOR_TABLE_SGI:
+         *params = (GLint) ctx->Pixel.PostConvolutionColorTableEnabled;
+         break;
+      case GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI:
+         *params = (GLint) ctx->Pixel.PostColorMatrixColorTableEnabled;
+         break;
 
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glGetIntegerv" );

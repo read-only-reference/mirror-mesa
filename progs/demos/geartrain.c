@@ -1,9 +1,28 @@
-/* $Id: geartrain.c,v 1.3 2000/03/29 17:56:02 brianp Exp $ */
+/* $Id: geartrain.c,v 1.6 2000/04/06 02:22:59 brianp Exp $ */
 
 /*
- * Geartrain simulation 
+ * GearTrain Simulator * Version:  1.00
  *
- * Contributed by Shobhan Kumar Dutta <skdutta@del3.vsnl.net.in>
+ * Copyright (C) 1999  Shobhan Kumar Dutta  All Rights Reserved.
+ * <skdutta@del3.vsnl.net.in>
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included
+ * in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * SHOBHAN KUMAR DUTTA BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+ * OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 
 
@@ -81,7 +100,7 @@ int number_of_belts;
 char Buf1[256], Buf2[256], Buf3[256], Buf4[256], Buf5[256];
 
 
-void 
+static void 
 strset (char buf[], char ch) 
 {
     int i;
@@ -90,7 +109,7 @@ strset (char buf[], char ch)
 }
 
 
-void 
+static void 
 Clear_Buffers () 
 {
     strset (Buf1, 0);
@@ -101,7 +120,7 @@ Clear_Buffers ()
 }
 
 
-void 
+static void 
 LoadTriplet (TDA A) 
 {
     Clear_Buffers ();
@@ -112,7 +131,7 @@ LoadTriplet (TDA A)
 }
 
 
-void 
+static void 
 LoadReal (float *a) 
 {
     Clear_Buffers ();
@@ -121,7 +140,7 @@ LoadReal (float *a)
 }
 
 
-void 
+static void 
 LoadInteger (int *a) 
 {
     Clear_Buffers ();
@@ -130,7 +149,7 @@ LoadInteger (int *a)
 }
 
 
-void 
+static void 
 LoadText (char *a) 
 {
     Clear_Buffers ();
@@ -139,7 +158,7 @@ LoadText (char *a)
 }
 
 
-void 
+static void 
 getdata (char filename[]) 
 {
     int gear_count = 0, axle_count = 0, belt_count = 0, i;
@@ -259,10 +278,6 @@ static void
 axle (GLint j, GLfloat radius, GLfloat length) 
 {
     GLfloat angle, rad, incr = 10.0 * M_PI / 180.0;
-    GLint indexes[3] =
-    {
-       0, 0, 0
-    };
     
     /* draw main cylinder */ 
     glBegin (GL_QUADS);
@@ -315,11 +330,7 @@ gear (GLint j, char type[], GLfloat radius, GLfloat width,
     GLfloat angle, da;
     GLfloat u, v, len, fraction = 0.5;
     GLfloat n = 1.0;
-    GLint indexes[3] =
-    {
-       0, 0, 0
-    };
-    
+
     r1 = radius - tooth_depth;
     r2 = radius;
     
@@ -534,7 +545,7 @@ belt (struct GEAR g1, struct GEAR g2)
 }
 
 
-int 
+static int 
 axle_find (char axle_name[]) 
 {
     int i;
@@ -548,7 +559,7 @@ axle_find (char axle_name[])
 }
 
 
-int 
+static int 
 gear_find (char gear_name[]) 
 {
     int i;
@@ -562,7 +573,7 @@ gear_find (char gear_name[])
 }
 
 
-void 
+static void 
 process () 
 {
     GLfloat x, y, z, D, dist;

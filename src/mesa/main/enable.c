@@ -1,4 +1,4 @@
-/* $Id: enable.c,v 1.12 2000/03/11 23:23:26 brianp Exp $ */
+/* $Id: enable.c,v 1.15 2000/04/12 00:27:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -455,12 +455,37 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
       case GL_OCCLUSION_TEST_HP:
          if (ctx->Extensions.HaveHpOcclusionTest) {
             ctx->Depth.OcclusionTest = state;
+            if (state)
+               ctx->OcclusionResult = ctx->OcclusionResultSaved;
+            else
+               ctx->OcclusionResultSaved = ctx->OcclusionResult;
             ctx->NewState |= NEW_RASTER_OPS;
          }
          else {
             gl_error( ctx, GL_INVALID_ENUM, state ? "glEnable": "glDisable" );
             return;
          }
+         break;
+
+      /* GL_SGIS_pixel_texture */
+      case GL_PIXEL_TEXTURE_SGIS:
+         ctx->Pixel.PixelTextureEnabled = state;
+         break;
+
+      /* GL_SGIX_pixel_texture */
+      case GL_PIXEL_TEX_GEN_SGIX:
+         ctx->Pixel.PixelTextureEnabled = state;
+         break;
+
+      /* GL_SGI_color_table */
+      case GL_COLOR_TABLE_SGI:
+         ctx->Pixel.ColorTableEnabled = state;
+         break;
+      case GL_POST_CONVOLUTION_COLOR_TABLE_SGI:
+         ctx->Pixel.PostConvolutionColorTableEnabled = state;
+         break;
+      case GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI:
+         ctx->Pixel.PostColorMatrixColorTableEnabled = state;
          break;
 
       default:
@@ -666,6 +691,22 @@ _mesa_IsEnabled( GLenum cap )
             gl_error( ctx, GL_INVALID_ENUM, "glIsEnabled" );
             return GL_FALSE;
          }
+
+      /* GL_SGIS_pixel_texture */
+      case GL_PIXEL_TEXTURE_SGIS:
+         return ctx->Pixel.PixelTextureEnabled;
+
+      /* GL_SGIX_pixel_texture */
+      case GL_PIXEL_TEX_GEN_SGIX:
+         return ctx->Pixel.PixelTextureEnabled;
+
+      /* GL_SGI_color_table */
+      case GL_COLOR_TABLE_SGI:
+         return ctx->Pixel.ColorTableEnabled;
+      case GL_POST_CONVOLUTION_COLOR_TABLE_SGI:
+         return ctx->Pixel.PostConvolutionColorTableEnabled;
+      case GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI:
+         return ctx->Pixel.PostColorMatrixColorTableEnabled;
 
       default:
 	 gl_error( ctx, GL_INVALID_ENUM, "glIsEnabled" );

@@ -1,4 +1,4 @@
-/* $Id: state.c,v 1.5 2000/03/11 23:23:26 brianp Exp $ */
+/* $Id: state.c,v 1.9 2000/04/09 17:08:09 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -64,6 +64,7 @@
 #include "mmath.h"
 #include "pipeline.h"
 #include "pixel.h"
+#include "pixeltex.h"
 #include "points.h"
 #include "polygon.h"
 #include "quads.h"
@@ -525,6 +526,17 @@ _mesa_init_exec_table(struct _glapi_table *exec)
    exec->GetColorTableParameterfvEXT = _mesa_GetColorTableParameterfv;
    exec->GetColorTableParameterivEXT = _mesa_GetColorTableParameteriv;
 
+   /* GL_SGIX_pixel_texture */
+   exec->PixelTexGenSGIX = _mesa_PixelTexGenSGIX;
+
+   /* GL_SGIS_pixel_texture */
+   exec->PixelTexGenParameteriSGIS = _mesa_PixelTexGenParameteriSGIS;
+   exec->PixelTexGenParameterivSGIS = _mesa_PixelTexGenParameterivSGIS;
+   exec->PixelTexGenParameterfSGIS = _mesa_PixelTexGenParameterfSGIS;
+   exec->PixelTexGenParameterfvSGIS = _mesa_PixelTexGenParameterfvSGIS;
+   exec->GetPixelTexGenParameterivSGIS = _mesa_GetPixelTexGenParameterivSGIS;
+   exec->GetPixelTexGenParameterfvSGIS = _mesa_GetPixelTexGenParameterfvSGIS;
+
    /* GL_EXT_compiled_vertex_array */
    exec->LockArraysEXT = _mesa_LockArraysEXT;
    exec->UnlockArraysEXT = _mesa_UnlockArraysEXT;
@@ -791,16 +803,9 @@ static void update_rasterflags( GLcontext *ctx )
       ctx->RasterMask |= WINCLIP_BIT;
    }
 
-   if (ctx->Depth.OcclusionTest) {
-      if (ctx->Color.ColorMask[0] == 0 && 
-          ctx->Color.ColorMask[1] == 0 && 
-          ctx->Color.ColorMask[2] == 0 &&
-          ctx->Color.ColorMask[3] == 0 && 
-          ctx->Depth.Mask == GL_FALSE &&
-          !ctx->Stencil.Enabled) {
-         ctx->RasterMask |= OCCLUSION_BIT;
-      }
-   }
+   if (ctx->Depth.OcclusionTest)
+      ctx->RasterMask |= OCCLUSION_BIT;
+
 
    /* If we're not drawing to exactly one color buffer set the
     * MULTI_DRAW_BIT flag.  Also set it if we're drawing to no
@@ -1141,6 +1146,10 @@ void gl_update_state( GLcontext *ctx )
 
       gl_calculate_model_project_matrix( ctx );
       ctx->ModelProjectWinMatrixUptodate = 0;
+   }
+
+   if (ctx->NewState & NEW_COLOR_MATRIX) {
+      gl_matrix_analyze( &ctx->ColorMatrix );
    }
 
    /* Figure out whether we can light in object space or not.  If we

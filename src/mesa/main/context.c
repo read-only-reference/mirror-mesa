@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.52 2000/03/31 01:05:51 brianp Exp $ */
+/* $Id: context.c,v 1.61 2000/04/22 01:05:00 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -32,6 +32,7 @@
 #include "accum.h"
 #include "alphabuf.h"
 #include "clip.h"
+#include "colortab.h"
 #include "context.h"
 #include "cva.h"
 #include "depth.h"
@@ -86,164 +87,6 @@ struct immediate *_mesa_CurrentInput = NULL;
 #endif
 
 
-
-
-/**********************************************************************/
-/*****                   Profiling functions                      *****/
-/**********************************************************************/
-
-#ifdef PROFILE
-
-#include <sys/times.h>
-#include <sys/param.h>
-
-
-/*
- * Return system time in seconds.
- * NOTE:  this implementation may not be very portable!
- */
-GLdouble gl_time( void )
-{
-   static GLdouble prev_time = 0.0;
-   static GLdouble time;
-   struct tms tm;
-   clock_t clk;
-
-   clk = times(&tm);
-
-#ifdef CLK_TCK
-   time = (double)clk / (double)CLK_TCK;
-#else
-   time = (double)clk / (double)HZ;
-#endif
-
-   if (time>prev_time) {
-      prev_time = time;
-      return time;
-   }
-   else {
-      return prev_time;
-   }
-}
-
-/*
- * Reset the timing/profiling counters
- */
-static void init_timings( GLcontext *ctx )
-{
-   ctx->BeginEndCount = 0;
-   ctx->BeginEndTime = 0.0;
-   ctx->VertexCount = 0;
-   ctx->VertexTime = 0.0;
-   ctx->PointCount = 0;
-   ctx->PointTime = 0.0;
-   ctx->LineCount = 0;
-   ctx->LineTime = 0.0;
-   ctx->PolygonCount = 0;
-   ctx->PolygonTime = 0.0;
-   ctx->ClearCount = 0;
-   ctx->ClearTime = 0.0;
-   ctx->SwapCount = 0;
-   ctx->SwapTime = 0.0;
-}
-
-
-/*
- * Print the accumulated timing/profiling data.
- */
-static void print_timings( GLcontext *ctx )
-{
-   GLdouble beginendrate;
-   GLdouble vertexrate;
-   GLdouble pointrate;
-   GLdouble linerate;
-   GLdouble polygonrate;
-   GLdouble overhead;
-   GLdouble clearrate;
-   GLdouble swaprate;
-   GLdouble avgvertices;
-
-   if (ctx->BeginEndTime>0.0) {
-      beginendrate = ctx->BeginEndCount / ctx->BeginEndTime;
-   }
-   else {
-      beginendrate = 0.0;
-   }
-   if (ctx->VertexTime>0.0) {
-      vertexrate = ctx->VertexCount / ctx->VertexTime;
-   }
-   else {
-      vertexrate = 0.0;
-   }
-   if (ctx->PointTime>0.0) {
-      pointrate = ctx->PointCount / ctx->PointTime;
-   }
-   else {
-      pointrate = 0.0;
-   }
-   if (ctx->LineTime>0.0) {
-      linerate = ctx->LineCount / ctx->LineTime;
-   }
-   else {
-      linerate = 0.0;
-   }
-   if (ctx->PolygonTime>0.0) {
-      polygonrate = ctx->PolygonCount / ctx->PolygonTime;
-   }
-   else {
-      polygonrate = 0.0;
-   }
-   if (ctx->ClearTime>0.0) {
-      clearrate = ctx->ClearCount / ctx->ClearTime;
-   }
-   else {
-      clearrate = 0.0;
-   }
-   if (ctx->SwapTime>0.0) {
-      swaprate = ctx->SwapCount / ctx->SwapTime;
-   }
-   else {
-      swaprate = 0.0;
-   }
-
-   if (ctx->BeginEndCount>0) {
-      avgvertices = (GLdouble) ctx->VertexCount / (GLdouble) ctx->BeginEndCount;
-   }
-   else {
-      avgvertices = 0.0;
-   }
-
-   overhead = ctx->BeginEndTime - ctx->VertexTime - ctx->PointTime
-              - ctx->LineTime - ctx->PolygonTime;
-
-
-   printf("                          Count   Time (s)    Rate (/s) \n");
-   printf("--------------------------------------------------------\n");
-   printf("glBegin/glEnd           %7d  %8.3f   %10.3f\n",
-          ctx->BeginEndCount, ctx->BeginEndTime, beginendrate);
-   printf("  vertexes transformed  %7d  %8.3f   %10.3f\n",
-          ctx->VertexCount, ctx->VertexTime, vertexrate );
-   printf("  points rasterized     %7d  %8.3f   %10.3f\n",
-          ctx->PointCount, ctx->PointTime, pointrate );
-   printf("  lines rasterized      %7d  %8.3f   %10.3f\n",
-          ctx->LineCount, ctx->LineTime, linerate );
-   printf("  polygons rasterized   %7d  %8.3f   %10.3f\n",
-          ctx->PolygonCount, ctx->PolygonTime, polygonrate );
-   printf("  overhead                       %8.3f\n", overhead );
-   printf("glClear                 %7d  %8.3f   %10.3f\n",
-          ctx->ClearCount, ctx->ClearTime, clearrate );
-   printf("SwapBuffers             %7d  %8.3f   %10.3f\n",
-          ctx->SwapCount, ctx->SwapTime, swaprate );
-   printf("\n");
-
-   printf("Average number of vertices per begin/end: %8.3f\n", avgvertices );
-}
-#endif
-
-
-
-
-
 /**********************************************************************/
 /***** GL Visual allocation/destruction                           *****/
 /**********************************************************************/
@@ -285,7 +128,48 @@ _mesa_create_visual( GLboolean rgbFlag,
                      GLint accumAlphaBits,
                      GLint numSamples )
 {
-   GLvisual *vis;
+   GLvisual *vis = (GLvisual *) CALLOC( sizeof(GLvisual) );
+   if (vis) {
+      if (!_mesa_initialize_visual(vis, rgbFlag, alphaFlag, dbFlag, stereoFlag,
+                                   redBits, greenBits, blueBits, alphaBits,
+                                   indexBits, depthBits, stencilBits,
+                                   accumRedBits, accumGreenBits,
+                                   accumBlueBits, accumAlphaBits,
+                                   numSamples )) {
+         FREE(vis);
+         return NULL;
+      }
+   }
+   return vis;
+}
+
+
+/*
+ * Initialize the fields of the given GLvisual.
+ * Input:  see _mesa_create_visual() above.
+ * Return: GL_TRUE = success
+ *         GL_FALSE = failure.
+ */
+GLboolean
+_mesa_initialize_visual( GLvisual *vis,
+                         GLboolean rgbFlag,
+                         GLboolean alphaFlag,
+                         GLboolean dbFlag,
+                         GLboolean stereoFlag,
+                         GLint redBits,
+                         GLint greenBits,
+                         GLint blueBits,
+                         GLint alphaBits,
+                         GLint indexBits,
+                         GLint depthBits,
+                         GLint stencilBits,
+                         GLint accumRedBits,
+                         GLint accumGreenBits,
+                         GLint accumBlueBits,
+                         GLint accumAlphaBits,
+                         GLint numSamples )
+{
+   assert(vis);
 
    /* This is to catch bad values from device drivers not updated for
     * Mesa 3.3.  Some device drivers just passed 1.  That's a REALLY
@@ -294,27 +178,22 @@ _mesa_create_visual( GLboolean rgbFlag,
    assert(depthBits == 0 || depthBits > 1);
 
    if (depthBits < 0 || depthBits > 32) {
-      return NULL;
+      return GL_FALSE;
    }
    if (stencilBits < 0 || stencilBits > (GLint) (8 * sizeof(GLstencil))) {
-      return NULL;
+      return GL_FALSE;
    }
    if (accumRedBits < 0 || accumRedBits > (GLint) (8 * sizeof(GLaccum))) {
-      return NULL;
+      return GL_FALSE;
    }
    if (accumGreenBits < 0 || accumGreenBits > (GLint) (8 * sizeof(GLaccum))) {
-      return NULL;
+      return GL_FALSE;
    }
    if (accumBlueBits < 0 || accumBlueBits > (GLint) (8 * sizeof(GLaccum))) {
-      return NULL;
+      return GL_FALSE;
    }
    if (accumAlphaBits < 0 || accumAlphaBits > (GLint) (8 * sizeof(GLaccum))) {
-      return NULL;
-   }
-
-   vis = (GLvisual *) CALLOC( sizeof(GLvisual) );
-   if (!vis) {
-      return NULL;
+      return GL_FALSE;
    }
 
    vis->RGBAflag   = rgbFlag;
@@ -347,23 +226,24 @@ _mesa_create_visual( GLboolean rgbFlag,
       vis->DepthMaxF = (GLfloat) vis->DepthMax;
    }
 
-   return vis;
+   return GL_TRUE;
 }
 
 
 /* This function should no longer be used. Use _mesa_create_visual() instead */
-GLvisual *gl_create_visual( GLboolean rgbFlag,
-                            GLboolean alphaFlag,
-                            GLboolean dbFlag,
-                            GLboolean stereoFlag,
-                            GLint depthBits,
-                            GLint stencilBits,
-                            GLint accumBits,
-                            GLint indexBits,
-                            GLint redBits,
-                            GLint greenBits,
-                            GLint blueBits,
-                            GLint alphaBits )
+GLvisual *
+gl_create_visual( GLboolean rgbFlag,
+                  GLboolean alphaFlag,
+                  GLboolean dbFlag,
+                  GLboolean stereoFlag,
+                  GLint depthBits,
+                  GLint stencilBits,
+                  GLint accumBits,
+                  GLint indexBits,
+                  GLint redBits,
+                  GLint greenBits,
+                  GLint blueBits,
+                  GLint alphaBits )
 {
    return _mesa_create_visual(rgbFlag, alphaFlag, dbFlag, stereoFlag,
                               redBits, greenBits, blueBits, alphaBits,
@@ -380,7 +260,8 @@ _mesa_destroy_visual( GLvisual *vis )
 
 
 /* obsolete */
-void gl_destroy_visual( GLvisual *vis )
+void
+gl_destroy_visual( GLvisual *vis )
 {
    _mesa_destroy_visual(vis);
 }
@@ -404,18 +285,38 @@ void gl_destroy_visual( GLvisual *vis )
 
  * Return:  pointer to new GLframebuffer struct or NULL if error.
  */
-GLframebuffer *gl_create_framebuffer( GLvisual *visual,
-                                      GLboolean softwareDepth,
-                                      GLboolean softwareStencil,
-                                      GLboolean softwareAccum,
-                                      GLboolean softwareAlpha )
+GLframebuffer *
+gl_create_framebuffer( GLvisual *visual,
+                       GLboolean softwareDepth,
+                       GLboolean softwareStencil,
+                       GLboolean softwareAccum,
+                       GLboolean softwareAlpha )
 {
-   GLframebuffer *buffer;
-
-   buffer = CALLOC_STRUCT(gl_frame_buffer);
-   if (!buffer) {
-      return NULL;
+   GLframebuffer *buffer = CALLOC_STRUCT(gl_frame_buffer);
+   assert(visual);
+   if (buffer) {
+      _mesa_initialize_framebuffer(buffer, visual,
+                                   softwareDepth, softwareStencil,
+                                   softwareAccum, softwareAlpha );
    }
+   return buffer;
+}
+
+
+/*
+ * Initialize a GLframebuffer object.
+ * Input:  See gl_create_framebuffer() above.
+ */
+void
+_mesa_initialize_framebuffer( GLframebuffer *buffer,
+                              GLvisual *visual,
+                              GLboolean softwareDepth,
+                              GLboolean softwareStencil,
+                              GLboolean softwareAccum,
+                              GLboolean softwareAlpha )
+{
+   assert(buffer);
+   assert(visual);
 
    /* sanity checks */
    if (softwareDepth ) {
@@ -440,16 +341,14 @@ GLframebuffer *gl_create_framebuffer( GLvisual *visual,
    buffer->UseSoftwareStencilBuffer = softwareStencil;
    buffer->UseSoftwareAccumBuffer = softwareAccum;
    buffer->UseSoftwareAlphaBuffers = softwareAlpha;
-
-   return buffer;
 }
-
 
 
 /*
  * Free a framebuffer struct and its buffers.
  */
-void gl_destroy_framebuffer( GLframebuffer *buffer )
+void
+gl_destroy_framebuffer( GLframebuffer *buffer )
 {
    if (buffer) {
       if (buffer->DepthBuffer) {
@@ -490,7 +389,8 @@ _glthread_DECLARE_STATIC_MUTEX(OneTimeLock);
 /*
  * This function just calls all the various one-time-init functions in Mesa.
  */
-static void one_time_init( void )
+static void
+one_time_init( void )
 {
    static GLboolean alreadyCalled = GL_FALSE;
    _glthread_LOCK_MUTEX(OneTimeLock);
@@ -537,7 +437,8 @@ static void one_time_init( void )
 /*
  * Allocate and initialize a shared context state structure.
  */
-static struct gl_shared_state *alloc_shared_state( void )
+static struct gl_shared_state *
+alloc_shared_state( void )
 {
    GLuint d;
    struct gl_shared_state *ss;
@@ -586,7 +487,8 @@ static struct gl_shared_state *alloc_shared_state( void )
 /*
  * Deallocate a shared state context and all children structures.
  */
-static void free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
+static void
+free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
 {
    /* Free display lists */
    while (1) {
@@ -619,7 +521,8 @@ static void free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
  * Initialize the nth light.  Note that the defaults for light 0 are
  * different than the other lights.
  */
-static void init_light( struct gl_light *l, GLuint n )
+static void
+init_light( struct gl_light *l, GLuint n )
 {
    make_empty_list( l );
 
@@ -646,7 +549,8 @@ static void init_light( struct gl_light *l, GLuint n )
 
 
 
-static void init_lightmodel( struct gl_lightmodel *lm )
+static void
+init_lightmodel( struct gl_lightmodel *lm )
 {
    ASSIGN_4V( lm->Ambient, 0.2, 0.2, 0.2, 1.0 );
    lm->LocalViewer = GL_FALSE;
@@ -655,7 +559,8 @@ static void init_lightmodel( struct gl_lightmodel *lm )
 }
 
 
-static void init_material( struct gl_material *m )
+static void
+init_material( struct gl_material *m )
 {
    ASSIGN_4V( m->Ambient,  0.2, 0.2, 0.2, 1.0 );
    ASSIGN_4V( m->Diffuse,  0.8, 0.8, 0.8, 1.0 );
@@ -669,7 +574,8 @@ static void init_material( struct gl_material *m )
 
 
 
-static void init_texture_unit( GLcontext *ctx, GLuint unit )
+static void
+init_texture_unit( GLcontext *ctx, GLuint unit )
 {
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
 
@@ -696,7 +602,8 @@ static void init_texture_unit( GLcontext *ctx, GLuint unit )
 }
 
 
-static void init_fallback_arrays( GLcontext *ctx )
+static void
+init_fallback_arrays( GLcontext *ctx )
 {
    struct gl_client_array *cl;
    GLuint i;
@@ -746,7 +653,8 @@ static void init_fallback_arrays( GLcontext *ctx )
 
 
 /* Initialize a 1-D evaluator map */
-static void init_1d_map( struct gl_1d_map *map, int n, const float *initial )
+static void
+init_1d_map( struct gl_1d_map *map, int n, const float *initial )
 {
    map->Order = 1;
    map->u1 = 0.0;
@@ -761,7 +669,8 @@ static void init_1d_map( struct gl_1d_map *map, int n, const float *initial )
 
 
 /* Initialize a 2-D evaluator map */
-static void init_2d_map( struct gl_2d_map *map, int n, const float *initial )
+static void
+init_2d_map( struct gl_2d_map *map, int n, const float *initial )
 {
    map->Uorder = 1;
    map->Vorder = 1;
@@ -778,22 +687,11 @@ static void init_2d_map( struct gl_2d_map *map, int n, const float *initial )
 }
 
 
-static void init_color_table( struct gl_color_table *p )
-{
-   p->Table[0] = 255;
-   p->Table[1] = 255;
-   p->Table[2] = 255;
-   p->Table[3] = 255;
-   p->Size = 1;
-   p->IntFormat = GL_RGBA;
-   p->Format = GL_RGBA;
-}
-
-
 /*
  * Initialize the attribute groups in a GLcontext.
  */
-static void init_attrib_groups( GLcontext *ctx )
+static void
+init_attrib_groups( GLcontext *ctx )
 {
    GLuint i, j;
 
@@ -816,6 +714,7 @@ static void init_attrib_groups( GLcontext *ctx )
    ctx->Const.MaxLineWidthAA = MAX_LINE_WIDTH;
    ctx->Const.LineWidthGranularity = LINE_WIDTH_GRANULARITY;
    ctx->Const.NumAuxBuffers = NUM_AUX_BUFFERS;
+   ctx->Const.MaxColorTableSize = MAX_COLOR_TABLE_SIZE;
 
    /* Modelview matrix */
    gl_matrix_ctr( &ctx->ModelView );
@@ -851,6 +750,13 @@ static void init_attrib_groups( GLcontext *ctx )
       for (j = 0; j < MAX_TEXTURE_STACK_DEPTH - 1; j++) {
          ctx->TextureStack[i][j].inv = 0;
       }
+   }
+
+   /* Color matrix */
+   gl_matrix_ctr(&ctx->ColorMatrix);
+   ctx->ColorStackDepth = 0;
+   for (j = 0; j < MAX_COLOR_STACK_DEPTH - 1; j++) {
+      gl_matrix_ctr(&ctx->ColorStack[j]);
    }
 
    /* Accumulate buffer group */
@@ -989,9 +895,35 @@ static void init_attrib_groups( GLcontext *ctx )
    ctx->Hint.Fog = GL_DONT_CARE;
 
    ctx->Hint.AllowDrawWin = GL_TRUE;
-   ctx->Hint.AllowDrawSpn = GL_TRUE;
+   ctx->Hint.AllowDrawFrg = GL_TRUE;
    ctx->Hint.AllowDrawMem = GL_TRUE;
    ctx->Hint.StrictLighting = GL_TRUE;
+
+   /* Histogram group */
+   ctx->Histogram.Width = 0;
+   ctx->Histogram.Format = GL_RGBA;
+   ctx->Histogram.Sink = GL_FALSE;
+   ctx->Histogram.RedSize       = 0xffffffff;
+   ctx->Histogram.GreenSize     = 0xffffffff;
+   ctx->Histogram.BlueSize      = 0xffffffff;
+   ctx->Histogram.AlphaSize     = 0xffffffff;
+   ctx->Histogram.LuminanceSize = 0xffffffff;
+   for (i = 0; i < HISTOGRAM_TABLE_SIZE; i++) {
+      ctx->Histogram.Count[i][0] = 0;
+      ctx->Histogram.Count[i][1] = 0;
+      ctx->Histogram.Count[i][2] = 0;
+      ctx->Histogram.Count[i][3] = 0;
+   }
+
+   /* Min/Max group */
+   ctx->MinMax.Format = GL_RGBA;
+   ctx->MinMax.Sink = GL_FALSE;
+   ctx->MinMax.Min[RCOMP] = 1000;    ctx->MinMax.Max[RCOMP] = -1000;
+   ctx->MinMax.Min[GCOMP] = 1000;    ctx->MinMax.Max[GCOMP] = -1000;
+   ctx->MinMax.Min[BCOMP] = 1000;    ctx->MinMax.Max[BCOMP] = -1000;
+   ctx->MinMax.Min[ACOMP] = 1000;    ctx->MinMax.Max[ACOMP] = -1000;
+
+
 
    /* Pipeline */
    gl_pipeline_init( ctx );
@@ -1089,6 +1021,30 @@ static void init_attrib_groups( GLcontext *ctx )
    ctx->Pixel.MapGtoG[0] = 0.0;
    ctx->Pixel.MapBtoB[0] = 0.0;
    ctx->Pixel.MapAtoA[0] = 0.0;
+   ctx->Pixel.HistogramEnabled = GL_FALSE;
+   ctx->Pixel.MinMaxEnabled = GL_FALSE;
+   ctx->Pixel.PixelTextureEnabled = GL_FALSE;
+   ctx->Pixel.FragmentRgbSource = GL_PIXEL_GROUP_COLOR_SGIS;
+   ctx->Pixel.FragmentAlphaSource = GL_PIXEL_GROUP_COLOR_SGIS;
+   ctx->Pixel.PostColorMatrixRedBias = 0.0;
+   ctx->Pixel.PostColorMatrixRedScale = 1.0;
+   ctx->Pixel.PostColorMatrixGreenBias = 0.0;
+   ctx->Pixel.PostColorMatrixGreenScale = 1.0;
+   ctx->Pixel.PostColorMatrixBlueBias = 0.0;
+   ctx->Pixel.PostColorMatrixBlueScale = 1.0;
+   ctx->Pixel.PostColorMatrixAlphaBias = 0.0;
+   ctx->Pixel.PostColorMatrixAlphaScale = 1.0;
+   ctx->Pixel.ColorTableScale[0] = 1.0F;
+   ctx->Pixel.ColorTableScale[1] = 1.0F;
+   ctx->Pixel.ColorTableScale[2] = 1.0F;
+   ctx->Pixel.ColorTableScale[3] = 1.0F;
+   ctx->Pixel.ColorTableBias[0] = 0.0F;
+   ctx->Pixel.ColorTableBias[1] = 0.0F;
+   ctx->Pixel.ColorTableBias[2] = 0.0F;
+   ctx->Pixel.ColorTableBias[3] = 0.0F;
+   ctx->Pixel.ColorTableEnabled = GL_FALSE;
+   ctx->Pixel.PostConvolutionColorTableEnabled = GL_FALSE;
+   ctx->Pixel.PostColorMatrixColorTableEnabled = GL_FALSE;
 
    /* Point group */
    ctx->Point.SmoothFlag = GL_FALSE;
@@ -1144,7 +1100,7 @@ static void init_attrib_groups( GLcontext *ctx )
    ctx->Texture.Enabled = 0;
    for (i=0; i<MAX_TEXTURE_UNITS; i++)
       init_texture_unit( ctx, i );
-   init_color_table(&ctx->Texture.Palette);
+   _mesa_init_colortable(&ctx->Texture.Palette);
 
    /* Transformation group */
    ctx->Transform.MatrixMode = GL_MODELVIEW;
@@ -1252,6 +1208,23 @@ static void init_attrib_groups( GLcontext *ctx )
    ctx->AttribStackDepth = 0;
    ctx->ClientAttribStackDepth = 0;
 
+   /* Display list */
+   ctx->CallDepth = 0;
+   ctx->ExecuteFlag = GL_TRUE;
+   ctx->CompileFlag = GL_FALSE;
+   ctx->CurrentListPtr = NULL;
+   ctx->CurrentBlock = NULL;
+   ctx->CurrentListNum = 0;
+   ctx->CurrentPos = 0;
+
+   /* Color tables */
+   _mesa_init_colortable(&ctx->ColorTable);
+   _mesa_init_colortable(&ctx->ProxyColorTable);
+   _mesa_init_colortable(&ctx->PostConvolutionColorTable);
+   _mesa_init_colortable(&ctx->ProxyPostConvolutionColorTable);
+   _mesa_init_colortable(&ctx->PostColorMatrixColorTable);
+   _mesa_init_colortable(&ctx->ProxyPostColorMatrixColorTable);
+
    /* Miscellaneous */
    ctx->NewState = NEW_ALL;
    ctx->RenderMode = GL_RENDER;
@@ -1263,19 +1236,11 @@ static void init_attrib_groups( GLcontext *ctx )
    ctx->NeedEyeNormals = GL_FALSE;
    ctx->vb_proj_matrix = &ctx->ModelProjectMatrix;
 
-   /* Display list */
-   ctx->CallDepth = 0;
-   ctx->ExecuteFlag = GL_TRUE;
-   ctx->CompileFlag = GL_FALSE;
-   ctx->CurrentListPtr = NULL;
-   ctx->CurrentBlock = NULL;
-   ctx->CurrentListNum = 0;
-   ctx->CurrentPos = 0;
-
    ctx->ErrorValue = (GLenum) GL_NO_ERROR;
 
    ctx->CatchSignals = GL_TRUE;
    ctx->OcclusionResult = GL_FALSE;
+   ctx->OcclusionResultSaved = GL_FALSE;
 
    /* For debug/development only */
    ctx->NoRaster = getenv("MESA_NO_RASTER") ? GL_TRUE : GL_FALSE;
@@ -1299,7 +1264,8 @@ static void init_attrib_groups( GLcontext *ctx )
  * the allocations clean up and return GL_FALSE.
  * Return:  GL_TRUE=success, GL_FALSE=failure
  */
-static GLboolean alloc_proxy_textures( GLcontext *ctx )
+static GLboolean
+alloc_proxy_textures( GLcontext *ctx )
 {
    GLboolean out_of_memory;
    GLint i;
@@ -1360,11 +1326,12 @@ static GLboolean alloc_proxy_textures( GLcontext *ctx )
 /*
  * Initialize a GLcontext struct.
  */
-GLboolean gl_initialize_context_data( GLcontext *ctx,
-                                      GLvisual *visual,
-                                      GLcontext *share_list,
-                                      void *driver_ctx,
-                                      GLboolean direct )
+GLboolean
+_mesa_initialize_context( GLcontext *ctx,
+                          GLvisual *visual,
+                          GLcontext *share_list,
+                          void *driver_ctx,
+                          GLboolean direct )
 {
    (void) direct;  /* not used */
 
@@ -1428,10 +1395,6 @@ GLboolean gl_initialize_context_data( GLcontext *ctx,
       ctx->Pixel.DriverReadBuffer = GL_FRONT_LEFT;
    }
 
-#ifdef PROFILE
-   init_timings( ctx );
-#endif
-
    if (!alloc_proxy_textures(ctx)) {
       free_shared_state(ctx, ctx->Shared);
       FREE(ctx->VB);
@@ -1467,18 +1430,18 @@ GLboolean gl_initialize_context_data( GLcontext *ctx,
  *         driver_ctx - pointer to device driver's context state struct
  * Return:  pointer to a new gl_context struct or NULL if error.
  */
-GLcontext *gl_create_context( GLvisual *visual,
-                              GLcontext *share_list,
-                              void *driver_ctx,
-                              GLboolean direct )
+GLcontext *
+gl_create_context( GLvisual *visual,
+                   GLcontext *share_list,
+                   void *driver_ctx,
+                   GLboolean direct )
 {
    GLcontext *ctx = (GLcontext *) CALLOC( sizeof(GLcontext) );
    if (!ctx) {
       return NULL;
    }
 
-   if (gl_initialize_context_data(ctx, visual, share_list,
-                                  driver_ctx, direct)) {
+   if (_mesa_initialize_context(ctx, visual, share_list, driver_ctx, direct)) {
       return ctx;
    }
    else {
@@ -1493,7 +1456,8 @@ GLcontext *gl_create_context( GLvisual *visual,
  * Free the data associated with the given context.
  * But don't free() the GLcontext struct itself!
  */
-void gl_free_context_data( GLcontext *ctx )
+void
+gl_free_context_data( GLcontext *ctx )
 {
    struct gl_shine_tab *s, *tmps;
    GLuint i, j;
@@ -1502,12 +1466,6 @@ void gl_free_context_data( GLcontext *ctx )
    if (ctx == gl_get_current_context()) {
       gl_make_current(NULL, NULL);
    }
-
-#ifdef PROFILE
-   if (getenv("MESA_PROFILE")) {
-      print_timings( ctx );
-   }
-#endif
 
    gl_matrix_dtr( &ctx->ModelView );
    for (i = 0; i < MAX_MODELVIEW_STACK_DEPTH - 1; i++) {
@@ -1526,7 +1484,7 @@ void gl_free_context_data( GLcontext *ctx )
 
    FREE( ctx->PB );
 
-   if(ctx->input != ctx->VB->IM)
+   if (ctx->input != ctx->VB->IM)
       gl_immediate_free( ctx->input );
 
    gl_vb_free( ctx->VB );
@@ -1589,6 +1547,11 @@ void gl_free_context_data( GLcontext *ctx )
    if (ctx->EvalMap.Map2Texture4.Points)
       FREE( ctx->EvalMap.Map2Texture4.Points );
 
+   _mesa_free_colortable_data( &ctx->ColorTable );
+   _mesa_free_colortable_data( &ctx->PostConvolutionColorTable );
+   _mesa_free_colortable_data( &ctx->PostColorMatrixColorTable );
+   _mesa_free_colortable_data( &ctx->Texture.Palette );
+
    /* Free cache of immediate buffers. */
    while (ctx->nr_im_queued-- > 0) {
       struct immediate * next = ctx->freed_im_queue->next;
@@ -1606,7 +1569,8 @@ void gl_free_context_data( GLcontext *ctx )
 /*
  * Destroy a GLcontext structure.
  */
-void gl_destroy_context( GLcontext *ctx )
+void
+gl_destroy_context( GLcontext *ctx )
 {
    if (ctx) {
       gl_free_context_data(ctx);
@@ -1620,7 +1584,8 @@ void gl_destroy_context( GLcontext *ctx )
  * Called by the driver after both the context and driver are fully
  * initialized.  Currently just reads the config file.
  */
-void gl_context_initialize( GLcontext *ctx )
+void
+gl_context_initialize( GLcontext *ctx )
 {
    gl_read_config_file( ctx );
 }
@@ -1633,7 +1598,8 @@ void gl_context_initialize( GLcontext *ctx )
  *         dst - destination context
  *         mask - bitwise OR of GL_*_BIT flags
  */
-void gl_copy_context( const GLcontext *src, GLcontext *dst, GLuint mask )
+void
+gl_copy_context( const GLcontext *src, GLcontext *dst, GLuint mask )
 {
    if (mask & GL_ACCUM_BUFFER_BIT) {
       MEMCPY( &dst->Accum, &src->Accum, sizeof(struct gl_accum_attrib) );
