@@ -1,4 +1,4 @@
-/* $Id: varray.c,v 1.18 2000/01/13 00:25:22 brianp Exp $ */
+/* $Id: varray.c,v 1.21 2000/02/25 03:55:40 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -37,6 +37,7 @@
 #include "macros.h"
 #include "mmath.h"
 #include "pipeline.h"
+#include "state.h"
 #include "texstate.h"
 #include "translate.h"
 #include "types.h"
@@ -680,6 +681,7 @@ _mesa_DrawArrays(GLenum mode, GLint start, GLsizei count)
 
 	 VB->NextPrimitive[VB->CopyStart] = VB->Count;
 	 VB->Primitive[VB->CopyStart] = mode;
+	 ctx->Array.Flag[count] |= VERT_END_VB;
 
          /* Transform and render.
 	  */
@@ -815,7 +817,7 @@ _mesa_DrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indice
       return;
    }
 
-   if (mode > GL_POLYGON) {
+   if (mode < 0 || mode > GL_POLYGON) {
       gl_error( ctx, GL_INVALID_ENUM, "glDrawArrays(mode)" );
       return;
    }
@@ -1121,6 +1123,13 @@ _mesa_DrawRangeElements(GLenum mode, GLuint start,
       return;
    }
 
+#if 0
+   /*
+    * XXX something in locked arrays is broken!  If start = 0,
+    * end = 1 and count = 2 we'll take the LockArrays path and
+    * get incorrect results.  See Scott McMillan's bug of 3 Jan 2000.
+    * For now, don't use locked arrays.
+    */
    if (!ctx->Array.LockCount && 2*count > (GLint) 3*(end-start)) {
       glLockArraysEXT( start, end );
       glDrawElements( mode, count, type, indices );
@@ -1128,6 +1137,9 @@ _mesa_DrawRangeElements(GLenum mode, GLuint start,
    } else {
       glDrawElements( mode, count, type, indices );
    }
+#else
+   glDrawElements( mode, count, type, indices );
+#endif
 }
 
 

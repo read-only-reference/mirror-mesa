@@ -1,4 +1,4 @@
-/* $Id: get.c,v 1.8 2000/01/17 18:05:46 brianp Exp $ */
+/* $Id: get.c,v 1.14 2000/02/24 22:04:03 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -111,7 +111,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = ctx->Eval.AutoNormal;
          break;
       case GL_AUX_BUFFERS:
-         *params = (NUM_AUX_BUFFERS) ? GL_TRUE : GL_FALSE;
+         *params = (ctx->Const.NumAuxBuffers) ? GL_TRUE : GL_FALSE;
          break;
       case GL_BLEND:
          *params = ctx->Color.BlendEnabled;
@@ -122,16 +122,16 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
       case GL_BLEND_SRC:
          *params = ENUM_TO_BOOL(ctx->Color.BlendSrcRGB);
          break;
-      case GL_BLEND_SRC_RGB_INGR:
+      case GL_BLEND_SRC_RGB_EXT:
          *params = ENUM_TO_BOOL(ctx->Color.BlendSrcRGB);
          break;
-      case GL_BLEND_DST_RGB_INGR:
+      case GL_BLEND_DST_RGB_EXT:
          *params = ENUM_TO_BOOL(ctx->Color.BlendDstRGB);
          break;
-      case GL_BLEND_SRC_ALPHA_INGR:
+      case GL_BLEND_SRC_ALPHA_EXT:
          *params = ENUM_TO_BOOL(ctx->Color.BlendSrcA);
          break;
-      case GL_BLEND_DST_ALPHA_INGR:
+      case GL_BLEND_DST_ALPHA_EXT:
          *params = ENUM_TO_BOOL(ctx->Color.BlendDstA);
          break;
       case GL_BLEND_EQUATION_EXT:
@@ -275,7 +275,6 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 *params = ctx->Current.EdgeFlag;
 	 break;
       case GL_FEEDBACK_BUFFER_SIZE:
-         /* TODO: is this right?  Or, return number of entries in buffer? */
          *params = INT_TO_BOOL(ctx->Feedback.BufferSize);
          break;
       case GL_FEEDBACK_BUFFER_TYPE:
@@ -385,12 +384,15 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 *params = FLOAT_TO_BOOL(ctx->Line.Width);
 	 break;
       case GL_LINE_WIDTH_GRANULARITY:
-	 *params = FLOAT_TO_BOOL(LINE_WIDTH_GRANULARITY);
+	 *params = FLOAT_TO_BOOL(ctx->Const.LineWidthGranularity);
 	 break;
       case GL_LINE_WIDTH_RANGE:
+	 params[0] = FLOAT_TO_BOOL(ctx->Const.MinLineWidthAA);
+	 params[1] = FLOAT_TO_BOOL(ctx->Const.MaxLineWidthAA);
+         break;
       case GL_ALIASED_LINE_WIDTH_RANGE:
-	 params[0] = FLOAT_TO_BOOL(MIN_LINE_WIDTH);
-	 params[1] = FLOAT_TO_BOOL(MAX_LINE_WIDTH);
+	 params[0] = FLOAT_TO_BOOL(ctx->Const.MinLineWidth);
+	 params[1] = FLOAT_TO_BOOL(ctx->Const.MaxLineWidth);
 	 break;
       case GL_LIST_BASE:
 	 *params = INT_TO_BOOL(ctx->List.ListBase);
@@ -613,12 +615,15 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 *params = FLOAT_TO_BOOL(ctx->Point.Size );
 	 break;
       case GL_POINT_SIZE_GRANULARITY:
-	 *params = FLOAT_TO_BOOL(POINT_SIZE_GRANULARITY );
+	 *params = FLOAT_TO_BOOL(ctx->Const.PointSizeGranularity );
 	 break;
       case GL_POINT_SIZE_RANGE:
+	 params[0] = FLOAT_TO_BOOL(ctx->Const.MinPointSizeAA);
+	 params[1] = FLOAT_TO_BOOL(ctx->Const.MaxPointSizeAA);
+         break;
       case GL_ALIASED_POINT_SIZE_RANGE:
-	 params[0] = FLOAT_TO_BOOL(MIN_POINT_SIZE );
-	 params[1] = FLOAT_TO_BOOL(MAX_POINT_SIZE );
+	 params[0] = FLOAT_TO_BOOL(ctx->Const.MinPointSize);
+	 params[1] = FLOAT_TO_BOOL(ctx->Const.MaxPointSize);
 	 break;
       case GL_POINT_SMOOTH:
 	 *params = ctx->Point.SmoothFlag;
@@ -644,11 +649,9 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 params[0] = ENUM_TO_BOOL(ctx->Polygon.FrontMode);
 	 params[1] = ENUM_TO_BOOL(ctx->Polygon.BackMode);
 	 break;
-#ifdef GL_EXT_polygon_offset
-      case GL_POLYGON_OFFSET_BIAS_EXT:
+      case GL_POLYGON_OFFSET_BIAS_EXT:  /* GL_EXT_polygon_offset */
          *params = FLOAT_TO_BOOL( ctx->Polygon.OffsetUnits );
          break;
-#endif
       case GL_POLYGON_OFFSET_FACTOR:
          *params = FLOAT_TO_BOOL( ctx->Polygon.OffsetFactor );
          break;
@@ -742,7 +745,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 *params = ctx->Visual->StereoFlag;
 	 break;
       case GL_SUBPIXEL_BITS:
-	 *params = INT_TO_BOOL(0);  /* TODO */
+	 *params = INT_TO_BOOL(ctx->Const.SubPixelBits);
 	 break;
       case GL_TEXTURE_1D:
          *params = _mesa_IsEnabled(GL_TEXTURE_1D );
@@ -916,7 +919,6 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = INT_TO_BOOL(GL_TEXTURE0_ARB + ctx->Array.ActiveTexture);
          break;
 
-
       /* GL_PGI_misc_hints */
       case GL_STRICT_DEPTHFUNC_HINT_PGI:
 	 *params = ENUM_TO_BOOL(GL_NICEST);
@@ -965,6 +967,14 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 break;
       case GL_NATIVE_GRAPHICS_HANDLE_PGI:
 	 *params = 0;
+	 break;
+
+      /* GL_EXT_compiled_vertex_array */
+      case GL_ARRAY_ELEMENT_LOCK_FIRST_EXT:
+	 *params = ctx->Array.LockFirst ? GL_TRUE : GL_FALSE;
+	 break;
+      case GL_ARRAY_ELEMENT_LOCK_COUNT_EXT:
+	 *params = ctx->Array.LockCount ? GL_TRUE : GL_FALSE;
 	 break;
 
       /* GL_ARB_transpose_matrix */
@@ -1063,7 +1073,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) ctx->Eval.AutoNormal;
          break;
       case GL_AUX_BUFFERS:
-         *params = (GLdouble) NUM_AUX_BUFFERS;
+         *params = (GLdouble) ctx->Const.NumAuxBuffers;
          break;
       case GL_BLEND:
          *params = (GLdouble) ctx->Color.BlendEnabled;
@@ -1074,16 +1084,16 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       case GL_BLEND_SRC:
          *params = ENUM_TO_DOUBLE(ctx->Color.BlendSrcRGB);
          break;
-      case GL_BLEND_SRC_RGB_INGR:
+      case GL_BLEND_SRC_RGB_EXT:
          *params = ENUM_TO_DOUBLE(ctx->Color.BlendSrcRGB);
          break;
-      case GL_BLEND_DST_RGB_INGR:
+      case GL_BLEND_DST_RGB_EXT:
          *params = ENUM_TO_DOUBLE(ctx->Color.BlendDstRGB);
          break;
-      case GL_BLEND_SRC_ALPHA_INGR:
+      case GL_BLEND_SRC_ALPHA_EXT:
          *params = ENUM_TO_DOUBLE(ctx->Color.BlendSrcA);
          break;
-      case GL_BLEND_DST_ALPHA_INGR:
+      case GL_BLEND_DST_ALPHA_EXT:
          *params = ENUM_TO_DOUBLE(ctx->Color.BlendDstA);
          break;
       case GL_BLEND_EQUATION_EXT:
@@ -1227,7 +1237,6 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 *params = (GLdouble) ctx->Current.EdgeFlag;
 	 break;
       case GL_FEEDBACK_BUFFER_SIZE:
-         /* TODO: is this right?  Or, return number of entries in buffer? */
          *params = (GLdouble) ctx->Feedback.BufferSize;
          break;
       case GL_FEEDBACK_BUFFER_TYPE:
@@ -1337,12 +1346,15 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 *params = (GLdouble) ctx->Line.Width;
 	 break;
       case GL_LINE_WIDTH_GRANULARITY:
-	 *params = (GLdouble) LINE_WIDTH_GRANULARITY;
+	 *params = (GLdouble) ctx->Const.LineWidthGranularity;
 	 break;
       case GL_LINE_WIDTH_RANGE:
+	 params[0] = (GLdouble) ctx->Const.MinLineWidthAA;
+	 params[1] = (GLdouble) ctx->Const.MaxLineWidthAA;
+	 break;
       case GL_ALIASED_LINE_WIDTH_RANGE:
-	 params[0] = (GLdouble) MIN_LINE_WIDTH;
-	 params[1] = (GLdouble) MAX_LINE_WIDTH;
+	 params[0] = (GLdouble) ctx->Const.MinLineWidth;
+	 params[1] = (GLdouble) ctx->Const.MaxLineWidth;
 	 break;
       case GL_LIST_BASE:
 	 *params = (GLdouble) ctx->List.ListBase;
@@ -1565,12 +1577,15 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) ctx->Point.Size;
          break;
       case GL_POINT_SIZE_GRANULARITY:
-	 *params = (GLdouble) POINT_SIZE_GRANULARITY;
+	 *params = (GLdouble) ctx->Const.PointSizeGranularity;
 	 break;
       case GL_POINT_SIZE_RANGE:
+	 params[0] = (GLdouble) ctx->Const.MinPointSizeAA;
+	 params[1] = (GLdouble) ctx->Const.MaxPointSizeAA;
+	 break;
       case GL_ALIASED_POINT_SIZE_RANGE:
-	 params[0] = (GLdouble) MIN_POINT_SIZE;
-	 params[1] = (GLdouble) MAX_POINT_SIZE;
+	 params[0] = (GLdouble) ctx->Const.MinPointSize;
+	 params[1] = (GLdouble) ctx->Const.MaxPointSize;
 	 break;
       case GL_POINT_SMOOTH:
 	 *params = (GLdouble) ctx->Point.SmoothFlag;
@@ -1596,11 +1611,9 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 params[0] = ENUM_TO_DOUBLE(ctx->Polygon.FrontMode);
 	 params[1] = ENUM_TO_DOUBLE(ctx->Polygon.BackMode);
 	 break;
-#ifdef GL_EXT_polygon_offset
-      case GL_POLYGON_OFFSET_BIAS_EXT:
+      case GL_POLYGON_OFFSET_BIAS_EXT:  /* GL_EXT_polygon_offset */
          *params = (GLdouble) ctx->Polygon.OffsetUnits;
          break;
-#endif
       case GL_POLYGON_OFFSET_FACTOR:
          *params = (GLdouble) ctx->Polygon.OffsetFactor;
          break;
@@ -1694,7 +1707,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 *params = (GLdouble) ctx->Visual->StereoFlag;
 	 break;
       case GL_SUBPIXEL_BITS:
-	 *params = 0.0;   /* TODO */
+	 *params = (GLdouble) ctx->Const.SubPixelBits;
 	 break;
       case GL_TEXTURE_1D:
          *params = _mesa_IsEnabled(GL_TEXTURE_1D) ? 1.0 : 0.0;
@@ -1919,6 +1932,14 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 *params = 0;
 	 break;
 
+      /* GL_EXT_compiled_vertex_array */
+      case GL_ARRAY_ELEMENT_LOCK_FIRST_EXT:
+	 *params = (GLdouble) ctx->Array.LockFirst;
+	 break;
+      case GL_ARRAY_ELEMENT_LOCK_COUNT_EXT:
+	 *params = (GLdouble) ctx->Array.LockCount;
+	 break;
+
       /* GL_ARB_transpose_matrix */
       case GL_TRANSPOSE_COLOR_MATRIX_ARB:
          /* don't have a color matrix */
@@ -2015,7 +2036,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = (GLfloat) ctx->Eval.AutoNormal;
          break;
       case GL_AUX_BUFFERS:
-         *params = (GLfloat) NUM_AUX_BUFFERS;
+         *params = (GLfloat) ctx->Const.NumAuxBuffers;
          break;
       case GL_BLEND:
          *params = (GLfloat) ctx->Color.BlendEnabled;
@@ -2026,16 +2047,16 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_BLEND_SRC:
          *params = ENUM_TO_FLOAT(ctx->Color.BlendSrcRGB);
          break;
-      case GL_BLEND_SRC_RGB_INGR:
+      case GL_BLEND_SRC_RGB_EXT:
          *params = ENUM_TO_FLOAT(ctx->Color.BlendSrcRGB);
          break;
-      case GL_BLEND_DST_RGB_INGR:
+      case GL_BLEND_DST_RGB_EXT:
          *params = ENUM_TO_FLOAT(ctx->Color.BlendDstRGB);
          break;
-      case GL_BLEND_SRC_ALPHA_INGR:
+      case GL_BLEND_SRC_ALPHA_EXT:
          *params = ENUM_TO_FLOAT(ctx->Color.BlendSrcA);
          break;
-      case GL_BLEND_DST_ALPHA_INGR:
+      case GL_BLEND_DST_ALPHA_EXT:
          *params = ENUM_TO_FLOAT(ctx->Color.BlendDstA);
          break;
       case GL_BLEND_EQUATION_EXT:
@@ -2176,7 +2197,6 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = (GLfloat) ctx->Current.EdgeFlag;
 	 break;
       case GL_FEEDBACK_BUFFER_SIZE:
-         /* TODO: is this right?  Or, return number of entries in buffer? */
          *params = (GLfloat) ctx->Feedback.BufferSize;
          break;
       case GL_FEEDBACK_BUFFER_TYPE:
@@ -2286,12 +2306,15 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = (GLfloat) ctx->Line.Width;
 	 break;
       case GL_LINE_WIDTH_GRANULARITY:
-	 *params = (GLfloat) LINE_WIDTH_GRANULARITY;
+	 *params = (GLfloat) ctx->Const.LineWidthGranularity;
 	 break;
       case GL_LINE_WIDTH_RANGE:
+	 params[0] = (GLfloat) ctx->Const.MinLineWidthAA;
+	 params[1] = (GLfloat) ctx->Const.MaxLineWidthAA;
+	 break;
       case GL_ALIASED_LINE_WIDTH_RANGE:
-	 params[0] = (GLfloat) MIN_LINE_WIDTH;
-	 params[1] = (GLfloat) MAX_LINE_WIDTH;
+	 params[0] = (GLfloat) ctx->Const.MinLineWidth;
+	 params[1] = (GLfloat) ctx->Const.MaxLineWidth;
 	 break;
       case GL_LIST_BASE:
 	 *params = (GLfloat) ctx->List.ListBase;
@@ -2514,12 +2537,15 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = (GLfloat) ctx->Point.Size;
          break;
       case GL_POINT_SIZE_GRANULARITY:
-	 *params = (GLfloat) POINT_SIZE_GRANULARITY;
+	 *params = (GLfloat) ctx->Const.PointSizeGranularity;
 	 break;
       case GL_POINT_SIZE_RANGE:
+	 params[0] = (GLfloat) ctx->Const.MinPointSizeAA;
+	 params[1] = (GLfloat) ctx->Const.MaxPointSizeAA;
+	 break;
       case GL_ALIASED_POINT_SIZE_RANGE:
-	 params[0] = (GLfloat) MIN_POINT_SIZE;
-	 params[1] = (GLfloat) MAX_POINT_SIZE;
+	 params[0] = (GLfloat) ctx->Const.MinPointSize;
+	 params[1] = (GLfloat) ctx->Const.MaxPointSize;
 	 break;
       case GL_POINT_SMOOTH:
 	 *params = (GLfloat) ctx->Point.SmoothFlag;
@@ -2643,7 +2669,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = (GLfloat) ctx->Visual->StereoFlag;
 	 break;
       case GL_SUBPIXEL_BITS:
-	 *params = 0.0F;  /* TODO */
+	 *params = (GLfloat) ctx->Const.SubPixelBits;
 	 break;
       case GL_TEXTURE_1D:
          *params = _mesa_IsEnabled(GL_TEXTURE_1D) ? 1.0 : 0.0;
@@ -2867,6 +2893,14 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = 0;
 	 break;
 
+      /* GL_EXT_compiled_vertex_array */
+      case GL_ARRAY_ELEMENT_LOCK_FIRST_EXT:
+	 *params = (GLfloat) ctx->Array.LockFirst;
+	 break;
+      case GL_ARRAY_ELEMENT_LOCK_COUNT_EXT:
+	 *params = (GLfloat) ctx->Array.LockCount;
+	 break;
+
       /* GL_ARB_transpose_matrix */
       case GL_TRANSPOSE_COLOR_MATRIX_ARB:
          /* don't have a color matrix */
@@ -2942,7 +2976,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Eval.AutoNormal;
          break;
       case GL_AUX_BUFFERS:
-         *params = (GLint) NUM_AUX_BUFFERS;
+         *params = (GLint) ctx->Const.NumAuxBuffers;
          break;
       case GL_BLEND:
          *params = (GLint) ctx->Color.BlendEnabled;
@@ -2953,16 +2987,16 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       case GL_BLEND_SRC:
          *params = (GLint) ctx->Color.BlendSrcRGB;
          break;
-      case GL_BLEND_SRC_RGB_INGR:
+      case GL_BLEND_SRC_RGB_EXT:
          *params = (GLint) ctx->Color.BlendSrcRGB;
          break;
-      case GL_BLEND_DST_RGB_INGR:
+      case GL_BLEND_DST_RGB_EXT:
          *params = (GLint) ctx->Color.BlendDstRGB;
          break;
-      case GL_BLEND_SRC_ALPHA_INGR:
+      case GL_BLEND_SRC_ALPHA_EXT:
          *params = (GLint) ctx->Color.BlendSrcA;
          break;
-      case GL_BLEND_DST_ALPHA_INGR:
+      case GL_BLEND_DST_ALPHA_EXT:
          *params = (GLint) ctx->Color.BlendDstA;
          break;
       case GL_BLEND_EQUATION_EXT:
@@ -3107,7 +3141,6 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 *params = (GLint) ctx->Current.EdgeFlag;
 	 break;
       case GL_FEEDBACK_BUFFER_SIZE:
-         /* TODO: is this right?  Or, return number of entries in buffer? */
          *params = ctx->Feedback.BufferSize;
          break;
       case GL_FEEDBACK_BUFFER_TYPE:
@@ -3217,12 +3250,15 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 *params = (GLint) ctx->Line.Width;
 	 break;
       case GL_LINE_WIDTH_GRANULARITY:
-	 *params = (GLint) LINE_WIDTH_GRANULARITY;
+	 *params = (GLint) ctx->Const.LineWidthGranularity;
 	 break;
       case GL_LINE_WIDTH_RANGE:
+	 params[0] = (GLint) ctx->Const.MinLineWidthAA;
+	 params[1] = (GLint) ctx->Const.MaxLineWidthAA;
+	 break;
       case GL_ALIASED_LINE_WIDTH_RANGE:
-	 params[0] = (GLint) MIN_LINE_WIDTH;
-	 params[1] = (GLint) MAX_LINE_WIDTH;
+	 params[0] = (GLint) ctx->Const.MinLineWidth;
+	 params[1] = (GLint) ctx->Const.MaxLineWidth;
 	 break;
       case GL_LIST_BASE:
 	 *params = (GLint) ctx->List.ListBase;
@@ -3445,12 +3481,15 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Point.Size;
          break;
       case GL_POINT_SIZE_GRANULARITY:
-	 *params = (GLint) POINT_SIZE_GRANULARITY;
+	 *params = (GLint) ctx->Const.PointSizeGranularity;
 	 break;
       case GL_POINT_SIZE_RANGE:
+	 params[0] = (GLint) ctx->Const.MinPointSizeAA;
+	 params[1] = (GLint) ctx->Const.MaxPointSizeAA;
+	 break;
       case GL_ALIASED_POINT_SIZE_RANGE:
-	 params[0] = (GLint) MIN_POINT_SIZE;
-	 params[1] = (GLint) MAX_POINT_SIZE;
+	 params[0] = (GLint) ctx->Const.MinPointSize;
+	 params[1] = (GLint) ctx->Const.MaxPointSize;
 	 break;
       case GL_POINT_SMOOTH:
 	 *params = (GLint) ctx->Point.SmoothFlag;
@@ -3476,11 +3515,9 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 params[0] = (GLint) ctx->Polygon.FrontMode;
 	 params[1] = (GLint) ctx->Polygon.BackMode;
 	 break;
-#ifdef GL_EXT_polygon_offset
-      case GL_POLYGON_OFFSET_BIAS_EXT:
+      case GL_POLYGON_OFFSET_BIAS_EXT: /* GL_EXT_polygon_offset */
          *params = (GLint) ctx->Polygon.OffsetUnits;
          break;
-#endif
       case GL_POLYGON_OFFSET_FACTOR:
          *params = (GLint) ctx->Polygon.OffsetFactor;
          break;
@@ -3574,7 +3611,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 *params = (GLint) ctx->Visual->StereoFlag;
 	 break;
       case GL_SUBPIXEL_BITS:
-	 *params = 0;  /* TODO */
+	 *params = ctx->Const.SubPixelBits;
 	 break;
       case GL_TEXTURE_1D:
          *params = _mesa_IsEnabled(GL_TEXTURE_1D) ? 1 : 0;
@@ -3748,7 +3785,6 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = GL_TEXTURE0_ARB + ctx->Array.ActiveTexture;
          break;
 
-
       /* GL_PGI_misc_hints */
       case GL_STRICT_DEPTHFUNC_HINT_PGI:
 	 *params = (GL_NICEST);
@@ -3799,13 +3835,11 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 *params = 0;
 	 break;
 
-      /* GL_EXT_compiled_vertex_array
-       */
-      case GL_ARRAY_ELEMENT_LOCK_FIRST_SGI:
+      /* GL_EXT_compiled_vertex_array */
+      case GL_ARRAY_ELEMENT_LOCK_FIRST_EXT:
 	 *params = ctx->Array.LockFirst;
 	 break;
-
-      case GL_ARRAY_ELEMENT_LOCK_COUNT_SGI:
+      case GL_ARRAY_ELEMENT_LOCK_COUNT_EXT:
 	 *params = ctx->Array.LockCount;
 	 break;
 	 
@@ -3899,47 +3933,32 @@ const GLubyte *
 _mesa_GetString( GLenum name )
 {
    GET_CURRENT_CONTEXT(ctx);
-   static char result[1000];
    static char *vendor = "Brian Paul";
+   static char *renderer = "Mesa";
    static char *version = "1.2 Mesa 3.3 beta";
 
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, "glGetString", 0);
 
-   /* First see if device driver can satisfy this call */
-   switch (name) {
-      case GL_VENDOR:
-      case GL_RENDERER:
-      case GL_VERSION:
-         if (ctx->Driver.GetString) {
-            const GLubyte *str = (*ctx->Driver.GetString)(ctx, name);
-            if (str && str[0])
-               return str;
-         }
-         break;
-      /* Extensions always handled by extensions.c */
-      case GL_EXTENSIONS:
-	 return (GLubyte *) gl_extensions_get_string( ctx );
-      default:
-         gl_error( ctx, GL_INVALID_ENUM, "glGetString" );
-         return (GLubyte *) 0;
-   }
+   /* this is a required driver function */
+   assert(ctx->Driver.GetString);
+   {
+      const GLubyte *str = (*ctx->Driver.GetString)(ctx, name);
+      if (str)
+         return str;
 
-   /* If we get here, device driver didn't return a string */
-   switch (name) {
-      case GL_VENDOR:
-         return (GLubyte *) vendor;
-      case GL_RENDERER:
-         strcpy(result, "Mesa");
-         if (ctx->Driver.RendererString) {
-            strcat(result, " ");
-            strcat(result, (*ctx->Driver.RendererString)());
-         }
-         return (GLubyte *) result;
-      case GL_VERSION:
-         return (GLubyte *) version;
-      default:
-         /* caught above */
-         return NULL;
+       switch (name) {
+          case GL_VENDOR:
+             return (const GLubyte *) vendor;
+          case GL_RENDERER:
+             return (const GLubyte *) renderer;
+          case GL_VERSION:
+             return (const GLubyte *) version;
+          case GL_EXTENSIONS:
+             return (GLubyte *) gl_extensions_get_string( ctx );
+          default:
+             gl_error( ctx, GL_INVALID_ENUM, "glGetString" );
+             return (GLubyte *) 0;
+       }
    }
 }
 

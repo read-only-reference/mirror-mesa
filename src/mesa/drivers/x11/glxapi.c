@@ -1,10 +1,10 @@
-/* $Id: glxapi.c,v 1.10 1999/12/10 15:16:49 brianp Exp $ */
+/* $Id: glxapi.c,v 1.15 2000/02/27 18:26:54 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -169,7 +169,7 @@ XVisualInfo *glXChooseVisual(Display *dpy, int screen, int *list)
 }
 
 
-void glXCopyContext(Display *dpy, GLXContext src, GLXContext dst, GLuint mask)
+void glXCopyContext(Display *dpy, GLXContext src, GLXContext dst, unsigned long mask)
 {
    struct _glxapi_table *t = get_dispatch(dpy);
    if (!t)

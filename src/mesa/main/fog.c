@@ -1,10 +1,10 @@
-/* $Id: fog.c,v 1.4 1999/11/11 01:22:26 brianp Exp $ */
+/* $Id: fog.c,v 1.7 2000/02/25 03:55:40 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -34,6 +34,7 @@
 #include "macros.h"
 #include "mmath.h"
 #include "types.h"
+#include "xform.h"
 #endif
 
 
@@ -72,7 +73,7 @@ _mesa_Fogiv(GLenum pname, const GLint *params )
 	 p[3] = INT_TO_FLOAT( params[3] );
 	 break;
       default:
-         /* Error will be caught later in gl_Fogfv */
+         /* Error will be caught later in _mesa_Fogfv */
          ;
    }
    _mesa_Fogfv(pname, p);
@@ -106,23 +107,9 @@ _mesa_Fogfv( GLenum pname, const GLfloat *params )
 	 }
 	 break;
       case GL_FOG_START:
-#if 0
-         /* Prior to OpenGL 1.1, this was an error */
-         if (*params<0.0F) {
-            gl_error( ctx, GL_INVALID_VALUE, "glFog(GL_FOG_START)" );
-            return;
-         }
-#endif
 	 ctx->Fog.Start = *params;
 	 break;
       case GL_FOG_END:
-#if 0
-         /* Prior to OpenGL 1.1, this was an error */
-         if (*params<0.0F) {
-            gl_error( ctx, GL_INVALID_VALUE, "glFog(GL_FOG_END)" );
-            return;
-         }
-#endif
 	 ctx->Fog.End = *params;
 	 break;
       case GL_FOG_INDEX:
@@ -150,9 +137,13 @@ _mesa_Fogfv( GLenum pname, const GLfloat *params )
 typedef void (*fog_func)( struct vertex_buffer *VB, GLuint side, 
 			  GLubyte flag );
 
+typedef void (*fog_coord_func)( struct vertex_buffer *VB, 
+				const GLvector4f *from,
+				GLubyte flag );
 
 static fog_func fog_ci_tab[2];
 static fog_func fog_rgba_tab[2];
+static fog_coord_func make_fog_coord_tab[2];
 
 /*
  * Compute the fogged color for an array of vertices.
@@ -172,16 +163,20 @@ static fog_func fog_rgba_tab[2];
 #define IDX 1
 #include "fog_tmp.h"
 
-void gl_init_fog( void )
+
+void
+_mesa_init_fog( void )
 {
    init_fog_tab_masked();
    init_fog_tab_raw();
 }
 
+
 /*
  * Compute fog for the vertices in the vertex buffer.
  */
-void gl_fog_vertices( struct vertex_buffer *VB )
+void
+_mesa_fog_vertices( struct vertex_buffer *VB )
 {
    GLcontext *ctx = VB->ctx;
    GLuint i = VB->CullMode & 1;
@@ -206,6 +201,70 @@ void gl_fog_vertices( struct vertex_buffer *VB )
    }
 }
 
+
+static void check_fog_coords( GLcontext *ctx, struct gl_pipeline_stage *d )
+{
+   d->type = 0;
+
+   if (ctx->FogMode==FOG_FRAGMENT)
+   {
+      d->type = PIPE_IMMEDIATE|PIPE_PRECALC;
+      d->inputs = VERT_OBJ_ANY;
+      d->outputs = VERT_FOG_COORD;
+   }
+}
+
+void gl_make_fog_coords( struct vertex_buffer *VB )
+{
+   GLcontext *ctx = VB->ctx;
+
+   /* If full eye coords weren't required, just calculate the eye Z
+    * values.  
+    */
+   if (!ctx->NeedEyeCoords) {
+      GLfloat *m = ctx->ModelView.m;
+      GLfloat plane[4];
+
+      plane[0] = m[2];
+      plane[1] = m[6];
+      plane[2] = m[10];
+      plane[3] = m[14];
+
+      gl_dotprod_tab[0][VB->ObjPtr->size](&VB->Eye,
+					  2, /* fill z coordinates */
+					  VB->ObjPtr,
+					  plane,
+					  0 );
+
+      make_fog_coord_tab[0]( VB, &VB->Eye, 0 );
+   }
+   else
+   {
+      make_fog_coord_tab[0]( VB, VB->EyePtr, 0 );
+   }
+}
+
+
+/* Drivers that want fog coordinates in VB->Spec[0] alpha, can substitute this
+ * stage for the default PIPE_OP_FOG pipeline stage.
+ */
+struct gl_pipeline_stage gl_fog_coord_stage = {
+   "build fog coordinates",
+   PIPE_OP_FOG,
+   PIPE_PRECALC|PIPE_IMMEDIATE,
+   0,
+   NEW_FOG,
+   NEW_LIGHTING|NEW_RASTER_OPS|NEW_FOG|NEW_MODELVIEW,
+   0, 0,
+   0, 0, 0,
+   check_fog_coords,
+   gl_make_fog_coords 
+};
+
+
+
+
+
 /*
  * Apply fog to an array of RGBA pixels.
  * Input:  n - number of pixels
@@ -213,8 +272,9 @@ void gl_fog_vertices( struct vertex_buffer *VB )
  *         red, green, blue, alpha - pixel colors
  * Output:  red, green, blue, alpha - fogged pixel colors
  */
-void gl_fog_rgba_pixels( const GLcontext *ctx,
-                         GLuint n, const GLdepth z[], GLubyte rgba[][4] )
+void
+_mesa_fog_rgba_pixels( const GLcontext *ctx,
+                       GLuint n, const GLdepth z[], GLubyte rgba[][4] )
 {
    GLfloat c = ctx->ProjectionMatrix.m[10];
    GLfloat d = ctx->ProjectionMatrix.m[14];
@@ -283,7 +343,7 @@ void gl_fog_rgba_pixels( const GLcontext *ctx,
          }
 	 break;
       default:
-         gl_problem(ctx, "Bad fog mode in gl_fog_rgba_pixels");
+         gl_problem(ctx, "Bad fog mode in _mesa_fog_rgba_pixels");
          return;
    }
 }
@@ -298,8 +358,9 @@ void gl_fog_rgba_pixels( const GLcontext *ctx,
  *         index - pixel color indexes
  * Output:  index - fogged pixel color indexes
  */
-void gl_fog_ci_pixels( const GLcontext *ctx,
-                       GLuint n, const GLdepth z[], GLuint index[] )
+void
+_mesa_fog_ci_pixels( const GLcontext *ctx,
+                     GLuint n, const GLdepth z[], GLuint index[] )
 {
    GLfloat c = ctx->ProjectionMatrix.m[10];
    GLfloat d = ctx->ProjectionMatrix.m[14];
@@ -359,7 +420,7 @@ void gl_fog_ci_pixels( const GLcontext *ctx,
 	 }
 	 break;
       default:
-         gl_problem(ctx, "Bad fog mode in gl_fog_ci_pixels");
+         gl_problem(ctx, "Bad fog mode in _mesa_fog_ci_pixels");
          return;
    }
 }

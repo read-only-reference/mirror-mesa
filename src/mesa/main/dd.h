@@ -1,4 +1,4 @@
-/* $Id: dd.h,v 1.9 2000/01/06 09:28:07 brianp Exp $ */
+/* $Id: dd.h,v 1.12 2000/02/27 20:38:15 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -139,12 +139,10 @@ struct dd_function_table {
     *** every device driver.                                           ***
     **********************************************************************/
 
-   const char * (*RendererString)(void);
-   /*
-    * Return a string which uniquely identifies this device driver.
-    * The string should contain no whitespace.  Examples: "X11", "OffScreen",
-    * "MSWindows", "SVGA".
-    * NOTE: This function will be obsolete in favor of GetString in the future!
+   const GLubyte * (*GetString)( GLcontext *ctx, GLenum name );
+   /* Return a string as needed by glGetString().
+    * Only the GL_RENDERER token must be implemented.  Otherwise,
+    * NULL can be returned.
     */
 
    void (*UpdateState)( GLcontext *ctx );
@@ -327,17 +325,6 @@ struct dd_function_table {
     *** since Mesa will either set them to NULL or point them at a     ***
     *** fall-back function.                                            ***
     **********************************************************************/
-
-   const char * (*ExtensionString)( GLcontext *ctx );
-   /* Return a space-separated list of extensions for this driver.
-    * NOTE: This function will be obsolete in favor of GetString in the future!
-    */
-
-   const GLubyte * (*GetString)( GLcontext *ctx, GLenum name );
-   /* Return a string as needed by glGetString().
-    * NOTE: This will replace the ExtensionString and RendererString
-    * functions in the future!
-    */
 
    void (*Finish)( GLcontext *ctx );
    /*
@@ -718,7 +705,10 @@ struct dd_function_table {
    void (*Lightfv)(GLcontext *ctx, GLenum light,
 		   GLenum pname, const GLfloat *params, GLint nparams );
    void (*LightModelfv)(GLcontext *ctx, GLenum pname, const GLfloat *params);
+   void (*LineStipple)(GLcontext *ctx, GLint factor, GLushort pattern );
+   void (*LogicOpcode)(GLcontext *ctx, GLenum opcode);
    void (*PolygonMode)(GLcontext *ctx, GLenum face, GLenum mode);
+   void (*PolygonStipple)(GLcontext *ctx, const GLubyte *mask );
    void (*Scissor)(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h);
    void (*ShadeModel)(GLcontext *ctx, GLenum mode);
    void (*ClearStencil)(GLcontext *ctx, GLint s);

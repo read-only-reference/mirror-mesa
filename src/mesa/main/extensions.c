@@ -1,10 +1,10 @@
-/* $Id: extensions.c,v 1.16 1999/12/10 20:01:06 brianp Exp $ */
+/* $Id: extensions.c,v 1.18 2000/02/25 03:55:40 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -49,7 +49,7 @@ struct extension {
 
 
 static struct { int enabled; const char *name; } default_extensions[] = {
-   { ALWAYS_ENABLED, "GL_EXT_blend_color" },
+   { DEFAULT_ON,     "GL_EXT_blend_color" },
    { DEFAULT_OFF,    "ARB_imaging" },
    { DEFAULT_ON,     "GL_EXT_blend_minmax" },
    { DEFAULT_ON,     "GL_EXT_blend_logic_op" },
@@ -62,7 +62,7 @@ static struct { int enabled; const char *name; } default_extensions[] = {
    { DEFAULT_ON,     "GL_EXT_texture3D" },
    { ALWAYS_ENABLED, "GL_MESA_window_pos" },
    { ALWAYS_ENABLED, "GL_MESA_resize_buffers" },
-   { ALWAYS_ENABLED, "GL_EXT_shared_texture_palette" },
+   { DEFAULT_ON,     "GL_EXT_shared_texture_palette" },
    { ALWAYS_ENABLED, "GL_EXT_rescale_normal" },
    { ALWAYS_ENABLED, "GL_EXT_abgr" },
    { ALWAYS_ENABLED, "GL_SGIS_texture_edge_clamp" },
@@ -72,10 +72,11 @@ static struct { int enabled; const char *name; } default_extensions[] = {
    { ALWAYS_ENABLED, "GL_NV_texgen_reflection" },
    { DEFAULT_ON,     "GL_PGI_misc_hints" },
    { DEFAULT_ON,     "GL_EXT_compiled_vertex_array" },
-   { DEFAULT_OFF,    "GL_EXT_vertex_array_set" },
    { DEFAULT_ON,     "GL_EXT_clip_volume_hint" },
    { DEFAULT_ON,     "GL_EXT_texture_env_add" },
    { ALWAYS_ENABLED, "GL_ARB_tranpose_matrix" },
+   { DEFAULT_OFF,    "GL_EXT_vertex_array_set" },
+   { DEFAULT_OFF,    "GL_EXT_texture_env" },
 };
 
 

@@ -1,4 +1,4 @@
-/* $Id: lines.c,v 1.6 1999/11/11 01:22:27 brianp Exp $ */
+/* $Id: lines.c,v 1.8 2000/02/27 20:38:15 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -71,6 +71,9 @@ _mesa_LineStipple( GLint factor, GLushort pattern )
    ctx->Line.StippleFactor = CLAMP( factor, 1, 256 );
    ctx->Line.StipplePattern = pattern;
    ctx->NewState |= NEW_RASTER_OPS;
+
+   if (ctx->Driver.LineStipple)
+      ctx->Driver.LineStipple( ctx, factor, pattern );
 }
 
 
@@ -1024,8 +1027,7 @@ void gl_set_line_function( GLcontext *ctx )
       else {
 	 if (ctx->Light.ShadeModel==GL_SMOOTH) {
 	    /* Width==1, non-stippled, smooth-shaded */
-            if (ctx->Depth.Test
-	        || (ctx->Fog.Enabled && ctx->Hint.Fog==GL_NICEST)) {
+            if (ctx->Depth.Test || ctx->FogMode == FOG_FRAGMENT) {
                if (rgbmode)
                   ctx->Driver.LineFunc = smooth_rgba_z_line;
                else
@@ -1040,8 +1042,7 @@ void gl_set_line_function( GLcontext *ctx )
 	 }
          else {
 	    /* Width==1, non-stippled, flat-shaded */
-            if (ctx->Depth.Test
-                || (ctx->Fog.Enabled && ctx->Hint.Fog==GL_NICEST)) {
+            if (ctx->Depth.Test || ctx->FogMode == FOG_FRAGMENT) {
                if (rgbmode)
                   ctx->Driver.LineFunc = flat_rgba_z_line;
                else

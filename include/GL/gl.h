@@ -1,4 +1,4 @@
-/* $Id: gl.h,v 1.28 2000/01/17 18:05:24 brianp Exp $ */
+/* $Id: gl.h,v 1.33 2000/02/25 21:01:41 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -57,38 +57,44 @@
 #  pragma warning( disable : 4710 ) /* function 'foo' not inlined */
 #  pragma warning( disable : 4711 ) /* function 'foo' selected for automatic inline expansion */
 #  pragma warning( disable : 4127 ) /* conditional expression is constant */
-#	if defined(MESA_MINWARN)
-#	  pragma warning( disable : 4244 ) /* '=' : conversion from 'const double ' to 'float ', possible loss of data */
-#	  pragma warning( disable : 4018 ) /* '<' : signed/unsigned mismatch */
-#	  pragma warning( disable : 4305 ) /* '=' : truncation from 'const double ' to 'float ' */
-#	  pragma warning( disable : 4550 ) /* 'function' undefined; assuming extern returning int */
-#	  pragma warning( disable : 4761 ) /* integral size mismatch in argument; conversion supplied */
+#  if defined(MESA_MINWARN)
+#    pragma warning( disable : 4244 ) /* '=' : conversion from 'const double ' to 'float ', possible loss of data */
+#    pragma warning( disable : 4018 ) /* '<' : signed/unsigned mismatch */
+#    pragma warning( disable : 4305 ) /* '=' : truncation from 'const double ' to 'float ' */
+#    pragma warning( disable : 4550 ) /* 'function' undefined; assuming extern returning int */
+#    pragma warning( disable : 4761 ) /* integral size mismatch in argument; conversion supplied */
 #  endif
-#	if defined(_MSC_VER) && defined(BUILD_GL32) /* tag specify we're building mesa as a DLL */
-#		define GLAPI __declspec(dllexport)
-#     define WGLAPI __declspec(dllexport)
-#	elif defined(_MSC_VER) && defined(_DLL) /* tag specifying we're building for DLL runtime support */
-#		define GLAPI __declspec(dllimport)
-#     define WGLAPI __declspec(dllimport)
-#	else /* for use with static link lib build of Win32 edition only */
-#		define GLAPI extern
-#     define WGLAPI __declspec(dllimport)
-#	endif /* _STATIC_MESA support */
-#	define GLAPIENTRY __stdcall
-#	define GLAPIENTRYP __stdcall *
-#	define GLCALLBACK __stdcall
-#       define GLCALLBACKP __stdcall *
-#	define GLWINAPI __stdcall
-#	define GLWINAPIV __cdecl
+#  if defined(_MSC_VER) && defined(BUILD_GL32) /* tag specify we're building mesa as a DLL */
+#    define GLAPI __declspec(dllexport)
+#    define WGLAPI __declspec(dllexport)
+#  elif defined(_MSC_VER) && defined(_DLL) /* tag specifying we're building for DLL runtime support */
+#    define GLAPI __declspec(dllimport)
+#    define WGLAPI __declspec(dllimport)
+#  else /* for use with static link lib build of Win32 edition only */
+#    define GLAPI extern
+#    define WGLAPI __declspec(dllimport)
+#  endif /* _STATIC_MESA support */
+#  define GLAPIENTRY __stdcall
+#  define GLAPIENTRYP __stdcall *
+#  define GLCALLBACK __stdcall
+#  define GLCALLBACKP __stdcall *
+#  if defined(__CYGWIN32__)
+#    define GLCALLBACKPCAST *
+#  else
+#    define GLCALLBACKPCAST __stdcall *
+#  endif
+#  define GLWINAPI __stdcall
+#  define GLWINAPIV __cdecl
 #else
 /* non-Windows compilation */
-#	define GLAPI extern
-#	define GLAPIENTRY
-#	define GLAPIENTRYP *
-#	define GLCALLBACK
-#	define GLCALLBACKP *
-#	define GLWINAPI
-#	define GLWINAPIV
+#  define GLAPI extern
+#  define GLAPIENTRY
+#  define GLAPIENTRYP *
+#  define GLCALLBACK
+#  define GLCALLBACKP *
+#  define GLCALLBACKPCAST *
+#  define GLWINAPI
+#  define GLWINAPIV
 #endif /* WIN32 / CYGWIN32 bracket */
 
 /* compatability guard so we don't need to change client code */
@@ -131,18 +137,9 @@ extern "C" {
 
 
 
-/*
- * Apps can test for this symbol to do conditional compilation if needed.
- */
-/* XXX these Mesa symbols are going away
-#define MESA
-#define MESA_MAJOR_VERSION 3
-#define MESA_MINOR_VERSION 1
-*/
-
-
 #define GL_VERSION_1_1   1
 #define GL_VERSION_1_2   1
+#define GL_HAS_GLEXT     1
 
 
 
@@ -1784,7 +1781,7 @@ GLAPI void GLAPIENTRY glGetSeparableFilter( GLenum target, GLenum format,
 
 
 /*
- * XXX these extensions may eventually be moved into a new glext.h file
+ * XXX these extensions may eventually be moved into glext.h
  */
 
 
@@ -2122,8 +2119,8 @@ GLAPI void GLAPIENTRY glGetColorTableParameterivEXT( GLenum target, GLenum pname
 #ifndef GL_EXT_compiled_vertex_array
 #define GL_EXT_compiled_vertex_array 1
 
-#define GL_ARRAY_ELEMENT_LOCK_FIRST_SGI		0x81A8
-#define GL_ARRAY_ELEMENT_LOCK_COUNT_SGI		0x81A9
+#define GL_ARRAY_ELEMENT_LOCK_FIRST_EXT		0x81A8
+#define GL_ARRAY_ELEMENT_LOCK_COUNT_EXT		0x81A9
 
 GLAPI void GLAPIENTRY glLockArraysEXT( GLint first, GLsizei count );
 GLAPI void GLAPIENTRY glUnlockArraysEXT( void );
@@ -2158,19 +2155,19 @@ GLAPI void GLAPIENTRY glUnlockArraysEXT( void );
 
 
 /*
- * GL_INGR_blend_func_separate (EXT number 173)
+ * GL_EXT_blend_func_separate (EXT number 173) (aka GL_INGR_blend_func_separate)
  */
-#ifndef GL_INGR_blend_func_separate
-#define GL_INGR_blend_func_separate 1
+#ifndef GL_EXT_blend_func_separate
+#define GL_EXT_blend_func_separate 1
 
-#define GL_BLEND_DST_RGB_INGR			0x80C8
-#define GL_BLEND_SRC_RGB_INGR			0x80C9
-#define GL_BLEND_DST_ALPHA_INGR			0x80CA
-#define GL_BLEND_SRC_ALPHA_INGR			0x80CB
+#define GL_BLEND_DST_RGB_EXT			0x80C8
+#define GL_BLEND_SRC_RGB_EXT			0x80C9
+#define GL_BLEND_DST_ALPHA_EXT			0x80CA
+#define GL_BLEND_SRC_ALPHA_EXT			0x80CB
 
-GLAPI void GLAPIENTRY glBlendFuncSeparateINGR( GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfactorAlpha, GLenum dfactorAlpha );
+GLAPI void GLAPIENTRY glBlendFuncSeparateEXT( GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfactorAlpha, GLenum dfactorAlpha );
 
-#endif /* GL_INGR_blend_func_separate */
+#endif /* GL_EXT_blend_func_separate */
 
 
 
@@ -2200,7 +2197,7 @@ GLAPI void GLAPIENTRY glBlendFuncSeparateINGR( GLenum sfactorRGB, GLenum dfactor
 
 
 /*
- * GL_ARB_multitexture (no number)
+ * GL_ARB_multitexture (ARB 0)
  */
 #ifndef GL_ARB_multitexture
 #define GL_ARB_multitexture 1
@@ -2281,7 +2278,7 @@ GLAPI void GLAPIENTRY glMultiTexCoord4svARB(GLenum target, const GLshort *v);
 
 
 /*
- * GL_MESA_window_pos (no number)
+ * GL_MESA_window_pos (197)
  */
 #ifndef GL_MESA_window_pos
 #define GL_MESA_window_pos 1
@@ -2316,7 +2313,7 @@ GLAPI void GLAPIENTRY glWindowPos4dvMESA( const GLdouble *p );
 
 
 /*
- * GL_MESA_resize_bufffers (no number)
+ * GL_MESA_resize_bufffers (196)
  */
 #ifndef GL_MESA_resize_bufffers
 #define GL_MESA_resize_buffers 1
@@ -2328,7 +2325,7 @@ GLAPI void GLAPIENTRY glResizeBuffersMESA( void );
 
 
 /*
- * GL_ARB_tranpose_matrix (number ?)
+ * GL_ARB_tranpose_matrix (ARB 2)
  */
 #ifndef GL_ARB_transpose_matrix
 #define GL_ARB_transpose_matrix 1
@@ -2343,7 +2340,21 @@ GLAPI void GLAPIENTRY glLoadTransposeMatrixfARB( const GLfloat m[16] );
 GLAPI void GLAPIENTRY glMultTransposeMatrixdARB( const GLdouble m[16] );
 GLAPI void GLAPIENTRY glMultTransposeMatrixfARB( const GLfloat m[16] );
 
-#endif
+#endif /* GL_ARB_tranpose_matrix */
+
+
+
+/*
+ * GL_ARB_multisample (ARB 4)
+ */
+#ifndef GL_ARB_multisample
+#define GL_ARB_multisample 1
+
+GLAPI void GLAPIENTRY glSampleCoverageARB(GLclampf value, GLboolean invert);
+
+GLAPI void GLAPIENTRY glSamplePassARB(GLenum pass);
+
+#endif /* GL_ARB_multisample */
 
 
 

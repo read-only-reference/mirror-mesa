@@ -2,9 +2,9 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -66,8 +66,6 @@ static void fxSetupTexture_NoLock(GLcontext *ctx);
 static void fxSetupTexture(GLcontext *ctx);
 static void fxSetupBlend(GLcontext *ctx);
 static void fxSetupDepthTest(GLcontext *ctx);
-static void fxFogTableGenerate(GLcontext *ctx);
-static void fxSetupFog(GLcontext *ctx, GLboolean forceTableRebuild);
 static void fxSetupScissor(GLcontext *ctx);
 static void fxSetupCull(GLcontext *ctx);
 static void gl_print_fx_state_flags( const char *msg, GLuint flags);
@@ -109,7 +107,7 @@ static void fxTexValidate(GLcontext *ctx, struct gl_texture_object *tObj)
   else
     FX_smallLodLog2(ti->info)=FX_largeLodLog2(ti->info);
 
-  fxTexGetFormat(tObj->Image[minl]->Format,&(ti->info.format),&(ti->baseLevelInternalFormat));
+  fxTexGetFormat(tObj->Image[minl]->IntFormat,&(ti->info.format),&(ti->baseLevelInternalFormat));
 
   switch (tObj->WrapS) {
   case GL_CLAMP_TO_EDGE:
@@ -395,11 +393,11 @@ static void fxSetupSingleTMU_NoLock(fxMesaContext fxMesa, struct gl_texture_obje
 static void fxSelectSingleTMUSrc_NoLock(fxMesaContext fxMesa, GLint tmu, 
 					FxBool LODblend)
 {
-   if (MESA_VERBOSE&VERBOSE_DRIVER) {
-      fprintf(stderr,"fxmesa: fxSelectSingleTMUSrc(%d,%d)\n",tmu,LODblend);
-   }
+  if (MESA_VERBOSE&VERBOSE_DRIVER) {
+    fprintf(stderr,"fxmesa: fxSelectSingleTMUSrc(%d,%d)\n",tmu,LODblend);
+  }
 
-  if(LODblend) {
+  if (LODblend) {
     FX_grTexCombine_NoLock(GR_TMU0,
 			   GR_COMBINE_FUNCTION_BLEND,
 			   GR_COMBINE_FACTOR_ONE_MINUS_LOD_FRACTION,
@@ -407,37 +405,42 @@ static void fxSelectSingleTMUSrc_NoLock(fxMesaContext fxMesa, GLint tmu,
 			   GR_COMBINE_FACTOR_ONE_MINUS_LOD_FRACTION,
 			   FXFALSE,FXFALSE);
 
-    FX_grTexCombine_NoLock(GR_TMU1,
-			   GR_COMBINE_FUNCTION_LOCAL,GR_COMBINE_FACTOR_NONE,
-			   GR_COMBINE_FUNCTION_LOCAL,GR_COMBINE_FACTOR_NONE,
-			   FXFALSE,FXFALSE);
+    if (fxMesa->haveTwoTMUs)
+      FX_grTexCombine_NoLock(GR_TMU1,
+			     GR_COMBINE_FUNCTION_LOCAL,GR_COMBINE_FACTOR_NONE,
+			     GR_COMBINE_FUNCTION_LOCAL,GR_COMBINE_FACTOR_NONE,
+			     FXFALSE,FXFALSE);
     fxMesa->tmuSrc=FX_TMU_SPLIT;
-  } else {
+  }
+  else {
     if (tmu!=FX_TMU1) {
       FX_grTexCombine_NoLock(GR_TMU0,
 			     GR_COMBINE_FUNCTION_LOCAL,GR_COMBINE_FACTOR_NONE,
 			     GR_COMBINE_FUNCTION_LOCAL,GR_COMBINE_FACTOR_NONE,
 			     FXFALSE,FXFALSE);
-      FX_grTexCombine_NoLock(GR_TMU1,
-			     GR_COMBINE_FUNCTION_ZERO, GR_COMBINE_FACTOR_NONE,
-			     GR_COMBINE_FUNCTION_ZERO, GR_COMBINE_FACTOR_NONE,
-			     FXFALSE,FXFALSE);
+      if (fxMesa->haveTwoTMUs) {
+        FX_grTexCombine_NoLock(GR_TMU1,
+                               GR_COMBINE_FUNCTION_ZERO, GR_COMBINE_FACTOR_NONE,
+                               GR_COMBINE_FUNCTION_ZERO, GR_COMBINE_FACTOR_NONE,
+                               FXFALSE,FXFALSE);
+      }
       fxMesa->tmuSrc=FX_TMU0;
-    } else {
+    }
+    else {
       FX_grTexCombine_NoLock(GR_TMU1,
 			     GR_COMBINE_FUNCTION_LOCAL,GR_COMBINE_FACTOR_NONE,
 			     GR_COMBINE_FUNCTION_LOCAL,GR_COMBINE_FACTOR_NONE,
 			     FXFALSE,FXFALSE);
-    
+
       /* GR_COMBINE_FUNCTION_SCALE_OTHER doesn't work ?!? */
-    
+
       FX_grTexCombine_NoLock(GR_TMU0,
 			     GR_COMBINE_FUNCTION_BLEND,
 			     GR_COMBINE_FACTOR_ONE,
 			     GR_COMBINE_FUNCTION_BLEND,
 			     GR_COMBINE_FACTOR_ONE,
 			     FXFALSE,FXFALSE);
-    
+
       fxMesa->tmuSrc=FX_TMU1;
     }
   }
@@ -1419,67 +1422,58 @@ static void fxSetupColorMask(GLcontext *ctx)
 /**************************** Fog Mode SetUp ****************************/
 /************************************************************************/
 
-static void fxFogTableGenerate(GLcontext *ctx)
+/*
+ * This is called during state update in order to update the Glide fog state.
+ */
+static void fxSetupFog(GLcontext *ctx)
 {
-  int i;
-  float f,eyez;
-  fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
+  if (ctx->Fog.Enabled && ctx->FogMode==FOG_FRAGMENT) {
+    fxMesaContext fxMesa = FX_CONTEXT(ctx);
 
-  for(i=0;i<FX_grGetInteger(FX_FOG_TABLE_ENTRIES);i++) {
-    eyez=guFogTableIndexToW(i);
-
-    switch(ctx->Fog.Mode) {
-    case GL_LINEAR:
-      f=(ctx->Fog.End-eyez)/(ctx->Fog.End-ctx->Fog.Start);
-      break;
-    case GL_EXP:
-      f=exp(-ctx->Fog.Density*eyez);  
-      break;
-    case GL_EXP2:
-      f=exp(-ctx->Fog.Density*ctx->Fog.Density*eyez*eyez);
-      break;
-    default: /* That should never happen */
-      f=0.0f;
-      break; 
-    }
-
-    fxMesa->fogTable[i]=(GrFog_t)((1.0f-CLAMP(f,0.0f,1.0f))*255.0f);
-  }
-}
-
-static void fxSetupFog(GLcontext *ctx, GLboolean forceTableRebuild)
-{
-  fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
-
-  if(ctx->Fog.Enabled && ctx->FogMode==FOG_FRAGMENT) {
+    /* update fog color */
     GLubyte col[4];
-    FX_grFogMode(GR_FOG_WITH_TABLE);
-
     col[0]=(unsigned int)(255*ctx->Fog.Color[0]);
     col[1]=(unsigned int)(255*ctx->Fog.Color[1]);
     col[2]=(unsigned int)(255*ctx->Fog.Color[2]); 
     col[3]=(unsigned int)(255*ctx->Fog.Color[3]);
-
     FX_grFogColorValue(FXCOLOR4(col));
 
-    if(forceTableRebuild ||
-       (fxMesa->fogTableMode!=ctx->Fog.Mode) ||
-       (fxMesa->fogDensity!=ctx->Fog.Density)) {
-      fxFogTableGenerate(ctx);
-         
-      fxMesa->fogTableMode=ctx->Fog.Mode;
-      fxMesa->fogDensity=ctx->Fog.Density;
+    if(fxMesa->fogTableMode != ctx->Fog.Mode ||
+       fxMesa->fogDensity != ctx->Fog.Density ||
+       fxMesa->fogStart != ctx->Fog.Start ||
+       fxMesa->fogEnd != ctx->Fog.End) {
+      /* reload the fog table */
+      switch (ctx->Fog.Mode) {
+        case GL_LINEAR:
+          guFogGenerateLinear(fxMesa->fogTable, ctx->Fog.Start, ctx->Fog.End);
+          break;
+        case GL_EXP:
+          guFogGenerateExp(fxMesa->fogTable, ctx->Fog.Density);
+          break;
+        case GL_EXP2:
+          guFogGenerateExp2(fxMesa->fogTable, ctx->Fog.Density);
+          break;
+        default:
+          ;
+      }
+      fxMesa->fogTableMode = ctx->Fog.Mode;
+      fxMesa->fogDensity = ctx->Fog.Density;
+      fxMesa->fogStart = ctx->Fog.Start;
+      fxMesa->fogEnd = ctx->Fog.End;
     }
-      
+
     FX_grFogTable(fxMesa->fogTable);
-  } else
+    FX_grFogMode(GR_FOG_WITH_TABLE);
+  }
+  else {
     FX_grFogMode(GR_FOG_DISABLE);
+  }
 }
 
 void fxDDFogfv( GLcontext *ctx, GLenum pname, const GLfloat *params )
 {
    FX_CONTEXT(ctx)->new_state |= FX_NEW_FOG;
-   ctx->Driver.RenderStart = fxSetupFXUnits;
+   ctx->Driver.RenderStart = fxSetupFXUnits;  /* XXX why is this here? */
 }
 
 /************************************************************************/
@@ -1557,28 +1551,28 @@ void fxDDFrontFace(GLcontext *ctx, GLenum mode)
 
 static void fxSetupCull(GLcontext *ctx)
 {
-   if(ctx->Polygon.CullFlag) {
-      switch(ctx->Polygon.CullFaceMode) {
-      case GL_BACK:
-	 if(ctx->Polygon.FrontFace==GL_CCW)
-	    FX_grCullMode(GR_CULL_NEGATIVE);
-	 else
-	    FX_grCullMode(GR_CULL_POSITIVE);
-	 break;
-      case GL_FRONT:
-	 if(ctx->Polygon.FrontFace==GL_CCW)
-	    FX_grCullMode(GR_CULL_POSITIVE);
-	 else
-	    FX_grCullMode(GR_CULL_NEGATIVE);
-	 break;
-      case GL_FRONT_AND_BACK:
-	 FX_grCullMode(GR_CULL_DISABLE);
-	 break;
-      default:
-	 break;
-      }
-   } else
-      FX_grCullMode(GR_CULL_DISABLE);
+  if (ctx->Polygon.CullFlag) {
+    switch (ctx->Polygon.CullFaceMode) {
+    case GL_BACK:
+      if (ctx->Polygon.FrontFace==GL_CCW)
+	FX_CONTEXT(ctx)->cullMode=GR_CULL_NEGATIVE;
+      else
+	FX_CONTEXT(ctx)->cullMode=GR_CULL_POSITIVE;
+      break;
+    case GL_FRONT:
+      if(ctx->Polygon.FrontFace==GL_CCW)
+	FX_CONTEXT(ctx)->cullMode=GR_CULL_POSITIVE;
+      else
+	FX_CONTEXT(ctx)->cullMode=GR_CULL_NEGATIVE;
+      break;
+    case GL_FRONT_AND_BACK:
+      FX_CONTEXT(ctx)->cullMode=GR_CULL_DISABLE;
+      break;
+    default:
+      break;
+    }
+  } else FX_CONTEXT(ctx)->cullMode=GR_CULL_DISABLE;
+  FX_grCullMode(FX_CONTEXT(ctx)->cullMode);
 }
 
 
@@ -1818,7 +1812,7 @@ void fxSetupFXUnits( GLcontext *ctx )
 	fxSetupDepthTest(ctx);
 
      if (newstate & FX_NEW_FOG)
-	fxSetupFog(ctx,GL_FALSE);
+	fxSetupFog(ctx);
 
      if (newstate & FX_NEW_SCISSOR)
 	fxSetupScissor(ctx);

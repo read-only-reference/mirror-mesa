@@ -16,37 +16,38 @@ LIBDIR = [-.lib]
 CFLAGS = /include=($(INCDIR),[])/define=(FBIND=1)
 
 CORE_SOURCES = accum.c alpha.c alphabuf.c attrib.c \
-bitmap.c blend.c clip.c colortab.c context.c copypix.c depth.c \
+bitmap.c blend.c buffers.c clip.c colortab.c context.c copypix.c depth.c \
 dispatch.c \
 dlist.c drawpix.c enable.c eval.c feedback.c fog.c \
-get.c hash.c image.c imaging.c light.c lines.c logic.c masking.c matrix.c \
+get.c hash.c hint.c image.c imaging.c light.c lines.c logic.c masking.c matrix.c \
 mem.c glapi.c glapinoop.c \
-glmisc.c mmath.c mthreads.c pb.c pixel.c points.c polygon.c \
+mmath.c pb.c pixel.c points.c polygon.c \
 quads.c rastpos.c readpix.c rect.c scissor.c shade.c span.c \
 stencil.c teximage.c texobj.c texstate.c texture.c translate.c triangle.c \
 varray.c winpos.c vb.c vbcull.c vbfill.c vbrender.c vbxform.c xform.c \
 zoom.c bbox.c cva.c vector.c vbindirect.c config.c enums.c extensions.c \
-pipeline.c stages.c vertices.c [.x86]x86.c
+pipeline.c stages.c state.c vertices.c [.x86]x86.c
 
 DRIVER_SOURCES = [.x]glxapi.c [.x]fakeglx.c [.x]xfonts.c \
 [.x]xmesa1.c [.x]xmesa2.c [.x]xmesa3.c [.x]xmesa4.c \
 [.osmesa]osmesa.c \
 [.svga]svgamesa.c \
 [.fx]fxapi.c [.fx]fxdd.c [.fx]fxddtex.c [.fx]fxvsetup.c [.fx]fxsetup.c \
-[.fx]fxtrifuncs.c \
-[.fx]fxrender.c [.fx]fxtexman.c [.fx]fxddspan.c [.fx]fxcva.c
+[.fx]fxtrifuncs.c [.fx]fxclip.c [.fx]fxfastpath.c [.fx]fxpipeline.c\
+[.fx]fxrender.c [.fx]fxtexman.c [.fx]fxddspan.c [.fx]fxcva.c [.fx]fxsanity.c\
+[.fx]fxglidew.c
 
 ASM_SOURCES =
 
 OBJECTS =\
 accum.obj,alpha.obj,alphabuf.obj,attrib.obj,\
-bitmap.obj,blend.obj,clip.obj,colortab.obj,context.obj,copypix.obj,depth.obj,\
+bitmap.obj,blend.obj,buffers.obj,clip.obj,colortab.obj,context.obj,copypix.obj,depth.obj,\
 dlist.obj,drawpix.obj,enable.obj,eval.obj,feedback.obj,fog.obj
 
 
-OBJECTS3=get.obj,hash.obj,image.obj,light.obj,lines.obj,logic.obj,masking.obj,\
+OBJECTS3=get.obj,hash.obj,hint.obj,image.obj,light.obj,lines.obj,logic.obj,masking.obj,\
 matrix.obj,glapi.obj,glapinoop.obj,dispatch.obj,imaging.obj,mem.obj,\
-glmisc.obj,mmath.obj,mthreads.obj,pb.obj,pixel.obj,points.obj
+mmath.obj,pb.obj,pixel.obj,points.obj
 
 OBJECTS7=polygon.obj,\
 quads.obj,rastpos.obj,readpix.obj,rect.obj,scissor.obj,shade.obj,span.obj
@@ -56,7 +57,7 @@ OBJECTS4=stencil.obj,teximage.obj,texobj.obj,texstate.obj,texture.obj,translate.
 triangle.obj,varray.obj,winpos.obj,vb.obj,vbcull.obj,vbfill.obj,vbrender.obj
 
 OBJECTS6=vbxform.obj,xform.obj,zoom.obj,bbox.obj,cva.obj,vector.obj,vbindirect.obj,\
-	config.obj,enums.obj,extensions.obj,pipeline.obj,stages.obj,\
+	config.obj,enums.obj,extensions.obj,pipeline.obj,stages.obj,state.obj,\
 	vertices.obj,[.x86]x86.obj
 
 OBJECTS2=[.x]glxapi.obj,[.x]fakeglx.obj,[.x]xfonts.obj,\
@@ -65,8 +66,9 @@ OBJECTS2=[.x]glxapi.obj,[.x]fakeglx.obj,[.x]xfonts.obj,\
 [.svga]svgamesa.obj
 
 OBJECTS5=[.fx]fxapi.obj,[.fx]fxdd.obj,[.fx]fxddtex.obj,[.fx]fxvsetup.obj,\
-[.fx]fxsetup.obj,\
-[.fx]fxtrifuncs.obj,\
+[.fx]fxsetup.obj,[.fx]fxclip.obj,[.fx]fxfastpath.obj,[.fx]fxpipeline.obj
+
+OBJECTS8=[.fx]fxtrifuncs.obj,[.fx]fxsanity.obj,[.fx]fxglidew.obj,\
 [.fx]fxrender.obj,[.fx]fxtexman.obj,[.fx]fxddspan.obj,[.fx]fxcva.obj
 
 ##### RULES #####
@@ -76,7 +78,7 @@ VERSION=Mesa V3.1
 ##### TARGETS #####
 # Make the library
 $(LIBDIR)$(GL_LIB) : $(OBJECTS),$(OBJECTS2) $(OBJECTS3) $(OBJECTS4)\
-	$(OBJECTS5) $(OBJECTS7) $(OBJECTS6)
+	$(OBJECTS5) $(OBJECTS8) $(OBJECTS7) $(OBJECTS6)
 .ifdef SHARE
   @ WRITE_ SYS$OUTPUT "  generating mesagl1.opt"
   @ OPEN_/WRITE FILE  mesagl1.opt
@@ -92,6 +94,7 @@ $(LIBDIR)$(GL_LIB) : $(OBJECTS),$(OBJECTS2) $(OBJECTS3) $(OBJECTS4)\
   @ WRITE_ FILE "$(OBJECTS6)"
   @ WRITE_ FILE "$(OBJECTS2)"
   @ WRITE_ FILE "$(OBJECTS5)"
+  @ WRITE_ FILE "$(OBJECTS8)"
   @ WRITE_ FILE "SYS$SHARE:DECW$XEXTLIBSHR/SHARE"
   @ WRITE_ FILE "SYS$SHARE:DECW$XLIBSHR/SHARE"
   @ CLOSE_ FILE
@@ -107,6 +110,7 @@ $(LIBDIR)$(GL_LIB) : $(OBJECTS),$(OBJECTS2) $(OBJECTS3) $(OBJECTS4)\
   @ library $(GL_LIB) $(OBJECTS3)
   @ library $(GL_LIB) $(OBJECTS4)
   @ library $(GL_LIB) $(OBJECTS5)
+  @ library $(GL_LIB) $(OBJECTS8)
   @ library $(GL_LIB) $(OBJECTS7)
   @ library $(GL_LIB) $(OBJECTS6)
 .endif
@@ -140,12 +144,20 @@ triangle.obj : triangle.c
 	$(CC) $(CFLAGS) /obj=[.svga]svgamesa.obj [.svga]svgamesa.c
 [.fx]fxapi.obj : [.fx]fxapi.c
 	$(CC) $(CFLAGS) /obj=[.fx]fxapi.obj [.fx]fxapi.c
+[.fx]fxclip.obj : [.fx]fxclip.c
+	$(CC) $(CFLAGS) /obj=[.fx]fxclip.obj [.fx]fxclip.c
 [.fx]fxcva.obj : [.fx]fxcva.c
 	$(CC) $(CFLAGS) /obj=[.fx]fxcva.obj [.fx]fxcva.c
 [.fx]fxdd.obj : [.fx]fxdd.c
 	$(CC) $(CFLAGS) /obj=[.fx]fxdd.obj [.fx]fxdd.c
 [.fx]fxddtex.obj : [.fx]fxddtex.c
 	$(CC) $(CFLAGS) /obj=[.fx]fxddtex.obj [.fx]fxddtex.c
+[.fx]fxfastpath.obj : [.fx]fxfastpath.c
+	$(CC) $(CFLAGS) /obj=[.fx]fxfastpath.obj [.fx]fxfastpath.c
+[.fx]fxpipeline.obj : [.fx]fxpipeline.c
+	$(CC) $(CFLAGS) /obj=[.fx]fxpipeline.obj [.fx]fxpipeline.c
+[.fx]fxsanity.obj : [.fx]fxsanity.c
+	$(CC) $(CFLAGS) /obj=[.fx]fxsanity.obj [.fx]fxsanity.c
 [.fx]fxvsetup.obj : [.fx]fxvsetup.c
 	$(CC) $(CFLAGS) /obj=[.fx]fxvsetup.obj [.fx]fxvsetup.c
 [.fx]fxsetup.obj : [.fx]fxsetup.c
@@ -158,5 +170,7 @@ triangle.obj : triangle.c
 	$(CC) $(CFLAGS) /obj=[.fx]fxtexman.obj [.fx]fxtexman.c
 [.fx]fxddspan.obj : [.fx]fxddspan.c
 	$(CC) $(CFLAGS) /obj=[.fx]fxddspan.obj [.fx]fxddspan.c
+[.fx]fxglidew.obj : [.fx]fxglidew.c
+	$(CC) $(CFLAGS) /obj=[.fx]fxglidew.obj [.fx]fxglidew.c
 
 .include mms_depend.
