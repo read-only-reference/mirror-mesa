@@ -1,8 +1,8 @@
-/* $Id: eval.c,v 1.11 2000/09/11 18:49:06 brianp Exp $ */
+/* $Id: eval.c,v 1.14 2000/10/30 13:32:00 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  * 
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
@@ -42,12 +42,14 @@
 #include "all.h"
 #else
 #include "glheader.h"
+#include "colormac.h"
 #include "context.h"
 #include "eval.h"
 #include "macros.h"
 #include "mem.h"
 #include "mmath.h"
 #include "types.h"
+#include "vb.h"
 #include "vbcull.h"
 #include "vbfill.h"
 #include "vbxform.h"
@@ -936,6 +938,8 @@ map1(GLenum target, GLfloat u1, GLfloat u2, GLint ustride,
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glMap1(target)" );
    }
+
+   ctx->NewState |= _NEW_EVAL;
 }
 
 
@@ -1130,6 +1134,8 @@ map2( GLenum target, GLfloat u1, GLfloat u2, GLint ustride, GLint uorder,
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glMap2(target)" );
    }
+
+   ctx->NewState |= _NEW_EVAL;
 }
 
 
@@ -2110,7 +2116,7 @@ static GLvector4ub *eval1_color( GLvector4ub *dest,
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 GLfloat fcolor[4];
 	 horner_bezier_curve(map->Points, fcolor, u, 4, map->Order);
-	 FLOAT_RGBA_TO_UBYTE_RGBA(to[i], fcolor);
+	 FLOAT_RGBA_TO_CHAN_RGBA(to[i], fcolor);
 	 flags[i+1] |= VERT_RGBA; /* reset */
       }
 
@@ -2270,7 +2276,7 @@ static GLvector4ub *eval2_color( GLvector4ub *dest,
 	 GLfloat fcolor[4];
 	 horner_bezier_surf(map->Points, fcolor, u, v, 4,
 			    map->Uorder, map->Vorder);
-	 FLOAT_RGBA_TO_UBYTE_RGBA(to[i], fcolor);
+	 FLOAT_RGBA_TO_CHAN_RGBA(to[i], fcolor);
 	 flags[i+1] |= VERT_RGBA; /* reset */
       }
 
@@ -2640,6 +2646,8 @@ _mesa_MapGrid1f( GLint un, GLfloat u1, GLfloat u2 )
    ctx->Eval.MapGrid1u1 = u1;
    ctx->Eval.MapGrid1u2 = u2;
    ctx->Eval.MapGrid1du = (u2 - u1) / (GLfloat) un;
+
+   ctx->NewState |= _NEW_EVAL;
 }
 
 
@@ -2672,6 +2680,8 @@ _mesa_MapGrid2f( GLint un, GLfloat u1, GLfloat u2,
    ctx->Eval.MapGrid2v1 = v1;
    ctx->Eval.MapGrid2v2 = v2;
    ctx->Eval.MapGrid2dv = (v2 - v1) / (GLfloat) vn;
+
+   ctx->NewState |= _NEW_EVAL;
 }
 
 
@@ -2681,7 +2691,6 @@ _mesa_MapGrid2d( GLint un, GLdouble u1, GLdouble u2,
 {
    _mesa_MapGrid2f( un, u1, u2, vn, v1, v2 );
 }
-
 
 
 
@@ -2847,7 +2856,6 @@ _mesa_EvalPoint2( GLint i, GLint j )
    GET_IMMEDIATE;
    EVALPOINT2( IM, i, j );
 }
-
 
 
 

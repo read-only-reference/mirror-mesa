@@ -1,4 +1,4 @@
-/* $Id: clip.c,v 1.9 2000/09/26 20:53:53 brianp Exp $ */
+/* $Id: clip.c,v 1.12 2000/10/30 13:31:59 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -30,6 +30,7 @@
 #else
 #include "glheader.h"
 #include "clip.h"
+#include "colormac.h"
 #include "context.h"
 #include "macros.h"
 #include "matrix.h"
@@ -202,8 +203,6 @@ _mesa_ClipPlane( GLenum plane, const GLdouble *eq )
 
 
    if (ctx->Transform.ClipEnabled[p]) {
-      ctx->NewState |= NEW_USER_CLIP;
-
       if (ctx->ProjectionMatrix.flags & MAT_DIRTY_ALL_OVER) {
 	 gl_matrix_analyze( &ctx->ProjectionMatrix );
       }
@@ -211,6 +210,8 @@ _mesa_ClipPlane( GLenum plane, const GLdouble *eq )
 			   ctx->Transform.EyeUserPlane[p], 
 			   ctx->ProjectionMatrix.inv );
    }
+
+   ctx->NewState |= _NEW_TRANSFORM;
 }
 
 
@@ -396,7 +397,7 @@ void gl_update_clipmask( GLcontext *ctx )
 	 mask |= CLIP_INDEX1;
    }
 
-   if (ctx->FogMode == FOG_FRAGMENT && (ctx->TriangleCaps & DD_CLIP_FOG_COORD))
+   if (ctx->Fog.Enabled)
       mask |= CLIP_FOG_COORD;
    
    ctx->ClipInterpFunc = clip_interp_tab[mask];

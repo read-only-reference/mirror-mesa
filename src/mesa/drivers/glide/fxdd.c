@@ -57,7 +57,7 @@
 #include "fxdrv.h"
 #include "enums.h"
 #include "extensions.h"
-#include "pb.h"
+#include "swrast/swrast.h"
 
 /* These lookup table are used to extract RGB values in [0,255] from
  * 16-bit pixel values.
@@ -831,10 +831,9 @@ int fxDDInitFxMesaContext( fxMesaContext fxMesa )
    fxMesa->glCtx->Const.MaxTextureLevels=9;
    fxMesa->glCtx->Const.MaxTextureSize=256;
    fxMesa->glCtx->Const.MaxTextureUnits=fxMesa->emulateTwoTMUs ? 2 : 1;
-   fxMesa->new_state = NEW_ALL;
+   fxMesa->new_state = _NEW_ALL;
   
    fxDDSetupInit();
-   fxDDCvaInit();
    fxDDClipInit();
    fxDDTrifuncInit();
    fxDDFastPathInit();
@@ -886,8 +885,9 @@ void fxDDInitExtensions( GLcontext *ctx )
    gl_extensions_disable(ctx, "GL_EXT_blend_minmax");
    gl_extensions_disable(ctx, "GL_EXT_blend_subtract");
    gl_extensions_disable(ctx, "GL_EXT_blend_color");
+   gl_extensions_disable(ctx, "GL_EXT_fog_coord");
 
-   gl_extensions_add(ctx, DEFAULT_ON, "3DFX_set_global_palette", 0);
+   gl_extensions_add(ctx, GL_TRUE, "3DFX_set_global_palette", 0);
    
    if (!fxMesa->haveTwoTMUs)
       gl_extensions_disable(ctx, "GL_EXT_texture_env_add");
@@ -1021,9 +1021,6 @@ static GLboolean fxIsInHardware(GLcontext *ctx)
 }
 
 
-
-#define INTERESTED (~(NEW_MODELVIEW|NEW_PROJECTION|NEW_PROJECTION|NEW_TEXTURE_MATRIX|NEW_USER_CLIP|NEW_CLIENT_STATE|NEW_TEXTURE_ENABLE))
-
 static void fxDDUpdateDDPointers(GLcontext *ctx)
 {
   fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
@@ -1032,23 +1029,26 @@ static void fxDDUpdateDDPointers(GLcontext *ctx)
   if (MESA_VERBOSE&(VERBOSE_DRIVER|VERBOSE_STATE)) 
     fprintf(stderr,"fxmesa: fxDDUpdateDDPointers(...)\n");
 
-  if (new_state & (NEW_RASTER_OPS|NEW_TEXTURING)) 
+  if (new_state & _FX_NEW_FALLBACK)
      fxMesa->is_in_hardware = fxIsInHardware(ctx);
 
   if (fxMesa->is_in_hardware) {
     if (fxMesa->new_state)
       fxSetupFXUnits(ctx);
 
-    if(new_state & INTERESTED) {
+    if (new_state & _FX_NEW_RENDERSTATE) {
       fxDDChooseRenderState( ctx );
+
       fxMesa->RenderVBTables=fxDDChooseRenderVBTables(ctx);
       fxMesa->RenderVBClippedTab=fxMesa->RenderVBTables[0];
       fxMesa->RenderVBCulledTab=fxMesa->RenderVBTables[1];
       fxMesa->RenderVBRawTab=fxMesa->RenderVBTables[2];
-
-      ctx->Driver.RasterSetup=fxDDChooseSetupFunction(ctx);
     }
-      
+    
+    if (new_state & _FX_NEW_SETUP_FUNCTION)
+      ctx->Driver.RasterSetup=fxDDChooseSetupFunction(ctx);      
+
+
     ctx->Driver.PointsFunc=fxMesa->PointsFunc;
     ctx->Driver.LineFunc=fxMesa->LineFunc;
     ctx->Driver.TriangleFunc=fxMesa->TriangleFunc;
@@ -1061,7 +1061,7 @@ static void fxDDUpdateDDPointers(GLcontext *ctx)
 static void fxDDReducedPrimitiveChange(GLcontext *ctx, GLenum prim)
 {
   if (ctx->Polygon.CullFlag) {
-    if (ctx->PB->primitive != GL_POLYGON) { /* Lines or Points */
+    if (ctx->ReducedPrimitive != GL_POLYGON) { /* Lines or Points */
       FX_grCullMode(GR_CULL_DISABLE);
       FX_CONTEXT(ctx)->cullMode=GR_CULL_DISABLE;
     }
@@ -1073,6 +1073,13 @@ void fxSetupDDPointers(GLcontext *ctx)
   if (MESA_VERBOSE&VERBOSE_DRIVER) {
     fprintf(stderr,"fxmesa: fxSetupDDPointers()\n");
   }
+
+  ctx->Driver.UpdateStateNotify = (_FX_NEW_SETUP_FUNCTION|
+				   _FX_NEW_RENDERSTATE|
+				   _FX_NEW_FALLBACK|
+				   _SWRAST_NEW_TRIANGLE|
+				   _SWRAST_NEW_LINE|
+				   _SWRAST_NEW_POINT);
 
   ctx->Driver.UpdateState=fxDDUpdateDDPointers;
 

@@ -1,4 +1,4 @@
-/* $Id: dlist.c,v 1.46 2000/09/26 20:53:53 brianp Exp $ */
+/* $Id: dlist.c,v 1.49 2000/10/28 20:41:13 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -36,6 +36,7 @@
 #include "blend.h"
 #include "buffers.h"
 #include "clip.h"
+#include "colormac.h"
 #include "colortab.h"
 #include "context.h"
 #include "convolve.h"
@@ -5076,6 +5077,10 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->FeedbackBuffer = _mesa_FeedbackBuffer;
    table->Finish = _mesa_Finish;
    table->Flush = _mesa_Flush;
+   table->FogCoordfEXT = _mesa_FogCoordfEXT;
+   table->FogCoordfvEXT = _mesa_FogCoordfvEXT;
+   table->FogCoorddEXT = _mesa_FogCoorddEXT;
+   table->FogCoorddvEXT = _mesa_FogCoorddvEXT;
    table->Fogf = save_Fogf;
    table->Fogfv = save_Fogfv;
    table->Fogi = save_Fogi;
@@ -5226,6 +5231,23 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->Scaled = save_Scaled;
    table->Scalef = save_Scalef;
    table->Scissor = save_Scissor;
+   table->SecondaryColor3bEXT = _mesa_SecondaryColor3bEXT;
+   table->SecondaryColor3bvEXT = _mesa_SecondaryColor3bvEXT;
+   table->SecondaryColor3sEXT = _mesa_SecondaryColor3sEXT;
+   table->SecondaryColor3svEXT = _mesa_SecondaryColor3svEXT;
+   table->SecondaryColor3iEXT = _mesa_SecondaryColor3iEXT;
+   table->SecondaryColor3ivEXT = _mesa_SecondaryColor3ivEXT;
+   table->SecondaryColor3fEXT = _mesa_SecondaryColor3fEXT;
+   table->SecondaryColor3fvEXT = _mesa_SecondaryColor3fvEXT;
+   table->SecondaryColor3dEXT = _mesa_SecondaryColor3dEXT;
+   table->SecondaryColor3dvEXT = _mesa_SecondaryColor3dvEXT;
+   table->SecondaryColor3ubEXT = _mesa_SecondaryColor3ubEXT;
+   table->SecondaryColor3ubvEXT = _mesa_SecondaryColor3ubvEXT;
+   table->SecondaryColor3usEXT = _mesa_SecondaryColor3usEXT;
+   table->SecondaryColor3usvEXT = _mesa_SecondaryColor3usvEXT;
+   table->SecondaryColor3uiEXT = _mesa_SecondaryColor3uiEXT;
+   table->SecondaryColor3uivEXT = _mesa_SecondaryColor3uivEXT;
+   table->SecondaryColorPointerEXT = _mesa_SecondaryColorPointerEXT;
    table->SelectBuffer = _mesa_SelectBuffer;
    table->ShadeModel = save_ShadeModel;
    table->StencilFunc = save_StencilFunc;

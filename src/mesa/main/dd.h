@@ -1,4 +1,4 @@
-/* $Id: dd.h,v 1.33 2000/09/28 18:30:39 brianp Exp $ */
+/* $Id: dd.h,v 1.37 2000/10/31 18:09:44 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -29,19 +29,15 @@
 #ifndef DD_INCLUDED
 #define DD_INCLUDED
 
-
-#include "macros.h"
+/* THIS FILE ONLY INCLUDED BY types.h !!!!! */
 
 
 struct gl_pixelstore_attrib;
-
-
 struct vertex_buffer;
 struct immediate;
+struct gl_pipeline;
 struct gl_pipeline_stage;
 
-
-/* THIS FILE ONLY INCLUDED BY types.h !!!!! */
 
 
 /*
@@ -145,6 +141,12 @@ struct dd_function_table {
     * NULL can be returned.
     */
 
+   GLuint UpdateStateNotify;
+   /*
+    * Tell mesa exactly when to call UpdateState.  This is a bitwise
+    * or of the _NEW_* flags defined in types.h. 
+    */
+   
    void (*UpdateState)( GLcontext *ctx );
    /*
     * UpdateState() is called whenver Mesa thinks the device driver should
@@ -158,8 +160,8 @@ struct dd_function_table {
     * the color buffer when in color index mode.
     */
 
-   void (*ClearColor)( GLcontext *ctx, GLubyte red, GLubyte green,
-                                        GLubyte blue, GLubyte alpha );
+   void (*ClearColor)( GLcontext *ctx, GLchan red, GLchan green,
+                                        GLchan blue, GLchan alpha );
    /*
     * Called whenever glClearColor() is called.  Set the color for clearing
     * the color buffer when in RGBA mode.
@@ -185,7 +187,7 @@ struct dd_function_table {
     */
 
    void (*Color)( GLcontext *ctx,
-                  GLubyte red, GLubyte green, GLubyte glue, GLubyte alpha );
+                  GLchan red, GLchan green, GLchan glue, GLchan alpha );
    /*
     * Sets current color for drawing flat-shaded primitives.
     * This color should also be used in the "mono" drawing functions.
@@ -234,10 +236,10 @@ struct dd_function_table {
 
    void (*WriteRGBASpan)( const GLcontext *ctx,
                           GLuint n, GLint x, GLint y,
-                          CONST GLubyte rgba[][4], const GLubyte mask[] );
+                          CONST GLchan rgba[][4], const GLubyte mask[] );
    void (*WriteRGBSpan)( const GLcontext *ctx,
                          GLuint n, GLint x, GLint y,
-                         CONST GLubyte rgb[][3], const GLubyte mask[] );
+                         CONST GLchan rgb[][3], const GLubyte mask[] );
    /* Write a horizontal run of RGBA or RGB pixels.
     * If mask is NULL, draw all pixels.
     * If mask is not null, only draw pixel [i] when mask [i] is true.
@@ -251,7 +253,7 @@ struct dd_function_table {
 
    void (*WriteRGBAPixels)( const GLcontext *ctx,
                             GLuint n, const GLint x[], const GLint y[],
-                            CONST GLubyte rgba[][4], const GLubyte mask[] );
+                            CONST GLchan rgba[][4], const GLubyte mask[] );
    /* Write array of RGBA pixels at random locations.
     */
 
@@ -301,7 +303,7 @@ struct dd_function_table {
     */
 
    void (*ReadRGBASpan)( const GLcontext *ctx, GLuint n, GLint x, GLint y,
-                         GLubyte rgba[][4] );
+                         GLchan rgba[][4] );
    /* Read a horizontal run of RGBA pixels.
     */
 
@@ -313,7 +315,7 @@ struct dd_function_table {
 
    void (*ReadRGBAPixels)( const GLcontext *ctx,
                            GLuint n, const GLint x[], const GLint y[],
-                           GLubyte rgba[][4], const GLubyte mask[] );
+                           GLchan rgba[][4], const GLubyte mask[] );
    /* Read a random array of RGBA pixels.
     */
 
@@ -472,6 +474,11 @@ struct dd_function_table {
    /* This is called by glBitmap.  Works the same as DrawPixels, above.
     */
 
+   GLboolean (*Accum)( GLcontext *ctx, GLenum op, 
+		       GLfloat value, GLint xpos, GLint ypos, 
+		       GLint width, GLint height );
+   /* Hardware accum buffer.
+    */
 
    /***
     *** Texture mapping functions:

@@ -1,8 +1,8 @@
-/* $Id: fog.h,v 1.4 2000/04/05 22:08:54 brianp Exp $ */
+/* $Id: fog.h,v 1.9 2000/10/31 18:09:44 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  * 
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
@@ -32,8 +32,6 @@
 #include "types.h"
 
 
-extern struct gl_pipeline_stage gl_fog_coord_stage;
-
 
 extern void
 _mesa_Fogf(GLenum pname, GLfloat param);
@@ -51,22 +49,8 @@ extern void
 _mesa_Fogiv(GLenum pname, const GLint *params );
 
 
-
-extern void
-_mesa_fog_vertices( struct vertex_buffer *VB );
-
-extern void
-_mesa_fog_rgba_pixels( const GLcontext *ctx,
-                       GLuint n, const GLdepth z[],
-                       GLubyte rgba[][4] );
-
-extern void
-_mesa_fog_ci_pixels( const GLcontext *ctx,
-                     GLuint n, const GLdepth z[], GLuint indx[] );
-
-
-extern void
-_mesa_init_fog( void );
+extern void 
+_mesa_make_win_fog_coords( struct vertex_buffer *VB );
 
 
 #endif

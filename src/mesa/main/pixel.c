@@ -1,8 +1,8 @@
-/* $Id: pixel.c,v 1.12 2000/08/21 14:22:24 brianp Exp $ */
+/* $Id: pixel.c,v 1.18 2000/10/30 16:32:43 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  * 
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
@@ -29,6 +29,7 @@
 #include "all.h"
 #else
 #include "glheader.h"
+#include "colormac.h"
 #include "context.h"
 #include "macros.h"
 #include "mem.h"
@@ -52,6 +53,7 @@ _mesa_PixelZoom( GLfloat xfactor, GLfloat yfactor )
 
    ctx->Pixel.ZoomX = xfactor;
    ctx->Pixel.ZoomY = yfactor;
+   ctx->NewState |= _NEW_PIXEL;
 }
 
 
@@ -105,6 +107,14 @@ _mesa_PixelStorei( GLenum pname, GLint param )
 	    ctx->Pack.SkipRows = param;
 	 }
 	 break;
+      case GL_PACK_SKIP_IMAGES:
+	 if (param<0) {
+	    gl_error( ctx, GL_INVALID_VALUE, "glPixelStore(param)" );
+	 }
+	 else {
+	    ctx->Pack.SkipImages = param;
+	 }
+	 break;
       case GL_PACK_ALIGNMENT:
          if (param==1 || param==2 || param==4 || param==8) {
 	    ctx->Pack.Alignment = param;
@@ -149,6 +159,14 @@ _mesa_PixelStorei( GLenum pname, GLint param )
 	    ctx->Unpack.SkipRows = param;
 	 }
 	 break;
+      case GL_UNPACK_SKIP_IMAGES:
+	 if (param < 0) {
+	    gl_error( ctx, GL_INVALID_VALUE, "glPixelStore(param)" );
+	 }
+	 else {
+	    ctx->Unpack.SkipImages = param;
+	 }
+	 break;
       case GL_UNPACK_ALIGNMENT:
          if (param==1 || param==2 || param==4 || param==8) {
 	    ctx->Unpack.Alignment = param;
@@ -160,6 +178,8 @@ _mesa_PixelStorei( GLenum pname, GLint param )
       default:
 	 gl_error( ctx, GL_INVALID_ENUM, "glPixelStore" );
    }
+
+   ctx->NewState |= _NEW_PACKUNPACK;
 }
 
 
@@ -278,6 +298,7 @@ _mesa_PixelMapfv( GLenum map, GLint mapsize, const GLfloat *values )
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glPixelMapfv(map)" );
    }
+   ctx->NewState |= _NEW_PIXEL;
 }
 
 
@@ -611,7 +632,7 @@ _mesa_PixelTransferf( GLenum pname, GLfloat param )
    }
 
    /* signal to recompute the bitmask */
-   ctx->ImageTransferState = UPDATE_IMAGE_TRANSFER_STATE;
+   ctx->NewState |= _NEW_PIXEL;
 }
 
 
@@ -729,20 +750,20 @@ void
 _mesa_lookup_rgba(const struct gl_color_table *table,
                   GLuint n, GLfloat rgba[][4])
 {
-   ASSERT(table->TableType == GL_FLOAT);
+   ASSERT(table->FloatTable);
    if (!table->Table)
       return;
 
    switch (table->Format) {
       case GL_INTENSITY:
          /* replace RGBA with I */
-         if (table->TableType == GL_UNSIGNED_BYTE) {
+         if (!table->FloatTable) {
             const GLfloat scale = (GLfloat) (table->Size - 1);
-            const GLubyte *lut = (const GLubyte *) table->Table;
+            const GLchan *lut = (const GLchan *) table->Table;
             GLuint i;
             for (i = 0; i < n; i++) {
                GLint j = (GLint) (rgba[i][RCOMP] * scale + 0.5F);
-               GLfloat c = lut[j] * (1.0F / 255.0F);
+               GLfloat c = CHAN_TO_FLOAT(lut[j]);
                rgba[i][RCOMP] = rgba[i][GCOMP] =
                   rgba[i][BCOMP] = rgba[i][ACOMP] = c;
             }
@@ -762,13 +783,13 @@ _mesa_lookup_rgba(const struct gl_color_table *table,
          break;
       case GL_LUMINANCE:
          /* replace RGB with L */
-         if (table->TableType == GL_UNSIGNED_BYTE) {
+         if (!table->FloatTable) {
             const GLfloat scale = (GLfloat) (table->Size - 1);
-            const GLubyte *lut = (const GLubyte *) table->Table;
+            const GLchan *lut = (const GLchan *) table->Table;
             GLuint i;
             for (i = 0; i < n; i++) {
                GLint j = (GLint) (rgba[i][RCOMP] * scale + 0.5F);
-               GLfloat c = lut[j] * (1.0F / 255.0F);
+               GLfloat c = CHAN_TO_FLOAT(lut[j]);
                rgba[i][RCOMP] = rgba[i][GCOMP] = rgba[i][BCOMP] = c;
             }
          }
@@ -785,13 +806,13 @@ _mesa_lookup_rgba(const struct gl_color_table *table,
          break;
       case GL_ALPHA:
          /* replace A with A */
-         if (table->TableType == GL_UNSIGNED_BYTE) {
+         if (!table->FloatTable) {
             const GLfloat scale = (GLfloat) (table->Size - 1);
-            const GLubyte *lut = (const GLubyte *) table->Table;
+            const GLchan *lut = (const GLchan *) table->Table;
             GLuint i;
             for (i = 0; i < n; i++) {
                GLint j = (GLint) (rgba[i][ACOMP] * scale + 0.5F);
-               rgba[i][ACOMP] = lut[j] * (1.0F / 255.0F);
+               rgba[i][ACOMP] = CHAN_TO_FLOAT(lut[j]);
             }
          }
          else  {
@@ -806,15 +827,15 @@ _mesa_lookup_rgba(const struct gl_color_table *table,
          break;
       case GL_LUMINANCE_ALPHA:
          /* replace RGBA with LLLA */
-         if (table->TableType == GL_UNSIGNED_BYTE) {
+         if (!table->FloatTable) {
             const GLfloat scale = (GLfloat) (table->Size - 1);
-            const GLubyte *lut = (const GLubyte *) table->Table;
+            const GLchan *lut = (const GLchan *) table->Table;
             GLuint i;
             for (i = 0; i < n; i++) {
                GLint jL = (GLint) (rgba[i][RCOMP] * scale + 0.5F);
                GLint jA = (GLint) (rgba[i][ACOMP] * scale + 0.5F);
-               GLfloat luminance = lut[jL * 2 + 0] * (1.0F / 255.0F);
-               GLfloat alpha     = lut[jA * 2 + 1] * (1.0F / 255.0F);
+               GLfloat luminance = CHAN_TO_FLOAT(lut[jL * 2 + 0]);
+               GLfloat alpha     = CHAN_TO_FLOAT(lut[jA * 2 + 1]);
                rgba[i][RCOMP] = rgba[i][GCOMP] = rgba[i][BCOMP] = luminance;
                rgba[i][ACOMP] = alpha;;
             }
@@ -835,17 +856,17 @@ _mesa_lookup_rgba(const struct gl_color_table *table,
          break;
       case GL_RGB:
          /* replace RGB with RGB */
-         if (table->TableType == GL_UNSIGNED_BYTE) {
+         if (!table->FloatTable) {
             const GLfloat scale = (GLfloat) (table->Size - 1);
-            const GLubyte *lut = (const GLubyte *) table->Table;
+            const GLchan *lut = (const GLchan *) table->Table;
             GLuint i;
             for (i = 0; i < n; i++) {
                GLint jR = (GLint) (rgba[i][RCOMP] * scale + 0.5F);
                GLint jG = (GLint) (rgba[i][GCOMP] * scale + 0.5F);
                GLint jB = (GLint) (rgba[i][BCOMP] * scale + 0.5F);
-               rgba[i][RCOMP] = lut[jR * 3 + 0] * (1.0F / 255.0F);
-               rgba[i][GCOMP] = lut[jG * 3 + 1] * (1.0F / 255.0F);
-               rgba[i][BCOMP] = lut[jB * 3 + 2] * (1.0F / 255.0F);
+               rgba[i][RCOMP] = CHAN_TO_FLOAT(lut[jR * 3 + 0]);
+               rgba[i][GCOMP] = CHAN_TO_FLOAT(lut[jG * 3 + 1]);
+               rgba[i][BCOMP] = CHAN_TO_FLOAT(lut[jB * 3 + 2]);
             }
          }
          else {
@@ -864,19 +885,19 @@ _mesa_lookup_rgba(const struct gl_color_table *table,
          break;
       case GL_RGBA:
          /* replace RGBA with RGBA */
-         if (table->TableType == GL_UNSIGNED_BYTE) {
+         if (!table->FloatTable) {
             const GLfloat scale = (GLfloat) (table->Size - 1);
-            const GLubyte *lut = (const GLubyte *) table->Table;
+            const GLchan *lut = (const GLchan *) table->Table;
             GLuint i;
             for (i = 0; i < n; i++) {
                GLint jR = (GLint) (rgba[i][RCOMP] * scale + 0.5F);
                GLint jG = (GLint) (rgba[i][GCOMP] * scale + 0.5F);
                GLint jB = (GLint) (rgba[i][BCOMP] * scale + 0.5F);
                GLint jA = (GLint) (rgba[i][ACOMP] * scale + 0.5F);
-               rgba[i][RCOMP] = lut[jR * 4 + 0] * (1.0F / 255.0F);
-               rgba[i][GCOMP] = lut[jG * 4 + 1] * (1.0F / 255.0F);
-               rgba[i][BCOMP] = lut[jB * 4 + 2] * (1.0F / 255.0F);
-               rgba[i][ACOMP] = lut[jA * 4 + 3] * (1.0F / 255.0F);
+               rgba[i][RCOMP] = CHAN_TO_FLOAT(lut[jR * 4 + 0]);
+               rgba[i][GCOMP] = CHAN_TO_FLOAT(lut[jG * 4 + 1]);
+               rgba[i][BCOMP] = CHAN_TO_FLOAT(lut[jB * 4 + 2]);
+               rgba[i][ACOMP] = CHAN_TO_FLOAT(lut[jA * 4 + 3]);
             }
          }
          else {
@@ -949,9 +970,10 @@ _mesa_map_ci( const GLcontext *ctx, GLuint n, GLuint index[] )
  * Map color indexes to rgba values.
  */
 void
-_mesa_map_ci_to_rgba_ubyte( const GLcontext *ctx, GLuint n,
-                            const GLuint index[], GLubyte rgba[][4] )
+_mesa_map_ci_to_rgba_chan( const GLcontext *ctx, GLuint n,
+                           const GLuint index[], GLchan rgba[][4] )
 {
+#if CHAN_BITS == 8
    GLuint rmask = ctx->Pixel.MapItoRsize - 1;
    GLuint gmask = ctx->Pixel.MapItoGsize - 1;
    GLuint bmask = ctx->Pixel.MapItoBsize - 1;
@@ -967,6 +989,23 @@ _mesa_map_ci_to_rgba_ubyte( const GLcontext *ctx, GLuint n,
       rgba[i][BCOMP] = bMap[index[i] & bmask];
       rgba[i][ACOMP] = aMap[index[i] & amask];
    }
+#else
+   GLuint rmask = ctx->Pixel.MapItoRsize - 1;
+   GLuint gmask = ctx->Pixel.MapItoGsize - 1;
+   GLuint bmask = ctx->Pixel.MapItoBsize - 1;
+   GLuint amask = ctx->Pixel.MapItoAsize - 1;
+   const GLfloat *rMap = ctx->Pixel.MapItoR;
+   const GLfloat *gMap = ctx->Pixel.MapItoG;
+   const GLfloat *bMap = ctx->Pixel.MapItoB;
+   const GLfloat *aMap = ctx->Pixel.MapItoA;
+   GLuint i;
+   for (i=0;i<n;i++) {
+      rgba[i][RCOMP] = FLOAT_TO_CHAN(rMap[index[i] & rmask]);
+      rgba[i][GCOMP] = FLOAT_TO_CHAN(gMap[index[i] & gmask]);
+      rgba[i][BCOMP] = FLOAT_TO_CHAN(bMap[index[i] & bmask]);
+      rgba[i][ACOMP] = FLOAT_TO_CHAN(aMap[index[i] & amask]);
+   }
+#endif
 }
 
 
@@ -1000,8 +1039,9 @@ _mesa_map_ci_to_rgba( const GLcontext *ctx, GLuint n,
  */
 void
 _mesa_map_ci8_to_rgba( const GLcontext *ctx, GLuint n, const GLubyte index[],
-                       GLubyte rgba[][4] )
+                       GLchan rgba[][4] )
 {
+#if CHAN_BITS == 8
    GLuint rmask = ctx->Pixel.MapItoRsize - 1;
    GLuint gmask = ctx->Pixel.MapItoGsize - 1;
    GLuint bmask = ctx->Pixel.MapItoBsize - 1;
@@ -1017,6 +1057,23 @@ _mesa_map_ci8_to_rgba( const GLcontext *ctx, GLuint n, const GLubyte index[],
       rgba[i][BCOMP] = bMap[index[i] & bmask];
       rgba[i][ACOMP] = aMap[index[i] & amask];
    }
+#else
+   GLuint rmask = ctx->Pixel.MapItoRsize - 1;
+   GLuint gmask = ctx->Pixel.MapItoGsize - 1;
+   GLuint bmask = ctx->Pixel.MapItoBsize - 1;
+   GLuint amask = ctx->Pixel.MapItoAsize - 1;
+   const GLfloat *rMap = ctx->Pixel.MapItoR;
+   const GLfloat *gMap = ctx->Pixel.MapItoG;
+   const GLfloat *bMap = ctx->Pixel.MapItoB;
+   const GLfloat *aMap = ctx->Pixel.MapItoA;
+   GLuint i;
+   for (i=0;i<n;i++) {
+      rgba[i][RCOMP] = FLOAT_TO_CHAN(rMap[index[i] & rmask]);
+      rgba[i][GCOMP] = FLOAT_TO_CHAN(gMap[index[i] & gmask]);
+      rgba[i][BCOMP] = FLOAT_TO_CHAN(bMap[index[i] & bmask]);
+      rgba[i][ACOMP] = FLOAT_TO_CHAN(aMap[index[i] & amask]);
+   }
+#endif
 }
 
 

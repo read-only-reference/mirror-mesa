@@ -1,4 +1,4 @@
-/* $Id: feedback.c,v 1.11 2000/09/26 20:53:53 brianp Exp $ */
+/* $Id: feedback.c,v 1.15 2000/10/31 18:09:44 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -29,13 +29,13 @@
 #include "all.h"
 #else
 #include "glheader.h"
+#include "colormac.h"
 #include "context.h"
 #include "enums.h"
 #include "feedback.h"
 #include "macros.h"
 #include "mmath.h"
 #include "types.h"
-#include "triangle.h"
 #endif
 
 
@@ -103,6 +103,7 @@ _mesa_FeedbackBuffer( GLsizei size, GLenum type, GLfloat *buffer )
    ctx->Feedback.BufferSize = size;
    ctx->Feedback.Buffer = buffer;
    ctx->Feedback.Count = 0;
+   ctx->NewState |= _NEW_FEEDBACK_SELECT;
 }
 
 
@@ -174,7 +175,10 @@ static void feedback_vertex( GLcontext *ctx, GLuint v, GLuint pv )
    if (ctx->Light.ShadeModel == GL_SMOOTH)
       pv = v;
 
-   UBYTE_RGBA_TO_FLOAT_RGBA( color, VB->ColorPtr->data[pv] );
+   color[0] = CHAN_TO_FLOAT(VB->ColorPtr->data[pv][0]);
+   color[1] = CHAN_TO_FLOAT(VB->ColorPtr->data[pv][1]);
+   color[2] = CHAN_TO_FLOAT(VB->ColorPtr->data[pv][2]);
+   color[3] = CHAN_TO_FLOAT(VB->ColorPtr->data[pv][3]);
 
    if (VB->TexCoordPtr[texUnit]->size == 4 &&     
        VB->TexCoordPtr[texUnit]->data[v][3] != 0.0) {
@@ -200,6 +204,24 @@ static void feedback_vertex( GLcontext *ctx, GLuint v, GLuint pv )
 }
 
 
+static GLboolean cull_triangle( GLcontext *ctx,
+				GLuint v0, GLuint v1, GLuint v2, GLuint pv )
+{
+   struct vertex_buffer *VB = ctx->VB;
+   GLfloat (*win)[4] = VB->Win.data;
+   GLfloat ex = win[v1][0] - win[v0][0];
+   GLfloat ey = win[v1][1] - win[v0][1];
+   GLfloat fx = win[v2][0] - win[v0][0];
+   GLfloat fy = win[v2][1] - win[v0][1];
+   GLfloat c = ex*fy-ey*fx;
+
+   if (c * ctx->backface_sign > 0)
+      return 0;
+   
+   return 1;
+}
+
+
 
 /*
  * Put triangle in feedback buffer.
@@ -207,7 +229,7 @@ static void feedback_vertex( GLcontext *ctx, GLuint v, GLuint pv )
 void gl_feedback_triangle( GLcontext *ctx,
 			   GLuint v0, GLuint v1, GLuint v2, GLuint pv )
 {
-   if (gl_cull_triangle( ctx, v0, v1, v2, 0 )) {
+   if (cull_triangle( ctx, v0, v1, v2, 0 )) {
       FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_POLYGON_TOKEN );
       FEEDBACK_TOKEN( ctx, (GLfloat) 3 );        /* three vertices */
       
@@ -274,6 +296,8 @@ _mesa_SelectBuffer( GLsizei size, GLuint *buffer )
    ctx->Select.HitFlag = GL_FALSE;
    ctx->Select.HitMinZ = 1.0;
    ctx->Select.HitMaxZ = 0.0;
+
+   ctx->NewState |= _NEW_FEEDBACK_SELECT;
 }
 
 
@@ -301,7 +325,7 @@ void gl_select_triangle( GLcontext *ctx,
 {
    const struct vertex_buffer *VB = ctx->VB;
 
-   if (gl_cull_triangle( ctx, v0, v1, v2, 0 )) {
+   if (cull_triangle( ctx, v0, v1, v2, 0 )) {
       const GLfloat zs = 1.0F / ctx->Visual.DepthMaxF;
       gl_update_hitflag( ctx, VB->Win.data[v0][2] * zs );
       gl_update_hitflag( ctx, VB->Win.data[v1][2] * zs );
@@ -376,6 +400,7 @@ _mesa_InitNames( void )
    ctx->Select.HitFlag = GL_FALSE;
    ctx->Select.HitMinZ = 1.0;
    ctx->Select.HitMaxZ = 0.0;
+   ctx->NewState |= _NEW_FEEDBACK_SELECT;
 }
 
 
@@ -401,6 +426,7 @@ _mesa_LoadName( GLuint name )
    else {
       ctx->Select.NameStack[MAX_NAME_STACK_DEPTH-1] = name;
    }
+   ctx->NewState |= _NEW_FEEDBACK_SELECT;
 }
 
 
@@ -421,6 +447,7 @@ _mesa_PushName( GLuint name )
    else {
       gl_error( ctx, GL_STACK_OVERFLOW, "glPushName" );
    }
+   ctx->NewState |= _NEW_FEEDBACK_SELECT;
 }
 
 
@@ -442,6 +469,7 @@ _mesa_PopName( void )
    else {
       gl_error( ctx, GL_STACK_UNDERFLOW, "glPopName" );
    }
+   ctx->NewState |= _NEW_FEEDBACK_SELECT;
 }
 
 
@@ -489,6 +517,7 @@ _mesa_RenderMode( GLenum mode )
 	 ctx->Select.BufferCount = 0;
 	 ctx->Select.Hits = 0;
 	 ctx->Select.NameStackDepth = 0;
+	 ctx->NewState |= _NEW_FEEDBACK_SELECT;
 	 break;
       case GL_FEEDBACK:
 	 if (ctx->Feedback.Count > ctx->Feedback.BufferSize) {
@@ -499,6 +528,7 @@ _mesa_RenderMode( GLenum mode )
 	    result = ctx->Feedback.Count;
 	 }
 	 ctx->Feedback.Count = 0;
+	 ctx->NewState |= _NEW_FEEDBACK_SELECT;
 	 break;
       default:
 	 gl_error( ctx, GL_INVALID_ENUM, "glRenderMode" );
@@ -528,7 +558,7 @@ _mesa_RenderMode( GLenum mode )
    }
 
    ctx->RenderMode = mode;
-   ctx->NewState |= NEW_ALL;
+   ctx->NewState |= _NEW_RENDERMODE;
 
    return result;
 }

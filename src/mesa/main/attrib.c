@@ -1,8 +1,8 @@
-/* $Id: attrib.c,v 1.28 2000/09/28 22:44:30 brianp Exp $ */
+/* $Id: attrib.c,v 1.32 2000/10/30 16:32:42 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  * 
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
@@ -34,6 +34,7 @@
 #include "context.h"
 #include "enable.h"
 #include "enums.h"
+#include "matrix.h"
 #include "mem.h"
 #include "simple_list.h"
 #include "texstate.h"
@@ -563,17 +564,19 @@ _mesa_PopAttrib(void)
       switch (attr->kind) {
          case GL_ACCUM_BUFFER_BIT:
             MEMCPY( &ctx->Accum, attr->data, sizeof(struct gl_accum_attrib) );
+	    ctx->NewState |= _NEW_ACCUM;
             break;
          case GL_COLOR_BUFFER_BIT:
             {
                GLenum oldDrawBuffer = ctx->Color.DrawBuffer;
                GLenum oldAlphaFunc = ctx->Color.AlphaFunc;
-               GLubyte oldAlphaRef = ctx->Color.AlphaRef;
+               GLchan oldAlphaRef = ctx->Color.AlphaRef;
                GLenum oldBlendSrc = ctx->Color.BlendSrcRGB;
                GLenum oldBlendDst = ctx->Color.BlendDstRGB;
 	       GLenum oldLogicOp = ctx->Color.LogicOp;
                MEMCPY( &ctx->Color, attr->data,
                        sizeof(struct gl_colorbuffer_attrib) );
+	       ctx->NewState |= _NEW_COLOR;
                if (ctx->Color.DrawBuffer != oldDrawBuffer) {
                   _mesa_DrawBuffer( ctx->Color.DrawBuffer);
                }
@@ -587,16 +590,16 @@ _mesa_PopAttrib(void)
 		  ctx->Driver.LogicOpcode( ctx, ctx->Color.LogicOp );
                }
                if (ctx->Visual.RGBAflag) {
-                  GLubyte r = (GLint) (ctx->Color.ClearColor[0] * 255.0F);
-                  GLubyte g = (GLint) (ctx->Color.ClearColor[1] * 255.0F);
-                  GLubyte b = (GLint) (ctx->Color.ClearColor[2] * 255.0F);
-                  GLubyte a = (GLint) (ctx->Color.ClearColor[3] * 255.0F);
+                  GLchan r = (GLint) (ctx->Color.ClearColor[0] * CHAN_MAXF);
+                  GLchan g = (GLint) (ctx->Color.ClearColor[1] * CHAN_MAXF);
+                  GLchan b = (GLint) (ctx->Color.ClearColor[2] * CHAN_MAXF);
+                  GLchan a = (GLint) (ctx->Color.ClearColor[3] * CHAN_MAXF);
                   (*ctx->Driver.ClearColor)( ctx, r, g, b, a );
                   if ((ctx->Color.AlphaFunc != oldAlphaFunc ||
                        ctx->Color.AlphaRef != oldAlphaRef) &&
                       ctx->Driver.AlphaFunc)
                      (*ctx->Driver.AlphaFunc)( ctx, ctx->Color.AlphaFunc,
-                                               ctx->Color.AlphaRef / 255.0F);
+                                              ctx->Color.AlphaRef / CHAN_MAXF);
                   if (ctx->Driver.ColorMask) {
                      (*ctx->Driver.ColorMask)(ctx,
                                               ctx->Color.ColorMask[0],
@@ -622,6 +625,7 @@ _mesa_PopAttrib(void)
                GLfloat oldDepthClear = ctx->Depth.Clear;
                MEMCPY( &ctx->Depth, attr->data,
                        sizeof(struct gl_depthbuffer_attrib) );
+	       ctx->NewState |= _NEW_DEPTH;
                if (ctx->Depth.Test != oldDepthTest && ctx->Driver.Enable)
                   (*ctx->Driver.Enable)( ctx, GL_DEPTH_TEST, ctx->Depth.Test);
                if (ctx->Depth.Func != oldDepthFunc && ctx->Driver.DepthFunc)
@@ -637,15 +641,18 @@ _mesa_PopAttrib(void)
                const struct gl_enable_attrib *enable;
                enable = (const struct gl_enable_attrib *) attr->data;
                pop_enable_group(ctx, enable);
+	       ctx->NewState |= _NEW_ALL;
             }
             break;
          case GL_EVAL_BIT:
             MEMCPY( &ctx->Eval, attr->data, sizeof(struct gl_eval_attrib) );
+	    ctx->NewState |= _NEW_EVAL;
             break;
          case GL_FOG_BIT:
             {
                GLboolean anyChange = (GLboolean) (memcmp( &ctx->Fog, attr->data, sizeof(struct gl_fog_attrib) ) != 0);
                MEMCPY( &ctx->Fog, attr->data, sizeof(struct gl_fog_attrib) );
+	       ctx->NewState |= _NEW_FOG;
                if (anyChange && ctx->Driver.Fogfv) {
                   const GLfloat mode = (GLfloat) ctx->Fog.Mode;
                   const GLfloat density = ctx->Fog.Density;
@@ -665,6 +672,7 @@ _mesa_PopAttrib(void)
             break;
          case GL_HINT_BIT:
             MEMCPY( &ctx->Hint, attr->data, sizeof(struct gl_hint_attrib) );
+	    ctx->NewState |= _NEW_HINT;
             if (ctx->Driver.Hint) {
                (*ctx->Driver.Hint)( ctx, GL_PERSPECTIVE_CORRECTION_HINT,
                                     ctx->Hint.PerspectiveCorrection );
@@ -679,6 +687,7 @@ _mesa_PopAttrib(void)
             break;
          case GL_LIGHTING_BIT:
             MEMCPY( &ctx->Light, attr->data, sizeof(struct gl_light_attrib) );
+	    ctx->NewState |= _NEW_LIGHT;
             if (ctx->Driver.Enable) {
                GLuint i;
                for (i = 0; i < MAX_LIGHTS; i++) {
@@ -699,6 +708,7 @@ _mesa_PopAttrib(void)
             break;
          case GL_LINE_BIT:
             MEMCPY( &ctx->Line, attr->data, sizeof(struct gl_line_attrib) );
+	    ctx->NewState |= _NEW_LINE;
             if (ctx->Driver.Enable) {
                (*ctx->Driver.Enable)( ctx, GL_LINE_SMOOTH, ctx->Line.SmoothFlag );
                (*ctx->Driver.Enable)( ctx, GL_LINE_STIPPLE, ctx->Line.StippleFlag );
@@ -714,9 +724,11 @@ _mesa_PopAttrib(void)
             break;
          case GL_PIXEL_MODE_BIT:
             MEMCPY( &ctx->Pixel, attr->data, sizeof(struct gl_pixel_attrib) );
+	    ctx->NewState |= _NEW_PIXEL;
             break;
          case GL_POINT_BIT:
             MEMCPY( &ctx->Point, attr->data, sizeof(struct gl_point_attrib) );
+	    ctx->NewState |= _NEW_POINT;
             if (ctx->Driver.Enable)
                (*ctx->Driver.Enable)( ctx, GL_POINT_SMOOTH, ctx->Point.SmoothFlag );
             break;
@@ -726,6 +738,7 @@ _mesa_PopAttrib(void)
                GLenum oldBackMode = ctx->Polygon.BackMode;
                MEMCPY( &ctx->Polygon, attr->data,
                        sizeof(struct gl_polygon_attrib) );
+	       ctx->NewState |= _NEW_POLYGON;
                if ((ctx->Polygon.FrontMode != oldFrontMode ||
                     ctx->Polygon.BackMode != oldBackMode) &&
                    ctx->Driver.PolygonMode) {
@@ -744,12 +757,14 @@ _mesa_PopAttrib(void)
             break;
 	 case GL_POLYGON_STIPPLE_BIT:
 	    MEMCPY( ctx->PolygonStipple, attr->data, 32*sizeof(GLuint) );
+	    ctx->NewState |= _NEW_POLYGONSTIPPLE;
 	    if (ctx->Driver.PolygonStipple) 
 	       ctx->Driver.PolygonStipple( ctx, (const GLubyte *) attr->data );
 	    break;
          case GL_SCISSOR_BIT:
             MEMCPY( &ctx->Scissor, attr->data,
 		    sizeof(struct gl_scissor_attrib) );
+	    ctx->NewState |= _NEW_SCISSOR;
             if (ctx->Driver.Enable)
                (*ctx->Driver.Enable)( ctx, GL_SCISSOR_TEST, ctx->Scissor.Enabled );
 	    if (ctx->Driver.Scissor)
@@ -759,6 +774,7 @@ _mesa_PopAttrib(void)
          case GL_STENCIL_BUFFER_BIT:
             MEMCPY( &ctx->Stencil, attr->data,
 		    sizeof(struct gl_stencil_attrib) );
+	    ctx->NewState |= _NEW_STENCIL;
             if (ctx->Driver.StencilFunc)
                (*ctx->Driver.StencilFunc)( ctx, ctx->Stencil.Function,
                                    ctx->Stencil.Ref, ctx->Stencil.ValueMask);
@@ -779,6 +795,7 @@ _mesa_PopAttrib(void)
          case GL_TRANSFORM_BIT:
             MEMCPY( &ctx->Transform, attr->data,
 		    sizeof(struct gl_transform_attrib) );
+	    ctx->NewState |= _NEW_TRANSFORM;
             if (ctx->Driver.Enable) {
                (*ctx->Driver.Enable)( ctx, GL_NORMALIZE, ctx->Transform.Normalize );
                (*ctx->Driver.Enable)( ctx, GL_RESCALE_NORMAL_EXT, ctx->Transform.RescaleNormals );
@@ -798,6 +815,7 @@ _mesa_PopAttrib(void)
                }
                MEMCPY( &ctx->Texture, attr->data,
                        sizeof(struct gl_texture_attrib) );
+	       ctx->NewState |= _NEW_TEXTURE;
                /* restore state of the currently bound texture objects */
                for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
                   copy_texobj_state( ctx->Texture.Unit[u].CurrentD[1],
@@ -821,7 +839,8 @@ _mesa_PopAttrib(void)
 	 {
 	    struct gl_viewport_attrib *v = 
 	       (struct gl_viewport_attrib *)attr->data;
-	    
+
+	    ctx->NewState |= _NEW_VIEWPORT;
 	    _mesa_Viewport( v->X, v->Y, v->Width, v->Height );
 	    _mesa_DepthRange( v->Near, v->Far );
 	    break;
@@ -836,9 +855,6 @@ _mesa_PopAttrib(void)
       FREE( attr );
       attr = next;
    }
-
-   ctx->NewState = NEW_ALL;
-   ctx->ImageTransferState = UPDATE_IMAGE_TRANSFER_STATE;
 }
 
 
@@ -939,7 +955,7 @@ _mesa_PopClientAttrib(void)
       attr = next;
    }
 
-   ctx->NewState = NEW_ALL;
+   ctx->NewState = _NEW_ARRAY;
 }
 
 

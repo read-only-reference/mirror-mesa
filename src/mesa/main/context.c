@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.91 2000/09/28 22:44:30 brianp Exp $ */
+/* $Id: context.c,v 1.102 2000/10/31 18:09:44 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -49,7 +49,6 @@
 #include "matrix.h"
 #include "mem.h"
 #include "mmath.h"
-#include "pb.h"
 #include "pipeline.h"
 #include "shade.h"
 #include "simple_list.h"
@@ -66,6 +65,7 @@
 #include "vbxform.h"
 #include "vertices.h"
 #include "xform.h"
+#include "swrast/swrast.h"
 #endif
 
 #if defined(MESA_TRACE)
@@ -277,10 +277,11 @@ _mesa_initialize_visual( GLvisual *vis,
 
    if (depthBits == 0) {
       /* Special case.  Even if we don't have a depth buffer we need
-       * good values for DepthMax for Z vertex transformation purposes.
+       * good values for DepthMax for Z vertex transformation purposes
+       * and for per-fragment fog computation.
        */
-      vis->DepthMax = 1;
-      vis->DepthMaxF = 1.0F;
+      vis->DepthMax = 1 << 16;
+      vis->DepthMaxF = (GLfloat) vis->DepthMax;
    }
    else if (depthBits < 32) {
       vis->DepthMax = (1 << depthBits) - 1;
@@ -294,6 +295,7 @@ _mesa_initialize_visual( GLvisual *vis,
       vis->DepthMax = 0xffffffff;
       vis->DepthMaxF = (GLfloat) vis->DepthMax;
    }
+   vis->MRD = 1;  /* XXX temporary value */
 
    return GL_TRUE;
 }
@@ -443,7 +445,6 @@ one_time_init( void )
 
       gl_init_clip();
       gl_init_eval();
-      _mesa_init_fog();
       _mesa_init_math();
       gl_init_lists();
       gl_init_shade();
@@ -452,6 +453,7 @@ one_time_init( void )
       gl_init_translate();
       gl_init_vbrender();
       gl_init_vbxform();
+      gl_init_vertices();
 
       if (getenv("MESA_DEBUG")) {
          _glapi_noop_enable_warnings(GL_TRUE);
@@ -692,7 +694,23 @@ init_fallback_arrays( GLcontext *ctx )
    cl->Type = GL_UNSIGNED_BYTE;
    cl->Stride = 0;
    cl->StrideB = 0;
-   cl->Ptr = (void *) ctx->Current.ByteColor;
+   cl->Ptr = (void *) ctx->Current.Color;
+   cl->Enabled = 1;
+
+   cl = &ctx->Fallback.SecondaryColor;
+   cl->Size = 3;
+   cl->Type = GL_UNSIGNED_BYTE;
+   cl->Stride = 0;
+   cl->StrideB = 0;
+   cl->Ptr = (void *) ctx->Current.SecondaryColor;
+   cl->Enabled = 1;
+
+   cl = &ctx->Fallback.FogCoord;
+   cl->Size = 1;
+   cl->Type = GL_FLOAT;
+   cl->Stride = 0;
+   cl->StrideB = 0;
+   cl->Ptr = (void *) &ctx->Current.FogCoord;
    cl->Enabled = 1;
 
    cl = &ctx->Fallback.Index;
@@ -806,8 +824,6 @@ init_attrib_groups( GLcontext *ctx )
    gl_matrix_alloc_inv( &ctx->ProjectionMatrix );
 
    gl_matrix_ctr( &ctx->ModelProjectMatrix );
-   gl_matrix_ctr( &ctx->ModelProjectWinMatrix );
-   ctx->ModelProjectWinMatrixUptodate = GL_FALSE;
 
    ctx->ProjectionStackDepth = 0;
    ctx->NearFarStack[0][0] = 1.0; /* These values seem weird by make */
@@ -865,7 +881,7 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Color.MultiDrawBuffer = GL_FALSE;
 
    /* Current group */
-   ASSIGN_4V( ctx->Current.ByteColor, 255, 255, 255, 255);
+   ASSIGN_4V( ctx->Current.Color, CHAN_MAX, CHAN_MAX, CHAN_MAX, CHAN_MAX );
    ctx->Current.Index = 1;
    for (i=0; i<MAX_TEXTURE_UNITS; i++)
       ASSIGN_4V( ctx->Current.Texcoord[i], 0.0, 0.0, 0.0, 1.0 );
@@ -881,8 +897,17 @@ init_attrib_groups( GLcontext *ctx )
    ASSIGN_3V( ctx->Current.Normal, 0.0, 0.0, 1.0 );
    ctx->Current.Primitive = (GLenum) (GL_POLYGON + 1);
 
-   ctx->Current.Flag = (VERT_NORM|VERT_INDEX|VERT_RGBA|VERT_EDGE|
-                        VERT_TEX0_1|VERT_TEX1_1|VERT_MATERIAL);
+   ctx->Current.Flag = (VERT_NORM |
+                        VERT_INDEX |
+                        VERT_RGBA |
+                        VERT_SPEC_RGB |
+                        VERT_FOG_COORD |
+                        VERT_EDGE |
+                        VERT_TEX0_12 |
+                        VERT_TEX1_12 |
+                        VERT_TEX2_12 |
+                        VERT_TEX3_12 |
+                        VERT_MATERIAL);
 
    init_fallback_arrays( ctx );
 
@@ -960,6 +985,8 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Fog.Density = 1.0;
    ctx->Fog.Start = 0.0;
    ctx->Fog.End = 1.0;
+   ctx->Fog.ColorSumEnabled = GL_FALSE;
+   ctx->Fog.FogCoordinateSource = GL_FRAGMENT_DEPTH_EXT;
 
    /* Hint group */
    ctx->Hint.PerspectiveCorrection = GL_DONT_CARE;
@@ -1150,6 +1177,7 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Polygon.StippleFlag = GL_FALSE;
    ctx->Polygon.OffsetFactor = 0.0F;
    ctx->Polygon.OffsetUnits = 0.0F;
+   ctx->Polygon.OffsetMRD = 0.0F;
    ctx->Polygon.OffsetPoint = GL_FALSE;
    ctx->Polygon.OffsetLine = GL_FALSE;
    ctx->Polygon.OffsetFill = GL_FALSE;
@@ -1308,12 +1336,12 @@ init_attrib_groups( GLcontext *ctx )
    _mesa_init_colortable(&ctx->ProxyPostColorMatrixColorTable);
 
    /* Miscellaneous */
-   ctx->NewState = NEW_ALL;
+   ctx->NewState = _NEW_ALL;
    ctx->RenderMode = GL_RENDER;
    ctx->StippleCounter = 0;
    ctx->NeedNormals = GL_FALSE;
    ctx->DoViewportMapping = GL_TRUE;
-   ctx->ImageTransferState = UPDATE_IMAGE_TRANSFER_STATE;
+   ctx->ImageTransferState = 0;
 
    ctx->NeedEyeCoords = GL_FALSE;
    ctx->NeedEyeNormals = GL_FALSE;
@@ -1441,9 +1469,8 @@ _mesa_initialize_context( GLcontext *ctx,
       return GL_FALSE;
    }
    ctx->input = ctx->VB->IM;
-
-   ctx->PB = gl_alloc_pb();
-   if (!ctx->PB) {
+   
+   if (!_swrast_create_context( ctx )) {
       ALIGN_FREE( ctx->VB );
       return GL_FALSE;
    }
@@ -1457,7 +1484,7 @@ _mesa_initialize_context( GLcontext *ctx,
       ctx->Shared = alloc_shared_state();
       if (!ctx->Shared) {
          ALIGN_FREE( ctx->VB );
-         FREE( ctx->PB );
+	 _swrast_destroy_context( ctx );
          return GL_FALSE;
       }
    }
@@ -1488,7 +1515,7 @@ _mesa_initialize_context( GLcontext *ctx,
    if (!alloc_proxy_textures(ctx)) {
       free_shared_state(ctx, ctx->Shared);
       ALIGN_FREE( ctx->VB );
-      FREE( ctx->PB );
+      _swrast_destroy_context( ctx );
       return GL_FALSE;
    }
 
@@ -1516,7 +1543,7 @@ _mesa_initialize_context( GLcontext *ctx,
    if (!ctx->Exec || !ctx->Save) {
       free_shared_state(ctx, ctx->Shared);
       ALIGN_FREE( ctx->VB );
-      FREE( ctx->PB );
+      _swrast_destroy_context( ctx );
       if (ctx->Exec)
          FREE( ctx->Exec );
    }
@@ -1532,7 +1559,7 @@ _mesa_initialize_context( GLcontext *ctx,
    if (!(ctx->TraceCtx)) {
       free_shared_state(ctx, ctx->Shared);
       ALIGN_FREE( ctx->VB );
-      FREE( ctx->PB );
+      _swrast_destroy_context( ctx );
       FREE( ctx->Exec );
       FREE( ctx->Save );
       return GL_FALSE;
@@ -1546,7 +1573,7 @@ _mesa_initialize_context( GLcontext *ctx,
    if (!(ctx->TraceCtx)) {
       free_shared_state(ctx, ctx->Shared);
       ALIGN_FREE( ctx->VB );
-      FREE( ctx->PB );
+      _swrast_destroy_context( ctx );
       FREE( ctx->Exec );
       FREE( ctx->Save );
       FREE( ctx->TraceCtx );
@@ -1620,7 +1647,7 @@ _mesa_free_context_data( GLcontext *ctx )
       }
    }
 
-   FREE( ctx->PB );
+   _swrast_destroy_context( ctx );
 
    if (ctx->input != ctx->VB->IM)
       gl_immediate_free( ctx->input );
@@ -1806,6 +1833,9 @@ _mesa_copy_context( const GLcontext *src, GLcontext *dst, GLuint mask )
    if (mask & GL_VIEWPORT_BIT) {
       MEMCPY( &dst->Viewport, &src->Viewport, sizeof(struct gl_viewport_attrib) );
    }
+   /* XXX FIXME:  Call callbacks?
+    */
+   dst->NewState = _NEW_ALL;
 }
 
 
@@ -1866,7 +1896,7 @@ _mesa_make_current2( GLcontext *newCtx, GLframebuffer *drawBuffer,
       /* TODO: check if newCtx and buffer's visual match??? */
       newCtx->DrawBuffer = drawBuffer;
       newCtx->ReadBuffer = readBuffer;
-      newCtx->NewState = NEW_ALL;   /* just to be safe */
+      newCtx->NewState |= _NEW_BUFFERS;
       gl_update_state( newCtx );
    }
 
@@ -2105,4 +2135,4 @@ GLenum gl_reduce_prim[GL_POLYGON+1] = {
    GL_TRIANGLES,
    GL_TRIANGLES,
    GL_TRIANGLES,
-};  
+};

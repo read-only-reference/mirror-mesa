@@ -1,8 +1,8 @@
-/* $Id: light.c,v 1.17 2000/09/26 20:53:53 brianp Exp $ */
+/* $Id: light.c,v 1.22 2000/10/30 13:32:00 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  * 
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
@@ -29,6 +29,7 @@
 #include "all.h"
 #else
 #include "glheader.h"
+#include "colormac.h"
 #include "context.h"
 #include "enums.h"
 #include "light.h"
@@ -65,7 +66,9 @@ _mesa_ShadeModel( GLenum mode )
             SET_BITS(ctx->TriangleCaps, DD_FLATSHADE);
          else
             CLEAR_BITS(ctx->TriangleCaps, DD_FLATSHADE);
-         ctx->NewState |= NEW_RASTER_OPS;
+
+         ctx->NewState |= _NEW_LIGHT;
+
          if (ctx->Driver.ShadeModel) 
             (*ctx->Driver.ShadeModel)( ctx, mode );
       }
@@ -184,7 +187,7 @@ _mesa_Lightfv( GLenum light, GLenum pname, const GLfloat *params )
    if (ctx->Driver.Lightfv)
       ctx->Driver.Lightfv( ctx, light, pname, params, nParams );
 
-   ctx->NewState |= NEW_LIGHTING;
+   ctx->NewState |= _NEW_LIGHT;
 }
 
 
@@ -385,7 +388,8 @@ _mesa_LightModelfv( GLenum pname, const GLfloat *params )
       case GL_LIGHT_MODEL_COLOR_CONTROL:
          if (params[0] == (GLfloat) GL_SINGLE_COLOR) {
             ctx->Light.Model.ColorControl = GL_SINGLE_COLOR;
-            CLEAR_BITS(ctx->TriangleCaps, DD_SEPERATE_SPECULAR);
+	    if (!ctx->Fog.ColorSumEnabled)
+	       CLEAR_BITS(ctx->TriangleCaps, DD_SEPERATE_SPECULAR);
          }
          else if (params[0] == (GLfloat) GL_SEPARATE_SPECULAR_COLOR) {
             ctx->Light.Model.ColorControl = GL_SEPARATE_SPECULAR_COLOR;
@@ -394,7 +398,6 @@ _mesa_LightModelfv( GLenum pname, const GLfloat *params )
          else {
             gl_error( ctx, GL_INVALID_ENUM, "glLightModel(param)" );
          }
-	 ctx->NewState |= NEW_RASTER_OPS;
          break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glLightModel" );
@@ -404,7 +407,7 @@ _mesa_LightModelfv( GLenum pname, const GLfloat *params )
    if (ctx->Driver.LightModelfv) 
       ctx->Driver.LightModelfv( ctx, pname, params );
 
-   ctx->NewState |= NEW_LIGHTING;
+   ctx->NewState |= _NEW_LIGHT;
 }
 
 
@@ -590,7 +593,7 @@ void gl_update_material( GLcontext *ctx,
 	 ACC_SCALE_3V( light->MatDiffuse[0], light->Diffuse, tmp );
       }
       COPY_4FV( mat->Diffuse, src[0].Diffuse );
-      FLOAT_COLOR_TO_UBYTE_COLOR(ctx->Light.BaseAlpha[0], mat->Diffuse[3]);
+      FLOAT_COLOR_TO_CHAN(ctx->Light.BaseAlpha[0], mat->Diffuse[3]);
    }
    if (bitmask & BACK_DIFFUSE_BIT) {
       struct gl_material *mat = &ctx->Light.Material[1];
@@ -600,7 +603,7 @@ void gl_update_material( GLcontext *ctx,
 	 ACC_SCALE_3V( light->MatDiffuse[1], light->Diffuse, tmp );
       }
       COPY_4FV( mat->Diffuse, src[1].Diffuse );
-      FLOAT_COLOR_TO_UBYTE_COLOR(ctx->Light.BaseAlpha[1], mat->Diffuse[3]);
+      FLOAT_COLOR_TO_CHAN(ctx->Light.BaseAlpha[1], mat->Diffuse[3]);
    }
 
    /* update material specular values */
@@ -684,14 +687,17 @@ void gl_update_material( GLcontext *ctx,
  * set by glColorMaterial().
  */
 void gl_update_color_material( GLcontext *ctx, 
-			       const GLubyte rgba[4] )
+			       const GLchan rgba[4] )
 {
    struct gl_light *light, *list = &ctx->Light.EnabledList;
    GLuint bitmask = ctx->Light.ColorMaterialBitmask;
    GLfloat color[4];
 
-   UBYTE_RGBA_TO_FLOAT_RGBA( color, rgba );
-   
+   color[0] = CHAN_TO_FLOAT(rgba[0]);
+   color[1] = CHAN_TO_FLOAT(rgba[1]);
+   color[2] = CHAN_TO_FLOAT(rgba[2]);
+   color[3] = CHAN_TO_FLOAT(rgba[3]);
+
    if (MESA_VERBOSE&VERBOSE_IMMEDIATE)
       fprintf(stderr, "gl_update_color_material, mask 0x%x\n", bitmask);
 
@@ -745,7 +751,7 @@ void gl_update_color_material( GLcontext *ctx,
 	 ACC_SCALE_3V( light->MatDiffuse[0], light->Diffuse, tmp );
       }
       COPY_4FV( mat->Diffuse, color );
-      FLOAT_COLOR_TO_UBYTE_COLOR(ctx->Light.BaseAlpha[0], mat->Diffuse[3]);
+      FLOAT_COLOR_TO_CHAN(ctx->Light.BaseAlpha[0], mat->Diffuse[3]);
    }
 
    if (bitmask & BACK_DIFFUSE_BIT) {
@@ -756,7 +762,7 @@ void gl_update_color_material( GLcontext *ctx,
 	 ACC_SCALE_3V( light->MatDiffuse[1], light->Diffuse, tmp );
       }
       COPY_4FV( mat->Diffuse, color );
-      FLOAT_COLOR_TO_UBYTE_COLOR(ctx->Light.BaseAlpha[1], mat->Diffuse[3]);
+      FLOAT_COLOR_TO_CHAN(ctx->Light.BaseAlpha[1], mat->Diffuse[3]);
    }
 
    /* update light->MatSpecular = light's specular * material's specular */
@@ -839,7 +845,9 @@ _mesa_ColorMaterial( GLenum face, GLenum mode )
    }
 
    if (ctx->Light.ColorMaterialEnabled)
-      gl_update_color_material( ctx, ctx->Current.ByteColor );
+      gl_update_color_material( ctx, ctx->Current.Color );
+
+   ctx->NewState |= _NEW_LIGHT;
 }
 
 
@@ -1206,30 +1214,6 @@ gl_compute_shine_table( GLcontext *ctx, GLuint i, GLfloat shininess )
 
 
 
-#if 0
-static void
-gl_reinit_light_attrib( GLcontext *ctx, struct gl_light_attrib *l )
-{
-   GLuint i;
-
-   if (ctx->ShineTable[0]->shininess != l->Material[0].Shininess) {
-      gl_compute_shine_table( ctx, 0, l->Material[0].Shininess );
-      gl_compute_shine_table( ctx, 2, l->Material[0].Shininess * .5 );
-   }
-
-   if (ctx->ShineTable[1]->shininess != l->Material[1].Shininess) {
-      gl_compute_shine_table( ctx, 1, l->Material[1].Shininess );
-      gl_compute_shine_table( ctx, 3, l->Material[1].Shininess * .5 );
-   }
-
-   make_empty_list( &l->EnabledList );
-   for (i = 0 ; i < MAX_LIGHTS ; i++) {
-      if (l->Light[i].Enabled) 
-	 insert_at_tail( &l->EnabledList, &l->Light[i] );
-   }
-}
-#endif
-
 
 /*
  * Examine current lighting parameters to determine if the optimized lighting
@@ -1279,8 +1263,8 @@ gl_update_lighting( GLcontext *ctx )
 		      ctx->Light.Model.Ambient,
 		      mat->Ambient);
 
-	 FLOAT_COLOR_TO_UBYTE_COLOR(ctx->Light.BaseAlpha[side],
-				    ctx->Light.Material[side].Diffuse[3] );
+	 FLOAT_COLOR_TO_CHAN(ctx->Light.BaseAlpha[side],
+                             ctx->Light.Material[side].Diffuse[3] );
       }
       
       foreach (light, &ctx->Light.EnabledList) {	 
@@ -1389,9 +1373,6 @@ gl_compute_light_positions( GLcontext *ctx )
 void
 gl_update_normal_transform( GLcontext *ctx )
 {
-   GLuint new_flag = 0;
-   normal_func *last = ctx->NormalTransform;
-   
    ctx->vb_rescale_factor = 1.0;
 
    if (ctx->NeedEyeCoords) {
@@ -1403,9 +1384,7 @@ gl_update_normal_transform( GLcontext *ctx )
 				     MAT_FLAG_GENERAL_3D |
 				     MAT_FLAG_PERSPECTIVE)) 
 	    transform = NORM_TRANSFORM;
-
 	    
-	 new_flag = ctx->NewState & NEW_MODELVIEW;
 	 ctx->vb_rescale_factor = ctx->rescale_factor;
 	       
 	 if (ctx->Transform.Normalize) {
@@ -1442,7 +1421,4 @@ gl_update_normal_transform( GLcontext *ctx )
 	 ctx->NormalTransform = 0;
       }
    }
-
-   if (last != ctx->NormalTransform || new_flag)
-      ctx->NewState |= NEW_NORMAL_TRANSFORM;
 }

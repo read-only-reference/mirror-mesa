@@ -1,8 +1,8 @@
-/* $Id: config.h,v 1.17 2000/09/26 20:53:53 brianp Exp $ */
+/* $Id: config.h,v 1.23 2000/10/29 18:23:16 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  * 
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
@@ -103,7 +103,7 @@
 #define MAX_TEXTURE_LEVELS 12
 
 /* Number of texture units - GL_ARB_multitexture */
-#define MAX_TEXTURE_UNITS 2
+#define MAX_TEXTURE_UNITS 3
 
 /* Maximum viewport/image size: */
 #define MAX_WIDTH 2048
@@ -139,11 +139,16 @@
 
 
 /*
- * Bits per depth buffer value:  16 or 32 (GLushort or GLuint)
- * _mesa_create_visual() can specify any depth in [0, 32].
+ * Bits per depth buffer value.  Any reasonable value up to 31 will
+ * work.  32 doesn't work because of integer overflow problems in the
+ * rasterizer code.
  */
 #define DEFAULT_SOFTWARE_DEPTH_BITS 16
+#if DEFAULT_SOFTWARE_DEPTH_BITS <= 16
 #define DEFAULT_SOFTWARE_DEPTH_TYPE GLushort
+#else
+#define DEFAULT_SOFTWARE_DEPTH_TYPE GLuint
+#endif
 
 
 
@@ -157,8 +162,6 @@
  * Bits per color channel (must be 8 at this time!)
  */
 #define CHAN_BITS 8
-#define CHAN_MAX ((1 << CHAN_BITS) - 1)
-#define CHAN_MAXF ((GLfloat) CHAN_MAX)
 
 
 /*
@@ -194,13 +197,33 @@
 #define VB_SIZE  (VB_MAX + VB_MAX_CLIPPED_VERTS)
 
 
-typedef struct __GLcontextRec GLcontext;
+/*
+ * Language/compiler stuff
+ */
 
-extern void
-gl_read_config_file(GLcontext *ctx);
+/* Some compilers don't like some of Mesa's const usage */
+#ifdef NO_CONST
+#  define CONST
+#else
+#  define CONST const
+#endif
 
-extern void
-gl_register_config_var(const char *name, void (*notify)( const char *, int ));
+
+/* Function inlining */
+#if defined(__GNUC__)
+#  define INLINE __inline__
+#elif defined(__MSC__)
+#  define INLINE __inline
+#else
+#  define INLINE
+#endif
+
+
+#ifdef DEBUG
+#  define ASSERT(X)   assert(X)
+#else
+#  define ASSERT(X)
+#endif
 
 
 #endif
