@@ -1,4 +1,4 @@
-/* $Id: get.c,v 1.87 2002/07/09 01:22:50 brianp Exp $ */
+/* $Id: get.c,v 1.92 2002/09/27 02:45:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -38,7 +38,7 @@
 #include "macros.h"
 #include "mmath.h"
 #include "mtypes.h"
-
+#include "texcompress.h"
 #include "math/m_matrix.h"
 #endif
 
@@ -659,6 +659,9 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
       case GL_PACK_IMAGE_HEIGHT_EXT:
          *params = ctx->Pack.ImageHeight;
          break;
+      case GL_PACK_INVERT_MESA:
+         *params = ctx->Pack.Invert;
+         break;
       case GL_PERSPECTIVE_CORRECTION_HINT:
 	 *params = ENUM_TO_BOOL(ctx->Hint.PerspectiveCorrection);
 	 break;
@@ -802,28 +805,28 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 *params = INT_TO_BOOL(ctx->Stencil.Clear);
 	 break;
       case GL_STENCIL_FAIL:
-	 *params = ENUM_TO_BOOL(ctx->Stencil.FailFunc);
+	 *params = ENUM_TO_BOOL(ctx->Stencil.FailFunc[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_FUNC:
-	 *params = ENUM_TO_BOOL(ctx->Stencil.Function);
+	 *params = ENUM_TO_BOOL(ctx->Stencil.Function[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_PASS_DEPTH_FAIL:
-	 *params = ENUM_TO_BOOL(ctx->Stencil.ZFailFunc);
+	 *params = ENUM_TO_BOOL(ctx->Stencil.ZFailFunc[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_PASS_DEPTH_PASS:
-	 *params = ENUM_TO_BOOL(ctx->Stencil.ZPassFunc);
+	 *params = ENUM_TO_BOOL(ctx->Stencil.ZPassFunc[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_REF:
-	 *params = INT_TO_BOOL(ctx->Stencil.Ref);
+	 *params = INT_TO_BOOL(ctx->Stencil.Ref[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_TEST:
 	 *params = ctx->Stencil.Enabled;
 	 break;
       case GL_STENCIL_VALUE_MASK:
-	 *params = INT_TO_BOOL(ctx->Stencil.ValueMask);
+	 *params = INT_TO_BOOL(ctx->Stencil.ValueMask[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_WRITEMASK:
-	 *params = INT_TO_BOOL(ctx->Stencil.WriteMask);
+	 *params = INT_TO_BOOL(ctx->Stencil.WriteMask[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STEREO:
 	 *params = ctx->Visual.stereoMode;
@@ -1031,14 +1034,16 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          break;
       case GL_NUM_COMPRESSED_TEXTURE_FORMATS_ARB:
          CHECK_EXTENSION_B(ARB_texture_compression, pname);
-         *params = INT_TO_BOOL(ctx->Const.NumCompressedTextureFormats);
+         *params = INT_TO_BOOL(_mesa_get_compressed_formats(ctx, NULL));
          break;
       case GL_COMPRESSED_TEXTURE_FORMATS_ARB:
          CHECK_EXTENSION_B(ARB_texture_compression, pname);
          {
-            GLuint i;
-            for (i = 0; i < ctx->Const.NumCompressedTextureFormats; i++)
-               params[i] = INT_TO_BOOL(ctx->Const.CompressedTextureFormats[i]);
+            GLint formats[100];
+            GLuint i, n;
+            n = _mesa_get_compressed_formats(ctx, formats);
+            for (i = 0; i < n; i++)
+               params[i] = INT_TO_BOOL(formats[i]);
          }
          break;
 
@@ -1170,14 +1175,6 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
       case GL_SEPARABLE_2D:
          CHECK_EXTENSION_B(EXT_convolution, pname);
          *params = ctx->Pixel.Separable2DEnabled;
-         break;
-      case GL_MAX_CONVOLUTION_WIDTH:
-         CHECK_EXTENSION_B(EXT_convolution, pname);
-         *params = INT_TO_BOOL(ctx->Const.MaxConvolutionWidth);
-         break;
-      case GL_MAX_CONVOLUTION_HEIGHT:
-         CHECK_EXTENSION_B(EXT_convolution, pname);
-         *params = INT_TO_BOOL(ctx->Const.MaxConvolutionHeight);
          break;
       case GL_POST_CONVOLUTION_RED_SCALE_EXT:
          CHECK_EXTENSION_B(EXT_convolution, pname);
@@ -1464,6 +1461,16 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
       case GL_MAX_RECTANGLE_TEXTURE_SIZE_NV:
          CHECK_EXTENSION_B(NV_texture_rectangle, pname);
          *params = INT_TO_BOOL(ctx->Const.MaxTextureRectSize);
+         break;
+
+      /* GL_EXT_stencil_two_side */
+      case GL_STENCIL_TEST_TWO_SIDE_EXT:
+         CHECK_EXTENSION_B(EXT_stencil_two_side, pname);
+         *params = ctx->Stencil.TestTwoSide;
+         break;
+      case GL_ACTIVE_STENCIL_FACE_EXT:
+         CHECK_EXTENSION_B(EXT_stencil_two_side, pname);
+         *params = ENUM_TO_BOOL(ctx->Stencil.ActiveFace ? GL_FRONT : GL_BACK);
          break;
 
       default:
@@ -2016,6 +2023,9 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       case GL_PACK_IMAGE_HEIGHT_EXT:
          *params = (GLdouble) ctx->Pack.ImageHeight;
          break;
+      case GL_PACK_INVERT_MESA:
+         *params = (GLdouble) ctx->Pack.Invert;
+         break;
       case GL_PERSPECTIVE_CORRECTION_HINT:
 	 *params = ENUM_TO_DOUBLE(ctx->Hint.PerspectiveCorrection);
 	 break;
@@ -2159,28 +2169,28 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 *params = (GLdouble) ctx->Stencil.Clear;
 	 break;
       case GL_STENCIL_FAIL:
-	 *params = ENUM_TO_DOUBLE(ctx->Stencil.FailFunc);
+	 *params = ENUM_TO_DOUBLE(ctx->Stencil.FailFunc[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_FUNC:
-	 *params = ENUM_TO_DOUBLE(ctx->Stencil.Function);
+	 *params = ENUM_TO_DOUBLE(ctx->Stencil.Function[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_PASS_DEPTH_FAIL:
-	 *params = ENUM_TO_DOUBLE(ctx->Stencil.ZFailFunc);
+	 *params = ENUM_TO_DOUBLE(ctx->Stencil.ZFailFunc[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_PASS_DEPTH_PASS:
-	 *params = ENUM_TO_DOUBLE(ctx->Stencil.ZPassFunc);
+	 *params = ENUM_TO_DOUBLE(ctx->Stencil.ZPassFunc[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_REF:
-	 *params = (GLdouble) ctx->Stencil.Ref;
+	 *params = (GLdouble) ctx->Stencil.Ref[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STENCIL_TEST:
 	 *params = (GLdouble) ctx->Stencil.Enabled;
 	 break;
       case GL_STENCIL_VALUE_MASK:
-	 *params = (GLdouble) ctx->Stencil.ValueMask;
+	 *params = (GLdouble) ctx->Stencil.ValueMask[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STENCIL_WRITEMASK:
-	 *params = (GLdouble) ctx->Stencil.WriteMask;
+	 *params = (GLdouble) ctx->Stencil.WriteMask[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STEREO:
 	 *params = (GLdouble) ctx->Visual.stereoMode;
@@ -2385,14 +2395,16 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          break;
       case GL_NUM_COMPRESSED_TEXTURE_FORMATS_ARB:
          CHECK_EXTENSION_D(ARB_texture_compression, pname);
-         *params = (GLdouble) ctx->Const.NumCompressedTextureFormats;
+         *params = (GLdouble) _mesa_get_compressed_formats(ctx, NULL);
          break;
       case GL_COMPRESSED_TEXTURE_FORMATS_ARB:
          CHECK_EXTENSION_D(ARB_texture_compression, pname);
          {
-            GLuint i;
-            for (i = 0; i < ctx->Const.NumCompressedTextureFormats; i++)
-               params[i] = (GLdouble) ctx->Const.CompressedTextureFormats[i];
+            GLint formats[100];
+            GLuint i, n;
+            n = _mesa_get_compressed_formats(ctx, formats);
+            for (i = 0; i < n; i++)
+               params[i] = (GLdouble) formats[i];
          }
          break;
 
@@ -2524,14 +2536,6 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       case GL_SEPARABLE_2D:
          CHECK_EXTENSION_D(EXT_convolution, pname);
          *params = (GLdouble) ctx->Pixel.Separable2DEnabled;
-         break;
-      case GL_MAX_CONVOLUTION_WIDTH:
-         CHECK_EXTENSION_D(EXT_convolution, pname);
-         *params = (GLdouble) ctx->Const.MaxConvolutionWidth;
-         break;
-      case GL_MAX_CONVOLUTION_HEIGHT:
-         CHECK_EXTENSION_D(EXT_convolution, pname);
-         *params = (GLdouble) ctx->Const.MaxConvolutionHeight;
          break;
       case GL_POST_CONVOLUTION_RED_SCALE_EXT:
          CHECK_EXTENSION_D(EXT_convolution, pname);
@@ -2818,6 +2822,16 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       case GL_MAX_RECTANGLE_TEXTURE_SIZE_NV:
          CHECK_EXTENSION_D(NV_texture_rectangle, pname);
          *params = (GLdouble) ctx->Const.MaxTextureRectSize;
+         break;
+
+      /* GL_EXT_stencil_two_side */
+      case GL_STENCIL_TEST_TWO_SIDE_EXT:
+         CHECK_EXTENSION_D(EXT_stencil_two_side, pname);
+         *params = (GLdouble) ctx->Stencil.TestTwoSide;
+         break;
+      case GL_ACTIVE_STENCIL_FACE_EXT:
+         CHECK_EXTENSION_D(EXT_stencil_two_side, pname);
+         *params = (GLdouble) (ctx->Stencil.ActiveFace ? GL_FRONT : GL_BACK);
          break;
 
       default:
@@ -3370,6 +3384,9 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_PACK_IMAGE_HEIGHT_EXT:
          *params = (GLfloat) ctx->Pack.ImageHeight;
          break;
+      case GL_PACK_INVERT_MESA:
+         *params = (GLfloat) ctx->Pack.Invert;
+         break;
       case GL_PERSPECTIVE_CORRECTION_HINT:
 	 *params = ENUM_TO_FLOAT(ctx->Hint.PerspectiveCorrection);
 	 break;
@@ -3515,28 +3532,28 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = (GLfloat) ctx->Stencil.Clear;
 	 break;
       case GL_STENCIL_FAIL:
-	 *params = ENUM_TO_FLOAT(ctx->Stencil.FailFunc);
+	 *params = ENUM_TO_FLOAT(ctx->Stencil.FailFunc[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_FUNC:
-	 *params = ENUM_TO_FLOAT(ctx->Stencil.Function);
+	 *params = ENUM_TO_FLOAT(ctx->Stencil.Function[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_PASS_DEPTH_FAIL:
-	 *params = ENUM_TO_FLOAT(ctx->Stencil.ZFailFunc);
+	 *params = ENUM_TO_FLOAT(ctx->Stencil.ZFailFunc[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_PASS_DEPTH_PASS:
-	 *params = ENUM_TO_FLOAT(ctx->Stencil.ZPassFunc);
+	 *params = ENUM_TO_FLOAT(ctx->Stencil.ZPassFunc[ctx->Stencil.ActiveFace]);
 	 break;
       case GL_STENCIL_REF:
-	 *params = (GLfloat) ctx->Stencil.Ref;
+	 *params = (GLfloat) ctx->Stencil.Ref[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STENCIL_TEST:
 	 *params = (GLfloat) ctx->Stencil.Enabled;
 	 break;
       case GL_STENCIL_VALUE_MASK:
-	 *params = (GLfloat) ctx->Stencil.ValueMask;
+	 *params = (GLfloat) ctx->Stencil.ValueMask[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STENCIL_WRITEMASK:
-	 *params = (GLfloat) ctx->Stencil.WriteMask;
+	 *params = (GLfloat) ctx->Stencil.WriteMask[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STEREO:
 	 *params = (GLfloat) ctx->Visual.stereoMode;
@@ -3741,14 +3758,16 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          break;
       case GL_NUM_COMPRESSED_TEXTURE_FORMATS_ARB:
          CHECK_EXTENSION_F(ARB_texture_compression, pname);
-         *params = (GLfloat) ctx->Const.NumCompressedTextureFormats;
+         *params = (GLfloat) _mesa_get_compressed_formats(ctx, NULL);
          break;
       case GL_COMPRESSED_TEXTURE_FORMATS_ARB:
          CHECK_EXTENSION_F(ARB_texture_compression, pname);
          {
-            GLuint i;
-            for (i = 0; i < ctx->Const.NumCompressedTextureFormats; i++)
-               params[i] = (GLfloat) ctx->Const.CompressedTextureFormats[i];
+            GLint formats[100];
+            GLuint i, n;
+            n = _mesa_get_compressed_formats(ctx, formats);
+            for (i = 0; i < n; i++)
+               params[i] = (GLfloat) formats[i];
          }
          break;
 
@@ -3854,14 +3873,6 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_SEPARABLE_2D:
          CHECK_EXTENSION_F(EXT_convolution, pname);
          *params = (GLfloat) ctx->Pixel.Separable2DEnabled;
-         break;
-      case GL_MAX_CONVOLUTION_WIDTH:
-         CHECK_EXTENSION_F(EXT_convolution, pname);
-         *params = (GLfloat) ctx->Const.MaxConvolutionWidth;
-         break;
-      case GL_MAX_CONVOLUTION_HEIGHT:
-         CHECK_EXTENSION_F(EXT_convolution, pname);
-         *params = (GLfloat) ctx->Const.MaxConvolutionHeight;
          break;
       case GL_POST_CONVOLUTION_RED_SCALE_EXT:
          CHECK_EXTENSION_F(EXT_convolution, pname);
@@ -4148,6 +4159,16 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_MAX_RECTANGLE_TEXTURE_SIZE_NV:
          CHECK_EXTENSION_F(NV_texture_rectangle, pname);
          *params = (GLfloat) ctx->Const.MaxTextureRectSize;
+         break;
+
+      /* GL_EXT_stencil_two_side */
+      case GL_STENCIL_TEST_TWO_SIDE_EXT:
+         CHECK_EXTENSION_F(EXT_stencil_two_side, pname);
+         *params = (GLfloat) ctx->Stencil.TestTwoSide;
+         break;
+      case GL_ACTIVE_STENCIL_FACE_EXT:
+         CHECK_EXTENSION_F(EXT_stencil_two_side, pname);
+         *params = (GLfloat) (ctx->Stencil.ActiveFace ? GL_FRONT : GL_BACK);
          break;
 
       default:
@@ -4701,6 +4722,9 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       case GL_PACK_IMAGE_HEIGHT_EXT:
          *params = ctx->Pack.ImageHeight;
          break;
+      case GL_PACK_INVERT_MESA:
+         *params = ctx->Pack.Invert;
+         break;
       case GL_PERSPECTIVE_CORRECTION_HINT:
 	 *params = (GLint) ctx->Hint.PerspectiveCorrection;
 	 break;
@@ -4844,28 +4868,28 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 *params = (GLint) ctx->Stencil.Clear;
 	 break;
       case GL_STENCIL_FAIL:
-	 *params = (GLint) ctx->Stencil.FailFunc;
+	 *params = (GLint) ctx->Stencil.FailFunc[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STENCIL_FUNC:
-	 *params = (GLint) ctx->Stencil.Function;
+	 *params = (GLint) ctx->Stencil.Function[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STENCIL_PASS_DEPTH_FAIL:
-	 *params = (GLint) ctx->Stencil.ZFailFunc;
+	 *params = (GLint) ctx->Stencil.ZFailFunc[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STENCIL_PASS_DEPTH_PASS:
-	 *params = (GLint) ctx->Stencil.ZPassFunc;
+	 *params = (GLint) ctx->Stencil.ZPassFunc[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STENCIL_REF:
-	 *params = (GLint) ctx->Stencil.Ref;
+	 *params = (GLint) ctx->Stencil.Ref[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STENCIL_TEST:
 	 *params = (GLint) ctx->Stencil.Enabled;
 	 break;
       case GL_STENCIL_VALUE_MASK:
-	 *params = (GLint) ctx->Stencil.ValueMask;
+	 *params = (GLint) ctx->Stencil.ValueMask[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STENCIL_WRITEMASK:
-	 *params = (GLint) ctx->Stencil.WriteMask;
+	 *params = (GLint) ctx->Stencil.WriteMask[ctx->Stencil.ActiveFace];
 	 break;
       case GL_STEREO:
 	 *params = (GLint) ctx->Visual.stereoMode;
@@ -5070,15 +5094,11 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          break;
       case GL_NUM_COMPRESSED_TEXTURE_FORMATS_ARB:
          CHECK_EXTENSION_I(ARB_texture_compression, pname);
-         *params = (GLint) ctx->Const.NumCompressedTextureFormats;
+         *params = (GLint) _mesa_get_compressed_formats(ctx, NULL);
          break;
       case GL_COMPRESSED_TEXTURE_FORMATS_ARB:
          CHECK_EXTENSION_I(ARB_texture_compression, pname);
-         {
-            GLuint i;
-            for (i = 0; i < ctx->Const.NumCompressedTextureFormats; i++)
-               params[i] = (GLint) ctx->Const.CompressedTextureFormats[i];
-         }
+         (void) _mesa_get_compressed_formats(ctx, params);
          break;
 
       /* GL_EXT_compiled_vertex_array */
@@ -5225,14 +5245,6 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       case GL_SEPARABLE_2D:
          CHECK_EXTENSION_I(EXT_convolution, pname);
          *params = (GLint) ctx->Pixel.Separable2DEnabled;
-         break;
-      case GL_MAX_CONVOLUTION_WIDTH:
-         CHECK_EXTENSION_I(EXT_convolution, pname);
-         *params = ctx->Const.MaxConvolutionWidth;
-         break;
-      case GL_MAX_CONVOLUTION_HEIGHT:
-         CHECK_EXTENSION_I(EXT_convolution, pname);
-         *params = ctx->Const.MaxConvolutionHeight;
          break;
       case GL_POST_CONVOLUTION_RED_SCALE_EXT:
          CHECK_EXTENSION_I(EXT_convolution, pname);
@@ -5525,6 +5537,16 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Const.MaxTextureRectSize;
          break;
 
+      /* GL_EXT_stencil_two_side */
+      case GL_STENCIL_TEST_TWO_SIDE_EXT:
+         CHECK_EXTENSION_I(EXT_stencil_two_side, pname);
+         *params = (GLint) ctx->Stencil.TestTwoSide;
+         break;
+      case GL_ACTIVE_STENCIL_FACE_EXT:
+         CHECK_EXTENSION_I(EXT_stencil_two_side, pname);
+         *params = (GLint) (ctx->Stencil.ActiveFace ? GL_FRONT : GL_BACK);
+         break;
+
       default:
          _mesa_error(ctx, GL_INVALID_ENUM, "glGetIntegerv(pname=0x%x)", pname);
    }
@@ -5617,6 +5639,7 @@ _mesa_GetString( GLenum name )
                 ctx->Extensions.ARB_multitexture &&
                 ctx->Extensions.ARB_texture_border_clamp &&
                 ctx->Extensions.ARB_texture_compression &&
+                ctx->Extensions.ARB_texture_cube_map &&
                 ctx->Extensions.EXT_texture_env_add &&
                 ctx->Extensions.ARB_texture_env_combine &&
                 ctx->Extensions.ARB_texture_env_dot3) {

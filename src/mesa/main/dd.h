@@ -1,4 +1,4 @@
-/* $Id: dd.h,v 1.70 2002/07/09 01:22:50 brianp Exp $ */
+/* $Id: dd.h,v 1.72 2002/09/27 02:45:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -341,55 +341,6 @@ struct dd_function_table {
     * should do the job.
     */
 
-   void (*GetCompressedTexImage)( GLcontext *ctx, GLenum target,
-                                  GLint level, void *image,
-                                  const struct gl_texture_object *texObj,
-                                  struct gl_texture_image *texImage );
-   /* Called by glGetCompressedTexImageARB.
-    * <target>, <level>, <image> are specified by user.
-    * <texObj> is the source texture object.
-    * <texImage> is the source texture image.
-    */
-
-   GLint (*BaseCompressedTexFormat)(GLcontext *ctx,
-                                    GLint internalFormat);
-   /* Called to compute the base format for a specific compressed
-    * format.  Return -1 if the internalFormat is not a specific
-    * compressed format that the driver recognizes.
-    * Example: if internalFormat==GL_COMPRESSED_RGB_FXT1_3DFX, return GL_RGB.
-    */
-
-   GLint (*CompressedTextureSize)(GLcontext *ctx,
-                                  const struct gl_texture_image *texImage);
-
-#if 000
-   /* ... Note the
-    * return value differences between this function and
-    * SpecificCompressedTexFormat below.
-    */
-
-   GLint (*SpecificCompressedTexFormat)(GLcontext *ctx,
-                                        GLint      internalFormat,
-                                        GLint      numDimensions,
-                                        GLint     *levelp,
-                                        GLsizei   *widthp,
-                                        GLsizei   *heightp,
-                                        GLsizei   *depthp,
-                                        GLint     *borderp,
-                                        GLenum    *formatp,
-                                        GLenum    *typep);
-   /* Called to turn a generic texture format into a specific
-    * texture format.  For example, if a driver implements
-    * GL_3DFX_texture_compression_FXT1, this would map
-    * GL_COMPRESSED_RGBA_ARB to GL_COMPRESSED_RGBA_FXT1_3DFX.
-    *
-    * If the driver does not know how to handle the compressed
-    * format, then just return the generic format, and Mesa will
-    * do the right thing with it.
-    */
-
-#endif
-
    /***
     *** Texture object functions:
     ***/
@@ -458,14 +409,22 @@ struct dd_function_table {
     *** They're ALSO called by the gl_PopAttrib() function!!!
     *** May add more functions like these to the device driver in the future.
     ***/
+#if 1
    void (*AlphaFunc)(GLcontext *ctx, GLenum func, GLchan ref);
+#else
+   void (*AlphaFunc)(GLcontext *ctx, GLenum func, GLfloat ref);
+#endif
    void (*BlendColor)(GLcontext *ctx, const GLfloat color[4]);
    void (*BlendEquation)(GLcontext *ctx, GLenum mode);
    void (*BlendFunc)(GLcontext *ctx, GLenum sfactor, GLenum dfactor);
    void (*BlendFuncSeparate)(GLcontext *ctx,
                              GLenum sfactorRGB, GLenum dfactorRGB,
                              GLenum sfactorA, GLenum dfactorA);
+#if 1
    void (*ClearColor)(GLcontext *ctx, const GLchan color[4]);
+#else
+   void (*ClearColor)(GLcontext *ctx, const GLfloat color[4]);
+#endif
    void (*ClearDepth)(GLcontext *ctx, GLclampd d);
    void (*ClearIndex)(GLcontext *ctx, GLuint index);
    void (*ClearStencil)(GLcontext *ctx, GLint s);
@@ -500,6 +459,7 @@ struct dd_function_table {
    void (*StencilFunc)(GLcontext *ctx, GLenum func, GLint ref, GLuint mask);
    void (*StencilMask)(GLcontext *ctx, GLuint mask);
    void (*StencilOp)(GLcontext *ctx, GLenum fail, GLenum zfail, GLenum zpass);
+   void (*ActiveStencilFace)(GLcontext *ctx, GLuint face);
    void (*TexGen)(GLcontext *ctx, GLenum coord, GLenum pname,
 		  const GLfloat *params);
    void (*TexEnv)(GLcontext *ctx, GLenum target, GLenum pname,

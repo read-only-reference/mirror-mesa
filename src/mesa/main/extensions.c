@@ -1,4 +1,4 @@
-/* $Id: extensions.c,v 1.76 2002/06/29 20:03:13 brianp Exp $ */
+/* $Id: extensions.c,v 1.81 2002/09/27 02:45:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -95,6 +95,7 @@ static struct {
    { OFF, "GL_EXT_shadow_funcs",               F(EXT_shadow_funcs) },
    { OFF, "GL_EXT_shared_texture_palette",     F(EXT_shared_texture_palette) },
    { OFF, "GL_EXT_stencil_wrap",               F(EXT_stencil_wrap) },
+   { OFF, "GL_EXT_stencil_two_side",           F(EXT_stencil_two_side) },
    { ON,  "GL_EXT_texture3D",                  F(EXT_texture3D) },
    { OFF, "GL_EXT_texture_compression_s3tc",   F(EXT_texture_compression_s3tc) },
    { OFF, "GL_EXT_texture_edge_clamp",         F(SGIS_texture_edge_clamp) },
@@ -108,9 +109,12 @@ static struct {
    { OFF, "GL_EXT_vertex_array_set",           F(EXT_vertex_array_set) },
    { OFF, "GL_HP_occlusion_test",              F(HP_occlusion_test) },
    { ON,  "GL_IBM_rasterpos_clip",             F(IBM_rasterpos_clip) },
+   { OFF, "GL_IBM_texture_mirrored_repeat",    F(ARB_texture_mirrored_repeat)},
    { OFF, "GL_INGR_blend_func_separate",       F(INGR_blend_func_separate) },
+   { OFF, "GL_MESA_pack_invert",               F(MESA_pack_invert) },
    { OFF, "GL_MESA_packed_depth_stencil",      0 },
    { OFF, "GL_MESA_resize_buffers",            F(MESA_resize_buffers) },
+   { OFF, "GL_MESA_ycbcr_texture",             F(MESA_ycbcr_texture) },
    { ON,  "GL_MESA_window_pos",                F(MESA_window_pos) },
    { OFF, "GL_NV_blend_square",                F(NV_blend_square) },
    { OFF, "GL_NV_point_sprite",                F(NV_point_sprite) },
@@ -128,7 +132,8 @@ static struct {
    { OFF, "GL_SGIX_pixel_texture",             F(SGIX_pixel_texture) },
    { OFF, "GL_SGIX_shadow",                    F(SGIX_shadow) },
    { OFF, "GL_SGIX_shadow_ambient",            F(SGIX_shadow_ambient) },
-   { OFF, "GL_3DFX_texture_compression_FXT1",  F(_3DFX_texture_compression_FXT1) }
+   { OFF, "GL_3DFX_texture_compression_FXT1",  F(TDFX_texture_compression_FXT1) },
+   { OFF, "GL_APPLE_client_storage",           F(APPLE_client_storage) }
 };
 
 
@@ -169,14 +174,18 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
       "GL_EXT_secondary_color",
       "GL_EXT_shared_texture_palette",
       "GL_EXT_stencil_wrap",
+      "GL_EXT_stencil_two_side",
       "GL_EXT_texture_edge_clamp",
       "GL_EXT_texture_env_add",
       "GL_EXT_texture_env_combine",
       "GL_EXT_texture_env_dot3",
       "GL_EXT_texture_lod_bias",
       "GL_HP_occlusion_test",
+      "GL_IBM_texture_mirrored_repeat",
       "GL_INGR_blend_func_separate",
+      "GL_MESA_pack_invert",
       "GL_MESA_resize_buffers",
+      "GL_MESA_ycbcr_texture",
       "GL_NV_blend_square",
       "GL_NV_point_sprite",
       "GL_NV_texture_rectangle",

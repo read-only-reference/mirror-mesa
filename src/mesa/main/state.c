@@ -1,4 +1,4 @@
-/* $Id: state.c,v 1.89 2002/07/09 01:22:50 brianp Exp $ */
+/* $Id: state.c,v 1.92 2002/09/27 02:45:38 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -491,6 +491,9 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    /* 262. GL_NV_point_sprite */
    exec->PointParameteriNV = _mesa_PointParameteriNV;
    exec->PointParameterivNV = _mesa_PointParameterivNV;
+
+   /* 268. GL_EXT_stencil_two_side */
+   exec->ActiveStencilFaceEXT = _mesa_ActiveStencilFaceEXT;
 
    /* ARB 1. GL_ARB_multitexture */
    exec->ActiveTextureARB = _mesa_ActiveTextureARB;
@@ -1038,9 +1041,6 @@ void _mesa_update_state( GLcontext *ctx )
    ASSERT(ctx->Driver.CopyTexSubImage2D);
    ASSERT(ctx->Driver.CopyTexSubImage3D);
    if (ctx->Extensions.ARB_texture_compression) {
-      ASSERT(ctx->Driver.BaseCompressedTexFormat);
-      ASSERT(ctx->Driver.CompressedTextureSize);
-      ASSERT(ctx->Driver.GetCompressedTexImage);
 #if 0  /* HW drivers need these, but not SW rasterizers */
       ASSERT(ctx->Driver.CompressedTexImage1D);
       ASSERT(ctx->Driver.CompressedTexImage2D);

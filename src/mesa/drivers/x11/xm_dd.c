@@ -1,4 +1,4 @@
-/* $Id: xm_dd.c,v 1.34 2002/07/09 01:22:52 brianp Exp $ */
+/* $Id: xm_dd.c,v 1.36 2002/09/27 02:45:39 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -208,6 +208,7 @@ index_mask( GLcontext *ctx, GLuint mask )
          m = (unsigned long) mask;
       }
       XMesaSetPlaneMask( xmesa->display, xmesa->xm_draw_buffer->cleargc, m );
+      XMesaSetPlaneMask( xmesa->display, xmesa->xm_draw_buffer->gc, m );
    }
 }
 
@@ -952,9 +953,12 @@ void xmesa_init_pointers( GLcontext *ctx )
    ctx->Driver.CopyTexSubImage2D = _swrast_copy_texsubimage2d;
    ctx->Driver.CopyTexSubImage3D = _swrast_copy_texsubimage3d;
 
-   ctx->Driver.BaseCompressedTexFormat = _mesa_base_compressed_texformat;
-   ctx->Driver.CompressedTextureSize = _mesa_compressed_texture_size;
-   ctx->Driver.GetCompressedTexImage = _mesa_get_compressed_teximage;
+   ctx->Driver.CompressedTexImage1D = _mesa_store_compressed_teximage1d;
+   ctx->Driver.CompressedTexImage2D = _mesa_store_compressed_teximage2d;
+   ctx->Driver.CompressedTexImage3D = _mesa_store_compressed_teximage3d;
+   ctx->Driver.CompressedTexSubImage1D = _mesa_store_compressed_texsubimage1d;
+   ctx->Driver.CompressedTexSubImage2D = _mesa_store_compressed_texsubimage2d;
+   ctx->Driver.CompressedTexSubImage3D = _mesa_store_compressed_texsubimage3d;
 
    /* Swrast hooks for imaging extensions:
     */

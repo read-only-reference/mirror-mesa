@@ -23,7 +23,7 @@
  */
 
 /*
- * DOS/DJGPP device driver v1.0 for Mesa 4.0
+ * DOS/DJGPP device driver v1.1 for Mesa 4.0
  *
  *  Copyright (C) 2002 - Borca Daniel
  *  Email : dborca@yahoo.com
@@ -34,15 +34,15 @@
 #ifndef VIDEO_H_included
 #define VIDEO_H_included
 
-int vl_video_init (int width, int height, int bpp);
-void vl_video_exit (int textmode);
+int vl_video_init (int width, int height, int bpp, int refresh);
+void vl_video_exit (void);
 
 void *vl_sync_buffer (void *buffer, int x, int y, int width, int height);
 
-extern void (*vl_clear) (void *buffer, int len, int color);
+extern void (*vl_clear) (void *buffer, int bytes, int color);
 void vl_rect (void *buffer, int x, int y, int width, int height, int color);
 
-void (*vl_flip) (void *buffer, int width, int height);
+void (*vl_flip) (void *buffer, int stride, int height);
 
 extern int (*vl_mixrgba) (const unsigned char rgba[]);
 extern int (*vl_mixrgb) (const unsigned char rgb[]);

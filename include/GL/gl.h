@@ -1,4 +1,4 @@
-/* $Id: gl.h,v 1.68 2002/08/29 14:02:27 brianp Exp $ */
+/* $Id: gl.h,v 1.71 2002/09/21 16:47:09 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -63,6 +63,10 @@
 #  define GLAPIENTRY
 #endif /* WIN32 / CYGWIN bracket */
 
+#if (defined(__BEOS__) && defined(__POWERPC__)) || defined(__QUICKDRAW__)
+#  define PRAGMA_EXPORT_SUPPORTED		1
+#endif
+
 #if defined(_WIN32) && !defined(_WINGDI_) && !defined(_GNU_H_WINDOWS32_DEFINES) && !defined(OPENSTEP) && !defined(__CYGWIN__)
 #include <gl/mesa_wgl.h>
 #endif
@@ -79,10 +83,10 @@
 #define signed
 #endif
 
-
-#if defined(__BEOS__) || defined(__QUICKDRAW__)
+#if defined(PRAGMA_EXPORT_SUPPORTED)
 #pragma export on
 #endif
+
 /*
  * End system-specific stuff.
  **********************************************************************/
@@ -724,6 +728,7 @@ typedef double		GLclampd;	/* double precision float in [0,1] */
 #define GL_CLIENT_VERTEX_ARRAY_BIT		0x00000002
 #define GL_ALL_CLIENT_ATTRIB_BITS 		0xFFFFFFFF
 #define GL_CLIENT_ALL_ATTRIB_BITS 		0xFFFFFFFF
+
 
 
 /*
@@ -2536,23 +2541,7 @@ GLAPI void GLAPIENTRY glResizeBuffersMESA( void );
 
 #else  /* GL_GLEXT_LEGACY */
 
-
 #include <GL/glext.h>
-
-/* fix-up known errors in glext.h */
-#ifndef GL_TEXTURE_BINDING_3D
-#define GL_TEXTURE_BINDING_3D		   0x806A
-#endif
-#ifdef GL_IGNORE_BORDER
-#undef GL_IGNORE_BORDER /* invalid! */
-#endif
-#ifdef GL_WRAP_BORDER
-#undef GL_WRAP_BORDER /* invalid! */
-#endif
-#ifndef GL_POST_COLOR_MATRIX_ALPHA_BIAS
-#define GL_POST_COLOR_MATRIX_ALPHA_BIAS    0x80BB
-#endif
-
 
 #endif  /* GL_GLEXT_LEGACY */
 
@@ -2605,11 +2594,50 @@ GLAPI void GLAPIENTRY glTracePointerRangeMESA( const GLvoid* first, const GLvoid
 #endif /* GL_MESA_packed_depth_stencil */
 
 
+#ifndef GL_MESA_ycbcr_texture
+#define GL_MESA_ycbcr_texture 1
+
+#define GL_YCBCR_MESA				0x8757
+#define GL_UNSIGNED_SHORT_8_8_MESA		0x85BA /* same as Apple */
+#define GL_UNSIGNED_SHORT_8_8_REV_MESA		0x85BB /* same as Apple */
+
+#endif /* GL_MESA_texture_ycbcr */
+
+
+
+#ifndef GL_MESA_pack_invert
+#define GL_MESA_pack_invert 1
+
+#define GL_PACK_INVERT_MESA                     0x8758
+
+#endif /* GL_MESA_pack_invert */
+
+
+
+#ifndef GL_APPLE_client_storage
+#define GL_APPLE_client_storage 1
+
+#define GL_UNPACK_CLIENT_STORAGE_APPLE          0x85B2
+
+#endif /* GL_APPLE_client_storage */
+
+
+
+#ifndef GL_APPLE_ycbcr_422
+#define GL_APPLE_ycbcr_422 1
+
+#define GL_YCBCR_422_APPLE			0x85B9
+#define GL_UNSIGNED_SHORT_8_8_APPLE		0x85BA
+#define GL_UNSIGNED_SHORT_8_8_REV_APPLE		0x85BB
+
+#endif /* GL_APPLE_ycbcr_422 */
+
+
 
 /**********************************************************************
  * Begin system-specific stuff
  */
-#if defined(__BEOS__) || defined(__QUICKDRAW__)
+#if defined(PRAGMA_EXPORT_SUPPORTED)
 #pragma export off
 #endif
 

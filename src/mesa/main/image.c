@@ -1,4 +1,4 @@
-/* $Id: image.c,v 1.66 2002/04/26 13:59:09 brianp Exp $ */
+/* $Id: image.c,v 1.68 2002/09/21 17:34:56 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -57,7 +57,9 @@ const struct gl_pixelstore_attrib _mesa_native_packing = {
    0,            /* ImageHeight */
    0,            /* SkipImages */
    GL_FALSE,     /* SwapBytes */
-   GL_FALSE      /* LsbFirst */
+   GL_FALSE,     /* LsbFirst */
+   GL_FALSE,     /* ClientStorage */
+   GL_FALSE      /* Invert */
 };
 
 
@@ -203,6 +205,9 @@ GLint _mesa_sizeof_packed_type( GLenum type )
          return sizeof(GLuint);
       case GL_UNSIGNED_INT_2_10_10_10_REV:
          return sizeof(GLuint);
+      case GL_UNSIGNED_SHORT_8_8_MESA:
+      case GL_UNSIGNED_SHORT_8_8_REV_MESA:
+          return sizeof(GLushort);      
       default:
          return -1;
    }
@@ -245,6 +250,8 @@ GLint _mesa_components_in_format( GLenum format )
 	 return 4;
       case GL_ABGR_EXT:
          return 4;
+      case GL_YCBCR_MESA:
+         return 2;
       default:
          return -1;
    }
@@ -301,6 +308,12 @@ GLint _mesa_bytes_per_pixel( GLenum format, GLenum type )
       case GL_UNSIGNED_INT_2_10_10_10_REV:
          if (format == GL_RGBA || format == GL_BGRA || format == GL_ABGR_EXT)
             return sizeof(GLuint);
+         else
+            return -1;
+      case GL_UNSIGNED_SHORT_8_8_MESA:
+      case GL_UNSIGNED_SHORT_8_8_REV_MESA:
+         if (format == GL_YCBCR_MESA)
+            return sizeof(GLushort);
          else
             return -1;
       default:
@@ -393,6 +406,12 @@ _mesa_is_legal_format_and_type( GLenum format, GLenum type )
             default:
                return GL_FALSE;
          }
+      case GL_YCBCR_MESA:
+         if (type == GL_UNSIGNED_SHORT_8_8_MESA ||
+             type == GL_UNSIGNED_SHORT_8_8_REV_MESA)
+            return GL_TRUE;
+         else
+            return GL_FALSE;
       default:
          ; /* fall-through */
    }
@@ -476,6 +495,7 @@ _mesa_image_address( const struct gl_pixelstore_attrib *packing,
    else {
       /* Non-BITMAP data */
       GLint bytes_per_pixel, bytes_per_row, remainder, bytes_per_image;
+      GLint topOfImage;
 
       bytes_per_pixel = _mesa_bytes_per_pixel( format, type );
 
@@ -491,9 +511,19 @@ _mesa_image_address( const struct gl_pixelstore_attrib *packing,
 
       bytes_per_image = bytes_per_row * rows_per_image;
 
+      if (packing->Invert) {
+         /* set pixel_addr to the last row */
+         topOfImage = bytes_per_row * (height - 1);
+         bytes_per_row = -bytes_per_row;
+      }
+      else {
+         topOfImage = 0;
+      }
+
       /* compute final pixel address */
       pixel_addr = (GLubyte *) image
                  + (skipimages + img) * bytes_per_image
+                 + topOfImage
                  + (skiprows + row) * bytes_per_row
                  + (skippixels + column) * bytes_per_pixel;
    }
@@ -514,14 +544,18 @@ _mesa_image_row_stride( const struct gl_pixelstore_attrib *packing,
    ASSERT(packing);
    if (type == GL_BITMAP) {
       /* BITMAP data */
+      GLint bytes;
       if (packing->RowLength == 0) {
-         GLint bytes = (width + 7) / 8;
-         return bytes;
+         bytes = (width + 7) / 8;
       }
       else {
-         GLint bytes = (packing->RowLength + 7) / 8;
-         return bytes;
+         bytes = (packing->RowLength + 7) / 8;
       }
+      if (packing->Invert) {
+         /* negate the bytes per row (negative row stride) */
+         bytes = -bytes;
+      }
+      return bytes;
    }
    else {
       /* Non-BITMAP data */
@@ -538,6 +572,8 @@ _mesa_image_row_stride( const struct gl_pixelstore_attrib *packing,
       remainder = bytesPerRow % packing->Alignment;
       if (remainder > 0)
          bytesPerRow += (packing->Alignment - remainder);
+      if (packing->Invert)
+         bytesPerRow = -bytesPerRow;
       return bytesPerRow;
    }
 }

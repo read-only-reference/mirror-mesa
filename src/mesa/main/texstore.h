@@ -1,10 +1,10 @@
-/* $Id: texstore.h,v 1.9 2001/06/15 14:18:46 brianp Exp $ */
+/* $Id: texstore.h,v 1.11 2002/09/27 02:45:38 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -136,10 +136,33 @@ _mesa_store_compressed_teximage3d(GLcontext *ctx, GLenum target, GLint level,
 
 
 extern void
-_mesa_get_compressed_teximage(GLcontext *ctx, GLenum target,
-                              GLint level, void *image,
-                              const struct gl_texture_object *texObj,
-                              struct gl_texture_image *texImage);
+_mesa_store_compressed_texsubimage1d(GLcontext *ctx, GLenum target,
+                                     GLint level,
+                                     GLint xoffset, GLsizei width,
+                                     GLenum format,
+                                     GLsizei imageSize, const GLvoid *data,
+                                     struct gl_texture_object *texObj,
+                                     struct gl_texture_image *texImage);
+
+extern void
+_mesa_store_compressed_texsubimage2d(GLcontext *ctx, GLenum target,
+                                     GLint level,
+                                     GLint xoffset, GLint yoffset,
+                                     GLsizei width, GLsizei height,
+                                     GLenum format,
+                                     GLsizei imageSize, const GLvoid *data,
+                                     struct gl_texture_object *texObj,
+                                     struct gl_texture_image *texImage);
+
+extern void
+_mesa_store_compressed_texsubimage3d(GLcontext *ctx, GLenum target,
+                                GLint level,
+                                GLint xoffset, GLint yoffset, GLint zoffset,
+                                GLsizei width, GLsizei height, GLsizei depth,
+                                GLenum format,
+                                GLsizei imageSize, const GLvoid *data,
+                                struct gl_texture_object *texObj,
+                                struct gl_texture_image *texImage);
 
 
 extern GLboolean
@@ -149,7 +172,7 @@ _mesa_test_proxy_teximage(GLcontext *ctx, GLenum target, GLint level,
 
 
 extern void
-_mesa_generate_mipmap(GLcontext *ctx,
+_mesa_generate_mipmap(GLcontext *ctx, GLenum target,
                       const struct gl_texture_unit *texUnit,
                       struct gl_texture_object *texObj);
 

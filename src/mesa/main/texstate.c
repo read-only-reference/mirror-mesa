@@ -1,4 +1,4 @@
-/* $Id: texstate.c,v 1.77 2002/06/29 19:48:16 brianp Exp $ */
+/* $Id: texstate.c,v 1.79 2002/09/27 02:45:38 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -463,7 +463,7 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
    else if (target == GL_TEXTURE_FILTER_CONTROL_EXT) {
       /* GL_EXT_texture_lod_bias */
       if (!ctx->Extensions.EXT_texture_lod_bias) {
-	 _mesa_error( ctx, GL_INVALID_ENUM, "glTexEnv(target)" );
+	 _mesa_error( ctx, GL_INVALID_ENUM, "glTexEnv(target=0x%x)", target );
 	 return;
       }
       if (pname == GL_TEXTURE_LOD_BIAS_EXT) {
@@ -481,7 +481,7 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
    else if (target == GL_POINT_SPRITE_NV) {
       /* GL_NV_point_sprite */
       if (!ctx->Extensions.NV_point_sprite) {
-	 _mesa_error( ctx, GL_INVALID_ENUM, "glTexEnv(target)" );
+	 _mesa_error( ctx, GL_INVALID_ENUM, "glTexEnv(target=0x%x)", target );
 	 return;
       }
       if (pname == GL_COORD_REPLACE_NV) {
@@ -497,17 +497,17 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
             ctx->Point.CoordReplace[ctx->Texture.CurrentUnit] = state;
          }
          else {
-            _mesa_error( ctx, GL_INVALID_VALUE, "glTexEnv(param)" );
+            _mesa_error( ctx, GL_INVALID_VALUE, "glTexEnv(param=0x%x)", value);
             return;
          }
       }
       else {
-         _mesa_error( ctx, GL_INVALID_ENUM, "glTexEnv(pname)" );
+         _mesa_error( ctx, GL_INVALID_ENUM, "glTexEnv(pname=0x%x)", pname );
          return;
       }
    }
    else {
-      _mesa_error( ctx, GL_INVALID_ENUM, "glTexEnv(target)" );
+      _mesa_error( ctx, GL_INVALID_ENUM, "glTexEnv(target=0x%x)",target );
       return;
    }
 
@@ -1461,7 +1461,7 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
       maxLevels = 1;
       break;
    default:
-      _mesa_printf(ctx, "bad target in _mesa_GetTexLevelParameter (0x%x)", target);
+      _mesa_problem(ctx, "switch in _mesa_GetTexLevelParameter");
       return;
    }
 
@@ -1557,7 +1557,8 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
          if (ctx->Extensions.SGIX_depth_texture)
             *params = img->TexFormat->DepthBits;
          else
-            _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(pname)");
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetTexLevelParameter[if]v(pname)");
          return;
 
       /* GL_ARB_texture_compression */
@@ -1567,10 +1568,11 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
                *params = img->CompressedSize;
             else
                _mesa_error(ctx, GL_INVALID_OPERATION,
-                        "glGetTexLevelParameter[if]v(pname)");
+                           "glGetTexLevelParameter[if]v(pname)");
          }
          else {
-            _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(pname)");
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetTexLevelParameter[if]v(pname)");
          }
          return;
       case GL_TEXTURE_COMPRESSED_ARB:
@@ -1578,12 +1580,14 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
             *params = (GLint) img->IsCompressed;
          }
          else {
-            _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(pname)");
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetTexLevelParameter[if]v(pname)");
          }
          return;
 
       default:
-         _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(pname)");
+         _mesa_error(ctx, GL_INVALID_ENUM,
+                     "glGetTexLevelParameter[if]v(pname)");
    }
 }
 

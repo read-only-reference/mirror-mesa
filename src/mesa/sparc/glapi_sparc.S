@@ -9660,6 +9660,27 @@ glMultTransposeMatrixd:
 	jmpl	%g3, %g0
 	nop
 
+.globl glSampleCoverage
+.type glSampleCoverage,#function
+glSampleCoverage:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SampleCoverageARB), %g2
+	or	%g2, %lo(8 * _gloffset_SampleCoverageARB), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SampleCoverageARB)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
 .globl glCompressedTexImage3D
 .type glCompressedTexImage3D,#function
 glCompressedTexImage3D:
@@ -14091,6 +14112,153 @@ glSamplePatternEXT:
 	jmpl	%g3, %g0
 	nop
 
+.globl glDeleteFencesNV
+.type glDeleteFencesNV,#function
+glDeleteFencesNV:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_DeleteFencesNV), %g2
+	or	%g2, %lo(8 * _gloffset_DeleteFencesNV), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_DeleteFencesNV)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glGenFencesNV
+.type glGenFencesNV,#function
+glGenFencesNV:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_GenFencesNV), %g2
+	or	%g2, %lo(8 * _gloffset_GenFencesNV), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_GenFencesNV)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glIsFenceNV
+.type glIsFenceNV,#function
+glIsFenceNV:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_IsFenceNV), %g2
+	or	%g2, %lo(8 * _gloffset_IsFenceNV), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_IsFenceNV)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glTestFenceNV
+.type glTestFenceNV,#function
+glTestFenceNV:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_TestFenceNV), %g2
+	or	%g2, %lo(8 * _gloffset_TestFenceNV), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_TestFenceNV)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glGetFenceivNV
+.type glGetFenceivNV,#function
+glGetFenceivNV:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_GetFenceivNV), %g2
+	or	%g2, %lo(8 * _gloffset_GetFenceivNV), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_GetFenceivNV)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glFinishFenceNV
+.type glFinishFenceNV,#function
+glFinishFenceNV:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_FinishFenceNV), %g2
+	or	%g2, %lo(8 * _gloffset_FinishFenceNV), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_FinishFenceNV)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSetFenceNV
+.type glSetFenceNV,#function
+glSetFenceNV:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SetFenceNV), %g2
+	or	%g2, %lo(8 * _gloffset_SetFenceNV), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SetFenceNV)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
 .globl glWindowPos2dARB
 .type glWindowPos2dARB,#function
 glWindowPos2dARB:
@@ -15809,6 +15977,804 @@ glPointParameterivNV:
 	sethi	%hi(0x00000000), %g1
 	ld	[%g1 + %lo(0x00000000)], %g1
 	ld	[%g1 + (4 * _gloffset_PointParameterivNV)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glPointParameterf
+.type glPointParameterf,#function
+glPointParameterf:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_PointParameterfEXT), %g2
+	or	%g2, %lo(8 * _gloffset_PointParameterfEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_PointParameterfEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glPointParameterfv
+.type glPointParameterfv,#function
+glPointParameterfv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_PointParameterfvEXT), %g2
+	or	%g2, %lo(8 * _gloffset_PointParameterfvEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_PointParameterfvEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glPointParameteri
+.type glPointParameteri,#function
+glPointParameteri:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_PointParameteriNV), %g2
+	or	%g2, %lo(8 * _gloffset_PointParameteriNV), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_PointParameteriNV)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glPointParameteriv
+.type glPointParameteriv,#function
+glPointParameteriv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_PointParameterivNV), %g2
+	or	%g2, %lo(8 * _gloffset_PointParameterivNV), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_PointParameterivNV)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3b
+.type glSecondaryColor3b,#function
+glSecondaryColor3b:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3bEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3bEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3bEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3bv
+.type glSecondaryColor3bv,#function
+glSecondaryColor3bv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3bvEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3bvEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3bvEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3d
+.type glSecondaryColor3d,#function
+glSecondaryColor3d:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3dEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3dEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3dEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3dv
+.type glSecondaryColor3dv,#function
+glSecondaryColor3dv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3dvEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3dvEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3dvEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3f
+.type glSecondaryColor3f,#function
+glSecondaryColor3f:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3fEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3fEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3fEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3fv
+.type glSecondaryColor3fv,#function
+glSecondaryColor3fv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3fvEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3fvEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3fvEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3i
+.type glSecondaryColor3i,#function
+glSecondaryColor3i:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3iEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3iEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3iEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3iv
+.type glSecondaryColor3iv,#function
+glSecondaryColor3iv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3ivEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3ivEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3ivEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3s
+.type glSecondaryColor3s,#function
+glSecondaryColor3s:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3sEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3sEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3sEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3sv
+.type glSecondaryColor3sv,#function
+glSecondaryColor3sv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3svEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3svEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3svEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3ub
+.type glSecondaryColor3ub,#function
+glSecondaryColor3ub:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3ubEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3ubEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3ubEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3ubv
+.type glSecondaryColor3ubv,#function
+glSecondaryColor3ubv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3ubvEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3ubvEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3ubvEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3ui
+.type glSecondaryColor3ui,#function
+glSecondaryColor3ui:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3uiEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3uiEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3uiEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3uiv
+.type glSecondaryColor3uiv,#function
+glSecondaryColor3uiv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3uivEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3uivEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3uivEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3us
+.type glSecondaryColor3us,#function
+glSecondaryColor3us:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3usEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3usEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3usEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColor3usv
+.type glSecondaryColor3usv,#function
+glSecondaryColor3usv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColor3usvEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColor3usvEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColor3usvEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glSecondaryColorPointer
+.type glSecondaryColorPointer,#function
+glSecondaryColorPointer:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_SecondaryColorPointerEXT), %g2
+	or	%g2, %lo(8 * _gloffset_SecondaryColorPointerEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_SecondaryColorPointerEXT)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos2d
+.type glWindowPos2d,#function
+glWindowPos2d:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos2dMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos2dMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos2dMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos2dv
+.type glWindowPos2dv,#function
+glWindowPos2dv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos2dvMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos2dvMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos2dvMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos2f
+.type glWindowPos2f,#function
+glWindowPos2f:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos2fMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos2fMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos2fMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos2fv
+.type glWindowPos2fv,#function
+glWindowPos2fv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos2fvMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos2fvMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos2fvMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos2i
+.type glWindowPos2i,#function
+glWindowPos2i:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos2iMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos2iMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos2iMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos2iv
+.type glWindowPos2iv,#function
+glWindowPos2iv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos2ivMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos2ivMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos2ivMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos2s
+.type glWindowPos2s,#function
+glWindowPos2s:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos2sMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos2sMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos2sMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos2sv
+.type glWindowPos2sv,#function
+glWindowPos2sv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos2svMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos2svMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos2svMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos3d
+.type glWindowPos3d,#function
+glWindowPos3d:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos3dMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos3dMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos3dMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos3dv
+.type glWindowPos3dv,#function
+glWindowPos3dv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos3dvMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos3dvMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos3dvMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos3f
+.type glWindowPos3f,#function
+glWindowPos3f:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos3fMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos3fMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos3fMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos3fv
+.type glWindowPos3fv,#function
+glWindowPos3fv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos3fvMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos3fvMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos3fvMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos3i
+.type glWindowPos3i,#function
+glWindowPos3i:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos3iMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos3iMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos3iMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos3iv
+.type glWindowPos3iv,#function
+glWindowPos3iv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos3ivMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos3ivMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos3ivMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos3s
+.type glWindowPos3s,#function
+glWindowPos3s:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos3sMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos3sMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos3sMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glWindowPos3sv
+.type glWindowPos3sv,#function
+glWindowPos3sv:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_WindowPos3svMESA), %g2
+	or	%g2, %lo(8 * _gloffset_WindowPos3svMESA), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_WindowPos3svMESA)], %g3
+#endif
+	jmpl	%g3, %g0
+	nop
+
+.globl glActiveStencilFaceEXT
+.type glActiveStencilFaceEXT,#function
+glActiveStencilFaceEXT:
+#ifdef __sparc_v9__
+	sethi	%hi(0x00000000), %g2
+	sethi	%hi(0x00000000), %g1
+	or	%g2, %lo(0x00000000), %g2
+	or	%g1, %lo(0x00000000), %g1
+	sllx	%g2, 32, %g2
+	ldx	[%g1 + %g2], %g1
+	sethi	%hi(8 * _gloffset_ActiveStencilFaceEXT), %g2
+	or	%g2, %lo(8 * _gloffset_ActiveStencilFaceEXT), %g2
+	ldx	[%g1 + %g2], %g3
+#else
+	sethi	%hi(0x00000000), %g1
+	ld	[%g1 + %lo(0x00000000)], %g1
+	ld	[%g1 + (4 * _gloffset_ActiveStencilFaceEXT)], %g3
 #endif
 	jmpl	%g3, %g0
 	nop

@@ -58,6 +58,7 @@ CORE_SOURCES =accum.c \
 	rastpos.c \
 	state.c \
 	stencil.c \
+	texcompress.c \
 	texformat.c \
 	teximage.c \
 	texobj.c \
@@ -68,6 +69,7 @@ CORE_SOURCES =accum.c \
 	vtxfmt.c \
 	vpstate.c \
 	vpexec.c \
+	vsnprintf.c \
 	vtparse.c \
 	[.x86]x86.c
 
@@ -199,6 +201,7 @@ polygon.obj,\
 rastpos.obj,\
 state.obj,\
 stencil.obj,\
+texcompress.obj,\
 texformat.obj,\
 teximage.obj,\
 texobj.obj,\
@@ -210,14 +213,14 @@ vtxfmt.obj,\
 vpstate.obj,\
 vpexec.obj,\
 vpparse.obj,\
-[.x86]x86.obj
+vsnprintf.obj
 
 OBJECTS4=[.x]glxapi.obj,[.x]fakeglx.obj,[.x]xfonts.obj,\
 [.x]xm_api.obj,[.x]xm_dd.obj,[.x]xm_line.obj,[.x]xm_span.obj,[.x]xm_tri.obj,\
 [.osmesa]osmesa.obj,\
 [.svga]svgamesa.obj
 
-OBJECTS5=[.fx]fxapi.obj,[.fx]fxdd.obj,[.fx]fxddtex.obj
+OBJECTS5=[.fx]fxapi.obj,[.fx]fxdd.obj,[.fx]fxddtex.obj,[.x86]x86.obj
 
 OBJECTS6=[.fx]fxddspan.obj,\
 [.fx]fxsetup.obj,\

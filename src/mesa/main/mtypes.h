@@ -1,4 +1,4 @@
-/* $Id: mtypes.h,v 1.84 2002/07/09 01:22:50 brianp Exp $ */
+/* $Id: mtypes.h,v 1.89 2002/09/27 02:45:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -311,7 +311,11 @@ struct gl_accum_attrib {
 
 struct gl_colorbuffer_attrib {
    GLuint ClearIndex;			/* Index to use for glClear */
+#if 1
    GLchan ClearColor[4];		/* Color to use for glClear */
+#else
+   GLclampf ClearColor[4];		/* Color to use for glClear */
+#endif
 
    GLuint IndexMask;			/* Color index write mask */
    GLubyte ColorMask[4];		/* Each flag is 0xff or 0x0 */
@@ -323,7 +327,11 @@ struct gl_colorbuffer_attrib {
    /* alpha testing */
    GLboolean AlphaEnabled;		/* Alpha test enabled flag */
    GLenum AlphaFunc;			/* Alpha test function */
+#if 1
    GLchan AlphaRef;			/* Alpha ref value as GLchan */
+#else
+   GLclampf AlphaRef;
+#endif
 
    /* blending */
    GLboolean BlendEnabled;		/* Blending enabled flag */
@@ -708,14 +716,16 @@ struct gl_scissor_attrib {
 
 struct gl_stencil_attrib {
    GLboolean Enabled;		/* Enabled flag */
-   GLenum Function;		/* Stencil function */
-   GLenum FailFunc;		/* Fail function */
-   GLenum ZPassFunc;		/* Depth buffer pass function */
-   GLenum ZFailFunc;		/* Depth buffer fail function */
-   GLstencil Ref;		/* Reference value */
-   GLstencil ValueMask;		/* Value mask */
+   GLboolean TestTwoSide;	/* GL_EXT_stencil_two_side */
+   GLubyte ActiveFace;		/* GL_EXT_stencil_two_side (0 or 1) */
+   GLenum Function[2];		/* Stencil function */
+   GLenum FailFunc[2];		/* Fail function */
+   GLenum ZPassFunc[2];		/* Depth buffer pass function */
+   GLenum ZFailFunc[2];		/* Depth buffer fail function */
+   GLstencil Ref[2];		/* Reference value */
+   GLstencil ValueMask[2];	/* Value mask */
+   GLstencil WriteMask[2];	/* Write mask */
    GLstencil Clear;		/* Clear value */
-   GLstencil WriteMask;		/* Write mask */
 };
 
 
@@ -799,18 +809,16 @@ struct gl_texture_format {
                                  * GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA,
                                  * GL_COLOR_INDEX or GL_DEPTH_COMPONENT.
                                  */
-   GLenum Type;			/* Internal type as GL enum value - UNUSED?? */
-
    GLubyte RedBits;		/* Bits per texel component */
-   GLubyte GreenBits;
-   GLubyte BlueBits;
+   GLubyte GreenBits;		/* These are just rough approximations for */
+   GLubyte BlueBits;		/* compressed texture formats. */
    GLubyte AlphaBits;
    GLubyte LuminanceBits;
    GLubyte IntensityBits;
    GLubyte IndexBits;
    GLubyte DepthBits;
 
-   GLint TexelBytes;
+   GLint TexelBytes;		/* Bytes per texel (0 for compressed formats */
 
    FetchTexelFunc FetchTexel1D;	/* Texel fetch function pointers */
    FetchTexelFunc FetchTexel2D;
@@ -823,12 +831,14 @@ struct gl_texture_image {
    GLenum Format;		/* GL_ALPHA, GL_LUMINANCE, GL_LUMINANCE_ALPHA,
 				 * GL_INTENSITY, GL_RGB, GL_RGBA,
                                  * GL_COLOR_INDEX or GL_DEPTH_COMPONENT only.
+                                 * Used for choosing TexEnv arithmetic.
 				 */
    GLint IntFormat;		/* Internal format as given by the user */
    GLuint Border;		/* 0 or 1 */
    GLuint Width;		/* = 2^WidthLog2 + 2*Border */
    GLuint Height;		/* = 2^HeightLog2 + 2*Border */
    GLuint Depth;		/* = 2^DepthLog2 + 2*Border */
+   GLuint RowStride;		/* == Width unless IsClientData and padded */
    GLuint Width2;		/* = Width - 2*Border */
    GLuint Height2;		/* = Height - 2*Border */
    GLuint Depth2;		/* = Depth - 2*Border */
@@ -840,6 +850,8 @@ struct gl_texture_image {
    GLfloat HeightScale;		/* used for mipmap lod computation */
    GLfloat DepthScale;		/* used for mipmap lod computation */
    GLvoid *Data;		/* Image data, accessed via FetchTexel() */
+   GLboolean IsClientData;	/* Data owned by client? */
+
 
    const struct gl_texture_format *TexFormat;
 
@@ -861,7 +873,10 @@ struct gl_texture_object {
    GLenum Target;               /* GL_TEXTURE_1D, GL_TEXTURE_2D, etc. */
    GLfloat Priority;		/* in [0,1] */
    GLfloat BorderValues[4];     /* unclamped */
+#if 1
+   /* omit someday */
    GLchan BorderColor[4];       /* clamped, as GLchan */
+#endif
    GLenum WrapS;		/* Wrap modes are: GL_CLAMP, REPEAT */
    GLenum WrapT;		/*   GL_CLAMP_TO_EDGE, and          */
    GLenum WrapR;		/*   GL_CLAMP_TO_BORDER_ARB         */
@@ -874,7 +889,11 @@ struct gl_texture_object {
    GLfloat MaxAnisotropy;	/* GL_EXT_texture_filter_anisotropic */
    GLboolean CompareFlag;	/* GL_SGIX_shadow */
    GLenum CompareOperator;	/* GL_SGIX_shadow */
+#if 1
    GLchan ShadowAmbient;	/* GL_SGIX/ARB_shadow_ambient */
+#else
+   GLfloat ShadowAmbient;
+#endif
    GLenum CompareMode;		/* GL_ARB_shadow */
    GLenum CompareFunc;		/* GL_ARB_shadow */
    GLenum DepthMode;		/* GL_ARB_depth_texture */
@@ -1025,6 +1044,8 @@ struct gl_pixelstore_attrib {
    GLint SkipImages;      /* for GL_EXT_texture3D */
    GLboolean SwapBytes;
    GLboolean LsbFirst;
+   GLboolean ClientStorage; /* GL_APPLE_client_storage */
+   GLboolean Invert;        /* GL_MESA_pack_invert */
 };
 
 
@@ -1310,11 +1331,17 @@ struct gl_frame_buffer {
    GLaccum *Accum;		/* array [4*Width*Height] of GLaccum values */
 
    /* Software alpha planes */
+#if 1
    GLchan *FrontLeftAlpha;	/* array [Width*Height] of GLubyte */
    GLchan *BackLeftAlpha;	/* array [Width*Height] of GLubyte */
    GLchan *FrontRightAlpha;	/* array [Width*Height] of GLubyte */
    GLchan *BackRightAlpha;	/* array [Width*Height] of GLubyte */
-
+#else
+   GLvoid *FrontLeftAlpha;	/* array [Width*Height] of GLubyte */
+   GLvoid *BackLeftAlpha;	/* array [Width*Height] of GLubyte */
+   GLvoid *FrontRightAlpha;	/* array [Width*Height] of GLubyte */
+   GLvoid *BackRightAlpha;	/* array [Width*Height] of GLubyte */
+#endif
    /* Drawing bounds: intersection of window size and scissor box */
    GLint _Xmin, _Ymin;  /* inclusive */
    GLint _Xmax, _Ymax;  /* exclusive */
@@ -1345,8 +1372,6 @@ struct gl_constants {
    GLuint MaxColorTableSize;
    GLuint MaxConvolutionWidth;
    GLuint MaxConvolutionHeight;
-   GLuint NumCompressedTextureFormats;	/* GL_ARB_texture_compression */
-   GLenum CompressedTextureFormats[MAX_COMPRESSED_TEXTURE_FORMATS];
    GLuint MaxClipPlanes;
    GLuint MaxLights;
 };
@@ -1395,6 +1420,7 @@ struct gl_extensions {
    GLboolean EXT_secondary_color;
    GLboolean EXT_shared_texture_palette;
    GLboolean EXT_stencil_wrap;
+   GLboolean EXT_stencil_two_side;
    GLboolean EXT_texture3D;
    GLboolean EXT_texture_compression_s3tc;
    GLboolean EXT_texture_env_add;
@@ -1407,9 +1433,10 @@ struct gl_extensions {
    GLboolean HP_occlusion_test;
    GLboolean IBM_rasterpos_clip;
    GLboolean INGR_blend_func_separate;
+   GLboolean MESA_pack_invert;
    GLboolean MESA_window_pos;
    GLboolean MESA_resize_buffers;
-   GLboolean MESA_sprite_point;
+   GLboolean MESA_ycbcr_texture;
    GLboolean NV_blend_square;
    GLboolean NV_point_sprite;
    GLboolean NV_texture_rectangle;
@@ -1425,7 +1452,8 @@ struct gl_extensions {
    GLboolean SGIX_pixel_texture;
    GLboolean SGIX_shadow;
    GLboolean SGIX_shadow_ambient; /* or GL_ARB_shadow_ambient */
-   GLboolean _3DFX_texture_compression_FXT1;
+   GLboolean TDFX_texture_compression_FXT1;
+   GLboolean APPLE_client_storage;
 };
 
 

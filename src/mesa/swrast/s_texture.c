@@ -1,4 +1,4 @@
-/* $Id: s_texture.c,v 1.65 2002/08/07 00:45:07 brianp Exp $ */
+/* $Id: s_texture.c,v 1.67 2002/09/23 16:37:15 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -1119,7 +1119,8 @@ sample_linear_2d( GLcontext *ctx, GLuint texUnit,
  * Optimized 2-D texture sampling:
  *    S and T wrap mode == GL_REPEAT
  *    GL_NEAREST min/mag filter
- *    No border
+ *    No border, 
+ *    RowStride == Width,
  *    Format = GL_RGB
  */
 static void
@@ -1158,6 +1159,7 @@ opt_sample_rgb_2d( GLcontext *ctx, GLuint texUnit,
  *    S and T wrap mode == GL_REPEAT
  *    GL_NEAREST min/mag filter
  *    No border
+ *    RowStride == Width,
  *    Format = GL_RGBA
  */
 static void
@@ -1205,7 +1207,7 @@ sample_lambda_2d( GLcontext *ctx, GLuint texUnit,
 
    const GLboolean repeatNoBorder = (tObj->WrapS == GL_REPEAT)
       && (tObj->WrapT == GL_REPEAT)
-      && (tImg->Border == 0)
+      && (tImg->Border == 0 && (tImg->Width == tImg->RowStride))
       && (tImg->Format != GL_COLOR_INDEX);
 
    ASSERT(lambda != NULL);
@@ -3268,7 +3270,8 @@ texture_apply( const GLcontext *ctx,
 
    format = texUnit->_Current->Image[baseLevel]->Format;
 
-   if (format == GL_COLOR_INDEX || format == GL_DEPTH_COMPONENT) {
+   if (format == GL_COLOR_INDEX || format == GL_DEPTH_COMPONENT
+       || format == GL_YCBCR_MESA) {
       format = GL_RGBA;  /* a bit of a hack */
    }
 
