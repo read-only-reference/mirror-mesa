@@ -120,6 +120,7 @@ sisCreateContext( const __GLcontextModes *glVisual,
     * (the texture functions are especially important)
     */
    _mesa_init_driver_functions(&functions);
+   sisInitDriverFuncs(&functions);
    sisInitTextureFuncs(&functions);
 
    /* Allocate the Mesa context */
@@ -181,7 +182,7 @@ sisCreateContext( const __GLcontextModes *glVisual,
       smesa->colorFormat = DST_FORMAT_RGB_565;
       break;
    default:
-      assert (0);
+      sis_fatal_error("Bad bytesPerPixel.\n");
    }
 
    /* Parse configuration files */
@@ -507,11 +508,3 @@ sis_update_texture_state (sisContextPtr smesa)
    smesa->GlobalFlag &= ~GFLAG_TEXTURE_STATES;
 }
 
-void
-sis_fatal_error (void)
-{
-   /* free video memory, or the framebuffer device will do it automatically */
-
-   fprintf(stderr, "Fatal errors in sis_dri.so\n");
-   exit (-1);
-}

@@ -19,6 +19,8 @@ SOURCES = antialias.c \
 	arbvptest3.c \
 	arbvptorus.c \
 	arbvpwarpmesh.c \
+	blendminmax.c \
+	blendsquare.c \
 	bufferobj.c \
 	cva.c \
 	dinoshade.c \
@@ -29,6 +31,7 @@ SOURCES = antialias.c \
 	getprocaddress.c \
 	manytex.c \
 	multipal.c \
+	packedpixels.c \
 	pbo.c \
 	projtex.c \
 	seccolor.c \

@@ -230,11 +230,11 @@ mach64CreateScreen( __DRIscreenPrivate *sPriv )
    mach64Screen->IsPCI = serverInfo->IsPCI;
 
    {
-      drmMach64GetParam gp;
+      drm_mach64_getparam_t gp;
       int ret;
 
       gp.param = MACH64_PARAM_IRQ_NR;
-      gp.value = &mach64Screen->irq;
+      gp.value = (void *) &mach64Screen->irq;
 
       ret = drmCommandWriteRead( sPriv->fd, DRM_MACH64_GETPARAM,
 				    &gp, sizeof(gp));

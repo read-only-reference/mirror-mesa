@@ -34,8 +34,6 @@
 #ifndef TEXFORMAT_H
 #define TEXFORMAT_H
 
-#define NEWTEXSTORE 1
-
 
 #include "mtypes.h"
 
@@ -54,8 +52,7 @@ enum _format {
     * Drivers can override the default formats and convert texture images to
     * one of these as required.  The driver's
     * dd_function_table::ChooseTextureFormat function will choose one of these
-    * formats.  These formats are all little endian, as shown below.  They will
-    * be most useful for x86-based PC graphics card drivers.
+    * formats.
     *
     * \note In the default case, some of these formats will be duplicates of
     * the generic formats listed below.  However, these formats guarantee their
@@ -66,12 +63,19 @@ enum _format {
 				/* msb <------ TEXEL BITS -----------> lsb */
 				/* ---- ---- ---- ---- ---- ---- ---- ---- */
    MESA_FORMAT_RGBA8888,	/* RRRR RRRR GGGG GGGG BBBB BBBB AAAA AAAA */
+   MESA_FORMAT_RGBA8888_REV,	/* AAAA AAAA BBBB BBBB GGGG GGGG RRRR RRRR */
    MESA_FORMAT_ARGB8888,	/* AAAA AAAA RRRR RRRR GGGG GGGG BBBB BBBB */
+   MESA_FORMAT_ARGB8888_REV,	/* BBBB BBBB GGGG GGGG RRRR RRRR AAAA AAAA */
    MESA_FORMAT_RGB888,		/*           RRRR RRRR GGGG GGGG BBBB BBBB */
+   MESA_FORMAT_BGR888,		/*           BBBB BBBB GGGG GGGG RRRR RRRR */
    MESA_FORMAT_RGB565,		/*                     RRRR RGGG GGGB BBBB */
+   MESA_FORMAT_RGB565_REV,	/*                     GGGB BBBB RRRR RGGG */
    MESA_FORMAT_ARGB4444,	/*                     AAAA RRRR GGGG BBBB */
+   MESA_FORMAT_ARGB4444_REV,	/*                     GGGG BBBB AAAA RRRR */
    MESA_FORMAT_ARGB1555,	/*                     ARRR RRGG GGGB BBBB */
+   MESA_FORMAT_ARGB1555_REV,	/*                     GGGB BBBB ARRR RRGG */
    MESA_FORMAT_AL88,		/*                     AAAA AAAA LLLL LLLL */
+   MESA_FORMAT_AL88_REV,	/*                     LLLL LLLL AAAA AAAA */
    MESA_FORMAT_RGB332,		/*                               RRRG GGBB */
    MESA_FORMAT_A8,		/*                               AAAA AAAA */
    MESA_FORMAT_L8,		/*                               LLLL LLLL */
@@ -80,24 +84,6 @@ enum _format {
    MESA_FORMAT_YCBCR,		/*                     YYYY YYYY UorV UorV */
    MESA_FORMAT_YCBCR_REV,	/*                     UorV UorV YYYY YYYY */
    /*@}*/
-
-#if 0
-   /** 
-    * \name Upcoming little-endian formats 
-    */
-   /*@{*/
-				/* msb <------ TEXEL BITS -----------> lsb */
-				/* ---- ---- ---- ---- ---- ---- ---- ---- */
-   MESA_FORMAT_ABGR8888,	/* AAAA AAAA BBBB BBBB GGGG GGGG RRRR RRRR */
-   MESA_FORMAT_BGRA8888,	/* BBBB BBBB GGGG GGGG RRRR RRRR AAAA AAAA */
-   MESA_FORMAT_BGR888,		/*           BBBB BBBB GGGG GGGG RRRR RRRR */
-   MESA_FORMAT_BGR565,		/*                     BBBB BGGG GGGR RRRR */
-   MESA_FORMAT_BGRA4444,	/*                     BBBB GGGG RRRR AAAA */
-   MESA_FORMAT_BGRA5551,	/*                     BBBB BGGG GGRR RRRA */
-   MESA_FORMAT_LA88,		/*                     LLLL LLLL AAAA AAAA */
-   MESA_FORMAT_BGR233,		/*                               BBGG GRRR */
-   /*@}*/
-#endif
 
    /**
     * \name Compressed texture formats.
@@ -115,7 +101,7 @@ enum _format {
     * \name Generic GLchan-based formats.
     *
     * Software-oriented texture formats.  Texels are arrays of GLchan
-    * values so there will be no big/little endian issues.
+    * values so there are no byte order issues.
     *
     * \note Because these are based on the GLchan data type, one cannot assume
     * 8 bits per channel with these formats.  If you require GLubyte channels,
@@ -128,7 +114,6 @@ enum _format {
    MESA_FORMAT_LUMINANCE,
    MESA_FORMAT_LUMINANCE_ALPHA,
    MESA_FORMAT_INTENSITY,
-   MESA_FORMAT_COLOR_INDEX,
    /*@}*/
 
    /**
@@ -167,7 +152,6 @@ extern const struct gl_texture_format _mesa_texformat_alpha;
 extern const struct gl_texture_format _mesa_texformat_luminance;
 extern const struct gl_texture_format _mesa_texformat_luminance_alpha;
 extern const struct gl_texture_format _mesa_texformat_intensity;
-extern const struct gl_texture_format _mesa_texformat_color_index;
 /*@}*/
 
 /** Depth textures */
@@ -195,17 +179,25 @@ extern const struct gl_texture_format _mesa_texformat_intensity_float16;
 /** \name Assorted hardware-friendly formats */
 /*@{*/
 extern const struct gl_texture_format _mesa_texformat_rgba8888;
+extern const struct gl_texture_format _mesa_texformat_rgba8888_rev;
 extern const struct gl_texture_format _mesa_texformat_argb8888;
+extern const struct gl_texture_format _mesa_texformat_argb8888_rev;
 extern const struct gl_texture_format _mesa_texformat_rgb888;
+extern const struct gl_texture_format _mesa_texformat_bgr888;
 extern const struct gl_texture_format _mesa_texformat_rgb565;
+extern const struct gl_texture_format _mesa_texformat_rgb565_rev;
 extern const struct gl_texture_format _mesa_texformat_argb4444;
+extern const struct gl_texture_format _mesa_texformat_argb4444_rev;
 extern const struct gl_texture_format _mesa_texformat_argb1555;
+extern const struct gl_texture_format _mesa_texformat_argb1555_rev;
 extern const struct gl_texture_format _mesa_texformat_al88;
+extern const struct gl_texture_format _mesa_texformat_al88_rev;
 extern const struct gl_texture_format _mesa_texformat_rgb332;
 extern const struct gl_texture_format _mesa_texformat_a8;
 extern const struct gl_texture_format _mesa_texformat_l8;
 extern const struct gl_texture_format _mesa_texformat_i8;
 extern const struct gl_texture_format _mesa_texformat_ci8;
+
 /*@}*/
 
 /** \name YCbCr formats */

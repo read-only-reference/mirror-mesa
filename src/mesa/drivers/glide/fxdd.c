@@ -152,14 +152,8 @@ static void fxDDClear( GLcontext *ctx,
    fxMesaContext fxMesa = FX_CONTEXT(ctx);
    GLbitfield softwareMask = mask & (DD_ACCUM_BIT);
    const GLuint stencil_size = fxMesa->haveHwStencil ? ctx->Visual.stencilBits : 0;
-   const FxU32 clearD = (FxU32) (((1 << ctx->Visual.depthBits) - 1) * ctx->Depth.Clear);
+   const FxU32 clearD = (FxU32) (ctx->DepthMaxF * ctx->Depth.Clear);
    const FxU8 clearS = (FxU8) (ctx->Stencil.Clear & 0xff);
-
-   /* [dBorca] Hack alert:
-    * if we set Mesa for 32bit depth, we'll get
-    * clearD == 0
-    * due to 32bit integer overflow!
-    */
 
    if ( TDFX_DEBUG & MESA_VERBOSE ) {
       fprintf( stderr, "fxDDClear( %d, %d, %d, %d )\n",
@@ -634,7 +628,7 @@ fxDDDrawBitmap4 (GLcontext *ctx, GLint px, GLint py,
    struct gl_pixelstore_attrib scissoredUnpack;
 
    /* check if there's any raster operations enabled which we can't handle */
-   if ((swrast->_RasterMask & (ALPHATEST_BIT |
+   if ((swrast->_RasterMask & (/*ALPHATEST_BIT |*/
 			      /*BLEND_BIT |*/   /* blending ok, through pixpipe */
 			      DEPTH_BIT |       /* could be done with RGB:DEPTH */
 			      FOG_BIT |         /* could be done with RGB:DEPTH */
@@ -1485,21 +1479,15 @@ fxDDInitExtensions(GLcontext * ctx)
     *    fake NCC multitexturing through multipass rendering, but...
     *    ohwell, it's not worth the effort...
     *    This stand true for multitexturing palletized textures.
-    * 3) since NCC is not an OpenGL standard (as opposed to FXT1), we
-    *    would need to plug deeper into the core... First, we would need to
-    *    bind NCC to GL_COMPRESSED_RGB[A]. Then, we would need to trick
-    *    Mesa into reporting our texture as compressed. Last, we would need
-    *    to stash the NCC decompression table into the mipmap data and adjust
-    *    CompressedSize accordingly!
+    * 3) since NCC is not an OpenGL standard (as opposed to FXT1/DXTC), we
+    *    can't use precompressed textures!
     */
-   if (fxMesa->HaveTexus2) {
-      _mesa_enable_extension(ctx, "GL_ARB_texture_compression");
-
-      if (fxMesa->type >= GR_SSTTYPE_Voodoo4) {
-         _mesa_enable_extension(ctx, "GL_3DFX_texture_compression_FXT1");
-         _mesa_enable_extension(ctx, "GL_EXT_texture_compression_s3tc");
-         _mesa_enable_extension(ctx, "GL_S3_s3tc");
-      }
+   _mesa_enable_extension(ctx, "GL_ARB_texture_compression");
+   if (fxMesa->type >= GR_SSTTYPE_Voodoo4) {
+      _mesa_enable_extension(ctx, "GL_3DFX_texture_compression_FXT1");
+      _mesa_enable_extension(ctx, "GL_EXT_texture_compression_s3tc");
+      _mesa_enable_extension(ctx, "GL_S3_s3tc");
+      _mesa_enable_extension(ctx, "GL_NV_blend_square");
    }
 
    if (fxMesa->HaveCmbExt) {
@@ -1515,9 +1503,11 @@ fxDDInitExtensions(GLcontext * ctx)
    }
 
    /* core-level extensions */
+   _mesa_enable_extension(ctx, "GL_EXT_multi_draw_arrays");
+   _mesa_enable_extension(ctx, "GL_IBM_multimode_draw_arrays");
 #if 0
    /* not until texel fetchers are right */
-   _mesa_enable_extension(ctx, "GL_SGIS_generate_mipmaps");
+   _mesa_enable_extension(ctx, "GL_SGIS_generate_mipmap");
 #endif
 #if 0
    /* breaks UT2004 */
@@ -1727,6 +1717,7 @@ fxSetupDDPointers(GLcontext * ctx)
    ctx->Driver.ChooseTextureFormat = fxDDChooseTextureFormat;
    ctx->Driver.TexImage1D = fxDDTexImage1D;
    ctx->Driver.TexImage2D = fxDDTexImage2D;
+   ctx->Driver.TexSubImage1D = fxDDTexSubImage1D;
    ctx->Driver.TexSubImage2D = fxDDTexSubImage2D;
    ctx->Driver.CompressedTexImage2D = fxDDCompressedTexImage2D;
    ctx->Driver.CompressedTexSubImage2D = fxDDCompressedTexSubImage2D;

@@ -8,8 +8,6 @@ include $(TOP)/configs/current
 DEFINES += -DGLX_DIRECT_RENDERING 
 
 C_SOURCES = \
-	dri_util.c \
-	glcontextmodes.c \
 	xf86drm.c \
 	xf86drmHash.c \
 	xf86drmRandom.c \
@@ -21,6 +19,7 @@ OBJECTS = $(C_SOURCES:.c=.o)
 
 INCLUDES = \
 	-I$(TOP)/include \
+	-I$(DRM_SOURCE_PATH)/shared \
 	-I$(TOP)/include/GL/internal \
 	-I$(TOP)/src/mesa \
 	-I$(TOP)/src/mesa/main \
@@ -43,7 +42,7 @@ default: depend dri.a
 # what's included by any source file.
 depend: $(C_SOURCES) $(ASM_SOURCES)
 	touch depend
-	makedepend -fdepend -Y $(INCLUDES) \
+	$(MKDEP) $(MKDEP_OPTIONS) -Y $(INCLUDES) \
 		$(C_SOURCES) $(ASM_SOURCES) >& /dev/null
 
 

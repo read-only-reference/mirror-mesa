@@ -58,6 +58,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define     R200_FOG_USE_DIFFUSE_ALPHA (2 << 25)
 #define     R200_FOG_USE_SPEC_ALPHA    (3 << 25)
 #define     R200_FOG_USE_VTX_FOG       (4 << 25)
+#define     R200_FOG_USE_MASK          (7 << 25)
 #define R200_RE_SOLID_COLOR               0x1c1c 
 #define R200_RB3D_BLENDCNTL               0x1c20
 #define     R200_COMB_FCN_MASK                    (7  << 12)
@@ -69,39 +70,26 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define     R200_COMB_FCN_MAX                     (5  << 12)
 #define     R200_COMB_FCN_RSUB_CLAMP              (6  << 12)
 #define     R200_COMB_FCN_RSUB_NOCLAMP            (7  << 12)
-#define     R200_SRC_BLEND_GL_ZERO                (32 << 16)
-#define     R200_SRC_BLEND_GL_ONE                 (33 << 16)
-#define     R200_SRC_BLEND_GL_SRC_COLOR           (34 << 16)
-#define     R200_SRC_BLEND_GL_ONE_MINUS_SRC_COLOR (35 << 16)
-#define     R200_SRC_BLEND_GL_DST_COLOR           (36 << 16)
-#define     R200_SRC_BLEND_GL_ONE_MINUS_DST_COLOR (37 << 16)
-#define     R200_SRC_BLEND_GL_SRC_ALPHA           (38 << 16)
-#define     R200_SRC_BLEND_GL_ONE_MINUS_SRC_ALPHA (39 << 16)
-#define     R200_SRC_BLEND_GL_DST_ALPHA           (40 << 16)
-#define     R200_SRC_BLEND_GL_ONE_MINUS_DST_ALPHA (41 << 16)
-#define     R200_SRC_BLEND_GL_SRC_ALPHA_SATURATE  (42 << 16)
-#define     R200_SRC_BLEND_GL_CONST_COLOR           (43 << 16)
-#define     R200_SRC_BLEND_GL_ONE_MINUS_CONST_COLOR (44 << 16)
-#define     R200_SRC_BLEND_GL_CONST_ALPHA           (45 << 16)
-#define     R200_SRC_BLEND_GL_ONE_MINUS_CONST_ALPHA (46 << 16)
-#define     R200_SRC_BLEND_MASK                     (63 << 16)
-#define     R200_DST_BLEND_GL_ZERO                (32 << 24)
-#define     R200_DST_BLEND_GL_ONE                 (33 << 24)
-#define     R200_DST_BLEND_GL_SRC_COLOR           (34 << 24)
-#define     R200_DST_BLEND_GL_ONE_MINUS_SRC_COLOR (35 << 24)
-#define     R200_DST_BLEND_GL_DST_COLOR           (36 << 24)
-#define     R200_DST_BLEND_GL_ONE_MINUS_DST_COLOR (37 << 24)
-#define     R200_DST_BLEND_GL_SRC_ALPHA           (38 << 24)
-#define     R200_DST_BLEND_GL_ONE_MINUS_SRC_ALPHA (39 << 24)
-#define     R200_DST_BLEND_GL_DST_ALPHA           (40 << 24)
-#define     R200_DST_BLEND_GL_ONE_MINUS_DST_ALPHA (41 << 24)
-#define     R200_DST_BLEND_GL_CONST_COLOR         (43 << 24)
-#define     R200_DST_BLEND_GL_ONE_MINUS_CONST_COLOR (44 << 24)
-#define     R200_DST_BLEND_GL_CONST_ALPHA           (45 << 24)
-#define     R200_DST_BLEND_GL_ONE_MINUS_CONST_ALPHA (46 << 24)
-#define     R200_DST_BLEND_MASK                     (63 << 24)
-#define R200_RB3D_DEPTHOFFSET             0x1c24 
-#define R200_RB3D_DEPTHPITCH              0x1c28 
+#define       R200_BLEND_GL_ZERO                  (32)
+#define       R200_BLEND_GL_ONE                   (33)
+#define       R200_BLEND_GL_SRC_COLOR             (34)
+#define       R200_BLEND_GL_ONE_MINUS_SRC_COLOR   (35)
+#define       R200_BLEND_GL_DST_COLOR             (36)
+#define       R200_BLEND_GL_ONE_MINUS_DST_COLOR   (37)
+#define       R200_BLEND_GL_SRC_ALPHA             (38)
+#define       R200_BLEND_GL_ONE_MINUS_SRC_ALPHA   (39)
+#define       R200_BLEND_GL_DST_ALPHA             (40)
+#define       R200_BLEND_GL_ONE_MINUS_DST_ALPHA   (41)
+#define       R200_BLEND_GL_SRC_ALPHA_SATURATE    (42) /* src factor only */
+#define       R200_BLEND_GL_CONST_COLOR           (43)
+#define       R200_BLEND_GL_ONE_MINUS_CONST_COLOR (44)
+#define       R200_BLEND_GL_CONST_ALPHA           (45)
+#define       R200_BLEND_GL_ONE_MINUS_CONST_ALPHA (46)
+#define       R200_BLEND_MASK                     (63)
+#define     R200_SRC_BLEND_SHIFT                  (16)
+#define     R200_DST_BLEND_SHIFT                  (24)
+#define R200_RB3D_DEPTHOFFSET             0x1c24
+#define R200_RB3D_DEPTHPITCH              0x1c28
 #define     R200_DEPTHPITCH_MASK         0x00001ff8
 #define     R200_DEPTH_ENDIAN_NO_SWAP    (0 << 18)
 #define     R200_DEPTH_ENDIAN_WORD_SWAP  (1 << 18)
@@ -501,6 +489,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define     R200_OUTPUT_TEX_4                   (1<<20)
 #define     R200_OUTPUT_TEX_5                   (1<<21)
 #define     R200_OUTPUT_TEX_MASK                (0x3f<<16)
+#define     R200_OUTPUT_DISCRETE_FOG            (1<<24)
 #define     R200_OUTPUT_PT_SIZE                 (1<<25)
 #define     R200_FORCE_INORDER_PROC             (1<<31)
 #define R200_SE_TCL_INPUT_VTX_VECTOR_ADDR_0  0x2254
@@ -1320,6 +1309,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define R200_PP_TXABLEND_7                0x2f78
 #define R200_PP_TXABLEND2_7               0x2f7c
 /* gap */
+#define R200_RB3D_BLENDCOLOR               0x3218 /* ARGB 8888 */
 #define R200_RB3D_ABLENDCNTL               0x321C /* see BLENDCTL */
 #define R200_RB3D_CBLENDCNTL               0x3220 /* see BLENDCTL */
 

@@ -1543,15 +1543,15 @@ glXChooseVisual( Display *dpy, int screen, int *attribList )
          attrib++;
          break;
       case GLX_GREEN_SIZE:
-         redBits = attrib[1];
+         greenBits = attrib[1];
          attrib++;
          break;
       case GLX_BLUE_SIZE:
-         redBits = attrib[1];
+         blueBits = attrib[1];
          attrib++;
          break;
       case GLX_ALPHA_SIZE:
-         redBits = attrib[1];
+         alphaBits = attrib[1];
          attrib++;
          break;
       case GLX_STENCIL_SIZE:

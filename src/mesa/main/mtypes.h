@@ -1066,7 +1066,7 @@ struct gl_texture_format {
    GLubyte IndexBits;
    GLubyte DepthBits;
 
-   GLint TexelBytes;		/**< Bytes per texel, 0 if compressed format */
+   GLuint TexelBytes;		/**< Bytes per texel, 0 if compressed format */
 
    StoreTexImageFunc StoreImage;
 
@@ -1115,6 +1115,8 @@ struct gl_texture_image {
    GLboolean _IsPowerOfTwo;	/**< Are all dimensions powers of two? */
 
    const struct gl_texture_format *TexFormat;
+
+   struct gl_texture_object *TexObject;  /**< Pointer back to parent object */
 
    FetchTexelFuncC FetchTexelc;	/**< GLchan texel fetch function pointer */
    FetchTexelFuncF FetchTexelf;	/**< Float texel fetch function pointer */
@@ -1323,6 +1325,10 @@ struct gl_transform_attrib {
    GLboolean Normalize;				/**< Normalize all normals? */
    GLboolean RescaleNormals;			/**< GL_EXT_rescale_normal */
    GLboolean RasterPositionUnclipped;           /**< GL_IBM_rasterpos_clip */
+
+   GLboolean CullVertexFlag;	/**< True if GL_CULL_VERTEX_EXT is enabled */
+   GLfloat CullEyePos[4];
+   GLfloat CullObjPos[4];
 };
 
 
@@ -1885,6 +1891,7 @@ struct gl_extensions
    GLboolean EXT_blend_minmax;
    GLboolean EXT_blend_subtract;
    GLboolean EXT_clip_volume_hint;
+   GLboolean EXT_cull_vertex;
    GLboolean EXT_convolution;
    GLboolean EXT_compiled_vertex_array;
    GLboolean EXT_copy_texture;

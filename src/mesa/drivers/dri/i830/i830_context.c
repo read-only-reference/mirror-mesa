@@ -26,14 +26,15 @@
  * **************************************************************************/
 /* $XFree86: xc/lib/GL/mesa/src/drv/i830/i830_context.c,v 1.9 2003/02/06 04:18:00 dawes Exp $ */
 
-/*
- * Authors:
- *   Jeff Hartmann <jhartmann@2d3d.com>
- *   Graeme Fisher <graeme@2d3d.co.za>
- *   Abraham vd Merwe <abraham@2d3d.co.za>
+/**
+ * \file i830_context.c
+ * 
+ * Heavily Based on I810 driver written by Keith Whitwell.
  *
- * Heavily Based on I810 driver written by:
- *   Keith Whitwell <keith@tungstengraphics.com>
+ * \author Jeff Hartmann <jhartmann@2d3d.com>
+ * \author Graeme Fisher <graeme@2d3d.co.za>
+ * \author Abraham vd Merwe <abraham@2d3d.co.za>
+ * \author Keith Whitwell <keith@tungstengraphics.com>
  */
 
 #include "glheader.h"
@@ -63,6 +64,7 @@
 
 
 #include "utils.h"
+#include "xmlpool.h" /* for symbolic values of enum-type options */
 #ifndef I830_DEBUG
 int I830_DEBUG = (0);
 #endif
@@ -71,11 +73,8 @@ int I830_DEBUG = (0);
  * Mesa's Driver Functions
  ***************************************/
 
-#define DRIVER_DATE                     "20021115"
+#define DRIVER_DATE                     "20040506"
 
-
-const char __driConfigOptions[] = { 0 };
-const GLuint __driNConfigOptions = 0;
 
 static const GLubyte *i830DDGetString( GLcontext *ctx, GLenum name )
 {
@@ -146,9 +145,11 @@ static const char * const card_extensions[] =
    "GL_ARB_texture_compression",
    "GL_ARB_texture_env_add",
    "GL_ARB_texture_env_combine",
+   "GL_ARB_texture_env_crossbar",
    "GL_ARB_texture_env_dot3",
    "GL_ARB_texture_mirrored_repeat",
    "GL_EXT_blend_color",
+   "GL_EXT_blend_equation_separate",
    "GL_EXT_blend_func_separate",
    "GL_EXT_blend_minmax",
    "GL_EXT_blend_subtract",
@@ -161,6 +162,7 @@ static const char * const card_extensions[] =
    "GL_EXT_texture_filter_anisotropic",
    "GL_EXT_texture_lod_bias",
    "GL_EXT_texture_rectangle",
+   "GL_NV_blend_square",
    "GL_MESA_ycbcr_texture",
    "GL_SGIS_generate_mipmap",
    NULL
@@ -246,6 +248,8 @@ GLboolean i830CreateContext( const __GLcontextModes *mesaVis,
    imesa->sarea = saPriv;
    imesa->glBuffer = NULL;
 
+   driParseConfigFiles (&imesa->optionCache, &screen->optionCache,
+			screen->driScrnPriv->myNum, "i830");
 
    (void) memset( imesa->texture_heaps, 0, sizeof( imesa->texture_heaps ) );
    make_empty_list( & imesa->swapped );
@@ -261,16 +265,16 @@ GLboolean i830CreateContext( const __GLcontextModes *mesaVis,
 	    sizeof( struct i830_texture_object_t ),
 	    (destroy_texture_object_t *) i830DestroyTexObj );
 
-
    /* Set the maximum texture size small enough that we can guarantee
-    * that both texture units can bind a maximal texture and have them
+    * that every texture unit can bind a maximal texture and have them
     * in memory at once.
     */
 
    ctx = imesa->glCtx;
-   ctx->Const.MaxTextureUnits = 2;
-   ctx->Const.MaxTextureImageUnits = 2;
-   ctx->Const.MaxTextureCoordUnits = 2;
+   ctx->Const.MaxTextureUnits = driQueryOptioni(&imesa->optionCache, 
+						"texture_units");
+   ctx->Const.MaxTextureImageUnits = ctx->Const.MaxTextureUnits;
+   ctx->Const.MaxTextureCoordUnits = ctx->Const.MaxTextureUnits;
 
    /* FIXME: driCalculateMaxTextureLevels assumes that mipmaps are tightly
     * FIXME: packed, but they're not in Intel graphics hardware.
@@ -327,7 +331,8 @@ GLboolean i830CreateContext( const __GLcontextModes *mesaVis,
    /* Dri stuff */
    imesa->hHWContext = driContextPriv->hHWContext;
    imesa->driFd = sPriv->fd;
-   imesa->driHwLock = &sPriv->pSAREA->lock;
+   /* drmLock ptr = &drm_hw_lock_t */
+   imesa->driHwLock = (drmLock *) &sPriv->pSAREA->lock;
    imesa->hw_stencil = mesaVis->stencilBits && mesaVis->depthBits == 24;
 
    switch(mesaVis->depthBits) {
@@ -476,16 +481,21 @@ static void i830XMesaWindowMoved( i830ContextPtr imesa )
 GLboolean i830UnbindContext(__DRIcontextPrivate *driContextPriv)
 {
    i830ContextPtr imesa = (i830ContextPtr) driContextPriv->driverPrivate;
+   unsigned i;
+
    if (imesa) {
       /* Might want to change this so texblend isn't always updated */
       imesa->dirty |= (I830_UPLOAD_CTX |
 		       I830_UPLOAD_BUFFERS |
 		       I830_UPLOAD_STIPPLE |
 		       I830_UPLOAD_TEXBLEND0 |
-		       I830_UPLOAD_TEXBLEND1);
+		       I830_UPLOAD_TEXBLEND1 |
+		       I830_UPLOAD_TEXBLEND2 |
+		       I830_UPLOAD_TEXBLEND3);
 
-      if (imesa->CurrentTexObj[0]) imesa->dirty |= I830_UPLOAD_TEX0;
-      if (imesa->CurrentTexObj[1]) imesa->dirty |= I830_UPLOAD_TEX1;
+      for ( i = 0 ; i < imesa->glCtx->Const.MaxTextureUnits ; i++ ) {
+	 if (imesa->CurrentTexObj[i]) imesa->dirty |= I830_UPLOAD_TEX_N( i );
+      }
    }
    return GL_TRUE;
 }
@@ -499,10 +509,12 @@ GLboolean i830MakeCurrent(__DRIcontextPrivate *driContextPriv,
       i830ContextPtr imesa = (i830ContextPtr) driContextPriv->driverPrivate;
 
       if ( imesa->driDrawable != driDrawPriv ) {
-	 /* Shouldn't the readbuffer be stored also? */
 	 imesa->driDrawable = driDrawPriv;
 	 i830XMesaWindowMoved( imesa );
+	 imesa->mesa_drawable = driDrawPriv;
       }
+
+       imesa->driReadable = driReadPriv;
 
       _mesa_make_current2(imesa->glCtx,
 			  (GLframebuffer *) driDrawPriv->driverPrivate,
@@ -547,10 +559,10 @@ void i830GetLock( i830ContextPtr imesa, GLuint flags )
 		       I830_UPLOAD_BUFFERS | 
 		       I830_UPLOAD_STIPPLE);
 
-      if(imesa->CurrentTexObj[0]) imesa->dirty |= I830_UPLOAD_TEX0;
-      if(imesa->CurrentTexObj[1]) imesa->dirty |= I830_UPLOAD_TEX1;
-      if(imesa->TexBlendWordsUsed[0]) imesa->dirty |= I830_UPLOAD_TEXBLEND0;
-      if(imesa->TexBlendWordsUsed[1]) imesa->dirty |= I830_UPLOAD_TEXBLEND1;
+      for ( i = 0 ; i < imesa->glCtx->Const.MaxTextureUnits ; i++ ) {
+	 if(imesa->CurrentTexObj[i]) imesa->dirty |= I830_UPLOAD_TEX_N( i );
+	 if(imesa->TexBlendWordsUsed[i]) imesa->dirty |= I830_UPLOAD_TEXBLEND_N( i );
+      }
 
       sarea->perf_boxes = imesa->perf_boxes | I830_BOX_LOST_CONTEXT;
       sarea->ctxOwner = me;

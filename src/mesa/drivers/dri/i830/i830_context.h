@@ -63,6 +63,8 @@ typedef void (*i830_tri_func)(i830ContextPtr, i830Vertex *, i830Vertex *,
 typedef void (*i830_line_func)(i830ContextPtr, i830Vertex *, i830Vertex *);
 typedef void (*i830_point_func)(i830ContextPtr, i830Vertex *);
 
+#define I830_MAX_TEXTURE_UNITS    4
+
 #define I830_FALLBACK_TEXTURE		 0x1
 #define I830_FALLBACK_DRAW_BUFFER	 0x2
 #define I830_FALLBACK_READ_BUFFER	 0x4
@@ -80,14 +82,12 @@ struct i830_context_t
    /*From I830 stuff*/
    int TextureMode;
    GLuint renderindex;
-   GLuint TexBlendWordsUsed[I830_TEXBLEND_COUNT];
-   GLuint TexBlend[I830_TEXBLEND_COUNT][I830_TEXBLEND_SIZE];
-   GLuint Init_TexBlend[I830_TEXBLEND_COUNT][I830_TEXBLEND_SIZE];
-   GLuint Init_TexBlendWordsUsed[I830_TEXBLEND_COUNT];
-   GLuint Init_TexBlendColorPipeNum[I830_TEXBLEND_COUNT];
-   GLuint TexBlendColorPipeNum[I830_TEXBLEND_COUNT];
+   GLuint TexBlendWordsUsed[I830_MAX_TEXTURE_UNITS];
+   GLuint TexBlend[I830_MAX_TEXTURE_UNITS][I830_TEXBLEND_SIZE];
+   GLuint Init_TexBlend[I830_MAX_TEXTURE_UNITS][I830_TEXBLEND_SIZE];
+   GLuint Init_TexBlendWordsUsed[I830_MAX_TEXTURE_UNITS];
    GLuint Init_BufferSetup[I830_DEST_SETUP_SIZE];
-   GLuint LodBias[2];
+   GLuint LodBias[I830_MAX_TEXTURE_UNITS];
    
    GLenum palette_format;
    GLuint palette[256];
@@ -124,7 +124,7 @@ struct i830_context_t
    driTexHeap          * texture_heaps[1];
    driTextureObject      swapped;
 
-   struct i830_texture_object_t *CurrentTexObj[2];
+   struct i830_texture_object_t *CurrentTexObj[I830_MAX_TEXTURE_UNITS];
 
    /* Rasterization and vertex state:
     */
@@ -210,13 +210,32 @@ struct i830_context_t
    drm_clip_rect_t scissor_rect;
 
    drmContext hHWContext;
-   drm_hw_lock_t *driHwLock;
+   drmLock *driHwLock;
    int driFd;
 
-   __DRIdrawablePrivate *driDrawable;
+   __DRIdrawablePrivate *driDrawable;    /**< DRI drawable bound to this
+					  * context for drawing.
+					  */
+   __DRIdrawablePrivate *driReadable;    /**< DRI drawable bound to this
+					  * context for reading.
+					  */
+
+   /**
+    * Drawable used by Mesa for software fallbacks for reading and
+    * writing.  It is set by Mesa's \c SetBuffer callback, and will always be
+    * either \c i830_context_t::driDrawable or \c i830_context_t::driReadable.
+    */
+   
+   __DRIdrawablePrivate * mesa_drawable;
+
    __DRIscreenPrivate *driScreen;
-   i830ScreenPrivate *i830Screen; 
+   i830ScreenPrivate *i830Screen;
    I830SAREAPtr sarea;
+
+   /**
+    * Configuration cache
+    */
+   driOptionCache optionCache;
 };
 
 

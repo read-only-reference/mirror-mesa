@@ -14,7 +14,9 @@ COMMON_SOURCES = \
 	../common/utils.c \
 	../common/texmem.c \
 	../common/vblank.c \
-	../common/xmlconfig.c
+	../common/xmlconfig.c \
+	../common/dri_util.c \
+	../common/glcontextmodes.c
 
 DRIVER_SOURCES = \
 	radeon_context.c \
@@ -42,8 +44,8 @@ C_SOURCES = \
 	$(DRIVER_SOURCES) 
 
 
-ASM_SOURCES = 
-
+X86_SOURCES = \
+	radeon_vtxtmp_x86.S 
 
 include ../Makefile.template
 
