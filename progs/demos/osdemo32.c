@@ -1,7 +1,10 @@
-/* $Id: osdemo32.c,v 1.1 2003/03/08 19:05:45 brianp Exp $ */
-
 /*
- * Test OSMesa with GLfloat color channels.
+ * Demo of off-screen Mesa rendering with 32-bit float color channels.
+ * This requires the libOSMesa32.so library.
+ *
+ * Compile with something like this:
+ *
+ * gcc osdemo32.c -I../include -L../lib -lOSMesa32 -lm -o osdemo32
  */
 
 

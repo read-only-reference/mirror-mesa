@@ -1,20 +1,12 @@
-/* $Id: osdemo16.c,v 1.1 2001/03/08 15:24:18 brianp Exp $ */
-
 /*
- * Demo of off-screen Mesa rendering
+ * Demo of off-screen Mesa rendering with 16-bit color channels.
+ * This requires the libOSMesa16.so library.
  *
- * See Mesa/include/GL/osmesa.h for documentation of the OSMesa functions.
+ * Compile with something like this:
  *
- * If you want to render BIG images you'll probably have to increase
- * MAX_WIDTH and MAX_HEIGHT in src/config.h.
- *
- * This program is in the public domain.
- *
- * Brian Paul
- *
- * PPM output provided by Joerg Schmalzl.
- * ASCII PPM output added by Brian Paul.
+ * gcc osdemo16.c -I../include -L../lib -lOSMesa16 -lm -o osdemo16
  */
+
 
 
 #include <stdio.h>

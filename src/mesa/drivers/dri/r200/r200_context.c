@@ -62,7 +62,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r200_vtxfmt.h"
 #include "r200_maos.h"
 
-#define DRIVER_DATE	"20030328"
+#define DRIVER_DATE	"20040929"
 
 #include "vblank.h"
 #include "utils.h"
@@ -166,6 +166,7 @@ static const struct tnl_pipeline_stage *r200_pipeline[] = {
    &_tnl_fog_coordinate_stage,
    &_tnl_texgen_stage,
    &_tnl_texture_transform_stage,
+   &_tnl_vertex_program_stage,
 
    /* Try again to go to tcl? 
     *     - no good for asymmetric-twoside (do with multipass)
@@ -322,7 +323,7 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
 	 DRI_CONF_TEXTURE_DEPTH_32 : DRI_CONF_TEXTURE_DEPTH_16;
 
    rmesa->swtcl.RenderIndex = ~0;
-   rmesa->lost_context = 1;
+   rmesa->hw.all_dirty = 1;
 
    /* Set the maximum texture size small enough that we can guarentee that
     * all texture units can bind a maximal texture and have them both in
@@ -406,6 +407,10 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
       _mesa_enable_extension( ctx, "GL_EXT_blend_equation_separate" );
       _mesa_enable_extension( ctx, "GL_EXT_blend_func_separate" );
    }
+   if(driQueryOptionb(&rmesa->optionCache, "arb_vertex_program"))
+      _mesa_enable_extension( ctx, "GL_ARB_vertex_program");
+   if(driQueryOptionb(&rmesa->optionCache, "nv_vertex_program"))
+      _mesa_enable_extension( ctx, "GL_NV_vertex_program");
 
 #if 0
    r200InitDriverFuncs( ctx );

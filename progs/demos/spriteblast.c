@@ -36,7 +36,6 @@
 static GLfloat angle = -150;   /* in degrees */
 static int spin = 0;
 static int moving, begin;
-static int newModel = 1;
 static float theTime;
 static int repeat = 1;
 static int blend = 1;
@@ -56,7 +55,7 @@ static GLfloat pointTime[MAX_POINTS];
 static GLfloat pointVelocity[MAX_POINTS][2];
 static GLfloat pointDirection[MAX_POINTS][2];
 static int colorList[MAX_POINTS];
-static int animate = 1, motion = 0;
+static int animate = 1, motion = 0, org = 0, sprite = 1, smooth = 1;
 
 static GLfloat colorSet[][4] = {
   /* Shades of red. */
@@ -183,7 +182,6 @@ idle(void)
   updatePointList();
   if (spin) {
     angle += 0.3;
-    newModel = 1;
   }
   glutPostRedisplay();
 }
@@ -201,22 +199,15 @@ visible(int vis)
 }
 
 static void
-recalcModelView(void)
-{
-  glPopMatrix();
-  glPushMatrix();
-  glRotatef(angle, 0.0, 1.0, 0.0);
-  newModel = 0;
-}
-
-static void
 redraw(void)
 {
   int i;
 
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-  if (newModel)
-    recalcModelView();
+
+  glPushMatrix();
+  glRotatef(15.0, 1.0, 0.0, 0.0);
+  glRotatef(angle, 0.0, 1.0, 0.0);
 
   glDepthMask(GL_FALSE);
 
@@ -240,17 +231,19 @@ redraw(void)
   if (blend)
      glEnable(GL_BLEND);
 
-  glEnable(GL_TEXTURE_2D);
+  if (sprite) {
+     glEnable(GL_TEXTURE_2D);
 #ifdef GL_ARB_point_sprite
-  glEnable(GL_POINT_SPRITE_ARB);
+     glEnable(GL_POINT_SPRITE_ARB);
 #endif
+  }
 
   glColor3f(1,1,1);
   glBegin(GL_POINTS);
     for (i=0; i<numPoints; i++) {
       /* Draw alive particles. */
       if (colorList[i] != DEAD) {
-         /*glColor4fv(colorSet[colorList[i]]);*/
+        if (!sprite) glColor4fv(colorSet[colorList[i]]);
         glVertex3fv(pointList[i]);
       }
     }
@@ -261,6 +254,8 @@ redraw(void)
   glDisable(GL_POINT_SPRITE_ARB);
 #endif
   glDisable(GL_BLEND);
+
+  glPopMatrix();
 
   glutSwapBuffers();
 }
@@ -287,7 +282,6 @@ mouseMotion(int x, int y)
   if (moving) {
     angle = angle + (x - begin);
     begin = x;
-    newModel = 1;
     glutPostRedisplay();
   }
 }
@@ -299,7 +293,7 @@ menu(int option)
   case 0:
     makePointList();
     break;
-#if GL_ARB_point_parameters
+#ifdef GL_ARB_point_parameters
   case 1:
     glPointParameterfvARB(GL_POINT_DISTANCE_ATTENUATION_ARB, constant);
     break;
@@ -316,7 +310,7 @@ menu(int option)
   case 5:
     blend = 0;
     break;
-#if GL_ARB_point_parameters
+#ifdef GL_ARB_point_parameters
   case 6:
     glPointParameterfARB(GL_POINT_FADE_THRESHOLD_SIZE_ARB, 1.0);
     break;
@@ -326,9 +320,11 @@ menu(int option)
 #endif
   case 8:
     glEnable(GL_POINT_SMOOTH);
+    smooth = 1;
     break;
   case 9:
     glDisable(GL_POINT_SMOOTH);
+    smooth = 0;
     break;
   case 10:
     glPointSize(4.0);
@@ -382,6 +378,47 @@ key(unsigned char c, int x, int y)
     animate = 1;
     makePointList();
     glutIdleFunc(idle);
+    break;
+  case 'o':
+  case 'O':
+    org ^= 1;
+#ifdef GL_VERSION_2_0
+#ifdef GL_ARB_point_parameters
+    glPointParameteri(GL_POINT_SPRITE_COORD_ORIGIN,
+                      org ? GL_LOWER_LEFT : GL_UPPER_LEFT);
+#endif
+#endif
+    glutPostRedisplay();
+    break;
+  case 't':
+  case 'T':
+    sprite ^= 1;
+    glutPostRedisplay();
+    break;
+  case 's':
+  case 'S':
+    (smooth ^= 1) ? glEnable(GL_POINT_SMOOTH) : glDisable(GL_POINT_SMOOTH);
+    glutPostRedisplay();
+    break;
+  case '0':
+    glPointSize(1.0);
+    glutPostRedisplay();
+    break;
+  case '1':
+    glPointSize(2.0);
+    glutPostRedisplay();
+    break;
+  case '2':
+    glPointSize(4.0);
+    glutPostRedisplay();
+    break;
+  case '3':
+    glPointSize(8.0);
+    glutPostRedisplay();
+    break;
+  case '4':
+    glPointSize(16.0);
+    glutPostRedisplay();
     break;
   case 27:
     exit(0);
@@ -440,10 +477,10 @@ reshape(int width, int height)
   glViewport(0, 0, (GLint) width, (GLint) height);
   glMatrixMode(GL_PROJECTION);
   glLoadIdentity();
-  glFrustum(-1.0, 1.0, -h, h, 2.0, 20.0);
+  glFrustum(-1.0, 1.0, -h, h, 2.0, 30.0);
   glMatrixMode(GL_MODELVIEW);
   glLoadIdentity();
-  glTranslatef(0.0, 0.0, -60.0);
+  glTranslatef(0.0, 0.0, -10.0);
 }
 
 int
@@ -499,19 +536,9 @@ main(int argc, char **argv)
   glEnable(GL_POINT_SMOOTH);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glPointSize(16.0);
-#if GL_ARB_point_parameters
+#ifdef GL_ARB_point_parameters
   glPointParameterfvARB(GL_POINT_DISTANCE_ATTENUATION_ARB, theQuad);
 #endif
-  glMatrixMode(GL_PROJECTION);
-  gluPerspective( /* field of view in degree */ 40.0,
-  /* aspect ratio */ 1.0,
-    /* Z near */ 0.5, /* Z far */ 40.0);
-  glMatrixMode(GL_MODELVIEW);
-  gluLookAt(0.0, 1.0, 8.0, /* eye location */
-    0.0, 1.0, 0.0,      /* center is at (0,0,0) */
-    0.0, 1.0, 0.);      /* up is in postivie Y direction */
-  glPushMatrix();       /* dummy push so we can pop on model
-                           recalc */
 
   makePointList();
   makeSprite();

@@ -1279,7 +1279,17 @@ Mesa Version History
 6.2  Month, day, 2004
     New:
 	- enabled GL_ARB_texture_rectangle (same as GL_NV_texture_rectangle)
+	- updated Doxygen support (Jose Fonseca)
     Changes:
+	- some GGI driver updates (Christoph Egger, bug 1025977)
     Bug fixes:
-	- OpenGL version 1.5 doesn't need GL_ARB_texture_non_power_of_two
+	- Omit GL_ARB_texture_non_power_of_two from list of OpenGL 1.5 features
 	- fixed a few compilation issues on IRIX
+	- fixed a matrix classification bug (reported by Wes Bethel)
+	- we weren't reseting the vertex/fragment program error state
+	  before parsing (Dave Reveman)
+	- adjust texcoords for sampling texture rectangles (Dave Reveman)
+	- glGet*(GL_MAX_VERTEX_ATTRIBS_ARB) wasn't implemented
+	- repeated calls to glDeleteTexture(t) could lead to a crash
+	- fixed potential ref count bugs in VBOs and vertex/fragment programs
+	- spriteblast demo didn't handle window size changes correctly
