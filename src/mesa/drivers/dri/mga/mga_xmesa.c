@@ -60,7 +60,7 @@
 #include "vblank.h"
 
 #ifndef _SOLO
-#include "glxextensions.h"
+#include "GL/internal/dri_interface.h"
 #endif
 
 /* MGA configuration
@@ -248,6 +248,7 @@ mgaInitDriver(__DRIscreenPrivate *sPriv)
 
       gp.param = MGA_PARAM_IRQ_NR;
       gp.value = &mgaScreen->irq;
+      mgaScreen->irq = 0;
 
       ret = drmCommandWriteRead( sPriv->fd, DRM_MGA_GETPARAM,
 				    &gp, sizeof(gp));
@@ -402,6 +403,8 @@ mgaDestroyScreen(__DRIscreenPrivate *sPriv)
 
    if (MGA_DEBUG&DEBUG_VERBOSE_DRI)
       fprintf(stderr, "mgaDestroyScreen\n");
+
+   drmUnmapBufs(mgaScreen->bufs);
 
    /*drmUnmap(mgaScreen->agp_tex.map, mgaScreen->agp_tex.size);*/
 

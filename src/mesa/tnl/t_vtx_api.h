@@ -49,7 +49,7 @@ extern void _tnl_vtx_destroy( GLcontext *ctx );
 extern void _tnl_FlushVertices( GLcontext *ctx, GLuint flags );
 extern void _tnl_flush_vtx( GLcontext *ctx );
 
-extern void _tnl_wrap_filled_vertex( GLcontext *ctx );
+extern void GLAPIENTRY _tnl_wrap_filled_vertex( GLcontext *ctx );
 
 /* t_vtx_exec.c:
  */
@@ -77,6 +77,12 @@ extern void _tnl_generic_attr_table_init( attrfv_func (*tab)[4] );
 /* t_vtx_x86.c:
  */
 extern void _tnl_InitX86Codegen( struct _tnl_dynfn_generators *gen );
+
+extern void _tnl_x86_exec_vtxfmt_init( GLcontext *ctx );
+
+extern void _tnl_x86choosers( attrfv_func (*choose)[4],
+			      attrfv_func (*do_choose)( GLuint attr,
+							GLuint sz ));
 
 
 

@@ -1,22 +1,19 @@
 # src/mesa/drivers/dri/r200/Makefile
 
 TOP = ../../../../..
-include $(TOP)/configs/default
+include $(TOP)/configs/current
 
-SHARED_INCLUDES = $(INCLUDE_DIRS) -I. -I../common -Iserver
-MINIGLX_INCLUDES = -I$(TOP)/src/glx/mini
-
-DEFINES += \
-	-D_HAVE_SWRAST=1 \
-	-D_HAVE_SWTNL=1 \
-	-D_HAVE_SANITY=1 \
-	-D_HAVE_CODEGEN=1 \
-	-D_HAVE_LIGHTING=1 \
-	-D_HAVE_TEXGEN=1 \
-	-D_HAVE_USERCLIP=1 \
-	-DGLX_DIRECT_RENDERING 
+LIBNAME = r200_dri.so
 
 MINIGLX_SOURCES = server/radeon_dri.c 
+
+COMMON_SOURCES = \
+	../../common/driverfuncs.c \
+	../common/mm.c \
+	../common/utils.c \
+	../common/texmem.c \
+	../common/vblank.c \
+	../common/xmlconfig.c
 
 DRIVER_SOURCES = r200_context.c \
 		 r200_ioctl.c \
@@ -24,12 +21,6 @@ DRIVER_SOURCES = r200_context.c \
 		 r200_screen.c \
 		 r200_state.c \
 		 r200_state_init.c \
-		 ../../common/driverfuncs.c \
-		 ../common/mm.c \
-		 ../common/utils.c \
-		 ../common/texmem.c \
-		 ../common/vblank.c \
-		 ../common/xmlconfig.c \
 		 r200_cmdbuf.c \
 		 r200_pixel.c \
 		 r200_tex.c \
@@ -45,97 +36,25 @@ DRIVER_SOURCES = r200_context.c \
 		 r200_vtxfmt_sse.c \
 		 r200_vtxfmt_x86.c 
 
-
-INCLUDES = $(MINIGLX_INCLUDES) \
-	   $(SHARED_INCLUDES)
-
-
-C_SOURCES = $(DRIVER_SOURCES) \
-	    $(MINIGLX_SOURCES) 
-
-MESA_MODULES = $(TOP)/src/mesa/mesa.a
-
-
-ifeq ($(WINDOW_SYSTEM),dri)
-WINOBJ=$(MESABUILDDIR)/dri/dri.a
-WINLIB=
-else
-WINOBJ=
-WINLIB=-L$(MESA)/src/glx/mini
-endif
+C_SOURCES = $(COMMON_SOURCES) $(DRIVER_SOURCES)
 
 ASM_SOURCES = 
-OBJECTS = $(C_SOURCES:.c=.o) \
-	  $(ASM_SOURCES:.S=.o) 
 
 SYMLINKS = \
-	server/radeon_common.h \
 	server/radeon_dri.c \
 	server/radeon_dri.h \
 	server/radeon.h \
 	server/radeon_macros.h \
-	server/radeon_reg.h \
-	server/radeon_sarea.h \
-
-
-$(SYMLINKS):
-	mkdir -p server
-	cd server
-	rm -f $@ && ln -s ../../radeon/$@ $@
-
-
-### Include directories
-
-INCLUDE_DIRS = \
-	-I$(TOP)/include \
-	-I$(TOP)/src/mesa \
-	-I$(TOP)/src/mesa/main \
-	-I$(TOP)/src/mesa/glapi \
-	-I$(TOP)/src/mesa/math \
-	-I$(TOP)/src/mesa/transform \
-	-I$(TOP)/src/mesa/swrast \
-	-I$(TOP)/src/mesa/swrast_setup
-
-
-##### RULES #####
-
-.c.o:
-	$(CC) -c $(SHARED_INCLUDES) $(MINIGLX_INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
-
-.S.o:
-	$(CC) -c $(SHARED_INCLUDES) $(MINIGLX_INCLUDES) $(CFLAGS) $(DEFINES)  $< -o $@
-
+	server/radeon_reg.h 
 
 ##### TARGETS #####
 
-default: depend r200_dri.so
 
-r200_dri.so:  $(SYMLINKS) $(OBJECTS) $(MESA_MODULES) $(WINOBJ) Makefile.solo
-	rm -f $@ && gcc -o $@ -shared $(OBJECTS) $(MESA_MODULES) $(WINOBJ) $(WINLIB) -lc $(GL_LIB_DEPS)
-	rm -f $(LIB_DIR)/r200_dri.so && \
-	install r200_dri.so $(LIB_DIR)/r200_dri.so
+include ../Makefile.template
 
-$(LIB_DIR)/r200_dri.so:	r200_dri.so
-	rm -f $(LIB_DIR)/r200_dri.so && \
-	install r200_dri.so $(LIB_DIR)/r200_dri.so
+$(SYMLINKS):
+	mkdir -p server
+	for i in $(SYMLINKS) ; do rm -f $$i && test -f ../radeon/$$i && ln -s ../../radeon/$$i $$i ; done
 
-# Run 'make -f Makefile.solo dep' to update the dependencies if you change
-# what's included by any source file.
-depend: $(C_SOURCES) $(ASM_SOURCES)
-	touch depend
-	makedepend -fdepend -Y $(SHARED_INCLUDES) $(MINIGLX_INCLUDES) \
-		$(C_SOURCES) $(ASM_SOURCES) >& /dev/null
+symlinks: $(SYMLINKS)
 
-
-# Emacs tags
-tags:
-	etags `find . -name \*.[ch]` `find ../include`
-
-
-# Remove .o and backup files
-clean:
-	-rm -f *.o */*.o *~ *.o *~ *.so server/*.o
-	-rm -f $(SYMLINKS)
-
-
-include depend

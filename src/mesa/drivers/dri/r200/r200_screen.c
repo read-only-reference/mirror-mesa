@@ -41,6 +41,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "imports.h"
 #include "context.h"
 
+#define STANDALONE_MMIO
 #include "r200_screen.h"
 #include "r200_context.h"
 #include "r200_ioctl.h"
@@ -50,7 +51,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "utils.h"
 #include "vblank.h"
 #ifndef _SOLO
-#include "glxextensions.h"
+#include "GL/internal/dri_interface.h"
 #endif
 
 /* R200 configuration
@@ -363,6 +364,8 @@ r200CreateScreen( __DRIscreenPrivate *sPriv )
       __driUtilMessage("%s: drmMap failed\n", __FUNCTION__ );
       return NULL;
    }
+
+   RADEONMMIO = screen->mmio.map;
 
    screen->status.handle = dri_priv->statusHandle;
    screen->status.size   = dri_priv->statusSize;

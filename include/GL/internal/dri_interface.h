@@ -35,6 +35,9 @@
  * \author Ian Romanick <idr@us.ibm.com>
  */
 
+#ifndef DRI_INTERFACE_H
+#define DRI_INTERFACE_H
+
 /* FIXME: With a small amount of work, these two includes can be removed. */
 #include <X11/Xlib.h>
 #include <GL/glx.h>
@@ -394,7 +397,7 @@ struct __DRIcontextRec {
     /**
      * Method to bind a DRI drawable to a DRI graphics context.
      *
-     * \since Internal API version 20040317.
+     * \since Internal API version 20040415.
      */
     Bool (*bindContext3)(Display *dpy, int scrn, __DRIid draw,
 			 __DRIid read, __DRIcontext *ctx);
@@ -402,7 +405,7 @@ struct __DRIcontextRec {
     /**
      * Method to unbind a DRI drawable from a DRI graphics context.
      *
-     * \since Internal API version 20040317.
+     * \since Internal API version 20040415.
      */
     Bool (*unbindContext3)(Display *dpy, int scrn, __DRIid draw,
 			   __DRIid read, __DRIcontext *ctx);
@@ -497,3 +500,5 @@ struct __DRIdrawableRec {
      */
     unsigned swap_interval;
 };
+
+#endif

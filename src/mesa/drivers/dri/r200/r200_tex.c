@@ -41,7 +41,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "simple_list.h"
 #include "texformat.h"
 #include "texstore.h"
-#include "texutil.h"
 #include "texmem.h"
 #include "teximage.h"
 #include "texobj.h"
@@ -445,7 +444,6 @@ r200ValidateClientStorage( GLcontext *ctx, GLenum target,
 
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
-   int texelBytes;
 
    if (0)
       fprintf(stderr, "intformat %s format %s type %s\n",
@@ -468,7 +466,6 @@ r200ValidateClientStorage( GLcontext *ctx, GLenum target,
    case GL_RGBA:
       if ( format == GL_BGRA && type == GL_UNSIGNED_INT_8_8_8_8_REV ) {
 	 texImage->TexFormat = &_mesa_texformat_argb8888;
-	 texelBytes = 4;
       }
       else
 	 return 0;
@@ -477,7 +474,6 @@ r200ValidateClientStorage( GLcontext *ctx, GLenum target,
    case GL_RGB:
       if ( format == GL_RGB && type == GL_UNSIGNED_SHORT_5_6_5 ) {
 	 texImage->TexFormat = &_mesa_texformat_rgb565;
-	 texelBytes = 2;
       }
       else
 	 return 0;
@@ -487,19 +483,16 @@ r200ValidateClientStorage( GLcontext *ctx, GLenum target,
       if ( format == GL_YCBCR_MESA && 
 	   type == GL_UNSIGNED_SHORT_8_8_REV_APPLE ) {
 	 texImage->TexFormat = &_mesa_texformat_ycbcr_rev;
-	 texelBytes = 2;
       }
       else if ( format == GL_YCBCR_MESA && 
 		(type == GL_UNSIGNED_SHORT_8_8_APPLE || 
 		 type == GL_UNSIGNED_BYTE)) {
 	 texImage->TexFormat = &_mesa_texformat_ycbcr;
-	 texelBytes = 2;
       }
       else
 	 return 0;
       break;
-      
-	 
+
    default:
       return 0;
    }
@@ -538,7 +531,8 @@ r200ValidateClientStorage( GLcontext *ctx, GLenum target,
        */
       texImage->Data = (void *)pixels;
       texImage->IsClientData = GL_TRUE;
-      texImage->RowStride = srcRowStride / texelBytes;
+      texImage->RowStride = srcRowStride / texImage->TexFormat->TexelBytes;
+
       return 1;
    }
 }

@@ -2,7 +2,7 @@
  * Mesa 3-D graphics library
  * Version:  6.1
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -1794,6 +1794,70 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
          }
          return;
 
+      /* GL_ARB_texture_float */
+      case GL_TEXTURE_RED_TYPE_ARB:
+         if (ctx->Extensions.ARB_texture_float) {
+            *params = img->TexFormat->RedBits ? img->TexFormat->DataType : GL_NONE;
+         }
+         else {
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetTexLevelParameter[if]v(pname)");
+         }
+         return;
+      case GL_TEXTURE_GREEN_TYPE_ARB:
+         if (ctx->Extensions.ARB_texture_float) {
+            *params = img->TexFormat->GreenBits ? img->TexFormat->DataType : GL_NONE;
+         }
+         else {
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetTexLevelParameter[if]v(pname)");
+         }
+         return;
+      case GL_TEXTURE_BLUE_TYPE_ARB:
+         if (ctx->Extensions.ARB_texture_float) {
+            *params = img->TexFormat->BlueBits ? img->TexFormat->DataType : GL_NONE;
+         }
+         else {
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetTexLevelParameter[if]v(pname)");
+         }
+         return;
+      case GL_TEXTURE_ALPHA_TYPE_ARB:
+         if (ctx->Extensions.ARB_texture_float) {
+            *params = img->TexFormat->AlphaBits ? img->TexFormat->DataType : GL_NONE;
+         }
+         else {
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetTexLevelParameter[if]v(pname)");
+         }
+         return;
+      case GL_TEXTURE_LUMINANCE_TYPE_ARB:
+         if (ctx->Extensions.ARB_texture_float) {
+            *params = img->TexFormat->LuminanceBits ? img->TexFormat->DataType : GL_NONE;
+         }
+         else {
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetTexLevelParameter[if]v(pname)");
+         }
+         return;
+      case GL_TEXTURE_INTENSITY_TYPE_ARB:
+         if (ctx->Extensions.ARB_texture_float) {
+            *params = img->TexFormat->IntensityBits ? img->TexFormat->DataType : GL_NONE;
+         }
+         else {
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetTexLevelParameter[if]v(pname)");
+         }
+         return;
+      case GL_TEXTURE_DEPTH_TYPE_ARB:
+         if (ctx->Extensions.ARB_texture_float) {
+            *params = img->TexFormat->DepthBits ? img->TexFormat->DataType : GL_NONE;
+         }
+         else {
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetTexLevelParameter[if]v(pname)");
+         }
+         return;
       default:
          _mesa_error(ctx, GL_INVALID_ENUM,
                      "glGetTexLevelParameter[if]v(pname)");
@@ -2871,7 +2935,7 @@ update_texture_state( GLcontext *ctx )
       texUnit->_GenFlags = 0;
 
       /* Get the bitmask of texture enables */
-      if (ctx->FragmentProgram.Enabled && ctx->FragmentProgram.Current) {
+      if (ctx->FragmentProgram._Enabled) {
          enableBits = ctx->FragmentProgram.Current->TexturesUsed[unit];
       }
       else {
@@ -2946,13 +3010,16 @@ update_texture_state( GLcontext *ctx )
       if (texUnit->_ReallyEnabled)
          ctx->Texture._EnabledUnits |= (1 << unit);
 
-      if ( texUnit->EnvMode == GL_COMBINE ) {
+      if (texUnit->EnvMode == GL_COMBINE) {
 	 texUnit->_CurrentCombine = & texUnit->Combine;
       }
       else {
          GLenum format = texUnit->_Current->Image[0][0]->Format;
          if (format == GL_COLOR_INDEX) {
             format = GL_RGBA;  /* a bit of a hack */
+         }
+         else if (format == GL_DEPTH_COMPONENT) {
+            format = texUnit->_Current->DepthMode;
          }
 	 calculate_derived_texenv(&texUnit->_EnvMode, texUnit->EnvMode, format);
 	 texUnit->_CurrentCombine = & texUnit->_EnvMode;
@@ -3032,7 +3099,7 @@ update_texture_state( GLcontext *ctx )
    /* Fragment programs may need texture coordinates but not the
     * corresponding texture images.
     */
-   if (ctx->FragmentProgram.Enabled && ctx->FragmentProgram.Current) {
+   if (ctx->FragmentProgram._Enabled) {
       ctx->Texture._EnabledCoordUnits |=
          (ctx->FragmentProgram.Current->InputsRead >> FRAG_ATTRIB_TEX0);
    }

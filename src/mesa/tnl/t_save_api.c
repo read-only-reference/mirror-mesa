@@ -444,7 +444,6 @@ static void _save_upgrade_vertex( GLcontext *ctx,
       tnl->save.counter = ctx->Const.MaxArrayLockSize;
    tnl->save.initial_counter = tnl->save.counter;
 
-
    /* Recalculate all the attrptr[] values:
     */
    for (i = 0, tmp = tnl->save.vertex ; i < _TNL_ATTRIB_MAX ; i++) {
@@ -460,7 +459,6 @@ static void _save_upgrade_vertex( GLcontext *ctx,
     */
    _save_copy_from_current( ctx );
 
-
    /* Replay stored vertices to translate them to new format here.
     *
     * If there are copied vertices and the new (upgraded) attribute
@@ -475,7 +473,7 @@ static void _save_upgrade_vertex( GLcontext *ctx,
 
       /* Need to note this and fix up at runtime (or loopback):
        */
-      if (tnl->save.currentsz[attr] == 0) {
+      if (tnl->save.currentsz[attr][0] == 0) {
 	 assert(oldsz == 0);
 	 tnl->save.dangling_attr_ref = GL_TRUE;
 	 _mesa_debug(0, "_save_upgrade_vertex: dangling reference attr %d\n", 
@@ -498,10 +496,16 @@ static void _save_upgrade_vertex( GLcontext *ctx,
 	 for (j = 0 ; j < _TNL_ATTRIB_MAX ; j++) {
 	    if (tnl->save.attrsz[j]) {
 	       if (j == attr) {
-		  ASSIGN_4V( dest, 0, 0, 0, 1 );
-		  COPY_SZ_4V( dest, oldsz, data );
-		  data += oldsz;
-		  dest += newsz;
+		  if (oldsz) {
+		     ASSIGN_4V( dest, 0, 0, 0, 1 );
+		     COPY_SZ_4V( dest, oldsz, data );
+		     data += oldsz;
+		     dest += newsz;
+		  }
+		  else {
+		     COPY_SZ_4V( dest, newsz, tnl->save.current[attr] );
+		     dest += newsz;
+		  }
 	       }
 	       else {
 		  GLint sz = tnl->save.attrsz[j];
@@ -712,6 +716,15 @@ do {						\
 
 #define DISPATCH_ATTR1F( ATTR, S ) DISPATCH_ATTRFV( ATTR, 1, &(S) )
 
+#if defined(USE_X86_ASM) && 0 /* will break register calling convention */
+/* Naughty cheat:
+ */
+#define DISPATCH_ATTR2F( ATTR, S,T ) DISPATCH_ATTRFV( ATTR, 2, &(S) )
+#define DISPATCH_ATTR3F( ATTR, S,T,R ) DISPATCH_ATTRFV( ATTR, 3, &(S) )
+#define DISPATCH_ATTR4F( ATTR, S,T,R,Q ) DISPATCH_ATTRFV( ATTR, 4, &(S) )
+#else
+/* Safe:
+ */
 #define DISPATCH_ATTR2F( ATTR, S,T ) 		\
 do { 						\
    GLfloat v[2]; 				\
@@ -730,6 +743,7 @@ do { 						\
    v[0] = S; v[1] = T; v[2] = R; v[3] = Q;	\
    DISPATCH_ATTR4FV( ATTR, v );			\
 } while (0)
+#endif
 
 
 static void enum_error( void )
@@ -1467,8 +1481,7 @@ void _tnl_NewList( GLcontext *ctx, GLuint list, GLenum mode )
 
 void _tnl_EndList( GLcontext *ctx )
 {
-   TNLcontext *tnl = TNL_CONTEXT(ctx);
-   assert(tnl->save.vertex_size == 0);
+   assert(TNL_CONTEXT(ctx)->save.vertex_size == 0);
 }
  
 void _tnl_BeginCallList( GLcontext *ctx, GLuint list )
@@ -1524,13 +1537,16 @@ static void _save_current_init( GLcontext *ctx )
    GLint i;
 
    for (i = 0; i < _TNL_ATTRIB_MAT_FRONT_AMBIENT; i++) {
+      ASSERT(i < VERT_ATTRIB_MAX);
       tnl->save.currentsz[i] = &ctx->ListState.ActiveAttribSize[i];
       tnl->save.current[i] = ctx->ListState.CurrentAttrib[i];
    }
 
    for (i = _TNL_ATTRIB_MAT_FRONT_AMBIENT; i < _TNL_ATTRIB_INDEX; i++) {
-      tnl->save.currentsz[i] = &ctx->ListState.ActiveMaterialSize[i];
-      tnl->save.current[i] = ctx->ListState.CurrentMaterial[i];
+      const GLuint j = i - _TNL_ATTRIB_MAT_FRONT_AMBIENT;
+      ASSERT(j < MAT_ATTRIB_MAX);
+      tnl->save.currentsz[i] = &ctx->ListState.ActiveMaterialSize[j];
+      tnl->save.current[i] = ctx->ListState.CurrentMaterial[j];
    }
 
    tnl->save.currentsz[_TNL_ATTRIB_INDEX] = &ctx->ListState.ActiveIndex;

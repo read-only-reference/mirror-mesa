@@ -221,7 +221,6 @@ static int RADEONEngineRestore( const DRIDriverContext *ctx )
    OUTREG(RADEON_GEN_INT_CNTL, info->gen_int_cntl);
    OUTREG(RADEON_CRTC_OFFSET_CNTL, info->crtc_offset_cntl);
 
-
    /* Initialize and start the CP if required */
    if ((err = drmCommandNone(ctx->drmFD, DRM_RADEON_CP_START)) != 0) {
       fprintf(stderr, "%s: CP start %d\n", __FUNCTION__, err);
@@ -321,10 +320,6 @@ static int RADEONDRIAgpInit( const DRIDriverContext *ctx, RADEONInfoPtr info)
       return 0;
    }
     
-   /* Workaround for some hardware bugs */
-   if (info->ChipFamily < CHIP_FAMILY_R200)
-      OUTREG(RADEON_AGP_CNTL, INREG(RADEON_AGP_CNTL) | 0x000e0020);
-
    /* Modify the mode if the default mode is not appropriate for this
     * particular combination of graphics card and AGP chipset.
     */
@@ -333,7 +328,7 @@ static int RADEONDRIAgpInit( const DRIDriverContext *ctx, RADEONInfoPtr info)
    /* Disable fast write entirely - too many lockups.
     */
    mode &= ~RADEON_AGP_MODE_MASK;
-   switch (info->gartMode) {
+   switch (ctx->agpmode) {
    case 4:          mode |= RADEON_AGP_4X_MODE;
    case 2:          mode |= RADEON_AGP_2X_MODE;
    case 1: default: mode |= RADEON_AGP_1X_MODE;
@@ -344,7 +339,13 @@ static int RADEONDRIAgpInit( const DRIDriverContext *ctx, RADEONInfoPtr info)
       drmAgpRelease(ctx->drmFD);
       return 0;
    }
-    
+   else
+     fprintf(stderr, "[gart] AGP enabled at %dx\n", ctx->agpmode);
+
+   /* Workaround for some hardware bugs */
+   if (info->ChipFamily < CHIP_FAMILY_R200)
+      OUTREG(RADEON_AGP_CNTL, INREG(RADEON_AGP_CNTL) | 0x000e0000);
+
    info->gartOffset = 0;
 
    if ((ret = drmAgpAlloc(ctx->drmFD, info->gartSize*1024*1024, 0, NULL,
@@ -886,13 +887,14 @@ static int RADEONScreenInit( DRIDriverContext *ctx, RADEONInfoPtr info )
    /* Initialize kernel gart memory manager */
    RADEONDRIAgpHeapInit(ctx, info);
 
+   fprintf(stderr,"page flipping %sabled\n", info->page_flip_enable?"en":"dis");
    /* Initialize the SAREA private data structure */
    {
       drm_radeon_sarea_t *pSAREAPriv;
       pSAREAPriv = (drm_radeon_sarea_t *)(((char*)ctx->pSAREA) + 
 					sizeof(drm_sarea_t));
       memset(pSAREAPriv, 0, sizeof(*pSAREAPriv));
-      pSAREAPriv->pfState = 1;
+      pSAREAPriv->pfState = info->page_flip_enable;
    }
 
 
@@ -919,7 +921,7 @@ static int RADEONScreenInit( DRIDriverContext *ctx, RADEONInfoPtr info )
    pRADEONDRI->depth             = ctx->bpp; /* XXX: depth */
    pRADEONDRI->bpp               = ctx->bpp;
    pRADEONDRI->IsPCI             = 0;
-   pRADEONDRI->AGPMode           = info->gartMode;
+   pRADEONDRI->AGPMode           = ctx->agpmode;
    pRADEONDRI->frontOffset       = info->frontOffset;
    pRADEONDRI->frontPitch        = info->frontPitch;
    pRADEONDRI->backOffset        = info->backOffset;
@@ -1147,11 +1149,11 @@ static int radeonInitFBDev( DRIDriverContext *ctx )
    ctx->driverPrivate = (void *)info;
    
    info->gartFastWrite  = RADEON_DEFAULT_AGP_FAST_WRITE;
-   info->gartMode       = RADEON_DEFAULT_AGP_MODE;
    info->gartSize       = RADEON_DEFAULT_AGP_SIZE;
    info->gartTexSize    = RADEON_DEFAULT_AGP_TEX_SIZE;
    info->bufSize       = RADEON_DEFAULT_BUFFER_SIZE;
    info->ringSize      = RADEON_DEFAULT_RING_SIZE;
+   info->page_flip_enable = RADEON_DEFAULT_PAGE_FLIP;
   
    info->Chipset = ctx->chipset;
 

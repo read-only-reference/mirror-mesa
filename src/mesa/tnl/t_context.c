@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.1
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -81,6 +81,9 @@ _tnl_CreateContext( GLcontext *ctx )
       return GL_FALSE;
    }
 
+   if (getenv("MESA_CODEGEN"))
+      tnl->AllowCodegen = GL_TRUE;
+
    /* Initialize the VB.
     */
    tnl->vb.Size = ctx->Const.MaxArrayLockSize + MAX_CLIPPED_VERTICES;
@@ -121,10 +124,6 @@ _tnl_CreateContext( GLcontext *ctx )
    tnl->Driver.Render.PrimTabVerts = _tnl_render_tab_verts;
    tnl->Driver.NotifyMaterialChange = _mesa_validate_all_lighting_tables;
    
-
-   if (getenv("MESA_CODEGEN"))
-      tnl->AllowCodegen = GL_TRUE;
-
    return GL_TRUE;
 }
 
@@ -193,7 +192,7 @@ _tnl_InvalidateState( GLcontext *ctx, GLuint new_state )
       tnl->render_inputs |= _TNL_BIT_TEX0;
 
    if (ctx->Point._Attenuated ||
-       (ctx->VertexProgram.Enabled && ctx->VertexProgram.PointSizeEnabled))
+       (ctx->VertexProgram._Enabled && ctx->VertexProgram.PointSizeEnabled))
       tnl->render_inputs |= _TNL_BIT_POINTSIZE;
 }
 

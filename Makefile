@@ -7,7 +7,7 @@ SUBDIRS = src progs
 
 default: $(TOP)/configs/current
 	@for dir in $(SUBDIRS) ; do \
-		(cd $$dir ; make) ; \
+		(cd $$dir ; make) || exit 1 ; \
 	done
 
 
@@ -64,6 +64,9 @@ linux \
 linux-alpha \
 linux-alpha-static \
 linux-debug \
+linux-dri \
+linux-dri-x86-64 \
+linux-glide \
 linux-icc \
 linux-icc-static \
 linux-osmesa16 \
@@ -72,13 +75,17 @@ linux-osmesa32 \
 linux-ppc \
 linux-ppc-static \
 linux-solo \
+linux-solo-ia64 \
 linux-sparc \
 linux-sparc5 \
 linux-static \
 linux-ultrasparc \
+linux-tcc \
 linux-x86 \
+linux-x86-debug \
 linux-x86-64 \
 linux-x86-64-static \
+linux-x86-glide \
 linux-x86-static \
 netbsd \
 openbsd \
@@ -92,7 +99,7 @@ sunos5 \
 sunos5-gcc \
 sunos5-smp \
 ultrix-gcc:
-	cp $(TOP)/configs/$@ $(TOP)/configs/current
+	(cd configs && rm -f current && ln -s $@ current)
 	make default
 
 

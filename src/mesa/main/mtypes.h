@@ -143,6 +143,8 @@ struct gl_texture_object;
 typedef struct __GLcontextRec GLcontext;
 typedef struct __GLcontextModesRec GLvisual;
 typedef struct gl_frame_buffer GLframebuffer;
+struct gl_pixelstore_attrib;
+struct gl_texture_format;
 /*@}*/
 
 
@@ -1024,16 +1026,37 @@ typedef void (*FetchTexelFuncF)( const struct gl_texture_image *texImage,
                                  GLint col, GLint row, GLint img,
                                  GLfloat *texelOut );
 
+
+/**
+ * TexImage store function.  This is called by the glTex[Sub]Image
+ * functions and is responsible for converting the user-specified texture
+ * image into a specific (hardware) image format.
+ */
+typedef GLboolean (*StoreTexImageFunc)(GLcontext *ctx, GLuint dims,
+                          GLenum baseInternalFormat,
+                          const struct gl_texture_format *dstFormat,
+                          GLvoid *dstAddr,
+                          GLint dstXoffset, GLint dstYoffset, GLint dstZoffset,
+                          GLint dstRowStride, GLint dstImageStride,
+                          GLint srcWidth, GLint srcHeight, GLint srcDepth,
+                          GLenum srcFormat, GLenum srcType,
+                          const GLvoid *srcAddr,
+                          const struct gl_pixelstore_attrib *srcPacking);
+
+
+
 /**
  * Texture format record 
  */
 struct gl_texture_format {
    GLint MesaFormat;		/**< One of the MESA_FORMAT_* values */
 
-   GLenum BaseFormat;		/**< Either GL_ALPHA, GL_INTENSITY, GL_LUMINANCE,
-                                 *   GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA,
-                                 *   GL_COLOR_INDEX or GL_DEPTH_COMPONENT.
-                                 */
+   GLenum BaseFormat;		/**< Either GL_RGB, GL_RGBA, GL_ALPHA,
+				 *   GL_LUMINANCE, GL_LUMINANCE_ALPHA,
+				 *   GL_INTENSITY, GL_COLOR_INDEX or
+				 *   GL_DEPTH_COMPONENT.
+				 */
+   GLenum DataType;		/**< GL_FLOAT or GL_UNSIGNED_NORMALIZED_ARB */
    GLubyte RedBits;		/**< Bits per texel component */
    GLubyte GreenBits;		/**< These are just rough approximations for */
    GLubyte BlueBits;		/**< compressed texture formats. */
@@ -1043,7 +1066,9 @@ struct gl_texture_format {
    GLubyte IndexBits;
    GLubyte DepthBits;
 
-   GLint TexelBytes;		/**< Bytes per texel (0 for compressed formats */
+   GLint TexelBytes;		/**< Bytes per texel, 0 if compressed format */
+
+   StoreTexImageFunc StoreImage;
 
    /**
     * \name Texel fetch function pointers
@@ -1063,10 +1088,11 @@ struct gl_texture_format {
  * Texture image record 
  */
 struct gl_texture_image {
-   GLenum Format;		/**< GL_ALPHA, GL_LUMINANCE, GL_LUMINANCE_ALPHA,
-				 *    GL_INTENSITY, GL_RGB, GL_RGBA,
-                                 *    GL_COLOR_INDEX or GL_DEPTH_COMPONENT only.
-                                 *    Used for choosing TexEnv arithmetic.
+   GLenum Format;		/**< Either GL_RGB, GL_RGBA, GL_ALPHA,
+				 *   GL_LUMINANCE, GL_LUMINANCE_ALPHA,
+				 *   GL_INTENSITY, GL_COLOR_INDEX or
+				 *   GL_DEPTH_COMPONENT only.
+				 *   Used for choosing TexEnv arithmetic.
 				 */
    GLint IntFormat;		/**< Internal format as given by the user */
    GLuint Border;		/**< 0 or 1 */
@@ -1559,6 +1585,7 @@ struct vertex_program
 {
    struct program Base;   /* base class */
    struct vp_instruction *Instructions;  /* Compiled instructions */
+   GLboolean IsNVProgram; /* GL_NV_vertex_program ? */
    GLboolean IsPositionInvariant;  /* GL_NV_vertex_program1_1 */
    GLuint InputsRead;     /* Bitmask of which input regs are read */
    GLuint OutputsWritten; /* Bitmask of which output regs are written to */
@@ -1579,6 +1606,11 @@ struct fragment_program
    GLuint NumTexIndirections;
    GLenum FogOption;
    struct program_parameter_list *Parameters; /**< array [NumParameters] */
+
+#ifdef USE_TCC
+   char c_str[4096];		/* experimental... */
+   int c_strlen;
+#endif
 };
 
 
@@ -1596,10 +1628,11 @@ struct program_state {
  */
 struct vertex_program_state
 {
-   GLboolean Enabled;                    /**< GL_VERTEX_PROGRAM_NV */
-   GLboolean PointSizeEnabled;           /**< GL_VERTEX_PROGRAM_POINT_SIZE_NV */
-   GLboolean TwoSideEnabled;             /**< GL_VERTEX_PROGRAM_TWO_SIDE_NV */
-   struct vertex_program *Current;       /**< ptr to currently bound program */
+   GLboolean Enabled;                  /**< GL_VERTEX_PROGRAM_NV */
+   GLboolean _Enabled;                 /**< Really enabled? */
+   GLboolean PointSizeEnabled;         /**< GL_VERTEX_PROGRAM_POINT_SIZE_NV */
+   GLboolean TwoSideEnabled;           /**< GL_VERTEX_PROGRAM_TWO_SIDE_NV */
+   struct vertex_program *Current;     /**< ptr to currently bound program */
 
    GLenum TrackMatrix[MAX_NV_VERTEX_PROGRAM_PARAMS / 4];
    GLenum TrackMatrixTransform[MAX_NV_VERTEX_PROGRAM_PARAMS / 4];
@@ -1626,6 +1659,7 @@ struct vertex_program_state
 struct fragment_program_state
 {
    GLboolean Enabled;                    /* GL_VERTEX_PROGRAM_NV */
+   GLboolean _Enabled;                   /* Really enabled? */
    struct fragment_program *Current;     /* ptr to currently bound program */
    struct fp_machine Machine;            /* machine state */
    GLfloat Parameters[MAX_NV_FRAGMENT_PROGRAM_PARAMS][4]; /* Env params */
@@ -1822,6 +1856,7 @@ struct gl_extensions
    GLboolean dummy;  /* don't remove this! */
    GLboolean ARB_depth_texture;
    GLboolean ARB_fragment_program;
+   GLboolean ARB_half_float_pixel;
    GLboolean ARB_imaging;
    GLboolean ARB_multisample;
    GLboolean ARB_multitexture;
@@ -1834,6 +1869,7 @@ struct gl_extensions
    GLboolean ARB_texture_env_combine;
    GLboolean ARB_texture_env_crossbar;
    GLboolean ARB_texture_env_dot3;
+   GLboolean ARB_texture_float;
    GLboolean ARB_texture_mirrored_repeat;
    GLboolean ARB_texture_non_power_of_two;
    GLboolean ARB_transpose_matrix;

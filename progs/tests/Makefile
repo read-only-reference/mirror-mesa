@@ -22,6 +22,7 @@ SOURCES = antialias.c \
 	bufferobj.c \
 	cva.c \
 	dinoshade.c \
+	floattex.c \
 	fogcoord.c \
 	fptest1.c \
 	fptexture.c \
@@ -44,11 +45,14 @@ SOURCES = antialias.c \
 	vptorus.c \
 	vpwarpmesh.c \
 	yuvrect.c \
-	yuvsquare.c
+	yuvsquare.c \
+	zreaddraw.c
 
 PROGS = $(SOURCES:%.c=%)
 
 INCLUDES = -I. -I$(TOP)/include
+
+UTIL_FILES = readtex.h readtex.c
 
 
 ##### RULES #####
@@ -68,7 +72,7 @@ INCLUDES = -I. -I$(TOP)/include
 
 ##### TARGETS #####
 
-default: $(PROGS)
+default: $(UTIL_FILES) $(PROGS)
 
 clean:
 	rm -f $(PROGS)
@@ -105,6 +109,3 @@ readtex.c: $(TOP)/progs/util/readtex.c
 # Emacs tags
 tags:
 	etags `find . -name \*.[ch]` `find ../include`
-
-
-include depend

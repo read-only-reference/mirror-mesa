@@ -102,8 +102,10 @@ static void _tnl_wrap_buffers( GLcontext *ctx )
 
 /* Deal with buffer wrapping where provoked by the vertex buffer
  * filling up, as opposed to upgrade_vertex().
+ *
+ * Make it GLAPIENTRY, so we can tail from the codegen'ed Vertex*fv
  */
-void _tnl_wrap_filled_vertex( GLcontext *ctx )
+void GLAPIENTRY _tnl_wrap_filled_vertex( GLcontext *ctx )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    GLfloat *data = tnl->vtx.copied.buffer;
@@ -273,10 +275,15 @@ static void _tnl_wrap_upgrade_vertex( GLcontext *ctx,
 	 for (j = 0 ; j < _TNL_ATTRIB_MAX ; j++) {
 	    if (tnl->vtx.attrsz[j]) {
 	       if (j == attr) {
-		  COPY_SZ_4V( dest, newsz, tnl->vtx.current[j] );
-		  COPY_SZ_4V( dest, oldsz, data );
-		  data += oldsz;
-		  dest += newsz;
+		  if (oldsz) {
+		     ASSIGN_4V( dest, 0, 0, 0, 1 );
+		     COPY_SZ_4V( dest, oldsz, data );
+		     data += oldsz;
+		     dest += newsz;
+		  } else {
+		     COPY_SZ_4V( dest, newsz, tnl->vtx.current[j] );
+		     dest += newsz;
+		  }
 	       }
 	       else {
 		  GLuint sz = tnl->vtx.attrsz[j];
@@ -327,6 +334,15 @@ static void _tnl_fixup_vertex( GLcontext *ctx, GLuint attr, GLuint sz )
       for (i = sz ; i <= tnl->vtx.attrsz[attr] ; i++)
 	 tnl->vtx.attrptr[attr][i-1] = id[i-1];
    }
+
+   /* Does setting NeedFlush belong here?  Necessitates resetting
+    * vtxfmt on each flush (otherwise flags won't get reset
+    * afterwards).
+    */
+   if (attr == 0) 
+      ctx->Driver.NeedFlush |= FLUSH_STORED_VERTICES;
+   else 
+      ctx->Driver.NeedFlush |= FLUSH_UPDATE_CURRENT;
 }
 
 
@@ -391,22 +407,16 @@ static attrfv_func do_choose( GLuint attr, GLuint sz )
    
       _tnl_fixup_vertex( ctx, attr, sz );
  
-      /* Does setting NeedFlush belong here?  Necessitates resetting
-       * vtxfmt on each flush (otherwise flags won't get reset
-       * afterwards).
-       */
-      if (attr == 0) 
-	 ctx->Driver.NeedFlush |= FLUSH_STORED_VERTICES;
-      else 
-	 ctx->Driver.NeedFlush |= FLUSH_UPDATE_CURRENT;
    }
 
 
    /* Try to use codegen:
-    */   
+    */
+#ifdef USE_X86_ASM
    if (tnl->AllowCodegen)
       tnl->vtx.tabfv[attr][sz-1] = do_codegen( ctx, attr, sz );
    else
+#endif
       tnl->vtx.tabfv[attr][sz-1] = 0;
 
    /* Else use generic version:
@@ -471,11 +481,15 @@ static void reset_attrfv( TNLcontext *tnl )
 
    for (i = 0 ; i < _TNL_ATTRIB_MAX ; i++) 
       if (tnl->vtx.attrsz[i]) {
-	 GLuint j = tnl->vtx.attrsz[i] - 1;
+	 GLint j = tnl->vtx.attrsz[i] - 1;
 	 tnl->vtx.attrsz[i] = 0;
 
-	 if (i < _TNL_MAX_ATTR_CODEGEN)
-	    tnl->vtx.tabfv[i][j] = choose[i][j];
+	 if (i < _TNL_MAX_ATTR_CODEGEN) {
+            while (j >= 0) {
+	       tnl->vtx.tabfv[i][j] = choose[i][j];
+               j--;
+            }
+         }
       }
 
    tnl->vtx.vertex_size = 0;
@@ -509,7 +523,6 @@ do {							\
       if (N>1) dest[1] = (params)[1];			\
       if (N>2) dest[2] = (params)[2];			\
       if (N>3) dest[3] = (params)[3];			\
-      ctx->Driver.NeedFlush |= FLUSH_UPDATE_CURRENT;	\
    }							\
 } while (0)
 
@@ -623,7 +636,7 @@ static void GLAPIENTRY _tnl_EvalCoord1f( GLfloat u )
 
       for (i = 0 ; i <= _TNL_ATTRIB_INDEX ; i++) {
 	 if (tnl->vtx.eval.map1[i].map) 
-	    if (tnl->vtx.attrsz[i] < tnl->vtx.eval.map1[i].sz)
+	    if (tnl->vtx.attrsz[i] != tnl->vtx.eval.map1[i].sz)
 	       _tnl_fixup_vertex( ctx, i, tnl->vtx.eval.map1[i].sz );
       }
    }
@@ -651,12 +664,12 @@ static void GLAPIENTRY _tnl_EvalCoord2f( GLfloat u, GLfloat v )
 
       for (i = 0 ; i <= _TNL_ATTRIB_INDEX ; i++) {
 	 if (tnl->vtx.eval.map2[i].map) 
-	    if (tnl->vtx.attrsz[i] < tnl->vtx.eval.map2[i].sz)
+	    if (tnl->vtx.attrsz[i] != tnl->vtx.eval.map2[i].sz)
 	       _tnl_fixup_vertex( ctx, i, tnl->vtx.eval.map2[i].sz );
       }
 
       if (ctx->Eval.AutoNormal) 
-	 if (tnl->vtx.attrsz[_TNL_ATTRIB_NORMAL] < 3)
+	 if (tnl->vtx.attrsz[_TNL_ATTRIB_NORMAL] != 3)
 	    _tnl_fixup_vertex( ctx, _TNL_ATTRIB_NORMAL, 3 );
    }
 
@@ -711,21 +724,20 @@ static void GLAPIENTRY _tnl_Begin( GLenum mode )
 {
    GET_CURRENT_CONTEXT( ctx ); 
 
-   if ((ctx->VertexProgram.Enabled
-        && !ctx->VertexProgram.Current->Instructions) ||
-       (ctx->FragmentProgram.Enabled
-        && !ctx->FragmentProgram.Current->Instructions)) {
-      _mesa_error(ctx, GL_INVALID_OPERATION,
-                  "glBegin (invalid vertex/fragment program)");
-      return;
-   }
-
    if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1) {
       TNLcontext *tnl = TNL_CONTEXT(ctx); 
       int i;
 
       if (ctx->NewState) {
 	 _mesa_update_state( ctx );
+
+         if ((ctx->VertexProgram.Enabled && !ctx->VertexProgram._Enabled) ||
+            (ctx->FragmentProgram.Enabled && !ctx->FragmentProgram._Enabled)) {
+            _mesa_error(ctx, GL_INVALID_OPERATION,
+                        "glBegin (invalid vertex/fragment program)");
+            return;
+         }
+
 	 if (!(tnl->Driver.NotifyBegin && 
 	       tnl->Driver.NotifyBegin( ctx, mode )))
 	     ctx->Exec->Begin(mode);
@@ -883,6 +895,12 @@ void _tnl_vtx_init( GLcontext *ctx )
       choose[ERROR_ATTRIB][2] = error_attrib;
       choose[ERROR_ATTRIB][3] = error_attrib;
 
+#ifdef USE_X86_ASM
+      if (tnl->AllowCodegen) {
+         _tnl_x86choosers(choose, do_choose); /* x86 INIT_CHOOSERS */
+      }
+#endif
+
       _tnl_generic_attr_table_init( generic_attr_func );
    }
 
@@ -896,11 +914,18 @@ void _tnl_vtx_init( GLcontext *ctx )
       tnl->vtx.gen.Attribute[i] = no_codegen;
    }
 
+#ifdef USE_X86_ASM
    _tnl_InitX86Codegen( &tnl->vtx.gen );
+#endif
 
    _tnl_current_init( ctx );
    _tnl_exec_vtxfmt_init( ctx );
    _tnl_generic_exec_vtxfmt_init( ctx );
+#ifdef USE_X86_ASM
+   if (tnl->AllowCodegen) {
+      _tnl_x86_exec_vtxfmt_init( ctx ); /* x86 DISPATCH_ATTRFV */
+   }
+#endif
 
    _mesa_install_exec_vtxfmt( ctx, &tnl->exec_vtxfmt );
 

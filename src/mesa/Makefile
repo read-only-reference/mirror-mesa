@@ -32,20 +32,21 @@ default:
 ######################################################################
 # Linux solo DRI drivers
 
-SOLO_SOURCES = \
+SOLO_C_SOURCES = \
 	$(MAIN_SOURCES)		\
 	$(MATH_SOURCES)		\
 	$(ARRAY_CACHE_SOURCES)	\
 	$(TNL_SOURCES)		\
 	$(SWRAST_SOURCES)	\
 	$(SWRAST_SETUP_SOURCES)	\
-	$(ASM_C_SOURCES)	\
-	$(X86_SOURCES)
+	$(SHADER_SOURCES)       \
+	$(ASM_C_SOURCES)	
 
-SOLO_OBJECTS = $(SOLO_SOURCES:.c=.o)
+SOLO_OBJECTS = $(SOLO_C_SOURCES:.c=.o) \
+		$(ASM_SOURCES:.S=.o)
 
 
-linux-solo: depend mesa.a drivers
+linux-solo: depend subdirs mesa.a driver-dirs
 
 # Make archive of core object files
 mesa.a:	$(SOLO_OBJECTS)
@@ -53,7 +54,10 @@ mesa.a:	$(SOLO_OBJECTS)
 	ar rcv $@ $(SOLO_OBJECTS)
 	ranlib $@
 
-drivers:
+# note: cannot use the name of the directory ("drivers") as the
+# target, otherwise make will look & see that the "drivers" directory
+# already exists, so not try to rebuild it...
+driver-dirs:
 	cd drivers/dri ; make
 
 
@@ -97,7 +101,7 @@ stand-alone: depend subdirs $(LIB_DIR)/$(GL_LIB_NAME) $(LIB_DIR)/$(OSMESA_LIB_NA
 osmesa-only: depend subdirs $(LIB_DIR)/$(OSMESA_LIB_NAME)
 
 subdirs:
-	(cd x86 ; make)
+	@ (cd x86 ; make)
 
 # Make the GL library
 $(LIB_DIR)/$(GL_LIB_NAME): $(STAND_ALONE_OBJECTS)
@@ -140,6 +144,7 @@ ALL_SOURCES = \
 	$(MATH_SOURCES)		\
 	$(ARRAY_CACHE_SOURCES)	\
 	$(TNL_SOURCES)		\
+	$(SHADER_SOURCES)	\
 	$(SWRAST_SOURCES)	\
 	$(SWRAST_SETUP_SOURCES)	\
 	$(ASM_C_SOURCES)	\
@@ -154,7 +159,7 @@ SUBDIRS = array_cache drivers/dri glapi main math sparc swrast swrast_setup \
 # Update dependencies
 depend: $(ALL_SOURCES)
 	touch depend
-	makedepend -fdepend -Y $(INCLUDE_DIRS) $(ALL_SOURCES) >& /dev/null
+	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDE_DIRS) $(ALL_SOURCES) >& /dev/null
 
 
 # Emacs tags
@@ -163,7 +168,7 @@ tags:
 
 clean:
 	-rm -f */*.o
-	rm -f depend
+	rm -f depend mesa.a
 	for dir in $(SUBDIRS) ; do \
 		(cd $$dir ; make clean) ; \
 	done
