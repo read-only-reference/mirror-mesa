@@ -1,4 +1,4 @@
-/* $Id: fakeglx.c,v 1.1 1999/08/19 00:55:42 jtg Exp $ */
+/* $Id: fakeglx.c,v 1.8 1999/09/16 16:44:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -62,6 +62,17 @@
 #include "macros.h"
 #include "types.h"
 #include "xmesaP.h"
+
+
+
+/* Silence compiler warnings */
+void Fake_glXDummyFunc( void )
+{
+   (void) kernel8;
+   (void) DitherValues;
+   (void) HPCR_DRGB;
+   (void) kernel1;
+}
 
 
 
@@ -1172,49 +1183,7 @@ Bool Fake_glXIsDirect( Display *dpy, GLXContext ctx )
 void Fake_glXSwapBuffers( Display *dpy, GLXDrawable drawable )
 {
    XMesaBuffer buffer = XMesaFindBuffer( dpy, drawable );
-   static GLXDrawable last = 0;
-   static Window window = 0;
-   if (drawable != last && 0) {
-      XSetWindowAttributes cwa;
 
-      _kw_ungrab_all( dpy );
-      cwa.override_redirect = 0;
-      XChangeWindowAttributes( dpy, drawable, CWOverrideRedirect,
-			       &cwa );
-/*       printf("KW: Ungrab display %s\n", DisplayString(dpy)); */
-
-
-/*       last = drawable; */
-
-
-      if (!window) {
-	 XSetWindowAttributes cwa;
-
-	 if ((window = XCreateSimpleWindow( dpy, 
-					    RootWindow( dpy, 0 ),
-					    10,10,100,100, 0, 
-					    WhitePixel( dpy, 0 ),
-					    BlackPixel( dpy, 0 ))) == 0)
-	 {
-	    printf("Failed to open radar window\n");
-	    abort();
-	 }
-   
-	 cwa.event_mask = (PointerMotionMask |
-			   ButtonPressMask |
-			   ButtonReleaseMask |
-			   KeyPressMask |
-			   KeyReleaseMask |
-			   ExposureMask );
-
-	 XChangeWindowAttributes( dpy, window, 
-				  CWEventMask,
-				  &cwa );
-
-	 XMapWindow( dpy, window );
-	 XFlush( dpy );
-      }
-   }
    if (buffer) {
       XMesaSwapBuffers(buffer);
    }
@@ -1429,17 +1398,28 @@ void Fake_glXWaitX( void )
 }
 
 
+/*
+ * Return the extensions string, which is 3Dfx-dependant.
+ */
+static const char *get_extensions( void )
+{
+#ifdef FX
+   const char *fx = getenv("MESA_GLX_FX");
+   if (fx && fx[0] != 'd') {
+      return "GLX_MESA_pixmap_colormap GLX_EXT_visual_info GLX_MESA_release_buffers GLX_MESA_copy_sub_buffer GLX_SGI_video_sync GLX_EXT_get_proc_address GLX_MESA_set_3dfx_mode";
+   }
+#endif
+   return "GLX_MESA_pixmap_colormap GLX_EXT_visual_info GLX_MESA_release_buffers GLX_MESA_copy_sub_buffer GLX_SGI_video_sync GL_EXT_get_proc_address";
+}
 
-#define EXTENSIONS "GLX_MESA_pixmap_colormap GLX_EXT_visual_info GLX_MESA_release_buffers GLX_MESA_copy_sub_buffer GLX_SGI_video_sync"
 
 
 /* GLX 1.1 and later */
 const char *Fake_glXQueryExtensionsString( Display *dpy, int screen )
 {
-   static char *extensions = EXTENSIONS;
    (void) dpy;
    (void) screen;
-   return extensions;
+   return get_extensions();
 }
 
 
@@ -1447,16 +1427,15 @@ const char *Fake_glXQueryExtensionsString( Display *dpy, int screen )
 /* GLX 1.1 and later */
 const char *Fake_glXQueryServerString( Display *dpy, int screen, int name )
 {
-   static char *extensions = EXTENSIONS;
    static char *vendor = "Brian Paul";
-   static char *version = "1.1 Mesa 3.0";
+   static char *version = "1.1 Mesa 3.1";
 
    (void) dpy;
    (void) screen;
 
    switch (name) {
       case GLX_EXTENSIONS:
-         return extensions;
+         return get_extensions();
       case GLX_VENDOR:
 	 return vendor;
       case GLX_VERSION:
@@ -1471,15 +1450,14 @@ const char *Fake_glXQueryServerString( Display *dpy, int screen, int name )
 /* GLX 1.1 and later */
 const char *Fake_glXGetClientString( Display *dpy, int name )
 {
-   static char *extensions = EXTENSIONS;
    static char *vendor = "Brian Paul";
-   static char *version = "1.1 Mesa 3.0";
+   static char *version = "1.1 Mesa 3.1";
 
    (void) dpy;
 
    switch (name) {
       case GLX_EXTENSIONS:
-         return extensions;
+         return get_extensions();
       case GLX_VENDOR:
 	 return vendor;
       case GLX_VERSION:
@@ -1506,11 +1484,40 @@ Bool Fake_glXReleaseBuffersMESA( Display *dpy, GLXDrawable d )
 }
 
 
-/* Silence compiler warnings */
-void Fake_glXDummyFunc( void )
+/*
+ * GLX_MESA_set_3dfx_mode
+ */
+GLboolean Fake_glXSet3DfxModeMESA( GLint mode )
 {
-   (void) kernel8;
-   (void) DitherValues;
-   (void) HPCR_DRGB;
-   (void) kernel1;
+   return XMesaSetFXmode( mode );
+}
+
+
+
+/*GLfunction Fake_glXGetProcAddress( const GLubyte *procName )*/
+void (*Fake_glXGetProcAddress( const GLubyte *procName ))()
+{
+   typedef void (*GLfunction)();
+   struct proc {
+      const char *name;
+      GLfunction address;
+   };
+   static struct proc procTable[] = {
+      { "glXGetProcAddressEXT", (GLfunction) glXGetProcAddressEXT },
+      { "glXCreateGLXPixmapMESA", (GLfunction) glXCreateGLXPixmapMESA },
+      { "glXReleaseBuffersMESA", (GLfunction) glXReleaseBuffersMESA },
+      { "glXCopySubBufferMESA", (GLfunction) glXCopySubBufferMESA },
+      { "glXSet3DfxModeMESA", (GLfunction) glXSet3DfxModeMESA },
+      /* NOTE: GLX_SGI_video_sync not implemented in Mesa */
+      { NULL, NULL }  /* end of list token */
+   };
+   GLuint i;
+
+   /* First, look for core library functions */
+   for (i = 0; procTable[i].address; i++) {
+      if (strcmp((const char *) procName, procTable[i].name) == 0)
+	  return (GLfunction) procTable[i].address;
+   }
+
+   return NULL;
 }

@@ -1,4 +1,4 @@
-/* $Id: light.c,v 1.1 1999/08/19 00:55:41 jtg Exp $ */
+/* $Id: light.c,v 1.3 1999/09/30 11:18:22 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -60,17 +60,18 @@ void gl_ShadeModel( GLcontext *ctx, GLenum mode )
    if (MESA_VERBOSE & VERBOSE_API)
       fprintf(stderr, "glShadeModel %s\n", gl_lookup_enum_by_nr(mode));
 
+
    switch (mode) {
-      case GL_FLAT:
-      case GL_SMOOTH:
-         if (ctx->Light.ShadeModel!=mode) {
-            ctx->Light.ShadeModel = mode;
-	    ctx->TriangleCaps ^= DD_FLATSHADE;
-            ctx->NewState |= NEW_RASTER_OPS;
-         }
-         break;
-      default:
-         gl_error( ctx, GL_INVALID_ENUM, "glShadeModel" );
+   case GL_FLAT:
+   case GL_SMOOTH:
+      if (ctx->Light.ShadeModel!=mode) {
+	 ctx->Light.ShadeModel = mode;
+	 ctx->TriangleCaps ^= DD_FLATSHADE;
+	 ctx->NewState |= NEW_RASTER_OPS;
+      }
+      break;
+   default:
+      gl_error( ctx, GL_INVALID_ENUM, "glShadeModel" );
    }
 
    if (ctx->Driver.ShadeModel) 
@@ -166,6 +167,9 @@ void gl_Lightfv( GLcontext *ctx,
          gl_error( ctx, GL_INVALID_ENUM, "glLight" );
          break;
    }
+
+   if (ctx->Driver.Lightfv)
+      ctx->Driver.Lightfv( ctx, light, pname, params, nparams );
 
    ctx->NewState |= NEW_LIGHTING;
 }
@@ -314,6 +318,7 @@ void gl_LightModelfv( GLcontext *ctx, GLenum pname, const GLfloat *params )
          break;
       case GL_LIGHT_MODEL_COLOR_CONTROL:
 	 ctx->TriangleCaps &= ~DD_SEPERATE_SPECULAR;
+	 ctx->NewState |= NEW_RASTER_OPS;
          if (params[0] == (GLfloat) GL_SINGLE_COLOR) 
             ctx->Light.Model.ColorControl = GL_SINGLE_COLOR;
          else if (params[0] == (GLfloat) GL_SEPARATE_SPECULAR_COLOR) {
@@ -326,6 +331,10 @@ void gl_LightModelfv( GLcontext *ctx, GLenum pname, const GLfloat *params )
          gl_error( ctx, GL_INVALID_ENUM, "glLightModel" );
          break;
    }
+
+   if (ctx->Driver.LightModelfv) 
+      ctx->Driver.LightModelfv( ctx, pname, params );
+
    ctx->NewState |= NEW_LIGHTING;
 }
 

@@ -1,4 +1,4 @@
-/* $Id: matrix.c,v 1.1 1999/08/19 00:55:41 jtg Exp $ */
+/* $Id: matrix.c,v 1.4 1999/09/19 23:06:40 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -912,8 +912,9 @@ void gl_Frustum( GLcontext *ctx,
 
    GET_ACTIVE_MATRIX( ctx,  mat, ctx->NewState, "glFrustrum" );
 
-   if (nearval<=0.0 || farval<=0.0) {
+   if ((nearval<=0.0 || farval<=0.0) || (nearval == farval) || (left == right) || (top == bottom)) {
       gl_error( ctx,  GL_INVALID_VALUE, "glFrustum(near or far)" );
+      return;
    }
 
    x = (2.0*nearval) / (right-left);
@@ -961,6 +962,11 @@ void gl_Ortho( GLcontext *ctx,
    GLmatrix *mat = 0;
 
    GET_ACTIVE_MATRIX( ctx,  mat, ctx->NewState, "glOrtho" );
+   
+   if ((left == right) || (bottom == top) || (nearval == farval)) {
+      gl_error( ctx,  GL_INVALID_VALUE, "gl_Ortho((l = r) or (b = top) or (n=f)" );
+      return;
+   }
 
    x = 2.0 / (right-left);
    y = 2.0 / (top-bottom);
@@ -1311,6 +1317,11 @@ void gl_Viewport( GLcontext *ctx,
    ctx->Viewport.WindowMap.m[MAT_TX] = ctx->Viewport.WindowMap.m[MAT_SX] + x;
    ctx->Viewport.WindowMap.m[MAT_SY] = (GLfloat) height / 2.0F;
    ctx->Viewport.WindowMap.m[MAT_TY] = ctx->Viewport.WindowMap.m[MAT_SY] + y;
+   ctx->Viewport.WindowMap.m[MAT_SZ] = 0.5 * DEPTH_SCALE;
+   ctx->Viewport.WindowMap.m[MAT_TZ] = 0.5 * DEPTH_SCALE;
+
+   ctx->Viewport.WindowMap.flags = MAT_FLAG_GENERAL_SCALE|MAT_FLAG_TRANSLATION;
+   ctx->Viewport.WindowMap.type = MATRIX_3D_NO_ROT;
 
    ctx->ModelProjectWinMatrixUptodate = GL_FALSE;
    ctx->NewState |= NEW_VIEWPORT;
@@ -1321,7 +1332,7 @@ void gl_Viewport( GLcontext *ctx,
    gl_ResizeBuffersMESA(ctx);
 
 
-   ctx->RasterMask &= WINCLIP_BIT;
+   ctx->RasterMask &= ~WINCLIP_BIT;
 
    if (   ctx->Viewport.X<0
        || ctx->Viewport.X + ctx->Viewport.Width > ctx->Buffer->Width
@@ -1399,6 +1410,14 @@ void gl_matrix_dtr( GLmatrix *m )
       m->inv = 0;
    }
 }
+
+void gl_matrix_set_identity( GLmatrix *m )
+{
+   MEMCPY( m->m, Identity, sizeof(Identity));
+   m->type = MATRIX_IDENTITY;
+   m->flags = MAT_DIRTY_DEPENDENTS;
+}
+
 
 void gl_matrix_alloc_inv( GLmatrix *m )
 {

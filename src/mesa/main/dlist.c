@@ -1,4 +1,4 @@
-/* $Id: dlist.c,v 1.2 1999/08/26 14:50:49 keithw Exp $ */
+/* $Id: dlist.c,v 1.5 1999/09/20 14:30:22 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -48,6 +48,7 @@
 #include "enable.h"
 #include "enums.h"
 #include "eval.h"
+#include "extensions.h"
 #include "feedback.h"
 #include "fog.h"
 #include "get.h"
@@ -271,6 +272,7 @@ union node {
 /* Number of nodes of storage needed for each instruction: */
 static GLuint InstSize[ OPCODE_END_OF_LIST+1 ];
 
+void mesa_print_display_list( GLuint list );
 
 
 /**********************************************************************/
@@ -2382,14 +2384,9 @@ void gl_compile_cassette( GLcontext *ctx )
       return;
    }
 
-   /* Do some easy optimizations of the cassette.  If current value of
-    * clip volume hint is GL_FASTEST, we are not clipping anyway, so
-    * don't calculate the bounds.  But - they will not be calculated
-    * later even if the hint is changed, so this is a slightly odd
-    * behaviour.
+   /* Do some easy optimizations of the cassette.  
     */
-   if (ctx->Hint.ClipVolumeClipping != GL_FASTEST &&
-       im->v.Obj.size < 4 && 
+   if (im->v.Obj.size < 4 && 
        im->Count > 15)
    {
       im->Bounds = (GLfloat (*)[3]) malloc(6 * sizeof(GLfloat));
@@ -2460,6 +2457,11 @@ static void execute_list( GLcontext *ctx, GLuint list )
 	    }
 	    if (!ctx->CVA.elt.pipeline_valid)
 	       gl_build_immediate_pipeline( ctx );
+
+	    if ((MESA_VERBOSE & VERBOSE_DISPLAY_LIST) &&
+		(MESA_VERBOSE & VERBOSE_IMMEDIATE))
+	       gl_print_cassette( (struct immediate *) n[1].data, 0, ~0 );
+
 	    gl_fixup_cassette( ctx, (struct immediate *) n[1].data ); 
 	    gl_execute_cassette( ctx, (struct immediate *) n[1].data ); 
             break;
@@ -3063,12 +3065,14 @@ void gl_EndList( GLcontext *ctx )
 
    (void) alloc_instruction( ctx, OPCODE_END_OF_LIST, 0 );
 
-
-
    /* Destroy old list, if any */
    gl_destroy_list(ctx, ctx->CurrentListNum);
    /* Install the list */
    HashInsert(ctx->Shared->DisplayList, ctx->CurrentListNum, ctx->CurrentListPtr);
+
+
+   if (MESA_VERBOSE & VERBOSE_DISPLAY_LIST)
+      mesa_print_display_list(ctx->CurrentListNum);
 
    ctx->CurrentListNum = 0;
    ctx->CurrentListPtr = NULL;
@@ -3080,6 +3084,11 @@ void gl_EndList( GLcontext *ctx )
     */
    free( ctx->input );
    SET_IMMEDIATE( ctx, ctx->VB->IM );
+   gl_reset_input( ctx );
+
+   /* Haven't tracked down why this is needed.
+    */
+   ctx->NewState = ~0;
 
    ctx->API = ctx->Exec;   /* Switch the API function pointers */
 }
@@ -3092,26 +3101,21 @@ void gl_CallList( GLcontext *ctx, GLuint list )
    /* execute the display list, and restore the CompileFlag. */
    GLboolean save_compile_flag;
 
-   if (MESA_VERBOSE&VERBOSE_API)
+   if (MESA_VERBOSE&VERBOSE_API) {
       fprintf(stderr, "glCallList %u\n", list);
-
+      mesa_print_display_list( list ); 
+   }
 
    save_compile_flag = ctx->CompileFlag;   
    ctx->CompileFlag = GL_FALSE;
    
    FLUSH_VB( ctx, "call list" );
-
-/*    mesa_print_display_list( list ); */
-
    execute_list( ctx, list );
    ctx->CompileFlag = save_compile_flag;
 
    /* also restore API function pointers to point to "save" versions */
    if (save_compile_flag)
-           ctx->API = ctx->Save;
-
-
-/*    RESET_IMMEDIATE( ctx );       */
+      ctx->API = ctx->Save;
 }
 
 
@@ -3333,6 +3337,9 @@ void gl_init_dlist_pointers( struct gl_api_table *table )
    /* GL_ARB_multitexture */
    table->ActiveTexture = save_ActiveTexture;
    table->ClientActiveTexture = save_ClientActiveTexture;
+
+   /* GL_EXT_get_proc_address */
+   table->GetProcAddress = gl_GetProcAddress;  /* NOT SAVED */
 }
 
 

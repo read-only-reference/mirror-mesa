@@ -1,4 +1,4 @@
-/* $Id: glu.c,v 1.1 1999/08/19 00:55:42 jtg Exp $ */
+/* $Id: glu.c,v 1.15 1999/09/19 02:03:19 tjump Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -23,8 +23,51 @@
 
 /*
  * $Log: glu.c,v $
- * Revision 1.1  1999/08/19 00:55:42  jtg
- * Initial revision
+ * Revision 1.15  1999/09/19 02:03:19  tjump
+ * More Win32 build compliance fixups
+ *
+ * Revision 1.14  1999/09/17 12:21:53  brianp
+ * glGetProcAddressEXT changes to accomodate Win32 and non-Win32
+ *
+ * Revision 1.13  1999/09/17 03:17:18  tjump
+ * Patch error fixup
+ *
+ * Revision 1.12  1999/09/17 03:07:28  tjump
+ * Win32 build req't updates
+ *
+ * Revision 1.11  1999/09/17 01:00:38  brianp
+ * fixed typo
+ *
+ * Revision 1.10  1999/09/17 00:06:14  brianp
+ * gluGetProcAddressEXT change for C++ / BeOS
+ *
+ * Revision 1.9  1999/09/16 22:37:56  brianp
+ * added some casts in gluGetProcAddressEXT()
+ *
+ * Revision 1.8  1999/09/16 16:53:28  brianp
+ * clean-up of GLU_EXT_get_proc_address
+ *
+ * Revision 1.7  1999/09/14 00:11:40  brianp
+ * added gluCheckExtension()
+ *
+ * Revision 1.6  1999/09/13 14:31:32  joukj
+ *
+ * strcmp needs the string.h
+ *
+ * Revision 1.5  1999/09/11 12:04:54  brianp
+ * added 1.2 function to gluGetProcAddressEXT()
+ *
+ * Revision 1.4  1999/09/11 11:36:26  brianp
+ * added GLU_EXT_get_proc_address
+ *
+ * Revision 1.3  1999/09/10 04:32:10  gareth
+ * Fixed triangle output, recovery process termination.
+ *
+ * Revision 1.2  1999/09/10 02:03:31  gareth
+ * Added GLU 1.3 tessellation (except winding rule code).
+ *
+ * Revision 1.1.1.1  1999/08/19 00:55:42  jtg
+ * Imported sources
  *
  * Revision 1.13  1999/03/31 19:07:28  brianp
  * added GL_EXT_abgr to extensions
@@ -71,9 +114,11 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "gluP.h"
 #endif
 
@@ -213,15 +258,14 @@ void GLAPIENTRY gluPickMatrix( GLdouble x, GLdouble y,
 const GLubyte* GLAPIENTRY gluErrorString( GLenum errorCode )
 {
    static char *tess_error[] = {
-      "missing gluEndPolygon",
       "missing gluBeginPolygon",
-      "misoriented contour",
-      "vertex/edge intersection",
+      "missing gluBeginContour",
+      "missing gluEndPolygon",
+      "missing gluEndContour",
       "misoriented or self-intersecting loops",
       "coincident vertices",
       "colinear vertices",
-      "intersecting edges",
-      "not coplanar contours"
+      "FIST recovery process fatal error"
    };
    static char *nurbs_error[] = {
       "spline order un-supported",
@@ -301,7 +345,7 @@ const GLubyte* GLAPIENTRY gluErrorString( GLenum errorCode )
    else if (errorCode==GLU_INCOMPATIBLE_GL_VERSION) {
       return (GLubyte *) "incompatible GL version";
    }
-   else if (errorCode>=GLU_TESS_ERROR1 && errorCode<=GLU_TESS_ERROR9) {
+   else if (errorCode>=GLU_TESS_ERROR1 && errorCode<=GLU_TESS_ERROR8) {
       return (GLubyte *) tess_error[errorCode-GLU_TESS_ERROR1];
    }
    else if (errorCode>=GLU_NURBS_ERROR1 && errorCode<=GLU_NURBS_ERROR37) {
@@ -320,8 +364,8 @@ const GLubyte* GLAPIENTRY gluErrorString( GLenum errorCode )
 
 const GLubyte* GLAPIENTRY gluGetString( GLenum name )
 {
-   static char *extensions = "GL_EXT_abgr";
-   static char *version = "1.1 Mesa 3.1";
+   static char *extensions = "GL_EXT_abgr GLU_EXT_get_proc_address";
+   static char *version = "1.2 Mesa 3.1";
 
    switch (name) {
       case GLU_EXTENSIONS:
@@ -333,3 +377,73 @@ const GLubyte* GLAPIENTRY gluGetString( GLenum name )
    }
 }
 
+
+
+#ifdef GLU_EXT_get_proc_address
+
+#ifdef __cplusplus
+   /* for BeOS R4.5 */
+   void GLAPIENTRY (*gluGetProcAddressEXT(const GLubyte *procName))(...)
+#else
+   void (GLAPIENTRY *gluGetProcAddressEXT(const GLubyte *procName))()
+#endif
+{
+   struct proc {
+      const char *name;
+      void *address;
+   };
+   static struct proc procTable[] = {
+      { "gluGetProcAddressEXT", (void *) gluGetProcAddressEXT },  /* me! */
+
+      /* new 1.1 functions */
+      { "gluGetString", (void *) gluGetString },
+
+      /* new 1.2 functions */
+      { "gluTessBeginPolygon", (void *) gluTessBeginPolygon },
+      { "gluTessBeginContour", (void *) gluTessBeginContour },
+      { "gluTessEndContour", (void *) gluTessEndContour },
+      { "gluTessEndPolygon", (void *) gluTessEndPolygon },
+      { "gluGetTessProperty", (void *) gluGetTessProperty },
+
+      /* new 1.3 functions */
+
+      { NULL, NULL }
+   };
+   GLuint i;
+
+   for (i = 0; procTable[i].address; i++) {
+      if (strcmp((const char *) procName, procTable[i].name) == 0)
+         return (void (GLAPIENTRY *)()) procTable[i].address;
+   }
+
+   return NULL;
+}
+
+#endif
+
+
+
+/*
+ * New in GLU 1.3
+ */
+GLboolean GLAPIENTRY
+gluCheckExtension( const char *extName, const GLubyte *extString )
+{
+   assert(extName);
+   assert(extString);
+   {
+      const int len = strlen(extName);
+      const char *start = (const char *) extString;
+
+      while (1) {
+         const char *c = strstr( start, extName );
+         if (!c)
+            return GL_FALSE;
+
+         if ((c == start || c[-1] == ' ') && (c[len] == ' ' || c[len] == 0))
+            return GL_TRUE;
+
+         start = c + len;
+      }
+   }
+}

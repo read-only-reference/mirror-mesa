@@ -347,11 +347,11 @@ int main(int argc, char **argv)
     if (!glutLayerGet(GLUT_OVERLAY_POSSIBLE))
     {
 	fprintf(stderr, "Overlay not available\n");
-	return;
+	return(1);
     }
 
     if (Args(argc, argv) == GL_FALSE) {
-	exit(1);
+	return(1);
     }
 
     windW = 300;
@@ -363,7 +363,7 @@ int main(int argc, char **argv)
     glutInitDisplayMode(type);
 
     if (glutCreateWindow("Overlay Test") == GL_FALSE) {
-	exit(1);
+	return(1);
     }
 
     glutEstablishOverlay();

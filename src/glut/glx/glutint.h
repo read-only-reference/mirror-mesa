@@ -21,18 +21,22 @@
 #include <GL/glx.h>
 #endif
 
+#define GLUT_BUILDING_LIB  /* Building the GLUT library itself. */
+#include <GL/glut.h>
+
+#if defined( MESA ) && defined( _WIN32 )
+#include <gl/mesa_wgl.h>
+#endif
+
+#ifndef _WIN32
 /* added by BrianP: */
 #define APIENTRY GLAPIENTRY
 #define __cdecl GLAPIENTRY
 #define CDECL GLAPIENTRY
-
-
-#define GLUT_BUILDING_LIB  /* Building the GLUT library itself. */
+#endif
 
 /* GLUT_BUILDING_LIB is used by <GL/glut.h> to 1) not #pragma link
    with the GLUT library, and 2) avoid the Win32 atexit hack. */
-
-#include <GL/glut.h>
 
 /* This must be done after <GL/gl.h> is included.  MESA is defined
    if the <GL/gl.h> is supplied by Brian Paul's Mesa library. */
@@ -40,26 +44,16 @@
 /* Mesa implements "wgl" versions of GDI entry points needed for
    using OpenGL.  Map these "wgl" versions to the GDI names via
    macros. */
-GLAPI int GLAPIENTRY wglChoosePixelFormat(HDC hdc, CONST PIXELFORMATDESCRIPTOR *ppfd);
-GLAPI int GLAPIENTRY wglDescribePixelFormat(HDC hdc,int iPixelFormat,UINT nBytes, LPPIXELFORMATDESCRIPTOR ppfd);
-GLAPI int GLAPIENTRY wglGetPixelFormat(HDC hdc);
-GLAPI BOOL GLAPIENTRY wglSetPixelFormat(HDC hdc, int iPixelFormat, CONST PIXELFORMATDESCRIPTOR *ppfd);
-GLAPI BOOL GLAPIENTRY wglSwapBuffers(HDC hdc);
-GLAPI HGLRC GLWINAPI wglCreateContext(HDC hdc);
-GLAPI BOOL GLWINAPI wglDeleteContext(HGLRC hglrc);
-GLAPI HGLRC GLWINAPI wglGetCurrentContext(VOID);
-GLAPI HDC GLWINAPI wglGetCurrentDC(VOID);
-GLAPI BOOL GLWINAPI wglMakeCurrent(HDC hdc,HGLRC hglrc);
-#define ChoosePixelFormat wglChoosePixelFormat
+#define ChoosePixelFormat   wglChoosePixelFormat
 #define DescribePixelFormat wglDescribePixelFormat
-#define GetPixelFormat wglGetPixelFormat
-#define SetPixelFormat wglSetPixelFormat
-#define SwapBuffers wglSwapBuffers
-#define GetCurrentContext wglGetCurrentContext
-#define GetCurrentDC wglGetCurrentDC
-#define MakeCurrent wglMakeCurrent
-#define CreateContext wglCreateContext
-#define DeleteContext wglDeleteContext
+#define GetPixelFormat      wglGetPixelFormat
+#define SetPixelFormat      wglSetPixelFormat
+#define SwapBuffers         wglSwapBuffers
+#define GetCurrentContext   wglGetCurrentContext
+#define GetCurrentDC        wglGetCurrentDC
+#define MakeCurrent         wglMakeCurrent
+#define CreateContext       wglCreateContext
+#define DeleteContext       wglDeleteContext
 #endif /* MESA */
 
 #ifdef SUPPORT_FORTRAN

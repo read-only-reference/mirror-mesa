@@ -1,4 +1,4 @@
-/* $Id: glu.h,v 1.1 1999/08/19 00:55:40 jtg Exp $ */
+/* $Id: glu.h,v 1.10 1999/09/19 10:04:01 tjump Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -23,8 +23,34 @@
 
 /*
  * $Log: glu.h,v $
- * Revision 1.1  1999/08/19 00:55:40  jtg
- * Initial revision
+ * Revision 1.10  1999/09/19 10:04:01  tjump
+ * Changed name 'glGetProcAddressEXT' to 'gluGetProcAddressEXT'
+ *
+ * Revision 1.8  1999/09/17 12:21:36  brianp
+ * glGetProcAddressEXT changes to accomodate Win32 and non-Win32
+ *
+ * Revision 1.7  1999/09/17 02:44:19  tjump
+ * I changed the xxxGetProcAddressEXT function declarations to be more
+ * MSVC friendly. Brianp - could you verify that they describe and operate
+ * as intended on Linux/ETC platforms?
+ *
+ * Revision 1.6  1999/09/16 16:54:22  brianp
+ * GLU_EXT_get_proc_address clean-up
+ *
+ * Revision 1.5  1999/09/14 03:23:08  gareth
+ * Fixed GLUtriangulatorObj again (spelling).
+ *
+ * Revision 1.4  1999/09/14 01:32:58  gareth
+ * Fixed definition of GLUtriangluatorObj for 1.3 tessellator.
+ *
+ * Revision 1.3  1999/09/11 11:34:21  brianp
+ * added GLU_EXT_get_proc_address
+ *
+ * Revision 1.2  1999/09/10 02:08:18  gareth
+ * Added GLU 1.3 tessellation (except winding rule code).
+ *
+ * Revision 1.1.1.1  1999/08/19 00:55:40  jtg
+ * Imported sources
  *
  * Revision 3.6  1999/02/14 03:39:45  brianp
  * updated for BeOS R4
@@ -88,6 +114,7 @@ extern "C" {
 
 
 #define GLU_VERSION_1_1		1
+#define GLU_VERSION_1_2		1
 
 
 #define GLU_TRUE   GL_TRUE
@@ -110,30 +137,42 @@ enum {
 	GLU_OUTSIDE	= 100020,
 	GLU_INSIDE	= 100021,
 
-	/* Tesselator */
-	GLU_BEGIN	= 100100,
-	GLU_VERTEX	= 100101,
-	GLU_END		= 100102,
-	GLU_ERROR	= 100103,
-	GLU_EDGE_FLAG	= 100104,
+	/* Tessellator */
+	GLU_TESS_BEGIN		= 100100,
+	GLU_TESS_VERTEX		= 100101,
+	GLU_TESS_END		= 100102,
+	GLU_TESS_ERROR		= 100103,
+	GLU_TESS_EDGE_FLAG	= 100104,
+	GLU_TESS_COMBINE	= 100105,
 
-	/* Contour types */
-	GLU_CW		= 100120,
-	GLU_CCW		= 100121,
-	GLU_INTERIOR	= 100122,
-	GLU_EXTERIOR	= 100123,
-	GLU_UNKNOWN	= 100124,
+	GLU_TESS_BEGIN_DATA	= 100106,
+	GLU_TESS_VERTEX_DATA	= 100107,
+	GLU_TESS_END_DATA	= 100108,
+	GLU_TESS_ERROR_DATA	= 100109,
+	GLU_TESS_EDGE_FLAG_DATA	= 100110,
+	GLU_TESS_COMBINE_DATA	= 100111,
 
-	/* Tesselation errors */
-	GLU_TESS_ERROR1	= 100151,  /* missing gluEndPolygon */
-	GLU_TESS_ERROR2 = 100152,  /* missing gluBeginPolygon */
-	GLU_TESS_ERROR3 = 100153,  /* misoriented contour */
-	GLU_TESS_ERROR4 = 100154,  /* vertex/edge intersection */
-	GLU_TESS_ERROR5 = 100155,  /* misoriented or self-intersecting loops */
-	GLU_TESS_ERROR6 = 100156,  /* coincident vertices */
-	GLU_TESS_ERROR7 = 100157,  /* all vertices collinear */
-	GLU_TESS_ERROR8 = 100158,  /* intersecting edges */
-	GLU_TESS_ERROR9 = 100159,  /* not coplanar contours */
+	/* Winding rules */
+	GLU_TESS_WINDING_ODD		= 100130,
+	GLU_TESS_WINDING_NONZERO	= 100131,
+	GLU_TESS_WINDING_POSITIVE	= 100132,
+	GLU_TESS_WINDING_NEGATIVE	= 100133,
+	GLU_TESS_WINDING_ABS_GEQ_TWO	= 100134,
+
+	/* Tessellation properties */
+	GLU_TESS_WINDING_RULE	= 100140,
+	GLU_TESS_BOUNDARY_ONLY	= 100141,
+	GLU_TESS_TOLERANCE	= 100142,
+
+	/* Tessellation errors */
+	GLU_TESS_ERROR1	= 100151,  /* Missing gluBeginPolygon */
+	GLU_TESS_ERROR2 = 100152,  /* Missing gluBeginContour */
+	GLU_TESS_ERROR3 = 100153,  /* Missing gluEndPolygon */
+	GLU_TESS_ERROR4 = 100154,  /* Missing gluEndContour */
+	GLU_TESS_ERROR5 = 100155,  /* */
+	GLU_TESS_ERROR6 = 100156,  /* */
+	GLU_TESS_ERROR7 = 100157,  /* */
+	GLU_TESS_ERROR8 = 100158,  /* */
 
 	/* NURBS */
 	GLU_AUTO_LOAD_MATRIX	= 100200,
@@ -201,21 +240,40 @@ enum {
 
 	/* New in GLU 1.1 */
 	GLU_VERSION	= 100800,
-	GLU_EXTENSIONS	= 100801
+	GLU_EXTENSIONS	= 100801,
+
+	/*** GLU 1.0 tessellation - obsolete! ***/
+
+	/* Contour types */
+	GLU_CW		= 100120,
+	GLU_CCW		= 100121,
+	GLU_INTERIOR	= 100122,
+	GLU_EXTERIOR	= 100123,
+	GLU_UNKNOWN	= 100124,
+
+	/* Tessellator */
+	GLU_BEGIN	= GLU_TESS_BEGIN,
+	GLU_VERTEX	= GLU_TESS_VERTEX,
+	GLU_END		= GLU_TESS_END,
+	GLU_ERROR	= GLU_TESS_ERROR,
+	GLU_EDGE_FLAG	= GLU_TESS_EDGE_FLAG
 };
 
 
 /*
- * These are the GLU 1.1 typedefs.  GLU 1.2 has different ones!
+ * These are the GLU 1.1 typedefs.  GLU 1.3 has different ones!
  */
 #if defined(__BEOS__)
-   /* The BeOS does something funky and makes these typedefs in one
-    * of its system headers.
-    */
+    /* The BeOS does something funky and makes these typedefs in one
+     * of its system headers.
+     */
 #else
-   typedef struct GLUquadric GLUquadricObj;
-   typedef struct GLUtesselator GLUtriangulatorObj;
-   typedef struct GLUnurbs GLUnurbsObj;
+    typedef struct GLUquadric GLUquadricObj;
+    typedef struct GLUnurbs GLUnurbsObj;
+
+    /* FIXME: We need to implement the other 1.3 typedefs - GH */
+    typedef struct GLUtesselator GLUtesselator;
+    typedef GLUtesselator GLUtriangulatorObj;
 #endif
 
 
@@ -392,25 +450,49 @@ GLUAPI void GLAPIENTRY gluNurbsCallback( GLUnurbsObj *nobj, GLenum which,
 
 /*
  *
- * Polygon tesselation
+ * Polygon tessellation
  *
  */
 
-GLUAPI GLUtriangulatorObj* GLAPIENTRY gluNewTess( void );
+GLUAPI GLUtesselator* GLAPIENTRY gluNewTess( void );
 
-GLUAPI void GLAPIENTRY gluTessCallback( GLUtriangulatorObj *tobj, GLenum which,
-                                      void (GLCALLBACK *fn)() );
+GLUAPI void GLAPIENTRY gluDeleteTess( GLUtesselator *tobj );
 
-GLUAPI void GLAPIENTRY gluDeleteTess( GLUtriangulatorObj *tobj );
+GLUAPI void GLAPIENTRY gluTessBeginPolygon( GLUtesselator *tobj,
+					    void *polygon_data );
 
-GLUAPI void GLAPIENTRY gluBeginPolygon( GLUtriangulatorObj *tobj );
+GLUAPI void GLAPIENTRY gluTessBeginContour( GLUtesselator *tobj );
 
-GLUAPI void GLAPIENTRY gluEndPolygon( GLUtriangulatorObj *tobj );
+GLUAPI void GLAPIENTRY gluTessVertex( GLUtesselator *tobj, GLdouble coords[3],
+				      void *vertex_data );
 
-GLUAPI void GLAPIENTRY gluNextContour( GLUtriangulatorObj *tobj, GLenum type );
+GLUAPI void GLAPIENTRY gluTessEndContour( GLUtesselator *tobj );
 
-GLUAPI void GLAPIENTRY gluTessVertex( GLUtriangulatorObj *tobj, GLdouble v[3],
-                                    void *data );
+GLUAPI void GLAPIENTRY gluTessEndPolygon( GLUtesselator *tobj );
+
+GLUAPI void GLAPIENTRY gluTessProperty( GLUtesselator *tobj, GLenum which,
+					GLdouble value );
+
+GLUAPI void GLAPIENTRY gluTessNormal( GLUtesselator *tobj, GLdouble x,
+				      GLdouble y, GLdouble z );
+
+GLUAPI void GLAPIENTRY gluTessCallback( GLUtesselator *tobj, GLenum which,
+					void (GLCALLBACK *fn)() );
+
+GLUAPI void GLAPIENTRY gluGetTessProperty( GLUtesselator *tobj, GLenum which,
+					   GLdouble *value );
+
+/*
+ *
+ * Obsolete 1.0 tessellation functions
+ *
+ */
+
+GLUAPI void GLAPIENTRY gluBeginPolygon( GLUtesselator *tobj );
+
+GLUAPI void GLAPIENTRY gluNextContour( GLUtesselator *tobj, GLenum type );
+
+GLUAPI void GLAPIENTRY gluEndPolygon( GLUtesselator *tobj );
 
 
 
@@ -421,6 +503,20 @@ GLUAPI void GLAPIENTRY gluTessVertex( GLUtriangulatorObj *tobj, GLdouble v[3],
  */
 
 GLUAPI const GLubyte* GLAPIENTRY gluGetString( GLenum name );
+
+
+
+/*
+ * GLU_EXT_get_proc_address extension
+ */
+/*
+ * WARNING: this extension is not finalized yet!  Do not release code
+ * which uses this extension yet!  It may change!
+ */
+#define GLU_EXT_get_proc_address 1
+#ifdef GLU_EXT_get_proc_address
+GLUAPI void (GLAPIENTRY *gluGetProcAddressEXT(const GLubyte *procName))();
+#endif
 
 
 #if defined(__BEOS__) || defined(__QUICKDRAW__)

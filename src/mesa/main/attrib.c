@@ -1,4 +1,4 @@
-/* $Id: attrib.c,v 1.1 1999/08/19 00:55:41 jtg Exp $ */
+/* $Id: attrib.c,v 1.4 1999/09/19 23:43:02 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -492,6 +492,7 @@ void gl_PopAttrib( GLcontext* ctx )
                }
                TEST_AND_UPDATE(ctx->Light.ColorMaterialEnabled, enable->ColorMaterial, GL_COLOR_MATERIAL);
                TEST_AND_UPDATE(ctx->Polygon.CullFlag, enable->CullFace, GL_CULL_FACE);
+               TEST_AND_UPDATE(ctx->Depth.Test, enable->DepthTest, GL_DEPTH_TEST);
                TEST_AND_UPDATE(ctx->Color.DitherFlag, enable->Dither, GL_DITHER);
                TEST_AND_UPDATE(ctx->Fog.Enabled, enable->Fog, GL_FOG);
                TEST_AND_UPDATE(ctx->Light.Enabled, enable->Lighting, GL_LIGHTING);
@@ -700,6 +701,10 @@ void gl_PopAttrib( GLcontext* ctx )
                (*ctx->Driver.ClearStencil)( ctx, ctx->Stencil.Clear );
             if (ctx->Driver.Enable)
                (*ctx->Driver.Enable)( ctx, GL_STENCIL_TEST, ctx->Stencil.Enabled );
+	    ctx->TriangleCaps &= ~DD_STENCIL;
+	    if (ctx->Stencil.Enabled)
+	       ctx->TriangleCaps |= DD_STENCIL;
+
             break;
          case GL_TRANSFORM_BIT:
             MEMCPY( &ctx->Transform, attr->data,
@@ -738,18 +743,15 @@ void gl_PopAttrib( GLcontext* ctx )
                }
             }
             break;
-         case GL_VIEWPORT_BIT:
-            MEMCPY( &ctx->Viewport, attr->data,
-		    sizeof(struct gl_viewport_attrib) );
-            if (ctx->Driver.Viewport) {
-               (*ctx->Driver.Viewport)( ctx, ctx->Viewport.X, ctx->Viewport.Y,
-                                  ctx->Viewport.Width, ctx->Viewport.Height );
-            }
-            if (ctx->Driver.DepthRange) {
-               (*ctx->Driver.DepthRange)( ctx, ctx->Viewport.Near,
-                                          ctx->Viewport.Far );
-            }
-            break;
+         case GL_VIEWPORT_BIT: 
+	 {
+	    struct gl_viewport_attrib *v = 
+	       (struct gl_viewport_attrib *)attr->data;
+	    
+	    gl_Viewport( ctx, v->X, v->Y, v->Width, v->Height );
+	    gl_DepthRange( ctx, v->Near, v->Far );
+	    break;
+	 }
          default:
             gl_problem( ctx, "Bad attrib flag in PopAttrib");
             break;

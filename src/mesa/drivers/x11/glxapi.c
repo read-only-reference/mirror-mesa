@@ -1,4 +1,4 @@
-/* $Id: glxapi.c,v 1.1 1999/08/19 00:55:42 jtg Exp $ */
+/* $Id: glxapi.c,v 1.3 1999/09/16 15:54:21 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -402,4 +402,30 @@ int glXWaitVideoSyncSGI(int divisor, int remainder, unsigned int *count)
    return 0;
 }
 
+#endif
+
+
+
+#ifdef GLX_MESA_set_3dfx_mode
+GLboolean glXSet3DfxModeMESA( GLint mode )
+{
+#ifdef REALGLX
+   return GL_FALSE;
+#else
+   return Fake_glXSet3DfxModeMESA( mode );
+#endif
+}
+#endif
+
+
+
+#ifdef GLX_EXT_get_proc_address
+void (*glXGetProcAddressEXT( const GLubyte *procName ))()
+{
+#ifdef REALGLX
+   return NULL;
+#else
+   return Fake_glXGetProcAddress( procName );
+#endif
+}
 #endif

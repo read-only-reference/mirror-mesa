@@ -31,6 +31,7 @@
 
 #include "fxdrv.h"
 #include "enums.h"
+#include "extensions.h"
 
 /**********************************************************************/
 /*****                 Miscellaneous functions                    *****/
@@ -202,6 +203,7 @@ static GLboolean fxDDSetBuffer(GLcontext *ctx, GLenum mode )
 }
 
 
+
 static GLboolean fxDDDrawBitMap(GLcontext *ctx, GLint px, GLint py,
                                 GLsizei width, GLsizei height,
                                 const struct gl_pixelstore_attrib *unpack,
@@ -211,7 +213,7 @@ static GLboolean fxDDDrawBitMap(GLcontext *ctx, GLint px, GLint py,
   FxU16 *p;
   GrLfbInfo_t info;
   const GLubyte *pb;
-  int x,y;
+  int x,y,xmin,xmax,ymin,ymax;
   GLint r,g,b,a,scrwidth,scrheight,stride;
   FxU16 color;
 
@@ -226,13 +228,26 @@ static GLboolean fxDDDrawBitMap(GLcontext *ctx, GLint px, GLint py,
      (unpack->LsbFirst))
     return GL_FALSE;
 
-#define ISCLIPPED(rx) ( ((rx)<0) || ((rx)>=scrwidth) )
-#define DRAWBIT(i) {	   \
-  if(!ISCLIPPED(x+px))	   \
+  if (ctx->Scissor.Enabled) {
+        xmin=ctx->Scissor.X;
+        xmax=ctx->Scissor.X+ctx->Scissor.Width;
+        ymin=ctx->Scissor.Y;
+        ymax=ctx->Scissor.Y+ctx->Scissor.Height;
+  } else {
+        xmin=0;
+        xmax=fxMesa->width;
+        ymin=0;
+        ymax=fxMesa->height;
+  }
+
+
+#define ISCLIPPED(rx) ( ((rx)<xmin) || ((rx)>=xmax) )
+#define DRAWBIT(i) {       \
+  if(!ISCLIPPED(x+px))     \
     if( (*pb) & (1<<(i)) ) \
-      (*p)=color;	   \
+      (*p)=color;          \
   p++;                     \
-  x++;			   \
+  x++;                     \
   if(x>=width) {           \
     pb++;                  \
     break;                 \
@@ -282,8 +297,15 @@ static GLboolean fxDDDrawBitMap(GLcontext *ctx, GLint px, GLint py,
 
   /* This code is a bit slow... */
 
-  for(y=0;y<height;y++) {
-    p=((FxU16 *)info.lfbPtr)+px+((scrheight-(y+py))*stride);
+  for(y=py;y<(py+height);y++) {
+
+    if (y>=ymax)
+        break;
+
+    if (y<=ymin)
+        continue;
+
+    p=((FxU16 *)info.lfbPtr)+px+((scrheight-y)*stride);
 
     for(x=0;;) {
       DRAWBIT(7);       DRAWBIT(6);     DRAWBIT(5);     DRAWBIT(4);
@@ -426,8 +448,9 @@ static GLboolean fxIsInHardware(GLcontext *ctx)
         (ctx->Color.ColorMask[GCOMP]==ctx->Color.ColorMask[BCOMP]) &&
         (ctx->Color.ColorMask[ACOMP]==ctx->Color.ColorMask[ACOMP])))
      )
-    return GL_FALSE;
-
+  {
+     return GL_FALSE;
+  }
   /* Unsupported texture/multitexture cases */
 
   if(fxMesa->emulateTwoTMUs) {
@@ -503,7 +526,7 @@ static void fxDDUpdateDDPointers(GLcontext *ctx)
   if (MESA_VERBOSE&(VERBOSE_DRIVER|VERBOSE_STATE)) 
     fprintf(stderr,"fxmesa: fxDDUpdateDDPointers(...)\n");
 
-  if (new_state & (NEW_RASTER_OPS|NEW_TEXTURING))
+  if (new_state & (NEW_RASTER_OPS|NEW_TEXTURING)) 
      fxMesa->is_in_hardware = fxIsInHardware(ctx);
 
   if (fxMesa->is_in_hardware) {
@@ -524,14 +547,8 @@ static void fxDDUpdateDDPointers(GLcontext *ctx)
     ctx->Driver.LineFunc=fxMesa->LineFunc;
     ctx->Driver.TriangleFunc=fxMesa->TriangleFunc;
     ctx->Driver.QuadFunc=fxMesa->QuadFunc;
-  }
-
-  ctx->Driver.AllocDepthBuffer=fxAllocDepthBuffer;
-  ctx->Driver.DepthTestSpan=fxDDDepthTestSpanGeneric;
-  ctx->Driver.DepthTestPixels=fxDDDepthTestPixelsGeneric;
-  ctx->Driver.ReadDepthSpanFloat=fxDDReadDepthSpanFloat;
-  ctx->Driver.ReadDepthSpanInt=fxDDReadDepthSpanInt;
-  ctx->Driver.RenderStart = 0;
+  } else 
+     fxMesa->render_index = FX_FALLBACK;
 }
 
 
@@ -542,6 +559,12 @@ void fxSetupDDPointers(GLcontext *ctx)
   }
 
   ctx->Driver.UpdateState=fxDDUpdateDDPointers;
+
+  ctx->Driver.AllocDepthBuffer=fxAllocDepthBuffer;
+  ctx->Driver.DepthTestSpan=fxDDDepthTestSpanGeneric;
+  ctx->Driver.DepthTestPixels=fxDDDepthTestPixelsGeneric;
+  ctx->Driver.ReadDepthSpanFloat=fxDDReadDepthSpanFloat;
+  ctx->Driver.ReadDepthSpanInt=fxDDReadDepthSpanInt;
          
   ctx->Driver.GetString=fxDDGetString;
 

@@ -1,4 +1,4 @@
-# $Id: Makefile.X11,v 1.1 1999/08/19 00:55:41 jtg Exp $
+# $Id: Makefile.X11,v 1.5 1999/09/17 12:07:10 brianp Exp $
 
 # Mesa 3-D graphics library
 # Version:  3.1
@@ -8,6 +8,10 @@
 
 
 ##### MACROS #####
+
+GL_MAJOR = 1
+GL_MINOR = 2
+GL_TINY = 0$(MESA_MAJOR)0$(MESA_MINOR)0$(MESA_TINY)
 
 VPATH = RCS
 
@@ -81,6 +85,7 @@ CORE_SOURCES = \
 	vbrender.c \
 	vbxform.c \
 	vector.c \
+	vertices.c \
 	winpos.c \
 	xform.c \
 	zoom.c \
@@ -221,7 +226,7 @@ targets: $(LIBDIR)/$(GL_LIB)
 
 # Make the library
 $(LIBDIR)/$(GL_LIB): $(OBJECTS)
-	$(MAKELIB) $(GL_LIB) $(MAJOR) $(MINOR) $(OBJECTS)
+	$(MAKELIB) $(GL_LIB) $(GL_MAJOR) $(GL_MINOR) $(GL_TINY) $(OBJECTS)
 	rm -f $(LIBDIR)/$(GL_LIB)*
 	mv $(GL_LIB)* $(LIBDIR)
 

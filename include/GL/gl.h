@@ -1,4 +1,4 @@
-/* $Id: gl.h,v 1.1 1999/08/19 00:55:40 jtg Exp $ */
+/* $Id: gl.h,v 1.8 1999/09/19 02:03:18 tjump Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -57,10 +57,13 @@
 #	pragma warning( disable : 4761 ) /* integral size mismatch in argument; conversion supplied */
 #	if defined(_MSC_VER) && defined(BUILD_GL32) /* tag specify we're building mesa as a DLL */
 #		define GLAPI __declspec(dllexport)
+#     define WGLAPI __declspec(dllexport)
 #	elif defined(_MSC_VER) && defined(_DLL) /* tag specifying we're building for DLL runtime support */
 #		define GLAPI __declspec(dllimport)
+#     define WGLAPI __declspec(dllimport)
 #	else /* for use with static link lib build of Win32 edition only */
 #		define GLAPI extern
+#     define WGLAPI __declspec(dllimport)
 #	endif /* _STATIC_MESA support */
 #	define GLAPIENTRY __stdcall
 #	define GLCALLBACK __stdcall
@@ -107,25 +110,8 @@ typedef unsigned long COLORREF;
 #	endif /* !UNICODE */
 typedef struct tagLAYERPLANEDESCRIPTOR LAYERPLANEDESCRIPTOR, *PLAYERPLANEDESCRIPTOR, *LPLAYERPLANEDESCRIPTOR;
 typedef struct _GLYPHMETRICSFLOAT GLYPHMETRICSFLOAT, *PGLYPHMETRICSFLOAT, *LPGLYPHMETRICSFLOAT;
-GLAPI int   GLAPIENTRY wglCopyContext(HGLRC, HGLRC, unsigned int);
-GLAPI HGLRC GLAPIENTRY wglCreateContext(HDC);
-GLAPI HGLRC GLAPIENTRY wglCreateLayerContext(HDC, int);
-GLAPI int   GLAPIENTRY wglDeleteContext(HGLRC);
-GLAPI HGLRC GLAPIENTRY wglGetCurrentContext(void);
-GLAPI HDC   GLAPIENTRY wglGetCurrentDC(void);
-GLAPI PROC  GLAPIENTRY wglGetProcAddress(char*);
-GLAPI int   GLAPIENTRY wglMakeCurrent(HDC, HGLRC);
-GLAPI int   GLAPIENTRY wglShareLists(HGLRC, HGLRC);
-GLAPI int   GLAPIENTRY wglUseFontBitmapsA(HDC, unsigned long, unsigned long, unsigned long);
-GLAPI int   GLAPIENTRY wglUseFontBitmapsW(HDC, unsigned long, unsigned long, unsigned long);
-GLAPI int   GLAPIENTRY wglUseFontOutlinesA(HDC, unsigned long, unsigned long, unsigned long, float,float, int, LPGLYPHMETRICSFLOAT);
-GLAPI int   GLAPIENTRY wglUseFontOutlinesW(HDC, unsigned long, unsigned long, unsigned long, float,float, int, LPGLYPHMETRICSFLOAT);
-GLAPI int   GLAPIENTRY wglDescribeLayerPlane(HDC, int, int, unsigned int,LPLAYERPLANEDESCRIPTOR);
-GLAPI int   GLAPIENTRY wglSetLayerPaletteEntries(HDC, int, int, int,const COLORREF *);
-GLAPI int   GLAPIENTRY wglGetLayerPaletteEntries(HDC, int, int, int,COLORREF *);
-GLAPI int   GLAPIENTRY wglRealizeLayerPalette(HDC, int, int);
-GLAPI int   GLAPIENTRY wglSwapLayerBuffers(HDC, unsigned int);
-GLAPI int   GLAPIENTRY SwapBuffers(HDC);
+typedef struct tagPIXELFORMATDESCRIPTOR PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESCRIPTOR, *LPPIXELFORMATDESCRIPTOR;
+#include <gl/mesa_wgl.h>
 #endif
 
 
@@ -1859,7 +1845,7 @@ GLAPI void GLAPIENTRY glPopName( void );
 
 
 /*
- * 1.0 Extensions
+ * Extensions
  */
 
 /* GL_EXT_blend_minmax */
@@ -2186,6 +2172,19 @@ GLAPI void GLAPIENTRY glCopyColorTable( GLenum target, GLenum internalformat,
 GLAPI void GLAPIENTRY glLockArraysEXT( GLint first, GLsizei count );
 GLAPI void GLAPIENTRY glUnlockArraysEXT( void );
 
+
+/*
+ * GL_EXT_get_proc_address
+ *
+ * XXX this is a preliminary extension.  It may change!  Use at your
+ * own risk!  Do not release code which uses this extension yet!
+ * If you want to try it out, #define GL_EXT_get_proc_address before
+ * #include <GL/gl.h>
+ */
+#define GL_EXT_get_proc_address 1
+#ifdef GL_EXT_get_proc_address
+GLAPI void (GLAPIENTRY *glGetProcAddressEXT(const GLubyte *procName))();
+#endif
 
 #if defined(__BEOS__) || defined(__QUICKDRAW__)
 #pragma export off

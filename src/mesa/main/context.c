@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.3 1999/08/29 10:26:31 keithw Exp $ */
+/* $Id: context.c,v 1.9 1999/09/19 23:43:02 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -53,6 +53,7 @@
 #include "dlist.h"
 #include "eval.h"
 #include "enums.h"
+#include "extensions.h"
 #include "fog.h"
 #include "hash.h"
 #include "light.h"
@@ -1004,9 +1005,6 @@ static void initialize_context( GLcontext *ctx )
       ctx->IntegerAccumMode = GL_TRUE;
       ctx->IntegerAccumScaler = 0.0;
 
-      /* multitexture */
-      ctx->TexCoordUnit = 0;
-
       /* Renderer and client attribute stacks */
       ctx->AttribStackDepth = 0;
       ctx->ClientAttribStackDepth = 0;
@@ -1293,6 +1291,15 @@ GLcontext *gl_create_context( GLvisual *visual,
       ctx->Pixel.DriverReadBuffer = GL_FRONT_LEFT;
    }
 
+   
+   /* Fill in some driver defaults now.
+    */
+   ctx->Driver.AllocDepthBuffer = gl_alloc_depth_buffer;
+   ctx->Driver.ReadDepthSpanFloat = gl_read_depth_span_float;
+   ctx->Driver.ReadDepthSpanInt = gl_read_depth_span_int;
+
+   
+
 #ifdef PROFILE
    init_timings( ctx );
 #endif
@@ -1343,10 +1350,17 @@ void gl_destroy_context( GLcontext *ctx )
       for (i = 0 ; i < MAX_MODELVIEW_STACK_DEPTH ; i++) {
 	 gl_matrix_dtr( &ctx->ModelViewStack[i] );
       }
-
+      gl_matrix_dtr( &ctx->ProjectionMatrix );
+      for (i = 0 ; i < MAX_PROJECTION_STACK_DEPTH ; i++) {
+	 gl_matrix_dtr( &ctx->ProjectionStack[i] );
+      }
 
       free( ctx->PB );
-      free( ctx->VB );
+
+      if(ctx->input != ctx->VB->IM)
+         gl_immediate_free( ctx->input );
+
+      gl_vb_free( ctx->VB );
 
       ctx->Shared->RefCount--;
       assert(ctx->Shared->RefCount>=0);
@@ -1403,6 +1417,14 @@ void gl_destroy_context( GLcontext *ctx )
          free( ctx->EvalMap.Map2Texture3.Points );
       if (ctx->EvalMap.Map2Texture4.Points)
          free( ctx->EvalMap.Map2Texture4.Points );
+
+      /* Free cache of immediate buffers. */
+      while (ctx->nr_im_queued-- > 0) {
+         struct immediate * next = ctx->freed_im_queue->next;
+         free( ctx->freed_im_queue );
+         ctx->freed_im_queue = next;
+      }
+      gl_extensions_dtr(ctx);
 
       free( (void *) ctx );
 
@@ -1753,7 +1775,7 @@ GLenum gl_GetError( GLcontext *ctx )
 {
    GLenum e = ctx->ErrorValue;
 
-   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL( ctx, "glGetError", 0);
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL( ctx, "glGetError", (GLenum) 0);
 
    if (MESA_VERBOSE & VERBOSE_API)
       fprintf(stderr, "glGetError <-- %s\n", gl_lookup_enum_by_nr(e));
@@ -2075,8 +2097,13 @@ void gl_update_state( GLcontext *ctx )
       ctx->Texture.Unit[1].LastEnvMode = ctx->Texture.Unit[1].EnvMode;
    }
 
-   if ((ctx->NewState & ~(NEW_CLIENT_STATE|NEW_TEXTURE_ENABLE)) == 0)
+   if ((ctx->NewState & ~(NEW_CLIENT_STATE|NEW_TEXTURE_ENABLE)) == 0) {
+
+      if (MESA_VERBOSE&VERBOSE_STATE)
+	 fprintf(stderr, "update_state: goto finished\n");
+
       goto finished;
+   }
 
    if (ctx->NewState & NEW_TEXTURE_MATRIX) {
       ctx->Enabled &= ~(ENABLE_TEXMAT0|ENABLE_TEXMAT1);
@@ -2173,31 +2200,30 @@ void gl_update_state( GLcontext *ctx )
 	    }
 	 }
 
-	 /*
-	  * Update Device Driver interface
+	 /* The driver isn't managing the depth buffer.
 	  */
-	 ctx->Driver.AllocDepthBuffer = gl_alloc_depth_buffer;
-	 if (ctx->Depth.Mask) {
-	    switch (ctx->Depth.Func) {
-	    case GL_LESS:
-	       ctx->Driver.DepthTestSpan = gl_depth_test_span_less;
-	       ctx->Driver.DepthTestPixels = gl_depth_test_pixels_less;
-	       break;
-	    case GL_GREATER:
-	       ctx->Driver.DepthTestSpan = gl_depth_test_span_greater;
-	       ctx->Driver.DepthTestPixels = gl_depth_test_pixels_greater;
-	       break;
-	    default:
+	 if (ctx->Driver.AllocDepthBuffer == gl_alloc_depth_buffer) 
+	 {
+	    if (ctx->Depth.Mask) {
+	       switch (ctx->Depth.Func) {
+	       case GL_LESS:
+		  ctx->Driver.DepthTestSpan = gl_depth_test_span_less;
+		  ctx->Driver.DepthTestPixels = gl_depth_test_pixels_less;
+		  break;
+	       case GL_GREATER:
+		  ctx->Driver.DepthTestSpan = gl_depth_test_span_greater;
+		  ctx->Driver.DepthTestPixels = gl_depth_test_pixels_greater;
+		  break;
+	       default:
+		  ctx->Driver.DepthTestSpan = gl_depth_test_span_generic;
+		  ctx->Driver.DepthTestPixels = gl_depth_test_pixels_generic;
+	       }
+	    }
+	    else {
 	       ctx->Driver.DepthTestSpan = gl_depth_test_span_generic;
 	       ctx->Driver.DepthTestPixels = gl_depth_test_pixels_generic;
 	    }
 	 }
-	 else {
-	    ctx->Driver.DepthTestSpan = gl_depth_test_span_generic;
-	    ctx->Driver.DepthTestPixels = gl_depth_test_pixels_generic;
-	 }
-	 ctx->Driver.ReadDepthSpanFloat = gl_read_depth_span_float;
-	 ctx->Driver.ReadDepthSpanInt = gl_read_depth_span_int;
       }
 
       if (ctx->NewState & NEW_LIGHTING) {
@@ -2212,6 +2238,7 @@ void gl_update_state( GLcontext *ctx )
 
    if (ctx->NewState & (NEW_POLYGON | NEW_LIGHTING)) {
 
+      ctx->TriangleCaps &= ~DD_TRI_CULL_FRONT_BACK;
 
       if (ctx->NewState & NEW_POLYGON) {
 	 /* Setup CullBits bitmask */
@@ -2231,7 +2258,8 @@ void gl_update_state( GLcontext *ctx )
 	    default:
 	    case GL_FRONT_AND_BACK:
 	       ctx->backface_sign = 0;
-	       ctx->Polygon.CullBits = 3;
+	       ctx->Polygon.CullBits = 0;
+	       ctx->TriangleCaps |= DD_TRI_CULL_FRONT_BACK;
 	       break;
 	    }
 	 }
