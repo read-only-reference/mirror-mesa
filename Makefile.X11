@@ -1,7 +1,7 @@
-# $Id: Makefile.X11,v 1.27 2000/06/27 17:37:17 brianp Exp $
+# $Id: Makefile.X11,v 1.33 2000/07/31 13:59:22 brianp Exp $
 
 # Mesa 3-D graphics library
-# Version:  3.3
+# Version:  3.5
 # 
 # Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
 # 
@@ -162,6 +162,7 @@ sunos5-x11r6-gcc-sl ultrix-gcc unicos unixware uwin vistra:
 	if [ -d src      ] ; then touch src/depend      ; fi
 	if [ -d src-glu  ] ; then touch src-glu/depend  ; fi
 	if [ -d src-glut ] ; then touch src-glut/depend ; fi
+	if [ -d widgets-sgi ] ; then touch widgets-sgi/depend ; fi
 	if [ -d src      ] ; then cd src      ; $(MAKE) -f Makefile.X11 $@ ; fi
 	if [ -d src-glu  ] ; then cd src-glu  ; $(MAKE) -f Makefile.X11 $@ ; fi
 	if [ -d src-glut ] ; then cd src-glut ; $(MAKE) -f Makefile.X11 $@ ; fi
@@ -177,6 +178,7 @@ irix6-n32 irix6-n32-dso irix6-gcc-n32-sl irix-debug:
 	if [ -d src-glu  ] ; then touch src-glu/depend  ; fi
 	if [ -d src-glut ] ; then touch src-glut/depend ; fi
 	if [ -d src-glut ] ; then touch src-glut/depend ; fi
+	if [ -d widgets-sgi ] ; then touch widgets-sgi/depend ; fi
 	if [ -d src      ] ; then cd src      ; $(MAKE) -f Makefile.X11 $@ ; fi
 	if [ -d src-glu  ] ; then cd src-glu  ; $(MAKE) -f Makefile.X11 $@ ; fi
 	if [ -d src-glut ] ; then cd src-glut ; $(MAKE) -f Makefile.X11 $@ ; fi
@@ -192,6 +194,7 @@ irix6-64 irix6-64-dso:
 	touch src/depend
 	touch src-glu/depend
 	if [ -d src-glut ] ; then touch src-glut/depend ; fi
+	if [ -d widgets-sgi ] ; then touch widgets-sgi/depend ; fi
 	if [ -d src      ] ; then cd src      ; $(MAKE) -f Makefile.X11 $@ ; fi
 	if [ -d src-glu  ] ; then cd src-glu  ; $(MAKE) -f Makefile.X11 $@ ; fi
 	if [ -d src-glut ] ; then cd src-glut ; $(MAKE) -f Makefile.X11 $@ ; fi
@@ -226,6 +229,7 @@ cygnus cygnus-linux:
 	-mkdir lib
 	touch src/depend
 	touch src-glu/depend
+	if [ -d widgets-sgi ] ; then touch widgets-sgi/depend ; fi
 	if [ -d src      ] ; then cd src      ; $(MAKE) -f Makefile.X11 $@ ; fi
 	if [ -d src-glu  ] ; then cd src-glu  ; $(MAKE) -f Makefile.X11 $@ ; fi
 	if [ -d src-glut ] ; then cd src-glut ; $(MAKE) -f Makefile.X11 $@ ; fi
@@ -264,6 +268,7 @@ linux-ggi linux-386-ggi:
 	touch src/depend
 	touch src-glu/depend
 	if [ -d src-glut        ] ; then touch src-glut/depend ; fi
+	if [ -d widgets-sgi     ] ; then touch widgets-sgi/depend ; fi
 	if [ -d ggi             ] ; then touch ggi/depend      ; fi
 	if [ -d src             ] ; then cd src ; $(MAKE) -f Makefile.X11 $@ ; fi
 	if [ -d src/GGI/default ] ; then cd src/GGI/default ; $(MAKE)      ; fi
@@ -321,10 +326,10 @@ realclean: clean
 
 
 
-DIRECTORY = Mesa-3.3
-LIB_NAME = MesaLib-3.3beta1
-DEMO_NAME = MesaDemos-3.3beta1
-GLU_NAME = MesaGLU-3.3beta1
+DIRECTORY = Mesa-3.5
+LIB_NAME = MesaLib-3.5
+DEMO_NAME = MesaDemos-3.5
+GLU_NAME = MesaGLU-3.5
 GLUT_NAME = GLUT-3.7
 
 
@@ -345,7 +350,6 @@ LIB_FILES =	\
 	$(DIRECTORY)/missing			\
 	$(DIRECTORY)/mkinstalldirs		\
 	$(DIRECTORY)/stamp-h.in			\
-	$(DIRECTORY)/configure			\
 	$(DIRECTORY)/docs/CONFIG		\
 	$(DIRECTORY)/docs/CONFORM		\
 	$(DIRECTORY)/docs/COPYING		\
@@ -356,7 +360,7 @@ LIB_FILES =	\
 	$(DIRECTORY)/docs/INSTALL.GNU		\
 	$(DIRECTORY)/docs/README		\
 	$(DIRECTORY)/docs/README.*		\
-	$(DIRECTORY)/docs/RELNOTES		\
+	$(DIRECTORY)/docs/RELNOTES*		\
 	$(DIRECTORY)/docs/VERSIONS		\
 	$(DIRECTORY)/docs/*.spec		\
 	$(DIRECTORY)/bin/README			\
@@ -370,7 +374,7 @@ LIB_FILES =	\
 	$(DIRECTORY)/mesawin32.mak		\
 	$(DIRECTORY)/Names.win			\
 	$(DIRECTORY)/win32-openstep.sh		\
-	$(DIRECTORY)/*.dja			\
+	$(DIRECTORY)/common.dja			\
 	$(DIRECTORY)/include/GL/Makefile.in	\
 	$(DIRECTORY)/include/GL/Makefile.am	\
 	$(DIRECTORY)/include/GL/dosmesa.h	\
@@ -461,13 +465,11 @@ LIB_FILES =	\
 	$(DIRECTORY)/src/X86/Makefile.in			\
 	$(DIRECTORY)/src/X86/*.m4				\
 	$(DIRECTORY)/src/X86/*.S				\
-	$(DIRECTORY)/src/*.dja					\
 	$(DIRECTORY)/src-glu/README[12]				\
 	$(DIRECTORY)/src-glu/Makefile*				\
 	$(DIRECTORY)/src-glu/descrip.mms			\
 	$(DIRECTORY)/src-glu/mms_depend				\
 	$(DIRECTORY)/src-glu/*.def				\
-	$(DIRECTORY)/src-glu/*.dja				\
 	$(DIRECTORY)/src-glu/depend				\
 	$(DIRECTORY)/src-glu/*.[ch]				\
 	$(DIRECTORY)/widgets-mesa/ChangeLog			\
@@ -492,8 +494,8 @@ LIB_FILES =	\
 	$(DIRECTORY)/widgets-mesa/man/Makefile.in		\
 	$(DIRECTORY)/widgets-mesa/man/Mesa*			\
 	$(DIRECTORY)/widgets-mesa/src/ChangeLog			\
-	$(DIRECTORY)/widgets-mesa/*.[ch]			\
-	$(DIRECTORY)/widgets-mesa/Makefile.in			\
+	$(DIRECTORY)/widgets-mesa/src/*.c			\
+	$(DIRECTORY)/widgets-mesa/src/Makefile.in		\
 	$(DIRECTORY)/widgets-sgi/*.[ch]				\
 	$(DIRECTORY)/widgets-sgi/Makefile*			\
 	$(DIRECTORY)/widgets-sgi/README				\
@@ -560,7 +562,6 @@ DEMO_FILES =	\
 	$(DIRECTORY)/samples/Makefile*		\
 	$(DIRECTORY)/samples/README		\
 	$(DIRECTORY)/samples/*.c		\
-	$(DIRECTORY)/samples/*.dja		\
 	$(DIRECTORY)/mtdemos			\
 	$(DIRECTORY)/ggi
 
@@ -578,7 +579,6 @@ GLU_FILES = \
 	$(DIRECTORY)/src-glu/descrip.mms	\
 	$(DIRECTORY)/src-glu/mms_depend		\
 	$(DIRECTORY)/src-glu/*.def		\
-	$(DIRECTORY)/src-glu/*.dja		\
 	$(DIRECTORY)/src-glu/depend		\
 	$(DIRECTORY)/src-glu/*.[ch]
 
@@ -635,14 +635,14 @@ glut_tar:
 
 
 lib_zip:
+	-rm $(LIB_NAME).zip ; \
 	cp Makefile.X11 Makefile ; \
-	-rm $(LIB_NAME).zip
 	cd .. ; \
 	zip -r $(LIB_NAME).zip $(LIB_FILES) ; \
 	mv $(LIB_NAME).zip $(DIRECTORY)
 
 demo_zip:
-	-rm $(DEMO_NAME).zip
+	-rm $(DEMO_NAME).zip ; \
 	cd .. ; \
 	zip -r $(DEMO_NAME).zip $(DEMO_FILES) ; \
 	mv $(DEMO_NAME).zip $(DIRECTORY)
