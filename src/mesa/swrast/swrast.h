@@ -119,18 +119,15 @@ _swrast_Accum( GLcontext *ctx, GLenum op,
 	       GLint width, GLint height );
 
 
-/* Get a pointer to the stipple counter.
- */
-extern GLuint *
-_swrast_get_stipple_counter_ref( GLcontext *ctx );
-
-/* Reset the stipple pointer via a function call
+/* Reset the stipple counter
  */
 extern void
 _swrast_ResetLineStipple( GLcontext *ctx );
 
 /* These will always render the correct point/line/triangle for the
  * current state.
+ *
+ * For flatshaded primitives, the provoking vertex is the final one.
  */
 extern void
 _swrast_Point( GLcontext *ctx, const SWvertex *v );
@@ -164,6 +161,8 @@ _swrast_allow_vertex_fog( GLcontext *ctx, GLboolean value );
 extern void
 _swrast_allow_pixel_fog( GLcontext *ctx, GLboolean value );
 
+/* Debug:
+ */
 extern void
 _swrast_print_vertex( GLcontext *ctx, const SWvertex *v );
 

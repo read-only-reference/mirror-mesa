@@ -87,6 +87,14 @@
 #define T1COORD  GR_VERTEX_TOW_TMU1_OFFSET
 
 
+extern float gl_ubyte_to_float_255_color_tab[256];
+#define UBYTE_COLOR_TO_FLOAT_255_COLOR(c) gl_ubyte_to_float_255_color_tab[c]
+#define UBYTE_COLOR_TO_FLOAT_255_COLOR2(f,c) \
+    (*(int *)&(f)) = ((int *)gl_ubyte_to_float_255_color_tab)[c]
+
+
+
+
 /* Should have size == 16 * sizeof(float).
  */
 typedef union {
@@ -416,6 +424,7 @@ struct tfxMesaContext {
    GLuint render_index;
    GLuint passes, multipass;
    GLuint is_in_hardware;
+   GLenum render_prim;
 
    /* Current rasterization functions 
     */
@@ -501,7 +510,7 @@ struct tfxMesaContext {
    GLuint size;
 };
 
-typedef void (*tfxSetupFunc)(GLcontext *ctx, GLuint, GLuint, GLuint);
+typedef void (*tfxSetupFunc)(GLcontext *ctx, GLuint, GLuint );
 
 extern GrHwConfiguration glbHWConfig;
 extern int glbCurrentBoard;

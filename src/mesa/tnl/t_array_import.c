@@ -1,4 +1,4 @@
-/* $Id: t_array_import.c,v 1.3 2000/12/28 22:11:05 keithw Exp $ */
+/* $Id: t_array_import.c,v 1.7 2001/01/24 00:04:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -107,10 +107,10 @@ static void _tnl_import_color( GLcontext *ctx,
 			  &is_writeable);
       
    inputs->Color.data = tmp->Ptr;
-   inputs->Color.start = (GLubyte *)tmp->Ptr;
+   inputs->Color.start = (GLchan *)tmp->Ptr;
    inputs->Color.stride = tmp->StrideB;
    inputs->Color.flags &= ~(VEC_BAD_STRIDE|VEC_NOT_WRITEABLE);
-   if (inputs->Color.stride != 4*sizeof(GLubyte))
+   if (inputs->Color.stride != 4*sizeof(GLchan))
       inputs->Color.flags |= VEC_BAD_STRIDE;
    if (!is_writeable)
       inputs->Color.flags |= VEC_NOT_WRITEABLE;
@@ -132,7 +132,7 @@ static void _tnl_import_secondarycolor( GLcontext *ctx,
 				   &is_writeable);
       
    inputs->SecondaryColor.data = tmp->Ptr;
-   inputs->SecondaryColor.start = (GLubyte *)tmp->Ptr;
+   inputs->SecondaryColor.start = (GLchan *)tmp->Ptr;
    inputs->SecondaryColor.stride = tmp->StrideB;
    inputs->SecondaryColor.flags &= ~(VEC_BAD_STRIDE|VEC_NOT_WRITEABLE);
    if (inputs->SecondaryColor.stride != 4*sizeof(GLubyte))
@@ -195,9 +195,6 @@ static void _tnl_import_texcoord( GLcontext *ctx,
    struct gl_client_array *tmp;
    GLboolean is_writeable = 0;
 
-/*     fprintf(stderr, "%s %d before wr %d ptr %p\n", __FUNCTION__, i, writeable, */
-/*  	   inputs->TexCoord[i].data); */
-
    tmp = _ac_import_texcoord(ctx, i, GL_FLOAT, 
 			     stride ? 4*sizeof(GLfloat) : 0, 
 			     0,
@@ -213,9 +210,6 @@ static void _tnl_import_texcoord( GLcontext *ctx,
       inputs->TexCoord[i].flags |= VEC_BAD_STRIDE;
    if (!is_writeable)
       inputs->TexCoord[i].flags |= VEC_NOT_WRITEABLE;
-
-/*     fprintf(stderr, "%s %d before wr %d ptr %p\n", __FUNCTION__, i, is_writeable, */
-/*  	   inputs->TexCoord[i].data); */
 }
  
   
@@ -267,31 +261,37 @@ static void _tnl_upgrade_client_data( GLcontext *ctx,
    if ((required & VERT_OBJ) && (VB->ObjPtr->flags & flags)) {
       ASSERT(VB->ObjPtr == &inputs->Obj);
       _tnl_import_vertex( ctx, writeable, stride );
+      VB->importable_data &= ~(VERT_OBJ|VERT_CLIP);
    }
 
    if ((required & VERT_NORM) && (VB->NormalPtr->flags & flags)) {
       ASSERT(VB->NormalPtr == &inputs->Normal);
       _tnl_import_normal( ctx, writeable, stride );
+      VB->importable_data &= ~VERT_NORM;
    }
 
    if ((required & VERT_RGBA) && (VB->ColorPtr[0]->flags & flags)) {
       ASSERT(VB->ColorPtr[0] == &inputs->Color);
       _tnl_import_color( ctx, writeable, stride );
+      VB->importable_data &= ~VERT_RGBA;
    }
 
    if ((required & VERT_SPEC_RGB) && (VB->SecondaryColorPtr[0]->flags&flags)) {
       ASSERT(VB->SecondaryColorPtr[0] == &inputs->SecondaryColor);
       _tnl_import_secondarycolor( ctx, writeable, stride );
+      VB->importable_data &= ~VERT_SPEC_RGB;
    }
 
    if ((required & VERT_FOG_COORD) && (VB->FogCoordPtr->flags & flags)) {
       ASSERT(VB->FogCoordPtr == &inputs->FogCoord);
       _tnl_import_fogcoord( ctx, writeable, stride );
+      VB->importable_data &= ~VERT_FOG_COORD;
    }
 
    if ((required & VERT_INDEX) && (VB->IndexPtr[0]->flags & flags)) {
       ASSERT(VB->IndexPtr[0] == &inputs->Index);
       _tnl_import_index( ctx, writeable, stride );
+      VB->importable_data &= ~VERT_INDEX;
    }
 
    if (required & VERT_TEX_ANY)
@@ -299,14 +299,9 @@ static void _tnl_upgrade_client_data( GLcontext *ctx,
 	 if ((required & VERT_TEX(i)) && (VB->TexCoordPtr[i]->flags & flags)) {
 	    ASSERT(VB->TexCoordPtr[i] == &inputs->TexCoord[i]);
 	    _tnl_import_texcoord( ctx, i, writeable, stride );
+	    VB->importable_data &= ~VERT_TEX(i);
 	 }
    
-   if ((required & VERT_EDGE) && (VB->EdgeFlagPtr->flags & flags)) {
-      ASSERT(VB->EdgeFlagPtr == &inputs->EdgeFlag);
-      _tnl_import_edgeflag( ctx, writeable, stride );
-   }
-
-   VB->importable_data &= ~required;
 }
 
 
@@ -386,11 +381,8 @@ void _tnl_vb_bind_arrays( GLcontext *ctx, GLint start, GLsizei count )
    }
     
    if (inputs & VERT_EDGE) {
-      if (imports & VERT_EDGE) {
-	 _tnl_import_edgeflag( ctx, 0, 0 ); 
-	 tmp->EdgeFlag.count = VB->Count;
-      }
-      VB->EdgeFlagPtr = &tmp->EdgeFlag;
+      _tnl_import_edgeflag( ctx, GL_TRUE, sizeof(GLboolean) ); 
+      VB->EdgeFlag = (GLboolean *) tmp->EdgeFlag.data;
    }
     
    if (inputs & VERT_SPEC_RGB) {
@@ -472,21 +464,53 @@ void _tnl_fill_immediate_drawarrays( GLcontext *ctx, struct immediate *IM,
    }
 	
    if (required & VERT_RGBA) {
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
       _math_trans_4ub( IM->Color + IM->Start,
 		       ctx->Array.Color.Ptr, 
 		       ctx->Array.Color.StrideB,
 		       ctx->Array.Color.Type,
 		       ctx->Array.Color.Size,
 		       start, n );
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+      _math_trans_4us( IM->Color + IM->Start,
+		       ctx->Array.Color.Ptr, 
+		       ctx->Array.Color.StrideB,
+		       ctx->Array.Color.Type,
+		       ctx->Array.Color.Size,
+		       start, n );
+#elif CHAN_TYPE == GL_FLOAT
+      _math_trans_4f( IM->Color + IM->Start,
+                      ctx->Array.Color.Ptr, 
+                      ctx->Array.Color.StrideB,
+                      ctx->Array.Color.Type,
+                      ctx->Array.Color.Size,
+                      start, n );
+#endif
    }
 
    if (required & VERT_SPEC_RGB) {
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
       _math_trans_4ub( IM->SecondaryColor + IM->Start,
 		       ctx->Array.SecondaryColor.Ptr,
 		       ctx->Array.SecondaryColor.StrideB, 
 		       ctx->Array.SecondaryColor.Type, 
 		       ctx->Array.SecondaryColor.Size, 
 		       start, n );
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+      _math_trans_4us( IM->SecondaryColor + IM->Start,
+		       ctx->Array.SecondaryColor.Ptr,
+		       ctx->Array.SecondaryColor.StrideB, 
+		       ctx->Array.SecondaryColor.Type, 
+		       ctx->Array.SecondaryColor.Size, 
+		       start, n );
+#elif CHAN_TYPE == GL_FLOAT
+      _math_trans_4f( IM->SecondaryColor + IM->Start,
+		       ctx->Array.SecondaryColor.Ptr,
+		       ctx->Array.SecondaryColor.StrideB, 
+		       ctx->Array.SecondaryColor.Type, 
+		       ctx->Array.SecondaryColor.Size, 
+		       start, n );
+#endif
    }
 
    if (required & VERT_FOG_COORD) {

@@ -1,4 +1,4 @@
-/* $Id: ss_context.c,v 1.5 2000/12/26 05:09:32 keithw Exp $ */
+/* $Id: ss_context.c,v 1.9 2001/01/29 20:47:39 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -27,65 +27,18 @@
  *    Keith Whitwell <keithw@valinux.com>
  */
 
-
 #include "glheader.h"
 #include "mem.h"
-
-
 #include "ss_context.h"
 #include "ss_triangle.h"
 #include "ss_vb.h"
-
+#include "ss_interp.h"
 #include "swrast_setup.h"
-
 #include "tnl/t_context.h"
 
-/* Stub for swsetup->Triangle to select a true triangle function 
- * after a state change.
- */
-static void 
-_swsetup_validate_quad( GLcontext *ctx, GLuint v0, GLuint v1, 
-			GLuint v2, GLuint v3, GLuint pv )
-{
-   _swsetup_choose_trifuncs( ctx );
-   SWSETUP_CONTEXT(ctx)->Quad( ctx, v0, v1, v2, v3, pv );
-}
-
-static void 
-_swsetup_validate_triangle( GLcontext *ctx, GLuint v0, GLuint v1, 
-			    GLuint v2, GLuint pv )
-{
-   _swsetup_choose_trifuncs( ctx );
-   SWSETUP_CONTEXT(ctx)->Triangle( ctx, v0, v1, v2, pv );
-}
-
-static void 
-_swsetup_validate_line( GLcontext *ctx, GLuint v0, GLuint v1, GLuint pv )
-{
-   _swsetup_choose_trifuncs( ctx );
-   SWSETUP_CONTEXT(ctx)->Line( ctx, v0, v1, pv );
-}
-
-
-static void 
-_swsetup_validate_points( GLcontext *ctx, GLuint first, GLuint last )
-{
-   _swsetup_choose_trifuncs( ctx );
-   SWSETUP_CONTEXT(ctx)->Points( ctx, first, last );
-}
-
-
-
-static void 
-_swsetup_validate_buildprojverts( GLcontext *ctx,
-				  GLuint start, GLuint end, GLuint new_inputs )
-{
-   _swsetup_choose_rastersetup_func( ctx );
-   SWSETUP_CONTEXT(ctx)->BuildProjVerts( ctx, start, end, new_inputs );
-}
-
-
+ 
 #define _SWSETUP_NEW_VERTS (_NEW_RENDERMODE|	\
+                            _NEW_LIGHT|         \
 			    _NEW_TEXTURE|	\
 			    _NEW_COLOR|		\
 			    _NEW_FOG|		\
@@ -94,59 +47,33 @@ _swsetup_validate_buildprojverts( GLcontext *ctx,
 #define _SWSETUP_NEW_RENDERINDEX (_NEW_POLYGON|_NEW_LIGHT)
 
 
-#if 0
-/* TODO: sleep/wakeup mechanism
- */
-static void
-_swsetup_sleep( GLcontext *ctx, GLuint new_state )
-{
-}
-#endif
-
-static void
-_swsetup_invalidate_state( GLcontext *ctx, GLuint new_state )
-{
-   SScontext *swsetup = SWSETUP_CONTEXT(ctx);
-   
-   swsetup->NewState |= new_state;
-
-   if (new_state & _SWSETUP_NEW_RENDERINDEX) {
-      swsetup->Triangle = _swsetup_validate_triangle;
-      swsetup->Line = _swsetup_validate_line;
-      swsetup->Points = _swsetup_validate_points;
-      swsetup->Quad = _swsetup_validate_quad;
-   }
-
-   if (new_state & _SWSETUP_NEW_VERTS) {
-      swsetup->BuildProjVerts = _swsetup_validate_buildprojverts;
-   }
-}
-
-
-
 /* Dispatch from these fixed entrypoints to the state-dependent
- * functions:
+ * functions.  
+ *
+ * The design of swsetup suggests that we could really program
+ * ctx->Driver.TriangleFunc directly from _swsetup_RenderStart, and
+ * avoid this second level of indirection.  However, this is more
+ * convient for fallback cases in hardware rasterization drivers.  
  */
 void 
 _swsetup_Quad( GLcontext *ctx, GLuint v0, GLuint v1, 
-	       GLuint v2, GLuint v3, GLuint pv )
+	       GLuint v2, GLuint v3 )
 {
-   SWSETUP_CONTEXT(ctx)->Quad( ctx, v0, v1, v2, v3, pv );
+   SWSETUP_CONTEXT(ctx)->Quad( ctx, v0, v1, v2, v3 );
 }
 
 void 
 _swsetup_Triangle( GLcontext *ctx, GLuint v0, GLuint v1, 
-		   GLuint v2, GLuint pv )
+		   GLuint v2 )
 {
-   SWSETUP_CONTEXT(ctx)->Triangle( ctx, v0, v1, v2, pv );
+   SWSETUP_CONTEXT(ctx)->Triangle( ctx, v0, v1, v2 );
 }
 
 void 
-_swsetup_Line( GLcontext *ctx, GLuint v0, GLuint v1, GLuint pv )
+_swsetup_Line( GLcontext *ctx, GLuint v0, GLuint v1 )
 {
-   SWSETUP_CONTEXT(ctx)->Line( ctx, v0, v1, pv );
+   SWSETUP_CONTEXT(ctx)->Line( ctx, v0, v1 );
 }
-
 
 void 
 _swsetup_Points( GLcontext *ctx, GLuint first, GLuint last )
@@ -159,12 +86,6 @@ _swsetup_BuildProjectedVertices( GLcontext *ctx, GLuint start, GLuint end,
 				 GLuint new_inputs )
 {
    SWSETUP_CONTEXT(ctx)->BuildProjVerts( ctx, start, end, new_inputs );
-}
-
-void
-_swsetup_InvalidateState( GLcontext *ctx, GLuint new_state )
-{
-   SWSETUP_CONTEXT(ctx)->InvalidateState( ctx, new_state );
 }
 
 
@@ -186,14 +107,8 @@ _swsetup_CreateContext( GLcontext *ctx )
    ctx->swsetup_context = swsetup;
 
    swsetup->NewState = ~0;
-   swsetup->InvalidateState = _swsetup_invalidate_state;
-   swsetup->Quad = _swsetup_validate_quad;
-   swsetup->Triangle = _swsetup_validate_triangle;
-   swsetup->Line = _swsetup_validate_line;
-   swsetup->Points = _swsetup_validate_points;
-   swsetup->BuildProjVerts = _swsetup_validate_buildprojverts;
-   
    _swsetup_vb_init( ctx );
+   _swsetup_interp_init( ctx );
    _swsetup_trifuncs_init( ctx );
 
    return GL_TRUE;
@@ -211,4 +126,64 @@ _swsetup_DestroyContext( GLcontext *ctx )
    }
 }
 
+void
+_swsetup_RenderPrimitive( GLcontext *ctx, GLenum mode )
+{
+   SWSETUP_CONTEXT(ctx)->render_prim = mode;
+}
+
+void
+_swsetup_RenderStart( GLcontext *ctx )
+{ 
+   SScontext *swsetup = SWSETUP_CONTEXT(ctx);   
+   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
+   GLuint new_state = swsetup->NewState;
+
+   if (new_state & _SWSETUP_NEW_RENDERINDEX) {
+      _swsetup_choose_trifuncs( ctx );
+   }
+
+   if (new_state & _SWSETUP_NEW_VERTS) {
+      _swsetup_choose_rastersetup_func( ctx );
+   }
+
+   swsetup->NewState = 0;
+
+   if (VB->ClipMask && VB->importable_data) 
+      VB->import_data( ctx,
+		       VB->importable_data,
+		       VEC_NOT_WRITEABLE|VEC_BAD_STRIDE);
+}
+
+void
+_swsetup_RenderFinish( GLcontext *ctx )
+{
+   _swrast_flush( ctx );
+}
+
+void
+_swsetup_InvalidateState( GLcontext *ctx, GLuint new_state )
+{
+   SScontext *swsetup = SWSETUP_CONTEXT(ctx);   
+   swsetup->NewState |= new_state;
+
+   if (new_state & _SWSETUP_NEW_INTERP) {
+      swsetup->RenderInterp = _swsetup_validate_interp;
+      swsetup->RenderCopyPV = _swsetup_validate_copypv;
+   }
+}
+
+void 
+_swsetup_RenderInterp( GLcontext *ctx, GLfloat t, 
+		       GLuint dst, GLuint out, GLuint in,
+		       GLboolean force_boundary ) 
+{
+   SWSETUP_CONTEXT(ctx)->RenderInterp( ctx, t, dst, out, in, force_boundary );
+}
+
+void 
+_swsetup_RenderCopyPV( GLcontext *ctx, GLuint dst, GLuint src ) 
+{
+   SWSETUP_CONTEXT(ctx)->RenderCopyPV( ctx, dst, src );
+}
 

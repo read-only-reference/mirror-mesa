@@ -1,4 +1,4 @@
-/* $Id: extensions.c,v 1.43 2000/12/08 00:20:15 brianp Exp $ */
+/* $Id: extensions.c,v 1.45 2001/01/24 04:56:20 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -87,6 +87,7 @@ static struct {
    { OFF, "GL_EXT_texture_compression_s3tc",  F(EXT_texture_compression_s3tc) },
    { ON,  "GL_EXT_texture_env_add",           F(EXT_texture_env_add) },
    { OFF, "GL_EXT_texture_env_combine",       F(EXT_texture_env_combine) },
+   { OFF, "GL_EXT_texture_env_dot3",          F(EXT_texture_env_dot3) },
    { ON,  "GL_EXT_texture_object",            F(EXT_texture_object) },
    { ON,  "GL_EXT_texture_lod_bias",          F(EXT_texture_lod_bias) },
    { ON,  "GL_EXT_vertex_array",              0 },
@@ -98,7 +99,6 @@ static struct {
    { OFF, "GL_MESA_sprite_point",             F(MESA_sprite_point) },
    { OFF, "GL_NV_blend_square",               F(NV_blend_square) },
    { ON,  "GL_NV_texgen_reflection",          F(NV_texgen_reflection) },
-   { ON,  "GL_PGI_misc_hints",                F(PGI_misc_hints) },
    { ON,  "GL_SGI_color_matrix",              F(SGI_color_matrix) },
    { ON,  "GL_SGI_color_table",               F(SGI_color_table) },
    { ON,  "GL_SGIS_pixel_texture",            F(SGIS_pixel_texture) },
@@ -120,6 +120,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
    gl_extensions_enable(ctx, "GL_ARB_texture_cube_map");
    gl_extensions_enable(ctx, "GL_EXT_bgra");
    gl_extensions_enable(ctx, "GL_EXT_texture_env_combine");
+   gl_extensions_enable(ctx, "GL_EXT_texture_env_dot3");
    gl_extensions_enable(ctx, "GL_HP_occlusion_test");
    gl_extensions_enable(ctx, "GL_NV_blend_square");
    gl_extensions_enable(ctx, "GL_MESA_sprite_point");

@@ -1,3 +1,30 @@
+/* $Id: api_noop.c,v 1.4 2001/01/24 00:04:58 brianp Exp $ */
+
+/*
+ * Mesa 3-D graphics library
+ * Version:  3.5
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included
+ * in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+ * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+
 #include "glheader.h"
 #include "api_noop.h"
 #include "api_validate.h"
@@ -133,73 +160,84 @@ void _mesa_noop_Materialfv(  GLenum face, GLenum pname, const GLfloat *params )
 void _mesa_noop_Color4ub( GLubyte a, GLubyte b, GLubyte c, GLubyte d )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.Color;
-   color[0] = a;
-   color[1] = b;
-   color[2] = c;
-   color[3] = d;
+   GLchan *color = ctx->Current.Color;
+   color[0] = UBYTE_TO_CHAN(a);
+   color[1] = UBYTE_TO_CHAN(b);
+   color[2] = UBYTE_TO_CHAN(c);
+   color[3] = UBYTE_TO_CHAN(d);
 }
 
 void _mesa_noop_Color4ubv( const GLubyte *v )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.Color;
+   GLchan *color = ctx->Current.Color;
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
    COPY_4UBV( color, v );
+#else
+   color[0] = UBYTE_TO_CHAN(v[0]);
+   color[1] = UBYTE_TO_CHAN(v[1]);
+   color[2] = UBYTE_TO_CHAN(v[2]);
+   color[3] = UBYTE_TO_CHAN(v[3]);
+#endif
 }
 
 void _mesa_noop_Color4f( GLfloat a, GLfloat b, GLfloat c, GLfloat d )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.Color;
-   FLOAT_COLOR_TO_UBYTE_COLOR(color[0], a);
-   FLOAT_COLOR_TO_UBYTE_COLOR(color[1], b);
-   FLOAT_COLOR_TO_UBYTE_COLOR(color[2], c);
-   FLOAT_COLOR_TO_UBYTE_COLOR(color[3], d);
+   GLchan *color = ctx->Current.Color;
+   UNCLAMPED_FLOAT_TO_CHAN(color[0], a);
+   UNCLAMPED_FLOAT_TO_CHAN(color[1], b);
+   UNCLAMPED_FLOAT_TO_CHAN(color[2], c);
+   UNCLAMPED_FLOAT_TO_CHAN(color[3], d);
 }
 
 void _mesa_noop_Color4fv( const GLfloat *v )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.Color;
-   FLOAT_RGBA_TO_CHAN_RGBA( color, v );
+   GLchan *color = ctx->Current.Color;
+   UNCLAMPED_FLOAT_TO_CHAN(color[0], v[0]);
+   UNCLAMPED_FLOAT_TO_CHAN(color[1], v[1]);
+   UNCLAMPED_FLOAT_TO_CHAN(color[2], v[2]);
 }
 
 void _mesa_noop_Color3ub( GLubyte a, GLubyte b, GLubyte c )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.Color;
-   color[0] = a;
-   color[1] = b;
-   color[2] = c;
-   color[3] = 255;
+   GLchan *color = ctx->Current.Color;
+   color[0] = UBYTE_TO_CHAN(a);
+   color[1] = UBYTE_TO_CHAN(b);
+   color[2] = UBYTE_TO_CHAN(c);
+   color[3] = CHAN_MAX;
 }
 
 void _mesa_noop_Color3ubv( const GLubyte *v )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.Color;
-   color[0] = v[0];
-   color[1] = v[1];
-   color[2] = v[2];
-   color[3] = 255;
+   GLchan *color = ctx->Current.Color;
+   color[0] = UBYTE_TO_CHAN(v[0]);
+   color[1] = UBYTE_TO_CHAN(v[1]);
+   color[2] = UBYTE_TO_CHAN(v[2]);
+   color[3] = CHAN_MAX;
 }
 
 void _mesa_noop_Color3f( GLfloat a, GLfloat b, GLfloat c )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.Color;
-   FLOAT_COLOR_TO_UBYTE_COLOR(color[0], a);
-   FLOAT_COLOR_TO_UBYTE_COLOR(color[1], b);
-   FLOAT_COLOR_TO_UBYTE_COLOR(color[2], c);
-   color[3] = 255;
+   GLchan *color = ctx->Current.Color;
+   UNCLAMPED_FLOAT_TO_CHAN(color[0], a);
+   UNCLAMPED_FLOAT_TO_CHAN(color[1], b);
+   UNCLAMPED_FLOAT_TO_CHAN(color[2], c);
+   color[3] = CHAN_MAX;
 }
 
 void _mesa_noop_Color3fv( const GLfloat *v )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.Color;
-   FLOAT_RGB_TO_CHAN_RGB( color, v );
-   color[3] = 255;
+   GLchan *color = ctx->Current.Color;
+   UNCLAMPED_FLOAT_TO_CHAN(color[0], v[0]);
+   UNCLAMPED_FLOAT_TO_CHAN(color[1], v[1]);
+   UNCLAMPED_FLOAT_TO_CHAN(color[2], v[2]);
+   color[3] = CHAN_MAX;
 }
 
 void _mesa_noop_MultiTexCoord1fARB( GLenum target, GLfloat a )
@@ -342,39 +380,41 @@ void _mesa_noop_MultiTexCoord4fvARB( GLenum target, GLfloat *v )
 void _mesa_noop_SecondaryColor3ubEXT( GLubyte a, GLubyte b, GLubyte c )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.SecondaryColor;
-   color[0] = a;
-   color[1] = b;
-   color[2] = c;
-   color[3] = 255;
+   GLchan *color = ctx->Current.SecondaryColor;
+   color[0] = UBYTE_TO_CHAN(a);
+   color[1] = UBYTE_TO_CHAN(b);
+   color[2] = UBYTE_TO_CHAN(c);
+   color[3] = CHAN_MAX;
 }
 
 void _mesa_noop_SecondaryColor3ubvEXT( const GLubyte *v )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.SecondaryColor;
-   color[0] = v[0];
-   color[1] = v[1];
-   color[2] = v[2];
-   color[3] = 255;
+   GLchan *color = ctx->Current.SecondaryColor;
+   color[0] = UBYTE_TO_CHAN(v[0]);
+   color[1] = UBYTE_TO_CHAN(v[1]);
+   color[2] = UBYTE_TO_CHAN(v[2]);
+   color[3] = CHAN_MAX;
 }
 
 void _mesa_noop_SecondaryColor3fEXT( GLfloat a, GLfloat b, GLfloat c )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.SecondaryColor;
-   FLOAT_COLOR_TO_UBYTE_COLOR(color[0], a);
-   FLOAT_COLOR_TO_UBYTE_COLOR(color[1], b);
-   FLOAT_COLOR_TO_UBYTE_COLOR(color[2], c);
-   color[3] = 255;
+   GLchan *color = ctx->Current.SecondaryColor;
+   UNCLAMPED_FLOAT_TO_CHAN(color[0], a);
+   UNCLAMPED_FLOAT_TO_CHAN(color[1], b);
+   UNCLAMPED_FLOAT_TO_CHAN(color[2], c);
+   color[3] = CHAN_MAX;
 }
 
 void _mesa_noop_SecondaryColor3fvEXT( const GLfloat *v )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLubyte *color = ctx->Current.SecondaryColor;
-   FLOAT_RGB_TO_CHAN_RGB( color, v );
-   color[3] = 255;
+   GLchan *color = ctx->Current.SecondaryColor;
+   UNCLAMPED_FLOAT_TO_CHAN(color[0], v[0]);
+   UNCLAMPED_FLOAT_TO_CHAN(color[1], v[1]);
+   UNCLAMPED_FLOAT_TO_CHAN(color[2], v[2]);
+   color[3] = CHAN_MAX;
 }
 
 void _mesa_noop_TexCoord1f( GLfloat a )

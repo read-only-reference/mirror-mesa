@@ -1,21 +1,21 @@
-/* $Id: mtypes.h,v 1.8 2000/12/27 22:52:45 keithw Exp $ */
+/* $Id: mtypes.h,v 1.17 2001/01/29 20:47:39 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -27,16 +27,14 @@
 
 #ifndef TYPES_H
 #define TYPES_H
- 
+
 
 #include "glheader.h"
 #include "config.h"		/* Hardwired parameters */
-#include "fixed.h"		/* GLfixed */
 #include "glapitable.h"
 #include "glthread.h"
 
 #include "math/m_matrix.h"	/* GLmatrix */
-#include "math/m_translate.h"	/* trans_XXX_func */
 
 #if defined(MESA_TRACE)
 #include "Trace/tr_context.h"
@@ -101,11 +99,6 @@
 #endif
 
 
-/* Maximum number of temporary vertices required for clipping.  (Used
- * in array_cache and tnl modules).
- */
-#define MAX_CLIPPED_VERTICES ((2 * (6 + MAX_CLIP_PLANES))+1)
-
 /*
  * Depth buffer data type:
  */
@@ -113,14 +106,27 @@ typedef GLuint GLdepth;  /* Must be 32-bits! */
 
 
 /*
+ * Fixed point data type:
+ */
+typedef int GLfixed;
+
+
+
+/*
  * Some forward type declarations
  */
 struct _mesa_HashTable;
 struct gl_texture_object;
-typedef struct gl_visual GLvisual;
-typedef struct gl_frame_buffer GLframebuffer;
 typedef struct __GLcontextRec GLcontext;
+typedef struct __GLcontextModesRec GLvisual;
+typedef struct gl_frame_buffer GLframebuffer;
 
+
+
+/* Maximum number of temporary vertices required for clipping.  (Used
+ * in array_cache and tnl modules).
+ */
+#define MAX_CLIPPED_VERTICES ((2 * (6 + MAX_CLIP_PLANES))+1)
 
 
 /* Data structure for color tables */
@@ -205,7 +211,7 @@ struct gl_light {
    GLfloat _VP_inf_norm[3];	/* Norm direction to infinite light */
    GLfloat _h_inf_norm[3];	/* Norm( _VP_inf_norm + <0,0,1> ) */
    GLfloat _NormDirection[4];	/* normalized spotlight direction */
-   GLfloat _VP_inf_spot_attenuation; 
+   GLfloat _VP_inf_spot_attenuation;
 
    GLfloat _SpotExpTable[EXP_TABLE_SIZE][2];  /* to replace a pow() call */
    GLfloat _MatAmbient[2][3];	/* material ambient * light ambient */
@@ -225,7 +231,7 @@ struct gl_lightmodel {
 };
 
 
-struct gl_material 
+struct gl_material
 {
    GLfloat Ambient[4];
    GLfloat Diffuse[4];
@@ -259,7 +265,7 @@ struct gl_accum_attrib {
 
 struct gl_colorbuffer_attrib {
    GLuint ClearIndex;			/* Index to use for glClear */
-   GLfloat ClearColor[4];		/* Color to use for glClear */
+   GLchan ClearColor[4];		/* Color to use for glClear */
 
    GLuint IndexMask;			/* Color index write mask */
    GLubyte ColorMask[4];		/* Each flag is 0xff or 0x0 */
@@ -302,7 +308,7 @@ struct gl_current_attrib {
    GLuint Index;				/* Current color index */
    GLboolean EdgeFlag;				/* Current edge flag */
    GLfloat Texcoord[MAX_TEXTURE_UNITS][4];	/* Current texture coords */
-	
+
    /* These values are always valid.
     */
    GLfloat RasterPos[4];			/* Current raster position */
@@ -430,12 +436,6 @@ struct gl_hint_attrib {
    GLenum PolygonSmooth;
    GLenum Fog;
 
-   /* GL_PGI_misc_hints */
-   GLenum AllowDrawWin;
-   GLenum AllowDrawFrg;
-   GLenum AllowDrawMem;
-   GLenum StrictLighting;
-
    /* GL_EXT_clip_volume_hint */
    GLenum ClipVolumeClipping;
 
@@ -498,9 +498,9 @@ struct gl_light_attrib {
 };
 
 
+#define LIGHT_SPOT         0x1
+#define LIGHT_LOCAL_VIEWER 0x2
 #define LIGHT_POSITIONAL   0x4
-#define LIGHT_SPOT         0x10
-#define LIGHT_LOCAL_VIEWER 0x20
 
 #define LIGHT_NEED_VERTICES (LIGHT_POSITIONAL|LIGHT_LOCAL_VIEWER)
 
@@ -510,6 +510,7 @@ struct gl_line_attrib {
    GLushort StipplePattern;	/* Stipple pattern */
    GLint StippleFactor;		/* Stipple repeat factor */
    GLfloat Width;		/* Line width */
+   GLfloat _Width;		/* Clamped Line width */
 };
 
 
@@ -738,7 +739,7 @@ struct gl_stencil_attrib {
 #define ENABLE_TEXMAT1        0x200
 #define ENABLE_TEXMAT2        0x400
 #define ENABLE_TEXMAT3        0x800
-#define ENABLE_TEXMAT4        0x1000	
+#define ENABLE_TEXMAT4        0x1000
 #define ENABLE_TEXMAT5        0x2000
 #define ENABLE_TEXMAT6        0x4000
 #define ENABLE_TEXMAT7        0x8000
@@ -904,7 +905,7 @@ struct gl_texture_attrib {
    GLuint _GenFlags;  /* for texgen */
 
    struct gl_texture_unit Unit[MAX_TEXTURE_UNITS];
-	
+
    struct gl_texture_object *Proxy1D;
    struct gl_texture_object *Proxy2D;
    struct gl_texture_object *Proxy3D;
@@ -1027,7 +1028,7 @@ struct gl_1d_map {
    GLfloat u1, u2, du;	/* u1, u2, 1.0/(u2-u1) */
    GLfloat *Points;	/* Points to contiguous control points */
 };
-	
+
 
 /*
  * 2-D Evaluator control points
@@ -1087,38 +1088,6 @@ struct gl_shared_state {
    struct gl_texture_object *DefaultCubeMap;
 
    void *DriverData;  /* Device driver shared state */
-};
-
-
-
-/*
- * Describes the color, depth, stencil and accum buffer parameters.
- * In C++ terms, think of this as a base class from which device drivers
- * will make derived classes.
- */
-struct gl_visual {
-   GLboolean RGBAflag;		/* Is frame buffer in RGBA mode, not CI? */
-   GLboolean DBflag;		/* Is color buffer double buffered? */
-   GLboolean StereoFlag;	/* stereo buffer? */
-
-   GLint RedBits;		/* Bits per color component */
-   GLint GreenBits;
-   GLint BlueBits;
-   GLint AlphaBits;
-
-   GLint IndexBits;		/* Bits/pixel if in color index mode */
-
-   GLint AccumRedBits;		/* Number of bits in red accum channel */
-   GLint AccumGreenBits;	/* Number of bits in green accum channel */
-   GLint AccumBlueBits;		/* Number of bits in blue accum channel */
-   GLint AccumAlphaBits;	/* Number of bits in alpha accum channel */
-   GLint DepthBits;		/* Number of bits in depth buffer, or 0 */
-   GLint StencilBits;		/* Number of bits in stencil buffer, or 0 */
-   GLint NumSamples;            /* Samples/pixel for multisampling */
-
-   GLuint DepthMax;		/* Max depth buffer value */
-   GLfloat DepthMaxF;		/* Float max depth buffer value */
-   GLfloat MRD;			/* minimum resolvable difference in Z values */
 };
 
 
@@ -1225,6 +1194,7 @@ struct gl_extensions {
    GLboolean EXT_texture_compression_s3tc;
    GLboolean EXT_texture_env_add;
    GLboolean EXT_texture_env_combine;
+   GLboolean EXT_texture_env_dot3;
    GLboolean EXT_texture_object;
    GLboolean EXT_texture_lod_bias;
    GLboolean EXT_vertex_array_set;
@@ -1235,7 +1205,6 @@ struct gl_extensions {
    GLboolean MESA_sprite_point;
    GLboolean NV_blend_square;
    GLboolean NV_texgen_reflection;
-   GLboolean PGI_misc_hints;
    GLboolean SGI_color_matrix;
    GLboolean SGI_color_table;
    GLboolean SGIS_pixel_texture;
@@ -1315,18 +1284,18 @@ struct gl_extensions {
 
 /* Bits to track array state changes (also used to summarize array enabled)
  */
-#define _NEW_ARRAY_VERTEX           0x1	
-#define _NEW_ARRAY_COLOR            0x2	
-#define _NEW_ARRAY_NORMAL           0x4	
-#define _NEW_ARRAY_INDEX            0x8	
+#define _NEW_ARRAY_VERTEX           0x1
+#define _NEW_ARRAY_COLOR            0x2
+#define _NEW_ARRAY_NORMAL           0x4
+#define _NEW_ARRAY_INDEX            0x8
 #define _NEW_ARRAY_EDGEFLAG         0x10
 #define _NEW_ARRAY_SECONDARYCOLOR   0x20
 #define _NEW_ARRAY_FOGCOORD         0x40
-#define _NEW_ARRAY_TEXCOORD_0       0x80	
+#define _NEW_ARRAY_TEXCOORD_0       0x80
 #define _NEW_ARRAY_TEXCOORD_1       0x100
 #define _NEW_ARRAY_TEXCOORD_2       0x200
 #define _NEW_ARRAY_TEXCOORD_3       0x400
-#define _NEW_ARRAY_TEXCOORD_4       0x800	
+#define _NEW_ARRAY_TEXCOORD_4       0x800
 #define _NEW_ARRAY_TEXCOORD_5       0x1000
 #define _NEW_ARRAY_TEXCOORD_6       0x2000
 #define _NEW_ARRAY_TEXCOORD_7       0x4000
@@ -1353,7 +1322,7 @@ struct gl_extensions {
 #define DD_POINT_ATTEN              0x10000
 #define DD_TRI_CULL_FRONT_BACK      0x400000 /* special case on some hw */
 #define DD_Z_NEVER                  0x800000 /* special case on some hw */
-#define DD_STENCIL                  0x1000000 
+#define DD_STENCIL                  0x1000000
 
 /* Define the state changes under which each of these bits might change
  */
@@ -1374,7 +1343,7 @@ struct gl_extensions {
 #define _DD_NEW_POINT_SIZE               _NEW_POINT
 #define _DD_NEW_POINT_ATTEN              _NEW_POINT
 #define _DD_NEW_LIGHTING_CULL            _NEW_LIGHT
-#define _DD_NEW_TRI_CULL_FRONT_BACK      _NEW_POLYGON 
+#define _DD_NEW_TRI_CULL_FRONT_BACK      _NEW_POLYGON
 #define _DD_NEW_Z_NEVER                  _NEW_DEPTH
 #define _DD_NEW_STENCIL                  _NEW_STENCIL
 
@@ -1382,11 +1351,10 @@ struct gl_extensions {
 #define _MESA_NEW_NEED_EYE_COORDS         (_NEW_LIGHT|		\
                                             _NEW_TEXTURE|		\
                                             _NEW_POINT|		\
-                                            _NEW_MODELVIEW)	
+                                            _NEW_MODELVIEW)
 
 #define _MESA_NEW_NEED_NORMALS            (_NEW_LIGHT|		\
                                             _NEW_TEXTURE)
-
 #define _IMAGE_NEW_TRANSFER_STATE        (_NEW_PIXEL|_NEW_COLOR_MATRIX)
 
 
@@ -1415,7 +1383,7 @@ typedef union node Node;
 
 
 /*
- * The library context: 
+ * The library context:
  */
 struct __GLcontextRec {
    /*
@@ -1433,7 +1401,7 @@ struct __GLcontextRec {
    struct _glapi_table *Save;	/* Display list save funcs */
    struct _glapi_table *Exec;	/* Execute funcs */
    struct _glapi_table *CurrentDispatch;  /* == Save or Exec !! */
-  
+
    GLboolean ExecPrefersFloat;	/* What preference for color conversion? */
    GLboolean SavePrefersFloat;
 
@@ -1559,9 +1527,14 @@ struct __GLcontextRec {
    GLboolean OcclusionResult;  /* GL_HP_occlusion_test */
    GLboolean OcclusionResultSaved;  /* GL_HP_occlusion_test */
 
+   /* Z buffer stuff */
+   GLuint DepthMax;		/* Max depth buffer value */
+   GLfloat DepthMaxF;		/* Float max depth buffer value */
+   GLfloat MRD;			/* minimum resolvable difference in Z values */
+
    /* Should 3Dfx Glide driver catch signals? */
    GLboolean CatchSignals;
-        
+
    /* For debugging/development only */
    GLboolean NoRaster;
    GLboolean FirstTimeCurrent;
@@ -1569,13 +1542,14 @@ struct __GLcontextRec {
    /* Dither disable via MESA_NO_DITHER env var */
    GLboolean NoDither;
 
-#ifdef DEBUG
    GLboolean Rendering;
-#endif
 
 #if defined(MESA_TRACE)
    struct _glapi_table *TraceDispatch;
    trace_context_t     *TraceCtx;
+#else
+   void *TraceDispatch;
+   void *TraceCtx;
 #endif
 
    /* Hooks for module contexts.  These will eventually live
@@ -1596,7 +1570,7 @@ extern GLenum gl_reduce_prim[];
 
 
 #ifdef MESA_DEBUG
-extern int MESA_VERBOSE; 
+extern int MESA_VERBOSE;
 extern int MESA_DEBUG_FLAGS;
 #else
 # define MESA_VERBOSE 0
@@ -1617,12 +1591,12 @@ enum _verbose {
    VERBOSE_API             = 0x40,
    VERBOSE_DISPLAY_LIST    = 0x200,
    VERBOSE_LIGHTING        = 0x400
-}; 
+};
 
 
 enum _debug {
    DEBUG_ALWAYS_FLUSH          = 0x1
-}; 
+};
 
 
 

@@ -1,10 +1,10 @@
-/* $Id: s_lines.c,v 1.8 2000/11/22 08:42:15 joukj Exp $ */
+/* $Id: s_lines.c,v 1.10 2001/01/23 23:39:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -95,7 +95,7 @@ static void flat_rgba_line( GLcontext *ctx,
                             const SWvertex *vert0,
 			    const SWvertex *vert1 )
 {
-   const GLchan *color = vert0->color;
+   const GLchan *color = vert1->color;
    struct pixel_buffer *PB = SWRAST_CONTEXT(ctx)->PB;
    PB_SET_COLOR( PB, color[0], color[1], color[2], color[3] );
 
@@ -114,7 +114,7 @@ static void flat_rgba_z_line( GLcontext *ctx,
                               const SWvertex *vert0,
 			      const SWvertex *vert1 )
 {
-   const GLchan *color = vert0->color;
+   const GLchan *color = vert1->color;
    struct pixel_buffer *PB = SWRAST_CONTEXT(ctx)->PB;
    PB_SET_COLOR( PB, color[0], color[1], color[2], color[3] );
 
@@ -534,7 +534,7 @@ static void general_flat_rgba_line( GLcontext *ctx,
 				    const SWvertex *vert1 )
 {
    struct pixel_buffer *PB = SWRAST_CONTEXT(ctx)->PB;
-   const GLchan *color = vert0->color;
+   const GLchan *color = vert1->color;
    PB_SET_COLOR( PB, color[0], color[1], color[2], color[3] );
 
    if (ctx->Line.StippleFlag) {
@@ -586,7 +586,7 @@ static void flat_textured_line( GLcontext *ctx,
    GLfloat *pbs = PB->s[0];
    GLfloat *pbt = PB->t[0];
    GLfloat *pbu = PB->u[0];
-   GLchan *color = (GLchan*) vert0->color;
+   GLchan *color = (GLchan*) vert1->color;
    PB_SET_COLOR( PB, color[0], color[1], color[2], color[3] );
    count = PB->count;
 
@@ -827,10 +827,10 @@ static void flat_multitextured_line( GLcontext *ctx,
    GLfixed *pbfog = PB->fog;
    GLchan (*pbrgba)[4] = PB->rgba;
    GLchan (*pbspec)[3] = PB->spec;
-   GLchan *color = (GLchan*) vert0->color;
-   GLchan sRed   = vert0->specular[0];
-   GLchan sGreen = vert0->specular[1];
-   GLchan sBlue  = vert0->specular[2];
+   GLchan *color = (GLchan*) vert1->color;
+   GLchan sRed   = vert1->specular[0];
+   GLchan sGreen = vert1->specular[1];
+   GLchan sBlue  = vert1->specular[2];
 
    PB->mono = GL_FALSE;
 
@@ -969,7 +969,7 @@ void
 _swrast_choose_line( GLcontext *ctx )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
-   const GLboolean rgbmode = ctx->Visual.RGBAflag;
+   const GLboolean rgbmode = ctx->Visual.rgbMode;
 
    if (ctx->RenderMode==GL_RENDER) {
       if (ctx->Line.SmoothFlag) {

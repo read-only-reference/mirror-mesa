@@ -1,4 +1,4 @@
-/* $Id: s_aalinetemp.h,v 1.2 2000/11/19 23:10:26 brianp Exp $ */
+/* $Id: s_aalinetemp.h,v 1.5 2001/01/29 23:38:41 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -166,8 +166,14 @@ NAME(line)(GLcontext *ctx, const SWvertex *v0, const SWvertex *v1)
    line.dy = line.y1 - line.y0;
    line.len = sqrt(line.dx * line.dx + line.dy * line.dy);
    line.halfWidth = 0.5F * ctx->Line.Width;
-   line.xAdj = line.dx / line.len * line.halfWidth;
-   line.yAdj = line.dy / line.len * line.halfWidth;
+   if (line.len == 0.0) {
+      line.xAdj = 0.0;
+      line.yAdj = 0.0;
+   }
+   else {
+      line.xAdj = line.dx / line.len * line.halfWidth;
+      line.yAdj = line.dy / line.len * line.halfWidth;
+   }
 
 #ifdef DO_Z
    compute_plane(line.x0, line.y0, line.x1, line.y1,
@@ -189,10 +195,10 @@ NAME(line)(GLcontext *ctx, const SWvertex *v0, const SWvertex *v1)
                     v0->color[ACOMP], v1->color[ACOMP], line.aPlane);
    }
    else {
-      constant_plane(v0->color[RCOMP], line.rPlane);
-      constant_plane(v0->color[GCOMP], line.gPlane);
-      constant_plane(v0->color[BCOMP], line.bPlane);
-      constant_plane(v0->color[ACOMP], line.aPlane);
+      constant_plane(v1->color[RCOMP], line.rPlane);
+      constant_plane(v1->color[GCOMP], line.gPlane);
+      constant_plane(v1->color[BCOMP], line.bPlane);
+      constant_plane(v1->color[ACOMP], line.aPlane);
    }
 #endif
 #ifdef DO_SPEC
@@ -205,9 +211,9 @@ NAME(line)(GLcontext *ctx, const SWvertex *v0, const SWvertex *v1)
                     v0->specular[BCOMP], v1->specular[BCOMP], line.sbPlane);
    }
    else {
-      constant_plane(v0->specular[RCOMP], line.srPlane);
-      constant_plane(v0->specular[GCOMP], line.sgPlane);
-      constant_plane(v0->specular[BCOMP], line.sbPlane);
+      constant_plane(v1->specular[RCOMP], line.srPlane);
+      constant_plane(v1->specular[GCOMP], line.sgPlane);
+      constant_plane(v1->specular[BCOMP], line.sbPlane);
    }
 #endif
 #ifdef DO_INDEX
@@ -216,7 +222,7 @@ NAME(line)(GLcontext *ctx, const SWvertex *v0, const SWvertex *v1)
                     v0->index, v1->index, line.iPlane);
    }
    else {
-      constant_plane(v0->index, line.iPlane);
+      constant_plane(v1->index, line.iPlane);
    }
 #endif
 #ifdef DO_TEX
@@ -301,6 +307,11 @@ NAME(line)(GLcontext *ctx, const SWvertex *v0, const SWvertex *v1)
             }
          }
          swrast->StippleCounter++;
+      }
+
+      if (inSegment) {
+         /* draw the final segment of the line */
+         segment(ctx, &line, NAME(plot), pb, tStart, 1.0F);
       }
    }
    else {

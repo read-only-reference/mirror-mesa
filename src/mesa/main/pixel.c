@@ -1,10 +1,10 @@
-/* $Id: pixel.c,v 1.22 2000/12/26 05:09:29 keithw Exp $ */
+/* $Id: pixel.c,v 1.24 2001/01/23 23:39:36 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -1126,10 +1126,10 @@ _mesa_map_ci_to_rgba_chan( const GLcontext *ctx, GLuint n,
    const GLfloat *aMap = ctx->Pixel.MapItoA;
    GLuint i;
    for (i=0;i<n;i++) {
-      rgba[i][RCOMP] = FLOAT_TO_CHAN(rMap[index[i] & rmask]);
-      rgba[i][GCOMP] = FLOAT_TO_CHAN(gMap[index[i] & gmask]);
-      rgba[i][BCOMP] = FLOAT_TO_CHAN(bMap[index[i] & bmask]);
-      rgba[i][ACOMP] = FLOAT_TO_CHAN(aMap[index[i] & amask]);
+      CLAMPED_FLOAT_TO_CHAN(rgba[i][RCOMP], rMap[index[i] & rmask]);
+      CLAMPED_FLOAT_TO_CHAN(rgba[i][GCOMP], gMap[index[i] & gmask]);
+      CLAMPED_FLOAT_TO_CHAN(rgba[i][BCOMP], bMap[index[i] & bmask]);
+      CLAMPED_FLOAT_TO_CHAN(rgba[i][ACOMP], aMap[index[i] & amask]);
    }
 #endif
 }
@@ -1194,10 +1194,10 @@ _mesa_map_ci8_to_rgba( const GLcontext *ctx, GLuint n, const GLubyte index[],
    const GLfloat *aMap = ctx->Pixel.MapItoA;
    GLuint i;
    for (i=0;i<n;i++) {
-      rgba[i][RCOMP] = FLOAT_TO_CHAN(rMap[index[i] & rmask]);
-      rgba[i][GCOMP] = FLOAT_TO_CHAN(gMap[index[i] & gmask]);
-      rgba[i][BCOMP] = FLOAT_TO_CHAN(bMap[index[i] & bmask]);
-      rgba[i][ACOMP] = FLOAT_TO_CHAN(aMap[index[i] & amask]);
+      CLAMPED_FLOAT_TO_CHAN(rgba[i][RCOMP], rMap[index[i] & rmask]);
+      CLAMPED_FLOAT_TO_CHAN(rgba[i][GCOMP], gMap[index[i] & gmask]);
+      CLAMPED_FLOAT_TO_CHAN(rgba[i][BCOMP], bMap[index[i] & bmask]);
+      CLAMPED_FLOAT_TO_CHAN(rgba[i][ACOMP], aMap[index[i] & amask]);
    }
 #endif
 }
@@ -1254,19 +1254,19 @@ void
 _mesa_chan_to_float_span(const GLcontext *ctx, GLuint n,
                          CONST GLchan rgba[][4], GLfloat rgbaf[][4])
 {
-   const GLuint rShift = CHAN_BITS - ctx->Visual.RedBits;
-   const GLuint gShift = CHAN_BITS - ctx->Visual.GreenBits;
-   const GLuint bShift = CHAN_BITS - ctx->Visual.BlueBits;
+   const GLuint rShift = CHAN_BITS - ctx->Visual.redBits;
+   const GLuint gShift = CHAN_BITS - ctx->Visual.greenBits;
+   const GLuint bShift = CHAN_BITS - ctx->Visual.blueBits;
    GLuint aShift;
-   const GLfloat rScale = 1.0 / (GLfloat) ((1 << ctx->Visual.RedBits  ) - 1);
-   const GLfloat gScale = 1.0 / (GLfloat) ((1 << ctx->Visual.GreenBits) - 1);
-   const GLfloat bScale = 1.0 / (GLfloat) ((1 << ctx->Visual.BlueBits ) - 1);
+   const GLfloat rScale = 1.0 / (GLfloat) ((1 << ctx->Visual.redBits  ) - 1);
+   const GLfloat gScale = 1.0 / (GLfloat) ((1 << ctx->Visual.greenBits) - 1);
+   const GLfloat bScale = 1.0 / (GLfloat) ((1 << ctx->Visual.blueBits ) - 1);
    GLfloat aScale;
    GLuint i;
 
-   if (ctx->Visual.AlphaBits > 0) {
-      aShift = CHAN_BITS - ctx->Visual.AlphaBits;
-      aScale = 1.0 / (GLfloat) ((1 << ctx->Visual.AlphaBits) - 1);
+   if (ctx->Visual.alphaBits > 0) {
+      aShift = CHAN_BITS - ctx->Visual.alphaBits;
+      aScale = 1.0 / (GLfloat) ((1 << ctx->Visual.alphaBits) - 1);
    }
    else {
       aShift = 0;

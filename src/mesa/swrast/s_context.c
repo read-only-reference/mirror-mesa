@@ -1,4 +1,4 @@
-/* $Id: s_context.c,v 1.9 2000/12/27 19:57:37 keithw Exp $ */
+/* $Id: s_context.c,v 1.12 2001/01/29 21:47:13 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -59,7 +59,7 @@ _swrast_update_rasterflags( GLcontext *ctx )
    if (ctx->Fog.Enabled)                  RasterMask |= FOG_BIT;
    if (ctx->Scissor.Enabled)              RasterMask |= SCISSOR_BIT;
    if (ctx->Stencil.Enabled)              RasterMask |= STENCIL_BIT;
-   if (ctx->Visual.RGBAflag) {
+   if (ctx->Visual.rgbMode) {
       const GLuint colorMask = *((GLuint *) &ctx->Color.ColorMask);
       if (colorMask != 0xffffffff)        RasterMask |= MASKING_BIT;
       if (ctx->Color.ColorLogicOpEnabled) RasterMask |= LOGIC_OP_BIT;
@@ -96,10 +96,10 @@ _swrast_update_rasterflags( GLcontext *ctx )
    else if (ctx->Color.DrawBuffer==GL_NONE) {
       RasterMask |= MULTI_DRAW_BIT;
    }
-   else if (ctx->Visual.RGBAflag && *((GLuint *) ctx->Color.ColorMask) == 0) {
+   else if (ctx->Visual.rgbMode && *((GLuint *) ctx->Color.ColorMask) == 0) {
       RasterMask |= MULTI_DRAW_BIT; /* all RGBA channels disabled */
    }
-   else if (!ctx->Visual.RGBAflag && ctx->Color.IndexMask==0) {
+   else if (!ctx->Visual.rgbMode && ctx->Color.IndexMask==0) {
       RasterMask |= MULTI_DRAW_BIT; /* all color index bits disabled */
    }
 
@@ -326,8 +326,8 @@ _swrast_validate_derived( GLcontext *ctx )
  	 _swrast_update_rasterflags( ctx );
 
       if (swrast->NewState & _NEW_TEXTURE)
-	 swrast->_MultiTextureEnabled = (ctx->Texture._ReallyEnabled &
-					 ~TEXTURE0_ANY);
+	 swrast->_MultiTextureEnabled =
+            ctx->Texture._ReallyEnabled > TEXTURE0_ANY;
 
       if (swrast->NewState & _NEW_POLYGON)
 	 _swrast_update_polygon( ctx );
@@ -350,6 +350,11 @@ _swrast_Quad( GLcontext *ctx,
 	      const SWvertex *v0, const SWvertex *v1,
               const SWvertex *v2, const SWvertex *v3 )
 {
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
+/*     _swrast_print_vertex( ctx, v0 ); */
+/*     _swrast_print_vertex( ctx, v1 ); */
+/*     _swrast_print_vertex( ctx, v2 ); */
+/*     _swrast_print_vertex( ctx, v3 ); */
    SWRAST_CONTEXT(ctx)->Quad( ctx, v0, v1, v2, v3 );
 }
 
@@ -385,13 +390,6 @@ void
 _swrast_InvalidateState( GLcontext *ctx, GLuint new_state )
 {
    SWRAST_CONTEXT(ctx)->InvalidateState( ctx, new_state );
-}
-
-
-GLuint *
-_swrast_get_stipple_counter_ref( GLcontext *ctx )
-{
-   return &SWRAST_CONTEXT(ctx)->StippleCounter;
 }
 
 void

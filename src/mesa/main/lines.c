@@ -1,4 +1,4 @@
-/* $Id: lines.c,v 1.24 2000/12/26 05:09:29 keithw Exp $ */
+/* $Id: lines.c,v 1.27 2001/01/14 06:14:21 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -31,7 +31,6 @@
 #include "glheader.h"
 #include "context.h"
 #include "depth.h"
-#include "feedback.h"
 #include "lines.h"
 #include "macros.h"
 #include "mmath.h"
@@ -57,6 +56,10 @@ _mesa_LineWidth( GLfloat width )
 
    FLUSH_VERTICES(ctx, _NEW_LINE);
    ctx->Line.Width = width;
+   ctx->Line._Width = CLAMP(width, 
+			    ctx->Const.MinLineWidth,
+			    ctx->Const.MaxLineWidth);
+
 
    if (width != 1.0) 
       ctx->_TriangleCaps |= DD_LINE_WIDTH;
@@ -75,12 +78,14 @@ _mesa_LineStipple( GLint factor, GLushort pattern )
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   if (ctx->Line.StippleFactor == CLAMP( factor, 1, 256 ) &&
+   factor = CLAMP( factor, 1, 256 );
+
+   if (ctx->Line.StippleFactor == factor &&
        ctx->Line.StipplePattern == pattern)
       return;
 
    FLUSH_VERTICES(ctx, _NEW_LINE);
-   ctx->Line.StippleFactor = CLAMP( factor, 1, 256 );
+   ctx->Line.StippleFactor = factor;
    ctx->Line.StipplePattern = pattern;
 
    if (ctx->Driver.LineStipple)

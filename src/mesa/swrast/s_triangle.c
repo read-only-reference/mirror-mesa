@@ -1,10 +1,10 @@
-/* $Id: s_triangle.c,v 1.7 2000/12/12 00:31:45 brianp Exp $ */
+/* $Id: s_triangle.c,v 1.10 2001/01/29 18:51:25 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -160,7 +160,7 @@ static void flat_rgba_triangle( GLcontext *ctx,
 		 fffog += fdfogdx;				\
 	      }							\
               gl_write_monocolor_span( ctx, n, LEFT, Y, zspan,	\
-                                       fogspan, v0->color,	\
+                                       fogspan, v2->color,	\
 			               GL_POLYGON );		\
 	   }							\
 	}
@@ -1613,10 +1613,10 @@ static void general_textured_triangle( GLcontext *ctx,
    GLboolean flat_shade = (ctx->Light.ShadeModel==GL_FLAT);	\
    GLint r, g, b, a;						\
    if (flat_shade) {						\
-      r = v0->color[0];						\
-      g = v0->color[1];						\
-      b = v0->color[2];						\
-      a = v0->color[3];						\
+      r = v2->color[0];						\
+      g = v2->color[1];						\
+      b = v2->color[2];						\
+      a = v2->color[3];						\
    }
 #define INNER_LOOP( LEFT, RIGHT, Y )				\
 	{							\
@@ -1708,13 +1708,13 @@ static void general_textured_spec_triangle1( GLcontext *ctx,
    GLboolean flat_shade = (ctx->Light.ShadeModel==GL_FLAT);	\
    GLint r, g, b, a, sr, sg, sb;				\
    if (flat_shade) {						\
-      r = v0->color[0];						\
-      g = v0->color[1];						\
-      b = v0->color[2];						\
-      a = v0->color[3];						\
-      sr = v0->specular[0]; 					\
-      sg = v0->specular[1]; 					\
-      sb = v0->specular[2]; 					\
+      r = v2->color[0];						\
+      g = v2->color[1];						\
+      b = v2->color[2];						\
+      a = v2->color[3];						\
+      sr = v2->specular[0]; 					\
+      sg = v2->specular[1]; 					\
+      sb = v2->specular[2]; 					\
    }
 #define INNER_LOOP( LEFT, RIGHT, Y )				\
 	{							\
@@ -1826,6 +1826,7 @@ static void lambda_textured_triangle1( GLcontext *ctx,
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
+#define INTERP_LAMBDA 1
 #define INTERP_TEX 1
 
 #define SETUP_CODE							\
@@ -1837,10 +1838,10 @@ static void lambda_textured_triangle1( GLcontext *ctx,
    const GLboolean flat_shade = (ctx->Light.ShadeModel==GL_FLAT);	\
    GLint r, g, b, a;							\
    if (flat_shade) {							\
-      r = v0->color[0];							\
-      g = v0->color[1];							\
-      b = v0->color[2];							\
-      a = v0->color[3];							\
+      r = v2->color[0];							\
+      g = v2->color[1];							\
+      b = v2->color[2];							\
+      a = v2->color[3];							\
    }
 
 #define INNER_LOOP( LEFT, RIGHT, Y )					\
@@ -1864,8 +1865,7 @@ static void lambda_textured_triangle1( GLcontext *ctx,
 		    s[i] = ss*invQ;					\
 		    t[i] = tt*invQ;					\
 		    u[i] = uu*invQ;					\
-		    lambda[i] = compute_lambda( dsdx, dsdy, dtdx, dtdy,	\
-						invQ, twidth, theight );\
+                    lambda[i] = COMPUTE_LAMBDA(invQ);			\
 		    ffz += fdzdx;					\
 		    fffog += fdfogdx;					\
 		    ss += dsdx;						\
@@ -1886,8 +1886,7 @@ static void lambda_textured_triangle1( GLcontext *ctx,
 		    s[i] = ss*invQ;					\
 		    t[i] = tt*invQ;					\
 		    u[i] = uu*invQ;					\
-		    lambda[i] = compute_lambda( dsdx, dsdy, dtdx, dtdy,	\
-						invQ, twidth, theight );\
+                    lambda[i] = COMPUTE_LAMBDA(invQ);			\
 		    ffz += fdzdx;					\
 		    fffog += fdfogdx;					\
 		    ffr += fdrdx;					\
@@ -1932,6 +1931,7 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
 #define INTERP_SPEC 1
 #define INTERP_ALPHA 1
 #define INTERP_TEX 1
+#define INTERP_LAMBDA 1
 
 #define SETUP_CODE							\
    const struct gl_texture_object *obj = ctx->Texture.Unit[0]._Current;	\
@@ -1942,13 +1942,13 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
    const GLboolean flat_shade = (ctx->Light.ShadeModel==GL_FLAT);	\
    GLint r, g, b, a, sr, sg, sb;					\
    if (flat_shade) {							\
-      r = v0->color[0];							\
-      g = v0->color[1];							\
-      b = v0->color[2];							\
-      a = v0->color[3];							\
-      sr = v0->specular[0];						\
-      sg = v0->specular[1];						\
-      sb = v0->specular[2];						\
+      r = v2->color[0];							\
+      g = v2->color[1];							\
+      b = v2->color[2];							\
+      a = v2->color[3];							\
+      sr = v2->specular[0];						\
+      sg = v2->specular[1];						\
+      sb = v2->specular[2];						\
    }
 
 #define INNER_LOOP( LEFT, RIGHT, Y )					\
@@ -1976,8 +1976,7 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
 		    s[i] = ss*invQ;					\
 		    t[i] = tt*invQ;					\
 		    u[i] = uu*invQ;					\
-		    lambda[i] = compute_lambda( dsdx, dsdy, dtdx, dtdy,	\
-						invQ, twidth, theight );\
+                    lambda[i] = COMPUTE_LAMBDA(invQ);			\
 		    fffog += fdfogdx;					\
 		    ffz += fdzdx;					\
 		    ss += dsdx;						\
@@ -2001,8 +2000,7 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
 		    s[i] = ss*invQ;					\
 		    t[i] = tt*invQ;					\
 		    u[i] = uu*invQ;					\
-		    lambda[i] = compute_lambda( dsdx, dsdy, dtdx, dtdy,	\
-						invQ, twidth, theight );\
+                    lambda[i] = COMPUTE_LAMBDA(invQ);			\
 		    fffog += fdfogdx;					\
 		    ffz += fdzdx;					\
 		    ffr += fdrdx;					\
@@ -2055,10 +2053,10 @@ lambda_multitextured_triangle1( GLcontext *ctx,
    GLfloat twidth[MAX_TEXTURE_UNITS], theight[MAX_TEXTURE_UNITS];		\
    GLint r, g, b, a;								\
    if (flat_shade) {								\
-      r = v0->color[0];								\
-      g = v0->color[1];								\
-      b = v0->color[2];								\
-      a = v0->color[3];								\
+      r = v2->color[0];								\
+      g = v2->color[1];								\
+      b = v2->color[2];								\
+      a = v2->color[3];								\
    }										\
    {										\
       GLuint unit;								\
@@ -2266,7 +2264,7 @@ void
 _swrast_choose_triangle( GLcontext *ctx )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
-   const GLboolean rgbmode = ctx->Visual.RGBAflag;
+   const GLboolean rgbmode = ctx->Visual.rgbMode;
 
    if (ctx->RenderMode==GL_RENDER) {
 
@@ -2307,6 +2305,7 @@ _swrast_choose_triangle( GLcontext *ctx )
              && image->Border==0
              && ((format = image->Format)==GL_RGB || format==GL_RGBA)
 	     && (filter = current2Dtex->MinFilter)==current2Dtex->MagFilter
+	     /* ==> current2Dtex->MinFilter != GL_XXX_MIPMAP_XXX */
 	     && ctx->Light.Model.ColorControl==GL_SINGLE_COLOR
 	     && ctx->Texture.Unit[0].EnvMode!=GL_COMBINE_EXT) {
 
@@ -2384,7 +2383,7 @@ _swrast_choose_triangle( GLcontext *ctx )
             }
             else {
                if (needLambda) {
-                  swrast->Triangle = lambda_textured_triangle;
+		  swrast->Triangle = lambda_textured_triangle;
 		  dputs("lambda_textured_triangle");
 	       }
                else {

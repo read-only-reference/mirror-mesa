@@ -1,4 +1,4 @@
-/* $Id: texstate.c,v 1.26 2000/12/26 05:09:29 keithw Exp $ */
+/* $Id: texstate.c,v 1.29 2001/01/29 20:47:39 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -41,7 +41,6 @@
 #include "mtypes.h"
 #include "math/m_xform.h"
 #include "math/m_matrix.h"
-#include "swrast/swrast.h"
 #endif
 
 
@@ -100,7 +99,7 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
 	 }
 
 	 if (texUnit->EnvMode == mode)
-	    return;  
+	    return;
 	 FLUSH_VERTICES(ctx, _NEW_TEXTURE);
 	 texUnit->EnvMode = mode;
 	 break;
@@ -117,7 +116,7 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
 	 COPY_4FV(texUnit->EnvColor, tmp);
 	 break;
       }
-      case GL_COMBINE_RGB_EXT: 
+      case GL_COMBINE_RGB_EXT:
 	 if (ctx->Extensions.EXT_texture_env_combine) {
 	    GLenum mode = (GLenum) (GLint) *param;
 	    switch (mode) {
@@ -127,12 +126,19 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
 	    case GL_ADD_SIGNED_EXT:
 	    case GL_INTERPOLATE_EXT:
 	       break;
+	    case GL_DOT3_RGB_EXT:
+	    case GL_DOT3_RGBA_EXT:
+	       if (!ctx->Extensions.EXT_texture_env_dot3) {
+		  gl_error(ctx, GL_INVALID_ENUM, "glTexEnv(param)");
+		  return;
+	       }
+	       break;
 	    default:
 	       gl_error( ctx, GL_INVALID_ENUM, "glTexEnv(param)" );
 	       return;
 	    }
 	    if (texUnit->CombineModeRGB == mode)
-	       return; 
+	       return;
 	    FLUSH_VERTICES(ctx, _NEW_TEXTURE);
 	    texUnit->CombineModeRGB = mode;
 	 }
@@ -140,7 +146,7 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
 	    gl_error(ctx, GL_INVALID_ENUM, "glTexEnv(pname)");
 	    return;
 	 }
-      case GL_COMBINE_ALPHA_EXT: 
+      case GL_COMBINE_ALPHA_EXT:
 	 if (ctx->Extensions.EXT_texture_env_combine) {
 	    GLenum mode = (GLenum) (GLint) *param;
 	    switch (mode) {
@@ -150,7 +156,7 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
 	    case GL_ADD_SIGNED_EXT:
 	    case GL_INTERPOLATE_EXT:
 	       if (texUnit->CombineModeA == mode)
-		  return;  
+		  return;
 	       FLUSH_VERTICES(ctx, _NEW_TEXTURE);
 	       texUnit->CombineModeA = mode;
 	       break;
@@ -736,10 +742,10 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
          }
          break;
       case GL_TEXTURE_BORDER_COLOR:
-         texObj->BorderColor[0] = (GLchan) CLAMP((GLint)(params[0]*CHAN_MAXF), 0, CHAN_MAX);
-         texObj->BorderColor[1] = (GLchan) CLAMP((GLint)(params[1]*CHAN_MAXF), 0, CHAN_MAX);
-         texObj->BorderColor[2] = (GLchan) CLAMP((GLint)(params[2]*CHAN_MAXF), 0, CHAN_MAX);
-         texObj->BorderColor[3] = (GLchan) CLAMP((GLint)(params[3]*CHAN_MAXF), 0, CHAN_MAX);
+         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[0], params[0]);
+         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[1], params[1]);
+         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[2], params[2]);
+         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[3], params[3]);
          break;
       case GL_TEXTURE_MIN_LOD:
          texObj->MinLod = params[0];
@@ -1326,7 +1332,7 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
          gl_error( ctx, GL_INVALID_ENUM, "glTexGenfv(coord)" );
 	 return;
    }
-   
+
    if (ctx->Driver.TexGen)
       ctx->Driver.TexGen( ctx, coord, pname, params );
 }

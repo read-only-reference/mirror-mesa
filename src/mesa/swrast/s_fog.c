@@ -1,4 +1,4 @@
-/* $Id: s_fog.c,v 1.5 2000/12/15 16:42:30 brianp Exp $ */
+/* $Id: s_fog.c,v 1.8 2001/01/03 22:55:26 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -33,6 +33,7 @@
 
 #include "s_context.h"
 #include "s_fog.h"
+#include "s_pb.h"
 
 
 /*
@@ -48,20 +49,32 @@ _mesa_fog_rgba_pixels( const GLcontext *ctx,
 		       const GLfixed fog[], 
 		       GLchan rgba[][4] )
 {
-   GLchan rFog = FLOAT_TO_CHAN(ctx->Fog.Color[0]);
-   GLchan gFog = FLOAT_TO_CHAN(ctx->Fog.Color[1]);
-   GLchan bFog = FLOAT_TO_CHAN(ctx->Fog.Color[2]);
    GLuint i;
+   GLchan rFog, gFog, bFog;
 
+   UNCLAMPED_FLOAT_TO_CHAN(rFog, ctx->Fog.Color[RCOMP]);
+   UNCLAMPED_FLOAT_TO_CHAN(gFog, ctx->Fog.Color[GCOMP]);
+   UNCLAMPED_FLOAT_TO_CHAN(bFog, ctx->Fog.Color[BCOMP]);
+
+#if CHAN_TYPE == GL_FLOAT
    for (i = 0; i < n; i++) {
-      GLfixed f = CLAMP(fog[i], 0, FIXED_ONE);
-      GLfixed g = FIXED_ONE - f;
+      const GLfixed cf = CLAMP(fog[i], 0, FIXED_ONE);
+      const GLfloat f = FixedToFloat(cf);
+      const GLfloat g = 1.0F - f;
+      rgba[i][RCOMP] = f * rgba[i][RCOMP] + g * rFog;
+      rgba[i][GCOMP] = f * rgba[i][GCOMP] + g * gFog;
+      rgba[i][BCOMP] = f * rgba[i][BCOMP] + g * bFog;
+   }
+#else
+   for (i = 0; i < n; i++) {
+      const GLfixed f = CLAMP(fog[i], 0, FIXED_ONE);
+      const GLfixed g = FIXED_ONE - f;
       rgba[i][0] = (f * rgba[i][0] + g * rFog) >> FIXED_SHIFT;
       rgba[i][1] = (f * rgba[i][1] + g * gFog) >> FIXED_SHIFT;
       rgba[i][2] = (f * rgba[i][2] + g * bFog) >> FIXED_SHIFT;
    }
+#endif
 }
-
 
 
 
@@ -106,8 +119,13 @@ _mesa_win_fog_coords_from_z( const GLcontext *ctx,
    const GLfloat p10 = ctx->ProjectionMatrix.m[10];
    const GLfloat p14 = ctx->ProjectionMatrix.m[14];
    const GLfloat tz = ctx->Viewport._WindowMap.m[MAT_TZ];
-   const GLfloat szInv = 1.0F / ctx->Viewport._WindowMap.m[MAT_SZ];
+   GLfloat szInv;
    GLuint i;
+
+   if (ctx->Viewport._WindowMap.m[MAT_SZ] == 0.0)
+      szInv = 1.0F;
+   else
+      szInv = 1.0F / ctx->Viewport._WindowMap.m[MAT_SZ];
 
    /*
     * Note: to compute eyeZ from the ndcZ we have to solve the following:
@@ -136,7 +154,11 @@ _mesa_win_fog_coords_from_z( const GLcontext *ctx,
       case GL_LINEAR:
          {
             GLfloat fogEnd = ctx->Fog.End;
-            GLfloat fogScale = 1.0F / (ctx->Fog.End - ctx->Fog.Start);
+            GLfloat fogScale;
+            if (ctx->Fog.Start == ctx->Fog.End)
+               fogScale = 1.0;
+            else
+               fogScale = 1.0F / (ctx->Fog.End - ctx->Fog.Start);
             if (ortho) {
                for (i=0;i<n;i++) {
                   GLfloat ndcz = ((GLfloat) z[i] - tz) * szInv;
@@ -229,7 +251,8 @@ void
 _mesa_depth_fog_rgba_pixels( const GLcontext *ctx,
 			     GLuint n, const GLdepth z[], GLchan rgba[][4] )
 {
-   GLfixed fog[MAX_WIDTH];
+   GLfixed fog[PB_SIZE];
+   ASSERT(n <= PB_SIZE);
    _mesa_win_fog_coords_from_z( ctx, n, z, fog );
    _mesa_fog_rgba_pixels( ctx, n, fog, rgba );
 }
@@ -246,7 +269,8 @@ void
 _mesa_depth_fog_ci_pixels( const GLcontext *ctx,
                      GLuint n, const GLdepth z[], GLuint index[] )
 {
-   GLfixed fog[MAX_WIDTH];
+   GLfixed fog[PB_SIZE];
+   ASSERT(n <= PB_SIZE);
    _mesa_win_fog_coords_from_z( ctx, n, z, fog );
    _mesa_fog_ci_pixels( ctx, n, fog, index );
 }

@@ -68,7 +68,7 @@ void _tnl_flush_vertices( GLcontext *ctx, GLuint flags )
 }
 
 
-void
+static void
 _tnl_begin( GLcontext *ctx, GLenum p )
 {
    struct immediate *IM = TNL_CURRENT_IM(ctx);
@@ -172,6 +172,10 @@ _tnl_hard_begin( GLcontext *ctx, GLenum p )
     */
    if (!ctx->CompileFlag) {
       _tnl_begin( ctx, p );
+
+      /* Set this for the duration:
+       */
+      ctx->Driver.CurrentExecPrimitive = p;
       return GL_TRUE;
    }
        
@@ -182,19 +186,15 @@ _tnl_hard_begin( GLcontext *ctx, GLenum p )
  
    switch (IM->BeginState & (VERT_BEGIN_0|VERT_BEGIN_1)) {
    case VERT_BEGIN_0|VERT_BEGIN_1:
-      /* In this case we know for sure that the list is going to be
-       * inside a begin/end object at this point when run.  Rather
-       * than saving the redundant data, compile in an error and
-       * return.
+      /* This is an immediate known to be inside a begin/end object.
        */
       IM->BeginState |= (VERT_ERROR_1|VERT_ERROR_0);
       return GL_FALSE;
       
    case VERT_BEGIN_0:
    case VERT_BEGIN_1:
-      /* This is a normal (non-hard) immediate, in an unknown
-       * begin/end state.  Assert it is empty and conviert it to a
-       * 'hard' one.  
+      /* This is a display-list immediate in an unknown begin/end
+       * state.  Assert it is empty and conviert it to a 'hard' one.  
        */
       ASSERT (IM->SavedBeginState == 0);
       
@@ -207,6 +207,9 @@ _tnl_hard_begin( GLcontext *ctx, GLenum p )
       
       /* FALLTHROUGH */
    case 0: 
+      /* Unless we have fallen through, this is an immediate known to 
+       * be outside begin/end objects.
+       */
       
       IM->BeginState |= VERT_BEGIN_0|VERT_BEGIN_1;
 	 
@@ -229,6 +232,7 @@ _tnl_hard_begin( GLcontext *ctx, GLenum p )
        * vertices before the next state change.
        */
       ctx->Driver.NeedFlush |= FLUSH_STORED_VERTICES;
+
       return GL_TRUE;
       
    default:
@@ -236,6 +240,40 @@ _tnl_hard_begin( GLcontext *ctx, GLenum p )
       return GL_TRUE;      
    }
 }
+
+
+
+/* Need to do this to get the correct begin/end error behaviour from
+ * functions like ColorPointerEXT which are still active in
+ * SAVE_AND_EXEC modes.  
+ */
+void
+_tnl_save_Begin( GLenum mode )
+{
+   GET_CURRENT_CONTEXT(ctx);
+  
+    if (mode > GL_POLYGON) {
+      _mesa_compile_error( ctx, GL_INVALID_ENUM, "glBegin" );
+      return;		     
+   }
+
+   if (ctx->ExecuteFlag) {
+      /* Preserve vtxfmt invarient:
+       */
+      if (ctx->NewState)
+	 gl_update_state( ctx );
+
+      /* Slot in geomexec: No need to call setdispatch as we know
+       * CurrentDispatch is Save.
+       */
+      ASSERT(ctx->CurrentDispatch == ctx->Save);
+   }
+
+   _tnl_begin( ctx, mode );
+}
+
+
+
 
 /* Note the continuation of a partially completed primitive.  For
  * driver t&l fallbacks between begin/end primitives.  Has basically
@@ -292,10 +330,14 @@ _tnl_end( GLcontext *ctx )
 	 IM->FlushElt = 0;
       }
       
-      ctx->Driver.NeedFlush |= FLUSH_STORED_VERTICES;
+/*        ctx->Driver.NeedFlush |= FLUSH_STORED_VERTICES; */
    }
 
    IM->BeginState = state;      
+
+   if (!ctx->CompileFlag)
+      ctx->Driver.CurrentExecPrimitive = PRIM_OUTSIDE_BEGIN_END;
+
 
    /* You can set this flag to get the old 'flush_vb on glEnd()'
     * behaviour.
@@ -316,10 +358,6 @@ _tnl_End(void)
     */
    if (ctx->CompileFlag) 
       ctx->Driver.CurrentSavePrimitive = PRIM_OUTSIDE_BEGIN_END;
-   else
-      ctx->Driver.CurrentExecPrimitive = PRIM_OUTSIDE_BEGIN_END;
-   
-   
 }
 
 
@@ -344,22 +382,13 @@ _tnl_End(void)
 static void
 _tnl_Color3f( GLfloat red, GLfloat green, GLfloat blue )
 {
-#if CHAN_BITS == 8
-   GLubyte col[4];
+   GLchan col[4];
    GET_IMMEDIATE;
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[0], red);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[1], green);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[2], blue);
+   UNCLAMPED_FLOAT_TO_CHAN(col[0], red);
+   UNCLAMPED_FLOAT_TO_CHAN(col[1], green);
+   UNCLAMPED_FLOAT_TO_CHAN(col[2], blue);
    col[3] = CHAN_MAX;
    COLORV( IM, col );
-#else
-   GET_IMMEDIATE;
-   COLOR(IM,
-         UNCLAMPED_FLOAT_TO_CHAN(red),
-         UNCLAMPED_FLOAT_TO_CHAN(green),
-         UNCLAMPED_FLOAT_TO_CHAN(blue),
-         CHAN_MAX);
-#endif
 }
 
 
@@ -385,61 +414,37 @@ _tnl_Color3ub( GLubyte red, GLubyte green, GLubyte blue )
 static void
 _tnl_Color4f( GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha )
 {
-#if CHAN_BITS == 8
-   GLubyte col[4];
+   GLchan col[4];
    GET_IMMEDIATE;
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[0], red);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[1], green);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[2], blue);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[3], alpha);
+   UNCLAMPED_FLOAT_TO_CHAN(col[0], red);
+   UNCLAMPED_FLOAT_TO_CHAN(col[1], green);
+   UNCLAMPED_FLOAT_TO_CHAN(col[2], blue);
+   UNCLAMPED_FLOAT_TO_CHAN(col[3], alpha);
    COLORV( IM, col );
-#else
-   GET_IMMEDIATE;
-   COLOR(IM,
-         UNCLAMPED_FLOAT_TO_CHAN(red),
-         UNCLAMPED_FLOAT_TO_CHAN(green),
-         UNCLAMPED_FLOAT_TO_CHAN(blue),
-         UNCLAMPED_FLOAT_TO_CHAN(alpha));
-#endif
 }
 
 static void
 _tnl_Color4ub( GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha )
 {
-#if CHAN_BITS == 8
-   GET_IMMEDIATE;
-   COLOR( IM, red, green, blue, alpha );
-#else
    GET_IMMEDIATE;
    COLOR(IM,
          UBYTE_TO_CHAN(red),
          UBYTE_TO_CHAN(green),
          UBYTE_TO_CHAN(blue),
          UBYTE_TO_CHAN(alpha));
-#endif
 }
 
 
 static void
 _tnl_Color3fv( const GLfloat *v )
 {
-#if CHAN_BITS == 8
-   GLubyte col[4];
+   GLchan col[4];
    GET_IMMEDIATE;
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[0], v[0]);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[1], v[1]);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[2], v[2]);
+   UNCLAMPED_FLOAT_TO_CHAN(col[0], v[0]);
+   UNCLAMPED_FLOAT_TO_CHAN(col[1], v[1]);
+   UNCLAMPED_FLOAT_TO_CHAN(col[2], v[2]);
    col[3] = CHAN_MAX;
    COLORV( IM, col );
-#else
-   GET_IMMEDIATE;
-   COLOR(IM,
-         UNCLAMPED_FLOAT_TO_CHAN(v[0]),
-         UNCLAMPED_FLOAT_TO_CHAN(v[1]),
-         UNCLAMPED_FLOAT_TO_CHAN(v[2]),
-         CHAN_MAX);
-
-#endif
 }
 
 
@@ -447,38 +452,24 @@ _tnl_Color3fv( const GLfloat *v )
 static void
 _tnl_Color3ubv( const GLubyte *v )
 {
-#if CHAN_BITS == 8
-   GET_IMMEDIATE;
-   COLOR( IM, v[0], v[1], v[2], CHAN_MAX );
-#else
    GET_IMMEDIATE;
    COLOR(IM,
          UBYTE_TO_CHAN(v[0]),
          UBYTE_TO_CHAN(v[1]),
          UBYTE_TO_CHAN(v[2]),
-         CHAN_MAX);
-#endif
+         CHAN_MAX );
 }
 
 static void
 _tnl_Color4fv( const GLfloat *v )
 {
-#if CHAN_BITS == 8
-   GLubyte col[4];
+   GLchan col[4];
    GET_IMMEDIATE;
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[0], v[0]);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[1], v[1]);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[2], v[2]);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[3], v[3]);
+   UNCLAMPED_FLOAT_TO_CHAN(col[0], v[0]);
+   UNCLAMPED_FLOAT_TO_CHAN(col[1], v[1]);
+   UNCLAMPED_FLOAT_TO_CHAN(col[2], v[2]);
+   UNCLAMPED_FLOAT_TO_CHAN(col[3], v[3]);
    COLORV( IM, col );
-#else
-   GET_IMMEDIATE;
-   COLOR(IM,
-         UNCLAMPED_FLOAT_TO_CHAN(v[0]),
-         UNCLAMPED_FLOAT_TO_CHAN(v[1]),
-         UNCLAMPED_FLOAT_TO_CHAN(v[2]),
-         UNCLAMPED_FLOAT_TO_CHAN(v[3]));
-#endif
 }
 
 
@@ -486,17 +477,12 @@ _tnl_Color4fv( const GLfloat *v )
 static void
 _tnl_Color4ubv( const GLubyte *v)
 {
-#if CHAN_BITS == 8
-   GET_IMMEDIATE;
-   COLORV( IM, v );
-#else
    GET_IMMEDIATE;
    COLOR(IM,
          UBYTE_TO_CHAN(v[0]),
          UBYTE_TO_CHAN(v[1]),
          UBYTE_TO_CHAN(v[2]),
          UBYTE_TO_CHAN(v[3]));
-#endif
 }
 
 
@@ -526,20 +512,12 @@ _tnl_Color4ubv( const GLubyte *v)
 static void
 _tnl_SecondaryColor3fEXT( GLfloat red, GLfloat green, GLfloat blue )
 {
-#if CHAN_BITS == 8
-   GLubyte col[3];
+   GLchan col[3];
    GET_IMMEDIATE;
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[0], red);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[1], green);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[2], blue);
+   UNCLAMPED_FLOAT_TO_CHAN(col[0], red);
+   UNCLAMPED_FLOAT_TO_CHAN(col[1], green);
+   UNCLAMPED_FLOAT_TO_CHAN(col[2], blue);
    SECONDARY_COLORV( IM, col );
-#else
-   GET_IMMEDIATE;
-   SECONDARY_COLOR(IM,
-                   UNCLAMPED_FLOAT_TO_CHAN(red),
-                   UNCLAMPED_FLOAT_TO_CHAN(green),
-                   UNCLAMPED_FLOAT_TO_CHAN(blue));
-#endif
 }
 
 
@@ -547,16 +525,11 @@ _tnl_SecondaryColor3fEXT( GLfloat red, GLfloat green, GLfloat blue )
 static void
 _tnl_SecondaryColor3ubEXT( GLubyte red, GLubyte green, GLubyte blue )
 {
-#if CHAN_BITS == 8
-   GET_IMMEDIATE;
-   SECONDARY_COLOR( IM, red, green, blue );
-#else
    GET_IMMEDIATE;
    SECONDARY_COLOR(IM,
                    UBYTE_TO_CHAN(red),
                    UBYTE_TO_CHAN(green),
                    UBYTE_TO_CHAN(blue));
-#endif
 }
 
 
@@ -565,20 +538,12 @@ _tnl_SecondaryColor3ubEXT( GLubyte red, GLubyte green, GLubyte blue )
 static void
 _tnl_SecondaryColor3fvEXT( const GLfloat *v )
 {
-#if CHAN_BITS == 8
-   GLubyte col[3];
+   GLchan col[3];
    GET_IMMEDIATE;
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[0], v[0]);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[1], v[1]);
-   FLOAT_COLOR_TO_UBYTE_COLOR(col[2], v[2]);
+   UNCLAMPED_FLOAT_TO_CHAN(col[0], v[0]);
+   UNCLAMPED_FLOAT_TO_CHAN(col[1], v[1]);
+   UNCLAMPED_FLOAT_TO_CHAN(col[2], v[2]);
    SECONDARY_COLORV( IM, col );
-#else
-   GET_IMMEDIATE;
-   SECONDARY_COLOR(IM,
-                   UNCLAMPED_FLOAT_TO_CHAN(v[0]),
-                   UNCLAMPED_FLOAT_TO_CHAN(v[1]),
-                   UNCLAMPED_FLOAT_TO_CHAN(v[2]));
-#endif
 }
 
 
@@ -586,16 +551,11 @@ _tnl_SecondaryColor3fvEXT( const GLfloat *v )
 static void
 _tnl_SecondaryColor3ubvEXT( const GLubyte *v )
 {
-#if CHAN_BITS == 8
-   GET_IMMEDIATE;
-   SECONDARY_COLOR( IM, v[0], v[1], v[2] );
-#else
    GET_IMMEDIATE;
    SECONDARY_COLOR(IM,
                    UBYTE_TO_CHAN(v[0]),
                    UBYTE_TO_CHAN(v[1]),
                    UBYTE_TO_CHAN(v[2]));
-#endif
 }
 
 

@@ -1,4 +1,4 @@
-/* $Id: image.c,v 1.50 2000/11/28 00:07:51 brianp Exp $ */
+/* $Id: image.c,v 1.53 2001/01/23 23:39:36 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -2337,10 +2337,10 @@ extract_float_rgba(GLuint n, GLfloat rgba[][4],
             GLuint i;
             for (i = 0; i < n; i ++) {
                GLuint p = uisrc[i];
-               rgba[i][rComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p      ) & 0xff);
-               rgba[i][gComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >>  8) & 0xff);
-               rgba[i][bComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >> 16) & 0xff);
-               rgba[i][aComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >> 24)       );
+               rgba[i][rComp] = UBYTE_TO_FLOAT((p      ) & 0xff);
+               rgba[i][gComp] = UBYTE_TO_FLOAT((p >>  8) & 0xff);
+               rgba[i][bComp] = UBYTE_TO_FLOAT((p >> 16) & 0xff);
+               rgba[i][aComp] = UBYTE_TO_FLOAT((p >> 24)       );
             }
          }
          else {
@@ -2348,10 +2348,10 @@ extract_float_rgba(GLuint n, GLfloat rgba[][4],
             GLuint i;
             for (i = 0; i < n; i ++) {
                GLuint p = uisrc[i];
-               rgba[i][rComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >> 24)       );
-               rgba[i][gComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >> 16) & 0xff);
-               rgba[i][bComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >>  8) & 0xff);
-               rgba[i][aComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p      ) & 0xff);
+               rgba[i][rComp] = UBYTE_TO_FLOAT((p >> 24)       );
+               rgba[i][gComp] = UBYTE_TO_FLOAT((p >> 16) & 0xff);
+               rgba[i][bComp] = UBYTE_TO_FLOAT((p >>  8) & 0xff);
+               rgba[i][aComp] = UBYTE_TO_FLOAT((p      ) & 0xff);
             }
          }
          break;
@@ -2361,10 +2361,10 @@ extract_float_rgba(GLuint n, GLfloat rgba[][4],
             GLuint i;
             for (i = 0; i < n; i ++) {
                GLuint p = uisrc[i];
-               rgba[i][rComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >> 24)       );
-               rgba[i][gComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >> 16) & 0xff);
-               rgba[i][bComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >>  8) & 0xff);
-               rgba[i][aComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p      ) & 0xff);
+               rgba[i][rComp] = UBYTE_TO_FLOAT((p >> 24)       );
+               rgba[i][gComp] = UBYTE_TO_FLOAT((p >> 16) & 0xff);
+               rgba[i][bComp] = UBYTE_TO_FLOAT((p >>  8) & 0xff);
+               rgba[i][aComp] = UBYTE_TO_FLOAT((p      ) & 0xff);
             }
          }
          else {
@@ -2372,10 +2372,10 @@ extract_float_rgba(GLuint n, GLfloat rgba[][4],
             GLuint i;
             for (i = 0; i < n; i ++) {
                GLuint p = uisrc[i];
-               rgba[i][rComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p      ) & 0xff);
-               rgba[i][gComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >>  8) & 0xff);
-               rgba[i][bComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >> 16) & 0xff);
-               rgba[i][aComp] = UBYTE_COLOR_TO_FLOAT_COLOR((p >> 24)       );
+               rgba[i][rComp] = UBYTE_TO_FLOAT((p      ) & 0xff);
+               rgba[i][gComp] = UBYTE_TO_FLOAT((p >>  8) & 0xff);
+               rgba[i][bComp] = UBYTE_TO_FLOAT((p >> 16) & 0xff);
+               rgba[i][aComp] = UBYTE_TO_FLOAT((p >> 24)       );
             }
          }
          break;
@@ -2506,7 +2506,7 @@ _mesa_unpack_chan_color_span( GLcontext *ctx,
           srcType == GL_UNSIGNED_INT_2_10_10_10_REV);
 
    /* this is intended for RGBA mode only */
-   assert(ctx->Visual.RGBAflag);
+   assert(ctx->Visual.rgbMode);
 
    /* Try simple cases first */
    if (transferOps == 0 && srcType == CHAN_TYPE) {
@@ -2721,7 +2721,7 @@ _mesa_unpack_chan_color_span( GLcontext *ctx,
          GLchan *dst = dest;
          GLuint i;
          for (i = 0; i < n; i++) {
-            dst[dstRedIndex] = FLOAT_TO_CHAN(rgba[i][RCOMP]);
+            CLAMPED_FLOAT_TO_CHAN(dst[dstRedIndex], rgba[i][RCOMP]);
             dst += dstComponents;
          }
       }
@@ -2730,7 +2730,7 @@ _mesa_unpack_chan_color_span( GLcontext *ctx,
          GLchan *dst = dest;
          GLuint i;
          for (i = 0; i < n; i++) {
-            dst[dstGreenIndex] = FLOAT_TO_CHAN(rgba[i][GCOMP]);
+            CLAMPED_FLOAT_TO_CHAN(dst[dstGreenIndex], rgba[i][GCOMP]);
             dst += dstComponents;
          }
       }
@@ -2739,7 +2739,7 @@ _mesa_unpack_chan_color_span( GLcontext *ctx,
          GLchan *dst = dest;
          GLuint i;
          for (i = 0; i < n; i++) {
-            dst[dstBlueIndex] = FLOAT_TO_CHAN(rgba[i][BCOMP]);
+            CLAMPED_FLOAT_TO_CHAN(dst[dstBlueIndex], rgba[i][BCOMP]);
             dst += dstComponents;
          }
       }
@@ -2748,7 +2748,7 @@ _mesa_unpack_chan_color_span( GLcontext *ctx,
          GLchan *dst = dest;
          GLuint i;
          for (i = 0; i < n; i++) {
-            dst[dstAlphaIndex] = FLOAT_TO_CHAN(rgba[i][ACOMP]);
+            CLAMPED_FLOAT_TO_CHAN(dst[dstAlphaIndex], rgba[i][ACOMP]);
             dst += dstComponents;
          }
       }
@@ -2760,7 +2760,7 @@ _mesa_unpack_chan_color_span( GLcontext *ctx,
          assert(dstComponents == 1);
          for (i = 0; i < n; i++) {
             /* Intensity comes from red channel */
-            dst[i] = FLOAT_TO_CHAN(rgba[i][RCOMP]);
+            CLAMPED_FLOAT_TO_CHAN(dst[i], rgba[i][RCOMP]);
          }
       }
 
@@ -2770,7 +2770,7 @@ _mesa_unpack_chan_color_span( GLcontext *ctx,
          assert(dstLuminanceIndex == 0);
          for (i = 0; i < n; i++) {
             /* Luminance comes from red channel */
-            dst[0] = FLOAT_TO_CHAN(rgba[i][RCOMP]);
+            CLAMPED_FLOAT_TO_CHAN(dst[0], rgba[i][RCOMP]);
             dst += dstComponents;
          }
       }
@@ -2830,7 +2830,7 @@ _mesa_unpack_float_color_span( GLcontext *ctx,
           srcType == GL_UNSIGNED_INT_2_10_10_10_REV);
 
    /* this is intended for RGBA mode only */
-   assert(ctx->Visual.RGBAflag);
+   assert(ctx->Visual.rgbMode);
 
    /* general solution, no special cases, yet */
    {
@@ -3342,7 +3342,7 @@ _mesa_unpack_depth_span( const GLcontext *ctx, GLuint n, GLdepth *dest,
 
    /* clamp depth values to [0,1] and convert from floats to integers */
    {
-      const GLfloat zs = ctx->Visual.DepthMaxF;
+      const GLfloat zs = ctx->DepthMaxF;
       GLuint i;
       for (i = 0; i < n; i++) {
          dest[i] = (GLdepth) (CLAMP(depth[i], 0.0F, 1.0F) * zs);

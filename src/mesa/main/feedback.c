@@ -1,10 +1,10 @@
-/* $Id: feedback.c,v 1.18 2000/12/26 05:09:28 keithw Exp $ */
+/* $Id: feedback.c,v 1.21 2001/01/23 23:39:36 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -58,14 +58,13 @@ _mesa_FeedbackBuffer( GLsizei size, GLenum type, GLfloat *buffer )
       gl_error( ctx, GL_INVALID_OPERATION, "glFeedbackBuffer" );
       return;
    }
-
    if (size<0) {
       gl_error( ctx, GL_INVALID_VALUE, "glFeedbackBuffer(size<0)" );
       return;
    }
    if (!buffer) {
       gl_error( ctx, GL_INVALID_VALUE, "glFeedbackBuffer(buffer==NULL)" );
-      ctx->Feedback.BufferSize = 0; /* XXX -- Sould this be here??? */
+      ctx->Feedback.BufferSize = 0; 
       return;
    }
 
@@ -78,16 +77,16 @@ _mesa_FeedbackBuffer( GLsizei size, GLenum type, GLfloat *buffer )
 	 break;
       case GL_3D_COLOR:
 	 ctx->Feedback._Mask = (FB_3D | 
-				(ctx->Visual.RGBAflag ? FB_COLOR : FB_INDEX));
+				(ctx->Visual.rgbMode ? FB_COLOR : FB_INDEX));
 	 break;
       case GL_3D_COLOR_TEXTURE:
 	 ctx->Feedback._Mask = (FB_3D | 
-				(ctx->Visual.RGBAflag ? FB_COLOR : FB_INDEX) | 
+				(ctx->Visual.rgbMode ? FB_COLOR : FB_INDEX) | 
 				FB_TEXTURE);
 	 break;
       case GL_4D_COLOR_TEXTURE:
 	 ctx->Feedback._Mask = (FB_3D | FB_4D | 
-				(ctx->Visual.RGBAflag ? FB_COLOR : FB_INDEX) |
+				(ctx->Visual.rgbMode ? FB_COLOR : FB_INDEX) |
 				FB_TEXTURE);
 	 break;
       default:
@@ -101,7 +100,6 @@ _mesa_FeedbackBuffer( GLsizei size, GLenum type, GLfloat *buffer )
    ctx->Feedback.Buffer = buffer;
    ctx->Feedback.Count = 0;	              /* Becaues of this. */
 }
-
 
 
 void
@@ -152,6 +150,7 @@ void gl_feedback_vertex( GLcontext *ctx,
       FEEDBACK_TOKEN( ctx, texcoord[3] );
    }
 }
+
 
 /**********************************************************************/
 /*                              Selection                             */
@@ -406,6 +405,9 @@ _mesa_RenderMode( GLenum mode )
    }
 
    ctx->RenderMode = mode;
+   if (ctx->Driver.RenderMode) 
+      ctx->Driver.RenderMode( ctx, mode );
+
    return result;
 }
 

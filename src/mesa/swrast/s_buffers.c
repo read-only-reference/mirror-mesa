@@ -1,10 +1,10 @@
-/* $Id: s_buffers.c,v 1.2 2000/11/13 20:02:57 keithw Exp $ */
+/* $Id: s_buffers.c,v 1.4 2001/01/24 00:04:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -49,17 +49,17 @@ clear_color_buffer_with_masking( GLcontext *ctx )
    const GLint height = ctx->DrawBuffer->_Ymax - ctx->DrawBuffer->_Ymin;
    const GLint width  = ctx->DrawBuffer->_Xmax - ctx->DrawBuffer->_Xmin;
 
-   if (ctx->Visual.RGBAflag) {
+   if (ctx->Visual.rgbMode) {
       /* RGBA mode */
-      const GLchan r = (GLint) (ctx->Color.ClearColor[0] * CHAN_MAXF);
-      const GLchan g = (GLint) (ctx->Color.ClearColor[1] * CHAN_MAXF);
-      const GLchan b = (GLint) (ctx->Color.ClearColor[2] * CHAN_MAXF);
-      const GLchan a = (GLint) (ctx->Color.ClearColor[3] * CHAN_MAXF);
+      const GLchan r = ctx->Color.ClearColor[0];
+      const GLchan g = ctx->Color.ClearColor[1];
+      const GLchan b = ctx->Color.ClearColor[2];
+      const GLchan a = ctx->Color.ClearColor[3];
       GLint i;
       for (i = 0; i < height; i++) {
          GLchan rgba[MAX_WIDTH][4];
          GLint j;
-         for (j=0; j<width; j++) {
+         for (j = 0; j < width; j++) {
             rgba[j][RCOMP] = r;
             rgba[j][GCOMP] = g;
             rgba[j][BCOMP] = b;
@@ -99,12 +99,12 @@ clear_color_buffer(GLcontext *ctx)
    const GLint height = ctx->DrawBuffer->_Ymax - ctx->DrawBuffer->_Ymin;
    const GLint width  = ctx->DrawBuffer->_Xmax - ctx->DrawBuffer->_Xmin;
 
-   if (ctx->Visual.RGBAflag) {
+   if (ctx->Visual.rgbMode) {
       /* RGBA mode */
-      const GLchan r = (GLint) (ctx->Color.ClearColor[0] * CHAN_MAXF);
-      const GLchan g = (GLint) (ctx->Color.ClearColor[1] * CHAN_MAXF);
-      const GLchan b = (GLint) (ctx->Color.ClearColor[2] * CHAN_MAXF);
-      const GLchan a = (GLint) (ctx->Color.ClearColor[3] * CHAN_MAXF);
+      const GLchan r = ctx->Color.ClearColor[0];
+      const GLchan g = ctx->Color.ClearColor[1];
+      const GLchan b = ctx->Color.ClearColor[2];
+      const GLchan a = ctx->Color.ClearColor[3];
       GLchan span[MAX_WIDTH][4];
       GLint i;
 
@@ -124,7 +124,7 @@ clear_color_buffer(GLcontext *ctx)
    else {
       /* Color index mode */
       ASSERT(ctx->Color.IndexMask == ~0);
-      if (ctx->Visual.IndexBits == 8) {
+      if (ctx->Visual.indexBits == 8) {
          /* 8-bit clear */
          GLubyte span[MAX_WIDTH];
          GLint i;

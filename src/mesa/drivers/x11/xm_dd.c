@@ -1,8 +1,8 @@
-/* $Id: xm_dd.c,v 1.8 2000/12/26 05:09:31 keithw Exp $ */
+/* $Id: xm_dd.c,v 1.13 2001/01/29 20:56:32 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  *
@@ -229,14 +229,15 @@ clear_index( GLcontext *ctx, GLuint index )
 
 
 static void
-clear_color( GLcontext *ctx, GLubyte r, GLubyte g, GLubyte b, GLubyte a )
+clear_color( GLcontext *ctx, const GLchan color[4] )
 {
    const XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   xmesa->clearcolor[0] = r;
-   xmesa->clearcolor[1] = g;
-   xmesa->clearcolor[2] = b;
-   xmesa->clearcolor[3] = a;
-   xmesa->clearpixel = xmesa_color_to_pixel( xmesa, r, g, b, a,
+   xmesa->clearcolor[0] = color[0];
+   xmesa->clearcolor[1] = color[1];
+   xmesa->clearcolor[2] = color[2];
+   xmesa->clearcolor[3] = color[3];
+   xmesa->clearpixel = xmesa_color_to_pixel( xmesa, color[0], color[1],
+                                             color[2], color[3],
                                              xmesa->xm_visual->undithered_pf );
    _glthread_LOCK_MUTEX(_xmesa_lock);
    XMesaSetForeground( xmesa->display, xmesa->xm_buffer->cleargc,
@@ -738,7 +739,7 @@ clear_nbit_ximage( GLcontext *ctx, GLboolean all,
 
 
 
-static GLbitfield
+static void
 clear_buffers( GLcontext *ctx, GLbitfield mask,
                GLboolean all, GLint x, GLint y, GLint width, GLint height )
 {
@@ -746,23 +747,29 @@ clear_buffers( GLcontext *ctx, GLbitfield mask,
    const GLuint *colorMask = (GLuint *) &ctx->Color.ColorMask;
 
    /* we can't handle color or index masking */
-   if (mask & (DD_FRONT_LEFT_BIT | DD_BACK_LEFT_BIT)) {
-      if (*colorMask != 0xffffffff || ctx->Color.IndexMask != 0xffffffff)
-         return mask;
+   if (*colorMask == 0xffffffff && ctx->Color.IndexMask == 0xffffffff) {
+      if (mask & DD_FRONT_LEFT_BIT) {
+	 ASSERT(xmesa->xm_buffer->front_clear_func);
+	 (*xmesa->xm_buffer->front_clear_func)( ctx, all, x, y, width, height );
+	 mask &= ~DD_FRONT_LEFT_BIT;
+      }
+      if (mask & DD_BACK_LEFT_BIT) {
+	 ASSERT(xmesa->xm_buffer->back_clear_func);
+	 (*xmesa->xm_buffer->back_clear_func)( ctx, all, x, y, width, height );
+	 mask &= ~DD_BACK_LEFT_BIT;
+      }
    }
 
-   if (mask & DD_FRONT_LEFT_BIT) {
-      ASSERT(xmesa->xm_buffer->front_clear_func);
-      (*xmesa->xm_buffer->front_clear_func)( ctx, all, x, y, width, height );
-   }
-   if (mask & DD_BACK_LEFT_BIT) {
-      ASSERT(xmesa->xm_buffer->back_clear_func);
-      (*xmesa->xm_buffer->back_clear_func)( ctx, all, x, y, width, height );
-   }
-   return mask & (~(DD_FRONT_LEFT_BIT | DD_BACK_LEFT_BIT));
+   if (mask)
+      _swrast_Clear( ctx, mask, all, x, y, width, height );
 }
 
 
+static void
+resize_buffers( GLcontext *ctx )
+{
+   _swrast_alloc_buffers( ctx );
+}
 
 #if 0
 /*
@@ -921,25 +928,43 @@ void xmesa_init_pointers( GLcontext *ctx )
    ctx->Driver.GetBufferSize = get_buffer_size;
    ctx->Driver.Flush = flush;
    ctx->Driver.Finish = finish;
-
-   ctx->Driver.RenderStart = 0;
-   ctx->Driver.RenderFinish = _swrast_flush;
-
-   ctx->Driver.SetDrawBuffer = set_draw_buffer;
-   ctx->Driver.SetReadBuffer = set_read_buffer;
-
-   ctx->Driver.ClearIndex = clear_index;
-   ctx->Driver.ClearColor = clear_color;
-   ctx->Driver.Clear = clear_buffers;
-   ctx->Driver.IndexMask = index_mask;
-   ctx->Driver.ColorMask = color_mask;
-   ctx->Driver.Enable = enable;
-
+ 
+   /* Hooks for t_vb_render.c:
+    */
+   ctx->Driver.RenderStart = _swsetup_RenderStart;
+   ctx->Driver.RenderFinish = _swsetup_RenderFinish;
+   ctx->Driver.BuildProjectedVertices = _swsetup_BuildProjectedVertices;
+   ctx->Driver.RenderPrimitive = _swsetup_RenderPrimitive;
    ctx->Driver.PointsFunc = _swsetup_Points;
    ctx->Driver.LineFunc = _swsetup_Line;
    ctx->Driver.TriangleFunc = _swsetup_Triangle;
    ctx->Driver.QuadFunc = _swsetup_Quad;
-   ctx->Driver.BuildProjectedVertices = _swsetup_BuildProjectedVertices;
    ctx->Driver.ResetLineStipple = _swrast_ResetLineStipple;
+   ctx->Driver.RenderInterp = _swsetup_RenderInterp;
+   ctx->Driver.RenderCopyPV = _swsetup_RenderCopyPV;
+   ctx->Driver.RenderClippedLine = _swsetup_RenderClippedLine;
+   ctx->Driver.RenderClippedPolygon = _swsetup_RenderClippedPolygon;
+   
+   /* Software rasterizer pixel paths:
+    */
+   ctx->Driver.Accum = _swrast_Accum;
+   ctx->Driver.Bitmap = _swrast_Bitmap;
+   ctx->Driver.Clear = clear_buffers;
+   ctx->Driver.ResizeBuffersMESA = resize_buffers;
+   ctx->Driver.CopyPixels = _swrast_CopyPixels;
+   ctx->Driver.DrawPixels = _swrast_DrawPixels;
+   ctx->Driver.ReadPixels = _swrast_ReadPixels;
+
+   
+   /* 
+    */
+   ctx->Driver.SetDrawBuffer = set_draw_buffer;
+   ctx->Driver.SetReadBuffer = set_read_buffer;
+   ctx->Driver.ClearIndex = clear_index;
+   ctx->Driver.ClearColor = clear_color;
+   ctx->Driver.IndexMask = index_mask;
+   ctx->Driver.ColorMask = color_mask;
+   ctx->Driver.Enable = enable;
+
    (void) DitherValues;  /* silenced unused var warning */
 }

@@ -1,10 +1,10 @@
-/* $Id: dlist.c,v 1.60 2000/12/27 23:01:25 keithw Exp $ */
+/* $Id: dlist.c,v 1.63 2001/01/24 04:56:20 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -176,7 +176,6 @@ typedef enum {
 	OPCODE_FRONT_FACE,
 	OPCODE_FRUSTUM,
 	OPCODE_HINT,
-	OPCODE_HINT_PGI,
 	OPCODE_HISTOGRAM,
 	OPCODE_INDEX_MASK,
 	OPCODE_INIT_NAMES,
@@ -564,7 +563,6 @@ void gl_init_lists( void )
       InstSize[OPCODE_FRONT_FACE] = 2;
       InstSize[OPCODE_FRUSTUM] = 7;
       InstSize[OPCODE_HINT] = 3;
-      InstSize[OPCODE_HINT_PGI] = 3;
       InstSize[OPCODE_HISTOGRAM] = 5;
       InstSize[OPCODE_INDEX_MASK] = 2;
       InstSize[OPCODE_INIT_NAMES] = 1;
@@ -869,11 +867,12 @@ static void save_BlendColor( GLfloat red, GLfloat green,
 }
 
 
-static void save_CallList( GLuint list )
+void _mesa_save_CallList( GLuint list )
 {
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+
    n = ALLOC_INSTRUCTION( ctx, OPCODE_CALL_LIST, 1 );
    if (n) {
       n[1].ui = list;
@@ -884,7 +883,7 @@ static void save_CallList( GLuint list )
 }
 
 
-static void save_CallLists( GLsizei n, GLenum type, const GLvoid *lists )
+void _mesa_save_CallLists( GLsizei n, GLenum type, const GLvoid *lists )
 {
    GET_CURRENT_CONTEXT(ctx);
    GLint i;
@@ -1805,23 +1804,6 @@ static void save_Hint( GLenum target, GLenum mode )
 }
 
 
-/* GL_PGI_misc_hints*/
-static void save_HintPGI( GLenum target, GLint mode )
-{
-   GET_CURRENT_CONTEXT(ctx);
-   Node *n;
-   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = ALLOC_INSTRUCTION( ctx, OPCODE_HINT_PGI, 2 );
-   if (n) {
-      n[1].e = target;
-      n[2].i = mode;
-   }
-   if (ctx->ExecuteFlag) {
-      (*ctx->Exec->HintPGI)( target, mode );
-   }
-}
-
-
 static void
 save_Histogram(GLenum target, GLsizei width, GLenum internalFormat, GLboolean sink)
 {
@@ -2583,7 +2565,7 @@ static void save_PolygonOffset( GLfloat factor, GLfloat units )
 static void save_PolygonOffsetEXT( GLfloat factor, GLfloat bias )
 {
    GET_CURRENT_CONTEXT(ctx);
-   save_PolygonOffset(factor, ctx->Visual.DepthMaxF * bias);
+   save_PolygonOffset(factor, ctx->DepthMaxF * bias);
 }
 
 
@@ -3981,6 +3963,7 @@ static void execute_list( GLcontext *ctx, GLuint list )
    if (ctx->Driver.BeginCallList)
       ctx->Driver.BeginCallList( ctx, list );
 
+/*     fprintf(stderr, "execute list %d\n", list); */
 /*     mesa_print_display_list( list );  */
 
    ctx->CallDepth++;
@@ -4245,9 +4228,6 @@ static void execute_list( GLcontext *ctx, GLuint list )
             break;
 	 case OPCODE_HINT:
 	    (*ctx->Exec->Hint)( n[1].e, n[2].e );
-	    break;
-	 case OPCODE_HINT_PGI:
-	    (*ctx->Exec->HintPGI)( n[1].e, n[2].i );
 	    break;
 	 case OPCODE_HISTOGRAM:
 	    (*ctx->Exec->Histogram)( n[1].e, n[2].i, n[3].e, n[4].b );
@@ -4819,15 +4799,13 @@ _mesa_EndList( void )
 void
 _mesa_CallList( GLuint list )
 {
+   GLboolean save_compile_flag;
    GET_CURRENT_CONTEXT(ctx);
+   FLUSH_CURRENT(ctx, 0);
    /* VERY IMPORTANT:  Save the CompileFlag status, turn it off, */
    /* execute the display list, and restore the CompileFlag. */
-   GLboolean save_compile_flag;
 
-   if (MESA_VERBOSE&VERBOSE_API) {
-      fprintf(stderr, "glCallList %u\n", list);
-      mesa_print_display_list( list );
-   }
+/*     mesa_print_display_list( list ); */
 
    save_compile_flag = ctx->CompileFlag;
    if (save_compile_flag) {
@@ -5536,8 +5514,8 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->AlphaFunc = save_AlphaFunc;
    table->Bitmap = save_Bitmap;
    table->BlendFunc = save_BlendFunc;
-   table->CallList = save_CallList;
-   table->CallLists = save_CallLists;
+   table->CallList = _mesa_save_CallList;
+   table->CallLists = _mesa_save_CallLists;
    table->Clear = save_Clear;
    table->ClearAccum = save_ClearAccum;
    table->ClearColor = save_ClearColor;
@@ -5818,9 +5796,6 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    /* 54. GL_EXT_point_parameters */
    table->PointParameterfEXT = save_PointParameterfEXT;
    table->PointParameterfvEXT = save_PointParameterfvEXT;
-
-   /* 77. GL_PGI_misc_hints */
-   table->HintPGI = save_HintPGI;
 
    /* 78. GL_EXT_paletted_texture */
 #if 0

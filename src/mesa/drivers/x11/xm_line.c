@@ -1,4 +1,4 @@
-/* $Id: xm_line.c,v 1.13 2000/12/13 16:24:40 brianp Exp $ */
+/* $Id: xm_line.c,v 1.16 2001/01/23 23:39:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -35,6 +35,7 @@
 #include "glxheader.h"
 #include "depth.h"
 #include "macros.h"
+#include "mmath.h"
 #include "mtypes.h"
 #include "xmesaP.h"
 
@@ -126,7 +127,7 @@ static void flat_TRUECOLOR_line( GLcontext *ctx,
                                  const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    XMesaImage *img = xmesa->xm_buffer->backimage;
    unsigned long pixel;
    PACK_TRUECOLOR( pixel, color[0], color[1], color[2] );
@@ -147,7 +148,7 @@ static void flat_8A8B8G8R_line( GLcontext *ctx,
                                 const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLuint pixel = PACK_8B8G8R( color[0], color[1], color[2] );
 
 #define PIXEL_TYPE GLuint
@@ -167,7 +168,7 @@ static void flat_8R8G8B_line( GLcontext *ctx,
                               const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLuint pixel = PACK_8R8G8B( color[0], color[1], color[2] );
 
 #define PIXEL_TYPE GLuint
@@ -187,7 +188,7 @@ static void flat_8R8G8B24_line( GLcontext *ctx,
                               const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
 
 #define PIXEL_TYPE bgr_t
 #define BYTES_PER_ROW (xmesa->xm_buffer->backimage->bytes_per_line)
@@ -210,7 +211,7 @@ static void flat_5R6G5B_line( GLcontext *ctx,
                               const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLushort pixel = PACK_5R6G5B( color[0], color[1], color[2] );
 
 #define PIXEL_TYPE GLushort
@@ -230,7 +231,7 @@ static void flat_DITHER_5R6G5B_line( GLcontext *ctx,
                                      const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
 
 #define PIXEL_TYPE GLushort
 #define BYTES_PER_ROW (xmesa->xm_buffer->backimage->bytes_per_line)
@@ -250,7 +251,7 @@ static void flat_DITHER8_line( GLcontext *ctx,
                                const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLint r = color[0], g = color[1], b = color[2];
    DITHER_SETUP;
 
@@ -272,7 +273,7 @@ static void flat_LOOKUP8_line( GLcontext *ctx,
                                const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLubyte pixel;
    LOOKUP_SETUP;
    pixel = (GLubyte) LOOKUP( color[0], color[1], color[2] );
@@ -294,7 +295,7 @@ static void flat_HPCR_line( GLcontext *ctx,
                             const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLint r = color[0], g = color[1], b = color[2];
 
 #define INTERP_XY 1
@@ -316,7 +317,7 @@ static void flat_TRUECOLOR_z_line( GLcontext *ctx,
                                    const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    XMesaImage *img = xmesa->xm_buffer->backimage;
    unsigned long pixel;
    PACK_TRUECOLOR( pixel, color[0], color[1], color[2] );
@@ -342,7 +343,7 @@ static void flat_8A8B8G8R_z_line( GLcontext *ctx,
                                   const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLuint pixel = PACK_8B8G8R( color[0], color[1], color[2] );
 
 #define INTERP_Z 1
@@ -368,7 +369,7 @@ static void flat_8R8G8B_z_line( GLcontext *ctx,
                                 const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLuint pixel = PACK_8R8G8B( color[0], color[1], color[2] );
 
 #define INTERP_Z 1
@@ -394,7 +395,7 @@ static void flat_8R8G8B24_z_line( GLcontext *ctx,
                                     const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
 
 #define INTERP_Z 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
@@ -421,7 +422,7 @@ static void flat_5R6G5B_z_line( GLcontext *ctx,
                                 const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLushort pixel = PACK_5R6G5B( color[0], color[1], color[2] );
 
 #define INTERP_Z 1
@@ -446,7 +447,7 @@ static void flat_DITHER_5R6G5B_z_line( GLcontext *ctx,
                                        const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
 
 #define INTERP_Z 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
@@ -470,7 +471,7 @@ static void flat_DITHER8_z_line( GLcontext *ctx,
                                  const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLint r = color[0], g = color[1], b = color[2];
    DITHER_SETUP;
 
@@ -497,7 +498,7 @@ static void flat_LOOKUP8_z_line( GLcontext *ctx,
                                  const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLubyte pixel;
    LOOKUP_SETUP;
    pixel = (GLubyte) LOOKUP( color[0], color[1], color[2] );
@@ -525,7 +526,7 @@ static void flat_HPCR_z_line( GLcontext *ctx,
                               const SWvertex *vert0, const SWvertex *vert1 )
 {
    XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   const GLubyte *color = vert0->color;
+   const GLubyte *color = vert1->color;
    GLint r = color[0], g = color[1], b = color[2];
 
 #define INTERP_XY 1
@@ -564,7 +565,7 @@ static swrast_line_func get_line_func( GLcontext *ctx )
        && swrast->_RasterMask==DEPTH_BIT
        && ctx->Depth.Func==GL_LESS
        && ctx->Depth.Mask==GL_TRUE
-       && ctx->Visual.DepthBits == DEFAULT_SOFTWARE_DEPTH_BITS
+       && ctx->Visual.depthBits == DEFAULT_SOFTWARE_DEPTH_BITS
        && ctx->Line.Width==1.0F) {
       switch (xmesa->pixelformat) {
          case PF_TRUECOLOR:

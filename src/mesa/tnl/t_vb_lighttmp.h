@@ -1,4 +1,4 @@
-/* $Id: t_vb_lighttmp.h,v 1.1 2000/12/26 05:09:33 keithw Exp $ */
+/* $Id: t_vb_lighttmp.h,v 1.4 2001/01/24 00:05:00 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -36,7 +36,7 @@
 #  define CHECK_MATERIAL(x)  (flags[x] & VERT_MATERIAL)
 #  define CHECK_END_VB(x)    (flags[x] & VERT_END_VB)
 #  if (IDX & LIGHT_COLORMATERIAL)
-#    define CMSTRIDE STRIDE_4UB(CMcolor, (4 * sizeof(GLubyte)))
+#    define CMSTRIDE STRIDE_4CHAN(CMcolor, (4 * sizeof(GLchan)))
 #    define CHECK_COLOR_MATERIAL(x) (flags[x] & VERT_RGBA)
 #    define CHECK_VALIDATE(x) (flags[x] & (VERT_RGBA|VERT_MATERIAL))
 #    define DO_ANOTHER_NORMAL(x) \
@@ -58,7 +58,7 @@
 #  define CHECK_MATERIAL(x)   0	           /* no materials on array paths */
 #  define CHECK_END_VB(XX)     (XX >= nr)        
 #  if (IDX & LIGHT_COLORMATERIAL)
-#     define CMSTRIDE STRIDE_4UB(CMcolor, CMstride)
+#     define CMSTRIDE STRIDE_4CHAN(CMcolor, CMstride)
 #     define CHECK_COLOR_MATERIAL(x) (x < nr) /* always have colormaterial */
 #     define CHECK_VALIDATE(x) (x < nr)
 #     define DO_ANOTHER_NORMAL(x) 0        /* always stop to recalc colormat */
@@ -269,13 +269,13 @@ static void TAG(light_rgba_spec)( GLcontext *ctx,
 	 }
       } /*loop over lights*/
 
-      FLOAT_RGB_TO_CHAN_RGB( Fcolor[j], sum[0] );
-      FLOAT_RGB_TO_CHAN_RGB( Fspec[j], spec[0] );
+      UNCLAMPED_FLOAT_TO_RGB_CHAN( Fcolor[j], sum[0] );
+      UNCLAMPED_FLOAT_TO_RGB_CHAN( Fspec[j], spec[0] );
       Fcolor[j][3] = sumA[0];
       
       if (IDX & LIGHT_TWOSIDE) {
-	 FLOAT_RGB_TO_CHAN_RGB( Bcolor[j], sum[1] );
-	 FLOAT_RGB_TO_CHAN_RGB( Bspec[j], spec[1] );
+	 UNCLAMPED_FLOAT_TO_RGB_CHAN( Bcolor[j], sum[1] );
+	 UNCLAMPED_FLOAT_TO_RGB_CHAN( Bspec[j], spec[1] );
 	 Bcolor[j][3] = sumA[1];
       }
    } 
@@ -307,7 +307,7 @@ static void TAG(light_rgba)( GLcontext *ctx,
    GLuint  nstride = VB->NormalPtr->stride; 
    const GLfloat *normal = (GLfloat *)VB->NormalPtr->data;
 
-   GLubyte (*CMcolor)[4];
+   GLchan (*CMcolor)[4];
    GLuint CMstride;
 
    GLchan (*Fcolor)[4] = (GLchan (*)[4]) store->LitColor[0].data;
@@ -475,11 +475,11 @@ static void TAG(light_rgba)( GLcontext *ctx,
 	 ACC_SCALE_SCALAR_3V( sum[side], attenuation, contrib );
       } 
 
-      FLOAT_RGB_TO_CHAN_RGB( Fcolor[j], sum[0] );
+      UNCLAMPED_FLOAT_TO_RGB_CHAN( Fcolor[j], sum[0] );
       Fcolor[j][3] = sumA[0];
 
       if (IDX & LIGHT_TWOSIDE) {
-	 FLOAT_RGB_TO_CHAN_RGB( Bcolor[j], sum[1] );
+	 UNCLAMPED_FLOAT_TO_RGB_CHAN( Bcolor[j], sum[1] );
 	 Bcolor[j][3] = sumA[1];
       }
    } 
@@ -508,7 +508,7 @@ static void TAG(light_fast_rgba_single)( GLcontext *ctx,
    struct light_stage_data *store = LIGHT_STAGE_DATA(stage);
    GLuint  nstride = VB->NormalPtr->stride; 
    const GLfloat *normal = (GLfloat *)VB->NormalPtr->data;
-   GLubyte (*CMcolor)[4];
+   GLchan (*CMcolor)[4];
    GLuint CMstride;
    GLchan (*Fcolor)[4] = (GLchan (*)[4]) store->LitColor[0].data;
    GLchan (*Bcolor)[4] = (GLchan (*)[4]) store->LitColor[1].data;
@@ -556,12 +556,12 @@ static void TAG(light_fast_rgba_single)( GLcontext *ctx,
       {
 	 COPY_3V(base[0], light->_MatAmbient[0]);
 	 ACC_3V(base[0], ctx->Light._BaseColor[0] );
-	 FLOAT_RGB_TO_CHAN_RGB( baseubyte[0], base[0] );
+	 UNCLAMPED_FLOAT_TO_RGB_CHAN( baseubyte[0], base[0] );
 	 
 	 if (IDX & LIGHT_TWOSIDE) {
 	    COPY_3V(base[1], light->_MatAmbient[1]);
 	    ACC_3V(base[1], ctx->Light._BaseColor[1]);
-	    FLOAT_RGB_TO_CHAN_RGB( baseubyte[1], base[1]);
+	    UNCLAMPED_FLOAT_TO_RGB_CHAN( baseubyte[1], base[1]);
 	 }
       }
 
@@ -582,7 +582,7 @@ static void TAG(light_fast_rgba_single)( GLcontext *ctx,
 		  GET_SHINE_TAB_ENTRY( ctx->_ShineTable[1], n_dot_h, spec );
 		  ACC_SCALE_SCALAR_3V(sum, spec, light->_MatSpecular[1]);
 	       } 
-	       FLOAT_RGB_TO_CHAN_RGB(Bcolor[j], sum );
+	       UNCLAMPED_FLOAT_TO_RGB_CHAN(Bcolor[j], sum );
 	    }
 	 } else {
 	    GLfloat n_dot_h = DOT3(normal, light->_h_inf_norm);
@@ -595,7 +595,7 @@ static void TAG(light_fast_rgba_single)( GLcontext *ctx,
 	       ACC_SCALE_SCALAR_3V(sum, spec, light->_MatSpecular[0]);
 
 	    }
-	    FLOAT_RGB_TO_CHAN_RGB(Fcolor[j], sum );
+	    UNCLAMPED_FLOAT_TO_RGB_CHAN(Fcolor[j], sum );
 	 }
 
 	 j++;
@@ -636,7 +636,7 @@ static void TAG(light_fast_rgba)( GLcontext *ctx,
    const GLchan *sumA = ctx->Light._BaseAlpha;
    GLuint  nstride = VB->NormalPtr->stride; 
    const GLfloat *normal = (GLfloat *)VB->NormalPtr->data;
-   GLubyte (*CMcolor)[4];
+   GLchan (*CMcolor)[4];
    GLuint CMstride;
    GLchan (*Fcolor)[4] = (GLchan (*)[4]) store->LitColor[0].data;
    GLchan (*Bcolor)[4] = (GLchan (*)[4]) store->LitColor[1].data;
@@ -660,6 +660,9 @@ static void TAG(light_fast_rgba)( GLcontext *ctx,
    VB->ColorPtr[0] = &store->LitColor[0];
    if (IDX & LIGHT_TWOSIDE)
       VB->ColorPtr[1] = &store->LitColor[1];
+
+   if (stage->changed_inputs == 0)
+      return;
 
    if ( CHECK_COLOR_MATERIAL(j) ) 
       gl_update_color_material( ctx, *CMcolor );
@@ -709,11 +712,11 @@ static void TAG(light_fast_rgba)( GLcontext *ctx,
 	    }
 	 }
 
-	 FLOAT_RGB_TO_CHAN_RGB( Fcolor[j], sum[0] );
+	 UNCLAMPED_FLOAT_TO_RGB_CHAN( Fcolor[j], sum[0] );
 	 Fcolor[j][3] = sumA[0];
 	 
 	 if (IDX & LIGHT_TWOSIDE) {
-	    FLOAT_RGB_TO_CHAN_RGB( Bcolor[j], sum[1] );
+	    UNCLAMPED_FLOAT_TO_RGB_CHAN( Bcolor[j], sum[1] );
 	    Bcolor[j][3] = sumA[1];
 	 }
 
@@ -767,7 +770,7 @@ static void TAG(light_ci)( GLcontext *ctx,
    const GLfloat *vertex = (GLfloat *) input->data;
    GLuint  nstride = VB->NormalPtr->stride; 
    const GLfloat *normal = (GLfloat *)VB->NormalPtr->data;
-   GLubyte (*CMcolor)[4];
+   GLchan (*CMcolor)[4];
    GLuint CMstride;
    GLuint *flags = VB->Flag;
    GLuint  *indexResult[2];
@@ -782,6 +785,9 @@ static void TAG(light_ci)( GLcontext *ctx,
    VB->IndexPtr[0] = &store->LitIndex[0];
    if (IDX & LIGHT_TWOSIDE)
       VB->IndexPtr[1] = &store->LitIndex[1];
+
+   if (stage->changed_inputs == 0)
+      return;
 
    indexResult[0] = VB->IndexPtr[0]->data;
    indexResult[1] = VB->IndexPtr[1]->data;

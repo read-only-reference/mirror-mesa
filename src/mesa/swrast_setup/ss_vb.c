@@ -2,7 +2,7 @@
  * Mesa 3-D graphics library
  * Version:  3.5
  * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -242,6 +242,20 @@ _swsetup_vb_init( GLcontext *ctx )
    setup_func[INDEX|TEX0|FOG|POINT] = rs_index_tex0_fog_point;
 }
 
+static void printSetupFlags(char *msg, GLuint flags )
+{
+   fprintf(stderr, "%s(%x): %s%s%s%s%s%s%s\n",
+	   msg,
+	   (int)flags,
+	   (flags & COLOR) ? "color, " : "",
+	   (flags & INDEX) ? "index, " : "",
+	   (flags & TEX0) ? "tex0, " : "",
+	   (flags & MULTITEX) ? "multitex, " : "",
+	   (flags & SPEC) ? "spec, " : "",
+	   (flags & FOG) ? "fog, " : "",
+	   (flags & POINT) ? "point, " : "");
+}
+
 
 void 
 _swsetup_choose_rastersetup_func(GLcontext *ctx)
@@ -250,7 +264,7 @@ _swsetup_choose_rastersetup_func(GLcontext *ctx)
    int funcindex = 0;
 
    if (ctx->RenderMode == GL_RENDER) {
-      if (ctx->Visual.RGBAflag) {
+      if (ctx->Visual.rgbMode) {
          funcindex = COLOR;
 
          if (ctx->Texture._ReallyEnabled & ~0xf) 
@@ -273,7 +287,7 @@ _swsetup_choose_rastersetup_func(GLcontext *ctx)
 	 funcindex |= FOG;
    }
    else if (ctx->RenderMode == GL_FEEDBACK) {
-      if (ctx->Visual.RGBAflag) 
+      if (ctx->Visual.rgbMode) 
 	 funcindex = (COLOR | TEX0); /* is feedback color subject to fogging? */
       else
 	 funcindex = (INDEX | TEX0);
@@ -281,6 +295,7 @@ _swsetup_choose_rastersetup_func(GLcontext *ctx)
    else
       funcindex = 0;
 
+/*     printSetupFlags("software setup func", funcindex); */
    swsetup->BuildProjVerts = setup_func[funcindex];
    ASSERT(setup_func[funcindex] != rs_invalid);
 }

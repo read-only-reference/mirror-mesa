@@ -1,10 +1,10 @@
-/* $Id: rastpos.c,v 1.18 2000/12/26 05:09:29 keithw Exp $ */
+/* $Id: rastpos.c,v 1.20 2001/01/23 23:39:36 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -52,7 +52,8 @@
  * Return:  0 = outside view volume
  *          1 = inside view volume
  */
-static GLuint gl_viewclip_point( const GLfloat v[] )
+static GLuint
+viewclip_point( const GLfloat v[] )
 {
    if (   v[0] > v[3] || v[0] < -v[3]
        || v[1] > v[3] || v[1] < -v[3]
@@ -64,13 +65,15 @@ static GLuint gl_viewclip_point( const GLfloat v[] )
    }
 }
 
+
 /*
  * Clip a point against the user clipping planes.
  * Input:  v - vertex-vector describing the point to clip.
  * Return:  0 = point was clipped
  *          1 = point not clipped
  */
-static GLuint gl_userclip_point( GLcontext* ctx, const GLfloat v[] )
+static GLuint
+userclip_point( GLcontext* ctx, const GLfloat v[] )
 {
    GLuint p;
 
@@ -94,11 +97,12 @@ static GLuint gl_userclip_point( GLcontext* ctx, const GLfloat v[] )
  * get a little closer to the vertex buffer, and to use the
  * GLvector objects directly.
  */
-static void gl_shade_rastpos( GLcontext *ctx,
-			      GLfloat vertex[4],
-			      GLfloat normal[3],
-			      GLfloat Rcolor[4],
-			      GLuint *index )
+static void
+shade_rastpos(GLcontext *ctx,
+              const GLfloat vertex[4],
+              const GLfloat normal[3],
+              GLfloat Rcolor[4],
+              GLuint *index)
 {
    GLfloat (*base)[3] = ctx->Light._BaseColor;
    const GLchan *sumA = ctx->Light._BaseAlpha;
@@ -136,15 +140,13 @@ static void gl_shade_rastpos( GLcontext *ctx,
 			       (light->LinearAttenuation + d *
 				light->QuadraticAttenuation));
 	
-	 if (light->_Flags & LIGHT_SPOT)
-	 {
+	 if (light->_Flags & LIGHT_SPOT) {
 	    GLfloat PV_dot_dir = - DOT3(VP, light->_NormDirection);
 	
 	    if (PV_dot_dir<light->_CosCutoff) {
 	       continue;
 	    }
-	    else
-	    {
+	    else {
 	       double x = PV_dot_dir * (EXP_TABLE_SIZE-1);
 	       int k = (int) x;
 	       GLfloat spot = (GLfloat) (light->_SpotExpTable[k][0]
@@ -213,7 +215,7 @@ static void gl_shade_rastpos( GLcontext *ctx,
       ACC_SCALE_SCALAR_3V( color, attenuation, contrib );
    }
 
-   if (ctx->Visual.RGBAflag) {
+   if (ctx->Visual.rgbMode) {
       Rcolor[0] = CLAMP(color[0], 0.0F, 1.0F);
       Rcolor[1] = CLAMP(color[1], 0.0F, 1.0F);
       Rcolor[2] = CLAMP(color[2], 0.0F, 1.0F);
@@ -237,8 +239,8 @@ static void gl_shade_rastpos( GLcontext *ctx,
 /*
  * Caller:  context->API.RasterPos4f
  */
-static void raster_pos4f( GLcontext *ctx,
-                          GLfloat x, GLfloat y, GLfloat z, GLfloat w )
+static void
+raster_pos4f(GLcontext *ctx, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
 {
    GLfloat v[4], eye[4], clip[4], ndc[3], d;
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
@@ -251,8 +253,7 @@ static void raster_pos4f( GLcontext *ctx,
    TRANSFORM_POINT( eye, ctx->ModelView.m, v );
 
    /* raster color */
-   if (ctx->Light.Enabled)
-   {
+   if (ctx->Light.Enabled) {
       GLfloat *norm, eyenorm[3];
       GLfloat *objnorm = ctx->Current.Normal;
 
@@ -260,18 +261,19 @@ static void raster_pos4f( GLcontext *ctx,
 	 GLfloat *inv = ctx->ModelView.inv;
 	 TRANSFORM_NORMAL( eyenorm, objnorm, inv );
 	 norm = eyenorm;
-      } else {
+      }
+      else {
 	 norm = objnorm;
       }
 
-      gl_shade_rastpos( ctx, v, norm,
-			ctx->Current.RasterColor,
-			&ctx->Current.RasterIndex );
+      shade_rastpos( ctx, v, norm,
+                     ctx->Current.RasterColor,
+                     &ctx->Current.RasterIndex );
 
    }
    else {
       /* use current color or index */
-      if (ctx->Visual.RGBAflag) {
+      if (ctx->Visual.rgbMode) {
          ctx->Current.RasterColor[0] = CHAN_TO_FLOAT(ctx->Current.Color[0]);
          ctx->Current.RasterColor[1] = CHAN_TO_FLOAT(ctx->Current.Color[1]);
          ctx->Current.RasterColor[2] = CHAN_TO_FLOAT(ctx->Current.Color[2]);
@@ -290,15 +292,14 @@ static void raster_pos4f( GLcontext *ctx,
    TRANSFORM_POINT( clip, ctx->ProjectionMatrix.m, eye );
 
    /* clip to view volume */
-   if (gl_viewclip_point( clip )==0) {
+   if (viewclip_point( clip )==0) {
       ctx->Current.RasterPosValid = GL_FALSE;
       return;
    }
 
    /* clip to user clipping planes */
-   if ( ctx->Transform._AnyClip &&
-	gl_userclip_point(ctx, clip) == 0)
-   {
+   if (ctx->Transform._AnyClip &&
+       userclip_point(ctx, clip) == 0) {
       ctx->Current.RasterPosValid = GL_FALSE;
       return;
    }
@@ -315,7 +316,7 @@ static void raster_pos4f( GLcontext *ctx,
    ctx->Current.RasterPos[1] = (ndc[1] * ctx->Viewport._WindowMap.m[MAT_SY] +
 				ctx->Viewport._WindowMap.m[MAT_TY]);
    ctx->Current.RasterPos[2] = (ndc[2] * ctx->Viewport._WindowMap.m[MAT_SZ] +
-				ctx->Viewport._WindowMap.m[MAT_TZ]) / ctx->Visual.DepthMaxF;
+				ctx->Viewport._WindowMap.m[MAT_TZ]) / ctx->DepthMaxF;
    ctx->Current.RasterPos[3] = clip[3];
    ctx->Current.RasterPosValid = GL_TRUE;
 

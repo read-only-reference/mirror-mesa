@@ -1,10 +1,10 @@
-/* $Id: t_array_api.c,v 1.1 2000/12/26 05:09:32 keithw Exp $ */
+/* $Id: t_array_api.c,v 1.4 2001/01/24 00:04:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -101,9 +101,9 @@ _tnl_DrawArrays(GLenum mode, GLint start, GLsizei count)
        * because the array range is too large to process in a single
        * VB.  In GL_EXECUTE mode, this introduces two redundant
        * operations: producing the flag array and computing the orflag
-       * of the flag array. 
+       * of the flag array.
        */
-#if 0
+#if 1
       if (_tnl_hard_begin( ctx, mode )) {
 	 GLuint j;
 	 for (j = 0 ; j < count ; ) {
@@ -127,8 +127,7 @@ _tnl_DrawArrays(GLenum mode, GLint start, GLsizei count)
 #else
       /* Simple alternative to above code.
        */
-/*        if (_tnl_hard_begin( ctx, mode ))  */
-      _tnl_begin(ctx,mode);
+      if (_tnl_hard_begin( ctx, mode )) 
       {
 	 GLuint i;
 	 for (i=start;i<count;i++) {
@@ -149,7 +148,7 @@ static void _tnl_draw_range_elements( GLcontext *ctx, GLenum mode,
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    FLUSH_CURRENT( ctx, 0 );
-   
+
    _tnl_vb_bind_arrays( ctx, start, end );
 
    tnl->vb.FirstPrimitive = 0;
@@ -261,11 +260,11 @@ _tnl_DrawRangeElements(GLenum mode,
 		     "elements outside locked range.");
       }
    }
-   else if (end - start < ctx->Const.MaxArrayLockSize) {
+   else if (end + 1 - start < ctx->Const.MaxArrayLockSize) {
       /* The arrays aren't locked but we can still fit them inside a single
        * vertexbuffer.
        */
-      _tnl_draw_range_elements( ctx, mode, start, end, count, ui_indices );
+      _tnl_draw_range_elements( ctx, mode, start, end + 1, count, ui_indices );
    } else {
       /* Range is too big to optimize:
        */
@@ -293,7 +292,8 @@ _tnl_DrawElements(GLenum mode, GLsizei count, GLenum type,
 
    ui_indices = (GLuint *)_ac_import_elements( ctx, GL_UNSIGNED_INT, 
 					       count, type, indices );
-            
+
+#if 1            
    if (ctx->Array.LockCount) {
       _tnl_draw_range_elements( ctx, mode, 
 				ctx->Array.LockFirst,
@@ -310,11 +310,14 @@ _tnl_DrawElements(GLenum mode, GLsizei count, GLenum type,
 	 if (ui_indices[i] > max_elt) max_elt = ui_indices[i];
 
       if (max_elt < ctx->Const.MaxArrayLockSize && /* can we use it? */
-	  max_elt < count)	                   /* do we want to use it? */
-	 _tnl_draw_range_elements( ctx, mode, 0, max_elt, count, ui_indices );
+	  max_elt < count) 	                   /* do we want to use it? */
+	 _tnl_draw_range_elements( ctx, mode, 0, max_elt + 1, count, ui_indices );
       else
 	 _tnl_draw_elements( ctx, mode, count, ui_indices );
    }
+#else
+	 _tnl_draw_elements( ctx, mode, count, ui_indices );
+#endif
 }
 
 
@@ -333,8 +336,16 @@ void _tnl_array_init( GLcontext *ctx )
     */
    gl_vector4f_init( &tmp->Obj, 0, 0 );
    gl_vector3f_init( &tmp->Normal, 0, 0 );
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
    gl_vector4ub_init( &tmp->Color, 0, 0 );
    gl_vector4ub_init( &tmp->SecondaryColor, 0, 0 );
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+   gl_vector4us_init( &tmp->Color, 0, 0 );
+   gl_vector4us_init( &tmp->SecondaryColor, 0, 0 );
+#elif CHAN_TYPE == GL_FLOAT
+   gl_vector4f_init( &tmp->Color, 0, 0 );
+   gl_vector4f_init( &tmp->SecondaryColor, 0, 0 );
+#endif
    gl_vector1f_init( &tmp->FogCoord, 0, 0 );
    gl_vector1ui_init( &tmp->Index, 0, 0 );
    gl_vector1ub_init( &tmp->EdgeFlag, 0, 0 );

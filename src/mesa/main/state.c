@@ -1,4 +1,4 @@
-/* $Id: state.c,v 1.53 2000/12/26 05:09:29 keithw Exp $ */
+/* $Id: state.c,v 1.55 2001/01/24 04:56:20 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -420,9 +420,6 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->PointParameterfEXT = _mesa_PointParameterfEXT;
    exec->PointParameterfvEXT = _mesa_PointParameterfvEXT;
 
-   /* 77. GL_PGI_misc_hints */
-   exec->HintPGI = _mesa_HintPGI;
-
    /* 78. GL_EXT_paletted_texture */
 #if 0
    exec->ColorTableEXT = _mesa_ColorTableEXT;
@@ -501,8 +498,8 @@ update_polygon( GLcontext *ctx )
 {
    ctx->_TriangleCaps &= ~(DD_TRI_CULL_FRONT_BACK | DD_TRI_OFFSET);
 
-/*     if (ctx->Polygon.CullFlag && ctx->Polygon.CullFaceMode == GL_FRONT_AND_BACK) */
-/*        ctx->_TriangleCaps |= DD_TRI_CULL_FRONT_BACK; */
+   if (ctx->Polygon.CullFlag && ctx->Polygon.CullFaceMode == GL_FRONT_AND_BACK)
+      ctx->_TriangleCaps |= DD_TRI_CULL_FRONT_BACK;
 
    /* Any Polygon offsets enabled? */
    ctx->Polygon._OffsetAny = GL_FALSE;

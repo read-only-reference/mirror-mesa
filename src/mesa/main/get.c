@@ -1,10 +1,10 @@
-/* $Id: get.c,v 1.48 2000/12/26 05:09:28 keithw Exp $ */
+/* $Id: get.c,v 1.52 2001/01/24 04:56:20 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -105,16 +105,16 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 
    switch (pname) {
       case GL_ACCUM_RED_BITS:
-         *params = INT_TO_BOOL(ctx->Visual.AccumRedBits);
+         *params = INT_TO_BOOL(ctx->Visual.accumRedBits);
          break;
       case GL_ACCUM_GREEN_BITS:
-         *params = INT_TO_BOOL(ctx->Visual.AccumGreenBits);
+         *params = INT_TO_BOOL(ctx->Visual.accumGreenBits);
          break;
       case GL_ACCUM_BLUE_BITS:
-         *params = INT_TO_BOOL(ctx->Visual.AccumBlueBits);
+         *params = INT_TO_BOOL(ctx->Visual.accumBlueBits);
          break;
       case GL_ACCUM_ALPHA_BITS:
-         *params = INT_TO_BOOL(ctx->Visual.AccumAlphaBits);
+         *params = INT_TO_BOOL(ctx->Visual.accumAlphaBits);
          break;
       case GL_ACCUM_CLEAR_VALUE:
          params[0] = FLOAT_TO_BOOL(ctx->Accum.ClearColor[0]);
@@ -126,7 +126,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = FLOAT_TO_BOOL(ctx->Pixel.AlphaBias);
          break;
       case GL_ALPHA_BITS:
-         *params = INT_TO_BOOL(ctx->Visual.AlphaBits);
+         *params = INT_TO_BOOL(ctx->Visual.alphaBits);
          break;
       case GL_ALPHA_SCALE:
          *params = FLOAT_TO_BOOL(ctx->Pixel.AlphaScale);
@@ -183,7 +183,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = FLOAT_TO_BOOL(ctx->Pixel.BlueBias);
          break;
       case GL_BLUE_BITS:
-         *params = INT_TO_BOOL( ctx->Visual.BlueBits );
+         *params = INT_TO_BOOL( ctx->Visual.blueBits );
          break;
       case GL_BLUE_SCALE:
          *params = FLOAT_TO_BOOL(ctx->Pixel.BlueScale);
@@ -200,10 +200,10 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = ctx->Transform.ClipEnabled[pname-GL_CLIP_PLANE0];
          break;
       case GL_COLOR_CLEAR_VALUE:
-         params[0] = FLOAT_TO_BOOL(ctx->Color.ClearColor[0]);
-         params[1] = FLOAT_TO_BOOL(ctx->Color.ClearColor[1]);
-         params[2] = FLOAT_TO_BOOL(ctx->Color.ClearColor[2]);
-         params[3] = FLOAT_TO_BOOL(ctx->Color.ClearColor[3]);
+         params[0] = ctx->Color.ClearColor[0] ? GL_TRUE : GL_FALSE;
+         params[1] = ctx->Color.ClearColor[1] ? GL_TRUE : GL_FALSE;
+         params[2] = ctx->Color.ClearColor[2] ? GL_TRUE : GL_FALSE;
+         params[3] = ctx->Color.ClearColor[3] ? GL_TRUE : GL_FALSE;
          break;
       case GL_COLOR_MATERIAL:
          *params = ctx->Light.ColorMaterialEnabled;
@@ -281,7 +281,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = FLOAT_TO_BOOL(ctx->Pixel.DepthBias);
 	 break;
       case GL_DEPTH_BITS:
-	 *params = INT_TO_BOOL(ctx->Visual.DepthBits);
+	 *params = INT_TO_BOOL(ctx->Visual.depthBits);
 	 break;
       case GL_DEPTH_CLEAR_VALUE:
          *params = FLOAT_TO_BOOL(ctx->Depth.Clear);
@@ -306,7 +306,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 *params = ctx->Color.DitherFlag;
 	 break;
       case GL_DOUBLEBUFFER:
-	 *params = ctx->Visual.DBflag;
+	 *params = ctx->Visual.doubleBufferMode;
 	 break;
       case GL_DRAW_BUFFER:
 	 *params = ENUM_TO_BOOL(ctx->Color.DrawBuffer);
@@ -355,7 +355,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = FLOAT_TO_BOOL(ctx->Pixel.GreenBias);
 	 break;
       case GL_GREEN_BITS:
-         *params = INT_TO_BOOL( ctx->Visual.GreenBits );
+         *params = INT_TO_BOOL( ctx->Visual.greenBits );
 	 break;
       case GL_GREEN_SCALE:
          *params = FLOAT_TO_BOOL(ctx->Pixel.GreenScale);
@@ -370,13 +370,13 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          }
 	 break;
       case GL_INDEX_BITS:
-         *params = INT_TO_BOOL( ctx->Visual.IndexBits );
+         *params = INT_TO_BOOL( ctx->Visual.indexBits );
 	 break;
       case GL_INDEX_CLEAR_VALUE:
 	 *params = INT_TO_BOOL(ctx->Color.ClearIndex);
 	 break;
       case GL_INDEX_MODE:
-	 *params = ctx->Visual.RGBAflag ? GL_FALSE : GL_TRUE;
+	 *params = ctx->Visual.rgbMode ? GL_FALSE : GL_TRUE;
 	 break;
       case GL_INDEX_OFFSET:
 	 *params = INT_TO_BOOL(ctx->Pixel.IndexOffset);
@@ -735,7 +735,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = FLOAT_TO_BOOL(ctx->Pixel.RedBias);
 	 break;
       case GL_RED_BITS:
-         *params = INT_TO_BOOL( ctx->Visual.RedBits );
+         *params = INT_TO_BOOL( ctx->Visual.redBits );
 	 break;
       case GL_RED_SCALE:
          *params = FLOAT_TO_BOOL(ctx->Pixel.RedScale);
@@ -747,7 +747,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = ctx->Transform.RescaleNormals;
          break;
       case GL_RGBA_MODE:
-         *params = ctx->Visual.RGBAflag;
+         *params = ctx->Visual.rgbMode;
 	 break;
       case GL_SCISSOR_BOX:
 	 params[0] = INT_TO_BOOL(ctx->Scissor.X);
@@ -768,7 +768,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = ctx->Texture.SharedPalette;
          break;
       case GL_STENCIL_BITS:
-	 *params = INT_TO_BOOL(ctx->Visual.StencilBits);
+	 *params = INT_TO_BOOL(ctx->Visual.stencilBits);
 	 break;
       case GL_STENCIL_CLEAR_VALUE:
 	 *params = INT_TO_BOOL(ctx->Stencil.Clear);
@@ -798,7 +798,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 *params = INT_TO_BOOL(ctx->Stencil.WriteMask);
 	 break;
       case GL_STEREO:
-	 *params = ctx->Visual.StereoFlag;
+	 *params = ctx->Visual.stereoMode;
 	 break;
       case GL_SUBPIXEL_BITS:
 	 *params = INT_TO_BOOL(ctx->Const.SubPixelBits);
@@ -1020,56 +1020,6 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          else
             gl_error(ctx, GL_INVALID_ENUM, "glGetBooleanv");
          break;
-
-      /* GL_PGI_misc_hints */
-      case GL_STRICT_DEPTHFUNC_HINT_PGI:
-	 *params = ENUM_TO_BOOL(GL_NICEST);
-         break;
-      case GL_STRICT_LIGHTING_HINT_PGI:
-	 *params = ENUM_TO_BOOL(ctx->Hint.StrictLighting);
-	 break;
-      case GL_STRICT_SCISSOR_HINT_PGI:
-      case GL_FULL_STIPPLE_HINT_PGI:
-	 *params = ENUM_TO_BOOL(GL_TRUE);
-	 break;
-      case GL_CONSERVE_MEMORY_HINT_PGI:
-	 *params = ENUM_TO_BOOL(GL_FALSE);
-	 break;
-      case GL_ALWAYS_FAST_HINT_PGI:
-	 *params = (GLboolean) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawFrg == GL_FALSE &&
-			      ctx->Hint.AllowDrawMem == GL_FALSE);
-	 break;
-      case GL_ALWAYS_SOFT_HINT_PGI:
-	 *params = (GLboolean) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawFrg == GL_TRUE &&
-			      ctx->Hint.AllowDrawMem == GL_TRUE);
-	 break;
-      case GL_ALLOW_DRAW_OBJ_HINT_PGI:
-	 *params = (GLboolean) GL_TRUE;
-	 break;
-      case GL_ALLOW_DRAW_WIN_HINT_PGI:
-	 *params = (GLboolean) ctx->Hint.AllowDrawWin;
-	 break;
-      case GL_ALLOW_DRAW_FRG_HINT_PGI:
-	 *params = (GLboolean) ctx->Hint.AllowDrawFrg;
-	 break;
-      case GL_ALLOW_DRAW_MEM_HINT_PGI:
-	 *params = (GLboolean) ctx->Hint.AllowDrawMem;
-	 break;
-      case GL_CLIP_NEAR_HINT_PGI:
-      case GL_CLIP_FAR_HINT_PGI:
-	 *params = ENUM_TO_BOOL(GL_TRUE);
-	 break;
-      case GL_WIDE_LINE_HINT_PGI:
-	 *params = ENUM_TO_BOOL(GL_DONT_CARE);
-	 break;
-      case GL_BACK_NORMALS_HINT_PGI:
-	 *params = ENUM_TO_BOOL(GL_TRUE);
-	 break;
-      case GL_NATIVE_GRAPHICS_HANDLE_PGI:
-	 *params = 0;
-	 break;
 
       /* GL_EXT_compiled_vertex_array */
       case GL_ARRAY_ELEMENT_LOCK_FIRST_EXT:
@@ -1343,16 +1293,16 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 
    switch (pname) {
       case GL_ACCUM_RED_BITS:
-         *params = (GLdouble) ctx->Visual.AccumRedBits;
+         *params = (GLdouble) ctx->Visual.accumRedBits;
          break;
       case GL_ACCUM_GREEN_BITS:
-         *params = (GLdouble) ctx->Visual.AccumGreenBits;
+         *params = (GLdouble) ctx->Visual.accumGreenBits;
          break;
       case GL_ACCUM_BLUE_BITS:
-         *params = (GLdouble) ctx->Visual.AccumBlueBits;
+         *params = (GLdouble) ctx->Visual.accumBlueBits;
          break;
       case GL_ACCUM_ALPHA_BITS:
-         *params = (GLdouble) ctx->Visual.AccumAlphaBits;
+         *params = (GLdouble) ctx->Visual.accumAlphaBits;
          break;
       case GL_ACCUM_CLEAR_VALUE:
          params[0] = (GLdouble) ctx->Accum.ClearColor[0];
@@ -1364,7 +1314,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) ctx->Pixel.AlphaBias;
          break;
       case GL_ALPHA_BITS:
-         *params = (GLdouble) ctx->Visual.AlphaBits;
+         *params = (GLdouble) ctx->Visual.alphaBits;
          break;
       case GL_ALPHA_SCALE:
          *params = (GLdouble) ctx->Pixel.AlphaScale;
@@ -1421,7 +1371,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) ctx->Pixel.BlueBias;
          break;
       case GL_BLUE_BITS:
-         *params = (GLdouble) ctx->Visual.BlueBits;
+         *params = (GLdouble) ctx->Visual.blueBits;
          break;
       case GL_BLUE_SCALE:
          *params = (GLdouble) ctx->Pixel.BlueScale;
@@ -1438,10 +1388,10 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) ctx->Transform.ClipEnabled[pname-GL_CLIP_PLANE0];
          break;
       case GL_COLOR_CLEAR_VALUE:
-         params[0] = (GLdouble) ctx->Color.ClearColor[0];
-         params[1] = (GLdouble) ctx->Color.ClearColor[1];
-         params[2] = (GLdouble) ctx->Color.ClearColor[2];
-         params[3] = (GLdouble) ctx->Color.ClearColor[3];
+         params[0] = (GLdouble) CHAN_TO_FLOAT(ctx->Color.ClearColor[0]);
+         params[1] = (GLdouble) CHAN_TO_FLOAT(ctx->Color.ClearColor[1]);
+         params[2] = (GLdouble) CHAN_TO_FLOAT(ctx->Color.ClearColor[2]);
+         params[3] = (GLdouble) CHAN_TO_FLOAT(ctx->Color.ClearColor[3]);
          break;
       case GL_COLOR_MATERIAL:
          *params = (GLdouble) ctx->Light.ColorMaterialEnabled;
@@ -1519,7 +1469,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 *params = (GLdouble) ctx->Pixel.DepthBias;
 	 break;
       case GL_DEPTH_BITS:
-	 *params = (GLdouble) ctx->Visual.DepthBits;
+	 *params = (GLdouble) ctx->Visual.depthBits;
 	 break;
       case GL_DEPTH_CLEAR_VALUE:
 	 *params = (GLdouble) ctx->Depth.Clear;
@@ -1544,7 +1494,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 *params = (GLdouble) ctx->Color.DitherFlag;
 	 break;
       case GL_DOUBLEBUFFER:
-	 *params = (GLdouble) ctx->Visual.DBflag;
+	 *params = (GLdouble) ctx->Visual.doubleBufferMode;
 	 break;
       case GL_DRAW_BUFFER:
 	 *params = ENUM_TO_DOUBLE(ctx->Color.DrawBuffer);
@@ -1593,7 +1543,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) ctx->Pixel.GreenBias;
          break;
       case GL_GREEN_BITS:
-         *params = (GLdouble) ctx->Visual.GreenBits;
+         *params = (GLdouble) ctx->Visual.greenBits;
          break;
       case GL_GREEN_SCALE:
          *params = (GLdouble) ctx->Pixel.GreenScale;
@@ -1608,13 +1558,13 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          }
 	 break;
       case GL_INDEX_BITS:
-         *params = (GLdouble) ctx->Visual.IndexBits;
+         *params = (GLdouble) ctx->Visual.indexBits;
 	 break;
       case GL_INDEX_CLEAR_VALUE:
          *params = (GLdouble) ctx->Color.ClearIndex;
 	 break;
       case GL_INDEX_MODE:
-	 *params = ctx->Visual.RGBAflag ? 0.0 : 1.0;
+	 *params = ctx->Visual.rgbMode ? 0.0 : 1.0;
 	 break;
       case GL_INDEX_OFFSET:
 	 *params = (GLdouble) ctx->Pixel.IndexOffset;
@@ -1973,7 +1923,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) ctx->Pixel.RedBias;
          break;
       case GL_RED_BITS:
-         *params = (GLdouble) ctx->Visual.RedBits;
+         *params = (GLdouble) ctx->Visual.redBits;
          break;
       case GL_RED_SCALE:
          *params = (GLdouble) ctx->Pixel.RedScale;
@@ -1985,7 +1935,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) ctx->Transform.RescaleNormals;
          break;
       case GL_RGBA_MODE:
-	 *params = (GLdouble) ctx->Visual.RGBAflag;
+	 *params = (GLdouble) ctx->Visual.rgbMode;
 	 break;
       case GL_SCISSOR_BOX:
 	 params[0] = (GLdouble) ctx->Scissor.X;
@@ -2006,7 +1956,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) ctx->Texture.SharedPalette;
          break;
       case GL_STENCIL_BITS:
-         *params = (GLdouble) ctx->Visual.StencilBits;
+         *params = (GLdouble) ctx->Visual.stencilBits;
          break;
       case GL_STENCIL_CLEAR_VALUE:
 	 *params = (GLdouble) ctx->Stencil.Clear;
@@ -2036,7 +1986,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 *params = (GLdouble) ctx->Stencil.WriteMask;
 	 break;
       case GL_STEREO:
-	 *params = (GLdouble) ctx->Visual.StereoFlag;
+	 *params = (GLdouble) ctx->Visual.stereoMode;
 	 break;
       case GL_SUBPIXEL_BITS:
 	 *params = (GLdouble) ctx->Const.SubPixelBits;
@@ -2259,56 +2209,6 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
             gl_error(ctx, GL_INVALID_ENUM, "glGetDoublev");
          break;
 
-      /* GL_PGI_misc_hints */
-      case GL_STRICT_DEPTHFUNC_HINT_PGI:
-	 *params = ENUM_TO_DOUBLE(GL_NICEST);
-         break;
-      case GL_STRICT_LIGHTING_HINT_PGI:
-	 *params = ENUM_TO_DOUBLE(ctx->Hint.StrictLighting);
-	 break;
-      case GL_STRICT_SCISSOR_HINT_PGI:
-      case GL_FULL_STIPPLE_HINT_PGI:
-	 *params = ENUM_TO_DOUBLE(GL_TRUE);
-	 break;
-      case GL_CONSERVE_MEMORY_HINT_PGI:
-	 *params = ENUM_TO_DOUBLE(GL_FALSE);
-	 break;
-      case GL_ALWAYS_FAST_HINT_PGI:
-	 *params = (GLdouble) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawFrg == GL_FALSE &&
-			      ctx->Hint.AllowDrawMem == GL_FALSE);
-	 break;
-      case GL_ALWAYS_SOFT_HINT_PGI:
-	 *params = (GLdouble) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawFrg == GL_TRUE &&
-			      ctx->Hint.AllowDrawMem == GL_TRUE);
-	 break;
-      case GL_ALLOW_DRAW_OBJ_HINT_PGI:
-	 *params = (GLdouble) GL_TRUE;
-	 break;
-      case GL_ALLOW_DRAW_WIN_HINT_PGI:
-	 *params = (GLdouble) ctx->Hint.AllowDrawWin;
-	 break;
-      case GL_ALLOW_DRAW_FRG_HINT_PGI:
-	 *params = (GLdouble) ctx->Hint.AllowDrawFrg;
-	 break;
-      case GL_ALLOW_DRAW_MEM_HINT_PGI:
-	 *params = (GLdouble) ctx->Hint.AllowDrawMem;
-	 break;
-      case GL_CLIP_NEAR_HINT_PGI:
-      case GL_CLIP_FAR_HINT_PGI:
-	 *params = ENUM_TO_DOUBLE(GL_TRUE);
-	 break;
-      case GL_WIDE_LINE_HINT_PGI:
-	 *params = ENUM_TO_DOUBLE(GL_DONT_CARE);
-	 break;
-      case GL_BACK_NORMALS_HINT_PGI:
-	 *params = ENUM_TO_DOUBLE(GL_TRUE);
-	 break;
-      case GL_NATIVE_GRAPHICS_HANDLE_PGI:
-	 *params = 0;
-	 break;
-
       /* GL_EXT_compiled_vertex_array */
       case GL_ARRAY_ELEMENT_LOCK_FIRST_EXT:
 	 *params = (GLdouble) ctx->Array.LockFirst;
@@ -2509,9 +2409,9 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 break;
       case GL_CURRENT_SECONDARY_COLOR_EXT:
 	 FLUSH_CURRENT(ctx, 0);
-         params[0] = UBYTE_COLOR_TO_FLOAT_COLOR(ctx->Current.SecondaryColor[0]);
-         params[1] = UBYTE_COLOR_TO_FLOAT_COLOR(ctx->Current.SecondaryColor[1]);
-         params[2] = UBYTE_COLOR_TO_FLOAT_COLOR(ctx->Current.SecondaryColor[2]);
+         params[0] = CHAN_TO_FLOAT(ctx->Current.SecondaryColor[0]);
+         params[1] = CHAN_TO_FLOAT(ctx->Current.SecondaryColor[1]);
+         params[2] = CHAN_TO_FLOAT(ctx->Current.SecondaryColor[2]);
 	 break;
       case GL_SECONDARY_COLOR_ARRAY_EXT:
          *params = (GLdouble) ctx->Array.SecondaryColor.Enabled;
@@ -2581,16 +2481,16 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 
    switch (pname) {
       case GL_ACCUM_RED_BITS:
-         *params = (GLfloat) ctx->Visual.AccumRedBits;
+         *params = (GLfloat) ctx->Visual.accumRedBits;
          break;
       case GL_ACCUM_GREEN_BITS:
-         *params = (GLfloat) ctx->Visual.AccumGreenBits;
+         *params = (GLfloat) ctx->Visual.accumGreenBits;
          break;
       case GL_ACCUM_BLUE_BITS:
-         *params = (GLfloat) ctx->Visual.AccumBlueBits;
+         *params = (GLfloat) ctx->Visual.accumBlueBits;
          break;
       case GL_ACCUM_ALPHA_BITS:
-         *params = (GLfloat) ctx->Visual.AccumAlphaBits;
+         *params = (GLfloat) ctx->Visual.accumAlphaBits;
          break;
       case GL_ACCUM_CLEAR_VALUE:
          params[0] = ctx->Accum.ClearColor[0];
@@ -2602,7 +2502,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = ctx->Pixel.AlphaBias;
          break;
       case GL_ALPHA_BITS:
-         *params = (GLfloat) ctx->Visual.AlphaBits;
+         *params = (GLfloat) ctx->Visual.alphaBits;
          break;
       case GL_ALPHA_SCALE:
          *params = ctx->Pixel.AlphaScale;
@@ -2659,7 +2559,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = ctx->Pixel.BlueBias;
          break;
       case GL_BLUE_BITS:
-         *params = (GLfloat) ctx->Visual.BlueBits;
+         *params = (GLfloat) ctx->Visual.blueBits;
          break;
       case GL_BLUE_SCALE:
          *params = ctx->Pixel.BlueScale;
@@ -2676,10 +2576,10 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = (GLfloat) ctx->Transform.ClipEnabled[pname-GL_CLIP_PLANE0];
          break;
       case GL_COLOR_CLEAR_VALUE:
-         params[0] = (GLfloat) ctx->Color.ClearColor[0];
-         params[1] = (GLfloat) ctx->Color.ClearColor[1];
-         params[2] = (GLfloat) ctx->Color.ClearColor[2];
-         params[3] = (GLfloat) ctx->Color.ClearColor[3];
+         params[0] = CHAN_TO_FLOAT(ctx->Color.ClearColor[0]);
+         params[1] = CHAN_TO_FLOAT(ctx->Color.ClearColor[1]);
+         params[2] = CHAN_TO_FLOAT(ctx->Color.ClearColor[2]);
+         params[3] = CHAN_TO_FLOAT(ctx->Color.ClearColor[3]);
          break;
       case GL_COLOR_MATERIAL:
          *params = (GLfloat) ctx->Light.ColorMaterialEnabled;
@@ -2757,7 +2657,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = (GLfloat) ctx->Pixel.DepthBias;
 	 break;
       case GL_DEPTH_BITS:
-	 *params = (GLfloat) ctx->Visual.DepthBits;
+	 *params = (GLfloat) ctx->Visual.depthBits;
 	 break;
       case GL_DEPTH_CLEAR_VALUE:
 	 *params = (GLfloat) ctx->Depth.Clear;
@@ -2782,7 +2682,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = (GLfloat) ctx->Color.DitherFlag;
 	 break;
       case GL_DOUBLEBUFFER:
-	 *params = (GLfloat) ctx->Visual.DBflag;
+	 *params = (GLfloat) ctx->Visual.doubleBufferMode;
 	 break;
       case GL_DRAW_BUFFER:
 	 *params = ENUM_TO_FLOAT(ctx->Color.DrawBuffer);
@@ -2831,7 +2731,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = (GLfloat) ctx->Pixel.GreenBias;
          break;
       case GL_GREEN_BITS:
-         *params = (GLfloat) ctx->Visual.GreenBits;
+         *params = (GLfloat) ctx->Visual.greenBits;
          break;
       case GL_GREEN_SCALE:
          *params = (GLfloat) ctx->Pixel.GreenScale;
@@ -2846,13 +2746,13 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          }
 	 break;
       case GL_INDEX_BITS:
-         *params = (GLfloat) ctx->Visual.IndexBits;
+         *params = (GLfloat) ctx->Visual.indexBits;
 	 break;
       case GL_INDEX_CLEAR_VALUE:
          *params = (GLfloat) ctx->Color.ClearIndex;
 	 break;
       case GL_INDEX_MODE:
-	 *params = ctx->Visual.RGBAflag ? 0.0F : 1.0F;
+	 *params = ctx->Visual.rgbMode ? 0.0F : 1.0F;
 	 break;
       case GL_INDEX_OFFSET:
 	 *params = (GLfloat) ctx->Pixel.IndexOffset;
@@ -3213,7 +3113,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = ctx->Pixel.RedBias;
          break;
       case GL_RED_BITS:
-         *params = (GLfloat) ctx->Visual.RedBits;
+         *params = (GLfloat) ctx->Visual.redBits;
          break;
       case GL_RED_SCALE:
          *params = ctx->Pixel.RedScale;
@@ -3225,7 +3125,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = (GLfloat) ctx->Transform.RescaleNormals;
          break;
       case GL_RGBA_MODE:
-	 *params = (GLfloat) ctx->Visual.RGBAflag;
+	 *params = (GLfloat) ctx->Visual.rgbMode;
 	 break;
       case GL_SCISSOR_BOX:
 	 params[0] = (GLfloat) ctx->Scissor.X;
@@ -3246,7 +3146,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = (GLfloat) ctx->Texture.SharedPalette;
          break;
       case GL_STENCIL_BITS:
-         *params = (GLfloat) ctx->Visual.StencilBits;
+         *params = (GLfloat) ctx->Visual.stencilBits;
          break;
       case GL_STENCIL_CLEAR_VALUE:
 	 *params = (GLfloat) ctx->Stencil.Clear;
@@ -3276,7 +3176,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = (GLfloat) ctx->Stencil.WriteMask;
 	 break;
       case GL_STEREO:
-	 *params = (GLfloat) ctx->Visual.StereoFlag;
+	 *params = (GLfloat) ctx->Visual.stereoMode;
 	 break;
       case GL_SUBPIXEL_BITS:
 	 *params = (GLfloat) ctx->Const.SubPixelBits;
@@ -3499,56 +3399,6 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
             gl_error(ctx, GL_INVALID_ENUM, "glGetFloatv");
          break;
 
-      /* GL_PGI_misc_hints */
-      case GL_STRICT_DEPTHFUNC_HINT_PGI:
-	 *params = ENUM_TO_FLOAT(GL_NICEST);
-         break;
-      case GL_STRICT_LIGHTING_HINT_PGI:
-	 *params = ENUM_TO_FLOAT(ctx->Hint.StrictLighting);
-	 break;
-      case GL_STRICT_SCISSOR_HINT_PGI:
-      case GL_FULL_STIPPLE_HINT_PGI:
-	 *params = ENUM_TO_FLOAT(GL_TRUE);
-	 break;
-      case GL_CONSERVE_MEMORY_HINT_PGI:
-	 *params = ENUM_TO_FLOAT(GL_FALSE);
-	 break;
-      case GL_ALWAYS_FAST_HINT_PGI:
-	 *params = (GLfloat) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawFrg == GL_FALSE &&
-			      ctx->Hint.AllowDrawMem == GL_FALSE);
-	 break;
-      case GL_ALWAYS_SOFT_HINT_PGI:
-	 *params = (GLfloat) (ctx->Hint.AllowDrawWin == GL_TRUE &&
-			      ctx->Hint.AllowDrawFrg == GL_TRUE &&
-			      ctx->Hint.AllowDrawMem == GL_TRUE);
-	 break;
-      case GL_ALLOW_DRAW_OBJ_HINT_PGI:
-	 *params = (GLfloat) GL_TRUE;
-	 break;
-      case GL_ALLOW_DRAW_WIN_HINT_PGI:
-	 *params = (GLfloat) ctx->Hint.AllowDrawWin;
-	 break;
-      case GL_ALLOW_DRAW_FRG_HINT_PGI:
-	 *params = (GLfloat) ctx->Hint.AllowDrawFrg;
-	 break;
-      case GL_ALLOW_DRAW_MEM_HINT_PGI:
-	 *params = (GLfloat) ctx->Hint.AllowDrawMem;
-	 break;
-      case GL_CLIP_NEAR_HINT_PGI:
-      case GL_CLIP_FAR_HINT_PGI:
-	 *params = ENUM_TO_FLOAT(GL_TRUE);
-	 break;
-      case GL_WIDE_LINE_HINT_PGI:
-	 *params = ENUM_TO_FLOAT(GL_DONT_CARE);
-	 break;
-      case GL_BACK_NORMALS_HINT_PGI:
-	 *params = ENUM_TO_FLOAT(GL_TRUE);
-	 break;
-      case GL_NATIVE_GRAPHICS_HANDLE_PGI:
-	 *params = 0;
-	 break;
-
       /* GL_EXT_compiled_vertex_array */
       case GL_ARRAY_ELEMENT_LOCK_FIRST_EXT:
 	 *params = (GLfloat) ctx->Array.LockFirst;
@@ -3721,9 +3571,9 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 break;
       case GL_CURRENT_SECONDARY_COLOR_EXT:
 	 FLUSH_CURRENT(ctx, 0);
-         params[0] = UBYTE_COLOR_TO_FLOAT_COLOR(ctx->Current.SecondaryColor[0]);
-         params[1] = UBYTE_COLOR_TO_FLOAT_COLOR(ctx->Current.SecondaryColor[1]);
-         params[2] = UBYTE_COLOR_TO_FLOAT_COLOR(ctx->Current.SecondaryColor[2]);
+         params[0] = CHAN_TO_FLOAT(ctx->Current.SecondaryColor[0]);
+         params[1] = CHAN_TO_FLOAT(ctx->Current.SecondaryColor[1]);
+         params[2] = CHAN_TO_FLOAT(ctx->Current.SecondaryColor[2]);
 	 break;
       case GL_SECONDARY_COLOR_ARRAY_EXT:
          *params = (GLfloat) ctx->Array.SecondaryColor.Enabled;
@@ -3794,16 +3644,16 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 
    switch (pname) {
       case GL_ACCUM_RED_BITS:
-         *params = (GLint) ctx->Visual.AccumRedBits;
+         *params = (GLint) ctx->Visual.accumRedBits;
          break;
       case GL_ACCUM_GREEN_BITS:
-         *params = (GLint) ctx->Visual.AccumGreenBits;
+         *params = (GLint) ctx->Visual.accumGreenBits;
          break;
       case GL_ACCUM_BLUE_BITS:
-         *params = (GLint) ctx->Visual.AccumBlueBits;
+         *params = (GLint) ctx->Visual.accumBlueBits;
          break;
       case GL_ACCUM_ALPHA_BITS:
-         *params = (GLint) ctx->Visual.AccumAlphaBits;
+         *params = (GLint) ctx->Visual.accumAlphaBits;
          break;
       case GL_ACCUM_CLEAR_VALUE:
          params[0] = FLOAT_TO_INT( ctx->Accum.ClearColor[0] );
@@ -3815,7 +3665,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Pixel.AlphaBias;
          break;
       case GL_ALPHA_BITS:
-         *params = ctx->Visual.AlphaBits;
+         *params = ctx->Visual.alphaBits;
          break;
       case GL_ALPHA_SCALE:
          *params = (GLint) ctx->Pixel.AlphaScale;
@@ -3872,7 +3722,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Pixel.BlueBias;
          break;
       case GL_BLUE_BITS:
-         *params = (GLint) ctx->Visual.BlueBits;
+         *params = (GLint) ctx->Visual.blueBits;
          break;
       case GL_BLUE_SCALE:
          *params = (GLint) ctx->Pixel.BlueScale;
@@ -3890,10 +3740,10 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Transform.ClipEnabled[i];
          break;
       case GL_COLOR_CLEAR_VALUE:
-         params[0] = FLOAT_TO_INT( ctx->Color.ClearColor[0] );
-         params[1] = FLOAT_TO_INT( ctx->Color.ClearColor[1] );
-         params[2] = FLOAT_TO_INT( ctx->Color.ClearColor[2] );
-         params[3] = FLOAT_TO_INT( ctx->Color.ClearColor[3] );
+         params[0] = FLOAT_TO_INT( CHAN_TO_FLOAT(ctx->Color.ClearColor[0]) );
+         params[1] = FLOAT_TO_INT( CHAN_TO_FLOAT(ctx->Color.ClearColor[1]) );
+         params[2] = FLOAT_TO_INT( CHAN_TO_FLOAT(ctx->Color.ClearColor[2]) );
+         params[3] = FLOAT_TO_INT( CHAN_TO_FLOAT(ctx->Color.ClearColor[3]) );
          break;
       case GL_COLOR_MATERIAL:
          *params = (GLint) ctx->Light.ColorMaterialEnabled;
@@ -3971,7 +3821,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Pixel.DepthBias;
 	 break;
       case GL_DEPTH_BITS:
-	 *params = ctx->Visual.DepthBits;
+	 *params = ctx->Visual.depthBits;
 	 break;
       case GL_DEPTH_CLEAR_VALUE:
          *params = (GLint) ctx->Depth.Clear;
@@ -3996,7 +3846,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 *params = (GLint) ctx->Color.DitherFlag;
 	 break;
       case GL_DOUBLEBUFFER:
-	 *params = (GLint) ctx->Visual.DBflag;
+	 *params = (GLint) ctx->Visual.doubleBufferMode;
 	 break;
       case GL_DRAW_BUFFER:
 	 *params = (GLint) ctx->Color.DrawBuffer;
@@ -4045,7 +3895,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Pixel.GreenBias;
          break;
       case GL_GREEN_BITS:
-         *params = (GLint) ctx->Visual.GreenBits;
+         *params = (GLint) ctx->Visual.greenBits;
          break;
       case GL_GREEN_SCALE:
          *params = (GLint) ctx->Pixel.GreenScale;
@@ -4060,13 +3910,13 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          }
 	 break;
       case GL_INDEX_BITS:
-         *params = (GLint) ctx->Visual.IndexBits;
+         *params = (GLint) ctx->Visual.indexBits;
          break;
       case GL_INDEX_CLEAR_VALUE:
          *params = (GLint) ctx->Color.ClearIndex;
          break;
       case GL_INDEX_MODE:
-	 *params = ctx->Visual.RGBAflag ? 0 : 1;
+	 *params = ctx->Visual.rgbMode ? 0 : 1;
 	 break;
       case GL_INDEX_OFFSET:
 	 *params = ctx->Pixel.IndexOffset;
@@ -4425,7 +4275,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Pixel.RedBias;
          break;
       case GL_RED_BITS:
-         *params = (GLint) ctx->Visual.RedBits;
+         *params = (GLint) ctx->Visual.redBits;
          break;
       case GL_RED_SCALE:
          *params = (GLint) ctx->Pixel.RedScale;
@@ -4437,7 +4287,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Transform.RescaleNormals;
          break;
       case GL_RGBA_MODE:
-	 *params = (GLint) ctx->Visual.RGBAflag;
+	 *params = (GLint) ctx->Visual.rgbMode;
 	 break;
       case GL_SCISSOR_BOX:
 	 params[0] = (GLint) ctx->Scissor.X;
@@ -4458,7 +4308,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Texture.SharedPalette;
          break;
       case GL_STENCIL_BITS:
-         *params = ctx->Visual.StencilBits;
+         *params = ctx->Visual.stencilBits;
          break;
       case GL_STENCIL_CLEAR_VALUE:
 	 *params = (GLint) ctx->Stencil.Clear;
@@ -4488,7 +4338,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 *params = (GLint) ctx->Stencil.WriteMask;
 	 break;
       case GL_STEREO:
-	 *params = (GLint) ctx->Visual.StereoFlag;
+	 *params = (GLint) ctx->Visual.stereoMode;
 	 break;
       case GL_SUBPIXEL_BITS:
 	 *params = ctx->Const.SubPixelBits;
@@ -4711,56 +4561,6 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
             gl_error(ctx, GL_INVALID_ENUM, "glGetIntegerv");
          break;
 
-      /* GL_PGI_misc_hints */
-      case GL_STRICT_DEPTHFUNC_HINT_PGI:
-	 *params = (GL_NICEST);
-         break;
-      case GL_STRICT_LIGHTING_HINT_PGI:
-	 *params = (ctx->Hint.StrictLighting);
-	 break;
-      case GL_STRICT_SCISSOR_HINT_PGI:
-      case GL_FULL_STIPPLE_HINT_PGI:
-	 *params = GL_TRUE;
-	 break;
-      case GL_CONSERVE_MEMORY_HINT_PGI:
-	 *params = GL_FALSE;
-	 break;
-      case GL_ALWAYS_FAST_HINT_PGI:
-	 *params = (ctx->Hint.AllowDrawWin == GL_TRUE &&
-		    ctx->Hint.AllowDrawFrg == GL_FALSE &&
-		    ctx->Hint.AllowDrawMem == GL_FALSE);
-	 break;
-      case GL_ALWAYS_SOFT_HINT_PGI:
-	 *params =  (ctx->Hint.AllowDrawWin == GL_TRUE &&
-		     ctx->Hint.AllowDrawFrg == GL_TRUE &&
-		     ctx->Hint.AllowDrawMem == GL_TRUE);
-	 break;
-      case GL_ALLOW_DRAW_OBJ_HINT_PGI:
-	 *params = GL_TRUE;
-	 break;
-      case GL_ALLOW_DRAW_WIN_HINT_PGI:
-	 *params = ctx->Hint.AllowDrawWin;
-	 break;
-      case GL_ALLOW_DRAW_FRG_HINT_PGI:
-	 *params = ctx->Hint.AllowDrawFrg;
-	 break;
-      case GL_ALLOW_DRAW_MEM_HINT_PGI:
-	 *params = ctx->Hint.AllowDrawMem;
-	 break;
-      case GL_CLIP_NEAR_HINT_PGI:
-      case GL_CLIP_FAR_HINT_PGI:
-	 *params = GL_TRUE;
-	 break;
-      case GL_WIDE_LINE_HINT_PGI:
-	 *params = GL_DONT_CARE;
-	 break;
-      case GL_BACK_NORMALS_HINT_PGI:
-	 *params = GL_TRUE;
-	 break;
-      case GL_NATIVE_GRAPHICS_HANDLE_PGI:
-	 *params = 0;
-	 break;
-
       /* GL_EXT_compiled_vertex_array */
       case GL_ARRAY_ELEMENT_LOCK_FIRST_EXT:
 	 *params = ctx->Array.LockFirst;
@@ -4962,9 +4762,9 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 break;
       case GL_CURRENT_SECONDARY_COLOR_EXT:
 	 FLUSH_CURRENT(ctx, 0);
-         params[0] = FLOAT_TO_INT( UBYTE_COLOR_TO_FLOAT_COLOR( ctx->Current.SecondaryColor[0] ) );
-         params[1] = FLOAT_TO_INT( UBYTE_COLOR_TO_FLOAT_COLOR( ctx->Current.SecondaryColor[1] ) );
-         params[2] = FLOAT_TO_INT( UBYTE_COLOR_TO_FLOAT_COLOR( ctx->Current.SecondaryColor[2] ) );
+         params[0] = FLOAT_TO_INT( CHAN_TO_FLOAT(ctx->Current.SecondaryColor[0]) );
+         params[1] = FLOAT_TO_INT( CHAN_TO_FLOAT(ctx->Current.SecondaryColor[1]) );
+         params[2] = FLOAT_TO_INT( CHAN_TO_FLOAT(ctx->Current.SecondaryColor[2]) );
 	 break;
       case GL_SECONDARY_COLOR_ARRAY_EXT:
          *params = (GLint) ctx->Array.SecondaryColor.Enabled;

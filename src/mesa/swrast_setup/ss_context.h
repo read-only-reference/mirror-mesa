@@ -44,16 +44,24 @@ typedef struct {
 			   GLuint start, GLuint end, GLuint new_inputs );
 
    void (*Quad)( GLcontext *ctx, GLuint v0, GLuint v1,
-		 GLuint v2, GLuint v3, GLuint pv );
+		 GLuint v2, GLuint v3 );
 
    void (*Triangle)( GLcontext *ctx, GLuint v0, GLuint v1,
-		     GLuint v2, GLuint pv );
+		     GLuint v2 );
 
-   void (*Line)( GLcontext *ctx, GLuint v0, GLuint v1, GLuint pv );
+   void (*Line)( GLcontext *ctx, GLuint v0, GLuint v1 );
 
    void (*Points)( GLcontext *ctx, GLuint first, GLuint last );
 
+   void (*RenderCopyPV)( GLcontext *ctx, GLuint dst, GLuint src );
+
+   void (*RenderInterp)( GLcontext *ctx, GLfloat t, 
+			 GLuint dst, GLuint out, GLuint in,
+			 GLboolean force_boundary );
+
+
    SWvertex *verts;
+   GLenum render_prim;
 
 } SScontext;
 

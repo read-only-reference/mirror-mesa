@@ -1,4 +1,4 @@
-/* $Id: t_vb_vertex.c,v 1.1 2000/12/26 05:09:33 keithw Exp $ */
+/* $Id: t_vb_vertex.c,v 1.3 2001/01/29 20:47:39 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -134,7 +134,8 @@ static GLboolean run_vertex_stage( GLcontext *ctx,
 				   struct gl_pipeline_stage *stage )
 {
    struct vertex_stage_data *store = (struct vertex_stage_data *)stage->private;
-   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb; 
+   TNLcontext *tnl = TNL_CONTEXT(ctx); 
+   struct vertex_buffer *VB = &tnl->vb; 
    
    if (stage->changed_inputs) 
    {
@@ -159,11 +160,24 @@ static GLboolean run_vertex_stage( GLcontext *ctx,
       {
 	 /* Combined modelviewproject transform:
 	  */
-	 if (ctx->_ModelProjectMatrix.type == MATRIX_IDENTITY)
+	 if (ctx->_ModelProjectMatrix.type == MATRIX_IDENTITY) 
 	    VB->ClipPtr = VB->ObjPtr;
 	 else
 	    VB->ClipPtr = TransformRaw( &store->clip, &ctx->_ModelProjectMatrix,
 					VB->ObjPtr );
+      }
+
+      /* Drivers expect this to be clean to element 4...
+       */
+      if (VB->ClipPtr->size < 4) {
+	 if (VB->ClipPtr->flags & VEC_NOT_WRITEABLE) {
+	    ASSERT(VB->ClipPtr == VB->ObjPtr);
+	    VB->import_data( ctx, VERT_OBJ, VEC_NOT_WRITEABLE );
+	    VB->ClipPtr = VB->ObjPtr;
+	 }
+	 if (VB->ClipPtr->size == 2) 
+	    gl_vector4f_clean_elem( VB->ClipPtr, VB->Count, 2 );
+	 gl_vector4f_clean_elem( VB->ClipPtr, VB->Count, 3 );
       }
 
       /* Cliptest and perspective divide.  Clip functions must clear
@@ -172,12 +186,22 @@ static GLboolean run_vertex_stage( GLcontext *ctx,
       store->ormask = 0;
       store->andmask = CLIP_ALL_BITS;
 
-      VB->ProjectedClipPtr = 
-	 gl_clip_tab[VB->ClipPtr->size]( VB->ClipPtr,
-					 &store->proj,
-					 store->clipmask,
-					 &store->ormask,
-					 &store->andmask );
+      if (tnl->NeedProjCoords) {
+	 VB->ProjectedClipPtr = 
+	    gl_clip_tab[VB->ClipPtr->size]( VB->ClipPtr,
+					    &store->proj,
+					    store->clipmask,
+					    &store->ormask,
+					    &store->andmask );
+
+      } else {
+	 VB->ProjectedClipPtr = 0;
+	 gl_clip_np_tab[VB->ClipPtr->size]( VB->ClipPtr,
+					    0,
+					    store->clipmask,
+					    &store->ormask,
+					    &store->andmask );
+      }
 
       if (store->andmask) 
 	 return GL_FALSE;
@@ -202,21 +226,6 @@ static GLboolean run_vertex_stage( GLcontext *ctx,
 
       if (VB->ClipPtr == VB->ObjPtr && (VB->importable_data & VERT_OBJ))
 	 VB->importable_data |= VERT_CLIP;
-
-      /* Drivers expect this to be size 4...
-       */
-      if (VB->ProjectedClipPtr->size < 4) {
-	 ASSERT(VB->ProjectedClipPtr == VB->ClipPtr);
-	 if (VB->ProjectedClipPtr->flags & VEC_NOT_WRITEABLE) {
-	    ASSERT(VB->ProjectedClipPtr == VB->ObjPtr);
-	    VB->import_data( ctx, VERT_OBJ, VEC_NOT_WRITEABLE );
-	    VB->ProjectedClipPtr = VB->ClipPtr = VB->ObjPtr;
-	 }
-	 if (VB->ClipPtr->size == 2) 
-	    gl_vector4f_clean_elem( VB->ClipPtr, VB->Count, 2 );
-	 gl_vector4f_clean_elem( VB->ClipPtr, VB->Count, 3 );
-	 VB->ClipPtr->size = 4;
-      }
 
       store->save_eyeptr = VB->EyePtr;
       store->save_clipptr = VB->ClipPtr;

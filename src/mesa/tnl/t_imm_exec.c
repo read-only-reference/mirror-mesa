@@ -1,10 +1,10 @@
-/* $Id: t_imm_exec.c,v 1.4 2000/12/28 22:11:05 keithw Exp $ */
+/* $Id: t_imm_exec.c,v 1.9 2001/01/24 00:04:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -198,7 +198,7 @@ static void _tnl_vb_bind_immediate( GLcontext *ctx, struct immediate *IM )
    VB->NormalPtr = 0;
    VB->NormalLengthPtr = 0;
    VB->FogCoordPtr = 0;
-   VB->EdgeFlagPtr = 0;
+   VB->EdgeFlag = 0;
    VB->IndexPtr[0] = 0;
    VB->IndexPtr[1] = 0;
    VB->ColorPtr[0] = 0;
@@ -253,21 +253,18 @@ static void _tnl_vb_bind_immediate( GLcontext *ctx, struct immediate *IM )
 
    if (inputs & VERT_SPEC_RGB) {
       tmp->SecondaryColor.data = IM->SecondaryColor + start;
-      tmp->SecondaryColor.start = (GLubyte *)(IM->SecondaryColor + start);
+      tmp->SecondaryColor.start = (GLchan *)(IM->SecondaryColor + start);
       tmp->SecondaryColor.count = count;
       VB->SecondaryColorPtr[0] = &tmp->SecondaryColor;
    }
 
    if (inputs & VERT_EDGE) {
-      tmp->EdgeFlag.data = IM->EdgeFlag + start;
-      tmp->EdgeFlag.start = IM->EdgeFlag + start;
-      tmp->EdgeFlag.count = count;
-      VB->EdgeFlagPtr = &tmp->EdgeFlag;
+      VB->EdgeFlag = IM->EdgeFlag + start;
    }
 
    if (inputs & VERT_RGBA) {
       tmp->Color.data = IM->Color + start;
-      tmp->Color.start = (GLubyte *)(IM->Color + start);
+      tmp->Color.start = (GLchan *)(IM->Color + start);
       tmp->Color.count = count;
       VB->ColorPtr[0] = &tmp->Color;
    }
@@ -281,9 +278,9 @@ static void _tnl_vb_bind_immediate( GLcontext *ctx, struct immediate *IM )
 	    tmp->TexCoord[i].data = IM->TexCoord[i] + start;
 	    tmp->TexCoord[i].start = (GLfloat *)(IM->TexCoord[i] + start);
 	    tmp->TexCoord[i].size = 2;
-	    if (IM->TexSize & i) {
+	    if (IM->TexSize & TEX_SIZE_3(i)) {
 	       tmp->TexCoord[i].size = 3;
-	       if (IM->TexSize & (i<<16)) 
+	       if (IM->TexSize & TEX_SIZE_4(i)) 
 		  tmp->TexCoord[i].size = 4;
 	    }
 	    VB->TexCoordPtr[i] = &tmp->TexCoord[i];
@@ -360,16 +357,21 @@ static void exec_elt_cassette( GLcontext *ctx, struct immediate *IM )
  */
 void _tnl_run_empty_cassette( GLcontext *ctx, struct immediate *IM )
 {
-   GLuint start = IM->CopyStart;
-
    copy_to_current( ctx, IM, IM->OrFlag ); 
 
-   if (IM->OrFlag & VERT_MATERIAL) 
-      gl_update_material( ctx, IM->Material[start], IM->MaterialMask[start] );
+   if (IM->OrFlag & (VERT_RGBA|VERT_MATERIAL)) {
+      GLuint start = IM->CopyStart;
 
-   if (IM->OrFlag & VERT_RGBA) 
-      if (ctx->Light.ColorMaterialEnabled)
-	 gl_update_color_material( ctx, ctx->Current.Color );
+      if (IM->OrFlag & VERT_MATERIAL) 
+	 gl_update_material( ctx, IM->Material[start], 
+			     IM->MaterialMask[start] );
+      
+      if (IM->OrFlag & VERT_RGBA) 
+	 if (ctx->Light.ColorMaterialEnabled)
+	    gl_update_color_material( ctx, ctx->Current.Color );
+
+      gl_validate_all_lighting_tables( ctx );
+   }
 }
 
 
@@ -451,8 +453,8 @@ void _tnl_execute_cassette( GLcontext *ctx, struct immediate *IM )
     */
    _tnl_copy_immediate_vertices( ctx, IM );
 
-/*     if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1) */
-/*        ctx->Driver.NeedFlush &= ~FLUSH_STORED_VERTICES; */
+   if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1)
+      ctx->Driver.NeedFlush &= ~FLUSH_STORED_VERTICES;
 }
 
 
@@ -474,21 +476,26 @@ void _tnl_imm_init( GLcontext *ctx )
 
    ctx->swtnl_im = _tnl_alloc_immediate( ctx );
    TNL_CURRENT_IM(ctx)->ref_count++;
-/*     fprintf(stderr, "%s id %d refcount %d\n", __FUNCTION__,  */
-/*  	   TNL_CURRENT_IM(ctx)->id, TNL_CURRENT_IM(ctx)->ref_count); */
 
    tnl->ExecCopyTexSize = 0;
    tnl->ExecCopyCount = 0;
    tnl->ExecCopySource = TNL_CURRENT_IM(ctx);
    TNL_CURRENT_IM(ctx)->ref_count++;
-/*     fprintf(stderr, "%s id %d refcount %d\n", __FUNCTION__,  */
-/*  	   TNL_CURRENT_IM(ctx)->id, TNL_CURRENT_IM(ctx)->ref_count); */
+
    TNL_CURRENT_IM(ctx)->CopyStart = IMM_MAX_COPIED_VERTS;
 
    gl_vector4f_init( &tmp->Obj, 0, 0 );
    gl_vector3f_init( &tmp->Normal, 0, 0 );
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
    gl_vector4ub_init( &tmp->Color, 0, 0 );
    gl_vector4ub_init( &tmp->SecondaryColor, 0, 0 );
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+   gl_vector4us_init( &tmp->Color, 0, 0 );
+   gl_vector4us_init( &tmp->SecondaryColor, 0, 0 );
+#elif CHAN_TYPE == GL_FLOAT
+   gl_vector4f_init( &tmp->Color, 0, 0 );
+   gl_vector4f_init( &tmp->SecondaryColor, 0, 0 );
+#endif
    gl_vector1f_init( &tmp->FogCoord, 0, 0 );
    gl_vector1ui_init( &tmp->Index, 0, 0 );
    gl_vector1ub_init( &tmp->EdgeFlag, 0, 0 );

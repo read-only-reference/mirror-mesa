@@ -1,4 +1,4 @@
-/* $Id: t_context.c,v 1.7 2000/12/26 05:09:32 keithw Exp $ */
+/* $Id: t_context.c,v 1.11 2001/01/13 18:28:20 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -39,6 +39,7 @@
 #include "t_array_api.h"
 #include "t_eval_api.h"
 #include "t_imm_alloc.h"
+#include "t_imm_api.h"
 #include "t_imm_exec.h"
 #include "t_imm_dlist.h"
 #include "t_pipeline.h"
@@ -69,6 +70,9 @@ install_driver_callbacks( GLcontext *ctx )
    ctx->Driver.MakeCurrent = _tnl_MakeCurrent;
    ctx->Driver.BeginCallList = _tnl_BeginCallList;
    ctx->Driver.EndCallList = _tnl_EndCallList;
+
+   ctx->Driver.RenderTabElts = _tnl_render_tab_elts;
+   ctx->Driver.RenderTabVerts = _tnl_render_tab_verts;
 }
 
 
@@ -81,6 +85,7 @@ _tnl_CreateContext( GLcontext *ctx )
    /* Create the TNLcontext structure
     */
    ctx->swtnl_context = tnl = CALLOC( sizeof(TNLcontext) );
+
    if (!tnl) {
       return GL_FALSE;
    }
@@ -99,11 +104,15 @@ _tnl_CreateContext( GLcontext *ctx )
    _tnl_eval_init( ctx );
    _tnl_install_pipeline( ctx, _tnl_default_pipeline );
 
+
+   tnl->NeedProjCoords = GL_TRUE;
     
    /* Hook our functions into exec and compile dispatch tables.
     */
    _mesa_install_exec_vtxfmt( ctx, &tnl->vtxfmt );
    _mesa_install_save_vtxfmt( ctx, &tnl->vtxfmt );
+   ctx->Save->CallList = _mesa_save_CallList;	/* fixme */
+   ctx->Save->CallLists = _mesa_save_CallLists;
    ctx->Save->EvalMesh1 = _mesa_save_EvalMesh1;	/* fixme */
    ctx->Save->EvalMesh2 = _mesa_save_EvalMesh2;
    ctx->Save->Begin = _tnl_save_Begin;
@@ -111,10 +120,9 @@ _tnl_CreateContext( GLcontext *ctx )
    /* Set a few default values in the driver struct.
     */
    install_driver_callbacks(ctx);
-   ctx->Driver.NeedFlush = FLUSH_UPDATE_CURRENT|FLUSH_STORED_VERTICES;
+   ctx->Driver.NeedFlush = FLUSH_UPDATE_CURRENT;
    ctx->Driver.CurrentExecPrimitive = PRIM_OUTSIDE_BEGIN_END;
    ctx->Driver.CurrentSavePrimitive = PRIM_UNKNOWN;
-
    return GL_TRUE;
 }
 
@@ -186,8 +194,20 @@ _tnl_wakeup_save_exec( GLcontext *ctx )
 
    _tnl_wakeup_exec( ctx );
    _mesa_install_save_vtxfmt( ctx, &tnl->vtxfmt );
+   ctx->Save->CallList = _mesa_save_CallList;	/* fixme */
+   ctx->Save->CallLists = _mesa_save_CallLists;
    ctx->Save->EvalMesh1 = _mesa_save_EvalMesh1;	/* fixme */
    ctx->Save->EvalMesh2 = _mesa_save_EvalMesh2;
    ctx->Save->Begin = _tnl_save_Begin;
 }
 
+
+void
+_tnl_need_projected_coords( GLcontext *ctx, GLboolean mode )
+{
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   if (tnl->NeedProjCoords != mode) {
+      tnl->NeedProjCoords = mode;
+      _tnl_InvalidateState( ctx, _NEW_PROJECTION );
+   }
+}

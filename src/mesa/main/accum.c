@@ -1,4 +1,4 @@
-/* $Id: accum.c,v 1.33 2000/12/26 05:09:27 keithw Exp $ */
+/* $Id: accum.c,v 1.35 2001/01/29 20:47:39 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -35,7 +35,6 @@
 #include "mem.h"
 #include "state.h"
 #include "mtypes.h"
-#include "swrast/swrast.h"
 #endif
 
 
@@ -69,7 +68,7 @@ _mesa_Accum( GLenum op, GLfloat value )
    GLuint xpos, ypos, width, height;
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (ctx->Visual.AccumRedBits == 0 || ctx->DrawBuffer != ctx->ReadBuffer) {
+   if (ctx->Visual.accumRedBits == 0 || ctx->DrawBuffer != ctx->ReadBuffer) {
       gl_error(ctx, GL_INVALID_OPERATION, "glAccum");
       return;
    }
@@ -92,7 +91,5 @@ _mesa_Accum( GLenum op, GLfloat value )
       height = ctx->DrawBuffer->Height;
    }
 
-   if (!ctx->Driver.Accum ||
-       !ctx->Driver.Accum( ctx, op, value, xpos, ypos, width, height ))
-      _swrast_Accum( ctx, op, value, xpos, ypos, width, height );
+   ctx->Driver.Accum( ctx, op, value, xpos, ypos, width, height );
 }

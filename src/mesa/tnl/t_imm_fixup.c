@@ -1,4 +1,4 @@
-/* $Id: t_imm_fixup.c,v 1.2 2000/12/28 22:11:05 keithw Exp $ */
+/* $Id: t_imm_fixup.c,v 1.4 2001/01/24 00:04:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -34,6 +34,7 @@
 #include "context.h"
 #include "enums.h"
 #include "dlist.h"
+#include "colormac.h"
 #include "macros.h"
 #include "mem.h"
 #include "mmath.h"
@@ -124,13 +125,13 @@ fixup_1ub( GLubyte *data, GLuint flag[], GLuint start, GLuint match )
 
 
 static void
-fixup_4ub( GLubyte data[][4], GLuint flag[], GLuint start, GLuint match )
+fixup_4chan( GLchan data[][4], GLuint flag[], GLuint start, GLuint match )
 {
    GLuint i = start;
 
    for (;;) {
       if ((flag[++i] & match) == 0) {
-	 COPY_4UBV(data[i], data[i-1]);
+	 COPY_CHAN4(data[i], data[i-1]);
 	 if (flag[i] & VERT_END_VB) break;
       }
    }
@@ -197,14 +198,14 @@ fixup_first_1ub( GLubyte data[], GLuint flag[], GLuint match,
 
 
 static void
-fixup_first_4ub( GLubyte data[][4], GLuint flag[], GLuint match,
-		 GLuint start, GLubyte dflt[4] )
+fixup_first_4chan( GLchan data[][4], GLuint flag[], GLuint match,
+                   GLuint start, GLchan dflt[4] )
 {
    GLuint i = start-1;
    match |= VERT_END_VB;
 
    while ((flag[++i]&match) == 0)
-      COPY_4UBV(data[i], dflt);
+      COPY_CHAN4(data[i], dflt);
 }
 
 
@@ -250,11 +251,11 @@ void _tnl_fixup_input( GLcontext *ctx, struct immediate *IM )
 	 }
 
 	 if (copy & VERT_RGBA) {
-	    COPY_4UBV( IM->Color[start], ctx->Current.Color);
+	    COPY_CHAN4( IM->Color[start], ctx->Current.Color);
 	 }
 
 	 if (copy & VERT_SPEC_RGB)
-	    COPY_4UBV( IM->SecondaryColor[start], ctx->Current.SecondaryColor);
+	    COPY_CHAN4( IM->SecondaryColor[start], ctx->Current.SecondaryColor);
 
 	 if (copy & VERT_FOG_COORD)
 	    IM->FogCoord[start] = ctx->Current.FogCoord;
@@ -308,17 +309,17 @@ void _tnl_fixup_input( GLcontext *ctx, struct immediate *IM )
 
    if (fixup & VERT_RGBA) {
       if (orflag & VERT_RGBA)
-	 fixup_4ub( IM->Color, IM->Flag, start, VERT_RGBA );
+	 fixup_4chan( IM->Color, IM->Flag, start, VERT_RGBA );
       else
-	 fixup_first_4ub( IM->Color, IM->Flag, VERT_END_VB, start, IM->Color[start] );
+	 fixup_first_4chan( IM->Color, IM->Flag, VERT_END_VB, start, IM->Color[start] );
    }
 
    if (fixup & VERT_SPEC_RGB) {
       if (orflag & VERT_SPEC_RGB)
-	 fixup_4ub( IM->SecondaryColor, IM->Flag, start, VERT_SPEC_RGB );
+	 fixup_4chan( IM->SecondaryColor, IM->Flag, start, VERT_SPEC_RGB );
       else
-	 fixup_first_4ub( IM->SecondaryColor, IM->Flag, VERT_END_VB, start,
-			  IM->SecondaryColor[start] );
+	 fixup_first_4chan( IM->SecondaryColor, IM->Flag, VERT_END_VB, start,
+                            IM->SecondaryColor[start] );
    }
 
    if (fixup & VERT_FOG_COORD) {
@@ -393,7 +394,7 @@ static void copy_vertices( GLcontext *ctx,
 
       COPY_4FV( next->Obj[dst], prev->Obj[src] );
       COPY_3FV( next->Normal[dst], prev->Normal[src] );      
-      COPY_4UBV( next->Color[dst], prev->Color[src] );
+      COPY_CHAN4( next->Color[dst], prev->Color[src] );
 
       if (prev->OrFlag & VERT_TEX_ANY) {
 	 GLuint i;
@@ -409,7 +410,7 @@ static void copy_vertices( GLcontext *ctx,
       next->Elt[dst] = prev->Elt[src];
       next->EdgeFlag[dst] = prev->EdgeFlag[src];
       next->Index[dst] = prev->Index[src];
-      COPY_4UBV( next->SecondaryColor[dst], prev->SecondaryColor[src] );
+      COPY_CHAN4( next->SecondaryColor[dst], prev->SecondaryColor[src] );
       next->FogCoord[dst] = prev->FogCoord[src];
       next->Flag[dst] = (prev->CopyOrFlag & VERT_FIXUP);
       next->CopyOrFlag |= prev->Flag[src];  /* redundant for current_im */
@@ -433,16 +434,12 @@ static void copy_vertices( GLcontext *ctx,
 
    ASSERT(prev == tnl->ExecCopySource);
 
-/*     fprintf(stderr, "%s id %d refcount %d\n", __FUNCTION__,  */
-/*  	   tnl->ExecCopySource->id, tnl->ExecCopySource->ref_count-1); */
-
    if (--tnl->ExecCopySource->ref_count == 0)
       _tnl_free_immediate( tnl->ExecCopySource );
    
    next->ref_count++;
    tnl->ExecCopySource = next;
-/*     fprintf(stderr, "%s id %d refcount %d\n", __FUNCTION__,  */
-/*  	   next->id, next->ref_count); */
+
    tnl->ExecCopyElts[0] = next->Start-3;
    tnl->ExecCopyElts[1] = next->Start-2;
    tnl->ExecCopyElts[2] = next->Start-1;
@@ -539,12 +536,12 @@ void _tnl_fixup_compiled_cassette( GLcontext *ctx, struct immediate *IM )
 			 ctx->Current.Index );
 
       if (fixup & VERT_RGBA)
-	 fixup_first_4ub(IM->Color, IM->Flag, VERT_RGBA, start,
-			 ctx->Current.Color );
+	 fixup_first_4chan(IM->Color, IM->Flag, VERT_RGBA, start,
+                           ctx->Current.Color );
 
       if (fixup & VERT_SPEC_RGB)
-	 fixup_first_4ub(IM->SecondaryColor, IM->Flag, VERT_SPEC_RGB, start,
-			 ctx->Current.SecondaryColor );
+	 fixup_first_4chan(IM->SecondaryColor, IM->Flag, VERT_SPEC_RGB, start,
+                           ctx->Current.SecondaryColor );
 
       if (fixup & VERT_FOG_COORD)
 	 fixup_first_1f(IM->FogCoord, IM->Flag, VERT_FOG_COORD, start,
@@ -732,14 +729,10 @@ _tnl_get_exec_copy_verts( GLcontext *ctx, struct immediate *IM )
    
 
    if (tnl->ExecCopySource != IM) {
-/*        fprintf(stderr, "%s id %d refcount %d\n", __FUNCTION__,  */
-/*  	      tnl->ExecCopySource->id, tnl->ExecCopySource->ref_count-1); */
       if (--tnl->ExecCopySource->ref_count == 0)
 	 _tnl_free_immediate( tnl->ExecCopySource );
       IM->ref_count++;
       tnl->ExecCopySource = IM;
-/*        fprintf(stderr, "%s id %d refcount %d\n", __FUNCTION__,  */
-/*  	      tnl->ExecCopySource->id, tnl->ExecCopySource->ref_count); */
    }
 
    if (prim == GL_POLYGON+1) {
@@ -791,7 +784,7 @@ void _tnl_fixup_purged_eval( GLcontext *ctx,
       fixup_1ui( store->Index, flags, 0, VERT_INDEX|fixup_fence );
 
    if (fixup & VERT_RGBA) 
-      fixup_4ub( store->Color, flags, 0, VERT_RGBA|fixup_fence );
+      fixup_4chan( store->Color, flags, 0, VERT_RGBA|fixup_fence );
 
    if (fixup & VERT_NORM) 
       fixup_3f( store->Normal, flags, 0, VERT_NORM|fixup_fence );

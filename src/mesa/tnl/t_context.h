@@ -1,4 +1,4 @@
-/* $Id: t_context.h,v 1.8 2000/12/27 22:30:29 keithw Exp $ */
+/* $Id: t_context.h,v 1.13 2001/01/29 20:47:39 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -105,7 +105,7 @@
 /* Flags for IM->TexCoordSize.  Enough flags for 16 units.
  */
 #define TEX_0_SIZE_3          0x1
-#define TEX_0_SIZE_4          0x1000
+#define TEX_0_SIZE_4          0x1001
 #define TEX_SIZE_3(unit)      (TEX_0_SIZE_3<<unit)
 #define TEX_SIZE_4(unit)      (TEX_0_SIZE_4<<unit)
 
@@ -205,7 +205,7 @@ struct immediate
    GLuint  Elt[IMM_SIZE];
    GLubyte EdgeFlag[IMM_SIZE];
    GLuint  Index[IMM_SIZE];
-   GLubyte SecondaryColor[IMM_SIZE][4];
+   GLchan  SecondaryColor[IMM_SIZE][4];
    GLfloat FogCoord[IMM_SIZE];
 };
 
@@ -214,12 +214,20 @@ struct vertex_arrays
 {
    GLvector4f  Obj;
    GLvector3f  Normal;
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
    GLvector4ub Color;
+   GLvector4ub SecondaryColor;
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+   GLvector4us Color;
+   GLvector4us SecondaryColor;
+#elif CHAN_TYPE == GL_FLOAT
+   GLvector4f Color;
+   GLvector4f SecondaryColor;
+#endif
    GLvector1ui Index;
    GLvector1ub EdgeFlag;
    GLvector4f  TexCoord[MAX_TEXTURE_UNITS];
    GLvector1ui Elt;
-   GLvector4ub SecondaryColor;
    GLvector1f  FogCoord;
 };
 
@@ -251,11 +259,20 @@ typedef struct vertex_buffer
    GLubyte     *ClipMask;		        /* VERT_CLIP (4) */
    GLvector3f  *NormalPtr;	                /* VERT_NORM */
    GLfloat     *NormalLengthPtr;                /* VERT_NORM (optional) */
-   GLvector1ub *EdgeFlagPtr;	                /* VERT_EDGE */
+   GLboolean   *EdgeFlag;	                /* VERT_EDGE */
    GLvector4f  *TexCoordPtr[MAX_TEXTURE_UNITS];	/* VERT_TEX_0..n */
    GLvector1ui *IndexPtr[2];	                /* VERT_INDEX */
+
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
    GLvector4ub *ColorPtr[2];	                /* VERT_RGBA */
-   GLvector4ub *SecondaryColorPtr[2];           /* VERT_SPEC_RGB */
+   GLvector4ub *SecondaryColorPtr[2];         /* VERT_SPEC_RGB */
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+   GLvector4us *ColorPtr[2];	                /* VERT_RGBA */
+   GLvector4us *SecondaryColorPtr[2];         /* VERT_SPEC_RGB */
+#elif CHAN_TYPE == GL_FLOAT
+   GLvector4f *ColorPtr[2];	                /* VERT_RGBA */
+   GLvector4f *SecondaryColorPtr[2];         /* VERT_SPEC_RGB */
+#endif
    GLvector1f  *FogCoordPtr;	                /* VERT_FOG_COORD */
    GLvector1f  *PointSizePtr;	                /* VERT_POINT_SIZE */
    GLmaterial (*Material)[2];                   /* VERT_MATERIAL, optional */
@@ -276,9 +293,8 @@ typedef struct vertex_buffer
     */
 
    GLuint LastClipped;
-   void *interpfunc;
-   /* Two pieces of private data from _tnl_render_stage that have no
-    * business being in this struct.
+   /* Private data from _tnl_render_stage that has no business being
+    * in this struct.  
     */
 
 } TNLvertexbuffer;
@@ -404,6 +420,10 @@ typedef struct {
    GLuint DlistPrimitive;
    GLuint DlistPrimitiveLength;
    GLuint DlistLastPrimitive;
+
+   /* Probably need a better configuration mechanism:
+    */
+   GLboolean NeedProjCoords;
 
    /* Derived state and storage for _tnl_eval_vb:
     */

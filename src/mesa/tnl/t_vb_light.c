@@ -1,10 +1,10 @@
-/* $Id: t_vb_light.c,v 1.2 2000/12/27 19:57:37 keithw Exp $ */
+/* $Id: t_vb_light.c,v 1.6 2001/01/29 22:10:24 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -49,10 +49,17 @@ typedef void (*light_func)( GLcontext *ctx,
 			    GLvector4f *input );
 
 struct light_stage_data {
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
    GLvector4ub LitColor[2];
-   GLvector1ui LitIndex[2];
    GLvector4ub LitSecondary[2];
-
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+   GLvector4us LitColor[2];
+   GLvector4us LitSecondary[2];
+#elif CHAN_TYPE == GL_FLOAT
+   GLvector4f LitColor[2];
+   GLvector4f LitSecondary[2];
+#endif
+   GLvector1ui LitIndex[2];
    light_func *light_func_tab;
 };
 
@@ -161,9 +168,10 @@ static GLboolean run_validate_lighting( GLcontext *ctx,
    GLuint ind = 0;
    light_func *tab;   
    
-   if (ctx->Visual.RGBAflag) {
+   if (ctx->Visual.rgbMode) {
       if (ctx->Light._NeedVertices) {
-	 if (ctx->Light.Model.ColorControl==GL_SEPARATE_SPECULAR_COLOR) 
+	 if (ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR &&
+             ctx->Texture._ReallyEnabled) 
 	    tab = _tnl_light_spec_tab;
 	 else
 	    tab = _tnl_light_tab;	 
@@ -216,10 +224,22 @@ static GLboolean run_init_lighting( GLcontext *ctx,
     */
    init_lighting();
 
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
    gl_vector4ub_alloc( &store->LitColor[0], 0, size, 32 );
    gl_vector4ub_alloc( &store->LitColor[1], 0, size, 32 );
    gl_vector4ub_alloc( &store->LitSecondary[0], 0, size, 32 );
    gl_vector4ub_alloc( &store->LitSecondary[1], 0, size, 32 );
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+   gl_vector4us_alloc( &store->LitColor[0], 0, size, 32 );
+   gl_vector4us_alloc( &store->LitColor[1], 0, size, 32 );
+   gl_vector4us_alloc( &store->LitSecondary[0], 0, size, 32 );
+   gl_vector4us_alloc( &store->LitSecondary[1], 0, size, 32 );
+#elif CHAN_TYPE == GL_FLOAT
+   gl_vector4f_alloc( &store->LitColor[0], 0, size, 32 );
+   gl_vector4f_alloc( &store->LitColor[1], 0, size, 32 );
+   gl_vector4f_alloc( &store->LitSecondary[0], 0, size, 32 );
+   gl_vector4f_alloc( &store->LitSecondary[1], 0, size, 32 );
+#endif
    gl_vector1ui_alloc( &store->LitIndex[0], 0, size, 32 );
    gl_vector1ui_alloc( &store->LitIndex[1], 0, size, 32 );
 
@@ -246,6 +266,11 @@ static void check_lighting( GLcontext *ctx, struct gl_pipeline_stage *stage )
 	 stage->inputs |= VERT_EYE; /* effectively, even when lighting in obj */
       if (ctx->Light.ColorMaterialEnabled) 
 	 stage->inputs |= VERT_RGBA;
+
+      stage->outputs = VERT_RGBA;
+      if (ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR &&
+          ctx->Texture._ReallyEnabled)
+	 stage->outputs |= VERT_SPEC_RGB;
    }
 }
 
@@ -255,12 +280,24 @@ static void dtr( struct gl_pipeline_stage *stage )
    struct light_stage_data *store = LIGHT_STAGE_DATA(stage);
 
    if (store) {
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
       gl_vector4ub_free( &store->LitColor[0] );      
       gl_vector4ub_free( &store->LitColor[1] );      
-      gl_vector1ui_free( &store->LitIndex[0] );      
-      gl_vector1ui_free( &store->LitIndex[1] );      
       gl_vector4ub_free( &store->LitSecondary[0] );  
       gl_vector4ub_free( &store->LitSecondary[1] );  
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+      gl_vector4us_free( &store->LitColor[0] );      
+      gl_vector4us_free( &store->LitColor[1] );      
+      gl_vector4us_free( &store->LitSecondary[0] );  
+      gl_vector4us_free( &store->LitSecondary[1] );  
+#elif CHAN_TYPE == GL_FLOAT
+      gl_vector4f_free( &store->LitColor[0] );      
+      gl_vector4f_free( &store->LitColor[1] );      
+      gl_vector4f_free( &store->LitSecondary[0] );  
+      gl_vector4f_free( &store->LitSecondary[1] );  
+#endif
+      gl_vector1ui_free( &store->LitIndex[0] );      
+      gl_vector1ui_free( &store->LitIndex[1] );      
       FREE( store );
       stage->private = 0;
    }
@@ -273,7 +310,7 @@ const struct gl_pipeline_stage _tnl_lighting_stage =
    _NEW_LIGHT|_NEW_MODELVIEW,	/* recalc -- modelview dependency
 				 * otherwise not captured by inputs
 				 * (which may be VERT_OBJ) */
-   0,0,VERT_RGBA,		/* active, inputs, outputs */
+   0,0,0,			/* active, inputs, outputs */
    0,0,				/* changed_inputs, private_data */
    dtr,				/* destroy */
    check_lighting,		/* check */

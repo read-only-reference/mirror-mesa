@@ -1,10 +1,10 @@
-/* $Id: ac_import.c,v 1.2 2000/12/28 22:11:05 keithw Exp $ */
+/* $Id: ac_import.c,v 1.4 2001/01/24 00:04:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -33,7 +33,9 @@
 #include "mmath.h"
 #include "mtypes.h"
 
+#include "math/m_translate.h"
 #include "array_cache/ac_context.h"
+#include "math/m_translate.h"
 
 
 
@@ -269,20 +271,39 @@ static void import_color( GLcontext *ctx,
 
    /* Limited choices at this stage:
     */
-   ASSERT(type == GL_UNSIGNED_BYTE);
-   ASSERT(stride == 4*sizeof(GLubyte) || stride == 0);
+   /* XXX GLchan: is this right for GLchan? */
+   ASSERT(type == CHAN_TYPE);
+   ASSERT(stride == 4 * sizeof(GLchan) || stride == 0);
 
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
    _math_trans_4ub( to->Ptr,
-		    from->Ptr,
-		    from->StrideB,
-		    from->Type,
-		    from->Size,
-		    ac->start, 
-		    ac->count);
+                    from->Ptr,
+                    from->StrideB,
+                    from->Type,
+                    from->Size,
+                    ac->start, 
+                    ac->count);
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+   _math_trans_4us( to->Ptr,
+                    from->Ptr,
+                    from->StrideB,
+                    from->Type,
+                    from->Size,
+                    ac->start, 
+                    ac->count);
+#elif CHAN_TYPE == GL_FLOAT
+   _math_trans_4f( to->Ptr,
+                   from->Ptr,
+                   from->StrideB,
+                   from->Type,
+                   from->Size,
+                   ac->start, 
+                   ac->count);
+#endif
 
    to->Size = from->Size;
-   to->StrideB = 4 * sizeof(GLubyte);
-   to->Type = GL_FLOAT;
+   to->StrideB = 4 * sizeof(GLchan);
+   to->Type = CHAN_TYPE;
    ac->Current.Color = to;
    ac->Writeable.Color = GL_TRUE;
 }
@@ -321,19 +342,37 @@ static void import_secondarycolor( GLcontext *ctx,
 
    /* Limited choices at this stage:
     */
-   ASSERT(type == GL_UNSIGNED_BYTE);
-   ASSERT(stride == 4*sizeof(GLubyte) || stride == 0);
+   ASSERT(type == CHAN_TYPE);
+   ASSERT(stride == 4 * sizeof(GLchan) || stride == 0);
 
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
    _math_trans_4ub( to->Ptr,
-		    from->Ptr,
-		    from->StrideB,
-		    from->Type,
-		    from->Size,
-		    ac->start, 
-		    ac->count);
+                    from->Ptr,
+                    from->StrideB,
+                    from->Type,
+                    from->Size,
+                    ac->start, 
+                    ac->count);
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+   _math_trans_4us( to->Ptr,
+                    from->Ptr,
+                    from->StrideB,
+                    from->Type,
+                    from->Size,
+                    ac->start, 
+                    ac->count);
+#elif CHAN_TYPE == GL_FLOAT
+   _math_trans_4f( to->Ptr,
+                   from->Ptr,
+                   from->StrideB,
+                   from->Type,
+                   from->Size,
+                   ac->start, 
+                   ac->count);
+#endif
 
-   to->StrideB = 4 * sizeof(GLubyte);
-   to->Type = GL_UNSIGNED_BYTE;
+   to->StrideB = 4 * sizeof(GLchan);
+   to->Type = CHAN_TYPE;
    ac->Current.SecondaryColor = to;
    ac->Writeable.SecondaryColor = GL_TRUE;
 }

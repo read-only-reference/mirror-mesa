@@ -1,4 +1,4 @@
-/* $Id: light.c,v 1.31 2000/12/26 05:09:28 keithw Exp $ */
+/* $Id: light.c,v 1.35 2001/01/23 23:39:36 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -616,7 +616,7 @@ void gl_update_material( GLcontext *ctx,
       foreach (light, list) {
 	 SCALE_3V( light->_MatDiffuse[0], light->Diffuse, mat->Diffuse );
       }
-      FLOAT_COLOR_TO_CHAN(ctx->Light._BaseAlpha[0], mat->Diffuse[3]);
+      UNCLAMPED_FLOAT_TO_CHAN(ctx->Light._BaseAlpha[0], mat->Diffuse[3]);
    }
    if (bitmask & BACK_DIFFUSE_BIT) {
       struct gl_material *mat = &ctx->Light.Material[1];
@@ -627,7 +627,7 @@ void gl_update_material( GLcontext *ctx,
       foreach (light, list) {
 	 SCALE_3V( light->_MatDiffuse[1], light->Diffuse, mat->Diffuse );
       }
-      FLOAT_COLOR_TO_CHAN(ctx->Light._BaseAlpha[1], mat->Diffuse[3]);
+      UNCLAMPED_FLOAT_TO_CHAN(ctx->Light._BaseAlpha[1], mat->Diffuse[3]);
    }
 
    /* update material specular values */
@@ -760,7 +760,7 @@ void gl_update_color_material( GLcontext *ctx,
       foreach (light, list) {
 	 SCALE_3V( light->_MatDiffuse[0], light->Diffuse, mat->Diffuse );
       }
-      FLOAT_COLOR_TO_CHAN(ctx->Light._BaseAlpha[0], mat->Diffuse[3]);
+      UNCLAMPED_FLOAT_TO_CHAN(ctx->Light._BaseAlpha[0], mat->Diffuse[3]);
    }
 
    if (bitmask & BACK_DIFFUSE_BIT) {
@@ -769,7 +769,7 @@ void gl_update_color_material( GLcontext *ctx,
       foreach (light, list) {
 	 SCALE_3V( light->_MatDiffuse[1], light->Diffuse, mat->Diffuse );
       }
-      FLOAT_COLOR_TO_CHAN(ctx->Light._BaseAlpha[1], mat->Diffuse[3]);
+      UNCLAMPED_FLOAT_TO_CHAN(ctx->Light._BaseAlpha[1], mat->Diffuse[3]);
    }
 
    /* update light->_MatSpecular = light's specular * material's specular */
@@ -1050,14 +1050,12 @@ static void validate_shine_table( GLcontext *ctx, GLuint i, GLfloat shininess )
    struct gl_shine_tab *list = ctx->_ShineTabList;
    struct gl_shine_tab *s;
 
-/*     fprintf(stderr, "validate_shine_table %d, shininess %f\n", i, shininess); */
-
    foreach(s, list)
       if ( s->shininess == shininess )
 	 break;
 
    if (s == list) {
-      GLint i;
+      GLint j;
       GLfloat *m;
 
       foreach(s, list)
@@ -1067,16 +1065,19 @@ static void validate_shine_table( GLcontext *ctx, GLuint i, GLfloat shininess )
       m = s->tab;
       m[0] = 0.0;
       if (shininess == 0.0) {
-	 for (i = 1 ; i <= SHINE_TABLE_SIZE ; i++)
-	    m[i] = 1.0;
+	 for (j = 1 ; j <= SHINE_TABLE_SIZE ; j++)
+	    m[j] = 1.0;
       }
       else {
-	 for (i = 1 ; i < SHINE_TABLE_SIZE ; i++) {
-	    GLdouble t = pow(i / (GLfloat)(SHINE_TABLE_SIZE-1), shininess);
+	 for (j = 1 ; j < SHINE_TABLE_SIZE ; j++) {
+            GLdouble t, x = j / (GLfloat) (SHINE_TABLE_SIZE - 1);
+            if (x < 0.005) /* underflow check */
+               x = 0.005;
+            t = pow(x, shininess);
 	    if (t > 1e-20)
-	       m[i] = t;
+	       m[j] = t;
 	    else
-	       m[i] = 0.0;
+	       m[j] = 0.0;
 	 }
 	 m[SHINE_TABLE_SIZE] = 1.0;
       }
@@ -1162,7 +1163,7 @@ gl_update_lighting( GLcontext *ctx )
     * FLUSH_UPDATE_CURRENT, as when any outstanding material changes
     * are flushed, they will update the derived state at that time.  
     */
-   if (ctx->Visual.RGBAflag) {
+   if (ctx->Visual.rgbMode) {
       GLuint sides = ctx->Light.Model.TwoSide ? 2 : 1;
       GLuint side;
       for (side=0; side < sides; side++) {
@@ -1173,8 +1174,8 @@ gl_update_lighting( GLcontext *ctx )
 		      ctx->Light.Model.Ambient,
 		      mat->Ambient);
 
-	 FLOAT_COLOR_TO_CHAN(ctx->Light._BaseAlpha[side],
-                             ctx->Light.Material[side].Diffuse[3] );
+	 UNCLAMPED_FLOAT_TO_CHAN(ctx->Light._BaseAlpha[side],
+                                 ctx->Light.Material[side].Diffuse[3] );
       }
 
       foreach (light, &ctx->Light.EnabledList) {	

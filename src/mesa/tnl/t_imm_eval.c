@@ -1,4 +1,4 @@
-/* $Id: t_imm_eval.c,v 1.2 2000/12/27 22:30:29 keithw Exp $ */
+/* $Id: t_imm_eval.c,v 1.4 2001/01/24 00:04:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -144,23 +144,31 @@ static void eval1_norm( GLvector3f *dest,
       }
 }
 
-static void eval1_color( GLvector4ub *dest,
+static void eval1_color(
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
+                         GLvector4ub *dest,
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+                         GLvector4us *dest,
+#elif CHAN_TYPE == GL_FLOAT
+                         GLvector4f *dest,
+#endif
 			 GLfloat coord[][4],
 			 const GLuint *flags,
 			 struct gl_1d_map *map )
 {
    const GLfloat u1 = map->u1;
    const GLfloat du = map->du;
-   GLubyte (*to)[4] = dest->data;
+   GLchan (*to)[4] = dest->data;
    GLuint i;
 
-   for (i = 0 ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = 0 ; !(flags[i] & VERT_END_VB) ; i++) {
       if (flags[i] & (VERT_EVAL_C1|VERT_EVAL_P1)) {
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 GLfloat fcolor[4];
 	 _math_horner_bezier_curve(map->Points, fcolor, u, 4, map->Order);
-	 FLOAT_RGBA_TO_CHAN_RGBA(to[i], fcolor);
+         UNCLAMPED_FLOAT_TO_RGBA_CHAN(to[i], fcolor);
       }
+   }
 }
 
 
@@ -275,7 +283,14 @@ static void eval2_1ui( GLvector1ui *dest,
 
 
 
-static void eval2_color( GLvector4ub *dest,
+static void eval2_color(
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
+                         GLvector4ub *dest,
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+                         GLvector4us *dest,
+#elif CHAN_TYPE == GL_FLOAT
+                         GLvector4f *dest,
+#endif
 			 GLfloat coord[][4],
 			 GLuint *flags,
 			 struct gl_2d_map *map )
@@ -284,19 +299,19 @@ static void eval2_color( GLvector4ub *dest,
    const GLfloat du = map->du;
    const GLfloat v1 = map->v1;
    const GLfloat dv = map->dv;
-   GLubyte (*to)[4] = dest->data;
+   GLchan (*to)[4] = dest->data;
    GLuint i;
 
-   for (i = 0 ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = 0 ; !(flags[i] & VERT_END_VB) ; i++) {
       if (flags[i] & (VERT_EVAL_C2|VERT_EVAL_P2)) {
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 GLfloat v = (coord[i][1] - v1) * dv;
 	 GLfloat fcolor[4];
 	 _math_horner_bezier_surf(map->Points, fcolor, u, v, 4,
 				  map->Uorder, map->Vorder);
-	 FLOAT_RGBA_TO_CHAN_RGBA(to[i], fcolor);
+         UNCLAMPED_FLOAT_TO_RGBA_CHAN(to[i], fcolor);
       }
-
+   }
 }
 
 
@@ -311,7 +326,7 @@ static void copy_3f( GLfloat to[][3], GLfloat from[][3], GLuint count )
    MEMCPY( to, from, (count) * sizeof(to[0])); 
 }
 
-static void copy_4ub( GLubyte to[][4], GLubyte from[][4], GLuint count )
+static void copy_4chan( GLchan to[][4], GLchan from[][4], GLuint count )
 {
    MEMCPY( to, from, (count) * sizeof(to[0])); 
 }
@@ -471,10 +486,10 @@ void _tnl_eval_vb( GLcontext *ctx,
    if (req & VERT_RGBA)
    {
       if (!all_eval)
-	 copy_4ub( store->Color, tmp->Color.data, count );
+	 copy_4chan( store->Color, tmp->Color.data, count );
 
       tmp->Color.data = store->Color;
-      tmp->Color.start = (GLubyte *)store->Color;
+      tmp->Color.start = (GLchan *) store->Color;
 
       if (ctx->Eval.Map1Color4 && any_eval1)
 	 eval1_color( &tmp->Color, coord, flags, &ctx->EvalMap.Map1Color4 );

@@ -1,10 +1,10 @@
-/* $Id: xm_span.c,v 1.4 2000/11/22 07:32:18 joukj Exp $ */
+/* $Id: xm_span.c,v 1.7 2001/01/29 22:40:23 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -1507,10 +1507,11 @@ static void write_span_DITHER_5R6G5B_ximage( RGBA_SPAN_ARGS )
    const XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
    register GLuint i;
    register GLushort *ptr = PIXELADDR2( xmesa->xm_buffer, x, y );
+   const GLint y2 = FLIP(xmesa->xm_buffer, y);
    if (mask) {
       for (i=0;i<n;i++,x++) {
          if (mask[i]) {
-            PACK_TRUEDITHER( ptr[i], x, y, rgba[i][RCOMP], rgba[i][GCOMP], rgba[i][BCOMP] );
+            PACK_TRUEDITHER( ptr[i], x, y2, rgba[i][RCOMP], rgba[i][GCOMP], rgba[i][BCOMP] );
          }
       }
    }
@@ -1522,16 +1523,16 @@ static void write_span_DITHER_5R6G5B_ximage( RGBA_SPAN_ARGS )
       n -= extraPixel;
       for (i = 0; i < n; i += 2, x += 2) {
          GLuint p0, p1;
-         PACK_TRUEDITHER( p0, x, y, rgba[i][RCOMP], rgba[i][GCOMP], rgba[i][BCOMP] );
-         PACK_TRUEDITHER( p1, x+1, y, rgba[i+1][RCOMP], rgba[i+1][GCOMP], rgba[i+1][BCOMP] );
+         PACK_TRUEDITHER( p0, x, y2, rgba[i][RCOMP], rgba[i][GCOMP], rgba[i][BCOMP] );
+         PACK_TRUEDITHER( p1, x+1, y2, rgba[i+1][RCOMP], rgba[i+1][GCOMP], rgba[i+1][BCOMP] );
          *ptr32++ = (p1 << 16) | p0;
       }
       if (extraPixel) {
-         PACK_TRUEDITHER( ptr[n], x+n, y, rgba[n][RCOMP], rgba[n][GCOMP], rgba[n][BCOMP]);
+         PACK_TRUEDITHER( ptr[n], x+n, y2, rgba[n][RCOMP], rgba[n][GCOMP], rgba[n][BCOMP]);
       }
 #else
       for (i = 0; i < n; i++, x++) {
-         PACK_TRUEDITHER( ptr[i], x, y, rgba[i][RCOMP], rgba[i][GCOMP], rgba[i][BCOMP]);
+         PACK_TRUEDITHER( ptr[i], x, y2, rgba[i][RCOMP], rgba[i][GCOMP], rgba[i][BCOMP]);
       }
 #endif
    }
@@ -4152,17 +4153,14 @@ static void read_color_pixels( const GLcontext *ctx,
 
 
 static void
-clear_color_HPCR_ximage( GLcontext *ctx,
-                         GLubyte r, GLubyte g, GLubyte b, GLubyte a )
+clear_color_HPCR_ximage( GLcontext *ctx, const GLchan color[4] )
 {
    int i;
    const XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   xmesa->clearcolor[0] = r;
-   xmesa->clearcolor[1] = g;
-   xmesa->clearcolor[2] = b;
-   xmesa->clearcolor[3] = a;
 
-   if (r == 0 && g == 0 && b == 0) {
+   COPY_4V(xmesa->clearcolor, color);
+
+   if (color[0] == 0 && color[1] == 0 && color[2] == 0) {
       /* black is black */
       MEMSET( xmesa->xm_visual->hpcr_clear_ximage_pattern, 0x0 ,
               sizeof(xmesa->xm_visual->hpcr_clear_ximage_pattern));
@@ -4171,27 +4169,23 @@ clear_color_HPCR_ximage( GLcontext *ctx,
       /* build clear pattern */
       for (i=0; i<16; i++) {
          xmesa->xm_visual->hpcr_clear_ximage_pattern[0][i]    =
-            DITHER_HPCR(i, 0, r, g, b);
+            DITHER_HPCR(i, 0, color[0], color[1], color[2]);
          xmesa->xm_visual->hpcr_clear_ximage_pattern[1][i]    =
-            DITHER_HPCR(i, 1, r, g, b);
+            DITHER_HPCR(i, 1, color[0], color[1], color[2]);
       }
    }
 }
 
 
 static void
-clear_color_HPCR_pixmap( GLcontext *ctx,
-                         GLubyte r, GLubyte g, GLubyte b, GLubyte a )
+clear_color_HPCR_pixmap( GLcontext *ctx, const GLchan color[4] )
 {
    int i;
    const XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   xmesa->clearcolor[0] = r;
-   xmesa->clearcolor[1] = g;
-   xmesa->clearcolor[2] = b;
-   xmesa->clearcolor[3] = a;
 
+   COPY_4V(xmesa->clearcolor, color);
 
-   if (0x0==r && 0x0==g && 0x0==b) {
+   if (color[0] == 0 && color[1] == 0 && color[2] == 0) {
       /* black is black */
       for (i=0; i<16; i++) {
          XMesaPutPixel(xmesa->xm_visual->hpcr_clear_ximage, i, 0, 0);
@@ -4200,8 +4194,10 @@ clear_color_HPCR_pixmap( GLcontext *ctx,
    }
    else {
       for (i=0; i<16; i++) {
-         XMesaPutPixel(xmesa->xm_visual->hpcr_clear_ximage, i, 0, DITHER_HPCR(i, 0, r, g, b));
-         XMesaPutPixel(xmesa->xm_visual->hpcr_clear_ximage, i, 1, DITHER_HPCR(i, 1, r, g, b));
+         XMesaPutPixel(xmesa->xm_visual->hpcr_clear_ximage, i, 0,
+                       DITHER_HPCR(i, 0, color[0], color[1], color[2]));
+         XMesaPutPixel(xmesa->xm_visual->hpcr_clear_ximage, i, 1,
+                       DITHER_HPCR(i, 1, color[0], color[1], color[2]));
       }
    }
    /* change tile pixmap content */
