@@ -1,4 +1,4 @@
-/* $Id: teximage.c,v 1.98 2001/06/15 14:18:46 brianp Exp $ */
+/* $Id: teximage.c,v 1.103 2001/07/26 20:02:10 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -58,6 +58,9 @@
 #ifdef DEBUG
 static void PrintTexture(const struct gl_texture_image *img)
 {
+#if CHAN_TYPE == GL_FLOAT
+   _mesa_problem(NULL, "PrintTexture doesn't support float channels");
+#else
    GLuint i, j, c;
    const GLchan *data = (const GLchan *) img->Data;
 
@@ -101,6 +104,7 @@ static void PrintTexture(const struct gl_texture_image *img)
       }
       printf("\n");
    }
+#endif
 }
 #endif
 
@@ -504,6 +508,7 @@ _mesa_select_tex_image(GLcontext *ctx, const struct gl_texture_unit *texUnit,
 
 
 
+#if 000 /* not used anymore */
 /*
  * glTexImage[123]D can accept a NULL image pointer.  In this case we
  * create a texture image with unspecified image contents per the OpenGL
@@ -516,6 +521,7 @@ make_null_texture(GLint width, GLint height, GLint depth, GLenum format)
    const GLint numPixels = width * height * depth;
    GLubyte *data = (GLubyte *) MALLOC(numPixels * components * sizeof(GLubyte));
 
+#ifdef DEBUG
    /*
     * Let's see if anyone finds this.  If glTexImage2D() is called with
     * a NULL image pointer then load the texture image with something
@@ -548,9 +554,11 @@ make_null_texture(GLint width, GLint height, GLint depth, GLenum format)
          }
       }
    }
+#endif
 
    return data;
 }
+#endif
 
 
 
@@ -1349,10 +1357,12 @@ _mesa_TexImage1D( GLenum target, GLint level, GLint internalFormat,
       _mesa_init_teximage_fields(ctx, texImage, postConvWidth, 1, 1,
                                  border, internalFormat);
 
-      if (ctx->NewState & _NEW_PIXEL)
+      if (ctx->NewState & _IMAGE_NEW_TRANSFER_STATE)
          _mesa_update_state(ctx);
 
       ASSERT(ctx->Driver.TexImage1D);
+
+#if 0 /* don't make default teximage anymore */
       if (pixels) {
          (*ctx->Driver.TexImage1D)(ctx, target, level, internalFormat,
                                    width, border, format, type, pixels,
@@ -1368,6 +1378,12 @@ _mesa_TexImage1D( GLenum target, GLint level, GLint internalFormat,
             FREE(dummy);
          }
       }
+#else
+      /* <pixels> may be null! */
+      (*ctx->Driver.TexImage1D)(ctx, target, level, internalFormat,
+                                width, border, format, type, pixels,
+                                &ctx->Unpack, texObj, texImage);
+#endif
 
       ASSERT(texImage->TexFormat);
       if (!texImage->FetchTexel) {
@@ -1466,10 +1482,12 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
       _mesa_init_teximage_fields(ctx, texImage, postConvWidth, postConvHeight,
                                  1, border, internalFormat);
 
-      if (ctx->NewState & _NEW_PIXEL)
+      if (ctx->NewState & _IMAGE_NEW_TRANSFER_STATE)
          _mesa_update_state(ctx);
 
       ASSERT(ctx->Driver.TexImage2D);
+
+#if 0 /* don't make default teximage anymore */
       if (pixels) {
          (*ctx->Driver.TexImage2D)(ctx, target, level, internalFormat,
                                    width, height, border, format, type, pixels,
@@ -1485,6 +1503,12 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
             FREE(dummy);
          }
       }
+#else
+      /* <pixels> may be null! */
+      (*ctx->Driver.TexImage2D)(ctx, target, level, internalFormat,
+                                width, height, border, format, type, pixels,
+                                &ctx->Unpack, texObj, texImage);
+#endif
 
       ASSERT(texImage->TexFormat);
       if (!texImage->FetchTexel) {
@@ -1501,7 +1525,9 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
       texObj->Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
    }
-   else if (target == GL_PROXY_TEXTURE_2D) {
+   else if (target == GL_PROXY_TEXTURE_2D ||
+            (target == GL_PROXY_TEXTURE_CUBE_MAP_ARB &&
+             ctx->Extensions.ARB_texture_cube_map)) {
       /* Proxy texture: check for errors and update proxy state */
       GLenum error = texture_error_check(ctx, target, level, internalFormat,
 				format, type, 2,
@@ -1577,10 +1603,12 @@ _mesa_TexImage3D( GLenum target, GLint level, GLenum internalFormat,
       _mesa_init_teximage_fields(ctx, texImage, width, height, depth, border,
                                  internalFormat);
 
-      if (ctx->NewState & _NEW_PIXEL)
+      if (ctx->NewState & _IMAGE_NEW_TRANSFER_STATE)
          _mesa_update_state(ctx);
 
       ASSERT(ctx->Driver.TexImage3D);
+
+#if 0 /* don't make default teximage anymore */
       if (pixels) {
          (*ctx->Driver.TexImage3D)(ctx, target, level, (GLint) internalFormat,
                                    width, height, depth, border,
@@ -1598,6 +1626,12 @@ _mesa_TexImage3D( GLenum target, GLint level, GLenum internalFormat,
             FREE(dummy);
          }
       }
+#else
+      /* <pixels> may be null! */
+      (*ctx->Driver.TexImage3D)(ctx, target, level, internalFormat,
+                                width, height, depth, border, format, type,
+                                pixels, &ctx->Unpack, texObj, texImage);
+#endif
 
       ASSERT(texImage->TexFormat);
       if (!texImage->FetchTexel) {
@@ -1669,7 +1703,7 @@ _mesa_TexSubImage1D( GLenum target, GLint level,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (ctx->NewState & _NEW_PIXEL)
+   if (ctx->NewState & _IMAGE_NEW_TRANSFER_STATE)
       _mesa_update_state(ctx);
 
    /* XXX should test internal format */
@@ -1715,7 +1749,7 @@ _mesa_TexSubImage2D( GLenum target, GLint level,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (ctx->NewState & _NEW_PIXEL)
+   if (ctx->NewState & _IMAGE_NEW_TRANSFER_STATE)
       _mesa_update_state(ctx);
 
    /* XXX should test internal format */
@@ -1763,7 +1797,7 @@ _mesa_TexSubImage3D( GLenum target, GLint level,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (ctx->NewState & _NEW_PIXEL)
+   if (ctx->NewState & _IMAGE_NEW_TRANSFER_STATE)
       _mesa_update_state(ctx);
 
    if (subtexture_error_check(ctx, 3, target, level, xoffset, yoffset, zoffset,
@@ -1808,7 +1842,7 @@ _mesa_CopyTexImage1D( GLenum target, GLint level,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (ctx->NewState & _NEW_PIXEL)
+   if (ctx->NewState & _IMAGE_NEW_TRANSFER_STATE)
       _mesa_update_state(ctx);
 
    if (is_color_format(internalFormat)) {
@@ -1871,7 +1905,7 @@ _mesa_CopyTexImage2D( GLenum target, GLint level, GLenum internalFormat,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (ctx->NewState & _NEW_PIXEL)
+   if (ctx->NewState & _IMAGE_NEW_TRANSFER_STATE)
       _mesa_update_state(ctx);
 
    if (is_color_format(internalFormat)) {
@@ -1933,7 +1967,7 @@ _mesa_CopyTexSubImage1D( GLenum target, GLint level,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (ctx->NewState & _NEW_PIXEL)
+   if (ctx->NewState & _IMAGE_NEW_TRANSFER_STATE)
       _mesa_update_state(ctx);
 
    /* XXX should test internal format */
@@ -1969,7 +2003,7 @@ _mesa_CopyTexSubImage2D( GLenum target, GLint level,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (ctx->NewState & _NEW_PIXEL)
+   if (ctx->NewState & _IMAGE_NEW_TRANSFER_STATE)
       _mesa_update_state(ctx);
 
    /* XXX should test internal format */
@@ -2007,7 +2041,7 @@ _mesa_CopyTexSubImage3D( GLenum target, GLint level,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (ctx->NewState & _NEW_PIXEL)
+   if (ctx->NewState & _IMAGE_NEW_TRANSFER_STATE)
       _mesa_update_state(ctx);
 
    /* XXX should test internal format */

@@ -1,4 +1,4 @@
-/* $Id: texstore.c,v 1.29 2001/06/15 14:18:46 brianp Exp $ */
+/* $Id: texstore.c,v 1.33 2001/07/23 16:07:12 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -189,8 +189,9 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
          const GLint srcRowStride = _mesa_image_row_stride(srcPacking,
                                                srcWidth, srcFormat, srcType);
          const GLint widthInBytes = srcWidth * texComponents * sizeof(GLchan);
-         GLchan *dst = (GLchan *) texDestAddr + dstYoffset * dstRowStride
-                      + dstXoffset * texComponents;
+         GLchan *dst = (GLchan *) texDestAddr
+                     + dstYoffset * (dstRowStride / sizeof(GLchan))
+                     + dstXoffset * texComponents;
          if (srcRowStride == widthInBytes && dstRowStride == widthInBytes) {
             MEMCPY(dst, src, srcHeight * widthInBytes);
          }
@@ -198,8 +199,8 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
             GLint i;
             for (i = 0; i < srcHeight; i++) {
                MEMCPY(dst, src, widthInBytes);
-               src += srcRowStride;
-               dst += dstRowStride;
+               src += (srcRowStride / sizeof(GLchan));
+               dst += (dstRowStride / sizeof(GLchan));
             }
          }
          return;  /* all done */
@@ -211,8 +212,9 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
                                    srcFormat, srcType, 0, 0, 0);
          const GLint srcRowStride = _mesa_image_row_stride(srcPacking,
                                                srcWidth, srcFormat, srcType);
-         GLchan *dst = (GLchan *) texDestAddr + dstYoffset * dstRowStride
-                      + dstXoffset * texComponents;
+         GLchan *dst = (GLchan *) texDestAddr
+                     + dstYoffset * (dstRowStride / sizeof(GLchan))
+                     + dstXoffset * texComponents;
          GLint i, j;
          for (i = 0; i < srcHeight; i++) {
             const GLchan *s = src;
@@ -223,8 +225,8 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
                *d++ = *s++;  /*blue*/
                s++;          /*alpha*/
             }
-            src += srcRowStride;
-            dst += dstRowStride;
+            src += (srcRowStride / sizeof(GLchan));
+            dst += (dstRowStride / sizeof(GLchan));
          }
          return;  /* all done */
       }
@@ -238,8 +240,8 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
       const GLenum texType = CHAN_TYPE;
       GLint img, row;
       GLchan *dest = (GLchan *) texDestAddr + dstZoffset * dstImageStride
-                    + dstYoffset * dstRowStride
-                    + dstXoffset * texComponents;
+                   + dstYoffset * (dstRowStride / sizeof(GLchan))
+                   + dstXoffset * texComponents;
       for (img = 0; img < srcDepth; img++) {
          GLchan *destRow = dest;
          for (row = 0; row < srcHeight; row++) {
@@ -247,7 +249,7 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
                 srcAddr, srcWidth, srcHeight, srcFormat, srcType, img, row, 0);
             _mesa_unpack_index_span(ctx, srcWidth, texType, destRow,
                                     srcType, src, srcPacking, transferOps);
-            destRow += dstRowStride;
+            destRow += (dstRowStride / sizeof(GLchan));
          }
          dest += dstImageStride;
       }
@@ -257,7 +259,7 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
       GLint img, row;
       GLubyte *dest = (GLubyte *) texDestAddr
                     + dstZoffset * dstImageStride
-                    + dstYoffset * dstRowStride
+                    + dstYoffset * (dstRowStride / sizeof(GLchan))
                     + dstXoffset * texComponents;
       for (img = 0; img < srcDepth; img++) {
          GLubyte *destRow = dest;
@@ -266,7 +268,7 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
                 srcAddr, srcWidth, srcHeight, srcFormat, srcType, img, row, 0);
             _mesa_unpack_depth_span(ctx, srcWidth, (GLfloat *) destRow,
                                     srcType, src, srcPacking);
-            destRow += dstRowStride;
+            destRow += (dstRowStride / sizeof(GLchan));
          }
          dest += dstImageStride;
       }
@@ -331,7 +333,7 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
             /* packing and transfer ops after convolution */
             srcf = convImage;
             dest = (GLchan *) texDestAddr + (dstZoffset + img) * dstImageStride
-                 + dstYoffset * dstRowStride;
+                 + dstYoffset * (dstRowStride / sizeof(GLchan));
             for (row = 0; row < convHeight; row++) {
                _mesa_pack_float_rgba_span(ctx, convWidth,
                                           (const GLfloat (*)[4]) srcf,
@@ -340,7 +342,7 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
                                           transferOps
                                           & IMAGE_POST_CONVOLUTION_BITS);
                srcf += convWidth * 4;
-               dest += dstRowStride;
+               dest += (dstRowStride / sizeof(GLchan));
             }
          }
 
@@ -353,8 +355,8 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
           */
          GLint img, row;
          GLchan *dest = (GLchan *) texDestAddr + dstZoffset * dstImageStride
-                       + dstYoffset * dstRowStride
-                       + dstXoffset * texComponents;
+                      + dstYoffset * (dstRowStride / sizeof(GLchan))
+                      + dstXoffset * texComponents;
          for (img = 0; img < srcDepth; img++) {
             GLchan *destRow = dest;
             for (row = 0; row < srcHeight; row++) {
@@ -364,7 +366,7 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
                _mesa_unpack_chan_color_span(ctx, srcWidth, texDestFormat,
                                        destRow, srcFormat, srcType, srcRow,
                                        srcPacking, transferOps);
-               destRow += dstRowStride;
+               destRow += (dstRowStride / sizeof(GLchan));
             }
             dest += dstImageStride;
          }
@@ -649,18 +651,22 @@ _mesa_store_teximage1d(GLcontext *ctx, GLenum target, GLint level,
       return;
    }
 
-   /* unpack image, apply transfer ops and store in texImage->Data */
-   _mesa_transfer_teximage(ctx, 1, _mesa_base_tex_format(ctx, internalFormat),
-                           texImage->TexFormat, texImage->Data,
-                           width, 1, 1, 0, 0, 0,
-                           0, /* dstRowStride */
-                           0, /* dstImageStride */
-                           format, type, pixels, packing);
+   if (pixels) {
+      /* unpack image, apply transfer ops and store in texImage->Data */
+      _mesa_transfer_teximage(ctx, 1,
+                              _mesa_base_tex_format(ctx, internalFormat),
+                              texImage->TexFormat, texImage->Data,
+                              width, 1, 1, 0, 0, 0,
+                              0, /* dstRowStride */
+                              0, /* dstImageStride */
+                              format, type, pixels, packing);
 
-   /* GL_SGIS_generate_mipmap */
-   if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      _mesa_generate_mipmap(ctx, &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
-                            texObj);
+      /* GL_SGIS_generate_mipmap */
+      if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
+         _mesa_generate_mipmap(ctx,
+                               &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
+                               texObj);
+      }
    }
 }
 
@@ -718,18 +724,22 @@ _mesa_store_teximage2d(GLcontext *ctx, GLenum target, GLint level,
       return;
    }
 
-   /* unpack image, apply transfer ops and store in texImage->Data */
-   _mesa_transfer_teximage(ctx, 2, _mesa_base_tex_format(ctx, internalFormat),
-                           texImage->TexFormat, texImage->Data,
-                           width, height, 1, 0, 0, 0,
-                           texImage->Width * texelBytes,
-                           0, /* dstImageStride */
-                           format, type, pixels, packing);
+   if (pixels) {
+      /* unpack image, apply transfer ops and store in texImage->Data */
+      _mesa_transfer_teximage(ctx, 2,
+                              _mesa_base_tex_format(ctx, internalFormat),
+                              texImage->TexFormat, texImage->Data,
+                              width, height, 1, 0, 0, 0,
+                              texImage->Width * texelBytes,
+                              0, /* dstImageStride */
+                              format, type, pixels, packing);
 
-   /* GL_SGIS_generate_mipmap */
-   if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      _mesa_generate_mipmap(ctx, &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
-                            texObj);
+      /* GL_SGIS_generate_mipmap */
+      if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
+         _mesa_generate_mipmap(ctx,
+                               &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
+                               texObj);
+      }
    }
 }
 
@@ -780,18 +790,22 @@ _mesa_store_teximage3d(GLcontext *ctx, GLenum target, GLint level,
       return;
    }
 
-   /* unpack image, apply transfer ops and store in texImage->Data */
-   _mesa_transfer_teximage(ctx, 3, _mesa_base_tex_format(ctx, internalFormat),
-                           texImage->TexFormat, texImage->Data,
-                           width, height, depth, 0, 0, 0,
-                           texImage->Width * texelBytes,
-                           texImage->Width * texImage->Height * texelBytes,
-                           format, type, pixels, packing);
+   if (pixels) {
+      /* unpack image, apply transfer ops and store in texImage->Data */
+      _mesa_transfer_teximage(ctx, 3,
+                              _mesa_base_tex_format(ctx, internalFormat),
+                              texImage->TexFormat, texImage->Data,
+                              width, height, depth, 0, 0, 0,
+                              texImage->Width * texelBytes,
+                              texImage->Width * texImage->Height * texelBytes,
+                              format, type, pixels, packing);
 
-   /* GL_SGIS_generate_mipmap */
-   if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      _mesa_generate_mipmap(ctx, &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
-                            texObj);
+      /* GL_SGIS_generate_mipmap */
+      if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
+         _mesa_generate_mipmap(ctx,
+                               &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
+                               texObj);
+      }
    }
 }
 
@@ -1021,13 +1035,13 @@ do_row(const struct gl_texture_format *format, GLint srcWidth,
          for (i = j = 0, k = k0; i < dstWidth;
               i++, j += colStride, k += colStride) {
             dst[i][0] = (rowA[j][0] + rowA[k][0] +
-                         rowB[j][0] + rowB[k][0]) >> 2;
+                         rowB[j][0] + rowB[k][0]) / 4;
             dst[i][1] = (rowA[j][1] + rowA[k][1] +
-                         rowB[j][1] + rowB[k][1]) >> 2;
+                         rowB[j][1] + rowB[k][1]) / 4;
             dst[i][2] = (rowA[j][2] + rowA[k][2] +
-                         rowB[j][2] + rowB[k][2]) >> 2;
+                         rowB[j][2] + rowB[k][2]) / 4;
             dst[i][3] = (rowA[j][3] + rowA[k][3] +
-                         rowB[j][3] + rowB[k][3]) >> 2;
+                         rowB[j][3] + rowB[k][3]) / 4;
          }
       }
       return;
@@ -1040,11 +1054,11 @@ do_row(const struct gl_texture_format *format, GLint srcWidth,
          for (i = j = 0, k = k0; i < dstWidth;
               i++, j += colStride, k += colStride) {
             dst[i][0] = (rowA[j][0] + rowA[k][0] +
-                         rowB[j][0] + rowB[k][0]) >> 2;
+                         rowB[j][0] + rowB[k][0]) / 4;
             dst[i][1] = (rowA[j][1] + rowA[k][1] +
-                         rowB[j][1] + rowB[k][1]) >> 2;
+                         rowB[j][1] + rowB[k][1]) / 4;
             dst[i][2] = (rowA[j][2] + rowA[k][2] +
-                         rowB[j][2] + rowB[k][2]) >> 2;
+                         rowB[j][2] + rowB[k][2]) / 4;
          }
       }
       return;
@@ -1059,7 +1073,7 @@ do_row(const struct gl_texture_format *format, GLint srcWidth,
          GLchan *dst = (GLchan *) dstRow;
          for (i = j = 0, k = k0; i < dstWidth;
               i++, j += colStride, k += colStride) {
-            dst[i] = (rowA[j] + rowA[k] + rowB[j] + rowB[k]) >> 2;
+            dst[i] = (rowA[j] + rowA[k] + rowB[j] + rowB[k]) / 4;
          }
       }
       return;
@@ -1072,9 +1086,9 @@ do_row(const struct gl_texture_format *format, GLint srcWidth,
          for (i = j = 0, k = k0; i < dstWidth;
               i++, j += colStride, k += colStride) {
             dst[i][0] = (rowA[j][0] + rowA[k][0] +
-                         rowB[j][0] + rowB[k][0]) >> 2;
+                         rowB[j][0] + rowB[k][0]) / 4;
             dst[i][1] = (rowA[j][1] + rowA[k][1] +
-                         rowB[j][1] + rowB[k][1]) >> 2;
+                         rowB[j][1] + rowB[k][1]) / 4;
          }
       }
       return;
@@ -1101,13 +1115,13 @@ do_row(const struct gl_texture_format *format, GLint srcWidth,
          for (i = j = 0, k = k0; i < dstWidth;
               i++, j += colStride, k += colStride) {
             dst[i][0] = (rowA[j][0] + rowA[k][0] +
-                         rowB[j][0] + rowB[k][0]) >> 2;
+                         rowB[j][0] + rowB[k][0]) / 4;
             dst[i][1] = (rowA[j][1] + rowA[k][1] +
-                         rowB[j][1] + rowB[k][1]) >> 2;
+                         rowB[j][1] + rowB[k][1]) / 4;
             dst[i][2] = (rowA[j][2] + rowA[k][2] +
-                         rowB[j][2] + rowB[k][2]) >> 2;
+                         rowB[j][2] + rowB[k][2]) / 4;
             dst[i][3] = (rowA[j][3] + rowA[k][3] +
-                         rowB[j][3] + rowB[k][3]) >> 2;
+                         rowB[j][3] + rowB[k][3]) / 4;
          }
       }
       return;
@@ -1120,11 +1134,11 @@ do_row(const struct gl_texture_format *format, GLint srcWidth,
          for (i = j = 0, k = k0; i < dstWidth;
               i++, j += colStride, k += colStride) {
             dst[i][0] = (rowA[j][0] + rowA[k][0] +
-                         rowB[j][0] + rowB[k][0]) >> 2;
+                         rowB[j][0] + rowB[k][0]) / 4;
             dst[i][1] = (rowA[j][1] + rowA[k][1] +
-                         rowB[j][1] + rowB[k][1]) >> 2;
+                         rowB[j][1] + rowB[k][1]) / 4;
             dst[i][2] = (rowA[j][2] + rowA[k][2] +
-                         rowB[j][2] + rowB[k][2]) >> 2;
+                         rowB[j][2] + rowB[k][2]) / 4;
          }
       }
       return;
@@ -1419,6 +1433,8 @@ make_3d_mipmap(const struct gl_texture_format *format, GLint border,
    GLint bytesPerSrcImage, bytesPerDstImage;
    GLint bytesPerSrcRow, bytesPerDstRow;
    GLint srcImageOffset, srcRowOffset;
+
+   (void) srcDepthNB; /* silence warnings */
 
    /* Need two temporary row buffers */
    tmpRowA = MALLOC(srcWidth * bpt);

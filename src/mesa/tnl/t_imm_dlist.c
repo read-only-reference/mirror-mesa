@@ -1,4 +1,4 @@
-/* $Id: t_imm_dlist.c,v 1.21 2001/06/28 17:34:14 keithw Exp $ */
+/* $Id: t_imm_dlist.c,v 1.27 2001/07/28 21:04:21 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -96,7 +96,7 @@ static void build_normal_lengths( struct immediate *IM )
 static void fixup_normal_lengths( struct immediate *IM ) 
 {
    GLuint i;
-   GLfloat len;
+   GLfloat len = 1.0;  /* just to silence warnings */
    GLfloat (*data)[3] = IM->Normal;
    GLfloat *dest = IM->NormalLengthPtr;
    GLuint *flags = IM->Flag;
@@ -107,9 +107,11 @@ static void fixup_normal_lengths( struct immediate *IM )
       dest[i] = len;
    } 
 
-   while (!(flags[i] & (VERT_NORM|VERT_END_VB))) {
-      dest[i] = len;
-      i++;
+   if (i < IM->Count) {
+      while (!(flags[i] & (VERT_NORM|VERT_END_VB))) {
+	 dest[i] = len;
+	 i++;
+      }
    }
 }
 
@@ -341,9 +343,6 @@ execute_compiled_cassette( GLcontext *ctx, void *data )
       loopback_compiled_cassette( ctx, IM );
       restore_compiled_primitives( ctx, IM );
    }
-   else if (IM->Count == IM->Start) {
-      _tnl_copy_to_current( ctx, IM, IM->OrFlag );
-   }
    else {
       if (ctx->NewState)
 	 _mesa_update_state(ctx);
@@ -356,16 +355,22 @@ execute_compiled_cassette( GLcontext *ctx, void *data )
 
       if (IM->Primitive[IM->LastPrimitive] & PRIM_END)
 	 ctx->Driver.CurrentExecPrimitive = GL_POLYGON+1;
-      else
+      else if ((IM->Primitive[IM->LastPrimitive] & PRIM_BEGIN) ||
+	       (IM->Primitive[IM->LastPrimitive] & PRIM_MODE_MASK) == 
+	       PRIM_OUTSIDE_BEGIN_END) {
 	 ctx->Driver.CurrentExecPrimitive =
 	    IM->Primitive[IM->LastPrimitive] & PRIM_MODE_MASK;
+      }
 
       _tnl_get_exec_copy_verts( ctx, IM );
 
       if (IM->NormalLengthPtr) 
 	 fixup_normal_lengths( IM );
       
-      _tnl_run_cassette( ctx, IM );
+      if (IM->Count == IM->Start) 
+	 _tnl_copy_to_current( ctx, IM, IM->OrFlag );
+      else
+	 _tnl_run_cassette( ctx, IM );
 
       restore_compiled_primitives( ctx, IM );
    }
@@ -394,6 +399,7 @@ print_compiled_cassette( GLcontext *ctx, void *data )
 	   node->IM->id, node->Start, node->Count);
 
    IM->Start = node->Start;
+   IM->CopyStart = node->Start;
    IM->Count = node->Count;
    IM->BeginState = node->BeginState;
    IM->OrFlag = node->OrFlag;
@@ -551,15 +557,15 @@ static void loopback_compiled_cassette( GLcontext *ctx, struct immediate *IM )
    GLuint *flags = IM->Flag;
    GLuint orflag = IM->OrFlag;
    GLuint j;
-   void (*vertex)( const GLfloat * );
-   void (*texcoordfv[MAX_TEXTURE_UNITS])( GLuint, const GLfloat * );
+   void (GLAPIENTRY *vertex)( const GLfloat * );
+   void (GLAPIENTRY *texcoordfv[MAX_TEXTURE_UNITS])( GLenum, const GLfloat * );
    GLuint maxtex = 0;
    GLuint p, length, prim = 0;
    
    if (orflag & VERT_OBJ_234)
-      vertex = glVertex4fv;
+      vertex = (void (GLAPIENTRY *)(const GLfloat *)) glVertex4fv;
    else
-      vertex = glVertex3fv;
+      vertex = (void (GLAPIENTRY *)(const GLfloat *)) glVertex3fv;
    
    if (orflag & VERT_TEX_ANY) {
       for (j = 0 ; j < ctx->Const.MaxTextureUnits ; j++) {

@@ -1,4 +1,4 @@
-/* $Id: t_context.c,v 1.20 2001/06/28 17:34:14 keithw Exp $ */
+/* $Id: t_context.c,v 1.22 2001/07/19 15:54:35 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -123,8 +123,8 @@ _tnl_CreateContext( GLcontext *ctx )
    ctx->Driver.CurrentExecPrimitive = PRIM_OUTSIDE_BEGIN_END;
    ctx->Driver.CurrentSavePrimitive = PRIM_UNKNOWN;
 
-   tnl->Driver.RenderTabElts = _tnl_render_tab_elts;
-   tnl->Driver.RenderTabVerts = _tnl_render_tab_verts;
+   tnl->Driver.Render.PrimTabElts = _tnl_render_tab_elts;
+   tnl->Driver.Render.PrimTabVerts = _tnl_render_tab_verts;
 
    
    return GL_TRUE;
@@ -139,6 +139,7 @@ _tnl_DestroyContext( GLcontext *ctx )
    _tnl_array_destroy( ctx );
    _tnl_imm_destroy( ctx );
    _tnl_destroy_pipeline( ctx );
+   _tnl_free_immediate( tnl->freed_immediate );
 
    FREE(tnl);
    ctx->swtnl_context = 0;

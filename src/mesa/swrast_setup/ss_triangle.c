@@ -1,4 +1,4 @@
-/* $Id: ss_triangle.c,v 1.13 2001/04/28 08:39:18 keithw Exp $ */
+/* $Id: ss_triangle.c,v 1.15 2001/07/17 19:39:32 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -141,8 +141,8 @@ static void _swsetup_render_point_tri( GLcontext *ctx,
    }
 }
 
-#define SS_COLOR(a,b) UNCLAMPED_FLOAT_TO_RGBA_CHAN(a,b)
-#define SS_SPEC(a,b) UNCLAMPED_FLOAT_TO_RGB_CHAN(a,b)
+#define SS_COLOR(a,b) COPY_CHAN4(a,b)
+#define SS_SPEC(a,b) COPY_3V(a,b)
 #define SS_IND(a,b) (a = b)
 
 #define IND (0)
@@ -262,7 +262,7 @@ static void swsetup_line( GLcontext *ctx, GLuint v0, GLuint v1 )
 
 void _swsetup_choose_trifuncs( GLcontext *ctx )
 {
-   SScontext *swsetup = SWSETUP_CONTEXT(ctx);
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
    GLuint ind = 0;
 
    if (ctx->Polygon._OffsetAny)
@@ -277,8 +277,8 @@ void _swsetup_choose_trifuncs( GLcontext *ctx )
    if (ctx->Visual.rgbMode)
       ind |= SS_RGBA_BIT;
 
-   swsetup->Triangle = tri_tab[ind];
-   swsetup->Quad = quad_tab[ind];
-   swsetup->Line = swsetup_line;
-   swsetup->Points = swsetup_points;
+   tnl->Driver.Render.Triangle = tri_tab[ind];
+   tnl->Driver.Render.Quad = quad_tab[ind];
+   tnl->Driver.Render.Line = swsetup_line;
+   tnl->Driver.Render.Points = swsetup_points;
 }

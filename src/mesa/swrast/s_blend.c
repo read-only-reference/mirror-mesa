@@ -1,4 +1,4 @@
-/* $Id: s_blend.c,v 1.7 2001/03/19 02:25:36 keithw Exp $ */
+/* $Id: s_blend.c,v 1.9 2001/07/16 20:45:55 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -216,6 +216,12 @@ blend_modulate( GLcontext *ctx, GLuint n, const GLubyte mask[],
 
    for (i=0;i<n;i++) {
       if (mask[i]) {
+#if CHAN_TYPE == GL_FLOAT
+         rgba[i][RCOMP] = rgba[i][RCOMP] * dest[i][RCOMP];
+         rgba[i][GCOMP] = rgba[i][GCOMP] * dest[i][GCOMP];
+         rgba[i][BCOMP] = rgba[i][BCOMP] * dest[i][BCOMP];
+         rgba[i][ACOMP] = rgba[i][ACOMP] * dest[i][ACOMP];
+#else
          GLint r = (rgba[i][RCOMP] * dest[i][RCOMP]) >> 8;
          GLint g = (rgba[i][GCOMP] * dest[i][GCOMP]) >> 8;
          GLint b = (rgba[i][BCOMP] * dest[i][BCOMP]) >> 8;
@@ -224,6 +230,7 @@ blend_modulate( GLcontext *ctx, GLuint n, const GLubyte mask[],
          rgba[i][GCOMP] = (GLchan) g;
          rgba[i][BCOMP] = (GLchan) b;
          rgba[i][ACOMP] = (GLchan) a;
+#endif
       }
    }
 }
@@ -579,7 +586,8 @@ void _swrast_choose_blend_func( GLcontext *ctx )
    else if (eq==GL_FUNC_ADD_EXT && srcRGB==GL_SRC_ALPHA
 	    && dstRGB==GL_ONE_MINUS_SRC_ALPHA)
    {
-#if defined(USE_MMX_ASM)
+      /* XXX It looks like the MMX blend code is broken.  Disable for now. */
+#if 0 && defined(USE_MMX_ASM)
       if ( cpu_has_mmx ) {
 	 SWRAST_CONTEXT(ctx)->BlendFunc = _mesa_mmx_blend_transparency;
       }

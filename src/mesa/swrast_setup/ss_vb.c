@@ -1,4 +1,4 @@
-/* $Id: ss_vb.c,v 1.12 2001/03/29 21:16:26 keithw Exp $ */
+/* $Id: ss_vb.c,v 1.14 2001/07/17 19:39:32 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -30,15 +30,60 @@
 #include "glheader.h"
 #include "colormac.h"
 #include "macros.h"
+#include "mem.h"
 
 #include "swrast/swrast.h"
-
 #include "tnl/t_context.h"
-
 #include "math/m_vector.h"
+#include "math/m_translate.h"
+
 #include "ss_context.h"
 #include "ss_vb.h"
 
+static void do_import( struct vertex_buffer *VB,
+		       struct gl_client_array *to,
+		       struct gl_client_array *from )
+{
+   GLuint count = VB->Count;
+
+   if (!to->Ptr) {
+      to->Ptr = ALIGN_MALLOC( VB->Size * 4 * sizeof(GLchan), 32 );
+      to->Type = CHAN_TYPE;
+   }
+
+   /* No need to transform the same value 3000 times.
+    */
+   if (!from->StrideB) {
+      to->StrideB = 0;
+      count = 1;
+   }
+   else
+      to->StrideB = 4 * sizeof(GLchan);
+   
+   _math_trans_4chan( (GLchan (*)[4]) to->Ptr,
+		      from->Ptr,
+		      from->StrideB,
+		      from->Type,
+		      from->Size,
+		      0,
+		      count);
+}
+
+static void import_float_colors( GLcontext *ctx )
+{
+   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
+   struct gl_client_array *to = &SWSETUP_CONTEXT(ctx)->ChanColor;
+   do_import( VB, to, VB->ColorPtr[0] );
+   VB->ColorPtr[0] = to;
+}
+
+static void import_float_spec_colors( GLcontext *ctx )
+{
+   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
+   struct gl_client_array *to = &SWSETUP_CONTEXT(ctx)->ChanSecondaryColor;
+   do_import( VB, to, VB->SecondaryColorPtr[0] );
+   VB->SecondaryColorPtr[0] = to;
+}
 
 
 /* Provides a RasterSetup function which prebuilds vertices for the
@@ -46,8 +91,6 @@
  * in this module, but not the rest of the swrast module.
  */
 
-typedef void (*SetupFunc)( GLcontext *ctx,
-			   GLuint start, GLuint end, GLuint newinputs );
 
 #define COLOR         0x1
 #define INDEX         0x2
@@ -58,7 +101,9 @@ typedef void (*SetupFunc)( GLcontext *ctx,
 #define POINT         0x40
 #define MAX_SETUPFUNC 0x80
 
-static SetupFunc setup_func[MAX_SETUPFUNC];
+static setup_func setup_tab[MAX_SETUPFUNC];
+static interp_func interp_tab[MAX_SETUPFUNC];
+static copy_pv_func copy_pv_tab[MAX_SETUPFUNC];
 
 
 #define IND (0)
@@ -165,84 +210,153 @@ static SetupFunc setup_func[MAX_SETUPFUNC];
 #define TAG(x) x##_index
 #include "ss_vbtmp.h"
 
-#define IND (INDEX|TEX0)
-#define TAG(x) x##_index_tex0
-#include "ss_vbtmp.h"
-
 #define IND (INDEX|FOG)
 #define TAG(x) x##_index_fog
-#include "ss_vbtmp.h"
-
-#define IND (INDEX|TEX0|FOG)
-#define TAG(x) x##_index_tex0_fog
 #include "ss_vbtmp.h"
 
 #define IND (INDEX|POINT)
 #define TAG(x) x##_index_point
 #include "ss_vbtmp.h"
 
-#define IND (INDEX|TEX0|POINT)
-#define TAG(x) x##_index_tex0_point
-#include "ss_vbtmp.h"
-
 #define IND (INDEX|FOG|POINT)
 #define TAG(x) x##_index_fog_point
 #include "ss_vbtmp.h"
 
-#define IND (INDEX|TEX0|FOG|POINT)
-#define TAG(x) x##_index_tex0_fog_point
-#include "ss_vbtmp.h"
+
+/***********************************************************************
+ *      Additional setup and interp for back color and edgeflag. 
+ ***********************************************************************/
+
+#define GET_COLOR(ptr, idx) (((GLchan (*)[4])((ptr)->Ptr))[idx])
+
+static void interp_extras( GLcontext *ctx,
+			   GLfloat t,
+			   GLuint dst, GLuint out, GLuint in,
+			   GLboolean force_boundary )
+{
+   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
+
+   if (VB->ColorPtr[1]) {
+      INTERP_4CHAN( t,
+		 GET_COLOR(VB->ColorPtr[1], dst),
+		 GET_COLOR(VB->ColorPtr[1], out),
+		 GET_COLOR(VB->ColorPtr[1], in) );
+
+      if (VB->SecondaryColorPtr[1]) {
+	 INTERP_3CHAN( t,
+		    GET_COLOR(VB->SecondaryColorPtr[1], dst),
+		    GET_COLOR(VB->SecondaryColorPtr[1], out),
+		    GET_COLOR(VB->SecondaryColorPtr[1], in) );
+      }
+   }
+   else if (VB->IndexPtr[1]) {
+      VB->IndexPtr[1]->data[dst] = (GLuint) (GLint)
+	 LINTERP( t,
+		  (GLfloat) VB->IndexPtr[1]->data[out],
+		  (GLfloat) VB->IndexPtr[1]->data[in] );
+   }
+
+   if (VB->EdgeFlag) {
+      VB->EdgeFlag[dst] = VB->EdgeFlag[out] || force_boundary;
+   }
+
+   interp_tab[SWSETUP_CONTEXT(ctx)->SetupIndex](ctx, t, dst, out, in,
+						force_boundary);
+}
+
+static void copy_pv_extras( GLcontext *ctx, GLuint dst, GLuint src )
+{
+   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
+
+   if (VB->ColorPtr[1]) {
+	 COPY_CHAN4( GET_COLOR(VB->ColorPtr[1], dst), 
+		     GET_COLOR(VB->ColorPtr[1], src) );
+	 
+	 if (VB->SecondaryColorPtr[1]) {
+	    COPY_3V( GET_COLOR(VB->SecondaryColorPtr[1], dst), 
+		     GET_COLOR(VB->SecondaryColorPtr[1], src) );
+	 }
+   }
+   else if (VB->IndexPtr[1]) {
+      VB->IndexPtr[1]->data[dst] = VB->IndexPtr[1]->data[src];
+   }
+
+   copy_pv_tab[SWSETUP_CONTEXT(ctx)->SetupIndex](ctx, dst, src);
+}
+
+
+
+
+/***********************************************************************
+ *                         Initialization 
+ ***********************************************************************/
+
+
+
 
 
 static void
-rs_invalid( GLcontext *ctx, GLuint start, GLuint end, GLuint newinputs )
+emit_invalid( GLcontext *ctx, GLuint start, GLuint end, GLuint newinputs )
 {
    fprintf(stderr, "swrast_setup: invalid setup function\n");
    (void) (ctx && start && end && newinputs);
 }
 
-void
-_swsetup_vb_init( GLcontext *ctx )
+static void 
+interp_invalid( GLcontext *ctx, GLfloat t,
+		GLuint edst, GLuint eout, GLuint ein,
+		GLboolean force_boundary )
+{
+   fprintf(stderr, "swrast_setup: invalid interp function\n");
+   (void) (ctx && t && edst && eout && ein && force_boundary);
+}
+
+static void 
+copy_pv_invalid( GLcontext *ctx, GLuint edst, GLuint esrc )
+{
+   fprintf(stderr, "swrast_setup: invalid copy_pv function\n");
+   (void) (ctx && edst && esrc );
+}
+
+static void init_standard( void )
 {
    GLuint i;
-   (void) ctx;
 
-   for (i = 0 ; i < Elements(setup_func) ; i++)
-      setup_func[i] = rs_invalid;
+   for (i = 0 ; i < Elements(setup_tab) ; i++) {
+      setup_tab[i] = emit_invalid;
+      interp_tab[i] = interp_invalid;
+      copy_pv_tab[i] = copy_pv_invalid;
+   }
 
-   setup_func[0] = rs_none;
-   setup_func[COLOR] = rs_color;
-   setup_func[COLOR|SPEC] = rs_color_spec;
-   setup_func[COLOR|FOG] = rs_color_fog;
-   setup_func[COLOR|SPEC|FOG] = rs_color_spec_fog;
-   setup_func[COLOR|TEX0] = rs_color_tex0;
-   setup_func[COLOR|TEX0|SPEC] = rs_color_tex0_spec;
-   setup_func[COLOR|TEX0|FOG] = rs_color_tex0_fog;
-   setup_func[COLOR|TEX0|SPEC|FOG] = rs_color_tex0_spec_fog;
-   setup_func[COLOR|MULTITEX] = rs_color_multitex;
-   setup_func[COLOR|MULTITEX|SPEC] = rs_color_multitex_spec;
-   setup_func[COLOR|MULTITEX|FOG] = rs_color_multitex_fog;
-   setup_func[COLOR|MULTITEX|SPEC|FOG] = rs_color_multitex_spec_fog;
-   setup_func[COLOR|POINT] = rs_color_point;
-   setup_func[COLOR|SPEC|POINT] = rs_color_spec_point;
-   setup_func[COLOR|FOG|POINT] = rs_color_fog_point;
-   setup_func[COLOR|SPEC|FOG|POINT] = rs_color_spec_fog_point;
-   setup_func[COLOR|TEX0|POINT] = rs_color_tex0_point;
-   setup_func[COLOR|TEX0|SPEC|POINT] = rs_color_tex0_spec_point;
-   setup_func[COLOR|TEX0|FOG|POINT] = rs_color_tex0_fog_point;
-   setup_func[COLOR|TEX0|SPEC|FOG|POINT] = rs_color_tex0_spec_fog_point;
-   setup_func[COLOR|MULTITEX|POINT] = rs_color_multitex_point;
-   setup_func[COLOR|MULTITEX|SPEC|POINT] = rs_color_multitex_spec_point;
-   setup_func[COLOR|MULTITEX|FOG|POINT] = rs_color_multitex_fog_point;
-   setup_func[COLOR|MULTITEX|SPEC|FOG|POINT] = rs_color_multitex_spec_fog_point;
-   setup_func[INDEX] = rs_index;
-   setup_func[INDEX|TEX0] = rs_index_tex0;
-   setup_func[INDEX|FOG] = rs_index_fog;
-   setup_func[INDEX|TEX0|FOG] = rs_index_tex0_fog;
-   setup_func[INDEX|POINT] = rs_index_point;
-   setup_func[INDEX|TEX0|POINT] = rs_index_tex0_point;
-   setup_func[INDEX|FOG|POINT] = rs_index_fog_point;
-   setup_func[INDEX|TEX0|FOG|POINT] = rs_index_tex0_fog_point;
+   init_none();
+   init_color();
+   init_color_spec();
+   init_color_fog();
+   init_color_spec_fog();
+   init_color_tex0();
+   init_color_tex0_spec();
+   init_color_tex0_fog();
+   init_color_tex0_spec_fog();
+   init_color_multitex();
+   init_color_multitex_spec();
+   init_color_multitex_fog();
+   init_color_multitex_spec_fog();
+   init_color_point();
+   init_color_spec_point();
+   init_color_fog_point();
+   init_color_spec_fog_point();
+   init_color_tex0_point();
+   init_color_tex0_spec_point();
+   init_color_tex0_fog_point();
+   init_color_tex0_spec_fog_point();
+   init_color_multitex_point();
+   init_color_multitex_spec_point();
+   init_color_multitex_fog_point();
+   init_color_multitex_spec_fog_point();
+   init_index();
+   init_index_fog();
+   init_index_point();
+   init_index_fog_point();
 }
 
 static void printSetupFlags(char *msg, GLuint flags )
@@ -260,10 +374,12 @@ static void printSetupFlags(char *msg, GLuint flags )
 }
 
 
+
 void
 _swsetup_choose_rastersetup_func(GLcontext *ctx)
 {
    SScontext *swsetup = SWSETUP_CONTEXT(ctx);
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
    int funcindex = 0;
 
    if (ctx->RenderMode == GL_RENDER) {
@@ -275,8 +391,7 @@ _swsetup_choose_rastersetup_func(GLcontext *ctx)
          else if (ctx->Texture._ReallyEnabled & 0xf)
             funcindex |= TEX0;
 
-         if (ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR ||
-             ctx->Fog.ColorSumEnabled)
+         if (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR)
             funcindex |= SPEC;
       }
       else {
@@ -293,12 +408,33 @@ _swsetup_choose_rastersetup_func(GLcontext *ctx)
       if (ctx->Visual.rgbMode)
 	 funcindex = (COLOR | TEX0); /* is feedback color subject to fogging? */
       else
-	 funcindex = (INDEX | TEX0);
+	 funcindex = INDEX;
    }
    else
       funcindex = 0;
+   
+   swsetup->SetupIndex = funcindex;
+   tnl->Driver.Render.BuildVertices = setup_tab[funcindex];
 
-   if (0) printSetupFlags("software setup func", funcindex); 
-   swsetup->BuildProjVerts = setup_func[funcindex];
-   ASSERT(setup_func[funcindex] != rs_invalid);
+   if (ctx->_TriangleCaps & (DD_TRI_LIGHT_TWOSIDE|DD_TRI_UNFILLED)) {
+      tnl->Driver.Render.Interp = interp_extras;
+      tnl->Driver.Render.CopyPV = copy_pv_extras;
+   }
+   else {
+      tnl->Driver.Render.Interp = interp_tab[funcindex];
+      tnl->Driver.Render.CopyPV = copy_pv_tab[funcindex];
+   }
+
+   ASSERT(tnl->Driver.Render.BuildVertices);
+   ASSERT(tnl->Driver.Render.BuildVertices != emit_invalid);
 }
+
+
+void
+_swsetup_vb_init( GLcontext *ctx )
+{
+   (void) ctx;
+   init_standard();
+   (void) printSetupFlags;
+}
+   

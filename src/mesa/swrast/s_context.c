@@ -1,4 +1,4 @@
-/* $Id: s_context.c,v 1.21 2001/05/17 09:32:17 keithw Exp $ */
+/* $Id: s_context.c,v 1.25 2001/07/28 19:28:49 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -541,14 +541,22 @@ _swrast_print_vertex( GLcontext *ctx, const SWvertex *v )
 	      v->win[0], v->win[1], v->win[2], v->win[3]);
 
       for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++)
-	 fprintf(stderr, "texcoord[%d] %f %f %f %f\n", i,
-		 v->texcoord[i][0], v->texcoord[i][1],
-		 v->texcoord[i][2], v->texcoord[i][3]);
+	 if (ctx->Texture.Unit[i]._ReallyEnabled)
+	    fprintf(stderr, "texcoord[%d] %f %f %f %f\n", i,
+		    v->texcoord[i][0], v->texcoord[i][1],
+		    v->texcoord[i][2], v->texcoord[i][3]);
 
+#if CHAN_TYPE == GL_FLOAT
+      fprintf(stderr, "color %f %f %f %f\n",
+	      v->color[0], v->color[1], v->color[2], v->color[3]);
+      fprintf(stderr, "spec %f %f %f %f\n",
+	      v->specular[0], v->specular[1], v->specular[2], v->specular[3]);
+#else
       fprintf(stderr, "color %d %d %d %d\n",
 	      v->color[0], v->color[1], v->color[2], v->color[3]);
       fprintf(stderr, "spec %d %d %d %d\n",
 	      v->specular[0], v->specular[1], v->specular[2], v->specular[3]);
+#endif
       fprintf(stderr, "fog %f\n", v->fog);
       fprintf(stderr, "index %d\n", v->index);
       fprintf(stderr, "pointsize %f\n", v->pointSize);

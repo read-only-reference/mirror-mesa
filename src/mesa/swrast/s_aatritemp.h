@@ -1,4 +1,4 @@
-/* $Id: s_aatritemp.h,v 1.18 2001/06/05 21:41:05 brianp Exp $ */
+/* $Id: s_aatritemp.h,v 1.20 2001/07/13 20:12:44 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library

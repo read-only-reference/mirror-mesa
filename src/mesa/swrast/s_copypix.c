@@ -1,4 +1,4 @@
-/* $Id: s_copypix.c,v 1.21 2001/06/26 21:15:36 brianp Exp $ */
+/* $Id: s_copypix.c,v 1.24 2001/07/23 16:07:39 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -193,7 +193,7 @@ copy_conv_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
 
    /* do image transfer ops up until convolution */
    for (row = 0; row < height; row++) {
-      GLfloat (*rgba)[4] = (GLfloat (*)[4]) tmpImage + row * width * 4;
+      GLfloat (*rgba)[4] = (GLfloat (*)[4]) (tmpImage + row * width * 4);
 
       /* scale & bias */
       if (transferOps & IMAGE_SCALE_BIAS_BIT) {
@@ -225,7 +225,7 @@ copy_conv_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
 
    /* do remaining image transfer ops */
    for (row = 0; row < height; row++) {
-      GLfloat (*rgba)[4] = (GLfloat (*)[4]) convImage + row * width * 4;
+      GLfloat (*rgba)[4] = (GLfloat (*)[4]) (convImage + row * width * 4);
 
       /* GL_POST_CONVOLUTION_COLOR_TABLE lookup */
       if (transferOps & IMAGE_POST_CONVOLUTION_COLOR_TABLE_BIT) {
@@ -720,7 +720,7 @@ static void copy_depth_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
    GLint i, j;
    const GLboolean zoom = ctx->Pixel.ZoomX != 1.0F || ctx->Pixel.ZoomY != 1.0F;
    GLint overlapping;
-   DEFMARRAY(GLubyte, rgba, MAX_WIDTH, 4);  /* mac 32k limitation */
+   DEFMARRAY(GLchan, rgba, MAX_WIDTH, 4);  /* mac 32k limitation */
    CHECKARRAY(rgba, return);  /* mac 32k limitation */
 
    if (!ctx->Visual.depthBits) {
@@ -814,7 +814,7 @@ static void copy_depth_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
          }
          else {
             _mesa_write_rgba_span( ctx, width, destx, dy, zspan, fogSpan,
-                                   rgba, NULL, GL_BITMAP);
+                                   (GLchan (*)[4])rgba, NULL, GL_BITMAP);
          }
       }
       else {

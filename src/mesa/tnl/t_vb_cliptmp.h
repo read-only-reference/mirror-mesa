@@ -1,4 +1,4 @@
-/* $Id: t_vb_cliptmp.h,v 1.12 2001/05/09 12:25:40 keithw Exp $ */
+/* $Id: t_vb_cliptmp.h,v 1.14 2001/07/13 17:26:39 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -118,13 +118,12 @@ do {									\
 
 /* Clip a line against the viewport and user clip planes.
  */
-static __inline void TAG(clip_line)( GLcontext *ctx,
-				     GLuint i, GLuint j,
-				     GLubyte mask )
+static INLINE void
+TAG(clip_line)( GLcontext *ctx, GLuint i, GLuint j, GLubyte mask )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct vertex_buffer *VB = &tnl->vb;
-   interp_func interp = tnl->Driver.RenderInterp;
+   interp_func interp = tnl->Driver.Render.Interp;
    GLfloat (*coord)[4] = VB->ClipPtr->data;
    GLuint ii = i, jj = j, p;
 
@@ -152,21 +151,20 @@ static __inline void TAG(clip_line)( GLcontext *ctx,
    }
 
    if ((ctx->_TriangleCaps & DD_FLATSHADE) && j != jj)
-      tnl->Driver.RenderCopyPV( ctx, jj, j );
+      tnl->Driver.Render.CopyPV( ctx, jj, j );
 
-   tnl->Driver.RenderClippedLine( ctx, ii, jj );
+   tnl->Driver.Render.ClippedLine( ctx, ii, jj );
 }
 
 
 /* Clip a triangle against the viewport and user clip planes.
  */
-static __inline void TAG(clip_tri)( GLcontext *ctx,
-				    GLuint v0, GLuint v1, GLuint v2,
-				    GLubyte mask )
+static INLINE void
+TAG(clip_tri)( GLcontext *ctx, GLuint v0, GLuint v1, GLuint v2, GLubyte mask )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct vertex_buffer *VB = &tnl->vb;
-   interp_func interp = tnl->Driver.RenderInterp;
+   interp_func interp = tnl->Driver.Render.Interp;
    GLfloat (*coord)[4] = VB->ClipPtr->data;
    GLuint pv = v2;
    GLuint vlist[2][MAX_CLIPPED_VERTICES];
@@ -203,23 +201,23 @@ static __inline void TAG(clip_tri)( GLcontext *ctx,
    if (ctx->_TriangleCaps & DD_FLATSHADE) {
       if (pv != inlist[0]) {
 	 ASSERT( inlist[0] >= VB->FirstClipped );
-	 tnl->Driver.RenderCopyPV( ctx, inlist[0], pv );
+	 tnl->Driver.Render.CopyPV( ctx, inlist[0], pv );
       }
    }
 
-   tnl->Driver.RenderClippedPolygon( ctx, inlist, n );
+   tnl->Driver.Render.ClippedPolygon( ctx, inlist, n );
 }
 
 
 /* Clip a quad against the viewport and user clip planes.
  */
-static __inline void TAG(clip_quad)( GLcontext *ctx,
-				     GLuint v0, GLuint v1, GLuint v2, GLuint v3,
-				     GLubyte mask )
+static INLINE void
+TAG(clip_quad)( GLcontext *ctx, GLuint v0, GLuint v1, GLuint v2, GLuint v3,
+                GLubyte mask )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct vertex_buffer *VB = &tnl->vb;
-   interp_func interp = tnl->Driver.RenderInterp;
+   interp_func interp = tnl->Driver.Render.Interp;
    GLfloat (*coord)[4] = VB->ClipPtr->data;
    GLuint pv = v3;
    GLuint vlist[2][MAX_CLIPPED_VERTICES];
@@ -256,11 +254,11 @@ static __inline void TAG(clip_quad)( GLcontext *ctx,
    if (ctx->_TriangleCaps & DD_FLATSHADE) {
       if (pv != inlist[0]) {
 	 ASSERT( inlist[0] >= VB->FirstClipped );
-	 tnl->Driver.RenderCopyPV( ctx, inlist[0], pv );
+	 tnl->Driver.Render.CopyPV( ctx, inlist[0], pv );
       }
    }
 
-   tnl->Driver.RenderClippedPolygon( ctx, inlist, n );
+   tnl->Driver.Render.ClippedPolygon( ctx, inlist, n );
 }
 
 #undef W
