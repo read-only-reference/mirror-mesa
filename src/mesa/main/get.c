@@ -1,8 +1,8 @@
-/* $Id: get.c,v 1.67 2001/08/28 22:46:22 brianp Exp $ */
+/* $Id: get.c,v 1.69 2001/09/23 16:11:26 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.0
  *
  * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
@@ -3398,13 +3398,13 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = (GLfloat) ctx->Const.SubPixelBits;
 	 break;
       case GL_TEXTURE_1D:
-         *params = _mesa_IsEnabled(GL_TEXTURE_1D) ? 1.0 : 0.0;
+         *params = _mesa_IsEnabled(GL_TEXTURE_1D) ? 1.0F : 0.0F;
 	 break;
       case GL_TEXTURE_2D:
-         *params = _mesa_IsEnabled(GL_TEXTURE_2D) ? 1.0 : 0.0;
+         *params = _mesa_IsEnabled(GL_TEXTURE_2D) ? 1.0F : 0.0F;
 	 break;
       case GL_TEXTURE_3D:
-         *params = _mesa_IsEnabled(GL_TEXTURE_3D) ? 1.0 : 0.0;
+         *params = _mesa_IsEnabled(GL_TEXTURE_3D) ? 1.0F : 0.0F;
 	 break;
       case GL_TEXTURE_BINDING_1D:
          *params = (GLfloat) textureUnit->Current1D->Name;
@@ -3425,16 +3425,16 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = ENUM_TO_FLOAT(textureUnit->EnvMode);
 	 break;
       case GL_TEXTURE_GEN_S:
-	 *params = (textureUnit->TexGenEnabled & S_BIT) ? 1.0 : 0.0;
+	 *params = (textureUnit->TexGenEnabled & S_BIT) ? 1.0F : 0.0F;
 	 break;
       case GL_TEXTURE_GEN_T:
-	 *params = (textureUnit->TexGenEnabled & T_BIT) ? 1.0 : 0.0;
+	 *params = (textureUnit->TexGenEnabled & T_BIT) ? 1.0F : 0.0F;
 	 break;
       case GL_TEXTURE_GEN_R:
-	 *params = (textureUnit->TexGenEnabled & R_BIT) ? 1.0 : 0.0;
+	 *params = (textureUnit->TexGenEnabled & R_BIT) ? 1.0F : 0.0F;
 	 break;
       case GL_TEXTURE_GEN_Q:
-	 *params = (textureUnit->TexGenEnabled & Q_BIT) ? 1.0 : 0.0;
+	 *params = (textureUnit->TexGenEnabled & Q_BIT) ? 1.0F : 0.0F;
 	 break;
       case GL_TEXTURE_MATRIX:
          for (i=0;i<16;i++) {
@@ -5310,8 +5310,8 @@ _mesa_GetString( GLenum name )
    GET_CURRENT_CONTEXT(ctx);
    static const char *vendor = "Brian Paul";
    static const char *renderer = "Mesa";
-   static const char *version_1_2 = "1.2 Mesa 3.5.1";
-   static const char *version_1_3 = "1.3 Mesa 3.5.1";
+   static const char *version_1_2 = "1.2 Mesa 4.0";
+   static const char *version_1_3 = "1.3 Mesa 4.0";
 
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, 0);
 

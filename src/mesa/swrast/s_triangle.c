@@ -1,4 +1,4 @@
-/* $Id: s_triangle.c,v 1.36 2001/07/26 15:57:49 brianp Exp $ */
+/* $Id: s_triangle.c,v 1.39 2001/09/19 22:21:13 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -344,11 +344,16 @@ struct affine_info
    GLint fixedToDepthShift;
 };
 
+
+/* This function can handle GL_NEAREST or GL_LINEAR sampling of 2D RGB or RGBA
+ * textures with GL_REPLACE, GL_MODULATE, GL_BLEND, GL_DECAL or GL_ADD
+ * texture env modes.
+ */
 static void
 affine_span(GLcontext *ctx, struct triangle_span *span,
             struct affine_info *info)
 {
-   GLchan tmp_col[4];
+   GLchan sample[4];  /* the filtered texture sample */
 
    /* Instead of defining a function for each mode, a test is done
     * between the outer and inner loops. This is to reduce code size
@@ -357,75 +362,71 @@ affine_span(GLcontext *ctx, struct triangle_span *span,
     */
 
 #define NEAREST_RGB			\
-   tmp_col[RCOMP] = tex00[RCOMP];	\
-   tmp_col[GCOMP] = tex00[GCOMP];	\
-   tmp_col[BCOMP] = tex00[BCOMP];	\
-   tmp_col[ACOMP] = CHAN_MAX
+   sample[RCOMP] = tex00[RCOMP];	\
+   sample[GCOMP] = tex00[GCOMP];	\
+   sample[BCOMP] = tex00[BCOMP];	\
+   sample[ACOMP] = CHAN_MAX
 
 #define LINEAR_RGB							\
-   tmp_col[RCOMP] = (ti * (si * tex00[0] + sf * tex01[0]) +		\
+   sample[RCOMP] = (ti * (si * tex00[0] + sf * tex01[0]) +		\
              tf * (si * tex10[0] + sf * tex11[0])) >> 2 * FIXED_SHIFT;	\
-   tmp_col[GCOMP] = (ti * (si * tex00[1] + sf * tex01[1]) +		\
+   sample[GCOMP] = (ti * (si * tex00[1] + sf * tex01[1]) +		\
              tf * (si * tex10[1] + sf * tex11[1])) >> 2 * FIXED_SHIFT;	\
-   tmp_col[BCOMP] = (ti * (si * tex00[2] + sf * tex01[2]) +		\
+   sample[BCOMP] = (ti * (si * tex00[2] + sf * tex01[2]) +		\
              tf * (si * tex10[2] + sf * tex11[2])) >> 2 * FIXED_SHIFT;	\
-   tmp_col[ACOMP] = CHAN_MAX
+   sample[ACOMP] = CHAN_MAX
 
-#define NEAREST_RGBA  COPY_CHAN4(tmp_col, tex00)
+#define NEAREST_RGBA  COPY_CHAN4(sample, tex00)
 
 #define LINEAR_RGBA							\
-   tmp_col[RCOMP] = (ti * (si * tex00[0] + sf * tex01[0]) +		\
+   sample[RCOMP] = (ti * (si * tex00[0] + sf * tex01[0]) +		\
                tf * (si * tex10[0] + sf * tex11[0])) >> 2 * FIXED_SHIFT;\
-   tmp_col[GCOMP] = (ti * (si * tex00[1] + sf * tex01[1]) +		\
+   sample[GCOMP] = (ti * (si * tex00[1] + sf * tex01[1]) +		\
                tf * (si * tex10[1] + sf * tex11[1])) >> 2 * FIXED_SHIFT;\
-   tmp_col[BCOMP] = (ti * (si * tex00[2] + sf * tex01[2]) +		\
+   sample[BCOMP] = (ti * (si * tex00[2] + sf * tex01[2]) +		\
                tf * (si * tex10[2] + sf * tex11[2])) >> 2 * FIXED_SHIFT;\
-   tmp_col[ACOMP] = (ti * (si * tex00[3] + sf * tex01[3]) +		\
+   sample[ACOMP] = (ti * (si * tex00[3] + sf * tex01[3]) +		\
                tf * (si * tex10[3] + sf * tex11[3])) >> 2 * FIXED_SHIFT
 
 #define MODULATE							   \
-   dest[RCOMP] = span->red   * (tmp_col[RCOMP] + 1u) >> (FIXED_SHIFT + 8); \
-   dest[GCOMP] = span->green * (tmp_col[GCOMP] + 1u) >> (FIXED_SHIFT + 8); \
-   dest[BCOMP] = span->blue  * (tmp_col[BCOMP] + 1u) >> (FIXED_SHIFT + 8); \
-   dest[ACOMP] = span->alpha * (tmp_col[ACOMP] + 1u) >> (FIXED_SHIFT + 8)
+   dest[RCOMP] = span->red   * (sample[RCOMP] + 1u) >> (FIXED_SHIFT + 8); \
+   dest[GCOMP] = span->green * (sample[GCOMP] + 1u) >> (FIXED_SHIFT + 8); \
+   dest[BCOMP] = span->blue  * (sample[BCOMP] + 1u) >> (FIXED_SHIFT + 8); \
+   dest[ACOMP] = span->alpha * (sample[ACOMP] + 1u) >> (FIXED_SHIFT + 8)
 
 #define DECAL								\
-   dest[RCOMP] = ((CHAN_MAX - tmp_col[ACOMP]) * span->red +		\
-               ((tmp_col[ACOMP] + 1) * tmp_col[RCOMP] << FIXED_SHIFT))	\
+   dest[RCOMP] = ((CHAN_MAX - sample[ACOMP]) * span->red +		\
+               ((sample[ACOMP] + 1) * sample[RCOMP] << FIXED_SHIFT))	\
                >> (FIXED_SHIFT + 8);					\
-   dest[GCOMP] = ((CHAN_MAX - tmp_col[ACOMP]) * span->green +		\
-               ((tmp_col[ACOMP] + 1) * tmp_col[GCOMP] << FIXED_SHIFT))	\
+   dest[GCOMP] = ((CHAN_MAX - sample[ACOMP]) * span->green +		\
+               ((sample[ACOMP] + 1) * sample[GCOMP] << FIXED_SHIFT))	\
                >> (FIXED_SHIFT + 8);					\
-   dest[BCOMP] = ((CHAN_MAX - tmp_col[ACOMP]) * span->blue +		\
-               ((tmp_col[ACOMP] + 1) * tmp_col[BCOMP] << FIXED_SHIFT))	\
+   dest[BCOMP] = ((CHAN_MAX - sample[ACOMP]) * span->blue +		\
+               ((sample[ACOMP] + 1) * sample[BCOMP] << FIXED_SHIFT))	\
                >> (FIXED_SHIFT + 8);					\
    dest[ACOMP] = FixedToInt(span->alpha)
 
 #define BLEND								\
-   dest[RCOMP] = ((CHAN_MAX - tmp_col[RCOMP]) * span->red		\
-               + (tmp_col[RCOMP] + 1) * info->er) >> (FIXED_SHIFT + 8);	\
-   dest[GCOMP] = ((CHAN_MAX - tmp_col[GCOMP]) * span->green		\
-               + (tmp_col[GCOMP] + 1) * info->eg) >> (FIXED_SHIFT + 8);	\
-   dest[BCOMP] = ((CHAN_MAX - tmp_col[BCOMP]) * span->blue		\
-               + (tmp_col[BCOMP] + 1) * info->eb) >> (FIXED_SHIFT + 8);	\
-   dest[ACOMP] = span->alpha * (tmp_col[ACOMP] + 1) >> (FIXED_SHIFT + 8)
+   dest[RCOMP] = ((CHAN_MAX - sample[RCOMP]) * span->red		\
+               + (sample[RCOMP] + 1) * info->er) >> (FIXED_SHIFT + 8);	\
+   dest[GCOMP] = ((CHAN_MAX - sample[GCOMP]) * span->green		\
+               + (sample[GCOMP] + 1) * info->eg) >> (FIXED_SHIFT + 8);	\
+   dest[BCOMP] = ((CHAN_MAX - sample[BCOMP]) * span->blue		\
+               + (sample[BCOMP] + 1) * info->eb) >> (FIXED_SHIFT + 8);	\
+   dest[ACOMP] = span->alpha * (sample[ACOMP] + 1) >> (FIXED_SHIFT + 8)
 
-#define REPLACE  COPY_CHAN4(dest, tmp_col)
-
-#define I2CHAN_CLAMP(I) (GLchan) ((I) & CHAN_MAX)
-   /* equivalent to '(GLchan) MIN2((I),CHAN_MAX)' */
+#define REPLACE  COPY_CHAN4(dest, sample)
 
 #define ADD								\
-   dest[RCOMP] = MIN2(((span->red << 8) +				\
-                       (tmp_col[RCOMP] + 1) * info->er)			\
-                       >> (FIXED_SHIFT + 8), CHAN_MAX);			\
-   dest[GCOMP] = MIN2(((span->green << 8) +				\
-                       (tmp_col[GCOMP] + 1) * info->eg)			\
-                       >> (FIXED_SHIFT + 8), CHAN_MAX);			\
-   dest[RCOMP] = MIN2(((span->blue << 8) +				\
-                       (tmp_col[BCOMP] + 1) * info->eb)			\
-                       >> (FIXED_SHIFT + 8), CHAN_MAX);			\
-   dest[ACOMP] = span->alpha * (tmp_col[ACOMP] + 1) >> (FIXED_SHIFT + 8)
+   {									\
+      GLint rSum = FixedToInt(span->red)   + (GLint) sample[RCOMP];	\
+      GLint gSum = FixedToInt(span->green) + (GLint) sample[GCOMP];	\
+      GLint bSum = FixedToInt(span->blue)  + (GLint) sample[BCOMP];	\
+      dest[RCOMP] = MIN2(rSum, CHAN_MAX);				\
+      dest[GCOMP] = MIN2(gSum, CHAN_MAX);				\
+      dest[BCOMP] = MIN2(bSum, CHAN_MAX);				\
+      dest[ACOMP] = span->alpha * (sample[ACOMP] + 1) >> (FIXED_SHIFT + 8); \
+  }
 
 /* shortcuts */
 
@@ -687,7 +688,7 @@ struct persp_info
    GLint smask, tmask;
    GLint twidth_log2;
    const GLchan *texture;
-   GLchan er, eg, eb, ea;
+   GLchan er, eg, eb, ea;   /* texture env color */
    GLint tbytesline, tsize;
    GLint fixedToDepthShift;
 };
@@ -697,7 +698,7 @@ static void
 fast_persp_span(GLcontext *ctx, struct triangle_span *span,
 		struct persp_info *info)
 {
-   GLchan tmp_col[4];
+   GLchan sample[4];  /* the filtered texture sample */
 
   /* Instead of defining a function for each mode, a test is done
    * between the outer and inner loops. This is to reduce code size
@@ -708,8 +709,8 @@ fast_persp_span(GLcontext *ctx, struct triangle_span *span,
 	for (i = 0; i < span->count; i++) {				\
            GLdouble invQ = tex_coord[2] ?				\
                                  (1.0 / tex_coord[2]) : 1.0;            \
-           GLfloat s_tmp = tex_coord[0] * invQ;				\
-           GLfloat t_tmp = tex_coord[1] * invQ;				\
+           GLfloat s_tmp = (GLfloat) (tex_coord[0] * invQ);		\
+           GLfloat t_tmp = (GLfloat) (tex_coord[1] * invQ);		\
            GLint s = IFLOOR(s_tmp) & info->smask;	        	\
            GLint t = IFLOOR(t_tmp) & info->tmask;	        	\
            GLint pos = (t << info->twidth_log2) + s;			\
@@ -733,8 +734,8 @@ fast_persp_span(GLcontext *ctx, struct triangle_span *span,
 	for (i = 0; i < span->count; i++) {				\
            GLdouble invQ = tex_coord[2] ?				\
                                  (1.0 / tex_coord[2]) : 1.0;            \
-           GLfloat s_tmp = tex_coord[0] * invQ;				\
-           GLfloat t_tmp = tex_coord[1] * invQ;				\
+           GLfloat s_tmp = (GLfloat) (tex_coord[0] * invQ);		\
+           GLfloat t_tmp = (GLfloat) (tex_coord[1] * invQ);		\
            GLfixed s_fix = FloatToFixed(s_tmp) - FIXED_HALF;		\
            GLfixed t_fix = FloatToFixed(t_tmp) - FIXED_HALF;        	\
            GLint s = FixedToInt(FixedFloor(s_fix)) & info->smask;	\
@@ -1011,57 +1012,98 @@ rasterize_span(GLcontext *ctx, const struct triangle_span *span)
    CHECKARRAY(mLambda, return);
 
    if (span->activeMask & SPAN_RGBA) {
+      if (span->activeMask & SPAN_FLAT) {
+         GLuint i;
+         GLchan color[4];
+         color[RCOMP] = FixedToChan(span->red);
+         color[GCOMP] = FixedToChan(span->green);
+         color[BCOMP] = FixedToChan(span->blue);
+         color[ACOMP] = FixedToChan(span->alpha);
+         for (i = 0; i < span->count; i++) {
+            COPY_CHAN4(rgba[i], color);
+         }
+      }
+      else {
+         /* smooth interpolation */
 #if CHAN_TYPE == GL_FLOAT
-      GLfloat r = span->red;
-      GLfloat g = span->green;
-      GLfloat b = span->blue;
-      GLfloat a = span->alpha;
+         GLfloat r = span->red;
+         GLfloat g = span->green;
+         GLfloat b = span->blue;
+         GLfloat a = span->alpha;
 #else
-      GLfixed r = span->red;
-      GLfixed g = span->green;
-      GLfixed b = span->blue;
-      GLfixed a = span->alpha;
+         GLfixed r = span->red;
+         GLfixed g = span->green;
+         GLfixed b = span->blue;
+         GLfixed a = span->alpha;
 #endif
-      GLuint i;
-      for (i = 0; i < span->count; i++) {
-         rgba[i][RCOMP] = FixedToChan(r);
-         rgba[i][GCOMP] = FixedToChan(g);
-         rgba[i][BCOMP] = FixedToChan(b);
-         rgba[i][ACOMP] = FixedToChan(a);
-         r += span->redStep;
-         g += span->greenStep;
-         b += span->blueStep;
-         a += span->alphaStep;
+         GLuint i;
+         for (i = 0; i < span->count; i++) {
+            rgba[i][RCOMP] = FixedToChan(r);
+            rgba[i][GCOMP] = FixedToChan(g);
+            rgba[i][BCOMP] = FixedToChan(b);
+            rgba[i][ACOMP] = FixedToChan(a);
+            r += span->redStep;
+            g += span->greenStep;
+            b += span->blueStep;
+            a += span->alphaStep;
+         }
       }
    }
+
    if (span->activeMask & SPAN_SPEC) {
+      if (span->activeMask & SPAN_FLAT) {
+         const GLchan r = FixedToChan(span->specRed);
+         const GLchan g = FixedToChan(span->specGreen);
+         const GLchan b = FixedToChan(span->specBlue);
+         GLuint i;
+         for (i = 0; i < span->count; i++) {
+            spec[i][RCOMP] = r;
+            spec[i][GCOMP] = g;
+            spec[i][BCOMP] = b;
+         }
+      }
+      else {
+         /* smooth interpolation */
 #if CHAN_TYPE == GL_FLOAT
-      GLfloat r = span->specRed;
-      GLfloat g = span->specGreen;
-      GLfloat b = span->specBlue;
+         GLfloat r = span->specRed;
+         GLfloat g = span->specGreen;
+         GLfloat b = span->specBlue;
 #else
-      GLfixed r = span->specRed;
-      GLfixed g = span->specGreen;
-      GLfixed b = span->specBlue;
+         GLfixed r = span->specRed;
+         GLfixed g = span->specGreen;
+         GLfixed b = span->specBlue;
 #endif
-      GLuint i;
-      for (i = 0; i < span->count; i++) {
-         spec[i][RCOMP] = FixedToChan(r);
-         spec[i][GCOMP] = FixedToChan(g);
-         spec[i][BCOMP] = FixedToChan(b);
-         r += span->specRedStep;
-         g += span->specGreenStep;
-         b += span->specBlueStep;
+         GLuint i;
+         for (i = 0; i < span->count; i++) {
+            spec[i][RCOMP] = FixedToChan(r);
+            spec[i][GCOMP] = FixedToChan(g);
+            spec[i][BCOMP] = FixedToChan(b);
+            r += span->specRedStep;
+            g += span->specGreenStep;
+            b += span->specBlueStep;
+         }
       }
    }
+
    if (span->activeMask & SPAN_INDEX) {
-      GLuint i;
-      GLfixed ind = span->index;
-      for (i = 0; i < span->count; i++) {
-         index[i] = FixedToInt(ind);
-         ind += span->indexStep;
+      if (span->activeMask & SPAN_FLAT) {
+         GLuint i;
+         const GLint indx = FixedToInt(span->index);
+         for (i = 0; i < span->count; i++) {
+            index[i] = indx;
+         }
+      }
+      else {
+         /* smooth interpolation */
+         GLuint i;
+         GLfixed ind = span->index;
+         for (i = 0; i < span->count; i++) {
+            index[i] = FixedToInt(ind);
+            ind += span->indexStep;
+         }
       }
    }
+
    if (span->activeMask & SPAN_Z) {
       if (ctx->Visual.depthBits <= 16) {
          GLuint i;
@@ -1103,11 +1145,12 @@ rasterize_span(GLcontext *ctx, const struct triangle_span *span)
                   GLfloat q = span->tex[u][3];
                   GLuint i;
                   for (i = 0; i < span->count; i++) {
-                     const GLfloat invQ = (q == 0.0F) ? 1.0 : (1.0F / q);
+                     const GLfloat invQ = (q == 0.0F) ? 1.0F : (1.0F / q);
                      msTex[u][i] = s * invQ;
                      mtTex[u][i] = t * invQ;
                      mrTex[u][i] = r * invQ;
-                     mLambda[u][i] = log(span->rho[u] * invQ * invQ) * 1.442695F * 0.5F;
+                     mLambda[u][i] = (GLfloat) 
+			 (log(span->rho[u] * invQ * invQ) * 1.442695F * 0.5F);
                      s += span->texStep[u][0];
                      t += span->texStep[u][1];
                      r += span->texStep[u][2];
@@ -1127,7 +1170,7 @@ rasterize_span(GLcontext *ctx, const struct triangle_span *span)
                   GLfloat q = span->tex[u][3];
                   GLuint i;
                   for (i = 0; i < span->count; i++) {
-                     const GLfloat invQ = (q == 0.0F) ? 1.0 : (1.0F / q);
+                     const GLfloat invQ = (q == 0.0F) ? 1.0F : (1.0F / q);
                      msTex[u][i] = s * invQ;
                      mtTex[u][i] = t * invQ;
                      mrTex[u][i] = r * invQ;
@@ -1150,11 +1193,12 @@ rasterize_span(GLcontext *ctx, const struct triangle_span *span)
             GLfloat q = span->tex[0][3];
             GLuint i;
             for (i = 0; i < span->count; i++) {
-               const GLfloat invQ = (q == 0.0F) ? 1.0 : (1.0F / q);
+               const GLfloat invQ = (q == 0.0F) ? 1.0F : (1.0F / q);
                sTex[i] = s * invQ;
                tTex[i] = t * invQ;
                rTex[i] = r * invQ;
-               lambda[i] = log(span->rho[0] * invQ * invQ) * 1.442695F * 0.5F;
+               lambda[i] = (GLfloat)
+		   (log(span->rho[0] * invQ * invQ) * 1.442695F * 0.5F);
                s += span->texStep[0][0];
                t += span->texStep[0][1];
                r += span->texStep[0][2];
@@ -1169,7 +1213,7 @@ rasterize_span(GLcontext *ctx, const struct triangle_span *span)
             GLfloat q = span->tex[0][3];
             GLuint i;
             for (i = 0; i < span->count; i++) {
-               const GLfloat invQ = (q == 0.0F) ? 1.0 : (1.0F / q);
+               const GLfloat invQ = (q == 0.0F) ? 1.0F : (1.0F / q);
                sTex[i] = s * invQ;
                tTex[i] = t * invQ;
                rTex[i] = r * invQ;
@@ -1310,9 +1354,9 @@ static void general_textured_triangle( GLcontext *ctx,
       span.green += span.greenStep;					\
       span.blue += span.blueStep;					\
       span.alpha += span.alphaStep;					\
-      sSpan[i] = span.tex[0][0] * invQ;					\
-      tSpan[i] = span.tex[0][1] * invQ;					\
-      uSpan[i] = span.tex[0][2] * invQ;					\
+      sSpan[i] = (GLfloat) (span.tex[0][0] * invQ);			\
+      tSpan[i] = (GLfloat) (span.tex[0][1] * invQ);			\
+      uSpan[i] = (GLfloat) (span.tex[0][2] * invQ);			\
       span.tex[0][0] += span.texStep[0][0];				\
       span.tex[0][1] += span.texStep[0][1];				\
       span.tex[0][2] += span.texStep[0][2];				\

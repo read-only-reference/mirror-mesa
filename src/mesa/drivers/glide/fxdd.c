@@ -1,9 +1,10 @@
+/* $Id: fxdd.c,v 1.84 2001/09/23 16:50:01 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  4.0
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,26 +22,14 @@
  * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- *
- * Original Mesa / 3Dfx device driver (C) 1999 David Bucciarelli, by the
- * terms stated above.
- *
- * Thank you for your contribution, David!
- *
- * Please make note of the above copyright/license statement.  If you
- * contributed code or bug fixes to this code under the previous (GNU
- * Library) license and object to the new license, your code will be
- * removed at your request.  Please see the Mesa docs/COPYRIGHT file
- * for more information.
- *
- * Additional Mesa/3Dfx driver developers:
- *   Daryll Strauss <daryll@precisioninsight.com>
- *   Keith Whitwell <keith@precisioninsight.com>
- *
- * See fxapi.h for more revision/author details.
  */
 
+/* Authors:
+ *    David Bucciarelli
+ *    Brian Paul
+ *    Daryll Strauss
+ *    Keith Whitwell
+ */
 
 /* fxdd.c - 3Dfx VooDoo Mesa device driver functions */
 
@@ -657,18 +646,9 @@ int
 fxDDInitFxMesaContext(fxMesaContext fxMesa)
 {
    int i;
-   static int firsttime = 1;
 
    for (i = 0; i < 256; i++) {
       gl_ubyte_to_float_255_color_tab[i] = (float) i;
-   }
-
-   if (firsttime) {
-#if 00
-      fxDDSetupInit();
-      fxDDTrifuncInit();
-#endif
-      firsttime = 0;
    }
 
    FX_setupGrVertexLayout();
@@ -767,6 +747,7 @@ fxDDInitFxMesaContext(fxMesaContext fxMesa)
    fxAllocVB(fxMesa->glCtx);
 
    fxSetupDDPointers(fxMesa->glCtx);
+   fxDDInitTriFuncs(fxMesa->glCtx);
 
    /* Tell the software rasterizer to use pixel fog always.
     */
@@ -987,10 +968,9 @@ fxDDUpdateDDPointers(GLcontext * ctx, GLuint new_state)
       if (fxMesa->is_in_hardware) {
 	 if (new_state & _FX_NEW_RENDERSTATE)
 	    fxDDChooseRenderState(ctx);
-#if 000
+
 	 if (new_state & _FX_NEW_SETUP_FUNCTION)
-	    fxDDChooseSetupState(ctx);
-#endif
+	    fxChooseVertexState(ctx);
       }
 
       if (new_state & _NEW_TEXTURE)
@@ -1060,11 +1040,6 @@ fxSetupDDPointers(GLcontext * ctx)
    ctx->Driver.Enable = fxDDEnable;
 
    tnl->Driver.RunPipeline = _tnl_run_pipeline;
-
-   /* XXX is this right? (BP) */
-   /* Install swsetup for tnl->Driver.Render.*:
-    */
-   _swsetup_Wakeup(ctx);
 
    fxSetupDDSpanPointers(ctx);
    fxDDUpdateDDPointers(ctx, ~0);

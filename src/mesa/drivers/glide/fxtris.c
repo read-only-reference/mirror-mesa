@@ -1,8 +1,10 @@
-/* -*- mode: c; c-basic-offset: 3 -*-
+/* $Id: fxtris.c,v 1.17 2001/09/23 16:50:01 brianp Exp $ */
+
+/*
+ * Mesa 3-D graphics library
+ * Version:  4.0
  *
- * Copyright 2000 VA Linux Systems Inc., Fremont, California.
- *
- * All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -11,28 +13,29 @@
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
+ * The above copyright notice and this permission notice shall be included
+ * in all copies or substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * VA LINUX SYSTEMS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
- * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+ * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-/* $XFree86: xc/lib/GL/mesa/src/drv/fx/fxtris.c,v 1.5 2000/09/24 13:51:04 alanh Exp $ */
 
 /* Authors:
  *    Keith Whitwell <keithw@valinux.com>
  */
 
-#include <stdio.h>
-#include <math.h>
+#ifdef HAVE_CONFIG_H
+#include "conf.h"
+#endif
 
 #ifdef FX
+
+#include <stdio.h>
+#include <math.h>
 
 #include "glheader.h"
 #include "mtypes.h"
@@ -174,6 +177,7 @@ fx_fallback_tri( fxMesaContext fxMesa,
 {
    GLcontext *ctx = fxMesa->glCtx;
    SWvertex v[3];
+
    fx_translate_vertex( ctx, v0, &v[0] );
    fx_translate_vertex( ctx, v1, &v[1] );
    fx_translate_vertex( ctx, v2, &v[2] );
@@ -626,7 +630,6 @@ static void fxFastRenderClippedPoly( GLcontext *ctx, const GLuint *elts,
    GrVertex *vertptr = fxMesa->verts;			
    const GrVertex *start = VERT(elts[0]);
    int i;
-
    for (i = 2 ; i < n ; i++) {
       grDrawTriangle( start, VERT(elts[i-1]), VERT(elts[i]) );
    }
@@ -639,10 +642,10 @@ static void fxFastRenderClippedPoly( GLcontext *ctx, const GLuint *elts,
 
 #define POINT_FALLBACK (DD_POINT_SMOOTH)
 #define LINE_FALLBACK (DD_LINE_STIPPLE)
-#define TRI_FALLBACK (DD_TRI_SMOOTH)
-#define ANY_FALLBACK_FLAGS (POINT_FALLBACK|LINE_FALLBACK|TRI_FALLBACK|DD_TRI_STIPPLE)
-#define ANY_RASTER_FLAGS (DD_FLATSHADE|DD_TRI_LIGHT_TWOSIDE|DD_TRI_OFFSET| \
-			  DD_TRI_UNFILLED)
+#define TRI_FALLBACK (DD_TRI_SMOOTH | DD_TRI_STIPPLE)
+#define ANY_FALLBACK_FLAGS (POINT_FALLBACK | LINE_FALLBACK | TRI_FALLBACK)
+#define ANY_RASTER_FLAGS (DD_FLATSHADE | DD_TRI_LIGHT_TWOSIDE | DD_TRI_OFFSET \
+			  | DD_TRI_UNFILLED)
 
 
 
@@ -681,12 +684,16 @@ void fxDDChooseRenderState(GLcontext *ctx)
 	 if (flags & LINE_FALLBACK)
 	    fxMesa->draw_line = fx_fallback_line;
 
-	 if (flags & TRI_FALLBACK)
+	 if (flags & TRI_FALLBACK) {
+/*  	    fprintf(stderr, "tri fallback\n"); */
 	    fxMesa->draw_tri = fx_fallback_tri;
+	 }
 
 	 index |= FX_FALLBACK_BIT;
       }
    }
+
+/*     fprintf(stderr, "render index %x\n", index); */
 
    tnl->Driver.Render.Points = rast_tab[index].points;
    tnl->Driver.Render.Line = rast_tab[index].line;
@@ -698,6 +705,9 @@ void fxDDChooseRenderState(GLcontext *ctx)
       tnl->Driver.Render.PrimTabVerts = fx_render_tab_verts;
       tnl->Driver.Render.PrimTabElts = fx_render_tab_elts;
       tnl->Driver.Render.ClippedPolygon = fxFastRenderClippedPoly;
+
+      tnl->Driver.Render.ClippedPolygon = fxRenderClippedPoly;
+
    } else {
       tnl->Driver.Render.PrimTabVerts = _tnl_render_tab_verts;
       tnl->Driver.Render.PrimTabElts = _tnl_render_tab_elts;
@@ -779,11 +789,13 @@ void fxCheckIsInHardware( GLcontext *ctx )
 
    if (newfallback) {
       if (oldfallback == 0) {
+/*  	 fprintf(stderr, "goint to fallback\n"); */
 	 _swsetup_Wakeup( ctx );
       }
    }
    else {
       if (oldfallback) {
+/*  	 fprintf(stderr, "leaving fallback\n"); */
 	 _swrast_flush( ctx );
 	 tnl->Driver.Render.Start = fxCheckTexSizes;
 	 tnl->Driver.Render.Finish = _swrast_flush;
@@ -795,19 +807,15 @@ void fxCheckIsInHardware( GLcontext *ctx )
 	 tnl->Driver.Render.ResetLineStipple = _swrast_ResetLineStipple;
 	 tnl->Driver.Render.BuildVertices = fxBuildVertices;
 	 tnl->Driver.Render.Multipass = 0;
-#if 000
-	 fxDDChooseSetupState(ctx);
-#endif
+	 fxChooseVertexState(ctx);
 	 fxDDChooseRenderState(ctx);
       }
    }
 }
 
-#if 00
 void fxDDInitTriFuncs( GLcontext *ctx )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
-   fxMesaContext fxMesa = FX_CONTEXT(ctx);
    static int firsttime = 1;
 
    if (firsttime) {
@@ -828,7 +836,6 @@ void fxDDInitTriFuncs( GLcontext *ctx )
    
    (void) fx_print_vertex;
 }
-#endif
 
 
 #else

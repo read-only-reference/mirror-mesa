@@ -1,10 +1,10 @@
-/* $Id: glx.h,v 1.29 2001/07/27 14:26:27 brianp Exp $ */
+/* $Id: glx.h,v 1.33 2001/09/24 14:15:58 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.0
  * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -60,6 +60,7 @@ extern "C" {
 #define GLX_VERSION_1_1		1
 #define GLX_VERSION_1_2		1
 #define GLX_VERSION_1_3		1
+#define GLX_VERSION_1_4		1
 
 #define GLX_EXTENSION_NAME   "GLX"
 
@@ -125,7 +126,7 @@ extern "C" {
 #define GLX_MAX_PBUFFER_HEIGHT		0x8017
 #define GLX_MAX_PBUFFER_PIXELS		0x8018
 #define GLX_PRESERVED_CONTENTS		0x801B
-#define GLX_LARGEST_BUFFER		0x801C
+#define GLX_LARGEST_PBUFFER		0x801C
 #define GLX_WIDTH			0x801D
 #define GLX_HEIGHT			0x801E
 #define GLX_EVENT_MASK			0x801F
@@ -140,7 +141,6 @@ extern "C" {
 #define GLX_FRONT_RIGHT_BUFFER_BIT	0x00000002
 #define GLX_BACK_LEFT_BUFFER_BIT	0x00000004
 #define GLX_BACK_RIGHT_BUFFER_BIT	0x00000008
-#define GLX_AUX_BUFFERS_BIT		0x00000010
 #define GLX_DEPTH_BUFFER_BIT		0x00000020
 #define GLX_STENCIL_BUFFER_BIT		0x00000040
 #define GLX_ACCUM_BUFFER_BIT		0x00000080
@@ -155,6 +155,7 @@ extern "C" {
 #define GLX_GRAY_SCALE			0x8006
 #define GLX_STATIC_GRAY			0x8007
 #define GLX_TRANSPARENT_INDEX		0x8009
+#define GLX_RGBA_TYPE			0x8014
 #define GLX_COLOR_INDEX_TYPE		0x8015
 #define GLX_COLOR_INDEX_BIT		0x00000002
 #define GLX_RGBA_BIT			0x00000001
@@ -166,6 +167,13 @@ extern "C" {
 #define GLX_PBUFFER			0x8023
 #define GLX_PBUFFER_HEIGHT              0x8040
 #define GLX_PBUFFER_WIDTH               0x8041
+
+
+/*
+ * GLX 1.4 and later:
+ */
+#define GLX_SAMPLE_BUFFERS_SGIS            100000
+#define GLX_SAMPLES_SGIS                   100001
 
 
 
@@ -283,6 +291,10 @@ extern void glXSelectEvent( Display *dpy, GLXDrawable drawable,
 
 extern void glXGetSelectedEvent( Display *dpy, GLXDrawable drawable,
                                  unsigned long *mask );
+
+
+/* GLX 1.4 and later */
+extern void (*glXGetProcAddress(const GLubyte *procname))();
 
 
 

@@ -1,4 +1,4 @@
-/* $Id: osmesa.c,v 1.65 2001/08/28 23:12:37 brianp Exp $ */
+/* $Id: osmesa.c,v 1.71 2001/09/25 17:38:11 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -112,7 +112,7 @@ static void osmesa_register_swrast_functions( GLcontext *ctx );
  *                     display lists.  NULL indicates no sharing.
  * Return:  an OSMesaContext or 0 if error
  */
-OSMesaContext GLAPIENTRY
+GLAPI OSMesaContext GLAPIENTRY
 OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
 {
    return OSMesaCreateContextExt(format, DEFAULT_SOFTWARE_DEPTH_BITS,
@@ -126,7 +126,7 @@ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
  *
  * Create context and specify size of ancillary buffers.
  */
-OSMesaContext GLAPIENTRY
+GLAPI OSMesaContext GLAPIENTRY
 OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
                         GLint accumBits, OSMesaContext sharelist )
 {
@@ -135,12 +135,10 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
    GLint rind, gind, bind, aind;
    GLint indexBits = 0, redBits = 0, greenBits = 0, blueBits = 0, alphaBits =0;
    GLboolean rgbmode;
-   GLboolean swalpha;
    const GLuint i4 = 1;
    const GLubyte *i1 = (GLubyte *) &i4;
    const GLint little_endian = *i1;
 
-   swalpha = GL_FALSE;
    rind = gind = bind = aind = 0;
    if (format==OSMESA_COLOR_INDEX) {
       indexBits = 8;
@@ -177,15 +175,15 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       greenBits = CHAN_BITS;
       blueBits = CHAN_BITS;
       alphaBits = CHAN_BITS;
-      rind = 2;
-      gind = 1;
       bind = 0;
+      gind = 1;
+      rind = 2;
       aind = 3;
       if (little_endian) {
-         ashift = 0;
-         rshift = 8;
-         gshift = 16;
-         bshift = 24;
+         bshift = 0;
+         gshift = 8;
+         rshift = 16;
+         ashift = 24;
       }
       else {
          bshift = 24;
@@ -201,15 +199,15 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       greenBits = CHAN_BITS;
       blueBits = CHAN_BITS;
       alphaBits = CHAN_BITS;
+      aind = 0;
       rind = 1;
       gind = 2;
       bind = 3;
-      aind = 0;
       if (little_endian) {
-         bshift = 0;
-         gshift = 8;
-         rshift = 16;
-         ashift = 24;
+         ashift = 0;
+         rshift = 8;
+         gshift = 16;
+         bshift = 24;
       }
       else {
          ashift = 24;
@@ -233,7 +231,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       gind = 1;
       bind = 2;
       rgbmode = GL_TRUE;
-      swalpha = GL_TRUE;
    }
    else if (format==OSMESA_BGR) {
       indexBits = 0;
@@ -249,7 +246,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       gind = 1;
       bind = 0;
       rgbmode = GL_TRUE;
-      swalpha = GL_TRUE;
    }
    else if (format==OSMESA_RGB_565) {
       indexBits = 0;
@@ -265,7 +261,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       gind = 0;
       bind = 0;
       rgbmode = GL_TRUE;
-      swalpha = GL_FALSE;
    }
    else {
       return NULL;
@@ -309,10 +304,10 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       _mesa_enable_1_3_extensions(&(osmesa->gl_ctx));
 
       osmesa->gl_buffer = _mesa_create_framebuffer( osmesa->gl_visual,
-                                          osmesa->gl_visual->depthBits > 0,
-                                          osmesa->gl_visual->stencilBits > 0,
-                                          osmesa->gl_visual->accumRedBits > 0,
-                                          swalpha );
+                           (GLboolean) ( osmesa->gl_visual->depthBits > 0 ),
+                           (GLboolean) ( osmesa->gl_visual->stencilBits > 0 ),
+                           (GLboolean) ( osmesa->gl_visual->accumRedBits > 0 ),
+                           GL_FALSE /* s/w alpha */ );
 
       if (!osmesa->gl_buffer) {
          _mesa_destroy_visual( osmesa->gl_visual );
@@ -362,7 +357,7 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
  *
  * Input:  ctx - the context to destroy
  */
-void GLAPIENTRY OSMesaDestroyContext( OSMesaContext ctx )
+GLAPI void GLAPIENTRY OSMesaDestroyContext( OSMesaContext ctx )
 {
    if (ctx) {
       _swsetup_DestroyContext( &ctx->gl_ctx );
@@ -449,7 +444,7 @@ static void compute_row_addresses( OSMesaContext ctx )
  *          invalid buffer address, type!=GL_UNSIGNED_BYTE, width<1, height<1,
  *          width>internal limit or height>internal limit.
  */
-GLboolean GLAPIENTRY
+GLAPI GLboolean GLAPIENTRY
 OSMesaMakeCurrent( OSMesaContext ctx, void *buffer, GLenum type,
                    GLsizei width, GLsizei height )
 {
@@ -493,7 +488,7 @@ OSMesaMakeCurrent( OSMesaContext ctx, void *buffer, GLenum type,
 
 
 
-OSMesaContext GLAPIENTRY OSMesaGetCurrentContext( void )
+GLAPI OSMesaContext GLAPIENTRY OSMesaGetCurrentContext( void )
 {
    GLcontext *ctx = _mesa_get_current_context();
    if (ctx)
@@ -504,7 +499,7 @@ OSMesaContext GLAPIENTRY OSMesaGetCurrentContext( void )
 
 
 
-void GLAPIENTRY OSMesaPixelStore( GLint pname, GLint value )
+GLAPI void GLAPIENTRY OSMesaPixelStore( GLint pname, GLint value )
 {
    OSMesaContext ctx = OSMesaGetCurrentContext();
 
@@ -530,7 +525,7 @@ void GLAPIENTRY OSMesaPixelStore( GLint pname, GLint value )
 }
 
 
-void GLAPIENTRY OSMesaGetIntegerv( GLint pname, GLint *value )
+GLAPI void GLAPIENTRY OSMesaGetIntegerv( GLint pname, GLint *value )
 {
    OSMesaContext ctx = OSMesaGetCurrentContext();
 
@@ -573,7 +568,7 @@ void GLAPIENTRY OSMesaGetIntegerv( GLint pname, GLint *value )
  *          buffer - pointer to depth buffer values
  * Return:  GL_TRUE or GL_FALSE to indicate success or failure.
  */
-GLboolean GLAPIENTRY
+GLAPI GLboolean GLAPIENTRY
 OSMesaGetDepthBuffer( OSMesaContext c, GLint *width, GLint *height,
                       GLint *bytesPerValue, void **buffer )
 {
@@ -604,7 +599,7 @@ OSMesaGetDepthBuffer( OSMesaContext c, GLint *width, GLint *height,
  *          buffer - pointer to color buffer values
  * Return:  GL_TRUE or GL_FALSE to indicate success or failure.
  */
-GLboolean GLAPIENTRY
+GLAPI GLboolean GLAPIENTRY
 OSMesaGetColorBuffer( OSMesaContext c, GLint *width,
                       GLint *height, GLint *format, void **buffer )
 {
@@ -791,7 +786,7 @@ static void clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
             PACK_RGB_565(clearPixel, r, g, b);
             if (all) {
                /* Clear whole RGB buffer */
-	       const GLint n = osmesa->rowlength * osmesa->height;
+	       const GLuint n = osmesa->rowlength * osmesa->height;
                GLushort *ptr2 = (GLushort *) osmesa->buffer;
                GLuint  i;
                for (i = 0; i < n; i++) {
@@ -1553,7 +1548,7 @@ static void
 flat_rgba_line( GLcontext *ctx, const SWvertex *vert0, const SWvertex *vert1 )
 {
    const OSMesaContext osmesa = OSMESA_CONTEXT(ctx);
-   const GLchan *color = vert0->color;
+   const GLchan *color = vert1->color;
 
 #define INTERP_XY 1
 #define CLIP_HACK 1
@@ -1578,7 +1573,7 @@ static void
 flat_rgba_z_line(GLcontext *ctx, const SWvertex *vert0, const SWvertex *vert1)
 {
    const OSMesaContext osmesa = OSMESA_CONTEXT(ctx);
-   const GLchan *color = vert0->color;
+   const GLchan *color = vert1->color;
 
 #define INTERP_XY 1
 #define INTERP_Z 1
@@ -1617,9 +1612,9 @@ flat_blend_rgba_line( GLcontext *ctx,
    const GLint bshift = osmesa->bshift;
    const GLint avalue = vert0->color[3];
    const GLint msavalue = CHAN_MAX - avalue;
-   const GLint rvalue = vert0->color[0]*avalue;
-   const GLint gvalue = vert0->color[1]*avalue;
-   const GLint bvalue = vert0->color[2]*avalue;
+   const GLint rvalue = vert1->color[0]*avalue;
+   const GLint gvalue = vert1->color[1]*avalue;
+   const GLint bvalue = vert1->color[2]*avalue;
 
 #define INTERP_XY 1
 #define CLIP_HACK 1
@@ -1632,6 +1627,17 @@ flat_blend_rgba_line( GLcontext *ctx,
      *ptr4 = pixel;					\
    }
 
+#if 0  /* XXX use this in the future */
+#define PLOT(X,Y)							\
+   {									\
+      GLchan *pixel = (GLchan *) PIXELADDR4(X, Y);			\
+      pixel[rInd] = (pixel[rInd] * msavalue + rvalue) >> CHAN_BITS;	\
+      pixel[gInd] = (pixel[gInd] * msavalue + gvalue) >> CHAN_BITS;	\
+      pixel[bInd] = (pixel[bInd] * msavalue + bvalue) >> CHAN_BITS;	\
+      pixel[aInd] = (pixel[aInd] * msavalue + avalue) >> CHAN_BITS;	\
+   }
+#endif
+
 #ifdef WIN32
 #include "..\swrast\s_linetemp.h"
 #else
@@ -1642,6 +1648,7 @@ flat_blend_rgba_line( GLcontext *ctx,
 
 /*
  * Draw a flat-shaded, Z-less, alpha-blended, RGB line into an osmesa buffer.
+ * But don't write to Z buffer.
  * XXX update for GLchan
  */
 static void
@@ -1654,9 +1661,9 @@ flat_blend_rgba_z_line( GLcontext *ctx,
    const GLint bshift = osmesa->bshift;
    const GLint avalue = vert0->color[3];
    const GLint msavalue = 256 - avalue;
-   const GLint rvalue = vert0->color[0]*avalue;
-   const GLint gvalue = vert0->color[1]*avalue;
-   const GLint bvalue = vert0->color[2]*avalue;
+   const GLint rvalue = vert1->color[0]*avalue;
+   const GLint gvalue = vert1->color[1]*avalue;
+   const GLint bvalue = vert1->color[2]*avalue;
 
 #define INTERP_XY 1
 #define INTERP_Z 1
@@ -1671,6 +1678,17 @@ flat_blend_rgba_z_line( GLcontext *ctx,
 	   pixel |=((((((*ptr4) >> bshift) & 0xff)*msavalue+bvalue)>>8) << bshift);	\
 	   *ptr4 = pixel; 						\
 	}
+
+#if 0  /* XXX use this in the future */
+#define PLOT(X,Y)							\
+   if (Z < *zPtr) {							\
+      GLchan *pixel = (GLchan *) PIXELADDR4(X, Y);			\
+      pixel[rInd] = (pixel[rInd] * msavalue + rvalue) >> CHAN_BITS;	\
+      pixel[gInd] = (pixel[gInd] * msavalue + gvalue) >> CHAN_BITS;	\
+      pixel[bInd] = (pixel[bInd] * msavalue + bvalue) >> CHAN_BITS;	\
+      pixel[aInd] = (pixel[aInd] * msavalue + avalue) >> CHAN_BITS;	\
+   }
+#endif
 
 #ifdef WIN32
 #include "..\swrast\s_linetemp.h"
@@ -1694,9 +1712,9 @@ flat_blend_rgba_z_line_write( GLcontext *ctx,
    const GLint bshift = osmesa->bshift;
    const GLint avalue = vert0->color[3];
    const GLint msavalue = 256 - avalue;
-   const GLint rvalue = vert0->color[0]*avalue;
-   const GLint gvalue = vert0->color[1]*avalue;
-   const GLint bvalue = vert0->color[2]*avalue;
+   const GLint rvalue = vert1->color[0]*avalue;
+   const GLint gvalue = vert1->color[1]*avalue;
+   const GLint bvalue = vert1->color[2]*avalue;
 
 #define INTERP_XY 1
 #define INTERP_Z 1
@@ -1712,6 +1730,18 @@ flat_blend_rgba_z_line_write( GLcontext *ctx,
 	   *ptr4 = pixel;						\
 	   *zPtr = Z;							\
 	}
+
+#if 0  /* XXX use this in the future */
+#define PLOT(X,Y)							\
+   if (Z < *zPtr) {							\
+      GLchan *pixel = (GLchan *) PIXELADDR4(X, Y);			\
+      pixel[rInd] = (pixel[rInd] * msavalue + rvalue) >> CHAN_BITS;	\
+      pixel[gInd] = (pixel[gInd] * msavalue + gvalue) >> CHAN_BITS;	\
+      pixel[bInd] = (pixel[bInd] * msavalue + bvalue) >> CHAN_BITS;	\
+      pixel[aInd] = (pixel[aInd] * msavalue + avalue) >> CHAN_BITS;	\
+      *zPtr = Z;							\
+   }
+#endif
 
 #ifdef WIN32
 #include "..\swrast\s_linetemp.h"
@@ -1747,11 +1777,11 @@ osmesa_choose_line_function( GLcontext *ctx )
        && ctx->Depth.Func==GL_LESS
        && ctx->Depth.Mask==GL_TRUE
        && ctx->Visual.depthBits == DEFAULT_SOFTWARE_DEPTH_BITS) {
-      return flat_rgba_z_line;
+      return (swrast_line_func) flat_rgba_z_line;
    }
 
    if (swrast->_RasterMask == 0) {
-      return flat_rgba_line;
+      return (swrast_line_func) flat_rgba_line;
    }
 
    if (swrast->_RasterMask==(DEPTH_BIT|BLEND_BIT)
@@ -1763,7 +1793,7 @@ osmesa_choose_line_function( GLcontext *ctx )
        && ctx->Color.BlendSrcA==GL_SRC_ALPHA
        && ctx->Color.BlendDstA==GL_ONE_MINUS_SRC_ALPHA
        && ctx->Color.BlendEquation==GL_FUNC_ADD_EXT) {
-      return flat_blend_rgba_z_line_write;
+      return (swrast_line_func) flat_blend_rgba_z_line_write;
    }
 
    if (swrast->_RasterMask==(DEPTH_BIT|BLEND_BIT)
@@ -1775,7 +1805,7 @@ osmesa_choose_line_function( GLcontext *ctx )
        && ctx->Color.BlendSrcA==GL_SRC_ALPHA
        && ctx->Color.BlendDstA==GL_ONE_MINUS_SRC_ALPHA
        && ctx->Color.BlendEquation==GL_FUNC_ADD_EXT) {
-      return flat_blend_rgba_z_line;
+      return (swrast_line_func) flat_blend_rgba_z_line;
    }
 
    if (swrast->_RasterMask==BLEND_BIT
@@ -1784,10 +1814,10 @@ osmesa_choose_line_function( GLcontext *ctx )
        && ctx->Color.BlendSrcA==GL_SRC_ALPHA
        && ctx->Color.BlendDstA==GL_ONE_MINUS_SRC_ALPHA
        && ctx->Color.BlendEquation==GL_FUNC_ADD_EXT) {
-      return flat_blend_rgba_line;
+      return (swrast_line_func) flat_blend_rgba_line;
    }
 
-   return NULL;
+   return (swrast_line_func) NULL;
 }
 
 
@@ -1851,8 +1881,8 @@ static void flat_rgba_z_triangle( GLcontext *ctx,
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define SETUP_CODE						\
    GLuint pixel;						\
-   PACK_RGBA((GLchan *) &pixel, v0->color[0], v0->color[1],	\
-                                v0->color[2], v0->color[3]);
+   PACK_RGBA((GLchan *) &pixel, v2->color[0], v2->color[1],	\
+                                v2->color[2], v2->color[3]);
 
 #define RENDER_SPAN( span )				\
    GLuint i;						\
@@ -1898,10 +1928,10 @@ osmesa_choose_triangle_function( GLcontext *ctx )
        ctx->Depth.Mask == GL_TRUE &&
        ctx->Visual.depthBits == DEFAULT_SOFTWARE_DEPTH_BITS) {
       if (ctx->Light.ShadeModel == GL_SMOOTH) {
-         return smooth_rgba_z_triangle;
+         return (swrast_tri_func) smooth_rgba_z_triangle;
       }
       else {
-         return flat_rgba_z_triangle;
+         return (swrast_tri_func) flat_rgba_z_triangle;
       }
    }
    return (swrast_tri_func) NULL;
@@ -2019,6 +2049,9 @@ static void osmesa_update_state( GLcontext *ctx, GLuint new_state )
    ctx->Driver.CopyConvolutionFilter1D = _swrast_CopyConvolutionFilter1D;
    ctx->Driver.CopyConvolutionFilter2D = _swrast_CopyConvolutionFilter2D;
 
+   ctx->Driver.BaseCompressedTexFormat = _mesa_base_compressed_texformat;
+   ctx->Driver.CompressedTextureSize = _mesa_compressed_texture_size;
+   ctx->Driver.GetCompressedTexImage = _mesa_get_compressed_teximage;
 
    /* RGB(A) span/pixel functions */
    if (osmesa->format == OSMESA_RGB) {
