@@ -16,12 +16,10 @@ LIBDIR = [-.lib]
 CFLAGS = /include=($(INCDIR),[])/define=(PTHREADS=1)/name=(as_is,short)
 
 CORE_SOURCES =accum.c \
-	alpha.c \
 	api_loopback.c \
 	api_noop.c \
 	api_validate.c \
  	attrib.c \
-	bitmap.c \
 	blend.c \
 	buffers.c \
 	clip.c \
@@ -29,7 +27,6 @@ CORE_SOURCES =accum.c \
 	config.c \
 	context.c \
 	convolve.c \
-	copypix.c \
 	debug.c \
 	depth.c \
 	dispatch.c \
@@ -52,19 +49,14 @@ CORE_SOURCES =accum.c \
 	imports.c \
 	light.c \
 	lines.c \
-	logic.c \
 	lowpc.c \
-	masking.c \
 	matrix.c \
 	mem.c \
 	mmath.c \
 	pixel.c \
-	pixeltex.c \
 	points.c \
 	polygon.c \
 	rastpos.c \
-	readpix.c \
-	scissor.c \
 	state.c \
 	stencil.c \
 	texformat.c \
@@ -75,7 +67,6 @@ CORE_SOURCES =accum.c \
 	texutil.c \
 	varray.c \
 	vtxfmt.c \
-	winpos.c \
 	[.x86]x86.c
 
 DRIVER_SOURCES = [.x]glxapi.c [.x]fakeglx.c [.x]xfonts.c \
@@ -166,12 +157,10 @@ CACHE_SOURCES=[.array_cache]ac_context.c \
 	[.array_cache]ac_import.c
  
 OBJECTS1=accum.obj,\
-alpha.obj,\
 api_loopback.obj,\
 api_noop.obj,\
 api_validate.obj,\
 attrib.obj,\
-bitmap.obj,\
 blend.obj,\
 buffers.obj,\
 clip.obj,\
@@ -179,7 +168,6 @@ colortab.obj,\
 config.obj,\
 context.obj,\
 convolve.obj,\
-copypix.obj,\
 debug.obj,\
 depth.obj,\
 dispatch.obj,\
@@ -203,20 +191,15 @@ image.obj,\
 imports.obj,\
 light.obj,\
 lines.obj,\
-logic.obj,\
 lowpc.obj,\
-masking.obj,\
 matrix.obj,\
 mem.obj
 
 OBJECTS3=mmath.obj,\
 pixel.obj,\
-pixeltex.obj,\
 points.obj,\
 polygon.obj,\
 rastpos.obj,\
-readpix.obj,\
-scissor.obj,\
 state.obj,\
 stencil.obj,\
 texformat.obj,\
@@ -227,7 +210,6 @@ texstore.obj,\
 texutil.obj,\
 varray.obj,\
 vtxfmt.obj,\
-winpos.obj,\
 [.x86]x86.obj
 
 OBJECTS4=[.x]glxapi.obj,[.x]fakeglx.obj,[.x]xfonts.obj,\

@@ -1,4 +1,4 @@
-/* $Id: t_context.h,v 1.26 2001/05/31 23:03:05 brianp Exp $ */
+/* $Id: t_context.h,v 1.29 2001/06/28 17:34:14 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -207,6 +207,7 @@ struct immediate
    GLfloat Color[IMM_SIZE][4];
    GLfloat Obj[IMM_SIZE][4];
    GLfloat Normal[IMM_SIZE][3];
+   GLfloat *NormalLengthPtr;
    GLfloat TexCoord0[IMM_SIZE][4];  /* just VERT_TEX0 */
    GLuint  Elt[IMM_SIZE];
    GLubyte EdgeFlag[IMM_SIZE];
@@ -256,6 +257,7 @@ typedef struct vertex_buffer
    GLubyte     ClipOrMask;	                /* VERT_CLIP (3) */
    GLubyte     *ClipMask;		        /* VERT_CLIP (4) */
    GLvector3f  *NormalPtr;	                /* VERT_NORM */
+   GLfloat     *NormalLengthPtr;	        /* VERT_NORM */
    GLboolean   *EdgeFlag;	                /* VERT_EDGE */
    GLvector4f  *TexCoordPtr[MAX_TEXTURE_UNITS];	/* VERT_TEX_0..n */
    GLvector1ui *IndexPtr[2];	                /* VERT_INDEX */
@@ -436,7 +438,9 @@ struct tnl_device_driver {
    render_func          *RenderTabElts;
    /* Render whole unclipped primitives (points, lines, linestrips,
     * lineloops, etc).  The tables are indexed by the GL enum of the
-    * primitive to be rendered.
+    * primitive to be rendered.  RenderTabVerts is used for non-indexed
+    * arrays of vertices.  RenderTabElts is used for indexed arrays of
+    * vertices.
     */
 
    void (*ResetLineStipple)( GLcontext *ctx );
@@ -522,6 +526,8 @@ typedef struct {
    /* Probably need a better configuration mechanism:
     */
    GLboolean NeedProjCoords;
+   GLboolean LoopbackDListCassettes;
+   GLboolean CalcDListNormalLengths;
 
    /* Derived state and storage for _tnl_eval_vb:
     */

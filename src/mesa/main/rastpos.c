@@ -1,4 +1,4 @@
-/* $Id: rastpos.c,v 1.25 2001/05/30 15:22:04 brianp Exp $ */
+/* $Id: rastpos.c,v 1.28 2001/06/26 21:15:36 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -66,6 +66,20 @@ viewclip_point( const GLfloat v[] )
 }
 
 
+/* As above, but only clip test against far/near Z planes */
+static GLuint
+viewclip_point_z( const GLfloat v[] )
+{
+   if (v[2] > v[3] || v[2] < -v[3] ) {
+      return 0;
+   }
+   else {
+      return 1;
+   }
+}
+
+
+
 /*
  * Clip a point against the user clipping planes.
  * Input:  v - vertex-vector describing the point to clip.
@@ -96,22 +110,30 @@ userclip_point( GLcontext* ctx, const GLfloat v[] )
 /* This has been split off to allow the normal shade routines to
  * get a little closer to the vertex buffer, and to use the
  * GLvector objects directly.
+ * Input: ctx - the context
+ *        vertex - vertex location
+ *        normal - normal vector
+ * Output: Rcolor - returned color
+ *         Rspec  - returned specular color (if separate specular enabled)
+ *         Rindex - returned color index
  */
 static void
 shade_rastpos(GLcontext *ctx,
               const GLfloat vertex[4],
               const GLfloat normal[3],
               GLfloat Rcolor[4],
-              GLuint *index)
+              GLfloat Rspec[4],
+              GLuint *Rindex)
 {
    GLfloat (*base)[3] = ctx->Light._BaseColor;
    const GLfloat *sumA = ctx->Light._BaseAlpha;
    struct gl_light *light;
-   GLfloat color[4];
+   GLfloat diffuseColor[4], specularColor[4];
    GLfloat diffuse = 0, specular = 0;
 
-   COPY_3V(color, base[0]);
-   color[3] = sumA[0];
+   COPY_3V(diffuseColor, base[0]);
+   diffuseColor[3] = sumA[0];
+   ASSIGN_4V(specularColor, 0.0, 0.0, 0.0, 0.0);
 
    foreach (light, &ctx->Light.EnabledList) {
       GLfloat n_dot_h;
@@ -119,7 +141,7 @@ shade_rastpos(GLcontext *ctx,
       GLfloat VP[3];
       GLfloat n_dot_VP;
       GLfloat *h;
-      GLfloat contrib[3];
+      GLfloat diffuseContrib[3], specularContrib[3];
       GLboolean normalized;
 
       if (!(light->_Flags & LIGHT_POSITIONAL)) {
@@ -162,13 +184,14 @@ shade_rastpos(GLcontext *ctx,
       n_dot_VP = DOT3( normal, VP );
 
       if (n_dot_VP < 0.0F) {
-	 ACC_SCALE_SCALAR_3V(color, attenuation, light->_MatAmbient[0]);
+	 ACC_SCALE_SCALAR_3V(diffuseColor, attenuation, light->_MatAmbient[0]);
 	 continue;
       }
 
-      COPY_3V(contrib, light->_MatAmbient[0]);
-      ACC_SCALE_SCALAR_3V(contrib, n_dot_VP, light->_MatDiffuse[0]);
+      COPY_3V(diffuseContrib, light->_MatAmbient[0]);
+      ACC_SCALE_SCALAR_3V(diffuseContrib, n_dot_VP, light->_MatDiffuse[0]);
       diffuse += n_dot_VP * light->_dli * attenuation;
+      ASSIGN_3V(specularContrib, 0.0, 0.0, 0.0);
 
       {
 	 if (ctx->Light.Model.LocalViewer) {
@@ -192,7 +215,7 @@ shade_rastpos(GLcontext *ctx,
 	 n_dot_h = DOT3(normal, h);
 
 	 if (n_dot_h > 0.0F) {
-	    struct gl_material *mat = &ctx->Light.Material[0];
+	    const struct gl_material *mat = &ctx->Light.Material[0];
 	    GLfloat spec_coef;
 	    GLfloat shininess = mat->Shininess;
 
@@ -205,21 +228,32 @@ shade_rastpos(GLcontext *ctx,
 	    GET_SHINE_TAB_ENTRY( ctx->_ShineTable[0], n_dot_h, spec_coef );
 
 	    if (spec_coef > 1.0e-10) {
-	       ACC_SCALE_SCALAR_3V( contrib, spec_coef,
-				    light->_MatSpecular[0]);
+               if (ctx->Light.Model.ColorControl==GL_SEPARATE_SPECULAR_COLOR) {
+                  ACC_SCALE_SCALAR_3V( specularContrib, spec_coef,
+                                       light->_MatSpecular[0]);
+               }
+               else {
+                  ACC_SCALE_SCALAR_3V( diffuseContrib, spec_coef,
+                                       light->_MatSpecular[0]);
+               }
 	       specular += spec_coef * light->_sli * attenuation;
 	    }
 	 }
       }
 
-      ACC_SCALE_SCALAR_3V( color, attenuation, contrib );
+      ACC_SCALE_SCALAR_3V( diffuseColor, attenuation, diffuseContrib );
+      ACC_SCALE_SCALAR_3V( specularColor, attenuation, specularContrib );
    }
 
    if (ctx->Visual.rgbMode) {
-      Rcolor[0] = CLAMP(color[0], 0.0F, 1.0F);
-      Rcolor[1] = CLAMP(color[1], 0.0F, 1.0F);
-      Rcolor[2] = CLAMP(color[2], 0.0F, 1.0F);
-      Rcolor[3] = CLAMP(color[3], 0.0F, 1.0F);
+      Rcolor[0] = CLAMP(diffuseColor[0], 0.0F, 1.0F);
+      Rcolor[1] = CLAMP(diffuseColor[1], 0.0F, 1.0F);
+      Rcolor[2] = CLAMP(diffuseColor[2], 0.0F, 1.0F);
+      Rcolor[3] = CLAMP(diffuseColor[3], 0.0F, 1.0F);
+      Rspec[0] = CLAMP(specularColor[0], 0.0F, 1.0F);
+      Rspec[1] = CLAMP(specularColor[1], 0.0F, 1.0F);
+      Rspec[2] = CLAMP(specularColor[2], 0.0F, 1.0F);
+      Rspec[3] = CLAMP(specularColor[3], 0.0F, 1.0F);
    }
    else {
       struct gl_material *mat = &ctx->Light.Material[0];
@@ -231,7 +265,7 @@ shade_rastpos(GLcontext *ctx,
       if (ind > mat->SpecularIndex) {
 	 ind = mat->SpecularIndex;
       }
-      *index = (GLuint) (GLint) ind;
+      *Rindex = (GLuint) (GLint) ind;
    }
 
 }
@@ -268,16 +302,16 @@ raster_pos4f(GLcontext *ctx, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
 
       shade_rastpos( ctx, v, norm,
                      ctx->Current.RasterColor,
+                     ctx->Current.RasterSecondaryColor,
                      &ctx->Current.RasterIndex );
 
    }
    else {
       /* use current color or index */
       if (ctx->Visual.rgbMode) {
-         ctx->Current.RasterColor[0] = (ctx->Current.Color[0]);
-         ctx->Current.RasterColor[1] = (ctx->Current.Color[1]);
-         ctx->Current.RasterColor[2] = (ctx->Current.Color[2]);
-         ctx->Current.RasterColor[3] = (ctx->Current.Color[3]);
+         COPY_4FV(ctx->Current.RasterColor, ctx->Current.Color);
+         COPY_4FV(ctx->Current.RasterSecondaryColor,
+                  ctx->Current.SecondaryColor);
       }
       else {
 	 ctx->Current.RasterIndex = ctx->Current.Index;
@@ -292,7 +326,13 @@ raster_pos4f(GLcontext *ctx, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
    TRANSFORM_POINT( clip, ctx->ProjectionMatrix.m, eye );
 
    /* clip to view volume */
-   if (viewclip_point( clip )==0) {
+   if (ctx->Transform.RasterPositionUnclipped) {
+      /* GL_IBM_rasterpos_clip: only clip against Z */
+      if (viewclip_point_z(clip) == 0)
+         ctx->Current.RasterPosValid = GL_FALSE;
+   }
+   else if (viewclip_point(clip) == 0) {
+      /* Normal OpenGL behaviour */
       ctx->Current.RasterPosValid = GL_FALSE;
       return;
    }
@@ -482,3 +522,239 @@ _mesa_RasterPos4sv(const GLshort *v)
 {
    _mesa_RasterPos4f(v[0], v[1], v[2], v[3]);
 }
+
+
+
+/**********************************************************************/
+/***                     GL_MESA_window_pos                         ***/
+/**********************************************************************/
+
+
+/*
+ * This is a MESA extension function.  Pretty much just like glRasterPos
+ * except we don't apply the modelview or projection matrices; specify a
+ * window coordinate directly.
+ * Caller:  context->API.WindowPos4fMESA pointer.
+ */
+void
+_mesa_WindowPos4fMESA( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
+   FLUSH_CURRENT(ctx, 0);
+
+   /* set raster position */
+   ctx->Current.RasterPos[0] = x;
+   ctx->Current.RasterPos[1] = y;
+   ctx->Current.RasterPos[2] = CLAMP( z, 0.0F, 1.0F );
+   ctx->Current.RasterPos[3] = w;
+
+   ctx->Current.RasterPosValid = GL_TRUE;
+   ctx->Current.RasterDistance = 0.0F;
+   ctx->Current.RasterFogCoord = 0.0F;
+
+   /* raster color = current color or index */
+   if (ctx->Visual.rgbMode) {
+      ctx->Current.RasterColor[0] = (ctx->Current.Color[0]);
+      ctx->Current.RasterColor[1] = (ctx->Current.Color[1]);
+      ctx->Current.RasterColor[2] = (ctx->Current.Color[2]);
+      ctx->Current.RasterColor[3] = (ctx->Current.Color[3]);
+   }
+   else {
+      ctx->Current.RasterIndex = ctx->Current.Index;
+   }
+
+   /* raster texcoord = current texcoord */
+   {
+      GLuint texSet;
+      for (texSet = 0; texSet < ctx->Const.MaxTextureUnits; texSet++) {
+         COPY_4FV( ctx->Current.RasterMultiTexCoord[texSet],
+                  ctx->Current.Texcoord[texSet] );
+      }
+   }
+
+   if (ctx->RenderMode==GL_SELECT) {
+      _mesa_update_hitflag( ctx, ctx->Current.RasterPos[2] );
+   }
+}
+
+
+
+
+void
+_mesa_WindowPos2dMESA(GLdouble x, GLdouble y)
+{
+   _mesa_WindowPos4fMESA(x, y, 0.0F, 1.0F);
+}
+
+void
+_mesa_WindowPos2fMESA(GLfloat x, GLfloat y)
+{
+   _mesa_WindowPos4fMESA(x, y, 0.0F, 1.0F);
+}
+
+void
+_mesa_WindowPos2iMESA(GLint x, GLint y)
+{
+   _mesa_WindowPos4fMESA(x, y, 0.0F, 1.0F);
+}
+
+void
+_mesa_WindowPos2sMESA(GLshort x, GLshort y)
+{
+   _mesa_WindowPos4fMESA(x, y, 0.0F, 1.0F);
+}
+
+void
+_mesa_WindowPos3dMESA(GLdouble x, GLdouble y, GLdouble z)
+{
+   _mesa_WindowPos4fMESA(x, y, z, 1.0F);
+}
+
+void
+_mesa_WindowPos3fMESA(GLfloat x, GLfloat y, GLfloat z)
+{
+   _mesa_WindowPos4fMESA(x, y, z, 1.0F);
+}
+
+void
+_mesa_WindowPos3iMESA(GLint x, GLint y, GLint z)
+{
+   _mesa_WindowPos4fMESA(x, y, z, 1.0F);
+}
+
+void
+_mesa_WindowPos3sMESA(GLshort x, GLshort y, GLshort z)
+{
+   _mesa_WindowPos4fMESA(x, y, z, 1.0F);
+}
+
+void
+_mesa_WindowPos4dMESA(GLdouble x, GLdouble y, GLdouble z, GLdouble w)
+{
+   _mesa_WindowPos4fMESA(x, y, z, w);
+}
+
+void
+_mesa_WindowPos4iMESA(GLint x, GLint y, GLint z, GLint w)
+{
+   _mesa_WindowPos4fMESA(x, y, z, w);
+}
+
+void
+_mesa_WindowPos4sMESA(GLshort x, GLshort y, GLshort z, GLshort w)
+{
+   _mesa_WindowPos4fMESA(x, y, z, w);
+}
+
+void
+_mesa_WindowPos2dvMESA(const GLdouble *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], 0.0F, 1.0F);
+}
+
+void
+_mesa_WindowPos2fvMESA(const GLfloat *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], 0.0F, 1.0F);
+}
+
+void
+_mesa_WindowPos2ivMESA(const GLint *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], 0.0F, 1.0F);
+}
+
+void
+_mesa_WindowPos2svMESA(const GLshort *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], 0.0F, 1.0F);
+}
+
+void
+_mesa_WindowPos3dvMESA(const GLdouble *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], v[2], 1.0F);
+}
+
+void
+_mesa_WindowPos3fvMESA(const GLfloat *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], v[2], 1.0F);
+}
+
+void
+_mesa_WindowPos3ivMESA(const GLint *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], v[2], 1.0F);
+}
+
+void
+_mesa_WindowPos3svMESA(const GLshort *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], v[2], 1.0F);
+}
+
+void
+_mesa_WindowPos4dvMESA(const GLdouble *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], v[2], v[3]);
+}
+
+void
+_mesa_WindowPos4fvMESA(const GLfloat *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], v[2], v[3]);
+}
+
+void
+_mesa_WindowPos4ivMESA(const GLint *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], v[2], v[3]);
+}
+
+void
+_mesa_WindowPos4svMESA(const GLshort *v)
+{
+   _mesa_WindowPos4fMESA(v[0], v[1], v[2], v[3]);
+}
+
+
+
+#if 0
+
+/*
+ * OpenGL implementation of glWindowPos*MESA()
+ */
+void glWindowPos4fMESA( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
+{
+   GLfloat fx, fy;
+
+   /* Push current matrix mode and viewport attributes */
+   glPushAttrib( GL_TRANSFORM_BIT | GL_VIEWPORT_BIT );
+
+   /* Setup projection parameters */
+   glMatrixMode( GL_PROJECTION );
+   glPushMatrix();
+   glLoadIdentity();
+   glMatrixMode( GL_MODELVIEW );
+   glPushMatrix();
+   glLoadIdentity();
+
+   glDepthRange( z, z );
+   glViewport( (int) x - 1, (int) y - 1, 2, 2 );
+
+   /* set the raster (window) position */
+   fx = x - (int) x;
+   fy = y - (int) y;
+   glRasterPos4f( fx, fy, 0.0, w );
+
+   /* restore matrices, viewport and matrix mode */
+   glPopMatrix();
+   glMatrixMode( GL_PROJECTION );
+   glPopMatrix();
+
+   glPopAttrib();
+}
+
+#endif

@@ -1,4 +1,4 @@
-/* $Id: sparc.h,v 1.1 2001/05/23 14:27:03 brianp Exp $ */
+/* $Id: sparc.h,v 1.3 2001/06/06 22:55:28 davem69 Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -33,5 +33,6 @@
 #define SPARC_H
 
 extern void _mesa_init_all_sparc_transform_asm(void);
+extern void _mesa_init_sparc_glapi_relocs(void);
 
 #endif /* !(SPARC_H) */

@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.139 2001/05/29 15:23:48 brianp Exp $ */
+/* $Id: context.c,v 1.144 2001/06/26 01:32:48 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -66,6 +66,9 @@
 #include "Trace/tr_wrapper.h"
 #endif
 
+#ifdef USE_SPARC_ASM
+#include "SPARC/sparc.h"
+#endif
 
 #ifndef MESA_VERBOSE
 int MESA_VERBOSE = 0
@@ -453,6 +456,9 @@ one_time_init( void )
       _math_init();
       _mesa_init_math();
 
+#ifdef USE_SPARC_ASM
+      _mesa_init_sparc_glapi_relocs();
+#endif
       if (getenv("MESA_DEBUG")) {
          _glapi_noop_enable_warnings(GL_TRUE);
       }
@@ -722,10 +728,13 @@ init_attrib_groups( GLcontext *ctx )
 
    assert(ctx);
 
+   assert(MAX_TEXTURE_LEVELS >= MAX_3D_TEXTURE_LEVELS);
+   assert(MAX_TEXTURE_LEVELS >= MAX_CUBE_TEXTURE_LEVELS);
+
    /* Constants, may be overriden by device drivers */
    ctx->Const.MaxTextureLevels = MAX_TEXTURE_LEVELS;
-   ctx->Const.MaxTextureSize = 1 << (MAX_TEXTURE_LEVELS - 1);
-   ctx->Const.MaxCubeTextureSize = ctx->Const.MaxTextureSize;
+   ctx->Const.Max3DTextureLevels = MAX_3D_TEXTURE_LEVELS;
+   ctx->Const.MaxCubeTextureLevels = MAX_CUBE_TEXTURE_LEVELS;
    ctx->Const.MaxTextureUnits = MAX_TEXTURE_UNITS;
    ctx->Const.MaxTextureMaxAnisotropy = MAX_TEXTURE_MAX_ANISOTROPY;
    ctx->Const.MaxArrayLockSize = MAX_ARRAY_LOCK_SIZE;
@@ -1122,7 +1131,6 @@ init_attrib_groups( GLcontext *ctx )
 
    /* Texture group */
    ctx->Texture.CurrentUnit = 0;      /* multitexture */
-   ctx->Texture.CurrentTransformUnit = 0; /* multitexture */
    ctx->Texture._ReallyEnabled = 0;
    for (i=0; i<MAX_TEXTURE_UNITS; i++)
       init_texture_unit( ctx, i );
@@ -1133,6 +1141,7 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Transform.MatrixMode = GL_MODELVIEW;
    ctx->Transform.Normalize = GL_FALSE;
    ctx->Transform.RescaleNormals = GL_FALSE;
+   ctx->Transform.RasterPositionUnclipped = GL_FALSE;
    for (i=0;i<MAX_CLIP_PLANES;i++) {
       ctx->Transform.ClipEnabled[i] = GL_FALSE;
       ASSIGN_4V( ctx->Transform.EyeUserPlane[i], 0.0, 0.0, 0.0, 0.0 );
@@ -1794,6 +1803,11 @@ static void print_info( void )
    fprintf(stderr, "Mesa x86-optimized: YES\n");
 #else
    fprintf(stderr, "Mesa x86-optimized: NO\n");
+#endif
+#if defined(USE_SPARC_ASM)
+   fprintf(stderr, "Mesa sparc-optimized: YES\n");
+#else
+   fprintf(stderr, "Mesa sparc-optimized: NO\n");
 #endif
 }
 

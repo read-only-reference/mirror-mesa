@@ -1,4 +1,4 @@
-/* $Id: s_bitmap.c,v 1.10 2001/05/30 15:22:05 brianp Exp $ */
+/* $Id: s_bitmap.c,v 1.12 2001/06/26 21:15:36 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -49,7 +49,7 @@ _swrast_Bitmap( GLcontext *ctx, GLint px, GLint py,
    struct pixel_buffer *PB = swrast->PB;
    GLint row, col;
    GLdepth fragZ;
-   GLfloat fogCoord;
+   GLfloat fog;
 
    ASSERT(ctx->RenderMode == GL_RENDER);
    ASSERT(bitmap);
@@ -76,12 +76,12 @@ _swrast_Bitmap( GLcontext *ctx, GLint px, GLint py,
 
    if (ctx->Fog.Enabled) {
       if (ctx->Fog.FogCoordinateSource == GL_FOG_COORDINATE_EXT)
-         fogCoord = ctx->Current.FogCoord;
+         fog = _mesa_z_to_fogfactor(ctx, ctx->Current.FogCoord);
       else
-         fogCoord = ctx->Current.RasterDistance;
+         fog = _mesa_z_to_fogfactor(ctx, ctx->Current.RasterDistance);
    }
    else {
-      fogCoord = 0.0;
+      fog = 0.0;
    }
 
    for (row=0; row<height; row++) {
@@ -93,7 +93,7 @@ _swrast_Bitmap( GLcontext *ctx, GLint px, GLint py,
          GLubyte mask = 1U << (unpack->SkipPixels & 0x7);
          for (col=0; col<width; col++) {
             if (*src & mask) {
-               PB_WRITE_PIXEL( PB, px+col, py+row, fragZ, fogCoord );
+               PB_WRITE_PIXEL( PB, px+col, py+row, fragZ, fog );
             }
             if (mask == 128U) {
                src++;
@@ -115,7 +115,7 @@ _swrast_Bitmap( GLcontext *ctx, GLint px, GLint py,
          GLubyte mask = 128U >> (unpack->SkipPixels & 0x7);
          for (col=0; col<width; col++) {
             if (*src & mask) {
-               PB_WRITE_PIXEL( PB, px+col, py+row, fragZ, fogCoord );
+               PB_WRITE_PIXEL( PB, px+col, py+row, fragZ, fog );
             }
             if (mask == 1U) {
                src++;

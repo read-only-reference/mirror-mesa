@@ -1,4 +1,4 @@
-/* $Id: texstate.c,v 1.51 2001/05/21 16:41:03 brianp Exp $ */
+/* $Id: texstate.c,v 1.54 2001/06/18 17:26:08 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -1133,16 +1133,33 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
    const struct gl_texture_image *img = NULL;
    GLuint dimensions;
    GLboolean isProxy;
+   GLint maxLevels;
    ASSERT_OUTSIDE_BEGIN_END(ctx);
-
-   if (level < 0 || level >= ctx->Const.MaxTextureLevels) {
-      _mesa_error( ctx, GL_INVALID_VALUE, "glGetTexLevelParameter[if]v" );
-      return;
-   }
 
    dimensions = tex_image_dimensions(ctx, target);  /* 1, 2 or 3 */
    if (dimensions == 0) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(target)");
+      return;
+   }
+
+   switch (target) {
+   case GL_TEXTURE_1D:
+   case GL_PROXY_TEXTURE_1D:
+   case GL_TEXTURE_2D:
+   case GL_PROXY_TEXTURE_2D:
+      maxLevels = ctx->Const.MaxTextureLevels;
+      break;
+   case GL_TEXTURE_3D:
+   case GL_PROXY_TEXTURE_3D:
+      maxLevels = ctx->Const.Max3DTextureLevels;
+      break;
+   default:
+      maxLevels = ctx->Const.MaxCubeTextureLevels;
+      break;
+   }
+
+   if (level < 0 || level >= maxLevels) {
+      _mesa_error( ctx, GL_INVALID_VALUE, "glGetTexLevelParameter[if]v" );
       return;
    }
 
@@ -1469,7 +1486,7 @@ void
 _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLuint tUnit = ctx->Texture.CurrentTransformUnit;
+   GLuint tUnit = ctx->Texture.CurrentUnit;
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[tUnit];
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
@@ -1754,7 +1771,7 @@ void
 _mesa_GetTexGendv( GLenum coord, GLenum pname, GLdouble *params )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLuint tUnit = ctx->Texture.CurrentTransformUnit;
+   GLuint tUnit = ctx->Texture.CurrentUnit;
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[tUnit];
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
@@ -1831,7 +1848,7 @@ void
 _mesa_GetTexGenfv( GLenum coord, GLenum pname, GLfloat *params )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLuint tUnit = ctx->Texture.CurrentTransformUnit;
+   GLuint tUnit = ctx->Texture.CurrentUnit;
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[tUnit];
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
@@ -1908,7 +1925,7 @@ void
 _mesa_GetTexGeniv( GLenum coord, GLenum pname, GLint *params )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLuint tUnit = ctx->Texture.CurrentTransformUnit;
+   GLuint tUnit = ctx->Texture.CurrentUnit;
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[tUnit];
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
@@ -2023,7 +2040,6 @@ _mesa_ActiveTextureARB( GLenum target )
 
    FLUSH_VERTICES(ctx, _NEW_TEXTURE);
    ctx->Texture.CurrentUnit = texUnit;
-   ctx->Texture.CurrentTransformUnit = texUnit;
    if (ctx->Driver.ActiveTexture) {
       (*ctx->Driver.ActiveTexture)( ctx, (GLuint) texUnit );
    }
@@ -2045,4 +2061,136 @@ _mesa_ClientActiveTextureARB( GLenum target )
 
    FLUSH_VERTICES(ctx, _NEW_ARRAY);
    ctx->Array.ActiveTexture = texUnit;
+}
+
+
+
+/**********************************************************************/
+/*                     Pixel Texgen Extensions                        */
+/**********************************************************************/
+
+void
+_mesa_PixelTexGenSGIX(GLenum mode)
+{
+   GLenum newRgbSource, newAlphaSource;
+   GET_CURRENT_CONTEXT(ctx);
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
+
+   switch (mode) {
+      case GL_NONE:
+         newRgbSource = GL_PIXEL_GROUP_COLOR_SGIS;
+         newAlphaSource = GL_PIXEL_GROUP_COLOR_SGIS;
+         break;
+      case GL_ALPHA:
+         newRgbSource = GL_PIXEL_GROUP_COLOR_SGIS;
+         newAlphaSource = GL_CURRENT_RASTER_COLOR;
+         break;
+      case GL_RGB:
+         newRgbSource = GL_CURRENT_RASTER_COLOR;
+         newAlphaSource = GL_PIXEL_GROUP_COLOR_SGIS;
+         break;
+      case GL_RGBA:
+         newRgbSource = GL_CURRENT_RASTER_COLOR;
+         newAlphaSource = GL_CURRENT_RASTER_COLOR;
+         break;
+      default:
+         _mesa_error(ctx, GL_INVALID_ENUM, "glPixelTexGenSGIX(mode)");
+         return;
+   }
+
+   if (newRgbSource == ctx->Pixel.FragmentRgbSource &&
+       newAlphaSource == ctx->Pixel.FragmentAlphaSource)
+      return;
+
+   FLUSH_VERTICES(ctx, _NEW_PIXEL);
+   ctx->Pixel.FragmentRgbSource = newRgbSource;
+   ctx->Pixel.FragmentAlphaSource = newAlphaSource;
+}
+
+
+void
+_mesa_PixelTexGenParameterfSGIS(GLenum target, GLfloat value)
+{
+   _mesa_PixelTexGenParameteriSGIS(target, (GLint) value);
+}
+
+
+void
+_mesa_PixelTexGenParameterfvSGIS(GLenum target, const GLfloat *value)
+{
+   _mesa_PixelTexGenParameteriSGIS(target, (GLint) *value);
+}
+
+
+void
+_mesa_PixelTexGenParameteriSGIS(GLenum target, GLint value)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
+
+   if (value != GL_CURRENT_RASTER_COLOR && value != GL_PIXEL_GROUP_COLOR_SGIS) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glPixelTexGenParameterSGIS(value)");
+      return;
+   }
+
+   switch (target) {
+   case GL_PIXEL_FRAGMENT_RGB_SOURCE_SGIS:
+      if (ctx->Pixel.FragmentRgbSource == (GLenum) value)
+	 return;
+      FLUSH_VERTICES(ctx, _NEW_PIXEL);
+      ctx->Pixel.FragmentRgbSource = (GLenum) value;
+      break;
+   case GL_PIXEL_FRAGMENT_ALPHA_SOURCE_SGIS:
+      if (ctx->Pixel.FragmentAlphaSource == (GLenum) value)
+	 return;
+      FLUSH_VERTICES(ctx, _NEW_PIXEL);
+      ctx->Pixel.FragmentAlphaSource = (GLenum) value;
+      break;
+   default:
+      _mesa_error(ctx, GL_INVALID_ENUM, "glPixelTexGenParameterSGIS(target)");
+      return;
+   }
+}
+
+
+void
+_mesa_PixelTexGenParameterivSGIS(GLenum target, const GLint *value)
+{
+  _mesa_PixelTexGenParameteriSGIS(target, *value);
+}
+
+
+void
+_mesa_GetPixelTexGenParameterfvSGIS(GLenum target, GLfloat *value)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
+
+   if (target == GL_PIXEL_FRAGMENT_RGB_SOURCE_SGIS) {
+      *value = (GLfloat) ctx->Pixel.FragmentRgbSource;
+   }
+   else if (target == GL_PIXEL_FRAGMENT_ALPHA_SOURCE_SGIS) {
+      *value = (GLfloat) ctx->Pixel.FragmentAlphaSource;
+   }
+   else {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glGetPixelTexGenParameterfvSGIS(target)");
+   }
+}
+
+
+void
+_mesa_GetPixelTexGenParameterivSGIS(GLenum target, GLint *value)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
+
+   if (target == GL_PIXEL_FRAGMENT_RGB_SOURCE_SGIS) {
+      *value = (GLint) ctx->Pixel.FragmentRgbSource;
+   }
+   else if (target == GL_PIXEL_FRAGMENT_ALPHA_SOURCE_SGIS) {
+      *value = (GLint) ctx->Pixel.FragmentAlphaSource;
+   }
+   else {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glGetPixelTexGenParameterivSGIS(target)");
+   }
 }

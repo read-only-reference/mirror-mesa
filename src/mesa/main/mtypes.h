@@ -1,4 +1,4 @@
-/* $Id: mtypes.h,v 1.44 2001/05/30 15:22:04 brianp Exp $ */
+/* $Id: mtypes.h,v 1.48 2001/06/26 21:15:35 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -309,6 +309,7 @@ struct gl_current_attrib {
    GLfloat RasterPos[4];			/* Current raster position */
    GLfloat RasterDistance;			/* Current raster distance */
    GLfloat RasterColor[4];			/* Current raster color */
+   GLfloat RasterSecondaryColor[4];             /* Current rast 2ndary color */
    GLuint  RasterIndex;				/* Current raster index */
    GLfloat *RasterTexCoord;			/* Current raster texcoord*/
    GLfloat RasterMultiTexCoord[MAX_TEXTURE_UNITS][4];
@@ -381,6 +382,7 @@ struct gl_enable_attrib {
    GLboolean SampleAlphaToOne;       /* GL_ARB_multisample */
    GLboolean SampleCoverage;         /* GL_ARB_multisample */
    GLboolean SampleCoverageInvert;   /* GL_ARB_multisample */
+   GLboolean RasterPositionUnclipped; /* GL_IBM_rasterpos_clip */
    GLuint Texture[MAX_TEXTURE_UNITS];
    GLuint TexGen[MAX_TEXTURE_UNITS];
 };
@@ -920,7 +922,6 @@ struct gl_texture_unit {
 struct gl_texture_attrib {
    /* multitexture */
    GLuint CurrentUnit;	          /* Active texture unit */
-   GLuint CurrentTransformUnit;	  /* Client active texture xform unit */
 
    GLuint _ReallyEnabled;     /* enables for all texture units: */
                              /* = (Unit[0]._ReallyEnabled << 0) | */
@@ -952,6 +953,7 @@ struct gl_transform_attrib {
    GLubyte   _AnyClip;				/* How many ClipEnabled? */
    GLboolean Normalize;				/* Normalize all normals? */
    GLboolean RescaleNormals;			/* GL_EXT_rescale_normal */
+   GLboolean RasterPositionUnclipped;           /* GL_IBM_rasterpos_clip */
 };
 
 
@@ -1157,9 +1159,9 @@ struct gl_frame_buffer {
  * but are never changed after that.
  */
 struct gl_constants {
-   GLint MaxTextureSize;
-   GLint MaxCubeTextureSize;
    GLint MaxTextureLevels;
+   GLint Max3DTextureLevels;
+   GLint MaxCubeTextureLevels;
    GLuint MaxTextureUnits;
    GLfloat MaxTextureMaxAnisotropy;	/* GL_EXT_texture_filter_anisotropic */
    GLuint MaxArrayLockSize;
@@ -1227,6 +1229,7 @@ struct gl_extensions {
    GLboolean EXT_texture_lod_bias;
    GLboolean EXT_vertex_array_set;
    GLboolean HP_occlusion_test;
+   GLboolean IBM_rasterpos_clip;
    GLboolean INGR_blend_func_separate;
    GLboolean MESA_window_pos;
    GLboolean MESA_resize_buffers;

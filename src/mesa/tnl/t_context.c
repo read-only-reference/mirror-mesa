@@ -1,4 +1,4 @@
-/* $Id: t_context.c,v 1.18 2001/05/11 08:11:31 keithw Exp $ */
+/* $Id: t_context.c,v 1.20 2001/06/28 17:34:14 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -103,6 +103,8 @@ _tnl_CreateContext( GLcontext *ctx )
 
 
    tnl->NeedProjCoords = GL_TRUE;
+   tnl->LoopbackDListCassettes = GL_FALSE;
+   tnl->CalcDListNormalLengths = GL_TRUE;
 
    /* Hook our functions into exec and compile dispatch tables.
     */
@@ -123,6 +125,8 @@ _tnl_CreateContext( GLcontext *ctx )
 
    tnl->Driver.RenderTabElts = _tnl_render_tab_elts;
    tnl->Driver.RenderTabVerts = _tnl_render_tab_verts;
+
+   
    return GL_TRUE;
 }
 
@@ -208,5 +212,23 @@ _tnl_need_projected_coords( GLcontext *ctx, GLboolean mode )
    if (tnl->NeedProjCoords != mode) {
       tnl->NeedProjCoords = mode;
       _tnl_InvalidateState( ctx, _NEW_PROJECTION );
+   }
+}
+
+void
+_tnl_need_dlist_loopback( GLcontext *ctx, GLboolean mode )
+{
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   if (tnl->LoopbackDListCassettes != mode) {
+      tnl->LoopbackDListCassettes = mode;
+   }
+}
+
+void
+_tnl_need_dlist_norm_lengths( GLcontext *ctx, GLboolean mode )
+{
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   if (tnl->CalcDListNormalLengths != mode) {
+      tnl->CalcDListNormalLengths = mode;
    }
 }

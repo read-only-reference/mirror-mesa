@@ -1,4 +1,4 @@
-/* $Id: xm_api.c,v 1.23 2001/05/29 19:48:47 brianp Exp $ */
+/* $Id: xm_api.c,v 1.25 2001/06/15 14:18:46 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -77,6 +77,8 @@
 #include "conf.h"
 #endif
 #include "macros.h"
+#include "texformat.h"
+#include "texstore.h"
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
 #include "array_cache/acache.h"
@@ -1634,6 +1636,10 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
    }
 
    _mesa_enable_sw_extensions(ctx);
+   _mesa_enable_extension(ctx, "GL_ARB_texture_compression");
+   ctx->Driver.BaseCompressedTexFormat = _mesa_base_compressed_texformat;
+   ctx->Driver.CompressedTextureSize = _mesa_compressed_texture_size;
+   ctx->Driver.GetCompressedTexImage = _mesa_get_compressed_teximage;
 
    if (CHECK_BYTE_ORDER(v)) {
       c->swapbytes = GL_FALSE;
@@ -1688,10 +1694,12 @@ void XMesaDestroyContext( XMesaContext c )
       _mesa_destroy_context( c->gl_ctx );
    }
 
-   /* Disassociate old buffer with this context */
-   if (c->xm_buffer)
-       c->xm_buffer->xm_context = NULL;
-
+   /*
+    * XXX This code should really go away because the ancilliary data
+    * associated with a window/pixmap should not go away just because
+    * a context is destroyed.
+    */
+#if 0
    /* Destroy any buffers which are using this context.  If we don't
     * we may have dangling references.  Hmm, maybe we should just
     * set the buffer's context pointer to NULL instead of deleting it?
@@ -1713,6 +1721,7 @@ void XMesaDestroyContext( XMesaContext c )
          }
       }
    }
+#endif
 
    FREE( c );
 }
@@ -1993,7 +2002,7 @@ void XMesaDestroyBuffer( XMesaBuffer b )
    }
 
    if (b->xm_context)
-       b->xm_context->xm_buffer = NULL;
+      b->xm_context->xm_buffer = NULL;
 
    free_xmesa_buffer(client, b);
 }

@@ -1,4 +1,4 @@
-/* $Id: glapi.c,v 1.54 2001/05/29 15:23:49 brianp Exp $ */
+/* $Id: glapi.c,v 1.56 2001/06/06 22:55:28 davem69 Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -51,8 +51,6 @@
 #include "glapioffsets.h"
 #include "glapitable.h"
 #include "glthread.h"
-
-
 
 /***** BEGIN NO-OP DISPATCH *****/
 
@@ -1707,7 +1705,9 @@ get_static_proc_address(const char *funcName)
 static struct name_address_offset ExtEntryTable[MAX_EXTENSION_FUNCS];
 static GLuint NumExtEntryPoints = 0;
 
-
+#ifdef USE_SPARC_ASM
+extern void __glapi_sparc_icache_flush(unsigned int *);
+#endif
 
 /*
  * Generate a dispatch function (entrypoint) which jumps through
@@ -1752,6 +1752,55 @@ generate_entrypoint(GLuint functionOffset)
       next_insn = (unsigned int)(code + 0x14);
       *(unsigned int *)(code + 0x10) = (unsigned int)_glapi_get_dispatch - next_insn;
       *(unsigned int *)(code + 0x16) = (unsigned int)functionOffset * 4;
+   }
+   return code;
+#elif defined(USE_SPARC_ASM)
+
+#ifdef __sparc_v9__
+   static const unsigned int insn_template[] = {
+	   0x05000000,	/* sethi	%uhi(_glapi_Dispatch), %g2	*/
+	   0x03000000,	/* sethi	%hi(_glapi_Dispatch), %g1	*/
+	   0x8410a000,	/* or		%g2, %ulo(_glapi_Dispatch), %g2	*/
+	   0x82106000,	/* or		%g1, %lo(_glapi_Dispatch), %g1	*/
+	   0x8528b020,	/* sllx		%g2, 32, %g2			*/
+	   0xc2584002,	/* ldx		[%g1 + %g2], %g1		*/
+	   0x05000000,	/* sethi	%hi(8 * glapioffset), %g2	*/
+	   0x8410a000,	/* or		%g2, %lo(8 * glapioffset), %g2	*/
+	   0xc6584002,	/* ldx		[%g1 + %g2], %g3		*/
+	   0x81c0c000,	/* jmpl		%g3, %g0			*/
+	   0x01000000	/*  nop						*/
+   };
+#else
+   static const unsigned int insn_template[] = {
+	   0x03000000,	/* sethi	%hi(_glapi_Dispatch), %g1	  */
+	   0xc2006000,	/* ld		[%g1 + %lo(_glapi_Dispatch)], %g1 */
+	   0xc6006000,	/* ld		[%g1 + %lo(4*glapioffset)], %g3	  */
+	   0x81c0c000,	/* jmpl		%g3, %g0			  */
+	   0x01000000	/*  nop						  */
+   };
+#endif
+   unsigned int *code = malloc(sizeof(insn_template));
+   unsigned long glapi_addr = (unsigned long) &_glapi_Dispatch;
+   if (code) {
+      memcpy(code, insn_template, sizeof(insn_template));
+
+#ifdef __sparc_v9__
+      code[0] |= (glapi_addr >> (32 + 10));
+      code[1] |= ((glapi_addr & 0xffffffff) >> 10);
+      __glapi_sparc_icache_flush(&code[0]);
+      code[2] |= ((glapi_addr >> 32) & ((1 << 10) - 1));
+      code[3] |= (glapi_addr & ((1 << 10) - 1));
+      __glapi_sparc_icache_flush(&code[2]);
+      code[6] |= ((functionOffset * 8) >> 10);
+      code[7] |= ((functionOffset * 8) & ((1 << 10) - 1));
+      __glapi_sparc_icache_flush(&code[6]);
+#else
+      code[0] |= (glapi_addr >> 10);
+      code[1] |= (glapi_addr & ((1 << 10) - 1));
+      __glapi_sparc_icache_flush(&code[0]);
+      code[2] |= (functionOffset * 4);
+      __glapi_sparc_icache_flush(&code[2]);
+#endif
    }
    return code;
 #else

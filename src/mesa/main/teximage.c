@@ -1,4 +1,4 @@
-/* $Id: teximage.c,v 1.95 2001/05/24 14:47:56 brianp Exp $ */
+/* $Id: teximage.c,v 1.98 2001/06/15 14:18:46 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -307,10 +307,14 @@ is_index_format(GLenum format)
 static GLboolean
 is_compressed_format(GLcontext *ctx, GLenum internalFormat)
 {
-    if (ctx->Driver.IsCompressedFormat) {
-        return (*ctx->Driver.IsCompressedFormat)(ctx, internalFormat);
-    }
-    return GL_FALSE;
+   if (ctx->Driver.BaseCompressedTexFormat) {
+      GLint b = (*ctx->Driver.BaseCompressedTexFormat)(ctx, internalFormat);
+      if (b > 0)
+         return GL_TRUE;
+      else
+         return GL_FALSE;
+   }
+   return GL_FALSE;
 }
 
 
@@ -443,6 +447,7 @@ _mesa_select_tex_image(GLcontext *ctx, const struct gl_texture_unit *texUnit,
                        GLenum target, GLint level)
 {
    ASSERT(texUnit);
+   ASSERT(level < MAX_TEXTURE_LEVELS);
    switch (target) {
       case GL_TEXTURE_1D:
          return texUnit->Current1D->Image[level];
@@ -592,6 +597,7 @@ _mesa_init_teximage_fields(GLcontext *ctx,
 {
    ASSERT(img);
    img->Format = _mesa_base_tex_format( ctx, internalFormat );
+   ASSERT(img->Format > 0);
    img->IntFormat = internalFormat;
    img->Border = border;
    img->Width = width;
@@ -631,6 +637,7 @@ texture_error_check( GLcontext *ctx, GLenum target,
 {
    GLboolean isProxy;
    GLint iformat;
+   GLint maxLevels = 0, maxTextureSize;
 
    if (dimensions == 1) {
       isProxy = (GLboolean) (target == GL_PROXY_TEXTURE_1D);
@@ -638,6 +645,7 @@ texture_error_check( GLcontext *ctx, GLenum target,
          _mesa_error( ctx, GL_INVALID_ENUM, "glTexImage1D(target)" );
          return GL_TRUE;
       }
+      maxLevels = ctx->Const.MaxTextureLevels;
    }
    else if (dimensions == 2) {
       isProxy = (GLboolean) (target == GL_PROXY_TEXTURE_2D ||
@@ -649,6 +657,10 @@ texture_error_check( GLcontext *ctx, GLenum target,
           _mesa_error( ctx, GL_INVALID_ENUM, "glTexImage2D(target)" );
           return GL_TRUE;
       }
+      if (target == GL_PROXY_TEXTURE_2D && target == GL_TEXTURE_2D)
+         maxLevels = ctx->Const.MaxTextureLevels;
+      else
+         maxLevels = ctx->Const.MaxCubeTextureLevels;
    }
    else if (dimensions == 3) {
       isProxy = (GLboolean) (target == GL_PROXY_TEXTURE_3D);
@@ -656,11 +668,15 @@ texture_error_check( GLcontext *ctx, GLenum target,
          _mesa_error( ctx, GL_INVALID_ENUM, "glTexImage3D(target)" );
          return GL_TRUE;
       }
+      maxLevels = ctx->Const.Max3DTextureLevels;
    }
    else {
       _mesa_problem( ctx, "bad dims in texture_error_check" );
       return GL_TRUE;
    }
+
+   ASSERT(maxLevels > 0);
+   maxTextureSize = 1 << (maxLevels - 1);
 
    /* Border */
    if (border != 0 && border != 1) {
@@ -673,7 +689,7 @@ texture_error_check( GLcontext *ctx, GLenum target,
    }
 
    /* Width */
-   if (width < 2 * border || width > 2 + ctx->Const.MaxTextureSize
+   if (width < 2 * border || width > 2 + maxTextureSize
        || logbase2( width - 2 * border ) < 0) {
       if (!isProxy) {
          char message[100];
@@ -685,7 +701,7 @@ texture_error_check( GLcontext *ctx, GLenum target,
 
    /* Height */
    if (dimensions >= 2) {
-      if (height < 2 * border || height > 2 + ctx->Const.MaxTextureSize
+      if (height < 2 * border || height > 2 + maxTextureSize
           || logbase2( height - 2 * border ) < 0) {
          if (!isProxy) {
             char message[100];
@@ -709,7 +725,7 @@ texture_error_check( GLcontext *ctx, GLenum target,
 
    /* Depth */
    if (dimensions >= 3) {
-      if (depth < 2 * border || depth > 2 + ctx->Const.MaxTextureSize
+      if (depth < 2 * border || depth > 2 + maxTextureSize
           || logbase2( depth - 2 * border ) < 0) {
          if (!isProxy) {
             char message[100];
@@ -721,7 +737,7 @@ texture_error_check( GLcontext *ctx, GLenum target,
    }
 
    /* Level */
-   if (level < 0 || level >= ctx->Const.MaxTextureLevels) {
+   if (level < 0 || level >= maxLevels) {
       if (!isProxy) {
          char message[100];
          sprintf(message, "glTexImage%dD(level=%d)", dimensions, level);
@@ -749,6 +765,8 @@ texture_error_check( GLcontext *ctx, GLenum target,
       }
       return GL_TRUE;
    }
+
+   ASSERT(iformat > 0);
 
    if (!is_compressed_format( ctx, internalFormat ) &&
        !_mesa_is_legal_format_and_type( format, type )) {
@@ -784,12 +802,15 @@ subtexture_error_check( GLcontext *ctx, GLuint dimensions,
 {
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    struct gl_texture_image *destTex;
+   GLint maxLevels = 0;
+   GLboolean compressed;
 
    if (dimensions == 1) {
       if (target != GL_TEXTURE_1D) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glTexSubImage1D(target)" );
          return GL_TRUE;
       }
+      maxLevels = ctx->Const.MaxTextureLevels;
    }
    else if (dimensions == 2) {
       if (ctx->Extensions.ARB_texture_cube_map) {
@@ -804,19 +825,26 @@ subtexture_error_check( GLcontext *ctx, GLuint dimensions,
          _mesa_error( ctx, GL_INVALID_ENUM, "glTexSubImage2D(target)" );
          return GL_TRUE;
       }
+      if (target == GL_PROXY_TEXTURE_2D && target == GL_TEXTURE_2D)
+         maxLevels = ctx->Const.MaxTextureLevels;
+      else
+         maxLevels = ctx->Const.MaxCubeTextureLevels;
    }
    else if (dimensions == 3) {
       if (target != GL_TEXTURE_3D) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glTexSubImage3D(target)" );
          return GL_TRUE;
       }
+      maxLevels = ctx->Const.Max3DTextureLevels;
    }
    else {
       _mesa_problem( ctx, "bad dims in texture_error_check" );
       return GL_TRUE;
    }
 
-   if (level < 0 || level >= ctx->Const.MaxTextureLevels) {
+   ASSERT(maxLevels > 0);
+
+   if (level < 0 || level >= maxLevels) {
       char message[100];
       sprintf(message, "glTexSubImage2D(level=%d)", level);
       _mesa_error(ctx, GL_INVALID_ENUM, message);
@@ -878,12 +906,31 @@ subtexture_error_check( GLcontext *ctx, GLuint dimensions,
       }
    }
 
-   if (!is_compressed_format(ctx, destTex->IntFormat) &&
-       !_mesa_is_legal_format_and_type(format, type)) {
+   compressed = is_compressed_format(ctx, destTex->IntFormat);
+
+   if (!compressed && !_mesa_is_legal_format_and_type(format, type)) {
       char message[100];
       sprintf(message, "glTexSubImage%dD(format or type)", dimensions);
       _mesa_error(ctx, GL_INVALID_ENUM, message);
       return GL_TRUE;
+   }
+
+   if (compressed) {
+      if (xoffset != -destTex->Border) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glTexSubImage1/2/3D(xoffset != -border");
+         return GL_TRUE;
+      }
+      if (dimensions > 1 && yoffset != -destTex->Border) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glTexSubImage2/3D(yoffset != -border");
+         return GL_TRUE;
+      }
+      if (dimensions > 2 && zoffset != -destTex->Border) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glTexSubImage3D(zoffset != -border");
+         return GL_TRUE;
+      }
    }
 
    return GL_FALSE;
@@ -901,12 +948,14 @@ copytexture_error_check( GLcontext *ctx, GLuint dimensions,
                          GLint width, GLint height, GLint border )
 {
    GLint iformat;
+   GLint maxLevels = 0, maxTextureSize;
 
    if (dimensions == 1) {
       if (target != GL_TEXTURE_1D) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexImage1D(target)" );
          return GL_TRUE;
       }
+      maxLevels = ctx->Const.MaxTextureLevels;
    }
    else if (dimensions == 2) {
       if (ctx->Extensions.ARB_texture_cube_map) {
@@ -921,7 +970,14 @@ copytexture_error_check( GLcontext *ctx, GLuint dimensions,
          _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexImage2D(target)" );
          return GL_TRUE;
       }
+      if (target == GL_PROXY_TEXTURE_2D && target == GL_TEXTURE_2D)
+         maxLevels = ctx->Const.MaxTextureLevels;
+      else
+         maxLevels = ctx->Const.MaxCubeTextureLevels;
    }
+
+   ASSERT(maxLevels > 0);
+   maxTextureSize = 1 << (maxLevels - 1);
 
    /* Border */
    if (border != 0 && border != 1) {
@@ -932,7 +988,7 @@ copytexture_error_check( GLcontext *ctx, GLuint dimensions,
    }
 
    /* Width */
-   if (width < 2 * border || width > 2 + ctx->Const.MaxTextureSize
+   if (width < 2 * border || width > 2 + maxTextureSize
        || logbase2( width - 2 * border ) < 0) {
       char message[100];
       sprintf(message, "glCopyTexImage%dD(width=%d)", dimensions, width);
@@ -942,7 +998,7 @@ copytexture_error_check( GLcontext *ctx, GLuint dimensions,
 
    /* Height */
    if (dimensions >= 2) {
-      if (height < 2 * border || height > 2 + ctx->Const.MaxTextureSize
+      if (height < 2 * border || height > 2 + maxTextureSize
           || logbase2( height - 2 * border ) < 0) {
          char message[100];
          sprintf(message, "glCopyTexImage%dD(height=%d)", dimensions, height);
@@ -961,14 +1017,14 @@ copytexture_error_check( GLcontext *ctx, GLuint dimensions,
    }
 
    /* Level */
-   if (level < 0 || level>=ctx->Const.MaxTextureLevels) {
+   if (level < 0 || level >= maxLevels) {
       char message[100];
       sprintf(message, "glCopyTexImage%dD(level=%d)", dimensions, level);
       _mesa_error(ctx, GL_INVALID_VALUE, message);
       return GL_TRUE;
    }
 
-   iformat = _mesa_base_tex_format( ctx, internalFormat );
+   iformat = _mesa_base_tex_format(ctx, internalFormat);
    if (iformat < 0) {
       char message[100];
       sprintf(message, "glCopyTexImage%dD(internalFormat)", dimensions);
@@ -989,12 +1045,15 @@ copytexsubimage_error_check( GLcontext *ctx, GLuint dimensions,
 {
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    struct gl_texture_image *teximage;
+   GLint maxLevels = 0;
+   GLboolean compressed;
 
    if (dimensions == 1) {
       if (target != GL_TEXTURE_1D) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexSubImage1D(target)" );
          return GL_TRUE;
       }
+      maxLevels = ctx->Const.MaxTextureLevels;
    }
    else if (dimensions == 2) {
       if (ctx->Extensions.ARB_texture_cube_map) {
@@ -1009,15 +1068,22 @@ copytexsubimage_error_check( GLcontext *ctx, GLuint dimensions,
          _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexSubImage2D(target)" );
          return GL_TRUE;
       }
+      if (target == GL_PROXY_TEXTURE_2D && target == GL_TEXTURE_2D)
+         maxLevels = ctx->Const.MaxTextureLevels;
+      else
+         maxLevels = ctx->Const.MaxCubeTextureLevels;
    }
    else if (dimensions == 3) {
       if (target != GL_TEXTURE_3D) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexSubImage3D(target)" );
          return GL_TRUE;
       }
+      maxLevels = ctx->Const.Max3DTextureLevels;
    }
 
-   if (level < 0 || level >= ctx->Const.MaxTextureLevels) {
+   ASSERT(maxLevels > 0);
+
+   if (level < 0 || level >= maxLevels) {
       char message[100];
       sprintf(message, "glCopyTexSubImage%dD(level=%d)", dimensions, level);
       _mesa_error(ctx, GL_INVALID_VALUE, message);
@@ -1088,6 +1154,25 @@ copytexsubimage_error_check( GLcontext *ctx, GLuint dimensions,
       }
    }
 
+   compressed = is_compressed_format(ctx, teximage->IntFormat);
+   if (compressed) {
+      if (xoffset != -teximage->Border) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glCopyTexSubImage1/2/3D(xoffset != -border");
+         return GL_TRUE;
+      }
+      if (dimensions > 1 && yoffset != -teximage->Border) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glCopyTexSubImage2/3D(yoffset != -border");
+         return GL_TRUE;
+      }
+      if (dimensions > 2 && zoffset != -teximage->Border) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glCopyTexSubImage3D(zoffset != -border");
+         return GL_TRUE;
+      }
+   }
+
    /* if we get here, the parameters are OK */
    return GL_FALSE;
 }
@@ -1101,10 +1186,30 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
    const struct gl_texture_unit *texUnit;
    const struct gl_texture_object *texObj;
    struct gl_texture_image *texImage;
+   GLint maxLevels = 0;
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (level < 0 || level >= ctx->Const.MaxTextureLevels) {
+   texUnit = &(ctx->Texture.Unit[ctx->Texture.CurrentUnit]);
+   texObj = _mesa_select_tex_object(ctx, texUnit, target);
+   if (!texObj || is_proxy_target(target)) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(target)");
+      return;
+   }
+
+   if (target == GL_TEXTURE_1D || target == GL_TEXTURE_2D) {
+      maxLevels = ctx->Const.MaxTextureLevels;
+   }
+   else if (target == GL_TEXTURE_3D) {
+      maxLevels = ctx->Const.Max3DTextureLevels;
+   }
+   else {
+      maxLevels = ctx->Const.MaxCubeTextureLevels;
+   }
+
+   ASSERT(maxLevels > 0);
+
+   if (level < 0 || level >= maxLevels) {
       _mesa_error( ctx, GL_INVALID_VALUE, "glGetTexImage(level)" );
       return;
    }
@@ -1133,13 +1238,6 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
    if (!pixels)
       return;
 
-   texUnit = &(ctx->Texture.Unit[ctx->Texture.CurrentUnit]);
-   texObj = _mesa_select_tex_object(ctx, texUnit, target);
-   if (!texObj || is_proxy_target(target)) {
-      _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(target)");
-      return;
-   }
-
    texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
    if (!texImage) {
       /* invalid mipmap level, not an error */
@@ -1151,89 +1249,10 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
       return;
    }
 
-   if (ctx->NewState & _NEW_PIXEL)
-      _mesa_update_state(ctx);
-
-   if (is_color_format(format) &&
-       ctx->_ImageTransferState & IMAGE_CONVOLUTION_BIT) {
-      /* convert texture image to GL_RGBA, GL_FLOAT */
-      GLint width = texImage->Width;
-      GLint height = texImage->Height;
-      GLint depth = texImage->Depth;
-      GLint img, row;
-      GLfloat *tmpImage, *convImage;
-      tmpImage = (GLfloat *) MALLOC(width * height * 4 * sizeof(GLfloat));
-      if (!tmpImage) {
-         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glGetTexImage");
-         return;
-      }
-      convImage = (GLfloat *) MALLOC(width * height * 4 * sizeof(GLfloat));
-      if (!convImage) {
-         FREE(tmpImage);
-         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glGetTexImage");
-         return;
-      }
-
-      for (img = 0; img < depth; img++) {
-         GLint convWidth, convHeight;
-
-         /* convert texture data to GLfloat/GL_RGBA */
-         for (row = 0; row < height; row++) {
-            GLchan texels[1 << MAX_TEXTURE_LEVELS][4];
-            GLint col;
-            GLfloat *dst = tmpImage + row * width * 4;
-            for (col = 0; col < width; col++) {
-               (*texImage->FetchTexel)(texImage, col, row, img,
-                                       texels[col]);
-            }
-            _mesa_unpack_float_color_span(ctx, width, GL_RGBA, dst,
-                         GL_RGBA, CHAN_TYPE, texels,
-                         &_mesa_native_packing,
-                         ctx->_ImageTransferState & IMAGE_PRE_CONVOLUTION_BITS,
-                         GL_FALSE);
-         }
-
-         convWidth = width;
-         convHeight = height;
-
-         /* convolve */
-         if (target == GL_TEXTURE_1D) {
-            if (ctx->Pixel.Convolution1DEnabled) {
-               _mesa_convolve_1d_image(ctx, &convWidth, tmpImage, convImage);
-            }
-         }
-         else {
-            if (ctx->Pixel.Convolution2DEnabled) {
-               _mesa_convolve_2d_image(ctx, &convWidth, &convHeight,
-                                       tmpImage, convImage);
-            }
-            else if (ctx->Pixel.Separable2DEnabled) {
-               _mesa_convolve_sep_image(ctx, &convWidth, &convHeight,
-                                        tmpImage, convImage);
-            }
-         }
-
-         /* pack convolved image */
-         for (row = 0; row < convHeight; row++) {
-            const GLfloat *src = convImage + row * convWidth * 4;
-            GLvoid *dest = _mesa_image_address(&ctx->Pack, pixels,
-                                               convWidth, convHeight,
-                                               format, type, img, row, 0);
-            _mesa_pack_float_rgba_span(ctx, convWidth,
-                       (const GLfloat(*)[4]) src,
-                       format, type, dest, &ctx->Pack,
-                       ctx->_ImageTransferState & IMAGE_POST_CONVOLUTION_BITS);
-         }
-      }
-
-      FREE(tmpImage);
-      FREE(convImage);
-   }
-   else {
-      /* no convolution, or non-rgba image */
-      GLint width = texImage->Width;
-      GLint height = texImage->Height;
-      GLint depth = texImage->Depth;
+   {
+      const GLint width = texImage->Width;
+      const GLint height = texImage->Height;
+      const GLint depth = texImage->Depth;
       GLint img, row;
       for (img = 0; img < depth; img++) {
          for (row = 0; row < height; row++) {
@@ -1252,7 +1271,7 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
                }
                _mesa_pack_index_span(ctx, width, type, dest,
                                      indexRow, &ctx->Pack,
-                                     ctx->_ImageTransferState);
+                                     0 /* no image transfer */);
             }
             else if (format == GL_DEPTH_COMPONENT) {
                GLfloat depthRow[MAX_WIDTH];
@@ -1274,11 +1293,11 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
                }
                _mesa_pack_rgba_span(ctx, width, (const GLchan (*)[4])rgba,
                                     format, type, dest, &ctx->Pack,
-                                    ctx->_ImageTransferState);
+                                    0 /* no image transfer */);
             } /* format */
          } /* row */
       } /* img */
-   } /* convolution */
+   }
 }
 
 
@@ -1356,6 +1375,10 @@ _mesa_TexImage1D( GLenum target, GLint level, GLint internalFormat,
          texImage->FetchTexel = texImage->TexFormat->FetchTexel1D;
       }
       ASSERT(texImage->FetchTexel);
+
+      if (texImage->IsCompressed) {
+         ASSERT(texImage->CompressedSize > 0);
+      }
 
       /* state update */
       texObj->Complete = GL_FALSE;
@@ -1470,6 +1493,10 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
       }
       ASSERT(texImage->FetchTexel);
 
+      if (texImage->IsCompressed) {
+         ASSERT(texImage->CompressedSize > 0);
+      }
+
       /* state update */
       texObj->Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
@@ -1493,7 +1520,9 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
       }
       if (error) {
          /* if error, clear all proxy texture image parameters */
-         if (level >= 0 && level < ctx->Const.MaxTextureLevels) {
+         const GLint maxLevels = (target == GL_PROXY_TEXTURE_2D) ?
+            ctx->Const.MaxTextureLevels : ctx->Const.MaxCubeTextureLevels;
+         if (level >= 0 && level < maxLevels) {
             clear_teximage_fields(ctx->Texture.Proxy2D->Image[level]);
          }
       }
@@ -1577,6 +1606,10 @@ _mesa_TexImage3D( GLenum target, GLint level, GLenum internalFormat,
       }
       ASSERT(texImage->FetchTexel);
 
+      if (texImage->IsCompressed) {
+         ASSERT(texImage->CompressedSize > 0);
+      }
+
       /* state update */
       texObj->Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
@@ -1599,7 +1632,7 @@ _mesa_TexImage3D( GLenum target, GLint level, GLenum internalFormat,
       }
       if (error) {
          /* if error, clear all proxy texture image parameters */
-         if (level >= 0 && level < ctx->Const.MaxTextureLevels) {
+         if (level >= 0 && level < ctx->Const.Max3DTextureLevels) {
             clear_teximage_fields(ctx->Texture.Proxy3D->Image[level]);
          }
       }
@@ -2092,7 +2125,7 @@ _mesa_CompressedTexImage1DARB(GLenum target, GLint level,
       }
    }
    else {
-      _mesa_error( ctx, GL_INVALID_ENUM, "glCompressedTexImage1DARB(target)" );
+      _mesa_error(ctx, GL_INVALID_ENUM, "glCompressedTexImage1DARB(target)");
       return;
    }
 }
@@ -2185,13 +2218,15 @@ _mesa_CompressedTexImage2DARB(GLenum target, GLint level,
       }
       if (error) {
          /* if error, clear all proxy texture image parameters */
-         if (level >= 0 && level < ctx->Const.MaxTextureLevels) {
+         const GLint maxLevels = (target == GL_PROXY_TEXTURE_2D) ?
+            ctx->Const.MaxTextureLevels : ctx->Const.MaxCubeTextureLevels;
+         if (level >= 0 && level < maxLevels) {
             clear_teximage_fields(ctx->Texture.Proxy2D->Image[level]);
          }
       }
    }
    else {
-      _mesa_error( ctx, GL_INVALID_ENUM, "glCompressedTexImage2DARB(target)" );
+      _mesa_error(ctx, GL_INVALID_ENUM, "glCompressedTexImage2DARB(target)");
       return;
    }
 }
@@ -2282,13 +2317,13 @@ _mesa_CompressedTexImage3DARB(GLenum target, GLint level,
       }
       if (error) {
          /* if error, clear all proxy texture image parameters */
-         if (level >= 0 && level < ctx->Const.MaxTextureLevels) {
+         if (level >= 0 && level < ctx->Const.Max3DTextureLevels) {
             clear_teximage_fields(ctx->Texture.Proxy3D->Image[level]);
          }
       }
    }
    else {
-      _mesa_error( ctx, GL_INVALID_ENUM, "glCompressedTexImage3DARB(target)" );
+      _mesa_error(ctx, GL_INVALID_ENUM, "glCompressedTexImage3DARB(target)");
       return;
    }
 }
@@ -2405,11 +2440,31 @@ _mesa_GetCompressedTexImageARB(GLenum target, GLint level, GLvoid *img)
    const struct gl_texture_unit *texUnit;
    const struct gl_texture_object *texObj;
    struct gl_texture_image *texImage;
+   GLint maxLevels;
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (level < 0 || level >= ctx->Const.MaxTextureLevels) {
-      _mesa_error( ctx, GL_INVALID_VALUE, "glGetCompressedTexImageARB(level)" );
+   texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
+   texObj = _mesa_select_tex_object(ctx, texUnit, target);
+   if (!texObj) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glGetCompressedTexImageARB");
+      return;
+   }
+
+   if (target == GL_TEXTURE_1D || target == GL_TEXTURE_2D) {
+      maxLevels = ctx->Const.MaxTextureLevels;
+   }
+   else if (target == GL_TEXTURE_3D) {
+      maxLevels = ctx->Const.Max3DTextureLevels;
+   }
+   else {
+      maxLevels = ctx->Const.MaxCubeTextureLevels;
+   }
+
+   ASSERT(maxLevels > 0);
+
+   if (level < 0 || level >= maxLevels) {
+      _mesa_error(ctx, GL_INVALID_VALUE, "glGetCompressedTexImageARB(level)");
       return;
    }
 
@@ -2418,12 +2473,9 @@ _mesa_GetCompressedTexImageARB(GLenum target, GLint level, GLvoid *img)
       return;
    }
 
-   texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-   texObj = _mesa_select_tex_object(ctx, texUnit, target);
    texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-
    if (!texImage) {
-      /* invalid mipmap level */
+      /* probably invalid mipmap level */
       _mesa_error(ctx, GL_INVALID_VALUE, "glGetCompressedTexImageARB(level)");
       return;
    }
