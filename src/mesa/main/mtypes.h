@@ -1,4 +1,4 @@
-/* $Id: mtypes.h,v 1.73 2002/04/21 20:37:04 brianp Exp $ */
+/* $Id: mtypes.h,v 1.76 2002/05/27 17:04:53 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -360,8 +360,7 @@ struct gl_current_attrib {
    GLfloat RasterColor[4];			/* Current raster color */
    GLfloat RasterSecondaryColor[4];             /* Current rast 2ndary color */
    GLuint RasterIndex;				/* Current raster index */
-   GLfloat *RasterTexCoord;			/* Current raster texcoord */
-   GLfloat RasterMultiTexCoord[MAX_TEXTURE_UNITS][4];
+   GLfloat RasterTexCoords[MAX_TEXTURE_UNITS][4];/* Current raster texcoords */
    GLboolean RasterPosValid;			/* Raster pos valid flag */
 };
 
@@ -427,18 +426,18 @@ struct gl_enable_attrib {
    GLboolean RescaleNormals;
    GLboolean Scissor;
    GLboolean Stencil;
-   GLboolean MultisampleEnabled;     /* GL_ARB_multisample */
-   GLboolean SampleAlphaToCoverage;  /* GL_ARB_multisample */
-   GLboolean SampleAlphaToOne;       /* GL_ARB_multisample */
-   GLboolean SampleCoverage;         /* GL_ARB_multisample */
-   GLboolean SampleCoverageInvert;   /* GL_ARB_multisample */
+   GLboolean MultisampleEnabled;      /* GL_ARB_multisample */
+   GLboolean SampleAlphaToCoverage;   /* GL_ARB_multisample */
+   GLboolean SampleAlphaToOne;        /* GL_ARB_multisample */
+   GLboolean SampleCoverage;          /* GL_ARB_multisample */
+   GLboolean SampleCoverageInvert;    /* GL_ARB_multisample */
    GLboolean RasterPositionUnclipped; /* GL_IBM_rasterpos_clip */
    GLuint Texture[MAX_TEXTURE_UNITS];
    GLuint TexGen[MAX_TEXTURE_UNITS];
-   /* GL_NV_vertex_program */
-   GLboolean VertexProgram;
-   GLboolean VertexProgramPointSize;
-   GLboolean VertexProgramTwoSide;
+   GLboolean VertexProgram;           /* GL_NV_vertex_program */
+   GLboolean VertexProgramPointSize;  /* GL_NV_vertex_program */
+   GLboolean VertexProgramTwoSide;    /* GL_NV_vertex_program */
+   GLboolean PointSprite;             /* GL_NV_point_sprite */
 };
 
 
@@ -670,13 +669,15 @@ struct gl_pixel_attrib {
 
 struct gl_point_attrib {
    GLboolean SmoothFlag;	/* True if GL_POINT_SMOOTH is enabled */
-   GLboolean SpriteMode;	/* GL_MESA_sprite_point extension */
    GLfloat Size;		/* User-specified point size */
    GLfloat _Size;		/* Size clamped to Const.Min/MaxPointSize */
    GLfloat Params[3];		/* GL_EXT_point_parameters */
    GLfloat MinSize, MaxSize;	/* GL_EXT_point_parameters */
    GLfloat Threshold;		/* GL_EXT_point_parameters */
    GLboolean _Attenuated;	/* True if Params != [1, 0, 0] */
+   GLboolean PointSprite;	/* GL_NV_point_sprite */
+   GLboolean CoordReplace[MAX_TEXTURE_UNITS]; /* GL_NV_point_sprite */
+   GLenum SpriteRMode;		/* GL_NV_point_sprite */
 };
 
 
@@ -1389,6 +1390,7 @@ struct gl_extensions {
    GLboolean ARB_texture_compression;
    GLboolean ARB_texture_cube_map;
    GLboolean ARB_texture_env_combine;
+   GLboolean ARB_texture_env_crossbar;
    GLboolean ARB_texture_env_dot3;
    GLboolean ARB_texture_mirrored_repeat;
    GLboolean ARB_window_pos;
@@ -1427,6 +1429,7 @@ struct gl_extensions {
    GLboolean MESA_resize_buffers;
    GLboolean MESA_sprite_point;
    GLboolean NV_blend_square;
+   GLboolean NV_point_sprite;
    GLboolean NV_texgen_reflection;
    GLboolean NV_vertex_program;
    GLboolean NV_vertex_program1_1;

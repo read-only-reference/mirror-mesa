@@ -1,4 +1,4 @@
-/* $Id: readpix.c,v 1.5 2002/04/22 16:03:37 brianp Exp $ */
+/* $Id: readpix.c,v 1.7 2002/05/02 09:17:59 alanh Exp $ */
 
 /*
  * glReadPixels and glCopyPixels test
@@ -156,6 +156,8 @@ Display( void )
 
    if (!DrawFront)
       glutSwapBuffers();
+   else
+      glFinish();
 }
 
 

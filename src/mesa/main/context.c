@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.161 2002/04/19 00:23:08 brianp Exp $ */
+/* $Id: context.c,v 1.163 2002/05/27 17:04:52 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -857,8 +857,7 @@ init_attrib_groups( GLcontext *ctx )
    ASSIGN_4V( ctx->Current.RasterColor, 1.0, 1.0, 1.0, 1.0 );
    ctx->Current.RasterIndex = 1;
    for (i=0; i<MAX_TEXTURE_UNITS; i++)
-      ASSIGN_4V( ctx->Current.RasterMultiTexCoord[i], 0.0, 0.0, 0.0, 1.0 );
-   ctx->Current.RasterTexCoord = ctx->Current.RasterMultiTexCoord[0];
+      ASSIGN_4V( ctx->Current.RasterTexCoords[i], 0.0, 0.0, 0.0, 1.0 );
    ctx->Current.RasterPosValid = GL_TRUE;
 
 
@@ -1117,7 +1116,11 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Point.MinSize = 0.0;
    ctx->Point.MaxSize = ctx->Const.MaxPointSize;
    ctx->Point.Threshold = 1.0;
-   ctx->Point.SpriteMode = GL_FALSE; /* GL_MESA_sprite_point */
+   ctx->Point.PointSprite = GL_FALSE; /* GL_NV_point_sprite */
+   ctx->Point.SpriteRMode = GL_ZERO; /* GL_NV_point_sprite */
+   for (i = 0; i < MAX_TEXTURE_UNITS; i++) {
+      ctx->Point.CoordReplace[i] = GL_FALSE; /* GL_NV_point_sprite */
+   }
 
    /* Polygon group */
    ctx->Polygon.CullFlag = GL_FALSE;
