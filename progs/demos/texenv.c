@@ -141,7 +141,7 @@ struct formatInfo rgbFormats[] =
 #define NUM_RGBA_FORMATS	(sizeof(rgbaFormats) / sizeof(rgbaFormats[0]))
 struct formatInfo rgbaFormats[] =
 {
-   { GL_RGBA, 4, "RGBA" },
+   { GL_RGBA, GL_RGBA, "RGBA" },
    { GL_RGBA, GL_RGBA2, "RGBA2" },
    { GL_RGBA, GL_RGBA4, "RGBA4" },
    { GL_RGBA, GL_RGB5_A1, "RGB5_A1" },
@@ -208,7 +208,8 @@ static void checkErrors( void )
    }
 }
 
-static void drawString( char *string, GLfloat x, GLfloat y, GLfloat color[4] )
+static void drawString( const char *string, GLfloat x, GLfloat y,
+                        const GLfloat color[4] )
 {
    glColor4fv( color );
    glRasterPos2f( x, y );
@@ -219,8 +220,9 @@ static void drawString( char *string, GLfloat x, GLfloat y, GLfloat color[4] )
    }
 }
 
-static void drawStringOutline( char *string, GLfloat x, GLfloat y,
-			       GLfloat color[4], GLfloat outline[4] )
+static void drawStringOutline( const char *string, GLfloat x, GLfloat y,
+			       const GLfloat color[4],
+                               const GLfloat outline[4] )
 {
    drawString( string, x - 1, y, outline );
    drawString( string, x + 1, y, outline );
@@ -335,7 +337,8 @@ reshape( int w, int h )
    /* No need to call glViewPort here since "draw" calls it! */
 }
 
-static void loadTexture( int width, int height, struct formatInfo *format )
+static void loadTexture( int width, int height,
+                         const struct formatInfo *format )
 {
    int		luminanceSize = 0;
    int		alphaSize = 0;
@@ -497,7 +500,8 @@ static void loadTexture( int width, int height, struct formatInfo *format )
    free( texImage );
 }
 
-static void drawCheck( int w, int h, GLfloat lightCheck[4], GLfloat darkCheck[4] )
+static void drawCheck( int w, int h, const GLfloat lightCheck[4],
+                       const GLfloat darkCheck[4] )
 {
    float	dw = 2.0 / w;
    float	dh = 2.0 / h;
@@ -527,7 +531,8 @@ static void drawCheck( int w, int h, GLfloat lightCheck[4], GLfloat darkCheck[4]
 }
 
 static void drawSample( int x, int y, int w, int h,
-			struct formatInfo *format, struct envModeInfo *envMode )
+			const struct formatInfo *format,
+                        const struct envModeInfo *envMode )
 {
    glViewport( x, y, w, h );
    glScissor( x, y, w, h );
@@ -543,8 +548,8 @@ static void drawSample( int x, int y, int w, int h,
    glTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, envMode->mode );
    glTexEnvfv( GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, envColors[envColor] );
 
-   glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
-   glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+   glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+   glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
 
    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP );
    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP );
@@ -715,6 +720,8 @@ static void instructions( void )
    fprintf( stderr, "  [s] - toggle smooth shading\n" );
    fprintf( stderr, "  [t] - toggle texturing\n" );
    fprintf( stderr, "  [i] - toggle information display\n" );
+   fprintf( stderr, "  up/down - select row\n" );
+   fprintf( stderr, "  left/right - change row's internal format\n" );
 }
 
 int main( int argc, char *argv[] )
@@ -744,6 +751,7 @@ int main( int argc, char *argv[] )
    }
 
    glutInitWindowSize( winWidth, winHeight );
+   glutInitWindowPosition( 0, 0 );
    glutCreateWindow( "Texture Environment Test" );
 
    initialize();

@@ -1,4 +1,4 @@
-/* $Id: state.c,v 1.23 2000/08/23 14:33:04 brianp Exp $ */
+/* $Id: state.c,v 1.29 2000/09/28 22:44:30 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -666,120 +666,12 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
 /**********************************************************************/
 
 
-/*
- * Since the device driver may or may not support pixel logic ops we
- * have to make some extensive tests to determine whether or not
- * software-implemented logic operations have to be used.
- */
-static void update_pixel_logic( GLcontext *ctx )
-{
-   if (ctx->Visual->RGBAflag) {
-      /* RGBA mode blending w/ Logic Op */
-      if (ctx->Color.ColorLogicOpEnabled) {
-	 if (ctx->Driver.LogicOp
-             && (*ctx->Driver.LogicOp)( ctx, ctx->Color.LogicOp )) {
-	    /* Device driver can do logic, don't have to do it in software */
-	    ctx->Color.SWLogicOpEnabled = GL_FALSE;
-	 }
-	 else {
-	    /* Device driver can't do logic op so we do it in software */
-	    ctx->Color.SWLogicOpEnabled = GL_TRUE;
-	 }
-      }
-      else {
-	 /* no logic op */
-	 if (ctx->Driver.LogicOp) {
-            (void) (*ctx->Driver.LogicOp)( ctx, GL_COPY );
-         }
-	 ctx->Color.SWLogicOpEnabled = GL_FALSE;
-      }
-   }
-   else {
-      /* CI mode Logic Op */
-      if (ctx->Color.IndexLogicOpEnabled) {
-	 if (ctx->Driver.LogicOp
-             && (*ctx->Driver.LogicOp)( ctx, ctx->Color.LogicOp )) {
-	    /* Device driver can do logic, don't have to do it in software */
-	    ctx->Color.SWLogicOpEnabled = GL_FALSE;
-	 }
-	 else {
-	    /* Device driver can't do logic op so we do it in software */
-	    ctx->Color.SWLogicOpEnabled = GL_TRUE;
-	 }
-      }
-      else {
-	 /* no logic op */
-	 if (ctx->Driver.LogicOp) {
-            (void) (*ctx->Driver.LogicOp)( ctx, GL_COPY );
-         }
-	 ctx->Color.SWLogicOpEnabled = GL_FALSE;
-      }
-   }
-}
-
-
-
-/*
- * Check if software implemented RGBA or Color Index masking is needed.
- */
-static void update_pixel_masking( GLcontext *ctx )
-{
-   if (ctx->Visual->RGBAflag) {
-      GLuint *colorMask = (GLuint *) ctx->Color.ColorMask;
-      if (*colorMask == 0xffffffff) {
-         /* disable masking */
-         if (ctx->Driver.ColorMask) {
-            (void) (*ctx->Driver.ColorMask)( ctx, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
-         }
-         ctx->Color.SWmasking = GL_FALSE;
-      }
-      else {
-         /* Ask driver to do color masking, if it can't then
-          * do it in software
-          */
-         GLboolean red   = ctx->Color.ColorMask[RCOMP] ? GL_TRUE : GL_FALSE;
-         GLboolean green = ctx->Color.ColorMask[GCOMP] ? GL_TRUE : GL_FALSE;
-         GLboolean blue  = ctx->Color.ColorMask[BCOMP] ? GL_TRUE : GL_FALSE;
-         GLboolean alpha = ctx->Color.ColorMask[ACOMP] ? GL_TRUE : GL_FALSE;
-         if (ctx->Driver.ColorMask
-             && (*ctx->Driver.ColorMask)( ctx, red, green, blue, alpha )) {
-            ctx->Color.SWmasking = GL_FALSE;
-         }
-         else {
-            ctx->Color.SWmasking = GL_TRUE;
-         }
-      }
-   }
-   else {
-      if (ctx->Color.IndexMask==0xffffffff) {
-         /* disable masking */
-         if (ctx->Driver.IndexMask) {
-            (void) (*ctx->Driver.IndexMask)( ctx, 0xffffffff );
-         }
-         ctx->Color.SWmasking = GL_FALSE;
-      }
-      else {
-         /* Ask driver to do index masking, if it can't then
-          * do it in software
-          */
-         if (ctx->Driver.IndexMask
-             && (*ctx->Driver.IndexMask)( ctx, ctx->Color.IndexMask )) {
-            ctx->Color.SWmasking = GL_FALSE;
-         }
-         else {
-            ctx->Color.SWmasking = GL_TRUE;
-         }
-      }
-   }
-}
-
-
 static void update_fog_mode( GLcontext *ctx )
 {
    int old_mode = ctx->FogMode;
 
    if (ctx->Fog.Enabled) {
-      if (ctx->Texture.Enabled)
+      if (ctx->Texture.ReallyEnabled)
          ctx->FogMode = FOG_FRAGMENT;
       else if (ctx->Hint.Fog == GL_NICEST)
          ctx->FogMode = FOG_FRAGMENT;
@@ -807,15 +699,22 @@ static void update_rasterflags( GLcontext *ctx )
 {
    ctx->RasterMask = 0;
 
-   if (ctx->Color.AlphaEnabled)		ctx->RasterMask |= ALPHATEST_BIT;
-   if (ctx->Color.BlendEnabled)		ctx->RasterMask |= BLEND_BIT;
-   if (ctx->Depth.Test)			ctx->RasterMask |= DEPTH_BIT;
-   if (ctx->FogMode==FOG_FRAGMENT)	ctx->RasterMask |= FOG_BIT;
-   if (ctx->Color.SWLogicOpEnabled)	ctx->RasterMask |= LOGIC_OP_BIT;
-   if (ctx->Scissor.Enabled)		ctx->RasterMask |= SCISSOR_BIT;
-   if (ctx->Stencil.Enabled)		ctx->RasterMask |= STENCIL_BIT;
-   if (ctx->Color.SWmasking)		ctx->RasterMask |= MASKING_BIT;
-   if (ctx->Texture.ReallyEnabled)	ctx->RasterMask |= TEXTURE_BIT;
+   if (ctx->Color.AlphaEnabled)           ctx->RasterMask |= ALPHATEST_BIT;
+   if (ctx->Color.BlendEnabled)           ctx->RasterMask |= BLEND_BIT;
+   if (ctx->Depth.Test)                   ctx->RasterMask |= DEPTH_BIT;
+   if (ctx->FogMode == FOG_FRAGMENT)      ctx->RasterMask |= FOG_BIT;
+   if (ctx->Scissor.Enabled)              ctx->RasterMask |= SCISSOR_BIT;
+   if (ctx->Stencil.Enabled)              ctx->RasterMask |= STENCIL_BIT;
+   if (ctx->Visual.RGBAflag) {
+      const GLuint colorMask = *((GLuint *) &ctx->Color.ColorMask);
+      if (colorMask != 0xffffffff)        ctx->RasterMask |= MASKING_BIT;
+      if (ctx->Color.ColorLogicOpEnabled) ctx->RasterMask |= LOGIC_OP_BIT;
+      if (ctx->Texture.ReallyEnabled)     ctx->RasterMask |= TEXTURE_BIT;
+   }
+   else {
+      if (ctx->Color.IndexMask != 0xffffffff) ctx->RasterMask |= MASKING_BIT;
+      if (ctx->Color.IndexLogicOpEnabled)     ctx->RasterMask |= LOGIC_OP_BIT;
+   }
 
    if (ctx->DrawBuffer->UseSoftwareAlphaBuffers
        && ctx->Color.ColorMask[ACOMP]
@@ -847,12 +746,12 @@ static void update_rasterflags( GLcontext *ctx )
       ctx->RasterMask |= MULTI_DRAW_BIT;
       ctx->TriangleCaps |= DD_MULTIDRAW;
    }
-   else if (ctx->Visual->RGBAflag && *((GLuint *) ctx->Color.ColorMask) == 0) {
+   else if (ctx->Visual.RGBAflag && *((GLuint *) ctx->Color.ColorMask) == 0) {
       /* all RGBA channels disabled */
       ctx->RasterMask |= MULTI_DRAW_BIT;
       ctx->TriangleCaps |= DD_MULTIDRAW;
    }
-   else if (!ctx->Visual->RGBAflag && ctx->Color.IndexMask==0) {
+   else if (!ctx->Visual.RGBAflag && ctx->Color.IndexMask==0) {
       /* all color index bits disabled */
       ctx->RasterMask |= MULTI_DRAW_BIT;
       ctx->TriangleCaps |= DD_MULTIDRAW;
@@ -863,17 +762,13 @@ static void update_rasterflags( GLcontext *ctx )
 void gl_print_state( const char *msg, GLuint state )
 {
    fprintf(stderr,
-	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
+	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
 	   msg,
 	   state,
 	   (state & NEW_LIGHTING)         ? "lighting, " : "",
 	   (state & NEW_RASTER_OPS)       ? "raster-ops, " : "",
 	   (state & NEW_TEXTURING)        ? "texturing, " : "",
 	   (state & NEW_POLYGON)          ? "polygon, " : "",
-	   (state & NEW_DRVSTATE0)        ? "driver-0, " : "",
-	   (state & NEW_DRVSTATE1)        ? "driver-1, " : "",
-	   (state & NEW_DRVSTATE2)        ? "driver-2, " : "",
-	   (state & NEW_DRVSTATE3)        ? "driver-3, " : "",
 	   (state & NEW_MODELVIEW)        ? "modelview, " : "",
 	   (state & NEW_PROJECTION)       ? "projection, " : "",
 	   (state & NEW_TEXTURE_MATRIX)   ? "texture-matrix, " : "",
@@ -923,7 +818,7 @@ void gl_update_state( GLcontext *ctx )
       gl_update_client_state( ctx );
 
    if ((ctx->NewState & NEW_TEXTURE_ENABLE) &&
-       (ctx->Enabled & ENABLE_TEX_ANY) != ctx->Texture.Enabled)
+       (ctx->Enabled & ENABLE_TEX_ANY) != ctx->Texture.ReallyEnabled)
       ctx->NewState |= NEW_TEXTURING | NEW_RASTER_OPS;
 
    if (ctx->NewState & NEW_TEXTURE_ENV) {
@@ -977,49 +872,43 @@ void gl_update_state( GLcontext *ctx )
 	 }
       }
 
-      ctx->Texture.Enabled = ctx->Enabled & ENABLE_TEX_ANY;
       ctx->NeedNormals = (ctx->Light.Enabled || ctx->Texture.NeedNormals);
    }
 
-   if (ctx->NewState & (NEW_RASTER_OPS | NEW_LIGHTING | NEW_FOG | NEW_TEXTURE_ENABLE)) {
+   if (ctx->NewState & NEW_FOG) {
+      update_fog_mode(ctx);
+   }
 
-      if (ctx->NewState & (NEW_RASTER_OPS | NEW_TEXTURE_ENABLE)) {
-	 update_pixel_logic(ctx);
-	 update_pixel_masking(ctx);
-	 update_fog_mode(ctx);
-	 update_rasterflags(ctx);
-	 if (ctx->Driver.Dither) {
-	    (*ctx->Driver.Dither)( ctx, ctx->Color.DitherFlag );
-	 }
+   if (ctx->NewState & NEW_RASTER_OPS) {
+      update_rasterflags(ctx);
 
-	 /* update scissor region */
-	 ctx->DrawBuffer->Xmin = 0;
-	 ctx->DrawBuffer->Ymin = 0;
-	 ctx->DrawBuffer->Xmax = ctx->DrawBuffer->Width-1;
-	 ctx->DrawBuffer->Ymax = ctx->DrawBuffer->Height-1;
-	 if (ctx->Scissor.Enabled) {
-	    if (ctx->Scissor.X > ctx->DrawBuffer->Xmin) {
-	       ctx->DrawBuffer->Xmin = ctx->Scissor.X;
-	    }
-	    if (ctx->Scissor.Y > ctx->DrawBuffer->Ymin) {
-	       ctx->DrawBuffer->Ymin = ctx->Scissor.Y;
-	    }
-	    if (ctx->Scissor.X + ctx->Scissor.Width - 1 < ctx->DrawBuffer->Xmax) {
-	       ctx->DrawBuffer->Xmax = ctx->Scissor.X + ctx->Scissor.Width - 1;
-	    }
-	    if (ctx->Scissor.Y + ctx->Scissor.Height - 1 < ctx->DrawBuffer->Ymax) {
-	       ctx->DrawBuffer->Ymax = ctx->Scissor.Y + ctx->Scissor.Height - 1;
-	    }
-	 }
+      /* update scissor region */
+      ctx->DrawBuffer->Xmin = 0;
+      ctx->DrawBuffer->Ymin = 0;
+      ctx->DrawBuffer->Xmax = ctx->DrawBuffer->Width;
+      ctx->DrawBuffer->Ymax = ctx->DrawBuffer->Height;
+      if (ctx->Scissor.Enabled) {
+         if (ctx->Scissor.X > ctx->DrawBuffer->Xmin) {
+            ctx->DrawBuffer->Xmin = ctx->Scissor.X;
+         }
+         if (ctx->Scissor.Y > ctx->DrawBuffer->Ymin) {
+            ctx->DrawBuffer->Ymin = ctx->Scissor.Y;
+         }
+         if (ctx->Scissor.X + ctx->Scissor.Width < ctx->DrawBuffer->Xmax) {
+            ctx->DrawBuffer->Xmax = ctx->Scissor.X + ctx->Scissor.Width;
+         }
+         if (ctx->Scissor.Y + ctx->Scissor.Height < ctx->DrawBuffer->Ymax) {
+            ctx->DrawBuffer->Ymax = ctx->Scissor.Y + ctx->Scissor.Height;
+         }
       }
+   }
 
-      if (ctx->NewState & NEW_LIGHTING) {
-	 ctx->TriangleCaps &= ~(DD_TRI_LIGHT_TWOSIDE|DD_LIGHTING_CULL);
-	 if (ctx->Light.Enabled) {
-	    if (ctx->Light.Model.TwoSide)
-	       ctx->TriangleCaps |= (DD_TRI_LIGHT_TWOSIDE|DD_LIGHTING_CULL);
-	    gl_update_lighting(ctx);
-	 }
+   if (ctx->NewState & NEW_LIGHTING) {
+      ctx->TriangleCaps &= ~(DD_TRI_LIGHT_TWOSIDE|DD_LIGHTING_CULL);
+      if (ctx->Light.Enabled) {
+         if (ctx->Light.Model.TwoSide)
+            ctx->TriangleCaps |= (DD_TRI_LIGHT_TWOSIDE|DD_LIGHTING_CULL);
+         gl_update_lighting(ctx);
       }
    }
 
@@ -1065,9 +954,7 @@ void gl_update_state( GLcontext *ctx )
       }
    }
 
-   if (ctx->NewState & ~(NEW_CLIENT_STATE|
-			 NEW_DRIVER_STATE|NEW_USER_CLIP|
-			 NEW_POLYGON))
+   if (ctx->NewState & ~(NEW_CLIENT_STATE | NEW_USER_CLIP | NEW_POLYGON))
       gl_update_clipmask(ctx);
 
    if (ctx->NewState & (NEW_LIGHTING|
@@ -1076,10 +963,6 @@ void gl_update_state( GLcontext *ctx )
 			NEW_TEXTURE_ENABLE|
 			NEW_TEXTURE_ENV|
 			NEW_POLYGON|
-			NEW_DRVSTATE0|
-			NEW_DRVSTATE1|
-			NEW_DRVSTATE2|
-			NEW_DRVSTATE3|
 			NEW_USER_CLIP))
    {
       ctx->IndirectTriangles = ctx->TriangleCaps & ~ctx->Driver.TriangleCaps;
@@ -1188,7 +1071,7 @@ void gl_update_state( GLcontext *ctx )
 	 }
 	 ctx->NeedEyeNormals = ctx->NeedEyeCoords;
       }
-      if (ctx->Texture.Enabled || ctx->RenderMode==GL_FEEDBACK) {
+      if (ctx->Texture.ReallyEnabled || ctx->RenderMode==GL_FEEDBACK) {
 	 if (ctx->Texture.NeedEyeCoords) ctx->NeedEyeCoords = GL_TRUE;
 	 if (ctx->Texture.NeedNormals)
 	    ctx->NeedNormals = ctx->NeedEyeNormals = GL_TRUE;

@@ -1,8 +1,8 @@
-/* $Id: dlist.h,v 1.4 2000/05/24 15:04:45 brianp Exp $ */
+/* $Id: dlist.h,v 1.6 2000/09/24 16:11:55 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  * 
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
@@ -30,19 +30,6 @@
 
 
 #include "types.h"
-
-
-struct display_list {
-   union node *nodes;	
-   GLuint OrFlag;
-   struct gl_current_attrib outputs;
-};
-
-struct display_list_compilation {
-   struct display_list *list;
-   union node *current_block;
-   GLuint current_pos;
-};
 
 
 extern void gl_init_lists( void );

@@ -1,4 +1,4 @@
-/* $Id: glheader.h,v 1.12 2000/08/02 00:41:21 brianp Exp $ */
+/* $Id: glheader.h,v 1.15 2000/09/26 20:53:53 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -47,7 +47,12 @@
 #else
 #include <assert.h>
 #include <ctype.h>
+/* If we can use Compaq's Fast Math Library on Alpha */
+#if defined(__alpha__) && defined(CCPML)
+#include <cpml.h>
+#else
 #include <math.h>
+#endif
 #include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -132,10 +137,10 @@
 #if defined(_WIN32) && !defined(_WINDEF_) && !defined(_GNU_H_WINDOWS32_BASE) && !defined(OPENSTEP)
 #if 0
 #	define CALLBACK GLCALLBACK
-#endif
-typedef int (GLAPIENTRY *PROC)();
 typedef void *HGLRC;
 typedef void *HDC;
+#endif
+typedef int (GLAPIENTRY *PROC)();
 typedef unsigned long COLORREF;
 #endif
 
@@ -167,6 +172,12 @@ typedef struct tagPIXELFORMATDESCRIPTOR PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESC
 
 #include "GL/gl.h"
 #include "GL/glext.h"
+
+
+#ifndef CAPI
+#define CAPI
+#endif
+#include "glcore.h"
 
 
 

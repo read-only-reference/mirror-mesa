@@ -1,8 +1,8 @@
-/* $Id: dd.h,v 1.28 2000/08/29 23:31:23 brianp Exp $ */
+/* $Id: dd.h,v 1.33 2000/09/28 18:30:39 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.4
+ * Version:  3.5
  * 
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
@@ -336,30 +336,6 @@ struct dd_function_table {
     * This is called whenever glFlush() is called.
     */
 
-   GLboolean (*IndexMask)( GLcontext *ctx, GLuint mask );
-   /*
-    * Implements glIndexMask() if possible, else return GL_FALSE.
-    */
-
-   GLboolean (*ColorMask)( GLcontext *ctx,
-                           GLboolean rmask, GLboolean gmask,
-                           GLboolean bmask, GLboolean amask );
-   /*
-    * Implements glColorMask() if possible, else return GL_FALSE.
-    */
-
-   GLboolean (*LogicOp)( GLcontext *ctx, GLenum op );
-   /*
-    * Implements glLogicOp() if possible, else return GL_FALSE.
-    */
-
-   void (*Dither)( GLcontext *ctx, GLboolean enable );
-   /*
-    * Enable/disable dithering.
-    * NOTE: This function will be removed in the future in favor
-    * of the "Enable" driver function.
-    */
-
    void (*Error)( GLcontext *ctx );
    /*
     * Called whenever an error is generated.  ctx->ErrorValue contains
@@ -641,6 +617,16 @@ struct dd_function_table {
     * Core Mesa will perform any image format/type conversions that are needed.
     */
 
+   GLboolean (*TestProxyTexImage)(GLcontext *ctx, GLenum target,
+                                  GLint level, GLint internalFormat,
+                                  GLenum format, GLenum type,
+                                  GLint width, GLint height,
+                                  GLint depth, GLint border);
+   /* Called by glTexImage[123]D when user specifies a proxy texture
+    * target.  Return GL_TRUE if the proxy test passes, return GL_FALSE
+    * if the test fails.
+    */
+
    GLboolean (*CompressedTexImage1D)( GLcontext *ctx, GLenum target,
                                       GLint level, GLsizei imageSize,
                                       const GLvoid *data,
@@ -713,8 +699,15 @@ struct dd_function_table {
     */
 
    GLint (*SpecificCompressedTexFormat)(GLcontext *ctx,
-                                        GLint internalFormat,
-                                        GLint numDimensions);
+                                        GLint      internalFormat,
+                                        GLint      numDimensions,
+                                        GLint     *levelp,
+                                        GLsizei   *widthp,
+                                        GLsizei   *heightp,
+                                        GLsizei   *depthp,
+                                        GLint     *borderp,
+                                        GLenum    *formatp,
+                                        GLenum    *typep);
    /* Called to turn a generic texture format into a specific
     * texture format.  For example, if a driver implements
     * GL_3DFX_texture_compression_FXT1, this would map
@@ -870,8 +863,11 @@ struct dd_function_table {
 
    void (*RegisterVB)( struct vertex_buffer *VB );
    void (*UnregisterVB)( struct vertex_buffer *VB );
-   /* Do any processing (eg allocate memory) required to set up a new
-    * vertex_buffer.  
+   /* When Mesa creates a new vertex buffer it calls Driver.RegisterVB()
+    * so the device driver can allocate its own vertex buffer data and
+    * hook it to the VB->driver_data pointer.
+    * When Mesa destroys a vertex buffer it calls Driver.UnegisterVB()
+    * so the driver can deallocate its own data attached to VB->driver_data.
     */
 
 
@@ -923,6 +919,8 @@ struct dd_function_table {
 			      GLenum dfactorRGB, GLenum sfactorA,
 			      GLenum dfactorA );
    void (*ClearDepth)(GLcontext *ctx, GLclampd d);
+   void (*ColorMask)(GLcontext *ctx, GLboolean rmask, GLboolean gmask,
+                     GLboolean bmask, GLboolean amask );
    void (*CullFace)(GLcontext *ctx, GLenum mode);
    void (*FrontFace)(GLcontext *ctx, GLenum mode);
    void (*DepthFunc)(GLcontext *ctx, GLenum func);
@@ -931,6 +929,7 @@ struct dd_function_table {
    void (*Enable)(GLcontext* ctx, GLenum cap, GLboolean state);
    void (*Fogfv)(GLcontext *ctx, GLenum pname, const GLfloat *params);
    void (*Hint)(GLcontext *ctx, GLenum target, GLenum mode);
+   void (*IndexMask)(GLcontext *ctx, GLuint mask);
    void (*Lightfv)(GLcontext *ctx, GLenum light,
 		   GLenum pname, const GLfloat *params, GLint nparams );
    void (*LightModelfv)(GLcontext *ctx, GLenum pname, const GLfloat *params);

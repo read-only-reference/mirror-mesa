@@ -1,4 +1,4 @@
-/* $Id: xmesaP.h,v 1.11 2000/07/19 23:26:35 brianp Exp $ */
+/* $Id: xmesaP.h,v 1.13 2000/09/26 20:54:13 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -127,7 +127,7 @@ struct xmesa_visual {
 
 
 /*
- * "Derived" from gl_context.  Basically corresponds to a GLXContext.
+ * "Derived" from __GLcontextRec.  Basically corresponds to a GLXContext.
  */
 struct xmesa_context {
    GLcontext *gl_ctx;		/* the core library context */
@@ -516,7 +516,8 @@ static int const kernel1[16] = {
  */
 
 extern unsigned long
-xmesa_color_to_pixel( XMesaContext xmesa, GLubyte r, GLubyte g, GLubyte b, GLubyte a,
+xmesa_color_to_pixel( XMesaContext xmesa,
+                      GLubyte r, GLubyte g, GLubyte b, GLubyte a,
                       GLuint pixelFormat );
 
 extern void xmesa_alloc_back_buffer( XMesaBuffer b );
@@ -528,6 +529,9 @@ extern points_func xmesa_get_points_func( GLcontext *ctx );
 extern line_func xmesa_get_line_func( GLcontext *ctx );
 
 extern triangle_func xmesa_get_triangle_func( GLcontext *ctx );
+
+extern void xmesa_update_span_funcs( GLcontext *ctx );
+
 
 
 /* XXX this is a hack to implement shared display lists with 3Dfx */

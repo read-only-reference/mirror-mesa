@@ -1,4 +1,4 @@
-/* $Id: osmesa.c,v 1.19 2000/06/27 21:42:14 brianp Exp $ */
+/* $Id: osmesa.c,v 1.22 2000/09/28 22:44:31 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -30,7 +30,7 @@
  *
  * Note on thread safety:  this driver is thread safe.  All
  * functions are reentrant.  The notion of current context is
- * managed by the core gl_make_current() and gl_get_current_context()
+ * managed by the core _mesa_make_current() and _mesa_get_current_context()
  * functions.  Those functions are thread-safe.
  */
 
@@ -100,10 +100,25 @@ static void osmesa_update_state( GLcontext *ctx );
 OSMesaContext GLAPIENTRY
 OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
 {
+   return OSMesaCreateContextExt(format, DEFAULT_SOFTWARE_DEPTH_BITS,
+                                 8, 16, sharelist);
+}
+
+
+
+/*
+ * New in Mesa 3.5
+ *
+ * Create context and specify size of ancillary buffers.
+ */
+OSMesaContext GLAPIENTRY
+OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
+                        GLint accumBits, OSMesaContext sharelist )
+{
    OSMesaContext osmesa;
    GLint rshift, gshift, bshift, ashift;
    GLint rind, gind, bind;
-   GLint indexBits, alphaBits;
+   GLint indexBits, redBits, greenBits, blueBits, alphaBits;
    GLboolean rgbmode;
    GLboolean swalpha;
    GLuint i4 = 1;
@@ -119,6 +134,9 @@ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
    }
    else if (format==OSMESA_RGBA) {
       indexBits = 0;
+      redBits = 8;
+      greenBits = 8;
+      blueBits = 8;
       alphaBits = 8;
       if (little_endian) {
          rshift = 0;
@@ -136,6 +154,9 @@ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
    }
    else if (format==OSMESA_BGRA) {
       indexBits = 0;
+      redBits = 8;
+      greenBits = 8;
+      blueBits = 8;
       alphaBits = 8;
       if (little_endian) {
          ashift = 0;
@@ -153,6 +174,9 @@ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
    }
    else if (format==OSMESA_ARGB) {
       indexBits = 0;
+      redBits = 8;
+      greenBits = 8;
+      blueBits = 8;
       alphaBits = 8;
       if (little_endian) {
          bshift = 0;
@@ -170,6 +194,9 @@ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
    }
    else if (format==OSMESA_RGB) {
       indexBits = 0;
+      redBits = 8;
+      greenBits = 8;
+      blueBits = 8;
       alphaBits = 0;
       bshift = 0;
       gshift = 8;
@@ -183,6 +210,9 @@ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
    }
    else if (format==OSMESA_BGR) {
       indexBits = 0;
+      redBits = 8;
+      greenBits = 8;
+      blueBits = 8;
       alphaBits = 0;
       bshift = 0;
       gshift = 8;
@@ -201,15 +231,22 @@ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
 
    osmesa = (OSMesaContext) CALLOC_STRUCT(osmesa_context);
    if (osmesa) {
-      osmesa->gl_visual = gl_create_visual( rgbmode,
-                                            swalpha,    /* software alpha */
-                                            GL_FALSE,	/* double buffer */
-                                            GL_FALSE,	/* stereo */
-                                            DEFAULT_SOFTWARE_DEPTH_BITS,
-                                            STENCIL_BITS,
-                                            rgbmode ? ACCUM_BITS : 0,
-                                            indexBits,
-                                            8, 8, 8, alphaBits );
+      osmesa->gl_visual = _mesa_create_visual( rgbmode,
+                                               GL_FALSE,    /* double buffer */
+                                               GL_FALSE,    /* stereo */
+                                               redBits,
+                                               greenBits,
+                                               blueBits,
+                                               alphaBits,
+                                               indexBits,
+                                               depthBits,
+                                               stencilBits,
+                                               accumBits,
+                                               accumBits,
+                                               accumBits,
+                                               alphaBits ? accumBits : 0,
+                                               1            /* num samples */
+                                               );
       if (!osmesa->gl_visual) {
          FREE(osmesa);
          return NULL;
@@ -228,15 +265,15 @@ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
       gl_extensions_enable(&(osmesa->gl_ctx), "GL_ARB_texture_cube_map");
       gl_extensions_enable(&(osmesa->gl_ctx), "GL_EXT_texture_env_combine");
 
-      osmesa->gl_buffer = gl_create_framebuffer( osmesa->gl_visual,
-                                           osmesa->gl_visual->DepthBits > 0,
-                                           osmesa->gl_visual->StencilBits > 0,
-                                           osmesa->gl_visual->AccumRedBits > 0,
-                                           osmesa->gl_visual->AlphaBits > 0 );
+      osmesa->gl_buffer = _mesa_create_framebuffer( osmesa->gl_visual,
+                                          osmesa->gl_visual->DepthBits > 0,
+                                          osmesa->gl_visual->StencilBits > 0,
+                                          osmesa->gl_visual->AccumRedBits > 0,
+                                          osmesa->gl_visual->AlphaBits > 0 );
 
       if (!osmesa->gl_buffer) {
-         gl_destroy_visual( osmesa->gl_visual );
-         gl_free_context_data( &osmesa->gl_ctx );
+         _mesa_destroy_visual( osmesa->gl_visual );
+         _mesa_free_context_data( &osmesa->gl_ctx );
          FREE(osmesa);
          return NULL;
       }
@@ -262,6 +299,7 @@ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
 
 
 
+
 /*
  * Destroy an Off-Screen Mesa rendering context.
  *
@@ -270,9 +308,9 @@ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
 void GLAPIENTRY OSMesaDestroyContext( OSMesaContext ctx )
 {
    if (ctx) {
-      gl_destroy_visual( ctx->gl_visual );
-      gl_destroy_framebuffer( ctx->gl_buffer );
-      gl_free_context_data( &ctx->gl_ctx );
+      _mesa_destroy_visual( ctx->gl_visual );
+      _mesa_destroy_framebuffer( ctx->gl_buffer );
+      _mesa_free_context_data( &ctx->gl_ctx );
       FREE( ctx );
    }
 }
@@ -376,7 +414,7 @@ OSMesaMakeCurrent( OSMesaContext ctx, void *buffer, GLenum type,
    }
 
    osmesa_update_state( &ctx->gl_ctx );
-   gl_make_current( &ctx->gl_ctx, ctx->gl_buffer );
+   _mesa_make_current( &ctx->gl_ctx, ctx->gl_buffer );
 
    ctx->buffer = buffer;
    ctx->width = width;
@@ -403,7 +441,7 @@ OSMesaMakeCurrent( OSMesaContext ctx, void *buffer, GLenum type,
 
 OSMesaContext GLAPIENTRY OSMesaGetCurrentContext( void )
 {
-   GLcontext *ctx = gl_get_current_context();
+   GLcontext *ctx = _mesa_get_current_context();
    if (ctx)
       return (OSMesaContext) ctx;
    else
@@ -1357,7 +1395,7 @@ static line_func choose_line_function( GLcontext *ctx )
    OSMesaContext osmesa = (OSMesaContext) ctx;
 
    if (ctx->Line.SmoothFlag)              return NULL;
-   if (ctx->Texture.Enabled)              return NULL;
+   if (ctx->Texture.ReallyEnabled)        return NULL;
    if (ctx->Light.ShadeModel!=GL_FLAT)    return NULL;
 
    if (ctx->Line.Width==1.0F
@@ -1366,7 +1404,7 @@ static line_func choose_line_function( GLcontext *ctx )
        if (ctx->RasterMask==DEPTH_BIT
            && ctx->Depth.Func==GL_LESS
            && ctx->Depth.Mask==GL_TRUE
-           && ctx->Visual->DepthBits == DEFAULT_SOFTWARE_DEPTH_BITS) {
+           && ctx->Visual.DepthBits == DEFAULT_SOFTWARE_DEPTH_BITS) {
            switch(osmesa->format) {
        		case OSMESA_RGBA:
        		case OSMESA_BGRA:
@@ -1391,7 +1429,7 @@ static line_func choose_line_function( GLcontext *ctx )
        if (ctx->RasterMask==(DEPTH_BIT|BLEND_BIT)
            && ctx->Depth.Func==GL_LESS
            && ctx->Depth.Mask==GL_TRUE
-           && ctx->Visual->DepthBits == DEFAULT_SOFTWARE_DEPTH_BITS
+           && ctx->Visual.DepthBits == DEFAULT_SOFTWARE_DEPTH_BITS
            && ctx->Color.BlendSrcRGB==GL_SRC_ALPHA
            && ctx->Color.BlendDstRGB==GL_ONE_MINUS_SRC_ALPHA
            && ctx->Color.BlendSrcA==GL_SRC_ALPHA
@@ -1410,7 +1448,7 @@ static line_func choose_line_function( GLcontext *ctx )
        if (ctx->RasterMask==(DEPTH_BIT|BLEND_BIT)
            && ctx->Depth.Func==GL_LESS
            && ctx->Depth.Mask==GL_FALSE
-           && ctx->Visual->DepthBits == DEFAULT_SOFTWARE_DEPTH_BITS
+           && ctx->Visual.DepthBits == DEFAULT_SOFTWARE_DEPTH_BITS
            && ctx->Color.BlendSrcRGB==GL_SRC_ALPHA
            && ctx->Color.BlendDstRGB==GL_ONE_MINUS_SRC_ALPHA
            && ctx->Color.BlendSrcA==GL_SRC_ALPHA
@@ -1543,12 +1581,12 @@ static triangle_func choose_triangle_function( GLcontext *ctx )
 
    if (ctx->Polygon.SmoothFlag)     return NULL;
    if (ctx->Polygon.StippleFlag)    return NULL;
-   if (ctx->Texture.Enabled)        return NULL;
+   if (ctx->Texture.ReallyEnabled)  return NULL;
 
    if (ctx->RasterMask==DEPTH_BIT
        && ctx->Depth.Func==GL_LESS
        && ctx->Depth.Mask==GL_TRUE
-       && ctx->Visual->DepthBits == DEFAULT_SOFTWARE_DEPTH_BITS
+       && ctx->Visual.DepthBits == DEFAULT_SOFTWARE_DEPTH_BITS
        && osmesa->format!=OSMESA_COLOR_INDEX) {
       if (ctx->Light.ShadeModel==GL_SMOOTH) {
          return smooth_rgba_z_triangle;

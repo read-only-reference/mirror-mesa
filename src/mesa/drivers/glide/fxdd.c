@@ -102,21 +102,6 @@ void fxInitPixelTables(fxMesaContext fxMesa, GLboolean bgrOrder)
 /*****                 Miscellaneous functions                    *****/
 /**********************************************************************/
 
-/* Enalbe/Disable dithering */
-static void fxDDDither(GLcontext *ctx, GLboolean enable)
-{
-  if (MESA_VERBOSE&VERBOSE_DRIVER) {
-    fprintf(stderr,"fxmesa: fxDDDither()\n");
-  }
-
-  if (enable) {
-    FX_grDitherMode(GR_DITHER_4x4);
-  } else {
-    FX_grDitherMode(GR_DITHER_DISABLE);
-  }
-}
-
-
 /* Return buffer size information */
 static void fxDDBufferSize(GLcontext *ctx, GLuint *width, GLuint *height)
 {
@@ -846,7 +831,6 @@ int fxDDInitFxMesaContext( fxMesaContext fxMesa )
    fxMesa->glCtx->Const.MaxTextureLevels=9;
    fxMesa->glCtx->Const.MaxTextureSize=256;
    fxMesa->glCtx->Const.MaxTextureUnits=fxMesa->emulateTwoTMUs ? 2 : 1;
-   fxMesa->glCtx->NewState|=NEW_DRVSTATE1;
    fxMesa->new_state = NEW_ALL;
   
    fxDDSetupInit();
@@ -879,7 +863,7 @@ int fxDDInitFxMesaContext( fxMesaContext fxMesa )
 	 fxMesa->glCtx->NrPipelineStages);
 
    /* Run the config file */
-   gl_context_initialize( fxMesa->glCtx );
+   _mesa_context_initialize( fxMesa->glCtx );
 
    return 1;
 }
@@ -1098,8 +1082,6 @@ void fxSetupDDPointers(GLcontext *ctx)
   ctx->Driver.ReadDepthPixels=fxDDReadDepthPixels;
          
   ctx->Driver.GetString=fxDDGetString;
-
-  ctx->Driver.Dither=fxDDDither;
 
   ctx->Driver.NearFar=fxDDSetNearFar;
 

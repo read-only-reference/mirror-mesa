@@ -279,44 +279,6 @@ static void set_color( GLcontext* ctx, GLubyte r, GLubyte g, GLubyte b, GLubyte 
 
 
 
-/* Set the index mode bitplane mask. */
-static GLboolean index_mask(GLcontext* ctx, GLuint mask)
-{
-   /* can't implement */
-   return GL_FALSE;
-}
-
-
-
-/* Set the RGBA drawing mask. */
-static GLboolean color_mask( GLcontext* ctx,
-							 GLboolean rmask, GLboolean gmask,
-							 GLboolean bmask, GLboolean amask)
-{
-   /* can't implement */
-   return GL_FALSE;
-}
-
-
-
-/*
- * Set the pixel logic operation.  Return GL_TRUE if the device driver
- * can perform the operation, otherwise return GL_FALSE.  If GL_FALSE
- * is returned, the logic op will be done in software by Mesa.
- */
-GLboolean logicop( GLcontext* ctx, GLenum op )
-{
-   /* can't implement */
-   return GL_FALSE;
-}
-
-
-static void dither( GLcontext* ctx, GLboolean enable )
-{
-   /* No op */
-}
-
-
 
 static GLboolean set_buffer( GLcontext* ctx, GLenum mode )
 {
@@ -458,7 +420,7 @@ extern points_func choose_points_function( GLcontext* ctx )
 {
    STARTPROFILE
    if (ctx->Point.Size==1.0 && !ctx->Point.SmoothFlag && ctx->RasterMask==0
-       && !ctx->Texture.Enabled  && ctx->Visual->RGBAflag) {
+       && !ctx->Texture.ReallyEnabled  && ctx->Visual->RGBAflag) {
    ENDPROFILE(choose_points_function)
       return fast_rgb_points;
    }
@@ -516,7 +478,7 @@ static line_func choose_line_function( GLcontext* ctx )
 	STARTPROFILE
    if (ctx->Line.Width==1.0 && !ctx->Line.SmoothFlag && !ctx->Line.StippleFlag
        && ctx->Light.ShadeModel==GL_FLAT && ctx->RasterMask==0
-       && !ctx->Texture.Enabled && Current->rgb_flag) {
+       && !ctx->Texture.ReallyEnabled && Current->rgb_flag) {
    ENDPROFILE(choose_line_function)
       return fast_flat_rgb_line;
    }
@@ -627,7 +589,7 @@ static triangle_func choose_triangle_function( GLcontext *ctx )
 {
    if (ctx->Polygon.SmoothFlag)     return NULL;
    if (ctx->Polygon.StippleFlag)    return NULL;
-   if (ctx->Texture.Enabled)        return NULL;
+   if (ctx->Texture.ReallyEnabled)  return NULL;
 
    if (ctx->RasterMask==DEPTH_BIT
        && ctx->Depth.Func==GL_LESS
@@ -695,15 +657,15 @@ static void fast_flat_rgb_polygon( GLcontext* ctx, GLuint n, GLuint vlist[], GLu
 /* Return pointer to accerated polygon function */
 static polygon_func choose_polygon_function( GLcontext* ctx )
 {
-	STARTPROFILE
+   STARTPROFILE
    if (!ctx->Polygon.SmoothFlag && !ctx->Polygon.StippleFlag
        && ctx->Light.ShadeModel==GL_FLAT && ctx->RasterMask==0
-       && !ctx->Texture.Enabled && Current->rgb_flag==GL_TRUE) {
-   ENDPROFILE(choose_polygon_function)
+       && !ctx->Texture.ReallyEnabled && Current->rgb_flag==GL_TRUE) {
+      ENDPROFILE(choose_polygon_function)
       return fast_flat_rgb_polygon;
    }
    else {
-   ENDPROFILE(choose_polygon_function)
+      ENDPROFILE(choose_polygon_function)
       return NULL;
    }
 }
@@ -717,18 +679,18 @@ static polygon_func choose_polygon_function( GLcontext* ctx )
 
 /* Write a horizontal span of color-index pixels with a boolean mask. */
 static void write_index_span( GLcontext* ctx,
-							  GLuint n, GLint x, GLint y,
-							  const GLuint index[],
+                              GLuint n, GLint x, GLint y,
+                              const GLuint index[],
                               const GLubyte mask[] )
 {
-	  STARTPROFILE
-	  GLuint i;
-	  char *Mem=Current->ScreenMem+y*Current->ScanWidth+x;
-	  assert(Current->rgb_flag==GL_FALSE);
-	  for (i=0; i<n; i++)
-		if (mask[i])
-		  Mem[i]=index[i];
-	   ENDPROFILE(write_index_span)
+   STARTPROFILE
+   GLuint i;
+   char *Mem=Current->ScreenMem+y*Current->ScanWidth+x;
+   assert(Current->rgb_flag==GL_FALSE);
+   for (i=0; i<n; i++)
+      if (mask[i])
+         Mem[i]=index[i];
+   ENDPROFILE(write_index_span)
 }
 
 
@@ -1043,11 +1005,6 @@ void setup_DD_pointers( GLcontext* ctx )
 
    ctx->Driver.Index = set_index;
    ctx->Driver.Color = set_color;
-   ctx->Driver.IndexMask = index_mask;
-   ctx->Driver.ColorMask = color_mask;
-
-   ctx->Driver.LogicOp = logicop;
-   ctx->Driver.Dither = dither;
 
    ctx->Driver.SetBuffer = set_buffer;
    ctx->Driver.GetBufferSize = buffer_size;
@@ -1224,32 +1181,33 @@ WMesaContext /*APIENTRY*/ WMesaCreateContext( HWND hWnd, HPALETTE Pal,
 
 
 
-  c->gl_visual = gl_create_visual(rgb_flag,
-								  GL_FALSE,	/* software alpha */
-                                  db_flag,	/* db_flag */
-                                  16,		/* depth_bits */
-                                  8,		/* stencil_bits */
-                                  8,		/* accum_bits */
-                                  8,
-                                  255.0, 255.0, 255.0, 255.0 );
+  c->gl_visual = _mesa_create_visual(rgb_flag,
+                                     db_flag,	/* db_flag */
+                                     GL_TRUE,   /* stereo */
+                                     8, 8, 8, 8,/* rgba bits */
+                                     0,         /* index bits */
+                                     16,	/* depth_bits */
+                                     8,		/* stencil_bits */
+                                     16,16,16,16,/* accum_bits */
+                                     1 );
 
 	if (!c->gl_visual) {
          return NULL;
       }
 
   /* allocate a new Mesa context */
-  c->gl_ctx = gl_create_context( c->gl_visual, NULL,c);
+  c->gl_ctx = _mesa_create_context( c->gl_visual, NULL,c);
 
   if (!c->gl_ctx) {
-         gl_destroy_visual( c->gl_visual );
+         _mesa_destroy_visual( c->gl_visual );
          free(c);
          return NULL;
       }
 
-      c->gl_buffer = gl_create_framebuffer( c->gl_visual );
+      c->gl_buffer = _mesa_create_framebuffer( c->gl_visual );
       if (!c->gl_buffer) {
-         gl_destroy_visual( c->gl_visual );
-         gl_destroy_context( c->gl_ctx );
+         _mesa_destroy_visual( c->gl_visual );
+         _mesa_destroy_context( c->gl_ctx );
          free(c);
          return NULL;
       }
@@ -1266,9 +1224,9 @@ void /*APIENTRY*/ WMesaDestroyContext( void )
 	ReleaseDC(c->Window,c->hDC);
 	WC = c;
 
-    gl_destroy_visual( c->gl_visual );
-    gl_destroy_framebuffer( c->gl_buffer );
-	gl_destroy_context( c->gl_ctx );
+    _mesa_destroy_visual( c->gl_visual );
+    _mesa_destroy_framebuffer( c->gl_buffer );
+    _mesa_destroy_context( c->gl_ctx );
 
 	if (c->db_flag){
 		wmDeleteBackingStore(c);
@@ -1310,7 +1268,7 @@ void /*APIENTRY*/ WMesaMakeCurrent( WMesaContext c )
 		return;
 
 	//gl_set_context( c->gl_ctx );
-	gl_make_current(c->gl_ctx, c->gl_buffer);
+	_mesa_make_current(c->gl_ctx, c->gl_buffer);
 	Current = c;
 	setup_DD_pointers(c->gl_ctx);
 	if (Current->gl_ctx->Viewport.Width==0) {

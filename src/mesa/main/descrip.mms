@@ -20,7 +20,7 @@ bitmap.c blend.c buffers.c clip.c colortab.c context.c copypix.c depth.c \
 dispatch.c convolve.c \
 dlist.c drawpix.c enable.c eval.c feedback.c fog.c \
 get.c hash.c hint.c image.c imaging.c light.c lines.c logic.c masking.c matrix.c \
-mem.c glapi.c glapinoop.c \
+mem.c glapi.c glapinoop.c imports.c\
 mmath.c pb.c pixel.c points.c polygon.c \
 quads.c rastpos.c readpix.c rect.c scissor.c shade.c span.c \
 stencil.c teximage.c texobj.c texstate.c texture.c translate.c triangle.c \
@@ -29,7 +29,7 @@ zoom.c bbox.c cva.c vector.c vbindirect.c config.c enums.c extensions.c \
 pipeline.c stages.c state.c vertices.c [.x86]x86.c
 
 DRIVER_SOURCES = [.x]glxapi.c [.x]fakeglx.c [.x]xfonts.c \
-[.x]xmesa1.c [.x]xmesa2.c [.x]xmesa3.c [.x]xmesa4.c \
+[.x]xm_api.c [.x]xm_dd.c [.x]xm_line.c [.x]xm_span.c [.x]xm_tri.c \
 [.osmesa]osmesa.c \
 [.svga]svgamesa.c \
 [.fx]fxapi.c [.fx]fxdd.c [.fx]fxddtex.c [.fx]fxvsetup.c [.fx]fxsetup.c \
@@ -49,7 +49,7 @@ OBJECTS3=get.obj,hash.obj,hint.obj,image.obj,light.obj,lines.obj,logic.obj,maski
 matrix.obj,glapi.obj,glapinoop.obj,dispatch.obj,imaging.obj,mem.obj,\
 mmath.obj,pb.obj,pixel.obj,points.obj
 
-OBJECTS7=polygon.obj,\
+OBJECTS7=polygon.obj,imports.obj,\
 quads.obj,rastpos.obj,readpix.obj,rect.obj,scissor.obj,shade.obj,span.obj,\
 pixeltex.obj,convolve.obj
 
@@ -61,7 +61,7 @@ OBJECTS6=vbxform.obj,xform.obj,zoom.obj,bbox.obj,cva.obj,vector.obj,vbindirect.o
 	vertices.obj,[.x86]x86.obj
 
 OBJECTS2=[.x]glxapi.obj,[.x]fakeglx.obj,[.x]xfonts.obj,\
-[.x]xmesa1.obj,[.x]xmesa2.obj,[.x]xmesa3.obj,[.x]xmesa4.obj,\
+[.x]xm_api.obj,[.x]xm_dd.obj,[.x]xm_line.obj,[.x]xm_span.obj,[.x]xm_tri.obj,\
 [.osmesa]osmesa.obj,\
 [.svga]svgamesa.obj
 
@@ -126,6 +126,8 @@ triangle.obj : triangle.c
 
 pixeltex.obj : pixeltex.c
 
+imports.obj : imports.c
+
 [.x86]x86.obj : [.x86]x86.c
 	$(CC) $(CFLAGS) /obj=[.x86]x86.obj [.x86]x86.c
 [.x]glxapi.obj : [.x]glxapi.c
@@ -134,14 +136,16 @@ pixeltex.obj : pixeltex.c
 	$(CC) $(CFLAGS) /obj=[.x]fakeglx.obj [.x]fakeglx.c
 [.x]xfonts.obj : [.x]xfonts.c
 	$(CC) $(CFLAGS) /obj=[.x]xfonts.obj [.x]xfonts.c
-[.x]xmesa1.obj : [.x]xmesa1.c
-	$(CC) $(CFLAGS) /obj=[.x]xmesa1.obj [.x]xmesa1.c
-[.x]xmesa2.obj : [.x]xmesa2.c
-	$(CC) $(CFLAGS) /obj=[.x]xmesa2.obj [.x]xmesa2.c
-[.x]xmesa3.obj : [.x]xmesa3.c
-	$(CC) $(CFLAGS) /obj=[.x]xmesa3.obj [.x]xmesa3.c
-[.x]xmesa4.obj : [.x]xmesa4.c
-	$(CC) $(CFLAGS) /obj=[.x]xmesa4.obj [.x]xmesa4.c
+[.x]xm_api.obj : [.x]xm_api.c
+	$(CC) $(CFLAGS) /obj=[.x]xm_api.obj [.x]xm_api.c
+[.x]xm_dd.obj : [.x]xm_dd.c
+	$(CC) $(CFLAGS) /obj=[.x]xm_dd.obj [.x]xm_dd.c
+[.x]xm_line.obj : [.x]xm_line.c
+	$(CC) $(CFLAGS) /obj=[.x]xm_line.obj [.x]xm_line.c
+[.x]xm_span.obj : [.x]xm_span.c
+	$(CC) $(CFLAGS) /obj=[.x]xm_span.obj [.x]xm_span.c
+[.x]xm_tri.obj : [.x]xm_tri.c
+	$(CC) $(CFLAGS) /obj=[.x]xm_tri.obj [.x]xm_tri.c
 [.osmesa]osmesa.obj : [.osmesa]osmesa.c
 	$(CC) $(CFLAGS) /obj=[.osmesa]osmesa.obj [.osmesa]osmesa.c
 [.svga]svgamesa.obj : [.svga]svgamesa.c

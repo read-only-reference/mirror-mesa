@@ -41,11 +41,39 @@ GL_ARB_texture_compression
 	This is supported in Mesa but only used by the 3dfx DRI drivers
 	for Voodoo4 and later.
 
+GL_ARB_texture_env_add
+	This is identical to GL_EXT_texture_env_add.
+
 GL_NV_blend_square
 	Adds extra blend source and dest factors which allow squaring
 	of color values.
 
 
 
+Device Driver Changes / Core Mesa Changes
+-----------------------------------------
+
+The ctx->Driver.LogicOp() function has been removed.  It used to
+be called during state update in order to determine if the driver
+could do glLogicOp() operations, and if not, set the SWLogicOpEnabled
+flag.  Drivers should instead examine the LogicOp state themselves
+and choose specialized point, line, and triangle functions appropriately,
+or fall back to software rendering.  The Xlib driver was the only driver
+to use this function.  And since the Xlib driver no longer draws
+points, lines or triangles using Xlib, the LogicOp function isn't needed.
+
+The ctx->Driver.Dither() function has been removed.  Drivers should
+detect dither enable/disable via ctx->Driver.Enable() instead.
+
+The ctx->Driver.IndexMask() and ctx->Driver.ColorMask() functions
+are now just called from glIndexMask and glColorMask like the other
+GL state-changing functions.  They are no longer called from inside
+gl_update_state().  Also, they now return void.  The change was made
+mostly for sake of uniformity.
+
+The NEW_DRVSTATE[0123] flags have been removed.  They weren't being used
+and are obsolete w.r.t. the way state updates are done in DRI drivers.
+
+
 ----------------------------------------------------------------------
-$Id: RELNOTES-3.5,v 1.2 2000/08/31 23:04:17 brianp Exp $
+$Id: RELNOTES-3.5,v 1.5 2000/09/25 16:04:35 brianp Exp $

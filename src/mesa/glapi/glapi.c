@@ -1,8 +1,8 @@
-/* $Id: glapi.c,v 1.42 2000/05/24 17:53:30 brianp Exp $ */
+/* $Id: glapi.c,v 1.45 2000/09/26 15:27:22 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  *
@@ -49,6 +49,9 @@
 #include "glapitable.h"
 #include "glthread.h"
 
+#if defined(MESA_TRACE)
+#include "types.h"
+#endif
 
 /* This is used when thread safety is disabled */
 struct _glapi_table *_glapi_Dispatch = (struct _glapi_table *) __glapi_noop_table;
@@ -167,6 +170,10 @@ _glapi_get_context(void)
 void
 _glapi_set_dispatch(struct _glapi_table *dispatch)
 {
+#if defined(MESA_TRACE)
+   GLcontext * ctx;
+#endif
+
    if (!dispatch) {
       /* use the no-op functions */
       dispatch = (struct _glapi_table *) __glapi_noop_table;
@@ -178,14 +185,37 @@ _glapi_set_dispatch(struct _glapi_table *dispatch)
 #endif
 
 #if defined(THREADS)
-   _glthread_SetTSD(&DispatchTSD, (void*) dispatch);
+#if defined(MESA_TRACE)
+   ctx = (GLcontext *)_glthread_GetTSD(&ContextTSD);
+   if (ctx->TraceCtx->traceEnabled == GL_TRUE) {
+      _glthread_SetTSD(&DispatchTSD, (void *) ctx->TraceDispatch);
+      if (ThreadSafe)
+         _glapi_Dispatch = NULL;
+      else
+         _glapi_Dispatch = ctx->TraceDispatch;
+   }
+   else {
+      _glthread_SetTSD(&DispatchTSD, (void *) dispatch);
+      if (ThreadSafe)
+         _glapi_Dispatch = NULL;
+      else
+         _glapi_Dispatch = dispatch;
+   }
+#else
+   _glthread_SetTSD(&DispatchTSD, (void *) dispatch);
    if (ThreadSafe)
       _glapi_Dispatch = NULL;
    else
       _glapi_Dispatch = dispatch;
+#endif /*MESA_TRACE*/
+#else /*THREADS*/
+#if defined(MESA_TRACE)
+   ctx = (GLcontext *)_glthread_GetTSD(&ContextTSD);
+   _glapi_Dispatch = ctx->TraceDispatch;
 #else
    _glapi_Dispatch = dispatch;
-#endif
+#endif /*MESA_TRACE*/
+#endif /*THREADS*/
 }
 
 
@@ -209,6 +239,32 @@ _glapi_get_dispatch(void)
 #endif
 }
 
+
+#if defined(MESA_TRACE)
+struct _glapi_table *
+_glapi_get_true_dispatch(void)
+{
+   GLcontext* ctx;
+
+#if defined(THREADS)
+   if (ThreadSafe) {
+      ctx = (GLcontext *) _glthread_GetTSD(&ContextTSD);
+      assert(ctx);
+      assert(ctx->CurrentDispatch);
+      return ctx->CurrentDispatch;
+   }
+   else {
+      assert(_glapi_Context);
+      assert(((GLcontext *)_glapi_Context)->CurrentDispatch);
+      return ((GLcontext *)_glapi_Context)->CurrentDispatch;
+   }
+#else
+   assert(_glapi_Context);
+   assert(((GLcontext *)_glapi_Context)->CurrentDispatch);
+   return ((GLcontext *)_glapi_Context)->CurrentDispatch;
+#endif
+}
+#endif /* MESA_TRACE */
 
 
 /*
