@@ -1,8 +1,8 @@
-/* $Id: xmesaP.h,v 1.2 1999/10/08 09:27:12 keithw Exp $ */
+/* $Id: xmesaP.h,v 1.4 1999/11/25 17:38:12 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  * 
  * Copyright (C) 1999  Brian Paul   All Rights Reserved.
  * 
@@ -23,9 +23,6 @@
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-/* $XFree86: xc/lib/GL/mesa/src/X/xmesaP.h,v 1.5 1999/07/06 14:51:28 dawes Exp $ */
-
-
 
 
 #ifndef XMESAP_H
@@ -39,7 +36,7 @@
 # ifdef GLX_DIRECT_RENDERING
 #  include "dri_mesa.h"
 # endif
-# ifdef SHM
+# ifdef USE_XSHM
 #  include <X11/extensions/XShm.h>
 # endif
 #endif
@@ -126,7 +123,9 @@ struct xmesa_visual {
 struct xmesa_context {
    GLcontext *gl_ctx;		/* the core library context */
    XMesaVisual xm_visual;	/* Describes the buffers */
-   XMesaBuffer xm_buffer;	/* current framebuffer */
+   XMesaBuffer xm_buffer;	/* current draw framebuffer */
+   XMesaBuffer xm_read_buffer;	/* current read framebuffer */
+   GLboolean use_read_buffer;	/* read from the xm_read_buffer/ */
 
    XMesaDisplay *display;	/* == xm_visual->display */
    GLboolean swapbytes;		/* Host byte order != display byte order? */
@@ -179,7 +178,7 @@ struct xmesa_buffer {
 				/*    0 = not available			*/
 				/*    1 = XImage support available	*/
 				/*    2 = Pixmap support available too	*/
-#ifdef SHM
+#ifdef USE_XSHM
    XShmSegmentInfo shminfo;
 #endif
 #endif
@@ -478,24 +477,24 @@ static int const kernel1[16] = {
 /*
  * Converts a GL window Y coord to an X window Y coord:
  */
-#define FLIP(Y)  (xmesa->xm_buffer->bottom-(Y))
+#define FLIP(BUFFER, Y)  ((BUFFER)->bottom-(Y))
 
 
 /*
  * Return the address of a 1, 2 or 4-byte pixel in the back XImage:
  * X==0 is left, Y==0 is bottom.
  */
-#define PIXELADDR1( X, Y )  \
-      ( xmesa->xm_buffer->ximage_origin1 - (Y) * xmesa->xm_buffer->ximage_width1 + (X) )
+#define PIXELADDR1( BUFFER, X, Y )  \
+   ( (BUFFER)->ximage_origin1 - (Y) * (BUFFER)->ximage_width1 + (X) )
 
-#define PIXELADDR2( X, Y )  \
-      ( xmesa->xm_buffer->ximage_origin2 - (Y) * xmesa->xm_buffer->ximage_width2 + (X) )
+#define PIXELADDR2( BUFFER, X, Y )  \
+   ( (BUFFER)->ximage_origin2 - (Y) * (BUFFER)->ximage_width2 + (X) )
 
-#define PIXELADDR3( X, Y )  \
-      ( xmesa->xm_buffer->ximage_origin3 - (Y) * xmesa->xm_buffer->ximage_width3 + (X) )
+#define PIXELADDR3( BUFFER, X, Y )  \
+   ( (BUFFER)->ximage_origin3 - (Y) * (BUFFER)->ximage_width3 + (X) )
 
-#define PIXELADDR4( X, Y )  \
-      ( xmesa->xm_buffer->ximage_origin4 - (Y) * xmesa->xm_buffer->ximage_width4 + (X) )
+#define PIXELADDR4( BUFFER, X, Y )  \
+   ( (BUFFER)->ximage_origin4 - (Y) * (BUFFER)->ximage_width4 + (X) )
 
 
 

@@ -1,8 +1,8 @@
-/* $Id: extensions.c,v 1.9 1999/10/16 11:30:31 brianp Exp $ */
+/* $Id: extensions.c,v 1.14 1999/11/12 23:38:42 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  * 
  * Copyright (C) 1999  Brian Paul   All Rights Reserved.
  * 
@@ -25,11 +25,16 @@
  */
 
 
-#include <stdlib.h>
+#ifdef PC_HEADER
+#include "all.h"
+#else
+#include "glheader.h"
 #include "context.h"
 #include "extensions.h"
+#include "mem.h"
 #include "simple_list.h"
 #include "types.h"
+#endif
 
 
 #define MAX_EXT_NAMELEN 80
@@ -69,6 +74,7 @@ static struct { int enabled; const char *name; } default_extensions[] = {
    { DEFAULT_ON,     "GL_EXT_compiled_vertex_array" },
    { DEFAULT_OFF,    "GL_EXT_vertex_array_set" },
    { DEFAULT_ON,     "GL_EXT_clip_volume_hint" },
+   { DEFAULT_ON,     "GL_EXT_texture_env_add" },
 };
 
 
@@ -127,6 +133,24 @@ int gl_extensions_disable( GLcontext *ctx, const char *name )
    return 1;
 }
       
+
+/*
+ * Test if the named extension is enabled in this context.
+ */
+GLboolean gl_extension_is_enabled( GLcontext *ctx, const char *name)
+{
+   struct extension *i;
+   foreach( i, ctx->Extensions.ext_list )
+      if (strncmp(i->name, name, MAX_EXT_NAMELEN) == 0) {
+         if (i->enabled)
+            return GL_TRUE;
+         else
+            return GL_FALSE;
+      }
+
+   return GL_FALSE;
+}
+
 
 void gl_extensions_dtr( GLcontext *ctx )
 {
@@ -284,7 +308,7 @@ void (*gl_get_proc_address( const GLubyte *procName ))()
       { "glTexSubImage3DEXT", (gl_function) glTexSubImage3DEXT },
       { "glCopyTexSubImage3DEXT", (gl_function) glCopyTexSubImage3DEXT },
 
-      /* GL_EXT_color_table */
+      /* GL_EXT_paletted_texture */
       { "glColorTableEXT", (gl_function) glColorTableEXT },
       { "glColorSubTableEXT", (gl_function) glColorSubTableEXT },
       { "glGetColorTableEXT", (gl_function) glGetColorTableEXT },

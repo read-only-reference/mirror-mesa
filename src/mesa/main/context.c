@@ -1,8 +1,8 @@
-/* $Id: context.c,v 1.17 1999/10/30 08:22:45 brianp Exp $ */
+/* $Id: context.c,v 1.24 1999/11/30 20:34:51 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  *
  * Copyright (C) 1999  Brian Paul   All Rights Reserved.
  *
@@ -25,8 +25,6 @@
  */
 
 
-/* $XFree86: xc/lib/GL/mesa/src/context.c,v 1.4 1999/04/04 00:20:21 dawes Exp $ */
-
 /*
  * If multi-threading is enabled (-DTHREADS) then each thread has it's
  * own rendering context.  A thread obtains the pointer to its GLcontext
@@ -36,42 +34,35 @@
  */
 
 
-
 #ifdef PC_HEADER
 #include "all.h"
 #else
-#ifndef XFree86Server
-#include <assert.h>
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#else
-#include "GL/xf86glx.h"
-#endif
+#include "glheader.h"
 #include "accum.h"
 #include "alphabuf.h"
-#include "api.h"
 #include "clip.h"
 #include "context.h"
 #include "cva.h"
 #include "depth.h"
+#include "dispatch.h"
 #include "dlist.h"
 #include "eval.h"
 #include "enums.h"
 #include "extensions.h"
 #include "fog.h"
+#include "get.h"
+#include "glapi.h"
 #include "hash.h"
 #include "light.h"
 #include "lines.h"
 #include "dlist.h"
 #include "macros.h"
 #include "matrix.h"
+#include "mem.h"
 #include "mmath.h"
 #include "pb.h"
 #include "pipeline.h"
 #include "points.h"
-#include "pointers.h"
 #include "quads.h"
 #include "shade.h"
 #include "simple_list.h"
@@ -92,45 +83,8 @@
 #include "vbxform.h"
 #include "vertices.h"
 #include "xform.h"
-#ifdef XFree86Server
-#include "GL/xf86glx.h"
-#endif
 #endif
 
-
-/*
- * Memory allocation functions.  Called via the MALLOC, CALLOC and
- * FREE macros when DEBUG symbol is defined.
- * You might want to set breakpoints on these functions or plug in
- * other memory allocation functions.  The Mesa sources should only
- * use the MALLOC and FREE macros (which could also be overriden).
- *
- * XXX these functions should probably go into a new glmemory.c file.
- */
-
-/*
- * Allocate memory (uninitialized)
- */
-void *gl_malloc(size_t bytes)
-{
-   return malloc(bytes);
-}
-
-/*
- * Allocate memory and initialize to zero.
- */
-void *gl_calloc(size_t bytes)
-{
-   return calloc(1, bytes);
-}
-
-/*
- * Free memory
- */
-void gl_free(void *ptr)
-{
-   free(ptr);
-}
 
 
 /**********************************************************************/
@@ -140,27 +94,16 @@ void gl_free(void *ptr)
 
 #ifdef THREADS
 
-#include "mthreads.h" /* Mesa platform independent threads interface */
-
+#include "mthreads.h"
 static MesaTSD mesa_ctx_tsd;
-
 static void mesa_ctx_thread_init() {
   MesaInitTSD(&mesa_ctx_tsd);
 }
 
-GLcontext *gl_get_thread_context( void ) {
-  return (GLcontext *) MesaGetTSD(&mesa_ctx_tsd);
-}
-
-static void set_thread_context( GLcontext *ctx ) {
-  MesaSetTSD(&mesa_ctx_tsd, ctx, mesa_ctx_thread_init);
-}
-
-
 #else
 
 /* One Current Context pointer for all threads in the address space */
-GLcontext *CC = NULL;
+GLcontext *_mesa_current_context = NULL;
 struct immediate *CURRENT_INPUT = NULL;
 
 #endif /*THREADS*/
@@ -581,7 +524,6 @@ static void init_1d_map( struct gl_1d_map *map, int n, const float *initial )
       for (i=0;i<n;i++)
          map->Points[i] = initial[i];
    }
-   map->Retain = GL_FALSE;
 }
 
 
@@ -600,9 +542,19 @@ static void init_2d_map( struct gl_2d_map *map, int n, const float *initial )
       for (i=0;i<n;i++)
          map->Points[i] = initial[i];
    }
-   map->Retain = GL_FALSE;
 }
 
+
+static void init_color_table( struct gl_color_table *p )
+{
+   p->Table[0] = 255;
+   p->Table[1] = 255;
+   p->Table[2] = 255;
+   p->Table[3] = 255;
+   p->Size = 1;
+   p->IntFormat = GL_RGBA;
+   p->Format = GL_RGBA;
+}
 
 
 /*
@@ -932,14 +884,7 @@ static void initialize_context( GLcontext *ctx )
       for (i=0; i<MAX_TEXTURE_UNITS; i++)
          init_texture_unit( ctx, i );
 
-      ctx->Texture.SharedPalette = GL_FALSE;
-      ctx->Texture.Palette[0] = 255;
-      ctx->Texture.Palette[1] = 255;
-      ctx->Texture.Palette[2] = 255;
-      ctx->Texture.Palette[3] = 255;
-      ctx->Texture.PaletteSize = 1;
-      ctx->Texture.PaletteIntFormat = GL_RGBA;
-      ctx->Texture.PaletteFormat = GL_RGBA;
+      init_color_table(&ctx->Texture.Palette);
 
       /* Transformation group */
       ctx->Transform.MatrixMode = GL_MODELVIEW;
@@ -1073,6 +1018,7 @@ static void initialize_context( GLcontext *ctx )
 
       /* For debug/development only */
       ctx->NoRaster = getenv("MESA_NO_RASTER") ? GL_TRUE : GL_FALSE;
+      ctx->FirstTimeCurrent = GL_TRUE;
 
       /* Dither disable */
       ctx->NoDither = getenv("MESA_NO_DITHER") ? GL_TRUE : GL_FALSE;
@@ -1260,7 +1206,8 @@ GLcontext *gl_create_context( GLvisual *visual,
 
    ctx->DriverCtx = driver_ctx;
    ctx->Visual = visual;
-   ctx->Buffer = NULL;
+   ctx->DrawBuffer = NULL;
+   ctx->ReadBuffer = NULL;
 
    ctx->VB = gl_vb_create_for_immediate( ctx );
    if (!ctx->VB) {
@@ -1334,13 +1281,11 @@ GLcontext *gl_create_context( GLvisual *visual,
    ctx->Driver.ReadDepthSpanFloat = gl_read_depth_span_float;
    ctx->Driver.ReadDepthSpanInt = gl_read_depth_span_int;
 
-   
 
 #ifdef PROFILE
    init_timings( ctx );
 #endif
 
-#ifdef GL_VERSION_1_1
    if (!alloc_proxy_textures(ctx)) {
       free_shared_state(ctx, ctx->Shared);
       FREE(ctx->VB);
@@ -1348,10 +1293,11 @@ GLcontext *gl_create_context( GLvisual *visual,
       FREE(ctx);
       return NULL;
    }
-#endif
 
-   gl_init_api_function_pointers( ctx );
-   ctx->API = ctx->Exec;   /* GL_EXECUTE is default */
+   /* setup API dispatch tables */
+   _mesa_init_exec_table( &ctx->Exec );
+   _mesa_init_dlist_table( &ctx->Save );
+   ctx->CurrentDispatch = &ctx->Exec;
 
    return ctx;
 }
@@ -1465,8 +1411,8 @@ void gl_destroy_context( GLcontext *ctx )
       FREE( (void *) ctx );
 
 #ifndef THREADS
-      if (ctx==CC) {
-         CC = NULL;
+      if (ctx == _mesa_current_context) {
+         _mesa_current_context = NULL;
 	 CURRENT_INPUT = NULL;
       }
 #endif
@@ -1535,50 +1481,87 @@ void gl_destroy_framebuffer( GLframebuffer *buffer )
 /*
  * Set the current context, binding the given frame buffer to the context.
  */
-void gl_make_current( GLcontext *ctx, GLframebuffer *buffer )
+void gl_make_current( GLcontext *newCtx, GLframebuffer *buffer )
 {
-   GET_CONTEXT;
-
-   /* Flush the old context
-    */
-   if (CC) {
-      ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(CC, "gl_make_current");
-   }
-
-#ifdef THREADS
-   /* TODO: unbind old buffer from context? */
-   set_thread_context( ctx );
-#else
-   if (CC && CC->Buffer) {
-      /* unbind frame buffer from context */
-      CC->Buffer = NULL;
-   }
-   CC = ctx;
-   if (ctx) {
-      SET_IMMEDIATE(ctx, ctx->input);
-   }
-#endif
-
-   if (MESA_VERBOSE) fprintf(stderr, "gl_make_current()\n");
-
-   if (ctx && buffer) {
-      /* TODO: check if ctx and buffer's visual match??? */
-      ctx->Buffer = buffer;      /* Bind the frame buffer to the context */
-      ctx->NewState = NEW_ALL;   /* just to be safe */
-      gl_update_state( ctx );
-   }
+   gl_make_current2( newCtx, buffer, buffer );
 }
 
 
 /*
- * Return current context handle.
+ * Bind the given context to the given draw-buffer and read-buffer
+ * and make it the current context for this thread.
+ */
+void gl_make_current2( GLcontext *newCtx, GLframebuffer *drawBuffer,
+                       GLframebuffer *readBuffer )
+{
+   GET_CURRENT_CONTEXT(oldCtx);
+
+   /* Flush the old context
+    */
+   if (oldCtx) {
+      ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(oldCtx, "gl_make_current");
+   }
+
+   /* unbind frame buffers from context */
+   if (oldCtx && oldCtx->DrawBuffer) {
+      oldCtx->DrawBuffer = NULL;
+   }
+   if (oldCtx && oldCtx->ReadBuffer) {
+      oldCtx->ReadBuffer = NULL;
+   }
+
+#ifdef THREADS
+   /* TODO: unbind old buffer from context? */
+   MesaSetTSD(&mesa_ctx_tsd, (void *) newCtx, mesa_ctx_thread_init);
+#else
+   _mesa_current_context = newCtx;
+#endif
+   if (newCtx) {
+      SET_IMMEDIATE(newCtx, newCtx->input);
+   }
+
+   if (newCtx)
+      _glapi_set_dispatch(newCtx->CurrentDispatch);
+   else
+      _glapi_set_dispatch(NULL);  /* none current */
+
+   if (MESA_VERBOSE) fprintf(stderr, "gl_make_current()\n");
+
+   if (newCtx && drawBuffer && readBuffer) {
+      /* TODO: check if newCtx and buffer's visual match??? */
+      newCtx->DrawBuffer = drawBuffer;
+      newCtx->ReadBuffer = readBuffer;
+      newCtx->NewState = NEW_ALL;   /* just to be safe */
+      gl_update_state( newCtx );
+   }
+
+   /* We can use this to help debug user's problems.  Tell the to set
+    * the MESA_INFO env variable before running their app.  Then the
+    * first time each context is made current we'll print some useful
+    * information.
+    */
+   if (newCtx->FirstTimeCurrent) {
+      if (getenv("MESA_INFO")) {
+         fprintf(stderr, "Mesa GL_VERSION = %s\n", (char *) _mesa_GetString(GL_VERSION));
+         fprintf(stderr, "Mesa GL_RENDERER = %s\n", (char *) _mesa_GetString(GL_RENDERER));
+         fprintf(stderr, "Mesa GL_VENDOR = %s\n", (char *) _mesa_GetString(GL_VENDOR));
+         fprintf(stderr, "Mesa GL_EXTENSIONS = %s\n", (char *) _mesa_GetString(GL_EXTENSIONS));
+      }
+      newCtx->FirstTimeCurrent = GL_FALSE;
+   }
+}
+
+
+
+/*
+ * Return current context handle for the calling thread.
  */
 GLcontext *gl_get_current_context( void )
 {
 #ifdef THREADS
-   return gl_get_thread_context();
+   return (GLcontext *) MesaGetTSD(&mesa_ctx_tsd);
 #else
-   return CC;
+   return _mesa_current_context;
 #endif
 }
 
@@ -1662,24 +1645,71 @@ void gl_copy_context( const GLcontext *src, GLcontext *dst, GLuint mask )
 }
 
 
-
 /*
- * Someday a GLS library or OpenGL-like debugger may call this function
- * to register it's own set of API entry points.
- * Input: ctx - the context to set API pointers for
- *        api - if NULL, restore original API pointers
- *              else, set API function table to this table.
+ * This should be called by device drivers just before they do a
+ * swapbuffers.  Any pending rendering commands will be executed.
  */
-void gl_set_api_table( GLcontext *ctx, const struct gl_api_table *api )
+void
+_mesa_swapbuffers(GLcontext *ctx)
 {
-   if (api) {
-      MEMCPY( &ctx->API, api, sizeof(struct gl_api_table) );
-   }
-   else {
-      MEMCPY( &ctx->API, &ctx->Exec, sizeof(struct gl_api_table) );
-   }
+   FLUSH_VB( ctx, "swap buffers" );
 }
 
+
+/*
+ * Return pointer to this context's current API dispatch table.
+ * It'll either be the immediate-mode execute dispatcher or the
+ * display list compile dispatcher.
+ */
+struct _glapi_table *
+_mesa_get_dispatch(GLcontext *ctx)
+{
+   return ctx->CurrentDispatch;
+}
+
+
+
+void
+_mesa_ResizeBuffersMESA( void )
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   GLuint buf_width, buf_height;
+
+   if (MESA_VERBOSE & VERBOSE_API)
+      fprintf(stderr, "glResizeBuffersMESA\n");
+
+   /* ask device driver for size of output buffer */
+   (*ctx->Driver.GetBufferSize)( ctx, &buf_width, &buf_height );
+
+   /* see if size of device driver's color buffer (window) has changed */
+   if (ctx->DrawBuffer->Width == (GLint) buf_width &&
+       ctx->DrawBuffer->Height == (GLint) buf_height)
+      return;
+
+   ctx->NewState |= NEW_RASTER_OPS;  /* to update scissor / window bounds */
+
+   /* save buffer size */
+   ctx->DrawBuffer->Width = buf_width;
+   ctx->DrawBuffer->Height = buf_height;
+
+   /* Reallocate other buffers if needed. */
+   if (ctx->Visual->DepthBits>0) {
+      /* reallocate depth buffer */
+      (*ctx->Driver.AllocDepthBuffer)( ctx );
+   }
+   if (ctx->Visual->StencilBits>0) {
+      /* reallocate stencil buffer */
+      gl_alloc_stencil_buffer( ctx );
+   }
+   if (ctx->Visual->AccumBits>0) {
+      /* reallocate accum buffer */
+      gl_alloc_accum_buffer( ctx );
+   }
+   if (ctx->Visual->SoftwareAlpha) {
+      gl_alloc_alpha_buffers( ctx );
+   }
+}
 
 
 
@@ -1801,66 +1831,6 @@ void gl_error( GLcontext *ctx, GLenum error, const char *s )
       (*ctx->Driver.Error)( ctx );
    }
 }
-
-
-
-/*
- * Execute a glGetError command
- */
-GLenum gl_GetError( GLcontext *ctx )
-{
-   GLenum e = ctx->ErrorValue;
-
-   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL( ctx, "glGetError", (GLenum) 0);
-
-   if (MESA_VERBOSE & VERBOSE_API)
-      fprintf(stderr, "glGetError <-- %s\n", gl_lookup_enum_by_nr(e));
-
-   ctx->ErrorValue = (GLenum) GL_NO_ERROR;
-   return e;
-}
-
-
-
-void gl_ResizeBuffersMESA( GLcontext *ctx )
-{
-   GLuint buf_width, buf_height;
-
-   if (MESA_VERBOSE & VERBOSE_API)
-      fprintf(stderr, "glResizeBuffersMESA\n");
-
-   /* ask device driver for size of output buffer */
-   (*ctx->Driver.GetBufferSize)( ctx, &buf_width, &buf_height );
-
-   /* see if size of device driver's color buffer (window) has changed */
-   if (ctx->Buffer->Width == (GLint) buf_width &&
-       ctx->Buffer->Height == (GLint) buf_height)
-      return;
-
-   ctx->NewState |= NEW_RASTER_OPS;  /* to update scissor / window bounds */
-
-   /* save buffer size */
-   ctx->Buffer->Width = buf_width;
-   ctx->Buffer->Height = buf_height;
-
-   /* Reallocate other buffers if needed. */
-   if (ctx->Visual->DepthBits>0) {
-      /* reallocate depth buffer */
-      (*ctx->Driver.AllocDepthBuffer)( ctx );
-   }
-   if (ctx->Visual->StencilBits>0) {
-      /* reallocate stencil buffer */
-      gl_alloc_stencil_buffer( ctx );
-   }
-   if (ctx->Visual->AccumBits>0) {
-      /* reallocate accum buffer */
-      gl_alloc_accum_buffer( ctx );
-   }
-   if (ctx->Visual->SoftwareAlpha) {
-      gl_alloc_alpha_buffers( ctx );
-   }
-}
-
 
 
 
@@ -2024,9 +1994,9 @@ static void update_rasterflags( GLcontext *ctx )
       ctx->RasterMask |= ALPHABUF_BIT;
 
    if (   ctx->Viewport.X<0
-       || ctx->Viewport.X + ctx->Viewport.Width > ctx->Buffer->Width
+       || ctx->Viewport.X + ctx->Viewport.Width > ctx->DrawBuffer->Width
        || ctx->Viewport.Y<0
-       || ctx->Viewport.Y + ctx->Viewport.Height > ctx->Buffer->Height) {
+       || ctx->Viewport.Y + ctx->Viewport.Height > ctx->DrawBuffer->Height) {
       ctx->RasterMask |= WINCLIP_BIT;
    }
 
@@ -2133,14 +2103,6 @@ void gl_update_state( GLcontext *ctx )
       ctx->Texture.Unit[1].LastEnvMode = ctx->Texture.Unit[1].EnvMode;
    }
 
-   if ((ctx->NewState & ~(NEW_CLIENT_STATE|NEW_TEXTURE_ENABLE)) == 0) {
-
-      if (MESA_VERBOSE&VERBOSE_STATE)
-	 fprintf(stderr, "update_state: goto finished\n");
-
-      goto finished;
-   }
-
    if (ctx->NewState & NEW_TEXTURE_MATRIX) {
       ctx->Enabled &= ~(ENABLE_TEXMAT0|ENABLE_TEXMAT1);
 
@@ -2157,7 +2119,7 @@ void gl_update_state( GLcontext *ctx )
       }
    }
 
-   if (ctx->NewState & NEW_TEXTURING) {
+   if (ctx->NewState & (NEW_TEXTURING | NEW_TEXTURE_ENABLE)) {
       ctx->Texture.NeedNormals = GL_FALSE;
       gl_update_dirty_texobjs(ctx);
       ctx->Enabled &= ~(ENABLE_TEXGEN0|ENABLE_TEXGEN1);
@@ -2217,22 +2179,22 @@ void gl_update_state( GLcontext *ctx )
 
 	 /* update scissor region */
 
-	 ctx->Buffer->Xmin = 0;
-	 ctx->Buffer->Ymin = 0;
-	 ctx->Buffer->Xmax = ctx->Buffer->Width-1;
-	 ctx->Buffer->Ymax = ctx->Buffer->Height-1;
+	 ctx->DrawBuffer->Xmin = 0;
+	 ctx->DrawBuffer->Ymin = 0;
+	 ctx->DrawBuffer->Xmax = ctx->DrawBuffer->Width-1;
+	 ctx->DrawBuffer->Ymax = ctx->DrawBuffer->Height-1;
 	 if (ctx->Scissor.Enabled) {
-	    if (ctx->Scissor.X > ctx->Buffer->Xmin) {
-	       ctx->Buffer->Xmin = ctx->Scissor.X;
+	    if (ctx->Scissor.X > ctx->DrawBuffer->Xmin) {
+	       ctx->DrawBuffer->Xmin = ctx->Scissor.X;
 	    }
-	    if (ctx->Scissor.Y > ctx->Buffer->Ymin) {
-	       ctx->Buffer->Ymin = ctx->Scissor.Y;
+	    if (ctx->Scissor.Y > ctx->DrawBuffer->Ymin) {
+	       ctx->DrawBuffer->Ymin = ctx->Scissor.Y;
 	    }
-	    if (ctx->Scissor.X + ctx->Scissor.Width - 1 < ctx->Buffer->Xmax) {
-	       ctx->Buffer->Xmax = ctx->Scissor.X + ctx->Scissor.Width - 1;
+	    if (ctx->Scissor.X + ctx->Scissor.Width - 1 < ctx->DrawBuffer->Xmax) {
+	       ctx->DrawBuffer->Xmax = ctx->Scissor.X + ctx->Scissor.Width - 1;
 	    }
-	    if (ctx->Scissor.Y + ctx->Scissor.Height - 1 < ctx->Buffer->Ymax) {
-	       ctx->Buffer->Ymax = ctx->Scissor.Y + ctx->Scissor.Height - 1;
+	    if (ctx->Scissor.Y + ctx->Scissor.Height - 1 < ctx->DrawBuffer->Ymax) {
+	       ctx->DrawBuffer->Ymax = ctx->Scissor.Y + ctx->Scissor.Height - 1;
 	    }
 	 }
 
@@ -2319,7 +2281,7 @@ void gl_update_state( GLcontext *ctx )
       }
    }
 
-   if (ctx->NewState & ~(NEW_CLIENT_STATE|NEW_TEXTURE_ENABLE|
+   if (ctx->NewState & ~(NEW_CLIENT_STATE|
 			 NEW_DRIVER_STATE|NEW_USER_CLIP|
 			 NEW_POLYGON))
       gl_update_clipmask(ctx);
@@ -2327,6 +2289,7 @@ void gl_update_state( GLcontext *ctx )
    if (ctx->NewState & (NEW_LIGHTING|
 			NEW_RASTER_OPS|
 			NEW_TEXTURING|
+			NEW_TEXTURE_ENABLE|
 			NEW_TEXTURE_ENV|
 			NEW_POLYGON|
 			NEW_DRVSTATE0|
@@ -2478,7 +2441,6 @@ void gl_update_state( GLcontext *ctx )
       gl_update_normal_transform( ctx );
    }
 
- finished:
    gl_update_pipelines(ctx);
    ctx->NewState = 0;
 }

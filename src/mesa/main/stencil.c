@@ -1,8 +1,8 @@
-/* $Id: stencil.c,v 1.6 1999/10/13 18:42:50 brianp Exp $ */
+/* $Id: stencil.c,v 1.10 1999/11/24 18:48:31 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  * 
  * Copyright (C) 1999  Brian Paul   All Rights Reserved.
  * 
@@ -25,26 +25,16 @@
  */
 
 
-/* $XFree86: xc/lib/GL/mesa/src/stencil.c,v 1.3 1999/04/04 00:20:32 dawes Exp $ */
-
 #ifdef PC_HEADER
 #include "all.h"
 #else
-#ifndef XFree86Server
-#include <stdlib.h>
-#include <string.h>
-#else
-#include "GL/xf86glx.h"
-#endif
+#include "glheader.h"
 #include "context.h"
-#include "macros.h"
+#include "mem.h"
 #include "pb.h"
 #include "stencil.h"
 #include "types.h"
 #include "enable.h"
-#ifdef XFree86Server
-#include "GL/xf86glx.h"
-#endif
 #endif
 
 
@@ -58,14 +48,10 @@
 
 
 
-/*
- * Return the address of a stencil buffer value given the window coords:
- */
-#define STENCIL_ADDRESS(X,Y)  (ctx->Buffer->Stencil + ctx->Buffer->Width * (Y) + (X))
-
-
-void gl_ClearStencil( GLcontext *ctx, GLint s )
+void
+_mesa_ClearStencil( GLint s )
 {
+   GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glClearStencil");
    ctx->Stencil.Clear = (GLstencil) s;
 
@@ -76,8 +62,10 @@ void gl_ClearStencil( GLcontext *ctx, GLint s )
 
 
 
-void gl_StencilFunc( GLcontext *ctx, GLenum func, GLint ref, GLuint mask )
+void
+_mesa_StencilFunc( GLenum func, GLint ref, GLuint mask )
 {
+   GET_CURRENT_CONTEXT(ctx);
    GLint maxref;
 
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glStencilFunc");
@@ -99,8 +87,8 @@ void gl_StencilFunc( GLcontext *ctx, GLenum func, GLint ref, GLuint mask )
    }
 
    maxref = (1 << STENCIL_BITS) - 1;
-   ctx->Stencil.Ref = CLAMP( ref, 0, maxref );
-   ctx->Stencil.ValueMask = mask;
+   ctx->Stencil.Ref = (GLstencil) CLAMP( ref, 0, maxref );
+   ctx->Stencil.ValueMask = (GLstencil) mask;
 
    if (ctx->Driver.StencilFunc) {
       (*ctx->Driver.StencilFunc)( ctx, func, ctx->Stencil.Ref, mask );
@@ -109,8 +97,10 @@ void gl_StencilFunc( GLcontext *ctx, GLenum func, GLint ref, GLuint mask )
 
 
 
-void gl_StencilMask( GLcontext *ctx, GLuint mask )
+void
+_mesa_StencilMask( GLuint mask )
 {
+   GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glStencilMask");
    ctx->Stencil.WriteMask = (GLstencil) mask;
 
@@ -121,8 +111,10 @@ void gl_StencilMask( GLcontext *ctx, GLuint mask )
 
 
 
-void gl_StencilOp( GLcontext *ctx, GLenum fail, GLenum zfail, GLenum zpass )
+void
+_mesa_StencilOp( GLenum fail, GLenum zfail, GLenum zpass )
 {
+   GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glStencilOp");
    switch (fail) {
       case GL_KEEP:
@@ -199,6 +191,13 @@ ENDIF
 
 
 
+/*
+ * Return the address of a stencil buffer value given the window coords:
+ */
+#define STENCIL_ADDRESS(X,Y)  \
+       (ctx->DrawBuffer->Stencil + ctx->DrawBuffer->Width * (Y) + (X))
+
+
 
 /*
  * Apply the given stencil operator for each pixel in the span whose
@@ -214,7 +213,7 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 {
    const GLstencil ref = ctx->Stencil.Ref;
    const GLstencil wrtmask = ctx->Stencil.WriteMask;
-   const GLstencil invmask = ~ctx->Stencil.WriteMask;
+   const GLstencil invmask = (GLstencil) (~ctx->Stencil.WriteMask);
    GLstencil *stencil = STENCIL_ADDRESS( x, y );
    GLuint i;
 
@@ -233,7 +232,7 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 	 else {
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
-		  stencil[i] = stencil[i] & invmask;
+		  stencil[i] = (GLstencil) (stencil[i] & invmask);
 	       }
 	    }
 	 }
@@ -250,7 +249,7 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
 		  GLstencil s = stencil[i];
-		  stencil[i] = (invmask & s ) | (wrtmask & ref);
+		  stencil[i] = (GLstencil) ((invmask & s ) | (wrtmask & ref));
 	       }
 	    }
 	 }
@@ -261,7 +260,7 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 	       if (mask[i]) {
 		  GLstencil s = stencil[i];
 		  if (s < STENCIL_MAX) {
-		     stencil[i] = s+1;
+		     stencil[i] = (GLstencil) (s+1);
 		  }
 	       }
 	    }
@@ -272,7 +271,7 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 		  /* VERIFY logic of adding 1 to a write-masked value */
 		  GLstencil s = stencil[i];
 		  if (s < STENCIL_MAX) {
-		     stencil[i] = (invmask & s) | (wrtmask & (s+1));
+		     stencil[i] = (GLstencil) ((invmask & s) | (wrtmask & (s+1)));
 		  }
 	       }
 	    }
@@ -284,7 +283,7 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 	       if (mask[i]) {
 		  GLstencil s = stencil[i];
 		  if (s>0) {
-		     stencil[i] = s-1;
+		     stencil[i] = (GLstencil) (s-1);
 		  }
 	       }
 	    }
@@ -295,7 +294,7 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 		  /* VERIFY logic of subtracting 1 to a write-masked value */
 		  GLstencil s = stencil[i];
 		  if (s>0) {
-		     stencil[i] = (invmask & s) | (wrtmask & (s-1));
+		     stencil[i] = (GLstencil) ((invmask & s) | (wrtmask & (s-1)));
 		  }
 	       }
 	    }
@@ -313,7 +312,7 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
                   GLstencil s = stencil[i];
-                  stencil[i] = (invmask & s) | (wrtmask & (stencil[i]+1));
+                  stencil[i] = (GLstencil) ((invmask & s) | (wrtmask & (stencil[i]+1)));
 	       }
 	    }
 	 }
@@ -330,7 +329,7 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
                   GLstencil s = stencil[i];
-                  stencil[i] = (invmask & s) | (wrtmask & (stencil[i]-1));
+                  stencil[i] = (GLstencil) ((invmask & s) | (wrtmask & (stencil[i]-1)));
 	       }
 	    }
 	 }
@@ -340,7 +339,7 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
 		  GLstencil s = stencil[i];
-		  stencil[i] = ~s;
+		  stencil[i] = (GLstencil) ~s;
 	       }
 	    }
 	 }
@@ -348,7 +347,7 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
 		  GLstencil s = stencil[i];
-		  stencil[i] = (invmask & s) | (wrtmask & ~s);
+		  stencil[i] = (GLstencil) ((invmask & s) | (wrtmask & ~s));
 	       }
 	    }
 	 }
@@ -405,10 +404,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 allfail = 1;
 	 break;
       case GL_LESS:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (stencil[i] & ctx->Stencil.ValueMask);
 	       if (r < s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -424,10 +423,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 }
 	 break;
       case GL_LEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (stencil[i] & ctx->Stencil.ValueMask);
 	       if (r <= s) {
 		  /* pass */
 		  fail[i] = 0;
@@ -443,10 +442,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 }
 	 break;
       case GL_GREATER:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (stencil[i] & ctx->Stencil.ValueMask);
 	       if (r > s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -462,10 +461,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 }
 	 break;
       case GL_GEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (stencil[i] & ctx->Stencil.ValueMask);
 	       if (r >= s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -481,10 +480,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 }
 	 break;
       case GL_EQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (stencil[i] & ctx->Stencil.ValueMask);
 	       if (r == s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -500,10 +499,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 }
 	 break;
       case GL_NOTEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (stencil[i] & ctx->Stencil.ValueMask);
 	       if (r != s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -611,7 +610,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
    GLstencil wrtmask, invmask;
 
    wrtmask = ctx->Stencil.WriteMask;
-   invmask = ~ctx->Stencil.WriteMask;
+   invmask = (GLstencil) (~ctx->Stencil.WriteMask);
 
    ref = ctx->Stencil.Ref;
 
@@ -632,7 +631,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
-		  *sptr = invmask & *sptr;
+		  *sptr = (GLstencil) (invmask & *sptr);
 	       }
 	    }
 	 }
@@ -650,7 +649,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
-		  *sptr = (invmask & *sptr ) | (wrtmask & ref);
+		  *sptr = (GLstencil) ((invmask & *sptr ) | (wrtmask & ref));
 	       }
 	    }
 	 }
@@ -661,7 +660,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
 		  if (*sptr < STENCIL_MAX) {
-		     *sptr = *sptr + 1;
+		     *sptr = (GLstencil) (*sptr + 1);
 		  }
 	       }
 	    }
@@ -671,7 +670,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
 		  if (*sptr < STENCIL_MAX) {
-		     *sptr = (invmask & *sptr) | (wrtmask & (*sptr+1));
+		     *sptr = (GLstencil) ((invmask & *sptr) | (wrtmask & (*sptr+1)));
 		  }
 	       }
 	    }
@@ -683,7 +682,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
 		  if (*sptr>0) {
-		     *sptr = *sptr - 1;
+		     *sptr = (GLstencil) (*sptr - 1);
 		  }
 	       }
 	    }
@@ -693,7 +692,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
 		  if (*sptr>0) {
-		     *sptr = (invmask & *sptr) | (wrtmask & (*sptr-1));
+		     *sptr = (GLstencil) ((invmask & *sptr) | (wrtmask & (*sptr-1)));
 		  }
 	       }
 	    }
@@ -704,7 +703,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
-                  *sptr = *sptr + 1;
+                  *sptr = (GLstencil) (*sptr + 1);
 	       }
 	    }
 	 }
@@ -712,7 +711,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
-                  *sptr = (invmask & *sptr) | (wrtmask & (*sptr+1));
+                  *sptr = (GLstencil) ((invmask & *sptr) | (wrtmask & (*sptr+1)));
 	       }
 	    }
 	 }
@@ -722,7 +721,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
-                  *sptr = *sptr - 1;
+                  *sptr = (GLstencil) (*sptr - 1);
 	       }
 	    }
 	 }
@@ -730,7 +729,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
-                  *sptr = (invmask & *sptr) | (wrtmask & (*sptr-1));
+                  *sptr = (GLstencil) ((invmask & *sptr) | (wrtmask & (*sptr-1)));
 	       }
 	    }
 	 }
@@ -740,7 +739,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
-                  *sptr = ~*sptr;
+                  *sptr = (GLstencil) (~*sptr);
 	       }
 	    }
 	 }
@@ -748,7 +747,7 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	    for (i=0;i<n;i++) {
 	       if (mask[i]) {
                   GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
-                  *sptr = (invmask & *sptr) | (wrtmask & ~*sptr);
+                  *sptr = (GLstencil) ((invmask & *sptr) | (wrtmask & ~*sptr));
 	       }
 	    }
 	 }
@@ -803,11 +802,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 allfail = 1;
 	 break;
       case GL_LESS:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (*sptr & ctx->Stencil.ValueMask);
 	       if (r < s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -823,11 +822,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 }
 	 break;
       case GL_LEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (*sptr & ctx->Stencil.ValueMask);
 	       if (r <= s) {
 		  /* pass */
 		  fail[i] = 0;
@@ -843,11 +842,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 }
 	 break;
       case GL_GREATER:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (*sptr & ctx->Stencil.ValueMask);
 	       if (r > s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -863,11 +862,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 }
 	 break;
       case GL_GEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (*sptr & ctx->Stencil.ValueMask);
 	       if (r >= s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -883,11 +882,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 }
 	 break;
       case GL_EQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (*sptr & ctx->Stencil.ValueMask);
 	       if (r == s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -903,11 +902,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 }
 	 break;
       case GL_NOTEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = (GLstencil) (ctx->Stencil.Ref & ctx->Stencil.ValueMask);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = (GLstencil) (*sptr & ctx->Stencil.ValueMask);
 	       if (r != s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -1008,7 +1007,7 @@ void gl_depth_stencil_pixels( GLcontext *ctx,
 void gl_read_stencil_span( GLcontext *ctx,
                            GLuint n, GLint x, GLint y, GLstencil stencil[] )
 {
-   if (ctx->Buffer->Stencil) {
+   if (ctx->DrawBuffer->Stencil) {
       const GLstencil *s = STENCIL_ADDRESS( x, y );
 #if STENCIL_BITS == 8
       MEMCPY( stencil, s, n * sizeof(GLstencil) );
@@ -1032,7 +1031,7 @@ void gl_write_stencil_span( GLcontext *ctx,
                             GLuint n, GLint x, GLint y,
 			    const GLstencil stencil[] )
 {
-   if (ctx->Buffer->Stencil) {
+   if (ctx->DrawBuffer->Stencil) {
       GLstencil *s = STENCIL_ADDRESS( x, y );
 #if STENCIL_BITS == 8
       MEMCPY( s, stencil, n * sizeof(GLstencil) );
@@ -1052,19 +1051,19 @@ void gl_write_stencil_span( GLcontext *ctx,
  */
 void gl_alloc_stencil_buffer( GLcontext *ctx )
 {
-   GLuint buffersize = ctx->Buffer->Width * ctx->Buffer->Height;
+   GLuint buffersize = ctx->DrawBuffer->Width * ctx->DrawBuffer->Height;
 
    /* deallocate current stencil buffer if present */
-   if (ctx->Buffer->Stencil) {
-      FREE(ctx->Buffer->Stencil);
-      ctx->Buffer->Stencil = NULL;
+   if (ctx->DrawBuffer->Stencil) {
+      FREE(ctx->DrawBuffer->Stencil);
+      ctx->DrawBuffer->Stencil = NULL;
    }
 
    /* allocate new stencil buffer */
-   ctx->Buffer->Stencil = (GLstencil *) MALLOC(buffersize * sizeof(GLstencil));
-   if (!ctx->Buffer->Stencil) {
+   ctx->DrawBuffer->Stencil = (GLstencil *) MALLOC(buffersize * sizeof(GLstencil));
+   if (!ctx->DrawBuffer->Stencil) {
       /* out of memory */
-      gl_set_enable( ctx, GL_STENCIL_TEST, GL_FALSE );
+      _mesa_set_enable( ctx, GL_STENCIL_TEST, GL_FALSE );
       gl_error( ctx, GL_OUT_OF_MEMORY, "gl_alloc_stencil_buffer" );
    }
 }
@@ -1078,7 +1077,7 @@ void gl_alloc_stencil_buffer( GLcontext *ctx )
  */
 void gl_clear_stencil_buffer( GLcontext *ctx )
 {
-   if (ctx->Visual->StencilBits==0 || !ctx->Buffer->Stencil) {
+   if (ctx->Visual->StencilBits==0 || !ctx->DrawBuffer->Stencil) {
       /* no stencil buffer */
       return;
    }
@@ -1086,9 +1085,9 @@ void gl_clear_stencil_buffer( GLcontext *ctx )
    if (ctx->Scissor.Enabled) {
       /* clear scissor region only */
       GLint y;
-      GLint width = ctx->Buffer->Xmax - ctx->Buffer->Xmin + 1;
-      for (y=ctx->Buffer->Ymin; y<=ctx->Buffer->Ymax; y++) {
-         GLstencil *ptr = STENCIL_ADDRESS( ctx->Buffer->Xmin, y );
+      GLint width = ctx->DrawBuffer->Xmax - ctx->DrawBuffer->Xmin + 1;
+      for (y=ctx->DrawBuffer->Ymin; y<=ctx->DrawBuffer->Ymax; y++) {
+         GLstencil *ptr = STENCIL_ADDRESS( ctx->DrawBuffer->Xmin, y );
 #if STENCIL_BITS==8
          MEMSET( ptr, ctx->Stencil.Clear, width * sizeof(GLstencil) );
 #else
@@ -1101,12 +1100,12 @@ void gl_clear_stencil_buffer( GLcontext *ctx )
    else {
       /* clear whole stencil buffer */
 #if STENCIL_BITS==8
-      MEMSET( ctx->Buffer->Stencil, ctx->Stencil.Clear,
-              ctx->Buffer->Width * ctx->Buffer->Height * sizeof(GLstencil) );
+      MEMSET( ctx->DrawBuffer->Stencil, ctx->Stencil.Clear,
+              ctx->DrawBuffer->Width * ctx->DrawBuffer->Height * sizeof(GLstencil) );
 #else
       GLuint i;
-      GLuint pixels = ctx->Buffer->Width * ctx->Buffer->Height;
-      GLstencil *buffer = ctx->Buffer->Stencil;
+      GLuint pixels = ctx->DrawBuffer->Width * ctx->DrawBuffer->Height;
+      GLstencil *buffer = ctx->DrawBuffer->Stencil;
       for (i = 0; i < pixels; i++)
          ptr[i] = ctx->Stencil.Clear;
 #endif

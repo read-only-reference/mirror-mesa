@@ -1,8 +1,8 @@
-/* $Id: enable.c,v 1.7 1999/10/20 22:16:45 brianp Exp $ */
+/* $Id: enable.c,v 1.10 1999/11/11 01:22:26 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  * 
  * Copyright (C) 1999  Brian Paul   All Rights Reserved.
  * 
@@ -25,17 +25,10 @@
  */
 
 
-/* $XFree86: xc/lib/GL/mesa/src/enable.c,v 1.3 1999/04/04 00:20:23 dawes Exp $ */
-
 #ifdef PC_HEADER
 #include "all.h"
 #else
-#ifndef XFree86Server
-#include <stdio.h>
-#include <string.h>
-#else
-#include "GL/xf86glx.h"
-#endif
+#include "glheader.h"
 #include "context.h"
 #include "enable.h"
 #include "light.h"
@@ -47,9 +40,6 @@
 #include "vbfill.h"
 #include "xform.h"
 #include "enums.h"
-#ifdef XFree86Server
-#include "GL/xf86glx.h"
-#endif
 #endif
 
 
@@ -57,7 +47,7 @@
 /*
  * Perform glEnable and glDisable calls.
  */
-void gl_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
+void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
 {
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH( ctx, "gl_enable/disable" );
 
@@ -126,6 +116,8 @@ void gl_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
          if (ctx->Light.ColorMaterialEnabled!=state) {
             ctx->Light.ColorMaterialEnabled = state;
 	    ctx->NewState |= NEW_LIGHTING;
+            if (state)
+               gl_update_color_material( ctx, ctx->Current.ByteColor );
          }
 	 break;
       case GL_CULL_FACE:
@@ -479,22 +471,28 @@ void gl_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
 
 
 
-void gl_Enable( GLcontext* ctx, GLenum cap )
+void
+_mesa_Enable( GLenum cap )
 {
-   gl_set_enable( ctx, cap, GL_TRUE );
+   GET_CURRENT_CONTEXT(ctx);
+   _mesa_set_enable( ctx, cap, GL_TRUE );
 }
 
 
 
-void gl_Disable( GLcontext* ctx, GLenum cap )
+void
+_mesa_Disable( GLenum cap )
 {
-   gl_set_enable( ctx, cap, GL_FALSE );
+   GET_CURRENT_CONTEXT(ctx);
+   _mesa_set_enable( ctx, cap, GL_FALSE );
 }
 
 
 
-GLboolean gl_IsEnabled( GLcontext* ctx, GLenum cap )
+GLboolean
+_mesa_IsEnabled( GLenum cap )
 {
+   GET_CURRENT_CONTEXT(ctx);
    switch (cap) {
       case GL_ALPHA_TEST:
          return ctx->Color.AlphaEnabled;
@@ -657,7 +655,8 @@ GLboolean gl_IsEnabled( GLcontext* ctx, GLenum cap )
 
 
 
-static void gl_client_state( GLcontext *ctx, GLenum cap, GLboolean state )
+static void
+client_state( GLcontext *ctx, GLenum cap, GLboolean state )
 {
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH( ctx, 
 				       (state 
@@ -692,15 +691,19 @@ static void gl_client_state( GLcontext *ctx, GLenum cap, GLboolean state )
 
 
 
-void gl_EnableClientState( GLcontext *ctx, GLenum cap )
+void
+_mesa_EnableClientState( GLenum cap )
 {
-   gl_client_state( ctx, cap, GL_TRUE );
+   GET_CURRENT_CONTEXT(ctx);
+   client_state( ctx, cap, GL_TRUE );
 }
 
 
 
-void gl_DisableClientState( GLcontext *ctx, GLenum cap )
+void
+_mesa_DisableClientState( GLenum cap )
 {
-   gl_client_state( ctx, cap, GL_FALSE );
+   GET_CURRENT_CONTEXT(ctx);
+   client_state( ctx, cap, GL_FALSE );
 }
 

@@ -1,8 +1,8 @@
-/* $Id: glx.h,v 1.5 1999/10/27 09:46:07 brianp Exp $ */
+/* $Id: glx.h,v 1.9 1999/11/24 17:04:46 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  * 
  * Copyright (C) 1999  Brian Paul   All Rights Reserved.
  * 
@@ -49,39 +49,33 @@ extern "C" {
 
 
 #define GLX_VERSION_1_1		1
+#define GLX_VERSION_1_2		1
+#define GLX_VERSION_1_3		1
+
+#define GLX_EXTENSION_NAME   "GLX"
+
 
 
 /*
  * Tokens for glXChooseVisual and glXGetConfig:
  */
-enum _GLX_CONFIGS {
-	GLX_USE_GL		= 1,
-	GLX_BUFFER_SIZE		= 2,
-	GLX_LEVEL		= 3,
-	GLX_RGBA		= 4,
-	GLX_DOUBLEBUFFER	= 5, 
-	GLX_STEREO		= 6,
-	GLX_AUX_BUFFERS		= 7,
-	GLX_RED_SIZE		= 8,
-	GLX_GREEN_SIZE		= 9,
-	GLX_BLUE_SIZE		= 10,
-	GLX_ALPHA_SIZE		= 11,
-	GLX_DEPTH_SIZE		= 12,
-	GLX_STENCIL_SIZE	= 13,
-	GLX_ACCUM_RED_SIZE	= 14,
-	GLX_ACCUM_GREEN_SIZE	= 15,
-	GLX_ACCUM_BLUE_SIZE	= 16,
-	GLX_ACCUM_ALPHA_SIZE	= 17,
-
-	/* GLX_EXT_visual_info extension */
-	GLX_X_VISUAL_TYPE_EXT		= 0x22,
-	GLX_TRANSPARENT_TYPE_EXT	= 0x23,
-	GLX_TRANSPARENT_INDEX_VALUE_EXT	= 0x24,
-	GLX_TRANSPARENT_RED_VALUE_EXT	= 0x25,
-	GLX_TRANSPARENT_GREEN_VALUE_EXT	= 0x26,
-	GLX_TRANSPARENT_BLUE_VALUE_EXT	= 0x27,
-	GLX_TRANSPARENT_ALPHA_VALUE_EXT	= 0x28
-};
+#define GLX_USE_GL		1
+#define GLX_BUFFER_SIZE		2
+#define GLX_LEVEL		3
+#define GLX_RGBA		4
+#define GLX_DOUBLEBUFFER	5
+#define GLX_STEREO		6
+#define GLX_AUX_BUFFERS		7
+#define GLX_RED_SIZE		8
+#define GLX_GREEN_SIZE		9
+#define GLX_BLUE_SIZE		10
+#define GLX_ALPHA_SIZE		11
+#define GLX_DEPTH_SIZE		12
+#define GLX_STENCIL_SIZE	13
+#define GLX_ACCUM_RED_SIZE	14
+#define GLX_ACCUM_GREEN_SIZE	15
+#define GLX_ACCUM_BLUE_SIZE	16
+#define GLX_ACCUM_ALPHA_SIZE	17
 
 
 /*
@@ -102,6 +96,75 @@ enum _GLX_CONFIGS {
 #define GLX_VENDOR		1
 #define GLX_VERSION		2
 #define GLX_EXTENSIONS 		3
+
+
+/*
+ * GLX 1.3 and later:
+ * XXX don't know the values of some of these enums!
+ * XXX some 1.3 enums may be missing!
+ */
+#define GLX_CONFIG_CAVEAT		?
+#define GLX_DONT_CARE			?
+#define GLX_SLOW_CONFIG			?
+#define GLX_NON_CONFORMANT_CONFIG	?
+#define GLX_X_VISUAL_TYPE		0x22
+#define GLX_TRANSPARENT_TYPE		0x23
+#define GLX_TRANSPARENT_INDEX_VALUE	0x24
+#define GLX_TRANSPARENT_RED_VALUE	0x25
+#define GLX_TRANSPARENT_GREEN_VALUE	0x26
+#define GLX_TRANSPARENT_BLUE_VALUE	0x27
+#define GLX_TRANSPARENT_ALPHA_VALUE	0x28
+#define GLX_MAX_PBUFFER_WIDTH		?
+#define GLX_MAX_PBUFFER_HEIGHT		?
+#define GLX_MAX_PBUFFER_PIXELS		?
+#define GLX_PRESERVED_CONTENTS		?
+#define GLX_LARGEST_BUFFER		?
+#define GLX_DRAWABLE_TYPE		?
+#define GLX_FBCONFIG_ID			?
+#define GLX_VISUAL_ID			?
+#define GLX_WINDOW_BIT			?
+#define GLX_PIXMAP_BIT			?
+#define GLX_PBUFFER_BIT			?
+#define GLX_AUX_BUFFERS_BIT		?
+#define GLX_FRONT_LEFT_BUFFER_BIT	?
+#define GLX_FRONT_RIGHT_BUFFER_BIT	?
+#define GLX_BACK_LEFT_BUFFER_BIT	?
+#define GLX_BACK_RIGHT_BUFFER_BIT	?
+#define GLX_AUX_BUFFERS_BIT		?
+#define GLX_DEPTH_BUFFER_BIT		?
+#define GLX_STENCIL_BUFFER_BIT		?
+#define GLX_ACCUM_BUFFER_BIT		?
+#define GLX_RENDER_TYPE			?
+#define GLX_DRAWABLE_TYPE		?
+#define GLX_X_RENDERABLE		?
+#define GLX_NONE			0x8000
+#define GLX_TRUE_COLOR			0x8002
+#define GLX_DIRECT_COLOR		0x8003
+#define GLX_PSEUDO_COLOR		0x8004
+#define GLX_STATIC_COLOR		0x8005
+#define GLX_GRAY_SCALE			0x8006
+#define GLX_STATIC_GRAY			0x8007
+#define GLX_TRANSPARENT_INDEX		0x8009
+#define GLX_COLOR_INDEX_TYPE		?
+#define GLX_COLOR_INDEX_BIT		?
+#define GLX_SCREEN			?
+#define GLX_PBUFFER_CLOBBER_MASK	?
+#define GLX_DAMAGED			?
+#define GLX_SAVED			?
+#define GLX_WINDOW			?
+#define GLX_PBUFFER			?
+
+
+/*
+ * GLX_EXT_visual_info extension
+ */
+#define GLX_X_VISUAL_TYPE_EXT		0x22
+#define GLX_TRANSPARENT_TYPE_EXT	0x23
+#define GLX_TRANSPARENT_INDEX_VALUE_EXT	0x24
+#define GLX_TRANSPARENT_RED_VALUE_EXT	0x25
+#define GLX_TRANSPARENT_GREEN_VALUE_EXT	0x26
+#define GLX_TRANSPARENT_BLUE_VALUE_EXT	0x27
+#define GLX_TRANSPARENT_ALPHA_VALUE_EXT	0x28
 
 
 /*
@@ -139,6 +202,12 @@ enum _GLX_CONFIGS {
    typedef void * GLXContext;
    typedef XID GLXPixmap;
    typedef XID GLXDrawable;
+   /* GLX 1.3 and later */
+   typedef XID GLXFBConfigID;
+   typedef XID GLXPfuffer;
+   typedef XID GLXWindow;
+   typedef XID GLXPbuffer;
+   typedef XID GLXFBConfig;
 #endif
 typedef XID GLXContextID;
 
@@ -192,6 +261,57 @@ extern const char *glXQueryExtensionsString( Display *dpy, int screen );
 extern const char *glXQueryServerString( Display *dpy, int screen, int name );
 
 extern const char *glXGetClientString( Display *dpy, int name );
+
+
+/* GLX 1.2 and later */
+extern Display *glXGetCurrentDisplay( void );
+
+
+/* GLX 1.3 and later */
+extern GLXFBConfig glXChooseFBConfig( Display *dpy, int screen,
+                                      const int *attribList, int *nitems );
+
+extern int glXGetFBConfigAttrib( Display *dpy, GLXFBConfig config,
+                                 int attribute, int *value );
+
+extern XVisualInfo *glXGetVisualFromFBConfig( Display *dpy,
+                                              GLXFBConfig config );
+
+extern GLXWindow glXCreateWindow( Display *dpy, GLXFBConfig config,
+                                  Window win, const int *attribList );
+
+extern void glXDestroyWindow( Display *dpy, GLXWindow window );
+
+extern GLXPixmap glXCreatePixmap( Display *dpy, GLXFBConfig config,
+                                  Pixmap pixmap, const int *attribList );
+
+extern void glXDestroyPixmap( Display *dpy, GLXPixmap pixmap );
+
+extern GLXPbuffer glXCreatePbuffer( Display *dpy, GLXFBConfig config,
+                                    const int *attribList );
+
+extern void glXDestroyPbuffer( Display *dpy, GLXPbuffer pbuf );
+
+extern void glXQueryDrawable( Display *dpy, GLXDrawable draw, int attribute,
+                              unsigned int *value );
+
+extern GLXContext glXCreateNewContext( Display *dpy, GLXFBConfig config,
+                                       int renderType, GLXContext shareList,
+                                       Bool direct );
+
+extern Bool glXMakeContextCurrent( Display *dpy, GLXDrawable draw,
+                                   GLXDrawable read, GLXContext ctx );
+
+extern GLXDrawable glXGetCurrentReadDrawable( void );
+
+extern int glXQueryContext( Display *dpy, GLXContext ctx, int attribute,
+                            int *value );
+
+extern void glXSelectEvent( Display *dpy, GLXDrawable drawable,
+                            unsigned long mask );
+
+extern void glXGetSelectedEvent( Display *dpy, GLXDrawable drawable,
+                                 unsigned long *mask );
 
 
 

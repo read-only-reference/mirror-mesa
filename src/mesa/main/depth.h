@@ -1,9 +1,8 @@
-
-/* $Id: depth.h,v 1.2 1999/10/08 09:27:10 keithw Exp $ */
+/* $Id: depth.h,v 1.4 1999/11/24 18:48:31 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  * 
  * Copyright (C) 1999  Brian Paul   All Rights Reserved.
  * 
@@ -26,9 +25,6 @@
  */
 
 
-
-
-
 #ifndef DEPTH_H
 #define DEPTH_H
 
@@ -40,7 +36,7 @@
  * Return the address of the Z-buffer value for window coordinate (x,y):
  */
 #define Z_ADDRESS( CTX, X, Y )  \
-            ((CTX)->Buffer->Depth + (CTX)->Buffer->Width * (Y) + (X))
+            ((CTX)->DrawBuffer->Depth + (CTX)->DrawBuffer->Width * (Y) + (X))
 
 
 
@@ -90,10 +86,16 @@ extern void gl_alloc_depth_buffer( GLcontext* ctx );
 extern void gl_clear_depth_buffer( GLcontext* ctx );
 
 
-extern void gl_ClearDepth( GLcontext* ctx, GLclampd depth );
 
-extern void gl_DepthFunc( GLcontext* ctx, GLenum func );
+extern void
+_mesa_ClearDepth( GLclampd depth );
 
-extern void gl_DepthMask( GLcontext* ctx, GLboolean flag );
+extern void
+_mesa_DepthFunc( GLenum func );
+
+
+extern void
+_mesa_DepthMask( GLboolean flag );
+
 
 #endif

@@ -1,8 +1,8 @@
-/* $Id: xmesa.h,v 1.1 1999/08/19 00:55:40 jtg Exp $ */
+/* $Id: xmesa.h,v 1.3 1999/11/24 18:45:44 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  * 
  * Copyright (C) 1999  Brian Paul   All Rights Reserved.
  * 
@@ -22,23 +22,6 @@
  * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- */
-
-
-/*
- * $Log: xmesa.h,v $
- * Revision 1.1  1999/08/19 00:55:40  jtg
- * Initial revision
- *
- * Revision 1.3  1999/02/24 22:43:27  jens
- * Name changes to get XMesa to compile standalone inside XFree86
- *
- * Revision 1.2  1999/02/14 03:39:09  brianp
- * new copyright
- *
- * Revision 1.1  1998/02/13 03:17:32  brianp
- * Initial revision
- *
  */
 
 
@@ -106,7 +89,7 @@ extern struct Library *XLibBase;
 
 
 #define XMESA_MAJOR_VERSION 3
-#define XMESA_MINOR_VERSION 0
+#define XMESA_MINOR_VERSION 3
 
 
 
@@ -227,15 +210,32 @@ extern GLboolean XMesaMakeCurrent( XMesaContext c,
 
 
 /*
+ * Bind two buffers (read and draw) to a context and make the
+ * context the current one.
+ * New in Mesa 3.3
+ */
+extern GLboolean XMesaMakeCurrent2( XMesaContext c,
+                                    XMesaBuffer drawBuffer,
+                                    XMesaBuffer readBuffer );
+
+
+/*
  * Return a handle to the current context.
  */
 extern XMesaContext XMesaGetCurrentContext( void );
 
 
 /*
- * Return handle to the current buffer.
+ * Return handle to the current (draw) buffer.
  */
 extern XMesaBuffer XMesaGetCurrentBuffer( void );
+
+
+/*
+ * Return handle to the current read buffer.
+ * New in Mesa 3.3
+ */
+extern XMesaBuffer XMesaGetCurrentReadBuffer( void );
 
 
 /*

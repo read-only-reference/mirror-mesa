@@ -1,4 +1,4 @@
-/* $Id: varray.c,v 1.5 1999/10/19 18:37:05 keithw Exp $ */
+/* $Id: varray.c,v 1.17 1999/11/19 00:03:27 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -27,15 +27,8 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
-#ifndef XFree86Server
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#else
-#include "GL/xf86glx.h"
-#endif
+#include "glheader.h"
 #include "context.h"
-#include "api.h"
 #include "cva.h"
 #include "enable.h"
 #include "enums.h"
@@ -54,24 +47,14 @@
 #include "vbindirect.h"
 #include "vbxform.h"
 #include "xform.h"
-#ifdef XFree86Server
-#include "GL/xf86glx.h"
-#endif
-#endif
-
-#if defined(GLX_DIRECT_RENDERING) && !defined(XFree86Server) && !defined(GLX_USE_DLOPEN)
-#define NEED_MESA_FUNCS_WRAPPED
-#include "mesa_api.h"
 #endif
 
 
-void GLAPIENTRY glVertexPointer(CTX_ARG GLint size, GLenum type, GLsizei stride,
-                                 const GLvoid *ptr )
+
+void
+_mesa_VertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr)
 {
-   GLcontext *ctx;
-   GET_CONTEXT;
-   CHECK_CONTEXT;
-   ctx = CC;
+   GET_CURRENT_CONTEXT(ctx);
    
    if (size<2 || size>4) {
       gl_error( ctx, GL_INVALID_VALUE, "glVertexPointer(size)" );
@@ -120,13 +103,10 @@ void GLAPIENTRY glVertexPointer(CTX_ARG GLint size, GLenum type, GLsizei stride,
 
 
 
-void GLAPIENTRY glNormalPointer(CTX_ARG GLenum type, GLsizei stride,
-                                 const GLvoid *ptr )
+void
+_mesa_NormalPointer(GLenum type, GLsizei stride, const GLvoid *ptr )
 {
-   GLcontext *ctx;
-   GET_CONTEXT;
-   CHECK_CONTEXT;
-   ctx = CC;
+   GET_CURRENT_CONTEXT(ctx);
    
    if (stride<0) {
       gl_error( ctx, GL_INVALID_VALUE, "glNormalPointer(stride)" );
@@ -172,13 +152,11 @@ void GLAPIENTRY glNormalPointer(CTX_ARG GLenum type, GLsizei stride,
 
 
 
-void GLAPIENTRY glColorPointer(CTX_ARG GLint size, GLenum type, GLsizei stride,
-                                const GLvoid *ptr )
+void
+_mesa_ColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr)
 {
-   GLcontext *ctx;
-   GET_CONTEXT;
-   CHECK_CONTEXT;
-   ctx = CC;
+   GET_CURRENT_CONTEXT(ctx);
+
    if (size<3 || size>4) {
       gl_error( ctx, GL_INVALID_VALUE, "glColorPointer(size)" );
       return;
@@ -237,13 +215,10 @@ void GLAPIENTRY glColorPointer(CTX_ARG GLint size, GLenum type, GLsizei stride,
 
 
 
-void GLAPIENTRY glIndexPointer(CTX_ARG GLenum type, GLsizei stride,
-                                const GLvoid *ptr )
+void
+_mesa_IndexPointer(GLenum type, GLsizei stride, const GLvoid *ptr)
 {
-   GLcontext *ctx;
-   GET_CONTEXT;
-   CHECK_CONTEXT;
-   ctx = CC;
+   GET_CURRENT_CONTEXT(ctx);
    
    if (stride<0) {
       gl_error( ctx, GL_INVALID_VALUE, "glIndexPointer(stride)" );
@@ -284,15 +259,11 @@ void GLAPIENTRY glIndexPointer(CTX_ARG GLenum type, GLsizei stride,
 
 
 
-void GLAPIENTRY glTexCoordPointer(CTX_ARG GLint size, GLenum type,
-                                   GLsizei stride, const GLvoid *ptr )
+void
+_mesa_TexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr)
 {
+   GET_CURRENT_CONTEXT(ctx);
    GLuint texUnit;
-   
-   GLcontext *ctx;
-   GET_CONTEXT;
-   CHECK_CONTEXT;
-   ctx = CC;
    
    texUnit = ctx->Array.ActiveTexture;
 
@@ -346,14 +317,11 @@ void GLAPIENTRY glTexCoordPointer(CTX_ARG GLint size, GLenum type,
 
 
 
-void GLAPIENTRY glEdgeFlagPointer(CTX_ARG GLsizei stride, const void *vptr )
+void
+_mesa_EdgeFlagPointer(GLsizei stride, const void *vptr)
 {
+   GET_CURRENT_CONTEXT(ctx);
    const GLboolean *ptr = (GLboolean *)vptr;
-   
-   GLcontext *ctx;
-   GET_CONTEXT;
-   CHECK_CONTEXT;
-   ctx = CC;
 
    if (stride<0) {
       gl_error( ctx, GL_INVALID_VALUE, "glEdgeFlagPointer(stride)" );
@@ -461,25 +429,51 @@ void gl_exec_array_elements( GLcontext *ctx, struct immediate *IM,
 				       flags, elts, (VERT_ELT|VERT_TEX1_ANY),
 				       start, count);
 
-   /* Lighting ignores the and-flag, so still need to do this.
-    */
-/*     fprintf(stderr, "start %d count %d\n", start, count); */
-/*     gl_print_vert_flags("translate", translate); */
 
    for (i = start ; i < count ; i++) 
-      if (flags[i] & VERT_ELT) {
-/*  	 flags[i] &= ~VERT_ELT;	*/
+      if (flags[i] & VERT_ELT) 
 	 flags[i] |= translate;
-      }      
+
 }
 
 
 
-/* KW:  I think this is moving in the right direction, but it still feels 
- *      like we are doing way too much work.
+/* Enough funny business going on in here it might be quicker to use a
+ * function pointer.
  */
-void gl_DrawArrays( GLcontext *ctx, GLenum mode, GLint start, GLsizei count )
+#define ARRAY_ELT( IM, i )					\
+{								\
+   GLuint count = IM->Count;					\
+   IM->Elt[count] = i;						\
+   IM->Flag[count] = ((IM->Flag[count] & IM->ArrayAndFlags) |	\
+		      VERT_ELT);				\
+   IM->FlushElt |= IM->ArrayEltFlush;				\
+   IM->Count = count += IM->ArrayIncr;				\
+   if (count == VB_MAX)						\
+      IM->maybe_transform_vb( IM );				\
+}
+
+
+void
+_mesa_ArrayElement( GLint i )
 {
+   GET_IMMEDIATE;
+   ARRAY_ELT( IM, i );
+}
+
+
+void gl_ArrayElement( GLcontext *CC, GLint i )
+{
+   struct immediate *im = CC->input;
+   ARRAY_ELT( im, i );
+}
+
+
+
+void
+_mesa_DrawArrays(GLenum mode, GLint start, GLsizei count)
+{
+   GET_CURRENT_CONTEXT(ctx);
    struct vertex_buffer *VB = ctx->VB;
    GLint i;
 
@@ -494,83 +488,57 @@ void gl_DrawArrays( GLcontext *ctx, GLenum mode, GLint start, GLsizei count )
    {
       GLint remaining = count;
       GLint i;
-      GLvector4f obj;
-      GLvector3f norm;
-      GLvector4f tc[MAX_TEXTURE_UNITS];
-      GLvector4ub col;
-      GLvector1ub edge;
-      GLvector1ui index;
-      GLuint update = 0, translate = 0;
-      struct vertex_array_pointers VSrc;
+      struct gl_client_array *Normal;
+      struct gl_client_array *Color;
+      struct gl_client_array *Index;
+      struct gl_client_array *TexCoord[MAX_TEXTURE_UNITS];
+      struct gl_client_array *EdgeFlag;
       struct immediate *IM = VB->IM;
-      struct gl_client_array *client_data;
       struct gl_pipeline *elt = &ctx->CVA.elt;
-      GLuint relock;
+      GLboolean relock;
       GLuint fallback, required;
 
       if (ctx->NewState)
 	 gl_update_state( ctx );	
 
-      /* This will die miserably with CVA...  Need more work to support this.
+      /* Just turn off cva on this path.  Could be useful for multipass
+       * rendering to keep it turned on.
        */
       relock = ctx->CompileCVAFlag;
-      ctx->CompileCVAFlag = 0;
 
-      if (!elt->pipeline_valid || relock)
+      if (relock) {
+	 ctx->CompileCVAFlag = 0;
+	 elt->pipeline_valid = 0;
+      }
+
+      if (!elt->pipeline_valid)
 	 gl_build_immediate_pipeline( ctx );
 
       required = elt->inputs;
       fallback = (elt->inputs & ~ctx->Array.Summary);
 
-      VSrc.Color = &IM->v.Color;
-      VSrc.Index = &IM->v.Index;
-      VSrc.EdgeFlag = &IM->v.EdgeFlag;
-      VSrc.TexCoord[0] = &IM->v.TexCoord[0];
-      VSrc.TexCoord[1] = &IM->v.TexCoord[1];
-      VSrc.Obj = &IM->v.Obj;
-      VSrc.Normal = &IM->v.Normal;
+      /* The translate function doesn't do anything about size.  It
+       * just ensures that type and stride come out right.
+       */
+      IM->v.Obj.size = ctx->Array.Vertex.Size;
 
       if (required & VERT_RGBA) 
       {
-	 client_data = &ctx->Array.Color;
-	 if (fallback & VERT_RGBA)
-	    client_data = &ctx->Fallback.Color;
-
-	 if (client_data->Type == GL_UNSIGNED_BYTE && 
-	     client_data->Size == 4)
-	 {
-	    VSrc.Color = &col;
-	    col.data = (GLubyte (*)[4]) client_data->Ptr;
-	    col.stride = client_data->StrideB;
-	    col.flags = VEC_NOT_WRITABLE|VEC_GOOD_STRIDE;
-	    if (client_data->StrideB != 4 * sizeof(GLubyte)) 
-	       col.flags ^= VEC_STRIDE_FLAGS;
-
-	    update |= VERT_RGBA;
-	 } else {
-	    translate |= VERT_RGBA;
-	 }	
+	 Color = &ctx->Array.Color;
+	 if (fallback & VERT_RGBA) {
+	    Color = &ctx->Fallback.Color;
+	    ctx->Array.ColorFunc = 
+	       gl_trans_4ub_tab[4][TYPE_IDX(GL_UNSIGNED_BYTE)];
+	 }
       }
    
       if (required & VERT_INDEX) 
       {
-	 client_data = &ctx->Array.Index;
-	 if (fallback & VERT_INDEX)
-	    client_data = &ctx->Fallback.Index;
-
-	 if (client_data->Type == GL_UNSIGNED_INT)
-	 {
-	    VSrc.Index = &index;
-	    index.data = (GLuint *) client_data->Ptr;
-	    index.stride = client_data->StrideB;
-	    index.flags = VEC_NOT_WRITABLE|VEC_GOOD_STRIDE;
-	    if (client_data->StrideB != sizeof(GLuint)) 
-	       index.flags ^= VEC_STRIDE_FLAGS;
-
-	    update |= VERT_INDEX;
-	 } else {
-	    translate |= VERT_INDEX;
-	 }	
+	 Index = &ctx->Array.Index;
+	 if (fallback & VERT_INDEX) {
+	    Index = &ctx->Fallback.Index;
+	    ctx->Array.IndexFunc = gl_trans_1ui_tab[TYPE_IDX(GL_UNSIGNED_INT)];
+	 }
       }
 
       for (i = 0 ; i < MAX_TEXTURE_UNITS ; i++) 
@@ -578,89 +546,48 @@ void gl_DrawArrays( GLcontext *ctx, GLenum mode, GLint start, GLsizei count )
 	 GLuint flag = VERT_TEX_ANY(i);
 
 	 if (required & flag) {
-
-	    client_data = &ctx->Array.TexCoord[i];
+	    TexCoord[i] = &ctx->Array.TexCoord[i];
 
 	    if (fallback & flag) 
 	    {
-	       client_data = &ctx->Fallback.TexCoord[i];
-	       client_data->Size = gl_texcoord_size( ctx->Current.Flag, i );
-	    }
+	       TexCoord[i] = &ctx->Fallback.TexCoord[i];
+	       TexCoord[i]->Size = gl_texcoord_size( ctx->Current.Flag, i );
 
-	    if (client_data->Type == GL_FLOAT)
-	    {
-	       VSrc.TexCoord[i] = &tc[i];
-	       tc[i].data = (GLfloat (*)[4]) client_data->Ptr;
-	       tc[i].stride = client_data->StrideB;
-	       tc[i].size = client_data->Size;
-	       tc[i].flags = VEC_NOT_WRITABLE|VEC_GOOD_STRIDE;
-	       if (tc[i].stride |= 4 * sizeof(GLfloat))
-		  tc[i].flags ^= VEC_STRIDE_FLAGS;
-	       update |= flag;
-	    } else {
-	       translate |= flag;
+	       ctx->Array.TexCoordFunc[i] = 
+		  gl_trans_4f_tab[TexCoord[i]->Size][TYPE_IDX(GL_FLOAT)];
 	    }
 	 }
       }
 
       if (ctx->Array.Flags != ctx->Array.Flag[0])
-	 for (i = 0 ; i < VB_MAX ; i++) 
+ 	 for (i = 0 ; i < VB_MAX ; i++) 
 	    ctx->Array.Flag[i] = ctx->Array.Flags;
 
-      
-      if (ctx->Array.Vertex.Type == GL_FLOAT)
-      {
-	 VSrc.Obj = &obj;
-	 obj.data = (GLfloat (*)[4]) ctx->Array.Vertex.Ptr;
-	 obj.stride = ctx->Array.Vertex.StrideB;
-	 obj.size = ctx->Array.Vertex.Size;
-	 obj.flags = VEC_NOT_WRITABLE|VEC_GOOD_STRIDE;
-	 if (obj.stride != 4 * sizeof(GLfloat)) 
-	    obj.flags ^= VEC_STRIDE_FLAGS;
-
-	 update |= VERT_OBJ_ANY;
-      }
-      else 
-      {
-	 translate |= VERT_OBJ_ANY;
-      }
 
       if (required & VERT_NORM) 
       {
-	 client_data = &ctx->Array.Normal;
-	 if (fallback & VERT_NORM) 
-	    client_data = &ctx->Fallback.Normal;
-
-	 if (client_data->Type == GL_FLOAT) 
-	 {
-	    VSrc.Normal = &norm;
-	    norm.flags = 0;
-	    norm.data = (GLfloat (*)[3]) client_data->Ptr;
-	    norm.stride = client_data->StrideB;
-	    update |= VERT_NORM;	    
-	 } else {
-	    translate |= VERT_NORM;	    
+	 Normal = &ctx->Array.Normal;
+	 if (fallback & VERT_NORM) {
+	    Normal = &ctx->Fallback.Normal;
+	    ctx->Array.NormalFunc = gl_trans_3f_tab[TYPE_IDX(GL_FLOAT)];
 	 }
       }
 
-      if ( (required & VERT_EDGE) && 
-	   (mode == GL_TRIANGLES || 
-	    mode == GL_QUADS || 
-	    mode == GL_POLYGON)) 
+      if ( required & VERT_EDGE )
       {
-	 client_data = &ctx->Array.EdgeFlag;
-
-	 if (fallback & VERT_EDGE) 
-	    client_data = &ctx->Fallback.EdgeFlag;
-
-	 VSrc.EdgeFlag = &edge;
-	 edge.data = (GLboolean *) client_data->Ptr;
-	 edge.stride = client_data->StrideB;
-	 edge.flags = VEC_NOT_WRITABLE|VEC_GOOD_STRIDE;
-	 if (edge.stride != sizeof(GLubyte))
-	    edge.flags ^= VEC_STRIDE_FLAGS;
-	 
-	 update |= VERT_EDGE;
+	 if (mode == GL_TRIANGLES || 
+	     mode == GL_QUADS || 
+	     mode == GL_POLYGON)
+	 {
+	    EdgeFlag = &ctx->Array.EdgeFlag;
+	    if (fallback & VERT_EDGE) {
+	       EdgeFlag = &ctx->Fallback.EdgeFlag;
+	       ctx->Array.EdgeFlagFunc = 
+		  gl_trans_1ub_tab[TYPE_IDX(GL_UNSIGNED_BYTE)];
+	    }
+	 }
+	 else
+	    required &= ~VERT_EDGE;
       }
 
       VB->Primitive = IM->Primitive; 
@@ -673,7 +600,6 @@ void gl_DrawArrays( GLcontext *ctx, GLenum mode, GLint start, GLsizei count )
          GLint vbspace = VB_MAX - VB_START;
 	 GLuint count, n;
 	 
-
 	 if (vbspace >= remaining) {
 	    n = remaining;
 	    VB->LastPrimitive = VB_START + n;
@@ -684,98 +610,71 @@ void gl_DrawArrays( GLcontext *ctx, GLenum mode, GLint start, GLsizei count )
 	 
 	 VB->CullMode = 0;
 	 
-
-         /* Update pointers.
-	  */
-	 if (update) {
-	    if (update & VERT_OBJ_ANY) 
-	       obj.start = VEC_ELT(&obj, GLfloat, start);
-	    
-	    if (update & VERT_NORM) 
-	       norm.start = VEC_ELT(&norm, GLfloat, start);
-
-	    if (update & VERT_EDGE) 
-	       edge.start = VEC_ELT(&edge, GLubyte, start);
-
-	    if (update & VERT_RGBA) 
-	       col.start = VEC_ELT(&col, GLubyte, start);
-
-	    if (update & VERT_INDEX) 
-	       index.start = VEC_ELT(&index, GLuint, start);
-
-	    if (update & VERT_TEX0_ANY) 
-	       tc[0].start = VEC_ELT(&tc[0], GLfloat, start);
-
-	    if (update & VERT_TEX1_ANY) 
-	       tc[1].start = VEC_ELT(&tc[1], GLfloat, start);
+	 ctx->Array.VertexFunc( IM->Obj + VB_START, 
+				&ctx->Array.Vertex, start, n );
+	 
+	 if (required & VERT_NORM) {
+	    ctx->Array.NormalFunc( IM->Normal + VB_START, 
+				   Normal, start, n );
+	 }
+	 
+	 if (required & VERT_EDGE) {
+	    ctx->Array.EdgeFlagFunc( IM->EdgeFlag + VB_START, 
+				     EdgeFlag, start, n );
+	 }
+	 
+	 if (required & VERT_RGBA) {
+	    ctx->Array.ColorFunc( IM->Color + VB_START, 
+				  Color, start, n );
+	 }
+	 
+	 if (required & VERT_INDEX) {
+	    ctx->Array.IndexFunc( IM->Index + VB_START, 
+				  Index, start, n );
+	 }
+	 
+	 if (required & VERT_TEX0_ANY) {
+	    IM->v.TexCoord[0].size = TexCoord[0]->Size;
+	    ctx->Array.TexCoordFunc[0]( IM->TexCoord[0] + VB_START, 
+					TexCoord[0], start, n );
+	 }
+	 
+	 if (required & VERT_TEX1_ANY) {
+	    IM->v.TexCoord[1].size = TexCoord[1]->Size;
+	    ctx->Array.TexCoordFunc[1]( IM->TexCoord[1] + VB_START, 
+					TexCoord[1], start, n );
 	 }
 
-
-	 /* Translate data to fix up type and stride.
-	  */
-	 if (translate) {
-	    if (translate & VERT_OBJ_ANY) {
-	       ctx->Array.VertexFunc( IM->Obj + VB_START, 
-				      &ctx->Array.Vertex, start, n );
-	    }
-
-	    if (translate & VERT_NORM) {
-	       ctx->Array.NormalFunc( IM->Normal + VB_START, 
-				      &ctx->Array.Normal, start, n );
-	    }
-
-	    if (translate & VERT_EDGE) {
-	       ctx->Array.EdgeFlagFunc( IM->EdgeFlag + VB_START, 
-					&ctx->Array.EdgeFlag, start, n );
-	    }
-
-	    if (translate & VERT_RGBA) {
-	       ctx->Array.ColorFunc( IM->Color + VB_START, 
-				     &ctx->Array.Color, start, n );
-	    }
-
-	    if (translate & VERT_INDEX) {
-	       ctx->Array.IndexFunc( IM->Index + VB_START, 
-				     &ctx->Array.Index, start, n );
-	    }
-
-	    if (translate & VERT_TEX0_ANY) {
-	       IM->v.TexCoord[0].size = tc[0].size;
-	       ctx->Array.TexCoordFunc[0]( IM->TexCoord[0] + VB_START, 
-					   &ctx->Array.TexCoord[0], start, n );
-	    }
-
-	    if (translate & VERT_TEX1_ANY) {
-	       IM->v.TexCoord[1].size = tc[1].size;
-	       ctx->Array.TexCoordFunc[1]( IM->TexCoord[1] + VB_START, 
-					   &ctx->Array.TexCoord[1], start, n );
-	    }
-	 }
-
-
-	 VB->ObjPtr = VSrc.Obj;
-	 VB->NormalPtr = VSrc.Normal;
-	 VB->Color[0] = VB->Color[1] = VB->ColorPtr = VSrc.Color;
-	 VB->IndexPtr = VSrc.Index;
-	 VB->EdgeFlagPtr = VSrc.EdgeFlag;
-	 VB->TexCoordPtr[0] = VSrc.TexCoord[0];
-	 VB->TexCoordPtr[1] = VSrc.TexCoord[1];
+	 VB->ObjPtr = &IM->v.Obj;
+	 VB->NormalPtr = &IM->v.Normal;
+	 VB->ColorPtr = &IM->v.Color;
+	 VB->Color[0] = VB->Color[1] = VB->ColorPtr;
+	 VB->IndexPtr = &IM->v.Index;
+	 VB->EdgeFlagPtr = &IM->v.EdgeFlag;
+	 VB->TexCoordPtr[0] = &IM->v.TexCoord[0];
+	 VB->TexCoordPtr[1] = &IM->v.TexCoord[1];
 
 	 VB->Flag = ctx->Array.Flag;
 	 VB->OrFlag = ctx->Array.Flags;
 
-	 count = VB->Count = VB_START + n;
+	 VB->Start = IM->Start = VB_START;
+	 count = VB->Count = IM->Count = VB_START + n;
 
-	 VB->ObjPtr->count = count;
-	 VB->NormalPtr->count = count;
-	 VB->ColorPtr->count = count;
-	 VB->IndexPtr->count = count;
-	 VB->EdgeFlagPtr->count = count;
-	 VB->TexCoordPtr[0]->count = count;
-	 VB->TexCoordPtr[1]->count = count;
+#define RESET_VEC(v, t, s, c) (v.start = t v.data[s], v.count = c)  
 
-	 VB->Flag[count] |= VERT_END_VB;
-	 VB->Flag[VB_START] |= VERT_NORM;
+	 RESET_VEC(IM->v.Obj, (GLfloat *), VB_START, count);
+	 RESET_VEC(IM->v.Normal, (GLfloat *), VB_START, count);
+	 RESET_VEC(IM->v.TexCoord[0], (GLfloat *), VB_START, count);
+	 RESET_VEC(IM->v.TexCoord[1], (GLfloat *), VB_START, count);
+	 RESET_VEC(IM->v.Index, &, VB_START, count);
+	 RESET_VEC(IM->v.Elt, &, VB_START, count);
+	 RESET_VEC(IM->v.EdgeFlag, &, VB_START, count);
+	 RESET_VEC(IM->v.Color, (GLubyte *), VB_START, count);
+	 RESET_VEC(VB->Clip, (GLfloat *), VB_START, count);
+	 RESET_VEC(VB->Eye, (GLfloat *), VB_START, count);
+	 RESET_VEC(VB->Win, (GLfloat *), VB_START, count);
+	 RESET_VEC(VB->BColor, (GLubyte *), VB_START, count); 
+	 RESET_VEC(VB->BIndex, &, VB_START, count);
 
 	 VB->NextPrimitive[VB->CopyStart] = VB->Count;
 	 VB->Primitive[VB->CopyStart] = mode;
@@ -787,21 +686,25 @@ void gl_DrawArrays( GLcontext *ctx, GLenum mode, GLint start, GLsizei count )
 
 	 ctx->Array.Flag[count] = ctx->Array.Flags;
 	 ctx->Array.Flag[VB_START] = ctx->Array.Flags;
-	 IM->Flag[VB_START] = 0;
 
          start += n;
          remaining -= n;
       }
 
-      ctx->CompileCVAFlag = relock;
+      gl_reset_input( ctx );
+
+      if (relock) {
+	 ctx->CompileCVAFlag = relock;
+	 elt->pipeline_valid = 0;
+      }
    }
    else if (ctx->Array.Vertex.Enabled) 
    {
       /* The GL_COMPILE and GL_COMPILE_AND_EXECUTE cases.  These
        * could be handled by the above code, but it gets a little
-       * complex.  
+       * complex.  The generated list is still of good quality
+       * this way.
        */
-      /* No need to reset - never called from inside a display list */
       gl_Begin( ctx, mode );
       for (i=0;i<count;i++) {
          gl_ArrayElement( ctx, start+i );
@@ -825,34 +728,49 @@ void gl_DrawArrays( GLcontext *ctx, GLenum mode, GLint start, GLsizei count )
 /* KW: Exactly fakes the effects of calling glArrayElement multiple times.
  *     Compilation is handled via. the IM->maybe_transform_vb() callback.
  */
+#if 1
 #define DRAW_ELT(FUNC, TYPE)				\
 static void FUNC( GLcontext *ctx, GLenum mode,		\
 		  TYPE *indices, GLuint count )		\
 {							\
    GLuint i,j;						\
 							\
-   if (count) gl_Begin( ctx, mode );			\
+   gl_Begin( ctx, mode );				\
 							\
    for (j = 0 ; j < count ; ) {				\
-      GLuint nr = MIN2( VB_MAX, count - j + VB_START );	\
       struct immediate *IM = ctx->input;		\
-      GLuint sf = IM->Flag[VB_START];			\
+      GLuint start = IM->Start;				\
+      GLuint nr = MIN2( VB_MAX, count - j + start );	\
+      GLuint sf = IM->Flag[start];			\
       IM->FlushElt |= IM->ArrayEltFlush;		\
 							\
-      for (i = VB_START ; i < nr ; i++) {		\
+      for (i = start ; i < nr ; i++) {			\
 	 IM->Elt[i] = (GLuint) *indices++;		\
 	 IM->Flag[i] = VERT_ELT;			\
       }							\
 							\
-      if (j == 0) IM->Flag[IM->Start] |= sf;		\
+      if (j == 0) IM->Flag[start] |= sf;		\
 							\
       IM->Count = nr;					\
-      j += nr - VB_START;				\
+      j += nr - start;					\
 							\
       if (j == count) gl_End( ctx );			\
       IM->maybe_transform_vb( IM );			\
    }							\
 }
+#else 
+#define DRAW_ELT(FUNC, TYPE)				\
+static void FUNC( GLcontext *ctx, GLenum mode,		\
+		   TYPE *indices, GLuint count )	\
+{							\
+  int i;						\
+  glBegin(mode);					\
+  for (i = 0 ; i < count ; i++)				\
+    glArrayElement( indices[i] );			\
+  glEnd();						\
+}
+#endif
+	
 
 DRAW_ELT( draw_elt_ubyte, GLubyte )
 DRAW_ELT( draw_elt_ushort, GLushort )
@@ -879,16 +797,13 @@ static GLuint natural_stride[0x10] =
    0				/* f */
 };
 
-void GLAPIENTRY glDrawElements(CTX_ARG GLenum mode, GLsizei count,
-                                GLenum type, const GLvoid *indices )
+
+void
+_mesa_DrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices)
 {
-   GLcontext *ctx;
+   GET_CURRENT_CONTEXT(ctx);
    struct gl_cva *cva;
       
-   GET_CONTEXT;
-   CHECK_CONTEXT;
-   ctx = CC;
-
    cva = &ctx->CVA;
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glDrawElements");
 
@@ -898,7 +813,7 @@ void GLAPIENTRY glDrawElements(CTX_ARG GLenum mode, GLsizei count,
       return;
    }
 
-   if (mode < 0 || mode > GL_POLYGON) {
+   if (mode > GL_POLYGON) {
       gl_error( ctx, GL_INVALID_ENUM, "glDrawArrays(mode)" );
       return;
    }
@@ -998,10 +913,10 @@ void GLAPIENTRY glDrawElements(CTX_ARG GLenum mode, GLsizei count,
 
 
 
-void GLAPIENTRY glInterleavedArrays(CTX_ARG GLenum format, GLsizei stride,
-                                     const GLvoid *pointer )
+void
+_mesa_InterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer)
 {
-   GLcontext *ctx;
+   GET_CURRENT_CONTEXT(ctx);
    GLboolean tflag, cflag, nflag;  /* enable/disable flags */
    GLint tcomps, ccomps, vcomps;   /* components per texcoord, color, vertex */
 
@@ -1011,11 +926,6 @@ void GLAPIENTRY glInterleavedArrays(CTX_ARG GLenum format, GLsizei stride,
    GLint c, f;
    GLint coordUnitSave;
    
-   GET_CONTEXT;
-   CHECK_CONTEXT;
-   ctx = CC;
-
-
    f = sizeof(GLfloat);
    c = f * ((4*sizeof(GLubyte) + (f-1)) / f);
 
@@ -1139,8 +1049,8 @@ void GLAPIENTRY glInterleavedArrays(CTX_ARG GLenum format, GLsizei stride,
       stride = defstride;
    }
 
-   gl_DisableClientState( ctx, GL_EDGE_FLAG_ARRAY );
-   gl_DisableClientState( ctx, GL_INDEX_ARRAY );
+   _mesa_DisableClientState( GL_EDGE_FLAG_ARRAY );
+   _mesa_DisableClientState( GL_INDEX_ARRAY );
 
    /* Texcoords */
    coordUnitSave = ctx->Array.ActiveTexture;
@@ -1148,75 +1058,73 @@ void GLAPIENTRY glInterleavedArrays(CTX_ARG GLenum format, GLsizei stride,
       GLint i;
       GLint factor = ctx->Array.TexCoordInterleaveFactor;
       for (i = 0; i < factor; i++) {
-         gl_ActiveTexture( ctx, (GLenum) (GL_TEXTURE0_ARB + i) );
-         gl_EnableClientState( ctx, GL_TEXTURE_COORD_ARRAY );
-         glTexCoordPointer(CTX_PRM  tcomps, GL_FLOAT, stride,
+         _mesa_ClientActiveTextureARB( (GLenum) (GL_TEXTURE0_ARB + i) );
+         _mesa_EnableClientState( GL_TEXTURE_COORD_ARRAY );
+         glTexCoordPointer( tcomps, GL_FLOAT, stride,
                              (GLubyte *) pointer + i * coffset );
       }
       for (i = factor; i < ctx->Const.MaxTextureUnits; i++) {
-         gl_ActiveTexture( ctx, (GLenum) (GL_TEXTURE0_ARB + i) );
-         gl_DisableClientState( ctx, GL_TEXTURE_COORD_ARRAY );
+         _mesa_ClientActiveTextureARB( (GLenum) (GL_TEXTURE0_ARB + i) );
+         _mesa_DisableClientState( GL_TEXTURE_COORD_ARRAY );
       }
    }
    else {
       GLint i;
       for (i = 0; i < ctx->Const.MaxTextureUnits; i++) {
-         gl_ActiveTexture( ctx, (GLenum) (GL_TEXTURE0_ARB + i) );
-         gl_DisableClientState( ctx, GL_TEXTURE_COORD_ARRAY );
+         _mesa_ClientActiveTextureARB( (GLenum) (GL_TEXTURE0_ARB + i) );
+         _mesa_DisableClientState( GL_TEXTURE_COORD_ARRAY );
       }
    }
    /* Restore texture coordinate unit index */
-   gl_ActiveTexture( ctx, (GLenum) (GL_TEXTURE0_ARB + coordUnitSave) );
+   _mesa_ClientActiveTextureARB( (GLenum) (GL_TEXTURE0_ARB + coordUnitSave) );
 
 
    /* Color */
    if (cflag) {
-      gl_EnableClientState( ctx, GL_COLOR_ARRAY );
-      glColorPointer(CTX_PRM ccomps, ctype, stride,
+      _mesa_EnableClientState( GL_COLOR_ARRAY );
+      glColorPointer( ccomps, ctype, stride,
                        (GLubyte*) pointer + coffset );
    }
    else {
-      gl_DisableClientState( ctx, GL_COLOR_ARRAY );
+      _mesa_DisableClientState( GL_COLOR_ARRAY );
    }
 
 
    /* Normals */
    if (nflag) {
-      gl_EnableClientState( ctx, GL_NORMAL_ARRAY );
-      glNormalPointer(CTX_PRM GL_FLOAT, stride,
+      _mesa_EnableClientState( GL_NORMAL_ARRAY );
+      glNormalPointer( GL_FLOAT, stride,
                         (GLubyte*) pointer + noffset );
    }
    else {
-      gl_DisableClientState( ctx, GL_NORMAL_ARRAY );
+      _mesa_DisableClientState( GL_NORMAL_ARRAY );
    }
 
-   gl_EnableClientState( ctx, GL_VERTEX_ARRAY );
-   glVertexPointer(CTX_PRM vcomps, GL_FLOAT, stride,
+   _mesa_EnableClientState( GL_VERTEX_ARRAY );
+   glVertexPointer( vcomps, GL_FLOAT, stride,
                      (GLubyte *) pointer + voffset );
 }
 
 
 
-void GLAPIENTRY glDrawRangeElements(CTX_ARG GLenum mode, GLuint start,
-                                     GLuint end, GLsizei count,
-                                     GLenum type, const GLvoid *indices )
+void
+_mesa_DrawRangeElements(GLenum mode, GLuint start,
+                        GLuint end, GLsizei count,
+                        GLenum type, const GLvoid *indices)
 {
-   GLcontext *ctx;
-   GET_CONTEXT;
-   CHECK_CONTEXT;
-   ctx = CC;
+   GET_CURRENT_CONTEXT(ctx);
 
    if (end < start) {
       gl_error(ctx, GL_INVALID_VALUE, "glDrawRangeElements( end < start )");
       return;
    }
 
-   if (!ctx->Array.LockCount && 2*count > 3*(end-start)) {
-      glLockArraysEXT(CTX_PRM start, end );
-      glDrawElements(CTX_PRM mode, count, type, indices );
-      glUnlockArraysEXT(CTX_VPRM );
+   if (!ctx->Array.LockCount && 2*count > (GLint) 3*(end-start)) {
+      glLockArraysEXT( start, end );
+      glDrawElements( mode, count, type, indices );
+      glUnlockArraysEXT();
    } else {
-      glDrawElements(CTX_PRM mode, count, type, indices );
+      glDrawElements( mode, count, type, indices );
    }
 }
 

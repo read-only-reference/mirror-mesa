@@ -876,9 +876,17 @@
 #define D_BYTE db
 /* #define SPACE */
 /* #define COMM */
+#if defined(__WATCOMC__)
+SECTION _TEXT public align=16 class=CODE use32 flat
+SECTION _DATA public align=16 class=DATA use32 flat
+#define SEG_TEXT SECTION _TEXT
+#define SEG_DATA SECTION _DATA
+#define SEG_BSS SECTION .bss
+#else
 #define SEG_DATA SECTION .data
 #define SEG_TEXT SECTION .text
 #define SEG_BSS SECTION .bss
+#endif
 
 #define D_SPACE(n) db n REP 0
 
@@ -974,12 +982,12 @@
 #define B_REGIND(a) 	BYTE_PTR [a]
 
 /* Register b indirect plus displacement a */
-#define P_REGOFF(a, b) 	[a + b]
-#define X_REGOFF(a, b) 	TBYTE_PTR [a + b]
-#define D_REGOFF(a, b) 	QWORD_PTR [a + b]
-#define L_REGOFF(a, b) 	DWORD_PTR [a + b]
-#define W_REGOFF(a, b) 	WORD_PTR [a + b]
-#define B_REGOFF(a, b) 	BYTE_PTR [a + b]
+#define P_REGOFF(a, b) 	[b + a]
+#define X_REGOFF(a, b) 	TBYTE_PTR [b + a]
+#define D_REGOFF(a, b) 	QWORD_PTR [b + a]
+#define L_REGOFF(a, b) 	DWORD_PTR [b + a]
+#define W_REGOFF(a, b) 	WORD_PTR [b + a]
+#define B_REGOFF(a, b) 	BYTE_PTR [b + a]
 
 /* Reg indirect Base + Index + Displacement  - this is mainly for 16-bit mode
  * which has no scaling
@@ -1464,7 +1472,7 @@
 #else
 #define P_ARG1(a) 	a
 #define P_ARG2(a, b) 	a, b
-#define P_ARG3(a, b) 	a, b, c
+#define P_ARG3(a, b, c) 	a, b, c
 #endif
 
 /* MMX */
@@ -1570,22 +1578,22 @@
 	#define CMPPS(a, b, c)	cmpps P_ARG3(a, b, c)
 	#define CMPSS(a, b, c)	cmpss P_ARG3(a, b, c)
 */
-#define CMPEQPS(a, b)	cmpeqps P_ARG3(a, b)
-#define CMPLTPS(a, b)	cmpltps P_ARG3(a, b)
-#define CMPLEPS(a, b)	cmpleps P_ARG3(a, b)
-#define CMPUNORDPS(a, b)	cmpunordps P_ARG3(a, b)
-#define CMPNEQPS(a, b)	cmpneqps P_ARG3(a, b)
-#define CMPNLTPS(a, b)	cmpnltps P_ARG3(a, b)
-#define CMPNLEPS(a, b)	cmpnleps P_ARG3(a, b)
-#define CMPORDPS(a, b)	cmpordps P_ARG3(a, b)
-#define CMPEQSS(a, b)	cmpeqss P_ARG3(a, b)
-#define CMPLTSS(a, b)	cmpltss P_ARG3(a, b)
-#define CMPLESS(a, b)	cmpless P_ARG3(a, b)
-#define CMPUNORDSS(a, b)	cmpunordss P_ARG3(a, b)
-#define CMPNEQSS(a, b)	cmpneqss P_ARG3(a, b)
-#define CMPNLTSS(a, b)	cmpnltss P_ARG3(a, b)
-#define CMPNLESS(a, b)	cmpnless P_ARG3(a, b)
-#define CMPORDSS(a, b)	cmpordss P_ARG3(a, b)
+#define CMPEQPS(a, b)	cmpeqps P_ARG2(a, b)
+#define CMPLTPS(a, b)	cmpltps P_ARG2(a, b)
+#define CMPLEPS(a, b)	cmpleps P_ARG2(a, b)
+#define CMPUNORDPS(a, b)	cmpunordps P_ARG2(a, b)
+#define CMPNEQPS(a, b)	cmpneqps P_ARG2(a, b)
+#define CMPNLTPS(a, b)	cmpnltps P_ARG2(a, b)
+#define CMPNLEPS(a, b)	cmpnleps P_ARG2(a, b)
+#define CMPORDPS(a, b)	cmpordps P_ARG2(a, b)
+#define CMPEQSS(a, b)	cmpeqss P_ARG2(a, b)
+#define CMPLTSS(a, b)	cmpltss P_ARG2(a, b)
+#define CMPLESS(a, b)	cmpless P_ARG2(a, b)
+#define CMPUNORDSS(a, b)	cmpunordss P_ARG2(a, b)
+#define CMPNEQSS(a, b)	cmpneqss P_ARG2(a, b)
+#define CMPNLTSS(a, b)	cmpnltss P_ARG2(a, b)
+#define CMPNLESS(a, b)	cmpnless P_ARG2(a, b)
+#define CMPORDSS(a, b)	cmpordss P_ARG2(a, b)
 #define COMISS(a, b)	comiss P_ARG2(a, b)
 #define CVTPI2PS(a, b)	cvtpi2ps P_ARG2(a, b)
 #define CVTPS2PI(a, b)	cvtps2pi P_ARG2(a, b)

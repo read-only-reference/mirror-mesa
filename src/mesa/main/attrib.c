@@ -1,4 +1,4 @@
-/* $Id: attrib.c,v 1.8 1999/10/13 18:42:49 brianp Exp $ */
+/* $Id: attrib.c,v 1.13 1999/11/23 21:15:37 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -25,30 +25,19 @@
  */
 
 
-
-#include <stdlib.h>
-
 #ifdef PC_HEADER
 #include "all.h"
 #else
-#ifndef XFree86Server
-#include <stdio.h>
-#else
-#include "GL/xf86glx.h"
-#endif
+#include "glheader.h"
 #include "attrib.h"
 #include "context.h"
 #include "glmisc.h"
 #include "enable.h"
 #include "enums.h"
-#include "macros.h"
+#include "mem.h"
 #include "simple_list.h"
 #include "texstate.h"
 #include "types.h"
-#ifdef XFree86Server
-#undef MISC_H
-#include "GL/xf86glx.h"
-#endif
 #endif
 
 
@@ -96,11 +85,7 @@ static void copy_texobj_state( struct gl_texture_object *dest,
    dest->P = src->P;
    dest->M = src->M;
    dest->MinMagThresh = src->MinMagThresh;
-   memcpy( dest->Palette, src->Palette,
-           sizeof(GLubyte) * MAX_TEXTURE_PALETTE_SIZE * 4 );
-   dest->PaletteSize = src->PaletteSize;
-   dest->PaletteIntFormat = src->PaletteIntFormat;
-   dest->PaletteFormat = src->PaletteFormat;
+   dest->Palette = src->Palette;
    dest->Complete = src->Complete;
    dest->SampleFunc = src->SampleFunc;
 }
@@ -435,7 +420,7 @@ void gl_PopAttrib( GLcontext* ctx )
                MEMCPY( &ctx->Color, attr->data,
                        sizeof(struct gl_colorbuffer_attrib) );
                if (ctx->Color.DrawBuffer != oldDrawBuffer) {
-                  gl_DrawBuffer(ctx, ctx->Color.DrawBuffer);
+                  _mesa_DrawBuffer( ctx->Color.DrawBuffer);
                }
                if ((ctx->Color.AlphaFunc != oldAlphaFunc ||
                     ctx->Color.AlphaRef != oldAlphaRef) &&
@@ -475,7 +460,7 @@ void gl_PopAttrib( GLcontext* ctx )
 
 #define TEST_AND_UPDATE(VALUE, NEWVALUE, ENUM)		\
 	if ((VALUE) != (NEWVALUE)) {			\
-	   gl_set_enable( ctx, ENUM, (NEWVALUE) );	\
+	   _mesa_set_enable( ctx, ENUM, (NEWVALUE) );	\
 	}
 
                TEST_AND_UPDATE(ctx->Color.AlphaEnabled, enable->AlphaTest, GL_ALPHA_TEST);
@@ -485,7 +470,7 @@ void gl_PopAttrib( GLcontext* ctx )
                   GLuint i;
                   for (i=0;i<MAX_CLIP_PLANES;i++) {
                      if (ctx->Transform.ClipEnabled[i] != enable->ClipPlane[i])
-                        gl_set_enable( ctx, (GLenum) (GL_CLIP_PLANE0 + i), enable->ClipPlane[i] );
+                        _mesa_set_enable( ctx, (GLenum) (GL_CLIP_PLANE0 + i), enable->ClipPlane[i] );
                   }
                }
                TEST_AND_UPDATE(ctx->Light.ColorMaterialEnabled, enable->ColorMaterial, GL_COLOR_MATERIAL);
@@ -585,10 +570,10 @@ void gl_PopAttrib( GLcontext* ctx )
             break;
          case GL_FOG_BIT:
             {
-               GLboolean anyChange = (memcmp( &ctx->Fog, attr->data, sizeof(struct gl_fog_attrib) ) != 0);
+               GLboolean anyChange = (GLboolean) (memcmp( &ctx->Fog, attr->data, sizeof(struct gl_fog_attrib) ) != 0);
                MEMCPY( &ctx->Fog, attr->data, sizeof(struct gl_fog_attrib) );
                if (anyChange && ctx->Driver.Fogfv) {
-                  const GLfloat mode = ctx->Fog.Mode;
+                  const GLfloat mode = (GLfloat) ctx->Fog.Mode;
                   const GLfloat density = ctx->Fog.Density;
                   const GLfloat start = ctx->Fog.Start;
                   const GLfloat end = ctx->Fog.End;
@@ -600,7 +585,7 @@ void gl_PopAttrib( GLcontext* ctx )
                   (*ctx->Driver.Fogfv)( ctx, GL_FOG_INDEX, &index );
                   (*ctx->Driver.Fogfv)( ctx, GL_FOG_COLOR, ctx->Fog.Color );
                }
-	       ctx->Enabled &= ENABLE_FOG;
+	       ctx->Enabled &= ~ENABLE_FOG;
 	       if (ctx->Fog.Enabled) ctx->Enabled |= ENABLE_FOG;
             }
             break;
@@ -628,7 +613,13 @@ void gl_PopAttrib( GLcontext* ctx )
                }
                (*ctx->Driver.Enable)( ctx, GL_LIGHTING, ctx->Light.Enabled );
             }
-	    ctx->Enabled &= ENABLE_LIGHT;
+            if (ctx->Light.ShadeModel == GL_FLAT)
+               ctx->TriangleCaps |= DD_FLATSHADE;
+            else
+               ctx->TriangleCaps &= ~DD_FLATSHADE;
+            if (ctx->Driver.ShadeModel)
+               (*ctx->Driver.ShadeModel)(ctx, ctx->Light.ShadeModel);
+	    ctx->Enabled &= ~ENABLE_LIGHT;
 	    if (ctx->Light.Enabled && !is_empty_list(&ctx->Light.EnabledList))
 	       ctx->Enabled |= ENABLE_LIGHT;
             break;
@@ -746,8 +737,8 @@ void gl_PopAttrib( GLcontext* ctx )
 	    struct gl_viewport_attrib *v = 
 	       (struct gl_viewport_attrib *)attr->data;
 	    
-	    gl_Viewport( ctx, v->X, v->Y, v->Width, v->Height );
-	    gl_DepthRange( ctx, v->Near, v->Far );
+	    _mesa_Viewport( v->X, v->Y, v->Width, v->Height );
+	    _mesa_DepthRange( v->Near, v->Far );
 	    break;
 	 }
          default:
@@ -860,4 +851,38 @@ void gl_PopClientAttrib( GLcontext *ctx )
 
    ctx->NewState = NEW_ALL;
 }
+
+
+
+void
+_mesa_PushAttrib( GLbitfield mask )
+{
+   GET_CURRENT_CONTEXT(ctx);
+   gl_PushAttrib(ctx, mask);
+}
+
+
+void
+_mesa_PopAttrib( void )
+{
+   GET_CURRENT_CONTEXT(ctx);
+   gl_PopAttrib(ctx);
+}
+
+
+void
+_mesa_PushClientAttrib( GLbitfield mask )
+{
+   GET_CURRENT_CONTEXT(ctx);
+   gl_PushClientAttrib(ctx, mask);
+}
+
+
+void
+_mesa_PopClientAttrib( void )
+{
+   GET_CURRENT_CONTEXT(ctx);
+   gl_PopClientAttrib(ctx);
+}
+
 

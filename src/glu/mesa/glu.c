@@ -1,8 +1,8 @@
-/* $Id: glu.c,v 1.16 1999/10/27 09:47:41 brianp Exp $ */
+/* $Id: glu.c,v 1.18 1999/11/22 22:15:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  * Copyright (C) 1995-1999  Brian Paul
  *
  * This library is free software; you can redistribute it and/or
@@ -23,6 +23,12 @@
 
 /*
  * $Log: glu.c,v $
+ * Revision 1.18  1999/11/22 22:15:50  brianp
+ * removed GLU_EXT_get_proc_address from ext strings
+ *
+ * Revision 1.17  1999/11/19 21:23:37  brianp
+ * replace encounteed with encountered
+ *
  * Revision 1.16  1999/10/27 09:47:41  brianp
  * disabled gluGetProcAddressEXT
  *
@@ -304,7 +310,7 @@ const GLubyte* GLAPIENTRY gluErrorString( GLenum errorCode )
       "unconnected trim curves",
       "unknown knot error",
       "negative vertex count encountered",
-      "negative byte-stride encounteed",
+      "negative byte-stride encountered",
       "unknown type descriptor",
       "null control array or knot vector",
       "duplicate point on pwlcurve"
@@ -367,7 +373,7 @@ const GLubyte* GLAPIENTRY gluErrorString( GLenum errorCode )
 
 const GLubyte* GLAPIENTRY gluGetString( GLenum name )
 {
-   static char *extensions = "GL_EXT_abgr GLU_EXT_get_proc_address";
+   static char *extensions = "GL_EXT_abgr";
    static char *version = "1.2 Mesa 3.1";
 
    switch (name) {

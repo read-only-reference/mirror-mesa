@@ -1,8 +1,8 @@
-/* $Id: dd.h,v 1.4 1999/10/21 12:46:27 brianp Exp $ */
+/* $Id: dd.h,v 1.6 1999/11/25 17:36:48 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  * 
  * Copyright (C) 1999  Brian Paul   All Rights Reserved.
  * 
@@ -180,9 +180,9 @@ struct dd_function_table {
     * This color should also be used in the "mono" drawing functions.
     */
 
-   GLboolean (*SetBuffer)( GLcontext *ctx, GLenum buffer );
+   GLboolean (*SetDrawBuffer)( GLcontext *ctx, GLenum buffer );
    /*
-    * Selects the color buffer(s) for reading and writing.
+    * Specifies the current buffer for writing.
     * The following values must be accepted when applicable:
     *    GL_FRONT_LEFT - this buffer always exists
     *    GL_BACK_LEFT - when double buffering
@@ -198,6 +198,17 @@ struct dd_function_table {
     *    GL_RIGHT - write to right left and back right if they exist
     *    GL_FRONT_AND_BACK - write to all four buffers if they exist
     *    GL_NONE - disable buffer write in device driver.
+    */
+
+   void (*SetReadBuffer)( GLcontext *ctx, GLframebuffer *colorBuffer,
+                          GLenum buffer );
+   /*
+    * Specifies the current buffer for reading.
+    * colorBuffer will be one of:
+    *    GL_FRONT_LEFT - this buffer always exists
+    *    GL_BACK_LEFT - when double buffering
+    *    GL_FRONT_RIGHT - when using stereo
+    *    GL_BACK_RIGHT - when using stereo and double buffering
     */
 
    void (*GetBufferSize)( GLcontext *ctx, GLuint *width, GLuint *height );
@@ -216,8 +227,7 @@ struct dd_function_table {
    void (*WriteRGBSpan)( const GLcontext *ctx,
                          GLuint n, GLint x, GLint y,
                          CONST GLubyte rgb[][3], const GLubyte mask[] );
-   /* Write a horizontal run of RGB[A] pixels.  The later version is only
-    * used to accelerate GL_RGB, GL_UNSIGNED_BYTE glDrawPixels() calls.
+   /* Write a horizontal run of RGBA or RGB pixels.
     * If mask is NULL, draw all pixels.
     * If mask is not null, only draw pixel [i] when mask [i] is true.
     */

@@ -1,8 +1,8 @@
-/* $Id: enums.c,v 1.3 1999/10/13 18:42:50 brianp Exp $ */
+/* $Id: enums.c,v 1.5 1999/11/11 01:22:26 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
+ * Version:  3.3
  * 
  * Copyright (C) 1999  Brian Paul   All Rights Reserved.
  * 
@@ -25,11 +25,13 @@
  */
 
 
-#include "GL/gl.h"
+#ifdef PC_HEADER
+#include "all.h"
+#else
+#include "glheader.h"
 #include "enums.h"
-#include "macros.h"
-#include <stdlib.h>
-#include <string.h>
+#include "mem.h"
+#endif
 
 
 typedef struct { 

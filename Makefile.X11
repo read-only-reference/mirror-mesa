@@ -1,7 +1,7 @@
-# $Id: Makefile.X11,v 1.10 1999/10/15 22:00:07 brianp Exp $
+# $Id: Makefile.X11,v 1.14 1999/11/24 21:17:32 brianp Exp $
 
 # Mesa 3-D graphics library
-# Version:  3.1
+# Version:  3.3
 # 
 # Copyright (C) 1999  Brian Paul   All Rights Reserved.
 # 
@@ -82,6 +82,8 @@ default:
 	@echo "  make linux-386-opt-V2-glide  for Linux with 3Dfx Voodoo2 for GLQuake"
 	@echo "  make linux-3dnow          for Linux on AMD w/ 3DNow!"
 	@echo "  make linux-3dnow-glide    for Linux on AMD w/ 3DNow! for Glide"
+	@echo "  make linux-katmai         for Linux on PentiumIII w/ SSE"
+	@echo "  make linux-katmai-glide   for Linux on PentiumIII w/ SSE for Glide"
 	@echo "  make linux-386-pthread    for Linux w/ Intel assembly and linuxthreads"
 	@echo "  make linux-386-pthread-shared  for Linux w/ Intel assembly and linuxthreads"
 	@echo "  make linux-386-pthread-shared-glide  for Linux w/ Intel assembly, linuxthreads, and 3Dfx Glide driver"
@@ -140,11 +142,12 @@ aix aix-sl amix bsdos bsdos4 dgux freebsd freebsd-386 gcc \
 hpux9 hpux9-sl hpux9-gcc hpux9-gcc-sl \
 hpux10 hpux10-sl hpux10-gcc hpux10-gcc-sl \
 irix4 irix5 irix5-gcc irix5-dso irix6-o32 irix6-o32-dso \
-linux linux-debug linux-prof linux-elf linux-elf-debug \
+linux linux-debug linux-prof linux-elf linux-elf-debug linux-glide-debug \
 linux-glide linux-386-glide linux-386-opt-glide \
 linux-386-opt-V2-glide \
 linux-386 linux-386-elf \
 linux-3dnow linux-3dnow-glide \
+linux-katmai linux-katmai-glide \
 linux-alpha linux-alpha-elf \
 linux-ppc linux-ppc-so \
 linux-386-pthread linux-386-pthread-shared linux-386-pthread-shared-glide \
@@ -309,14 +312,14 @@ realclean: clean
 	cd xdemos      && $(MAKE) -f Makefile.X11 realclean || true
 	cd book        && $(MAKE) -f Makefile.X11 realclean || true
 	cd samples     && $(MAKE) -f Makefile.X11 realclean || true
-	cd ggi/demos   && ($MAKE) -f Makefile.X11 realclean || true
+	cd ggi/demos   && $(MAKE) -f Makefile.X11 realclean || true
 	cd src/GGI/default && $(MAKE) -f Makefile.X11 realclean || true
 
 
 
-DIRECTORY = Mesa-3.1
-LIB_NAME = MesaLib-3.1beta3
-DEMO_NAME = MesaDemos-3.1beta3
+DIRECTORY = Mesa-3.3
+LIB_NAME = MesaLib-3.3beta1
+DEMO_NAME = MesaDemos-3.3beta1
 
 
 LIB_FILES =	\
