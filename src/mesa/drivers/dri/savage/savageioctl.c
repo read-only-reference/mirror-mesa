@@ -57,6 +57,8 @@ void savageGetDMABuffer( savageContextPtr imesa )
    int retcode;
    drmBufPtr buf;
 
+   assert (imesa->savageScreen->bufs);
+
    if (SAVAGE_DEBUG & DEBUG_DMA)
       fprintf(stderr,  "Getting dma buffer\n");
 
@@ -421,13 +423,6 @@ static void savageDDClear( GLcontext *ctx, GLbitfield mask, GLboolean all,
       _swrast_Clear( ctx, mask, all, cx, cy, cw, ch );
 }
 
-
-/* This is necessary as to prevent annyoing stuttering effects with
- * some games, though it does reduce the frame rate (glxgears)
- * slightly. I believe this is due to texture uploads which do not go
- * through the Savage command pipeline yet. */
-#define SYNC_FRAMES 1
-
 /*
  * Copy the back buffer to the front buffer. 
  */
@@ -448,9 +443,9 @@ void savageSwapBuffers( __DRIdrawablePrivate *dPriv )
 
    FLUSH_BATCH(imesa);
 
-#if SYNC_FRAMES
-   imesa->lastSwap = savageEmitEvent( imesa, 0 );
-#endif
+   if (imesa->sync_frames)
+       imesa->lastSwap = savageEmitEvent( imesa, 0 );
+
    if (imesa->lastSwap != 0)
        savageWaitEvent( imesa, imesa->lastSwap );
 
@@ -462,9 +457,9 @@ void savageSwapBuffers( __DRIdrawablePrivate *dPriv )
        imesa->inSwap = GL_FALSE;
    }
 
-#if !SYNC_FRAMES
-   imesa->lastSwap = savageEmitEvent( imesa, 0 );
-#endif
+   if (!imesa->sync_frames)
+       /* don't sync, but limit the lag to one frame. */
+       imesa->lastSwap = savageEmitEvent( imesa, 0 );
 }
 
 unsigned int savageEmitEventLocked( savageContextPtr imesa, unsigned int flags )
@@ -530,13 +525,6 @@ void savageFlushVertices( savageContextPtr imesa )
 	cmd->prim.start = buffer->flushed / imesa->HwVertexSize;
 	cmd->prim.count = buffer->used / imesa->HwVertexSize - cmd->prim.start;
 	buffer->flushed = buffer->used;
-	/* Make sure we don't buffer too many vertices without
-	 * telling the hardware. */
-	imesa->vertsPending += cmd->prim.count;
-	if (imesa->vertsPending > SAVAGE_MAX_VERTS_PENDING) {
-	    savageFlushCmdBuf(imesa, GL_FALSE);
-	    imesa->vertsPending = 0;
-	}
     }
 }
 
@@ -617,18 +605,6 @@ void savageFlushCmdBufLocked( savageContextPtr imesa, GLboolean discard )
 	imesa->cmdBuf.write = imesa->cmdBuf.base;
 	savageEmitOldState(imesa);
 	imesa->cmdBuf.start = imesa->cmdBuf.write;
-
-	/* Timestamp current texture objects for texture heap aging.
-	 * Only useful with long-lived 32-bit event tags available
-	 * with Savage DRM 2.3.x or later. */
-	if ((imesa->CurrentTexObj[0] || imesa->CurrentTexObj[1]) &&
-	    imesa->savageScreen->driScrnPriv->drmMinor >= 3) {
-	    unsigned int e = savageEmitEventLocked(imesa, 0);
-	    if (imesa->CurrentTexObj[0])
-		imesa->CurrentTexObj[0]->timestamp = e;
-	    if (imesa->CurrentTexObj[1])
-		imesa->CurrentTexObj[1]->timestamp = e;
-	}
     }
 
     if (discard) {

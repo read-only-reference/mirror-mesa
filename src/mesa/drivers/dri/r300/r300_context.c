@@ -102,12 +102,13 @@ static const char *const card_extensions[] = {
 };
 
 extern struct tnl_pipeline_stage _r300_render_stage;
+extern struct tnl_pipeline_stage _r300_tcl_stage;
 
 static const struct tnl_pipeline_stage *r300_pipeline[] = {
 
 	/* Try and go straight to t&l
 	 */
-//	&_r300_tcl_stage,
+	&_r300_tcl_stage,
 
 	/* Catch any t&l fallbacks
 	 */
@@ -117,7 +118,7 @@ static const struct tnl_pipeline_stage *r300_pipeline[] = {
 	&_tnl_fog_coordinate_stage,
 	&_tnl_texgen_stage,
 	&_tnl_texture_transform_stage,
-	&_tnl_vertex_program_stage,
+	//&_tnl_vertex_program_stage,
 
 	/* Try again to go to tcl?
 	 *     - no good for asymmetric-twoside (do with multipass)
@@ -267,12 +268,12 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 		_mesa_enable_extension( ctx, "GL_NV_vertex_program");
 #endif
 	/* currently bogus data */
-	ctx->Const.MaxVertexProgramInstructions=128;
-	ctx->Const.MaxVertexProgramAttribs=64;
-	ctx->Const.MaxVertexProgramTemps=64;
-	ctx->Const.MaxVertexProgramLocalParams=64;
-	ctx->Const.MaxVertexProgramEnvParams=64;
-	ctx->Const.MaxVertexProgramAddressRegs=8;
+	ctx->Const.MaxVertexProgramInstructions=VSF_MAX_FRAGMENT_LENGTH;
+	ctx->Const.MaxVertexProgramAttribs=16; // r420
+	ctx->Const.MaxVertexProgramTemps=VSF_MAX_FRAGMENT_TEMPS;
+	ctx->Const.MaxVertexProgramLocalParams=256; // r420
+	ctx->Const.MaxVertexProgramEnvParams=256; // r420
+	ctx->Const.MaxVertexProgramAddressRegs=1;
 		
 	driInitExtensions(ctx, card_extensions, GL_TRUE);
 	

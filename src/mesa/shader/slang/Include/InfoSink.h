@@ -1,5 +1,5 @@
 //
-//Copyright (C) 2002-2004  3Dlabs Inc. Ltd.
+//Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
 //All rights reserved.
 //
 //Redistribution and use in source and binary forms, with or without
@@ -54,7 +54,7 @@ enum TOutputStream {
     ENull = 0,
     EDebugger = 0x01,
     EStdOut = 0x02,
-    EString = 0x04,
+    EString = 0x04
 };
 //
 // Encapsulate info logs for all objects that have them.

@@ -91,9 +91,10 @@ class glEnum( glItem ):
 		glItem.__init__(self, name, enum_name, context)
 
 		temp = attrs.get('count', None)
-		if temp == None:
-			self.default_count = 0
-		else:
+		self.default_count = 0
+		if temp == "?":
+			self.default_count = -1
+		elif temp:
 			try:
 				c = int(temp)
 			except Exception,e:
@@ -175,6 +176,8 @@ class glParameter( glItem ):
 			self.p_count = 0
 			self.counter = c
 
+		self.count_scale = int(attrs.get('count_scale', "1"))
+			
 		if attrs.get('counter', "false") == "true":
 			self.is_counter = 1
 		else:
@@ -296,7 +299,7 @@ class glParameter( glItem ):
 		elif self.p_count == 0:
 			return self.p_type.size
 		else:
-			return self.p_type.size * self.p_count
+			return self.p_type.size * self.p_count * self.count_scale
 
 	def size_string(self):
 		s = self.size()
@@ -310,11 +313,17 @@ class glParameter( glItem ):
 			if b_prod == 0:	b_prod = 1
 
 			if not self.count_parameter_list and self.counter != None:
-				a_prod = self.counter
+				if self.count_scale > 1:
+					a_prod = '(%s * %u)' % (self.counter, self.count_scale)
+				else:
+					a_prod = self.counter
 			elif self.count_parameter_list and self.counter == None:
 				pass
 			elif self.count_parameter_list and self.counter != None:
-				b_prod = self.counter
+				if self.count_scale > 1:
+					b_prod = '(%s * %u)' % (self.counter, self.count_scale)
+				else:
+					b_prod = self.counter
 			elif self.width:
 				return "compsize"
 			else:
@@ -367,6 +376,9 @@ class glFunction( glItem ):
 		else:
 			self.real_name = fn_name
 
+		self.parameters_by_name = {}
+		self.variable_length_parameters = []
+
 		glItem.__init__(self, name, fn_name, context)
 		return
 
@@ -387,6 +399,32 @@ class glFunction( glItem ):
 			self.set_return_type(attrs.get('type', None))
 
 
+	def endElement(self, name):
+		"""Handle the end of a <function> element.
+
+		At the end of a <function> element, there is some semantic
+		checking that can be done.  This prevents some possible
+		exceptions from being thrown elsewhere in the code.
+		"""
+
+		if name == "function":
+			for p in self.variable_length_parameters:
+				if p.counter:
+					counter = self.parameters_by_name[ p.counter ]
+					if not self.parameters_by_name.has_key( p.counter ):
+						raise RuntimeError("Parameter '%s' of function '%s' has counter '%s', but function has no such parameter." % (p.name, self.name, p.counter))
+					elif not self.parameters_by_name[ p.counter ].is_counter:
+						raise RuntimeError("Parameter '%s' of function '%s' has counter '%s', but '%s' is not marked as a counter." % (p.name, self.name, p.counter, p.counter))
+
+					for n in p.count_parameter_list:
+						if not self.parameters_by_name.has_key( n ):
+							raise RuntimeError("Parameter '%s' of function '%s' has size parameter '%s', but function has no such parameter." % (p.name, self.name, n))
+
+			return 1
+		else:
+			return 0
+
+
 	def append(self, tag_name, p):
 		if tag_name != "param":
 			raise RuntimeError("Trying to append '%s' to parameter list of function '%s'." % (tag_name, self.name))
@@ -397,6 +435,11 @@ class glFunction( glItem ):
 		self.fn_parameters.append(p)
 		if p.count_parameter_list != []:
 			self.count_parameter_list.extend( p.count_parameter_list )
+
+		if p.is_variable_length_array():
+			self.variable_length_parameters.append(p)
+
+		self.parameters_by_name[ p.name ] = p
 
 
 	def set_return_type(self, t):
@@ -487,22 +530,18 @@ class glFunctionIterator:
 class FilterGLAPISpecBase(saxutils.XMLFilterBase):
 	name = "a"
 	license = "The license for this file is unspecified."
-	functions = {}
 	next_alias = -2
-	types = {}
-	xref = {}
 	current_object = None
-	factory = None
-	current_category = ""
 
 	def __init__(self):
 		saxutils.XMLFilterBase.__init__(self)
 		self.functions = {}
 		self.types = {}
-		self.xref = {}
+		self.functions_by_name = {}
 		self.factory = glItemFactory()
 		self.header_tag = None
 		self.undef_list = []
+		self.current_category = ""
 
 
 	def find_type(self,type_name):
@@ -514,8 +553,7 @@ class FilterGLAPISpecBase(saxutils.XMLFilterBase):
 
 
 	def find_function(self,function_name):
-		index = self.xref[function_name]
-		return self.functions[index]
+		return self.functions_by_name[function_name]
 
 
 	def functionIterator(self):
@@ -584,7 +622,9 @@ class FilterGLAPISpecBase(saxutils.XMLFilterBase):
 					self.next_alias -= 1
 
 				self.functions[index] = obj
-				self.xref[obj.name] = index
+
+			self.functions_by_name[obj.name] = obj
+
 		elif object_type == "type":
 			self.types[obj.name] = obj
 

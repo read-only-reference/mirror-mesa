@@ -336,6 +336,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #	define R300_GB_TILE_ENABLE	(1<<0)
 #	define R300_GB_TILE_PIPE_COUNT_RV300	0
 #	define R300_GB_TILE_PIPE_COUNT_R300	(3<<1)
+#	define R300_GB_TILE_PIPE_COUNT_R420	(7<<1)
 #	define R300_GB_TILE_SIZE_8		0
 #	define R300_GB_TILE_SIZE_16		(1<<4)
 #	define R300_GB_TILE_SIZE_32		(2<<4)
@@ -535,8 +536,8 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 // the ROUTE_0_COLOR bit is set and ROUTE_0_COLOR_DEST contains the
 // color register index. */
 #       define R300_RS_ROUTE_0_COLOR             (1 << 14)
-#       define R300_RS_ROUTE_0_COLOR_DEST_SHIFT  (1 << 17)
-#       define R300_RS_ROUTE_0_COLOR_DEST_MASK   (31 << 6) /* GUESS */
+#       define R300_RS_ROUTE_0_COLOR_DEST_SHIFT  17
+#       define R300_RS_ROUTE_0_COLOR_DEST_MASK   (31 << 17) /* GUESS */
 /* END */
 
 /* BEGIN: Scissors and cliprects
@@ -999,19 +1000,12 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_REF_ALPHA_MASK               0x000000ff
 #       define R300_ALPHA_TEST_FAIL              (0 << 8)
 #       define R300_ALPHA_TEST_LESS              (1 << 8)
-#       define R300_ALPHA_TEST_LEQUAL            (2 << 8)
-#       define R300_ALPHA_TEST_EQUAL             (3 << 8)
-#       define R300_ALPHA_TEST_GEQUAL            (4 << 8)
-#       define R300_ALPHA_TEST_GREATER           (5 << 8)
-#       define R300_ALPHA_TEST_NEQUAL            (6 << 8)
-#       define R300_ALPHA_TEST_PASS              (7 << 8)
-/* // Possibly more correct values:
 #       define R300_ALPHA_TEST_LEQUAL            (3 << 8)
 #       define R300_ALPHA_TEST_EQUAL             (2 << 8)
 #       define R300_ALPHA_TEST_GEQUAL            (6 << 8)
 #       define R300_ALPHA_TEST_GREATER           (4 << 8)
 #       define R300_ALPHA_TEST_NEQUAL            (5 << 8)
-*/
+#       define R300_ALPHA_TEST_PASS              (7 << 8)
 #       define R300_ALPHA_TEST_OP_MASK           (7 << 8)
 #       define R300_ALPHA_TEST_ENABLE            (1 << 11)
 
@@ -1115,7 +1109,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_RB3D_Z_TEST                  0x00000012
 #       define R300_RB3D_Z_TEST_AND_WRITE        0x00000016
 #       define R300_RB3D_Z_WRITE_ONLY        	 0x00000006
-#	define R300_RB3D_STENCIL_ENABLE		 (0<<1)  /* UNKNOWN yet.. */
+#	define R300_RB3D_STENCIL_ENABLE		 0x00000001
 
 #define R300_RB3D_ZSTENCIL_CNTL_1                   0x4F04
 		/* functions */
@@ -1154,6 +1148,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 
 #define R300_RB3D_ZSTENCIL_CNTL_2                   0x4F08
 #	define R300_RB3D_ZS2_STENCIL_REF_SHIFT		0
+#	define R300_RB3D_ZS2_STENCIL_MASK		0xFF
 #	define R300_RB3D_ZS2_STENCIL_MASK_SHIFT	        8
 #	define R300_RB3D_ZS2_STENCIL_WRITE_MASK_SHIFT	16
 

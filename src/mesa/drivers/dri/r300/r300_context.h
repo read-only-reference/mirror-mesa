@@ -500,6 +500,12 @@ struct r300_depthbuffer_state {
 	GLfloat scale;
 };
 
+struct r300_stencilbuffer_state {
+	GLuint clear;
+	GLboolean hw_stencil;
+
+};
+
 struct r300_vap_reg_state {
 	   /* input register assigments */
 	   int i_coords;
@@ -513,8 +519,11 @@ struct r300_vap_reg_state {
 
 /* Vertex shader state */
 
-/* 64 appears to be the maximum */
-#define VSF_MAX_FRAGMENT_LENGTH (64*4)
+/* Tested with rv350 and verified from misc web pages. */
+#define VSF_MAX_FRAGMENT_LENGTH (256*4)
+	
+/* Tested with rv350 and verified from misc web pages. */
+#define VSF_MAX_FRAGMENT_TEMPS (32)
 
 
 struct r300_vertex_shader_fragment {
@@ -557,6 +566,9 @@ struct r300_vertex_shader_state {
 	int unknown_ptr3;  /* pointer within program space */
 	};
 	
+#define VERTPROG_ACTIVE(ctx) ( ctx->VertexProgram._Enabled && (R300_CONTEXT(ctx)->current_vp != NULL) && \
+	(R300_CONTEXT(ctx)->current_vp->translated) )
+	
 /* r300_vertex_shader_state and r300_vertex_program should probably be merged together someday.
  * Keeping them them seperate for now should ensure fixed pipeline keeps functioning properly.
  */	
@@ -570,6 +582,7 @@ struct r300_vertex_program {
 	int t2rs;
 	unsigned long num_temporaries; /* Number of temp vars used by program */
 	int inputs[VERT_ATTRIB_MAX];
+	GLuint outputs;
 };
 
 /* 64 appears to be the maximum */
@@ -621,7 +634,12 @@ struct r300_pixel_shader_program {
 #define MAX_PIXEL_SHADER_PARAMS 32
 struct r300_pixel_shader_state {
 	struct r300_pixel_shader_program program;
-
+	
+	int translated;
+	int have_sample;
+	GLuint color_reg;
+	GLuint src_previous;
+	
 	/* parameters */
 	int param_length;  /* to limit the number of unnecessary writes */
 	struct {
@@ -675,7 +693,9 @@ struct r300_state {
 	struct {
 		int transform_offset;  /* Transform matrix offset, -1 if none */
 		} vap_param;  /* vertex processor parameter allocation - tells where to write parameters */
-	int hw_stencil;
+	
+	struct r300_stencilbuffer_state stencil;
+	
 };
 
 

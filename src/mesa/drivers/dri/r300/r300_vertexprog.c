@@ -357,8 +357,10 @@ void vp_dump_inputs(struct r300_vertex_program *vp, char *caller)
 {
 	int i;
 	
-	if(vp == NULL)
+	if(vp == NULL){
+		fprintf(stderr, "vp null in call to %s from %s\n", __FUNCTION__, caller);
 		return ;
+	}
 	
 	fprintf(stderr, "%s:<", caller);
 	for(i=0; i < VERT_ATTRIB_MAX; i++)
@@ -373,16 +375,6 @@ static unsigned long t_src_index(struct r300_vertex_program *vp, struct vp_src_r
 	int max_reg=-1;
 	
 	if(src->File == PROGRAM_INPUT){
-		/*
-		switch(src->Index){
-			case 0: return 0;
-			case 3: return 1;
-			
-			case 2: return 2;
-			case 8: return 8;
-			
-		default: printf("unknown input index %d\n", src->Index); exit(0); break;
-		}*/
 		if(vp->inputs[src->Index] != -1)
 			return vp->inputs[src->Index];
 		
@@ -412,6 +404,18 @@ static unsigned long t_src(struct r300_vertex_program *vp, struct vp_src_registe
 				src->Negate ? VSF_FLAG_ALL : VSF_FLAG_NONE);
 }
 
+static unsigned long t_src_scalar(struct r300_vertex_program *vp, struct vp_src_register *src)
+{
+			
+	return MAKE_VSF_SOURCE(t_src_index(vp, src),
+				t_swizzle(src->Swizzle[0]),
+				t_swizzle(src->Swizzle[0]),
+				t_swizzle(src->Swizzle[0]),
+				t_swizzle(src->Swizzle[0]),
+				t_src_class(src->File),
+				src->Negate ? VSF_FLAG_ALL : VSF_FLAG_NONE);
+}
+
 static unsigned long t_opcode(enum vp_opcode opcode)
 {
 
@@ -422,7 +426,6 @@ static unsigned long t_opcode(enum vp_opcode opcode)
 		case VP_OPCODE_EXP: return R300_VPI_OUT_OP_EXP;
 		case VP_OPCODE_FRC: return R300_VPI_OUT_OP_FRC;
 		case VP_OPCODE_LG2: return R300_VPI_OUT_OP_LG2;
-		case VP_OPCODE_LIT: return R300_VPI_OUT_OP_LIT;
 		case VP_OPCODE_LOG: return R300_VPI_OUT_OP_LOG;
 		case VP_OPCODE_MAD: return R300_VPI_OUT_OP_MAD;
 		case VP_OPCODE_MAX: return R300_VPI_OUT_OP_MAX;
@@ -472,7 +475,11 @@ static void translate_program(struct r300_vertex_program *vp)
 	VERTEX_SHADER_INSTRUCTION t2rs[1024];
 	VERTEX_SHADER_INSTRUCTION *o_inst;
 	unsigned long operands;
-	int u_temp_i=63; /* Initial value should be last tmp reg that hw supports */
+	int are_srcs_scalar;
+	/* Initial value should be last tmp reg that hw supports.
+	   Strangely enough r300 doesnt mind even though these would be out of range.
+	   Smart enough to realize that it doesnt need it? */
+	int u_temp_i=VSF_MAX_FRAGMENT_TEMPS-1;
 #ifdef SRCS_WRITABLE
 	struct vp_src_register src[3];
 #else	
@@ -485,14 +492,33 @@ static void translate_program(struct r300_vertex_program *vp)
 	for(i=0; i < VERT_ATTRIB_MAX; i++)
 		vp->inputs[i]=-1;
 	
+	vp->outputs = 0;
+	/* FIXME: hardcoded values in arbprogparse.c:parse_result_binding ()
+	   We might want to use these constants for VAP output in general as well once they have been added to
+	   mesa headers.
+	 */
+	if(mesa_vp->OutputsWritten & (1<<0))
+		vp->outputs |= _TNL_BIT_POS;
+	if(mesa_vp->OutputsWritten & (1<<1))
+		vp->outputs |= _TNL_BIT_COLOR0;
+	if(mesa_vp->OutputsWritten & (1<<2))
+		vp->outputs |= _TNL_BIT_COLOR1;
+	for(i=0; i < 8/*ctx->Const.MaxTextureUnits*/; i++)
+		if(mesa_vp->OutputsWritten & (1<<(7+i)))
+			vp->outputs |= _TNL_BIT_TEX(i);
+	if(mesa_vp->OutputsWritten & ~(0x7 | 0x3f80))
+		fprintf(stderr, "%s:Odd bits(0x%08x)\n", __FUNCTION__, mesa_vp->OutputsWritten);
+			
 	o_inst=vp->program.body.i;
 	for(vpi=mesa_vp->Instructions; vpi->Opcode != VP_OPCODE_END; vpi++, o_inst++){
 		
 		operands=op_operands(vpi->Opcode);
+		are_srcs_scalar=operands & SCALAR_FLAG;
+		operands &= ~SCALAR_FLAG;
 		
 		for(i=0; i < operands; i++)
 			src[i]=vpi->SrcReg[i];
-		
+#if 1
 		if(operands == 3){ /* TODO: scalars */
 			if( CMP_SRCS(src[1], src[2]) || CMP_SRCS(src[0], src[2]) ){
 				o_inst->op=MAKE_VSF_OP(R300_VPI_OUT_OP_ADD, u_temp_i,
@@ -501,12 +527,12 @@ static void translate_program(struct r300_vertex_program *vp)
 				o_inst->src1=MAKE_VSF_SOURCE(t_src_index(vp, &src[2]),
 						SWIZZLE_X, SWIZZLE_Y,
 						SWIZZLE_Z, SWIZZLE_W,
-						t_src_class(src[0].File), VSF_FLAG_NONE);
+						t_src_class(src[2].File), VSF_FLAG_NONE);
 
 				o_inst->src2=MAKE_VSF_SOURCE(t_src_index(vp, &src[2]),
 						SWIZZLE_ZERO, SWIZZLE_ZERO,
 						SWIZZLE_ZERO, SWIZZLE_ZERO,
-						t_src_class(src[0].File), VSF_FLAG_NONE);
+						t_src_class(src[2].File), VSF_FLAG_NONE);
 				o_inst->src3=0;
 				o_inst++;
 						
@@ -538,7 +564,7 @@ static void translate_program(struct r300_vertex_program *vp)
 				u_temp_i--;
 			}
 		}
-		
+#endif		
 		/* these ops need special handling.
 		   Ops that need temp vars should probably be given reg indexes starting at the end of tmp area. */
 		switch(vpi->Opcode){
@@ -601,7 +627,8 @@ static void translate_program(struct r300_vertex_program *vp)
 #ifdef SRCS_WRITABLE
 			vpi->Opcode=VP_OPCODE_MAX;
 			src[1]=src[0];
-			src[1].Negate=GL_TRUE;
+			src[1].Negate=!src[0].Negate;
+			operands=op_operands(vpi->Opcode);
 			break;
 #else
 			o_inst->op=MAKE_VSF_OP(R300_VPI_OUT_OP_MAX, vpi->DstReg.Index,
@@ -647,6 +674,33 @@ static void translate_program(struct r300_vertex_program *vp)
 			u_temp_i--;
 			goto next;
 			
+		case VP_OPCODE_LIT://LIT TMP 1.Y Z TMP 1{} {X W Z Y} TMP 1{} {Y W Z X} TMP 1{} {Y X Z W} 
+			o_inst->op=MAKE_VSF_OP(R300_VPI_OUT_OP_LIT, vpi->DstReg.Index,
+					t_dst_mask(vpi->DstReg.WriteMask), t_dst_class(vpi->DstReg.File));
+			/* NOTE: Users swizzling might not work. */
+			o_inst->src1=MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
+					t_swizzle(src[0].Swizzle[0]), // x
+					t_swizzle(src[0].Swizzle[3]), // w
+					t_swizzle(src[0].Swizzle[2]), // z
+					t_swizzle(src[0].Swizzle[1]), // y
+					t_src_class(src[0].File),
+					src[0].Negate ? VSF_FLAG_ALL : VSF_FLAG_NONE);
+			o_inst->src2=MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
+					t_swizzle(src[0].Swizzle[1]), // y
+					t_swizzle(src[0].Swizzle[3]), // w
+					t_swizzle(src[0].Swizzle[2]), // z
+					t_swizzle(src[0].Swizzle[0]), // x
+					t_src_class(src[0].File),
+					src[0].Negate ? VSF_FLAG_ALL : VSF_FLAG_NONE);
+			o_inst->src3=MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
+					t_swizzle(src[0].Swizzle[1]), // y
+					t_swizzle(src[0].Swizzle[0]), // x
+					t_swizzle(src[0].Swizzle[2]), // z
+					t_swizzle(src[0].Swizzle[3]), // w
+					t_src_class(src[0].File),
+					src[0].Negate ? VSF_FLAG_ALL : VSF_FLAG_NONE);
+			goto next;
+			
 		case VP_OPCODE_DPH://DOT RESULT 1.X Y Z W PARAM 0{} {X Y Z ONE} PARAM 0{} {X Y Z W} 
 			o_inst->op=MAKE_VSF_OP(R300_VPI_OUT_OP_DOT, vpi->DstReg.Index,
 					t_dst_mask(vpi->DstReg.WriteMask), t_dst_class(vpi->DstReg.File));
@@ -662,7 +716,7 @@ static void translate_program(struct r300_vertex_program *vp)
 			o_inst->src3=0;
 			goto next;
 			
-		case VP_OPCODE_XPD:
+		case VP_OPCODE_XPD: /* Broken due to swizzling */
 		/* ADD TMP 0.X Y Z PARAM 0{} {X Y Z W} PARAM 0{} {ZERO ZERO ZERO ZERO} 
 		   MUL TMP 1.X Y Z W TMP 0{} {Z X Y ZERO} PARAM 1{} {Y Z X ZERO} 
 		   MAD RESULT 1.X Y Z W TMP 0{} {Y Z X ONE} PARAM 1{} {Z X Y ONE} TMP 1{X Y Z W } {X Y Z W} neg Xneg Yneg Zneg W*/
@@ -734,33 +788,60 @@ static void translate_program(struct r300_vertex_program *vp)
 	
 		o_inst->op=MAKE_VSF_OP(t_opcode(vpi->Opcode), vpi->DstReg.Index,
 				t_dst_mask(vpi->DstReg.WriteMask), t_dst_class(vpi->DstReg.File));
-
-		switch(operands){
-			case 1:
-				o_inst->src1=t_src(vp, &src[0]);
-				o_inst->src2=0;
-				o_inst->src3=0;
-			break;
-			
-			case 2:
-				o_inst->src1=t_src(vp, &src[0]);
-				o_inst->src2=t_src(vp, &src[1]);
-				o_inst->src3=0;
-			break;
-			
-			case 3:
-				o_inst->src1=t_src(vp, &src[0]);
-				o_inst->src2=t_src(vp, &src[1]);
-				o_inst->src3=t_src(vp, &src[2]);
-			break;
-			
-			default:
-				fprintf(stderr, "scalars and op RCC not handled yet");
-				exit(-1);
-			break;
-		}
-		next:
+		
+		if(are_srcs_scalar){
+			switch(operands){
+				case 1:
+					o_inst->src1=t_src_scalar(vp, &src[0]);
+					o_inst->src2=0;
+					o_inst->src3=0;
+				break;
 				
+				case 2:
+					o_inst->src1=t_src_scalar(vp, &src[0]);
+					o_inst->src2=t_src_scalar(vp, &src[1]);
+					o_inst->src3=0;
+				break;
+				
+				case 3:
+					o_inst->src1=t_src_scalar(vp, &src[0]);
+					o_inst->src2=t_src_scalar(vp, &src[1]);
+					o_inst->src3=t_src_scalar(vp, &src[2]);
+				break;
+				
+				default:
+					fprintf(stderr, "scalars and op RCC not handled yet");
+					exit(-1);
+				break;
+			}
+		}else{
+			switch(operands){
+				case 1:
+					o_inst->src1=t_src(vp, &src[0]);
+					o_inst->src2=0;
+					o_inst->src3=0;
+				break;
+			
+				case 2:
+					o_inst->src1=t_src(vp, &src[0]);
+					o_inst->src2=t_src(vp, &src[1]);
+					o_inst->src3=0;
+				break;
+			
+				case 3:
+					o_inst->src1=t_src(vp, &src[0]);
+					o_inst->src2=t_src(vp, &src[1]);
+					o_inst->src3=t_src(vp, &src[2]);
+				break;
+			
+				default:
+					fprintf(stderr, "scalars and op RCC not handled yet");
+					exit(-1);
+				break;
+			}
+		}
+		next: ;
+#if 0				
 		/* If instruction writes to result and one of the inputs is tmp, we move it at the end of program */
 		if(vpi->DstReg.File == PROGRAM_OUTPUT){
 			for(operand_index=0; operand_index < operands; operand_index++)
@@ -770,13 +851,13 @@ static void translate_program(struct r300_vertex_program *vp)
 					break;
 				}
 		}
-		
+#endif		
 	}
-	
+#if 0	
 	/* Put "tmp to result" instructions in */
 	for(i=0; i < vp->t2rs; i++, o_inst++)
 		*o_inst=t2rs[i];
-		
+#endif		
 	vp->program.length=(o_inst - vp->program.body.i) * 4;
 	
 	if(u_temp_i < vp->num_temporaries)
@@ -853,13 +934,16 @@ static void r300ProgramStringNotify(GLcontext *ctx, GLenum target,
 				struct program *prog)
 {
 	struct r300_vertex_program *vp=(void *)prog;
-#if 0			
+#if 0
 	fprintf(stderr, "r300ProgramStringNotify\n");
 #endif
 		
 	switch(target) {
 	case GL_VERTEX_PROGRAM_ARB:
 		vp->translated=GL_FALSE;
+	break;
+	case GL_FRAGMENT_PROGRAM_ARB:
+		return ;
 		break;
 	}
 	

@@ -107,6 +107,25 @@ static __inline__ uint32_t cmdcpdelay(unsigned short count)
 	return cmd.u;
 }
 
+static __inline__ uint32_t cmdwait(unsigned char flags)
+{
+	drm_r300_cmd_header_t cmd;
+
+	cmd.wait.cmd_type = R300_CMD_WAIT;
+	cmd.wait.flags = flags;
+
+	return cmd.u;
+}
+
+static __inline__ uint32_t cmdpacify(void)
+{
+	drm_r300_cmd_header_t cmd;
+
+	cmd.header.cmd_type = R300_CMD_END3D;
+
+	return cmd.u;
+}
+
 /* Prepare to write a register value to register at address reg.
    If num_extra > 0 then the following extra values are written
    to registers with address +4, +8 and so on.. */
@@ -181,13 +200,14 @@ static __inline__ uint32_t cmdcpdelay(unsigned short count)
 	}
 
 	/* must be sent to switch to 2d commands */
+/*
 void static inline end_3d(PREFIX_VOID)
 {
 LOCAL_VARS
 (void)cmd_reserved; (void)cmd_written;
 
 cmd=(drm_radeon_cmd_header_t *) r300AllocCmdBuf(rmesa, \
-					0, \
+					0, \ // ??!
 					__FUNCTION__); \
 
 cmd[0].header.cmd_type=R300_CMD_END3D;
@@ -199,11 +219,12 @@ LOCAL_VARS
 (void)cmd_reserved; (void)cmd_written;
 
 cmd=(drm_radeon_cmd_header_t *) r300AllocCmdBuf(rmesa, \
-					0, \
+					0, \ // ??!
 					__FUNCTION__); \
 
 cmd[0].i=cmdcpdelay(count);
 }
+*/
 
 /* fire vertex buffer */
 static void inline fire_AOS(PREFIX int vertex_count, int type)

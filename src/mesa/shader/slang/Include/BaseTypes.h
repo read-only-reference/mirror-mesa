@@ -1,5 +1,5 @@
 //
-//Copyright (C) 2002-2004  3Dlabs Inc. Ltd.
+//Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
 //All rights reserved.
 //
 //Redistribution and use in source and binary forms, with or without
@@ -50,7 +50,7 @@ enum TBasicType {
     EbtSampler1DShadow,
     EbtSampler2DShadow,
     EbtStruct,
-    EbtAddress,
+    EbtAddress
 };
 
 __inline bool IsSampler(TBasicType type)
@@ -97,7 +97,7 @@ enum TQualifier {
     EvqFragDepth,
 
     // end of list
-    EvqLast,
+    EvqLast
 };
 
 //

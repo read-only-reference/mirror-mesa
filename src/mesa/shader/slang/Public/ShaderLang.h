@@ -1,5 +1,5 @@
 /*
-//Copyright (C) 2002-2004  3Dlabs Inc. Ltd.
+//Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
 //All rights reserved.
 //
 //Redistribution and use in source and binary forms, with or without
@@ -34,9 +34,16 @@
 #ifndef _COMPILER_INTERFACE_INCLUDED_
 #define _COMPILER_INTERFACE_INCLUDED_
 
+#include "../Include/ResourceLimits.h"
 
 #ifdef _WIN32
 #define C_DECL __cdecl
+/*#ifdef SH_EXPORTING
+    #define SH_IMPORT_EXPORT __declspec(dllexport)
+#else
+    #define SH_IMPORT_EXPORT __declspec(dllimport)
+#endif*/
+/* disable DLL linking */
 #define SH_IMPORT_EXPORT
 #else
 #define SH_IMPORT_EXPORT
@@ -62,33 +69,6 @@ SH_IMPORT_EXPORT int ShInitialize();
 // Driver should call this at shutdown.
 */
 SH_IMPORT_EXPORT int __fastcall ShFinalize();
-/*
-// to be used for hardwareDataType and userDataType by ICD
-*/
-typedef enum {
-    EFloat,
-    EInt,
-    EBool,
-    EFloat_Vec2,
-    EFloat_Vec3,
-    EFloat_Vec4,
-    EInt_Vec2,
-    EInt_Vec3,
-    EInt_Vec4,
-    EBool_Vec2,
-    EBool_Vec3,
-    EBool_Vec4,
-    EFloat_Mat2,
-    EFloat_Mat3,
-    EFloat_Mat4,
-    ESampler_1D,
-    ESampler_2D,
-    ESampler_3D,
-    ESampler_Cube,
-    ESampler_1D_Shadow,
-    ESampler_2D_Shadow,
-    EStruct
-} ShBasicType;
 
 /*
 // Types of languages the compiler can consume.
@@ -98,7 +78,7 @@ typedef enum {
 	EShLangFragment,
 	EShLangPack,
     EShLangUnpack,
-    EShLangCount,
+    EShLangCount
 } EShLanguage;
 
 /*
@@ -118,7 +98,7 @@ typedef enum {
     EShOptNoGeneration,
     EShOptNone,
     EShOptSimple,       /* Optimizations that can be done quickly */
-    EShOptFull,         /* Optimizations that will take more time */
+    EShOptFull          /* Optimizations that will take more time */
 } EShOptimizationLevel;
 
 /*
@@ -132,7 +112,7 @@ typedef struct {
 
 typedef struct {
     int numBindings;
-	ShBinding* bindings;  /* array of bindings */
+    ShBinding* bindings;  /* array of bindings */
 } ShBindingTable;
 
 /*
@@ -167,6 +147,7 @@ SH_IMPORT_EXPORT int ShCompile(
     const char* const shaderStrings[],
     const int numStrings,
     const EShOptimizationLevel,
+    const TBuiltInResource *resources,
     int debugOptions
     );
 
@@ -215,7 +196,6 @@ SH_IMPORT_EXPORT int ShExcludeAttributes(const ShHandle, int *attributes, int co
 // Returns -1 if error.
 */
 SH_IMPORT_EXPORT int ShGetUniformLocation(const ShHandle uniformMap, const char* name);
-SH_IMPORT_EXPORT char* ShGetUniformName(const ShHandle linker, int virtualLocation);
 
 enum TDebugOptions {
 	EDebugOpNone               = 0x000,

@@ -243,7 +243,7 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 	GLuint vic_1 = 0;	/* R300_VAP_INPUT_CNTL_1 */
 	GLuint aa_vap_reg = 0; /* VAP register assignment */
 	GLuint i;
-	GLuint inputs = 0;
+	GLuint inputs = 0, outputs = 0;
 	
 
 #define CONFIGURE_AOS(r, f, v, sz, cn) { \
@@ -254,7 +254,7 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 			exit(-1); \
 		} \
 		\
-		if (rmesa->current_vp == NULL) \
+		if (VERTPROG_ACTIVE(ctx) == GL_FALSE) \
 			rmesa->state.aos[nr-1].aos_reg = aa_vap_reg++; \
 		rmesa->state.aos[nr-1].aos_format = f; \
 		if (immd) { \
@@ -272,7 +272,7 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 		} \
 }
 
-	if (rmesa->current_vp != NULL) {
+	if (VERTPROG_ACTIVE(ctx)) {
 		if (rmesa->current_vp->inputs[VERT_ATTRIB_POS] != -1) {
 			inputs |= _TNL_BIT_POS;
 			rmesa->state.aos[nr++].aos_reg = rmesa->current_vp->inputs[VERT_ATTRIB_POS];
@@ -306,6 +306,14 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 		nr = 0;
 	} else {
 		inputs = TNL_CONTEXT(ctx)->render_inputs;
+		/* Hack to see what would happen if we would enable tex units according to their enabled values. 
+		   Why arent we doing this?
+		   As for vertex programs tex coords should be passed if program wants them as some programs might deliver
+		   some other values to the program with them. Futher more some programs might generate output tex coords
+		   without taking them as inputs. */
+		/*for (i=0;i<ctx->Const.MaxTextureUnits;i++) 
+			if(ctx->Texture.Unit[i].Enabled == 0)
+				inputs &= ~ (_TNL_BIT_TEX0<<i);*/
 	}
 	rmesa->state.render_inputs = inputs;
 
@@ -489,13 +497,22 @@ drm_radeon_cmd_header_t *cmd = NULL;
 #endif
 
 	/* Stage 3: VAP output */
+	if (VERTPROG_ACTIVE(ctx))
+		outputs = rmesa->current_vp->outputs;
+	else
+		outputs = inputs;
+	
 	R300_STATECHANGE(r300, vof);
-	r300->hw.vof.cmd[R300_VOF_CNTL_0]=R300_VAP_OUTPUT_VTX_FMT_0__POS_PRESENT
-					| R300_VAP_OUTPUT_VTX_FMT_0__COLOR_PRESENT;
+	
+	r300->hw.vof.cmd[R300_VOF_CNTL_0]=0;
+	if(outputs & _TNL_BIT_POS)
+		r300->hw.vof.cmd[R300_VOF_CNTL_0] |= R300_VAP_OUTPUT_VTX_FMT_0__POS_PRESENT;
+	if(outputs & _TNL_BIT_COLOR0)
+		r300->hw.vof.cmd[R300_VOF_CNTL_0] |= R300_VAP_OUTPUT_VTX_FMT_0__COLOR_PRESENT;
 
 	r300->hw.vof.cmd[R300_VOF_CNTL_1]=0;
 	for(i=0;i < ctx->Const.MaxTextureUnits;i++)
-		if(r300->state.render_inputs & (_TNL_BIT_TEX0<<i))
+		if(outputs & (_TNL_BIT_TEX0<<i))
 			r300->hw.vof.cmd[R300_VOF_CNTL_1]|=(4<<(3*i));
 
 	rmesa->state.aos_count = nr;

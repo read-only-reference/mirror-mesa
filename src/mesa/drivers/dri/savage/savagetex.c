@@ -767,17 +767,19 @@ static void savageUploadTexImages( savageContextPtr imesa, savageTexObjPtr t )
       if (SAVAGE_DEBUG & DEBUG_VERBOSE_TEX)
 	 fprintf(stderr, "Texture upload: |");
 
-      savageFlushVertices (imesa);
-      LOCK_HARDWARE(imesa);
-      savageFlushCmdBufLocked (imesa, GL_FALSE);
       /* Heap timestamps are only reliable with Savage DRM 2.3.x or
        * later. Earlier versions had only 16 bit time stamps which
        * would wrap too frequently. */
       if (imesa->savageScreen->driScrnPriv->drmMinor >= 3) {
 	  unsigned int heap = t->base.heap->heapId;
+	  LOCK_HARDWARE(imesa);
 	  savageWaitEvent (imesa, imesa->textureHeaps[heap]->timestamp);
-      } else
+      } else {
+	  savageFlushVertices (imesa);
+	  LOCK_HARDWARE(imesa);
+	  savageFlushCmdBufLocked (imesa, GL_FALSE);
 	  WAIT_IDLE_EMPTY_LOCKED(imesa);
+      }
 
       for (i = 0 ; i < numLevels ; i++) {
          const GLint j = t->base.firstLevel + i;  /* the texObj's level */
@@ -1403,10 +1405,40 @@ static void savageUpdateTexState_s3d( GLcontext *ctx )
 }
 
 
+static void savageTimestampTextures( savageContextPtr imesa )
+{
+   /* Timestamp current texture objects for texture heap aging.
+    * Only useful with long-lived 32-bit event tags available
+    * with Savage DRM 2.3.x or later. */
+   if ((imesa->CurrentTexObj[0] || imesa->CurrentTexObj[1]) &&
+       imesa->savageScreen->driScrnPriv->drmMinor >= 3) {
+       unsigned int e;
+       FLUSH_BATCH(imesa);
+       e = savageEmitEvent(imesa, SAVAGE_WAIT_3D);
+       if (imesa->CurrentTexObj[0])
+	   imesa->CurrentTexObj[0]->timestamp = e;
+       if (imesa->CurrentTexObj[1])
+	   imesa->CurrentTexObj[1]->timestamp = e;
+   }
+}
+
 
 static void savageUpdateTextureState_s4( GLcontext *ctx )
 {
    savageContextPtr imesa = SAVAGE_CONTEXT(ctx);
+
+   /* When a texture is about to change or be disabled, timestamp the
+    * old texture(s). We'll have to wait for this time stamp before
+    * uploading anything to the same texture heap.
+    */
+   if ((imesa->CurrentTexObj[0] && ctx->Texture.Unit[0]._ReallyEnabled &&
+	ctx->Texture.Unit[0]._Current->DriverData != imesa->CurrentTexObj[0]) ||
+       (imesa->CurrentTexObj[1] && ctx->Texture.Unit[1]._ReallyEnabled &&
+	ctx->Texture.Unit[1]._Current->DriverData != imesa->CurrentTexObj[1]) ||
+       (imesa->CurrentTexObj[0] && !ctx->Texture.Unit[0]._ReallyEnabled) ||
+       (imesa->CurrentTexObj[1] && !ctx->Texture.Unit[1]._ReallyEnabled))
+       savageTimestampTextures(imesa);
+
    if (imesa->CurrentTexObj[0]) imesa->CurrentTexObj[0]->bound &= ~1;
    if (imesa->CurrentTexObj[1]) imesa->CurrentTexObj[1]->bound &= ~2;
    imesa->CurrentTexObj[0] = 0;
@@ -1419,6 +1451,16 @@ static void savageUpdateTextureState_s4( GLcontext *ctx )
 static void savageUpdateTextureState_s3d( GLcontext *ctx )
 {
     savageContextPtr imesa = SAVAGE_CONTEXT(ctx);
+
+   /* When a texture is about to change or be disabled, timestamp the
+    * old texture(s). We'll have to wait for this time stamp before
+    * uploading anything to the same texture heap.
+    */
+    if ((imesa->CurrentTexObj[0] && ctx->Texture.Unit[0]._ReallyEnabled &&
+	 ctx->Texture.Unit[0]._Current->DriverData != imesa->CurrentTexObj[0]) ||
+	(imesa->CurrentTexObj[0] && !ctx->Texture.Unit[0]._ReallyEnabled))
+	savageTimestampTextures(imesa);
+
     if (imesa->CurrentTexObj[0]) imesa->CurrentTexObj[0]->bound &= ~1;
     imesa->CurrentTexObj[0] = 0;
     savageUpdateTexState_s3d( ctx );
@@ -1470,15 +1512,18 @@ static void savageTexEnv( GLcontext *ctx, GLenum target,
    } 
 }
 
-/* Update a heap's timestamp when a texture image is modified, so the
- * new image is not uploaded while the old one is still in use.
- * FIXME: this should be moved to ../common/texmem.c 
- */
+/* Update the heap's time stamp, so the new image is not uploaded
+ * while the old one is still in use. If the texture that is going to
+ * be changed is currently bound, we need to timestamp the texture
+ * first. */
 static void savageTexImageChanged (savageTexObjPtr t) {
-    /* Update the heap's time stamp, so the new image is not uploaded
-     * while the old one is still in use. */
-    if (t->base.heap && t->base.timestamp > t->base.heap->timestamp)
-	t->base.heap->timestamp = t->base.timestamp;
+    if (t->base.heap) {
+	if (t->base.bound)
+	    savageTimestampTextures(
+		(savageContextPtr)t->base.heap->driverContext);
+	if (t->base.timestamp > t->base.heap->timestamp)
+	    t->base.heap->timestamp = t->base.timestamp;
+    }
 }
 
 static void savageTexImage1D( GLcontext *ctx, GLenum target, GLint level,
@@ -1644,9 +1689,8 @@ static void savageDeleteTexture( GLcontext *ctx, struct gl_texture_object *tObj 
    savageContextPtr imesa = SAVAGE_CONTEXT( ctx );
 
    if (t) {
-      if (t->bound) {
-	 FLUSH_BATCH(imesa);
-      }
+      if (t->bound)
+	 savageTimestampTextures(imesa);
 
       driDestroyTextureObject(t);
    }
