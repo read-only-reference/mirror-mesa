@@ -1,4 +1,4 @@
-/* $Id: colortab.c,v 1.30 2000/11/23 02:50:56 jtaylor Exp $ */
+/* $Id: colortab.c,v 1.33 2000/12/26 05:09:27 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -113,7 +113,7 @@ _mesa_init_colortable( struct gl_color_table *p )
       t[2] = CHAN_MAX;
       t[3] = CHAN_MAX;
    }
-   p->Size = 1;
+   p->Size = 0;
    p->IntFormat = GL_RGBA;
    p->Format = GL_RGBA;
    p->RedSize = CHAN_BITS;
@@ -213,8 +213,7 @@ _mesa_ColorTable( GLenum target, GLenum internalFormat,
    GLfloat rBias  = 0.0, gBias  = 0.0, bBias  = 0.0, aBias  = 0.0;
    GLboolean floatTable = GL_FALSE;
    GLint comps;
-
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glColorTable");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx); /* too complex */
 
    switch (target) {
       case GL_TEXTURE_1D:
@@ -304,7 +303,7 @@ _mesa_ColorTable( GLenum target, GLenum internalFormat,
 
    if (!_mesa_is_legal_format_and_type(format, type) ||
        format == GL_INTENSITY) {
-      gl_error(ctx, GL_INVALID_ENUM, "glColorTable(format or type)");
+      gl_error(ctx, GL_INVALID_OPERATION, "glColorTable(format or type)");
       return;
    }
 
@@ -314,14 +313,17 @@ _mesa_ColorTable( GLenum target, GLenum internalFormat,
       return;
    }
 
-   if (width < 0 || _mesa_bitcount(width) != 1) {
+   if (width < 0 || (width != 0 && _mesa_bitcount(width) != 1)) {
+      /* error */
       if (proxy) {
          table->Size = 0;
          table->IntFormat = (GLenum) 0;
          table->Format = (GLenum) 0;
       }
       else {
-         gl_error(ctx, GL_INVALID_VALUE, "glColorTable(width)");
+         char msg[100];
+         sprintf(msg, "glColorTable(width=%d)", width);
+         gl_error(ctx, GL_INVALID_VALUE, msg);
       }
       return;
    }
@@ -335,8 +337,11 @@ _mesa_ColorTable( GLenum target, GLenum internalFormat,
       else {
          if (width > ctx->Const.MaxColorTableSize)
             gl_error(ctx, GL_TABLE_TOO_LARGE, "glColorTable(width)");
-         else
-            gl_error(ctx, GL_INVALID_VALUE, "glColorTable(width)");
+         else {
+            char msg[100];
+            sprintf(msg, "glColorTable(width=%d)", width);
+            gl_error(ctx, GL_INVALID_VALUE, msg);
+         }
       }
       return;
    }
@@ -454,8 +459,7 @@ _mesa_ColorSubTable( GLenum target, GLsizei start,
    GLfloat rScale = 1.0, gScale = 1.0, bScale = 1.0, aScale = 1.0;
    GLfloat rBias  = 0.0, gBias  = 0.0, bBias  = 0.0, aBias  = 0.0;
    GLint comps;
-
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glColorSubTable");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    switch (target) {
       case GL_TEXTURE_1D:
@@ -515,7 +519,7 @@ _mesa_ColorSubTable( GLenum target, GLsizei start,
 
    if (!_mesa_is_legal_format_and_type(format, type) ||
        format == GL_INTENSITY) {
-      gl_error(ctx, GL_INVALID_ENUM, "glColorSubTable(format or type)");
+      gl_error(ctx, GL_INVALID_OPERATION, "glColorSubTable(format or type)");
       return;
    }
 
@@ -624,7 +628,7 @@ _mesa_CopyColorTable(GLenum target, GLenum internalformat,
 {
    GLchan data[MAX_WIDTH][4];
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glCopyColorTable");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    /* Select buffer to read from */
    (*ctx->Driver.SetReadBuffer)( ctx, ctx->ReadBuffer,
@@ -655,7 +659,7 @@ _mesa_CopyColorSubTable(GLenum target, GLsizei start,
 {
    GLchan data[MAX_WIDTH][4];
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glCopyColorSubTable");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    /* Select buffer to read from */
    (*ctx->Driver.SetReadBuffer)( ctx, ctx->ReadBuffer,
@@ -687,8 +691,7 @@ _mesa_GetColorTable( GLenum target, GLenum format,
    struct gl_color_table *table = NULL;
    GLchan rgba[MAX_COLOR_TABLE_SIZE][4];
    GLint i;
-
-   ASSERT_OUTSIDE_BEGIN_END(ctx, "glGetColorTable");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (ctx->NewState) {
       gl_update_state(ctx);
@@ -859,7 +862,7 @@ void
 _mesa_ColorTableParameterfv(GLenum target, GLenum pname, const GLfloat *params)
 {
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END(ctx, "glColorTableParameterfv");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    switch (target) {
       case GL_COLOR_TABLE_SGI:
@@ -954,8 +957,7 @@ _mesa_GetColorTableParameterfv( GLenum target, GLenum pname, GLfloat *params )
    GET_CURRENT_CONTEXT(ctx);
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    struct gl_color_table *table = NULL;
-
-   ASSERT_OUTSIDE_BEGIN_END(ctx, "glGetColorTableParameterfv");
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    switch (target) {
       case GL_TEXTURE_1D:
@@ -1085,8 +1087,7 @@ _mesa_GetColorTableParameteriv( GLenum target, GLenum pname, GLint *params )
    GET_CURRENT_CONTEXT(ctx);
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    struct gl_color_table *table = NULL;
-
-   ASSERT_OUTSIDE_BEGIN_END(ctx, "glGetColorTableParameteriv");
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    switch (target) {
       case GL_TEXTURE_1D:

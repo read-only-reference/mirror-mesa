@@ -54,7 +54,7 @@ static char *ggimesaconffile = ggimesaconfstub + GGIMESATAGLEN;
 int _ggimesaDebugSync = 0;
 uint32 _ggimesaDebugState = 0;
 
-static void gl_ggiUpdateState(GLcontext *ctx);
+static void gl_ggiUpdateState(GLcontext *ctx, GLuint new_state);
 static int changed(ggi_visual_t vis, int whatchanged);
 
 static void gl_ggiGetSize(GLcontext *ctx, GLuint *width, GLuint *height)
@@ -136,20 +136,6 @@ static GLbitfield gl_ggiClear(GLcontext *ctx,GLbitfield mask, GLboolean all,
 	}
 	return mask & (~GL_COLOR_BUFFER_BIT);
 }
-
-#if 0
-static GLboolean gl_ggiSetBuffer(GLcontext *ctx, GLenum mode)
-{
-	GGIMESADPRINT_CORE("gl_ggiSetBuffer() called\n");
-	
-	if (mode == GL_FRONT)
-	  GGICTX->active_buffer = 1;
-	else
-	  GGICTX->active_buffer = 0;
-	
-	return GL_TRUE;
-}
-#endif
 
 /* Set the buffer used for drawing */
 static GLboolean gl_ggiSetDrawBuffer(GLcontext *ctx, GLenum mode)
@@ -254,9 +240,7 @@ static void gl_ggiSetupPointers(GLcontext *ctx)
 	ctx->Driver.LineFunc = _swsetup_Line;
 	ctx->Driver.TriangleFunc = _swsetup_Triangle;
 	ctx->Driver.QuadFunc = _swsetup_Quad;
-	ctx->Driver.RasterSetup = _swsetup_RasterSetup;
-	ctx->Driver.RegisterVB = _swsetup_RegisterVB;
-	ctx->Driver.UnregisterVB = _swsetup_UnregisterVB;
+	
 }
 
 static int gl_ggiInitInfo(GGIMesaContext ctx, struct ggi_mesa_info *info)
@@ -580,7 +564,7 @@ void GGIMesaSwapBuffers(void)
 	}
 }
 
-static void gl_ggiUpdateState(GLcontext *ctx)
+static void gl_ggiUpdateState(GLcontext *ctx, GLuint new_state)
 {
 	void *func;
 
@@ -589,9 +573,9 @@ static void gl_ggiUpdateState(GLcontext *ctx)
 	/* Propogate statechange information to swrast and swrast_setup
 	 * modules.  The GGI driver has no internal GL-dependent state.
 	 */
-	_swrast_InvalidateState(ctx, ctx->NewState);
-	_swsetup_InvalidateState(ctx, ctx->NewState);
-	_tnl_InvalidateState(ctx, ctx->NewState);
+	_swrast_InvalidateState(ctx, new_state);
+	_swsetup_InvalidateState(ctx, new_state);
+	_tnl_InvalidateState(ctx, new_state);
 	
 	func = (void *)CTX_OPMESA(ctx)->update_state;
 

@@ -1,8 +1,8 @@
-/* $Id: xm_api.c,v 1.10 2000/11/22 07:32:17 joukj Exp $ */
+/* $Id: xm_api.c,v 1.13 2000/12/26 05:09:31 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  *
@@ -78,6 +78,7 @@
 #include "macros.h"
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
+#include "array_cache/acache.h"
 #include "tnl/tnl.h"
 
 #ifndef GLX_NONE_EXT
@@ -1067,7 +1068,7 @@ static void setup_truecolor( XMesaVisual v, XMesaBuffer buffer,
       GLint rBits = bitcount(rmask);
       GLint gBits = bitcount(gmask);
       GLint bBits = bitcount(bmask);
-      GLint minBits;
+      GLint maxBits;
       GLuint i;
 
       /* convert pixel components in [0,_mask] to RGB values in [0,255] */
@@ -1096,11 +1097,11 @@ static void setup_truecolor( XMesaVisual v, XMesaBuffer buffer,
       }
 
       /* setup dithering kernel */
-      minBits = rBits;
-      if (gBits < minBits)  minBits = gBits;
-      if (bBits < minBits)  minBits = bBits;
+      maxBits = rBits;
+      if (gBits > maxBits)  maxBits = gBits;
+      if (bBits > maxBits)  maxBits = bBits;
       for (i=0;i<16;i++) {
-         v->Kernel[i] = kernel[i] >> minBits;
+         v->Kernel[i] = kernel[i] >> maxBits;
       }
 
       v->undithered_pf = PF_TRUECOLOR;
@@ -1665,8 +1666,9 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
    /* Initialize the software rasterizer and helper modules.
     */
    _swrast_CreateContext( ctx );
-   _swsetup_CreateContext( ctx );
+   _ac_CreateContext( ctx );
    _tnl_CreateContext( ctx );
+   _swsetup_CreateContext( ctx );
 
    xmesa_register_swrast_functions( ctx );
 
@@ -2404,7 +2406,7 @@ void XMesaCopySubBuffer( XMesaBuffer b, int x, int y, int width, int height )
       _mesa_swapbuffers(ctx);
 
    if (b->db_state) {
-      int yTop = b->bottom - y - height;
+      int yTop = b->height - y - height;
 #ifdef FX
       if (b->FXctx) {
          fxMesaSwapBuffers();

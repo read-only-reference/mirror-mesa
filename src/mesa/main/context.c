@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.110 2000/11/27 18:22:13 brianp Exp $ */
+/* $Id: context.c,v 1.114 2000/12/26 05:09:28 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -77,7 +77,6 @@ int MESA_VERBOSE = 0
 /*                 | VERBOSE_API */
 /*                 | VERBOSE_DRIVER */
 /*                 | VERBOSE_STATE */
-/*                 | VERBOSE_CULL */
 /*                 | VERBOSE_DISPLAY_LIST */
 ;
 #endif
@@ -302,7 +301,7 @@ _mesa_initialize_visual( GLvisual *vis,
       vis->DepthMax = 0xffffffff;
       vis->DepthMaxF = (GLfloat) vis->DepthMax;
    }
-   vis->MRD = 1;  /* XXX temporary value */
+   vis->MRD = 2.0;  /* XXX temporary value */
 
    return GL_TRUE;
 }
@@ -603,7 +602,7 @@ init_light( struct gl_light *l, GLuint n )
    ASSIGN_4V( l->EyePosition, 0.0, 0.0, 1.0, 0.0 );
    ASSIGN_3V( l->EyeDirection, 0.0, 0.0, -1.0 );
    l->SpotExponent = 0.0;
-   gl_compute_spot_exp_table( l );
+   gl_invalidate_spot_exp_table( l );
    l->SpotCutoff = 180.0;
    l->_CosCutoff = 0.0;		/* KW: -ve values not admitted */
    l->ConstantAttenuation = 1.0;
@@ -993,15 +992,6 @@ init_attrib_groups( GLcontext *ctx )
       s->refcount = 0;
       insert_at_tail( ctx->_ShineTabList, s );
    }
-   for (i = 0 ; i < 4 ; i++) {
-      ctx->_ShineTable[i] = ctx->_ShineTabList->prev;
-      ctx->_ShineTable[i]->refcount++;
-   }
-
-   gl_compute_shine_table( ctx, 0, ctx->Light.Material[0].Shininess );
-   gl_compute_shine_table( ctx, 2, ctx->Light.Material[0].Shininess * .5 );
-   gl_compute_shine_table( ctx, 1, ctx->Light.Material[1].Shininess );
-   gl_compute_shine_table( ctx, 3, ctx->Light.Material[1].Shininess * .5 );
 
 
    /* Line group */
@@ -1080,6 +1070,11 @@ init_attrib_groups( GLcontext *ctx )
       ASSIGN_4V(ctx->Pixel.ConvolutionFilterScale[i], 1.0, 1.0, 1.0, 1.0);
       ASSIGN_4V(ctx->Pixel.ConvolutionFilterBias[i], 0.0, 0.0, 0.0, 0.0);
    }
+   for (i = 0; i < MAX_CONVOLUTION_WIDTH * MAX_CONVOLUTION_WIDTH * 4; i++) {
+      ctx->Convolution1D.Filter[i] = 0.0;
+      ctx->Convolution2D.Filter[i] = 0.0;
+      ctx->Separable2D.Filter[i] = 0.0;
+   }
    ASSIGN_4V(ctx->Pixel.PostConvolutionScale, 1.0, 1.0, 1.0, 1.0);
    ASSIGN_4V(ctx->Pixel.PostConvolutionBias, 0.0, 0.0, 0.0, 0.0);
 
@@ -1094,15 +1089,15 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Point.MinSize = 0.0;
    ctx->Point.MaxSize = ctx->Const.MaxPointSize;
    ctx->Point.Threshold = 1.0;
+   ctx->Point.SpriteMode = GL_FALSE; /* GL_MESA_sprite_point */
 
    /* Polygon group */
    ctx->Polygon.CullFlag = GL_FALSE;
    ctx->Polygon.CullFaceMode = GL_BACK;
    ctx->Polygon.FrontFace = GL_CCW;
-   ctx->Polygon.FrontBit = 0;
+   ctx->Polygon._FrontBit = 0;
    ctx->Polygon.FrontMode = GL_FILL;
    ctx->Polygon.BackMode = GL_FILL;
-   ctx->Polygon._Unfilled = GL_FALSE;
    ctx->Polygon.SmoothFlag = GL_FALSE;
    ctx->Polygon.StippleFlag = GL_FALSE;
    ctx->Polygon.OffsetFactor = 0.0F;
@@ -1842,7 +1837,7 @@ _mesa_get_current_context( void )
 void
 _mesa_swapbuffers(GLcontext *ctx)
 {
-   FLUSH_TNL( ctx, FLUSH_STORED_VERTICES );
+   FLUSH_VERTICES( ctx, 0 );
 }
 
 
@@ -1983,7 +1978,7 @@ void
 _mesa_Finish( void )
 {
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glFinish");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
    if (ctx->Driver.Finish) {
       (*ctx->Driver.Finish)( ctx );
    }
@@ -1995,7 +1990,7 @@ void
 _mesa_Flush( void )
 {
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glFlush");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
    if (ctx->Driver.Flush) {
       (*ctx->Driver.Flush)( ctx );
    }
@@ -2003,7 +1998,7 @@ _mesa_Flush( void )
 
 
 
-const char *_mesa_prim_name[GL_POLYGON+2] = {
+const char *_mesa_prim_name[GL_POLYGON+4] = {
    "GL_POINTS",
    "GL_LINES",
    "GL_LINE_LOOP",
@@ -2014,7 +2009,9 @@ const char *_mesa_prim_name[GL_POLYGON+2] = {
    "GL_QUADS",
    "GL_QUAD_STRIP",
    "GL_POLYGON",
-   "culled primitive"
+   "outside begin/end",
+   "inside unkown primitive",
+   "unknown state"
 };
 
 

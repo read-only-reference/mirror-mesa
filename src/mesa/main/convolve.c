@@ -1,4 +1,4 @@
-/* $Id: convolve.c,v 1.15 2000/11/23 02:50:56 jtaylor Exp $ */
+/* $Id: convolve.c,v 1.17 2000/12/26 05:09:28 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -112,7 +112,7 @@ _mesa_ConvolutionFilter1D(GLenum target, GLenum internalFormat, GLsizei width, G
 {
    GLenum baseFormat;
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glConvolutionFilter1D");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (target != GL_CONVOLUTION_1D) {
       gl_error(ctx, GL_INVALID_ENUM, "glConvolutionFilter1D(target)");
@@ -130,8 +130,12 @@ _mesa_ConvolutionFilter1D(GLenum target, GLenum internalFormat, GLsizei width, G
       return;
    }
 
-   if (!_mesa_is_legal_format_and_type(format, type) ||
-       format == GL_COLOR_INDEX ||
+   if (!_mesa_is_legal_format_and_type(format, type)) {
+      gl_error(ctx, GL_INVALID_OPERATION, "glConvolutionFilter1D(format or type)");
+      return;
+   }
+
+   if (format == GL_COLOR_INDEX ||
        format == GL_STENCIL_INDEX ||
        format == GL_DEPTH_COMPONENT ||
        format == GL_INTENSITY ||
@@ -182,7 +186,7 @@ _mesa_ConvolutionFilter2D(GLenum target, GLenum internalFormat, GLsizei width, G
    GLenum baseFormat;
    GLint i, components;
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glConvolutionFilter2D");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (target != GL_CONVOLUTION_2D) {
       gl_error(ctx, GL_INVALID_ENUM, "glConvolutionFilter2D(target)");
@@ -204,8 +208,11 @@ _mesa_ConvolutionFilter2D(GLenum target, GLenum internalFormat, GLsizei width, G
       return;
    }
 
-   if (!_mesa_is_legal_format_and_type(format, type) ||
-       format == GL_COLOR_INDEX ||
+   if (!_mesa_is_legal_format_and_type(format, type)) {
+      gl_error(ctx, GL_INVALID_OPERATION, "glConvolutionFilter2D(format or type)");
+      return;
+   }
+   if (format == GL_COLOR_INDEX ||
        format == GL_STENCIL_INDEX ||
        format == GL_DEPTH_COMPONENT ||
        format == GL_INTENSITY ||
@@ -261,8 +268,7 @@ _mesa_ConvolutionParameterf(GLenum target, GLenum pname, GLfloat param)
 {
    GET_CURRENT_CONTEXT(ctx);
    GLuint c;
-
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glConvolutionParameterf");
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    switch (target) {
       case GL_CONVOLUTION_1D:
@@ -306,8 +312,7 @@ _mesa_ConvolutionParameterfv(GLenum target, GLenum pname, const GLfloat *params)
    GET_CURRENT_CONTEXT(ctx);
    struct gl_convolution_attrib *conv;
    GLuint c;
-
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glConvolutionParameterfv");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    switch (target) {
       case GL_CONVOLUTION_1D:
@@ -362,8 +367,7 @@ _mesa_ConvolutionParameteri(GLenum target, GLenum pname, GLint param)
 {
    GET_CURRENT_CONTEXT(ctx);
    GLuint c;
-
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glConvolutionParameteri");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    switch (target) {
       case GL_CONVOLUTION_1D:
@@ -407,8 +411,7 @@ _mesa_ConvolutionParameteriv(GLenum target, GLenum pname, const GLint *params)
    GET_CURRENT_CONTEXT(ctx);
    struct gl_convolution_attrib *conv;
    GLuint c;
-
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glConvolutionParameteriv");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    switch (target) {
       case GL_CONVOLUTION_1D:
@@ -467,7 +470,7 @@ _mesa_CopyConvolutionFilter1D(GLenum target, GLenum internalFormat, GLint x, GLi
    GLenum baseFormat;
    GLchan rgba[MAX_CONVOLUTION_WIDTH][4];
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glCopyConvolutionFilter1D");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (target != GL_CONVOLUTION_1D) {
       gl_error(ctx, GL_INVALID_ENUM, "glCopyConvolutionFilter1D(target)");
@@ -504,7 +507,7 @@ _mesa_CopyConvolutionFilter2D(GLenum target, GLenum internalFormat, GLint x, GLi
    struct gl_pixelstore_attrib packSave;
    GLchan rgba[MAX_CONVOLUTION_HEIGHT][MAX_CONVOLUTION_WIDTH][4];
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glCopyConvolutionFilter2D");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (target != GL_CONVOLUTION_2D) {
       gl_error(ctx, GL_INVALID_ENUM, "glCopyConvolutionFilter2D(target)");
@@ -563,14 +566,18 @@ _mesa_GetConvolutionFilter(GLenum target, GLenum format, GLenum type, GLvoid *im
    const struct gl_convolution_attrib *filter;
    GLint row;
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glGetConvolutionFilter");
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (ctx->NewState) {
       gl_update_state(ctx);
    }
 
-   if (!_mesa_is_legal_format_and_type(format, type) ||
-       format == GL_COLOR_INDEX ||
+   if (!_mesa_is_legal_format_and_type(format, type)) {
+      gl_error(ctx, GL_INVALID_OPERATION, "glGetConvolutionFilter(format or type)");
+      return;
+   }
+
+   if (format == GL_COLOR_INDEX ||
        format == GL_STENCIL_INDEX ||
        format == GL_DEPTH_COMPONENT ||
        format == GL_INTENSITY ||
@@ -609,8 +616,7 @@ _mesa_GetConvolutionParameterfv(GLenum target, GLenum pname, GLfloat *params)
    GET_CURRENT_CONTEXT(ctx);
    const struct gl_convolution_attrib *conv;
    GLuint c;
-
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glGetConvolutionParameterfv");
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    switch (target) {
       case GL_CONVOLUTION_1D:
@@ -671,8 +677,7 @@ _mesa_GetConvolutionParameteriv(GLenum target, GLenum pname, GLint *params)
    GET_CURRENT_CONTEXT(ctx);
    const struct gl_convolution_attrib *conv;
    GLuint c;
-
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glGetConvolutionParameteriv");
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    switch (target) {
       case GL_CONVOLUTION_1D:
@@ -742,7 +747,7 @@ _mesa_GetSeparableFilter(GLenum target, GLenum format, GLenum type, GLvoid *row,
    const GLint colStart = MAX_CONVOLUTION_WIDTH * 4;
    const struct gl_convolution_attrib *filter;
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glGetSeparableFilter");
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (ctx->NewState) {
       gl_update_state(ctx);
@@ -753,8 +758,12 @@ _mesa_GetSeparableFilter(GLenum target, GLenum format, GLenum type, GLvoid *row,
       return;
    }
 
-   if (!_mesa_is_legal_format_and_type(format, type) ||
-       format == GL_COLOR_INDEX ||
+   if (!_mesa_is_legal_format_and_type(format, type)) {
+      gl_error(ctx, GL_INVALID_OPERATION, "glGetConvolutionFilter(format or type)");
+      return;
+   }
+
+   if (format == GL_COLOR_INDEX ||
        format == GL_STENCIL_INDEX ||
        format == GL_DEPTH_COMPONENT ||
        format == GL_INTENSITY ||
@@ -796,7 +805,7 @@ _mesa_SeparableFilter2D(GLenum target, GLenum internalFormat, GLsizei width, GLs
    const GLint colStart = MAX_CONVOLUTION_WIDTH * 4;
    GLenum baseFormat;
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glSeparableFilter2D");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (target != GL_SEPARABLE_2D) {
       gl_error(ctx, GL_INVALID_ENUM, "glSeparableFilter2D(target)");
@@ -818,8 +827,12 @@ _mesa_SeparableFilter2D(GLenum target, GLenum internalFormat, GLsizei width, GLs
       return;
    }
 
-   if (!_mesa_is_legal_format_and_type(format, type) ||
-       format == GL_COLOR_INDEX ||
+   if (!_mesa_is_legal_format_and_type(format, type)) {
+      gl_error(ctx, GL_INVALID_OPERATION, "glSeparableFilter2D(format or type)");
+      return;
+   }
+
+   if (format == GL_COLOR_INDEX ||
        format == GL_STENCIL_INDEX ||
        format == GL_DEPTH_COMPONENT ||
        format == GL_INTENSITY ||

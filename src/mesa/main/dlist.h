@@ -1,4 +1,4 @@
-/* $Id: dlist.h,v 1.9 2000/11/24 15:21:59 keithw Exp $ */
+/* $Id: dlist.h,v 1.11 2000/12/26 07:41:32 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -30,6 +30,31 @@
 
 
 #include "mtypes.h"
+
+
+#define ASSERT_OUTSIDE_SAVE_BEGIN_END_WITH_RETVAL(ctx, retval)	\
+do {								\
+   if (ctx->Driver.CurrentSavePrimitive < GL_POLYGON+1 ||        \
+       ctx->Driver.CurrentSavePrimitive == PRIM_INSIDE_UNKNOWN_PRIM) {	\
+      _mesa_compile_error( ctx, GL_INVALID_OPERATION, "begin/end" );	\
+      return retval;						\
+   }								\
+} while (0)
+
+#define ASSERT_OUTSIDE_SAVE_BEGIN_END(ctx) \
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_WITH_RETVAL(ctx,)
+
+#define ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx)	\
+do {							\
+   ASSERT_OUTSIDE_SAVE_BEGIN_END(ctx);			\
+   FLUSH_VERTICES(ctx, 0);				\
+} while (0)
+
+#define ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, retval)\
+do {									\
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_WITH_RETVAL(ctx, retval);		\
+   FLUSH_VERTICES(ctx, 0);						\
+} while (0)
 
 
 extern void gl_init_lists( void );

@@ -1,4 +1,4 @@
-/* $Id: s_context.c,v 1.6 2000/11/22 07:32:18 joukj Exp $ */
+/* $Id: s_context.c,v 1.9 2000/12/27 19:57:37 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -309,7 +309,7 @@ _swrast_invalidate_state( GLcontext *ctx, GLuint new_state )
       swrast->BlendFunc = _swrast_validate_blend_func;
 
    if (new_state & _SWRAST_NEW_TEXTURE_SAMPLE_FUNC)
-      for (i = 0 ; i < MAX_TEXTURE_UNITS ; i++)
+      for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++)
 	 swrast->TextureSample[i] = _swrast_validate_texture_sample;
 }
 
@@ -327,7 +327,7 @@ _swrast_validate_derived( GLcontext *ctx )
 
       if (swrast->NewState & _NEW_TEXTURE)
 	 swrast->_MultiTextureEnabled = (ctx->Texture._ReallyEnabled &
-					 ~ENABLE_TEX0);
+					 ~TEXTURE0_ANY);
 
       if (swrast->NewState & _NEW_POLYGON)
 	 _swrast_update_polygon( ctx );
@@ -357,18 +357,27 @@ void
 _swrast_Triangle( GLcontext *ctx, const SWvertex *v0,
                   const SWvertex *v1, const SWvertex *v2 )
 {
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
+/*     _swrast_print_vertex( ctx, v0 ); */
+/*     _swrast_print_vertex( ctx, v1 ); */
+/*     _swrast_print_vertex( ctx, v2 ); */
    SWRAST_CONTEXT(ctx)->Triangle( ctx, v0, v1, v2 );
 }
 
 void
 _swrast_Line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1 )
 {
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
+/*     _swrast_print_vertex( ctx, v0 ); */
+/*     _swrast_print_vertex( ctx, v1 ); */
    SWRAST_CONTEXT(ctx)->Line( ctx, v0, v1 );
 }
 
 void
 _swrast_Point( GLcontext *ctx, const SWvertex *v0 )
 {
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
+/*     _swrast_print_vertex( ctx, v0 ); */
    SWRAST_CONTEXT(ctx)->Point( ctx, v0 );
 }
 
@@ -383,6 +392,12 @@ GLuint *
 _swrast_get_stipple_counter_ref( GLcontext *ctx )
 {
    return &SWRAST_CONTEXT(ctx)->StippleCounter;
+}
+
+void
+_swrast_ResetLineStipple( GLcontext *ctx )
+{
+   SWRAST_CONTEXT(ctx)->StippleCounter = 0;
 }
 
 void
@@ -459,3 +474,26 @@ _swrast_DestroyContext( GLcontext *ctx )
    ctx->swrast_context = 0;
 }
 
+
+void
+_swrast_print_vertex( GLcontext *ctx, const SWvertex *v )
+{
+   GLuint i;
+
+   fprintf(stderr, "win %f %f %f %f\n", 
+	   v->win[0], v->win[1], v->win[2], v->win[3]);
+
+   for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++)
+      fprintf(stderr, "texcoord[%d] %f %f %f %f\n", i,
+	      v->texcoord[i][0], v->texcoord[i][1], 
+	      v->texcoord[i][2], v->texcoord[i][3]);
+
+   fprintf(stderr, "color %d %d %d %d\n", 
+	   v->color[0], v->color[1], v->color[2], v->color[3]);
+   fprintf(stderr, "spec %d %d %d %d\n",
+	   v->specular[0], v->specular[1], v->specular[2], v->specular[3]);
+   fprintf(stderr, "fog %f\n", v->fog);
+   fprintf(stderr, "index %d\n", v->index);
+   fprintf(stderr, "pointsize %f\n", v->pointSize);
+   fprintf(stderr, "\n");
+}

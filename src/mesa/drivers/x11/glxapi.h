@@ -1,8 +1,8 @@
-/* $Id: glxapi.h,v 1.6 2000/06/08 22:50:28 brianp Exp $ */
+/* $Id: glxapi.h,v 1.8 2000/12/15 04:02:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  * 
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
@@ -29,8 +29,7 @@
 #define _glxapi_h_
 
 
-#define GLX_GLXEXT_LEGACY
-#define GL_GLEXT_PROTOTYPES
+#define GLX_GLXEXT_PROTOTYPES
 #include "GL/glx.h"
 
 
@@ -42,6 +41,9 @@
  * Specifically, a real GLX library (like SGI's or the Utah GLX) and Mesa's
  * pseudo-GLX can be present at the same time.  The former being used on
  * GLX-enabled X servers and the later on non-GLX X servers.
+ *
+ * XXX Note that this hasn't actually been fully used yet in either Mesa or
+ * the DRI.  Red Hat, however, has used it for their custom libGL.
  */
 struct _glxapi_table {
    /* GLX 1.0 functions */
@@ -93,6 +95,25 @@ struct _glxapi_table {
    void (*SelectEvent)(Display *dpy, GLXDrawable drawable, unsigned long mask);
 #endif
 
+#ifdef GLX_SGI_swap_control
+   int (*SwapIntervalSGI)(int);
+#endif
+
+#ifdef GLX_SGI_video_sync
+   int (*GetVideoSyncSGI)(unsigned int *count);
+   int (*WaitVideoSyncSGI)(int divisor, int remainder, unsigned int *count);
+#endif
+
+#ifdef GLX_SGI_make_current_read
+   Bool (*MakeCurrentReadSGI)(Display *, GLXDrawable, GLXDrawable, GLXContext);
+   GLXDrawable (*GetCurrentReadDrawableSGI)(void);
+#endif
+
+#if defined(_VL_H) && defined(GLX_SGIX_video_source)
+   GLXVideoSourceSGIX (*CreateGLXVideoSourceSGIX)(Display *, int, VLServer, VLPath, int, VLNode);
+   void (*DestroyGLXVideoSourceSGIX)(Display *, GLXVideoSourceSGIX);
+#endif
+
 #ifdef GLX_EXT_import_context
    void (*FreeContextEXT)(Display *dpy, GLXContext context);
    GLXContextID (*GetContextIDEXT)(const GLXContext context);
@@ -101,14 +122,51 @@ struct _glxapi_table {
    int (*QueryContextInfoEXT)(Display *dpy, GLXContext context, int attribute,int *value);
 #endif
 
-#ifdef GLX_SGI_video_sync
-   int (*GetVideoSyncSGI)(unsigned int *count);
-   int (*WaitVideoSyncSGI)(int divisor, int remainder, unsigned int *count);
+#ifdef GLX_SGIX_fbconfig
+   int (*GetFBConfigAttribSGIX)(Display *, GLXFBConfigSGIX, int, int *);
+   GLXFBConfigSGIX * (*ChooseFBConfigSGIX)(Display *, int, int *, int *);
+   GLXPixmap (*CreateGLXPixmapWithConfigSGIX)(Display *, GLXFBConfigSGIX, Pixmap);
+   GLXContext (*CreateContextWithConfigSGIX)(Display *, GLXFBConfigSGIX, int, GLXContext, Bool);
+   XVisualInfo * (*GetVisualFromFBConfigSGIX)(Display *, GLXFBConfigSGIX);
+   GLXFBConfigSGIX (*GetFBConfigFromVisualSGIX)(Display *, XVisualInfo *);
 #endif
 
-   /*
-    * XXX thesa Mesa-specific functions might not belong here
-    */
+#ifdef GLX_SGIX_pbuffer
+   GLXPbufferSGIX (*CreateGLXPbufferSGIX)(Display *, GLXFBConfigSGIX, unsigned int, unsigned int, int *);
+   void (*DestroyGLXPbufferSGIX)(Display *, GLXPbufferSGIX);
+   int (*QueryGLXPbufferSGIX)(Display *, GLXPbufferSGIX, int, unsigned int *);
+   void (*SelectEventSGIX)(Display *, GLXDrawable, unsigned long);
+   void (*GetSelectedEventSGIX)(Display *, GLXDrawable, unsigned long *);
+#endif
+
+#ifdef GLX_SGI_cushion
+   void (*CushionSGI)(Display *, Window, float);
+#endif
+
+#ifdef GLX_SGIX_video_resize
+   int (*BindChannelToWindowSGIX)(Display *, int, int, Window);
+   int (*ChannelRectSGIX)(Display *, int, int, int, int, int, int);
+   int (*QueryChannelRectSGIX)(Display *, int, int, int *, int *, int *, int *);
+   int (*QueryChannelDeltasSGIX)(Display *, int, int, int *, int *, int *, int *);
+   int (*ChannelRectSyncSGIX)(Display *, int, int, GLenum);
+#endif
+
+#if defined (_DM_BUFFER_H_) && defined(GLX_SGIX_dmbuffer)
+   Bool (*AssociateDMPbufferSGIX)(Display *, GLXPbufferSGIX, DMparams *, DMbuffer);
+#endif
+
+#ifdef GLX_SGIX_swap_group
+   void (*JoinSwapGroupSGIX)(Display *, GLXDrawable, GLXDrawable);
+#endif
+
+#ifdef GLX_SGIX_swap_barrier
+   void (*BindSwapBarrierSGIX)(Display *, GLXDrawable, int);
+   Bool (*QueryMaxSwapBarriersSGIX)(Display *, int, int *);
+#endif
+
+#ifdef GLX_SUN_get_transparent_index
+   Status (*GetTransparentIndexSUN)(Display *, Window, Window, long *);
+#endif
 
 #ifdef GLX_MESA_copy_sub_buffer
    void (*CopySubBufferMESA)(Display *dpy, GLXDrawable drawable, int x, int y, int width, int height);
@@ -123,7 +181,7 @@ struct _glxapi_table {
 #endif
 
 #ifdef GLX_MESA_set_3dfx_mode
-   GLboolean (*Set3DfxModeMESA)(GLint mode);
+   Bool (*Set3DfxModeMESA)(int mode);
 #endif
 
 };
