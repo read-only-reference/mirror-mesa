@@ -1,8 +1,9 @@
 # Makefile for Win32
 #
 #  NOTE: the install target may overwrite important files in the system dirs
-# Sept 12, 2001
-# Windows driver not working.  OSMesa driver works.
+#  Check first, before making the install target.
+#
+#  This builds both the osmesa and Windows drivers.
 #
 
 !include <win32.mak>
@@ -154,6 +155,9 @@ all	: mesadll $(SUBDIRS)
 mesadll	: $(MESADLL)
 
 CFLAGS	= $(cvarsdll) $(CFLAGS) -D_OPENGL32_ -DBUILD_GL32 -DNO_PARALLEL -DNO_STEREO
+!IFNDEF NODEBUG
+CFLAGS = $(CFLAGS) -DMESA_DEBUG
+!ENDIF
 LFLAGS	= $(dlllflags) $(lcommon) $(LFLAGS)
 
 OBJS	= $(ASM_SRCS:.S=.obj) $(CORE_SRCS:.c=.obj) $(DRIVER_SRCS:.c=.obj)
