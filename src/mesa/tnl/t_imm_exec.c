@@ -1,4 +1,4 @@
-/* $Id: t_imm_exec.c,v 1.37 2002/02/13 23:53:19 keithw Exp $ */
+/* $Id: t_imm_exec.c,v 1.39 2002/04/19 12:32:14 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -25,7 +25,7 @@
  */
 
 /**
- * \file vpexec.c
+ * \file tnl/t_imm_exec.c
  * \brief Setup to execute immediate-mode vertex data.
  * \author Keith Whitwell
  */
@@ -70,6 +70,10 @@ static void reset_input( GLcontext *ctx,
     */
    if (start < IM->Count+2)
       MEMSET(IM->Flag + start, 0, sizeof(GLuint) * (IM->Count+2-start));
+
+   if (MESA_VERBOSE & VERBOSE_IMMEDIATE)
+      fprintf(stderr, "reset_input: IM(%d) new %x\n", 
+	      IM->id, beginstate);
 
    IM->Start = start;
    IM->Count = start;
@@ -432,7 +436,7 @@ static void exec_elt_cassette( GLcontext *ctx, struct immediate *IM )
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct vertex_buffer *VB = &tnl->vb;
 
-/*     fprintf(stderr, "%s\n", __FUNCTION__); */
+/*      fprintf(stderr, "%s\n", __FUNCTION__);  */
 
    _tnl_vb_bind_arrays( ctx, ctx->Array.LockFirst, ctx->Array.LockCount );
 
@@ -514,6 +518,9 @@ void _tnl_execute_cassette( GLcontext *ctx, struct immediate *IM )
 
    if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1)
       ctx->Driver.NeedFlush &= ~FLUSH_STORED_VERTICES;
+
+/*     fprintf(stderr, "%s: NeedFlush: %x\n", __FUNCTION__,  */
+/*  	   ctx->Driver.NeedFlush); */
 }
 
 
@@ -585,7 +592,7 @@ void _tnl_imm_destroy( GLcontext *ctx )
    if (TNL_CURRENT_IM(ctx)) {
       TNL_CURRENT_IM(ctx)->ref_count--;
       if (TNL_CURRENT_IM(ctx)->ref_count == 0)
-	 _tnl_free_immediate( TNL_CURRENT_IM(ctx) );
+	 _tnl_free_immediate( ctx, TNL_CURRENT_IM(ctx) );
       /* 
        * Don't use SET_IMMEDIATE here, or else we'll whack the
        * _tnl_CurrentInput pointer - not good when another 

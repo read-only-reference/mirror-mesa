@@ -1,352 +1,358 @@
+/*
+ * Written by José Fonseca <j_r_fonseca@yahoo.co.uk>
+ */
+
 #include "matypes.h"
 
 
-SEG_TEXT
+/* integer multiplication - alpha plus one
+ *
+ * makes the following approximation to the division (Sree)
+ *
+ *   rgb*a/255 ~= (rgb*(a+1)) >> 256
+ *
+ * which is the fastest method that satisfies the following OpenGL criteria
+ *
+ *   0*0 = 0 and 255*255 = 255
+ *
+ * note that MX1 is a register with 0xffffffffffffffff constant which can be easily obtained making
+ *
+ *   PCMPEQW    ( MX1, MX1 )
+ */
+#define GMB_MULT_AP1( MP1, MA1, MP2, MA2, MX1 ) \
+    PSUBW      ( MX1, MA1 )			/*   a1 + 1  |   a1 + 1  |   a1 + 1  |   a1 + 1  */	;\
+    PMULLW     ( MP1, MA1 )			/*                  t1 = p1*a1                   */	;\
+													;\
+TWO(PSUBW      ( MX1, MA2 ))			/*   a2 + 1  |   a2 + 1  |   a2 + 1  |   a2 + 1  */	;\
+TWO(PMULLW     ( MP2, MA2 ))			/*                  t2 = p2*a2                   */	;\
+													;\
+    PSRLW      ( CONST(8), MA1 )		/*               t1 >> 8 ~= t1/255               */	;\
+TWO(PSRLW      ( CONST(8), MA2 ))		/*               t2 >> 8 ~= t2/255               */	
 
 
-ALIGNTEXT16
-GLOBL GLNAME(_mesa_mmx_blend_transparency)
-
-GLNAME( _mesa_mmx_blend_transparency ):
-    PUSH_L    ( EBP )
-    MOV_L     ( ESP, EBP )
-    SUB_L     ( CONST(52), ESP )
-    PUSH_L    ( EBX )
-    MOV_L     ( CONST(16711680), REGOFF(-8, EBP) )
-    MOV_L     ( CONST(16711680), REGOFF(-4, EBP) )
-    MOV_L     ( CONST(0), REGOFF(-16, EBP) )
-    MOV_L     ( CONST(-1), REGOFF(-12, EBP) )
-    MOV_L     ( CONST(-1), REGOFF(-24, EBP) )
-    MOV_L     ( CONST(0), REGOFF(-20, EBP) )
-    MOV_L     ( REGOFF(24, EBP), EAX )
-    ADD_L     ( CONST(4), EAX )
-    MOV_L     ( EAX, EDX )
-    AND_L     ( REGOFF(20, EBP), EDX )
-    MOV_L     ( EDX, EAX )
-    AND_L     ( CONST(4), EAX )
-    CMP_L     ( CONST(8), EAX )
-    JNE       ( LLBL(GMBT_2) )
-    MOV_L     ( REGOFF(20, EBP), EAX )
-    ADD_L     ( CONST(3), EAX )
-    XOR_L     ( EDX, EDX )
-    MOV_B     ( REGIND(EAX), DL )
-    MOV_L     ( EDX, REGOFF(-32, EBP) )
-    MOV_L     ( CONST(255), EAX )
-    MOV_L     ( EAX, EBX )
-    SUB_L     ( REGOFF(-32, EBP), EBX )
-    MOV_L     ( EBX, REGOFF(-36, EBP) )
-    MOV_L     ( REGOFF(20, EBP), EAX )
-    XOR_L     ( EDX, EDX )
-    MOV_B     ( REGIND(EAX), DL )
-    MOV_L     ( EDX, EAX )
-    IMUL_L    ( REGOFF(-32, EBP), EAX )
-    MOV_L     ( REGOFF(24, EBP), EDX )
-    XOR_L     ( ECX, ECX )
-    MOV_B     ( REGIND(EDX), CL )
-    MOV_L     ( ECX, EDX )
-    IMUL_L    ( REGOFF(-36, EBP), EDX )
-    ADD_L     ( EDX, EAX )
-    MOV_L     ( EAX, EBX )
-    SAR_L     ( CONST(8), EBX )
-    MOV_L     ( EBX, REGOFF(-40, EBP) )
-    MOV_L     ( REGOFF(20, EBP), EAX )
-    INC_L     ( EAX )
-    XOR_L     ( EDX, EDX )
-    MOV_B     ( REGIND(EAX), DL )
-    MOV_L     ( EDX, EAX )
-    IMUL_L    ( REGOFF(-32, EBP), EAX )
-    MOV_L     ( REGOFF(24, EBP), EDX )
-    INC_L     ( EDX )
-    XOR_L     ( ECX, ECX )
-    MOV_B     ( REGIND(EDX), CL )
-    MOV_L     ( ECX, EDX )
-    IMUL_L    ( REGOFF(-36, EBP), EDX )
-    ADD_L     ( EDX, EAX )
-    MOV_L     ( EAX, EBX )
-    SAR_L     ( CONST(8), EBX )
-    MOV_L     ( EBX, REGOFF(-44, EBP) )
-    MOV_L     ( REGOFF(20, EBP), EAX )
-    ADD_L     ( CONST(2), EAX )
-    XOR_L     ( EDX, EDX )
-    MOV_B     ( REGIND(EAX), DL )
-    MOV_L     ( EDX, EAX )
-    IMUL_L    ( REGOFF(-32, EBP), EAX )
-    MOV_L     ( REGOFF(24, EBP), EDX )
-    ADD_L     ( CONST(2), EDX )
-    XOR_L     ( ECX, ECX )
-    MOV_B     ( REGIND(EDX), CL )
-    MOV_L     ( ECX, EDX )
-    IMUL_L    ( REGOFF(-36, EBP), EDX )
-    ADD_L     ( EDX, EAX )
-    MOV_L     ( EAX, EBX )
-    SAR_L     ( CONST(8), EBX )
-    MOV_L     ( EBX, REGOFF(-48, EBP) )
-    MOV_L     ( REGOFF(20, EBP), EAX )
-    ADD_L     ( CONST(3), EAX )
-    XOR_L     ( EDX, EDX )
-    MOV_B     ( REGIND(EAX), DL )
-    MOV_L     ( EDX, EAX )
-    IMUL_L    ( REGOFF(-32, EBP), EAX )
-    MOV_L     ( REGOFF(24, EBP), EDX )
-    ADD_L     ( CONST(3), EDX )
-    XOR_L     ( ECX, ECX )
-    MOV_B     ( REGIND(EDX), CL )
-    MOV_L     ( ECX, EDX )
-    IMUL_L    ( REGOFF(-36, EBP), EDX )
-    ADD_L     ( EDX, EAX )
-    MOV_L     ( EAX, EBX )
-    SAR_L     ( CONST(8), EBX )
-    MOV_L     ( EBX, REGOFF(-52, EBP) )
-    MOV_L     ( REGOFF(20, EBP), EAX )
-    MOV_B     ( REGOFF(-40, EBP), DL )
-    MOV_B     ( DL, REGIND(EAX) )
-    MOV_L     ( REGOFF(20, EBP), EAX )
-    INC_L     ( EAX )
-    MOV_B     ( REGOFF(-44, EBP), DL )
-    MOV_B     ( DL, REGIND(EAX) )
-    MOV_L     ( REGOFF(20, EBP), EAX )
-    ADD_L     ( CONST(2), EAX )
-    MOV_B     ( REGOFF(-48, EBP), DL )
-    MOV_B     ( DL, REGIND(EAX) )
-    MOV_L     ( REGOFF(20, EBP), EAX )
-    ADD_L     ( CONST(3), EAX )
-    MOV_B     ( REGOFF(-52, EBP), DL )
-    MOV_B     ( DL, REGIND(EAX) )
-    INC_L     ( REGOFF(16, EBP) )
-    ADD_L     ( CONST(4), REGOFF(20, EBP) )
-    ADD_L     ( CONST(4), REGOFF(24, EBP) )
-    DEC_L     ( REGOFF(12, EBP) )
-LLBL(GMBT_2):
-
-    CMP_L     ( CONST(0), REGOFF(12, EBP) )
-    JE        ( LLBL(GMBT_3) )
-    MOV_L     ( CONST(0), REGOFF(-28, EBP) )
-ALIGNTEXT4
-LLBL(GMBT_4):
-
-    MOV_L     ( REGOFF(12, EBP), EDX )
-    MOV_L     ( EDX, EAX )
-    SHR_L     ( CONST(1), EAX )
-    CMP_L     ( EAX, REGOFF(-28, EBP) )
-    JB        ( LLBL(GMBT_7) )
-    JMP       ( LLBL(GMBT_5) )
-ALIGNTEXT16
-LLBL(GMBT_7):
-
-    MOV_L     ( REGOFF(-28, EBP), EAX )
-    LEA_L     ( REGDIS(0,EAX,2), EDX )
-    MOV_L     ( REGOFF(16, EBP), EAX )
-    CMP_B     ( CONST(0), REGBI(EAX,EDX) )
-    JE        ( LLBL(GMBT_6) )
-    MOV_L     ( REGOFF(-28, EBP), EAX )
-    MOV_L     ( EAX, EDX )
-    LEA_L     ( REGDIS(0,EDX,8), ECX )
-    MOV_L     ( ECX, EAX )
-    ADD_L     ( REGOFF(20, EBP), EAX )
-    MOV_L     ( REGOFF(-28, EBP), EDX )
-    MOV_L     ( EDX, ECX )
-    LEA_L     ( REGDIS(0,ECX,8), EDX )
-    MOV_L     ( EDX, ECX )
-    ADD_L     ( REGOFF(24, EBP), ECX )
-
-    MOVQ      ( REGIND(EAX), MM4 )
-    PXOR      ( MM5, MM5 )
-    MOVQ      ( MM4, MM1 )
-    MOVQ      ( REGIND(ECX), MM7 )
-    PUNPCKLBW ( MM5, MM1 )
-    MOVQ      ( MM7, MM6 )
-    MOVQ      ( MM1, MM0 )
-    PUNPCKLBW ( MM5, MM6 )
-    MOVQ      ( MM1, MM2 )
-    PSRLQ     ( CONST(48), MM0 )
-    PUNPCKHBW ( MM5, MM4 )
-    PACKSSDW  ( MM0, MM0 )
-    MOVQ      ( MM0, MM3 )
-    PUNPCKHBW ( MM5, MM7 )
-    PSLLQ     ( CONST(16), MM3 )
-    POR       ( REGOFF(-8, EBP), MM0 )
-    PUNPCKLWD ( MM6, MM1 )
-    PSUBW     ( MM3, MM0 )
-    PUNPCKHWD ( MM6, MM2 )
-    MOVQ      ( MM4, MM3 )
-    PSRLQ     ( CONST(48), MM3 )
-    PACKSSDW  ( MM3, MM3 )
-    MOVQ      ( MM3, MM6 )
-    POR       ( REGOFF(-8, EBP), MM3 )
-    PSLLQ     ( CONST(16), MM6 )
-    PSUBW     ( MM6, MM3 )
-    MOVQ      ( MM4, MM5 )
-    PUNPCKLWD ( MM7, MM4 )
-    PUNPCKHWD ( MM7, MM5 )
-    PMADDWD   ( MM0, MM1 )
-    PMADDWD   ( MM3, MM4 )
-    PMADDWD   ( MM0, MM2 )
-    PMADDWD   ( MM3, MM5 )
-    PSRLD     ( CONST(8), MM1 )
-    PSRLD     ( CONST(8), MM2 )
-    PSRLD     ( CONST(8), MM4 )
-    PACKSSDW  ( MM2, MM1 )
-    PSRLD     ( CONST(8), MM5 )
-    PACKUSWB  ( MM1, MM1 )
-    PACKSSDW  ( MM5, MM4 )
-    PAND      ( REGOFF(-24, EBP), MM1 )
-    PACKUSWB  ( MM4, MM4 )
-    PAND      ( REGOFF(-16, EBP), MM4 )
-    POR       ( MM1, MM4 )
-    MOVQ      ( MM4, REGIND(EAX) )
+/* integer multiplication - geometric series
+ *
+ * takes the geometric series approximation to the division
+ *
+ *   t/255 = (t >> 8) + (t >> 16) + (t >> 24) ..
+ *
+ * in this case just the first two terms to fit in 16bit arithmetic
+ *
+ *   t/255 ~= (t + (t >> 8)) >> 8
+ *
+ * note that just by itself it doesn't satisfies the OpenGL criteria, as 255*255 = 254, 
+ * so the special case a = 255 must be accounted or roundoff must be used
+ */
+#define GMB_MULT_GS( MP1, MA1, MP2, MA2 ) \
+    PMULLW     ( MP1, MA1 )			/*                  t1 = p1*a1                   */	;\
+TWO(PMULLW     ( MP2, MA2 ))			/*                  t2 = p2*a2                   */	;\
+													;\
+    MOVQ       ( MA1, MP1 )										;\
+    PSRLW      ( CONST(8), MA1 )		/*                    t1 >> 8                    */	;\
+													;\
+TWO(MOVQ       ( MA2, MP2 ))										;\
+TWO(PSRLW      ( CONST(8), MA2 ))		/*                    t2 >> 8                    */	;\
+													;\
+    PADDW      ( MP1, MA1 )			/*        t1 + (t1 >> 8) ~= (t1/255) << 8        */	;\
+    PSRLW      ( CONST(8), MA1 )		/*    sa1    |    sb1    |    sg1    |    sr1    */	;\
+													;\
+TWO(PADDW      ( MP2, MA2 ))			/*        t2 + (t2 >> 8) ~= (t2/255) << 8        */	;\
+TWO(PSRLW      ( CONST(8), MA2 ))		/*    sa2    |    sb2    |    sg2    |    sr2    */
 
 
-LLBL(GMBT_8):
+/* integer multiplication - geometric series plus rounding
+ *
+ * when using a geometric series division instead of truncating the result 
+ * use roundoff in the approximation (Jim Blinn)
+ *
+ *   t = rgb*a + 0x80
+ *
+ * achieving the exact results
+ *
+ * note that M80 is register with the 0x0080008000800080 constant
+ */
+#define GMB_MULT_GSR( MP1, MA1, MP2, MA2, M80 ) \
+    PMULLW     ( MP1, MA1 )			/*                  t1 = p1*a1                   */	;\
+    PADDW      ( M80, MA1 )			/*                 t1 += 0x80                    */	;\
+													;\
+TWO(PMULLW     ( MP2, MA2 ))			/*                  t2 = p2*a2                   */	;\
+TWO(PADDW      ( M80, MA2 ))			/*                 t2 += 0x80                    */	;\
+													;\
+    MOVQ       ( MA1, MP1 )										;\
+    PSRLW      ( CONST(8), MA1 )		/*                    t1 >> 8                    */	;\
+													;\
+TWO(MOVQ       ( MA2, MP2 ))										;\
+TWO(PSRLW      ( CONST(8), MA2 ))		/*                    t2 >> 8                    */	;\
+													;\
+    PADDW      ( MP1, MA1 )			/*        t1 + (t1 >> 8) ~= (t1/255) << 8        */	;\
+    PSRLW      ( CONST(8), MA1 )		/*    sa1    |    sb1    |    sg1    |    sr1    */	;\
+													;\
+TWO(PADDW      ( MP2, MA2 ))			/*        t2 + (t2 >> 8) ~= (t2/255) << 8        */	;\
+TWO(PSRLW      ( CONST(8), MA2 ))		/*    sa2    |    sb2    |    sg2    |    sr2    */
 
-LLBL(GMBT_6):
 
-    INC_L     ( REGOFF(-28, EBP) )
-    JMP       ( LLBL(GMBT_4) )
-ALIGNTEXT16
-LLBL(GMBT_5):
+/* linear interpolation - geometric series 
+ */
+#define GMB_LERP_GS( MP1, MQ1, MA1, MP2, MQ2, MA2) \
+    PSUBW      ( MQ1, MP1 )                     /* pa1 - qa1 | pb1 - qb1 | pg1 - qg1 | pr1 - qr1 */	;\
+    PSLLW      ( CONST(8), MQ1 )		/*                    q1 << 8                    */	;\
+    PMULLW     ( MP1, MA1 )			/*              t1 = (q1 - p1)*pa1               */	;\
+													;\
+TWO(PSUBW      ( MQ2, MP2 ))                    /* pa2 - qa2 | pb2 - qb2 | pg2 - qg2 | pr2 - qr2 */	;\
+TWO(PSLLW      ( CONST(8), MQ2 ))		/*                    q2 << 8                    */	;\
+TWO(PMULLW     ( MP2, MA2 ))			/*              t2 = (q2 - p2)*pa2               */	;\
+													;\
+    MOVQ       ( MA1, MP1 )										;\
+    PSRLW      ( CONST(8), MA1 )		/*                    t1 >> 8                    */	;\
+													;\
+TWO(MOVQ       ( MA2, MP2 ))										;\
+TWO(PSRLW      ( CONST(8), MA2 ))		/*                    t2 >> 8                    */	;\
+													;\
+    PADDW      ( MP1, MA1 )			/*        t1 + (t1 >> 8) ~= (t1/255) << 8        */	;\
+TWO(PADDW      ( MP2, MA2 ))			/*        t2 + (t2 >> 8) ~= (t2/255) << 8        */	;\
+													;\
+    PADDW      ( MQ1, MA1 )			/*              (t1/255 + q1) << 8               */	;\
+TWO(PADDW      ( MQ2, MA2 ))			/*              (t2/255 + q2) << 8               */	;\
+													;\
+    PSRLW      ( CONST(8), MA1 )		/*    sa1    |    sb1    |    sg1    |    sr1    */	;\
+TWO(PSRLW      ( CONST(8), MA2 ))		/*    sa2    |    sb2    |    sg2    |    sr2    */
 
 
-    EMMS
+/* linear interpolation - geometric series with roundoff
+ *
+ * this is a generalization of Blinn's formula to signed arithmetic
+ *
+ * note that M80 is a register with the 0x0080008000800080 constant
+ */
+#define GMB_LERP_GSR( MP1, MQ1, MA1, MP2, MQ2, MA2, M80) \
+    PSUBW      ( MQ1, MP1 )                     /* pa1 - qa1 | pb1 - qb1 | pg1 - qg1 | pr1 - qr1 */	;\
+    PSLLW      ( CONST(8), MQ1 )		/*                    q1 << 8                    */	;\
+    PMULLW     ( MP1, MA1 )			/*              t1 = (q1 - p1)*pa1               */	;\
+													;\
+TWO(PSUBW      ( MQ2, MP2 ))                    /* pa2 - qa2 | pb2 - qb2 | pg2 - qg2 | pr2 - qr2 */	;\
+TWO(PSLLW      ( CONST(8), MQ2 ))		/*                    q2 << 8                    */	;\
+TWO(PMULLW     ( MP2, MA2 ))			/*              t2 = (q2 - p2)*pa2               */	;\
+													;\
+    PSRLW      ( CONST(15), MP1 )		/*                 q1 > p1 ? 1 : 0               */	;\
+TWO(PSRLW      ( CONST(15), MP2 ))		/*                 q2 > q2 ? 1 : 0               */	;\
+													;\
+    PSLLW      ( CONST(8), MP1 )		/*             q1 > p1 ? 0x100 : 0               */	;\
+TWO(PSLLW      ( CONST(8), MP2 ))		/*             q2 > q2 ? 0x100 : 0               */	;\
+													;\
+    PSUBW      ( MP1, MA1 )			/*                  t1 -=? 0x100                 */	;\
+TWO(PSUBW      ( MP2, MA2 ))			/*                  t2 -=? 0x100                 */	;\
+ 													;\
+    PADDW      ( M80, MA1 )			/*                 t1 += 0x80                    */	;\
+TWO(PADDW      ( M80, MA2 ))			/*                 t2 += 0x80                    */	;\
+													;\
+    MOVQ       ( MA1, MP1 )										;\
+    PSRLW      ( CONST(8), MA1 )		/*                    t1 >> 8                    */	;\
+													;\
+TWO(MOVQ       ( MA2, MP2 ))										;\
+TWO(PSRLW      ( CONST(8), MA2 ))		/*                    t2 >> 8                    */	;\
+													;\
+    PADDW      ( MP1, MA1 )			/*        t1 + (t1 >> 8) ~= (t1/255) << 8        */	;\
+TWO(PADDW      ( MP2, MA2 ))			/*        t2 + (t2 >> 8) ~= (t2/255) << 8        */	;\
+													;\
+    PADDW      ( MQ1, MA1 )			/*              (t1/255 + q1) << 8               */	;\
+TWO(PADDW      ( MQ2, MA2 ))			/*              (t2/255 + q2) << 8               */	;\
+													;\
+    PSRLW      ( CONST(8), MA1 )		/*    sa1    |    sb1    |    sg1    |    sr1    */	;\
+TWO(PSRLW      ( CONST(8), MA2 ))		/*    sa2    |    sb2    |    sg2    |    sr2    */
 
-LLBL(GMBT_3):
 
-    MOV_L     ( REGOFF(12, EBP), EAX )
-    AND_L     ( CONST(1), EAX )
-    TEST_L    ( EAX, EAX )
-    JE        ( LLBL(GMBT_9) )
-    MOV_L     ( REGOFF(12, EBP), EAX )
-    LEA_L     ( REGDIS(0,EAX,4), EDX )
-    MOV_L     ( EDX, EAX )
-    ADD_L     ( REGOFF(20, EBP), EAX )
-    LEA_L     ( REGOFF(-1, EAX), EDX )
-    XOR_L     ( EAX, EAX )
-    MOV_B     ( REGIND(EDX), AL )
-    MOV_L     ( EAX, REGOFF(-52, EBP) )
-    MOV_L     ( CONST(255), EAX )
-    MOV_L     ( EAX, EBX )
-    SUB_L     ( REGOFF(-52, EBP), EBX )
-    MOV_L     ( EBX, REGOFF(-48, EBP) )
-    MOV_L     ( REGOFF(12, EBP), EAX )
-    LEA_L     ( REGDIS(0,EAX,4), EDX )
-    MOV_L     ( EDX, EAX )
-    ADD_L     ( REGOFF(20, EBP), EAX )
-    LEA_L     ( REGOFF(-4, EAX), EDX )
-    XOR_L     ( ECX, ECX )
-    MOV_B     ( REGIND(EDX), CL )
-    MOV_L     ( ECX, EAX )
-    IMUL_L    ( REGOFF(-52, EBP), EAX )
-    MOV_L     ( REGOFF(12, EBP), EDX )
-    LEA_L     ( REGDIS(0,EDX,4), ECX )
-    MOV_L     ( ECX, EDX )
-    ADD_L     ( REGOFF(24, EBP), EDX )
-    LEA_L     ( REGOFF(-4, EDX), ECX )
-    XOR_L     ( EDX, EDX )
-    MOV_B     ( REGIND(ECX), DL )
-    MOV_L     ( EDX, ECX )
-    IMUL_L    ( REGOFF(-48, EBP), ECX )
-    ADD_L     ( ECX, EAX )
-    MOV_L     ( EAX, EBX )
-    SAR_L     ( CONST(8), EBX )
-    MOV_L     ( EBX, REGOFF(-44, EBP) )
-    MOV_L     ( REGOFF(12, EBP), EAX )
-    LEA_L     ( REGDIS(0,EAX,4), EDX )
-    MOV_L     ( EDX, EAX )
-    ADD_L     ( REGOFF(20, EBP), EAX )
-    LEA_L     ( REGOFF(-3, EAX), EDX )
-    XOR_L     ( ECX, ECX )
-    MOV_B     ( REGIND(EDX), CL )
-    MOV_L     ( ECX, EAX )
-    IMUL_L    ( REGOFF(-52, EBP), EAX )
-    MOV_L     ( REGOFF(12, EBP), EDX )
-    LEA_L     ( REGDIS(0,EDX,4), ECX )
-    MOV_L     ( ECX, EDX )
-    ADD_L     ( REGOFF(24, EBP), EDX )
-    LEA_L     ( REGOFF(-3, EDX), ECX )
-    XOR_L     ( EDX, EDX )
-    MOV_B     ( REGIND(ECX), DL )
-    MOV_L     ( EDX, ECX )
-    IMUL_L    ( REGOFF(-48, EBP), ECX )
-    ADD_L     ( ECX, EAX )
-    MOV_L     ( EAX, EBX )
-    SAR_L     ( CONST(8), EBX )
-    MOV_L     ( EBX, REGOFF(-40, EBP) )
-    MOV_L     ( REGOFF(12, EBP), EAX )
-    LEA_L     ( REGDIS(0,EAX,4), EDX )
-    MOV_L     ( EDX, EAX )
-    ADD_L     ( REGOFF(20, EBP), EAX )
-    LEA_L     ( REGOFF(-2, EAX), EDX )
-    XOR_L     ( ECX, ECX )
-    MOV_B     ( REGIND(EDX), CL )
-    MOV_L     ( ECX, EAX )
-    IMUL_L    ( REGOFF(-52, EBP), EAX )
-    MOV_L     ( REGOFF(12, EBP), EDX )
-    LEA_L     ( REGDIS(0,EDX,4), ECX )
-    MOV_L     ( ECX, EDX )
-    ADD_L     ( REGOFF(24, EBP), EDX )
-    LEA_L     ( REGOFF(-2, EDX), ECX )
-    XOR_L     ( EDX, EDX )
-    MOV_B     ( REGIND(ECX), DL )
-    MOV_L     ( EDX, ECX )
-    IMUL_L    ( REGOFF(-48, EBP), ECX )
-    ADD_L     ( ECX, EAX )
-    MOV_L     ( EAX, EBX )
-    SAR_L     ( CONST(8), EBX )
-    MOV_L     ( EBX, REGOFF(-36, EBP) )
-    MOV_L     ( REGOFF(12, EBP), EAX )
-    LEA_L     ( REGDIS(0,EAX,4), EDX )
-    MOV_L     ( EDX, EAX )
-    ADD_L     ( REGOFF(20, EBP), EAX )
-    LEA_L     ( REGOFF(-1, EAX), EDX )
-    XOR_L     ( ECX, ECX )
-    MOV_B     ( REGIND(EDX), CL )
-    MOV_L     ( ECX, EAX )
-    IMUL_L    ( REGOFF(-52, EBP), EAX )
-    MOV_L     ( REGOFF(12, EBP), EDX )
-    LEA_L     ( REGDIS(0,EDX,4), ECX )
-    MOV_L     ( ECX, EDX )
-    ADD_L     ( REGOFF(24, EBP), EDX )
-    LEA_L     ( REGOFF(-1, EDX), ECX )
-    XOR_L     ( EDX, EDX )
-    MOV_B     ( REGIND(ECX), DL )
-    MOV_L     ( EDX, ECX )
-    IMUL_L    ( REGOFF(-48, EBP), ECX )
-    ADD_L     ( ECX, EAX )
-    MOV_L     ( EAX, EBX )
-    SAR_L     ( CONST(8), EBX )
-    MOV_L     ( EBX, REGOFF(-32, EBP) )
-    MOV_L     ( REGOFF(12, EBP), EAX )
-    LEA_L     ( REGDIS(0,EAX,4), EDX )
-    MOV_L     ( EDX, EAX )
-    ADD_L     ( REGOFF(20, EBP), EAX )
-    LEA_L     ( REGOFF(-4, EAX), EDX )
-    MOV_B     ( REGOFF(-44, EBP), AL )
-    MOV_B     ( AL, REGIND(EDX) )
-    MOV_L     ( REGOFF(12, EBP), EAX )
-    LEA_L     ( REGDIS(0,EAX,4), EDX )
-    MOV_L     ( EDX, EAX )
-    ADD_L     ( REGOFF(20, EBP), EAX )
-    LEA_L     ( REGOFF(-3, EAX), EDX )
-    MOV_B     ( REGOFF(-40, EBP), AL )
-    MOV_B     ( AL, REGIND(EDX) )
-    MOV_L     ( REGOFF(12, EBP), EAX )
-    LEA_L     ( REGDIS(0,EAX,4), EDX )
-    MOV_L     ( EDX, EAX )
-    ADD_L     ( REGOFF(20, EBP), EAX )
-    LEA_L     ( REGOFF(-2, EAX), EDX )
-    MOV_B     ( REGOFF(-36, EBP), AL )
-    MOV_B     ( AL, REGIND(EDX) )
-    MOV_L     ( REGOFF(12, EBP), EAX )
-    LEA_L     ( REGDIS(0,EAX,4), EDX )
-    MOV_L     ( EDX, EAX )
-    ADD_L     ( REGOFF(20, EBP), EAX )
-    LEA_L     ( REGOFF(-1, EAX), EDX )
-    MOV_B     ( REGOFF(-32, EBP), AL )
-    MOV_B     ( AL, REGIND(EDX) )
-LLBL(GMBT_9):
+/* linear interpolation - geometric series with correction
+ *
+ * instead of the roundoff this adds a small correction to satisfy the OpenGL criteria
+ *
+ *   t/255 ~= (t + (t >> 8) + (t >> 15)) >> 8
+ *
+ * note that although is faster than rounding off it doesn't give always the exact results
+ */
+#define GMB_LERP_GSC( MP1, MQ1, MA1, MP2, MQ2, MA2) \
+    PSUBW      ( MQ1, MP1 )                     /* pa1 - qa1 | pb1 - qb1 | pg1 - qg1 | pr1 - qr1 */	;\
+    PSLLW      ( CONST(8), MQ1 )		/*                    q1 << 8                    */	;\
+    PMULLW     ( MP1, MA1 )			/*              t1 = (q1 - p1)*pa1               */	;\
+													;\
+TWO(PSUBW      ( MQ2, MP2 ))                    /* pa2 - qa2 | pb2 - qb2 | pg2 - qg2 | pr2 - qr2 */	;\
+TWO(PSLLW      ( CONST(8), MQ2 ))		/*                    q2 << 8                    */	;\
+TWO(PMULLW     ( MP2, MA2 ))			/*              t2 = (q2 - p2)*pa2               */	;\
+													;\
+    MOVQ       ( MA1, MP1 )										;\
+    PSRLW      ( CONST(8), MA1 )		/*                    t1 >> 8                    */	;\
+													;\
+TWO(MOVQ       ( MA2, MP2 ))										;\
+TWO(PSRLW      ( CONST(8), MA2 ))		/*                    t2 >> 8                    */	;\
+													;\
+    PADDW      ( MA1, MP1 )			/*        t1 + (t1 >> 8) ~= (t1/255) << 8        */	;\
+    PSRLW      ( CONST(7), MA1 )		/*                    t1 >> 15                   */	;\
+													;\
+TWO(PADDW      ( MA2, MP2 ))			/*        t2 + (t2 >> 8) ~= (t2/255) << 8        */	;\
+TWO(PSRLW      ( CONST(7), MA2 ))		/*                    t2 >> 15                   */	;\
+													;\
+    PADDW      ( MP1, MA1 )			/*  t1 + (t1 >> 8) + (t1 >>15) ~= (t1/255) << 8  */	;\
+TWO(PADDW      ( MP2, MA2 ))			/*  t2 + (t2 >> 8) + (t2 >>15) ~= (t2/255) << 8  */	;\
+													;\
+    PADDW      ( MQ1, MA1 )			/*              (t1/255 + q1) << 8               */	;\
+TWO(PADDW      ( MQ2, MA2 ))			/*              (t2/255 + q2) << 8               */	;\
+													;\
+    PSRLW      ( CONST(8), MA1 )		/*    sa1    |    sb1    |    sg1    |    sr1    */	;\
+TWO(PSRLW      ( CONST(8), MA2 ))		/*    sa2    |    sb2    |    sg2    |    sr2    */
 
-LLBL(GMBT_1):
 
-    MOV_L     ( REGOFF(-56, EBP), EBX )
-    MOV_L     ( EBP, ESP )
-    POP_L     ( EBP )
-    RET
+/* common blending setup code
+ *
+ * note that M00 is a register with 0x0000000000000000 constant which can be easily obtained making
+ *
+ *   PXOR      ( M00, M00 )
+ */
+#define GMB_LOAD(rgba, dest, MPP, MQQ) \
+ONE(MOVD       ( REGIND(rgba), MPP ))		/*     |     |     |     | qa1 | qb1 | qg1 | qr1 */	;\
+ONE(MOVD       ( REGIND(dest), MQQ ))		/*     |     |     |     | pa1 | pb1 | pg1 | pr1 */	;\
+													;\
+TWO(MOVQ       ( REGIND(rgba), MPP ))		/* qa2 | qb2 | qg2 | qr2 | qa1 | qb1 | qg1 | qr1 */	;\
+TWO(MOVQ       ( REGIND(dest), MQQ ))		/* pa2 | pb2 | pg2 | pr2 | pa1 | pb1 | pg1 | pr1 */
+
+#define GMB_UNPACK(MP1, MQ1, MP2, MQ2, M00) \
+TWO(MOVQ       ( MP1, MP2 ))										;\
+TWO(MOVQ       ( MQ1, MQ2 ))										;\
+													;\
+    PUNPCKLBW  ( M00, MQ1 )			/*    qa1    |    qb1    |    qg1    |    qr1    */	;\
+TWO(PUNPCKHBW  ( M00, MQ2 ))                    /*    qa2    |    qb2    |    qg2    |    qr2    */	;\
+    PUNPCKLBW  ( M00, MP1 )			/*    pa1    |    pb1    |    pg1    |    pr1    */	;\
+TWO(PUNPCKHBW  ( M00, MP2 ))                    /*    pa2    |    pb2    |    pg2    |    pr2    */
+
+#define GMB_ALPHA(MP1, MA1, MP2, MA2) \
+    MOVQ       ( MP1, MA1 )										;\
+TWO(MOVQ       ( MP2, MA2 ))										;\
+													;\
+    PUNPCKHWD  ( MA1, MA1 )			/*    pa1    |    pa1    |           |           */	;\
+TWO(PUNPCKHWD  ( MA2, MA2 ))			/*    pa2    |    pa2    |           |           */	;\
+    PUNPCKHDQ  ( MA1, MA1 )                     /*    pa1    |    pa1    |    pa1    |    pa1    */	;\
+TWO(PUNPCKHDQ  ( MA2, MA2 ))                    /*    pa2    |    pa2    |    pa2    |    pa2    */
+
+#define GMB_PACK( MS1, MS2 ) \
+    PACKUSWB   ( MS2, MS1 )			/* sa2 | sb2 | sg2 | sr2 | sa1 | sb1 | sg1 | sr1 */	;\
+
+#define GMB_STORE(rgba, MSS ) \
+ONE(MOVD       ( MSS, REGIND(rgba) ))		/*     |     |     |     | sa1 | sb1 | sg1 | sr1 */	;\
+TWO(MOVQ       ( MSS, REGIND(rgba) ))		/* sa2 | sb2 | sg2 | sr2 | sa1 | sb1 | sg1 | sr1 */
+
+
+    SEG_DATA
+
+ALIGNDATA8
+const_0080:
+    D_LONG 0x00800080, 0x00800080
+
+const_80:
+    D_LONG 0x80808080, 0x80808080
+
+    SEG_TEXT
+
+
+/* Blend transparency function
+ */
+
+#define TAG(x) x##_transparency
+
+#define INIT \
+    PXOR       ( MM0, MM0 )			/*   0x0000  |   0x0000  |   0x0000  |   0x0000  */
+
+#define MAIN( rgba, dest ) \
+    GMB_LOAD( rgba, dest, MM1, MM2 )									;\
+    GMB_UNPACK( MM1, MM2, MM4, MM5, MM0 )								;\
+    GMB_ALPHA( MM1, MM3, MM4, MM6 )									;\
+    GMB_LERP_GSC( MM1, MM2, MM3, MM4, MM5, MM6 )							;\
+    GMB_PACK( MM3, MM6 )										;\
+    GMB_STORE( rgba, MM3 )
+
+#include "mmx_blendtmp.h"
+
+
+/* Blend add function
+ *
+ * FIXME: Add some loop unrolling here...
+ */
+
+#define TAG(x) x##_add
+
+#define INIT
+
+#define MAIN( rgba, dest ) \
+ONE(MOVD       ( REGIND(rgba), MM1 ))		/*     |     |     |     | qa1 | qb1 | qg1 | qr1 */	;\
+ONE(MOVD       ( REGIND(dest), MM2 ))		/*     |     |     |     | pa1 | pb1 | pg1 | pr1 */	;\
+ONE(PADDUSB    ( MM2, MM1 ))										;\
+ONE(MOVD       ( MM1, REGIND(rgba) ))		/*     |     |     |     | sa1 | sb1 | sg1 | sr1 */	;\
+													;\
+TWO(MOVQ       ( REGIND(rgba), MM1 ))		/* qa2 | qb2 | qg2 | qr2 | qa1 | qb1 | qg1 | qr1 */	;\
+TWO(PADDUSB    ( REGIND(dest), MM1 ))		/* sa2 | sb2 | sg2 | sr2 | sa1 | sb1 | sg1 | sr1 */	;\
+TWO(MOVQ       ( MM1, REGIND(rgba) ))
+
+#include "mmx_blendtmp.h"
+
+
+/* Blend min function
+ */
+
+#define TAG(x) x##_min
+
+#define INIT \
+    MOVQ       ( CONTENT(const_80), MM7 )	/* 0x80| 0x80| 0x80| 0x80| 0x80| 0x80| 0x80| 0x80*/
+
+#define MAIN( rgba, dest ) \
+    GMB_LOAD( rgba, dest, MM1, MM2 )									;\
+    MOVQ       ( MM1, MM3 )										;\
+    MOVQ       ( MM2, MM4 )										;\
+    PXOR       ( MM7, MM3 )			/*              unsigned -> signed               */	;\
+    PXOR       ( MM7, MM4 )			/*              unsigned -> signed               */	;\
+    PCMPGTB    ( MM3, MM4 )			/*                 q > p ? 0xff : 0x00           */	;\
+    PAND       ( MM4, MM1 )			/*                 q > p ? p : 0                 */	;\
+    PANDN      ( MM2, MM4 )			/*                 q > p ? 0 : q                 */	;\
+    POR        ( MM1, MM4 )			/*                 q > p ? p : q                 */	;\
+    GMB_STORE( rgba, MM4 )
+
+#include "mmx_blendtmp.h"
+
+
+/* Blend max function
+ */
+
+#define TAG(x) x##_max
+
+#define INIT \
+    MOVQ       ( CONTENT(const_80), MM7 )	/* 0x80| 0x80| 0x80| 0x80| 0x80| 0x80| 0x80| 0x80*/
+
+#define MAIN( rgba, dest ) \
+    GMB_LOAD( rgba, dest, MM1, MM2 )									;\
+    MOVQ       ( MM1, MM3 )										;\
+    MOVQ       ( MM2, MM4 )										;\
+    PXOR       ( MM7, MM3 )			/*              unsigned -> signed               */	;\
+    PXOR       ( MM7, MM4 )			/*              unsigned -> signed               */	;\
+    PCMPGTB    ( MM3, MM4 )			/*                 q > p ? 0xff : 0x00           */	;\
+    PAND       ( MM4, MM2 )			/*                 q > p ? q : 0                 */	;\
+    PANDN      ( MM1, MM4 )			/*                 q > p ? 0 : p                 */	;\
+    POR        ( MM2, MM4 )			/*                 q > p ? p : q                 */	;\
+    GMB_STORE( rgba, MM4 )
+
+#include "mmx_blendtmp.h"
+
+
+/* Blend modulate function
+ */
+
+#define TAG(x) x##_modulate
+
+#define INIT \
+    PXOR       ( MM0, MM0 )			/*   0x0000  |   0x0000  |   0x0000  |   0x0000  */	;\
+    MOVQ       ( CONTENT(const_0080), MM7 )	/*   0x0080  |   0x0080  |   0x0080  |   0x0080  */
+
+#define MAIN( rgba, dest ) \
+    GMB_LOAD( rgba, dest, MM1, MM2 )									;\
+    GMB_UNPACK( MM1, MM2, MM4, MM5, MM0 )								;\
+    GMB_MULT_GSR( MM1, MM2, MM4, MM5, MM7 )								;\
+    GMB_PACK( MM2, MM5 )										;\
+    GMB_STORE( rgba, MM2 )
+
+#include "mmx_blendtmp.h"
+

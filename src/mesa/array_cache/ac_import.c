@@ -1,4 +1,4 @@
-/* $Id: ac_import.c,v 1.16 2002/01/05 20:51:12 brianp Exp $ */
+/* $Id: ac_import.c,v 1.19 2002/04/21 21:03:02 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -74,7 +74,8 @@ static void reset_texcoord( GLcontext *ctx, GLuint unit )
 static void reset_vertex( GLcontext *ctx )
 {
    ACcontext *ac = AC_CONTEXT(ctx);
-   ASSERT(ctx->Array.Vertex.Enabled);
+   ASSERT(ctx->Array.Vertex.Enabled
+          || (ctx->VertexProgram.Enabled && ctx->Array.VertexAttrib[0].Enabled));
    ac->Raw.Vertex = ctx->Array.Vertex;
    STRIDE_ARRAY(ac->Raw.Vertex, ac->start);
    ac->IsCached.Vertex = GL_FALSE;
@@ -147,6 +148,7 @@ static void reset_index( GLcontext *ctx )
    ac->NewArrayState &= ~_NEW_ARRAY_INDEX;
 }
 
+
 static void reset_fogcoord( GLcontext *ctx )
 {
    ACcontext *ac = AC_CONTEXT(ctx);
@@ -161,6 +163,7 @@ static void reset_fogcoord( GLcontext *ctx )
    ac->IsCached.FogCoord = GL_FALSE;
    ac->NewArrayState &= ~_NEW_ARRAY_FOGCOORD;
 }
+
 
 static void reset_edgeflag( GLcontext *ctx )
 {
@@ -178,7 +181,73 @@ static void reset_edgeflag( GLcontext *ctx )
 }
 
 
+static void reset_attrib( GLcontext *ctx, GLuint index )
+{
+   ACcontext *ac = AC_CONTEXT(ctx);
+   GLboolean fallback = GL_FALSE;
 
+   /*
+    * The 16 NV vertex attribute arrays have top priority.  If one of those
+    * is not enabled, look if a corresponding conventional array is enabled.
+    * If nothing else, use the fallback (ctx->Current.Attrib) values.
+    */
+   if (ctx->Array._Enabled & _NEW_ARRAY_ATTRIB(index)) {
+      ac->Raw.Attrib[index] = ctx->Array.VertexAttrib[index];
+      STRIDE_ARRAY(ac->Raw.Attrib[index], ac->start);
+   }
+   else if (ctx->Array._Enabled & (1 << index)) {
+      /* use conventional vertex array if possible */
+      if (index == VERT_ATTRIB_POS) {
+         ac->Raw.Attrib[index] = ctx->Array.Vertex;
+      }
+      else if (index == VERT_ATTRIB_NORMAL) {
+         ac->Raw.Attrib[index] = ctx->Array.Normal;
+      }
+      else if (index == VERT_ATTRIB_COLOR0) {
+         ac->Raw.Attrib[index] = ctx->Array.Color;
+      }
+      else if (index == VERT_ATTRIB_COLOR1) {
+         ac->Raw.Attrib[index] = ctx->Array.SecondaryColor;
+      }
+      else if (index == VERT_ATTRIB_FOG) {
+         ac->Raw.Attrib[index] = ctx->Array.FogCoord;
+      }
+      else if (index >= VERT_ATTRIB_TEX0 && index <= VERT_ATTRIB_TEX7) {
+         GLuint unit = index - VERT_ATTRIB_TEX0;
+         ASSERT(unit < MAX_TEXTURE_UNITS);
+         ac->Raw.Attrib[index] = ctx->Array.TexCoord[unit];
+      }
+      else {
+         /* missing conventional array (vertex weight, for example) */
+         fallback = GL_TRUE;
+      }
+      if (!fallback)
+         STRIDE_ARRAY(ac->Raw.Attrib[index], ac->start);
+   }
+   else {
+      fallback = GL_TRUE;
+   }
+
+   if (fallback) {
+      /* fallback to ctx->Current.Attrib values */
+      ac->Raw.Attrib[index] = ac->Fallback.Attrib[index];
+
+      if (ctx->Current.Attrib[index][3] != 1.0)
+	 ac->Raw.Attrib[index].Size = 4;
+      else if (ctx->Current.Attrib[index][2] != 0.0)
+	 ac->Raw.Attrib[index].Size = 3;
+      else
+	 ac->Raw.Attrib[index].Size = 2;
+   }
+
+   ac->IsCached.Attrib[index] = GL_FALSE;
+   ac->NewArrayState &= ~_NEW_ARRAY_ATTRIB(index);
+}
+
+
+/*
+ * Generic import function for color data
+ */
 static void import( GLcontext *ctx,
 		    GLenum type,
 		    struct gl_client_array *to,
@@ -237,14 +306,20 @@ static void import( GLcontext *ctx,
 
 
 
-/* Functions to import array ranges with specified types and strides.
+/*
+ * Functions to import array ranges with specified types and strides.
+ * For example, if the vertex data is GLshort[2] and we want GLfloat[3]
+ * we'll use an import function to do the data conversion.
  */
+
 static void import_texcoord( GLcontext *ctx, GLuint unit,
 			     GLenum type, GLuint stride )
 {
    ACcontext *ac = AC_CONTEXT(ctx);
    struct gl_client_array *from = &ac->Raw.TexCoord[unit];
    struct gl_client_array *to = &ac->Cache.TexCoord[unit];
+
+   ASSERT(unit < ctx->Const.MaxTextureUnits);
 
    /* Limited choices at this stage:
     */
@@ -315,9 +390,6 @@ static void import_normal( GLcontext *ctx,
    to->Type = GL_FLOAT;
    ac->IsCached.Normal = GL_TRUE;
 }
-
-		    
-
 
 static void import_color( GLcontext *ctx,
 			  GLenum type, GLuint stride )
@@ -415,10 +487,42 @@ static void import_edgeflag( GLcontext *ctx,
    ac->IsCached.EdgeFlag = GL_TRUE;
 }
 
+static void import_attrib( GLcontext *ctx, GLuint index,
+                           GLenum type, GLuint stride )
+{
+   ACcontext *ac = AC_CONTEXT(ctx);
+   struct gl_client_array *from = &ac->Raw.Attrib[index];
+   struct gl_client_array *to = &ac->Cache.Attrib[index];
+
+   ASSERT(index < VERT_ATTRIB_MAX);
+
+   /* Limited choices at this stage:
+    */
+   ASSERT(type == GL_FLOAT);
+   ASSERT(stride == 4*sizeof(GLfloat) || stride == 0);
+   ASSERT(ac->count - ac->start < ctx->Const.MaxArrayLockSize);
+
+   _math_trans_4f( (GLfloat (*)[4]) to->Ptr,
+		   from->Ptr,
+		   from->StrideB,
+		   from->Type,
+		   from->Size,
+		   0,
+		   ac->count - ac->start);
+
+   to->Size = from->Size;
+   to->StrideB = 4 * sizeof(GLfloat);
+   to->Type = GL_FLOAT;
+   ac->IsCached.Attrib[index] = GL_TRUE;
+}
 
 
-/* Externals to request arrays with specific properties:
+
+/*
+ * Externals to request arrays with specific properties:
  */
+
+
 struct gl_client_array *_ac_import_texcoord( GLcontext *ctx,
 					     GLuint unit,
 					     GLenum type,
@@ -428,6 +532,8 @@ struct gl_client_array *_ac_import_texcoord( GLcontext *ctx,
 					     GLboolean *writeable )
 {
    ACcontext *ac = AC_CONTEXT(ctx);
+
+   ASSERT(unit < ctx->Const.MaxTextureUnits);
 
    /* Can we keep the existing version?
     */
@@ -656,9 +762,6 @@ struct gl_client_array *_ac_import_fogcoord( GLcontext *ctx,
    }
 }
 
-
-
-
 struct gl_client_array *_ac_import_edgeflag( GLcontext *ctx,
 					     GLenum type,
 					     GLuint reqstride,
@@ -689,8 +792,50 @@ struct gl_client_array *_ac_import_edgeflag( GLcontext *ctx,
    }
 }
 
+/* GL_NV_vertex_program */
+struct gl_client_array *_ac_import_attrib( GLcontext *ctx,
+                                           GLuint index,
+                                           GLenum type,
+                                           GLuint reqstride,
+                                           GLuint reqsize,
+                                           GLboolean reqwriteable,
+                                           GLboolean *writeable )
+{
+   ACcontext *ac = AC_CONTEXT(ctx);
 
+   ASSERT(index < VERT_ATTRIB_MAX);
 
+   /* Can we keep the existing version?
+    */
+   if (ac->NewArrayState & _NEW_ARRAY_ATTRIB(index)) {
+      reset_attrib( ctx, index );
+   }
+   else if (ac->NewArrayState & (1 << index)) {
+      /* Also need to check conventional attributes */
+      reset_attrib( ctx, index );
+   }
+
+   /* Is the request impossible?
+    */
+   if (reqsize != 0 && ac->Raw.Attrib[index].Size > (GLint) reqsize)
+      return NULL;
+
+   /* Do we need to pull in a copy of the client data:
+    */
+   if (ac->Raw.Attrib[index].Type != type ||
+       (reqstride != 0 && ac->Raw.Attrib[index].StrideB != (GLint)reqstride) ||
+       reqwriteable)
+   {
+      if (!ac->IsCached.Attrib[index])
+	 import_attrib(ctx, index, type, reqstride );
+      *writeable = GL_TRUE;
+      return &ac->Cache.Attrib[index];
+   }
+   else {
+      *writeable = GL_FALSE;
+      return &ac->Raw.Attrib[index];
+   }
+}
 
 
 /* Clients must call this function to validate state and set bounds
@@ -723,8 +868,8 @@ void _ac_import_range( GLcontext *ctx, GLuint start, GLuint count )
 
 
 
-/* Additional convienence function for importing a the element list
- * for drawelements, drawrangeelements:
+/* Additional convienence function for importing the element list
+ * for glDrawElements() and glDrawRangeElements().
  */
 CONST void *
 _ac_import_elements( GLcontext *ctx,

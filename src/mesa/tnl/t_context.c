@@ -1,4 +1,4 @@
-/* $Id: t_context.c,v 1.24 2002/02/13 00:53:20 keithw Exp $ */
+/* $Id: t_context.c,v 1.26 2002/04/19 12:32:14 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -110,12 +110,15 @@ _tnl_CreateContext( GLcontext *ctx )
    /* Hook our functions into exec and compile dispatch tables.
     */
    _mesa_install_exec_vtxfmt( ctx, &tnl->vtxfmt );
-   _mesa_install_save_vtxfmt( ctx, &tnl->vtxfmt );
-   ctx->Save->CallList = _mesa_save_CallList;	
-   ctx->Save->CallLists = _mesa_save_CallLists;
-   ctx->Save->EvalMesh1 = _mesa_save_EvalMesh1;	
-   ctx->Save->EvalMesh2 = _mesa_save_EvalMesh2;
-   ctx->Save->Begin = _tnl_save_Begin;
+
+   tnl->save_vtxfmt = tnl->vtxfmt;
+   tnl->save_vtxfmt.CallList = _mesa_save_CallList;	
+   tnl->save_vtxfmt.EvalMesh1 = _mesa_save_EvalMesh1;	
+   tnl->save_vtxfmt.EvalMesh2 = _mesa_save_EvalMesh2;
+   tnl->save_vtxfmt.Begin = _tnl_save_Begin;
+
+   _mesa_install_save_vtxfmt( ctx, &tnl->save_vtxfmt );
+
 
    /* Set a few default values in the driver struct.
     */
@@ -142,7 +145,7 @@ _tnl_DestroyContext( GLcontext *ctx )
    _tnl_array_destroy( ctx );
    _tnl_imm_destroy( ctx );
    _tnl_destroy_pipeline( ctx );
-   _tnl_free_immediate( tnl->freed_immediate );
+   _tnl_free_immediate( ctx, tnl->freed_immediate );
 
    FREE(tnl);
    ctx->swtnl_context = 0;
@@ -200,12 +203,7 @@ _tnl_wakeup_save_exec( GLcontext *ctx )
    TNLcontext *tnl = TNL_CONTEXT(ctx);
 
    _tnl_wakeup_exec( ctx );
-   _mesa_install_save_vtxfmt( ctx, &tnl->vtxfmt );
-   ctx->Save->CallList = _mesa_save_CallList;	/* fixme */
-   ctx->Save->CallLists = _mesa_save_CallLists;
-   ctx->Save->EvalMesh1 = _mesa_save_EvalMesh1;	/* fixme */
-   ctx->Save->EvalMesh2 = _mesa_save_EvalMesh2;
-   ctx->Save->Begin = _tnl_save_Begin;
+   _mesa_install_save_vtxfmt( ctx, &tnl->save_vtxfmt );
 }
 
 

@@ -1,4 +1,4 @@
-/* $Id: mtypes.h,v 1.69 2002/03/29 17:27:59 brianp Exp $ */
+/* $Id: mtypes.h,v 1.73 2002/04/21 20:37:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -1537,11 +1537,12 @@ struct matrix_stack
 #define _NEW_ARRAY_TEXCOORD_5       VERT_BIT_TEX5
 #define _NEW_ARRAY_TEXCOORD_6       VERT_BIT_TEX6
 #define _NEW_ARRAY_TEXCOORD_7       VERT_BIT_TEX7
-#define _NEW_ARRAY_ALL              0xffff
-#define _NEW_ARRAY_VERT_ATTRIB0     0x10000
+#define _NEW_ARRAY_ATTRIB_0         0x10000  /* start at bit 16 */
+#define _NEW_ARRAY_ALL              0xffffffff
 
 
 #define _NEW_ARRAY_TEXCOORD(i) (_NEW_ARRAY_TEXCOORD_0 << (i))
+#define _NEW_ARRAY_ATTRIB(i) (_NEW_ARRAY_ATTRIB_0 << (i))
 
 /* A bunch of flags that we think might be useful to drivers.
  */
@@ -1810,6 +1811,9 @@ struct __GLcontextRec {
 /* The string names for GL_POINT, GL_LINE_LOOP, etc */
 extern const char *_mesa_prim_name[GL_POLYGON+4];
 
+#ifndef MESA_DEBUG
+#define MESA_DEBUG
+#endif
 
 #ifdef MESA_DEBUG
 extern int MESA_VERBOSE;
@@ -1831,8 +1835,10 @@ enum _verbose {
    VERBOSE_DRIVER		= 0x0010,
    VERBOSE_STATE		= 0x0020,
    VERBOSE_API			= 0x0040,
-   VERBOSE_DISPLAY_LIST		= 0x0200,
-   VERBOSE_LIGHTING		= 0x0400
+   VERBOSE_DISPLAY_LIST		= 0x0100,
+   VERBOSE_LIGHTING		= 0x0200,
+   VERBOSE_PRIMS		= 0x0400,
+   VERBOSE_VERTS		= 0x0800
 };
 
 
@@ -1844,22 +1850,34 @@ enum _debug {
 
 #define Elements(x) sizeof(x)/sizeof(*(x))
 
-
+/*
+ * Provide a reasonable replacement for __FUNCTION__ when using
+ * non-GNU C compilers.
+ */
+#if !defined(__GNUC__)
+#define STRINGIZE(x) #x
+#define STRINGIZE_EVAL(x) STRINGIZE(x)
+#define __FUNCTION__ STRINGIZE_EVAL(__FILE__) ", line " STRINGIZE_EVAL(__LINE__)
+#endif
 
 /* Eventually let the driver specify what statechanges require a flush:
  */
-#define FLUSH_VERTICES(ctx, newstate)					\
-do {									\
-   if (ctx->Driver.NeedFlush & FLUSH_STORED_VERTICES)			\
-      ctx->Driver.FlushVertices(ctx, FLUSH_STORED_VERTICES);		\
-   ctx->NewState |= newstate;						\
+#define FLUSH_VERTICES(ctx, newstate)				\
+do {								\
+   if (MESA_VERBOSE & VERBOSE_STATE)				\
+      fprintf(stderr, "FLUSH_VERTICES in %s\n", __FUNCTION__);	\
+   if (ctx->Driver.NeedFlush & FLUSH_STORED_VERTICES)		\
+      ctx->Driver.FlushVertices(ctx, FLUSH_STORED_VERTICES);	\
+   ctx->NewState |= newstate;					\
 } while (0)
 
-#define FLUSH_CURRENT(ctx, newstate)					\
-do {									\
-   if (ctx->Driver.NeedFlush & FLUSH_UPDATE_CURRENT)			\
-      ctx->Driver.FlushVertices(ctx, FLUSH_UPDATE_CURRENT);		\
-   ctx->NewState |= newstate;						\
+#define FLUSH_CURRENT(ctx, newstate)				\
+do {								\
+   if (MESA_VERBOSE & VERBOSE_STATE)				\
+      fprintf(stderr, "FLUSH_CURRENT in %s\n", __FUNCTION__);	\
+   if (ctx->Driver.NeedFlush & FLUSH_UPDATE_CURRENT)		\
+      ctx->Driver.FlushVertices(ctx, FLUSH_UPDATE_CURRENT);	\
+   ctx->NewState |= newstate;					\
 } while (0)
 
 #define ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, retval)		\

@@ -1,4 +1,4 @@
-/* $Id: fakeglx.c,v 1.61 2002/03/15 18:43:25 brianp Exp $ */
+/* $Id: fakeglx.c,v 1.63 2002/04/19 00:47:07 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -1133,6 +1133,10 @@ Fake_glXCreateContext( Display *dpy, XVisualInfo *visinfo,
    XMesaVisual glxvis;
    struct fake_glx_context *glxCtx;
    struct fake_glx_context *shareCtx = (struct fake_glx_context *) share_list;
+
+   if (!dpy || !visinfo)
+      return 0;
+
    glxCtx = CALLOC_STRUCT(fake_glx_context);
    if (!glxCtx)
       return 0;
@@ -1791,7 +1795,11 @@ Fake_glXGetFBConfigAttrib( Display *dpy, GLXFBConfig config,
          *value = False; /* XXX ??? */
          break;
       case GLX_X_VISUAL_TYPE:
+#if defined(__cplusplus) || defined(c_plusplus)
+         switch (v->vishandle->c_class) {
+#else
          switch (v->vishandle->class) {
+#endif
             case GrayScale:
                *value = GLX_GRAY_SCALE;
                break;

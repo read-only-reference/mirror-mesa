@@ -1,4 +1,4 @@
-/* $Id: s_texture.c,v 1.57 2002/03/23 16:33:53 brianp Exp $ */
+/* $Id: s_texture.c,v 1.61 2002/04/19 00:38:27 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -2250,7 +2250,7 @@ sample_depth_texture( GLcontext *ctx, GLuint unit,
                result = 0;
                break;
             case GL_NEVER:
-               result = CHAN_MAXF;
+               result = CHAN_MAX;
                break;
             case GL_NONE:
                /* ordinary bilinear filtering */
@@ -2543,6 +2543,16 @@ texture_combine(const GLcontext *ctx,
           ctx->Extensions.ARB_texture_env_combine);
 
    /*
+   printf("modeRGB 0x%x  modeA 0x%x  srcRGB1 0x%x  srcA1 0x%x  srcRGB2 0x%x  srcA2 0x%x\n",
+          textureUnit->CombineModeRGB,
+          textureUnit->CombineModeA,
+          textureUnit->CombineSourceRGB[0],
+          textureUnit->CombineSourceA[0],
+          textureUnit->CombineSourceRGB[1],
+          textureUnit->CombineSourceA[1]);
+   */
+
+   /*
     * Do operand setup for up to 3 operands.  Loop over the terms.
     */
    for (j = 0; j < 3; j++) {
@@ -2689,7 +2699,7 @@ texture_combine(const GLcontext *ctx,
             const GLchan (*arg0)[4] = (const GLchan (*)[4]) argRGB[0];
             const GLchan (*arg1)[4] = (const GLchan (*)[4]) argRGB[1];
 #if CHAN_TYPE != GL_FLOAT
-            const GLint shift = 8 - RGBshift;
+            const GLint shift = CHAN_BITS - RGBshift;
 #endif
             for (i = 0; i < n; i++) {
 #if CHAN_TYPE == GL_FLOAT
@@ -2756,7 +2766,7 @@ texture_combine(const GLcontext *ctx,
             const GLchan (*arg1)[4] = (const GLchan (*)[4]) argRGB[1];
             const GLchan (*arg2)[4] = (const GLchan (*)[4]) argRGB[2];
 #if CHAN_TYPE != GL_FLOAT
-            const GLint shift = 8 - RGBshift;
+            const GLint shift = CHAN_BITS - RGBshift;
 #endif
             for (i = 0; i < n; i++) {
 #if CHAN_TYPE == GL_FLOAT
@@ -2803,15 +2813,12 @@ texture_combine(const GLcontext *ctx,
             }
          }
          break;
-      case GL_DOT3_RGB_ARB:
-      case GL_DOT3_RGBA_ARB:
+      case GL_DOT3_RGB_EXT:
+      case GL_DOT3_RGBA_EXT:
          {
+            /* Do not scale the result by 1 2 or 4 */
             const GLchan (*arg0)[4] = (const GLchan (*)[4]) argRGB[0];
             const GLchan (*arg1)[4] = (const GLchan (*)[4]) argRGB[1];
-	    /* ATI's EXT extension has a constant scale by 4.  The ARB
-	     * one will likely remove this restriction, and we should
-	     * drop the EXT extension in favour of the ARB one.
-	     */
             for (i = 0; i < n; i++) {
 #if CHAN_TYPE == GL_FLOAT
                GLchan dot = ((arg0[i][RCOMP]-0.5F) * (arg1[i][RCOMP]-0.5F) +
@@ -2827,6 +2834,31 @@ texture_combine(const GLcontext *ctx,
 				   (GLint)arg1[i][BCOMP] - half)) >> 6;
 #endif
                dot = CLAMP(dot, 0, CHAN_MAX);
+               rgba[i][RCOMP] = rgba[i][GCOMP] = rgba[i][BCOMP] = (GLchan) dot;
+            }
+         }
+         break;
+      case GL_DOT3_RGB_ARB:
+      case GL_DOT3_RGBA_ARB:
+         {
+            /* DO scale the result by 1 2 or 4 */
+            const GLchan (*arg0)[4] = (const GLchan (*)[4]) argRGB[0];
+            const GLchan (*arg1)[4] = (const GLchan (*)[4]) argRGB[1];
+            for (i = 0; i < n; i++) {
+#if CHAN_TYPE == GL_FLOAT
+               GLchan dot = ((arg0[i][RCOMP]-0.5F) * (arg1[i][RCOMP]-0.5F) +
+                             (arg0[i][GCOMP]-0.5F) * (arg1[i][GCOMP]-0.5F) +
+                             (arg0[i][BCOMP]-0.5F) * (arg1[i][BCOMP]-0.5F))
+                            * 4.0F;
+#else
+               GLint dot = (S_PROD((GLint)arg0[i][RCOMP] - half,
+				   (GLint)arg1[i][RCOMP] - half) +
+			    S_PROD((GLint)arg0[i][GCOMP] - half,
+				   (GLint)arg1[i][GCOMP] - half) +
+			    S_PROD((GLint)arg0[i][BCOMP] - half,
+				   (GLint)arg1[i][BCOMP] - half)) >> 6;
+#endif
+               dot = CLAMP(dot, 0, CHAN_MAX) << RGBshift;
                rgba[i][RCOMP] = rgba[i][GCOMP] = rgba[i][BCOMP] = (GLchan) dot;
             }
          }
@@ -2861,7 +2893,7 @@ texture_combine(const GLcontext *ctx,
             const GLchan (*arg0)[4] = (const GLchan (*)[4]) argA[0];
             const GLchan (*arg1)[4] = (const GLchan (*)[4]) argA[1];
 #if CHAN_TYPE != GL_FLOAT
-            const GLint shift = 8 - Ashift;
+            const GLint shift = CHAN_BITS - Ashift;
 #endif
             for (i = 0; i < n; i++) {
 #if CHAN_TYPE == GL_FLOAT
@@ -2908,7 +2940,7 @@ texture_combine(const GLcontext *ctx,
             const GLchan (*arg1)[4] = (const GLchan (*)[4]) argA[1];
             const GLchan (*arg2)[4] = (const GLchan (*)[4]) argA[2];
 #if CHAN_TYPE != GL_FLOAT
-            const GLint shift = 8 - Ashift;
+            const GLint shift = CHAN_BITS - Ashift;
 #endif
             for (i=0; i<n; i++) {
 #if CHAN_TYPE == GL_FLOAT
@@ -2926,13 +2958,13 @@ texture_combine(const GLcontext *ctx,
          break;
       case GL_SUBTRACT_ARB:
          {
-            const GLchan (*arg0)[4] = (const GLchan (*)[4]) argRGB[0];
-            const GLchan (*arg1)[4] = (const GLchan (*)[4]) argRGB[1];
+            const GLchan (*arg0)[4] = (const GLchan (*)[4]) argA[0];
+            const GLchan (*arg1)[4] = (const GLchan (*)[4]) argA[1];
             for (i = 0; i < n; i++) {
 #if CHAN_TYPE == GL_FLOAT
                rgba[i][ACOMP] = (arg0[i][ACOMP] - arg1[i][ACOMP]) * Amult;
 #else
-               GLint a = ((GLint) arg0[i][ACOMP] - (GLint) arg1[i][ACOMP]) << RGBshift;
+               GLint a = ((GLint) arg0[i][ACOMP] - (GLint) arg1[i][ACOMP]) << Ashift;
                rgba[i][ACOMP] = (GLchan) CLAMP(a, 0, CHAN_MAX);
 #endif
             }
@@ -2943,7 +2975,10 @@ texture_combine(const GLcontext *ctx,
          _mesa_problem(ctx, "invalid combine mode");
    }
 
-   /* Fix the alpha component for GL_DOT3_RGBA_EXT combining.
+   /* Fix the alpha component for GL_DOT3_RGBA_EXT/ARB combining.
+    * This is kind of a kludge.  It would have been better if the spec
+    * were written such that the GL_COMBINE_ALPHA value could be set to
+    * GL_DOT3.
     */
    if (textureUnit->CombineModeRGB == GL_DOT3_RGBA_EXT ||
        textureUnit->CombineModeRGB == GL_DOT3_RGBA_ARB) {
@@ -3319,26 +3354,30 @@ apply_texture( const GLcontext *ctx,
  * Apply a unit of texture mapping to the incoming fragments.
  */
 void
-_swrast_texture_fragments( GLcontext *ctx, GLuint texUnit, GLuint n,
-			       GLfloat texcoords[][4], GLfloat lambda[],
-			       CONST GLchan primary_rgba[][4],
-			       GLchan rgba[][4] )
+_swrast_texture_fragments( GLcontext *ctx, GLuint texUnit,
+			   struct sw_span *span,
+			   CONST GLchan primary_rgba[][4])
 {
    const GLuint mask = TEXTURE0_ANY << (texUnit * 4);
+   GLfloat (*texcoords)[4] = span->texcoords[texUnit];
+   GLfloat *lambda = span->lambda[texUnit];
+
 
    if (ctx->Texture._ReallyEnabled & mask) {
       const struct gl_texture_unit *textureUnit = &ctx->Texture.Unit[texUnit];
+
+      ASSERT(span->arrayMask & SPAN_TEXTURE);
       
       if (textureUnit->_Current) {   /* XXX need this? */
          const struct gl_texture_object *curObj = textureUnit->_Current;
          GLchan texel[MAX_WIDTH][4];
          
-         if (lambda) {
+         if (span->arrayMask | SPAN_LAMBDA) {
 #if 0
             float min, max;
             int i;
             min = max = lambda[0];
-            for (i = 1; i < n; i++) {
+            for (i = 1; i < span->end; i++) {
                if (lambda[i] > max)
                   max = lambda[i];
                if (lambda[i] < min)
@@ -3349,7 +3388,7 @@ _swrast_texture_fragments( GLcontext *ctx, GLuint texUnit, GLuint n,
             if (textureUnit->LodBias != 0.0F) {
                /* apply LOD bias, but don't clamp yet */
                GLuint i;
-               for (i=0;i<n;i++) {
+               for (i=0;i<span->end;i++) {
                   lambda[i] += textureUnit->LodBias;
                }
             }
@@ -3359,7 +3398,7 @@ _swrast_texture_fragments( GLcontext *ctx, GLuint texUnit, GLuint n,
                const GLfloat min = curObj->MinLod;
                const GLfloat max = curObj->MaxLod;
                GLuint i;
-               for (i=0;i<n;i++) {
+               for (i=0;i<span->end;i++) {
                   GLfloat l = lambda[i];
                   lambda[i] = CLAMP(l, min, max);
                }
@@ -3369,11 +3408,11 @@ _swrast_texture_fragments( GLcontext *ctx, GLuint texUnit, GLuint n,
          /* Sample the texture for n fragments */
          SWRAST_CONTEXT(ctx)->TextureSample[texUnit]( ctx, texUnit,
                                                       textureUnit->_Current,
-                                                      n, texcoords,
+                                                      span->end, texcoords,
                                                       lambda, texel );
 
-         apply_texture( ctx, textureUnit, n, primary_rgba,
-                        (const GLchan (*)[4]) texel, rgba );
+         apply_texture( ctx, textureUnit, span->end, primary_rgba,
+                        (const GLchan (*)[4]) texel, span->color.rgba );
       }
    }
 }
@@ -3395,6 +3434,7 @@ _swrast_multitexture_fragments( GLcontext *ctx, struct sw_span *span )
       GLuint unit;
 
       ASSERT(span->end < MAX_WIDTH);
+      ASSERT(span->arrayMask & SPAN_TEXTURE);
 
       /* save copy of the span colors (the GL_PRIMARY_COLOR) */
       MEMCPY(primary_rgba, span->color.rgba, 4 * span->end * sizeof(GLchan));
@@ -3402,12 +3442,8 @@ _swrast_multitexture_fragments( GLcontext *ctx, struct sw_span *span )
       /* loop over texture units, modifying the span->color.rgba values */
       for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {
          if (ctx->Texture.Unit[unit]._ReallyEnabled) {
-            _swrast_texture_fragments( ctx, unit, span->end,
-                                           span->texcoords[unit],
-                                           (span->arrayMask & SPAN_LAMBDA) ?
-                                              span->lambda[unit] : NULL,
-                                           (CONST GLchan (*)[4]) primary_rgba,
-                                           span->color.rgba );
+            _swrast_texture_fragments( ctx, unit, span,
+				       (CONST GLchan (*)[4]) primary_rgba);
          }
       }
    }
@@ -3415,11 +3451,7 @@ _swrast_multitexture_fragments( GLcontext *ctx, struct sw_span *span )
       /* Just unit 0 enabled */
       ASSERT(ctx->Texture._ReallyEnabled & TEXTURE0_ANY);
 
-      _swrast_texture_fragments( ctx, 0, span->end,
-                                     span->texcoords[0],
-                                     (span->arrayMask & SPAN_LAMBDA) ?
-                                        span->lambda[0] : NULL,
-                                     (CONST GLchan (*)[4]) span->color.rgba,
-                                     span->color.rgba );
+      _swrast_texture_fragments( ctx, 0, span,
+				 (CONST GLchan (*)[4]) span->color.rgba);
    }
 }

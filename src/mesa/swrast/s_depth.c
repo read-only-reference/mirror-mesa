@@ -1,4 +1,4 @@
-/* $Id: s_depth.c,v 1.19 2002/03/19 16:47:05 brianp Exp $ */
+/* $Id: s_depth.c,v 1.22 2002/04/19 00:38:27 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -567,8 +567,22 @@ depth_test_span( GLcontext *ctx, struct sw_span *span)
          GLuint *zptr = (GLuint *) Z_ADDRESS32(ctx, x, y);
          passed = depth_test_span32(ctx, n, zptr, span->zArray, span->mask);
       }
-      if (passed < span->end)
+#if 1
+      if (passed < span->end) {
          span->writeAll = GL_FALSE;
+      }
+#else
+      /* this causes a glDrawPixels(GL_DEPTH_COMPONENT) conformance failure */
+      if (passed < span->end) {
+	  span->writeAll = GL_FALSE;
+	  if (passed == 0) {
+	      span->end = 0;
+	      return 0;
+	  }
+	  while (span->end > 0  &&  span->mask[span->end - 1] == 0)
+	      span->end --;
+      }
+#endif
       return passed;
    }
 }
@@ -1364,8 +1378,8 @@ _mesa_read_depth_span( GLcontext *ctx,
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
 
-   if (y < 0 || y >= ctx->DrawBuffer->Height ||
-       x + (GLint) n <= 0 || x >= ctx->DrawBuffer->Width) {
+   if (y < 0 || y >= (GLint) ctx->DrawBuffer->Height ||
+       x + (GLint) n <= 0 || x >= (GLint) ctx->DrawBuffer->Width) {
       /* span is completely outside framebuffer */
       GLint i;
       for (i = 0; i < n; i++)
@@ -1382,8 +1396,8 @@ _mesa_read_depth_span( GLcontext *ctx,
       n -= dx;
       depth += dx;
    }
-   if (x + n > ctx->DrawBuffer->Width) {
-      GLint dx = x + n - ctx->DrawBuffer->Width;
+   if (x + n > (GLint) ctx->DrawBuffer->Width) {
+      GLint dx = x + n - (GLint) ctx->DrawBuffer->Width;
       GLint i;
       for (i = 0; i < dx; i++)
          depth[n - i - 1] = 0;
@@ -1438,8 +1452,8 @@ _mesa_read_depth_span_float( GLcontext *ctx,
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const GLfloat scale = 1.0F / ctx->DepthMaxF;
 
-   if (y < 0 || y >= ctx->DrawBuffer->Height ||
-       x + (GLint) n <= 0 || x >= ctx->DrawBuffer->Width) {
+   if (y < 0 || y >= (GLint) ctx->DrawBuffer->Height ||
+       x + (GLint) n <= 0 || x >= (GLint) ctx->DrawBuffer->Width) {
       /* span is completely outside framebuffer */
       GLint i;
       for (i = 0; i < n; i++)
@@ -1455,8 +1469,8 @@ _mesa_read_depth_span_float( GLcontext *ctx,
       n -= dx;
       x = 0;
    }
-   if (x + n > ctx->DrawBuffer->Width) {
-      GLint dx = x + n - ctx->DrawBuffer->Width;
+   if (x + n > (GLint) ctx->DrawBuffer->Width) {
+      GLint dx = x + n - (GLint) ctx->DrawBuffer->Width;
       GLint i;
       for (i = 0; i < dx; i++)
          depth[n - i - 1] = 0.0F;

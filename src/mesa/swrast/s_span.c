@@ -1,4 +1,4 @@
-/* $Id: s_span.c,v 1.37 2002/03/16 18:02:08 brianp Exp $ */
+/* $Id: s_span.c,v 1.41 2002/04/20 17:54:55 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -135,7 +135,8 @@ interpolate_colors(GLcontext *ctx, struct sw_span *span)
    GLchan (*rgba)[4] = span->color.rgba;
    GLuint i;
 
-   ASSERT(span->interpMask & SPAN_RGBA);
+   ASSERT((span->interpMask & SPAN_RGBA)  &&
+	  !(span->arrayMask & SPAN_RGBA));
 
    if (span->interpMask & SPAN_FLAT) {
       /* constant color */
@@ -174,7 +175,8 @@ interpolate_indexes(GLcontext *ctx, struct sw_span *span)
    const GLuint n = span->end;
    GLuint *indexes = span->color.index;
    GLuint i;
-   ASSERT(span->interpMask & SPAN_INDEX);
+   ASSERT((span->interpMask & SPAN_INDEX)  &&
+	  !(span->arrayMask & SPAN_INDEX));
 
    if ((span->interpMask & SPAN_FLAT) || (indexStep == 0)) {
       /* constant color */
@@ -242,7 +244,8 @@ _mesa_span_interpolate_z( const GLcontext *ctx, struct sw_span *span )
    const GLuint n = span->end;
    GLuint i;
 
-   ASSERT(span->interpMask & SPAN_Z);
+   ASSERT((span->interpMask & SPAN_Z)  &&
+	  !(span->arrayMask & SPAN_Z));
 
    if (ctx->Visual.depthBits <= 16) {
       GLfixed zval = span->z;
@@ -318,10 +321,12 @@ static void
 interpolate_texcoords(GLcontext *ctx, struct sw_span *span)
 {
    ASSERT(span->interpMask & SPAN_TEXTURE);
+   ASSERT(!(span->arrayMask & SPAN_TEXTURE));
 
    if (ctx->Texture._ReallyEnabled & ~TEXTURE0_ANY) {
       /* multitexture */
       GLuint u;
+      span->arrayMask |= SPAN_TEXTURE;
       for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
          if (ctx->Texture.Unit[u]._ReallyEnabled) {
             const struct gl_texture_object *obj =ctx->Texture.Unit[u]._Current;
@@ -402,6 +407,7 @@ interpolate_texcoords(GLcontext *ctx, struct sw_span *span)
       const struct gl_texture_object *obj = ctx->Texture.Unit[0]._Current;
       const struct gl_texture_image *img = obj->Image[obj->BaseLevel];
       GLboolean needLambda = (obj->MinFilter != obj->MagFilter);
+      span->arrayMask |= SPAN_TEXTURE;
       if (needLambda) {
          /* just texture unit 0, with lambda */
          const GLfloat texW = (GLfloat) img->Width;
@@ -717,14 +723,15 @@ multi_write_rgba_span( GLcontext *ctx, struct sw_span *span )
  * to their original values before returning.
  */
 void
-_mesa_write_index_span( GLcontext *ctx, struct sw_span *span,
-			GLenum primitive)
+_mesa_write_index_span( GLcontext *ctx, struct sw_span *span)
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const GLuint origInterpMask = span->interpMask;
    const GLuint origArrayMask = span->arrayMask;
 
    ASSERT(span->end <= MAX_WIDTH);
+   ASSERT(span->primitive == GL_POINT  ||  span->primitive == GL_LINE ||
+	  span->primitive == GL_POLYGON  ||  span->primitive == GL_BITMAP);
    ASSERT((span->interpMask | span->arrayMask) & SPAN_INDEX);
    ASSERT((span->interpMask & span->arrayMask) == 0);
 
@@ -738,8 +745,7 @@ _mesa_write_index_span( GLcontext *ctx, struct sw_span *span,
    }
 
    /* Clipping */
-   if ((swrast->_RasterMask & CLIP_BIT) || (primitive == GL_BITMAP)
-       || (primitive == GL_POINT) || (primitive == GL_LINE)) {
+   if ((swrast->_RasterMask & CLIP_BIT) || (span->primitive != GL_POLYGON)) {
       if (!clip_span(ctx, span)) {
          return;
       }
@@ -747,7 +753,7 @@ _mesa_write_index_span( GLcontext *ctx, struct sw_span *span,
 
 #ifdef DEBUG
    if (span->arrayMask & SPAN_XY) {
-      int i;
+      GLuint i;
       for (i = 0; i < span->end; i++) {
          if (span->mask[i]) {
             assert(span->xArray[i] >= ctx->DrawBuffer->_Xmin);
@@ -760,7 +766,7 @@ _mesa_write_index_span( GLcontext *ctx, struct sw_span *span,
 #endif
 
    /* Polygon Stippling */
-   if (ctx->Polygon.StippleFlag && primitive == GL_POLYGON) {
+   if (ctx->Polygon.StippleFlag && span->primitive == GL_POLYGON) {
       stipple_polygon_span(ctx, span);
    }
 
@@ -872,8 +878,7 @@ _mesa_write_index_span( GLcontext *ctx, struct sw_span *span,
  * to their original values before returning.
  */
 void
-_mesa_write_rgba_span( GLcontext *ctx, struct sw_span *span,
-		       GLenum primitive)
+_mesa_write_rgba_span( GLcontext *ctx, struct sw_span *span)
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const GLuint colorMask = *((GLuint *) ctx->Color.ColorMask);
@@ -882,6 +887,8 @@ _mesa_write_rgba_span( GLcontext *ctx, struct sw_span *span,
    GLboolean monoColor;
 
    ASSERT(span->end <= MAX_WIDTH);
+   ASSERT(span->primitive == GL_POINT  ||  span->primitive == GL_LINE ||
+	  span->primitive == GL_POLYGON  ||  span->primitive == GL_BITMAP);
    ASSERT((span->interpMask & span->arrayMask) == 0);
    ASSERT((span->interpMask | span->arrayMask) & SPAN_RGBA);
 #ifdef DEBUG
@@ -892,7 +899,7 @@ _mesa_write_rgba_span( GLcontext *ctx, struct sw_span *span,
 #endif
 
    /*
-   printf("%s()  interp 0x%x  array 0x%x  p=0x%x\n", __FUNCTION__, span->interpMask, span->arrayMask, primitive);
+   printf("%s()  interp 0x%x  array 0x%x  p=0x%x\n", __FUNCTION__, span->interpMask, span->arrayMask, span->primitive);
    */
 
    if (span->arrayMask & SPAN_MASK) {
@@ -910,8 +917,7 @@ _mesa_write_rgba_span( GLcontext *ctx, struct sw_span *span,
       span->blueStep == 0 && span->alphaStep == 0;
 
    /* Clipping */
-   if ((swrast->_RasterMask & CLIP_BIT) || (primitive == GL_BITMAP)
-       || (primitive == GL_POINT) || (primitive == GL_LINE)) {
+   if ((swrast->_RasterMask & CLIP_BIT) || (span->primitive != GL_POLYGON)) {
       if (!clip_span(ctx, span)) {
          return;
       }
@@ -919,7 +925,7 @@ _mesa_write_rgba_span( GLcontext *ctx, struct sw_span *span,
 
 #ifdef DEBUG
    if (span->arrayMask & SPAN_XY) {
-      int i;
+      GLuint i;
       for (i = 0; i < span->end; i++) {
          if (span->mask[i]) {
             assert(span->xArray[i] >= ctx->DrawBuffer->_Xmin);
@@ -932,7 +938,7 @@ _mesa_write_rgba_span( GLcontext *ctx, struct sw_span *span,
 #endif
 
    /* Polygon Stippling */
-   if (ctx->Polygon.StippleFlag && primitive == GL_POLYGON) {
+   if (ctx->Polygon.StippleFlag && span->primitive == GL_POLYGON) {
       stipple_polygon_span(ctx, span);
    }
 
@@ -1099,13 +1105,14 @@ add_colors(GLuint n, GLchan rgba[][4], GLchan specular[][4] )
  * to their original values before returning.
  */
 void
-_mesa_write_texture_span( GLcontext *ctx, struct sw_span *span,
-                          GLenum primitive )
+_mesa_write_texture_span( GLcontext *ctx, struct sw_span *span)
 {
    const GLuint colorMask = *((GLuint *) ctx->Color.ColorMask);
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const GLuint origArrayMask = span->arrayMask;
 
+   ASSERT(span->primitive == GL_POINT  ||  span->primitive == GL_LINE ||
+	  span->primitive == GL_POLYGON  ||  span->primitive == GL_BITMAP);
    ASSERT(span->end <= MAX_WIDTH);
    ASSERT((span->interpMask & span->arrayMask) == 0);
    ASSERT(ctx->Texture._ReallyEnabled);
@@ -1124,8 +1131,7 @@ _mesa_write_texture_span( GLcontext *ctx, struct sw_span *span,
    }
 
    /* Clipping */
-   if ((swrast->_RasterMask & CLIP_BIT) || (primitive == GL_BITMAP)
-       || (primitive == GL_POINT) || (primitive == GL_LINE)) {
+   if ((swrast->_RasterMask & CLIP_BIT) || (span->primitive != GL_POLYGON)) {
       if (!clip_span(ctx, span)) {
 	 return;
       }
@@ -1133,7 +1139,7 @@ _mesa_write_texture_span( GLcontext *ctx, struct sw_span *span,
 
 #ifdef DEBUG
    if (span->arrayMask & SPAN_XY) {
-      int i;
+      GLuint i;
       for (i = 0; i < span->end; i++) {
          if (span->mask[i]) {
             assert(span->xArray[i] >= ctx->DrawBuffer->_Xmin);
@@ -1146,7 +1152,7 @@ _mesa_write_texture_span( GLcontext *ctx, struct sw_span *span,
 #endif
 
    /* Polygon Stippling */
-   if (ctx->Polygon.StippleFlag && primitive == GL_POLYGON) {
+   if (ctx->Polygon.StippleFlag && span->primitive == GL_POLYGON) {
       stipple_polygon_span(ctx, span);
    }
 
@@ -1299,8 +1305,10 @@ _mesa_read_rgba_span( GLcontext *ctx, GLframebuffer *buffer,
                       GLuint n, GLint x, GLint y, GLchan rgba[][4] )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
-   if (y < 0 || y >= buffer->Height
-       || x + (GLint) n < 0 || x >= buffer->Width) {
+   const GLint bufWidth = (GLint) buffer->Width;
+   const GLint bufHeight = (GLint) buffer->Height;
+
+   if (y < 0 || y >= bufHeight || x + (GLint) n < 0 || x >= bufWidth) {
       /* completely above, below, or right */
       /* XXX maybe leave undefined? */
       BZERO(rgba, 4 * n * sizeof(GLchan));
@@ -1315,14 +1323,14 @@ _mesa_read_rgba_span( GLcontext *ctx, GLframebuffer *buffer,
             /* completely left of window */
             return;
          }
-         if (length > buffer->Width) {
-            length = buffer->Width;
+         if (length > bufWidth) {
+            length = bufWidth;
          }
       }
-      else if ((GLint) (x + n) > buffer->Width) {
+      else if ((GLint) (x + n) > bufWidth) {
          /* right edge clipping */
          skip = 0;
-         length = buffer->Width - x;
+         length = bufWidth - x;
          if (length < 0) {
             /* completely to right of window */
             return;
@@ -1351,8 +1359,10 @@ _mesa_read_index_span( GLcontext *ctx, GLframebuffer *buffer,
                        GLuint n, GLint x, GLint y, GLuint indx[] )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
-   if (y < 0 || y >= buffer->Height
-       || x + (GLint) n < 0 || x >= buffer->Width) {
+   const GLint bufWidth = (GLint) buffer->Width;
+   const GLint bufHeight = (GLint) buffer->Height;
+
+   if (y < 0 || y >= bufHeight || x + (GLint) n < 0 || x >= bufWidth) {
       /* completely above, below, or right */
       BZERO(indx, n * sizeof(GLuint));
    }
@@ -1366,14 +1376,14 @@ _mesa_read_index_span( GLcontext *ctx, GLframebuffer *buffer,
             /* completely left of window */
             return;
          }
-         if (length > buffer->Width) {
-            length = buffer->Width;
+         if (length > bufWidth) {
+            length = bufWidth;
          }
       }
-      else if ((GLint) (x + n) > buffer->Width) {
+      else if ((GLint) (x + n) > bufWidth) {
          /* right edge clipping */
          skip = 0;
-         length = buffer->Width - x;
+         length = bufWidth - x;
          if (length < 0) {
             /* completely to right of window */
             return;

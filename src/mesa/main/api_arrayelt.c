@@ -1,4 +1,4 @@
-/* $Id: api_arrayelt.c,v 1.6 2002/01/14 16:06:35 brianp Exp $ */
+/* $Id: api_arrayelt.c,v 1.8 2002/04/19 00:23:08 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -63,7 +63,7 @@ typedef struct {
 
 static void (*colorfuncs[2][8])( const void * ) = {
    { (array_func)glColor3bv,
-     (array_func)glColor3ub,
+     (array_func)glColor3ubv,
      (array_func)glColor3sv,
      (array_func)glColor3usv,
      (array_func)glColor3iv,
@@ -72,7 +72,7 @@ static void (*colorfuncs[2][8])( const void * ) = {
      (array_func)glColor3dv },
 
    { (array_func)glColor4bv,
-     (array_func)glColor4ub,
+     (array_func)glColor4ubv,
      (array_func)glColor4sv,
      (array_func)glColor4usv,
      (array_func)glColor4iv,
@@ -275,7 +275,7 @@ static void _ae_update_state( GLcontext *ctx )
    AEcontext *actx = AE_CONTEXT(ctx);
    AEtexarray *ta = actx->texarrays;
    AEarray *aa = actx->arrays;
-   int i;
+   GLuint i;
 
    for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++)
       if (ctx->Array.TexCoord[i].Enabled) {

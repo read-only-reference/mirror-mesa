@@ -1,4 +1,4 @@
-/* $Id: t_imm_fixup.c,v 1.34 2002/02/13 00:53:20 keithw Exp $ */
+/* $Id: t_imm_fixup.c,v 1.36 2002/04/19 12:32:14 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -386,6 +386,7 @@ void _tnl_fixup_input( GLcontext *ctx, struct immediate *IM )
 				    vulnerable );
 
 
+	++i;
       } while (vulnerable);
    }
 }
@@ -559,7 +560,7 @@ void _tnl_copy_immediate_vertices( GLcontext *ctx, struct immediate *next )
    }
 
    if (--tnl->ExecCopySource->ref_count == 0) 
-      _tnl_free_immediate( tnl->ExecCopySource );
+      _tnl_free_immediate( ctx, tnl->ExecCopySource );
   
    tnl->ExecCopySource = next; next->ref_count++;
 }
@@ -680,6 +681,7 @@ void _tnl_fixup_compiled_cassette( GLcontext *ctx, struct immediate *IM )
 				    vulnerable );
 
 
+	 ++i;
       } while (vulnerable);
    }
 }
@@ -771,7 +773,7 @@ _tnl_get_exec_copy_verts( GLcontext *ctx, struct immediate *IM )
 
    if (tnl->ExecCopySource)
       if (--tnl->ExecCopySource->ref_count == 0) 
-	 _tnl_free_immediate( tnl->ExecCopySource );
+	 _tnl_free_immediate( ctx, tnl->ExecCopySource );
 
    if (prim == GL_POLYGON+1) {
       tnl->ExecCopySource = 0;

@@ -1,4 +1,4 @@
-/* $Id: enable.c,v 1.59 2002/03/29 17:27:59 brianp Exp $ */
+/* $Id: enable.c,v 1.62 2002/04/21 18:49:18 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -112,7 +112,7 @@ client_state( GLcontext *ctx, GLenum cap, GLboolean state )
          {
             GLint n = (GLint) cap - GL_VERTEX_ATTRIB_ARRAY0_NV;
             var = &ctx->Array.VertexAttrib[n].Enabled;
-            flag = _NEW_ARRAY_VERT_ATTRIB0;  /* XXX flag OK? */
+            flag = _NEW_ARRAY_ATTRIB(n);
          }
          break;
       default:
@@ -120,7 +120,7 @@ client_state( GLcontext *ctx, GLenum cap, GLboolean state )
          return;
    }
 
-   if (*var == flag)
+   if (*var == state)
       return;
 
    FLUSH_VERTICES(ctx, _NEW_ARRAY);
@@ -209,7 +209,7 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
          {
             const GLuint p = cap - GL_CLIP_PLANE0;
 
-            if ((ctx->Transform.ClipPlanesEnabled & (1 << p)) == (state << p))
+            if ((ctx->Transform.ClipPlanesEnabled & (1 << p)) == ((GLuint) state << p))
                return;
 
             FLUSH_VERTICES(ctx, _NEW_TRANSFORM);

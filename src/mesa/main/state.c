@@ -1,4 +1,4 @@
-/* $Id: state.c,v 1.79 2002/03/29 17:27:59 brianp Exp $ */
+/* $Id: state.c,v 1.81 2002/04/09 16:56:50 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -506,7 +506,10 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->CompressedTexSubImage1DARB = _mesa_CompressedTexSubImage1DARB;
    exec->GetCompressedTexImageARB = _mesa_GetCompressedTexImageARB;
 
-   /* ARB ??. GL_ARB_window_pos */
+   /* ARB 14. GL_ARB_point_parameters */
+   /* reuse EXT_point_parameters functions */
+
+   /* ARB 25. GL_ARB_window_pos */
    exec->WindowPos2dARB = _mesa_WindowPos2dARB;
    exec->WindowPos2dvARB = _mesa_WindowPos2dvARB;
    exec->WindowPos2fARB = _mesa_WindowPos2fARB;
@@ -907,7 +910,7 @@ void _mesa_update_state( GLcontext *ctx )
    const GLuint oldneedeyecoords = ctx->_NeedEyeCoords;
 
    if (MESA_VERBOSE & VERBOSE_STATE)
-      _mesa_print_state("", new_state);
+      _mesa_print_state("_mesa_update_state", new_state);
 
    if (new_state & _NEW_MODELVIEW)
       _math_matrix_analyse( ctx->ModelviewMatrixStack.Top );

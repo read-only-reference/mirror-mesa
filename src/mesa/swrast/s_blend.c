@@ -1,4 +1,4 @@
-/* $Id: s_blend.c,v 1.14 2002/03/27 15:49:27 brianp Exp $ */
+/* $Id: s_blend.c,v 1.22 2002/04/19 20:12:31 jrfonseca Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -28,6 +28,7 @@
 
 #include "glheader.h"
 #include "context.h"
+#include "colormac.h"
 #include "macros.h"
 
 #include "s_alphabuf.h"
@@ -60,10 +61,7 @@ blend_noop( GLcontext *ctx, GLuint n, const GLubyte mask[],
 
    for (i = 0; i < n; i++) {
       if (mask[i]) {
-         rgba[i][RCOMP] = dest[i][RCOMP];
-         rgba[i][GCOMP] = dest[i][GCOMP];
-         rgba[i][BCOMP] = dest[i][BCOMP];
-         rgba[i][ACOMP] = dest[i][ACOMP];
+         COPY_CHAN4( rgba[i], dest[i] );
       }
    }
 }
@@ -132,27 +130,30 @@ blend_transparency( GLcontext *ctx, GLuint n, const GLubyte mask[],
 #if CHAN_BITS == 8
             /* This satisfies Glean and should be reasonably fast */
             /* Contributed by Nathan Hand */
+#if 0
 #define DIV255(X)  (((X) << 8) + (X) + 256) >> 16
-            const GLint s = CHAN_MAX - t;
-            const GLint r = DIV255(rgba[i][RCOMP] * t + dest[i][RCOMP] * s);
-            const GLint g = DIV255(rgba[i][GCOMP] * t + dest[i][GCOMP] * s);
-            const GLint b = DIV255(rgba[i][BCOMP] * t + dest[i][BCOMP] * s);
-            const GLint a = DIV255(rgba[i][ACOMP] * t + dest[i][ACOMP] * s);
+#else
+	    GLint temp;
+#define DIV255(X)  (temp = (X), ((temp << 8) + temp + 256) >> 16)
+#endif
+            const GLint r = DIV255((rgba[i][RCOMP] - dest[i][RCOMP]) * t) + dest[i][RCOMP];
+            const GLint g = DIV255((rgba[i][GCOMP] - dest[i][GCOMP]) * t) + dest[i][GCOMP];
+            const GLint b = DIV255((rgba[i][BCOMP] - dest[i][BCOMP]) * t) + dest[i][BCOMP];
+            const GLint a = DIV255((rgba[i][ACOMP] - dest[i][ACOMP]) * t) + dest[i][ACOMP]; 
+
 #undef DIV255
 #elif CHAN_BITS == 16
             const GLfloat tt = (GLfloat) t / CHAN_MAXF;
-            const GLfloat s = 1.0 - tt;
-            const GLint r = (GLint) (rgba[i][RCOMP] * tt + dest[i][RCOMP] * s);
-            const GLint g = (GLint) (rgba[i][GCOMP] * tt + dest[i][GCOMP] * s);
-            const GLint b = (GLint) (rgba[i][BCOMP] * tt + dest[i][BCOMP] * s);
-            const GLint a = (GLint) (rgba[i][ACOMP] * tt + dest[i][ACOMP] * s);
+            const GLint r = (GLint) ((rgba[i][RCOMP] - dest[i][RCOMP]) * tt + dest[i][RCOMP]);
+            const GLint g = (GLint) ((rgba[i][GCOMP] - dest[i][GCOMP]) * tt + dest[i][GCOMP]);
+            const GLint b = (GLint) ((rgba[i][BCOMP] - dest[i][BCOMP]) * tt + dest[i][BCOMP]);
+            const GLint a = (GLint) ((rgba[i][ACOMP] - dest[i][ACOMP]) * tt + dest[i][ACOMP]);
 #else /* CHAN_BITS == 32 */
             const GLfloat tt = (GLfloat) t / CHAN_MAXF;
-            const GLfloat s = 1.0 - tt;
-            const GLfloat r = rgba[i][RCOMP] * tt + dest[i][RCOMP] * s;
-            const GLfloat g = rgba[i][GCOMP] * tt + dest[i][GCOMP] * s;
-            const GLfloat b = rgba[i][BCOMP] * tt + dest[i][BCOMP] * s;
-            const GLfloat a = rgba[i][ACOMP] * tt + dest[i][ACOMP] * s;
+            const GLfloat r = (rgba[i][RCOMP] - dest[i][RCOMP]) * tt + dest[i][RCOMP];
+            const GLfloat g = (rgba[i][GCOMP] - dest[i][GCOMP]) * tt + dest[i][GCOMP];
+            const GLfloat b = (rgba[i][BCOMP] - dest[i][BCOMP]) * tt + dest[i][BCOMP];
+            const GLfloat a = (rgba[i][ACOMP] - dest[i][ACOMP]) * tt + dest[i][ACOMP];
 #endif
 #endif
             ASSERT(r <= CHAN_MAX);
@@ -185,6 +186,16 @@ blend_add( GLcontext *ctx, GLuint n, const GLubyte mask[],
 
    for (i=0;i<n;i++) {
       if (mask[i]) {
+#if CHAN_TYPE == GL_FLOAT
+         GLfloat r = rgba[i][RCOMP] + dest[i][RCOMP];
+         GLfloat g = rgba[i][GCOMP] + dest[i][GCOMP];
+         GLfloat b = rgba[i][BCOMP] + dest[i][BCOMP];
+         GLfloat a = rgba[i][ACOMP] + dest[i][ACOMP];
+         rgba[i][RCOMP] = (GLchan) MIN2( r, CHAN_MAXF );
+         rgba[i][GCOMP] = (GLchan) MIN2( g, CHAN_MAXF );
+         rgba[i][BCOMP] = (GLchan) MIN2( b, CHAN_MAXF );
+         rgba[i][ACOMP] = (GLchan) MIN2( a, CHAN_MAXF );
+#else
          GLint r = rgba[i][RCOMP] + dest[i][RCOMP];
          GLint g = rgba[i][GCOMP] + dest[i][GCOMP];
          GLint b = rgba[i][BCOMP] + dest[i][BCOMP];
@@ -193,6 +204,7 @@ blend_add( GLcontext *ctx, GLuint n, const GLubyte mask[],
          rgba[i][GCOMP] = (GLchan) MIN2( g, CHAN_MAX );
          rgba[i][BCOMP] = (GLchan) MIN2( b, CHAN_MAX );
          rgba[i][ACOMP] = (GLchan) MIN2( a, CHAN_MAX );
+#endif
       }
    }
 }
@@ -262,11 +274,20 @@ blend_modulate( GLcontext *ctx, GLuint n, const GLubyte mask[],
          rgba[i][GCOMP] = rgba[i][GCOMP] * dest[i][GCOMP];
          rgba[i][BCOMP] = rgba[i][BCOMP] * dest[i][BCOMP];
          rgba[i][ACOMP] = rgba[i][ACOMP] * dest[i][ACOMP];
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+         GLint r = (rgba[i][RCOMP] * dest[i][RCOMP] + 65535) >> 16;
+         GLint g = (rgba[i][GCOMP] * dest[i][GCOMP] + 65535) >> 16;
+         GLint b = (rgba[i][BCOMP] * dest[i][BCOMP] + 65535) >> 16;
+         GLint a = (rgba[i][ACOMP] * dest[i][ACOMP] + 65535) >> 16;
+         rgba[i][RCOMP] = (GLchan) r;
+         rgba[i][GCOMP] = (GLchan) g;
+         rgba[i][BCOMP] = (GLchan) b;
+         rgba[i][ACOMP] = (GLchan) a;
 #else
-         GLint r = (rgba[i][RCOMP] * dest[i][RCOMP]) >> 8;
-         GLint g = (rgba[i][GCOMP] * dest[i][GCOMP]) >> 8;
-         GLint b = (rgba[i][BCOMP] * dest[i][BCOMP]) >> 8;
-         GLint a = (rgba[i][ACOMP] * dest[i][ACOMP]) >> 8;
+         GLint r = (rgba[i][RCOMP] * dest[i][RCOMP] + 255) >> 8;
+         GLint g = (rgba[i][GCOMP] * dest[i][GCOMP] + 255) >> 8;
+         GLint b = (rgba[i][BCOMP] * dest[i][BCOMP] + 255) >> 8;
+         GLint a = (rgba[i][ACOMP] * dest[i][ACOMP] + 255) >> 8;
          rgba[i][RCOMP] = (GLchan) r;
          rgba[i][GCOMP] = (GLchan) g;
          rgba[i][BCOMP] = (GLchan) b;
@@ -625,10 +646,8 @@ void _swrast_choose_blend_func( GLcontext *ctx )
       SWRAST_CONTEXT(ctx)->BlendFunc = blend_general;
    }
    else if (eq==GL_FUNC_ADD_EXT && srcRGB==GL_SRC_ALPHA
-            && dstRGB==GL_ONE_MINUS_SRC_ALPHA)
-   {
-      /* XXX It looks like the MMX blend code is broken.  Disable for now. */
-#if 0 && defined(USE_MMX_ASM)
+            && dstRGB==GL_ONE_MINUS_SRC_ALPHA) {
+#if defined(USE_MMX_ASM)
       if ( cpu_has_mmx ) {
          SWRAST_CONTEXT(ctx)->BlendFunc = _mesa_mmx_blend_transparency;
       }
@@ -637,20 +656,44 @@ void _swrast_choose_blend_func( GLcontext *ctx )
 	 SWRAST_CONTEXT(ctx)->BlendFunc = blend_transparency;
    }
    else if (eq==GL_FUNC_ADD_EXT && srcRGB==GL_ONE && dstRGB==GL_ONE) {
-      SWRAST_CONTEXT(ctx)->BlendFunc = blend_add;
+#if defined(USE_MMX_ASM)
+      if ( cpu_has_mmx ) {
+         SWRAST_CONTEXT(ctx)->BlendFunc = _mesa_mmx_blend_add;
+      }
+      else
+#endif
+         SWRAST_CONTEXT(ctx)->BlendFunc = blend_add;
    }
    else if (((eq==GL_FUNC_ADD_EXT || eq==GL_FUNC_REVERSE_SUBTRACT_EXT)
 	     && (srcRGB==GL_ZERO && dstRGB==GL_SRC_COLOR))
 	    ||
 	    ((eq==GL_FUNC_ADD_EXT || eq==GL_FUNC_SUBTRACT_EXT)
 	     && (srcRGB==GL_DST_COLOR && dstRGB==GL_ZERO))) {
-      SWRAST_CONTEXT(ctx)->BlendFunc = blend_modulate;
+#if defined(USE_MMX_ASM)
+      if ( cpu_has_mmx ) {
+         SWRAST_CONTEXT(ctx)->BlendFunc = _mesa_mmx_blend_modulate;
+      }
+      else
+#endif
+         SWRAST_CONTEXT(ctx)->BlendFunc = blend_modulate;
    }
    else if (eq==GL_MIN_EXT) {
-      SWRAST_CONTEXT(ctx)->BlendFunc = blend_min;
+#if defined(USE_MMX_ASM)
+      if ( cpu_has_mmx ) {
+         SWRAST_CONTEXT(ctx)->BlendFunc = _mesa_mmx_blend_min;
+      }
+      else
+#endif
+         SWRAST_CONTEXT(ctx)->BlendFunc = blend_min;
    }
    else if (eq==GL_MAX_EXT) {
-      SWRAST_CONTEXT(ctx)->BlendFunc = blend_max;
+#if defined(USE_MMX_ASM)
+      if ( cpu_has_mmx ) {
+         SWRAST_CONTEXT(ctx)->BlendFunc = _mesa_mmx_blend_max;
+      }
+      else
+#endif
+         SWRAST_CONTEXT(ctx)->BlendFunc = blend_max;
    }
    else if (eq==GL_FUNC_ADD_EXT && srcRGB == GL_ZERO && dstRGB == GL_ONE) {
       SWRAST_CONTEXT(ctx)->BlendFunc = blend_noop;

@@ -1,4 +1,4 @@
-/* $Id: swrast.h,v 1.21 2002/03/16 00:53:15 brianp Exp $ */
+/* $Id: swrast.h,v 1.24 2002/04/19 14:05:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -23,8 +23,12 @@
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
- * Authors:
- *    Keith Whitwell <keithw@valinux.com>
+ */
+
+/**
+ * \file swrast/swrast.h
+ * \brief Defines basic structures for sw_rasterizer.
+ * \author Keith Whitwell <keithw@valinux.com>
  */
 
 #ifndef SWRAST_H
@@ -32,8 +36,11 @@
 
 #include "mtypes.h"
 
-
-/* The software rasterizer now uses this format for vertices.  Thus a
+/**
+ * \struct SWvertex
+ * \brief Data-structure to handle vertices in the software rasterizer.
+ * 
+ * The software rasterizer now uses this format for vertices.  Thus a
  * 'RasterSetup' stage or other translation is required between the
  * tnl module and the swrast rasterization functions.  This serves to
  * isolate the swrast module from the internals of the tnl module, and
@@ -66,11 +73,17 @@ typedef struct {
 } SWvertex;
 
 
-/*
+/**
+ * \struct sw_span
+ * \brief Contains data for either a horizontal line or a set of
+ * pixels that are passed through a pipeline of functions before being
+ * drawn.
+ *
  * The sw_span structure describes the colors, Z, fogcoord, texcoords,
- * etc for a horizontal run of pixels.  We can either specify a base/step
- * to indicate interpolated values, or fill in arrays of values.
- * The interpMask and arrayMask bitfields indicate which are active.
+ * etc for either a horizontal run or a set of independent pixels.  We
+ * can either specify a base/step to indicate interpolated values, or
+ * fill in arrays of values.  The interpMask and arrayMask bitfields
+ * indicate which are active.
  *
  * With this structure it's easy to hand-off span rasterization to
  * subroutines instead of doing it all inline in the triangle functions
@@ -102,11 +115,15 @@ typedef struct {
 struct sw_span {
    GLint x, y;
 
-   /* only need to process pixels between start <= i < end */
+   /** Only need to process pixels between start <= i < end */
+   /** At this time, start is always zero. */
    GLuint start, end;
 
-   /* This flag indicates that only a part of the span is visible */
+   /** This flag indicates that mask[] array is effectively filled with ones */
    GLboolean writeAll;
+
+   /** either GL_POLYGON, GL_LINE, GL_POLYGON, GL_BITMAP */
+   GLenum primitive;
 
    /**
     * This bitmask (of SPAN_* flags) indicates which of the x/xStep
@@ -122,7 +139,7 @@ struct sw_span {
    GLfloat specRed, specRedStep;
    GLfloat specGreen, specGreenStep;
    GLfloat specBlue, specBlueStep;
-#else /* CHAN_TYPE == */
+#else /* CHAN_TYPE == GL_UNSIGNED_BYTE or GL_UNSIGNED SHORT */
    GLfixed red, redStep;
    GLfixed green, greenStep;
    GLfixed blue, blueStep;
@@ -155,24 +172,26 @@ struct sw_span {
       GLuint index[MAX_WIDTH];
    } color;
    GLchan  specArray[MAX_WIDTH][4];
-   GLint   xArray[MAX_WIDTH];  /* X/Y used for point/line rendering only */
-   GLint   yArray[MAX_WIDTH];
+   GLint   xArray[MAX_WIDTH];  /**< X/Y used for point/line rendering only */
+   GLint   yArray[MAX_WIDTH];  /**< X/Y used for point/line rendering only */
    GLdepth zArray[MAX_WIDTH];
    GLfloat fogArray[MAX_WIDTH];
    GLfloat texcoords[MAX_TEXTURE_UNITS][MAX_WIDTH][4];
    GLfloat lambda[MAX_TEXTURE_UNITS][MAX_WIDTH];
    GLfloat coverage[MAX_WIDTH];
 
-   /* This mask indicates if fragment is alive or culled */
+  /** This mask indicates if fragment is alive or culled */
    GLubyte mask[MAX_WIDTH];
 };
 
 
-#define INIT_SPAN(S)	\
-do {			\
-   S.interpMask = 0;	\
-   S.arrayMask = 0;	\
-   S.start = S.end = 0;	\
+#define INIT_SPAN(S, PRIMITIVE, END, INTERP_MASK, ARRAY_MASK)  \
+do {                              \
+   S->primitive = (PRIMITIVE);     \
+   S->interpMask = (INTERP_MASK);  \
+   S->arrayMask = (ARRAY_MASK);    \
+   S->start = 0;                   \
+   S->end = (END);                 \
 } while (0)
 
 

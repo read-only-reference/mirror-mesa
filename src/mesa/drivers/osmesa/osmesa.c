@@ -1,4 +1,4 @@
-/* $Id: osmesa.c,v 1.76 2002/03/29 17:20:48 brianp Exp $ */
+/* $Id: osmesa.c,v 1.79 2002/04/19 14:05:51 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -37,6 +37,7 @@
 
 #include "glheader.h"
 #include "GL/osmesa.h"
+#include "buffers.h"
 #include "context.h"
 #include "colormac.h"
 #include "depth.h"
@@ -473,11 +474,15 @@ OSMesaMakeCurrent( OSMesaContext ctx, void *buffer, GLenum type,
    compute_row_addresses( ctx );
 
    /* init viewport */
-   if (ctx->gl_ctx.Viewport.Width==0) {
+   if (ctx->gl_ctx.Viewport.Width == 0) {
       /* initialize viewport and scissor box to buffer size */
       _mesa_Viewport( 0, 0, width, height );
       ctx->gl_ctx.Scissor.Width = width;
       ctx->gl_ctx.Scissor.Height = height;
+   }
+   else {
+      /* this will make ensure we recognize the new buffer size */
+      _mesa_ResizeBuffersMESA();
    }
 
    return GL_TRUE;
@@ -615,6 +620,39 @@ OSMesaGetColorBuffer( OSMesaContext c, GLint *width,
       return GL_TRUE;
    }
 }
+
+
+
+struct name_address {
+   const char *Name;
+   GLvoid *Address;
+};
+
+static struct name_address functions[] = {
+   { "OSMesaCreateContext", (void *) OSMesaCreateContext },
+   { "OSMesaCreateContextExt", (void *) OSMesaCreateContextExt },
+   { "OSMesaDestroyContext", (void *) OSMesaDestroyContext },
+   { "OSMesaMakeCurrent", (void *) OSMesaMakeCurrent },
+   { "OSMesaGetCurrentContext", (void *) OSMesaGetCurrentContext },
+   { "OSMesaPixelsStore", (void *) OSMesaPixelStore },
+   { "OSMesaGetIntegerv", (void *) OSMesaGetIntegerv },
+   { "OSMesaGetDepthBuffer", (void *) OSMesaGetDepthBuffer },
+   { "OSMesaGetColorBuffer", (void *) OSMesaGetColorBuffer },
+   { "OSMesaGetProcAddress", (void *) OSMesaGetProcAddress },
+   { NULL, NULL }
+};
+
+GLAPI void * GLAPIENTRY
+OSMesaGetProcAddress( const char *funcName )
+{
+   int i;
+   for (i = 0; functions[i].Name; i++) {
+      if (strcmp(functions[i].Name, funcName) == 0)
+         return (void *) functions[i].Address;
+   }
+   return (void *) _glapi_get_proc_address(funcName);
+}
+
 
 /**********************************************************************/
 /*** Device Driver Functions                                        ***/
@@ -1844,20 +1882,20 @@ static void smooth_rgba_z_triangle( GLcontext *ctx,
 #define INTERP_ALPHA 1
 #define RENDER_SPAN( span )					\
    GLuint i;							\
-   GLchan *img = PIXELADDR4(span.x, span.y); 			\
-   for (i = 0; i < span.end; i++, img += 4) {			\
-      const GLdepth z = FixedToDepth(span.z);			\
+   GLchan *img = PIXELADDR4(span->x, span->y); 			\
+   for (i = 0; i < span->end; i++, img += 4) {			\
+      const GLdepth z = FixedToDepth(span->z);			\
       if (z < zRow[i]) {					\
-         PACK_RGBA(img, FixedToChan(span.red),			\
-            FixedToChan(span.green), FixedToChan(span.blue),	\
-            FixedToChan(span.alpha));				\
+         PACK_RGBA(img, FixedToChan(span->red),			\
+            FixedToChan(span->green), FixedToChan(span->blue),	\
+            FixedToChan(span->alpha));				\
          zRow[i] = z;						\
       }								\
-      span.red += span.redStep;					\
-      span.green += span.greenStep;				\
-      span.blue += span.blueStep;				\
-      span.alpha += span.alphaStep;				\
-      span.z += span.zStep;					\
+      span->red += span->redStep;					\
+      span->green += span->greenStep;				\
+      span->blue += span->blueStep;				\
+      span->alpha += span->alphaStep;				\
+      span->z += span->zStep;					\
    }
 
 #ifdef WIN32
@@ -1888,14 +1926,14 @@ static void flat_rgba_z_triangle( GLcontext *ctx,
 
 #define RENDER_SPAN( span )				\
    GLuint i;						\
-   GLuint *img = (GLuint *) PIXELADDR4(span.x, span.y);	\
-   for (i = 0; i < span.end; i++) {			\
-      const GLdepth z = FixedToDepth(span.z);		\
+   GLuint *img = (GLuint *) PIXELADDR4(span->x, span->y);	\
+   for (i = 0; i < span->end; i++) {			\
+      const GLdepth z = FixedToDepth(span->z);		\
       if (z < zRow[i]) {				\
          img[i] = pixel;				\
          zRow[i] = z;					\
       }							\
-      span.z += span.zStep;				\
+      span->z += span->zStep;				\
    }
 
 #ifdef WIN32

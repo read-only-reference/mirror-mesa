@@ -1,4 +1,4 @@
-/* $Id: s_context.c,v 1.29 2002/02/02 21:40:33 brianp Exp $ */
+/* $Id: s_context.c,v 1.31 2002/04/19 14:05:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -75,9 +75,9 @@ _swrast_update_rasterflags( GLcontext *ctx )
       RasterMask |= ALPHABUF_BIT;
 
    if (   ctx->Viewport.X < 0
-       || ctx->Viewport.X + ctx->Viewport.Width > ctx->DrawBuffer->Width
+       || ctx->Viewport.X + ctx->Viewport.Width > (GLint) ctx->DrawBuffer->Width
        || ctx->Viewport.Y < 0
-       || ctx->Viewport.Y + ctx->Viewport.Height > ctx->DrawBuffer->Height) {
+       || ctx->Viewport.Y + ctx->Viewport.Height > (GLint) ctx->DrawBuffer->Height) {
       RasterMask |= CLIP_BIT;
    }
 
@@ -494,7 +494,14 @@ _swrast_CreateContext( GLcontext *ctx )
    for (i = 0 ; i < MAX_TEXTURE_UNITS ; i++)
       swrast->TextureSample[i] = _swrast_validate_texture_sample;
 
+   swrast->span = (struct sw_span *) MALLOC(sizeof(struct sw_span));
+   if (!swrast->span) {
+     FREE(swrast);
+     return GL_FALSE;
+   }
+   
    ctx->swrast_context = swrast;
+
    return GL_TRUE;
 }
 
@@ -507,6 +514,8 @@ _swrast_DestroyContext( GLcontext *ctx )
       fprintf(stderr, "_swrast_DestroyContext\n");
    }
 
+   FREE( swrast->span );
+   
    FREE( swrast );
 
    ctx->swrast_context = 0;

@@ -1,4 +1,4 @@
-/* $Id: t_vb_program.c,v 1.10 2002/01/22 14:35:17 brianp Exp $ */
+/* $Id: t_vb_program.c,v 1.12 2002/04/21 20:37:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -150,7 +150,7 @@ static GLboolean run_vp( GLcontext *ctx, struct gl_pipeline_stage *stage )
    struct vertex_buffer *VB = &tnl->vb;
    struct vp_machine *machine = &(ctx->VertexProgram.Machine);
    struct vp_program *program = ctx->VertexProgram.Current;
-   GLint i;
+   GLuint i;
 
    _mesa_init_tracked_matrices(ctx);
    _mesa_init_vp_registers(ctx);  /* init temp and result regs */
@@ -182,10 +182,6 @@ static GLboolean run_vp( GLcontext *ctx, struct gl_pipeline_stage *stage )
              VB->AttribPtr[2]->data[i][3]);
 #endif
 
-      /* XXXX
-       * We have to deal with stride!=16 bytes, size!=4, etc in these loops!!!
-       */
-
       /* load the input attribute registers */
       if (VB->Flag) {
          /* the traditional glBegin/glVertex/glEnd case */
@@ -199,13 +195,14 @@ static GLboolean run_vp( GLcontext *ctx, struct gl_pipeline_stage *stage )
       else {
          /* the vertex array case */
          for (attr = 0; attr < VERT_ATTRIB_MAX; attr++) {
-            const GLubyte *ptr = (const GLubyte *) VB->AttribPtr[attr]->data;
-            const GLint stride = VB->AttribPtr[attr]->stride;
-            const GLfloat *data = (GLfloat *) (ptr + stride * i);
-            const GLint size = VB->AttribPtr[attr]->size;
-            COPY_4V(machine->Registers[VP_INPUT_REG_START + attr], data);
-            if (size == 3)
-               machine->Registers[VP_INPUT_REG_START + attr][3] = 1.0;
+            if (program->InputsRead & (1 << attr)) {
+               const GLubyte *ptr = (const GLubyte*) VB->AttribPtr[attr]->data;
+               const GLuint stride = VB->AttribPtr[attr]->stride;
+               const GLfloat *data = (GLfloat *) (ptr + stride * i);
+               COPY_4V(machine->Registers[VP_INPUT_REG_START + attr], data);
+               /*ASSERT(VB->AttribPtr[attr]->size == 4);*/
+               ASSERT(stride == 4 * sizeof(GLfloat) || stride == 0);
+            }
          }
       }
 
@@ -406,10 +403,12 @@ static void check_vp( GLcontext *ctx, struct gl_pipeline_stage *stage )
    stage->active = ctx->VertexProgram.Enabled;
 
    if (stage->active) {
-      /* XXX what do we need here??? */
-      /*
-      GLbitfield vpInput = ctx->VertexProgram.Current->InputsRead;
-      */
+      /* XXX what do we need here???
+       *
+       * I think that:
+       *   stage->inputs = ctx->VertexProgram.Current->InputsRead;
+       * would be correct, and something similar for the outputs.
+       */
 
 #if 000
       if (stage->privatePtr)

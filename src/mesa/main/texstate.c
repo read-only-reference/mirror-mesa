@@ -1,4 +1,4 @@
-/* $Id: texstate.c,v 1.66 2002/03/23 16:33:53 brianp Exp $ */
+/* $Id: texstate.c,v 1.70 2002/04/26 13:40:11 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -140,10 +140,16 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
                   return;
                }
                break;
+	    case GL_DOT3_RGB_EXT:
+	    case GL_DOT3_RGBA_EXT:
+	       if (!ctx->Extensions.EXT_texture_env_dot3) {
+                  TE_ERROR(GL_INVALID_ENUM, "glTexEnv(param=%s)", mode);
+		  return;
+	       }
+	       break;
 	    case GL_DOT3_RGB_ARB:
 	    case GL_DOT3_RGBA_ARB:
-	       if (!ctx->Extensions.EXT_texture_env_dot3 &&
-                   !ctx->Extensions.ARB_texture_env_dot3) {
+	       if (!ctx->Extensions.ARB_texture_env_dot3) {
                   TE_ERROR(GL_INVALID_ENUM, "glTexEnv(param=%s)", mode);
 		  return;
 	       }
@@ -1104,7 +1110,7 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
             const GLenum mode = (GLenum) params[0];
             if (mode == GL_NONE || mode == GL_COMPARE_R_TO_TEXTURE_ARB) {
                FLUSH_VERTICES(ctx, _NEW_TEXTURE);
-               texObj->CompareMode = params[0];
+               texObj->CompareMode = mode;
             }
             else {
                _mesa_error(ctx, GL_INVALID_ENUM,
@@ -1123,7 +1129,7 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
             const GLenum func = (GLenum) params[0];
             if (func == GL_LEQUAL || func == GL_GEQUAL) {
                FLUSH_VERTICES(ctx, _NEW_TEXTURE);
-               texObj->CompareFunc = params[0];
+               texObj->CompareFunc = func;
             }
             else if (ctx->Extensions.EXT_shadow_funcs &&
                      (func == GL_EQUAL ||
@@ -1133,7 +1139,7 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
                       func == GL_ALWAYS ||
                       func == GL_NEVER)) {
                FLUSH_VERTICES(ctx, _NEW_TEXTURE);
-               texObj->CompareFunc = params[0];
+               texObj->CompareFunc = func;
             }
             else {
                _mesa_error(ctx, GL_INVALID_ENUM,
@@ -1153,7 +1159,7 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
             if (result == GL_LUMINANCE || result == GL_INTENSITY
                 || result == GL_ALPHA) {
                FLUSH_VERTICES(ctx, _NEW_TEXTURE);
-               texObj->DepthMode = params[0];
+               texObj->DepthMode = result;
             }
             else {
                _mesa_error(ctx, GL_INVALID_ENUM,
@@ -1471,6 +1477,12 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
       case GL_TEXTURE_MAX_LEVEL:
          *params = (GLfloat) obj->MaxLevel;
          return;
+      case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+         if (ctx->Extensions.EXT_texture_filter_anisotropic) {
+            *params = obj->MaxAnisotropy;
+            return;
+         }
+         break;
       case GL_TEXTURE_COMPARE_SGIX:
          if (ctx->Extensions.SGIX_shadow) {
             *params = (GLfloat) obj->CompareFlag;
@@ -1599,6 +1611,12 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
       case GL_TEXTURE_MAX_LEVEL:
          *params = obj->MaxLevel;
          return;
+      case GL_TEXTURE_MAX_ANISOTROPY_EXT:
+         if (ctx->Extensions.EXT_texture_filter_anisotropic) {
+            *params = (GLint) obj->MaxAnisotropy;
+            return;
+         }
+         break;
       case GL_TEXTURE_COMPARE_SGIX:
          if (ctx->Extensions.SGIX_shadow) {
             *params = (GLint) obj->CompareFlag;

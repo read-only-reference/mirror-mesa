@@ -1,4 +1,4 @@
-/* $Id: t_imm_api.c,v 1.25 2002/02/13 00:53:20 keithw Exp $ */
+/* $Id: t_imm_api.c,v 1.27 2002/04/19 12:32:14 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -49,9 +49,19 @@
 
 /* A cassette is full or flushed on a statechange.
  */
-void _tnl_flush_immediate( struct immediate *IM )
+void _tnl_flush_immediate( GLcontext *ctx, struct immediate *IM )
 {
-   GLcontext *ctx = IM->backref;
+   if (!ctx) {
+      /* We were called by glVertex, glEvalCoord, glArrayElement, etc.
+       * The current context is corresponds to the IM structure.
+       */
+      GET_CURRENT_CONTEXT(context);
+      ctx = context;
+   }
+
+   if (MESA_VERBOSE & VERBOSE_IMMEDIATE)
+      fprintf(stderr, "_tnl_flush_immediate IM: %d compiling: %d\n",
+	      IM->id, ctx->CompileFlag);
 
    if (IM->FlushElt == FLUSH_ELT_EAGER) {
       _tnl_translate_array_elts( ctx, IM, IM->LastPrimitive, IM->Count );
@@ -69,30 +79,39 @@ void _tnl_flush_immediate( struct immediate *IM )
 }
 
 
+/* Hook for ctx->Driver.FlushVertices:
+ */
 void _tnl_flush_vertices( GLcontext *ctx, GLuint flags )
 {
    struct immediate *IM = TNL_CURRENT_IM(ctx);
 
+   if (MESA_VERBOSE & VERBOSE_IMMEDIATE)
+      fprintf( stderr, 
+	       "_tnl_flush_vertices flags %x IM(%d) %d..%d Flag[%d]: %x\n", 
+	       flags, IM->id, IM->Start, IM->Count, IM->Start,
+	       IM->Flag[IM->Start]);
+
    if (IM->Flag[IM->Start])
       if ((flags & FLUSH_UPDATE_CURRENT) || IM->Count > IM->Start)
-	 _tnl_flush_immediate( IM );
+	 _tnl_flush_immediate( ctx, IM );
 }
 
 
 
 
-/* Note the ctx argument.  This function called only by _tnl_Begin,
- * _tnl_save_Begin and _tnl_hard_begin() in this file.  
- */
-static void
-_tnl_begin( GLcontext *ctx, GLenum p )
+void
+_tnl_save_Begin( GLenum mode )
 {
+   GET_CURRENT_CONTEXT(ctx);
    struct immediate *IM = TNL_CURRENT_IM(ctx);
    GLuint inflags, state;
 
-   if (MESA_VERBOSE&VERBOSE_API)
-      fprintf(stderr, "glBegin(IM %d) %s\n", IM->id, 
-	      _mesa_lookup_enum_by_nr(p));
+/*     fprintf(stderr, "%s: before: %x\n", __FUNCTION__, IM->BeginState); */
+
+   if (mode > GL_POLYGON) {
+      _mesa_compile_error( ctx, GL_INVALID_ENUM, "_tnl_Begin" );
+      return;
+   }
 
    if (ctx->NewState)
       _mesa_update_state(ctx);
@@ -100,14 +119,14 @@ _tnl_begin( GLcontext *ctx, GLenum p )
    /* if only a very few slots left, might as well flush now
     */
    if (IM->Count > IMM_MAXDATA-8) {
-      _tnl_flush_immediate( IM );
+      _tnl_flush_immediate( ctx, IM );
       IM = TNL_CURRENT_IM(ctx);
    }
 
    /* Check for and flush buffered vertices from internal operations.
     */
    if (IM->SavedBeginState) {
-      _tnl_flush_immediate( IM );
+      _tnl_flush_immediate( ctx, IM );
       IM = TNL_CURRENT_IM(ctx);
       IM->BeginState = IM->SavedBeginState;
       IM->SavedBeginState = 0;
@@ -124,7 +143,7 @@ _tnl_begin( GLcontext *ctx, GLenum p )
 
       state |= (VERT_BEGIN_0|VERT_BEGIN_1);
       IM->Flag[count] |= VERT_BIT_BEGIN;
-      IM->Primitive[count] = p | PRIM_BEGIN;
+      IM->Primitive[count] = mode | PRIM_BEGIN;
       IM->PrimitiveLength[IM->LastPrimitive] = count - IM->LastPrimitive;
       IM->LastPrimitive = count;
 
@@ -139,20 +158,15 @@ _tnl_begin( GLcontext *ctx, GLenum p )
 
    ctx->Driver.NeedFlush |= FLUSH_STORED_VERTICES;
    IM->BeginState = state;
-}
 
-
-void
-_tnl_save_Begin( GLenum mode )
-{
-   GET_CURRENT_CONTEXT(ctx);
-
-   if (mode > GL_POLYGON) {
-      _mesa_compile_error( ctx, GL_INVALID_ENUM, "glBegin" );
-      return;
+   if (ctx->ExecuteFlag) {
+      if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END) {
+	 _mesa_error( ctx, GL_INVALID_OPERATION, "_tnl_Begin" );
+      }
+      else 
+	 ctx->Driver.CurrentExecPrimitive = mode;
    }
 
-   _tnl_begin( ctx, mode );
 
    /* Update save_primitive now.
     */
@@ -167,18 +181,52 @@ void
 _tnl_Begin( GLenum mode )
 {
    GET_CURRENT_CONTEXT(ctx);
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   ASSERT (!ctx->CompileFlag);
 
    if (mode > GL_POLYGON) {
-      _mesa_compile_error( ctx, GL_INVALID_ENUM, "glBegin" );
+      _mesa_error( ctx, GL_INVALID_ENUM, "_tnl_Begin" );
       return;
    }
 
-   _tnl_begin(ctx, mode);
+   if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END) {
+      _mesa_error( ctx, GL_INVALID_OPERATION, "_tnl_Begin" );
+      return;
+   }
 
-   /* Update exec_primitive now.
-    */
-   ASSERT (!ctx->CompileFlag);
-   if (ctx->Driver.CurrentExecPrimitive == PRIM_OUTSIDE_BEGIN_END) {
+   if (ctx->NewState)
+      _mesa_update_state(ctx);
+
+   {
+      struct immediate *IM = TNL_CURRENT_IM(ctx);
+      GLuint count = IM->Count;
+      GLuint last = IM->LastPrimitive;
+
+      if (IM->Start == IM->Count &&
+	  tnl->Driver.NotifyBegin &&
+	  tnl->Driver.NotifyBegin( ctx, mode )) 
+	 return;
+
+      assert( IM->SavedBeginState == 0 );
+      assert( IM->BeginState == 0 );
+
+      /* Not quite right.  Need to use the fallback '_aa_ArrayElement'
+       * when not known to be inside begin/end and arrays are
+       * unlocked.  
+       */
+      if (IM->FlushElt == FLUSH_ELT_EAGER) {
+	 _tnl_translate_array_elts( ctx, IM, last, count );
+      }
+
+      IM->Flag[count] |= VERT_BIT_BEGIN;
+      IM->Primitive[count] = mode | PRIM_BEGIN;
+      IM->PrimitiveLength[last] = count - last;
+      IM->LastPrimitive = count;
+      IM->BeginState = (VERT_BEGIN_0|VERT_BEGIN_1);
+
+/*        fprintf(stderr, "%s: %x\n", __FUNCTION__, IM->BeginState);  */
+
+      ctx->Driver.NeedFlush |= FLUSH_STORED_VERTICES;
       ctx->Driver.CurrentExecPrimitive = mode;
    }
 }
@@ -191,12 +239,13 @@ _tnl_Begin( GLenum mode )
 GLboolean
 _tnl_hard_begin( GLcontext *ctx, GLenum p )
 {
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
+
    if (!ctx->CompileFlag) {
       /* If not compiling, treat as a normal begin().
        */
-      _tnl_begin( ctx, p );
-      ASSERT(ctx->Driver.CurrentExecPrimitive == PRIM_OUTSIDE_BEGIN_END);
-      ctx->Driver.CurrentExecPrimitive = p;
+/*        fprintf(stderr, "%s: treating as glBegin\n", __FUNCTION__); */
+      glBegin( p );
       return GL_TRUE;
    }
    else {
@@ -210,7 +259,7 @@ _tnl_hard_begin( GLcontext *ctx, GLenum p )
 	 _mesa_update_state(ctx);
 
       if (IM->Count > IMM_MAXDATA-8) {
-	 _tnl_flush_immediate( IM );
+	 _tnl_flush_immediate( ctx, IM );
 	 IM = TNL_CURRENT_IM(ctx);
       }
 
@@ -262,7 +311,7 @@ _tnl_hard_begin( GLcontext *ctx, GLenum p )
 	 return GL_TRUE;
 
       default:
-	 ASSERT (0);
+	 assert (0);
 	 return GL_TRUE;
       }
    }
@@ -284,6 +333,8 @@ _tnl_end( GLcontext *ctx )
    struct immediate *IM = TNL_CURRENT_IM(ctx);
    GLuint state = IM->BeginState;
    GLuint inflags = (~state) & (VERT_BEGIN_0|VERT_BEGIN_1);
+
+   assert( ctx->Driver.NeedFlush & FLUSH_STORED_VERTICES );
 
    state |= inflags << 2;	/* errors */
 
@@ -308,15 +359,19 @@ _tnl_end( GLcontext *ctx )
 
    IM->BeginState = state;
 
-   if (!ctx->CompileFlag) {
-      ctx->Driver.CurrentExecPrimitive = PRIM_OUTSIDE_BEGIN_END;
+   if (ctx->ExecuteFlag) {
+      if (ctx->Driver.CurrentExecPrimitive == PRIM_OUTSIDE_BEGIN_END) 
+	 _mesa_error( ctx, GL_INVALID_OPERATION, "_tnl_End" );
+      else
+	 ctx->Driver.CurrentExecPrimitive = PRIM_OUTSIDE_BEGIN_END;
    }
 
    /* You can set this flag to get the old 'flush_vb on glEnd()'
     * behaviour.
     */
+   /* XXXX tempory change here */
    if (1 /*(MESA_DEBUG_FLAGS&DEBUG_ALWAYS_FLUSH)*/ )
-      _tnl_flush_immediate( IM );
+      _tnl_flush_immediate( ctx, IM );
 }
 
 void
@@ -686,7 +741,7 @@ _tnl_TexCoord4fv( const GLfloat *v )
    ASSIGN_4V(dest, x, y, 0, 1);				\
 /*     ASSERT(IM->Flag[IM->Count]==0);		 */	\
    if (count == IMM_MAXDATA - 1)			\
-      _tnl_flush_immediate( IM );			\
+      _tnl_flush_immediate( NULL, IM );			\
 }
 
 #define VERTEX3(IM,x,y,z)				\
@@ -697,7 +752,7 @@ _tnl_TexCoord4fv( const GLfloat *v )
    ASSIGN_4V(dest, x, y, z, 1);				\
 /*     ASSERT(IM->Flag[IM->Count]==0); */		\
    if (count == IMM_MAXDATA - 1)			\
-      _tnl_flush_immediate( IM );			\
+      _tnl_flush_immediate( NULL, IM );			\
 }
 
 #define VERTEX4(IM, x,y,z,w)				\
@@ -707,7 +762,7 @@ _tnl_TexCoord4fv( const GLfloat *v )
    IM->Flag[count] |= VERT_BITS_OBJ_234;		\
    ASSIGN_4V(dest, x, y, z, w);				\
    if (count == IMM_MAXDATA - 1)			\
-      _tnl_flush_immediate( IM );			\
+      _tnl_flush_immediate( NULL, IM );			\
 }
 
 #if defined(USE_IEEE)
@@ -722,7 +777,7 @@ _tnl_TexCoord4fv( const GLfloat *v )
    dest[3].i = IEEE_ONE;						\
 /*     ASSERT(IM->Flag[IM->Count]==0); */				\
    if (count == IMM_MAXDATA - 1)					\
-      _tnl_flush_immediate( IM );					\
+      _tnl_flush_immediate( NULL, IM );					\
 }
 #else
 #define VERTEX2F VERTEX2
@@ -740,7 +795,7 @@ _tnl_TexCoord4fv( const GLfloat *v )
    dest[3].i = IEEE_ONE;						\
 /*     ASSERT(IM->Flag[IM->Count]==0);	 */				\
    if (count == IMM_MAXDATA - 1)					\
-      _tnl_flush_immediate( IM );					\
+      _tnl_flush_immediate( NULL, IM );					\
 }
 #else
 #define VERTEX3F VERTEX3
@@ -757,7 +812,7 @@ _tnl_TexCoord4fv( const GLfloat *v )
    dest[2].i = ((fi_type *)&(z))->i;					\
    dest[3].i = ((fi_type *)&(w))->i;					\
    if (count == IMM_MAXDATA - 1)					\
-      _tnl_flush_immediate( IM );					\
+      _tnl_flush_immediate( NULL, IM );					\
 }
 #else
 #define VERTEX4F VERTEX4
@@ -951,7 +1006,7 @@ _tnl_MultiTexCoord4fvARB(GLenum target, const GLfloat *v)
    IM->Flag[count] |= VERT_BIT_EVAL_C1;			\
    ASSIGN_4V(dest, x, 0, 0, 1);				\
    if (count == IMM_MAXDATA-1)				\
-      _tnl_flush_immediate( IM );			\
+      _tnl_flush_immediate( NULL, IM );			\
 }
 
 #define EVALCOORD2(IM, x, y)				\
@@ -961,7 +1016,7 @@ _tnl_MultiTexCoord4fvARB(GLenum target, const GLfloat *v)
    IM->Flag[count] |= VERT_BIT_EVAL_C2;			\
    ASSIGN_4V(dest, x, y, 0, 1);				\
    if (count == IMM_MAXDATA-1)				\
-      _tnl_flush_immediate( IM );			\
+      _tnl_flush_immediate( NULL, IM );			\
 }
 
 #define EVALPOINT1(IM, x)				\
@@ -971,7 +1026,7 @@ _tnl_MultiTexCoord4fvARB(GLenum target, const GLfloat *v)
    IM->Flag[count] |= VERT_BIT_EVAL_P1;			\
    ASSIGN_4V(dest, x, 0, 0, 1);				\
    if (count == IMM_MAXDATA-1)				\
-      _tnl_flush_immediate( IM );			\
+      _tnl_flush_immediate( NULL, IM );			\
 }
 
 #define EVALPOINT2(IM, x, y)				\
@@ -981,7 +1036,7 @@ _tnl_MultiTexCoord4fvARB(GLenum target, const GLfloat *v)
    IM->Flag[count] |= VERT_BIT_EVAL_P2;			\
    ASSIGN_4V(dest, x, y, 0, 1);				\
    if (count == IMM_MAXDATA-1)				\
-      _tnl_flush_immediate( IM );			\
+      _tnl_flush_immediate( NULL, IM );			\
 }
 
 static void
@@ -1041,7 +1096,7 @@ _tnl_EvalPoint2( GLint i, GLint j )
    IM->FlushElt = IM->ArrayEltFlush;		\
    IM->Count += IM->ArrayEltIncr;		\
    if (IM->Count == IMM_MAXDATA)		\
-      _tnl_flush_immediate( IM );		\
+      _tnl_flush_immediate( NULL, IM );		\
 }
 
 
@@ -1076,19 +1131,6 @@ _tnl_eval_coord2f( GLcontext *CC, GLfloat u, GLfloat v )
    EVALCOORD2( i, u, v );
 }
 
-void
-_tnl_array_element( GLcontext *CC, GLint i )
-{
-   struct immediate *im = TNL_CURRENT_IM(CC);
-   ARRAY_ELT( im, i );
-}
-
-void
-_tnl_vertex2f( GLcontext *ctx, GLfloat x, GLfloat y )
-{
-   struct immediate *im = TNL_CURRENT_IM(ctx);
-   VERTEX2( im, x, y );
-}
 
 
 
@@ -1108,7 +1150,7 @@ _tnl_VertexAttrib4fNV( GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w 
       if (index == 0) {
          IM->Count++;
          if (count == IMM_MAXDATA - 1)
-            _tnl_flush_immediate( IM );
+            _tnl_flush_immediate( NULL, IM );
       }
    }
 }   
@@ -1125,7 +1167,7 @@ _tnl_VertexAttrib4fvNV( GLuint index, const GLfloat *v )
       if (index == 0) {
          IM->Count++;
          if (count == IMM_MAXDATA - 1)
-            _tnl_flush_immediate( IM );
+            _tnl_flush_immediate( NULL, IM );
       }
    }
 }   
@@ -1141,14 +1183,12 @@ _tnl_Rectf( GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2 )
 {
    GET_CURRENT_CONTEXT(ctx);
 
-/*     fprintf(stderr, "%s\n", __FUNCTION__); */
-
    if (_tnl_hard_begin( ctx, GL_QUADS )) {
-      _tnl_vertex2f( ctx, x1, y1 );
-      _tnl_vertex2f( ctx, x2, y1 );
-      _tnl_vertex2f( ctx, x2, y2 );
-      _tnl_vertex2f( ctx, x1, y2 );
-      _tnl_end( ctx );
+      glVertex2f( x1, y1 );
+      glVertex2f( x2, y1 );
+      glVertex2f( x2, y2 );
+      glVertex2f( x1, y2 );
+      glEnd();
    }
 }
 
@@ -1164,11 +1204,14 @@ _tnl_Materialfv( GLenum face, GLenum pname, const GLfloat *params )
 
    if (bitmask == 0)
       return;
+   
+   if (MESA_VERBOSE & VERBOSE_API)
+      fprintf(stderr, "_tnl_Materialfv\n");
 
    if (tnl->IsolateMaterials &&
        !(IM->BeginState & VERT_BEGIN_1)) /* heuristic */
    {
-      _tnl_flush_immediate( IM );      
+      _tnl_flush_immediate( ctx, IM );      
       IM = TNL_CURRENT_IM(ctx);
       count = IM->Count;
    }
@@ -1242,7 +1285,7 @@ _tnl_Materialfv( GLenum face, GLenum pname, const GLfloat *params )
    if (tnl->IsolateMaterials && 
        !(IM->BeginState & VERT_BEGIN_1)) /* heuristic */
    {
-      _tnl_flush_immediate( IM );
+      _tnl_flush_immediate( ctx, IM );
    }
 }
 
