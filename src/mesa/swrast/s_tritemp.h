@@ -1,4 +1,4 @@
-/* $Id: s_tritemp.h,v 1.27 2001/09/19 20:30:44 kschultz Exp $ */
+/* $Id: s_tritemp.h,v 1.30 2001/12/17 04:58:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -120,11 +120,18 @@
    const GLint snapMask = ~((FIXED_ONE / 16) - 1); /* for x/y coord snapping */
    GLfixed vMin_fx, vMin_fy, vMid_fx, vMid_fy, vMax_fx, vMax_fy;
 
-   struct triangle_span span;
+   struct sw_span span;
 
 #ifdef INTERP_Z
    (void) fixedToDepthShift;
 #endif
+
+   /*
+   printf("%s()\n", __FUNCTION__);
+   printf("  %g, %g, %g\n", v0->win[0], v0->win[1], v0->win[2]);
+   printf("  %g, %g, %g\n", v1->win[0], v1->win[1], v1->win[2]);
+   printf("  %g, %g, %g\n", v2->win[0], v2->win[1], v2->win[2]);
+   */
 
    /* Compute fixed point x,y coords w/ half-pixel offsets and snapping.
     * And find the order of the 3 vertices along the Y axis.
@@ -199,7 +206,7 @@
       if (area * bf < 0.0)
          return;
 
-      if (area == 0.0F)
+      if (area == 0.0F || IS_INF_OR_NAN(area))
          return;
 
       oneOverArea = 1.0F / area;
@@ -1136,11 +1143,13 @@
                /* initialize the span interpolants to the leftmost value */
                /* ff = fixed-pt fragment */
                const GLint right = FixedToInt(fxRightEdge);
+	       SW_SPAN_RESET(span);
                span.x = FixedToInt(fxLeftEdge);
+
                if (right <= span.x)
-                  span.count = 0;
+                  span.end = 0;
                else
-                  span.count = right - span.x;
+                  span.end = right - span.x;
 
 #ifdef INTERP_Z
                span.z = fz;
@@ -1254,7 +1263,7 @@
 #endif
 
                /* This is where we actually generate fragments */
-               if (span.count > 0) {
+               if (span.end > 0) {
                   RENDER_SPAN( span );
                }
 

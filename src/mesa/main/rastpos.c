@@ -1,4 +1,4 @@
-/* $Id: rastpos.c,v 1.32 2001/11/18 23:52:38 brianp Exp $ */
+/* $Id: rastpos.c,v 1.34 2001/12/18 04:06:45 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -286,15 +286,15 @@ raster_pos4f(GLcontext *ctx, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
       _mesa_update_state( ctx );
 
    ASSIGN_4V( v, x, y, z, w );
-   TRANSFORM_POINT( eye, ctx->ModelView.m, v );
+   TRANSFORM_POINT( eye, ctx->ModelviewMatrixStack.Top->m, v );
 
    /* raster color */
    if (ctx->Light.Enabled) {
       GLfloat *norm, eyenorm[3];
-      GLfloat *objnorm = ctx->Current.Normal;
+      GLfloat *objnorm = ctx->Current.Attrib[VERT_ATTRIB_NORMAL];
 
       if (ctx->_NeedEyeCoords) {
-	 GLfloat *inv = ctx->ModelView.inv;
+	 GLfloat *inv = ctx->ModelviewMatrixStack.Top->inv;
 	 TRANSFORM_NORMAL( eyenorm, objnorm, inv );
 	 norm = eyenorm;
       }
@@ -311,9 +311,10 @@ raster_pos4f(GLcontext *ctx, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
    else {
       /* use current color or index */
       if (ctx->Visual.rgbMode) {
-         COPY_4FV(ctx->Current.RasterColor, ctx->Current.Color);
+         COPY_4FV(ctx->Current.RasterColor,
+                  ctx->Current.Attrib[VERT_ATTRIB_COLOR0]);
          COPY_4FV(ctx->Current.RasterSecondaryColor,
-                  ctx->Current.SecondaryColor);
+                  ctx->Current.Attrib[VERT_ATTRIB_COLOR1]);
       }
       else {
 	 ctx->Current.RasterIndex = ctx->Current.Index;
@@ -325,7 +326,7 @@ raster_pos4f(GLcontext *ctx, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
                       GL_SQRT( eye[0]*eye[0] + eye[1]*eye[1] + eye[2]*eye[2] );
 
    /* apply projection matrix:  clip = Proj * eye */
-   TRANSFORM_POINT( clip, ctx->ProjectionMatrix.m, eye );
+   TRANSFORM_POINT( clip, ctx->ProjectionMatrixStack.Top->m, eye );
 
    /* clip to view volume */
    if (ctx->Transform.RasterPositionUnclipped) {
@@ -362,13 +363,13 @@ raster_pos4f(GLcontext *ctx, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
    ctx->Current.RasterPos[3] = clip[3];
    ctx->Current.RasterPosValid = GL_TRUE;
 
-   ctx->Current.RasterFogCoord = ctx->Current.FogCoord;
+   ctx->Current.RasterFogCoord = ctx->Current.Attrib[VERT_ATTRIB_FOG][0];
 
    {
       GLuint texSet;
       for (texSet = 0; texSet < ctx->Const.MaxTextureUnits; texSet++) {
          COPY_4FV( ctx->Current.RasterMultiTexCoord[texSet],
-                  ctx->Current.Texcoord[texSet] );
+                  ctx->Current.Attrib[VERT_ATTRIB_TEX0 + texSet] );
       }
    }
 
@@ -559,10 +560,8 @@ _mesa_WindowPos4fMESA( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
 
    /* raster color = current color or index */
    if (ctx->Visual.rgbMode) {
-      ctx->Current.RasterColor[0] = (ctx->Current.Color[0]);
-      ctx->Current.RasterColor[1] = (ctx->Current.Color[1]);
-      ctx->Current.RasterColor[2] = (ctx->Current.Color[2]);
-      ctx->Current.RasterColor[3] = (ctx->Current.Color[3]);
+      COPY_4FV(ctx->Current.RasterColor,
+               ctx->Current.Attrib[VERT_ATTRIB_COLOR0]);
    }
    else {
       ctx->Current.RasterIndex = ctx->Current.Index;
@@ -573,7 +572,7 @@ _mesa_WindowPos4fMESA( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
       GLuint texSet;
       for (texSet = 0; texSet < ctx->Const.MaxTextureUnits; texSet++) {
          COPY_4FV( ctx->Current.RasterMultiTexCoord[texSet],
-                  ctx->Current.Texcoord[texSet] );
+                  ctx->Current.Attrib[VERT_ATTRIB_TEX0 + texSet] );
       }
    }
 
@@ -834,23 +833,27 @@ void _mesa_WindowPos3fARB(GLfloat x, GLfloat y, GLfloat z)
 
    ctx->Current.RasterPosValid = GL_TRUE;
    /* XXX might have to change this */
-   ctx->Current.RasterDistance = ctx->Current.FogCoord;
-   ctx->Current.RasterFogCoord = ctx->Current.FogCoord;
+   ctx->Current.RasterDistance = ctx->Current.Attrib[VERT_ATTRIB_FOG][0];
+   ctx->Current.RasterFogCoord = ctx->Current.Attrib[VERT_ATTRIB_FOG][0];
 
    /* raster color = current color or index */
    if (ctx->Visual.rgbMode) {
-      ctx->Current.RasterColor[0] = CLAMP(ctx->Current.Color[0], 0.0F, 1.0F);
-      ctx->Current.RasterColor[1] = CLAMP(ctx->Current.Color[1], 0.0F, 1.0F);
-      ctx->Current.RasterColor[2] = CLAMP(ctx->Current.Color[2], 0.0F, 1.0F);
-      ctx->Current.RasterColor[3] = CLAMP(ctx->Current.Color[3], 0.0F, 1.0F);
+      ctx->Current.RasterColor[0]
+         = CLAMP(ctx->Current.Attrib[VERT_ATTRIB_COLOR0][0], 0.0F, 1.0F);
+      ctx->Current.RasterColor[1]
+         = CLAMP(ctx->Current.Attrib[VERT_ATTRIB_COLOR0][1], 0.0F, 1.0F);
+      ctx->Current.RasterColor[2]
+         = CLAMP(ctx->Current.Attrib[VERT_ATTRIB_COLOR0][2], 0.0F, 1.0F);
+      ctx->Current.RasterColor[3]
+         = CLAMP(ctx->Current.Attrib[VERT_ATTRIB_COLOR0][3], 0.0F, 1.0F);
       ctx->Current.RasterSecondaryColor[0]
-         = CLAMP(ctx->Current.SecondaryColor[0], 0.0F, 1.0F);
+         = CLAMP(ctx->Current.Attrib[VERT_ATTRIB_COLOR1][0], 0.0F, 1.0F);
       ctx->Current.RasterSecondaryColor[1]
-         = CLAMP(ctx->Current.SecondaryColor[1], 0.0F, 1.0F);
+         = CLAMP(ctx->Current.Attrib[VERT_ATTRIB_COLOR1][1], 0.0F, 1.0F);
       ctx->Current.RasterSecondaryColor[2]
-         = CLAMP(ctx->Current.SecondaryColor[2], 0.0F, 1.0F);
+         = CLAMP(ctx->Current.Attrib[VERT_ATTRIB_COLOR1][2], 0.0F, 1.0F);
       ctx->Current.RasterSecondaryColor[3]
-         = CLAMP(ctx->Current.SecondaryColor[3], 0.0F, 1.0F);
+         = CLAMP(ctx->Current.Attrib[VERT_ATTRIB_COLOR1][3], 0.0F, 1.0F);
    }
    else {
       ctx->Current.RasterIndex = ctx->Current.Index;
@@ -861,7 +864,7 @@ void _mesa_WindowPos3fARB(GLfloat x, GLfloat y, GLfloat z)
       GLuint texSet;
       for (texSet = 0; texSet < ctx->Const.MaxTextureUnits; texSet++) {
          COPY_4FV( ctx->Current.RasterMultiTexCoord[texSet],
-                  ctx->Current.Texcoord[texSet] );
+                  ctx->Current.Attrib[VERT_ATTRIB_TEX0 + texSet] );
       }
    }
 

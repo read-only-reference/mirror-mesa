@@ -1,4 +1,4 @@
-/* $Id: light.c,v 1.46 2001/09/18 16:16:21 kschultz Exp $ */
+/* $Id: light.c,v 1.48 2001/12/18 04:06:45 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -117,7 +117,7 @@ _mesa_Lightfv( GLenum light, GLenum pname, const GLfloat *params )
    case GL_POSITION: {
       GLfloat tmp[4];
       /* transform position by ModelView matrix */
-      TRANSFORM_POINT( tmp, ctx->ModelView.m, params );
+      TRANSFORM_POINT( tmp, ctx->ModelviewMatrixStack.Top->m, params );
       if (TEST_EQ_4V(l->EyePosition, tmp))
 	 return;
       FLUSH_VERTICES(ctx, _NEW_LIGHT);
@@ -131,10 +131,10 @@ _mesa_Lightfv( GLenum light, GLenum pname, const GLfloat *params )
    case GL_SPOT_DIRECTION: {
       GLfloat tmp[4];
       /* transform direction by inverse modelview */
-      if (ctx->ModelView.flags & MAT_DIRTY_INVERSE) {
-	 _math_matrix_analyse( &ctx->ModelView );
+      if (ctx->ModelviewMatrixStack.Top->flags & MAT_DIRTY_INVERSE) {
+	 _math_matrix_analyse( ctx->ModelviewMatrixStack.Top );
       }
-      TRANSFORM_NORMAL( tmp, params, ctx->ModelView.inv );
+      TRANSFORM_NORMAL( tmp, params, ctx->ModelviewMatrixStack.Top->inv );
       if (TEST_EQ_3V(l->EyeDirection, tmp))
 	 return;
       FLUSH_VERTICES(ctx, _NEW_LIGHT);
@@ -881,7 +881,7 @@ _mesa_ColorMaterial( GLenum face, GLenum mode )
 
    if (ctx->Light.ColorMaterialEnabled) {
       FLUSH_CURRENT( ctx, 0 );
-      _mesa_update_color_material( ctx, ctx->Current.Color );
+      _mesa_update_color_material(ctx,ctx->Current.Attrib[VERT_ATTRIB_COLOR0]);
    }
 }
 
@@ -1254,7 +1254,7 @@ _mesa_compute_light_positions( GLcontext *ctx )
       COPY_3V( ctx->_EyeZDir, eye_z );
    }
    else {
-      TRANSFORM_NORMAL( ctx->_EyeZDir, eye_z, ctx->ModelView.m );
+      TRANSFORM_NORMAL( ctx->_EyeZDir, eye_z, ctx->ModelviewMatrixStack.Top->m );
    }
 
    foreach (light, &ctx->Light.EnabledList) {
@@ -1263,7 +1263,7 @@ _mesa_compute_light_positions( GLcontext *ctx )
 	 COPY_4FV( light->_Position, light->EyePosition );
       }
       else {
-	 TRANSFORM_POINT( light->_Position, ctx->ModelView.inv,
+	 TRANSFORM_POINT( light->_Position, ctx->ModelviewMatrixStack.Top->inv,
 			  light->EyePosition );
       }
 
@@ -1287,7 +1287,7 @@ _mesa_compute_light_positions( GLcontext *ctx )
          else {
 	    TRANSFORM_NORMAL( light->_NormDirection,
 			      light->EyeDirection,
-			      ctx->ModelView.m);
+			      ctx->ModelviewMatrixStack.Top->m);
 	 }
 
 	 NORMALIZE_3FV( light->_NormDirection );

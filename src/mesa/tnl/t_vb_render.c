@@ -1,8 +1,8 @@
-/* $Id: t_vb_render.c,v 1.23 2001/11/19 10:22:41 keithw Exp $ */
+/* $Id: t_vb_render.c,v 1.26 2001/12/17 01:46:58 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.0.1
  *
  * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
@@ -142,7 +142,7 @@ do {							\
 
 #define TAG(x) clip_##x##_verts
 #define INIT(x) tnl->Driver.Render.PrimitiveNotify( ctx, x )
-#define RESET_STIPPLE if (stipple) tnl->Driver.Render.ResetLineStipple( ctx )
+#define RESET_STIPPLE tnl->Driver.Render.ResetLineStipple( ctx )
 #define RESET_OCCLUSION ctx->OcclusionResult = GL_TRUE
 #define PRESERVE_VB_DEFS
 #include "t_vb_rendertmp.h"
@@ -225,8 +225,9 @@ static void clip_elt_triangles( GLcontext *ctx,
    const line_func LineFunc = tnl->Driver.Render.Line;		\
    const triangle_func TriangleFunc = tnl->Driver.Render.Triangle;	\
    const quad_func QuadFunc = tnl->Driver.Render.Quad;		\
+   const GLboolean stipple = ctx->Line.StippleFlag;		\
    (void) (LineFunc && TriangleFunc && QuadFunc);		\
-   (void) elt;
+   (void) elt; (void) stipple
 
 #define RESET_STIPPLE tnl->Driver.Render.ResetLineStipple( ctx )
 #define RESET_OCCLUSION ctx->OcclusionResult = GL_TRUE
@@ -280,7 +281,6 @@ static GLboolean run_render( GLcontext *ctx,
    GLuint new_inputs = stage->changed_inputs;
    render_func *tab;
    GLint pass = 0;
-
 
    /* Allow the drivers to lock before projected verts are built so
     * that window coordinates are guarenteed not to change before
@@ -353,10 +353,10 @@ static void check_render( GLcontext *ctx, struct gl_pipeline_stage *stage )
    GLuint i;
 
    if (ctx->Visual.rgbMode) {
-      inputs |= VERT_RGBA;
+      inputs |= VERT_COLOR0_BIT;
 
       if (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR)
-	 inputs |= VERT_SPEC_RGB;
+	 inputs |= VERT_COLOR1_BIT;
 
       if (ctx->Texture._ReallyEnabled) {
 	 for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++) {
@@ -366,7 +366,7 @@ static void check_render( GLcontext *ctx, struct gl_pipeline_stage *stage )
       }
    }
    else {
-      inputs |= VERT_INDEX;
+      inputs |= VERT_INDEX_BIT;
    }
 
    if (ctx->Point._Attenuated)
@@ -375,10 +375,10 @@ static void check_render( GLcontext *ctx, struct gl_pipeline_stage *stage )
    /* How do drivers turn this off?
     */
    if (ctx->Fog.Enabled)
-      inputs |= VERT_FOG_COORD;
+      inputs |= VERT_FOG_BIT;
 
    if (ctx->_TriangleCaps & DD_TRI_UNFILLED)
-      inputs |= VERT_EDGE;
+      inputs |= VERT_EDGEFLAG_BIT;
 
    if (ctx->RenderMode==GL_FEEDBACK)
       inputs |= VERT_TEX_ANY;
@@ -396,7 +396,7 @@ static void dtr( struct gl_pipeline_stage *stage )
 
 const struct gl_pipeline_stage _tnl_render_stage =
 {
-   "render",
+   "render",			/* name */
    (_NEW_BUFFERS |
     _DD_NEW_SEPARATE_SPECULAR |
     _DD_NEW_FLATSHADE |
@@ -407,9 +407,11 @@ const struct gl_pipeline_stage _tnl_render_stage =
     _DD_NEW_TRI_UNFILLED |
     _NEW_RENDERMODE),		/* re-check (new inputs, interp function) */
    0,				/* re-run (always runs) */
-   GL_TRUE,			/* active */
-   0, 0,			/* inputs (set in check_render), outputs */
-   0, 0,			/* changed_inputs, private */
+   GL_TRUE,			/* active? */
+   0,				/* inputs (set in check_render) */
+   0,				/* outputs */
+   0,				/* changed_inputs */
+   NULL,			/* private data */
    dtr,				/* destructor */
    check_render,		/* check */
    run_render			/* run */

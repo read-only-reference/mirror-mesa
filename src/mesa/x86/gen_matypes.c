@@ -1,4 +1,4 @@
-/* $Id: gen_matypes.c,v 1.3 2001/07/28 19:28:49 keithw Exp $ */
+/* $Id: gen_matypes.c,v 1.5 2001/12/18 04:06:45 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -122,7 +122,7 @@ int main( int argc, char **argv )
    OFFSET( "VB_OBJ_PTR             ", struct vertex_buffer, ObjPtr );
    OFFSET( "VB_EYE_PTR             ", struct vertex_buffer, EyePtr );
    OFFSET( "VB_CLIP_PTR            ", struct vertex_buffer, ClipPtr );
-   OFFSET( "VB_PROJ_CLIP_PTR       ", struct vertex_buffer, ProjectedClipPtr );
+   OFFSET( "VB_PROJ_CLIP_PTR       ", struct vertex_buffer, NdcPtr );
    OFFSET( "VB_CLIP_OR_MASK        ", struct vertex_buffer, ClipOrMask );
    OFFSET( "VB_CLIP_MASK           ", struct vertex_buffer, ClipMask );
    OFFSET( "VB_NORMAL_PTR          ", struct vertex_buffer, NormalPtr );
@@ -148,17 +148,18 @@ int main( int argc, char **argv )
 
    DEFINE_HEADER( "struct vertex_buffer" );
 
-   DEFINE( "VERT_OBJ               ", VERT_OBJ );
-   DEFINE( "VERT_RGBA              ", VERT_RGBA );
-   DEFINE( "VERT_NORM              ", VERT_NORM );
-   DEFINE( "VERT_INDEX             ", VERT_INDEX );
-   DEFINE( "VERT_EDGE              ", VERT_EDGE );
-   DEFINE( "VERT_SPEC_RGB          ", VERT_SPEC_RGB );
-   DEFINE( "VERT_FOG_COORD         ", VERT_FOG_COORD );
-   DEFINE( "VERT_TEX0              ", VERT_TEX0 );
-   DEFINE( "VERT_TEX1              ", VERT_TEX1 );
-   DEFINE( "VERT_TEX2              ", VERT_TEX2 );
-   DEFINE( "VERT_TEX3              ", VERT_TEX3 );
+   /* XXX use new labels here someday after vertex proram is done */
+   DEFINE( "VERT_OBJ               ", VERT_OBJ_BIT );
+   DEFINE( "VERT_NORM              ", VERT_NORMAL_BIT );
+   DEFINE( "VERT_RGBA              ", VERT_COLOR0_BIT );
+   DEFINE( "VERT_SPEC_RGB          ", VERT_COLOR1_BIT );
+   DEFINE( "VERT_FOG_COORD         ", VERT_FOG_BIT );
+   DEFINE( "VERT_INDEX             ", VERT_INDEX_BIT );
+   DEFINE( "VERT_EDGE              ", VERT_EDGEFLAG_BIT );
+   DEFINE( "VERT_TEX0              ", VERT_TEX0_BIT );
+   DEFINE( "VERT_TEX1              ", VERT_TEX1_BIT );
+   DEFINE( "VERT_TEX2              ", VERT_TEX2_BIT );
+   DEFINE( "VERT_TEX3              ", VERT_TEX3_BIT );
    DEFINE( "VERT_EVAL_C1           ", VERT_EVAL_C1 );
    DEFINE( "VERT_EVAL_C2           ", VERT_EVAL_C2 );
    DEFINE( "VERT_EVAL_P1           ", VERT_EVAL_P1 );

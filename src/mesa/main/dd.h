@@ -1,4 +1,4 @@
-/* $Id: dd.h,v 1.63 2001/11/18 22:48:11 brianp Exp $ */
+/* $Id: dd.h,v 1.65 2001/12/14 02:50:01 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -665,14 +665,14 @@ typedef struct {
    void (*Indexi)( GLint );
    void (*Indexiv)( const GLint * );
    void (*Materialfv)( GLenum face, GLenum pname, const GLfloat * ); /* NOTE */
-   void (*MultiTexCoord1f)( GLenum, GLfloat );
-   void (*MultiTexCoord1fv)( GLenum, const GLfloat * );
-   void (*MultiTexCoord2f)( GLenum, GLfloat, GLfloat );
-   void (*MultiTexCoord2fv)( GLenum, const GLfloat * );
-   void (*MultiTexCoord3f)( GLenum, GLfloat, GLfloat, GLfloat );
-   void (*MultiTexCoord3fv)( GLenum, const GLfloat * );
-   void (*MultiTexCoord4f)( GLenum, GLfloat, GLfloat, GLfloat, GLfloat );
-   void (*MultiTexCoord4fv)( GLenum, const GLfloat * );
+   void (*MultiTexCoord1fARB)( GLenum, GLfloat );
+   void (*MultiTexCoord1fvARB)( GLenum, const GLfloat * );
+   void (*MultiTexCoord2fARB)( GLenum, GLfloat, GLfloat );
+   void (*MultiTexCoord2fvARB)( GLenum, const GLfloat * );
+   void (*MultiTexCoord3fARB)( GLenum, GLfloat, GLfloat, GLfloat );
+   void (*MultiTexCoord3fvARB)( GLenum, const GLfloat * );
+   void (*MultiTexCoord4fARB)( GLenum, GLfloat, GLfloat, GLfloat, GLfloat );
+   void (*MultiTexCoord4fvARB)( GLenum, const GLfloat * );
    void (*Normal3f)( GLfloat, GLfloat, GLfloat );
    void (*Normal3fv)( const GLfloat * );
    void (*SecondaryColor3fEXT)( GLfloat, GLfloat, GLfloat );
@@ -696,6 +696,9 @@ typedef struct {
    void (*CallList)( GLuint );	/* NOTE */
    void (*Begin)( GLenum );
    void (*End)( void );
+   void (*VertexAttrib4fNV)( GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w );
+   void (*VertexAttrib4fvNV)( GLuint index, const GLfloat *v );
+
    /* Drivers present a reduced set of the functions possible in
     * begin/end objects.  Core mesa provides translation stubs for the
     * remaining functions to map down to these entrypoints.

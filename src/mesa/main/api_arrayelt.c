@@ -1,4 +1,4 @@
-/* $Id: api_arrayelt.c,v 1.3 2001/06/01 22:22:10 keithw Exp $ */
+/* $Id: api_arrayelt.c,v 1.5 2001/12/28 06:28:10 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,24 +24,32 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/* Author:
+ *    Keith Whitwell <keith_whitwell@yahoo.com>
+ */
+
 #include "glheader.h"
 #include "api_arrayelt.h"
 #include "context.h"
+#include "glapi.h"
 #include "mem.h"
 #include "macros.h"
 #include "mtypes.h"
 
 
+typedef void (*texarray_func)( GLenum, const void * );
+
 typedef struct {
    GLint unit;
    struct gl_client_array *array;
-   void (*func)( GLenum, const void * );
+   texarray_func func;
 } AEtexarray;
 
+typedef void (*array_func)( const void * );
 
 typedef struct {
    struct gl_client_array *array;
-   void (*func)( const void * );
+   array_func func;
 } AEarray;
 
 typedef struct {
@@ -54,144 +62,147 @@ typedef struct {
 #define TYPE_IDX(t) ((t) & 0xf)
 
 static void (*colorfuncs[2][8])( const void * ) = {
-   { (void (*)( const void * ))glColor3bv,
-     (void (*)( const void * ))glColor3ub,
-     (void (*)( const void * ))glColor3sv,
-     (void (*)( const void * ))glColor3usv,
-     (void (*)( const void * ))glColor3iv,
-     (void (*)( const void * ))glColor3uiv,
-     (void (*)( const void * ))glColor3fv,
-     (void (*)( const void * ))glColor3dv },
+   { (array_func)glColor3bv,
+     (array_func)glColor3ub,
+     (array_func)glColor3sv,
+     (array_func)glColor3usv,
+     (array_func)glColor3iv,
+     (array_func)glColor3uiv,
+     (array_func)glColor3fv,
+     (array_func)glColor3dv },
 
-   { (void (*)( const void * ))glColor4bv,
-     (void (*)( const void * ))glColor4ub,
-     (void (*)( const void * ))glColor4sv,
-     (void (*)( const void * ))glColor4usv,
-     (void (*)( const void * ))glColor4iv,
-     (void (*)( const void * ))glColor4uiv,
-     (void (*)( const void * ))glColor4fv,
-     (void (*)( const void * ))glColor4dv }
+   { (array_func)glColor4bv,
+     (array_func)glColor4ub,
+     (array_func)glColor4sv,
+     (array_func)glColor4usv,
+     (array_func)glColor4iv,
+     (array_func)glColor4uiv,
+     (array_func)glColor4fv,
+     (array_func)glColor4dv }
 };
 
 static void (*vertexfuncs[3][8])( const void * ) = {
    { 0,
      0,
-     (void (*)( const void * ))glVertex2sv,
+     (array_func)glVertex2sv,
      0,
-     (void (*)( const void * ))glVertex2iv,
+     (array_func)glVertex2iv,
      0,
-     (void (*)( const void * ))glVertex2fv,
-     (void (*)( const void * ))glVertex2dv },
+     (array_func)glVertex2fv,
+     (array_func)glVertex2dv },
 
    { 0,
      0,
-     (void (*)( const void * ))glVertex3sv,
+     (array_func)glVertex3sv,
      0,
-     (void (*)( const void * ))glVertex3iv,
+     (array_func)glVertex3iv,
      0,
-     (void (*)( const void * ))glVertex3fv,
-     (void (*)( const void * ))glVertex3dv },
+     (array_func)glVertex3fv,
+     (array_func)glVertex3dv },
 
    { 0,
      0,
-     (void (*)( const void * ))glVertex4sv,
+     (array_func)glVertex4sv,
      0,
-     (void (*)( const void * ))glVertex4iv,
+     (array_func)glVertex4iv,
      0,
-     (void (*)( const void * ))glVertex4fv,
-     (void (*)( const void * ))glVertex4dv }
+     (array_func)glVertex4fv,
+     (array_func)glVertex4dv }
 };
 
 
 static void (*multitexfuncs[4][8])( GLenum, const void * ) = {
    { 0,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord1svARB,
+     (texarray_func)glMultiTexCoord1svARB,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord1ivARB,
+     (texarray_func)glMultiTexCoord1ivARB,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord1fvARB,
-     (void (*)( GLenum, const void * ))glMultiTexCoord1dvARB },
+     (texarray_func)glMultiTexCoord1fvARB,
+     (texarray_func)glMultiTexCoord1dvARB },
 
    { 0,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord2svARB,
+     (texarray_func)glMultiTexCoord2svARB,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord2ivARB,
+     (texarray_func)glMultiTexCoord2ivARB,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord2fvARB,
-     (void (*)( GLenum, const void * ))glMultiTexCoord2dvARB },
+     (texarray_func)glMultiTexCoord2fvARB,
+     (texarray_func)glMultiTexCoord2dvARB },
 
    { 0,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord3svARB,
+     (texarray_func)glMultiTexCoord3svARB,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord3ivARB,
+     (texarray_func)glMultiTexCoord3ivARB,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord3fvARB,
-     (void (*)( GLenum, const void * ))glMultiTexCoord3dvARB },
+     (texarray_func)glMultiTexCoord3fvARB,
+     (texarray_func)glMultiTexCoord3dvARB },
 
    { 0,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord4svARB,
+     (texarray_func)glMultiTexCoord4svARB,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord4ivARB,
+     (texarray_func)glMultiTexCoord4ivARB,
      0,
-     (void (*)( GLenum, const void * ))glMultiTexCoord4fvARB,
-     (void (*)( GLenum, const void * ))glMultiTexCoord4dvARB }
+     (texarray_func)glMultiTexCoord4fvARB,
+     (texarray_func)glMultiTexCoord4dvARB }
 };
 
 static void (*indexfuncs[8])( const void * ) = {
    0,
-   (void (*)( const void * ))glIndexubv,
-   (void (*)( const void * ))glIndexsv,
+   (array_func)glIndexubv,
+   (array_func)glIndexsv,
    0,
-   (void (*)( const void * ))glIndexiv,
+   (array_func)glIndexiv,
    0,
-   (void (*)( const void * ))glIndexfv,
-   (void (*)( const void * ))glIndexdv
+   (array_func)glIndexfv,
+   (array_func)glIndexdv
 };
 
 
 static void (*normalfuncs[8])( const void * ) = {
-   (void (*)( const void * ))glNormal3bv,
+   (array_func)glNormal3bv,
    0,
-   (void (*)( const void * ))glNormal3sv,
+   (array_func)glNormal3sv,
    0,
-   (void (*)( const void * ))glNormal3iv,
+   (array_func)glNormal3iv,
    0,
-   (void (*)( const void * ))glNormal3fv,
-   (void (*)( const void * ))glNormal3dv,
+   (array_func)glNormal3fv,
+   (array_func)glNormal3dv,
 };
 
-static void (*fogcoordfuncs[8])( const void * ) = {
-   0,
-   0,
-   0,
-   0,
-   0,
-   0,
-   (void (*)( const void * ))glFogCoordfvEXT,
-   (void (*)( const void * ))glFogCoorddvEXT,
-};
-
-static void (*secondarycolorfuncs[8])( const void * ) = {
-   (void (*)( const void * ))glSecondaryColor3bvEXT,
-   (void (*)( const void * ))glSecondaryColor3ubvEXT,
-   (void (*)( const void * ))glSecondaryColor3svEXT,
-   (void (*)( const void * ))glSecondaryColor3usvEXT,
-   (void (*)( const void * ))glSecondaryColor3ivEXT,
-   (void (*)( const void * ))glSecondaryColor3uivEXT,
-   (void (*)( const void * ))glSecondaryColor3fvEXT,
-   (void (*)( const void * ))glSecondaryColor3dvEXT,
-};
-
+static void (*fogcoordfuncs[8])( const void * );
+static void (*secondarycolorfuncs[8])( const void * );
 
 GLboolean _ae_create_context( GLcontext *ctx )
 {
+   static int firsttime = 1;
+
    ctx->aelt_context = MALLOC( sizeof(AEcontext) );
-   if (!ctx->aelt_context) 
+   if (!ctx->aelt_context)
       return GL_FALSE;
+
+
+   if (firsttime)
+   {
+      firsttime = 0;
+
+      /* Don't really want to use api_compat.h for this, but the
+       * rational for using _glapi_get_proc_address is the same.
+       */
+      fogcoordfuncs[0] = (array_func) _glapi_get_proc_address("glSecondaryColor3bvEXT");
+      fogcoordfuncs[1] = (array_func) _glapi_get_proc_address("glSecondaryColor3ubvEXT");
+      fogcoordfuncs[2] = (array_func) _glapi_get_proc_address("glSecondaryColor3svEXT");
+      fogcoordfuncs[3] = (array_func) _glapi_get_proc_address("glSecondaryColor3usvEXT");
+      fogcoordfuncs[4] = (array_func) _glapi_get_proc_address("glSecondaryColor3ivEXT");
+      fogcoordfuncs[5] = (array_func) _glapi_get_proc_address("glSecondaryColor3uivEXT");
+      fogcoordfuncs[6] = (array_func) _glapi_get_proc_address("glSecondaryColor3fvEXT");
+      fogcoordfuncs[7] = (array_func) _glapi_get_proc_address("glSecondaryColor3dvEXT");
+
+      secondarycolorfuncs[6] = (array_func) _glapi_get_proc_address("glFogCoordfvEXT");
+      secondarycolorfuncs[7] = (array_func) _glapi_get_proc_address("glFogCoorddvEXT");
+   }
 
    AE_CONTEXT(ctx)->NewState = ~0;
    return GL_TRUE;
@@ -244,7 +255,7 @@ static void _ae_update_state( GLcontext *ctx )
 
    if (ctx->Array.EdgeFlag.Enabled) {
       aa->array = &ctx->Array.EdgeFlag;
-      aa->func = (void (*)( const void * ))glEdgeFlagv;
+      aa->func = (array_func)glEdgeFlagv;
       aa++;
    }
 

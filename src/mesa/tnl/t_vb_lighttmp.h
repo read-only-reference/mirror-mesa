@@ -1,4 +1,4 @@
-/* $Id: t_vb_lighttmp.h,v 1.19 2001/10/20 00:13:45 keithw Exp $ */
+/* $Id: t_vb_lighttmp.h,v 1.21 2001/12/19 01:07:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -37,20 +37,20 @@
 #  define CHECK_END_VB(x)    (flags[x] & VERT_END_VB)
 #  if (IDX & LIGHT_COLORMATERIAL)
 #    define CMSTRIDE STRIDE_F(CMcolor, CMstride)
-#    define CHECK_COLOR_MATERIAL(x) (flags[x] & VERT_RGBA)
-#    define CHECK_VALIDATE(x) (flags[x] & (VERT_RGBA|VERT_MATERIAL))
+#    define CHECK_COLOR_MATERIAL(x) (flags[x] & VERT_COLOR0_BIT)
+#    define CHECK_VALIDATE(x) (flags[x] & (VERT_COLOR0_BIT|VERT_MATERIAL))
 #    define DO_ANOTHER_NORMAL(x) \
-     ((flags[x] & (VERT_RGBA|VERT_NORM|VERT_END_VB|VERT_MATERIAL)) == VERT_NORM)
+     ((flags[x] & (VERT_COLOR0_BIT|VERT_NORMAL_BIT|VERT_END_VB|VERT_MATERIAL)) == VERT_NORMAL_BIT)
 #    define REUSE_LIGHT_RESULTS(x) \
-     ((flags[x] & (VERT_RGBA|VERT_NORM|VERT_END_VB|VERT_MATERIAL)) == 0)
+     ((flags[x] & (VERT_COLOR0_BIT|VERT_NORMAL_BIT|VERT_END_VB|VERT_MATERIAL)) == 0)
 #  else
 #    define CMSTRIDE (void)0
 #    define CHECK_COLOR_MATERIAL(x) 0
 #    define CHECK_VALIDATE(x) (flags[x] & (VERT_MATERIAL))
 #    define DO_ANOTHER_NORMAL(x) \
-      ((flags[x] & (VERT_NORM|VERT_END_VB|VERT_MATERIAL)) == VERT_NORM)
+      ((flags[x] & (VERT_NORMAL_BIT|VERT_END_VB|VERT_MATERIAL)) == VERT_NORMAL_BIT)
 #    define REUSE_LIGHT_RESULTS(x) \
-      ((flags[x] & (VERT_NORM|VERT_END_VB|VERT_MATERIAL)) == 0)
+      ((flags[x] & (VERT_NORMAL_BIT|VERT_END_VB|VERT_MATERIAL)) == 0)
 #  endif
 #else
 #  define VSTRIDE vstride
@@ -89,7 +89,6 @@ static void TAG(light_rgba_spec)( GLcontext *ctx,
    struct light_stage_data *store = LIGHT_STAGE_DATA(stage);
    GLfloat (*base)[3] = ctx->Light._BaseColor;
    GLchan sumA[2];
-
    GLuint j;
 
    GLuint  vstride = input->stride;
@@ -104,7 +103,6 @@ static void TAG(light_rgba_spec)( GLcontext *ctx,
    GLchan (*Bcolor)[4] = (GLchan (*)[4]) store->LitColor[1].Ptr;
    GLchan (*Fspec)[4] = (GLchan (*)[4]) store->LitSecondary[0].Ptr;
    GLchan (*Bspec)[4] = (GLchan (*)[4]) store->LitSecondary[1].Ptr;
-   GLchan (*spec[2])[4];
 
    GLuint nr = VB->Count;
    GLuint *flags = VB->Flag;
@@ -115,12 +113,7 @@ static void TAG(light_rgba_spec)( GLcontext *ctx,
    (void) nstride;
    (void) vstride;
 
-
-
 /*     fprintf(stderr, "%s\n", __FUNCTION__ );   */
-
-   spec[0] = Fspec;
-   spec[1] = Bspec;
 
    if (IDX & LIGHT_COLORMATERIAL) {
       if (VB->ColorPtr[0]->Type != GL_FLOAT || 

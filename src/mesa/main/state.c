@@ -1,4 +1,4 @@
-/* $Id: state.c,v 1.71 2001/11/18 23:52:38 brianp Exp $ */
+/* $Id: state.c,v 1.75 2001/12/18 04:06:45 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -69,6 +69,7 @@
 #include "texstate.h"
 #include "mtypes.h"
 #include "varray.h"
+#include "vpstate.h"
 
 #include "math/m_matrix.h"
 #include "math/m_xform.h"
@@ -408,8 +409,8 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
 #endif
 
    /* 54. GL_EXT_point_parameters */
-   exec->PointParameterfARB = _mesa_PointParameterfEXT;
-   exec->PointParameterfvARB = _mesa_PointParameterfvEXT;
+   exec->PointParameterfEXT = _mesa_PointParameterfEXT;
+   exec->PointParameterfvEXT = _mesa_PointParameterfvEXT;
 
    /* 78. GL_EXT_paletted_texture */
 #if 0
@@ -456,29 +457,56 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->WindowPos4sMESA = _mesa_WindowPos4sMESA;
    exec->WindowPos4svMESA = _mesa_WindowPos4svMESA;
 
+   /* 233. GL_NV_vertex_program */
+   exec->BindProgramNV = _mesa_BindProgramNV;
+   exec->DeleteProgramsNV = _mesa_DeleteProgramsNV;
+   exec->ExecuteProgramNV = _mesa_ExecuteProgramNV;
+   exec->GenProgramsNV = _mesa_GenProgramsNV;
+   exec->AreProgramsResidentNV = _mesa_AreProgramsResidentNV;
+   exec->RequestResidentProgramsNV = _mesa_RequestResidentProgramsNV;
+   exec->GetProgramParameterfvNV = _mesa_GetProgramParameterfvNV;
+   exec->GetProgramParameterdvNV = _mesa_GetProgramParameterdvNV;
+   exec->GetProgramivNV = _mesa_GetProgramivNV;
+   exec->GetProgramStringNV = _mesa_GetProgramStringNV;
+   exec->GetTrackMatrixivNV = _mesa_GetTrackMatrixivNV;
+   exec->GetVertexAttribdvNV = _mesa_GetVertexAttribdvNV;
+   exec->GetVertexAttribfvNV = _mesa_GetVertexAttribfvNV;
+   exec->GetVertexAttribivNV = _mesa_GetVertexAttribivNV;
+   exec->GetVertexAttribPointervNV = _mesa_GetVertexAttribPointervNV;
+   exec->IsProgramNV = _mesa_IsProgramNV;
+   exec->LoadProgramNV = _mesa_LoadProgramNV;
+   exec->ProgramParameter4dNV = _mesa_ProgramParameter4dNV;
+   exec->ProgramParameter4dvNV = _mesa_ProgramParameter4dvNV;
+   exec->ProgramParameter4fNV = _mesa_ProgramParameter4fNV;
+   exec->ProgramParameter4fvNV = _mesa_ProgramParameter4fvNV;
+   exec->ProgramParameters4dvNV = _mesa_ProgramParameters4dvNV;
+   exec->ProgramParameters4fvNV = _mesa_ProgramParameters4fvNV;
+   exec->TrackMatrixNV = _mesa_TrackMatrixNV;
+   exec->VertexAttribPointerNV = _mesa_VertexAttribPointerNV;
+
    /* ARB 1. GL_ARB_multitexture */
-   exec->ActiveTexture = _mesa_ActiveTextureARB;
-   exec->ClientActiveTexture = _mesa_ClientActiveTextureARB;
+   exec->ActiveTextureARB = _mesa_ActiveTextureARB;
+   exec->ClientActiveTextureARB = _mesa_ClientActiveTextureARB;
 
    /* ARB 3. GL_ARB_transpose_matrix */
-   exec->LoadTransposeMatrixd = _mesa_LoadTransposeMatrixdARB;
-   exec->LoadTransposeMatrixf = _mesa_LoadTransposeMatrixfARB;
-   exec->MultTransposeMatrixd = _mesa_MultTransposeMatrixdARB;
-   exec->MultTransposeMatrixf = _mesa_MultTransposeMatrixfARB;
+   exec->LoadTransposeMatrixdARB = _mesa_LoadTransposeMatrixdARB;
+   exec->LoadTransposeMatrixfARB = _mesa_LoadTransposeMatrixfARB;
+   exec->MultTransposeMatrixdARB = _mesa_MultTransposeMatrixdARB;
+   exec->MultTransposeMatrixfARB = _mesa_MultTransposeMatrixfARB;
 
    /* ARB 5. GL_ARB_multisample */
-   exec->SampleCoverage = _mesa_SampleCoverageARB;
+   exec->SampleCoverageARB = _mesa_SampleCoverageARB;
 
    /* ARB 12. GL_ARB_texture_compression */
-   exec->CompressedTexImage3D = _mesa_CompressedTexImage3DARB;
-   exec->CompressedTexImage2D = _mesa_CompressedTexImage2DARB;
-   exec->CompressedTexImage1D = _mesa_CompressedTexImage1DARB;
-   exec->CompressedTexSubImage3D = _mesa_CompressedTexSubImage3DARB;
-   exec->CompressedTexSubImage2D = _mesa_CompressedTexSubImage2DARB;
-   exec->CompressedTexSubImage1D = _mesa_CompressedTexSubImage1DARB;
-   exec->GetCompressedTexImage = _mesa_GetCompressedTexImageARB;
+   exec->CompressedTexImage3DARB = _mesa_CompressedTexImage3DARB;
+   exec->CompressedTexImage2DARB = _mesa_CompressedTexImage2DARB;
+   exec->CompressedTexImage1DARB = _mesa_CompressedTexImage1DARB;
+   exec->CompressedTexSubImage3DARB = _mesa_CompressedTexSubImage3DARB;
+   exec->CompressedTexSubImage2DARB = _mesa_CompressedTexSubImage2DARB;
+   exec->CompressedTexSubImage1DARB = _mesa_CompressedTexSubImage1DARB;
+   exec->GetCompressedTexImageARB = _mesa_GetCompressedTexImageARB;
 
-   /* GL_ARB_window_pos */
+   /* ARB ??. GL_ARB_window_pos */
    exec->WindowPos2dARB = _mesa_WindowPos2dARB;
    exec->WindowPos2dvARB = _mesa_WindowPos2dvARB;
    exec->WindowPos2fARB = _mesa_WindowPos2fARB;
@@ -529,8 +557,8 @@ calculate_model_project_matrix( GLcontext *ctx )
 {
    if (!ctx->_NeedEyeCoords) {
       _math_matrix_mul_matrix( &ctx->_ModelProjectMatrix,
-			       &ctx->ProjectionMatrix,
-			       &ctx->ModelView );
+			       ctx->ProjectionMatrixStack.Top,
+			       ctx->ModelviewMatrixStack.Top );
 
       _math_matrix_analyse( &ctx->_ModelProjectMatrix );
    }
@@ -540,11 +568,11 @@ static void
 update_modelview_scale( GLcontext *ctx )
 {
    ctx->_ModelViewInvScale = 1.0F;
-   if (ctx->ModelView.flags & (MAT_FLAG_UNIFORM_SCALE |
+   if (ctx->ModelviewMatrixStack.Top->flags & (MAT_FLAG_UNIFORM_SCALE |
 			       MAT_FLAG_GENERAL_SCALE |
 			       MAT_FLAG_GENERAL_3D |
 			       MAT_FLAG_GENERAL) ) {
-      const GLfloat *m = ctx->ModelView.inv;
+      const GLfloat *m = ctx->ModelviewMatrixStack.Top->inv;
       GLfloat f = m[2] * m[2] + m[6] * m[6] + m[10] * m[10];
       if (f < 1e-12) f = 1.0;
       if (ctx->_NeedEyeCoords)
@@ -623,7 +651,7 @@ update_drawbuffer( GLcontext *ctx )
 static void
 update_projection( GLcontext *ctx )
 {
-   _math_matrix_analyse( &ctx->ProjectionMatrix );
+   _math_matrix_analyse( ctx->ProjectionMatrixStack.Top );
 
    /* Recompute clip plane positions in clipspace.  This is also done
     * in _mesa_ClipPlane().
@@ -634,7 +662,7 @@ update_projection( GLcontext *ctx )
 	 if (ctx->Transform.ClipEnabled[p]) {
 	    _mesa_transform_vector( ctx->Transform._ClipUserPlane[p],
 				 ctx->Transform.EyeUserPlane[p],
-				 ctx->ProjectionMatrix.inv );
+				 ctx->ProjectionMatrixStack.Top->inv );
 	 }
       }
    }
@@ -684,7 +712,7 @@ update_image_transfer_state(GLcontext *ctx)
    if (ctx->Pixel.PostConvolutionColorTableEnabled)
       mask |= IMAGE_POST_CONVOLUTION_COLOR_TABLE_BIT;
 
-   if (ctx->ColorMatrix.type != MATRIX_IDENTITY ||
+   if (ctx->ColorMatrixStack.Top->type != MATRIX_IDENTITY ||
        ctx->Pixel.PostColorMatrixScale[0] != 1.0F ||
        ctx->Pixel.PostColorMatrixBias[0]  != 0.0F ||
        ctx->Pixel.PostColorMatrixScale[1] != 1.0F ||
@@ -726,14 +754,14 @@ update_texture_matrices( GLcontext *ctx )
    ctx->Texture._TexMatEnabled = 0;
 
    for (i=0; i < ctx->Const.MaxTextureUnits; i++) {
-      if (ctx->TextureMatrix[i].flags & MAT_DIRTY) {
-	 _math_matrix_analyse( &ctx->TextureMatrix[i] );
+      if (ctx->TextureMatrixStack[i].Top->flags & MAT_DIRTY) {
+	 _math_matrix_analyse( ctx->TextureMatrixStack[i].Top );
 
 	 if (ctx->Driver.TextureMatrix)
-	    ctx->Driver.TextureMatrix( ctx, i, &ctx->TextureMatrix[i] );
+	    ctx->Driver.TextureMatrix( ctx, i, ctx->TextureMatrixStack[i].Top);
 
 	 if (ctx->Texture.Unit[i]._ReallyEnabled &&
-	     ctx->TextureMatrix[i].type != MATRIX_IDENTITY)
+	     ctx->TextureMatrixStack[i].Top->type != MATRIX_IDENTITY)
 	    ctx->Texture._TexMatEnabled |= ENABLE_TEXMAT(i);
       }
    }
@@ -846,7 +874,7 @@ update_texture_state( GLcontext *ctx )
 	 ctx->Texture._GenFlags |= texUnit->_GenFlags;
       }
 
-      if (ctx->TextureMatrix[i].type != MATRIX_IDENTITY)
+      if (ctx->TextureMatrixStack[i].Top->type != MATRIX_IDENTITY)
 	 ctx->Texture._TexMatEnabled |= ENABLE_TEXMAT(i);
    }
 
@@ -887,7 +915,7 @@ void _mesa_update_state( GLcontext *ctx )
       _mesa_print_state("", new_state);
 
    if (new_state & _NEW_MODELVIEW)
-      _math_matrix_analyse( &ctx->ModelView );
+      _math_matrix_analyse( ctx->ModelviewMatrixStack.Top );
 
    if (new_state & _NEW_PROJECTION)
       update_projection( ctx );
@@ -896,7 +924,7 @@ void _mesa_update_state( GLcontext *ctx )
       update_texture_matrices( ctx );
 
    if (new_state & _NEW_COLOR_MATRIX)
-      _math_matrix_analyse( &ctx->ColorMatrix );
+      _math_matrix_analyse( ctx->ColorMatrixStack.Top );
 
    /* References ColorMatrix.type (derived above).
     */
@@ -925,7 +953,7 @@ void _mesa_update_state( GLcontext *ctx )
    if (new_state & (_NEW_MODELVIEW|_NEW_LIGHT)) {
       ctx->_NeedEyeCoords &= ~NEED_EYE_LIGHT_MODELVIEW;
       if (ctx->Light.Enabled &&
-	  !TEST_MAT_FLAGS( &ctx->ModelView, MAT_FLAGS_LENGTH_PRESERVING))
+	  !TEST_MAT_FLAGS( ctx->ModelviewMatrixStack.Top, MAT_FLAGS_LENGTH_PRESERVING))
 	    ctx->_NeedEyeCoords |= NEED_EYE_LIGHT_MODELVIEW;
    }
 

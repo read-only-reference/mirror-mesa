@@ -1,4 +1,4 @@
-/* $Id: dlist.c,v 1.78 2001/11/18 23:52:37 brianp Exp $ */
+/* $Id: dlist.c,v 1.84 2001/12/19 02:36:05 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -65,6 +65,7 @@
 #include "texstate.h"
 #include "mtypes.h"
 #include "varray.h"
+#include "vpstate.h"
 
 #include "math/m_matrix.h"
 #include "math/m_xform.h"
@@ -244,6 +245,14 @@ typedef enum {
         OPCODE_SAMPLE_COVERAGE,
         /* GL_ARB_window_pos */
 	OPCODE_WINDOW_POS_ARB,
+        /* GL_NV_vertex_program */
+        OPCODE_BIND_PROGRAM_NV,
+        OPCODE_EXECUTE_PROGRAM_NV,
+        OPCODE_REQUEST_PROGRAMS_RESIDENT_NV,
+        OPCODE_LOAD_PROGRAM_NV,
+        OPCODE_PROGRAM_PARAMETER4F_NV,
+        OPCODE_PROGRAM_PARAMETERS4FV_NV,
+        OPCODE_TRACK_MATRIX_NV,
 	/* The following three are meta instructions */
 	OPCODE_ERROR,	        /* raise compiled-in error */
 	OPCODE_CONTINUE,
@@ -631,6 +640,14 @@ void _mesa_init_lists( void )
       InstSize[OPCODE_ACTIVE_TEXTURE] = 2;
       /* GL_ARB_window_pos */
       InstSize[OPCODE_WINDOW_POS_ARB] = 4;
+      /* GL_NV_vertex_program */
+      InstSize[OPCODE_BIND_PROGRAM_NV] = 3;
+      InstSize[OPCODE_EXECUTE_PROGRAM_NV] = 7;
+      InstSize[OPCODE_REQUEST_PROGRAMS_RESIDENT_NV] = 2;
+      InstSize[OPCODE_LOAD_PROGRAM_NV] = 4;
+      InstSize[OPCODE_PROGRAM_PARAMETER4F_NV] = 7;
+      InstSize[OPCODE_PROGRAM_PARAMETERS4FV_NV] = 4;
+      InstSize[OPCODE_TRACK_MATRIX_NV] = 5;
    }
    init_flag = 1;
 }
@@ -2490,7 +2507,7 @@ save_PointParameterfvEXT( GLenum pname, const GLfloat *params )
       n[4].f = params[2];
    }
    if (ctx->ExecuteFlag) {
-      (*ctx->Exec->PointParameterfvARB)( pname, params );
+      (*ctx->Exec->PointParameterfvEXT)( pname, params );
    }
 }
 
@@ -3134,7 +3151,7 @@ static void save_TexParameterf( GLenum target, GLenum pname, GLfloat param )
 }
 
 
-static void save_TexParameteri( GLenum target, GLenum pname, const GLint param )
+static void save_TexParameteri( GLenum target, GLenum pname, GLint param )
 {
    GLfloat fparam[4];
    fparam[0] = (GLfloat) param;
@@ -3658,7 +3675,7 @@ static void save_ActiveTextureARB( GLenum target )
       n[1].e = target;
    }
    if (ctx->ExecuteFlag) {
-      (*ctx->Exec->ActiveTexture)( target );
+      (*ctx->Exec->ActiveTextureARB)( target );
    }
 }
 
@@ -3725,8 +3742,8 @@ save_CompressedTexImage1DARB(GLenum target, GLint level,
    GET_CURRENT_CONTEXT(ctx);
    if (target == GL_PROXY_TEXTURE_1D) {
       /* don't compile, execute immediately */
-      (*ctx->Exec->CompressedTexImage1D)(target, level, internalFormat,
-                                         width, border, imageSize, data);
+      (*ctx->Exec->CompressedTexImage1DARB)(target, level, internalFormat,
+                                            width, border, imageSize, data);
    }
    else {
       Node *n;
@@ -3753,8 +3770,8 @@ save_CompressedTexImage1DARB(GLenum target, GLint level,
          FREE(image);
       }
       if (ctx->ExecuteFlag) {
-         (*ctx->Exec->CompressedTexImage1D)(target, level, internalFormat,
-                                            width, border, imageSize, data);
+         (*ctx->Exec->CompressedTexImage1DARB)(target, level, internalFormat,
+                                               width, border, imageSize, data);
       }
    }
 }
@@ -3769,7 +3786,7 @@ save_CompressedTexImage2DARB(GLenum target, GLint level,
    GET_CURRENT_CONTEXT(ctx);
    if (target == GL_PROXY_TEXTURE_2D) {
       /* don't compile, execute immediately */
-      (*ctx->Exec->CompressedTexImage2D)(target, level, internalFormat,
+      (*ctx->Exec->CompressedTexImage2DARB)(target, level, internalFormat,
                                        width, height, border, imageSize, data);
    }
    else {
@@ -3798,7 +3815,7 @@ save_CompressedTexImage2DARB(GLenum target, GLint level,
          FREE(image);
       }
       if (ctx->ExecuteFlag) {
-         (*ctx->Exec->CompressedTexImage2D)(target, level, internalFormat,
+         (*ctx->Exec->CompressedTexImage2DARB)(target, level, internalFormat,
                                       width, height, border, imageSize, data);
       }
    }
@@ -3814,7 +3831,7 @@ save_CompressedTexImage3DARB(GLenum target, GLint level,
    GET_CURRENT_CONTEXT(ctx);
    if (target == GL_PROXY_TEXTURE_3D) {
       /* don't compile, execute immediately */
-      (*ctx->Exec->CompressedTexImage3D)(target, level, internalFormat,
+      (*ctx->Exec->CompressedTexImage3DARB)(target, level, internalFormat,
                                 width, height, depth, border, imageSize, data);
    }
    else {
@@ -3844,7 +3861,7 @@ save_CompressedTexImage3DARB(GLenum target, GLint level,
          FREE(image);
       }
       if (ctx->ExecuteFlag) {
-         (*ctx->Exec->CompressedTexImage3D)(target, level, internalFormat,
+         (*ctx->Exec->CompressedTexImage3DARB)(target, level, internalFormat,
                                 width, height, depth, border, imageSize, data);
       }
    }
@@ -3883,7 +3900,7 @@ save_CompressedTexSubImage1DARB(GLenum target, GLint level, GLint xoffset,
       FREE(image);
    }
    if (ctx->ExecuteFlag) {
-      (*ctx->Exec->CompressedTexSubImage1D)(target, level, xoffset,
+      (*ctx->Exec->CompressedTexSubImage1DARB)(target, level, xoffset,
                                             width, format, imageSize, data);
    }
 }
@@ -3924,7 +3941,7 @@ save_CompressedTexSubImage2DARB(GLenum target, GLint level, GLint xoffset,
       FREE(image);
    }
    if (ctx->ExecuteFlag) {
-      (*ctx->Exec->CompressedTexSubImage2D)(target, level, xoffset, yoffset,
+      (*ctx->Exec->CompressedTexSubImage2DARB)(target, level, xoffset, yoffset,
                                        width, height, format, imageSize, data);
    }
 }
@@ -3967,7 +3984,7 @@ save_CompressedTexSubImage3DARB(GLenum target, GLint level, GLint xoffset,
       FREE(image);
    }
    if (ctx->ExecuteFlag) {
-      (*ctx->Exec->CompressedTexSubImage3D)(target, level, xoffset, yoffset,
+      (*ctx->Exec->CompressedTexSubImage3DARB)(target, level, xoffset, yoffset,
                        zoffset, width, height, depth, format, imageSize, data);
    }
 }
@@ -3986,7 +4003,7 @@ save_SampleCoverageARB(GLclampf value, GLboolean invert)
       n[2].b = invert;
    }
    if (ctx->ExecuteFlag) {
-      (*ctx->Exec->SampleCoverage)( value, invert );
+      (*ctx->Exec->SampleCoverageARB)( value, invert );
    }
 }
 
@@ -4031,6 +4048,119 @@ save_PixelTexGenParameterfvSGIS(GLenum target, const GLfloat *value)
 }
 
 
+/*
+ * GL_NV_vertex_program
+ */
+static void
+save_BindProgramNV(GLenum target, GLuint id)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_BIND_PROGRAM_NV, 2 );
+   if (n) {
+      n[1].e = target;
+      n[2].ui = id;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->BindProgramNV)( target, id );
+   }
+}
+
+static void
+save_ExecuteProgramNV(GLenum target, GLuint id, const GLfloat *params)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_EXECUTE_PROGRAM_NV, 6 );
+   if (n) {
+      n[1].e = target;
+      n[2].ui = id;
+      n[3].f = params[0];
+      n[4].f = params[1];
+      n[5].f = params[2];
+      n[6].f = params[3];
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->ExecuteProgramNV)(target, id, params);
+   }
+}
+
+
+static void
+save_ProgramParameter4fNV(GLenum target, GLuint index,
+                          GLfloat x, GLfloat y,
+                          GLfloat z, GLfloat w)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_PROGRAM_PARAMETER4F_NV, 6 );
+   if (n) {
+      n[1].e = target;
+      n[2].ui = index;
+      n[3].f = x;
+      n[4].f = y;
+      n[5].f = z;
+      n[6].f = w;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->ProgramParameter4fNV)(target, index, x, y, z, w);
+   }
+}
+
+
+static void
+save_ProgramParameter4fvNV(GLenum target, GLuint index, const GLfloat *params)
+{
+   save_ProgramParameter4fNV(target, index, params[0], params[1],
+                             params[2], params[3]);
+}
+
+
+static void
+save_ProgramParameter4dNV(GLenum target, GLuint index,
+                          GLdouble x, GLdouble y,
+                          GLdouble z, GLdouble w)
+{
+   save_ProgramParameter4fNV(target, index, (GLfloat) x, (GLfloat) y,
+                             (GLfloat) z, (GLfloat) w);
+}
+
+
+static void
+save_ProgramParameter4dvNV(GLenum target, GLuint index,
+                           const GLdouble *params)
+{
+   save_ProgramParameter4fNV(target, index, (GLfloat) params[0],
+                             (GLfloat) params[1], (GLfloat) params[2],
+                             (GLfloat) params[3]);
+}
+
+
+static void
+save_TrackMatrixNV(GLenum target, GLuint address,
+                   GLenum matrix, GLenum transform)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_TRACK_MATRIX_NV, 4 );
+   if (n) {
+      n[1].e = target;
+      n[2].ui = address;
+      n[3].e = matrix;
+      n[4].e = transform;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->TrackMatrixNV)(target, address, matrix, transform);
+   }
+}
+
+
+
+
 /* KW: Compile commands
  *
  * Will appear in the list before the vertex buffer containing the
@@ -4047,6 +4177,21 @@ _mesa_save_error( GLcontext *ctx, GLenum error, const char *s )
    }
    /* execute already done */
 }
+
+
+/*
+ * Compile an error into current display list.
+ */
+void
+_mesa_compile_error( GLcontext *ctx, GLenum error, const char *s )
+{
+   if (ctx->CompileFlag)
+      _mesa_save_error( ctx, error, s );
+
+   if (ctx->ExecuteFlag)
+      _mesa_error( ctx, error, s );
+}
+
 
 
 static GLboolean
@@ -4487,7 +4632,7 @@ execute_list( GLcontext *ctx, GLuint list )
 		params[0] = n[2].f;
 		params[1] = n[3].f;
 		params[2] = n[4].f;
-		(*ctx->Exec->PointParameterfvARB)( n[1].e, params );
+		(*ctx->Exec->PointParameterfvEXT)( n[1].e, params );
 	    }
 	    break;
 	 case OPCODE_POLYGON_MODE:
@@ -4676,7 +4821,7 @@ execute_list( GLcontext *ctx, GLuint list )
             (*ctx->Exec->WindowPos4fMESA)( n[1].f, n[2].f, n[3].f, n[4].f );
 	    break;
          case OPCODE_ACTIVE_TEXTURE:  /* GL_ARB_multitexture */
-            (*ctx->Exec->ActiveTexture)( n[1].e );
+            (*ctx->Exec->ActiveTextureARB)( n[1].e );
             break;
          case OPCODE_PIXEL_TEXGEN_SGIX:  /* GL_SGIX_pixel_texture */
             (*ctx->Exec->PixelTexGenSGIX)( n[1].e );
@@ -4685,36 +4830,72 @@ execute_list( GLcontext *ctx, GLuint list )
             (*ctx->Exec->PixelTexGenParameteriSGIS)( n[1].e, n[2].i );
             break;
          case OPCODE_COMPRESSED_TEX_IMAGE_1D: /* GL_ARB_texture_compression */
-            (*ctx->Exec->CompressedTexImage1D)(n[1].e, n[2].i, n[3].e,
+            (*ctx->Exec->CompressedTexImage1DARB)(n[1].e, n[2].i, n[3].e,
                                             n[4].i, n[5].i, n[6].i, n[7].data);
             break;
          case OPCODE_COMPRESSED_TEX_IMAGE_2D: /* GL_ARB_texture_compression */
-            (*ctx->Exec->CompressedTexImage2D)(n[1].e, n[2].i, n[3].e,
+            (*ctx->Exec->CompressedTexImage2DARB)(n[1].e, n[2].i, n[3].e,
                                     n[4].i, n[5].i, n[6].i, n[7].i, n[8].data);
             break;
          case OPCODE_COMPRESSED_TEX_IMAGE_3D: /* GL_ARB_texture_compression */
-            (*ctx->Exec->CompressedTexImage3D)(n[1].e, n[2].i, n[3].e,
+            (*ctx->Exec->CompressedTexImage3DARB)(n[1].e, n[2].i, n[3].e,
                             n[4].i, n[5].i, n[6].i, n[7].i, n[8].i, n[9].data);
             break;
          case OPCODE_COMPRESSED_TEX_SUB_IMAGE_1D: /* GL_ARB_texture_compress */
-            (*ctx->Exec->CompressedTexSubImage1D)(n[1].e, n[2].i, n[3].i,
+            (*ctx->Exec->CompressedTexSubImage1DARB)(n[1].e, n[2].i, n[3].i,
                                             n[4].i, n[5].e, n[6].i, n[7].data);
             break;
          case OPCODE_COMPRESSED_TEX_SUB_IMAGE_2D: /* GL_ARB_texture_compress */
-            (*ctx->Exec->CompressedTexSubImage2D)(n[1].e, n[2].i, n[3].i,
+            (*ctx->Exec->CompressedTexSubImage2DARB)(n[1].e, n[2].i, n[3].i,
                             n[4].i, n[5].i, n[6].i, n[7].e, n[8].i, n[9].data);
             break;
          case OPCODE_COMPRESSED_TEX_SUB_IMAGE_3D: /* GL_ARB_texture_compress */
-            (*ctx->Exec->CompressedTexSubImage3D)(n[1].e, n[2].i, n[3].i,
+            (*ctx->Exec->CompressedTexSubImage3DARB)(n[1].e, n[2].i, n[3].i,
                                         n[4].i, n[5].i, n[6].i, n[7].i, n[8].i,
                                         n[9].e, n[10].i, n[11].data);
             break;
          case OPCODE_SAMPLE_COVERAGE: /* GL_ARB_multisample */
-            (*ctx->Exec->SampleCoverage)(n[1].f, n[2].b);
+            (*ctx->Exec->SampleCoverageARB)(n[1].f, n[2].b);
             break;
 	 case OPCODE_WINDOW_POS_ARB: /* GL_ARB_window_pos */
             (*ctx->Exec->WindowPos3fARB)( n[1].f, n[2].f, n[3].f );
 	    break;
+         case OPCODE_BIND_PROGRAM_NV: /* GL_NV_vertex_program */
+            (*ctx->Exec->BindProgramNV)( n[1].e, n[2].ui );
+            break;
+         case OPCODE_EXECUTE_PROGRAM_NV:
+            {
+               GLfloat v[4];
+               v[0] = n[3].f;
+               v[1] = n[4].f;
+               v[2] = n[5].f;
+               v[3] = n[6].f;
+               (*ctx->Exec->ExecuteProgramNV)(n[1].e, n[2].ui, v);
+            }
+            break;
+         case OPCODE_REQUEST_PROGRAMS_RESIDENT_NV:
+            /*
+            (*ctx->Exec->RequestResidentProgramsNV)();
+            */
+            break;
+         case OPCODE_LOAD_PROGRAM_NV:
+            /*
+            (*ctx->Exec->LoadProgramNV)();
+            */
+            break;
+         case OPCODE_PROGRAM_PARAMETER4F_NV:
+            (*ctx->Exec->ProgramParameter4fNV)(n[1].e, n[2].ui, n[3].f,
+                                               n[4].f, n[5].f, n[6].f);
+            break;
+         case OPCODE_PROGRAM_PARAMETERS4FV_NV:
+            /*
+            (*ctx->Exec->ProgramParameters4fvNV)();
+            */
+            break;
+         case OPCODE_TRACK_MATRIX_NV:
+            (*ctx->Exec->TrackMatrixNV)(n[1].e, n[2].ui, n[3].e, n[4].e);
+            break;
+
 	 case OPCODE_CONTINUE:
 	    n = (Node *) n[1].next;
 	    break;
@@ -5375,7 +5556,7 @@ static void exec_GetCompressedTexImageARB(GLenum target, GLint level,
 {
    GET_CURRENT_CONTEXT(ctx);
    FLUSH_VERTICES(ctx, 0);
-   ctx->Exec->GetCompressedTexImage( target, level, img);
+   ctx->Exec->GetCompressedTexImageARB( target, level, img);
 }
 
 static void exec_VertexPointer(GLint size, GLenum type, GLsizei stride,
@@ -5607,7 +5788,7 @@ static void exec_ClientActiveTextureARB( GLenum target )
 {
    GET_CURRENT_CONTEXT(ctx);
    FLUSH_VERTICES(ctx, 0);
-   ctx->Exec->ClientActiveTexture(target);
+   ctx->Exec->ClientActiveTextureARB(target);
 }
 
 static void exec_SecondaryColorPointerEXT(GLint size, GLenum type,
@@ -5927,8 +6108,8 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
 #endif
 
    /* 54. GL_EXT_point_parameters */
-   table->PointParameterfARB = save_PointParameterfEXT;
-   table->PointParameterfvARB = save_PointParameterfvEXT;
+   table->PointParameterfEXT = save_PointParameterfEXT;
+   table->PointParameterfvEXT = save_PointParameterfvEXT;
 
    /* 78. GL_EXT_paletted_texture */
 #if 0
@@ -5943,14 +6124,19 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->LockArraysEXT = exec_LockArraysEXT;
    table->UnlockArraysEXT = exec_UnlockArraysEXT;
 
-   /* GL_ARB_multitexture */
-   table->ActiveTexture = save_ActiveTextureARB;
-   table->ClientActiveTexture = exec_ClientActiveTextureARB;
+   /* 145. GL_EXT_secondary_color */
+   table->SecondaryColorPointerEXT = exec_SecondaryColorPointerEXT;
 
-   /* GL_EXT_blend_func_separate */
+   /* 149. GL_EXT_fog_coord */
+   table->FogCoordPointerEXT = exec_FogCoordPointerEXT;
+
+   /* 173. GL_EXT_blend_func_separate */
    table->BlendFuncSeparateEXT = save_BlendFuncSeparateEXT;
 
-   /* GL_MESA_window_pos */
+   /* 196. GL_MESA_resize_buffers */
+   table->ResizeBuffersMESA = exec_ResizeBuffersMESA;
+
+   /* 197. GL_MESA_window_pos */
    table->WindowPos2dMESA = save_WindowPos2dMESA;
    table->WindowPos2dvMESA = save_WindowPos2dvMESA;
    table->WindowPos2fMESA = save_WindowPos2fMESA;
@@ -5976,34 +6162,61 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->WindowPos4sMESA = save_WindowPos4sMESA;
    table->WindowPos4svMESA = save_WindowPos4svMESA;
 
-   /* GL_MESA_resize_buffers */
-   table->ResizeBuffersMESA = exec_ResizeBuffersMESA;
+   /* 233. GL_NV_vertex_program */
+   /* XXX Need to implement vertex program in display lists !!! */
+   /* The following commands DO NOT go into display lists:
+    * AreProgramsResidentNV, IsProgramNV, GenProgramsNV, DeleteProgramsNV,
+    * VertexAttribPointerNV, GetProgram*, GetVertexAttrib*
+    */
+   table->BindProgramNV = save_BindProgramNV;
+   table->DeleteProgramsNV = _mesa_DeleteProgramsNV;
+   table->ExecuteProgramNV = save_ExecuteProgramNV;
+   table->GenProgramsNV = _mesa_GenProgramsNV;
+   table->AreProgramsResidentNV = _mesa_AreProgramsResidentNV;
+   table->RequestResidentProgramsNV = _mesa_RequestResidentProgramsNV;
+   table->GetProgramParameterfvNV = _mesa_GetProgramParameterfvNV;
+   table->GetProgramParameterdvNV = _mesa_GetProgramParameterdvNV;
+   table->GetProgramivNV = _mesa_GetProgramivNV;
+   table->GetProgramStringNV = _mesa_GetProgramStringNV;
+   table->GetTrackMatrixivNV = _mesa_GetTrackMatrixivNV;
+   table->GetVertexAttribdvNV = _mesa_GetVertexAttribdvNV;
+   table->GetVertexAttribfvNV = _mesa_GetVertexAttribfvNV;
+   table->GetVertexAttribivNV = _mesa_GetVertexAttribivNV;
+   table->GetVertexAttribPointervNV = _mesa_GetVertexAttribPointervNV;
+   table->IsProgramNV = _mesa_IsProgramNV;
+   table->LoadProgramNV = _mesa_LoadProgramNV;
+   table->ProgramParameter4dNV = save_ProgramParameter4dNV;
+   table->ProgramParameter4dvNV = save_ProgramParameter4dvNV;
+   table->ProgramParameter4fNV = save_ProgramParameter4fNV;
+   table->ProgramParameter4fvNV = save_ProgramParameter4fvNV;
+   table->ProgramParameters4dvNV = _mesa_ProgramParameters4dvNV;
+   table->ProgramParameters4fvNV = _mesa_ProgramParameters4fvNV;
+   table->TrackMatrixNV = save_TrackMatrixNV;
+   table->VertexAttribPointerNV = _mesa_VertexAttribPointerNV;
 
-   /* GL_ARB_transpose_matrix */
-   table->LoadTransposeMatrixd = save_LoadTransposeMatrixdARB;
-   table->LoadTransposeMatrixf = save_LoadTransposeMatrixfARB;
-   table->MultTransposeMatrixd = save_MultTransposeMatrixdARB;
-   table->MultTransposeMatrixf = save_MultTransposeMatrixfARB;
+   /* ARB 1. GL_ARB_multitexture */
+   table->ActiveTextureARB = save_ActiveTextureARB;
+   table->ClientActiveTextureARB = exec_ClientActiveTextureARB;
 
-   /* GL_ARB_multisample */
-   table->SampleCoverage = save_SampleCoverageARB;
+   /* ARB 3. GL_ARB_transpose_matrix */
+   table->LoadTransposeMatrixdARB = save_LoadTransposeMatrixdARB;
+   table->LoadTransposeMatrixfARB = save_LoadTransposeMatrixfARB;
+   table->MultTransposeMatrixdARB = save_MultTransposeMatrixdARB;
+   table->MultTransposeMatrixfARB = save_MultTransposeMatrixfARB;
+
+   /* ARB 5. GL_ARB_multisample */
+   table->SampleCoverageARB = save_SampleCoverageARB;
 
    /* ARB 12. GL_ARB_texture_compression */
-   table->CompressedTexImage3D = save_CompressedTexImage3DARB;
-   table->CompressedTexImage2D = save_CompressedTexImage2DARB;
-   table->CompressedTexImage1D = save_CompressedTexImage1DARB;
-   table->CompressedTexSubImage3D = save_CompressedTexSubImage3DARB;
-   table->CompressedTexSubImage2D = save_CompressedTexSubImage2DARB;
-   table->CompressedTexSubImage1D = save_CompressedTexSubImage1DARB;
-   table->GetCompressedTexImage = exec_GetCompressedTexImageARB;
+   table->CompressedTexImage3DARB = save_CompressedTexImage3DARB;
+   table->CompressedTexImage2DARB = save_CompressedTexImage2DARB;
+   table->CompressedTexImage1DARB = save_CompressedTexImage1DARB;
+   table->CompressedTexSubImage3DARB = save_CompressedTexSubImage3DARB;
+   table->CompressedTexSubImage2DARB = save_CompressedTexSubImage2DARB;
+   table->CompressedTexSubImage1DARB = save_CompressedTexSubImage1DARB;
+   table->GetCompressedTexImageARB = exec_GetCompressedTexImageARB;
 
-   /* GL_EXT_secondary_color */
-   table->SecondaryColorPointerEXT = exec_SecondaryColorPointerEXT;
-
-   /* GL_EXT_fog_coord */
-   table->FogCoordPointerEXT = exec_FogCoordPointerEXT;
-
-   /* GL_ARB_window_pos */
+   /* ARB ??. GL_ARB_window_pos */
    table->WindowPos2dARB = save_WindowPos2dARB;
    table->WindowPos2dvARB = save_WindowPos2dvARB;
    table->WindowPos2fARB = save_WindowPos2fARB;

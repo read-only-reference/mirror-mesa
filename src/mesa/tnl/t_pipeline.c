@@ -1,4 +1,4 @@
-/* $Id: t_pipeline.c,v 1.19 2001/05/21 16:33:41 gareth Exp $ */
+/* $Id: t_pipeline.c,v 1.21 2001/12/15 02:13:32 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -203,6 +203,7 @@ const struct gl_pipeline_stage *_tnl_default_pipeline[] = {
    &_tnl_texgen_stage,
    &_tnl_texture_transform_stage,
    &_tnl_point_attenuation_stage,
+   &_tnl_vertex_program_stage,
    &_tnl_render_stage,
    0
 };

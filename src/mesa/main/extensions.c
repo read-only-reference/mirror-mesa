@@ -1,4 +1,4 @@
-/* $Id: extensions.c,v 1.66 2001/11/19 00:41:32 brianp Exp $ */
+/* $Id: extensions.c,v 1.68 2001/12/14 02:50:01 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -56,9 +56,12 @@ static struct {
    const char *name;
    int flag_offset;
 } default_extensions[] = {
+   { OFF, "GL_ARB_depth_texture",              F(SGIX_depth_texture) },
    { OFF, "GL_ARB_imaging",                    F(ARB_imaging) },
    { OFF, "GL_ARB_multisample",                F(ARB_multisample) },
    { OFF, "GL_ARB_multitexture",               F(ARB_multitexture) },
+   { OFF, "GL_ARB_shadow",                     F(ARB_shadow) },
+   { OFF, "GL_ARB_shadow_ambient",             F(SGIX_shadow_ambient) },
    { OFF, "GL_ARB_texture_border_clamp",       F(ARB_texture_border_clamp) },
    { OFF, "GL_ARB_texture_compression",        F(ARB_texture_compression) },
    { OFF, "GL_ARB_texture_cube_map",           F(ARB_texture_cube_map) },
@@ -109,6 +112,7 @@ static struct {
    { ON,  "GL_MESA_window_pos",                F(MESA_window_pos) },
    { OFF, "GL_NV_blend_square",                F(NV_blend_square) },
    { ON,  "GL_NV_texgen_reflection",           F(NV_texgen_reflection) },
+   { OFF, "GL_NV_vertex_program",              F(NV_vertex_program) },
    { OFF, "GL_SGI_color_matrix",               F(SGI_color_matrix) },
    { OFF, "GL_SGI_color_table",                F(SGI_color_table) },
    { OFF, "GL_SGIS_generate_mipmap",           F(SGIS_generate_mipmap) },
@@ -133,8 +137,11 @@ void
 _mesa_enable_sw_extensions(GLcontext *ctx)
 {
    const char *extensions[] = {
+      "GL_ARB_depth_texture",
       "GL_ARB_imaging",
       "GL_ARB_multitexture",
+      "GL_ARB_shadow",
+      "GL_ARB_shadow_ambient",
       "GL_ARB_texture_border_clamp",
       "GL_ARB_texture_cube_map",
       "GL_ARB_texture_env_add",
@@ -164,6 +171,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
       "GL_MESA_resize_buffers",
       "GL_NV_blend_square",
       "GL_NV_texgen_reflection",
+      "GL_NV_vertex_program",
       "GL_SGI_color_matrix",
       "GL_SGI_color_table",
       "GL_SGIS_generate_mipmap",

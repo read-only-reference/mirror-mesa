@@ -1,4 +1,4 @@
-/* $Id: t_imm_dlist.c,v 1.29 2001/09/14 21:30:31 brianp Exp $ */
+/* $Id: t_imm_dlist.c,v 1.34 2001/12/20 15:30:46 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -29,6 +29,7 @@
 
 
 #include "glheader.h"
+#include "api_compat.h"
 #include "context.h"
 #include "dlist.h"
 #include "debug.h"
@@ -86,7 +87,7 @@ static void build_normal_lengths( struct immediate *IM )
    
    for (i = 0 ; i < count ; ) {
       dest[i] = len;
-      if (flags[++i] & VERT_NORM) {
+      if (flags[++i] & VERT_NORMAL_BIT) {
 	 len = (GLfloat) LEN_3FV( data[i] );
 	 if (len > 0.0F) len = 1.0F / len;
       }
@@ -108,7 +109,7 @@ static void fixup_normal_lengths( struct immediate *IM )
    } 
 
    if (i < IM->Count) {
-      while (!(flags[i] & (VERT_NORM|VERT_END_VB))) {
+      while (!(flags[i] & (VERT_NORMAL_BIT|VERT_END_VB))) {
 	 dest[i] = len;
 	 i++;
       }
@@ -229,7 +230,7 @@ static void fixup_compiled_primitives( GLcontext *ctx, struct immediate *IM )
        * set copystart because it might skip materials?
        */
       ASSERT(IM->Start == IM->CopyStart);
-      if (i > IM->CopyStart) {
+      if (i > IM->CopyStart || !(IM->Flag[IM->Start] & VERT_BEGIN)) {
 	 IM->Primitive[IM->CopyStart] = GL_POLYGON+1;
 	 IM->PrimitiveLength[IM->CopyStart] = i - IM->CopyStart;
 	 if (IM->Flag[i] & VERT_END_VB) {
@@ -425,12 +426,18 @@ _tnl_BeginCallList( GLcontext *ctx, GLuint list )
 }
 
 
-/* Called at the tail of a CallList.  Nothing to do.
+/* Called at the tail of a CallList.  Make current immediate aware of
+ * any new to-be-copied vertices.
  */
 void
 _tnl_EndCallList( GLcontext *ctx )
 {
-   (void) ctx;
+   GLuint beginstate = 0;
+
+   if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END)
+      beginstate = VERT_BEGIN_0|VERT_BEGIN_1;
+
+   _tnl_reset_exec_input( ctx, TNL_CURRENT_IM(ctx)->Start, beginstate, 0 );
 }
 
 
@@ -591,7 +598,6 @@ static void loopback_compiled_cassette( GLcontext *ctx, struct immediate *IM )
       ASSERT((prim & PRIM_MODE_MASK) <= GL_POLYGON+1);
 
       if (prim & PRIM_BEGIN) {
-/*  	 fprintf(stderr, "begin %s\n", _mesa_prim_name[prim&PRIM_MODE_MASK]); */
 	 glBegin(prim & PRIM_MODE_MASK);
       }
 
@@ -605,38 +611,29 @@ static void loopback_compiled_cassette( GLcontext *ctx, struct immediate *IM )
 	    }
 	 }
 
-	 if (flags[i] & VERT_NORM) {
-/*  	       fprintf(stderr, "normal %d: %f %f %f\n", i, */
-/*  		       IM->Normal[i][0], IM->Normal[i][1], IM->Normal[i][2]);  */
+	 if (flags[i] & VERT_NORMAL_BIT) 
 	    glNormal3fv(IM->Normal[i]);
-	 }
 
-	 if (flags[i] & VERT_RGBA) {
-/*  	       fprintf(stderr, "color %d: %f %f %f\n", i, */
-/*  		       IM->Color[i][0], IM->Color[i][1], IM->Color[i][2]);  */
+	 if (flags[i] & VERT_COLOR0_BIT) 
 	    glColor4fv( IM->Color[i] );
-	 }
 
-	 if (flags[i] & VERT_SPEC_RGB)
-	    glSecondaryColor3fvEXT( IM->SecondaryColor[i] );
+	 if (flags[i] & VERT_COLOR1_BIT)
+	    _compat_SecondaryColor3fvEXT( IM->SecondaryColor[i] );
 
-	 if (flags[i] & VERT_FOG_COORD)
-	    glFogCoordfEXT( IM->FogCoord[i] );
+	 if (flags[i] & VERT_FOG_BIT)
+	    _compat_FogCoordfEXT( IM->FogCoord[i] );
 
-	 if (flags[i] & VERT_INDEX)
+	 if (flags[i] & VERT_INDEX_BIT)
 	    glIndexi( IM->Index[i] );
 
-	 if (flags[i] & VERT_EDGE)
+	 if (flags[i] & VERT_EDGEFLAG_BIT)
 	    glEdgeFlag( IM->EdgeFlag[i] );
 
 	 if (flags[i] & VERT_MATERIAL) 
 	    emit_material( IM->Material[i], IM->MaterialMask[i] );
 
-	 if (flags[i]&VERT_OBJ_234) {
-/*  	       fprintf(stderr, "vertex %d: %f %f %f\n", i, */
-/*  		       IM->Obj[i][0], IM->Obj[i][1], IM->Obj[i][2]); */
+	 if (flags[i]&VERT_OBJ_234) 
 	    vertex( IM->Obj[i] );
-	 }
 	 else if (flags[i] & VERT_EVAL_C1)
 	    glEvalCoord1f( IM->Obj[i][0] );
 	 else if (flags[i] & VERT_EVAL_P1)
@@ -648,7 +645,6 @@ static void loopback_compiled_cassette( GLcontext *ctx, struct immediate *IM )
       }
 
       if (prim & PRIM_END) {
-/*  	 fprintf(stderr, "end\n"); */
 	 glEnd();
       }
    }

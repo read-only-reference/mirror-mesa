@@ -1,4 +1,4 @@
-/* $Id: t_vb_normals.c,v 1.9 2001/06/28 17:34:14 keithw Exp $ */
+/* $Id: t_vb_normals.c,v 1.11 2001/12/18 04:06:46 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -62,7 +62,7 @@ static GLboolean run_normal_stage( GLcontext *ctx,
    ASSERT(store->NormalTransform);
 
    if (stage->changed_inputs)
-      store->NormalTransform( &ctx->ModelView,
+      store->NormalTransform( ctx->ModelviewMatrixStack.Top,
 			      ctx->_ModelViewInvScale,
 			      VB->NormalPtr,
 			      VB->NormalLengthPtr,
@@ -84,7 +84,7 @@ static GLboolean run_validate_normal_stage( GLcontext *ctx,
    if (ctx->_NeedEyeCoords) {
       GLuint transform = NORM_TRANSFORM_NO_ROT;
 
-      if (ctx->ModelView.flags & (MAT_FLAG_GENERAL |
+      if (ctx->ModelviewMatrixStack.Top->flags & (MAT_FLAG_GENERAL |
 				  MAT_FLAG_ROTATION |
 				  MAT_FLAG_GENERAL_3D |
 				  MAT_FLAG_PERSPECTIVE))
@@ -128,7 +128,7 @@ static GLboolean run_validate_normal_stage( GLcontext *ctx,
 static void check_normal_transform( GLcontext *ctx,
 				    struct gl_pipeline_stage *stage )
 {
-   stage->active = ctx->_NeedNormals;
+   stage->active = ctx->_NeedNormals && !ctx->VertexProgram.Enabled;
    /* Don't clobber the initialize function:
     */
    if (stage->privatePtr)
@@ -175,11 +175,14 @@ static void free_normal_data( struct gl_pipeline_stage *stage )
 
 const struct gl_pipeline_stage _tnl_normal_transform_stage =
 {
-   "normal transform",
+   "normal transform",		/* name */
    _TNL_NEW_NORMAL_TRANSFORM,	/* re-check */
    _TNL_NEW_NORMAL_TRANSFORM,	/* re-run */
-   0,VERT_NORM,VERT_NORM,	/* active, inputs, outputs */
-   0, 0,			/* changed_inputs, private */
+   GL_FALSE,			/* active? */
+   VERT_NORMAL_BIT,		/* inputs */
+   VERT_NORMAL_BIT,		/* outputs */
+   0,				/* changed_inputs */
+   NULL,			/* private data */
    free_normal_data,		/* destructor */
    check_normal_transform,	/* check */
    alloc_normal_data		/* run -- initially set to alloc */
