@@ -1390,9 +1390,9 @@ struct gl_constants {
    GLint Max3DTextureLevels;
    GLint MaxCubeTextureLevels;          /* GL_ARB_texture_cube_map */
    GLint MaxTextureRectSize;            /* GL_NV_texture_rectangle */
-   GLuint MaxTextureUnits;
    GLuint MaxTextureCoordUnits;
    GLuint MaxTextureImageUnits;
+   GLuint MaxTextureUnits;              /* = MAX(CoordUnits, ImageUnits) */
    GLfloat MaxTextureMaxAnisotropy;	/* GL_EXT_texture_filter_anisotropic */
    GLfloat MaxTextureLodBias;           /* GL_EXT_texture_lod_bias */
    GLuint MaxArrayLockSize;
@@ -1409,6 +1409,8 @@ struct gl_constants {
    GLuint MaxConvolutionHeight;
    GLuint MaxClipPlanes;
    GLuint MaxLights;
+   GLfloat MaxShininess;			/* GL_NV_light_max_exponent */
+   GLfloat MaxSpotExponent;			/* GL_NV_light_max_exponent */
    /* GL_ARB_vertex_program */
    GLuint MaxVertexProgramInstructions;
    GLuint MaxVertexProgramAttribs;
@@ -1500,6 +1502,7 @@ struct gl_extensions {
    GLboolean MESA_ycbcr_texture;
    GLboolean NV_blend_square;
    GLboolean NV_fragment_program;
+   GLboolean NV_light_max_exponent;
    GLboolean NV_point_sprite;
    GLboolean NV_texture_rectangle;
    GLboolean NV_texgen_reflection;

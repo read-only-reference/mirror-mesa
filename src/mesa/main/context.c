@@ -507,33 +507,35 @@ _mesa_free_framebuffer_data( GLframebuffer *buffer )
    if (!buffer)
       return;
 
-   if (buffer->DepthBuffer) {
+   if (buffer->UseSoftwareDepthBuffer && buffer->DepthBuffer) {
       MESA_PBUFFER_FREE( buffer->DepthBuffer );
       buffer->DepthBuffer = NULL;
    }
-   if (buffer->Accum) {
+   if (buffer->UseSoftwareAccumBuffer && buffer->Accum) {
       MESA_PBUFFER_FREE( buffer->Accum );
       buffer->Accum = NULL;
    }
-   if (buffer->Stencil) {
+   if (buffer->UseSoftwareStencilBuffer && buffer->Stencil) {
       MESA_PBUFFER_FREE( buffer->Stencil );
       buffer->Stencil = NULL;
    }
-   if (buffer->FrontLeftAlpha) {
-      MESA_PBUFFER_FREE( buffer->FrontLeftAlpha );
-      buffer->FrontLeftAlpha = NULL;
-   }
-   if (buffer->BackLeftAlpha) {
-      MESA_PBUFFER_FREE( buffer->BackLeftAlpha );
-      buffer->BackLeftAlpha = NULL;
-   }
-   if (buffer->FrontRightAlpha) {
-      MESA_PBUFFER_FREE( buffer->FrontRightAlpha );
-      buffer->FrontRightAlpha = NULL;
-   }
-   if (buffer->BackRightAlpha) {
-      MESA_PBUFFER_FREE( buffer->BackRightAlpha );
-      buffer->BackRightAlpha = NULL;
+   if (buffer->UseSoftwareAlphaBuffers){
+      if (buffer->FrontLeftAlpha) {
+         MESA_PBUFFER_FREE( buffer->FrontLeftAlpha );
+         buffer->FrontLeftAlpha = NULL;
+      }
+      if (buffer->BackLeftAlpha) {
+         MESA_PBUFFER_FREE( buffer->BackLeftAlpha );
+         buffer->BackLeftAlpha = NULL;
+      }
+      if (buffer->FrontRightAlpha) {
+         MESA_PBUFFER_FREE( buffer->FrontRightAlpha );
+         buffer->FrontRightAlpha = NULL;
+      }
+      if (buffer->BackRightAlpha) {
+         MESA_PBUFFER_FREE( buffer->BackRightAlpha );
+         buffer->BackRightAlpha = NULL;
+      }
    }
 }
 
@@ -986,6 +988,8 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Const.MaxConvolutionHeight = MAX_CONVOLUTION_HEIGHT;
    ctx->Const.MaxClipPlanes = MAX_CLIP_PLANES;
    ctx->Const.MaxLights = MAX_LIGHTS;
+   ctx->Const.MaxSpotExponent = 128.0;
+   ctx->Const.MaxShininess = 128.0;
 #if FEATURE_ARB_vertex_program
    ctx->Const.MaxVertexProgramInstructions = MAX_NV_VERTEX_PROGRAM_INSTRUCTIONS;
    ctx->Const.MaxVertexProgramAttribs = MAX_NV_VERTEX_PROGRAM_INPUTS;
@@ -1008,6 +1012,7 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Const.MaxProgramMatrices = MAX_PROGRAM_MATRICES;
    ctx->Const.MaxProgramMatrixStackDepth = MAX_PROGRAM_MATRIX_STACK_DEPTH;
 
+   ASSERT(ctx->Const.MaxTextureUnits == MAX2(ctx->Const.MaxTextureImageUnits, ctx->Const.MaxTextureCoordUnits));
 
    /* Initialize matrix stacks */
    init_matrix_stack(&ctx->ModelviewMatrixStack, MAX_MODELVIEW_STACK_DEPTH,

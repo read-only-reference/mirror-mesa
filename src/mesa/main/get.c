@@ -33,8 +33,8 @@
 #include "macros.h"
 #include "mtypes.h"
 #include "texcompress.h"
+#include "version.h"
 #include "math/m_matrix.h"
-
 
 
 #define FLOAT_TO_BOOL(X)	( (X)==0.0F ? GL_FALSE : GL_TRUE )
@@ -1002,7 +1002,8 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
       /* GL_ARB_multitexture */
       case GL_MAX_TEXTURE_UNITS_ARB:
          CHECK_EXTENSION_B(ARB_multitexture, pname);
-         *params = INT_TO_BOOL(ctx->Const.MaxTextureUnits);
+         *params = INT_TO_BOOL(MIN2(ctx->Const.MaxTextureImageUnits,
+                                    ctx->Const.MaxTextureCoordUnits));
          break;
       case GL_ACTIVE_TEXTURE_ARB:
          CHECK_EXTENSION_B(ARB_multitexture, pname);
@@ -1517,6 +1518,16 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = ENUM_TO_BOOL(ctx->Stencil.ActiveFace ? GL_BACK : GL_FRONT);
          break;
 
+      /* GL_NV_light_max_exponent */
+      case GL_MAX_SHININESS_NV:
+         CHECK_EXTENSION_B(NV_light_max_exponent, pname);
+         *params = FLOAT_TO_BOOL(ctx->Const.MaxShininess);
+         break;
+      case GL_MAX_SPOT_EXPONENT_NV:
+         CHECK_EXTENSION_B(NV_light_max_exponent, pname);
+         *params = FLOAT_TO_BOOL(ctx->Const.MaxSpotExponent);
+         break;
+         
 #if FEATURE_ARB_vertex_buffer_object
       case GL_ARRAY_BUFFER_BINDING_ARB:
          CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
@@ -2501,7 +2512,8 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       /* GL_ARB_multitexture */
       case GL_MAX_TEXTURE_UNITS_ARB:
          CHECK_EXTENSION_D(ARB_multitexture, pname);
-         *params = (GLdouble) ctx->Const.MaxTextureUnits;
+         *params = (GLdouble) MIN2(ctx->Const.MaxTextureImageUnits,
+                                   ctx->Const.MaxTextureCoordUnits);
          break;
       case GL_ACTIVE_TEXTURE_ARB:
          CHECK_EXTENSION_D(ARB_multitexture, pname);
@@ -3012,6 +3024,16 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       case GL_ACTIVE_STENCIL_FACE_EXT:
          CHECK_EXTENSION_D(EXT_stencil_two_side, pname);
          *params = (GLdouble) (ctx->Stencil.ActiveFace ? GL_BACK : GL_FRONT);
+         break;
+
+      /* GL_NV_light_max_exponent */
+      case GL_MAX_SHININESS_NV:
+         CHECK_EXTENSION_D(NV_light_max_exponent, pname);
+         *params = (GLdouble) ctx->Const.MaxShininess;
+         break;
+      case GL_MAX_SPOT_EXPONENT_NV:
+         CHECK_EXTENSION_D(NV_light_max_exponent, pname);
+         *params = (GLdouble) ctx->Const.MaxSpotExponent;
          break;
 
 #if FEATURE_ARB_vertex_buffer_object
@@ -4000,7 +4022,8 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       /* GL_ARB_multitexture */
       case GL_MAX_TEXTURE_UNITS_ARB:
          CHECK_EXTENSION_F(ARB_multitexture, pname);
-         *params = (GLfloat) ctx->Const.MaxTextureUnits;
+         *params = (GLfloat) MIN2(ctx->Const.MaxTextureImageUnits,
+                                  ctx->Const.MaxTextureCoordUnits);
          break;
       case GL_ACTIVE_TEXTURE_ARB:
          CHECK_EXTENSION_F(ARB_multitexture, pname);
@@ -4485,6 +4508,16 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_ACTIVE_STENCIL_FACE_EXT:
          CHECK_EXTENSION_F(EXT_stencil_two_side, pname);
          *params = (GLfloat) (ctx->Stencil.ActiveFace ? GL_BACK : GL_FRONT);
+         break;
+
+      /* GL_NV_light_max_exponent */
+      case GL_MAX_SHININESS_NV:
+         CHECK_EXTENSION_F(NV_light_max_exponent, pname);
+         *params = ctx->Const.MaxShininess;
+         break;
+      case GL_MAX_SPOT_EXPONENT_NV:
+         CHECK_EXTENSION_F(NV_light_max_exponent, pname);
+         *params = ctx->Const.MaxSpotExponent;
          break;
 
 #if FEATURE_ARB_vertex_buffer_object
@@ -5472,7 +5505,8 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       /* GL_ARB_multitexture */
       case GL_MAX_TEXTURE_UNITS_ARB:
          CHECK_EXTENSION_I(ARB_multitexture, pname);
-         *params = ctx->Const.MaxTextureUnits;
+         *params = MIN2(ctx->Const.MaxTextureImageUnits,
+                        ctx->Const.MaxTextureCoordUnits);
          break;
       case GL_ACTIVE_TEXTURE_ARB:
          CHECK_EXTENSION_I(ARB_multitexture, pname);
@@ -5998,6 +6032,16 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) (ctx->Stencil.ActiveFace ? GL_BACK : GL_FRONT);
          break;
 
+      /* GL_NV_light_max_exponent */
+      case GL_MAX_SHININESS_NV:
+         CHECK_EXTENSION_I(NV_light_max_exponent, pname);
+         *params = (GLint) ctx->Const.MaxShininess;
+         break;
+      case GL_MAX_SPOT_EXPONENT_NV:
+         CHECK_EXTENSION_I(NV_light_max_exponent, pname);
+         *params = (GLint) ctx->Const.MaxSpotExponent;
+         break;
+
 #if FEATURE_ARB_vertex_buffer_object
       case GL_ARRAY_BUFFER_BINDING_ARB:
          CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
@@ -6154,9 +6198,9 @@ _mesa_GetString( GLenum name )
    GET_CURRENT_CONTEXT(ctx);
    static const char *vendor = "Brian Paul";
    static const char *renderer = "Mesa";
-   static const char *version_1_2 = "1.2 Mesa 5.1";
-   static const char *version_1_3 = "1.3 Mesa 5.1";
-   static const char *version_1_4 = "1.4 Mesa 5.1";
+   static const char *version_1_2 = "1.2 Mesa " MESA_VERSION_STRING;
+   static const char *version_1_3 = "1.3 Mesa " MESA_VERSION_STRING;
+   static const char *version_1_4 = "1.4 Mesa " MESA_VERSION_STRING;
 
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, 0);
 

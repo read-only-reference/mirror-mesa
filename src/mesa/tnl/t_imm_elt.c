@@ -584,8 +584,9 @@ static void init_translate_elt(void)
 #undef CLASS
 #undef ARGS
 #undef CHECK
+#ifdef START
 #undef START
-
+#endif
 
 
 
@@ -855,7 +856,7 @@ void _tnl_translate_array_elts( GLcontext *ctx, struct immediate *IM,
 
    if (translateConventional & VERT_BITS_TEX_ANY) {
       GLuint i;
-      for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++)
+      for (i = 0 ; i < ctx->Const.MaxTextureCoordUnits ; i++)
 	 if (translateConventional & VERT_BIT_TEX(i)) {
             _tnl_trans_elt_4f( IM->Attrib[VERT_ATTRIB_TEX0 + i],
                                &ctx->Array.TexCoord[i],
