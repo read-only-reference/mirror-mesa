@@ -50,6 +50,8 @@
 #include <signal.h>
 #endif
 
+#include "drm.h"
+#include "drm_sarea.h"
 #include "tdfx_glide.h"
 
 #include "clip.h"
@@ -769,7 +771,7 @@ struct tdfx_glide {
                       int textureOffset, int textureSize,
                       volatile int *fifoPtr, volatile int *fifoRead );
    void (*grDRIPosition)( int x, int y, int w, int h,
-                          int numClip, XF86DRIClipRectPtr pClip );
+                          int numClip, drm_clip_rect_t *pClip );
    void (*grDRILostContext)( void );
    void (*grDRIImportFifo)( int fifoPtr, int fifoRead );
    void (*grDRIInvalidateAll)( void );
@@ -913,7 +915,7 @@ struct tdfx_context {
    __DRIcontextPrivate *driContext;
    __DRIdrawablePrivate *driDrawable;
    drmContext hHWContext;
-   drmLock *driHwLock;
+   drm_hw_lock_t *driHwLock;
    int driFd;
    tdfxScreenPrivate *fxScreen;
    TDFXSAREAPriv *sarea;
@@ -928,7 +930,7 @@ struct tdfx_context {
    int y_delta;         /* distance from window bottom to screen bottom */
 
    int numClipRects;
-   XF86DRIClipRectPtr pClipRects;
+   drm_clip_rect_t *pClipRects;
    GLboolean scissoredClipRects;  /* if true, pClipRects is private storage */
 
    GuTexPalette glbPalette;         /* global texture palette */

@@ -248,7 +248,27 @@ struct tnl_copied_vtx {
 
 #define VERT_BUFFER_SIZE 2048	/* 8kbytes */
 
+
 typedef void (*attrfv_func)( const GLfloat * );
+
+struct _tnl_dynfn {
+   struct _tnl_dynfn *next, *prev;
+   int key;
+   char *code;
+};
+
+struct _tnl_dynfn_lists {
+   struct _tnl_dynfn Vertex[4];
+   struct _tnl_dynfn Attribute[4];
+};
+
+struct _tnl_dynfn_generators {
+   struct _tnl_dynfn *(*Vertex[4])( GLcontext *ctx, int key );
+   struct _tnl_dynfn *(*Attribute[4])( GLcontext *ctx, int key );
+};
+
+#define _TNL_MAX_ATTR_CODEGEN 16 
+
 
 /* The assembly of vertices in immediate mode is separated from
  * display list compilation.  This allows a simpler immediate mode
@@ -267,7 +287,12 @@ struct tnl_vtx {
    GLfloat *current[_TNL_ATTRIB_MAX]; /* points into ctx->Current, etc */
    GLuint counter, initial_counter;
    struct tnl_copied_vtx copied;
-   attrfv_func tabfv[_TNL_ATTRIB_MAX][4];
+
+   attrfv_func tabfv[_TNL_MAX_ATTR_CODEGEN+1][4]; /* plus 1 for ERROR_ATTRIB */
+
+   struct _tnl_dynfn_lists cache;
+   struct _tnl_dynfn_generators gen;
+
    struct tnl_eval eval;
    GLboolean *edgeflag_tmp;
    GLboolean have_materials;
@@ -507,17 +532,21 @@ typedef void (*insert_func)( const struct tnl_clipspace_attr *a, GLubyte *v,
 			     const GLfloat *in );
 
 
+/**
+ * Describes how to convert/move a vertex attribute from a vertex array
+ * to a vertex structure.
+ */
 struct tnl_clipspace_attr
 {
-   int attrib;
-   int vertoffset;
-   int vertattrsize;
+   GLuint attrib;          /* which vertex attrib (0=position, etc) */
+   GLuint vertoffset;      /* position of the attrib in the vertex struct */
+   GLuint vertattrsize;    /* size of the attribute in bytes */
    GLubyte *inputptr;
-   int inputstride;
+   GLuint inputstride;
    insert_func *insert;
    insert_func emit;
    extract_func extract;
-   const GLfloat *vp;
+   const GLfloat *vp;   /* NDC->Viewport mapping matrix */
 };
 
 
@@ -539,8 +568,10 @@ typedef void (*setup_func)( GLcontext *ctx,
 			    GLuint new_inputs);
 
 
-
-
+/**
+ * Used to describe conversion of vertex arrays to vertex structures.
+ * I.e. Structure of arrays to arrays of structs.
+ */
 struct tnl_clipspace
 {
    GLboolean need_extras;
@@ -706,6 +737,7 @@ typedef struct
    GLboolean IsolateMaterials;
    GLboolean AllowVertexFog;
    GLboolean AllowPixelFog;
+   GLboolean AllowCodegen;
 
    GLboolean _DoVertexFog;  /* eval fog function at each vertex? */
 

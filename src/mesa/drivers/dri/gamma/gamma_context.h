@@ -28,6 +28,8 @@
 #define _GAMMA_CONTEXT_H_
 
 #include "dri_util.h"
+#include "drm.h"
+#include "drm_sarea.h"
 #include "colormac.h"
 #include "gamma_regs.h"
 #include "gamma_macros.h"
@@ -158,13 +160,13 @@ struct gamma_texture_object_t {
       int internalFormat;
    } image[GAMMA_TEX_MAXLEVELS];
 
-   CARD32 TextureBaseAddr[GAMMA_TEX_MAXLEVELS];
-   CARD32 TextureAddressMode;
-   CARD32 TextureColorMode;
-   CARD32 TextureFilterMode;
-   CARD32 TextureFormat;
-   CARD32 TextureReadMode;
-   CARD32 TextureBorderColor;
+   uint32_t TextureBaseAddr[GAMMA_TEX_MAXLEVELS];
+   uint32_t TextureAddressMode;
+   uint32_t TextureColorMode;
+   uint32_t TextureFilterMode;
+   uint32_t TextureFormat;
+   uint32_t TextureReadMode;
+   uint32_t TextureBorderColor;
 };		
 
 #define GAMMA_NO_PALETTE        0x0
@@ -242,11 +244,11 @@ struct gamma_context {
    	/* Mirrors of some DRI state
     	 */
    	drmContext hHWContext;
-   	drmLock *driHwLock;
+   	drm_hw_lock_t *driHwLock;
    	int driFd;
 
    	GLuint numClipRects;		   /* Cliprects for the draw buffer */
-   	XF86DRIClipRectPtr pClipRects;
+   	drm_clip_rect_t *pClipRects;
 
     	dmaBuf              buf;           /* DMA buffer for regular cmds */
     	int                 bufIndex;
@@ -298,18 +300,18 @@ struct gamma_context {
    	unsigned int lastStamp;
    
 
-    	CARD32 			ClearColor;
-	CARD32			Color;
-	CARD32			DitherMode;
-    	CARD32			ClearDepth;
-	CARD32			FogMode;
-	CARD32			AreaStippleMode;
-	CARD32			LBReadFormat;
-	CARD32			LBWriteFormat;
-	CARD32			LineMode;
-	CARD32			PointMode;
-	CARD32			TriangleMode;
-	CARD32			AntialiasMode;
+    	uint32_t 		ClearColor;
+	uint32_t		Color;
+	uint32_t		DitherMode;
+    	uint32_t		ClearDepth;
+	uint32_t		FogMode;
+	uint32_t		AreaStippleMode;
+	uint32_t		LBReadFormat;
+	uint32_t		LBWriteFormat;
+	uint32_t		LineMode;
+	uint32_t		PointMode;
+	uint32_t		TriangleMode;
+	uint32_t		AntialiasMode;
 	GLfloat			ViewportScaleX;
 	GLfloat			ViewportScaleY;
 	GLfloat			ViewportScaleZ;

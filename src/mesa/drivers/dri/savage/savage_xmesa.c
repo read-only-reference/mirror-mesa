@@ -234,6 +234,7 @@ savageCreateContext( const __GLcontextModes *mesaVis,
    savageScreenPrivate *savageScreen = (savageScreenPrivate *)sPriv->private;
    drm_savage_sarea_t *saPriv=(drm_savage_sarea_t *)(((char*)sPriv->pSAREA)+
 						 savageScreen->sarea_priv_offset);
+   GLuint maxTextureSize, minTextureSize, maxTextureLevels;
    int i;
    imesa = (savageContextPtr)Xcalloc(sizeof(savageContext), 1);
    if (!imesa) {
@@ -257,24 +258,45 @@ savageCreateContext( const __GLcontextModes *mesaVis,
    }
    driContextPriv->driverPrivate = imesa;
 
-   /*   BEGIN;*/
-   /* Set the maximum texture size small enough that we can guarentee
-    * that both texture units can bind a maximal texture and have them
-    * in memory at once.
-    */
-   if (savageScreen->textureSize[SAVAGE_CARD_HEAP] < 2*1024*1024) {
-      ctx->Const.MaxTextureLevels = 9;
-   } else if (savageScreen->textureSize[SAVAGE_CARD_HEAP] < 8*1024*1024) {
-      ctx->Const.MaxTextureLevels = 10;
-   } else {
-      ctx->Const.MaxTextureLevels = 11;
-   }
    if (savageScreen->chipset >= S3_SAVAGE4)
        ctx->Const.MaxTextureUnits = 2;
    else
        ctx->Const.MaxTextureUnits = 1;
    ctx->Const.MaxTextureImageUnits = ctx->Const.MaxTextureUnits;
    ctx->Const.MaxTextureCoordUnits = ctx->Const.MaxTextureUnits;
+
+   /* Set the maximum texture size small enough that we can guarentee
+    * that all texture units can bind a maximal texture and have them
+    * in memory at once.
+    */
+   if (savageScreen->textureSize[SAVAGE_CARD_HEAP] >
+       savageScreen->textureSize[SAVAGE_AGP_HEAP]) {
+       maxTextureSize = savageScreen->textureSize[SAVAGE_CARD_HEAP];
+       minTextureSize = savageScreen->textureSize[SAVAGE_AGP_HEAP];
+   } else {
+       maxTextureSize = savageScreen->textureSize[SAVAGE_AGP_HEAP];
+       minTextureSize = savageScreen->textureSize[SAVAGE_CARD_HEAP];
+   }
+   if (ctx->Const.MaxTextureUnits == 2) {
+       /* How to distribute two maximum sized textures to two texture heaps?
+	* If the smaller heap is less then half the size of the bigger one
+	* then the maximum size is half the size of the bigger heap.
+	* Otherwise it's the size of the smaller heap. */
+       if (minTextureSize < maxTextureSize / 2)
+	   maxTextureSize = maxTextureSize / 2;
+       else
+	   maxTextureSize = minTextureSize;
+   }
+   for (maxTextureLevels = 1; maxTextureLevels <= 11; ++maxTextureLevels) {
+       GLuint size = 1 << maxTextureLevels;
+       size *= size * 4; /* 4 bytes per texel */
+       size *= 2; /* all mipmap levels together take roughly twice the size of
+		     the biggest level */
+       if (size > maxTextureSize)
+	   break;
+   }
+   ctx->Const.MaxTextureLevels = maxTextureLevels;
+   assert (ctx->Const.MaxTextureLevels > 6); /*spec requires at least 64x64*/
 
 #if 0
    ctx->Const.MinLineWidth = 1.0;
@@ -408,6 +430,13 @@ savageCreateContext( const __GLcontextModes *mesaVis,
    imesa->depth_scale = (imesa->savageScreen->zpp == 2) ?
        (1.0F/0x10000):(1.0F/0x1000000);
 
+   imesa->vertex_dma_buffer = NULL;
+
+   /* Uninitialized vertex format. Force setting the vertex state in
+    * savageRenderStart.
+    */
+   imesa->vertex_size = 0;
+
    /* Utah stuff
     */
    imesa->new_state = ~0;
@@ -470,6 +499,8 @@ savageDestroyContext(__DRIcontextPrivate *driContextPriv)
    assert (imesa); /* should never be NULL */
    if (imesa) {
       savageTextureObjectPtr next_t, t;
+
+      FLUSH_BATCH(imesa);
 
       /* update for multi-tex*/ 
       {
@@ -587,10 +618,10 @@ static void savageXMesaWindowMoved( savageContextPtr imesa )
       fprintf(stderr, "savageXMesaWindowMoved\n\n");
 
    switch (imesa->glCtx->Color._DrawDestMask) {
-   case FRONT_LEFT_BIT:
+   case DD_FRONT_LEFT_BIT:
       savageXMesaSetFrontClipRects( imesa );
       break;
-   case BACK_LEFT_BIT:
+   case DD_BACK_LEFT_BIT:
       savageXMesaSetBackClipRects( imesa );
       break;
    default:

@@ -33,6 +33,7 @@
 #include "glheader.h"
 #include "hash.h"
 #include "imports.h"
+#include "image.h"
 #include "context.h"
 #include "bufferobj.h"
 
@@ -59,6 +60,12 @@ buffer_object_get_target( GLcontext *ctx, GLenum target, const char * str )
          break;
       case GL_ELEMENT_ARRAY_BUFFER_ARB:
          bufObj = ctx->Array.ElementArrayBufferObj;
+         break;
+      case GL_PIXEL_PACK_BUFFER_EXT:
+         bufObj = ctx->Pack.BufferObj;
+         break;
+      case GL_PIXEL_UNPACK_BUFFER_EXT:
+         bufObj = ctx->Unpack.BufferObj;
          break;
       default:
          _mesa_error(ctx, GL_INVALID_ENUM, "gl%s(target)", str);
@@ -145,7 +152,7 @@ _mesa_new_buffer_object( GLcontext *ctx, GLuint name, GLenum target )
  * Delete a buffer object.
  * 
  * This function is intended to be called via
- * \c dd_function_table::DeleteBufferObject.
+ * \c dd_function_table::DeleteBuffer.
  */
 void
 _mesa_delete_buffer_object( GLcontext *ctx, struct gl_buffer_object *bufObj )
@@ -358,6 +365,59 @@ _mesa_init_buffer_objects( GLcontext *ctx )
 }
 
 
+/**
+ * When we're about to read pixel data out of a PBO (via glDrawPixels,
+ * glTexImage, etc) or write data into a PBO (via glReadPixels,
+ * glGetTexImage, etc) we call this function to check that we're not
+ * going to read out of bounds.
+ *
+ * \param ctx  the rendering context
+ * \param width  width of image to read/write
+ * \param height  height of image to read/write
+ * \param depth  depth of image to read/write
+ * \param format  format of image to read/write
+ * \param type  datatype of image to read/write
+ * \param ptr  the user-provided pointer/offset
+ * \return GL_TRUE if the PBO access is OK, GL_FALSE if the access would
+ *         go out of bounds.
+ */
+GLboolean
+_mesa_validate_pbo_access(const struct gl_pixelstore_attrib *pack,
+                          GLsizei width, GLsizei height, GLsizei depth,
+                          GLenum format, GLenum type, const GLvoid *ptr)
+{
+   GLvoid *start, *end;
+
+   ASSERT(pack->BufferObj->Name != 0);
+
+   if (pack->BufferObj->Size == 0)
+      /* no buffer! */
+      return GL_FALSE;
+
+   /* get address of first pixel we'll read */
+   start = _mesa_image_address(pack, ptr, width, height,
+                               format, type, 0, 0, 0);
+
+   /* get address just past the last pixel we'll read */
+   end =  _mesa_image_address(pack, ptr, width, height,
+                              format, type, depth-1, height-1, width);
+
+
+   if ((const GLubyte *) start > (const GLubyte *) pack->BufferObj->Size) {
+      /* This will catch negative values / wrap-around */
+      return GL_FALSE;
+   }
+   if ((const GLubyte *) end > (const GLubyte *) pack->BufferObj->Size) {
+      /* Image read goes beyond end of buffer */
+      return GL_FALSE;
+   }
+
+   /* OK! */
+   return GL_TRUE;
+}
+
+
+
 
 /**********************************************************************/
 /* API Functions                                                      */
@@ -407,6 +467,15 @@ _mesa_BindBufferARB(GLenum target, GLuint buffer)
       case GL_ELEMENT_ARRAY_BUFFER_ARB:
          ctx->Array.ElementArrayBufferObj = newBufObj;
          break;
+      case GL_PIXEL_PACK_BUFFER_EXT:
+         ctx->Pack.BufferObj = newBufObj;
+         break;
+      case GL_PIXEL_UNPACK_BUFFER_EXT:
+         ctx->Unpack.BufferObj = newBufObj;
+         break;
+      default:
+         _mesa_problem(ctx, "Bad target in _mesa_BindBufferARB");
+         return;
    }
 
    /* Pass BindBuffer call to device driver */
@@ -454,41 +523,71 @@ _mesa_DeleteBuffersARB(GLsizei n, const GLuint *ids)
             /* unbind any vertex pointers bound to this buffer */
             GLuint j;
 
-            ASSERT(bufObj->Name != 0);
+            ASSERT(bufObj->Name == ids[i]);
 
-            if (ctx->Array.Vertex.BufferObj == bufObj)
+            if (ctx->Array.Vertex.BufferObj == bufObj) {
+               bufObj->RefCount--;
                ctx->Array.Vertex.BufferObj = ctx->Array.NullBufferObj;
-            if (ctx->Array.Normal.BufferObj == bufObj)
+            }
+            if (ctx->Array.Normal.BufferObj == bufObj) {
+               bufObj->RefCount--;
                ctx->Array.Normal.BufferObj = ctx->Array.NullBufferObj;
-            if (ctx->Array.Color.BufferObj == bufObj)
+            }
+            if (ctx->Array.Color.BufferObj == bufObj) {
+               bufObj->RefCount--;
                ctx->Array.Color.BufferObj = ctx->Array.NullBufferObj;
-            if (ctx->Array.SecondaryColor.BufferObj == bufObj)
+            }
+            if (ctx->Array.SecondaryColor.BufferObj == bufObj) {
+               bufObj->RefCount--;
                ctx->Array.SecondaryColor.BufferObj = ctx->Array.NullBufferObj;
-            if (ctx->Array.FogCoord.BufferObj == bufObj)
+            }
+            if (ctx->Array.FogCoord.BufferObj == bufObj) {
+               bufObj->RefCount--;
                ctx->Array.FogCoord.BufferObj = ctx->Array.NullBufferObj;
-            if (ctx->Array.Index.BufferObj == bufObj)
+            }
+            if (ctx->Array.Index.BufferObj == bufObj) {
+               bufObj->RefCount--;
                ctx->Array.Index.BufferObj = ctx->Array.NullBufferObj;
-            if (ctx->Array.EdgeFlag.BufferObj == bufObj)
+            }
+            if (ctx->Array.EdgeFlag.BufferObj == bufObj) {
+               bufObj->RefCount--;
                ctx->Array.EdgeFlag.BufferObj = ctx->Array.NullBufferObj;
+            }
             for (j = 0; j < MAX_TEXTURE_UNITS; j++) {
-               if (ctx->Array.TexCoord[j].BufferObj == bufObj)
+               if (ctx->Array.TexCoord[j].BufferObj == bufObj) {
+                  bufObj->RefCount--;
                   ctx->Array.TexCoord[j].BufferObj = ctx->Array.NullBufferObj;
+               }
             }
             for (j = 0; j < VERT_ATTRIB_MAX; j++) {
-               if (ctx->Array.VertexAttrib[j].BufferObj == bufObj)
+               if (ctx->Array.VertexAttrib[j].BufferObj == bufObj) {
+                  bufObj->RefCount--;
                   ctx->Array.VertexAttrib[j].BufferObj = ctx->Array.NullBufferObj;
+               }
             }
 
-            /* if deleting bound buffers, rebind to zero */
             if (ctx->Array.ArrayBufferObj == bufObj) {
-	       _mesa_BindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+               _mesa_BindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
             }
             if (ctx->Array.ElementArrayBufferObj == bufObj) {
-	       _mesa_BindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, 0 );
+               _mesa_BindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, 0 );
             }
 
+            if (ctx->Pack.BufferObj == bufObj) {
+               _mesa_BindBufferARB( GL_PIXEL_PACK_BUFFER_EXT, 0 );
+            }
+            if (ctx->Unpack.BufferObj == bufObj) {
+               _mesa_BindBufferARB( GL_PIXEL_UNPACK_BUFFER_EXT, 0 );
+            }
+
+            /* decrement refcount and delete if <= 0 */
+            bufObj->DeletePending = GL_TRUE;
             bufObj->RefCount--;
             if (bufObj->RefCount <= 0) {
+               /* buffer should not be bound anymore! */
+               ASSERT(ctx->Array.ArrayBufferObj != bufObj);
+               ASSERT(ctx->Array.ElementArrayBufferObj != bufObj);
+               ASSERT(ctx->Array.Vertex.BufferObj != bufObj);
                _mesa_remove_buffer_object(ctx, bufObj);
                ASSERT(ctx->Driver.DeleteBuffer);
                (*ctx->Driver.DeleteBuffer)(ctx, bufObj);
@@ -570,7 +669,7 @@ _mesa_IsBufferARB(GLuint id)
    bufObj = (struct gl_buffer_object *) _mesa_HashLookup(ctx->Shared->BufferObjects, id);
    _glthread_UNLOCK_MUTEX(ctx->Shared->Mutex);
 
-   return (bufObj != NULL);
+   return bufObj && !bufObj->DeletePending;
 }
 
 

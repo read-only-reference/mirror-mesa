@@ -36,7 +36,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef _R128_TEXOBJ_H_
 #define _R128_TEXOBJ_H_
 
-#include "r128_sarea.h"
 #include "mm.h"
 
 /* Individual texture image information.
@@ -54,16 +53,16 @@ typedef struct r128_tex_obj r128TexObj, *r128TexObjPtr;
 struct r128_tex_obj {
    driTextureObject   base;
 
-   CARD32 bufAddr;			/* Offset to start of locally
+   uint32_t bufAddr;			/* Offset to start of locally
 					   shared texture block */
 
    GLuint age;
    r128TexImage image[R128_MAX_TEXTURE_LEVELS]; /* Image data for all
 						   mipmap levels */
 
-   CARD32 textureFormat;		/* Actual hardware format */
+   uint32_t textureFormat;		/* Actual hardware format */
 
-   r128_texture_regs_t setup;		/* Setup regs for texture */
+   drm_r128_texture_regs_t setup;		/* Setup regs for texture */
 };
 
 #endif /* _R128_TEXOBJ_H_ */

@@ -6,10 +6,6 @@ MAIN_SOURCES = \
 	main/api_noop.c \
 	main/api_validate.c \
 	main/accum.c \
-	main/arbparse.c \
-	main/arbprogram.c \
-	main/arbfragparse.c \
-	main/arbvertparse.c \
 	main/attrib.c \
 	main/blend.c \
 	main/bufferobj.c \
@@ -38,15 +34,10 @@ MAIN_SOURCES = \
 	main/light.c \
 	main/lines.c \
 	main/matrix.c \
-	main/nvprogram.c \
-	main/nvfragparse.c \
-	main/nvvertexec.c \
-	main/nvvertparse.c \
 	main/occlude.c \
 	main/pixel.c \
 	main/points.c \
 	main/polygon.c \
-	main/program.c \
 	main/rastpos.c \
 	main/state.c \
 	main/stencil.c \
@@ -84,6 +75,7 @@ SWRAST_SOURCES = \
 	swrast/s_accum.c \
 	swrast/s_alpha.c \
 	swrast/s_alphabuf.c \
+	swrast/s_auxbuffer.c \
 	swrast/s_bitmap.c \
 	swrast/s_blend.c \
 	swrast/s_buffers.c \
@@ -131,8 +123,22 @@ TNL_SOURCES = \
 	tnl/t_vb_vertex.c \
 	tnl/t_vertex.c \
 	tnl/t_vtx_api.c \
+	tnl/t_vtx_generic.c \
+	tnl/t_vtx_x86.c \
 	tnl/t_vtx_eval.c \
 	tnl/t_vtx_exec.c 
+
+SHADER_SOURCES = \
+	shader/arbfragparse.c \
+	shader/arbprogparse.c \
+	shader/arbprogram.c \
+	shader/arbvertparse.c \
+	shader/grammar_mesa.c \
+	shader/nvfragparse.c \
+	shader/nvprogram.c \
+	shader/nvvertexec.c \
+	shader/nvvertparse.c \
+	shader/program.c
 
 ASM_C_SOURCES =	\
 	x86/common_x86.c \
@@ -158,7 +164,8 @@ X86_SOURCES =			\
 	x86/sse_xform2.S	\
 	x86/sse_xform3.S	\
 	x86/sse_xform4.S	\
-	x86/sse_normal.S
+	x86/sse_normal.S \
+	tnl/t_vtx_x86_gcc.S
 
 SPARC_SOURCES =			\
 	sparc/clip.S		\
@@ -214,6 +221,7 @@ CORE_SOURCES = \
 	$(MATH_SOURCES)		\
 	$(ARRAY_CACHE_SOURCES)	\
 	$(TNL_SOURCES)		\
+	$(SHADER_SOURCES)	\
 	$(SWRAST_SOURCES)	\
 	$(SWRAST_SETUP_SOURCES)	\
 	$(ASM_C_SOURCES)
@@ -223,6 +231,10 @@ CORE_SOURCES = \
 ### Object files
 
 CORE_OBJECTS = $(CORE_SOURCES:.c=.o)
+
+OSMESA_DRIVER_OBJECTS = $(OSMESA_DRIVER_SOURCES:.c=.o)
+
+COMMON_DRIVER_OBJECTS = $(COMMON_DRIVER_SOURCES:.c=.o)
 
 
 
@@ -235,5 +247,6 @@ INCLUDE_DIRS = \
 	-I$(TOP)/src/mesa/glapi \
 	-I$(TOP)/src/mesa/math \
 	-I$(TOP)/src/mesa/tnl \
+	-I$(TOP)/src/mesa/shader \
 	-I$(TOP)/src/mesa/swrast \
 	-I$(TOP)/src/mesa/swrast_setup

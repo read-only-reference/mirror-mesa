@@ -38,10 +38,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #ifdef GLX_DIRECT_RENDERING
 
-#include "dri_util.h"
 #include "xf86drm.h"
-#include "radeon_common.h"
-#include "radeon_sarea.h"
+#include "drm.h"
+#include "radeon_drm.h"
+#include "dri_util.h"
 #include "xmlconfig.h"
 
 typedef struct {
@@ -86,7 +86,7 @@ typedef struct {
 
    drmBufMapPtr buffers;
 
-   __volatile__ CARD32 *scratch;
+   __volatile__ int32_t *scratch;
 
    __DRIscreenPrivate *driScreen;
    unsigned int sarea_priv_offset;

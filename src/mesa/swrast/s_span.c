@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.1
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -653,7 +653,7 @@ multi_write_index_span( GLcontext *ctx, struct sw_span *span )
          ASSERT(span->end < MAX_WIDTH);
 
          /* Set the current read/draw buffer */
-         swrast->CurrentBuffer = bufferBit;
+         swrast->CurrentBufferBit = bufferBit;
          (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, bufferBit);
 
          /* make copy of incoming indexes */
@@ -710,7 +710,7 @@ multi_write_rgba_span( GLcontext *ctx, struct sw_span *span )
          ASSERT(span->end < MAX_WIDTH);
 
          /* Set the current read/draw buffer */
-         swrast->CurrentBuffer = bufferBit;
+         swrast->CurrentBufferBit = bufferBit;
          (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, bufferBit);
 
          /* make copy of incoming colors */
@@ -1016,7 +1016,7 @@ _swrast_write_rgba_span( GLcontext *ctx, struct sw_span *span)
       if (span->interpMask & SPAN_SPEC) {
          interpolate_specular(ctx, span);
       }
-      _swrast_exec_nv_fragment_program(ctx, span);
+      _swrast_exec_fragment_program(ctx, span);
       monoColor = GL_FALSE;
    }
 
@@ -1118,14 +1118,32 @@ _swrast_write_rgba_span( GLcontext *ctx, struct sw_span *span)
       /* write pixels */
       if (span->arrayMask & SPAN_XY) {
          /* array of pixel coords */
-         /* XXX test for mono color */
-         (*swrast->Driver.WriteRGBAPixels)(ctx, span->end, span->array->x,
-             span->array->y, (const GLchan (*)[4]) span->array->rgba, span->array->mask);
-         if (SWRAST_CONTEXT(ctx)->_RasterMask & ALPHABUF_BIT) {
-            _swrast_write_alpha_pixels(ctx, span->end,
-                                     span->array->x, span->array->y,
-                                     (const GLchan (*)[4]) span->array->rgba,
-                                     span->array->mask);
+         if (monoColor) {
+            /* all pixels have same color */
+            GLchan color[4];
+            color[RCOMP] = FixedToChan(span->red);
+            color[GCOMP] = FixedToChan(span->green);
+            color[BCOMP] = FixedToChan(span->blue);
+            color[ACOMP] = FixedToChan(span->alpha);
+            (*swrast->Driver.WriteMonoRGBAPixels)(ctx, span->end,
+                     span->array->x, span->array->y, color, span->array->mask);
+            if (SWRAST_CONTEXT(ctx)->_RasterMask & ALPHABUF_BIT) {
+               _swrast_write_mono_alpha_pixels(ctx, span->end,
+                                              span->array->x, span->array->y,
+                                              color[ACOMP], span->array->mask);
+            }
+         }
+         else {
+            (*swrast->Driver.WriteRGBAPixels)(ctx, span->end,
+                                       span->array->x, span->array->y,
+                                       (const GLchan (*)[4]) span->array->rgba,
+                                       span->array->mask);
+            if (SWRAST_CONTEXT(ctx)->_RasterMask & ALPHABUF_BIT) {
+               _swrast_write_alpha_pixels(ctx, span->end,
+                                       span->array->x, span->array->y,
+                                       (const GLchan (*)[4]) span->array->rgba,
+                                       span->array->mask);
+            }
          }
       }
       else {
@@ -1138,7 +1156,7 @@ _swrast_write_rgba_span( GLcontext *ctx, struct sw_span *span)
             color[BCOMP] = FixedToChan(span->blue);
             color[ACOMP] = FixedToChan(span->alpha);
             (*swrast->Driver.WriteMonoRGBASpan)(ctx, span->end, span->x,
-                                                span->y, color, span->array->mask);
+                                           span->y, color, span->array->mask);
             if (swrast->_RasterMask & ALPHABUF_BIT) {
                _swrast_write_mono_alpha_span(ctx, span->end, span->x, span->y,
                       color[ACOMP],
@@ -1268,7 +1286,7 @@ _swrast_write_texture_span( GLcontext *ctx, struct sw_span *span)
        * gives a potential speed-up.
        */
       if (ctx->FragmentProgram.Enabled)
-         _swrast_exec_nv_fragment_program( ctx, span );
+         _swrast_exec_fragment_program( ctx, span );
       else
          _swrast_texture_span( ctx, span );
 
@@ -1335,7 +1353,7 @@ _swrast_write_texture_span( GLcontext *ctx, struct sw_span *span)
       }
 
       if (ctx->FragmentProgram.Enabled)
-         _swrast_exec_nv_fragment_program( ctx, span );
+         _swrast_exec_fragment_program( ctx, span );
       else
          _swrast_texture_span( ctx, span );
    }

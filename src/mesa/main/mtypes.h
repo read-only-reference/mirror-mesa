@@ -236,6 +236,27 @@ enum {
 			   FRAG_BIT_TEX7)
 
 
+/**
+ * Bits for each basic buffer in a complete framebuffer.
+ * When glDrawBuffer(GL_FRONT_AND_BACK) is called (non-stereo),
+ * _DrawDestMask will be set to (DD_FRONT_LEFT_BIT | DD_BACK_LEFT_BIT),
+ * for example.  Also passed to ctx->Driver.Clear() to indicate which
+ * buffers to clear.
+ */
+/*@{*/
+#define DD_FRONT_LEFT_BIT  0x1
+#define DD_FRONT_RIGHT_BIT 0x2
+#define DD_BACK_LEFT_BIT   0x4
+#define DD_BACK_RIGHT_BIT  0x8
+#define DD_AUX0_BIT        0x10
+#define DD_AUX1_BIT        0x20
+#define DD_AUX2_BIT        0x40
+#define DD_AUX3_BIT        0x80
+#define DD_DEPTH_BIT       GL_DEPTH_BUFFER_BIT    /* 0x00000100 */
+#define DD_ACCUM_BIT       GL_ACCUM_BUFFER_BIT    /* 0x00000200 */
+#define DD_STENCIL_BIT     GL_STENCIL_BUFFER_BIT  /* 0x00000400 */
+/*@}*/
+
 
 /**
  * Maximum number of temporary vertices required for clipping.  
@@ -410,24 +431,6 @@ struct gl_accum_attrib {
 
 
 /**
- * \name Clipping planes bits
- * 
- * Used in gl_colorbuffer_attrib::_DrawDestMask and
- * gl_colorbuffer_attrib::_ReadSrcMask below to identify color buffers.
- */
-/*@{*/
-#define FRONT_LEFT_BIT  0x1
-#define FRONT_RIGHT_BIT 0x2
-#define BACK_LEFT_BIT   0x4
-#define BACK_RIGHT_BIT  0x8
-#define AUX0_BIT        0x10
-#define AUX1_BIT        0x20
-#define AUX2_BIT        0x40
-#define AUX3_BIT        0x80
-/*@}*/
-
-
-/**
  * Color buffers attributes.
  */
 struct gl_colorbuffer_attrib {
@@ -438,7 +441,7 @@ struct gl_colorbuffer_attrib {
    GLubyte ColorMask[4];		/**< Each flag is 0xff or 0x0 */
 
    GLenum DrawBuffer;			/**< Which buffer to draw into */
-   GLubyte _DrawDestMask;		/**< bitwise-OR of FRONT/BACK_LEFT/RIGHT_BITs */
+   GLbitfield _DrawDestMask;		/**< bitmask of DD_*_BIT bits */
 
    /** 
     * \name alpha testing
@@ -767,18 +770,18 @@ struct gl_list_attrib {
 };
 
 
-struct gl_list_opcode {
-   GLuint size;
-   void (*execute)( GLcontext *ctx, void *data );
-   void (*destroy)( GLcontext *ctx, void *data );
-   void (*print)( GLcontext *ctx, void *data );
+struct gl_list_instruction {
+   GLuint Size;
+   void (*Execute)( GLcontext *ctx, void *data );
+   void (*Destroy)( GLcontext *ctx, void *data );
+   void (*Print)( GLcontext *ctx, void *data );
 };
 
-#define GL_MAX_EXT_OPCODES 16
+#define MAX_DLIST_EXT_OPCODES 16
 
 struct gl_list_extensions {
-   struct gl_list_opcode opcode[GL_MAX_EXT_OPCODES];
-   GLuint nr_opcodes;
+   struct gl_list_instruction Opcode[MAX_DLIST_EXT_OPCODES];
+   GLuint NumOpcodes;
 };
 
 
@@ -1319,16 +1322,18 @@ struct gl_attrib_node {
 
 
 /**
- * GL_ARB_vertex_buffer_object buffer object
+ * GL_ARB_vertex/pixel_buffer_object buffer object
  */
 struct gl_buffer_object {
    GLint RefCount;
    GLuint Name;
    GLenum Usage;
    GLenum Access;
-   GLvoid *Pointer;   /**< Only valid while buffer is mapped */
-   GLuint Size;       /**< Size of data array in bytes */
-   GLubyte *Data;     /**< The storage */
+   GLvoid *Pointer;          /**< Only valid while buffer is mapped */
+   GLuint Size;              /**< Size of storage in bytes */
+   GLubyte *Data;            /**< Location of storage either in RAM or VRAM. */
+   GLboolean OnCard;         /**< Is buffer in VRAM? (hardware drivers) */
+   GLboolean DeletePending;  /**< Deleted by user but RefCount > 0? */
 };
 
 
@@ -1347,6 +1352,7 @@ struct gl_pixelstore_attrib {
    GLboolean LsbFirst;
    GLboolean ClientStorage; /**< GL_APPLE_client_storage */
    GLboolean Invert;        /**< GL_MESA_pack_invert */
+   struct gl_buffer_object *BufferObj; /**< GL_ARB_pixel_buffer_object */
 };
 
 
@@ -1517,7 +1523,7 @@ enum register_file
    PROGRAM_NAMED_PARAM,
    PROGRAM_STATE_VAR,
    PROGRAM_WRITE_ONLY,
-	PROGRAM_ADDRESS
+   PROGRAM_ADDRESS
 };
 
 
@@ -1706,6 +1712,7 @@ struct gl_frame_buffer
    GLboolean UseSoftwareAccumBuffer;
    GLboolean UseSoftwareStencilBuffer;
    GLboolean UseSoftwareAlphaBuffers;
+   GLboolean UseSoftwareAuxBuffers;
 
    /** \name Software depth (aka Z) buffer */
    /*@{*/
@@ -1729,6 +1736,8 @@ struct gl_frame_buffer
    GLchan *FrontRightAlpha;	/**< array [Width*Height] of GLchan */
    GLchan *BackRightAlpha;	/**< array [Width*Height] of GLchan */
    /*@}*/
+
+   GLchan *AuxBuffers[MAX_AUX_BUFFERS];
 
    /** 
     * \name Drawing bounds
@@ -1767,7 +1776,6 @@ struct gl_constants
    GLfloat MinLineWidth, MaxLineWidth;		/* aliased */
    GLfloat MinLineWidthAA, MaxLineWidthAA;	/* antialiased */
    GLfloat LineWidthGranularity;
-   GLuint NumAuxBuffers;
    GLuint MaxColorTableSize;
    GLuint MaxConvolutionWidth;
    GLuint MaxConvolutionHeight;
@@ -1851,6 +1859,7 @@ struct gl_extensions
    GLboolean EXT_multi_draw_arrays;
    GLboolean EXT_paletted_texture;
    GLboolean EXT_packed_pixels;
+   GLboolean EXT_pixel_buffer_object;
    GLboolean EXT_point_parameters;
    GLboolean EXT_polygon_offset;
    GLboolean EXT_rescale_normal;
@@ -2263,6 +2272,7 @@ struct __GLcontextRec {
    struct gl_array_attrib	Array;	/**< Vertex arrays */
    struct gl_pixelstore_attrib	Pack;	/**< Pixel packing */
    struct gl_pixelstore_attrib	Unpack;	/**< Pixel unpacking */
+   struct gl_pixelstore_attrib	DefaultPacking;	/**< Default params */
 
    struct gl_evaluators EvalMap;   /**< All evaluators */
    struct gl_feedback   Feedback;  /**< Feedback */
@@ -2301,7 +2311,7 @@ struct __GLcontextRec {
    struct gl_shine_tab *_ShineTabList;  /**< MRU list of inactive shine tables */
    /**@}*/
 
-   struct gl_list_extensions listext; /**< driver dlist extensions */
+   struct gl_list_extensions ListExt; /**< driver dlist extensions */
 
 
    GLboolean OcclusionResult;       /**< for GL_HP_occlusion_test */

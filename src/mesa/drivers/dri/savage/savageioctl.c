@@ -61,9 +61,9 @@ static void savage_BCI_clear(GLcontext *ctx, drm_savage_clear_t *pclear)
 	for (i = 0 ; i < nbox ; i++, pbox++) {
 		unsigned int x = pbox->x1;
 		unsigned int y = pbox->y1;
-		unsigned int width = pbox->x2 - x+1;
-		unsigned int height = pbox->y2 - y+1;
- 		unsigned int *bciptr;		
+		unsigned int width = pbox->x2 - x;
+		unsigned int height = pbox->y2 - y;
+ 		uint32_t *bciptr;
 
 		if (pbox->x1 > pbox->x2 ||
 		    pbox->y1 > pbox->y2 ||
@@ -71,29 +71,29 @@ static void savage_BCI_clear(GLcontext *ctx, drm_savage_clear_t *pclear)
 		    pbox->y2 > imesa->savageScreen->height)
 			continue;
 
-	   	if ( (pclear->flags & SAVAGE_FRONT) && imesa->IsFullScreen) {
+	   	if ( pclear->flags & SAVAGE_FRONT ) {
 		        bciptr = savageDMAAlloc (imesa, 8);
-			WRITE_CMD((bciptr) , 0x4BCC8C00,GLuint);
-			WRITE_CMD((bciptr) , imesa->savageScreen->frontOffset,GLuint);
-			WRITE_CMD((bciptr) , imesa->savageScreen->frontBitmapDesc,GLuint);
-			WRITE_CMD((bciptr) , pclear->clear_color,GLuint);
-			WRITE_CMD((bciptr) , (y <<16) | x,GLuint);
-			WRITE_CMD((bciptr) , (height << 16) | width,GLuint);
+			WRITE_CMD((bciptr) , 0x4BCC8C00,uint32_t);
+			WRITE_CMD((bciptr) , imesa->savageScreen->frontOffset,uint32_t);
+			WRITE_CMD((bciptr) , imesa->savageScreen->frontBitmapDesc,uint32_t);
+			WRITE_CMD((bciptr) , pclear->clear_color,uint32_t);
+			WRITE_CMD((bciptr) , (y <<16) | x,uint32_t);
+			WRITE_CMD((bciptr) , (height << 16) | width,uint32_t);
 			savageDMACommit (imesa, bciptr);
 		}
-		else if ( pclear->flags & (SAVAGE_BACK|SAVAGE_FRONT) ) {
+		if ( pclear->flags & SAVAGE_BACK ) {
 		        bciptr = savageDMAAlloc (imesa, 8);
-			WRITE_CMD((bciptr) , 0x4BCC8C00,GLuint);
-			WRITE_CMD((bciptr) , imesa->savageScreen->backOffset,GLuint);
-			WRITE_CMD((bciptr) , imesa->savageScreen->backBitmapDesc,GLuint);
-			WRITE_CMD((bciptr) , pclear->clear_color,GLuint);
-			WRITE_CMD((bciptr) , (y <<16) | x,GLuint);
-			WRITE_CMD((bciptr) , (height << 16) | width,GLuint);
+			WRITE_CMD((bciptr) , 0x4BCC8C00,uint32_t);
+			WRITE_CMD((bciptr) , imesa->savageScreen->backOffset,uint32_t);
+			WRITE_CMD((bciptr) , imesa->savageScreen->backBitmapDesc,uint32_t);
+			WRITE_CMD((bciptr) , pclear->clear_color,uint32_t);
+			WRITE_CMD((bciptr) , (y <<16) | x,uint32_t);
+			WRITE_CMD((bciptr) , (height << 16) | width,uint32_t);
 			savageDMACommit (imesa, bciptr);
 		}
 		
 		if ( pclear->flags & (SAVAGE_DEPTH |SAVAGE_STENCIL) ) {
-		        GLuint writeMask = 0x0;
+		        uint32_t writeMask = 0x0;
 #if HW_STENCIL		
 		        if(imesa->hw_stencil)
 		        {        
@@ -128,8 +128,8 @@ static void savage_BCI_clear(GLcontext *ctx, drm_savage_clear_t *pclear)
 				bciptr = savageDMAAlloc (imesa, 10);
 			        if(writeMask != 0xFFFFFFFF)
 			        {
-                                    WRITE_CMD((bciptr) , 0x960100D7,GLuint);
-                                    WRITE_CMD((bciptr) , writeMask,GLuint);  
+                                    WRITE_CMD((bciptr) , 0x960100D7,uint32_t);
+                                    WRITE_CMD((bciptr) , writeMask,uint32_t);
                                 }
                             }
 			    else
@@ -138,19 +138,19 @@ static void savage_BCI_clear(GLcontext *ctx, drm_savage_clear_t *pclear)
 				bciptr = savageDMAAlloc (imesa, 6);
 			    }
 
-			    WRITE_CMD((bciptr) , 0x4BCC8C00,GLuint);
-			    WRITE_CMD((bciptr) , imesa->savageScreen->depthOffset,GLuint);
-			    WRITE_CMD((bciptr) , imesa->savageScreen->depthBitmapDesc,GLuint);
-			    WRITE_CMD((bciptr) , pclear->clear_depth,GLuint);
-			    WRITE_CMD((bciptr) , (y <<16) | x,GLuint);
-			    WRITE_CMD((bciptr) , (height << 16) | width,GLuint);
+			    WRITE_CMD((bciptr) , 0x4BCC8C00,uint32_t);
+			    WRITE_CMD((bciptr) , imesa->savageScreen->depthOffset,uint32_t);
+			    WRITE_CMD((bciptr) , imesa->savageScreen->depthBitmapDesc,uint32_t);
+			    WRITE_CMD((bciptr) , pclear->clear_depth,uint32_t);
+			    WRITE_CMD((bciptr) , (y <<16) | x,uint32_t);
+			    WRITE_CMD((bciptr) , (height << 16) | width,uint32_t);
 #if HW_STENCIL			    
 			    if(imesa->hw_stencil)
 			    {
 			        if(writeMask != 0xFFFFFFFF)
 			        {
-			           WRITE_CMD((bciptr) , 0x960100D7,GLuint);
-                                   WRITE_CMD((bciptr) , 0xFFFFFFFF,GLuint);  
+			           WRITE_CMD((bciptr) , 0x960100D7,uint32_t);
+                                   WRITE_CMD((bciptr) , 0xFFFFFFFF,uint32_t);  
 			        }
 			    }
 #endif
@@ -170,12 +170,11 @@ static void savage_BCI_swap(savageContextPtr imesa)
     int nbox = imesa->sarea->nbox;
     drm_clip_rect_t *pbox = imesa->sarea->boxes;
     int i;
-    volatile unsigned int *bciptr;
+    volatile uint32_t *bciptr;
     
     if (nbox > SAVAGE_NR_SAREA_CLIPRECTS)
         nbox = SAVAGE_NR_SAREA_CLIPRECTS;
     savageDMAFlush (imesa);
-    WAIT_IDLE_EMPTY;
     
     if(imesa->IsFullScreen)
     { /* full screen*/
@@ -245,9 +244,9 @@ static void savageDDClear( GLcontext *ctx, GLbitfield mask, GLboolean all,
        clear.clear_depth = (GLuint) (ctx->Depth.Clear * DEPTH_SCALE_16);
    else
        clear.clear_depth = (GLuint) (ctx->Depth.Clear * DEPTH_SCALE_24);
-#if 0
+
    FLUSH_BATCH( imesa );
-#endif	
+
    if ((mask & DD_FRONT_LEFT_BIT) && ((colorMask&0xffffffUL)==0xffffffUL) ){
       clear.flags |= SAVAGE_FRONT;
       mask &= ~DD_FRONT_LEFT_BIT;
@@ -347,6 +346,8 @@ void savageSwapBuffers( __DRIdrawablePrivate *dPriv )
    if (imesa->IsDouble)
        _mesa_notifySwapBuffers( imesa->glCtx );
 
+   FLUSH_BATCH(imesa);
+
    LOCK_HARDWARE( imesa );
    PAGE_PENDING(pending);
 
@@ -398,15 +399,33 @@ void savageWaitAge( savageContextPtr imesa, int age  )
 
 
 
-void savageFlushVertices( savageContextPtr imesa ) 
+void savageFlushVerticesLocked( savageContextPtr imesa )
 {
+    drmBufPtr buffer = imesa->vertex_dma_buffer;
 
+    if (!buffer)
+	return;
+
+    imesa->vertex_dma_buffer = NULL;
+
+    /* Lot's of stuff to do here. For now there is a fake DMA implementation
+     * in savagedma.c that emits drawing commands. Cliprects are not handled
+     * yet. */
+    if (buffer->used) {
+	/* State must be updated "per primitive" because hardware
+	 * culling must be disabled for unfilled primitives, points
+	 * and lines. */
+	savageEmitHwStateLocked (imesa);
+	savageFakeVertices (imesa, buffer);
+    }
 }
 
 
-void savageFlushVerticesLocked( savageContextPtr imesa )
+void savageFlushVertices( savageContextPtr imesa ) 
 {
-
+    LOCK_HARDWARE(imesa);
+    savageFlushVerticesLocked (imesa);
+    UNLOCK_HARDWARE(imesa);
 }
 
 
@@ -417,16 +436,25 @@ int savage_check_copy(int fd)
 
 static void savageDDFlush( GLcontext *ctx )
 {
-
+    savageContextPtr imesa = SAVAGE_CONTEXT(ctx);
+    LOCK_HARDWARE(imesa);
+    savageFlushVerticesLocked (imesa);
+    savageDMAFlush (imesa);
+    UNLOCK_HARDWARE(imesa);
 }
 
 static void savageDDFinish( GLcontext *ctx  ) 
 {
+    savageContextPtr imesa = SAVAGE_CONTEXT(ctx);
+    LOCK_HARDWARE(imesa);
+    savageFlushVerticesLocked (imesa);
+    savageDmaFinish (imesa);
+    UNLOCK_HARDWARE(imesa);
 }
 
 #define ALT_STATUS_WORD0 (* (volatile GLuint *)(imesa->MMIO_BASE+0x48c60))
 #define STATUS_WORD0 (* (volatile GLuint *)(imesa->MMIO_BASE+0x48c00))
-#define MAXFIFO_S4 0x1FF00
+#define MAXFIFO_S4  0x7F00
 #define MAXFIFO_S3D 0x7F00
 
 static GLboolean savagePagePending_s4( savageContextPtr imesa ) {

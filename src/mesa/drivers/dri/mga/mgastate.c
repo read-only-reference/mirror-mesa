@@ -746,7 +746,7 @@ static void mgaXMesaSetFrontClipRects( mgaContextPtr mmesa )
    __DRIdrawablePrivate *driDrawable = mmesa->driDrawable;
 
    if (driDrawable->numClipRects == 0) {
-       static XF86DRIClipRectRec zeroareacliprect = {0,0,0,0};
+       static drm_clip_rect_t zeroareacliprect = {0,0,0,0};
        mmesa->numClipRects = 1;
        mmesa->pClipRects = &zeroareacliprect;
    } else {
@@ -768,7 +768,7 @@ static void mgaXMesaSetBackClipRects( mgaContextPtr mmesa )
    if (driDrawable->numBackClipRects == 0)
    {
       if (driDrawable->numClipRects == 0) {
-	  static XF86DRIClipRectRec zeroareacliprect = {0,0,0,0};
+	  static drm_clip_rect_t zeroareacliprect = {0,0,0,0};
 	  mmesa->numClipRects = 1;
 	  mmesa->pClipRects = &zeroareacliprect;
       } else {
@@ -792,7 +792,7 @@ static void mgaXMesaSetBackClipRects( mgaContextPtr mmesa )
 void mgaUpdateRects( mgaContextPtr mmesa, GLuint buffers )
 {
    __DRIdrawablePrivate *driDrawable = mmesa->driDrawable;
-   MGASAREAPrivPtr sarea = mmesa->sarea;
+   drm_mga_sarea_t *sarea = mmesa->sarea;
 
 
    DRI_VALIDATE_DRAWABLE_INFO(mmesa->driScreen, driDrawable); 
@@ -824,14 +824,14 @@ static void mgaDDDrawBuffer(GLcontext *ctx, GLenum mode )
     * _DrawDestMask is easier to cope with than <mode>.
     */
    switch ( ctx->Color._DrawDestMask ) {
-   case FRONT_LEFT_BIT:
+   case DD_FRONT_LEFT_BIT:
       mmesa->setup.dstorg = mmesa->mgaScreen->frontOffset;
       mmesa->dirty |= MGA_UPLOAD_CONTEXT;
       mmesa->draw_buffer = MGA_FRONT;
       mgaXMesaSetFrontClipRects( mmesa );
       FALLBACK( ctx, MGA_FALLBACK_DRAW_BUFFER, GL_FALSE );
       break;
-   case BACK_LEFT_BIT:
+   case DD_BACK_LEFT_BIT:
       mmesa->setup.dstorg = mmesa->mgaScreen->backOffset;
       mmesa->draw_buffer = MGA_BACK;
       mmesa->dirty |= MGA_UPLOAD_CONTEXT;
@@ -959,7 +959,7 @@ static void mgaDDPrintDirty( const char *msg, GLuint state )
  */
 void mgaEmitHwStateLocked( mgaContextPtr mmesa )
 {
-   MGASAREAPrivPtr sarea = mmesa->sarea;
+   drm_mga_sarea_t *sarea = mmesa->sarea;
    GLcontext * ctx = mmesa->glCtx;
 
    if (MGA_DEBUG & DEBUG_VERBOSE_MSG)
@@ -1001,31 +1001,31 @@ void mgaEmitHwStateLocked( mgaContextPtr mmesa )
 	 ((AC_src_one | AC_dst_zero) & ~mmesa->hw.blend_func_enable) |
 	 mmesa->hw.alpha_sel;
 
-      memcpy( &sarea->ContextState, &mmesa->setup, sizeof(mmesa->setup));
+      memcpy( &sarea->context_state, &mmesa->setup, sizeof(mmesa->setup));
    }
 
    if ((mmesa->dirty & MGA_UPLOAD_TEX0) && mmesa->CurrentTexObj[0]) {
-      memcpy(&sarea->TexState[0],
+      memcpy(&sarea->tex_state[0],
 	     &mmesa->CurrentTexObj[0]->setup,
-	     sizeof(sarea->TexState[0]));
+	     sizeof(sarea->tex_state[0]));
    }
 
    if ((mmesa->dirty & MGA_UPLOAD_TEX1) && mmesa->CurrentTexObj[1]) {
-      memcpy(&sarea->TexState[1],
+      memcpy(&sarea->tex_state[1],
 	     &mmesa->CurrentTexObj[1]->setup,
-	     sizeof(sarea->TexState[1]));
+	     sizeof(sarea->tex_state[1]));
    }
 
    if (mmesa->dirty & (MGA_UPLOAD_TEX0 | MGA_UPLOAD_TEX1)) {
-      sarea->TexState[0].texctl2 &= ~TMC_specen_enable;
-      sarea->TexState[1].texctl2 &= ~TMC_specen_enable;
-      sarea->TexState[0].texctl2 |= mmesa->hw.specen;
-      sarea->TexState[1].texctl2 |= mmesa->hw.specen;
+      sarea->tex_state[0].texctl2 &= ~TMC_specen_enable;
+      sarea->tex_state[1].texctl2 &= ~TMC_specen_enable;
+      sarea->tex_state[0].texctl2 |= mmesa->hw.specen;
+      sarea->tex_state[1].texctl2 |= mmesa->hw.specen;
    }
 
    if (mmesa->dirty & MGA_UPLOAD_PIPE) {
 /*        mmesa->sarea->wacceptseq = mmesa->hw_primitive; */
-      mmesa->sarea->WarpPipe = mmesa->vertex_format;
+      mmesa->sarea->warp_pipe = mmesa->vertex_format;
       mmesa->sarea->vertsize = mmesa->vertex_size;
    }
 

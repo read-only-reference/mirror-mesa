@@ -52,7 +52,7 @@ r128UpdatePageFlipping( r128ContextPtr rmesa )
 
    rmesa->doPageFlip = rmesa->sarea->pfAllowPageFlip;
 
-   use_back = (rmesa->glCtx->Color._DrawDestMask == BACK_LEFT_BIT);
+   use_back = (rmesa->glCtx->Color._DrawDestMask == DD_BACK_LEFT_BIT);
    use_back ^= (rmesa->sarea->pfCurrentPage == 1);
 
    if ( R128_DEBUG & DEBUG_VERBOSE_API )
@@ -85,7 +85,7 @@ void r128GetLock( r128ContextPtr rmesa, GLuint flags )
 {
    __DRIdrawablePrivate *dPriv = rmesa->driDrawable;
    __DRIscreenPrivate *sPriv = rmesa->driScreen;
-   R128SAREAPrivPtr sarea = rmesa->sarea;
+   drm_r128_sarea_t *sarea = rmesa->sarea;
    int i;
 
    drmGetLock( rmesa->driFd, rmesa->hHWContext, flags );
@@ -112,8 +112,8 @@ void r128GetLock( r128ContextPtr rmesa, GLuint flags )
    rmesa->numClipRects = dPriv->numClipRects;
    rmesa->pClipRects = dPriv->pClipRects;
 
-   if ( sarea->ctxOwner != rmesa->hHWContext ) {
-      sarea->ctxOwner = rmesa->hHWContext;
+   if ( sarea->ctx_owner != rmesa->hHWContext ) {
+      sarea->ctx_owner = rmesa->hHWContext;
       rmesa->dirty = R128_UPLOAD_ALL;
    }
 

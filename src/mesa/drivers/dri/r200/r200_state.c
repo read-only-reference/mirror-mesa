@@ -411,9 +411,9 @@ static void r200Fogfv( GLcontext *ctx, GLenum pname, const GLfloat *param )
  */
 
 
-static GLboolean intersect_rect( XF86DRIClipRectPtr out,
-				 XF86DRIClipRectPtr a,
-				 XF86DRIClipRectPtr b )
+static GLboolean intersect_rect( drm_clip_rect_t *out,
+				 drm_clip_rect_t *a,
+				 drm_clip_rect_t *b )
 {
    *out = *a;
    if ( b->x1 > out->x1 ) out->x1 = b->x1;
@@ -428,7 +428,7 @@ static GLboolean intersect_rect( XF86DRIClipRectPtr out,
 
 void r200RecalcScissorRects( r200ContextPtr rmesa )
 {
-   XF86DRIClipRectPtr out;
+   drm_clip_rect_t *out;
    int i;
 
    /* Grow cliprect store?
@@ -444,7 +444,7 @@ void r200RecalcScissorRects( r200ContextPtr rmesa )
 
       rmesa->state.scissor.pClipRects = 
 	 MALLOC( rmesa->state.scissor.numAllocedClipRects * 
-		 sizeof(XF86DRIClipRectRec) );
+		 sizeof(drm_clip_rect_t) );
 
       if ( rmesa->state.scissor.pClipRects == NULL ) {
 	 rmesa->state.scissor.numAllocedClipRects = 0;
@@ -658,7 +658,7 @@ static void r200PolygonStipple( GLcontext *ctx, const GLubyte *mask )
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
    GLuint i;
-   drmRadeonStipple stipple;
+   drm_radeon_stipple_t stipple;
 
    /* Must flip pattern upside down.
     */
@@ -675,7 +675,7 @@ static void r200PolygonStipple( GLcontext *ctx, const GLubyte *mask )
     */
    stipple.mask = rmesa->state.stipple.mask;
    drmCommandWrite( rmesa->dri.fd, DRM_RADEON_STIPPLE, 
-                    &stipple, sizeof(drmRadeonStipple) );
+                    &stipple, sizeof(stipple) );
    UNLOCK_HARDWARE( rmesa );
 }
 
@@ -709,7 +709,7 @@ static void r200PolygonMode( GLcontext *ctx, GLenum face, GLenum mode )
 static void r200UpdateSpecular( GLcontext *ctx )
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
-   CARD32 p = rmesa->hw.ctx.cmd[CTX_PP_CNTL];
+   uint32_t p = rmesa->hw.ctx.cmd[CTX_PP_CNTL];
 
    R200_STATECHANGE( rmesa, tcl );
    R200_STATECHANGE( rmesa, vtx );
@@ -1636,18 +1636,18 @@ void r200SetCliprects( r200ContextPtr rmesa, GLenum mode )
    switch ( mode ) {
    case GL_FRONT_LEFT:
       rmesa->numClipRects = dPriv->numClipRects;
-      rmesa->pClipRects = (XF86DRIClipRectPtr)dPriv->pClipRects;
+      rmesa->pClipRects = dPriv->pClipRects;
       break;
    case GL_BACK_LEFT:
       /* Can't ignore 2d windows if we are page flipping.
        */
       if ( dPriv->numBackClipRects == 0 || rmesa->doPageFlip ) {
 	 rmesa->numClipRects = dPriv->numClipRects;
-	 rmesa->pClipRects = (XF86DRIClipRectPtr)dPriv->pClipRects;
+	 rmesa->pClipRects = dPriv->pClipRects;
       }
       else {
 	 rmesa->numClipRects = dPriv->numBackClipRects;
-	 rmesa->pClipRects = (XF86DRIClipRectPtr)dPriv->pBackClipRects;
+	 rmesa->pClipRects = dPriv->pBackClipRects;
       }
       break;
    default:
@@ -1674,11 +1674,11 @@ static void r200DrawBuffer( GLcontext *ctx, GLenum mode )
     * _DrawDestMask is easier to cope with than <mode>.
     */
    switch ( ctx->Color._DrawDestMask ) {
-   case FRONT_LEFT_BIT:
+   case DD_FRONT_LEFT_BIT:
       FALLBACK( rmesa, R200_FALLBACK_DRAW_BUFFER, GL_FALSE );
       r200SetCliprects( rmesa, GL_FRONT_LEFT );
       break;
-   case BACK_LEFT_BIT:
+   case DD_BACK_LEFT_BIT:
       FALLBACK( rmesa, R200_FALLBACK_DRAW_BUFFER, GL_FALSE );
       r200SetCliprects( rmesa, GL_BACK_LEFT );
       break;

@@ -133,7 +133,7 @@ set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit )
 {
    /* separate read buffer not supported */
    ASSERT(buffer == ctx->DrawBuffer);
-   ASSERT(bufferBit == FRONT_LEFT_BIT);
+   ASSERT(bufferBit == DD_FRONT_LEFT_BIT);
 }
 
 
@@ -282,8 +282,8 @@ clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 #define SPAN_VARS \
    const OSMesaContext osmesa = OSMESA_CONTEXT(ctx);
 #define INIT_PIXEL_PTR(P, X, Y) \
-   GLchan *P = osmesa->rowaddr[Y] + 4 * (X)
-#define INC_PIXEL_PTR(P) P += 4
+   GLchan *P = osmesa->rowaddr[Y] + 3 * (X)
+#define INC_PIXEL_PTR(P) P += 3
 #define STORE_RGB_PIXEL(P, X, Y, R, G, B) \
    P[0] = R;  P[1] = G;  P[2] = B
 #define STORE_RGBA_PIXEL(P, X, Y, R, G, B, A) \
@@ -297,8 +297,8 @@ clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 #define SPAN_VARS \
    const OSMesaContext osmesa = OSMESA_CONTEXT(ctx);
 #define INIT_PIXEL_PTR(P, X, Y) \
-   GLchan *P = osmesa->rowaddr[Y] + 4 * (X)
-#define INC_PIXEL_PTR(P) P += 4
+   GLchan *P = osmesa->rowaddr[Y] + 3 * (X)
+#define INC_PIXEL_PTR(P) P += 3
 #define STORE_RGB_PIXEL(P, X, Y, R, G, B) \
    P[0] = B;  P[1] = G;  P[2] = R
 #define STORE_RGBA_PIXEL(P, X, Y, R, G, B, A) \

@@ -71,8 +71,8 @@
 /** Maximum pixel map lookup table size */
 #define MAX_PIXEL_MAP_TABLE 256
 
-/** Number of auxillary color buffers */
-#define NUM_AUX_BUFFERS 0
+/** Maximum Number of auxillary color buffers */
+#define MAX_AUX_BUFFERS 4
 
 /** Maximum order (degree) of curves */
 #ifdef AMIGA
@@ -155,8 +155,8 @@
 /** For GL_EXT_texture_filter_anisotropic */
 #define MAX_TEXTURE_MAX_ANISOTROPY 16.0
 
-/** For GL_EXT_texture_lod_bias */
-#define MAX_TEXTURE_LOD_BIAS 4.0
+/** For GL_EXT_texture_lod_bias (typically MAX_TEXTURE_LEVELS - 1) */
+#define MAX_TEXTURE_LOD_BIAS 11.0
 
 /** For GL_NV_vertex_program */
 /*@{*/
@@ -270,6 +270,7 @@
 #define FEATURE_ARB_vertex_program  _HAVE_FULL_GL
 #define FEATURE_ARB_fragment_program  _HAVE_FULL_GL
 #define FEATURE_ARB_occlusion_query  _HAVE_FULL_GL
+#define FEATURE_EXT_pixel_buffer_object  _HAVE_FULL_GL
 #define FEATURE_MESA_program_debug  _HAVE_FULL_GL
 #define FEATURE_NV_fence  _HAVE_FULL_GL
 #define FEATURE_NV_fragment_program  _HAVE_FULL_GL

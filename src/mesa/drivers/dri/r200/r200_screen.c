@@ -311,7 +311,7 @@ r200CreateScreen( __DRIscreenPrivate *sPriv )
 
    {
       int ret;
-      drmRadeonGetParam gp;
+      drm_radeon_getparam_t gp;
 
       gp.param = RADEON_PARAM_GART_BUFFER_OFFSET;
       gp.value = &screen->gart_buffer_offset;
@@ -375,7 +375,7 @@ r200CreateScreen( __DRIscreenPrivate *sPriv )
       __driUtilMessage("%s: drmMap (2) failed\n", __FUNCTION__ );
       return NULL;
    }
-   screen->scratch = (__volatile__ CARD32 *)
+   screen->scratch = (__volatile__ uint32_t *)
       ((GLubyte *)screen->status.map + RADEON_SCRATCH_REG_OFFSET);
 
    screen->buffers = drmMapBufs( sPriv->fd );
@@ -416,7 +416,7 @@ r200CreateScreen( __DRIscreenPrivate *sPriv )
    screen->fbLocation	= ( INREG( RADEON_MC_FB_LOCATION ) & 0xffff ) << 16;
 
    if ( sPriv->drmMinor >= 10 ) {
-      drmRadeonSetParam sp;
+      drm_radeon_setparam_t sp;
 
       sp.param = RADEON_SETPARAM_FB_LOCATION;
       sp.value = screen->fbLocation;
@@ -432,22 +432,22 @@ r200CreateScreen( __DRIscreenPrivate *sPriv )
    screen->depthOffset	= dri_priv->depthOffset;
    screen->depthPitch	= dri_priv->depthPitch;
 
-   screen->texOffset[RADEON_CARD_HEAP] = dri_priv->textureOffset
+   screen->texOffset[RADEON_LOCAL_TEX_HEAP] = dri_priv->textureOffset
 				       + screen->fbLocation;
-   screen->texSize[RADEON_CARD_HEAP] = dri_priv->textureSize;
-   screen->logTexGranularity[RADEON_CARD_HEAP] =
+   screen->texSize[RADEON_LOCAL_TEX_HEAP] = dri_priv->textureSize;
+   screen->logTexGranularity[RADEON_LOCAL_TEX_HEAP] =
       dri_priv->log2TexGran;
 
    if ( !screen->gartTextures.map ) {
       screen->numTexHeaps = RADEON_NR_TEX_HEAPS - 1;
-      screen->texOffset[RADEON_GART_HEAP] = 0;
-      screen->texSize[RADEON_GART_HEAP] = 0;
-      screen->logTexGranularity[RADEON_GART_HEAP] = 0;
+      screen->texOffset[RADEON_GART_TEX_HEAP] = 0;
+      screen->texSize[RADEON_GART_TEX_HEAP] = 0;
+      screen->logTexGranularity[RADEON_GART_TEX_HEAP] = 0;
    } else {
       screen->numTexHeaps = RADEON_NR_TEX_HEAPS;
-      screen->texOffset[RADEON_GART_HEAP] = screen->gart_texture_offset;
-      screen->texSize[RADEON_GART_HEAP] = dri_priv->gartTexMapSize;
-      screen->logTexGranularity[RADEON_GART_HEAP] =
+      screen->texOffset[RADEON_GART_TEX_HEAP] = screen->gart_texture_offset;
+      screen->texSize[RADEON_GART_TEX_HEAP] = dri_priv->gartTexMapSize;
+      screen->logTexGranularity[RADEON_GART_TEX_HEAP] =
 	 dri_priv->log2GARTTexGran;
    }
 
@@ -640,16 +640,16 @@ void * __driCreateNewScreen( Display *dpy, int scrn, __DRIscreen *psc,
 				  ddx_version, dri_version, drm_version,
 				  frame_buffer, pSAREA, fd,
 				  internal_api_version, &r200API);
-
-
-   create_context_modes = 
-       (PFNGLXCREATECONTEXTMODES) glXGetProcAddress( (const GLubyte *) "__glXCreateContextModes" );
-   if ( create_context_modes != NULL ) {
-      RADEONDRIPtr dri_priv = (RADEONDRIPtr) psp->pDevPriv;
-      *driver_modes = r200FillInModes( dri_priv->bpp,
-				       (dri_priv->bpp == 16) ? 16 : 24,
-				       (dri_priv->bpp == 16) ? 0  : 8,
-				       (dri_priv->backOffset != dri_priv->depthOffset) );
+   if ( psp != NULL ) {
+      create_context_modes = (PFNGLXCREATECONTEXTMODES)
+	  glXGetProcAddress( (const GLubyte *) "__glXCreateContextModes" );
+      if ( create_context_modes != NULL ) {
+	 RADEONDRIPtr dri_priv = (RADEONDRIPtr) psp->pDevPriv;
+	 *driver_modes = r200FillInModes( dri_priv->bpp,
+					  (dri_priv->bpp == 16) ? 16 : 24,
+					  (dri_priv->bpp == 16) ? 0  : 8,
+					  (dri_priv->backOffset != dri_priv->depthOffset) );
+      }
    }
 
    return (void *) psp;

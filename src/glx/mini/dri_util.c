@@ -28,7 +28,6 @@
 #include <sys/mman.h>
 #include <sys/shm.h>
 
-#include "sarea.h"
 #include "dri_util.h"
 
 /**
@@ -270,7 +269,7 @@ static void *driCreateDrawable(__DRIscreen *screen,
     pdp->w = width;
     pdp->h = height;
     pdp->numClipRects = 0;
-    pdp->pClipRects = (XF86DRIClipRectPtr) malloc(sizeof(XF86DRIClipRectRec));
+    pdp->pClipRects = (drm_clip_rect_t *) malloc(sizeof(drm_clip_rect_t));
     (pdp->pClipRects)[0].x1 = 0;
     (pdp->pClipRects)[0].y1 = 0;
     (pdp->pClipRects)[0].x2 = width;
@@ -476,16 +475,6 @@ __driUtilCreateScreen(struct DRIDriverRec *driver,
 	    return NULL;
 	}
     }
-    
-    /*
-    * Fake various version numbers.
-    */
-    psp->ddxMajor = 4;
-    psp->ddxMinor = 0;
-    psp->ddxPatch = 1;
-    psp->driMajor = 4;
-    psp->driMinor = 1;
-    psp->driPatch = 0;
     
     /* install driver's callback functions */
     psp->DriverAPI = *driverAPI;

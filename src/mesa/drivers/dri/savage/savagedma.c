@@ -85,7 +85,7 @@ void *savageDMAAlloc (savageContextPtr imesa, GLuint size) {
     /* make sure that everything has been filled in and committed */
     assert (dmaBuff->end == dmaBuff->allocEnd);
 
-    size *= sizeof (GLuint); /* size in bytes */
+    size *= sizeof (uint32_t); /* size in bytes */
     if (dmaBuff->kickFlag == GL_TRUE) {
 	if (size > DMA_PAGE_SIZE)
 	    return NULL;
@@ -102,9 +102,9 @@ void *savageDMAAlloc (savageContextPtr imesa, GLuint size) {
 
 /* Flush DMA buffer via DMA */
 void savageDMAFlush (savageContextPtr imesa) {
-    volatile GLuint* BCIbase;
+    volatile uint32_t* BCIbase;
     DMABufferPtr dmaBuff = &imesa->DMABuf;
-    GLuint phyAddress;
+    uint32_t phyAddress;
     GLuint dmaCount, dmaCount1, remain;
     int i;
 
@@ -117,7 +117,7 @@ void savageDMAFlush (savageContextPtr imesa) {
       return;
 
     /* get bci base */
-    BCIbase = (volatile GLuint *)SAVAGE_GET_BCI_POINTER(imesa,4);
+    BCIbase = (volatile uint32_t *)SAVAGE_GET_BCI_POINTER(imesa,4);
 
     /* set the eventtag */
     *BCIbase = (dmaBuff->usingPage & 0xffffL) | (CMD_UpdateShadowStat << 27)
@@ -136,7 +136,7 @@ void savageDMAFlush (savageContextPtr imesa) {
     dmaCount1 = (dmaCount + 31UL) & ~31UL;
     remain = (dmaCount1 - dmaCount) >> 2;
     for (i = 0; i < remain; i++) {
-        *((GLuint *)dmaBuff->end) = 0x40000000L;
+        *((uint32_t *)dmaBuff->end) = 0x40000000L;
         dmaBuff->end+=4;
     }
     dmaCount = (dmaCount1 >> 3) - 1;
@@ -227,7 +227,7 @@ void *savageDMAAlloc (savageContextPtr imesa, GLuint size) {
     /* make sure that everything has been filled in and committed */
     assert (dmaBuff->end == dmaBuff->allocEnd);
 
-    size *= sizeof (GLuint); /* size in bytes */
+    size *= sizeof (uint32_t); /* size in bytes */
     if (dmaBuff->end + size >= dmaBuff->buf->linear + DMA_PAGE_SIZE) {
 	/* need kick off */
 	savageDMAFlush (imesa);
@@ -238,9 +238,9 @@ void *savageDMAAlloc (savageContextPtr imesa, GLuint size) {
 
 /* Flush DMA buffer via BCI (faked DMA) */
 void savageDMAFlush(savageContextPtr imesa) {
-    volatile GLuint* BCIbase;
+    volatile uint32_t* BCIbase;
     DMABufferPtr dmaBuff = &imesa->DMABuf;
-    GLuint *entry;
+    uint32_t *entry;
 
     /* make sure that everything has been filled in and committed */
     assert (dmaBuff->allocEnd == dmaBuff->end);
@@ -249,11 +249,11 @@ void savageDMAFlush(savageContextPtr imesa) {
       return;
 
     /* get bci base */
-    BCIbase = (volatile GLuint *)SAVAGE_GET_BCI_POINTER(
-	imesa, (dmaBuff->end - dmaBuff->start) / sizeof (GLuint));
+    BCIbase = (volatile uint32_t *)SAVAGE_GET_BCI_POINTER(
+	imesa, (dmaBuff->end - dmaBuff->start) / sizeof (uint32_t));
 
-    for (entry = (GLuint *)dmaBuff->start;
-	 entry < (GLuint *)dmaBuff->end; ++entry)
+    for (entry = (uint32_t *)dmaBuff->start;
+	 entry < (uint32_t *)dmaBuff->end; ++entry)
 	*BCIbase = *entry;
 
     dmaBuff->end = dmaBuff->allocEnd = dmaBuff->start;
@@ -296,3 +296,62 @@ int savageDMAClose (savageContextPtr imesa) {
 }
 
 #endif
+
+/* Faked vertex buffers
+ *
+ * This is a dirty hack, knowing that it will go away soon when real
+ * vertex DMA is implemented and eventually moved to the DRM.
+ */
+
+static uint32_t vertex_data[16384]; /* 64KB */
+static drmBuf vertex_buffer = {
+    0,                       /* idx */
+    65536,                   /* total = 64KB */
+    0,                       /* used */
+    (drmAddress)vertex_data  /* address */
+};
+
+void savageFakeVertices (savageContextPtr imesa, drmBufPtr buffer) {
+    GLuint vertexStride = imesa->vertex_size; /* stride in dwords */
+    GLuint vertexSize = imesa->vertex_size; /* the real vertex size in dwords */
+    GLuint nVertices = buffer->used / (vertexStride*4);
+    uint32_t *data = (uint32_t*)buffer->address;
+    uint32_t vertexFormat = imesa->DrawPrimitiveCmd & SAVAGE_HW_SKIPFLAGS;
+    GLuint i, j, left;
+
+    /* we have the monopoly on vertex buffers ;-) */
+    assert (buffer == &vertex_buffer);
+    assert (buffer->used % (vertexStride*4) == 0); /* whole vertices */
+    assert (nVertices % 3 == 0);                   /* triangle lists */
+
+    /* Flush (pseodo) DMA before accessing the BCI directly. */
+    savageDMAFlush(imesa);
+
+    left = nVertices;
+    while (left != 0) {
+	/* Can emit up to 255 vertices (85 triangles) with one command. */
+	GLuint count = left > 255 ? 255 : left;
+	/* Don't go through another buffering mechanism, copy to BCI
+	 * directly. */
+	volatile uint32_t *vb = SAVAGE_GET_BCI_POINTER(imesa,
+						       count*vertexSize + 1);
+
+	WRITE_CMD (vb, SAVAGE_DRAW_PRIMITIVE(
+		       count, SAVAGE_HW_TRIANGLE_LIST | vertexFormat, 0),
+		   uint32_t);
+	for (i = 0; i < count; ++i) {
+	    for (j = 0; j < vertexSize; ++j)
+		WRITE_CMD (vb, data[j], uint32_t);
+	    data += vertexStride;
+	}
+	left -= count;
+    }
+
+    /* clear the vertex buffer for the next set of vertices */
+    vertex_buffer.used = 0;
+}
+
+drmBufPtr savageFakeGetBuffer (savageContextPtr imesa) {
+    assert (vertex_buffer.used == 0); /* has been flushed */
+    return &vertex_buffer;
+}

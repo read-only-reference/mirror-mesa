@@ -26,7 +26,7 @@
  * Authors:
  *	Gareth Hughes <gareth@valinux.com>
  *	Leif Delgass <ldelgass@retinalburn.net>
- *	José Fonseca <j_r_fonseca@yahoo.co.uk>
+ *	Josï¿½Fonseca <j_r_fonseca@yahoo.co.uk>
  */
 
 #include "mach64_context.h"
@@ -694,19 +694,19 @@ void mach64SetCliprects( GLcontext *ctx, GLenum mode )
    switch ( mode ) {
    case GL_FRONT_LEFT:
       mmesa->numClipRects = dPriv->numClipRects;
-      mmesa->pClipRects = (XF86DRIClipRectPtr)dPriv->pClipRects;
+      mmesa->pClipRects = dPriv->pClipRects;
       mmesa->drawX = dPriv->x;
       mmesa->drawY = dPriv->y;
       break;
    case GL_BACK_LEFT:
       if ( dPriv->numBackClipRects == 0 ) {
 	 mmesa->numClipRects = dPriv->numClipRects;
-	 mmesa->pClipRects = (XF86DRIClipRectPtr)dPriv->pClipRects;
+	 mmesa->pClipRects = dPriv->pClipRects;
 	 mmesa->drawX = dPriv->x;
 	 mmesa->drawY = dPriv->y;
       } else {
 	 mmesa->numClipRects = dPriv->numBackClipRects;
-	 mmesa->pClipRects = (XF86DRIClipRectPtr)dPriv->pBackClipRects;
+	 mmesa->pClipRects = dPriv->pBackClipRects;
 	 mmesa->drawX = dPriv->backX;
 	 mmesa->drawY = dPriv->backY;
       }
@@ -730,17 +730,17 @@ static void mach64DDDrawBuffer( GLcontext *ctx, GLenum mode )
     * _DrawDestMask is easier to cope with than <mode>.
     */
    switch ( ctx->Color._DrawDestMask ) {
-   case FRONT_LEFT_BIT:
+   case DD_FRONT_LEFT_BIT:
       FALLBACK( mmesa, MACH64_FALLBACK_DRAW_BUFFER, GL_FALSE );
       mach64SetCliprects( ctx, GL_FRONT_LEFT );
       if (MACH64_DEBUG & DEBUG_VERBOSE_MSG)
-	 fprintf(stderr,"%s: FRONT_LEFT_BIT\n", __FUNCTION__);
+	 fprintf(stderr,"%s: DD_FRONT_LEFT_BIT\n", __FUNCTION__);
       break;
-   case BACK_LEFT_BIT:
+   case DD_BACK_LEFT_BIT:
       FALLBACK( mmesa, MACH64_FALLBACK_DRAW_BUFFER, GL_FALSE );
       mach64SetCliprects( ctx, GL_BACK_LEFT );
       if (MACH64_DEBUG & DEBUG_VERBOSE_MSG)
-	 fprintf(stderr,"%s: BACK_LEFT_BIT\n", __FUNCTION__);
+	 fprintf(stderr,"%s: DD_BACK_LEFT_BIT\n", __FUNCTION__);
       break;
    default:
       /* GL_NONE or GL_FRONT_AND_BACK or stereo left&right, etc */

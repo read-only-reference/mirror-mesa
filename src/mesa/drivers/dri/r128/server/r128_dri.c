@@ -37,7 +37,6 @@
  *
  */
 
-#include "sarea.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,13 +48,12 @@
 #include "driver.h"
 #include "drm.h"
 
-#include "sarea.h"
 #include "r128.h"
 #include "r128_dri.h"
 #include "r128_macros.h"
 #include "r128_reg.h"
-#include "r128_sarea.h"
 #include "r128_version.h"
+#include "r128_drm.h"
 
 
 /* ?? HACK - for now, put this here... */
@@ -325,7 +323,7 @@ static GLboolean R128DRIPciInit(const DRIDriverContext *ctx)
 {
     R128InfoPtr info = ctx->driverPrivate;
     unsigned char *R128MMIO = ctx->MMIOAddress;
-    CARD32 chunk;
+    uint32_t chunk;
     int ret;
     int flags;
 
@@ -460,12 +458,12 @@ static GLboolean R128DRIMapInit(const DRIDriverContext *ctx)
 static int R128DRIKernelInit(const DRIDriverContext *ctx)
 {
     R128InfoPtr info = ctx->driverPrivate;
-    drmR128Init drmInfo;
+    drm_r128_init_t drmInfo;
 
-    memset( &drmInfo, 0, sizeof(drmR128Init) );
+    memset( &drmInfo, 0, sizeof(&drmInfo) );
 
-    drmInfo.func                = DRM_R128_INIT_CCE;
-    drmInfo.sarea_priv_offset   = sizeof(XF86DRISAREARec);
+    drmInfo.func                = R128_INIT_CCE;
+    drmInfo.sarea_priv_offset   = sizeof(drm_sarea_t);
     drmInfo.is_pci              = info->IsPCI;
     drmInfo.cce_mode            = info->CCEMode;
     drmInfo.cce_secure          = info->CCESecure;
@@ -493,7 +491,7 @@ static int R128DRIKernelInit(const DRIDriverContext *ctx)
     drmInfo.agp_textures_offset = info->agpTexHandle;
 
     if (drmCommandWrite(ctx->drmFD, DRM_R128_INIT,
-                        &drmInfo, sizeof(drmR128Init)) < 0)
+                        &drmInfo, sizeof(drmInfo)) < 0)
         return GL_FALSE;
 
     return GL_TRUE;
@@ -571,14 +569,14 @@ static void R128DRIIrqInit(const DRIDriverContext *ctx)
 static int R128CCEStop(const DRIDriverContext *ctx)
 {
     R128InfoPtr info = ctx->driverPrivate;
-    drmR128CCEStop stop;
+    drm_r128_cce_stop_t stop;
     int            ret, i;
 
     stop.flush = 1;
     stop.idle  = 1;
 
     ret = drmCommandWrite( ctx->drmFD, DRM_R128_CCE_STOP,
-                           &stop, sizeof(drmR128CCEStop) );
+                           &stop, sizeof(stop) );
 
     if ( ret == 0 ) {
         return 0;
@@ -591,7 +589,7 @@ static int R128CCEStop(const DRIDriverContext *ctx)
     i = 0;
     do {
         ret = drmCommandWrite( ctx->drmFD, DRM_R128_CCE_STOP,
-                               &stop, sizeof(drmR128CCEStop) );
+                               &stop, sizeof(stop) );
     } while ( ret && errno == EBUSY && i++ < R128_IDLE_RETRY );
 
     if ( ret == 0 ) {
@@ -603,7 +601,7 @@ static int R128CCEStop(const DRIDriverContext *ctx)
     stop.idle = 0;
 
     if ( drmCommandWrite( ctx->drmFD, DRM_R128_CCE_STOP,
-                          &stop, sizeof(drmR128CCEStop) )) {
+                          &stop, sizeof(stop) )) {
         return -errno;
     } else {
         return 0;
@@ -886,9 +884,9 @@ static GLboolean R128DRIScreenInit(DRIDriverContext *ctx)
 	  0,
 	  info->backPitch * ctx->cpp * ctx->shared.virtualHeight );
     
-    R128SAREAPrivPtr pSAREAPriv;
-    pSAREAPriv = (R128SAREAPrivPtr)(((char*)ctx->pSAREA) + 
-					sizeof(XF86DRISAREARec));
+    drm_r128_sarea_t *pSAREAPriv;
+    pSAREAPriv = (drm_r128_sarea_t *)(((char*)ctx->pSAREA) + 
+					sizeof(drm_sarea_t));
     memset(pSAREAPriv, 0, sizeof(*pSAREAPriv));
 
    /* This is the struct passed to radeon_dri.so for its initialization */
@@ -923,7 +921,7 @@ static GLboolean R128DRIScreenInit(DRIDriverContext *ctx)
     pR128DRI->agpTexMapSize     = info->agpTexMapSize;
     pR128DRI->log2AGPTexGran    = info->log2AGPTexGran;
     pR128DRI->agpTexOffset      = info->agpTexStart;
-    pR128DRI->sarea_priv_offset = sizeof(XF86DRISAREARec);
+    pR128DRI->sarea_priv_offset = sizeof(drm_sarea_t);
 
     return GL_TRUE;
 }
@@ -933,7 +931,7 @@ static GLboolean R128DRIScreenInit(DRIDriverContext *ctx)
 void R128DRICloseScreen(const DRIDriverContext *ctx)
 {
     R128InfoPtr info = ctx->driverPrivate;
-    drmR128Init drmInfo;
+    drm_r128_init_t drmInfo;
 
     /* Stop the CCE if it is still in use */
     R128CCE_STOP(ctx, info);
@@ -950,10 +948,10 @@ void R128DRICloseScreen(const DRIDriverContext *ctx)
     }
 
     /* De-allocate all kernel resources */
-    memset(&drmInfo, 0, sizeof(drmR128Init));
-    drmInfo.func = DRM_R128_CLEANUP_CCE;
+    memset(&drmInfo, 0, sizeof(drmInfo));
+    drmInfo.func = R128_CLEANUP_CCE;
     drmCommandWrite(ctx->drmFD, DRM_R128_INIT,
-                    &drmInfo, sizeof(drmR128Init));
+                    &drmInfo, sizeof(drmInfo));
 
     /* De-allocate all AGP resources */
     if (info->agpTex) {

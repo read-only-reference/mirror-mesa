@@ -147,7 +147,7 @@ static r128TexObjPtr r128AllocTexObj( struct gl_texture_object *texObj )
    r128TexObjPtr t;
 
    if ( R128_DEBUG & DEBUG_VERBOSE_API ) {
-      fprintf( stderr, "%s( %p )\n", __FUNCTION__, texObj );
+      fprintf( stderr, "%s( %p )\n", __FUNCTION__, (void *) texObj );
    }
 
    t = (r128TexObjPtr) CALLOC_STRUCT( r128_tex_obj );
@@ -462,9 +462,9 @@ static void r128TexEnv( GLcontext *ctx, GLenum target,
 
    case GL_TEXTURE_LOD_BIAS:
       {
-	 CARD32 t = rmesa->setup.tex_cntl_c;
+	 uint32_t t = rmesa->setup.tex_cntl_c;
 	 GLint bias;
-	 CARD32 b;
+	 uint32_t b;
 
 	 /* GTH: This isn't exactly correct, but gives good results up to a
 	  * certain point.  It is better than completely ignoring the LOD
@@ -484,7 +484,7 @@ static void r128TexEnv( GLcontext *ctx, GLenum target,
 	    bias = 127;
 	 }
 
-	 b = (CARD32)bias & 0xff;
+	 b = (uint32_t)bias & 0xff;
 	 t &= ~R128_LOD_BIAS_MASK;
 	 t |= (b << R128_LOD_BIAS_SHIFT);
 
@@ -557,7 +557,7 @@ static void r128BindTexture( GLcontext *ctx, GLenum target,
 			       struct gl_texture_object *tObj )
 {
    if ( R128_DEBUG & DEBUG_VERBOSE_API ) {
-      fprintf( stderr, "%s( %p ) unit=%d\n", __FUNCTION__, tObj,
+      fprintf( stderr, "%s( %p ) unit=%d\n", __FUNCTION__, (void *) tObj,
 	       ctx->Texture.CurrentUnit );
    }
 

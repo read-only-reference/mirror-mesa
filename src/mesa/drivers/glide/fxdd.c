@@ -380,7 +380,7 @@ static void fxDDClear( GLcontext *ctx,
                           fxMesa->clearA,
                           clearD);
 	 fxSetupColorMask(ctx);
-	 if (ctx->Color._DrawDestMask & FRONT_LEFT_BIT) {
+	 if (ctx->Color._DrawDestMask & DD_FRONT_LEFT_BIT) {
             grRenderBuffer(GR_BUFFER_FRONTBUFFER);
          }
 	 if (!fxMesa->unitsState.depthTestEnabled) {
@@ -401,7 +401,7 @@ static void fxDDClear( GLcontext *ctx,
                grDepthMask(FXTRUE);
             }
             fxSetupColorMask(ctx);
-            if (ctx->Color._DrawDestMask & FRONT_LEFT_BIT) {
+            if (ctx->Color._DrawDestMask & DD_FRONT_LEFT_BIT) {
                grRenderBuffer(GR_BUFFER_FRONTBUFFER);
             }
          }
@@ -1331,8 +1331,18 @@ fxDDInitFxMesaContext(fxMesaContext fxMesa)
       return 0;
    }
 
-   if (fxMesa->haveZBuffer)
-      grDepthBufferMode(GR_DEPTHBUFFER_ZBUFFER);
+   /* [dBorca] Hack alert:
+    * Unlike the rest of the Voodoo family, the Rush
+    * doesn't support ZBUFFER with WBUFFER-like depth functions!
+    * I guess we could use WBUFFER, which is better, but we can't
+    * because the depth span functions would need to translate
+    * depth values to 4.12 floating point...
+    */
+   if (fxMesa->haveZBuffer) {
+      grDepthBufferMode((fxMesa->type == GR_SSTTYPE_SST96)
+                        ? GR_DEPTHBUFFER_WBUFFER
+                        : GR_DEPTHBUFFER_ZBUFFER);
+   }
 
    if (!fxMesa->bgrOrder) {
       grLfbWriteColorFormat(GR_COLORFORMAT_ABGR);
@@ -1352,7 +1362,7 @@ fxDDInitFxMesaContext(fxMesaContext fxMesa)
         textureLevels++;
     } while ((textureSize >>= 0x1) & 0x7ff);
     ctx->Const.MaxTextureLevels = textureLevels;
-#if 1||FX_RESCALE_BIG_TEXURES
+#if FX_RESCALE_BIG_TEXURES_HACK
     fxMesa->textureMaxLod = textureLevels - 1;
     if ((env = getenv("MESA_FX_MAXLOD")) != NULL) {
        int maxLevels = atoi(env) + 1;
@@ -1392,6 +1402,8 @@ fxDDInitFxMesaContext(fxMesaContext fxMesa)
     */
    _swrast_allow_vertex_fog(ctx, GL_FALSE);
    _swrast_allow_pixel_fog(ctx, GL_TRUE);
+   _tnl_allow_vertex_fog( ctx, GL_FALSE );
+   _tnl_allow_pixel_fog( ctx, GL_TRUE );
 
    /* Tell tnl not to calculate or use vertex fog factors.  (Needed to
     * tell render stage not to clip fog coords).
@@ -1507,7 +1519,8 @@ fxDDInitExtensions(GLcontext * ctx)
    /* not until texel fetchers are right */
    _mesa_enable_extension(ctx, "GL_SGIS_generate_mipmaps");
 #endif
-#if 1
+#if 0
+   /* breaks UT2004 */
    _mesa_enable_extension(ctx, "GL_ARB_vertex_buffer_object");
 #endif
 #if 0
@@ -1539,7 +1552,8 @@ fx_check_IsInHardware(GLcontext * ctx)
       return FX_FALLBACK_STENCIL;
    }
 
-   if (ctx->Color._DrawDestMask != FRONT_LEFT_BIT && ctx->Color._DrawDestMask != BACK_LEFT_BIT) {
+   if (ctx->Color._DrawDestMask != DD_FRONT_LEFT_BIT &&
+       ctx->Color._DrawDestMask != DD_BACK_LEFT_BIT) {
       return FX_FALLBACK_DRAW_BUFFER;
    }
 

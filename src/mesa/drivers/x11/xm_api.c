@@ -882,8 +882,6 @@ static GLboolean setup_grayscale( int client, XMesaVisual v,
 static GLboolean setup_dithered_color( int client, XMesaVisual v,
                                        XMesaBuffer buffer, XMesaColormap cmap )
 {
-   (void) DitherValues;  /* silence warning */
-
    if (GET_VISUAL_DEPTH(v)<4 || GET_VISUAL_DEPTH(v)>16) {
       return GL_FALSE;
    }
@@ -1604,6 +1602,7 @@ XMesaVisual XMesaCreateVisual( XMesaDisplay *display,
                             accum_blue_size, accum_alpha_size,
                             0 );
 
+   /* XXX minor hack */
    v->mesa_visual.level = level;
    return v;
 }
@@ -1791,6 +1790,8 @@ XMesaBuffer XMesaCreateWindowBuffer2( XMesaVisual v, XMesaWindow w,
                                 v->mesa_visual.stencilBits > 0,
                                 v->mesa_visual.accumRedBits > 0,
                                 v->mesa_visual.alphaBits > 0 );
+   /* XXX hack */
+   b->mesa_buffer.UseSoftwareAuxBuffers = GL_TRUE;
 
    if (!initialize_visual_and_buffer( client, v, b, v->mesa_visual.rgbMode,
                                       (XMesaDrawable)w, b->cmap )) {
@@ -1830,15 +1831,19 @@ XMesaBuffer XMesaCreateWindowBuffer2( XMesaVisual v, XMesaWindow w,
        }
        attribs[numAttribs++] = FXMESA_NONE;
 
-       /* [dBorca]  we should take an envvar for `fxMesaSelectCurrentBoard'!!! */
-       if ((hw = fxMesaSelectCurrentBoard(0))==GR_SSTTYPE_VOODOO) {
+       /* [dBorca] we should take an envvar for `fxMesaSelectCurrentBoard'!!! */
+       hw = fxMesaSelectCurrentBoard(0);
+       if ((hw == GR_SSTTYPE_VOODOO) || (hw == GR_SSTTYPE_Voodoo2)) {
          b->FXctx = fxMesaCreateBestContext(0, b->width, b->height, attribs);
          if ((v->undithered_pf!=PF_Index) && (b->backimage)) {
 	   b->FXisHackUsable = b->FXctx ? GL_TRUE : GL_FALSE;
-	   if (fxEnvVar[0]=='w' || fxEnvVar[0]=='W')
-	     b->FXwindowHack = b->FXctx ? GL_TRUE : GL_FALSE;
-	   else
+	   if (b->FXctx && (fxEnvVar[0]=='w' || fxEnvVar[0]=='W')) {
+	     b->FXwindowHack = GL_TRUE;
+	     FX_grSstControl(GR_CONTROL_DEACTIVATE);
+	   }
+           else {
 	     b->FXwindowHack = GL_FALSE;
+	   }
          }
        }
        else {
@@ -2210,6 +2215,10 @@ GLboolean XMesaSetFXmode( GLint mode )
          return GL_FALSE;
       }
       if (ctx) {
+         /* [dBorca] Hack alert: 
+	  * oh, this is sooo wrong: ctx above is
+	  * really an fxMesaContext, not an XMesaContext
+	  */
          XMesaContext xmesa = XMESA_CONTEXT(ctx);
          if (mode == XMESA_FX_WINDOW) {
 	    if (xmesa->xm_draw_buffer->FXisHackUsable) {
@@ -2269,10 +2278,7 @@ static void FXgetImage( XMesaBuffer b )
       xmesa_alloc_back_buffer( b );
    }
 
-   /* [dBorca]
-    * not needed for Voodoo2 anymore.
-    * should we test fxMesa->bgrOrder?
-    */
+   /* [dBorca] we're always in the right GR_COLORFORMAT... aren't we? */
    /* grLfbWriteColorFormat(GR_COLORFORMAT_ARGB); */
    if (b->xm_visual->undithered_pf==PF_5R6G5B) {
       /* Special case: 16bpp RGB */
@@ -2596,8 +2602,6 @@ unsigned long XMesaDitherColor( XMesaContext xmesa, GLint x, GLint y,
    GLint g = (GLint) (green * 255.0F);
    GLint b = (GLint) (blue  * 255.0F);
    GLint a = (GLint) (alpha * 255.0F);
-
-   (void) DitherValues; /* silence warning */
 
    switch (xmesa->pixelformat) {
       case PF_Index:

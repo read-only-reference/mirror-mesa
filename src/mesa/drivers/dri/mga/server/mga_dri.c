@@ -41,10 +41,6 @@
 #include "mga.h"
 #include "mga_macros.h"
 #include "mga_dri.h"
-#include "mga_sarea.h"
-
-#include "sarea.h"
-
 
 
 /* Quiescence, locking
@@ -53,27 +49,27 @@
 
 static void MGAWaitForIdleDMA( struct DRIDriverContextRec *ctx, MGAPtr pMga )
 {
-   drmMGALock lock;
+   drm_lock_t lock;
    int ret;
    int i = 0;
 
-   memset( &lock, 0, sizeof(drmMGALock) );
+   memset( &lock, 0, sizeof(lock) );
 
    for (;;) {
       do {
          /* first ask for quiescent and flush */
-         lock.flags = DRM_MGA_LOCK_QUIESCENT | DRM_MGA_LOCK_FLUSH;
+         lock.flags = DRM_LOCK_QUIESCENT | DRM_LOCK_FLUSH;
          do {
 	    ret = drmCommandWrite( ctx->drmFD, DRM_MGA_FLUSH,
-                                   &lock, sizeof( drmMGALock ) );
+                                   &lock, sizeof( lock ) );
          } while ( ret == -EBUSY && i++ < DRM_MGA_IDLE_RETRY );
 
          /* if it's still busy just try quiescent */
          if ( ret == -EBUSY ) { 
-            lock.flags = DRM_MGA_LOCK_QUIESCENT;
+            lock.flags = DRM_LOCK_QUIESCENT;
             do {
 	       ret = drmCommandWrite( ctx->drmFD, DRM_MGA_FLUSH,
-                                      &lock, sizeof( drmMGALock ) );
+                                      &lock, sizeof( lock ) );
             } while ( ret == -EBUSY && i++ < DRM_MGA_IDLE_RETRY );
          }
       } while ( ( ret == -EBUSY ) && ( i++ < MGA_TIMEOUT ) );
@@ -361,13 +357,13 @@ static int MGADRIMapInit( struct DRIDriverContextRec *ctx, MGAPtr pMga )
 
 static int MGADRIKernelInit( struct DRIDriverContextRec *ctx, MGAPtr pMga )
 {
-   drmMGAInit init;
+   drm_mga_init_t init;
    int ret;
 
-   memset( &init, 0, sizeof(drmMGAInit) );
+   memset( &init, 0, sizeof(init) );
 
    init.func = MGA_INIT_DMA;
-   init.sarea_priv_offset = sizeof(XF86DRISAREARec);
+   init.sarea_priv_offset = sizeof(drm_sarea_t);
 
    switch ( pMga->Chipset ) {
    case PCI_CHIP_MGAG550:
@@ -423,7 +419,7 @@ static int MGADRIKernelInit( struct DRIDriverContextRec *ctx, MGAPtr pMga )
    init.texture_offset[1] = pMga->agpTextures.handle;
    init.texture_size[1] = pMga->agpTextures.size;
 
-   ret = drmCommandWrite( ctx->drmFD, DRM_MGA_INIT, &init, sizeof(drmMGAInit));
+   ret = drmCommandWrite( ctx->drmFD, DRM_MGA_INIT, &init, sizeof(init));
    if ( ret < 0 ) {
       fprintf( stderr,
 		  "[drm] Failed to initialize DMA! (%d)\n", ret );
@@ -624,7 +620,7 @@ static void print_client_msg( MGADRIPtr pMGADRI )
    pMGADRI->primary.size	= pMga->primary.size;
    pMGADRI->buffers.handle	= pMga->buffers.handle;
    pMGADRI->buffers.size	= pMga->buffers.size;
-   pMGADRI->sarea_priv_offset = sizeof(XF86DRISAREARec);
+   pMGADRI->sarea_priv_offset = sizeof(drm_sarea_t);
 #endif
 }
 
@@ -799,9 +795,9 @@ static int MGAScreenInit( struct DRIDriverContextRec *ctx, MGAPtr pMga )
 
    /* Initialize the SAREA private data structure */
    {
-      MGASAREAPrivPtr pSAREAPriv;
-      pSAREAPriv = (MGASAREAPrivPtr)(((char*)ctx->pSAREA) + 
-					sizeof(XF86DRISAREARec));
+      drm_mga_sarea_t *pSAREAPriv;
+      pSAREAPriv = (drm_mga_sarea_t *)(((char*)ctx->pSAREA) + 
+					sizeof(drm_sarea_t));
       memset(pSAREAPriv, 0, sizeof(*pSAREAPriv));
    }
 
@@ -872,7 +868,7 @@ static int MGAScreenInit( struct DRIDriverContextRec *ctx, MGAPtr pMga )
    pMGADRI->primary.size	= pMga->primary.size;
    pMGADRI->buffers.handle	= pMga->buffers.handle;
    pMGADRI->buffers.size	= pMga->buffers.size;
-   pMGADRI->sarea_priv_offset = sizeof(XF86DRISAREARec);
+   pMGADRI->sarea_priv_offset = sizeof(drm_sarea_t);
 
    print_client_msg( pMGADRI );
 

@@ -84,16 +84,6 @@
    "GLX_ARB_render_texture"
 */
 
-/* Silence compiler warnings */
-extern void Fake_glXDummyFunc( void );
-void Fake_glXDummyFunc( void )
-{
-   (void) kernel8;
-   (void) DitherValues;
-   (void) HPCR_DRGB;
-   (void) kernel1;
-}
-
 
 /*
  * Our fake GLX context will contain a "real" GLX context and an XMesa context.
@@ -262,7 +252,7 @@ save_glx_visual( Display *dpy, XVisualInfo *vinfo,
                  GLint depth_size, GLint stencil_size,
                  GLint accumRedSize, GLint accumGreenSize,
                  GLint accumBlueSize, GLint accumAlphaSize,
-                 GLint level )
+                 GLint level, GLint numAuxBuffers )
 {
    GLboolean ximageFlag = GL_TRUE;
    XMesaVisual xmvis;
@@ -297,6 +287,7 @@ save_glx_visual( Display *dpy, XVisualInfo *vinfo,
       XMesaVisual v = VisualTable[i];
       if (v->display == dpy
           && v->mesa_visual.level == level
+          && v->mesa_visual.numAuxBuffers == numAuxBuffers
           && v->ximage_flag == ximageFlag
           && v->mesa_visual.rgbMode == rgbFlag
           && v->mesa_visual.doubleBufferMode == dbFlag
@@ -337,6 +328,8 @@ save_glx_visual( Display *dpy, XVisualInfo *vinfo,
       /* add xmvis to the list */
       VisualTable[NumVisuals] = xmvis;
       NumVisuals++;
+      /* XXX minor hack */
+      xmvis->mesa_visual.numAuxBuffers = numAuxBuffers;
    }
    return xmvis;
 }
@@ -367,7 +360,8 @@ create_glx_visual( Display *dpy, XVisualInfo *visinfo )
                               0,         /* depth bits */
                               0,         /* stencil bits */
                               0,0,0,0,   /* accum bits */
-                              vislevel   /* level */
+                              vislevel,  /* level */
+                              0          /* numAux */
                             );
    }
    else if (is_usable_visual( visinfo )) {
@@ -384,7 +378,8 @@ create_glx_visual( Display *dpy, XVisualInfo *visinfo )
                                  0 * sizeof(GLaccum), /* g */
                                  0 * sizeof(GLaccum), /* b */
                                  0 * sizeof(GLaccum), /* a */
-                                 0          /* level */
+                                 0,         /* level */
+                                 0          /* numAux */
                                );
       }
       else {
@@ -402,7 +397,8 @@ create_glx_visual( Display *dpy, XVisualInfo *visinfo )
                                  8 * sizeof(GLaccum), /* g */
                                  8 * sizeof(GLaccum), /* b */
                                  8 * sizeof(GLaccum), /* a */
-                                 0          /* level */
+                                 0,         /* level */
+                                 0          /* numAux */
                                );
       }
    }
@@ -935,6 +931,7 @@ static XMesaVisual choose_visual( Display *dpy, int screen, const int *list,
    GLint caveat = DONT_CARE;
    XMesaVisual xmvis = NULL;
    int desiredVisualID = -1;
+   int numAux = 0;
 
    parselist = list;
 
@@ -967,7 +964,9 @@ static XMesaVisual choose_visual( Display *dpy, int screen, const int *list,
 	 case GLX_AUX_BUFFERS:
 	    /* ignore */
 	    parselist++;
-	    parselist++;
+            numAux = *parselist++;
+            if (numAux > MAX_AUX_BUFFERS)
+               return NULL;
 	    break;
 	 case GLX_RED_SIZE:
 	    parselist++;
@@ -1196,7 +1195,7 @@ static XMesaVisual choose_visual( Display *dpy, int screen, const int *list,
       xmvis = save_glx_visual( dpy, vis, rgb_flag, alpha_flag, double_flag,
                                stereo_flag, depth_size, stencil_size,
                                accumRedSize, accumGreenSize,
-                               accumBlueSize, accumAlphaSize, level );
+                               accumBlueSize, accumAlphaSize, level, numAux );
    }
 
    return xmvis;
@@ -1576,7 +1575,7 @@ get_config( XMesaVisual xmvis, int attrib, int *value, GLboolean fbconfig )
 	 *value = (int) xmvis->mesa_visual.stereoMode;
 	 return 0;
       case GLX_AUX_BUFFERS:
-	 *value = (int) False;
+	 *value = xmvis->mesa_visual.numAuxBuffers;
 	 return 0;
       case GLX_RED_SIZE:
          *value = xmvis->mesa_visual.redBits;

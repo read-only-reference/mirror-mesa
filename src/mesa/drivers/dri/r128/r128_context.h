@@ -39,9 +39,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifdef GLX_DIRECT_RENDERING
 
 #include "dri_util.h"
-
-#include "xf86drm.h"
-#include "r128_common.h"
+#include "drm.h"
+#include "r128_drm.h"
 
 #include "mtypes.h"
 
@@ -121,7 +120,7 @@ struct r128_context {
     */
    GLuint new_state;
    GLuint dirty;			/* Hardware state to be updated */
-   r128_context_regs_t setup;
+   drm_r128_context_regs_t setup;
 
    GLuint NewGLState;
    GLuint Fallback;
@@ -136,9 +135,9 @@ struct r128_context {
    GLuint num_verts;
    GLubyte *verts;		
 
-   CARD32 ClearColor;			/* Color used to clear color buffer */
-   CARD32 ClearDepth;			/* Value used to clear depth buffer */
-   CARD32 ClearStencil;			/* Value used to clear stencil */
+   uint32_t ClearColor;			/* Color used to clear color buffer */
+   uint32_t ClearDepth;			/* Value used to clear depth buffer */
+   uint32_t ClearStencil;		/* Value used to clear stencil */
 
    /* Map GL texture units onto hardware
     */
@@ -181,10 +180,10 @@ struct r128_context {
    GLint readOffset, readPitch;
 
    GLuint numClipRects;			/* Cliprects for the draw buffer */
-   XF86DRIClipRectPtr pClipRects;
+   drm_clip_rect_t *pClipRects;
 
    GLuint scissor;
-   XF86DRIClipRectRec ScissorRect;	/* Current software scissor */
+   drm_clip_rect_t ScissorRect;	/* Current software scissor */
 
    /* Mirrors of some DRI state
     */
@@ -195,11 +194,11 @@ struct r128_context {
    unsigned int lastStamp;	        /* mirror driDrawable->lastStamp */
 
    drmContext hHWContext;
-   drmLock *driHwLock;
+   drm_hw_lock_t *driHwLock;
    int driFd;
 
    r128ScreenPtr r128Screen;		/* Screen private DRI data */
-   R128SAREAPrivPtr sarea;		/* Private SAREA data */
+   drm_r128_sarea_t *sarea;		/* Private SAREA data */
 
    /* Performance counters
     */
