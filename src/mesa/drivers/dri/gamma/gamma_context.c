@@ -39,7 +39,7 @@
 #include "matrix.h"
 #include "extensions.h"
 #if defined(USE_X86_ASM)
-#include "X86/common_x86_asm.h"
+#include "x86/common_x86_asm.h"
 #endif
 #include "simple_list.h"
 #include "mm.h"
@@ -106,6 +106,8 @@ GLboolean gammaCreateContext( const __GLcontextModes *glVisual,
 
    ctx->Const.MaxTextureLevels = 13;  /* 4K by 4K?  Is that right? */
    ctx->Const.MaxTextureUnits = 1; /* Permedia 3 */
+   ctx->Const.MaxTextureImageUnits = 1;
+   ctx->Const.MaxTextureCoordUnits = 1;
 
    ctx->Const.MinLineWidth = 0.0;
    ctx->Const.MaxLineWidth = 255.0;

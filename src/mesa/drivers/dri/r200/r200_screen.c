@@ -50,6 +50,30 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef _SOLO
 #include "glxextensions.h"
 #endif
+
+/* R200 configuration
+ */
+#include "xmlpool.h"
+
+const char __driConfigOptions[] =
+DRI_CONF_BEGIN
+    DRI_CONF_SECTION_PERFORMANCE
+        DRI_CONF_TCL_MODE(DRI_CONF_TCL_CODEGEN)
+        DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
+        DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
+    DRI_CONF_SECTION_END
+    DRI_CONF_SECTION_QUALITY
+        DRI_CONF_TEXTURE_DEPTH(DRI_CONF_TEXTURE_DEPTH_FB)
+        DRI_CONF_COLOR_REDUCTION(DRI_CONF_COLOR_REDUCTION_DITHER)
+        DRI_CONF_ROUND_MODE(DRI_CONF_ROUND_TRUNC)
+        DRI_CONF_DITHER_MODE(DRI_CONF_DITHER_XERRORDIFF)
+    DRI_CONF_SECTION_END
+    DRI_CONF_SECTION_DEBUG
+        DRI_CONF_NO_RAST(false)
+    DRI_CONF_SECTION_END
+DRI_CONF_END;
+static const GLuint __driNConfigOptions = 8;
+
 #if 1
 /* Including xf86PciInfo.h introduces a bunch of errors...
  */
@@ -76,6 +100,7 @@ r200CreateScreen( __DRIscreenPrivate *sPriv )
 {
    r200ScreenPtr screen;
    RADEONDRIPtr dri_priv = (RADEONDRIPtr)sPriv->pDevPriv;
+   unsigned char *RADEONMMIO;
 
    if ( ! driCheckDriDdxDrmVersions( sPriv, "R200", 4, 0, 4, 0, 1, 5 ) )
       return NULL;
@@ -108,7 +133,8 @@ r200CreateScreen( __DRIscreenPrivate *sPriv )
    }
 
    /* parse information in __driConfigOptions */
-   driParseOptionInfo (&screen->optionCache);
+   driParseOptionInfo (&screen->optionCache,
+		       __driConfigOptions, __driNConfigOptions);
 
    /* This is first since which regions we map depends on whether or
     * not we are using a PCI card.
@@ -193,8 +219,9 @@ r200CreateScreen( __DRIscreenPrivate *sPriv )
       return NULL;
    }
 
+   RADEONMMIO = screen->mmio.map;
+
    if ( dri_priv->gartTexHandle && dri_priv->gartTexMapSize ) {
-      unsigned char *RADEONMMIO = screen->mmio.map;
 
       screen->gartTextures.handle = dri_priv->gartTexHandle;
       screen->gartTextures.size   = dri_priv->gartTexMapSize;
@@ -218,6 +245,18 @@ r200CreateScreen( __DRIscreenPrivate *sPriv )
    screen->cpp = dri_priv->bpp / 8;
    screen->AGPMode = dri_priv->AGPMode;
 
+   screen->fbLocation	= ( INREG( RADEON_MC_FB_LOCATION ) & 0xffff ) << 16;
+
+   if ( sPriv->drmMinor >= 10 ) {
+      drmRadeonSetParam sp;
+
+      sp.param = RADEON_SETPARAM_FB_LOCATION;
+      sp.value = screen->fbLocation;
+
+      drmCommandWrite( sPriv->fd, DRM_RADEON_SETPARAM,
+		       &sp, sizeof( sp ) );
+   }
+
    screen->frontOffset	= dri_priv->frontOffset;
    screen->frontPitch	= dri_priv->frontPitch;
    screen->backOffset	= dri_priv->backOffset;
@@ -225,7 +264,8 @@ r200CreateScreen( __DRIscreenPrivate *sPriv )
    screen->depthOffset	= dri_priv->depthOffset;
    screen->depthPitch	= dri_priv->depthPitch;
 
-   screen->texOffset[RADEON_CARD_HEAP] = dri_priv->textureOffset;
+   screen->texOffset[RADEON_CARD_HEAP] = dri_priv->textureOffset
+				       + screen->fbLocation;
    screen->texSize[RADEON_CARD_HEAP] = dri_priv->textureSize;
    screen->logTexGranularity[RADEON_CARD_HEAP] =
       dri_priv->log2TexGran;

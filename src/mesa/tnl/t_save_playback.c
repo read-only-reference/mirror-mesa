@@ -26,6 +26,7 @@
  *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
+#include "glheader.h"
 #include "context.h"
 #include "imports.h"
 #include "mtypes.h"
@@ -148,6 +149,10 @@ static void _playback_copy_to_current( GLcontext *ctx,
       _mesa_update_color_material(ctx, ctx->Current.Attrib[VERT_ATTRIB_COLOR0]);
    }
 
+   if (node->have_materials) {
+      tnl->Driver.NotifyMaterialChange( ctx );
+   }
+
    /* CurrentExecPrimitive
     */
    if (node->prim_count) {
@@ -187,8 +192,6 @@ void _tnl_playback_vertex_list( GLcontext *ctx, void *data )
 	 /* Degenerate case: list references current data and would
 	  * require fixup.  Take the easier option & loop it back.
 	  */
-	 _mesa_debug(ctx,
-                     "tnl_playback_vertex_list: loopback dangling attr ref\n");
 	 _tnl_loopback_vertex_list( ctx, (struct tnl_vertex_list *) data );
 	 return;
       }

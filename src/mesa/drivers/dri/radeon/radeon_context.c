@@ -64,30 +64,11 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "vblank.h"
 #include "utils.h"
+#include "xmlpool.h" /* for symbolic values of enum-type options */
 #ifndef RADEON_DEBUG
 int RADEON_DEBUG = (0);
 #endif
 
-
-/* Radeon configuration
- */
-#include "xmlpool.h"
-
-const char __driConfigOptions[] =
-DRI_CONF_BEGIN
-    DRI_CONF_SECTION_PERFORMANCE
-        DRI_CONF_TCL_MODE(DRI_CONF_TCL_CODEGEN)
-        DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
-        DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
-    DRI_CONF_SECTION_END
-    DRI_CONF_SECTION_QUALITY
-        DRI_CONF_PREFERRED_BPT(0,"0,16,32")
-    DRI_CONF_SECTION_END
-    DRI_CONF_SECTION_DEBUG
-        DRI_CONF_NO_RAST(false)
-    DRI_CONF_SECTION_END
-DRI_CONF_END;
-const GLuint __driNConfigOptions = 5;
 
 /* Return the width and height of the given buffer.
  */
@@ -228,7 +209,7 @@ static const struct dri_debug_control debug_control[] =
 
 
 static int
-get_ust_nop( uint64_t * ust )
+get_ust_nop( int64_t * ust )
 {
    *ust = 1;
    return 0;
@@ -247,7 +228,7 @@ radeonCreateContext( const __GLcontextModes *glVisual,
    radeonContextPtr rmesa;
    GLcontext *ctx, *shareCtx;
    int i;
-   int tcl_mode, fthrottle_mode, preferred_bpt;
+   int tcl_mode, fthrottle_mode;
 
    assert(glVisual);
    assert(driContextPriv);
@@ -308,9 +289,11 @@ radeonCreateContext( const __GLcontextModes *glVisual,
       driSetTextureSwapCounterLocation( rmesa->texture_heaps[i],
 					& rmesa->c_textureSwaps );
    }
-   preferred_bpt = driQueryOptioni (&rmesa->optionCache, "preferred_bpt");
-   rmesa->default32BitTextures =
-       ( ( preferred_bpt == 0 && screen->cpp == 4 ) || preferred_bpt == 32 );
+   rmesa->texture_depth = driQueryOptioni (&rmesa->optionCache,
+					   "texture_depth");
+   if (rmesa->texture_depth == DRI_CONF_TEXTURE_DEPTH_FB)
+      rmesa->texture_depth = ( screen->cpp == 4 ) ?
+	 DRI_CONF_TEXTURE_DEPTH_32 : DRI_CONF_TEXTURE_DEPTH_16;
 
    rmesa->swtcl.RenderIndex = ~0;
    rmesa->lost_context = 1;
@@ -322,6 +305,8 @@ radeonCreateContext( const __GLcontextModes *glVisual,
 
    ctx = rmesa->glCtx;
    ctx->Const.MaxTextureUnits = 2;
+   ctx->Const.MaxTextureImageUnits = 2;
+   ctx->Const.MaxTextureCoordUnits = 2;
 
    driCalculateMaxTextureLevels( rmesa->texture_heaps,
 				 rmesa->nr_heaps,
@@ -521,12 +506,12 @@ void radeonDestroyContext( __DRIcontextPrivate *driContextPriv )
           */
          int i;
 
-	 assert( is_empty_list( & rmesa->swapped ) );
-
          for ( i = 0 ; i < rmesa->nr_heaps ; i++ ) {
 	    driDestroyTextureHeap( rmesa->texture_heaps[ i ] );
 	    rmesa->texture_heaps[ i ] = NULL;
          }
+
+	 assert( is_empty_list( & rmesa->swapped ) );
       }
 
       /* free the option cache */

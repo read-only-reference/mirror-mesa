@@ -18,10 +18,9 @@ Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
-ATI, PRECISION INSIGHT AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
-DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-USE OR OTHER DEALINGS IN THE SOFTWARE.
+ERIC ANHOLT BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 **************************************************************************/
 
@@ -39,6 +38,21 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "sis_context.h"
 #include "sis_dri.h"
 #include "sis_lock.h"
+
+#include "xmlpool.h"
+
+const char __driConfigOptions[] =
+DRI_CONF_BEGIN
+	DRI_CONF_SECTION_DEBUG
+		DRI_CONF_OPT_BEGIN(agp_disable,bool,false)
+		DRI_CONF_DESC(en,"Disable AGP vertex dispatch")
+		DRI_CONF_OPT_END
+		DRI_CONF_OPT_BEGIN(fallback_force,bool,false)
+		DRI_CONF_DESC(en,"Force software fallback")
+		DRI_CONF_OPT_END
+	DRI_CONF_SECTION_END
+DRI_CONF_END;
+static const GLuint __driNConfigOptions = 2;
 
 /* Create the device specific screen private data struct.
  */
@@ -85,6 +99,10 @@ sisCreateScreen( __DRIscreenPrivate *sPriv )
    }
 
    sisScreen->driScreen = sPriv;
+
+   /* parse information in __driConfigOptions */
+   driParseOptionInfo(&sisScreen->optionCache,
+		      __driConfigOptions, __driNConfigOptions);
 
    return sisScreen;
 }
@@ -150,7 +168,7 @@ sis_bitblt_copy_cmd (sisContextPtr smesa, ENGPACKET * pkt)
       *lpdwDest++ = *lpdwSrc++;
 
    MMIO(REG_CMD0, *(GLint *)&pkt->stdwCmd);
-   MMIO(REG_QueueLen, -1);
+   MMIO(REG_CommandQueue, -1);
 }
 
 static void sisCopyBuffer( __DRIdrawablePrivate *dPriv )
@@ -160,7 +178,7 @@ static void sisCopyBuffer( __DRIdrawablePrivate *dPriv )
    ENGPACKET stEngPacket;
   
    while ((*smesa->FrameCountPtr) - MMIO_READ(0x8a2c) > SIS_MAX_FRAME_LENGTH)
-      usleep(1);
+      ;
 
    LOCK_HARDWARE();
 

@@ -19,7 +19,7 @@ Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
-ATI, PRECISION INSIGHT AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
+ERIC ANHOLT OR SILICON INTEGRATED SYSTEMS CORP BE LIABLE FOR ANY CLAIM,
 DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
 OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -265,33 +265,38 @@ static struct {
 #define VERT_Y(_v) _v->v.y
 #define VERT_Z(_v) _v->v.z
 #define AREA_IS_CCW( a ) (a > 0)
-#define GET_VERTEX(e) (smesa->verts + (e << smesa->vertex_stride_shift))
+#define GET_VERTEX(e) (smesa->verts + (e * smesa->vertex_size * sizeof(int)))
 
-#define VERT_SET_RGBA( v, c )	\
-	do {			\
-		sis_color_t *vc = (sis_color_t *)&(v)->ui[coloroffset]; \
-		vc->blue  = (c)[2];	\
-		vc->green = (c)[1];	\
-		vc->red   = (c)[0];	\
-		vc->alpha = (c)[3];	\
-	} while (0)
+#define VERT_SET_RGBA( v, c )  					\
+do {								\
+   sis_color_t *color = (sis_color_t *)&((v)->ui[coloroffset]);	\
+   UNCLAMPED_FLOAT_TO_UBYTE(color->red, (c)[0]);		\
+   UNCLAMPED_FLOAT_TO_UBYTE(color->green, (c)[1]);		\
+   UNCLAMPED_FLOAT_TO_UBYTE(color->blue, (c)[2]);		\
+   UNCLAMPED_FLOAT_TO_UBYTE(color->alpha, (c)[3]);		\
+} while (0)
+
 #define VERT_COPY_RGBA( v0, v1 ) v0->ui[coloroffset] = v1->ui[coloroffset]
+
+#define VERT_SET_SPEC( v0, c )					\
+do {								\
+   if (havespec) {						\
+      UNCLAMPED_FLOAT_TO_UBYTE(v0->v.specular.red, (c)[0]);	\
+      UNCLAMPED_FLOAT_TO_UBYTE(v0->v.specular.green, (c)[1]);	\
+      UNCLAMPED_FLOAT_TO_UBYTE(v0->v.specular.blue, (c)[2]);	\
+   }								\
+} while (0)
+#define VERT_COPY_SPEC( v0, v1 )			\
+do {							\
+   if (havespec) {					\
+      v0->v.specular.red   = v1->v.specular.red;	\
+      v0->v.specular.green = v1->v.specular.green;	\
+      v0->v.specular.blue  = v1->v.specular.blue; 	\
+   }							\
+} while (0)
+
 #define VERT_SAVE_RGBA( idx )    color[idx] = v[idx]->ui[coloroffset]
 #define VERT_RESTORE_RGBA( idx ) v[idx]->ui[coloroffset] = color[idx]
-
-#define VERT_SET_SPEC( v0, c )				\
-	if (havespec) {					\
-		(v0)->v.specular.red   = (c)[0];	\
-		(v0)->v.specular.green = (c)[1];	\
-		(v0)->v.specular.blue  = (c)[2];	\
-	}
-#define VERT_COPY_SPEC( v0, v1 )			\
-	if (havespec) {					\
-		(v0)->v.specular.red   = v1->v.specular.red;	\
-		(v0)->v.specular.green = v1->v.specular.green;	\
-		(v0)->v.specular.blue  = v1->v.specular.blue;	\
-	}
-
 #define VERT_SAVE_SPEC( idx )    if (havespec) spec[idx] = v[idx]->ui[5]
 #define VERT_RESTORE_SPEC( idx ) if (havespec) v[idx]->ui[5] = spec[idx]
 
@@ -478,7 +483,7 @@ sis_fallback_point( sisContextPtr smesa,
 /*               Render unclipped begin/end objects                   */
 /**********************************************************************/
 
-#define VERT(x) (sisVertex *)(sisverts + (x << shift))
+#define VERT(x) (sisVertex *)(sisverts + (x * vertsize * sizeof(int)))
 #define RENDER_POINTS( start, count )		\
    for ( ; start < count ; start++)		\
       smesa->draw_point( smesa, VERT(start) )
@@ -491,7 +496,7 @@ sis_fallback_point( sisContextPtr smesa,
 #undef LOCAL_VARS
 #define LOCAL_VARS				\
     sisContextPtr smesa = SIS_CONTEXT(ctx);	\
-    const GLuint shift = smesa->vertex_stride_shift;		\
+    const GLuint vertsize = smesa->vertex_size;		\
     const char *sisverts = (char *)smesa->verts;		\
     const GLuint * const elt = TNL_CONTEXT(ctx)->vb.Elts;	\
     (void) elt;
@@ -541,7 +546,6 @@ static void sisFastRenderClippedPoly( GLcontext *ctx, const GLuint *elts,
    GLuint vertsize = smesa->vertex_size;
    GLuint *vb = r128AllocDmaLow( rmesa, (n-2) * 3 * 4 * vertsize );
    GLubyte *sisverts = (GLubyte *)smesa->verts;
-   const GLuint shift = smesa->vertex_stride_shift;
    const GLuint *start = (const GLuint *)VERT(elts[0]);
    int i,j;
 
@@ -870,7 +874,6 @@ sisMakeRoomAGP( sisContextPtr smesa, GLint num )
       sisUpdateAGP( smesa );
       while (size > AGP_SpaceLeft) {
          /* Spin until space is available. */
-         usleep(1);
          AGP_ReadPtr = (GLfloat *)((long)MMIO_READ(REG_3D_AGPCmBase) -
             (long)smesa->AGPCmdBufAddr + (long)smesa->AGPCmdBufBase);
          sisUpdateAGP( smesa );
@@ -943,7 +946,7 @@ void sisInitTriFuncs( GLcontext *ctx )
    tnl->Driver.Render.BuildVertices = sisBuildVertices;
    tnl->Driver.Render.Multipass		= NULL;
 
-   if (getenv("SIS_FORCE_FALLBACK") != NULL)
+   if (driQueryOptionb(&smesa->optionCache, "fallback_force"))
       sisFallback(ctx, SIS_FALLBACK_FORCE, 1);
    else
       sisFallback(ctx, SIS_FALLBACK_FORCE, 0);

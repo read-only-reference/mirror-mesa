@@ -64,30 +64,11 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "vblank.h"
 #include "utils.h"
+#include "xmlpool.h" /* for symbolic values of enum-type options */
 #ifndef R200_DEBUG
 int R200_DEBUG = (0);
 #endif
 
-/* R200 configuration
- */
-#include "xmlpool.h"
-
-
-const char __driConfigOptions[] =
-DRI_CONF_BEGIN
-    DRI_CONF_SECTION_PERFORMANCE
-        DRI_CONF_TCL_MODE(DRI_CONF_TCL_CODEGEN)
-        DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
-        DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
-    DRI_CONF_SECTION_END
-    DRI_CONF_SECTION_QUALITY
-        DRI_CONF_PREFERRED_BPT(0,"0,16,32")
-    DRI_CONF_SECTION_END
-    DRI_CONF_SECTION_DEBUG
-        DRI_CONF_NO_RAST(false)
-    DRI_CONF_SECTION_END
-DRI_CONF_END;
-const GLuint __driNConfigOptions = 5;
 
 /* Return the width and height of the given buffer.
  */
@@ -242,7 +223,7 @@ static const struct dri_debug_control debug_control[] =
 
 
 static int
-get_ust_nop( uint64_t * ust )
+get_ust_nop( int64_t * ust )
 {
    *ust = 1;
    return 0;
@@ -260,7 +241,7 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    r200ContextPtr rmesa;
    GLcontext *ctx, *shareCtx;
    int i;
-   int tcl_mode, fthrottle_mode, preferred_bpt;
+   int tcl_mode, fthrottle_mode;
 
    assert(glVisual);
    assert(driContextPriv);
@@ -295,6 +276,7 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    /* Parse configuration files */
    driParseConfigFiles (&rmesa->optionCache, &screen->optionCache,
 			screen->driScreen->myNum, "r200");
+
    rmesa->r200Screen = screen;
    rmesa->sarea = (RADEONSAREAPrivPtr)((GLubyte *)sPriv->pSAREA +
 				       screen->sarea_priv_offset);
@@ -317,9 +299,11 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
 	    sizeof( r200TexObj ),
 	    (destroy_texture_object_t *) r200DestroyTexObj );
    }
-   preferred_bpt = driQueryOptioni (&rmesa->optionCache, "preferred_bpt");
-   rmesa->default32BitTextures =
-       ( ( preferred_bpt == 0 && screen->cpp == 4 ) || preferred_bpt == 32 );
+   rmesa->texture_depth = driQueryOptioni (&rmesa->optionCache,
+					   "texture_depth");
+   if (rmesa->texture_depth == DRI_CONF_TEXTURE_DEPTH_FB)
+      rmesa->texture_depth = ( screen->cpp == 4 ) ?
+	 DRI_CONF_TEXTURE_DEPTH_32 : DRI_CONF_TEXTURE_DEPTH_16;
 
    rmesa->swtcl.RenderIndex = ~0;
    rmesa->lost_context = 1;
@@ -331,6 +315,8 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
 
    ctx = rmesa->glCtx;
    ctx->Const.MaxTextureUnits = 2;
+   ctx->Const.MaxTextureImageUnits = 2;
+   ctx->Const.MaxTextureCoordUnits = 2;
 
    driCalculateMaxTextureLevels( rmesa->texture_heaps,
 				 rmesa->nr_heaps,
@@ -452,12 +438,12 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
       fprintf(stderr, "disabling 3D acceleration\n");
       FALLBACK(rmesa, R200_FALLBACK_DISABLE, 1); 
    }
-   else if (tcl_mode == DRI_CONF_TCL_SW) {
+   else if (tcl_mode == DRI_CONF_TCL_SW || getenv("R200_NO_TCL")) {
       fprintf(stderr, "disabling TCL support\n");
       TCL_FALLBACK(rmesa->glCtx, R200_TCL_FALLBACK_TCL_DISABLE, 1); 
    }
    else {
-      if (tcl_mode >= DRI_CONF_TCL_VTXFMT) {
+      if (tcl_mode >= DRI_CONF_TCL_VTXFMT && !getenv("R200_NO_VTXFMT")) {
 	 r200VtxfmtInit( ctx, tcl_mode >= DRI_CONF_TCL_CODEGEN );
       }
       _tnl_need_dlist_norm_lengths( ctx, GL_FALSE );
@@ -523,13 +509,12 @@ void r200DestroyContext( __DRIcontextPrivate *driContextPriv )
           */
          int i;
 
-	 /* this assert is wrong. The default textures are always on swap list
-	 assert( is_empty_list( & rmesa->swapped ) ); */
-
          for ( i = 0 ; i < rmesa->nr_heaps ; i++ ) {
 	    driDestroyTextureHeap( rmesa->texture_heaps[ i ] );
 	    rmesa->texture_heaps[ i ] = NULL;
          }
+
+	 assert( is_empty_list( & rmesa->swapped ) );
       }
 
       /* free the option cache */
@@ -580,7 +565,7 @@ r200MakeCurrent( __DRIcontextPrivate *driContextPriv,
 	 (r200ContextPtr) driContextPriv->driverPrivate;
 
       if (R200_DEBUG & DEBUG_DRI)
-	 fprintf(stderr, "%s ctx %p\n", __FUNCTION__, newCtx->glCtx);
+	 fprintf(stderr, "%s ctx %p\n", __FUNCTION__, (void *)newCtx->glCtx);
 
       if ( newCtx->dri.drawable != driDrawPriv ) {
 	 driDrawableInitVBlank( driDrawPriv, newCtx->vblank_flags );
@@ -623,7 +608,7 @@ r200UnbindContext( __DRIcontextPrivate *driContextPriv )
    r200ContextPtr rmesa = (r200ContextPtr) driContextPriv->driverPrivate;
 
    if (R200_DEBUG & DEBUG_DRI)
-      fprintf(stderr, "%s ctx %p\n", __FUNCTION__, rmesa->glCtx);
+      fprintf(stderr, "%s ctx %p\n", __FUNCTION__, (void *)rmesa->glCtx);
 
    r200VtxfmtUnbindContext( rmesa->glCtx );
    return GL_TRUE;

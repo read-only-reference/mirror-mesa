@@ -26,6 +26,8 @@
  *    David Bucciarelli
  *    Brian Paul
  *    Keith Whitwell
+ *    Hiroshi Morii
+ *    Daniel Borca
  */
 
 /* fxwgl.c - Microsoft wgl functions emulation for
@@ -75,6 +77,7 @@ struct __pixelformat__
 };
 
 WINGDIAPI void GLAPIENTRY gl3DfxSetPaletteEXT(GLuint *);
+static GLushort gammaTable[3*256];
 
 struct __pixelformat__ pix[] = {
    /* 16bit RGB565 single buffer with depth */
@@ -400,13 +403,102 @@ wglGetCurrentDC(VOID)
    return (NULL);
 }
 
+GLAPI BOOL GLAPIENTRY
+wglSwapIntervalEXT (int interval)
+{
+ if (ctx == NULL) {
+    return FALSE;
+ }
+ if (interval < 0) {
+    interval = 0;
+ } else if (interval > 3) {
+    interval = 3;
+ }
+ ctx->swapInterval = interval;
+ return TRUE;
+}
+
+GLAPI int GLAPIENTRY
+wglGetSwapIntervalEXT (void)
+{
+ return (ctx == NULL) ? -1 : ctx->swapInterval;
+}
+
+GLAPI BOOL GLAPIENTRY
+wglGetDeviceGammaRamp3DFX (HDC hdc, LPVOID arrays)
+{
+ /* gammaTable should be per-context */
+ memcpy(arrays, gammaTable, 3*256*sizeof(GLushort));
+ return TRUE;
+}
+
+GLAPI BOOL GLAPIENTRY
+wglSetDeviceGammaRamp3DFX (HDC hdc, LPVOID arrays)
+{
+ GLint i, tableSize, inc, index;
+ GLushort *red, *green, *blue;
+ FxU32 gammaTableR[256], gammaTableG[256], gammaTableB[256];
+
+ /* gammaTable should be per-context */
+ memcpy(gammaTable, arrays, 3*256*sizeof(GLushort));
+
+ tableSize = FX_grGetInteger(GR_GAMMA_TABLE_ENTRIES);
+ inc = 256 / tableSize;
+ red = (GLushort *)arrays;
+ green = (GLushort *)arrays + 256;
+ blue = (GLushort *)arrays + 512;
+ for (i = 0, index = 0; i < tableSize; i++, index += inc) {
+     gammaTableR[i] = red[index] >> 8;
+     gammaTableG[i] = green[index] >> 8;
+     gammaTableB[i] = blue[index] >> 8;
+ }
+
+ grLoadGammaTable(tableSize, gammaTableR, gammaTableG, gammaTableB);
+
+ return TRUE;
+}
+
+GLAPI const char * GLAPIENTRY
+wglGetExtensionsStringEXT (void)
+{
+ return "WGL_3DFX_gamma_control "
+        "WGL_EXT_swap_control "
+        "WGL_EXT_extensions_string WGL_ARB_extensions_string";
+}
+
+GLAPI const char * GLAPIENTRY
+wglGetExtensionsStringARB (HDC hdc)
+{
+ return wglGetExtensionsStringEXT();
+}
+
+static struct {
+       const char *name;
+       PROC func;
+} wgl_ext[] = {
+       {"wglGetExtensionsStringARB", wglGetExtensionsStringARB},
+       {"wglGetExtensionsStringEXT", wglGetExtensionsStringEXT},
+       {"wglSwapIntervalEXT",        wglSwapIntervalEXT},
+       {"wglGetSwapIntervalEXT",     wglGetSwapIntervalEXT},
+       {"wglGetDeviceGammaRamp3DFX", wglGetDeviceGammaRamp3DFX},
+       {"wglSetDeviceGammaRamp3DFX", wglSetDeviceGammaRamp3DFX},
+       {NULL, NULL}
+};
+
 GLAPI PROC GLAPIENTRY
 wglGetProcAddress(LPCSTR lpszProc)
 { 
+   int i;
    PROC p = (PROC) _glapi_get_proc_address((const char *) lpszProc);
-  
+
    if (p)
       return p;
+
+   for (i = 0; wgl_ext[i].name; i++) {
+       if (!strcmp(lpszProc, wgl_ext[i].name)) {
+          return wgl_ext[i].func;
+       }
+   }
 
    SetLastError(0);
    return (NULL);
@@ -610,6 +702,13 @@ wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR * ppfd)
   fprintf(pix_file, "dwDamageMask    = %d\n",ppfd->dwDamageMask);
   }
   fclose(pix_file);
+#endif
+
+#if 1 || QUAKE2
+  if (ppfd->cColorBits == 24 && ppfd->cDepthBits == 32) {
+     ppfd->cColorBits = 16;
+     ppfd->cDepthBits = 16;
+  }
 #endif
 
    qt_valid_pix = qt_pix;

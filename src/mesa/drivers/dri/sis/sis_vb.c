@@ -18,10 +18,9 @@ Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
-ATI, PRECISION INSIGHT AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
-DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
-USE OR OTHER DEALINGS IN THE SOFTWARE.
+ERIC ANHOLT BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 **************************************************************************/
 
@@ -60,7 +59,6 @@ static struct {
    copy_pv_func	        copy_pv;
    GLboolean           (*check_tex_sizes)( GLcontext *ctx );
    GLuint               vertex_size;
-   GLuint               vertex_stride_shift;
    GLuint               vertex_format;
 } setup_tab[SIS_MAX_SETUP];
 
@@ -91,9 +89,7 @@ static struct {
 #define GET_TEXSOURCE(n)  n
 #define GET_VERTEX_FORMAT() smesa->vertex_format
 #define GET_VERTEX_STORE() smesa->verts
-#define GET_VERTEX_STRIDE_SHIFT() smesa->vertex_stride_shift
-#define GET_UBYTE_COLOR_STORE() &smesa->UbyteColor
-#define GET_UBYTE_SPEC_COLOR_STORE() &smesa->UbyteSecondaryColor
+#define GET_VERTEX_SIZE() smesa->vertex_size * sizeof(GLuint)
 
 #define HAVE_HW_VIEWPORT    0
 #define HAVE_HW_DIVIDE      0
@@ -112,9 +108,6 @@ static struct {
 #define UNVIEWPORT_Z(z)  z / smesa->depth_scale
 
 #define PTEX_FALLBACK() FALLBACK(smesa, SIS_FALLBACK_TEXTURE, 1)
-
-#define IMPORT_FLOAT_COLORS sis_import_float_colors
-#define IMPORT_FLOAT_SPEC_COLORS sis_import_float_spec_colors
 
 #define INTERP_VERTEX setup_tab[smesa->SetupIndex].interp
 #define COPY_PV_VERTEX setup_tab[smesa->SetupIndex].copy_pv
@@ -352,8 +345,8 @@ void sisBuildVertices( GLcontext *ctx,
 		       GLuint newinputs )
 {
    sisContextPtr smesa = SIS_CONTEXT( ctx );
-   GLubyte *v = ((GLubyte *)smesa->verts + (start<<smesa->vertex_stride_shift));
-   GLuint stride = 1 << smesa->vertex_stride_shift;
+   GLuint stride = smesa->vertex_size * sizeof(int);
+   GLubyte *v = ((GLubyte *)smesa->verts + (start * stride));
 
    newinputs |= smesa->SetupNewInputs;
    smesa->SetupNewInputs = 0;
@@ -424,7 +417,6 @@ void sisChooseVertexState( GLcontext *ctx )
   if (setup_tab[ind].vertex_format != smesa->vertex_format) {
     smesa->vertex_format = setup_tab[ind].vertex_format;
     smesa->vertex_size = setup_tab[ind].vertex_size;
-    smesa->vertex_stride_shift = setup_tab[ind].vertex_stride_shift;
   }
 }
 
@@ -449,16 +441,5 @@ void sisFreeVB( GLcontext *ctx )
   if (smesa->verts) {
     ALIGN_FREE(smesa->verts);
     smesa->verts = NULL;
-  }
-
-
-  if (smesa->UbyteSecondaryColor.Ptr) {
-    ALIGN_FREE(smesa->UbyteSecondaryColor.Ptr);
-    smesa->UbyteSecondaryColor.Ptr = NULL;
-  }
-
-  if (smesa->UbyteColor.Ptr) {
-    ALIGN_FREE(smesa->UbyteColor.Ptr);
-    smesa->UbyteColor.Ptr = NULL;
   }
 }

@@ -59,27 +59,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "vblank.h"
 #include "utils.h"
 #include "texmem.h"
-
-/* R128 configuration
- */
-#include "xmlpool.h"
-
-const char __driConfigOptions[] =
-DRI_CONF_BEGIN
-#if ENABLE_PERF_BOXES
-    DRI_CONF_SECTION_DEBUG
-        DRI_CONF_PERFORMANCE_BOXES(false)
-    DRI_CONF_SECTION_END
-#endif
-    DRI_CONF_SECTION_PERFORMANCE
-        DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
-    DRI_CONF_SECTION_END
-DRI_CONF_END;
-#if ENABLE_PERF_BOXES
-const GLuint __driNConfigOptions = 2;
-#else
-const GLuint __driNConfigOptions = 1;
-#endif
+#include "xmlpool.h" /* for symbolic values of enum-type options */
 
 #ifndef R128_DEBUG
 int R128_DEBUG = 0;
@@ -176,6 +156,11 @@ GLboolean r128CreateContext( const __GLcontextModes *glVisual,
       driSetTextureSwapCounterLocation( rmesa->texture_heaps[i],
 					& rmesa->c_textureSwaps );
    }
+   rmesa->texture_depth = driQueryOptioni (&rmesa->optionCache,
+					   "texture_depth");
+   if (rmesa->texture_depth == DRI_CONF_TEXTURE_DEPTH_FB)
+      rmesa->texture_depth = ( r128scrn->cpp == 4 ) ?
+	 DRI_CONF_TEXTURE_DEPTH_32 : DRI_CONF_TEXTURE_DEPTH_16;
 
 
    rmesa->RenderIndex = -1;		/* Impossible value */
@@ -188,6 +173,8 @@ GLboolean r128CreateContext( const __GLcontextModes *glVisual,
     */
 
    ctx->Const.MaxTextureUnits = 2;
+   ctx->Const.MaxTextureImageUnits = 2;
+   ctx->Const.MaxTextureCoordUnits = 2;
 
    driCalculateMaxTextureLevels( rmesa->texture_heaps,
 				 rmesa->nr_heaps,
@@ -292,12 +279,12 @@ void r128DestroyContext( __DRIcontextPrivate *driContextPriv  )
           */
          int i;
 
-	 assert( is_empty_list( & rmesa->swapped ) );
-
          for ( i = 0 ; i < rmesa->nr_heaps ; i++ ) {
 	    driDestroyTextureHeap( rmesa->texture_heaps[ i ] );
 	    rmesa->texture_heaps[ i ] = NULL;
          }
+
+	 assert( is_empty_list( & rmesa->swapped ) );
       }
 
       /* free the option cache */

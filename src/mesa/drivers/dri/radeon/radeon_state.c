@@ -868,28 +868,28 @@ static void radeonColorMaterial( GLcontext *ctx, GLenum face, GLenum mode )
 
       /* Default to PREMULT:
        */
-      light_model_ctl1 &= ~((0xf << RADEON_EMISSIVE_SOURCE_SHIFT) |
-			   (0xf << RADEON_AMBIENT_SOURCE_SHIFT) |
-			   (0xf << RADEON_DIFFUSE_SOURCE_SHIFT) |
-			   (0xf << RADEON_SPECULAR_SOURCE_SHIFT)); 
+      light_model_ctl1 &= ~((3 << RADEON_EMISSIVE_SOURCE_SHIFT) |
+			   (3 << RADEON_AMBIENT_SOURCE_SHIFT) |
+			   (3 << RADEON_DIFFUSE_SOURCE_SHIFT) |
+			   (3 << RADEON_SPECULAR_SOURCE_SHIFT)); 
    
       if (mask & MAT_BIT_FRONT_EMISSION) {
-	 light_model_ctl1 |= (3 <<
+	 light_model_ctl1 |= (RADEON_LM_SOURCE_VERTEX_DIFFUSE <<
 			     RADEON_EMISSIVE_SOURCE_SHIFT);
       }
 
       if (mask & MAT_BIT_FRONT_AMBIENT) {
-	 light_model_ctl1 |= (3 <<
+	 light_model_ctl1 |= (RADEON_LM_SOURCE_VERTEX_DIFFUSE <<
 			     RADEON_AMBIENT_SOURCE_SHIFT);
       }
 	 
       if (mask & MAT_BIT_FRONT_DIFFUSE) {
-	 light_model_ctl1 |= (3 <<
+	 light_model_ctl1 |= (RADEON_LM_SOURCE_VERTEX_DIFFUSE <<
 			     RADEON_DIFFUSE_SOURCE_SHIFT);
       }
    
       if (mask & MAT_BIT_FRONT_SPECULAR) {
-	 light_model_ctl1 |= (3 <<
+	 light_model_ctl1 |= (RADEON_LM_SOURCE_VERTEX_DIFFUSE <<
 			     RADEON_SPECULAR_SOURCE_SHIFT);
       }
    
@@ -1626,8 +1626,9 @@ static void radeonDrawBuffer( GLcontext *ctx, GLenum mode )
    _swrast_DrawBuffer(ctx, mode);
 
    RADEON_STATECHANGE( rmesa, ctx );
-   rmesa->hw.ctx.cmd[CTX_RB3D_COLOROFFSET] = (rmesa->state.color.drawOffset &
-					    RADEON_COLOROFFSET_MASK);
+   rmesa->hw.ctx.cmd[CTX_RB3D_COLOROFFSET] = ((rmesa->state.color.drawOffset +
+					       rmesa->radeonScreen->fbLocation)
+					      & RADEON_COLOROFFSET_MASK);
    rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] = rmesa->state.color.drawPitch;
 }
 
@@ -1734,8 +1735,10 @@ static void radeonEnable( GLcontext *ctx, GLenum cap, GLboolean state )
       RADEON_STATECHANGE(rmesa, ctx );
       if ( state ) {
 	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] |=  RADEON_DITHER_ENABLE;
+	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] &= ~rmesa->state.color.roundEnable;
       } else {
 	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] &= ~RADEON_DITHER_ENABLE;
+	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] |=  rmesa->state.color.roundEnable;
       }
       break;
 
@@ -2137,7 +2140,6 @@ static GLboolean check_material( GLcontext *ctx )
 static void radeonWrapRunPipeline( GLcontext *ctx )
 {
    radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
-   TNLcontext *tnl = TNL_CONTEXT(ctx);
    GLboolean has_material;
 
    if (0)
@@ -2160,7 +2162,6 @@ static void radeonWrapRunPipeline( GLcontext *ctx )
 
    if (has_material) {
       TCL_FALLBACK( ctx, RADEON_TCL_FALLBACK_MATERIAL, GL_FALSE );
-      radeonUpdateMaterial( ctx ); /* not needed any more? */
    }
 }
 

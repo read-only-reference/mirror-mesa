@@ -1623,8 +1623,9 @@ static void r200DrawBuffer( GLcontext *ctx, GLenum mode )
    _swrast_DrawBuffer(ctx, mode);
 
    R200_STATECHANGE( rmesa, ctx );
-   rmesa->hw.ctx.cmd[CTX_RB3D_COLOROFFSET] = (rmesa->state.color.drawOffset &
-					    R200_COLOROFFSET_MASK);
+   rmesa->hw.ctx.cmd[CTX_RB3D_COLOROFFSET] = ((rmesa->state.color.drawOffset +
+					       rmesa->r200Screen->fbLocation)
+					      & R200_COLOROFFSET_MASK);
    rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] = rmesa->state.color.drawPitch;
 }
 
@@ -1719,8 +1720,10 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
       R200_STATECHANGE(rmesa, ctx );
       if ( state ) {
 	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] |=  R200_DITHER_ENABLE;
+	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] &= ~rmesa->state.color.roundEnable;
       } else {
 	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] &= ~R200_DITHER_ENABLE;
+	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] |=  rmesa->state.color.roundEnable;
       }
       break;
 
@@ -1735,6 +1738,9 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
 	 rmesa->hw.tcl.cmd[TCL_UCP_VERT_BLEND_CTL] &= ~R200_TCL_FOG_MASK;
       }
       r200UpdateSpecular( ctx ); /* for PK_SPEC */
+      if (rmesa->TclFallback) 
+	 r200ChooseVertexState( ctx );
+      _mesa_allow_light_in_model( ctx, !state );
       break;
 
    case GL_LIGHT0:
@@ -2111,7 +2117,6 @@ static GLboolean check_material( GLcontext *ctx )
 static void r200WrapRunPipeline( GLcontext *ctx )
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
-   TNLcontext *tnl = TNL_CONTEXT(ctx);
    GLboolean has_material;
 
    if (0)
@@ -2134,7 +2139,6 @@ static void r200WrapRunPipeline( GLcontext *ctx )
 
    if (has_material) {
       TCL_FALLBACK( ctx, R200_TCL_FALLBACK_MATERIAL, GL_FALSE );
-      r200UpdateMaterial( ctx ); /* not needed any more? */
    }
 }
 

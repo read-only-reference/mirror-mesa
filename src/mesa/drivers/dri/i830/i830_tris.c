@@ -216,25 +216,6 @@ static struct {
 #define VERTEX            i830Vertex
 #define TAB               rast_tab
 
-/* Only used to pull back colors into vertices (ie, we know color is
- * floating point).
- */
-#define I830_COLOR( dst, src )			\
-do {						\
-   dst[0] = src[2];				\
-   dst[1] = src[1];				\
-   dst[2] = src[0];				\
-   dst[3] = src[3];				\
-} while (0)
-
-#define I830_SPEC( dst, src )			\
-do {						\
-   dst[0] = src[2];				\
-   dst[1] = src[1];				\
-   dst[2] = src[0];				\
-} while (0)
-
-
 #define DEPTH_SCALE (imesa->depth_scale)
 #define UNFILLED_TRI unfilled_tri
 #define UNFILLED_QUAD unfilled_quad
@@ -242,15 +223,38 @@ do {						\
 #define VERT_Y(_v) _v->v.y
 #define VERT_Z(_v) _v->v.z
 #define AREA_IS_CCW( a ) (a > 0)
-#define GET_VERTEX(e) (imesa->verts + (e<<imesa->vertex_stride_shift))
+#define GET_VERTEX(e) (imesa->verts + (e * imesa->vertex_size * sizeof(int)))
 
-#define VERT_SET_RGBA( v, c )    I830_COLOR( v->ub4[coloroffset], c )
+#define VERT_SET_RGBA( v, c )  					\
+do {								\
+   i830_color_t *color = (i830_color_t *)&((v)->ui[coloroffset]);	\
+   UNCLAMPED_FLOAT_TO_UBYTE(color->red, (c)[0]);		\
+   UNCLAMPED_FLOAT_TO_UBYTE(color->green, (c)[1]);		\
+   UNCLAMPED_FLOAT_TO_UBYTE(color->blue, (c)[2]);		\
+   UNCLAMPED_FLOAT_TO_UBYTE(color->alpha, (c)[3]);		\
+} while (0)
+
 #define VERT_COPY_RGBA( v0, v1 ) v0->ui[coloroffset] = v1->ui[coloroffset]
+
+#define VERT_SET_SPEC( v0, c )					\
+do {								\
+   if (havespec) {						\
+      UNCLAMPED_FLOAT_TO_UBYTE(v0->v.specular.red, (c)[0]);	\
+      UNCLAMPED_FLOAT_TO_UBYTE(v0->v.specular.green, (c)[1]);	\
+      UNCLAMPED_FLOAT_TO_UBYTE(v0->v.specular.blue, (c)[2]);	\
+   }								\
+} while (0)
+#define VERT_COPY_SPEC( v0, v1 )			\
+do {							\
+   if (havespec) {					\
+      v0->v.specular.red   = v1->v.specular.red;	\
+      v0->v.specular.green = v1->v.specular.green;	\
+      v0->v.specular.blue  = v1->v.specular.blue; 	\
+   }							\
+} while (0)
+
 #define VERT_SAVE_RGBA( idx )    color[idx] = v[idx]->ui[coloroffset]
 #define VERT_RESTORE_RGBA( idx ) v[idx]->ui[coloroffset] = color[idx]
-
-#define VERT_SET_SPEC( v, c )    if (havespec) I830_SPEC( v->ub4[5], c )
-#define VERT_COPY_SPEC( v0, v1 ) if (havespec) COPY_3V(v0->ub4[5], v1->ub4[5])
 #define VERT_SAVE_SPEC( idx )    if (havespec) spec[idx] = v[idx]->ui[5]
 #define VERT_RESTORE_SPEC( idx ) if (havespec) v[idx]->ui[5] = spec[idx]
 
@@ -450,7 +454,7 @@ i830_fallback_point( i830ContextPtr imesa,
 /**********************************************************************/
 
 #define IND 0
-#define V(x) (i830Vertex *)(vertptr + ((x)<<vertshift))
+#define V(x) (i830Vertex *)(vertptr + ((x) * vertsize * sizeof(int)))
 #define RENDER_POINTS( start, count )	\
    for ( ; start < count ; start++) POINT( V(ELT(start)) );
 #define RENDER_LINE( v0, v1 )         LINE( V(v0), V(v1) )
@@ -461,7 +465,7 @@ i830_fallback_point( i830ContextPtr imesa,
 #define LOCAL_VARS						\
     i830ContextPtr imesa = I830_CONTEXT(ctx);			\
     GLubyte *vertptr = (GLubyte *)imesa->verts;			\
-    const GLuint vertshift = imesa->vertex_stride_shift;       	\
+    const GLuint vertsize = imesa->vertex_size;       	\
     const GLuint * const elt = TNL_CONTEXT(ctx)->vb.Elts;	\
     (void) elt;
 #define RESET_STIPPLE
@@ -520,7 +524,6 @@ static void i830FastRenderClippedPoly( GLcontext *ctx, const GLuint *elts,
    GLuint vertsize = imesa->vertex_size;
    GLuint *vb = i830AllocDmaLow( imesa, (n-2) * 3 * 4 * vertsize );
    GLubyte *vertptr = (GLubyte *)imesa->verts;
-   const GLuint vertshift = imesa->vertex_stride_shift;
    const GLuint *start = (const GLuint *)V(elts[0]);
    int i,j;
 

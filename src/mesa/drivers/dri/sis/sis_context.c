@@ -18,7 +18,7 @@ Software.
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
-ATI, PRECISION INSIGHT AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
+ERIC ANHOLT OR SILICON INTEGRATED SYSTEMS CORP BE LIABLE FOR ANY CLAIM,
 DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
 OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -69,41 +69,32 @@ static const char * const card_extensions[] =
 void
 WaitEngIdle (sisContextPtr smesa)
 {
-   GLubyte *IOBase = GET_IOBase (smesa);
-   GLbyte cEngineState;
+   GLuint engineState;
 
-   cEngineState = *((GLbyte volatile *) (IOBase + 0x8243));
-   while (((cEngineState & 0x80) == 0) ||
-	  ((cEngineState & 0x40) == 0) || ((cEngineState & 0x20) == 0))
-   {
-      cEngineState = *((GLbyte volatile *) (IOBase + 0x8243));
-   }
+   do {
+      engineState = MMIO_READ(REG_CommandQueue);
+   } while ((engineState & SiS_EngIdle) != SiS_EngIdle);
 }
 
 void
 Wait2DEngIdle (sisContextPtr smesa)
 {
-   GLubyte *IOBase = GET_IOBase (smesa);
-   GLbyte cEngineState;
+   GLuint engineState;
 
-   cEngineState = *((GLbyte volatile *) (IOBase + 0x8243));
-   while (!(cEngineState & 0x80))
-   {
-      cEngineState = *((GLbyte volatile *) (IOBase + 0x8243));
-   }
+   do {
+      engineState = MMIO_READ(REG_CommandQueue);
+   } while ((engineState & SiS_EngIdle2d) != SiS_EngIdle2d);
 }
 
 /* To be called from mWait3DCmdQueue.  Separate function for profiling
  * purposes, and speed doesn't matter because we're spinning anyway.
- * This function should use usleeps to release cpu probably, but I have yet
- * to see it get called.
  */
 void
 WaitingFor3dIdle(sisContextPtr smesa, int wLen)
 {
-   while ( *(smesa->CurrentQueueLenPtr) < wLen) {
+   while (*(smesa->CurrentQueueLenPtr) < wLen) {
       *(smesa->CurrentQueueLenPtr) =
-         (*(GLint *)(GET_IOBase(smesa) + REG_QueueLen) & MASK_QueueLen) - 20;
+         (MMIO_READ(REG_CommandQueue) & MASK_QueueLen) - 20;
    }
 }
 
@@ -184,6 +175,10 @@ sisCreateContext( const __GLcontextModes *glVisual,
       assert (0);
    }
 
+   /* Parse configuration files */
+   driParseConfigFiles (&smesa->optionCache, &sisScreen->optionCache,
+			sisScreen->driScreen->myNum, "sis");
+
    /* TODO: index mode */
 
    smesa->CurrentQueueLenPtr = &(smesa->sarea->QueueLength);
@@ -195,16 +190,17 @@ sisCreateContext( const __GLcontextModes *glVisual,
    smesa->AGPAddr = sisScreen->agp.handle;
 
    /* set AGP command buffer */
-   smesa->AGPCmdModeEnabled = GL_FALSE;
-   if (smesa->AGPSize != 0 && getenv("SIS_NO_AGP") == NULL) {	
-      if (sisScreen->AGPCmdBufSize != 0) {
-         smesa->AGPCmdBufBase = smesa->AGPBase + sisScreen->AGPCmdBufOffset;
-         smesa->AGPCmdBufAddr = smesa->AGPAddr + sisScreen->AGPCmdBufOffset;
-         smesa->AGPCmdBufSize = sisScreen->AGPCmdBufSize;
+   if (smesa->AGPSize != 0 && sisScreen->AGPCmdBufSize != 0 &&
+      !driQueryOptionb(&smesa->optionCache, "agp_disable"))
+   {	
+      smesa->AGPCmdBufBase = smesa->AGPBase + sisScreen->AGPCmdBufOffset;
+      smesa->AGPCmdBufAddr = smesa->AGPAddr + sisScreen->AGPCmdBufOffset;
+      smesa->AGPCmdBufSize = sisScreen->AGPCmdBufSize;
 
-         smesa->pAGPCmdBufNext = (GLint *)&(smesa->sarea->AGPCmdBufNext);
-         smesa->AGPCmdModeEnabled = GL_TRUE;
-      }
+      smesa->pAGPCmdBufNext = (GLint *)&(smesa->sarea->AGPCmdBufNext);
+      smesa->AGPCmdModeEnabled = GL_TRUE;
+   } else {
+      smesa->AGPCmdModeEnabled = GL_FALSE;
    }
 
    smesa->GlobalFlag = 0L;
@@ -217,6 +213,9 @@ sisCreateContext( const __GLcontextModes *glVisual,
    _ac_CreateContext( ctx );
    _tnl_CreateContext( ctx );
    _swsetup_CreateContext( ctx );
+
+   _swrast_allow_pixel_fog( ctx, GL_TRUE );
+   _swrast_allow_vertex_fog( ctx, GL_FALSE );
 
    sisDDInitStateFuncs( ctx );
    sisDDInitState( smesa );	/* Initializes smesa->zFormat, important */
@@ -486,12 +485,12 @@ sis_update_texture_state (sisContextPtr smesa)
    /* texture environment */
    if (smesa->GlobalFlag & GFLAG_TEXTUREENV) {
       MMIO(REG_3D_TextureBlendFactor, prev->hwTexEnvColor);
-      MMIO(REG_3D_TextureColorBlendSet0, prev->hwTexBlendClr0);
+      MMIO(REG_3D_TextureColorBlendSet0, prev->hwTexBlendColor0);
       MMIO(REG_3D_TextureAlphaBlendSet0, prev->hwTexBlendAlpha0);
    }
    if (smesa->GlobalFlag & GFLAG_TEXTUREENV_1) {
       MMIO(REG_3D_TextureBlendFactor, prev->hwTexEnvColor);
-      MMIO(REG_3D_TextureColorBlendSet1, prev->hwTexBlendClr1);
+      MMIO(REG_3D_TextureColorBlendSet1, prev->hwTexBlendColor1);
       MMIO(REG_3D_TextureAlphaBlendSet1, prev->hwTexBlendAlpha1);
    }
 

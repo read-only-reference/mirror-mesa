@@ -30,7 +30,6 @@
  * \author Michal Krol, Karl Rasche
  */
 
-
 #include "mtypes.h"
 #include "glheader.h"
 #include "context.h"
@@ -45,37 +44,40 @@
 /* TODO:
  *    Fragment Program Stuff:
  *    -----------------------------------------------------
- *    - How does negating on SWZ work?? If any of the components have a -,
- *      negate?
- *    - how does thing like 'foo[N]' work in src registers?
  *
  *    - things from Michal's email
  *       + overflow on atoi
  *       + not-overflowing floats (don't use parse_integer..)
- *       + test for 0 on matrix rows, or give a default value to parse_integer()
- *
- *       + fix multiple cases in switches, that might change 
- *          (these are things that are #defined to the same value, but occur 
- *           only on fp or vp's, which funkifies the switch statements)
- *          - STATE_TEX_* STATE_CLIP_PLANE, etc and PRECISION_HINT_FASTEST/
- *            PositionInvariant
- *          
+ *       + can remove range checking in arbparse.c        
+ *       
  *    - check all limits of number of various variables
  *      + parameters
- *      + modelview matrix number
  *
  *    - test! test! test!    
  *
  *    Vertex Program Stuff:
  *    -----------------------------------------------------
- *    - Add in cases for vp attribs
- *       + VERTEX_ATTRIB_MATRIXINDEX -- ??
- *
- *    - ARRAY_INDEX_RELATIVE
+ *    - Optimize param array usage and count limits correctly, see spec,
+ *         section 2.14.3.7        
+ *       + Record if an array is reference absolutly or relatively (or both)
+ *       + For absolute arrays, store a bitmap of accesses
+ *       + For single parameters, store an access flag
+ *       + After parsing, make a parameter cleanup and merging pass, where
+ *           relative arrays are layed out first, followed by abs arrays, and
+ *           finally single state.
+ *       + Remap offsets for param src and dst registers
+ *       + Now we can properly count parameter usage
+ *                                                                         
+ *    - Multiple state binding errors in param arrays (see spec, just before
+ *         section 2.14.3.3)
  *    - grep for XXX
  *    
  *    Mesa Stuff
  *    -----------------------------------------------------
+ *    - User clipping planes vs. PositionInvariant 
+ *    - Is it sufficient to just multiply by the mvp to transform in the
+ *        PositionInvariant case? Or do we need something more involved?
+ *                    
  *    - vp_src swizzle is GLubyte, fp_src swizzle is GLuint
  *    - fetch state listed in program_parameters list
  *       + WTF should this go???
@@ -85,14 +87,19 @@
  *
  *    Cosmetic Stuff
  *    -----------------------------------------------------
- *    - fix compiler warnings 
  * 	- remove any leftover unused grammer.c stuff (dict_ ?)
  * 	- fix grammer.c error handling so its not static
  * 	- #ifdef around stuff pertaining to extentions
  *
  *    Outstanding Questions:
  *    -----------------------------------------------------
- *    - palette matrix?  do we support this extension? what is the extention?
+ *    - ARB_matrix_palette / ARB_vertex_blend -- not supported 
+ *      what gets hacked off because of this:
+ *       + VERTEX_ATTRIB_MATRIXINDEX          
+ *       + VERTEX_ATTRIB_WEIGHT
+ *       + MATRIX_MODELVIEW
+ *       + MATRIX_PALETTE       
+ *
  *    - When can we fetch env/local params from their own register files, and
  *      when to we have to fetch them into the main state register file?
  *      (think arrays)
@@ -359,7 +366,6 @@ character consumed by the specifier associated with the .emit
 instruction. Current position is stored in the output buffer in
 Little-Endian convention (the lowest byte comes first).  */
 
-
 /**
  * This is the text describing the rules to parse the grammar 
  */
@@ -369,7 +375,11 @@ Little-Endian convention (the lowest byte comes first).  */
  * These should match up with the values defined in arbparse.syn.h
  */
 
-#define REVISION                                   0x04
+/*
+    Changes:
+    - changed and merged V_* and F_* opcode values to OP_*.
+*/
+#define REVISION                                   0x05
 
 /* program type */
 #define FRAGMENT_PROGRAM                           0x01
@@ -394,124 +404,127 @@ $4: changed from 0x01 to 0x20.
 */
 #define ARB_POSITION_INVARIANT                     0x20
 
-/* fragment program instruction class */
-#define F_ALU_INST                                 0x01
-#define F_TEX_INST                                 0x02
+/* fragment program 1.0 instruction class */
+#define OP_ALU_INST                                0x00
+#define OP_TEX_INST                                0x01
 
-/* fragment program instruction type */
-#define F_ALU_VECTOR                               0x01
-#define F_ALU_SCALAR                               0x02
-#define F_ALU_BINSC                                0x03
-#define F_ALU_BIN                                  0x04
-#define F_ALU_TRI                                  0x05
-#define F_ALU_SWZ                                  0x06
-#define F_TEX_SAMPLE                               0x07
-#define F_TEX_KIL                                  0x08
+/* vertex program 1.0 instruction class */
+/*       OP_ALU_INST */
 
-/* vertex program instruction type */
-#define V_GEN_ARL                                  0x01
-#define V_GEN_VECTOR                               0x02
-#define V_GEN_SCALAR                               0x03
-#define V_GEN_BINSC                                0x04
-#define V_GEN_BIN                                  0x05
-#define V_GEN_TRI                                  0x06
-#define V_GEN_SWZ                                  0x07
+/* fragment program 1.0 instruction type */
+#define OP_ALU_VECTOR                               0x06
+#define OP_ALU_SCALAR                               0x03
+#define OP_ALU_BINSC                                0x02
+#define OP_ALU_BIN                                  0x01
+#define OP_ALU_TRI                                  0x05
+#define OP_ALU_SWZ                                  0x04
+#define OP_TEX_SAMPLE                               0x07
+#define OP_TEX_KIL                                  0x08
 
-/* fragment program instruction code */
-#define F_ABS                                      0x00
-#define F_ABS_SAT                                  0x01
-#define F_FLR                                      0x02
-#define F_FLR_SAT                                  0x03
-#define F_FRC                                      0x04
-#define F_FRC_SAT                                  0x05
-#define F_LIT                                      0x06
-#define F_LIT_SAT                                  0x07
-#define F_MOV                                      0x08
-#define F_MOV_SAT                                  0x09
-#define F_COS                                      0x0A
-#define F_COS_SAT                                  0x0B
-#define F_EX2                                      0x0C
-#define F_EX2_SAT                                  0x0D
-#define F_LG2                                      0x0E
-#define F_LG2_SAT                                  0x0F
-#define F_RCP                                      0x10
-#define F_RCP_SAT                                  0x11
-#define F_RSQ                                      0x12
-#define F_RSQ_SAT                                  0x13
-#define F_SIN                                      0x14
-#define F_SIN_SAT                                  0x15
-#define F_SCS                                      0x16
-#define F_SCS_SAT                                  0x17
-#define F_POW                                      0x18
-#define F_POW_SAT                                  0x19
-#define F_ADD                                      0x1A
-#define F_ADD_SAT                                  0x1B
-#define F_DP3                                      0x1C
-#define F_DP3_SAT                                  0x1D
-#define F_DP4                                      0x1E
-#define F_DP4_SAT                                  0x1F
-#define F_DPH                                      0x20
-#define F_DPH_SAT                                  0x21
-#define F_DST                                      0x22
-#define F_DST_SAT                                  0x23
-#define F_MAX                                      0x24
-#define F_MAX_SAT                                  0x25
-#define F_MIN                                      0x26
-#define F_MIN_SAT                                  0x27
-#define F_MUL                                      0x28
-#define F_MUL_SAT                                  0x29
-#define F_SGE                                      0x2A
-#define F_SGE_SAT                                  0x2B
-#define F_SLT                                      0x2C
-#define F_SLT_SAT                                  0x2D
-#define F_SUB                                      0x2E
-#define F_SUB_SAT                                  0x2F
-#define F_XPD                                      0x30
-#define F_XPD_SAT                                  0x31
-#define F_CMP                                      0x32
-#define F_CMP_SAT                                  0x33
-#define F_LRP                                      0x34
-#define F_LRP_SAT                                  0x35
-#define F_MAD                                      0x36
-#define F_MAD_SAT                                  0x37
-#define F_SWZ                                      0x38
-#define F_SWZ_SAT                                  0x39
-#define F_TEX                                      0x3A
-#define F_TEX_SAT                                  0x3B
-#define F_TXB                                      0x3C
-#define F_TXB_SAT                                  0x3D
-#define F_TXP                                      0x3E
-#define F_TXP_SAT                                  0x3F
-#define F_KIL                                      0x40
+/* vertex program 1.0 instruction type */
+#define OP_ALU_ARL                                  0x00
+/*       OP_ALU_VECTOR */
+/*       OP_ALU_SCALAR */
+/*       OP_ALU_BINSC */
+/*       OP_ALU_BIN */
+/*       OP_ALU_TRI */
+/*       OP_ALU_SWZ */
 
-/* vertex program instruction code */
-#define V_ARL                                      0x01
-#define V_ABS                                      0x02
-#define V_FLR                                      0x03
-#define V_FRC                                      0x04
-#define V_LIT                                      0x05
-#define V_MOV                                      0x06
-#define V_EX2                                      0x07
-#define V_EXP                                      0x08
-#define V_LG2                                      0x09
-#define V_LOG                                      0x0A
-#define V_RCP                                      0x0B
-#define V_RSQ                                      0x0C
-#define V_POW                                      0x0D
-#define V_ADD                                      0x0E
-#define V_DP3                                      0x0F
-#define V_DP4                                      0x10
-#define V_DPH                                      0x11
-#define V_DST                                      0x12
-#define V_MAX                                      0x13
-#define V_MIN                                      0x14
-#define V_MUL                                      0x15
-#define V_SGE                                      0x16
-#define V_SLT                                      0x17
-#define V_SUB                                      0x18
-#define V_XPD                                      0x19
-#define V_MAD                                      0x1A
-#define V_SWZ                                      0x1B
+/* fragment program 1.0 instruction code */
+#define OP_ABS                                     0x00
+#define OP_ABS_SAT                                 0x1B
+#define OP_FLR                                     0x09
+#define OP_FLR_SAT                                 0x26
+#define OP_FRC                                     0x0A
+#define OP_FRC_SAT                                 0x27
+#define OP_LIT                                     0x0C
+#define OP_LIT_SAT                                 0x2A
+#define OP_MOV                                     0x11
+#define OP_MOV_SAT                                 0x30
+#define OP_COS                                     0x1F
+#define OP_COS_SAT                                 0x20
+#define OP_EX2                                     0x07
+#define OP_EX2_SAT                                 0x25
+#define OP_LG2                                     0x0B
+#define OP_LG2_SAT                                 0x29
+#define OP_RCP                                     0x14
+#define OP_RCP_SAT                                 0x33
+#define OP_RSQ                                     0x15
+#define OP_RSQ_SAT                                 0x34
+#define OP_SIN                                     0x38
+#define OP_SIN_SAT                                 0x39
+#define OP_SCS                                     0x35
+#define OP_SCS_SAT                                 0x36
+#define OP_POW                                     0x13
+#define OP_POW_SAT                                 0x32
+#define OP_ADD                                     0x01
+#define OP_ADD_SAT                                 0x1C
+#define OP_DP3                                     0x03
+#define OP_DP3_SAT                                 0x21
+#define OP_DP4                                     0x04
+#define OP_DP4_SAT                                 0x22
+#define OP_DPH                                     0x05
+#define OP_DPH_SAT                                 0x23
+#define OP_DST                                     0x06
+#define OP_DST_SAT                                 0x24
+#define OP_MAX                                     0x0F
+#define OP_MAX_SAT                                 0x2E
+#define OP_MIN                                     0x10
+#define OP_MIN_SAT                                 0x2F
+#define OP_MUL                                     0x12
+#define OP_MUL_SAT                                 0x31
+#define OP_SGE                                     0x16
+#define OP_SGE_SAT                                 0x37
+#define OP_SLT                                     0x17
+#define OP_SLT_SAT                                 0x3A
+#define OP_SUB                                     0x18
+#define OP_SUB_SAT                                 0x3B
+#define OP_XPD                                     0x1A
+#define OP_XPD_SAT                                 0x43
+#define OP_CMP                                     0x1D
+#define OP_CMP_SAT                                 0x1E
+#define OP_LRP                                     0x2B
+#define OP_LRP_SAT                                 0x2C
+#define OP_MAD                                     0x0E
+#define OP_MAD_SAT                                 0x2D
+#define OP_SWZ                                     0x19
+#define OP_SWZ_SAT                                 0x3C
+#define OP_TEX                                     0x3D
+#define OP_TEX_SAT                                 0x3E
+#define OP_TXB                                     0x3F
+#define OP_TXB_SAT                                 0x40
+#define OP_TXP                                     0x41
+#define OP_TXP_SAT                                 0x42
+#define OP_KIL                                     0x28
+
+/* vertex program 1.0 instruction code */
+#define OP_ARL                                     0x02
+/*       OP_ABS */
+/*       OP_FLR */
+/*       OP_FRC */
+/*       OP_LIT */
+/*       OP_MOV */
+/*       OP_EX2 */
+#define OP_EXP                                     0x08
+/*       OP_LG2 */
+#define OP_LOG                                     0x0D
+/*       OP_RCP */
+/*       OP_RSQ */
+/*       OP_POW */
+/*       OP_ADD */
+/*       OP_DP3 */
+/*       OP_DP4 */
+/*       OP_DPH */
+/*       OP_DST */
+/*       OP_MAX */
+/*       OP_MIN */
+/*       OP_MUL */
+/*       OP_SGE */
+/*       OP_SLT */
+/*       OP_SUB */
+/*       OP_XPD */
+/*       OP_MAD */
+/*       OP_SWZ */
 
 /* fragment attribute binding */
 #define FRAGMENT_ATTRIB_COLOR                      0x01
@@ -711,7 +724,7 @@ static GLint error_position = -1;
 static GLubyte *unknown = (GLubyte *) "???";
 
 static GLvoid
-clear_last_error ()
+clear_last_error (GLvoid)
 {
    /* reset error message */
    error_message = NULL;
@@ -2904,20 +2917,32 @@ static GLfloat
 parse_float (GLubyte ** inst, struct arb_program *Program)
 {
    GLint tmp[5], denom;
+   GLuint leading_zeros =0;
    GLfloat value = 0;
 
 #if 0
    tmp[0] = parse_sign (inst);  /* This is the sign of the number + - >0, - -> 1 */
 #endif
    tmp[1] = parse_integer (inst, Program);   /* This is the integer portion of the number */
+
+   /* Now we grab the fractional portion of the number (the digits after 
+	* the .). We can have leading 0's here, which parse_integer will ignore, 
+	* so we'll check for those first
+	*/
+   while ((**inst == '0') && ( *(*inst+1) != 0))
+   {
+	  leading_zeros++;
+	  (*inst)++;
+   }
    tmp[2] = parse_integer (inst, Program);   /* This is the fractional portion of the number */
    tmp[3] = parse_sign (inst);               /* This is the sign of the exponent */
    tmp[4] = parse_integer (inst, Program);   /* This is the exponent */
 
    value = (GLfloat) tmp[1];
-   denom = 1;
+   denom = 1; 
    while (denom < tmp[2])
       denom *= 10;
+   denom *= _mesa_pow( 10, leading_zeros );
    value += (GLfloat) tmp[2] / (GLfloat) denom;
 #if 0
    if (tmp[0])
@@ -2927,6 +2952,7 @@ parse_float (GLubyte ** inst, struct arb_program *Program)
 
    return value;
 }
+
 
 /**
  */
@@ -2984,6 +3010,27 @@ parse_constant (GLubyte ** inst, GLfloat *values, struct arb_program *Program,
    }
 }
 
+/**
+ * \param offset The offset from the address register that we should
+ *                address
+ *
+ * \return 0 on sucess, 1 on error                
+ */
+static GLuint
+parse_relative_offset (GLcontext *ctx, GLubyte **inst, struct arb_program *Program,
+                        GLint *offset)
+{
+   *offset = parse_integer(inst, Program);
+   if ((*offset > 63) || (*offset < -64)) {
+      _mesa_set_program_error (ctx, Program->Position,
+                               "Relative offset out of range");
+      _mesa_error (ctx, GL_INVALID_OPERATION, "Relative offset %d out of range",
+                                                *offset);
+      return 1;	  
+   }
+
+   return 0;
+}
 
 /**
  * \param  color 0 if color type is primary, 1 if color type is secondary
@@ -3115,12 +3162,18 @@ parse_matrix (GLcontext * ctx, GLubyte ** inst, struct arb_program *Program,
    GLubyte mat = *(*inst)++;
 
    *matrix_idx = 0;
-
+	
    switch (mat) {
       case MATRIX_MODELVIEW:
          *matrix = STATE_MODELVIEW;
          *matrix_idx = parse_integer (inst, Program);
-         /* XXX: if (*matrix_idx >= ctx->Const. */
+         if (*matrix_idx > 0) {
+            _mesa_set_program_error (ctx, Program->Position,
+               "ARB_vertex_blend not supported\n");
+            _mesa_error (ctx, GL_INVALID_OPERATION,
+               "ARB_vertex_blend not supported\n");
+            return 1;
+         }
          break;
 
       case MATRIX_PROJECTION:
@@ -3143,9 +3196,14 @@ parse_matrix (GLcontext * ctx, GLubyte ** inst, struct arb_program *Program,
          }
          break;
 
-         /* XXX: How should we handle the palette matrix? */
+         /* This is not currently supported (ARB_matrix_palette) */
       case MATRIX_PALETTE:
          *matrix_idx = parse_integer (inst, Program);
+         _mesa_set_program_error (ctx, Program->Position,
+              "ARB_matrix_palette not supported\n");
+         _mesa_error (ctx, GL_INVALID_OPERATION,
+              "ARB_matrix_palette not supported\n");
+         return 1;
          break;
 
       case MATRIX_PROGRAM:
@@ -3395,7 +3453,6 @@ parse_state_single_item (GLcontext * ctx, GLubyte ** inst,
          /* XXX: I think this is the correct format for a matrix row */
       case STATE_MATRIX_ROWS:
          state_tokens[0] = STATE_MATRIX;
-
          if (parse_matrix
              (ctx, inst, Program, &state_tokens[1], &state_tokens[2],
               &state_tokens[5]))
@@ -3403,9 +3460,20 @@ parse_state_single_item (GLcontext * ctx, GLubyte ** inst,
 
          state_tokens[3] = parse_integer (inst, Program);       /* The first row to grab */
 
-         state_tokens[4] = parse_integer (inst, Program);       /* Either the last row, 0 */
-         if (state_tokens[4] == 0) {
+         if ((**inst) != 0) {                                   /* Either the last row, 0 */
+            state_tokens[4] = parse_integer (inst, Program);       
+            if (state_tokens[4] < state_tokens[3]) {
+               _mesa_set_program_error (ctx, Program->Position,
+                     "Second matrix index less than the first");
+               _mesa_error (ctx, GL_INVALID_OPERATION,
+                     "Second matrix index (%d) less than the first (%d)", 
+                     state_tokens[4], state_tokens[3]);									 
+               return 1;					
+            }						  
+         }
+         else {			
             state_tokens[4] = state_tokens[3];
+            (*inst)++;
          }
          break;
    }
@@ -3602,6 +3670,11 @@ parse_attrib_binding (GLcontext * ctx, GLubyte ** inst,
                *binding = VERT_ATTRIB_WEIGHT;
                *binding_idx = 1;
             }
+            _mesa_set_program_error (ctx, Program->Position,
+                 "ARB_vertex_blend not supported\n");
+            _mesa_error (ctx, GL_INVALID_OPERATION,
+                 "ARB_vertex_blend not supported\n");
+            return 1;
             break;
 
          case VERTEX_ATTRIB_NORMAL:
@@ -3640,9 +3713,14 @@ parse_attrib_binding (GLcontext * ctx, GLubyte ** inst,
             }
             break;
 
-            /* XXX: It looks like we don't support this at all, atm */
+            /* It looks like we don't support this at all, atm */
          case VERTEX_ATTRIB_MATRIXINDEX:
             parse_integer (inst, Program);
+            _mesa_set_program_error (ctx, Program->Position,
+                  "ARB_palette_matrix not supported");
+            _mesa_error (ctx, GL_INVALID_OPERATION,
+                  "ARB_palette_matrix not supported");
+            return 1;
             break;
 
          case VERTEX_ATTRIB_GENERIC:
@@ -3932,10 +4010,10 @@ parse_param_elements (GLcontext * ctx, GLubyte ** inst,
             }
             else {
                if (((state_tokens[1] == STATE_ENV)
-                    && (end_idx >= ctx->Const.MaxFragmentProgramEnvParams))
+                    && (end_idx >= ctx->Const.MaxVertexProgramEnvParams))
                    || ((state_tokens[1] == STATE_LOCAL)
                        && (end_idx >=
-                           ctx->Const.MaxFragmentProgramLocalParams)))
+                           ctx->Const.MaxVertexProgramLocalParams)))
                   out_of_range = 1;
             }
             if (out_of_range) {
@@ -4334,6 +4412,10 @@ parse_declaration (GLcontext * ctx, GLubyte ** inst, struct var_cache **vc_head,
 /**
  * Handle the parsing out of a masked destination register
  *
+ * If we are a vertex program, make sure we don't write to
+ * result.position of we have specified that the program is
+ * position invariant
+ * 
  * \param File      - The register file we write to
  * \param Index     - The register index we write to
  * \param WriteMask - The mask controlling which components we write (1->write)
@@ -4403,6 +4485,16 @@ parse_masked_dst_reg (GLcontext * ctx, GLubyte ** inst,
          return 1;
    }
 
+
+   /* Position invariance test */	
+   if ((Program->HintPositionInvariant) && (*File == PROGRAM_OUTPUT) &&
+      (*Index == 0))   {
+      _mesa_set_program_error (ctx, Program->Position,
+                  "Vertex program specified position invariance and wrote vertex position");
+      _mesa_error (ctx, GL_INVALID_OPERATION,
+                  "Vertex program specified position invariance and wrote vertex position");
+   }
+	
    /* And then the mask.
     *  w,a -> bit 0
     *  z,b -> bit 1
@@ -4415,6 +4507,44 @@ parse_masked_dst_reg (GLcontext * ctx, GLubyte ** inst,
    WriteMask[1] = (mask & (1 << 2)) >> 2;
    WriteMask[2] = (mask & (1 << 1)) >> 1;
    WriteMask[3] = (mask & (1));
+
+   return 0;
+}
+
+
+/** 
+ * Handle the parsing of a address register 
+ *
+ * \param Index     - The register index we write to
+ *
+ * \return 0 on sucess, 1 on error
+ */
+static GLuint
+parse_address_reg (GLcontext * ctx, GLubyte ** inst,
+                          struct var_cache **vc_head,
+                          struct arb_program *Program, GLint * Index)
+{
+   struct var_cache *dst;
+   GLuint result;
+
+   dst = parse_string (inst, vc_head, Program, &result);
+   Program->Position = parse_position (inst);
+
+   /* If the name has never been added to our symbol table, we're hosed */
+   if (!result) {
+      _mesa_set_program_error (ctx, Program->Position, "Undefined variable");
+      _mesa_error (ctx, GL_INVALID_OPERATION, "Undefined variable: %s",
+                   dst->name);
+      return 1;
+   }
+
+   if (dst->type != vt_address) {
+      _mesa_set_program_error (ctx, Program->Position,
+                               "Variable is not of type ADDRESS");
+      _mesa_error (ctx, GL_INVALID_OPERATION,
+                   "Variable: %s is not of type ADDRESS", dst->name);
+      return 1;
+   }
 
    return 0;
 }
@@ -4433,27 +4563,11 @@ parse_masked_address_reg (GLcontext * ctx, GLubyte ** inst,
                           struct arb_program *Program, GLint * Index,
                           GLboolean * WriteMask)
 {
-   struct var_cache *dst;
-   GLuint result;
+   if (parse_address_reg (ctx, inst, vc_head, Program, Index))
+      return 1;	     
 
-   dst = parse_string (inst, vc_head, Program, &result);
-   Program->Position = parse_position (inst);
-
-	/* If the name has never been added to our symbol table, we're hosed */
-   if (!result) {
-      _mesa_set_program_error (ctx, Program->Position, "1: Undefined variable");
-      _mesa_error (ctx, GL_INVALID_OPERATION, "1: Undefined variable: %s",
-                   dst->name);
-      return 1;
-   }
-
-   if (dst->type != vt_address) {
-      _mesa_set_program_error (ctx, Program->Position,
-                               "Variable is not of type ADDRESS");
-      _mesa_error (ctx, GL_INVALID_OPERATION,
-                   "Variable: %s is not of type ADDRESS", dst->name);
-      return 1;
-   }
+   /* This should be 0x8 */
+   (*inst)++;
 
    /* Writemask of .x is implied */
    WriteMask[0] = 1;
@@ -4461,6 +4575,7 @@ parse_masked_address_reg (GLcontext * ctx, GLubyte ** inst,
 
    return 0;
 }
+
 
 /** 
  * Parse out a swizzle mask.
@@ -4564,7 +4679,8 @@ parse_extended_swizzle_mask (GLubyte ** inst, GLubyte * mask, GLboolean * Negate
 
 static GLuint
 parse_src_reg (GLcontext * ctx, GLubyte ** inst, struct var_cache **vc_head,
-               struct arb_program *Program, GLint * File, GLint * Index)
+               struct arb_program *Program, GLint * File, GLint * Index,
+               GLboolean *IsRelOffset )
 {
    struct var_cache *src;
    GLuint binding_state, binding_idx, is_generic, found, offset;
@@ -4631,8 +4747,27 @@ parse_src_reg (GLcontext * ctx, GLubyte ** inst, struct var_cache **vc_head,
                      *Index = src->param_binding_begin + offset;
                      break;
 
-                     /* XXX: */
                   case ARRAY_INDEX_RELATIVE:
+                     {
+                        GLint addr_reg_idx, rel_off;
+
+                        /* First, grab the address regiseter */
+                        if (parse_address_reg (ctx, inst, vc_head, Program, &addr_reg_idx))
+                           return 1;					   
+
+                        /* And the .x */			   
+                        ((*inst)++);
+                        ((*inst)++);
+                        ((*inst)++);
+                        ((*inst)++);
+
+                        /* Then the relative offset */
+                        if (parse_relative_offset(ctx, inst, Program, &rel_off)) return 1;	
+
+                        /* And store it properly */
+                        *Index = src->param_binding_begin + rel_off;
+                        *IsRelOffset = 1;				
+                     }
                      break;
                }
                break;
@@ -4707,13 +4842,13 @@ static GLuint
 parse_vector_src_reg (GLcontext * ctx, GLubyte ** inst,
                       struct var_cache **vc_head, struct arb_program *Program,
                       GLint * File, GLint * Index, GLboolean * Negate,
-                      GLubyte * Swizzle)
+                      GLubyte * Swizzle, GLboolean *IsRelOffset)
 {
    /* Grab the sign */
    *Negate = parse_sign (inst);
 
    /* And the src reg */
-   if (parse_src_reg (ctx, inst, vc_head, Program, File, Index))
+   if (parse_src_reg (ctx, inst, vc_head, Program, File, Index, IsRelOffset))
       return 1;
 
    /* finally, the swizzle */
@@ -4728,13 +4863,13 @@ static GLuint
 parse_scalar_src_reg (GLcontext * ctx, GLubyte ** inst,
                       struct var_cache **vc_head, struct arb_program *Program,
                       GLint * File, GLint * Index, GLboolean * Negate,
-                      GLubyte * Swizzle)
+                      GLubyte * Swizzle, GLboolean *IsRelOffset)
 {
    /* Grab the sign */
    *Negate = parse_sign (inst);
 
    /* And the src reg */
-   if (parse_src_reg (ctx, inst, vc_head, Program, File, Index))
+   if (parse_src_reg (ctx, inst, vc_head, Program, File, Index, IsRelOffset))
       return 1;
 
    /* Now, get the component and shove it into all the swizzle slots  */
@@ -4756,6 +4891,7 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
    GLubyte swz[4]; /* FP's swizzle mask is a GLubyte, while VP's is GLuint */
    GLuint texcoord;
    GLubyte instClass, type, code;
+   GLboolean rel;
 
    /* No condition codes in ARB_fp */
    fp->UpdateCondRegister = 0;
@@ -4763,11 +4899,11 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
    /* Record the position in the program string for debugging */
    fp->StringPos = Program->Position;
 
-   /* F_ALU_INST or F_TEX_INST */
+   /* OP_ALU_INST or OP_TEX_INST */
    instClass = *(*inst)++;
 
-   /* F_ALU_{VECTOR, SCALAR, BINSC, BIN, TRI, SWZ}, 
-    * F_TEX_{SAMPLE, KIL}
+   /* OP_ALU_{VECTOR, SCALAR, BINSC, BIN, TRI, SWZ}, 
+    * OP_TEX_{SAMPLE, KIL}
     */
    type = *(*inst)++;
 
@@ -4776,10 +4912,10 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
 
    /* Increment the correct count */
    switch (instClass) {
-      case F_ALU_INST:
+      case OP_ALU_INST:
          Program->NumAluInstructions++;
          break;
-      case F_TEX_INST:
+      case OP_TEX_INST:
          Program->NumTexInstructions++;
          break;
    }
@@ -4790,35 +4926,35 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
    fp->DstReg.CondMask = COND_TR;
 
    switch (type) {
-      case F_ALU_VECTOR:
+      case OP_ALU_VECTOR:
          switch (code) {
-            case F_ABS_SAT:
+            case OP_ABS_SAT:
                fp->Saturate = 1;
-            case F_ABS:
+            case OP_ABS:
                fp->Opcode = FP_OPCODE_ABS;
                break;
 
-            case F_FLR_SAT:
+            case OP_FLR_SAT:
                fp->Saturate = 1;
-            case F_FLR:
+            case OP_FLR:
                fp->Opcode = FP_OPCODE_FLR;
                break;
 
-            case F_FRC_SAT:
+            case OP_FRC_SAT:
                fp->Saturate = 1;
-            case F_FRC:
+            case OP_FRC:
                fp->Opcode = FP_OPCODE_FRC;
                break;
 
-            case F_LIT_SAT:
+            case OP_LIT_SAT:
                fp->Saturate = 1;
-            case F_LIT:
+            case OP_LIT:
                fp->Opcode = FP_OPCODE_LIT;
                break;
 
-            case F_MOV_SAT:
+            case OP_MOV_SAT:
                fp->Saturate = 1;
-            case F_MOV:
+            case OP_MOV:
                fp->Opcode = FP_OPCODE_MOV;
                break;
          }
@@ -4833,53 +4969,54 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
          if (parse_vector_src_reg
              (ctx, inst, vc_head, Program, (GLint *) & fp->SrcReg[0].File,
               &fp->SrcReg[0].Index, &fp->SrcReg[0].NegateBase,
-              swz))
+              swz, &rel))
             return 1;
          for (b=0; b<4; b++)
             fp->SrcReg[0].Swizzle[b] = swz[b];
          break;
 
-      case F_ALU_SCALAR:
+      case OP_ALU_SCALAR:
          switch (code) {
-            case F_COS_SAT:
+            case OP_COS_SAT:
                fp->Saturate = 1;
-            case F_COS:
+            case OP_COS:
                fp->Opcode = FP_OPCODE_COS;
                break;
 
-            case F_EX2_SAT:
+            case OP_EX2_SAT:
                fp->Saturate = 1;
-            case F_EX2:
+            case OP_EX2:
                fp->Opcode = FP_OPCODE_EX2;
                break;
 
-            case F_LG2_SAT:
+            case OP_LG2_SAT:
                fp->Saturate = 1;
-            case F_LG2:
+            case OP_LG2:
                fp->Opcode = FP_OPCODE_LG2;
                break;
 
-            case F_RCP_SAT:
+            case OP_RCP_SAT:
                fp->Saturate = 1;
-            case F_RCP:
+            case OP_RCP:
                fp->Opcode = FP_OPCODE_RCP;
                break;
 
-            case F_RSQ_SAT:
+            case OP_RSQ_SAT:
                fp->Saturate = 1;
-            case F_RSQ:
+            case OP_RSQ:
                fp->Opcode = FP_OPCODE_RSQ;
                break;
 
-            case F_SIN_SAT:
+            case OP_SIN_SAT:
                fp->Saturate = 1;
-            case F_SIN:
+            case OP_SIN:
                fp->Opcode = FP_OPCODE_SIN;
                break;
 
-            case F_SCS_SAT:
+            case OP_SCS_SAT:
                fp->Saturate = 1;
-            case F_SCS:
+            case OP_SCS:
+	      
                fp->Opcode = FP_OPCODE_SCS;
                break;
          }
@@ -4893,17 +5030,17 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
          if (parse_scalar_src_reg
              (ctx, inst, vc_head, Program, (GLint *) & fp->SrcReg[0].File,
               &fp->SrcReg[0].Index, &fp->SrcReg[0].NegateBase,
-              swz))
+              swz, &rel))
             return 1;
          for (b=0; b<4; b++)
             fp->SrcReg[0].Swizzle[b] = swz[b];
          break;
 
-      case F_ALU_BINSC:
+      case OP_ALU_BINSC:
          switch (code) {
-            case F_POW_SAT:
+            case OP_POW_SAT:
                fp->Saturate = 1;
-            case F_POW:
+            case OP_POW:
                fp->Opcode = FP_OPCODE_POW;
                break;
          }
@@ -4918,7 +5055,7 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
             if (parse_scalar_src_reg
                 (ctx, inst, vc_head, Program, (GLint *) & fp->SrcReg[a].File,
                  &fp->SrcReg[a].Index, &fp->SrcReg[a].NegateBase,
-                 swz))
+                 swz, &rel))
                return 1;
             for (b=0; b<4; b++)
                fp->SrcReg[a].Swizzle[b] = swz[b];
@@ -4926,77 +5063,77 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
          break;
 
 
-      case F_ALU_BIN:
+      case OP_ALU_BIN:
          switch (code) {
-            case F_ADD_SAT:
+            case OP_ADD_SAT:
                fp->Saturate = 1;
-            case F_ADD:
+            case OP_ADD:
                fp->Opcode = FP_OPCODE_ADD;
                break;
 
-            case F_DP3_SAT:
+            case OP_DP3_SAT:
                fp->Saturate = 1;
-            case F_DP3:
+            case OP_DP3:
                fp->Opcode = FP_OPCODE_DP3;
                break;
 
-            case F_DP4_SAT:
+            case OP_DP4_SAT:
                fp->Saturate = 1;
-            case F_DP4:
+            case OP_DP4:
                fp->Opcode = FP_OPCODE_DP4;
                break;
 
-            case F_DPH_SAT:
+            case OP_DPH_SAT:
                fp->Saturate = 1;
-            case F_DPH:
+            case OP_DPH:
                fp->Opcode = FP_OPCODE_DPH;
                break;
 
-            case F_DST_SAT:
+            case OP_DST_SAT:
                fp->Saturate = 1;
-            case F_DST:
+            case OP_DST:
                fp->Opcode = FP_OPCODE_DST;
                break;
 
-            case F_MAX_SAT:
+            case OP_MAX_SAT:
                fp->Saturate = 1;
-            case F_MAX:
+            case OP_MAX:
                fp->Opcode = FP_OPCODE_MAX;
                break;
 
-            case F_MIN_SAT:
+            case OP_MIN_SAT:
                fp->Saturate = 1;
-            case F_MIN:
+            case OP_MIN:
                fp->Opcode = FP_OPCODE_MIN;
                break;
 
-            case F_MUL_SAT:
+            case OP_MUL_SAT:
                fp->Saturate = 1;
-            case F_MUL:
+            case OP_MUL:
                fp->Opcode = FP_OPCODE_MUL;
                break;
 
-            case F_SGE_SAT:
+            case OP_SGE_SAT:
                fp->Saturate = 1;
-            case F_SGE:
+            case OP_SGE:
                fp->Opcode = FP_OPCODE_SGE;
                break;
 
-            case F_SLT_SAT:
+            case OP_SLT_SAT:
                fp->Saturate = 1;
-            case F_SLT:
+            case OP_SLT:
                fp->Opcode = FP_OPCODE_SLT;
                break;
 
-            case F_SUB_SAT:
+            case OP_SUB_SAT:
                fp->Saturate = 1;
-            case F_SUB:
+            case OP_SUB:
                fp->Opcode = FP_OPCODE_SUB;
                break;
 
-            case F_XPD_SAT:
+            case OP_XPD_SAT:
                fp->Saturate = 1;
-            case F_XPD:
+            case OP_XPD:
                fp->Opcode = FP_OPCODE_X2D;
                break;
          }
@@ -5011,30 +5148,30 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
             if (parse_vector_src_reg
                 (ctx, inst, vc_head, Program, (GLint *) & fp->SrcReg[a].File,
                  &fp->SrcReg[a].Index, &fp->SrcReg[a].NegateBase,
-                 swz))
+                 swz, &rel))
                return 1;
             for (b=0; b<4; b++)
                fp->SrcReg[a].Swizzle[b] = swz[b];
          }
          break;
 
-      case F_ALU_TRI:
+      case OP_ALU_TRI:
          switch (code) {
-            case F_CMP_SAT:
+            case OP_CMP_SAT:
                fp->Saturate = 1;
-            case F_CMP:
+            case OP_CMP:
                fp->Opcode = FP_OPCODE_CMP;
                break;
 
-            case F_LRP_SAT:
+            case OP_LRP_SAT:
                fp->Saturate = 1;
-            case F_LRP:
+            case OP_LRP:
                fp->Opcode = FP_OPCODE_LRP;
                break;
 
-            case F_MAD_SAT:
+            case OP_MAD_SAT:
                fp->Saturate = 1;
-            case F_MAD:
+            case OP_MAD:
                fp->Opcode = FP_OPCODE_MAD;
                break;
          }
@@ -5049,18 +5186,18 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
             if (parse_vector_src_reg
                 (ctx, inst, vc_head, Program, (GLint *) & fp->SrcReg[a].File,
                  &fp->SrcReg[a].Index, &fp->SrcReg[a].NegateBase,
-                 swz))
+                 swz, &rel))
                return 1;
             for (b=0; b<4; b++)
                fp->SrcReg[a].Swizzle[b] = swz[b];
          }
          break;
 
-      case F_ALU_SWZ:
+      case OP_ALU_SWZ:
          switch (code) {
-            case F_SWZ_SAT:
+            case OP_SWZ_SAT:
                fp->Saturate = 1;
-            case F_SWZ:
+            case OP_SWZ:
                fp->Opcode = FP_OPCODE_SWZ;
                break;
          }
@@ -5071,7 +5208,7 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
 
          if (parse_src_reg
              (ctx, inst, vc_head, Program, (GLint *) & fp->SrcReg[0].File,
-              &fp->SrcReg[0].Index))
+              &fp->SrcReg[0].Index, &rel))
             return 1;
          parse_extended_swizzle_mask (inst, swz,
                                       &fp->SrcReg[0].NegateBase);
@@ -5079,23 +5216,24 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
             fp->SrcReg[0].Swizzle[b] = swz[b];
          break;
 
-      case F_TEX_SAMPLE:
+      case OP_TEX_SAMPLE:
          switch (code) {
-            case F_TEX_SAT:
+            case OP_TEX_SAT:
                fp->Saturate = 1;
-            case F_TEX:
+            case OP_TEX:
                fp->Opcode = FP_OPCODE_TEX;
                break;
 
-            case F_TXP_SAT:
+            case OP_TXP_SAT:
                fp->Saturate = 1;
-            case F_TXP:
+            case OP_TXP:
                fp->Opcode = FP_OPCODE_TXP;
                break;
 
-            case F_TXB_SAT:
+            case OP_TXB_SAT:
+	      
                fp->Saturate = 1;
-            case F_TXB:
+            case OP_TXB:
                fp->Opcode = FP_OPCODE_TXB;
                break;
          }
@@ -5109,7 +5247,7 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
          if (parse_vector_src_reg
              (ctx, inst, vc_head, Program, (GLint *) & fp->SrcReg[0].File,
               &fp->SrcReg[0].Index, &fp->SrcReg[0].NegateBase,
-              swz))
+              swz, &rel))
             return 1;
          for (b=0; b<4; b++)
             fp->SrcReg[0].Swizzle[b] = swz[b];
@@ -5140,14 +5278,14 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
          Program->TexturesUsed[texcoord] |= fp->TexSrcBit;			
          break;
 
-      case F_TEX_KIL:
+      case OP_TEX_KIL:
          fp->Opcode = FP_OPCODE_KIL;
          fp->SrcReg[0].Abs = GL_FALSE;
          fp->SrcReg[0].NegateAbs = GL_FALSE;
          if (parse_vector_src_reg
              (ctx, inst, vc_head, Program, (GLint *) & fp->SrcReg[0].File,
               &fp->SrcReg[0].Index, &fp->SrcReg[0].NegateBase,
-              swz))
+              swz, &rel))
             return 1;
          for (b=0; b<4; b++)
             fp->SrcReg[0].Swizzle[b] = swz[b];
@@ -5169,7 +5307,7 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
    GLint a;
    GLubyte type, code;
 
-   /* V_GEN_{ARL, VECTOR, SCALAR, BINSC, BIN, TRI, SWZ} */
+   /* OP_ALU_{ARL, VECTOR, SCALAR, BINSC, BIN, TRI, SWZ} */
    type = *(*inst)++;
 
    /* The actual opcode name */
@@ -5186,7 +5324,7 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
 
    switch (type) {
          /* XXX: */
-      case V_GEN_ARL:
+      case OP_ALU_ARL:
          vp->Opcode = VP_OPCODE_ARL;
 
          /* Remember to set SrcReg.RelAddr; */
@@ -5198,31 +5336,30 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
             return 1;
          vp->DstReg.File = PROGRAM_ADDRESS;
 
-
          /* Get a scalar src register */
          if (parse_scalar_src_reg
              (ctx, inst, vc_head, Program, (GLint *) & vp->SrcReg[0].File,
               &vp->SrcReg[0].Index, &vp->SrcReg[0].Negate,
-              vp->SrcReg[0].Swizzle))
+              vp->SrcReg[0].Swizzle, &vp->SrcReg[0].RelAddr))
             return 1;
 
          break;
 
-      case V_GEN_VECTOR:
+      case OP_ALU_VECTOR:
          switch (code) {
-            case V_ABS:
+            case OP_ABS:
                vp->Opcode = VP_OPCODE_ABS;
                break;
-            case V_FLR:
+            case OP_FLR:
                vp->Opcode = VP_OPCODE_FLR;
                break;
-            case V_FRC:
+            case OP_FRC:
                vp->Opcode = VP_OPCODE_FRC;
                break;
-            case V_LIT:
+            case OP_LIT:
                vp->Opcode = VP_OPCODE_LIT;
                break;
-            case V_MOV:
+            case OP_MOV:
                vp->Opcode = VP_OPCODE_MOV;
                break;
          }
@@ -5233,28 +5370,28 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
          if (parse_vector_src_reg
              (ctx, inst, vc_head, Program, (GLint *) & vp->SrcReg[0].File,
               &vp->SrcReg[0].Index, &vp->SrcReg[0].Negate,
-              vp->SrcReg[0].Swizzle))
+              vp->SrcReg[0].Swizzle, &vp->SrcReg[0].RelAddr))
             return 1;
          break;
 
-      case V_GEN_SCALAR:
+      case OP_ALU_SCALAR:
          switch (code) {
-            case V_EX2:
+            case OP_EX2:
                vp->Opcode = VP_OPCODE_EX2;
                break;
-            case V_EXP:
+            case OP_EXP:
                vp->Opcode = VP_OPCODE_EXP;
                break;
-            case V_LG2:
+            case OP_LG2:
                vp->Opcode = VP_OPCODE_LG2;
                break;
-            case V_LOG:
+            case OP_LOG:
                vp->Opcode = VP_OPCODE_LOG;
                break;
-            case V_RCP:
+            case OP_RCP:
                vp->Opcode = VP_OPCODE_RCP;
                break;
-            case V_RSQ:
+            case OP_RSQ:
                vp->Opcode = VP_OPCODE_RSQ;
                break;
          }
@@ -5265,13 +5402,13 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
          if (parse_scalar_src_reg
              (ctx, inst, vc_head, Program, (GLint *) & vp->SrcReg[0].File,
               &vp->SrcReg[0].Index, &vp->SrcReg[0].Negate,
-              vp->SrcReg[0].Swizzle))
+              vp->SrcReg[0].Swizzle, &vp->SrcReg[0].RelAddr))
             return 1;
          break;
 
-      case V_GEN_BINSC:
+      case OP_ALU_BINSC:
          switch (code) {
-            case V_POW:
+            case OP_POW:
                vp->Opcode = VP_OPCODE_POW;
                break;
          }
@@ -5283,47 +5420,47 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
             if (parse_scalar_src_reg
                 (ctx, inst, vc_head, Program, (GLint *) & vp->SrcReg[a].File,
                  &vp->SrcReg[a].Index, &vp->SrcReg[a].Negate,
-                 vp->SrcReg[a].Swizzle))
+                 vp->SrcReg[a].Swizzle, &vp->SrcReg[a].RelAddr))
                return 1;
          }
          break;
 
-      case V_GEN_BIN:
+      case OP_ALU_BIN:
          switch (code) {
-            case V_ADD:
+            case OP_ADD:
                vp->Opcode = VP_OPCODE_ADD;
                break;
-            case V_DP3:
+            case OP_DP3:
                vp->Opcode = VP_OPCODE_DP3;
                break;
-            case V_DP4:
+            case OP_DP4:
                vp->Opcode = VP_OPCODE_DP4;
                break;
-            case V_DPH:
+            case OP_DPH:
                vp->Opcode = VP_OPCODE_DPH;
                break;
-            case V_DST:
+            case OP_DST:
                vp->Opcode = VP_OPCODE_DST;
                break;
-            case V_MAX:
+            case OP_MAX:
                vp->Opcode = VP_OPCODE_MAX;
                break;
-            case V_MIN:
+            case OP_MIN:
                vp->Opcode = VP_OPCODE_MIN;
                break;
-            case V_MUL:
+            case OP_MUL:
                vp->Opcode = VP_OPCODE_MUL;
                break;
-            case V_SGE:
+            case OP_SGE:
                vp->Opcode = VP_OPCODE_SGE;
                break;
-            case V_SLT:
+            case OP_SLT:
                vp->Opcode = VP_OPCODE_SLT;
                break;
-            case V_SUB:
+            case OP_SUB:
                vp->Opcode = VP_OPCODE_SUB;
                break;
-            case V_XPD:
+            case OP_XPD:
                vp->Opcode = VP_OPCODE_XPD;
                break;
          }
@@ -5335,14 +5472,14 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
             if (parse_vector_src_reg
                 (ctx, inst, vc_head, Program, (GLint *) & vp->SrcReg[a].File,
                  &vp->SrcReg[a].Index, &vp->SrcReg[a].Negate,
-                 vp->SrcReg[a].Swizzle))
+                 vp->SrcReg[a].Swizzle, &vp->SrcReg[a].RelAddr))
                return 1;
          }
          break;
 
-      case V_GEN_TRI:
+      case OP_ALU_TRI:
          switch (code) {
-            case V_MAD:
+            case OP_MAD:
                vp->Opcode = VP_OPCODE_MAD;
                break;
          }
@@ -5355,14 +5492,14 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
             if (parse_vector_src_reg
                 (ctx, inst, vc_head, Program, (GLint *) & vp->SrcReg[a].File,
                  &vp->SrcReg[a].Index, &vp->SrcReg[a].Negate,
-                 vp->SrcReg[a].Swizzle))
+                 vp->SrcReg[a].Swizzle, &vp->SrcReg[a].RelAddr))
                return 1;
          }
          break;
 
-      case V_GEN_SWZ:
+      case OP_ALU_SWZ:
          switch (code) {
-            case V_SWZ:
+            case OP_SWZ:
                vp->Opcode = VP_OPCODE_SWZ;
                break;
          }
@@ -5373,7 +5510,7 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
 
          if (parse_src_reg
              (ctx, inst, vc_head, Program, (GLint *) & vp->SrcReg[0].File,
-              &vp->SrcReg[0].Index))
+              &vp->SrcReg[0].Index, &vp->SrcReg[0].RelAddr))
             return 1;
          parse_extended_swizzle_mask (inst, vp->SrcReg[0].Swizzle,
                                       &vp->SrcReg[0].Negate);
@@ -5675,7 +5812,8 @@ parse_arb_program (GLcontext * ctx, GLubyte * inst, struct var_cache **vc_head,
                   break;
 
                case ARB_POSITION_INVARIANT:
-                  Program->HintPositionInvariant = 1;
+                  if (Program->type == GL_VERTEX_PROGRAM_ARB)						
+                     Program->HintPositionInvariant = 1;
                   break;
             }
             break;
@@ -5684,6 +5822,17 @@ parse_arb_program (GLcontext * ctx, GLubyte * inst, struct var_cache **vc_head,
             Program->Position = parse_position (&inst);
 
             if (Program->type == GL_FRAGMENT_PROGRAM_ARB) {
+
+               /* Check the instruction count 
+                * XXX: Does END count as an instruction?
+                */						  
+               if (Program->Base.NumInstructions+1 == MAX_NV_FRAGMENT_PROGRAM_INSTRUCTIONS) {
+                  _mesa_set_program_error (ctx, Program->Position, 
+                      "Max instruction count exceeded!");
+                  _mesa_error (ctx, GL_INVALID_OPERATION,
+                      "Max instruction count exceeded!");
+               }
+					
                /* Realloc Program->FPInstructions */
                Program->FPInstructions =
                   (struct fp_instruction *) _mesa_realloc (Program->FPInstructions,
@@ -5696,6 +5845,16 @@ parse_arb_program (GLcontext * ctx, GLubyte * inst, struct var_cache **vc_head,
                                                                     
             }
             else {
+               /* Check the instruction count 
+                * XXX: Does END count as an instruction?
+                */						  
+               if (Program->Base.NumInstructions+1 == MAX_NV_VERTEX_PROGRAM_INSTRUCTIONS) {
+                  _mesa_set_program_error (ctx, Program->Position, 
+                      "Max instruction count exceeded!");
+                  _mesa_error (ctx, GL_INVALID_OPERATION,
+                      "Max instruction count exceeded!");
+               }
+
                /* Realloc Program->VPInstructions */
                Program->VPInstructions =
                   (struct vp_instruction *) _mesa_realloc (Program->VPInstructions,

@@ -307,9 +307,15 @@ static struct {
 #define VERT_Y(_v) _v->v.y
 #define VERT_Z(_v) _v->v.z
 #define AREA_IS_CCW( a ) (a > 0)
-#define GET_VERTEX(e) (gmesa->verts + (e<<gmesa->vertex_stride_shift))
+#define GET_VERTEX(e) (gmesa->verts + (e * gmesa->vertex_size * sizeof(int)))
 
-#define VERT_SET_RGBA( v, c )    COPY_4V( v->ub4[4], c)
+#define VERT_SET_RGBA( v, c )  					\
+do {								\
+   UNCLAMPED_FLOAT_TO_UBYTE(v->ub4[4][0], (c)[0]);		\
+   UNCLAMPED_FLOAT_TO_UBYTE(v->ub4[4][1], (c)[1]);		\
+   UNCLAMPED_FLOAT_TO_UBYTE(v->ub4[4][2], (c)[2]);		\
+   UNCLAMPED_FLOAT_TO_UBYTE(v->ub4[4][3], (c)[3]);		\
+} while (0)
 #define VERT_COPY_RGBA( v0, v1 ) v0->ui[4] = v1->ui[4]
 #define VERT_SAVE_RGBA( idx )    color[idx] = v[idx]->ui[4]
 #define VERT_RESTORE_RGBA( idx ) v[idx]->ui[4] = color[idx]   
@@ -404,7 +410,7 @@ static void init_render_tab( void )
 /*               Render unclipped begin/end objects                   */
 /**********************************************************************/
 
-#define VERT(x) (gammaVertex *)(gammaverts + (x << shift))
+#define VERT(x) (gammaVertex *)(gammaverts + (x * size * sizeof(int)))
 #define RENDER_POINTS( start, count )		\
    for ( ; start < count ; start++) 		\
       gmesa->draw_point( gmesa, VERT(start) )
@@ -418,7 +424,7 @@ static void init_render_tab( void )
 #undef LOCAL_VARS
 #define LOCAL_VARS						\
    gammaContextPtr gmesa = GAMMA_CONTEXT(ctx);		\
-   const GLuint shift = gmesa->vertex_stride_shift;		\
+   const GLuint size = gmesa->vertex_size;		\
    const char *gammaverts = (char *)gmesa->verts;		\
    const GLboolean stipple = ctx->Line.StippleFlag;		\
    (void) stipple;

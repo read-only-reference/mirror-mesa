@@ -907,22 +907,21 @@ EXPORTS
 ;fxMesaSetNearFar
  fxMesaSwapBuffers
  fxMesaUpdateScreenSize
- fxQueryHardware
  wglChoosePixelFormat
  wglCopyContext
  wglCreateContext
  wglCreateLayerContext
  wglDeleteContext
-;wglDescribeLayerPlane
+ wglDescribeLayerPlane
  wglDescribePixelFormat
  wglGetCurrentContext
  wglGetCurrentDC
-;wglGetLayerPaletteEntries
+ wglGetLayerPaletteEntries
  wglGetPixelFormat
  wglGetProcAddress
  wglMakeCurrent
-;wglRealizeLayerPalette
-;wglSetLayerPaletteEntries
+ wglRealizeLayerPalette
+ wglSetLayerPaletteEntries
  wglSetPixelFormat
  wglShareLists
  wglSwapBuffers

@@ -68,6 +68,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
 
+#include "glheader.h"
 #include "context.h"
 #include "dlist.h"
 #include "enums.h"
@@ -251,7 +252,8 @@ static void _save_compile_vertex_list( GLcontext *ctx )
    node->vertex_store->refcount++;
    node->prim_store->refcount++;
 
-   assert(node->attrsz[_TNL_ATTRIB_POS] != 0);
+   assert(node->attrsz[_TNL_ATTRIB_POS] != 0 ||
+	  node->count == 0);
 
    /* Maybe calculate normal lengths:
     */
@@ -473,7 +475,7 @@ static void _save_upgrade_vertex( GLcontext *ctx,
        */
       if (tnl->save.currentsz[attr] == 0) {
 	 assert(oldsz == 0);
-	 tnl->save.dangling_attr_ref = attr;
+	 tnl->save.dangling_attr_ref = GL_TRUE;
 	 _mesa_debug(0, "_save_upgrade_vertex: dangling reference attr %d\n", 
                      attr); 
 
@@ -678,11 +680,12 @@ static void _save_reset_vertex( GLcontext *ctx )
    save_init_13( tnl );
    save_init_14( tnl );
    save_init_15( tnl );
-
+      
    for (i = 0 ; i < _TNL_ATTRIB_MAX ; i++)
       tnl->save.attrsz[i] = 0;
-
+      
    tnl->save.vertex_size = 0;
+   tnl->save.have_materials = 0;
 
    _save_reset_counters( ctx ); 
 }
@@ -733,177 +736,177 @@ static void enum_error( void )
    _mesa_compile_error( ctx, GL_INVALID_ENUM, "glVertexAttrib" );
 }
 
-static void _save_Vertex2f( GLfloat x, GLfloat y )
+static void GLAPIENTRY _save_Vertex2f( GLfloat x, GLfloat y )
 {
    DISPATCH_ATTR2F( _TNL_ATTRIB_POS, x, y );
 }
 
-static void _save_Vertex2fv( const GLfloat *v )
+static void GLAPIENTRY _save_Vertex2fv( const GLfloat *v )
 {
    DISPATCH_ATTR2FV( _TNL_ATTRIB_POS, v );
 }
 
-static void _save_Vertex3f( GLfloat x, GLfloat y, GLfloat z )
+static void GLAPIENTRY _save_Vertex3f( GLfloat x, GLfloat y, GLfloat z )
 {
    DISPATCH_ATTR3F( _TNL_ATTRIB_POS, x, y, z );
 }
 
-static void _save_Vertex3fv( const GLfloat *v )
+static void GLAPIENTRY _save_Vertex3fv( const GLfloat *v )
 {
    DISPATCH_ATTR3FV( _TNL_ATTRIB_POS, v );
 }
 
-static void _save_Vertex4f( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
+static void GLAPIENTRY _save_Vertex4f( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
 {
    DISPATCH_ATTR4F( _TNL_ATTRIB_POS, x, y, z, w );
 }
 
-static void _save_Vertex4fv( const GLfloat *v )
+static void GLAPIENTRY _save_Vertex4fv( const GLfloat *v )
 {
    DISPATCH_ATTR4FV( _TNL_ATTRIB_POS, v );
 }
 
-static void _save_TexCoord1f( GLfloat x )
+static void GLAPIENTRY _save_TexCoord1f( GLfloat x )
 {
    DISPATCH_ATTR1F( _TNL_ATTRIB_TEX0, x );
 }
 
-static void _save_TexCoord1fv( const GLfloat *v )
+static void GLAPIENTRY _save_TexCoord1fv( const GLfloat *v )
 {
    DISPATCH_ATTR1FV( _TNL_ATTRIB_TEX0, v );
 }
 
-static void _save_TexCoord2f( GLfloat x, GLfloat y )
+static void GLAPIENTRY _save_TexCoord2f( GLfloat x, GLfloat y )
 {
    DISPATCH_ATTR2F( _TNL_ATTRIB_TEX0, x, y );
 }
 
-static void _save_TexCoord2fv( const GLfloat *v )
+static void GLAPIENTRY _save_TexCoord2fv( const GLfloat *v )
 {
    DISPATCH_ATTR2FV( _TNL_ATTRIB_TEX0, v );
 }
 
-static void _save_TexCoord3f( GLfloat x, GLfloat y, GLfloat z )
+static void GLAPIENTRY _save_TexCoord3f( GLfloat x, GLfloat y, GLfloat z )
 {
    DISPATCH_ATTR3F( _TNL_ATTRIB_TEX0, x, y, z );
 }
 
-static void _save_TexCoord3fv( const GLfloat *v )
+static void GLAPIENTRY _save_TexCoord3fv( const GLfloat *v )
 {
    DISPATCH_ATTR3FV( _TNL_ATTRIB_TEX0, v );
 }
 
-static void _save_TexCoord4f( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
+static void GLAPIENTRY _save_TexCoord4f( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
 {
    DISPATCH_ATTR4F( _TNL_ATTRIB_TEX0, x, y, z, w );
 }
 
-static void _save_TexCoord4fv( const GLfloat *v )
+static void GLAPIENTRY _save_TexCoord4fv( const GLfloat *v )
 {
    DISPATCH_ATTR4FV( _TNL_ATTRIB_TEX0, v );
 }
 
-static void _save_Normal3f( GLfloat x, GLfloat y, GLfloat z )
+static void GLAPIENTRY _save_Normal3f( GLfloat x, GLfloat y, GLfloat z )
 {
    DISPATCH_ATTR3F( _TNL_ATTRIB_NORMAL, x, y, z );
 }
 
-static void _save_Normal3fv( const GLfloat *v )
+static void GLAPIENTRY _save_Normal3fv( const GLfloat *v )
 {
    DISPATCH_ATTR3FV( _TNL_ATTRIB_NORMAL, v );
 }
 
-static void _save_FogCoordfEXT( GLfloat x )
+static void GLAPIENTRY _save_FogCoordfEXT( GLfloat x )
 {
    DISPATCH_ATTR1F( _TNL_ATTRIB_FOG, x );
 }
 
-static void _save_FogCoordfvEXT( const GLfloat *v )
+static void GLAPIENTRY _save_FogCoordfvEXT( const GLfloat *v )
 {
    DISPATCH_ATTR1FV( _TNL_ATTRIB_FOG, v );
 }
 
-static void _save_Color3f( GLfloat x, GLfloat y, GLfloat z )
+static void GLAPIENTRY _save_Color3f( GLfloat x, GLfloat y, GLfloat z )
 {
    DISPATCH_ATTR3F( _TNL_ATTRIB_COLOR0, x, y, z );
 }
 
-static void _save_Color3fv( const GLfloat *v )
+static void GLAPIENTRY _save_Color3fv( const GLfloat *v )
 {
    DISPATCH_ATTR3FV( _TNL_ATTRIB_COLOR0, v );
 }
 
-static void _save_Color4f( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
+static void GLAPIENTRY _save_Color4f( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
 {
    DISPATCH_ATTR4F( _TNL_ATTRIB_COLOR0, x, y, z, w );
 }
 
-static void _save_Color4fv( const GLfloat *v )
+static void GLAPIENTRY _save_Color4fv( const GLfloat *v )
 {
    DISPATCH_ATTR4FV( _TNL_ATTRIB_COLOR0, v );
 }
 
-static void _save_SecondaryColor3fEXT( GLfloat x, GLfloat y, GLfloat z )
+static void GLAPIENTRY _save_SecondaryColor3fEXT( GLfloat x, GLfloat y, GLfloat z )
 {
    DISPATCH_ATTR3F( _TNL_ATTRIB_COLOR1, x, y, z );
 }
 
-static void _save_SecondaryColor3fvEXT( const GLfloat *v )
+static void GLAPIENTRY _save_SecondaryColor3fvEXT( const GLfloat *v )
 {
    DISPATCH_ATTR3FV( _TNL_ATTRIB_COLOR1, v );
 }
 
-static void _save_MultiTexCoord1f( GLenum target, GLfloat x  )
+static void GLAPIENTRY _save_MultiTexCoord1f( GLenum target, GLfloat x  )
 {
    GLuint attr = (target & 0x7) + _TNL_ATTRIB_TEX0;
    DISPATCH_ATTR1F( attr, x );
 }
 
-static void _save_MultiTexCoord1fv( GLenum target, const GLfloat *v )
+static void GLAPIENTRY _save_MultiTexCoord1fv( GLenum target, const GLfloat *v )
 {
    GLuint attr = (target & 0x7) + _TNL_ATTRIB_TEX0;
    DISPATCH_ATTR1FV( attr, v );
 }
 
-static void _save_MultiTexCoord2f( GLenum target, GLfloat x, GLfloat y )
+static void GLAPIENTRY _save_MultiTexCoord2f( GLenum target, GLfloat x, GLfloat y )
 {
    GLuint attr = (target & 0x7) + _TNL_ATTRIB_TEX0;
    DISPATCH_ATTR2F( attr, x, y );
 }
 
-static void _save_MultiTexCoord2fv( GLenum target, const GLfloat *v )
+static void GLAPIENTRY _save_MultiTexCoord2fv( GLenum target, const GLfloat *v )
 {
    GLuint attr = (target & 0x7) + _TNL_ATTRIB_TEX0;
    DISPATCH_ATTR2FV( attr, v );
 }
 
-static void _save_MultiTexCoord3f( GLenum target, GLfloat x, GLfloat y,
+static void GLAPIENTRY _save_MultiTexCoord3f( GLenum target, GLfloat x, GLfloat y,
 				    GLfloat z)
 {
    GLuint attr = (target & 0x7) + _TNL_ATTRIB_TEX0;
    DISPATCH_ATTR3F( attr, x, y, z );
 }
 
-static void _save_MultiTexCoord3fv( GLenum target, const GLfloat *v )
+static void GLAPIENTRY _save_MultiTexCoord3fv( GLenum target, const GLfloat *v )
 {
    GLuint attr = (target & 0x7) + _TNL_ATTRIB_TEX0;
    DISPATCH_ATTR3FV( attr, v );
 }
 
-static void _save_MultiTexCoord4f( GLenum target, GLfloat x, GLfloat y,
+static void GLAPIENTRY _save_MultiTexCoord4f( GLenum target, GLfloat x, GLfloat y,
 				    GLfloat z, GLfloat w )
 {
    GLuint attr = (target & 0x7) + _TNL_ATTRIB_TEX0;
    DISPATCH_ATTR4F( attr, x, y, z, w );
 }
 
-static void _save_MultiTexCoord4fv( GLenum target, const GLfloat *v )
+static void GLAPIENTRY _save_MultiTexCoord4fv( GLenum target, const GLfloat *v )
 {
    GLuint attr = (target & 0x7) + _TNL_ATTRIB_TEX0;
    DISPATCH_ATTR4FV( attr, v );
 }
 
-static void _save_VertexAttrib1fNV( GLuint index, GLfloat x )
+static void GLAPIENTRY _save_VertexAttrib1fNV( GLuint index, GLfloat x )
 {
    if (index < VERT_ATTRIB_MAX)
       DISPATCH_ATTR1F( index, x );
@@ -911,7 +914,7 @@ static void _save_VertexAttrib1fNV( GLuint index, GLfloat x )
       enum_error(); 
 }
 
-static void _save_VertexAttrib1fvNV( GLuint index, const GLfloat *v )
+static void GLAPIENTRY _save_VertexAttrib1fvNV( GLuint index, const GLfloat *v )
 {
    if (index < VERT_ATTRIB_MAX)
       DISPATCH_ATTR1FV( index, v );
@@ -919,7 +922,7 @@ static void _save_VertexAttrib1fvNV( GLuint index, const GLfloat *v )
       enum_error();
 }
 
-static void _save_VertexAttrib2fNV( GLuint index, GLfloat x, GLfloat y )
+static void GLAPIENTRY _save_VertexAttrib2fNV( GLuint index, GLfloat x, GLfloat y )
 {
    if (index < VERT_ATTRIB_MAX)
       DISPATCH_ATTR2F( index, x, y );
@@ -927,7 +930,7 @@ static void _save_VertexAttrib2fNV( GLuint index, GLfloat x, GLfloat y )
       enum_error();
 }
 
-static void _save_VertexAttrib2fvNV( GLuint index, const GLfloat *v )
+static void GLAPIENTRY _save_VertexAttrib2fvNV( GLuint index, const GLfloat *v )
 {
    if (index < VERT_ATTRIB_MAX)
       DISPATCH_ATTR2FV( index, v );
@@ -935,7 +938,7 @@ static void _save_VertexAttrib2fvNV( GLuint index, const GLfloat *v )
       enum_error();
 }
 
-static void _save_VertexAttrib3fNV( GLuint index, GLfloat x, GLfloat y, 
+static void GLAPIENTRY _save_VertexAttrib3fNV( GLuint index, GLfloat x, GLfloat y, 
 				  GLfloat z )
 {
    if (index < VERT_ATTRIB_MAX)
@@ -944,7 +947,7 @@ static void _save_VertexAttrib3fNV( GLuint index, GLfloat x, GLfloat y,
       enum_error();
 }
 
-static void _save_VertexAttrib3fvNV( GLuint index, const GLfloat *v )
+static void GLAPIENTRY _save_VertexAttrib3fvNV( GLuint index, const GLfloat *v )
 {
    if (index < VERT_ATTRIB_MAX)
       DISPATCH_ATTR3FV( index, v );
@@ -952,7 +955,7 @@ static void _save_VertexAttrib3fvNV( GLuint index, const GLfloat *v )
       enum_error();
 }
 
-static void _save_VertexAttrib4fNV( GLuint index, GLfloat x, GLfloat y,
+static void GLAPIENTRY _save_VertexAttrib4fNV( GLuint index, GLfloat x, GLfloat y,
 				  GLfloat z, GLfloat w )
 {
    if (index < VERT_ATTRIB_MAX)
@@ -961,7 +964,7 @@ static void _save_VertexAttrib4fNV( GLuint index, GLfloat x, GLfloat y,
       enum_error();
 }
 
-static void _save_VertexAttrib4fvNV( GLuint index, const GLfloat *v )
+static void GLAPIENTRY _save_VertexAttrib4fvNV( GLuint index, const GLfloat *v )
 {
    if (index < VERT_ATTRIB_MAX)
       DISPATCH_ATTR4FV( index, v );
@@ -987,6 +990,7 @@ static void _save_VertexAttrib4fvNV( GLuint index, const GLfloat *v )
 do {							\
    if (tnl->save.attrsz[A] < N) {			\
       _save_upgrade_vertex( ctx, A, N );		\
+      tnl->save.have_materials = GL_TRUE;               \
    }							\
 							\
    {							\
@@ -1011,7 +1015,7 @@ do {							\
 /* NOTE: Have to remove/deal-with colormaterial crossovers, probably
  * later on - in the meantime just store everything.  
  */
-static void _save_Materialfv( GLenum face, GLenum pname, 
+static void GLAPIENTRY _save_Materialfv( GLenum face, GLenum pname, 
 			       const GLfloat *params )
 {
    GET_CURRENT_CONTEXT( ctx ); 
@@ -1063,22 +1067,22 @@ do {							\
 } while (0)
 
 
-static void _save_EdgeFlag( GLboolean b )
+static void GLAPIENTRY _save_EdgeFlag( GLboolean b )
 {
    IDX_ATTR( _TNL_ATTRIB_EDGEFLAG, (GLfloat)b );
 }
 
-static void _save_EdgeFlagv( const GLboolean *v )
+static void GLAPIENTRY _save_EdgeFlagv( const GLboolean *v )
 {
    IDX_ATTR( _TNL_ATTRIB_EDGEFLAG, (GLfloat)(v[0]) );
 }
 
-static void _save_Indexf( GLfloat f )
+static void GLAPIENTRY _save_Indexf( GLfloat f )
 {
    IDX_ATTR( _TNL_ATTRIB_INDEX, f );
 }
 
-static void _save_Indexfv( const GLfloat *f )
+static void GLAPIENTRY _save_Indexfv( const GLfloat *f )
 {
    IDX_ATTR( _TNL_ATTRIB_INDEX, f[0] );
 }
@@ -1106,56 +1110,56 @@ do {									\
    ctx->Driver.SaveNeedFlush = 0;					\
 } while (0)
 
-static void _save_EvalCoord1f( GLfloat u )
+static void GLAPIENTRY _save_EvalCoord1f( GLfloat u )
 {
    GET_CURRENT_CONTEXT(ctx);
    FALLBACK(ctx);
    ctx->Save->EvalCoord1f( u );
 }
 
-static void _save_EvalCoord1fv( const GLfloat *v )
+static void GLAPIENTRY _save_EvalCoord1fv( const GLfloat *v )
 {
    GET_CURRENT_CONTEXT(ctx);
    FALLBACK(ctx);
    ctx->Save->EvalCoord1fv( v );
 }
 
-static void _save_EvalCoord2f( GLfloat u, GLfloat v )
+static void GLAPIENTRY _save_EvalCoord2f( GLfloat u, GLfloat v )
 {
    GET_CURRENT_CONTEXT(ctx);
    FALLBACK(ctx);
    ctx->Save->EvalCoord2f( u, v );
 }
 
-static void _save_EvalCoord2fv( const GLfloat *v )
+static void GLAPIENTRY _save_EvalCoord2fv( const GLfloat *v )
 {
    GET_CURRENT_CONTEXT(ctx);
    FALLBACK(ctx);
    ctx->Save->EvalCoord2fv( v );
 }
 
-static void _save_EvalPoint1( GLint i )
+static void GLAPIENTRY _save_EvalPoint1( GLint i )
 {
    GET_CURRENT_CONTEXT(ctx);
    FALLBACK(ctx);
    ctx->Save->EvalPoint1( i );
 }
 
-static void _save_EvalPoint2( GLint i, GLint j )
+static void GLAPIENTRY _save_EvalPoint2( GLint i, GLint j )
 {
    GET_CURRENT_CONTEXT(ctx);
    FALLBACK(ctx);
    ctx->Save->EvalPoint2( i, j );
 }
 
-static void _save_CallList( GLuint l )
+static void GLAPIENTRY _save_CallList( GLuint l )
 {
    GET_CURRENT_CONTEXT(ctx);
    FALLBACK(ctx);
    ctx->Save->CallList( l );
 }
 
-static void _save_CallLists( GLsizei n, GLenum type, const GLvoid *v )
+static void GLAPIENTRY _save_CallLists( GLsizei n, GLenum type, const GLvoid *v )
 {
    GET_CURRENT_CONTEXT(ctx);
    FALLBACK(ctx);
@@ -1190,7 +1194,7 @@ static GLboolean _save_NotifyBegin( GLcontext *ctx, GLenum mode )
 
 
 
-static void _save_End( void )
+static void GLAPIENTRY _save_End( void )
 {
    GET_CURRENT_CONTEXT( ctx ); 
    TNLcontext *tnl = TNL_CONTEXT(ctx); 
@@ -1217,7 +1221,7 @@ static void _save_End( void )
 /* These are all errors as this vtxfmt is only installed inside
  * begin/end pairs.
  */
-static void _save_DrawElements(GLenum mode, GLsizei count, GLenum type,
+static void GLAPIENTRY _save_DrawElements(GLenum mode, GLsizei count, GLenum type,
 			       const GLvoid *indices)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -1225,7 +1229,7 @@ static void _save_DrawElements(GLenum mode, GLsizei count, GLenum type,
 }
 
 
-static void _save_DrawRangeElements(GLenum mode,
+static void GLAPIENTRY _save_DrawRangeElements(GLenum mode,
 				    GLuint start, GLuint end,
 				    GLsizei count, GLenum type,
 				    const GLvoid *indices)
@@ -1234,32 +1238,32 @@ static void _save_DrawRangeElements(GLenum mode,
    _mesa_compile_error( ctx, GL_INVALID_OPERATION, "glDrawRangeElements" );
 }
 
-static void _save_DrawArrays(GLenum mode, GLint start, GLsizei count)
+static void GLAPIENTRY _save_DrawArrays(GLenum mode, GLint start, GLsizei count)
 {
    GET_CURRENT_CONTEXT(ctx);
    _mesa_compile_error( ctx, GL_INVALID_OPERATION, "glDrawArrays" );
 }
 
-static void _save_Rectf( GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2 )
+static void GLAPIENTRY _save_Rectf( GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2 )
 {
    GET_CURRENT_CONTEXT(ctx);
    _mesa_compile_error( ctx, GL_INVALID_OPERATION, "glRectf" );
 }
 
-static void _save_EvalMesh1( GLenum mode, GLint i1, GLint i2 )
+static void GLAPIENTRY _save_EvalMesh1( GLenum mode, GLint i1, GLint i2 )
 {
    GET_CURRENT_CONTEXT(ctx);
    _mesa_compile_error( ctx, GL_INVALID_OPERATION, "glEvalMesh1" );
 }
 
-static void _save_EvalMesh2( GLenum mode, GLint i1, GLint i2,
+static void GLAPIENTRY _save_EvalMesh2( GLenum mode, GLint i1, GLint i2,
 				  GLint j1, GLint j2 )
 {
    GET_CURRENT_CONTEXT(ctx);
    _mesa_compile_error( ctx, GL_INVALID_OPERATION, "glEvalMesh2" );
 }
 
-static void _save_Begin( GLenum mode )
+static void GLAPIENTRY _save_Begin( GLenum mode )
 {
    GET_CURRENT_CONTEXT( ctx );
    _mesa_compile_error( ctx, GL_INVALID_OPERATION, "Recursive glBegin" );
@@ -1270,7 +1274,7 @@ static void _save_Begin( GLenum mode )
  * maintained in ctx->ListState, active when the list is known or
  * suspected to be outside any begin/end primitive.
  */
-static void _save_OBE_Rectf( GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2 )
+static void GLAPIENTRY _save_OBE_Rectf( GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2 )
 {
    GET_CURRENT_CONTEXT(ctx);
    _save_NotifyBegin( ctx, GL_QUADS | PRIM_WEAK );
@@ -1282,7 +1286,7 @@ static void _save_OBE_Rectf( GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2 )
 }
 
 
-static void _save_OBE_DrawArrays(GLenum mode, GLint start, GLsizei count)
+static void GLAPIENTRY _save_OBE_DrawArrays(GLenum mode, GLint start, GLsizei count)
 {
    GET_CURRENT_CONTEXT(ctx);
    GLint i;
@@ -1297,7 +1301,7 @@ static void _save_OBE_DrawArrays(GLenum mode, GLint start, GLsizei count)
 }
 
 
-static void _save_OBE_DrawElements(GLenum mode, GLsizei count, GLenum type,
+static void GLAPIENTRY _save_OBE_DrawElements(GLenum mode, GLsizei count, GLenum type,
 				   const GLvoid *indices)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -1329,7 +1333,7 @@ static void _save_OBE_DrawElements(GLenum mode, GLsizei count, GLenum type,
    glEnd();
 }
 
-static void _save_OBE_DrawRangeElements(GLenum mode,
+static void GLAPIENTRY _save_OBE_DrawRangeElements(GLenum mode,
 					GLuint start, GLuint end,
 					GLsizei count, GLenum type,
 					const GLvoid *indices)

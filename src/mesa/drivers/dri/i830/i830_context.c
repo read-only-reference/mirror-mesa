@@ -72,6 +72,10 @@ int I830_DEBUG = (0);
 
 #define DRIVER_DATE                     "20021115"
 
+
+const char __driConfigOptions[] = { 0 };
+const GLuint __driNConfigOptions = 0;
+
 static const GLubyte *i830DDGetString( GLcontext *ctx, GLenum name )
 {
    const char * chipset;
@@ -259,6 +263,8 @@ GLboolean i830CreateContext( const __GLcontextModes *mesaVis,
 
    ctx = imesa->glCtx;
    ctx->Const.MaxTextureUnits = 2;
+   ctx->Const.MaxTextureImageUnits = 2;
+   ctx->Const.MaxTextureCoordUnits = 2;
 
    /* FIXME: driCalcualteMaxTextureLevels assumes that mipmaps are tightly
     * FIXME: packed, but they're not in Intel graphics hardware.
@@ -406,12 +412,12 @@ void i830DestroyContext(__DRIcontextPrivate *driContextPriv)
           */
          int i;
 
-	 assert( is_empty_list( & imesa->swapped ) );
-
          for ( i = 0 ; i < imesa->nr_heaps ; i++ ) {
 	    driDestroyTextureHeap( imesa->texture_heaps[ i ] );
 	    imesa->texture_heaps[ i ] = NULL;
          }
+
+	 assert( is_empty_list( & imesa->swapped ) );
       }
 
       Xfree (imesa);

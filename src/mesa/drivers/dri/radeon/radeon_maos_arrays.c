@@ -36,7 +36,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "glheader.h"
 #include "imports.h"
 #include "mtypes.h"
-#include "mmath.h"
 #include "macros.h"
 
 #include "swrast_setup/swrast_setup.h"
@@ -422,8 +421,10 @@ void radeonEmitArrays( GLcontext *ctx, GLuint inputs )
    GLuint count = VB->Count;
    GLuint vtx;
    
+#if 0
    if (RADEON_DEBUG & DEBUG_VERTS) 
       _tnl_print_vert_flags( __FUNCTION__, inputs );
+#endif
 
    if (1) {
       if (!rmesa->tcl.obj.buf) 
@@ -498,8 +499,6 @@ void radeonEmitArrays( GLcontext *ctx, GLuint inputs )
 
    if (inputs & VERT_BIT_COLOR1) {
       if (!rmesa->tcl.spec.buf) {
-	 if (VB->SecondaryColorPtr[0]->Type != GL_UNSIGNED_BYTE)
-	    radeon_import_float_spec_colors( ctx );
 
 	 emit_ubyte_rgba( ctx, 
 			  &rmesa->tcl.spec, 
@@ -568,8 +567,10 @@ void radeonReleaseArrays( GLcontext *ctx, GLuint newinputs )
 {
    radeonContextPtr rmesa = RADEON_CONTEXT( ctx );
 
+#if 0
    if (RADEON_DEBUG & DEBUG_VERTS) 
       _tnl_print_vert_flags( __FUNCTION__, newinputs );
+#endif
 
    if (newinputs & VERT_BIT_POS) 
      radeonReleaseDmaRegion( rmesa, &rmesa->tcl.obj, __FUNCTION__ );

@@ -96,6 +96,7 @@ typedef void (*r200_point_func)( r200ContextPtr,
 struct r200_colorbuffer_state {
    GLuint clear;
    GLint drawOffset, drawPitch;
+   int roundEnable;
 };
 
 
@@ -778,7 +779,7 @@ struct r200_context {
    unsigned              nr_heaps;
    driTexHeap          * texture_heaps[ R200_NR_TEX_HEAPS ];
    driTextureObject      swapped;
-   GLboolean             default32BitTextures;
+   int                   texture_depth;
 
 
    /* Rasterization and vertex state:
@@ -786,12 +787,6 @@ struct r200_context {
    GLuint TclFallback;
    GLuint Fallback;
    GLuint NewGLState;
-
-   
-   /* Temporaries for translating away float colors:
-    */
-   struct gl_client_array UbyteColor;
-   struct gl_client_array UbyteSecondaryColor;
 
    /* Vertex buffers
     */

@@ -107,9 +107,9 @@
 #    define WGLAPI __declspec(dllimport)
 #  endif /* _STATIC_MESA support */
 #  define GLAPIENTRY __stdcall
-#  define GLAPIENTRYP __stdcall *
+#  define GLAPIENTRYP GLAPIENTRY *
 #  define GLCALLBACK __stdcall
-#  define GLCALLBACKP __stdcall *
+#  define GLCALLBACKP GLCALLBACK *
 #  if defined(__CYGWIN__)
 #    define GLCALLBACKPCAST *
 #  else
@@ -121,7 +121,9 @@
 /* non-Windows compilation */
 #  define GLAPI extern
 #  define GLAPIENTRY
-#  define GLAPIENTRYP *
+#  ifndef GLAPIENTRYP
+#    define GLAPIENTRYP *
+#  endif
 #  define GLCALLBACK
 #  define GLCALLBACKP *
 #  define GLCALLBACKPCAST *
@@ -162,7 +164,7 @@ typedef struct tagLAYERPLANEDESCRIPTOR LAYERPLANEDESCRIPTOR, *PLAYERPLANEDESCRIP
 typedef struct _GLYPHMETRICSFLOAT GLYPHMETRICSFLOAT, *PGLYPHMETRICSFLOAT, *LPGLYPHMETRICSFLOAT;
 typedef struct tagPIXELFORMATDESCRIPTOR PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESCRIPTOR, *LPPIXELFORMATDESCRIPTOR;
 #if !defined(GLX_USE_MESA)
-#include <gl/mesa_wgl.h>
+#include <GL/mesa_wgl.h>
 #endif
 #endif
 
@@ -226,7 +228,7 @@ typedef struct tagPIXELFORMATDESCRIPTOR PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESC
  * than GNU C
  */
 #ifndef _ASMAPI
-#if !defined( __GNUC__ ) && !defined( VMS )
+#if !defined( __GNUC__ ) && !defined( VMS ) && !defined( __INTEL_COMPILER )
 #define _ASMAPI __cdecl
 #else
 #define _ASMAPI
@@ -256,6 +258,8 @@ typedef struct tagPIXELFORMATDESCRIPTOR PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESC
 #  define INLINE __inline
 #elif defined(__ICL)
 #  define INLINE __inline
+#elif defined(__INTEL_COMPILER)
+#  define INLINE inline
 #elif defined(__WATCOMC__) && (__WATCOMC__ >= 1100)
 #  define INLINE __inline
 #else
