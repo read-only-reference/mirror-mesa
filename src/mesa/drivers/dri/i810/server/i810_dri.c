@@ -24,16 +24,6 @@
 #include "i810_reg.h"
 
 
-/* HACK - for now, put this here... */
-/* Alpha - this may need to be a variable to handle UP1x00 vs TITAN */
-#if defined(__alpha__)
-# define DRM_PAGE_SIZE 8192
-#elif defined(__ia64__)
-# define DRM_PAGE_SIZE getpagesize()
-#else
-# define DRM_PAGE_SIZE 4096
-#endif
-
 static int i810_pitches[] = {
    512,
    1024,
@@ -862,40 +852,6 @@ static int I810ScreenInit( DRIDriverContext *ctx, I810Ptr info )
 
 
 /**
- * \brief Establish the set of modes available for the display.
- *
- * \param ctx display handle.
- * \param numModes will receive the number of supported modes.
- * \param modes will point to the list of supported modes.
- *
- * \return one on success, or zero on failure.
- * 
- * Allocates a single visual and fills it with information according to the
- * display bit depth. Supports only 16 and 32 bpp bit depths, aborting
- * otherwise.
- */
-const __GLcontextModes __glModes[] = {
-    
-    /* 16 bit, RGB Depth=16 */
-    {.rgbMode = GL_TRUE, .colorIndexMode = GL_FALSE, .doubleBufferMode = GL_TRUE, .stereoMode = GL_FALSE,
-     .haveAccumBuffer = GL_FALSE, .haveDepthBuffer = GL_TRUE, .haveStencilBuffer = GL_FALSE,
-     .redBits = 5, .greenBits = 6, .blueBits = 5, .alphaBits = 0,
-     .redMask = 0xf800, .greenMask = 0x07e0, .blueMask = 0x001f, .alphaMask = 0x0,
-     .rgbBits = 16, .indexBits = 0,
-     .accumRedBits = 0, .accumGreenBits = 0, .accumBlueBits = 0, .accumAlphaBits = 0,
-     .depthBits = 16, .stencilBits = 0,
-     .numAuxBuffers= 0, .level = 0, .pixmapMode = GL_FALSE, },
-};
-static int i810InitContextModes( const DRIDriverContext *ctx,
-				   int *numModes, const __GLcontextModes **modes)
-{
-   *numModes = sizeof(__glModes)/sizeof(__GLcontextModes *);
-   *modes = &__glModes[0];
-   return 1;
-}
-
-
-/**
  * \brief Validate the fbdev mode.
  * 
  * \param ctx display handle.
@@ -1005,7 +961,6 @@ extern void i810NotifyFocus( int );
  * \sa DRIDriverRec.
  */
 const struct DRIDriverRec __driDriver = {
-   i810InitContextModes,
    i810ValidateMode,
    i810PostValidateMode,
    i810InitFBDev,

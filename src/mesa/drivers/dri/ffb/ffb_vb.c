@@ -74,11 +74,11 @@ static void ffb_copy_pv_twoside(GLcontext *ctx, GLuint edst, GLuint esrc)
 #define FFB_VB_TWOSIDE_BIT	0x04
 #define FFB_VB_MAX		0x08
 
-typedef void (*emit_func)(GLcontext *, GLuint, GLuint);
+typedef void (*ffb_emit_func)(GLcontext *, GLuint, GLuint);
 
 static struct {
-	emit_func	emit;
-	interp_func	interp;
+ 	ffb_emit_func	emit;
+	tnl_interp_func	interp;
 } setup_tab[FFB_VB_MAX];
 
 

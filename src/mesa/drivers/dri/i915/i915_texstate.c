@@ -122,6 +122,12 @@ static void i915SetTexImages( i915ContextPtr i915,
       ss2 |= SS2_COLORSPACE_CONVERSION;
       break;
 
+   case MESA_FORMAT_RGB_FXT1:
+   case MESA_FORMAT_RGBA_FXT1:
+     t->intel.texelBytes = 2;
+     textureFormat = (MAPSURF_COMPRESSED | MT_COMPRESS_FXT1);
+     break;
+
    default:
       fprintf(stderr, "%s: bad image format\n", __FUNCTION__);
       abort();
@@ -232,7 +238,15 @@ static void i915SetTexImages( i915ContextPtr i915,
 	 
 	 t->intel.image[0][i].offset = total_height * pitch;
 	 t->intel.image[0][i].internalFormat = baseImage->Format;
-	 total_height += MAX2(2, t->intel.image[0][i].image->Height);
+	 if (t->intel.image[0][i].image->IsCompressed)
+	 {
+	   if (t->intel.image[0][i].image->Height > 4)
+	     total_height += t->intel.image[0][i].image->Height/4;
+	   else
+	     total_height += 1;
+	 }
+	 else
+	   total_height += MAX2(2, t->intel.image[0][i].image->Height);
       }
       break;
    }

@@ -238,17 +238,6 @@ static void fx_print_vertex( GLcontext *ctx, const GrVertex *v )
  * rendering.  These functions are only used when mixed-mode rendering
  * is occurring.
  */
-static void fx_draw_quad( fxMesaContext fxMesa,
-			  GrVertex *v0,
-			  GrVertex *v1,
-			  GrVertex *v2,
-			  GrVertex *v3 )
-{
-   BEGIN_CLIP_LOOP();
-   QUAD( v0, v1, v2, v3 );
-   END_CLIP_LOOP();
-}
-
 static void fx_draw_triangle( fxMesaContext fxMesa,
 				GrVertex *v0,
 				GrVertex *v1,
@@ -285,6 +274,63 @@ static void fx_draw_point( fxMesaContext fxMesa,
 #endif
 #define __GL_COSF cos
 #define __GL_SINF sin
+static void fx_draw_point_sprite ( fxMesaContext fxMesa,
+				   GrVertex *v0, GLfloat psize )
+{
+ const GLcontext *ctx = fxMesa->glCtx;
+
+ GLfloat radius;
+ GrVertex _v_[4];
+ GLuint ts0 = fxMesa->tmu_source[0];
+ GLuint ts1 = fxMesa->tmu_source[1];
+ GLfloat w = v0->oow;
+ GLfloat u0scale = fxMesa->s0scale * w;
+ GLfloat v0scale = fxMesa->t0scale * w;
+ GLfloat u1scale = fxMesa->s1scale * w;
+ GLfloat v1scale = fxMesa->t1scale * w;
+
+ radius = psize / 2.;
+ _v_[0] = *v0;
+ _v_[1] = *v0;
+ _v_[2] = *v0;
+ _v_[3] = *v0;
+ /* CLIP_LOOP ?!? */
+ /* point coverage? */
+ /* we don't care about culling here (see fxSetupCull) */
+
+ _v_[0].x -= radius;
+ _v_[0].y += radius;
+ _v_[1].x += radius;
+ _v_[1].y += radius;
+ _v_[2].x += radius;
+ _v_[2].y -= radius;
+ _v_[3].x -= radius;
+ _v_[3].y -= radius;
+
+ if (ctx->Point.CoordReplace[ts0]) {
+    _v_[0].tmuvtx[0].sow = 0;
+    _v_[0].tmuvtx[0].tow = 0;
+    _v_[1].tmuvtx[0].sow = u0scale;
+    _v_[1].tmuvtx[0].tow = 0;
+    _v_[2].tmuvtx[0].sow = u0scale;
+    _v_[2].tmuvtx[0].tow = v0scale;
+    _v_[3].tmuvtx[0].sow = 0;
+    _v_[3].tmuvtx[0].tow = v0scale;
+ }
+ if (ctx->Point.CoordReplace[ts1]) {
+    _v_[0].tmuvtx[1].sow = 0;
+    _v_[0].tmuvtx[1].tow = 0;
+    _v_[1].tmuvtx[1].sow = u1scale;
+    _v_[1].tmuvtx[1].tow = 0;
+    _v_[2].tmuvtx[1].sow = u1scale;
+    _v_[2].tmuvtx[1].tow = v1scale;
+    _v_[3].tmuvtx[1].sow = 0;
+    _v_[3].tmuvtx[1].tow = v1scale;
+ }
+
+ grDrawVertexArrayContiguous(GR_TRIANGLE_FAN, 4, _v_, sizeof(GrVertex));
+}
+
 static void fx_draw_point_wide ( fxMesaContext fxMesa,
 			         GrVertex *v0 )
 {
@@ -295,6 +341,11 @@ static void fx_draw_point_wide ( fxMesaContext fxMesa,
 
  const GLcontext *ctx = fxMesa->glCtx;
  const GLfloat psize = (ctx->_TriangleCaps & DD_POINT_ATTEN) ? v0->psize : ctx->Point.Size;
+
+ if (ctx->Point.PointSprite) {
+    fx_draw_point_sprite(fxMesa, v0, psize);
+    return;
+ }
 
  _v_[0] = v0;
  _v_[1] = &vtxB;
@@ -366,6 +417,11 @@ static void fx_draw_point_wide_aa ( fxMesaContext fxMesa,
  const GLcontext *ctx = fxMesa->glCtx;
  const GLfloat psize = (ctx->_TriangleCaps & DD_POINT_ATTEN) ? v0->psize : ctx->Point.Size;
 
+ if (ctx->Point.PointSprite) {
+    fx_draw_point_sprite(fxMesa, v0, psize);
+    return;
+ }
+
  radius = psize / 2.;
  n = IROUND(psize * 2); /* radius x 4 */
  if (n < 4) n = 4;
@@ -404,10 +460,10 @@ static void fx_draw_point_wide_aa ( fxMesaContext fxMesa,
 #define FX_MAX_TRIFUNC     0x20
 
 static struct {
-   points_func	        points;
-   line_func		line;
-   triangle_func	triangle;
-   quad_func		quad;
+   tnl_points_func	points;
+   tnl_line_func	line;
+   tnl_triangle_func	triangle;
+   tnl_quad_func	quad;
 } rast_tab[FX_MAX_TRIFUNC];
 
 #define DO_FALLBACK (IND & FX_FALLBACK_BIT)
@@ -422,7 +478,7 @@ static struct {
 #define DO_FULL_QUAD 1
 
 #define HAVE_RGBA   1
-#define HAVE_SPEC   1 /* [dBorca] investigate overhead !!! */
+#define HAVE_SPEC   1
 #define HAVE_HW_FLATSHADE 0
 #define HAVE_BACK_COLORS  0
 #define VERTEX GrVertex
@@ -916,27 +972,16 @@ static void fx_render_vb_quads( GLcontext *ctx,
 
    INIT(GL_QUADS);
 
-#if 1
-   /* [dBorca] Hack alert:
-    * since VTX-0-2 we get here with start = 0, count = 2,
-    * causing around 4 billion triangles. Revise this after
-    * a while
-    */
-   if (count < 3) {
-      return;
-   }
-#endif
-
-   for (i = start ; i < count-3 ; i += 4 ) {
+   for (i = start + 3 ; i < count ; i += 4 ) {
 #define VERT(x) (fxVB + (x))
       GrVertex *_v_[4];
-      _v_[0] = VERT(i+3);
-      _v_[1] = VERT(i+0);
-      _v_[2] = VERT(i+1);
-      _v_[3] = VERT(i+2);
+      _v_[0] = VERT(i);
+      _v_[1] = VERT(i-3);
+      _v_[2] = VERT(i-2);
+      _v_[3] = VERT(i-1);
       grDrawVertexArray(GR_TRIANGLE_FAN, 4, _v_);
-      /*grDrawTriangle( VERT(i),   VERT(i+1), VERT(i+3) );*/
-      /*grDrawTriangle( VERT(i+1), VERT(i+2), VERT(i+3) );*/
+      /*grDrawTriangle( VERT(i-3), VERT(i-2), VERT(i) );*/
+      /*grDrawTriangle( VERT(i-2), VERT(i-1), VERT(i) );*/
 #undef VERT
    }
 }
@@ -1027,7 +1072,16 @@ static void (*fx_render_tab_verts[GL_POLYGON+2])(GLcontext *,
    grDrawTriangle( VERT(v0), VERT(v1), VERT(v2) )
 
 #define RENDER_QUAD( v0, v1, v2, v3 ) \
-   fx_draw_quad( fxMesa, VERT(v0), VERT(v1), VERT(v2), VERT(v3) )
+   do {	\
+      GrVertex *_v_[4];	\
+      _v_[0] = VERT(v3);\
+      _v_[1] = VERT(v0);\
+      _v_[2] = VERT(v1);\
+      _v_[3] = VERT(v2);\
+      grDrawVertexArray(GR_TRIANGLE_FAN, 4, _v_);\
+      /*grDrawTriangle( VERT(v0), VERT(v1), VERT(v3) );*/\
+      /*grDrawTriangle( VERT(v1), VERT(v2), VERT(v3) );*/\
+   } while (0)
 
 #define INIT(x) fxRenderPrimitive( ctx, x )
 
@@ -1094,12 +1148,22 @@ static void fxRenderClippedPoly( GLcontext *ctx, const GLuint *elts,
 static void fxFastRenderClippedPoly( GLcontext *ctx, const GLuint *elts, 
 				       GLuint n )
 {
+   int i;
    fxMesaContext fxMesa = FX_CONTEXT( ctx );
    GrVertex *vertptr = fxMesa->verts;
-   const GrVertex *start = VERT(elts[0]);
-   int i;
-   for (i = 2 ; i < n ; i++) {
-      grDrawTriangle( start, VERT(elts[i-1]), VERT(elts[i]) );
+   if (n == 3) {
+      grDrawTriangle( VERT(elts[0]), VERT(elts[1]), VERT(elts[2]) );
+   } else if (n <= 32) {
+      GrVertex *newvptr[32];
+      for (i = 0 ; i < n ; i++) {
+         newvptr[i] = VERT(elts[i]);
+      }
+      grDrawVertexArray(GR_TRIANGLE_FAN, n, newvptr);
+   } else {
+      const GrVertex *start = VERT(elts[0]);
+      for (i = 2 ; i < n ; i++) {
+         grDrawTriangle( start, VERT(elts[i-1]), VERT(elts[i]) );
+      }
    }
 }
 
@@ -1198,7 +1262,7 @@ void fxDDChooseRenderState(GLcontext *ctx)
          fx_render_tab_verts[0] = fx_render_pw_verts;
          fx_render_tab_elts[0] = fx_render_pw_elts;
       }
-      tnl->Driver.Render.Points = rast_tab[FX_FALLBACK_BIT].points;
+      tnl->Driver.Render.Points = rast_tab[index|FX_FALLBACK_BIT].points;
    } else {
       fx_render_tab_verts[0] = fx_render_vb_points;
       fx_render_tab_elts[0] = fx_render_points_elts;
@@ -1433,6 +1497,10 @@ void fxDDInitTriFuncs( GLcontext *ctx )
 }
 
 
+/* [dBorca] Hack alert:
+ * doesn't work with blending.
+ * need to take care of stencil.
+ */
 GLboolean fxMultipass_ColorSum (GLcontext *ctx, GLuint pass)
 {
  fxMesaContext fxMesa = FX_CONTEXT(ctx);

@@ -29,6 +29,7 @@
 #define _TNL_VERTEX_H
 
 #include "mtypes.h"
+#include "t_context.h"
 
 /* New mechanism to specify hardware vertices so that tnl can build
  * and manipulate them directly.  
@@ -124,7 +125,7 @@ extern void _tnl_invalidate_vertices( GLcontext *ctx, GLuint newinputs );
 
 extern void _tnl_invalidate_vertex_state( GLcontext *ctx, GLuint new_state );
 
-extern emit_func _tnl_codegen_emit( GLcontext *ctx );
+extern tnl_emit_func _tnl_codegen_emit( GLcontext *ctx );
 
 #define REG_IN   (0<<16)
 #define REG_OUT  (1<<16)

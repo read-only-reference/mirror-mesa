@@ -588,8 +588,8 @@ static void extract_1ub_1f( const struct tnl_clipspace_attr *a, GLfloat *out, co
 
 static struct {
    const char *name;
-   extract_func extract;
-   insert_func insert[4];
+   tnl_extract_func extract;
+   tnl_insert_func insert[4];
    const GLuint attrsize;
 } format_info[EMIT_MAX] = {
 
@@ -1027,9 +1027,10 @@ GLuint _tnl_install_attrs( GLcontext *ctx, const struct tnl_attr_map *map,
    for (j = 0, i = 0; i < nr; i++) {
       const GLuint format = map[i].format;
       if (format == EMIT_PAD) {
+         /*
  	 fprintf(stderr, "%d: pad %d, offset %d\n", i,  
  		 map[i].offset, offset);  
-
+         */
 	 offset += map[i].offset;
 
       }
@@ -1046,10 +1047,11 @@ GLuint _tnl_install_attrs( GLcontext *ctx, const struct tnl_attr_map *map,
 	 else
 	    vtx->attr[j].vertoffset = offset;
 	 
+         /*
  	 fprintf(stderr, "%d: %s, vp %p, offset %d\n", i,  
  		 format_info[format].name, (void *)vp,
 		 vtx->attr[j].vertoffset);   
-	 
+         */
 	 offset += format_info[format].attrsize;
 	 j++;
       }

@@ -155,10 +155,15 @@ static int NoOpUnused(void)
  * static dispatch functions to call \c _glapi_get_dispatch to get the real
  * dispatch table.
  * 
- * Throughout the code \c _glapi_DispatchTSD == \c NULL is used to determine
- * whether or not the application is multi-threaded.
+ * There is a race condition in setting \c _glapi_DispatchTSD to \c NULL.
+ * It is possible for the original thread to be setting it at the same instant
+ * a new thread, perhaps running on a different processor, is clearing it.
+ * Because of that, \c ThreadSafe, which can only ever be changed to
+ * \c GL_TRUE, is used to determine whether or not the application is
+ * multithreaded.
  */
 /*@{*/
+static GLboolean ThreadSafe = GL_FALSE;  /**< In thread-safe mode? */
 _glthread_TSD _gl_DispatchTSD;           /**< Per-thread dispatch pointer */
 static _glthread_TSD RealDispatchTSD;    /**< only when using override */
 static _glthread_TSD ContextTSD;         /**< Per-thread context pointer */
@@ -184,8 +189,11 @@ static int glUnused(void)
 
 
 struct _glapi_table *_glapi_Dispatch = (struct _glapi_table *) __glapi_noop_table;
+#if defined( THREADS )
 struct _glapi_table *_glapi_DispatchTSD = (struct _glapi_table *) __glapi_noop_table;
+#endif
 struct _glapi_table *_glapi_RealDispatch = (struct _glapi_table *) __glapi_noop_table;
+
 
 /* Used when thread safety disabled */
 void *_glapi_Context = NULL;
@@ -219,7 +227,7 @@ void
 _glapi_check_multithread(void)
 {
 #if defined(THREADS)
-   if ( _glapi_DispatchTSD != NULL ) {
+   if (!ThreadSafe) {
       static unsigned long knownID;
       static GLboolean firstCall = GL_TRUE;
       if (firstCall) {
@@ -227,6 +235,7 @@ _glapi_check_multithread(void)
          firstCall = GL_FALSE;
       }
       else if (knownID != _glthread_GetID()) {
+         ThreadSafe = GL_TRUE;
          _glapi_set_dispatch(NULL);
       }
    }
@@ -249,7 +258,7 @@ _glapi_set_context(void *context)
 {
 #if defined(THREADS)
    _glthread_SetTSD(&ContextTSD, context);
-   _glapi_Context = (_glapi_DispatchTSD == NULL) ? NULL : context;
+   _glapi_Context = (ThreadSafe) ? NULL : context;
 #else
    _glapi_Context = context;
 #endif
@@ -266,7 +275,7 @@ void *
 _glapi_get_context(void)
 {
 #if defined(THREADS)
-   if ( _glapi_DispatchTSD == NULL ) {
+   if (ThreadSafe) {
       return _glthread_GetTSD(&ContextTSD);
    }
    else {
@@ -285,37 +294,35 @@ _glapi_get_context(void)
 void
 _glapi_set_dispatch(struct _glapi_table *dispatch)
 {
-   struct _glapi_table * old_style_dispatch;
-
-
-   /* Use the no-op functions if a NULL dispatch table was requested.
-    */
-
-   old_style_dispatch = (dispatch == NULL)
-     ? (struct _glapi_table *) __glapi_noop_table : dispatch;
-
+   if (!dispatch) {
+      /* use the no-op functions */
+      dispatch = (struct _glapi_table *) __glapi_noop_table;
+   }
 #ifdef DEBUG
-   if (dispatch != NULL) {
+   else {
       _glapi_check_table(dispatch);
    }
 #endif
 
 #if defined(THREADS)
    if (DispatchOverride) {
-      _glthread_SetTSD(&RealDispatchTSD, (void *) old_style_dispatch);
-      if ( dispatch == NULL )
+      _glthread_SetTSD(&RealDispatchTSD, (void *) dispatch);
+      if (ThreadSafe)
          _glapi_RealDispatch = (struct _glapi_table*) __glapi_threadsafe_table;
       else
          _glapi_RealDispatch = dispatch;
    }
    else {
       /* normal operation */
-      _glthread_SetTSD(&_gl_DispatchTSD, (void *) old_style_dispatch);
-      _glapi_DispatchTSD = dispatch;
-
-      _glapi_Dispatch = (dispatch == NULL)
-	  ? (struct _glapi_table *) __glapi_threadsafe_table
-	  : old_style_dispatch;
+      _glthread_SetTSD(&_gl_DispatchTSD, (void *) dispatch);
+      if (ThreadSafe) {
+	 _glapi_Dispatch = (struct _glapi_table *) __glapi_threadsafe_table;
+	 _glapi_DispatchTSD = NULL;
+      }
+      else {
+	 _glapi_Dispatch = dispatch;
+	 _glapi_DispatchTSD = dispatch;
+      }
    }
 #else /*THREADS*/
    if (DispatchOverride) {
@@ -336,7 +343,7 @@ struct _glapi_table *
 _glapi_get_dispatch(void)
 {
 #if defined(THREADS)
-   if ( _glapi_DispatchTSD == NULL ) {
+   if (ThreadSafe) {
       if (DispatchOverride) {
          return (struct _glapi_table *) _glthread_GetTSD(&RealDispatchTSD);
       }
@@ -394,8 +401,9 @@ _glapi_begin_dispatch_override(struct _glapi_table *override)
 
 #if defined(THREADS)
    _glthread_SetTSD(&_gl_DispatchTSD, (void *) override);
-   if ( _glapi_DispatchTSD == NULL ) {
+   if ( ThreadSafe ) {
       _glapi_Dispatch = (struct _glapi_table *) __glapi_threadsafe_table;
+      _glapi_DispatchTSD = NULL;
    }
    else {
       _glapi_Dispatch = override;
@@ -494,7 +502,7 @@ get_static_proc_offset(const char *funcName)
 #ifdef USE_X86_ASM
 extern const GLubyte gl_dispatch_functions_start[];
 
-# if defined(PTHREADS)
+# if defined(THREADS)
 #  define X86_DISPATCH_FUNCTION_SIZE  32
 # else
 #  define X86_DISPATCH_FUNCTION_SIZE  16
@@ -615,7 +623,11 @@ generate_entrypoint(GLuint functionOffset)
    if (code) {
       memcpy(code, insn_template, sizeof(insn_template));
 
+#if defined( THREADS )
       *(unsigned int *)(code + 0x01) = (unsigned int)&_glapi_DispatchTSD;
+#else
+      *(unsigned int *)(code + 0x01) = (unsigned int)&_glapi_Dispatch;
+#endif
       *(unsigned int *)(code + 0x0b) = (unsigned int)functionOffset * 4;
       next_insn = (unsigned int)(code + 0x14);
       *(unsigned int *)(code + 0x10) = (unsigned int)_glapi_get_dispatch - next_insn;

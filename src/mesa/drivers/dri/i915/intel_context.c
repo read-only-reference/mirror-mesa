@@ -68,9 +68,6 @@ char *prevLockFile;
 int prevLockLine;
 #endif
 
-const char __driConfigOptions[] = { 0 };
-const GLuint __driNConfigOptions = 0;
-
 /***************************************
  * Mesa's Driver Functions
  ***************************************/
@@ -179,6 +176,8 @@ static const char * const card_extensions[] =
    "GL_SGIS_generate_mipmap",
    "GL_SGIS_texture_border_clamp",
    "GL_SGIS_texture_edge_clamp",
+   "GL_3DFX_texture_compression_FXT1",
+
    NULL
 };
 
