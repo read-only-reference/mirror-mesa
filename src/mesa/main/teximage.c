@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.1
+ * Version:  6.3
  *
  * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
@@ -36,6 +36,7 @@
 
 
 #include "glheader.h"
+#include "bufferobj.h"
 #include "context.h"
 #include "convolve.h"
 #include "image.h"
@@ -1950,11 +1951,6 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
       return;
    }
 
-   if (!texImage->Data) {
-      /* no image data, not an error */
-      return;
-   }
-
    /* Make sure the requested image format is compatible with the
     * texture's format.
     */
@@ -1976,6 +1972,35 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
    else if (is_ycbcr_format(format)
        && !is_ycbcr_format(texImage->TexFormat->BaseFormat)) {
       _mesa_error(ctx, GL_INVALID_OPERATION, "glGetTexImage(format mismatch)");
+      return;
+   }
+
+   /* XXX - someday the rest of this function should be moved into a
+    * fallback routine called via ctx->Driver.GetTexImage()
+    */
+
+   if (ctx->Pack.BufferObj->Name) {
+      /* pack texture image into a PBO */
+      GLubyte *buf;
+      if (!_mesa_validate_pbo_access(&ctx->Pack, texImage->Width,
+                                     texImage->Height, texImage->Depth,
+                                     format, type, pixels)) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glGetTexImage(invalid PBO access)");
+         return;
+      }
+      buf = (GLubyte *) ctx->Driver.MapBuffer(ctx, GL_PIXEL_PACK_BUFFER_EXT,
+                                              GL_WRITE_ONLY_ARB,
+                                              ctx->Pack.BufferObj);
+      if (!buf) {
+         /* buffer is already mapped - that's an error */
+         _mesa_error(ctx, GL_INVALID_OPERATION,"glGetTexImage(PBO is mapped)");
+         return;
+      }
+      pixels = ADD_POINTERS(buf, pixels);
+   }
+   else if (!pixels) {
+      /* not an error */
       return;
    }
 
@@ -2016,7 +2041,6 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
                else {
                   _mesa_problem(ctx,
                                 "Color index problem in _mesa_GetTexImage");
-                  return;
                }
                _mesa_pack_index_span(ctx, width, type, dest,
                                      indexRow, &ctx->Pack,
@@ -2064,6 +2088,11 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
             } /* format */
          } /* row */
       } /* img */
+   }
+
+   if (ctx->Pack.BufferObj->Name) {
+      ctx->Driver.UnmapBuffer(ctx, GL_PIXEL_PACK_BUFFER_EXT,
+                              ctx->Pack.BufferObj);
    }
 }
 
@@ -2798,6 +2827,9 @@ compressed_texture_error_check(GLcontext *ctx, GLint dimensions,
    if (!is_compressed_format(ctx, internalFormat))
       return GL_INVALID_ENUM;
 
+   if (_mesa_base_tex_format(ctx, internalFormat) < 0)
+      return GL_INVALID_ENUM;
+
    if (border != 0)
       return GL_INVALID_VALUE;
 
@@ -3356,9 +3388,40 @@ _mesa_GetCompressedTexImageARB(GLenum target, GLint level, GLvoid *img)
       return;
    }
 
-   if (!img)
+   /* XXX - someday the rest of this function should be moved into a
+    * fallback routine called via ctx->Driver.GetCompressedTexImage()
+    */
+ 
+   if (ctx->Pack.BufferObj->Name) {
+      /* pack texture image into a PBO */
+      GLubyte *buf;
+      if ((const GLubyte *) img + texImage->CompressedSize >
+          (const GLubyte *) ctx->Pack.BufferObj->Size) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glGetCompressedTexImage(invalid PBO access)");
+         return;
+      }
+      buf = (GLubyte *) ctx->Driver.MapBuffer(ctx, GL_PIXEL_PACK_BUFFER_EXT,
+                                              GL_WRITE_ONLY_ARB,
+                                              ctx->Pack.BufferObj);
+      if (!buf) {
+         /* buffer is already mapped - that's an error */
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glGetCompressedTexImage(PBO is mapped)");
+         return;
+      }
+      img = ADD_POINTERS(buf, img);
+   }
+   else if (!img) {
+      /* not an error */
       return;
+   }
 
    /* just memcpy, no pixelstore or pixel transfer */
    MEMCPY(img, texImage->Data, texImage->CompressedSize);
+
+   if (ctx->Pack.BufferObj->Name) {
+      ctx->Driver.UnmapBuffer(ctx, GL_PIXEL_PACK_BUFFER_EXT,
+                              ctx->Pack.BufferObj);
+   }
 }

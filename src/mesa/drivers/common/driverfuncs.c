@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.1
+ * Version:  6.3
  *
  * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
@@ -126,6 +126,7 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->ColorMaterial = NULL;
    driver->CullFace = NULL;
    driver->DrawBuffer = _swrast_DrawBuffer;
+   driver->DrawBuffers = _swrast_DrawBuffers;
    driver->FrontFace = NULL;
    driver->DepthFunc = NULL;
    driver->DepthMask = NULL;
@@ -186,7 +187,7 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->BufferSubData = _mesa_buffer_subdata;
    driver->GetBufferSubData = _mesa_buffer_get_subdata;
    driver->MapBuffer = _mesa_buffer_map;
-   driver->UnmapBuffer = NULL;
+   driver->UnmapBuffer = _mesa_buffer_unmap;
 #endif
 
    /* T&L stuff */

@@ -56,7 +56,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r128_span.h"
 #include "r128_tex.h"
 #include "r128_tris.h"
-#include "r128_vb.h"
 
 #include "vblank.h"
 #include "utils.h"
@@ -90,6 +89,7 @@ static const struct dri_debug_control debug_control[] =
     { "2d",    DEBUG_VERBOSE_2D },
     { "sync",  DEBUG_ALWAYS_SYNC },
     { "api",   DEBUG_VERBOSE_API },
+    { "fall",  DEBUG_VERBOSE_FALL },
     { NULL,    0 }
 };
 
@@ -180,6 +180,7 @@ GLboolean r128CreateContext( const __GLcontextModes *glVisual,
    rmesa->RenderIndex = -1;		/* Impossible value */
    rmesa->vert_buf = NULL;
    rmesa->num_verts = 0;
+   rmesa->tnl_state = ~0;
 
    /* Set the maximum texture size small enough that we can guarentee that
     * all texture units can bind a maximal texture and have them both in
@@ -243,7 +244,6 @@ GLboolean r128CreateContext( const __GLcontextModes *glVisual,
    if (sPriv->drmMinor >= 4)
       _mesa_enable_extension( ctx, "GL_MESA_ycbcr_texture" );
 
-   r128InitVB( ctx );
    r128InitTriFuncs( ctx );
    r128DDInitStateFuncs( ctx );
    r128DDInitSpanFuncs( ctx );
@@ -258,6 +258,11 @@ GLboolean r128CreateContext( const __GLcontextModes *glVisual,
    R128_DEBUG = driParseDebugString( getenv( "R128_DEBUG" ),
 				     debug_control );
 #endif
+
+   if (driQueryOptionb(&rmesa->optionCache, "no_rast")) {
+      fprintf(stderr, "disabling 3D acceleration\n");
+      FALLBACK(rmesa, R128_FALLBACK_DISABLE, 1);
+   }
 
    return GL_TRUE;
 }
@@ -279,8 +284,6 @@ void r128DestroyContext( __DRIcontextPrivate *driContextPriv  )
       _tnl_DestroyContext( rmesa->glCtx );
       _ac_DestroyContext( rmesa->glCtx );
       _swrast_DestroyContext( rmesa->glCtx );
-
-      r128FreeVB( rmesa->glCtx );
 
       /* free the Mesa context */
       rmesa->glCtx->DriverCtx = NULL;

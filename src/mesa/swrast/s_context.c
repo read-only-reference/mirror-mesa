@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.1
+ * Version:  6.3
  *
  * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
@@ -93,7 +93,7 @@ _swrast_update_rasterflags( GLcontext *ctx )
     * MULTI_DRAW_BIT flag.  Also set it if we're drawing to no
     * buffers or the RGBA or CI mask disables all writes.
     */
-   if (_mesa_bitcount(ctx->Color._DrawDestMask) != 1) {
+   if (_mesa_bitcount(ctx->Color._DrawDestMask[0]) != 1) {
       /* more than one color buffer designated for writing (or zero buffers) */
       rasterMask |= MULTI_DRAW_BIT;
    }
@@ -196,18 +196,21 @@ _swrast_update_fog_state( GLcontext *ctx )
    CLAMPED_FLOAT_TO_CHAN(swrast->_FogColor[GCOMP], ctx->Fog.Color[GCOMP]);
    CLAMPED_FLOAT_TO_CHAN(swrast->_FogColor[BCOMP], ctx->Fog.Color[BCOMP]);
 
-   /* determine if fog is needed */
+   /* determine if fog is needed, and if so, which fog mode */
    swrast->_FogEnabled = GL_FALSE;
-   if (ctx->Fog.Enabled) {
-      swrast->_FogEnabled = GL_TRUE;
-   }
-   else if (ctx->FragmentProgram._Enabled &&
-        ctx->FragmentProgram.Current->Base.Target == GL_FRAGMENT_PROGRAM_ARB) {
-      const struct fragment_program *p;
-      p = (struct fragment_program *) ctx->FragmentProgram.Current;
-      if (p->FogOption != GL_NONE) {
-         swrast->_FogEnabled = GL_TRUE;
+   if (ctx->FragmentProgram._Enabled) {
+      if (ctx->FragmentProgram.Current->Base.Target==GL_FRAGMENT_PROGRAM_ARB) {
+         const struct fragment_program *p
+            = (struct fragment_program *) ctx->FragmentProgram.Current;
+         if (p->FogOption != GL_NONE) {
+            swrast->_FogEnabled = GL_TRUE;
+            swrast->_FogMode = p->FogOption;
+         }
       }
+   }
+   else if (ctx->Fog.Enabled) {
+      swrast->_FogEnabled = GL_TRUE;
+      swrast->_FogMode = ctx->Fog.Mode;
    }
 }
 
@@ -480,7 +483,7 @@ _swrast_validate_derived( GLcontext *ctx )
       if (swrast->NewState & _SWRAST_NEW_TEXTURE_ENV_MODE)
 	 _swrast_update_texture_env( ctx );
 
-      if (swrast->NewState & _NEW_FOG)
+      if (swrast->NewState & (_NEW_FOG | _NEW_PROGRAM))
          _swrast_update_fog_state( ctx );
 
       if (swrast->NewState & _NEW_PROGRAM)
@@ -767,26 +770,4 @@ _swrast_print_vertex( GLcontext *ctx, const SWvertex *v )
       _mesa_debug(ctx, "pointsize %f\n", v->pointSize);
       _mesa_debug(ctx, "\n");
    }
-}
-
-
-/**
- * Validate access to a PBO to be sure we're not going to read/write
- * out of buffer bounds.
- */
-GLvoid *
-_swrast_validate_pbo_access(const struct gl_pixelstore_attrib *pack,
-                            GLsizei width, GLsizei height, GLsizei depth,
-                            GLenum format, GLenum type, GLvoid *ptr)
-{
-   if (pack->BufferObj->Name == 0) {
-      /* no PBO */
-      return ptr;
-   }
-   else if (_mesa_validate_pbo_access(pack, width, height, depth, format,
-                                      type, ptr)) {
-      return ADD_POINTERS(pack->BufferObj->Data, ptr);
-   }
-   /* bad access! */
-   return NULL;
 }

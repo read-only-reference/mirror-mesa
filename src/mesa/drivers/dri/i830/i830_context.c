@@ -73,7 +73,7 @@ int I830_DEBUG = (0);
  * Mesa's Driver Functions
  ***************************************/
 
-#define DRIVER_DATE                     "20040506"
+#define DRIVER_DATE                     "20041007"
 
 
 static const GLubyte *i830DDGetString( GLcontext *ctx, GLenum name )
@@ -372,6 +372,14 @@ GLboolean i830CreateContext( const __GLcontextModes *mesaVis,
 
    driInitExtensions( ctx, card_extensions, GL_TRUE );
 
+   if (imesa->glCtx->Mesa_DXTn) {
+     _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
+     _mesa_enable_extension( ctx, "GL_S3_s3tc" );
+   }
+   else if (driQueryOptionb (&imesa->optionCache, "force_s3tc_enable")) {
+     _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
+   }
+
    _mesa_enable_extension( ctx, "GL_3DFX_texture_compression_FXT1" );
 
    /* XXX these should really go right after _mesa_init_driver_functions() */
@@ -468,7 +476,7 @@ void i830XMesaSetBackClipRects( i830ContextPtr imesa )
 
 static void i830XMesaWindowMoved( i830ContextPtr imesa )
 {
-   switch (imesa->glCtx->Color._DrawDestMask) {
+   switch (imesa->glCtx->Color._DrawDestMask[0]) {
    case DD_FRONT_LEFT_BIT:
       i830XMesaSetFrontClipRects( imesa );
       break;

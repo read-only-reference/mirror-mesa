@@ -299,8 +299,8 @@ void mgaUpdateClipping(const GLcontext *ctx)
       int x1 = mmesa->driDrawable->x + ctx->Scissor.X;
       int y1 = mmesa->driDrawable->y + mmesa->driDrawable->h
 	 - (ctx->Scissor.Y + ctx->Scissor.Height);
-      int x2 = x1 + ctx->Scissor.Width - 1;
-      int y2 = y1 + ctx->Scissor.Height - 1;
+      int x2 = x1 + ctx->Scissor.Width;
+      int y2 = y1 + ctx->Scissor.Height;
 
       if (x1 < 0) x1 = 0;
       if (y1 < 0) y1 = 0;
@@ -822,7 +822,7 @@ static void mgaDDDrawBuffer(GLcontext *ctx, GLenum mode )
    /*
     * _DrawDestMask is easier to cope with than <mode>.
     */
-   switch ( ctx->Color._DrawDestMask ) {
+   switch ( ctx->Color._DrawDestMask[0] ) {
    case DD_FRONT_LEFT_BIT:
       mmesa->setup.dstorg = mmesa->mgaScreen->frontOffset;
       mmesa->dirty |= MGA_UPLOAD_CONTEXT;

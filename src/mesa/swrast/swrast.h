@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.1
+ * Version:  6.3
  *
  * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
@@ -141,6 +141,10 @@ extern void
 _swrast_DrawBuffer( GLcontext *ctx, GLenum mode );
 
 
+extern void
+_swrast_DrawBuffers( GLcontext *ctx, GLsizei n, const GLenum *buffers );
+
+
 /* Reset the stipple counter
  */
 extern void
@@ -196,11 +200,6 @@ _swrast_allow_pixel_fog( GLcontext *ctx, GLboolean value );
 extern void
 _swrast_print_vertex( GLcontext *ctx, const SWvertex *v );
 
-
-extern GLvoid *
-_swrast_validate_pbo_access(const struct gl_pixelstore_attrib *pack,
-                            GLsizei width, GLsizei height, GLsizei depth,
-                            GLenum format, GLenum type, GLvoid *ptr);
 
 /*
  * Imaging fallbacks (a better solution should be found, perhaps

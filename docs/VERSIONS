@@ -1276,7 +1276,7 @@ Mesa Version History
 	- fixed a number of minor memory leaks (bug #1002030)
 
 
-6.2  Month, day, 2004
+6.2  October 2, 2004
     New:
 	- enabled GL_ARB_texture_rectangle (same as GL_NV_texture_rectangle)
 	- updated Doxygen support (Jose Fonseca)
@@ -1293,3 +1293,18 @@ Mesa Version History
 	- repeated calls to glDeleteTexture(t) could lead to a crash
 	- fixed potential ref count bugs in VBOs and vertex/fragment programs
 	- spriteblast demo didn't handle window size changes correctly
+	- glTexSubImage didn't handle pixels=NULL correctly for PBOs
+	- fixed color index mode glDrawPixels bug (Karl Schultz)
+
+
+6.3  Month day, 2004
+    New:
+	- GL_ARB_draw_buffers extension
+	- GL_OES_read_format extension (Ian Romanick)
+	- full support for GL_EXT_pixel_buffer_object (convolution filters,
+	  polygon stipple, colormaps, etc)
+    Changes:
+	- added -stereo option for glxgears demo (Jacek Rosik)
+    Bug fixes:
+	fixes from 6.2.1, plus:
+	- 

@@ -64,7 +64,6 @@ static void flush_last_swtcl_prim( r200ContextPtr rmesa  );
  *                         Initialization 
  ***********************************************************************/
 
-#define EMIT_SZ(sz)   (EMIT_1F + (sz) - 1)
 #define EMIT_ATTR( ATTR, STYLE, F0 )					\
 do {									\
    rmesa->swtcl.vertex_attrs[rmesa->swtcl.vertex_attr_count].attrib = (ATTR);	\
@@ -117,12 +116,17 @@ static void r200SetVertexFormat( GLcontext *ctx )
    }
 
    rmesa->swtcl.coloroffset = offset;
+#if MESA_LITTLE_ENDIAN 
    EMIT_ATTR( _TNL_ATTRIB_COLOR0, EMIT_4UB_4F_RGBA, (R200_VTX_PK_RGBA << R200_VTX_COLOR_0_SHIFT) );
+#else
+   EMIT_ATTR( _TNL_ATTRIB_COLOR0, EMIT_4UB_4F_ABGR, (R200_VTX_PK_RGBA << R200_VTX_COLOR_0_SHIFT) );
+#endif
    offset += 1;
 
    rmesa->swtcl.specoffset = 0;
    if (index & (_TNL_BIT_COLOR1|_TNL_BIT_FOG)) {
 
+#if MESA_LITTLE_ENDIAN 
       if (index & _TNL_BIT_COLOR1) {
 	 rmesa->swtcl.specoffset = offset;
 	 EMIT_ATTR( _TNL_ATTRIB_COLOR1, EMIT_3UB_3F_RGB, (R200_VTX_PK_RGBA << R200_VTX_COLOR_1_SHIFT) );
@@ -137,6 +141,22 @@ static void r200SetVertexFormat( GLcontext *ctx )
       else {
 	 EMIT_PAD( 1 );
       }
+#else
+      if (index & _TNL_BIT_FOG) {
+	 EMIT_ATTR( _TNL_ATTRIB_FOG, EMIT_1UB_1F, (R200_VTX_PK_RGBA << R200_VTX_COLOR_1_SHIFT) );
+      }
+      else {
+	 EMIT_PAD( 1 );
+      }
+
+      if (index & _TNL_BIT_COLOR1) {
+	 rmesa->swtcl.specoffset = offset;
+	 EMIT_ATTR( _TNL_ATTRIB_COLOR1, EMIT_3UB_3F_BGR, (R200_VTX_PK_RGBA << R200_VTX_COLOR_1_SHIFT) );
+      }
+      else {
+	 EMIT_PAD( 3 );
+      }
+#endif
    }
 
    if (index & _TNL_BITS_TEX_ANY) {
@@ -145,28 +165,18 @@ static void r200SetVertexFormat( GLcontext *ctx )
       for (i = 0; i < ctx->Const.MaxTextureUnits; i++) {
 	 if (index & _TNL_BIT_TEX(i)) {
 	    GLuint sz = VB->TexCoordPtr[i]->size;
-	    GLuint emit;
-
-	    /* r200 doesn't like 4D texcoords (is that true?):
-	     */
-	    if (sz != 4) {
-	       emit = EMIT_1F + (sz - 1);
-	    }
-	    else {
-	       sz = 3;
-	       emit = EMIT_3F_XYW; 
-	    }
 
 	    fmt_1 |= sz << (3 * i);
-	    EMIT_ATTR( _TNL_ATTRIB_TEX0+i, EMIT_SZ(sz), 0 );
+	    EMIT_ATTR( _TNL_ATTRIB_TEX0+i, EMIT_1F + sz - 1, 0 );
 	 }
       }
    }
 
 
 
-   if ( (rmesa->hw.vtx.cmd[VTX_VTXFMT_0] != fmt_0)
-	|| (rmesa->hw.vtx.cmd[VTX_VTXFMT_1] != fmt_1) ) {
+   if ( rmesa->tnl_index != index ||
+	(rmesa->hw.vtx.cmd[VTX_VTXFMT_0] != fmt_0) ||
+	(rmesa->hw.vtx.cmd[VTX_VTXFMT_1] != fmt_1) ) {
       R200_NEWPRIM(rmesa);
       R200_STATECHANGE( rmesa, vtx );
       rmesa->hw.vtx.cmd[VTX_VTXFMT_0] = fmt_0;
@@ -178,6 +188,7 @@ static void r200SetVertexFormat( GLcontext *ctx )
 			      rmesa->swtcl.vertex_attr_count,
 			      NULL, 0 );
       rmesa->swtcl.vertex_size /= 4;
+      rmesa->tnl_index = index;
    }
 }
 
@@ -214,13 +225,11 @@ void r200ChooseVertexState( GLcontext *ctx )
 	|| (ctx->_TriangleCaps & (DD_TRI_LIGHT_TWOSIDE|DD_TRI_UNFILLED))) {
       rmesa->swtcl.needproj = GL_TRUE;
       vte |= R200_VTX_XY_FMT | R200_VTX_Z_FMT;
-      vte &= ~R200_VTX_W0_FMT;
       vap |= R200_VAP_FORCE_W_TO_ONE;
    }
    else {
       rmesa->swtcl.needproj = GL_FALSE;
       vte &= ~(R200_VTX_XY_FMT | R200_VTX_Z_FMT);
-      vte |= R200_VTX_W0_FMT;
       vap &= ~R200_VAP_FORCE_W_TO_ONE;
    }
 
@@ -737,7 +746,6 @@ r200PointsBitmap( GLcontext *ctx, GLint px, GLint py,
       GLuint vap = rmesa->hw.vap.cmd[VAP_SE_VAP_CNTL];
 
       vte &= ~(R200_VTX_XY_FMT | R200_VTX_Z_FMT);
-      vte |= R200_VTX_W0_FMT;
       vap &= ~R200_VAP_FORCE_W_TO_ONE;
 
       rmesa->swtcl.vertex_size = 5;

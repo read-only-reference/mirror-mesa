@@ -31,6 +31,7 @@ SOURCES = antialias.c \
 	getprocaddress.c \
 	manytex.c \
 	multipal.c \
+	no_s3tc.c \
 	packedpixels.c \
 	pbo.c \
 	projtex.c \
@@ -86,7 +87,7 @@ clean:
 # auto code generation
 getprocaddress: getprocaddress.c getproclist.h
 
-getproclist.h: $(TOP)/src/mesa/glapi/APIspec getprocaddress.c getprocaddress.py
+getproclist.h: $(TOP)/src/mesa/glapi/gl_API.xml getprocaddress.c getprocaddress.py
 	python getprocaddress.py > getproclist.h
 
 

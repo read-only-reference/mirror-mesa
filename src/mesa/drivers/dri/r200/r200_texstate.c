@@ -53,6 +53,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define R200_TXFORMAT_AL88      R200_TXFORMAT_AI88
 #define R200_TXFORMAT_YCBCR     R200_TXFORMAT_YVYU422
 #define R200_TXFORMAT_YCBCR_REV R200_TXFORMAT_VYUY422
+#define R200_TXFORMAT_RGB_DXT1  R200_TXFORMAT_DXT1
+#define R200_TXFORMAT_RGBA_DXT1 R200_TXFORMAT_DXT1
+#define R200_TXFORMAT_RGBA_DXT3 R200_TXFORMAT_DXT23
+#define R200_TXFORMAT_RGBA_DXT5 R200_TXFORMAT_DXT45
 
 #define _COLOR(f) \
     [ MESA_FORMAT_ ## f ] = { R200_TXFORMAT_ ## f, 0 }
@@ -66,7 +70,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     [ MESA_FORMAT_ ## f ] = { R200_TXFORMAT_ ## f, R200_YUV_TO_RGB }
 #define _INVALID(f) \
     [ MESA_FORMAT_ ## f ] = { 0xffffffff, 0 }
-#define VALID_FORMAT(f) ( ((f) <= MESA_FORMAT_YCBCR_REV) \
+#define VALID_FORMAT(f) ( ((f) <= MESA_FORMAT_RGBA_DXT5) \
 			     && (tx_table[f].format != 0xffffffff) )
 
 static const struct {
@@ -93,6 +97,12 @@ tx_table[] =
    _INVALID(CI8),
    _YUV(YCBCR),
    _YUV(YCBCR_REV),
+   _INVALID(RGB_FXT1),
+   _INVALID(RGBA_FXT1),
+   _COLOR(RGB_DXT1),
+   _ALPHA(RGBA_DXT1),
+   _ALPHA(RGBA_DXT3),
+   _ALPHA(RGBA_DXT5),
 };
 
 #undef _COLOR
@@ -165,7 +175,24 @@ static void r200SetTexImages( r200ContextPtr rmesa,
 
       /* find image size in bytes */
       if (texImage->IsCompressed) {
-         size = texImage->CompressedSize;
+      /* need to calculate the size AFTER padding even though the texture is
+         submitted without padding.
+         Only handle pot textures currently - don't know if npot is even possible,
+         size calculation would certainly need (trivial) adjustments.
+         Align (and later pad) to 32byte, not sure what that 64byte blit width is
+         good for? */
+         if ((t->pp_txformat & R200_TXFORMAT_FORMAT_MASK) == R200_TXFORMAT_DXT1) {
+            /* RGB_DXT1/RGBA_DXT1, 8 bytes per block */
+            if ((texImage->Width + 3) < 8) /* width one block */
+               size = texImage->CompressedSize * 4;
+            else if ((texImage->Width + 3) < 16)
+               size = texImage->CompressedSize * 2;
+            else size = texImage->CompressedSize;
+         }
+         else /* DXT3/5, 16 bytes per block */
+            if ((texImage->Width + 3) < 8)
+               size = texImage->CompressedSize * 2;
+            else size = texImage->CompressedSize;
       }
       else if (tObj->Target == GL_TEXTURE_RECTANGLE_NV) {
          size = ((texImage->Width * texImage->TexFormat->TexelBytes + 63)
@@ -252,7 +279,7 @@ static void r200SetTexImages( r200ContextPtr rmesa,
       t->pp_txformat_x |= R200_TEXCOORD_VOLUME;
    }
    else if (tObj->Target == GL_TEXTURE_CUBE_MAP) {
-      ASSERT(log2Width == log2height);
+      ASSERT(log2Width == log2Height);
       t->pp_txformat |= ((log2Width << R200_TXFORMAT_F5_WIDTH_SHIFT) |
                          (log2Height << R200_TXFORMAT_F5_HEIGHT_SHIFT) |
                          (R200_TXFORMAT_CUBIC_MAP_ENABLE));
@@ -265,6 +292,12 @@ static void r200SetTexImages( r200ContextPtr rmesa,
                            (log2Height << R200_FACE_HEIGHT_3_SHIFT) |
                            (log2Width << R200_FACE_WIDTH_4_SHIFT) |
                            (log2Height << R200_FACE_HEIGHT_4_SHIFT));
+   }
+   else {
+      /* If we don't in fact send enough texture coordinates, q will be 1,
+       * making TEXCOORD_PROJ act like TEXCOORD_NONPROJ (Right?)
+       */
+      t->pp_txformat_x |= R200_TEXCOORD_PROJ;
    }
 
    t->pp_txsize = (((tObj->Image[0][t->base.firstLevel]->Width - 1) << 0) |
@@ -795,7 +828,7 @@ static void import_tex_obj_state( r200ContextPtr rmesa,
    if (texobj->base.tObj->Target == GL_TEXTURE_CUBE_MAP) {
       GLuint *cube_cmd = R200_DB_STATE( cube[unit] );
       GLuint bytesPerFace = texobj->base.totalSize / 6;
-      ASSERT(texobj->totalSize % 6 == 0);
+      ASSERT(texobj->base.totalSize % 6 == 0);
       cube_cmd[CUBE_PP_CUBIC_FACES] = texobj->pp_cubic_faces;
       cube_cmd[CUBE_PP_CUBIC_OFFSET_F1] = texobj->pp_txoffset + 1 * bytesPerFace;
       cube_cmd[CUBE_PP_CUBIC_OFFSET_F2] = texobj->pp_txoffset + 2 * bytesPerFace;
@@ -809,71 +842,42 @@ static void import_tex_obj_state( r200ContextPtr rmesa,
 }
 
 
-
-
 static void set_texgen_matrix( r200ContextPtr rmesa, 
 			       GLuint unit,
 			       const GLfloat *s_plane,
 			       const GLfloat *t_plane,
-			       const GLfloat *r_plane )
+			       const GLfloat *r_plane,
+			       const GLfloat *q_plane )
 {
-   static const GLfloat scale_identity[4] = { 1,1,1,1 };
+   GLfloat m[16];
 
-   if (!TEST_EQ_4V( s_plane, scale_identity) ||
-       !TEST_EQ_4V( t_plane, scale_identity) ||
-       !TEST_EQ_4V( r_plane, scale_identity)) {
-      rmesa->TexGenEnabled |= R200_TEXMAT_0_ENABLE<<unit;
-      rmesa->TexGenMatrix[unit].m[0]  = s_plane[0];
-      rmesa->TexGenMatrix[unit].m[4]  = s_plane[1];
-      rmesa->TexGenMatrix[unit].m[8]  = s_plane[2];
-      rmesa->TexGenMatrix[unit].m[12] = s_plane[3];
+   m[0]  = s_plane[0];
+   m[4]  = s_plane[1];
+   m[8]  = s_plane[2];
+   m[12] = s_plane[3];
 
-      rmesa->TexGenMatrix[unit].m[1]  = t_plane[0];
-      rmesa->TexGenMatrix[unit].m[5]  = t_plane[1];
-      rmesa->TexGenMatrix[unit].m[9]  = t_plane[2];
-      rmesa->TexGenMatrix[unit].m[13] = t_plane[3];
+   m[1]  = t_plane[0];
+   m[5]  = t_plane[1];
+   m[9]  = t_plane[2];
+   m[13] = t_plane[3];
 
-      /* NOTE: r_plane goes in the 4th row, not 3rd! */
-      rmesa->TexGenMatrix[unit].m[3]  = r_plane[0];
-      rmesa->TexGenMatrix[unit].m[7]  = r_plane[1];
-      rmesa->TexGenMatrix[unit].m[11] = r_plane[2];
-      rmesa->TexGenMatrix[unit].m[15] = r_plane[3];
+   m[2]  = r_plane[0];
+   m[6]  = r_plane[1];
+   m[10] = r_plane[2];
+   m[14] = r_plane[3];
 
-      rmesa->NewGLState |= _NEW_TEXTURE_MATRIX;
-   }
-}
+   m[3]  = q_plane[0];
+   m[7]  = q_plane[1];
+   m[11] = q_plane[2];
+   m[15] = q_plane[3];
 
-/* Need this special matrix to get correct reflection map coords */
-static void
-set_texgen_reflection_matrix( r200ContextPtr rmesa, GLuint unit )
-{
-   static const GLfloat m[16] = {
-      -1,  0,  0,  0,
-       0, -1,  0,  0,
-       0,  0,  0, -1,
-       0,  0, -1,  0 };
-   _math_matrix_loadf( &(rmesa->TexGenMatrix[unit]), m);
-   _math_matrix_analyse( &(rmesa->TexGenMatrix[unit]) );
-   rmesa->TexGenEnabled |= R200_TEXMAT_0_ENABLE<<unit;
-}
-
-/* Need this special matrix to get correct normal map coords */
-static void
-set_texgen_normal_map_matrix( r200ContextPtr rmesa, GLuint unit )
-{
-   static const GLfloat m[16] = {
-      1, 0, 0, 0,
-      0, 1, 0, 0,
-      0, 0, 0, 1,
-      0, 0, 1, 0 };
    _math_matrix_loadf( &(rmesa->TexGenMatrix[unit]), m);
    _math_matrix_analyse( &(rmesa->TexGenMatrix[unit]) );
    rmesa->TexGenEnabled |= R200_TEXMAT_0_ENABLE<<unit;
 }
 
 
-/* Ignoring the Q texcoord for now.
- *
+/*
  * Returns GL_FALSE if fallback required.  
  */
 static GLboolean r200_validate_texgen( GLcontext *ctx, GLuint unit )
@@ -881,98 +885,130 @@ static GLboolean r200_validate_texgen( GLcontext *ctx, GLuint unit )
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
    const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
    GLuint inputshift = R200_TEXGEN_0_INPUT_SHIFT + unit*4;
-   GLuint tmp = rmesa->TexGenEnabled;
+   GLuint tgi, tgcm;
+   GLuint mode = 0;
+   GLboolean mixed_fallback = GL_FALSE;
+   static const GLfloat I[16] = {
+      1,  0,  0,  0,
+      0,  1,  0,  0,
+      0,  0,  1,  0,
+      0,  0,  0,  1 };
+   static const GLfloat reflect[16] = {
+      -1,  0,  0,  0,
+       0, -1,  0,  0,
+       0,  0,  -1, 0,
+       0,  0,  0,  1 };
 
    rmesa->TexGenCompSel &= ~(R200_OUTPUT_TEX_0 << unit);
    rmesa->TexGenEnabled &= ~(R200_TEXGEN_TEXMAT_0_ENABLE<<unit);
    rmesa->TexGenEnabled &= ~(R200_TEXMAT_0_ENABLE<<unit);
-   rmesa->TexGenInputs &= ~(R200_TEXGEN_INPUT_MASK<<inputshift);
-   rmesa->TexGenNeedNormals[unit] = 0;
+   rmesa->TexGenNeedNormals[unit] = GL_FALSE;
+   tgi = rmesa->hw.tcg.cmd[TCG_TEX_PROC_CTL_1] & ~(R200_TEXGEN_INPUT_MASK <<
+						   inputshift);
+   tgcm = rmesa->hw.tcg.cmd[TCG_TEX_PROC_CTL_2] & ~(R200_TEXGEN_COMP_MASK <<
+						    (unit * 4));
 
    if (0) 
       fprintf(stderr, "%s unit %d\n", __FUNCTION__, unit);
 
-   if ((texUnit->TexGenEnabled & (S_BIT|T_BIT|R_BIT)) == 0) {
-      /* Disabled, no fallback:
-       */
-      rmesa->TexGenInputs |= 
-	 (R200_TEXGEN_INPUT_TEXCOORD_0+unit) << inputshift;
-      return GL_TRUE;
+   if (texUnit->TexGenEnabled & S_BIT) {
+      mode = texUnit->GenModeS;
+   } else {
+      tgcm |= R200_TEXGEN_COMP_S << (unit * 4);
    }
-   else if (texUnit->TexGenEnabled & Q_BIT) {
-      /* Very easy to do this, in fact would remove a fallback case
-       * elsewhere, but I haven't done it yet...  Fallback: 
-       */
-      /*fprintf(stderr, "fallback Q_BIT\n");*/
-      return GL_FALSE;
+
+   if (texUnit->TexGenEnabled & T_BIT) {
+      if (texUnit->GenModeT != mode)
+	 mixed_fallback = GL_TRUE;
+   } else {
+      tgcm |= R200_TEXGEN_COMP_T << (unit * 4);
    }
-   else if (texUnit->TexGenEnabled == (S_BIT|T_BIT) &&
-	    texUnit->GenModeS == texUnit->GenModeT) {
-      /* OK */
-      rmesa->TexGenEnabled |= R200_TEXGEN_TEXMAT_0_ENABLE << unit;
-      /* continue */
+
+   if (texUnit->TexGenEnabled & R_BIT) {
+      if (texUnit->GenModeR != mode)
+	 mixed_fallback = GL_TRUE;
+   } else {
+      tgcm |= R200_TEXGEN_COMP_R << (unit * 4);
    }
-   else if (texUnit->TexGenEnabled == (S_BIT|T_BIT|R_BIT) &&
-	    texUnit->GenModeS == texUnit->GenModeT &&
-            texUnit->GenModeT == texUnit->GenModeR) {
-      /* OK */
-      rmesa->TexGenEnabled |= R200_TEXGEN_TEXMAT_0_ENABLE << unit;
-      /* continue */
+
+   if (texUnit->TexGenEnabled & Q_BIT) {
+      if (texUnit->GenModeQ != mode)
+	 mixed_fallback = GL_TRUE;
+   } else {
+      tgcm |= R200_TEXGEN_COMP_Q << (unit * 4);
    }
-   else {
-      /* Mixed modes, fallback:
-       */
-      /* fprintf(stderr, "fallback mixed texgen\n"); */
+
+   if (mixed_fallback) {
+      if (R200_DEBUG & DEBUG_FALLBACKS)
+	 fprintf(stderr, "fallback mixed texgen, 0x%x (0x%x 0x%x 0x%x 0x%x)\n",
+		 texUnit->TexGenEnabled, texUnit->GenModeS, texUnit->GenModeT,
+		 texUnit->GenModeR, texUnit->GenModeQ);
       return GL_FALSE;
    }
 
-   rmesa->TexGenEnabled |= R200_TEXGEN_TEXMAT_0_ENABLE << unit;
-
-   switch (texUnit->GenModeS) {
+   switch (mode) {
    case GL_OBJECT_LINEAR:
-      rmesa->TexGenInputs |= R200_TEXGEN_INPUT_OBJ << inputshift;
+      tgi |= R200_TEXGEN_INPUT_OBJ << inputshift;
       set_texgen_matrix( rmesa, unit, 
-			 texUnit->ObjectPlaneS,
-			 texUnit->ObjectPlaneT,
-                         texUnit->ObjectPlaneR);
+	 (texUnit->TexGenEnabled & S_BIT) ? texUnit->ObjectPlaneS : I,
+	 (texUnit->TexGenEnabled & T_BIT) ? texUnit->ObjectPlaneT : I + 4,
+	 (texUnit->TexGenEnabled & R_BIT) ? texUnit->ObjectPlaneR : I + 8,
+	 (texUnit->TexGenEnabled & Q_BIT) ? texUnit->ObjectPlaneQ : I + 12);
       break;
 
    case GL_EYE_LINEAR:
-      rmesa->TexGenInputs |= R200_TEXGEN_INPUT_EYE << inputshift;
+      tgi |= R200_TEXGEN_INPUT_EYE << inputshift;
       set_texgen_matrix( rmesa, unit, 
-			 texUnit->EyePlaneS,
-			 texUnit->EyePlaneT,
-			 texUnit->EyePlaneR);
+	 (texUnit->TexGenEnabled & S_BIT) ? texUnit->EyePlaneS : I,
+	 (texUnit->TexGenEnabled & T_BIT) ? texUnit->EyePlaneT : I + 4,
+	 (texUnit->TexGenEnabled & R_BIT) ? texUnit->EyePlaneR : I + 8,
+	 (texUnit->TexGenEnabled & Q_BIT) ? texUnit->EyePlaneQ : I + 12);
       break;
 
    case GL_REFLECTION_MAP_NV:
       rmesa->TexGenNeedNormals[unit] = GL_TRUE;
-      rmesa->TexGenInputs |= R200_TEXGEN_INPUT_EYE_REFLECT<<inputshift;
-      set_texgen_reflection_matrix(rmesa, unit);
+      tgi |= R200_TEXGEN_INPUT_EYE_REFLECT<<inputshift;
+      set_texgen_matrix( rmesa, unit, 
+	 (texUnit->TexGenEnabled & S_BIT) ? reflect : I,
+	 (texUnit->TexGenEnabled & T_BIT) ? reflect + 4 : I + 4,
+	 (texUnit->TexGenEnabled & R_BIT) ? reflect + 8 : I + 8,
+	 I + 12);
       break;
 
    case GL_NORMAL_MAP_NV:
       rmesa->TexGenNeedNormals[unit] = GL_TRUE;
-      rmesa->TexGenInputs |= R200_TEXGEN_INPUT_EYE_NORMAL<<inputshift;
-      set_texgen_normal_map_matrix(rmesa, unit);
+      tgi |= R200_TEXGEN_INPUT_EYE_NORMAL<<inputshift;
       break;
 
    case GL_SPHERE_MAP:
       rmesa->TexGenNeedNormals[unit] = GL_TRUE;
-      rmesa->TexGenInputs |= R200_TEXGEN_INPUT_SPHERE<<inputshift;
+      tgi |= R200_TEXGEN_INPUT_SPHERE<<inputshift;
+      /* GL_SPHERE_MAP doesn't appear to work. */
+      return GL_FALSE;
+
+   case 0:
+      /* All texgen units were disabled, so just pass coords through. */
+      tgi |= unit << inputshift;
       break;
 
    default:
       /* Unsupported mode, fallback:
        */
-      /*  fprintf(stderr, "fallback unsupported texgen\n"); */
+      if (R200_DEBUG & DEBUG_FALLBACKS)
+	 fprintf(stderr, "fallback unsupported texgen, %d\n",
+		 texUnit->GenModeS);
       return GL_FALSE;
    }
 
+   rmesa->TexGenEnabled |= R200_TEXGEN_TEXMAT_0_ENABLE << unit;
    rmesa->TexGenCompSel |= R200_OUTPUT_TEX_0 << unit;
 
-   if (tmp != rmesa->TexGenEnabled) {
-      rmesa->NewGLState |= _NEW_TEXTURE_MATRIX;
+   if (tgi != rmesa->hw.tcg.cmd[TCG_TEX_PROC_CTL_1] || 
+       tgcm != rmesa->hw.tcg.cmd[TCG_TEX_PROC_CTL_2])
+   {
+      R200_STATECHANGE(rmesa, tcg);
+      rmesa->hw.tcg.cmd[TCG_TEX_PROC_CTL_1] = tgi;
+      rmesa->hw.tcg.cmd[TCG_TEX_PROC_CTL_2] = tgcm;
    }
 
    return GL_TRUE;
@@ -999,7 +1035,7 @@ static void disable_tex( GLcontext *ctx, int unit )
 					   R200_TEX_BLEND_0_ENABLE) << unit);
       rmesa->hw.ctx.cmd[CTX_PP_CNTL] |= R200_TEX_BLEND_0_ENABLE; 
 	 
-      R200_STATECHANGE( rmesa, tcl );
+      R200_STATECHANGE( rmesa, vtx );
       rmesa->hw.vtx.cmd[VTX_TCL_OUTPUT_VTXFMT_1] &= ~(7 << (unit * 3));
 	 
       if (rmesa->TclFallback & (R200_TCL_FALLBACK_TEXGEN_0<<unit)) {
@@ -1015,21 +1051,34 @@ static void disable_tex( GLcontext *ctx, int unit )
 
 
       {
-	 GLuint inputshift = R200_TEXGEN_0_INPUT_SHIFT + unit*4;
 	 GLuint tmp = rmesa->TexGenEnabled;
 
 	 rmesa->TexGenEnabled &= ~(R200_TEXGEN_TEXMAT_0_ENABLE<<unit);
 	 rmesa->TexGenEnabled &= ~(R200_TEXMAT_0_ENABLE<<unit);
-	 rmesa->TexGenEnabled &= ~(R200_TEXGEN_INPUT_MASK<<inputshift);
-	 rmesa->TexGenNeedNormals[unit] = 0;
+	 rmesa->TexGenNeedNormals[unit] = GL_FALSE;
 	 rmesa->TexGenCompSel &= ~(R200_OUTPUT_TEX_0 << unit);
-	 rmesa->TexGenInputs &= ~(R200_TEXGEN_INPUT_MASK<<inputshift);
 
 	 if (tmp != rmesa->TexGenEnabled) {
 	    rmesa->recheck_texgen[unit] = GL_TRUE;
 	    rmesa->NewGLState |= _NEW_TEXTURE_MATRIX;
 	 }
       }
+   }
+}
+
+static void set_re_cntl_d3d( GLcontext *ctx, int unit, GLboolean use_d3d )
+{
+   r200ContextPtr rmesa = R200_CONTEXT(ctx);
+
+   GLuint re_cntl;
+
+   re_cntl = rmesa->hw.set.cmd[SET_RE_CNTL] & ~(R200_VTX_STQ0_D3D << (2 * unit));
+   if (use_d3d)
+      re_cntl |= R200_VTX_STQ0_D3D << (2 * unit);
+
+   if ( re_cntl != rmesa->hw.set.cmd[SET_RE_CNTL] ) {
+      R200_STATECHANGE( rmesa, set );
+      rmesa->hw.set.cmd[SET_RE_CNTL] = re_cntl;
    }
 }
 
@@ -1056,6 +1105,8 @@ static GLboolean enable_tex_2d( GLcontext *ctx, int unit )
       if ( !t->base.memBlock ) 
 	 return GL_FALSE;
    }
+
+   set_re_cntl_d3d( ctx, unit, GL_FALSE );
 
    return GL_TRUE;
 }
@@ -1090,6 +1141,8 @@ static GLboolean enable_tex_3d( GLcontext *ctx, int unit )
       if ( !t->base.memBlock ) 
 	 return GL_FALSE;
    }
+
+   set_re_cntl_d3d( ctx, unit, GL_TRUE );
 
    return GL_TRUE;
 }
@@ -1134,6 +1187,8 @@ static GLboolean enable_tex_cube( GLcontext *ctx, int unit )
       return GL_FALSE;
    }
 
+   set_re_cntl_d3d( ctx, unit, GL_TRUE );
+
    return GL_TRUE;
 }
 
@@ -1158,6 +1213,8 @@ static GLboolean enable_tex_rect( GLcontext *ctx, int unit )
       if ( !t->base.memBlock && !rmesa->prefer_gart_client_texturing ) 
 	 return GL_FALSE;
    }
+
+   set_re_cntl_d3d( ctx, unit, GL_FALSE );
 
    return GL_TRUE;
 }
@@ -1203,6 +1260,7 @@ static GLboolean update_tex_common( GLcontext *ctx, int unit )
 					 R200_TEX_BLEND_0_ENABLE) << unit;
 
       R200_STATECHANGE( rmesa, vtx );
+      rmesa->hw.vtx.cmd[VTX_TCL_OUTPUT_VTXFMT_1] &= ~(7 << (unit * 3));
       rmesa->hw.vtx.cmd[VTX_TCL_OUTPUT_VTXFMT_1] |= 4 << (unit * 3);
 
       rmesa->recheck_texgen[unit] = GL_TRUE;
@@ -1335,8 +1393,14 @@ void r200UpdateTextureState( GLcontext *ctx )
        * Texture cache LRU hang workaround -------------
        * not needed for r200 derivatives?
        */
-      dbg = 0x0;
 
+      /* While the cases below attempt to only enable the workaround in the
+       * specific cases necessary, they were insufficient.  See bugzilla #1519,
+       * #729, #814.  Tests with quake3 showed no impact on performance.
+       */
+      dbg = 0x6;
+
+      /*
       if (((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & (R200_TEX_0_ENABLE )) &&
          ((((rmesa->hw.tex[0].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) &
          0x04) == 0)) ||
@@ -1361,7 +1425,7 @@ void r200UpdateTextureState( GLcontext *ctx )
          0x04) == 0)))
       {
          dbg |= 0x04;
-      }
+      }*/
 
       if (dbg != rmesa->hw.tam.cmd[TAM_DEBUG3]) {
          R200_STATECHANGE( rmesa, tam );

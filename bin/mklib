@@ -21,6 +21,7 @@
 #   -arch ARCH    override using `uname` to determine architecture
 #   -archopt OPT  specify an extra achitecture-specific option OPT
 #   -noprefix     don't prefix library name with "lib" or any suffix
+#   -exports FILE only export the symbols listed in FILE
 #
 # The library name should just be "GL" or "GLU", etc.  The 'lib' prefix
 # will be added here if needed, as well as the ".so" or ".a" suffix,
@@ -48,6 +49,7 @@ INSTALLDIR="."
 ARCH="auto"
 ARCHOPT=""
 NOPREFIX=0
+EXPORTS=""
 
 
 #
@@ -68,6 +70,7 @@ do
 	'-arch')      shift 1; ARCH=$1;;
 	'-archopt')   shift 1; ARCHOPT=$1;;
 	'-noprefix')  NOPREFIX=1;;
+	'-exports')   shift 1; EXPORTS=$1;;
 	-*)           echo "mklib: Unknown option: " $1 ; exit 1;;
 	*) break
     esac
@@ -104,6 +107,7 @@ if [  ]  ; then
     echo MINOR is $MINOR
     echo PATCH is $PATCH
     echo DEPS are $DEPS
+    echo "EXPORTS in" $EXPORTS
     echo "-----------------"
 fi
 
@@ -114,7 +118,15 @@ fi
 case $ARCH in
 
     'Linux' | 'OpenBSD')
-	# GCC-based environment
+	# we assume gcc
+
+	# Set default compilers if env vars not set
+	if [ "x$CXX" = "x" ] ; then
+	    CXX=g++
+	fi
+	if [ "x$CC" = "x" ] ; then
+	    CC=gcc
+	fi
 
 	if [ $NOPREFIX = 1 ] ; then
 	    # No "lib" or ".so" part
@@ -149,6 +161,18 @@ case $ARCH in
 	    else
 		OPTS="-shared -Wl,-soname,${LIBNAME}.so.${MAJOR}"
 	    fi
+	    if [ $EXPORTS ] ; then
+		#OPTS="${OPTS} -Xlinker --retain-symbols-file ${EXPORTS}"
+		# Make the 'exptmp' file for --version-script option
+		echo "VERSION_${MAJOR}.${MINOR} {" > exptmp
+		echo "global:" >> exptmp
+		sed 's/$/;/' ${EXPORTS} >> exptmp
+		echo "local:" >> exptmp
+		echo "*;" >> exptmp
+		echo "};" >> exptmp
+		OPTS="${OPTS} -Xlinker --version-script=exptmp"
+		# exptmp is removed below
+	    fi
 	    if [ x${PATCH} = "x" ] ; then
 		VERSION="${MAJOR}.${MINOR}"
 	    else
@@ -175,6 +199,7 @@ case $ARCH in
             ln -s ${LIBNAME}.so.${MAJOR} ${LIBNAME}.so
             # finish up
             FINAL_LIBS="${LIBNAME}.so.${VERSION} ${LIBNAME}.so.${MAJOR} ${LIBNAME}.so"
+	    rm -f exptmp
         fi
 	;;
 
@@ -372,7 +397,30 @@ case $ARCH in
             ar -X64 -ruv ${LIBNAME} ${OBJECTS}
             FINAL_LIBS=${LIBNAME}
         else
-            echo "mklib: PROBLEM: AIX64 shared libs not supported!!!"
+	    EXPFILE="lib${LIBNAME}.exp"
+	    OFILE=shr.o  #Want to be consistent with the IBM libGL.a
+	    LIBNAME="lib${LIBNAME}.a"  # shared objects are still stored in the .a libraries
+	    OPTS="-bE:${EXPFILE} -bM:SRE -bnoentry -q64"
+	    rm -f ${EXPFILE} ${OFILE}
+	    NM="/bin/nm -eC -X64"
+	    echo "#! /usr/lib/${LIBNAME}" > ${EXPFILE}
+	    ${NM} ${OBJECTS} | awk '{
+	    if ((($2 == "T") || ($2 == "D") || ($2 == "B")) \
+	    && ( substr($1,1,1) != ".")) {
+		    if (substr ($1, 1, 7) != "__sinit" &&
+			    substr ($1, 1, 7) != "__sterm") {
+			    if (substr ($1, 1, 5) == "__tf1")
+				print (substr ($1, 7))
+			    else if (substr ($1, 1, 5) == "__tf9")
+				print (substr ($1, 15))
+			    else
+				print $1
+			}
+		}
+	    }' | sort -u >> ${EXPFILE}
+	    cc ${OPTS} -o ${OFILE} ${OBJECTS} ${DEPS}
+	    ar -X64 -r ${LIBNAME} ${OFILE}
+            FINAL_LIBS="${LIBNAME}"
         fi
         ;;
 

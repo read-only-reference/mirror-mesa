@@ -5272,76 +5272,76 @@
     <type name="charARB" size="1"/>
     <type name="handleARB" size="4"/>
 
-    <function name="DeleteObjectARB" offset="?">
+    <function name="DeleteObjectARB" offset="711">
         <param name="obj" type="GLhandleARB"/>
     </function>
 
-    <function name="GetHandleARB" offset="?">
+    <function name="GetHandleARB" offset="712">
         <param name="pname" type="GLenum"/>
         <return type="GLhandleARB"/>
     </function>
 
-    <function name="DetachObjectARB" offset="?">
+    <function name="DetachObjectARB" offset="713">
         <param name="containerObj" type="GLhandleARB"/>
         <param name="attachedObj" type="GLhandleARB"/>
     </function>
 
-    <function name="CreateShaderObjectARB" offset="?">
+    <function name="CreateShaderObjectARB" offset="714">
         <param name="shaderType" type="GLenum"/>
         <return type="GLhandleARB"/>
     </function>
 
-    <function name="ShaderSourceARB" offset="?">
+    <function name="ShaderSourceARB" offset="715">
         <param name="shaderObj" type="GLhandleARB"/>
         <param name="count" type="GLsizei"/>
         <param name="string" type="const GLcharARB **"/>
         <param name="length" type="const GLint *"/>
     </function>
 
-    <function name="CompileShaderARB" offset="?">
+    <function name="CompileShaderARB" offset="716">
         <param name="shaderObj" type="GLhandleARB"/>
     </function>
 
-    <function name="CreateProgramObjectARB" offset="?">
+    <function name="CreateProgramObjectARB" offset="717">
         <return type="GLhandleARB"/>
     </function>
 
-    <function name="AttachObjectARB" offset="?">
+    <function name="AttachObjectARB" offset="718">
         <param name="containerObj" type="GLhandleARB"/>
         <param name="obj" type="GLhandleARB"/>
     </function>
 
-    <function name="LinkProgramARB" offset="?">
+    <function name="LinkProgramARB" offset="719">
         <param name="programObj" type="GLhandleARB"/>
     </function>
 
-    <function name="UseProgramObjectARB" offset="?">
+    <function name="UseProgramObjectARB" offset="720">
         <param name="programObj" type="GLhandleARB"/>
     </function>
 
-    <function name="ValidateProgramARB" offset="?">
+    <function name="ValidateProgramARB" offset="721">
         <param name="programObj" type="GLhandleARB"/>
     </function>
 
-    <function name="Uniform1fARB" offset="?">
+    <function name="Uniform1fARB" offset="722">
         <param name="location" type="GLint"/>
         <param name="v0" type="GLfloat"/>
     </function>
 
-    <function name="Uniform2fARB" offset="?">
+    <function name="Uniform2fARB" offset="723">
         <param name="location" type="GLint"/>
         <param name="v0" type="GLfloat"/>
         <param name="v1" type="GLfloat"/>
     </function>
 
-    <function name="Uniform3fARB" offset="?">
+    <function name="Uniform3fARB" offset="724">
         <param name="location" type="GLint"/>
         <param name="v0" type="GLfloat"/>
         <param name="v1" type="GLfloat"/>
         <param name="v2" type="GLfloat"/>
     </function>
 
-    <function name="Uniform4fARB" offset="?">
+    <function name="Uniform4fARB" offset="725">
         <param name="location" type="GLint"/>
         <param name="v0" type="GLfloat"/>
         <param name="v1" type="GLfloat"/>
@@ -5349,25 +5349,25 @@
         <param name="v3" type="GLfloat"/>
     </function>
 
-    <function name="Uniform1iARB" offset="?">
+    <function name="Uniform1iARB" offset="726">
         <param name="location" type="GLint"/>
         <param name="v0" type="GLint"/>
     </function>
 
-    <function name="Uniform2iARB" offset="?">
+    <function name="Uniform2iARB" offset="727">
         <param name="location" type="GLint"/>
         <param name="v0" type="GLint"/>
         <param name="v1" type="GLint"/>
     </function>
 
-    <function name="Uniform3iARB" offset="?">
+    <function name="Uniform3iARB" offset="728">
         <param name="location" type="GLint"/>
         <param name="v0" type="GLint"/>
         <param name="v1" type="GLint"/>
         <param name="v2" type="GLint"/>
     </function>
 
-    <function name="Uniform4iARB" offset="?">
+    <function name="Uniform4iARB" offset="729">
         <param name="location" type="GLint"/>
         <param name="v0" type="GLint"/>
         <param name="v1" type="GLint"/>
@@ -5375,108 +5375,108 @@
         <param name="v3" type="GLint"/>
     </function>
 
-    <function name="Uniform1fvARB" offset="?">
+    <function name="Uniform1fvARB" offset="730">
         <param name="location" type="GLint"/>
         <param name="count" type="GLsizei"/>
         <param name="value" type="const GLfloat *"/>
     </function>
 
-    <function name="Uniform2fvARB" offset="?">
+    <function name="Uniform2fvARB" offset="731">
         <param name="location" type="GLint"/>
         <param name="count" type="GLsizei"/>
         <param name="value" type="const GLfloat *"/>
     </function>
 
-    <function name="Uniform3fvARB" offset="?">
+    <function name="Uniform3fvARB" offset="732">
         <param name="location" type="GLint"/>
         <param name="count" type="GLsizei"/>
         <param name="value" type="const GLfloat *"/>
     </function>
 
-    <function name="Uniform4fvARB" offset="?">
+    <function name="Uniform4fvARB" offset="733">
         <param name="location" type="GLint"/>
         <param name="count" type="GLsizei"/>
         <param name="value" type="const GLfloat *"/>
     </function>
 
-    <function name="Uniform1ivARB" offset="?">
+    <function name="Uniform1ivARB" offset="734">
         <param name="location" type="GLint"/>
         <param name="count" type="GLsizei"/>
         <param name="value" type="const GLint *"/>
     </function>
 
-    <function name="Uniform2ivARB" offset="?">
+    <function name="Uniform2ivARB" offset="735">
         <param name="location" type="GLint"/>
         <param name="count" type="GLsizei"/>
         <param name="value" type="const GLint *"/>
     </function>
 
-    <function name="Uniform3ivARB" offset="?">
+    <function name="Uniform3ivARB" offset="736">
         <param name="location" type="GLint"/>
         <param name="count" type="GLsizei"/>
         <param name="value" type="const GLint *"/>
     </function>
 
-    <function name="Uniform4ivARB" offset="?">
+    <function name="Uniform4ivARB" offset="737">
         <param name="location" type="GLint"/>
         <param name="count" type="GLsizei"/>
         <param name="value" type="const GLint *"/>
     </function>
 
-    <function name="UniformMatrix2fvARB" offset="?">
+    <function name="UniformMatrix2fvARB" offset="738">
         <param name="location" type="GLint"/>
         <param name="count" type="GLsizei"/>
         <param name="transpose" type="GLboolean"/>
         <param name="value" type="const GLfloat *"/>
     </function>
 
-    <function name="UniformMatrix3fvARB" offset="?">
+    <function name="UniformMatrix3fvARB" offset="739">
         <param name="location" type="GLint"/>
         <param name="count" type="GLsizei"/>
         <param name="transpose" type="GLboolean"/>
         <param name="value" type="const GLfloat *"/>
     </function>
 
-    <function name="UniformMatrix4fvARB" offset="?">
+    <function name="UniformMatrix4fvARB" offset="740">
         <param name="location" type="GLint"/>
         <param name="count" type="GLsizei"/>
         <param name="transpose" type="GLboolean"/>
         <param name="value" type="const GLfloat *"/>
     </function>
 
-    <function name="GetObjectParameterfvARB" offset="?">
+    <function name="GetObjectParameterfvARB" offset="741">
         <param name="obj" type="GLhandleARB"/>
         <param name="pname" type="GLenum"/>
         <param name="params" type="GLfloat *"/>
     </function>
 
-    <function name="GetObjectParameterivARB" offset="?">
+    <function name="GetObjectParameterivARB" offset="742">
         <param name="obj" type="GLhandleARB"/>
         <param name="pname" type="GLenum"/>
         <param name="params" type="GLint *"/>
     </function>
 
-    <function name="GetInfoLogARB" offset="?">
+    <function name="GetInfoLogARB" offset="743">
         <param name="obj" type="GLhandleARB"/>
-        <param name="" type="GLsizei"/>
-        <param name="" type="GLsizei *"/>
-        <param name="" type="GLcharARB *"/>
+        <param name="maxLength" type="GLsizei"/>
+        <param name="length" type="GLsizei *"/>
+        <param name="infoLog" type="GLcharARB *"/>
     </function>
 
-    <function name="GetAttachedObjectsARB" offset="?">
+    <function name="GetAttachedObjectsARB" offset="744">
         <param name="containerObj" type="GLhandleARB"/>
         <param name="maxLength" type="GLsizei"/>
         <param name="length" type="GLsizei *"/>
         <param name="infoLog" type="GLhandleARB *"/>
     </function>
 
-    <function name="GetUniformLocationARB" offset="?">
+    <function name="GetUniformLocationARB" offset="745">
         <param name="programObj" type="GLhandleARB"/>
         <param name="name" type="const GLcharARB *"/>
         <return type="GLint"/>
     </function>
 
-    <function name="GetActiveUniformARB" offset="?">
+    <function name="GetActiveUniformARB" offset="746">
         <param name="programObj" type="GLhandleARB"/>
         <param name="index" type="GLuint"/>
         <param name="maxLength" type="GLsizei"/>
@@ -5486,19 +5486,19 @@
         <param name="name" type="GLcharARB *"/>
     </function>
 
-    <function name="GetUniformfvARB" offset="?">
+    <function name="GetUniformfvARB" offset="747">
         <param name="programObj" type="GLhandleARB"/>
         <param name="location" type="GLint"/>
         <param name="params" type="GLfloat *"/>
     </function>
 
-    <function name="GetUniformivARB" offset="?">
+    <function name="GetUniformivARB" offset="748">
         <param name="programObj" type="GLhandleARB"/>
         <param name="location" type="GLint"/>
         <param name="params" type="GLint *"/>
     </function>
 
-    <function name="GetShaderSourceARB" offset="?">
+    <function name="GetShaderSourceARB" offset="749">
         <param name="obj" type="GLhandleARB"/>
         <param name="maxLength" type="GLsizei"/>
         <param name="length" type="GLsizei *"/>
@@ -5515,23 +5515,23 @@
     <enum name="OBJECT_ACTIVE_ATTRIBUTES_ARB"             value="0x8B89"/>
     <enum name="OBJECT_ACTIVE_ATTRIBUTE_MAX_LENGTH_ARB"   value="0x8B8A"/>
 
-    <function name="BindAttribLocationARB" offset="?">
+    <function name="BindAttribLocationARB" offset="750">
         <param name="programObj" type="GLhandleARB"/>
         <param name="index" type="GLuint"/>
         <param name="name" type="const GLcharARB *"/>
     </function>
 
-    <function name="GetActiveAttribARB" offset="?">
+    <function name="GetActiveAttribARB" offset="751">
         <param name="programObj" type="GLhandleARB"/>
         <param name="index" type="GLuint"/>
         <param name="maxLength" type="GLsizei"/>
         <param name="length" type="GLsizei *" output="true"/>
         <param name="size" type="GLint *" output="true"/>
         <param name="type" type="GLenum *" output="true"/>
-        <param name="name" type="const GLcharARB *"/>
+        <param name="name" type="GLcharARB *"/>
     </function>
 
-    <function name="GetAttribLocationARB" offset="?">
+    <function name="GetAttribLocationARB" offset="752">
         <param name="programObj" type="GLhandleARB"/>
         <param name="name" type="const GLcharARB *"/>
         <return type="GLint"/>
@@ -5560,6 +5560,31 @@
     <!-- No new functions, types, enums. -->
 </category>
 
+<category name="GL_ARB_draw_buffers" number="37">
+    <enum name="MAX_DRAW_BUFFERS_ARB"                     value="0x8824"/>
+    <enum name="DRAW_BUFFER0_ARB"                         value="0x8825"/>
+    <enum name="DRAW_BUFFER1_ARB"                         value="0x8826"/>
+    <enum name="DRAW_BUFFER2_ARB"                         value="0x8827"/>
+    <enum name="DRAW_BUFFER3_ARB"                         value="0x8828"/>
+    <enum name="DRAW_BUFFER4_ARB"                         value="0x8829"/>
+    <enum name="DRAW_BUFFER5_ARB"                         value="0x882A"/>
+    <enum name="DRAW_BUFFER6_ARB"                         value="0x882B"/>
+    <enum name="DRAW_BUFFER7_ARB"                         value="0x882C"/>
+    <enum name="DRAW_BUFFER8_ARB"                         value="0x882D"/>
+    <enum name="DRAW_BUFFER9_ARB"                         value="0x882E"/>
+    <enum name="DRAW_BUFFER10_ARB"                        value="0x882F"/>
+    <enum name="DRAW_BUFFER11_ARB"                        value="0x8830"/>
+    <enum name="DRAW_BUFFER12_ARB"                        value="0x8831"/>
+    <enum name="DRAW_BUFFER13_ARB"                        value="0x8832"/>
+    <enum name="DRAW_BUFFER14_ARB"                        value="0x8833"/>
+    <enum name="DRAW_BUFFER15_ARB"                        value="0x8834"/>
+
+    <function name="DrawBuffersARB" offset="413">
+        <param name="n" type="GLsizei" counter="true"/>
+        <param name="bufs" type="const GLenum *" count="n"/>
+        <!-- no GLX yet -->
+    </function>
+</category>
 
 
 <!-- Non-ARB extensions sorted by extension number. -->
@@ -8601,7 +8626,7 @@
 </category>
 
 <category name="GL_ATI_draw_buffers" number="277">
-    <function name="DrawBuffersATI" offset="?">
+    <function name="DrawBuffersATI" alias="DrawBuffersARB">
         <param name="n" type="GLsizei" counter="true"/>
         <param name="bufs" type="const GLenum *" count="n"/>
 	<!-- GLX protocol is not fully defined for this extension. -->
@@ -8760,12 +8785,6 @@
 
     <function name="LoadIdentityDeformationMapSGIX" offset="?">
         <param name="mask" type="GLenum"/>
-    </function>
-</category>
-
-<category name="unused">
-    <function name="__unused413" offset="413">
-        <glx ignore="true"/>
     </function>
 </category>
 

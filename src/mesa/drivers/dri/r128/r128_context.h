@@ -43,6 +43,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r128_drm.h"
 
 #include "mtypes.h"
+#include "tnl/t_vertex.h"
 
 #include "r128_reg.h"
 
@@ -76,11 +77,12 @@ typedef struct r128_context *r128ContextPtr;
 #define R128_FALLBACK_READ_BUFFER	0x0004
 #define R128_FALLBACK_STENCIL		0x0008
 #define R128_FALLBACK_RENDER_MODE	0x0010
-#define R128_FALLBACK_MULTIDRAW		0x0020
-#define R128_FALLBACK_LOGICOP		0x0040
-#define R128_FALLBACK_SEP_SPECULAR	0x0080
-#define R128_FALLBACK_BLEND_EQ		0x0100
-#define R128_FALLBACK_BLEND_FUNC	0x0200
+#define R128_FALLBACK_LOGICOP		0x0020
+#define R128_FALLBACK_SEP_SPECULAR	0x0040
+#define R128_FALLBACK_BLEND_EQ		0x0080
+#define R128_FALLBACK_BLEND_FUNC	0x0100
+#define R128_FALLBACK_PROJTEX		0x0200
+#define R128_FALLBACK_DISABLE		0x0400
 
 
 /* Use the templated vertex format:
@@ -122,18 +124,21 @@ struct r128_context {
    GLuint dirty;			/* Hardware state to be updated */
    drm_r128_context_regs_t setup;
 
+   /* Vertex state */
+   GLuint vertex_size;
+   GLuint vertex_format;
+   struct tnl_attr_map vertex_attrs[VERT_ATTRIB_MAX];
+   GLuint vertex_attr_count;
+   char *verts;			/* points to tnl->clipspace.vertex_buf */
+   GLuint num_verts;
+   int coloroffset, specoffset;
+   int tnl_state;	/* tnl->render_inputs for this _tnl_install_attrs */
+
    GLuint NewGLState;
    GLuint Fallback;
-   GLuint SetupIndex;
-   GLuint SetupNewInputs;
    GLuint RenderIndex;
    GLfloat hw_viewport[16];
    GLfloat depth_scale;
-   GLuint vertex_size;
-   GLuint vertex_stride_shift;
-   GLuint vertex_format;
-   GLuint num_verts;
-   GLubyte *verts;		
 
    uint32_t ClearColor;			/* Color used to clear color buffer */
    uint32_t ClearDepth;			/* Value used to clear depth buffer */
@@ -245,7 +250,7 @@ extern GLboolean r128UnbindContext( __DRIcontextPrivate *driContextPriv );
 /* ================================================================
  * Debugging:
  */
-#define DO_DEBUG		0
+#define DO_DEBUG		1
 #define ENABLE_PERF_BOXES	0
 
 #if DO_DEBUG
@@ -261,6 +266,7 @@ extern int R128_DEBUG;
 #define DEBUG_VERBOSE_DRI	0x10
 #define DEBUG_VERBOSE_IOCTL	0x20
 #define DEBUG_VERBOSE_2D	0x40
+#define DEBUG_VERBOSE_FALL	0x80
 
 #endif
 #endif /* __R128_CONTEXT_H__ */

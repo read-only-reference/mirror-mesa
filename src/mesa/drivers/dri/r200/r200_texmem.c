@@ -372,16 +372,37 @@ static void uploadSubImage( r200ContextPtr rmesa, r200TexObjPtr t,
       tex.height = imageHeight;
    }
    else {
-      tex.width = imageWidth; /* compressed */
-      tex.height = imageHeight;
-      if (tex.height < 4)
-         tex.height = 4;
+      /* In case of for instance 8x8 texture (2x2 dxt blocks), padding after the first two blocks is
+         needed (only with dxt1 since 2 dxt3/dxt5 blocks already use 32 Byte). */
+      /* set tex.height to 1/4 since 1 "macropixel" (dxt-block) has 4 real pixels. Needed
+         so the kernel module reads the right amount of data. */
+      tex.height = (imageHeight + 3) / 4;
+      tex.width = (imageWidth + 3) / 4;
+      switch (t->pp_txformat & R200_TXFORMAT_FORMAT_MASK) {
+      case R200_TXFORMAT_DXT1:
+           tex.width *= 8;
+           break;
+      case R200_TXFORMAT_DXT23:
+      case R200_TXFORMAT_DXT45:
+           tex.width *= 16;
+           break;
+      default:
+          fprintf(stderr, "unknown compressed tex format in uploadSubImage\n");
+      }
    }
    tex.image = &tmp;
 
    /* copy (x,y,width,height,data) */
    memcpy( &tmp, &t->image[face][hwlevel], sizeof(tmp) );
 
+   /* Adjust the base offset to account for the Y-offset.  This is done,
+    * instead of just letting the Y-offset automatically take care of it,
+    * because it is possible, for very large textures, for the Y-offset
+    * to exceede the [-8192,+8191] range.
+    */
+   tex.offset += tmp.y * 1024;
+   tmp.y = 0;
+    
    LOCK_HARDWARE( rmesa );
    do {
       ret = drmCommandWriteRead( rmesa->dri.fd, DRM_RADEON_TEXTURE,

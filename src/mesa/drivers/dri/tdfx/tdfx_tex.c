@@ -38,6 +38,8 @@
  *
  */
 
+
+#include "enums.h"
 #include "image.h"
 #include "texcompress.h"
 #include "texformat.h"
@@ -212,7 +214,7 @@ tdfxTexGetInfo(const GLcontext *ctx, int w, int h,
     /* Hardware only allows a maximum aspect ratio of 8x1, so handle
        |ar| > 3 by scaling the image and using an 8x1 aspect ratio */
     if (ar >= 0) {
-        ASSERT(width >= height);
+        ASSERT(w >= h);
         lod = logw;
         if (ar <= GR_ASPECT_LOG2_8x1) {
             t = 256 >> ar;
@@ -225,7 +227,7 @@ tdfxTexGetInfo(const GLcontext *ctx, int w, int h,
         }
     }
     else {
-        ASSERT(width < height);
+        ASSERT(w < h);
         lod = logh;
         if (ar >= GR_ASPECT_LOG2_1x8) {
             s = 256 >> -ar;
@@ -595,7 +597,7 @@ convertPalette(FxU32 data[256], const struct gl_color_table *table)
     FxU32 r, g, b, a;
     GLint i;
 
-    ASSERT(table->TableType == GL_UNSIGNED_BYTE);
+    ASSERT(table->Type == GL_UNSIGNED_BYTE);
 
     switch (table->Format) {
     case GL_INTENSITY:
@@ -649,6 +651,10 @@ convertPalette(FxU32 data[256], const struct gl_color_table *table)
         }
         return GR_TEXTABLE_PALETTE_6666_EXT;
     }
+    /* XXX fixme: how can this happen? */
+    _mesa_error(NULL, GL_INVALID_ENUM, "convertPalette: table->Format == %s",
+                                       _mesa_lookup_enum_by_nr(table->Format));
+    abort();
 }
 
 
@@ -1193,6 +1199,7 @@ adjust2DRatio (GLcontext *ctx,
             + xoffset * mml->wScale) * texelBytes;
 
       _mesa_rescale_teximage2d(texelBytes,
+                               width,
                                dstRowStride, /* dst stride */
                                width, height,
                                newWidth, newHeight,
@@ -1216,6 +1223,7 @@ adjust2DRatio (GLcontext *ctx,
                               width, height, 1,
                               format, type, pixels, packing);
       _mesa_rescale_teximage2d(rawBytes,
+                               width,
                                newWidth * rawBytes, /* dst stride */
                                width, height, /* src */
                                newWidth, newHeight, /* dst */

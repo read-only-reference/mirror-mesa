@@ -107,9 +107,7 @@ sisDDBlendFuncSeparate( GLcontext *ctx,
    __GLSiSHardware *prev = &smesa->prev;
    __GLSiSHardware *current = &smesa->current;
 
-   /* TODO: in ICD, if no blend, it will reset these value */
-   /* blending enable */
-   current->hwDstSrcBlend = 0x10000;	/* Default destination alpha */
+   current->hwDstSrcBlend = 0;
 
    switch (dfactorRGB)
    {
@@ -131,11 +129,20 @@ sisDDBlendFuncSeparate( GLcontext *ctx,
    case GL_ONE_MINUS_SRC_ALPHA:
       current->hwDstSrcBlend |= SiS_D_ONE_MINUS_SRC_ALPHA;
       break;
+   case GL_DST_COLOR:
+      current->hwDstSrcBlend |= SiS_D_DST_COLOR;
+      break;
+   case GL_ONE_MINUS_DST_COLOR:
+      current->hwDstSrcBlend |= SiS_D_ONE_MINUS_DST_COLOR;
+      break;
    case GL_DST_ALPHA:
       current->hwDstSrcBlend |= SiS_D_DST_ALPHA;
       break;
    case GL_ONE_MINUS_DST_ALPHA:
       current->hwDstSrcBlend |= SiS_D_ONE_MINUS_DST_ALPHA;
+      break;
+   default:
+      fprintf(stderr, "Unknown dst blend function 0x%x\n", dfactorRGB);
       break;
    }
 
@@ -147,17 +154,17 @@ sisDDBlendFuncSeparate( GLcontext *ctx,
    case GL_ONE:
       current->hwDstSrcBlend |= SiS_S_ONE;
       break;
+   case GL_SRC_COLOR:
+      current->hwDstSrcBlend |= SiS_S_SRC_COLOR;
+      break;
+   case GL_ONE_MINUS_SRC_COLOR:
+      current->hwDstSrcBlend |= SiS_S_ONE_MINUS_SRC_COLOR;
+      break;
    case GL_SRC_ALPHA:
       current->hwDstSrcBlend |= SiS_S_SRC_ALPHA;
       break;
    case GL_ONE_MINUS_SRC_ALPHA:
       current->hwDstSrcBlend |= SiS_S_ONE_MINUS_SRC_ALPHA;
-      break;
-   case GL_DST_ALPHA:
-      current->hwDstSrcBlend |= SiS_S_DST_ALPHA;
-      break;
-   case GL_ONE_MINUS_DST_ALPHA:
-      current->hwDstSrcBlend |= SiS_S_ONE_MINUS_DST_ALPHA;
       break;
    case GL_DST_COLOR:
       current->hwDstSrcBlend |= SiS_S_DST_COLOR;
@@ -165,8 +172,17 @@ sisDDBlendFuncSeparate( GLcontext *ctx,
    case GL_ONE_MINUS_DST_COLOR:
       current->hwDstSrcBlend |= SiS_S_ONE_MINUS_DST_COLOR;
       break;
+   case GL_DST_ALPHA:
+      current->hwDstSrcBlend |= SiS_S_DST_ALPHA;
+      break;
+   case GL_ONE_MINUS_DST_ALPHA:
+      current->hwDstSrcBlend |= SiS_S_ONE_MINUS_DST_ALPHA;
+      break;
    case GL_SRC_ALPHA_SATURATE:
       current->hwDstSrcBlend |= SiS_S_SRC_ALPHA_SATURATE;
+      break;
+   default:
+      fprintf(stderr, "Unknown src blend function 0x%x\n", sfactorRGB);
       break;
    }
 
@@ -510,7 +526,7 @@ void sisDDDrawBuffer( GLcontext *ctx, GLenum mode )
    /*
     * _DrawDestMask is easier to cope with than <mode>.
     */
-   switch ( ctx->Color._DrawDestMask ) {
+   switch ( ctx->Color._DrawDestMask[0] ) {
    case DD_FRONT_LEFT_BIT:
    case DD_BACK_LEFT_BIT:
       FALLBACK( smesa, SIS_FALLBACK_DRAW_BUFFER, GL_FALSE );

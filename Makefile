@@ -45,17 +45,22 @@ $(TOP)/configs/current:
 
 # Rules to set/install a specific build configuration
 aix \
+aix-64 \
 aix-gcc \
 aix-static \
 beos \
 darwin \
 darwin-static \
 freebsd \
+freebsd-dri \
+freebsd-dri-x86 \
 hpux10 \
 hpux10-gcc \
 hpux10-static \
+hpux11-32 \
 hpux11-32-static \
 hpux11-32-static-nothreads \
+hpux11-64 \
 hpux11-64-static \
 hpux9 \
 hpux9-gcc \
@@ -72,6 +77,7 @@ linux-debug \
 linux-dri \
 linux-dri-x86 \
 linux-dri-x86-64 \
+linux-dri-ppc \
 linux-glide \
 linux-icc \
 linux-icc-static \

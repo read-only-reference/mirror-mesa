@@ -37,6 +37,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "glheader.h"
 #include "state.h"
 #include "imports.h"
+#include "enums.h"
 #include "macros.h"
 #include "context.h"
 #include "dd.h"
@@ -49,11 +50,46 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "tnl/tnl.h"
 
 #include "radeon_ioctl.h"
+#include "radeon_state.h"
 #include "r300_context.h"
 #include "r300_ioctl.h"
 #include "r300_state.h"
 #include "r300_reg.h"
 #include "r300_program.h"
+
+
+/**
+ * Handle glEnable()/glDisable().
+ */
+static void r300Enable(GLcontext* ctx, GLenum cap, GLboolean state)
+{
+	if (RADEON_DEBUG & DEBUG_STATE)
+		fprintf(stderr, "%s( %s = %s )\n", __FUNCTION__,
+			_mesa_lookup_enum_by_nr(cap),
+			state ? "GL_TRUE" : "GL_FALSE");
+
+	switch (cap) {
+	default:
+		radeonEnable(ctx, cap, state);
+		return;
+	}
+}
+
+
+/**
+ * Handle glColorMask()
+ */
+static void r300ColorMask(GLcontext* ctx,
+			  GLboolean r, GLboolean g, GLboolean b, GLboolean a)
+{
+	r300ContextPtr r300 = R300_CONTEXT(ctx);
+	int mask = (b << 0) | (g << 1) | (r << 2) | (a << 3);
+
+	if (mask != r300->hw.cmk.cmd[R300_CMK_COLORMASK]) {
+		R300_STATECHANGE(r300, cmk);
+		r300->hw.cmk.cmd[R300_CMK_COLORMASK] = mask;
+	}
+}
 
 
 /**
@@ -79,6 +115,7 @@ static void r300InvalidateState(GLcontext * ctx, GLuint new_state)
  */
 void r300ResetHwState(r300ContextPtr r300)
 {
+	GLcontext* ctx = r300->radeon.glCtx;
 	int i;
 
 	if (RADEON_DEBUG & DEBUG_STATE)
@@ -88,7 +125,7 @@ void r300ResetHwState(r300ContextPtr r300)
 		__DRIdrawablePrivate *dPriv = r300->radeon.dri.drawable;
 		GLfloat xoffset = dPriv ? (GLfloat) dPriv->x : 0;
 		GLfloat yoffset = dPriv ? (GLfloat) dPriv->y + dPriv->h : 0;
-		const GLfloat *v = r300->radeon.glCtx->Viewport._WindowMap.m;
+		const GLfloat *v = ctx->Viewport._WindowMap.m;
 
 		r300->hw.vpt.cmd[R300_VPT_XSCALE] =
 			r300PackFloat32(v[MAT_SX]);
@@ -103,6 +140,12 @@ void r300ResetHwState(r300ContextPtr r300)
 		r300->hw.vpt.cmd[R300_VPT_YOFFSET] =
 			r300PackFloat32(v[MAT_TZ]);
 	}
+
+	r300->hw.cmk.cmd[R300_CMK_COLORMASK] =
+		(ctx->Color.ColorMask[BCOMP] ? R300_COLORMASK0_B : 0) |
+		(ctx->Color.ColorMask[GCOMP] ? R300_COLORMASK0_G : 0) |
+		(ctx->Color.ColorMask[RCOMP] ? R300_COLORMASK0_R : 0) |
+		(ctx->Color.ColorMask[ACOMP] ? R300_COLORMASK0_A : 0);
 
 //BEGIN: TODO
 	r300->hw.unk2080.cmd[1] = 0x0030045A;
@@ -165,6 +208,9 @@ void r300ResetHwState(r300ContextPtr r300)
 
 	r300->hw.unk4214.cmd[1] = 0x00050005;
 
+	r300->hw.ps.cmd[R300_PS_POINTSIZE] = (6 << R300_POINTSIZE_X_SHIFT) |
+					     (6 << R300_POINTSIZE_Y_SHIFT);
+
 	r300->hw.unk4230.cmd[1] = 0x01800000;
 	r300->hw.unk4230.cmd[2] = 0x00020006;
 	r300->hw.unk4230.cmd[3] = r300PackFloat32(1.0 / 192.0);
@@ -205,9 +251,7 @@ void r300ResetHwState(r300ContextPtr r300)
 	r300->hw.unk43A4.cmd[1] = 0x0000001C;
 	r300->hw.unk43A4.cmd[2] = 0x2DA49525;
 
-	r300->hw.unk43E0.cmd[1] = 0x00000000;
-	r300->hw.unk43E0.cmd[2] = 0x03FFFFFF;
-	r300->hw.unk43E0.cmd[3] = 0x00FFFFFF;
+	r300->hw.unk43E8.cmd[1] = 0x00FFFFFF;
 
 	r300->hw.fp.cmd[R300_FP_CNTL0] = 0;
 	r300->hw.fp.cmd[R300_FP_CNTL1] = 0;
@@ -246,8 +290,6 @@ void r300ResetHwState(r300ContextPtr r300)
 	r300->hw.bld.cmd[R300_BLD_CBLEND] = 0;
 	r300->hw.bld.cmd[R300_BLD_ABLEND] = 0;
 
-	r300->hw.cmk.cmd[R300_CMK_COLORMASK] = 0xF;
-
 	r300->hw.unk4E10.cmd[1] = 0;
 	r300->hw.unk4E10.cmd[2] = 0;
 	r300->hw.unk4E10.cmd[3] = 0;
@@ -274,10 +316,11 @@ void r300ResetHwState(r300ContextPtr r300)
 	r300->hw.zc.cmd[R300_ZC_CNTL_1] = 0;
 
 	r300->hw.unk4F08.cmd[1] = 0x00FFFF00;
-	r300->hw.unk4F08.cmd[2] = 0x00000002;
-	r300->hw.unk4F08.cmd[3] = 0x00000000;
-	r300->hw.unk4F08.cmd[4] = 0x00000003;
-	r300->hw.unk4F08.cmd[5] = 0x00000000;
+
+	r300->hw.unk4F10.cmd[1] = 0x00000002; // depthbuffer format?
+	r300->hw.unk4F10.cmd[2] = 0x00000000;
+	r300->hw.unk4F10.cmd[3] = 0x00000003;
+	r300->hw.unk4F10.cmd[4] = 0x00000000;
 
 	r300->hw.zb.cmd[R300_ZB_OFFSET] =
 		r300->radeon.radeonScreen->depthOffset +
@@ -305,10 +348,16 @@ void r300ResetHwState(r300ContextPtr r300)
 	((drm_r300_cmd_header_t*)r300->hw.vpp.cmd)->vpu.count = 0;
 	for(i = 1; i < R300_VPP_CMDSIZE; ++i)
 		r300->hw.vpp.cmd[i] = 0;
+
+	r300->hw.vps.cmd[R300_VPS_ZERO_0] = 0;
+	r300->hw.vps.cmd[R300_VPS_ZERO_1] = 0;
+	r300->hw.vps.cmd[R300_VPS_POINTSIZE] = r300PackFloat32(1.0);
+	r300->hw.vps.cmd[R300_VPS_ZERO_3] = 0;
 //END: TODO
 
 	r300->hw.all_dirty = GL_TRUE;
 }
+
 
 
 /**
@@ -318,12 +367,21 @@ void r300ResetHwState(r300ContextPtr r300)
  */
 void r300InitState(r300ContextPtr r300)
 {
-	struct dd_function_table* functions;
+	radeonInitState(&r300->radeon);
 
 	r300ResetHwState(r300);
+}
 
-	/* Setup state functions */
-	functions = &r300->radeon.glCtx->Driver;
+
+/**
+ * Initialize driver's state callback functions
+ */
+void r300InitStateFuncs(struct dd_function_table* functions)
+{
+	radeonInitStateFuncs(functions);
+
 	functions->UpdateState = r300InvalidateState;
+	functions->Enable = r300Enable;
+	functions->ColorMask = r300ColorMask;
 }
 

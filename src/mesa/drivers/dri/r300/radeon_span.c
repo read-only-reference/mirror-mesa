@@ -70,8 +70,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
    GLuint height = dPriv->h;						\
    GLuint xo = dPriv->x;						\
    GLuint yo = dPriv->y;						\
-   char *buf = (char *)(sPriv->pFB + radeon->radeonScreen->depthOffset);	\
-   GLuint pitch = radeon->radeonScreen->depthPitch;			\
+   char *buf = (char *)(sPriv->pFB + radeonScreen->depthOffset);	\
+   GLuint pitch = radeonScreen->depthPitch;				\
    (void) buf; (void) pitch
 
 #define LOCAL_STENCIL_VARS	LOCAL_DEPTH_VARS
@@ -248,27 +248,30 @@ do {									\
 /* 16-bit depth buffer functions
  */
 #define WRITE_DEPTH( _x, _y, d )					\
-   *(GLushort *)(buf + (_x + xo)*2 + (_y + yo)*pitch ) = d;
+   *(GLushort *)(buf + (_x + xo + (_y + yo)*pitch)*2 ) = d;
 
 #define READ_DEPTH( d, _x, _y )						\
-   d = *(GLushort *)(buf + (_x + xo)*2 + (_y + yo)*pitch );
+   d = *(GLushort *)(buf + (_x + xo + (_y + yo)*pitch)*2 );
 
 #define TAG(x) radeon##x##_16_LINEAR
 #include "depthtmp.h"
 
 /* 24 bit depth, 8 bit stencil depthbuffer functions
+ *
+ * Careful: It looks like the R300 uses ZZZS byte order while the R200
+ * uses SZZZ for 24 bit depth, 8 bit stencil mode.
  */
 #define WRITE_DEPTH( _x, _y, d )					\
 do {									\
-   GLuint offset = (_x + xo)*4 + (_y + yo)*pitch;			\
+   GLuint offset = (_x + xo + (_y + yo)*pitch)*4;			\
    GLuint tmp = *(GLuint *)(buf + offset);				\
-   tmp &= 0xff000000;							\
-   tmp |= ((d) & 0x00ffffff);						\
+   tmp &= 0x000000ff;							\
+   tmp |= ((d << 8) & 0xffffff00);					\
    *(GLuint *)(buf + offset) = tmp;					\
 } while (0)
 
 #define READ_DEPTH( d, _x, _y )						\
-   d = *(GLuint *)(buf + (_x + xo)*4 + (_y + yo)*pitch) & 0x00ffffff;
+   d = (*(GLuint *)(buf + (_x + xo + (_y + yo)*pitch)*4) & 0xffffff00) >> 8;
 
 #define TAG(x) radeon##x##_24_8_LINEAR
 #include "depthtmp.h"
@@ -330,53 +333,46 @@ static void radeonSetBuffer(GLcontext * ctx,
 			  GLframebuffer * colorBuffer, GLuint bufferBit)
 {
 	radeonContextPtr radeon = RADEON_CONTEXT(ctx);
+	int buffer;
 
 	switch (bufferBit) {
 	case DD_FRONT_LEFT_BIT:
-		if (radeon->doPageFlip && radeon->sarea->pfCurrentPage == 1) {
-			radeon->state.pixel.readOffset =
-			    radeon->radeonScreen->backOffset;
-			radeon->state.pixel.readPitch =
-			    radeon->radeonScreen->backPitch;
-			radeon->state.color.drawOffset =
-			    radeon->radeonScreen->backOffset;
-			radeon->state.color.drawPitch =
-			    radeon->radeonScreen->backPitch;
-		} else {
-			radeon->state.pixel.readOffset =
-			    radeon->radeonScreen->frontOffset;
-			radeon->state.pixel.readPitch =
-			    radeon->radeonScreen->frontPitch;
-			radeon->state.color.drawOffset =
-			    radeon->radeonScreen->frontOffset;
-			radeon->state.color.drawPitch =
-			    radeon->radeonScreen->frontPitch;
-		}
+		buffer = 0;
 		break;
+
 	case DD_BACK_LEFT_BIT:
-		if (radeon->doPageFlip && radeon->sarea->pfCurrentPage == 1) {
-			radeon->state.pixel.readOffset =
-			    radeon->radeonScreen->frontOffset;
-			radeon->state.pixel.readPitch =
-			    radeon->radeonScreen->frontPitch;
-			radeon->state.color.drawOffset =
-			    radeon->radeonScreen->frontOffset;
-			radeon->state.color.drawPitch =
-			    radeon->radeonScreen->frontPitch;
-		} else {
-			radeon->state.pixel.readOffset =
-			    radeon->radeonScreen->backOffset;
-			radeon->state.pixel.readPitch =
-			    radeon->radeonScreen->backPitch;
-			radeon->state.color.drawOffset =
-			    radeon->radeonScreen->backOffset;
-			radeon->state.color.drawPitch =
-			    radeon->radeonScreen->backPitch;
-		}
+		buffer = 1;
 		break;
+
 	default:
 		_mesa_problem(ctx, "Bad bufferBit in %s", __FUNCTION__);
-		break;
+		return;
+	}
+
+	if (radeon->doPageFlip && radeon->sarea->pfCurrentPage == 1)
+		buffer ^= 1;
+
+	fprintf(stderr, "%s: using %s buffer\n", __FUNCTION__,
+		buffer ? "back" : "front");
+
+	if (buffer) {
+		radeon->state.pixel.readOffset =
+			radeon->radeonScreen->backOffset;
+		radeon->state.pixel.readPitch =
+			radeon->radeonScreen->backPitch;
+		radeon->state.color.drawOffset =
+			radeon->radeonScreen->backOffset;
+		radeon->state.color.drawPitch =
+			radeon->radeonScreen->backPitch;
+	} else {
+		radeon->state.pixel.readOffset =
+			radeon->radeonScreen->frontOffset;
+		radeon->state.pixel.readPitch =
+			radeon->radeonScreen->frontPitch;
+		radeon->state.color.drawOffset =
+			radeon->radeonScreen->frontOffset;
+		radeon->state.color.drawPitch =
+			radeon->radeonScreen->frontPitch;
 	}
 }
 
@@ -426,7 +422,6 @@ static void radeonSpanRenderFinish(GLcontext * ctx)
 
 void radeonInitSpanFuncs(GLcontext * ctx)
 {
-	r200ContextPtr rmesa = R200_CONTEXT(ctx);
 	radeonContextPtr radeon = RADEON_CONTEXT(ctx);
 	struct swrast_device_driver *swdd =
 	    _swrast_GetDeviceDriverReference(ctx);

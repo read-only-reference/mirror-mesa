@@ -72,7 +72,7 @@ int prevLockLine;
  * Mesa's Driver Functions
  ***************************************/
 
-#define DRIVER_DATE                     "20040919"
+#define DRIVER_DATE                     "20041007"
 
 const GLubyte *intelGetString( GLcontext *ctx, GLenum name )
 {
@@ -354,6 +354,14 @@ GLboolean intelInitContext( intelContextPtr intel,
 
    driInitExtensions( ctx, card_extensions, GL_TRUE );
 
+   if (intel->ctx.Mesa_DXTn) {
+     _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
+     _mesa_enable_extension( ctx, "GL_S3_s3tc" );
+   }
+   else if (driQueryOptionb (&intelScreen->optionCache, "force_s3tc_enable")) {
+     _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
+   }
+
 /*    driInitTextureObjects( ctx, & intel->swapped, */
 /* 			  DRI_TEXMGR_DO_TEXTURE_1D | */
 /* 			  DRI_TEXMGR_DO_TEXTURE_2D |  */
@@ -491,7 +499,7 @@ void intelSetBackClipRects( intelContextPtr intel )
 
 void intelWindowMoved( intelContextPtr intel )
 {
-   switch (intel->ctx.Color._DrawDestMask) {
+   switch (intel->ctx.Color._DrawDestMask[0]) {
    case DD_FRONT_LEFT_BIT:
       intelSetFrontClipRects( intel );
       break;
@@ -683,5 +691,5 @@ void intelInitState( GLcontext *ctx )
 			  ctx->Stencil.ZPassFunc[0]);
 
 
-   ctx->Driver.DrawBuffer( ctx, ctx->Color.DrawBuffer );
+   ctx->Driver.DrawBuffer( ctx, ctx->Color.DrawBuffer[0] );
 }

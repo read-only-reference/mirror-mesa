@@ -1,5 +1,7 @@
 /*
-Copyright (C) The Weather Channel, Inc.  2002.  All Rights Reserved.
+Copyright (C) The Weather Channel, Inc.  2002.
+Copyright (C) 2004 Nicolai Haehnle.
+All Rights Reserved.
 
 The Weather Channel (TM) funded Tungsten Graphics to develop the
 initial release of the Radeon 8500 driver under the XFree86 license.
@@ -53,7 +55,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "vblank.h"
 
 
-static void r300ClearColorBuffer(r300ContextPtr r300, int buffer)
+#define CLEARBUFFER_COLOR	0x1
+#define CLEARBUFFER_DEPTH	0x2
+
+static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 {
 	GLcontext* ctx = r300->radeon.glCtx;
 	__DRIdrawablePrivate *dPriv = r300->radeon.dri.drawable;
@@ -62,8 +67,9 @@ static void r300ClearColorBuffer(r300ContextPtr r300, int buffer)
 	drm_r300_cmd_header_t* cmd;
 
 	if (RADEON_DEBUG & DEBUG_IOCTL)
-		fprintf(stderr, "%s: %s buffer\n", __FUNCTION__,
-			buffer ? "back" : "front");
+		fprintf(stderr, "%s: %s buffer (%i,%i %ix%i)\n",
+			__FUNCTION__, buffer ? "back" : "front",
+			dPriv->x, dPriv->y, dPriv->w, dPriv->h);
 
 	if (buffer) {
 		cboffset = r300->radeon.radeonScreen->backOffset;
@@ -72,7 +78,8 @@ static void r300ClearColorBuffer(r300ContextPtr r300, int buffer)
 		cboffset = r300->radeon.radeonScreen->frontOffset;
 		cbpitch = r300->radeon.radeonScreen->frontPitch;
 	}
-	cboffset = r300->radeon.radeonScreen->fbLocation;
+
+	cboffset += r300->radeon.radeonScreen->fbLocation;
 
 	R300_STATECHANGE(r300, vpt);
 	r300->hw.vpt.cmd[R300_VPT_XSCALE] = r300PackFloat32(1.0);
@@ -89,6 +96,11 @@ static void r300ClearColorBuffer(r300ContextPtr r300, int buffer)
 	R300_STATECHANGE(r300, unk221C);
 	r300->hw.unk221C.cmd[1] = R300_221C_CLEAR;
 
+	R300_STATECHANGE(r300, ps);
+	r300->hw.ps.cmd[R300_PS_POINTSIZE] =
+		((dPriv->w * 6) << R300_POINTSIZE_X_SHIFT) |
+		((dPriv->h * 6) << R300_POINTSIZE_Y_SHIFT);
+
 	R300_STATECHANGE(r300, ri);
 	for(i = 1; i <= 8; ++i)
 		r300->hw.ri.cmd[i] = R300_RS_INTERP_USED;
@@ -96,6 +108,17 @@ static void r300ClearColorBuffer(r300ContextPtr r300, int buffer)
 	R300_STATECHANGE(r300, rr);
 	((drm_r300_cmd_header_t*)r300->hw.rr.cmd)->unchecked_state.count = 1;
 	r300->hw.rr.cmd[1] = 0x00004000;
+
+	R300_STATECHANGE(r300, cmk);
+	if (flags & CLEARBUFFER_COLOR) {
+		r300->hw.cmk.cmd[R300_CMK_COLORMASK] =
+			(ctx->Color.ColorMask[BCOMP] ? R300_COLORMASK0_B : 0) |
+			(ctx->Color.ColorMask[GCOMP] ? R300_COLORMASK0_G : 0) |
+			(ctx->Color.ColorMask[RCOMP] ? R300_COLORMASK0_R : 0) |
+			(ctx->Color.ColorMask[ACOMP] ? R300_COLORMASK0_A : 0);
+	} else {
+		r300->hw.cmk.cmd[R300_CMK_COLORMASK] = 0;
+	}
 
 	R300_STATECHANGE(r300, fp);
 	r300->hw.fp.cmd[R300_FP_CNTL0] = 0; /* 1 pass, no textures */
@@ -145,6 +168,24 @@ static void r300ClearColorBuffer(r300ContextPtr r300, int buffer)
 	r300->hw.vpi.cmd[7] = VP_ZERO();
 	r300->hw.vpi.cmd[8] = 0;
 
+	R300_STATECHANGE(r300, zc);
+	if (flags & CLEARBUFFER_DEPTH) {
+		r300->hw.zc.cmd[R300_ZC_CNTL_0] = 0x6; // test and write
+		r300->hw.zc.cmd[R300_ZC_CNTL_1] = R300_RB3D_Z_TEST_ALWAYS;
+/*
+		R300_STATECHANGE(r300, zb);
+		r300->hw.zb.cmd[R300_ZB_OFFSET] =
+			1024*4*300 +
+			r300->radeon.radeonScreen->frontOffset +
+			r300->radeon.radeonScreen->fbLocation;
+		r300->hw.zb.cmd[R300_ZB_PITCH] =
+			r300->radeon.radeonScreen->depthPitch;
+*/
+	} else {
+		r300->hw.zc.cmd[R300_ZC_CNTL_0] = 0; // disable
+		r300->hw.zc.cmd[R300_ZC_CNTL_1] = 0;
+	}
+
 	/* Make sure we have enough space */
 	r300EnsureCmdBufSpace(r300, r300->hw.max_state_size + 9, __FUNCTION__);
 
@@ -153,9 +194,9 @@ static void r300ClearColorBuffer(r300ContextPtr r300, int buffer)
 	cmd = (drm_r300_cmd_header_t*)r300AllocCmdBuf(r300, 9, __FUNCTION__);
 	cmd[0].packet3.cmd_type = R300_CMD_PACKET3;
 	cmd[0].packet3.packet = R300_CMD_PACKET3_CLEAR;
-	cmd[1].u = r300PackFloat32(dPriv->w / 2.0); /* my guess is as good as yours */
+	cmd[1].u = r300PackFloat32(dPriv->w / 2.0);
 	cmd[2].u = r300PackFloat32(dPriv->h / 2.0);
-	cmd[3].u = r300PackFloat32(0.0);
+	cmd[3].u = r300PackFloat32(ctx->Depth.Clear);
 	cmd[4].u = r300PackFloat32(1.0);
 	cmd[5].u = r300PackFloat32(ctx->Color.ClearColor[0]);
 	cmd[6].u = r300PackFloat32(ctx->Color.ClearColor[1]);
@@ -173,6 +214,7 @@ static void r300Clear(GLcontext * ctx, GLbitfield mask, GLboolean all,
 	r300ContextPtr r300 = R300_CONTEXT(ctx);
 	__DRIdrawablePrivate *dPriv = r300->radeon.dri.drawable;
 	int flags = 0;
+	int bits = 0;
 	int swapped;
 
 	if (RADEON_DEBUG & DEBUG_IOCTL)
@@ -196,6 +238,11 @@ static void r300Clear(GLcontext * ctx, GLbitfield mask, GLboolean all,
 		mask &= ~DD_BACK_LEFT_BIT;
 	}
 
+	if (mask & DD_DEPTH_BIT) {
+		bits |= CLEARBUFFER_DEPTH;
+		mask &= ~DD_DEPTH_BIT;
+	}
+
 	if (mask) {
 		if (RADEON_DEBUG & DEBUG_FALLBACKS)
 			fprintf(stderr, "%s: swrast clear, mask: %x\n",
@@ -205,13 +252,20 @@ static void r300Clear(GLcontext * ctx, GLbitfield mask, GLboolean all,
 
 	swapped = r300->radeon.doPageFlip && (r300->radeon.sarea->pfCurrentPage == 1);
 
-	if (flags & DD_FRONT_LEFT_BIT)
-		r300ClearColorBuffer(r300, swapped);
+	if (flags & DD_FRONT_LEFT_BIT) {
+		r300ClearBuffer(r300, bits | CLEARBUFFER_COLOR, swapped);
+		bits = 0;
+	}
 
-	if (flags & DD_BACK_LEFT_BIT)
-		r300ClearColorBuffer(r300, swapped ^ 1);
+	if (flags & DD_BACK_LEFT_BIT) {
+		r300ClearBuffer(r300, bits | CLEARBUFFER_COLOR, swapped ^ 1);
+		bits = 0;
+	}
 
-	/* Recalculate the hardware set. This could be done more efficiently,
+	if (bits)
+		r300ClearBuffer(r300, bits, 0);
+
+	/* Recalculate the hardware state. This could be done more efficiently,
 	 * but do keep it like this for now.
 	 */
 	r300ResetHwState(r300);

@@ -18,12 +18,13 @@ CXXFLAGS = -DDRI_NEW_INTERFACE_ONLY -m64 -Wall -g -ansi -pedantic -fPIC -D_POSIX
 LIB_DIR = $(TOP)/lib64
 
 # Library/program dependencies
-GL_LIB_DEPS = -L/usr/X11R6/lib64 -lX11 -lXext -lm -lpthread -lexpat -ldl
+DRI_LIB_DEPS = -lm -lpthread -lexpat -ldl
+GL_LIB_DEPS = -L/usr/X11R6/lib64 -lX11 -lXext -lXxf86vm -lm -lpthread -ldl
 GLUT_LIB_DEPS = -L$(LIB_DIR) -l$(GLU_LIB) -l$(GL_LIB) -L/usr/X11R6/lib64 -lX11 -lXmu -lXt -lXi -lm
 GLW_LIB_DEPS = -L$(LIB_DIR) -l$(GL_LIB) -L/usr/X11R6/lib64 -lXt -lX11
 
 # Directories
-SRC_DIRS = mesa glu glut/glx glw
+SRC_DIRS = mesa glu glut/glx glw glx/x11
 DRIVER_DIRS = dri
 PROGRAM_DIRS = 
 WINDOW_SYSTEM=dri

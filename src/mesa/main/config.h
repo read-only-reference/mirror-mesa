@@ -202,6 +202,13 @@
 /*@}*/
 
 
+/** For GL_ARB_draw_buffers */
+/*@{*/
+#define MAX_DRAW_BUFFERS 1
+/*@}*/
+
+
+
 /**
  * \name Mesa-specific parameters
  */
@@ -279,8 +286,19 @@
 #define FEATURE_userclip  _HAVE_FULL_GL
 #define FEATURE_texgen  _HAVE_FULL_GL
 #define FEATURE_windowpos  _HAVE_FULL_GL
+#define FEATURE_ARB_vertex_shader _HAVE_FULL_GL
+#define FEATURE_ARB_fragment_shader _HAVE_FULL_GL
+#define FEATURE_ARB_shader_objects (FEATURE_ARB_vertex_shader || FEATURE_ARB_fragment_shader)
 
 /*@}*/
+
+
+/**
+ * Maximum number of temporary vertices required for clipping.  
+ *
+ * Used in array_cache and tnl modules.
+ */
+#define MAX_CLIPPED_VERTICES ((2 * (6 + MAX_CLIP_PLANES))+1)
 
 
 #endif /* CONFIG_H */

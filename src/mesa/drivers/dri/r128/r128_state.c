@@ -38,7 +38,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r128_state.h"
 #include "r128_ioctl.h"
 #include "r128_tris.h"
-#include "r128_vb.h"
 #include "r128_tex.h"
 
 #include "context.h"
@@ -714,7 +713,7 @@ static void r128DDDrawBuffer( GLcontext *ctx, GLenum mode )
    /*
     * _DrawDestMask is easier to cope with than <mode>.
     */
-   switch ( ctx->Color._DrawDestMask ) {
+   switch ( ctx->Color._DrawDestMask[0] ) {
    case DD_FRONT_LEFT_BIT:
       FALLBACK( rmesa, R128_FALLBACK_DRAW_BUFFER, GL_FALSE );
       break;

@@ -448,7 +448,7 @@ struct _glapi_table
    void (GLAPIENTRYP MultTransposeMatrixfARB)(const GLfloat * m); /* 410 */
    void (GLAPIENTRYP MultTransposeMatrixdARB)(const GLdouble * m); /* 411 */
    void (GLAPIENTRYP SampleCoverageARB)(GLclampf value, GLboolean invert); /* 412 */
-   void (GLAPIENTRYP __unused413)(void); /* 413 */
+   void (GLAPIENTRYP DrawBuffersARB)(GLsizei n, const GLenum * bufs); /* 413 */
    void (GLAPIENTRYP PolygonOffsetEXT)(GLfloat factor, GLfloat bias); /* 414 */
    void (GLAPIENTRYP GetTexFilterFuncSGIS)(GLenum target, GLenum filter, GLfloat * weights); /* 415 */
    void (GLAPIENTRYP TexFilterFuncSGIS)(GLenum target, GLenum filter, GLsizei n, const GLfloat * weights); /* 416 */
@@ -746,6 +746,48 @@ struct _glapi_table
    void (GLAPIENTRYP MultiModeDrawArraysIBM)(const GLenum * mode, const GLint * first, const GLsizei * count, GLsizei primcount, GLint modestride); /* 708 */
    void (GLAPIENTRYP MultiModeDrawElementsIBM)(const GLenum * mode, const GLsizei * count, GLenum type, const GLvoid * const * indices, GLsizei primcount, GLint modestride); /* 709 */
    void (GLAPIENTRYP BlendEquationSeparateEXT)(GLenum modeRGB, GLenum modeA); /* 710 */
+   void (GLAPIENTRYP DeleteObjectARB)(GLhandleARB obj); /* 711 */
+   GLhandleARB (GLAPIENTRYP GetHandleARB)(GLenum pname); /* 712 */
+   void (GLAPIENTRYP DetachObjectARB)(GLhandleARB containerObj, GLhandleARB attachedObj); /* 713 */
+   GLhandleARB (GLAPIENTRYP CreateShaderObjectARB)(GLenum shaderType); /* 714 */
+   void (GLAPIENTRYP ShaderSourceARB)(GLhandleARB shaderObj, GLsizei count, const GLcharARB ** string, const GLint * length); /* 715 */
+   void (GLAPIENTRYP CompileShaderARB)(GLhandleARB shaderObj); /* 716 */
+   GLhandleARB (GLAPIENTRYP CreateProgramObjectARB)(void); /* 717 */
+   void (GLAPIENTRYP AttachObjectARB)(GLhandleARB containerObj, GLhandleARB obj); /* 718 */
+   void (GLAPIENTRYP LinkProgramARB)(GLhandleARB programObj); /* 719 */
+   void (GLAPIENTRYP UseProgramObjectARB)(GLhandleARB programObj); /* 720 */
+   void (GLAPIENTRYP ValidateProgramARB)(GLhandleARB programObj); /* 721 */
+   void (GLAPIENTRYP Uniform1fARB)(GLint location, GLfloat v0); /* 722 */
+   void (GLAPIENTRYP Uniform2fARB)(GLint location, GLfloat v0, GLfloat v1); /* 723 */
+   void (GLAPIENTRYP Uniform3fARB)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2); /* 724 */
+   void (GLAPIENTRYP Uniform4fARB)(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3); /* 725 */
+   void (GLAPIENTRYP Uniform1iARB)(GLint location, GLint v0); /* 726 */
+   void (GLAPIENTRYP Uniform2iARB)(GLint location, GLint v0, GLint v1); /* 727 */
+   void (GLAPIENTRYP Uniform3iARB)(GLint location, GLint v0, GLint v1, GLint v2); /* 728 */
+   void (GLAPIENTRYP Uniform4iARB)(GLint location, GLint v0, GLint v1, GLint v2, GLint v3); /* 729 */
+   void (GLAPIENTRYP Uniform1fvARB)(GLint location, GLsizei count, const GLfloat * value); /* 730 */
+   void (GLAPIENTRYP Uniform2fvARB)(GLint location, GLsizei count, const GLfloat * value); /* 731 */
+   void (GLAPIENTRYP Uniform3fvARB)(GLint location, GLsizei count, const GLfloat * value); /* 732 */
+   void (GLAPIENTRYP Uniform4fvARB)(GLint location, GLsizei count, const GLfloat * value); /* 733 */
+   void (GLAPIENTRYP Uniform1ivARB)(GLint location, GLsizei count, const GLint * value); /* 734 */
+   void (GLAPIENTRYP Uniform2ivARB)(GLint location, GLsizei count, const GLint * value); /* 735 */
+   void (GLAPIENTRYP Uniform3ivARB)(GLint location, GLsizei count, const GLint * value); /* 736 */
+   void (GLAPIENTRYP Uniform4ivARB)(GLint location, GLsizei count, const GLint * value); /* 737 */
+   void (GLAPIENTRYP UniformMatrix2fvARB)(GLint location, GLsizei count, GLboolean transpose, const GLfloat * value); /* 738 */
+   void (GLAPIENTRYP UniformMatrix3fvARB)(GLint location, GLsizei count, GLboolean transpose, const GLfloat * value); /* 739 */
+   void (GLAPIENTRYP UniformMatrix4fvARB)(GLint location, GLsizei count, GLboolean transpose, const GLfloat * value); /* 740 */
+   void (GLAPIENTRYP GetObjectParameterfvARB)(GLhandleARB obj, GLenum pname, GLfloat * params); /* 741 */
+   void (GLAPIENTRYP GetObjectParameterivARB)(GLhandleARB obj, GLenum pname, GLint * params); /* 742 */
+   void (GLAPIENTRYP GetInfoLogARB)(GLhandleARB obj, GLsizei maxLength, GLsizei * length, GLcharARB * infoLog); /* 743 */
+   void (GLAPIENTRYP GetAttachedObjectsARB)(GLhandleARB containerObj, GLsizei maxLength, GLsizei * length, GLhandleARB * infoLog); /* 744 */
+   GLint (GLAPIENTRYP GetUniformLocationARB)(GLhandleARB programObj, const GLcharARB * name); /* 745 */
+   void (GLAPIENTRYP GetActiveUniformARB)(GLhandleARB programObj, GLuint index, GLsizei maxLength, GLsizei * lenght, GLint * size, GLenum * type, GLcharARB * name); /* 746 */
+   void (GLAPIENTRYP GetUniformfvARB)(GLhandleARB programObj, GLint location, GLfloat * params); /* 747 */
+   void (GLAPIENTRYP GetUniformivARB)(GLhandleARB programObj, GLint location, GLint * params); /* 748 */
+   void (GLAPIENTRYP GetShaderSourceARB)(GLhandleARB obj, GLsizei maxLength, GLsizei * length, GLcharARB * source); /* 749 */
+   void (GLAPIENTRYP BindAttribLocationARB)(GLhandleARB programObj, GLuint index, const GLcharARB * name); /* 750 */
+   void (GLAPIENTRYP GetActiveAttribARB)(GLhandleARB programObj, GLuint index, GLsizei maxLength, GLsizei * length, GLint * size, GLenum * type, GLcharARB * name); /* 751 */
+   GLint (GLAPIENTRYP GetAttribLocationARB)(GLhandleARB programObj, const GLcharARB * name); /* 752 */
 };
 
 #endif
