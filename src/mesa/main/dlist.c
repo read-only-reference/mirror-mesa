@@ -1,4 +1,4 @@
-/* $Id: dlist.c,v 1.32 2000/02/25 03:55:39 keithw Exp $ */
+/* $Id: dlist.c,v 1.36 2000/03/21 17:42:27 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -2177,7 +2177,8 @@ static void save_PolygonOffset( GLfloat factor, GLfloat units )
 
 static void save_PolygonOffsetEXT( GLfloat factor, GLfloat bias )
 {
-   save_PolygonOffset(factor, DEPTH_SCALE * bias);
+   GET_CURRENT_CONTEXT(ctx);
+   save_PolygonOffset(factor, ctx->Visual->DepthMaxF * bias);
 }
 
 
@@ -3390,7 +3391,7 @@ static void execute_list( GLcontext *ctx, GLuint list )
                struct gl_pixelstore_attrib save = ctx->Unpack;
                ctx->Unpack = _mesa_native_packing;
                (*ctx->Exec->Bitmap)( (GLsizei) n[1].i, (GLsizei) n[2].i,
-                                n[3].f, n[4].f, n[5].f, n[6].f, n[7].data );
+                 n[3].f, n[4].f, n[5].f, n[6].f, (const GLubyte *) n[7].data );
                ctx->Unpack = save;  /* restore */
             }
 	    break;
@@ -3956,6 +3957,11 @@ _mesa_GenLists(GLsizei range )
       return 0;
    }
 
+   /*
+    * Make this an atomic operation
+    */
+   _glthread_LOCK_MUTEX(ctx->Shared->Mutex);
+
    base = _mesa_HashFindFreeKeyBlock(ctx->Shared->DisplayList, range);
    if (base) {
       /* reserve the list IDs by with empty/dummy lists */
@@ -3964,6 +3970,9 @@ _mesa_GenLists(GLsizei range )
          _mesa_HashInsert(ctx->Shared->DisplayList, base+i, make_empty_list());
       }
    }
+
+   _glthread_UNLOCK_MUTEX(ctx->Shared->Mutex);
+
    return base;
 }
 
@@ -4510,8 +4519,8 @@ _mesa_init_dlist_table( struct _glapi_table *table )
    /* Not all are supported */
    table->BlendColor = save_BlendColor;
    table->BlendEquation = save_BlendEquation;
-   table->ColorSubTable = _mesa_ColorSubTable;
-   table->ColorTable = _mesa_ColorTable;
+   table->ColorSubTable = save_ColorSubTable;
+   table->ColorTable = save_ColorTable;
    table->ColorTableParameterfv = _mesa_ColorTableParameterfv;
    table->ColorTableParameteriv = _mesa_ColorTableParameteriv;
    table->ConvolutionFilter1D = _mesa_ConvolutionFilter1D;

@@ -1,4 +1,4 @@
-/* $Id: context.h,v 1.13 2000/02/02 19:16:46 brianp Exp $ */
+/* $Id: context.h,v 1.15 2000/03/31 01:05:51 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -57,6 +57,25 @@
  * the colorbuffer, depth buffer, stencil buffer and accum buffer which will
  * be used by the GL context and framebuffer.
  */
+extern GLvisual *
+_mesa_create_visual( GLboolean rgbFlag,
+                     GLboolean alphaFlag,
+                     GLboolean dbFlag,
+                     GLboolean stereoFlag,
+                     GLint redBits,
+                     GLint greenBits,
+                     GLint blueBits,
+                     GLint alphaBits,
+                     GLint indexBits,
+                     GLint depthBits,
+                     GLint stencilBits,
+                     GLint accumRedBits,
+                     GLint accumGreenBits,
+                     GLint accumBlueBits,
+                     GLint accumAlphaBits,
+                     GLint numSamples );
+
+/* this function is obsolete */
 extern GLvisual *gl_create_visual( GLboolean rgbFlag,
                                    GLboolean alphaFlag,
                                    GLboolean dbFlag,
@@ -70,7 +89,11 @@ extern GLvisual *gl_create_visual( GLboolean rgbFlag,
                                    GLint blueBits,
                                    GLint alphaBits );
 
-extern void gl_destroy_visual( GLvisual *vis );
+
+extern void
+_mesa_destroy_visual( GLvisual *vis );
+
+/*obsolete */ extern void gl_destroy_visual( GLvisual *vis );
 
 
 /*
@@ -142,7 +165,7 @@ do {					\
 
 extern struct immediate *_mesa_CurrentInput;
 
-#define GET_CURRENT_CONTEXT(C)  GLcontext *C = _glapi_Context
+#define GET_CURRENT_CONTEXT(C)  GLcontext *C = (GLcontext *) _glapi_Context
 
 #define GET_IMMEDIATE struct immediate *IM = _mesa_CurrentInput
 

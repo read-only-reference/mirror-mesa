@@ -1,4 +1,4 @@
-/* $Id: accum.c,v 1.16 2000/02/02 21:53:11 brianp Exp $ */
+/* $Id: accum.c,v 1.18 2000/03/31 01:04:52 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -145,7 +145,7 @@ _mesa_Accum( GLenum op, GLfloat value )
    
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glAccum");
 
-   if (ctx->Visual->AccumBits == 0 || ctx->DrawBuffer != ctx->ReadBuffer) {
+   if (ctx->Visual->AccumRedBits == 0 || ctx->DrawBuffer != ctx->ReadBuffer) {
       gl_error(ctx, GL_INVALID_OPERATION, "glAccum");
       return;
    }
@@ -351,7 +351,7 @@ _mesa_Accum( GLenum op, GLfloat value )
             static GLchan multTable[32768];
             static GLfloat prevMult = 0.0;
             GLuint j;
-            const GLint max = 256 / mult;
+            const GLint max = (GLint) (256 / mult);
             if (mult != prevMult) {
                assert(max <= 32768);
                for (j = 0; j < max; j++)
@@ -427,7 +427,7 @@ _mesa_clear_accum_buffer( GLcontext *ctx )
    GLuint buffersize;
    GLfloat acc_scale;
 
-   if (ctx->Visual->AccumBits==0) {
+   if (ctx->Visual->AccumRedBits==0) {
       /* No accumulation buffer! */
       return;
    }

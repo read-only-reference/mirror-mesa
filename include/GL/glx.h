@@ -1,4 +1,4 @@
-/* $Id: glx.h,v 1.13 2000/02/27 18:26:54 brianp Exp $ */
+/* $Id: glx.h,v 1.18 2000/03/31 14:48:28 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -30,12 +30,21 @@
 #define GLX_H
 
 
+#ifdef __VMS
+# ifdef __cplusplus
+/* VMS Xlib.h gives problems with C++.
+ * this avoids a bunch of trivial warnings */
+#pragma message disable nosimpint
+#endif
+#endif
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
-#include "GL/gl.h"
-#ifdef MESA
-#include "GL/xmesa.h"
+#ifdef __VMS
+# ifdef __cplusplus
+#pragma message enable nosimpint
 #endif
+#endif
+#include "GL/gl.h"
 
 
 #if defined(USE_MGL_NAMESPACE)
@@ -50,7 +59,6 @@ extern "C" {
 
 #define GLX_VERSION_1_1		1
 #define GLX_VERSION_1_2		1
-#define GLX_VERSION_1_3		1
 
 #define GLX_EXTENSION_NAME   "GLX"
 
@@ -156,7 +164,7 @@ extern "C" {
 
 
 /*
- * GLX_EXT_visual_info extension
+ * 28. GLX_EXT_visual_info extension
  */
 #define GLX_X_VISUAL_TYPE_EXT		0x22
 #define GLX_TRANSPARENT_TYPE_EXT	0x23
@@ -165,11 +173,6 @@ extern "C" {
 #define GLX_TRANSPARENT_GREEN_VALUE_EXT	0x26
 #define GLX_TRANSPARENT_BLUE_VALUE_EXT	0x27
 #define GLX_TRANSPARENT_ALPHA_VALUE_EXT	0x28
-
-
-/*
- * GLX_visual_info extension
- */
 #define GLX_TRUE_COLOR_EXT		0x8002
 #define GLX_DIRECT_COLOR_EXT		0x8003
 #define GLX_PSEUDO_COLOR_EXT		0x8004
@@ -182,9 +185,19 @@ extern "C" {
 
 
 /*
+ * 42. GLX_EXT_visual_rating
+ */
+#define GLX_VISUAL_CAVEAT_EXT		0x20
+/*#define GLX_NONE_EXT			0x8000*/
+#define GLX_SLOW_VISUAL_EXT		0x8001
+#define GLX_NON_CONFORMANT_VISUAL_EXT	0x800D
+
+
+/*
  * Compile-time extension tests
  */
 #define GLX_EXT_visual_info		1
+#define GLX_EXT_visual_rating		1
 #define GLX_MESA_pixmap_colormap	1
 #define GLX_MESA_release_buffers	1
 #define GLX_MESA_copy_sub_buffer	1

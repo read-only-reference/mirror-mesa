@@ -87,8 +87,8 @@ typedef struct tfxMesaContext *fxMesaContext;
 
 
 
-#if defined(MESA_DEBUG) && 0
 extern void fx_sanity_triangle( GrVertex *, GrVertex *, GrVertex * );
+#if defined(MESA_DEBUG) && 0
 #define grDrawTriangle fx_sanity_triangle
 #endif
 
@@ -272,11 +272,9 @@ typedef struct MemRange_t {
 } MemRange;
 
 typedef struct {
-  GLsizei width, height;
-  GLint glideFormat;
-
-  unsigned short *data;
-  GLboolean translated, used;
+  GLsizei width, height;              /* image size */
+  GrTextureFormat_t glideFormat;      /* Glide image format */
+  unsigned short *data;               /* Glide-formated texture image */
 } tfxMipMapLevel;
 
 typedef struct tfxTexInfo_t {
@@ -480,6 +478,7 @@ struct tfxMesaContext {
   GLfloat fogDensity;
   GLfloat fogStart, fogEnd;
   GrFog_t *fogTable;
+  GLint textureAlign;
 
   /* Acc. functions */
 
@@ -533,6 +532,7 @@ typedef void (*tfxSetupFunc)(struct vertex_buffer *, GLuint, GLuint);
 extern GrHwConfiguration glbHWConfig;
 extern int glbCurrentBoard;
 
+extern void fxPrintSetupFlags( const char *msg, GLuint flags );
 extern void fxSetupFXUnits(GLcontext *);
 extern void fxSetupDDPointers(GLcontext *);
 extern void fxDDSetNearFar(GLcontext *, GLfloat, GLfloat);
@@ -566,17 +566,29 @@ extern void fxUpdateDDSpanPointers(GLcontext *);
 extern void fxSetupDDSpanPointers(GLcontext *);
 
 extern void fxPrintTextureData(tfxTexInfo *ti);
-extern void fxDDTexEnv(GLcontext *, GLenum, const GLfloat *);
-extern void fxDDTexImg(GLcontext *, GLenum, struct gl_texture_object *,
-		       GLint, GLint, const struct gl_texture_image *);
+extern GLboolean fxDDTexImage2D(GLcontext *ctx, GLenum target, GLint level,
+                              GLenum format, GLenum type, const GLvoid *pixels,
+                              const struct gl_pixelstore_attrib *packing,
+                              struct gl_texture_object *texObj,
+                              struct gl_texture_image *texImage,
+                              GLboolean *retainInternalCopy);
+extern GLboolean fxDDTexSubImage2D(GLcontext *ctx, GLenum target, GLint level,
+                              GLint xoffset, GLint yoffset,
+                              GLsizei width, GLsizei height,
+                              GLenum format, GLenum type, const GLvoid *pixels,
+                              const struct gl_pixelstore_attrib *packing,
+                              struct gl_texture_object *texObj,
+                              struct gl_texture_image *texImage);
+extern GLvoid *fxDDGetTexImage(GLcontext *ctx, GLenum target, GLint level,
+                               const struct gl_texture_object *texObj,
+                               GLenum *formatOut, GLenum *typeOut,
+                               GLboolean *freeImageOut );
+extern void fxDDTexEnv(GLcontext *, GLenum, GLenum, const GLfloat *);
 extern void fxDDTexParam(GLcontext *, GLenum, struct gl_texture_object *,
 			 GLenum, const GLfloat *);
 extern void fxDDTexBind(GLcontext *, GLenum, struct gl_texture_object *);
 extern void fxDDTexDel(GLcontext *, struct gl_texture_object *);
 extern void fxDDTexPalette(GLcontext *, struct gl_texture_object *);
-extern void fxDDTexuseGlbPalette(GLcontext *, GLboolean);
-extern void fxDDTexSubImg(GLcontext *, GLenum, struct gl_texture_object *, GLint,
-			  GLint, GLint, GLint, GLint, GLint, const struct gl_texture_image *);
 extern void fxDDTexUseGlbPalette(GLcontext *, GLboolean);
 
 extern void fxDDEnable(GLcontext *, GLenum, GLboolean);
@@ -618,6 +630,7 @@ extern void fxDDInitExtensions( GLcontext *ctx );
 #define fxTMGetTexInfo(o) ((tfxTexInfo*)((o)->DriverData))
 extern void fxTMInit(fxMesaContext ctx);
 extern void fxTMClose(fxMesaContext ctx);
+extern void fxTMRestoreTextures_NoLock(fxMesaContext ctx);
 extern void fxTMMoveInTM(fxMesaContext, struct gl_texture_object *, GLint);
 extern void fxTMMoveOutTM(fxMesaContext, struct gl_texture_object *);
 #define fxTMMoveOutTM_NoLock fxTMMoveOutTM

@@ -1,4 +1,4 @@
-/* $Id: teximage.h,v 1.4 2000/01/31 23:10:16 brianp Exp $ */
+/* $Id: teximage.h,v 1.6 2000/03/27 17:54:17 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -35,13 +35,21 @@
 /*** Internal functions ***/
 
 
+extern GLint
+_mesa_base_tex_format( GLint format );
+
+
 extern struct gl_texture_image *
-gl_alloc_texture_image( void );
+_mesa_alloc_texture_image( void );
 
 
 extern void
-gl_free_texture_image( struct gl_texture_image *teximage );
+_mesa_free_texture_image( struct gl_texture_image *teximage );
 
+
+extern void
+_mesa_get_teximage_from_driver( GLcontext *ctx, GLenum target, GLint level,
+                                const struct gl_texture_object *texObj );
 
 
 /*** API entry point functions ***/

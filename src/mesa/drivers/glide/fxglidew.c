@@ -68,6 +68,9 @@ FxI32 FX_grGetInteger_NoLock(FxU32 pname)
        return FXFALSE;
     case FX_PENDING_BUFFERSWAPS:
 	return grBufferNumPending();
+    case FX_TEXTURE_ALIGN:
+        /* This is a guess from reading the glide3 docs */
+        return 8;
     default:
        if (MESA_VERBOSE&VERBOSE_DRIVER) {
           fprintf(stderr,"Wrong parameter in FX_grGetInteger!\n");
@@ -84,6 +87,7 @@ FxI32 FX_grGetInteger_NoLock(FxU32 pname)
      case FX_GLIDE_STATE_SIZE:
      case FX_LFB_PIXEL_PIPE:
      case FX_PENDING_BUFFERSWAPS:
+     case FX_TEXTURE_ALIGN:
        grname = pname;
        break;
      default:
@@ -221,12 +225,12 @@ void FX_grGlideGetVersion(char *buf)
 
 void FX_grSstPerfStats(GrSstPerfStats_t *st)
 {
-  /* ToDo */
-  st->pixelsIn = 0;
-  st->chromaFail = 0;
-  st->zFuncFail = 0;
-  st->aFuncFail = 0;
-  st->pixelsOut = 0;
+  int n;
+  grGet(GR_STATS_PIXELS_IN, 4, &n);              st->pixelsIn = n;
+  grGet(GR_STATS_PIXELS_CHROMA_FAIL, 4, &n);     st->chromaFail = n;
+  grGet(GR_STATS_PIXELS_DEPTHFUNC_FAIL, 4, &n);  st->zFuncFail = n;
+  grGet(GR_STATS_PIXELS_AFUNC_FAIL, 4, &n);      st->aFuncFail = n;
+  grGet(GR_STATS_PIXELS_OUT, 4, &n);             st->pixelsOut = n;
 }
 
 void FX_grAADrawLine(GrVertex *a,GrVertex *b)

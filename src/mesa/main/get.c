@@ -1,4 +1,4 @@
-/* $Id: get.c,v 1.14 2000/02/24 22:04:03 brianp Exp $ */
+/* $Id: get.c,v 1.16 2000/03/31 01:04:52 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -75,10 +75,16 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 
    switch (pname) {
       case GL_ACCUM_RED_BITS:
+         *params = INT_TO_BOOL(ctx->Visual->AccumRedBits);
+         break;
       case GL_ACCUM_GREEN_BITS:
+         *params = INT_TO_BOOL(ctx->Visual->AccumGreenBits);
+         break;
       case GL_ACCUM_BLUE_BITS:
+         *params = INT_TO_BOOL(ctx->Visual->AccumBlueBits);
+         break;
       case GL_ACCUM_ALPHA_BITS:
-         *params = INT_TO_BOOL(ctx->Visual->AccumBits);
+         *params = INT_TO_BOOL(ctx->Visual->AccumAlphaBits);
          break;
       case GL_ACCUM_CLEAR_VALUE:
          params[0] = FLOAT_TO_BOOL(ctx->Accum.ClearColor[0]);
@@ -1012,8 +1018,26 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          }
          break;
 
+      /* GL_HP_occlusion_test */
+      case GL_OCCLUSION_TEST_HP:
+         if (ctx->Extensions.HaveHpOcclusionTest) {
+            *params = ctx->Depth.OcclusionTest;
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetBooleanv" );
+         }
+         return;
+      case GL_OCCLUSION_TEST_RESULT_HP:
+         if (ctx->Extensions.HaveHpOcclusionTest) {
+            *params = ctx->OcclusionResult;
+            ctx->OcclusionResult = GL_FALSE; /* reset now */
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetBooleanv" );
+         }
+         return;
+
       default:
-	 printf("invalid enum: %x\n", pname);
          gl_error( ctx, GL_INVALID_ENUM, "glGetBooleanv" );
    }
 }
@@ -1037,10 +1061,16 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 
    switch (pname) {
       case GL_ACCUM_RED_BITS:
+         *params = (GLdouble) ctx->Visual->AccumRedBits;
+         break;
       case GL_ACCUM_GREEN_BITS:
+         *params = (GLdouble) ctx->Visual->AccumGreenBits;
+         break;
       case GL_ACCUM_BLUE_BITS:
+         *params = (GLdouble) ctx->Visual->AccumBlueBits;
+         break;
       case GL_ACCUM_ALPHA_BITS:
-         *params = (GLdouble) ctx->Visual->AccumBits;
+         *params = (GLdouble) ctx->Visual->AccumAlphaBits;
          break;
       case GL_ACCUM_CLEAR_VALUE:
          params[0] = (GLdouble) ctx->Accum.ClearColor[0];
@@ -1975,8 +2005,26 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          }
          break;
 
+      /* GL_HP_occlusion_test */
+      case GL_OCCLUSION_TEST_HP:
+         if (ctx->Extensions.HaveHpOcclusionTest) {
+            *params = (GLdouble) ctx->Depth.OcclusionTest;
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetDoublev" );
+         }
+         return;
+      case GL_OCCLUSION_TEST_RESULT_HP:
+         if (ctx->Extensions.HaveHpOcclusionTest) {
+            *params = (GLdouble) ctx->OcclusionResult;
+            ctx->OcclusionResult = GL_FALSE; /* reset now */
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetDoublev" );
+         }
+         return;
+
       default:
-	 printf("invalid enum: %x\n", pname);
          gl_error( ctx, GL_INVALID_ENUM, "glGetDoublev" );
    }
 }
@@ -2000,10 +2048,16 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 
    switch (pname) {
       case GL_ACCUM_RED_BITS:
+         *params = (GLfloat) ctx->Visual->AccumRedBits;
+         break;
       case GL_ACCUM_GREEN_BITS:
+         *params = (GLfloat) ctx->Visual->AccumGreenBits;
+         break;
       case GL_ACCUM_BLUE_BITS:
+         *params = (GLfloat) ctx->Visual->AccumBlueBits;
+         break;
       case GL_ACCUM_ALPHA_BITS:
-         *params = (GLfloat) ctx->Visual->AccumBits;
+         *params = (GLfloat) ctx->Visual->AccumAlphaBits;
          break;
       case GL_ACCUM_CLEAR_VALUE:
          params[0] = ctx->Accum.ClearColor[0];
@@ -2915,8 +2969,26 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          gl_matrix_transposef(params, ctx->TextureMatrix[texTransformUnit].m);
          break;
 
+      /* GL_HP_occlusion_test */
+      case GL_OCCLUSION_TEST_HP:
+         if (ctx->Extensions.HaveHpOcclusionTest) {
+            *params = (GLfloat) ctx->Depth.OcclusionTest;
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetFloatv" );
+         }
+         return;
+      case GL_OCCLUSION_TEST_RESULT_HP:
+         if (ctx->Extensions.HaveHpOcclusionTest) {
+            *params = (GLfloat) ctx->OcclusionResult;
+            ctx->OcclusionResult = GL_FALSE; /* reset now */
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetFloatv" );
+         }
+         return;
+
       default:
-	 printf("invalid enum: %x\n", pname);
          gl_error( ctx, GL_INVALID_ENUM, "glGetFloatv" );
    }
 }
@@ -2940,10 +3012,16 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 
    switch (pname) {
       case GL_ACCUM_RED_BITS:
+         *params = (GLint) ctx->Visual->AccumRedBits;
+         break;
       case GL_ACCUM_GREEN_BITS:
+         *params = (GLint) ctx->Visual->AccumGreenBits;
+         break;
       case GL_ACCUM_BLUE_BITS:
+         *params = (GLint) ctx->Visual->AccumBlueBits;
+         break;
       case GL_ACCUM_ALPHA_BITS:
-         *params = (GLint) ctx->Visual->AccumBits;
+         *params = (GLint) ctx->Visual->AccumAlphaBits;
          break;
       case GL_ACCUM_CLEAR_VALUE:
          params[0] = FLOAT_TO_INT( ctx->Accum.ClearColor[0] );
@@ -3878,8 +3956,26 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          }
          break;
 
+      /* GL_HP_occlusion_test */
+      case GL_OCCLUSION_TEST_HP:
+         if (ctx->Extensions.HaveHpOcclusionTest) {
+            *params = (GLint) ctx->Depth.OcclusionTest;
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetIntegerv" );
+         }
+         return;
+      case GL_OCCLUSION_TEST_RESULT_HP:
+         if (ctx->Extensions.HaveHpOcclusionTest) {
+            *params = (GLint) ctx->OcclusionResult;
+            ctx->OcclusionResult = GL_FALSE; /* reset now */
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetIntegerv" );
+         }
+         return;
+
       default:
-	 printf("invalid enum: %x\n", pname);
          gl_error( ctx, GL_INVALID_ENUM, "glGetIntegerv" );
    }
 }

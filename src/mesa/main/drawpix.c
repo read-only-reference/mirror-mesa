@@ -1,4 +1,4 @@
-/* $Id: drawpix.c,v 1.12 2000/02/08 23:42:14 brianp Exp $ */
+/* $Id: drawpix.c,v 1.15 2000/03/21 01:03:40 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -34,6 +34,7 @@
 #include "feedback.h"
 #include "image.h"
 #include "macros.h"
+#include "mem.h"
 #include "mmath.h"
 #include "pixel.h"
 #include "span.h"
@@ -117,13 +118,6 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
       gl_update_state(ctx);
    }
 
-   /* see if device driver can do the drawpix */
-   if (ctx->Driver.DrawPixels
-       && (*ctx->Driver.DrawPixels)(ctx, x, y, width, height, format, type,
-                                    unpack, pixels)) {
-      return GL_TRUE;
-   }
-
    if ((ctx->RasterMask&(~(SCISSOR_BIT|WINCLIP_BIT)))==0
        && ctx->Pixel.RedBias==0.0 && ctx->Pixel.RedScale==1.0
        && ctx->Pixel.GreenBias==0.0 && ctx->Pixel.GreenScale==1.0
@@ -181,7 +175,7 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
       }
       else {
          /* setup array of fragment Z value to pass to zoom function */
-         GLdepth z = (GLdepth) (ctx->Current.RasterPos[2] * DEPTH_SCALE);
+         GLdepth z = (GLdepth) (ctx->Current.RasterPos[2] * ctx->Visual->DepthMaxF);
          GLint i;
          assert(drawWidth < MAX_WIDTH);
          for (i=0; i<drawWidth; i++)
@@ -419,7 +413,7 @@ draw_index_pixels( GLcontext *ctx, GLint x, GLint y,
 
    /* Fragment depth values */
    if (ctx->Depth.Test || ctx->Fog.Enabled) {
-      GLdepth zval = (GLdepth) (ctx->Current.RasterPos[2] * DEPTH_SCALE);
+      GLdepth zval = (GLdepth) (ctx->Current.RasterPos[2] * ctx->Visual->DepthMaxF);
       GLint i;
       for (i = 0; i < drawWidth; i++) {
 	 zspan[i] = zval;
@@ -431,7 +425,7 @@ draw_index_pixels( GLcontext *ctx, GLint x, GLint y,
     */
    for (row = 0; row < height; row++, y++) {
       GLuint indexes[MAX_WIDTH];
-      const GLvoid *source = gl_pixel_addr_in_image(&ctx->Unpack,
+      const GLvoid *source = _mesa_image_address(&ctx->Unpack,
                     pixels, width, height, GL_COLOR_INDEX, type, 0, row, 0);
       _mesa_unpack_index_span(ctx, drawWidth, GL_UNSIGNED_INT, indexes,
                               type, source, &ctx->Unpack, GL_TRUE);
@@ -477,7 +471,7 @@ draw_stencil_pixels( GLcontext *ctx, GLint x, GLint y,
       GLstencil values[MAX_WIDTH];
       GLenum destType = (sizeof(GLstencil) == sizeof(GLubyte))
                       ? GL_UNSIGNED_BYTE : GL_UNSIGNED_SHORT;
-      const GLvoid *source = gl_pixel_addr_in_image(&ctx->Unpack,
+      const GLvoid *source = _mesa_image_address(&ctx->Unpack,
                     pixels, width, height, GL_COLOR_INDEX, type, 0, row, 0);
       _mesa_unpack_index_span(ctx, drawWidth, destType, values,
                               type, source, &ctx->Unpack, GL_TRUE);
@@ -546,30 +540,23 @@ draw_depth_pixels( GLcontext *ctx, GLint x, GLint y,
       /* Special case: directly write 16-bit depth values */
       GLint row;
       for (row = 0; row < height; row++, y++) {
-         const GLdepth *zptr = gl_pixel_addr_in_image(&ctx->Unpack,
+         GLdepth zspan[MAX_WIDTH];
+         const GLushort *zptr = _mesa_image_address(&ctx->Unpack,
                 pixels, width, height, GL_DEPTH_COMPONENT, type, 0, row, 0);
-         gl_write_rgba_span( ctx, width, x, y, zptr, rgba, GL_BITMAP );
+         GLint i;
+         for (i = 0; i < width; i++)
+            zspan[i] = zptr[i];
+         gl_write_rgba_span( ctx, width, x, y, zspan, rgba, GL_BITMAP );
       }
    }
-   else if (type==GL_UNSIGNED_INT && sizeof(GLdepth)==sizeof(GLuint)
+   else if (type==GL_UNSIGNED_INT && ctx->Visual->DepthBits == 32
        && !bias_or_scale && !zoom && ctx->Visual->RGBAflag) {
       /* Special case: directly write 32-bit depth values */
-      GLint i, row;
-      /* Compute shift value to scale 32-bit uints down to depth values. */
-      GLuint shift = 0;
-      GLuint max = MAX_DEPTH;
-      while ((max & 0x80000000) == 0) {
-         max = max << 1;
-         shift++;
-      }
+      GLint row;
       for (row = 0; row < height; row++, y++) {
-         GLdepth zspan[MAX_WIDTH];
-         const GLdepth *zptr = gl_pixel_addr_in_image(&ctx->Unpack,
+         const GLuint *zptr = _mesa_image_address(&ctx->Unpack,
                 pixels, width, height, GL_DEPTH_COMPONENT, type, 0, row, 0);
-         for (i=0;i<width;i++) {
-            zspan[i] = zptr[i] >> shift;
-         }
-         gl_write_rgba_span( ctx, width, x, y, zspan, rgba, GL_BITMAP );
+         gl_write_rgba_span( ctx, width, x, y, zptr, rgba, GL_BITMAP );
       }
    }
    else {
@@ -577,7 +564,7 @@ draw_depth_pixels( GLcontext *ctx, GLint x, GLint y,
       GLint row;
       for (row = 0; row < height; row++, y++) {
          GLdepth zspan[MAX_WIDTH];
-         const GLvoid *src = gl_pixel_addr_in_image(&ctx->Unpack,
+         const GLvoid *src = _mesa_image_address(&ctx->Unpack,
                 pixels, width, height, GL_DEPTH_COMPONENT, type, 0, row, 0);
          _mesa_unpack_depth_span( ctx, drawWidth, zspan, type, src,
                                   &ctx->Unpack, GL_TRUE );
@@ -626,7 +613,7 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
    /* Fragment depth values */
    if (ctx->Depth.Test || ctx->Fog.Enabled) {
       /* fill in array of z values */
-      GLdepth z = (GLdepth) (ctx->Current.RasterPos[2] * DEPTH_SCALE);
+      GLdepth z = (GLdepth) (ctx->Current.RasterPos[2] * ctx->Visual->DepthMaxF);
       GLint i;
       for (i=0;i<width;i++) {
 	 zspan[i] = z;
@@ -653,7 +640,7 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
       if (width > MAX_WIDTH)
          width = MAX_WIDTH;
       for (row = 0; row < height; row++, y++) {
-         const GLvoid *source = gl_pixel_addr_in_image(unpack,
+         const GLvoid *source = _mesa_image_address(unpack,
                   pixels, width, height, format, type, 0, row, 0);
          _mesa_unpack_ubyte_color_span(ctx, width, GL_RGBA, (void*) rgba,
                    format, type, source, unpack, GL_TRUE);
@@ -693,6 +680,13 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
 
       x = (GLint) (ctx->Current.RasterPos[0] + 0.5F);
       y = (GLint) (ctx->Current.RasterPos[1] + 0.5F);
+
+      /* see if device driver can do the drawpix */
+      if (ctx->Driver.DrawPixels
+          && (*ctx->Driver.DrawPixels)(ctx, x, y, width, height, format, type,
+                                       &ctx->Unpack, pixels)) {
+         return;
+      }
 
       switch (format) {
 	 case GL_STENCIL_INDEX:

@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.43 2000/02/12 17:26:15 brianp Exp $ */
+/* $Id: context.c,v 1.52 2000/03/31 01:05:51 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -255,40 +255,60 @@ static void print_timings( GLcontext *ctx )
  *         alphaFlag - alloc software alpha buffers?
  *         dbFlag - double buffering?
  *         stereoFlag - stereo buffer?
- *         depthFits - requested minimum bits per depth buffer value
- *         stencilFits - requested minimum bits per stencil buffer value
- *         accumFits - requested minimum bits per accum buffer component
- *         indexFits - number of bits per pixel if rgbFlag==GL_FALSE
- *         red/green/blue/alphaFits - number of bits per color component
- *                                     in frame buffer for RGB(A) mode.
+ *         depthBits - requested bits per depth buffer value
+ *                     Any value in [0, 32] is acceptable but the actual
+ *                     depth type will be GLushort or GLuint as needed.
+ *         stencilBits - requested minimum bits per stencil buffer value
+ *         accumBits - requested minimum bits per accum buffer component
+ *         indexBits - number of bits per pixel if rgbFlag==GL_FALSE
+ *         red/green/blue/alphaBits - number of bits per color component
+ *                                    in frame buffer for RGB(A) mode.
+ *                                    We always use 8 in core Mesa though.
  * Return:  pointer to new GLvisual or NULL if requested parameters can't
  *          be met.
  */
-GLvisual *gl_create_visual( GLboolean rgbFlag,
-                            GLboolean alphaFlag,
-                            GLboolean dbFlag,
-                            GLboolean stereoFlag,
-                            GLint depthBits,
-                            GLint stencilBits,
-                            GLint accumBits,
-                            GLint indexBits,
-                            GLint redBits,
-                            GLint greenBits,
-                            GLint blueBits,
-                            GLint alphaBits )
+GLvisual *
+_mesa_create_visual( GLboolean rgbFlag,
+                     GLboolean alphaFlag,
+                     GLboolean dbFlag,
+                     GLboolean stereoFlag,
+                     GLint redBits,
+                     GLint greenBits,
+                     GLint blueBits,
+                     GLint alphaBits,
+                     GLint indexBits,
+                     GLint depthBits,
+                     GLint stencilBits,
+                     GLint accumRedBits,
+                     GLint accumGreenBits,
+                     GLint accumBlueBits,
+                     GLint accumAlphaBits,
+                     GLint numSamples )
 {
    GLvisual *vis;
 
-   if (depthBits > (GLint) (8*sizeof(GLdepth))) {
-      /* can't meet depth buffer requirements */
+   /* This is to catch bad values from device drivers not updated for
+    * Mesa 3.3.  Some device drivers just passed 1.  That's a REALLY
+    * bad value now (a 1-bit depth buffer!?!).
+    */
+   assert(depthBits == 0 || depthBits > 1);
+
+   if (depthBits < 0 || depthBits > 32) {
       return NULL;
    }
-   if (stencilBits > (GLint) (8*sizeof(GLstencil))) {
-      /* can't meet stencil buffer requirements */
+   if (stencilBits < 0 || stencilBits > (GLint) (8 * sizeof(GLstencil))) {
       return NULL;
    }
-   if (accumBits > (GLint) (8*sizeof(GLaccum))) {
-      /* can't meet accum buffer requirements */
+   if (accumRedBits < 0 || accumRedBits > (GLint) (8 * sizeof(GLaccum))) {
+      return NULL;
+   }
+   if (accumGreenBits < 0 || accumGreenBits > (GLint) (8 * sizeof(GLaccum))) {
+      return NULL;
+   }
+   if (accumBlueBits < 0 || accumBlueBits > (GLint) (8 * sizeof(GLaccum))) {
+      return NULL;
+   }
+   if (accumAlphaBits < 0 || accumAlphaBits > (GLint) (8 * sizeof(GLaccum))) {
       return NULL;
    }
 
@@ -303,23 +323,66 @@ GLvisual *gl_create_visual( GLboolean rgbFlag,
    vis->RedBits    = redBits;
    vis->GreenBits  = greenBits;
    vis->BlueBits   = blueBits;
-   vis->AlphaBits  = alphaFlag ? 8*sizeof(GLubyte) : alphaBits;
+   vis->AlphaBits  = alphaFlag ? (8 * sizeof(GLubyte)) : alphaBits;
 
-   vis->IndexBits   = indexBits;
-   vis->DepthBits   = (depthBits>0) ? 8*sizeof(GLdepth) : 0;
-   vis->AccumBits   = (accumBits>0) ? 8*sizeof(GLaccum) : 0;
-   vis->StencilBits = (stencilBits>0) ? 8*sizeof(GLstencil) : 0;
+   vis->IndexBits      = indexBits;
+   vis->DepthBits      = depthBits;
+   vis->AccumRedBits   = (accumRedBits > 0) ? (8 * sizeof(GLaccum)) : 0;
+   vis->AccumGreenBits = (accumGreenBits > 0) ? (8 * sizeof(GLaccum)) : 0;
+   vis->AccumBlueBits  = (accumBlueBits > 0) ? (8 * sizeof(GLaccum)) : 0;
+   vis->AccumAlphaBits = (accumAlphaBits > 0) ? (8 * sizeof(GLaccum)) : 0;
+   vis->StencilBits    = (stencilBits > 0) ? (8 * sizeof(GLstencil)) : 0;
 
    vis->SoftwareAlpha = alphaFlag;
+
+   if (depthBits == 0) {
+      /* Special case.  Even if we don't have a depth buffer we need
+       * good values for DepthMax for Z vertex transformation purposes.
+       */
+      vis->DepthMax = 1;
+      vis->DepthMaxF = 1.0F;
+   }
+   else {
+      vis->DepthMax = (1 << depthBits) - 1;
+      vis->DepthMaxF = (GLfloat) vis->DepthMax;
+   }
 
    return vis;
 }
 
 
+/* This function should no longer be used. Use _mesa_create_visual() instead */
+GLvisual *gl_create_visual( GLboolean rgbFlag,
+                            GLboolean alphaFlag,
+                            GLboolean dbFlag,
+                            GLboolean stereoFlag,
+                            GLint depthBits,
+                            GLint stencilBits,
+                            GLint accumBits,
+                            GLint indexBits,
+                            GLint redBits,
+                            GLint greenBits,
+                            GLint blueBits,
+                            GLint alphaBits )
+{
+   return _mesa_create_visual(rgbFlag, alphaFlag, dbFlag, stereoFlag,
+                              redBits, greenBits, blueBits, alphaBits,
+                              indexBits, depthBits, stencilBits,
+                              accumBits, accumBits, accumBits, accumBits, 0);
+}
 
+
+void
+_mesa_destroy_visual( GLvisual *vis )
+{
+   FREE(vis);
+}
+
+
+/* obsolete */
 void gl_destroy_visual( GLvisual *vis )
 {
-   FREE( vis );
+   _mesa_destroy_visual(vis);
 }
 
 
@@ -363,7 +426,9 @@ GLframebuffer *gl_create_framebuffer( GLvisual *visual,
    }
    if (softwareAccum) {
       assert(visual->RGBAflag);
-      assert(visual->AccumBits > 0);
+      assert(visual->AccumRedBits > 0);
+      assert(visual->AccumGreenBits > 0);
+      assert(visual->AccumBlueBits > 0);
    }
    if (softwareAlpha) {
       assert(visual->RGBAflag);
@@ -387,8 +452,8 @@ GLframebuffer *gl_create_framebuffer( GLvisual *visual,
 void gl_destroy_framebuffer( GLframebuffer *buffer )
 {
    if (buffer) {
-      if (buffer->Depth) {
-         FREE( buffer->Depth );
+      if (buffer->DepthBuffer) {
+         FREE( buffer->DepthBuffer );
       }
       if (buffer->Accum) {
          FREE( buffer->Accum );
@@ -441,7 +506,7 @@ static void one_time_init( void )
       gl_init_clip();
       gl_init_eval();
       _mesa_init_fog();
-      gl_init_math();
+      _mesa_init_math();
       gl_init_lists();
       gl_init_shade();
       gl_init_texture();
@@ -757,7 +822,7 @@ static void init_attrib_groups( GLcontext *ctx )
    gl_matrix_alloc_inv( &ctx->ModelView );
 
    ctx->ModelViewStackDepth = 0;
-   for (i = 0 ; i < MAX_MODELVIEW_STACK_DEPTH ; i++) {
+   for (i = 0; i < MAX_MODELVIEW_STACK_DEPTH - 1; i++) {
       gl_matrix_ctr( &ctx->ModelViewStack[i] );
       gl_matrix_alloc_inv( &ctx->ModelViewStack[i] );
    }
@@ -774,7 +839,7 @@ static void init_attrib_groups( GLcontext *ctx )
    ctx->NearFarStack[0][0] = 1.0; /* These values seem weird by make */
    ctx->NearFarStack[0][1] = 0.0; /* sense mathematically. */
 
-   for (i = 0 ; i < MAX_PROJECTION_STACK_DEPTH ; i++) {
+   for (i = 0; i < MAX_PROJECTION_STACK_DEPTH - 1; i++) {
       gl_matrix_ctr( &ctx->ProjectionStack[i] );
       gl_matrix_alloc_inv( &ctx->ProjectionStack[i] );
    }
@@ -783,7 +848,7 @@ static void init_attrib_groups( GLcontext *ctx )
    for (i=0; i<MAX_TEXTURE_UNITS; i++) {
       gl_matrix_ctr( &ctx->TextureMatrix[i] );
       ctx->TextureStackDepth[i] = 0;
-      for (j = 0 ; j < MAX_TEXTURE_STACK_DEPTH ; j++) {
+      for (j = 0; j < MAX_TEXTURE_STACK_DEPTH - 1; j++) {
          ctx->TextureStack[i][j].inv = 0;
       }
    }
@@ -846,6 +911,7 @@ static void init_attrib_groups( GLcontext *ctx )
    ctx->Depth.Clear = 1.0;
    ctx->Depth.Func = GL_LESS;
    ctx->Depth.Mask = GL_TRUE;
+   ctx->Depth.OcclusionTest = GL_FALSE;
 
    /* Evaluators group */
    ctx->Eval.Map1Color4 = GL_FALSE;
@@ -1101,8 +1167,8 @@ static void init_attrib_groups( GLcontext *ctx )
 
 #define Sz 10
 #define Tz 14
-   ctx->Viewport.WindowMap.m[Sz] = 0.5 * DEPTH_SCALE;
-   ctx->Viewport.WindowMap.m[Tz] = 0.5 * DEPTH_SCALE;
+   ctx->Viewport.WindowMap.m[Sz] = 0.5 * ctx->Visual->DepthMaxF;
+   ctx->Viewport.WindowMap.m[Tz] = 0.5 * ctx->Visual->DepthMaxF;
 #undef Sz
 #undef Tz
 
@@ -1209,6 +1275,7 @@ static void init_attrib_groups( GLcontext *ctx )
    ctx->ErrorValue = (GLenum) GL_NO_ERROR;
 
    ctx->CatchSignals = GL_TRUE;
+   ctx->OcclusionResult = GL_FALSE;
 
    /* For debug/development only */
    ctx->NoRaster = getenv("MESA_NO_RASTER") ? GL_TRUE : GL_FALSE;
@@ -1257,9 +1324,9 @@ static GLboolean alloc_proxy_textures( GLcontext *ctx )
 
    out_of_memory = GL_FALSE;
    for (i=0;i<MAX_TEXTURE_LEVELS;i++) {
-      ctx->Texture.Proxy1D->Image[i] = gl_alloc_texture_image();
-      ctx->Texture.Proxy2D->Image[i] = gl_alloc_texture_image();
-      ctx->Texture.Proxy3D->Image[i] = gl_alloc_texture_image();
+      ctx->Texture.Proxy1D->Image[i] = _mesa_alloc_texture_image();
+      ctx->Texture.Proxy2D->Image[i] = _mesa_alloc_texture_image();
+      ctx->Texture.Proxy3D->Image[i] = _mesa_alloc_texture_image();
       if (!ctx->Texture.Proxy1D->Image[i]
           || !ctx->Texture.Proxy2D->Image[i]
           || !ctx->Texture.Proxy3D->Image[i]) {
@@ -1269,13 +1336,13 @@ static GLboolean alloc_proxy_textures( GLcontext *ctx )
    if (out_of_memory) {
       for (i=0;i<MAX_TEXTURE_LEVELS;i++) {
          if (ctx->Texture.Proxy1D->Image[i]) {
-            gl_free_texture_image(ctx->Texture.Proxy1D->Image[i]);
+            _mesa_free_texture_image(ctx->Texture.Proxy1D->Image[i]);
          }
          if (ctx->Texture.Proxy2D->Image[i]) {
-            gl_free_texture_image(ctx->Texture.Proxy2D->Image[i]);
+            _mesa_free_texture_image(ctx->Texture.Proxy2D->Image[i]);
          }
          if (ctx->Texture.Proxy3D->Image[i]) {
-            gl_free_texture_image(ctx->Texture.Proxy3D->Image[i]);
+            _mesa_free_texture_image(ctx->Texture.Proxy3D->Image[i]);
          }
       }
       gl_free_texture_object(NULL, ctx->Texture.Proxy1D);
@@ -1374,8 +1441,8 @@ GLboolean gl_initialize_context_data( GLcontext *ctx,
    }
 
    /* setup API dispatch tables */
-   ctx->Exec = CALLOC(_glapi_get_dispatch_table_size() * sizeof(void *));
-   ctx->Save = CALLOC(_glapi_get_dispatch_table_size() * sizeof(void *));
+   ctx->Exec = (struct _glapi_table *) CALLOC(_glapi_get_dispatch_table_size() * sizeof(void *));
+   ctx->Save = (struct _glapi_table *) CALLOC(_glapi_get_dispatch_table_size() * sizeof(void *));
    if (!ctx->Exec || !ctx->Save) {
       free_shared_state(ctx, ctx->Shared);
       FREE(ctx->VB);
@@ -1428,8 +1495,8 @@ GLcontext *gl_create_context( GLvisual *visual,
  */
 void gl_free_context_data( GLcontext *ctx )
 {
-   GLuint i;
    struct gl_shine_tab *s, *tmps;
+   GLuint i, j;
 
    /* if we're destroying the current context, unbind it first */
    if (ctx == gl_get_current_context()) {
@@ -1443,12 +1510,18 @@ void gl_free_context_data( GLcontext *ctx )
 #endif
 
    gl_matrix_dtr( &ctx->ModelView );
-   for (i = 0 ; i < MAX_MODELVIEW_STACK_DEPTH ; i++) {
+   for (i = 0; i < MAX_MODELVIEW_STACK_DEPTH - 1; i++) {
       gl_matrix_dtr( &ctx->ModelViewStack[i] );
    }
    gl_matrix_dtr( &ctx->ProjectionMatrix );
-   for (i = 0 ; i < MAX_PROJECTION_STACK_DEPTH ; i++) {
+   for (i = 0; i < MAX_PROJECTION_STACK_DEPTH - 1; i++) {
       gl_matrix_dtr( &ctx->ProjectionStack[i] );
+   }
+   for (i = 0; i < MAX_TEXTURE_UNITS; i++) {
+      gl_matrix_dtr( &ctx->TextureMatrix[i] );
+      for (j = 0; j < MAX_TEXTURE_STACK_DEPTH - 1; j++) {
+         gl_matrix_dtr( &ctx->TextureStack[i][j] );
+      }
    }
 
    FREE( ctx->PB );

@@ -1,4 +1,4 @@
-/* $Id: attrib.c,v 1.17 2000/02/27 20:38:15 keithw Exp $ */
+/* $Id: attrib.c,v 1.20 2000/03/19 01:10:11 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -429,19 +429,37 @@ _mesa_PopAttrib(void)
                if (ctx->Color.DrawBuffer != oldDrawBuffer) {
                   _mesa_DrawBuffer( ctx->Color.DrawBuffer);
                }
-               if ((ctx->Color.AlphaFunc != oldAlphaFunc ||
-                    ctx->Color.AlphaRef != oldAlphaRef) &&
-                   ctx->Driver.AlphaFunc)
-                  (*ctx->Driver.AlphaFunc)( ctx, ctx->Color.AlphaFunc,
-                                            ctx->Color.AlphaRef / 255.0F);
                if ((ctx->Color.BlendSrcRGB != oldBlendSrc ||
-                    ctx->Color.BlendSrcRGB != oldBlendDst) &&
+                    ctx->Color.BlendDstRGB != oldBlendDst) &&
                    ctx->Driver.BlendFunc)
                   (*ctx->Driver.BlendFunc)( ctx, ctx->Color.BlendSrcRGB,
                                             ctx->Color.BlendDstRGB);
 	       if (ctx->Color.LogicOp != oldLogicOp &&
-		   ctx->Driver.LogicOpcode)
+		   ctx->Driver.LogicOpcode) {
 		  ctx->Driver.LogicOpcode( ctx, ctx->Color.LogicOp );
+               }
+               if (ctx->Visual->RGBAflag) {
+                  GLubyte r = (GLint) (ctx->Color.ClearColor[0] * 255.0F);
+                  GLubyte g = (GLint) (ctx->Color.ClearColor[1] * 255.0F);
+                  GLubyte b = (GLint) (ctx->Color.ClearColor[2] * 255.0F);
+                  GLubyte a = (GLint) (ctx->Color.ClearColor[3] * 255.0F);
+                  (*ctx->Driver.ClearColor)( ctx, r, g, b, a );
+                  if ((ctx->Color.AlphaFunc != oldAlphaFunc ||
+                       ctx->Color.AlphaRef != oldAlphaRef) &&
+                      ctx->Driver.AlphaFunc)
+                     (*ctx->Driver.AlphaFunc)( ctx, ctx->Color.AlphaFunc,
+                                               ctx->Color.AlphaRef / 255.0F);
+                  if (ctx->Driver.ColorMask) {
+                     (*ctx->Driver.ColorMask)(ctx,
+                                              ctx->Color.ColorMask[0],
+                                              ctx->Color.ColorMask[1],
+                                              ctx->Color.ColorMask[2],
+                                              ctx->Color.ColorMask[3]);
+                  }
+               }
+               else {
+                  (*ctx->Driver.ClearIndex)( ctx, ctx->Color.ClearIndex);
+               }
             }
             break;
          case GL_CURRENT_BIT:
@@ -639,6 +657,11 @@ _mesa_PopAttrib(void)
                (*ctx->Driver.Enable)( ctx, GL_LINE_SMOOTH, ctx->Line.SmoothFlag );
                (*ctx->Driver.Enable)( ctx, GL_LINE_STIPPLE, ctx->Line.StippleFlag );
             }
+            if (ctx->Driver.LineStipple)
+               (*ctx->Driver.LineStipple)(ctx, ctx->Line.StippleFactor,
+                                          ctx->Line.StipplePattern);
+            if (ctx->Driver.LineWidth)
+               (*ctx->Driver.LineWidth)(ctx, ctx->Line.Width);
             break;
          case GL_LIST_BIT:
             MEMCPY( &ctx->List, attr->data, sizeof(struct gl_list_attrib) );
@@ -676,7 +699,7 @@ _mesa_PopAttrib(void)
 	 case GL_POLYGON_STIPPLE_BIT:
 	    MEMCPY( ctx->PolygonStipple, attr->data, 32*sizeof(GLuint) );
 	    if (ctx->Driver.PolygonStipple) 
-	       ctx->Driver.PolygonStipple( ctx, attr->data );
+	       ctx->Driver.PolygonStipple( ctx, (const GLubyte *) attr->data );
 	    break;
          case GL_SCISSOR_BIT:
             MEMCPY( &ctx->Scissor, attr->data,

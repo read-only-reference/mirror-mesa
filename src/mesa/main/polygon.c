@@ -1,10 +1,10 @@
-/* $Id: polygon.c,v 1.8 2000/02/27 20:38:15 keithw Exp $ */
+/* $Id: polygon.c,v 1.11 2000/03/13 18:32:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
  * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -132,27 +132,23 @@ _mesa_PolygonMode( GLenum face, GLenum mode )
 
 
 
-/*
- * NOTE:  stipple pattern has already been unpacked.
- */
 void
-_mesa_PolygonStipple( const GLubyte *mask )
+_mesa_PolygonStipple( const GLubyte *pattern )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLuint *pattern = (GLuint *) mask;  /* XXX verify */
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glPolygonStipple");
 
    if (MESA_VERBOSE&VERBOSE_API)
       fprintf(stderr, "glPolygonStipple\n");
 
-   MEMCPY( ctx->PolygonStipple, pattern, 32 * 4 );
+   _mesa_unpack_polygon_stipple(pattern, ctx->PolygonStipple, &ctx->Unpack);
 
    if (ctx->Polygon.StippleFlag) {
       ctx->NewState |= NEW_RASTER_OPS;
    }
    
    if (ctx->Driver.PolygonStipple)
-      ctx->Driver.PolygonStipple( ctx, mask );
+      ctx->Driver.PolygonStipple( ctx, (const GLubyte *) ctx->PolygonStipple );
 }
 
 
@@ -166,7 +162,7 @@ _mesa_GetPolygonStipple( GLubyte *dest )
    if (MESA_VERBOSE&VERBOSE_API)
       fprintf(stderr, "glGetPolygonStipple\n");
 
-   gl_pack_polygon_stipple( ctx, ctx->PolygonStipple, dest );
+   _mesa_pack_polygon_stipple(ctx->PolygonStipple, dest, &ctx->Pack);
 }
 
 
@@ -185,9 +181,11 @@ _mesa_PolygonOffset( GLfloat factor, GLfloat units )
 }
 
 
+
 void
 _mesa_PolygonOffsetEXT( GLfloat factor, GLfloat bias )
 {
-   _mesa_PolygonOffset(factor, bias * DEPTH_SCALE );
+   GET_CURRENT_CONTEXT(ctx);
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glPolygonOffsetEXT");
+   _mesa_PolygonOffset(factor, bias * ctx->Visual->DepthMaxF );
 }
-

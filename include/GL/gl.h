@@ -1,4 +1,4 @@
-/* $Id: gl.h,v 1.33 2000/02/25 21:01:41 brianp Exp $ */
+/* $Id: gl.h,v 1.36 2000/03/28 16:59:39 rjfrank Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -99,7 +99,7 @@
 
 /* compatability guard so we don't need to change client code */
 
-#if defined(_WIN32) && !defined(_WINDEF_) && !defined(OPENSTEP)
+#if defined(_WIN32) && !defined(_WINDEF_) && !defined(_GNU_H_WINDOWS32_BASE) && !defined(OPENSTEP)
 #	define CALLBACK GLCALLBACK
 typedef int (GLAPIENTRY *PROC)();
 typedef void *HGLRC;
@@ -107,9 +107,10 @@ typedef void *HDC;
 typedef unsigned long COLORREF;
 #endif
 
-#if defined(_WIN32) && !defined(_WINGDI_) && !defined(OPENSTEP)
+#if defined(_WIN32) && !defined(_WINGDI_) && !defined(_GNU_H_WINDOWS32_DEFINES) && !defined(OPENSTEP)
 #	define WGL_FONT_LINES      0
 #	define WGL_FONT_POLYGONS   1
+#ifndef _GNU_H_WINDOWS32_FUNCTIONS
 #	ifdef UNICODE
 #		define wglUseFontBitmaps  wglUseFontBitmapsW
 #		define wglUseFontOutlines  wglUseFontOutlinesW
@@ -117,6 +118,7 @@ typedef unsigned long COLORREF;
 #		define wglUseFontBitmaps  wglUseFontBitmapsA
 #		define wglUseFontOutlines  wglUseFontOutlinesA
 #	endif /* !UNICODE */
+#endif /* _GNU_H_WINDOWS32_FUNCTIONS */
 typedef struct tagLAYERPLANEDESCRIPTOR LAYERPLANEDESCRIPTOR, *PLAYERPLANEDESCRIPTOR, *LPLAYERPLANEDESCRIPTOR;
 typedef struct _GLYPHMETRICSFLOAT GLYPHMETRICSFLOAT, *PGLYPHMETRICSFLOAT, *LPGLYPHMETRICSFLOAT;
 typedef struct tagPIXELFORMATDESCRIPTOR PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESCRIPTOR, *LPPIXELFORMATDESCRIPTOR;
@@ -2031,40 +2033,6 @@ GLAPI void GLAPIENTRY glPointParameterfvEXT( GLenum pname, const GLfloat *params
 
 
 /*
- * GL_PGI_misc_hints (number 77)
- */
-#ifndef GL_PGI_misc_hints
-#define GL_PGI_misc_hints 1
-
-#define GL_PREFER_DOUBLEBUFFER_HINT_PGI		107000
-#define GL_STRICT_DEPTHFUNC_HINT_PGI		107030
-#define GL_STRICT_LIGHTING_HINT_PGI		107031
-#define GL_STRICT_SCISSOR_HINT_PGI		107032
-#define GL_FULL_STIPPLE_HINT_PGI		107033
-#define GL_NATIVE_GRAPHICS_BEGIN_HINT_PGI	107011
-#define GL_NATIVE_GRAPHICS_END_HINT_PGI		107012
-#define GL_CONSERVE_MEMORY_HINT_PGI		107005
-#define GL_RECLAIM_MEMORY_HINT_PGI		107006
-#define GL_ALWAYS_FAST_HINT_PGI			107020
-#define GL_ALWAYS_SOFT_HINT_PGI			107021
-#define GL_ALLOW_DRAW_OBJ_HINT_PGI		107022
-#define GL_ALLOW_DRAW_WIN_HINT_PGI		107023
-#define GL_ALLOW_DRAW_FRG_HINT_PGI		107024
-#define GL_ALLOW_DRAW_SPN_HINT_PGI		107024
-#define GL_ALLOW_DRAW_MEM_HINT_PGI		107025
-#define GL_CLIP_NEAR_HINT_PGI			107040
-#define GL_CLIP_FAR_HINT_PGI			107041
-#define GL_WIDE_LINE_HINT_PGI		  	107042
-#define GL_BACK_NORMALS_HINT_PGI		107043
-#define GL_NATIVE_GRAPHICS_HANDLE_PGI		107010
-
-GLAPI void GLAPIENTRY glHintPGI(GLenum target, GLint mode);
-
-#endif /* GL_PGI_misc_hints */
-
-
-
-/*
  * GL_EXT_paletted_texture (number 78)
  */
 #ifndef GL_EXT_paletted_texture
@@ -2127,6 +2095,16 @@ GLAPI void GLAPIENTRY glUnlockArraysEXT( void );
 
 #endif /* GL_EXT_compiled_vertex_array */
 
+/*
+ * 137. GL_HP_occlusion_test
+ */
+#ifndef GL_HP_occlusion_test
+#define GL_HP_occlusion_test 1
+
+#define GL_OCCLUSION_TEST_HP                    0x8165
+#define GL_OCCLUSION_TEST_RESULT_HP             0x8166
+
+#endif /* GL_HP_occlusion_test */
 
 
 /*
@@ -2151,23 +2129,6 @@ GLAPI void GLAPIENTRY glUnlockArraysEXT( void );
 #define GL_DECR_WRAP_EXT			0x8508
 
 #endif /* GL_EXT_stencil_wrap */
-
-
-
-/*
- * GL_EXT_blend_func_separate (EXT number 173) (aka GL_INGR_blend_func_separate)
- */
-#ifndef GL_EXT_blend_func_separate
-#define GL_EXT_blend_func_separate 1
-
-#define GL_BLEND_DST_RGB_EXT			0x80C8
-#define GL_BLEND_SRC_RGB_EXT			0x80C9
-#define GL_BLEND_DST_ALPHA_EXT			0x80CA
-#define GL_BLEND_SRC_ALPHA_EXT			0x80CB
-
-GLAPI void GLAPIENTRY glBlendFuncSeparateEXT( GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfactorAlpha, GLenum dfactorAlpha );
-
-#endif /* GL_EXT_blend_func_separate */
 
 
 
@@ -2321,40 +2282,6 @@ GLAPI void GLAPIENTRY glWindowPos4dvMESA( const GLdouble *p );
 GLAPI void GLAPIENTRY glResizeBuffersMESA( void );
 
 #endif /* GL_MESA_resize_bufffers */
-
-
-
-/*
- * GL_ARB_tranpose_matrix (ARB 2)
- */
-#ifndef GL_ARB_transpose_matrix
-#define GL_ARB_transpose_matrix 1
-
-#define GL_TRANSPOSE_MODELVIEW_MATRIX_ARB		0x84E3
-#define GL_TRANSPOSE_PROJECTION_MATRIX_ARB		0x84E4
-#define GL_TRANSPOSE_TEXTURE_MATRIX_ARB			0x84E5
-#define GL_TRANSPOSE_COLOR_MATRIX_ARB			0x84E6
-
-GLAPI void GLAPIENTRY glLoadTransposeMatrixdARB( const GLdouble m[16] );
-GLAPI void GLAPIENTRY glLoadTransposeMatrixfARB( const GLfloat m[16] );
-GLAPI void GLAPIENTRY glMultTransposeMatrixdARB( const GLdouble m[16] );
-GLAPI void GLAPIENTRY glMultTransposeMatrixfARB( const GLfloat m[16] );
-
-#endif /* GL_ARB_tranpose_matrix */
-
-
-
-/*
- * GL_ARB_multisample (ARB 4)
- */
-#ifndef GL_ARB_multisample
-#define GL_ARB_multisample 1
-
-GLAPI void GLAPIENTRY glSampleCoverageARB(GLclampf value, GLboolean invert);
-
-GLAPI void GLAPIENTRY glSamplePassARB(GLenum pass);
-
-#endif /* GL_ARB_multisample */
 
 
 

@@ -1,4 +1,3 @@
-/* $Id: texobj.c,v 1.14 2000/02/12 01:59:19 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -149,7 +148,7 @@ void gl_free_texture_object( struct gl_shared_state *shared,
       GLuint i;
       for (i=0;i<MAX_TEXTURE_LEVELS;i++) {
          if (t->Image[i]) {
-            gl_free_texture_image( t->Image[i] );
+            _mesa_free_texture_image( t->Image[i] );
          }
       }
    }
@@ -168,7 +167,7 @@ void gl_test_texture_object_completeness( const GLcontext *ctx, struct gl_textur
    t->Complete = GL_TRUE;  /* be optimistic */
 
    /* Always need level zero image */
-   if (!t->Image[0] || !t->Image[0]->Data) {
+   if (!t->Image[0]) {
       t->Complete = GL_FALSE;
       return;
    }
@@ -207,10 +206,6 @@ void gl_test_texture_object_completeness( const GLcontext *ctx, struct gl_textur
       /* Test dimension-independent attributes */
       for (i = minLevel; i <= maxLevel; i++) {
          if (t->Image[i]) {
-            if (!t->Image[i]->Data) {
-               t->Complete = GL_FALSE;
-               return;
-            }
             if (t->Image[i]->Format != t->Image[0]->Format) {
                t->Complete = GL_FALSE;
                return;
@@ -232,10 +227,6 @@ void gl_test_texture_object_completeness( const GLcontext *ctx, struct gl_textur
             }
             if (i >= minLevel && i <= maxLevel) {
                if (!t->Image[i]) {
-                  t->Complete = GL_FALSE;
-                  return;
-               }
-               if (!t->Image[i]->Data) {
                   t->Complete = GL_FALSE;
                   return;
                }
@@ -325,6 +316,8 @@ void gl_test_texture_object_completeness( const GLcontext *ctx, struct gl_textur
 }
 
 
+_glthread_DECLARE_STATIC_MUTEX(GenTexturesLock);
+
 
 /*
  * Execute glGenTextures
@@ -342,6 +335,12 @@ _mesa_GenTextures( GLsizei n, GLuint *texName )
       return;
    }
 
+
+   /*
+    * This must be atomic (generation and allocation of texture IDs)
+    */
+   _glthread_LOCK_MUTEX(GenTexturesLock);
+
    first = _mesa_HashFindFreeKeyBlock(ctx->Shared->TexObjects, n);
 
    /* Return the texture names */
@@ -355,6 +354,8 @@ _mesa_GenTextures( GLsizei n, GLuint *texName )
       GLuint dims = 0;
       (void) gl_alloc_texture_object(ctx->Shared, name, dims);
    }
+
+   _glthread_UNLOCK_MUTEX(GenTexturesLock);
 }
 
 
