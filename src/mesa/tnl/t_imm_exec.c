@@ -1,4 +1,4 @@
-/* $Id: t_imm_exec.c,v 1.44 2003/03/01 01:50:27 brianp Exp $ */
+/* $Id: t_imm_exec.c,v 1.46 2003/04/08 02:27:20 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -85,7 +85,9 @@ static void reset_input( GLcontext *ctx,
       IM->MaterialMask[IM->Start] = 0;
 
    IM->ArrayEltFlags = ~ctx->Array._Enabled;
-   IM->ArrayEltIncr = ctx->Array.Vertex.Enabled ? 1 : 0;
+   IM->ArrayEltIncr = (ctx->Array.Vertex.Enabled ||
+                       (ctx->VertexProgram.Enabled &&
+                        ctx->Array.VertexAttrib[0].Enabled)) ? 1 : 0;
    IM->ArrayEltFlush = ctx->Array.LockCount ? FLUSH_ELT_LAZY : FLUSH_ELT_EAGER;
 }
   
@@ -486,7 +488,9 @@ void _tnl_execute_cassette( GLcontext *ctx, struct immediate *IM )
    }
    else if ((IM->CopyOrFlag & VERT_BITS_DATA) == VERT_BIT_ELT &&
 	    ctx->Array.LockCount &&
-	    ctx->Array.Vertex.Enabled) {
+	    (ctx->Array.Vertex.Enabled ||
+             (ctx->VertexProgram.Enabled &&
+              ctx->Array.VertexAttrib[0].Enabled))) {
       exec_elt_cassette( ctx, IM );
    }
    else {
@@ -511,8 +515,10 @@ void _tnl_execute_cassette( GLcontext *ctx, struct immediate *IM )
 			     begin_state, saved_begin_state );
    }
 
-   if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1)
-      ctx->Driver.NeedFlush &= ~FLUSH_STORED_VERTICES;
+   /* Don't unset FLUSH_STORED_VERTICES flag here as the driver might
+    * have other stored data of its own & be relying on the
+    * FlushVertices notification to clear it.
+    */
 }
 
 

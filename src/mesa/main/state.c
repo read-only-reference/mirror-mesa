@@ -1,5 +1,3 @@
-/* $Id: state.c,v 1.102 2003/03/29 17:01:01 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -34,6 +32,9 @@
 #include "glheader.h"
 #include "accum.h"
 #include "api_loopback.h"
+#if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
+#include "arbprogram.h"
+#endif
 #include "attrib.h"
 #include "blend.h"
 #if FEATURE_ARB_vertex_buffer_object
@@ -71,6 +72,9 @@
 #include "varray.h"
 #if FEATURE_NV_vertex_program || FEATURE_NV_fragment_program
 #include "nvprogram.h"
+#endif
+#if FEATURE_NV_fragment_program
+#include "nvfragprog.h"
 #endif
 
 #include "math/m_matrix.h"
@@ -507,6 +511,7 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->VertexAttribPointerNV = _mesa_VertexAttribPointerNV;
 #endif
 
+   /* 282. GL_NV_fragment_program */
 #if FEATURE_NV_fragment_program
    exec->ProgramNamedParameter4fNV = _mesa_ProgramNamedParameter4fNV;
    exec->ProgramNamedParameter4dNV = _mesa_ProgramNamedParameter4dNV;
@@ -528,6 +533,9 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
 
    /* 268. GL_EXT_stencil_two_side */
    exec->ActiveStencilFaceEXT = _mesa_ActiveStencilFaceEXT;
+
+   /* ???. GL_EXT_depth_bounds_test */
+   exec->DepthBoundsEXT = _mesa_DepthBoundsEXT;
 
    /* ARB 1. GL_ARB_multitexture */
    exec->ActiveTextureARB = _mesa_ActiveTextureARB;
@@ -554,19 +562,86 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    /* ARB 14. GL_ARB_point_parameters */
    /* reuse EXT_point_parameters functions */
 
+   /* ARB 26. GL_ARB_vertex_program */
+   /* ARB 27. GL_ARB_fragment_program */
+#if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
+   /* glVertexAttrib1sARB aliases glVertexAttrib1sNV */
+   /* glVertexAttrib1fARB aliases glVertexAttrib1fNV */
+   /* glVertexAttrib1dARB aliases glVertexAttrib1dNV */
+   /* glVertexAttrib2sARB aliases glVertexAttrib2sNV */
+   /* glVertexAttrib2fARB aliases glVertexAttrib2fNV */
+   /* glVertexAttrib2dARB aliases glVertexAttrib2dNV */
+   /* glVertexAttrib3sARB aliases glVertexAttrib3sNV */
+   /* glVertexAttrib3fARB aliases glVertexAttrib3fNV */
+   /* glVertexAttrib3dARB aliases glVertexAttrib3dNV */
+   /* glVertexAttrib4sARB aliases glVertexAttrib4sNV */
+   /* glVertexAttrib4fARB aliases glVertexAttrib4fNV */
+   /* glVertexAttrib4dARB aliases glVertexAttrib4dNV */
+   /* glVertexAttrib4NubARB aliases glVertexAttrib4NubNV */
+   /* glVertexAttrib1svARB aliases glVertexAttrib1svNV */
+   /* glVertexAttrib1fvARB aliases glVertexAttrib1fvNV */
+   /* glVertexAttrib1dvARB aliases glVertexAttrib1dvNV */
+   /* glVertexAttrib2svARB aliases glVertexAttrib2svNV */
+   /* glVertexAttrib2fvARB aliases glVertexAttrib2fvNV */
+   /* glVertexAttrib2dvARB aliases glVertexAttrib2dvNV */
+   /* glVertexAttrib3svARB aliases glVertexAttrib3svNV */
+   /* glVertexAttrib3fvARB aliases glVertexAttrib3fvNV */
+   /* glVertexAttrib3dvARB aliases glVertexAttrib3dvNV */
+   /* glVertexAttrib4svARB aliases glVertexAttrib4svNV */
+   /* glVertexAttrib4fvARB aliases glVertexAttrib4fvNV */
+   /* glVertexAttrib4dvARB aliases glVertexAttrib4dvNV */
+   /* glVertexAttrib4NubvARB aliases glVertexAttrib4NubvNV */
+   exec->VertexAttrib4bvARB = _mesa_VertexAttrib4bvARB;
+   exec->VertexAttrib4ivARB = _mesa_VertexAttrib4ivARB;
+   exec->VertexAttrib4ubvARB = _mesa_VertexAttrib4ubvARB;
+   exec->VertexAttrib4usvARB = _mesa_VertexAttrib4usvARB;
+   exec->VertexAttrib4uivARB = _mesa_VertexAttrib4uivARB;
+   exec->VertexAttrib4NbvARB = _mesa_VertexAttrib4NbvARB;
+   exec->VertexAttrib4NsvARB = _mesa_VertexAttrib4NsvARB;
+   exec->VertexAttrib4NivARB = _mesa_VertexAttrib4NivARB;
+   exec->VertexAttrib4NusvARB = _mesa_VertexAttrib4NusvARB;
+   exec->VertexAttrib4NuivARB = _mesa_VertexAttrib4NuivARB;
+   exec->VertexAttribPointerARB = _mesa_VertexAttribPointerARB;
+   exec->EnableVertexAttribArrayARB = _mesa_EnableVertexAttribArrayARB;
+   exec->DisableVertexAttribArrayARB = _mesa_DisableVertexAttribArrayARB;
+   exec->ProgramStringARB = _mesa_ProgramStringARB;
+   /* glBindProgramARB aliases glBindProgramNV */
+   /* glDeleteProgramsARB aliases glDeleteProgramsNV */
+   /* glGenProgramsARB aliases glGenProgramsNV */
+   /* glIsProgramARB aliases glIsProgramNV */
+   /* glGetVertexAttribdvARB aliases glGetVertexAttribdvNV */
+   /* glGetVertexAttribfvARB aliases glGetVertexAttribfvNV */
+   /* glGetVertexAttribivARB aliases glGetVertexAttribivNV */
+   /* glGetVertexAttribPointervARB aliases glGetVertexAttribPointervNV */
+   exec->ProgramEnvParameter4dARB = _mesa_ProgramEnvParameter4dARB;
+   exec->ProgramEnvParameter4dvARB = _mesa_ProgramEnvParameter4dvARB;
+   exec->ProgramEnvParameter4fARB = _mesa_ProgramEnvParameter4fARB;
+   exec->ProgramEnvParameter4fvARB = _mesa_ProgramEnvParameter4fvARB;
+   exec->ProgramLocalParameter4dARB = _mesa_ProgramLocalParameter4dARB;
+   exec->ProgramLocalParameter4dvARB = _mesa_ProgramLocalParameter4dvARB;
+   exec->ProgramLocalParameter4fARB = _mesa_ProgramLocalParameter4fARB;
+   exec->ProgramLocalParameter4fvARB = _mesa_ProgramLocalParameter4fvARB;
+   exec->GetProgramEnvParameterdvARB = _mesa_GetProgramEnvParameterdvARB;
+   exec->GetProgramEnvParameterfvARB = _mesa_GetProgramEnvParameterfvARB;
+   exec->GetProgramLocalParameterdvARB = _mesa_GetProgramLocalParameterdvARB;
+   exec->GetProgramLocalParameterfvARB = _mesa_GetProgramLocalParameterfvARB;
+   exec->GetProgramivARB = _mesa_GetProgramivARB;
+   exec->GetProgramStringARB = _mesa_GetProgramStringARB;
+#endif
+
    /* ARB 28. GL_ARB_vertex_buffer_object */
 #if FEATURE_ARB_vertex_buffer_object
    exec->BindBufferARB = _mesa_BindBufferARB;
-   exec->DeleteBuffersARB = _mesa_DeleteBuffersARB;
-   exec->GenBuffersARB = _mesa_GenBuffersARB;
-   exec->IsBufferARB = _mesa_IsBufferARB;
    exec->BufferDataARB = _mesa_BufferDataARB;
    exec->BufferSubDataARB = _mesa_BufferSubDataARB;
-   exec->GetBufferSubDataARB = _mesa_GetBufferSubDataARB;
-   exec->MapBufferARB = _mesa_MapBufferARB;
-   exec->UnmapBufferARB = _mesa_UnmapBufferARB;
+   exec->DeleteBuffersARB = _mesa_DeleteBuffersARB;
+   exec->GenBuffersARB = _mesa_GenBuffersARB;
    exec->GetBufferParameterivARB = _mesa_GetBufferParameterivARB;
    exec->GetBufferPointervARB = _mesa_GetBufferPointervARB;
+   exec->GetBufferSubDataARB = _mesa_GetBufferSubDataARB;
+   exec->IsBufferARB = _mesa_IsBufferARB;
+   exec->MapBufferARB = _mesa_MapBufferARB;
+   exec->UnmapBufferARB = _mesa_UnmapBufferARB;
 #endif
 }
 
@@ -943,8 +1018,29 @@ update_texture_state( GLcontext *ctx )
    if (ctx->Texture._GenFlags & TEXGEN_NEED_EYE_COORD) {
       ctx->_NeedEyeCoords |= NEED_EYE_TEXGEN;
    }
+
+   ctx->Texture._EnabledCoordUnits = ctx->Texture._EnabledUnits;
+   /* Fragment programs may need texture coordinates but not the
+    * corresponding texture images.
+    */
+   if (ctx->FragmentProgram.Enabled && ctx->FragmentProgram.Current) {
+      ctx->Texture._EnabledCoordUnits |=
+         (ctx->FragmentProgram.Current->InputsRead >> FRAG_ATTRIB_TEX0);
+   }
 }
 
+
+/*
+ * Update items which depend on vertex/fragment programs.
+ */
+static void
+update_program( GLcontext *ctx )
+{
+   if (ctx->FragmentProgram.Enabled && ctx->FragmentProgram.Current) {
+      if (ctx->FragmentProgram.Current->InputsRead & (1 << FRAG_ATTRIB_COL1))
+         ctx->_TriangleCaps |= DD_SEPARATE_SPECULAR;
+   }
+}
 
 
 /*
@@ -1015,6 +1111,8 @@ void _mesa_update_state( GLcontext *ctx )
 	    ctx->_NeedEyeCoords |= NEED_EYE_LIGHT_MODELVIEW;
    }
 
+   if (new_state & _NEW_PROGRAM)
+      update_program( ctx );
 
 #if 0
    /* XXX this is a bit of a hack.  We should be checking elsewhere if

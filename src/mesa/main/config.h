@@ -1,5 +1,3 @@
-/* $Id: config.h,v 1.45 2003/03/29 17:01:03 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -55,10 +53,6 @@
 /* Maximum color matrix stack depth: */
 #define MAX_COLOR_STACK_DEPTH 4
 
-/* Vertex program matrix stacks: */
-#define MAX_PROGRAM_MATRICES 8
-#define MAX_PROGRAM_STACK_DEPTH 4
-
 /* Maximum attribute stack depth: */
 #define MAX_ATTRIB_STACK_DEPTH 16
 
@@ -107,7 +101,7 @@
 #define MAX_TEXTURE_LEVELS 12
 
 /* Number of 3D texture mipmap levels */
-#define MAX_3D_TEXTURE_LEVELS 8
+#define MAX_3D_TEXTURE_LEVELS 9
 
 /* Number of cube texture mipmap levels - GL_ARB_texture_cube_map */
 #define MAX_CUBE_TEXTURE_LEVELS 12
@@ -166,6 +160,21 @@
 #define MAX_NV_FRAGMENT_PROGRAM_INPUTS        12
 #define MAX_NV_FRAGMENT_PROGRAM_OUTPUTS        3
 #define MAX_NV_FRAGMENT_PROGRAM_WRITE_ONLYS    2
+
+/* GL_ARB_vertex_program */
+#define MAX_VERTEX_PROGRAM_ADDRESS_REGS 1
+
+/* GL_ARB_fragment_program */
+#define MAX_FRAGMENT_PROGRAM_ADDRESS_REGS 1
+#define MAX_FRAGMENT_PROGRAM_ALU_INSTRUCTIONS 48
+#define MAX_FRAGMENT_PROGRAM_TEX_INSTRUCTIONS 24
+#define MAX_FRAGMENT_PROGRAM_TEX_INDIRECTIONS  4
+
+/* Any program target/extension */
+#define MAX_PROGRAM_LOCAL_PARAMS 96
+#define MAX_PROGRAM_MATRICES 8
+#define MAX_PROGRAM_MATRIX_STACK_DEPTH 4
+
 
 
 
@@ -229,5 +238,10 @@
 #define FEATURE_NV_fragment_program 1
 
 #define FEATURE_ARB_vertex_buffer_object 1
+
+#define FEATURE_ARB_vertex_program 1
+
+#define FEATURE_ARB_fragment_program 1
+
 
 #endif /* CONFIG_H */

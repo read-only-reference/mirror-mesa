@@ -1,5 +1,3 @@
-/* $Id: texstore.c,v 1.54 2003/03/04 19:16:23 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -482,6 +480,7 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
           baseInternalFormat == GL_ALPHA ||
           baseInternalFormat == GL_RGB ||
           baseInternalFormat == GL_RGBA ||
+          baseInternalFormat == GL_COLOR_INDEX ||
           baseInternalFormat == GL_DEPTH_COMPONENT);
 
    if (transferOps & IMAGE_CONVOLUTION_BIT) {
@@ -1263,44 +1262,6 @@ _mesa_store_compressed_texsubimage3d(GLcontext *ctx, GLenum target,
 }
 
 
-
-
-
-/*
- * This is the fallback for Driver.TestProxyTexImage().
- */
-GLboolean
-_mesa_test_proxy_teximage(GLcontext *ctx, GLenum target, GLint level,
-                          GLint internalFormat, GLenum format, GLenum type,
-                          GLint width, GLint height, GLint depth, GLint border)
-{
-   struct gl_texture_unit *texUnit;
-   struct gl_texture_object *texObj;
-   struct gl_texture_image *texImage;
-
-   (void) format;
-   (void) type;
-
-   texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-   texObj = _mesa_select_tex_object(ctx, texUnit, target);
-   texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-
-   /* We always pass.
-    * The core Mesa code will have already tested the image size, etc.
-    * If a driver has more stringent texture limits to enforce it will
-    * have to override this function.
-    */
-   /* choose the texture format */
-   assert(ctx->Driver.ChooseTextureFormat);
-   texImage->TexFormat = (*ctx->Driver.ChooseTextureFormat)(ctx,
-                                          internalFormat, format, type);
-   assert(texImage->TexFormat);
-
-   return GL_TRUE;
-}
-
-
-
 /*
  * Average together two rows of a source image to produce a single new
  * row in the dest image.  It's legal for the two source rows to point
@@ -2011,14 +1972,10 @@ _mesa_generate_mipmap(GLcontext *ctx, GLenum target,
       }
 
       /* get dest gl_texture_image */
-      dstImage = _mesa_select_tex_image(ctx, texUnit, target, level+1);
+      dstImage = _mesa_get_tex_image(ctx, texUnit, target, level + 1);
       if (!dstImage) {
-         dstImage = _mesa_alloc_texture_image();
-         if (!dstImage) {
-            _mesa_error(ctx, GL_OUT_OF_MEMORY, "generating mipmaps");
-            return;
-         }
-         _mesa_set_tex_image(texObj, target, level + 1, dstImage);
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "generating mipmaps");
+         return;
       }
 
       /* Free old image data */

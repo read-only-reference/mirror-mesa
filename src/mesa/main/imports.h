@@ -1,5 +1,3 @@
-/* $Id: imports.h,v 1.19 2003/03/17 15:13:43 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -200,14 +198,14 @@ static INLINE GLfloat LOG2(GLfloat x)
  */
 static INLINE GLfloat LOG2(GLfloat val)
 {
-   GLint *exp_ptr = (GLint *) &val;
-   GLint x = *exp_ptr;
-   const GLint log_2 = ((x >> 23) & 255) - 128;
-   x &= ~(255 << 23);
-   x += 127 << 23;
-   *exp_ptr = x;
-   val = ((-1.0f/3) * val + 2) * val - 2.0f/3;
-   return val + log_2;
+   fi_type num;
+   GLint log_2;
+   num.f = val;
+   log_2 = ((num.i >> 23) & 255) - 128;
+   num.i &= ~(255 << 23);
+   num.i += 127 << 23;
+   num.f = ((-1.0f/3) * num.f + 2) * num.f - 2.0f/3;
+   return num.f + log_2;
 }
 #elif defined(XFree86LOADER) && defined(IN_MODULE)
 #define LOG2(x) ((GLfloat) (xf86log(x) * 1.442695))
@@ -272,22 +270,19 @@ static INLINE int IS_INF_OR_NAN( float x )
  *** FLOORF: floor of float
  *** FABSF: absolute value of float
  ***/
-#if defined(__sparc__) || defined(__NeXT__) /* XXX improve? */
-#define CEILF(x)   ceil(x)
-#define FLOORF(x)  floor(x)
-#define FABSF(x)   fabs(x)
-#elif defined(__WIN32__) || defined(__IBMC__) || defined(__IBMCPP__)
-#define CEILF(x)   ((GLfloat) ceil(x))
-#define FLOORF(x)  ((GLfloat) floor(x))
-#define FABSF(x)   ((GLfloat) fabs(x))
-#elif defined(XFree86LOADER) && defined(IN_MODULE)
+#if defined(XFree86LOADER) && defined(IN_MODULE)
 #define CEILF(x)   ((GLfloat) xf86ceil(x))
 #define FLOORF(x)  ((GLfloat) xf86floor(x))
 #define FABSF(x)   ((GLfloat) xf86fabs(x))
-#else
+#elif defined(__gnu_linux__)
+/* C99 functions */
 #define CEILF(x)   ceilf(x)
 #define FLOORF(x)  floorf(x)
 #define FABSF(x)   fabsf(x)
+#else
+#define CEILF(x)   ((GLfloat) ceil(x))
+#define FLOORF(x)  ((GLfloat) floor(x))
+#define FABSF(x)   ((GLfloat) fabs(x))
 #endif
 
 
@@ -581,6 +576,9 @@ _mesa_align_calloc( size_t bytes, unsigned long alignment );
 
 extern void
 _mesa_align_free( void *ptr );
+
+extern void *
+_mesa_realloc( void *oldBuffer, size_t oldSize, size_t newSize );
 
 extern void *
 _mesa_memcpy( void *dest, const void *src, size_t n );

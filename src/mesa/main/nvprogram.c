@@ -1,5 +1,3 @@
-/* $Id: nvprogram.c,v 1.10 2003/03/29 16:37:08 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -104,6 +102,45 @@ _mesa_find_line_column(const GLubyte *string, const GLubyte *pos,
 
 
 
+/**
+ * Allocate and initialize a new fragment/vertex program object
+ * \param ctx  context
+ * \param id   program id/number
+ * \param target  program target/type
+ * \return  pointer to new program object
+ */
+struct program *
+_mesa_alloc_program(GLcontext *ctx, GLenum target, GLuint id)
+{
+   struct program *prog;
+
+   if (target == GL_VERTEX_PROGRAM_NV
+       || target == GL_VERTEX_PROGRAM_ARB) {
+      struct vertex_program *vprog = CALLOC_STRUCT(vertex_program);
+      if (!vprog) {
+         return NULL;
+      }
+      prog = &(vprog->Base);
+   }
+   else if (target == GL_FRAGMENT_PROGRAM_NV
+            || target == GL_FRAGMENT_PROGRAM_ARB) {
+      struct fragment_program *fprog = CALLOC_STRUCT(fragment_program);
+      if (!fprog) {
+         return NULL;
+      }
+      prog = &(fprog->Base);
+   }
+   else {
+      _mesa_problem(ctx, "bad target in _mesa_alloc_program");
+      return NULL;
+   }
+   prog->Id = id;
+   prog->Target = target;
+   prog->Resident = GL_TRUE;
+   prog->RefCount = 1;
+   return prog;
+}
+
 
 /**
  * Delete a program and remove it from the hash table, ignoring the
@@ -111,35 +148,31 @@ _mesa_find_line_column(const GLubyte *string, const GLubyte *pos,
  * \note Called from the GL API dispatcher.
  */
 void
-_mesa_delete_program(GLcontext *ctx, GLuint id)
+_mesa_delete_program(GLcontext *ctx, struct program *prog)
 {
-   struct program *prog = (struct program *)
-      _mesa_HashLookup(ctx->Shared->Programs, id);
+   ASSERT(prog);
 
-   if (prog) {
-      if (prog->String)
-         _mesa_free(prog->String);
-      if (prog->Target == GL_VERTEX_PROGRAM_NV ||
-          prog->Target == GL_VERTEX_STATE_PROGRAM_NV) {
-         struct vertex_program *vprog = (struct vertex_program *) prog;
-         if (vprog->Instructions)
-            _mesa_free(vprog->Instructions);
-      }
-      else if (prog->Target == GL_FRAGMENT_PROGRAM_NV) {
-         struct fragment_program *fprog = (struct fragment_program *) prog;
-         if (fprog->Instructions)
-            _mesa_free(fprog->Instructions);
-         if (fprog->Parameters) {
-            GLuint i;
-            for (i = 0; i < fprog->NumParameters; i++) {
-               _mesa_free((void *) fprog->Parameters[i].Name);
-            }
-            _mesa_free(fprog->Parameters);
-         }
-      }
-      _mesa_HashRemove(ctx->Shared->Programs, id);
-      _mesa_free(prog);
+   if (prog->String)
+      _mesa_free(prog->String);
+   if (prog->Target == GL_VERTEX_PROGRAM_NV ||
+       prog->Target == GL_VERTEX_STATE_PROGRAM_NV) {
+      struct vertex_program *vprog = (struct vertex_program *) prog;
+      if (vprog->Instructions)
+         _mesa_free(vprog->Instructions);
    }
+   else if (prog->Target == GL_FRAGMENT_PROGRAM_NV) {
+      struct fragment_program *fprog = (struct fragment_program *) prog;
+      if (fprog->Instructions)
+         _mesa_free(fprog->Instructions);
+      if (fprog->Parameters) {
+         GLuint i;
+         for (i = 0; i < fprog->NumParameters; i++) {
+            _mesa_free((void *) fprog->Parameters[i].Name);
+         }
+         _mesa_free(fprog->Parameters);
+      }
+   }
+   _mesa_free(prog);
 }
 
 
@@ -154,7 +187,8 @@ _mesa_BindProgramNV(GLenum target, GLuint id)
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   if (target == GL_VERTEX_PROGRAM_NV) {
+   if (target == GL_VERTEX_PROGRAM_NV
+       && ctx->Extensions.NV_vertex_program) {
       if (ctx->VertexProgram.Current &&
           ctx->VertexProgram.Current->Base.Id == id)
          return;
@@ -162,11 +196,14 @@ _mesa_BindProgramNV(GLenum target, GLuint id)
       if (ctx->VertexProgram.Current) {
          ctx->VertexProgram.Current->Base.RefCount--;
          /* and delete if refcount goes below one */
-         if (ctx->VertexProgram.Current->Base.RefCount <= 0)
-            _mesa_delete_program(ctx, ctx->VertexProgram.Current->Base.Id);
+         if (ctx->VertexProgram.Current->Base.RefCount <= 0) {
+            _mesa_delete_program(ctx, &(ctx->VertexProgram.Current->Base));
+            _mesa_HashRemove(ctx->Shared->Programs, id);
+         }
       }
    }
-   else if (target == GL_FRAGMENT_PROGRAM_NV) {
+   else if (target == GL_FRAGMENT_PROGRAM_NV
+       && ctx->Extensions.NV_fragment_program) {
       if (ctx->FragmentProgram.Current &&
           ctx->FragmentProgram.Current->Base.Id == id)
          return;
@@ -174,12 +211,14 @@ _mesa_BindProgramNV(GLenum target, GLuint id)
       if (ctx->FragmentProgram.Current) {
          ctx->FragmentProgram.Current->Base.RefCount--;
          /* and delete if refcount goes below one */
-         if (ctx->FragmentProgram.Current->Base.RefCount <= 0)
-            _mesa_delete_program(ctx, ctx->FragmentProgram.Current->Base.Id);
+         if (ctx->FragmentProgram.Current->Base.RefCount <= 0) {
+            _mesa_delete_program(ctx, &(ctx->FragmentProgram.Current->Base));
+            _mesa_HashRemove(ctx->Shared->Programs, id);
+         }
       }
    }
    else {
-      _mesa_error(ctx, GL_INVALID_ENUM, "glBindProgramNV");
+      _mesa_error(ctx, GL_INVALID_ENUM, "glBindProgramNV(target)");
       return;
    }
 
@@ -188,31 +227,27 @@ _mesa_BindProgramNV(GLenum target, GLuint id)
     */
    if (id == 0) {
       /* OK, the null program object */
+      /* XXX use the ARB_vertex/fragment prorgram default objects??? */
       prog = NULL;
    }
    else {
       prog = (struct program *) _mesa_HashLookup(ctx->Shared->Programs, id);
-
-      if (!prog && id > 0){
-         /* allocate new program */
-         if (target == GL_VERTEX_PROGRAM_NV) {
-            struct vertex_program *vprog = CALLOC_STRUCT(vertex_program);
-            if (!vprog) {
-               _mesa_error(ctx, GL_OUT_OF_MEMORY, "glBindProgramNV");
-               return;
-            }
-            prog = &(vprog->Base);
+      if (prog) {
+         if (prog->Target == 0) {
+            /* prog was allocated with glGenProgramsNV */
+            prog->Target = target;
          }
-         else if (target == GL_FRAGMENT_PROGRAM_NV) {
-            struct fragment_program *fprog = CALLOC_STRUCT(fragment_program);
-            if (!fprog) {
-               _mesa_error(ctx, GL_OUT_OF_MEMORY, "glBindProgramNV");
-               return;
-            }
-            prog = &(fprog->Base);
+         else if (prog->Target != target) {
+            _mesa_error(ctx, GL_INVALID_OPERATION,
+                        "glBindProgramNV(target mismatch)");
+            return;
          }
-         else {
-            _mesa_error(ctx, GL_INVALID_ENUM, "glBindProgramNV(target)");
+      }
+      else {
+         /* allocate a new program now */
+         prog = _mesa_alloc_program(ctx, target, id);
+         if (!prog) {
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glBindProgramNV");
             return;
          }
          prog->Id = id;
@@ -239,7 +274,7 @@ _mesa_BindProgramNV(GLenum target, GLuint id)
 /**
  * Delete a list of programs.
  * \note Not compiled into display lists.
- * \note Called from the GL API dispatcher.
+ * \note Called by both glDeleteProgramsNV and glDeleteProgramsARB.
  */
 void
 _mesa_DeleteProgramsNV(GLsizei n, const GLuint *ids)
@@ -279,7 +314,7 @@ _mesa_DeleteProgramsNV(GLsizei n, const GLuint *ids)
             }
             prog->RefCount--;
             if (prog->RefCount <= 0) {
-               _mesa_delete_program(ctx, ids[i]);
+               _mesa_delete_program(ctx, prog);
             }
          }
       }
@@ -321,7 +356,7 @@ _mesa_ExecuteProgramNV(GLenum target, GLuint id, const GLfloat *params)
 /**
  * Generate a list of new program identifiers.
  * \note Not compiled into display lists.
- * \note Called from the GL API dispatcher.
+ * \note Called by both glGenProgramsNV and glGenProgramsARB.
  */
 void
 _mesa_GenProgramsNV(GLsizei n, GLuint *ids)
@@ -332,7 +367,7 @@ _mesa_GenProgramsNV(GLsizei n, GLuint *ids)
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (n < 0) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glGenProgramsNV");
+      _mesa_error(ctx, GL_INVALID_VALUE, "glGenPrograms");
       return;
    }
 
@@ -346,7 +381,7 @@ _mesa_GenProgramsNV(GLsizei n, GLuint *ids)
                              sizeof(struct fragment_program));
       struct program *prog = (struct program *) _mesa_calloc(bytes);
       if (!prog) {
-         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glGenProgramsNV");
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glGenPrograms");
          return;
       }
       prog->RefCount = 1;
@@ -597,7 +632,8 @@ _mesa_GetTrackMatrixivNV(GLenum target, GLuint address,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   if (target == GL_VERTEX_PROGRAM_NV) {
+   if (target == GL_VERTEX_PROGRAM_NV
+       && ctx->Extensions.NV_vertex_program) {
       GLuint i;
 
       if ((address & 0x3) || address >= MAX_NV_VERTEX_PROGRAM_PARAMS) {
@@ -725,6 +761,13 @@ _mesa_GetVertexAttribivNV(GLuint index, GLenum pname, GLint *params)
       case GL_CURRENT_ATTRIB_NV:
          COPY_4V_CAST(params, ctx->Current.Attrib[index], GLint);
          break;
+      case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING_ARB:
+         if (!ctx->Extensions.ARB_vertex_buffer_object) {
+            _mesa_error(ctx, GL_INVALID_ENUM, "glGetVertexAttribdvNV");
+            return;
+         }
+         params[0] = ctx->Array.VertexAttribArrayBufferBinding[index];
+         break;
       default:
          _mesa_error(ctx, GL_INVALID_ENUM, "glGetVertexAttribdvNV");
          return;
@@ -760,11 +803,12 @@ _mesa_GetVertexAttribPointervNV(GLuint index, GLenum pname, GLvoid **pointer)
 /**
  * Determine if id names a program.
  * \note Not compiled into display lists.
- * \note Called from the GL API dispatcher.
+ * \note Called from both glIsProgramNV and glIsProgramARB.
  * \param id is the program identifier
  * \return GL_TRUE if id is a program, else GL_FALSE.
  */
-GLboolean _mesa_IsProgramNV(GLuint id)
+GLboolean
+_mesa_IsProgramNV(GLuint id)
 {
    struct program *prog;
    GET_CURRENT_CONTEXT(ctx);
@@ -782,7 +826,7 @@ GLboolean _mesa_IsProgramNV(GLuint id)
 
 
 /**
- * Load a program.
+ * Load/parse/compile a program.
  * \note Called from the GL API dispatcher.
  */
 void
@@ -805,11 +849,9 @@ _mesa_LoadProgramNV(GLenum target, GLuint id, GLsizei len,
       return;
    }
 
-   /* Reset error pos and string */
-   _mesa_set_program_error(ctx, -1, NULL);
-
-   if (target == GL_VERTEX_PROGRAM_NV ||
-       target == GL_VERTEX_STATE_PROGRAM_NV) {
+   if ((target == GL_VERTEX_PROGRAM_NV ||
+        target == GL_VERTEX_STATE_PROGRAM_NV)
+       && ctx->Extensions.NV_vertex_program) {
       struct vertex_program *vprog = (struct vertex_program *) prog;
       if (!vprog) {
          vprog = CALLOC_STRUCT(vertex_program);
@@ -823,7 +865,8 @@ _mesa_LoadProgramNV(GLenum target, GLuint id, GLsizei len,
       }
       _mesa_parse_nv_vertex_program(ctx, target, program, len, vprog);
    }
-   else if (target == GL_FRAGMENT_PROGRAM_NV) {
+   else if (target == GL_FRAGMENT_PROGRAM_NV
+            && ctx->Extensions.NV_fragment_program) {
       struct fragment_program *fprog = (struct fragment_program *) prog;
       if (!fprog) {
          fprog = CALLOC_STRUCT(fragment_program);
@@ -838,7 +881,7 @@ _mesa_LoadProgramNV(GLenum target, GLuint id, GLsizei len,
       _mesa_parse_nv_fragment_program(ctx, target, program, len, fprog);
    }
    else {
-      _mesa_error(ctx, GL_INVALID_ENUM, "LoadProgramNV(target)");
+      _mesa_error(ctx, GL_INVALID_ENUM, "glLoadProgramNV(target)");
    }
 }
 
@@ -882,7 +925,7 @@ _mesa_ProgramParameter4fNV(GLenum target, GLuint index,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   if (target == GL_VERTEX_PROGRAM_NV) {
+   if (target == GL_VERTEX_PROGRAM_NV && ctx->Extensions.NV_vertex_program) {
       if (index < MAX_NV_VERTEX_PROGRAM_PARAMS) {
          index += VP_PROG_REG_START;
          ASSIGN_4V(ctx->VertexProgram.Machine.Registers[index], x, y, z, w);
@@ -924,7 +967,7 @@ _mesa_ProgramParameters4dvNV(GLenum target, GLuint index,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   if (target == GL_VERTEX_PROGRAM_NV) {
+   if (target == GL_VERTEX_PROGRAM_NV && ctx->Extensions.NV_vertex_program) {
       GLuint i;
       if (index + num > MAX_NV_VERTEX_PROGRAM_PARAMS) {
          _mesa_error(ctx, GL_INVALID_VALUE, "glProgramParameters4dvNV");
@@ -955,7 +998,7 @@ _mesa_ProgramParameters4fvNV(GLenum target, GLuint index,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   if (target == GL_VERTEX_PROGRAM_NV) {
+   if (target == GL_VERTEX_PROGRAM_NV && ctx->Extensions.NV_vertex_program) {
       GLuint i;
       if (index + num > MAX_NV_VERTEX_PROGRAM_PARAMS) {
          _mesa_error(ctx, GL_INVALID_VALUE, "glProgramParameters4fvNV");
@@ -986,7 +1029,7 @@ _mesa_TrackMatrixNV(GLenum target, GLuint address,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   if (target == GL_VERTEX_PROGRAM_NV) {
+   if (target == GL_VERTEX_PROGRAM_NV && ctx->Extensions.NV_vertex_program) {
       if (address & 0x3) {
          /* addr must be multiple of four */
          _mesa_error(ctx, GL_INVALID_VALUE, "glTrackMatrixNV(address)");
@@ -1043,7 +1086,7 @@ _mesa_ProgramNamedParameter4fNV(GLuint id, GLsizei len, const GLubyte *name,
 {
    struct program *prog;
    struct fragment_program *fragProg;
-   GLint reg;
+   GLint i;
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
@@ -1059,12 +1102,15 @@ _mesa_ProgramNamedParameter4fNV(GLuint id, GLsizei len, const GLubyte *name,
    }
 
    fragProg = (struct fragment_program *) prog;
-   for (reg = 0; reg < fragProg->NumParameters; reg++) {
-      if (!_mesa_strcmp(fragProg->Parameters[reg].Name, (const char *) name)) {
-         fragProg->Parameters[reg].Values[0] = x;
-         fragProg->Parameters[reg].Values[1] = y;
-         fragProg->Parameters[reg].Values[2] = z;
-         fragProg->Parameters[reg].Values[3] = w;
+   for (i = 0; i < fragProg->NumParameters; i++) {
+      if (!_mesa_strncmp(fragProg->Parameters[i].Name,
+                         (const char *) name, len) &&
+          fragProg->Parameters[i].Name[len] == 0) {
+         ASSERT(!fragProg->Parameters[i].Constant);
+         fragProg->Parameters[i].Values[0] = x;
+         fragProg->Parameters[i].Values[1] = y;
+         fragProg->Parameters[i].Values[2] = z;
+         fragProg->Parameters[i].Values[3] = w;
          return;
       }
    }
@@ -1077,7 +1123,7 @@ void
 _mesa_ProgramNamedParameter4fvNV(GLuint id, GLsizei len, const GLubyte *name,
                                  const float v[])
 {
-   glProgramNamedParameter4fNV(id, len, name, v[0], v[1], v[2], v[3]);
+   _mesa_ProgramNamedParameter4fNV(id, len, name, v[0], v[1], v[2], v[3]);
 }
 
 
@@ -1085,8 +1131,8 @@ void
 _mesa_ProgramNamedParameter4dNV(GLuint id, GLsizei len, const GLubyte *name,
                                 GLdouble x, GLdouble y, GLdouble z, GLdouble w)
 {
-   glProgramNamedParameter4fNV(id, len, name, (GLfloat)x, (GLfloat)y, 
-		   			      (GLfloat)z, (GLfloat)w);
+   _mesa_ProgramNamedParameter4fNV(id, len, name, (GLfloat)x, (GLfloat)y, 
+                                   (GLfloat)z, (GLfloat)w);
 }
 
 
@@ -1094,8 +1140,9 @@ void
 _mesa_ProgramNamedParameter4dvNV(GLuint id, GLsizei len, const GLubyte *name,
                                  const double v[])
 {
-   glProgramNamedParameter4fNV(id, len, name, (GLfloat)v[0], (GLfloat)v[1], 
-		   			      (GLfloat)v[2], (GLfloat)v[3]);
+   _mesa_ProgramNamedParameter4fNV(id, len, name,
+                                   (GLfloat)v[0], (GLfloat)v[1],
+                                   (GLfloat)v[2], (GLfloat)v[3]);
 }
 
 
@@ -1105,7 +1152,7 @@ _mesa_GetProgramNamedParameterfvNV(GLuint id, GLsizei len, const GLubyte *name,
 {
    struct program *prog;
    struct fragment_program *fragProg;
-   GLint reg;
+   GLint i;
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
@@ -1121,12 +1168,15 @@ _mesa_GetProgramNamedParameterfvNV(GLuint id, GLsizei len, const GLubyte *name,
    }
 
    fragProg = (struct fragment_program *) prog;
-   for (reg = 0; reg < fragProg->NumParameters; reg++) {
-      if (!_mesa_strcmp(fragProg->Parameters[reg].Name, (const char *) name)) {
-         params[0] = fragProg->Parameters[reg].Values[0];
-         params[1] = fragProg->Parameters[reg].Values[1];
-         params[2] = fragProg->Parameters[reg].Values[2];
-         params[3] = fragProg->Parameters[reg].Values[3];
+   for (i = 0; i < fragProg->NumParameters; i++) {
+      if (!_mesa_strncmp(fragProg->Parameters[i].Name,
+                         (const char *) name, len) &&
+          fragProg->Parameters[i].Name[len] == 0) {
+         ASSERT(!fragProg->Parameters[i].Constant);
+         params[0] = fragProg->Parameters[i].Values[0];
+         params[1] = fragProg->Parameters[i].Values[1];
+         params[2] = fragProg->Parameters[i].Values[2];
+         params[3] = fragProg->Parameters[i].Values[3];
          return;
       }
    }
@@ -1140,11 +1190,12 @@ _mesa_GetProgramNamedParameterdvNV(GLuint id, GLsizei len, const GLubyte *name,
                                    GLdouble *params)
 {
    GLfloat floatParams[4];
-   glGetProgramNamedParameterfvNV(id, len, name, floatParams);
+   _mesa_GetProgramNamedParameterfvNV(id, len, name, floatParams);
    COPY_4V(params, floatParams);
 }
 
 
+#if 000
 void
 _mesa_ProgramLocalParameter4fARB(GLenum target, GLuint index,
                                  GLfloat x, GLfloat y, GLfloat z, GLfloat w)
@@ -1162,10 +1213,10 @@ _mesa_ProgramLocalParameter4fARB(GLenum target, GLuint index,
          _mesa_error(ctx, GL_INVALID_VALUE, "glProgramLocalParameterARB");
          return;
       }
-      fprog->LocalParams[index][0] = x;
-      fprog->LocalParams[index][1] = y;
-      fprog->LocalParams[index][2] = z;
-      fprog->LocalParams[index][3] = w;
+      fprog->Base.LocalParams[index][0] = x;
+      fprog->Base.LocalParams[index][1] = y;
+      fprog->Base.LocalParams[index][2] = z;
+      fprog->Base.LocalParams[index][3] = w;
    }
    else {
       _mesa_error(ctx, GL_INVALID_ENUM, "glProgramLocalParameterARB");
@@ -1174,35 +1225,39 @@ _mesa_ProgramLocalParameter4fARB(GLenum target, GLuint index,
 }
 
 
+/* XXX move into arbprogram.c */
 void
 _mesa_ProgramLocalParameter4fvARB(GLenum target, GLuint index,
                                   const GLfloat *params)
 {
-   glProgramLocalParameter4fARB(target, index, params[0], params[1],
-                                params[2], params[3]);
+   _mesa_ProgramLocalParameter4fARB(target, index, params[0], params[1],
+                                    params[2], params[3]);
 }
 
 
+/* XXX move into arbprogram.c */
 void
 _mesa_ProgramLocalParameter4dARB(GLenum target, GLuint index,
                                  GLdouble x, GLdouble y,
                                  GLdouble z, GLdouble w)
 {
-   glProgramLocalParameter4fARB(target, index, (GLfloat)x, (GLfloat)y, 
-		   			       (GLfloat)z, (GLfloat)w);
+   _mesa_ProgramLocalParameter4fARB(target, index, (GLfloat)x, (GLfloat)y, 
+                                    (GLfloat)z, (GLfloat)w);
 }
 
 
+/* XXX move into arbprogram.c */
 void
 _mesa_ProgramLocalParameter4dvARB(GLenum target, GLuint index,
                                   const GLdouble *params)
 {
-   glProgramLocalParameter4fARB(target, index, (GLfloat)params[0], 
-		   		(GLfloat)params[1], (GLfloat)params[2],
-				(GLfloat)params[3]);
+   _mesa_ProgramLocalParameter4fARB(target, index, (GLfloat)params[0], 
+                                    (GLfloat)params[1], (GLfloat)params[2],
+                                    (GLfloat)params[3]);
 }
 
 
+/* XXX move into arbprogram.c */
 void
 _mesa_GetProgramLocalParameterfvARB(GLenum target, GLuint index,
                                     GLfloat *params)
@@ -1220,10 +1275,10 @@ _mesa_GetProgramLocalParameterfvARB(GLenum target, GLuint index,
          _mesa_error(ctx, GL_INVALID_VALUE, "glGetProgramLocalParameterARB");
          return;
       }
-      params[0] = fprog->LocalParams[index][0];
-      params[1] = fprog->LocalParams[index][1];
-      params[2] = fprog->LocalParams[index][2];
-      params[3] = fprog->LocalParams[index][3];
+      params[0] = fprog->Base.LocalParams[index][0];
+      params[1] = fprog->Base.LocalParams[index][1];
+      params[2] = fprog->Base.LocalParams[index][2];
+      params[3] = fprog->Base.LocalParams[index][3];
    }
    else {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetProgramLocalParameterARB");
@@ -1232,11 +1287,13 @@ _mesa_GetProgramLocalParameterfvARB(GLenum target, GLuint index,
 }
 
 
+/* XXX move into arbprogram.c */
 void
 _mesa_GetProgramLocalParameterdvARB(GLenum target, GLuint index,
                                     GLdouble *params)
 {
    GLfloat floatParams[4];
-   glGetProgramLocalParameterfvARB(target, index, floatParams);
+   _mesa_GetProgramLocalParameterfvARB(target, index, floatParams);
    COPY_4V(params, floatParams);
 }
+#endif

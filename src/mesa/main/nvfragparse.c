@@ -1,5 +1,3 @@
-/* $Id: nvfragparse.c,v 1.15 2003/03/19 05:34:25 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -24,7 +22,6 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
 /**
  * \file nvfragparse.c
  * \brief NVIDIA fragment program parser.
@@ -40,20 +37,6 @@
 #include "nvfragprog.h"
 #include "nvfragparse.h"
 #include "nvprogram.h"
-
-
-/* XXX move */
-static void *
-_mesa_realloc(void *oldBuffer, size_t oldSize, size_t newSize)
-{
-   void *newBuffer = _mesa_malloc(newSize);
-   size_t bytes = MIN2(oldSize, newSize);
-   if (newBuffer && bytes > 0) {
-      _mesa_memcpy(newBuffer, oldBuffer, bytes);
-   }
-   _mesa_free(oldBuffer);
-   return newBuffer;
-}
 
 
 #define INPUT_1V     1
@@ -158,9 +141,13 @@ struct parse_state {
 };
 
 
-static void
+/**
+ * Add a new program parameter (via DEFINE statement)
+ * \return index of the new entry in the parameter list
+ */
+static GLuint
 add_parameter(struct parse_state *parseState,
-              const char *name, const GLfloat values[4])
+              const char *name, const GLfloat values[4], GLboolean constant)
 {
    const GLuint n = parseState->numParameters;
 
@@ -170,6 +157,27 @@ add_parameter(struct parse_state *parseState,
    parseState->numParameters = n + 1;
    parseState->parameters[n].Name = _mesa_strdup(name);
    COPY_4V(parseState->parameters[n].Values, values);
+   parseState->parameters[n].Constant = constant;
+   return n;
+}
+
+
+/**
+ * Add a new unnamed constant to the parameter lists.
+ * \param parseState  parsing state
+ * \param values  four float values
+ * \return index of the new parameter.
+ */
+static GLuint
+add_unnamed_constant(struct parse_state *parseState, const GLfloat values[4])
+{
+   /* generate a new dummy name */
+   static GLuint n = 0;
+   char name[20];
+   _mesa_sprintf(name, "constant%d", n);
+   n++;
+   /* store it */
+   return add_parameter(parseState, name, values, GL_TRUE);
 }
 
 
@@ -185,30 +193,15 @@ lookup_parameter(struct parse_state *parseState, const char *name)
 }
 
 
-static void
-add_constant(struct parse_state *parseState,
-             const char *name, const GLfloat values[4])
+static const GLint
+lookup_parameter_index(struct parse_state *parseState, const char *name)
 {
-   const GLuint n = parseState->numConstants;
-
-   parseState->constants = _mesa_realloc(parseState->constants,
-                                   n * sizeof(struct program_parameter),
-                                   (n + 1) * sizeof(struct program_parameter));
-   parseState->numConstants = n + 1;
-   parseState->constants[n].Name = _mesa_strdup(name);
-   COPY_4V(parseState->constants[n].Values, values);
-}
-
-
-static const GLfloat *
-lookup_constant(struct parse_state *parseState, const char *name)
-{
-   GLuint i;
-   for (i = 0; i < parseState->numConstants; i++) {
-      if (_mesa_strcmp(parseState->constants[i].Name, name) == 0)
-         return parseState->constants[i].Values;
+   GLint i;
+   for (i = 0; i < parseState->numParameters; i++) {
+      if (_mesa_strcmp(parseState->parameters[i].Name, name) == 0)
+         return i;
    }
-   return NULL;
+   return -1;
 }
 
 
@@ -571,7 +564,8 @@ Parse_ScalarConstant(struct parse_state *parseState, GLfloat *number)
       const GLfloat *constant;
       if (!Parse_Identifier(parseState, ident))
          RETURN_ERROR1("Expected an identifier");
-      constant = lookup_constant(parseState, (const char *) ident);
+      constant = lookup_parameter(parseState, (const char *) ident);
+      /* XXX Check that it's a constant and not a parameter */
       if (!constant) {
          RETURN_ERROR1("Undefined symbol");
       }
@@ -596,11 +590,12 @@ Parse_VectorConstant(struct parse_state *parseState, GLfloat *vec)
 {
    /* "{" was already consumed */
 
+   ASSIGN_4V(vec, 0.0, 0.0, 0.0, 1.0);
+
    if (!Parse_ScalarConstant(parseState, vec+0))  /* X */
       return GL_FALSE;
 
    if (Parse_String(parseState, "}")) {
-      vec[1] = vec[2] = vec[3] = vec[0];
       return GL_TRUE;
    }
 
@@ -611,7 +606,6 @@ Parse_VectorConstant(struct parse_state *parseState, GLfloat *vec)
       return GL_FALSE;
 
    if (Parse_String(parseState, "}")) {
-      vec[2] = vec[3] = vec[1];
       return GL_TRUE;
    }
 
@@ -622,7 +616,6 @@ Parse_VectorConstant(struct parse_state *parseState, GLfloat *vec)
       return GL_FALSE;
 
    if (Parse_String(parseState, "}")) {
-      vec[3] = vec[2];
       return GL_TRUE;
    }
 
@@ -1106,26 +1099,34 @@ Parse_VectorSrc(struct parse_state *parseState,
          RETURN_ERROR;
    }
    else if (IsLetter(token[0])){
-      /* XXX named constant */
       GLubyte ident[100];
+      GLint paramIndex;
       if (!Parse_Identifier(parseState, ident))
          RETURN_ERROR;
-      srcReg->Register = 0; /* XXX fix */
+      paramIndex = lookup_parameter_index(parseState, (const char *) ident);
+      if (paramIndex < 0) {
+         RETURN_ERROR2("Undefined constant or parameter: ", ident);
+      }
+      srcReg->IsParameter = GL_TRUE;
+      srcReg->Register = paramIndex;      
    }
    else if (IsDigit(token[0]) || token[0] == '-' || token[0] == '+'){
-      /* XXX literal scalar constant */
+      /* literal scalar constant */
       GLfloat values[4];
       if (!Parse_ScalarConstant(parseState, values))
          RETURN_ERROR;
       srcReg->Register = 0; /* XXX fix */
    }
    else if (token[0] == '{'){
-      /* XXX literal vector constant */
+      /* literal vector constant */
       GLfloat values[4];
+      GLuint paramIndex;
       (void) Parse_String(parseState, "{");
       if (!Parse_VectorConstant(parseState, values))
          RETURN_ERROR;
-      srcReg->Register = 0; /* XXX fix */
+      paramIndex = add_unnamed_constant(parseState, values);
+      srcReg->IsParameter = GL_TRUE;
+      srcReg->Register = paramIndex;      
    }
    else {
       RETURN_ERROR2("Invalid source register name", token);
@@ -1160,13 +1161,32 @@ Parse_ScalarSrcReg(struct parse_state *parseState,
                    struct fp_src_register *srcReg)
 {
    GLubyte token[100];
+   GLfloat sign = 1.0F;
+   GLboolean needSuffix = GL_TRUE;
 
-   /* check for '-' */
-   if (Parse_String(parseState, "-")) {
-      srcReg->NegateBase = GL_TRUE;
+   /*
+    * First, take care of +/- and absolute value stuff.
+    */
+   if (Parse_String(parseState, "-"))
+      sign = -1.0F;
+   else if (Parse_String(parseState, "+"))
+      sign = +1.0F;
+
+   if (Parse_String(parseState, "|")) {
+      srcReg->Abs = GL_TRUE;
+      srcReg->NegateAbs = (sign < 0.0F) ? GL_TRUE : GL_FALSE;
+
+      if (Parse_String(parseState, "-"))
+         srcReg->NegateBase = GL_TRUE;
+      else if (Parse_String(parseState, "+"))
+         srcReg->NegateBase = GL_FALSE;
+      else
+         srcReg->NegateBase = GL_FALSE;
    }
    else {
-      srcReg->NegateBase = GL_FALSE;
+      srcReg->Abs = GL_FALSE;
+      srcReg->NegateAbs = GL_FALSE;
+      srcReg->NegateBase = (sign < 0.0F) ? GL_TRUE : GL_FALSE;
    }
 
    if (!Peek_Token(parseState, token))
@@ -1181,33 +1201,65 @@ Parse_ScalarSrcReg(struct parse_state *parseState,
       if (!Parse_FragReg(parseState, &srcReg->Register))
          RETURN_ERROR;
    }
+   else if (token[0] == '{') {
+      /* vector literal */
+      GLfloat values[4];
+      GLuint paramIndex;
+      (void) Parse_String(parseState, "{");
+      if (!Parse_VectorConstant(parseState, values))
+         RETURN_ERROR;
+      paramIndex = add_unnamed_constant(parseState, values);
+      srcReg->IsParameter = GL_TRUE;
+      srcReg->Register = paramIndex;      
+   }
+   else if (IsDigit(token[0])) {
+      /* scalar literal */
+      GLfloat values[4];
+      GLuint paramIndex;
+      if (!Parse_ScalarConstant(parseState, values))
+         RETURN_ERROR;
+      paramIndex = add_unnamed_constant(parseState, values);
+      srcReg->IsParameter = GL_TRUE;
+      srcReg->Register = paramIndex;      
+      needSuffix = GL_FALSE;
+   }
    else {
-      RETURN_ERROR2("Invalid source register name", token);
+      RETURN_ERROR2("Invalid scalar source argument", token);
    }
 
-   /* Look for .[xyzw] suffix */
-   if (!Parse_String(parseState, "."))
-      RETURN_ERROR1("Expected .");
+   if (needSuffix) {
+      /* parse .[xyzw] suffix */
+      if (!Parse_String(parseState, "."))
+         RETURN_ERROR1("Expected .");
 
-   if (!Parse_Token(parseState, token))
-      RETURN_ERROR;
+      if (!Parse_Token(parseState, token))
+         RETURN_ERROR;
 
-   if (token[0] == 'x' && token[1] == 0) {
+      if (token[0] == 'x' && token[1] == 0) {
+         srcReg->Swizzle[0] = 0;
+      }
+      else if (token[0] == 'y' && token[1] == 0) {
+         srcReg->Swizzle[0] = 1;
+      }
+      else if (token[0] == 'z' && token[1] == 0) {
+         srcReg->Swizzle[0] = 2;
+      }
+      else if (token[0] == 'w' && token[1] == 0) {
+         srcReg->Swizzle[0] = 3;
+      }
+      else {
+         RETURN_ERROR1("Invalid scalar source suffix");
+      }
+   }
+   else {
       srcReg->Swizzle[0] = 0;
    }
-   else if (token[0] == 'y' && token[1] == 0) {
-      srcReg->Swizzle[0] = 1;
-   }
-   else if (token[0] == 'z' && token[1] == 0) {
-      srcReg->Swizzle[0] = 2;
-   }
-   else if (token[0] == 'w' && token[1] == 0) {
-      srcReg->Swizzle[0] = 3;
-   }
-   else {
-      RETURN_ERROR1("Invalid scalar source suffix");
-   }
    srcReg->Swizzle[1] = srcReg->Swizzle[2] = srcReg->Swizzle[3] = 0;
+
+   /* Finish absolute value */
+   if (srcReg->Abs && !Parse_String(parseState, "|")) {
+      RETURN_ERROR1("Expected |");
+   }
 
    return GL_TRUE;
 }
@@ -1227,7 +1279,14 @@ Parse_InstructionSequence(struct parse_state *parseState,
       inst->SrcReg[0].Register = -1;
       inst->SrcReg[1].Register = -1;
       inst->SrcReg[2].Register = -1;
+      inst->SrcReg[0].IsParameter = GL_FALSE;
+      inst->SrcReg[1].IsParameter = GL_FALSE;
+      inst->SrcReg[2].IsParameter = GL_FALSE;
       inst->DstReg.Register = -1;
+      inst->DstReg.CondSwizzle[0] = 0;
+      inst->DstReg.CondSwizzle[1] = 1;
+      inst->DstReg.CondSwizzle[2] = 2;
+      inst->DstReg.CondSwizzle[3] = 3;
 
       /* special instructions */
       if (Parse_String(parseState, "DEFINE")) {
@@ -1242,12 +1301,10 @@ Parse_InstructionSequence(struct parse_state *parseState,
             RETURN_ERROR;
          if (!Parse_String(parseState, ";"))
             RETURN_ERROR1("Expected ;");
-         printf("Parsed DEFINE %s = %f %f %f %f\n", id, value[0], value[1],
-                value[2], value[3]);
          if (lookup_parameter(parseState, (const char *) id)) {
             RETURN_ERROR2(id, "already defined");
          }
-         add_parameter(parseState, (const char *) id, value);
+         add_parameter(parseState, (const char *) id, value, GL_TRUE);
       }
       else if (Parse_String(parseState, "DECLARE")) {
          GLubyte id[100];
@@ -1258,18 +1315,13 @@ Parse_InstructionSequence(struct parse_state *parseState,
          if (Parse_String(parseState, "=")) {
             if (!Parse_VectorOrScalarConstant(parseState, value))
                RETURN_ERROR;
-            printf("Parsed DECLARE %s = %f %f %f %f\n", id,
-                   value[0], value[1], value[2], value[3]);
-         }
-         else {
-            printf("Parsed DECLARE %s\n", id);
          }
          if (!Parse_String(parseState, ";"))
             RETURN_ERROR1("Expected ;");
-         if (lookup_constant(parseState, (const char *) id)) {
+         if (lookup_parameter(parseState, (const char *) id)) {
             RETURN_ERROR2(id, "already declared");
          }
-         add_constant(parseState, (const char *) id, value);
+         add_parameter(parseState, (const char *) id, value, GL_FALSE);
       }
       else if (Parse_String(parseState, "END")) {
          inst->Opcode = FP_OPCODE_END;
@@ -1328,7 +1380,7 @@ Parse_InstructionSequence(struct parse_state *parseState,
                RETURN_ERROR;
          }
          else if (instMatch.inputs == INPUT_3V) {
-            if (!Parse_VectorSrc(parseState, &inst->SrcReg[1]))
+            if (!Parse_VectorSrc(parseState, &inst->SrcReg[0]))
                RETURN_ERROR;
             if (!Parse_String(parseState, ","))
                RETURN_ERROR1("Expected ,");
@@ -1336,11 +1388,11 @@ Parse_InstructionSequence(struct parse_state *parseState,
                RETURN_ERROR;
             if (!Parse_String(parseState, ","))
                RETURN_ERROR1("Expected ,");
-            if (!Parse_VectorSrc(parseState, &inst->SrcReg[1]))
+            if (!Parse_VectorSrc(parseState, &inst->SrcReg[2]))
                RETURN_ERROR;
          }
          else if (instMatch.inputs == INPUT_1S) {
-            if (!Parse_ScalarSrcReg(parseState, &inst->SrcReg[1]))
+            if (!Parse_ScalarSrcReg(parseState, &inst->SrcReg[0]))
                RETURN_ERROR;
          }
          else if (instMatch.inputs == INPUT_2S) {
@@ -1485,6 +1537,7 @@ _mesa_parse_nv_fragment_program(GLcontext *ctx, GLenum dstTarget,
          FREE(program->Base.String);
       }
       program->Base.String = programString;
+      program->Base.Format = GL_PROGRAM_FORMAT_ASCII_ARB;
       if (program->Instructions) {
          FREE(program->Instructions);
       }
@@ -1533,7 +1586,8 @@ _mesa_parse_nv_fragment_program(GLcontext *ctx, GLenum dstTarget,
 
 
 static void
-PrintSrcReg(const struct fp_src_register *src)
+PrintSrcReg(const struct fragment_program *program,
+            const struct fp_src_register *src)
 {
    static const char comps[5] = "xyzw";
    GLint r;
@@ -1547,7 +1601,19 @@ PrintSrcReg(const struct fp_src_register *src)
    if (src->NegateBase) {
       _mesa_printf("-");
    }
-   if ((r = OutputRegisterNumber(src->Register)) >= 0) {
+   if (src->IsParameter) {
+      if (program->Parameters[src->Register].Constant) {
+         printf("{%g, %g, %g, %g}",
+                program->Parameters[src->Register].Values[0],
+                program->Parameters[src->Register].Values[1],
+                program->Parameters[src->Register].Values[2],
+                program->Parameters[src->Register].Values[3]);
+      }
+      else {
+         printf("%s", program->Parameters[src->Register].Name);
+      }
+   }
+   else if ((r = OutputRegisterNumber(src->Register)) >= 0) {
       _mesa_printf("o[%s]", OutputRegisters[r]);
    }
    else if ((r = InputRegisterNumber(src->Register)) >= 0) {
@@ -1652,7 +1718,7 @@ PrintDstReg(const struct fp_dst_register *dst)
       _mesa_printf("o[%s]", OutputRegisters[r]);
    }
    else if ((r = HalfTempRegisterNumber(dst->Register)) >= 0) {
-      _mesa_printf("H[%s]", InputRegisters[r]);
+      _mesa_printf("H%d", r);
    }
    else if ((r = TempRegisterNumber(dst->Register)) >= 0) {
       _mesa_printf("R%d", r);
@@ -1728,32 +1794,32 @@ _mesa_print_nv_fragment_program(const struct fragment_program *program)
             /* print source register(s) */
             if (Instructions[i].inputs == INPUT_1V ||
                 Instructions[i].inputs == INPUT_1S) {
-               PrintSrcReg(&inst->SrcReg[0]);
+               PrintSrcReg(program, &inst->SrcReg[0]);
             }
             else if (Instructions[i].inputs == INPUT_2V ||
                      Instructions[i].inputs == INPUT_2S) {
-               PrintSrcReg(&inst->SrcReg[0]);
+               PrintSrcReg(program, &inst->SrcReg[0]);
                _mesa_printf(", ");
-               PrintSrcReg(&inst->SrcReg[1]);
+               PrintSrcReg(program, &inst->SrcReg[1]);
             }
             else if (Instructions[i].inputs == INPUT_3V) {
-               PrintSrcReg(&inst->SrcReg[0]);
+               PrintSrcReg(program, &inst->SrcReg[0]);
                _mesa_printf(", ");
-               PrintSrcReg(&inst->SrcReg[1]);
+               PrintSrcReg(program, &inst->SrcReg[1]);
                _mesa_printf(", ");
-               PrintSrcReg(&inst->SrcReg[2]);
+               PrintSrcReg(program, &inst->SrcReg[2]);
             }
             else if (Instructions[i].inputs == INPUT_1V_T) {
-               PrintSrcReg(&inst->SrcReg[0]);
+               PrintSrcReg(program, &inst->SrcReg[0]);
                _mesa_printf(", ");
                PrintTextureSrc(inst);
             }
             else if (Instructions[i].inputs == INPUT_3V_T) {
-               PrintSrcReg(&inst->SrcReg[0]);
+               PrintSrcReg(program, &inst->SrcReg[0]);
                _mesa_printf(", ");
-               PrintSrcReg(&inst->SrcReg[1]);
+               PrintSrcReg(program, &inst->SrcReg[1]);
                _mesa_printf(", ");
-               PrintSrcReg(&inst->SrcReg[2]);
+               PrintSrcReg(program, &inst->SrcReg[2]);
                _mesa_printf(", ");
                PrintTextureSrc(inst);
             }

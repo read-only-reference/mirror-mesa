@@ -1,5 +1,3 @@
-/* $Id: gl.h,v 1.75 2003/02/28 16:31:32 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -2647,6 +2645,7 @@ GLAPI void GLAPIENTRY glTracePointerRangeMESA( const GLvoid* first, const GLvoid
 
 
 
+/* XXX temporary until glext.h is updated! */
 #ifndef GL_NV_fragment_program
 #define GL_NV_fragment_program 1
 
@@ -2658,55 +2657,77 @@ GLAPI void GLAPIENTRY glTracePointerRangeMESA( const GLvoid* first, const GLvoid
 #define GL_MAX_FRAGMENT_PROGRAM_LOCAL_PARAMETERS_NV 0x8868
 
 
-GLAPI void GLAPIENTRY
-glProgramNamedParameter4fNV(GLuint id, GLsizei len, const GLubyte *name,
-                            GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+GLAPI void GLAPIENTRY glProgramNamedParameter4fNV(GLuint id, GLsizei len, const GLubyte *name, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
 
-GLAPI void GLAPIENTRY
-glProgramNamedParameter4dNV(GLuint id, GLsizei len, const GLubyte *name,
-                            GLdouble x, GLdouble y, GLdouble z, GLdouble w);
+GLAPI void GLAPIENTRY glProgramNamedParameter4dNV(GLuint id, GLsizei len, const GLubyte *name, GLdouble x, GLdouble y, GLdouble z, GLdouble w);
 
-GLAPI void GLAPIENTRY
-glProgramNamedParameter4fvNV(GLuint id, GLsizei len, const GLubyte *name,
-                             const float v[]);
+GLAPI void GLAPIENTRY glProgramNamedParameter4fvNV(GLuint id, GLsizei len, const GLubyte *name, const float v[]);
 
-GLAPI void GLAPIENTRY
-glProgramNamedParameter4dvNV(GLuint id, GLsizei len, const GLubyte *name,
-                             const double v[]);
+GLAPI void GLAPIENTRY glProgramNamedParameter4dvNV(GLuint id, GLsizei len, const GLubyte *name, const double v[]);
 
-GLAPI void GLAPIENTRY
-glGetProgramNamedParameterfvNV(GLuint id, GLsizei len, const GLubyte *name,
-                               GLfloat *params);
+GLAPI void GLAPIENTRY glGetProgramNamedParameterfvNV(GLuint id, GLsizei len, const GLubyte *name, GLfloat *params);
 
-GLAPI void GLAPIENTRY
-glGetProgramNamedParameterdvNV(GLuint id, GLsizei len, const GLubyte *name,
-                               GLdouble *params);
+GLAPI void GLAPIENTRY glGetProgramNamedParameterdvNV(GLuint id, GLsizei len, const GLubyte *name, GLdouble *params);
 
-GLAPI void GLAPIENTRY
-glProgramLocalParameter4dARB(GLenum target, GLuint index,
-                             GLdouble x, GLdouble y, GLdouble z, GLdouble w);
+GLAPI void GLAPIENTRY glProgramLocalParameter4dARB(GLenum target, GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w);
 
-GLAPI void GLAPIENTRY
-glProgramLocalParameter4dvARB(GLenum target, GLuint index,
-                              const GLdouble *params);
+GLAPI void GLAPIENTRY glProgramLocalParameter4dvARB(GLenum target, GLuint index, const GLdouble *params);
 
-GLAPI void GLAPIENTRY
-glProgramLocalParameter4fARB(GLenum target, GLuint index,
-                             GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+GLAPI void GLAPIENTRY glProgramLocalParameter4fARB(GLenum target, GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
 
-GLAPI void GLAPIENTRY
-glProgramLocalParameter4fvARB(GLenum target, GLuint index,
-                              const GLfloat *params);
+GLAPI void GLAPIENTRY glProgramLocalParameter4fvARB(GLenum target, GLuint index, const GLfloat *params);
 
-GLAPI void GLAPIENTRY
-glGetProgramLocalParameterdvARB(GLenum target, GLuint index, GLdouble *params);
+GLAPI void GLAPIENTRY glGetProgramLocalParameterdvARB(GLenum target, GLuint index, GLdouble *params);
 
-GLAPI void GLAPIENTRY
-glGetProgramLocalParameterfvARB(GLenum target, GLuint index, GLfloat *params);
+GLAPI void GLAPIENTRY glGetProgramLocalParameterfvARB(GLenum target, GLuint index, GLfloat *params);
 
+typedef void (APIENTRY * PFNGLPROGRAMNAMEDPARAMETER4FNVPROC) (GLuint id, GLsizei len, const GLubyte * name, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+typedef void (APIENTRY * PFNGLPROGRAMNAMEDPARAMETER4DNVPROC) (GLuint id, GLsizei len, const GLubyte * name, GLdouble x, GLdouble y, GLdouble z, GLdouble w);
+typedef void (APIENTRY * PFNGLPROGRAMNAMEDPARAMETER4FVNVPROC) (GLuint id, GLsizei len, const GLubyte * name, const GLfloat *v);
+typedef void (APIENTRY * PFNGLPROGRAMNAMEDPARAMETER4DVNVPROC) (GLuint id, GLsizei len, const GLubyte * name, const GLdouble *v);   
+typedef void (APIENTRY * PFNGLGETPROGRAMNAMEDPARAMETERFVNVPROC) (GLuint id, GLsizei len, const GLubyte * name, GLfloat *params);
+typedef void (APIENTRY * PFNGLGETPROGRAMNAMEDPARAMETERDVNVPROC) (GLuint id, GLsizei len, const GLubyte * name, GLdouble *params);
 
 #endif /* GL_NV_fragment_program */
 
+
+
+/* XXX temporary until glext.h is updated! */
+#ifndef GL_ARB_fragment_program
+#define GL_ARB_fragment_program 1
+
+#define GL_FRAGMENT_PROGRAM_ARB                            0x8804
+#define GL_PROGRAM_ALU_INSTRUCTIONS_ARB                    0x8805
+#define GL_PROGRAM_TEX_INSTRUCTIONS_ARB                    0x8806
+#define GL_PROGRAM_TEX_INDIRECTIONS_ARB                    0x8807
+#define GL_PROGRAM_NATIVE_ALU_INSTRUCTIONS_ARB             0x8808
+#define GL_PROGRAM_NATIVE_TEX_INSTRUCTIONS_ARB             0x8809
+#define GL_PROGRAM_NATIVE_TEX_INDIRECTIONS_ARB             0x880A
+#define GL_MAX_PROGRAM_ALU_INSTRUCTIONS_ARB                0x880B
+#define GL_MAX_PROGRAM_TEX_INSTRUCTIONS_ARB                0x880C
+#define GL_MAX_PROGRAM_TEX_INDIRECTIONS_ARB                0x880D
+#define GL_MAX_PROGRAM_NATIVE_ALU_INSTRUCTIONS_ARB         0x880E
+#define GL_MAX_PROGRAM_NATIVE_TEX_INSTRUCTIONS_ARB         0x880F
+#define GL_MAX_PROGRAM_NATIVE_TEX_INDIRECTIONS_ARB         0x8810
+#define GL_MAX_TEXTURE_COORDS_ARB                          0x8871
+#define GL_MAX_TEXTURE_IMAGE_UNITS_ARB                     0x8872
+
+#endif /* GL_ARB_fragment_program */
+
+
+
+/* XXX temporary until glext.h is updated! */
+#ifndef GL_EXT_depth_bounds_test
+#define GL_EXT_depth_bounds_test 1
+
+#define GL_DEPTH_BOUNDS_TEST_EXT                       0x8890
+#define GL_DEPTH_BOUNDS_EXT                            0x8891
+
+GLAPI void GLAPIENTRY glDepthBoundsEXT(GLclampd zmin, GLclampd zmax);
+
+typedef void (APIENTRY * PFNGLDEPTHBOUNDSEXTPROC)(GLclampd zmin, GLclampd zmax);
+
+#endif /* GL_EXT_depth_bounds_test */
 
 
 

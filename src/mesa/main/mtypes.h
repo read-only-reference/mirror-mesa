@@ -1,10 +1,8 @@
-/* $Id: mtypes.h,v 1.108 2003/03/29 17:01:00 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
- * Version:  4.1
+ * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -399,6 +397,8 @@ struct gl_depthbuffer_attrib {
    GLboolean Test;		/* Depth buffering enabled flag */
    GLboolean Mask;		/* Depth buffer writable? */
    GLboolean OcclusionTest;	/* GL_HP_occlusion_test */
+   GLboolean BoundsTest;        /* GL_EXT_depth_bounds_test */
+   GLfloat BoundsMin, BoundsMax;/* GL_EXT_depth_bounds_test */
 };
 
 
@@ -1006,6 +1006,7 @@ struct gl_texture_attrib {
    GLuint CurrentUnit;	        /* Active texture unit */
 
    GLuint _EnabledUnits;        /* one bit set for each really-enabled unit */
+   GLuint _EnabledCoordUnits;   /* one bit per enabled coordinate unit */
    GLuint _GenFlags;            /* for texgen */
    GLuint _TexGenEnabled;	
    GLuint _TexMatEnabled;
@@ -1082,6 +1083,7 @@ struct gl_client_array {
    void *Ptr;
    GLuint Flags;
    GLuint Enabled;		/* one of the _NEW_ARRAY_ bits */
+   GLboolean Normalized;        /* GL_ARB_vertex_program */
 };
 
 
@@ -1094,8 +1096,8 @@ struct gl_array_attrib {
    struct gl_client_array Index;
    struct gl_client_array TexCoord[MAX_TEXTURE_COORD_UNITS];
    struct gl_client_array EdgeFlag;
-
-   struct gl_client_array VertexAttrib[16];  /* GL_NV_vertex_program */
+   /* GL_NV_vertex_program */
+   struct gl_client_array VertexAttrib[VERT_ATTRIB_MAX];
 
    GLint TexCoordInterleaveFactor;
    GLint ActiveTexture;		/* Client Active Texture */
@@ -1104,6 +1106,20 @@ struct gl_array_attrib {
 
    GLuint _Enabled;		/* _NEW_ARRAY_* - bit set if array enabled */
    GLuint NewState;		/* _NEW_ARRAY_* */
+
+   /* GL_ARB_vertex_buffer_object */
+   GLuint ArrayBufferBinding;
+   GLuint VertexArrayBufferBinding;
+   GLuint NormalArrayBufferBinding;
+   GLuint ColorArrayBufferBinding;
+   GLuint IndexArrayBufferBinding;
+   GLuint TextureArrayBufferBinding;
+   GLuint EdgeFlagArrayBufferBinding;
+   GLuint SecondaryColorArrayBufferBinding;
+   GLuint FogCoordArrayBufferBinding;
+   GLuint WeightArrayBufferBinding;
+   GLuint ElementArrayBufferBinding;
+   GLuint VertexAttribArrayBufferBinding[VERT_ATTRIB_MAX];
 };
 
 
@@ -1213,6 +1229,7 @@ struct program_parameter
 {
    const char *Name;
    GLfloat Values[4];
+   GLboolean Constant;
 };
 
 
@@ -1222,8 +1239,15 @@ struct program
    GLuint Id;
    GLubyte *String;    /* Null-terminated program text */
    GLenum Target;
+   GLenum Format;      /* String encoding format */
    GLint RefCount;
    GLboolean Resident;
+   GLfloat LocalParams[MAX_PROGRAM_LOCAL_PARAMS][4];
+   GLuint NumInstructions;  /* GL_ARB_vertex/fragment_program */
+   GLuint NumTemporaries;
+   GLuint NumParameters;
+   GLuint NumAttributes;
+   GLuint NumAddressRegs;
 };
 
 
@@ -1246,9 +1270,11 @@ struct fragment_program
    GLuint InputsRead;     /* Bitmask of which input regs are read */
    GLuint OutputsWritten; /* Bitmask of which output regs are written to */
    GLuint TexturesUsed[MAX_TEXTURE_IMAGE_UNITS];  /* TEXTURE_x_INDEX bitmask */
-   GLfloat LocalParams[MAX_NV_FRAGMENT_PROGRAM_PARAMS][4];
-   GLuint NumParameters;
+   GLuint NumAluInstructions; /* GL_ARB_fragment_program */
+   GLuint NumTexInstructions;
+   GLuint NumTexIndirections;
    struct program_parameter *Parameters; /* array [NumParameters] */
+   GLuint NumParameters;
 };
 
 
@@ -1262,7 +1288,7 @@ struct program_state {
 
 
 /*
- * State for GL_NV_vertex_program
+ * State for GL_ARB/NV_vertex_program
  */
 struct vertex_program_state
 {
@@ -1278,7 +1304,7 @@ struct vertex_program_state
 
 
 /*
- * State for GL_NV_fragment_program
+ * State for GL_ARB/NV_fragment_program
  */
 struct fragment_program_state
 {
@@ -1307,6 +1333,12 @@ struct gl_shared_state {
 
    /* GL_NV_vertex/_program */
    struct _mesa_HashTable *Programs;
+#if FEATURE_ARB_vertex_program
+   struct program *DefaultVertexProgram;
+#endif
+#if FEATURE_ARB_fragment_program
+   struct program *DefaultFragmentProgram;
+#endif
 
    void *DriverData;  /* Device driver shared state */
 };
@@ -1377,6 +1409,26 @@ struct gl_constants {
    GLuint MaxConvolutionHeight;
    GLuint MaxClipPlanes;
    GLuint MaxLights;
+   /* GL_ARB_vertex_program */
+   GLuint MaxVertexProgramInstructions;
+   GLuint MaxVertexProgramAttribs;
+   GLuint MaxVertexProgramTemps;
+   GLuint MaxVertexProgramLocalParams;
+   GLuint MaxVertexProgramEnvParams;
+   GLuint MaxVertexProgramAddressRegs;
+   /* GL_ARB_fragment_program */
+   GLuint MaxFragmentProgramInstructions;
+   GLuint MaxFragmentProgramAttribs;
+   GLuint MaxFragmentProgramTemps;
+   GLuint MaxFragmentProgramLocalParams;
+   GLuint MaxFragmentProgramEnvParams;
+   GLuint MaxFragmentProgramAddressRegs;
+   GLuint MaxFragmentProgramAluInstructions;
+   GLuint MaxFragmentProgramTexInstructions;
+   GLuint MaxFragmentProgramTexIndirections;
+   /* vertex or fragment program */
+   GLuint MaxProgramMatrices;
+   GLuint MaxProgramMatrixStackDepth;
 };
 
 
@@ -1391,6 +1443,7 @@ struct gl_extensions {
     * Not every extension needs to have such a flag, but it's encouraged.
     */
    GLboolean ARB_depth_texture;
+   GLboolean ARB_fragment_program;
    GLboolean ARB_imaging;
    GLboolean ARB_multisample;
    GLboolean ARB_multitexture;
@@ -1403,6 +1456,7 @@ struct gl_extensions {
    GLboolean ARB_texture_env_dot3;
    GLboolean ARB_texture_mirrored_repeat;
    GLboolean ARB_vertex_buffer_object;
+   GLboolean ARB_vertex_program;
    GLboolean ARB_window_pos;
    GLboolean ATI_texture_mirror_once;
    GLboolean ATI_texture_env_combine3;
@@ -1414,6 +1468,7 @@ struct gl_extensions {
    GLboolean EXT_clip_volume_hint;
    GLboolean EXT_convolution;
    GLboolean EXT_compiled_vertex_array;
+   GLboolean EXT_depth_bounds_test;
    GLboolean EXT_fog_coord;
    GLboolean EXT_histogram;
    GLboolean EXT_multi_draw_arrays;
@@ -1561,7 +1616,7 @@ struct matrix_stack
 #define _NEW_ARRAY_TEXCOORD_5       VERT_BIT_TEX5
 #define _NEW_ARRAY_TEXCOORD_6       VERT_BIT_TEX6
 #define _NEW_ARRAY_TEXCOORD_7       VERT_BIT_TEX7
-#define _NEW_ARRAY_ATTRIB_0         0x10000  /* start at bit 16 */
+#define _NEW_ARRAY_ATTRIB_0         0x1  /* alias conventional arrays */
 #define _NEW_ARRAY_ALL              0xffffffff
 
 

@@ -19,6 +19,7 @@ CORE_SOURCES =accum.c \
 	api_loopback.c \
 	api_noop.c \
 	api_validate.c \
+	arbprogram.c \
  	attrib.c \
 	blend.c \
 	bufferobj.c \
@@ -91,7 +92,6 @@ RASTER_SOURCES = [.swrast]s_aatriangle.c \
 [.swrast]s_alphabuf.c \
 [.swrast]s_bitmap.c \
 [.swrast]s_blend.c \
-[.swrast]s_bufferobj.c \
 [.swrast]s_buffers.c \
 [.swrast]s_copypix.c \
 [.swrast]s_context.c \
@@ -160,8 +160,10 @@ OBJECTS1=accum.obj,\
 api_loopback.obj,\
 api_noop.obj,\
 api_validate.obj,\
+arbprogram.obj,\
 attrib.obj,\
 blend.obj,\
+bufferobj.obj,\
 buffers.obj,\
 clip.obj,\
 colortab.obj,\

@@ -1,5 +1,3 @@
-/* $Id: nvvertparse.c,v 1.5 2003/03/29 16:38:08 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -1283,6 +1281,7 @@ _mesa_parse_nv_vertex_program(GLcontext *ctx, GLenum dstTarget,
          FREE(program->Base.String);
       }
       program->Base.String = programString;
+      program->Base.Format = GL_PROGRAM_FORMAT_ASCII_ARB;
       if (program->Instructions) {
          FREE(program->Instructions);
       }

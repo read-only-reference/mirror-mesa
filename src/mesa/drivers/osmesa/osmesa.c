@@ -1,5 +1,3 @@
-/* $Id: osmesa.c,v 1.101 2003/03/04 19:16:47 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -47,6 +45,8 @@
 #include "matrix.h"
 #include "mtypes.h"
 #include "texformat.h"
+#include "texobj.h"
+#include "teximage.h"
 #include "texstore.h"
 #include "array_cache/acache.h"
 #include "swrast/swrast.h"
@@ -69,7 +69,7 @@
  * or vice versa.
  */
 struct osmesa_context {
-   GLcontext gl_ctx;		/* The core GL/Mesa context */
+   GLcontext mesa;		/* The core GL/Mesa context */
    GLvisual *gl_visual;		/* Describes the buffers */
    GLframebuffer *gl_buffer;	/* Depth, stencil, accum, etc buffers */
    GLenum format;		/* either GL_RGBA or GL_COLOR_INDEX */
@@ -86,6 +86,7 @@ struct osmesa_context {
 };
 
 
+/* Just cast, since we're using structure containment */
 #define OSMESA_CONTEXT(ctx)  ((OSMesaContext) (ctx->DriverCtx))
 
 
@@ -648,7 +649,7 @@ hook_in_driver_functions( GLcontext *ctx )
 
    ctx->Driver.Accum = _swrast_Accum;
    ctx->Driver.Bitmap = _swrast_Bitmap;
-   ctx->Driver.Clear = clear;  /* = _swrast_Clear */
+   ctx->Driver.Clear = clear;  /* uses _swrast_Clear */
    ctx->Driver.CopyPixels = _swrast_CopyPixels;
    ctx->Driver.DrawPixels = _swrast_DrawPixels;
    ctx->Driver.ReadPixels = _swrast_ReadPixels;
@@ -958,9 +959,17 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
          return NULL;
       }
 
-      if (!_mesa_initialize_context(&osmesa->gl_ctx,
+      /* Setup these pointers here since they're using for making the default
+       * and proxy texture objects.  Actually, we don't really need to do
+       * this since we're using the default fallback functions which
+       * _mesa_initialize_context() would plug in if needed.
+       */
+      osmesa->mesa.Driver.NewTextureObject = _mesa_new_texture_object;
+      osmesa->mesa.Driver.DeleteTexture = _mesa_delete_texture_object;
+
+      if (!_mesa_initialize_context(&osmesa->mesa,
                                     osmesa->gl_visual,
-                                    sharelist ? &sharelist->gl_ctx
+                                    sharelist ? &sharelist->mesa
                                               : (GLcontext *) NULL,
                                     (void *) osmesa,
                                     GL_FALSE)) {
@@ -969,9 +978,9 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
          return NULL;
       }
 
-      _mesa_enable_sw_extensions(&(osmesa->gl_ctx));
-      _mesa_enable_1_3_extensions(&(osmesa->gl_ctx));
-      /*_mesa_enable_1_4_extensions(&(osmesa->gl_ctx));*/
+      _mesa_enable_sw_extensions(&(osmesa->mesa));
+      _mesa_enable_1_3_extensions(&(osmesa->mesa));
+      _mesa_enable_1_4_extensions(&(osmesa->mesa));
 
       osmesa->gl_buffer = _mesa_create_framebuffer( osmesa->gl_visual,
                            (GLboolean) ( osmesa->gl_visual->depthBits > 0 ),
@@ -981,7 +990,7 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
 
       if (!osmesa->gl_buffer) {
          _mesa_destroy_visual( osmesa->gl_visual );
-         _mesa_free_context_data( &osmesa->gl_ctx );
+         _mesa_free_context_data( &osmesa->mesa );
          FREE(osmesa);
          return NULL;
       }
@@ -1003,7 +1012,7 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
 
       /* Initialize the software rasterizer and helper modules. */
       {
-	 GLcontext *ctx = &osmesa->gl_ctx;
+	 GLcontext *ctx = &osmesa->mesa;
 
 	 _swrast_CreateContext( ctx );
 	 _ac_CreateContext( ctx );
@@ -1027,14 +1036,14 @@ GLAPI void GLAPIENTRY
 OSMesaDestroyContext( OSMesaContext ctx )
 {
    if (ctx) {
-      _swsetup_DestroyContext( &ctx->gl_ctx );
-      _tnl_DestroyContext( &ctx->gl_ctx );
-      _ac_DestroyContext( &ctx->gl_ctx );
-      _swrast_DestroyContext( &ctx->gl_ctx );
+      _swsetup_DestroyContext( &ctx->mesa );
+      _tnl_DestroyContext( &ctx->mesa );
+      _ac_DestroyContext( &ctx->mesa );
+      _swrast_DestroyContext( &ctx->mesa );
 
       _mesa_destroy_visual( ctx->gl_visual );
       _mesa_destroy_framebuffer( ctx->gl_buffer );
-      _mesa_free_context_data( &ctx->gl_ctx );
+      _mesa_free_context_data( &ctx->mesa );
       FREE( ctx );
    }
 }
@@ -1127,8 +1136,8 @@ OSMesaMakeCurrent( OSMesaContext ctx, void *buffer, GLenum type,
       return GL_FALSE;
    }
 
-   osmesa_update_state( &ctx->gl_ctx, 0 );
-   _mesa_make_current( &ctx->gl_ctx, ctx->gl_buffer );
+   osmesa_update_state( &ctx->mesa, 0 );
+   _mesa_make_current( &ctx->mesa, ctx->gl_buffer );
 
    ctx->buffer = buffer;
    ctx->width = width;
@@ -1141,11 +1150,11 @@ OSMesaMakeCurrent( OSMesaContext ctx, void *buffer, GLenum type,
    compute_row_addresses( ctx );
 
    /* init viewport */
-   if (ctx->gl_ctx.Viewport.Width == 0) {
+   if (ctx->mesa.Viewport.Width == 0) {
       /* initialize viewport and scissor box to buffer size */
       _mesa_Viewport( 0, 0, width, height );
-      ctx->gl_ctx.Scissor.Width = width;
-      ctx->gl_ctx.Scissor.Height = height;
+      ctx->mesa.Scissor.Width = width;
+      ctx->mesa.Scissor.Height = height;
    }
    else {
       /* this will make ensure we recognize the new buffer size */
@@ -1153,8 +1162,8 @@ OSMesaMakeCurrent( OSMesaContext ctx, void *buffer, GLenum type,
    }
 
    /* Added by Gerk Huisma: */
-   _tnl_MakeCurrent( &ctx->gl_ctx, ctx->gl_ctx.DrawBuffer,
-                     ctx->gl_ctx.ReadBuffer );
+   _tnl_MakeCurrent( &ctx->mesa, ctx->mesa.DrawBuffer,
+                     ctx->mesa.ReadBuffer );
 
    return GL_TRUE;
 }
@@ -1179,7 +1188,7 @@ GLAPI void GLAPIENTRY OSMesaPixelStore( GLint pname, GLint value )
    switch (pname) {
       case OSMESA_ROW_LENGTH:
          if (value<0) {
-            _mesa_error( &osmesa->gl_ctx, GL_INVALID_VALUE,
+            _mesa_error( &osmesa->mesa, GL_INVALID_VALUE,
                       "OSMesaPixelStore(value)" );
             return;
          }
@@ -1190,7 +1199,7 @@ GLAPI void GLAPIENTRY OSMesaPixelStore( GLint pname, GLint value )
          osmesa->yup = value ? GL_TRUE : GL_FALSE;
          break;
       default:
-         _mesa_error( &osmesa->gl_ctx, GL_INVALID_ENUM, "OSMesaPixelStore(pname)" );
+         _mesa_error( &osmesa->mesa, GL_INVALID_ENUM, "OSMesaPixelStore(pname)" );
          return;
    }
 
@@ -1228,7 +1237,7 @@ GLAPI void GLAPIENTRY OSMesaGetIntegerv( GLint pname, GLint *value )
          *value = MAX_HEIGHT;
          return;
       default:
-         _mesa_error(&osmesa->gl_ctx, GL_INVALID_ENUM, "OSMesaGetIntergerv(pname)");
+         _mesa_error(&osmesa->mesa, GL_INVALID_ENUM, "OSMesaGetIntergerv(pname)");
          return;
    }
 }

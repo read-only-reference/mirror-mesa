@@ -1,5 +1,3 @@
-/* $Id: s_nvfragprog.c,v 1.12 2003/03/25 02:23:47 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -25,7 +23,6 @@
  */
 
 
-
 #include "glheader.h"
 #include "colormac.h"
 #include "context.h"
@@ -37,20 +34,23 @@
 #include "s_texture.h"
 
 
+/* if 1, print some debugging info */
+#define DEBUG_FRAG 0
+
+
 /**
  * Fetch a texel.
  */
 static void
-fetch_texel( GLcontext *ctx, const GLfloat texcoord[4], GLuint unit,
-             GLfloat color[4] )
+fetch_texel( GLcontext *ctx, const GLfloat texcoord[4], GLfloat lambda,
+             GLuint unit, GLfloat color[4] )
 {
-   const GLfloat *lambda = NULL;
    GLchan rgba[4];
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
 
    swrast->TextureSample[unit](ctx, unit, ctx->Texture.Unit[unit]._Current,
                                1, (const GLfloat (*)[4]) texcoord,
-                               lambda, &rgba);
+                               &lambda, &rgba);
    color[0] = CHAN_TO_FLOAT(rgba[0]);
    color[1] = CHAN_TO_FLOAT(rgba[1]);
    color[2] = CHAN_TO_FLOAT(rgba[2]);
@@ -99,9 +99,17 @@ fetch_texel_deriv( GLcontext *ctx, const GLfloat texcoord[4],
 static void
 fetch_vector4( const struct fp_src_register *source,
                const struct fp_machine *machine,
+               const struct fragment_program *program,
                GLfloat result[4] )
 {
-   const GLfloat *src = machine->Registers[source->Register];
+   const GLfloat *src;
+
+   if (source->IsParameter) {
+      src = program->Parameters[source->Register].Values;
+   }
+   else {
+      src = machine->Registers[source->Register];
+   }
 
    result[0] = src[source->Swizzle[0]];
    result[1] = src[source->Swizzle[1]];
@@ -260,9 +268,17 @@ fetch_vector4_deriv( const struct fp_src_register *source,
 static void
 fetch_vector1( const struct fp_src_register *source,
                const struct fp_machine *machine,
+               const struct fragment_program *program,
                GLfloat result[4] )
 {
-   const GLfloat *src = machine->Registers[source->Register];
+   const GLfloat *src;
+
+   if (source->IsParameter) {
+      src = program->Parameters[source->Register].Values;
+   }
+   else {
+      src = machine->Registers[source->Register];
+   }
 
    result[0] = src[source->Swizzle[0]];
 
@@ -330,6 +346,15 @@ store_vector4( const struct fp_instruction *inst,
    GLfloat clampedValue[4];
    const GLboolean *writeMask = dest->WriteMask;
    GLboolean condWriteMask[4];
+
+#if DEBUG_FRAG
+   if (value[0] > 1.0e10 ||
+       IS_INF_OR_NAN(value[0]) ||
+       IS_INF_OR_NAN(value[1]) ||
+       IS_INF_OR_NAN(value[2]) ||
+       IS_INF_OR_NAN(value[3])  )
+      printf("store %g %g %g %g\n", value[0], value[1], value[2], value[3]);
+#endif
 
    if (clamp) {
       clampedValue[0] = CLAMP(value[0], 0.0F, 1.0F);
@@ -485,9 +510,14 @@ init_machine_deriv( GLcontext *ctx,
 static GLboolean
 execute_program( GLcontext *ctx,
                  const struct fragment_program *program, GLuint maxInst,
-                 struct fp_machine *machine, const struct sw_span *span )
+                 struct fp_machine *machine, const struct sw_span *span,
+                 GLuint column )
 {
-   GLuint pc = 0;
+   GLuint pc;
+
+#if DEBUG_FRAG
+   printf("execute fragment program --------------------\n");
+#endif
 
    for (pc = 0; pc < maxInst; pc++) {
       const struct fp_instruction *inst = program->Instructions + pc;
@@ -495,8 +525,8 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_ADD:
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = a[0] + b[0];
                result[1] = a[1] + b[1];
                result[2] = a[2] + b[2];
@@ -507,7 +537,7 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_COS:
             {
                GLfloat a[4], result[4];
-               fetch_vector1( &inst->SrcReg[0], machine, a );
+               fetch_vector1( &inst->SrcReg[0], machine, program, a );
                result[0] = result[1] = result[2] = result[3] = _mesa_cos(a[0]);
                store_vector4( inst, machine, result );
             }
@@ -524,10 +554,11 @@ execute_program( GLcontext *ctx,
                    * Finally, find the difference in the register values for
                    * the original and derivative runs.
                    */
+                  fetch_vector4( &inst->SrcReg[0], machine, program, a);
                   init_machine_deriv(ctx, machine, program, span,
                                      'X', &dMachine);
-                  execute_program(ctx, program, pc, &dMachine, span);
-                  fetch_vector4( &inst->SrcReg[0], &dMachine, aNext );
+                  execute_program(ctx, program, pc, &dMachine, span, column);
+                  fetch_vector4( &inst->SrcReg[0], &dMachine, program, aNext );
                   result[0] = aNext[0] - a[0];
                   result[1] = aNext[1] - a[1];
                   result[2] = aNext[2] - a[2];
@@ -543,8 +574,9 @@ execute_program( GLcontext *ctx,
                if (!fetch_vector4_deriv(&inst->SrcReg[0], span, 'Y', result)) {
                   init_machine_deriv(ctx, machine, program, span,
                                      'Y', &dMachine);
-                  execute_program(ctx, program, pc, &dMachine, span);
-                  fetch_vector4( &inst->SrcReg[0], &dMachine, aNext );
+                  fetch_vector4( &inst->SrcReg[0], machine, program, a);
+                  execute_program(ctx, program, pc, &dMachine, span, column);
+                  fetch_vector4( &inst->SrcReg[0], &dMachine, program, aNext );
                   result[0] = aNext[0] - a[0];
                   result[1] = aNext[1] - a[1];
                   result[2] = aNext[2] - a[2];
@@ -556,28 +588,32 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_DP3:
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = result[1] = result[2] = result[3] = 
-                  a[0] + b[0] + a[1] * b[1] + a[2] * b[2];
+                  a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
                store_vector4( inst, machine, result );
+#if DEBUG_FRAG
+               printf("DP3 %g = (%g %g %g) . (%g %g %g)\n",
+                      result[0], a[0], a[1], a[2], b[0], b[1], b[2]);
+#endif
             }
             break;
          case FP_OPCODE_DP4:
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = result[1] = result[2] = result[3] = 
-                  a[0] + b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+                  a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
                store_vector4( inst, machine, result );
             }
             break;
          case FP_OPCODE_DST: /* Distance vector */
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = 1.0F;
                result[1] = a[1] * b[1];
                result[2] = a[2];
@@ -588,7 +624,7 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_EX2: /* Exponential base 2 */
             {
                GLfloat a[4], result[4];
-               fetch_vector1( &inst->SrcReg[0], machine, a );
+               fetch_vector1( &inst->SrcReg[0], machine, program, a );
                result[0] = result[1] = result[2] = result[3] =
                   (GLfloat) _mesa_pow(2.0, a[0]);
                store_vector4( inst, machine, result );
@@ -597,7 +633,7 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_FLR:
             {
                GLfloat a[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
                result[0] = FLOORF(a[0]);
                result[1] = FLOORF(a[1]);
                result[2] = FLOORF(a[2]);
@@ -608,7 +644,7 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_FRC:
             {
                GLfloat a[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
                result[0] = a[0] - FLOORF(a[0]);
                result[1] = a[1] - FLOORF(a[1]);
                result[2] = a[2] - FLOORF(a[2]);
@@ -630,7 +666,7 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_LG2:  /* log base 2 */
             {
                GLfloat a[4], result[4];
-               fetch_vector1( &inst->SrcReg[0], machine, a );
+               fetch_vector1( &inst->SrcReg[0], machine, program, a );
                result[0] = result[1] = result[2] = result[3]
                   = LOG2(a[0]);
                store_vector4( inst, machine, result );
@@ -639,7 +675,7 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_LIT:
             {
                GLfloat a[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
                if (a[0] < 0.0F)
                   a[0] = 0.0F;
                if (a[1] < 0.0F)
@@ -654,9 +690,9 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_LRP:
             {
                GLfloat a[4], b[4], c[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
-               fetch_vector4( &inst->SrcReg[2], machine, c );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
+               fetch_vector4( &inst->SrcReg[2], machine, program, c );
                result[0] = a[0] * b[0] + (1.0F - a[0]) * c[0];
                result[1] = a[1] * b[1] + (1.0F - a[1]) * c[1];
                result[2] = a[2] * b[2] + (1.0F - a[2]) * c[2];
@@ -667,9 +703,9 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_MAD:
             {
                GLfloat a[4], b[4], c[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
-               fetch_vector4( &inst->SrcReg[2], machine, c );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
+               fetch_vector4( &inst->SrcReg[2], machine, program, c );
                result[0] = a[0] * b[0] + c[0];
                result[1] = a[1] * b[1] + c[1];
                result[2] = a[2] * b[2] + c[2];
@@ -680,8 +716,8 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_MAX:
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = MAX2(a[0], b[0]);
                result[1] = MAX2(a[1], b[1]);
                result[2] = MAX2(a[2], b[2]);
@@ -692,8 +728,8 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_MIN:
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = MIN2(a[0], b[0]);
                result[1] = MIN2(a[1], b[1]);
                result[2] = MIN2(a[2], b[2]);
@@ -704,20 +740,26 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_MOV:
             {
                GLfloat result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, result );
+               fetch_vector4( &inst->SrcReg[0], machine, program, result );
                store_vector4( inst, machine, result );
             }
             break;
          case FP_OPCODE_MUL:
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = a[0] * b[0];
                result[1] = a[1] * b[1];
                result[2] = a[2] * b[2];
                result[3] = a[3] * b[3];
                store_vector4( inst, machine, result );
+#if DEBUG_FRAG
+               printf("MUL (%g %g %g %g) = (%g %g %g %g) * (%g %g %g %g)\n",
+                      result[0], result[1], result[2], result[3], 
+                      a[0], a[1], a[2], a[3],
+                      b[0], b[1], b[2], b[3]);
+#endif
             }
             break;
          case FP_OPCODE_PK2H: /* pack two 16-bit floats */
@@ -726,7 +768,7 @@ execute_program( GLcontext *ctx,
                GLfloat a[4], result[4];
                const GLuint *rawBits = (const GLuint *) a;
                GLuint *rawResult = (GLuint *) result;
-               fetch_vector4( &inst->SrcReg[0], machine, a );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
                rawResult[0] = rawResult[1] = rawResult[2] = rawResult[3]
                   = rawBits[0] | (rawBits[1] << 16);
                store_vector4( inst, machine, result );
@@ -736,7 +778,7 @@ execute_program( GLcontext *ctx,
             {
                GLfloat a[4], result[4];
                GLuint usx, usy, *rawResult = (GLuint *) result;
-               fetch_vector4( &inst->SrcReg[0], machine, a );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
                a[0] = CLAMP(a[0], 0.0F, 1.0F);
                a[1] = CLAMP(a[0], 0.0F, 1.0F);
                usx = IROUND(a[0] * 65535.0F);
@@ -750,7 +792,7 @@ execute_program( GLcontext *ctx,
             {
                GLfloat a[4], result[4];
                GLuint ubx, uby, ubz, ubw, *rawResult = (GLuint *) result;
-               fetch_vector4( &inst->SrcReg[0], machine, a );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
                a[0] = CLAMP(a[0], -128.0F / 127.0F, 1.0F);
                a[1] = CLAMP(a[1], -128.0F / 127.0F, 1.0F);
                a[2] = CLAMP(a[2], -128.0F / 127.0F, 1.0F);
@@ -768,7 +810,7 @@ execute_program( GLcontext *ctx,
             {
                GLfloat a[4], result[4];
                GLuint ubx, uby, ubz, ubw, *rawResult = (GLuint *) result;
-               fetch_vector4( &inst->SrcReg[0], machine, a );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
                a[0] = CLAMP(a[0], 0.0F, 1.0F);
                a[1] = CLAMP(a[1], 0.0F, 1.0F);
                a[2] = CLAMP(a[2], 0.0F, 1.0F);
@@ -785,8 +827,8 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_POW:
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector1( &inst->SrcReg[0], machine, a );
-               fetch_vector1( &inst->SrcReg[1], machine, b );
+               fetch_vector1( &inst->SrcReg[0], machine, program, a );
+               fetch_vector1( &inst->SrcReg[1], machine, program, b );
                result[0] = result[1] = result[2] = result[3]
                   = _mesa_pow(a[0], b[0]);
                store_vector4( inst, machine, result );
@@ -795,7 +837,13 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_RCP:
             {
                GLfloat a[4], result[4];
-               fetch_vector1( &inst->SrcReg[0], machine, a );
+               fetch_vector1( &inst->SrcReg[0], machine, program, a );
+#if DEBUG_FRAG
+               if (a[0] == 0)
+                  printf("RCP(0)\n");
+               else if (IS_INF_OR_NAN(a[0]))
+                  printf("RCP(inf)\n");
+#endif
                result[0] = result[1] = result[2] = result[3]
                   = 1.0F / a[0];
                store_vector4( inst, machine, result );
@@ -804,8 +852,8 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_RFL:
             {
                GLfloat axis[4], dir[4], result[4], tmp[4];
-               fetch_vector4( &inst->SrcReg[0], machine, axis );
-               fetch_vector4( &inst->SrcReg[1], machine, dir );
+               fetch_vector4( &inst->SrcReg[0], machine, program, axis );
+               fetch_vector4( &inst->SrcReg[1], machine, program, dir );
                tmp[3] = axis[0] * axis[0]
                       + axis[1] * axis[1]
                       + axis[2] * axis[2];
@@ -822,16 +870,19 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_RSQ: /* 1 / sqrt() */
             {
                GLfloat a[4], result[4];
-               fetch_vector1( &inst->SrcReg[0], machine, a );
+               fetch_vector1( &inst->SrcReg[0], machine, program, a );
                result[0] = result[1] = result[2] = result[3] = INV_SQRTF(a[0]);
                store_vector4( inst, machine, result );
+#if DEBUG_FRAG
+               printf("RSQ %g = 1/sqrt(%g)\n", result[0], a[0]);
+#endif
             }
             break;
          case FP_OPCODE_SEQ: /* set on equal */
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = (a[0] == b[0]) ? 1.0F : 0.0F;
                result[1] = (a[1] == b[1]) ? 1.0F : 0.0F;
                result[2] = (a[2] == b[2]) ? 1.0F : 0.0F;
@@ -848,8 +899,8 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_SGE: /* set on greater or equal */
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = (a[0] >= b[0]) ? 1.0F : 0.0F;
                result[1] = (a[1] >= b[1]) ? 1.0F : 0.0F;
                result[2] = (a[2] >= b[2]) ? 1.0F : 0.0F;
@@ -860,8 +911,8 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_SGT: /* set on greater */
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = (a[0] > b[0]) ? 1.0F : 0.0F;
                result[1] = (a[1] > b[1]) ? 1.0F : 0.0F;
                result[2] = (a[2] > b[2]) ? 1.0F : 0.0F;
@@ -872,7 +923,7 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_SIN:
             {
                GLfloat a[4], result[4];
-               fetch_vector1( &inst->SrcReg[0], machine, a );
+               fetch_vector1( &inst->SrcReg[0], machine, program, a );
                result[0] = result[1] = result[2] = result[3] = _mesa_sin(a[0]);
                store_vector4( inst, machine, result );
             }
@@ -880,8 +931,8 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_SLE: /* set on less or equal */
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = (a[0] <= b[0]) ? 1.0F : 0.0F;
                result[1] = (a[1] <= b[1]) ? 1.0F : 0.0F;
                result[2] = (a[2] <= b[2]) ? 1.0F : 0.0F;
@@ -892,8 +943,8 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_SLT: /* set on less */
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = (a[0] < b[0]) ? 1.0F : 0.0F;
                result[1] = (a[1] < b[1]) ? 1.0F : 0.0F;
                result[2] = (a[2] < b[2]) ? 1.0F : 0.0F;
@@ -904,8 +955,8 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_SNE: /* set on not equal */
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = (a[0] != b[0]) ? 1.0F : 0.0F;
                result[1] = (a[1] != b[1]) ? 1.0F : 0.0F;
                result[2] = (a[2] != b[2]) ? 1.0F : 0.0F;
@@ -922,8 +973,8 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_SUB:
             {
                GLfloat a[4], b[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
                result[0] = a[0] - b[0];
                result[1] = a[1] - b[1];
                result[2] = a[2] - b[2];
@@ -935,9 +986,11 @@ execute_program( GLcontext *ctx,
             /* Texel lookup */
             {
                GLfloat texcoord[4], color[4];
-               fetch_vector4( &inst->SrcReg[0], machine, texcoord );
+               fetch_vector4( &inst->SrcReg[0], machine, program, texcoord );
                /* XXX: Undo perspective divide from interpolate_texcoords() */
-               fetch_texel( ctx, texcoord, inst->TexSrcUnit, color );
+               fetch_texel( ctx, texcoord,
+                            span->array->lambda[inst->TexSrcUnit][column],
+                            inst->TexSrcUnit, color );
                store_vector4( inst, machine, color );
             }
             break;
@@ -945,9 +998,9 @@ execute_program( GLcontext *ctx,
             /* Texture lookup w/ partial derivatives for LOD */
             {
                GLfloat texcoord[4], dtdx[4], dtdy[4], color[4];
-               fetch_vector4( &inst->SrcReg[0], machine, texcoord );
-               fetch_vector4( &inst->SrcReg[1], machine, dtdx );
-               fetch_vector4( &inst->SrcReg[2], machine, dtdy );
+               fetch_vector4( &inst->SrcReg[0], machine, program, texcoord );
+               fetch_vector4( &inst->SrcReg[1], machine, program, dtdx );
+               fetch_vector4( &inst->SrcReg[2], machine, program, dtdy );
                fetch_texel_deriv( ctx, texcoord, dtdx, dtdy, inst->TexSrcUnit,
                                   color );
                store_vector4( inst, machine, color );
@@ -957,9 +1010,11 @@ execute_program( GLcontext *ctx,
             /* Texture lookup w/ perspective divide */
             {
                GLfloat texcoord[4], color[4];
-               fetch_vector4( &inst->SrcReg[0], machine, texcoord );
+               fetch_vector4( &inst->SrcReg[0], machine, program, texcoord );
                /* Already did perspective divide in interpolate_texcoords() */
-               fetch_texel( ctx, texcoord, inst->TexSrcUnit, color );
+               fetch_texel( ctx, texcoord,
+                            span->array->lambda[inst->TexSrcUnit][column],
+                            inst->TexSrcUnit, color );
                store_vector4( inst, machine, color );
             }
             break;
@@ -969,7 +1024,7 @@ execute_program( GLcontext *ctx,
                GLfloat a[4], result[4];
                const GLuint *rawBits = (const GLuint *) a;
                GLuint *rawResult = (GLuint *) result;
-               fetch_vector1( &inst->SrcReg[0], machine, a );
+               fetch_vector1( &inst->SrcReg[0], machine, program, a );
                rawResult[0] = rawBits[0] & 0xffff;
                rawResult[1] = (rawBits[0] >> 16) & 0xffff;
                rawResult[2] = rawBits[0] & 0xffff;
@@ -981,7 +1036,7 @@ execute_program( GLcontext *ctx,
             {
                GLfloat a[4], result[4];
                const GLuint *rawBits = (const GLuint *) a;
-               fetch_vector1( &inst->SrcReg[0], machine, a );
+               fetch_vector1( &inst->SrcReg[0], machine, program, a );
                result[0] = (GLfloat) ((rawBits[0] >>  0) & 0xffff) / 65535.0F;
                result[1] = (GLfloat) ((rawBits[0] >> 16) & 0xffff) / 65535.0F;
                result[2] = result[0];
@@ -993,7 +1048,7 @@ execute_program( GLcontext *ctx,
             {
                GLfloat a[4], result[4];
                const GLuint *rawBits = (const GLuint *) a;
-               fetch_vector1( &inst->SrcReg[0], machine, a );
+               fetch_vector1( &inst->SrcReg[0], machine, program, a );
                result[0] = (((rawBits[0] >>  0) & 0xff) - 128) / 127.0F;
                result[0] = (((rawBits[0] >>  8) & 0xff) - 128) / 127.0F;
                result[0] = (((rawBits[0] >> 16) & 0xff) - 128) / 127.0F;
@@ -1005,7 +1060,7 @@ execute_program( GLcontext *ctx,
             {
                GLfloat a[4], result[4];
                const GLuint *rawBits = (const GLuint *) a;
-               fetch_vector1( &inst->SrcReg[0], machine, a );
+               fetch_vector1( &inst->SrcReg[0], machine, program, a );
                result[0] = ((rawBits[0] >>  0) & 0xff) / 255.0F;
                result[0] = ((rawBits[0] >>  8) & 0xff) / 255.0F;
                result[0] = ((rawBits[0] >> 16) & 0xff) / 255.0F;
@@ -1016,9 +1071,9 @@ execute_program( GLcontext *ctx,
          case FP_OPCODE_X2D: /* 2-D matrix transform */
             {
                GLfloat a[4], b[4], c[4], result[4];
-               fetch_vector4( &inst->SrcReg[0], machine, a );
-               fetch_vector4( &inst->SrcReg[1], machine, b );
-               fetch_vector4( &inst->SrcReg[2], machine, c );
+               fetch_vector4( &inst->SrcReg[0], machine, program, a );
+               fetch_vector4( &inst->SrcReg[1], machine, program, b );
+               fetch_vector4( &inst->SrcReg[2], machine, program, c );
                result[0] = a[0] + b[0] * c[0] + b[1] * c[1];
                result[1] = a[1] + b[0] * c[2] + b[1] * c[3];
                result[2] = a[2] + b[0] * c[0] + b[1] * c[1];
@@ -1052,7 +1107,7 @@ init_machine( GLcontext *ctx, struct fp_machine *machine,
    /* Load program local parameters */
    for (j = 0; j < MAX_NV_FRAGMENT_PROGRAM_PARAMS; j++) {
       COPY_4V(machine->Registers[FP_PROG_REG_START + j],
-              program->LocalParams[j]);
+              program->Base.LocalParams[j]);
    }
 
    /* Load input registers */
@@ -1087,12 +1142,9 @@ init_machine( GLcontext *ctx, struct fp_machine *machine,
    for (u = 0; u < ctx->Const.MaxTextureCoordUnits; u++) {
       if (program->InputsRead & (1 << (FRAG_ATTRIB_TEX0 + u))) {
          GLfloat *tex = machine->Registers[FP_INPUT_REG_START+FRAG_ATTRIB_TEX0+u];
-         if (ctx->Texture.Unit[u]._ReallyEnabled) {
-            COPY_4V(tex, span->array->texcoords[u][col]);
-         }
-         else {
-            COPY_4V(tex, ctx->Current.Attrib[VERT_ATTRIB_TEX0 + u]);
-         }
+         ASSERT(ctx->Texture._EnabledCoordUnits & (1 << u));
+         COPY_4V(tex, span->array->texcoords[u][col]);
+         ASSERT(tex[0] != 0 || tex[1] != 0 || tex[2] != 0);
       }
    }
 }
@@ -1110,7 +1162,7 @@ _swrast_exec_nv_fragment_program( GLcontext *ctx, struct sw_span *span )
                       ctx->FragmentProgram.Current, span, i);
 
          if (!execute_program(ctx, program, ~0,
-                              &ctx->FragmentProgram.Machine, span))
+                              &ctx->FragmentProgram.Machine, span, i))
             span->array->mask[i] = GL_FALSE;  /* killed fragment */
 
          /* Store output registers */

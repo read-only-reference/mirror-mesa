@@ -1,5 +1,3 @@
-/* $Id: teximage.c,v 1.126 2003/03/01 01:50:22 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -415,19 +413,26 @@ _mesa_set_tex_image(struct gl_texture_object *tObj,
 
 
 
-/*
+/**
  * Return new gl_texture_image struct with all fields initialized to zero.
+ * Called via ctx->Driver.NewTextureImage() unless overriden by a device
+ * driver.
  */
 struct gl_texture_image *
-_mesa_alloc_texture_image( void )
+_mesa_new_texture_image( GLcontext *ctx )
 {
+   (void) ctx;
    return CALLOC_STRUCT(gl_texture_image);
 }
 
 
 
+/**
+ * Delete/free the given texture image and associated image data if it's not
+ * marked as client data.
+ */
 void
-_mesa_free_texture_image( struct gl_texture_image *teximage )
+_mesa_delete_texture_image( struct gl_texture_image *teximage )
 {
    if (teximage->Data && !teximage->IsClientData) {
       MESA_PBUFFER_FREE( teximage->Data );
@@ -446,7 +451,8 @@ is_proxy_target(GLenum target)
    return (target == GL_PROXY_TEXTURE_1D ||
            target == GL_PROXY_TEXTURE_2D ||
            target == GL_PROXY_TEXTURE_3D ||
-           target == GL_PROXY_TEXTURE_CUBE_MAP_ARB);
+           target == GL_PROXY_TEXTURE_CUBE_MAP_ARB ||
+           target == GL_PROXY_TEXTURE_RECTANGLE_NV);
 }
 
 
@@ -577,6 +583,118 @@ _mesa_select_tex_image(GLcontext *ctx, const struct gl_texture_unit *texUnit,
 }
 
 
+/**
+ * Like _mesa_select_tex_image() but if the image doesn't exist, allocate
+ * it and install it.  Only return NULL if passed a bad parameter or run
+ * out of memory.
+ */
+struct gl_texture_image *
+_mesa_get_tex_image(GLcontext *ctx, const struct gl_texture_unit *texUnit,
+                    GLenum target, GLint level)
+{
+   struct gl_texture_image *texImage;
+   texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
+   if (!texImage) {
+      struct gl_texture_object *texObj;
+      texImage = ctx->Driver.NewTextureImage(ctx);
+      if (!texImage) {
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "texture image allocation");
+         return NULL;
+      }
+      texObj = _mesa_select_tex_object(ctx, texUnit, target);
+      ASSERT(texObj);
+      _mesa_set_tex_image(texObj, target, level, texImage);
+   }
+   return texImage;
+}
+
+
+/**
+ * Return pointer to the specified proxy texture image.
+ * Note that proxy textures are per-context, not per-texture unit.
+ * \return pointer to texture image or NULL if invalid target, invalid
+ *         level, or out of memory.
+ */
+struct gl_texture_image *
+_mesa_get_proxy_tex_image(GLcontext *ctx, GLenum target, GLint level)
+{
+   struct gl_texture_image *texImage;
+
+   if (level < 0 )
+      return NULL;
+
+   switch (target) {
+   case GL_PROXY_TEXTURE_1D:
+      if (level >= ctx->Const.MaxTextureLevels)
+         return NULL;
+      texImage = ctx->Texture.Proxy1D->Image[level];
+      if (!texImage) {
+         texImage = ctx->Driver.NewTextureImage(ctx);
+         if (!texImage) {
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "proxy texture allocation");
+            return NULL;
+         }
+         ctx->Texture.Proxy1D->Image[level] = texImage;
+      }
+      return texImage;
+   case GL_PROXY_TEXTURE_2D:
+      if (level >= ctx->Const.MaxTextureLevels)
+         return NULL;
+      texImage = ctx->Texture.Proxy2D->Image[level];
+      if (!texImage) {
+         texImage = ctx->Driver.NewTextureImage(ctx);
+         if (!texImage) {
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "proxy texture allocation");
+            return NULL;
+         }
+         ctx->Texture.Proxy2D->Image[level] = texImage;
+      }
+      return texImage;
+   case GL_PROXY_TEXTURE_3D:
+      if (level >= ctx->Const.Max3DTextureLevels)
+         return NULL;
+      texImage = ctx->Texture.Proxy3D->Image[level];
+      if (!texImage) {
+         texImage = ctx->Driver.NewTextureImage(ctx);
+         if (!texImage) {
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "proxy texture allocation");
+            return NULL;
+         }
+         ctx->Texture.Proxy3D->Image[level] = texImage;
+      }
+      return texImage;
+   case GL_PROXY_TEXTURE_CUBE_MAP:
+      if (level >= ctx->Const.MaxCubeTextureLevels)
+         return NULL;
+      texImage = ctx->Texture.ProxyCubeMap->Image[level];
+      if (!texImage) {
+         texImage = ctx->Driver.NewTextureImage(ctx);
+         if (!texImage) {
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "proxy texture allocation");
+            return NULL;
+         }
+         ctx->Texture.ProxyCubeMap->Image[level] = texImage;
+      }
+      return texImage;
+   case GL_PROXY_TEXTURE_RECTANGLE_NV:
+      if (level > 0)
+         return NULL;
+      texImage = ctx->Texture.ProxyRect->Image[level];
+      if (!texImage) {
+         texImage = ctx->Driver.NewTextureImage(ctx);
+         if (!texImage) {
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "proxy texture allocation");
+            return NULL;
+         }
+         ctx->Texture.ProxyRect->Image[level] = texImage;
+      }
+      return texImage;
+   default:
+      return NULL;
+   }
+}
+
+
 /*
  * Return the maximum number of allows mipmap levels for the given
  * texture target.
@@ -667,7 +785,7 @@ make_null_texture(GLint width, GLint height, GLint depth, GLenum format)
 
 
 
-/*
+/**
  * Reset the fields of a gl_texture_image struct to zero.
  * This is called when a proxy texture test fails, we set all the
  * image members (except DriverData) to zero.
@@ -753,12 +871,103 @@ _mesa_init_teximage_fields(GLcontext *ctx, GLenum target,
 }
 
 
+/**
+ * This is the fallback for Driver.TestProxyTexImage().  Test the texture
+ * level, width, height and depth against the ctx->Const limits for textures.
+ *
+ * A hardware driver might override this function if, for example, the
+ * max 3D texture size is 512x512x64 (i.e. not a cube).
+ *
+ * \param target  one of GL_PROXY_TEXTURE_1D, GL_PROXY_TEXTURE_2D,
+ *                GL_PROXY_TEXTURE_3D, GL_PROXY_TEXTURE_RECTANGLE_NV,
+ *                GL_PROXY_TEXTURE_CUBE_MAP_ARB.
+ * \param level  as passed to glTexImage
+ * \param internalFormat  as passed to glTexImage
+ * \param format  as passed to glTexImage
+ * \param type  as passed to glTexImage
+ * \param width  as passed to glTexImage
+ * \param height  as passed to glTexImage
+ * \param depth  as passed to glTexImage
+ * \param border  as passed to glTexImage
+ * \return GL_TRUE if the image is acceptable, GL_FALSE if not acceptable.
+ */
+GLboolean
+_mesa_test_proxy_teximage(GLcontext *ctx, GLenum target, GLint level,
+                          GLint internalFormat, GLenum format, GLenum type,
+                          GLint width, GLint height, GLint depth, GLint border)
+{
+   GLint maxSize;
 
-/*
+   (void) internalFormat;
+   (void) format;
+   (void) type;
+
+   switch (target) {
+   case GL_PROXY_TEXTURE_1D:
+      maxSize = 1 << (ctx->Const.MaxTextureLevels - 1);
+      if (width < 2 * border || width > 2 + maxSize ||
+          _mesa_bitcount(width - 2 * border) != 1 ||
+          level >= ctx->Const.MaxTextureLevels) {
+         /* bad width or level */
+         return GL_FALSE;
+      }
+      return GL_TRUE;
+   case GL_PROXY_TEXTURE_2D:
+      maxSize = 1 << (ctx->Const.MaxTextureLevels - 1);
+      if (width < 2 * border || width > 2 + maxSize ||
+          _mesa_bitcount(width - 2 * border) != 1 ||
+          height < 2 * border || height > 2 + maxSize ||
+          _mesa_bitcount(height - 2 * border) != 1 ||
+          level >= ctx->Const.MaxTextureLevels) {
+         /* bad width or height or level */
+         return GL_FALSE;
+      }
+      return GL_TRUE;
+   case GL_PROXY_TEXTURE_3D:
+      maxSize = 1 << (ctx->Const.Max3DTextureLevels - 1);
+      if (width < 2 * border || width > 2 + maxSize ||
+          _mesa_bitcount(width - 2 * border) != 1 ||
+          height < 2 * border || height > 2 + maxSize ||
+          _mesa_bitcount(height - 2 * border) != 1 ||
+          depth < 2 * border || depth > 2 + maxSize ||
+          _mesa_bitcount(depth - 2 * border) != 1 ||
+          level >= ctx->Const.Max3DTextureLevels) {
+         /* bad width or height or depth or level */
+         return GL_FALSE;
+      }
+      return GL_TRUE;
+   case GL_PROXY_TEXTURE_RECTANGLE_NV:
+      if (width < 1 || width > ctx->Const.MaxTextureRectSize ||
+          height < 1 || height > ctx->Const.MaxTextureRectSize ||
+          level != 0) {
+         /* bad width or height or level */
+         return GL_FALSE;
+      }
+      return GL_TRUE;
+   case GL_PROXY_TEXTURE_CUBE_MAP_ARB:
+      maxSize = 1 << (ctx->Const.MaxCubeTextureLevels - 1);
+      if (width < 2 * border || width > 2 + maxSize ||
+          _mesa_bitcount(width - 2 * border) != 1 ||
+          height < 2 * border || height > 2 + maxSize ||
+          _mesa_bitcount(height - 2 * border) != 1 ||
+          level >= ctx->Const.MaxCubeTextureLevels) {
+         /* bad width or height */
+         return GL_FALSE;
+      }
+      return GL_TRUE;
+   default:
+      _mesa_problem(ctx, "Invalid target in _mesa_test_proxy_teximage");
+      return GL_FALSE;
+   }
+}
+
+
+/**
  * Test glTexImage[123]D() parameters for errors.
- * Input:
- *         dimensions - must be 1 or 2 or 3
- * Return:  GL_TRUE = an error was detected, GL_FALSE = no errors
+ * This function calls the ctx->Driver.TestProxyTexImage() function to
+ * check the level and size.
+ * \param dimensions  must be 1 or 2 or 3
+ * \return  GL_TRUE if an error was detected or GL_FALSE if no errors
  */
 static GLboolean
 texture_error_check( GLcontext *ctx, GLenum target,
@@ -768,180 +977,11 @@ texture_error_check( GLcontext *ctx, GLenum target,
                      GLint width, GLint height,
                      GLint depth, GLint border )
 {
-   GLboolean isProxy;
-   GLint maxLevels = 0, maxTextureSize;
+   const GLboolean isProxy = is_proxy_target(target);
+   GLboolean sizeOK;
 
-   if (dimensions == 1) {
-      if (target == GL_PROXY_TEXTURE_1D) {
-         isProxy = GL_TRUE;
-      }
-      else if (target == GL_TEXTURE_1D) {
-         isProxy = GL_FALSE;
-      }
-      else {
-         _mesa_error( ctx, GL_INVALID_ENUM, "glTexImage1D(target)" );
-         return GL_TRUE;
-      }
-      maxLevels = ctx->Const.MaxTextureLevels;
-   }
-   else if (dimensions == 2) {
-      if (target == GL_PROXY_TEXTURE_2D) {
-         isProxy = GL_TRUE;
-         maxLevels = ctx->Const.MaxTextureLevels;
-      }
-      else if (target == GL_TEXTURE_2D) {
-         isProxy = GL_FALSE;
-         maxLevels = ctx->Const.MaxTextureLevels;
-      }
-      else if (target == GL_PROXY_TEXTURE_CUBE_MAP_ARB) {
-         if (!ctx->Extensions.ARB_texture_cube_map) {
-            _mesa_error(ctx, GL_INVALID_ENUM, "glTexImage2D(target)");
-            return GL_TRUE;
-         }
-         isProxy = GL_TRUE;
-         maxLevels = ctx->Const.MaxCubeTextureLevels;
-      }
-      else if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
-               target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB) {
-         if (!ctx->Extensions.ARB_texture_cube_map) {
-            _mesa_error(ctx, GL_INVALID_ENUM, "glTexImage2D(target)");
-            return GL_TRUE;
-         }
-         isProxy = GL_FALSE;
-         maxLevels = ctx->Const.MaxCubeTextureLevels;
-      }
-      else if (target == GL_PROXY_TEXTURE_RECTANGLE_NV) {
-         if (!ctx->Extensions.NV_texture_rectangle) {
-            _mesa_error(ctx, GL_INVALID_ENUM, "glTexImage2D(target)");
-            return GL_TRUE;
-         }
-         isProxy = GL_TRUE;
-         maxLevels = 1;
-      }
-      else if (target == GL_TEXTURE_RECTANGLE_NV) {
-         if (!ctx->Extensions.NV_texture_rectangle) {
-            _mesa_error(ctx, GL_INVALID_ENUM, "glTexImage2D(target)");
-            return GL_TRUE;
-         }
-         isProxy = GL_FALSE;
-         maxLevels = 1;
-      }
-      else {
-         _mesa_error(ctx, GL_INVALID_ENUM, "glTexImage2D(target)");
-         return GL_TRUE;
-      }
-   }
-   else if (dimensions == 3) {
-      if (target == GL_PROXY_TEXTURE_3D) {
-         isProxy = GL_TRUE;
-      }
-      else if (target == GL_TEXTURE_3D) {
-         isProxy = GL_FALSE;
-      }
-      else {
-         _mesa_error( ctx, GL_INVALID_ENUM, "glTexImage3D(target)" );
-         return GL_TRUE;
-      }
-      maxLevels = ctx->Const.Max3DTextureLevels;
-   }
-   else {
-      _mesa_problem( ctx, "bad dims in texture_error_check" );
-      return GL_TRUE;
-   }
-
-   ASSERT(maxLevels > 0);
-   maxTextureSize = 1 << (maxLevels - 1);
-
-   /* Border */
-   if (border != 0 && border != 1) {
-      if (!isProxy) {
-         _mesa_error(ctx, GL_INVALID_VALUE,
-                     "glTexImage%dD(border=%d)", dimensions, border);
-      }
-      return GL_TRUE;
-   }
-   if ((target == GL_TEXTURE_RECTANGLE_NV ||
-        target == GL_PROXY_TEXTURE_RECTANGLE_NV) && border != 0) {
-      return GL_TRUE;
-   }
-
-   /* Width */
-   if (target == GL_TEXTURE_RECTANGLE_NV ||
-       target == GL_PROXY_TEXTURE_RECTANGLE_NV) {
-      if (width < 1 || width > ctx->Const.MaxTextureRectSize) {
-         if (!isProxy) {
-            _mesa_error(ctx, GL_INVALID_VALUE,
-                        "glTexImage%dD(width=%d)", dimensions, width);
-         }
-         return GL_TRUE;
-      }
-   }
-   else if (width < 2 * border || width > 2 + maxTextureSize
-       || logbase2( width - 2 * border ) < 0) {
-      if (!isProxy) {
-         _mesa_error(ctx, GL_INVALID_VALUE,
-                     "glTexImage%dD(width=%d)", dimensions, width);
-      }
-      return GL_TRUE;
-   }
-
-   /* Height */
-   if (target == GL_TEXTURE_RECTANGLE_NV ||
-       target == GL_PROXY_TEXTURE_RECTANGLE_NV) {
-      if (height < 1 || height > ctx->Const.MaxTextureRectSize) {
-         if (!isProxy) {
-            _mesa_error(ctx, GL_INVALID_VALUE,
-                        "glTexImage%dD(height=%d)", dimensions, height);
-         }
-         return GL_TRUE;
-      }
-   }
-   else if (dimensions >= 2) {
-      if (height < 2 * border || height > 2 + maxTextureSize
-          || logbase2( height - 2 * border ) < 0) {
-         if (!isProxy) {
-            _mesa_error(ctx, GL_INVALID_VALUE,
-                        "glTexImage%dD(height=%d)", dimensions, height);
-         }
-         return GL_TRUE;
-      }
-   }
-
-   /* For cube map, width must equal height */
-   if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
-       target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB) {
-      if (width != height) {
-         if (!isProxy) {
-            _mesa_error(ctx, GL_INVALID_VALUE, "glTexImage2D(width != height)");
-         }
-         return GL_TRUE;
-      }
-   }
-
-   /* Depth */
-   if (dimensions >= 3) {
-      if (depth < 2 * border || depth > 2 + maxTextureSize
-          || logbase2( depth - 2 * border ) < 0) {
-         if (!isProxy) {
-            _mesa_error( ctx, GL_INVALID_VALUE,
-                         "glTexImage3D(depth=%d)", depth );
-         }
-         return GL_TRUE;
-      }
-   }
-
-   /* Level */
-   if (target == GL_TEXTURE_RECTANGLE_NV ||
-       target == GL_PROXY_TEXTURE_RECTANGLE_NV) {
-      if (level != 0) {
-         if (!isProxy) {
-            _mesa_error(ctx, GL_INVALID_VALUE,
-                        "glTexImage2D(level=%d)", level);
-         }
-         return GL_TRUE;
-      }
-   }
-   else if (level < 0 || level >= maxLevels) {
+   /* Basic level check (more checking in ctx->Driver.TestProxyTexImage) */
+   if (level < 0 || level >= MAX_TEXTURE_LEVELS) {
       if (!isProxy) {
          _mesa_error(ctx, GL_INVALID_VALUE,
                      "glTexImage%dD(level=%d)", dimensions, level);
@@ -949,15 +989,95 @@ texture_error_check( GLcontext *ctx, GLenum target,
       return GL_TRUE;
    }
 
-   /* For cube map, width must equal height */
-   if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
-       target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB) {
-      if (width != height) {
-         _mesa_error(ctx, GL_INVALID_VALUE, "glTexImage2D(width != height)");
+   /* Check border */
+   if (border < 0 || border > 1 ||
+       ((target == GL_TEXTURE_RECTANGLE_NV ||
+         target == GL_PROXY_TEXTURE_RECTANGLE_NV) && border != 0)) {
+      if (!isProxy) {
+         _mesa_error(ctx, GL_INVALID_VALUE,
+                     "glTexImage%dD(border=%d)", dimensions, border);
+      }
+      return GL_TRUE;
+   }
+
+   /* Check target and call ctx->Driver.TestProxyTexImage() to check the
+    * level, width, height and depth.
+    */
+   if (dimensions == 1) {
+      if (target == GL_PROXY_TEXTURE_1D || target == GL_TEXTURE_1D) {
+         sizeOK = ctx->Driver.TestProxyTexImage(ctx, GL_PROXY_TEXTURE_1D,
+                                                level, internalFormat,
+                                                format, type,
+                                                width, 1, 1, border);
+      }
+      else {
+         _mesa_error( ctx, GL_INVALID_ENUM, "glTexImage1D(target)" );
          return GL_TRUE;
       }
    }
+   else if (dimensions == 2) {
+      if (target == GL_PROXY_TEXTURE_2D || target == GL_TEXTURE_2D) {
+         sizeOK = ctx->Driver.TestProxyTexImage(ctx, GL_PROXY_TEXTURE_2D,
+                                                level, internalFormat,
+                                                format, type,
+                                                width, height, 1, border);
+      }
+      else if (target == GL_PROXY_TEXTURE_CUBE_MAP_ARB ||
+               (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
+                target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB)) {
+         if (!ctx->Extensions.ARB_texture_cube_map) {
+            _mesa_error(ctx, GL_INVALID_ENUM, "glTexImage2D(target)");
+            return GL_TRUE;
+         }
+         sizeOK = (width == height) &&
+            ctx->Driver.TestProxyTexImage(ctx, GL_PROXY_TEXTURE_CUBE_MAP_ARB,
+                                          level, internalFormat, format, type,
+                                          width, height, 1, border);
+      }
+      else if (target == GL_PROXY_TEXTURE_RECTANGLE_NV ||
+               target == GL_TEXTURE_RECTANGLE_NV) {
+         if (!ctx->Extensions.NV_texture_rectangle) {
+            _mesa_error(ctx, GL_INVALID_ENUM, "glTexImage2D(target)");
+            return GL_TRUE;
+         }
+         sizeOK = ctx->Driver.TestProxyTexImage(ctx,
+                                                GL_PROXY_TEXTURE_RECTANGLE_NV,
+                                                level, internalFormat,
+                                                format, type,
+                                                width, height, 1, border);
+      }
+      else {
+         _mesa_error(ctx, GL_INVALID_ENUM, "glTexImage2D(target)");
+         return GL_TRUE;
+      }
+   }
+   else if (dimensions == 3) {
+      if (target == GL_PROXY_TEXTURE_3D || target == GL_TEXTURE_3D) {
+         sizeOK = ctx->Driver.TestProxyTexImage(ctx, GL_PROXY_TEXTURE_3D,
+                                                level, internalFormat,
+                                                format, type,
+                                                width, height, depth, border);
+      }
+      else {
+         _mesa_error( ctx, GL_INVALID_ENUM, "glTexImage3D(target)" );
+         return GL_TRUE;
+      }
+   }
+   else {
+      _mesa_problem( ctx, "bad dims in texture_error_check" );
+      return GL_TRUE;
+   }
 
+   if (!sizeOK) {
+      if (!isProxy) {
+         _mesa_error(ctx, GL_INVALID_VALUE,
+                     "glTexImage%dD(level=%d, width=%d, height=%d, depth=%d)",
+                     dimensions, level, width, height, depth);
+      }
+      return GL_TRUE;
+   }
+
+   /* Check internalFormat */
    if (_mesa_base_tex_format(ctx, internalFormat) < 0) {
       if (!isProxy) {
          _mesa_error(ctx, GL_INVALID_VALUE,
@@ -967,6 +1087,7 @@ texture_error_check( GLcontext *ctx, GLenum target,
       return GL_TRUE;
    }
 
+   /* Check incoming image format and type */
    if (!_mesa_is_legal_format_and_type(format, type)) {
       /* Yes, generate GL_INVALID_OPERATION, not GL_INVALID_ENUM, if there
        * is a type/format mismatch.  See 1.2 spec page 94, sec 3.6.4.
@@ -1058,52 +1179,47 @@ subtexture_error_check( GLcontext *ctx, GLuint dimensions,
 {
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    struct gl_texture_image *destTex;
-   GLint maxLevels = 0;
 
+   /* Check target */
    if (dimensions == 1) {
-      if (target == GL_TEXTURE_1D) {
-         maxLevels = ctx->Const.MaxTextureLevels;
-      }
-      else {
+      if (target != GL_TEXTURE_1D) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glTexSubImage1D(target)" );
          return GL_TRUE;
       }
    }
    else if (dimensions == 2) {
-      if (ctx->Extensions.ARB_texture_cube_map &&
-          target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
+      if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
           target <=GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB) {
-         maxLevels = ctx->Const.MaxCubeTextureLevels;
+         if (!ctx->Extensions.ARB_texture_cube_map) {
+            _mesa_error( ctx, GL_INVALID_ENUM, "glTexSubImage2D(target)" );
+            return GL_TRUE;
+         }
       }
       else if (ctx->Extensions.NV_texture_rectangle &&
                target == GL_TEXTURE_RECTANGLE_NV) {
-         maxLevels = 1;
+         if (!ctx->Extensions.NV_texture_rectangle) {
+            _mesa_error( ctx, GL_INVALID_ENUM, "glTexSubImage2D(target)" );
+            return GL_TRUE;
+         }
       }
-      else if (target == GL_TEXTURE_2D) {
-         maxLevels = ctx->Const.MaxTextureLevels;
-      }
-      else {
+      else if (target != GL_TEXTURE_2D) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glTexSubImage2D(target)" );
          return GL_TRUE;
       }
    }
    else if (dimensions == 3) {
-      if (target == GL_TEXTURE_3D) {
-         maxLevels = ctx->Const.Max3DTextureLevels;
-      }
-      else {
+      if (target != GL_TEXTURE_3D) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glTexSubImage3D(target)" );
          return GL_TRUE;
       }
    }
    else {
-      _mesa_problem( ctx, "bad dims in texture_error_check" );
+      _mesa_problem( ctx, "invalid dims in texture_error_check" );
       return GL_TRUE;
    }
 
-   ASSERT(maxLevels > 0);
-
-   if (level < 0 || level >= maxLevels) {
+   /* Basic level check */
+   if (level < 0 || level >= MAX_TEXTURE_LEVELS) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glTexSubImage2D(level=%d)", level);
       return GL_TRUE;
    }
@@ -1119,32 +1235,38 @@ subtexture_error_check( GLcontext *ctx, GLuint dimensions,
       return GL_TRUE;
    }
    if (depth < 0 && dimensions > 2) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glTexSubImage%dD(depth=%d)", dimensions, depth);
+      _mesa_error(ctx, GL_INVALID_VALUE,
+                  "glTexSubImage%dD(depth=%d)", dimensions, depth);
       return GL_TRUE;
    }
 
    destTex = _mesa_select_tex_image(ctx, texUnit, target, level);
 
    if (!destTex) {
-      _mesa_error(ctx, GL_INVALID_OPERATION, "glTexSubImage2D");
+      /* undefined image level */
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glTexSubImage%dD", dimensions);
       return GL_TRUE;
    }
 
    if (xoffset < -((GLint)destTex->Border)) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glTexSubImage1/2/3D(xoffset)");
+      _mesa_error(ctx, GL_INVALID_VALUE, "glTexSubImage%dD(xoffset)",
+                  dimensions);
       return GL_TRUE;
    }
    if (xoffset + width > (GLint) (destTex->Width + destTex->Border)) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glTexSubImage1/2/3D(xoffset+width)");
+      _mesa_error(ctx, GL_INVALID_VALUE, "glTexSubImage%dD(xoffset+width)",
+                  dimensions);
       return GL_TRUE;
    }
    if (dimensions > 1) {
       if (yoffset < -((GLint)destTex->Border)) {
-         _mesa_error(ctx, GL_INVALID_VALUE, "glTexSubImage2/3D(yoffset)");
+         _mesa_error(ctx, GL_INVALID_VALUE, "glTexSubImage%dD(yoffset)",
+                     dimensions);
          return GL_TRUE;
       }
       if (yoffset + height > (GLint) (destTex->Height + destTex->Border)) {
-         _mesa_error(ctx, GL_INVALID_VALUE, "glTexSubImage2/3D(yoffset+height)");
+         _mesa_error(ctx, GL_INVALID_VALUE, "glTexSubImage%dD(yoffset+height)",
+                     dimensions);
          return GL_TRUE;
       }
    }
@@ -1167,10 +1289,8 @@ subtexture_error_check( GLcontext *ctx, GLuint dimensions,
 
    if (destTex->IsCompressed) {
       const struct gl_texture_unit *texUnit;
-      const struct gl_texture_object *texObj;
       const struct gl_texture_image *texImage;
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-      texObj = _mesa_select_tex_object(ctx, texUnit, target);
       texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
 
       if (target == GL_TEXTURE_2D || target == GL_PROXY_TEXTURE_2D) {
@@ -1220,82 +1340,93 @@ copytexture_error_check( GLcontext *ctx, GLuint dimensions,
                          GLenum target, GLint level, GLint internalFormat,
                          GLint width, GLint height, GLint border )
 {
-   GLint maxLevels = 0, maxTextureSize;
+   GLenum format, type;
+   GLboolean sizeOK;
 
+   /* Basic level check (more checking in ctx->Driver.TestProxyTexImage) */
+   if (level < 0 || level >= MAX_TEXTURE_LEVELS) {
+      _mesa_error(ctx, GL_INVALID_VALUE,
+                  "glCopyTexImage%dD(level=%d)", dimensions, level);
+      return GL_TRUE;
+   }
+
+   /* Check border */
+   if (border < 0 || border > 1 ||
+       ((target == GL_TEXTURE_RECTANGLE_NV ||
+         target == GL_PROXY_TEXTURE_RECTANGLE_NV) && border != 0)) {
+      return GL_TRUE;
+   }
+
+   /* The format and type aren't really significant here, but we need to pass
+    * something to TestProxyTexImage().
+    */
+   format = _mesa_base_tex_format(ctx, internalFormat);
+   type = GL_FLOAT;
+
+   /* Check target and call ctx->Driver.TestProxyTexImage() to check the
+    * level, width, height and depth.
+    */
    if (dimensions == 1) {
-      if (target != GL_TEXTURE_1D) {
+      if (target == GL_TEXTURE_1D) {
+         sizeOK = ctx->Driver.TestProxyTexImage(ctx, GL_PROXY_TEXTURE_1D,
+                                                level, internalFormat,
+                                                format, type,
+                                                width, 1, 1, border);
+      }
+      else {
          _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexImage1D(target)" );
          return GL_TRUE;
       }
-      maxLevels = ctx->Const.MaxTextureLevels;
    }
    else if (dimensions == 2) {
-      if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
-          target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB) {
+      if (target == GL_TEXTURE_2D) {
+         sizeOK = ctx->Driver.TestProxyTexImage(ctx, GL_PROXY_TEXTURE_2D,
+                                                level, internalFormat,
+                                                format, type,
+                                                width, height, 1, border);
+      }
+      else if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
+               target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB) {
          if (!ctx->Extensions.ARB_texture_cube_map) {
             _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexImage2D(target)" );
             return GL_TRUE;
          }
+         sizeOK = (width == height) &&
+            ctx->Driver.TestProxyTexImage(ctx, GL_PROXY_TEXTURE_CUBE_MAP_ARB,
+                                          level, internalFormat, format, type,
+                                          width, height, 1, border);
       }
       else if (target == GL_TEXTURE_RECTANGLE_NV) {
          if (!ctx->Extensions.NV_texture_rectangle) {
             _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexImage2D(target)" );
             return GL_TRUE;
          }
+         sizeOK = ctx->Driver.TestProxyTexImage(ctx,
+                                                GL_PROXY_TEXTURE_RECTANGLE_NV,
+                                                level, internalFormat,
+                                                format, type,
+                                                width, height, 1, border);
       }
-      else if (target != GL_TEXTURE_2D) {
+      else {
          _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexImage2D(target)" );
          return GL_TRUE;
       }
-      if (target == GL_TEXTURE_2D)
-         maxLevels = ctx->Const.MaxTextureLevels;
-      else if (target == GL_TEXTURE_RECTANGLE_NV)
-         maxLevels = 1;
-      else
-         maxLevels = ctx->Const.MaxCubeTextureLevels;
    }
-
-   ASSERT(maxLevels > 0);
-   maxTextureSize = 1 << (maxLevels - 1);
-
-   /* Border */
-   if (border != 0 && border != 1) {
-      _mesa_error(ctx, GL_INVALID_VALUE,
-                  "glCopyTexImage%dD(border)", dimensions);
+   else {
+      _mesa_problem(ctx, "invalid dimensions in copytexture_error_check");
       return GL_TRUE;
    }
 
-   /* Width */
-   if (width < 2 * border || width > 2 + maxTextureSize
-       || logbase2( width - 2 * border ) < 0) {
-      _mesa_error(ctx, GL_INVALID_VALUE,
-                  "glCopyTexImage%dD(width=%d)", dimensions, width);
-      return GL_TRUE;
-   }
-
-   /* Height */
-   if (dimensions >= 2) {
-      if (height < 2 * border || height > 2 + maxTextureSize
-          || logbase2( height - 2 * border ) < 0) {
+   if (!sizeOK) {
+      if (dimensions == 1) {
          _mesa_error(ctx, GL_INVALID_VALUE,
-                     "glCopyTexImage%dD(height=%d)", dimensions, height);
-         return GL_TRUE;
+                     "glCopyTexImage1D(width=%d)", width);
       }
-   }
-
-   /* For cube map, width must equal height */
-   if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
-       target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB) {
-      if (width != height) {
-         _mesa_error(ctx, GL_INVALID_VALUE, "glCopyTexImage2D(width != height)");
-         return GL_TRUE;
+      else {
+         ASSERT(dimensions == 2);
+         _mesa_error(ctx, GL_INVALID_VALUE,
+                     "glCopyTexImage2D(width=%d, height=%d)", width, height);
       }
-   }
-
-   /* Level */
-   if (level < 0 || level >= maxLevels) {
-      _mesa_error(ctx, GL_INVALID_VALUE,
-                  "glCopyTexImage%dD(level=%d)", dimensions, level);
       return GL_TRUE;
    }
 
@@ -1331,14 +1462,13 @@ copytexsubimage_error_check( GLcontext *ctx, GLuint dimensions,
 {
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    struct gl_texture_image *teximage;
-   GLint maxLevels = 0;
 
+   /* Check target */
    if (dimensions == 1) {
       if (target != GL_TEXTURE_1D) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexSubImage1D(target)" );
          return GL_TRUE;
       }
-      maxLevels = ctx->Const.MaxTextureLevels;
    }
    else if (dimensions == 2) {
       if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
@@ -1358,29 +1488,22 @@ copytexsubimage_error_check( GLcontext *ctx, GLuint dimensions,
          _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexSubImage2D(target)" );
          return GL_TRUE;
       }
-      if (target == GL_TEXTURE_2D)
-         maxLevels = ctx->Const.MaxTextureLevels;
-      else if (target == GL_TEXTURE_RECTANGLE_NV)
-         maxLevels = 1;
-      else
-         maxLevels = ctx->Const.MaxCubeTextureLevels;
    }
    else if (dimensions == 3) {
       if (target != GL_TEXTURE_3D) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glCopyTexSubImage3D(target)" );
          return GL_TRUE;
       }
-      maxLevels = ctx->Const.Max3DTextureLevels;
    }
 
-   ASSERT(maxLevels > 0);
-
-   if (level < 0 || level >= maxLevels) {
+   /* Check level */
+   if (level < 0 || level >= MAX_TEXTURE_LEVELS) {
       _mesa_error(ctx, GL_INVALID_VALUE,
                   "glCopyTexSubImage%dD(level=%d)", dimensions, level);
       return GL_TRUE;
    }
 
+   /* Check size */
    if (width < 0) {
       _mesa_error(ctx, GL_INVALID_VALUE,
                   "glCopyTexSubImage%dD(width=%d)", dimensions, width);
@@ -1637,15 +1760,11 @@ _mesa_TexImage1D( GLenum target, GLint level, GLint internalFormat,
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
       texObj = _mesa_select_tex_object(ctx, texUnit, target);
-      texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
+      texImage = _mesa_get_tex_image(ctx, texUnit, target, level);
 
       if (!texImage) {
-         texImage = _mesa_alloc_texture_image();
-         texObj->Image[level] = texImage;
-         if (!texImage) {
-            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexImage1D");
-            return;
-         }
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexImage1D");
+         return;
       }
       else if (texImage->Data && !texImage->IsClientData) {
          /* free the old texture data */
@@ -1680,29 +1799,22 @@ _mesa_TexImage1D( GLenum target, GLint level, GLint internalFormat,
    }
    else if (target == GL_PROXY_TEXTURE_1D) {
       /* Proxy texture: check for errors and update proxy state */
-      GLboolean error = texture_error_check(ctx, target, level, internalFormat,
-                                 format, type, 1, postConvWidth, 1, 1, border);
-      if (!error) {
-         ASSERT(ctx->Driver.TestProxyTexImage);
-         error = !(*ctx->Driver.TestProxyTexImage)(ctx, target, level,
-                                                  internalFormat, format, type,
-                                                  postConvWidth, 1, 1, border);
-      }
-      if (error) {
-         /* if error, clear all proxy texture image parameters */
-         if (level >= 0 && level < ctx->Const.MaxTextureLevels) {
-            clear_teximage_fields(ctx->Texture.Proxy1D->Image[level]);
-         }
+      struct gl_texture_image *texImage;
+      texImage = _mesa_get_proxy_tex_image(ctx, target, level);
+      if (texture_error_check(ctx, target, level, internalFormat,
+                              format, type, 1, postConvWidth, 1, 1, border)) {
+         /* when error, clear all proxy texture image parameters */
+         if (texImage)
+            clear_teximage_fields(texImage);
       }
       else {
          /* no error, set the tex image parameters */
-         struct gl_texture_unit *texUnit;
-         struct gl_texture_image *texImage;
-         texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-         texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
+         ASSERT(texImage);
          _mesa_init_teximage_fields(ctx, target, texImage,
                                     postConvWidth, 1, 1,
                                     border, internalFormat);
+         texImage->TexFormat = (*ctx->Driver.ChooseTextureFormat)(ctx,
+                                          internalFormat, format, type);
       }
    }
    else {
@@ -1746,15 +1858,10 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
       texObj = _mesa_select_tex_object(ctx, texUnit, target);
-      texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-
+      texImage = _mesa_get_tex_image(ctx, texUnit, target, level);
       if (!texImage) {
-         texImage = _mesa_alloc_texture_image();
-         _mesa_set_tex_image(texObj, target, level, texImage);
-         if (!texImage) {
-            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexImage2D");
-            return;
-         }
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexImage2D");
+         return;
       }
       else if (texImage->Data && !texImage->IsClientData) {
          /* free the old texture data */
@@ -1793,31 +1900,22 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
             (target == GL_PROXY_TEXTURE_RECTANGLE_NV &&
              ctx->Extensions.NV_texture_rectangle)) {
       /* Proxy texture: check for errors and update proxy state */
-      GLboolean error = texture_error_check(ctx, target, level, internalFormat,
-                    format, type, 2, postConvWidth, postConvHeight, 1, border);
-      if (!error) {
-         ASSERT(ctx->Driver.TestProxyTexImage);
-         error = !(*ctx->Driver.TestProxyTexImage)(ctx, target, level,
-                                    internalFormat, format, type,
-                                    postConvWidth, postConvHeight, 1, border);
-      }
-      if (error) {
-         /* if error, clear all proxy texture image parameters */
-         const GLint maxLevels = (target == GL_PROXY_TEXTURE_2D) ?
-            ctx->Const.MaxTextureLevels : ctx->Const.MaxCubeTextureLevels;
-         if (level >= 0 && level < maxLevels) {
+      struct gl_texture_image *texImage;
+      texImage = _mesa_get_proxy_tex_image(ctx, target, level);
+      if (texture_error_check(ctx, target, level, internalFormat,
+                              format, type, 2, postConvWidth, postConvHeight,
+                              1, border)) {
+         /* when error, clear all proxy texture image parameters */
+         if (texImage)
             clear_teximage_fields(ctx->Texture.Proxy2D->Image[level]);
-         }
       }
       else {
          /* no error, set the tex image parameters */
-         struct gl_texture_unit *texUnit;
-         struct gl_texture_image *texImage;
-         texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-         texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
          _mesa_init_teximage_fields(ctx, target, texImage,
                                     postConvWidth, postConvHeight, 1,
                                     border, internalFormat);
+         texImage->TexFormat = (*ctx->Driver.ChooseTextureFormat)(ctx,
+                                          internalFormat, format, type);
       }
    }
    else {
@@ -1852,15 +1950,10 @@ _mesa_TexImage3D( GLenum target, GLint level, GLint internalFormat,
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
       texObj = _mesa_select_tex_object(ctx, texUnit, target);
-      texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-
+      texImage = _mesa_get_tex_image(ctx, texUnit, target, level);
       if (!texImage) {
-         texImage = _mesa_alloc_texture_image();
-         texObj->Image[level] = texImage;
-         if (!texImage) {
-            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexImage3D");
-            return;
-         }
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexImage3D");
+         return;
       }
       else if (texImage->Data && !texImage->IsClientData) {
          MESA_PBUFFER_FREE(texImage->Data);
@@ -1894,28 +1987,20 @@ _mesa_TexImage3D( GLenum target, GLint level, GLint internalFormat,
    }
    else if (target == GL_PROXY_TEXTURE_3D) {
       /* Proxy texture: check for errors and update proxy state */
-      GLboolean error = texture_error_check(ctx, target, level, internalFormat,
-                                format, type, 3, width, height, depth, border);
-      if (!error) {
-         ASSERT(ctx->Driver.TestProxyTexImage);
-         error = !(*ctx->Driver.TestProxyTexImage)(ctx, target, level,
-                                                 internalFormat, format, type,
-                                                 width, height, depth, border);
-      }
-      if (error) {
-         /* if error, clear all proxy texture image parameters */
-         if (level >= 0 && level < ctx->Const.Max3DTextureLevels) {
-            clear_teximage_fields(ctx->Texture.Proxy3D->Image[level]);
-         }
+      struct gl_texture_image *texImage;
+      texImage = _mesa_get_proxy_tex_image(ctx, target, level);
+      if (texture_error_check(ctx, target, level, internalFormat,
+                              format, type, 3, width, height, depth, border)) {
+         /* when error, clear all proxy texture image parameters */
+         if (texImage)
+            clear_teximage_fields(texImage);
       }
       else {
          /* no error, set the tex image parameters */
-         struct gl_texture_unit *texUnit;
-         struct gl_texture_image *texImage;
-         texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-         texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
          _mesa_init_teximage_fields(ctx, target, texImage, width, height, 1,
                                     border, internalFormat);
+         texImage->TexFormat = (*ctx->Driver.ChooseTextureFormat)(ctx,
+                                          internalFormat, format, type);
       }
    }
    else {
@@ -2102,14 +2187,10 @@ _mesa_CopyTexImage1D( GLenum target, GLint level,
 
    texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    texObj = _mesa_select_tex_object(ctx, texUnit, target);
-   texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
+   texImage = _mesa_get_tex_image(ctx, texUnit, target, level);
    if (!texImage) {
-      texImage = _mesa_alloc_texture_image();
-      _mesa_set_tex_image(texObj, target, level, texImage);
-      if (!texImage) {
-         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyTexImage1D");
-         return;
-      }
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyTexImage1D");
+      return;
    }
    else if (texImage->Data && !texImage->IsClientData) {
       /* free the old texture data */
@@ -2166,14 +2247,10 @@ _mesa_CopyTexImage2D( GLenum target, GLint level, GLenum internalFormat,
 
    texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    texObj = _mesa_select_tex_object(ctx, texUnit, target);
-   texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
+   texImage = _mesa_get_tex_image(ctx, texUnit, target, level);
    if (!texImage) {
-      texImage = _mesa_alloc_texture_image();
-      _mesa_set_tex_image(texObj, target, level, texImage);
-      if (!texImage) {
-         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyTexImage2D");
-         return;
-      }
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyTexImage2D");
+      return;
    }
    else if (texImage->Data && !texImage->IsClientData) {
       /* free the old texture data */
@@ -2228,6 +2305,7 @@ _mesa_CopyTexSubImage1D( GLenum target, GLint level,
    texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    texObj = _mesa_select_tex_object(ctx, texUnit, target);
    texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
+   ASSERT(texImage);
 
    /* If we have a border, xoffset=-1 is legal.  Bias by border width */
    xoffset += texImage->Border;
@@ -2264,6 +2342,7 @@ _mesa_CopyTexSubImage2D( GLenum target, GLint level,
    texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    texObj = _mesa_select_tex_object(ctx, texUnit, target);
    texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
+   ASSERT(texImage);
 
    /* If we have a border, xoffset=-1 is legal.  Bias by border width */
    xoffset += texImage->Border;
@@ -2302,6 +2381,7 @@ _mesa_CopyTexSubImage3D( GLenum target, GLint level,
    texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    texObj = _mesa_select_tex_object(ctx, texUnit, target);
    texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
+   ASSERT(texImage);
 
    /* If we have a border, xoffset=-1 is legal.  Bias by border width */
    xoffset += texImage->Border;
@@ -2509,15 +2589,10 @@ _mesa_CompressedTexImage1DARB(GLenum target, GLint level,
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
       texObj = _mesa_select_tex_object(ctx, texUnit, target);
-      texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-
+      texImage = _mesa_get_tex_image(ctx, texUnit, target, level);
       if (!texImage) {
-         texImage = _mesa_alloc_texture_image();
-         texObj->Image[level] = texImage;
-         if (!texImage) {
-            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage1D");
-            return;
-         }
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage1D");
+         return;
       }
       else if (texImage->Data && !texImage->IsClientData) {
          MESA_PBUFFER_FREE(texImage->Data);
@@ -2549,9 +2624,10 @@ _mesa_CompressedTexImage1DARB(GLenum target, GLint level,
       }
       if (error) {
          /* if error, clear all proxy texture image parameters */
-         if (level >= 0 && level < ctx->Const.MaxTextureLevels) {
-            clear_teximage_fields(ctx->Texture.Proxy1D->Image[level]);
-         }
+         struct gl_texture_image *texImage;
+         texImage = _mesa_get_proxy_tex_image(ctx, target, level);
+         if (texImage)
+            clear_teximage_fields(texImage);
       }
       else {
          /* store the teximage parameters */
@@ -2595,15 +2671,10 @@ _mesa_CompressedTexImage2DARB(GLenum target, GLint level,
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
       texObj = _mesa_select_tex_object(ctx, texUnit, target);
-      texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-
+      texImage = _mesa_get_tex_image(ctx, texUnit, target, level);
       if (!texImage) {
-         texImage = _mesa_alloc_texture_image();
-         texObj->Image[level] = texImage;
-         if (!texImage) {
-            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage2D");
-            return;
-         }
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage2D");
+         return;
       }
       else if (texImage->Data && !texImage->IsClientData) {
          MESA_PBUFFER_FREE(texImage->Data);
@@ -2637,11 +2708,10 @@ _mesa_CompressedTexImage2DARB(GLenum target, GLint level,
       }
       if (error) {
          /* if error, clear all proxy texture image parameters */
-         const GLint maxLevels = (target == GL_PROXY_TEXTURE_2D) ?
-            ctx->Const.MaxTextureLevels : ctx->Const.MaxCubeTextureLevels;
-         if (level >= 0 && level < maxLevels) {
-            clear_teximage_fields(ctx->Texture.Proxy2D->Image[level]);
-         }
+         struct gl_texture_image *texImage;
+         texImage = _mesa_get_proxy_tex_image(ctx, target, level);
+         if (texImage)
+            clear_teximage_fields(texImage);
       }
       else {
          /* store the teximage parameters */
@@ -2682,15 +2752,10 @@ _mesa_CompressedTexImage3DARB(GLenum target, GLint level,
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
       texObj = _mesa_select_tex_object(ctx, texUnit, target);
-      texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-
+      texImage = _mesa_get_tex_image(ctx, texUnit, target, level);
       if (!texImage) {
-         texImage = _mesa_alloc_texture_image();
-         texObj->Image[level] = texImage;
-         if (!texImage) {
-            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage3D");
-            return;
-         }
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage3D");
+         return;
       }
       else if (texImage->Data && !texImage->IsClientData) {
          MESA_PBUFFER_FREE(texImage->Data);
@@ -2723,9 +2788,10 @@ _mesa_CompressedTexImage3DARB(GLenum target, GLint level,
       }
       if (error) {
          /* if error, clear all proxy texture image parameters */
-         if (level >= 0 && level < ctx->Const.Max3DTextureLevels) {
-            clear_teximage_fields(ctx->Texture.Proxy3D->Image[level]);
-         }
+         struct gl_texture_image *texImage;
+         texImage = _mesa_get_proxy_tex_image(ctx, target, level);
+         if (texImage)
+            clear_teximage_fields(texImage);
       }
       else {
          /* store the teximage parameters */

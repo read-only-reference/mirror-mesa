@@ -367,7 +367,8 @@ _tnl_copy_immediate_vertices( GLcontext *ctx, struct immediate *next )
 
    if ((prev->CopyOrFlag & VERT_BITS_DATA) == VERT_BIT_ELT &&
        ctx->Array.LockCount &&
-       ctx->Array.Vertex.Enabled)
+       (ctx->Array.Vertex.Enabled ||
+        (ctx->VertexProgram.Enabled && ctx->Array.VertexAttrib[0].Enabled)))
    {
       /* Copy Elt values only
        */
@@ -544,6 +545,12 @@ _tnl_fixup_compiled_cassette( GLcontext *ctx, struct immediate *IM )
       for (attr = 1; attr < VERT_ATTRIB_MAX; attr++) { /* skip 0 (POS) */
          const GLuint attrBit = 1 << attr;
          if (fixup & attrBit) {
+            if (!IM->Attrib[attr]) {
+               IM->Attrib[attr] = _mesa_malloc(IMM_SIZE * 4 * sizeof(GLfloat));
+               if (!IM->Attrib[attr]) {
+                  _mesa_error(ctx, GL_OUT_OF_MEMORY, "vertex processing");
+               }
+            }
             if (attr == VERT_ATTRIB_COLOR0) {
                /* special case, darn */
                if (IM->CopyOrFlag & VERT_BIT_COLOR0)

@@ -1,10 +1,8 @@
-/* $Id: dlist.c,v 1.103 2003/03/03 15:37:45 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
- * Version:  5.0
+ * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -27,6 +25,10 @@
 #include "glheader.h"
 #include "imports.h"
 #include "api_loopback.h"
+#include "config.h"
+#if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
+#include "arbprogram.h"
+#endif
 #include "attrib.h"
 #include "blend.h"
 #include "buffers.h"
@@ -61,7 +63,7 @@
 #include "texstate.h"
 #include "mtypes.h"
 #include "varray.h"
-#if FEATURE_NV_vertex_program
+#if FEATURE_NV_vertex_program || FEATURE_NV_fragment_program
 #include "nvprogram.h"
 #endif
 
@@ -244,12 +246,17 @@ typedef enum {
         /* GL_NV_vertex_program */
         OPCODE_BIND_PROGRAM_NV,
         OPCODE_EXECUTE_PROGRAM_NV,
-        OPCODE_REQUEST_PROGRAMS_RESIDENT_NV,
+        OPCODE_REQUEST_RESIDENT_PROGRAMS_NV,
         OPCODE_LOAD_PROGRAM_NV,
         OPCODE_PROGRAM_PARAMETER4F_NV,
         OPCODE_TRACK_MATRIX_NV,
+        /* GL_NV_fragment_program */
+        OPCODE_PROGRAM_LOCAL_PARAMETER_ARB,
+        OPCODE_PROGRAM_NAMED_PARAMETER_NV,
         /* GL_EXT_stencil_two_side */
         OPCODE_ACTIVE_STENCIL_FACE_EXT,
+        /* GL_EXT_depth_bounds_test */
+        OPCODE_DEPTH_BOUNDS_EXT,
 	/* The following three are meta instructions */
 	OPCODE_ERROR,	        /* raise compiled-in error */
 	OPCODE_CONTINUE,
@@ -336,6 +343,7 @@ void _mesa_destroy_list( GLcontext *ctx, GLuint list )
       }
       else {
 	 switch (n[0].opcode) {
+         /* for some commands, we need to free malloc'd memory */
 	 case OPCODE_MAP1:
             FREE(n[6].data);
 	    n += InstSize[n[0].opcode];
@@ -420,6 +428,22 @@ void _mesa_destroy_list( GLcontext *ctx, GLuint list )
             FREE(n[11].data);
             n += InstSize[n[0].opcode];
             break;
+#if FEATURE_NV_vertex_program
+         case OPCODE_LOAD_PROGRAM_NV:
+            FREE(n[4].data);
+            n += InstSize[n[0].opcode];
+            break;
+         case OPCODE_REQUEST_RESIDENT_PROGRAMS_NV:
+            FREE(n[2].data);
+            n += InstSize[n[0].opcode];
+            break;
+#endif
+#if FEATURE_NV_fragment_program
+         case OPCODE_PROGRAM_NAMED_PARAMETER_NV:
+            FREE(n[3].data);
+            n += InstSize[n[0].opcode];
+            break;
+#endif
 	 case OPCODE_CONTINUE:
 	    n = (Node *) n[1].next;
 	    FREE( block );
@@ -640,12 +664,17 @@ void _mesa_init_lists( void )
       /* GL_NV_vertex_program */
       InstSize[OPCODE_BIND_PROGRAM_NV] = 3;
       InstSize[OPCODE_EXECUTE_PROGRAM_NV] = 7;
-      InstSize[OPCODE_REQUEST_PROGRAMS_RESIDENT_NV] = 2;
-      InstSize[OPCODE_LOAD_PROGRAM_NV] = 4;
+      InstSize[OPCODE_REQUEST_RESIDENT_PROGRAMS_NV] = 2;
+      InstSize[OPCODE_LOAD_PROGRAM_NV] = 5;
       InstSize[OPCODE_PROGRAM_PARAMETER4F_NV] = 7;
       InstSize[OPCODE_TRACK_MATRIX_NV] = 5;
+      /* GL_NV_fragment_program */
+      InstSize[OPCODE_PROGRAM_LOCAL_PARAMETER_ARB] = 7;
+      InstSize[OPCODE_PROGRAM_NAMED_PARAMETER_NV] = 8;
       /* GL_EXT_stencil_two_side */
       InstSize[OPCODE_ACTIVE_STENCIL_FACE_EXT] = 2;
+      /* GL_EXT_depth_bounds_test */
+      InstSize[OPCODE_DEPTH_BOUNDS_EXT] = 3;
    }
    init_flag = 1;
 }
@@ -4097,6 +4126,58 @@ save_ProgramParameters4fvNV(GLenum target, GLuint index,
 }
 
 
+static void
+save_LoadProgramNV(GLenum target, GLuint id, GLsizei len,
+                   const GLubyte *program)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   GLubyte *programCopy;
+
+   programCopy = (GLubyte *) _mesa_malloc(len);
+   if (!programCopy) {
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glLoadProgramNV");
+      return;
+   }
+   _mesa_memcpy(programCopy, program, len);
+
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_LOAD_PROGRAM_NV, 4 );
+   if (n) {
+      n[1].e = target;
+      n[2].ui = id;
+      n[3].i = len;
+      n[4].data = programCopy;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->LoadProgramNV)(target, id, len, program);
+   }
+}
+
+
+static void
+save_RequestResidentProgramsNV(GLsizei num, const GLuint *ids)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   GLuint *idCopy;
+   idCopy = _mesa_malloc(num * sizeof(GLuint));
+   if (!idCopy) {
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glRequestResidentProgramsNV");
+      return;
+   }
+   _mesa_memcpy(idCopy, ids, num * sizeof(GLuint));
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_TRACK_MATRIX_NV, 2 );
+   if (n) {
+      n[1].i = num;
+      n[2].data = idCopy;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->RequestResidentProgramsNV)(num, ids);
+   }
+}
+
 
 static void
 save_TrackMatrixNV(GLenum target, GLuint address,
@@ -4119,6 +4200,160 @@ save_TrackMatrixNV(GLenum target, GLuint address,
 #endif /* FEATURE_NV_vertex_program */
 
 
+/*
+ * GL_NV_fragment_program
+ */
+#if FEATURE_NV_fragment_program
+static void
+save_ProgramLocalParameter4fARB(GLenum target, GLuint index,
+                                GLfloat x, GLfloat y, GLfloat z, GLfloat w)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_PROGRAM_LOCAL_PARAMETER_ARB, 6 );
+   if (n) {
+      n[1].e = target;
+      n[2].ui = index;
+      n[3].f = x;
+      n[4].f = y;
+      n[5].f = z;
+      n[6].f = w;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->ProgramLocalParameter4fARB)(target, index, x, y, z, w);
+   }
+}
+
+
+static void
+save_ProgramLocalParameter4fvARB(GLenum target, GLuint index,
+                                 const GLfloat *params)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_PROGRAM_LOCAL_PARAMETER_ARB, 6 );
+   if (n) {
+      n[1].e = target;
+      n[2].ui = index;
+      n[3].f = params[0];
+      n[4].f = params[1];
+      n[5].f = params[2];
+      n[6].f = params[3];
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->ProgramLocalParameter4fvARB)(target, index, params);
+   }
+}
+
+
+static void
+save_ProgramLocalParameter4dARB(GLenum target, GLuint index,
+                                GLdouble x, GLdouble y,
+                                GLdouble z, GLdouble w)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_PROGRAM_LOCAL_PARAMETER_ARB, 6 );
+   if (n) {
+      n[1].e = target;
+      n[2].ui = index;
+      n[3].f = x;
+      n[4].f = y;
+      n[5].f = z;
+      n[6].f = w;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->ProgramLocalParameter4dARB)(target, index, x, y, z, w);
+   }
+}
+
+
+static void
+save_ProgramLocalParameter4dvARB(GLenum target, GLuint index,
+                                 const GLdouble *params)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_PROGRAM_LOCAL_PARAMETER_ARB, 6 );
+   if (n) {
+      n[1].e = target;
+      n[2].ui = index;
+      n[3].f = params[0];
+      n[4].f = params[1];
+      n[5].f = params[2];
+      n[6].f = params[3];
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->ProgramLocalParameter4dvARB)(target, index, params);
+   }
+}
+
+static void
+save_ProgramNamedParameter4fNV(GLuint id, GLsizei len, const GLubyte *name,
+                               GLfloat x, GLfloat y, GLfloat z, GLfloat w)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   GLubyte *nameCopy;
+
+   nameCopy = _mesa_malloc(len);
+   if (!nameCopy) {
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glProgramNamedParameter4fNV");
+      return;
+   }
+   _mesa_memcpy(nameCopy, name, len);
+
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_PROGRAM_NAMED_PARAMETER_NV, 6 );
+   if (n) {
+      n[1].ui = id;
+      n[2].i = len;
+      n[3].data = nameCopy;
+      n[4].f = x;
+      n[5].f = y;
+      n[6].f = z;
+      n[7].f = w;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->ProgramNamedParameter4fNV)(id, len, name, x, y, z, w);
+   }
+}
+
+
+static void
+save_ProgramNamedParameter4fvNV(GLuint id, GLsizei len, const GLubyte *name,
+                                const float v[])
+{
+   save_ProgramNamedParameter4fNV(id, len, name, v[0], v[1], v[2], v[3]);
+}
+
+
+static void
+save_ProgramNamedParameter4dNV(GLuint id, GLsizei len, const GLubyte *name,
+                               GLdouble x, GLdouble y, GLdouble z, GLdouble w)
+{
+   save_ProgramNamedParameter4fNV(id, len, name, (GLfloat) x, (GLfloat) y,
+                                  (GLfloat) z,(GLfloat) w);
+}
+
+
+static void
+save_ProgramNamedParameter4dvNV(GLuint id, GLsizei len, const GLubyte *name,
+                                const double v[])
+{
+   save_ProgramNamedParameter4fNV(id, len, name, (GLfloat) v[0],
+                                  (GLfloat) v[1], (GLfloat) v[2],
+                                  (GLfloat) v[3]);
+}
+
+#endif /* FEATURE_NV_fragment_program */
+
+
+
 /* GL_EXT_stencil_two_side */
 static void save_ActiveStencilFaceEXT( GLenum face )
 {
@@ -4133,6 +4368,24 @@ static void save_ActiveStencilFaceEXT( GLenum face )
       (*ctx->Exec->ActiveStencilFaceEXT)( face );
    }
 }
+
+
+/* GL_EXT_depth_bounds_test */
+static void save_DepthBoundsEXT( GLclampd zmin, GLclampd zmax )
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_ACTIVE_STENCIL_FACE_EXT, 2 );
+   if (n) {
+      n[1].f = zmin;
+      n[2].f = zmax;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->DepthBoundsEXT)( zmin, zmax );
+   }
+}
+
 
 
 
@@ -4836,6 +5089,7 @@ execute_list( GLcontext *ctx, GLuint list )
 	 case OPCODE_WINDOW_POS_ARB: /* GL_ARB_window_pos */
             (*ctx->Exec->WindowPos3fMESA)( n[1].f, n[2].f, n[3].f );
 	    break;
+#if FEATURE_NV_vertex_program
          case OPCODE_BIND_PROGRAM_NV: /* GL_NV_vertex_program */
             (*ctx->Exec->BindProgramNV)( n[1].e, n[2].ui );
             break;
@@ -4849,15 +5103,11 @@ execute_list( GLcontext *ctx, GLuint list )
                (*ctx->Exec->ExecuteProgramNV)(n[1].e, n[2].ui, v);
             }
             break;
-         case OPCODE_REQUEST_PROGRAMS_RESIDENT_NV:
-            /*
-            (*ctx->Exec->RequestResidentProgramsNV)();
-            */
+         case OPCODE_REQUEST_RESIDENT_PROGRAMS_NV:
+            (*ctx->Exec->RequestResidentProgramsNV)(n[1].ui, n[2].data);
             break;
          case OPCODE_LOAD_PROGRAM_NV:
-            /*
-            (*ctx->Exec->LoadProgramNV)();
-            */
+            (*ctx->Exec->LoadProgramNV)(n[1].e, n[2].ui, n[3].i, n[4].data);
             break;
          case OPCODE_PROGRAM_PARAMETER4F_NV:
             (*ctx->Exec->ProgramParameter4fNV)(n[1].e, n[2].ui, n[3].f,
@@ -4865,6 +5115,25 @@ execute_list( GLcontext *ctx, GLuint list )
             break;
          case OPCODE_TRACK_MATRIX_NV:
             (*ctx->Exec->TrackMatrixNV)(n[1].e, n[2].ui, n[3].e, n[4].e);
+            break;
+#endif
+
+#if FEATURE_NV_fragment_program
+         case OPCODE_PROGRAM_LOCAL_PARAMETER_ARB:
+            (*ctx->Exec->ProgramLocalParameter4fARB)(n[1].e, n[2].ui, n[3].f,
+                                                     n[4].f, n[5].f, n[6].f);
+            break;
+         case OPCODE_PROGRAM_NAMED_PARAMETER_NV:
+            (*ctx->Exec->ProgramNamedParameter4fNV)(n[1].ui, n[2].i, n[3].data,
+                                               n[4].f, n[5].f, n[6].f, n[7].f);
+            break;
+#endif
+
+         case OPCODE_ACTIVE_STENCIL_FACE_EXT:
+            (*ctx->Exec->ActiveStencilFaceEXT)(n[1].e);
+            break;
+         case OPCODE_DEPTH_BOUNDS_EXT:
+            (*ctx->Exec->DepthBoundsEXT)(n[1].f, n[2].f);
             break;
 
 	 case OPCODE_CONTINUE:
@@ -6208,7 +6477,7 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->ExecuteProgramNV = save_ExecuteProgramNV;
    table->GenProgramsNV = _mesa_GenProgramsNV;
    table->AreProgramsResidentNV = _mesa_AreProgramsResidentNV;
-   table->RequestResidentProgramsNV = _mesa_RequestResidentProgramsNV;
+   table->RequestResidentProgramsNV = save_RequestResidentProgramsNV;
    table->GetProgramParameterfvNV = _mesa_GetProgramParameterfvNV;
    table->GetProgramParameterdvNV = _mesa_GetProgramParameterdvNV;
    table->GetProgramivNV = _mesa_GetProgramivNV;
@@ -6219,7 +6488,7 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->GetVertexAttribivNV = _mesa_GetVertexAttribivNV;
    table->GetVertexAttribPointervNV = _mesa_GetVertexAttribPointervNV;
    table->IsProgramNV = _mesa_IsProgramNV;
-   table->LoadProgramNV = _mesa_LoadProgramNV;
+   table->LoadProgramNV = save_LoadProgramNV;
    table->ProgramParameter4dNV = save_ProgramParameter4dNV;
    table->ProgramParameter4dvNV = save_ProgramParameter4dvNV;
    table->ProgramParameter4fNV = save_ProgramParameter4fNV;
@@ -6230,12 +6499,31 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->VertexAttribPointerNV = _mesa_VertexAttribPointerNV;
 #endif
 
+   /* 282. GL_NV_fragment_program */
+#if FEATURE_NV_fragment_program
+   table->ProgramNamedParameter4fNV = save_ProgramNamedParameter4fNV;
+   table->ProgramNamedParameter4dNV = save_ProgramNamedParameter4dNV;
+   table->ProgramNamedParameter4fvNV = save_ProgramNamedParameter4fvNV;
+   table->ProgramNamedParameter4dvNV = save_ProgramNamedParameter4dvNV;
+   table->GetProgramNamedParameterfvNV = _mesa_GetProgramNamedParameterfvNV;
+   table->GetProgramNamedParameterdvNV = _mesa_GetProgramNamedParameterdvNV;
+   table->ProgramLocalParameter4dARB = save_ProgramLocalParameter4dARB;
+   table->ProgramLocalParameter4dvARB = save_ProgramLocalParameter4dvARB;
+   table->ProgramLocalParameter4fARB = save_ProgramLocalParameter4fARB;
+   table->ProgramLocalParameter4fvARB = save_ProgramLocalParameter4fvARB;
+   table->GetProgramLocalParameterdvARB = _mesa_GetProgramLocalParameterdvARB;
+   table->GetProgramLocalParameterfvARB = _mesa_GetProgramLocalParameterfvARB;
+#endif
+
    /* 262. GL_NV_point_sprite */
    table->PointParameteriNV = save_PointParameteriNV;
    table->PointParameterivNV = save_PointParameterivNV;
 
    /* 268. GL_EXT_stencil_two_side */
    table->ActiveStencilFaceEXT = save_ActiveStencilFaceEXT;
+
+   /* ???. GL_EXT_depth_bounds_test */
+   table->DepthBoundsEXT = save_DepthBoundsEXT;
 
    /* ARB 1. GL_ARB_multitexture */
    table->ActiveTextureARB = save_ActiveTextureARB;
@@ -6260,10 +6548,17 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->GetCompressedTexImageARB = exec_GetCompressedTexImageARB;
 
    /* ARB 14. GL_ARB_point_parameters */
-   /* re-use EXT_point_parameters functions */
+   /* aliased with EXT_point_parameters functions */
 
    /* ARB 25. GL_ARB_window_pos */
-   /* re-use MESA_window_pos functions */
+   /* aliased with MESA_window_pos functions */
+
+   /* ARB 26. GL_ARB_vertex_program */
+   /* XXX todo */
+   /* ARB 27. GL_ARB_vertex_program */
+   /* XXX todo */
+   /* ARB 28. GL_ARB_vertex_buffer_object */
+   /* XXX todo */
 }
 
 

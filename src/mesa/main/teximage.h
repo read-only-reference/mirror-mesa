@@ -1,10 +1,8 @@
-/* $Id: teximage.h,v 1.22 2002/10/18 18:03:07 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  5.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -40,11 +38,11 @@ _mesa_base_tex_format( GLcontext *ctx, GLint format );
 
 
 extern struct gl_texture_image *
-_mesa_alloc_texture_image( void );
+_mesa_new_texture_image( GLcontext *ctx );
 
 
 extern void
-_mesa_free_texture_image( struct gl_texture_image *teximage );
+_mesa_delete_texture_image( struct gl_texture_image *teximage );
 
 
 extern void
@@ -70,9 +68,23 @@ _mesa_select_tex_image(GLcontext *ctx, const struct gl_texture_unit *texUnit,
                        GLenum target, GLint level);
 
 
+extern struct gl_texture_image *
+_mesa_get_tex_image(GLcontext *ctx, const struct gl_texture_unit *texUnit,
+                    GLenum target, GLint level);
+
+
+extern struct gl_texture_image *
+_mesa_get_proxy_tex_image(GLcontext *ctx, GLenum target, GLint level);
+
+
 extern GLint
 _mesa_max_texture_levels(GLcontext *ctx, GLenum target);
 
+
+extern GLboolean
+_mesa_test_proxy_teximage(GLcontext *ctx, GLenum target, GLint level,
+                         GLint internalFormat, GLenum format, GLenum type,
+                         GLint width, GLint height, GLint depth, GLint border);
 
 /*** API entry point functions ***/
 

@@ -1,5 +1,3 @@
-/* $Id: get.c,v 1.106 2003/03/01 01:50:21 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -475,8 +473,12 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 *params = INT_TO_BOOL( ctx->CurrentListNum );
 	 break;
       case GL_LIST_MODE:
-	 *params = ENUM_TO_BOOL( ctx->ExecuteFlag
-				  ? GL_COMPILE_AND_EXECUTE : GL_COMPILE );
+         if (!ctx->CompileFlag)
+            *params = 0;
+         else if (ctx->ExecuteFlag)
+            *params = ENUM_TO_BOOL(GL_COMPILE_AND_EXECUTE);
+         else
+            *params = ENUM_TO_BOOL(GL_COMPILE);
 	 break;
       case GL_INDEX_LOGIC_OP:
 	 *params = ctx->Color.IndexLogicOpEnabled;
@@ -1261,7 +1263,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 break;
       case GL_SECONDARY_COLOR_ARRAY_SIZE_EXT:
          CHECK_EXTENSION_B(EXT_secondary_color, pname);
-	 *params = INT_TO_BOOL(ctx->Array.SecondaryColor.Stride);
+	 *params = INT_TO_BOOL(ctx->Array.SecondaryColor.Size);
 	 break;
 
       /* GL_EXT_fog_coord */
@@ -1281,6 +1283,10 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
       case GL_FOG_COORDINATE_ARRAY_STRIDE_EXT:
          CHECK_EXTENSION_B(EXT_fog_coord, pname);
 	 *params = INT_TO_BOOL(ctx->Array.FogCoord.Stride);
+	 break;
+      case GL_FOG_COORDINATE_SOURCE_EXT:
+         CHECK_EXTENSION_B(EXT_fog_coord, pname);
+	 *params = ENUM_TO_BOOL(ctx->Fog.FogCoordinateSource);
 	 break;
 
       /* GL_EXT_texture_lod_bias */
@@ -1365,19 +1371,20 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          break;
       case GL_MAX_TRACK_MATRIX_STACK_DEPTH_NV:
          CHECK_EXTENSION_B(NV_vertex_program, pname);
-         *params = (MAX_PROGRAM_STACK_DEPTH > 0) ? GL_TRUE : GL_FALSE;
+         *params = (ctx->Const.MaxProgramMatrixStackDepth > 0) ? GL_TRUE : GL_FALSE;
          break;
       case GL_MAX_TRACK_MATRICES_NV:
          CHECK_EXTENSION_B(NV_vertex_program, pname);
-         *params = (MAX_PROGRAM_MATRICES > 0) ? GL_TRUE : GL_FALSE;
+         *params = (ctx->Const.MaxProgramMatrices > 0) ? GL_TRUE : GL_FALSE;
          break;
       case GL_CURRENT_MATRIX_STACK_DEPTH_NV:
          CHECK_EXTENSION_B(NV_vertex_program, pname);
-         *params = (ctx->CurrentStack->Depth > 0) ? GL_TRUE : GL_FALSE;
+         *params = GL_TRUE;
          break;
       case GL_CURRENT_MATRIX_NV:
          CHECK_EXTENSION_B(NV_vertex_program, pname);
-         *params = (ctx->Transform.MatrixMode != 0) ? GL_TRUE : GL_FALSE;
+         for (i = 0; i < 16; i++)
+            params[i] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[i]);
          break;
       case GL_VERTEX_PROGRAM_BINDING_NV:
          CHECK_EXTENSION_B(NV_vertex_program, pname);
@@ -1460,6 +1467,10 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 #endif /* FEATURE_NV_vertex_program */
 
 #if FEATURE_NV_fragment_program
+      case GL_FRAGMENT_PROGRAM_NV:
+         CHECK_EXTENSION_B(NV_fragment_program, pname);
+         *params = ctx->FragmentProgram.Enabled;
+         break;
       case GL_MAX_TEXTURE_COORDS_NV:
          CHECK_EXTENSION_B(NV_fragment_program, pname);
          *params = INT_TO_BOOL(ctx->Const.MaxTextureCoordUnits);
@@ -1504,6 +1515,93 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
       case GL_ACTIVE_STENCIL_FACE_EXT:
          CHECK_EXTENSION_B(EXT_stencil_two_side, pname);
          *params = ENUM_TO_BOOL(ctx->Stencil.ActiveFace ? GL_BACK : GL_FRONT);
+         break;
+
+#if FEATURE_ARB_vertex_buffer_object
+      case GL_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
+         *params = INT_TO_BOOL(ctx->Array.ArrayBufferBinding);
+         break;
+      case GL_VERTEX_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
+         *params = INT_TO_BOOL(ctx->Array.VertexArrayBufferBinding);
+         break;
+      case GL_NORMAL_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
+         *params = INT_TO_BOOL(ctx->Array.NormalArrayBufferBinding);
+         break;
+      case GL_COLOR_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
+         *params = INT_TO_BOOL(ctx->Array.ColorArrayBufferBinding);
+         break;
+      case GL_INDEX_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
+         *params = INT_TO_BOOL(ctx->Array.IndexArrayBufferBinding);
+         break;
+      case GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
+         *params = INT_TO_BOOL(ctx->Array.TextureArrayBufferBinding);
+         break;
+      case GL_EDGE_FLAG_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
+         *params = INT_TO_BOOL(ctx->Array.EdgeFlagArrayBufferBinding);
+         break;
+      case GL_SECONDARY_COLOR_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
+         *params = INT_TO_BOOL(ctx->Array.SecondaryColorArrayBufferBinding);
+         break;
+      case GL_FOG_COORDINATE_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
+         *params = INT_TO_BOOL(ctx->Array.FogCoordArrayBufferBinding);
+         break;
+      case GL_WEIGHT_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
+         *params = INT_TO_BOOL(ctx->Array.WeightArrayBufferBinding);
+         break;
+      case GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_B(ARB_vertex_buffer_object, pname);
+         *params = INT_TO_BOOL(ctx->Array.ElementArrayBufferBinding);
+         break;
+#endif
+
+#if FEATURE_ARB_fragment_program
+      case GL_FRAGMENT_PROGRAM_ARB:
+         CHECK_EXTENSION_B(ARB_fragment_program, pname);
+         *params = ctx->FragmentProgram.Enabled;
+         break;
+      case GL_TRANSPOSE_CURRENT_MATRIX_ARB:
+         CHECK_EXTENSION_B(ARB_fragment_program, pname);
+         params[0] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[0]);
+         params[1] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[4]);
+         params[2] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[8]);
+         params[3] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[12]);
+         params[4] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[1]);
+         params[5] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[5]);
+         params[6] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[9]);
+         params[7] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[13]);
+         params[8] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[2]);
+         params[9] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[6]);
+         params[10] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[10]);
+         params[11] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[14]);
+         params[12] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[3]);
+         params[13] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[7]);
+         params[14] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[11]);
+         params[15] = FLOAT_TO_BOOL(ctx->CurrentStack->Top->m[15]);
+         break;
+      /* Remaining ARB_fragment_program queries alias with
+       * the GL_NV_fragment_program queries.
+       */
+#endif
+
+      /* GL_EXT_depth_bounds_test */
+      case GL_DEPTH_BOUNDS_TEST_EXT:
+         CHECK_EXTENSION_B(EXT_depth_bounds_test, pname);
+         params[0] = ctx->Depth.BoundsTest;
+         break;
+      case GL_DEPTH_BOUNDS_EXT:
+         CHECK_EXTENSION_B(EXT_depth_bounds_test, pname);
+         params[0] = FLOAT_TO_BOOL(ctx->Depth.BoundsMin);
+         params[1] = FLOAT_TO_BOOL(ctx->Depth.BoundsMax);
          break;
 
       default:
@@ -1877,8 +1975,12 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 *params = (GLdouble) ctx->CurrentListNum;
 	 break;
       case GL_LIST_MODE:
-	 *params = ctx->ExecuteFlag ? ENUM_TO_DOUBLE(GL_COMPILE_AND_EXECUTE)
-	   			  : ENUM_TO_DOUBLE(GL_COMPILE);
+         if (!ctx->CompileFlag)
+            *params = 0.0;
+         else if (ctx->ExecuteFlag)
+            *params = ENUM_TO_DOUBLE(GL_COMPILE_AND_EXECUTE);
+         else
+            *params = ENUM_TO_DOUBLE(GL_COMPILE);
 	 break;
       case GL_INDEX_LOGIC_OP:
 	 *params = (GLdouble) ctx->Color.IndexLogicOpEnabled;
@@ -2660,7 +2762,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 break;
       case GL_SECONDARY_COLOR_ARRAY_SIZE_EXT:
          CHECK_EXTENSION_D(EXT_secondary_color, pname);
-	 *params = (GLdouble) ctx->Array.SecondaryColor.Stride;
+	 *params = (GLdouble) ctx->Array.SecondaryColor.Size;
 	 break;
 
       /* GL_EXT_fog_coord */
@@ -2680,6 +2782,10 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       case GL_FOG_COORDINATE_ARRAY_STRIDE_EXT:
          CHECK_EXTENSION_D(EXT_fog_coord, pname);
 	 *params = (GLdouble) ctx->Array.FogCoord.Stride;
+	 break;
+      case GL_FOG_COORDINATE_SOURCE_EXT:
+         CHECK_EXTENSION_D(EXT_fog_coord, pname);
+	 *params = (GLdouble) ctx->Fog.FogCoordinateSource;
 	 break;
 
       /* GL_EXT_texture_lod_bias */
@@ -2764,19 +2870,20 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          break;
       case GL_MAX_TRACK_MATRIX_STACK_DEPTH_NV:
          CHECK_EXTENSION_D(NV_vertex_program, pname);
-         *params = (GLdouble) MAX_PROGRAM_STACK_DEPTH;
+         *params = (GLdouble) ctx->Const.MaxProgramMatrixStackDepth;
          break;
       case GL_MAX_TRACK_MATRICES_NV:
          CHECK_EXTENSION_D(NV_vertex_program, pname);
-         *params = (GLdouble) MAX_PROGRAM_MATRICES;
+         *params = (GLdouble) ctx->Const.MaxProgramMatrices;
          break;
       case GL_CURRENT_MATRIX_STACK_DEPTH_NV:
          CHECK_EXTENSION_D(NV_vertex_program, pname);
-         *params = (GLdouble) ctx->CurrentStack->Depth;
+         *params = (GLdouble) ctx->CurrentStack->Depth + 1;
          break;
       case GL_CURRENT_MATRIX_NV:
          CHECK_EXTENSION_D(NV_vertex_program, pname);
-         *params = (GLdouble) ctx->Transform.MatrixMode;
+         for (i = 0; i < 16; i++)
+            params[i] = (GLdouble) ctx->CurrentStack->Top->m[i];
          break;
       case GL_VERTEX_PROGRAM_BINDING_NV:
          CHECK_EXTENSION_D(NV_vertex_program, pname);
@@ -2858,6 +2965,10 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 #endif /* FEATURE_NV_vertex_program */
 
 #if FEATURE_NV_fragment_program
+      case GL_FRAGMENT_PROGRAM_NV:
+         CHECK_EXTENSION_D(NV_fragment_program, pname);
+         *params = (GLdouble) ctx->FragmentProgram.Enabled;
+         break;
       case GL_MAX_TEXTURE_COORDS_NV:
          CHECK_EXTENSION_B(NV_fragment_program, pname);
          *params = (GLdouble) ctx->Const.MaxTextureCoordUnits;
@@ -2901,6 +3012,93 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       case GL_ACTIVE_STENCIL_FACE_EXT:
          CHECK_EXTENSION_D(EXT_stencil_two_side, pname);
          *params = (GLdouble) (ctx->Stencil.ActiveFace ? GL_BACK : GL_FRONT);
+         break;
+
+#if FEATURE_ARB_vertex_buffer_object
+      case GL_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_D(ARB_vertex_buffer_object, pname);
+         *params = (GLdouble) ctx->Array.ArrayBufferBinding;
+         break;
+      case GL_VERTEX_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_D(ARB_vertex_buffer_object, pname);
+         *params = (GLdouble) ctx->Array.VertexArrayBufferBinding;
+         break;
+      case GL_NORMAL_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_D(ARB_vertex_buffer_object, pname);
+         *params = (GLdouble) ctx->Array.NormalArrayBufferBinding;
+         break;
+      case GL_COLOR_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_D(ARB_vertex_buffer_object, pname);
+         *params = (GLdouble) ctx->Array.ColorArrayBufferBinding;
+         break;
+      case GL_INDEX_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_D(ARB_vertex_buffer_object, pname);
+         *params = (GLdouble) ctx->Array.IndexArrayBufferBinding;
+         break;
+      case GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_D(ARB_vertex_buffer_object, pname);
+         *params = (GLdouble) ctx->Array.TextureArrayBufferBinding;
+         break;
+      case GL_EDGE_FLAG_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_D(ARB_vertex_buffer_object, pname);
+         *params = (GLdouble) ctx->Array.EdgeFlagArrayBufferBinding;
+         break;
+      case GL_SECONDARY_COLOR_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_D(ARB_vertex_buffer_object, pname);
+         *params = (GLdouble) ctx->Array.SecondaryColorArrayBufferBinding;
+         break;
+      case GL_FOG_COORDINATE_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_D(ARB_vertex_buffer_object, pname);
+         *params = (GLdouble) ctx->Array.FogCoordArrayBufferBinding;
+         break;
+      case GL_WEIGHT_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_D(ARB_vertex_buffer_object, pname);
+         *params = (GLdouble) ctx->Array.WeightArrayBufferBinding;
+         break;
+      case GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_D(ARB_vertex_buffer_object, pname);
+         *params = (GLdouble) ctx->Array.ElementArrayBufferBinding;
+         break;
+#endif
+
+#if FEATURE_ARB_fragment_program
+      case GL_FRAGMENT_PROGRAM_ARB:
+         CHECK_EXTENSION_D(ARB_fragment_program, pname);
+         *params = (GLdouble) ctx->FragmentProgram.Enabled;
+         break;
+      case GL_TRANSPOSE_CURRENT_MATRIX_ARB:
+         CHECK_EXTENSION_D(ARB_fragment_program, pname);
+         params[0] = ctx->CurrentStack->Top->m[0];
+         params[1] = ctx->CurrentStack->Top->m[4];
+         params[2] = ctx->CurrentStack->Top->m[8];
+         params[3] = ctx->CurrentStack->Top->m[12];
+         params[4] = ctx->CurrentStack->Top->m[1];
+         params[5] = ctx->CurrentStack->Top->m[5];
+         params[6] = ctx->CurrentStack->Top->m[9];
+         params[7] = ctx->CurrentStack->Top->m[13];
+         params[8] = ctx->CurrentStack->Top->m[2];
+         params[9] = ctx->CurrentStack->Top->m[6];
+         params[10] = ctx->CurrentStack->Top->m[10];
+         params[11] = ctx->CurrentStack->Top->m[14];
+         params[12] = ctx->CurrentStack->Top->m[3];
+         params[13] = ctx->CurrentStack->Top->m[7];
+         params[14] = ctx->CurrentStack->Top->m[11];
+         params[15] = ctx->CurrentStack->Top->m[15];
+         break;
+      /* Remaining ARB_fragment_program queries alias with
+       * the GL_NV_fragment_program queries.
+       */
+#endif
+
+      /* GL_EXT_depth_bounds_test */
+      case GL_DEPTH_BOUNDS_TEST_EXT:
+         CHECK_EXTENSION_D(EXT_depth_bounds_test, pname);
+         params[0] = (GLdouble) ctx->Depth.BoundsTest;
+         break;
+      case GL_DEPTH_BOUNDS_EXT:
+         CHECK_EXTENSION_D(EXT_depth_bounds_test, pname);
+         params[0] = ctx->Depth.BoundsMin;
+         params[1] = ctx->Depth.BoundsMax;
          break;
 
       default:
@@ -3274,8 +3472,12 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = (GLfloat) ctx->CurrentListNum;
 	 break;
       case GL_LIST_MODE:
-	 *params = ctx->ExecuteFlag ? ENUM_TO_FLOAT(GL_COMPILE_AND_EXECUTE)
-	   			  : ENUM_TO_FLOAT(GL_COMPILE);
+         if (!ctx->CompileFlag)
+            *params = 0.0F;
+         else if (ctx->ExecuteFlag)
+            *params = ENUM_TO_FLOAT(GL_COMPILE_AND_EXECUTE);
+         else
+            *params = ENUM_TO_FLOAT(GL_COMPILE);
 	 break;
       case GL_INDEX_LOGIC_OP:
 	 *params = (GLfloat) ctx->Color.IndexLogicOpEnabled;
@@ -4033,7 +4235,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 break;
       case GL_SECONDARY_COLOR_ARRAY_SIZE_EXT:
          CHECK_EXTENSION_F(EXT_secondary_color, pname);
-	 *params = (GLfloat) ctx->Array.SecondaryColor.Stride;
+	 *params = (GLfloat) ctx->Array.SecondaryColor.Size;
 	 break;
 
       /* GL_EXT_fog_coord */
@@ -4053,6 +4255,10 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_FOG_COORDINATE_ARRAY_STRIDE_EXT:
          CHECK_EXTENSION_F(EXT_fog_coord, pname);
 	 *params = (GLfloat) ctx->Array.FogCoord.Stride;
+	 break;
+      case GL_FOG_COORDINATE_SOURCE_EXT:
+         CHECK_EXTENSION_F(EXT_fog_coord, pname);
+	 *params = (GLfloat) ctx->Fog.FogCoordinateSource;
 	 break;
 
       /* GL_EXT_texture_lod_bias */
@@ -4137,19 +4343,20 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          break;
       case GL_MAX_TRACK_MATRIX_STACK_DEPTH_NV:
          CHECK_EXTENSION_F(NV_vertex_program, pname);
-         *params = (GLfloat) MAX_PROGRAM_STACK_DEPTH;
+         *params = (GLfloat) ctx->Const.MaxProgramMatrixStackDepth;
          break;
       case GL_MAX_TRACK_MATRICES_NV:
          CHECK_EXTENSION_F(NV_vertex_program, pname);
-         *params = (GLfloat) MAX_PROGRAM_MATRICES;
+         *params = (GLfloat) ctx->Const.MaxProgramMatrices;
          break;
       case GL_CURRENT_MATRIX_STACK_DEPTH_NV:
          CHECK_EXTENSION_F(NV_vertex_program, pname);
-         *params = (GLfloat) ctx->CurrentStack->Depth;
+         *params = (GLfloat) ctx->CurrentStack->Depth + 1;
          break;
       case GL_CURRENT_MATRIX_NV:
          CHECK_EXTENSION_F(NV_vertex_program, pname);
-         *params = (GLfloat) ctx->Transform.MatrixMode;
+         for (i = 0; i < 16; i++)
+            params[i] = ctx->CurrentStack->Top->m[i];
          break;
       case GL_VERTEX_PROGRAM_BINDING_NV:
          CHECK_EXTENSION_F(NV_vertex_program, pname);
@@ -4231,6 +4438,10 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 #endif /* FEATURE_NV_vertex_program */
 
 #if FEATURE_NV_fragment_program
+      case GL_FRAGMENT_PROGRAM_NV:
+         CHECK_EXTENSION_F(NV_fragment_program, pname);
+         *params = (GLfloat) ctx->FragmentProgram.Enabled;
+         break;
       case GL_MAX_TEXTURE_COORDS_NV:
          CHECK_EXTENSION_F(NV_fragment_program, pname);
          *params = (GLfloat) ctx->Const.MaxTextureCoordUnits;
@@ -4274,6 +4485,93 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_ACTIVE_STENCIL_FACE_EXT:
          CHECK_EXTENSION_F(EXT_stencil_two_side, pname);
          *params = (GLfloat) (ctx->Stencil.ActiveFace ? GL_BACK : GL_FRONT);
+         break;
+
+#if FEATURE_ARB_vertex_buffer_object
+      case GL_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_F(ARB_vertex_buffer_object, pname);
+         *params = (GLfloat) ctx->Array.ArrayBufferBinding;
+         break;
+      case GL_VERTEX_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_F(ARB_vertex_buffer_object, pname);
+         *params = (GLfloat) ctx->Array.VertexArrayBufferBinding;
+         break;
+      case GL_NORMAL_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_F(ARB_vertex_buffer_object, pname);
+         *params = (GLfloat) ctx->Array.NormalArrayBufferBinding;
+         break;
+      case GL_COLOR_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_F(ARB_vertex_buffer_object, pname);
+         *params = (GLfloat) ctx->Array.ColorArrayBufferBinding;
+         break;
+      case GL_INDEX_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_F(ARB_vertex_buffer_object, pname);
+         *params = (GLfloat) ctx->Array.IndexArrayBufferBinding;
+         break;
+      case GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_F(ARB_vertex_buffer_object, pname);
+         *params = (GLfloat) ctx->Array.TextureArrayBufferBinding;
+         break;
+      case GL_EDGE_FLAG_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_F(ARB_vertex_buffer_object, pname);
+         *params = (GLfloat) ctx->Array.EdgeFlagArrayBufferBinding;
+         break;
+      case GL_SECONDARY_COLOR_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_F(ARB_vertex_buffer_object, pname);
+         *params = (GLfloat) ctx->Array.SecondaryColorArrayBufferBinding;
+         break;
+      case GL_FOG_COORDINATE_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_F(ARB_vertex_buffer_object, pname);
+         *params = (GLfloat) ctx->Array.FogCoordArrayBufferBinding;
+         break;
+      case GL_WEIGHT_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_F(ARB_vertex_buffer_object, pname);
+         *params = (GLfloat) ctx->Array.WeightArrayBufferBinding;
+         break;
+      case GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_F(ARB_vertex_buffer_object, pname);
+         *params = (GLfloat) ctx->Array.ElementArrayBufferBinding;
+         break;
+#endif
+
+#if FEATURE_ARB_fragment_program
+      case GL_FRAGMENT_PROGRAM_ARB:
+         CHECK_EXTENSION_F(ARB_fragment_program, pname);
+         *params = (GLfloat) ctx->FragmentProgram.Enabled;
+         break;
+      case GL_TRANSPOSE_CURRENT_MATRIX_ARB:
+         CHECK_EXTENSION_F(ARB_fragment_program, pname);
+         params[0] = ctx->CurrentStack->Top->m[0];
+         params[1] = ctx->CurrentStack->Top->m[4];
+         params[2] = ctx->CurrentStack->Top->m[8];
+         params[3] = ctx->CurrentStack->Top->m[12];
+         params[4] = ctx->CurrentStack->Top->m[1];
+         params[5] = ctx->CurrentStack->Top->m[5];
+         params[6] = ctx->CurrentStack->Top->m[9];
+         params[7] = ctx->CurrentStack->Top->m[13];
+         params[8] = ctx->CurrentStack->Top->m[2];
+         params[9] = ctx->CurrentStack->Top->m[6];
+         params[10] = ctx->CurrentStack->Top->m[10];
+         params[11] = ctx->CurrentStack->Top->m[14];
+         params[12] = ctx->CurrentStack->Top->m[3];
+         params[13] = ctx->CurrentStack->Top->m[7];
+         params[14] = ctx->CurrentStack->Top->m[11];
+         params[15] = ctx->CurrentStack->Top->m[15];
+         break;
+      /* Remaining ARB_fragment_program queries alias with
+       * the GL_NV_fragment_program queries.
+       */
+#endif
+
+      /* GL_EXT_depth_bounds_test */
+      case GL_DEPTH_BOUNDS_TEST_EXT:
+         CHECK_EXTENSION_F(EXT_depth_bounds_test, pname);
+         params[0] = (GLfloat) ctx->Depth.BoundsTest;
+         break;
+      case GL_DEPTH_BOUNDS_EXT:
+         CHECK_EXTENSION_F(EXT_depth_bounds_test, pname);
+         params[0] = ctx->Depth.BoundsMin;
+         params[1] = ctx->Depth.BoundsMax;
          break;
 
       default:
@@ -4648,8 +4946,12 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 *params = (GLint) ctx->CurrentListNum;
 	 break;
       case GL_LIST_MODE:
-	 *params = ctx->ExecuteFlag ? (GLint) GL_COMPILE_AND_EXECUTE
-	   			  : (GLint) GL_COMPILE;
+         if (!ctx->CompileFlag)
+            *params = 0;
+         else if (ctx->ExecuteFlag)
+            *params = (GLint) GL_COMPILE_AND_EXECUTE;
+         else
+            *params = (GLint) GL_COMPILE;
 	 break;
       case GL_INDEX_LOGIC_OP:
 	 *params = (GLint) ctx->Color.IndexLogicOpEnabled;
@@ -5444,7 +5746,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 break;
       case GL_SECONDARY_COLOR_ARRAY_SIZE_EXT:
          CHECK_EXTENSION_I(EXT_secondary_color, pname);
-	 *params = (GLint) ctx->Array.SecondaryColor.Stride;
+	 *params = (GLint) ctx->Array.SecondaryColor.Size;
 	 break;
 
       /* GL_EXT_fog_coord */
@@ -5464,6 +5766,10 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       case GL_FOG_COORDINATE_ARRAY_STRIDE_EXT:
          CHECK_EXTENSION_I(EXT_fog_coord, pname);
          *params = (GLint) ctx->Array.FogCoord.Stride;
+	 break;
+      case GL_FOG_COORDINATE_SOURCE_EXT:
+         CHECK_EXTENSION_I(EXT_fog_coord, pname);
+	 *params = (GLint) ctx->Fog.FogCoordinateSource;
 	 break;
 
       /* GL_EXT_texture_lod_bias */
@@ -5548,19 +5854,20 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          break;
       case GL_MAX_TRACK_MATRIX_STACK_DEPTH_NV:
          CHECK_EXTENSION_I(NV_vertex_program, pname);
-         *params = MAX_PROGRAM_STACK_DEPTH;
+         *params = ctx->Const.MaxProgramMatrixStackDepth;
          break;
       case GL_MAX_TRACK_MATRICES_NV:
          CHECK_EXTENSION_I(NV_vertex_program, pname);
-         *params = MAX_PROGRAM_MATRICES;
+         *params = ctx->Const.MaxProgramMatrices;
          break;
       case GL_CURRENT_MATRIX_STACK_DEPTH_NV:
          CHECK_EXTENSION_I(NV_vertex_program, pname);
-         *params = ctx->CurrentStack->Depth;
+         *params = ctx->CurrentStack->Depth + 1;
          break;
       case GL_CURRENT_MATRIX_NV:
          CHECK_EXTENSION_I(NV_vertex_program, pname);
-         *params = (GLint) ctx->Transform.MatrixMode;
+         for (i = 0; i < 16; i++)
+            params[i] = (GLint) ctx->CurrentStack->Top->m[i];
          break;
       case GL_VERTEX_PROGRAM_BINDING_NV:
          CHECK_EXTENSION_I(NV_vertex_program, pname);
@@ -5642,6 +5949,10 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 #endif /* FEATURE_NV_vertex_program */
 
 #if FEATURE_NV_fragment_program
+      case GL_FRAGMENT_PROGRAM_NV:
+         CHECK_EXTENSION_I(NV_fragment_program, pname);
+         *params = (GLint) ctx->FragmentProgram.Enabled;
+         break;
       case GL_MAX_TEXTURE_COORDS_NV:
          CHECK_EXTENSION_I(NV_fragment_program, pname);
          *params = (GLint) ctx->Const.MaxTextureCoordUnits;
@@ -5685,6 +5996,93 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       case GL_ACTIVE_STENCIL_FACE_EXT:
          CHECK_EXTENSION_I(EXT_stencil_two_side, pname);
          *params = (GLint) (ctx->Stencil.ActiveFace ? GL_BACK : GL_FRONT);
+         break;
+
+#if FEATURE_ARB_vertex_buffer_object
+      case GL_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
+         *params = (GLint) ctx->Array.ArrayBufferBinding;
+         break;
+      case GL_VERTEX_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
+         *params = (GLint) ctx->Array.VertexArrayBufferBinding;
+         break;
+      case GL_NORMAL_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
+         *params = (GLint) ctx->Array.NormalArrayBufferBinding;
+         break;
+      case GL_COLOR_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
+         *params = (GLint) ctx->Array.ColorArrayBufferBinding;
+         break;
+      case GL_INDEX_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
+         *params = (GLint) ctx->Array.IndexArrayBufferBinding;
+         break;
+      case GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
+         *params = (GLint) ctx->Array.TextureArrayBufferBinding;
+         break;
+      case GL_EDGE_FLAG_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
+         *params = (GLint) ctx->Array.EdgeFlagArrayBufferBinding;
+         break;
+      case GL_SECONDARY_COLOR_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
+         *params = (GLint) ctx->Array.SecondaryColorArrayBufferBinding;
+         break;
+      case GL_FOG_COORDINATE_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
+         *params = (GLint) ctx->Array.FogCoordArrayBufferBinding;
+         break;
+      case GL_WEIGHT_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
+         *params = (GLint) ctx->Array.WeightArrayBufferBinding;
+         break;
+      case GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB:
+         CHECK_EXTENSION_I(ARB_vertex_buffer_object, pname);
+         *params = (GLint) ctx->Array.ElementArrayBufferBinding;
+         break;
+#endif
+
+#if FEATURE_ARB_fragment_program
+      case GL_FRAGMENT_PROGRAM_ARB:
+         CHECK_EXTENSION_I(ARB_fragment_program, pname);
+         *params = ctx->FragmentProgram.Enabled;
+         break;
+      case GL_TRANSPOSE_CURRENT_MATRIX_ARB:
+         CHECK_EXTENSION_I(ARB_fragment_program, pname);
+         params[0] = (GLint) ctx->CurrentStack->Top->m[0];
+         params[1] = (GLint) ctx->CurrentStack->Top->m[4];
+         params[2] = (GLint) ctx->CurrentStack->Top->m[8];
+         params[3] = (GLint) ctx->CurrentStack->Top->m[12];
+         params[4] = (GLint) ctx->CurrentStack->Top->m[1];
+         params[5] = (GLint) ctx->CurrentStack->Top->m[5];
+         params[6] = (GLint) ctx->CurrentStack->Top->m[9];
+         params[7] = (GLint) ctx->CurrentStack->Top->m[13];
+         params[8] = (GLint) ctx->CurrentStack->Top->m[2];
+         params[9] = (GLint) ctx->CurrentStack->Top->m[6];
+         params[10] = (GLint) ctx->CurrentStack->Top->m[10];
+         params[11] = (GLint) ctx->CurrentStack->Top->m[14];
+         params[12] = (GLint) ctx->CurrentStack->Top->m[3];
+         params[13] = (GLint) ctx->CurrentStack->Top->m[7];
+         params[14] = (GLint) ctx->CurrentStack->Top->m[11];
+         params[15] = (GLint) ctx->CurrentStack->Top->m[15];
+         break;
+      /* Remaining ARB_fragment_program queries alias with
+       * the GL_NV_fragment_program queries.
+       */
+#endif
+
+      /* GL_EXT_depth_bounds_test */
+      case GL_DEPTH_BOUNDS_TEST_EXT:
+         CHECK_EXTENSION_I(EXT_depth_bounds_test, pname);
+         params[0] = ctx->Depth.BoundsTest;
+         break;
+      case GL_DEPTH_BOUNDS_EXT:
+         CHECK_EXTENSION_I(EXT_depth_bounds_test, pname);
+         params[0] = (GLint) ctx->Depth.BoundsMin;
+         params[1] = (GLint) ctx->Depth.BoundsMax;
          break;
 
       default:

@@ -1,8 +1,8 @@
-# $Id: Makefile.X11,v 1.20 2001/08/21 05:42:11 gareth Exp $
+# $Id: Makefile.X11,v 1.23 2003/04/21 14:04:27 brianp Exp $
 
 # Mesa 3-D graphics library
-# Version:  3.5
-# Copyright (C) 1995-2001  Brian Paul
+# Version:  5.1
+# Copyright (C) 1995-2003  Brian Paul
 
 # Makefile for GLUT-based demo programs for Unix/X11
 
@@ -18,11 +18,14 @@ OSMESA_LIBS = -L$(LIBDIR) -lglut -lOSMesa -lGLU -lGL $(APP_LIB_DEPS)
 
 LIB_DEP = $(LIBDIR)/$(GL_LIB) $(LIBDIR)/$(GLU_LIB) $(LIBDIR)/$(GLUT_LIB)
 
-PROGS = bounce \
+PROGS = \
+	arbfplight \
+	bounce \
 	clearspd \
 	cubemap \
 	drawpix \
 	fire \
+	fplight \
 	gamma \
 	gears \
 	geartrain \
@@ -95,7 +98,7 @@ readtex.c:
 	cp ../util/readtex.c .
 
 readtex.h:
-	cp ../util/readtex.c .
+	cp ../util/readtex.h .
 
 
 # execute all programs
