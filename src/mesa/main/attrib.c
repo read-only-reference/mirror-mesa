@@ -1,4 +1,4 @@
-/* $Id: attrib.c,v 1.53 2001/06/26 01:32:48 brianp Exp $ */
+/* $Id: attrib.c,v 1.55 2001/08/07 23:10:55 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -49,6 +49,7 @@
 #include "polygon.h"
 #include "simple_list.h"
 #include "stencil.h"
+#include "texobj.h"
 #include "texstate.h"
 #include "mtypes.h"
 #endif
@@ -79,8 +80,8 @@ static void
 copy_texobj_state( struct gl_texture_object *dest,
                    const struct gl_texture_object *src )
 {
-   /*
    dest->Name = src->Name;
+   /*
    dest->Dimensions = src->Dimensions;
    */
    dest->Priority = src->Priority;
@@ -592,16 +593,6 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
 {
    GLuint u;
 
-   /* "un-bump" the texture object reference counts.  We did that so they
-    * wouldn't inadvertantly get deleted.
-    */
-   for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-      ctx->Texture.Unit[u].Current1D->RefCount--;
-      ctx->Texture.Unit[u].Current2D->RefCount--;
-      ctx->Texture.Unit[u].Current3D->RefCount--;
-      ctx->Texture.Unit[u].CurrentCubeMap->RefCount--;
-   }
-
    for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
       const struct gl_texture_unit *unit = &texAttrib->Unit[u];
       GLuint numObjs, i;
@@ -697,6 +688,8 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
             ; /* silence warnings */
          }
 
+         _mesa_BindTexture(target, obj->Name);
+
          bordColor[0] = CHAN_TO_FLOAT(obj->BorderColor[0]);
          bordColor[1] = CHAN_TO_FLOAT(obj->BorderColor[1]);
          bordColor[2] = CHAN_TO_FLOAT(obj->BorderColor[2]);
@@ -732,6 +725,17 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
    }
    _mesa_ActiveTextureARB(GL_TEXTURE0_ARB
                           + texAttrib->CurrentUnit);
+
+   /* "un-bump" the texture object reference counts.  We did that so they
+    * wouldn't inadvertantly get deleted while they were still referenced
+    * inside the attribute state stack.
+    */
+   for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
+      ctx->Texture.Unit[u].Current1D->RefCount--;
+      ctx->Texture.Unit[u].Current2D->RefCount--;
+      ctx->Texture.Unit[u].Current3D->RefCount--;
+      ctx->Texture.Unit[u].CurrentCubeMap->RefCount--;
+   }
 }
 
 
@@ -1127,17 +1131,17 @@ _mesa_PopClientAttrib(void)
          case GL_CLIENT_PACK_BIT:
             MEMCPY( &ctx->Pack, attr->data,
                     sizeof(struct gl_pixelstore_attrib) );
-	    ctx->NewState = _NEW_PACKUNPACK;
+	    ctx->NewState |= _NEW_PACKUNPACK;
             break;
          case GL_CLIENT_UNPACK_BIT:
             MEMCPY( &ctx->Unpack, attr->data,
                     sizeof(struct gl_pixelstore_attrib) );
-	    ctx->NewState = _NEW_PACKUNPACK;
+	    ctx->NewState |= _NEW_PACKUNPACK;
             break;
          case GL_CLIENT_VERTEX_ARRAY_BIT:
             MEMCPY( &ctx->Array, attr->data,
 		    sizeof(struct gl_array_attrib) );
-	    ctx->NewState = _NEW_ARRAY;
+	    ctx->NewState |= _NEW_ARRAY;
             break;
          default:
             _mesa_problem( ctx, "Bad attrib flag in PopClientAttrib");

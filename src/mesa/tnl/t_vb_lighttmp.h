@@ -1,4 +1,4 @@
-/* $Id: t_vb_lighttmp.h,v 1.14 2001/07/28 19:28:49 keithw Exp $ */
+/* $Id: t_vb_lighttmp.h,v 1.17 2001/08/13 22:17:19 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -36,7 +36,7 @@
 #  define CHECK_MATERIAL(x)  (flags[x] & VERT_MATERIAL)
 #  define CHECK_END_VB(x)    (flags[x] & VERT_END_VB)
 #  if (IDX & LIGHT_COLORMATERIAL)
-#    define CMSTRIDE STRIDE_F(CMcolor, (4 * sizeof(GLfloat)))
+#    define CMSTRIDE STRIDE_F(CMcolor, CMstride)
 #    define CHECK_COLOR_MATERIAL(x) (flags[x] & VERT_RGBA)
 #    define CHECK_VALIDATE(x) (flags[x] & (VERT_RGBA|VERT_MATERIAL))
 #    define DO_ANOTHER_NORMAL(x) \
@@ -117,13 +117,14 @@ static void TAG(light_rgba_spec)( GLcontext *ctx,
 
 
 
-/*     fprintf(stderr, "%s\n", __FUNCTION__ );  */
+/*     fprintf(stderr, "%s\n", __FUNCTION__ );   */
 
    spec[0] = Fspec;
    spec[1] = Bspec;
 
    if (IDX & LIGHT_COLORMATERIAL) {
-      if (VB->ColorPtr[0]->Type != GL_FLOAT)
+      if (VB->ColorPtr[0]->Type != GL_FLOAT || 
+	  VB->ColorPtr[0]->Size != 4)
 	 import_color_material( ctx, stage );
 
       CMcolor = (GLfloat *) VB->ColorPtr[0]->Ptr;
@@ -336,7 +337,8 @@ static void TAG(light_rgba)( GLcontext *ctx,
    color[1] = Bcolor;
 
    if (IDX & LIGHT_COLORMATERIAL) {
-      if (VB->ColorPtr[0]->Type != GL_FLOAT)
+      if (VB->ColorPtr[0]->Type != GL_FLOAT || 
+	  VB->ColorPtr[0]->Size != 4)
 	 import_color_material( ctx, stage );
 
       CMcolor = (GLfloat *)VB->ColorPtr[0]->Ptr;
@@ -543,7 +545,8 @@ static void TAG(light_fast_rgba_single)( GLcontext *ctx,
    (void) nstride;
 
    if (IDX & LIGHT_COLORMATERIAL) {
-      if (VB->ColorPtr[0]->Type != GL_FLOAT)
+      if (VB->ColorPtr[0]->Type != GL_FLOAT || 
+	  VB->ColorPtr[0]->Size != 4)
 	 import_color_material( ctx, stage );
 
       CMcolor = (GLfloat *)VB->ColorPtr[0]->Ptr;
@@ -559,8 +562,10 @@ static void TAG(light_fast_rgba_single)( GLcontext *ctx,
 
    do {
       
-      if ( CHECK_COLOR_MATERIAL(j) )
+      if ( CHECK_COLOR_MATERIAL(j) ) {
+/*  	 fprintf(stderr, "colormaterial at %d (%p)\n", j, CMcolor); */
 	 _mesa_update_color_material( ctx, CMcolor );
+      }
 
       if ( CHECK_MATERIAL(j) )
 	 _mesa_update_material( ctx, new_material[j], new_material_mask[j] );
@@ -588,6 +593,12 @@ static void TAG(light_fast_rgba_single)( GLcontext *ctx,
       do {
 	 GLfloat n_dot_VP = DOT3(normal, light->_VP_inf_norm);
 
+/*  	 if (j < 5) */
+/*  	    fprintf(stderr, "light normal %d: %f %f %f\n",  */
+/*  		    j,  */
+/*  		    normal[0], */
+/*  		    normal[1], */
+/*  		    normal[2]); */
 
 	 if (n_dot_VP < 0.0F) {
 	    if (IDX & LIGHT_TWOSIDE) {
@@ -629,6 +640,14 @@ static void TAG(light_fast_rgba_single)( GLcontext *ctx,
 	 COPY_CHAN4(Fcolor[j], Fcolor[j-1]);
 	 if (IDX & LIGHT_TWOSIDE)
 	    COPY_CHAN4(Bcolor[j], Bcolor[j-1]);
+
+/*  	 if (j < 5) */
+/*  	    fprintf(stderr, "skip normal %d: %f %f %f\n",  */
+/*  		    j,  */
+/*  		    normal[0], */
+/*  		    normal[1], */
+/*  		    normal[2]); */
+
       }
 
    } while (!CHECK_END_VB(j));
@@ -667,7 +686,8 @@ static void TAG(light_fast_rgba)( GLcontext *ctx,
    UNCLAMPED_FLOAT_TO_CHAN(sumA[1], ctx->Light.Material[1].Diffuse[3]);
 
    if (IDX & LIGHT_COLORMATERIAL) {
-      if (VB->ColorPtr[0]->Type != GL_FLOAT)
+      if (VB->ColorPtr[0]->Type != GL_FLOAT || 
+	  VB->ColorPtr[0]->Size != 4)
 	 import_color_material( ctx, stage );
 
       CMcolor = (GLfloat *)VB->ColorPtr[0]->Ptr;
@@ -698,6 +718,7 @@ static void TAG(light_fast_rgba)( GLcontext *ctx,
 	       UNCLAMPED_FLOAT_TO_CHAN(sumA[1], 
 				       ctx->Light.Material[1].Diffuse[3]);
 	 }
+
 
 	 COPY_3V(sum[0], ctx->Light._BaseColor[0]);
 	 if (IDX & LIGHT_TWOSIDE)
@@ -809,7 +830,8 @@ static void TAG(light_ci)( GLcontext *ctx,
       indexResult[1] = VB->IndexPtr[1]->data;
 
    if (IDX & LIGHT_COLORMATERIAL) {
-      if (VB->ColorPtr[0]->Type != GL_FLOAT)
+      if (VB->ColorPtr[0]->Type != GL_FLOAT || 
+	  VB->ColorPtr[0]->Size != 4)
 	 import_color_material( ctx, stage );
 
       CMcolor = (GLfloat *)VB->ColorPtr[0]->Ptr;

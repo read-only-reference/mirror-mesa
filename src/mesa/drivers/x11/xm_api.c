@@ -1,4 +1,4 @@
-/* $Id: xm_api.c,v 1.25 2001/06/15 14:18:46 brianp Exp $ */
+/* $Id: xm_api.c,v 1.27 2001/08/31 04:30:14 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -1636,7 +1636,7 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
    }
 
    _mesa_enable_sw_extensions(ctx);
-   _mesa_enable_extension(ctx, "GL_ARB_texture_compression");
+   _mesa_enable_1_3_extensions(ctx);
    ctx->Driver.BaseCompressedTexFormat = _mesa_base_compressed_texformat;
    ctx->Driver.CompressedTextureSize = _mesa_compressed_texture_size;
    ctx->Driver.GetCompressedTexImage = _mesa_get_compressed_teximage;
@@ -2032,6 +2032,10 @@ GLboolean XMesaMakeCurrent2( XMesaContext c, XMesaBuffer drawBuffer,
       if (drawBuffer->FXctx) {
          fxMesaMakeCurrent(drawBuffer->FXctx);
 
+         /* Disassociate drawBuffer's current context from drawBuffer */
+         if (drawBuffer->xm_context)
+            drawBuffer->xm_context->xm_buffer = NULL;
+
          /* Disassociate old buffer from this context */
          if (c->xm_buffer)
             c->xm_buffer->xm_context = NULL;
@@ -2054,9 +2058,14 @@ GLboolean XMesaMakeCurrent2( XMesaContext c, XMesaBuffer drawBuffer,
          return GL_TRUE;
       }
 
+      /* Disassociate drawBuffer's current context from drawBuffer */
+      if (drawBuffer->xm_context)
+         drawBuffer->xm_context->xm_buffer = NULL;
+ 
       /* Disassociate old buffer with this context */
       if (c->xm_buffer)
 	  c->xm_buffer->xm_context = NULL;
+
       drawBuffer->xm_context = c; /* Associate the context with this buffer */
 
       c->xm_buffer = drawBuffer;
@@ -2506,7 +2515,7 @@ const char *XMesaGetString( XMesaContext c, int name )
 {
    (void) c;
    if (name==XMESA_VERSION) {
-      return "3.1";
+      return "3.5";
    }
    else if (name==XMESA_EXTENSIONS) {
       return "";

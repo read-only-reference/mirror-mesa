@@ -1,4 +1,4 @@
-/* $Id: t_imm_eval.c,v 1.13 2001/05/14 09:00:51 keithw Exp $ */
+/* $Id: t_imm_eval.c,v 1.17 2001/08/14 00:59:08 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -206,6 +206,16 @@ static void eval2_obj_norm( GLvector4f *obj_ptr,
 	 _math_de_casteljau_surf(map->Points, obj[i], du, dv, u, v, dimension,
 				 map->Uorder, map->Vorder);
 
+	 if (dimension == 4) {
+	    du[0] = du[0]*obj[i][3] - du[3]*obj[i][0];
+	    du[1] = du[1]*obj[i][3] - du[3]*obj[i][1];
+	    du[2] = du[2]*obj[i][3] - du[3]*obj[i][2];
+	 
+	    dv[0] = dv[0]*obj[i][3] - dv[3]*obj[i][0];
+	    dv[1] = dv[1]*obj[i][3] - dv[3]*obj[i][1];
+	    dv[2] = dv[2]*obj[i][3] - dv[3]*obj[i][2];
+	 }
+
 	 CROSS3(normal[i], du, dv);
 	 NORMALIZE_3FV(normal[i]);
       }
@@ -343,7 +353,14 @@ static void copy_4f_stride( GLfloat to[][4], GLfloat *from,
 
 static void copy_3f( GLfloat to[][3], GLfloat from[][3], GLuint count )
 {
-   MEMCPY( to, from, (count) * sizeof(to[0]));
+   int i;
+/*     MEMCPY( to, from, (count) * sizeof(to[0])); */
+   for (i = 0 ; i < count ; i++) {
+/*        fprintf(stderr, "copy norm %d from %p: %f %f %f\n", i, */
+/*  	      from[i], */
+/*  	      from[i][0], from[i][1], from[i][2]); */
+      COPY_3FV(to[i], from[i]);
+   }
 }
 
 
@@ -442,8 +459,8 @@ void _tnl_eval_immediate( GLcontext *ctx, struct immediate *IM )
    else
       copycount = IM->Count - IM->CopyStart; /* copy all vertices */
 
-/*     fprintf(stderr, "%s copystart %d start %d count %d copycount %d\n", */
-/*  	   __FUNCTION__, IM->CopyStart, IM->Start, IM->Count, copycount); */
+/*       fprintf(stderr, "%s copystart %d start %d count %d copycount %d\n", */
+/*    	   __FUNCTION__, IM->CopyStart, IM->Start, IM->Count, copycount);  */
 
    if (!store)
       store = tnl->eval.im = _tnl_alloc_immediate( ctx );
@@ -509,16 +526,6 @@ void _tnl_eval_immediate( GLcontext *ctx, struct immediate *IM )
 	 eval2_1ui( &tmp->Index, coord, flags, &ctx->EvalMap.Map2Index );
 	 generated |= VERT_EVAL_C2|VERT_EVAL_P2;
       }
-
-      /* Propogate values to generate correct vertices when vertex
-       * maps are disabled.
-       */
-      if (purge_flags & generated)
-	 _tnl_fixup_1ui( tmp->Index.data, flags, 0, 
-			 VERT_INDEX|
-			 VERT_OBJ|
-			 generated|
-			 (VERT_EVAL_ANY&~purge_flags) );
    }
 
    if (req & VERT_RGBA)
@@ -545,17 +552,6 @@ void _tnl_eval_immediate( GLcontext *ctx, struct immediate *IM )
 	 eval2_4f_ca( &tmp->Color, coord, flags, 4, &ctx->EvalMap.Map2Color4 );
 	 generated |= VERT_EVAL_C2|VERT_EVAL_P2;
       }
-
-      /* Propogate values to generate correct vertices when vertex
-       * maps are disabled.
-       */
-      if (purge_flags & generated)
-	 _tnl_fixup_4f( store->Color + IM->CopyStart, 
-			flags, 0, 
-			VERT_RGBA|
-			VERT_OBJ|
-			generated|
-			(VERT_EVAL_ANY&~purge_flags) );
    }
 
 
@@ -617,16 +613,6 @@ void _tnl_eval_immediate( GLcontext *ctx, struct immediate *IM )
 	    generated |= VERT_EVAL_C2|VERT_EVAL_P2;
 	 }
       }
-
-      /* Propogate values to generate correct vertices when vertex
-       * maps are disabled.
-       */
-      if (purge_flags & generated)
-	 _tnl_fixup_4f( tmp->TexCoord[0].data, flags, 0, 
-			VERT_TEX0|
-			VERT_OBJ|
-			generated|
-			(VERT_EVAL_ANY&~purge_flags) );
    }
 
 
@@ -635,7 +621,7 @@ void _tnl_eval_immediate( GLcontext *ctx, struct immediate *IM )
       GLuint generated = 0;
 
       if (copycount) {
-/*  	 fprintf(stderr, "%s: Copy normals\n", __FUNCTION__); */
+/*    	 fprintf(stderr, "%s: Copy normals\n", __FUNCTION__);  */
 	 copy_3f( store->Normal + IM->CopyStart, tmp->Normal.data, 
 		  copycount );
       }
@@ -654,16 +640,6 @@ void _tnl_eval_immediate( GLcontext *ctx, struct immediate *IM )
 		     &ctx->EvalMap.Map2Normal );
 	 generated |= VERT_EVAL_C2|VERT_EVAL_P2;
       }
-
-      /* Propogate values to generate correct vertices when vertex
-       * maps are disabled.
-       */
-      if (purge_flags & generated)
-	 _tnl_fixup_3f( tmp->Normal.data, flags, 0, 
-			VERT_NORM|
-			VERT_OBJ|
-			generated|
-			(VERT_EVAL_ANY&~purge_flags) );
    }
 
 
@@ -723,8 +699,9 @@ void _tnl_eval_immediate( GLcontext *ctx, struct immediate *IM )
 
 
    /* Calculate new IM->Elts, IM->Primitive, IM->PrimitiveLength for
-    * the case where vertex maps are not enabled for some received eval
-    * coordinates.
+    * the case where vertex maps are not enabled for some received
+    * eval coordinates.  In this case those slots in the immediate
+    * must be ignored.
     */
    if (purge_flags) {
       GLuint vertex = VERT_OBJ|(VERT_EVAL_ANY & ~purge_flags);
@@ -763,6 +740,6 @@ void _tnl_eval_immediate( GLcontext *ctx, struct immediate *IM )
       tnl->vb.Flag = store->Flag;
       for (i = 0 ; i < count ; i++)
 	 store->Flag[i] |= req;
-      IM->CopyOrFlag |= req;	/* hack for copying. */
+      IM->Evaluated = req;	/* hack for copying. */
    }
 }
