@@ -1,4 +1,4 @@
-/* $Id: osmesa.c,v 1.16 2000/04/22 01:05:40 brianp Exp $ */
+/* $Id: osmesa.c,v 1.18 2000/05/26 16:17:00 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -38,8 +38,7 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
-#include <stdlib.h>
-#include <string.h>
+#include "glheader.h"
 #include "GL/osmesa.h"
 #include "context.h"
 #include "depth.h"
@@ -226,6 +225,7 @@ OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
          return NULL;
       }
       gl_extensions_enable(&(osmesa->gl_ctx),"GL_HP_occlusion_test");
+      gl_extensions_enable(&(osmesa->gl_ctx), "GL_ARB_texture_cube_map");
 
       osmesa->gl_buffer = gl_create_framebuffer( osmesa->gl_visual,
                                            osmesa->gl_visual->DepthBits > 0,

@@ -1,4 +1,4 @@
-/* $Id: enable.c,v 1.15 2000/04/12 00:27:37 brianp Exp $ */
+/* $Id: enable.c,v 1.21 2000/05/23 15:17:12 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -154,6 +154,9 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
             ctx->NewState |= NEW_FOG|NEW_RASTER_OPS;
          }
 	 break;
+      case GL_HISTOGRAM:
+         ctx->Pixel.HistogramEnabled = state;
+         break;
       case GL_LIGHT0:
       case GL_LIGHT1:
       case GL_LIGHT2:
@@ -192,6 +195,7 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
       case GL_LINE_SMOOTH:
 	 if (ctx->Line.SmoothFlag!=state) {
             ctx->Line.SmoothFlag = state;
+	    ctx->TriangleCaps ^= DD_LINE_SMOOTH;
             ctx->NewState |= NEW_RASTER_OPS;
          }
 	 break;
@@ -268,6 +272,9 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
       case GL_MAP2_VERTEX_4:
 	 ctx->Eval.Map2Vertex4 = state;
 	 break;
+      case GL_MINMAX:
+         ctx->Pixel.MinMaxEnabled = state;
+         break;
       case GL_NORMALIZE:
 	 if (ctx->Transform.Normalize != state) {
 	    ctx->Transform.Normalize = state;
@@ -488,6 +495,44 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
          ctx->Pixel.PostColorMatrixColorTableEnabled = state;
          break;
 
+      /* GL_EXT_convolution */
+      case GL_CONVOLUTION_1D:
+         ctx->Pixel.Convolution1DEnabled = state;
+         break;
+      case GL_CONVOLUTION_2D:
+         ctx->Pixel.Convolution2DEnabled = state;
+         break;
+      case GL_SEPARABLE_2D:
+         ctx->Pixel.Separable2DEnabled = state;
+         break;
+
+      /* GL_ARB_texture_cube_map */
+      case GL_TEXTURE_CUBE_MAP_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap) {
+            if (ctx->Visual->RGBAflag) {
+               const GLuint curr = ctx->Texture.CurrentUnit;
+               const GLuint flag = TEXTURE0_CUBE << (curr * 4);
+               struct gl_texture_unit *texUnit = &ctx->Texture.Unit[curr];
+               ctx->NewState |= NEW_TEXTURE_ENABLE;
+               if (state) {
+                  texUnit->Enabled |= TEXTURE0_CUBE;
+                  ctx->Enabled |= flag;
+               }
+               else {
+                  texUnit->Enabled &= ~TEXTURE0_CUBE;
+                  ctx->Enabled &= ~flag;
+               }
+            }
+         }
+         else {
+            if (state)
+               gl_error(ctx, GL_INVALID_ENUM, "glEnable");
+            else
+               gl_error(ctx, GL_INVALID_ENUM, "glDisable");
+            return;
+         }
+	 break;
+
       default:
 	 if (state) {
 	    gl_error( ctx, GL_INVALID_ENUM, "glEnable" );
@@ -552,6 +597,8 @@ _mesa_IsEnabled( GLenum cap )
 	 return ctx->Color.DitherFlag;
       case GL_FOG:
 	 return ctx->Fog.Enabled;
+      case GL_HISTOGRAM:
+         return ctx->Pixel.HistogramEnabled;
       case GL_LIGHTING:
          return ctx->Light.Enabled;
       case GL_LIGHT0:
@@ -607,6 +654,8 @@ _mesa_IsEnabled( GLenum cap )
 	 return ctx->Eval.Map2Vertex3;
       case GL_MAP2_VERTEX_4:
 	 return ctx->Eval.Map2Vertex4;
+      case GL_MINMAX:
+         return ctx->Pixel.MinMaxEnabled;
       case GL_NORMALIZE:
 	 return ctx->Transform.Normalize;
       case GL_POINT_SMOOTH:
@@ -707,6 +756,25 @@ _mesa_IsEnabled( GLenum cap )
          return ctx->Pixel.PostConvolutionColorTableEnabled;
       case GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI:
          return ctx->Pixel.PostColorMatrixColorTableEnabled;
+
+      /* GL_EXT_convolution */
+      case GL_CONVOLUTION_1D:
+         return ctx->Pixel.Convolution1DEnabled;
+      case GL_CONVOLUTION_2D:
+         return ctx->Pixel.Convolution2DEnabled;
+      case GL_SEPARABLE_2D:
+         return ctx->Pixel.Separable2DEnabled;
+
+      /* GL_ARB_texture_cube_map */
+      case GL_TEXTURE_CUBE_MAP_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap) {
+            const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
+            return (texUnit->Enabled & TEXTURE0_CUBE) ? GL_TRUE : GL_FALSE;
+         }
+         else {
+            gl_error(ctx, GL_INVALID_ENUM, "glIsEnabled");
+            return GL_FALSE;
+         }
 
       default:
 	 gl_error( ctx, GL_INVALID_ENUM, "glIsEnabled" );

@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.61 2000/04/22 01:05:00 brianp Exp $ */
+/* $Id: context.c,v 1.70 2000/05/26 14:44:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -95,7 +95,6 @@ struct immediate *_mesa_CurrentInput = NULL;
 /*
  * Allocate a new GLvisual object.
  * Input:  rgbFlag - GL_TRUE=RGB(A) mode, GL_FALSE=Color Index mode
- *         alphaFlag - alloc software alpha buffers?
  *         dbFlag - double buffering?
  *         stereoFlag - stereo buffer?
  *         depthBits - requested bits per depth buffer value
@@ -112,7 +111,6 @@ struct immediate *_mesa_CurrentInput = NULL;
  */
 GLvisual *
 _mesa_create_visual( GLboolean rgbFlag,
-                     GLboolean alphaFlag,
                      GLboolean dbFlag,
                      GLboolean stereoFlag,
                      GLint redBits,
@@ -130,7 +128,7 @@ _mesa_create_visual( GLboolean rgbFlag,
 {
    GLvisual *vis = (GLvisual *) CALLOC( sizeof(GLvisual) );
    if (vis) {
-      if (!_mesa_initialize_visual(vis, rgbFlag, alphaFlag, dbFlag, stereoFlag,
+      if (!_mesa_initialize_visual(vis, rgbFlag, dbFlag, stereoFlag,
                                    redBits, greenBits, blueBits, alphaBits,
                                    indexBits, depthBits, stencilBits,
                                    accumRedBits, accumGreenBits,
@@ -153,7 +151,6 @@ _mesa_create_visual( GLboolean rgbFlag,
 GLboolean
 _mesa_initialize_visual( GLvisual *vis,
                          GLboolean rgbFlag,
-                         GLboolean alphaFlag,
                          GLboolean dbFlag,
                          GLboolean stereoFlag,
                          GLint redBits,
@@ -202,7 +199,7 @@ _mesa_initialize_visual( GLvisual *vis,
    vis->RedBits    = redBits;
    vis->GreenBits  = greenBits;
    vis->BlueBits   = blueBits;
-   vis->AlphaBits  = alphaFlag ? (8 * sizeof(GLubyte)) : alphaBits;
+   vis->AlphaBits  = alphaBits;
 
    vis->IndexBits      = indexBits;
    vis->DepthBits      = depthBits;
@@ -212,8 +209,6 @@ _mesa_initialize_visual( GLvisual *vis,
    vis->AccumAlphaBits = (accumAlphaBits > 0) ? (8 * sizeof(GLaccum)) : 0;
    vis->StencilBits    = (stencilBits > 0) ? (8 * sizeof(GLstencil)) : 0;
 
-   vis->SoftwareAlpha = alphaFlag;
-
    if (depthBits == 0) {
       /* Special case.  Even if we don't have a depth buffer we need
        * good values for DepthMax for Z vertex transformation purposes.
@@ -221,8 +216,16 @@ _mesa_initialize_visual( GLvisual *vis,
       vis->DepthMax = 1;
       vis->DepthMaxF = 1.0F;
    }
-   else {
+   else if (depthBits < 32) {
       vis->DepthMax = (1 << depthBits) - 1;
+      vis->DepthMaxF = (GLfloat) vis->DepthMax;
+   }
+   else {
+      /* Special case since shift values greater than or equal to the
+       * number of bits in the left hand expression's type are
+       * undefined.
+       */
+      vis->DepthMax = 0xffffffff;
       vis->DepthMaxF = (GLfloat) vis->DepthMax;
    }
 
@@ -245,7 +248,8 @@ gl_create_visual( GLboolean rgbFlag,
                   GLint blueBits,
                   GLint alphaBits )
 {
-   return _mesa_create_visual(rgbFlag, alphaFlag, dbFlag, stereoFlag,
+   (void) alphaFlag;
+   return _mesa_create_visual(rgbFlag, dbFlag, stereoFlag,
                               redBits, greenBits, blueBits, alphaBits,
                               indexBits, depthBits, stencilBits,
                               accumBits, accumBits, accumBits, accumBits, 0);
@@ -463,6 +467,14 @@ alloc_shared_state( void )
       ss->DefaultD[d]->RefCount++; /* don't free if not in use */
    }
 
+   ss->DefaultCubeMap = gl_alloc_texture_object(ss, 0, 6);
+   if (!ss->DefaultCubeMap) {
+      outOfMemory = GL_TRUE;
+   }
+   else {
+      ss->DefaultCubeMap->RefCount++;
+   }
+
    if (!ss->DisplayList || !ss->TexObjects || outOfMemory) {
       /* Ran out of memory at some point.  Free everything and return NULL */
       if (ss->DisplayList)
@@ -475,6 +487,8 @@ alloc_shared_state( void )
          gl_free_texture_object(ss, ss->DefaultD[2]);
       if (ss->DefaultD[3])
          gl_free_texture_object(ss, ss->DefaultD[3]);
+      if (ss->DefaultCubeMap)
+         gl_free_texture_object(ss, ss->DefaultCubeMap);
       FREE(ss);
       return NULL;
    }
@@ -599,6 +613,7 @@ init_texture_unit( GLcontext *ctx, GLuint unit )
    texUnit->CurrentD[1] = ctx->Shared->DefaultD[1];
    texUnit->CurrentD[2] = ctx->Shared->DefaultD[2];
    texUnit->CurrentD[3] = ctx->Shared->DefaultD[3];
+   texUnit->CurrentCubeMap = ctx->Shared->DefaultCubeMap;
 }
 
 
@@ -700,6 +715,7 @@ init_attrib_groups( GLcontext *ctx )
    /* Constants, may be overriden by device drivers */
    ctx->Const.MaxTextureLevels = MAX_TEXTURE_LEVELS;
    ctx->Const.MaxTextureSize = 1 << (MAX_TEXTURE_LEVELS - 1);
+   ctx->Const.MaxCubeTextureSize = ctx->Const.MaxTextureSize;
    ctx->Const.MaxTextureUnits = MAX_TEXTURE_UNITS;
    ctx->Const.MaxArrayLockSize = MAX_ARRAY_LOCK_SIZE;
    ctx->Const.SubPixelBits = SUB_PIXEL_BITS;
@@ -715,6 +731,9 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Const.LineWidthGranularity = LINE_WIDTH_GRANULARITY;
    ctx->Const.NumAuxBuffers = NUM_AUX_BUFFERS;
    ctx->Const.MaxColorTableSize = MAX_COLOR_TABLE_SIZE;
+   ctx->Const.MaxConvolutionWidth = MAX_CONVOLUTION_WIDTH;
+   ctx->Const.MaxConvolutionHeight = MAX_CONVOLUTION_HEIGHT;
+   ctx->Const.NumCompressedTextureFormats = 0;
 
    /* Modelview matrix */
    gl_matrix_ctr( &ctx->ModelView );
@@ -893,11 +912,12 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Hint.LineSmooth = GL_DONT_CARE;
    ctx->Hint.PolygonSmooth = GL_DONT_CARE;
    ctx->Hint.Fog = GL_DONT_CARE;
-
    ctx->Hint.AllowDrawWin = GL_TRUE;
    ctx->Hint.AllowDrawFrg = GL_TRUE;
    ctx->Hint.AllowDrawMem = GL_TRUE;
    ctx->Hint.StrictLighting = GL_TRUE;
+   ctx->Hint.ClipVolumeClipping = GL_DONT_CARE;
+   ctx->Hint.TextureCompression = GL_DONT_CARE;
 
    /* Histogram group */
    ctx->Histogram.Width = 0;
@@ -1026,25 +1046,24 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Pixel.PixelTextureEnabled = GL_FALSE;
    ctx->Pixel.FragmentRgbSource = GL_PIXEL_GROUP_COLOR_SGIS;
    ctx->Pixel.FragmentAlphaSource = GL_PIXEL_GROUP_COLOR_SGIS;
-   ctx->Pixel.PostColorMatrixRedBias = 0.0;
-   ctx->Pixel.PostColorMatrixRedScale = 1.0;
-   ctx->Pixel.PostColorMatrixGreenBias = 0.0;
-   ctx->Pixel.PostColorMatrixGreenScale = 1.0;
-   ctx->Pixel.PostColorMatrixBlueBias = 0.0;
-   ctx->Pixel.PostColorMatrixBlueScale = 1.0;
-   ctx->Pixel.PostColorMatrixAlphaBias = 0.0;
-   ctx->Pixel.PostColorMatrixAlphaScale = 1.0;
-   ctx->Pixel.ColorTableScale[0] = 1.0F;
-   ctx->Pixel.ColorTableScale[1] = 1.0F;
-   ctx->Pixel.ColorTableScale[2] = 1.0F;
-   ctx->Pixel.ColorTableScale[3] = 1.0F;
-   ctx->Pixel.ColorTableBias[0] = 0.0F;
-   ctx->Pixel.ColorTableBias[1] = 0.0F;
-   ctx->Pixel.ColorTableBias[2] = 0.0F;
-   ctx->Pixel.ColorTableBias[3] = 0.0F;
+   ASSIGN_4V(ctx->Pixel.PostColorMatrixScale, 1.0, 1.0, 1.0, 1.0);
+   ASSIGN_4V(ctx->Pixel.PostColorMatrixBias, 0.0, 0.0, 0.0, 0.0);
+   ASSIGN_4V(ctx->Pixel.ColorTableScale, 1.0, 1.0, 1.0, 1.0);
+   ASSIGN_4V(ctx->Pixel.ColorTableBias, 0.0, 0.0, 0.0, 0.0);
    ctx->Pixel.ColorTableEnabled = GL_FALSE;
    ctx->Pixel.PostConvolutionColorTableEnabled = GL_FALSE;
    ctx->Pixel.PostColorMatrixColorTableEnabled = GL_FALSE;
+   ctx->Pixel.Convolution1DEnabled = GL_FALSE;
+   ctx->Pixel.Convolution2DEnabled = GL_FALSE;
+   ctx->Pixel.Separable2DEnabled = GL_FALSE;
+   for (i = 0; i < 3; i++) {
+      ASSIGN_4V(ctx->Pixel.ConvolutionBorderColor[i], 0.0, 0.0, 0.0, 0.0);
+      ctx->Pixel.ConvolutionBorderMode[i] = GL_REDUCE;
+      ASSIGN_4V(ctx->Pixel.ConvolutionFilterScale[i], 1.0, 1.0, 1.0, 1.0);
+      ASSIGN_4V(ctx->Pixel.ConvolutionFilterBias[i], 0.0, 0.0, 0.0, 0.0);
+   }
+   ASSIGN_4V(ctx->Pixel.PostConvolutionScale, 1.0, 1.0, 1.0, 1.0);
+   ASSIGN_4V(ctx->Pixel.PostConvolutionBias, 0.0, 0.0, 0.0, 0.0);
 
    /* Point group */
    ctx->Point.SmoothFlag = GL_FALSE;
@@ -1333,6 +1352,8 @@ _mesa_initialize_context( GLcontext *ctx,
                           void *driver_ctx,
                           GLboolean direct )
 {
+   GLuint dispatchSize;
+
    (void) direct;  /* not used */
 
    /* misc one-time initializations */
@@ -1403,9 +1424,27 @@ _mesa_initialize_context( GLcontext *ctx,
       return GL_FALSE;
    }
 
+   /* register the most recent extension functions with libGL */
+   _glapi_add_entrypoint("glTbufferMask3DFX", 553);
+   _glapi_add_entrypoint("glCompressedTexImage3DARB", 554);
+   _glapi_add_entrypoint("glCompressedTexImage2DARB", 555);
+   _glapi_add_entrypoint("glCompressedTexImage1DARB", 556);
+   _glapi_add_entrypoint("glCompressedTexSubImage3DARB", 557);
+   _glapi_add_entrypoint("glCompressedTexSubImage2DARB", 558);
+   _glapi_add_entrypoint("glCompressedTexSubImage1DARB", 559);
+   _glapi_add_entrypoint("glGetCompressedTexImageARB", 560);
+
+   /* Find the larger of Mesa's dispatch table and libGL's dispatch table.
+    * In practice, this'll be the same for stand-alone Mesa.  But for DRI
+    * Mesa we do this to accomodate different versions of libGL and various
+    * DRI drivers.
+    */
+   dispatchSize = MAX2(_glapi_get_dispatch_table_size(),
+                       sizeof(struct _glapi_table) / sizeof(void *));
+
    /* setup API dispatch tables */
-   ctx->Exec = (struct _glapi_table *) CALLOC(_glapi_get_dispatch_table_size() * sizeof(void *));
-   ctx->Save = (struct _glapi_table *) CALLOC(_glapi_get_dispatch_table_size() * sizeof(void *));
+   ctx->Exec = (struct _glapi_table *) CALLOC(dispatchSize * sizeof(void*));
+   ctx->Save = (struct _glapi_table *) CALLOC(dispatchSize * sizeof(void*));
    if (!ctx->Exec || !ctx->Save) {
       free_shared_state(ctx, ctx->Shared);
       FREE(ctx->VB);
@@ -1414,8 +1453,8 @@ _mesa_initialize_context( GLcontext *ctx,
          FREE(ctx->Exec);
       FREE(ctx);
    }
-   _mesa_init_exec_table( ctx->Exec );
-   _mesa_init_dlist_table( ctx->Save );
+   _mesa_init_exec_table(ctx->Exec, dispatchSize);
+   _mesa_init_dlist_table(ctx->Save, dispatchSize);
    ctx->CurrentDispatch = ctx->Exec;
 
    return GL_TRUE;
@@ -1807,7 +1846,7 @@ _mesa_get_dispatch(GLcontext *ctx)
 void gl_problem( const GLcontext *ctx, const char *s )
 {
    fprintf( stderr, "Mesa implementation error: %s\n", s );
-   fprintf( stderr, "Report to mesa-bugs@mesa3d.org\n" );
+   fprintf( stderr, "Report to Mesa bug database at www.mesa3d.org\n" );
    (void) ctx;
 }
 

@@ -1,4 +1,4 @@
-/* $Id: x86.c,v 1.5 2000/04/15 23:19:05 brianp Exp $ */
+/* $Id: x86.c,v 1.7 2000/05/26 16:17:00 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -29,11 +29,7 @@
  */
 
 
-#include <limits.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <math.h>
-
+#include "glheader.h"
 #include "context.h"
 #include "types.h"
 #include "vertices.h"
@@ -87,8 +83,7 @@ extern void _ASMAPI gl_v16_x86_general_xform(GLfloat *dest,
  gl_transform_tab[cma][vsize][MATRIX_3D] 			\
   = gl_##pfx##_transform_points##vsize##_3d_##masked;
 
-void gl_init_x86_asm_transforms( void )
-{
+
 #ifdef USE_X86_ASM
    DECLARE_XFORM_GROUP( x86, 2, raw )
    DECLARE_XFORM_GROUP( x86, 3, raw )
@@ -102,8 +97,12 @@ void gl_init_x86_asm_transforms( void )
                                                GLubyte clipMask[],
                                                GLubyte *orMask, 
                                                GLubyte *andMask );
+#endif
 
-   
+
+void gl_init_x86_asm_transforms( void )
+{
+#ifdef USE_X86_ASM
    ASSIGN_XFORM_GROUP( x86, 0, 2, raw )
    ASSIGN_XFORM_GROUP( x86, 0, 3, raw )
    ASSIGN_XFORM_GROUP( x86, 0, 4, raw )

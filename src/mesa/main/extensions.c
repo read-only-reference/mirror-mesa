@@ -1,4 +1,4 @@
-/* $Id: extensions.c,v 1.24 2000/04/17 15:13:53 brianp Exp $ */
+/* $Id: extensions.c,v 1.30 2000/05/30 02:28:03 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -49,16 +49,21 @@ struct extension {
 
 
 static struct { int enabled; const char *name; } default_extensions[] = {
-   { DEFAULT_OFF,    "GL_ARB_imaging" },
+   { DEFAULT_OFF,    "GL_ARB_imaging" },  /* in progress */
    { DEFAULT_ON,     "GL_ARB_multitexture" },
+   { DEFAULT_OFF,    "GL_ARB_texture_compression" },  /* in progress */
+   { DEFAULT_OFF,    "GL_ARB_texture_cube_map" },  /* in progress */
    { ALWAYS_ENABLED, "GL_ARB_tranpose_matrix" },
    { ALWAYS_ENABLED, "GL_EXT_abgr" },
    { DEFAULT_ON,     "GL_EXT_blend_color" },
+   { DEFAULT_ON,     "GL_EXT_blend_func_separate" },
    { DEFAULT_ON,     "GL_EXT_blend_logic_op" },
    { DEFAULT_ON,     "GL_EXT_blend_minmax" },
    { DEFAULT_ON,     "GL_EXT_blend_subtract" },
    { DEFAULT_ON,     "GL_EXT_clip_volume_hint" },
+   { DEFAULT_OFF,    "GL_EXT_convolution" },  /* in progress */
    { DEFAULT_ON,     "GL_EXT_compiled_vertex_array" },
+   { DEFAULT_ON,     "GL_EXT_histogram" },
    { DEFAULT_ON,     "GL_EXT_paletted_texture" },
    { DEFAULT_ON,     "GL_EXT_point_parameters" },
    { ALWAYS_ENABLED, "GL_EXT_polygon_offset" },
@@ -66,6 +71,7 @@ static struct { int enabled; const char *name; } default_extensions[] = {
    { DEFAULT_ON,     "GL_EXT_shared_texture_palette" },
    { ALWAYS_ENABLED, "GL_EXT_stencil_wrap" },
    { DEFAULT_ON,     "GL_EXT_texture3D" },
+   { DEFAULT_OFF,    "GL_EXT_texture_compression_s3tc" },
    { DEFAULT_OFF,    "GL_EXT_texture_env" },
    { DEFAULT_ON,     "GL_EXT_texture_env_add" },
    { ALWAYS_ENABLED, "GL_EXT_texture_object" },
@@ -76,13 +82,15 @@ static struct { int enabled; const char *name; } default_extensions[] = {
    { DEFAULT_ON,     "GL_INGR_blend_func_separate" },
    { ALWAYS_ENABLED, "GL_MESA_window_pos" },
    { ALWAYS_ENABLED, "GL_MESA_resize_buffers" },
+   { DEFAULT_OFF,    "GL_NV_blend_square" },
    { ALWAYS_ENABLED, "GL_NV_texgen_reflection" },
    { DEFAULT_ON,     "GL_PGI_misc_hints" },
    { DEFAULT_ON,     "GL_SGI_color_matrix" },
    { DEFAULT_ON,     "GL_SGI_color_table" },
    { DEFAULT_ON,     "GL_SGIS_pixel_texture" },
    { DEFAULT_ON,     "GL_SGIS_texture_edge_clamp" },
-   { DEFAULT_ON,     "GL_SGIX_pixel_texture" }
+   { DEFAULT_ON,     "GL_SGIX_pixel_texture" },
+   { DEFAULT_OFF,    "GL_3DFX_texture_compression_FXT1" }
 };
 
 
@@ -96,6 +104,11 @@ update_extension_flags( GLcontext *ctx )
    ctx->Extensions.HaveTextureEnvAdd = gl_extension_is_enabled(ctx, "GL_EXT_texture_env_add");
    ctx->Extensions.HaveTextureLodBias = gl_extension_is_enabled(ctx, "GL_EXT_texture_lod_bias");
    ctx->Extensions.HaveHpOcclusionTest = gl_extension_is_enabled(ctx, "GL_HP_occlusion_test");
+   ctx->Extensions.HaveTextureCubeMap = gl_extension_is_enabled(ctx, "GL_ARB_texture_cube_map");
+   ctx->Extensions.HaveTextureCompression = gl_extension_is_enabled(ctx, "GL_ARB_texture_compression");
+   ctx->Extensions.HaveTextureCompressionS3TC = gl_extension_is_enabled(ctx, "GL_EXT_texture_compression_s3tc");
+   ctx->Extensions.HaveTextureCompressionFXT1 = gl_extension_is_enabled(ctx, "GL_3DFX_texture_compression_FXT1");
+   ctx->Extensions.HaveBlendSquare = gl_extension_is_enabled(ctx, "GL_NV_blend_square");
 }
 
 

@@ -1,4 +1,4 @@
-/* $Id: texstate.c,v 1.9 2000/03/07 17:54:58 brianp Exp $ */
+/* $Id: texstate.c,v 1.13 2000/05/23 20:10:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -35,6 +35,7 @@
 #include "macros.h"
 #include "matrix.h"
 #include "texobj.h"
+#include "teximage.h"
 #include "texstate.h"
 #include "texture.h"
 #include "types.h"
@@ -273,6 +274,12 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
       case GL_TEXTURE_3D_EXT:
          texObj = texUnit->CurrentD[3];
          break;
+      case GL_TEXTURE_CUBE_MAP_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap) {
+            texObj = texUnit->CurrentCubeMap;
+            break;
+         }
+         /* fallthrough */
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glTexParameter(target)" );
          return;
@@ -425,6 +432,28 @@ _mesa_GetTexLevelParameterfv( GLenum target, GLint level,
 }
 
 
+static GLuint
+tex_image_dimensions(GLcontext *ctx, GLenum target)
+{
+   switch (target) {
+      case GL_TEXTURE_1D:
+      case GL_PROXY_TEXTURE_1D:
+         return 1;
+      case GL_TEXTURE_2D:
+      case GL_PROXY_TEXTURE_2D:
+         return 2;
+      case GL_TEXTURE_3D:
+      case GL_PROXY_TEXTURE_3D:
+         return 3;
+      case GL_TEXTURE_CUBE_MAP_ARB:
+      case GL_PROXY_TEXTURE_CUBE_MAP_ARB:
+         return ctx->Extensions.HaveTextureCubeMap ? 2 : 0;
+      default:
+         gl_problem(ctx, "bad target in _mesa_tex_target_dimensions()");
+         return 0;
+   }
+}
+
 
 void
 _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
@@ -434,6 +463,7 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
    const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    const struct gl_texture_image *img = NULL;
    GLuint dimensions;
+   GLboolean isProxy;
 
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glGetTexLevelParameter");
 
@@ -442,36 +472,13 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
       return;
    }
 
-   switch (target) {
-      case GL_TEXTURE_1D:
-         img = texUnit->CurrentD[1]->Image[level];
-         dimensions = 1;
-         break;
-      case GL_TEXTURE_2D:
-         img = texUnit->CurrentD[2]->Image[level];
-         dimensions = 2;
-         break;
-      case GL_TEXTURE_3D:
-         img = texUnit->CurrentD[3]->Image[level];
-         dimensions = 3; 
-        break;
-      case GL_PROXY_TEXTURE_1D:
-         img = ctx->Texture.Proxy1D->Image[level];
-         dimensions = 1;
-         break;
-      case GL_PROXY_TEXTURE_2D:
-         img = ctx->Texture.Proxy2D->Image[level];
-         dimensions = 2;
-         break;
-      case GL_PROXY_TEXTURE_3D:
-         img = ctx->Texture.Proxy3D->Image[level];
-         dimensions = 3;
-         break;
-      default:
-	 gl_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(target)");
-         return;
+   dimensions = tex_image_dimensions(ctx, target);  /* 1, 2 or 3 */
+   if (dimensions == 0) {
+      gl_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(target)");
+      return;
    }
 
+   img = _mesa_select_tex_image(ctx, texUnit, target, level);
    if (!img) {
       if (pname == GL_TEXTURE_COMPONENTS)
          *params = 1;
@@ -479,6 +486,11 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
          *params = 0;
       return;
    }
+
+   isProxy = (target == GL_PROXY_TEXTURE_1D) ||
+             (target == GL_PROXY_TEXTURE_2D) ||
+             (target == GL_PROXY_TEXTURE_3D) ||
+             (target == GL_PROXY_TEXTURE_CUBE_MAP_ARB);
 
    switch (pname) {
       case GL_TEXTURE_WIDTH:
@@ -529,9 +541,31 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
       case GL_TEXTURE_INDEX_SIZE_EXT:
          *params = img->IndexBits;
          return;
+
+      /* GL_ARB_texture_compression */
+      case GL_TEXTURE_COMPRESSED_IMAGE_SIZE_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            if (img->IsCompressed && !isProxy)
+               *params = img->CompressedSize;
+            else
+               gl_error(ctx, GL_INVALID_OPERATION,
+                        "glGetTexLevelParameter[if]v(pname)");
+         }
+         else {
+            gl_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(pname)");
+         }
+         return;
+      case GL_TEXTURE_COMPRESSED_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            *params = (GLint) img->IsCompressed;
+         }
+         else {
+            gl_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(pname)");
+         }
+         return;
+
       default:
-         gl_error( ctx, GL_INVALID_ENUM,
-                   "glGetTexLevelParameter[if]v(pname)" );
+         gl_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(pname)");
    }
 }
 
@@ -546,19 +580,10 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
 
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glGetTexParameterfv");
 
-   switch (target) {
-      case GL_TEXTURE_1D:
-         obj = texUnit->CurrentD[1];
-         break;
-      case GL_TEXTURE_2D:
-         obj = texUnit->CurrentD[2];
-         break;
-      case GL_TEXTURE_3D_EXT:
-         obj = texUnit->CurrentD[3];
-         break;
-      default:
-         gl_error(ctx, GL_INVALID_ENUM, "glGetTexParameterfv(target)");
-         return;
+   obj = _mesa_select_tex_object(ctx, texUnit, target);
+   if (!obj) {
+      gl_error(ctx, GL_INVALID_ENUM, "glGetTexParameterfv(target)");
+      return;
    }
 
    switch (pname) {
@@ -616,19 +641,10 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
 
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glGetTexParameteriv");
 
-   switch (target) {
-      case GL_TEXTURE_1D:
-         obj = texUnit->CurrentD[1];
-         break;
-      case GL_TEXTURE_2D:
-         obj = texUnit->CurrentD[2];
-         break;
-      case GL_TEXTURE_3D_EXT:
-         obj = texUnit->CurrentD[3];
-         break;
-      default:
-         gl_error(ctx, GL_INVALID_ENUM, "glGetTexParameteriv(target)");
-         return;
+   obj = _mesa_select_tex_object(ctx, texUnit, target);
+   if (!obj) {
+      gl_error(ctx, GL_INVALID_ENUM, "glGetTexParameteriv(target)");
+      return;
    }
 
    switch (pname) {
@@ -757,30 +773,30 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
       case GL_T:
          if (pname==GL_TEXTURE_GEN_MODE) {
 	    GLenum mode = (GLenum) (GLint) *params;
-	    switch(mode) {
-	    case GL_OBJECT_LINEAR:
-	       texUnit->GenModeT = GL_OBJECT_LINEAR;
-	       texUnit->GenBitT = TEXGEN_OBJ_LINEAR;
-	       break;
-	    case GL_EYE_LINEAR:
-	       texUnit->GenModeT = GL_EYE_LINEAR;
-	       texUnit->GenBitT = TEXGEN_EYE_LINEAR;
-	       break;
-	    case GL_REFLECTION_MAP_NV:
-	       texUnit->GenModeT = GL_REFLECTION_MAP_NV;
-	       texUnit->GenBitT = TEXGEN_REFLECTION_MAP_NV;
-	       break;
-	    case GL_NORMAL_MAP_NV:
-	       texUnit->GenModeT = GL_NORMAL_MAP_NV;
-	       texUnit->GenBitT = TEXGEN_NORMAL_MAP_NV;
-	       break;
-	    case GL_SPHERE_MAP:
-	       texUnit->GenModeT = GL_SPHERE_MAP;
-	       texUnit->GenBitT = TEXGEN_SPHERE_MAP;
-	       break;
-	    default:
-	       gl_error( ctx, GL_INVALID_ENUM, "glTexGenfv(param)" );
-	       return;
+	    switch (mode) {
+               case GL_OBJECT_LINEAR:
+                  texUnit->GenModeT = GL_OBJECT_LINEAR;
+                  texUnit->GenBitT = TEXGEN_OBJ_LINEAR;
+                  break;
+               case GL_EYE_LINEAR:
+                  texUnit->GenModeT = GL_EYE_LINEAR;
+                  texUnit->GenBitT = TEXGEN_EYE_LINEAR;
+                  break;
+               case GL_REFLECTION_MAP_NV:
+                  texUnit->GenModeT = GL_REFLECTION_MAP_NV;
+                  texUnit->GenBitT = TEXGEN_REFLECTION_MAP_NV;
+                  break;
+               case GL_NORMAL_MAP_NV:
+                  texUnit->GenModeT = GL_NORMAL_MAP_NV;
+                  texUnit->GenBitT = TEXGEN_NORMAL_MAP_NV;
+                  break;
+               case GL_SPHERE_MAP:
+                  texUnit->GenModeT = GL_SPHERE_MAP;
+                  texUnit->GenBitT = TEXGEN_SPHERE_MAP;
+                  break;
+               default:
+                  gl_error( ctx, GL_INVALID_ENUM, "glTexGenfv(param)" );
+                  return;
 	    }
 	 }
 	 else if (pname==GL_OBJECT_PLANE) {
@@ -947,7 +963,7 @@ _mesa_GetTexGendv( GLenum coord, GLenum pname, GLdouble *params )
 
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glGetTexGendv");
 
-   switch( coord ) {
+   switch (coord) {
       case GL_S:
          if (pname==GL_TEXTURE_GEN_MODE) {
             params[0] = ENUM_TO_DOUBLE(texUnit->GenModeS);
@@ -1025,7 +1041,7 @@ _mesa_GetTexGenfv( GLenum coord, GLenum pname, GLfloat *params )
 
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glGetTexGenfv");
 
-   switch( coord ) {
+   switch (coord) {
       case GL_S:
          if (pname==GL_TEXTURE_GEN_MODE) {
             params[0] = ENUM_TO_FLOAT(texUnit->GenModeS);
@@ -1103,7 +1119,7 @@ _mesa_GetTexGeniv( GLenum coord, GLenum pname, GLint *params )
 
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glGetTexGeniv");
 
-   switch( coord ) {
+   switch (coord) {
       case GL_S:
          if (pname==GL_TEXTURE_GEN_MODE) {
             params[0] = texUnit->GenModeS;
@@ -1309,8 +1325,8 @@ void gl_update_dirty_texobjs( GLcontext *ctx )
    struct gl_texture_object *t, *next;
    for (t = ctx->Shared->DirtyTexObjList; t; t = next) {
       next = t->NextDirty;
-      gl_test_texture_object_completeness(ctx, t);
-      gl_set_texture_sampler(t);
+      _mesa_test_texobj_completeness(ctx, t);
+      _mesa_set_texture_sampler(t);
       t->NextDirty = NULL;
       t->Dirty = GL_FALSE;
    }

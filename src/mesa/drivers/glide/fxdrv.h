@@ -50,14 +50,10 @@
  * you turn debugging on/off from the debugger.
  */
 
-#ifndef XFree86Server
-#include <math.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <limits.h>
-#include <assert.h>
-#else 
+#ifdef XFree86Server
 #include "GL/xf86glx.h"
+#else 
+#include "glheader.h"
 #endif
 
 
@@ -428,8 +424,10 @@ struct tfxMesaContext {
   GuTexPalette glbPalette;
 
   GLcontext *glCtx;              /* the core Mesa context */
+#if !defined(XFree86Server) && !defined(GLX_DIRECT_RENDERING)
   GLvisual *glVis;               /* describes the color buffer */
   GLframebuffer *glBuffer;       /* the ancillary buffers */
+#endif
 
   GLint board;                   /* the board used for this context */
   GLint width, height;           /* size of color buffer */

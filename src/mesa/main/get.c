@@ -1,4 +1,4 @@
-/* $Id: get.c,v 1.21 2000/04/12 00:27:37 brianp Exp $ */
+/* $Id: get.c,v 1.29 2000/05/23 20:10:49 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -347,6 +347,9 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
       case GL_GREEN_SCALE:
          *params = FLOAT_TO_BOOL(ctx->Pixel.GreenScale);
 	 break;
+      case GL_HISTOGRAM:
+         *params = ctx->Pixel.HistogramEnabled;
+	 break;
       case GL_INDEX_BITS:
          *params = INT_TO_BOOL( ctx->Visual->IndexBits );
 	 break;
@@ -568,6 +571,9 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 params[0] = INT_TO_BOOL(MAX_WIDTH);
 	 params[1] = INT_TO_BOOL(MAX_HEIGHT);
 	 break;
+      case GL_MINMAX:
+         *params = ctx->Pixel.MinMaxEnabled;
+         break;
       case GL_MODELVIEW_MATRIX:
 	 for (i=0;i<16;i++) {
 	    params[i] = FLOAT_TO_BOOL(ctx->ModelView.m[i]);
@@ -640,7 +646,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 *params = INT_TO_BOOL(ctx->Pixel.MapStoSsize);
 	 break;
       case GL_POINT_SIZE:
-	 *params = FLOAT_TO_BOOL(ctx->Point.Size );
+	 *params = FLOAT_TO_BOOL(ctx->Point.UserSize);
 	 break;
       case GL_POINT_SIZE_GRANULARITY:
 	 *params = FLOAT_TO_BOOL(ctx->Const.PointSizeGranularity );
@@ -776,13 +782,13 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 *params = INT_TO_BOOL(ctx->Const.SubPixelBits);
 	 break;
       case GL_TEXTURE_1D:
-         *params = _mesa_IsEnabled(GL_TEXTURE_1D );
+         *params = _mesa_IsEnabled(GL_TEXTURE_1D);
 	 break;
       case GL_TEXTURE_2D:
-         *params = _mesa_IsEnabled(GL_TEXTURE_2D );
+         *params = _mesa_IsEnabled(GL_TEXTURE_2D);
 	 break;
       case GL_TEXTURE_3D:
-         *params = _mesa_IsEnabled(GL_TEXTURE_3D );
+         *params = _mesa_IsEnabled(GL_TEXTURE_3D);
 	 break;
       case GL_TEXTURE_BINDING_1D:
          *params = INT_TO_BOOL(textureUnit->CurrentD[1]->Name);
@@ -792,7 +798,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
           break;
       case GL_TEXTURE_BINDING_3D:
          *params = INT_TO_BOOL(textureUnit->CurrentD[3]->Name);
-          break;
+         break;
       case GL_TEXTURE_ENV_COLOR:
          {
             params[0] = FLOAT_TO_BOOL(textureUnit->EnvColor[0]);
@@ -937,6 +943,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = INT_TO_BOOL(ctx->Array.EdgeFlag.Stride);
          break;
 
+      /* GL_ARB_multitexture */
       case GL_MAX_TEXTURE_UNITS_ARB:
          *params = ctx->Const.MaxTextureUnits;
          break;
@@ -945,6 +952,51 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          break;
       case GL_CLIENT_ACTIVE_TEXTURE_ARB:
          *params = INT_TO_BOOL(GL_TEXTURE0_ARB + ctx->Array.ActiveTexture);
+         break;
+
+      /* GL_ARB_texture_cube_map */
+      case GL_TEXTURE_CUBE_MAP_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = _mesa_IsEnabled(GL_TEXTURE_CUBE_MAP_ARB);
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetBooleanv");
+         return;
+      case GL_TEXTURE_BINDING_CUBE_MAP_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = INT_TO_BOOL(textureUnit->CurrentCubeMap->Name);
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetBooleanv");
+         return;
+      case GL_MAX_CUBE_MAP_TEXTURE_SIZE_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = INT_TO_BOOL(ctx->Const.MaxCubeTextureSize);
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetBooleanv");
+         break;
+
+      /* GL_ARB_texture_compression */
+      case GL_TEXTURE_COMPRESSION_HINT_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            *params = INT_TO_BOOL(ctx->Hint.TextureCompression);
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetBooleanv");
+         break;
+      case GL_NUM_COMPRESSED_TEXTURE_FORMATS_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            *params = INT_TO_BOOL(ctx->Const.NumCompressedTextureFormats);
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetBooleanv");
+         break;
+      case GL_COMPRESSED_TEXTURE_FORMATS_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            GLuint i;
+            for (i = 0; i < ctx->Const.NumCompressedTextureFormats; i++)
+               params[i] = INT_TO_BOOL(ctx->Const.CompressedTextureFormats[i]);
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetBooleanv");
          break;
 
       /* GL_PGI_misc_hints */
@@ -1007,7 +1059,14 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 
       /* GL_ARB_transpose_matrix */
       case GL_TRANSPOSE_COLOR_MATRIX_ARB:
-         /* don't have a color matrix */
+         {
+            GLfloat tm[16];
+            GLuint i;
+            gl_matrix_transposef(tm, ctx->ColorMatrix.m);
+            for (i=0;i<16;i++) {
+               params[i] = FLOAT_TO_BOOL(tm[i]);
+            }
+         }
          break;
       case GL_TRANSPOSE_MODELVIEW_MATRIX_ARB:
          {
@@ -1090,28 +1149,60 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = FLOAT_TO_BOOL(MAX_COLOR_STACK_DEPTH);
          break;
       case GL_POST_COLOR_MATRIX_RED_SCALE_SGI:
-         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixRedScale);
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixScale[0]);
          break;
       case GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI:
-         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixGreenScale);
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixScale[1]);
          break;
       case GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI:
-         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixBlueScale);
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixScale[2]);
          break;
       case GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI:
-         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixAlphaScale);
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixScale[3]);
          break;
       case GL_POST_COLOR_MATRIX_RED_BIAS_SGI:
-         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixRedBias);
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixBias[0]);
          break;
       case GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI:
-         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixGreenBias);
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixBias[1]);
          break;
       case GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI:
-         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixBlueBias);
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixBias[2]);
          break;
       case GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI:
-         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixAlphaBias);
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostColorMatrixBias[3]);
+         break;
+
+      /* GL_EXT_convolution (also in 1.2 imaging) */
+      case GL_MAX_CONVOLUTION_WIDTH:
+         *params = INT_TO_BOOL(ctx->Const.MaxConvolutionWidth);
+         break;
+      case GL_MAX_CONVOLUTION_HEIGHT:
+         *params = INT_TO_BOOL(ctx->Const.MaxConvolutionHeight);
+         break;
+      case GL_POST_CONVOLUTION_RED_SCALE_EXT:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostConvolutionScale[0]);
+         break;
+      case GL_POST_CONVOLUTION_GREEN_SCALE_EXT:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostConvolutionScale[1]);
+         break;
+      case GL_POST_CONVOLUTION_BLUE_SCALE_EXT:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostConvolutionScale[2]);
+         break;
+      case GL_POST_CONVOLUTION_ALPHA_SCALE_EXT:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostConvolutionScale[3]);
+         break;
+      case GL_POST_CONVOLUTION_RED_BIAS_EXT:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostConvolutionBias[0]);
+         break;
+      case GL_POST_CONVOLUTION_GREEN_BIAS_EXT:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostConvolutionBias[1]);
+         break;
+      case GL_POST_CONVOLUTION_BLUE_BIAS_EXT:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostConvolutionBias[2]);
+         break;
+      case GL_POST_CONVOLUTION_ALPHA_BIAS_EXT:
+         *params = FLOAT_TO_BOOL(ctx->Pixel.PostConvolutionBias[2]);
          break;
 
       /* GL_SGI_color_table (also in 1.2 imaging */
@@ -1399,6 +1490,9 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       case GL_GREEN_SCALE:
          *params = (GLdouble) ctx->Pixel.GreenScale;
          break;
+      case GL_HISTOGRAM:
+         *params = (GLdouble) ctx->Pixel.HistogramEnabled;
+	 break;
       case GL_INDEX_BITS:
          *params = (GLdouble) ctx->Visual->IndexBits;
 	 break;
@@ -1620,6 +1714,9 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          params[0] = (GLdouble) MAX_WIDTH;
          params[1] = (GLdouble) MAX_HEIGHT;
          break;
+      case GL_MINMAX:
+         *params = (GLdouble) ctx->Pixel.MinMaxEnabled;
+         break;
       case GL_MODELVIEW_MATRIX:
 	 for (i=0;i<16;i++) {
 	    params[i] = (GLdouble) ctx->ModelView.m[i];
@@ -1692,7 +1789,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 *params = (GLdouble) ctx->Pixel.MapStoSsize;
 	 break;
       case GL_POINT_SIZE:
-         *params = (GLdouble) ctx->Point.Size;
+         *params = (GLdouble) ctx->Point.UserSize;
          break;
       case GL_POINT_SIZE_GRANULARITY:
 	 *params = (GLdouble) ctx->Const.PointSizeGranularity;
@@ -1989,6 +2086,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = 0.0;
          break;
 
+      /* GL_ARB_multitexture */
       case GL_MAX_TEXTURE_UNITS_ARB:
          *params = (GLdouble) ctx->Const.MaxTextureUnits;
          break;
@@ -1999,6 +2097,50 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) (GL_TEXTURE0_ARB + ctx->Array.ActiveTexture);
          break;
 
+      /* GL_ARB_texture_cube_map */
+      case GL_TEXTURE_CUBE_MAP_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = (GLdouble) _mesa_IsEnabled(GL_TEXTURE_CUBE_MAP_ARB);
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetDoublev");
+         return;
+      case GL_TEXTURE_BINDING_CUBE_MAP_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = (GLdouble) textureUnit->CurrentCubeMap->Name;
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetDoublev");
+         return;
+      case GL_MAX_CUBE_MAP_TEXTURE_SIZE_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = (GLdouble) ctx->Const.MaxCubeTextureSize;
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetDoublev");
+         return;
+
+      /* GL_ARB_texture_compression */
+      case GL_TEXTURE_COMPRESSION_HINT_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            *params = (GLdouble) ctx->Hint.TextureCompression;
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetDoublev");
+         break;
+      case GL_NUM_COMPRESSED_TEXTURE_FORMATS_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            *params = (GLdouble) ctx->Const.NumCompressedTextureFormats;
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetDoublev");
+         break;
+      case GL_COMPRESSED_TEXTURE_FORMATS_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            GLuint i;
+            for (i = 0; i < ctx->Const.NumCompressedTextureFormats; i++)
+               params[i] = (GLdouble) ctx->Const.CompressedTextureFormats[i];
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetDoublev");
+         break;
 
       /* GL_PGI_misc_hints */
       case GL_STRICT_DEPTHFUNC_HINT_PGI:
@@ -2060,7 +2202,14 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 
       /* GL_ARB_transpose_matrix */
       case GL_TRANSPOSE_COLOR_MATRIX_ARB:
-         /* don't have a color matrix */
+         {
+            GLfloat tm[16];
+            GLuint i;
+            gl_matrix_transposef(tm, ctx->ColorMatrix.m);
+            for (i=0;i<16;i++) {
+               params[i] = (GLdouble) tm[i];
+            }
+         }
          break;
       case GL_TRANSPOSE_MODELVIEW_MATRIX_ARB:
          {
@@ -2143,28 +2292,60 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) MAX_COLOR_STACK_DEPTH;
          break;
       case GL_POST_COLOR_MATRIX_RED_SCALE_SGI:
-         *params = (GLdouble) ctx->Pixel.PostColorMatrixRedScale;
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixScale[0];
          break;
       case GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI:
-         *params = (GLdouble) ctx->Pixel.PostColorMatrixGreenScale;
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixScale[1];
          break;
       case GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI:
-         *params = (GLdouble) ctx->Pixel.PostColorMatrixBlueScale;
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixScale[2];
          break;
       case GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI:
-         *params = (GLdouble) ctx->Pixel.PostColorMatrixAlphaScale;
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixScale[3];
          break;
       case GL_POST_COLOR_MATRIX_RED_BIAS_SGI:
-         *params = (GLdouble) ctx->Pixel.PostColorMatrixRedBias;
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixBias[0];
          break;
       case GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI:
-         *params = (GLdouble) ctx->Pixel.PostColorMatrixGreenBias;
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixBias[1];
          break;
       case GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI:
-         *params = (GLdouble) ctx->Pixel.PostColorMatrixBlueBias;
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixBias[2];
          break;
       case GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI:
-         *params = (GLdouble) ctx->Pixel.PostColorMatrixAlphaBias;
+         *params = (GLdouble) ctx->Pixel.PostColorMatrixBias[3];
+         break;
+
+      /* GL_EXT_convolution (also in 1.2 imaging) */
+      case GL_MAX_CONVOLUTION_WIDTH:
+         *params = (GLdouble) ctx->Const.MaxConvolutionWidth;
+         break;
+      case GL_MAX_CONVOLUTION_HEIGHT:
+         *params = (GLdouble) ctx->Const.MaxConvolutionHeight;
+         break;
+      case GL_POST_CONVOLUTION_RED_SCALE_EXT:
+         *params = (GLdouble) ctx->Pixel.PostConvolutionScale[0];
+         break;
+      case GL_POST_CONVOLUTION_GREEN_SCALE_EXT:
+         *params = (GLdouble) ctx->Pixel.PostConvolutionScale[1];
+         break;
+      case GL_POST_CONVOLUTION_BLUE_SCALE_EXT:
+         *params = (GLdouble) ctx->Pixel.PostConvolutionScale[2];
+         break;
+      case GL_POST_CONVOLUTION_ALPHA_SCALE_EXT:
+         *params = (GLdouble) ctx->Pixel.PostConvolutionScale[3];
+         break;
+      case GL_POST_CONVOLUTION_RED_BIAS_EXT:
+         *params = (GLdouble) ctx->Pixel.PostConvolutionBias[0];
+         break;
+      case GL_POST_CONVOLUTION_GREEN_BIAS_EXT:
+         *params = (GLdouble) ctx->Pixel.PostConvolutionBias[1];
+         break;
+      case GL_POST_CONVOLUTION_BLUE_BIAS_EXT:
+         *params = (GLdouble) ctx->Pixel.PostConvolutionBias[2];
+         break;
+      case GL_POST_CONVOLUTION_ALPHA_BIAS_EXT:
+         *params = (GLdouble) ctx->Pixel.PostConvolutionBias[2];
          break;
 
       /* GL_SGI_color_table (also in 1.2 imaging */
@@ -2449,6 +2630,9 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_GREEN_SCALE:
          *params = (GLfloat) ctx->Pixel.GreenScale;
          break;
+      case GL_HISTOGRAM:
+         *params = (GLfloat) ctx->Pixel.HistogramEnabled;
+	 break;
       case GL_INDEX_BITS:
          *params = (GLfloat) ctx->Visual->IndexBits;
 	 break;
@@ -2670,6 +2854,9 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          params[0] = (GLfloat) MAX_WIDTH;
          params[1] = (GLfloat) MAX_HEIGHT;
          break;
+      case GL_MINMAX:
+         *params = (GLfloat) ctx->Pixel.MinMaxEnabled;
+         break;
       case GL_MODELVIEW_MATRIX:
 	 for (i=0;i<16;i++) {
 	    params[i] = ctx->ModelView.m[i];
@@ -2742,7 +2929,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = (GLfloat) ctx->Pixel.MapStoSsize;
 	 break;
       case GL_POINT_SIZE:
-         *params = (GLfloat) ctx->Point.Size;
+         *params = (GLfloat) ctx->Point.UserSize;
          break;
       case GL_POINT_SIZE_GRANULARITY:
 	 *params = (GLfloat) ctx->Const.PointSizeGranularity;
@@ -3041,6 +3228,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = 0.0;
          break;
 
+      /* GL_ARB_multitexture */
       case GL_MAX_TEXTURE_UNITS_ARB:
          *params = (GLfloat) ctx->Const.MaxTextureUnits;
          break;
@@ -3049,6 +3237,51 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          break;
       case GL_CLIENT_ACTIVE_TEXTURE_ARB:
          *params = (GLfloat) (GL_TEXTURE0_ARB + ctx->Array.ActiveTexture);
+         break;
+
+      /* GL_ARB_texture_cube_map */
+      case GL_TEXTURE_CUBE_MAP_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = (GLfloat) _mesa_IsEnabled(GL_TEXTURE_CUBE_MAP_ARB);
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetFloatv");
+         return;
+      case GL_TEXTURE_BINDING_CUBE_MAP_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = (GLfloat) textureUnit->CurrentCubeMap->Name;
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetFloatv");
+         return;
+      case GL_MAX_CUBE_MAP_TEXTURE_SIZE_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = (GLfloat) ctx->Const.MaxCubeTextureSize;
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetFloatv");
+         return;
+
+      /* GL_ARB_texture_compression */
+      case GL_TEXTURE_COMPRESSION_HINT_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            *params = (GLfloat) ctx->Hint.TextureCompression;
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetFloatv");
+         break;
+      case GL_NUM_COMPRESSED_TEXTURE_FORMATS_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            *params = (GLfloat) ctx->Const.NumCompressedTextureFormats;
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetFloatv");
+         break;
+      case GL_COMPRESSED_TEXTURE_FORMATS_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            GLuint i;
+            for (i = 0; i < ctx->Const.NumCompressedTextureFormats; i++)
+               params[i] = (GLfloat) ctx->Const.CompressedTextureFormats[i];
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetFloatv");
          break;
 
       /* GL_PGI_misc_hints */
@@ -3111,7 +3344,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 
       /* GL_ARB_transpose_matrix */
       case GL_TRANSPOSE_COLOR_MATRIX_ARB:
-         /* don't have a color matrix */
+         gl_matrix_transposef(params, ctx->ColorMatrix.m);
          break;
       case GL_TRANSPOSE_MODELVIEW_MATRIX_ARB:
          gl_matrix_transposef(params, ctx->ModelView.m);
@@ -3173,28 +3406,60 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = (GLfloat) MAX_COLOR_STACK_DEPTH;
          break;
       case GL_POST_COLOR_MATRIX_RED_SCALE_SGI:
-         *params = ctx->Pixel.PostColorMatrixRedScale;
+         *params = ctx->Pixel.PostColorMatrixScale[0];
          break;
       case GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI:
-         *params = ctx->Pixel.PostColorMatrixGreenScale;
+         *params = ctx->Pixel.PostColorMatrixScale[1];
          break;
       case GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI:
-         *params = ctx->Pixel.PostColorMatrixBlueScale;
+         *params = ctx->Pixel.PostColorMatrixScale[2];
          break;
       case GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI:
-         *params = ctx->Pixel.PostColorMatrixAlphaScale;
+         *params = ctx->Pixel.PostColorMatrixScale[3];
          break;
       case GL_POST_COLOR_MATRIX_RED_BIAS_SGI:
-         *params = ctx->Pixel.PostColorMatrixRedBias;
+         *params = ctx->Pixel.PostColorMatrixBias[0];
          break;
       case GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI:
-         *params = ctx->Pixel.PostColorMatrixGreenBias;
+         *params = ctx->Pixel.PostColorMatrixBias[1];
          break;
       case GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI:
-         *params = ctx->Pixel.PostColorMatrixBlueBias;
+         *params = ctx->Pixel.PostColorMatrixBias[2];
          break;
       case GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI:
-         *params = ctx->Pixel.PostColorMatrixAlphaBias;
+         *params = ctx->Pixel.PostColorMatrixBias[3];
+         break;
+
+      /* GL_EXT_convolution (also in 1.2 imaging) */
+      case GL_MAX_CONVOLUTION_WIDTH:
+         *params = (GLfloat) ctx->Const.MaxConvolutionWidth;
+         break;
+      case GL_MAX_CONVOLUTION_HEIGHT:
+         *params = (GLfloat) ctx->Const.MaxConvolutionHeight;
+         break;
+      case GL_POST_CONVOLUTION_RED_SCALE_EXT:
+         *params = ctx->Pixel.PostConvolutionScale[0];
+         break;
+      case GL_POST_CONVOLUTION_GREEN_SCALE_EXT:
+         *params = ctx->Pixel.PostConvolutionScale[1];
+         break;
+      case GL_POST_CONVOLUTION_BLUE_SCALE_EXT:
+         *params = ctx->Pixel.PostConvolutionScale[2];
+         break;
+      case GL_POST_CONVOLUTION_ALPHA_SCALE_EXT:
+         *params = ctx->Pixel.PostConvolutionScale[3];
+         break;
+      case GL_POST_CONVOLUTION_RED_BIAS_EXT:
+         *params = ctx->Pixel.PostConvolutionBias[0];
+         break;
+      case GL_POST_CONVOLUTION_GREEN_BIAS_EXT:
+         *params = ctx->Pixel.PostConvolutionBias[1];
+         break;
+      case GL_POST_CONVOLUTION_BLUE_BIAS_EXT:
+         *params = ctx->Pixel.PostConvolutionBias[2];
+         break;
+      case GL_POST_CONVOLUTION_ALPHA_BIAS_EXT:
+         *params = ctx->Pixel.PostConvolutionBias[2];
          break;
 
       /* GL_SGI_color_table (also in 1.2 imaging */
@@ -3483,6 +3748,9 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       case GL_GREEN_SCALE:
          *params = (GLint) ctx->Pixel.GreenScale;
          break;
+      case GL_HISTOGRAM:
+         *params = (GLint) ctx->Pixel.HistogramEnabled;
+	 break;
       case GL_INDEX_BITS:
          *params = (GLint) ctx->Visual->IndexBits;
          break;
@@ -3704,6 +3972,9 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          params[0] = (GLint) MAX_WIDTH;
          params[1] = (GLint) MAX_HEIGHT;
          break;
+      case GL_MINMAX:
+         *params = (GLint) ctx->Pixel.MinMaxEnabled;
+         break;
       case GL_MODELVIEW_MATRIX:
 	 for (i=0;i<16;i++) {
 	    params[i] = (GLint) ctx->ModelView.m[i];
@@ -3776,7 +4047,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 *params = ctx->Pixel.MapStoSsize;
 	 break;
       case GL_POINT_SIZE:
-         *params = (GLint) ctx->Point.Size;
+         *params = (GLint) ctx->Point.UserSize;
          break;
       case GL_POINT_SIZE_GRANULARITY:
 	 *params = (GLint) ctx->Const.PointSizeGranularity;
@@ -4073,6 +4344,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = 0;
          break;
 
+      /* GL_ARB_multitexture */
       case GL_MAX_TEXTURE_UNITS_ARB:
          *params = ctx->Const.MaxTextureUnits;
          break;
@@ -4081,6 +4353,51 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          break;
       case GL_CLIENT_ACTIVE_TEXTURE_ARB:
          *params = GL_TEXTURE0_ARB + ctx->Array.ActiveTexture;
+         break;
+
+      /* GL_ARB_texture_cube_map */
+      case GL_TEXTURE_CUBE_MAP_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = (GLint) _mesa_IsEnabled(GL_TEXTURE_CUBE_MAP_ARB);
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetIntegerv");
+         return;
+      case GL_TEXTURE_BINDING_CUBE_MAP_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = textureUnit->CurrentCubeMap->Name;
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetIntegerv");
+         return;
+      case GL_MAX_CUBE_MAP_TEXTURE_SIZE_ARB:
+         if (ctx->Extensions.HaveTextureCubeMap)
+            *params = ctx->Const.MaxCubeTextureSize;
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetIntegerv");
+         return;
+
+      /* GL_ARB_texture_compression */
+      case GL_TEXTURE_COMPRESSION_HINT_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            *params = (GLint) ctx->Hint.TextureCompression;
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetIntegerv");
+         break;
+      case GL_NUM_COMPRESSED_TEXTURE_FORMATS_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            *params = (GLint) ctx->Const.NumCompressedTextureFormats;
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetIntegerv");
+         break;
+      case GL_COMPRESSED_TEXTURE_FORMATS_ARB:
+         if (ctx->Extensions.HaveTextureCompression) {
+            GLuint i;
+            for (i = 0; i < ctx->Const.NumCompressedTextureFormats; i++)
+               params[i] = (GLint) ctx->Const.CompressedTextureFormats[i];
+         }
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetIntegerv");
          break;
 
       /* GL_PGI_misc_hints */
@@ -4092,10 +4409,10 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 break;
       case GL_STRICT_SCISSOR_HINT_PGI:
       case GL_FULL_STIPPLE_HINT_PGI:
-	 *params = (GL_TRUE);
+	 *params = GL_TRUE;
 	 break;
       case GL_CONSERVE_MEMORY_HINT_PGI:
-	 *params = (GL_FALSE);
+	 *params = GL_FALSE;
 	 break;
       case GL_ALWAYS_FAST_HINT_PGI:
 	 *params = (ctx->Hint.AllowDrawWin == GL_TRUE &&
@@ -4127,7 +4444,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 *params = GL_DONT_CARE;
 	 break;
       case GL_BACK_NORMALS_HINT_PGI:
-	 *params = (GL_TRUE);
+	 *params = GL_TRUE;
 	 break;
       case GL_NATIVE_GRAPHICS_HANDLE_PGI:
 	 *params = 0;
@@ -4143,7 +4460,14 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 
       /* GL_ARB_transpose_matrix */
       case GL_TRANSPOSE_COLOR_MATRIX_ARB:
-         /* don't have a color matrix */
+         {
+            GLfloat tm[16];
+            GLuint i;
+            gl_matrix_transposef(tm, ctx->ColorMatrix.m);
+            for (i=0;i<16;i++) {
+               params[i] = (GLint) tm[i];
+            }
+         }
          break;
       case GL_TRANSPOSE_MODELVIEW_MATRIX_ARB:
          {
@@ -4226,28 +4550,60 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = MAX_COLOR_STACK_DEPTH;
          break;
       case GL_POST_COLOR_MATRIX_RED_SCALE_SGI:
-         *params = (GLint) ctx->Pixel.PostColorMatrixRedScale;
+         *params = (GLint) ctx->Pixel.PostColorMatrixScale[0];
          break;
       case GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI:
-         *params = (GLint) ctx->Pixel.PostColorMatrixGreenScale;
+         *params = (GLint) ctx->Pixel.PostColorMatrixScale[1];
          break;
       case GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI:
-         *params = (GLint) ctx->Pixel.PostColorMatrixBlueScale;
+         *params = (GLint) ctx->Pixel.PostColorMatrixScale[2];
          break;
       case GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI:
-         *params = (GLint) ctx->Pixel.PostColorMatrixAlphaScale;
+         *params = (GLint) ctx->Pixel.PostColorMatrixScale[3];
          break;
       case GL_POST_COLOR_MATRIX_RED_BIAS_SGI:
-         *params = (GLint) ctx->Pixel.PostColorMatrixRedBias;
+         *params = (GLint) ctx->Pixel.PostColorMatrixBias[0];
          break;
       case GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI:
-         *params = (GLint) ctx->Pixel.PostColorMatrixGreenBias;
+         *params = (GLint) ctx->Pixel.PostColorMatrixBias[1];
          break;
       case GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI:
-         *params = (GLint) ctx->Pixel.PostColorMatrixBlueBias;
+         *params = (GLint) ctx->Pixel.PostColorMatrixBias[2];
          break;
       case GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI:
-         *params = (GLint) ctx->Pixel.PostColorMatrixAlphaBias;
+         *params = (GLint) ctx->Pixel.PostColorMatrixBias[3];
+         break;
+
+      /* GL_EXT_convolution (also in 1.2 imaging) */
+      case GL_MAX_CONVOLUTION_WIDTH:
+         *params = ctx->Const.MaxConvolutionWidth;
+         break;
+      case GL_MAX_CONVOLUTION_HEIGHT:
+         *params = ctx->Const.MaxConvolutionHeight;
+         break;
+      case GL_POST_CONVOLUTION_RED_SCALE_EXT:
+         *params = (GLint) ctx->Pixel.PostConvolutionScale[0];
+         break;
+      case GL_POST_CONVOLUTION_GREEN_SCALE_EXT:
+         *params = (GLint) ctx->Pixel.PostConvolutionScale[1];
+         break;
+      case GL_POST_CONVOLUTION_BLUE_SCALE_EXT:
+         *params = (GLint) ctx->Pixel.PostConvolutionScale[2];
+         break;
+      case GL_POST_CONVOLUTION_ALPHA_SCALE_EXT:
+         *params = (GLint) ctx->Pixel.PostConvolutionScale[3];
+         break;
+      case GL_POST_CONVOLUTION_RED_BIAS_EXT:
+         *params = (GLint) ctx->Pixel.PostConvolutionBias[0];
+         break;
+      case GL_POST_CONVOLUTION_GREEN_BIAS_EXT:
+         *params = (GLint) ctx->Pixel.PostConvolutionBias[1];
+         break;
+      case GL_POST_CONVOLUTION_BLUE_BIAS_EXT:
+         *params = (GLint) ctx->Pixel.PostConvolutionBias[2];
+         break;
+      case GL_POST_CONVOLUTION_ALPHA_BIAS_EXT:
+         *params = (GLint) ctx->Pixel.PostConvolutionBias[2];
          break;
 
       /* GL_SGI_color_table (also in 1.2 imaging */
