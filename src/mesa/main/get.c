@@ -1,10 +1,10 @@
-/* $Id: get.c,v 1.100 2002/11/14 16:14:55 brianp Exp $ */
+/* $Id: get.c,v 1.105 2003/01/26 14:37:16 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -1229,6 +1229,12 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = ctx->Pixel.PostColorMatrixColorTableEnabled;
          break;
 
+      /* GL_SGI_texture_color_table */
+      case GL_TEXTURE_COLOR_TABLE_SGI:
+         CHECK_EXTENSION_B(SGI_texture_color_table, pname);
+         *params = textureUnit->ColorTableEnabled;
+         break;
+
       /* GL_EXT_secondary_color */
       case GL_COLOR_SUM_EXT:
          CHECK_EXTENSION_B(EXT_secondary_color, pname);
@@ -1240,6 +1246,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          params[0] = INT_TO_BOOL(ctx->Current.Attrib[VERT_ATTRIB_COLOR1][0]);
          params[1] = INT_TO_BOOL(ctx->Current.Attrib[VERT_ATTRIB_COLOR1][1]);
          params[2] = INT_TO_BOOL(ctx->Current.Attrib[VERT_ATTRIB_COLOR1][2]);
+         params[3] = INT_TO_BOOL(ctx->Current.Attrib[VERT_ATTRIB_COLOR1][3]);
 	 break;
       case GL_SECONDARY_COLOR_ARRAY_EXT:
          CHECK_EXTENSION_B(EXT_secondary_color, pname);
@@ -1375,11 +1382,15 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          break;
       case GL_VERTEX_PROGRAM_BINDING_NV:
          CHECK_EXTENSION_B(NV_vertex_program, pname);
-         *params = (ctx->VertexProgram.CurrentID != 0) ? GL_TRUE : GL_FALSE;
+         if (ctx->VertexProgram.Current &&
+             ctx->VertexProgram.Current->Base.Id != 0)
+            *params = GL_TRUE;
+         else
+            *params = GL_FALSE;
          break;
       case GL_PROGRAM_ERROR_POSITION_NV:
          CHECK_EXTENSION_B(NV_vertex_program, pname);
-         *params = (ctx->VertexProgram.ErrorPos != 0) ? GL_TRUE : GL_FALSE;
+         *params = (ctx->Program.ErrorPos != 0) ? GL_TRUE : GL_FALSE;
          break;
       case GL_VERTEX_ATTRIB_ARRAY0_NV:
       case GL_VERTEX_ATTRIB_ARRAY1_NV:
@@ -1448,6 +1459,29 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          }
          break;
 #endif /* FEATURE_NV_vertex_program */
+
+#if FEATURE_NV_fragment_program
+      case GL_MAX_TEXTURE_COORDS_NV:
+         CHECK_EXTENSION_B(NV_fragment_program, pname);
+         *params = INT_TO_BOOL(ctx->Const.MaxTextureCoordUnits);
+         break;
+      case GL_MAX_TEXTURE_IMAGE_UNITS_NV:
+         CHECK_EXTENSION_B(NV_fragment_program, pname);
+         *params = INT_TO_BOOL(ctx->Const.MaxTextureImageUnits);
+         break;
+      case GL_FRAGMENT_PROGRAM_BINDING_NV:
+         CHECK_EXTENSION_B(NV_fragment_program, pname);
+         if (ctx->VertexProgram.Current &&
+             ctx->VertexProgram.Current->Base.Id != 0)
+            *params = GL_TRUE;
+         else
+            *params = GL_FALSE;
+         break;
+      case GL_MAX_FRAGMENT_PROGRAM_LOCAL_PARAMETERS_NV:
+         CHECK_EXTENSION_B(NV_fragment_program, pname);
+         *params = MAX_NV_FRAGMENT_PROGRAM_PARAMS ? GL_TRUE : GL_FALSE;
+         break;
+#endif /* FEATURE_NV_fragment_program */
 
       /* GL_NV_texture_rectangle */
       case GL_TEXTURE_RECTANGLE_NV:
@@ -2594,6 +2628,12 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) ctx->Pixel.PostColorMatrixColorTableEnabled;
          break;
 
+      /* GL_SGI_texture_color_table */
+      case GL_TEXTURE_COLOR_TABLE_SGI:
+         CHECK_EXTENSION_D(SGI_texture_color_table, pname);
+         *params = (GLdouble) textureUnit->ColorTableEnabled;
+         break;
+
       /* GL_EXT_secondary_color */
       case GL_COLOR_SUM_EXT:
          CHECK_EXTENSION_D(EXT_secondary_color, pname);
@@ -2605,6 +2645,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          params[0] = ctx->Current.Attrib[VERT_ATTRIB_COLOR1][0];
          params[1] = ctx->Current.Attrib[VERT_ATTRIB_COLOR1][1];
          params[2] = ctx->Current.Attrib[VERT_ATTRIB_COLOR1][2];
+         params[3] = ctx->Current.Attrib[VERT_ATTRIB_COLOR1][3];
 	 break;
       case GL_SECONDARY_COLOR_ARRAY_EXT:
          CHECK_EXTENSION_D(EXT_secondary_color, pname);
@@ -2740,11 +2781,14 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          break;
       case GL_VERTEX_PROGRAM_BINDING_NV:
          CHECK_EXTENSION_D(NV_vertex_program, pname);
-         *params = (GLdouble) ctx->VertexProgram.CurrentID;
+         if (ctx->VertexProgram.Current)
+            *params = (GLdouble) ctx->VertexProgram.Current->Base.Id;
+         else
+            *params = 0.0;
          break;
       case GL_PROGRAM_ERROR_POSITION_NV:
          CHECK_EXTENSION_D(NV_vertex_program, pname);
-         *params = (GLdouble) ctx->VertexProgram.ErrorPos;
+         *params = (GLdouble) ctx->Program.ErrorPos;
          break;
       case GL_VERTEX_ATTRIB_ARRAY0_NV:
       case GL_VERTEX_ATTRIB_ARRAY1_NV:
@@ -2813,6 +2857,28 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          }
          break;
 #endif /* FEATURE_NV_vertex_program */
+
+#if FEATURE_NV_fragment_program
+      case GL_MAX_TEXTURE_COORDS_NV:
+         CHECK_EXTENSION_B(NV_fragment_program, pname);
+         *params = (GLdouble) ctx->Const.MaxTextureCoordUnits;
+         break;
+      case GL_MAX_TEXTURE_IMAGE_UNITS_NV:
+         CHECK_EXTENSION_B(NV_fragment_program, pname);
+         *params = (GLdouble) ctx->Const.MaxTextureImageUnits;
+         break;
+      case GL_FRAGMENT_PROGRAM_BINDING_NV:
+         CHECK_EXTENSION_D(NV_fragment_program, pname);
+         if (ctx->FragmentProgram.Current)
+            *params = (GLdouble) ctx->FragmentProgram.Current->Base.Id;
+         else
+            *params = 0.0;
+         break;
+      case GL_MAX_FRAGMENT_PROGRAM_LOCAL_PARAMETERS_NV:
+         CHECK_EXTENSION_D(NV_fragment_program, pname);
+         *params = (GLdouble) MAX_NV_FRAGMENT_PROGRAM_PARAMS;
+         break;
+#endif /* FEATURE_NV_fragment_program */
 
       /* GL_NV_texture_rectangle */
       case GL_TEXTURE_RECTANGLE_NV:
@@ -3935,6 +4001,12 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = (GLfloat) ctx->Pixel.PostColorMatrixColorTableEnabled;
          break;
 
+      /* GL_SGI_texture_color_table */
+      case GL_TEXTURE_COLOR_TABLE_SGI:
+         CHECK_EXTENSION_F(SGI_texture_color_table, pname);
+         *params = (GLfloat) textureUnit->ColorTableEnabled;
+         break;
+
       /* GL_EXT_secondary_color */
       case GL_COLOR_SUM_EXT:
          CHECK_EXTENSION_F(EXT_secondary_color, pname);
@@ -3946,6 +4018,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          params[0] = ctx->Current.Attrib[VERT_ATTRIB_COLOR1][0];
          params[1] = ctx->Current.Attrib[VERT_ATTRIB_COLOR1][1];
          params[2] = ctx->Current.Attrib[VERT_ATTRIB_COLOR1][2];
+         params[3] = ctx->Current.Attrib[VERT_ATTRIB_COLOR1][3];
 	 break;
       case GL_SECONDARY_COLOR_ARRAY_EXT:
          CHECK_EXTENSION_F(EXT_secondary_color, pname);
@@ -4036,11 +4109,11 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 
       /* GL_NV_point_sprite */
       case GL_POINT_SPRITE_NV:
-         CHECK_EXTENSION_B(NV_point_sprite, pname);
+         CHECK_EXTENSION_F(NV_point_sprite, pname);
          *params = (GLfloat) ctx->Point.PointSprite;
          break;
       case GL_POINT_SPRITE_R_MODE_NV:
-         CHECK_EXTENSION_B(NV_point_sprite, pname);
+         CHECK_EXTENSION_F(NV_point_sprite, pname);
          *params = (GLfloat) ctx->Point.SpriteRMode;
          break;
 
@@ -4081,11 +4154,14 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          break;
       case GL_VERTEX_PROGRAM_BINDING_NV:
          CHECK_EXTENSION_F(NV_vertex_program, pname);
-         *params = (GLfloat) ctx->VertexProgram.CurrentID;
+         if (ctx->VertexProgram.Current)
+            *params = (GLfloat) ctx->VertexProgram.Current->Base.Id;
+         else
+            *params = 0.0;
          break;
       case GL_PROGRAM_ERROR_POSITION_NV:
          CHECK_EXTENSION_F(NV_vertex_program, pname);
-         *params = (GLfloat) ctx->VertexProgram.ErrorPos;
+         *params = (GLfloat) ctx->Program.ErrorPos;
          break;
       case GL_VERTEX_ATTRIB_ARRAY0_NV:
       case GL_VERTEX_ATTRIB_ARRAY1_NV:
@@ -4125,7 +4201,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_MAP1_VERTEX_ATTRIB13_4_NV:
       case GL_MAP1_VERTEX_ATTRIB14_4_NV:
       case GL_MAP1_VERTEX_ATTRIB15_4_NV:
-         CHECK_EXTENSION_B(NV_vertex_program, pname);
+         CHECK_EXTENSION_F(NV_vertex_program, pname);
          {
             GLuint n = (GLuint) pname - GL_MAP1_VERTEX_ATTRIB0_4_NV;
             *params = (GLfloat) ctx->Eval.Map1Attrib[n];
@@ -4147,12 +4223,35 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_MAP2_VERTEX_ATTRIB13_4_NV:
       case GL_MAP2_VERTEX_ATTRIB14_4_NV:
       case GL_MAP2_VERTEX_ATTRIB15_4_NV:
-         CHECK_EXTENSION_B(NV_vertex_program, pname);
+         CHECK_EXTENSION_F(NV_vertex_program, pname);
          {
             GLuint n = (GLuint) pname - GL_MAP2_VERTEX_ATTRIB0_4_NV;
             *params = (GLfloat) ctx->Eval.Map2Attrib[n];
          }
          break;
+#endif /* FEATURE_NV_vertex_program */
+
+#if FEATURE_NV_fragment_program
+      case GL_MAX_TEXTURE_COORDS_NV:
+         CHECK_EXTENSION_F(NV_fragment_program, pname);
+         *params = (GLfloat) ctx->Const.MaxTextureCoordUnits;
+         break;
+      case GL_MAX_TEXTURE_IMAGE_UNITS_NV:
+         CHECK_EXTENSION_F(NV_fragment_program, pname);
+         *params = (GLfloat) ctx->Const.MaxTextureImageUnits;
+         break;
+      case GL_FRAGMENT_PROGRAM_BINDING_NV:
+         CHECK_EXTENSION_F(NV_fragment_program, pname);
+         if (ctx->FragmentProgram.Current)
+            *params = (GLfloat) ctx->FragmentProgram.Current->Base.Id;
+         else
+            *params = 0.0;
+         break;
+      case GL_MAX_FRAGMENT_PROGRAM_LOCAL_PARAMETERS_NV:
+         CHECK_EXTENSION_F(NV_fragment_program, pname);
+         *params = (GLfloat) MAX_NV_FRAGMENT_PROGRAM_PARAMS;
+         break;
+#endif /* FEATURE_NV_fragment_program */
 
       /* GL_NV_texture_rectangle */
       case GL_TEXTURE_RECTANGLE_NV:
@@ -4167,7 +4266,6 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          CHECK_EXTENSION_F(NV_texture_rectangle, pname);
          *params = (GLfloat) ctx->Const.MaxTextureRectSize;
          break;
-#endif /* FEATURE_NV_vertex_program */
 
       /* GL_EXT_stencil_two_side */
       case GL_STENCIL_TEST_TWO_SIDE_EXT:
@@ -5314,6 +5412,11 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Pixel.PostColorMatrixColorTableEnabled;
          break;
 
+      /* GL_SGI_texture_color_table */
+      case GL_TEXTURE_COLOR_TABLE_SGI:
+         CHECK_EXTENSION_I(SGI_texture_color_table, pname);
+         *params = (GLint) textureUnit->ColorTableEnabled;
+         break;
 
       /* GL_EXT_secondary_color */
       case GL_COLOR_SUM_EXT:
@@ -5326,6 +5429,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          params[0] = FLOAT_TO_INT( (ctx->Current.Attrib[VERT_ATTRIB_COLOR1][0]) );
          params[1] = FLOAT_TO_INT( (ctx->Current.Attrib[VERT_ATTRIB_COLOR1][1]) );
          params[2] = FLOAT_TO_INT( (ctx->Current.Attrib[VERT_ATTRIB_COLOR1][2]) );
+         params[3] = FLOAT_TO_INT( (ctx->Current.Attrib[VERT_ATTRIB_COLOR1][3]) );
 	 break;
       case GL_SECONDARY_COLOR_ARRAY_EXT:
          CHECK_EXTENSION_I(EXT_secondary_color, pname);
@@ -5416,11 +5520,11 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 
       /* GL_NV_point_sprite */
       case GL_POINT_SPRITE_NV:
-         CHECK_EXTENSION_B(NV_point_sprite, pname);
+         CHECK_EXTENSION_I(NV_point_sprite, pname);
          *params = (GLint) ctx->Point.PointSprite;
          break;
       case GL_POINT_SPRITE_R_MODE_NV:
-         CHECK_EXTENSION_B(NV_point_sprite, pname);
+         CHECK_EXTENSION_I(NV_point_sprite, pname);
          *params = (GLint) ctx->Point.SpriteRMode;
          break;
 
@@ -5461,11 +5565,14 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          break;
       case GL_VERTEX_PROGRAM_BINDING_NV:
          CHECK_EXTENSION_I(NV_vertex_program, pname);
-         *params = (GLint) ctx->VertexProgram.CurrentID;
+         if (ctx->VertexProgram.Current)
+            *params = (GLint) ctx->VertexProgram.Current->Base.Id;
+         else
+            *params = 0;
          break;
       case GL_PROGRAM_ERROR_POSITION_NV:
          CHECK_EXTENSION_I(NV_vertex_program, pname);
-         *params = (GLint) ctx->VertexProgram.ErrorPos;
+         *params = (GLint) ctx->Program.ErrorPos;
          break;
       case GL_VERTEX_ATTRIB_ARRAY0_NV:
       case GL_VERTEX_ATTRIB_ARRAY1_NV:
@@ -5505,7 +5612,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       case GL_MAP1_VERTEX_ATTRIB13_4_NV:
       case GL_MAP1_VERTEX_ATTRIB14_4_NV:
       case GL_MAP1_VERTEX_ATTRIB15_4_NV:
-         CHECK_EXTENSION_B(NV_vertex_program, pname);
+         CHECK_EXTENSION_I(NV_vertex_program, pname);
          {
             GLuint n = (GLuint) pname - GL_MAP1_VERTEX_ATTRIB0_4_NV;
             *params = (GLint) ctx->Eval.Map1Attrib[n];
@@ -5527,12 +5634,35 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       case GL_MAP2_VERTEX_ATTRIB13_4_NV:
       case GL_MAP2_VERTEX_ATTRIB14_4_NV:
       case GL_MAP2_VERTEX_ATTRIB15_4_NV:
-         CHECK_EXTENSION_B(NV_vertex_program, pname);
+         CHECK_EXTENSION_I(NV_vertex_program, pname);
          {
             GLuint n = (GLuint) pname - GL_MAP2_VERTEX_ATTRIB0_4_NV;
             *params = (GLint) ctx->Eval.Map2Attrib[n];
          }
          break;
+#endif /* FEATURE_NV_vertex_program */
+
+#if FEATURE_NV_fragment_program
+      case GL_MAX_TEXTURE_COORDS_NV:
+         CHECK_EXTENSION_I(NV_fragment_program, pname);
+         *params = (GLint) ctx->Const.MaxTextureCoordUnits;
+         break;
+      case GL_MAX_TEXTURE_IMAGE_UNITS_NV:
+         CHECK_EXTENSION_I(NV_fragment_program, pname);
+         *params = (GLint) ctx->Const.MaxTextureImageUnits;
+         break;
+      case GL_FRAGMENT_PROGRAM_BINDING_NV:
+         CHECK_EXTENSION_I(NV_fragment_program, pname);
+         if (ctx->FragmentProgram.Current)
+            *params = (GLint) ctx->FragmentProgram.Current->Base.Id;
+         else
+            *params = 0;
+         break;
+      case GL_MAX_FRAGMENT_PROGRAM_LOCAL_PARAMETERS_NV:
+         CHECK_EXTENSION_I(NV_fragment_program, pname);
+         *params = MAX_NV_FRAGMENT_PROGRAM_PARAMS;
+         break;
+#endif /* FEATURE_NV_fragment_program */
 
       /* GL_NV_texture_rectangle */
       case GL_TEXTURE_RECTANGLE_NV:
@@ -5547,7 +5677,6 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          CHECK_EXTENSION_I(NV_texture_rectangle, pname);
          *params = (GLint) ctx->Const.MaxTextureRectSize;
          break;
-#endif /* FEATURE_NV_vertex_program */
 
       /* GL_EXT_stencil_two_side */
       case GL_STENCIL_TEST_TWO_SIDE_EXT:
@@ -5682,6 +5811,13 @@ _mesa_GetString( GLenum name )
             }
          case GL_EXTENSIONS:
             return (const GLubyte *) _mesa_extensions_get_string(ctx);
+#if FEATURE_NV_fragment_program
+         case GL_PROGRAM_ERROR_STRING_NV:
+            if (ctx->Extensions.NV_fragment_program) {
+               return (const GLubyte *) ctx->Program.ErrorString;
+            }
+            /* FALL-THROUGH */
+#endif
          default:
             _mesa_error( ctx, GL_INVALID_ENUM, "glGetString" );
             return (const GLubyte *) 0;

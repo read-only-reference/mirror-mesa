@@ -49,6 +49,10 @@ CORE_SOURCES =accum.c \
 	lines.c \
 	matrix.c \
 	mmath.c \
+	nvprogram.c \
+	nvfragparse.c \
+	nvvertexec.c \
+	nvvertparse.c \
 	pixel.c \
 	points.c \
 	polygon.c \
@@ -64,8 +68,6 @@ CORE_SOURCES =accum.c \
 	texutil.c \
 	varray.c \
 	vtxfmt.c \
-	vpstate.c \
-	vpexec.c \
 	vsnprintf.c \
 	vtparse.c \
 	[.x86]x86.c
@@ -101,6 +103,7 @@ RASTER_SOURCES = [.swrast]s_aatriangle.c \
 [.swrast]s_lines.c \
 [.swrast]s_logic.c \
 [.swrast]s_masking.c \
+[.swrast]s_nvfragprog.c \
 [.swrast]s_pixeltex.c \
 [.swrast]s_points.c \
 [.swrast]s_readpix.c \
@@ -189,6 +192,10 @@ lines.obj,\
 matrix.obj
 
 OBJECTS3=mmath.obj,\
+nvprogram.obj,\
+nvfragparse.obj,\
+nvvertexec.obj,\
+nvvertparse.obj,\
 pixel.obj,\
 points.obj,\
 polygon.obj,\
@@ -201,29 +208,27 @@ teximage.obj,\
 texobj.obj,\
 texstate.obj,\
 texstore.obj,\
-texutil.obj,\
-varray.obj,\
+texutil.obj
+
+OBJECTS4=varray.obj,\
 vtxfmt.obj,\
-vpstate.obj,\
-vpexec.obj,\
-vpparse.obj,\
 vsnprintf.obj
 
-OBJECTS4=[.x]glxapi.obj,[.x]fakeglx.obj,[.x]xfonts.obj,\
+OBJECTS5=[.x]glxapi.obj,[.x]fakeglx.obj,[.x]xfonts.obj,\
 [.x]xm_api.obj,[.x]xm_dd.obj,[.x]xm_line.obj,[.x]xm_span.obj,[.x]xm_tri.obj,\
 [.osmesa]osmesa.obj,\
 [.svga]svgamesa.obj
 
-OBJECTS5=[.fx]fxapi.obj,[.fx]fxdd.obj,[.fx]fxddtex.obj,[.x86]x86.obj
+OBJECTS6=[.fx]fxapi.obj,[.fx]fxdd.obj,[.fx]fxddtex.obj,[.x86]x86.obj
 
-OBJECTS6=[.fx]fxddspan.obj,\
+OBJECTS7=[.fx]fxddspan.obj,\
 [.fx]fxsetup.obj,\
 [.fx]fxtexman.obj,\
 [.fx]fxtris.obj,\
 [.fx]fxvb.obj,\
 [.fx]fxglidew.obj
 
-OBJECTS7=[.swrast]s_aatriangle.obj,\
+OBJECTS8=[.swrast]s_aatriangle.obj,\
 [.swrast]s_accum.obj,\
 [.swrast]s_alpha.obj,\
 [.swrast]s_alphabuf.obj,\
@@ -234,17 +239,18 @@ OBJECTS7=[.swrast]s_aatriangle.obj,\
 [.swrast]s_context.obj,\
 [.swrast]s_depth.obj
 
-OBJECTS8=[.swrast]s_drawpix.obj,\
+OBJECTS9=[.swrast]s_drawpix.obj,\
 [.swrast]s_fog.obj,\
 [.swrast]s_histogram.obj,\
 [.swrast]s_imaging.obj,\
 [.swrast]s_lines.obj,\
 [.swrast]s_logic.obj,\
 [.swrast]s_masking.obj,\
+[.swrast]s_nvfragprog.obj,\
 [.swrast]s_pixeltex.obj,\
 [.swrast]s_points.obj
 
-OBJECTS9=[.swrast]s_readpix.obj,\
+OBJECTS10=[.swrast]s_readpix.obj,\
 [.swrast]s_aaline.obj,\
 [.swrast]s_span.obj,\
 [.swrast]s_stencil.obj,\
@@ -254,11 +260,11 @@ OBJECTS9=[.swrast]s_readpix.obj,\
 [.swrast]s_feedback.obj,\
 [.swrast]s_zoom.obj
 
-OBJECTS10=[.swrast_setup]ss_context.obj,\
+OBJECTS11=[.swrast_setup]ss_context.obj,\
 [.swrast_setup]ss_triangle.obj,\
 [.swrast_setup]ss_vb.obj 
 
-OBJECTS11=[.tnl]t_array_api.obj,\
+OBJECTS12=[.tnl]t_array_api.obj,\
 [.tnl]t_array_import.obj,\
 [.tnl]t_context.obj,\
 [.tnl]t_eval_api.obj,\
@@ -270,7 +276,7 @@ OBJECTS11=[.tnl]t_array_api.obj,\
 [.tnl]t_imm_eval.obj,\
 [.tnl]t_imm_exec.obj
 
-OBJECTS12=[.tnl]t_imm_fixup.obj,\
+OBJECTS13=[.tnl]t_imm_fixup.obj,\
 [.tnl]t_pipeline.obj,\
 [.tnl]t_vb_fog.obj,\
 [.tnl]t_vb_light.obj,\
@@ -282,7 +288,7 @@ OBJECTS12=[.tnl]t_imm_fixup.obj,\
 [.tnl]t_vb_texmat.obj,\
 [.tnl]t_vb_vertex.obj
 
-OBJECTS13=[.math]m_debug_xform.obj,\
+OBJECTS14=[.math]m_debug_xform.obj,\
 [.math]m_debug_norm.obj,\
 [.math]m_eval.obj,\
 [.math]m_matrix.obj,\
@@ -290,7 +296,7 @@ OBJECTS13=[.math]m_debug_xform.obj,\
 [.math]m_vector.obj,\
 [.math]m_xform.obj 
 
-OBJECTS14=[.array_cache]ac_context.obj,\
+OBJECTS15=[.array_cache]ac_context.obj,\
 	[.array_cache]ac_import.obj
 
 ##### RULES #####
@@ -301,7 +307,8 @@ VERSION=Mesa V3.4
 # Make the library
 $(LIBDIR)$(GL_LIB) : $(OBJECTS1),$(OBJECTS2) $(OBJECTS3) $(OBJECTS4)\
 	$(OBJECTS5) $(OBJECTS6) $(OBJECTS7) $(OBJECTS8) $(OBJECTS9)\
-	$(OBJECTS10) $(OBJECTS11) $(OBJECTS12) $(OBJECTS13) $(OBJECTS14)
+	$(OBJECTS10) $(OBJECTS11) $(OBJECTS12) $(OBJECTS13) $(OBJECTS14)\
+	$(OBJECTS15)
 .ifdef SHARE
   @ WRITE_ SYS$OUTPUT "  generating mesagl1.opt"
   @ OPEN_/WRITE FILE  mesagl1.opt
@@ -324,6 +331,7 @@ $(LIBDIR)$(GL_LIB) : $(OBJECTS1),$(OBJECTS2) $(OBJECTS3) $(OBJECTS4)\
   @ WRITE_ FILE "$(OBJECTS12)"
   @ WRITE_ FILE "$(OBJECTS13)"
   @ WRITE_ FILE "$(OBJECTS14)"
+  @ WRITE_ FILE "$(OBJECTS15)"
   @ write_ file "sys$share:decw$xextlibshr/share"
   @ write_ file "sys$share:decw$xlibshr/share"
   @ write_ file "sys$share:pthread$rtl/share"
@@ -349,6 +357,7 @@ $(LIBDIR)$(GL_LIB) : $(OBJECTS1),$(OBJECTS2) $(OBJECTS3) $(OBJECTS4)\
   @ library $(GL_LIB) $(OBJECTS12)
   @ library $(GL_LIB) $(OBJECTS13)
   @ library $(GL_LIB) $(OBJECTS14)
+  @ library $(GL_LIB) $(OBJECTS15)
 .endif
   @ rename $(GL_LIB)* $(LIBDIR)
 
@@ -438,6 +447,8 @@ imports.obj : imports.c
 	$(CC) $(CFLAGS) /obj=[.swrast]s_logic.obj [.swrast]s_logic.c
 [.swrast]s_masking.obj : [.swrast]s_masking.c
 	$(CC) $(CFLAGS) /obj=[.swrast]s_masking.obj [.swrast]s_masking.c
+[.swrast]s_nvfragprog.obj : [.swrast]s_nvfragprog.c
+	$(CC) $(CFLAGS) /obj=[.swrast]s_nvfragprog.obj [.swrast]s_nvfragprog.c
 [.swrast]s_pixeltex.obj : [.swrast]s_pixeltex.c
 	$(CC) $(CFLAGS) /obj=[.swrast]s_pixeltex.obj [.swrast]s_pixeltex.c
 [.swrast]s_points.obj : [.swrast]s_points.c

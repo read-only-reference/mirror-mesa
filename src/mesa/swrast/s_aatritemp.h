@@ -1,10 +1,10 @@
-/* $Id: s_aatritemp.h,v 1.30 2002/08/07 00:45:07 brianp Exp $ */
+/* $Id: s_aatritemp.h,v 1.34 2003/01/28 00:14:32 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  4.1
+ * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -76,11 +76,12 @@
    GLfloat sPlane[4], tPlane[4], uPlane[4], vPlane[4];
    GLfloat texWidth, texHeight;
 #elif defined(DO_MULTITEX)
-   GLfloat sPlane[MAX_TEXTURE_UNITS][4];  /* texture S */
-   GLfloat tPlane[MAX_TEXTURE_UNITS][4];  /* texture T */
-   GLfloat uPlane[MAX_TEXTURE_UNITS][4];  /* texture R */
-   GLfloat vPlane[MAX_TEXTURE_UNITS][4];  /* texture Q */
-   GLfloat texWidth[MAX_TEXTURE_UNITS], texHeight[MAX_TEXTURE_UNITS];
+   GLfloat sPlane[MAX_TEXTURE_COORD_UNITS][4];  /* texture S */
+   GLfloat tPlane[MAX_TEXTURE_COORD_UNITS][4];  /* texture T */
+   GLfloat uPlane[MAX_TEXTURE_COORD_UNITS][4];  /* texture R */
+   GLfloat vPlane[MAX_TEXTURE_COORD_UNITS][4];  /* texture Q */
+   GLfloat texWidth[MAX_TEXTURE_COORD_UNITS];
+   GLfloat texHeight[MAX_TEXTURE_COORD_UNITS];
 #endif
    GLfloat bf = SWRAST_CONTEXT(ctx)->_backface_sign;
    
@@ -123,10 +124,10 @@
       const GLfloat botDx = vMid->win[0] - vMin->win[0];
       const GLfloat botDy = vMid->win[1] - vMin->win[1];
       const GLfloat area = majDx * botDy - botDx * majDy;
-      ltor = (GLboolean) (area < 0.0F);
       /* Do backface culling */
       if (area * bf < 0 || area == 0 || IS_INF_OR_NAN(area))
 	 return;
+      ltor = (GLboolean) (area < 0.0F);
    }
 
 #ifndef DO_OCCLUSION_TEST
@@ -148,10 +149,10 @@
 #endif
 #ifdef DO_RGBA
    if (ctx->Light.ShadeModel == GL_SMOOTH) {
-      compute_plane(p0, p1, p2, v0->color[0], v1->color[0], v2->color[0], rPlane);
-      compute_plane(p0, p1, p2, v0->color[1], v1->color[1], v2->color[1], gPlane);
-      compute_plane(p0, p1, p2, v0->color[2], v1->color[2], v2->color[2], bPlane);
-      compute_plane(p0, p1, p2, v0->color[3], v1->color[3], v2->color[3], aPlane);
+      compute_plane(p0, p1, p2, v0->color[RCOMP], v1->color[RCOMP], v2->color[RCOMP], rPlane);
+      compute_plane(p0, p1, p2, v0->color[GCOMP], v1->color[GCOMP], v2->color[GCOMP], gPlane);
+      compute_plane(p0, p1, p2, v0->color[BCOMP], v1->color[BCOMP], v2->color[BCOMP], bPlane);
+      compute_plane(p0, p1, p2, v0->color[ACOMP], v1->color[ACOMP], v2->color[ACOMP], aPlane);
    }
    else {
       constant_plane(v2->color[RCOMP], rPlane);
@@ -173,9 +174,9 @@
 #endif
 #ifdef DO_SPEC
    if (ctx->Light.ShadeModel == GL_SMOOTH) {
-      compute_plane(p0, p1, p2, v0->specular[0], v1->specular[0], v2->specular[0],srPlane);
-      compute_plane(p0, p1, p2, v0->specular[1], v1->specular[1], v2->specular[1],sgPlane);
-      compute_plane(p0, p1, p2, v0->specular[2], v1->specular[2], v2->specular[2],sbPlane);
+      compute_plane(p0, p1, p2, v0->specular[RCOMP], v1->specular[RCOMP], v2->specular[RCOMP], srPlane);
+      compute_plane(p0, p1, p2, v0->specular[GCOMP], v1->specular[GCOMP], v2->specular[GCOMP], sgPlane);
+      compute_plane(p0, p1, p2, v0->specular[BCOMP], v1->specular[BCOMP], v2->specular[BCOMP], sbPlane);
    }
    else {
       constant_plane(v2->specular[RCOMP], srPlane);
@@ -463,10 +464,10 @@
             GLint j;
             for (j = 0; j < (GLint) n; j++) {
 #ifdef DO_RGBA
-               COPY_4V(array->rgba[j], array->rgba[j + left]);
+               COPY_CHAN4(array->rgba[j], array->rgba[j + left]);
 #endif
 #ifdef DO_SPEC
-               COPY_4V(array->spec[j], array->spec[j + left]);
+               COPY_CHAN4(array->spec[j], array->spec[j + left]);
 #endif
 #ifdef DO_INDEX
                array->index[j] = array->index[j + left];

@@ -1,10 +1,10 @@
-/* $Id: s_tritemp.h,v 1.41 2002/11/13 16:51:02 brianp Exp $ */
+/* $Id: s_tritemp.h,v 1.43 2003/01/20 00:24:22 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -325,10 +325,10 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
       GLfloat dvdx, dvdy;
 #endif
 #ifdef INTERP_MULTITEX
-      GLfloat dsdx[MAX_TEXTURE_UNITS], dsdy[MAX_TEXTURE_UNITS];
-      GLfloat dtdx[MAX_TEXTURE_UNITS], dtdy[MAX_TEXTURE_UNITS];
-      GLfloat dudx[MAX_TEXTURE_UNITS], dudy[MAX_TEXTURE_UNITS];
-      GLfloat dvdx[MAX_TEXTURE_UNITS], dvdy[MAX_TEXTURE_UNITS];
+      GLfloat dsdx[MAX_TEXTURE_COORD_UNITS], dsdy[MAX_TEXTURE_COORD_UNITS];
+      GLfloat dtdx[MAX_TEXTURE_COORD_UNITS], dtdy[MAX_TEXTURE_COORD_UNITS];
+      GLfloat dudx[MAX_TEXTURE_COORD_UNITS], dudy[MAX_TEXTURE_COORD_UNITS];
+      GLfloat dvdx[MAX_TEXTURE_COORD_UNITS], dvdy[MAX_TEXTURE_COORD_UNITS];
 #endif
 
       /*
@@ -766,14 +766,14 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
          GLfloat vLeft=0, dvOuter=0, dvInner;
 #endif
 #ifdef INTERP_MULTITEX
-         GLfloat sLeft[MAX_TEXTURE_UNITS];
-         GLfloat tLeft[MAX_TEXTURE_UNITS];
-         GLfloat uLeft[MAX_TEXTURE_UNITS];
-         GLfloat vLeft[MAX_TEXTURE_UNITS];
-         GLfloat dsOuter[MAX_TEXTURE_UNITS], dsInner[MAX_TEXTURE_UNITS];
-         GLfloat dtOuter[MAX_TEXTURE_UNITS], dtInner[MAX_TEXTURE_UNITS];
-         GLfloat duOuter[MAX_TEXTURE_UNITS], duInner[MAX_TEXTURE_UNITS];
-         GLfloat dvOuter[MAX_TEXTURE_UNITS], dvInner[MAX_TEXTURE_UNITS];
+         GLfloat sLeft[MAX_TEXTURE_COORD_UNITS];
+         GLfloat tLeft[MAX_TEXTURE_COORD_UNITS];
+         GLfloat uLeft[MAX_TEXTURE_COORD_UNITS];
+         GLfloat vLeft[MAX_TEXTURE_COORD_UNITS];
+         GLfloat dsOuter[MAX_TEXTURE_COORD_UNITS], dsInner[MAX_TEXTURE_COORD_UNITS];
+         GLfloat dtOuter[MAX_TEXTURE_COORD_UNITS], dtInner[MAX_TEXTURE_COORD_UNITS];
+         GLfloat duOuter[MAX_TEXTURE_COORD_UNITS], duInner[MAX_TEXTURE_COORD_UNITS];
+         GLfloat dvOuter[MAX_TEXTURE_COORD_UNITS], dvInner[MAX_TEXTURE_COORD_UNITS];
 #endif
 
          for (subTriangle=0; subTriangle<=1; subTriangle++) {
@@ -836,11 +836,14 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
 
                adjx = (float)(fx - eLeft->fx0);  /* SCALED! */
                adjy = eLeft->adjy;		 /* SCALED! */
+#ifndef __IBMCPP__
                (void) adjx;  /* silence compiler warnings */
                (void) adjy;  /* silence compiler warnings */
-
+#endif
                vLower = eLeft->v0;
+#ifndef __IBMCPP__
                (void) vLower;  /* silence compiler warnings */
+#endif
 
 #ifdef PIXEL_ADDRESS
                {

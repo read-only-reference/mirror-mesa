@@ -1,4 +1,4 @@
-/* $Id: mtypes.h,v 1.97 2002/10/21 15:52:34 brianp Exp $ */
+/* $Id: mtypes.h,v 1.102 2003/01/26 14:37:15 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -361,7 +361,7 @@ struct gl_current_attrib {
    GLfloat RasterColor[4];			/* Current raster color */
    GLfloat RasterSecondaryColor[4];             /* Current rast 2ndary color */
    GLuint RasterIndex;				/* Current raster index */
-   GLfloat RasterTexCoords[MAX_TEXTURE_UNITS][4];/* Current raster texcoords */
+   GLfloat RasterTexCoords[MAX_TEXTURE_COORD_UNITS][4];
    GLboolean RasterPosValid;			/* Raster pos valid flag */
 };
 
@@ -381,6 +381,9 @@ struct gl_enable_attrib {
    GLboolean Blend;
    GLuint ClipPlanes;
    GLboolean ColorMaterial;
+   GLboolean ColorTable;                /* SGI_color_table */
+   GLboolean PostColorMatrixColorTable; /* SGI_color_table */
+   GLboolean PostConvolutionColorTable; /* SGI_color_table */
    GLboolean Convolution1D;
    GLboolean Convolution2D;
    GLboolean Separable2D;
@@ -433,12 +436,16 @@ struct gl_enable_attrib {
    GLboolean SampleCoverage;          /* GL_ARB_multisample */
    GLboolean SampleCoverageInvert;    /* GL_ARB_multisample */
    GLboolean RasterPositionUnclipped; /* GL_IBM_rasterpos_clip */
-   GLuint Texture[MAX_TEXTURE_UNITS];
-   GLuint TexGen[MAX_TEXTURE_UNITS];
-   GLboolean VertexProgram;           /* GL_NV_vertex_program */
-   GLboolean VertexProgramPointSize;  /* GL_NV_vertex_program */
-   GLboolean VertexProgramTwoSide;    /* GL_NV_vertex_program */
-   GLboolean PointSprite;             /* GL_NV_point_sprite */
+   GLuint Texture[MAX_TEXTURE_IMAGE_UNITS];
+   GLuint TexGen[MAX_TEXTURE_COORD_UNITS];
+   /* SGI_texture_color_table */
+   GLboolean TextureColorTable[MAX_TEXTURE_IMAGE_UNITS];
+   /* GL_NV_vertex_program */
+   GLboolean VertexProgram;
+   GLboolean VertexProgramPointSize;
+   GLboolean VertexProgramTwoSide;
+   /* GL_NV_point_sprite */
+   GLboolean PointSprite;
 };
 
 
@@ -657,6 +664,9 @@ struct gl_pixel_attrib {
    GLfloat PCMCTscale[4];
    GLfloat PCMCTbias[4];
    GLboolean PostColorMatrixColorTableEnabled;
+   /* GL_SGI_texture_color_table */
+   GLfloat TextureColorTableScale[4];
+   GLfloat TextureColorTableBias[4];
    /* Convolution */
    GLboolean Convolution1DEnabled;
    GLboolean Convolution2DEnabled;
@@ -679,7 +689,7 @@ struct gl_point_attrib {
    GLfloat Threshold;		/* GL_EXT_point_parameters */
    GLboolean _Attenuated;	/* True if Params != [1, 0, 0] */
    GLboolean PointSprite;	/* GL_NV_point_sprite */
-   GLboolean CoordReplace[MAX_TEXTURE_UNITS]; /* GL_NV_point_sprite */
+   GLboolean CoordReplace[MAX_TEXTURE_COORD_UNITS]; /* GL_NV_point_sprite */
    GLenum SpriteRMode;		/* GL_NV_point_sprite */
 };
 
@@ -951,16 +961,21 @@ struct gl_texture_unit {
    struct gl_texture_object Saved3D;
    struct gl_texture_object SavedCubeMap;
    struct gl_texture_object SavedRect;
+
+   /* GL_SGI_texture_color_table */
+   struct gl_color_table ColorTable;
+   struct gl_color_table ProxyColorTable;
+   GLboolean ColorTableEnabled;
 };
 
 
 /* The texture attribute group */
 struct gl_texture_attrib {
    /* multitexture */
-   GLuint CurrentUnit;	          /* Active texture unit */
+   GLuint CurrentUnit;	        /* Active texture unit */
 
    GLuint _EnabledUnits;        /* one bit set for each really-enabled unit */
-   GLuint _GenFlags;  /* for texgen */
+   GLuint _GenFlags;            /* for texgen */
    GLuint _TexGenEnabled;	
    GLuint _TexMatEnabled;
 
@@ -1046,7 +1061,7 @@ struct gl_array_attrib {
    struct gl_client_array SecondaryColor;
    struct gl_client_array FogCoord;
    struct gl_client_array Index;
-   struct gl_client_array TexCoord[MAX_TEXTURE_UNITS];
+   struct gl_client_array TexCoord[MAX_TEXTURE_COORD_UNITS];
    struct gl_client_array EdgeFlag;
 
    struct gl_client_array VertexAttrib[16];  /* GL_NV_vertex_program */
@@ -1134,124 +1149,102 @@ struct gl_evaluators {
 };
 
 
-/*
- * Vertex program tokens and datatypes
- */
 
-#define VP_MAX_INSTRUCTIONS 128
-
-#define VP_NUM_INPUT_REGS VERT_ATTRIB_MAX
-#define VP_NUM_OUTPUT_REGS 15
-#define VP_NUM_TEMP_REGS 12
-#define VP_NUM_PROG_REGS 96
-
-#define VP_NUM_TOTAL_REGISTERS (VP_NUM_INPUT_REGS + VP_NUM_OUTPUT_REGS + VP_NUM_TEMP_REGS + VP_NUM_PROG_REGS)
-
-/* Location of register sets within the whole register file */
-#define VP_INPUT_REG_START  0
-#define VP_INPUT_REG_END    (VP_INPUT_REG_START + VP_NUM_INPUT_REGS - 1)
-#define VP_OUTPUT_REG_START (VP_INPUT_REG_END + 1)
-#define VP_OUTPUT_REG_END   (VP_OUTPUT_REG_START + VP_NUM_OUTPUT_REGS - 1)
-#define VP_TEMP_REG_START   (VP_OUTPUT_REG_END + 1)
-#define VP_TEMP_REG_END     (VP_TEMP_REG_START + VP_NUM_TEMP_REGS - 1)
-#define VP_PROG_REG_START   (VP_TEMP_REG_END + 1)
-#define VP_PROG_REG_END     (VP_PROG_REG_START + VP_NUM_PROG_REGS - 1)
-
-
-/* Machine state (i.e. the register file) */
+/* NV_vertex_program runtime state */
 struct vp_machine
 {
-   GLfloat Registers[VP_NUM_TOTAL_REGISTERS][4];
+   GLfloat Registers[MAX_NV_VERTEX_PROGRAM_TEMPS
+                    + MAX_NV_VERTEX_PROGRAM_PARAMS
+                    + MAX_NV_VERTEX_PROGRAM_INPUTS
+                    + MAX_NV_VERTEX_PROGRAM_OUTPUTS][4];
    GLint AddressReg;  /* might someday be a 4-vector */
 };
 
 
-/* Vertex program opcodes */
-enum vp_opcode
+/* NV_fragment_program runtime state */
+struct fp_machine
 {
-   MOV,
-   LIT,
-   RCP,
-   RSQ,
-   EXP,
-   LOG,
-   MUL,
-   ADD,
-   DP3,
-   DP4,
-   DST,
-   MIN,
-   MAX,
-   SLT,
-   SGE,
-   MAD,
-   ARL,
-   DPH,
-   RCC,
-   SUB,
-   ABS,
-   END
+   GLfloat Registers[MAX_NV_FRAGMENT_PROGRAM_TEMPS
+                    + MAX_NV_FRAGMENT_PROGRAM_PARAMS
+                    + MAX_NV_FRAGMENT_PROGRAM_INPUTS
+                    + MAX_NV_FRAGMENT_PROGRAM_OUTPUTS
+                    + MAX_NV_FRAGMENT_PROGRAM_WRITE_ONLYS][4];
+   GLuint CondCodes[4];
 };
 
 
-/* Instruction source register */
-struct vp_src_register
+/* Vertex and fragment instructions */
+struct vp_instruction;
+struct fp_instruction;
+
+
+/* Base class for any kind of program object */
+struct program
 {
-   GLint Register;    /* or the offset from the address register */
-   GLuint Swizzle[4];
-   GLboolean Negate;
-   GLboolean RelAddr;
-};
-
-
-/* Instruction destination register */
-struct vp_dst_register
-{
-   GLint Register;
-   GLboolean WriteMask[4];
-};
-
-
-/* Vertex program instruction */
-struct vp_instruction
-{
-   enum vp_opcode Opcode;
-   struct vp_src_register SrcReg[3];
-   struct vp_dst_register DstReg;
-};
-
-
-/* The actual vertex program, stored in the hash table */
-struct vp_program
-{
-   GLubyte *String;                      /* Original user code */
-   struct vp_instruction *Instructions;  /* Compiled instructions */
-   GLenum Target;      /* GL_VERTEX_PROGRAM_NV or GL_VERTEX_STATE_PROGRAM_NV */
-   GLint RefCount;            /* Since programs can be shared among contexts */
-   GLboolean IsPositionInvariant;  /* GL_NV_vertex_program1_1 */
+   GLuint Id;
+   GLubyte *String;    /* Null-terminated program text */
+   GLenum Target;
+   GLint RefCount;
    GLboolean Resident;
+};
+
+
+/* Vertex program object */
+struct vertex_program
+{
+   struct program Base;   /* base class */
+   struct vp_instruction *Instructions;  /* Compiled instructions */
+   GLboolean IsPositionInvariant;  /* GL_NV_vertex_program1_1 */
    GLuint InputsRead;     /* Bitmask of which input regs are read */
    GLuint OutputsWritten; /* Bitmask of which output regs are written to */
 };
 
 
+/* Fragment program object */
+struct fragment_program
+{
+   struct program Base;   /* base class */
+   struct fp_instruction *Instructions;  /* Compiled instructions */
+   GLuint InputsRead;     /* Bitmask of which input regs are read */
+   GLuint OutputsWritten; /* Bitmask of which output regs are written to */
+   GLfloat LocalParams[MAX_NV_FRAGMENT_PROGRAM_PARAMS][4];
+};
+
+
 /*
- * State vars for GL_NV_vertex_program
+ * State common to vertex and fragment programs.
+ */
+struct program_state {
+   GLint ErrorPos;                       /* GL_PROGRAM_ERROR_POSITION_NV */
+   const char *ErrorString;              /* GL_PROGRAM_ERROR_STRING_NV */
+};
+
+
+/*
+ * State for GL_NV_vertex_program
  */
 struct vertex_program_state
 {
    GLboolean Enabled;                    /* GL_VERTEX_PROGRAM_NV */
    GLboolean PointSizeEnabled;           /* GL_VERTEX_PROGRAM_POINT_SIZE_NV */
    GLboolean TwoSideEnabled;             /* GL_VERTEX_PROGRAM_TWO_SIDE_NV */
-   GLuint CurrentID;                     /* currently bound program's ID */
-   GLint ErrorPos;                       /* GL_PROGRAM_ERROR_POSITION_NV */
-   struct vp_program *Current;           /* ptr to currently bound program */
+   struct vertex_program *Current;       /* ptr to currently bound program */
    struct vp_machine Machine;            /* machine state */
 
-   GLenum TrackMatrix[VP_NUM_PROG_REGS / 4];
-   GLenum TrackMatrixTransform[VP_NUM_PROG_REGS / 4];
+   GLenum TrackMatrix[MAX_NV_VERTEX_PROGRAM_PARAMS / 4];
+   GLenum TrackMatrixTransform[MAX_NV_VERTEX_PROGRAM_PARAMS / 4];
 };
 
+
+/*
+ * State for GL_NV_fragment_program
+ */
+struct fragment_program_state
+{
+   GLboolean Enabled;                    /* GL_VERTEX_PROGRAM_NV */
+   struct fragment_program *Current;     /* ptr to currently bound program */
+   struct fp_machine Machine;            /* machine state */
+};
 
 
 /*
@@ -1271,8 +1264,8 @@ struct gl_shared_state {
    struct gl_texture_object *DefaultCubeMap;
    struct gl_texture_object *DefaultRect;
 
-   /* GL_NV_vertex_program */
-   struct _mesa_HashTable *VertexPrograms;
+   /* GL_NV_vertex/_program */
+   struct _mesa_HashTable *Programs;
 
    void *DriverData;  /* Device driver shared state */
 };
@@ -1325,6 +1318,8 @@ struct gl_constants {
    GLint MaxCubeTextureLevels;          /* GL_ARB_texture_cube_map */
    GLint MaxTextureRectSize;            /* GL_NV_texture_rectangle */
    GLuint MaxTextureUnits;
+   GLuint MaxTextureCoordUnits;
+   GLuint MaxTextureImageUnits;
    GLfloat MaxTextureMaxAnisotropy;	/* GL_EXT_texture_filter_anisotropic */
    GLfloat MaxTextureLodBias;           /* GL_EXT_texture_lod_bias */
    GLuint MaxArrayLockSize;
@@ -1368,6 +1363,7 @@ struct gl_extensions {
    GLboolean ARB_texture_mirrored_repeat;
    GLboolean ARB_window_pos;
    GLboolean ATI_texture_mirror_once;
+   GLboolean ATI_texture_env_combine3;
    GLboolean EXT_blend_color;
    GLboolean EXT_blend_func_separate;
    GLboolean EXT_blend_logic_op;
@@ -1406,6 +1402,7 @@ struct gl_extensions {
    GLboolean MESA_resize_buffers;
    GLboolean MESA_ycbcr_texture;
    GLboolean NV_blend_square;
+   GLboolean NV_fragment_program;
    GLboolean NV_point_sprite;
    GLboolean NV_texture_rectangle;
    GLboolean NV_texgen_reflection;
@@ -1413,6 +1410,7 @@ struct gl_extensions {
    GLboolean NV_vertex_program1_1;
    GLboolean SGI_color_matrix;
    GLboolean SGI_color_table;
+   GLboolean SGI_texture_color_table;
    GLboolean SGIS_generate_mipmap;
    GLboolean SGIS_pixel_texture;
    GLboolean SGIS_texture_edge_clamp;
@@ -1662,7 +1660,7 @@ struct __GLcontextRec {
    struct matrix_stack ModelviewMatrixStack;
    struct matrix_stack ProjectionMatrixStack;
    struct matrix_stack ColorMatrixStack;
-   struct matrix_stack TextureMatrixStack[MAX_TEXTURE_UNITS];
+   struct matrix_stack TextureMatrixStack[MAX_TEXTURE_COORD_UNITS];
    struct matrix_stack ProgramMatrixStack[MAX_PROGRAM_MATRICES];
    struct matrix_stack *CurrentStack; /* Points to one of the above stacks */
 
@@ -1734,7 +1732,9 @@ struct __GLcontextRec {
    struct gl_color_table PostColorMatrixColorTable;
    struct gl_color_table ProxyPostColorMatrixColorTable;
 
-   struct vertex_program_state VertexProgram;  /* GL_NV_vertex_program */
+   struct program_state Program;             /* for vertex or fragment progs */
+   struct vertex_program_state VertexProgram;      /* GL_NV_vertex_program */
+   struct fragment_program_state FragmentProgram;  /* GL_NV_fragment_program */
 
    GLenum ErrorValue;        /* Last error code */
    GLenum RenderMode;        /* either GL_RENDER, GL_SELECT, GL_FEEDBACK */

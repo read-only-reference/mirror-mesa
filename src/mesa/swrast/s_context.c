@@ -1,10 +1,10 @@
-/* $Id: s_context.c,v 1.42 2002/10/29 20:28:59 brianp Exp $ */
+/* $Id: s_context.c,v 1.44 2003/01/26 14:37:16 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  4.1
+ * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -295,6 +295,11 @@ _swrast_validate_texture_sample( GLcontext *ctx, GLuint texUnit,
 
    swrast->TextureSample[texUnit]( ctx, texUnit, tObj, n, texcoords,
 				   lambda, rgba );
+
+   /* GL_SGI_texture_color_table */
+   if (ctx->Texture.Unit[texUnit].ColorTableEnabled) {
+      _swrast_texture_table_lookup(&ctx->Texture.Unit[texUnit].ColorTable, n, rgba);
+   }
 }
 
 
@@ -516,7 +521,7 @@ _swrast_CreateContext( GLcontext *ctx )
    swrast->_IntegerAccumMode = GL_TRUE;
    swrast->_IntegerAccumScaler = 0.0;
 
-   for (i = 0 ; i < MAX_TEXTURE_UNITS ; i++)
+   for (i = 0; i < MAX_TEXTURE_IMAGE_UNITS; i++)
       swrast->TextureSample[i] = _swrast_validate_texture_sample;
 
    swrast->SpanArrays = MALLOC_STRUCT(span_arrays);

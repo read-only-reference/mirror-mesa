@@ -1,4 +1,4 @@
-/* $Id: extensions.c,v 1.85 2002/10/25 21:06:27 brianp Exp $ */
+/* $Id: extensions.c,v 1.88 2003/01/21 21:47:49 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -69,6 +69,7 @@ static struct {
    { ON,  "GL_ARB_transpose_matrix",           0 },
    { ON,  "GL_ARB_window_pos",                 F(ARB_window_pos) },
    { OFF, "GL_ATI_texture_mirror_once",        F(ATI_texture_mirror_once)},
+   { OFF, "GL_ATI_texture_env_combine3",       F(ATI_texture_env_combine3)},
    { ON,  "GL_EXT_abgr",                       0 },
    { ON,  "GL_EXT_bgra",                       0 },
    { OFF, "GL_EXT_blend_color",                F(EXT_blend_color) },
@@ -116,10 +117,12 @@ static struct {
    { OFF, "GL_NV_point_sprite",                F(NV_point_sprite) },
    { OFF, "GL_NV_texture_rectangle",           F(NV_texture_rectangle) },
    { ON,  "GL_NV_texgen_reflection",           F(NV_texgen_reflection) },
+   { OFF, "GL_NV_fragment_program",            F(NV_fragment_program) },
    { OFF, "GL_NV_vertex_program",              F(NV_vertex_program) },
    { OFF, "GL_NV_vertex_program1_1",           F(NV_vertex_program1_1) },
    { OFF, "GL_SGI_color_matrix",               F(SGI_color_matrix) },
    { OFF, "GL_SGI_color_table",                F(SGI_color_table) },
+   { OFF, "GL_SGI_texture_color_table",        F(SGI_texture_color_table) },
    { OFF, "GL_SGIS_generate_mipmap",           F(SGIS_generate_mipmap) },
    { OFF, "GL_SGIS_pixel_texture",             F(SGIS_pixel_texture) },
    { OFF, "GL_SGIS_texture_border_clamp",      F(ARB_texture_border_clamp) },
@@ -156,6 +159,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
       "GL_ARB_texture_env_crossbar",
       "GL_ARB_texture_env_dot3",
       "GL_ARB_texture_mirrored_repeat",
+      "GL_ATI_texture_env_combine3",
       "GL_ATI_texture_mirror_once",
       "GL_EXT_blend_color",
       "GL_EXT_blend_func_separate",
@@ -191,8 +195,12 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
       "GL_NV_vertex_program",
       "GL_NV_vertex_program1_1",
 #endif
+#if FEATURE_NV_fragment_program
+      "GL_NV_fragment_program",
+#endif
       "GL_SGI_color_matrix",
       "GL_SGI_color_table",
+      "GL_SGI_texture_color_table",
       "GL_SGIS_generate_mipmap",
       "GL_SGIS_pixel_texture",
       "GL_SGIS_texture_edge_clamp",
