@@ -1,4 +1,4 @@
-/* $Id: s_zoom.c,v 1.4 2001/03/12 00:48:42 gareth Exp $ */
+/* $Id: s_zoom.c,v 1.6 2001/05/15 21:30:27 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -46,7 +46,7 @@
 void
 _mesa_write_zoomed_rgba_span( GLcontext *ctx,
                               GLuint n, GLint x, GLint y, const GLdepth z[],
-                              const GLfixed *fog,
+                              const GLfloat *fog,
                               CONST GLchan rgba[][4], GLint y0 )
 {
    GLint m;
@@ -54,7 +54,7 @@ _mesa_write_zoomed_rgba_span( GLcontext *ctx,
    GLint i, j, skipcol;
    GLchan zrgba[MAX_WIDTH][4];  /* zoomed pixel colors */
    GLdepth zdepth[MAX_WIDTH];  /* zoomed depth values */
-   GLfixed zfog[MAX_WIDTH];  /* zoomed fog values */
+   GLfloat zfog[MAX_WIDTH];  /* zoomed fog values */
    GLint maxwidth = MIN2( ctx->DrawBuffer->Width, MAX_WIDTH );
    const GLuint *srcRGBA32 = (const GLuint *) rgba;
    GLuint *dstRGBA32 = (GLuint *) zrgba;
@@ -143,8 +143,7 @@ _mesa_write_zoomed_rgba_span( GLcontext *ctx,
    /* write the span */
    for (r=r0; r<r1; r++) {
       _mesa_write_rgba_span( ctx, m, x+skipcol, r, zdepth,
-			  (fog ? zfog : 0),
-			  zrgba, GL_BITMAP );
+			  (fog ? zfog : 0), zrgba, NULL, GL_BITMAP );
    }
 }
 
@@ -153,7 +152,7 @@ _mesa_write_zoomed_rgba_span( GLcontext *ctx,
 void
 _mesa_write_zoomed_rgb_span( GLcontext *ctx,
                              GLuint n, GLint x, GLint y, const GLdepth z[],
-                             const GLfixed *fog,
+                             const GLfloat *fog,
                              CONST GLchan rgb[][3], GLint y0 )
 {
    GLint m;
@@ -161,7 +160,7 @@ _mesa_write_zoomed_rgb_span( GLcontext *ctx,
    GLint i, j, skipcol;
    GLchan zrgba[MAX_WIDTH][4];  /* zoomed pixel colors */
    GLdepth zdepth[MAX_WIDTH];  /* zoomed depth values */
-   GLfixed zfog[MAX_WIDTH];  /* zoomed fog values */
+   GLfloat zfog[MAX_WIDTH];  /* zoomed fog values */
    GLint maxwidth = MIN2( ctx->DrawBuffer->Width, MAX_WIDTH );
 
    /* compute width of output row */
@@ -254,7 +253,7 @@ _mesa_write_zoomed_rgb_span( GLcontext *ctx,
    /* write the span */
    for (r=r0; r<r1; r++) {
       _mesa_write_rgba_span( ctx, m, x+skipcol, r, zdepth,
-			  (fog ? zfog : 0), zrgba, GL_BITMAP );
+			  (fog ? zfog : 0), zrgba, NULL, GL_BITMAP );
    }
 }
 
@@ -266,7 +265,7 @@ _mesa_write_zoomed_rgb_span( GLcontext *ctx,
 void
 _mesa_write_zoomed_index_span( GLcontext *ctx,
                                GLuint n, GLint x, GLint y, const GLdepth z[],
-                               const GLfixed *fog,
+                               const GLfloat *fog,
                                const GLuint indexes[], GLint y0 )
 {
    GLint m;
@@ -274,7 +273,7 @@ _mesa_write_zoomed_index_span( GLcontext *ctx,
    GLint i, j, skipcol;
    GLuint zindexes[MAX_WIDTH];  /* zoomed color indexes */
    GLdepth zdepth[MAX_WIDTH];  /* zoomed depth values */
-   GLfixed zfog[MAX_WIDTH];  /* zoomed fog values */
+   GLfloat zfog[MAX_WIDTH];  /* zoomed fog values */
    GLint maxwidth = MIN2( ctx->DrawBuffer->Width, MAX_WIDTH );
 
    /* compute width of output row */
@@ -361,7 +360,7 @@ _mesa_write_zoomed_index_span( GLcontext *ctx,
    /* write the span */
    for (r=r0; r<r1; r++) {
       _mesa_write_index_span( ctx, m, x+skipcol, r, zdepth,
-			   (fog ? zfog : 0), zindexes, GL_BITMAP );
+                              (fog ? zfog : 0), zindexes, NULL, GL_BITMAP );
    }
 }
 

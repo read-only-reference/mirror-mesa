@@ -1,4 +1,4 @@
-/* $Id: mtypes.h,v 1.41 2001/04/28 08:39:17 keithw Exp $ */
+/* $Id: mtypes.h,v 1.44 2001/05/30 15:22:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -312,6 +312,7 @@ struct gl_current_attrib {
    GLuint  RasterIndex;				/* Current raster index */
    GLfloat *RasterTexCoord;			/* Current raster texcoord*/
    GLfloat RasterMultiTexCoord[MAX_TEXTURE_UNITS][4];
+   GLfloat RasterFogCoord;
    GLboolean RasterPosValid;			/* Raster po valid flag */
 };
 
@@ -375,6 +376,11 @@ struct gl_enable_attrib {
    GLboolean RescaleNormals;
    GLboolean Scissor;
    GLboolean Stencil;
+   GLboolean MultisampleEnabled;     /* GL_ARB_multisample */
+   GLboolean SampleAlphaToCoverage;  /* GL_ARB_multisample */
+   GLboolean SampleAlphaToOne;       /* GL_ARB_multisample */
+   GLboolean SampleCoverage;         /* GL_ARB_multisample */
+   GLboolean SampleCoverageInvert;   /* GL_ARB_multisample */
    GLuint Texture[MAX_TEXTURE_UNITS];
    GLuint TexGen[MAX_TEXTURE_UNITS];
 };
@@ -419,7 +425,7 @@ struct gl_fog_attrib {
    GLfloat Index;		/* Fog index */
    GLenum Mode;			/* Fog mode */
    GLboolean ColorSumEnabled;
-   GLenum FogCoordinateSource;
+   GLenum FogCoordinateSource;  /* GL_EXT_fog_coord */
 };
 
 
@@ -430,12 +436,9 @@ struct gl_hint_attrib {
    GLenum LineSmooth;
    GLenum PolygonSmooth;
    GLenum Fog;
-
-   /* GL_EXT_clip_volume_hint */
-   GLenum ClipVolumeClipping;
-
-   /* GL_ARB_texture_compression */
-   GLenum TextureCompression;
+   GLenum ClipVolumeClipping;   /* GL_EXT_clip_volume_hint */
+   GLenum TextureCompression;   /* GL_ARB_texture_compression */
+   GLenum GenerateMipmap;       /* GL_SGIS_generate_mipmap */
 };
 
 
@@ -526,6 +529,17 @@ struct gl_list_extensions {
    struct gl_list_opcode opcode[GL_MAX_EXT_OPCODES];
    GLuint nr_opcodes;
 };
+
+
+struct gl_multisample_attrib {
+   GLboolean Enabled;
+   GLboolean SampleAlphaToCoverage;
+   GLboolean SampleAlphaToOne;
+   GLboolean SampleCoverage;
+   GLfloat SampleCoverageValue;
+   GLboolean SampleCoverageInvert;
+};
+
 
 struct gl_pixel_attrib {
    GLenum ReadBuffer;		/* src buffer for glRead/CopyPixels */
@@ -826,6 +840,8 @@ struct gl_texture_object {
    GLchan ShadowAmbient;	/* GL_SGIX_shadow_ambient */
    GLint _MaxLevel;		/* actual max mipmap level (q in the spec) */
    GLfloat _MaxLambda;		/* = _MaxLevel - BaseLevel (q - b in spec) */
+   GLboolean GenerateMipmap;    /* GL_SGIS_generate_mipmap */
+
    struct gl_texture_image *Image[MAX_TEXTURE_LEVELS];
 
    /* Texture cube faces */
@@ -1176,6 +1192,7 @@ struct gl_extensions {
     * Not every extension needs to have such a flag, but it's encouraged.
     */
    GLboolean ARB_imaging;
+   GLboolean ARB_multisample;
    GLboolean ARB_multitexture;
    GLboolean ARB_texture_border_clamp;
    GLboolean ARB_texture_compression;
@@ -1218,6 +1235,7 @@ struct gl_extensions {
    GLboolean NV_texgen_reflection;
    GLboolean SGI_color_matrix;
    GLboolean SGI_color_table;
+   GLboolean SGIS_generate_mipmap;
    GLboolean SGIS_pixel_texture;
    GLboolean SGIS_texture_edge_clamp;
    GLboolean SGIX_depth_texture;
@@ -1273,21 +1291,21 @@ struct gl_extensions {
 #define _NEW_FOG		0x100      /* ctx->Fog */
 #define _NEW_HINT		0x200      /* ctx->Hint */
 #define _NEW_LIGHT		0x400      /* ctx->Light */
-#define _NEW_LINE		0x800     /* ctx->Line */
+#define _NEW_LINE		0x800      /* ctx->Line */
 #define _NEW_PIXEL		0x1000     /* ctx->Pixel */
-#define _NEW_POINT		0x2000    /* ctx->Point */
-#define _NEW_POLYGON		0x4000    /* ctx->Polygon */
-#define _NEW_POLYGONSTIPPLE	0x8000    /* ctx->PolygonStipple */
+#define _NEW_POINT		0x2000     /* ctx->Point */
+#define _NEW_POLYGON		0x4000     /* ctx->Polygon */
+#define _NEW_POLYGONSTIPPLE	0x8000     /* ctx->PolygonStipple */
 #define _NEW_SCISSOR		0x10000    /* ctx->Scissor */
-#define _NEW_STENCIL		0x20000   /* ctx->Stencil */
-#define _NEW_TEXTURE		0x40000   /* ctx->Texture */
-#define _NEW_TRANSFORM		0x80000   /* ctx->Transform */
+#define _NEW_STENCIL		0x20000    /* ctx->Stencil */
+#define _NEW_TEXTURE		0x40000    /* ctx->Texture */
+#define _NEW_TRANSFORM		0x80000    /* ctx->Transform */
 #define _NEW_VIEWPORT		0x100000   /* ctx->Viewport */
-#define _NEW_PACKUNPACK		0x200000  /* ctx->Pack, ctx->Unpack */
-#define _NEW_ARRAY	        0x400000  /* ctx->Array */
-#define _NEW_RENDERMODE		0x800000  /* RenderMode, Feedback, Select */
-#define _NEW_BUFFERS            0x1000000 /* ctx->Visual, ctx->DrawBuffer, */
-
+#define _NEW_PACKUNPACK		0x200000   /* ctx->Pack, ctx->Unpack */
+#define _NEW_ARRAY	        0x400000   /* ctx->Array */
+#define _NEW_RENDERMODE		0x800000   /* RenderMode, Feedback, Select */
+#define _NEW_BUFFERS            0x1000000  /* ctx->Visual, ctx->DrawBuffer, */
+#define _NEW_MULTISAMPLE        0x2000000  /* ctx->Multisample */
 #define _NEW_ALL ~0
 
 
@@ -1482,6 +1500,7 @@ struct __GLcontextRec {
    struct gl_light_attrib	Light;
    struct gl_line_attrib	Line;
    struct gl_list_attrib	List;
+   struct gl_multisample_attrib Multisample;
    struct gl_pixel_attrib	Pixel;
    struct gl_point_attrib	Point;
    struct gl_polygon_attrib	Polygon;

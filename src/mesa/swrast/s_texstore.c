@@ -1,4 +1,4 @@
-/* $Id: s_texstore.c,v 1.3 2001/04/13 00:13:51 brianp Exp $ */
+/* $Id: s_texstore.c,v 1.5 2001/05/21 16:41:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -46,6 +46,7 @@
 #include "mem.h"
 #include "texformat.h"
 #include "teximage.h"
+#include "texstore.h"
 
 #include "s_context.h"
 #include "s_depth.h"
@@ -190,6 +191,11 @@ _swrast_copy_teximage1d( GLcontext *ctx, GLenum target, GLint level,
                                 &_mesa_native_packing, texObj, texImage);
       FREE(image);
    }
+
+   /* GL_SGIS_generate_mipmap */
+   if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
+      _mesa_generate_mipmap(ctx, texUnit, texObj);
+   }
 }
 
 
@@ -244,6 +250,11 @@ _swrast_copy_teximage2d( GLcontext *ctx, GLenum target, GLint level,
                                 &_mesa_native_packing, texObj, texImage);
       FREE(image);
    }
+
+   /* GL_SGIS_generate_mipmap */
+   if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
+      _mesa_generate_mipmap(ctx, texUnit, texObj);
+   }
 }
 
 
@@ -274,6 +285,7 @@ _swrast_copy_texsubimage1d(GLcontext *ctx, GLenum target, GLint level,
          return;
       }
 
+#if 0
       /*
        * XXX this is a bit of a hack.  We need to be sure that the alpha
        * channel is 1.0 if the internal texture format is not supposed to
@@ -289,7 +301,7 @@ _swrast_copy_texsubimage1d(GLcontext *ctx, GLenum target, GLint level,
             image[i + 3] = CHAN_MAX;
          }
       }
-
+#endif
       /* now call glTexSubImage1D to do the real work */
       (*ctx->Driver.TexSubImage1D)(ctx, target, level, xoffset, width,
                                    GL_RGBA, CHAN_TYPE, image,
@@ -309,6 +321,11 @@ _swrast_copy_texsubimage1d(GLcontext *ctx, GLenum target, GLint level,
                                    GL_DEPTH_COMPONENT, GL_FLOAT, image,
                                    &_mesa_native_packing, texObj, texImage);
       FREE(image);
+   }
+
+   /* GL_SGIS_generate_mipmap */
+   if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
+      _mesa_generate_mipmap(ctx, texUnit, texObj);
    }
 }
 
@@ -342,6 +359,7 @@ _swrast_copy_texsubimage2d( GLcontext *ctx,
          return;
       }
 
+#if  0
       /*
        * XXX this is a bit of a hack.  We need to be sure that the alpha
        * channel is 1.0 if the internal texture format is not supposed to
@@ -357,7 +375,7 @@ _swrast_copy_texsubimage2d( GLcontext *ctx,
             image[i + 3] = CHAN_MAX;
          }
       }
-
+#endif
       /* now call glTexSubImage2D to do the real work */
       (*ctx->Driver.TexSubImage2D)(ctx, target, level,
                                    xoffset, yoffset, width, height,
@@ -379,6 +397,11 @@ _swrast_copy_texsubimage2d( GLcontext *ctx,
                                    GL_DEPTH_COMPONENT, GL_FLOAT, image,
                                    &_mesa_native_packing, texObj, texImage);
       FREE(image);
+   }
+
+   /* GL_SGIS_generate_mipmap */
+   if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
+      _mesa_generate_mipmap(ctx, texUnit, texObj);
    }
 }
 
@@ -411,7 +434,7 @@ _swrast_copy_texsubimage3d( GLcontext *ctx,
          _mesa_error( ctx, GL_OUT_OF_MEMORY, "glCopyTexSubImage3D" );
          return;
       }
-
+#if 0
       /*
        * XXX this is a bit of a hack.  We need to be sure that the alpha
        * channel is 1.0 if the internal texture format is not supposed to
@@ -427,7 +450,7 @@ _swrast_copy_texsubimage3d( GLcontext *ctx,
             image[i + 3] = CHAN_MAX;
          }
       }
-
+#endif
       /* now call glTexSubImage3D to do the real work */
       (*ctx->Driver.TexSubImage3D)(ctx, target, level,
                                    xoffset, yoffset, zoffset, width, height, 1,
@@ -449,5 +472,10 @@ _swrast_copy_texsubimage3d( GLcontext *ctx,
                                    GL_DEPTH_COMPONENT, GL_FLOAT, image,
                                    &_mesa_native_packing, texObj, texImage);
       FREE(image);
+   }
+
+   /* GL_SGIS_generate_mipmap */
+   if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
+      _mesa_generate_mipmap(ctx, texUnit, texObj);
    }
 }

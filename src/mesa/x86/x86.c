@@ -1,4 +1,4 @@
-/* $Id: x86.c,v 1.21 2001/03/30 14:44:43 gareth Exp $ */
+/* $Id: x86.c,v 1.24 2001/05/31 23:06:01 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -85,12 +85,12 @@ void _mesa_init_x86_transform_asm( void )
    ASSIGN_XFORM_GROUP( x86, 3 );
    ASSIGN_XFORM_GROUP( x86, 4 );
 
-   /* XXX this function has been found to cause FP overflow exceptions */
    _mesa_clip_tab[4] = _mesa_x86_cliptest_points4;
    _mesa_clip_np_tab[4] = _mesa_x86_cliptest_points4_np;
 
 #ifdef DEBUG
    _math_test_all_transform_functions( "x86" );
+   _math_test_all_cliptest_functions( "x86" );
 #endif
 #endif
 }
@@ -101,7 +101,7 @@ void _mesa_init_x86_vertex_asm( void )
    _mesa_xform_points3_v16_general = _mesa_v16_x86_general_xform;
    _mesa_cliptest_points4_v16 = _mesa_v16_x86_cliptest_points4;
 
-#ifdef DEBUG
+#if 0 /* DEBUG */
    _math_test_all_vertex_functions( "x86" );
 #endif
 #endif

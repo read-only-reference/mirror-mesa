@@ -1,4 +1,4 @@
-/* $Id: t_context.h,v 1.22 2001/04/30 21:08:52 keithw Exp $ */
+/* $Id: t_context.h,v 1.26 2001/05/31 23:03:05 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -176,6 +176,9 @@ struct immediate
    GLuint ArrayEltFlags;	/* precalc'ed for glArrayElt */
    GLuint ArrayEltIncr;
    GLuint ArrayEltFlush;
+
+#define FLUSH_ELT_EAGER 0x1
+#define FLUSH_ELT_LAZY 0x2
    GLuint FlushElt;
 
    GLuint MaxTextureUnits;	/* precalc'ed for glMultiTexCoordARB */
@@ -268,6 +271,7 @@ typedef struct vertex_buffer
 
 
    GLuint importable_data;
+   void *import_source;
    void (*import_data)( GLcontext *ctx, GLuint flags, GLuint vecflags );
    /* Callback to the provider of the untransformed input for the
     * render stage (or other stages) to call if they need to write into
@@ -345,7 +349,7 @@ struct gl_pipeline {
    GLuint run_state_changes;	  /* state changes since last run */
    GLuint run_input_changes;	  /* VERT_* changes since last run */
    GLuint inputs;		  /* VERT_* inputs to pipeline */
-   struct gl_pipeline_stage stages[MAX_PIPELINE_STAGES];
+   struct gl_pipeline_stage stages[MAX_PIPELINE_STAGES+1];
    GLuint nr_stages;
 };
 
@@ -367,7 +371,7 @@ typedef void (*quad_func)( GLcontext *ctx, GLuint v1, GLuint v2,
 typedef void (*render_func)( GLcontext *ctx, GLuint start, GLuint count,
 			     GLuint flags );
 typedef void (*interp_func)( GLcontext *ctx,
-			     GLfloat t, GLuint dst, GLuint in, GLuint out,
+			     GLfloat t, GLuint dst, GLuint out, GLuint in,
 			     GLboolean force_boundary );
 typedef void (*copy_pv_func)( GLcontext *ctx, GLuint dst, GLuint src );
 
@@ -377,10 +381,10 @@ struct tnl_device_driver {
     *** TNL Pipeline
     ***/
 
-   void (*PipelineStart)(GLcontext *ctx);
-   void (*PipelineFinish)(GLcontext *ctx);
-   /* Called before and after all pipeline stages.
-    * These are a suitable place for grabbing/releasing hardware locks.
+   void (*RunPipeline)(GLcontext *ctx);
+   /* Replaces PipelineStart/PipelineFinish -- intended to allow
+    * drivers to wrap _tnl_run_pipeline() with code to validate state
+    * and grab/release hardware locks.  
     */
 
    /***
@@ -401,12 +405,24 @@ struct tnl_device_driver {
     */
 
    interp_func RenderInterp;
-   copy_pv_func RenderCopyPV;
-   void (*RenderClippedPolygon)( GLcontext *ctx, const GLuint *elts, GLuint n );
-   void (*RenderClippedLine)( GLcontext *ctx, GLuint v0, GLuint v1 );
-   /* Functions to interpolate between prebuilt vertices, copy flat-shade
-    * provoking color, and to render clipped primitives.
+   /* The interp function is called by the clipping routines when we need
+    * to generate an interpolated vertex.  All pertinant vertex ancilliary
+    * data should be computed by interpolating between the 'in' and 'out'
+    * vertices.
     */
+
+   copy_pv_func RenderCopyPV;
+   /* The copy function is used to make a copy of a vertex.  All pertinant
+    * vertex attributes should be copied.
+    */
+
+   void (*RenderClippedPolygon)( GLcontext *ctx, const GLuint *elts, GLuint n );
+   /* Render a polygon with <n> vertices whose indexes are in the <elts>
+    * array.
+    */
+
+   void (*RenderClippedLine)( GLcontext *ctx, GLuint v0, GLuint v1 );
+   /* Render a line between the two vertices given by indexes v0 and v1. */
 
    points_func           PointsFunc; /* must now respect vb->elts */
    line_func             LineFunc;

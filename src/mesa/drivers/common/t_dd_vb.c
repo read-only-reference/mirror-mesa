@@ -1,4 +1,4 @@
-/* $Id: t_dd_vb.c,v 1.13 2001/04/30 21:08:52 keithw Exp $ */
+/* $Id: t_dd_vb.c,v 1.15 2001/05/14 09:00:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -303,7 +303,7 @@ INTERP_QUALIFIER void TAG(interp_extras)( GLcontext *ctx,
    }
 
    if (VB->EdgeFlag) {
-      VB->EdgeFlag[dst] = VB->EdgeFlag[out] || force_boundary || 1;
+      VB->EdgeFlag[dst] = VB->EdgeFlag[out] || force_boundary;
    }
 
    INTERP_VERTEX(ctx, t, dst, out, in, force_boundary);
@@ -313,16 +313,16 @@ INTERP_QUALIFIER void TAG(copy_pv_extras)( GLcontext *ctx,
 					   GLuint dst, GLuint src )
 {
    LOCALVARS
-   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
+      struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
 
    if (VB->ColorPtr[1]) {
-	 COPY_4FV( GET_COLOR(VB->ColorPtr[1], dst), 
-		   GET_COLOR(VB->ColorPtr[1], src) );
+      COPY_4FV( GET_COLOR(VB->ColorPtr[1], dst), 
+		GET_COLOR(VB->ColorPtr[1], src) );
 
-	 if (VB->SecondaryColorPtr[1]) {
-	    COPY_4FV( GET_COLOR(VB->SecondaryColorPtr[1], dst), 
-		      GET_COLOR(VB->SecondaryColorPtr[1], src) );
-	 }
+      if (VB->SecondaryColorPtr[1]) {
+	 COPY_4FV( GET_COLOR(VB->SecondaryColorPtr[1], dst), 
+		   GET_COLOR(VB->SecondaryColorPtr[1], src) );
+      }
    }
 
    COPY_PV_VERTEX(ctx, dst, src);

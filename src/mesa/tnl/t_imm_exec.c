@@ -1,4 +1,4 @@
-/* $Id: t_imm_exec.c,v 1.19 2001/04/30 21:08:52 keithw Exp $ */
+/* $Id: t_imm_exec.c,v 1.26 2001/05/16 09:28:32 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -57,12 +57,11 @@
 
 
 
-void _tnl_reset_input( GLcontext *ctx,
-		       GLuint start,
-		       GLuint beginstate,
-		       GLuint savedbeginstate )
+static void reset_input( GLcontext *ctx,
+			 GLuint start,
+			 GLuint beginstate,
+			 GLuint savedbeginstate )
 {
-   TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct immediate *IM = TNL_CURRENT_IM(ctx);
 
    /* Clear the dirty part of the flag array.
@@ -70,23 +69,12 @@ void _tnl_reset_input( GLcontext *ctx,
    if (start < IM->Count+2)
       MEMSET(IM->Flag + start, 0, sizeof(GLuint) * (IM->Count+2-start));
 
-   IM->Start = IM->Count = start;
-   IM->CopyStart = IM->Start - tnl->ExecCopyCount;
-   IM->Primitive[IM->CopyStart] = ctx->Driver.CurrentExecPrimitive;
-   if (tnl->ExecParity)
-      IM->Primitive[IM->CopyStart] |= PRIM_PARITY;
-
-   if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1) {
-      ASSERT(tnl->ExecCopyTexSize == 0);
-      ASSERT(tnl->ExecCopyCount == 0);
-      ASSERT(IM->CopyStart == IM->Start);
-   }
-
-   IM->LastPrimitive = IM->CopyStart;
+   IM->Start = start;
+   IM->Count = start;
+   IM->LastMaterial = start;
    IM->BeginState = beginstate;
    IM->SavedBeginState = savedbeginstate;
    IM->TexSize = 0;
-   IM->LastMaterial = IM->Start;
    IM->MaterialOrMask = 0;
 
    if (IM->MaterialMask) 
@@ -94,11 +82,40 @@ void _tnl_reset_input( GLcontext *ctx,
 
    IM->ArrayEltFlags = ~ctx->Array._Enabled;
    IM->ArrayEltIncr = ctx->Array.Vertex.Enabled ? 1 : 0;
-   IM->ArrayEltFlush = !ctx->Array.LockCount;
+   IM->ArrayEltFlush = ctx->Array.LockCount ? FLUSH_ELT_LAZY : FLUSH_ELT_EAGER;
+}
+  
+void _tnl_reset_exec_input( GLcontext *ctx,
+			    GLuint start,
+			    GLuint beginstate,
+			    GLuint savedbeginstate )
+{
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   struct immediate *IM = TNL_CURRENT_IM(ctx);
+
+   reset_input( ctx, start, beginstate, savedbeginstate );
+
+   IM->CopyStart = start - tnl->ExecCopyCount;
+   IM->Primitive[IM->CopyStart] = ctx->Driver.CurrentExecPrimitive;
+   if (tnl->ExecParity)
+      IM->Primitive[IM->CopyStart] |= PRIM_PARITY;
+
+   IM->LastPrimitive = IM->CopyStart;
 }
 
 
+void _tnl_reset_compile_input( GLcontext *ctx,
+			    GLuint start,
+			    GLuint beginstate,
+			    GLuint savedbeginstate )
+{
+   struct immediate *IM = TNL_CURRENT_IM(ctx);
 
+   reset_input( ctx, start, beginstate, savedbeginstate );
+   IM->CopyStart = start;
+   IM->LastPrimitive = IM->Start;
+}
+  
 
 void _tnl_copy_to_current( GLcontext *ctx, struct immediate *IM,
 			   GLuint flag )
@@ -151,7 +168,7 @@ void _tnl_copy_to_current( GLcontext *ctx, struct immediate *IM,
 
 
 
-void _tnl_compute_orflag( struct immediate *IM )
+void _tnl_compute_orflag( struct immediate *IM, GLuint start )
 {
    GLuint count = IM->Count;
    GLuint orflag = 0;
@@ -163,7 +180,7 @@ void _tnl_compute_orflag( struct immediate *IM )
 
    /* Compute the flags for the whole buffer.
     */
-   for (i = IM->CopyStart ; i < count ; i++) {
+   for (i = start ; i < count ; i++) {
       andflag &= IM->Flag[i];
       orflag |= IM->Flag[i];
    }
@@ -297,6 +314,7 @@ static void _tnl_vb_bind_immediate( GLcontext *ctx, struct immediate *IM )
 	 tmp->Color.Ptr = ctx->Current.Color;
 	 tmp->Color.StrideB = 0;
 	 tmp->Color.Flags = CA_CLIENT_DATA; /* hack */
+	 VB->import_source = IM;
 	 VB->importable_data |= VERT_RGBA;
 	 VB->import_data = _tnl_upgrade_current_data;
       }
@@ -331,7 +349,7 @@ static void _tnl_vb_bind_immediate( GLcontext *ctx, struct immediate *IM )
 
 
 
-/* Called by exec_cassette execute_compiled_cassette, but not
+/* Called by exec_vert_cassette, execute_compiled_cassette, but not
  * exec_elt_cassette.
  */
 void _tnl_run_cassette( GLcontext *ctx, struct immediate *IM )
@@ -346,36 +364,30 @@ void _tnl_run_cassette( GLcontext *ctx, struct immediate *IM )
    /* Invalidate all stored data before and after run:
     */
    tnl->pipeline.run_input_changes |= tnl->pipeline.inputs;
-   _tnl_run_pipeline( ctx );
+   tnl->Driver.RunPipeline( ctx );
    tnl->pipeline.run_input_changes |= tnl->pipeline.inputs;
 
    _tnl_copy_to_current( ctx, IM, IM->OrFlag );
 }
 
+
 /* Called for regular vertex cassettes.
  */
 static void exec_vert_cassette( GLcontext *ctx, struct immediate *IM )
 {
-   if (IM->OrFlag & VERT_ELT) {
-      GLuint andflag = ~0;
-      GLuint i;
-      GLuint start = IM->FlushElt ? IM->LastPrimitive : IM->CopyStart;
-      _tnl_translate_array_elts( ctx, IM, start, IM->Count );
-
-      /* Need to recompute andflag and orflag for fixup.
+   if (IM->FlushElt) {
+      /* Orflag is computed twice, but only reach this code if app is
+       * using a mixture of glArrayElement() and glVertex() while
+       * arrays are locked (else would be in exec_elt_cassette now).
        */
-      if (IM->CopyAndFlag & VERT_ELT)
-	 IM->CopyAndFlag |= ctx->Array._Enabled;
-      else {
-	 for (i = IM->CopyStart ; i < IM->Count ; i++)
-	    andflag &= IM->Flag[i];
-	 IM->CopyAndFlag = andflag;
-      }
-      IM->CopyOrFlag |= ctx->Array._Enabled;
+      ASSERT(ctx->Array.LockCount);
+      ASSERT(IM->FlushElt == FLUSH_ELT_LAZY);
+      _tnl_translate_array_elts( ctx, IM, IM->CopyStart, IM->Count );
+      _tnl_compute_orflag( IM, IM->CopyStart ); 
    }
 
    _tnl_fixup_input( ctx, IM );
-   _tnl_print_cassette( IM );
+/*     _tnl_print_cassette( IM ); */
    _tnl_run_cassette( ctx, IM );
 }
 
@@ -399,10 +411,9 @@ static void exec_elt_cassette( GLcontext *ctx, struct immediate *IM )
 
    /* Run the pipeline.  No input changes as a result of this action.
     */
-   _tnl_run_pipeline( ctx );
+   tnl->Driver.RunPipeline( ctx );
 
-   /* Still need to update current values:  (TODO - copy from VB)
-    * TODO: delay this until FlushVertices
+   /* Still need to update current values:  
     */
    if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1) {
       _tnl_translate_array_elts( ctx, IM, IM->LastData, IM->LastData );
@@ -414,7 +425,7 @@ static void exec_elt_cassette( GLcontext *ctx, struct immediate *IM )
 static void
 exec_empty_cassette( GLcontext *ctx, struct immediate *IM )
 {
-   if (IM->OrFlag & VERT_ELT)
+   if (IM->FlushElt)
       _tnl_translate_array_elts( ctx, IM, IM->CopyStart, IM->CopyStart );
 
    _tnl_copy_to_current( ctx, IM, IM->OrFlag );
@@ -429,8 +440,8 @@ void _tnl_execute_cassette( GLcontext *ctx, struct immediate *IM )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
 
-   _tnl_compute_orflag( IM );
-   _tnl_copy_immediate_vertices( ctx, IM ); /* ?? flags, orflag above */
+   _tnl_compute_orflag( IM, IM->Start );
+   _tnl_copy_immediate_vertices( ctx, IM ); 
    _tnl_get_exec_copy_verts( ctx, IM );
 
    if (tnl->pipeline.build_state_changes)
@@ -462,8 +473,8 @@ void _tnl_execute_cassette( GLcontext *ctx, struct immediate *IM )
 
       IM->ref_count++;
 	 
-      _tnl_reset_input( ctx, IMM_MAX_COPIED_VERTS, 
-			begin_state, saved_begin_state );
+      _tnl_reset_exec_input( ctx, IMM_MAX_COPIED_VERTS, 
+			     begin_state, saved_begin_state );
    }
 
    if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1)
@@ -522,7 +533,7 @@ void _tnl_imm_init( GLcontext *ctx )
 
    /* Install the first immediate.  Intially outside begin/end.
     */
-   _tnl_reset_input( ctx, IMM_MAX_COPIED_VERTS, 0, 0 );
+   _tnl_reset_exec_input( ctx, IMM_MAX_COPIED_VERTS, 0, 0 );
    tnl->ReplayHardBeginEnd = 0;
 
    _tnl_imm_vtxfmt_init( ctx );
@@ -533,7 +544,8 @@ void _tnl_imm_destroy( GLcontext *ctx )
 {
    if (TNL_CURRENT_IM(ctx)) {
       TNL_CURRENT_IM(ctx)->ref_count--;
-      _tnl_free_immediate( TNL_CURRENT_IM(ctx) );
+      if (TNL_CURRENT_IM(ctx)->ref_count == 0)
+	 _tnl_free_immediate( TNL_CURRENT_IM(ctx) );
       SET_IMMEDIATE(ctx, 0);
    }
 }

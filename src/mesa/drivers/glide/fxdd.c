@@ -791,7 +791,7 @@ fxDDInitFxMesaContext(fxMesaContext fxMesa)
    FX_grGlideGetState((GrState *) fxMesa->state);
 
    /* Run the config file */
-   _mesa_context_initialize(fxMesa->glCtx);
+   _mesa_read_config_file(fxMesa->glCtx);
 
    return 1;
 }
@@ -891,7 +891,7 @@ fxIsInHardware(GLcontext * ctx)
       if (ctx->Texture._ReallyEnabled & TEXTURE1_2D) {
 	 if (ctx->Texture.Unit[1].EnvMode == GL_BLEND)
 	    return GL_FALSE;
-	 if (ctx->Texture.Unit[0]._Current->Image[0]->Border > 0)
+	 if (ctx->Texture.Unit[1]._Current->Image[0]->Border > 0)
 	    return GL_FALSE;
       }
 
@@ -1107,6 +1107,7 @@ fxSetupDDPointers(GLcontext * ctx)
    ctx->Driver.ShadeModel = fxDDShadeModel;
    ctx->Driver.Enable = fxDDEnable;
 
+   tnl->Driver.RunPipeline = _tnl_run_pipeline;
    tnl->Driver.RenderStart = fxDDRenderStart;
    tnl->Driver.RenderFinish = fxDDRenderFinish;
    tnl->Driver.ResetLineStipple = _swrast_ResetLineStipple;

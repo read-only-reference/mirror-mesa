@@ -1,4 +1,4 @@
-/* $Id: rastpos.c,v 1.23 2001/04/28 08:39:17 keithw Exp $ */
+/* $Id: rastpos.c,v 1.25 2001/05/30 15:22:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -105,13 +105,13 @@ shade_rastpos(GLcontext *ctx,
               GLuint *index)
 {
    GLfloat (*base)[3] = ctx->Light._BaseColor;
-   const GLchan *sumA = ctx->Light._BaseAlpha;
+   const GLfloat *sumA = ctx->Light._BaseAlpha;
    struct gl_light *light;
    GLfloat color[4];
    GLfloat diffuse = 0, specular = 0;
 
    COPY_3V(color, base[0]);
-   color[3] = CHAN_TO_FLOAT( sumA[0] );
+   color[3] = sumA[0];
 
    foreach (light, &ctx->Light.EnabledList) {
       GLfloat n_dot_h;
@@ -320,7 +320,7 @@ raster_pos4f(GLcontext *ctx, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
    ctx->Current.RasterPos[3] = clip[3];
    ctx->Current.RasterPosValid = GL_TRUE;
 
-   /* FOG??? */
+   ctx->Current.RasterFogCoord = ctx->Current.FogCoord;
 
    {
       GLuint texSet;

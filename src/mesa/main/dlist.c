@@ -1,4 +1,4 @@
-/* $Id: dlist.c,v 1.68 2001/03/27 16:42:37 brianp Exp $ */
+/* $Id: dlist.c,v 1.72 2001/05/29 15:23:48 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -110,7 +110,7 @@ Functions which cause errors if called while compiling a display list:
 /* How many nodes to allocate at a time:
  * - reduced now that we hold vertices etc. elsewhere.
  */
-#define BLOCK_SIZE 64
+#define BLOCK_SIZE 256
 
 
 /*
@@ -166,12 +166,8 @@ typedef enum {
 	OPCODE_DRAW_BUFFER,
 	OPCODE_DRAW_PIXELS,
 	OPCODE_ENABLE,
-	OPCODE_EVALCOORD1,
-	OPCODE_EVALCOORD2,
 	OPCODE_EVALMESH1,
 	OPCODE_EVALMESH2,
-	OPCODE_EVALPOINT1,
-	OPCODE_EVALPOINT2,
 	OPCODE_FOG,
 	OPCODE_FRONT_FACE,
 	OPCODE_FRUSTUM,
@@ -250,6 +246,8 @@ typedef enum {
         OPCODE_COMPRESSED_TEX_SUB_IMAGE_1D,
         OPCODE_COMPRESSED_TEX_SUB_IMAGE_2D,
         OPCODE_COMPRESSED_TEX_SUB_IMAGE_3D,
+        /* GL_ARB_multisample */
+        OPCODE_SAMPLE_COVERAGE,
 	/* The following three are meta instructions */
 	OPCODE_ERROR,	        /* raise compiled-in error */
 	OPCODE_CONTINUE,
@@ -553,12 +551,8 @@ void _mesa_init_lists( void )
       InstSize[OPCODE_DRAW_BUFFER] = 2;
       InstSize[OPCODE_DRAW_PIXELS] = 6;
       InstSize[OPCODE_ENABLE] = 2;
-      InstSize[OPCODE_EVALCOORD1] = 2;
-      InstSize[OPCODE_EVALCOORD2] = 3;
       InstSize[OPCODE_EVALMESH1] = 4;
       InstSize[OPCODE_EVALMESH2] = 6;
-      InstSize[OPCODE_EVALPOINT1] = 2;
-      InstSize[OPCODE_EVALPOINT2] = 3;
       InstSize[OPCODE_FOG] = 6;
       InstSize[OPCODE_FRONT_FACE] = 2;
       InstSize[OPCODE_FRUSTUM] = 7;
@@ -635,6 +629,8 @@ void _mesa_init_lists( void )
       InstSize[OPCODE_COMPRESSED_TEX_SUB_IMAGE_1D] = 8;
       InstSize[OPCODE_COMPRESSED_TEX_SUB_IMAGE_2D] = 10;
       InstSize[OPCODE_COMPRESSED_TEX_SUB_IMAGE_3D] = 12;
+      /* GL_ARB_multisample */
+      InstSize[OPCODE_SAMPLE_COVERAGE] = 3;
       /* GL_ARB_multitexture */
       InstSize[OPCODE_ACTIVE_TEXTURE] = 2;
       InstSize[OPCODE_CLIENT_ACTIVE_TEXTURE] = 2;
@@ -724,7 +720,7 @@ static void save_Accum( GLenum op, GLfloat value )
 {
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
-   FLUSH_VERTICES(ctx, 0);
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
    n = ALLOC_INSTRUCTION( ctx, OPCODE_ACCUM, 2 );
    if (n) {
       n[1].e = op;
@@ -872,6 +868,7 @@ void _mesa_save_CallList( GLuint list )
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   FLUSH_CURRENT(ctx, 0);
 
    n = ALLOC_INSTRUCTION( ctx, OPCODE_CALL_LIST, 1 );
    if (n) {
@@ -888,6 +885,7 @@ void _mesa_save_CallLists( GLsizei n, GLenum type, const GLvoid *lists )
    GET_CURRENT_CONTEXT(ctx);
    GLint i;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   FLUSH_CURRENT(ctx, 0);
 
    for (i=0;i<n;i++) {
       GLuint list = translate_id( i, type, lists );
@@ -1044,6 +1042,8 @@ static void save_ColorMaterial( GLenum face, GLenum mode )
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   FLUSH_CURRENT(ctx, 0);
+
    n = ALLOC_INSTRUCTION( ctx, OPCODE_COLOR_MATERIAL, 2 );
    if (n) {
       n[1].e = face;
@@ -1372,8 +1372,9 @@ save_ConvolutionParameterfv(GLenum target, GLenum pname, const GLfloat *params)
 }
 
 
-static void save_CopyPixels( GLint x, GLint y,
-                             GLsizei width, GLsizei height, GLenum type )
+static void 
+save_CopyPixels( GLint x, GLint y,
+		 GLsizei width, GLsizei height, GLenum type )
 {
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
@@ -2592,6 +2593,7 @@ static void save_PopMatrix( void )
 {
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   FLUSH_CURRENT(ctx, 0);
    (void) ALLOC_INSTRUCTION( ctx, OPCODE_POP_MATRIX, 0 );
    if (ctx->ExecuteFlag) {
       (*ctx->Exec->PopMatrix)();
@@ -2636,6 +2638,7 @@ static void save_PushAttrib( GLbitfield mask )
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   FLUSH_CURRENT(ctx, 0);
    n = ALLOC_INSTRUCTION( ctx, OPCODE_PUSH_ATTRIB, 1 );
    if (n) {
       n[1].bf = mask;
@@ -2677,6 +2680,7 @@ static void save_RasterPos4f( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   FLUSH_CURRENT(ctx, 0);
    n = ALLOC_INSTRUCTION( ctx, OPCODE_RASTER_POS, 4 );
    if (n) {
       n[1].f = x;
@@ -3414,6 +3418,7 @@ static void save_WindowPos4fMESA( GLfloat x, GLfloat y, GLfloat z, GLfloat w )
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   FLUSH_CURRENT(ctx, 0);
    n = ALLOC_INSTRUCTION( ctx,  OPCODE_WINDOW_POS, 4 );
    if (n) {
       n[1].f = x;
@@ -3882,6 +3887,24 @@ save_CompressedTexSubImage3DARB(GLenum target, GLint level, GLint xoffset,
    if (ctx->ExecuteFlag) {
       (*ctx->Exec->CompressedTexSubImage3DARB)(target, level, xoffset, yoffset,
                        zoffset, width, height, depth, format, imageSize, data);
+   }
+}
+
+
+/* GL_ARB_multisample */
+static void
+save_SampleCoverageARB(GLclampf value, GLboolean invert)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_SAMPLE_COVERAGE, 2 );
+   if (n) {
+      n[1].f = value;
+      n[2].b = invert;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->SampleCoverageARB)( value, invert );
    }
 }
 
@@ -4606,6 +4629,9 @@ execute_list( GLcontext *ctx, GLuint list )
             (*ctx->Exec->CompressedTexSubImage3DARB)(n[1].e, n[2].i, n[3].i,
                                         n[4].i, n[5].i, n[6].i, n[7].i, n[8].i,
                                         n[9].e, n[10].i, n[11].data);
+            break;
+         case OPCODE_SAMPLE_COVERAGE: /* GL_ARB_multisample */
+            (*ctx->Exec->SampleCoverageARB)(n[1].f, n[2].b);
             break;
 	 case OPCODE_CONTINUE:
 	    n = (Node *) n[1].next;
@@ -5524,7 +5550,7 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
 {
    _mesa_init_no_op_table(table, tableSize);
 
-   _mesa_loopback_init_api_table( table, GL_FALSE );
+   _mesa_loopback_init_api_table( table, GL_TRUE );
 
    /* GL 1.0 */
    table->Accum = save_Accum;
@@ -5869,6 +5895,9 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->MultTransposeMatrixdARB = save_MultTransposeMatrixdARB;
    table->MultTransposeMatrixfARB = save_MultTransposeMatrixfARB;
 
+   /* GL_ARB_multisample */
+   table->SampleCoverageARB = save_SampleCoverageARB;
+
    /* ARB 12. GL_ARB_texture_compression */
    table->CompressedTexImage3DARB = save_CompressedTexImage3DARB;
    table->CompressedTexImage2DARB = save_CompressedTexImage2DARB;
@@ -6019,6 +6048,32 @@ static void print_list( GLcontext *ctx, FILE *f, GLuint list )
 	    break;
          case OPCODE_SHADE_MODEL:
 	    fprintf(f,"ShadeModel %s\n", _mesa_lookup_enum_by_nr(n[1].ui));
+	    break;
+	 case OPCODE_MAP1:
+	    fprintf(f,"Map1 %s %.3f %.3f %d %d\n", 
+		    _mesa_lookup_enum_by_nr(n[1].ui),
+		    n[2].f, n[3].f, n[4].i, n[5].i);
+	    break;
+	 case OPCODE_MAP2:
+	    fprintf(f,"Map2 %s %.3f %.3f %.3f %.3f %d %d %d %d\n", 
+		    _mesa_lookup_enum_by_nr(n[1].ui),
+		    n[2].f, n[3].f, n[4].f, n[5].f,
+		    n[6].i, n[7].i, n[8].i, n[9].i);
+	    break;
+	 case OPCODE_MAPGRID1:
+	    fprintf(f,"MapGrid1 %d %.3f %.3f\n", n[1].i, n[2].f, n[3].f);
+	    break;
+	 case OPCODE_MAPGRID2:
+	    fprintf(f,"MapGrid2 %d %.3f %.3f, %d %.3f %.3f\n", 
+		    n[1].i, n[2].f, n[3].f,
+		    n[4].i, n[5].f, n[6].f);
+	    break;
+	 case OPCODE_EVALMESH1:
+	    fprintf(f,"EvalMesh1 %d %d\n", n[1].i, n[2].i);
+	    break;
+	 case OPCODE_EVALMESH2:
+	    fprintf(f,"EvalMesh2 %d %d %d %d\n",
+		    n[1].i, n[2].i, n[3].i, n[4].i);
 	    break;
 
 	 /*

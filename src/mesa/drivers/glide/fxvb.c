@@ -298,6 +298,9 @@ fx_validate_BuildProjVerts(GLcontext * ctx, GLuint start, GLuint count,
    else {
       GLuint setupindex = SETUP_XYZW;
 
+      if (fxMesa->snapVertices)
+         setupindex |= SETUP_SNAP;
+
       fxMesa->tmu_source[0] = 0;
       fxMesa->tmu_source[1] = 1;
       fxMesa->tex_dest[0] = SETUP_TMU0;

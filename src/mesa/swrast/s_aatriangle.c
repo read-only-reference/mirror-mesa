@@ -1,4 +1,4 @@
-/* $Id: s_aatriangle.c,v 1.13 2001/04/10 15:46:51 brianp Exp $ */
+/* $Id: s_aatriangle.c,v 1.18 2001/05/29 15:23:15 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -30,6 +30,7 @@
  */
 
 
+#include "mem.h"
 #include "mmath.h"
 #include "s_aatriangle.h"
 #include "s_context.h"
@@ -309,6 +310,7 @@ rgba_aa_tri(GLcontext *ctx,
 	    const SWvertex *v2)
 {
 #define DO_Z
+#define DO_FOG
 #define DO_RGBA
 #include "s_aatritemp.h"
 }
@@ -321,6 +323,7 @@ index_aa_tri(GLcontext *ctx,
 	     const SWvertex *v2)
 {
 #define DO_Z
+#define DO_FOG
 #define DO_INDEX
 #include "s_aatritemp.h"
 }
@@ -341,7 +344,10 @@ compute_lambda(const GLfloat sPlane[4], const GLfloat tPlane[4],
    GLfloat r2 = dvdx * dvdx + dvdy * dvdy;
    GLfloat rho2 = r1 + r2;
    /* return log base 2 of rho */
-   return log(rho2) * 1.442695 * 0.5;       /* 1.442695 = 1/log(2) */
+   if (rho2 == 0.0F)
+      return 0.0;
+   else
+      return log(rho2) * 1.442695 * 0.5;       /* 1.442695 = 1/log(2) */
 }
 
 
@@ -352,6 +358,7 @@ tex_aa_tri(GLcontext *ctx,
 	   const SWvertex *v2)
 {
 #define DO_Z
+#define DO_FOG
 #define DO_RGBA
 #define DO_TEX
 #include "s_aatritemp.h"
@@ -365,6 +372,7 @@ spec_tex_aa_tri(GLcontext *ctx,
 		const SWvertex *v2)
 {
 #define DO_Z
+#define DO_FOG
 #define DO_RGBA
 #define DO_TEX
 #define DO_SPEC
@@ -379,6 +387,7 @@ multitex_aa_tri(GLcontext *ctx,
 		const SWvertex *v2)
 {
 #define DO_Z
+#define DO_FOG
 #define DO_RGBA
 #define DO_MULTITEX
 #include "s_aatritemp.h"
@@ -391,6 +400,7 @@ spec_multitex_aa_tri(GLcontext *ctx,
 		     const SWvertex *v2)
 {
 #define DO_Z
+#define DO_FOG
 #define DO_RGBA
 #define DO_MULTITEX
 #define DO_SPEC
@@ -405,12 +415,11 @@ spec_multitex_aa_tri(GLcontext *ctx,
 void
 _mesa_set_aa_triangle_function(GLcontext *ctx)
 {
-   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    ASSERT(ctx->Polygon.SmoothFlag);
 
    if (ctx->Texture._ReallyEnabled) {
       if (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR) {
-         if (swrast->_MultiTextureEnabled) {
+         if (ctx->Texture._ReallyEnabled > TEXTURE0_ANY) {
             SWRAST_CONTEXT(ctx)->Triangle = spec_multitex_aa_tri;
          }
          else {
@@ -418,7 +427,7 @@ _mesa_set_aa_triangle_function(GLcontext *ctx)
          }
       }
       else {
-         if (swrast->_MultiTextureEnabled) {
+         if (ctx->Texture._ReallyEnabled > TEXTURE0_ANY) {
             SWRAST_CONTEXT(ctx)->Triangle = multitex_aa_tri;
          }
          else {

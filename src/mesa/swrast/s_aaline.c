@@ -1,4 +1,4 @@
-/* $Id: s_aaline.c,v 1.8 2001/04/10 15:46:51 brianp Exp $ */
+/* $Id: s_aaline.c,v 1.11 2001/05/21 18:13:43 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -201,7 +201,10 @@ compute_lambda(const GLfloat sPlane[4], const GLfloat tPlane[4],
    GLfloat r2 = dvdx * dvdx + dvdy * dvdy;
    GLfloat rho2 = r1 + r2;
    /* return log base 2 of rho */
-   return log(rho2) * 1.442695 * 0.5;       /* 1.442695 = 1/log(2) */
+   if (rho2 == 0.0F)
+      return 0.0;
+   else
+      return log(rho2) * 1.442695 * 0.5;       /* 1.442695 = 1/log(2) */
 }
 
 
@@ -485,6 +488,13 @@ segment(GLcontext *ctx,
 #define DO_Z
 #define DO_RGBA
 #define DO_MULTITEX
+#include "s_aalinetemp.h"
+
+
+#define NAME(x)  aa_multitex_spec_##x
+#define DO_Z
+#define DO_RGBA
+#define DO_MULTITEX
 #define DO_SPEC
 #include "s_aalinetemp.h"
 
@@ -500,13 +510,17 @@ _swrast_choose_aa_line_function(GLcontext *ctx)
    if (ctx->Visual.rgbMode) {
       /* RGBA */
       if (ctx->Texture._ReallyEnabled) {
-         if (swrast->_MultiTextureEnabled
-             || ctx->Light.Model.ColorControl==GL_SEPARATE_SPECULAR_COLOR
-             || ctx->Fog.ColorSumEnabled)
+         if (ctx->Texture._ReallyEnabled > TEXTURE0_ANY) {
             /* Multitextured! */
-            swrast->Line = aa_multitex_rgba_line;
-         else
+            if (ctx->Light.Model.ColorControl==GL_SEPARATE_SPECULAR_COLOR || 
+                ctx->Fog.ColorSumEnabled)
+               swrast->Line = aa_multitex_spec_line;
+            else
+               swrast->Line = aa_multitex_rgba_line;
+         }
+         else {
             swrast->Line = aa_tex_rgba_line;
+         }
       }
       else {
          swrast->Line = aa_rgba_line;

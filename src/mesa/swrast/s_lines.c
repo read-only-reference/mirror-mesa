@@ -1,4 +1,4 @@
-/* $Id: s_lines.c,v 1.15 2001/03/29 16:50:32 brianp Exp $ */
+/* $Id: s_lines.c,v 1.18 2001/05/21 18:13:43 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -239,7 +239,7 @@ static void smooth_rgba_z_line( GLcontext *ctx,
    GLint *pbx = PB->x;
    GLint *pby = PB->y;
    GLdepth *pbz = PB->z;
-   GLfixed *pbfog = PB->fog;
+   GLfloat *pbfog = PB->fog;
    GLchan (*pbrgba)[4] = PB->rgba;
 
 
@@ -288,7 +288,7 @@ static void general_smooth_ci_line( GLcontext *ctx,
    GLint *pbx = PB->x;
    GLint *pby = PB->y;
    GLdepth *pbz = PB->z;
-   GLfixed *pbfog = PB->fog;
+   GLfloat *pbfog = PB->fog;
    GLuint *pbi = PB->index;
 
    PB->mono = GL_FALSE;
@@ -371,7 +371,7 @@ static void general_flat_ci_line( GLcontext *ctx,
    GLint *pbx = PB->x;
    GLint *pby = PB->y;
    GLdepth *pbz = PB->z;
-   GLfixed *pbfog = PB->fog;
+   GLfloat *pbfog = PB->fog;
    PB_SET_INDEX( PB, vert0->index );
    count = PB->count;
 
@@ -446,7 +446,7 @@ static void general_smooth_rgba_line( GLcontext *ctx,
    GLint *pbx = PB->x;
    GLint *pby = PB->y;
    GLdepth *pbz = PB->z;
-   GLfixed *pbfog = PB->fog;
+   GLfloat *pbfog = PB->fog;
    GLchan (*pbrgba)[4] = PB->rgba;
 
    PB->mono = GL_FALSE;
@@ -598,7 +598,7 @@ static void flat_textured_line( GLcontext *ctx,
    GLint *pbx = PB->x;
    GLint *pby = PB->y;
    GLdepth *pbz = PB->z;
-   GLfixed *pbfog = PB->fog;
+   GLfloat *pbfog = PB->fog;
    GLfloat *pbs = PB->s[0];
    GLfloat *pbt = PB->t[0];
    GLfloat *pbu = PB->u[0];
@@ -666,7 +666,7 @@ static void smooth_textured_line( GLcontext *ctx,
    GLint *pbx = PB->x;
    GLint *pby = PB->y;
    GLdepth *pbz = PB->z;
-   GLfixed *pbfog = PB->fog;
+   GLfloat *pbfog = PB->fog;
    GLfloat *pbs = PB->s[0];
    GLfloat *pbt = PB->t[0];
    GLfloat *pbu = PB->u[0];
@@ -747,7 +747,7 @@ static void smooth_multitextured_line( GLcontext *ctx,
    GLint *pbx = PB->x;
    GLint *pby = PB->y;
    GLdepth *pbz = PB->z;
-   GLfixed *pbfog = PB->fog;
+   GLfloat *pbfog = PB->fog;
    GLchan (*pbrgba)[4] = PB->rgba;
    GLchan (*pbspec)[3] = PB->spec;
 
@@ -780,10 +780,9 @@ static void smooth_multitextured_line( GLcontext *ctx,
 	   pbspec[count][BCOMP] = FixedToInt(sb0);		\
 	   for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {	\
 	      if (ctx->Texture.Unit[u]._ReallyEnabled) {	\
-	         PB->s[u][0] = fragTexcoord[u][0];		\
-	         PB->s[u][1] = fragTexcoord[u][1];		\
-	         PB->s[u][2] = fragTexcoord[u][2];		\
-	         PB->s[u][3] = fragTexcoord[u][3];		\
+	         PB->s[u][count] = fragTexcoord[u][0];		\
+	         PB->t[u][count] = fragTexcoord[u][1];		\
+	         PB->u[u][count] = fragTexcoord[u][2];		\
 	      }							\
 	   }							\
 	   count++;						\
@@ -817,10 +816,9 @@ static void smooth_multitextured_line( GLcontext *ctx,
 	   pbspec[count][BCOMP] = FixedToInt(sb0);		\
 	   for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {	\
 	      if (ctx->Texture.Unit[u]._ReallyEnabled) {	\
-	         PB->s[u][0] = fragTexcoord[u][0];		\
-	         PB->s[u][1] = fragTexcoord[u][1];		\
-	         PB->s[u][2] = fragTexcoord[u][2];		\
-	         PB->s[u][3] = fragTexcoord[u][3];		\
+	         PB->s[u][count] = fragTexcoord[u][0];		\
+	         PB->t[u][count] = fragTexcoord[u][1];		\
+	         PB->u[u][count] = fragTexcoord[u][2];		\
 	      }							\
 	   }							\
 	   count++;						\
@@ -846,7 +844,7 @@ static void flat_multitextured_line( GLcontext *ctx,
    GLint *pbx = PB->x;
    GLint *pby = PB->y;
    GLdepth *pbz = PB->z;
-   GLfixed *pbfog = PB->fog;
+   GLfloat *pbfog = PB->fog;
    GLchan (*pbrgba)[4] = PB->rgba;
    GLchan (*pbspec)[3] = PB->spec;
    GLchan *color = (GLchan*) vert1->color;
@@ -881,10 +879,9 @@ static void flat_multitextured_line( GLcontext *ctx,
 	   pbspec[count][BCOMP] = sBlue;			\
 	   for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {	\
 	      if (ctx->Texture.Unit[u]._ReallyEnabled) {	\
-	         PB->s[u][0] = fragTexcoord[u][0];		\
-	         PB->s[u][1] = fragTexcoord[u][1];		\
-	         PB->s[u][2] = fragTexcoord[u][2];		\
-	         PB->s[u][3] = fragTexcoord[u][3];		\
+	         PB->s[u][count] = fragTexcoord[u][0];		\
+	         PB->t[u][count] = fragTexcoord[u][1];		\
+	         PB->u[u][count] = fragTexcoord[u][2];		\
 	      }							\
 	   }							\
 	   count++;						\
@@ -916,10 +913,9 @@ static void flat_multitextured_line( GLcontext *ctx,
 	   pbspec[count][BCOMP] = sBlue;			\
 	   for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {	\
 	      if (ctx->Texture.Unit[u]._ReallyEnabled) {	\
-	         PB->s[u][0] = fragTexcoord[u][0];		\
-	         PB->s[u][1] = fragTexcoord[u][1];		\
-	         PB->s[u][2] = fragTexcoord[u][2];		\
-	         PB->s[u][3] = fragTexcoord[u][3];		\
+	         PB->s[u][count] = fragTexcoord[u][0];		\
+	         PB->t[u][count] = fragTexcoord[u][1];		\
+	         PB->u[u][count] = fragTexcoord[u][2];		\
 	      }							\
 	   }							\
 	   count++;						\
@@ -1018,7 +1014,7 @@ _swrast_choose_line( GLcontext *ctx )
          ASSERT(swrast->Triangle);
       }
       else if (ctx->Texture._ReallyEnabled) {
-         if (swrast->_MultiTextureEnabled ||
+         if (ctx->Texture._ReallyEnabled > TEXTURE0_ANY ||	     
 	     (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR)) {
             /* multi-texture and/or separate specular color */
             if (ctx->Light.ShadeModel==GL_SMOOTH)

@@ -1,4 +1,4 @@
-/* $Id: s_aalinetemp.h,v 1.7 2001/03/12 00:48:41 gareth Exp $ */
+/* $Id: s_aalinetemp.h,v 1.12 2001/05/21 18:13:43 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -41,9 +41,12 @@ NAME(plot)(GLcontext *ctx, const struct LineInfo *line,
    const GLfloat fy = (GLfloat) iy;
    const GLfloat coverage = compute_coveragef(line, ix, iy);
    GLdepth z;
-   GLfixed fog;
+   GLfloat fog;
+#ifdef DO_RGBA
    GLchan red, green, blue, alpha;
-   GLint frac, indx, index;
+#else
+   GLint index;
+#endif
    GLchan specRed, specGreen, specBlue;
    GLfloat tex[MAX_TEXTURE_UNITS][4], lambda[MAX_TEXTURE_UNITS];
 
@@ -60,29 +63,18 @@ NAME(plot)(GLcontext *ctx, const struct LineInfo *line,
    z = 0.0;
 #endif
 #ifdef DO_FOG
-   fog = FloatToFixed( solve_plane(fx, fy, line->fPlane) );
+   fog = solve_plane(fx, fy, line->fPlane);
 #else
-   fog = 0;
+   fog = 0.0;
 #endif
 #ifdef DO_RGBA
    red   = solve_plane_chan(fx, fy, line->rPlane);
    green = solve_plane_chan(fx, fy, line->gPlane);
    blue  = solve_plane_chan(fx, fy, line->bPlane);
-   alpha = (GLchan) (solve_plane_chan(fx, fy, line->aPlane) * coverage);;
-#else
-   (void) red;
-   (void) green;
-   (void) blue;
-   (void) alpha;
+   alpha = solve_plane_chan(fx, fy, line->aPlane);
 #endif
 #ifdef DO_INDEX
-   frac = (GLint) (15.0 * coverage);
-   indx = (GLint) solve_plane(fx, fy, line->iPlane);
-   index = (indx & ~0xf) | frac;
-#else
-   (void) frac;
-   (void) indx;
-   (void) index;
+   index = (GLint) solve_plane(fx, fy, line->iPlane);
 #endif
 #ifdef DO_SPEC
    specRed   = solve_plane_chan(fx, fy, line->srPlane);
@@ -123,12 +115,14 @@ NAME(plot)(GLcontext *ctx, const struct LineInfo *line,
 #endif
 
 
+   PB_COVERAGE(pb, coverage);
+
 #if defined(DO_MULTITEX)
 #if defined(DO_SPEC)
    PB_WRITE_MULTITEX_SPEC_PIXEL(pb, ix, iy, z, fog, red, green, blue, alpha,
                                 specRed, specGreen, specBlue, tex);
 #else
-   PB_WRITE_MULTITEX_PIXEL(pb, ix, iy, z, fog, red, green, blue, alpha, texcoords);
+   PB_WRITE_MULTITEX_PIXEL(pb, ix, iy, z, fog, red, green, blue, alpha, tex);
 #endif
 #elif defined(DO_TEX)
    PB_WRITE_TEX_PIXEL(pb, ix, iy, z, fog, red, green, blue, alpha,
@@ -139,6 +133,7 @@ NAME(plot)(GLcontext *ctx, const struct LineInfo *line,
    PB_WRITE_CI_PIXEL(pb, ix, iy, z, fog, index);
 #endif
 
+   pb->haveCoverage = GL_TRUE;
    PB_CHECK_FLUSH(ctx, pb);
 }
 
@@ -166,14 +161,12 @@ NAME(line)(GLcontext *ctx, const SWvertex *v0, const SWvertex *v1)
    line.dy = line.y1 - line.y0;
    line.len = sqrt(line.dx * line.dx + line.dy * line.dy);
    line.halfWidth = 0.5F * ctx->Line.Width;
-   if (line.len == 0.0) {
-      line.xAdj = 0.0;
-      line.yAdj = 0.0;
-   }
-   else {
-      line.xAdj = line.dx / line.len * line.halfWidth;
-      line.yAdj = line.dy / line.len * line.halfWidth;
-   }
+
+   if (line.len == 0.0)
+      return;
+
+   line.xAdj = line.dx / line.len * line.halfWidth;
+   line.yAdj = line.dy / line.len * line.halfWidth;
 
 #ifdef DO_Z
    compute_plane(line.x0, line.y0, line.x1, line.y1,
@@ -246,16 +239,15 @@ NAME(line)(GLcontext *ctx, const SWvertex *v0, const SWvertex *v1)
       line.texWidth[0] = (GLfloat) texImage->Width;
       line.texHeight[0] = (GLfloat) texImage->Height;
    }
-#elif defined(DO_MULITEX)
+#elif defined(DO_MULTITEX)
    {
       GLuint u;
       for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-         if (ctx->Texture.Unit[u].ReallyEnabled) {
-            const struct gl_texture_object *obj = ctx->Texture.Unit[u].Current;
+         if (ctx->Texture.Unit[u]._ReallyEnabled) {
+            const struct gl_texture_object *obj = ctx->Texture.Unit[u]._Current;
             const struct gl_texture_image *texImage = obj->Image[obj->BaseLevel];
             const GLfloat invW0 = v0->win[3];
             const GLfloat invW1 = v1->win[3];
-            GLfloat (*texCoord)[4] = VB->TexCoordPtr[u]->data;
             const GLfloat s0 = v0->texcoord[u][0] * invW0;
             const GLfloat s1 = v1->texcoord[u][0] * invW1;
             const GLfloat t0 = v0->texcoord[u][1] * invW0;
@@ -266,8 +258,8 @@ NAME(line)(GLcontext *ctx, const SWvertex *v0, const SWvertex *v1)
             const GLfloat q1 = v1->texcoord[u][3] * invW0;
             compute_plane(line.x0, line.y0, line.x1, line.y1, s0, s1, line.sPlane[u]);
             compute_plane(line.x0, line.y0, line.x1, line.y1, t0, t1, line.tPlane[u]);
-            compute_plane(line.x0, line.y0, line.x1, line.y1, u0, u1, line.uPlane[u]);
-            compute_plane(line.x0, line.y0, line.x1, line.y1, v0, v1, line.vPlane[u]);
+            compute_plane(line.x0, line.y0, line.x1, line.y1, r0, r1, line.uPlane[u]);
+            compute_plane(line.x0, line.y0, line.x1, line.y1, q0, q1, line.vPlane[u]);
             line.texWidth[u]  = (GLfloat) texImage->Width;
             line.texHeight[u] = (GLfloat) texImage->Height;
          }

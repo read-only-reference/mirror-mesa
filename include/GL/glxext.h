@@ -107,6 +107,12 @@ extern "C" {
 #define GLX_PBUFFER_WIDTH                  0x8041
 #endif
 
+/* XXX Added by BrianP */
+#ifndef GLX_SGIS_multisample
+#define GLX_SAMPLE_BUFFERS_SGIS            100000
+#define GLX_SAMPLES_SGIS                   100001
+#endif
+
 #ifndef GLX_EXT_visual_info
 #define GLX_X_VISUAL_TYPE_EXT              0x22
 #define GLX_TRANSPARENT_TYPE_EXT           0x23
@@ -246,7 +252,8 @@ extern "C" {
 /*************************************************************/
 
 #ifndef GLX_ARB_get_proc_address
-typedef void (*__GLXextFuncPtr)();
+/* XXX Added void parameter to silence many, many warnings (BrianP) */
+typedef void (*__GLXextFuncPtr)(void);
 #endif
 
 #ifndef GLX_SGIX_video_source
@@ -325,11 +332,8 @@ extern __GLXextFuncPtr glXGetProcAddressARB (const GLubyte *);
 typedef __GLXextFuncPtr ( * PFNGLXGETPROCADDRESSARBPROC) (const GLubyte *procName);
 #endif
 
-#if 0
-/* XXX the enums for this extension are missing */
 #ifndef GLX_SGIS_multisample
 #define GLX_SGIS_multisample 1
-#endif
 #endif
 
 #ifndef GLX_EXT_visual_info

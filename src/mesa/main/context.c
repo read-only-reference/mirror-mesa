@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.135 2001/04/28 08:39:17 keithw Exp $ */
+/* $Id: context.c,v 1.139 2001/05/29 15:23:48 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -918,6 +918,7 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Hint.Fog = GL_DONT_CARE;
    ctx->Hint.ClipVolumeClipping = GL_DONT_CARE;
    ctx->Hint.TextureCompression = GL_DONT_CARE;
+   ctx->Hint.GenerateMipmap = GL_DONT_CARE;
 
    /* Histogram group */
    ctx->Histogram.Width = 0;
@@ -986,6 +987,14 @@ init_attrib_groups( GLcontext *ctx )
 
    /* Display List group */
    ctx->List.ListBase = 0;
+
+   /* Multisample */
+   ctx->Multisample.Enabled = GL_FALSE;
+   ctx->Multisample.SampleAlphaToCoverage = GL_FALSE;
+   ctx->Multisample.SampleAlphaToOne = GL_FALSE;
+   ctx->Multisample.SampleCoverage = GL_FALSE;
+   ctx->Multisample.SampleCoverageValue = 1.0;
+   ctx->Multisample.SampleCoverageInvert = GL_FALSE;
 
    /* Pixel group */
    ctx->Pixel.RedBias = 0.0;
@@ -1494,11 +1503,11 @@ _mesa_initialize_context( GLcontext *ctx,
       ctx->DepthMax = 0xffffffff;
       ctx->DepthMaxF = (GLfloat) ctx->DepthMax;
    }
-   ctx->MRD = 2.0;  /* XXX temporary value */
+   ctx->MRD = 1.0;  /* Minimum resolvable depth value, for polygon offset */
 
 
 #if defined(MESA_TRACE)
-   ctx->TraceCtx = CALLOC( sizeof(trace_context_t) );
+   ctx->TraceCtx = (trace_context_t *) CALLOC( sizeof(trace_context_t) );
 #if 0
    /* Brian: do you want to have CreateContext fail here,
        or should we just trap in NewTrace (currently done)? */
@@ -1670,18 +1679,6 @@ _mesa_destroy_context( GLcontext *ctx )
       _mesa_free_context_data(ctx);
       FREE( (void *) ctx );
    }
-}
-
-
-
-/*
- * Called by the driver after both the context and driver are fully
- * initialized.  Currently just reads the config file.
- */
-void
-_mesa_context_initialize( GLcontext *ctx )
-{
-   _mesa_read_config_file( ctx );
 }
 
 

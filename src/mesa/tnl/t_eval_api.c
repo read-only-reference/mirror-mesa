@@ -1,4 +1,4 @@
-/* $Id: t_eval_api.c,v 1.5 2001/04/30 21:08:52 keithw Exp $ */
+/* $Id: t_eval_api.c,v 1.7 2001/05/14 09:00:51 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -61,7 +61,7 @@ _tnl_exec_EvalMesh1( GLenum mode, GLint i1, GLint i2 )
    GLenum prim;
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   fprintf(stderr, "%s\n", __FUNCTION__);
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
 
    switch (mode) {
       case GL_POINT:
@@ -89,6 +89,14 @@ _tnl_exec_EvalMesh1( GLenum mode, GLint i1, GLint i2 )
     *
     * TODO: Anaylse display lists to determine if this state is
     * constant.
+    *
+    * State to watch:
+    *       - enabled maps
+    *       - map state for each enabled map, including control points
+    *       - grid state
+    *
+    * Could alternatively cache individual maps in arrays, rather than
+    * building immediates.  
     */
    {
       GLboolean compiling = ctx->CompileFlag;
@@ -131,7 +139,7 @@ _tnl_exec_EvalMesh2( GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2 )
    GLfloat u, du, v, dv, v1, u1;
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   fprintf(stderr, "%s\n", __FUNCTION__);
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
 
    /* No effect if vertex maps disabled.
     */

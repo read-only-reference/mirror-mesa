@@ -102,6 +102,13 @@ calcposobs(void)
    dir[1] = cos(alpha * M_PI / 180.0) * sin(beta * M_PI / 180.0);
    dir[2] = cos(beta * M_PI / 180.0);
 
+   if (dir[0] < 1.0e-5 && dir[0] > -1.0e-5)
+      dir[0] = 0;
+   if (dir[1] < 1.0e-5 && dir[1] > -1.0e-5)
+      dir[1] = 0;
+   if (dir[2] < 1.0e-5 && dir[2] > -1.0e-5)
+      dir[2] = 0;
+
    obs[0] += v * dir[0];
    obs[1] += v * dir[1];
    obs[2] += v * dir[2];
@@ -379,8 +386,7 @@ colorcheckmap(float ppos[3], float c[3])
    h[1] = 0.5f * (vdir[1] + ldir[1]);
    h[2] = 0.5f * (vdir[2] + ldir[2]);
    kfact = dprod(h, norm);
-   kfact =
-      kfact * kfact * kfact * kfact * kfact * kfact * kfact * 7.0f * 255.0f;
+   kfact = pow(kfact, 6.0) * 7.0 * 255.0;
 
    r = r * dfact + kfact;
    g = g * dfact + kfact;
@@ -480,12 +486,10 @@ updatereflectmap(int slot)
 	    h[1] = 0.5f * (vdir[1] + ldir[1]);
 	    h[2] = 0.5f * (vdir[2] + ldir[2]);
 	    kfact = dprod(h, norm);
-	    kfact *= kfact;
-	    kfact *= kfact;
-	    kfact *= kfact;
-	    kfact *= kfact;
-	    kfact *= 10.0f;
-	 }
+            kfact = pow(kfact, 4.0);
+            if (kfact < 1.0e-10)
+               kfact = 0.0;
+         }
 
 	 r = dfact + kfact;
 	 g = dfact + kfact;

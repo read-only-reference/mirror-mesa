@@ -1,4 +1,4 @@
-/* $Id: m_xform.c,v 1.12 2001/03/30 14:44:43 gareth Exp $ */
+/* $Id: m_xform.c,v 1.14 2001/05/23 14:27:03 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -54,6 +54,10 @@
 
 #ifdef USE_X86_ASM
 #include "X86/common_x86_asm.h"
+#endif
+
+#ifdef USE_SPARC_ASM
+#include "SPARC/sparc.h"
 #endif
 
 clip_func _mesa_clip_tab[5];
@@ -200,10 +204,14 @@ _math_init_transformation( void )
 #ifdef DEBUG
    _math_test_all_transform_functions( "default" );
    _math_test_all_normal_transform_functions( "default" );
+   _math_test_all_cliptest_functions( "default" );
 #endif
 
 #ifdef USE_X86_ASM
    _mesa_init_all_x86_transform_asm();
+#endif
+#ifdef USE_SPARC_ASM
+   _mesa_init_all_sparc_transform_asm();
 #endif
 }
 

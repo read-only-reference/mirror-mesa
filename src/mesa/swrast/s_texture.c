@@ -1,4 +1,4 @@
-/* $Id: s_texture.c,v 1.27 2001/04/23 18:06:09 brianp Exp $ */
+/* $Id: s_texture.c,v 1.31 2001/05/30 17:47:43 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -187,12 +187,13 @@
 
 /*
  * Note, the FRAC macro has to work perfectly.  Otherwise you'll sometimes
- * see 1-pixel bands of improperly weighted linear-sampled texels.
- * In particular, #define FRAC(f) ((f) - IFLOOR(f)) doesn't work.
+ * see 1-pixel bands of improperly weighted linear-sampled texels.  The
+ * tests/texwrap.c demo is a good test.
  * Also note, FRAC(x) doesn't truly return the fractional part of x for x < 0.
  * Instead, if x < 0 then FRAC(x) = 1 - true_frac(x).
  */
-#define FRAC(f)  ((f) - floor(f))
+#define FRAC(f)  ((f) - IFLOOR(f))
+
 
 
 /*
@@ -280,7 +281,7 @@ sample_1d_nearest(GLcontext *ctx,
    /* skip over the border, if any */
    i += img->Border;
 
-   if (i < 0 || i >= img->Width) {
+   if (i < 0 || i >= (GLint) img->Width) {
       /* Need this test for GL_CLAMP_TO_BORDER_ARB mode */
       COPY_CHAN4(rgba, tObj->BorderColor);
    }
@@ -321,7 +322,7 @@ sample_1d_linear(GLcontext *ctx,
    }
 
    {
-      const GLfloat a = FRAC(u + 1.0F);
+      const GLfloat a = FRAC(u);
       /* compute sample weights in fixed point in [0,WEIGHT_SCALE] */
       const GLint w0 = IROUND_POS((1.0F-a) * WEIGHT_SCALE);
       const GLint w1 = IROUND_POS(      a  * WEIGHT_SCALE);
@@ -570,7 +571,7 @@ sample_2d_nearest(GLcontext *ctx,
    i += img->Border;
    j += img->Border;
 
-   if (i < 0 || i >= img->Width || j < 0 || j >= img->Height) {
+   if (i < 0 || i >= (GLint) img->Width || j < 0 || j >= (GLint) img->Height) {
       /* Need this test for GL_CLAMP_TO_BORDER_ARB mode */
       COPY_CHAN4(rgba, tObj->BorderColor);
    }
@@ -619,8 +620,8 @@ sample_2d_linear(GLcontext *ctx,
    }
 
    {
-      const GLfloat a = FRAC(u - 1.0);
-      const GLfloat b = FRAC(v - 1.0);
+      const GLfloat a = FRAC(u);
+      const GLfloat b = FRAC(v);
       /* compute sample weights in fixed point in [0,WEIGHT_SCALE] */
       const GLint w00 = IROUND_POS((1.0F-a) * (1.0F-b) * WEIGHT_SCALE);
       const GLint w10 = IROUND_POS(      a  * (1.0F-b) * WEIGHT_SCALE);
@@ -990,9 +991,9 @@ sample_3d_nearest(GLcontext *ctx,
    COMPUTE_NEAREST_TEXEL_LOCATION(tObj->WrapT, t, height, j);
    COMPUTE_NEAREST_TEXEL_LOCATION(tObj->WrapR, r, depth,  k);
 
-   if (i < 0 || i >= img->Width ||
-       j < 0 || j >= img->Height ||
-       k < 0 || k >= img->Depth) {
+   if (i < 0 || i >= (GLint) img->Width ||
+       j < 0 || j >= (GLint) img->Height ||
+       k < 0 || k >= (GLint) img->Depth) {
       /* Need this test for GL_CLAMP_TO_BORDER_ARB mode */
       COPY_CHAN4(rgba, tObj->BorderColor);
    }
@@ -1047,9 +1048,9 @@ sample_3d_linear(GLcontext *ctx,
    }
 
    {
-      const GLfloat a = FRAC(u + 1.0F);
-      const GLfloat b = FRAC(v + 1.0F);
-      const GLfloat c = FRAC(w + 1.0F);
+      const GLfloat a = FRAC(u);
+      const GLfloat b = FRAC(v);
+      const GLfloat c = FRAC(w);
       /* compute sample weights in fixed point in [0,WEIGHT_SCALE] */
       GLint w000 = IROUND_POS((1.0F-a) * (1.0F-b) * (1.0F-c) * WEIGHT_SCALE);
       GLint w100 = IROUND_POS(      a  * (1.0F-b) * (1.0F-c) * WEIGHT_SCALE);
@@ -1742,12 +1743,13 @@ texture_combine(const GLcontext *ctx,
                 CONST GLchan (*texel)[4],
                 GLchan (*rgba)[4])
 {
-   GLchan ccolor [3][3*MAX_WIDTH][4];
    const GLchan (*argRGB [3])[4];
    const GLchan (*argA [3])[4];
    GLuint i, j;
    const GLuint RGBshift = textureUnit->CombineScaleShiftRGB;
    const GLuint Ashift   = textureUnit->CombineScaleShiftA;
+   DEFMNARRAY(GLchan, ccolor, 3, 3 * MAX_WIDTH, 4);  /* mac 32k limitation */
+   CHECKARRAY(ccolor, return);  /* mac 32k limitation */
 
    ASSERT(ctx->Extensions.EXT_texture_env_combine ||
           ctx->Extensions.ARB_texture_env_combine);
@@ -1975,8 +1977,8 @@ texture_combine(const GLcontext *ctx,
       case GL_DOT3_RGB_ARB:
       case GL_DOT3_RGBA_ARB:
          {
-            const GLubyte (*arg0)[4] = (const GLubyte (*)[4]) argRGB[0];
-            const GLubyte (*arg1)[4] = (const GLubyte (*)[4]) argRGB[1];
+            const GLchan (*arg0)[4] = (const GLchan (*)[4]) argRGB[0];
+            const GLchan (*arg1)[4] = (const GLchan (*)[4]) argRGB[1];
 	    /* ATI's EXT extension has a constant scale by 4.  The ARB
 	     * one will likely remove this restriction, and we should
 	     * drop the EXT extension in favour of the ARB one.
@@ -1989,7 +1991,7 @@ texture_combine(const GLcontext *ctx,
 			    S_PROD((GLint)arg0[i][BCOMP] - 128,
 				   (GLint)arg1[i][BCOMP] - 128)) >> 6;
                dot = CLAMP(dot, 0, 255);
-               rgba[i][RCOMP] = rgba[i][GCOMP] = rgba[i][BCOMP] = (GLubyte)dot;
+               rgba[i][RCOMP] = rgba[i][GCOMP] = rgba[i][BCOMP] = (GLchan) dot;
             }
          }
          break;
@@ -2083,6 +2085,7 @@ texture_combine(const GLcontext *ctx,
 	 rgba[i][ACOMP] = rgba[i][RCOMP];
       }
    }
+   UNDEFARRAY(ccolor);  /* mac 32k limitation */
 }
 #undef PROD
 

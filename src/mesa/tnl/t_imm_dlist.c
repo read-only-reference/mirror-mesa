@@ -1,4 +1,4 @@
-/* $Id: t_imm_dlist.c,v 1.15 2001/04/30 21:08:52 keithw Exp $ */
+/* $Id: t_imm_dlist.c,v 1.19 2001/05/14 09:00:51 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -76,33 +76,21 @@ _tnl_compile_cassette( GLcontext *ctx, struct immediate *IM )
    TNLvertexcassette *node;
    GLuint new_beginstate;
 
-   _tnl_compute_orflag( IM );
-
-   IM->CopyStart = IM->Start;
-
-   if (IM->OrFlag & VERT_ELT) {
-      GLuint andflag = ~0;
-      GLuint i;
-      GLuint start = IM->FlushElt ? IM->LastPrimitive : IM->CopyStart;
-      _tnl_translate_array_elts( ctx, IM, start, IM->Count );
-
-      /* Need to recompute andflag.
-       */
-      if (IM->AndFlag & VERT_ELT)
-	 IM->CopyAndFlag = IM->AndFlag |= ctx->Array._Enabled;
-      else {
-	 for (i = IM->CopyStart ; i < IM->Count ; i++)
-	    andflag &= IM->Flag[i];
-	 IM->CopyAndFlag = IM->AndFlag = andflag;
-      }
-      IM->CopyOrFlag |= ctx->Array._Enabled;
+   if (IM->FlushElt) {
+      ASSERT (IM->FlushElt == FLUSH_ELT_LAZY); 
+      _tnl_translate_array_elts( ctx, IM, IM->Start, IM->Count );
    }
 
+   _tnl_compute_orflag( IM, IM->Start );
+
+   /* Need to clear this flag, or fixup gets confused.  (The elements
+    * have been translated away by now.)  
+    */
+   IM->OrFlag &= ~VERT_ELT;	
+   IM->AndFlag &= ~VERT_ELT;	
+
    _tnl_fixup_input( ctx, IM );
-
-   
 /*     _tnl_print_cassette( IM ); */
-
 
    node = (TNLvertexcassette *)
       _mesa_alloc_instruction(ctx,
@@ -129,7 +117,6 @@ _tnl_compile_cassette( GLcontext *ctx, struct immediate *IM )
       execute_compiled_cassette( ctx, (void *)node );
    }
 
-
    /* Discard any errors raised in the last cassette.
     */
    new_beginstate = node->BeginState & (VERT_BEGIN_0|VERT_BEGIN_1);
@@ -145,12 +132,12 @@ _tnl_compile_cassette( GLcontext *ctx, struct immediate *IM )
       im->ref_count--;		 /* remove CURRENT_IM reference */
       ASSERT(im->ref_count > 0); /* it is compiled into a display list */
       SET_IMMEDIATE( ctx, new_im );
-      _tnl_reset_input( ctx, IMM_MAX_COPIED_VERTS,
-			new_beginstate, node->SavedBeginState );
+      _tnl_reset_compile_input( ctx, IMM_MAX_COPIED_VERTS,
+				new_beginstate, node->SavedBeginState );
    } else {
       /* Still some room in the current immediate.
        */
-      _tnl_reset_input( ctx, im->Count+1+IMM_MAX_COPIED_VERTS,
+      _tnl_reset_compile_input( ctx, im->Count+1+IMM_MAX_COPIED_VERTS,
 			new_beginstate, node->SavedBeginState);
    }
 }
@@ -162,6 +149,8 @@ execute_compiled_cassette( GLcontext *ctx, void *data )
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    TNLvertexcassette *node = (TNLvertexcassette *)data;
    struct immediate *IM = node->IM;
+
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
 
    if (ctx->NewState)
       _mesa_update_state(ctx);
@@ -278,8 +267,6 @@ _tnl_EndList( GLcontext *ctx )
 {
    struct immediate *IM = TNL_CURRENT_IM(ctx);
 
-/*     fprintf(stderr, "%s\n", __FUNCTION__); */
-
    ctx->swtnl_im = 0;
    IM->ref_count--;
 
@@ -299,7 +286,7 @@ _tnl_EndList( GLcontext *ctx )
    SET_IMMEDIATE( ctx, IM );
    IM->ref_count++;
 
-   _tnl_reset_input( ctx, IMM_MAX_COPIED_VERTS, 0, 0 );
+   _tnl_reset_exec_input( ctx, IMM_MAX_COPIED_VERTS, 0, 0 );
 }
 
 
