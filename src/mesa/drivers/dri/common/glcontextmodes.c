@@ -31,23 +31,35 @@
  * \author Ian Romanick <idr@us.ibm.com>
  */
 
-#include <X11/X.h>
-#include <GL/glx.h>
-#include "GL/glxint.h"
+#ifdef DRI_NEW_INTERFACE_ONLY
+# include <stdlib.h>
+# include <string.h>
+# include <GL/gl.h>
+# include "dri_interface.h"
+# include "imports.h"
+# define __glXMemset  memset
+#else
+# include <X11/X.h>
+# include <GL/glx.h>
+# include "GL/glxint.h"
 
-#ifdef XFree86Server
-# include "GL/glx_ansic.h"
+# ifdef XFree86Server
+#  include "GL/glx_ansic.h"
 extern void * __glXMalloc( size_t size );
 extern void __glXFree( void * ptr );
-# define Xmalloc __glXMalloc
-# define Xfree   __glXFree
-#else
-# include <X11/Xlibint.h>
-# define __glXMemset  memset
-#endif /* XFree86Server */
+#  define _mesa_malloc(b) __glXMalloc(b)
+#  define _mesa_free(m)   __glXFree(m)
+# else
+#  include <X11/Xlibint.h>
+#  define __glXMemset  memset
+#  define _mesa_malloc(b) Xmalloc(b)
+#  define _mesa_free(m) Xfree(m)
+# endif /* XFree86Server */
+#endif  /* DRI_NEW_INTERFACE_ONLY */
 
 #include "glcontextmodes.h"
 
+#ifndef DRI_NEW_INTERFACE_ONLY
 #define NUM_VISUAL_TYPES   6
 
 /**
@@ -176,7 +188,7 @@ _gl_copy_visual_to_context_mode( __GLcontextModes * mode,
  * \param mode         GL context mode whose data is to be returned.
  * \param attribute    Attribute of \c mode that is to be returned.
  * \param value_return Location to store the data member of \c mode.
- * \return  If \c attribute is a valid attribute of \c mode, \c Success is
+ * \return  If \c attribute is a valid attribute of \c mode, zero is
  *          returned.  Otherwise \c GLX_BAD_ATTRIBUTE is returned.
  */
 int
@@ -186,118 +198,118 @@ _gl_get_context_mode_data(const __GLcontextModes *mode, int attribute,
     switch (attribute) {
       case GLX_USE_GL:
 	*value_return = GL_TRUE;
-	return Success;
+	return 0;
       case GLX_BUFFER_SIZE:
 	*value_return = mode->rgbBits;
-	return Success;
+	return 0;
       case GLX_RGBA:
 	*value_return = mode->rgbMode;
-	return Success;
+	return 0;
       case GLX_RED_SIZE:
 	*value_return = mode->redBits;
-	return Success;
+	return 0;
       case GLX_GREEN_SIZE:
 	*value_return = mode->greenBits;
-	return Success;
+	return 0;
       case GLX_BLUE_SIZE:
 	*value_return = mode->blueBits;
-	return Success;
+	return 0;
       case GLX_ALPHA_SIZE:
 	*value_return = mode->alphaBits;
-	return Success;
+	return 0;
       case GLX_DOUBLEBUFFER:
 	*value_return = mode->doubleBufferMode;
-	return Success;
+	return 0;
       case GLX_STEREO:
 	*value_return = mode->stereoMode;
-	return Success;
+	return 0;
       case GLX_AUX_BUFFERS:
 	*value_return = mode->numAuxBuffers;
-	return Success;
+	return 0;
       case GLX_DEPTH_SIZE:
 	*value_return = mode->depthBits;
-	return Success;
+	return 0;
       case GLX_STENCIL_SIZE:
 	*value_return = mode->stencilBits;
-	return Success;
+	return 0;
       case GLX_ACCUM_RED_SIZE:
 	*value_return = mode->accumRedBits;
-	return Success;
+	return 0;
       case GLX_ACCUM_GREEN_SIZE:
 	*value_return = mode->accumGreenBits;
-	return Success;
+	return 0;
       case GLX_ACCUM_BLUE_SIZE:
 	*value_return = mode->accumBlueBits;
-	return Success;
+	return 0;
       case GLX_ACCUM_ALPHA_SIZE:
 	*value_return = mode->accumAlphaBits;
-	return Success;
+	return 0;
       case GLX_LEVEL:
 	*value_return = mode->level;
-	return Success;
+	return 0;
       case GLX_TRANSPARENT_TYPE_EXT:
 	*value_return = mode->transparentPixel;
-	return Success;
+	return 0;
       case GLX_TRANSPARENT_RED_VALUE:
 	*value_return = mode->transparentRed;
-	return Success;
+	return 0;
       case GLX_TRANSPARENT_GREEN_VALUE:
 	*value_return = mode->transparentGreen;
-	return Success;
+	return 0;
       case GLX_TRANSPARENT_BLUE_VALUE:
 	*value_return = mode->transparentBlue;
-	return Success;
+	return 0;
       case GLX_TRANSPARENT_ALPHA_VALUE:
 	*value_return = mode->transparentAlpha;
-	return Success;
+	return 0;
       case GLX_TRANSPARENT_INDEX_VALUE:
 	*value_return = mode->transparentIndex;
-	return Success;
+	return 0;
       case GLX_X_VISUAL_TYPE:
 	*value_return = mode->visualType;
-	return Success;
+	return 0;
       case GLX_CONFIG_CAVEAT:
 	*value_return = mode->visualRating;
-	return Success;
+	return 0;
       case GLX_VISUAL_ID:
 	*value_return = mode->visualID;
-	return Success;
+	return 0;
       case GLX_DRAWABLE_TYPE:
 	*value_return = mode->drawableType;
-	return Success;
+	return 0;
       case GLX_RENDER_TYPE:
 	*value_return = mode->renderType;
-	return Success;
+	return 0;
       case GLX_X_RENDERABLE:
 	*value_return = mode->xRenderable;
-	return Success;
+	return 0;
       case GLX_FBCONFIG_ID:
 	*value_return = mode->fbconfigID;
-	return Success;
+	return 0;
       case GLX_MAX_PBUFFER_WIDTH:
 	*value_return = mode->maxPbufferWidth;
-	return Success;
+	return 0;
       case GLX_MAX_PBUFFER_HEIGHT:
 	*value_return = mode->maxPbufferHeight;
-	return Success;
+	return 0;
       case GLX_MAX_PBUFFER_PIXELS:
 	*value_return = mode->maxPbufferPixels;
-	return Success;
+	return 0;
       case GLX_OPTIMAL_PBUFFER_WIDTH_SGIX:
 	*value_return = mode->optimalPbufferWidth;
-	return Success;
+	return 0;
       case GLX_OPTIMAL_PBUFFER_HEIGHT_SGIX:
 	*value_return = mode->optimalPbufferHeight;
-	return Success;
+	return 0;
       case GLX_SWAP_METHOD_OML:
 	*value_return = mode->swapMethod;
-	return Success;
+	return 0;
       case GLX_SAMPLE_BUFFERS_SGIS:
 	*value_return = mode->sampleBuffers;
-	return Success;
+	return 0;
       case GLX_SAMPLES_SGIS:
 	*value_return = mode->samples;
-	return Success;
+	return 0;
 
       /* Applications are NOT allowed to query GLX_VISUAL_SELECT_GROUP_SGIX.
        * It is ONLY for communication between the GLX client and the GLX
@@ -308,6 +320,7 @@ _gl_get_context_mode_data(const __GLcontextModes *mode, int attribute,
 	return GLX_BAD_ATTRIBUTE;
     }
 }
+#endif /* DRI_NEW_INTERFACE_ONLY */
 
 
 /**
@@ -347,7 +360,7 @@ _gl_context_modes_create( unsigned count, size_t minimum_size )
 
    next = & base;
    for ( i = 0 ; i < count ; i++ ) {
-      *next = (__GLcontextModes *) Xmalloc( size );
+      *next = (__GLcontextModes *) _mesa_malloc( size );
       if ( *next == NULL ) {
 	 _gl_context_modes_destroy( base );
 	 base = NULL;
@@ -388,7 +401,7 @@ _gl_context_modes_destroy( __GLcontextModes * modes )
    while ( modes != NULL ) {
       __GLcontextModes * const next = modes->next;
 
-      Xfree( modes );
+      _mesa_free( modes );
       modes = next;
    }
 }

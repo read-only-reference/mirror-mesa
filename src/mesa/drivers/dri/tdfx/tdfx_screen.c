@@ -39,6 +39,7 @@
 #include "tdfx_lock.h"
 #include "tdfx_vb.h"
 #include "tdfx_tris.h"
+#include "utils.h"
 
 
 #ifdef DEBUG_LOCKING
@@ -119,34 +120,6 @@ tdfxInitDriver( __DRIscreenPrivate *sPriv )
 {
    if ( TDFX_DEBUG & DEBUG_VERBOSE_DRI ) {
       fprintf( stderr, "%s( %p )\n", __FUNCTION__, (void *)sPriv );
-   }
-
-   /* Check the DRI externsion version */
-   if ( sPriv->driMajor != 4 || sPriv->driMinor < 0 ) {
-       __driUtilMessage( "tdfx DRI driver expected DRI version 4.0.x "
-                         "but got version %d.%d.%d",
-                         sPriv->driMajor, sPriv->driMinor, sPriv->driPatch );
-       return GL_FALSE;
-   }
-
-   /* Check that the DDX driver version is compatible */
-   if ( sPriv->ddxMajor != 1 ||
-	sPriv->ddxMinor < 0 ) {
-      __driUtilMessage(
-	       "3dfx DRI driver expected DDX driver version 1.0.x "
-	       "but got version %d.%d.%d",
-	       sPriv->ddxMajor, sPriv->ddxMinor, sPriv->ddxPatch );
-      return GL_FALSE;
-   }
-
-   /* Check that the DRM driver version is compatible */
-   if ( sPriv->drmMajor != 1 ||
-	sPriv->drmMinor < 0 ) {
-      __driUtilMessage(
-	       "3dfx DRI driver expected DRM driver version 1.0.x "
-	       "but got version %d.%d.%d",
-	       sPriv->drmMajor, sPriv->drmMinor, sPriv->drmPatch );
-      return GL_FALSE;
    }
 
    if ( !tdfxCreateScreen( sPriv ) ) {
@@ -290,13 +263,6 @@ tdfxSwapBuffers( __DRIdrawablePrivate *driDrawPriv )
 }
 
 
-static GLboolean
-tdfxOpenCloseFullScreen(__DRIcontextPrivate *driContextPriv)
-{
-    return GL_TRUE;
-}
-
-
 static const struct __DriverAPIRec tdfxAPI = {
    .InitDriver      = tdfxInitDriver,
    .DestroyScreen   = tdfxDestroyScreen,
@@ -307,8 +273,6 @@ static const struct __DriverAPIRec tdfxAPI = {
    .SwapBuffers     = tdfxSwapBuffers,
    .MakeCurrent     = tdfxMakeCurrent,
    .UnbindContext   = tdfxUnbindContext,
-   .OpenFullScreen  = tdfxOpenCloseFullScreen,
-   .CloseFullScreen = tdfxOpenCloseFullScreen,
    .GetSwapInfo     = NULL,
    .GetMSC          = NULL,
    .WaitForMSC      = NULL,
@@ -402,7 +366,7 @@ static __GLcontextModes *tdfxFillInModes(unsigned pixel_bits,
  * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on
  *         failure.
  */
-void * __driCreateNewScreen( Display *dpy, int scrn, __DRIscreen *psc,
+void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,
 			     const __DRIversion * dri_version,
@@ -413,6 +377,16 @@ void * __driCreateNewScreen( Display *dpy, int scrn, __DRIscreen *psc,
 			     __GLcontextModes ** driver_modes )
 {
    __DRIscreenPrivate *psp;
+   static const __DRIversion ddx_expected = { 1, 0, 0 };
+   static const __DRIversion dri_expected = { 4, 0, 0 };
+   static const __DRIversion drm_expected = { 1, 0, 0 };
+
+   if ( ! driCheckDriDdxDrmVersions2( "tdfx",
+				      dri_version, & dri_expected,
+				      ddx_version, & ddx_expected,
+				      drm_version, & drm_expected ) ) {
+      return NULL;
+   }
 
    psp = __driUtilCreateNewScreen(dpy, scrn, psc, NULL,
    				  ddx_version, dri_version, drm_version,
@@ -445,6 +419,7 @@ void * __driCreateNewScreen( Display *dpy, int scrn, __DRIscreen *psc,
  * The __driCreateScreen name is the symbol that libGL.so fetches.
  * Return:  pointer to a __DRIscreenPrivate.
  */
+#if !defined(DRI_NEW_INTERFACE_ONLY)
 #ifndef _SOLO
 void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
                         int numConfigs, __GLXvisualConfig *config)
@@ -462,3 +437,4 @@ void *__driCreateScreen(struct DRIDriverRec *driver,
    return (void *) psp;
 }
 #endif
+#endif /* !defined(DRI_NEW_INTERFACE_ONLY) */

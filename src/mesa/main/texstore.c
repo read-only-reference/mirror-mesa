@@ -80,37 +80,60 @@ compute_component_mapping(GLenum logicalBaseFormat, GLenum textureBaseFormat,
                           GLint map[4])
 {
    /* compute mapping from dest components back to src components */
-   switch (logicalBaseFormat) {
-   case GL_LUMINANCE:
-      map[0] = map[1] = map[2] = 0;
-      if (textureBaseFormat == GL_RGBA)
-         map[3] = ONE;
-      break;
-   case GL_ALPHA:
-      ASSERT(textureBaseFormat == GL_RGBA);
-      map[0] = map[1] = map[2] = ZERO;
-      map[3] = 0;
-      break;
-   case GL_INTENSITY:
-      map[0] = map[1] = map[2] = 0;
-      if (textureBaseFormat == GL_RGBA)
+   switch (textureBaseFormat) {
+   case GL_RGB:
+   case GL_RGBA:
+      switch (logicalBaseFormat) {
+      case GL_LUMINANCE:
+         map[0] = map[1] = map[2] = 0;
+         if (textureBaseFormat == GL_RGBA)
+            map[3] = ONE;
+         break;
+      case GL_ALPHA:
+         ASSERT(textureBaseFormat == GL_RGBA);
+         map[0] = map[1] = map[2] = ZERO;
          map[3] = 0;
+         break;
+      case GL_INTENSITY:
+         map[0] = map[1] = map[2] = 0;
+         if (textureBaseFormat == GL_RGBA)
+            map[3] = 0;
+         break;
+      case GL_LUMINANCE_ALPHA:
+         ASSERT(textureBaseFormat == GL_RGBA);
+         map[0] = map[1] = map[2] = 0;
+         map[3] = 1;
+         break;
+      case GL_RGB:
+         ASSERT(textureBaseFormat == GL_RGBA);
+         map[0] = 0;
+         map[1] = 1;
+         map[2] = 2;
+         map[3] = ONE;
+         break;
+      default:
+         _mesa_problem(NULL, "Unexpected logicalBaseFormat");
+         map[0] = map[1] = map[2] = map[3] = 0;
+      }
       break;
    case GL_LUMINANCE_ALPHA:
-      ASSERT(textureBaseFormat == GL_RGBA);
-      map[0] = map[1] = map[2] = 0;
-      map[3] = 1;
-      break;
-   case GL_RGB:
-      ASSERT(textureBaseFormat == GL_RGBA);
-      map[0] = 0;
-      map[1] = 1;
-      map[2] = 2;
-      map[3] = ONE;
-      break;
-   default:
-      _mesa_problem(NULL, "Unexpected logicalBaseFormat");
-      map[0] = map[1] = map[2] = map[3] = 0;
+      switch (logicalBaseFormat) {
+      case GL_LUMINANCE:
+         map[0] = 0;
+         map[1] = ONE;
+         break;
+      case GL_ALPHA:
+         map[0] = ZERO;
+         map[1] = 0;
+         break;
+      case GL_INTENSITY:
+         map[0] = 0;
+         map[1] = 0;
+         break;
+      default:
+         _mesa_problem(NULL, "Unexpected logicalBaseFormat");
+         map[0] = map[1] = 0;
+      }
    }
 }
 
@@ -298,8 +321,9 @@ make_temp_float_image(GLcontext *ctx, GLuint dims,
       GLint i, n;
       GLint map[4];
 
-      /* we only promote up to RGB and RGBA formats for now */
-      ASSERT(textureBaseFormat == GL_RGB || textureBaseFormat == GL_RGBA);
+      /* we only promote up to RGB, RGBA and LUMINANCE_ALPHA formats for now */
+      ASSERT(textureBaseFormat == GL_RGB || textureBaseFormat == GL_RGBA ||
+             textureBaseFormat == GL_LUMINANCE_ALPHA);
 
       /* The actual texture format should have at least as many components
        * as the logical texture format.
@@ -451,8 +475,9 @@ _mesa_make_temp_chan_image(GLcontext *ctx, GLuint dims,
       GLint i, n;
       GLint map[4];
 
-      /* we only promote up to RGB and RGBA formats for now */
-      ASSERT(textureBaseFormat == GL_RGB || textureBaseFormat == GL_RGBA);
+      /* we only promote up to RGB, RGBA and LUMINANCE_ALPHA formats for now */
+      ASSERT(textureBaseFormat == GL_RGB || textureBaseFormat == GL_RGBA ||
+             textureBaseFormat == GL_LUMINANCE_ALPHA);
 
       /* The actual texture format should have at least as many components
        * as the logical texture format.
@@ -803,13 +828,18 @@ _mesa_texstore_rgb565(STORE_PARAMS)
       for (row = 0; row < srcHeight; row++) {
          const GLubyte *srcUB = (const GLubyte *) src;
          GLushort *dstUS = (GLushort *) dst;
-         for (col = 0; col < srcWidth; col++) {
-            dstUS[col] = PACK_COLOR_565( srcUB[0], srcUB[1], srcUB[2] );
-            srcUB += 3;
-         }
          /* check for byteswapped format */
-         if (dstFormat == &_mesa_texformat_rgb565_rev) {
-            _mesa_swap2(dstUS, srcWidth);
+         if (dstFormat == &_mesa_texformat_rgb565) {
+            for (col = 0; col < srcWidth; col++) {
+               dstUS[col] = PACK_COLOR_565( srcUB[0], srcUB[1], srcUB[2] );
+               srcUB += 3;
+            }
+         }
+         else {
+            for (col = 0; col < srcWidth; col++) {
+               dstUS[col] = PACK_COLOR_565_REV( srcUB[0], srcUB[1], srcUB[2] );
+               srcUB += 3;
+            }
          }
          dst += dstRowStride;
          src += srcRowStride;
@@ -836,15 +866,22 @@ _mesa_texstore_rgb565(STORE_PARAMS)
          GLubyte *dstRow = dstImage;
          for (row = 0; row < srcHeight; row++) {
             GLushort *dstUS = (GLushort *) dstRow;
-            for (col = 0; col < srcWidth; col++) {
-               dstUS[col] = PACK_COLOR_565( CHAN_TO_UBYTE(src[RCOMP]),
-                                            CHAN_TO_UBYTE(src[GCOMP]),
-                                            CHAN_TO_UBYTE(src[BCOMP]) );
-               src += 3;
-            }
             /* check for byteswapped format */
-            if (dstFormat == &_mesa_texformat_rgb565_rev) {
-               _mesa_swap2(dstUS, srcWidth);
+            if (dstFormat == &_mesa_texformat_rgb565) {
+               for (col = 0; col < srcWidth; col++) {
+                  dstUS[col] = PACK_COLOR_565( CHAN_TO_UBYTE(src[RCOMP]),
+                                               CHAN_TO_UBYTE(src[GCOMP]),
+                                               CHAN_TO_UBYTE(src[BCOMP]) );
+                  src += 3;
+               }
+            }
+            else {
+               for (col = 0; col < srcWidth; col++) {
+                  dstUS[col] = PACK_COLOR_565_REV( CHAN_TO_UBYTE(src[RCOMP]),
+                                                   CHAN_TO_UBYTE(src[GCOMP]),
+                                                   CHAN_TO_UBYTE(src[BCOMP]) );
+                  src += 3;
+               }
             }
             dstRow += dstRowStride;
          }
@@ -896,16 +933,23 @@ _mesa_texstore_rgba8888(STORE_PARAMS)
          GLubyte *dstRow = dstImage;
          for (row = 0; row < srcHeight; row++) {
             GLuint *dstUI = (GLuint *) dstRow;
-            for (col = 0; col < srcWidth; col++) {
-               dstUI[col] = PACK_COLOR_8888( CHAN_TO_UBYTE(src[RCOMP]),
-                                             CHAN_TO_UBYTE(src[GCOMP]),
-                                             CHAN_TO_UBYTE(src[BCOMP]),
-                                             CHAN_TO_UBYTE(src[ACOMP]) );
-               src += 4;
+            if (dstFormat == &_mesa_texformat_rgba8888) {
+               for (col = 0; col < srcWidth; col++) {
+                  dstUI[col] = PACK_COLOR_8888( CHAN_TO_UBYTE(src[RCOMP]),
+                                                CHAN_TO_UBYTE(src[GCOMP]),
+                                                CHAN_TO_UBYTE(src[BCOMP]),
+                                                CHAN_TO_UBYTE(src[ACOMP]) );
+                  src += 4;
+               }
             }
-            /* check for byteswapped format */
-            if (dstFormat == &_mesa_texformat_rgba8888_rev) {
-               _mesa_swap4(dstUI, srcWidth);
+            else {
+               for (col = 0; col < srcWidth; col++) {
+                  dstUI[col] = PACK_COLOR_8888_REV( CHAN_TO_UBYTE(src[RCOMP]),
+                                                    CHAN_TO_UBYTE(src[GCOMP]),
+                                                    CHAN_TO_UBYTE(src[BCOMP]),
+                                                    CHAN_TO_UBYTE(src[ACOMP]) );
+                  src += 4;
+               }
             }
             dstRow += dstRowStride;
          }
@@ -974,15 +1018,23 @@ _mesa_texstore_argb8888(STORE_PARAMS)
          GLubyte *dstRow = dstImage;
          for (row = 0; row < srcHeight; row++) {
             GLuint *dstUI = (GLuint *) dstRow;
-            for (col = 0; col < srcWidth; col++) {
-               dstUI[col] = PACK_COLOR_8888( CHAN_TO_UBYTE(src[ACOMP]),
-                                             CHAN_TO_UBYTE(src[RCOMP]),
-                                             CHAN_TO_UBYTE(src[GCOMP]),
-                                             CHAN_TO_UBYTE(src[BCOMP]) );
-               src += 4;
+            if (dstFormat == &_mesa_texformat_argb8888) {
+               for (col = 0; col < srcWidth; col++) {
+                  dstUI[col] = PACK_COLOR_8888( CHAN_TO_UBYTE(src[ACOMP]),
+                                                CHAN_TO_UBYTE(src[RCOMP]),
+                                                CHAN_TO_UBYTE(src[GCOMP]),
+                                                CHAN_TO_UBYTE(src[BCOMP]) );
+                  src += 4;
+               }
             }
-            if (dstFormat == &_mesa_texformat_argb8888_rev) {
-               _mesa_swap4(dstUI, srcWidth);
+            else {
+               for (col = 0; col < srcWidth; col++) {
+                  dstUI[col] = PACK_COLOR_8888_REV( CHAN_TO_UBYTE(src[ACOMP]),
+                                                    CHAN_TO_UBYTE(src[RCOMP]),
+                                                    CHAN_TO_UBYTE(src[GCOMP]),
+                                                    CHAN_TO_UBYTE(src[BCOMP]) );
+                  src += 4;
+               }
             }
             dstRow += dstRowStride;
          }
@@ -1223,15 +1275,23 @@ _mesa_texstore_argb4444(STORE_PARAMS)
          GLubyte *dstRow = dstImage;
          for (row = 0; row < srcHeight; row++) {
             GLushort *dstUS = (GLushort *) dstRow;
-            for (col = 0; col < srcWidth; col++) {
-               dstUS[col] = PACK_COLOR_4444( CHAN_TO_UBYTE(src[ACOMP]),
-                                             CHAN_TO_UBYTE(src[RCOMP]),
-                                             CHAN_TO_UBYTE(src[GCOMP]),
-                                             CHAN_TO_UBYTE(src[BCOMP]) );
-               src += 4;
+            if (dstFormat == &_mesa_texformat_argb4444) {
+               for (col = 0; col < srcWidth; col++) {
+                  dstUS[col] = PACK_COLOR_4444( CHAN_TO_UBYTE(src[ACOMP]),
+                                                CHAN_TO_UBYTE(src[RCOMP]),
+                                                CHAN_TO_UBYTE(src[GCOMP]),
+                                                CHAN_TO_UBYTE(src[BCOMP]) );
+                  src += 4;
+               }
             }
-            if (dstFormat == &_mesa_texformat_argb4444_rev) {
-               _mesa_swap2(dstUS, srcWidth);
+            else {
+               for (col = 0; col < srcWidth; col++) {
+                  dstUS[col] = PACK_COLOR_4444_REV( CHAN_TO_UBYTE(src[ACOMP]),
+                                                    CHAN_TO_UBYTE(src[RCOMP]),
+                                                    CHAN_TO_UBYTE(src[GCOMP]),
+                                                    CHAN_TO_UBYTE(src[BCOMP]) );
+                  src += 4;
+               }
             }
             dstRow += dstRowStride;
          }
@@ -1284,15 +1344,23 @@ _mesa_texstore_argb1555(STORE_PARAMS)
          GLubyte *dstRow = dstImage;
          for (row = 0; row < srcHeight; row++) {
             GLushort *dstUS = (GLushort *) dstRow;
-            for (col = 0; col < srcWidth; col++) {
-               dstUS[col] = PACK_COLOR_1555( CHAN_TO_UBYTE(src[ACOMP]),
-                                             CHAN_TO_UBYTE(src[RCOMP]),
-                                             CHAN_TO_UBYTE(src[GCOMP]),
-                                             CHAN_TO_UBYTE(src[BCOMP]) );
-               src += 4;
+            if (dstFormat == &_mesa_texformat_argb1555) {
+               for (col = 0; col < srcWidth; col++) {
+                  dstUS[col] = PACK_COLOR_1555( CHAN_TO_UBYTE(src[ACOMP]),
+                                                CHAN_TO_UBYTE(src[RCOMP]),
+                                                CHAN_TO_UBYTE(src[GCOMP]),
+                                                CHAN_TO_UBYTE(src[BCOMP]) );
+                  src += 4;
+               }
             }
-            if (dstFormat == &_mesa_texformat_argb1555_rev) {
-               _mesa_swap2(dstUS, srcWidth);
+            else {
+               for (col = 0; col < srcWidth; col++) {
+                  dstUS[col] = PACK_COLOR_1555_REV( CHAN_TO_UBYTE(src[ACOMP]),
+                                                    CHAN_TO_UBYTE(src[RCOMP]),
+                                                    CHAN_TO_UBYTE(src[GCOMP]),
+                                                    CHAN_TO_UBYTE(src[BCOMP]) );
+                  src += 4;
+               }
             }
             dstRow += dstRowStride;
          }
@@ -1348,13 +1416,21 @@ _mesa_texstore_al88(STORE_PARAMS)
          GLubyte *dstRow = dstImage;
          for (row = 0; row < srcHeight; row++) {
             GLushort *dstUS = (GLushort *) dstRow;
-            for (col = 0; col < srcWidth; col++) {
-               dstUS[col] = PACK_COLOR_88( CHAN_TO_UBYTE(src[ACOMP]),
-                                           CHAN_TO_UBYTE(src[RCOMP]) );
-               src += 2;
+            if (dstFormat == &_mesa_texformat_al88) {
+               for (col = 0; col < srcWidth; col++) {
+                  /* src[0] is luminance, src[1] is alpha */
+                 dstUS[col] = PACK_COLOR_88( CHAN_TO_UBYTE(src[1]),
+                                             CHAN_TO_UBYTE(src[0]) );
+                 src += 2;
+               }
             }
-            if (dstFormat == &_mesa_texformat_al88_rev) {
-               _mesa_swap2(dstUS, srcWidth);
+            else {
+               for (col = 0; col < srcWidth; col++) {
+                  /* src[0] is luminance, src[1] is alpha */
+                 dstUS[col] = PACK_COLOR_88_REV( CHAN_TO_UBYTE(src[1]),
+                                                 CHAN_TO_UBYTE(src[0]) );
+                 src += 2;
+               }
             }
             dstRow += dstRowStride;
          }
@@ -3379,8 +3455,8 @@ _mesa_upscale_teximage2d (GLsizei inWidth, GLsizei inHeight,
 
    ASSERT(outWidth >= inWidth);
    ASSERT(outHeight >= inHeight);
-   ASSERT(inWidth == 1 || inWidth == 2 || inHeight == 1 || inHeight == 2);
 #if 0
+   ASSERT(inWidth == 1 || inWidth == 2 || inHeight == 1 || inHeight == 2);
    ASSERT((outWidth & 3) == 0);
    ASSERT((outHeight & 3) == 0);
 #endif

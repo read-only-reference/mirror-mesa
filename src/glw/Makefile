@@ -33,7 +33,7 @@ clean:
 
 # Make the library
 $(LIB_DIR)/$(GLW_LIB_NAME): $(OBJECTS)
-	$(TOP)/bin/mklib -o $(GLW_LIB) -major $(MAJOR) -minor $(MINOR) \
+	CC=$(CC) CXX=$(CXX) $(TOP)/bin/mklib -o $(GLW_LIB) -major $(MAJOR) -minor $(MINOR) \
 		-patch $(TINY) $(MKLIB_OPTIONS) -install $(LIB_DIR) \
 		$(GLW_LIB_DEPS) $(OBJECTS)
 
@@ -44,7 +44,8 @@ $(LIB_DIR)/$(GLW_LIB_NAME): $(OBJECTS)
 # 
 depend: $(GLW_SOURCES)
 	touch depend
-	$(MKDEP) $(MKDEP_OPTIONS) -I$(TOP)/include $(GLW_SOURCES) >&/dev/null
+	$(MKDEP) $(MKDEP_OPTIONS) -I$(TOP)/include $(GLW_SOURCES) \
+		> /dev/null 2>&1
 
 
 include depend

@@ -1,7 +1,5 @@
 # -*-makefile-*-
 
-TOP = ../../../../..
-
 MESA_MODULES = $(TOP)/src/mesa/mesa.a
 
 
@@ -21,6 +19,7 @@ WINLIB=-L$(MESA)/src/glx/mini
 MINIGLX_INCLUDES = -I$(TOP)/src/glx/mini
 INCLUDES = $(MINIGLX_INCLUDES) \
 	   -I$(DRM_SOURCE_PATH)/shared \
+	   -I$(DRM_SOURCE_PATH)/libdrm \
 	   $(SHARED_INCLUDES)
 
 OBJECTS = $(C_SOURCES:.c=.o) \
@@ -35,7 +34,7 @@ endif
 ### Include directories
 SHARED_INCLUDES = \
 	-I. \
-	-I../common \
+	-I$(TOP)/src/mesa/drivers/dri/common \
 	-Iserver \
 	-I$(DRM_SOURCE_PATH)/shared \
 	-I$(TOP)/include \
@@ -74,7 +73,7 @@ default: depend symlinks $(LIB_DIR)/$(LIBNAME)
 #		$(WINLIB) $(LIB_DEPS) $(WINOBJ) $(MESA_MODULES) $(OBJECTS)
 
 
-$(LIB_DIR)/$(LIBNAME):  $(OBJECTS) $(MESA_MODULES) $(WINOBJ) Makefile ../Makefile.template
+$(LIB_DIR)/$(LIBNAME):  $(OBJECTS) $(MESA_MODULES) $(WINOBJ) Makefile $(TOP)/src/mesa/drivers/dri/Makefile.template
 	rm -f $@ && gcc -o $@ -shared $(OBJECTS) $(MESA_MODULES) $(WINOBJ) $(GL_LIB_DEPS)
 
 
@@ -85,7 +84,7 @@ $(LIB_DIR)/$(LIBNAME):  $(OBJECTS) $(MESA_MODULES) $(WINOBJ) Makefile ../Makefil
 depend: $(C_SOURCES) $(ASM_SOURCES)
 	touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDES) $(C_SOURCES) $(ASM_SOURCES) \
-		>& /dev/null
+		> /dev/null 2>&1
 
 
 # Emacs tags
@@ -95,6 +94,6 @@ tags:
 
 # Remove .o and backup files
 clean:
-	-rm -f *.o */*.o *~ *.o *~ *.so server/*.o $(SYMLINKS)
+	-rm -f *.o */*.o *~ *.o *~ *.so server/*.o $(SYMLINKS) depend
 
 include depend

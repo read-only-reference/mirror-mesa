@@ -55,7 +55,7 @@ default: depend $(LIB_DIR)/$(GLUT_LIB_NAME)
 
 # Make the library
 $(LIB_DIR)/$(GLUT_LIB_NAME): depend $(OBJECTS)
-	$(TOP)/bin/mklib -o $(GLUT_LIB) \
+	CC=$(CC) CXX=$(CXX) $(TOP)/bin/mklib -o $(GLUT_LIB) \
 		-major $(GLUT_MAJOR) -minor $(GLUT_MINOR) \
 		-patch $(GLUT_TINY) $(GLUT_LIB_DEPS) -install $(LIB_DIR) \
 		$(MKLIB_OPTIONS) $(OBJECTS)
@@ -65,7 +65,7 @@ $(LIB_DIR)/$(GLUT_LIB_NAME): depend $(OBJECTS)
 # what's included by any source file.
 depend: $(SOURCES) 
 	touch depend
-	makedepend -fdepend -Y $(INCLUDES) $(SOURCES) >& /dev/null
+	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDES) $(SOURCES) > /dev/null 2>&1
 
 # Emacs tags
 tags:

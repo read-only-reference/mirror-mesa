@@ -575,9 +575,6 @@ extern void fxPrintTextureData(tfxTexInfo * ti);
 extern const struct gl_texture_format *
 fxDDChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
                          GLenum srcFormat, GLenum srcType );
-extern GLuint fxDDCompressedTextureSize (GLcontext *ctx,
-                                         GLsizei width, GLsizei height, GLsizei depth,
-                                         GLenum format);
 extern void fxDDTexImage2D(GLcontext * ctx, GLenum target, GLint level,
 			   GLint internalFormat, GLint width, GLint height,
 			   GLint border, GLenum format, GLenum type,
@@ -738,6 +735,6 @@ extern int TDFX_DEBUG;
 
 /* dirty hacks */
 #define FX_RESCALE_BIG_TEXURES_HACK   1
-#define FX_COMPRESS_S3TC_AS_FXT1_HACK 0
+#define FX_COMPRESS_S3TC_AS_FXT1_HACK 1
 
 #endif

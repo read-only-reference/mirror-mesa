@@ -230,8 +230,6 @@ i810InitDriver(__DRIscreenPrivate *sPriv)
    i810ScreenPrivate *i810Screen;
    I810DRIPtr         gDRIPriv = (I810DRIPtr)sPriv->pDevPriv;
 
-   if ( ! driCheckDriDdxDrmVersions( sPriv, "i810", 4, 0, 1, 0, 1, 2 ) )
-     return GL_FALSE;
 
    /* Allocate the private area */
    i810Screen = (i810ScreenPrivate *)CALLOC(sizeof(i810ScreenPrivate));
@@ -362,12 +360,6 @@ i810DestroyBuffer(__DRIdrawablePrivate *driDrawPriv)
 }
 
 
-static GLboolean
-i810OpenCloseFullScreen(__DRIcontextPrivate *driContextPriv)
-{
-    return GL_TRUE;
-}
-
 static const struct __DriverAPIRec i810API = {
    .InitDriver      = i810InitDriver,
    .DestroyScreen   = i810DestroyScreen,
@@ -378,8 +370,6 @@ static const struct __DriverAPIRec i810API = {
    .SwapBuffers     = i810SwapBuffers,
    .MakeCurrent     = i810MakeCurrent,
    .UnbindContext   = i810UnbindContext,
-   .OpenFullScreen  = i810OpenCloseFullScreen,
-   .CloseFullScreen = i810OpenCloseFullScreen,
    .GetSwapInfo     = NULL,
    .GetMSC          = NULL,
    .WaitForMSC      = NULL,
@@ -393,6 +383,7 @@ static const struct __DriverAPIRec i810API = {
  * The __driCreateScreen name is the symbol that libGL.so fetches.
  * Return:  pointer to a __DRIscreenPrivate.
  */
+#if !defined(DRI_NEW_INTERFACE_ONLY)
 #ifndef _SOLO
 void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
                         int numConfigs, __GLXvisualConfig *config)
@@ -410,6 +401,7 @@ void *__driCreateScreen(struct DRIDriverRec *driver,
    return (void *) psp;
 }
 #endif
+#endif /* !defined(DRI_NEW_INTERFACE_ONLY) */
 
 /**
  * This is the bootstrap function for the driver.  libGL supplies all of the
@@ -422,7 +414,7 @@ void *__driCreateScreen(struct DRIDriverRec *driver,
  *         failure.
  */
 #ifdef USE_NEW_INTERFACE
-void * __driCreateNewScreen( Display *dpy, int scrn, __DRIscreen *psc,
+void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,
 			     const __DRIversion * dri_version,
@@ -434,6 +426,16 @@ void * __driCreateNewScreen( Display *dpy, int scrn, __DRIscreen *psc,
 
 {
    __DRIscreenPrivate *psp;
+   static const __DRIversion ddx_expected = { 1, 0, 0 };
+   static const __DRIversion dri_expected = { 4, 0, 0 };
+   static const __DRIversion drm_expected = { 1, 2, 0 };
+
+   if ( ! driCheckDriDdxDrmVersions2( "i810",
+				      dri_version, & dri_expected,
+				      ddx_version, & ddx_expected,
+				      drm_version, & drm_expected ) ) {
+      return NULL;
+   }
 
    psp = __driUtilCreateNewScreen(dpy, scrn, psc, NULL,
 				  ddx_version, dri_version, drm_version,

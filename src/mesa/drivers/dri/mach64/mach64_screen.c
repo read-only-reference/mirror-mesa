@@ -26,7 +26,7 @@
  * Authors:
  *	Gareth Hughes <gareth@valinux.com>
  *	Leif Delgass <ldelgass@retinalburn.net>
- *	José Fonseca <j_r_fonseca@yahoo.co.uk>
+ *	Josï¿½Fonseca <j_r_fonseca@yahoo.co.uk>
  */
 
 #include "mach64_context.h"
@@ -216,9 +216,6 @@ mach64CreateScreen( __DRIscreenPrivate *sPriv )
    if ( MACH64_DEBUG & DEBUG_VERBOSE_DRI ) 
       fprintf( stderr, "%s\n", __FUNCTION__ );
 
-   if ( ! driCheckDriDdxDrmVersions( sPriv, "Mach64", 4, 0, 6, 4, 1, 0 ) )
-      return NULL;
-
    /* Allocate the private area */
    mach64Screen = (mach64ScreenPtr) CALLOC( sizeof(*mach64Screen) );
    if ( !mach64Screen ) return NULL;
@@ -362,23 +359,6 @@ mach64DestroyScreen( __DRIscreenPrivate *driScreen )
    driScreen->private = NULL;
 }
 
-/* Initialize the fullscreen mode.
- */
-static GLboolean
-mach64OpenFullScreen( __DRIcontextPrivate *driContextPriv )
-{
-   return GL_TRUE;
-}
-
-/* Shut down the fullscreen mode.
- */
-static GLboolean
-mach64CloseFullScreen( __DRIcontextPrivate *driContextPriv )
-{
-   return GL_TRUE;
-}
-
-
 /* Create and initialize the Mesa and driver specific pixmap buffer
  * data.
  */
@@ -446,31 +426,6 @@ mach64InitDriver( __DRIscreenPrivate *driScreen )
    return GL_TRUE;
 }
 
-#ifndef _SOLO
-/* This function is called by libGL.so as soon as libGL.so is loaded.
- * This is where we register new extension functions with the dispatcher.
- */
-void __driRegisterExtensions( void )
-{
-#if 0
-   /* KW: This is handled differently in the other drivers, not sure
-    * what to do here.
-    */
-   PFNGLXENABLEEXTENSIONPROC glx_enable_extension;
-
-   if ( driCompareGLXAPIVersion( 20030317 ) >= 0 ) {
-      glx_enable_extension = (PFNGLXENABLEEXTENSIONPROC)
-	  glXGetProcAddress( (const GLubyte *) "__glXEnableExtension" );
-
-      if ( glx_enable_extension != NULL ) {
-	 glx_enable_extension( "GLX_SGI_swap_control", GL_FALSE );
-	 glx_enable_extension( "GLX_SGI_video_sync", GL_FALSE );
-	 glx_enable_extension( "GLX_MESA_swap_control", GL_FALSE );
-      }
-   }
-#endif
-}
-#endif
 
 static struct __DriverAPIRec mach64API = {
    .InitDriver      = mach64InitDriver,
@@ -482,8 +437,6 @@ static struct __DriverAPIRec mach64API = {
    .SwapBuffers     = mach64SwapBuffers,
    .MakeCurrent     = mach64MakeCurrent,
    .UnbindContext   = mach64UnbindContext,
-   .OpenFullScreen  = mach64OpenFullScreen,
-   .CloseFullScreen = mach64CloseFullScreen,
    .GetSwapInfo     = NULL,
    .GetMSC          = driGetMSC32,
    .WaitForMSC      = driWaitForMSC32,
@@ -497,6 +450,7 @@ static struct __DriverAPIRec mach64API = {
  * The __driCreateScreen name is the symbol that libGL.so fetches.
  * Return:  pointer to a __DRIscreenPrivate.
  */
+#if !defined(DRI_NEW_INTERFACE_ONLY)
 #ifndef _SOLO 
 void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
                         int numConfigs, __GLXvisualConfig *config)
@@ -514,6 +468,7 @@ void *__driCreateScreen(struct DRIDriverRec *driver,
    return (void *) psp;
 }
 #endif
+#endif /* !defined(DRI_NEW_INTERFACE_ONLY) */
 
 /**
  * This is the bootstrap function for the driver.  libGL supplies all of the
@@ -526,7 +481,7 @@ void *__driCreateScreen(struct DRIDriverRec *driver,
  *         failure.
  */
 #ifdef USE_NEW_INTERFACE
-void * __driCreateNewScreen( Display *dpy, int scrn, __DRIscreen *psc,
+void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,
 			     const __DRIversion * dri_version,
@@ -538,6 +493,16 @@ void * __driCreateNewScreen( Display *dpy, int scrn, __DRIscreen *psc,
 			     
 {
    __DRIscreenPrivate *psp;
+   static const __DRIversion ddx_expected = { 6, 4, 0 };
+   static const __DRIversion dri_expected = { 4, 0, 0 };
+   static const __DRIversion drm_expected = { 1, 0, 0 };
+
+   if ( ! driCheckDriDdxDrmVersions2( "Mach64",
+				      dri_version, & dri_expected,
+				      ddx_version, & ddx_expected,
+				      drm_version, & drm_expected ) ) {
+      return NULL;
+   }
 
    psp = __driUtilCreateNewScreen(dpy, scrn, psc, NULL,
 				  ddx_version, dri_version, drm_version,

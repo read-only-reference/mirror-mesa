@@ -5,13 +5,18 @@ TOP = ../../..
 include $(TOP)/configs/current
 
 
-C_SOURCES = dispatch.c \
-	  dri_util.c \
-	  ../../mesa/glapi/glapi.c \
-	  ../../mesa/glapi/glthread.c \
+DEFINES += -DGLX_DIRECT_RENDERING
+
+C_SOURCES = \
+	  $(TOP)/src/mesa/main/dispatch.c \
+	  $(TOP)/src/mesa/glapi/glapi.c \
+	  $(TOP)/src/mesa/glapi/glthread.c \
+	  $(TOP)/src/mesa/drivers/dri/common/glcontextmodes.c \
+	  $(TOP)/src/mesa/drivers/dri/dri_client/xf86drm.c \
+	  $(TOP)/src/mesa/drivers/dri/dri_client/xf86drmHash.c \
+	  $(TOP)/src/mesa/drivers/dri/dri_client/xf86drmRandom.c \
 	  miniglx.c \
-	  miniglx_events.c \
-	  xf86drm.c 
+	  miniglx_events.c
 
 OBJECTS = $(C_SOURCES:.c=.o)
 
@@ -26,6 +31,8 @@ INCLUDE_DIRS = \
 	-I$(TOP)/src/mesa/transform \
 	-I$(TOP)/src/mesa/swrast \
 	-I$(TOP)/src/mesa/swrast_setup \
+	-I$(TOP)/src/mesa/drivers/dri/common \
+	-I$(TOP)/src/mesa/drivers/dri/dri_client/imports \
 	-I$(DRM_SOURCE_PATH)/shared
 
 
@@ -45,7 +52,7 @@ default: depend $(LIB_DIR)/$(GL_LIB_NAME)
 
 # Make libGL
 $(LIB_DIR)/$(GL_LIB_NAME):  $(OBJECTS) Makefile
-	$(TOP)/bin/mklib -o $(GL_LIB) -major 1 -minor 2 $(MKLIB_OPTIONS) \
+	CC=$(CC) CXX=$(CXX) $(TOP)/bin/mklib -o $(GL_LIB) -major 1 -minor 2 $(MKLIB_OPTIONS) \
 		-install $(LIB_DIR) $(GL_LIB_DEPS) $(OBJECTS)
 	rm -f $(LIB_DIR)/miniglx.conf
 	install example.miniglx.conf $(LIB_DIR)/miniglx.conf
@@ -57,7 +64,8 @@ drmtest: xf86drm.o drmtest.o
 
 depend: $(C_SOURCES) $(ASM_SOURCES)
 	touch depend
-	makedepend -fdepend -Y $(INCLUDES) $(C_SOURCES) $(ASM_SOURCES) >& /dev/null
+	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDES) $(C_SOURCES) $(ASM_SOURCES) \
+		> /dev/null 2>&1
 
 
 # Emacs tags

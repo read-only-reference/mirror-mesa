@@ -214,7 +214,7 @@ struct savage_context_t {
     /*  use this bit to support single/double buffer */
     GLuint IsDouble;
     /*  use this to indicate Fullscreen mode */   
-    GLuint IsFullScreen;
+    GLuint IsFullScreen; /* FIXME - open/close fullscreen is gone, is this needed? */
     GLuint backup_frontOffset;
     GLuint backup_backOffset;
     GLuint backup_frontBitmapDesc;
@@ -236,7 +236,7 @@ struct savage_context_t {
     /*Texture aging and DMA based aging*/
     unsigned int texAge[SAVAGE_NR_TEX_HEAPS]; 
 
-    drmContext hHWContext;
+    drm_context_t hHWContext;
     drmLock *driHwLock;
     GLuint driFd;
 

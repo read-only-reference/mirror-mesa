@@ -38,16 +38,15 @@
 #ifndef DRI_INTERFACE_H
 #define DRI_INTERFACE_H
 
-/* FIXME: With a small amount of work, these two includes can be removed. */
-#include <X11/Xlib.h>
-#include <GL/glx.h>
-
 #ifndef DRI_NEW_INTERFACE_ONLY
-#include <GL/glxint.h>
+# include <X11/X.h>
+# include <GL/glx.h>
+# include "GL/glxint.h"
 #endif
 
 #include <GL/internal/glcore.h>
 #include <xf86drm.h>
+#include <drm.h>
 
 /**
  * \name DRI interface structures
@@ -64,7 +63,7 @@ typedef struct __DRIdriverRec   __DRIdriver;
 typedef struct __DRIframebufferRec __DRIframebuffer;
 typedef struct __DRIversionRec     __DRIversion;
 typedef unsigned long __DRIid;
-struct _XF86DRIClipRect;
+typedef void __DRInativeDisplay;
 /*@}*/
 
 
@@ -72,7 +71,7 @@ struct _XF86DRIClipRect;
  * \name Functions provided by the driver loader.
  */
 /*@{*/
-extern __DRIscreen *__glXFindDRIScreen(Display *dpy, int scrn);
+extern __DRIscreen *__glXFindDRIScreen(__DRInativeDisplay *dpy, int scrn);
 
 
 /**
@@ -89,7 +88,7 @@ typedef int (* PFNGLXGETINTERNALVERSIONPROC) ( void );
  *
  * \sa __glXWindowExists, glXGetProcAddress
  */
-typedef Bool (* PFNGLXWINDOWEXISTSPROC) (Display *dpy, GLXDrawable draw);
+typedef GLboolean (* PFNGLXWINDOWEXISTSPROC) (__DRInativeDisplay *dpy, __DRIid draw);
 
 /**
  * Type of a pointer to \c __glXGetUST, as returned by \c glXGetProcAddress.
@@ -116,7 +115,7 @@ typedef __GLcontextModes * (* PFNGLXCREATECONTEXTMODES) ( unsigned count,
  *
  * \sa glXGetScreenDriver, glXGetProcAddress, glXGetDriverConfig
  */
-typedef const char * (* PFNGLXGETSCREENDRIVERPROC) (Display *dpy, int scrNum);
+typedef const char * (* PFNGLXGETSCREENDRIVERPROC) (__DRInativeDisplay *dpy, int scrNum);
 
 /**
  * Type of a pointer to \c glXGetDriverConfig, as returned by
@@ -143,12 +142,21 @@ typedef void (* PFNGLXSCRENABLEEXTENSIONPROC) ( void *psc, const char * name );
  * 
  * \sa __glXGetDrawableInfo, glXGetProcAddress
  */
-typedef Bool (* PFNGLXGETDRAWABLEINFOPROC) ( Display *dpy, int scrn,
-    Drawable draw, unsigned int * index, unsigned int * stamp,
+typedef GLboolean (* PFNGLXGETDRAWABLEINFOPROC) ( __DRInativeDisplay *dpy, int scrn,
+    __DRIid draw, unsigned int * index, unsigned int * stamp,
     int * x, int * y, int * width, int * height,
-    int * numClipRects, struct _XF86DRIClipRect ** pClipRects,
+    int * numClipRects, drm_clip_rect_t ** pClipRects,
     int * backX, int * backY,
-    int * numBackClipRects, struct _XF86DRIClipRect ** pBackClipRects );
+    int * numBackClipRects, drm_clip_rect_t ** pBackClipRects );
+
+extern GLboolean XF86DRIDestroyContext( __DRInativeDisplay *dpy, int screen,
+    __DRIid context_id );
+
+extern GLboolean XF86DRICreateDrawable( __DRInativeDisplay *dpy, int screen,
+    __DRIid drawable, drm_drawable_t *hHWDrawable );
+
+extern GLboolean XF86DRIDestroyDrawable( __DRInativeDisplay *dpy, int screen, 
+    __DRIid drawable);
 /*@}*/
 
 
@@ -157,19 +165,19 @@ typedef Bool (* PFNGLXGETDRAWABLEINFOPROC) ( Display *dpy, int scrn,
  */
 /*@{*/
 
-extern void * __driCreateNewScreen( Display *dpy, int scrn, __DRIscreen *psc,
-    const __GLcontextModes * modes, const __DRIversion * ddx_version,
-    const __DRIversion * dri_version, const __DRIversion * drm_version,
-    const __DRIframebuffer * frame_buffer, drmAddress pSAREA, int fd, 
-    int internal_api_version, __GLcontextModes ** driver_modes );
+typedef void *(CREATENEWSCREENFUNC)(__DRInativeDisplay *dpy, int scrn,
+    __DRIscreen *psc, const __GLcontextModes * modes,
+    const __DRIversion * ddx_version, const __DRIversion * dri_version,
+    const __DRIversion * drm_version, const __DRIframebuffer * frame_buffer,
+    void * pSAREA, int fd, int internal_api_version,
+    __GLcontextModes ** driver_modes);
+typedef CREATENEWSCREENFUNC* PFNCREATENEWSCREENFUNC;
+extern CREATENEWSCREENFUNC __driCreateNewScreen;
 
 #ifndef DRI_NEW_INTERFACE_ONLY
 
 extern void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
     int numConfigs, __GLXvisualConfig *config);
-
-/** This is optionally implemented in each driver */
-extern void __driRegisterExtensions( void );
 
 #endif /* DRI_NEW_INTERFACE_ONLY */
 
@@ -234,7 +242,7 @@ struct __DRIscreenRec {
     /**
      * Method to destroy the private DRI screen data.
      */
-    void (*destroyScreen)(Display *dpy, int scrn, void *screenPrivate);
+    void (*destroyScreen)(__DRInativeDisplay *dpy, int scrn, void *screenPrivate);
 
     /**
      * Method to create the private DRI context data and initialize the
@@ -259,14 +267,14 @@ struct __DRIscreenRec {
      * Method to create the private DRI drawable data and initialize the
      * drawable dependent methods.
      */
-    void *(*createNewDrawable)(Display *dpy, const __GLcontextModes *modes,
-			       GLXDrawable draw, __DRIdrawable *pdraw,
+    void *(*createNewDrawable)(__DRInativeDisplay *dpy, const __GLcontextModes *modes,
+			       __DRIid draw, __DRIdrawable *pdraw,
 			       int renderType, const int *attrs);
 
     /**
      * Method to return a pointer to the DRI drawable data.
      */
-    __DRIdrawable *(*getDrawable)(Display *dpy, GLXDrawable draw,
+    __DRIdrawable *(*getDrawable)(__DRInativeDisplay *dpy, __DRIid draw,
 				  void *drawablePrivate);
 
     /**
@@ -300,13 +308,13 @@ struct __DRIscreenRec {
      * \since Internal API version 20030815.
      */
     /*@{*/
-    void *(*allocateMemory)(Display *dpy, int scrn, GLsizei size,
+    void *(*allocateMemory)(__DRInativeDisplay *dpy, int scrn, GLsizei size,
 			    GLfloat readfreq, GLfloat writefreq,
 			    GLfloat priority);
    
-    void (*freeMemory)(Display *dpy, int scrn, GLvoid *pointer);
+    void (*freeMemory)(__DRInativeDisplay *dpy, int scrn, GLvoid *pointer);
    
-    GLuint (*memoryOffset)(Display *dpy, int scrn, const GLvoid *pointer);
+    GLuint (*memoryOffset)(__DRInativeDisplay *dpy, int scrn, const GLvoid *pointer);
     /*@}*/
 
     /**
@@ -315,7 +323,7 @@ struct __DRIscreenRec {
      *
      * \since Internal API version 20031201.
      */
-    void * (*createNewContext)(Display *dpy, const __GLcontextModes *modes,
+    void * (*createNewContext)(__DRInativeDisplay *dpy, const __GLcontextModes *modes,
 			       int render_type,
 			       void *sharedPrivate, __DRIcontext *pctx);
 };
@@ -328,7 +336,7 @@ struct __DRIcontextRec {
     /**
      * Method to destroy the private DRI context data.
      */
-    void (*destroyContext)(Display *dpy, int scrn, void *contextPrivate);
+    void (*destroyContext)(__DRInativeDisplay *dpy, int scrn, void *contextPrivate);
 
     /**
      * Method to bind a DRI drawable to a DRI graphics context.
@@ -399,7 +407,7 @@ struct __DRIcontextRec {
      *
      * \since Internal API version 20040415.
      */
-    Bool (*bindContext3)(Display *dpy, int scrn, __DRIid draw,
+    GLboolean (*bindContext3)(__DRInativeDisplay *dpy, int scrn, __DRIid draw,
 			 __DRIid read, __DRIcontext *ctx);
 
     /**
@@ -407,7 +415,7 @@ struct __DRIcontextRec {
      *
      * \since Internal API version 20040415.
      */
-    Bool (*unbindContext3)(Display *dpy, int scrn, __DRIid draw,
+    GLboolean (*unbindContext3)(__DRInativeDisplay *dpy, int scrn, __DRIid draw,
 			   __DRIid read, __DRIcontext *ctx);
 };
 
@@ -421,12 +429,12 @@ struct __DRIdrawableRec {
     /**
      * Method to destroy the private DRI drawable data.
      */
-    void (*destroyDrawable)(Display *dpy, void *drawablePrivate);
+    void (*destroyDrawable)(__DRInativeDisplay *dpy, void *drawablePrivate);
 
     /**
      * Method to swap the front and back buffers.
      */
-    void (*swapBuffers)(Display *dpy, void *drawablePrivate);
+    void (*swapBuffers)(__DRInativeDisplay *dpy, void *drawablePrivate);
 
     /**
      * Opaque pointer to private per drawable direct rendering data.
@@ -440,14 +448,14 @@ struct __DRIdrawableRec {
      *
      * \since Internal API version 20030317.
      */
-    int (*getSBC)(Display *dpy, void *drawablePrivate, int64_t *sbc );
+    int (*getSBC)(__DRInativeDisplay *dpy, void *drawablePrivate, int64_t *sbc );
 
     /**
      * Wait for the SBC to be greater than or equal target_sbc.
      *
      * \since Internal API version 20030317.
      */
-    int (*waitForSBC)( Display * dpy, void *drawablePriv,
+    int (*waitForSBC)( __DRInativeDisplay * dpy, void *drawablePriv,
 		       int64_t target_sbc,
 		       int64_t * msc, int64_t * sbc );
 
@@ -459,7 +467,7 @@ struct __DRIdrawableRec {
      * 
      * \since Internal API version 20030317.
      */
-    int (*waitForMSC)( Display * dpy, void *drawablePriv,
+    int (*waitForMSC)( __DRInativeDisplay * dpy, void *drawablePriv,
 		       int64_t target_msc, int64_t divisor, int64_t remainder,
 		       int64_t * msc, int64_t * sbc );
 
@@ -472,7 +480,7 @@ struct __DRIdrawableRec {
      * 
      * \since Internal API version 20030317.
      */
-    int64_t (*swapBuffersMSC)(Display *dpy, void *drawablePrivate,
+    int64_t (*swapBuffersMSC)(__DRInativeDisplay *dpy, void *drawablePrivate,
 			      int64_t target_msc,
 			      int64_t divisor, int64_t remainder);
 
@@ -481,14 +489,14 @@ struct __DRIdrawableRec {
      * 
      * \since Internal API version 20030317.
      */
-    int (*frameTracking)(Display *dpy, void *drawablePrivate, Bool enable);
+    int (*frameTracking)(__DRInativeDisplay *dpy, void *drawablePrivate, GLboolean enable);
 
     /**
      * Retrieve frame usage information.
      * 
      * \since Internal API version 20030317.
      */
-    int (*queryFrameTracking)(Display *dpy, void *drawablePrivate,
+    int (*queryFrameTracking)(__DRInativeDisplay *dpy, void *drawablePrivate,
 			      int64_t * sbc, int64_t * missedFrames,
 			      float * lastMissedUsage, float * usage );
 

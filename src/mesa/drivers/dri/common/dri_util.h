@@ -54,13 +54,24 @@
 #define CAPI  /* XXX this should be globally defined somewhere */
 
 #include <inttypes.h>
-#include "glxclient.h"           /* for GLXDrawable */
-/* temporary */
-/* typedef Bool ( * PFNGLXGETMSCRATEOMLPROC) (Display *dpy, GLXDrawable drawable, int32_t *numerator, int32_t *denominator); */
-#include "drm.h"             /* for drm_clip_rect_t */
-#include "sarea.h"               /* for XF86DRISAREAPtr */
-#include "GL/internal/glcore.h"  /* for __GLcontextModes */
+#ifdef DRI_NEW_INTERFACE_ONLY
+# include <GL/gl.h>
+#else
+# include "glxclient.h"
+#endif /* DRI_NEW_INTERFACE_ONLY */
+#include "drm.h"
+#include "drm_sarea.h"
+#include "GL/internal/glcore.h"
+#include "GL/internal/dri_interface.h"
 
+#define GLX_BAD_CONTEXT                    5
+
+/* This is a temporary relic.  Once all drivers are converted to support
+ * the new interface, it can go away.
+ */
+#ifdef DRI_NEW_INTERFACE_ONLY
+#define USE_NEW_INTERFACE
+#endif
 
 typedef struct __DRIdisplayPrivateRec  __DRIdisplayPrivate;
 typedef struct __DRIscreenPrivateRec   __DRIscreenPrivate;
@@ -165,36 +176,6 @@ struct __DriverAPIRec {
     GLboolean (*UnbindContext)(__DRIcontextPrivate *driContextPriv);
   
     /**
-     * Full screen mode opening callback.
-     * 
-     * \deprecated
-     * Full screen functionality is no longer used by DRI.  Drivers should
-     * simply install a function returning \c GL_TRUE for backwards
-     * compatability.
-     *
-     * \todo
-     * Nothing calls this function anymore.  Since this data structure is only
-     * accessed with in the driver (i.e., libGL never sees it), we need to
-     * remove the other cases that set this field and remove the field.
-     */
-    GLboolean (*OpenFullScreen)(__DRIcontextPrivate *driContextPriv);
-
-    /**
-     * Full screen mode closing callback.
-     *
-     * \deprecated
-     * Full screen functionality is no longer used by DRI.  Drivers should
-     * simply install a function returning \c GL_TRUE for backwards
-     * compatability.
-     *
-     * \todo
-     * Nothing calls this function anymore.  Since this data structure is only
-     * accessed with in the driver (i.e., libGL never sees it), we need to
-     * remove the other cases that set this field and remove the field.
-     */
-    GLboolean (*CloseFullScreen)(__DRIcontextPrivate *driContextPriv);
-
-    /**
      * Retrieves statistics about buffer swap operations.  Required if
      * GLX_OML_sync_control or GLX_MESA_swap_frame_usage is supported.
      */
@@ -254,14 +235,6 @@ struct __DRIswapInfoRec {
 };
 
 
-typedef Bool (GetDrawableInfo)( Display *dpy, int scrn, Drawable draw,
-    unsigned int * index, unsigned int * stamp,
-    int * x, int * y, int * width, int * height,
-    int * numClipRects, drm_clip_rect_t * pClipRects,
-    int * backX, int * backY,
-    int * numBackClipRects, drm_clip_rect_t * pBackClipRects );
-
-
 /**
  * Per-drawable private DRI driver information.
  */
@@ -269,7 +242,7 @@ struct __DRIdrawablePrivateRec {
     /**
      * Kernel drawable handle
      */
-    drmDrawable hHWDrawable;
+    drm_drawable_t hHWDrawable;
 
     /**
      * Driver's private drawable information.  
@@ -281,7 +254,7 @@ struct __DRIdrawablePrivateRec {
     /**
      * X's drawable ID associated with this private drawable.
      */
-    GLXDrawable draw;
+    __DRIid draw;
     __DRIdrawable *pdraw;
 
     /**
@@ -357,7 +330,7 @@ struct __DRIdrawablePrivateRec {
      * __driUtilUpdateDrawableInfo() which calls XF86DRIGetDrawableInfo().
      */
     /*@{*/
-    Display *display;
+    __DRInativeDisplay *display;
     int screen;
     /*@}*/
 
@@ -370,7 +343,7 @@ struct __DRIdrawablePrivateRec {
      * Get information about the location, size, and clip rects of the
      * drawable within the display.
      */
-    GetDrawableInfo * getInfo;
+    PFNGLXGETDRAWABLEINFOPROC getInfo;
 };
 
 /**
@@ -380,12 +353,12 @@ struct __DRIcontextPrivateRec {
     /**
      * Kernel context handle used to access the device lock.
      */
-    XID contextID;
+    __DRIid contextID;
 
     /**
      * Kernel context handle used to access the device lock.
      */
-    drmContext hHWContext;
+    drm_context_t hHWContext;
 
     /**
      * Device driver's private context data.  This structure is opaque.
@@ -395,7 +368,7 @@ struct __DRIcontextPrivateRec {
     /**
      * This context's display pointer.
      */
-    Display *display;
+    __DRInativeDisplay *display;
 
     /**
      * Pointer to drawable currently bound to this context.
@@ -415,7 +388,7 @@ struct __DRIscreenPrivateRec {
     /**
      * Display for this screen
      */
-    Display *display;
+    __DRInativeDisplay *display;
 
     /**
      * Current screen's number
@@ -485,7 +458,7 @@ struct __DRIscreenPrivateRec {
      *   - the device lock
      *   - the device-independent per-drawable and per-context(?) information
      */
-    XF86DRISAREAPtr pSAREA;
+    drm_sarea_t *pSAREA;
 
     /**
      * \name Direct frame buffer access information 
@@ -563,17 +536,19 @@ extern void
 __driUtilUpdateDrawableInfo(__DRIdrawablePrivate *pdp);
 
 
-extern __DRIscreenPrivate * __driUtilCreateNewScreen( Display *dpy,
+extern __DRIscreenPrivate * __driUtilCreateNewScreen( __DRInativeDisplay *dpy,
     int scrn, __DRIscreen *psc, __GLcontextModes * modes,
     const __DRIversion * ddx_version, const __DRIversion * dri_version,
     const __DRIversion * drm_version, const __DRIframebuffer * frame_buffer,
-    drmAddress pSAREA, int fd, int internal_api_version,
+    drm_sarea_t *pSAREA, int fd, int internal_api_version,
     const struct __DriverAPIRec *driverAPI );
 
+#ifndef DRI_NEW_INTERFACE_ONLY
 extern __DRIscreenPrivate *
 __driUtilCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
                       int numConfigs, __GLXvisualConfig *config,
                       const struct __DriverAPIRec *driverAPI);
+#endif /* DRI_NEW_INTERFACE_ONLY */
 
 /* Test the version of the internal GLX API.  Returns a value like strcmp. */
 extern int
@@ -582,6 +557,9 @@ driCompareGLXAPIVersion( GLuint required_version );
 extern float
 driCalculateSwapUsage( __DRIdrawablePrivate *dPriv,
 		       int64_t last_swap_ust, int64_t current_ust );
+
+extern void 
+(*glXGetProcAddress(const GLubyte *procname))( void );
 
 #endif /* GLX_DIRECT_RENDERING */
 

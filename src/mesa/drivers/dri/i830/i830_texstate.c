@@ -111,6 +111,12 @@ static void i830SetTexImages( i830ContextPtr imesa,
       textureFormat = (MAPSURF_422 | MT_422_YCRCB_SWAPY | /* ??? */
 		       TM0S1_COLORSPACE_CONVERSION);
       break;
+      
+   case MESA_FORMAT_RGB_FXT1:
+   case MESA_FORMAT_RGBA_FXT1:
+     t->texelBytes = 2;
+     textureFormat = (MAPSURF_COMPRESSED | MT_COMPRESS_FXT1);
+     break;
 
    default:
       fprintf(stderr, "%s: bad image format\n", __FUNCTION__);
@@ -153,8 +159,16 @@ static void i830SetTexImages( i830ContextPtr imesa,
 	 break;
       
       t->image[0][i].offset = total_height * pitch;
+      if (t->image[0][i].image->IsCompressed)
+	{
+	  if (t->image[0][i].image->Height > 4)
+	    total_height += t->image[0][i].image->Height/4;
+	  else
+	    total_height += 1;
+	}
+      else
+	total_height += t->image[0][i].image->Height;
       t->image[0][i].internalFormat = baseImage->Format;
-      total_height += t->image[0][i].image->Height;
    }
 
    t->Pitch = pitch;

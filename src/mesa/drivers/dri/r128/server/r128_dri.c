@@ -747,7 +747,7 @@ static GLboolean R128DRIScreenInit(DRIDriverContext *ctx)
     }
 
     info->registerSize = ctx->MMIOSize;
-    ctx->shared.SAREASize = DRM_PAGE_SIZE;
+    ctx->shared.SAREASize = SAREA_MAX;
 
     /* Note that drmOpen will try to load the kernel module, if needed. */
     ctx->drmFD = drmOpen("r128", NULL );
@@ -810,7 +810,7 @@ static GLboolean R128DRIScreenInit(DRIDriverContext *ctx)
    /* Need to AddMap the framebuffer and mmio regions here:
     */
    if (drmAddMap( ctx->drmFD,
-		  (drmHandle)ctx->FBStart,
+		  (drm_handle_t)ctx->FBStart,
 		  ctx->FBSize,
 		  DRM_FRAME_BUFFER,
 		  0,

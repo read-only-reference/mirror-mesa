@@ -48,14 +48,20 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r200_tcl.h"
 
 
+#define R200_TXFORMAT_A8        R200_TXFORMAT_I8
+#define R200_TXFORMAT_L8        R200_TXFORMAT_I8
 #define R200_TXFORMAT_AL88      R200_TXFORMAT_AI88
 #define R200_TXFORMAT_YCBCR     R200_TXFORMAT_YVYU422
 #define R200_TXFORMAT_YCBCR_REV R200_TXFORMAT_VYUY422
 
 #define _COLOR(f) \
     [ MESA_FORMAT_ ## f ] = { R200_TXFORMAT_ ## f, 0 }
+#define _COLOR_REV(f) \
+    [ MESA_FORMAT_ ## f ## _REV ] = { R200_TXFORMAT_ ## f, 0 }
 #define _ALPHA(f) \
     [ MESA_FORMAT_ ## f ] = { R200_TXFORMAT_ ## f | R200_TXFORMAT_ALPHA_IN_MAP, 0 }
+#define _ALPHA_REV(f) \
+    [ MESA_FORMAT_ ## f ## _REV ] = { R200_TXFORMAT_ ## f | R200_TXFORMAT_ALPHA_IN_MAP, 0 }
 #define _YUV(f) \
     [ MESA_FORMAT_ ## f ] = { R200_TXFORMAT_ ## f, R200_YUV_TO_RGB }
 #define _INVALID(f) \
@@ -69,15 +75,21 @@ static const struct {
 tx_table[] =
 {
    _ALPHA(RGBA8888),
+   _ALPHA_REV(RGBA8888),
    _ALPHA(ARGB8888),
+   _ALPHA_REV(ARGB8888),
    _INVALID(RGB888),
    _COLOR(RGB565),
+   _COLOR_REV(RGB565),
    _ALPHA(ARGB4444),
+   _ALPHA_REV(ARGB4444),
    _ALPHA(ARGB1555),
+   _ALPHA_REV(ARGB1555),
    _ALPHA(AL88),
-   _INVALID(A8),
-   _INVALID(L8),
-   _COLOR(I8),
+   _ALPHA_REV(AL88),
+   _ALPHA(A8),
+   _COLOR(L8),
+   _ALPHA(I8),
    _INVALID(CI8),
    _YUV(YCBCR),
    _YUV(YCBCR_REV),
@@ -290,22 +302,34 @@ static GLuint r200_register_color[][R200_MAX_TEXTURE_UNITS] =
    {
       R200_TXC_ARG_A_R0_COLOR,
       R200_TXC_ARG_A_R1_COLOR,
-      R200_TXC_ARG_A_R2_COLOR
+      R200_TXC_ARG_A_R2_COLOR,
+      R200_TXC_ARG_A_R3_COLOR,
+      R200_TXC_ARG_A_R4_COLOR,
+      R200_TXC_ARG_A_R5_COLOR
    },
    {
       R200_TXC_ARG_A_R0_COLOR | R200_TXC_COMP_ARG_A,
       R200_TXC_ARG_A_R1_COLOR | R200_TXC_COMP_ARG_A,
-      R200_TXC_ARG_A_R2_COLOR | R200_TXC_COMP_ARG_A
+      R200_TXC_ARG_A_R2_COLOR | R200_TXC_COMP_ARG_A,
+      R200_TXC_ARG_A_R3_COLOR | R200_TXC_COMP_ARG_A,
+      R200_TXC_ARG_A_R4_COLOR | R200_TXC_COMP_ARG_A,
+      R200_TXC_ARG_A_R5_COLOR | R200_TXC_COMP_ARG_A
    },
    {
       R200_TXC_ARG_A_R0_ALPHA,
       R200_TXC_ARG_A_R1_ALPHA,
-      R200_TXC_ARG_A_R2_ALPHA
+      R200_TXC_ARG_A_R2_ALPHA,
+      R200_TXC_ARG_A_R3_ALPHA,
+      R200_TXC_ARG_A_R4_ALPHA,
+      R200_TXC_ARG_A_R5_ALPHA
    },
    {
       R200_TXC_ARG_A_R0_ALPHA | R200_TXC_COMP_ARG_A,
       R200_TXC_ARG_A_R1_ALPHA | R200_TXC_COMP_ARG_A,
-      R200_TXC_ARG_A_R2_ALPHA | R200_TXC_COMP_ARG_A
+      R200_TXC_ARG_A_R2_ALPHA | R200_TXC_COMP_ARG_A,
+      R200_TXC_ARG_A_R3_ALPHA | R200_TXC_COMP_ARG_A,
+      R200_TXC_ARG_A_R4_ALPHA | R200_TXC_COMP_ARG_A,
+      R200_TXC_ARG_A_R5_ALPHA | R200_TXC_COMP_ARG_A
    },
 };
 
@@ -344,12 +368,18 @@ static GLuint r200_register_alpha[][R200_MAX_TEXTURE_UNITS] =
    {
       R200_TXA_ARG_A_R0_ALPHA,
       R200_TXA_ARG_A_R1_ALPHA,
-      R200_TXA_ARG_A_R2_ALPHA
+      R200_TXA_ARG_A_R2_ALPHA,
+      R200_TXA_ARG_A_R3_ALPHA,
+      R200_TXA_ARG_A_R4_ALPHA,
+      R200_TXA_ARG_A_R5_ALPHA
    },
    {
       R200_TXA_ARG_A_R0_ALPHA | R200_TXA_COMP_ARG_A,
       R200_TXA_ARG_A_R1_ALPHA | R200_TXA_COMP_ARG_A,
-      R200_TXA_ARG_A_R2_ALPHA | R200_TXA_COMP_ARG_A
+      R200_TXA_ARG_A_R2_ALPHA | R200_TXA_COMP_ARG_A,
+      R200_TXA_ARG_A_R3_ALPHA | R200_TXA_COMP_ARG_A,
+      R200_TXA_ARG_A_R4_ALPHA | R200_TXA_COMP_ARG_A,
+      R200_TXA_ARG_A_R5_ALPHA | R200_TXA_COMP_ARG_A
    },
 };
 
@@ -409,8 +439,10 @@ static GLboolean r200UpdateTextureEnv( GLcontext *ctx, int unit )
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
    const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
    GLuint color_combine, alpha_combine;
-   GLuint color_scale = rmesa->hw.pix[unit].cmd[PIX_PP_TXCBLEND2];
-   GLuint alpha_scale = rmesa->hw.pix[unit].cmd[PIX_PP_TXABLEND2];
+   GLuint color_scale = rmesa->hw.pix[unit].cmd[PIX_PP_TXCBLEND2] &
+      ~(R200_TXC_SCALE_MASK);
+   GLuint alpha_scale = rmesa->hw.pix[unit].cmd[PIX_PP_TXABLEND2] &
+      ~(R200_TXA_DOT_ALPHA | R200_TXA_SCALE_MASK);
 
    /* texUnit->_Current can be NULL if and only if the texture unit is
     * not actually enabled.
@@ -428,11 +460,12 @@ static GLboolean r200UpdateTextureEnv( GLcontext *ctx, int unit )
     * reduces the amount of special-casing we have to do, alpha-only
     * textures being a notable exception.
     */
+   /* Don't cache these results.
+    */
+   rmesa->state.texture.unit[unit].format = 0;
+   rmesa->state.texture.unit[unit].envMode = 0;
+
    if ( !texUnit->_ReallyEnabled ) {
-      /* Don't cache these results.
-       */
-      rmesa->state.texture.unit[unit].format = 0;
-      rmesa->state.texture.unit[unit].envMode = 0;
       if ( unit == 0 ) {
 	 color_combine = R200_TXC_ARG_A_ZERO | R200_TXC_ARG_B_ZERO
 	     | R200_TXC_ARG_C_DIFFUSE_COLOR | R200_TXC_OP_MADD;
@@ -454,17 +487,12 @@ static GLboolean r200UpdateTextureEnv( GLcontext *ctx, int unit )
       GLuint RGBshift = texUnit->_CurrentCombine->ScaleShiftRGB;
       GLuint Ashift = texUnit->_CurrentCombine->ScaleShiftA;
 
-      /* Don't cache these results.
-       */
-      rmesa->state.texture.unit[unit].format = 0;
-      rmesa->state.texture.unit[unit].envMode = 0;
-
 
       /* Step 1:
        * Extract the color and alpha combine function arguments.
        */
       for ( i = 0 ; i < numColorArgs ; i++ ) {
-	 const GLuint op = texUnit->_CurrentCombine->OperandRGB[i] - GL_SRC_COLOR;
+	 const GLint op = texUnit->_CurrentCombine->OperandRGB[i] - GL_SRC_COLOR;
 	 assert(op >= 0);
 	 assert(op <= 3);
 	 switch ( texUnit->_CurrentCombine->SourceRGB[i] ) {
@@ -495,7 +523,7 @@ static GLboolean r200UpdateTextureEnv( GLcontext *ctx, int unit )
       }
 
       for ( i = 0 ; i < numAlphaArgs ; i++ ) {
-	 const GLuint op = texUnit->_CurrentCombine->OperandA[i] - GL_SRC_ALPHA;
+	 const GLint op = texUnit->_CurrentCombine->OperandA[i] - GL_SRC_ALPHA;
 	 assert(op >= 0);
 	 assert(op <= 1);
 	 switch ( texUnit->_CurrentCombine->SourceA[i] ) {
@@ -578,7 +606,6 @@ static GLboolean r200UpdateTextureEnv( GLcontext *ctx, int unit )
 	  * 1.3) does.
 	  */
 	 RGBshift = 0;
-	 Ashift = 0;
 	 /* FALLTHROUGH */
 
       case GL_DOT3_RGB:
@@ -590,9 +617,6 @@ static GLboolean r200UpdateTextureEnv( GLcontext *ctx, int unit )
 	  * the -0.5 in the DOT3 spec do.  The post-scale is then set
 	  * normally.
 	  */
-
-	 RGBshift++;
-	 Ashift = RGBshift;
 
 	 color_combine = (R200_TXC_ARG_C_ZERO |
 			  R200_TXC_OP_DOT3 |
@@ -695,16 +719,15 @@ static GLboolean r200UpdateTextureEnv( GLcontext *ctx, int unit )
 	 return GL_FALSE;
       }
 
-      if ( (texUnit->_CurrentCombine->ModeRGB == GL_DOT3_RGB_EXT)
-	   || (texUnit->_CurrentCombine->ModeRGB == GL_DOT3_RGB) ) {
+      if ( (texUnit->_CurrentCombine->ModeRGB == GL_DOT3_RGBA_EXT)
+	   || (texUnit->_CurrentCombine->ModeRGB == GL_DOT3_RGBA) ) {
 	 alpha_scale |= R200_TXA_DOT_ALPHA;
+	 Ashift = RGBshift;
       }
 
       /* Step 3:
        * Apply the scale factor.
        */
-      color_scale &= ~R200_TXC_SCALE_MASK;
-      alpha_scale &= ~R200_TXA_SCALE_MASK;
       color_scale |= (RGBshift << R200_TXC_SCALE_SHIFT);
       alpha_scale |= (Ashift   << R200_TXA_SCALE_SHIFT);
 
@@ -1249,75 +1272,102 @@ void r200UpdateTextureState( GLcontext *ctx )
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
    GLboolean ok;
    GLuint dbg;
+   int i;
 
    ok = (r200UpdateTextureUnit( ctx, 0 ) &&
-	 r200UpdateTextureUnit( ctx, 1 ));
+	 r200UpdateTextureUnit( ctx, 1 ) &&
+	 r200UpdateTextureUnit( ctx, 2 ) &&
+	 r200UpdateTextureUnit( ctx, 3 ) &&
+	 r200UpdateTextureUnit( ctx, 4 ) &&
+	 r200UpdateTextureUnit( ctx, 5 ));
 
    FALLBACK( rmesa, R200_FALLBACK_TEXTURE, !ok );
 
    if (rmesa->TclFallback)
       r200ChooseVertexState( ctx );
 
-   /*
-    * T0 hang workaround -------------
-    */
-#if 1
-   if ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_ENABLE_MASK) == R200_TEX_0_ENABLE &&
-       (rmesa->hw.tex[0].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK) > R200_MIN_FILTER_LINEAR) {
 
-      R200_STATECHANGE(rmesa, ctx);
-      R200_STATECHANGE(rmesa, tex[1]);
-      rmesa->hw.ctx.cmd[CTX_PP_CNTL] |= R200_TEX_1_ENABLE;
-      rmesa->hw.tex[1].cmd[TEX_PP_TXFORMAT] &= ~TEXOBJ_TXFORMAT_MASK;
-      rmesa->hw.tex[1].cmd[TEX_PP_TXFORMAT] |= 0x08000000;
-   }
-   else {
-      if ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_1_ENABLE) &&
-	  (rmesa->hw.tex[1].cmd[TEX_PP_TXFORMAT] & 0x08000000)) {
-	 R200_STATECHANGE(rmesa, tex[1]);
-	 rmesa->hw.tex[1].cmd[TEX_PP_TXFORMAT] &= ~0x08000000;
+   if (rmesa->r200Screen->chipset & R200_CHIPSET_REAL_R200) {
+
+      /*
+       * T0 hang workaround -------------
+       * not needed for r200 derivatives?
+       */
+      if ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_ENABLE_MASK) == R200_TEX_0_ENABLE &&
+         (rmesa->hw.tex[0].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK) > R200_MIN_FILTER_LINEAR) {
+
+         R200_STATECHANGE(rmesa, ctx);
+         R200_STATECHANGE(rmesa, tex[1]);
+         rmesa->hw.ctx.cmd[CTX_PP_CNTL] |= R200_TEX_1_ENABLE;
+         rmesa->hw.tex[1].cmd[TEX_PP_TXFORMAT] &= ~TEXOBJ_TXFORMAT_MASK;
+         rmesa->hw.tex[1].cmd[TEX_PP_TXFORMAT] |= 0x08000000;
+      }
+      else {
+         if ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_1_ENABLE) &&
+            (rmesa->hw.tex[1].cmd[TEX_PP_TXFORMAT] & 0x08000000)) {
+               R200_STATECHANGE(rmesa, tex[1]);
+               rmesa->hw.tex[1].cmd[TEX_PP_TXFORMAT] &= ~0x08000000;
+         }
+      }
+
+      /* maybe needs to be done pairwise due to 2 parallel (physical) tex units ?
+         looks like that's not the case, if 8500/9100 owners don't complain remove this...
+      for ( i = 0; i < ctx->Const.MaxTextureUnits; i += 2) {
+         if (((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & ((R200_TEX_0_ENABLE |
+            R200_TEX_1_ENABLE ) << i)) == (R200_TEX_0_ENABLE << i)) &&
+            ((rmesa->hw.tex[i].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK) >
+            R200_MIN_FILTER_LINEAR)) {
+            R200_STATECHANGE(rmesa, ctx);
+            R200_STATECHANGE(rmesa, tex[i+1]);
+            rmesa->hw.ctx.cmd[CTX_PP_CNTL] |= (R200_TEX_1_ENABLE << i);
+            rmesa->hw.tex[i+1].cmd[TEX_PP_TXFORMAT] &= ~TEXOBJ_TXFORMAT_MASK;
+            rmesa->hw.tex[i+1].cmd[TEX_PP_TXFORMAT] |= 0x08000000;
+         }
+         else {
+            if ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & (R200_TEX_1_ENABLE << i)) &&
+               (rmesa->hw.tex[i+1].cmd[TEX_PP_TXFORMAT] & 0x08000000)) {
+               R200_STATECHANGE(rmesa, tex[i+1]);
+               rmesa->hw.tex[i+1].cmd[TEX_PP_TXFORMAT] &= ~0x08000000;
+            }
+         }
+      } */
+
+      /*
+       * Texture cache LRU hang workaround -------------
+       * not needed for r200 derivatives?
+       */
+      dbg = 0x0;
+
+      if (((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & (R200_TEX_0_ENABLE )) &&
+         ((((rmesa->hw.tex[0].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) &
+         0x04) == 0)) ||
+         ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_2_ENABLE) &&
+         ((((rmesa->hw.tex[2].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) &
+         0x04) == 0)) ||
+         ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_4_ENABLE) &&
+         ((((rmesa->hw.tex[4].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) &
+         0x04) == 0)))
+      {
+         dbg |= 0x02;
+      }
+
+      if (((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & (R200_TEX_1_ENABLE )) &&
+         ((((rmesa->hw.tex[1].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) &
+         0x04) == 0)) ||
+         ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_3_ENABLE) &&
+         ((((rmesa->hw.tex[3].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) &
+         0x04) == 0)) ||
+         ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_5_ENABLE) &&
+         ((((rmesa->hw.tex[5].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) &
+         0x04) == 0)))
+      {
+         dbg |= 0x04;
+      }
+
+      if (dbg != rmesa->hw.tam.cmd[TAM_DEBUG3]) {
+         R200_STATECHANGE( rmesa, tam );
+         rmesa->hw.tam.cmd[TAM_DEBUG3] = dbg;
+         if (0) printf("TEXCACHE LRU HANG WORKAROUND %x\n", dbg);
       }
    }
-#endif
-
-#if 1
-   /*
-    * Texture cache LRU hang workaround -------------
-    */
-   dbg = 0x0;
-   if (((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_0_ENABLE) &&
-	((((rmesa->hw.tex[0].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) & 
-	  0x04) == 0)))
-   {
-      dbg |= 0x02;
-   }
-
-   if (((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_1_ENABLE) &&
-	((((rmesa->hw.tex[1].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) & 
-	  0x04) == 0)))
-   {
-      dbg |= 0x04;
-   }
-
-   if (dbg != rmesa->hw.tam.cmd[TAM_DEBUG3]) {
-      R200_STATECHANGE( rmesa, tam );
-      rmesa->hw.tam.cmd[TAM_DEBUG3] = dbg;
-      if (0) printf("TEXCACHE LRU HANG WORKAROUND %x\n", dbg);
-   }
-#endif
 }
-
-/*
-  also tests for higher texunits:
-
-       ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_2_ENABLE) &&
-	((((rmesa->hw.tex[2].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) & 0x04) == 0)) ||
-       ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_4_ENABLE) &&
-	((((rmesa->hw.tex[4].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) & 0x04) == 0)))
-
-       ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_3_ENABLE) &&
-	((((rmesa->hw.tex[3].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) & 0x04) == 0)) ||
-       ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_5_ENABLE) &&
-	((((rmesa->hw.tex[5].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) & 0x04) == 0)))
-
-*/

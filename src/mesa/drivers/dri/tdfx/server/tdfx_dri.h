@@ -4,9 +4,10 @@
 #define _TDFX_DRI_
 
 #include "xf86drm.h"
+#include "drm.h"
 
 typedef struct {
-  drmHandle regs;
+  drm_handle_t regs;
   drmSize regsSize;
   drmAddress regsMap;
   int deviceID;

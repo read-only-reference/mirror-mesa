@@ -65,6 +65,7 @@
 #include "dlist.h"
 #include "macros.h"
 #include "matrix.h"
+#include "occlude.h"
 #include "pixel.h"
 #include "points.h"
 #include "polygon.h"
@@ -309,7 +310,9 @@ typedef enum {
         /* GL_ARB_vertex/fragment_program */
         OPCODE_PROGRAM_STRING_ARB,
         OPCODE_PROGRAM_ENV_PARAMETER_ARB,
-
+        /* GL_ARB_occlusion_query */
+        OPCODE_BEGIN_QUERY_ARB,
+        OPCODE_END_QUERY_ARB,
 
 	/* Vertex attributes -- fallback for when optimized display
 	 * list build isn't active.
@@ -773,6 +776,10 @@ _mesa_init_lists( void )
 #if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
       InstSize[OPCODE_PROGRAM_STRING_ARB] = 5;
       InstSize[OPCODE_PROGRAM_ENV_PARAMETER_ARB] = 7;
+#endif
+#if FEATURE_ARB_occlusion_query
+      InstSize[OPCODE_BEGIN_QUERY_ARB] = 3;
+      InstSize[OPCODE_END_QUERY_ARB] = 2;
 #endif
       InstSize[OPCODE_ATTR_1F] = 3;
       InstSize[OPCODE_ATTR_2F] = 4;
@@ -4638,6 +4645,42 @@ save_ProgramEnvParameter4dvARB(GLenum target, GLuint index,
 #endif /* FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program */
 
 
+#ifdef FEATURE_ARB_occlusion_query
+
+static void GLAPIENTRY
+save_BeginQueryARB(GLenum target, GLuint id)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_BEGIN_QUERY_ARB, 2 );
+   if (n) {
+      n[1].e = target;
+      n[2].ui = id;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->BeginQueryARB)( target, id );
+   }
+}
+
+
+static void GLAPIENTRY
+save_EndQueryARB(GLenum target)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_END_QUERY_ARB, 1 );
+   if (n) {
+      n[1].e = target;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->EndQueryARB)( target );
+   }
+}
+
+#endif /* FEATURE_ARB_occlusion_query */
+
 
 
 static void save_Attr1f( GLenum attr, GLfloat x )
@@ -5991,21 +6034,54 @@ execute_list( GLcontext *ctx, GLuint list )
                                                    n[4].f, n[5].f, n[6].f);
             break;
 #endif
-
+#if FEATURE_ARB_occlusion_query
+         case OPCODE_BEGIN_QUERY_ARB:
+            ctx->Exec->BeginQueryARB(n[1].e, n[2].ui);
+            break;
+         case OPCODE_END_QUERY_ARB:
+            ctx->Exec->EndQueryARB(n[1].e);
+            break;
+#endif
 	 case OPCODE_ATTR_1F:
 	    (*ctx->Exec->VertexAttrib1fNV)(n[1].e, n[2].f);
 	    break;
 	 case OPCODE_ATTR_2F:
-	    (*ctx->Exec->VertexAttrib2fvNV)(n[1].e, &n[2].f);
+	    /* Really shouldn't have to do this - the Node structure
+	     * is convenient, but it would be better to store the data
+	     * packed appropriately so that it can be sent directly
+	     * on.  With x86_64 becoming common, this will start to
+	     * matter more.
+	     */
+	    if (sizeof(Node)==sizeof(GLfloat)) 
+	       (*ctx->Exec->VertexAttrib2fvNV)(n[1].e, &n[2].f);
+	    else
+	       (*ctx->Exec->VertexAttrib2fNV)(n[1].e, n[2].f, n[3].f);
 	    break;
 	 case OPCODE_ATTR_3F:
-	    (*ctx->Exec->VertexAttrib3fvNV)(n[1].e, &n[2].f);
+	    if (sizeof(Node)==sizeof(GLfloat)) 
+	       (*ctx->Exec->VertexAttrib3fvNV)(n[1].e, &n[2].f);
+	    else
+	       (*ctx->Exec->VertexAttrib3fNV)(n[1].e, n[2].f, n[3].f,
+					      n[4].f);
 	    break;
 	 case OPCODE_ATTR_4F:
-	    (*ctx->Exec->VertexAttrib4fvNV)(n[1].e, &n[2].f);
+	    if (sizeof(Node)==sizeof(GLfloat)) 
+	       (*ctx->Exec->VertexAttrib4fvNV)(n[1].e, &n[2].f);
+	    else
+	       (*ctx->Exec->VertexAttrib4fNV)(n[1].e, n[2].f, n[3].f,
+					      n[4].f, n[5].f);
 	    break;
 	 case OPCODE_MATERIAL:
-	    (*ctx->Exec->Materialfv)(n[1].e, n[2].e, &n[3].f);
+	    if (sizeof(Node)==sizeof(GLfloat)) 
+	       (*ctx->Exec->Materialfv)(n[1].e, n[2].e, &n[3].f);
+	    else {
+	       GLfloat f[4];
+	       f[0] = n[3].f;
+	       f[1] = n[4].f;
+	       f[2] = n[5].f;
+	       f[3] = n[6].f;
+	       (*ctx->Exec->Materialfv)(n[1].e, n[2].e, f);
+	    }
 	    break;
 	 case OPCODE_INDEX:
 	    (*ctx->Exec->Indexi)(n[1].i);
@@ -6026,7 +6102,7 @@ execute_list( GLcontext *ctx, GLuint list )
 	    (*ctx->Exec->EvalCoord1f)(n[1].f);
 	    break;
 	 case OPCODE_EVAL_C2:
-	    (*ctx->Exec->EvalCoord2fv)(&n[1].f);
+	    (*ctx->Exec->EvalCoord2f)(n[1].f, n[2].f);
 	    break;
 	 case OPCODE_EVAL_P1:
 	    (*ctx->Exec->EvalPoint1)(n[1].i);
@@ -7546,6 +7622,17 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->IsBufferARB = _mesa_IsBufferARB;
    table->MapBufferARB = _mesa_MapBufferARB;
    table->UnmapBufferARB = _mesa_UnmapBufferARB;
+#endif
+
+#if FEATURE_ARB_occlusion_query
+   table->BeginQueryARB = save_BeginQueryARB;
+   table->EndQueryARB = save_EndQueryARB;
+   table->GenQueriesARB = _mesa_GenQueriesARB;
+   table->DeleteQueriesARB = _mesa_DeleteQueriesARB;
+   table->IsQueryARB = _mesa_IsQueryARB;
+   table->GetQueryivARB = _mesa_GetQueryivARB;
+   table->GetQueryObjectivARB = _mesa_GetQueryObjectivARB;
+   table->GetQueryObjectuivARB = _mesa_GetQueryObjectuivARB;
 #endif
 
    /* 299. GL_EXT_blend_equation_separate */

@@ -6,6 +6,7 @@
 #define _SIS_DRI_
 
 #include "xf86drm.h"
+#include "drm.h"
 
 #define SIS_MAX_DRAWABLES 256
 #define SISIOMAPSIZE (64*1024)
@@ -35,7 +36,7 @@ typedef struct {
 #define SIS_DEPTH 2
 
 typedef struct {
-  drmHandle handle;
+  drm_handle_t handle;
   drmSize size;
   drmAddress map;
 } sisRegion, *sisRegionPtr;

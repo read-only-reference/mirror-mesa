@@ -740,54 +740,50 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
       }
       return;
    case STATE_DEPTH_RANGE:
-      value[0] = ctx->Viewport.Near;                     /* near       */		
-      value[1] = ctx->Viewport.Far;                      /* far        */		
-      value[2] = ctx->Viewport.Far - ctx->Viewport.Near; /* far - near */		
-      value[3] = 0;		
+      value[0] = ctx->Viewport.Near;                     /* near       */
+      value[1] = ctx->Viewport.Far;                      /* far        */
+      value[2] = ctx->Viewport.Far - ctx->Viewport.Near; /* far - near */
+      value[3] = 0;
       return;
    case STATE_FRAGMENT_PROGRAM:
       {
          /* state[1] = {STATE_ENV, STATE_LOCAL} */
          /* state[2] = parameter index          */
-         int idx = state[2];				  
-
+         const int idx = (int) state[2];
          switch (state[1]) {
             case STATE_ENV:
-               COPY_4V(value, ctx->FragmentProgram.Parameters[idx]);						  
+               COPY_4V(value, ctx->FragmentProgram.Parameters[idx]);
                break;
-
             case STATE_LOCAL:
                COPY_4V(value, ctx->FragmentProgram.Current->Base.LocalParams[idx]);
-               break;				
+               break;
             default:
                _mesa_problem(ctx, "Bad state switch in _mesa_fetch_state()");
                return;
-         }				  
-      }			
+         }
+      }
       return;
 		
    case STATE_VERTEX_PROGRAM:
-      {		
+      {
          /* state[1] = {STATE_ENV, STATE_LOCAL} */
          /* state[2] = parameter index          */
-         int idx = state[2];				  
-			
+         const int idx = (int) state[2];
          switch (state[1]) {
             case STATE_ENV:
-               COPY_4V(value, ctx->VertexProgram.Parameters[idx]);						  
+               COPY_4V(value, ctx->VertexProgram.Parameters[idx]);
                break;
-
             case STATE_LOCAL:
                COPY_4V(value, ctx->VertexProgram.Current->Base.LocalParams[idx]);
-               break;				
+               break;
             default:
                _mesa_problem(ctx, "Bad state switch in _mesa_fetch_state()");
                return;
-         }				  
-      }			
+         }
+      }
       return;
    default:
-      _mesa_problem(ctx, "Invalid state in fetch_state");
+      _mesa_problem(ctx, "Invalid state in _mesa_fetch_state");
       return;
    }
 }
@@ -907,10 +903,6 @@ _mesa_BindProgram(GLenum target, GLuint id)
             _mesa_error(ctx, GL_OUT_OF_MEMORY, "glBindProgramNV/ARB");
             return;
          }
-         prog->Id = id;
-         prog->Target = target;
-         prog->Resident = GL_TRUE;
-         prog->RefCount = 1;
          _mesa_HashInsert(ctx->Shared->Programs, id, prog);
       }
    }
@@ -978,14 +970,13 @@ _mesa_DeletePrograms(GLsizei n, const GLuint *ids)
                ctx->Driver.DeleteProgram(ctx, prog);
             }
          }
-	 else {
-	    /* This is necessary as we can't tell from HashLookup
-	     * whether the entry exists with data == 0, or if it
-	     * doesn't exist at all.  As GenPrograms creates the first
-	     * case below, need to call Remove() to avoid memory leak:
-	     */
-            _mesa_HashRemove(ctx->Shared->Programs, ids[i]);
-	 }
+         /* Always remove entry from hash table.
+          * This is necessary as we can't tell from HashLookup
+          * whether the entry exists with data == 0, or if it
+          * doesn't exist at all.  As GenPrograms creates the first
+          * case below, need to call Remove() to avoid memory leak:
+          */
+         _mesa_HashRemove(ctx->Shared->Programs, ids[i]);
       }
    }
 }

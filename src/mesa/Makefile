@@ -21,11 +21,11 @@ GL_TINY = 0$(MESA_MAJOR)0$(MESA_MINOR)0$(MESA_TINY)
 # Figure out what to make here
 default:
 	@if [ "${DRIVER_DIRS}" = "dri" ] ; then \
-		make linux-solo ; \
+		$(MAKE) linux-solo ; \
 	elif [ "${DRIVER_DIRS}" = "osmesa" ] ; then \
-		make osmesa-only ; \
+		$(MAKE) osmesa-only ; \
 	else \
-		make stand-alone ; \
+		$(MAKE) stand-alone ; \
 	fi
 
 
@@ -58,7 +58,7 @@ mesa.a:	$(SOLO_OBJECTS)
 # target, otherwise make will look & see that the "drivers" directory
 # already exists, so not try to rebuild it...
 driver-dirs:
-	cd drivers/dri ; make
+	cd drivers/dri ; $(MAKE)
 
 
 ######################################################################
@@ -101,23 +101,23 @@ stand-alone: depend subdirs $(LIB_DIR)/$(GL_LIB_NAME) $(LIB_DIR)/$(OSMESA_LIB_NA
 osmesa-only: depend subdirs $(LIB_DIR)/$(OSMESA_LIB_NAME)
 
 subdirs:
-	@ (cd x86 ; make)
+	@ (cd x86 ; $(MAKE))
 
 # Make the GL library
 $(LIB_DIR)/$(GL_LIB_NAME): $(STAND_ALONE_OBJECTS)
-	$(TOP)/bin/mklib -o $(GL_LIB) -major $(GL_MAJOR) \
+	CC=$(CC) CXX=$(CXX) $(TOP)/bin/mklib -o $(GL_LIB) -major $(GL_MAJOR) \
 		-minor $(GL_MINOR) -patch $(GL_TINY) -install $(LIB_DIR) \
 		$(MKLIB_OPTIONS) $(GL_LIB_DEPS) $(STAND_ALONE_OBJECTS)
 
 # Make the OSMesa library
 $(LIB_DIR)/$(OSMESA_LIB_NAME): $(OSMESA_DRIVER_OBJECTS) $(OSMESA16_OBJECTS)
 	if [ "${DRIVER_DIRS}" = "osmesa" ] ; then \
-		$(TOP)/bin/mklib -o $(OSMESA_LIB) -major $(MESA_MAJOR) \
+		CC=$(CC) CXX=$(CXX) $(TOP)/bin/mklib -o $(OSMESA_LIB) -major $(MESA_MAJOR) \
 			-minor $(MESA_MINOR) -patch $(MESA_TINY) \
 			-install $(LIB_DIR) $(MKLIB_OPTIONS) \
 			$(OSMESA_LIB_DEPS) $(OSMESA16_OBJECTS) ; \
 	else \
-		$(TOP)/bin/mklib -o $(OSMESA_LIB) -major $(MESA_MAJOR) \
+		CC=$(CC) CXX=$(CXX) $(TOP)/bin/mklib -o $(OSMESA_LIB) -major $(MESA_MAJOR) \
 			-minor $(MESA_MINOR) -patch $(GL_TINY) \
 			-install $(LIB_DIR) $(MKLIB_OPTIONS) \
 			$(OSMESA_LIB_DEPS) $(OSMESA_DRIVER_OBJECTS) ; \
@@ -159,7 +159,8 @@ SUBDIRS = array_cache drivers/dri glapi main math sparc swrast swrast_setup \
 # Update dependencies
 depend: $(ALL_SOURCES)
 	touch depend
-	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDE_DIRS) $(ALL_SOURCES) >& /dev/null
+	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDE_DIRS) $(ALL_SOURCES) \
+		> /dev/null 2>&1
 
 
 # Emacs tags
@@ -170,7 +171,7 @@ clean:
 	-rm -f */*.o
 	rm -f depend mesa.a
 	for dir in $(SUBDIRS) ; do \
-		(cd $$dir ; make clean) ; \
+		(cd $$dir ; $(MAKE) clean) ; \
 	done
 
 include depend

@@ -11,7 +11,7 @@ MESA_MINOR=1
 MESA_TINY=0
 
 # external projects
-DRM_SOURCE_PATH=/home/dri/drm
+DRM_SOURCE_PATH=$(TOP)/../drm
 
 # Compiler and flags
 CC = cc
@@ -24,7 +24,7 @@ GLU_CFLAGS =
 MKLIB_OPTIONS = 
 MKDEP = makedepend
 MKDEP_OPTIONS = -Y -fdepend
-
+MAKE = make
 
 # Library names (base name)
 GL_LIB = GL
