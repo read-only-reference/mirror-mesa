@@ -1,4 +1,4 @@
-/* $Id: osmesa.c,v 1.79 2002/04/19 14:05:51 brianp Exp $ */
+/* $Id: osmesa.c,v 1.85 2002/06/30 16:07:18 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -42,6 +42,7 @@
 #include "colormac.h"
 #include "depth.h"
 #include "extensions.h"
+#include "imports.h"
 #include "macros.h"
 #include "matrix.h"
 #include "mem.h"
@@ -138,6 +139,7 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
    const GLuint i4 = 1;
    const GLubyte *i1 = (GLubyte *) &i4;
    const GLint little_endian = *i1;
+   __GLimports imports;
 
    rind = gind = bind = aind = 0;
    if (format==OSMESA_COLOR_INDEX) {
@@ -290,11 +292,12 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
          return NULL;
       }
 
+      _mesa_init_default_imports( &imports, (void *) osmesa );
       if (!_mesa_initialize_context(&osmesa->gl_ctx,
                                     osmesa->gl_visual,
                                     sharelist ? &sharelist->gl_ctx
                                               : (GLcontext *) NULL,
-                                    (void *) osmesa, GL_TRUE )) {
+                                    &imports)) {
          _mesa_destroy_visual( osmesa->gl_visual );
          FREE(osmesa);
          return NULL;
@@ -485,6 +488,10 @@ OSMesaMakeCurrent( OSMesaContext ctx, void *buffer, GLenum type,
       _mesa_ResizeBuffersMESA();
    }
 
+   /* Added by Gerk Huisma: */
+   _tnl_MakeCurrent( &ctx->gl_ctx, ctx->gl_ctx.DrawBuffer,
+                     ctx->gl_ctx.ReadBuffer );
+
    return GL_TRUE;
 }
 
@@ -663,6 +670,15 @@ OSMesaGetProcAddress( const char *funcName )
  * Useful macros:
  */
 
+#if CHAN_TYPE == GL_FLOAT
+#define PACK_RGBA(DST, R, G, B, A)				\
+do {								\
+   (DST)[0] = (R < 0.0f) ? 0.0f : ((R > 1.0f) ? 1.0f : R);	\
+   (DST)[1] = (G < 0.0f) ? 0.0f : ((G > 1.0f) ? 1.0f : G);	\
+   (DST)[2] = (B < 0.0f) ? 0.0f : ((B > 1.0f) ? 1.0f : B);	\
+   (DST)[3] = (A < 0.0f) ? 0.0f : ((A > 1.0f) ? 1.0f : A);	\
+} while (0)
+#else
 #define PACK_RGBA(DST, R, G, B, A)	\
 do {					\
    (DST)[osmesa->rInd] = R;		\
@@ -670,6 +686,7 @@ do {					\
    (DST)[osmesa->bInd] = B;		\
    (DST)[osmesa->aInd] = A;		\
 } while (0)
+#endif
 
 #define PACK_RGB(DST, R, G, B)  \
 do {				\
@@ -704,15 +721,10 @@ do {									\
 
 
 
-static GLboolean set_draw_buffer( GLcontext *ctx, GLenum mode )
+static void set_draw_buffer( GLcontext *ctx, GLenum mode )
 {
    (void) ctx;
-   if (mode==GL_FRONT_LEFT) {
-      return GL_TRUE;
-   }
-   else {
-      return GL_FALSE;
-   }
+   (void) mode;
 }
 
 
@@ -1804,7 +1816,7 @@ osmesa_choose_line_function( GLcontext *ctx )
    if (CHAN_BITS != 8)                    return NULL;
    if (ctx->RenderMode != GL_RENDER)      return NULL;
    if (ctx->Line.SmoothFlag)              return NULL;
-   if (ctx->Texture._ReallyEnabled)       return NULL;
+   if (ctx->Texture._EnabledUnits)        return NULL;
    if (ctx->Light.ShadeModel != GL_FLAT)  return NULL;
    if (ctx->Line.Width != 1.0F)           return NULL;
    if (ctx->Line.StippleFlag)             return NULL;
@@ -1958,10 +1970,13 @@ osmesa_choose_triangle_function( GLcontext *ctx )
    if (ctx->RenderMode != GL_RENDER)    return (swrast_tri_func) NULL;
    if (ctx->Polygon.SmoothFlag)         return (swrast_tri_func) NULL;
    if (ctx->Polygon.StippleFlag)        return (swrast_tri_func) NULL;
-   if (ctx->Texture._ReallyEnabled)     return (swrast_tri_func) NULL;
+   if (ctx->Texture._EnabledUnits)      return (swrast_tri_func) NULL;
    if (osmesa->format != OSMESA_RGBA &&
        osmesa->format != OSMESA_BGRA &&
        osmesa->format != OSMESA_ARGB)   return (swrast_tri_func) NULL;
+   if (ctx->Polygon.CullFlag && 
+       ctx->Polygon.CullFaceMode == GL_FRONT_AND_BACK)
+                                        return (swrast_tri_func) NULL;
 
    if (swrast->_RasterMask == DEPTH_BIT &&
        ctx->Depth.Func == GL_LESS &&

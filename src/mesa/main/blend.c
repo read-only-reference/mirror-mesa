@@ -1,10 +1,10 @@
-/* $Id: blend.c,v 1.34 2001/09/14 21:36:43 brianp Exp $ */
+/* $Id: blend.c,v 1.36 2002/06/15 02:38:15 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -46,9 +46,9 @@ _mesa_BlendFunc( GLenum sfactor, GLenum dfactor )
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (MESA_VERBOSE & (VERBOSE_API|VERBOSE_TEXTURE))
-      fprintf(stderr, "glBlendFunc %s %s\n",
-	      _mesa_lookup_enum_by_nr(sfactor),
-	      _mesa_lookup_enum_by_nr(dfactor));
+      _mesa_debug(ctx, "glBlendFunc %s %s\n",
+                  _mesa_lookup_enum_by_nr(sfactor),
+                  _mesa_lookup_enum_by_nr(dfactor));
 
    switch (sfactor) {
       case GL_SRC_COLOR:
@@ -127,11 +127,11 @@ _mesa_BlendFuncSeparateEXT( GLenum sfactorRGB, GLenum dfactorRGB,
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (MESA_VERBOSE & (VERBOSE_API|VERBOSE_TEXTURE))
-      fprintf(stderr, "glBlendFuncSeparate %s %s %s %s\n",
-	      _mesa_lookup_enum_by_nr(sfactorRGB),
-	      _mesa_lookup_enum_by_nr(dfactorRGB),
-	      _mesa_lookup_enum_by_nr(sfactorA),
-	      _mesa_lookup_enum_by_nr(dfactorA));
+      _mesa_debug(ctx, "glBlendFuncSeparate %s %s %s %s\n",
+                  _mesa_lookup_enum_by_nr(sfactorRGB),
+                  _mesa_lookup_enum_by_nr(dfactorRGB),
+                  _mesa_lookup_enum_by_nr(sfactorA),
+                  _mesa_lookup_enum_by_nr(dfactorA));
 
    switch (sfactorRGB) {
       case GL_SRC_COLOR:
@@ -268,8 +268,8 @@ _mesa_BlendEquation( GLenum mode )
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (MESA_VERBOSE & (VERBOSE_API|VERBOSE_TEXTURE))
-      fprintf(stderr, "glBlendEquation %s\n",
-	      _mesa_lookup_enum_by_nr(mode));
+      _mesa_debug(ctx, "glBlendEquation %s\n",
+                  _mesa_lookup_enum_by_nr(mode));
 
    switch (mode) {
       case GL_FUNC_ADD_EXT:
@@ -445,7 +445,7 @@ _mesa_ColorMask( GLboolean red, GLboolean green,
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (MESA_VERBOSE & VERBOSE_API)
-      fprintf(stderr, "glColorMask %d %d %d %d\n", red, green, blue, alpha);
+      _mesa_debug(ctx, "glColorMask %d %d %d %d\n", red, green, blue, alpha);
 
    /* Shouldn't have any information about channel depth in core mesa
     * -- should probably store these as the native booleans:

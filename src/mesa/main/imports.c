@@ -1,10 +1,10 @@
-/* $Id: imports.c,v 1.10 2001/07/16 15:54:23 brianp Exp $ */
+/* $Id: imports.c,v 1.15 2002/06/29 19:48:16 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -26,23 +26,26 @@
 
 
 /*
- * Imports are functions which the device driver or window system or
+ * Imports are services which the device driver or window system or
  * operating system provides to the core renderer.  The core renderer (Mesa)
  * will call these functions in order to do memory allocation, simple I/O,
  * etc.
  *
- * Some drivers will need to implement these functions themselves but
- * many (most?) Mesa drivers will be fine using these.
+ * Some drivers will want to override/replace this file with something
+ * specialized, but most Mesa drivers will be able to call
+ *_mesa_init_default_imports() and go with what's here.
  *
- * A server-side GL renderer will likely not use these functions since
- * the renderer should use the XFree86-wrapped system calls.
+ * Eventually, I'd like to move most of the stuff in glheader.h and mem.[ch]
+ * into imports.[ch].  Then we'll really have one, single place where
+ * all OS-related dependencies are isolated.
  */
 
 
 #include "glheader.h"
+#include "mtypes.h"
+#include "context.h"
 #include "imports.h"
 #include "mem.h"
-#include "mtypes.h"
 
 
 static void *
@@ -69,45 +72,48 @@ _mesa_Free(__GLcontext *gc, void *addr)
    FREE(addr);
 }
 
+
 /* Must be before '#undef getenv' for inclusion in XFree86.
  */
 static char * CAPI
 _mesa_getenv(__GLcontext *gc, const char *var)
 {
    (void) gc;
-   return getenv(var);
-}
-
-static void
-_mesa_warning(__GLcontext *gc, char *str)
-{
-   GLboolean debug;
-#ifdef DEBUG
-   debug = GL_TRUE;
-#else
 /* Whacko XFree86 macro:
  */
 #ifdef getenv
 #undef getenv
 #endif
-   if (gc->imports.getenv(gc, "MESA_DEBUG")) {
+   return getenv(var);
+}
+
+
+static void
+warning(__GLcontext *gc, char *str)
+{
+   GLboolean debug;
+#ifdef DEBUG
+   debug = GL_TRUE;
+#else
+   if (_mesa_getenv(gc "MESA_DEBUG"))
       debug = GL_TRUE;
-   }
-   else {
+   else
       debug = GL_FALSE;
-   }
 #endif
    if (debug) {
       fprintf(stderr, "Mesa warning: %s\n", str);
    }
 }
 
-static void
+
+void
 _mesa_fatal(__GLcontext *gc, char *str)
 {
+   (void) gc;
    fprintf(stderr, "%s\n", str);
    abort();
 }
+
 
 static int CAPI
 _mesa_atoi(__GLcontext *gc, const char *str)
@@ -116,12 +122,18 @@ _mesa_atoi(__GLcontext *gc, const char *str)
    return atoi(str);
 }
 
-static int CAPI
+
+int CAPI
 _mesa_sprintf(__GLcontext *gc, char *str, const char *fmt, ...)
 {
-   /* XXX fix this */
-   return sprintf(str, fmt);
+   int r;
+   va_list args;
+   va_start( args, fmt );  
+   r = vsprintf( str, fmt, args );
+   va_end( args );
+   return r;
 }
+
 
 static void * CAPI
 _mesa_fopen(__GLcontext *gc, const char *path, const char *mode)
@@ -129,18 +141,25 @@ _mesa_fopen(__GLcontext *gc, const char *path, const char *mode)
    return fopen(path, mode);
 }
 
+
 static int CAPI
 _mesa_fclose(__GLcontext *gc, void *stream)
 {
    return fclose((FILE *) stream);
 }
 
+
 static int CAPI
 _mesa_fprintf(__GLcontext *gc, void *stream, const char *fmt, ...)
 {
-   /* XXX fix this */
-   return fprintf((FILE *) stream, fmt);
+   int r;
+   va_list args;
+   va_start( args, fmt );  
+   r = vfprintf( (FILE *) stream, fmt, args );
+   va_end( args );
+   return r;
 }
+
 
 /* XXX this really is driver-specific and can't be here */
 static __GLdrawablePrivate *
@@ -150,14 +169,168 @@ _mesa_GetDrawablePrivate(__GLcontext *gc)
 }
 
 
+
 void
-_mesa_InitDefaultImports(__GLimports *imports, void *driverCtx, void *other)
+_mesa_warning(__GLcontext *gc, const char *fmtString, ...)
+{
+   char str[1000];
+   va_list args;
+   va_start( args, fmtString );  
+   (void) vsprintf( str, fmtString, args );
+   va_end( args );
+   warning(gc, str);
+}
+
+
+/*
+ * This function is called when the Mesa user has stumbled into a code
+ * path which may not be implemented fully or correctly.
+ */
+void
+_mesa_problem( const GLcontext *ctx, const char *s )
+{
+   if (ctx) {
+      ctx->imports.fprintf((GLcontext *) ctx, stderr, "Mesa implementation error: %s\n", s);
+#ifdef XF86DRI
+      ctx->imports.fprintf((GLcontext *) ctx, stderr, "Please report to the DRI bug database at dri.sourceforge.net\n");
+#else
+      ctx->imports.fprintf((GLcontext *) ctx, stderr, "Please report to the Mesa bug database at www.mesa3d.org\n" );
+#endif
+   }
+   else {
+      /* what can we do if we don't have a context???? */
+      fprintf( stderr, "Mesa implementation error: %s\n", s );
+#ifdef XF86DRI
+      fprintf( stderr, "Please report to the DRI bug database at dri.sourceforge.net\n");
+#else
+      fprintf( stderr, "Please report to the Mesa bug database at www.mesa3d.org\n" );
+#endif
+   }
+}
+
+
+/*
+ * If in debug mode, print error message to stdout.
+ * Also, record the error code by calling _mesa_record_error().
+ * Input:  ctx - the GL context
+ *         error - the error value
+ *         fmtString - printf-style format string, followed by optional args
+ */
+void
+_mesa_error( GLcontext *ctx, GLenum error, const char *fmtString, ... )
+{
+   const char *debugEnv;
+   GLboolean debug;
+
+   debugEnv = _mesa_getenv(ctx, "MESA_DEBUG");
+
+#ifdef DEBUG
+   if (debugEnv && strstr(debugEnv, "silent"))
+      debug = GL_FALSE;
+   else
+      debug = GL_TRUE;
+#else
+   if (debugEnv)
+      debug = GL_TRUE;
+   else
+      debug = GL_FALSE;
+#endif
+
+   if (debug) {
+      va_list args;
+      char where[1000];
+      const char *errstr;
+
+      va_start( args, fmtString );  
+      vsprintf( where, fmtString, args );
+      va_end( args );
+
+      switch (error) {
+	 case GL_NO_ERROR:
+	    errstr = "GL_NO_ERROR";
+	    break;
+	 case GL_INVALID_VALUE:
+	    errstr = "GL_INVALID_VALUE";
+	    break;
+	 case GL_INVALID_ENUM:
+	    errstr = "GL_INVALID_ENUM";
+	    break;
+	 case GL_INVALID_OPERATION:
+	    errstr = "GL_INVALID_OPERATION";
+	    break;
+	 case GL_STACK_OVERFLOW:
+	    errstr = "GL_STACK_OVERFLOW";
+	    break;
+	 case GL_STACK_UNDERFLOW:
+	    errstr = "GL_STACK_UNDERFLOW";
+	    break;
+	 case GL_OUT_OF_MEMORY:
+	    errstr = "GL_OUT_OF_MEMORY";
+	    break;
+         case GL_TABLE_TOO_LARGE:
+            errstr = "GL_TABLE_TOO_LARGE";
+            break;
+	 default:
+	    errstr = "unknown";
+	    break;
+      }
+      _mesa_debug(ctx, "Mesa user error: %s in %s\n", errstr, where);
+   }
+
+   _mesa_record_error(ctx, error);
+}  
+
+
+/*
+ * Call this to report debug information.  Uses stderr.
+ */
+void
+_mesa_debug( const GLcontext *ctx, const char *fmtString, ... )
+{
+   char s[1000];
+   va_list args;
+   va_start(args, fmtString);
+   vsprintf(s, fmtString, args);
+   if (ctx)
+      (void) ctx->imports.fprintf( (__GLcontext *) ctx, stderr, s );
+   else
+      fprintf( stderr, s );
+   va_end(args);
+}
+
+
+/*
+ * A wrapper for printf.  Uses stdout.
+ */
+void
+_mesa_printf( const GLcontext *ctx, const char *fmtString, ... )
+{
+   char s[1000];
+   va_list args;
+   va_start( args, fmtString );  
+   vsprintf(s, fmtString, args);
+   if (ctx)
+      (void) ctx->imports.fprintf( (__GLcontext *) ctx, stdout, s );
+   else
+      printf( s );
+   va_end( args );
+}
+
+
+/*
+ * Initialize a __GLimports object to point to the functions in
+ * this file.  This is to be called from device drivers.
+ * Input:  imports - the object to init
+ *         driverCtx - pointer to device driver-specific data
+ */
+void
+_mesa_init_default_imports(__GLimports *imports, void *driverCtx)
 {
    imports->malloc = _mesa_Malloc;
    imports->calloc = _mesa_Calloc;
    imports->realloc = _mesa_Realloc;
    imports->free = _mesa_Free;
-   imports->warning = _mesa_warning;
+   imports->warning = warning;
    imports->fatal = _mesa_fatal;
    imports->getenv = _mesa_getenv;
    imports->atoi = _mesa_atoi;
@@ -166,6 +339,5 @@ _mesa_InitDefaultImports(__GLimports *imports, void *driverCtx, void *other)
    imports->fclose = _mesa_fclose;
    imports->fprintf = _mesa_fprintf;
    imports->getDrawablePrivate = _mesa_GetDrawablePrivate;
-/*     imports->wscx = driverCtx; */
    imports->other = driverCtx;
 }

@@ -1,4 +1,4 @@
-/* $Id: s_span.c,v 1.42 2002/05/02 00:59:20 brianp Exp $ */
+/* $Id: s_span.c,v 1.44 2002/06/15 03:03:11 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -116,6 +116,28 @@ _mesa_span_default_color( GLcontext *ctx, struct sw_span *span )
       span->indexStep = 0;
       span->interpMask |= SPAN_INDEX;
    }
+}
+
+
+/**
+ * Init span's texcoord interpolation values to the RasterPos texcoords.
+ * Used during setup for glDraw/CopyPixels.
+ */
+void
+_mesa_span_default_texcoords( GLcontext *ctx, struct sw_span *span )
+{
+   GLuint i;
+   for (i = 0; i < ctx->Const.MaxTextureUnits; i++) {
+      span->tex[i][0] = ctx->Current.RasterTexCoords[i][0];
+      span->tex[i][1] = ctx->Current.RasterTexCoords[i][1];
+      span->tex[i][2] = ctx->Current.RasterTexCoords[i][2];
+      span->tex[i][3] = ctx->Current.RasterTexCoords[i][3];
+      span->texStepX[i][0] = 0.0;
+      span->texStepX[i][1] = 0.0;
+      span->texStepX[i][2] = 0.0;
+      span->texStepX[i][3] = 0.0;
+   }
+   span->interpMask |= SPAN_TEXTURE;
 }
 
 
@@ -323,7 +345,7 @@ interpolate_texcoords(GLcontext *ctx, struct sw_span *span)
    ASSERT(span->interpMask & SPAN_TEXTURE);
    ASSERT(!(span->arrayMask & SPAN_TEXTURE));
 
-   if (ctx->Texture._ReallyEnabled & ~TEXTURE0_ANY) {
+   if (ctx->Texture._EnabledUnits > 1) {
       /* multitexture */
       GLuint u;
       span->arrayMask |= SPAN_TEXTURE;
@@ -333,8 +355,8 @@ interpolate_texcoords(GLcontext *ctx, struct sw_span *span)
             const struct gl_texture_image *img = obj->Image[obj->BaseLevel];
             GLboolean needLambda = (obj->MinFilter != obj->MagFilter);
             if (needLambda) {
-               const GLfloat texW = (GLfloat) img->Width;
-               const GLfloat texH = (GLfloat) img->Height;
+               const GLfloat texW = (GLfloat) img->WidthScale;
+               const GLfloat texH = (GLfloat) img->HeightScale;
                const GLfloat dsdx = span->texStepX[u][0];
                const GLfloat dsdy = span->texStepY[u][0];
                const GLfloat dtdx = span->texStepX[u][1];
@@ -410,8 +432,8 @@ interpolate_texcoords(GLcontext *ctx, struct sw_span *span)
       span->arrayMask |= SPAN_TEXTURE;
       if (needLambda) {
          /* just texture unit 0, with lambda */
-         const GLfloat texW = (GLfloat) img->Width;
-         const GLfloat texH = (GLfloat) img->Height;
+         const GLfloat texW = (GLfloat) img->WidthScale;
+         const GLfloat texH = (GLfloat) img->HeightScale;
          const GLfloat dsdx = span->texStepX[0][0];
          const GLfloat dsdy = span->texStepY[0][0];
          const GLfloat dtdx = span->texStepX[0][1];
@@ -1115,7 +1137,7 @@ _mesa_write_texture_span( GLcontext *ctx, struct sw_span *span)
 	  span->primitive == GL_POLYGON  ||  span->primitive == GL_BITMAP);
    ASSERT(span->end <= MAX_WIDTH);
    ASSERT((span->interpMask & span->arrayMask) == 0);
-   ASSERT(ctx->Texture._ReallyEnabled);
+   ASSERT(ctx->Texture._EnabledUnits);
 
    /*
    printf("%s()  interp 0x%x  array 0x%x\n", __FUNCTION__, span->interpMask, span->arrayMask);

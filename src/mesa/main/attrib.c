@@ -1,4 +1,4 @@
-/* $Id: attrib.c,v 1.64 2002/05/27 17:04:52 brianp Exp $ */
+/* $Id: attrib.c,v 1.69 2002/06/17 23:36:31 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -72,44 +72,6 @@ new_attrib_node( GLbitfield kind )
 }
 
 
-
-/*
- * Copy texture object state from one texture object to another.
- */
-static void
-copy_texobj_state( struct gl_texture_object *dest,
-                   const struct gl_texture_object *src )
-{
-   dest->Name = src->Name;
-   /*
-   dest->Dimensions = src->Dimensions;
-   */
-   dest->Priority = src->Priority;
-   dest->BorderColor[0] = src->BorderColor[0];
-   dest->BorderColor[1] = src->BorderColor[1];
-   dest->BorderColor[2] = src->BorderColor[2];
-   dest->BorderColor[3] = src->BorderColor[3];
-   dest->WrapS = src->WrapS;
-   dest->WrapT = src->WrapT;
-   dest->WrapR = src->WrapR;
-   dest->MinFilter = src->MinFilter;
-   dest->MagFilter = src->MagFilter;
-   dest->MinLod = src->MinLod;
-   dest->MaxLod = src->MaxLod;
-   dest->BaseLevel = src->BaseLevel;
-   dest->MaxLevel = src->MaxLevel;
-   dest->MaxAnisotropy = src->MaxAnisotropy;
-   dest->CompareFlag = src->CompareFlag;
-   dest->CompareOperator = src->CompareOperator;
-   dest->ShadowAmbient = src->ShadowAmbient;
-   dest->_MaxLevel = src->_MaxLevel;
-   dest->_MaxLambda = src->_MaxLambda;
-   dest->Palette = src->Palette;
-   dest->Complete = src->Complete;
-}
-
-
-
 void
 _mesa_PushAttrib(GLbitfield mask)
 {
@@ -119,8 +81,8 @@ _mesa_PushAttrib(GLbitfield mask)
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   if (MESA_VERBOSE&VERBOSE_API)
-      fprintf(stderr, "glPushAttrib %x\n", (int)mask);
+   if (MESA_VERBOSE & VERBOSE_API)
+      _mesa_debug(ctx, "glPushAttrib %x\n", (int) mask);
 
    if (ctx->AttribStackDepth >= MAX_ATTRIB_STACK_DEPTH) {
       _mesa_error( ctx, GL_STACK_OVERFLOW, "glPushAttrib" );
@@ -223,6 +185,7 @@ _mesa_PushAttrib(GLbitfield mask)
       attr->RasterPositionUnclipped = ctx->Transform.RasterPositionUnclipped;
       attr->PixelTexture = ctx->Pixel.PixelTextureEnabled;
       attr->PointSmooth = ctx->Point.SmoothFlag;
+      attr->PointSprite = ctx->Point.PointSprite;
       attr->PolygonOffsetPoint = ctx->Polygon.OffsetPoint;
       attr->PolygonOffsetLine = ctx->Polygon.OffsetLine;
       attr->PolygonOffsetFill = ctx->Polygon.OffsetFill;
@@ -382,15 +345,22 @@ _mesa_PushAttrib(GLbitfield mask)
 	 ctx->Texture.Unit[u].Current2D->RefCount++;
 	 ctx->Texture.Unit[u].Current3D->RefCount++;
 	 ctx->Texture.Unit[u].CurrentCubeMap->RefCount++;
+	 ctx->Texture.Unit[u].CurrentRect->RefCount++;
       }
       attr = MALLOC_STRUCT( gl_texture_attrib );
       MEMCPY( attr, &ctx->Texture, sizeof(struct gl_texture_attrib) );
       /* copy state of the currently bound texture objects */
       for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-         copy_texobj_state(&attr->Unit[u].Saved1D, attr->Unit[u].Current1D);
-         copy_texobj_state(&attr->Unit[u].Saved2D, attr->Unit[u].Current2D);
-         copy_texobj_state(&attr->Unit[u].Saved3D, attr->Unit[u].Current3D);
-         copy_texobj_state(&attr->Unit[u].SavedCubeMap, attr->Unit[u].CurrentCubeMap);
+         _mesa_copy_texture_object(&attr->Unit[u].Saved1D,
+                                   attr->Unit[u].Current1D);
+         _mesa_copy_texture_object(&attr->Unit[u].Saved2D,
+                                   attr->Unit[u].Current2D);
+         _mesa_copy_texture_object(&attr->Unit[u].Saved3D,
+                                   attr->Unit[u].Current3D);
+         _mesa_copy_texture_object(&attr->Unit[u].SavedCubeMap,
+                                   attr->Unit[u].CurrentCubeMap);
+         _mesa_copy_texture_object(&attr->Unit[u].SavedRect,
+                                   attr->Unit[u].CurrentRect);
       }
       newnode = new_attrib_node( GL_TEXTURE_BIT );
       newnode->data = attr;
@@ -579,11 +549,17 @@ pop_enable_group(GLcontext *ctx, const struct gl_enable_attrib *enable)
                (*ctx->Driver.ActiveTexture)(ctx, i);
             }
             (*ctx->Driver.Enable)( ctx, GL_TEXTURE_1D,
-                             (GLboolean) (enable->Texture[i] & TEXTURE0_1D) );
+                             (GLboolean) (enable->Texture[i] & TEXTURE_1D_BIT) );
             (*ctx->Driver.Enable)( ctx, GL_TEXTURE_2D,
-                             (GLboolean) (enable->Texture[i] & TEXTURE0_2D) );
+                             (GLboolean) (enable->Texture[i] & TEXTURE_2D_BIT) );
             (*ctx->Driver.Enable)( ctx, GL_TEXTURE_3D,
-                             (GLboolean) (enable->Texture[i] & TEXTURE0_3D) );
+                             (GLboolean) (enable->Texture[i] & TEXTURE_3D_BIT) );
+            if (ctx->Extensions.ARB_texture_cube_map)
+               (*ctx->Driver.Enable)( ctx, GL_TEXTURE_CUBE_MAP_ARB,
+                          (GLboolean) (enable->Texture[i] & TEXTURE_CUBE_BIT) );
+            if (ctx->Extensions.NV_texture_rectangle)
+               (*ctx->Driver.Enable)( ctx, GL_TEXTURE_RECTANGLE_NV,
+                          (GLboolean) (enable->Texture[i] & TEXTURE_RECT_BIT) );
          }
       }
 
@@ -626,18 +602,22 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
 
    for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
       const struct gl_texture_unit *unit = &texAttrib->Unit[u];
-      GLuint numObjs, i;
+      GLuint i;
 
       _mesa_ActiveTextureARB(GL_TEXTURE0_ARB + u);
       _mesa_set_enable(ctx, GL_TEXTURE_1D,
-              (GLboolean) (unit->Enabled & TEXTURE0_1D ? GL_TRUE : GL_FALSE));
+              (GLboolean) (unit->Enabled & TEXTURE_1D_BIT ? GL_TRUE : GL_FALSE));
       _mesa_set_enable(ctx, GL_TEXTURE_2D,
-              (GLboolean) (unit->Enabled & TEXTURE0_2D ? GL_TRUE : GL_FALSE));
+              (GLboolean) (unit->Enabled & TEXTURE_2D_BIT ? GL_TRUE : GL_FALSE));
       _mesa_set_enable(ctx, GL_TEXTURE_3D,
-              (GLboolean) (unit->Enabled & TEXTURE0_3D ? GL_TRUE : GL_FALSE));
+              (GLboolean) (unit->Enabled & TEXTURE_3D_BIT ? GL_TRUE : GL_FALSE));
       if (ctx->Extensions.ARB_texture_cube_map) {
          _mesa_set_enable(ctx, GL_TEXTURE_CUBE_MAP_ARB,
-             (GLboolean) (unit->Enabled & TEXTURE0_CUBE ? GL_TRUE : GL_FALSE));
+             (GLboolean) (unit->Enabled & TEXTURE_CUBE_BIT ? GL_TRUE : GL_FALSE));
+      }
+      if (ctx->Extensions.NV_texture_rectangle) {
+         _mesa_set_enable(ctx, GL_TEXTURE_RECTANGLE_NV,
+             (GLboolean) (unit->Enabled & TEXTURE_RECT_BIT ? GL_TRUE : GL_FALSE));
       }
       _mesa_TexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, unit->EnvMode);
       _mesa_TexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, unit->EnvColor);
@@ -694,9 +674,7 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
       }
 
       /* Restore texture object state */
-      numObjs = ctx->Extensions.ARB_texture_cube_map ? 4 : 3;
-
-      for (i = 0; i < numObjs; i++) {
+      for (i = 0; i < 5; i++) {
          GLenum target = 0;
          const struct gl_texture_object *obj = NULL;
          GLfloat bordColor[4];
@@ -715,8 +693,16 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
             obj = &unit->Saved3D;
             break;
          case 3:
+            if (!ctx->Extensions.ARB_texture_cube_map)
+               continue;
             target = GL_TEXTURE_CUBE_MAP_ARB;
             obj = &unit->SavedCubeMap;
+            break;
+         case 4:
+            if (!ctx->Extensions.NV_texture_rectangle)
+               continue;
+            target = GL_TEXTURE_RECTANGLE_NV;
+            obj = &unit->SavedRect;
             break;
          default:
             ; /* silence warnings */
@@ -769,6 +755,7 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
       ctx->Texture.Unit[u].Current2D->RefCount--;
       ctx->Texture.Unit[u].Current3D->RefCount--;
       ctx->Texture.Unit[u].CurrentCubeMap->RefCount--;
+      ctx->Texture.Unit[u].CurrentRect->RefCount--;
    }
 }
 
@@ -800,9 +787,9 @@ _mesa_PopAttrib(void)
 
    while (attr) {
 
-      if (MESA_VERBOSE&VERBOSE_API) {
-	 fprintf(stderr, "glPopAttrib %s\n",
-                 _mesa_lookup_enum_by_nr(attr->kind));
+      if (MESA_VERBOSE & VERBOSE_API) {
+         _mesa_debug(ctx, "glPopAttrib %s\n",
+                     _mesa_lookup_enum_by_nr(attr->kind));
       }
 
       switch (attr->kind) {
@@ -1078,7 +1065,7 @@ _mesa_PopAttrib(void)
                      _mesa_set_enable(ctx, GL_CLIP_PLANE0 + i, GL_FALSE);
                   }
                   if (ctx->Driver.ClipPlane)
-                     ctx->Driver.ClipPlane( ctx, i, eyePlane );
+                     ctx->Driver.ClipPlane( ctx, GL_CLIP_PLANE0 + i, eyePlane );
                }
 
                /* normalize/rescale */

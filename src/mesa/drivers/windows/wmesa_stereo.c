@@ -17,6 +17,7 @@
 #include <GL\wmesa.h>
 #include "context.h"
 #include "dd.h"
+#include "imports.h"
 #include "xform.h"
 #include "vb.h"
 #include "matrix.h"
@@ -420,7 +421,7 @@ extern points_func choose_points_function( GLcontext* ctx )
 {
    STARTPROFILE
    if (ctx->Point.Size==1.0 && !ctx->Point.SmoothFlag && ctx->_RasterMask==0
-       && !ctx->Texture._ReallyEnabled  && ctx->Visual->RGBAflag) {
+       && ctx->Texture._EnabledUnits == 0 && ctx->Visual->RGBAflag) {
    ENDPROFILE(choose_points_function)
       return fast_rgb_points;
    }
@@ -478,7 +479,7 @@ static line_func choose_line_function( GLcontext* ctx )
 	STARTPROFILE
    if (ctx->Line.Width==1.0 && !ctx->Line.SmoothFlag && !ctx->Line.StippleFlag
        && ctx->Light.ShadeModel==GL_FLAT && ctx->_RasterMask==0
-       && !ctx->Texture._ReallyEnabled && Current->rgb_flag) {
+       && ctx->Texture._EnabledUnits == 0 && Current->rgb_flag) {
    ENDPROFILE(choose_line_function)
       return fast_flat_rgb_line;
    }
@@ -589,7 +590,7 @@ static triangle_func choose_triangle_function( GLcontext *ctx )
 {
    if (ctx->Polygon.SmoothFlag)     return NULL;
    if (ctx->Polygon.StippleFlag)    return NULL;
-   if (ctx->Texture._ReallyEnabled)  return NULL;
+   if (ctx->Texture._EnabledUnits)  return NULL;
 
    if (ctx->_RasterMask==DEPTH_BIT
        && ctx->Depth.Func==GL_LESS
@@ -660,7 +661,7 @@ static polygon_func choose_polygon_function( GLcontext* ctx )
    STARTPROFILE
    if (!ctx->Polygon.SmoothFlag && !ctx->Polygon.StippleFlag
        && ctx->Light.ShadeModel==GL_FLAT && ctx->_RasterMask==0
-       && !ctx->Texture._ReallyEnabled && Current->rgb_flag==GL_TRUE) {
+       && ctx->Texture._EnabledUnits == 0 && Current->rgb_flag==GL_TRUE) {
       ENDPROFILE(choose_polygon_function)
       return fast_flat_rgb_polygon;
    }
@@ -1110,6 +1111,7 @@ WMesaContext /*APIENTRY*/ WMesaCreateContext( HWND hWnd, HPALETTE Pal,
   //HDC DC;
   RECT CR;
   WMesaContext c;
+  __GLimports imports;
 
   c = (struct wmesa_context * ) calloc(1,sizeof(struct wmesa_context));
   if (!c)
@@ -1196,7 +1198,8 @@ WMesaContext /*APIENTRY*/ WMesaCreateContext( HWND hWnd, HPALETTE Pal,
       }
 
   /* allocate a new Mesa context */
-  c->gl_ctx = _mesa_create_context( c->gl_visual, NULL,c);
+  _mesa_init_default_imports( &imports, (void *) c );
+  c->gl_ctx = _mesa_create_context( c->gl_visual, &imports );
 
   if (!c->gl_ctx) {
          _mesa_destroy_visual( c->gl_visual );

@@ -1,4 +1,4 @@
-/* $Id: xm_tri.c,v 1.22 2002/04/19 14:05:51 brianp Exp $ */
+/* $Id: xm_tri.c,v 1.26 2002/06/25 15:25:17 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -1505,7 +1505,6 @@ static const char *triFuncName = NULL;
 #define USE(triFunc)                   \
 do {                                   \
     triFuncName = #triFunc;            \
-    /*printf("%s\n", triFuncName);*/   \
     return triFunc;                    \
 } while (0)
 
@@ -1530,7 +1529,11 @@ static swrast_tri_func get_triangle_func( GLcontext *ctx )
 
    if (ctx->RenderMode != GL_RENDER)  return (swrast_tri_func) NULL;
    if (ctx->Polygon.SmoothFlag)       return (swrast_tri_func) NULL;
-   if (ctx->Texture._ReallyEnabled)   return (swrast_tri_func) NULL;
+   if (ctx->Texture._EnabledUnits)    return (swrast_tri_func) NULL;
+   if (swrast->_RasterMask & MULTI_DRAW_BIT) return (swrast_tri_func) NULL;
+   if (ctx->Polygon.CullFlag && 
+       ctx->Polygon.CullFaceMode == GL_FRONT_AND_BACK)
+                                        return (swrast_tri_func) NULL;
 
    if (xmesa->xm_buffer->buffer==XIMAGE) {
       if (   ctx->Light.ShadeModel==GL_SMOOTH

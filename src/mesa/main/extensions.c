@@ -1,4 +1,4 @@
-/* $Id: extensions.c,v 1.74 2002/05/27 17:04:53 brianp Exp $ */
+/* $Id: extensions.c,v 1.76 2002/06/29 20:03:13 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -81,11 +81,11 @@ static struct {
    { OFF, "GL_EXT_blend_minmax",               F(EXT_blend_minmax) },
    { OFF, "GL_EXT_blend_subtract",             F(EXT_blend_subtract) },
    { ON,  "GL_EXT_clip_volume_hint",           F(EXT_clip_volume_hint) },
-   { OFF, "GL_EXT_cull_vertex",                0 },
    { OFF, "GL_EXT_convolution",                F(EXT_convolution) },
    { ON,  "GL_EXT_compiled_vertex_array",      F(EXT_compiled_vertex_array) },
    { OFF, "GL_EXT_fog_coord",                  F(EXT_fog_coord) },
    { OFF, "GL_EXT_histogram",                  F(EXT_histogram) },
+   { OFF, "GL_EXT_multi_draw_arrays",          F(EXT_multi_draw_arrays) },
    { ON,  "GL_EXT_packed_pixels",              F(EXT_packed_pixels) },
    { OFF, "GL_EXT_paletted_texture",           F(EXT_paletted_texture) },
    { OFF, "GL_EXT_point_parameters",           F(EXT_point_parameters) },
@@ -114,6 +114,7 @@ static struct {
    { ON,  "GL_MESA_window_pos",                F(MESA_window_pos) },
    { OFF, "GL_NV_blend_square",                F(NV_blend_square) },
    { OFF, "GL_NV_point_sprite",                F(NV_point_sprite) },
+   { OFF, "GL_NV_texture_rectangle",           F(NV_texture_rectangle) },
    { ON,  "GL_NV_texgen_reflection",           F(NV_texgen_reflection) },
    { OFF, "GL_NV_vertex_program",              F(NV_vertex_program) },
    { OFF, "GL_NV_vertex_program1_1",           F(NV_vertex_program1_1) },
@@ -178,6 +179,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
       "GL_MESA_resize_buffers",
       "GL_NV_blend_square",
       "GL_NV_point_sprite",
+      "GL_NV_texture_rectangle",
       "GL_NV_texgen_reflection",
       "GL_NV_vertex_program",
       "GL_NV_vertex_program1_1",
@@ -243,6 +245,40 @@ _mesa_enable_1_3_extensions(GLcontext *ctx)
       "GL_ARB_texture_env_combine",
       "GL_ARB_texture_env_dot3",
       "GL_ARB_transpose_matrix",
+      NULL
+   };
+   GLuint i;
+
+   for (i = 0; extensions[i]; i++) {
+      _mesa_enable_extension(ctx, extensions[i]);
+   }
+}
+
+
+
+/*
+ * Enable all OpenGL 1.4 features and extensions.
+ */
+void
+_mesa_enable_1_4_extensions(GLcontext *ctx)
+{
+   const char *extensions[] = {
+      "GL_ARB_depth_texture",
+      "GL_ARB_point_parameters",
+      "GL_ARB_shadow",
+      "GL_ARB_texture_env_crossbar",
+      "GL_ARB_texture_mirrored_repeat",
+      "GL_ARB_window_pos",
+      "GL_EXT_blend_color",
+      "GL_EXT_blend_func_separate",
+      "GL_EXT_blend_logic_op",
+      "GL_EXT_blend_minmax",
+      "GL_EXT_blend_subtract",
+      "GL_EXT_fog_coord",
+      "GL_EXT_multi_draw_arrays",
+      "GL_EXT_secondary_color",
+      "GL_EXT_stencil_wrap",
+      "GL_SGIS_generate_mipmap",
       NULL
    };
    GLuint i;

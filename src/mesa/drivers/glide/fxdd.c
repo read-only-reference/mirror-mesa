@@ -1,4 +1,4 @@
-/* $Id: fxdd.c,v 1.85 2002/03/16 00:53:15 brianp Exp $ */
+/* $Id: fxdd.c,v 1.88 2002/06/15 03:03:10 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -264,7 +264,7 @@ fxDDClear(GLcontext * ctx, GLbitfield mask, GLboolean all,
 
 /* Set the buffer used for drawing */
 /* XXX support for separate read/draw buffers hasn't been tested */
-static GLboolean
+static void
 fxDDSetDrawBuffer(GLcontext * ctx, GLenum mode)
 {
    fxMesaContext fxMesa = (fxMesaContext) ctx->DriverCtx;
@@ -276,19 +276,17 @@ fxDDSetDrawBuffer(GLcontext * ctx, GLenum mode)
    if (mode == GL_FRONT_LEFT) {
       fxMesa->currentFB = GR_BUFFER_FRONTBUFFER;
       FX_grRenderBuffer(fxMesa->currentFB);
-      return GL_TRUE;
    }
    else if (mode == GL_BACK_LEFT) {
       fxMesa->currentFB = GR_BUFFER_BACKBUFFER;
       FX_grRenderBuffer(fxMesa->currentFB);
-      return GL_TRUE;
    }
    else if (mode == GL_NONE) {
       FX_grColorMask(FXFALSE, FXFALSE);
-      return GL_TRUE;
    }
    else {
-      return GL_FALSE;
+      /* we'll need a software fallback */
+      /* XXX not implemented */
    }
 }
 
@@ -766,9 +764,6 @@ fxDDInitFxMesaContext(fxMesaContext fxMesa)
 
    FX_grGlideGetState((GrState *) fxMesa->state);
 
-   /* Run the config file */
-   _mesa_read_config_file(fxMesa->glCtx);
-
    return 1;
 }
 
@@ -846,14 +841,15 @@ fx_check_IsInHardware(GLcontext * ctx)
    /* Unsupported texture/multitexture cases */
 
    if (fxMesa->haveTwoTMUs) {
-      if (ctx->Texture._ReallyEnabled & (TEXTURE0_3D | TEXTURE1_3D))
-	 return GL_FALSE;	/* can't do 3D textures */
-      if (ctx->Texture._ReallyEnabled & (TEXTURE0_1D | TEXTURE1_1D))
-	 return GL_FALSE;	/* can't do 1D textures */
+      /* we can only do 2D textures */
+      if (ctx->Texture.Unit[0]._ReallyEnabled & ~TEXTURE_2D_BIT)
+	 return GL_FALSE;
+      if (ctx->Texture.Unit[1]._ReallyEnabled & ~TEXTURE_2D_BIT)
+	 return GL_FALSE;
 
-      if (ctx->Texture._ReallyEnabled & TEXTURE0_2D) {
+      if (ctx->Texture.Unit[0]._ReallyEnabled & TEXTURE_2D_BIT) {
 	 if (ctx->Texture.Unit[0].EnvMode == GL_BLEND &&
-	     (ctx->Texture._ReallyEnabled & TEXTURE1_2D ||
+	     (ctx->Texture.Unit[1]._ReallyEnabled & TEXTURE_2D_BIT ||
 	      ctx->Texture.Unit[0].EnvColor[0] != 0 ||
 	      ctx->Texture.Unit[0].EnvColor[1] != 0 ||
 	      ctx->Texture.Unit[0].EnvColor[2] != 0 ||
@@ -864,7 +860,7 @@ fx_check_IsInHardware(GLcontext * ctx)
 	    return GL_FALSE;
       }
 
-      if (ctx->Texture._ReallyEnabled & TEXTURE1_2D) {
+      if (ctx->Texture.Unit[1]._ReallyEnabled & TEXTURE_2D_BIT) {
 	 if (ctx->Texture.Unit[1].EnvMode == GL_BLEND)
 	    return GL_FALSE;
 	 if (ctx->Texture.Unit[1]._Current->Image[0]->Border > 0)
@@ -878,9 +874,10 @@ fx_check_IsInHardware(GLcontext * ctx)
 
       /* KW: This was wrong (I think) and I changed it... which doesn't mean
        * it is now correct...
+       * BP: The old condition just seemed to test if both texture units
+       * were enabled.  That's easy!
        */
-      if ((ctx->Texture._ReallyEnabled & (TEXTURE0_1D | TEXTURE0_2D | TEXTURE0_3D)) &&
-	  (ctx->Texture._ReallyEnabled & (TEXTURE1_1D | TEXTURE1_2D | TEXTURE1_3D))) {
+      if (ctx->Texture._EnabledUnits == 0x3) {
 	 /* Can't use multipass to blend a multitextured triangle - fall
 	  * back to software.
 	  */
@@ -898,16 +895,12 @@ fx_check_IsInHardware(GLcontext * ctx)
       }
    }
    else {
-      if ((ctx->Texture._ReallyEnabled & (TEXTURE1_1D | TEXTURE1_2D | TEXTURE1_3D)) ||
-	  /* Not very well written ... */
-	  ((ctx->Texture._ReallyEnabled & TEXTURE0_1D) &&
-           (!(ctx->Texture._ReallyEnabled & TEXTURE0_2D)))
-	 ) {
+      /* we have just one texture unit */
+      if (ctx->Texture._EnabledUnits > 0x1) {
 	 return GL_FALSE;
       }
 
-
-      if ((ctx->Texture._ReallyEnabled & TEXTURE0_2D) &&
+      if ((ctx->Texture.Unit[0]._ReallyEnabled & TEXTURE_2D_BIT) &&
 	  (ctx->Texture.Unit[0].EnvMode == GL_BLEND)) {
 	 return GL_FALSE;
       }

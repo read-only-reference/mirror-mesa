@@ -38,6 +38,7 @@
 #include "context.h"
 #include "GL/dmesa.h"
 #include "extensions.h"
+#inlcude "imports.h"
 #include "macros.h"
 #include "matrix.h"
 #include "mmath.h"
@@ -412,7 +413,7 @@ static swrast_tri_func dmesa_choose_tri_function (GLcontext *ctx)
 
  if (ctx->RenderMode != GL_RENDER)  return (swrast_tri_func) NULL;
  if (ctx->Polygon.SmoothFlag)       return (swrast_tri_func) NULL;
- if (ctx->Texture._ReallyEnabled)   return (swrast_tri_func) NULL;
+ if (ctx->Texture._EnabledUnits)    return (swrast_tri_func) NULL;
 
  if (ctx->Light.ShadeModel==GL_SMOOTH
      && swrast->_RasterMask==DEPTH_BIT
@@ -525,13 +526,11 @@ static void set_read_buffer (GLcontext *ctx, GLframebuffer *buffer,
 /*
  * Set the destination/draw buffer.
  */
-static GLboolean set_draw_buffer (GLcontext *ctx, GLenum mode)
+static void set_draw_buffer (GLcontext *ctx, GLenum mode)
 {
- if (mode==GL_BACK_LEFT) {
-    return GL_TRUE;
- } else {
-    return GL_FALSE;
- }
+   /*
+     XXX this has to be fixed
+   */
 }
 
 
@@ -839,9 +838,11 @@ DMesaContext DMesaCreateContext (DMesaVisual visual,
  GLboolean direct = GL_FALSE;
 
  if ((c=(DMesaContext)calloc(1, sizeof(struct dmesa_context)))!=NULL) {
+    __GLimports imports;
+    _mesa_init_default_imports( &imports, (void *) c);
     c->gl_ctx = _mesa_create_context(visual->gl_visual,
                                      share ? share->gl_ctx : NULL,
-                                     (void *)c, direct);
+                                     &imports);
 
     _mesa_enable_sw_extensions(c->gl_ctx);
     _mesa_enable_1_3_extensions(c->gl_ctx);

@@ -1,4 +1,4 @@
-/* $Id: t_vb_render.c,v 1.29 2002/04/09 16:56:52 keithw Exp $ */
+/* $Id: t_vb_render.c,v 1.31 2002/06/29 19:48:17 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -327,7 +327,7 @@ static GLboolean run_render( GLcontext *ctx,
 	 ASSERT((flags & PRIM_MODE_MASK) <= GL_POLYGON+1);
 
 	 if (MESA_VERBOSE & VERBOSE_PRIMS)
-	    fprintf(stderr, "MESA prim %s %d..%d\n", 
+	    _mesa_debug(NULL, "MESA prim %s %d..%d\n", 
 		    _mesa_lookup_enum_by_nr(flags & PRIM_MODE_MASK), 
 		    i, i+length);
 
@@ -365,7 +365,7 @@ static void check_render( GLcontext *ctx, struct gl_pipeline_stage *stage )
       if (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR)
 	 inputs |= VERT_BIT_COLOR1;
 
-      if (ctx->Texture._ReallyEnabled) {
+      if (ctx->Texture._EnabledUnits) {
 	 for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++) {
 	    if (ctx->Texture.Unit[i]._ReallyEnabled)
 	       inputs |= VERT_BIT_TEX(i);

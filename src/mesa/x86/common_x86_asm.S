@@ -1,10 +1,10 @@
-/* $Id: common_x86_asm.S,v 1.8 2002/03/07 21:40:08 brianp Exp $ */
+/* $Id: common_x86_asm.S,v 1.10 2002/06/11 01:26:58 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.0.3
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -63,11 +63,6 @@
  */
 GLNAME( found_intel ):	STRING( "Genuine Intel processor found\n\0" )
 GLNAME( found_amd ):	STRING( "Authentic AMD processor found\n\0" )
-
-#ifdef USE_SSE_ASM
-GLNAME( sse_test_dummy ):
-	D_LONG 0x3f800000, 0x3f800000, 0x3f800000, 0x3f800000
-#endif
 
 
 	SEG_TEXT
@@ -202,7 +197,15 @@ GLNAME( _mesa_test_os_sse_exception_support ):
 	LDMXCSR	( REGOFF( -8, EBP ) )
 
 	XORPS	( XMM0, XMM0 )
-	MOVUPS	( GLNAME( sse_test_dummy ), XMM1 )
+
+	PUSH_L	( CONST( 0x3f800000 ) )
+	PUSH_L	( CONST( 0x3f800000 ) )
+	PUSH_L	( CONST( 0x3f800000 ) )
+	PUSH_L	( CONST( 0x3f800000 ) )
+
+	MOVUPS	( REGIND( ESP ), XMM1 )
+
+	ADD_L	( CONST( 32 ), ESP )
 
 	DIVPS	( XMM0, XMM1 )
 

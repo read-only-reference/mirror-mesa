@@ -1,10 +1,10 @@
-/* $Id: ss_vb.c,v 1.15 2002/01/06 20:39:03 brianp Exp $ */
+/* $Id: ss_vb.c,v 1.20 2002/06/29 19:48:17 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -29,6 +29,7 @@
 
 #include "glheader.h"
 #include "colormac.h"
+#include "context.h"
 #include "macros.h"
 #include "mem.h"
 
@@ -291,32 +292,31 @@ static void copy_pv_extras( GLcontext *ctx, GLuint dst, GLuint src )
  *                         Initialization 
  ***********************************************************************/
 
-
-
-
-
 static void
 emit_invalid( GLcontext *ctx, GLuint start, GLuint end, GLuint newinputs )
 {
-   fprintf(stderr, "swrast_setup: invalid setup function\n");
+   _mesa_debug(ctx, "swrast_setup: invalid setup function\n");
    (void) (ctx && start && end && newinputs);
 }
+
 
 static void 
 interp_invalid( GLcontext *ctx, GLfloat t,
 		GLuint edst, GLuint eout, GLuint ein,
 		GLboolean force_boundary )
 {
-   fprintf(stderr, "swrast_setup: invalid interp function\n");
+   _mesa_debug(ctx, "swrast_setup: invalid interp function\n");
    (void) (ctx && t && edst && eout && ein && force_boundary);
 }
+
 
 static void 
 copy_pv_invalid( GLcontext *ctx, GLuint edst, GLuint esrc )
 {
-   fprintf(stderr, "swrast_setup: invalid copy_pv function\n");
+   _mesa_debug(ctx, "swrast_setup: invalid copy_pv function\n");
    (void) (ctx && edst && esrc );
 }
+
 
 static void init_standard( void )
 {
@@ -359,21 +359,24 @@ static void init_standard( void )
    init_index_fog_point();
 }
 
-static void printSetupFlags(char *msg, GLuint flags )
+
+/* debug only */
+#if 0
+static void
+printSetupFlags(const GLcontext *ctx, char *msg, GLuint flags )
 {
-   fprintf(stderr, "%s(%x): %s%s%s%s%s%s%s\n",
-	   msg,
-	   (int)flags,
-	   (flags & COLOR) ? "color, " : "",
-	   (flags & INDEX) ? "index, " : "",
-	   (flags & TEX0) ? "tex0, " : "",
-	   (flags & MULTITEX) ? "multitex, " : "",
-	   (flags & SPEC) ? "spec, " : "",
-	   (flags & FOG) ? "fog, " : "",
-	   (flags & POINT) ? "point, " : "");
+   _mesa_debug(ctx, "%s(%x): %s%s%s%s%s%s%s\n",
+               msg,
+               (int) flags,
+               (flags & COLOR) ? "color, " : "",
+               (flags & INDEX) ? "index, " : "",
+               (flags & TEX0) ? "tex0, " : "",
+               (flags & MULTITEX) ? "multitex, " : "",
+               (flags & SPEC) ? "spec, " : "",
+               (flags & FOG) ? "fog, " : "",
+               (flags & POINT) ? "point, " : "");
 }
-
-
+#endif
 
 void
 _swsetup_choose_rastersetup_func(GLcontext *ctx)
@@ -386,10 +389,10 @@ _swsetup_choose_rastersetup_func(GLcontext *ctx)
       if (ctx->Visual.rgbMode) {
          funcindex = COLOR;
 
-         if (ctx->Texture._ReallyEnabled & ~0xf)
-            funcindex |= MULTITEX;
-         else if (ctx->Texture._ReallyEnabled & 0xf)
-            funcindex |= TEX0;
+         if (ctx->Texture._EnabledUnits > 1)
+            funcindex |= MULTITEX; /* a unit above unit[0] is enabled */
+         else if (ctx->Texture._EnabledUnits == 1)
+            funcindex |= TEX0;  /* only unit 0 is enabled */
 
          if (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR)
             funcindex |= SPEC;
@@ -436,6 +439,8 @@ _swsetup_vb_init( GLcontext *ctx )
 {
    (void) ctx;
    init_standard();
-   (void) printSetupFlags;
+   /*
+   printSetupFlags(ctx);
+   */
 }
    

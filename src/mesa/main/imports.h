@@ -1,10 +1,10 @@
-/* $Id: imports.h,v 1.2 2001/03/12 00:48:38 gareth Exp $ */
+/* $Id: imports.h,v 1.4 2002/06/29 19:48:16 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -32,8 +32,30 @@
 #include "glheader.h"
 
 
+extern int CAPI
+_mesa_sprintf(__GLcontext *gc, char *str, const char *fmt, ...);
+
 extern void
-_mesa_InitDefaultImports(__GLimports *imports, void *driverCtx, void *other);
+_mesa_warning(__GLcontext *gc, const char *fmtString, ...);
+
+extern void
+_mesa_fatal(__GLcontext *gc, char *str);
+
+extern void
+_mesa_problem( const __GLcontext *ctx, const char *s );
+
+extern void
+_mesa_error( __GLcontext *ctx, GLenum error, const char *fmtString, ... );
+
+extern void
+_mesa_debug( const __GLcontext *ctx, const char *fmtString, ... );
+
+extern void
+_mesa_printf( const __GLcontext *ctx, const char *fmtString, ... );
+
+
+extern void
+_mesa_init_default_imports(__GLimports *imports, void *driverCtx);
 
 
 #endif

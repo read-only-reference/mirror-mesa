@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.163 2002/05/27 17:04:52 brianp Exp $ */
+/* $Id: context.c,v 1.174 2002/06/29 19:48:15 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -41,7 +41,6 @@
 #include "get.h"
 #include "glthread.h"
 #include "hash.h"
-#include "imports.h"
 #include "light.h"
 #include "macros.h"
 #include "mem.h"
@@ -50,6 +49,7 @@
 #include "state.h"
 #include "teximage.h"
 #include "texobj.h"
+#include "texstate.h"
 #include "mtypes.h"
 #include "varray.h"
 #include "vpstate.h"
@@ -78,13 +78,19 @@ int MESA_DEBUG_FLAGS = 0;
 #endif
 
 
+static void
+free_shared_state( GLcontext *ctx, struct gl_shared_state *ss );
+
 
 /**********************************************************************/
 /*****       OpenGL SI-style interface (new in Mesa 3.5)          *****/
 /**********************************************************************/
 
-static GLboolean
-_mesa_DestroyContext(__GLcontext *gc)
+/* Called by window system/device driver (via gc->exports.destroyCurrent())
+ * when the rendering context is to be destroyed.
+ */
+GLboolean
+_mesa_destroyContext(__GLcontext *gc)
 {
    if (gc) {
       _mesa_free_context_data(gc);
@@ -93,6 +99,133 @@ _mesa_DestroyContext(__GLcontext *gc)
    return GL_TRUE;
 }
 
+/* Called by window system/device driver (via gc->exports.loseCurrent())
+ * when the rendering context is made non-current.
+ */
+GLboolean
+_mesa_loseCurrent(__GLcontext *gc)
+{
+   /* XXX unbind context from thread */
+   return GL_TRUE;
+}
+
+/* Called by window system/device driver (via gc->exports.makeCurrent())
+ * when the rendering context is made current.
+ */
+GLboolean
+_mesa_makeCurrent(__GLcontext *gc)
+{
+   /* XXX bind context to thread */
+   return GL_TRUE;
+}
+
+/* Called by window system/device driver - yadda, yadda, yadda.
+ * See above comments.
+ */
+GLboolean
+_mesa_shareContext(__GLcontext *gc, __GLcontext *gcShare)
+{
+   if (gc && gcShare && gc->Shared && gcShare->Shared) {
+      gc->Shared->RefCount--;
+      if (gc->Shared->RefCount == 0) {
+         free_shared_state(gc, gc->Shared);
+      }
+      gc->Shared = gcShare->Shared;
+      gc->Shared->RefCount++;
+      return GL_TRUE;
+   }
+   else {
+      return GL_FALSE;
+   }
+}
+
+GLboolean
+_mesa_copyContext(__GLcontext *dst, const __GLcontext *src, GLuint mask)
+{
+   if (dst && src) {
+      _mesa_copy_context( src, dst, mask );
+      return GL_TRUE;
+   }
+   else {
+      return GL_FALSE;
+   }
+}
+
+GLboolean
+_mesa_forceCurrent(__GLcontext *gc)
+{
+   return GL_TRUE;
+}
+
+GLboolean
+_mesa_notifyResize(__GLcontext *gc)
+{
+   GLint x, y;
+   GLuint width, height;
+   __GLdrawablePrivate *d = gc->imports.getDrawablePrivate(gc);
+   if (!d || !d->getDrawableSize)
+      return GL_FALSE;
+   d->getDrawableSize( d, &x, &y, &width, &height );
+   /* update viewport, resize software buffers, etc. */
+   return GL_TRUE;
+}
+
+void
+_mesa_notifyDestroy(__GLcontext *gc)
+{
+}
+
+/* Called by window system just before swapping buffers.
+ * We have to finish any pending rendering.
+ */
+void
+_mesa_notifySwapBuffers(__GLcontext *gc)
+{
+   FLUSH_VERTICES( gc, 0 );
+}
+
+struct __GLdispatchStateRec *
+_mesa_dispatchExec(__GLcontext *gc)
+{
+   return NULL;
+}
+
+void
+_mesa_beginDispatchOverride(__GLcontext *gc)
+{
+}
+
+void
+_mesa_endDispatchOverride(__GLcontext *gc)
+{
+}
+
+/* Setup the exports.  The window system will call these functions
+ * when it needs Mesa to do something.
+ * NOTE: Device drivers should override these functions!  For example,
+ * the Xlib driver should plug in the XMesa*-style functions into this
+ * structure.  The XMesa-style functions should then call the _mesa_*
+ * version of these functions.  This is an approximation to OO design
+ * (inheritance and virtual functions).
+ */
+static void
+_mesa_init_default_exports(__GLexports *exports)
+{
+    exports->destroyContext = _mesa_destroyContext;
+    exports->loseCurrent = _mesa_loseCurrent;
+    exports->makeCurrent = _mesa_makeCurrent;
+    exports->shareContext = _mesa_shareContext;
+    exports->copyContext = _mesa_copyContext;
+    exports->forceCurrent = _mesa_forceCurrent;
+    exports->notifyResize = _mesa_notifyResize;
+    exports->notifyDestroy = _mesa_notifyDestroy;
+    exports->notifySwapBuffers = _mesa_notifySwapBuffers;
+    exports->dispatchExec = _mesa_dispatchExec;
+    exports->beginDispatchOverride = _mesa_beginDispatchOverride;
+    exports->endDispatchOverride = _mesa_endDispatchOverride;
+}
+
+
 
 /* exported OpenGL SI interface */
 __GLcontext *
@@ -100,12 +233,13 @@ __glCoreCreateContext(__GLimports *imports, __GLcontextModes *modes)
 {
     GLcontext *ctx;
 
-    ctx = (GLcontext *) (*imports->calloc)(0, 1, sizeof(GLcontext));
+    ctx = (GLcontext *) (*imports->calloc)(NULL, 1, sizeof(GLcontext));
     if (ctx == NULL) {
 	return NULL;
     }
-   ctx->Driver.CurrentExecPrimitive=0;
+    ctx->Driver.CurrentExecPrimitive=0;  /* XXX why is this here??? */
     ctx->imports = *imports;
+    _mesa_init_default_exports(&(ctx->exports));
 
     _mesa_initialize_visual(&ctx->Visual,
                             modes->rgbMode,
@@ -124,10 +258,7 @@ __glCoreCreateContext(__GLimports *imports, __GLcontextModes *modes)
                             modes->accumAlphaBits,
                             0);
 
-    /* KW: was imports->wscx */
-    _mesa_initialize_context(ctx, &ctx->Visual, NULL, imports->other, GL_FALSE);
-
-    ctx->exports.destroyContext = _mesa_DestroyContext;
+    _mesa_initialize_context(ctx, &ctx->Visual, NULL, imports);
 
     return ctx;
 }
@@ -145,12 +276,6 @@ __glCoreNopDispatch(void)
    _glapi_set_dispatch(NULL);
 #endif
 }
-
-
-/**********************************************************************/
-/*****                  Context and Thread management             *****/
-/**********************************************************************/
-
 
 
 /**********************************************************************/
@@ -337,6 +462,8 @@ _mesa_initialize_framebuffer( GLframebuffer *buffer,
    assert(buffer);
    assert(visual);
 
+   BZERO(buffer, sizeof(GLframebuffer));
+
    /* sanity checks */
    if (softwareDepth ) {
       assert(visual->depthBits > 0);
@@ -429,7 +556,7 @@ _glthread_DECLARE_STATIC_MUTEX(OneTimeLock);
  * This function just calls all the various one-time-init functions in Mesa.
  */
 static void
-one_time_init( void )
+one_time_init( GLcontext *ctx )
 {
    static GLboolean alreadyCalled = GL_FALSE;
    _glthread_LOCK_MUTEX(OneTimeLock);
@@ -450,15 +577,16 @@ one_time_init( void )
 #ifdef USE_SPARC_ASM
       _mesa_init_sparc_glapi_relocs();
 #endif
-      if (getenv("MESA_DEBUG")) {
+      if (ctx->imports.getenv(ctx, "MESA_DEBUG")) {
          _glapi_noop_enable_warnings(GL_TRUE);
+         _glapi_set_warning_func( (_glapi_warning_func) _mesa_warning );
       }
       else {
          _glapi_noop_enable_warnings(GL_FALSE);
       }
 
 #if defined(DEBUG) && defined(__DATE__) && defined(__TIME__)
-   fprintf(stderr, "Mesa DEBUG build %s %s\n", __DATE__, __TIME__);
+      _mesa_debug(ctx, "Mesa DEBUG build %s %s\n", __DATE__, __TIME__);
 #endif
 
       alreadyCalled = GL_TRUE;
@@ -520,23 +648,30 @@ alloc_shared_state( void )
    /* Default Texture objects */
    outOfMemory = GL_FALSE;
 
-   ss->Default1D = _mesa_alloc_texture_object(ss, 0, 1);
+   ss->Default1D = _mesa_alloc_texture_object(ss, 0, GL_TEXTURE_1D);
    if (!ss->Default1D) {
       outOfMemory = GL_TRUE;
    }
 
-   ss->Default2D = _mesa_alloc_texture_object(ss, 0, 2);
+   ss->Default2D = _mesa_alloc_texture_object(ss, 0, GL_TEXTURE_2D);
    if (!ss->Default2D) {
       outOfMemory = GL_TRUE;
    }
 
-   ss->Default3D = _mesa_alloc_texture_object(ss, 0, 3);
+   ss->Default3D = _mesa_alloc_texture_object(ss, 0, GL_TEXTURE_3D);
    if (!ss->Default3D) {
       outOfMemory = GL_TRUE;
    }
 
-   ss->DefaultCubeMap = _mesa_alloc_texture_object(ss, 0, 6);
+   ss->DefaultCubeMap = _mesa_alloc_texture_object(ss, 0,
+                                                   GL_TEXTURE_CUBE_MAP_ARB);
    if (!ss->DefaultCubeMap) {
+      outOfMemory = GL_TRUE;
+   }
+
+   ss->DefaultRect = _mesa_alloc_texture_object(ss, 0,
+                                                GL_TEXTURE_RECTANGLE_NV);
+   if (!ss->DefaultRect) {
       outOfMemory = GL_TRUE;
    }
 
@@ -557,6 +692,8 @@ alloc_shared_state( void )
          _mesa_free_texture_object(ss, ss->Default3D);
       if (ss->DefaultCubeMap)
          _mesa_free_texture_object(ss, ss->DefaultCubeMap);
+      if (ss->DefaultRect)
+         _mesa_free_texture_object(ss, ss->DefaultRect);
       FREE(ss);
       return NULL;
    }
@@ -715,6 +852,7 @@ init_texture_unit( GLcontext *ctx, GLuint unit )
    texUnit->Current2D = ctx->Shared->Default2D;
    texUnit->Current3D = ctx->Shared->Default3D;
    texUnit->CurrentCubeMap = ctx->Shared->DefaultCubeMap;
+   texUnit->CurrentRect = ctx->Shared->DefaultRect;
 }
 
 
@@ -772,6 +910,7 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Const.MaxTextureLevels = MAX_TEXTURE_LEVELS;
    ctx->Const.Max3DTextureLevels = MAX_3D_TEXTURE_LEVELS;
    ctx->Const.MaxCubeTextureLevels = MAX_CUBE_TEXTURE_LEVELS;
+   ctx->Const.MaxTextureRectSize = MAX_TEXTURE_RECT_SIZE;
    ctx->Const.MaxTextureUnits = MAX_TEXTURE_UNITS;
    ctx->Const.MaxTextureMaxAnisotropy = MAX_TEXTURE_MAX_ANISOTROPY;
    ctx->Const.MaxTextureLodBias = MAX_TEXTURE_LOD_BIAS;
@@ -1161,7 +1300,8 @@ init_attrib_groups( GLcontext *ctx )
 
    /* Texture group */
    ctx->Texture.CurrentUnit = 0;      /* multitexture */
-   ctx->Texture._ReallyEnabled = 0;
+   ctx->Texture._ReallyEnabled = 0;   /* XXX obsolete */
+   ctx->Texture._EnabledUnits = 0;
    for (i=0; i<MAX_TEXTURE_UNITS; i++)
       init_texture_unit( ctx, i );
    ctx->Texture.SharedPalette = GL_FALSE;
@@ -1307,11 +1447,12 @@ init_attrib_groups( GLcontext *ctx )
    _mesa_init_colortable(&ctx->ProxyPostColorMatrixColorTable);
 
    /* GL_NV_vertex_program */
-   ctx->VertexProgram.Current = NULL;
-   ctx->VertexProgram.CurrentID = 0;
    ctx->VertexProgram.Enabled = GL_FALSE;
    ctx->VertexProgram.PointSizeEnabled = GL_FALSE;
    ctx->VertexProgram.TwoSideEnabled = GL_FALSE;
+   ctx->VertexProgram.CurrentID = 0;
+   ctx->VertexProgram.ErrorPos = -1;
+   ctx->VertexProgram.Current = NULL;
    for (i = 0; i < VP_NUM_PROG_REGS / 4; i++) {
       ctx->VertexProgram.TrackMatrix[i] = GL_NONE;
       ctx->VertexProgram.TrackMatrixTransform[i] = GL_IDENTITY_NV;
@@ -1333,14 +1474,14 @@ init_attrib_groups( GLcontext *ctx )
    ctx->OcclusionResultSaved = GL_FALSE;
 
    /* For debug/development only */
-   ctx->NoRaster = getenv("MESA_NO_RASTER") ? GL_TRUE : GL_FALSE;
+   ctx->NoRaster = ctx->imports.getenv(ctx, "MESA_NO_RASTER") ? GL_TRUE : GL_FALSE;
    ctx->FirstTimeCurrent = GL_TRUE;
 
    /* Dither disable */
-   ctx->NoDither = getenv("MESA_NO_DITHER") ? GL_TRUE : GL_FALSE;
+   ctx->NoDither = ctx->imports.getenv(ctx, "MESA_NO_DITHER") ? GL_TRUE : GL_FALSE;
    if (ctx->NoDither) {
-      if (getenv("MESA_DEBUG")) {
-         fprintf(stderr, "MESA_NO_DITHER set - dithering disabled\n");
+      if (ctx->imports.getenv(ctx, "MESA_DEBUG")) {
+         _mesa_debug(ctx, "MESA_NO_DITHER set - dithering disabled\n");
       }
       ctx->Color.DitherFlag = GL_FALSE;
    }
@@ -1360,29 +1501,40 @@ alloc_proxy_textures( GLcontext *ctx )
    GLboolean out_of_memory;
    GLint i;
 
-   ctx->Texture.Proxy1D = _mesa_alloc_texture_object(NULL, 0, 1);
+   ctx->Texture.Proxy1D = _mesa_alloc_texture_object(NULL, 0, GL_TEXTURE_1D);
    if (!ctx->Texture.Proxy1D) {
       return GL_FALSE;
    }
 
-   ctx->Texture.Proxy2D = _mesa_alloc_texture_object(NULL, 0, 2);
+   ctx->Texture.Proxy2D = _mesa_alloc_texture_object(NULL, 0, GL_TEXTURE_2D);
    if (!ctx->Texture.Proxy2D) {
       _mesa_free_texture_object(NULL, ctx->Texture.Proxy1D);
       return GL_FALSE;
    }
 
-   ctx->Texture.Proxy3D = _mesa_alloc_texture_object(NULL, 0, 3);
+   ctx->Texture.Proxy3D = _mesa_alloc_texture_object(NULL, 0, GL_TEXTURE_3D);
    if (!ctx->Texture.Proxy3D) {
       _mesa_free_texture_object(NULL, ctx->Texture.Proxy1D);
       _mesa_free_texture_object(NULL, ctx->Texture.Proxy2D);
       return GL_FALSE;
    }
 
-   ctx->Texture.ProxyCubeMap = _mesa_alloc_texture_object(NULL, 0, 6);
+   ctx->Texture.ProxyCubeMap = _mesa_alloc_texture_object(NULL, 0,
+                                                     GL_TEXTURE_CUBE_MAP_ARB);
    if (!ctx->Texture.ProxyCubeMap) {
       _mesa_free_texture_object(NULL, ctx->Texture.Proxy1D);
       _mesa_free_texture_object(NULL, ctx->Texture.Proxy2D);
       _mesa_free_texture_object(NULL, ctx->Texture.Proxy3D);
+      return GL_FALSE;
+   }
+
+   ctx->Texture.ProxyRect = _mesa_alloc_texture_object(NULL, 0,
+                                                      GL_TEXTURE_RECTANGLE_NV);
+   if (!ctx->Texture.ProxyRect) {
+      _mesa_free_texture_object(NULL, ctx->Texture.Proxy1D);
+      _mesa_free_texture_object(NULL, ctx->Texture.Proxy2D);
+      _mesa_free_texture_object(NULL, ctx->Texture.Proxy3D);
+      _mesa_free_texture_object(NULL, ctx->Texture.ProxyCubeMap);
       return GL_FALSE;
    }
 
@@ -1399,6 +1551,10 @@ alloc_proxy_textures( GLcontext *ctx )
          out_of_memory = GL_TRUE;
       }
    }
+   ctx->Texture.ProxyRect->Image[0] = _mesa_alloc_texture_image();
+   if (!ctx->Texture.ProxyRect->Image[0])
+      out_of_memory = GL_TRUE;
+
    if (out_of_memory) {
       for (i=0;i<MAX_TEXTURE_LEVELS;i++) {
          if (ctx->Texture.Proxy1D->Image[i]) {
@@ -1414,10 +1570,14 @@ alloc_proxy_textures( GLcontext *ctx )
             _mesa_free_texture_image(ctx->Texture.ProxyCubeMap->Image[i]);
          }
       }
+      if (ctx->Texture.ProxyRect->Image[0]) {
+         _mesa_free_texture_image(ctx->Texture.ProxyRect->Image[0]);
+      }
       _mesa_free_texture_object(NULL, ctx->Texture.Proxy1D);
       _mesa_free_texture_object(NULL, ctx->Texture.Proxy2D);
       _mesa_free_texture_object(NULL, ctx->Texture.Proxy3D);
       _mesa_free_texture_object(NULL, ctx->Texture.ProxyCubeMap);
+      _mesa_free_texture_object(NULL, ctx->Texture.ProxyRect);
       return GL_FALSE;
    }
    else {
@@ -1472,25 +1632,33 @@ GLboolean
 _mesa_initialize_context( GLcontext *ctx,
                           const GLvisual *visual,
                           GLcontext *share_list,
-                          void *driver_ctx,
-                          GLboolean direct )
+                          const __GLimports *imports )
 {
    GLuint dispatchSize;
 
-   (void) direct;  /* not used */
+   ASSERT(imports);
+   ASSERT(imports->other); /* other points to the device driver's context */
+
+   /* assing imports */
+   ctx->imports = *imports;
+
+   /* initialize the exports (Mesa functions called by the window system) */
+   _mesa_init_default_exports( &(ctx->exports) );
 
    /* misc one-time initializations */
-   one_time_init();
+   one_time_init(ctx);
 
+#if 0
    /**
     ** OpenGL SI stuff
     **/
    if (!ctx->imports.malloc) {
-      _mesa_InitDefaultImports(&ctx->imports, driver_ctx, NULL);
+      _mesa_init_default_imports(&ctx->imports, driver_ctx);
    }
    /* exports are setup by the device driver */
+#endif
 
-   ctx->DriverCtx = driver_ctx;
+   ctx->DriverCtx = imports->other;
    ctx->Visual = *visual;
    ctx->DrawBuffer = NULL;
    ctx->ReadBuffer = NULL;
@@ -1515,6 +1683,7 @@ _mesa_initialize_context( GLcontext *ctx,
    ctx->Shared->Default2D->RefCount += MAX_TEXTURE_UNITS;
    ctx->Shared->Default3D->RefCount += MAX_TEXTURE_UNITS;
    ctx->Shared->DefaultCubeMap->RefCount += MAX_TEXTURE_UNITS;
+   ctx->Shared->DefaultRect->RefCount += MAX_TEXTURE_UNITS;
 
    init_attrib_groups( ctx );
 
@@ -1628,11 +1797,11 @@ _mesa_initialize_context( GLcontext *ctx,
 #endif
 
 
-   if (getenv("MESA_DEBUG"))
-      add_debug_flags(getenv("MESA_DEBUG"));
+   if (ctx->imports.getenv(ctx, "MESA_DEBUG"))
+      add_debug_flags(ctx->imports.getenv(ctx, "MESA_DEBUG"));
 
-   if (getenv("MESA_VERBOSE"))
-      add_debug_flags(getenv("MESA_VERBOSE"));
+   if (ctx->imports.getenv(ctx, "MESA_VERBOSE"))
+      add_debug_flags(ctx->imports.getenv(ctx, "MESA_VERBOSE"));
 
    return GL_TRUE;
 }
@@ -1643,25 +1812,31 @@ _mesa_initialize_context( GLcontext *ctx,
  * Allocate and initialize a GLcontext structure.
  * Input:  visual - a GLvisual pointer (we copy the struct contents)
  *         sharelist - another context to share display lists with or NULL
- *         driver_ctx - pointer to device driver's context state struct
+ *         imports - points to a fully-initialized __GLimports object.
  * Return:  pointer to a new __GLcontextRec or NULL if error.
  */
 GLcontext *
 _mesa_create_context( const GLvisual *visual,
                       GLcontext *share_list,
-                      void *driver_ctx,
-                      GLboolean direct )
+                      const __GLimports *imports )
 {
-   GLcontext *ctx = (GLcontext *) CALLOC( sizeof(GLcontext) );
-   if (!ctx) {
+   GLcontext *ctx;
+
+   ASSERT(visual);
+   ASSERT(imports);
+   ASSERT(imports->calloc);
+
+   ctx = (GLcontext *) imports->calloc(NULL, 1, sizeof(GLcontext));
+   if (!ctx)
       return NULL;
-   }
-   ctx->Driver.CurrentExecPrimitive = 0;
-   if (_mesa_initialize_context(ctx, visual, share_list, driver_ctx, direct)) {
+
+   ctx->Driver.CurrentExecPrimitive = 0;  /* XXX why is this here??? */
+
+   if (_mesa_initialize_context(ctx, visual, share_list, imports)) {
       return ctx;
    }
    else {
-      FREE(ctx);
+      imports->free(NULL, ctx);
       return NULL;
    }
 }
@@ -1724,6 +1899,7 @@ _mesa_free_context_data( GLcontext *ctx )
    _mesa_free_texture_object( NULL, ctx->Texture.Proxy2D );
    _mesa_free_texture_object( NULL, ctx->Texture.Proxy3D );
    _mesa_free_texture_object( NULL, ctx->Texture.ProxyCubeMap );
+   _mesa_free_texture_object( NULL, ctx->Texture.ProxyRect );
 
    /* Free evaluator data */
    if (ctx->EvalMap.Map1Vertex3.Points)
@@ -1807,75 +1983,136 @@ void
 _mesa_copy_context( const GLcontext *src, GLcontext *dst, GLuint mask )
 {
    if (mask & GL_ACCUM_BUFFER_BIT) {
-      MEMCPY( &dst->Accum, &src->Accum, sizeof(struct gl_accum_attrib) );
+      /* OK to memcpy */
+      dst->Accum = src->Accum;
    }
    if (mask & GL_COLOR_BUFFER_BIT) {
-      MEMCPY( &dst->Color, &src->Color, sizeof(struct gl_colorbuffer_attrib) );
+      /* OK to memcpy */
+      dst->Color = src->Color;
    }
    if (mask & GL_CURRENT_BIT) {
-      MEMCPY( &dst->Current, &src->Current, sizeof(struct gl_current_attrib) );
+      /* OK to memcpy */
+      dst->Current = src->Current;
    }
    if (mask & GL_DEPTH_BUFFER_BIT) {
-      MEMCPY( &dst->Depth, &src->Depth, sizeof(struct gl_depthbuffer_attrib) );
+      /* OK to memcpy */
+      dst->Depth = src->Depth;
    }
    if (mask & GL_ENABLE_BIT) {
       /* no op */
    }
    if (mask & GL_EVAL_BIT) {
-      MEMCPY( &dst->Eval, &src->Eval, sizeof(struct gl_eval_attrib) );
+      /* OK to memcpy */
+      dst->Eval = src->Eval;
    }
    if (mask & GL_FOG_BIT) {
-      MEMCPY( &dst->Fog, &src->Fog, sizeof(struct gl_fog_attrib) );
+      /* OK to memcpy */
+      dst->Fog = src->Fog;
    }
    if (mask & GL_HINT_BIT) {
-      MEMCPY( &dst->Hint, &src->Hint, sizeof(struct gl_hint_attrib) );
+      /* OK to memcpy */
+      dst->Hint = src->Hint;
    }
    if (mask & GL_LIGHTING_BIT) {
-      MEMCPY( &dst->Light, &src->Light, sizeof(struct gl_light_attrib) );
-      /*       gl_reinit_light_attrib( &dst->Light ); */
+      GLuint i;
+      /* begin with memcpy */
+      MEMCPY( &dst->Light, &src->Light, sizeof(struct gl_light) );
+      /* fixup linked lists to prevent pointer insanity */
+      make_empty_list( &(dst->Light.EnabledList) );
+      for (i = 0; i < MAX_LIGHTS; i++) {
+         if (dst->Light.Light[i].Enabled) {
+            insert_at_tail(&(dst->Light.EnabledList), &(dst->Light.Light[i]));
+         }
+      }
    }
    if (mask & GL_LINE_BIT) {
-      MEMCPY( &dst->Line, &src->Line, sizeof(struct gl_line_attrib) );
+      /* OK to memcpy */
+      dst->Line = src->Line;
    }
    if (mask & GL_LIST_BIT) {
-      MEMCPY( &dst->List, &src->List, sizeof(struct gl_list_attrib) );
+      /* OK to memcpy */
+      dst->List = src->List;
    }
    if (mask & GL_PIXEL_MODE_BIT) {
-      MEMCPY( &dst->Pixel, &src->Pixel, sizeof(struct gl_pixel_attrib) );
+      /* OK to memcpy */
+      dst->Pixel = src->Pixel;
    }
    if (mask & GL_POINT_BIT) {
-      MEMCPY( &dst->Point, &src->Point, sizeof(struct gl_point_attrib) );
+      /* OK to memcpy */
+      dst->Point = src->Point;
    }
    if (mask & GL_POLYGON_BIT) {
-      MEMCPY( &dst->Polygon, &src->Polygon, sizeof(struct gl_polygon_attrib) );
+      /* OK to memcpy */
+      dst->Polygon = src->Polygon;
    }
    if (mask & GL_POLYGON_STIPPLE_BIT) {
       /* Use loop instead of MEMCPY due to problem with Portland Group's
        * C compiler.  Reported by John Stone.
        */
-      int i;
-      for (i=0;i<32;i++) {
+      GLuint i;
+      for (i = 0; i < 32; i++) {
          dst->PolygonStipple[i] = src->PolygonStipple[i];
       }
    }
    if (mask & GL_SCISSOR_BIT) {
-      MEMCPY( &dst->Scissor, &src->Scissor, sizeof(struct gl_scissor_attrib) );
+      /* OK to memcpy */
+      dst->Scissor = src->Scissor;
    }
    if (mask & GL_STENCIL_BUFFER_BIT) {
-      MEMCPY( &dst->Stencil, &src->Stencil, sizeof(struct gl_stencil_attrib) );
+      /* OK to memcpy */
+      dst->Stencil = src->Stencil;
    }
    if (mask & GL_TEXTURE_BIT) {
-      MEMCPY( &dst->Texture, &src->Texture, sizeof(struct gl_texture_attrib) );
+      /* Cannot memcpy because of pointers */
+      _mesa_copy_texture_state(src, dst);
    }
    if (mask & GL_TRANSFORM_BIT) {
-      MEMCPY( &dst->Transform, &src->Transform, sizeof(struct gl_transform_attrib) );
+      /* OK to memcpy */
+      dst->Transform = src->Transform;
    }
    if (mask & GL_VIEWPORT_BIT) {
-      MEMCPY( &dst->Viewport, &src->Viewport, sizeof(struct gl_viewport_attrib) );
+      /* Cannot use memcpy, because of pointers in GLmatrix _WindowMap */
+      dst->Viewport.X = src->Viewport.X;
+      dst->Viewport.Y = src->Viewport.Y;
+      dst->Viewport.Width = src->Viewport.Width;
+      dst->Viewport.Height = src->Viewport.Height;
+      dst->Viewport.Near = src->Viewport.Near;
+      dst->Viewport.Far = src->Viewport.Far;
+      _math_matrix_copy(&dst->Viewport._WindowMap, &src->Viewport._WindowMap);
    }
+
    /* XXX FIXME:  Call callbacks?
     */
    dst->NewState = _NEW_ALL;
+}
+
+
+
+static void print_info( void )
+{
+   _mesa_debug(NULL, "Mesa GL_VERSION = %s\n",
+	   (char *) _mesa_GetString(GL_VERSION));
+   _mesa_debug(NULL, "Mesa GL_RENDERER = %s\n",
+	   (char *) _mesa_GetString(GL_RENDERER));
+   _mesa_debug(NULL, "Mesa GL_VENDOR = %s\n",
+	   (char *) _mesa_GetString(GL_VENDOR));
+   _mesa_debug(NULL, "Mesa GL_EXTENSIONS = %s\n",
+	   (char *) _mesa_GetString(GL_EXTENSIONS));
+#if defined(THREADS)
+   _mesa_debug(NULL, "Mesa thread-safe: YES\n");
+#else
+   _mesa_debug(NULL, "Mesa thread-safe: NO\n");
+#endif
+#if defined(USE_X86_ASM)
+   _mesa_debug(NULL, "Mesa x86-optimized: YES\n");
+#else
+   _mesa_debug(NULL, "Mesa x86-optimized: NO\n");
+#endif
+#if defined(USE_SPARC_ASM)
+   _mesa_debug(NULL, "Mesa sparc-optimized: YES\n");
+#else
+   _mesa_debug(NULL, "Mesa sparc-optimized: NO\n");
+#endif
 }
 
 
@@ -1889,34 +2126,6 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *buffer )
 }
 
 
-static void print_info( void )
-{
-   fprintf(stderr, "Mesa GL_VERSION = %s\n",
-	   (char *) _mesa_GetString(GL_VERSION));
-   fprintf(stderr, "Mesa GL_RENDERER = %s\n",
-	   (char *) _mesa_GetString(GL_RENDERER));
-   fprintf(stderr, "Mesa GL_VENDOR = %s\n",
-	   (char *) _mesa_GetString(GL_VENDOR));
-   fprintf(stderr, "Mesa GL_EXTENSIONS = %s\n",
-	   (char *) _mesa_GetString(GL_EXTENSIONS));
-#if defined(THREADS)
-   fprintf(stderr, "Mesa thread-safe: YES\n");
-#else
-   fprintf(stderr, "Mesa thread-safe: NO\n");
-#endif
-#if defined(USE_X86_ASM)
-   fprintf(stderr, "Mesa x86-optimized: YES\n");
-#else
-   fprintf(stderr, "Mesa x86-optimized: NO\n");
-#endif
-#if defined(USE_SPARC_ASM)
-   fprintf(stderr, "Mesa sparc-optimized: YES\n");
-#else
-   fprintf(stderr, "Mesa sparc-optimized: NO\n");
-#endif
-}
-
-
 /*
  * Bind the given context to the given draw-buffer and read-buffer
  * and make it the current context for this thread.
@@ -1926,7 +2135,7 @@ _mesa_make_current2( GLcontext *newCtx, GLframebuffer *drawBuffer,
                      GLframebuffer *readBuffer )
 {
    if (MESA_VERBOSE)
-      fprintf(stderr, "_mesa_make_current2()\n");
+      _mesa_debug(newCtx, "_mesa_make_current2()\n");
 
    /* Check that the context's and framebuffer's visuals are compatible.
     * We could do a lot more checking here but this'll catch obvious
@@ -1962,9 +2171,42 @@ _mesa_make_current2( GLcontext *newCtx, GLframebuffer *drawBuffer,
 	 newCtx->DrawBuffer = drawBuffer;
 	 newCtx->ReadBuffer = readBuffer;
 	 newCtx->NewState |= _NEW_BUFFERS;
-	 /* _mesa_update_state( newCtx ); */
+
+         if (drawBuffer->Width == 0 && drawBuffer->Height == 0) {
+            /* get initial window size */
+            GLuint bufWidth, bufHeight;
+
+            /* ask device driver for size of output buffer */
+            (*newCtx->Driver.GetBufferSize)( drawBuffer, &bufWidth, &bufHeight );
+
+            if (drawBuffer->Width == bufWidth && drawBuffer->Height == bufHeight)
+               return; /* size is as expected */
+
+            drawBuffer->Width = bufWidth;
+            drawBuffer->Height = bufHeight;
+
+            newCtx->Driver.ResizeBuffers( drawBuffer );
+         }
+
+         if (readBuffer != drawBuffer &&
+             readBuffer->Width == 0 && readBuffer->Height == 0) {
+            /* get initial window size */
+            GLuint bufWidth, bufHeight;
+
+            /* ask device driver for size of output buffer */
+            (*newCtx->Driver.GetBufferSize)( readBuffer, &bufWidth, &bufHeight );
+
+            if (readBuffer->Width == bufWidth && readBuffer->Height == bufHeight)
+               return; /* size is as expected */
+
+            readBuffer->Width = bufWidth;
+            readBuffer->Height = bufHeight;
+
+            newCtx->Driver.ResizeBuffers( readBuffer );
+         }
       }
 
+      /* This is only for T&L - a bit out of place, or misnamed (BP) */
       if (newCtx->Driver.MakeCurrent)
 	 newCtx->Driver.MakeCurrent( newCtx, drawBuffer, readBuffer );
 
@@ -1974,7 +2216,7 @@ _mesa_make_current2( GLcontext *newCtx, GLframebuffer *drawBuffer,
        * information.
        */
       if (newCtx->FirstTimeCurrent) {
-	 if (getenv("MESA_INFO")) {
+	 if (newCtx->imports.getenv(newCtx, "MESA_INFO")) {
 	    print_info();
 	 }
 	 newCtx->FirstTimeCurrent = GL_FALSE;
@@ -2029,96 +2271,12 @@ _mesa_get_dispatch(GLcontext *ctx)
 
 
 /*
- * This function is called when the Mesa user has stumbled into a code
- * path which may not be implemented fully or correctly.
- */
-void _mesa_problem( const GLcontext *ctx, const char *s )
-{
-   fprintf( stderr, "Mesa implementation error: %s\n", s );
-#ifdef XF86DRI
-   fprintf( stderr, "Please report to the DRI bug database at dri.sourceforge.net\n");
-#else
-   fprintf( stderr, "Please report to the Mesa bug database at www.mesa3d.org\n" );
-#endif
-   (void) ctx;
-}
-
-
-
-/*
- * This is called to inform the user that he or she has tried to do
- * something illogical or if there's likely a bug in their program
- * (like enabled depth testing without a depth buffer).
+ * Record the given error code and call the driver's Error function if defined.
+ * This is called via _mesa_error().
  */
 void
-_mesa_warning( const GLcontext *ctx, const char *s )
+_mesa_record_error( GLcontext *ctx, GLenum error )
 {
-   (*ctx->imports.warning)((__GLcontext *) ctx, (char *) s);
-}
-
-
-
-/*
- * This is Mesa's error handler.  Normally, all that's done is the updating
- * of the current error value.  If Mesa is compiled with -DDEBUG or if the
- * environment variable "MESA_DEBUG" is defined then a real error message
- * is printed to stderr.
- * Input:  ctx - the GL context
- *         error - the error value
- *         where - usually the name of function where error was detected
- */
-void
-_mesa_error( GLcontext *ctx, GLenum error, const char *where )
-{
-   const char *debugEnv = getenv("MESA_DEBUG");
-   GLboolean debug;
-
-#ifdef DEBUG
-   if (debugEnv && strstr(debugEnv, "silent"))
-      debug = GL_FALSE;
-   else
-      debug = GL_TRUE;
-#else
-   if (debugEnv)
-      debug = GL_TRUE;
-   else
-      debug = GL_FALSE;
-#endif
-
-   if (debug) {
-      const char *errstr;
-      switch (error) {
-	 case GL_NO_ERROR:
-	    errstr = "GL_NO_ERROR";
-	    break;
-	 case GL_INVALID_VALUE:
-	    errstr = "GL_INVALID_VALUE";
-	    break;
-	 case GL_INVALID_ENUM:
-	    errstr = "GL_INVALID_ENUM";
-	    break;
-	 case GL_INVALID_OPERATION:
-	    errstr = "GL_INVALID_OPERATION";
-	    break;
-	 case GL_STACK_OVERFLOW:
-	    errstr = "GL_STACK_OVERFLOW";
-	    break;
-	 case GL_STACK_UNDERFLOW:
-	    errstr = "GL_STACK_UNDERFLOW";
-	    break;
-	 case GL_OUT_OF_MEMORY:
-	    errstr = "GL_OUT_OF_MEMORY";
-	    break;
-         case GL_TABLE_TOO_LARGE:
-            errstr = "GL_TABLE_TOO_LARGE";
-            break;
-	 default:
-	    errstr = "unknown";
-	    break;
-      }
-      fprintf(stderr, "Mesa user error: %s in %s\n", errstr, where);
-   }
-
    if (!ctx)
       return;
 
@@ -2131,7 +2289,6 @@ _mesa_error( GLcontext *ctx, GLenum error, const char *where )
       (*ctx->Driver.Error)( ctx );
    }
 }
-
 
 
 void

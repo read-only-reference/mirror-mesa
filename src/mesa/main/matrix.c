@@ -1,10 +1,10 @@
-/* $Id: matrix.c,v 1.40 2002/04/22 20:00:16 alanh Exp $ */
+/* $Id: matrix.c,v 1.43 2002/06/23 02:52:18 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -86,6 +86,10 @@ _mesa_Ortho( GLdouble left, GLdouble right,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
+   if (MESA_VERBOSE & VERBOSE_API)
+      _mesa_debug(ctx, "glFrustum(%f, %f, %f, %f, %f, %f)\n",
+                  left, right, bottom, top, nearval, farval);
+
    if (left == right ||
        bottom == top ||
        nearval == farval)
@@ -157,8 +161,8 @@ _mesa_PushMatrix( void )
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (MESA_VERBOSE&VERBOSE_API)
-      fprintf(stderr, "glPushMatrix %s\n",
-	      _mesa_lookup_enum_by_nr(ctx->Transform.MatrixMode));
+      _mesa_debug(ctx, "glPushMatrix %s\n",
+                  _mesa_lookup_enum_by_nr(ctx->Transform.MatrixMode));
 
    if (stack->Depth + 1 >= stack->MaxDepth) {
       _mesa_error( ctx,  GL_STACK_OVERFLOW, "glPushMatrix" );
@@ -181,8 +185,8 @@ _mesa_PopMatrix( void )
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (MESA_VERBOSE&VERBOSE_API)
-      fprintf(stderr, "glPopMatrix %s\n",
-	      _mesa_lookup_enum_by_nr(ctx->Transform.MatrixMode));
+      _mesa_debug(ctx, "glPopMatrix %s\n",
+                  _mesa_lookup_enum_by_nr(ctx->Transform.MatrixMode));
 
    if (stack->Depth == 0) {
       _mesa_error( ctx,  GL_STACK_UNDERFLOW, "glPopMatrix" );
@@ -200,6 +204,10 @@ _mesa_LoadIdentity( void )
 {
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
+
+   if (MESA_VERBOSE & VERBOSE_API)
+      _mesa_debug(ctx, "glLoadIdentity()");
+
    _math_matrix_set_identity( ctx->CurrentStack->Top );
    ctx->NewState |= ctx->CurrentStack->DirtyFlag;
 }
@@ -210,6 +218,14 @@ _mesa_LoadMatrixf( const GLfloat *m )
 {
    GET_CURRENT_CONTEXT(ctx);
    if (!m) return;
+   if (MESA_VERBOSE & VERBOSE_API)
+      _mesa_debug(ctx,
+          "glLoadMatrix(%f %f %f %f, %f %f %f %f, %f %f %f %f, %f %f %f %f\n",
+          m[0], m[4], m[8], m[12],
+          m[1], m[5], m[9], m[13],
+          m[2], m[6], m[10], m[14],
+          m[3], m[7], m[11], m[15]);
+
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
    _math_matrix_loadf( ctx->CurrentStack->Top, m );
    ctx->NewState |= ctx->CurrentStack->DirtyFlag;
@@ -237,6 +253,13 @@ _mesa_MultMatrixf( const GLfloat *m )
 {
    GET_CURRENT_CONTEXT(ctx);
    if (!m) return;
+   if (MESA_VERBOSE & VERBOSE_API)
+      _mesa_debug(ctx,
+          "glMultMatrix(%f %f %f %f, %f %f %f %f, %f %f %f %f, %f %f %f %f\n",
+          m[0], m[4], m[8], m[12],
+          m[1], m[5], m[9], m[13],
+          m[2], m[6], m[10], m[14],
+          m[3], m[7], m[11], m[15]);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
    _math_matrix_mul_floats( ctx->CurrentStack->Top, m );
    ctx->NewState |= ctx->CurrentStack->DirtyFlag;
@@ -390,7 +413,7 @@ _mesa_set_viewport( GLcontext *ctx, GLint x, GLint y,
    }
 
    if (MESA_VERBOSE & VERBOSE_API)
-      fprintf(stderr, "glViewport %d %d %d %d\n", x, y, width, height);
+      _mesa_debug(ctx, "glViewport %d %d %d %d\n", x, y, width, height);
 
    /* clamp width, and height to implementation dependent range */
    width  = CLAMP( width,  1, MAX_WIDTH );
@@ -446,7 +469,7 @@ _mesa_DepthRange( GLclampd nearval, GLclampd farval )
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (MESA_VERBOSE&VERBOSE_API)
-      fprintf(stderr, "glDepthRange %f %f\n", nearval, farval);
+      _mesa_debug(ctx, "glDepthRange %f %f\n", nearval, farval);
 
    n = (GLfloat) CLAMP( nearval, 0.0, 1.0 );
    f = (GLfloat) CLAMP( farval, 0.0, 1.0 );

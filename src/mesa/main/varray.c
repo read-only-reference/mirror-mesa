@@ -1,4 +1,4 @@
-/* $Id: varray.c,v 1.43 2002/04/21 18:49:18 brianp Exp $ */
+/* $Id: varray.c,v 1.46 2002/06/30 15:47:01 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -60,9 +60,8 @@ _mesa_VertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr)
    }
 
    if (MESA_VERBOSE&(VERBOSE_VARRAY|VERBOSE_API))
-      fprintf(stderr, "glVertexPointer( sz %d type %s stride %d )\n", size,
-	      _mesa_lookup_enum_by_nr( type ),
-	      stride);
+      _mesa_debug(ctx, "glVertexPointer( sz %d type %s stride %d )\n", size,
+                  _mesa_lookup_enum_by_nr( type ), stride);
 
    /* always need to check that <type> is legal */
    switch (type) {
@@ -112,9 +111,8 @@ _mesa_NormalPointer(GLenum type, GLsizei stride, const GLvoid *ptr )
    }
 
    if (MESA_VERBOSE&(VERBOSE_VARRAY|VERBOSE_API))
-      fprintf(stderr, "glNormalPointer( type %s stride %d )\n",
-	      _mesa_lookup_enum_by_nr( type ),
-	      stride);
+      _mesa_debug(ctx, "glNormalPointer( type %s stride %d )\n",
+                  _mesa_lookup_enum_by_nr( type ), stride);
 
    switch (type) {
       case GL_BYTE:
@@ -168,9 +166,8 @@ _mesa_ColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr)
    }
 
    if (MESA_VERBOSE&(VERBOSE_VARRAY|VERBOSE_API))
-      fprintf(stderr, "glColorPointer( sz %d type %s stride %d )\n", size,
-	  _mesa_lookup_enum_by_nr( type ),
-	  stride);
+      _mesa_debug(ctx, "glColorPointer( sz %d type %s stride %d )\n", size,
+                  _mesa_lookup_enum_by_nr( type ), stride);
 
    switch (type) {
       case GL_BYTE:
@@ -320,10 +317,8 @@ _mesa_SecondaryColorPointerEXT(GLint size, GLenum type,
    }
 
    if (MESA_VERBOSE&(VERBOSE_VARRAY|VERBOSE_API))
-      fprintf(stderr,
-              "glSecondaryColorPointer( sz %d type %s stride %d )\n", size,
-	  _mesa_lookup_enum_by_nr( type ),
-	  stride);
+      _mesa_debug(ctx, "glSecondaryColorPointer( sz %d type %s stride %d )\n",
+                  size, _mesa_lookup_enum_by_nr( type ), stride);
 
    switch (type) {
       case GL_BYTE:
@@ -389,11 +384,8 @@ _mesa_TexCoordPointer(GLint size, GLenum type, GLsizei stride,
    }
 
    if (MESA_VERBOSE&(VERBOSE_VARRAY|VERBOSE_API))
-      fprintf(stderr, "glTexCoordPointer( unit %u sz %d type %s stride %d )\n",
-	  texUnit,
-	  size,
-	  _mesa_lookup_enum_by_nr( type ),
-	  stride);
+      _mesa_debug(ctx, "glTexCoordPointer(unit %u sz %d type %s stride %d)\n",
+                  texUnit, size, _mesa_lookup_enum_by_nr( type ), stride);
 
    /* always need to check that <type> is legal */
    switch (type) {
@@ -770,7 +762,7 @@ _mesa_LockArraysEXT(GLint first, GLsizei count)
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (MESA_VERBOSE & VERBOSE_API)
-      fprintf(stderr, "glLockArrays %d %d\n", first, count);
+      _mesa_debug(ctx, "glLockArrays %d %d\n", first, count);
 
    if (first == 0 && count > 0 &&
        count <= (GLint) ctx->Const.MaxArrayLockSize) {
@@ -797,7 +789,7 @@ _mesa_UnlockArraysEXT( void )
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (MESA_VERBOSE & VERBOSE_API)
-      fprintf(stderr, "glUnlockArrays\n");
+      _mesa_debug(ctx, "glUnlockArrays\n");
 
    ctx->Array.LockFirst = 0;
    ctx->Array.LockCount = 0;
@@ -806,4 +798,42 @@ _mesa_UnlockArraysEXT( void )
 
    if (ctx->Driver.UnlockArraysEXT)
       ctx->Driver.UnlockArraysEXT( ctx );
+}
+
+
+
+/* GL_EXT_multi_draw_arrays */
+/* Somebody forgot to spec the first and count parameters as const! <sigh> */
+void
+_mesa_MultiDrawArraysEXT( GLenum mode, GLint *first,
+                          GLsizei *count, GLsizei primcount )
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLint i;
+
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
+
+   for (i = 0; i < primcount; i++) {
+      if (count[i] > 0) {
+         (ctx->Exec->DrawArrays)(mode, first[i], count[i]);
+      }
+   }
+}
+
+
+/* GL_EXT_multi_draw_arrays */
+void
+_mesa_MultiDrawElementsEXT( GLenum mode, const GLsizei *count, GLenum type,
+                            const GLvoid **indices, GLsizei primcount )
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLint i;
+
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
+
+   for (i = 0; i < primcount; i++) {
+      if (count[i] > 0) {
+         (ctx->Exec->DrawElements)(mode, count[i], type, indices[i]);
+      }
+   }
 }

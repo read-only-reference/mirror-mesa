@@ -1,4 +1,4 @@
-/* $Id: glheader.h,v 1.25 2002/03/23 01:49:58 brianp Exp $ */
+/* $Id: glheader.h,v 1.28 2002/06/15 02:38:15 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -66,12 +66,12 @@
 #endif
 #endif
 #include <float.h>
+#include <stdarg.h>
 
 
 #ifdef HAVE_CONFIG_H
 #include "conf.h"
 #endif
-
 
 
 #if defined(_WIN32) && !defined(__WIN32__) && !defined(__CYGWIN__)
@@ -162,6 +162,27 @@ typedef struct tagPIXELFORMATDESCRIPTOR PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESC
 #endif
 
 
+/*
+ * Either define MESA_BIG_ENDIAN or MESA_LITTLE_ENDIAN.
+ * Do not use them unless absolutely necessary!
+ * Try to use a runtime test instead.
+ * For now, only used by some DRI hardware drivers for color/texel packing.
+ */
+#if defined(BYTE_ORDER) && defined(BIG_ENDIAN) && BYTE_ORDER == BIG_ENDIAN
+#if defined(__linux__)
+#include <byteswap.h>
+#define CPU_TO_LE32( x )	bswap_32( x )
+#else /*__linux__*/
+#define CPU_TO_LE32( x )	( x )  /* fix me for non-Linux big-endian! */
+#endif /*__linux__*/
+#define MESA_BIG_ENDIAN 1
+#else
+#define CPU_TO_LE32( x )	( x )
+#define MESA_LITTLE_ENDIAN 1
+#endif
+#define LE32_TO_CPU( x )	CPU_TO_LE32( x )
+
+
 /* This is a macro on IRIX */
 #ifdef _P
 #undef _P
@@ -232,6 +253,17 @@ typedef struct tagPIXELFORMATDESCRIPTOR PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESC
 #  define INLINE __inline
 #else
 #  define INLINE
+#endif
+
+
+/*
+ * Provide a reasonable replacement for __FUNCTION__ when using
+ * non-GNU C compilers.
+ */
+#if !defined(__GNUC__)
+#define STRINGIZE(x) #x
+#define STRINGIZE_EVAL(x) STRINGIZE(x)
+#define __FUNCTION__ STRINGIZE_EVAL(__FILE__) ", line " STRINGIZE_EVAL(__LINE__)
 #endif
 
 
