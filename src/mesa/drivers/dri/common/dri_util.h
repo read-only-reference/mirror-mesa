@@ -53,7 +53,6 @@
 
 #define CAPI  /* XXX this should be globally defined somewhere */
 
-#include <inttypes.h>
 #ifdef DRI_NEW_INTERFACE_ONLY
 # include <GL/gl.h>
 #else
@@ -208,7 +207,7 @@ struct __DRIswapInfoRec {
     /** 
      * Number of swapBuffers operations that have been *completed*. 
      */
-    uint64_t  swap_count;
+    u_int64_t swap_count;
 
     /**
      * Unadjusted system time of the last buffer swap.  This is the time
@@ -222,7 +221,7 @@ struct __DRIswapInfoRec {
      * swap, it has missed its deadline.  If swap_interval is 0, then the
      * swap deadline is 1 frame after the previous swap.
      */
-    uint64_t  swap_missed_count;
+    u_int64_t swap_missed_count;
 
     /**
      * Amount of time used by the last swap that missed its deadline.  This
@@ -558,8 +557,11 @@ extern float
 driCalculateSwapUsage( __DRIdrawablePrivate *dPriv,
 		       int64_t last_swap_ust, int64_t current_ust );
 
+/* Test for the GLX header glx.h */
+#ifndef GLX
 extern void 
 (*glXGetProcAddress(const GLubyte *procname))( void );
+#endif
 
 #endif /* GLX_DIRECT_RENDERING */
 

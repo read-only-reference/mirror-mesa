@@ -63,6 +63,19 @@ GLboolean fxMultipass_ColorSum (GLcontext *ctx, GLuint pass);
 static void fxRasterPrimitive( GLcontext *ctx, GLenum prim );
 static void fxRenderPrimitive( GLcontext *ctx, GLenum prim );
 
+static GLenum reduced_prim[GL_POLYGON+1] = {
+   GL_POINTS,
+   GL_LINES,
+   GL_LINES,
+   GL_LINES,
+   GL_TRIANGLES,
+   GL_TRIANGLES,
+   GL_TRIANGLES,
+   GL_TRIANGLES,
+   GL_TRIANGLES,
+   GL_TRIANGLES
+};
+
 /***********************************************************************
  *          Macros for t_dd_tritmp.h to draw basic primitives          *
  ***********************************************************************/
@@ -139,7 +152,7 @@ fx_translate_vertex( GLcontext *ctx, const GrVertex *src, SWvertex *dst)
    fxMesaContext fxMesa = FX_CONTEXT(ctx);
    GLuint ts0 = fxMesa->tmu_source[0];
    GLuint ts1 = fxMesa->tmu_source[1];
-   GLfloat w = 1.0 / src->oow;
+   GLfloat w = 1.0F / src->oow;
 
    dst->win[0] = src->x;
    dst->win[1] = src->y;
@@ -172,7 +185,7 @@ fx_translate_vertex( GLcontext *ctx, const GrVertex *src, SWvertex *dst)
    if (fxMesa->stw_hint_state & GR_STWHINT_W_DIFF_TMU0)
       dst->texcoord[ts0][3] = src->tmuvtx[0].oow * w;
    else
-      dst->texcoord[ts0][3] = 1.0;
+      dst->texcoord[ts0][3] = 1.0F;
 
    if (fxMesa->SetupIndex & SETUP_TMU1) {
       dst->texcoord[ts1][0] = fxMesa->inv_s1scale * src->tmuvtx[1].sow * w;
@@ -181,7 +194,7 @@ fx_translate_vertex( GLcontext *ctx, const GrVertex *src, SWvertex *dst)
       if (fxMesa->stw_hint_state & GR_STWHINT_W_DIFF_TMU1)
 	 dst->texcoord[ts1][3] = src->tmuvtx[1].oow * w;
       else
-	 dst->texcoord[ts1][3] = 1.0;
+	 dst->texcoord[ts1][3] = 1.0F;
    }
 
    dst->pointSize = src->psize;
@@ -304,7 +317,7 @@ static void fx_draw_point_sprite ( fxMesaContext fxMesa,
  GLfloat u1scale = fxMesa->s1scale * w;
  GLfloat v1scale = fxMesa->t1scale * w;
 
- radius = psize / 2.;
+ radius = psize / 2.0F;
  _v_[0] = *v0;
  _v_[1] = *v0;
  _v_[2] = *v0;
@@ -379,10 +392,10 @@ static void fx_draw_point_wide ( fxMesaContext fxMesa,
  _v_[1] = &vtxB;
  _v_[2] = &vtxC;
 
- radius = psize / 2.;
+ radius = psize / 2.0F;
  n = IROUND(psize * 2); /* radius x 4 */
  if (n < 4) n = 4;
- oon = 1.0 / (GLfloat)n;
+ oon = 1.0F / (GLfloat)n;
 
  /* CLIP_LOOP ?!? */
  /* point coverage? */
@@ -452,10 +465,10 @@ static void fx_draw_point_wide_aa ( fxMesaContext fxMesa,
     return;
  }
 
- radius = psize / 2.;
+ radius = psize / 2.0F;
  n = IROUND(psize * 2); /* radius x 4 */
  if (n < 4) n = 4;
- oon = 1.0 / (GLfloat)n;
+ oon = 1.0F / (GLfloat)n;
 
  /* CLIP_LOOP ?!? */
  /* point coverage? */
@@ -486,8 +499,9 @@ static void fx_draw_point_wide_aa ( fxMesaContext fxMesa,
 #define FX_OFFSET_BIT	   0x2
 #define FX_TWOSIDE_BIT     0x4
 #define FX_FLAT_BIT        0x8
-#define FX_FALLBACK_BIT    0x10
-#define FX_MAX_TRIFUNC     0x20
+#define FX_TWOSTENCIL_BIT  0x10
+#define FX_FALLBACK_BIT    0x20
+#define FX_MAX_TRIFUNC     0x40
 
 static struct {
    tnl_points_func	points;
@@ -501,6 +515,7 @@ static struct {
 #define DO_UNFILLED (IND & FX_UNFILLED_BIT)
 #define DO_TWOSIDE  (IND & FX_TWOSIDE_BIT)
 #define DO_FLAT     (IND & FX_FLAT_BIT)
+#define DO_TWOSTENCIL (IND & FX_TWOSTENCIL_BIT)
 #define DO_TRI       1
 #define DO_QUAD      1
 #define DO_LINE      1
@@ -639,13 +654,19 @@ do {						\
 #endif /* !FX_PACKEDCOLOR */
 
 
+/***********************************************************************
+ *            Twoside stencil                                          *
+ ***********************************************************************/
+#define SETUP_STENCIL(f) if (f) fxSetupStencilFace(ctx, f)
+#define UNSET_STENCIL(f) if (f) fxSetupStencil(ctx)
+
 
 /***********************************************************************
  *            Functions to draw basic unfilled primitives              *
  ***********************************************************************/
 
-#define RASTERIZE(x) if (fxMesa->raster_primitive != x) \
-                        fxRasterPrimitive( ctx, x )
+#define RASTERIZE(x) if (fxMesa->raster_primitive != reduced_prim[x]) \
+                        fxRasterPrimitive( ctx, reduced_prim[x] )
 #define RENDER_PRIMITIVE fxMesa->render_primitive
 #define IND FX_FALLBACK_BIT
 #define TAG(x) x
@@ -790,6 +811,142 @@ do {						\
 #include "tnl_dd/t_dd_tritmp.h"
 
 
+/* 2-sided stencil begin */
+#define IND (FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_OFFSET_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_offset_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_OFFSET_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_offset_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_UNFILLED_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_unfilled_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_OFFSET_BIT|FX_UNFILLED_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_offset_unfilled_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_UNFILLED_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_unfilled_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_OFFSET_BIT|FX_UNFILLED_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_offset_unfilled_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_FALLBACK_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_fallback_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_OFFSET_BIT|FX_FALLBACK_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_offset_fallback_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_FALLBACK_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_fallback_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_OFFSET_BIT|FX_FALLBACK_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_offset_fallback_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_UNFILLED_BIT|FX_FALLBACK_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_unfilled_fallback_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_OFFSET_BIT|FX_UNFILLED_BIT|FX_FALLBACK_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_offset_unfilled_fallback_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_UNFILLED_BIT|FX_FALLBACK_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_unfilled_fallback_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_OFFSET_BIT|FX_UNFILLED_BIT| \
+	     FX_FALLBACK_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_offset_unfilled_fallback_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+
+/* Fx doesn't support provoking-vertex flat-shading?
+ */
+#define IND (FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_OFFSET_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_offset_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_OFFSET_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_offset_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_UNFILLED_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_unfilled_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_OFFSET_BIT|FX_UNFILLED_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_offset_unfilled_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_UNFILLED_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_unfilled_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_OFFSET_BIT|FX_UNFILLED_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_offset_unfilled_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_FALLBACK_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_fallback_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_OFFSET_BIT|FX_FALLBACK_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_offset_fallback_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_FALLBACK_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_fallback_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_OFFSET_BIT|FX_FALLBACK_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_offset_fallback_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_UNFILLED_BIT|FX_FALLBACK_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_unfilled_fallback_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_OFFSET_BIT|FX_UNFILLED_BIT|FX_FALLBACK_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_offset_unfilled_fallback_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_UNFILLED_BIT|FX_FALLBACK_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_unfilled_fallback_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+
+#define IND (FX_TWOSIDE_BIT|FX_OFFSET_BIT|FX_UNFILLED_BIT| \
+	     FX_FALLBACK_BIT|FX_FLAT_BIT|FX_TWOSTENCIL_BIT)
+#define TAG(x) x##_twoside_offset_unfilled_fallback_flat_twostencil
+#include "tnl_dd/t_dd_tritmp.h"
+/* 2-sided stencil end */
+
+
 static void init_rast_tab( void )
 {
    init();
@@ -825,6 +982,42 @@ static void init_rast_tab( void )
    init_offset_unfilled_fallback_flat();
    init_twoside_unfilled_fallback_flat();
    init_twoside_offset_unfilled_fallback_flat();
+
+   /* 2-sided stencil begin */
+   init_twostencil();
+   init_offset_twostencil();
+   init_twoside_twostencil();
+   init_twoside_offset_twostencil();
+   init_unfilled_twostencil();
+   init_offset_unfilled_twostencil();
+   init_twoside_unfilled_twostencil();
+   init_twoside_offset_unfilled_twostencil();
+   init_fallback_twostencil();
+   init_offset_fallback_twostencil();
+   init_twoside_fallback_twostencil();
+   init_twoside_offset_fallback_twostencil();
+   init_unfilled_fallback_twostencil();
+   init_offset_unfilled_fallback_twostencil();
+   init_twoside_unfilled_fallback_twostencil();
+   init_twoside_offset_unfilled_fallback_twostencil();
+
+   init_flat_twostencil();
+   init_offset_flat_twostencil();
+   init_twoside_flat_twostencil();
+   init_twoside_offset_flat_twostencil();
+   init_unfilled_flat_twostencil();
+   init_offset_unfilled_flat_twostencil();
+   init_twoside_unfilled_flat_twostencil();
+   init_twoside_offset_unfilled_flat_twostencil();
+   init_fallback_flat_twostencil();
+   init_offset_fallback_flat_twostencil();
+   init_twoside_fallback_flat_twostencil();
+   init_twoside_offset_fallback_flat_twostencil();
+   init_unfilled_fallback_flat_twostencil();
+   init_offset_unfilled_fallback_flat_twostencil();
+   init_twoside_unfilled_fallback_flat_twostencil();
+   init_twoside_offset_unfilled_fallback_flat_twostencil();
+   /* 2-sided stencil end */
 }
 
 
@@ -1258,7 +1451,7 @@ static void fxFastRenderClippedPoly( GLcontext *ctx, const GLuint *elts,
 #define TRI_FALLBACK (DD_TRI_SMOOTH | DD_TRI_STIPPLE)
 #define ANY_FALLBACK_FLAGS (POINT_FALLBACK | LINE_FALLBACK | TRI_FALLBACK)
 #define ANY_RASTER_FLAGS (DD_FLATSHADE | DD_TRI_LIGHT_TWOSIDE | DD_TRI_OFFSET \
-			  | DD_TRI_UNFILLED)
+			  | DD_TRI_UNFILLED | DD_TRI_TWOSTENCIL)
 
 
 
@@ -1271,6 +1464,7 @@ void fxDDChooseRenderState(GLcontext *ctx)
 
    if (flags & (ANY_FALLBACK_FLAGS|ANY_RASTER_FLAGS)) {
       if (flags & ANY_RASTER_FLAGS) {
+	 if (flags & DD_TRI_TWOSTENCIL)       index |= FX_TWOSTENCIL_BIT;
 	 if (flags & DD_TRI_LIGHT_TWOSIDE)    index |= FX_TWOSIDE_BIT;
 	 if (flags & DD_TRI_OFFSET)	      index |= FX_OFFSET_BIT;
 	 if (flags & DD_TRI_UNFILLED)	      index |= FX_UNFILLED_BIT;
@@ -1390,15 +1584,15 @@ static void fxRunPipeline( GLcontext *ctx )
       if (t0->_Current && FX_TEXTURE_DATA(t0)) {
          fxMesa->s0scale = FX_TEXTURE_DATA(t0)->sScale;
          fxMesa->t0scale = FX_TEXTURE_DATA(t0)->tScale;
-         fxMesa->inv_s0scale = 1.0 / fxMesa->s0scale;
-         fxMesa->inv_t0scale = 1.0 / fxMesa->t0scale;
+         fxMesa->inv_s0scale = 1.0F / fxMesa->s0scale;
+         fxMesa->inv_t0scale = 1.0F / fxMesa->t0scale;
       }
 
       if (t1->_Current && FX_TEXTURE_DATA(t1)) {
          fxMesa->s1scale = FX_TEXTURE_DATA(t1)->sScale;
          fxMesa->t1scale = FX_TEXTURE_DATA(t1)->tScale;
-         fxMesa->inv_s1scale = 1.0 / fxMesa->s1scale;
-         fxMesa->inv_t1scale = 1.0 / fxMesa->t1scale;
+         fxMesa->inv_s1scale = 1.0F / fxMesa->s1scale;
+         fxMesa->inv_t1scale = 1.0F / fxMesa->t1scale;
       }
    }
 
@@ -1406,20 +1600,6 @@ static void fxRunPipeline( GLcontext *ctx )
 
    _tnl_run_pipeline( ctx );
 }
-
-
-static GLenum reduced_prim[GL_POLYGON+1] = {
-   GL_POINTS,
-   GL_LINES,
-   GL_LINES,
-   GL_LINES,
-   GL_TRIANGLES,
-   GL_TRIANGLES,
-   GL_TRIANGLES,
-   GL_TRIANGLES,
-   GL_TRIANGLES,
-   GL_TRIANGLES
-};
 
 
 
@@ -1480,7 +1660,7 @@ static char *fallbackStrings[] = {
    "Texture border",
    "glColorMask",
    "blend mode",
-   "line stipple"
+   "multitex"
 };
 
 
@@ -1528,7 +1708,15 @@ void fxCheckIsInHardware( GLcontext *ctx )
             fprintf(stderr, "Voodoo ! leave SW 0x%08x %s\n", oldfallback, getFallbackString(oldfallback));
          }
       }
-      tnl->Driver.Render.Multipass = (HAVE_SPEC && NEED_SECONDARY_COLOR(ctx)) ? fxMultipass_ColorSum : NULL;
+      tnl->Driver.Render.Multipass = NULL;
+      if (HAVE_SPEC && NEED_SECONDARY_COLOR(ctx)) {
+         tnl->Driver.Render.Multipass = fxMultipass_ColorSum;
+         /* obey stencil, but do not change it */
+         fxMesa->multipass = GL_TRUE;
+         if (fxMesa->unitsState.stencilEnabled) {
+            fxMesa->new_state |= FX_NEW_STENCIL;
+         }
+      }
    }
 }
 
@@ -1560,19 +1748,24 @@ void fxDDInitTriFuncs( GLcontext *ctx )
 
 /* [dBorca] Hack alert:
  * doesn't work with blending.
- * XXX todo - need to take care of stencil.
  */
 GLboolean fxMultipass_ColorSum (GLcontext *ctx, GLuint pass)
 {
  fxMesaContext fxMesa = FX_CONTEXT(ctx);
+ tfxUnitsState *us = &fxMesa->unitsState;
 
  static int t0 = 0;
  static int t1 = 0;
 
  switch (pass) {
         case 1: /* first pass: the TEXTURED triangles are drawn */
+             /* set stencil's real values */
+             fxMesa->multipass = GL_FALSE;
+             if (us->stencilEnabled) {
+                fxSetupStencil(ctx);
+             }
              /* save per-pass data */
-             fxMesa->restoreUnitsState = fxMesa->unitsState;
+             fxMesa->restoreUnitsState = *us;
              /* turn off texturing */
              t0 = ctx->Texture.Unit[0]._ReallyEnabled;
              t1 = ctx->Texture.Unit[1]._ReallyEnabled;
@@ -1583,16 +1776,15 @@ GLboolean fxMultipass_ColorSum (GLcontext *ctx, GLuint pass)
              fxDDBlendFuncSeparate(ctx, GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
              fxDDEnable(ctx, GL_BLEND, GL_TRUE);
              /* make sure we draw only where we want to */
-             if (ctx->Depth.Mask) {
-                switch (ctx->Depth.Func) {
-                       case GL_NEVER:
-                       case GL_ALWAYS:
-                       break;
-                default:
-                       fxDDDepthFunc( ctx, GL_EQUAL );
-                       break;
+             if (us->depthTestEnabled) {
+                switch (us->depthTestFunc) {
+                   default:
+                      fxDDDepthFunc(ctx, GL_EQUAL);
+                   case GL_NEVER:
+                   case GL_ALWAYS:
+                      ;
                 }
-                fxDDDepthMask( ctx, GL_FALSE );
+                fxDDDepthMask(ctx, GL_FALSE);
              }
              /* switch to secondary colors */
 #if FX_PACKEDCOLOR
@@ -1605,7 +1797,7 @@ GLboolean fxMultipass_ColorSum (GLcontext *ctx, GLuint pass)
              break;
         case 2: /* 2nd pass (last): the secondary color is summed over texture */
              /* restore original state */
-             fxMesa->unitsState = fxMesa->restoreUnitsState;
+             *us = fxMesa->restoreUnitsState;
              /* restore texturing */
              ctx->Texture.Unit[0]._ReallyEnabled = t0;
              ctx->Texture.Unit[1]._ReallyEnabled = t1;

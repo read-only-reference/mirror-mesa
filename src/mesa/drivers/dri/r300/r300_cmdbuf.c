@@ -284,8 +284,8 @@ void r300InitCmdBuf(r300ContextPtr r300)
 		r300->hw.unk2080.cmd[0] = cmducs(0x2080, 1);
 	ALLOC_STATE( ovf, always, R300_OVF_CMDSIZE, "ovf", 0 );
 		r300->hw.ovf.cmd[R300_OVF_CMD_0] = cmducs(R300_VAP_OUTPUT_VTX_FMT_0, 2);
-	ALLOC_STATE( unk20B0, always, 3, "unk20B0", 0 );
-		r300->hw.unk20B0.cmd[0] = cmducs(0x20B0, 2);
+	ALLOC_STATE( vte, always, 3, "vte", 0 );
+		r300->hw.vte.cmd[0] = cmducs(R300_SE_VTE_CNTL, 2);
 	ALLOC_STATE( unk2134, always, 3, "unk2134", 0 );
 		r300->hw.unk2134.cmd[0] = cmducs(0x2134, 2);
 	ALLOC_STATE( unk2140, always, 2, "unk2140", 0 );
@@ -304,12 +304,14 @@ void r300InitCmdBuf(r300ContextPtr r300)
 		r300->hw.unk2220.cmd[0] = cmducs(0x2220, 4);
 	ALLOC_STATE( unk2288, always, 2, "unk2288", 0 );
 		r300->hw.unk2288.cmd[0] = cmducs(0x2288, 1);
+	ALLOC_STATE( vof, always, R300_VOF_CMDSIZE, "vof", 0 );
+		r300->hw.vof.cmd[R300_VOF_CMD_0] = cmducs(R300_VAP_OUTPUT_VTX_FMT_0, 2);
 	ALLOC_STATE( pvs, always, R300_PVS_CMDSIZE, "pvs", 0 );
 		r300->hw.pvs.cmd[R300_PVS_CMD_0] = cmducs(R300_VAP_PVS_CNTL_1, 3);
-	ALLOC_STATE( unk4008, always, 2, "unk4008", 0 );
-		r300->hw.unk4008.cmd[0] = cmducs(0x4008, 1);
-	ALLOC_STATE( unk4010, always, 6, "unk4010", 0 );
-		r300->hw.unk4010.cmd[0] = cmducs(0x4010, 5);
+	ALLOC_STATE( gb_enable, always, 2, "gb_enable", 0 );
+		r300->hw.gb_enable.cmd[0] = cmducs(R300_GB_ENABLE, 1);
+	ALLOC_STATE( gb_misc, always, R300_GB_MISC_CMDSIZE, "gb_misc", 0 );
+		r300->hw.gb_misc.cmd[0] = cmducs(R300_GB_MSPOS0, 5);
 	ALLOC_STATE( txe, always, R300_TXE_CMDSIZE, "txe", 0 );
 		r300->hw.txe.cmd[R300_TXE_CMD_0] = cmducs(R300_TX_ENABLE, 1);
 	ALLOC_STATE( unk4200, always, 5, "unk4200", 0 );
@@ -380,6 +382,8 @@ void r300InitCmdBuf(r300ContextPtr r300)
 		r300->hw.unk4E50.cmd[0] = cmducs(0x4E50, 9);
 	ALLOC_STATE( unk4E88, always, 2, "unk4E88", 0 );
 		r300->hw.unk4E88.cmd[0] = cmducs(0x4E88, 1);
+	ALLOC_STATE( unk4EA0, always, 3, "unk4EA0 R350 only", 0 );
+		r300->hw.unk4EA0.cmd[0] = cmducs(0x4EA0, 2);
 	ALLOC_STATE( zc, always, R300_ZC_CMDSIZE, "zc", 0 );
 		r300->hw.zc.cmd[R300_ZC_CMD_0] = cmducs(R300_RB3D_ZCNTL_0, 2);
 	ALLOC_STATE( unk4F08, always, 2, "unk4F08", 0 );
@@ -411,7 +415,7 @@ void r300InitCmdBuf(r300ContextPtr r300)
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.vpt);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk2080);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.ovf);
-	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk20B0);
+	insert_at_tail(&r300->hw.atomlist, &r300->hw.vte);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk2134);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk2140);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.vir[0]);
@@ -421,9 +425,10 @@ void r300InitCmdBuf(r300ContextPtr r300)
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk221C);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk2220);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk2288);
+	insert_at_tail(&r300->hw.atomlist, &r300->hw.vof);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.pvs);
-	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4008);
-	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4010);
+	insert_at_tail(&r300->hw.atomlist, &r300->hw.gb_enable);
+	insert_at_tail(&r300->hw.atomlist, &r300->hw.gb_misc);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.txe);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4200);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4214);
@@ -458,6 +463,7 @@ void r300InitCmdBuf(r300ContextPtr r300)
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.cb);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4E50);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4E88);
+	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4EA0);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.zc);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4F08);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4F10);

@@ -46,6 +46,8 @@
 #include "tnl/tnl.h"
 #include "swrast_setup/swrast_setup.h"
 
+#include "xmlpool.h"
+
 static void savageBlendFunc_s4(GLcontext *);
 static void savageBlendFunc_s3d(GLcontext *);
 
@@ -1401,12 +1403,12 @@ static GLboolean savageGlobalRegChanged (savageContextPtr imesa,
 static void savageEmitContiguousRegs (savageContextPtr imesa,
 				      GLuint first, GLuint last) {
     GLuint i;
-    uint32_t *pBCIBase;
+    u_int32_t *pBCIBase;
     pBCIBase = savageDMAAlloc (imesa, last - first + 2);
-    WRITE_CMD (pBCIBase, SET_REGISTER(first, last - first + 1), uint32_t);
+    WRITE_CMD (pBCIBase, SET_REGISTER(first, last - first + 1), u_int32_t);
 
     for (i = first - SAVAGE_FIRST_REG; i <= last - SAVAGE_FIRST_REG; ++i) {
-	WRITE_CMD (pBCIBase, imesa->regs.ui[i], uint32_t);
+	WRITE_CMD (pBCIBase, imesa->regs.ui[i], u_int32_t);
 	imesa->oldRegs.ui[i] = imesa->regs.ui[i];
     }
     savageDMACommit (imesa, pBCIBase);
@@ -1443,7 +1445,7 @@ static void savageEmitChangedRegChunk (savageContextPtr imesa,
 }
 static void savageUpdateRegister_s4(savageContextPtr imesa)
 {
-    uint32_t *pBCIBase;
+    u_int32_t *pBCIBase;
 
     /*
      * Scissors updates drawctrl0 and drawctrl 1
@@ -1470,7 +1472,7 @@ static void savageUpdateRegister_s4(savageContextPtr imesa)
      * 0x1e-0x27 are local, no need to check them for global changes */
     if (imesa->lostContext || savageGlobalRegChanged (imesa, 0x28, 0x39)) {
 	pBCIBase = savageDMAAlloc (imesa, 1);
-        WRITE_CMD (pBCIBase, WAIT_3D_IDLE, uint32_t);
+        WRITE_CMD (pBCIBase, WAIT_3D_IDLE, u_int32_t);
 	savageDMACommit (imesa, pBCIBase);
     }
     if (imesa->lostContext)
@@ -1483,7 +1485,7 @@ static void savageUpdateRegister_s4(savageContextPtr imesa)
 }
 static void savageUpdateRegister_s3d(savageContextPtr imesa)
 {
-    uint32_t *pBCIBase;
+    u_int32_t *pBCIBase;
 
     if (imesa->scissorChanged)
     {
@@ -1520,7 +1522,7 @@ static void savageUpdateRegister_s3d(savageContextPtr imesa)
      * 0x18-0x1c and 0x20-0x38. The first range is local. */
     if (imesa->lostContext || savageGlobalRegChanged (imesa, 0x20, 0x38)) {
 	pBCIBase = savageDMAAlloc (imesa, 1);
-        WRITE_CMD (pBCIBase, WAIT_3D_IDLE, uint32_t);
+        WRITE_CMD (pBCIBase, WAIT_3D_IDLE, u_int32_t);
 	savageDMACommit (imesa, pBCIBase);
     }
     /* FIXME: watermark registers aren't programmed correctly ATM */
@@ -1619,8 +1621,20 @@ static void savageDDInitState_s4( savageContextPtr imesa )
     imesa->regs.s4.drawLocalCtrl.ni.flushPdDestWrites= GL_TRUE;
 
     imesa->regs.s4.drawLocalCtrl.ni.zUpdateEn= GL_TRUE;
-    imesa->regs.s4.drawCtrl1.ni.ditherEn=GL_TRUE;
+    imesa->regs.s4.drawCtrl1.ni.ditherEn = (
+	driQueryOptioni(&imesa->optionCache, "color_reduction") ==
+	DRI_CONF_COLOR_REDUCTION_DITHER) ? GL_TRUE : GL_FALSE;
     imesa->regs.s4.drawCtrl1.ni.cullMode             = BCM_None;
+
+    imesa->regs.s4.zBufCtrl.ni.stencilRefVal      = 0x00;
+
+    imesa->regs.s4.stencilCtrl.ni.stencilEn       = GL_FALSE;
+    imesa->regs.s4.stencilCtrl.ni.cmpFunc         = CF_Always;
+    imesa->regs.s4.stencilCtrl.ni.failOp          = STC_FAIL_Keep;
+    imesa->regs.s4.stencilCtrl.ni.passZfailOp     = STC_FAIL_Keep;
+    imesa->regs.s4.stencilCtrl.ni.passZpassOp     = STC_FAIL_Keep;
+    imesa->regs.s4.stencilCtrl.ni.writeMask       = 0xff;
+    imesa->regs.s4.stencilCtrl.ni.readMask        = 0xff;
 
     imesa->LcsCullMode=BCM_None;
     imesa->regs.s4.texDescr.ni.palSize               = TPS_256;
@@ -1669,21 +1683,14 @@ static void savageDDInitState_s3d( savageContextPtr imesa )
     imesa->regs.s3d.zBufCtrl.ni.drawUpdateEn     = GL_TRUE;
     imesa->regs.s3d.zBufCtrl.ni.wrZafterAlphaTst = GL_FALSE;
     imesa->regs.s3d.zBufCtrl.ni.zUpdateEn        = GL_TRUE;
-    imesa->regs.s4.zBufCtrl.ni.stencilRefVal      = 0x00;
-
-    imesa->regs.s4.stencilCtrl.ni.stencilEn       = GL_FALSE;
-    imesa->regs.s4.stencilCtrl.ni.cmpFunc         = CF_Always;
-    imesa->regs.s4.stencilCtrl.ni.failOp          = STC_FAIL_Keep;
-    imesa->regs.s4.stencilCtrl.ni.passZfailOp     = STC_FAIL_Keep;
-    imesa->regs.s4.stencilCtrl.ni.passZpassOp     = STC_FAIL_Keep;
-    imesa->regs.s4.stencilCtrl.ni.writeMask       = 0xff;
-    imesa->regs.s4.stencilCtrl.ni.readMask        = 0xff;
 
     imesa->regs.s3d.drawCtrl.ni.srcAlphaMode      = SAM_One;
     imesa->regs.s3d.drawCtrl.ni.flushPdZbufWrites = GL_TRUE;
     imesa->regs.s3d.drawCtrl.ni.flushPdDestWrites = GL_TRUE;
 
-    imesa->regs.s3d.drawCtrl.ni.ditherEn          = GL_TRUE;
+    imesa->regs.s3d.drawCtrl.ni.ditherEn =  (
+	driQueryOptioni(&imesa->optionCache, "color_reduction") ==
+	DRI_CONF_COLOR_REDUCTION_DITHER) ? GL_TRUE : GL_FALSE;
     imesa->regs.s3d.drawCtrl.ni.cullMode          = BCM_None;
 
     imesa->LcsCullMode = BCM_None;
@@ -1711,9 +1718,9 @@ static void savageDDInitState_s3d( savageContextPtr imesa )
     imesa->globalRegMask.s3d.zBufCtrl.ni.zBufEn = 0x1;
 }
 void savageDDInitState( savageContextPtr imesa ) {
-    memset (imesa->regs.ui, 0, SAVAGE_NR_REGS*sizeof(uint32_t));
-    memset (imesa->oldRegs.ui, 0, SAVAGE_NR_REGS*sizeof(uint32_t));
-    memset (imesa->globalRegMask.ui, 0xff, SAVAGE_NR_REGS*sizeof(uint32_t));
+    memset (imesa->regs.ui, 0, SAVAGE_NR_REGS*sizeof(u_int32_t));
+    memset (imesa->oldRegs.ui, 0, SAVAGE_NR_REGS*sizeof(u_int32_t));
+    memset (imesa->globalRegMask.ui, 0xff, SAVAGE_NR_REGS*sizeof(u_int32_t));
     if (imesa->savageScreen->chipset >= S3_SAVAGE4)
 	savageDDInitState_s4 (imesa);
     else

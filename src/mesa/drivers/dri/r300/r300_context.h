@@ -54,6 +54,9 @@ typedef struct r300_context *r300ContextPtr;
 #include "radeon_lock.h"
 #include "mm.h"
 
+typedef GLuint uint32_t;
+typedef GLubyte uint8_t;
+
 
 static __inline__ uint32_t r300PackFloat32(float fl)
 {
@@ -112,11 +115,25 @@ struct r300_state_atom {
 #define R300_VIC_CNTL_1		2
 #define R300_VIC_CMDSIZE	3
 
+#define R300_VOF_CMD_0		0
+#define R300_VOF_CNTL_0		1
+#define R300_VOF_CNTL_1		2
+#define R300_VOF_CMDSIZE	3
+
+
 #define R300_PVS_CMD_0		0
 #define R300_PVS_CNTL_1		1
 #define R300_PVS_CNTL_2		2
 #define R300_PVS_CNTL_3		3
 #define R300_PVS_CMDSIZE	4
+
+#define R300_GB_MISC_CMD_0		0
+#define R300_GB_MISC_MSPOS_0		1
+#define R300_GB_MISC_MSPOS_1		2
+#define R300_GB_MISC_TILE_CONFIG	3
+#define R300_GB_MISC_SELECT		4
+#define R300_GB_MISC_AA_CONFIG		5
+#define R300_GB_MISC_CMDSIZE		6
 
 #define R300_TXE_CMD_0		0
 #define R300_TXE_ENABLE		1
@@ -229,7 +246,7 @@ struct r300_hw_state {
 	struct r300_state_atom vpt;	/* viewport (1D98) */
 	struct r300_state_atom unk2080;	/* (2080) */
 	struct r300_state_atom ovf;	/* output vertex format (2090) */
-	struct r300_state_atom unk20B0;	/* (20B0) */
+	struct r300_state_atom vte;	/* (20B0) */
 	struct r300_state_atom unk2134;	/* (2134) */
 	struct r300_state_atom unk2140;	/* (2140) */
 	struct r300_state_atom vir[2];	/* vap input route (2150/21E0) */
@@ -239,8 +256,9 @@ struct r300_hw_state {
 	struct r300_state_atom unk2220; /* (2220) */
 	struct r300_state_atom unk2288; /* (2288) */
 	struct r300_state_atom pvs;	/* pvs_cntl (22D0) */
-	struct r300_state_atom unk4008; /* (4008) */
-	struct r300_state_atom unk4010; /* (4010) */
+	struct r300_state_atom vof;     /* VAP output format register 0x4000 */
+	struct r300_state_atom gb_enable; /* (4008) */
+	struct r300_state_atom gb_misc; /* Multisampling position shifts ? (4010) */
 	struct r300_state_atom txe;	/* tex enable (4104) */
 	struct r300_state_atom unk4200; /* (4200) */
 	struct r300_state_atom unk4214; /* (4214) */
@@ -272,6 +290,7 @@ struct r300_hw_state {
 	struct r300_state_atom cb;	/* colorbuffer (4E28) */
 	struct r300_state_atom unk4E50;	/* (4E50) */
 	struct r300_state_atom unk4E88;	/* (4E88) */
+	struct r300_state_atom unk4EA0;	/* (4E88) I saw it only written on RV350 hardware..  */
 	struct r300_state_atom zc;	/* z control (4F00) */
 	struct r300_state_atom unk4F08;	/* (4F08) */
 	struct r300_state_atom unk4F10;	/* (4F10) */
@@ -305,7 +324,13 @@ struct r300_cmdbuf {
 /**
  * State cache
  */
+ 
+struct r300_depthbuffer_state {
+	GLfloat scale;
+};
+
 struct r300_state {
+	struct r300_depthbuffer_state depth;
 };
 
 
@@ -318,6 +343,11 @@ struct r300_context {
 	struct r300_hw_state hw;
 	struct r300_cmdbuf cmdbuf;
 	struct r300_state state;
+	
+	/* Vertex buffers */
+	int elt_count;  /* size of the buffer for vertices */
+	int attrib_count; /* size of the buffer for vertex attributes.. Somehow it can be different ? */
+	
 };
 
 #define R300_CONTEXT(ctx)		((r300ContextPtr)(ctx->DriverCtx))

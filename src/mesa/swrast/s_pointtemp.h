@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.2
+ * Version:  6.3
  *
  * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
@@ -120,16 +120,31 @@ NAME ( GLcontext *ctx, const SWvertex *vert )
 #endif
 #if FLAGS & TEXTURE
    span->arrayMask |= SPAN_TEXTURE;
-   for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-      if (ctx->Texture.Unit[u]._ReallyEnabled) {
-         const GLfloat q = vert->texcoord[u][3];
-         const GLfloat invQ = (q == 0.0F || q == 1.0F) ? 1.0F : (1.0F / q);
-         texcoord[u][0] = vert->texcoord[u][0] * invQ;
-         texcoord[u][1] = vert->texcoord[u][1] * invQ;
-         texcoord[u][2] = vert->texcoord[u][2] * invQ;
-         texcoord[u][3] = q;
+   if (ctx->FragmentProgram._Enabled) {
+      /* Don't divide texture s,t,r by q (use TXP to do that) */
+      for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
+         if (ctx->Texture._EnabledCoordUnits & (1 << u)) {
+            COPY_4V(texcoord[u], vert->texcoord[u]);
+         }
       }
    }
+   else {
+      /* Divide texture s,t,r by q here */
+      for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
+         if (ctx->Texture._EnabledCoordUnits & (1 << u)) {
+            const GLfloat q = vert->texcoord[u][3];
+            const GLfloat invQ = (q == 0.0F || q == 1.0F) ? 1.0F : (1.0F / q);
+            texcoord[u][0] = vert->texcoord[u][0] * invQ;
+            texcoord[u][1] = vert->texcoord[u][1] * invQ;
+            texcoord[u][2] = vert->texcoord[u][2] * invQ;
+            texcoord[u][3] = q;
+         }
+      }
+   }
+   /* need these for fragment programs */
+   span->w = 1.0F;
+   span->dwdx = 0.0F;
+   span->dwdy = 0.0F;
 #endif
 #if FLAGS & SMOOTH
    span->arrayMask |= SPAN_COVERAGE;
@@ -201,12 +216,7 @@ NAME ( GLcontext *ctx, const SWvertex *vert )
       /* check if we need to flush */
       if (span->end + (xmax-xmin+1) * (ymax-ymin+1) >= MAX_WIDTH ||
           (swrast->_RasterMask & (BLEND_BIT | LOGIC_OP_BIT | MASKING_BIT))) {
-#if FLAGS & (TEXTURE | SPRITE)
-         if (ctx->Texture._EnabledUnits)
-            _swrast_write_texture_span(ctx, span);
-         else
-            _swrast_write_rgba_span(ctx, span);
-#elif FLAGS & RGBA
+#if FLAGS & RGBA
          _swrast_write_rgba_span(ctx, span);
 #else
          _swrast_write_index_span(ctx, span);
@@ -223,12 +233,7 @@ NAME ( GLcontext *ctx, const SWvertex *vert )
          /* check if we need to flush */
          if (count + (xmax-xmin+1) >= MAX_WIDTH) {
 	     span->end = count;
-#if FLAGS & (TEXTURE | SPRITE)
-            if (ctx->Texture._EnabledUnits)
-               _swrast_write_texture_span(ctx, span);
-            else
-               _swrast_write_rgba_span(ctx, span);
-#elif FLAGS & RGBA
+#if FLAGS & RGBA
             _swrast_write_rgba_span(ctx, span);
 #else
             _swrast_write_index_span(ctx, span);
@@ -256,7 +261,7 @@ NAME ( GLcontext *ctx, const SWvertex *vert )
 #endif
 #if FLAGS & TEXTURE
             for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-               if (ctx->Texture.Unit[u]._ReallyEnabled) {
+               if (ctx->Texture._EnabledCoordUnits & (1 << u)) {
                   COPY_4V(span->array->texcoords[u][count], texcoord[u]);
                }
             }
@@ -349,12 +354,7 @@ NAME ( GLcontext *ctx, const SWvertex *vert )
       /* check if we need to flush */
       if (span->end >= MAX_WIDTH ||
           (swrast->_RasterMask & (BLEND_BIT | LOGIC_OP_BIT | MASKING_BIT))) {
-#if FLAGS & (TEXTURE | SPRITE)
-         if (ctx->Texture._EnabledUnits)
-            _swrast_write_texture_span(ctx, span);
-         else
-            _swrast_write_rgba_span(ctx, span);
-#elif FLAGS & RGBA
+#if FLAGS & RGBA
          _swrast_write_rgba_span(ctx, span);
 #else
          _swrast_write_index_span(ctx, span);

@@ -28,59 +28,72 @@
 #include "via_context.h"
 
 
-void viaEmitPrim(viaContextPtr vmesa);
-void viaFlushPrims(viaContextPtr vmesa);
-void viaFlushPrimsLocked(viaContextPtr vmesa);
+void viaFinishPrimitive(viaContextPtr vmesa);
+void viaFlushDma(viaContextPtr vmesa);
+void viaFlushDmaLocked(viaContextPtr vmesa, GLuint flags);
 
-void viaDmaFinish(viaContextPtr vmesa);
-void viaRegetLockQuiescent(viaContextPtr vmesa);
 void viaInitIoctlFuncs(GLcontext *ctx);
 void viaCopyBuffer(const __DRIdrawablePrivate *dpriv);
 void viaPageFlip(const __DRIdrawablePrivate *dpriv);
-int via_check_copy(int fd);
-void viaFillFrontBuffer(viaContextPtr vmesa);
-void viaFillFrontBufferSaam(viaContextPtr vmesa);
-void viaFillFrontPBuffer(viaContextPtr vmesa);
-void viaFillBackBuffer(viaContextPtr vmesa);
-void viaFillDepthBuffer(viaContextPtr vmesa, GLuint pixel);
-void viaFillStencilBuffer(viaContextPtr vmesa, GLuint pixel);
-void viaFillStencilDepthBuffer(viaContextPtr vmesa, GLuint pixel);
-void viaDoSwapBuffers(viaContextPtr vmesa);
-void viaDoSwapBuffersSaam(viaContextPtr vmesa);
-void viaDoSwapPBuffers(viaContextPtr vmesa);
+void viaCheckDma(viaContextPtr vmesa, GLuint bytes);
 
-int flush_agp(viaContextPtr vmesa, drm_via_flush_agp_t* agpCmd); 
-int flush_agp_saam(viaContextPtr vmesa, drm_via_flush_agp_t* agpCmd); 
-int flush_sys(viaContextPtr vmesa, drm_via_flush_sys_t* buf); 
+#define VIA_FINISH_PRIM(vmesa) do {		\
+   if (vmesa->dmaLastPrim)			\
+      viaFinishPrimitive( vmesa );		\
+} while (0)
 
-#define VIA_STATECHANGE(vmesa, flag)                            \
-    do {                                                        \
-        if (vmesa->dmaLow != vmesa->dmaLastPrim)                \
-            viaFlushPrims(vmesa);                               \
-        vmesa->dirty |= flag;                                   \
-    } while (0)                                                 \
-
-
-#define VIA_FIREVERTICES(vmesa)                                 \
-    do {                                                        \
-        if (vmesa->dmaLow) {                                    \
-            viaFlushPrims(vmesa);                               \
-        }                                                       \
-    } while (0)
+#define VIA_FLUSH_DMA(vmesa) do {		\
+   VIA_FINISH_PRIM(vmesa);			\
+   if (vmesa->dmaLow) 		\
+      viaFlushDma(vmesa);			\
+} while (0)
     
 
-static __inline GLuint *viaCheckDma(viaContextPtr vmesa, int bytes)
-{
-    if (vmesa->dmaLow + bytes > vmesa->dmaHigh) {
-#ifdef DEBUG
-	if (VIA_DEBUG) fprintf(stderr, "buffer overflow in check dma = %d + %d = %d\n", vmesa->dmaLow, bytes, vmesa->dmaLow + bytes);
-#endif
-	viaFlushPrims(vmesa);
-    }
+GLuint *viaExtendPrimitive(viaContextPtr vmesa, int bytes);
+GLuint *viaAllocDmaFunc(viaContextPtr vmesa, int bytes, const char *func, int line);
+#define viaAllocDma( v, b ) viaAllocDmaFunc(v, b, __FUNCTION__, __LINE__)
 
-    {
-        GLuint *start = (GLuint *)(vmesa->dmaAddr + vmesa->dmaLow);
-        return start;
-    }
-}
+
+#define RING_VARS GLuint *_vb = 0, _nr, _x;
+
+#define BEGIN_RING(n) do {				\
+   if (_vb != 0) abort();				\
+   _vb = viaAllocDma(vmesa, (n) * sizeof(GLuint));	\
+   _nr = (n);						\
+   _x = 0;						\
+} while (0)
+
+#define BEGIN_RING_NOCHECK(n) do {			\
+   if (_vb != 0) abort();				\
+   _vb = (GLuint *)(vmesa->dma + vmesa->dmaLow);	\
+   vmesa->dmaLow += (n) * sizeof(GLuint);		\
+   _nr = (n);						\
+   _x = 0;						\
+} while (0)
+
+#define OUT_RING(n) _vb[_x++] = (n)
+
+#define ADVANCE_RING() do {			\
+   if (_x != _nr) abort(); 			\
+   _vb = 0;						\
+} while (0)
+
+#define ADVANCE_RING_VARIABLE() do {			\
+   if (_x > _nr) abort();				\
+   vmesa->dmaLow -= (_nr - _x) * sizeof(GLuint);	\
+   _vb = 0;						\
+} while (0)
+
+
+#define QWORD_PAD_RING() do {			\
+   if (vmesa->dmaLow & 0x4) {			\
+      BEGIN_RING(1);				\
+      OUT_RING(HC_DUMMY);			\
+      ADVANCE_RING();				\
+   }						\
+} while (0)
+
+
+
+
 #endif

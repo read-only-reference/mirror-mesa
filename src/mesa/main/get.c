@@ -1440,7 +1440,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
             *params = GL_FALSE;
          break;
       case GL_PROGRAM_ERROR_POSITION_NV:
-         CHECK_EXTENSION_B(NV_vertex_program, pname);
+         CHECK_EXTENSION2_B(NV_vertex_program, ARB_vertex_program, pname);
          *params = (ctx->Program.ErrorPos != 0) ? GL_TRUE : GL_FALSE;
          break;
       case GL_VERTEX_ATTRIB_ARRAY0_NV:
@@ -1730,6 +1730,40 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = INT_TO_BOOL(ctx->Const.ColorReadFormat);
          return;
 
+#if FEATURE_ATI_fragment_shader
+      case GL_NUM_FRAGMENT_REGISTERS_ATI:
+ 	 CHECK_EXTENSION_B(ATI_fragment_shader, pname);
+	 *params = INT_TO_BOOL(6);
+	 break;
+      case GL_NUM_FRAGMENT_CONSTANTS_ATI:
+ 	 CHECK_EXTENSION_B(ATI_fragment_shader, pname);
+	 *params = INT_TO_BOOL(8);
+	 break;
+      case GL_NUM_PASSES_ATI:
+ 	 CHECK_EXTENSION_B(ATI_fragment_shader, pname);
+	*params = INT_TO_BOOL(2);
+	break;
+      case GL_NUM_INSTRUCTIONS_PER_PASS_ATI:
+ 	 CHECK_EXTENSION_B(ATI_fragment_shader, pname);
+	 *params = INT_TO_BOOL(8);
+	 break;
+      case GL_NUM_INSTRUCTIONS_TOTAL_ATI:
+ 	 CHECK_EXTENSION_B(ATI_fragment_shader, pname);
+	 *params = INT_TO_BOOL(16);
+	 break;
+      case GL_COLOR_ALPHA_PAIRING_ATI:
+ 	 CHECK_EXTENSION_B(ATI_fragment_shader, pname);
+	 *params = GL_TRUE;
+	 break;
+      case GL_NUM_LOOPBACK_COMPONENTS_ATI:
+ 	 CHECK_EXTENSION_B(ATI_fragment_shader, pname);
+	 *params = INT_TO_BOOL(3);
+ 	 break;
+      case GL_NUM_INPUT_INTERPOLATOR_COMPONENTS_ATI:
+ 	 CHECK_EXTENSION_B(ATI_fragment_shader, pname);
+	 *params = INT_TO_BOOL(3);
+	 break;
+#endif
       default:
          _mesa_error(ctx, GL_INVALID_ENUM, "glGetBooleanv(pname=0x%x)", pname);
    }
@@ -3042,7 +3076,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
             *params = 0.0;
          break;
       case GL_PROGRAM_ERROR_POSITION_NV:
-         CHECK_EXTENSION_D(NV_vertex_program, pname);
+         CHECK_EXTENSION2_D(NV_vertex_program, ARB_vertex_program, pname);
          *params = (GLdouble) ctx->Program.ErrorPos;
          break;
       case GL_VERTEX_ATTRIB_ARRAY0_NV:
@@ -3330,6 +3364,41 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       case GL_IMPLEMENTATION_COLOR_READ_FORMAT_OES:
          *params = (GLdouble) ctx->Const.ColorReadFormat;
          return;
+
+#if FEATURE_ATI_fragment_shader
+      case GL_NUM_FRAGMENT_REGISTERS_ATI:
+ 	 CHECK_EXTENSION_D(ATI_fragment_shader, pname);
+	*params = 6;
+	 break;
+      case GL_NUM_FRAGMENT_CONSTANTS_ATI:
+ 	 CHECK_EXTENSION_D(ATI_fragment_shader, pname);
+	 *params = 8;
+	 break;
+      case GL_NUM_PASSES_ATI:
+ 	 CHECK_EXTENSION_D(ATI_fragment_shader, pname);
+	*params = 2;
+	break;
+      case GL_NUM_INSTRUCTIONS_PER_PASS_ATI:
+ 	 CHECK_EXTENSION_D(ATI_fragment_shader, pname);
+	 *params = 8;
+	 break;
+      case GL_NUM_INSTRUCTIONS_TOTAL_ATI:
+ 	 CHECK_EXTENSION_D(ATI_fragment_shader, pname);
+	 *params = 16;
+	 break;
+      case GL_COLOR_ALPHA_PAIRING_ATI:
+ 	 CHECK_EXTENSION_D(ATI_fragment_shader, pname);
+	 *params = GL_TRUE;
+	 break;
+      case GL_NUM_LOOPBACK_COMPONENTS_ATI:
+ 	 CHECK_EXTENSION_D(ATI_fragment_shader, pname);
+	 *params = 3;
+ 	 break;
+      case GL_NUM_INPUT_INTERPOLATOR_COMPONENTS_ATI:
+ 	 CHECK_EXTENSION_D(ATI_fragment_shader, pname);
+	 *params = 3;
+	 break;
+#endif
 
       default:
          _mesa_error(ctx, GL_INVALID_ENUM, "glGetDoublev(pname=0x%x)", pname);
@@ -4619,7 +4688,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
             *params = 0.0;
          break;
       case GL_PROGRAM_ERROR_POSITION_NV:
-         CHECK_EXTENSION_F(NV_vertex_program, pname);
+         CHECK_EXTENSION2_F(NV_vertex_program, ARB_vertex_program, pname);
          *params = (GLfloat) ctx->Program.ErrorPos;
          break;
       case GL_VERTEX_ATTRIB_ARRAY0_NV:
@@ -4908,6 +4977,40 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = (GLfloat) ctx->Const.ColorReadFormat;
          return;
 
+#if FEATURE_ATI_fragment_shader
+      case GL_NUM_FRAGMENT_REGISTERS_ATI:
+ 	 CHECK_EXTENSION_F(ATI_fragment_shader, pname);
+	 *params = 6;
+	 break;
+      case GL_NUM_FRAGMENT_CONSTANTS_ATI:
+ 	 CHECK_EXTENSION_F(ATI_fragment_shader, pname);
+	 *params = 8;
+	 break;
+      case GL_NUM_PASSES_ATI:
+ 	 CHECK_EXTENSION_F(ATI_fragment_shader, pname);
+	*params = 2;
+	break;
+      case GL_NUM_INSTRUCTIONS_PER_PASS_ATI:
+ 	 CHECK_EXTENSION_F(ATI_fragment_shader, pname);
+	 *params = 8;
+	 break;
+      case GL_NUM_INSTRUCTIONS_TOTAL_ATI:
+ 	 CHECK_EXTENSION_F(ATI_fragment_shader, pname);
+	 *params = 16;
+	 break;
+      case GL_COLOR_ALPHA_PAIRING_ATI:
+ 	 CHECK_EXTENSION_F(ATI_fragment_shader, pname);
+	 *params = GL_TRUE;
+	 break;
+      case GL_NUM_LOOPBACK_COMPONENTS_ATI:
+ 	 CHECK_EXTENSION_F(ATI_fragment_shader, pname);
+	 *params = 3;
+ 	 break;
+      case GL_NUM_INPUT_INTERPOLATOR_COMPONENTS_ATI:
+ 	 CHECK_EXTENSION_F(ATI_fragment_shader, pname);
+	 *params = 3;
+	 break;
+#endif
       default:
          _mesa_error(ctx, GL_INVALID_ENUM, "glGetFloatv(0x%x)", pname);
    }
@@ -6234,7 +6337,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
             *params = 0;
          break;
       case GL_PROGRAM_ERROR_POSITION_NV:
-         CHECK_EXTENSION_I(NV_vertex_program, pname);
+         CHECK_EXTENSION2_I(NV_vertex_program, ARB_vertex_program, pname);
          *params = (GLint) ctx->Program.ErrorPos;
          break;
       case GL_VERTEX_ATTRIB_ARRAY0_NV:
@@ -6523,6 +6626,40 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = ctx->Const.ColorReadFormat;
          return;
 
+#if FEATURE_ATI_fragment_shader
+      case GL_NUM_FRAGMENT_REGISTERS_ATI:
+ 	 CHECK_EXTENSION_I(ATI_fragment_shader, pname);
+	 *params = 6;
+	 break;
+      case GL_NUM_FRAGMENT_CONSTANTS_ATI:
+ 	 CHECK_EXTENSION_I(ATI_fragment_shader, pname);
+	 *params = 8;
+	 break;
+      case GL_NUM_PASSES_ATI:
+ 	 CHECK_EXTENSION_I(ATI_fragment_shader, pname);
+	*params = 2;
+	break;
+      case GL_NUM_INSTRUCTIONS_PER_PASS_ATI:
+ 	 CHECK_EXTENSION_I(ATI_fragment_shader, pname);
+	 *params = 8;
+	 break;
+      case GL_NUM_INSTRUCTIONS_TOTAL_ATI:
+ 	 CHECK_EXTENSION_I(ATI_fragment_shader, pname);
+	 *params = 16;
+	 break;
+      case GL_COLOR_ALPHA_PAIRING_ATI:
+ 	 CHECK_EXTENSION_I(ATI_fragment_shader, pname);
+	 *params = GL_TRUE;
+	 break;
+      case GL_NUM_LOOPBACK_COMPONENTS_ATI:
+ 	 CHECK_EXTENSION_I(ATI_fragment_shader, pname);
+	 *params = 3;
+ 	 break;
+      case GL_NUM_INPUT_INTERPOLATOR_COMPONENTS_ATI:
+ 	 CHECK_EXTENSION_I(ATI_fragment_shader, pname);
+	 *params = 3;
+	 break;
+#endif
       default:
          _mesa_error(ctx, GL_INVALID_ENUM, "glGetIntegerv(pname=0x%x)", pname);
    }
@@ -6715,9 +6852,13 @@ _mesa_GetString( GLenum name )
             if (!ctx->Extensions.String)
                ctx->Extensions.String = _mesa_make_extension_string(ctx);
             return (const GLubyte *) ctx->Extensions.String;
-#if FEATURE_NV_fragment_program
+#if FEATURE_NV_fragment_program || FEATURE_ARB_fragment_program || \
+    FEATURE_NV_vertex_program || FEATURE_ARB_vertex_program
          case GL_PROGRAM_ERROR_STRING_NV:
-            if (ctx->Extensions.NV_fragment_program) {
+            if (ctx->Extensions.NV_fragment_program ||
+                ctx->Extensions.ARB_fragment_program ||
+                ctx->Extensions.NV_vertex_program ||
+                ctx->Extensions.ARB_vertex_program) {
                return (const GLubyte *) ctx->Program.ErrorString;
             }
             /* FALL-THROUGH */

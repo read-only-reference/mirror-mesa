@@ -67,7 +67,7 @@
  */
 #include "xmlpool.h"
 
-const char __driConfigOptions[] =
+PUBLIC const char __driConfigOptions[] =
 DRI_CONF_BEGIN
     DRI_CONF_SECTION_PERFORMANCE
         DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
@@ -113,8 +113,8 @@ mgaFillInModes( unsigned pixel_bits, unsigned depth_bits,
 	GLX_NONE, GLX_SWAP_UNDEFINED_OML, GLX_SWAP_COPY_OML
     };
 
-    uint8_t depth_bits_array[3];
-    uint8_t stencil_bits_array[3];
+    u_int8_t depth_bits_array[3];
+    u_int8_t stencil_bits_array[3];
 
 
     depth_bits_array[0] = 0;
@@ -890,6 +890,7 @@ void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
  *         failure.
  */
 #ifdef USE_NEW_INTERFACE
+PUBLIC
 void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,

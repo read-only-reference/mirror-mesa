@@ -772,11 +772,11 @@ void radeonAllocDmaRegionVerts( radeonContextPtr rmesa,
  * SwapBuffers with client-side throttling
  */
 
-static uint32_t radeonGetLastFrame (radeonContextPtr rmesa) 
+static u_int32_t radeonGetLastFrame (radeonContextPtr rmesa) 
 {
    unsigned char *RADEONMMIO = rmesa->radeonScreen->mmio.map;
    int ret;
-   uint32_t frame;
+   u_int32_t frame;
 
    if (rmesa->dri.screen->drmMinor >= 4) {
       drm_radeon_getparam_t gp;
@@ -1011,7 +1011,7 @@ static void radeonClear( GLcontext *ctx, GLbitfield mask, GLboolean all,
    __DRIdrawablePrivate *dPriv = rmesa->dri.drawable;
    drm_radeon_sarea_t *sarea = rmesa->sarea;
    unsigned char *RADEONMMIO = rmesa->radeonScreen->mmio.map;
-   uint32_t clear;
+   u_int32_t clear;
    GLuint flags = 0;
    GLuint color_mask = 0;
    GLint ret, i;
@@ -1043,7 +1043,7 @@ static void radeonClear( GLcontext *ctx, GLbitfield mask, GLboolean all,
    }
 
    if ( mask & DD_DEPTH_BIT ) {
-      if ( ctx->Depth.Mask ) flags |= RADEON_DEPTH; /* FIXME: ??? */
+      flags |= RADEON_DEPTH;
       mask &= ~DD_DEPTH_BIT;
    }
 
@@ -1061,6 +1061,16 @@ static void radeonClear( GLcontext *ctx, GLbitfield mask, GLboolean all,
    if ( !flags ) 
       return;
 
+   if (rmesa->using_hyperz) {
+      flags |= RADEON_USE_COMP_ZBUF;
+/*      if (rmesa->radeonScreen->chipset & RADEON_CHIPSET_TCL) 
+         flags |= RADEON_USE_HIERZ; */
+      if (!(rmesa->state.stencil.hwBuffer) ||
+	 ((flags & RADEON_DEPTH) && (flags & RADEON_STENCIL) &&
+	    ((rmesa->state.stencil.clear & RADEON_STENCIL_WRITE_MASK) == RADEON_STENCIL_WRITE_MASK))) {
+	  flags |= RADEON_CLEAR_FASTZ;
+      }
+   }
 
    /* Flip top to bottom */
    cx += dPriv->x;

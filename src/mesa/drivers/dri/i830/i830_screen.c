@@ -55,7 +55,7 @@
 #include "utils.h"
 #include "xmlpool.h"
 
-const char __driConfigOptions[] =
+PUBLIC const char __driConfigOptions[] =
 DRI_CONF_BEGIN
     DRI_CONF_SECTION_PERFORMANCE
        DRI_CONF_MAX_TEXTURE_UNITS(4,2,4)
@@ -394,8 +394,8 @@ i830FillInModes( unsigned pixel_bits, unsigned depth_bits,
       GLX_NONE, GLX_SWAP_UNDEFINED_OML, GLX_SWAP_COPY_OML
    };
 
-   uint8_t depth_bits_array[2];
-   uint8_t stencil_bits_array[2];
+   u_int8_t depth_bits_array[2];
+   u_int8_t stencil_bits_array[2];
 
 
    depth_bits_array[0] = 0;
@@ -459,6 +459,7 @@ i830FillInModes( unsigned pixel_bits, unsigned depth_bits,
  *         failure.
  */
 #ifdef USE_NEW_INTERFACE
+PUBLIC
 void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,

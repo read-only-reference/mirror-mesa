@@ -39,12 +39,11 @@
 
 static struct {
     void                (*emit)(GLcontext *, GLuint, GLuint, void *, GLuint);
-    tnl_interp_func          interp;
-    tnl_copy_pv_func         copyPv;
+    tnl_interp_func      interp;
+    tnl_copy_pv_func     copy_pv;
     GLboolean           (*check_tex_sizes)(GLcontext *ctx);
-    GLuint               vertexSize;
-    GLuint               vertexStrideShift;
-    GLuint               vertexFormat;
+    GLuint               vertex_size;
+    GLuint               vertex_format;
 } setup_tab[VIA_MAX_SETUP];
 
 #define TINY_VERTEX_FORMAT 	1
@@ -71,12 +70,9 @@ static struct {
 #define VERTEX_COLOR via_color_t
 #define GET_VIEWPORT_MAT() VIA_CONTEXT(ctx)->ViewportMatrix.m
 #define GET_TEXSOURCE(n)  n
-#define GET_VERTEX_FORMAT() VIA_CONTEXT(ctx)->vertexSize
-#define GET_VERTEX_SIZE() VIA_CONTEXT(ctx)->vertexSize
+#define GET_VERTEX_FORMAT() VIA_CONTEXT(ctx)->vertexFormat
+#define GET_VERTEX_SIZE() VIA_CONTEXT(ctx)->vertexSize * sizeof(GLuint)
 #define GET_VERTEX_STORE() VIA_CONTEXT(ctx)->verts
-#define GET_VERTEX_STRIDE_SHIFT() VIA_CONTEXT(ctx)->vertexStrideShift
-#define GET_UBYTE_COLOR_STORE() &VIA_CONTEXT(ctx)->UbyteColor
-#define GET_UBYTE_SPEC_COLOR_STORE() &VIA_CONTEXT(ctx)->UbyteSecondaryColor
 #define INVALIDATE_STORED_VERTICES()
 
 #define HAVE_HW_VIEWPORT    0
@@ -90,18 +86,18 @@ static struct {
 #define HAVE_TEX3_VERTICES  0
 #define HAVE_PTEX_VERTICES  0
 
-#define UNVIEWPORT_VARS  GLfloat h = VIA_CONTEXT(ctx)->driDrawable->h
-#define UNVIEWPORT_X(x)  x - SUBPIXEL_X
+#define UNVIEWPORT_VARS  \
+   viaContextPtr vmesa = VIA_CONTEXT(ctx); \
+   GLfloat h = vmesa->driDrawable->h, depth_max = vmesa->depth_max, xoff = vmesa->drawXoff;
+
+#define UNVIEWPORT_X(x)  x - (SUBPIXEL_X + xoff)
 #define UNVIEWPORT_Y(y)  - y + h + SUBPIXEL_Y
-#define UNVIEWPORT_Z(z)  z * (float)0xffffffff
+#define UNVIEWPORT_Z(z)  z * (float)depth_max
 
 #define PTEX_FALLBACK() FALLBACK(VIA_CONTEXT(ctx), VIA_FALLBACK_TEXTURE, 1)
 
-#define IMPORT_FLOAT_COLORS via_import_float_colors
-#define IMPORT_FLOAT_SPEC_COLORS via_import_float_spec_colors
-
 #define INTERP_VERTEX setup_tab[VIA_CONTEXT(ctx)->setupIndex].interp
-#define COPY_PV_VERTEX setup_tab[VIA_CONTEXT(ctx)->setupIndex].copyPv
+#define COPY_PV_VERTEX setup_tab[VIA_CONTEXT(ctx)->setupIndex].copy_pv
 
 
 /***********************************************************************
@@ -116,94 +112,94 @@ static struct {
  ***********************************************************************/
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT)
 #define TAG(x) x##_wg
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_SPEC_BIT)
 #define TAG(x) x##_wgs
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_TEX0_BIT)
 #define TAG(x) x##_wgt0
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_TEX0_BIT | VIA_TEX1_BIT)
 #define TAG(x) x##_wgt0t1
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_TEX0_BIT | VIA_PTEX_BIT)
 #define TAG(x) x##_wgpt0
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_TEX0_BIT | VIA_TEX1_BIT |\
              VIA_PTEX_BIT)
 #define TAG(x) x##_wgpt0t1
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_SPEC_BIT | VIA_TEX0_BIT)
 #define TAG(x) x##_wgst0
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_SPEC_BIT | VIA_TEX0_BIT |\
              VIA_TEX1_BIT)
 #define TAG(x) x##_wgst0t1
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_SPEC_BIT | VIA_TEX0_BIT |\
              VIA_PTEX_BIT)
 #define TAG(x) x##_wgspt0
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_SPEC_BIT | VIA_TEX0_BIT |\
              VIA_TEX1_BIT | VIA_PTEX_BIT)	     
 #define TAG(x) x##_wgspt0t1
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_FOG_BIT)
 #define TAG(x) x##_wgf
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_FOG_BIT | VIA_SPEC_BIT)
 #define TAG(x) x##_wgfs
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_FOG_BIT | VIA_TEX0_BIT)
 #define TAG(x) x##_wgft0
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_FOG_BIT | VIA_TEX0_BIT |\
              VIA_TEX1_BIT)
 #define TAG(x) x##_wgft0t1
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_FOG_BIT | VIA_TEX0_BIT |\
              VIA_PTEX_BIT)
 #define TAG(x) x##_wgfpt0
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_FOG_BIT | VIA_TEX0_BIT |\
              VIA_TEX1_BIT | VIA_PTEX_BIT)
 #define TAG(x) x##_wgfpt0t1
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_FOG_BIT | VIA_SPEC_BIT |\
              VIA_TEX0_BIT)
 #define TAG(x) x##_wgfst0
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_FOG_BIT | VIA_SPEC_BIT |\
              VIA_TEX0_BIT | VIA_TEX1_BIT)
 #define TAG(x) x##_wgfst0t1
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_FOG_BIT | VIA_SPEC_BIT |\
              VIA_TEX0_BIT | VIA_PTEX_BIT)
 #define TAG(x) x##_wgfspt0
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 #define IND (VIA_XYZW_BIT | VIA_RGBA_BIT | VIA_FOG_BIT | VIA_SPEC_BIT |\
              VIA_TEX0_BIT | VIA_TEX1_BIT | VIA_PTEX_BIT)
 #define TAG(x) x##_wgfspt0t1
-#include "via_dd_vbtmp.h"
+#include "tnl_dd/t_dd_vbtmp.h"
 
 static void init_setup_tab(void) {
 
@@ -230,7 +226,6 @@ static void init_setup_tab(void) {
 }
 
 void viaPrintSetupFlags(char *msg, GLuint flags) {
-#ifdef DEBUG
     if (VIA_DEBUG) fprintf(stderr, "%s(%x): %s%s%s%s%s%s\n",
             msg,
             (int)flags,
@@ -240,18 +235,13 @@ void viaPrintSetupFlags(char *msg, GLuint flags) {
             (flags & VIA_FOG_BIT)      ? " fog," : "",
             (flags & VIA_TEX0_BIT)     ? " tex-0," : "",
             (flags & VIA_TEX1_BIT)     ? " tex-1," : "");
-#endif
 }
 
-void viaCheckTexSizes(GLcontext *ctx) {
+void viaCheckTexSizes(GLcontext *ctx) 
+{
     TNLcontext *tnl = TNL_CONTEXT(ctx);
     viaContextPtr vmesa = VIA_CONTEXT(ctx);
-#ifdef DEBUG    
-    if (VIA_DEBUG) {    
-	fprintf(stderr, "%s - in\n", __FUNCTION__);
-	fprintf(stderr, "setupIndex = %x\n", vmesa->setupIndex);
-    }	
-#endif
+
     if (!setup_tab[vmesa->setupIndex].check_tex_sizes(ctx)) {
         /* Invalidate stored verts
          */
@@ -261,12 +251,13 @@ void viaCheckTexSizes(GLcontext *ctx) {
         if (!vmesa->Fallback &&
             !(ctx->_TriangleCaps & (DD_TRI_LIGHT_TWOSIDE|DD_TRI_UNFILLED))) {
             tnl->Driver.Render.Interp = setup_tab[vmesa->setupIndex].interp;
-            tnl->Driver.Render.CopyPV = setup_tab[vmesa->setupIndex].copyPv;
+            tnl->Driver.Render.CopyPV = setup_tab[vmesa->setupIndex].copy_pv;
         }
+
+	if (vmesa->Fallback)
+	   tnl->Driver.Render.Start(ctx);
     }
-#ifdef DEBUG
     if (VIA_DEBUG) fprintf(stderr, "%s - out\n", __FUNCTION__);    
-#endif
 }
 
 void viaBuildVertices(GLcontext *ctx,
@@ -275,16 +266,16 @@ void viaBuildVertices(GLcontext *ctx,
                       GLuint newinputs) 
 {
     viaContextPtr vmesa = VIA_CONTEXT(ctx);
-    GLubyte *v = ((GLubyte *)vmesa->verts + (start << vmesa->vertexStrideShift));
-    GLuint stride = 1 << vmesa->vertexStrideShift;
-#ifdef DEBUG
-    if (VIA_DEBUG) fprintf(stderr, "%s - in\n", __FUNCTION__);
-#endif
+    GLuint stride = vmesa->vertexSize * sizeof(GLuint);
+    GLubyte *v = (GLubyte *)vmesa->verts + start * stride;
+
     newinputs |= vmesa->setupNewInputs;
     vmesa->setupNewInputs = 0;
+
     if (!newinputs)
         return;
-    if (newinputs & VERT_BIT_CLIP) {
+
+    if (newinputs & VERT_BIT_POS) {
         setup_tab[vmesa->setupIndex].emit(ctx, start, count, v, stride);
     }
     else {
@@ -315,18 +306,13 @@ void viaBuildVertices(GLcontext *ctx,
             setup_tab[ind].emit(ctx, start, count, v, stride);
         }
     }
-#ifdef DEBUG
-    if (VIA_DEBUG) fprintf(stderr, "%s - out\n", __FUNCTION__);    
-#endif
 }
 
 void viaChooseVertexState(GLcontext *ctx) {
     TNLcontext *tnl = TNL_CONTEXT(ctx);
     viaContextPtr vmesa = VIA_CONTEXT(ctx);
     GLuint ind = VIA_XYZW_BIT | VIA_RGBA_BIT;
-#ifdef DEBUG
-    if (VIA_DEBUG) fprintf(stderr, "%s - in\n", __FUNCTION__);
-#endif
+
     if (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR)
         ind |= VIA_SPEC_BIT;
 
@@ -339,9 +325,7 @@ void viaChooseVertexState(GLcontext *ctx) {
         ind |= VIA_TEX0_BIT;
 
     vmesa->setupIndex = ind;
-#ifdef DEBUG
-    if (VIA_DEBUG) fprintf(stderr, "setupIndex = %x\n", vmesa->setupIndex);
-#endif
+    viaPrintSetupFlags(__FUNCTION__, ind);
 
     if (ctx->_TriangleCaps & (DD_TRI_LIGHT_TWOSIDE|DD_TRI_UNFILLED)) {
         tnl->Driver.Render.Interp = via_interp_extras;
@@ -349,36 +333,29 @@ void viaChooseVertexState(GLcontext *ctx) {
     }
     else {
         tnl->Driver.Render.Interp = setup_tab[ind].interp;
-        tnl->Driver.Render.CopyPV = setup_tab[ind].copyPv;
+        tnl->Driver.Render.CopyPV = setup_tab[ind].copy_pv;
     }
 
-        vmesa->vertexSize = setup_tab[ind].vertexSize;
-        vmesa->vertexStrideShift = setup_tab[ind].vertexStrideShift;
-#ifdef DEBUG
-    if (VIA_DEBUG) fprintf(stderr, "%s - out\n", __FUNCTION__);
-#endif
-    
+    vmesa->vertexSize = setup_tab[ind].vertex_size;
+    vmesa->vertexFormat = setup_tab[ind].vertex_format;
+
+    if (VIA_DEBUG) fprintf(stderr, "%s, size %d\n", __FUNCTION__, vmesa->vertexSize);
 }
 
-void via_emit_contiguous_verts(GLcontext *ctx,
-                               GLuint start,
-                               GLuint count) {
+void *via_emit_contiguous_verts(GLcontext *ctx,
+				GLuint start,
+				GLuint count,
+				void *dest) 
+{
     viaContextPtr vmesa = VIA_CONTEXT(ctx);
-    GLuint vertexSize = vmesa->vertexSize * 4;
-    GLuint *dest = viaCheckDma(vmesa, (count - start) * vertexSize);
-#ifdef DEBUG
-    if (VIA_DEBUG) fprintf(stderr, "%s - in\n", __FUNCTION__);
-    
-    if (VIA_DEBUG) fprintf(stderr, "choose setup_tab[0x%x]\n", vmesa->setupIndex);    
-#endif
-    setup_tab[vmesa->setupIndex].emit(ctx, start, count, dest, vertexSize);
-    vmesa->dmaLow += (count - start) * vertexSize;
-#ifdef DEBUG
-    if (VIA_DEBUG) fprintf(stderr, "%s - out\n", __FUNCTION__);    
-#endif
+    GLuint stride = vmesa->vertexSize * 4;    
+    setup_tab[vmesa->setupIndex].emit(ctx, start, count, dest, stride);
+    return (void *)((char *)dest + (count - start) * stride); 
 }
 
-void viaInitVB(GLcontext *ctx) {
+
+void viaInitVB(GLcontext *ctx) 
+{
     viaContextPtr vmesa = VIA_CONTEXT(ctx);
     GLuint size = TNL_CONTEXT(ctx)->vb.Size;
 
@@ -399,15 +376,5 @@ void viaFreeVB(GLcontext *ctx) {
     if (vmesa->verts) {
         ALIGN_FREE(vmesa->verts);
         vmesa->verts = 0;
-    }
-
-    if (vmesa->UbyteSecondaryColor.Ptr) {
-        ALIGN_FREE((void*)vmesa->UbyteSecondaryColor.Ptr);
-        vmesa->UbyteSecondaryColor.Ptr = 0;
-    }
-
-    if (vmesa->UbyteColor.Ptr) {
-        ALIGN_FREE((void*)vmesa->UbyteColor.Ptr);
-        vmesa->UbyteColor.Ptr = 0;
     }
 }

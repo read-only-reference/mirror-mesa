@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.3
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -3471,8 +3471,10 @@ clip_for_xgetimage(XMesaContext xmesa, GLuint *n, GLint *x, GLint *y)
    XMesaBuffer source = xmesa->xm_buffer;
    Window rootWin = RootWindow(xmesa->display, 0);
    Window child;
-   int screenWidth = WidthOfScreen(DefaultScreenOfDisplay(xmesa->display));
-   int dx, dy;
+   GLint screenWidth = WidthOfScreen(DefaultScreenOfDisplay(xmesa->display));
+   GLint dx, dy;
+   if (source->type == PBUFFER)
+      return 0;
    XTranslateCoordinates(xmesa->display, source->buffer, rootWin,
                          *x, *y, &dx, &dy, &child);
    if (dx >= screenWidth) {
@@ -3481,17 +3483,17 @@ clip_for_xgetimage(XMesaContext xmesa, GLuint *n, GLint *x, GLint *y)
    }
    if (dx < 0) {
       /* clipped on left */
-      int clip = -dx;
-      if (clip >= *n)
+      GLint clip = -dx;
+      if (clip >= (GLint) *n)
          return -1;  /* totally clipped on left */
       *x += clip;
       *n -= clip;
       dx = 0;
       return clip;
    }
-   if (dx + *n > screenWidth) {
+   if ((GLint) (dx + *n) > screenWidth) {
       /* clipped on right */
-      int clip = dx + *n - screenWidth;
+      GLint clip = dx + *n - screenWidth;
       *n -= clip;
    }
    return 0;

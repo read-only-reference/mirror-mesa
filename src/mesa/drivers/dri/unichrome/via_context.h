@@ -40,9 +40,6 @@ typedef struct via_texture_object_t *viaTextureObjectPtr;
 #include "via_tex.h"
 #include "via_common.h"
 #include "xf86drmVIA.h"
-#ifdef USE_XINERAMA
-#include "../../../../../include/extensions/Xinerama.h"
-#endif
 #define VIA_FALLBACK_TEXTURE           	0x1
 #define VIA_FALLBACK_DRAW_BUFFER       	0x2
 #define VIA_FALLBACK_READ_BUFFER       	0x4
@@ -53,37 +50,20 @@ typedef struct via_texture_object_t *viaTextureObjectPtr;
 #define VIA_FALLBACK_STENCIL           	0x100
 #define VIA_FALLBACK_BLEND_EQ          	0x200
 #define VIA_FALLBACK_BLEND_FUNC        	0x400
+#define VIA_FALLBACK_USER_DISABLE      	0x800
 
-#define VIA_UPLOAD_NONE		  	0x0000
-#define VIA_UPLOAD_ALPHATEST		0x0001
-#define VIA_UPLOAD_BLEND	  	0x0002
-#define VIA_UPLOAD_FOG 		  	0x0004
-#define VIA_UPLOAD_MASK_ROP		0x0008
-#define VIA_UPLOAD_LINESTIPPLE		0x0010
-#define VIA_UPLOAD_POLYGONSTIPPLE	0x0020
-#define VIA_UPLOAD_DEPTH		0x0040
-#define VIA_UPLOAD_TEXTURE		0x0080
-#define VIA_UPLOAD_STENCIL		0x0100
-#define VIA_UPLOAD_CLIPPING		0x0200
-#define VIA_UPLOAD_DESTBUFFER		0x0400
-#define VIA_UPLOAD_DEPTHBUFFER		0x0800
-#define VIA_UPLOAD_ENABLE		0x0800
-#define VIA_UPLOAD_ALL 		  	0x1000
-  		
+#define VIA_DMA_BUFSIZ                  5000
+#define VIA_DMA_HIGHWATER               (VIA_DMA_BUFSIZ - 256)
+
+#define VIA_NO_CLIPRECTS 0x1
+
+
 /* Use the templated vertex formats:
  */
 #define TAG(x) via##x
 #include "tnl_dd/t_dd_vertex.h"
 #undef TAG
 
-#define RightOf 1
-#define LeftOf 2
-#define Down 4
-#define Up 8
-#define S0 16
-#define S1 32
-#define P_MASK 0x0f;
-#define S_MASK 0x30;
 typedef void (*via_tri_func)(viaContextPtr, viaVertex *, viaVertex *,
                              viaVertex *);
 typedef void (*via_line_func)(viaContextPtr, viaVertex *, viaVertex *);
@@ -97,21 +77,17 @@ typedef struct {
     GLuint pitch;
     GLuint bpp;
     char *map;
+    GLuint orig;		/* The drawing origin, 
+				 * at (drawX,drawY) in screen space.
+				 */
+    char *origMap;
 } viaBuffer, *viaBufferPtr;
 
-typedef struct {
-    drm_handle_t handle;
-    drmSize size;
-    GLuint offset;
-    GLuint index;
-    unsigned char* map;
-} viaDmaBuffer, *viaDmaBufferPtr;
 
 struct via_context_t {
     GLint refcount;   
     GLcontext *glCtx;
     GLcontext *shareCtx;
-    unsigned char* front_base;
     viaBuffer front;
     viaBuffer back;
     viaBuffer depth;
@@ -121,7 +97,15 @@ struct via_context_t {
     GLboolean hasAccum;
     GLuint    depthBits;
     GLuint    stencilBits;
-    viaDmaBuffer dma[2];
+
+   GLboolean have_hw_stencil;
+   GLuint ClearDepth;
+   GLuint depth_clear_mask;
+   GLuint stencil_clear_mask;
+   GLfloat depth_max;
+   GLfloat polygon_offset_scale;
+
+    GLubyte    *dma;
     viaRegion tex;
     
     GLuint isAGP;
@@ -137,37 +121,25 @@ struct via_context_t {
      */
     GLuint Fallback;
 
-    /* Temporaries for translating away float colors:
-     */
-    struct gl_client_array UbyteColor;
-    struct gl_client_array UbyteSecondaryColor;
-
     /* State for via_vb.c and via_tris.c.
      */
     GLuint newState;            /* _NEW_* flags */
+    GLuint newEmitState;            /* _NEW_* flags */
     GLuint setupNewInputs;
     GLuint setupIndex;
     GLuint renderIndex;
     GLmatrix ViewportMatrix;
     GLenum renderPrimitive;
-    GLenum reducedPrimitive;
-    GLuint hwPrimitive;
+    GLenum hwPrimitive;
     unsigned char *verts;
 
     /* drmBufPtr dma_buffer;
     */
-    unsigned char* dmaAddr;
-    GLuint dmaIndex;
     GLuint dmaLow;
-    GLuint dmaHigh;
+    GLuint dmaCliprectAddr;
     GLuint dmaLastPrim;
     GLboolean useAgp;
    
-    GLboolean uploadCliprects;
-
-    GLuint needUploadAllState;
-    GLuint primitiveRendered;
-    
 
     /* Fallback rasterization functions 
      */
@@ -236,12 +208,13 @@ struct via_context_t {
      */
     GLuint dirty;             
     int vertexSize;
-    int vertexStrideShift;
+    int vertexFormat;
     GLint lastStamp;
-    GLboolean stippleInHw;
 
     GLenum TexEnvImageFmt[2];
     GLuint ClearColor;
+    GLuint ClearMask;
+
     /* DRI stuff
      */
     GLuint needClip;
@@ -249,25 +222,15 @@ struct via_context_t {
     GLboolean doPageFlip;
     /*=* John Sheng [2003.5.31] flip *=*/
     GLuint currentPage;
-    char *drawMap;               /* draw buffer address in virtual mem */
-    char *readMap;       
+
+    viaBuffer *drawBuffer;
+    viaBuffer *readBuffer;
     int drawX;                   /* origin of drawable in draw buffer */
     int drawY;
     
     int drawW;                  
     int drawH;
-    GLuint saam;
-#ifdef USE_XINERAMA
-    XineramaScreenInfo *xsi;
-#endif
-    int drawXoffSaam;
-    drm_clip_rect_t *pSaamRects;
-    int drawXSaam;
-    int drawYSaam;
-    GLuint numSaamRects;
     
-    int drawPitch;
-    int readPitch;
     int drawXoff;
     GLuint numClipRects;         /* cliprects for that buffer */
     drm_clip_rect_t *pClipRects;
@@ -297,75 +260,28 @@ struct via_context_t {
     volatile GLuint* regTranSpace;
     GLuint* agpBase;
     GLuint drawType;
-    /*=* John Sheng [2003.12.9] Tuxracer & VQ *=*/
-    int VQEnable;
+
+   GLuint nDoneFirstFlip;
+   GLuint agpFullCount;
+
+   /* Configuration cache
+    */
+   driOptionCache optionCache;
+
+   GLuint vblank_flags;
+   GLuint vbl_seq;
+
+   int64_t swap_ust;
+   int64_t swap_missed_ust;
+
+   GLuint swap_count;
+   GLuint swap_missed_count;
+
+   PFNGLXGETUSTPROC get_ust;
+
 };
-/*#define DMA_OFFSET 16*/
-#define DMA_OFFSET 32
-/*#define PERFORMANCE_MEASURE*/
 
-extern GLuint VIA_PERFORMANCE;
 
-#ifdef PERFORMANCE_MEASURE
-#define HASH_TABLE_SIZE 1000
-#define HASH_TABLE_DEPTH 10
-typedef struct {
-    char func[50];
-    GLuint count;
-} hash_element;
-extern hash_element hash_table[HASH_TABLE_SIZE][HASH_TABLE_DEPTH];
-#define P_M                                                                      \
-    do {                                                                         \
-	GLuint h_index,h_depth;                                                  \
-	h_index = (GLuint)(((GLuint) __FUNCTION__)%HASH_TABLE_SIZE);             \
-	for (h_depth = 0; h_depth < HASH_TABLE_DEPTH; h_depth++) {                \
-	    if (!strcmp(hash_table[h_index][h_depth].func, "NULL")) {             \
-		sprintf(hash_table[h_index][h_depth].func, "%s", __FUNCTION__);  \
-		hash_table[h_index][h_depth].count++;                            \
-		break;                                                           \
-	    }                                                                    \
-	    else if (!strcmp(hash_table[h_index][h_depth].func, __FUNCTION__)) {  \
-		hash_table[h_index][h_depth].count++;                            \
-		break;                                                           \
-	    }                                                                    \
-	}                                                                        \
-    } while (0)
-
-#define P_M_X                                                                    	\
-    do {                                                                         	\
-	GLuint h_index,h_depth;                                                  	\
-	char str[80];                                                            	\
-	strcpy(str, __FUNCTION__);                                               	\
-	h_index = (GLuint)(((GLuint) __FUNCTION__)%HASH_TABLE_SIZE);             	\
-	for (h_depth = 0; h_depth < HASH_TABLE_DEPTH; h_depth++) {                	\
-	    if (!strcmp(hash_table[h_index][h_depth].func, "NULL")) {             	\
-		sprintf(hash_table[h_index][h_depth].func, "%s_X", __FUNCTION__);  	\
-		hash_table[h_index][h_depth].count++;                              	\
-		break;                                                           	\
-	    }                                                                    	\
-	    else if (!strcmp(hash_table[h_index][h_depth].func, strcat(str, "_X"))) {  	\
-		hash_table[h_index][h_depth].count++;                            	\
-		break;                                                           	\
-	    }                                                                    	\
-	}                                                                        	\
-    } while (0)
-
-#define P_M_R                                                                                                                 	\
-    do {                                                                                                                      	\
-	GLuint h_size, h_depth;                                                                                               	\
-	for (h_size = 0; h_size < HASH_TABLE_SIZE; h_size++) {                                                                 	\
-	    for (h_depth = 0; h_depth < HASH_TABLE_DEPTH; h_depth++) {                                                         	\
-		if (hash_table[h_size][h_depth].count) {                                                                       	\
-		    fprintf(stderr, "func:%s count:%d\n", hash_table[h_size][h_depth].func, hash_table[h_size][h_depth].count); \
-		}                                                                                                             	\
-	    }                                                                                                                 	\
-	}                                                                                                                     	\
-    } while (0)
-#else /* PERFORMANCE_MEASURE */
-#define P_M {}
-#define P_M_X {}
-#define P_M_R {}
-#endif
 
 #define VIA_CONTEXT(ctx)   ((viaContextPtr)(ctx->DriverCtx))
 
@@ -375,74 +291,40 @@ extern hash_element hash_table[HASH_TABLE_SIZE][HASH_TABLE_DEPTH];
 
 /* Lock the hardware and validate our state.  
  */
-/*
-#define LOCK_HARDWARE(vmesa)                                \
-    do {                                                    \
-        char __ret = 0;                                     \
-        DRM_CAS(vmesa->driHwLock, vmesa->hHWContext,        \
-            (DRM_LOCK_HELD|vmesa->hHWContext), __ret);      \
-        if (__ret)                                          \
-            viaGetLock(vmesa, 0);                           \
-    } while (0)
-*/
-/*=* John Sheng [2003.6.20] fix pci *=*/
-/*=* John Sheng [2003.7.25] fix viewperf black shadow *=*/
 #define LOCK_HARDWARE(vmesa)                                	\
-    if(1)                                         	\
 	do {                                                    \
     	    char __ret = 0;                                     \
     	    DRM_CAS(vmesa->driHwLock, vmesa->hHWContext,        \
         	(DRM_LOCK_HELD|vmesa->hHWContext), __ret);      \
     	    if (__ret)                                          \
         	viaGetLock(vmesa, 0);                           \
-	} while (0);                                            \
-    else                                                        \
-	viaLock(vmesa, 0)
-	
+	} while (0)
 
-/*
-#define LOCK_HARDWARE(vmesa)                                	\
-    viaLock(vmesa, 0);                           
-*/
 
 /* Release the kernel lock.
  */
-/*
-#define UNLOCK_HARDWARE(vmesa)                                  \
-    DRM_UNLOCK(vmesa->driFd, vmesa->driHwLock, vmesa->hHWContext);
-*/
-/*=* John Sheng [2003.6.20] fix pci *=*/
-/*=* John Sheng [2003.7.25] fix viewperf black shadow *=*/
 #define UNLOCK_HARDWARE(vmesa)                                  	\
-    if(1)                                         		\
-	DRM_UNLOCK(vmesa->driFd, vmesa->driHwLock, vmesa->hHWContext);	\
-    else								\
-	viaUnLock(vmesa, 0);				
-/*	
-#define UNLOCK_HARDWARE(vmesa)                             	\
-    viaUnLock(vmesa, 0);
-*/
-#define WAIT_IDLE                                                             	\
-    while (1) {                                                            	\
+	DRM_UNLOCK(vmesa->driFd, vmesa->driHwLock, vmesa->hHWContext);	
+
+#define WAIT_IDLE(vmesa)                                                       	\
+    do {                                                            	\
 	if ((((GLuint)*vmesa->regEngineStatus) & 0xFFFEFFFF) == 0x00020000)	\
 	    break;                                                        	\
-    }
+    } while (1)
 	
-#define LOCK_HARDWARE_QUIESCENT(vmesa)          \
-    do {                                        \
-        LOCK_HARDWARE(vmesa);                   \
-        viaRegetLockQuiescent(vmesa);           \
-    } while (0)
 
-
+#ifdef DEBUG
 extern GLuint VIA_DEBUG;
-extern GLuint DRAW_FRONT;
+#else
+#define VIA_DEBUG 0
+#endif
+
+
 extern void viaGetLock(viaContextPtr vmesa, GLuint flags);
 extern void viaLock(viaContextPtr vmesa, GLuint flags);
 extern void viaUnLock(viaContextPtr vmesa, GLuint flags);
 extern void viaEmitHwStateLocked(viaContextPtr vmesa);
 extern void viaEmitScissorValues(viaContextPtr vmesa, int box_nr, int emit);
-extern void viaEmitDrawingRectangle(viaContextPtr vmesa);
 extern void viaXMesaSetBackClipRects(viaContextPtr vmesa);
 extern void viaXMesaSetFrontClipRects(viaContextPtr vmesa);
 extern void viaReAllocateBuffers(GLframebuffer *drawbuffer);
@@ -451,8 +333,10 @@ extern void viaXMesaWindowMoved(viaContextPtr vmesa);
 extern void viaTexCombineState(viaContextPtr vmesa,
     const struct gl_tex_env_combine_state * combine, unsigned unit );
 
-#define SUBPIXEL_X -.5
-#define SUBPIXEL_Y -.5
+/* Via hw already adjusted for GL pixel centers:
+ */
+#define SUBPIXEL_X 0
+#define SUBPIXEL_Y 0
 
 /* TODO XXX _SOLO temp defines to make code compilable */
 #ifndef GLX_PBUFFER_BIT

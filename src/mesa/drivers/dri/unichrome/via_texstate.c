@@ -170,9 +170,7 @@ static void viaSetTexImages(viaContextPtr vmesa,
     GLuint basH = 0;
     GLuint widthExp = 0;
     GLuint heightExp = 0;    
-#ifdef DEBUG
     if (VIA_DEBUG) fprintf(stderr, "%s - in\n", __FUNCTION__); 
-#endif
     switch (baseImage->TexFormat->MesaFormat) {
     case MESA_FORMAT_ARGB8888:
 	if (t->image[tObj->BaseLevel].internalFormat == GL_RGB)
@@ -208,6 +206,7 @@ static void viaSetTexImages(viaContextPtr vmesa,
     default:
         _mesa_problem(vmesa->glCtx, "Bad texture format in viaSetTexImages");
 	fprintf(stderr, "-- TexFormat = %d\n",baseImage->TexFormat->MesaFormat);
+	return;
     };
 
     /* Compute which mipmap levels we really want to send to the hardware.
@@ -234,12 +233,6 @@ static void viaSetTexImages(viaContextPtr vmesa,
 
     numLevels = lastLevel - firstLevel + 1;
     
-    /*=* [DBG] fgfs : fix mipmap level 11 over hw limitations and result in segmentation fault *=*/
-    if(numLevels > 10) {
-	numLevels = 10;
-	t->lastLevel = firstLevel + 9;
-    }
-
     log2Width = tObj->Image[0][firstLevel]->WidthLog2;
     log2Height = tObj->Image[0][firstLevel]->HeightLog2;
     log2Pitch = logbase2(tObj->Image[0][firstLevel]->Width * baseImage->TexFormat->TexelBytes);
@@ -271,8 +264,8 @@ static void viaSetTexImages(viaContextPtr vmesa,
     t->totalSize = (*texSize)[log2Height][log2Width];
     t->texMem.size = t->totalSize;
     t->maxLevel = i - 1;
-    t->dirty = VIA_UPLOAD_TEX0 | VIA_UPLOAD_TEX1;
-#ifdef DEBUG
+/*     t->dirty = VIA_UPLOAD_TEX0 | VIA_UPLOAD_TEX1; */
+
     if (VIA_DEBUG) {
 	fprintf(stderr, "log2Width = %d\n", log2Width);  
 	fprintf(stderr, "log2Height = %d\n", log2Height);    
@@ -282,7 +275,6 @@ static void viaSetTexImages(viaContextPtr vmesa,
 	fprintf(stderr, "actual level = %d\n", t->actualLevel);
         fprintf(stderr, "numlevel = %d\n", numLevels);    
     }	
-#endif
 
     {
 	w = log2Width;
@@ -318,14 +310,12 @@ static void viaSetTexImages(viaContextPtr vmesa,
                 texBase = (GLuint)vmesa->agpBase + t->texMem.offset + t->image[i].offset;
             else
 		texBase = t->texMem.offset + t->image[i].offset;
-#ifdef DEBUG
 	    if (VIA_DEBUG) {
 		fprintf(stderr, "texmem offset = %x\n", t->texMem.offset);    
 		fprintf(stderr, "mipmap%d addr = %x\n", i, t->image[i].offset);    
 		fprintf(stderr, "mipmap%d size = %d, h = %d, w = %d\n", i, (*texSize)[h][w], h, w);    
 		fprintf(stderr, "texBase%d = %x\n", i, texBase);
 	    }	
-#endif      
 	    t->regTexBaseAndPitch[i].baseL = ((HC_SubA_HTXnL0BasL + i) << 24) | (texBase & 0xFFFFFF);
             
 	    if (p < 5) {
@@ -367,9 +357,7 @@ static void viaSetTexImages(viaContextPtr vmesa,
             t->regTexHeightLog2[l] = ((l + HC_SubA_HTXnL0_5HE) << 24 | heightExp);
         }    
     }
-#ifdef DEBUG
     if (VIA_DEBUG) fprintf(stderr, "%s - out\n", __FUNCTION__);    
-#endif
 }
 
 /* ================================================================
@@ -541,9 +529,7 @@ static void viaUpdateTexEnv(GLcontext *ctx, GLuint unit)
     const struct gl_texture_object *tObj = texUnit->_Current;
     const GLuint format = tObj->Image[0][tObj->BaseLevel]->Format;
     GLuint color_combine, alpha_combine;
-#ifdef DEBUG
     if (VIA_DEBUG) fprintf(stderr, "%s - in\n", __FUNCTION__); 
-#endif
     switch (texUnit->EnvMode) {
     case GL_REPLACE:
         if (format == GL_ALPHA) {
@@ -649,43 +635,39 @@ static void viaUpdateTexEnv(GLcontext *ctx, GLuint unit)
     default:
         return;
     }
-#ifdef DEBUG
     if (VIA_DEBUG) fprintf(stderr, "%s - out\n", __FUNCTION__);    
-#endif
 }
 
-static void viaUpdateTexUnit(GLcontext *ctx, GLuint unit)
+static GLboolean viaUpdateTexUnit(GLcontext *ctx, GLuint unit)
 {
     viaContextPtr vmesa = VIA_CONTEXT(ctx);
     struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
-#ifdef DEBUG
-    if (VIA_DEBUG) fprintf(stderr, "%s - in\n", __FUNCTION__);     
-#endif
-    if (texUnit->_ReallyEnabled) {
+
+    if (texUnit->_ReallyEnabled == TEXTURE_2D_BIT || 
+	texUnit->_ReallyEnabled == TEXTURE_1D_BIT) {
+
         struct gl_texture_object *tObj = texUnit->_Current;
         viaTextureObjectPtr t = (viaTextureObjectPtr)tObj->DriverData;
 
         /* Upload teximages (not pipelined)
          */
         if (t->dirtyImages) {
-            VIA_FIREVERTICES(vmesa);
+            VIA_FLUSH_DMA(vmesa);
             viaSetTexImages(vmesa, tObj);
             if (!t->bufAddr) {
-                FALLBACK(vmesa, VIA_FALLBACK_TEXTURE, GL_TRUE);
-                return;
+                return GL_FALSE;
             }
         }
 
         if (tObj->Image[0][tObj->BaseLevel]->Border > 0) {
-            FALLBACK(vmesa, VIA_FALLBACK_TEXTURE, GL_TRUE);
-            return;
+            return GL_FALSE;
         }
 
         /* Update state if this is a different texture object to last
          * time.
          */
         if (vmesa->CurrentTexObj[unit] != t) {
-            VIA_STATECHANGE(vmesa, (VIA_UPLOAD_TEX0 << unit));
+            VIA_FLUSH_DMA(vmesa);
             vmesa->CurrentTexObj[unit] = t;
             viaUpdateTexLRU(vmesa, t); /* done too often */
         }
@@ -697,29 +679,27 @@ static void viaUpdateTexUnit(GLcontext *ctx, GLuint unit)
             vmesa->TexEnvImageFmt[unit] = tObj->Image[0][tObj->BaseLevel]->Format;
             viaUpdateTexEnv(ctx, unit);
         }
+
+	return GL_TRUE;
     }
+    else if (texUnit->_ReallyEnabled) {
+       return GL_FALSE;
+    } 
     else {
         vmesa->CurrentTexObj[unit] = 0;
         vmesa->TexEnvImageFmt[unit] = 0;
-        vmesa->dirty &= ~(VIA_UPLOAD_TEX0 << unit);
-        VIA_STATECHANGE(vmesa, VIA_UPLOAD_CTX);
+        VIA_FLUSH_DMA(vmesa);
+	return GL_TRUE;
     }
-#ifdef DEBUG
-    if (VIA_DEBUG) fprintf(stderr, "%s - out\n", __FUNCTION__);
-#endif
 }
 
 void viaUpdateTextureState(GLcontext *ctx)
 {
     viaContextPtr vmesa = VIA_CONTEXT(ctx);
-#ifdef DEBUG
-    if (VIA_DEBUG) fprintf(stderr, "%s - in\n", __FUNCTION__); 
-#endif
-    FALLBACK(vmesa, VIA_FALLBACK_TEXTURE, GL_FALSE);
-    viaUpdateTexUnit(ctx, 0);
-    viaUpdateTexUnit(ctx, 1);
-#ifdef DEBUG
-    if (VIA_DEBUG) fprintf(stderr, "%s - out\n", __FUNCTION__);
-#endif
+
+    GLuint ok = (viaUpdateTexUnit(ctx, 0) &&
+		 viaUpdateTexUnit(ctx, 1));
+
+    FALLBACK(vmesa, VIA_FALLBACK_TEXTURE, !ok);
 }
 

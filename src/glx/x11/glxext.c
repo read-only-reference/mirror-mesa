@@ -44,7 +44,7 @@
  * \author Kevin E. Martin <kevin@precisioninsight.com>
  */     
 
-#include "packrender.h"
+#include "glxclient.h"
 #include <stdio.h>
 #include <Xext.h>
 #include <extutil.h>
@@ -56,6 +56,7 @@
 #endif
 #include "glxextensions.h"
 #include "glcontextmodes.h"
+#include "glheader.h"
 
 #ifdef GLX_DIRECT_RENDERING
 #include <inttypes.h>
@@ -1262,23 +1263,23 @@ CARD8 __glXSetupForCommand(Display *dpy)
     return priv->majorOpcode;
 }
 
-/*
-** Flush the drawing command transport buffer.
-*/
+/**
+ * Flush the drawing command transport buffer.
+ * 
+ * \param ctx  Context whose transport buffer is to be flushed.
+ * \param pc   Pointer to first unused buffer location.
+ * 
+ * \todo
+ * Modify this function to use \c ctx->pc instead of the explicit
+ * \c pc parameter.
+ */
 GLubyte *__glXFlushRenderBuffer(__GLXcontext *ctx, GLubyte *pc)
 {
-    Display *dpy;
+    Display * const dpy = ctx->currentDpy;
     xGLXRenderReq *req;
-    GLint size;
+    const GLint size = pc - ctx->buf;
 
-    if (!(dpy = ctx->currentDpy)) {
-	/* Using the dummy context */
-	ctx->pc = ctx->buf;
-	return ctx->pc;
-    }
-
-    size = pc - ctx->buf;
-    if (size) {
+    if ( (dpy != NULL) && (size > 0) ) {
 	/* Send the entire buffer as an X request */
 	LockDisplay(dpy);
 	GetReq(GLXRender,req); 
@@ -1556,9 +1557,8 @@ static Bool UnbindContextWrapper( Display *dpy, GLXContext gc )
 ** Make a particular context current.
 ** NOTE: this is in this file so that it can access dummyContext.
 */
-static Bool MakeContextCurrent(Display *dpy, 
-			       GLXDrawable draw, GLXDrawable read,
-			       GLXContext gc)
+USED static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
+                                    GLXDrawable read, GLXContext gc)
 {
     xGLXMakeCurrentReply reply;
     GLXContext oldGC;
@@ -1775,16 +1775,17 @@ static Bool MakeContextCurrent(Display *dpy,
 }
 
 
-Bool GLX_PREFIX(glXMakeCurrent)(Display *dpy, GLXDrawable draw, GLXContext gc)
+PUBLIC Bool GLX_PREFIX(glXMakeCurrent)(Display *dpy, GLXDrawable draw,
+                                       GLXContext gc)
 {
     return MakeContextCurrent( dpy, draw, draw, gc );
 }
 
-GLX_ALIAS(Bool, glXMakeCurrentReadSGI,
+PUBLIC GLX_ALIAS(Bool, glXMakeCurrentReadSGI,
 	  (Display *dpy, GLXDrawable d, GLXDrawable r, GLXContext ctx),
 	  (dpy, d, r, ctx), MakeContextCurrent)
 
-GLX_ALIAS(Bool, glXMakeContextCurrent,
+PUBLIC GLX_ALIAS(Bool, glXMakeContextCurrent,
 	  (Display *dpy, GLXDrawable d, GLXDrawable r, GLXContext ctx),
 	  (dpy, d, r, ctx), MakeContextCurrent)
 

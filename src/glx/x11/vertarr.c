@@ -34,10 +34,10 @@
 **
 */
 
-#define NEED_GL_FUNCS_WRAPPED
 #include <assert.h>
 #include "glxclient.h"
 #include "packrender.h"
+#include "indirect.h"
 #include <string.h>
 #include <limits.h>		/* INT_MAX */
 
@@ -45,53 +45,53 @@
 #define __GL_VERTEX_FUNC(NAME, let) \
     case GL_##NAME: \
       if (size == 2) \
-	vertexPointer->proc = (void (*)(const void *))glVertex2##let##v; \
+	vertexPointer->proc = (void (*)(const void *))__indirect_glVertex2##let##v; \
       else if (size == 3) \
-	vertexPointer->proc = (void (*)(const void *))glVertex3##let##v; \
+	vertexPointer->proc = (void (*)(const void *))__indirect_glVertex3##let##v; \
       else if (size == 4) \
-	vertexPointer->proc = (void (*)(const void *))glVertex4##let##v; \
+	vertexPointer->proc = (void (*)(const void *))__indirect_glVertex4##let##v; \
       break
 
 #define __GL_NORMAL_FUNC(NAME, let) \
     case GL_##NAME: \
-      normalPointer->proc = (void (*)(const void *))glNormal3##let##v; \
+      normalPointer->proc = (void (*)(const void *))__indirect_glNormal3##let##v; \
       break
 
 #define __GL_COLOR_FUNC(NAME, let) \
     case GL_##NAME: \
       if (size == 3) \
-	colorPointer->proc = (void (*)(const void *))glColor3##let##v; \
+	colorPointer->proc = (void (*)(const void *))__indirect_glColor3##let##v; \
       else if (size == 4)\
-	colorPointer->proc = (void (*)(const void *))glColor4##let##v; \
+	colorPointer->proc = (void (*)(const void *))__indirect_glColor4##let##v; \
       break
 
 #define __GL_SEC_COLOR_FUNC(NAME, let) \
     case GL_##NAME: \
-      seccolorPointer->proc = (void (*)(const void *))glSecondaryColor3##let##v; \
+      seccolorPointer->proc = (void (*)(const void *))__indirect_glSecondaryColor3##let##vEXT; \
 
 #define __GL_FOG_FUNC(NAME, let) \
     case GL_##NAME: \
-      fogPointer->proc = (void (*)(const void *))glFogCoord##let##v; \
+      fogPointer->proc = (void (*)(const void *))__indirect_glFogCoord##let##vEXT; \
 
 #define __GL_INDEX_FUNC(NAME, let) \
     case GL_##NAME: \
-      indexPointer->proc = (void (*)(const void *))glIndex##let##v; \
+      indexPointer->proc = (void (*)(const void *))__indirect_glIndex##let##v; \
       break
 
 #define __GL_TEXTURE_FUNC(NAME, let) \
     case GL_##NAME: \
       if (size == 1) { \
-	texCoordPointer->proc = (void (*)(const void *))glTexCoord1##let##v; \
-	texCoordPointer->mtex_proc = (void (*)(GLenum, const void *))glMultiTexCoord1##let##vARB; \
+	texCoordPointer->proc = (void (*)(const void *))__indirect_glTexCoord1##let##v; \
+	texCoordPointer->mtex_proc = (void (*)(GLenum, const void *))__indirect_glMultiTexCoord1##let##vARB; \
       } else if (size == 2) { \
-	texCoordPointer->proc = (void (*)(const void *))glTexCoord2##let##v; \
-	texCoordPointer->mtex_proc = (void (*)(GLenum, const void *))glMultiTexCoord2##let##vARB; \
+	texCoordPointer->proc = (void (*)(const void *))__indirect_glTexCoord2##let##v; \
+	texCoordPointer->mtex_proc = (void (*)(GLenum, const void *))__indirect_glMultiTexCoord2##let##vARB; \
       } else if (size == 3) { \
-	texCoordPointer->proc = (void (*)(const void *))glTexCoord3##let##v; \
-	texCoordPointer->mtex_proc = (void (*)(GLenum, const void *))glMultiTexCoord2##let##vARB; \
+	texCoordPointer->proc = (void (*)(const void *))__indirect_glTexCoord3##let##v; \
+	texCoordPointer->mtex_proc = (void (*)(GLenum, const void *))__indirect_glMultiTexCoord2##let##vARB; \
       } else if (size == 4) { \
-	texCoordPointer->proc = (void (*)(const void *))glTexCoord4##let##v; \
-	texCoordPointer->mtex_proc = (void (*)(GLenum, const void *))glMultiTexCoord4##let##vARB; \
+	texCoordPointer->proc = (void (*)(const void *))__indirect_glTexCoord4##let##v; \
+	texCoordPointer->mtex_proc = (void (*)(GLenum, const void *))__indirect_glMultiTexCoord4##let##vARB; \
       } break
 
 /**
@@ -165,7 +165,56 @@ void __glXInitVertexArrayState(__GLXcontext *gc)
 
 /*****************************************************************************/
 
-void glVertexPointer(GLint size, GLenum type, GLsizei stride,
+/**
+ * \name Vertex array pointer bridge functions
+ *
+ * When EXT_vertex_array was moved into the core GL spec, the \c count
+ * parameter was lost.  This libGL really only wants to implement the GL 1.1
+ * version, but we need to support applications that were written to the old
+ * interface.  These bridge functions are part of the glue that makes this
+ * happen.
+ */
+/*@{*/
+void __indirect_glColorPointerEXT(GLint size, GLenum type, GLsizei stride,
+			    GLsizei count, const GLvoid * pointer )
+{
+    (void) count; __indirect_glColorPointer( size, type, stride, pointer );
+}
+
+void __indirect_glEdgeFlagPointerEXT(GLsizei stride,
+			       GLsizei count, const GLboolean * pointer )
+{
+    (void) count; __indirect_glEdgeFlagPointer( stride, pointer );
+}
+
+void __indirect_glIndexPointerEXT(GLenum type, GLsizei stride,
+			    GLsizei count, const GLvoid * pointer )
+{
+    (void) count; __indirect_glIndexPointer( type, stride, pointer );
+}
+
+void __indirect_glNormalPointerEXT(GLenum type, GLsizei stride, GLsizei count,
+			     const GLvoid * pointer )
+{
+    (void) count; __indirect_glNormalPointer( type, stride, pointer );
+}
+
+void __indirect_glTexCoordPointerEXT(GLint size, GLenum type, GLsizei stride,
+			       GLsizei count, const GLvoid * pointer )
+{
+    (void) count; __indirect_glTexCoordPointer( size, type, stride, pointer );
+}
+
+void __indirect_glVertexPointerEXT(GLint size, GLenum type, GLsizei stride,
+			    GLsizei count, const GLvoid * pointer )
+{
+    (void) count; __indirect_glVertexPointer( size, type, stride, pointer );
+}
+/*@}*/
+
+/*****************************************************************************/
+
+void __indirect_glVertexPointer(GLint size, GLenum type, GLsizei stride,
 		     const GLvoid *pointer)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
@@ -202,7 +251,7 @@ void glVertexPointer(GLint size, GLenum type, GLsizei stride,
     }
 }
 
-void glNormalPointer(GLenum type, GLsizei stride, const GLvoid *pointer)
+void __indirect_glNormalPointer(GLenum type, GLsizei stride, const GLvoid *pointer)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
     __GLXattribute * state = (__GLXattribute *)(gc->client_state_private);
@@ -238,7 +287,7 @@ void glNormalPointer(GLenum type, GLsizei stride, const GLvoid *pointer)
     }
 }
 
-void glColorPointer(GLint size, GLenum type, GLsizei stride,
+void __indirect_glColorPointer(GLint size, GLenum type, GLsizei stride,
 		    const GLvoid *pointer)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
@@ -279,7 +328,7 @@ void glColorPointer(GLint size, GLenum type, GLsizei stride,
     }
 }
 
-void glIndexPointer(GLenum type, GLsizei stride, const GLvoid *pointer)
+void __indirect_glIndexPointer(GLenum type, GLsizei stride, const GLvoid *pointer)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
     __GLXattribute * state = (__GLXattribute *)(gc->client_state_private);
@@ -315,7 +364,7 @@ void glIndexPointer(GLenum type, GLsizei stride, const GLvoid *pointer)
     }
 }
 
-void glTexCoordPointer(GLint size, GLenum type, GLsizei stride,
+void __indirect_glTexCoordPointer(GLint size, GLenum type, GLsizei stride,
 		       const GLvoid *pointer)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
@@ -353,7 +402,7 @@ void glTexCoordPointer(GLint size, GLenum type, GLsizei stride,
     }
 }
 
-void glEdgeFlagPointer(GLsizei stride, const GLvoid *pointer)
+void __indirect_glEdgeFlagPointer(GLsizei stride, const GLvoid *pointer)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
     __GLXattribute * state = (__GLXattribute *)(gc->client_state_private);
@@ -366,7 +415,7 @@ void glEdgeFlagPointer(GLsizei stride, const GLvoid *pointer)
     } 
 
     /* Choose appropriate api proc */
-    edgeFlagPointer->proc = (void (*)(const void *))glEdgeFlagv;
+    edgeFlagPointer->proc = (void (*)(const void *))__indirect_glEdgeFlagv;
 
     edgeFlagPointer->stride = stride;
     edgeFlagPointer->ptr = pointer;
@@ -380,7 +429,7 @@ void glEdgeFlagPointer(GLsizei stride, const GLvoid *pointer)
 
 }
 
-void glSecondaryColorPointer(GLint size, GLenum type, GLsizei stride,
+void __indirect_glSecondaryColorPointerEXT(GLint size, GLenum type, GLsizei stride,
 			     const GLvoid * pointer )
 {
     __GLXcontext *gc = __glXGetCurrentContext();
@@ -421,7 +470,7 @@ void glSecondaryColorPointer(GLint size, GLenum type, GLsizei stride,
     }
 }
 
-void glFogCoordPointer(GLenum type, GLsizei stride, const GLvoid * pointer)
+void __indirect_glFogCoordPointerEXT(GLenum type, GLsizei stride, const GLvoid * pointer)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
     __GLXattribute * state = (__GLXattribute *)(gc->client_state_private);
@@ -455,7 +504,7 @@ void glFogCoordPointer(GLenum type, GLsizei stride, const GLvoid * pointer)
     }
 }
 
-void glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer)
+void __indirect_glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
     __GLXattribute * state = (__GLXattribute *)(gc->client_state_private);
@@ -596,24 +645,24 @@ void glInterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer)
     state->vertArray.enables = 0;
     state->vertArray.texture_enables = 0;
     if (tEnable) {
-	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-	glTexCoordPointer(tSize, tType, trueStride, (const char *)pointer);
+	__indirect_glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	__indirect_glTexCoordPointer(tSize, tType, trueStride, (const char *)pointer);
     }
     if (cEnable) {
-	glEnableClientState(GL_COLOR_ARRAY);
-	glColorPointer(cSize, cType, trueStride, (const char *)pointer+cOffset);
+	__indirect_glEnableClientState(GL_COLOR_ARRAY);
+	__indirect_glColorPointer(cSize, cType, trueStride, (const char *)pointer+cOffset);
     }
     if (nEnable) {
-	glEnableClientState(GL_NORMAL_ARRAY);
-	glNormalPointer(nType, trueStride, (const char *)pointer+nOffset);
+	__indirect_glEnableClientState(GL_NORMAL_ARRAY);
+	__indirect_glNormalPointer(nType, trueStride, (const char *)pointer+nOffset);
     }
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glVertexPointer(vSize, vType, trueStride, (const char *)pointer+vOffset);
+    __indirect_glEnableClientState(GL_VERTEX_ARRAY);
+    __indirect_glVertexPointer(vSize, vType, trueStride, (const char *)pointer+vOffset);
 }
 
 /*****************************************************************************/
 
-void glArrayElement(GLint i)
+void __indirect_glArrayElement(GLint i)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
     __GLXattribute * state = (__GLXattribute *)(gc->client_state_private);
@@ -935,7 +984,7 @@ emit_DrawArrays_old(const __GLXattribute * const state,
 	    tcaPtr[ j ] = va->texCoord[ j ].ptr + first * va->texCoord[ j ].skip;
     }
 
-    glBegin(mode);
+    __indirect_glBegin(mode);
         for (i = 0; i < count; i++) {
 	    if (IS_TEXARRAY_ENABLED(state, 0)) {
 		(*va->texCoord[0].proc)(tcaPtr[0]);
@@ -959,7 +1008,7 @@ emit_DrawArrays_old(const __GLXattribute * const state,
 		}
             }
         }
-    glEnd();
+    __indirect_glEnd();
 }
 
 
@@ -1000,7 +1049,7 @@ glx_validate_array_args(__GLXcontext *gc, GLenum mode, GLsizei count)
 }
 
 
-void glDrawArrays(GLenum mode, GLint first, GLsizei count)
+void __indirect_glDrawArrays(GLenum mode, GLint first, GLsizei count)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
     const __GLXattribute * state = 
@@ -1029,7 +1078,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count)
  * would probably require refactoring out parts of \c emit_DrawArraysEXT into
  * more general functions that could be used in either place.
  */
-void glDrawElements(GLenum mode, GLsizei count, GLenum type,
+void __indirect_glDrawElements(GLenum mode, GLsizei count, GLenum type,
 		    const GLvoid *indices)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
@@ -1059,7 +1108,7 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type,
         return;
     }
 
-    glBegin(mode);
+    __indirect_glBegin(mode);
         for (i = 0; i < count; i++) {
 	    switch (type) {
 	      case GL_UNSIGNED_BYTE:
@@ -1096,10 +1145,10 @@ void glDrawElements(GLenum mode, GLsizei count, GLenum type,
 		}
             }
         }
-    glEnd();
+    __indirect_glEnd();
 }
 
-void glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
+void __indirect_glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
 			 GLsizei count, GLenum type,
 			 const GLvoid *indices)
 {
@@ -1110,22 +1159,22 @@ void glDrawRangeElements(GLenum mode, GLuint start, GLuint end,
 	return;
     }
 
-    glDrawElements(mode,count,type,indices);
+    __indirect_glDrawElements(mode,count,type,indices);
 }
 
-void glMultiDrawArrays(GLenum mode, GLint *first, GLsizei *count,
+void __indirect_glMultiDrawArraysEXT(GLenum mode, GLint *first, GLsizei *count,
 		       GLsizei primcount)
 {
    GLsizei  i;
 
    for(i=0; i<primcount; i++) {
       if ( count[i] > 0 ) {
-	  glDrawArrays( mode, first[i], count[i] );
+	  __indirect_glDrawArrays( mode, first[i], count[i] );
       }
    }
 }
 
-void glMultiDrawElements(GLenum mode, const GLsizei *count,
+void __indirect_glMultiDrawElementsEXT(GLenum mode, const GLsizei *count,
 			 GLenum type, const GLvoid ** indices,
 			 GLsizei primcount)
 {
@@ -1133,12 +1182,12 @@ void glMultiDrawElements(GLenum mode, const GLsizei *count,
 
    for(i=0; i<primcount; i++) {
       if ( count[i] > 0 ) {
-	  glDrawElements( mode, count[i], type, indices[i] );
+	  __indirect_glDrawElements( mode, count[i], type, indices[i] );
       }
    }
 }
 
-void glClientActiveTextureARB(GLenum texture)
+void __indirect_glClientActiveTextureARB(GLenum texture)
 {
     __GLXcontext *gc = __glXGetCurrentContext();
     __GLXattribute * state = (__GLXattribute *)(gc->client_state_private);

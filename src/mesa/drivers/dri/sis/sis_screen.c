@@ -43,7 +43,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "GL/internal/dri_interface.h"
 
-const char __driConfigOptions[] =
+PUBLIC const char __driConfigOptions[] =
 DRI_CONF_BEGIN
 	DRI_CONF_SECTION_DEBUG
 		DRI_CONF_OPT_BEGIN(agp_disable,bool,false)
@@ -74,8 +74,8 @@ sisFillInModes(int bpp)
    static const GLenum back_buffer_modes[] = {
       GLX_NONE, GLX_SWAP_UNDEFINED_OML
    };
-   uint8_t depth_bits_array[4];
-   uint8_t stencil_bits_array[4];
+   u_int8_t depth_bits_array[4];
+   u_int8_t stencil_bits_array[4];
 
    depth_bits_array[0] = 0;
    stencil_bits_array[0] = 0;
@@ -366,6 +366,7 @@ void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
  *         failure.
  */
 #ifdef USE_NEW_INTERFACE
+PUBLIC
 void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn,
 			     __DRIscreen *psc,
 			     const __GLcontextModes *modes,

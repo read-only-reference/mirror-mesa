@@ -58,6 +58,7 @@ typedef struct {
 
 /* chipset features */
 #define RADEON_CHIPSET_TCL	(1 << 0)
+#define RADEON_CHIPSET_BROKEN_STENCIL (1 << 1)
 
 typedef struct {
 
@@ -88,7 +89,7 @@ typedef struct {
 
    drmBufMapPtr buffers;
 
-   __volatile__ uint32_t *scratch;
+   __volatile__ u_int32_t *scratch;
 
    __DRIscreenPrivate *driScreen;
    unsigned int sarea_priv_offset;

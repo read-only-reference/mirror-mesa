@@ -111,6 +111,7 @@
 #endif /* WIN32 / CYGWIN bracket */
 
 
+#ifndef __MINGW32__
 /* XXX why is this here?
  * It should probaby be somewhere in src/mesa/drivers/windows/
  */
@@ -143,6 +144,7 @@ typedef struct tagPIXELFORMATDESCRIPTOR PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESC
 #include <GL/mesa_wgl.h>
 #endif
 #endif
+#endif /* !__MINGW32__ */
 
 
 /*
@@ -279,11 +281,16 @@ typedef GLushort GLhalfARB;
 
 /* If we build the library with gcc's -fvisibility=hidden flag, we'll
  * use the PUBLIC macro to mark functions that are to be exported.
+ *
+ * We also need to define a USED attribute, so the optimizer doesn't 
+ * inline a static function that we later use in an alias. - ajax
  */
 #if defined(__GNUC__) && (__GNUC__ * 100 + __GNUC_MINOR__) >= 303
 #  define PUBLIC __attribute__((visibility("default")))
+#  define USED __attribute__((used))
 #else
 #  define PUBLIC
+#  define USED
 #endif
 
 

@@ -54,12 +54,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "xmlpool.h"
 
-const char __driConfigOptions[] =
+PUBLIC const char __driConfigOptions[] =
 DRI_CONF_BEGIN
     DRI_CONF_SECTION_PERFORMANCE
         DRI_CONF_TCL_MODE(DRI_CONF_TCL_CODEGEN)
         DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
         DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
+        DRI_CONF_HYPERZ(false)
     DRI_CONF_SECTION_END
     DRI_CONF_SECTION_QUALITY
         DRI_CONF_TEXTURE_DEPTH(DRI_CONF_TEXTURE_DEPTH_FB)
@@ -74,7 +75,7 @@ DRI_CONF_BEGIN
         DRI_CONF_NO_RAST(false)
     DRI_CONF_SECTION_END
 DRI_CONF_END;
-static const GLuint __driNConfigOptions = 11;
+static const GLuint __driNConfigOptions = 12;
 
 #if 1
 /* Including xf86PciInfo.h introduces a bunch of errors...
@@ -133,8 +134,8 @@ radeonFillInModes( unsigned pixel_bits, unsigned depth_bits,
 	GLX_NONE, GLX_SWAP_UNDEFINED_OML /*, GLX_SWAP_COPY_OML */
     };
 
-    uint8_t depth_bits_array[2];
-    uint8_t stencil_bits_array[2];
+    u_int8_t depth_bits_array[2];
+    u_int8_t stencil_bits_array[2];
 
 
     depth_bits_array[0] = depth_bits;
@@ -272,7 +273,7 @@ radeonScreenPtr radeonCreateScreen( __DRIscreenPrivate *sPriv )
       __driUtilMessage("%s: drmMap (2) failed\n", __FUNCTION__ );
       return NULL;
    }
-   screen->scratch = (__volatile__ uint32_t *)
+   screen->scratch = (__volatile__ u_int32_t *)
       ((GLubyte *)screen->status.map + RADEON_SCRATCH_REG_OFFSET);
 
    screen->buffers = drmMapBufs( sPriv->fd );
@@ -312,6 +313,8 @@ radeonScreenPtr radeonCreateScreen( __DRIscreenPrivate *sPriv )
    case PCI_CHIP_RADEON_QE:
    case PCI_CHIP_RADEON_QF:
    case PCI_CHIP_RADEON_QG:
+      /* all original radeons (7200) presumably have a stencil op bug */
+      screen->chipset |= RADEON_CHIPSET_BROKEN_STENCIL;
    case PCI_CHIP_RV200_QW:
    case PCI_CHIP_RV200_QX:
    case PCI_CHIP_RADEON_LW:
@@ -522,6 +525,7 @@ void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
  *         failure.
  */
 #ifdef USE_NEW_INTERFACE
+PUBLIC
 void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,

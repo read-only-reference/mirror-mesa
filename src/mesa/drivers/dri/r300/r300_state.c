@@ -225,6 +225,58 @@ static void r300ColorMask(GLcontext* ctx,
 	}
 }
 
+/* =============================================================
+ * Window position and viewport transformation
+ */
+
+/*
+ * To correctly position primitives:
+ */
+#define SUBPIXEL_X 0.125
+#define SUBPIXEL_Y 0.125
+
+void r300UpdateWindow(GLcontext * ctx)
+{
+	r300ContextPtr rmesa = R300_CONTEXT(ctx);
+	__DRIdrawablePrivate *dPriv = rmesa->radeon.dri.drawable;
+	GLfloat xoffset = dPriv ? (GLfloat) dPriv->x : 0;
+	GLfloat yoffset = dPriv ? (GLfloat) dPriv->y + dPriv->h : 0;
+	const GLfloat *v = ctx->Viewport._WindowMap.m;
+
+	GLfloat sx = v[MAT_SX];
+	GLfloat tx = v[MAT_TX] + xoffset + SUBPIXEL_X;
+	GLfloat sy = -v[MAT_SY];
+	GLfloat ty = (-v[MAT_TY]) + yoffset + SUBPIXEL_Y;
+	GLfloat sz = v[MAT_SZ] * rmesa->state.depth.scale;
+	GLfloat tz = v[MAT_TZ] * rmesa->state.depth.scale;
+
+	R300_FIREVERTICES(rmesa);
+	R300_STATECHANGE(rmesa, vpt);
+
+	rmesa->hw.vpt.cmd[R300_VPT_XSCALE]  = r300PackFloat32(sx);
+	rmesa->hw.vpt.cmd[R300_VPT_XOFFSET] = r300PackFloat32(tx);
+	rmesa->hw.vpt.cmd[R300_VPT_YSCALE]  = r300PackFloat32(sy);
+	rmesa->hw.vpt.cmd[R300_VPT_YOFFSET] = r300PackFloat32(ty);
+	rmesa->hw.vpt.cmd[R300_VPT_ZSCALE]  = r300PackFloat32(sz);
+	rmesa->hw.vpt.cmd[R300_VPT_ZOFFSET] = r300PackFloat32(tz);
+}
+
+static void r300Viewport(GLcontext * ctx, GLint x, GLint y,
+			 GLsizei width, GLsizei height)
+{
+	/* Don't pipeline viewport changes, conflict with window offset
+	 * setting below.  Could apply deltas to rescue pipelined viewport
+	 * values, or keep the originals hanging around.
+	 */
+	R200_FIREVERTICES(R200_CONTEXT(ctx));
+	r300UpdateWindow(ctx);
+}
+
+static void r300DepthRange(GLcontext * ctx, GLclampd nearval, GLclampd farval)
+{
+	r300UpdateWindow(ctx);
+}
+
 
 /**
  * Called by Mesa after an internal state update.
@@ -255,26 +307,8 @@ void r300ResetHwState(r300ContextPtr r300)
 	if (RADEON_DEBUG & DEBUG_STATE)
 		fprintf(stderr, "%s\n", __FUNCTION__);
 
-	{
-		__DRIdrawablePrivate *dPriv = r300->radeon.dri.drawable;
-		GLfloat xoffset = dPriv ? (GLfloat) dPriv->x : 0;
-		GLfloat yoffset = dPriv ? (GLfloat) dPriv->y + dPriv->h : 0;
-		const GLfloat *v = ctx->Viewport._WindowMap.m;
-
-		r300->hw.vpt.cmd[R300_VPT_XSCALE] =
-			r300PackFloat32(v[MAT_SX]);
-		r300->hw.vpt.cmd[R300_VPT_XOFFSET] =
-			r300PackFloat32(v[MAT_TX] + xoffset);
-		r300->hw.vpt.cmd[R300_VPT_YSCALE] =
-			r300PackFloat32(-v[MAT_SY]);
-		r300->hw.vpt.cmd[R300_VPT_YOFFSET] =
-			r300PackFloat32(-v[MAT_TY] + yoffset);
-		r300->hw.vpt.cmd[R300_VPT_YSCALE] =
-			r300PackFloat32(v[MAT_SZ]);
-		r300->hw.vpt.cmd[R300_VPT_YOFFSET] =
-			r300PackFloat32(v[MAT_TZ]);
-	}
-
+	r300UpdateWindow(ctx);
+	
 	r300ColorMask(ctx,
 		ctx->Color.ColorMask[RCOMP],
 		ctx->Color.ColorMask[GCOMP],
@@ -293,8 +327,14 @@ void r300ResetHwState(r300ContextPtr r300)
 	r300->hw.ovf.cmd[R300_OVF_FMT_0] = 0x00000003;
 	r300->hw.ovf.cmd[R300_OVF_FMT_1] = 0x00000000;
 
-	r300->hw.unk20B0.cmd[1] = 0x0000040A;
-	r300->hw.unk20B0.cmd[2] = 0x00000008;
+	r300->hw.vte.cmd[1] = R300_VPORT_X_SCALE_ENA
+				| R300_VPORT_X_OFFSET_ENA
+				| R300_VPORT_Y_SCALE_ENA
+				| R300_VPORT_Y_OFFSET_ENA
+				| R300_VPORT_Z_SCALE_ENA
+				| R300_VPORT_Z_OFFSET_ENA
+				| R300_VTX_W0_FMT;
+	r300->hw.vte.cmd[2] = 0x00000008;
 
 	r300->hw.unk2134.cmd[1] = 0x00FFFFFF;
 	r300->hw.unk2134.cmd[2] = 0x00000000;
@@ -324,20 +364,30 @@ void r300ResetHwState(r300ContextPtr r300)
 	else
 		r300->hw.unk2288.cmd[1] = R300_2288_RV350;
 
+	r300->hw.vof.cmd[R300_VOF_CNTL_0] = R300_VAP_OUTPUT_VTX_FMT_0__POS_PRESENT
+				| R300_VAP_OUTPUT_VTX_FMT_0__COLOR_PRESENT;
+	r300->hw.vof.cmd[R300_VOF_CNTL_1] = 0; /* no textures */
+		
 	r300->hw.pvs.cmd[R300_PVS_CNTL_1] = 0;
 	r300->hw.pvs.cmd[R300_PVS_CNTL_2] = 0;
 	r300->hw.pvs.cmd[R300_PVS_CNTL_3] = 0;
 
-	r300->hw.unk4008.cmd[1] = 0x00000007;
+	r300->hw.gb_enable.cmd[1] = R300_GB_POINT_STUFF_ENABLE
+		| R300_GB_LINE_STUFF_ENABLE
+		| R300_GB_TRIANGLE_STUFF_ENABLE;
 
-	r300->hw.unk4010.cmd[1] = 0x66666666;
-	r300->hw.unk4010.cmd[2] = 0x06666666;
+	r300->hw.gb_misc.cmd[R300_GB_MISC_MSPOS_0] = 0x66666666;
+	r300->hw.gb_misc.cmd[R300_GB_MISC_MSPOS_1] = 0x06666666;
 	if (GET_CHIP(r300->radeon.radeonScreen) == RADEON_CHIP_R300)
-		r300->hw.unk4010.cmd[3] = 0x00000017;
+		r300->hw.gb_misc.cmd[R300_GB_MISC_TILE_CONFIG] = R300_GB_TILE_ENABLE
+							| R300_GB_TILE_PIPE_COUNT_R300
+							| R300_GB_TILE_SIZE_16;
 	else
-		r300->hw.unk4010.cmd[3] = 0x00000011;
-	r300->hw.unk4010.cmd[4] = 0x00000000;
-	r300->hw.unk4010.cmd[5] = 0x00000000;
+		r300->hw.gb_misc.cmd[R300_GB_MISC_TILE_CONFIG] = R300_GB_TILE_ENABLE
+							| R300_GB_TILE_PIPE_COUNT_RV300
+							| R300_GB_TILE_SIZE_16;
+	r300->hw.gb_misc.cmd[R300_GB_MISC_SELECT] = 0x00000000;
+	r300->hw.gb_misc.cmd[R300_GB_MISC_AA_CONFIG] = 0x00000000; /* No antialiasing */
 
 	r300->hw.txe.cmd[R300_TXE_ENABLE] = 0;
 
@@ -377,15 +427,20 @@ void r300ResetHwState(r300ContextPtr r300)
 	r300->hw.unk42C0.cmd[1] = 0x4B7FFFFF;
 	r300->hw.unk42C0.cmd[2] = 0x00000000;
 
-	r300->hw.rc.cmd[1] = R300_RS_CNTL_0_UNKNOWN_7;
+	/* The second constant is needed to get glxgears display anything .. */
+	r300->hw.rc.cmd[1] = R300_RS_CNTL_0_UNKNOWN_7 | R300_RS_CNTL_0_UNKNOWN_18;
 	r300->hw.rc.cmd[2] = 0;
 
 	for(i = 1; i <= 8; ++i)
-		r300->hw.ri.cmd[i] = 0;
+		r300->hw.ri.cmd[i] = 0x00d10000;
+	r300->hw.ri.cmd[R300_RI_INTERP_1] |= R300_RS_INTERP_1_UNKNOWN;
+	r300->hw.ri.cmd[R300_RI_INTERP_2] |= R300_RS_INTERP_2_UNKNOWN;
+	r300->hw.ri.cmd[R300_RI_INTERP_3] |= R300_RS_INTERP_3_UNKNOWN;
 
 	((drm_r300_cmd_header_t*)r300->hw.rr.cmd)->unchecked_state.count = 1;
 	for(i = 1; i <= 8; ++i)
-		r300->hw.rr.cmd[1] = 0;
+		r300->hw.rr.cmd[i] = 0;
+	r300->hw.rr.cmd[R300_RR_ROUTE_0] = 0x4000;
 
 	r300->hw.unk43A4.cmd[1] = 0x0000001C;
 	r300->hw.unk43A4.cmd[2] = 0x2DA49525;
@@ -451,6 +506,9 @@ void r300ResetHwState(r300ContextPtr r300)
 
 	r300->hw.unk4E88.cmd[1] = 0;
 
+	r300->hw.unk4EA0.cmd[1] = 0x00000000;
+	r300->hw.unk4EA0.cmd[2] = 0xffffffff;
+
 	r300->hw.unk4F08.cmd[1] = 0x00FFFF00;
 
 	r300->hw.unk4F10.cmd[1] = 0x00000002; // depthbuffer format?
@@ -504,9 +562,12 @@ void r300ResetHwState(r300ContextPtr r300)
 void r300InitState(r300ContextPtr r300)
 {
 	radeonInitState(&r300->radeon);
+	
+	r300->state.depth.scale = 1.0 / (GLfloat) 0xffff;
 
 	r300ResetHwState(r300);
 }
+
 
 
 /**
@@ -523,5 +584,9 @@ void r300InitStateFuncs(struct dd_function_table* functions)
 	functions->DepthMask = r300DepthMask;
 	functions->CullFace = r300CullFace;
 	functions->FrontFace = r300FrontFace;
+
+	/* Viewport related */
+	functions->Viewport = r300Viewport;
+	functions->DepthRange = r300DepthRange;
 }
 

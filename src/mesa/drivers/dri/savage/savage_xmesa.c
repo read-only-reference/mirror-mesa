@@ -57,24 +57,38 @@
 
 #include "savagedma.h"
 
+#include "xmlpool.h"
+
+/* Configuration
+ */
+PUBLIC const char __driConfigOptions[] =
+DRI_CONF_BEGIN
+    DRI_CONF_SECTION_QUALITY
+        DRI_CONF_TEXTURE_DEPTH(DRI_CONF_TEXTURE_DEPTH_FB)
+        DRI_CONF_COLOR_REDUCTION(DRI_CONF_COLOR_REDUCTION_DITHER)
+    DRI_CONF_SECTION_END
+    DRI_CONF_SECTION_PERFORMANCE
+        DRI_CONF_MAX_TEXTURE_UNITS(2,1,2)
+    DRI_CONF_SECTION_END
+    DRI_CONF_SECTION_DEBUG
+        DRI_CONF_NO_RAST(false)
+    DRI_CONF_SECTION_END
+DRI_CONF_END;
+static const GLuint __driNConfigOptions = 4;
+
 #ifdef USE_NEW_INTERFACE
 static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
 #endif /* USE_NEW_INTERFACE */
 
+static const struct dri_debug_control debug_control[] =
+{
+    { "fall",  DEBUG_FALLBACKS },
+    { "api",   DEBUG_VERBOSE_API },
+    { "lru",   DEBUG_VERBOSE_LRU },
+    { NULL,    0 }
+};
 #ifndef SAVAGE_DEBUG
-int SAVAGE_DEBUG = (0
-/*     		  | DEBUG_ALWAYS_SYNC  */
-/*  		  | DEBUG_VERBOSE_RING    */
-/*  		  | DEBUG_VERBOSE_OUTREG  */
-/*  		  | DEBUG_VERBOSE_MSG */
-/*  		  | DEBUG_NO_OUTRING */
-/*  		  | DEBUG_NO_OUTREG */
-/*  		  | DEBUG_VERBOSE_API */
-/*  		  | DEBUG_VERBOSE_2D */
-/*  		  | DEBUG_VERBOSE_DRI */
-/*  		  | DEBUG_VALIDATE_RING */
-/*  		  | DEBUG_VERBOSE_IOCTL */
-		  );
+int SAVAGE_DEBUG = 0;
 #endif
 
 
@@ -92,6 +106,22 @@ static const char *const card_extensions[] =
     "GL_EXT_texture_env_add",
     NULL
 };
+
+extern const struct tnl_pipeline_stage _savage_texnorm_stage;
+
+static const struct tnl_pipeline_stage *savage_pipeline[] = {
+
+   &_tnl_vertex_transform_stage,
+   &_tnl_normal_transform_stage,
+   &_tnl_lighting_stage,
+   &_tnl_fog_coordinate_stage,
+   &_tnl_texgen_stage,
+   &_tnl_texture_transform_stage,
+   &_savage_texnorm_stage,
+   &_tnl_render_stage,
+   0,
+};
+
 
 /* this is first function called in dirver*/
 
@@ -162,6 +192,50 @@ savageInitDriver(__DRIscreenPrivate *sPriv)
 
    savageScreen->texVirtual[SAVAGE_CARD_HEAP] = 
              (drmAddress)(((unsigned int)sPriv->pFB)+gDRIPriv->textureOffset);
+
+   if (drmMap(sPriv->fd, 
+	      gDRIPriv->registers.handle, 
+	      gDRIPriv->registers.size, 
+	      (drmAddress *)&(gDRIPriv->registers.map)) != 0) 
+   {
+      Xfree(savageScreen);
+      sPriv->private = NULL;
+      return GL_FALSE;
+   }
+   
+   if (drmMap(sPriv->fd, 
+	      gDRIPriv->agpTextures.handle, 
+	      gDRIPriv->agpTextures.size, 
+	      (drmAddress *)&(gDRIPriv->agpTextures.map)) != 0) 
+   {
+      Xfree(savageScreen);
+      sPriv->private = NULL;
+      return GL_FALSE;
+   }
+
+/* agp texture*/
+   savageScreen->texVirtual[SAVAGE_AGP_HEAP] = 
+                        (drmAddress)(gDRIPriv->agpTextures.map);
+
+   gDRIPriv->BCIcmdBuf.map = (drmAddress *)
+                           ((unsigned int)gDRIPriv->registers.map+0x00010000);
+
+   savageScreen->aperture.handle = gDRIPriv->aperture.handle;
+   savageScreen->aperture.size   = gDRIPriv->aperture.size;
+   if (drmMap(sPriv->fd, 
+	      savageScreen->aperture.handle, 
+	      savageScreen->aperture.size, 
+	      (drmAddress *)&savageScreen->aperture.map) != 0) 
+   {
+      Xfree(savageScreen);
+      sPriv->private = NULL;
+      return GL_FALSE;
+   } 
+      
+   /* parse information in __driConfigOptions */
+   driParseOptionInfo (&savageScreen->optionCache,
+		       __driConfigOptions, __driNConfigOptions);
+
 #if 0
    savageDDFastPathInit();
    savageDDTrifuncInit();
@@ -177,7 +251,9 @@ savageDestroyScreen(__DRIscreenPrivate *sPriv)
 {
    savageScreenPrivate *savageScreen = (savageScreenPrivate *)sPriv->private;
 
-   
+   /* free all option information */
+   driDestroyOptionInfo (&savageScreen->optionCache);
+
    Xfree(savageScreen);
    sPriv->private = NULL;
 }
@@ -247,10 +323,24 @@ savageCreateContext( const __GLcontextModes *mesaVis,
    }
    driContextPriv->driverPrivate = imesa;
 
+   /* Parse configuration files */
+   driParseConfigFiles (&imesa->optionCache, &savageScreen->optionCache,
+                        sPriv->myNum, "savage");
+
+   imesa->texture_depth = driQueryOptioni (&imesa->optionCache,
+					   "texture_depth");
+   if (imesa->texture_depth == DRI_CONF_TEXTURE_DEPTH_FB)
+       imesa->texture_depth = ( savageScreen->cpp == 4 ) ?
+	   DRI_CONF_TEXTURE_DEPTH_32 : DRI_CONF_TEXTURE_DEPTH_16;
+
    if (savageScreen->chipset >= S3_SAVAGE4)
        ctx->Const.MaxTextureUnits = 2;
    else
        ctx->Const.MaxTextureUnits = 1;
+   if (driQueryOptioni(&imesa->optionCache, "texture_units") <
+       ctx->Const.MaxTextureUnits)
+       ctx->Const.MaxTextureUnits =
+	   driQueryOptioni(&imesa->optionCache, "texture_units");
    ctx->Const.MaxTextureImageUnits = ctx->Const.MaxTextureUnits;
    ctx->Const.MaxTextureCoordUnits = ctx->Const.MaxTextureUnits;
 
@@ -278,9 +368,9 @@ savageCreateContext( const __GLcontextModes *mesaVis,
    }
    for (maxTextureLevels = 1; maxTextureLevels <= 11; ++maxTextureLevels) {
        GLuint size = 1 << maxTextureLevels;
-       size *= size * 4; /* 4 bytes per texel */
-       size *= 2; /* all mipmap levels together take roughly twice the size of
-		     the biggest level */
+       size *= size * 4;  /* 4 bytes per texel */
+       size = size * 4/3; /* all mipmap levels together take roughly
+		             4/3 the size of the biggest level */
        if (size > maxTextureSize)
 	   break;
    }
@@ -317,78 +407,12 @@ savageCreateContext( const __GLcontextModes *mesaVis,
    imesa->shadowCounter = MAX_SHADOWCOUNTER;
    imesa->shadowStatus = GL_TRUE;/*Will judge by 2d message */
 
-   if (drmMap(sPriv->fd, 
-	      gDRIPriv->registers.handle, 
-	      gDRIPriv->registers.size, 
-	      (drmAddress *)&(gDRIPriv->registers.map)) != 0) 
-   {
-      Xfree(savageScreen);
-      sPriv->private = NULL;
-      return GL_FALSE;
-   }
-   
-   if (drmMap(sPriv->fd, 
-	      gDRIPriv->agpTextures.handle, 
-	      gDRIPriv->agpTextures.size, 
-	      (drmAddress *)&(gDRIPriv->agpTextures.map)) != 0) 
-   {
-      Xfree(savageScreen);
-      sPriv->private = NULL;
-      return GL_FALSE;
-   }
-
-/* agp texture*/
-   savageScreen->texVirtual[SAVAGE_AGP_HEAP] = 
-                        (drmAddress)(gDRIPriv->agpTextures.map);
-
-   
-
-   gDRIPriv->BCIcmdBuf.map = (drmAddress *)
-                           ((unsigned int)gDRIPriv->registers.map+0x00010000);
-      
    imesa->MMIO_BASE = (GLuint)gDRIPriv->registers.map;
    imesa->BCIBase= (GLuint)gDRIPriv->BCIcmdBuf.map;
-
-   savageScreen->aperture.handle = gDRIPriv->aperture.handle;
-   savageScreen->aperture.size   = gDRIPriv->aperture.size;
-   if (drmMap(sPriv->fd, 
-	      savageScreen->aperture.handle, 
-	      savageScreen->aperture.size, 
-	      (drmAddress *)&savageScreen->aperture.map) != 0) 
-   {
-      Xfree(savageScreen);
-      sPriv->private = NULL;
-      return GL_FALSE;
-   } 
-   
-   
-
-
-   
    for(i=0;i<5;i++)
    {
        imesa->apertureBase[i] = ((GLuint)savageScreen->aperture.map + 
                                  0x01000000 * i );
-       
-   
-   }
-   
-   {
-      volatile unsigned int * tmp;
-      
-      tmp=(volatile unsigned int *)(imesa->MMIO_BASE + 0x850C);
-      
-      
-      tmp=(volatile unsigned int *)(imesa->MMIO_BASE + 0x48C40);
-      
-   
-      tmp=(volatile unsigned int *)(imesa->MMIO_BASE + 0x48C44);
-
-   
-      tmp=(volatile unsigned int *)(imesa->MMIO_BASE + 0x48C48);
-
-   
-   
    }
    
    imesa->aperturePitch = gDRIPriv->aperturePitch;
@@ -445,7 +469,7 @@ savageCreateContext( const __GLcontextModes *mesaVis,
 
    /* Install the customized pipeline:
     */
-#if 0
+#if 1
    _tnl_destroy_pipeline( ctx );
    _tnl_install_pipeline( ctx, savage_pipeline );
 #endif
@@ -461,7 +485,12 @@ savageCreateContext( const __GLcontextModes *mesaVis,
    imesa->glCtx = ctx;
    if (savageDMAInit(imesa) == GL_FALSE)
        return GL_FALSE;  
-   
+
+#ifndef SAVAGE_DEBUG
+   SAVAGE_DEBUG = driParseDebugString( getenv( "SAVAGE_DEBUG" ),
+				       debug_control );
+#endif
+
    driInitExtensions( ctx, card_extensions, GL_TRUE );
 
    savageDDInitStateFuncs( ctx );
@@ -471,6 +500,9 @@ savageCreateContext( const __GLcontextModes *mesaVis,
    savageInitTriFuncs( ctx );
 
    savageDDInitState( imesa );
+
+   if (driQueryOptionb(&imesa->optionCache, "no_rast"))
+       FALLBACK(ctx, SAVAGE_FALLBACK_NORAST, GL_TRUE);
 
    driContextPriv->driverPrivate = (void *) imesa;
 
@@ -833,8 +865,8 @@ savageFillInModes( unsigned pixel_bits, unsigned depth_bits,
 	GLX_NONE, GLX_SWAP_UNDEFINED_OML /*, GLX_SWAP_COPY_OML */
     };
 
-    uint8_t depth_bits_array[2];
-    uint8_t stencil_bits_array[2];
+    u_int8_t depth_bits_array[2];
+    u_int8_t stencil_bits_array[2];
 
 
     depth_bits_array[0] = depth_bits;
@@ -903,6 +935,7 @@ savageFillInModes( unsigned pixel_bits, unsigned depth_bits,
  * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on 
  *         failure.
  */
+PUBLIC
 void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,

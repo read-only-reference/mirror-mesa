@@ -65,7 +65,7 @@ static _glapi_warning_func warning_func;
 /*
  * Enable/disable printing of warning messages.
  */
-void
+PUBLIC void
 _glapi_noop_enable_warnings(GLboolean enable)
 {
    WarnFlag = enable;
@@ -74,7 +74,7 @@ _glapi_noop_enable_warnings(GLboolean enable)
 /*
  * Register a callback function for reporting errors.
  */
-void
+PUBLIC void
 _glapi_set_warning_func( _glapi_warning_func func )
 {
    warning_func = func;
@@ -115,7 +115,7 @@ warn(void)
 
 #define TABLE_ENTRY(name) (_glapi_proc) NoOp##name
 
-static int NoOpUnused(void)
+static GLint NoOpUnused(void)
 {
    if (warn()) {
       warning_func(NULL, "GL User Error: calling extension function without a current context\n");
@@ -172,7 +172,7 @@ static _glthread_TSD ContextTSD;         /**< Per-thread context pointer */
 
 #define TABLE_ENTRY(name) (_glapi_proc) gl##name
 
-static int glUnused(void)
+static GLint glUnused(void)
 {
    return 0;
 }
@@ -185,15 +185,15 @@ static int glUnused(void)
 
 
 
-struct _glapi_table *_glapi_Dispatch = (struct _glapi_table *) __glapi_noop_table;
+PUBLIC struct _glapi_table *_glapi_Dispatch = (struct _glapi_table *) __glapi_noop_table;
 #if defined( THREADS )
-struct _glapi_table *_glapi_DispatchTSD = (struct _glapi_table *) __glapi_noop_table;
+PUBLIC struct _glapi_table *_glapi_DispatchTSD = (struct _glapi_table *) __glapi_noop_table;
 #endif
-struct _glapi_table *_glapi_RealDispatch = (struct _glapi_table *) __glapi_noop_table;
+PUBLIC struct _glapi_table *_glapi_RealDispatch = (struct _glapi_table *) __glapi_noop_table;
 
 
 /* Used when thread safety disabled */
-void *_glapi_Context = NULL;
+PUBLIC void *_glapi_Context = NULL;
 
 
 static GLboolean DispatchOverride = GL_FALSE;
@@ -221,7 +221,7 @@ str_dup(const char *str)
  * We should call this periodically from a function such as glXMakeCurrent
  * in order to test if multiple threads are being used.
  */
-void
+PUBLIC void
 _glapi_check_multithread(void)
 {
 #if defined(THREADS)
@@ -251,7 +251,7 @@ _glapi_check_multithread(void)
  * The context pointer is an opaque type which should be cast to
  * void from the real context pointer type.
  */
-void
+PUBLIC void
 _glapi_set_context(void *context)
 {
    (void) __unused_noop_functions; /* silence a warning */
@@ -271,7 +271,7 @@ _glapi_set_context(void *context)
  * The context pointer is an opaque type which should be cast from
  * void to the real context pointer type.
  */
-void *
+PUBLIC void *
 _glapi_get_context(void)
 {
 #if defined(THREADS)
@@ -291,7 +291,7 @@ _glapi_get_context(void)
 /**
  * Set the global or per-thread dispatch table pointer.
  */
-void
+PUBLIC void
 _glapi_set_dispatch(struct _glapi_table *dispatch)
 {
    if (!dispatch) {
@@ -339,7 +339,7 @@ _glapi_set_dispatch(struct _glapi_table *dispatch)
 /**
  * Return pointer to current dispatch table for calling thread.
  */
-struct _glapi_table *
+PUBLIC struct _glapi_table *
 _glapi_get_dispatch(void)
 {
 #if defined(THREADS)
@@ -389,7 +389,7 @@ _glapi_get_dispatch(void)
 /*
  * Return: dispatch override layer number.
  */
-int
+PUBLIC int
 _glapi_begin_dispatch_override(struct _glapi_table *override)
 {
    struct _glapi_table *real = _glapi_get_dispatch();
@@ -416,7 +416,7 @@ _glapi_begin_dispatch_override(struct _glapi_table *override)
 }
 
 
-void
+PUBLIC void
 _glapi_end_dispatch_override(int layer)
 {
    struct _glapi_table *real = _glapi_get_dispatch();
@@ -431,7 +431,7 @@ _glapi_end_dispatch_override(int layer)
 }
 
 
-struct _glapi_table *
+PUBLIC struct _glapi_table *
 _glapi_get_override_dispatch(int layer)
 {
    if (layer == 0) {
@@ -467,9 +467,9 @@ _glapi_get_override_dispatch(int layer)
 static const glprocs_table_t *
 find_entry( const char * n )
 {
-   unsigned   i;
+   GLuint i;
 
-   for ( i = 0 ; static_functions[i].Name_offset >= 0 ; i++ ) {
+   for (i = 0; static_functions[i].Name_offset >= 0; i++) {
       const char * test_name;
 
       test_name = gl_string_table + static_functions[i].Name_offset;
@@ -549,9 +549,9 @@ get_static_proc_address(const char *funcName)
 static const char *
 get_static_proc_name( GLuint offset )
 {
-   unsigned   i;
+   GLuint i;
 
-   for ( i = 0 ; static_functions[i].Name_offset >= 0 ; i++ ) {
+   for (i = 0; static_functions[i].Name_offset >= 0; i++) {
       if (static_functions[i].Offset == offset) {
 	 return gl_string_table + static_functions[i].Name_offset;
       }
@@ -742,7 +742,7 @@ fill_in_entrypoint_offset(_glapi_proc entrypoint, GLuint offset)
  * Add a new extension function entrypoint.
  * Return: GL_TRUE = success or GL_FALSE = failure
  */
-GLboolean
+PUBLIC GLboolean
 _glapi_add_entrypoint(const char *funcName, GLuint offset)
 {
    /* trivial rejection test */
@@ -815,7 +815,7 @@ _glapi_add_entrypoint(const char *funcName, GLuint offset)
 /**
  * Return offset of entrypoint for named function within dispatch table.
  */
-GLint
+PUBLIC GLint
 _glapi_get_proc_offset(const char *funcName)
 {
    /* search extension functions first */
@@ -837,7 +837,7 @@ _glapi_get_proc_offset(const char *funcName)
  * in the name of static functions, try generating a new API entrypoint on
  * the fly with assembly language.
  */
-const _glapi_proc
+PUBLIC const _glapi_proc
 _glapi_get_proc_address(const char *funcName)
 {
    GLuint i;
@@ -894,7 +894,7 @@ _glapi_get_proc_address(const char *funcName)
  * Return the name of the function at the given dispatch offset.
  * This is only intended for debugging.
  */
-const char *
+PUBLIC const char *
 _glapi_get_proc_name(GLuint offset)
 {
    GLuint i;
@@ -921,7 +921,7 @@ _glapi_get_proc_name(GLuint offset)
  * Return size of dispatch table struct as number of functions (or
  * slots).
  */
-GLuint
+PUBLIC GLuint
 _glapi_get_dispatch_table_size(void)
 {
    return DISPATCH_TABLE_SIZE;
@@ -932,7 +932,7 @@ _glapi_get_dispatch_table_size(void)
 /**
  * Get API dispatcher version string.
  */
-const char *
+PUBLIC const char *
 _glapi_get_version(void)
 {
    return "20021001";  /* YYYYMMDD */
@@ -944,7 +944,7 @@ _glapi_get_version(void)
  * Make sure there are no NULL pointers in the given dispatch table.
  * Intended for debugging purposes.
  */
-void
+PUBLIC void
 _glapi_check_table(const struct _glapi_table *table)
 {
 #ifdef DEBUG
@@ -1014,7 +1014,7 @@ _glapi_check_table(const struct _glapi_table *table)
       GLuint offset = (pointParameterivFunc - (char *) table) / sizeof(void *);
       assert(pointParameterivOffset == _gloffset_PointParameterivNV);
       assert(pointParameterivOffset == offset);
-      assert(_glapi_get_proc_address("glPointParameterivNV") == &glPointParameterivNV);
+      assert(_glapi_get_proc_address("glPointParameterivNV") == (_glapi_proc) &glPointParameterivNV);
    }
    {
       GLuint setFenceOffset = _glapi_get_proc_offset("glSetFenceNV");
@@ -1022,7 +1022,7 @@ _glapi_check_table(const struct _glapi_table *table)
       GLuint offset = (setFenceFunc - (char *) table) / sizeof(void *);
       assert(setFenceOffset == _gloffset_SetFenceNV);
       assert(setFenceOffset == offset);
-      assert(_glapi_get_proc_address("glSetFenceNV") == &glSetFenceNV);
+      assert(_glapi_get_proc_address("glSetFenceNV") == (_glapi_proc) &glSetFenceNV);
    }
 #else
    (void) table;

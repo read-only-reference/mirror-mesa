@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.1
+ * Version:  6.3
  *
  * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
@@ -120,6 +120,11 @@ get_register_pointer( GLcontext *ctx,
          ASSERT(source->Index < MAX_NV_FRAGMENT_PROGRAM_INPUTS);
          src = machine->Inputs[source->Index];
          break;
+      case PROGRAM_OUTPUT:
+         /* This is only for PRINT */
+         ASSERT(source->Index < MAX_NV_FRAGMENT_PROGRAM_OUTPUTS);
+         src = machine->Outputs[source->Index];
+         break;
       case PROGRAM_LOCAL_PARAM:
          ASSERT(source->Index < MAX_PROGRAM_LOCAL_PARAMS);
          src = program->Base.LocalParams[source->Index];
@@ -128,10 +133,8 @@ get_register_pointer( GLcontext *ctx,
          ASSERT(source->Index < MAX_NV_FRAGMENT_PROGRAM_PARAMS);
          src = ctx->FragmentProgram.Parameters[source->Index];
          break;
-
       case PROGRAM_STATE_VAR:
-			/* Fallthrough */
-
+         /* Fallthrough */
       case PROGRAM_NAMED_PARAM:
          ASSERT(source->Index < (GLint) program->Parameters->NumParameters);
          src = program->Parameters->Parameters[source->Index].Values;
@@ -342,7 +345,7 @@ fetch_vector1( GLcontext *ctx,
 }
 
 
-/*
+/**
  * Test value against zero and return GT, LT, EQ or UN if NaN.
  */
 static INLINE GLuint
@@ -357,7 +360,8 @@ generate_cc( float value )
    return COND_EQ;
 }
 
-/*
+
+/**
  * Test if the ccMaskRule is satisfied by the given condition code.
  * Used to mask destination writes according to the current condition codee.
  */
@@ -805,14 +809,16 @@ execute_program( GLcontext *ctx,
             break;
          case FP_OPCODE_LIT:
             {
+               const GLfloat epsilon = 1.0F / 256.0F; /* from NV VP spec */
                GLfloat a[4], result[4];
                fetch_vector4( ctx, &inst->SrcReg[0], machine, program, a );
-               if (a[0] < 0.0F)
-                  a[0] = 0.0F;
-               if (a[1] < 0.0F)
-                  a[1] = 0.0F;
+               a[0] = MAX2(a[0], 0.0F);
+               a[1] = MAX2(a[1], 0.0F);
+               /* XXX ARB version clamps a[3], NV version doesn't */
+               a[3] = CLAMP(a[3], -(128.0F - epsilon), (128.0F - epsilon));
                result[0] = 1.0F;
                result[1] = a[0];
+               /* XXX we could probably just use pow() here */
                result[2] = (a[0] > 0.0F) ? (GLfloat) exp(a[3] * log(a[1])) : 0.0F;
                result[3] = 1.0F;
                store_vector4( inst, machine, result );
@@ -1302,6 +1308,19 @@ execute_program( GLcontext *ctx,
                result[2] = a[2] + b[0] * c[0] + b[1] * c[1];
                result[3] = a[3] + b[0] * c[2] + b[1] * c[3];
                store_vector4( inst, machine, result );
+            }
+            break;
+         case FP_OPCODE_PRINT:
+            {
+               if (inst->SrcReg[0].File != -1) {
+                  GLfloat a[4];
+                  fetch_vector4( ctx, &inst->SrcReg[0], machine, program, a);
+                  _mesa_printf("%s%g, %g, %g, %g\n", (const char *) inst->Data,
+                               a[0], a[1], a[2], a[3]);
+               }
+               else {
+                  _mesa_printf("%s\n", (const char *) inst->Data);
+               }
             }
             break;
          case FP_OPCODE_END:

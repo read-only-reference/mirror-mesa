@@ -334,8 +334,7 @@ static __GLcontextModes *tdfxFillInModes(unsigned pixel_bits,
 			    m->depthBits	= deep
 			    			  ? (depth ? 24 : 0)
 			    			  : (depth ? 0 : depth_bits);
-			    m->visualType	= i ? GLX_TRUE_COLOR
-			    			    : GLX_DIRECT_COLOR;
+			    m->visualType	= vis[i];
 			    m->renderType	= GLX_RGBA_BIT;
 			    m->drawableType	= GLX_WINDOW_BIT;
 			    m->rgbMode		= GL_TRUE;
@@ -366,6 +365,7 @@ static __GLcontextModes *tdfxFillInModes(unsigned pixel_bits,
  * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on
  *         failure.
  */
+PUBLIC
 void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,

@@ -108,6 +108,10 @@ _swrast_update_rasterflags( GLcontext *ctx )
       rasterMask |= FRAGPROG_BIT;
    }
 
+   if (ctx->ATIFragmentShader._Enabled) {
+      rasterMask |= ATIFRAGSHADER_BIT;
+   }
+
    SWRAST_CONTEXT(ctx)->_RasterMask = rasterMask;
 }
 
@@ -692,10 +696,7 @@ _swrast_flush( GLcontext *ctx )
    /* flush any pending fragments from rendering points */
    if (swrast->PointSpan.end > 0) {
       if (ctx->Visual.rgbMode) {
-         if (ctx->Texture._EnabledCoordUnits)
-            _swrast_write_texture_span(ctx, &(swrast->PointSpan));
-         else
-            _swrast_write_rgba_span(ctx, &(swrast->PointSpan));
+         _swrast_write_rgba_span(ctx, &(swrast->PointSpan));
       }
       else {
          _swrast_write_index_span(ctx, &(swrast->PointSpan));

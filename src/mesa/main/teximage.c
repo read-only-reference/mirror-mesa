@@ -886,11 +886,9 @@ _mesa_max_texture_levels(GLcontext *ctx, GLenum target)
    case GL_TEXTURE_CUBE_MAP_ARB:
    case GL_PROXY_TEXTURE_CUBE_MAP_ARB:
       return ctx->Const.MaxCubeTextureLevels;
-      break;
    case GL_TEXTURE_RECTANGLE_NV:
    case GL_PROXY_TEXTURE_RECTANGLE_NV:
       return 1;
-      break;
    default:
       return 0; /* bad target */
    }
@@ -1904,7 +1902,6 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
    const struct gl_texture_object *texObj;
    const struct gl_texture_image *texImage;
    GLint maxLevels = 0;
-   GLuint dimensions;
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
@@ -1956,10 +1953,12 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
    }
 
    /* Make sure the requested image format is compatible with the
-    * texture's format.
+    * texture's format. We let the colorformat-indexformat go through,
+    * because the texelfetcher will dequantize to full rgba.
     */
    if (is_color_format(format)
-       && !is_color_format(texImage->TexFormat->BaseFormat)) {
+       && !is_color_format(texImage->TexFormat->BaseFormat)
+       && !is_index_format(texImage->TexFormat->BaseFormat)) {
       _mesa_error(ctx, GL_INVALID_OPERATION, "glGetTexImage(format mismatch)");
       return;
    }
@@ -1979,127 +1978,9 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
       return;
    }
 
-   dimensions = (target == GL_TEXTURE_3D) ? 3 : 2;
-
-   /* XXX - someday the rest of this function should be moved into a
-    * fallback routine called via ctx->Driver.GetTexImage()
-    */
-
-   if (ctx->Pack.BufferObj->Name) {
-      /* pack texture image into a PBO */
-      GLubyte *buf;
-      if (!_mesa_validate_pbo_access(dimensions, &ctx->Pack, texImage->Width,
-                                     texImage->Height, texImage->Depth,
-                                     format, type, pixels)) {
-         _mesa_error(ctx, GL_INVALID_OPERATION,
-                     "glGetTexImage(invalid PBO access)");
-         return;
-      }
-      buf = (GLubyte *) ctx->Driver.MapBuffer(ctx, GL_PIXEL_PACK_BUFFER_EXT,
-                                              GL_WRITE_ONLY_ARB,
-                                              ctx->Pack.BufferObj);
-      if (!buf) {
-         /* buffer is already mapped - that's an error */
-         _mesa_error(ctx, GL_INVALID_OPERATION,"glGetTexImage(PBO is mapped)");
-         return;
-      }
-      pixels = ADD_POINTERS(buf, pixels);
-   }
-   else if (!pixels) {
-      /* not an error */
-      return;
-   }
-
-   /*
-    * XXX Move this code into a new driver fall-back function
-    */
-   {
-      const GLint width = texImage->Width;
-      const GLint height = texImage->Height;
-      const GLint depth = texImage->Depth;
-      GLint img, row;
-      for (img = 0; img < depth; img++) {
-         for (row = 0; row < height; row++) {
-            /* compute destination address in client memory */
-            GLvoid *dest = _mesa_image_address( dimensions, &ctx->Pack, pixels,
-                                                width, height, format, type,
-                                                img, row, 0);
-            assert(dest);
-
-            if (format == GL_COLOR_INDEX) {
-               GLuint indexRow[MAX_WIDTH];
-               GLint col;
-               /* Can't use FetchTexel here because that returns RGBA */
-               if (texImage->TexFormat->IndexBits == 8) {
-                  const GLubyte *src = (const GLubyte *) texImage->Data;
-                  for (col = 0; col < width; col++) {
-                     indexRow[col] = src[texImage->Width *
-                                        (img * texImage->Height + row) + col];
-                  }
-               }
-               else if (texImage->TexFormat->IndexBits == 16) {
-                  const GLushort *src = (const GLushort *) texImage->Data;
-                  for (col = 0; col < width; col++) {
-                     indexRow[col] = src[texImage->Width *
-                                        (img * texImage->Height + row) + col];
-                  }
-               }
-               else {
-                  _mesa_problem(ctx,
-                                "Color index problem in _mesa_GetTexImage");
-               }
-               _mesa_pack_index_span(ctx, width, type, dest,
-                                     indexRow, &ctx->Pack,
-                                     0 /* no image transfer */);
-            }
-            else if (format == GL_DEPTH_COMPONENT) {
-               GLfloat depthRow[MAX_WIDTH];
-               GLint col;
-               for (col = 0; col < width; col++) {
-                  (*texImage->FetchTexelf)(texImage, col, row, img,
-                                           depthRow + col);
-               }
-               _mesa_pack_depth_span(ctx, width, dest, type,
-                                     depthRow, &ctx->Pack);
-            }
-            else if (format == GL_YCBCR_MESA) {
-               /* No pixel transfer */
-               const GLint rowstride = texImage->RowStride;
-               MEMCPY(dest,
-                      (const GLushort *) texImage->Data + row * rowstride,
-                      width * sizeof(GLushort));
-               /* check for byte swapping */
-               if ((texImage->TexFormat->MesaFormat == MESA_FORMAT_YCBCR
-                    && type == GL_UNSIGNED_SHORT_8_8_REV_MESA) ||
-                   (texImage->TexFormat->MesaFormat == MESA_FORMAT_YCBCR_REV
-                    && type == GL_UNSIGNED_SHORT_8_8_MESA)) {
-                  if (!ctx->Pack.SwapBytes)
-                     _mesa_swap2((GLushort *) dest, width);
-               }
-               else if (ctx->Pack.SwapBytes) {
-                  _mesa_swap2((GLushort *) dest, width);
-               }
-            }
-            else {
-               /* general case:  convert row to RGBA format */
-               GLfloat rgba[MAX_WIDTH][4];
-               GLint col;
-               for (col = 0; col < width; col++) {
-                  (*texImage->FetchTexelf)(texImage, col, row, img, rgba[col]);
-               }
-               _mesa_pack_rgba_span_float(ctx, width,
-                                          (const GLfloat (*)[4]) rgba,
-                                          format, type, dest, &ctx->Pack,
-                                          0 /* no image transfer */);
-            } /* format */
-         } /* row */
-      } /* img */
-   }
-
-   if (ctx->Pack.BufferObj->Name) {
-      ctx->Driver.UnmapBuffer(ctx, GL_PIXEL_PACK_BUFFER_EXT,
-                              ctx->Pack.BufferObj);
-   }
+   /* typically, this will call _mesa_get_teximage() */
+   ctx->Driver.GetTexImage(ctx, target, level, format, type, pixels,
+                           texObj, texImage);
 }
 
 
@@ -2843,16 +2724,16 @@ compressed_texture_error_check(GLcontext *ctx, GLint dimensions,
     * XXX We should probably use the proxy texture error check function here.
     */
    if (width < 1 || width > maxTextureSize ||
-       (!ctx->Extensions.ARB_texture_non_power_of_two && logbase2(width) < 0))
+       (!ctx->Extensions.ARB_texture_non_power_of_two && _mesa_bitcount(width) != 1))
       return GL_INVALID_VALUE;
 
    if ((height < 1 || height > maxTextureSize ||
-        (!ctx->Extensions.ARB_texture_non_power_of_two && logbase2(height) < 0))
+       (!ctx->Extensions.ARB_texture_non_power_of_two && _mesa_bitcount(height) != 1))
        && dimensions > 1)
       return GL_INVALID_VALUE;
 
    if ((depth < 1 || depth > maxTextureSize ||
-        (!ctx->Extensions.ARB_texture_non_power_of_two && logbase2(depth) < 0))
+       (!ctx->Extensions.ARB_texture_non_power_of_two && _mesa_bitcount(depth) != 1))
        && dimensions > 2)
       return GL_INVALID_VALUE;
 
@@ -3394,40 +3275,6 @@ _mesa_GetCompressedTexImageARB(GLenum target, GLint level, GLvoid *img)
       return;
    }
 
-   /* XXX - someday the rest of this function should be moved into a
-    * fallback routine called via ctx->Driver.GetCompressedTexImage()
-    */
- 
-   if (ctx->Pack.BufferObj->Name) {
-      /* pack texture image into a PBO */
-      GLubyte *buf;
-      if ((const GLubyte *) img + texImage->CompressedSize >
-          (const GLubyte *) ctx->Pack.BufferObj->Size) {
-         _mesa_error(ctx, GL_INVALID_OPERATION,
-                     "glGetCompressedTexImage(invalid PBO access)");
-         return;
-      }
-      buf = (GLubyte *) ctx->Driver.MapBuffer(ctx, GL_PIXEL_PACK_BUFFER_EXT,
-                                              GL_WRITE_ONLY_ARB,
-                                              ctx->Pack.BufferObj);
-      if (!buf) {
-         /* buffer is already mapped - that's an error */
-         _mesa_error(ctx, GL_INVALID_OPERATION,
-                     "glGetCompressedTexImage(PBO is mapped)");
-         return;
-      }
-      img = ADD_POINTERS(buf, img);
-   }
-   else if (!img) {
-      /* not an error */
-      return;
-   }
-
-   /* just memcpy, no pixelstore or pixel transfer */
-   MEMCPY(img, texImage->Data, texImage->CompressedSize);
-
-   if (ctx->Pack.BufferObj->Name) {
-      ctx->Driver.UnmapBuffer(ctx, GL_PIXEL_PACK_BUFFER_EXT,
-                              ctx->Pack.BufferObj);
-   }
+   /* this typically calls _mesa_get_compressed_teximage() */
+   ctx->Driver.GetCompressedTexImage(ctx, target, level, img, texObj,texImage);
 }

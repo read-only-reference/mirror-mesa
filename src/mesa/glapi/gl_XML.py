@@ -193,7 +193,7 @@ class glParameter( glItem ):
 		to glCallLists, are not variable length arrays in this
 		sense."""
 
-		return self.p_count_parameters != None
+		return (self.p_count_parameters != None) or (self.counter != None)
 
 
 	def is_array(self):
@@ -211,7 +211,7 @@ class glParameter( glItem ):
 		glDeleteTextures), or a general variable length vector."""
 
 		if self.is_array():
-			if self.is_variable_length_array():
+			if self.p_count_parameters != None:
 				return "compsize"
 			elif self.counter != None:
 				return self.counter
@@ -222,25 +222,47 @@ class glParameter( glItem ):
 
 
 	def size(self):
-		if self.is_variable_length_array():
+		if self.p_count_parameters != None or self.counter != None or self.is_output:
 			return 0
 		elif self.p_count == 0:
 			return self.p_type.size
 		else:
 			return self.p_type.size * self.p_count
 
+	def size_string(self):
+		s = self.size()
+		if s == 0:
+			a_prod = "compsize"
+			b_prod = self.p_type.size
+
+			if self.p_count_parameters == None and self.counter != None:
+				a_prod = self.counter
+			elif self.p_count_parameters != None and self.counter == None:
+				pass
+			elif self.p_count_parameters != None and self.counter != None:
+				b_prod = self.counter
+			else:
+				raise RuntimeError("Parameter '%s' to function '%s' has size 0." % (self.name, self.context.name))
+
+			return "(%s * %s)" % (a_prod, b_prod)
+		else:
+			return str(s)
+
 
 class glParameterIterator:
 	"""Class to iterate over a list of glParameters.
 	
-	Objects of this class are returned by the __iter__ method of the
-	glFunction class.  They are used to iterate over the list of
+	Objects of this class are returned by the parameterIterator method of
+	the glFunction class.  They are used to iterate over the list of
 	parameters to the function."""
 
 	def __init__(self, data):
 		self.data = data
 		self.index = 0
-		
+
+	def __iter__(self):
+		return self
+
 	def next(self):
 		if self.index == len( self.data ):
 			raise StopIteration
@@ -276,14 +298,14 @@ class glFunction( glItem ):
 		return
 
 
-	def __iter__(self):
+	def parameterIterator(self):
 		return glParameterIterator(self.fn_parameters)
 
 
 	def startElement(self, name, attrs):
 		if name == "param":
 			try:
-				glParameter(self, name, attrs)
+				self.context.factory.create(self, name, attrs)
 			except RuntimeError:
 				print "Error with parameter '%s' in function '%s'." \
 					% (attrs.get('name','(unknown)'), self.name)
@@ -306,7 +328,7 @@ class glFunction( glItem ):
 	def get_parameter_string(self):
 		arg_string = ""
 		comma = ""
-		for p in self:
+		for p in glFunction.parameterIterator(self):
 			arg_string = arg_string + comma + p.p_type_string + " " + p.name
 			comma = ", "
 
@@ -326,6 +348,8 @@ class glItemFactory:
 			return glType(context, name, attrs)
 		elif name == "enum":
 			return glEnum(context, name, attrs)
+		elif name == "param":
+			return glParameter(context, name, attrs)
 		else:
 			return None
 

@@ -39,6 +39,7 @@
 #include "nvfragparse.h"
 #include "nvfragprog.h"
 #include "nvvertparse.h"
+#include "nvvertprog.h"
 
 
 /**********************************************************************/
@@ -82,6 +83,13 @@ _mesa_init_program(GLcontext *ctx)
    assert(ctx->FragmentProgram.Current);
    ctx->FragmentProgram.Current->Base.RefCount++;
 #endif
+
+#if FEATURE_ATI_fragment_shader
+   ctx->ATIFragmentShader.Enabled = GL_FALSE;
+   ctx->ATIFragmentShader.Current = (struct ati_fragment_shader *) ctx->Shared->DefaultFragmentShader;
+   assert(ctx->ATIFragmentShader.Current);
+   ctx->ATIFragmentShader.Current->Base.RefCount++;
+#endif
 }
 
 
@@ -103,6 +111,13 @@ _mesa_free_program_data(GLcontext *ctx)
       ctx->FragmentProgram.Current->Base.RefCount--;
       if (ctx->FragmentProgram.Current->Base.RefCount <= 0)
          ctx->Driver.DeleteProgram(ctx, &(ctx->FragmentProgram.Current->Base));
+   }
+#endif
+#if FEATURE_ATI_fragment_shader
+   if (ctx->ATIFragmentShader.Current) {
+      ctx->ATIFragmentShader.Current->Base.RefCount--;
+      if (ctx->ATIFragmentShader.Current->Base.RefCount <= 0)
+	ctx->Driver.DeleteProgram(ctx, &(ctx->ATIFragmentShader.Current->Base));
    }
 #endif
    _mesa_free((void *) ctx->Program.ErrorString);
@@ -215,6 +230,20 @@ _mesa_init_vertex_program( GLcontext *ctx, struct vertex_program *prog,
       return NULL;
 }
 
+/**
+ * Initialize a new ATI fragment shader object.
+ */
+struct program *
+_mesa_init_ati_fragment_shader( GLcontext *ctx, struct ati_fragment_shader *prog,
+                           GLenum target, GLuint id)
+{
+   if (prog) 
+      return _mesa_init_program_struct( ctx, &prog->Base, target, id );
+   else
+      return NULL;
+}
+
+
 
 /**
  * Allocate and initialize a new fragment/vertex program object but
@@ -239,6 +268,10 @@ _mesa_new_program(GLcontext *ctx, GLenum target, GLuint id)
    case GL_FRAGMENT_PROGRAM_ARB:
       return _mesa_init_fragment_program( ctx, CALLOC_STRUCT(fragment_program),
 					  target, id );
+   case GL_FRAGMENT_SHADER_ATI:
+      return _mesa_init_ati_fragment_shader( ctx, CALLOC_STRUCT(ati_fragment_shader),
+					  target, id );
+
    default:
       _mesa_problem(ctx, "bad target in _mesa_new_program");
       return NULL;
@@ -263,19 +296,37 @@ _mesa_delete_program(GLcontext *ctx, struct program *prog)
    if (prog->Target == GL_VERTEX_PROGRAM_NV ||
        prog->Target == GL_VERTEX_STATE_PROGRAM_NV) {
       struct vertex_program *vprog = (struct vertex_program *) prog;
-      if (vprog->Instructions)
+      if (vprog->Instructions) {
+         GLuint i;
+         for (i = 0; i < vprog->Base.NumInstructions; i++) {
+            if (vprog->Instructions[i].Data)
+               _mesa_free(vprog->Instructions[i].Data);
+         }
          _mesa_free(vprog->Instructions);
+      }
       if (vprog->Parameters)
          _mesa_free_parameter_list(vprog->Parameters);
    }
    else if (prog->Target == GL_FRAGMENT_PROGRAM_NV ||
             prog->Target == GL_FRAGMENT_PROGRAM_ARB) {
       struct fragment_program *fprog = (struct fragment_program *) prog;
-      if (fprog->Instructions)
+      if (fprog->Instructions) {
+         GLuint i;
+         for (i = 0; i < fprog->Base.NumInstructions; i++) {
+            if (fprog->Instructions[i].Data)
+               _mesa_free(fprog->Instructions[i].Data);
+         }
          _mesa_free(fprog->Instructions);
+      }
       if (fprog->Parameters)
          _mesa_free_parameter_list(fprog->Parameters);
    }
+   else if (prog->Target == GL_FRAGMENT_SHADER_ATI) {
+      struct ati_fragment_shader *atifs = (struct ati_fragment_shader *)prog;
+      if (atifs->Instructions)
+	 _mesa_free(atifs->Instructions);
+   }
+
    _mesa_free(prog);
 }
 
@@ -541,8 +592,7 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
             _mesa_problem(ctx, "Invalid material state in fetch_state");
             return;
          }
-      };
-      return;
+      }
    case STATE_LIGHT:
       {
          /* state[1] is the light number */
@@ -590,7 +640,6 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
             return;
          }
       }
-      return;
    case STATE_LIGHTMODEL_AMBIENT:
       COPY_4V(value, ctx->Light.Model.Ambient);
       return;
@@ -650,7 +699,6 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
                return;
          }
       }
-      return;
    case STATE_TEXGEN:
       {
          /* state[1] is the texture unit */
@@ -686,7 +734,6 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
             return;
          }
       }
-      return;
    case STATE_TEXENV_COLOR:
       {		
          /* state[1] is the texture unit */
