@@ -1,14 +1,25 @@
-/* $Id: multiarb.c,v 1.1 1999/08/19 00:55:40 jtg Exp $ */
+/* $Id: multiarb.c,v 1.3 1999/10/21 16:40:32 brianp Exp $ */
 
 /*
  * GL_ARB_multitexture demo
+ *
+ * Command line options:
+ *    -info      print GL implementation information
+ *
+ *
  * Brian Paul  November 1998  This program is in the public domain.
  */
 
 /*
  * $Log: multiarb.c,v $
- * Revision 1.1  1999/08/19 00:55:40  jtg
- * Initial revision
+ * Revision 1.3  1999/10/21 16:40:32  brianp
+ * added -info command line option
+ *
+ * Revision 1.2  1999/10/13 12:02:13  brianp
+ * use texture objects now
+ *
+ * Revision 1.1.1.1  1999/08/19 00:55:40  jtg
+ * Imported sources
  *
  * Revision 1.3  1999/03/28 18:20:49  brianp
  * minor clean-up
@@ -221,18 +232,21 @@ static void SpecialKey( int key, int x, int y )
 }
 
 
-static void Init( void )
+static void Init( int argc, char *argv[] )
 {
+   GLuint texObj[2];
+
    const char *exten = (const char *) glGetString(GL_EXTENSIONS);
    if (!strstr(exten, "GL_ARB_multitexture")) {
       printf("Sorry, GL_ARB_multitexture not supported by this renderer.\n");
       exit(1);
    }
 
-   /* setup texture env 0 */
-#ifdef GL_ARB_multitexture
-   glActiveTextureARB(GL_TEXTURE0_ARB);
-#endif
+   /* allocate two texture objects */
+   glGenTextures(2, texObj);
+
+   /* setup texture obj 0 */
+   glBindTexture(GL_TEXTURE_2D, texObj[0]);
 #ifdef LINEAR_FILTER
    /* linear filtering looks much nicer but is much slower for Mesa */
    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -252,10 +266,8 @@ static void Init( void )
    }
 
 
-   /* setup texture env 1 */
-#ifdef GL_ARB_multitexture
-   glActiveTextureARB(GL_TEXTURE1_ARB);
-#endif
+   /* setup texture obj 1 */
+   glBindTexture(GL_TEXTURE_2D, texObj[1]);
 #ifdef LINEAR_FILTER
    /* linear filtering looks much nicer but is much slower for Mesa */
    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -272,10 +284,26 @@ static void Init( void )
       exit(1);
    }
 
+
+   /* now bind the texture objects to the respective texture units */
+#ifdef GL_ARB_multitexture
+   glActiveTextureARB(GL_TEXTURE0_ARB);
+   glBindTexture(GL_TEXTURE_2D, texObj[0]);
+   glActiveTextureARB(GL_TEXTURE1_ARB);
+   glBindTexture(GL_TEXTURE_2D, texObj[1]);
+#endif
+
    glShadeModel(GL_FLAT);
    glClearColor(0.3, 0.3, 0.4, 1.0);
 
    ModeMenu(TEXBOTH);
+
+   if (argc > 1 && strcmp(argv[1], "-info")==0) {
+      printf("GL_RENDERER   = %s\n", (char *) glGetString(GL_RENDERER));
+      printf("GL_VERSION    = %s\n", (char *) glGetString(GL_VERSION));
+      printf("GL_VENDOR     = %s\n", (char *) glGetString(GL_VENDOR));
+      printf("GL_EXTENSIONS = %s\n", (char *) glGetString(GL_EXTENSIONS));
+   }
 }
 
 
@@ -286,7 +314,7 @@ int main( int argc, char *argv[] )
    glutInitDisplayMode( GLUT_RGB | GLUT_DOUBLE );
    glutCreateWindow(argv[0] );
 
-   Init();
+   Init( argc, argv );
 
    glutReshapeFunc( Reshape );
    glutKeyboardFunc( Key );

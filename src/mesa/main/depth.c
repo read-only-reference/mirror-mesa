@@ -1,4 +1,4 @@
-/* $Id: depth.c,v 1.3 1999/09/19 23:43:02 keithw Exp $ */
+/* $Id: depth.c,v 1.7 1999/10/13 18:42:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -25,17 +25,23 @@
  */
 
 
+/* $XFree86: xc/lib/GL/mesa/src/depth.c,v 1.3 1999/04/04 00:20:22 dawes Exp $ */
+
 /*
  * Depth buffer functions
  */
 
+#include <stdlib.h>
 
 #ifdef PC_HEADER
 #include "all.h"
 #else
-#include <stdlib.h>
+#ifndef XFree86Server
 #include <stdio.h>
 #include <string.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "context.h"
 #include "enums.h"
 #include "depth.h"
@@ -806,12 +812,12 @@ void gl_alloc_depth_buffer( GLcontext* ctx )
 {
    /* deallocate current depth buffer if present */
    if (ctx->Buffer->Depth) {
-      free(ctx->Buffer->Depth);
+      FREE(ctx->Buffer->Depth);
       ctx->Buffer->Depth = NULL;
    }
 
    /* allocate new depth buffer, but don't initialize it */
-   ctx->Buffer->Depth = (GLdepth *) malloc( ctx->Buffer->Width
+   ctx->Buffer->Depth = (GLdepth *) MALLOC( ctx->Buffer->Width
                                             * ctx->Buffer->Height
                                             * sizeof(GLdepth) );
    if (!ctx->Buffer->Depth) {

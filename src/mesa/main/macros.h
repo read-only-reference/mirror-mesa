@@ -1,4 +1,4 @@
-/* $Id: macros.h,v 1.1 1999/08/19 00:55:41 jtg Exp $ */
+/* $Id: macros.h,v 1.5 1999/10/13 18:42:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -36,9 +36,12 @@
 #ifndef MACROS_H
 #define MACROS_H
 
-
+#if defined( XFree86LOADER ) && defined( XFree86Server )
+#include <GL/glx_ansic.h>
+#else
 #include <math.h>
 #include <string.h>
+#endif
 
 
 #ifdef DEBUG
@@ -49,7 +52,7 @@
 #endif
 
 
-#if defined(__GNUC__) || defined(__MWERKS__)
+#if defined(__GNUC__)
 #define INLINE __inline__
 #elif defined(__MSC__)
 #define INLINE __inline
@@ -475,6 +478,28 @@ do {						\
 /* a close approximation: */
 #define FLOAT_TO_INT(X)		( (GLint) (2147483647.0 * (X)) )
 
+
+
+/*
+ * Memory allocation
+ * XXX these should probably go into a new glmemory.h file.
+ */
+#ifdef DEBUG
+extern void *gl_malloc(size_t bytes);
+extern void *gl_calloc(size_t bytes);
+extern void gl_free(void *ptr);
+#define MALLOC(BYTES)      gl_malloc(BYTES)
+#define CALLOC(BYTES)      gl_calloc(BYTES)
+#define MALLOC_STRUCT(T)   (struct T *) gl_malloc(sizeof(struct T))
+#define CALLOC_STRUCT(T)   (struct T *) gl_calloc(sizeof(struct T))
+#define FREE(PTR)          gl_free(PTR)
+#else
+#define MALLOC(BYTES)      (void *) malloc(BYTES)
+#define CALLOC(BYTES)      (void *) calloc(1, BYTES)
+#define MALLOC_STRUCT(T)   (struct T *) malloc(sizeof(struct T))
+#define CALLOC_STRUCT(T)   (struct T *) calloc(1,sizeof(struct T))
+#define FREE(PTR)          free(PTR)
+#endif
 
 
 /* Memory copy: */

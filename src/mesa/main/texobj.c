@@ -1,4 +1,4 @@
-/* $Id: texobj.c,v 1.2 1999/09/30 11:18:22 keithw Exp $ */
+/* $Id: texobj.c,v 1.6 1999/10/13 18:42:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -23,7 +23,7 @@
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-
+/* $XFree86: xc/lib/GL/mesa/src/texobj.c,v 1.3 1999/04/04 00:20:32 dawes Exp $ */
 
 
 
@@ -31,9 +31,13 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#ifndef XFree86Server
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "context.h"
 #include "enums.h"
 #include "hash.h"
@@ -42,9 +46,6 @@
 #include "texstate.h"
 #include "texobj.h"
 #include "types.h"
-#ifdef XFree86Server
-#include "GL/xf86glx.h"
-#endif
 #endif
 
 
@@ -70,6 +71,7 @@ gl_alloc_texture_object( struct gl_shared_state *shared, GLuint name,
                      calloc(1,sizeof(struct gl_texture_object));
    if (obj) {
       /* init the non-zero fields */
+      obj->RefCount = 1;
       obj->Name = name;
       obj->Dimensions = dimensions;
       obj->WrapS = GL_REPEAT;
@@ -157,7 +159,7 @@ void gl_free_texture_object( struct gl_shared_state *shared,
       }
    }
    /* free this object */
-   free( t );
+   FREE( t );
 }
 
 
@@ -381,8 +383,8 @@ void gl_DeleteTextures( GLcontext *ctx, GLsizei n, const GLuint *texName)
 	       GLuint d;
 	       for (d = 1 ; d <= 3 ; d++) {
 		  if (unit->CurrentD[d]==t) {
-		     unit->CurrentD[d] = ctx->Shared->DefaultD[d][u];
-		     ctx->Shared->DefaultD[d][u]->RefCount++;
+		     unit->CurrentD[d] = ctx->Shared->DefaultD[d];
+		     ctx->Shared->DefaultD[d]->RefCount++;
 		     t->RefCount--;
 		     assert( t->RefCount >= 0 );
 		  }
@@ -435,7 +437,7 @@ void gl_BindTexture( GLcontext *ctx, GLenum target, GLuint texName )
       return;
 
    if (texName == 0) 
-      newTexObj = ctx->Shared->DefaultD[unit][dim];
+      newTexObj = ctx->Shared->DefaultD[dim];
    else {
       struct HashTable *hash = ctx->Shared->TexObjects;
       newTexObj = (struct gl_texture_object *) HashLookup(hash, texName);
@@ -452,8 +454,8 @@ void gl_BindTexture( GLcontext *ctx, GLenum target, GLuint texName )
       }
    }
 
-   oldTexObj->RefCount--;
    newTexObj->RefCount++;
+
    texUnit->CurrentD[dim] = newTexObj;
 
    /* If we've changed the CurrentD[123] texture object then update the
@@ -480,6 +482,17 @@ void gl_BindTexture( GLcontext *ctx, GLenum target, GLuint texName )
    /* Pass BindTexture call to device driver */
    if (ctx->Driver.BindTexture) {
       (*ctx->Driver.BindTexture)( ctx, target, newTexObj );
+   }
+
+   if (oldTexObj->Name > 0) {
+      /* never delete default (id=0) texture objects */
+      oldTexObj->RefCount--;
+      if (oldTexObj->RefCount <= 0) {
+         if (ctx->Driver.DeleteTexture) {
+	    (*ctx->Driver.DeleteTexture)( ctx, oldTexObj );
+	 }
+         gl_free_texture_object(ctx->Shared, oldTexObj);
+      }
    }
 }
 

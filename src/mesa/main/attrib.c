@@ -1,4 +1,4 @@
-/* $Id: attrib.c,v 1.4 1999/09/19 23:43:02 keithw Exp $ */
+/* $Id: attrib.c,v 1.8 1999/10/13 18:42:49 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -26,20 +26,22 @@
 
 
 
-
+#include <stdlib.h>
 
 #ifdef PC_HEADER
 #include "all.h"
 #else
-#include <stdlib.h>
+#ifndef XFree86Server
 #include <stdio.h>
-#include <string.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "attrib.h"
 #include "context.h"
+#include "glmisc.h"
 #include "enable.h"
 #include "enums.h"
 #include "macros.h"
-#include "misc.h"
 #include "simple_list.h"
 #include "texstate.h"
 #include "types.h"
@@ -50,8 +52,6 @@
 #endif
 
 
-#define MALLOC_STRUCT(T)  (struct T *) malloc( sizeof(struct T) )
-
 
 
 /*
@@ -60,9 +60,7 @@
  */
 static struct gl_attrib_node *new_attrib_node( GLbitfield kind )
 {
-   struct gl_attrib_node *an;
-
-   an = (struct gl_attrib_node *) malloc( sizeof(struct gl_attrib_node) );
+   struct gl_attrib_node *an = MALLOC_STRUCT(gl_attrib_node);
    if (an) {
       an->kind = kind;
    }
@@ -322,7 +320,7 @@ void gl_PushAttrib( GLcontext* ctx, GLbitfield mask )
 
    if (mask & GL_POLYGON_STIPPLE_BIT) {
       GLuint *stipple;
-      stipple = (GLuint *) malloc( 32*sizeof(GLuint) );
+      stipple = (GLuint *) MALLOC( 32*sizeof(GLuint) );
       MEMCPY( stipple, ctx->PolygonStipple, 32*sizeof(GLuint) );
       newnode = new_attrib_node( GL_POLYGON_STIPPLE_BIT );
       newnode->data = stipple;
@@ -758,8 +756,8 @@ void gl_PopAttrib( GLcontext* ctx )
       }
 
       next = attr->next;
-      free( (void *) attr->data );
-      free( (void *) attr );
+      FREE( attr->data );
+      FREE( attr );
       attr = next;
    }
 
@@ -855,8 +853,8 @@ void gl_PopClientAttrib( GLcontext *ctx )
       }
 
       next = attr->next;
-      free( (void *) attr->data );
-      free( (void *) attr );
+      FREE( attr->data );
+      FREE( attr );
       attr = next;
    }
 

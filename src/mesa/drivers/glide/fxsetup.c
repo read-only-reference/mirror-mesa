@@ -36,9 +36,9 @@ static void fxTexValidate(GLcontext *ctx, struct gl_texture_object *tObj)
   tfxTexInfo *ti=(tfxTexInfo *)tObj->DriverData;
   GLint minl,maxl;
 
-  if (MESA_VERBOSE&VERBOSE_DRIVER) {
+  if (MESA_VERBOSE&VERBOSE_DRIVER) 
      fprintf(stderr,"fxmesa: fxTexValidate(...) Start\n");
-  }
+
 
   if(ti->validated) {
      if (MESA_VERBOSE&VERBOSE_DRIVER) {
@@ -50,12 +50,12 @@ static void fxTexValidate(GLcontext *ctx, struct gl_texture_object *tObj)
   minl=ti->minLevel=tObj->BaseLevel;
   maxl=ti->maxLevel=MIN2(tObj->MaxLevel,tObj->Image[0]->MaxLog2);
 
+  
   fxTexGetInfo(tObj->Image[minl]->Width,tObj->Image[minl]->Height,
 	       &(FX_largeLodLog2(ti->info)),&(FX_aspectRatioLog2(ti->info)),
 	       &(ti->sScale),&(ti->tScale),
 	       &(ti->int_sScale),&(ti->int_tScale),	       
 	       NULL,NULL);
-
 
   if((tObj->MinFilter!=GL_NEAREST) && (tObj->MinFilter!=GL_LINEAR))
     fxTexGetInfo(tObj->Image[maxl]->Width,tObj->Image[maxl]->Height,
@@ -167,6 +167,9 @@ GLuint fxGetTexSetConfiguration(GLcontext *ctx,
     case GL_BLEND:
       envmode|=FX_UM_E0_BLEND;
       break;
+    case GL_ADD:
+      envmode|=FX_UM_E0_ADD;
+      break;
     default:
       /* do nothing */
       break;
@@ -212,6 +215,9 @@ GLuint fxGetTexSetConfiguration(GLcontext *ctx,
       break;
     case GL_BLEND:
       envmode|=FX_UM_E1_BLEND;
+      break;
+    case GL_ADD:
+      envmode|=FX_UM_E1_ADD;
       break;
     default:
       /* do nothing */
@@ -286,6 +292,7 @@ static void fxSetupSingleTMU(fxMesaContext fxMesa, struct gl_texture_object *tOb
     if (ti->LODblend && (MESA_VERBOSE&VERBOSE_DRIVER))
        fprintf(stderr, "fxmesa: not blending texture - only on one tmu\n");
 
+
     grTexClampMode(ti->tmi.whichTMU,ti->sClamp,ti->tClamp);
     grTexFilterMode(ti->tmi.whichTMU,ti->minFilt,ti->maxFilt);
     grTexMipMapMode(ti->tmi.whichTMU,ti->mmMode,FXFALSE);
@@ -350,9 +357,9 @@ void fxSetupTextureSingleTMU(GLcontext *ctx, GLuint textureset)
   tfxTexInfo *ti;
   struct gl_texture_object *tObj=ctx->Texture.Unit[textureset].CurrentD[2];
 
-  if (MESA_VERBOSE&VERBOSE_DRIVER) {
+  if (MESA_VERBOSE&VERBOSE_DRIVER) 
      fprintf(stderr,"fxmesa: fxSetupTextureSingleTMU(...) Start\n");
-  }
+
 
   ti=(tfxTexInfo *)tObj->DriverData;
 
@@ -786,6 +793,57 @@ static void fxSetupTextureDoubleTMU(GLcontext *ctx)
 		   GR_COMBINE_OTHER_TEXTURE,
 		   FXFALSE);
     break;
+  
+
+  case (FX_UM_E0_MODULATE | FX_UM_E1_ADD): /* Quake 3 Sky */
+    {
+      GLboolean isalpha[FX_NUM_TMU];
+
+      if(ti0->baseLevelInternalFormat==GL_ALPHA)
+	isalpha[ti0->tmi.whichTMU]=GL_TRUE;
+      else
+	isalpha[ti0->tmi.whichTMU]=GL_FALSE;
+
+      if(ti1->baseLevelInternalFormat==GL_ALPHA)
+	isalpha[ti1->tmi.whichTMU]=GL_TRUE;
+      else
+	isalpha[ti1->tmi.whichTMU]=GL_FALSE;
+	
+      if(isalpha[FX_TMU1])
+	grTexCombine(GR_TMU1,
+		     GR_COMBINE_FUNCTION_ZERO,GR_COMBINE_FACTOR_NONE,
+		     GR_COMBINE_FUNCTION_LOCAL,GR_COMBINE_FACTOR_NONE,
+		     FXTRUE,FXFALSE);
+      else
+	grTexCombine(GR_TMU1,
+		     GR_COMBINE_FUNCTION_LOCAL,GR_COMBINE_FACTOR_NONE,
+		     GR_COMBINE_FUNCTION_LOCAL,GR_COMBINE_FACTOR_NONE,
+		     FXFALSE,FXFALSE);
+
+      if(isalpha[FX_TMU0])
+	grTexCombine(GR_TMU0,
+		     GR_COMBINE_FUNCTION_SCALE_OTHER,GR_COMBINE_FACTOR_ONE,
+		     GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL,GR_COMBINE_FACTOR_ONE,
+		     FXFALSE,FXFALSE);
+      else
+	grTexCombine(GR_TMU0,
+		     GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL,GR_COMBINE_FACTOR_ONE,
+		     GR_COMBINE_FUNCTION_SCALE_OTHER_ADD_LOCAL,GR_COMBINE_FACTOR_ONE,
+		     FXFALSE,FXFALSE);
+
+      grColorCombine(GR_COMBINE_FUNCTION_SCALE_OTHER,
+		     GR_COMBINE_FACTOR_LOCAL,
+		     localc,
+		     GR_COMBINE_OTHER_TEXTURE,
+		     FXFALSE);
+
+      grAlphaCombine(GR_COMBINE_FUNCTION_SCALE_OTHER,
+		     GR_COMBINE_FACTOR_LOCAL,
+		     locala,		     GR_COMBINE_OTHER_TEXTURE,
+		     FXFALSE);
+      break;
+    }
+    
   }
 
   if (MESA_VERBOSE&VERBOSE_DRIVER) {
@@ -1502,8 +1560,10 @@ void fxSetupFXUnits( GLcontext *ctx )
   fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
   GLuint newstate = fxMesa->new_state;
 
+
   if (MESA_VERBOSE&VERBOSE_DRIVER) 
      gl_print_fx_state_flags("fxmesa: fxSetupFXUnits", newstate);
+
 
   if (newstate) {
      if (newstate & FX_NEW_TEXTURING)
@@ -1531,7 +1591,7 @@ void fxSetupFXUnits( GLcontext *ctx )
 	fxSetupCull(ctx);     
 
      fxMesa->new_state = 0;
-     ctx->Driver.RenderStart = 0;
+/*       ctx->Driver.RenderStart = 0; */
   }
 }
 

@@ -1,4 +1,4 @@
-/* $Id: fakeglx.c,v 1.8 1999/09/16 16:44:37 brianp Exp $ */
+/* $Id: fakeglx.c,v 1.12 1999/10/27 09:50:10 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -718,6 +718,7 @@ static XVisualInfo *choose_x_visual( Display *dpy, int screen,
  * Return:  pointer to an XVisualInfo or NULL.
  */
 static XVisualInfo *choose_x_overlay_visual( Display *dpy, int scr,
+                                             GLboolean rgbFlag,
                                              int level, int trans_type,
                                              int trans_value,
                                              int min_depth,
@@ -809,10 +810,20 @@ static XVisualInfo *choose_x_overlay_visual( Display *dpy, int scr,
          continue;
       }
 
+      /* if RGB was requested, make sure we have True/DirectColor */
+      if (rgbFlag && vislist->CLASS != TrueColor
+          && vislist->CLASS != DirectColor)
+         continue;
+
+      /* if CI was requested, make sure we have a color indexed visual */
+      if (!rgbFlag
+          && (vislist->CLASS == TrueColor || vislist->CLASS == DirectColor))
+         continue;
+
       if (deepvis==NULL || vislist->depth > deepest) {
          /* YES!  found a satisfactory visual */
          if (deepvis) {
-            free( deepvis );
+            XFree( deepvis );
          }
          deepest = vislist->depth;
          deepvis = vislist;
@@ -979,8 +990,21 @@ XVisualInfo *Fake_glXChooseVisual( Display *dpy, int screen, int *list )
    }
    else {
       /* over/underlay planes */
-      vis = choose_x_overlay_visual( dpy, screen, level, trans_type,
-                                     trans_value, min_ci, visual_type );
+      if (rgb_flag) {
+         /* rgba overlay */
+         int min_rgb = min_red + min_green + min_blue;
+         if (min_rgb>1 && min_rgb<8) {
+            /* a special case to be sure we can get a monochrome visual */
+            min_rgb = 1;
+         }
+         vis = choose_x_overlay_visual( dpy, screen, rgb_flag, level,
+                              trans_type, trans_value, min_rgb, visual_type );
+      }
+      else {
+         /* color index overlay */
+         vis = choose_x_overlay_visual( dpy, screen, rgb_flag, level,
+                              trans_type, trans_value, min_ci, visual_type );
+      }
    }
 
    if (vis) {
@@ -1494,6 +1518,7 @@ GLboolean Fake_glXSet3DfxModeMESA( GLint mode )
 
 
 
+#if 0
 /*GLfunction Fake_glXGetProcAddress( const GLubyte *procName )*/
 void (*Fake_glXGetProcAddress( const GLubyte *procName ))()
 {
@@ -1514,6 +1539,11 @@ void (*Fake_glXGetProcAddress( const GLubyte *procName ))()
    GLuint i;
 
    /* First, look for core library functions */
+   GLfunction f = (GLfunction) gl_get_proc_address(procName);
+   if (f)
+      return f;
+
+   /* Second, look for GLX funtion */
    for (i = 0; procTable[i].address; i++) {
       if (strcmp((const char *) procName, procTable[i].name) == 0)
 	  return (GLfunction) procTable[i].address;
@@ -1521,3 +1551,4 @@ void (*Fake_glXGetProcAddress( const GLubyte *procName ))()
 
    return NULL;
 }
+#endif

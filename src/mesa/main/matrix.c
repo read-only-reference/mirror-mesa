@@ -1,4 +1,4 @@
-/* $Id: matrix.c,v 1.4 1999/09/19 23:06:40 keithw Exp $ */
+/* $Id: matrix.c,v 1.7 1999/10/13 18:42:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -43,10 +43,14 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#ifndef XFree86Server
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "context.h"
 #include "enums.h"
 #include "macros.h"
@@ -298,7 +302,7 @@ static GLboolean invert_matrix_general( GLmatrix *mat )
 
 /* Adapted from graphics gems II.
  */  
-GLboolean invert_matrix_3d_general( GLmatrix *mat )
+static GLboolean invert_matrix_3d_general( GLmatrix *mat )
 {
    const GLfloat *in = mat->m;
    GLfloat *out = mat->inv;
@@ -1406,7 +1410,7 @@ void gl_matrix_ctr( GLmatrix *m )
 void gl_matrix_dtr( GLmatrix *m )
 {
    if (m->inv != 0) {
-      free(m->inv);
+      FREE(m->inv);
       m->inv = 0;
    }
 }
@@ -1422,7 +1426,7 @@ void gl_matrix_set_identity( GLmatrix *m )
 void gl_matrix_alloc_inv( GLmatrix *m )
 {
    if (m->inv == 0) {
-      m->inv = (GLfloat *)malloc(16*sizeof(GLfloat));
+      m->inv = (GLfloat *)MALLOC(16*sizeof(GLfloat));
       MEMCPY( m->inv, Identity, 16 * sizeof(GLfloat) );
    }
 }

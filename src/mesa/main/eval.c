@@ -1,4 +1,4 @@
-/* $Id: eval.c,v 1.1 1999/08/19 00:55:41 jtg Exp $ */
+/* $Id: eval.c,v 1.5 1999/10/19 18:37:03 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -25,9 +25,6 @@
  */
 
 
-
-
-
 /*
  * eval.c was written by
  * Bernd Barsuhn (bdbarsuh@cip.informatik.uni-erlangen.de) and
@@ -44,9 +41,13 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#ifndef XFree86Server
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "context.h"
 #include "eval.h"
 #include "macros.h"
@@ -581,7 +582,7 @@ GLfloat *gl_copy_map_points1f( GLenum target,
       return NULL;
    }
 
-   buffer = (GLfloat *) malloc(uorder * size * sizeof(GLfloat));
+   buffer = (GLfloat *) MALLOC(uorder * size * sizeof(GLfloat));
 
    if(buffer) 
       for(i=0, p=buffer; i<uorder; i++, points+=ustride)
@@ -607,7 +608,7 @@ GLfloat *gl_copy_map_points1d( GLenum target,
       return NULL;
    }
 
-   buffer = (GLfloat *) malloc(uorder * size * sizeof(GLfloat));
+   buffer = (GLfloat *) MALLOC(uorder * size * sizeof(GLfloat));
 
    if(buffer)
       for(i=0, p=buffer; i<uorder; i++, points+=ustride)
@@ -651,9 +652,9 @@ GLfloat *gl_copy_map_points2f( GLenum target,
    hsize = (uorder > vorder ? uorder : vorder)*size;
 
    if(hsize>dsize)
-     buffer = (GLfloat *) malloc((uorder*vorder*size+hsize)*sizeof(GLfloat));
+     buffer = (GLfloat *) MALLOC((uorder*vorder*size+hsize)*sizeof(GLfloat));
    else
-     buffer = (GLfloat *) malloc((uorder*vorder*size+dsize)*sizeof(GLfloat));
+     buffer = (GLfloat *) MALLOC((uorder*vorder*size+dsize)*sizeof(GLfloat));
 
    /* compute the increment value for the u-loop */
    uinc = ustride - vorder*vstride;
@@ -694,9 +695,9 @@ GLfloat *gl_copy_map_points2d(GLenum target,
    hsize = (uorder > vorder ? uorder : vorder)*size;
 
    if(hsize>dsize)
-     buffer = (GLfloat *) malloc((uorder*vorder*size+hsize)*sizeof(GLfloat));
+     buffer = (GLfloat *) MALLOC((uorder*vorder*size+hsize)*sizeof(GLfloat));
    else
-     buffer = (GLfloat *) malloc((uorder*vorder*size+dsize)*sizeof(GLfloat));
+     buffer = (GLfloat *) MALLOC((uorder*vorder*size+dsize)*sizeof(GLfloat));
 
    /* compute the increment value for the u-loop */
    uinc = ustride - vorder*vstride;
@@ -789,7 +790,7 @@ void gl_free_control_points( GLcontext* ctx, GLenum target, GLfloat *data )
       else {
          /* The control points in the display list are not currently */
          /* being used. */
-         free( data );
+         FREE( data );
       }
    }
    if (map2) {
@@ -801,7 +802,7 @@ void gl_free_control_points( GLcontext* ctx, GLenum target, GLfloat *data )
       else {
          /* The control points in the display list are not currently */
          /* being used. */
-         free( data );
+         FREE( data );
       }
    }
 
@@ -863,7 +864,7 @@ void gl_Map1f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map1Vertex3.du = 1.0 / (u2 - u1);
 	 if (ctx->EvalMap.Map1Vertex3.Points
              && !ctx->EvalMap.Map1Vertex3.Retain) {
-	    free( ctx->EvalMap.Map1Vertex3.Points );
+	    FREE( ctx->EvalMap.Map1Vertex3.Points );
 	 }
 	 ctx->EvalMap.Map1Vertex3.Points = (GLfloat *) points;
          ctx->EvalMap.Map1Vertex3.Retain = retain;
@@ -875,7 +876,7 @@ void gl_Map1f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map1Vertex4.du = 1.0 / (u2 - u1);
 	 if (ctx->EvalMap.Map1Vertex4.Points
              && !ctx->EvalMap.Map1Vertex4.Retain) {
-	    free( ctx->EvalMap.Map1Vertex4.Points );
+	    FREE( ctx->EvalMap.Map1Vertex4.Points );
 	 }
 	 ctx->EvalMap.Map1Vertex4.Points = (GLfloat *) points;
 	 ctx->EvalMap.Map1Vertex4.Retain = retain;
@@ -887,7 +888,7 @@ void gl_Map1f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map1Index.du = 1.0 / (u2 - u1);
 	 if (ctx->EvalMap.Map1Index.Points
              && !ctx->EvalMap.Map1Index.Retain) {
-	    free( ctx->EvalMap.Map1Index.Points );
+	    FREE( ctx->EvalMap.Map1Index.Points );
 	 }
 	 ctx->EvalMap.Map1Index.Points = (GLfloat *) points;
 	 ctx->EvalMap.Map1Index.Retain = retain;
@@ -899,7 +900,7 @@ void gl_Map1f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map1Color4.du = 1.0 / (u2 - u1);
 	 if (ctx->EvalMap.Map1Color4.Points
              && !ctx->EvalMap.Map1Color4.Retain) {
-	    free( ctx->EvalMap.Map1Color4.Points );
+	    FREE( ctx->EvalMap.Map1Color4.Points );
 	 }
 	 ctx->EvalMap.Map1Color4.Points = (GLfloat *) points;
 	 ctx->EvalMap.Map1Color4.Retain = retain;
@@ -911,7 +912,7 @@ void gl_Map1f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map1Normal.du = 1.0 / (u2 - u1);
 	 if (ctx->EvalMap.Map1Normal.Points
              && !ctx->EvalMap.Map1Normal.Retain) {
-	    free( ctx->EvalMap.Map1Normal.Points );
+	    FREE( ctx->EvalMap.Map1Normal.Points );
 	 }
 	 ctx->EvalMap.Map1Normal.Points = (GLfloat *) points;
 	 ctx->EvalMap.Map1Normal.Retain = retain;
@@ -923,7 +924,7 @@ void gl_Map1f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map1Texture1.du = 1.0 / (u2 - u1);
 	 if (ctx->EvalMap.Map1Texture1.Points
              && !ctx->EvalMap.Map1Texture1.Retain) {
-	    free( ctx->EvalMap.Map1Texture1.Points );
+	    FREE( ctx->EvalMap.Map1Texture1.Points );
 	 }
 	 ctx->EvalMap.Map1Texture1.Points = (GLfloat *) points;
 	 ctx->EvalMap.Map1Texture1.Retain = retain;
@@ -935,7 +936,7 @@ void gl_Map1f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map1Texture2.du = 1.0 / (u2 - u1);
 	 if (ctx->EvalMap.Map1Texture2.Points
              && !ctx->EvalMap.Map1Texture2.Retain) {
-	    free( ctx->EvalMap.Map1Texture2.Points );
+	    FREE( ctx->EvalMap.Map1Texture2.Points );
 	 }
 	 ctx->EvalMap.Map1Texture2.Points = (GLfloat *) points;
 	 ctx->EvalMap.Map1Texture2.Retain = retain;
@@ -947,7 +948,7 @@ void gl_Map1f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map1Texture3.du = 1.0 / (u2 - u1);
 	 if (ctx->EvalMap.Map1Texture3.Points
              && !ctx->EvalMap.Map1Texture3.Retain) {
-	    free( ctx->EvalMap.Map1Texture3.Points );
+	    FREE( ctx->EvalMap.Map1Texture3.Points );
 	 }
 	 ctx->EvalMap.Map1Texture3.Points = (GLfloat *) points;
 	 ctx->EvalMap.Map1Texture3.Retain = retain;
@@ -959,7 +960,7 @@ void gl_Map1f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map1Texture4.du = 1.0 / (u2 - u1);
 	 if (ctx->EvalMap.Map1Texture4.Points
              && !ctx->EvalMap.Map1Texture4.Retain) {
-	    free( ctx->EvalMap.Map1Texture4.Points );
+	    FREE( ctx->EvalMap.Map1Texture4.Points );
 	 }
 	 ctx->EvalMap.Map1Texture4.Points = (GLfloat *) points;
 	 ctx->EvalMap.Map1Texture4.Retain = retain;
@@ -1032,7 +1033,7 @@ void gl_Map2f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map2Vertex3.dv = 1.0 / (v2 - v1);
 	 if (ctx->EvalMap.Map2Vertex3.Points
              && !ctx->EvalMap.Map2Vertex3.Retain) {
-	    free( ctx->EvalMap.Map2Vertex3.Points );
+	    FREE( ctx->EvalMap.Map2Vertex3.Points );
 	 }
 	 ctx->EvalMap.Map2Vertex3.Retain = retain;
 	 ctx->EvalMap.Map2Vertex3.Points = (GLfloat *) points;
@@ -1048,7 +1049,7 @@ void gl_Map2f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map2Vertex4.dv = 1.0 / (v2 - v1);
 	 if (ctx->EvalMap.Map2Vertex4.Points
              && !ctx->EvalMap.Map2Vertex4.Retain) {
-	    free( ctx->EvalMap.Map2Vertex4.Points );
+	    FREE( ctx->EvalMap.Map2Vertex4.Points );
 	 }
 	 ctx->EvalMap.Map2Vertex4.Points = (GLfloat *) points;
 	 ctx->EvalMap.Map2Vertex4.Retain = retain;
@@ -1064,7 +1065,7 @@ void gl_Map2f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map2Index.dv = 1.0 / (v2 - v1);
 	 if (ctx->EvalMap.Map2Index.Points
              && !ctx->EvalMap.Map2Index.Retain) {
-	    free( ctx->EvalMap.Map2Index.Points );
+	    FREE( ctx->EvalMap.Map2Index.Points );
 	 }
 	 ctx->EvalMap.Map2Index.Retain = retain;
 	 ctx->EvalMap.Map2Index.Points = (GLfloat *) points;
@@ -1080,7 +1081,7 @@ void gl_Map2f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map2Color4.dv = 1.0 / (v2 - v1);
 	 if (ctx->EvalMap.Map2Color4.Points
              && !ctx->EvalMap.Map2Color4.Retain) {
-	    free( ctx->EvalMap.Map2Color4.Points );
+	    FREE( ctx->EvalMap.Map2Color4.Points );
 	 }
 	 ctx->EvalMap.Map2Color4.Retain = retain;
 	 ctx->EvalMap.Map2Color4.Points = (GLfloat *) points;
@@ -1096,7 +1097,7 @@ void gl_Map2f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map2Normal.dv = 1.0 / (v2 - v1);
 	 if (ctx->EvalMap.Map2Normal.Points
              && !ctx->EvalMap.Map2Normal.Retain) {
-	    free( ctx->EvalMap.Map2Normal.Points );
+	    FREE( ctx->EvalMap.Map2Normal.Points );
 	 }
 	 ctx->EvalMap.Map2Normal.Retain = retain;
 	 ctx->EvalMap.Map2Normal.Points = (GLfloat *) points;
@@ -1112,7 +1113,7 @@ void gl_Map2f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map2Texture1.dv = 1.0 / (v2 - v1);
 	 if (ctx->EvalMap.Map2Texture1.Points
              && !ctx->EvalMap.Map2Texture1.Retain) {
-	    free( ctx->EvalMap.Map2Texture1.Points );
+	    FREE( ctx->EvalMap.Map2Texture1.Points );
 	 }
 	 ctx->EvalMap.Map2Texture1.Retain = retain;
 	 ctx->EvalMap.Map2Texture1.Points = (GLfloat *) points;
@@ -1128,7 +1129,7 @@ void gl_Map2f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map2Texture2.dv = 1.0 / (v2 - v1);
 	 if (ctx->EvalMap.Map2Texture2.Points
              && !ctx->EvalMap.Map2Texture2.Retain) {
-	    free( ctx->EvalMap.Map2Texture2.Points );
+	    FREE( ctx->EvalMap.Map2Texture2.Points );
 	 }
 	 ctx->EvalMap.Map2Texture2.Retain = retain;
 	 ctx->EvalMap.Map2Texture2.Points = (GLfloat *) points;
@@ -1144,7 +1145,7 @@ void gl_Map2f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map2Texture3.dv = 1.0 / (v2 - v1);
 	 if (ctx->EvalMap.Map2Texture3.Points
              && !ctx->EvalMap.Map2Texture3.Retain) {
-	    free( ctx->EvalMap.Map2Texture3.Points );
+	    FREE( ctx->EvalMap.Map2Texture3.Points );
 	 }
 	 ctx->EvalMap.Map2Texture3.Retain = retain;
 	 ctx->EvalMap.Map2Texture3.Points = (GLfloat *) points;
@@ -1160,7 +1161,7 @@ void gl_Map2f( GLcontext* ctx, GLenum target,
 	 ctx->EvalMap.Map2Texture4.dv = 1.0 / (v2 - v1);
 	 if (ctx->EvalMap.Map2Texture4.Points
              && !ctx->EvalMap.Map2Texture4.Retain) {
-	    free( ctx->EvalMap.Map2Texture4.Points );
+	    FREE( ctx->EvalMap.Map2Texture4.Points );
 	 }
 	 ctx->EvalMap.Map2Texture4.Retain = retain;
 	 ctx->EvalMap.Map2Texture4.Points = (GLfloat *) points;
@@ -1988,13 +1989,14 @@ void gl_GetMapiv( GLcontext* ctx, GLenum target, GLenum query, GLint *v )
 
 
 
-void eval_points1( GLfloat outcoord[][4], 
-		   GLfloat coord[][4],
-		   const GLuint *flags,
-		   GLfloat du, GLfloat u1 )
+static void eval_points1( GLfloat outcoord[][4], 
+			  GLfloat coord[][4],
+			  const GLuint *flags,
+			  GLuint start,
+			  GLfloat du, GLfloat u1 )
 {
    GLuint i;
-   for (i = VB_START ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = start ; !(flags[i] & VERT_END_VB) ; i++)
       if (flags[i] & VERT_EVAL_P1) 
 	 outcoord[i][0] = coord[i][0] * du + u1;
       else if (flags[i] & VERT_EVAL_ANY) {
@@ -2003,14 +2005,15 @@ void eval_points1( GLfloat outcoord[][4],
       }
 }
 
-void eval_points2( GLfloat outcoord[][4], 
-		   GLfloat coord[][4],
-		   const GLuint *flags,
-		   GLfloat du, GLfloat u1,
-		   GLfloat dv, GLfloat v1 )
+static void eval_points2( GLfloat outcoord[][4], 
+			  GLfloat coord[][4],
+			  const GLuint *flags,
+			  GLuint start,
+			  GLfloat du, GLfloat u1,
+			  GLfloat dv, GLfloat v1 )
 {
    GLuint i;
-   for (i = VB_START ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = start ; !(flags[i] & VERT_END_VB) ; i++)
       if (flags[i] & VERT_EVAL_P2) {
 	 outcoord[i][0] = coord[i][0] * du + u1;
 	 outcoord[i][1] = coord[i][1] * dv + v1;
@@ -2030,18 +2033,19 @@ static const GLubyte dirty_flags[5] = {
 };
 
 
-GLvector4f *eval1_4f( GLvector4f *dest, 
-		      GLfloat coord[][4], 
-		      const GLuint *flags, 
-		      GLuint dimension,
-		      struct gl_1d_map *map )
+static GLvector4f *eval1_4f( GLvector4f *dest, 
+			     GLfloat coord[][4], 
+			     const GLuint *flags,
+			     GLuint start,
+			     GLuint dimension,
+			     struct gl_1d_map *map )
 {
    const GLfloat u1 = map->u1;
    const GLfloat du = map->du;
    GLfloat (*to)[4] = dest->data;
    GLuint i;
    
-   for (i = VB_START ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = start ; !(flags[i] & VERT_END_VB) ; i++)
       if (flags[i] & (VERT_EVAL_C1|VERT_EVAL_P1)) {
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 ASSIGN_4V(to[i], 0,0,0,1);
@@ -2049,23 +2053,25 @@ GLvector4f *eval1_4f( GLvector4f *dest,
       }
 
    dest->count = i;
+   dest->start = VEC_ELT(dest, GLfloat, start);
    dest->size = MAX2(dest->size, dimension);
    dest->flags |= dirty_flags[dimension];
    return dest;
 }
 
 
-GLvector1ui *eval1_1ui( GLvector1ui *dest, 
-		       GLfloat coord[][4], 
-		       const GLuint *flags, 
-		       struct gl_1d_map *map )
+static GLvector1ui *eval1_1ui( GLvector1ui *dest, 
+			       GLfloat coord[][4], 
+			       const GLuint *flags,
+			       GLuint start,
+			       struct gl_1d_map *map )
 {
    const GLfloat u1 = map->u1;
    const GLfloat du = map->du;
    GLuint *to = dest->data;
    GLuint i;
 
-   for (i = VB_START ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = start ; !(flags[i] & VERT_END_VB) ; i++)
       if (flags[i] & (VERT_EVAL_C1|VERT_EVAL_P1)) {
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 GLfloat tmp;
@@ -2073,42 +2079,46 @@ GLvector1ui *eval1_1ui( GLvector1ui *dest,
 	 to[i] = (GLuint) (GLint) tmp;
       }
 
+   dest->start = VEC_ELT(dest, GLuint, start);
    dest->count = i;
    return dest;
 }
 
-GLvector3f *eval1_norm( GLvector3f *dest, 
-			GLfloat coord[][4],
-			GLuint *flags, /* not const */
-			struct gl_1d_map *map )
+static GLvector3f *eval1_norm( GLvector3f *dest, 
+			       GLfloat coord[][4],
+			       GLuint *flags, /* not const */
+			       GLuint start,
+			       struct gl_1d_map *map )
 {
    const GLfloat u1 = map->u1;
    const GLfloat du = map->du;
    GLfloat (*to)[3] = dest->data;
    GLuint i;
 
-   for (i = VB_START ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = start ; !(flags[i] & VERT_END_VB) ; i++)
       if (flags[i] & (VERT_EVAL_C1|VERT_EVAL_P1)) {
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 horner_bezier_curve(map->Points, to[i], u, 3, map->Order);
 	 flags[i+1] |= VERT_NORM; /* reset */
       }
 
+   dest->start = VEC_ELT(dest, GLfloat, start);
    dest->count = i;
    return dest;
 }
 
-GLvector4ub *eval1_color( GLvector4ub *dest, 
-			  GLfloat coord[][4],
-			  GLuint *flags, /* not const */
-			  struct gl_1d_map *map )
+static GLvector4ub *eval1_color( GLvector4ub *dest, 
+				 GLfloat coord[][4],
+				 GLuint *flags, /* not const */
+				 GLuint start,
+				 struct gl_1d_map *map )
 {   
    const GLfloat u1 = map->u1;
    const GLfloat du = map->du;
    GLubyte (*to)[4] = dest->data;
    GLuint i;
 
-   for (i = VB_START ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = start ; !(flags[i] & VERT_END_VB) ; i++)
       if (flags[i] & (VERT_EVAL_C1|VERT_EVAL_P1)) {
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 GLfloat fcolor[4];
@@ -2117,6 +2127,7 @@ GLvector4ub *eval1_color( GLvector4ub *dest,
 	 flags[i+1] |= VERT_RGBA; /* reset */
       }
 
+   dest->start = VEC_ELT(dest, GLubyte, start);
    dest->count = i;
    return dest;
 }
@@ -2124,12 +2135,13 @@ GLvector4ub *eval1_color( GLvector4ub *dest,
 
 
 
-GLvector4f *eval2_obj_norm( GLvector4f *obj_ptr, 
-			    GLvector3f *norm_ptr,
-			    GLfloat coord[][4], 
-			    GLuint *flags, 
-			    GLuint dimension,
-			    struct gl_2d_map *map )
+static GLvector4f *eval2_obj_norm( GLvector4f *obj_ptr, 
+				   GLvector3f *norm_ptr,
+				   GLfloat coord[][4], 
+				   GLuint *flags, 
+				   GLuint start,
+				   GLuint dimension,
+				   struct gl_2d_map *map )
 {
    const GLfloat u1 = map->u1;
    const GLfloat du = map->du;
@@ -2139,7 +2151,7 @@ GLvector4f *eval2_obj_norm( GLvector4f *obj_ptr,
    GLfloat (*normal)[3] = norm_ptr->data;
    GLuint i;
    
-   for (i = VB_START ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = start ; !(flags[i] & VERT_END_VB) ; i++)
       if (flags[i] & (VERT_EVAL_C2|VERT_EVAL_P2)) {
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 GLfloat v = (coord[i][1] - v1) * dv;
@@ -2154,6 +2166,7 @@ GLvector4f *eval2_obj_norm( GLvector4f *obj_ptr,
 	 flags[i+1] |= VERT_NORM;
       }
  
+   obj_ptr->start = VEC_ELT(obj_ptr, GLfloat, start);
    obj_ptr->count = i;
    obj_ptr->size = MAX2(obj_ptr->size, dimension);
    obj_ptr->flags |= dirty_flags[dimension];
@@ -2161,11 +2174,12 @@ GLvector4f *eval2_obj_norm( GLvector4f *obj_ptr,
 }
 
 
-GLvector4f *eval2_4f( GLvector4f *dest, 
-		      GLfloat coord[][4], 
-		      const GLuint *flags, 
-		      GLuint dimension,
-		      struct gl_2d_map *map )
+static GLvector4f *eval2_4f( GLvector4f *dest, 
+			     GLfloat coord[][4], 
+			     const GLuint *flags,
+			     GLuint start,
+			     GLuint dimension,
+			     struct gl_2d_map *map )
 {
    const GLfloat u1 = map->u1;
    const GLfloat du = map->du;
@@ -2174,7 +2188,7 @@ GLvector4f *eval2_4f( GLvector4f *dest,
    GLfloat (*to)[4] = dest->data;
    GLuint i;
 
-   for (i = VB_START ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = start ; !(flags[i] & VERT_END_VB) ; i++)
       if (flags[i] & (VERT_EVAL_C2|VERT_EVAL_P2)) {
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 GLfloat v = (coord[i][1] - v1) * dv;
@@ -2182,6 +2196,7 @@ GLvector4f *eval2_4f( GLvector4f *dest,
 			    map->Uorder, map->Vorder);
       }
 
+   dest->start = VEC_ELT(dest, GLfloat, start);
    dest->count = i;
    dest->size = MAX2(dest->size, dimension);
    dest->flags |= dirty_flags[dimension];
@@ -2189,10 +2204,11 @@ GLvector4f *eval2_4f( GLvector4f *dest,
 }
 
 
-GLvector3f *eval2_norm( GLvector3f *dest, 
-			GLfloat coord[][4], 
-			GLuint *flags, 
-			struct gl_2d_map *map )
+static GLvector3f *eval2_norm( GLvector3f *dest, 
+			       GLfloat coord[][4], 
+			       GLuint *flags, 
+			       GLuint start,
+			       struct gl_2d_map *map )
 {
    const GLfloat u1 = map->u1;
    const GLfloat du = map->du;
@@ -2201,7 +2217,7 @@ GLvector3f *eval2_norm( GLvector3f *dest,
    GLfloat (*to)[3] = dest->data;
    GLuint i;
 
-   for (i = VB_START ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = start ; !(flags[i] & VERT_END_VB) ; i++)
       if (flags[i] & (VERT_EVAL_C2|VERT_EVAL_P2)) {
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 GLfloat v = (coord[i][1] - v1) * dv;
@@ -2210,15 +2226,17 @@ GLvector3f *eval2_norm( GLvector3f *dest,
  	 flags[i+1] |= VERT_NORM; /* reset */
      }
 
+   dest->start = VEC_ELT(dest, GLfloat, start);
    dest->count = i;
    return dest;
 }
 
 
-GLvector1ui *eval2_1ui( GLvector1ui *dest, 
-		       GLfloat coord[][4], 
-		       const GLuint *flags, 
-		       struct gl_2d_map *map )
+static GLvector1ui *eval2_1ui( GLvector1ui *dest, 
+			       GLfloat coord[][4], 
+			       const GLuint *flags,
+			       GLuint start,
+			       struct gl_2d_map *map )
 {
    const GLfloat u1 = map->u1;
    const GLfloat du = map->du;
@@ -2227,7 +2245,7 @@ GLvector1ui *eval2_1ui( GLvector1ui *dest,
    GLuint *to = dest->data;
    GLuint i;
 
-   for (i = VB_START ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = start ; !(flags[i] & VERT_END_VB) ; i++)
       if (flags[i] & (VERT_EVAL_C2|VERT_EVAL_P2)) {
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 GLfloat v = (coord[i][1] - v1) * dv;
@@ -2238,16 +2256,18 @@ GLvector1ui *eval2_1ui( GLvector1ui *dest,
 	 to[i] = (GLuint) (GLint) tmp;
       }
 
+   dest->start = VEC_ELT(dest, GLuint, start);
    dest->count = i;
    return dest;
 }
 
 
 
-GLvector4ub *eval2_color( GLvector4ub *dest,
-			  GLfloat coord[][4], 
-			  GLuint *flags,
-			  struct gl_2d_map *map )
+static GLvector4ub *eval2_color( GLvector4ub *dest,
+				 GLfloat coord[][4], 
+				 GLuint *flags,
+				 GLuint start,
+				 struct gl_2d_map *map )
 {
    const GLfloat u1 = map->u1;
    const GLfloat du = map->du;
@@ -2256,7 +2276,7 @@ GLvector4ub *eval2_color( GLvector4ub *dest,
    GLubyte (*to)[4] = dest->data;
    GLuint i;
 
-   for (i = VB_START ; !(flags[i] & VERT_END_VB) ; i++)
+   for (i = start ; !(flags[i] & VERT_END_VB) ; i++)
       if (flags[i] & (VERT_EVAL_C2|VERT_EVAL_P2)) {
 	 GLfloat u = (coord[i][0] - u1) * du;
 	 GLfloat v = (coord[i][1] - v1) * dv;
@@ -2267,64 +2287,75 @@ GLvector4ub *eval2_color( GLvector4ub *dest,
 	 flags[i+1] |= VERT_RGBA; /* reset */
       }
 
+   dest->start = VEC_ELT(dest, GLubyte, start);
    dest->count = i;
    return dest;
 }
 
 
-GLvector4f *copy_4f( GLvector4f *out, CONST GLvector4f *in, 
-		     const GLuint *flags)
+static GLvector4f *copy_4f( GLvector4f *out, CONST GLvector4f *in, 
+			    const GLuint *flags,
+			    GLuint start )
 {
    GLfloat (*to)[4] = out->data;
    GLfloat (*from)[4] = in->data;
    GLuint i;
    
-   for ( i = VB_START ; !(flags[i] & VERT_END_VB) ; i++) 
+   for ( i = start ; !(flags[i] & VERT_END_VB) ; i++) 
       if (!(flags[i] & VERT_EVAL_ANY)) 
 	 COPY_4FV( to[i], from[i] );
    
+   out->start = VEC_ELT(out, GLfloat, start);
    return out;
 }
 
-GLvector3f *copy_3f( GLvector3f *out, CONST GLvector3f *in, 
-		     const GLuint *flags)
+static GLvector3f *copy_3f( GLvector3f *out, CONST GLvector3f *in, 
+			    const GLuint *flags,
+			    GLuint start )
 {
    GLfloat (*to)[3] = out->data;
    GLfloat (*from)[3] = in->data;
    GLuint i;
    
-   for ( i = VB_START ; !(flags[i] & VERT_END_VB) ; i++) 
+   for ( i = start ; !(flags[i] & VERT_END_VB) ; i++) 
       if (!(flags[i] & VERT_EVAL_ANY)) 
 	 COPY_3V( to[i], from[i] );
    
+   out->start = VEC_ELT(out, GLfloat, start);
    return out;
 }
 
-GLvector4ub *copy_4ub( GLvector4ub *out, CONST GLvector4ub *in, 
-		       const GLuint *flags )
+static GLvector4ub *copy_4ub( GLvector4ub *out, 
+			      CONST GLvector4ub *in, 
+			      const GLuint *flags,
+			      GLuint start )
 {
    GLubyte (*to)[4] = out->data;
    GLubyte (*from)[4] = in->data;
    GLuint i;
    
-   for ( i = VB_START ; !(flags[i] & VERT_END_VB) ; i++) 
+   for ( i = start ; !(flags[i] & VERT_END_VB) ; i++) 
       if (!(flags[i] & VERT_EVAL_ANY)) 
 	 COPY_4UBV( to[i], from[i] );
 
+   out->start = VEC_ELT(out, GLubyte, start);
    return out;
 }
 
-GLvector1ui *copy_1ui( GLvector1ui *out, CONST GLvector1ui *in, 
-		       const GLuint *flags )
+static GLvector1ui *copy_1ui( GLvector1ui *out, 
+			      CONST GLvector1ui *in, 
+			      const GLuint *flags,
+			      GLuint start )
 {
    GLuint *to = out->data;
    CONST GLuint *from = in->data;
    GLuint i;
    
-   for ( i = VB_START ; !(flags[i] & VERT_END_VB) ; i++) 
+   for ( i = start ; !(flags[i] & VERT_END_VB) ; i++) 
       if (!(flags[i] & VERT_EVAL_ANY)) 
 	 to[i] = from[i];
 
+   out->start = VEC_ELT(out, GLuint, start);
    return out;
 }
 
@@ -2353,7 +2384,7 @@ void gl_eval_vb( struct vertex_buffer *VB )
 
    GLuint any_eval1 = VB->OrFlag & (VERT_EVAL_C1|VERT_EVAL_P1);
    GLuint any_eval2 = VB->OrFlag & (VERT_EVAL_C2|VERT_EVAL_P2);
-   GLuint all_eval = VB->AndFlag & VERT_EVAL_ANY;
+   GLuint all_eval = IM->AndFlag & VERT_EVAL_ANY;
 
    /* Handle the degenerate cases.
     */
@@ -2378,7 +2409,7 @@ void gl_eval_vb( struct vertex_buffer *VB )
     * work on useful changes.
     */
    if (VB->PurgeFlags) {
-      if (!any_eval1 && !any_eval2 && all_eval) VB->Count = VB_START;
+      if (!any_eval1 && !any_eval2 && all_eval) VB->Count = VB->Start;
       gl_purge_vertices( VB );
       if (!any_eval1 && !any_eval2) return;
    } else
@@ -2388,7 +2419,7 @@ void gl_eval_vb( struct vertex_buffer *VB )
     */
    if (any_eval1 && (VB->OrFlag & VERT_EVAL_P1)) 
    {
-      eval_points1( IM->Obj, coord, flags, 
+      eval_points1( IM->Obj, coord, flags, IM->Start,
 		    ctx->Eval.MapGrid1du,
 		    ctx->Eval.MapGrid1u1);
 
@@ -2397,7 +2428,7 @@ void gl_eval_vb( struct vertex_buffer *VB )
 
    if (any_eval2 && (VB->OrFlag & VERT_EVAL_P2)) 
    {
-      eval_points2( IM->Obj, coord, flags, 
+      eval_points2( IM->Obj, coord, flags, IM->Start,
 		    ctx->Eval.MapGrid2du,
 		    ctx->Eval.MapGrid2u1,
 		    ctx->Eval.MapGrid2dv,
@@ -2414,17 +2445,17 @@ void gl_eval_vb( struct vertex_buffer *VB )
       GLvector1ui  *out_index = &IM->v.Index;
 
       if (ctx->Eval.Map1Index && any_eval1) 
-	 VB->IndexPtr = eval1_1ui( out_index, coord, flags, 
+	 VB->IndexPtr = eval1_1ui( out_index, coord, flags, IM->Start,
 				   &ctx->EvalMap.Map1Index );
       
       if (ctx->Eval.Map2Index && any_eval2)
-	 VB->IndexPtr = eval2_1ui( out_index, coord, flags, 
+	 VB->IndexPtr = eval2_1ui( out_index, coord, flags, IM->Start,
 				   &ctx->EvalMap.Map2Index );
 	 
       if (VB->IndexPtr != in_index) {
 	 new_flags |= VERT_INDEX;
 	 if (!all_eval)
-	    VB->IndexPtr = copy_1ui( out_index, in_index, flags );
+	    VB->IndexPtr = copy_1ui( out_index, in_index, flags, IM->Start );
       }
    }
 
@@ -2434,17 +2465,17 @@ void gl_eval_vb( struct vertex_buffer *VB )
       GLvector4ub  *out_color = &IM->v.Color;
 
       if (ctx->Eval.Map1Color4 && any_eval1) 
-	 VB->ColorPtr = eval1_color( out_color, coord, flags, 
+	 VB->ColorPtr = eval1_color( out_color, coord, flags, IM->Start,
 				   &ctx->EvalMap.Map1Color4 );
       
       if (ctx->Eval.Map2Color4 && any_eval2)
-	 VB->ColorPtr = eval2_color( out_color, coord, flags, 
+	 VB->ColorPtr = eval2_color( out_color, coord, flags, IM->Start,
 				     &ctx->EvalMap.Map2Color4 );
 	 
       if (VB->ColorPtr != in_color) {
 	 new_flags |= VERT_RGBA;
 	 if (!all_eval)
-	    VB->ColorPtr = copy_4ub( out_color, in_color, flags );
+	    VB->ColorPtr = copy_4ub( out_color, in_color, flags, IM->Start );
       }
 
       VB->Color[0] = VB->Color[1] = VB->ColorPtr;
@@ -2457,17 +2488,17 @@ void gl_eval_vb( struct vertex_buffer *VB )
       GLvector3f  *out_normal = &IM->v.Normal;
 
       if (ctx->Eval.Map1Normal && any_eval1) 
-	 VB->NormalPtr = eval1_norm( out_normal, coord, flags, 
+	 VB->NormalPtr = eval1_norm( out_normal, coord, flags, IM->Start,
 				     &ctx->EvalMap.Map1Normal );
       
       if (ctx->Eval.Map2Normal && any_eval2)
-	 VB->NormalPtr = eval2_norm( out_normal, coord, flags, 
+	 VB->NormalPtr = eval2_norm( out_normal, coord, flags, IM->Start,
 				     &ctx->EvalMap.Map2Normal );
 	 
       if (VB->NormalPtr != in_normal) {
 	 new_flags |= VERT_NORM;
 	 if (!all_eval)
-	    VB->NormalPtr = copy_3f( out_normal, in_normal, flags );
+	    VB->NormalPtr = copy_3f( out_normal, in_normal, flags, IM->Start );
       }
    }
 
@@ -2480,30 +2511,38 @@ void gl_eval_vb( struct vertex_buffer *VB )
 
       if (any_eval1) {
 	 if (ctx->Eval.Map1TextureCoord4) 
-	    tc = eval1_4f( out, coord, flags, 4, &ctx->EvalMap.Map1Texture4);
+	    tc = eval1_4f( out, coord, flags, IM->Start, 
+			   4, &ctx->EvalMap.Map1Texture4);
 	 else if (ctx->Eval.Map1TextureCoord3) 
-	    tc = eval1_4f( out, coord, flags, 3, &ctx->EvalMap.Map1Texture3);
+	    tc = eval1_4f( out, coord, flags, IM->Start, 3,
+			   &ctx->EvalMap.Map1Texture3);
 	 else if (ctx->Eval.Map1TextureCoord2) 
-	    tc = eval1_4f( out, coord, flags, 2, &ctx->EvalMap.Map1Texture2);
+	    tc = eval1_4f( out, coord, flags, IM->Start, 2,
+			   &ctx->EvalMap.Map1Texture2);
 	 else if (ctx->Eval.Map1TextureCoord1) 
-	    tc = eval1_4f( out, coord, flags, 1, &ctx->EvalMap.Map1Texture1);
+	    tc = eval1_4f( out, coord, flags, IM->Start, 1,
+			   &ctx->EvalMap.Map1Texture1);
       }
 
       if (any_eval2) {
 	 if (ctx->Eval.Map2TextureCoord4) 
-	    tc = eval2_4f( out, coord, flags, 4, &ctx->EvalMap.Map2Texture4);
+	    tc = eval2_4f( out, coord, flags, IM->Start,
+			   4, &ctx->EvalMap.Map2Texture4);
 	 else if (ctx->Eval.Map2TextureCoord3) 
-	    tc = eval2_4f( out, coord, flags, 3, &ctx->EvalMap.Map2Texture3);
+	    tc = eval2_4f( out, coord, flags, IM->Start,
+			   3, &ctx->EvalMap.Map2Texture3);
 	 else if (ctx->Eval.Map2TextureCoord2) 
-	    tc = eval2_4f( out, coord, flags, 2, &ctx->EvalMap.Map2Texture2);
+	    tc = eval2_4f( out, coord, flags, IM->Start,
+			   2, &ctx->EvalMap.Map2Texture2);
 	 else if (ctx->Eval.Map2TextureCoord1) 
-	    tc = eval2_4f( out, coord, flags, 1, &ctx->EvalMap.Map2Texture1);
+	    tc = eval2_4f( out, coord, flags, IM->Start,
+			   1, &ctx->EvalMap.Map2Texture1);
       }
 
       if (tc != in) {
 	 new_flags |= VERT_TEX_ANY(0); /* fix for sizes.. */
 	 if (!all_eval)
-	    tc = copy_4f( out, in, flags );
+	    tc = copy_4f( out, in, flags, IM->Start );
       }
 
       VB->TexCoordPtr[0] = tc;
@@ -2517,34 +2556,36 @@ void gl_eval_vb( struct vertex_buffer *VB )
    
       if (any_eval1) {
 	 if (ctx->Eval.Map1Vertex4) 
-	    obj = eval1_4f( out, coord, flags, 4, &ctx->EvalMap.Map1Vertex4);
+	    obj = eval1_4f( out, coord, flags, IM->Start,
+			    4, &ctx->EvalMap.Map1Vertex4);
 	 else 
-	    obj = eval1_4f( out, coord, flags, 3, &ctx->EvalMap.Map1Vertex3);
+	    obj = eval1_4f( out, coord, flags, IM->Start,
+			    3, &ctx->EvalMap.Map1Vertex3);
       }
 
       if (any_eval2) {
 	 if (ctx->Eval.Map2Vertex4) 
 	 {
 	    if (ctx->Eval.AutoNormal && (req & VERT_NORM)) 
-	       obj = eval2_obj_norm( out, VB->NormalPtr, coord, flags, 4,
-				    &ctx->EvalMap.Map2Vertex4 );
+	       obj = eval2_obj_norm( out, VB->NormalPtr, coord, flags, IM->Start,
+				     4, &ctx->EvalMap.Map2Vertex4 );
 	    else
-	       obj = eval2_4f( out, coord, flags, 4, 
-			       &ctx->EvalMap.Map2Vertex4);
+	       obj = eval2_4f( out, coord, flags, IM->Start,
+			       4, &ctx->EvalMap.Map2Vertex4);
 	 }
 	 else if (ctx->Eval.Map2Vertex3) 
 	 {
 	    if (ctx->Eval.AutoNormal && (req & VERT_NORM)) 
-	       obj = eval2_obj_norm( out, VB->NormalPtr, coord, flags, 3,
-				    &ctx->EvalMap.Map2Vertex3 );
+	       obj = eval2_obj_norm( out, VB->NormalPtr, coord, flags, IM->Start,
+				     3, &ctx->EvalMap.Map2Vertex3 );
 	    else
-	       obj = eval2_4f( out, coord, flags, 3, 
-			       &ctx->EvalMap.Map2Vertex3 );
+	       obj = eval2_4f( out, coord, flags, IM->Start,
+			       3, &ctx->EvalMap.Map2Vertex3 );
 	 }
       }
 
       if (obj != in && !all_eval)
-	 obj = copy_4f( out, in, flags );
+	 obj = copy_4f( out, in, flags, IM->Start );
 
       VB->ObjPtr = obj;
    }
@@ -2556,14 +2597,13 @@ void gl_eval_vb( struct vertex_buffer *VB )
       GLuint count = VB->Count;
 
       if (!flags) {
-	 VB->EvaluatedFlags = (GLuint *)malloc(VB->Size * sizeof(GLuint));
+	 VB->EvaluatedFlags = (GLuint *) MALLOC(VB->Size * sizeof(GLuint));
 	 flags = VB->Flag = VB->EvaluatedFlags;
       }
 
       if (all_eval) {
 	 for (i = 0 ; i < count ; i++) 
 	    flags[i] = oldflags[i] | new_flags;
-	 VB->AndFlag |= new_flags; 
       } else {
 	 GLuint andflag = ~0;
 	 for (i = 0 ; i < count ; i++) {
@@ -2571,7 +2611,6 @@ void gl_eval_vb( struct vertex_buffer *VB )
 	       flags[i] = oldflags[i] | new_flags;
 	    andflag &= flags[i];
 	 }
-	 VB->AndFlag = andflag;
       }
    }
 }
@@ -2722,4 +2761,3 @@ void gl_EvalMesh2( GLcontext* ctx,
       return;
    }
 }
-

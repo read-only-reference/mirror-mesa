@@ -28,14 +28,14 @@ extern "C" {
 #endif
 
 #include <windows.h>
-#include <GL/gl.h>
+#include "GL/gl.h"
 
 #ifdef __cplusplus
            }
 #endif
 
 #include <stdio.h>
-#include <GL/fxmesa.h>
+#include "GL/fxmesa.h"
 #include "fxdrv.h"
 
 #define MAX_MESA_ATTRS  20
@@ -351,7 +351,7 @@ HGLRC GLAPIENTRY wglCreateContext(HDC hdc)
 
       hDC = GetDC(dibWnd);
 
-      dibBMI = (BITMAPINFO*) malloc( sizeof(BITMAPINFO) + (256*sizeof(RGBQUAD)));
+      dibBMI = (BITMAPINFO*) MALLOC( sizeof(BITMAPINFO) + (256*sizeof(RGBQUAD)));
 
       memset(dibBMI,0,sizeof(BITMAPINFO) + (256*sizeof(RGBQUAD)));
 
@@ -429,7 +429,7 @@ BOOL GLAPIENTRY wglDeleteContext(HGLRC hglrc)
   if(ctx && hglrc == (HGLRC)1) {
     if (gdiWindowHackEna) {
       DeleteObject(dibHBM);
-      free(dibBMI);
+      FREE(dibBMI);
 
       dibSurfacePtr = NULL;
       dibBMI = NULL;
@@ -542,7 +542,7 @@ BOOL GLAPIENTRY wglUseFontBitmaps(HDC fontDevice, DWORD firstChar, DWORD numChar
   SetTextColor(bitDevice, tempColor);
 
   // Place chars based on base line
-  VERIFY(SetTextAlign(bitDevice, TA_BASELINE) >= 0);
+  VERIFY(SetTextAlign(bitDevice, TA_BASELINE) >= 0 ? 1 : 0);
 
   for(i = 0; i < numChars; i++) {
     SIZE size;
@@ -584,7 +584,7 @@ BOOL GLAPIENTRY wglUseFontBitmaps(HDC fontDevice, DWORD firstChar, DWORD numChar
 
     // Convert the display dependant representation to a 1 bit deep DIB
     numBytes = (bmapWidth * bmapHeight) / 8;
-    bmap = malloc(numBytes);
+    bmap = MALLOC(numBytes);
     dibInfo->bmiHeader.biWidth = bmapWidth;
     dibInfo->bmiHeader.biHeight = bmapHeight;
     res = GetDIBits(bitDevice, bitObject, 0, bmapHeight, bmap,
@@ -604,13 +604,13 @@ BOOL GLAPIENTRY wglUseFontBitmaps(HDC fontDevice, DWORD firstChar, DWORD numChar
     DeleteObject(bitObject);
 
     // Deallocate the bitmap data
-    free(bmap);
+    FREE(bmap);
   }
 
   // Destroy the DC
   VERIFY(DeleteDC(bitDevice));
 
-  free(dibInfo);
+  FREE(dibInfo);
 
   return TRUE;
 #undef VERIFY
@@ -799,6 +799,7 @@ BOOL GLAPIENTRY wglSwapBuffers(HDC hdc)
      * display. Obviously, it's performance hit will be higher on larger displays and
      * less on smaller displays. To support the window-hack display this is probably fine.
      */
+#if  FXMESA_USE_ARGB
     {
       unsigned long *pixel = dibSurfacePtr;
       unsigned long count = (width * height) / 2;
@@ -811,7 +812,8 @@ BOOL GLAPIENTRY wglSwapBuffers(HDC hdc)
             ;
         }
     }
-
+#endif
+    
     BitBlt(hdcScreen, 0, 0,
            width, height,
            hdcDIBSection,

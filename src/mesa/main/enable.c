@@ -1,4 +1,4 @@
-/* $Id: enable.c,v 1.5 1999/09/18 20:41:23 keithw Exp $ */
+/* $Id: enable.c,v 1.7 1999/10/20 22:16:45 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -25,11 +25,17 @@
  */
 
 
+/* $XFree86: xc/lib/GL/mesa/src/enable.c,v 1.3 1999/04/04 00:20:23 dawes Exp $ */
+
 #ifdef PC_HEADER
 #include "all.h"
 #else
-#include <string.h>
+#ifndef XFree86Server
 #include <stdio.h>
+#include <string.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "context.h"
 #include "enable.h"
 #include "light.h"
@@ -186,7 +192,7 @@ void gl_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
          if (ctx->Light.Enabled!=state) {
             ctx->Light.Enabled = state;
 	    ctx->Enabled &= ~ENABLE_LIGHT;
-	    if (state && !is_empty_list(&ctx->Light.EnabledList))
+            if (state)
 	       ctx->Enabled |= ENABLE_LIGHT;
             ctx->NewState |= NEW_LIGHTING;
          }

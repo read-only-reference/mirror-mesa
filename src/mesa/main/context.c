@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.9 1999/09/19 23:43:02 keithw Exp $ */
+/* $Id: context.c,v 1.17 1999/10/30 08:22:45 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -25,6 +25,8 @@
  */
 
 
+/* $XFree86: xc/lib/GL/mesa/src/context.c,v 1.4 1999/04/04 00:20:21 dawes Exp $ */
+
 /*
  * If multi-threading is enabled (-DTHREADS) then each thread has it's
  * own rendering context.  A thread obtains the pointer to its GLcontext
@@ -38,11 +40,15 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#ifndef XFree86Server
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "accum.h"
 #include "alphabuf.h"
 #include "api.h"
@@ -91,6 +97,40 @@
 #endif
 #endif
 
+
+/*
+ * Memory allocation functions.  Called via the MALLOC, CALLOC and
+ * FREE macros when DEBUG symbol is defined.
+ * You might want to set breakpoints on these functions or plug in
+ * other memory allocation functions.  The Mesa sources should only
+ * use the MALLOC and FREE macros (which could also be overriden).
+ *
+ * XXX these functions should probably go into a new glmemory.c file.
+ */
+
+/*
+ * Allocate memory (uninitialized)
+ */
+void *gl_malloc(size_t bytes)
+{
+   return malloc(bytes);
+}
+
+/*
+ * Allocate memory and initialize to zero.
+ */
+void *gl_calloc(size_t bytes)
+{
+   return calloc(1, bytes);
+}
+
+/*
+ * Free memory
+ */
+void gl_free(void *ptr)
+{
+   free(ptr);
+}
 
 
 /**********************************************************************/
@@ -321,11 +361,11 @@ static void one_time_init( void )
  */
 static struct gl_shared_state *alloc_shared_state( void )
 {
-   GLuint i;
+   GLuint d;
    struct gl_shared_state *ss;
    GLboolean outOfMemory;
 
-   ss = (struct gl_shared_state*) calloc( 1, sizeof(struct gl_shared_state) );
+   ss = CALLOC_STRUCT(gl_shared_state);
    if (!ss)
       return NULL;
 
@@ -335,16 +375,13 @@ static struct gl_shared_state *alloc_shared_state( void )
 
    /* Default Texture objects */
    outOfMemory = GL_FALSE;
-   for (i=0;i<MAX_TEXTURE_UNITS;i++) {
-      GLuint d;
-      for (d = 1 ; d <= 3 ; d++) {
-	 ss->DefaultD[d][i] = gl_alloc_texture_object(ss, 0, d);
-	 if (!ss->DefaultD[d][i]) {
-	    outOfMemory = GL_TRUE;
-	    break;
-	 }
-	 ss->DefaultD[d][i]->RefCount++; /* don't free if not in use */
+   for (d = 1 ; d <= 3 ; d++) {
+      ss->DefaultD[d] = gl_alloc_texture_object(ss, 0, d);
+      if (!ss->DefaultD[d]) {
+         outOfMemory = GL_TRUE;
+         break;
       }
+      ss->DefaultD[d]->RefCount++; /* don't free if not in use */
    }
 
    if (!ss->DisplayList || !ss->TexObjects || outOfMemory) {
@@ -353,15 +390,13 @@ static struct gl_shared_state *alloc_shared_state( void )
          DeleteHashTable(ss->DisplayList);
       if (ss->TexObjects)
          DeleteHashTable(ss->TexObjects);
-      for (i=0;i<MAX_TEXTURE_UNITS;i++) {
-         if (ss->DefaultD[1][i])
-            gl_free_texture_object(ss, ss->DefaultD[1][i]);
-         if (ss->DefaultD[2][i])
-            gl_free_texture_object(ss, ss->DefaultD[2][i]);
-         if (ss->DefaultD[3][i])
-            gl_free_texture_object(ss, ss->DefaultD[3][i]);
-      }
-      free(ss);
+      if (ss->DefaultD[1])
+         gl_free_texture_object(ss, ss->DefaultD[1]);
+      if (ss->DefaultD[2])
+         gl_free_texture_object(ss, ss->DefaultD[2]);
+      if (ss->DefaultD[3])
+         gl_free_texture_object(ss, ss->DefaultD[3]);
+      FREE(ss);
       return NULL;
    }
    else {
@@ -397,7 +432,7 @@ static void free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
    }
    DeleteHashTable(ss->TexObjects);
 
-   free(ss);
+   FREE(ss);
 }
 
 
@@ -480,9 +515,9 @@ static void init_texture_unit( GLcontext *ctx, GLuint unit )
    ASSIGN_4V( texUnit->EyePlaneR, 0.0, 0.0, 0.0, 0.0 );
    ASSIGN_4V( texUnit->EyePlaneQ, 0.0, 0.0, 0.0, 0.0 );
 
-   texUnit->CurrentD[1] = ctx->Shared->DefaultD[1][unit];
-   texUnit->CurrentD[2] = ctx->Shared->DefaultD[2][unit];
-   texUnit->CurrentD[3] = ctx->Shared->DefaultD[3][unit];
+   texUnit->CurrentD[1] = ctx->Shared->DefaultD[1];
+   texUnit->CurrentD[2] = ctx->Shared->DefaultD[2];
+   texUnit->CurrentD[3] = ctx->Shared->DefaultD[3];
 }
 
 
@@ -540,7 +575,7 @@ static void init_1d_map( struct gl_1d_map *map, int n, const float *initial )
    map->Order = 1;
    map->u1 = 0.0;
    map->u2 = 1.0;
-   map->Points = (GLfloat *) malloc(n * sizeof(GLfloat));
+   map->Points = (GLfloat *) MALLOC(n * sizeof(GLfloat));
    if (map->Points) {
       GLint i;
       for (i=0;i<n;i++)
@@ -559,7 +594,7 @@ static void init_2d_map( struct gl_2d_map *map, int n, const float *initial )
    map->u2 = 1.0;
    map->v1 = 0.0;
    map->v2 = 1.0;
-   map->Points = (GLfloat *) malloc(n * sizeof(GLfloat));
+   map->Points = (GLfloat *) MALLOC(n * sizeof(GLfloat));
    if (map->Points) {
       GLint i;
       for (i=0;i<n;i++)
@@ -583,7 +618,6 @@ static void initialize_context( GLcontext *ctx )
       ctx->Const.MaxTextureSize = 1 << (MAX_TEXTURE_LEVELS - 1);
       ctx->Const.MaxTextureUnits = MAX_TEXTURE_UNITS;
       ctx->Const.MaxArrayLockSize = MAX_ARRAY_LOCK_SIZE;
-
 
       /* Modelview matrix */
       gl_matrix_ctr( &ctx->ModelView );
@@ -977,14 +1011,18 @@ static void initialize_context( GLcontext *ctx )
       /* Pixel transfer */
       ctx->Pack.Alignment = 4;
       ctx->Pack.RowLength = 0;
+      ctx->Pack.ImageHeight = 0;
       ctx->Pack.SkipPixels = 0;
       ctx->Pack.SkipRows = 0;
+      ctx->Pack.SkipImages = 0;
       ctx->Pack.SwapBytes = GL_FALSE;
       ctx->Pack.LsbFirst = GL_FALSE;
       ctx->Unpack.Alignment = 4;
       ctx->Unpack.RowLength = 0;
+      ctx->Unpack.ImageHeight = 0;
       ctx->Unpack.SkipPixels = 0;
       ctx->Unpack.SkipRows = 0;
+      ctx->Unpack.SkipImages = 0;
       ctx->Unpack.SwapBytes = GL_FALSE;
       ctx->Unpack.LsbFirst = GL_FALSE;
 
@@ -1092,7 +1130,7 @@ GLvisual *gl_create_visual( GLboolean rgbFlag,
       return NULL;
    }
 
-   vis = (GLvisual *) calloc( 1, sizeof(GLvisual) );
+   vis = (GLvisual *) CALLOC( sizeof(GLvisual) );
    if (!vis) {
       return NULL;
    }
@@ -1119,7 +1157,7 @@ GLvisual *gl_create_visual( GLboolean rgbFlag,
 
 void gl_destroy_visual( GLvisual *vis )
 {
-   free( vis );
+   FREE( vis );
 }
 
 
@@ -1187,8 +1225,6 @@ static GLboolean alloc_proxy_textures( GLcontext *ctx )
 
 
 
-#define MALLOC_STRUCT(T)  (struct T *) malloc( sizeof(struct T) )
-
 /*
  * Allocate and initialize a GLcontext structure.
  * Input:  visual - a GLvisual pointer
@@ -1217,7 +1253,7 @@ GLcontext *gl_create_context( GLvisual *visual,
    /* misc one-time initializations */
    one_time_init();
 
-   ctx = (GLcontext *) calloc( 1, sizeof(GLcontext) );
+   ctx = (GLcontext *) CALLOC( sizeof(GLcontext) );
    if (!ctx) {
       return NULL;
    }
@@ -1228,15 +1264,15 @@ GLcontext *gl_create_context( GLvisual *visual,
 
    ctx->VB = gl_vb_create_for_immediate( ctx );
    if (!ctx->VB) {
-      free( ctx );
+      FREE( ctx );
       return NULL;
    }
    ctx->input = ctx->VB->IM;
 
    ctx->PB = gl_alloc_pb();
    if (!ctx->PB) {
-      free( ctx->VB );
-      free( ctx );
+      FREE( ctx->VB );
+      FREE( ctx );
       return NULL;
    }
 
@@ -1248,9 +1284,9 @@ GLcontext *gl_create_context( GLvisual *visual,
       /* allocate new group of display lists */
       ctx->Shared = alloc_shared_state();
       if (!ctx->Shared) {
-         free(ctx->VB);
-         free(ctx->PB);
-         free(ctx);
+         FREE(ctx->VB);
+         FREE(ctx->PB);
+         FREE(ctx);
          return NULL;
       }
    }
@@ -1307,9 +1343,9 @@ GLcontext *gl_create_context( GLvisual *visual,
 #ifdef GL_VERSION_1_1
    if (!alloc_proxy_textures(ctx)) {
       free_shared_state(ctx, ctx->Shared);
-      free(ctx->VB);
-      free(ctx->PB);
-      free(ctx);
+      FREE(ctx->VB);
+      FREE(ctx->PB);
+      FREE(ctx);
       return NULL;
    }
 #endif
@@ -1355,7 +1391,7 @@ void gl_destroy_context( GLcontext *ctx )
 	 gl_matrix_dtr( &ctx->ProjectionStack[i] );
       }
 
-      free( ctx->PB );
+      FREE( ctx->PB );
 
       if(ctx->input != ctx->VB->IM)
          gl_immediate_free( ctx->input );
@@ -1370,9 +1406,9 @@ void gl_destroy_context( GLcontext *ctx )
       }
 
       foreach_s( s, tmps, ctx->ShineTabList ) {
-	 free( s );
+	 FREE( s );
       }
-      free( ctx->ShineTabList );
+      FREE( ctx->ShineTabList );
 
       /* Free proxy texture objects */
       gl_free_texture_object( NULL, ctx->Texture.Proxy1D );
@@ -1381,52 +1417,52 @@ void gl_destroy_context( GLcontext *ctx )
 
       /* Free evaluator data */
       if (ctx->EvalMap.Map1Vertex3.Points)
-         free( ctx->EvalMap.Map1Vertex3.Points );
+         FREE( ctx->EvalMap.Map1Vertex3.Points );
       if (ctx->EvalMap.Map1Vertex4.Points)
-         free( ctx->EvalMap.Map1Vertex4.Points );
+         FREE( ctx->EvalMap.Map1Vertex4.Points );
       if (ctx->EvalMap.Map1Index.Points)
-         free( ctx->EvalMap.Map1Index.Points );
+         FREE( ctx->EvalMap.Map1Index.Points );
       if (ctx->EvalMap.Map1Color4.Points)
-         free( ctx->EvalMap.Map1Color4.Points );
+         FREE( ctx->EvalMap.Map1Color4.Points );
       if (ctx->EvalMap.Map1Normal.Points)
-         free( ctx->EvalMap.Map1Normal.Points );
+         FREE( ctx->EvalMap.Map1Normal.Points );
       if (ctx->EvalMap.Map1Texture1.Points)
-         free( ctx->EvalMap.Map1Texture1.Points );
+         FREE( ctx->EvalMap.Map1Texture1.Points );
       if (ctx->EvalMap.Map1Texture2.Points)
-         free( ctx->EvalMap.Map1Texture2.Points );
+         FREE( ctx->EvalMap.Map1Texture2.Points );
       if (ctx->EvalMap.Map1Texture3.Points)
-         free( ctx->EvalMap.Map1Texture3.Points );
+         FREE( ctx->EvalMap.Map1Texture3.Points );
       if (ctx->EvalMap.Map1Texture4.Points)
-         free( ctx->EvalMap.Map1Texture4.Points );
+         FREE( ctx->EvalMap.Map1Texture4.Points );
 
       if (ctx->EvalMap.Map2Vertex3.Points)
-         free( ctx->EvalMap.Map2Vertex3.Points );
+         FREE( ctx->EvalMap.Map2Vertex3.Points );
       if (ctx->EvalMap.Map2Vertex4.Points)
-         free( ctx->EvalMap.Map2Vertex4.Points );
+         FREE( ctx->EvalMap.Map2Vertex4.Points );
       if (ctx->EvalMap.Map2Index.Points)
-         free( ctx->EvalMap.Map2Index.Points );
+         FREE( ctx->EvalMap.Map2Index.Points );
       if (ctx->EvalMap.Map2Color4.Points)
-         free( ctx->EvalMap.Map2Color4.Points );
+         FREE( ctx->EvalMap.Map2Color4.Points );
       if (ctx->EvalMap.Map2Normal.Points)
-         free( ctx->EvalMap.Map2Normal.Points );
+         FREE( ctx->EvalMap.Map2Normal.Points );
       if (ctx->EvalMap.Map2Texture1.Points)
-         free( ctx->EvalMap.Map2Texture1.Points );
+         FREE( ctx->EvalMap.Map2Texture1.Points );
       if (ctx->EvalMap.Map2Texture2.Points)
-         free( ctx->EvalMap.Map2Texture2.Points );
+         FREE( ctx->EvalMap.Map2Texture2.Points );
       if (ctx->EvalMap.Map2Texture3.Points)
-         free( ctx->EvalMap.Map2Texture3.Points );
+         FREE( ctx->EvalMap.Map2Texture3.Points );
       if (ctx->EvalMap.Map2Texture4.Points)
-         free( ctx->EvalMap.Map2Texture4.Points );
+         FREE( ctx->EvalMap.Map2Texture4.Points );
 
       /* Free cache of immediate buffers. */
       while (ctx->nr_im_queued-- > 0) {
          struct immediate * next = ctx->freed_im_queue->next;
-         free( ctx->freed_im_queue );
+         FREE( ctx->freed_im_queue );
          ctx->freed_im_queue = next;
       }
       gl_extensions_dtr(ctx);
 
-      free( (void *) ctx );
+      FREE( (void *) ctx );
 
 #ifndef THREADS
       if (ctx==CC) {
@@ -1451,7 +1487,7 @@ GLframebuffer *gl_create_framebuffer( GLvisual *visual )
 {
    GLframebuffer *buffer;
 
-   buffer = (GLframebuffer *) calloc( 1, sizeof(GLframebuffer) );
+   buffer = (GLframebuffer *) CALLOC( sizeof(GLframebuffer) );
    if (!buffer) {
       return NULL;
    }
@@ -1470,27 +1506,27 @@ void gl_destroy_framebuffer( GLframebuffer *buffer )
 {
    if (buffer) {
       if (buffer->Depth) {
-         free( buffer->Depth );
+         FREE( buffer->Depth );
       }
       if (buffer->Accum) {
-         free( buffer->Accum );
+         FREE( buffer->Accum );
       }
       if (buffer->Stencil) {
-         free( buffer->Stencil );
+         FREE( buffer->Stencil );
       }
       if (buffer->FrontLeftAlpha) {
-         free( buffer->FrontLeftAlpha );
+         FREE( buffer->FrontLeftAlpha );
       }
       if (buffer->BackLeftAlpha) {
-         free( buffer->BackLeftAlpha );
+         FREE( buffer->BackLeftAlpha );
       }
       if (buffer->FrontRightAlpha) {
-         free( buffer->FrontRightAlpha );
+         FREE( buffer->FrontRightAlpha );
       }
       if (buffer->BackRightAlpha) {
-         free( buffer->BackRightAlpha );
+         FREE( buffer->BackRightAlpha );
       }
-      free(buffer);
+      FREE(buffer);
    }
 }
 

@@ -1,4 +1,4 @@
-/* $Id: varray.c,v 1.3 1999/09/07 22:31:30 brianp Exp $ */
+/* $Id: varray.c,v 1.5 1999/10/19 18:37:05 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -27,9 +27,13 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#ifndef XFree86Server
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "context.h"
 #include "api.h"
 #include "cva.h"
@@ -53,6 +57,11 @@
 #ifdef XFree86Server
 #include "GL/xf86glx.h"
 #endif
+#endif
+
+#if defined(GLX_DIRECT_RENDERING) && !defined(XFree86Server) && !defined(GLX_USE_DLOPEN)
+#define NEED_MESA_FUNCS_WRAPPED
+#include "mesa_api.h"
 #endif
 
 
@@ -394,15 +403,21 @@ void gl_CVAEltPointer( GLcontext *ctx, GLenum type, const GLvoid *ptr )
 /* KW: Batch function to exec all the array elements in the input
  *     buffer prior to transform.  Done only the first time a vertex
  *     buffer is executed or compiled.
+ *
+ * KW: Have to do this after each glEnd if cva isn't active.  (also
+ *     have to do it after each full buffer)
  */
-void gl_exec_array_elements( GLcontext *ctx, struct immediate *IM )
+void gl_exec_array_elements( GLcontext *ctx, struct immediate *IM,
+			     GLuint start, 
+			     GLuint count)
 {
    GLuint *flags = IM->Flag;
    GLuint *elts = IM->Elt;
-   GLuint count = IM->Count;
-   GLuint start = IM->Start;
    GLuint translate = ctx->Array.Flags;
    GLuint i;
+
+   if (MESA_VERBOSE&VERBOSE_IMMEDIATE)
+      fprintf(stderr, "exec_array_elements %d .. %d\n", start, count);
    
    if (translate & VERT_OBJ_ANY) 
       (ctx->Array.VertexEltFunc)( IM->Obj, 
@@ -446,22 +461,16 @@ void gl_exec_array_elements( GLcontext *ctx, struct immediate *IM )
 				       flags, elts, (VERT_ELT|VERT_TEX1_ANY),
 				       start, count);
 
-   IM->OrFlag |= translate;
-
    /* Lighting ignores the and-flag, so still need to do this.
     */
-   if (IM->AndFlag & VERT_ELT) {
-      for (i = 0 ; i < count ; i++) 
+/*     fprintf(stderr, "start %d count %d\n", start, count); */
+/*     gl_print_vert_flags("translate", translate); */
+
+   for (i = start ; i < count ; i++) 
+      if (flags[i] & VERT_ELT) {
+/*  	 flags[i] &= ~VERT_ELT;	*/
 	 flags[i] |= translate;
-      IM->AndFlag |= translate; 
-   } else {
-      GLuint andflag = ~0;
-      for (i = 0 ; i < count ; i++) {
-	 if (flags[i] & VERT_ELT) flags[i] |= translate;
-	 andflag &= flags[i];
-      }
-      IM->AndFlag = andflag;
-   }
+      }      
 }
 
 
@@ -753,7 +762,6 @@ void gl_DrawArrays( GLcontext *ctx, GLenum mode, GLint start, GLsizei count )
 	 VB->TexCoordPtr[1] = VSrc.TexCoord[1];
 
 	 VB->Flag = ctx->Array.Flag;
-	 VB->AndFlag = ctx->Array.Flags;
 	 VB->OrFlag = ctx->Array.Flags;
 
 	 count = VB->Count = VB_START + n;
@@ -768,7 +776,6 @@ void gl_DrawArrays( GLcontext *ctx, GLenum mode, GLint start, GLsizei count )
 
 	 VB->Flag[count] |= VERT_END_VB;
 	 VB->Flag[VB_START] |= VERT_NORM;
-/*  	 VB->Flag[VB_START] |= (IM->Flag[vb_start] & VERT_MATERIAL); */
 
 	 VB->NextPrimitive[VB->CopyStart] = VB->Count;
 	 VB->Primitive[VB->CopyStart] = mode;
@@ -830,19 +837,19 @@ static void FUNC( GLcontext *ctx, GLenum mode,		\
       GLuint nr = MIN2( VB_MAX, count - j + VB_START );	\
       struct immediate *IM = ctx->input;		\
       GLuint sf = IM->Flag[VB_START];			\
+      IM->FlushElt |= IM->ArrayEltFlush;		\
 							\
       for (i = VB_START ; i < nr ; i++) {		\
 	 IM->Elt[i] = (GLuint) *indices++;		\
 	 IM->Flag[i] = VERT_ELT;			\
       }							\
 							\
-      if (j == 0) IM->Flag[VB_START] |= sf;		\
+      if (j == 0) IM->Flag[IM->Start] |= sf;		\
 							\
       IM->Count = nr;					\
       j += nr - VB_START;				\
 							\
       if (j == count) gl_End( ctx );			\
-							\
       IM->maybe_transform_vb( IM );			\
    }							\
 }
@@ -885,8 +892,9 @@ void GLAPIENTRY glDrawElements(CTX_ARG GLenum mode, GLsizei count,
    cva = &ctx->CVA;
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glDrawElements");
 
-   if (count<0) {
-      gl_error( ctx, GL_INVALID_VALUE, "glDrawElements(count)" );
+   if (count <= 0) {
+      if (count < 0)
+	 gl_error( ctx, GL_INVALID_VALUE, "glDrawElements(count)" );
       return;
    }
 

@@ -1,4 +1,4 @@
-/* $Id: drawpix.c,v 1.2 1999/09/18 20:41:22 keithw Exp $ */
+/* $Id: drawpix.c,v 1.4 1999/10/19 20:33:57 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -31,9 +31,13 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#ifndef XFree86Server
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "context.h"
 #include "drawpix.h"
 #include "feedback.h"
@@ -482,6 +486,18 @@ static void draw_stencil_pixels( GLcontext *ctx, GLint x, GLint y,
    const GLint desty = y;
    GLint i;
    const GLboolean zoom = ctx->Pixel.ZoomX!=1.0 || ctx->Pixel.ZoomY!=1.0;
+
+   if (image->Type != GL_BYTE &&
+       image->Type != GL_UNSIGNED_BYTE &&
+       image->Type != GL_SHORT &&
+       image->Type != GL_UNSIGNED_SHORT &&
+       image->Type != GL_INT &&
+       image->Type != GL_UNSIGNED_INT &&
+       image->Type != GL_FLOAT &&
+       image->Type != GL_BITMAP) {
+      gl_error( ctx, GL_INVALID_OPERATION, "glDrawPixels(stencil type)");
+      return;
+   }
 
    assert(image);
    assert(image->Format == GL_STENCIL_INDEX);

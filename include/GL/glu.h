@@ -1,4 +1,4 @@
-/* $Id: glu.h,v 1.10 1999/09/19 10:04:01 tjump Exp $ */
+/* $Id: glu.h,v 1.13 1999/10/27 09:43:48 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -18,61 +18,6 @@
  * You should have received a copy of the GNU Library General Public
  * License along with this library; if not, write to the Free
  * Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- */
-
-
-/*
- * $Log: glu.h,v $
- * Revision 1.10  1999/09/19 10:04:01  tjump
- * Changed name 'glGetProcAddressEXT' to 'gluGetProcAddressEXT'
- *
- * Revision 1.8  1999/09/17 12:21:36  brianp
- * glGetProcAddressEXT changes to accomodate Win32 and non-Win32
- *
- * Revision 1.7  1999/09/17 02:44:19  tjump
- * I changed the xxxGetProcAddressEXT function declarations to be more
- * MSVC friendly. Brianp - could you verify that they describe and operate
- * as intended on Linux/ETC platforms?
- *
- * Revision 1.6  1999/09/16 16:54:22  brianp
- * GLU_EXT_get_proc_address clean-up
- *
- * Revision 1.5  1999/09/14 03:23:08  gareth
- * Fixed GLUtriangulatorObj again (spelling).
- *
- * Revision 1.4  1999/09/14 01:32:58  gareth
- * Fixed definition of GLUtriangluatorObj for 1.3 tessellator.
- *
- * Revision 1.3  1999/09/11 11:34:21  brianp
- * added GLU_EXT_get_proc_address
- *
- * Revision 1.2  1999/09/10 02:08:18  gareth
- * Added GLU 1.3 tessellation (except winding rule code).
- *
- * Revision 1.1.1.1  1999/08/19 00:55:40  jtg
- * Imported sources
- *
- * Revision 3.6  1999/02/14 03:39:45  brianp
- * updated for BeOS R4
- *
- * Revision 3.5  1999/01/03 03:02:55  brianp
- * now using GLAPI and GLAPIENTRY keywords, misc Windows changes (Ted Jump)
- *
- * Revision 3.4  1998/12/01 02:34:27  brianp
- * applied Mark Kilgard's patches from November 30, 1998
- *
- * Revision 3.3  1998/11/17 01:14:02  brianp
- * minor changes for OpenStep compilation (pete@ohm.york.ac.uk)
- *
- * Revision 3.2  1998/07/26 01:36:27  brianp
- * changes for Windows compilation per Ted Jump
- *
- * Revision 3.1  1998/06/23 00:33:08  brianp
- * added some WIN32 APIENTRY, CALLBACK stuff (Eric Lassauge)
- *
- * Revision 3.0  1998/02/20 05:06:01  brianp
- * initial rev
- *
  */
 
 
@@ -110,6 +55,18 @@ extern "C" {
 	#if PRAGMA_IMPORT_SUPPORTED
 	#pragma import on
 	#endif
+#endif
+
+#ifndef GLUAPI
+#define GLUAPI
+#endif
+
+#ifndef GLAPIENTRY
+#define GLAPIENTRY
+#endif
+
+#ifndef GLCALLBACK
+#define GLCALLBACK
 #endif
 
 
@@ -504,19 +461,6 @@ GLUAPI void GLAPIENTRY gluEndPolygon( GLUtesselator *tobj );
 
 GLUAPI const GLubyte* GLAPIENTRY gluGetString( GLenum name );
 
-
-
-/*
- * GLU_EXT_get_proc_address extension
- */
-/*
- * WARNING: this extension is not finalized yet!  Do not release code
- * which uses this extension yet!  It may change!
- */
-#define GLU_EXT_get_proc_address 1
-#ifdef GLU_EXT_get_proc_address
-GLUAPI void (GLAPIENTRY *gluGetProcAddressEXT(const GLubyte *procName))();
-#endif
 
 
 #if defined(__BEOS__) || defined(__QUICKDRAW__)

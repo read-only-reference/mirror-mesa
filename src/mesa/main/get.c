@@ -1,4 +1,4 @@
-/* $Id: get.c,v 1.3 1999/09/16 15:46:05 brianp Exp $ */
+/* $Id: get.c,v 1.5 1999/10/17 22:36:35 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -25,12 +25,18 @@
  */
 
 
+/* $XFree86: xc/lib/GL/mesa/src/get.c,v 1.3 1999/04/04 00:20:25 dawes Exp $ */
+
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#ifndef XFree86Server
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "context.h"
 #include "enable.h"
 #include "enums.h"
@@ -40,9 +46,6 @@
 #include "mmath.h"
 #include "types.h"
 #include "vb.h"
-#ifdef XFree86Server
-#include "GL/xf86glx.h"
-#endif
 #endif
 
 
@@ -830,6 +833,9 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
       case GL_ZOOM_Y:
 	 *params = FLOAT_TO_BOOL(ctx->Pixel.ZoomY);
 	 break;
+      case GL_VERTEX_ARRAY:
+         *params = ctx->Array.Vertex.Enabled;
+         break;
       case GL_VERTEX_ARRAY_SIZE:
          *params = INT_TO_BOOL(ctx->Array.Vertex.Size);
          break;
@@ -842,6 +848,9 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
       case GL_VERTEX_ARRAY_COUNT_EXT:
          *params = INT_TO_BOOL(0);
          break;
+      case GL_NORMAL_ARRAY:
+         *params = ctx->Array.Normal.Enabled;
+         break;
       case GL_NORMAL_ARRAY_TYPE:
          *params = ENUM_TO_BOOL(ctx->Array.Normal.Type);
          break;
@@ -850,6 +859,9 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
          break;
       case GL_NORMAL_ARRAY_COUNT_EXT:
          *params = INT_TO_BOOL(0);
+         break;
+      case GL_COLOR_ARRAY:
+         *params = ctx->Array.Color.Enabled;
          break;
       case GL_COLOR_ARRAY_SIZE:
          *params = INT_TO_BOOL(ctx->Array.Color.Size);
@@ -863,6 +875,9 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
       case GL_COLOR_ARRAY_COUNT_EXT:
          *params = INT_TO_BOOL(0);
          break;
+      case GL_INDEX_ARRAY:
+         *params = ctx->Array.Index.Enabled;
+         break;
       case GL_INDEX_ARRAY_TYPE:
          *params = ENUM_TO_BOOL(ctx->Array.Index.Type);
          break;
@@ -871,6 +886,9 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
          break;
       case GL_INDEX_ARRAY_COUNT_EXT:
          *params = INT_TO_BOOL(0);
+         break;
+      case GL_TEXTURE_COORD_ARRAY:
+         *params = ctx->Array.TexCoord[texUnit].Enabled;
          break;
       case GL_TEXTURE_COORD_ARRAY_SIZE:
          *params = INT_TO_BOOL(ctx->Array.TexCoord[texUnit].Size);
@@ -884,11 +902,11 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
       case GL_TEXTURE_COORD_ARRAY_COUNT_EXT:
          *params = INT_TO_BOOL(0);
          break;
+      case GL_EDGE_FLAG_ARRAY:
+         *params = ctx->Array.EdgeFlag.Enabled;
+         break;
       case GL_EDGE_FLAG_ARRAY_STRIDE:
          *params = INT_TO_BOOL(ctx->Array.EdgeFlag.Stride);
-         break;
-      case GL_EDGE_FLAG_ARRAY_EXT:
-         *params = INT_TO_BOOL(0);
          break;
 
       case GL_MAX_TEXTURE_UNITS_ARB:
@@ -1724,6 +1742,9 @@ void gl_GetDoublev( GLcontext *ctx, GLenum pname, GLdouble *params )
       case GL_ZOOM_Y:
 	 *params = (GLdouble) ctx->Pixel.ZoomY;
 	 break;
+      case GL_VERTEX_ARRAY:
+         *params = (GLdouble) ctx->Array.Vertex.Enabled;
+         break;
       case GL_VERTEX_ARRAY_SIZE:
          *params = (GLdouble) ctx->Array.Vertex.Size;
          break;
@@ -1736,6 +1757,9 @@ void gl_GetDoublev( GLcontext *ctx, GLenum pname, GLdouble *params )
       case GL_VERTEX_ARRAY_COUNT_EXT:
          *params = 0.0;
          break;
+      case GL_NORMAL_ARRAY:
+         *params = (GLdouble) ctx->Array.Normal.Enabled;
+         break;
       case GL_NORMAL_ARRAY_TYPE:
          *params = ENUM_TO_DOUBLE(ctx->Array.Normal.Type);
          break;
@@ -1744,6 +1768,9 @@ void gl_GetDoublev( GLcontext *ctx, GLenum pname, GLdouble *params )
          break;
       case GL_NORMAL_ARRAY_COUNT_EXT:
          *params = 0.0;
+         break;
+      case GL_COLOR_ARRAY:
+         *params = (GLdouble) ctx->Array.Color.Enabled;
          break;
       case GL_COLOR_ARRAY_SIZE:
          *params = (GLdouble) ctx->Array.Color.Size;
@@ -1757,6 +1784,9 @@ void gl_GetDoublev( GLcontext *ctx, GLenum pname, GLdouble *params )
       case GL_COLOR_ARRAY_COUNT_EXT:
          *params = 0.0;
          break;
+      case GL_INDEX_ARRAY:
+         *params = (GLdouble) ctx->Array.Index.Enabled;
+         break;
       case GL_INDEX_ARRAY_TYPE:
          *params = ENUM_TO_DOUBLE(ctx->Array.Index.Type);
          break;
@@ -1765,6 +1795,9 @@ void gl_GetDoublev( GLcontext *ctx, GLenum pname, GLdouble *params )
          break;
       case GL_INDEX_ARRAY_COUNT_EXT:
          *params = 0.0;
+         break;
+      case GL_TEXTURE_COORD_ARRAY:
+         *params = (GLdouble) ctx->Array.TexCoord[texUnit].Enabled;
          break;
       case GL_TEXTURE_COORD_ARRAY_SIZE:
          *params = (GLdouble) ctx->Array.TexCoord[texUnit].Size;
@@ -1777,6 +1810,9 @@ void gl_GetDoublev( GLcontext *ctx, GLenum pname, GLdouble *params )
          break;
       case GL_TEXTURE_COORD_ARRAY_COUNT_EXT:
          *params = 0.0;
+         break;
+      case GL_EDGE_FLAG_ARRAY:
+         *params = (GLdouble) ctx->Array.EdgeFlag.Enabled;
          break;
       case GL_EDGE_FLAG_ARRAY_STRIDE:
          *params = (GLdouble) ctx->Array.EdgeFlag.Stride;
@@ -2618,6 +2654,9 @@ void gl_GetFloatv( GLcontext *ctx, GLenum pname, GLfloat *params )
       case GL_ZOOM_Y:
 	 *params = (GLfloat) ctx->Pixel.ZoomY;
 	 break;
+      case GL_VERTEX_ARRAY:
+         *params = (GLfloat) ctx->Array.Vertex.Enabled;
+         break;
       case GL_VERTEX_ARRAY_SIZE:
          *params = (GLfloat) ctx->Array.Vertex.Size;
          break;
@@ -2630,6 +2669,9 @@ void gl_GetFloatv( GLcontext *ctx, GLenum pname, GLfloat *params )
       case GL_VERTEX_ARRAY_COUNT_EXT:
          *params = 0.0;
          break;
+      case GL_NORMAL_ARRAY:
+         *params = (GLfloat) ctx->Array.Normal.Enabled;
+         break;
       case GL_NORMAL_ARRAY_TYPE:
          *params = ENUM_TO_FLOAT(ctx->Array.Normal.Type);
          break;
@@ -2638,6 +2680,9 @@ void gl_GetFloatv( GLcontext *ctx, GLenum pname, GLfloat *params )
          break;
       case GL_NORMAL_ARRAY_COUNT_EXT:
          *params = 0.0;
+         break;
+      case GL_COLOR_ARRAY:
+         *params = (GLfloat) ctx->Array.Color.Enabled;
          break;
       case GL_COLOR_ARRAY_SIZE:
          *params = (GLfloat) ctx->Array.Color.Size;
@@ -2651,6 +2696,9 @@ void gl_GetFloatv( GLcontext *ctx, GLenum pname, GLfloat *params )
       case GL_COLOR_ARRAY_COUNT_EXT:
          *params = 0.0;
          break;
+      case GL_INDEX_ARRAY:
+         *params = (GLfloat) ctx->Array.Index.Enabled;
+         break;
       case GL_INDEX_ARRAY_TYPE:
          *params = ENUM_TO_FLOAT(ctx->Array.Index.Type);
          break;
@@ -2659,6 +2707,9 @@ void gl_GetFloatv( GLcontext *ctx, GLenum pname, GLfloat *params )
          break;
       case GL_INDEX_ARRAY_COUNT_EXT:
          *params = 0.0;
+         break;
+      case GL_TEXTURE_COORD_ARRAY:
+         *params = (GLfloat) ctx->Array.TexCoord[texUnit].Enabled;
          break;
       case GL_TEXTURE_COORD_ARRAY_SIZE:
          *params = (GLfloat) ctx->Array.TexCoord[texUnit].Size;
@@ -2671,6 +2722,9 @@ void gl_GetFloatv( GLcontext *ctx, GLenum pname, GLfloat *params )
          break;
       case GL_TEXTURE_COORD_ARRAY_COUNT_EXT:
          *params = 0.0;
+         break;
+      case GL_EDGE_FLAG_ARRAY:
+         *params = (GLfloat) ctx->Array.EdgeFlag.Enabled;
          break;
       case GL_EDGE_FLAG_ARRAY_STRIDE:
          *params = (GLfloat) ctx->Array.EdgeFlag.Stride;
@@ -3513,6 +3567,9 @@ void gl_GetIntegerv( GLcontext *ctx, GLenum pname, GLint *params )
       case GL_ZOOM_Y:
 	 *params = (GLint) ctx->Pixel.ZoomY;
 	 break;
+      case GL_VERTEX_ARRAY:
+         *params = (GLint) ctx->Array.Vertex.Enabled;
+         break;
       case GL_VERTEX_ARRAY_SIZE:
          *params = ctx->Array.Vertex.Size;
          break;
@@ -3525,6 +3582,9 @@ void gl_GetIntegerv( GLcontext *ctx, GLenum pname, GLint *params )
       case GL_VERTEX_ARRAY_COUNT_EXT:
          *params = 0;
          break;
+      case GL_NORMAL_ARRAY:
+         *params = (GLint) ctx->Array.Normal.Enabled;
+         break;
       case GL_NORMAL_ARRAY_TYPE:
          *params = ctx->Array.Normal.Type;
          break;
@@ -3533,6 +3593,9 @@ void gl_GetIntegerv( GLcontext *ctx, GLenum pname, GLint *params )
          break;
       case GL_NORMAL_ARRAY_COUNT_EXT:
          *params = 0;
+         break;
+      case GL_COLOR_ARRAY:
+         *params = (GLint) ctx->Array.Color.Enabled;
          break;
       case GL_COLOR_ARRAY_SIZE:
          *params = ctx->Array.Color.Size;
@@ -3546,6 +3609,9 @@ void gl_GetIntegerv( GLcontext *ctx, GLenum pname, GLint *params )
       case GL_COLOR_ARRAY_COUNT_EXT:
          *params = 0;
          break;
+      case GL_INDEX_ARRAY:
+         *params = (GLint) ctx->Array.Index.Enabled;
+         break;
       case GL_INDEX_ARRAY_TYPE:
          *params = ctx->Array.Index.Type;
          break;
@@ -3554,6 +3620,9 @@ void gl_GetIntegerv( GLcontext *ctx, GLenum pname, GLint *params )
          break;
       case GL_INDEX_ARRAY_COUNT_EXT:
          *params = 0;
+         break;
+      case GL_TEXTURE_COORD_ARRAY:
+         *params = (GLint) ctx->Array.TexCoord[texUnit].Enabled;
          break;
       case GL_TEXTURE_COORD_ARRAY_SIZE:
          *params = ctx->Array.TexCoord[texUnit].Size;
@@ -3566,6 +3635,9 @@ void gl_GetIntegerv( GLcontext *ctx, GLenum pname, GLint *params )
          break;
       case GL_TEXTURE_COORD_ARRAY_COUNT_EXT:
          *params = 0;
+         break;
+      case GL_EDGE_FLAG_ARRAY:
+         *params = (GLint) ctx->Array.EdgeFlag.Enabled;
          break;
       case GL_EDGE_FLAG_ARRAY_STRIDE:
          *params = ctx->Array.EdgeFlag.Stride;

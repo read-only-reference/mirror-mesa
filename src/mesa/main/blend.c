@@ -1,4 +1,4 @@
-/* $Id: blend.c,v 1.3 1999/09/30 11:18:21 keithw Exp $ */
+/* $Id: blend.c,v 1.5 1999/10/21 12:26:21 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -29,9 +29,13 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#include <stdio.h>
+#ifndef XFree86Server
 #include <assert.h>
 #include <stdlib.h>
-#include <stdio.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "alphabuf.h"
 #include "blend.h"
 #include "context.h"
@@ -547,6 +551,7 @@ static void blend_general( GLcontext *ctx, GLuint n, const GLubyte mask[],
                break;
             default:
                /* this should never happen */
+               sA = 0.0F;
                gl_problem(ctx, "Bad blend source A factor in do_blend");
          }
 
@@ -598,6 +603,7 @@ static void blend_general( GLcontext *ctx, GLuint n, const GLubyte mask[],
                break;
             default:
                /* this should never happen */
+               dR = dG = dB = 0.0F;
                gl_problem(ctx, "Bad blend dest RGB factor in do_blend");
          }
 
@@ -641,6 +647,7 @@ static void blend_general( GLcontext *ctx, GLuint n, const GLubyte mask[],
                break;
             default:
                /* this should never happen */
+               dA = 0.0F;
                gl_problem(ctx, "Bad blend dest A factor in do_blend");
 	       return;
          }
@@ -683,6 +690,11 @@ static void blend_general( GLcontext *ctx, GLuint n, const GLubyte mask[],
             g = Gd * dG - Gs * sG;
             b = Bd * dB - Bs * sB;
             a = Ad * dA - As * sA;
+         }
+         else {
+            /* should never get here */
+            r = g = b = a = 0.0F;  /* silence uninitialized var warning */
+            gl_problem(ctx, "unexpected BlendEquation in blend_general()");
          }
 
          /* final clamping */

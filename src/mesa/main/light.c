@@ -1,4 +1,4 @@
-/* $Id: light.c,v 1.3 1999/09/30 11:18:22 keithw Exp $ */
+/* $Id: light.c,v 1.6 1999/10/19 20:32:40 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -31,10 +31,15 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#include <float.h>
+#ifndef XFree86Server
 #include <assert.h>
 #include <float.h>
 #include <math.h>
 #include <stdlib.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include <stdio.h>
 #include "context.h"
 #include "enums.h"
@@ -46,9 +51,6 @@
 #include "types.h"
 #include "vb.h"
 #include "xform.h"
-#ifdef XFree86Server
-#include "GL/xf86glx.h"
-#endif
 #endif
 
 
@@ -317,15 +319,18 @@ void gl_LightModelfv( GLcontext *ctx, GLenum pname, const GLfloat *params )
             ctx->Light.Model.TwoSide = GL_TRUE;
          break;
       case GL_LIGHT_MODEL_COLOR_CONTROL:
-	 ctx->TriangleCaps &= ~DD_SEPERATE_SPECULAR;
-	 ctx->NewState |= NEW_RASTER_OPS;
-         if (params[0] == (GLfloat) GL_SINGLE_COLOR) 
+         if (params[0] == (GLfloat) GL_SINGLE_COLOR) {
             ctx->Light.Model.ColorControl = GL_SINGLE_COLOR;
+            ctx->TriangleCaps &= ~DD_SEPERATE_SPECULAR;
+         }
          else if (params[0] == (GLfloat) GL_SEPARATE_SPECULAR_COLOR) {
             ctx->Light.Model.ColorControl = GL_SEPARATE_SPECULAR_COLOR;
 	    ctx->TriangleCaps |= DD_SEPERATE_SPECULAR;
-	 } else
+	 }
+         else {
             gl_error( ctx, GL_INVALID_ENUM, "glLightModel(param)" );
+         }
+	 ctx->NewState |= NEW_RASTER_OPS;
          break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glLightModel" );
@@ -662,14 +667,22 @@ void gl_Materialfv( GLcontext *ctx,
    IM = ctx->input;
    count = IM->Count;
 
+   if (!IM->Material) {
+      IM->Material = 
+	 (struct gl_material (*)[2]) MALLOC( sizeof(struct gl_material) * 
+					     VB_SIZE * 2 );
+      IM->MaterialMask = (GLuint *) MALLOC( sizeof(GLuint) * VB_SIZE );
+   }
+
+
    if (!(IM->Flag[count] & VERT_MATERIAL)) {
       IM->Flag[count] |= VERT_MATERIAL;
-      IM->MaterialMask[count] = 0;
+      IM->MaterialMask[count] = 0;      
    }
+
 
    IM->MaterialMask[count] |= bitmask;
    mat = IM->Material[count];
-   IM->LastMaterial = count;
 
    if (bitmask & FRONT_AMBIENT_BIT) {
       COPY_4FV( mat[0].Ambient, params );

@@ -1,4 +1,4 @@
-/* $Id: teximage.c,v 1.1 1999/08/19 00:55:41 jtg Exp $ */
+/* $Id: teximage.c,v 1.8 1999/10/22 10:43:35 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -25,13 +25,19 @@
  */
 
 
+/* $XFree86: xc/lib/GL/mesa/src/teximage.c,v 1.3 1999/04/04 00:20:32 dawes Exp $ */
+
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#ifndef XFree86Server
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "context.h"
 #include "image.h"
 #include "macros.h"
@@ -230,7 +236,7 @@ static GLint components_in_intformat( GLint format )
 
 struct gl_texture_image *gl_alloc_texture_image( void )
 {
-   return (struct gl_texture_image *) calloc( 1, sizeof(struct gl_texture_image) );
+   return CALLOC_STRUCT(gl_texture_image);
 }
 
 
@@ -238,9 +244,10 @@ struct gl_texture_image *gl_alloc_texture_image( void )
 void gl_free_texture_image( struct gl_texture_image *teximage )
 {
    if (teximage->Data) {
-      free( teximage->Data );
+      FREE( teximage->Data );
+      teximage->Data = NULL;
    }
-   free( teximage );
+   FREE( teximage );
 }
 
 
@@ -290,7 +297,35 @@ static void set_teximage_component_sizes( struct gl_texture_image *texImage )
          texImage->LuminanceBits = 0;
          texImage->IndexBits = 0;
          break;
+      case GL_RED:
+         texImage->RedBits = 8;
+         texImage->GreenBits = 0;
+         texImage->BlueBits = 0;
+         texImage->AlphaBits = 0;
+         texImage->IntensityBits = 0;
+         texImage->LuminanceBits = 0;
+         texImage->IndexBits = 0;
+         break;
+      case GL_GREEN:
+         texImage->RedBits = 0;
+         texImage->GreenBits = 8;
+         texImage->BlueBits = 0;
+         texImage->AlphaBits = 0;
+         texImage->IntensityBits = 0;
+         texImage->LuminanceBits = 0;
+         texImage->IndexBits = 0;
+         break;
+      case GL_BLUE:
+         texImage->RedBits = 0;
+         texImage->GreenBits = 0;
+         texImage->BlueBits = 8;
+         texImage->AlphaBits = 0;
+         texImage->IntensityBits = 0;
+         texImage->LuminanceBits = 0;
+         texImage->IndexBits = 0;
+         break;
       case GL_RGB:
+      case GL_BGR:
          texImage->RedBits = 8;
          texImage->GreenBits = 8;
          texImage->BlueBits = 8;
@@ -300,6 +335,8 @@ static void set_teximage_component_sizes( struct gl_texture_image *texImage )
          texImage->IndexBits = 0;
          break;
       case GL_RGBA:
+      case GL_BGRA:
+      case GL_ABGR_EXT:
          texImage->RedBits = 8;
          texImage->GreenBits = 8;
          texImage->BlueBits = 8;
@@ -383,7 +420,7 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
    texImage->Height2 = 1 << texImage->HeightLog2;
    texImage->Depth2 = 1 << texImage->DepthLog2;
    texImage->MaxLog2 = MAX2( texImage->WidthLog2, texImage->HeightLog2 );
-   texImage->Data = (GLubyte *) malloc( numPixels * components + EXTRA_BYTE );
+   texImage->Data = (GLubyte *) MALLOC( numPixels * components + EXTRA_BYTE );
 
    if (!texImage->Data) {
       /* out of memory */
@@ -526,6 +563,7 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
                      /* a paletted texture */
                      GLint index = ((GLubyte*)image->Data)[pixel];
                      red = index;
+                     green = blue = alpha = 0;  /* silence compiler warnings */
                   }
                   else {
                      /* convert color index to RGBA */
@@ -586,6 +624,7 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
                   alpha = ((GLubyte*) image->Data)[pixel*2+1];
                   break;
               default:
+                 red = green = blue = alpha = 0;
                  gl_problem(ctx,"Bad format (2) in image_to_texture");
                  return NULL;
             }
@@ -669,6 +708,7 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
                      /* a paletted texture */
                      GLint index = (GLint) ((GLfloat*) image->Data)[pixel];
                      red = index;
+                     green = blue = alpha = 0;  /* silence compiler warning */
                   }
                   else {
                      GLint shift = ctx->Pixel.IndexShift;
@@ -866,7 +906,7 @@ make_null_texture( GLcontext *ctx, GLenum internalFormat,
    /* XXX should we really allocate memory for the image or let it be NULL? */
    /*texImage->Data = NULL;*/
 
-   texImage->Data = (GLubyte *) malloc( numPixels * components + EXTRA_BYTE );
+   texImage->Data = (GLubyte *) MALLOC( numPixels * components + EXTRA_BYTE );
 
    /*
     * Let's see if anyone finds this.  If glTexImage2D() is called with
@@ -1021,12 +1061,15 @@ static GLboolean texture_error_check( GLcontext *ctx, GLenum target,
    }
 
    if (!gl_is_legal_format_and_type( format, type )) {
+      /* Yes, generate GL_INVALID_OPERATION, not GL_INVALID_ENUM, if there
+       * is a type/format mismatch.  See 1.2 spec page 94, sec 3.6.4.
+       */
       if (dimensions == 1)
-         gl_error( ctx, GL_INVALID_ENUM, "glTexImage1D(format or type)");
+         gl_error( ctx, GL_INVALID_OPERATION, "glTexImage1D(format or type)");
       else if (dimensions == 2)
-         gl_error( ctx, GL_INVALID_ENUM, "glTexImage2D(format or type)");
+         gl_error( ctx, GL_INVALID_OPERATION, "glTexImage2D(format or type)");
       else if (dimensions == 3)
-         gl_error( ctx, GL_INVALID_ENUM, "glTexImage3D(format or type)");
+         gl_error( ctx, GL_INVALID_OPERATION, "glTexImage3D(format or type)");
       return GL_TRUE;
    }
 
@@ -1505,12 +1548,13 @@ void gl_TexSubImage1D( GLcontext *ctx,
 
    if (image) {
       /* unpacking must have been error-free */
-      GLint texcomponents = components_in_intformat(destTex->Format);
+      const GLint texcomponents = components_in_intformat(destTex->Format);
+      const GLint xoffsetb = xoffset + destTex->Border;
 
       if (image->Type==GL_UNSIGNED_BYTE && texcomponents==image->Components) {
          /* Simple case, just byte copy image data into texture image */
          /* row by row. */
-         GLubyte *dst = destTex->Data + texcomponents * xoffset;
+         GLubyte *dst = destTex->Data + texcomponents * xoffsetb;
          GLubyte *src = (GLubyte *) image->Data;
          MEMCPY( dst, src, width * texcomponents );
       }
@@ -1518,7 +1562,7 @@ void gl_TexSubImage1D( GLcontext *ctx,
          /* General case, convert image pixels into texels, scale, bias, etc */
          struct gl_texture_image *subTexImg = image_to_texture(ctx, image,
                                         destTex->IntFormat, destTex->Border);
-         GLubyte *dst = destTex->Data + texcomponents * xoffset;
+         GLubyte *dst = destTex->Data + texcomponents * xoffsetb;
          GLubyte *src = subTexImg->Data;
          MEMCPY( dst, src, width * texcomponents );
          gl_free_texture_image(subTexImg);
@@ -1621,14 +1665,16 @@ void gl_TexSubImage2D( GLcontext *ctx,
 
    if (image) {
       /* unpacking must have been error-free */
-      GLint texcomponents = components_in_intformat(destTex->Format);
+      const GLint texcomponents = components_in_intformat(destTex->Format);
+      const GLint xoffsetb = xoffset + destTex->Border;
+      const GLint yoffsetb = yoffset + destTex->Border;
 
       if (image->Type==GL_UNSIGNED_BYTE && texcomponents==image->Components) {
          /* Simple case, just byte copy image data into texture image */
          /* row by row. */
          GLubyte *dst = destTex->Data 
-                      + (yoffset * destTex->Width + xoffset) * texcomponents;
-         GLubyte *src = (GLubyte *) image->Data;
+                      + (yoffsetb * destTex->Width + xoffsetb) * texcomponents;
+         const GLubyte *src = (const GLubyte *) image->Data;
          GLint  j;
          for (j=0;j<height;j++) {
             MEMCPY( dst, src, width * texcomponents );
@@ -1636,13 +1682,32 @@ void gl_TexSubImage2D( GLcontext *ctx,
             src += width * texcomponents * sizeof(GLubyte);
          }
       }
+      else if (image->Type==GL_UNSIGNED_BYTE
+               && texcomponents==3 && image->Components == 4 ) {
+         /* 32 bit (padded) to 24 bit case, used heavily by quake */
+         GLubyte *dst = destTex->Data 
+                      + (yoffsetb * destTex->Width + xoffsetb) * texcomponents;
+         const GLubyte *src = (const GLubyte *) image->Data;
+         GLint j;
+         for (j=0;j<height;j++) {
+            const GLubyte *stop = src + (width << 2);
+            for ( ; src != stop ; ) {
+               dst[0] = src[0];
+               dst[1] = src[1];
+               dst[2] = src[2];
+               dst += 3;
+               src += 4;
+            }
+            dst += (destTex->Width - width) * texcomponents * sizeof(GLubyte);
+         }
+      }
       else {
          /* General case, convert image pixels into texels, scale, bias, etc */
          struct gl_texture_image *subTexImg = image_to_texture(ctx, image,
                                         destTex->IntFormat, destTex->Border);
          GLubyte *dst = destTex->Data
-                  + (yoffset * destTex->Width + xoffset) * texcomponents;
-         GLubyte *src = subTexImg->Data;
+                  + (yoffsetb * destTex->Width + xoffsetb) * texcomponents;
+         const GLubyte *src = subTexImg->Data;
          GLint j;
          for (j=0;j<height;j++) {
             MEMCPY( dst, src, width * texcomponents );
@@ -1763,12 +1828,15 @@ void gl_TexSubImage3DEXT( GLcontext *ctx,
       GLint texcomponents = components_in_intformat(destTex->Format);
       GLint dstRectArea = destTex->Width * destTex->Height;
       GLint srcRectArea = width * height;
+      const GLint xoffsetb = xoffset + destTex->Border;
+      const GLint yoffsetb = yoffset + destTex->Border;
+      const GLint zoffsetb = zoffset + destTex->Border;
 
       if (image->Type==GL_UNSIGNED_BYTE && texcomponents==image->Components) {
          /* Simple case, just byte copy image data into texture image */
          /* row by row. */
          GLubyte *dst = destTex->Data 
-               + (zoffset * dstRectArea +  yoffset * destTex->Width + xoffset)
+               + (zoffsetb * dstRectArea +  yoffsetb * destTex->Width + xoffsetb)
                * texcomponents;
          GLubyte *src = (GLubyte *) image->Data;
          GLint j, k;
@@ -1787,7 +1855,7 @@ void gl_TexSubImage3DEXT( GLcontext *ctx,
          struct gl_texture_image *subTexImg = image_to_texture(ctx, image,
                                         destTex->IntFormat, destTex->Border);
          GLubyte *dst = destTex->Data 
-               + (zoffset * dstRectArea +  yoffset * destTex->Width + xoffset)
+               + (zoffsetb * dstRectArea +  yoffsetb * destTex->Width + xoffsetb)
                * texcomponents;
          GLubyte *src = subTexImg->Data;
          GLint j, k;
@@ -1836,13 +1904,13 @@ void gl_TexSubImage3DEXT( GLcontext *ctx,
          gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage3DEXT(format)" );
          return;
       }
-      components = components_in_intformat( format );
+      components = gl_components_in_format( format );
       if (components<0 || format==GL_STENCIL_INDEX
           || format==GL_DEPTH_COMPONENT){
          gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage3DEXT(format)" );
          return;
       }
-      size = gl_sizeof_type( type );
+      size = gl_sizeof_packed_type( type );
       if (size<=0) {
          gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage3DEXT(type)" );
          return;
@@ -1876,7 +1944,7 @@ static struct gl_image *read_color_image( GLcontext *ctx, GLint x, GLint y,
    /*
     * Allocate image struct and image data buffer
     */
-   image = (struct gl_image *) malloc( sizeof(struct gl_image) );
+   image = MALLOC_STRUCT( gl_image );
    if (image) {
       image->Width = width;
       image->Height = height;
@@ -1885,9 +1953,9 @@ static struct gl_image *read_color_image( GLcontext *ctx, GLint x, GLint y,
       image->Format = format;
       image->Type = GL_UNSIGNED_BYTE;
       image->RefCount = 0;
-      image->Data = (GLubyte *) malloc( width * height * components );
+      image->Data = (GLubyte *) MALLOC( width * height * components );
       if (!image->Data) {
-         free(image);
+         FREE(image);
          return NULL;
       }
    }
@@ -2060,16 +2128,20 @@ void gl_CopyTexImage2D( GLcontext *ctx,
 static void copy_tex_sub_image( GLcontext *ctx, struct gl_texture_image *dest,
                                 GLint width, GLint height,
                                 GLint srcx, GLint srcy,
-                                GLint dstx, GLint dsty, GLint zoffset )
+                                GLint dstx, GLint dsty, GLint dstz )
 {
    GLint i, j;
    GLint format, components, rectarea;
-   GLint texwidth, texheight; 
+   GLint texwidth, texheight, zoffset;
 
+   /* dst[xyz] may be negative if we have a texture border! */
+   dstx += dest->Border;
+   dsty += dest->Border;
+   dstz += dest->Border;
    texwidth = dest->Width;
    texheight = dest->Height;
    rectarea = texwidth * texheight;
-   zoffset *= rectarea; 
+   zoffset = dstz * rectarea; 
    format = dest->Format;
    components = components_in_intformat( format );
 
@@ -2277,7 +2349,7 @@ void gl_CopyTexSubImage3DEXT( GLcontext *ctx,
    struct gl_texture_image *teximage;
 
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glCopyTexSubImage3DEXT");
-   if (target!=GL_TEXTURE_2D) {
+   if (target!=GL_TEXTURE_3D) {
       gl_error( ctx, GL_INVALID_ENUM, "glCopyTexSubImage3DEXT(target)" );
       return;
    }

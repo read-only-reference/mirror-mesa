@@ -29,11 +29,16 @@
  * you turn debugging on/off from the debugger.
  */
 
+#ifndef XFree86Server
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <assert.h>
+#else 
+#include "GL/xf86glx.h"
+#endif
+
 
 #if defined(__linux__)
 #include <signal.h>
@@ -56,7 +61,7 @@
 
 
 
-#if defined(MESA_DEBUG) && 0
+#if 0
 extern void fx_sanity_triangle( GrVertex *, GrVertex *, GrVertex * );
 #define grDrawTriangle fx_sanity_triangle
 #endif
@@ -79,6 +84,20 @@ extern void fx_sanity_triangle( GrVertex *, GrVertex *, GrVertex * );
 #define S1COORD  GR_VERTEX_SOW_TMU1_OFFSET
 #define T1COORD  GR_VERTEX_TOW_TMU1_OFFSET
 
+
+#if FX_USE_PARGB
+
+#define CLIP_XCOORD 0		/* normal place */
+#define CLIP_YCOROD 1		/* normal place */
+#define CLIP_ZCOORD 2		/* normal place */
+#define CLIP_WCOORD 3		/* normal place */
+#define CLIP_GCOORD 4		/* GR_VERTEX_PARGB_OFFSET */
+#define CLIP_BCOORD 5		/* GR_VERTEX_SOW_TMU0_OFFSET */
+#define CLIP_RCOORD 6		/* GR_VERTEX_TOW_TMU0_OFFSET */
+#define CLIP_ACOORD 7		/* GR_VERTEX_OOW_TMU0_OFFSET */
+
+#else
+
 #define CLIP_XCOORD 0		/* normal place */
 #define CLIP_YCOROD 1		/* normal place */
 #define CLIP_ZCOORD 2		/* GR_VERTEX_Z_OFFSET */
@@ -89,7 +108,7 @@ extern void fx_sanity_triangle( GrVertex *, GrVertex *, GrVertex * );
 #define CLIP_ACOORD 7		/* normal place */
 
 
-
+#endif
 
 /* Should have size == 16 * sizeof(float).
  */
@@ -141,6 +160,12 @@ do {						\
   gWin[(x)].v.a=UBYTE_COLOR_TO_FLOAT_255_COLOR(col[3]);	\
 }
 
+#if FX_USE_PARGB
+#define GOURAUD2(v, c) {																\
+  GLubyte *col = c;  																	\
+  v->argb=MESACOLOR2PARGB(col);															\
+}
+#else
 #define GOURAUD2(v, c) {			\
   GLubyte *col = c;  				\
   v->r=UBYTE_COLOR_TO_FLOAT_255_COLOR(col[0]);	\
@@ -148,6 +173,7 @@ do {						\
   v->b=UBYTE_COLOR_TO_FLOAT_255_COLOR(col[2]);	\
   v->a=UBYTE_COLOR_TO_FLOAT_255_COLOR(col[3]);	\
 }
+#endif
 
 
 /* Mergable items first
@@ -178,29 +204,31 @@ do {						\
 #define FX_UM_E0_MODULATE           0x00000002
 #define FX_UM_E0_DECAL              0x00000004
 #define FX_UM_E0_BLEND              0x00000008
+#define FX_UM_E0_ADD				0x00000010
 
-#define FX_UM_E1_REPLACE            0x00000010
-#define FX_UM_E1_MODULATE           0x00000020
-#define FX_UM_E1_DECAL              0x00000040
-#define FX_UM_E1_BLEND              0x00000080
+#define FX_UM_E1_REPLACE            0x00000020
+#define FX_UM_E1_MODULATE           0x00000040
+#define FX_UM_E1_DECAL              0x00000080
+#define FX_UM_E1_BLEND              0x00000100
+#define FX_UM_E1_ADD				0x00000200
 
-#define FX_UM_E_ENVMODE             0x000000ff
+#define FX_UM_E_ENVMODE             0x000003ff
 
-#define FX_UM_E0_ALPHA              0x00000100
-#define FX_UM_E0_LUMINANCE          0x00000200
-#define FX_UM_E0_LUMINANCE_ALPHA    0x00000400
-#define FX_UM_E0_INTENSITY          0x00000800
-#define FX_UM_E0_RGB                0x00001000
-#define FX_UM_E0_RGBA               0x00002000
+#define FX_UM_E0_ALPHA              0x00001000
+#define FX_UM_E0_LUMINANCE          0x00002000
+#define FX_UM_E0_LUMINANCE_ALPHA    0x00004000
+#define FX_UM_E0_INTENSITY          0x00008000
+#define FX_UM_E0_RGB                0x00010000
+#define FX_UM_E0_RGBA               0x00020000
 
-#define FX_UM_E1_ALPHA              0x00004000
-#define FX_UM_E1_LUMINANCE          0x00008000
-#define FX_UM_E1_LUMINANCE_ALPHA    0x00010000
-#define FX_UM_E1_INTENSITY          0x00020000
-#define FX_UM_E1_RGB                0x00040000
-#define FX_UM_E1_RGBA               0x00080000
+#define FX_UM_E1_ALPHA              0x00040000
+#define FX_UM_E1_LUMINANCE          0x00080000
+#define FX_UM_E1_LUMINANCE_ALPHA    0x00100000
+#define FX_UM_E1_INTENSITY          0x00200000
+#define FX_UM_E1_RGB                0x00400000
+#define FX_UM_E1_RGBA               0x00800000
 
-#define FX_UM_E_IFMT                0x000fff00
+#define FX_UM_E_IFMT                0x00fff000
 
 #define FX_UM_COLOR_ITERATED        0x00100000
 #define FX_UM_COLOR_CONSTANT        0x00200000
@@ -355,8 +383,14 @@ struct tfxMesaVertexBuffer {
 };
 
 #define FX_DRIVER_DATA(vb) ((struct tfxMesaVertexBuffer *)((vb)->driver_data))
-#define FX_CONTEXT(ctx) ((struct tfxMesaContext *)((ctx)->DriverCtx))
+#define FX_CONTEXT(ctx) ((fxMesaContext)((ctx)->DriverCtx))
 #define FX_TEXTURE_DATA(t) ((tfxTexInfo *) ((t)->Current->DriverData))
+
+#if defined(XFree86Server) || defined(GLX_DIRECT_RENDERING)
+#include "tdfx_init.h"
+#else
+#define DRI_FX_CONTEXT
+#endif
 
 struct tfxMesaContext {
   GuTexPalette glbPalette;
@@ -435,12 +469,18 @@ struct tfxMesaContext {
   GLboolean haveTwoTMUs;	/* True if we really have 2 tmu's  */
   GLboolean emulateTwoTMUs;	/* True if we present 2 tmu's to mesa.  */
   GLboolean haveAlphaBuffer;
+  GLboolean haveZBuffer;
   GLboolean haveDoubleBuffer;
   GLboolean haveGlobalPaletteTexture;
   GLint swapInterval;
   GLint maxPendingSwapBuffers;
   
   FX_GrContext_t glideContext;
+
+  GLfloat wscale;
+
+  DRI_FX_CONTEXT
+
 };
 
 typedef void (*tfxSetupFunc)(struct vertex_buffer *, GLuint, GLuint);
@@ -452,10 +492,10 @@ extern void fxSetupFXUnits(GLcontext *);
 extern void fxSetupDDPointers(GLcontext *);
 extern void fxDDSetNearFar(GLcontext *, GLfloat, GLfloat);
 
-extern void fxDDSetupInit();
-extern void fxDDCvaInit();
-extern void fxDDTrifuncInit();
-extern void fxDDFastPathInit();
+extern void fxDDSetupInit(void);
+extern void fxDDCvaInit(void);
+extern void fxDDTrifuncInit(void);
+extern void fxDDFastPathInit(void);
 
 extern void fxDDChooseRenderState( GLcontext *ctx );
 
@@ -475,7 +515,7 @@ extern quad_func fxDDChooseQuadFunction(GLcontext *);
 extern render_func **fxDDChooseRenderVBTables(GLcontext *);
 
 extern void fxDDRenderInit(GLcontext *);
-extern void fxDDClipInit();
+extern void fxDDClipInit(void);
 
 extern void fxUpdateDDSpanPointers(GLcontext *);
 extern void fxSetupDDSpanPointers(GLcontext *);
@@ -531,8 +571,8 @@ extern void fxDDRenderVBIndirectDirect( struct vertex_buffer *VB );
 
 extern void fxDDInitExtensions( GLcontext *ctx );
 
-extern void fxTMInit(fxMesaContext);
-extern void fxTMClose(fxMesaContext);
+extern void fxTMInit(fxMesaContext ctx);
+extern void fxTMClose(fxMesaContext ctx);
 extern void fxTMMoveInTM(fxMesaContext, struct gl_texture_object *, GLint);
 extern void fxTMMoveOutTM(fxMesaContext, struct gl_texture_object *);
 extern void fxTMFreeTexture(fxMesaContext, struct gl_texture_object *);
@@ -580,5 +620,6 @@ extern void fxPrintHintState( const char *msg, GLuint state );
 
 extern void fxDDDoRenderVB( struct vertex_buffer *VB );
 
+extern int fxDDInitFxMesaContext( fxMesaContext fxMesa );
 
 #endif

@@ -1,4 +1,4 @@
-/* $Id: gl.h,v 1.8 1999/09/19 02:03:18 tjump Exp $ */
+/* $Id: gl.h,v 1.16 1999/10/30 18:39:06 tjump Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -50,11 +50,17 @@
 #endif
 
 #if !defined(OPENSTEP) && (defined(__WIN32__) || defined(__CYGWIN32__))
-#	pragma warning( disable : 4244 ) /* '=' : conversion from 'const double ' to 'float ', possible loss of data */
-#	pragma warning( disable : 4018 ) /* '<' : signed/unsigned mismatch */
-#	pragma warning( disable : 4305 ) /* '=' : truncation from 'const double ' to 'float ' */
-#	pragma warning( disable : 4550 ) /* 'function' undefined; assuming extern returning int */
-#	pragma warning( disable : 4761 ) /* integral size mismatch in argument; conversion supplied */
+#  pragma warning( disable : 4068 ) /* unknown pragma */
+#  pragma warning( disable : 4710 ) /* function 'foo' not inlined */
+#  pragma warning( disable : 4711 ) /* function 'foo' selected for automatic inline expansion */
+#	if defined(MESA_MINWARN)
+#    pragma warning( disable : 4127 ) /* conditional expression is constant */
+#	  pragma warning( disable : 4244 ) /* '=' : conversion from 'const double ' to 'float ', possible loss of data */
+#	  pragma warning( disable : 4018 ) /* '<' : signed/unsigned mismatch */
+#	  pragma warning( disable : 4305 ) /* '=' : truncation from 'const double ' to 'float ' */
+#	  pragma warning( disable : 4550 ) /* 'function' undefined; assuming extern returning int */
+#	  pragma warning( disable : 4761 ) /* integral size mismatch in argument; conversion supplied */
+#  endif
 #	if defined(_MSC_VER) && defined(BUILD_GL32) /* tag specify we're building mesa as a DLL */
 #		define GLAPI __declspec(dllexport)
 #     define WGLAPI __declspec(dllexport)
@@ -81,11 +87,6 @@
 /* compatability guard so we don't need to change client code */
 
 #if defined(_WIN32) && !defined(_WINDEF_) && !defined(OPENSTEP)
-#	if !defined(MESA_MINWARN)
-#		pragma message( "note: WINDOWS.H not included, providing Mesa definition of CALLBACK macro" )
-#		pragma message( "----: and PROC typedef. If you receive compiler warnings about either ")
-#		pragma message( "----: being multiply defined you should include WINDOWS.H priot to gl/gl.h" )
-#	endif
 #	define CALLBACK GLCALLBACK
 typedef int (GLAPIENTRY *PROC)();
 typedef void *HGLRC;
@@ -94,11 +95,6 @@ typedef unsigned long COLORREF;
 #endif
 
 #if defined(_WIN32) && !defined(_WINGDI_) && !defined(OPENSTEP)
-#	if !defined(MESA_MINWARN)
-#		pragma message( "note: WINDOWS.H not included, providing Mesa definition of wgl functions" )
-#		pragma message( "----: and macros. If you receive compiler warnings about any being multiply ")
-#		pragma message( "----: defined you should include WINDOWS.H priot to gl/gl.h" )
-#	endif
 #	define WGL_FONT_LINES      0
 #	define WGL_FONT_POLYGONS   1
 #	ifdef UNICODE
@@ -113,7 +109,6 @@ typedef struct _GLYPHMETRICSFLOAT GLYPHMETRICSFLOAT, *PGLYPHMETRICSFLOAT, *LPGLY
 typedef struct tagPIXELFORMATDESCRIPTOR PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESCRIPTOR, *LPPIXELFORMATDESCRIPTOR;
 #include <gl/mesa_wgl.h>
 #endif
-
 
 #ifdef __cplusplus
 extern "C" {
@@ -860,8 +855,8 @@ typedef enum {
 	/* OpenGL 1.2 */
 	GL_RESCALE_NORMAL			= 0x803A,
 	GL_CLAMP_TO_EDGE			= 0x812F,
-	GL_MAX_ELEMENTS_VERTICES		= 0xF0E8,
-	GL_MAX_ELEMENTS_INDICES			= 0xF0E9,
+	GL_MAX_ELEMENTS_VERTICES		= 0x80E8,
+	GL_MAX_ELEMENTS_INDICES			= 0x80E9,
 	GL_BGR					= 0x80E0,
 	GL_BGRA					= 0x80E1,
 	GL_UNSIGNED_BYTE_3_3_2			= 0x8032,
@@ -941,7 +936,6 @@ typedef enum {
 	GL_COLOR_TABLE_ALPHA_SIZE		= 0x80DD,
 	GL_COLOR_TABLE_LUMINANCE_SIZE		= 0x80DE,
 	GL_COLOR_TABLE_INTENSITY_SIZE		= 0x80DF,
-
 	/* GL_EXT_convolution and GL_HP_convolution_border_modes */
 	GL_CONVOLUTION_1D			= 0x8010,
 	GL_CONVOLUTION_2D			= 0x8011,
@@ -966,7 +960,6 @@ typedef enum {
 	GL_CONSTANT_BORDER			= 0x8151,
 	GL_REPLICATE_BORDER			= 0x8153,
 	GL_CONVOLUTION_BORDER_COLOR		= 0x8154,
-
 	/* GL_SGI_color_matrix */
 	GL_COLOR_MATRIX				= 0x80B1,
 	GL_COLOR_MATRIX_STACK_DEPTH		= 0x80B2,
@@ -979,7 +972,6 @@ typedef enum {
 	GL_POST_COLOR_MATRIX_GREEN_BIAS		= 0x80B9,
 	GL_POST_COLOR_MATRIX_BLUE_BIAS		= 0x80BA,
 	GL_POST_COLOR_MATRIX_ALPHA_BIAS		= 0x80BB,
-
 	/* GL_EXT_histogram */
 	GL_HISTOGRAM				= 0x8024,
 	GL_PROXY_HISTOGRAM			= 0x8025,
@@ -995,6 +987,14 @@ typedef enum {
 	GL_MINMAX_FORMAT			= 0x802F,
 	GL_MINMAX_SINK				= 0x8030,
 	GL_TABLE_TOO_LARGE			= 0x8031,
+	/* GL_EXT_blend_color, GL_EXT_blend_minmax */
+	GL_BLEND_EQUATION			= 0x8009,
+	GL_MIN					= 0x8007,
+	GL_MAX					= 0x8008,
+	GL_FUNC_ADD				= 0x8006,
+	GL_FUNC_SUBTRACT			= 0x800A,
+	GL_FUNC_REVERSE_SUBTRACT		= 0x800B,
+	GL_BLEND_COLOR				= 0x8005,
 
 	/* GL_NV_texgen_reflection (nVidia) */
 	GL_NORMAL_MAP_NV			= 0x8511,
@@ -2082,6 +2082,36 @@ GLAPI void GLAPIENTRY glCopyTexSubImage3D( GLenum target, GLint level,
 
 /* 1.2 imaging extension functions */
 
+GLAPI void GLAPIENTRY glColorTable( GLenum target, GLenum internalformat,
+                                    GLsizei width, GLenum format,
+                                    GLenum type, const GLvoid *table );
+
+GLAPI void GLAPIENTRY glColorSubTable( GLenum target,
+                                       GLsizei start, GLsizei count,
+                                       GLenum format, GLenum type,
+                                       const GLvoid *data );
+
+GLAPI void GLAPIENTRY glColorTableParameteriv(GLenum target, GLenum pname,
+                                              const GLint *params);
+
+GLAPI void GLAPIENTRY glColorTableParameterfv(GLenum target, GLenum pname,
+                                              const GLfloat *params);
+
+GLAPI void GLAPIENTRY glCopyColorSubTable( GLenum target, GLsizei start,
+                                           GLint x, GLint y, GLsizei width );
+
+GLAPI void GLAPIENTRY glCopyColorTable( GLenum target, GLenum internalformat,
+                                        GLint x, GLint y, GLsizei width );
+
+GLAPI void GLAPIENTRY glGetColorTable( GLenum target, GLenum format,
+                                       GLenum type, GLvoid *table );
+
+GLAPI void GLAPIENTRY glGetColorTableParameterfv( GLenum target, GLenum pname,
+                                                  GLfloat *params );
+
+GLAPI void GLAPIENTRY glGetColorTableParameteriv( GLenum target, GLenum pname,
+                                                  GLint *params );
+
 GLAPI void GLAPIENTRY glBlendEquation( GLenum mode );
 
 GLAPI void GLAPIENTRY glBlendColor( GLclampf red, GLclampf green,
@@ -2107,7 +2137,7 @@ GLAPI void GLAPIENTRY glMinmax( GLenum target, GLenum internalformat,
 
 GLAPI void GLAPIENTRY glResetMinmax( GLenum target );
 
-GLAPI void GLAPIENTRY glGetMinMax( GLenum target, GLboolean reset,
+GLAPI void GLAPIENTRY glGetMinmax( GLenum target, GLboolean reset,
                                    GLenum format, GLenum types,
                                    GLvoid *values );
 
@@ -2160,12 +2190,6 @@ GLAPI void GLAPIENTRY glSeparableFilter2D( GLenum target,
 GLAPI void GLAPIENTRY glGetSeparableFilter( GLenum target, GLenum format,
 	GLenum type, GLvoid *row, GLvoid *column, GLvoid *span );
 
-GLAPI void GLAPIENTRY glCopyColorSubTable( GLenum target, GLsizei start,
-	GLint x, GLint y, GLsizei width );
-
-GLAPI void GLAPIENTRY glCopyColorTable( GLenum target, GLenum internalformat,
-	GLint x, GLint y, GLsizei width );
-
 
 
 /* GL_EXT_compiled_vertex_array */
@@ -2173,18 +2197,6 @@ GLAPI void GLAPIENTRY glLockArraysEXT( GLint first, GLsizei count );
 GLAPI void GLAPIENTRY glUnlockArraysEXT( void );
 
 
-/*
- * GL_EXT_get_proc_address
- *
- * XXX this is a preliminary extension.  It may change!  Use at your
- * own risk!  Do not release code which uses this extension yet!
- * If you want to try it out, #define GL_EXT_get_proc_address before
- * #include <GL/gl.h>
- */
-#define GL_EXT_get_proc_address 1
-#ifdef GL_EXT_get_proc_address
-GLAPI void (GLAPIENTRY *glGetProcAddressEXT(const GLubyte *procName))();
-#endif
 
 #if defined(__BEOS__) || defined(__QUICKDRAW__)
 #pragma export off

@@ -1,4 +1,4 @@
-/* $Id: image.c,v 1.2 1999/09/15 13:56:44 brianp Exp $ */
+/* $Id: image.c,v 1.10 1999/10/26 09:21:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -29,9 +29,13 @@
 #ifdef PC_HEADER
 #include "all.h"
 #else
+#ifndef XFree86Server
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#else
+#include "GL/xf86glx.h"
+#endif
 #include "context.h"
 #include "image.h"
 #include "macros.h"
@@ -479,7 +483,7 @@ GLvoid *gl_pixel_addr_in_image( const struct gl_pixelstore_attrib *packing,
  */
 static struct gl_image *alloc_image( void )
 {
-   return (struct gl_image *) calloc(sizeof(struct gl_image), 1);
+   return CALLOC_STRUCT(gl_image);
 }
 
 
@@ -511,9 +515,9 @@ static struct gl_image *alloc_error_image( GLint width, GLint height,
 void gl_free_image( struct gl_image *image )
 {
    if (image->Data) {
-      free(image->Data);
+      FREE(image->Data);
    }
-   free(image);
+   FREE(image);
 }
 
 
@@ -531,6 +535,9 @@ GLboolean gl_image_error_test( GLcontext *ctx, const struct gl_image *image,
    }
    if (image->Width <= 0 || image->Height <= 0 || image->Depth <= 0) {
       gl_error( ctx, GL_INVALID_VALUE, msg );
+      return GL_TRUE;
+   }
+   else if (!gl_is_legal_format_and_type(image->Format, image->Type)) {
       return GL_TRUE;
    }
    else {
@@ -561,6 +568,15 @@ unpack_depth_image( GLcontext *ctx, GLenum type, GLint width, GLint height,
    GLushort *sDst;
    GLuint *iDst;
    GLint i, j;
+   GLboolean errorType;
+
+   errorType = type != GL_BYTE &&
+               type != GL_UNSIGNED_BYTE &&
+               type != GL_SHORT &&
+               type != GL_UNSIGNED_SHORT &&
+               type != GL_INT &&
+               type != GL_UNSIGNED_INT &&
+               type != GL_FLOAT;
 
    image = alloc_image();
    if (image) {
@@ -569,17 +585,21 @@ unpack_depth_image( GLcontext *ctx, GLenum type, GLint width, GLint height,
       image->Depth = 1;
       image->Components = 1;
       image->Format = GL_DEPTH_COMPONENT;
+      if (errorType) {
+         image->Type = type;
+         image->Data = NULL;
+      }
       if (type==GL_UNSIGNED_SHORT) {
          image->Type = GL_UNSIGNED_SHORT;
-         image->Data = malloc( width * height * sizeof(GLushort));
+         image->Data = MALLOC( width * height * sizeof(GLushort));
       }
       else if (type==GL_UNSIGNED_INT) {
          image->Type = GL_UNSIGNED_INT;
-         image->Data = malloc( width * height * sizeof(GLuint));
+         image->Data = MALLOC( width * height * sizeof(GLuint));
       }
       else {
          image->Type = GL_FLOAT;
-         image->Data = malloc( width * height * sizeof(GLfloat));
+         image->Data = MALLOC( width * height * sizeof(GLfloat));
       }
       image->RefCount = 0;
       if (!image->Data)
@@ -588,6 +608,9 @@ unpack_depth_image( GLcontext *ctx, GLenum type, GLint width, GLint height,
    else {
       return NULL;
    }
+
+   if (errorType)
+      return image;
 
    fDst = (GLfloat *) image->Data;
    sDst = (GLushort *) image->Data;
@@ -696,8 +719,18 @@ unpack_stencil_image( GLcontext *ctx, GLenum type, GLint width, GLint height,
    struct gl_image *image;
    GLubyte *dst;
    GLint i, j;
+   GLboolean errorType;
 
    assert(sizeof(GLstencil) == sizeof(GLubyte));
+
+   errorType = type != GL_BYTE &&
+               type != GL_UNSIGNED_BYTE &&
+               type != GL_SHORT &&
+               type != GL_UNSIGNED_SHORT &&
+               type != GL_INT &&
+               type != GL_UNSIGNED_INT &&
+               type != GL_FLOAT &&
+               type != GL_BITMAP;
 
    image = alloc_image();
    if (image) {
@@ -706,8 +739,14 @@ unpack_stencil_image( GLcontext *ctx, GLenum type, GLint width, GLint height,
       image->Depth = 1;
       image->Components = 1;
       image->Format = GL_STENCIL_INDEX;
-      image->Type = GL_UNSIGNED_BYTE;
-      image->Data = malloc( width * height * sizeof(GLubyte));
+      if (errorType) {
+         image->Type = type;
+         image->Data = NULL;
+      }
+      else {
+         image->Type = GL_UNSIGNED_BYTE;
+         image->Data = MALLOC( width * height * sizeof(GLubyte));
+      }
       image->RefCount = 0;
       if (!image->Data)
          return image;
@@ -715,6 +754,9 @@ unpack_stencil_image( GLcontext *ctx, GLenum type, GLint width, GLint height,
    else {
       return NULL;
    }
+
+   if (errorType)
+      return image; /* error will be generated later */
 
    dst = (GLubyte *) image->Data;
 
@@ -821,7 +863,7 @@ unpack_bitmap( GLenum format, GLint width, GLint height,
    /* Alloc dest storage */
    bytes = ((width+7)/8 * height);
    if (bytes>0 && pixels!=NULL) {
-      buffer = (GLubyte *) malloc( bytes );
+      buffer = (GLubyte *) MALLOC( bytes );
       if (!buffer) {
          return NULL;
       }
@@ -834,7 +876,7 @@ unpack_bitmap( GLenum format, GLint width, GLint height,
                                                GL_COLOR_INDEX, GL_BITMAP,
                                                0, i, 0 );
          if (!src) {
-            free(buffer);
+            FREE(buffer);
             return NULL;
          }
          MEMCPY( dst, src, width_in_bytes );
@@ -862,7 +904,7 @@ unpack_bitmap( GLenum format, GLint width, GLint height,
       image->RefCount = 0;
    }
    else {
-      free( buffer );
+      FREE( buffer );
       return NULL;
    }
 
@@ -939,7 +981,7 @@ unpack_ubyte_image( GLint width, GLint height,
    components = gl_components_in_format( format );
 
    width_in_bytes = width * components * sizeof(GLubyte);
-   buffer = (GLubyte *) malloc( height * width_in_bytes * depth );
+   buffer = (GLubyte *) MALLOC( height * width_in_bytes * depth );
    if (!buffer) {
       return NULL;
    }
@@ -952,7 +994,7 @@ unpack_ubyte_image( GLint width, GLint height,
                        pixels, width, height, format, GL_UNSIGNED_BYTE,
                        d, i, 0 );
          if (!src) {
-            free(buffer);
+            FREE(buffer);
             return NULL;
          }
          MEMCPY( dst, src, width_in_bytes );
@@ -1012,7 +1054,7 @@ unpack_ubyte_image( GLint width, GLint height,
       image->RefCount = 0;
    }
    else {
-      free( buffer );
+      FREE( buffer );
    }
 
    return image;
@@ -1073,7 +1115,7 @@ unpack_float_image( GLcontext *ctx, GLint width, GLint height, GLint depth,
       else
          image->Format = format;
       image->Type = GL_FLOAT;
-      image->Data = malloc( elems_per_row * height * depth * sizeof(GLfloat));
+      image->Data = MALLOC( elems_per_row * height * depth * sizeof(GLfloat));
       image->RefCount = 0;
       if (!image->Data)
          return image;
@@ -1641,19 +1683,32 @@ void gl_pack_rgba_span( const GLcontext *ctx,
    /* Test for optimized case first */
    if (!ctx->Pixel.ScaleOrBiasRGBA && !ctx->Pixel.MapColorFlag &&
        format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
-      /* simple case */
+      /* common simple case */
       MEMCPY( destination, rgba, n * 4 * sizeof(GLubyte) );
+   }
+   else if (!ctx->Pixel.ScaleOrBiasRGBA && !ctx->Pixel.MapColorFlag &&
+       format == GL_RGB && type == GL_UNSIGNED_BYTE) {
+      /* common simple case */
+      GLint i;
+      GLubyte *dest = (GLubyte *) destination;
+      for (i = 0; i < n; i++) {
+         dest[0] = rgba[i][RCOMP];
+         dest[1] = rgba[i][GCOMP];
+         dest[2] = rgba[i][BCOMP];
+         dest += 3;
+      }
    }
    else {
       GLfloat red[MAX_WIDTH], green[MAX_WIDTH], blue[MAX_WIDTH];
       GLfloat alpha[MAX_WIDTH], luminance[MAX_WIDTH];
-      GLfloat rscale = 1.0F / 255.0F;
-      GLfloat gscale = 1.0F / 255.0F;
-      GLfloat bscale = 1.0F / 255.0F;
-      GLfloat ascale = 1.0F / 255.0F;
+      const GLfloat rscale = 1.0F / 255.0F;
+      const GLfloat gscale = 1.0F / 255.0F;
+      const GLfloat bscale = 1.0F / 255.0F;
+      const GLfloat ascale = 1.0F / 255.0F;
+      const GLint comps = gl_components_in_format(format);
       GLuint i;
 
-      assert( n < MAX_WIDTH );
+      assert(n <= MAX_WIDTH);
 
       /* convert color components to floating point */
       for (i=0;i<n;i++) {
@@ -1903,7 +1958,7 @@ void gl_pack_rgba_span( const GLcontext *ctx,
                      gl_problem(ctx, "bad format in gl_pack_rgba_span\n");
                }
                if (packing->SwapBytes) {
-                  gl_swap2( (GLushort *) dst, n );
+                  gl_swap2( (GLushort *) dst, n * comps);
                }
             }
 	    break;
@@ -1978,7 +2033,7 @@ void gl_pack_rgba_span( const GLcontext *ctx,
                      gl_problem(ctx, "bad format in gl_pack_rgba_span\n");
                }
                if (packing->SwapBytes) {
-                  gl_swap2( (GLushort *) dst, n );
+                  gl_swap2( (GLushort *) dst, n * comps );
                }
             }
 	    break;
@@ -2054,7 +2109,7 @@ void gl_pack_rgba_span( const GLcontext *ctx,
                      gl_problem(ctx, "bad format in gl_pack_rgba_span\n");
                }
                if (packing->SwapBytes) {
-                  gl_swap4( (GLuint *) dst, n );
+                  gl_swap4( (GLuint *) dst, n * comps );
                }
             }
 	    break;
@@ -2130,7 +2185,7 @@ void gl_pack_rgba_span( const GLcontext *ctx,
                      gl_problem(ctx, "bad format in gl_pack_rgba_span\n");
                }
 	       if (packing->SwapBytes) {
-		  gl_swap4( (GLuint *) dst, n );
+		  gl_swap4( (GLuint *) dst, n * comps );
 	       }
 	    }
 	    break;
@@ -2206,7 +2261,7 @@ void gl_pack_rgba_span( const GLcontext *ctx,
                      gl_problem(ctx, "bad format in gl_pack_rgba_span\n");
                }
 	       if (packing->SwapBytes) {
-		  gl_swap4( (GLuint *) dst, n );
+		  gl_swap4( (GLuint *) dst, n * comps );
 	       }
 	    }
 	    break;

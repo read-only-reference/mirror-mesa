@@ -34,7 +34,7 @@
 /*************************** Texture Mapping ****************************/
 /************************************************************************/
 
-static void fxTexInvalidate(GLcontext *ctx, struct gl_texture_object *tObj)
+void fxTexInvalidate(GLcontext *ctx, struct gl_texture_object *tObj)
 {
   fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
   tfxTexInfo *ti;
@@ -52,7 +52,7 @@ static tfxTexInfo *fxAllocTexObjData(fxMesaContext fxMesa)
   tfxTexInfo *ti;
   int i;
 
-  if(!(ti=malloc(sizeof(tfxTexInfo)))) {
+  if(!(ti=CALLOC(sizeof(tfxTexInfo)))) {
     fprintf(stderr,"fx Driver: out of memory !\n");
     fxCloseHardware();
     exit(-1);
@@ -219,6 +219,7 @@ void fxDDTexParam(GLcontext *ctx, GLenum target, struct gl_texture_object *tObj,
       ti->sClamp=GR_TEXTURECLAMP_WRAP;
       break;
     default:
+       fprintf(stderr, "BAD CLAMP\n");
       break;
     }
     fxMesa->new_state|=FX_NEW_TEXTURING;
@@ -276,7 +277,7 @@ void fxDDTexDel(GLcontext *ctx, struct gl_texture_object *tObj)
 
   fxTMFreeTexture(fxMesa,tObj);
 
-  free(ti);
+  FREE(ti);
   tObj->DriverData=NULL;
 
   ctx->NewState|=NEW_TEXTURING;
@@ -833,7 +834,7 @@ static void fxTexBuildImageMap(const struct gl_texture_image *image,
       (*istranslate)=GL_TRUE;
 
       if(!(*dest)) {
-        if(!((*dest)=src=(unsigned short *)malloc(sizeof(unsigned char)*w*h))) {
+        if(!((*dest)=src=(unsigned short *)MALLOC(sizeof(unsigned char)*w*h))) {
           fprintf(stderr,"fx Driver: out of memory !\n");
           fxCloseHardware();
           exit(-1);
@@ -861,7 +862,7 @@ static void fxTexBuildImageMap(const struct gl_texture_image *image,
     (*istranslate)=GL_TRUE;
 
     if(!(*dest)) {
-      if(!((*dest)=src=(unsigned short *)malloc(sizeof(unsigned short)*w*h))) {
+      if(!((*dest)=src=(unsigned short *)MALLOC(sizeof(unsigned short)*w*h))) {
         fprintf(stderr,"fx Driver: out of memory !\n");
         fxCloseHardware();
         exit(-1);
@@ -905,7 +906,7 @@ static void fxTexBuildImageMap(const struct gl_texture_image *image,
     (*istranslate)=GL_TRUE;
 
     if(!(*dest)) {
-      if(!((*dest)=src=(unsigned short *)malloc(sizeof(unsigned short)*w*h))) {
+      if(!((*dest)=src=(unsigned short *)MALLOC(sizeof(unsigned short)*w*h))) {
         fprintf(stderr,"fx Driver: out of memory !\n");
         fxCloseHardware();
         exit(-1);
@@ -955,7 +956,7 @@ static void fxTexBuildImageMap(const struct gl_texture_image *image,
     (*istranslate)=GL_TRUE;
 
     if(!(*dest)) {
-      if(!((*dest)=src=(unsigned short *)malloc(sizeof(unsigned short)*w*h))) {
+      if(!((*dest)=src=(unsigned short *)MALLOC(sizeof(unsigned short)*w*h))) {
         fprintf(stderr,"fx Driver: out of memory !\n");
         fxCloseHardware();
         exit(-1);
@@ -1046,7 +1047,7 @@ void fxDDTexImg(GLcontext *ctx, GLenum target,
         return;
       } else {
         if(mml->translated)
-          free(mml->data);
+          FREE(mml->data);
         mml->data=NULL;
       }
     }
