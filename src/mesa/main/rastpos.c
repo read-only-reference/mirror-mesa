@@ -129,7 +129,7 @@ shade_rastpos(GLcontext *ctx,
               const GLfloat normal[3],
               GLfloat Rcolor[4],
               GLfloat Rspec[4],
-              GLuint *Rindex)
+              GLfloat *Rindex)
 {
    GLfloat (*base)[3] = ctx->Light._BaseColor;
    struct gl_light *light;
@@ -274,7 +274,7 @@ shade_rastpos(GLcontext *ctx,
       if (i > ind[MAT_INDEX_SPECULAR]) {
 	 i = ind[MAT_INDEX_SPECULAR];
       }
-      *Rindex = (GLuint) (GLint) i;
+      *Rindex = i;
    }
 }
 
@@ -872,7 +872,7 @@ void _mesa_init_rastpos( GLcontext * ctx )
    ASSIGN_4V( ctx->Current.RasterPos, 0.0, 0.0, 0.0, 1.0 );
    ctx->Current.RasterDistance = 0.0;
    ASSIGN_4V( ctx->Current.RasterColor, 1.0, 1.0, 1.0, 1.0 );
-   ctx->Current.RasterIndex = 1;
+   ctx->Current.RasterIndex = 1.0;
    for (i=0; i<MAX_TEXTURE_UNITS; i++)
       ASSIGN_4V( ctx->Current.RasterTexCoords[i], 0.0, 0.0, 0.0, 1.0 );
    ctx->Current.RasterPosValid = GL_TRUE;

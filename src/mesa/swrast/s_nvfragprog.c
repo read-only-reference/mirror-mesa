@@ -38,7 +38,6 @@
 /* if 1, print some debugging info */
 #define DEBUG_FRAG 0
 
-
 /**
  * Fetch a texel.
  */
@@ -120,12 +119,13 @@ get_register_pointer( GLcontext *ctx,
          ASSERT(source->Index < MAX_NV_FRAGMENT_PROGRAM_PARAMS);
          src = ctx->FragmentProgram.Parameters[source->Index];
          break;
+
+      case PROGRAM_STATE_VAR:
+			/* Fallthrough */
+
       case PROGRAM_NAMED_PARAM:
          ASSERT(source->Index < (GLint) program->Parameters->NumParameters);
          src = program->Parameters->Parameters[source->Index].Values;
-         break;
-      case PROGRAM_STATE_VAR:
-         src = NULL;
          break;
       default:
          _mesa_problem(ctx, "Invalid input register file in fetch_vector4");
@@ -181,28 +181,27 @@ fetch_vector4( GLcontext *ctx,
  * need to execute another instance of the program (ugh)!
  */
 static GLboolean
-fetch_vector4_deriv( const struct fp_src_register *source,
+fetch_vector4_deriv( GLcontext *ctx,
+                     const struct fp_src_register *source,
                      const struct sw_span *span,
-                     char xOrY, GLfloat result[4] )
+                     char xOrY, GLint column, GLfloat result[4] )
 {
    GLfloat src[4];
 
    ASSERT(xOrY == 'X' || xOrY == 'Y');
-
-   assert(source->File == PROGRAM_INPUT);
 
    switch (source->Index) {
    case FRAG_ATTRIB_WPOS:
       if (xOrY == 'X') {
          src[0] = 1.0;
          src[1] = 0.0;
-         src[2] = span->dzdx;
+         src[2] = span->dzdx / ctx->DepthMaxF;
          src[3] = span->dwdx;
       }
       else {
          src[0] = 0.0;
          src[1] = 1.0;
-         src[2] = span->dzdy;
+         src[2] = span->dzdy / ctx->DepthMaxF;
          src[3] = span->dwdy;
       }
       break;
@@ -258,17 +257,22 @@ fetch_vector4_deriv( const struct fp_src_register *source,
    case FRAG_ATTRIB_TEX7:
       if (xOrY == 'X') {
          const GLuint u = source->Index - FRAG_ATTRIB_TEX0;
-         src[0] = span->texStepX[u][0] * (1.0F / CHAN_MAXF);
-         src[1] = span->texStepX[u][1] * (1.0F / CHAN_MAXF);
-         src[2] = span->texStepX[u][2] * (1.0F / CHAN_MAXF);
-         src[3] = span->texStepX[u][3] * (1.0F / CHAN_MAXF);
+         /* this is a little tricky - I think I've got it right */
+         const GLfloat invQ = 1.0f / (span->tex[u][3]
+                                      + span->texStepX[u][3] * column);
+         src[0] = span->texStepX[u][0] * invQ;
+         src[1] = span->texStepX[u][1] * invQ;
+         src[2] = span->texStepX[u][2] * invQ;
+         src[3] = span->texStepX[u][3] * invQ;
       }
       else {
          const GLuint u = source->Index - FRAG_ATTRIB_TEX0;
-         src[0] = span->texStepY[u][0] * (1.0F / CHAN_MAXF);
-         src[1] = span->texStepY[u][1] * (1.0F / CHAN_MAXF);
-         src[2] = span->texStepY[u][2] * (1.0F / CHAN_MAXF);
-         src[3] = span->texStepY[u][3] * (1.0F / CHAN_MAXF);
+         /* Tricky, as above, but in Y direction */
+         const GLfloat invQ = 1.0f / (span->tex[u][3] + span->texStepY[u][3]);
+         src[0] = span->texStepY[u][0] * invQ;
+         src[1] = span->texStepY[u][1] * invQ;
+         src[2] = span->texStepY[u][2] * invQ;
+         src[3] = span->texStepY[u][3] * invQ;
       }
       break;
    default:
@@ -527,6 +531,7 @@ init_machine_deriv( GLcontext *ctx,
    for (u = 0; u < ctx->Const.MaxTextureCoordUnits; u++) {
       if (program->InputsRead & (1 << (FRAG_ATTRIB_TEX0 + u))) {
          GLfloat *tex = (GLfloat*) machine->Inputs[FRAG_ATTRIB_TEX0 + u];
+         /* XXX perspective-correct interpolation */
          if (xOrY == 'X') {
             tex[0] += span->texStepX[u][0];
             tex[1] += span->texStepX[u][1];
@@ -571,6 +576,11 @@ execute_program( GLcontext *ctx,
 #if DEBUG_FRAG
    printf("execute fragment program --------------------\n");
 #endif
+
+   /* XXX: This should go someplace else, but it is safe here (and slow!) 
+    *        - karl
+    */
+   _mesa_load_state_parameters(ctx, program->Parameters); 
 
    for (pc = 0; pc < maxInst; pc++) {
       const struct fp_instruction *inst = program->Instructions + pc;
@@ -631,7 +641,8 @@ execute_program( GLcontext *ctx,
             {
                GLfloat a[4], aNext[4], result[4];
                struct fp_machine dMachine;
-               if (!fetch_vector4_deriv(&inst->SrcReg[0], span, 'X', result)) {
+               if (!fetch_vector4_deriv(ctx, &inst->SrcReg[0], span, 'X',
+                                        column, result)) {
                   /* This is tricky.  Make a copy of the current machine state,
                    * increment the input registers by the dx or dy partial
                    * derivatives, then re-execute the program up to the
@@ -656,7 +667,8 @@ execute_program( GLcontext *ctx,
             {
                GLfloat a[4], aNext[4], result[4];
                struct fp_machine dMachine;
-               if (!fetch_vector4_deriv(&inst->SrcReg[0], span, 'Y', result)) {
+               if (!fetch_vector4_deriv(ctx, &inst->SrcReg[0], span, 'Y',
+                                        column, result)) {
                   init_machine_deriv(ctx, machine, program, span,
                                      'Y', &dMachine);
                   fetch_vector4( ctx, &inst->SrcReg[0], machine, program, a);

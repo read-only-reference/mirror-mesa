@@ -430,6 +430,7 @@ struct gl_colorbuffer_attrib {
    GLenum LogicOp;			/**< Logic operator */
    GLboolean IndexLogicOpEnabled;	/**< Color index logic op enabled flag */
    GLboolean ColorLogicOpEnabled;	/**< RGBA logic op enabled flag */
+   GLboolean _LogicOpEnabled;		/**< RGBA logic op + EXT_blend_logic_op enabled flag */
    /*@}*/
 
    GLboolean DitherFlag;		/**< Dither enable flag */
@@ -446,22 +447,22 @@ struct gl_current_attrib {
    /*@{*/
    GLfloat Attrib[VERT_ATTRIB_MAX][4];		/**< Current vertex attributes
 						  *  indexed by VERT_ATTRIB_* */
-   GLuint Index;				/**< Current color index */
+   GLfloat Index;				/**< Current color index */
    GLboolean EdgeFlag;				/**< Current edge flag */
    /*@}*/
 
    /**
     * \name Values are always valid.  
     * 
-    * \note BTW, note how similar this set of attributes is to the SWvertex data type
-    * in the software rasterizer...
+    * \note BTW, note how similar this set of attributes is to the SWvertex
+    * data type in the software rasterizer...
     */
    /*@{*/
    GLfloat RasterPos[4];			/**< Current raster position */
    GLfloat RasterDistance;			/**< Current raster distance */
    GLfloat RasterColor[4];			/**< Current raster color */
    GLfloat RasterSecondaryColor[4];             /**< Current raster secondary color */
-   GLuint RasterIndex;				/**< Current raster index */
+   GLfloat RasterIndex;				/**< Current raster index */
    GLfloat RasterTexCoords[MAX_TEXTURE_UNITS][4];/**< Current raster texcoords */
    GLboolean RasterPosValid;			/**< Raster pos valid flag */
    /*@}*/
@@ -1329,6 +1330,7 @@ struct gl_array_attrib {
    struct gl_buffer_object *ArrayBufferObj;
    struct gl_buffer_object *ElementArrayBufferObj;
 #endif
+   GLuint _MaxElement;          /* Min of all enabled array's maxes */
 };
 
 
@@ -1444,7 +1446,8 @@ enum register_file
    PROGRAM_ENV_PARAM,
    PROGRAM_NAMED_PARAM,
    PROGRAM_STATE_VAR,
-   PROGRAM_WRITE_ONLY
+   PROGRAM_WRITE_ONLY,
+	PROGRAM_ADDRESS
 };
 
 
@@ -1483,6 +1486,7 @@ struct vertex_program
    GLboolean IsPositionInvariant;  /* GL_NV_vertex_program1_1 */
    GLuint InputsRead;     /* Bitmask of which input regs are read */
    GLuint OutputsWritten; /* Bitmask of which output regs are written to */
+   struct program_parameter_list *Parameters; /**< array [NumParameters] */
 };
 
 
@@ -1720,6 +1724,8 @@ struct gl_constants
    /* vertex or fragment program */
    GLuint MaxProgramMatrices;
    GLuint MaxProgramMatrixStackDepth;
+   /* vertex array / buffer object bounds checking */
+   GLboolean CheckArrayBounds;
 };
 
 
@@ -1809,6 +1815,7 @@ struct gl_extensions
    GLboolean SGIX_shadow_ambient; /* or GL_ARB_shadow_ambient */
    GLboolean TDFX_texture_compression_FXT1;
    GLboolean APPLE_client_storage;
+   GLboolean S3_s3tc;
    /*@}*/
    /* The extension string */
    const GLubyte *String;
@@ -1922,7 +1929,7 @@ struct matrix_stack
 #define _NEW_ARRAY_TEXCOORD_5       VERT_BIT_TEX5
 #define _NEW_ARRAY_TEXCOORD_6       VERT_BIT_TEX6
 #define _NEW_ARRAY_TEXCOORD_7       VERT_BIT_TEX7
-#define _NEW_ARRAY_ATTRIB_0         0x1  /* alias conventional arrays */
+#define _NEW_ARRAY_ATTRIB_0         0x10000  /* start at bit 16 */
 #define _NEW_ARRAY_ALL              0xffffffff
 
 
@@ -2020,6 +2027,27 @@ struct gl_tnl_module {
    /*@}*/
 };
 
+struct mesa_list_state {
+   GLuint CallDepth;		/**< Current recursion calling depth */
+   Node *CurrentListPtr;	/**< Head of list being compiled */
+   GLuint CurrentListNum;	/**< Number of the list being compiled */
+   Node *CurrentBlock;		/**< Pointer to current block of nodes */
+   GLuint CurrentPos;		/**< Index into current block of nodes */
+   GLvertexformat ListVtxfmt;
+
+   GLubyte ActiveAttribSize[VERT_ATTRIB_MAX];
+   GLfloat CurrentAttrib[VERT_ATTRIB_MAX][4];
+   
+   GLubyte ActiveMaterialSize[MAT_ATTRIB_MAX];
+   GLfloat CurrentMaterial[MAT_ATTRIB_MAX][4];
+
+   GLubyte ActiveIndex;
+   GLfloat CurrentIndex;
+   
+   GLubyte ActiveEdgeFlag;
+   GLboolean CurrentEdgeFlag;
+};
+
 
 /**
  * Mesa context
@@ -2051,9 +2079,6 @@ struct __GLcontextRec {
    struct _glapi_table *CurrentDispatch;  /**< == Save or Exec !! */
    /*@}*/
 
-   GLboolean ExecPrefersFloat;	/**< What preference for color conversion? */
-   GLboolean SavePrefersFloat;
-
    GLvisual Visual;
    GLframebuffer *DrawBuffer;	/**< buffer for writing */
    GLframebuffer *ReadBuffer;	/**< buffer for reading */
@@ -2083,15 +2108,10 @@ struct __GLcontextRec {
    GLmatrix _ModelProjectMatrix;
 
    /** \name Display lists */
-   /*@{*/
-   GLuint CallDepth;		/**< Current recursion calling depth */
+   struct mesa_list_state ListState;
+
    GLboolean ExecuteFlag;	/**< Execute GL commands? */
    GLboolean CompileFlag;	/**< Compile GL commands into display list? */
-   Node *CurrentListPtr;	/**< Head of list being compiled */
-   GLuint CurrentListNum;	/**< Number of the list being compiled */
-   Node *CurrentBlock;		/**< Pointer to current block of nodes */
-   GLuint CurrentPos;		/**< Index into current block of nodes */
-   /*@}*/
 
    /** Extensions */
    struct gl_extensions Extensions;
@@ -2243,9 +2263,11 @@ extern const char *_mesa_prim_name[GL_POLYGON+4];
 #ifdef MESA_DEBUG
 extern int MESA_VERBOSE;
 extern int MESA_DEBUG_FLAGS;
+# define MESA_FUNCTION __FUNCTION__
 #else
 # define MESA_VERBOSE 0
 # define MESA_DEBUG_FLAGS 0
+# define MESA_FUNCTION "a function"
 # ifndef NDEBUG
 #  define NDEBUG
 # endif

@@ -49,6 +49,7 @@
 
 
 #include "glapi.h"
+#include "imports.h"
 #include "mtypes.h"
 
 
@@ -263,6 +264,7 @@ _mesa_Flush( void );
 /** \name Macros for contexts/flushing. */
 /*@{*/
 
+
 /**
  * Flush vertices.
  *
@@ -272,13 +274,11 @@ _mesa_Flush( void );
  * Checks if dd_function_table::NeedFlush is marked to flush stored vertices,
  * and calls dd_function_table::FlushVertices if so. Marks
  * __GLcontextRec::NewState with \p newstate.
- * 
- * \todo Eventually let the driver specify what state changes require a flush:
  */
 #define FLUSH_VERTICES(ctx, newstate)				\
 do {								\
    if (MESA_VERBOSE & VERBOSE_STATE)				\
-      _mesa_debug(ctx, "FLUSH_VERTICES in %s\n", __FUNCTION__);	\
+      _mesa_debug(ctx, "FLUSH_VERTICES in %s\n", MESA_FUNCTION);\
    if (ctx->Driver.NeedFlush & FLUSH_STORED_VERTICES)		\
       ctx->Driver.FlushVertices(ctx, FLUSH_STORED_VERTICES);	\
    ctx->NewState |= newstate;					\
@@ -297,7 +297,7 @@ do {								\
 #define FLUSH_CURRENT(ctx, newstate)				\
 do {								\
    if (MESA_VERBOSE & VERBOSE_STATE)				\
-      _mesa_debug(ctx, "FLUSH_CURRENT in %s\n", __FUNCTION__);	\
+      _mesa_debug(ctx, "FLUSH_CURRENT in %s\n", MESA_FUNCTION);	\
    if (ctx->Driver.NeedFlush & FLUSH_UPDATE_CURRENT)		\
       ctx->Driver.FlushVertices(ctx, FLUSH_UPDATE_CURRENT);	\
    ctx->NewState |= newstate;					\

@@ -1062,6 +1062,15 @@ _mesa_init_constants( GLcontext *ctx )
    ctx->Const.MaxProgramMatrices = MAX_PROGRAM_MATRICES;
    ctx->Const.MaxProgramMatrixStackDepth = MAX_PROGRAM_MATRIX_STACK_DEPTH;
 
+   /* If we're running in the X server, do bounds checking to prevent
+    * segfaults and server crashes!
+    */
+#if defined(XFree86LOADER) && defined(IN_MODULE)
+   ctx->Const.CheckArrayBounds = GL_TRUE;
+#else
+   ctx->Const.CheckArrayBounds = GL_FALSE;
+#endif
+
    ASSERT(ctx->Const.MaxTextureUnits == MAX2(ctx->Const.MaxTextureImageUnits, ctx->Const.MaxTextureCoordUnits));
 }
 
@@ -1422,15 +1431,13 @@ _mesa_initialize_context( GLcontext *ctx,
 
 #if _HAVE_FULL_GL
    _mesa_init_dlist_table(ctx->Save, dispatchSize);
+   _mesa_install_save_vtxfmt( ctx, &ctx->ListState.ListVtxfmt );
 
-   ctx->ExecPrefersFloat = GL_FALSE;
-   ctx->SavePrefersFloat = GL_FALSE;
 
    /* Neutral tnl module stuff */
    _mesa_init_exec_vtxfmt( ctx ); 
    ctx->TnlModule.Current = NULL;
    ctx->TnlModule.SwapCount = 0;
-
 #endif
 
    return GL_TRUE;

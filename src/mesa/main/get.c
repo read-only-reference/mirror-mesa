@@ -295,7 +295,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          break;
       case GL_CURRENT_INDEX:
 	 FLUSH_CURRENT(ctx, 0);
-         *params = INT_TO_BOOL(ctx->Current.Index);
+         *params = FLOAT_TO_BOOL(ctx->Current.Index);
          break;
       case GL_CURRENT_NORMAL:
 	 FLUSH_CURRENT(ctx, 0);
@@ -499,7 +499,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
 	 *params = INT_TO_BOOL(ctx->List.ListBase);
 	 break;
       case GL_LIST_INDEX:
-	 *params = INT_TO_BOOL( ctx->CurrentListNum );
+	 *params = INT_TO_BOOL( ctx->ListState.CurrentListNum );
 	 break;
       case GL_LIST_MODE:
          if (!ctx->CompileFlag)
@@ -2041,7 +2041,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
 	 *params = (GLdouble) ctx->List.ListBase;
 	 break;
       case GL_LIST_INDEX:
-	 *params = (GLdouble) ctx->CurrentListNum;
+	 *params = (GLdouble) ctx->ListState.CurrentListNum;
 	 break;
       case GL_LIST_MODE:
          if (!ctx->CompileFlag)
@@ -3392,7 +3392,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 params[0] = ctx->Current.RasterDistance;
 	 break;
       case GL_CURRENT_RASTER_INDEX:
-	 *params = (GLfloat) ctx->Current.RasterIndex;
+	 *params = ctx->Current.RasterIndex;
 	 break;
       case GL_CURRENT_RASTER_POSITION:
 	 params[0] = ctx->Current.RasterPos[0];
@@ -3578,7 +3578,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
 	 *params = (GLfloat) ctx->List.ListBase;
 	 break;
       case GL_LIST_INDEX:
-	 *params = (GLfloat) ctx->CurrentListNum;
+	 *params = (GLfloat) ctx->ListState.CurrentListNum;
 	 break;
       case GL_LIST_MODE:
          if (!ctx->CompileFlag)
@@ -5092,7 +5092,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
 	 *params = (GLint) ctx->List.ListBase;
 	 break;
       case GL_LIST_INDEX:
-	 *params = (GLint) ctx->CurrentListNum;
+	 *params = (GLint) ctx->ListState.CurrentListNum;
 	 break;
       case GL_LIST_MODE:
          if (!ctx->CompileFlag)
@@ -6423,7 +6423,6 @@ _mesa_GetString( GLenum name )
                    ctx->Extensions.EXT_texture_lod_bias &&
                    ctx->Extensions.SGIS_generate_mipmap) {
                   if (ctx->Extensions.ARB_occlusion_query &&
-                      ctx->Extensions.ARB_point_sprite &&
                       ctx->Extensions.ARB_vertex_buffer_object &&
                       ctx->Extensions.ARB_texture_non_power_of_two &&
                       ctx->Extensions.EXT_shadow_funcs) {

@@ -480,6 +480,7 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
           baseInternalFormat == GL_ALPHA ||
           baseInternalFormat == GL_RGB ||
           baseInternalFormat == GL_RGBA ||
+          baseInternalFormat == GL_YCBCR_MESA ||
           baseInternalFormat == GL_COLOR_INDEX ||
           baseInternalFormat == GL_DEPTH_COMPONENT);
 
@@ -1092,7 +1093,7 @@ _mesa_store_texsubimage3d(GLcontext *ctx, GLenum target, GLint level,
                            texImage->Format,
                            texImage->TexFormat, texImage->Data,
                            width, height, depth, /* src size */
-                           xoffset, yoffset, xoffset, /* dest offsets */
+                           xoffset, yoffset, zoffset, /* dest offsets */
                            texImage->Width * texelBytes,  /* dst row stride */
                            texImage->Width * texImage->Height * texelBytes,
                            format, type, pixels, packing);
@@ -1276,7 +1277,9 @@ do_row(const struct gl_texture_format *format, GLint srcWidth,
    const GLuint k0 = (srcWidth == dstWidth) ? 0 : 1;
    const GLuint colStride = (srcWidth == dstWidth) ? 1 : 2;
 
+   /* This assertion is no longer valid with non-power-of-2 textures
    assert(srcWidth == dstWidth || srcWidth == 2 * dstWidth);
+   */
 
    switch (format->MesaFormat) {
    case MESA_FORMAT_RGBA:
