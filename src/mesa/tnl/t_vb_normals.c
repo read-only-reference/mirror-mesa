@@ -73,6 +73,13 @@ static GLboolean run_normal_stage( GLcontext *ctx,
 			      VB->NormalPtr,  /* input normals */
 			      lengths,
 			      &store->normal ); /* resulting normals */
+
+      if (VB->NormalPtr->count > 1) {
+	 store->normal.stride = 16;
+      }
+      else {
+	 store->normal.stride = 0;
+      }
    }
 
    VB->NormalPtr = &store->normal;

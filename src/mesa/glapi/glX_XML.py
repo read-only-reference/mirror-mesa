@@ -1,6 +1,6 @@
 #!/usr/bin/python2
 
-# (C) Copyright IBM Corporation 2004
+# (C) Copyright IBM Corporation 2004, 2005
 # All Rights Reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
@@ -62,6 +62,10 @@ def printNoinline():
 #    define NOINLINE
 #  endif"""
 
+def printHaveAlias():
+	print """#  if __GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ >= 95)
+#    define HAVE_ALIAS
+#  endif"""
 
 class glXItemFactory(gl_XML.glItemFactory):
 	"""Factory to create GLX protocol oriented objects derived from glItem."""
@@ -79,7 +83,9 @@ class glXItemFactory(gl_XML.glItemFactory):
 class glXEnumFunction:
 	def __init__(self, name):
 		self.name = name
-		
+		self.mode = 0
+		self.sig = None
+
 		# "enums" is a set of lists.  The element in the set is the
 		# value of the enum.  The list is the list of names for that
 		# value.  For example, [0x8126] = {"POINT_SIZE_MIN",
@@ -111,12 +117,24 @@ class glXEnumFunction:
 
 
 	def signature( self ):
-		sig = ""
-		for i in self.count:
-			for e in self.count[i]:
-				sig += "%04x,%u," % (e, i)
+		if self.sig == None:
+			self.sig = ""
+			for i in self.count:
+				self.count[i].sort()
+				for e in self.count[i]:
+					self.sig += "%04x,%u," % (e, i)
 	
-		return sig;
+		return self.sig
+
+
+	def set_mode( self, mode ):
+		"""Mark an enum-function as a 'set' function."""
+
+		self.mode = mode
+
+
+	def is_set( self ):
+		return self.mode
 
 
 	def PrintUsingTable(self):
@@ -236,20 +254,16 @@ class glXEnumFunction:
 class glXEnum(gl_XML.glEnum):
 	def __init__(self, context, name, attrs):
 		gl_XML.glEnum.__init__(self, context, name, attrs)
-		self.glx_functions = []
+
 
 	def startElement(self, name, attrs):
 		if name == "size":
-			n = attrs.get('name', None)
+			[n, c, mode] = self.process_attributes(attrs)
+
 			if not self.context.glx_enum_functions.has_key( n ):
 				f = glXEnumFunction( n )
+				f.set_mode( mode )
 				self.context.glx_enum_functions[ f.name ] = f
-
-			temp = attrs.get('count', None)
-			try:
-				c = int(temp)
-			except Exception,e:
-				raise RuntimeError('Invalid count value "%s" for enum "%s" in function "%s" when an integer was expected.' % (temp, self.name, n))
 
 			self.context.glx_enum_functions[ n ].append( c, self.value, self.name )
 		else:
@@ -314,8 +328,6 @@ class glXFunction(gl_XML.glFunction):
 	glx_doubles_in_order = 0
 
 	vectorequiv = None
-	handcode = 0
-	ignore = 0
 	can_be_large = 0
 
 	def __init__(self, context, name, attrs):
@@ -325,6 +337,10 @@ class glXFunction(gl_XML.glFunction):
 		self.output = None
 		self.can_be_large = 0
 		self.reply_always_array = 0
+
+		self.server_handcode = 0
+		self.client_handcode = 0
+		self.ignore = 0
 
 		gl_XML.glFunction.__init__(self, context, name, attrs)
 		return
@@ -342,10 +358,25 @@ class glXFunction(gl_XML.glFunction):
 			self.glx_sop = int(attrs.get('sop', "0"))
 			self.glx_vendorpriv = int(attrs.get('vendorpriv', "0"))
 
-			if attrs.get('handcode', "false") == "true":
-				self.handcode = 1
+			# The 'handcode' attribute can be one of 'true',
+			# 'false', 'client', or 'server'.
+
+			handcode = attrs.get('handcode', "false")
+			if handcode == "false":
+				self.server_handcode = 0
+				self.client_handcode = 0
+			elif handcode == "true":
+				self.server_handcode = 1
+				self.client_handcode = 1
+			elif handcode == "client":
+				self.server_handcode = 0
+				self.client_handcode = 1
+			elif handcode == "server":
+				self.server_handcode = 1
+				self.client_handcode = 0
 			else:
-				self.handcode = 0
+				raise RuntimeError('Invalid handcode mode "%s" in function "%s".' % (handcode, self.name))
+
 
 			if attrs.get('ignore', "false") == "true":
 				self.ignore = 1
@@ -371,6 +402,28 @@ class glXFunction(gl_XML.glFunction):
 			gl_XML.glFunction.startElement(self, name, attrs)
 
 
+	def endElement(self, name):
+		if name == "function":
+			# Mark any function that does not have GLX protocol
+			# defined as "ignore".  This prevents bad things from
+			# happening when people add new functions to the GL
+			# API XML without adding any GLX section.
+			#
+			# This will also mark functions that don't have a
+			# dispatch offset at ignored.
+
+			if (self.fn_offset == -1 and not self.fn_alias) or not (self.client_handcode or self.server_handcode or self.glx_rop or self.glx_sop or self.glx_vendorpriv or self.vectorequiv or self.fn_alias):
+				#if not self.ignore:
+				#	if self.fn_offset == -1:
+				#		print '/* %s ignored becuase no offset assigned. */' % (self.name)
+				#	else:
+				#		print '/* %s ignored becuase no GLX opcode assigned. */' % (self.name)
+
+				self.ignore = 1
+
+		return gl_XML.glFunction.endElement(self, name)
+
+
 	def append(self, tag_name, p):
 		gl_XML.glFunction.append(self, tag_name, p)
 
@@ -390,6 +443,7 @@ class glXFunction(gl_XML.glFunction):
 
 		return
 
+
 	def variable_length_parameter(self):
 		for param in self.fn_parameters:
 			if param.is_variable_length_array():
@@ -398,28 +452,78 @@ class glXFunction(gl_XML.glFunction):
 		return None
 
 
-	def command_payload_length(self):
-		size = 0
+	def output_parameter(self):
+		for param in self.fn_parameters:
+			if param.is_output:
+				return param
+
+		return None
+
+
+	def offset_of_first_parameter(self):
+		"""Get the offset of the first parameter in the command.
+
+		Gets the offset of the first function parameter in the GLX
+		command packet.  This byte offset is measured from the end
+		of the Render / RenderLarge header.  The offset for all non-
+		pixel commends is zero.  The offset for pixel commands depends
+		on the number of dimensions of the pixel data."""
+
+		if self.image:
+			[dim, junk, junk, junk, junk] = self.dimensions()
+
+			# The base size is the size of the pixel pack info
+			# header used by images with the specified number
+			# of dimensions.
+
+			if dim <=  2:
+				return 20
+			elif dim <= 4:
+				return 36
+			else:
+				raise RuntimeError('Invalid number of dimensions %u for parameter "%s" in function "%s".' % (dim, self.image.name, self.name))
+		else:
+			return 0
+
+
+	def command_fixed_length(self):
+		"""Return the length, in bytes as an integer, of the
+		fixed-size portion of the command."""
+
+		size = self.offset_of_first_parameter()
+
+		for p in gl_XML.glFunction.parameterIterator(self):
+			if not p.is_output:
+				size += p.size()
+				if self.pad_after(p):
+					size += 4
+
+		if self.image and self.image.img_null_flag:
+			size += 4
+
+		return size
+
+
+	def command_variable_length(self):
+		"""Return the length, as a string, of the variable-sized
+		portion of the command."""
+
 		size_string = ""
 		for p in gl_XML.glFunction.parameterIterator(self):
-			if p.is_output: continue
-			temp = p.size_string()
-			try:
-				s = int(temp)
-				size += s
-			except Exception,e:
-				size_string = size_string + " + __GLX_PAD(%s)" % (temp)
+			if (not p.is_output) and (p.size() == 0):
+				size_string = size_string + " + __GLX_PAD(%s)" % (p.size_string())
 
-		return [size, size_string]
+		return size_string
+
 
 	def command_length(self):
-		[size, size_string] = self.command_payload_length()
+		size = self.command_fixed_length()
 
 		if self.glx_rop != 0:
 			size += 4
 
 		size = ((size + 3) & ~3)
-		return "%u%s" % (size, size_string)
+		return "%u%s" % (size, self.command_variable_length())
 
 
 	def opcode_real_value(self):
@@ -507,6 +611,60 @@ class glXFunction(gl_XML.glFunction):
 		return self.fn_return_type != 'void' or self.output != None
 
 
+	def dimensions(self):
+		"""Determine the dimensions of an image.
+		
+		Returns a tuple representing the number of dimensions and the
+		string name of each of the dimensions of an image,  If the
+		function is not a pixel function, the number of dimensions
+		will be zero."""
+
+		if not self.image:
+			return [0, "0", "0", "0", "0"]
+		else:
+			dim = 1
+			w = self.image.width
+
+			if self.image.height:
+				dim = 2
+				h = self.image.height
+			else:
+				h = "1"
+
+			if self.image.depth:
+				dim = 3
+				d = self.image.depth
+			else:
+				d = "1"
+			
+			if self.image.extent:
+				dim = 4
+				e = self.image.extent
+			else:
+				e = "1"
+
+			return [dim, w, h, d, e]
+
+
+	def pad_after(self, p):
+		"""Returns the name of the field inserted after the
+		specified field to pad out the command header."""
+
+		if self.image and self.image.img_pad_dimensions:
+			if not self.image.height:
+				if p.name == self.image.width:
+					return "height"
+				elif p.name == self.image.img_xoff:
+					return "yoffset"
+			elif not self.image.extent:
+				if p.name == self.image.depth:
+					# Should this be "size4d"?
+					return "extent"
+				elif p.name == self.image.img_zoff:
+					return "woffset"
+		return None
+
+		
 class GlxProto(gl_XML.FilterGLAPISpecBase):
 	name = "glX_proto_send.py (from Mesa)"
 

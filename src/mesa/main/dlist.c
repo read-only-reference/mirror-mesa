@@ -322,6 +322,10 @@ typedef enum {
 	/* GL_ATI_fragment_shader */
 	OPCODE_BIND_FRAGMENT_SHADER_ATI,
 	OPCODE_SET_FRAGMENT_SHADER_CONSTANTS_ATI,
+        /* OpenGL 2.0 */
+        OPCODE_STENCIL_FUNC_SEPARATE,
+        OPCODE_STENCIL_OP_SEPARATE,
+        OPCODE_STENCIL_MASK_SEPARATE,
 	
 	/* Vertex attributes -- fallback for when optimized display
 	 * list build isn't active.
@@ -408,11 +412,13 @@ void mesa_print_display_list( GLuint list );
  * Make an empty display list.  This is used by glGenLists() to
  * reserver display list IDs.
  */
-static Node *make_empty_list( void )
+static struct mesa_display_list *make_list( GLuint list, GLuint count )
 {
-   Node *n = (Node *) MALLOC( sizeof(Node) );
-   n[0].opcode = OPCODE_END_OF_LIST;
-   return n;
+   struct mesa_display_list *dlist = CALLOC_STRUCT( mesa_display_list );
+   dlist->id = list;
+   dlist->node = (Node *) MALLOC( sizeof(Node) * count );
+   dlist->node[0].opcode = OPCODE_END_OF_LIST;
+   return dlist;
 }
 
 
@@ -423,14 +429,18 @@ static Node *make_empty_list( void )
  */
 void _mesa_destroy_list( GLcontext *ctx, GLuint list )
 {
+   struct mesa_display_list *dlist;
    Node *n, *block;
    GLboolean done;
 
    if (list==0)
       return;
 
-   block = (Node *) _mesa_HashLookup(ctx->Shared->DisplayList, list);
-   n = block;
+   dlist = (struct mesa_display_list *) _mesa_HashLookup(ctx->Shared->DisplayList, list);
+   if (!dlist)
+      return;
+   
+   n = block = dlist->node;
 
    done = block ? GL_FALSE : GL_TRUE;
    while (!done) {
@@ -568,6 +578,7 @@ void _mesa_destroy_list( GLcontext *ctx, GLuint list )
       }
    }
 
+   FREE( dlist );
    _mesa_HashRemove(ctx->Shared->DisplayList, list);
 }
 
@@ -799,6 +810,11 @@ _mesa_init_lists( void )
       InstSize[OPCODE_BIND_FRAGMENT_SHADER_ATI] = 2;
       InstSize[OPCODE_SET_FRAGMENT_SHADER_CONSTANTS_ATI] = 6;
 #endif
+      /* OpenGL 2.0 */
+      InstSize[OPCODE_STENCIL_FUNC_SEPARATE] = 5;
+      InstSize[OPCODE_STENCIL_MASK_SEPARATE] = 3;
+      InstSize[OPCODE_STENCIL_OP_SEPARATE] = 5;
+
       InstSize[OPCODE_ATTR_1F_NV] = 3;
       InstSize[OPCODE_ATTR_2F_NV] = 4;
       InstSize[OPCODE_ATTR_3F_NV] = 5;
@@ -3259,6 +3275,61 @@ static void GLAPIENTRY save_StencilOp( GLenum fail, GLenum zfail, GLenum zpass )
 }
 
 
+static void GLAPIENTRY
+save_StencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION(ctx, OPCODE_STENCIL_FUNC_SEPARATE, 4);
+   if (n) {
+      n[1].e = face;
+      n[2].e = func;
+      n[3].i = ref;
+      n[4].ui = mask;
+   }
+   if (ctx->ExecuteFlag) {
+      ctx->Exec->StencilFuncSeparate(face, func, ref, mask);
+   }
+}
+
+
+static void GLAPIENTRY
+save_StencilMaskSeparate(GLenum face, GLuint mask)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION(ctx, OPCODE_STENCIL_MASK_SEPARATE, 2);
+   if (n) {
+      n[1].e = face;
+      n[2].ui = mask;
+   }
+   if (ctx->ExecuteFlag) {
+      ctx->Exec->StencilMaskSeparate(face, mask);
+   }
+}
+
+
+static void GLAPIENTRY
+save_StencilOpSeparate(GLenum face, GLenum fail, GLenum zfail, GLenum zpass)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_STENCIL_OP_SEPARATE, 4 );
+   if (n) {
+      n[1].e = face;
+      n[2].e = fail;
+      n[3].e = zfail;
+      n[4].e = zpass;
+   }
+   if (ctx->ExecuteFlag) {
+      ctx->Exec->StencilOpSeparate(face, fail, zfail, zpass);
+   }
+}
+
+
 static void GLAPIENTRY save_TexEnvfv( GLenum target, GLenum pname, const GLfloat *params )
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -4567,7 +4638,7 @@ static void GLAPIENTRY save_DepthBoundsEXT( GLclampd zmin, GLclampd zmax )
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = ALLOC_INSTRUCTION( ctx, OPCODE_ACTIVE_STENCIL_FACE_EXT, 2 );
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_DEPTH_BOUNDS_EXT, 2 );
    if (n) {
       n[1].f = (GLfloat) zmin;
       n[2].f = (GLfloat) zmax;
@@ -5573,18 +5644,29 @@ islist(GLcontext *ctx, GLuint list)
 static void GLAPIENTRY
 execute_list( GLcontext *ctx, GLuint list )
 {
+   struct mesa_display_list *dlist;
    Node *n;
    GLboolean done;
 
    if (list == 0 || !islist(ctx,list))
       return;
 
+   if (ctx->ListState.CallDepth == MAX_LIST_NESTING) {
+      /* raise an error? */
+      return;
+   }
+
+
+   dlist = (struct mesa_display_list *) _mesa_HashLookup(ctx->Shared->DisplayList, list);
+   if (!dlist)
+      return;
+
+   ctx->ListState.CallStack[ctx->ListState.CallDepth++] = dlist;
+
    if (ctx->Driver.BeginCallList)
-      ctx->Driver.BeginCallList( ctx, list );
+      ctx->Driver.BeginCallList( ctx, dlist );
 
-   ctx->ListState.CallDepth++;
-
-   n = (Node *) _mesa_HashLookup(ctx->Shared->DisplayList, list);
+   n = dlist->node;
 
    done = GL_FALSE;
    while (!done) {
@@ -6052,6 +6134,15 @@ execute_list( GLcontext *ctx, GLuint list )
 	 case OPCODE_STENCIL_OP:
 	    (*ctx->Exec->StencilOp)( n[1].e, n[2].e, n[3].e );
 	    break;
+	 case OPCODE_STENCIL_FUNC_SEPARATE:
+	    ctx->Exec->StencilFuncSeparate( n[1].e, n[2].e, n[3].i, n[4].ui );
+	    break;
+	 case OPCODE_STENCIL_MASK_SEPARATE:
+	    ctx->Exec->StencilMaskSeparate( n[1].e, n[2].ui );
+	    break;
+	 case OPCODE_STENCIL_OP_SEPARATE:
+	    ctx->Exec->StencilOpSeparate( n[1].e, n[2].e, n[3].e, n[4].e );
+	    break;
          case OPCODE_TEXENV:
             {
                GLfloat params[4];
@@ -6428,10 +6519,11 @@ execute_list( GLcontext *ctx, GLuint list )
 	 }
       }
    }
-   ctx->ListState.CallDepth--;
 
    if (ctx->Driver.EndCallList)
       ctx->Driver.EndCallList( ctx );
+
+   ctx->ListState.CallStack[ctx->ListState.CallDepth--] = NULL;
 }
 
 
@@ -6510,7 +6602,7 @@ _mesa_GenLists(GLsizei range )
       /* reserve the list IDs by with empty/dummy lists */
       GLint i;
       for (i=0; i<range; i++) {
-         _mesa_HashInsert(ctx->Shared->DisplayList, base+i, make_empty_list());
+         _mesa_HashInsert(ctx->Shared->DisplayList, base+i, make_list(base+i, 1));
       }
    }
 
@@ -6558,7 +6650,8 @@ _mesa_NewList( GLuint list, GLenum mode )
 
    /* Allocate new display list */
    ctx->ListState.CurrentListNum = list;
-   ctx->ListState.CurrentBlock = (Node *) CALLOC( sizeof(Node) * BLOCK_SIZE );
+   ctx->ListState.CurrentList = make_list( list, BLOCK_SIZE );
+   ctx->ListState.CurrentBlock = ctx->ListState.CurrentList->node;
    ctx->ListState.CurrentListPtr = ctx->ListState.CurrentBlock;
    ctx->ListState.CurrentPos = 0;
 
@@ -6606,18 +6699,19 @@ _mesa_EndList( void )
    /* Destroy old list, if any */
    _mesa_destroy_list(ctx, ctx->ListState.CurrentListNum);
    /* Install the list */
-   _mesa_HashInsert(ctx->Shared->DisplayList, ctx->ListState.CurrentListNum, ctx->ListState.CurrentListPtr);
+   _mesa_HashInsert(ctx->Shared->DisplayList, ctx->ListState.CurrentListNum, ctx->ListState.CurrentList);
 
 
    if (MESA_VERBOSE & VERBOSE_DISPLAY_LIST)
       mesa_print_display_list(ctx->ListState.CurrentListNum);
 
+   ctx->Driver.EndList( ctx );
+
+   ctx->ListState.CurrentList = NULL;
    ctx->ListState.CurrentListNum = 0;
    ctx->ListState.CurrentListPtr = NULL;
    ctx->ExecuteFlag = GL_TRUE;
    ctx->CompileFlag = GL_FALSE;
-
-   ctx->Driver.EndList( ctx );
 
    ctx->CurrentDispatch = ctx->Exec;
    _glapi_set_dispatch( ctx->CurrentDispatch );
@@ -7628,6 +7722,11 @@ _mesa_init_dlist_table( struct _glapi_table *table )
    table->TexImage3D = save_TexImage3D;
    table->TexSubImage3D = save_TexSubImage3D;
 
+   /* GL 2.0 */
+   table->StencilFuncSeparate = save_StencilFuncSeparate;
+   table->StencilMaskSeparate = save_StencilMaskSeparate;
+   table->StencilOpSeparate = save_StencilOpSeparate;
+
    /* GL_ARB_imaging */
    /* Not all are supported */
    table->BlendColor = save_BlendColor;
@@ -7954,6 +8053,7 @@ static const char *enum_string( GLenum k )
  */
 static void GLAPIENTRY print_list( GLcontext *ctx, GLuint list )
 {
+   struct mesa_display_list *dlist;
    Node *n;
    GLboolean done;
 
@@ -7962,8 +8062,12 @@ static void GLAPIENTRY print_list( GLcontext *ctx, GLuint list )
       return;
    }
 
-   n = (Node *) _mesa_HashLookup(ctx->Shared->DisplayList, list);
+   dlist = (struct mesa_display_list *) _mesa_HashLookup(ctx->Shared->DisplayList, list);
+   if (!dlist)
+      return;
 
+   n = dlist->node;
+   
    _mesa_printf("START-LIST %u, address %p\n", list, (void*)n );
 
    done = n ? GL_FALSE : GL_TRUE;

@@ -11,8 +11,13 @@ GL_MINOR = 5
 GL_TINY = 0$(MESA_MAJOR)0$(MESA_MINOR)0$(MESA_TINY)
 
 
+.SUFFIXES : .cpp
+
 .c.o:
 	$(CC) -c $(INCLUDE_DIRS) $(CFLAGS) $< -o $@
+
+.cpp.o:
+	$(CXX) -c $(INCLUDE_DIRS) $(CXXFLAGS) $< -o $@
 
 .S.o:
 	$(CC) -c $(INCLUDE_DIRS) $(CFLAGS) $< -o $@
@@ -26,6 +31,8 @@ default:
 		$(MAKE) osmesa-only ; \
 	elif [ "$(DRIVER_DIRS)" = "beos" ]; then \
 		$(MAKE) beos ; \
+	elif [ "$(DRIVER_DIRS)" = "directfb" ]; then \
+		$(MAKE) directfb; \
 	else \
 		$(MAKE) stand-alone ; \
 	fi
@@ -34,6 +41,11 @@ default:
 beos: depend subdirs mesa.a
 	cd drivers/beos; $(MAKE)
 
+
+install: default
+	@if [ "${DRIVER_DIRS}" = "dri" ] ; then \
+		cd drivers/dri ; $(MAKE) install ; \
+	fi
 
 ######################################################################
 # Linux solo DRI drivers
@@ -67,6 +79,30 @@ mesa.a:	$(SOLO_OBJECTS)
 # already exists, so not try to rebuild it...
 drivers-dri:
 	cd drivers/dri ; $(MAKE)
+
+
+
+#####################################################################
+# Stand-alone Mesa libGL, no built-in drivers (DirectFB)
+
+LIBGL_CORE_SOURCES =	\
+	$(CORE_SOURCES) 	\
+	$(ASM_SOURCES)
+
+LIBGL_CORE_OBJECTS = 	\
+	$(CORE_OBJECTS) 	\
+	$(ASM_SOURCES:.S=.o)
+
+# Make libGL from core object files
+libgl-core: $(LIBGL_CORE_OBJECTS)
+	@ CC="$(CC)" CXX="$(CXX)" $(TOP)/bin/mklib -o $(GL_LIB) \
+		-major $(MESA_MAJOR) -minor $(MESA_MINOR) -patch $(MESA_TINY) \
+		-install $(LIB_DIR) $(MKLIB_OPTIONS) $(LIBGL_CORE_OBJECTS) $(GL_LIB_DEPS)
+
+# DirectFB driver target
+directfb: depend subdirs libgl-core
+	cd drivers/directfb; $(MAKE)
+
 
 
 ######################################################################
@@ -185,5 +221,6 @@ clean:
 	-rm -f depend depend.bak mesa.a
 	-rm -f drivers/*/*.o
 	(cd drivers/dri ; $(MAKE) clean)
+	(cd x86 ; $(MAKE) clean)
 
 include depend

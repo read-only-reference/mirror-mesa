@@ -36,8 +36,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef __R200_SCREEN_H__
 #define __R200_SCREEN_H__
 
-#ifdef GLX_DIRECT_RENDERING
-
 #include "xf86drm.h"
 #include "drm.h"
 #include "radeon_drm.h"
@@ -97,10 +95,10 @@ typedef struct {
 
    GLboolean drmSupportsCubeMaps;       /* need radeon kernel module >=1.7 */
    GLboolean drmSupportsBlendColor;     /* need radeon kernel module >= 1.11 */
+   GLboolean depthHasSurface;
 
    /* Configuration cache with default values for all contexts */
    driOptionCache optionCache;
 } r200ScreenRec, *r200ScreenPtr;
 
-#endif
 #endif /* __R200_SCREEN_H__ */

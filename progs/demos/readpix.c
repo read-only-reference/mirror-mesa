@@ -9,9 +9,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 #include <GL/glut.h>
 
-#include "../util/readtex.c"  /* a hack, I know */
+#include "readtex.h"
 
 #define IMAGE_FILE "../images/girl.rgb"
 

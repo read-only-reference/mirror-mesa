@@ -357,7 +357,7 @@ void radeonInitState( radeonContextPtr rmesa )
 
    rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] = (RADEON_PLANE_MASK_ENABLE |
 				       color_fmt |
-				       (1<<15));
+				       RADEON_ZBLOCK16);
 
    switch ( driQueryOptioni( &rmesa->optionCache, "dither_mode" ) ) {
    case DRI_CONF_DITHER_XERRORDIFFRESET:
@@ -385,6 +385,10 @@ void radeonInitState( radeonContextPtr rmesa )
    rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] = ((rmesa->state.color.drawPitch &
 					      RADEON_COLORPITCH_MASK) |
 					     RADEON_COLOR_ENDIAN_NO_SWAP);
+   /* (fixed size) sarea is initialized to zero afaics so can omit version check. Phew! */
+   if (rmesa->sarea->tiling_enabled) {
+      rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] |= RADEON_COLOR_TILE_ENABLE;
+   }
 
    rmesa->hw.set.cmd[SET_SE_CNTL] = (RADEON_FFACE_CULL_CCW |
 				     RADEON_BFACE_SOLID |

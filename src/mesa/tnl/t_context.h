@@ -364,6 +364,7 @@ struct tnl_save {
    GLfloat *buffer;
    GLuint count;
    GLuint wrap_count;
+   GLuint replay_flags;
 
    struct tnl_prim *prim;
    GLuint prim_count, prim_max;
@@ -536,8 +537,8 @@ typedef void (*tnl_insert_func)( const struct tnl_clipspace_attr *a,
 				 const GLfloat *in );
 
 typedef void (*tnl_emit_func)( GLcontext *ctx, 
-			       GLuint start, 
-			       GLuint end, void *dest );
+			       GLuint count, 
+			       GLubyte *dest );
 
 
 /**
@@ -552,7 +553,7 @@ struct tnl_clipspace_attr
    GLuint vertattrsize;    /* size of the attribute in bytes */
    GLubyte *inputptr;
    GLuint inputstride;
-   tnl_insert_func *insert;
+   const tnl_insert_func *insert;
    tnl_insert_func emit;
    tnl_extract_func extract;
    const GLfloat *vp;   /* NDC->Viewport mapping matrix */

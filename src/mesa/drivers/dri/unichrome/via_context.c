@@ -33,6 +33,7 @@
 #include "glheader.h"
 #include "context.h"
 #include "matrix.h"
+#include "state.h"
 #include "simple_list.h"
 #include "extensions.h"
 
@@ -52,10 +53,8 @@
 #include "via_tex.h"
 #include "via_span.h"
 #include "via_tris.h"
-#include "via_vb.h"
 #include "via_ioctl.h"
 #include "via_fb.h"
-#include "via_regs.h"
 
 #include <stdio.h>
 #include "macros.h"
@@ -180,8 +179,8 @@ calculate_buffer_parameters( viaContextPtr vmesa )
 	 return GL_FALSE;
    }
    else {
-      /* KW: mem leak if vmesa->hasBack ever changes:
-       */
+      if (vmesa->back.map)
+	 via_free_draw_buffer(vmesa, &vmesa->back);
       (void) memset( &vmesa->back, 0, sizeof( vmesa->back ) );
    }
 
@@ -202,8 +201,8 @@ calculate_buffer_parameters( viaContextPtr vmesa )
       }
    }
    else {
-      /* KW: mem leak if vmesa->hasStencil/hasDepth ever changes:
-       */
+      if (vmesa->depth.map)
+   	 via_free_draw_buffer(vmesa, &vmesa->depth);
       (void) memset( & vmesa->depth, 0, sizeof( vmesa->depth ) );
    }
 
@@ -213,11 +212,11 @@ calculate_buffer_parameters( viaContextPtr vmesa )
 #define ALLOW_EXPERIMENTAL_PAGEFLIP 0
 #if ALLOW_EXPERIMENTAL_PAGEFLIP
       vmesa->doPageFlip = GL_TRUE;
+      /* vmesa->currentPage = 0; */
+      assert(vmesa->back.pitch == vmesa->front.pitch);
 #else
       vmesa->doPageFlip = GL_FALSE;
 #endif
-      /* vmesa->currentPage = 0; */
-      assert(vmesa->back.pitch == vmesa->front.pitch);
    }
    else
       vmesa->doPageFlip = GL_FALSE;
@@ -251,12 +250,14 @@ static const char * const card_extensions[] =
    "GL_ARB_point_parameters",
    "GL_ARB_texture_env_add",
    "GL_ARB_texture_env_combine",
-   "GL_ARB_texture_env_dot3",
+/*    "GL_ARB_texture_env_dot3", */
    "GL_ARB_texture_mirrored_repeat",
    "GL_EXT_stencil_wrap",
    "GL_EXT_texture_env_combine",
-   "GL_EXT_texture_env_dot3",
+/*    "GL_EXT_texture_env_dot3", */
    "GL_EXT_texture_lod_bias",
+   "GL_EXT_secondary_color",
+   "GL_EXT_fog_coord",
    "GL_NV_blend_square",
    NULL
 };
@@ -272,7 +273,9 @@ static const struct tnl_pipeline_stage *via_pipeline[] = {
     &_tnl_texgen_stage,
     &_tnl_texture_transform_stage,
     /* REMOVE: point attenuation stage */
+#if 0
     &_via_fastrender_stage,     /* ADD: unclipped rastersetup-to-dma */
+#endif
     &_tnl_render_stage,
     0,
 };
@@ -288,14 +291,14 @@ AllocateDmaBuffer(const GLvisual *visual, viaContextPtr vmesa)
         return GL_FALSE;
 
     vmesa->dmaLow = 0;
-    vmesa->dmaCliprectAddr = 0;
+    vmesa->dmaCliprectAddr = ~0;
     return GL_TRUE;
 }
 
 static void
 FreeBuffer(viaContextPtr vmesa)
 {
-    if (vmesa->front.map)
+    if (vmesa->front.map && vmesa->drawType == GLX_PBUFFER_BIT)
 	via_free_draw_buffer(vmesa, &vmesa->front);
 
     if (vmesa->back.map)
@@ -379,9 +382,8 @@ viaCreateContext(const __GLcontextModes *mesaVis,
        assert(!mesaVis->haveStencilBuffer);
        vmesa->have_hw_stencil = GL_FALSE;
        vmesa->depth_max = (GLfloat)0xffffffff;
-       vmesa->depth_clear_mask = 0;
-       vmesa->ClearDepth = 0xffffffff;
        vmesa->depth_clear_mask = 0xf << 28;
+       vmesa->ClearDepth = 0xffffffff;
        vmesa->polygon_offset_scale = 2.0 / vmesa->depth_max;
        break;
     default:
@@ -468,6 +470,14 @@ viaCreateContext(const __GLcontextModes *mesaVis,
 
     vmesa->texHeap = mmInit(0, viaScreen->textureSize);
     vmesa->renderIndex = ~0;
+    vmesa->setupIndex = ~0;
+    vmesa->hwPrimitive = GL_POLYGON+1;
+
+    /* KW: Hardwire this.  Was previously set bogusly in
+     * viaCreateBuffer.  Needs work before PBUFFER can be used:
+     */
+    vmesa->drawType = GLX_WINDOW_BIT;
+
 
     make_empty_list(&vmesa->TexObjList);
     make_empty_list(&vmesa->SwappedOut);
@@ -492,7 +502,6 @@ viaCreateContext(const __GLcontextModes *mesaVis,
     viaInitTriFuncs(ctx);
     viaInitSpanFuncs(ctx);
     viaInitIoctlFuncs(ctx);
-    viaInitVB(ctx);
     viaInitState(ctx);
         
 #ifdef DEBUG
@@ -505,7 +514,8 @@ viaCreateContext(const __GLcontextModes *mesaVis,
     if (getenv("VIA_NO_RAST"))
        FALLBACK(vmesa, VIA_FALLBACK_USER_DISABLE, 1);
 
-	
+    if (getenv("VIA_CONFORM"))
+       vmesa->strictConformance = 1;
 
     /* I don't understand why this isn't working:
      */
@@ -542,9 +552,17 @@ viaCreateContext(const __GLcontextModes *mesaVis,
 void
 viaDestroyContext(__DRIcontextPrivate *driContextPriv)
 {
+    GET_CURRENT_CONTEXT(ctx);
     viaContextPtr vmesa = (viaContextPtr)driContextPriv->driverPrivate;
+    viaContextPtr current = ctx ? VIA_CONTEXT(ctx) : NULL;
     if (VIA_DEBUG) fprintf(stderr, "%s - in\n", __FUNCTION__);    
     assert(vmesa); /* should never be null */
+
+    /* check if we're deleting the currently bound context */
+    if (vmesa == current) {
+      VIA_FLUSH_DMA(vmesa);
+      _mesa_make_current2(NULL, NULL, NULL);
+    }
 
     if (vmesa) {
 	/*=* John Sheng [2003.5.31]  agp tex *=*/
@@ -555,11 +573,9 @@ viaDestroyContext(__DRIcontextPrivate *driContextPriv)
         _tnl_DestroyContext(vmesa->glCtx);
         _ac_DestroyContext(vmesa->glCtx);
         _swrast_DestroyContext(vmesa->glCtx);
-        viaFreeVB(vmesa->glCtx);
 	FreeBuffer(vmesa);
         /* free the Mesa context */
 	_mesa_destroy_context(vmesa->glCtx);
-	vmesa->glCtx->DriverCtx = NULL;
         FREE(vmesa);
     }
     
@@ -638,15 +654,13 @@ viaMakeCurrent(__DRIcontextPrivate *driContextPriv,
   
     if (VIA_DEBUG) {
 	fprintf(stderr, "driContextPriv = %08x\n", (GLuint)driContextPriv);
-	fprintf(stderr, "driContextPriv = %08x\n", (GLuint)driDrawPriv);    
-	fprintf(stderr, "driContextPriv = %08x\n", (GLuint)driReadPriv);
+	fprintf(stderr, "driDrawPriv = %08x\n", (GLuint)driDrawPriv);    
+	fprintf(stderr, "driReadPriv = %08x\n", (GLuint)driReadPriv);
     }	
 
     if (driContextPriv) {
         viaContextPtr vmesa = (viaContextPtr)driContextPriv->driverPrivate;
 	GLcontext *ctx = vmesa->glCtx;
-
-	if (VIA_DEBUG) fprintf(stderr, "viaMakeCurrent: w = %d\n", vmesa->driDrawable->w);
 
 	if ( vmesa->driDrawable != driDrawPriv ) {
 	   driDrawableInitVBlank( driDrawPriv, vmesa->vblank_flags );
@@ -656,22 +670,19 @@ viaMakeCurrent(__DRIcontextPrivate *driContextPriv,
 	   }
 	   ctx->Driver.DrawBuffer( ctx, ctx->Color.DrawBuffer[0] );
 	}
+	if (VIA_DEBUG) fprintf(stderr, "viaMakeCurrent: w = %d\n", vmesa->driDrawable->w);
 
         _mesa_make_current2(vmesa->glCtx,
                             (GLframebuffer *)driDrawPriv->driverPrivate,
                             (GLframebuffer *)driReadPriv->driverPrivate);
 	if (VIA_DEBUG) fprintf(stderr, "Context %d MakeCurrent\n", vmesa->hHWContext);
 	
-	/* These are probably needed only the first time a context is
-	 * made current:
-	 */
-	viaXMesaWindowMoved(vmesa);
-	ctx->Driver.Scissor(ctx, 
-			    ctx->Scissor.X,
-			    ctx->Scissor.Y,
-			    ctx->Scissor.Width,
-			    ctx->Scissor.Height);
-
+        viaXMesaWindowMoved(vmesa);
+	ctx->Driver.Scissor(vmesa->glCtx,
+			    vmesa->glCtx->Scissor.X,
+			    vmesa->glCtx->Scissor.Y,
+			    vmesa->glCtx->Scissor.Width,
+			    vmesa->glCtx->Scissor.Height);
     }
     else {
         _mesa_make_current(0,0);

@@ -26,6 +26,7 @@ MAIN_SOURCES = \
 	main/feedback.c \
 	main/fog.c \
 	main/get.c \
+	main/getstring.c \
 	main/hash.c \
 	main/hint.c \
 	main/histogram.c \
@@ -116,6 +117,7 @@ TNL_SOURCES = \
 	tnl/t_save_api.c \
 	tnl/t_save_loopback.c \
 	tnl/t_save_playback.c \
+	tnl/t_vb_cull.c \
 	tnl/t_vb_fog.c \
 	tnl/t_vb_light.c \
 	tnl/t_vb_normals.c \
@@ -146,7 +148,21 @@ SHADER_SOURCES = \
 	shader/nvvertexec.c \
 	shader/nvvertparse.c \
 	shader/program.c \
-	shader/shaderobjects.c
+	shader/shaderobjects.c \
+	shader/shaderobjects_3dlabs.c
+
+SLANG_SOURCES = \
+	shader/slang/MachineIndependent/preprocessor/atom.c \
+	shader/slang/MachineIndependent/preprocessor/cpp.c \
+	shader/slang/MachineIndependent/preprocessor/cppstruct.c \
+	shader/slang/MachineIndependent/preprocessor/memory.c \
+	shader/slang/MachineIndependent/preprocessor/scanner.c \
+	shader/slang/MachineIndependent/preprocessor/symbols.c \
+	shader/slang/MachineIndependent/preprocessor/tokens.c
+
+SLANG_CPP_SOURCES = \
+	shader/slang/slang_mesa.cpp 
+
 
 ASM_C_SOURCES =	\
 	x86/common_x86.c \
@@ -172,7 +188,7 @@ X86_SOURCES =			\
 	x86/sse_xform2.S	\
 	x86/sse_xform3.S	\
 	x86/sse_xform4.S	\
-	x86/sse_normal.S \
+	x86/sse_normal.S	\
 	x86/read_rgba_span_x86.S \
 	tnl/t_vtx_x86_gcc.S
 
@@ -239,12 +255,13 @@ CORE_SOURCES = \
 	$(SWRAST_SOURCES)	\
 	$(SWRAST_SETUP_SOURCES)	\
 	$(ASM_C_SOURCES)
-
+#	$(SLANG_SOURCES)	\
 
 
 ### Object files
 
 CORE_OBJECTS = $(CORE_SOURCES:.c=.o)
+# $(SLANG_CPP_SOURCES:.cpp=.o)
 
 OSMESA_DRIVER_OBJECTS = $(OSMESA_DRIVER_SOURCES:.c=.o)
 
@@ -262,5 +279,8 @@ INCLUDE_DIRS = \
 	-I$(TOP)/src/mesa/math \
 	-I$(TOP)/src/mesa/tnl \
 	-I$(TOP)/src/mesa/shader \
+	-I$(TOP)/src/mesa/shader/slang \
+	-I$(TOP)/src/mesa/shader/slang/OSDependent/Linux \
+	-I$(TOP)/src/mesa/shader/slang/OGLCompilersDLL \
 	-I$(TOP)/src/mesa/swrast \
 	-I$(TOP)/src/mesa/swrast_setup

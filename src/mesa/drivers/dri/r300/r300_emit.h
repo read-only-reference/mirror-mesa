@@ -96,6 +96,16 @@ static __inline__ uint32_t cmdpacket3(int packet)
 	return cmd.u;
 }
 
+static __inline__ uint32_t cmdcpdelay(unsigned short count)
+{
+	drm_r300_cmd_header_t cmd;
+
+	cmd.delay.cmd_type = R300_CMD_CP_DELAY;
+	cmd.delay.count = count;
+
+	return cmd.u;
+}
+
 /* Prepare to write a register value to register at address reg.
    If num_extra > 0 then the following extra values are written
    to registers with address +4, +8 and so on.. */
@@ -129,8 +139,8 @@ static __inline__ uint32_t cmdpacket3(int packet)
 		cmd[cmd_written].i=(dword); \
 		cmd_written++; \
 		} else { \
-		fprintf(stderr, "e32 but no previous packet declaration.. Aborting! in %s::%s at line %d\n", \
-			__FILE__, __FUNCTION__, __LINE__); \
+		fprintf(stderr, "e32 but no previous packet declaration.. Aborting! in %s::%s at line %d, cmd_written=%d cmd_reserved=%d\n", \
+			__FILE__, __FUNCTION__, __LINE__, cmd_written, cmd_reserved); \
 		exit(-1); \
 		} \
 	}
@@ -180,5 +190,57 @@ cmd=(drm_radeon_cmd_header_t *) r300AllocCmdBuf(rmesa, \
 
 cmd[0].header.cmd_type=R300_CMD_END3D;
 }
+
+void static inline cp_delay(PREFIX unsigned short count)
+{
+LOCAL_VARS
+
+cmd=(drm_radeon_cmd_header_t *) r300AllocCmdBuf(rmesa, \
+					0, \
+					__FUNCTION__); \
+
+cmd[0].i=cmdcpdelay(count);
+}
+
+/* fire vertex buffer */
+static void inline fire_AOS(PREFIX int vertex_count, int type)
+{
+LOCAL_VARS
+check_space(9);
+
+start_packet3(RADEON_CP_PACKET3_3D_DRAW_VBUF_2, 0);
+/*	e32(0x840c0024);  */
+	e32(R300_VAP_VF_CNTL__PRIM_WALK_VERTEX_LIST | (vertex_count<<16) | type); 
+}
+
+/* these are followed by the corresponding data */
+#define start_index32_packet(vertex_count, type) \
+	{\
+	int _vc;\
+	_vc=(vertex_count); \
+	start_packet3(RADEON_CP_PACKET3_3D_DRAW_INDX_2, _vc); \
+		e32(R300_VAP_VF_CNTL__PRIM_WALK_INDICES | (_vc<<16) | type \
+		    | R300_VAP_VF_CNTL__INDEX_SIZE_32bit); \
+	}
+
+#define start_index16_packet(vertex_count, type) \
+	{\
+	int _vc, _n;\
+	_vc=(vertex_count); \
+	_n=(vertex_count+1)>>1; \
+	start_packet3(RADEON_CP_PACKET3_3D_DRAW_INDX_2, _n); \
+		e32(R300_VAP_VF_CNTL__PRIM_WALK_INDICES | (_vc<<16) | type); \
+	}
+	
+/* Interestingly enough this ones needs the call to setup_AOS, even thought
+   some of the data so setup is not needed and some is not as arbitrary 
+   as when used by DRAW_VBUF_2 or DRAW_INDX_2 */
+#define start_immediate_packet(vertex_count, type, vertex_size) \
+	{\
+	int _vc; \
+	_vc=(vertex_count); \
+	start_packet3(RADEON_CP_PACKET3_3D_DRAW_IMMD_2, _vc*(vertex_size)); \
+	e32(R300_VAP_VF_CNTL__PRIM_WALK_VERTEX_EMBEDDED | (_vc<<16) | type); \
+	}
 
 #endif

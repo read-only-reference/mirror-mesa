@@ -33,7 +33,11 @@ realclean:
 
 install:
 	@echo "Installing"
-	$(TOP)/bin/installmesa 
+	$(TOP)/bin/installmesa
+
+# DirectFBGL module installation
+linux-directfb-install:
+	cd src/mesa/drivers/directfb && $(MAKE) install
 
 # If there's no current configuration file
 $(TOP)/configs/current:
@@ -78,6 +82,7 @@ linux \
 linux-alpha \
 linux-alpha-static \
 linux-debug \
+linux-directfb \
 linux-dri \
 linux-dri-x86 \
 linux-dri-x86-64 \
@@ -122,9 +127,9 @@ ultrix-gcc:
 
 # Rules for making release tarballs
 
-DIRECTORY = Mesa-6.2
-LIB_NAME = MesaLib-6.2
-DEMO_NAME = MesaDemos-6.2
+DIRECTORY = Mesa-6.3
+LIB_NAME = MesaLib-6.3
+DEMO_NAME = MesaDemos-6.3
 
 LIB_FILES =	\
 	$(DIRECTORY)/Makefile*						\
@@ -201,6 +206,8 @@ LIB_FILES =	\
 	$(DIRECTORY)/src/mesa/drivers/beos/Makefile			\
 	$(DIRECTORY)/src/mesa/drivers/common/*.[ch]			\
 	$(DIRECTORY)/src/mesa/drivers/common/descrip.mms		\
+	$(DIRECTORY)/src/mesa/drivers/directfb/*.[ch]		\
+	$(DIRECTORY)/src/mesa/drivers/directfb/Makefile		\
 	$(DIRECTORY)/src/mesa/drivers/dos/*.[chS]			\
 	$(DIRECTORY)/src/mesa/drivers/dri/common/*.[ch]			\
 	$(DIRECTORY)/src/mesa/drivers/fbdev/glfbdev.c			\
@@ -270,7 +277,7 @@ LIB_FILES =	\
 	$(DIRECTORY)/vms/xlib_share.opt
 
 
-DEMO_FILES =	\
+GLUT_FILES = \
 	$(DIRECTORY)/include/GL/glut.h			\
 	$(DIRECTORY)/include/GL/glutf90.h		\
 	$(DIRECTORY)/src/glut/glx/Makefile*		\
@@ -287,7 +294,10 @@ DEMO_FILES =	\
 	$(DIRECTORY)/src/glut/dos/Makefile.DJ		\
 	$(DIRECTORY)/src/glut/dos/PC_HW/*.[chS]		\
 	$(DIRECTORY)/src/glut/ggi/*.[ch]		\
-	$(DIRECTORY)/src/glut/ggi/Makefile		\
+	$(DIRECTORY)/src/glut/ggi/Makefile
+
+
+DEMO_FILES = \
 	$(DIRECTORY)/progs/beos/*.cpp			\
 	$(DIRECTORY)/progs/beos/Makefile		\
 	$(DIRECTORY)/progs/images/*.rgb			\
@@ -344,7 +354,7 @@ lib_gz:
 
 demo_gz:
 	cd .. ; \
-	tar -cvf $(DEMO_NAME).tar $(DEMO_FILES) ; \
+	tar -cvf $(DEMO_NAME).tar $(DEMO_FILES) $(GLUT_FILES) ; \
 	gzip $(DEMO_NAME).tar ; \
 	mv $(DEMO_NAME).tar.gz $(DIRECTORY)
 
@@ -357,7 +367,7 @@ lib_bz2:
 
 demo_bz2:
 	cd .. ; \
-	tar -cvf $(DEMO_NAME).tar $(DEMO_FILES) ; \
+	tar -cvf $(DEMO_NAME).tar $(DEMO_FILES) $(GLUT_FILES) ; \
 	bzip2 $(DEMO_NAME).tar ; \
 	mv $(DEMO_NAME).tar.bz2 $(DIRECTORY)
 
@@ -371,7 +381,7 @@ lib_zip:
 demo_zip:
 	-rm $(DEMO_NAME).zip ; \
 	cd .. ; \
-	zip -r $(DEMO_NAME).zip $(DEMO_FILES) ; \
+	zip -r $(DEMO_NAME).zip $(DEMO_FILES) $(GLUT_FILES) ; \
 	mv $(DEMO_NAME).zip $(DIRECTORY)
 
 md5:

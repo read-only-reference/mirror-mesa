@@ -51,6 +51,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r300_state.h"
 #include "r300_program.h"
 #include "radeon_reg.h"
+#include "r300_emit.h"
 
 #include "vblank.h"
 
@@ -61,12 +62,14 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 {
 	GLcontext* ctx = r300->radeon.glCtx;
+	r300ContextPtr rmesa=r300;
 	__DRIdrawablePrivate *dPriv = r300->radeon.dri.drawable;
 	int i;
 	GLuint cboffset, cbpitch;
-	drm_r300_cmd_header_t* cmd;
+	drm_r300_cmd_header_t* cmd2;
+	LOCAL_VARS;
 
-	if (RADEON_DEBUG & DEBUG_IOCTL)
+	if (1 || RADEON_DEBUG & DEBUG_IOCTL)
 		fprintf(stderr, "%s: %s buffer (%i,%i %ix%i)\n",
 			__FUNCTION__, buffer ? "back" : "front",
 			dPriv->x, dPriv->y, dPriv->w, dPriv->h);
@@ -81,6 +84,26 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 
 	cboffset += r300->radeon.radeonScreen->fbLocation;
 
+	R300_STATECHANGE(r300, vir[0]);
+	((drm_r300_cmd_header_t*)r300->hw.vir[0].cmd)->unchecked_state.count = 1;
+	r300->hw.vir[0].cmd[1] = 0x21030003;
+
+	R300_STATECHANGE(r300, vir[1]);
+	((drm_r300_cmd_header_t*)r300->hw.vir[1].cmd)->unchecked_state.count = 1;
+	r300->hw.vir[1].cmd[1] = 0xF688F688;
+
+	R300_STATECHANGE(r300, vic);
+	r300->hw.vic.cmd[R300_VIC_CNTL_0] = 0x00000001;
+	r300->hw.vic.cmd[R300_VIC_CNTL_1] = 0x00000405;
+	
+	R300_STATECHANGE(r300, vof);
+	r300->hw.vof.cmd[R300_VOF_CNTL_0] = R300_VAP_OUTPUT_VTX_FMT_0__POS_PRESENT
+				| R300_VAP_OUTPUT_VTX_FMT_0__COLOR_PRESENT;
+	r300->hw.vof.cmd[R300_VOF_CNTL_1] = 0; /* no textures */
+	
+	R300_STATECHANGE(r300, txe);
+	r300->hw.txe.cmd[R300_TXE_ENABLE] = 0;
+	
 	R300_STATECHANGE(r300, vpt);
 	r300->hw.vpt.cmd[R300_VPT_XSCALE] = r300PackFloat32(1.0);
 	r300->hw.vpt.cmd[R300_VPT_XOFFSET] = r300PackFloat32(dPriv->x);
@@ -89,6 +112,13 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 	r300->hw.vpt.cmd[R300_VPT_ZSCALE] = r300PackFloat32(1.0);
 	r300->hw.vpt.cmd[R300_VPT_ZOFFSET] = r300PackFloat32(0.0);
 
+	R300_STATECHANGE(r300, at);
+	r300->hw.at.cmd[R300_AT_ALPHA_TEST] = 0;
+	
+	R300_STATECHANGE(r300, bld);
+	r300->hw.bld.cmd[R300_BLD_CBLEND] = 0;
+	r300->hw.bld.cmd[R300_BLD_ABLEND] = 0;
+	
 	R300_STATECHANGE(r300, cb);
 	r300->hw.cb.cmd[R300_CB_OFFSET] = cboffset;
 	r300->hw.cb.cmd[R300_CB_PITCH] = cbpitch | R300_COLOR_UNKNOWN_22_23;
@@ -105,6 +135,11 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 	for(i = 1; i <= 8; ++i)
 		r300->hw.ri.cmd[i] = R300_RS_INTERP_USED;
 
+	R300_STATECHANGE(r300, rc);
+	/* The second constant is needed to get glxgears display anything .. */
+	r300->hw.rc.cmd[1] = R300_RS_CNTL_0_UNKNOWN_7 | R300_RS_CNTL_0_UNKNOWN_18;
+	r300->hw.rc.cmd[2] = 0;
+	
 	R300_STATECHANGE(r300, rr);
 	((drm_r300_cmd_header_t*)r300->hw.rr.cmd)->unchecked_state.count = 1;
 	r300->hw.rr.cmd[1] = 0x00004000;
@@ -168,10 +203,10 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 	r300->hw.vpi.cmd[7] = VP_ZERO();
 	r300->hw.vpi.cmd[8] = 0;
 
-	R300_STATECHANGE(r300, zc);
+	R300_STATECHANGE(r300, zs);
 	if (flags & CLEARBUFFER_DEPTH) {
-		r300->hw.zc.cmd[R300_ZC_CNTL_0] = 0x6; // test and write
-		r300->hw.zc.cmd[R300_ZC_CNTL_1] = R300_Z_TEST_ALWAYS;
+		r300->hw.zs.cmd[R300_ZS_CNTL_0] = 0x6; // test and write
+		r300->hw.zs.cmd[R300_ZS_CNTL_1] = (R300_ZS_ALWAYS<<R300_RB3D_ZS1_DEPTH_FUNC_SHIFT);
 /*
 		R300_STATECHANGE(r300, zb);
 		r300->hw.zb.cmd[R300_ZB_OFFSET] =
@@ -182,26 +217,43 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 			r300->radeon.radeonScreen->depthPitch;
 */
 	} else {
-		r300->hw.zc.cmd[R300_ZC_CNTL_0] = 0; // disable
-		r300->hw.zc.cmd[R300_ZC_CNTL_1] = 0;
+		r300->hw.zs.cmd[R300_ZS_CNTL_0] = 0; // disable
+		r300->hw.zs.cmd[R300_ZS_CNTL_1] = 0;
 	}
 
 	/* Make sure we have enough space */
-	r300EnsureCmdBufSpace(r300, r300->hw.max_state_size + 9, __FUNCTION__);
+	r300EnsureCmdBufSpace(r300, r300->hw.max_state_size + 9+8, __FUNCTION__);
 
+   /* needed before starting 3d operation .. */
+   reg_start(R300_RB3D_DSTCACHE_CTLSTAT,0);
+	e32(0x0000000a);
+   
+   reg_start(0x4f18,0);
+	e32(0x00000003);
+	
 	r300EmitState(r300);
 
-	cmd = (drm_r300_cmd_header_t*)r300AllocCmdBuf(r300, 9, __FUNCTION__);
-	cmd[0].packet3.cmd_type = R300_CMD_PACKET3;
-	cmd[0].packet3.packet = R300_CMD_PACKET3_CLEAR;
-	cmd[1].u = r300PackFloat32(dPriv->w / 2.0);
-	cmd[2].u = r300PackFloat32(dPriv->h / 2.0);
-	cmd[3].u = r300PackFloat32(ctx->Depth.Clear);
-	cmd[4].u = r300PackFloat32(1.0);
-	cmd[5].u = r300PackFloat32(ctx->Color.ClearColor[0]);
-	cmd[6].u = r300PackFloat32(ctx->Color.ClearColor[1]);
-	cmd[7].u = r300PackFloat32(ctx->Color.ClearColor[2]);
-	cmd[8].u = r300PackFloat32(ctx->Color.ClearColor[3]);
+	cmd2 = (drm_r300_cmd_header_t*)r300AllocCmdBuf(r300, 9, __FUNCTION__);
+	cmd2[0].packet3.cmd_type = R300_CMD_PACKET3;
+	cmd2[0].packet3.packet = R300_CMD_PACKET3_CLEAR;
+	cmd2[1].u = r300PackFloat32(dPriv->w / 2.0);
+	cmd2[2].u = r300PackFloat32(dPriv->h / 2.0);
+	cmd2[3].u = r300PackFloat32(ctx->Depth.Clear);
+	cmd2[4].u = r300PackFloat32(1.0);
+	cmd2[5].u = r300PackFloat32(ctx->Color.ClearColor[0]);
+	cmd2[6].u = r300PackFloat32(ctx->Color.ClearColor[1]);
+	cmd2[7].u = r300PackFloat32(ctx->Color.ClearColor[2]);
+	cmd2[8].u = r300PackFloat32(ctx->Color.ClearColor[3]);
+
+    /* This sequence is required after any 3d drawing packet
+      I suspect it work arounds a bug (or deficiency) in hardware */
+  
+   reg_start(R300_RB3D_DSTCACHE_CTLSTAT,0);
+	e32(0x0000000a);
+   
+   reg_start(0x4f18,0);
+	e32(0x00000003);
+         
 }
 
 
@@ -269,6 +321,8 @@ static void r300Clear(GLcontext * ctx, GLbitfield mask, GLboolean all,
 	 * but do keep it like this for now.
 	 */
 	r300ResetHwState(r300);
+	/* r300ClearBuffer has trampled all over the hardware state.. */
+	r300->hw.all_dirty=GL_TRUE;
 }
 
 void r300Flush(GLcontext * ctx)
@@ -280,6 +334,195 @@ void r300Flush(GLcontext * ctx)
 
 	if (r300->cmdbuf.count_used > r300->cmdbuf.count_reemit)
 		r300FlushCmdBuf(r300, __FUNCTION__);
+}
+
+void r300RefillCurrentDmaRegion(r300ContextPtr rmesa)
+{
+	struct r200_dma_buffer *dmabuf;
+	int fd = rmesa->radeon.dri.fd;
+	int index = 0;
+	int size = 0;
+	drmDMAReq dma;
+	int ret;
+
+	if (RADEON_DEBUG & (DEBUG_IOCTL | DEBUG_DMA))
+		fprintf(stderr, "%s\n", __FUNCTION__);
+
+	if (rmesa->dma.flush) {
+		rmesa->dma.flush(rmesa);
+	}
+
+	if (rmesa->dma.current.buf)
+		r300ReleaseDmaRegion(rmesa, &rmesa->dma.current, __FUNCTION__);
+
+	if (rmesa->dma.nr_released_bufs > 4)
+		r300FlushCmdBuf(rmesa, __FUNCTION__);
+
+	dma.context = rmesa->radeon.dri.hwContext;
+	dma.send_count = 0;
+	dma.send_list = NULL;
+	dma.send_sizes = NULL;
+	dma.flags = 0;
+	dma.request_count = 1;
+	dma.request_size = RADEON_BUFFER_SIZE;
+	dma.request_list = &index;
+	dma.request_sizes = &size;
+	dma.granted_count = 0;
+
+	LOCK_HARDWARE(&rmesa->radeon);	/* no need to validate */
+
+	while (1) {
+		ret = drmDMA(fd, &dma);
+		if (ret == 0)
+			break;
+
+		if (rmesa->dma.nr_released_bufs) {
+			r200FlushCmdBufLocked(rmesa, __FUNCTION__);
+		}
+
+		if (rmesa->radeon.do_usleeps) {
+			UNLOCK_HARDWARE(&rmesa->radeon);
+			DO_USLEEP(1);
+			LOCK_HARDWARE(&rmesa->radeon);
+		}
+	}
+
+	UNLOCK_HARDWARE(&rmesa->radeon);
+
+	if (RADEON_DEBUG & DEBUG_DMA)
+		fprintf(stderr, "Allocated buffer %d\n", index);
+
+	dmabuf = CALLOC_STRUCT(r300_dma_buffer);
+	dmabuf->buf = &rmesa->radeon.radeonScreen->buffers->list[index];
+	dmabuf->refcount = 1;
+
+	rmesa->dma.current.buf = dmabuf;
+	rmesa->dma.current.address = dmabuf->buf->address;
+	rmesa->dma.current.end = dmabuf->buf->total;
+	rmesa->dma.current.start = 0;
+	rmesa->dma.current.ptr = 0;
+}
+
+void r300ReleaseDmaRegion(r300ContextPtr rmesa,
+			  struct r300_dma_region *region, const char *caller)
+{
+	if (RADEON_DEBUG & DEBUG_IOCTL)
+		fprintf(stderr, "%s from %s\n", __FUNCTION__, caller);
+
+	if (!region->buf)
+		return;
+
+	if (rmesa->dma.flush)
+		rmesa->dma.flush(rmesa);
+
+	if (--region->buf->refcount == 0) {
+		drm_radeon_cmd_header_t *cmd;
+
+		if (RADEON_DEBUG & (DEBUG_IOCTL | DEBUG_DMA))
+			fprintf(stderr, "%s -- DISCARD BUF %d\n", __FUNCTION__,
+				region->buf->buf->idx);
+
+		cmd =
+		    (drm_radeon_cmd_header_t *) r300AllocCmdBuf(rmesa,
+								sizeof(*cmd),
+								__FUNCTION__);
+		cmd->dma.cmd_type = RADEON_CMD_DMA_DISCARD;
+		cmd->dma.buf_idx = region->buf->buf->idx;
+		FREE(region->buf);
+		rmesa->dma.nr_released_bufs++;
+	}
+
+	region->buf = 0;
+	region->start = 0;
+}
+
+/* Allocates a region from rmesa->dma.current.  If there isn't enough
+ * space in current, grab a new buffer (and discard what was left of current)
+ */
+void r300AllocDmaRegion(r300ContextPtr rmesa,
+			struct r300_dma_region *region,
+			int bytes, int alignment)
+{
+	if (RADEON_DEBUG & DEBUG_IOCTL)
+		fprintf(stderr, "%s %d\n", __FUNCTION__, bytes);
+
+	if (rmesa->dma.flush)
+		rmesa->dma.flush(rmesa);
+
+	if (region->buf)
+		r300ReleaseDmaRegion(rmesa, region, __FUNCTION__);
+
+	alignment--;
+	rmesa->dma.current.start = rmesa->dma.current.ptr =
+	    (rmesa->dma.current.ptr + alignment) & ~alignment;
+
+	if (rmesa->dma.current.ptr + bytes > rmesa->dma.current.end)
+		r300RefillCurrentDmaRegion(rmesa);
+
+	region->start = rmesa->dma.current.start;
+	region->ptr = rmesa->dma.current.start;
+	region->end = rmesa->dma.current.start + bytes;
+	region->address = rmesa->dma.current.address;
+	region->buf = rmesa->dma.current.buf;
+	region->buf->refcount++;
+
+	rmesa->dma.current.ptr += bytes;	/* bug - if alignment > 7 */
+	rmesa->dma.current.start =
+	    rmesa->dma.current.ptr = (rmesa->dma.current.ptr + 0x7) & ~0x7;
+
+	assert(rmesa->dma.current.ptr <= rmesa->dma.current.end);
+}
+
+/* Called via glXGetMemoryOffsetMESA() */
+GLuint r300GetMemoryOffsetMESA(__DRInativeDisplay * dpy, int scrn,
+			       const GLvoid * pointer)
+{
+	GET_CURRENT_CONTEXT(ctx);
+	r300ContextPtr rmesa;
+	GLuint card_offset;
+
+	if (!ctx || !(rmesa = R300_CONTEXT(ctx))) {
+		fprintf(stderr, "%s: no context\n", __FUNCTION__);
+		return ~0;
+	}
+
+	if (!r300IsGartMemory(rmesa, pointer, 0))
+		return ~0;
+
+	if (rmesa->radeon.dri.drmMinor < 6)
+		return ~0;
+
+	card_offset = r300GartOffsetFromVirtual(rmesa, pointer);
+
+	return card_offset - rmesa->radeon.radeonScreen->gart_base;
+}
+
+GLboolean r300IsGartMemory(r300ContextPtr rmesa, const GLvoid * pointer,
+			   GLint size)
+{
+	int offset =
+	    (char *)pointer - (char *)rmesa->radeon.radeonScreen->gartTextures.map;
+	int valid = (size >= 0 && offset >= 0
+		     && offset + size < rmesa->radeon.radeonScreen->gartTextures.size);
+
+	if (RADEON_DEBUG & DEBUG_IOCTL)
+		fprintf(stderr, "r300IsGartMemory( %p ) : %d\n", pointer,
+			valid);
+
+	return valid;
+}
+
+GLuint r300GartOffsetFromVirtual(r300ContextPtr rmesa, const GLvoid * pointer)
+{
+	int offset =
+	    (char *)pointer - (char *)rmesa->radeon.radeonScreen->gartTextures.map;
+
+	fprintf(stderr, "offset=%08x\n", offset);
+
+	if (offset < 0 || offset > rmesa->radeon.radeonScreen->gartTextures.size)
+		return ~0;
+	else
+		return rmesa->radeon.radeonScreen->gart_texture_offset + offset;
 }
 
 void r300InitIoctlFuncs(struct dd_function_table *functions)

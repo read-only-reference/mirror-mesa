@@ -37,8 +37,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef __RADEON_SCREEN_H__
 #define __RADEON_SCREEN_H__
 
-#ifdef GLX_DIRECT_RENDERING
-
 /*
  * IMPORTS: these headers contain all the DRI, X and kernel-related
  * definitions that we need.
@@ -96,6 +94,8 @@ typedef struct {
    unsigned int gart_buffer_offset;	/* offset in card memory space */
    unsigned int gart_texture_offset;	/* offset in card memory space */
 
+   GLboolean depthHasSurface;
+
    /* Configuration cache with default values for all contexts */
    driOptionCache optionCache;
 } radeonScreenRec, *radeonScreenPtr;
@@ -103,5 +103,4 @@ typedef struct {
 extern radeonScreenPtr radeonCreateScreen( __DRIscreenPrivate *sPriv );
 extern void radeonDestroyScreen( __DRIscreenPrivate *sPriv );
 
-#endif
 #endif /* __RADEON_SCREEN_H__ */

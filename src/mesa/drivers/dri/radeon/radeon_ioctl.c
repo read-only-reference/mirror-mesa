@@ -179,8 +179,7 @@ void radeonEmitState( radeonContextPtr rmesa )
       rmesa->save_on_next_emit = GL_FALSE;
    }
 
-   if (!rmesa->hw.is_dirty && !rmesa->hw.all_dirty)
-      return;
+   /* this code used to return here but now it emits zbs */
 
    /* To avoid going across the entire set of states multiple times, just check
     * for enough space for the case of emitting all state, and inline the
@@ -188,6 +187,12 @@ void radeonEmitState( radeonContextPtr rmesa )
     */
    radeonEnsureCmdBufSpace(rmesa, rmesa->hw.max_state_size);
    dest = rmesa->store.cmd_buf + rmesa->store.cmd_used;
+
+   /* We always always emit zbs, this is due to a bug found by keithw in
+      the hardware and rediscovered after Erics changes by me.
+      if you ever touch this code make sure you emit zbs otherwise
+      you get tcl lockups on at least M7/7500 class of chips - airlied */
+   rmesa->hw.zbs.dirty=1;
 
    if (RADEON_DEBUG & DEBUG_STATE) {
       foreach(atom, &rmesa->hw.atomlist) {
@@ -310,6 +315,11 @@ void radeonFlushElts( radeonContextPtr rmesa )
    cmd[1] |= (dwords - 3) << 16;
    cmd[3] |= nr << RADEON_CP_VC_CNTL_NUM_SHIFT;
 #endif
+
+   if (RADEON_DEBUG & DEBUG_SYNC) {
+      fprintf(stderr, "%s: Syncing\n", __FUNCTION__);
+      radeonFinish( rmesa->glCtx );
+   }
 }
 
 
@@ -579,6 +589,11 @@ static int radeonFlushCmdBufLocked( radeonContextPtr rmesa,
 
    if (ret)
       fprintf(stderr, "drmCommandWrite: %d\n", ret);
+
+   if (RADEON_DEBUG & DEBUG_SYNC) {
+      fprintf(stderr, "\nSyncing in %s\n\n", __FUNCTION__);
+      radeonWaitForIdleLocked( rmesa );
+   }
 
  out:
    rmesa->store.primnr = 0;
@@ -996,6 +1011,9 @@ void radeonPageFlip( const __DRIdrawablePrivate *dPriv )
    rmesa->hw.ctx.cmd[CTX_RB3D_COLOROFFSET] = rmesa->state.color.drawOffset
 					   + rmesa->radeonScreen->fbLocation;
    rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH]  = rmesa->state.color.drawPitch;
+   if (rmesa->sarea->tiling_enabled) {
+      rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] |= RADEON_COLOR_TILE_ENABLE;
+   }
 }
 
 

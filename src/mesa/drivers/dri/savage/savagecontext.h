@@ -38,11 +38,11 @@ typedef struct savage_texture_object_t *savageTextureObjectPtr;
 #include "drm.h"
 #include "savage_drm.h"
 #include "savage_init.h"
+#include "savage_3d_reg.h"
 #include "mm.h"
 #include "tnl/t_vertex.h"
 
-#include "savagetex.h"
-#include "savagedma.h"
+#include "texmem.h"
 
 #include "xmlconfig.h"
 
@@ -69,9 +69,25 @@ typedef struct savage_texture_object_t *savageTextureObjectPtr;
 #define SAVAGE_NEW_TEXTURE 0x1
 #define SAVAGE_NEW_CULL    0x2
 
+/* What needs to be changed for the current vertex dma buffer?
+ * This will go away!
+ */
+#define SAVAGE_UPLOAD_LOCAL	0x1  /* DrawLocalCtrl (S4) or 
+					DrawCtrl and ZBufCtrl (S3D) */
+#define SAVAGE_UPLOAD_TEX0	0x2  /* texture unit 0 */
+#define SAVAGE_UPLOAD_TEX1	0x4  /* texture unit 1 (S4 only) */
+#define SAVAGE_UPLOAD_FOGTBL	0x8  /* fog table */
+#define SAVAGE_UPLOAD_GLOBAL	0x10 /* most global regs */
+#define SAVAGE_UPLOAD_TEXGLOBAL 0x20 /* TexBlendColor (S4 only) */
+#define SAVAGE_UPLOAD_CLIPRECTS 0x1000 /* FIXME: get rid of this */
 
 /*define the max numer of vertex in vertex buf*/
 #define SAVAGE_MAX_VERTEXS 0x10000
+
+/* Don't make it too big. We don't want to buffer up a whole frame
+ * that would force the application to wait later. */
+#define SAVAGE_CMDBUF_SIZE 1024
+#define SAVAGE_MAX_VERTS_PENDING 1024
 
 /* Use the templated vertex formats:
  */
@@ -113,6 +129,23 @@ typedef void (*savage_point_func)( savageContextPtr, savageVertex * );
 			imesa->savageScreen->deviceID == CHIP_S3TRISTAR64CDDR )
 
 
+struct savage_vtxbuf_t {
+    GLuint total, used, flushed; /* in 32 bit units */
+    GLuint idx;		/* for DMA buffers */
+    u_int32_t *buf;
+};
+
+struct savage_cmdbuf_t {
+    GLuint size; /* size in qwords */
+    drm_savage_cmd_header_t *base;  /* initial state starts here */
+    drm_savage_cmd_header_t *start; /* drawing/state commands start here */
+    drm_savage_cmd_header_t *write; /* append stuff here */
+};
+
+struct savage_elt_t {
+    GLuint n;				/* number of elts currently allocated */
+    drm_savage_cmd_header_t *cmd;	/* the indexed drawing command */
+};
 
 
 struct savage_context_t {
@@ -121,18 +154,11 @@ struct savage_context_t {
     GLcontext *glCtx;
 
     int lastTexHeap;
-    savageTextureObjectPtr CurrentTexObj[2];
-   
-    struct savage_texture_object_t TexObjList[SAVAGE_NR_TEX_HEAPS];
-    struct savage_texture_object_t SwappedOut; 
-  
-    GLuint c_texupload;
-    GLuint c_texusage;
-    GLuint tex_thrash;
-   
-    GLuint TextureMode;
-   
-    
+    driTexHeap *textureHeaps[SAVAGE_NR_TEX_HEAPS];
+    driTextureObject swapped;
+
+    driTextureObject *CurrentTexObj[2];
+
     /* Hardware state
      */
 
@@ -143,11 +169,16 @@ struct savage_context_t {
     GLuint new_gl_state;
     GLboolean ptexHack;
 
-    GLuint BCIBase;  
-    GLuint MMIO_BASE;
+    /* Command buffer */
+    struct savage_cmdbuf_t cmdBuf;
 
-    /* DMA command buffer */
-    DMABuffer_t DMABuf;
+    /* Elt book-keeping */
+    struct savage_elt_t elts;
+    GLint firstElt;
+
+    /* Vertex buffers */
+    struct savage_vtxbuf_t dmaVtxBuf, clientVtxBuf;
+    struct savage_vtxbuf_t *vtxBuf;
 
     /* aperture base */
     GLuint apertureBase[5];
@@ -155,7 +186,6 @@ struct savage_context_t {
     /* Manage hardware state */
     GLuint dirty;
     GLboolean lostContext;
-    memHeap_t *texHeap[SAVAGE_NR_TEX_HEAPS];
     GLuint bTexEn1;
     /* One of the few bits of hardware state that can't be calculated
      * completely on the fly:
@@ -179,7 +209,8 @@ struct savage_context_t {
    GLenum raster_primitive;
    GLenum render_primitive;
 
-   GLuint DrawPrimitiveCmd;
+   GLuint skip;
+   GLubyte HwPrim;
    GLuint HwVertexSize;
 
    /* Fallback rasterization functions 
@@ -194,8 +225,9 @@ struct savage_context_t {
     GLuint ClearColor;
     GLfloat depth_scale;
     GLfloat hw_viewport[16];
-    /* DRI stuff */  
-    drmBufPtr  vertex_dma_buffer;
+    /* DRI stuff */
+    GLuint bufferSize;
+    GLuint vertsPending;
 
     GLframebuffer *glBuffer;
    
@@ -225,8 +257,8 @@ struct savage_context_t {
     GLuint backup_streamFIFO;
     GLuint NotFirstFrame;
    
+    GLboolean inSwap;
     GLuint lastSwap;
-    GLuint secondLastSwap;
     GLuint ctxAge;
     GLuint dirtyAge;
     GLuint any_contend;		/* throttle me harder */
@@ -235,9 +267,6 @@ struct savage_context_t {
     GLboolean scissorChanged;
     drm_clip_rect_t draw_rect;
     drm_clip_rect_t scissor_rect;
-    drm_clip_rect_t tmp_boxes[2][SAVAGE_NR_SAREA_CLIPRECTS];
-    /*Texture aging and DMA based aging*/
-    unsigned int texAge[SAVAGE_NR_TEX_HEAPS]; 
 
     drm_context_t hHWContext;
     drm_hw_lock_t *driHwLock;
@@ -259,16 +288,18 @@ struct savage_context_t {
 
     GLboolean hw_stencil;
 
-    /*shadow pointer*/
-    volatile GLuint  *shadowPointer;
-    volatile GLuint *eventTag1;
-    GLuint shadowCounter;
-    GLboolean shadowStatus;
+    /* Performance counters
+     */
+    GLuint c_textureSwaps;
 
     /* Configuration cache
      */
     driOptionCache optionCache;
-    int texture_depth;
+    GLint texture_depth;
+    GLboolean no_rast;
+    GLboolean float_depth;
+    GLboolean enable_fastpath;
+    GLboolean enable_vdma;
 };
 
 #define SAVAGE_CONTEXT(ctx) ((savageContextPtr)(ctx->DriverCtx))
@@ -282,7 +313,10 @@ extern int SAVAGE_DEBUG;
 
 #define DEBUG_FALLBACKS      0x001
 #define DEBUG_VERBOSE_API    0x002
-#define DEBUG_VERBOSE_LRU    0x004
+#define DEBUG_VERBOSE_TEX    0x004
+#define DEBUG_VERBOSE_MSG    0x008
+#define DEBUG_DMA            0x010
+#define DEBUG_STATE          0x020
 
 #define TARGET_FRONT    0x0
 #define TARGET_BACK     0x1

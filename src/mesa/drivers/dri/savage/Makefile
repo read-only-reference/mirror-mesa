@@ -24,9 +24,9 @@ DRIVER_SOURCES = \
 	savagestate.c \
 	savagetex.c \
 	savagetris.c \
+	savagerender.c \
 	savageioctl.c \
-	savagespan.c \
-	savagedma.c
+	savagespan.c
 
 C_SOURCES = \
 	$(COMMON_SOURCES) \

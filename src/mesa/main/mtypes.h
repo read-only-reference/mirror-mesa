@@ -9,7 +9,7 @@
  * Mesa 3-D graphics library
  * Version:  6.3
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -1245,8 +1245,7 @@ struct gl_texture_object
 {
    _glthread_Mutex Mutex;	/**< for thread safety */
    GLint RefCount;		/**< reference count */
-   GLboolean DeletePending;	/**< Has glDeleteTexture been called? */
-   GLuint Name;			/**< an unsigned integer */
+   GLuint Name;			/**< the user-visible texture object ID */
    GLenum Target;               /**< GL_TEXTURE_1D, GL_TEXTURE_2D, etc. */
    GLfloat Priority;		/**< in [0,1] */
    GLfloat BorderColor[4];	/**< unclamped */
@@ -1476,7 +1475,6 @@ struct gl_buffer_object
    GLuint Size;              /**< Size of storage in bytes */
    GLubyte *Data;            /**< Location of storage either in RAM or VRAM. */
    GLboolean OnCard;         /**< Is buffer in VRAM? (hardware drivers) */
-   GLboolean DeletePending;  /**< Deleted by user but RefCount > 0? */
 };
 
 
@@ -1707,7 +1705,6 @@ struct program
 {
    GLuint Id;
    GLubyte *String;          /**< Null-terminated program text */
-   GLboolean DeletePending;  /**< User called glDeletePrograms? */
    GLint RefCount;
    GLenum Target;
    GLenum Format;            /**< String encoding format */
@@ -1759,6 +1756,7 @@ struct ati_fragment_shader
   struct program Base;
   struct atifs_instruction *Instructions;
   GLfloat Constants[8][4];
+  GLint NumPasses;
   GLint cur_pass;
 };
 
@@ -1845,6 +1843,88 @@ struct gl_occlusion_state
    struct _mesa_HashTable *QueryObjects;
 };
 
+/**
+ * gl2 unique interface identifier.
+ * Each gl2 interface has its own interface id used for object queries.
+ */
+enum gl2_uiid
+{
+	UIID_UNKNOWN,							/* supported by all objects */
+	UIID_GENERIC,							/* generic object */
+	UIID_CONTAINER,							/* contains generic objects */
+	UIID_SHADER,							/* shader object */
+	UIID_FRAGMENT_SHADER,					/* fragment shader */
+	UIID_VERTEX_SHADER,						/* vertex shader */
+	UIID_PROGRAM,							/* program object */
+	UIID_3DLABS_SHHANDLE					/* encapsulates 3dlabs' ShHandle */
+};
+
+struct gl2_unknown_intf
+{
+	GLvoid (* AddRef) (struct gl2_unknown_intf **);
+	GLvoid (* Release) (struct gl2_unknown_intf **);
+	struct gl2_unknown_intf **(* QueryInterface) (struct gl2_unknown_intf **, enum gl2_uiid uiid);
+};
+
+struct gl2_generic_intf
+{
+	struct gl2_unknown_intf _unknown;
+	GLvoid (* Delete) (struct gl2_generic_intf **);
+	GLenum (* GetType) (struct gl2_generic_intf **);
+	GLhandleARB (* GetName) (struct gl2_generic_intf **);
+	GLboolean (* GetDeleteStatus) (struct gl2_generic_intf **);
+	const GLcharARB *(* GetInfoLog) (struct gl2_generic_intf **);
+};
+
+struct gl2_container_intf
+{
+	struct gl2_generic_intf _generic;
+	GLboolean (* Attach) (struct gl2_container_intf **, struct gl2_generic_intf **);
+	GLboolean (* Detach) (struct gl2_container_intf **, struct gl2_generic_intf **);
+	GLsizei (* GetAttachedCount) (struct gl2_container_intf **);
+	struct gl2_generic_intf **(* GetAttached) (struct gl2_container_intf **, GLuint);
+};
+
+struct gl2_shader_intf
+{
+	struct gl2_generic_intf _generic;
+	GLenum (* GetSubType) (struct gl2_shader_intf **);
+	GLboolean (* GetCompileStatus) (struct gl2_shader_intf **);
+	GLvoid (* SetSource) (struct gl2_shader_intf **, GLcharARB *, GLint *, GLsizei);
+	const GLcharARB *(* GetSource) (struct gl2_shader_intf **);
+	GLvoid (* Compile) (struct gl2_shader_intf **);
+};
+
+struct gl2_program_intf
+{
+	struct gl2_container_intf _container;
+	GLboolean (* GetLinkStatus) (struct gl2_program_intf **);
+	GLboolean (* GetValidateStatus) (struct gl2_program_intf **);
+	GLvoid (* Link) (struct gl2_program_intf **);
+	GLvoid (* Validate) (struct gl2_program_intf **);
+};
+
+struct gl2_fragment_shader_intf
+{
+	struct gl2_shader_intf _shader;
+};
+
+struct gl2_vertex_shader_intf
+{
+	struct gl2_shader_intf _shader;
+};
+
+struct gl2_3dlabs_shhandle_intf
+{
+	struct gl2_unknown_intf _unknown;
+	GLvoid *(* GetShHandle) (struct gl2_3dlabs_shhandle_intf **);
+};
+
+struct gl_shader_objects_state
+{
+	struct gl2_program_intf **current_program;
+};
+
 
 /**
  * State which can be shared by multiple contexts:
@@ -1887,6 +1967,8 @@ struct gl_shared_state
 #if FEATURE_ARB_vertex_buffer_object
    struct _mesa_HashTable *BufferObjects;
 #endif
+
+   struct _mesa_HashTable *GL2Objects;
 
    void *DriverData;  /**< Device driver shared state */
 };
@@ -2347,17 +2429,38 @@ struct gl_tnl_module
    /*@}*/
 };
 
+/* Strictly this is a tnl/ private concept, but it doesn't seem
+ * worthwhile adding a tnl private structure just to hold this one bit
+ * of information:
+ */
+#define MESA_DLIST_DANGLING_REFS     0x1 
+
+/* Provide a location where information about a display list can be
+ * collected.  Could be extended with driverPrivate structures,
+ * etc. in the future.
+ */
+struct mesa_display_list
+{
+   Node *node;
+   GLuint id;
+   GLuint flags;
+};
+
 
 /**
  * State used during display list compilation and execution.
  */
 struct mesa_list_state
 {
+   struct mesa_display_list *CallStack[MAX_LIST_NESTING];
    GLuint CallDepth;		/**< Current recursion calling depth */
+
+   struct mesa_display_list *CurrentList;
    Node *CurrentListPtr;	/**< Head of list being compiled */
    GLuint CurrentListNum;	/**< Number of the list being compiled */
    Node *CurrentBlock;		/**< Pointer to current block of nodes */
    GLuint CurrentPos;		/**< Index into current block of nodes */
+
    GLvertexformat ListVtxfmt;
 
    GLubyte ActiveAttribSize[VERT_ATTRIB_MAX];
@@ -2517,6 +2620,8 @@ struct __GLcontextRec
    struct gl_ati_fragment_shader_state ATIFragmentShader;  /**< GL_ATI_fragment_shader */
 
    struct gl_occlusion_state Occlusion;  /**< GL_ARB_occlusion_query */
+
+   struct gl_shader_objects_state ShaderObjects;	/* GL_ARB_shader_objects */
    /*@}*/
 
    GLenum ErrorValue;        /**< Last error code */

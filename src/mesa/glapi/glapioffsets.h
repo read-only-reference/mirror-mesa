@@ -26,8 +26,8 @@
  * SOFTWARE.
  */
 
-#ifndef _GLAPI_OFFSETS_H_
-#define _GLAPI_OFFSETS_H_
+#if !defined( _GLAPI_OFFSETS_H_ )
+#  define _GLAPI_OFFSETS_H_
 
 #define _gloffset_NewList 0
 #define _gloffset_EndList 1
@@ -825,5 +825,8 @@
 #define _gloffset_AlphaFragmentOp2ATI 793
 #define _gloffset_AlphaFragmentOp3ATI 794
 #define _gloffset_SetFragmentShaderConstantATI 795
+#define _gloffset_StencilFuncSeparate 796
+#define _gloffset_StencilOpSeparate 797
+#define _gloffset_StencilMaskSeparate 798
 
-#endif
+#endif /* !defined( _GLAPI_OFFSETS_H_ ) */

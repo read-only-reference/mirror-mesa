@@ -54,9 +54,25 @@ typedef struct r300_context *r300ContextPtr;
 #include "radeon_lock.h"
 #include "mm.h"
 
+/* Checkpoint.. for convenience */
+#define CPT	{ fprintf(stderr, "%s:%s line %d\n", __FILE__, __FUNCTION__, __LINE__); }
+#define WARN_ONCE(a)	{ \
+	static int warn=1; \
+	if(warn){ \
+		fprintf(stderr, (a)); \
+		warn=0;\
+		} \
+	}
+
 typedef GLuint uint32_t;
 typedef GLubyte uint8_t;
 
+  /* We should probably change types within vertex_shader
+      and pixel_shader structure later on */
+#define CARD32 GLuint
+#include "vertex_shader.h"
+#include "pixel_shader.h"
+#undef CARD32
 
 static __inline__ uint32_t r300PackFloat32(float fl)
 {
@@ -65,6 +81,104 @@ static __inline__ uint32_t r300PackFloat32(float fl)
 	u.fl = fl;
 	return u.u;
 }
+
+
+/************ DMA BUFFERS **************/
+
+/* Need refcounting on dma buffers:
+ */
+struct r300_dma_buffer {
+	int refcount;		/* the number of retained regions in buf */
+	drmBufPtr buf;
+};
+
+#define GET_START(rvb) (rmesa->radeon.radeonScreen->gart_buffer_offset +		\
+			(rvb)->address - rmesa->dma.buf0_address +	\
+			(rvb)->start)
+
+/* A retained region, eg vertices for indexed vertices.
+ */
+struct r300_dma_region {
+	struct r300_dma_buffer *buf;
+	char *address;		/* == buf->address */
+	int start, end, ptr;	/* offsets from start of buf */
+	int aos_start;
+	int aos_stride;
+	int aos_size;
+};
+
+struct r300_dma {
+	/* Active dma region.  Allocations for vertices and retained
+	 * regions come from here.  Also used for emitting random vertices,
+	 * these may be flushed by calling flush_current();
+	 */
+	struct r300_dma_region current;
+
+	void (*flush) (r300ContextPtr);
+
+	char *buf0_address;	/* start of buf[0], for index calcs */
+	GLuint nr_released_bufs;	/* flush after so many buffers released */
+};
+
+       /* Texture related */
+
+typedef struct r300_tex_obj r300TexObj, *r300TexObjPtr;
+
+/* Texture object in locally shared texture space.
+ */
+struct r300_tex_obj {
+	driTextureObject base;
+
+	GLuint bufAddr;		/* Offset to start of locally
+				   shared texture block */
+
+	GLuint dirty_state;	/* Flags (1 per texunit) for
+				   whether or not this texobj
+				   has dirty hardware state
+				   (pp_*) that needs to be
+				   brought into the
+				   texunit. */
+
+	drm_radeon_tex_image_t image[6][RADEON_MAX_TEXTURE_LEVELS];
+	/* Six, for the cube faces */
+
+
+	/* hardware register values */
+	/* Note that R200 has 8 registers per texture and R300 only 7 */
+	GLuint filter;
+	GLuint pitch; /* one of the unknown registers.. unknown 1 ?*/
+	GLuint size;	/* npot only */
+	GLuint format;
+	GLuint offset;	/* Image location in texmem.
+				   All cube faces follow. */
+	GLuint unknown4;
+	GLuint unknown5;
+	/* end hardware registers */
+
+	/* registers computed by r200 code - keep them here to
+	   compare against what is actually written.
+
+	   to be removed later.. */
+	GLuint pp_border_color;
+	GLuint pp_cubic_faces;	/* cube face 1,2,3,4 log2 sizes */
+	GLuint format_x;
+
+
+	GLboolean border_fallback;
+};
+
+struct r300_texture_env_state {
+	r300TexObjPtr texobj;
+	GLenum format;
+	GLenum envMode;
+};
+
+#define R300_MAX_TEXTURE_UNITS 8
+
+struct r300_texture_state {
+	struct r300_texture_env_state unit[R300_MAX_TEXTURE_UNITS];
+	int tc_count; /* number of incoming texture coordinates from VAP */
+};
 
 /**
  * A block of hardware state.
@@ -93,11 +207,6 @@ struct r300_state_atom {
 #define R300_VPT_ZSCALE		5
 #define R300_VPT_ZOFFSET	6
 #define R300_VPT_CMDSIZE	7
-
-#define R300_OVF_CMD_0		0
-#define R300_OVF_FMT_0		1
-#define R300_OVF_FMT_1		2
-#define R300_OVF_CMDSIZE	3
 
 #define R300_VIR_CMD_0		0 /* vir is variable size (at least 1) */
 #define R300_VIR_CNTL_0		1
@@ -185,13 +294,22 @@ struct r300_state_atom {
 #define R300_FP_NODE3		8
 #define R300_FP_CMDSIZE		9
 
+#define R300_FPT_CMD_0		0
+#define R300_FPT_INSTR_0	1
+#define R300_FPT_CMDSIZE	65
+
 #define R300_FPI_CMD_0		0
 #define R300_FPI_INSTR_0	1
 #define R300_FPI_CMDSIZE	65
 
+#define R300_FPP_CMD_0		0
+#define R300_FPP_PARAM_0	1
+#define R300_FPP_CMDSIZE	(32*4+1)
+
 #define R300_AT_CMD_0		0
 #define R300_AT_ALPHA_TEST	1
-#define R300_AT_CMDSIZE		2
+#define R300_AT_UNKNOWN		2
+#define R300_AT_CMDSIZE		3
 
 #define R300_BLD_CMD_0		0
 #define R300_BLD_CBLEND		1
@@ -208,10 +326,11 @@ struct r300_state_atom {
 #define R300_CB_PITCH		3
 #define R300_CB_CMDSIZE		4
 
-#define R300_ZC_CMD_0		0
-#define R300_ZC_CNTL_0		1
-#define R300_ZC_CNTL_1		2
-#define R300_ZC_CMDSIZE		3
+#define R300_ZS_CMD_0		0
+#define R300_ZS_CNTL_0		1
+#define R300_ZS_CNTL_1		2
+#define R300_ZS_CNTL_2		3
+#define R300_ZS_CMDSIZE		4
 
 #define R300_ZB_CMD_0		0
 #define R300_ZB_OFFSET		1
@@ -233,6 +352,13 @@ struct r300_state_atom {
 #define R300_VPS_ZERO_3		4
 #define R300_VPS_CMDSIZE	5
 
+	/* the layout is common for all fields inside tex */
+#define R300_TEX_CMD_0		0
+#define R300_TEX_VALUE_0	1
+/* We don't really use this, instead specify mtu+1 dynamically
+#define R300_TEX_CMDSIZE	(MAX_TEXTURE_UNITS+1)
+*/
+
 /**
  * Cache for hardware register state.
  */
@@ -245,7 +371,7 @@ struct r300_hw_state {
 
 	struct r300_state_atom vpt;	/* viewport (1D98) */
 	struct r300_state_atom unk2080;	/* (2080) */
-	struct r300_state_atom ovf;	/* output vertex format (2090) */
+	struct r300_state_atom vof;     /* VAP output format register 0x2090 */
 	struct r300_state_atom vte;	/* (20B0) */
 	struct r300_state_atom unk2134;	/* (2134) */
 	struct r300_state_atom unk2140;	/* (2140) */
@@ -256,10 +382,8 @@ struct r300_hw_state {
 	struct r300_state_atom unk2220; /* (2220) */
 	struct r300_state_atom unk2288; /* (2288) */
 	struct r300_state_atom pvs;	/* pvs_cntl (22D0) */
-	struct r300_state_atom vof;     /* VAP output format register 0x4000 */
 	struct r300_state_atom gb_enable; /* (4008) */
 	struct r300_state_atom gb_misc; /* Multisampling position shifts ? (4010) */
-	struct r300_state_atom txe;	/* tex enable (4104) */
 	struct r300_state_atom unk4200; /* (4200) */
 	struct r300_state_atom unk4214; /* (4214) */
 	struct r300_state_atom ps;	/* pointsize (421C) */
@@ -277,12 +401,14 @@ struct r300_hw_state {
 	struct r300_state_atom unk43A4;	/* (43A4) */
 	struct r300_state_atom unk43E8;	/* (43E8) */
 	struct r300_state_atom fp;	/* fragment program cntl + nodes (4600) */
+	struct r300_state_atom fpt;     /* texi - (4620) */
 	struct r300_state_atom unk46A4;	/* (46A4) */
 	struct r300_state_atom fpi[4];	/* fp instructions (46C0/47C0/48C0/49C0) */
 	struct r300_state_atom unk4BC0;	/* (4BC0) */
 	struct r300_state_atom unk4BC8;	/* (4BC8) */
 	struct r300_state_atom at;	/* alpha test (4BD4) */
 	struct r300_state_atom unk4BD8;	/* (4BD8) */
+	struct r300_state_atom fpp;     /* 0x4C00 and following */
 	struct r300_state_atom unk4E00;	/* (4E00) */
 	struct r300_state_atom bld;	/* blending (4E04) */
 	struct r300_state_atom cmk;	/* colormask (4E0C) */
@@ -291,8 +417,7 @@ struct r300_hw_state {
 	struct r300_state_atom unk4E50;	/* (4E50) */
 	struct r300_state_atom unk4E88;	/* (4E88) */
 	struct r300_state_atom unk4EA0;	/* (4E88) I saw it only written on RV350 hardware..  */
-	struct r300_state_atom zc;	/* z control (4F00) */
-	struct r300_state_atom unk4F08;	/* (4F08) */
+	struct r300_state_atom zs;	/* zstencil control (4F00) */
 	struct r300_state_atom unk4F10;	/* (4F10) */
 	struct r300_state_atom zb;	/* z buffer (4F20) */
 	struct r300_state_atom unk4F28;	/* (4F28) */
@@ -303,6 +428,23 @@ struct r300_hw_state {
 	struct r300_state_atom vpi;	/* vp instructions */
 	struct r300_state_atom vpp;	/* vp parameters */
 	struct r300_state_atom vps;	/* vertex point size (?) */
+
+		/* 8 texture units */
+		/* the state is grouped by function and not by
+		   texture unit. This makes single unit updates
+		   really awkward - we are much better off
+		   updating the whole thing at once */
+	struct {
+		struct r300_state_atom filter;
+		struct r300_state_atom unknown1;
+		struct r300_state_atom size;
+		struct r300_state_atom format;
+		struct r300_state_atom offset;
+		struct r300_state_atom unknown4;
+		struct r300_state_atom unknown5;
+		//struct r300_state_atom border_color;
+		} tex;
+	struct r300_state_atom txe;	/* tex enable (4104) */
 };
 
 
@@ -324,13 +466,174 @@ struct r300_cmdbuf {
 /**
  * State cache
  */
- 
+
 struct r300_depthbuffer_state {
 	GLfloat scale;
 };
 
+struct r300_vap_reg_state {
+	   /* input register assigments */
+	   int i_coords;
+	   int i_normal;
+	   int i_color[2];
+	   int i_fog;
+	   int i_tex[R300_MAX_TEXTURE_UNITS];
+	   int i_index;
+	   int i_pointsize;
+	};
+
+/* Vertex shader state */
+
+/* 64 appears to be the maximum */
+#define VSF_MAX_FRAGMENT_LENGTH 64
+
+
+struct r300_vertex_shader_fragment {
+	int length;
+	union {
+		GLuint d[VSF_MAX_FRAGMENT_LENGTH];
+		float f[VSF_MAX_FRAGMENT_LENGTH];
+		VERTEX_SHADER_INSTRUCTION i[VSF_MAX_FRAGMENT_LENGTH/4];
+		} body;
+	};
+
+#define VSF_DEST_PROGRAM	0x0
+#define VSF_DEST_MATRIX0	0x200
+#define VSF_DEST_MATRIX1	0x204
+#define VSF_DEST_MATRIX2	0x208
+#define VSF_DEST_VECTOR0	0x20c
+#define VSF_DEST_VECTOR1	0x20d
+#define VSF_DEST_UNKNOWN1	0x400
+#define VSF_DEST_UNKNOWN2	0x406
+
+struct r300_vertex_shader_state {
+	struct r300_vertex_shader_fragment program;
+
+	/* a bit of a waste - each uses only a subset of allocated space..
+	    but easier to program */
+	struct r300_vertex_shader_fragment matrix[3];
+	struct r300_vertex_shader_fragment vector[2];
+
+	struct r300_vertex_shader_fragment unknown1;
+	struct r300_vertex_shader_fragment unknown2;
+
+	int program_start;
+	int unknown_ptr1;  /* pointer within program space */
+	int program_end;
+
+	int param_offset;
+	int param_count;
+
+	int unknown_ptr2;  /* pointer within program space */
+	int unknown_ptr3;  /* pointer within program space */
+	};
+	
+/* r300_vertex_shader_state and r300_vertex_program should probably be merged together someday.
+ * Keeping them them seperate for now should ensure fixed pipeline keeps functioning properly.
+ */	
+struct r300_vertex_program {
+	struct vertex_program mesa_program; /* Must be first */
+	int translated;
+	
+	struct r300_vertex_shader_fragment program;
+	struct r300_vertex_shader_fragment params;
+
+};
+
+/* 64 appears to be the maximum */
+#define PSF_MAX_PROGRAM_LENGTH 64
+
+struct r300_pixel_shader_program {
+	struct {
+		int length;
+		GLuint inst[PSF_MAX_PROGRAM_LENGTH];
+		} tex;
+
+	/* ALU intructions (logic and integer) */
+	struct {
+		int length;
+		struct {
+			GLuint inst0;
+			GLuint inst1;
+			GLuint inst2;
+			GLuint inst3;
+			} inst[PSF_MAX_PROGRAM_LENGTH];
+		} alu;
+
+	/* node information */
+	/* nodes are used to synchronize ALU and TEX streams */
+	/* There could be up to 4 nodes each consisting of
+	   a number of TEX instructions followed by some ALU
+	   instructions */
+	/* the last node of a program should always be node3 */
+	struct {
+		int tex_offset;
+		int tex_end;
+		int alu_offset;
+		int alu_end;
+		} node[4];
+
+	int active_nodes;	/* must be between 1 and 4, inclusive */
+	int first_node_has_tex;  /* other nodes always have it */
+
+	int temp_register_count;  /* magic value goes into PFS_CNTL_1 */
+
+	/* entire program */
+	int tex_offset;
+	int tex_end;
+	int alu_offset;
+	int alu_end;
+
+	};
+
+#define MAX_PIXEL_SHADER_PARAMS 32
+struct r300_pixel_shader_state {
+	struct r300_pixel_shader_program program;
+
+	/* parameters */
+	int param_length;  /* to limit the number of unnecessary writes */
+	struct {
+		float x;
+		float y;
+		float z;
+		float w;
+		} param[MAX_PIXEL_SHADER_PARAMS];
+	};
+
+/* 8 is somewhat bogus... it is probably something like 24 */
+#define R300_MAX_AOS_ARRAYS		8
+
+#define AOS_FORMAT_FLOAT	1
+#define AOS_FORMAT_UBYTE	2
+#define AOS_FORMAT_FLOAT_COLOR	3
+
+#define REG_COORDS	0
+#define REG_COLOR0	1
+#define REG_TEX0	2
+
+struct r300_aos_rec {
+	GLuint offset;
+	int element_size; /* in dwords */
+	int stride;       /* distance between elements, in dwords */
+
+	int format;
+
+	int ncomponents; /* number of components - between 1 and 4, inclusive */
+
+	int reg; /* which register they are assigned to. */
+
+	};
+
 struct r300_state {
 	struct r300_depthbuffer_state depth;
+	struct r300_texture_state texture;
+	struct r300_vap_reg_state vap_reg;
+	struct r300_vertex_shader_state vertex_shader;
+	struct r300_pixel_shader_state pixel_shader;
+	struct r300_aos_rec aos[R300_MAX_AOS_ARRAYS];
+	int aos_count;
+
+	int hw_stencil;
 };
 
 
@@ -343,11 +646,37 @@ struct r300_context {
 	struct r300_hw_state hw;
 	struct r300_cmdbuf cmdbuf;
 	struct r300_state state;
+
+	/* Vertex buffers
+	 */
+	struct r300_dma dma;
+	GLboolean save_on_next_unlock;
+
+	/* Texture object bookkeeping
+	 */
+	unsigned nr_heaps;
+	driTexHeap *texture_heaps[R200_NR_TEX_HEAPS];
+	driTextureObject swapped;
+	int texture_depth;
+	float initialMaxAnisotropy;
+
+	/* Clientdata textures;
+	 */
+	GLuint prefer_gart_client_texturing;
+
+	/* TCL stuff
+	 */
+	GLmatrix TexGenMatrix[R300_MAX_TEXTURE_UNITS];
+	GLboolean recheck_texgen[R300_MAX_TEXTURE_UNITS];
+	GLboolean TexGenNeedNormals[R300_MAX_TEXTURE_UNITS];
+	GLuint TexMatEnabled;
+	GLuint TexMatCompSel;
+	GLuint TexGenEnabled;
+	GLuint TexGenInputs;
+	GLuint TexGenCompSel;
+	GLmatrix tmpmat;
 	
-	/* Vertex buffers */
-	int elt_count;  /* size of the buffer for vertices */
-	int attrib_count; /* size of the buffer for vertex attributes.. Somehow it can be different ? */
-	
+	struct r300_vertex_program *current_vp;
 };
 
 #define R300_CONTEXT(ctx)		((r300ContextPtr)(ctx->DriverCtx))
@@ -356,5 +685,6 @@ extern void r300DestroyContext(__DRIcontextPrivate * driContextPriv);
 extern GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 				   __DRIcontextPrivate * driContextPriv,
 				   void *sharedContextPrivate);
+extern void r300InitVertexProgFuncs(struct dd_function_table *functions);
 
 #endif				/* __R300_CONTEXT_H__ */

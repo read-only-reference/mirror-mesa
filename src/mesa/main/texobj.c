@@ -5,9 +5,9 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  6.2
+ * Version:  6.3
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -659,6 +659,7 @@ _mesa_DeleteTextures( GLsizei n, const GLuint *textures)
          if (delObj) {
             /* First check if this texture is currently bound.
              * If so, unbind it and decrement the reference count.
+             * XXX all RefCount accesses should be protected by a mutex.
              */
             GLuint u;
             for (u = 0; u < MAX_TEXTURE_IMAGE_UNITS; u++) {
@@ -701,17 +702,15 @@ _mesa_DeleteTextures( GLsizei n, const GLuint *textures)
             }
             ctx->NewState |= _NEW_TEXTURE;
 
-            /* If user hasn't already tried to delete the texture... */
-            if (!delObj->DeletePending) {
-               delObj->DeletePending = GL_TRUE;
-               delObj->RefCount--;
-               ASSERT(delObj->RefCount >= 0);
-            }
-
-            /* See if we can really delete the texture now */
+            /* The texture _name_ is now free for re-use. */
+            _mesa_remove_texture_object(ctx, delObj);
+            /* The actual texture object will not be freed until it's no
+             * longer bound in any context.
+             * XXX all RefCount accesses should be protected by a mutex.
+             */
+            delObj->RefCount--;
             if (delObj->RefCount == 0) {
-               ASSERT(delObj->Name != 0); /* Never delete default tex objects */
-               _mesa_remove_texture_object(ctx, delObj);
+               ASSERT(delObj->Name != 0); /* Never delete default tex objs */
                ASSERT(ctx->Driver.DeleteTexture);
                (*ctx->Driver.DeleteTexture)(ctx, delObj);
             }
@@ -854,6 +853,7 @@ _mesa_BindTexture( GLenum target, GLuint texName )
       newTexObj->Target = target;
    }
 
+   /* XXX all RefCount accesses should be protected by a mutex. */
    newTexObj->RefCount++;
 
    /* do the actual binding, but first flush outstanding vertices:
@@ -888,12 +888,11 @@ _mesa_BindTexture( GLenum target, GLuint texName )
    /* Decrement the reference count on the old texture and check if it's
     * time to delete it.
     */
+   /* XXX all RefCount accesses should be protected by a mutex. */
    oldTexObj->RefCount--;
    ASSERT(oldTexObj->RefCount >= 0);
    if (oldTexObj->RefCount == 0) {
       ASSERT(oldTexObj->Name != 0);
-      ASSERT(oldTexObj->DeletePending);
-      _mesa_remove_texture_object(ctx, oldTexObj);
       ASSERT(ctx->Driver.DeleteTexture);
       (*ctx->Driver.DeleteTexture)( ctx, oldTexObj );
    }

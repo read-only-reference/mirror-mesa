@@ -14,11 +14,12 @@
 
 VPATH = RCS
 
-INCDIR = [---.include],[-.main],[-.glapi]
+INCDIR = [---.include],[-.main],[-.glapi],[.slang]
 LIBDIR = [---.lib]
 CFLAGS = /include=($(INCDIR),[])/define=(PTHREADS=1)/name=(as_is,short)
 
 SOURCES = \
+	atifragshader.c \
 	arbfragparse.c \
 	arbprogparse.c \
 	arbprogram.c \
@@ -29,9 +30,11 @@ SOURCES = \
 	nvvertexec.c \
 	nvvertparse.c \
 	program.c \
-	shaderobjects.c
+	shaderobjects.c \
+	shaderobjects_3dlabs.c
 
 OBJECTS = \
+	atifragshader.obj,\
 	arbfragparse.obj,\
 	arbprogparse.obj,\
 	arbprogram.obj,\
@@ -42,7 +45,8 @@ OBJECTS = \
 	nvvertexec.obj,\
 	nvvertparse.obj,\
 	program.obj,\
-	shaderobjects.obj
+	shaderobjects.obj,\
+	shaderobjects_3dlabs.obj
 
 
 ##### RULES #####
@@ -58,7 +62,7 @@ clean :
 	purge
 	delete *.obj;*
 
-
+atifragshader.obj : atifragshader.c
 arbfragparse.obj : arbfragparse.c
 arbprogparse.obj : arbprogparse.c
 arbprogram.obj : arbprogram.c
@@ -70,3 +74,4 @@ nvvertexec.obj : nvvertexec.c
 nvvertparse.obj : nvvertparse.c
 program.obj : program.c
 shaderobjects.obj : shaderobjects.c
+shaderobjects_3dlabs.obj : shaderobjects_3dlabs.c

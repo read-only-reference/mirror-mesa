@@ -49,7 +49,8 @@
  * VERT_X(v): Alias for vertex x value.
  * VERT_Y(v): Alias for vertex y value.
  * VERT_Z(v): Alias for vertex z value.
- * DEPTH_SCALE: Scale for offset.
+ * DEPTH_SCALE: Scale for constant offset.
+ * REVERSE_DEPTH: Viewport depth range reversed.
  *
  * VERTEX: Hardware vertex type.
  * GET_VERTEX(n): Retreive vertex with index n.
@@ -106,6 +107,10 @@
 #ifndef INSANE_VERTICES
 #define VERT_SET_Z(v,val) VERT_Z(v) = val
 #define VERT_Z_ADD(v,val) VERT_Z(v) += val
+#endif
+
+#ifndef REVERSE_DEPTH
+#define REVERSE_DEPTH 0
 #endif
 
 /* disable twostencil for un-aware drivers */
@@ -196,20 +201,34 @@ static void TAG(triangle)( GLcontext *ctx, GLuint e0, GLuint e1, GLuint e2 )
 	       }
 	       else {
 		  GLfloat (*vbcolor)[4] = VB->ColorPtr[1]->data;
-		  ASSERT(VB->ColorPtr[1]->stride == 4*sizeof(GLfloat));
 		  (void) vbcolor;
 
 		  if (!DO_FLAT) {
 		     VERT_SAVE_RGBA( 0 );
 		     VERT_SAVE_RGBA( 1 );
-		     VERT_SET_RGBA( v[0], vbcolor[e0] );
-		     VERT_SET_RGBA( v[1], vbcolor[e1] );
 		  }
 		  VERT_SAVE_RGBA( 2 );
-		  VERT_SET_RGBA( v[2], vbcolor[e2] );
+
+		  if (VB->ColorPtr[1]->stride) {
+		     ASSERT(VB->ColorPtr[1]->stride == 4*sizeof(GLfloat));
+
+		     if (!DO_FLAT) {		  
+			VERT_SET_RGBA( v[0], vbcolor[e0] );
+			VERT_SET_RGBA( v[1], vbcolor[e1] );
+		     }
+		     VERT_SET_RGBA( v[2], vbcolor[e2] );
+		  }
+		  else {
+		     if (!DO_FLAT) {		  
+			VERT_SET_RGBA( v[0], vbcolor[0] );
+			VERT_SET_RGBA( v[1], vbcolor[0] );
+		     }
+		     VERT_SET_RGBA( v[2], vbcolor[0] );
+		  }
 
 		  if (HAVE_SPEC && VB->SecondaryColorPtr[1]) {
 		     GLfloat (*vbspec)[4] = VB->SecondaryColorPtr[1]->data;
+		     ASSERT(VB->SecondaryColorPtr[1]->stride == 4*sizeof(GLfloat));
 
 		     if (!DO_FLAT) {
 			VERT_SAVE_SPEC( 0 );
@@ -255,7 +274,7 @@ static void TAG(triangle)( GLcontext *ctx, GLuint e0, GLuint e1, GLuint e2 )
 	    if ( bc < 0.0f ) bc = -bc;
 	    offset += MAX2( ac, bc ) * ctx->Polygon.OffsetFactor;
 	 }
-	 offset *= ctx->MRD;
+	 offset *= REVERSE_DEPTH ? -ctx->MRD : ctx->MRD;
       }
    }
 
@@ -458,12 +477,25 @@ static void TAG(quad)( GLcontext *ctx,
 		     VERT_SAVE_RGBA( 0 );
 		     VERT_SAVE_RGBA( 1 );
 		     VERT_SAVE_RGBA( 2 );
-		     VERT_SET_RGBA( v[0], vbcolor[e0] );
-		     VERT_SET_RGBA( v[1], vbcolor[e1] );
-		     VERT_SET_RGBA( v[2], vbcolor[e2] );
-	          }
+		  }
 	          VERT_SAVE_RGBA( 3 );
-	          VERT_SET_RGBA( v[3], vbcolor[e3] );
+
+		  if (VB->ColorPtr[1]->stride) {
+		     if (!DO_FLAT) {
+			VERT_SET_RGBA( v[0], vbcolor[e0] );
+			VERT_SET_RGBA( v[1], vbcolor[e1] );
+			VERT_SET_RGBA( v[2], vbcolor[e2] );
+		     }
+		     VERT_SET_RGBA( v[3], vbcolor[e3] );
+		  }
+		  else {
+		     if (!DO_FLAT) {
+			VERT_SET_RGBA( v[0], vbcolor[0] );
+			VERT_SET_RGBA( v[1], vbcolor[0] );
+			VERT_SET_RGBA( v[2], vbcolor[0] );
+		     }
+		     VERT_SET_RGBA( v[3], vbcolor[0] );
+		  }
 
 	          if (HAVE_SPEC && VB->SecondaryColorPtr[1]) {
 		     GLfloat (*vbspec)[4] = VB->SecondaryColorPtr[1]->data;
@@ -518,7 +550,7 @@ static void TAG(quad)( GLcontext *ctx,
 	    if ( bc < 0.0f ) bc = -bc;
 	    offset += MAX2( ac, bc ) * ctx->Polygon.OffsetFactor;
 	 }
-	 offset *= ctx->MRD;
+	 offset *= REVERSE_DEPTH ? -ctx->MRD : ctx->MRD;
       }
    }
 

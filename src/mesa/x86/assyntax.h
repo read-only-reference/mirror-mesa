@@ -1730,4 +1730,11 @@ SECTION _DATA public align=16 class=DATA use32 flat
 #define TLBL(a)		CONCAT(a,$)
 #endif
 
+/* hidden symbol visibility support */
+#if defined(GNU_ASSEMBLER) && !defined(__DJGPP__) && !defined(__MINGW32__)
+#define HIDDEN(a)       .hidden a
+#else
+#define HIDDEN(a)
+#endif
+
 #endif /* __ASSYNTAX_H__ */

@@ -44,7 +44,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #	define	R300_VAP_VF_CNTL__COLOR_ORDER__SHIFT                     6
 #	define	R300_VAP_VF_CNTL__TCL_OUTPUT_CTL_ENA__SHIFT              9
 #	define	R300_VAP_VF_CNTL__PROG_STREAM_ENA__SHIFT                 10
-                
+
 		/* index size - when not set the indices are assumed to be 16 bit */
 #	define	R300_VAP_VF_CNTL__INDEX_SIZE_32bit                      (1<<11)
                 /* number of vertices */
@@ -261,7 +261,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 /* gap */
 
 /* These are values from r300_reg/r300_reg.h - they are known to be correct
-   and are here so we can use one register file instead of several 
+   and are here so we can use one register file instead of several
    - Vladimir */
 #define R300_GB_VAP_RASTER_VTX_FMT_0	0x4000
 #	define R300_GB_VAP_RASTER_VTX_FMT_0__POS_PRESENT	(1<<0)
@@ -290,9 +290,9 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #	define R300_GB_TRIANGLE_STUFF_ENABLE	(1<<2)
 #	define R300_GB_STENCIL_AUTO_ENABLE	(1<<4)
 	/* each of the following is 2 bits wide */
-	#define R300_GB_TEX_REPLICATE	0
-	#define R300_GB_TEX_ST		1
-	#define R300_GB_TEX_STR		2
+#define R300_GB_TEX_REPLICATE	0
+#define R300_GB_TEX_ST		1
+#define R300_GB_TEX_STR		2
 #	define R300_GB_TEX0_SOURCE_SHIFT	16
 #	define R300_GB_TEX1_SOURCE_SHIFT	18
 #	define R300_GB_TEX2_SOURCE_SHIFT	20
@@ -323,7 +323,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #	define R300_GB_MSPOS1__MS_Y5_SHIFT	20
 #	define R300_GB_MSPOS1__MSBD1		24
 
-   
+
 #define R300_GB_TILE_CONFIG	0x4018
 #	define R300_GB_TILE_ENABLE	(1<<0)
 #	define R300_GB_TILE_PIPE_COUNT_RV300	0
@@ -348,17 +348,17 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 
 #define R300_GB_FIFO_SIZE	0x4024
 	/* each of the following is 2 bits wide */
-	#define R300_GB_FIFO_SIZE_32	0
-	#define R300_GB_FIFO_SIZE_64	1
-	#define R300_GB_FIFO_SIZE_128	2
-	#define R300_GB_FIFO_SIZE_256	3
+#define R300_GB_FIFO_SIZE_32	0
+#define R300_GB_FIFO_SIZE_64	1
+#define R300_GB_FIFO_SIZE_128	2
+#define R300_GB_FIFO_SIZE_256	3
 #	define R300_SC_IFIFO_SIZE_SHIFT	0
 #	define R300_SC_TZFIFO_SIZE_SHIFT	2
 #	define R300_SC_BFIFO_SIZE_SHIFT	4
 
 #	define R300_US_OFIFO_SIZE_SHIFT	12
 #	define R300_US_WFIFO_SIZE_SHIFT	14
-	/* the following use the same constants as above, but meaning is 
+	/* the following use the same constants as above, but meaning is
 	   is times 2 (i.e. instead of 32 words it means 64 */
 #	define R300_RS_TFIFO_SIZE_SHIFT	6
 #	define R300_RS_CFIFO_SIZE_SHIFT	8
@@ -420,7 +420,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_POINTSIZE_X_MASK             (0xFFFF << 16) /* GUESS */
 
 /* This register needs to be set to (1<<1) for RV350 to correctly
-   perform depth test (see --vb-triangles in r300_demo) 
+   perform depth test (see --vb-triangles in r300_demo)
    Don't know about other chips. - Vladimir
     */
 #define R300_RE_OCCLUSION_CNTL		    0x42B4
@@ -565,20 +565,44 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 // TX_OFFSET_0 + (4*N) */
 #define R300_TX_FILTER_0                    0x4400
 #       define R300_TX_REPEAT                    0
-#       define R300_TX_CLAMP_TO_EDGE             1
-#       define R300_TX_CLAMP                     2
-#       define R300_TX_CLAMP_TO_BORDER           3
-
-#       define R300_TX_WRAP_S_SHIFT              1
-#       define R300_TX_WRAP_S_MASK               (3 << 1)
-#       define R300_TX_WRAP_T_SHIFT              4
-#       define R300_TX_WRAP_T_MASK               (3 << 4)
+#       define R300_TX_MIRRORED                  1
+#       define R300_TX_CLAMP                     4
+#       define R300_TX_CLAMP_TO_EDGE             2
+#       define R300_TX_CLAMP_TO_BORDER           6
+#       define R300_TX_WRAP_S_SHIFT              0
+#       define R300_TX_WRAP_S_MASK               (7 << 0)
+#       define R300_TX_WRAP_T_SHIFT              3
+#       define R300_TX_WRAP_T_MASK               (7 << 3)
+#       define R300_TX_WRAP_Q_SHIFT              6
+#       define R300_TX_WRAP_Q_MASK               (7 << 6)
 #       define R300_TX_MAG_FILTER_NEAREST        (1 << 9)
 #       define R300_TX_MAG_FILTER_LINEAR         (2 << 9)
 #       define R300_TX_MAG_FILTER_MASK           (3 << 9)
 #       define R300_TX_MIN_FILTER_NEAREST        (1 << 11)
 #       define R300_TX_MIN_FILTER_LINEAR         (2 << 11)
+#	define R300_TX_MIN_FILTER_NEAREST_MIP_NEAREST       (5  <<  11)
+#	define R300_TX_MIN_FILTER_NEAREST_MIP_LINEAR        (9  <<  11)
+#	define R300_TX_MIN_FILTER_LINEAR_MIP_NEAREST        (6  <<  11)
+#	define R300_TX_MIN_FILTER_LINEAR_MIP_LINEAR         (10 <<  11)
+
+/* NOTE: NEAREST doesnt seem to exist.
+   Im not seting MAG_FILTER_MASK and (3 << 11) on for all
+   anisotropy modes because that would void selected mag filter */
+#	define R300_TX_MIN_FILTER_ANISO_NEAREST             ((0 << 13) /*|R300_TX_MAG_FILTER_MASK|(3<<11)*/)
+#	define R300_TX_MIN_FILTER_ANISO_LINEAR              ((0 << 13) /*|R300_TX_MAG_FILTER_MASK|(3<<11)*/)
+#	define R300_TX_MIN_FILTER_ANISO_NEAREST_MIP_NEAREST ((1 << 13) /*|R300_TX_MAG_FILTER_MASK|(3<<11)*/)
+#	define R300_TX_MIN_FILTER_ANISO_NEAREST_MIP_LINEAR  ((2 << 13) /*|R300_TX_MAG_FILTER_MASK|(3<<11)*/)
+#       define R300_TX_MIN_FILTER_MASK           ( (15 << 11) | (3 << 13) )
+#	define R300_TX_MAX_ANISO_1_TO_1  (0 << 21)
+#	define R300_TX_MAX_ANISO_2_TO_1  (2 << 21)
+#	define R300_TX_MAX_ANISO_4_TO_1  (4 << 21)
+#	define R300_TX_MAX_ANISO_8_TO_1  (6 << 21)
+#	define R300_TX_MAX_ANISO_16_TO_1 (8 << 21)
+#	define R300_TX_MAX_ANISO_MASK    (14 << 21)
+
 #define R300_TX_UNK1_0                      0x4440
+#	define R300_LOD_BIAS_MASK	    0x1fff
+
 #define R300_TX_SIZE_0                      0x4480
 #       define R300_TX_WIDTHMASK_SHIFT           0
 #       define R300_TX_WIDTHMASK_MASK            (2047 << 0)
@@ -587,6 +611,81 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_TX_SIZE_SHIFT                26 /* largest of width, height */
 #       define R300_TX_SIZE_MASK                 (15 << 26)
 #define R300_TX_FORMAT_0                    0x44C0
+	/* The interpretation of the format word by Wladimir van der Laan */
+	/* The X, Y, Z and W refer to the layout of the components.
+	   They are given meanings as R, G, B and Alpha by the swizzle
+	   specification */
+#	define R300_TX_FORMAT_X8		    0x0
+#	define R300_TX_FORMAT_X16		    0x1
+#	define R300_TX_FORMAT_Y4X4		    0x2
+#	define R300_TX_FORMAT_Y8X8		    0x3
+#	define R300_TX_FORMAT_Y16X16		    0x4
+#	define R300_TX_FORMAT_Z3Y3X2		    0x5
+#	define R300_TX_FORMAT_Z5Y6X5		    0x6
+#	define R300_TX_FORMAT_Z6Y5X5		    0x7
+#	define R300_TX_FORMAT_Z11Y11X10		    0x8
+#	define R300_TX_FORMAT_Z10Y11X11		    0x9
+#	define R300_TX_FORMAT_W4Z4Y4X4		    0xA
+#	define R300_TX_FORMAT_W1Z5Y5X5		    0xB
+#	define R300_TX_FORMAT_W8Z8Y8X8		    0xC
+#	define R300_TX_FORMAT_W2Z10Y10X10	    0xD
+#	define R300_TX_FORMAT_W16Z16Y16X16	    0xE
+#	define R300_TX_FORMAT_DXT1	    	    0xF
+#	define R300_TX_FORMAT_DXT3	    	    0x10
+#	define R300_TX_FORMAT_DXT5	    	    0x11
+#	define R300_TX_FORMAT_D3DMFT_CxV8U8	    0x12     /* no swizzle */
+#	define R300_TX_FORMA_A8R8G8B8	    	    0x13     /* no swizzle */
+#	define R300_TX_FORMA_B8G8_B8G8	    	    0x14     /* no swizzle */
+#	define R300_TX_FORMA_G8R8_G8B8	    	    0x15     /* no swizzle */
+						  /* 0x16 - some 16 bit green format.. ?? */
+	/* gap */
+	/* Floating point formats */
+	/* Note - hardware supports both 16 and 32 bit floating point */
+#	define R300_TX_FORMAT_FL_I16	    	    0x18
+#	define R300_TX_FORMAT_FL_I16A16	    	    0x19
+#	define R300_TX_FORMAT_FL_R16G16B16A16	    0x1A
+#	define R300_TX_FORMAT_FL_I32	    	    0x1B
+#	define R300_TX_FORMAT_FL_I32A32	    	    0x1C
+#	define R300_TX_FORMAT_FL_R32G32B32A32	    0x1D
+	/* alpha modes, convenience mostly */
+	/* if you have alpha, pick constant appropriate to the
+	   number of channels (1 for I8, 2 for I8A8, 4 for R8G8B8A8, etc */
+# 	define R300_TX_FORMAT_ALPHA_1CH		    0x000
+# 	define R300_TX_FORMAT_ALPHA_2CH		    0x200
+# 	define R300_TX_FORMAT_ALPHA_4CH		    0x600
+# 	define R300_TX_FORMAT_ALPHA_NONE	    0xA00
+	/* Swizzling */
+	/* constats */
+#	define R300_TX_FORMAT_X		0
+#	define R300_TX_FORMAT_Y		1
+#	define R300_TX_FORMAT_Z		2
+#	define R300_TX_FORMAT_W		3
+#	define R300_TX_FORMAT_ZERO	4
+#	define R300_TX_FORMAT_ONE	5
+#	define R300_TX_FORMAT_CUT_Z	6		/* 2.0*Z, everything above 1.0 is set to 0.0 */
+#	define R300_TX_FORMAT_CUT_W	7		/* 2.0*W, everything above 1.0 is set to 0.0 */
+
+#	define R300_TX_FORMAT_B_SHIFT	18
+#	define R300_TX_FORMAT_G_SHIFT	15
+#	define R300_TX_FORMAT_R_SHIFT	12
+#	define R300_TX_FORMAT_A_SHIFT	9
+	/* Convenience macro to take care of layout and swizzling */
+#	define R300_EASY_TX_FORMAT(B, G, R, A, FMT)	(\
+	  ((R300_TX_FORMAT_##B)<<R300_TX_FORMAT_B_SHIFT) \
+	| ((R300_TX_FORMAT_##G)<<R300_TX_FORMAT_G_SHIFT) \
+	| ((R300_TX_FORMAT_##R)<<R300_TX_FORMAT_R_SHIFT) \
+	| ((R300_TX_FORMAT_##A)<<R300_TX_FORMAT_A_SHIFT) \
+	| (R300_TX_FORMAT_##FMT) \
+	  )
+	/* These can be ORed with result of R300_EASY_TX_FORMAT() */
+	/* We don't really know what they do. Take values from a constant color ? */
+#	define R300_TX_FORMAT_CONST_X		(1<<5)
+#	define R300_TX_FORMAT_CONST_Y		(2<<5)
+#	define R300_TX_FORMAT_CONST_Z		(4<<5)
+#	define R300_TX_FORMAT_CONST_W		(8<<5)
+
+#	define R300_TX_FORMAT_YUV_MODE		0x00800000
+
 #define R300_TX_OFFSET_0                    0x4540
 /* BEGIN: Guess from R200 */
 #       define R300_TXO_ENDIAN_NO_SWAP           (0 << 0)
@@ -598,6 +697,8 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 /* END */
 #define R300_TX_UNK4_0                      0x4580
 #define R300_TX_UNK5_0                      0x45C0
+#define R300_TX_BORDER_COLOR_0              0x45F0 //ff00ff00 == { 0, 1.0, 0, 1.0 }
+
 /* END */
 
 /* BEGIN: Fragment program instruction set
@@ -947,7 +1048,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_COLOR_ENDIAN_NO_SWAP         (0 << 18) /* GUESS */
 #       define R300_COLOR_ENDIAN_WORD_SWAP       (1 << 18) /* GUESS */
 #       define R300_COLOR_ENDIAN_DWORD_SWAP      (2 << 18) /* GUESS */
-#       define R300_COLOR_UNKNOWN_22_23          (3 << 22) /* GUESS: Format? */
+#       define R300_COLOR_UNKNOWN_22_23          (3 << 22) /* GUESS: Format? - (6<<21) for RGBA? */
 #define R300_RB3D_COLORPITCH1               0x4E3C /* GUESS */
 #define R300_RB3D_COLORPITCH2               0x4E40 /* GUESS */
 #define R300_RB3D_COLORPITCH3               0x4E44 /* GUESS */
@@ -962,22 +1063,58 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 /* gap */
 /* There seems to be no "write only" setting, so use Z-test = ALWAYS for this. */
 /* Bit (1<<8) is the "test" bit. so plain write is 6  - vd */
-#define R300_RB3D_ZCNTL_0                   0x4F00
+#define R300_RB3D_ZSTENCIL_CNTL_0                   0x4F00
 #       define R300_RB3D_Z_DISABLED_1            0x00000010 /* GUESS */
 #       define R300_RB3D_Z_DISABLED_2            0x00000014 /* GUESS */
 #       define R300_RB3D_Z_TEST                  0x00000012
 #       define R300_RB3D_Z_TEST_AND_WRITE        0x00000016
 #       define R300_RB3D_Z_WRITE_ONLY        	 0x00000006
-#define R300_RB3D_ZCNTL_1                   0x4F04
-#       define R300_Z_TEST_NEVER                 (0 << 0) /* GUESS (based on R200) */
-#       define R300_Z_TEST_LESS                  (1 << 0)
-#       define R300_Z_TEST_LEQUAL                (2 << 0)
-#       define R300_Z_TEST_EQUAL                 (3 << 0) /* GUESS */
-#       define R300_Z_TEST_GEQUAL                (4 << 0) /* GUESS */
-#       define R300_Z_TEST_GREATER               (5 << 0) /* GUESS */
-#       define R300_Z_TEST_NEQUAL                (6 << 0)
-#       define R300_Z_TEST_ALWAYS                (7 << 0)
-#       define R300_Z_TEST_MASK                  (7 << 0)
+
+#       define R300_RB3D_Z_TEST                  0x00000012
+#       define R300_RB3D_Z_TEST_AND_WRITE        0x00000016
+#       define R300_RB3D_Z_WRITE_ONLY        	 0x00000006
+#	define R300_RB3D_STENCIL_ENABLE		 (0<<1)  /* UNKNOWN yet.. */
+
+#define R300_RB3D_ZSTENCIL_CNTL_1                   0x4F04
+		/* functions */
+#	define R300_ZS_NEVER			0
+#	define R300_ZS_LESS			1
+#	define R300_ZS_LEQUAL			2
+#	define R300_ZS_EQUAL			3
+#	define R300_ZS_GEQUAL			4
+#	define R300_ZS_GREATER			5
+#	define R300_ZS_NOTEQUAL			6
+#	define R300_ZS_ALWAYS			7
+#       define R300_ZS_MASK                     7
+		/* operations */
+#	define R300_ZS_KEEP			0
+#	define R300_ZS_ZERO			1
+#	define R300_ZS_REPLACE			2
+#	define R300_ZS_INCR			3
+#	define R300_ZS_DECR			4
+#	define R300_ZS_INVERT			5
+#	define R300_ZS_INCR_WRAP		6
+#	define R300_ZS_DECR_WRAP		7
+
+       /* front and back refer to operations done for front
+          and back faces, i.e. separate stencil function support */
+#	define R300_RB3D_ZS1_DEPTH_FUNC_SHIFT		0
+#	define R300_RB3D_ZS1_FRONT_FUNC_SHIFT		3
+#	define R300_RB3D_ZS1_FRONT_FAIL_OP_SHIFT	6
+#	define R300_RB3D_ZS1_FRONT_ZPASS_OP_SHIFT	9
+#	define R300_RB3D_ZS1_FRONT_ZFAIL_OP_SHIFT      12
+#	define R300_RB3D_ZS1_BACK_FUNC_SHIFT           15
+#	define R300_RB3D_ZS1_BACK_FAIL_OP_SHIFT        18
+#	define R300_RB3D_ZS1_BACK_ZPASS_OP_SHIFT       21
+#	define R300_RB3D_ZS1_BACK_ZFAIL_OP_SHIFT       24
+
+
+
+#define R300_RB3D_ZSTENCIL_CNTL_2                   0x4F08
+#	define R300_RB3D_ZS2_STENCIL_REF_SHIFT		0
+#	define R300_RB3D_ZS2_STENCIL_MASK_SHIFT	        8
+#	define R300_RB3D_ZS2_STENCIL_WRITE_MASK_SHIFT	16
+
 /* gap */
 #define R300_RB3D_DEPTHOFFSET               0x4F20
 #define R300_RB3D_DEPTHPITCH                0x4F24
@@ -1020,6 +1157,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #define R300_VPI_OUT_OP_MUL                     (2 << 0)
 #define R300_VPI_OUT_OP_ADD                     (3 << 0)
 #define R300_VPI_OUT_OP_MAD                     (4 << 0)
+#define R300_VPI_OUT_OP_DST                     (5 << 0)
 #define R300_VPI_OUT_OP_FRC                     (6 << 0)
 #define R300_VPI_OUT_OP_MAX                     (7 << 0)
 #define R300_VPI_OUT_OP_MIN                     (8 << 0)
@@ -1077,5 +1215,55 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #define R300_VPI_IN_NEG_Z                       (1 << 27)
 #define R300_VPI_IN_NEG_W                       (1 << 28)
 /* END */
+
+//BEGIN: Packet 3 commands
+
+// A primitive emission dword.
+#define R300_PRIM_TYPE_NONE                     (0 << 0)
+#define R300_PRIM_TYPE_POINT                    (1 << 0)
+#define R300_PRIM_TYPE_LINE                     (2 << 0)
+#define R300_PRIM_TYPE_LINE_STRIP               (3 << 0)
+#define R300_PRIM_TYPE_TRI_LIST                 (4 << 0)
+#define R300_PRIM_TYPE_TRI_FAN                  (5 << 0)
+#define R300_PRIM_TYPE_TRI_STRIP                (6 << 0)
+#define R300_PRIM_TYPE_TRI_TYPE2                (7 << 0)
+#define R300_PRIM_TYPE_RECT_LIST                (8 << 0)
+#define R300_PRIM_TYPE_3VRT_POINT_LIST          (9 << 0)
+#define R300_PRIM_TYPE_3VRT_LINE_LIST           (10 << 0)
+#define R300_PRIM_TYPE_POINT_SPRITES            (11 << 0) // GUESS (based on r200)
+#define R300_PRIM_TYPE_LINE_LOOP                (12 << 0)
+#define R300_PRIM_TYPE_QUADS                    (13 << 0)
+#define R300_PRIM_TYPE_QUAD_STRIP               (14 << 0)
+#define R300_PRIM_TYPE_POLYGON                  (15 << 0)
+#define R300_PRIM_TYPE_MASK                     0xF
+#define R300_PRIM_WALK_IND                      (1 << 4)
+#define R300_PRIM_WALK_LIST                     (2 << 4)
+#define R300_PRIM_WALK_RING                     (3 << 4)
+#define R300_PRIM_WALK_MASK                     (3 << 4)
+#define R300_PRIM_COLOR_ORDER_BGRA              (0 << 6) // GUESS (based on r200)
+#define R300_PRIM_COLOR_ORDER_RGBA              (1 << 6) // GUESS
+#define R300_PRIM_NUM_VERTICES_SHIFT            16
+
+// Draw a primitive from vertex data in arrays loaded via 3D_LOAD_VBPNTR.
+// Two parameter dwords:
+// 0. The first parameter appears to be always 0
+// 1. The second parameter is a standard primitive emission dword.
+#define R300_PACKET3_3D_DRAW_VBUF           0x00002800
+
+// Specify the full set of vertex arrays as (address, stride).
+// The first parameter is the number of vertex arrays specified.
+// The rest of the command is a variable length list of blocks, where
+// each block is three dwords long and specifies two arrays.
+// The first dword of a block is split into two words, the lower significant
+// word refers to the first array, the more significant word to the second
+// array in the block.
+// The low byte of each word contains the size of an array entry in dwords,
+// the high byte contains the stride of the array.
+// The second dword of a block contains the pointer to the first array,
+// the third dword of a block contains the pointer to the second array.
+// Note that if the total number of arrays is odd, the third dword of
+// the last block is omitted.
+#define R300_PACKET3_3D_LOAD_VBPNTR         0x00002F00
+//END
 
 #endif /* _R300_REG_H */

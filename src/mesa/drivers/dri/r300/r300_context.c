@@ -32,7 +32,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *   Keith Whitwell <keith@tungstengraphics.com>
  *   Nicolai Haehnle <prefect_@gmx.net>
  */
-
 #include "glheader.h"
 #include "api_arrayelt.h"
 #include "context.h"
@@ -57,6 +56,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r300_cmdbuf.h"
 #include "r300_state.h"
 #include "r300_ioctl.h"
+#include "r300_tex.h"
 
 #include "vblank.h"
 #include "utils.h"
@@ -77,6 +77,7 @@ static const char *const card_extensions[] = {
 	"GL_ARB_texture_mirrored_repeat",
 	"GL_ARB_vertex_buffer_object",
 	"GL_ARB_vertex_program",
+	//"GL_ARB_fragment_program",
 	"GL_EXT_blend_equation_separate",
 	"GL_EXT_blend_func_separate",
 	"GL_EXT_blend_minmax",
@@ -135,7 +136,6 @@ static const struct tnl_pipeline_stage *r300_pipeline[] = {
 	0,
 };
 
-
 /* Create the device specific rendering context.
  */
 GLboolean r300CreateContext(const __GLcontextModes * glVisual,
@@ -147,7 +147,7 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	struct dd_function_table functions;
 	r300ContextPtr r300;
 	GLcontext *ctx;
-	int tcl_mode;
+	int tcl_mode, i;
 
 	assert(glVisual);
 	assert(driContextPriv);
@@ -171,8 +171,9 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	_mesa_init_driver_functions(&functions);
 	r300InitIoctlFuncs(&functions);
 	r300InitStateFuncs(&functions);
-	//r200InitTextureFuncs(&functions);
-
+	r300InitTextureFuncs(&functions);
+	r300InitVertexProgFuncs(&functions);
+	
 	if (!radeonInitContext(&r300->radeon, &functions,
 			       glVisual, driContextPriv, sharedContextPrivate)) {
 		FREE(r300);
@@ -180,6 +181,35 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	}
 
 	/* Init r300 context data */
+	r300->dma.buf0_address = r300->radeon.radeonScreen->buffers->list[0].address;
+
+	(void)memset(r300->texture_heaps, 0, sizeof(r300->texture_heaps));
+	make_empty_list(&r300->swapped);
+
+	r300->nr_heaps = 1 /* screen->numTexHeaps */ ;
+	assert(r300->nr_heaps < R200_NR_TEX_HEAPS);
+	for (i = 0; i < r300->nr_heaps; i++) {
+		r300->texture_heaps[i] = driCreateTextureHeap(i, r300,
+							       screen->
+							       texSize[i], 12,
+							       RADEON_NR_TEX_REGIONS,
+							       (drmTextureRegionPtr)
+							       r300->radeon.sarea->
+							       tex_list[i],
+							       &r300->radeon.sarea->
+							       tex_age[i],
+							       &r300->swapped,
+							       sizeof
+							       (r300TexObj),
+							       (destroy_texture_object_t
+								*)
+							       r300DestroyTexObj);
+	}
+	r300->texture_depth = driQueryOptioni(&r300->radeon.optionCache,
+					       "texture_depth");
+	if (r300->texture_depth == DRI_CONF_TEXTURE_DEPTH_FB)
+		r300->texture_depth = (screen->cpp == 4) ?
+		    DRI_CONF_TEXTURE_DEPTH_32 : DRI_CONF_TEXTURE_DEPTH_16;
 
 	/* Set the maximum texture size small enough that we can guarentee that
 	 * all texture units can bind a maximal texture and have them both in
@@ -231,22 +261,36 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	_tnl_allow_pixel_fog(ctx, GL_FALSE);
 	_tnl_allow_vertex_fog(ctx, GL_TRUE);
 
+#if 0
+	//if(driQueryOptionb(&rmesa->optionCache, "arb_vertex_program"))
+		_mesa_enable_extension( ctx, "GL_ARB_vertex_program");
+	//if(driQueryOptionb(&rmesa->optionCache, "nv_vertex_program"))
+		_mesa_enable_extension( ctx, "GL_NV_vertex_program");
+#endif
+	/* currently bogus data */
+	ctx->Const.MaxVertexProgramInstructions=128;
+	ctx->Const.MaxVertexProgramAttribs=64;
+	ctx->Const.MaxVertexProgramTemps=64;
+	ctx->Const.MaxVertexProgramLocalParams=64;
+	ctx->Const.MaxVertexProgramEnvParams=64;
+	ctx->Const.MaxVertexProgramAddressRegs=8;
+		
 	driInitExtensions(ctx, card_extensions, GL_TRUE);
-
+	
 	radeonInitSpanFuncs(ctx);
 	r300InitCmdBuf(r300);
 	r300InitState(r300);
+
 #if 0
 	/* plug in a few more device driver functions */
 	/* XXX these should really go right after _mesa_init_driver_functions() */
-	r200InitPixelFuncs(ctx);
-	r200InitSwtcl(ctx);
+	r300InitPixelFuncs(ctx);
+	r300InitSwtcl(ctx);
 #endif
 	TNL_CONTEXT(ctx)->Driver.RunPipeline = _tnl_run_pipeline;
 
 	tcl_mode = driQueryOptioni(&r300->radeon.optionCache, "tcl_mode");
-	if (1 ||
-	    driQueryOptionb(&r300->radeon.optionCache, "no_rast")) {
+	if (driQueryOptionb(&r300->radeon.optionCache, "no_rast")) {
 		fprintf(stderr, "disabling 3D acceleration\n");
 		FALLBACK(&r300->radeon, RADEON_FALLBACK_DISABLE, 1);
 	}
@@ -270,6 +314,8 @@ void r300DestroyContext(__DRIcontextPrivate * driContextPriv)
 	r300ContextPtr r300 = (r300ContextPtr) driContextPriv->driverPrivate;
 	radeonContextPtr current = ctx ? RADEON_CONTEXT(ctx) : NULL;
 
+	fprintf(stderr, "Destroying context !\n");
+	sleep(1);
 	/* check if we're deleting the currently bound context */
 	if (&r300->radeon == current) {
 		radeonFlush(r300->radeon.glCtx);

@@ -18,7 +18,7 @@ WINOBJ=
 WINLIB=-L$(MESA)/src/glx/mini
 MINIGLX_INCLUDES = -I$(TOP)/src/glx/mini
 INCLUDES = $(MINIGLX_INCLUDES) \
-	   -I$(DRM_SOURCE_PATH)/shared \
+	   -I$(DRM_SOURCE_PATH)/shared-core \
 	   -I$(DRM_SOURCE_PATH)/libdrm \
 	   $(SHARED_INCLUDES)
 
@@ -36,8 +36,7 @@ SHARED_INCLUDES = \
 	-I. \
 	-I$(TOP)/src/mesa/drivers/dri/common \
 	-Iserver \
-	-I$(DRM_SOURCE_PATH)/shared \
-	-I$(DRM_SOURCE_PATH)/linux \
+	-I$(DRM_SOURCE_PATH)/shared-core \
 	-I$(TOP)/include \
 	-I$(TOP)/include/GL/internal \
 	-I$(TOP)/src/mesa \
@@ -48,11 +47,6 @@ SHARED_INCLUDES = \
 	-I$(TOP)/src/mesa/shader \
 	-I$(TOP)/src/mesa/swrast \
 	-I$(TOP)/src/mesa/swrast_setup
-
-# Of course we're direct rendering.  Redundant #ifdefs in the code
-# from prehistory require this:
-#
-DEFINES += -DGLX_DIRECT_RENDERING 
 
 ##### RULES #####
 
@@ -65,7 +59,7 @@ DEFINES += -DGLX_DIRECT_RENDERING
 
 ##### TARGETS #####
 
-default: depend symlinks $(LIB_DIR)/$(LIBNAME)
+default: depend symlinks $(LIBNAME) $(LIB_DIR)/$(LIBNAME)
 
 
 #$(LIB_DIR)/$(LIBNAME): $(OBJECTS) $(MESA_MODULES) $(WINOBJ) Makefile
@@ -73,15 +67,19 @@ default: depend symlinks $(LIB_DIR)/$(LIBNAME)
 #	$(TOP)/bin/mklib -o $(LIBNAME) -noprefix -install $(LIB_DIR) \
 #		$(WINLIB) $(LIB_DEPS) $(WINOBJ) $(MESA_MODULES) $(OBJECTS)
 
+$(LIBNAME):  $(OBJECTS) $(MESA_MODULES) $(WINOBJ) Makefile $(TOP)/src/mesa/drivers/dri/Makefile.template
+	rm -f $@ 
+	gcc -o $@ -shared $(OBJECTS) $(MESA_MODULES) $(WINOBJ) $(DRI_LIB_DEPS)
 
-$(LIB_DIR)/$(LIBNAME):  $(OBJECTS) $(MESA_MODULES) $(WINOBJ) Makefile $(TOP)/src/mesa/drivers/dri/Makefile.template
-	rm -f $@ && gcc -o $@ -shared $(OBJECTS) $(MESA_MODULES) $(WINOBJ) $(DRI_LIB_DEPS)
 
+$(LIB_DIR)/$(LIBNAME): $(LIBNAME)
+	install $(LIBNAME) $(LIB_DIR) 
 
 
 
 # Run 'make depend' to update the dependencies if you change
 # what's included by any source file.
+.PHONY: depend
 depend: $(C_SOURCES) $(ASM_SOURCES) $(SYMLINKS)
 	touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(DEFINES) $(INCLUDES) $(C_SOURCES) $(ASM_SOURCES) \
@@ -95,7 +93,10 @@ tags:
 
 # Remove .o and backup files
 clean:
-	-rm -f *.o */*.o *~ *.o *~ *.so server/*.o $(SYMLINKS)
+	-rm -f *.o */*.o *~ *.so *~ server/*.o $(SYMLINKS)
 	-rm -f depend depend.bak
+
+install: $(LIBNAME)
+	install $(LIBNAME) /usr/X11R6/lib/modules/dri/$(LIBNAME)
 
 include depend

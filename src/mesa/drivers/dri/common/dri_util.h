@@ -49,8 +49,6 @@
 #ifndef _DRI_UTIL_H_
 #define _DRI_UTIL_H_
 
-#ifdef GLX_DIRECT_RENDERING
-
 #define CAPI  /* XXX this should be globally defined somewhere */
 
 #ifdef DRI_NEW_INTERFACE_ONLY
@@ -77,6 +75,7 @@ typedef struct __DRIscreenPrivateRec   __DRIscreenPrivate;
 typedef struct __DRIcontextPrivateRec  __DRIcontextPrivate;
 typedef struct __DRIdrawablePrivateRec __DRIdrawablePrivate;
 typedef struct __DRIswapInfoRec        __DRIswapInfo;
+typedef struct __DRIutilversionRec2    __DRIutilversion2;
 
 
 /**
@@ -526,6 +525,17 @@ struct __DRIscreenPrivateRec {
 };
 
 
+/**
+ * Used to store a version which includes a major range instead of a single
+ * major version number.
+ */
+struct __DRIutilversionRec2 {
+    int    major_min;    /** min allowed Major version number. */
+    int    major_max;    /** max allowed Major version number. */
+    int    minor;        /**< Minor version number. */
+    int    patch;        /**< Patch-level. */
+};
+
 
 extern void
 __driUtilMessage(const char *f, ...);
@@ -562,7 +572,5 @@ driCalculateSwapUsage( __DRIdrawablePrivate *dPriv,
 extern void 
 (*glXGetProcAddress(const GLubyte *procname))( void );
 #endif
-
-#endif /* GLX_DIRECT_RENDERING */
 
 #endif /* _DRI_UTIL_H_ */
