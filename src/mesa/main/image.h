@@ -1,8 +1,8 @@
-/* $Id: image.h,v 1.9 2000/05/10 14:39:53 brianp Exp $ */
+/* $Id: image.h,v 1.12 2000/08/31 15:24:07 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  * 
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
@@ -80,11 +80,19 @@ _mesa_pack_polygon_stipple( const GLuint pattern[32], GLubyte *dest,
 
 
 extern void
+_mesa_pack_float_rgba_span( GLcontext *ctx,
+                            GLuint n, CONST GLfloat rgba[][4],
+                            GLenum dstFormat, GLenum dstType, GLvoid *dstAddr,
+                            const struct gl_pixelstore_attrib *dstPacking,
+                            GLuint transferOps );
+
+
+extern void
 _mesa_pack_rgba_span( GLcontext *ctx,
                       GLuint n, CONST GLubyte rgba[][4],
-                      GLenum format, GLenum type, GLvoid *dest,
-                      const struct gl_pixelstore_attrib *packing,
-                      GLboolean applyTransferOps );
+                      GLenum dstFormat, GLenum dstType, GLvoid *dstAddr,
+                      const struct gl_pixelstore_attrib *dstPacking,
+                      GLuint transferOps );
 
 
 extern void
@@ -92,8 +100,8 @@ _mesa_unpack_ubyte_color_span( GLcontext *ctx,
                                GLuint n, GLenum dstFormat, GLubyte dest[],
                                GLenum srcFormat, GLenum srcType,
                                const GLvoid *source,
-                               const struct gl_pixelstore_attrib *unpacking,
-                               GLboolean applyTransferOps );
+                               const struct gl_pixelstore_attrib *srcPacking,
+                               GLuint transferOps );
 
 
 extern void
@@ -101,31 +109,31 @@ _mesa_unpack_float_color_span( GLcontext *ctx,
                                GLuint n, GLenum dstFormat, GLfloat dest[],
                                GLenum srcFormat, GLenum srcType,
                                const GLvoid *source,
-                               const struct gl_pixelstore_attrib *unpacking,
-                               GLboolean applyTransferOps, GLboolean clamp );
+                               const struct gl_pixelstore_attrib *srcPacking,
+                               GLuint transferOps, GLboolean clamp );
 
 
 extern void
 _mesa_unpack_index_span( const GLcontext *ctx, GLuint n,
                          GLenum dstType, GLvoid *dest,
                          GLenum srcType, const GLvoid *source,
-                         const struct gl_pixelstore_attrib *unpacking,
-                         GLboolean applyTransferOps );
+                         const struct gl_pixelstore_attrib *srcPacking,
+                         GLuint transferOps );
 
 
 extern void
 _mesa_unpack_stencil_span( const GLcontext *ctx, GLuint n,
                            GLenum dstType, GLvoid *dest,
                            GLenum srcType, const GLvoid *source,
-                           const struct gl_pixelstore_attrib *unpacking,
-                           GLboolean applyTransferOps );
+                           const struct gl_pixelstore_attrib *srcPacking,
+                           GLuint transferOps );
 
 
 extern void
 _mesa_unpack_depth_span( const GLcontext *ctx, GLuint n, GLdepth *dest,
                          GLenum srcType, const GLvoid *source,
-                         const struct gl_pixelstore_attrib *unpacking,
-                         GLboolean applyTransferOps );
+                         const struct gl_pixelstore_attrib *srcPacking,
+                         GLuint transferOps );
 
 
 extern void *

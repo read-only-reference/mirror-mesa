@@ -274,6 +274,8 @@ static GLbitfield fxDDClear(GLcontext *ctx, GLbitfield mask, GLboolean all,
       FX_grColorMask(FXTRUE, ctx->Color.ColorMask[ACOMP] && fxMesa->haveAlphaBuffer);
       if (ctx->Color.DrawDestMask & FRONT_LEFT_BIT)
         FX_grRenderBuffer(GR_BUFFER_FRONTBUFFER);
+      if (!ctx->Depth.Test || !ctx->Depth.Mask)
+        FX_grDepthMask(FXFALSE);
       break;
     default:
       /* error */
@@ -533,7 +535,7 @@ static GLboolean fxDDReadPixels( GLcontext *ctx, GLint x, GLint y,
                                  const struct gl_pixelstore_attrib *packing,
                                  GLvoid *dstImage )
 {
-  if (ctx->Pixel.ScaleOrBiasRGBA || ctx->Pixel.MapColorFlag) {
+  if (ctx->ImageTransferState) {
     return GL_FALSE;  /* can't do this */
   }
   else {

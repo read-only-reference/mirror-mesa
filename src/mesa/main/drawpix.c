@@ -1,8 +1,8 @@
-/* $Id: drawpix.c,v 1.26 2000/06/30 22:19:41 brianp Exp $ */
+/* $Id: drawpix.c,v 1.31 2000/08/30 18:22:28 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  * 
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  * 
@@ -30,6 +30,7 @@
 #else
 #include "glheader.h"
 #include "context.h"
+#include "convolve.h"
 #include "drawpix.h"
 #include "feedback.h"
 #include "image.h"
@@ -99,10 +100,21 @@ _mesa_clip_pixelrect(const GLcontext *ctx,
  * Return:  GL_TRUE if success, GL_FALSE if slow path must be used instead
  */
 static GLboolean
-simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
-                   GLsizei width, GLsizei height, GLenum format, GLenum type,
-                   const GLvoid *pixels )
+fast_draw_pixels(GLcontext *ctx, GLint x, GLint y,
+                 GLsizei width, GLsizei height,
+                 GLenum format, GLenum type, const GLvoid *pixels)
 {
+   const GLuint cantTransferBits =
+      IMAGE_SCALE_BIAS_BIT |
+      IMAGE_SHIFT_OFFSET_BIT |
+      IMAGE_MAP_COLOR_BIT |
+      IMAGE_COLOR_TABLE_BIT |
+      IMAGE_CONVOLUTION_BIT |
+      IMAGE_POST_CONVOLUTION_COLOR_TABLE_BIT |
+      IMAGE_COLOR_MATRIX_BIT |
+      IMAGE_POST_COLOR_MATRIX_COLOR_TABLE_BIT |
+      IMAGE_HISTOGRAM_BIT |
+      IMAGE_MIN_MAX_BIT;
    const struct gl_pixelstore_attrib *unpack = &ctx->Unpack;
    GLubyte rgb[MAX_WIDTH][3];
    GLubyte rgba[MAX_WIDTH][4];
@@ -112,23 +124,13 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
 
 
    if (!ctx->Current.RasterPosValid) {
-      /* no-op */
-      return GL_TRUE;
+      return GL_TRUE;      /* no-op */
    }
 
    if ((ctx->RasterMask&(~(SCISSOR_BIT|WINCLIP_BIT)))==0
-       && !ctx->Pixel.ScaleOrBiasRGBA
-       && !ctx->Pixel.ScaleOrBiasRGBApcm
-       && ctx->ColorMatrix.type == MATRIX_IDENTITY
-       && !ctx->Pixel.ColorTableEnabled
-       && !ctx->Pixel.PostColorMatrixColorTableEnabled
-       && ctx->Pixel.PostConvolutionColorTableEnabled
-       && !ctx->Pixel.MinMaxEnabled
-       && !ctx->Pixel.HistogramEnabled
-       && ctx->Pixel.IndexShift==0 && ctx->Pixel.IndexOffset==0
-       && ctx->Pixel.MapColorFlag==0
+       && (ctx->ImageTransferState & cantTransferBits) == 0
        && ctx->Texture.ReallyEnabled == 0
-       && unpack->Alignment==1
+       && unpack->Alignment == 1
        && !unpack->SwapBytes
        && !unpack->LsbFirst) {
 
@@ -176,11 +178,35 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
 
          zoomY0 = 0;  /* not used - silence compiler warning */
       }
+      else if (ctx->Pixel.ZoomX==1.0F && ctx->Pixel.ZoomY==-1.0F) {
+         /* upside-down image */
+         /* horizontal clipping */
+         if (destX < ctx->DrawBuffer->Xmin) {
+            skipPixels += (ctx->DrawBuffer->Xmin - destX);
+            drawWidth  -= (ctx->DrawBuffer->Xmin - destX);
+            destX = ctx->DrawBuffer->Xmin;
+         }
+         if (destX + drawWidth > ctx->DrawBuffer->Xmax)
+            drawWidth -= (destX + drawWidth - ctx->DrawBuffer->Xmax - 1);
+         if (drawWidth <= 0)
+            return GL_TRUE;
+
+         /* vertical clipping */
+         if (destY > ctx->DrawBuffer->Ymax) {
+            skipRows   += (destY - ctx->DrawBuffer->Ymax - 1);
+            drawHeight -= (destY - ctx->DrawBuffer->Ymax - 1);
+            destY = ctx->DrawBuffer->Ymax + 1;
+         }
+         if (destY - drawHeight < ctx->DrawBuffer->Ymin)
+            drawHeight -= (ctx->DrawBuffer->Ymin - (destY - drawHeight));
+         if (drawHeight <= 0)
+            return GL_TRUE;
+      }
       else {
          /* setup array of fragment Z value to pass to zoom function */
          GLdepth z = (GLdepth) (ctx->Current.RasterPos[2] * ctx->Visual->DepthMaxF);
          GLint i;
-         assert(drawWidth < MAX_WIDTH);
+         ASSERT(drawWidth < MAX_WIDTH);
          for (i=0; i<drawWidth; i++)
             zSpan[i] = z;
 
@@ -211,6 +237,16 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
                   destY++;
                }
             }
+            else if (ctx->Pixel.ZoomX==1.0F && ctx->Pixel.ZoomY==-1.0F) {
+               /* upside-down */
+               GLint row;
+               for (row=0; row<drawHeight; row++) {
+                  destY--;
+                  (*ctx->Driver.WriteRGBASpan)(ctx, drawWidth, destX, destY,
+                                              (void *) src, NULL);
+                  src += rowLength * 4;
+               }
+            }
             else {
                /* with zooming */
                GLint row;
@@ -237,6 +273,16 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
                   destY++;
                }
             }
+            else if (ctx->Pixel.ZoomX==1.0F && ctx->Pixel.ZoomY==-1.0F) {
+               /* upside-down */
+               GLint row;
+               for (row=0; row<drawHeight; row++) {
+                  destY--;
+                  (*ctx->Driver.WriteRGBSpan)(ctx, drawWidth, destX, destY,
+                                              (void *) src, NULL);
+                  src += rowLength * 3;
+               }
+            }
             else {
                /* with zooming */
                GLint row;
@@ -257,7 +303,7 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
             if (ctx->Pixel.ZoomX==1.0F && ctx->Pixel.ZoomY==1.0F) {
                /* no zooming */
                GLint row;
-               assert(drawWidth < MAX_WIDTH);
+               ASSERT(drawWidth < MAX_WIDTH);
                for (row=0; row<drawHeight; row++) {
                   GLint i;
 		  for (i=0;i<drawWidth;i++) {
@@ -271,10 +317,27 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
                   destY++;
                }
             }
+            else if (ctx->Pixel.ZoomX==1.0F && ctx->Pixel.ZoomY==-1.0F) {
+               /* upside-down */
+               GLint row;
+               ASSERT(drawWidth < MAX_WIDTH);
+               for (row=0; row<drawHeight; row++) {
+                  GLint i;
+                  for (i=0;i<drawWidth;i++) {
+                     rgb[i][0] = src[i];
+                     rgb[i][1] = src[i];
+                     rgb[i][2] = src[i];
+                  }
+                  destY--;
+                  (*ctx->Driver.WriteRGBSpan)(ctx, drawWidth, destX, destY,
+                                              (void *) rgb, NULL);
+                  src += rowLength;
+               }
+            }
             else {
                /* with zooming */
                GLint row;
-               assert(drawWidth < MAX_WIDTH);
+               ASSERT(drawWidth < MAX_WIDTH);
                for (row=0; row<drawHeight; row++) {
                   GLint i;
 		  for (i=0;i<drawWidth;i++) {
@@ -298,7 +361,7 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
             if (ctx->Pixel.ZoomX==1.0F && ctx->Pixel.ZoomY==1.0F) {
                /* no zooming */
                GLint row;
-               assert(drawWidth < MAX_WIDTH);
+               ASSERT(drawWidth < MAX_WIDTH);
                for (row=0; row<drawHeight; row++) {
                   GLint i;
                   GLubyte *ptr = src;
@@ -314,10 +377,29 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
                   destY++;
                }
             }
+            else if (ctx->Pixel.ZoomX==1.0F && ctx->Pixel.ZoomY==-1.0F) {
+               /* upside-down */
+               GLint row;
+               ASSERT(drawWidth < MAX_WIDTH);
+               for (row=0; row<drawHeight; row++) {
+                  GLint i;
+                  GLubyte *ptr = src;
+                  for (i=0;i<drawWidth;i++) {
+                     rgba[i][0] = *ptr;
+                     rgba[i][1] = *ptr;
+                     rgba[i][2] = *ptr++;
+                     rgba[i][3] = *ptr++;
+                  }
+                  destY--;
+                  (*ctx->Driver.WriteRGBASpan)(ctx, drawWidth, destX, destY,
+                                               (void *) rgba, NULL);
+                  src += rowLength*2;
+               }
+            }
             else {
                /* with zooming */
                GLint row;
-               assert(drawWidth < MAX_WIDTH);
+               ASSERT(drawWidth < MAX_WIDTH);
                for (row=0; row<drawHeight; row++) {
                   GLubyte *ptr = src;
                   GLint i;
@@ -344,7 +426,7 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
                /* no zooming */
                GLint row;
                for (row=0; row<drawHeight; row++) {
-                  assert(drawWidth < MAX_WIDTH);
+                  ASSERT(drawWidth < MAX_WIDTH);
                   _mesa_map_ci8_to_rgba(ctx, drawWidth, src, rgba);
                   (*ctx->Driver.WriteRGBASpan)(ctx, drawWidth, destX, destY,
                                                (const GLubyte (*)[4])rgba, 
@@ -354,11 +436,25 @@ simple_DrawPixels( GLcontext *ctx, GLint x, GLint y,
                }
                return GL_TRUE;
             }
+            else if (ctx->Pixel.ZoomX==1.0F && ctx->Pixel.ZoomY==-1.0F) {
+               /* upside-down */
+               GLint row;
+               for (row=0; row<drawHeight; row++) {
+                  ASSERT(drawWidth < MAX_WIDTH);
+                  _mesa_map_ci8_to_rgba(ctx, drawWidth, src, rgba);
+                  destY--;
+                  (*ctx->Driver.WriteRGBASpan)(ctx, drawWidth, destX, destY,
+                                               (const GLubyte (*)[4])rgba, 
+                                               NULL);
+                  src += rowLength;
+               }
+               return GL_TRUE;
+            }
             else {
                /* with zooming */
                GLint row;
                for (row=0; row<drawHeight; row++) {
-                  assert(drawWidth < MAX_WIDTH);
+                  ASSERT(drawWidth < MAX_WIDTH);
                   _mesa_map_ci8_to_rgba(ctx, drawWidth, src, rgba);
                   gl_write_zoomed_rgba_span(ctx, drawWidth, destX, destY,
                                             zSpan, (void *) rgba, zoomY0);
@@ -431,7 +527,8 @@ draw_index_pixels( GLcontext *ctx, GLint x, GLint y,
       const GLvoid *source = _mesa_image_address(&ctx->Unpack,
                     pixels, width, height, GL_COLOR_INDEX, type, 0, row, 0);
       _mesa_unpack_index_span(ctx, drawWidth, GL_UNSIGNED_INT, indexes,
-                              type, source, &ctx->Unpack, GL_TRUE);
+                              type, source, &ctx->Unpack,
+                              ctx->ImageTransferState);
       if (zoom) {
          gl_write_zoomed_index_span(ctx, drawWidth, x, y, zspan, indexes, desty);
       }
@@ -453,7 +550,6 @@ draw_stencil_pixels( GLcontext *ctx, GLint x, GLint y,
                      GLenum type, const GLvoid *pixels )
 {
    const GLboolean zoom = ctx->Pixel.ZoomX!=1.0 || ctx->Pixel.ZoomY!=1.0;
-   const GLboolean shift_or_offset = ctx->Pixel.IndexShift || ctx->Pixel.IndexOffset;
    const GLint desty = y;
    GLint row, drawWidth;
 
@@ -478,8 +574,9 @@ draw_stencil_pixels( GLcontext *ctx, GLint x, GLint y,
       const GLvoid *source = _mesa_image_address(&ctx->Unpack,
                     pixels, width, height, GL_COLOR_INDEX, type, 0, row, 0);
       _mesa_unpack_index_span(ctx, drawWidth, destType, values,
-                              type, source, &ctx->Unpack, GL_FALSE);
-      if (shift_or_offset) {
+                              type, source, &ctx->Unpack,
+                              ctx->ImageTransferState);
+      if (ctx->ImageTransferState & IMAGE_SHIFT_OFFSET_BIT) {
          _mesa_shift_and_offset_stencil( ctx, drawWidth, values );
       }
       if (ctx->Pixel.MapStencilFlag) {
@@ -577,7 +674,7 @@ draw_depth_pixels( GLcontext *ctx, GLint x, GLint y,
          const GLvoid *src = _mesa_image_address(&ctx->Unpack,
                 pixels, width, height, GL_DEPTH_COMPONENT, type, 0, row, 0);
          _mesa_unpack_depth_span( ctx, drawWidth, zspan, type, src,
-                                  &ctx->Unpack, GL_TRUE );
+                                  &ctx->Unpack, ctx->ImageTransferState );
          if (ctx->Visual->RGBAflag) {
             if (zoom) {
                gl_write_zoomed_rgba_span(ctx, width, x, y, zspan,
@@ -615,9 +712,11 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
    const GLint desty = y;
    GLdepth zspan[MAX_WIDTH];
    GLboolean quickDraw;
+   GLfloat *convImage = NULL;
+   GLuint transferOps = ctx->ImageTransferState;
 
    /* Try an optimized glDrawPixels first */
-   if (simple_DrawPixels(ctx, x, y, width, height, format, type, pixels))
+   if (fast_draw_pixels(ctx, x, y, width, height, format, type, pixels))
       return;
 
    /* Fragment depth values */
@@ -631,14 +730,65 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
    }
 
 
-   if (ctx->RasterMask == 0 && !zoom
-       && x >= 0 && y >= 0
+   if (ctx->RasterMask == 0 && !zoom && x >= 0 && y >= 0
        && x + width <= ctx->DrawBuffer->Width
        && y + height <= ctx->DrawBuffer->Height) {
       quickDraw = GL_TRUE;
    }
    else {
       quickDraw = GL_FALSE;
+   }
+
+   if (ctx->Pixel.Convolution2DEnabled || ctx->Pixel.Separable2DEnabled) {
+      /* Convolution has to be handled specially.  We'll create an
+       * intermediate image, applying all pixel transfer operations
+       * up to convolution.  Then we'll convolve the image.  Then
+       * we'll proceed with the rest of the transfer operations and
+       * rasterize the image.
+       */
+      GLint row;
+      GLfloat *dest, *tmpImage;
+
+      tmpImage = (GLfloat *) MALLOC(width * height * 4 * sizeof(GLfloat));
+      if (!tmpImage) {
+         gl_error(ctx, GL_OUT_OF_MEMORY, "glDrawPixels");
+         return;
+      }
+      convImage = (GLfloat *) MALLOC(width * height * 4 * sizeof(GLfloat));
+      if (!convImage) {
+         FREE(tmpImage);
+         gl_error(ctx, GL_OUT_OF_MEMORY, "glDrawPixels");
+         return;
+      }
+
+      /* Unpack the image and apply transfer ops up to convolution */
+      dest = tmpImage;
+      for (row = 0; row < height; row++) {
+         const GLvoid *source = _mesa_image_address(unpack,
+                  pixels, width, height, format, type, 0, row, 0);
+         _mesa_unpack_float_color_span(ctx, width, GL_RGBA, (void *) dest,
+                                      format, type, source, unpack,
+                                      transferOps & IMAGE_PRE_CONVOLUTION_BITS,
+                                      GL_FALSE);
+         dest += width * 4;
+      }
+
+      /* do convolution */
+      if (ctx->Pixel.Convolution2DEnabled) {
+         _mesa_convolve_2d_image(ctx, &width, &height, tmpImage, convImage);
+      }
+      else {
+         ASSERT(ctx->Pixel.Separable2DEnabled);
+         _mesa_convolve_sep_image(ctx, &width, &height, tmpImage, convImage);
+      }
+      FREE(tmpImage);
+
+      /* continue transfer ops and draw the convolved image */
+      unpack = &_mesa_native_packing;
+      pixels = convImage;
+      format = GL_RGBA;
+      type = GL_FLOAT;
+      transferOps &= IMAGE_POST_CONVOLUTION_BITS;
    }
 
    /*
@@ -653,7 +803,8 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
          const GLvoid *source = _mesa_image_address(unpack,
                   pixels, width, height, format, type, 0, row, 0);
          _mesa_unpack_ubyte_color_span(ctx, width, GL_RGBA, (void*) rgba,
-                   format, type, source, unpack, GL_TRUE);
+                                       format, type, source, unpack,
+                                       transferOps);
          if ((ctx->Pixel.MinMaxEnabled && ctx->MinMax.Sink) ||
              (ctx->Pixel.HistogramEnabled && ctx->Histogram.Sink))
             continue;
@@ -687,6 +838,10 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
          }
       }
    }
+
+   if (convImage) {
+      FREE(convImage);
+   }
 }
 
 
@@ -710,6 +865,9 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
       if (ctx->NewState) {
          gl_update_state(ctx);
       }
+
+      if (ctx->ImageTransferState == UPDATE_IMAGE_TRANSFER_STATE)
+         _mesa_update_image_transfer_state(ctx);
 
       x = (GLint) (ctx->Current.RasterPos[0] + 0.5F);
       y = (GLint) (ctx->Current.RasterPos[1] + 0.5F);

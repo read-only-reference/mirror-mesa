@@ -561,24 +561,28 @@ static void drawSample( int x, int y, int w, int h,
    if ( drawSmooth ) {
       glShadeModel( GL_SMOOTH );
    }
+   else {
+      glShadeModel( GL_FLAT );
+      glColor4f(1, 1, 1, 1);
+   }
    if ( drawTextured ) {
       glEnable( GL_TEXTURE_2D );
    }
 
    glBegin( GL_QUADS );
-      glColor4f( 1.0, 0.0, 0.0, 1.0 );
+      if ( drawSmooth )  glColor4f( 1.0, 0.0, 1.0, 1.0 );
       glTexCoord2f( 0.0, 0.0 );
       glVertex2f( -0.8, -0.8 );
 
-      glColor4f( 0.0, 1.0, 0.0, 1.0 );
+      if ( drawSmooth )  glColor4f( 1.0, 0.0, 1.0, 1.0 );
       glTexCoord2f( 1.0, 0.0 );
       glVertex2f( 0.8, -0.8 );
 
-      glColor4f( 0.0, 0.0, 1.0, 1.0 );
+      if ( drawSmooth )  glColor4f( 0.0, 1.0, 0.0, 1.0 );
       glTexCoord2f( 1.0, 1.0 );
       glVertex2f( 0.8, 0.8 );
 
-      glColor4f( 1.0, 1.0, 1.0, 1.0 );
+      if ( drawSmooth )  glColor4f( 0.0, 1.0, 0.0, 1.0 );
       glTexCoord2f( 0.0, 1.0 );
       glVertex2f( -0.8, 0.8 );
    glEnd();
@@ -587,7 +591,18 @@ static void drawSample( int x, int y, int w, int h,
    glShadeModel( GL_FLAT );
    glDisable( GL_TEXTURE_2D );
 
-   if ( displayLevelInfo ) {
+   if ( envMode->mode == GL_DECAL &&
+        (format->baseFormat == GL_ALPHA ||
+         format->baseFormat == GL_LUMINANCE ||
+         format->baseFormat == GL_LUMINANCE_ALPHA ||
+         format->baseFormat == GL_INTENSITY)) {
+      /* undefined format/mode combination */
+      begin2D( w, h );
+      drawStringOutline( "UNDEFINED MODE", 15, h / 2,
+                         labelLevelColor0, labelLevelColor1 );
+      end2D();
+   }
+   else if ( displayLevelInfo ) {
       GLint width, height, border, components;
       GLint redSize, greenSize, blueSize, alphaSize;
       GLint luminanceSize, intensitySize;
