@@ -47,6 +47,7 @@ $(TOP)/configs/current:
 aix \
 aix-gcc \
 aix-static \
+beos \
 darwin \
 darwin-static \
 freebsd \
@@ -110,9 +111,9 @@ ultrix-gcc:
 
 # Rules for making release tarballs
 
-DIRECTORY = Mesa-6.1
-LIB_NAME = MesaLib-6.1
-DEMO_NAME = MesaDemos-6.1
+DIRECTORY = Mesa-6.2
+LIB_NAME = MesaLib-6.2
+DEMO_NAME = MesaDemos-6.2
 
 LIB_FILES =	\
 	$(DIRECTORY)/Makefile*						\
@@ -120,6 +121,7 @@ LIB_FILES =	\
 	$(DIRECTORY)/mms-config.					\
 	$(DIRECTORY)/Mesa.dsw						\
 	$(DIRECTORY)/bin/mklib						\
+	$(DIRECTORY)/bin/installmesa					\
 	$(DIRECTORY)/configs/[a-z]*					\
 	$(DIRECTORY)/docs/*.html					\
 	$(DIRECTORY)/docs/COPYING					\
@@ -169,13 +171,16 @@ LIB_FILES =	\
 	$(DIRECTORY)/src/mesa/math/*.[ch]				\
 	$(DIRECTORY)/src/mesa/math/math.dsp				\
 	$(DIRECTORY)/src/mesa/math/descrip.mms				\
+	$(DIRECTORY)/src/mesa/shader/*.[ch]				\
+	$(DIRECTORY)/src/mesa/shader/shader.dsp				\
+	$(DIRECTORY)/src/mesa/shader/descrip.mms			\
 	$(DIRECTORY)/src/mesa/swrast/*.[ch]				\
 	$(DIRECTORY)/src/mesa/swrast/swrast.dsp				\
 	$(DIRECTORY)/src/mesa/swrast/descrip.mms			\
 	$(DIRECTORY)/src/mesa/swrast_setup/*.[ch]			\
 	$(DIRECTORY)/src/mesa/swrast_setup/swrast_setup.dsp		\
 	$(DIRECTORY)/src/mesa/swrast_setup/descrip.mms			\
-	$(DIRECTORY)/src/mesa/tnl/*.[ch]				\
+	$(DIRECTORY)/src/mesa/tnl/*.[chS]				\
 	$(DIRECTORY)/src/mesa/tnl/tnl.dsp				\
 	$(DIRECTORY)/src/mesa/tnl/descrip.mms				\
 	$(DIRECTORY)/src/mesa/tnl_dd/*.[ch]				\
@@ -183,6 +188,7 @@ LIB_FILES =	\
 	$(DIRECTORY)/src/mesa/tnl_dd/imm/NOTES.imm			\
 	$(DIRECTORY)/src/mesa/drivers/beos/*.cpp			\
 	$(DIRECTORY)/src/mesa/drivers/beos/*.h				\
+	$(DIRECTORY)/src/mesa/drivers/beos/Makefile			\
 	$(DIRECTORY)/src/mesa/drivers/common/*.[ch]			\
 	$(DIRECTORY)/src/mesa/drivers/common/descrip.mms		\
 	$(DIRECTORY)/src/mesa/drivers/dos/*.[chS]			\
@@ -244,6 +250,7 @@ LIB_FILES =	\
 	$(DIRECTORY)/src/glw/*.[ch]					\
 	$(DIRECTORY)/src/glw/Makefile*					\
 	$(DIRECTORY)/src/glw/README					\
+	$(DIRECTORY)/src/glw/depend					\
 	$(DIRECTORY)/progs/Makefile					\
 	$(DIRECTORY)/progs/util/README					\
 	$(DIRECTORY)/progs/util/*.[ch]					\
@@ -263,13 +270,14 @@ DEMO_FILES =	\
 	$(DIRECTORY)/src/glut/glx/mms_depend		\
 	$(DIRECTORY)/src/glut/glx/glut.dsp		\
 	$(DIRECTORY)/src/glut/glx/*.[ch]		\
-	$(DIRECTORY)/src/glut/beos/*.h			\
+	$(DIRECTORY)/src/glut/beos/*.[ch]		\
 	$(DIRECTORY)/src/glut/beos/*.cpp		\
-	$(DIRECTORY)/src/glut/beos/libglut.def		\
-	$(DIRECTORY)/src/glut/beos/Makefile*		\
+	$(DIRECTORY)/src/glut/beos/Makefile		\
 	$(DIRECTORY)/src/glut/dos/*.[ch]		\
 	$(DIRECTORY)/src/glut/dos/Makefile.DJ		\
 	$(DIRECTORY)/src/glut/dos/PC_HW/*.[chS]		\
+	$(DIRECTORY)/progs/beos/*.cpp			\
+	$(DIRECTORY)/progs/beos/Makefile		\
 	$(DIRECTORY)/progs/images/*.rgb			\
 	$(DIRECTORY)/progs/images/*.rgba		\
 	$(DIRECTORY)/progs/demos/Makefile*		\

@@ -204,9 +204,10 @@ extern void radeonEmitVbufPrim( radeonContextPtr rmesa,
       fprintf(stderr, "%s cmd_used/4: %d\n", __FUNCTION__,
 	      rmesa->store.cmd_used/4);
    
+   cmd = (drm_radeon_cmd_header_t *)radeonAllocCmdBuf( rmesa, VBUF_BUFSZ,
+						       __FUNCTION__ );
 #if RADEON_OLD_PACKETS
-   cmd = (drm_radeon_cmd_header_t *)radeonAllocCmdBuf( rmesa, 6 * sizeof(*cmd),
-						  __FUNCTION__ );
+   cmd[0].i = 0;
    cmd[0].header.cmd_type = RADEON_CMD_PACKET3_CLIP;
    cmd[1].i = RADEON_CP_PACKET3_3D_RNDR_GEN_INDX_PRIM | (3 << 16);
    cmd[2].i = rmesa->ioctl.vertex_offset;
@@ -223,8 +224,6 @@ extern void radeonEmitVbufPrim( radeonContextPtr rmesa,
 	      __FUNCTION__,
 	      cmd[1].i, cmd[2].i, cmd[4].i, cmd[5].i);
 #else
-   cmd = (drm_radeon_cmd_header_t *)radeonAllocCmdBuf( rmesa, 4 * sizeof(*cmd),
-						  __FUNCTION__ );
    cmd[0].i = 0;
    cmd[0].header.cmd_type = RADEON_CMD_PACKET3_CLIP;
    cmd[1].i = RADEON_CP_PACKET3_3D_DRAW_VBUF | (1 << 16);
@@ -291,10 +290,10 @@ GLushort *radeonAllocEltsOpenEnded( radeonContextPtr rmesa,
    
    radeonEmitState( rmesa );
    
+   cmd = (drm_radeon_cmd_header_t *)radeonAllocCmdBuf( rmesa,
+						       ELTS_BUFSZ(min_nr),
+						       __FUNCTION__ );
 #if RADEON_OLD_PACKETS
-   cmd = (drm_radeon_cmd_header_t *)radeonAllocCmdBuf( rmesa, 
-						  24 + min_nr*2,
-						  __FUNCTION__ );
    cmd[0].i = 0;
    cmd[0].header.cmd_type = RADEON_CMD_PACKET3_CLIP;
    cmd[1].i = RADEON_CP_PACKET3_3D_RNDR_GEN_INDX_PRIM;
@@ -308,9 +307,6 @@ GLushort *radeonAllocEltsOpenEnded( radeonContextPtr rmesa,
 
    retval = (GLushort *)(cmd+6);
 #else   
-   cmd = (drm_radeon_cmd_header_t *)radeonAllocCmdBuf( rmesa, 
-						  16 + min_nr*2,
-						  __FUNCTION__ );
    cmd[0].i = 0;
    cmd[0].header.cmd_type = RADEON_CMD_PACKET3_CLIP;
    cmd[1].i = RADEON_CP_PACKET3_3D_DRAW_INDX;
@@ -354,7 +350,7 @@ void radeonEmitVertexAOS( radeonContextPtr rmesa,
       fprintf(stderr, "%s:  vertex_size 0x%x offset 0x%x \n",
 	      __FUNCTION__, vertex_size, offset);
 
-   cmd = (drm_radeon_cmd_header_t *)radeonAllocCmdBuf( rmesa, 5 * sizeof(int),
+   cmd = (drm_radeon_cmd_header_t *)radeonAllocCmdBuf( rmesa, VERT_AOS_BUFSZ,
 						  __FUNCTION__ );
 
    cmd[0].i = 0;
@@ -380,7 +376,7 @@ void radeonEmitAOS( radeonContextPtr rmesa,
       (component[0]->aos_start + offset * component[0]->aos_stride * 4);
 #else
    drm_radeon_cmd_header_t *cmd;
-   int sz = 3 + (nr/2 * 3) + (nr & 1) * 2;
+   int sz = AOS_BUFSZ;
    int i;
    int *tmp;
 
@@ -388,11 +384,11 @@ void radeonEmitAOS( radeonContextPtr rmesa,
       fprintf(stderr, "%s\n", __FUNCTION__);
 
 
-   cmd = (drm_radeon_cmd_header_t *)radeonAllocCmdBuf( rmesa, sz * sizeof(int),
+   cmd = (drm_radeon_cmd_header_t *)radeonAllocCmdBuf( rmesa, sz,
 						  __FUNCTION__ );
    cmd[0].i = 0;
    cmd[0].header.cmd_type = RADEON_CMD_PACKET3;
-   cmd[1].i = RADEON_CP_PACKET3_3D_LOAD_VBPNTR | ((sz-3) << 16);
+   cmd[1].i = RADEON_CP_PACKET3_3D_LOAD_VBPNTR | (((sz / sizeof(int))-3) << 16);
    cmd[2].i = nr;
    tmp = &cmd[0].i;
    cmd += 3;
@@ -548,7 +544,19 @@ static int radeonFlushCmdBufLocked( radeonContextPtr rmesa,
    rmesa->store.statenr = 0;
    rmesa->store.cmd_used = 0;
    rmesa->dma.nr_released_bufs = 0;
-   rmesa->lost_context = 1;	
+   /* Set lost_context so that the first state emit on the new buffer is a full
+    * one.  This is because the context might get lost while preparing the next
+    * buffer, and when we lock and find out, we don't have the information to
+    * recreate the state.  This function should always be called before the new
+    * buffer is begun, so it's sufficient to just set lost_context here.
+    *
+    * The alternative to this would be to copy out the state on unlock
+    * (approximately) and if we did lose the context, dispatch a cmdbuf to reset
+    * the state to that old copy before continuing with the accumulated command
+    * buffer.
+    */
+   rmesa->lost_context = 1;
+
    return ret;
 }
 
@@ -982,11 +990,6 @@ static void radeonClear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 	       __FUNCTION__, all, cx, cy, cw, ch );
    }
 
-   radeonEmitState( rmesa );
-
-   /* Need to cope with lostcontext here as kernel relies on
-    * some residual state:
-    */
    RADEON_FIREVERTICES( rmesa ); 
 
    if ( mask & DD_FRONT_LEFT_BIT ) {
@@ -1024,6 +1027,13 @@ static void radeonClear( GLcontext *ctx, GLbitfield mask, GLboolean all,
    /* Flip top to bottom */
    cx += dPriv->x;
    cy  = dPriv->y + dPriv->h - cy - ch;
+
+   /* We have to emit state along with the clear, since the kernel relies on
+    * some of it.  The EmitState that was above RADEON_FIREVERTICES was an
+    * attempt to do that, except that another context may come in and cause us
+    * to lose our context while we're unlocked.
+    */
+   radeonEmitState( rmesa );
 
    LOCK_HARDWARE( rmesa );
 
@@ -1065,6 +1075,9 @@ static void radeonClear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 	 LOCK_HARDWARE( rmesa );
       }
    }
+
+   /* Send current state to the hardware */
+   radeonFlushCmdBufLocked( rmesa, __FUNCTION__ );
 
    for ( i = 0 ; i < dPriv->numClipRects ; ) {
       GLint nr = MIN2( i + RADEON_NR_SAREA_CLIPRECTS, dPriv->numClipRects );

@@ -192,6 +192,7 @@ GLboolean
 _mesa_loseCurrent(__GLcontext *gc)
 {
    /* XXX unbind context from thread */
+   (void) gc;
    return GL_TRUE;
 }
 
@@ -212,6 +213,7 @@ GLboolean
 _mesa_makeCurrent(__GLcontext *gc)
 {
    /* XXX bind context to thread */
+   (void) gc;
    return GL_TRUE;
 }
 
@@ -267,6 +269,7 @@ _mesa_copyContext(__GLcontext *dst, const __GLcontext *src, GLuint mask)
 GLboolean
 _mesa_forceCurrent(__GLcontext *gc)
 {
+   (void) gc;
    return GL_TRUE;
 }
 
@@ -302,6 +305,7 @@ void
 _mesa_notifyDestroy(__GLcontext *gc)
 {
    /* Unbind from it. */
+   (void) gc;
 }
 
 /**
@@ -322,6 +326,7 @@ _mesa_notifySwapBuffers(__GLcontext *gc)
 struct __GLdispatchStateRec *
 _mesa_dispatchExec(__GLcontext *gc)
 {
+   (void) gc;
    return NULL;
 }
 
@@ -329,12 +334,14 @@ _mesa_dispatchExec(__GLcontext *gc)
 void
 _mesa_beginDispatchOverride(__GLcontext *gc)
 {
+   (void) gc;
 }
 
 /** No-op */
 void
 _mesa_endDispatchOverride(__GLcontext *gc)
 {
+   (void) gc;
 }
 
 /**
@@ -372,6 +379,8 @@ _mesa_init_default_exports(__GLexports *exports)
     exports->dispatchExec = _mesa_dispatchExec;
     exports->beginDispatchOverride = _mesa_beginDispatchOverride;
     exports->endDispatchOverride = _mesa_endDispatchOverride;
+#else
+    (void) exports;
 #endif
 }
 
@@ -759,6 +768,7 @@ static void
 one_time_init( GLcontext *ctx )
 {
    static GLboolean alreadyCalled = GL_FALSE;
+   (void) ctx;
    _glthread_LOCK_MUTEX(OneTimeLock);
    if (!alreadyCalled) {
       GLuint i;
@@ -894,8 +904,10 @@ alloc_shared_state( GLcontext *ctx )
    if (ss->DefaultFragmentProgram)
       ctx->Driver.DeleteProgram(ctx, ss->DefaultFragmentProgram);
 #endif
+#if FEATURE_ARB_vertex_buffer_object
    if (ss->BufferObjects)
       _mesa_DeleteHashTable(ss->BufferObjects);
+#endif
 
    if (ss->Default1D)
       (*ctx->Driver.DeleteTexture)(ctx, ss->Default1D);
@@ -941,6 +953,13 @@ free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
 
    /* Free texture objects */
    ASSERT(ctx->Driver.DeleteTexture);
+   /* the default textures */
+   (*ctx->Driver.DeleteTexture)(ctx, ss->Default1D);
+   (*ctx->Driver.DeleteTexture)(ctx, ss->Default2D);
+   (*ctx->Driver.DeleteTexture)(ctx, ss->Default3D);
+   (*ctx->Driver.DeleteTexture)(ctx, ss->DefaultCubeMap);
+   (*ctx->Driver.DeleteTexture)(ctx, ss->DefaultRect);
+   /* all other textures */
    while (1) {
       GLuint texName = _mesa_HashFirstEntry(ss->TexObjects);
       if (texName) {
@@ -973,9 +992,16 @@ free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
    }
    _mesa_DeleteHashTable(ss->Programs);
 #endif
+#if FEATURE_ARB_vertex_program
+   _mesa_delete_program(ctx, ss->DefaultVertexProgram);
+#endif
+#if FEATURE_ARB_fragment_program
+   _mesa_delete_program(ctx, ss->DefaultFragmentProgram);
+#endif
 
+#if FEATURE_ARB_vertex_buffer_object
    _mesa_DeleteHashTable(ss->BufferObjects);
-
+#endif
    _glthread_DESTROY_MUTEX(ss->Mutex);
 
    FREE(ss);
@@ -1530,19 +1556,11 @@ _mesa_free_context_data( GLcontext *ctx )
    _mesa_free_matrix_data( ctx );
    _mesa_free_viewport_data( ctx );
    _mesa_free_colortables_data( ctx );
-#if FEATURE_NV_vertex_program
-   if (ctx->VertexProgram.Current) {
-      ctx->VertexProgram.Current->Base.RefCount--;
-      if (ctx->VertexProgram.Current->Base.RefCount <= 0)
-         ctx->Driver.DeleteProgram(ctx, &(ctx->VertexProgram.Current->Base));
-   }
-#endif
-#if FEATURE_NV_fragment_program
-   if (ctx->FragmentProgram.Current) {
-      ctx->FragmentProgram.Current->Base.RefCount--;
-      if (ctx->FragmentProgram.Current->Base.RefCount <= 0)
-         ctx->Driver.DeleteProgram(ctx, &(ctx->FragmentProgram.Current->Base));
-   }
+   _mesa_free_program_data(ctx);
+   _mesa_free_occlude_data(ctx);
+
+#if FEATURE_ARB_vertex_buffer_object
+   _mesa_delete_buffer_object(ctx, ctx->Array.NullBufferObj);
 #endif
 
    /* Shared context state (display lists, textures, etc) */

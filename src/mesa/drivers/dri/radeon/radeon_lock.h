@@ -99,8 +99,6 @@ extern int prevLockLine;
       DEBUG_LOCK();						\
    } while (0)
 
-/* Unlock the hardware.
- */
 #define UNLOCK_HARDWARE( rmesa )					\
    do {									\
       DRM_UNLOCK( rmesa->dri.fd,					\

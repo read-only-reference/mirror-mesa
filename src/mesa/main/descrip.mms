@@ -1,6 +1,6 @@
 # Makefile for core library for VMS
 # contributed by Jouk Jansen  joukj@hrem.stm.tudelft.nl
-# Last revision : 16 June 2003
+# Last revision : 18 August 2004
 
 .first
 	define gl [---.include.gl]
@@ -174,6 +174,7 @@ state.obj : state.c
 stencil.obj : stencil.c
 texcompress.obj : texcompress.c
 texcompress_fxt1.obj : texcompress_fxt1.c
+	cc$(CFLAGS)/warn=(disable=SHIFTCOUNT) texcompress_fxt1.c
 texcompress_s3tc.obj : texcompress_s3tc.c
 texformat.obj : texformat.c
 teximage.obj : teximage.c

@@ -47,7 +47,7 @@
 
 
 /**
- * Init context's program state
+ * Init context's vertex/fragment program state
  */
 void
 _mesa_init_program(GLcontext *ctx)
@@ -77,6 +77,32 @@ _mesa_init_program(GLcontext *ctx)
    ctx->FragmentProgram.Current->Base.RefCount++;
 #endif
 }
+
+
+/**
+ * Free a context's vertex/fragment program state
+ */
+void
+_mesa_free_program_data(GLcontext *ctx)
+{
+#if FEATURE_NV_vertex_program
+   if (ctx->VertexProgram.Current) {
+      ctx->VertexProgram.Current->Base.RefCount--;
+      if (ctx->VertexProgram.Current->Base.RefCount <= 0)
+         ctx->Driver.DeleteProgram(ctx, &(ctx->VertexProgram.Current->Base));
+   }
+#endif
+#if FEATURE_NV_fragment_program
+   if (ctx->FragmentProgram.Current) {
+      ctx->FragmentProgram.Current->Base.RefCount--;
+      if (ctx->FragmentProgram.Current->Base.RefCount <= 0)
+         ctx->Driver.DeleteProgram(ctx, &(ctx->FragmentProgram.Current->Base));
+   }
+#endif
+   _mesa_free((void *) ctx->Program.ErrorString);
+}
+
+
 
 
 /**
@@ -141,6 +167,7 @@ static struct program * _mesa_init_program_struct( GLcontext *ctx,
 						   struct program *prog,
 						   GLenum target, GLuint id)
 {
+   (void) ctx;
    if (prog) {
       prog->Id = id;
       prog->Target = target;
@@ -213,6 +240,7 @@ _mesa_new_program(GLcontext *ctx, GLenum target, GLuint id)
 void
 _mesa_delete_program(GLcontext *ctx, struct program *prog)
 {
+   (void) ctx;
    ASSERT(prog);
 
    if (prog->String)
@@ -222,15 +250,16 @@ _mesa_delete_program(GLcontext *ctx, struct program *prog)
       struct vertex_program *vprog = (struct vertex_program *) prog;
       if (vprog->Instructions)
          _mesa_free(vprog->Instructions);
+      if (vprog->Parameters)
+         _mesa_free_parameter_list(vprog->Parameters);
    }
    else if (prog->Target == GL_FRAGMENT_PROGRAM_NV ||
             prog->Target == GL_FRAGMENT_PROGRAM_ARB) {
       struct fragment_program *fprog = (struct fragment_program *) prog;
       if (fprog->Instructions)
          _mesa_free(fprog->Instructions);
-      if (fprog->Parameters) {
+      if (fprog->Parameters)
          _mesa_free_parameter_list(fprog->Parameters);
-      }
    }
    _mesa_free(prog);
 }

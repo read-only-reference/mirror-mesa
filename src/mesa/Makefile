@@ -24,9 +24,15 @@ default:
 		$(MAKE) linux-solo ; \
 	elif [ "${DRIVER_DIRS}" = "osmesa" ] ; then \
 		$(MAKE) osmesa-only ; \
+	elif [ "$(DRIVER_DIRS)" = "beos" ]; then \
+		$(MAKE) beos ; \
 	else \
 		$(MAKE) stand-alone ; \
 	fi
+
+# BeOS driver target
+beos: depend subdirs mesa.a
+	cd drivers/beos; $(MAKE)
 
 
 ######################################################################
@@ -45,19 +51,21 @@ SOLO_C_SOURCES = \
 SOLO_OBJECTS = $(SOLO_C_SOURCES:.c=.o) \
 		$(ASM_SOURCES:.S=.o)
 
-
-linux-solo: depend subdirs mesa.a driver-dirs
+linux-solo: depend subdirs mesa.a drivers-dri
 
 # Make archive of core object files
 mesa.a:	$(SOLO_OBJECTS)
 	rm -f $@
 	ar rcv $@ $(SOLO_OBJECTS)
 	ranlib $@
+	@if [ "${CONFIG_NAME}" = "beos" ] ; then \
+		mimeset -f "$@" ; \
+	fi
 
 # note: cannot use the name of the directory ("drivers") as the
 # target, otherwise make will look & see that the "drivers" directory
 # already exists, so not try to rebuild it...
-driver-dirs:
+drivers-dri:
 	cd drivers/dri ; $(MAKE)
 
 
@@ -93,7 +101,6 @@ OSMESA16_OBJECTS = \
 	$(ASM_OBJECTS) \
 	$(COMMON_DRIVER_OBJECTS) \
 	$(OSMESA_DRIVER_OBJECTS)
-
 
 
 stand-alone: depend subdirs $(LIB_DIR)/$(GL_LIB_NAME) $(LIB_DIR)/$(OSMESA_LIB_NAME)
@@ -169,9 +176,8 @@ tags:
 
 clean:
 	-rm -f */*.o
-	rm -f depend mesa.a
-	for dir in $(SUBDIRS) ; do \
-		(cd $$dir ; $(MAKE) clean) ; \
-	done
+	-rm -f depend mesa.a
+	-rm -f drivers/*/*.o
+	(cd drivers/dri ; $(MAKE) clean)
 
 include depend

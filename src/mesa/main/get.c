@@ -5,7 +5,7 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  6.1
+ * Version:  6.2
  *
  * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
@@ -6390,7 +6390,7 @@ _mesa_GetPointerv( GLenum pname, GLvoid **params )
             _mesa_error(ctx, GL_INVALID_ENUM, "glGetPointerv");
             return;
          }
-         *params = (GLvoid *) ctx->FragmentProgram.Callback;
+         *params = *(GLvoid **) &ctx->FragmentProgram.Callback;
          break;
       case GL_FRAGMENT_PROGRAM_CALLBACK_DATA_MESA:
          if (!ctx->Extensions.MESA_program_debug) {
@@ -6404,7 +6404,7 @@ _mesa_GetPointerv( GLenum pname, GLvoid **params )
             _mesa_error(ctx, GL_INVALID_ENUM, "glGetPointerv");
             return;
          }
-         *params = (GLvoid *) ctx->VertexProgram.Callback;
+         *params = *(GLvoid **) &ctx->VertexProgram.Callback;
          break;
       case GL_VERTEX_PROGRAM_CALLBACK_DATA_MESA:
          if (!ctx->Extensions.MESA_program_debug) {
@@ -6484,7 +6484,6 @@ _mesa_GetString( GLenum name )
                    ctx->Extensions.SGIS_generate_mipmap) {
                   if (ctx->Extensions.ARB_occlusion_query &&
                       ctx->Extensions.ARB_vertex_buffer_object &&
-                      ctx->Extensions.ARB_texture_non_power_of_two &&
                       ctx->Extensions.EXT_shadow_funcs) {
                      return (const GLubyte *) version_1_5;
                   }

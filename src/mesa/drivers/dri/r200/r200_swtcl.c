@@ -260,6 +260,8 @@ static void flush_last_swtcl_prim( r200ContextPtr rmesa  )
 	      current->ptr);
 
       if (rmesa->dma.current.start != rmesa->dma.current.ptr) {
+	 r200EnsureCmdBufSpace( rmesa, VERT_AOS_BUFSZ +
+			        rmesa->hw.max_state_size + VBUF_BUFSZ );
 	 r200EmitVertexAOS( rmesa,
 			      rmesa->swtcl.vertex_size,
 			      current_offset);
@@ -400,7 +402,6 @@ static struct {
 
 #define HAVE_RGBA   1
 #define HAVE_SPEC   1
-#define HAVE_INDEX  0
 #define HAVE_BACK_COLORS  0
 #define HAVE_HW_FLATSHADE 1
 #define TAB rast_tab
