@@ -1,8 +1,8 @@
-/* $Id: config.h,v 1.34 2001/07/16 15:54:23 brianp Exp $ */
+/* $Id: config.h,v 1.36 2001/11/28 17:18:36 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
  * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
@@ -134,6 +134,9 @@
 /* GL_EXT_texture_filter_anisotropic */
 #define MAX_TEXTURE_MAX_ANISOTROPY 16.0
 
+/* GL_EXT_texture_lod_bias */
+#define MAX_TEXTURE_LOD_BIAS 4.0
+
 
 
 /*
@@ -170,7 +173,7 @@
 
 
 /*
- * Bits per color channel (must be 8 at this time!)
+ * Bits per color channel:  8, 16 or 32
  */
 #ifndef CHAN_BITS
 #define CHAN_BITS 8

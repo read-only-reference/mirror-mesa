@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 
-# $Id: glx86asm.py,v 1.3 2001/03/28 17:22:11 brianp Exp $
+# $Id: glx86asm.py,v 1.4 2001/11/18 22:42:57 brianp Exp $
 
 # Mesa 3-D graphics library
-# Version:  3.4
+# Version:  4.1
 # 
-# Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+# Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the "Software"),
@@ -25,19 +25,16 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-# Generate the glapi_x86.S assembly language file.
+# Generate the src/X86/glapi_x86.S file.
 #
 # Usage:
-#    glx86asm.py >glapi_x86.S
+#    gloffsets.py >glapi_x86.S
 #
 # Dependencies:
-#    The gl.spec file from the SI must be in the current directory.
-#
-# Brian Paul  11 May 2000
+#    The apispec file must be in the current directory.
 
 
-import string
-import re
+import apiparser
 
 
 def PrintHead():
@@ -63,86 +60,60 @@ def PrintHead():
 	print ''
 	print ''
 	return
-#endif
+#enddef
 
 
 def PrintTail():
 	print ''
 	print '#endif  /* __WIN32__ */'
-#endif
+#enddef
 
 
-def GenerateDispatchCode(name, offset):
+
+records = []
+
+def FindOffset(funcName):
+	for (name, alias, offset) in records:
+		if name == funcName:
+			return offset
+		#endif
+	#endfor
+	return -1
+#enddef
+
+def EmitFunction(name, returnType, argTypeList, argNameList, alias, offset):
+	argList = apiparser.MakeArgList(argTypeList, argNameList)
+	if alias != '':
+		dispatchName = alias
+	else:
+		dispatchName = name
+	#endif
+	
+	if offset < 0:
+		# try to find offset from alias name
+		assert dispatchName != ''
+		offset = FindOffset(dispatchName)
+		if offset == -1:
+			#print 'Cannot dispatch %s' % name
+			return
+		#endif
+	#endif
+
+	# save this info in case we need to look up an alias later
+	records.append((name, dispatchName, offset))
+
+	# print the assembly code
 	print 'ALIGNTEXT16'
 	print "GLOBL_FN(GL_PREFIX(%s))" % (name)
 	print "GL_PREFIX(%s):" % (name)
 	print '\tMOV_L(GLNAME(_glapi_Dispatch), EAX)'
-	print "\tJMP(GL_OFFSET(_gloffset_%s))" % (offset)
+	print "\tJMP(GL_OFFSET(_gloffset_%s))" % (dispatchName)
 	print ''
-#enddef
-
-
-def FindAlias(list, funcName):
-	for i in range(0, len(list)):
-		entry = list[i]
-		if entry[0] == funcName:
-			return entry[1]
-		#endif
-	#endfor
-	return ''
-#enddef
-
-
-
-def PrintDefines():
-	functionPattern = re.compile('^[a-zA-Z0-9]+\(')
-	functionNamePattern = re.compile('^[a-zA-Z0-9]+')
-
-	funcName = ''
-	functions = [ ]
-
-	f = open('gl.spec')
-	for line in f.readlines():
-
-		m = functionPattern.match(line)
-		if m:
-			# extract funcName
-			n = functionNamePattern.findall(line)
-			funcName = n[0]
-
-		m = string.split(line)
-		if len(m) > 1:
-			if m[0] == 'param':
-				paramName = m[1]
-			if m[0] == 'offset':
-				if m[1] == '?':
-					#print 'WARNING skipping', funcName
-					noop = 0
-				else:
-					entry = [ funcName, funcName ]
-					functions.append(entry)
-				#endif
-			elif m[0] == 'alias':
-				aliasedName = FindAlias(functions, m[1])
-				if aliasedName:
-					entry = [ funcName, aliasedName ]
-					functions.append(entry)
-				else:
-					print 'WARNING: alias to unknown function:', aliasedName
-				#endif
-			#endif
-		#endif
-	#endfor
-
-	# Now generate the assembly dispatch code
-	for i in range(0, len(functions)):
-		entry = functions[i]
-		GenerateDispatchCode( entry[0], entry[1] )
 
 #enddef
 
 
 
 PrintHead()
-PrintDefines()
+apiparser.ProcessSpecFile("APIspec", EmitFunction)
 PrintTail()

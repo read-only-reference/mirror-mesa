@@ -1,4 +1,4 @@
-/* $Id: teximage.c,v 1.104 2001/09/18 23:06:14 kschultz Exp $ */
+/* $Id: teximage.c,v 1.106 2001/11/18 22:48:13 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -665,7 +665,7 @@ texture_error_check( GLcontext *ctx, GLenum target,
           _mesa_error( ctx, GL_INVALID_ENUM, "glTexImage2D(target)" );
           return GL_TRUE;
       }
-      if (target == GL_PROXY_TEXTURE_2D && target == GL_TEXTURE_2D)
+      if (target == GL_PROXY_TEXTURE_2D || target == GL_TEXTURE_2D)
          maxLevels = ctx->Const.MaxTextureLevels;
       else
          maxLevels = ctx->Const.MaxCubeTextureLevels;
@@ -1565,7 +1565,7 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
  * Note that width and height include the border.
  */
 void
-_mesa_TexImage3D( GLenum target, GLint level, GLenum internalFormat,
+_mesa_TexImage3D( GLenum target, GLint level, GLint internalFormat,
                   GLsizei width, GLsizei height, GLsizei depth,
                   GLint border, GLenum format, GLenum type,
                   const GLvoid *pixels )
