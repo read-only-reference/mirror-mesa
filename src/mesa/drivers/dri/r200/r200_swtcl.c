@@ -172,7 +172,12 @@ static void r200SetVertexFormat( GLcontext *ctx )
       }
    }
 
-
+   if ( (rmesa->hw.ctx.cmd[CTX_PP_FOG_COLOR] & R200_FOG_USE_MASK)
+      != R200_FOG_USE_SPEC_ALPHA ) {
+      R200_STATECHANGE( rmesa, ctx );
+      rmesa->hw.ctx.cmd[CTX_PP_FOG_COLOR] &= ~R200_FOG_USE_MASK;
+      rmesa->hw.ctx.cmd[CTX_PP_FOG_COLOR] |= R200_FOG_USE_SPEC_ALPHA;
+   }
 
    if ( rmesa->tnl_index != index ||
 	(rmesa->hw.vtx.cmd[VTX_VTXFMT_0] != fmt_0) ||
@@ -834,8 +839,8 @@ r200PointsBitmap( GLcontext *ctx, GLint px, GLint py,
     */
    for (row=0; row<height; row++) {
       const GLubyte *src = (const GLubyte *) 
-	 _mesa_image_address( unpack, bitmap, width, height, 
-			      GL_COLOR_INDEX, GL_BITMAP, 0, row, 0 );
+	 _mesa_image_address2d(unpack, bitmap, width, height, 
+                               GL_COLOR_INDEX, GL_BITMAP, row, 0 );
 
       if (unpack->LsbFirst) {
          /* Lsb first */

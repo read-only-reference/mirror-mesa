@@ -190,6 +190,7 @@ _mesa_PushAttrib(GLbitfield mask)
       attr->RescaleNormals = ctx->Transform.RescaleNormals;
       attr->Scissor = ctx->Scissor.Enabled;
       attr->Stencil = ctx->Stencil.Enabled;
+      attr->StencilTwoSide = ctx->Stencil.TestTwoSide;
       attr->MultisampleEnabled = ctx->Multisample.Enabled;
       attr->SampleAlphaToCoverage = ctx->Multisample.SampleAlphaToCoverage;
       attr->SampleAlphaToOne = ctx->Multisample.SampleAlphaToOne;
@@ -518,7 +519,9 @@ pop_enable_group(GLcontext *ctx, const struct gl_enable_attrib *enable)
                    GL_POLYGON_STIPPLE);
    TEST_AND_UPDATE(ctx->Scissor.Enabled, enable->Scissor, GL_SCISSOR_TEST);
    TEST_AND_UPDATE(ctx->Stencil.Enabled, enable->Stencil, GL_STENCIL_TEST);
-   /* XXX two-sided stencil */
+   if (ctx->Extensions.EXT_stencil_two_side) {
+      TEST_AND_UPDATE(ctx->Stencil.TestTwoSide, enable->StencilTwoSide, GL_STENCIL_TEST_TWO_SIDE_EXT);
+   }
    TEST_AND_UPDATE(ctx->Multisample.Enabled, enable->MultisampleEnabled,
                    GL_MULTISAMPLE_ARB);
    TEST_AND_UPDATE(ctx->Multisample.SampleAlphaToCoverage,
@@ -1060,17 +1063,26 @@ _mesa_PopAttrib(void)
             break;
          case GL_STENCIL_BUFFER_BIT:
             {
-               const GLint face = 0; /* XXX stencil two side */
+               GLint face;
                const struct gl_stencil_attrib *stencil;
                stencil = (const struct gl_stencil_attrib *) attr->data;
                _mesa_set_enable(ctx, GL_STENCIL_TEST, stencil->Enabled);
                _mesa_ClearStencil(stencil->Clear);
-               _mesa_StencilFunc(stencil->Function[face], stencil->Ref[face],
-                                 stencil->ValueMask[face]);
-               _mesa_StencilMask(stencil->WriteMask[face]);
-               _mesa_StencilOp(stencil->FailFunc[face],
-                               stencil->ZFailFunc[face],
-                               stencil->ZPassFunc[face]);
+               face = stencil->ActiveFace;
+               if (ctx->Extensions.EXT_stencil_two_side) {
+                  _mesa_set_enable(ctx, GL_STENCIL_TEST_TWO_SIDE_EXT, stencil->TestTwoSide);
+                  face ^= 1;
+               }
+               do {
+                  _mesa_ActiveStencilFaceEXT(face);
+                  _mesa_StencilFunc(stencil->Function[face], stencil->Ref[face],
+                                    stencil->ValueMask[face]);
+                  _mesa_StencilMask(stencil->WriteMask[face]);
+                  _mesa_StencilOp(stencil->FailFunc[face],
+                                  stencil->ZFailFunc[face],
+                                  stencil->ZPassFunc[face]);
+                  face ^= 1;
+               } while (face != (stencil->ActiveFace ^ 1));
             }
             break;
          case GL_TRANSFORM_BIT:

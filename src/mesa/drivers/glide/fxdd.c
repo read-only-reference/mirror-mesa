@@ -43,6 +43,7 @@
 #include "image.h"
 #include "mtypes.h"
 #include "fxdrv.h"
+#include "buffers.h"
 #include "enums.h"
 #include "extensions.h"
 #include "macros.h"
@@ -106,7 +107,7 @@ static void fxDisableColor (fxMesaContext fxMesa)
 
 /* Return buffer size information */
 static void
-fxDDBufferSize(GLframebuffer *buffer, GLuint *width, GLuint *height)
+fxDDGetBufferSize(GLframebuffer *buffer, GLuint *width, GLuint *height)
 {
    GET_CURRENT_CONTEXT(ctx);
    if (ctx && FX_CONTEXT(ctx)) {
@@ -121,6 +122,12 @@ fxDDBufferSize(GLframebuffer *buffer, GLuint *width, GLuint *height)
    }
 }
 
+static void
+fxDDViewport(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
+{
+   /* poll for window size change and realloc software Z/stencil/etc if needed */
+   _mesa_ResizeBuffersMESA();
+}
 
 /* Implements glClearColor() */
 static void
@@ -525,10 +532,10 @@ fxDDDrawBitmap2 (GLcontext *ctx, GLint px, GLint py,
 
       for (row = 0; row < height; row++) {
 	 const GLubyte *src =
-	    (const GLubyte *) _mesa_image_address(finalUnpack,
-						  bitmap, width, height,
-						  GL_COLOR_INDEX, GL_BITMAP,
-						  0, row, 0);
+	    (const GLubyte *) _mesa_image_address2d(finalUnpack,
+                                                    bitmap, width, height,
+                                                    GL_COLOR_INDEX, GL_BITMAP,
+                                                    row, 0);
 	 if (finalUnpack->LsbFirst) {
 	    /* least significan bit first */
 	    GLubyte mask = 1U << (finalUnpack->SkipPixels & 0x7);
@@ -684,10 +691,10 @@ fxDDDrawBitmap4 (GLcontext *ctx, GLint px, GLint py,
 
       for (row = 0; row < height; row++) {
 	 const GLubyte *src =
-	    (const GLubyte *) _mesa_image_address(finalUnpack,
-						  bitmap, width, height,
-						  GL_COLOR_INDEX, GL_BITMAP,
-						  0, row, 0);
+	    (const GLubyte *) _mesa_image_address2d(finalUnpack,
+                                                    bitmap, width, height,
+                                                    GL_COLOR_INDEX, GL_BITMAP,
+                                                    row, 0);
 	 if (finalUnpack->LsbFirst) {
 	    /* least significan bit first */
 	    GLubyte mask = 1U << (finalUnpack->SkipPixels & 0x7);
@@ -762,9 +769,9 @@ fxDDReadPixels565 (GLcontext * ctx,
 	 const GLint srcStride = info.strideInBytes / 2;	/* stride in GLushorts */
 	 const GLushort *src = (const GLushort *) info.lfbPtr
 	    + (winY - y) * srcStride + (winX + x);
-	 GLubyte *dst = (GLubyte *) _mesa_image_address(packing, dstImage,
+	 GLubyte *dst = (GLubyte *) _mesa_image_address2d(packing, dstImage,
 							width, height, format,
-							type, 0, 0, 0);
+							type, 0, 0);
 	 GLint dstStride =
 	    _mesa_image_row_stride(packing, width, format, type);
 
@@ -875,9 +882,9 @@ fxDDReadPixels555 (GLcontext * ctx,
 	 const GLint srcStride = info.strideInBytes / 2;	/* stride in GLushorts */
 	 const GLushort *src = (const GLushort *) info.lfbPtr
 	    + (winY - y) * srcStride + (winX + x);
-	 GLubyte *dst = (GLubyte *) _mesa_image_address(packing, dstImage,
+	 GLubyte *dst = (GLubyte *) _mesa_image_address2d(packing, dstImage,
 							width, height, format,
-							type, 0, 0, 0);
+							type, 0, 0);
 	 GLint dstStride =
 	    _mesa_image_row_stride(packing, width, format, type);
 
@@ -988,9 +995,9 @@ fxDDReadPixels8888 (GLcontext * ctx,
 	 const GLint srcStride = info.strideInBytes / 4;	/* stride in GLuints */
 	 const GLuint *src = (const GLuint *) info.lfbPtr
 	    + (winY - y) * srcStride + (winX + x);
-	 GLubyte *dst = (GLubyte *) _mesa_image_address(packing, dstImage,
+	 GLubyte *dst = (GLubyte *) _mesa_image_address2d(packing, dstImage,
 							width, height, format,
-							type, 0, 0, 0);
+							type, 0, 0);
 	 GLint dstStride =
 	    _mesa_image_row_stride(packing, width, format, type);
 
@@ -1155,9 +1162,8 @@ fxDDDrawPixels555 (GLcontext * ctx, GLint x, GLint y,
       if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
          GLint row;
          for (row = 0; row < height; row++) {
-	     GLubyte *src = (GLubyte *) _mesa_image_address(finalUnpack, pixels,
-							width, height, format,
-							type, 0, row, 0);
+	     GLubyte *src = (GLubyte *) _mesa_image_address2d(finalUnpack,
+                                  pixels, width, height, format, type, row, 0);
 	     GLint col;
 	     for (col = 0; col < width; col++) {
                  dst[col] = TDFXPACKCOLOR1555(src[2], src[1], src[0], src[3]);
@@ -1169,9 +1175,8 @@ fxDDDrawPixels555 (GLcontext * ctx, GLint x, GLint y,
       else if (format == GL_RGB && type == GL_UNSIGNED_BYTE) {
          GLint row;
          for (row = 0; row < height; row++) {
-	     GLubyte *src = (GLubyte *) _mesa_image_address(finalUnpack, pixels,
-							width, height, format,
-							type, 0, row, 0);
+	     GLubyte *src = (GLubyte *) _mesa_image_address2d(finalUnpack,
+                                  pixels, width, height, format, type, row, 0);
 	     GLint col;
 	     for (col = 0; col < width; col++) {
                  dst[col] = TDFXPACKCOLOR1555(src[2], src[1], src[0], 255);
@@ -1292,9 +1297,8 @@ fxDDDrawPixels565 (GLcontext * ctx, GLint x, GLint y,
       if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
          GLint row;
          for (row = 0; row < height; row++) {
-	     GLubyte *src = (GLubyte *) _mesa_image_address(finalUnpack, pixels,
-							width, height, format,
-							type, 0, row, 0);
+	     GLubyte *src = (GLubyte *) _mesa_image_address2d(finalUnpack,
+                                  pixels, width, height, format, type, row, 0);
 	     GLint col;
 	     for (col = 0; col < width; col++) {
                  dst[col] = TDFXPACKCOLOR565(src[2], src[1], src[0]);
@@ -1306,9 +1310,8 @@ fxDDDrawPixels565 (GLcontext * ctx, GLint x, GLint y,
       else if (format == GL_RGB && type == GL_UNSIGNED_BYTE) {
          GLint row;
          for (row = 0; row < height; row++) {
-	     GLubyte *src = (GLubyte *) _mesa_image_address(finalUnpack, pixels,
-							width, height, format,
-							type, 0, row, 0);
+	     GLubyte *src = (GLubyte *) _mesa_image_address2d(finalUnpack,
+                                  pixels, width, height, format, type, row, 0);
 	     GLint col;
 	     for (col = 0; col < width; col++) {
                  dst[col] = TDFXPACKCOLOR565(src[2], src[1], src[0]);
@@ -1429,9 +1432,8 @@ fxDDDrawPixels565_rev (GLcontext * ctx, GLint x, GLint y,
       if (format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
          GLint row;
          for (row = 0; row < height; row++) {
-	     GLubyte *src = (GLubyte *) _mesa_image_address(finalUnpack, pixels,
-							width, height, format,
-							type, 0, row, 0);
+	     GLubyte *src = (GLubyte *) _mesa_image_address2d(finalUnpack,
+                                  pixels, width, height, format, type, row, 0);
 	     GLint col;
 	     for (col = 0; col < width; col++) {
                  dst[col] = TDFXPACKCOLOR565(src[0], src[1], src[2]);
@@ -1443,9 +1445,8 @@ fxDDDrawPixels565_rev (GLcontext * ctx, GLint x, GLint y,
       else if (format == GL_RGB && type == GL_UNSIGNED_BYTE) {
          GLint row;
          for (row = 0; row < height; row++) {
-	     GLubyte *src = (GLubyte *) _mesa_image_address(finalUnpack, pixels,
-							width, height, format,
-							type, 0, row, 0);
+	     GLubyte *src = (GLubyte *) _mesa_image_address2d(finalUnpack,
+                                  pixels, width, height, format, type, row, 0);
 	     GLint col;
 	     for (col = 0; col < width; col++) {
                  dst[col] = TDFXPACKCOLOR565(src[0], src[1], src[2]);
@@ -1568,9 +1569,8 @@ fxDDDrawPixels8888 (GLcontext * ctx, GLint x, GLint y,
          const GLint widthInBytes = width * 4;
          GLint row;
          for (row = 0; row < height; row++) {
-	     GLubyte *src = (GLubyte *) _mesa_image_address(finalUnpack, pixels,
-							width, height, format,
-							type, 0, row, 0);
+	     GLubyte *src = (GLubyte *) _mesa_image_address2d(finalUnpack,
+                                  pixels, width, height, format, type, row, 0);
              MEMCPY(dst, src, widthInBytes);
              dst += dstStride;
          }
@@ -1578,9 +1578,8 @@ fxDDDrawPixels8888 (GLcontext * ctx, GLint x, GLint y,
       else if (format == GL_RGB && type == GL_UNSIGNED_BYTE) {
          GLint row;
          for (row = 0; row < height; row++) {
-	     GLubyte *src = (GLubyte *) _mesa_image_address(finalUnpack, pixels,
-							width, height, format,
-							type, 0, row, 0);
+	     GLubyte *src = (GLubyte *) _mesa_image_address2d(finalUnpack,
+                               pixels, width, height, format, type, row, 0);
 	     GLint col;
 	     for (col = 0; col < width; col++) {
                  dst[col] = TDFXPACKCOLOR8888(src[2], src[1], src[0], 255);
@@ -2114,7 +2113,8 @@ fxSetupDDPointers(GLcontext * ctx)
    ctx->Driver.ClearColor = fxDDClearColor;
    ctx->Driver.Clear = fxDDClear;
    ctx->Driver.DrawBuffer = fxDDSetDrawBuffer;
-   ctx->Driver.GetBufferSize = fxDDBufferSize;
+   ctx->Driver.GetBufferSize = fxDDGetBufferSize;
+   ctx->Driver.Viewport = fxDDViewport;
    switch (fxMesa->colDepth) {
       case 15:
          ctx->Driver.DrawPixels = fxDDDrawPixels555;

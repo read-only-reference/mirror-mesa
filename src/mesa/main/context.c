@@ -6,7 +6,7 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  6.1
+ * Version:  6.3
  *
  * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
@@ -1202,10 +1202,10 @@ init_attrib_groups( GLcontext *ctx )
 static void
 add_newer_entrypoints(void)
 {
-   unsigned   i;
+   unsigned i;
    static const struct {
       const char * const name;
-      unsigned  offset;
+      unsigned offset;
    }
    newer_entrypoints[] = {
       /* GL_ARB_window_pos aliases with GL_MESA_window_pos */
@@ -1381,12 +1381,55 @@ add_newer_entrypoints(void)
 #endif
       { "glMultiModeDrawArraysIBM", _gloffset_MultiModeDrawArraysIBM },
       { "glMultiModeDrawElementsIBM", _gloffset_MultiModeDrawElementsIBM },
+      /* GL_EXT_stencil_two_side */
+      { "glActiveStencilFaceEXT", _gloffset_ActiveStencilFaceEXT },
+      /* GL_ARB_draw_buffers */
+      { "glDrawBuffersARB", _gloffset_DrawBuffersARB },
    };
    
-   for ( i = 0 ; i < Elements(newer_entrypoints) ; i++ ) {
+   for (i = 0; i < Elements(newer_entrypoints); i++ ) {
       _glapi_add_entrypoint( newer_entrypoints[i].name,
-			     newer_entrypoints[i].offset );
+                             newer_entrypoints[i].offset );
    }
+}
+
+
+/**
+ * This is the default function we plug into all dispatch table slots
+ * This helps prevents a segfault when someone calls a GL function without
+ * first checking if the extension's supported.
+ */
+static int
+generic_nop(void)
+{
+   _mesa_problem(NULL, "User called no-op dispatch function (an unsupported extension function?)");
+   return 0;
+}
+
+
+/**
+ * Allocate and initialize a new dispatch table.
+ */
+static struct _glapi_table *
+alloc_dispatch_table(void)
+{
+   /* Find the larger of Mesa's dispatch table and libGL's dispatch table.
+    * In practice, this'll be the same for stand-alone Mesa.  But for DRI
+    * Mesa we do this to accomodate different versions of libGL and various
+    * DRI drivers.
+    */
+   GLint numEntries = MAX2(_glapi_get_dispatch_table_size(),
+                           sizeof(struct _glapi_table) / sizeof(_glapi_proc));
+   struct _glapi_table *table =
+      (struct _glapi_table *) _mesa_malloc(numEntries * sizeof(_glapi_proc));
+   if (table) {
+      _glapi_proc *entry = (_glapi_proc *) table;
+      GLuint i;
+      for (i = 0; i < numEntries; i++) {
+         entry[i] = (_glapi_proc) generic_nop;
+      }
+   }
+   return table;
 }
 
 
@@ -1423,8 +1466,6 @@ _mesa_initialize_context( GLcontext *ctx,
                           const struct dd_function_table *driverFunctions,
                           void *driverContext )
 {
-   GLuint dispatchSize;
-
    ASSERT(driverContext);
    assert(driverFunctions->NewTextureObject);
 
@@ -1473,30 +1514,19 @@ _mesa_initialize_context( GLcontext *ctx,
    /* libGL ABI coordination */
    add_newer_entrypoints();
 
-   /* Find the larger of Mesa's dispatch table and libGL's dispatch table.
-    * In practice, this'll be the same for stand-alone Mesa.  But for DRI
-    * Mesa we do this to accomodate different versions of libGL and various
-    * DRI drivers.
-    */
-   dispatchSize = MAX2(_glapi_get_dispatch_table_size(),
-                       sizeof(struct _glapi_table) / sizeof(void *));
-
-   /* setup API dispatch tables */
-   ctx->Exec = (struct _glapi_table *) CALLOC(dispatchSize * sizeof(void*));
-   ctx->Save = (struct _glapi_table *) CALLOC(dispatchSize * sizeof(void*));
+   /* setup the API dispatch tables */
+   ctx->Exec = alloc_dispatch_table();
+   ctx->Save = alloc_dispatch_table();
    if (!ctx->Exec || !ctx->Save) {
       free_shared_state(ctx, ctx->Shared);
       if (ctx->Exec)
-         FREE( ctx->Exec );
+         _mesa_free(ctx->Exec);
    }
-   _mesa_init_exec_table(ctx->Exec, dispatchSize);
+   _mesa_init_exec_table(ctx->Exec);
    ctx->CurrentDispatch = ctx->Exec;
-
 #if _HAVE_FULL_GL
-   _mesa_init_dlist_table(ctx->Save, dispatchSize);
+   _mesa_init_dlist_table(ctx->Save);
    _mesa_install_save_vtxfmt( ctx, &ctx->ListState.ListVtxfmt );
-
-
    /* Neutral tnl module stuff */
    _mesa_init_exec_vtxfmt( ctx ); 
    ctx->TnlModule.Current = NULL;
@@ -1576,6 +1606,10 @@ _mesa_free_context_data( GLcontext *ctx )
    _mesa_delete_buffer_object(ctx, ctx->Array.NullBufferObj);
 #endif
 
+   /* free dispatch tables */
+   _mesa_free(ctx->Exec);
+   _mesa_free(ctx->Save);
+
    /* Shared context state (display lists, textures, etc) */
    _glthread_LOCK_MUTEX(ctx->Shared->Mutex);
    ctx->Shared->RefCount--;
@@ -1588,9 +1622,6 @@ _mesa_free_context_data( GLcontext *ctx )
 
    if (ctx->Extensions.String)
       FREE((void *) ctx->Extensions.String);
-
-   FREE(ctx->Exec);
-   FREE(ctx->Save);
 }
 
 
@@ -1847,41 +1878,36 @@ _mesa_make_current2( GLcontext *newCtx, GLframebuffer *drawBuffer,
 	 newCtx->NewState |= _NEW_BUFFERS;
 
 #if _HAVE_FULL_GL
-         if (drawBuffer->Width == 0 && drawBuffer->Height == 0) {
+         if (!drawBuffer->Initialized) {
             /* get initial window size */
             GLuint bufWidth, bufHeight;
-
-            /* ask device driver for size of output buffer */
-            (*newCtx->Driver.GetBufferSize)( drawBuffer, &bufWidth, &bufHeight );
-
-            if (drawBuffer->Width != bufWidth || 
-		drawBuffer->Height != bufHeight) {
-
-	       drawBuffer->Width = bufWidth;
-	       drawBuffer->Height = bufHeight;
-
- 	       newCtx->Driver.ResizeBuffers( drawBuffer );
-	    }
+            /* ask device driver for size of the buffer */
+            (*newCtx->Driver.GetBufferSize)(drawBuffer, &bufWidth, &bufHeight);
+            /* set initial buffer size */
+            drawBuffer->Width = bufWidth;
+            drawBuffer->Height = bufHeight;
+            newCtx->Driver.ResizeBuffers( drawBuffer );
+            drawBuffer->Initialized = GL_TRUE;
          }
 
-         if (readBuffer != drawBuffer &&
-             readBuffer->Width == 0 && readBuffer->Height == 0) {
+         if (readBuffer != drawBuffer && !readBuffer->Initialized) {
             /* get initial window size */
             GLuint bufWidth, bufHeight;
-
-            /* ask device driver for size of output buffer */
-            (*newCtx->Driver.GetBufferSize)( readBuffer, &bufWidth, &bufHeight );
-
-            if (readBuffer->Width != bufWidth ||
-		readBuffer->Height != bufHeight) {
-
-	       readBuffer->Width = bufWidth;
-	       readBuffer->Height = bufHeight;
-
-	       newCtx->Driver.ResizeBuffers( readBuffer );
-	    }
+            /* ask device driver for size of the buffer */
+            (*newCtx->Driver.GetBufferSize)(readBuffer, &bufWidth, &bufHeight);
+            /* set initial buffer size */
+            readBuffer->Width = bufWidth;
+            readBuffer->Height = bufHeight;
+            newCtx->Driver.ResizeBuffers( readBuffer );
+            readBuffer->Initialized = GL_TRUE;
          }
 #endif
+         if (newCtx->FirstTimeCurrent) {
+            /* set initial viewport and scissor size now */
+            _mesa_set_viewport(newCtx, 0, 0, drawBuffer->Width, drawBuffer->Height);
+            newCtx->Scissor.Width = drawBuffer->Width;
+            newCtx->Scissor.Height = drawBuffer->Height;
+         }
       }
 
       /* Alert the driver - usually passed on to the sw t&l module,

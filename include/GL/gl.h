@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.2
+ * Version:  6.3
  *
  * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
@@ -38,8 +38,6 @@
  */
 #if !defined(__SCITECH_SNAP__)
 
-#include <stddef.h>     /* to get ptrdiff_t, used below */
-
 #if defined(__BEOS__)
 #include <stdlib.h>     /* to get some BeOS-isms */
 #endif
@@ -53,9 +51,9 @@
 #endif
 
 #if !defined(OPENSTEP) && (defined(__WIN32__) && !defined(__CYGWIN__))
-#  if defined(_MSC_VER) && defined(BUILD_GL32) /* tag specify we're building mesa as a DLL */
+#  if (defined(_MSC_VER) || defined(__MINGW32__)) && defined(BUILD_GL32) /* tag specify we're building mesa as a DLL */
 #    define GLAPI __declspec(dllexport)
-#  elif defined(_MSC_VER) && defined(_DLL) /* tag specifying we're building for DLL runtime support */
+#  elif (defined(_MSC_VER) || defined(__MINGW32__)) && defined(_DLL) /* tag specifying we're building for DLL runtime support */
 #    define GLAPI __declspec(dllimport)
 #  else /* for use with static link lib build of Win32 edition only */
 #    define GLAPI extern
@@ -64,11 +62,7 @@
 #elif defined(__CYGWIN__) && defined(USE_OPENGL32) /* use native windows opengl32 */
 #  define GLAPI extern
 #  define GLAPIENTRY __stdcall
-#else
-/* non-Windows compilation */
-#  define GLAPI extern
-#  define GLAPIENTRY
-#endif /* WIN32 / CYGWIN bracket */
+#endif /* WIN32 && !CYGWIN */
 
 #if (defined(__BEOS__) && defined(__POWERPC__)) || defined(__QUICKDRAW__)
 #  define PRAGMA_EXPORT_SUPPORTED		1
@@ -95,10 +89,22 @@
 #pragma import on
 #endif
 
+#ifndef GLAPI
+#define GLAPI extern
+#endif
+
+#ifndef GLAPIENTRY
+#define GLAPIENTRY
+#endif
+
 #ifndef APIENTRY
 #define APIENTRY GLAPIENTRY
 #endif
+
+/* "P" suffix for when function returns a pointer */
+#ifndef APIENTRYP
 #define APIENTRYP APIENTRY *
+#endif
 
 #ifndef GLAPIENTRYP
 #define GLAPIENTRYP GLAPIENTRY *
@@ -844,7 +850,7 @@ GLAPI GLint GLAPIENTRY glRenderMode( GLenum mode );
 
 GLAPI GLenum GLAPIENTRY glGetError( void );
 
-GLAPI const GLubyte* GLAPIENTRY glGetString( GLenum name );
+GLAPI const GLubyte GLAPIENTRYP glGetString( GLenum name );
 
 GLAPI void GLAPIENTRY glFinish( void );
 

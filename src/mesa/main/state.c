@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.2
+ * Version:  6.3
  *
  * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
@@ -89,46 +89,6 @@
 #endif
 #include "debug.h"
 
-/* #include "math/m_matrix.h" */
-/* #include "math/m_xform.h" */
-
-
-/**********************************************************************/
-/** \name Dispatch table setup */
-/*@{*/
-
-/**
- * Generic no-op dispatch function.
- *
- * Used in replacement of the functions which are not part of Mesa subset.
- *
- * Displays a message.
- */
-static int
-generic_noop(void)
-{
-   _mesa_problem(NULL, "User called no-op dispatch function (an unsupported extension function?)");
-   return 0;
-}
-
-
-/**
- * Set all pointers in the given dispatch table to point to a
- * generic no-op function - generic_noop().
- *
- * \param table dispatch table.
- * \param tableSize dispatch table size.
- */
-void
-_mesa_init_no_op_table(struct _glapi_table *table, GLuint tableSize)
-{
-   typedef void (*func_ptr_t)();
-   GLuint i;
-   func_ptr_t *dispatch = (func_ptr_t *) table;
-   for (i = 0; i < tableSize; i++) {
-      dispatch[i] = (func_ptr_t)generic_noop;
-   }
-}
 
 
 /**
@@ -142,11 +102,8 @@ _mesa_init_no_op_table(struct _glapi_table *table, GLuint tableSize)
  * \param tableSize dispatch table size.
  */
 void
-_mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
+_mesa_init_exec_table(struct _glapi_table *exec)
 {
-   /* first initialize all dispatch slots to no-op */
-   _mesa_init_no_op_table(exec, tableSize);
-
 #if _HAVE_FULL_GL
    _mesa_loopback_init_api_table( exec );
 #endif
@@ -692,9 +649,9 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    /* glDeleteProgramsARB aliases glDeleteProgramsNV */
    /* glGenProgramsARB aliases glGenProgramsNV */
    /* glIsProgramARB aliases glIsProgramNV */
-   /* glGetVertexAttribdvARB aliases glGetVertexAttribdvNV */
-   /* glGetVertexAttribfvARB aliases glGetVertexAttribfvNV */
-   /* glGetVertexAttribivARB aliases glGetVertexAttribivNV */
+   exec->GetVertexAttribdvARB = _mesa_GetVertexAttribdvARB;
+   exec->GetVertexAttribfvARB = _mesa_GetVertexAttribfvARB;
+   exec->GetVertexAttribivARB = _mesa_GetVertexAttribivARB;
    /* glGetVertexAttribPointervARB aliases glGetVertexAttribPointervNV */
    exec->ProgramEnvParameter4dARB = _mesa_ProgramEnvParameter4dARB;
    exec->ProgramEnvParameter4dvARB = _mesa_ProgramEnvParameter4dvARB;
@@ -790,7 +747,6 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
 #endif    /* FEATURE_ARB_shader_objects */
 }
 
-/*@}*/
 
 
 /**********************************************************************/

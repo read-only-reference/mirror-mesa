@@ -18,7 +18,7 @@
  * Updated for Mesa 4.0 by Karl Schultz (kschultz@sourceforge.net)
  */
 
-#ifdef NDEBUG
+#if defined(NDEBUG) && defined(_MSC_VER)
 #pragma auto_inline(on)
 #pragma inline_depth(255)
 #pragma inline_recursion(on)
@@ -29,6 +29,7 @@
 //#include "mesa_extend.h"
 
 #include "glheader.h"
+#include "buffers.h"
 #include "colors.h"
 #include "context.h"
 #include "colormac.h"
@@ -74,7 +75,7 @@
 /* Stereo and parallel not tested for Mesa 4.0. */
 #define NO_STEREO
 #if !defined(NO_STEREO)
-#include "gl\glu.h"
+#include "GL/glu.h"
 #include "stereo.h"
 #endif
 
@@ -114,6 +115,8 @@ WMesaContext WC = NULL;
 
 #if defined(_MSC_VER) && _MSC_VER >= 1200
 #define FORCEINLINE __forceinline
+#elif defined(__GNUC__) && (__GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 1))
+#define FORCEINLINE __attribute__((always_inline))
 #else
 #define FORCEINLINE __inline
 #endif
@@ -612,7 +615,7 @@ static void set_buffer(GLcontext *ctx, GLframebuffer *colorBuffer,
 
 
 /* Return characteristics of the output buffer. */
-static void buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
+static void get_buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
 {
   /*GET_CURRENT_CONTEXT(ctx);*/
   int New_Size;
@@ -655,6 +658,12 @@ static void buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
    }
 }
 
+
+static void viewport(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
+{
+   /* poll for window size change and realloc software Z/stencil/etc if needed */
+   _mesa_ResizeBuffersMESA();
+}
 
 
 /**********************************************************************/
@@ -1092,7 +1101,8 @@ static void SetFunctionPointers( struct dd_function_table *functions )
   functions->GetString = get_string;
   functions->UpdateState = wmesa_update_state;
   functions->ResizeBuffers = _swrast_alloc_buffers;
-  functions->GetBufferSize = buffer_size;
+  functions->GetBufferSize = get_buffer_size;
+  functions->Viewport = viewport;
 
   functions->Clear = clear;
 
@@ -1489,12 +1499,6 @@ void WMesaMakeCurrent( WMesaContext c )
   Current = c;
   wmesa_update_state(c->gl_ctx, 0);
   _mesa_make_current(c->gl_ctx, c->gl_buffer);
-  if (Current->gl_ctx->Viewport.Width==0) {
-    /* initialize viewport to window size */
-    _mesa_Viewport( 0, 0, Current->width, Current->height );
-    Current->gl_ctx->Scissor.Width = Current->width;
-    Current->gl_ctx->Scissor.Height = Current->height;
-  }
   if ((c->cColorBits <= 8 ) && (c->rgb_flag == GL_TRUE)){
     WMesaPaletteChange(c->hPalHalfTone);
   }
