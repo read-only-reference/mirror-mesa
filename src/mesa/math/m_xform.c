@@ -1,5 +1,3 @@
-/* $Id: m_xform.c,v 1.19 2003/03/01 01:50:24 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -50,11 +48,11 @@
 #endif
 
 #ifdef USE_X86_ASM
-#include "X86/common_x86_asm.h"
+#include "x86/common_x86_asm.h"
 #endif
 
 #ifdef USE_SPARC_ASM
-#include "SPARC/sparc.h"
+#include "sparc/sparc.h"
 #endif
 
 clip_func _mesa_clip_tab[5];

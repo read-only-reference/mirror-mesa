@@ -1315,6 +1315,18 @@ struct fragment_program_state
 
 
 /*
+ * State for GL_ARB_occlusion_query
+ */
+struct occlusion_state
+{
+   GLboolean Active;
+   GLuint CurrentQueryObject;
+   GLuint PassedCounter;
+   struct _mesa_HashTable *QueryObjects;
+};
+
+
+/*
  * State which can be shared by multiple contexts:
  */
 struct gl_shared_state {
@@ -1449,6 +1461,7 @@ struct gl_extensions {
    GLboolean ARB_imaging;
    GLboolean ARB_multisample;
    GLboolean ARB_multitexture;
+   GLboolean ARB_occlusion_query;
    GLboolean ARB_shadow;
    GLboolean ARB_texture_border_clamp;
    GLboolean ARB_texture_compression;
@@ -1467,18 +1480,14 @@ struct gl_extensions {
    GLboolean EXT_blend_logic_op;
    GLboolean EXT_blend_minmax;
    GLboolean EXT_blend_subtract;
-   GLboolean EXT_clip_volume_hint;
    GLboolean EXT_convolution;
    GLboolean EXT_compiled_vertex_array;
    GLboolean EXT_depth_bounds_test;
    GLboolean EXT_fog_coord;
    GLboolean EXT_histogram;
    GLboolean EXT_multi_draw_arrays;
-   GLboolean EXT_packed_pixels;
    GLboolean EXT_paletted_texture;
    GLboolean EXT_point_parameters;
-   GLboolean EXT_polygon_offset;
-   GLboolean EXT_rescale_normal;
    GLboolean EXT_shadow_funcs;
    GLboolean EXT_secondary_color;
    GLboolean EXT_shared_texture_palette;
@@ -1490,22 +1499,17 @@ struct gl_extensions {
    GLboolean EXT_texture_env_combine;
    GLboolean EXT_texture_env_dot3;
    GLboolean EXT_texture_filter_anisotropic;
-   GLboolean EXT_texture_object;
    GLboolean EXT_texture_lod_bias;
    GLboolean EXT_vertex_array_set;
    GLboolean HP_occlusion_test;
    GLboolean IBM_rasterpos_clip;
-   GLboolean INGR_blend_func_separate;
    GLboolean MESA_pack_invert;
-   GLboolean MESA_window_pos;
    GLboolean MESA_resize_buffers;
    GLboolean MESA_ycbcr_texture;
    GLboolean NV_blend_square;
    GLboolean NV_fragment_program;
-   GLboolean NV_light_max_exponent;
    GLboolean NV_point_sprite;
    GLboolean NV_texture_rectangle;
-   GLboolean NV_texgen_reflection;
    GLboolean NV_vertex_program;
    GLboolean NV_vertex_program1_1;
    GLboolean SGI_color_matrix;
@@ -1835,6 +1839,8 @@ struct __GLcontextRec {
    struct program_state Program;             /* for vertex or fragment progs */
    struct vertex_program_state VertexProgram;      /* GL_NV_vertex_program */
    struct fragment_program_state FragmentProgram;  /* GL_NV_fragment_program */
+
+   struct occlusion_state Occlusion;  /* GL_ARB_occlusion_query */
 
    GLenum ErrorValue;        /* Last error code */
    GLenum RenderMode;        /* either GL_RENDER, GL_SELECT, GL_FEEDBACK */
