@@ -1,4 +1,4 @@
-/* $Id: dd.h,v 1.6 1999/11/25 17:36:48 brianp Exp $ */
+/* $Id: dd.h,v 1.8 1999/12/10 19:09:22 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -390,34 +390,70 @@ struct dd_function_table {
 
    /***
     *** For supporting hardware Z buffers:
+    *** Either ALL or NONE of these functions must be implemented!
     ***/
 
-   void (*AllocDepthBuffer)( GLcontext *ctx );
-   /*
-    * Called when the depth buffer must be allocated or possibly resized.
+   void (*WriteDepthSpan)( GLcontext *ctx, GLuint n, GLint x, GLint y,
+                           const GLdepth depth[], const GLubyte mask[] );
+   /* Write a horizontal span of values into the depth buffer.  Only write
+    * depth[i] value if mask[i] is nonzero.
     */
 
-   GLuint (*DepthTestSpan)( GLcontext *ctx,
-                            GLuint n, GLint x, GLint y, const GLdepth z[],
-                            GLubyte mask[] );
-   void (*DepthTestPixels)( GLcontext *ctx,
-                            GLuint n, const GLint x[], const GLint y[],
-                            const GLdepth z[], GLubyte mask[] );
-   /*
-    * Apply the depth buffer test to an span/array of pixels and return
-    * an updated pixel mask.  This function is not used when accelerated
-    * point, line, polygon functions are used.
+   void (*ReadDepthSpan)( GLcontext *ctx, GLuint n, GLint x, GLint y,
+                          GLdepth depth[] );
+   /* Read a horizontal span of values from the depth buffer.
     */
 
-   void (*ReadDepthSpanFloat)( GLcontext *ctx,
-                               GLuint n, GLint x, GLint y, GLfloat depth[]);
-   void (*ReadDepthSpanInt)( GLcontext *ctx,
-                             GLuint n, GLint x, GLint y, GLdepth depth[] );
-   /*
-    * Return depth values as integers for glReadPixels.
-    * Floats should be returned in the range [0,1].
-    * Ints (GLdepth) values should be in the range [0,MAXDEPTH].
+
+   void (*WriteDepthPixels)( GLcontext *ctx, GLuint n,
+                             const GLint x[], const GLint y[],
+                             const GLdepth depth[], const GLubyte mask[] );
+   /* Write an array of randomly positioned depth values into the
+    * depth buffer.  Only write depth[i] value if mask[i] is nonzero.
     */
+
+   void (*ReadDepthPixels)( GLcontext *ctx, GLuint n,
+                            const GLint x[], const GLint y[],
+                            GLdepth depth[] );
+   /* Read an array of randomly positioned depth values from the depth buffer.
+    */
+
+
+
+   /***
+    *** For supporting hardware stencil buffers:
+    *** Either ALL or NONE of these functions must be implemented!
+    ***/
+
+   void (*WriteStencilSpan)( GLcontext *ctx, GLuint n, GLint x, GLint y,
+                             const GLstencil stencil[], const GLubyte mask[] );
+   /* Write a horizontal span of stencil values into the stencil buffer.
+    * If mask is NULL, write all stencil values.
+    * Else, only write stencil[i] if mask[i] is non-zero.
+    */
+
+
+   void (*ReadStencilSpan)( GLcontext *ctx, GLuint n, GLint x, GLint y,
+                            GLstencil stencil[] );
+   /* Read a horizontal span of stencil values from the stencil buffer.
+    */
+
+
+   void (*WriteStencilPixels)( GLcontext *ctx, GLuint n,
+                               const GLint x[], const GLint y[],
+                               const GLstencil stencil[],
+                               const GLubyte mask[] );
+   /* Write an array of stencil values into the stencil buffer.
+    * If mask is NULL, write all stencil values.
+    * Else, only write stencil[i] if mask[i] is non-zero.
+    */
+
+   void (*ReadStencilPixels)( GLcontext *ctx, GLuint n,
+                              const GLint x[], const GLint y[],
+                              GLstencil stencil[] );
+   /* Read an array of stencil values from the stencil buffer.
+    */
+  
 
 
    /***
