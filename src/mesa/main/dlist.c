@@ -34,6 +34,7 @@
 #include "config.h"
 #if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
 #include "arbprogram.h"
+#include "program.h"
 #endif
 #include "attrib.h"
 #include "blend.h"
@@ -71,6 +72,7 @@
 #include "varray.h"
 #if FEATURE_NV_vertex_program || FEATURE_NV_fragment_program
 #include "nvprogram.h"
+#include "program.h"
 #endif
 
 #include "math/m_matrix.h"
@@ -4265,10 +4267,10 @@ save_ProgramLocalParameter4dARB(GLenum target, GLuint index,
    if (n) {
       n[1].e = target;
       n[2].ui = index;
-      n[3].f = x;
-      n[4].f = y;
-      n[5].f = z;
-      n[6].f = w;
+      n[3].f = (GLfloat) x;
+      n[4].f = (GLfloat) y;
+      n[5].f = (GLfloat) z;
+      n[6].f = (GLfloat) w;
    }
    if (ctx->ExecuteFlag) {
       (*ctx->Exec->ProgramLocalParameter4dARB)(target, index, x, y, z, w);
@@ -4287,10 +4289,10 @@ save_ProgramLocalParameter4dvARB(GLenum target, GLuint index,
    if (n) {
       n[1].e = target;
       n[2].ui = index;
-      n[3].f = params[0];
-      n[4].f = params[1];
-      n[5].f = params[2];
-      n[6].f = params[3];
+      n[3].f = (GLfloat) params[0];
+      n[4].f = (GLfloat) params[1];
+      n[5].f = (GLfloat) params[2];
+      n[6].f = (GLfloat) params[3];
    }
    if (ctx->ExecuteFlag) {
       (*ctx->Exec->ProgramLocalParameter4dvARB)(target, index, params);
@@ -4383,8 +4385,8 @@ static void save_DepthBoundsEXT( GLclampd zmin, GLclampd zmax )
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
    n = ALLOC_INSTRUCTION( ctx, OPCODE_ACTIVE_STENCIL_FACE_EXT, 2 );
    if (n) {
-      n[1].f = zmin;
-      n[2].f = zmax;
+      n[1].f = (GLfloat) zmin;
+      n[2].f = (GLfloat) zmax;
    }
    if (ctx->ExecuteFlag) {
       (*ctx->Exec->DepthBoundsEXT)( zmin, zmax );
@@ -6099,6 +6101,29 @@ static void exec_MultiDrawElementsEXT(GLenum mode, const GLsizei *count,
    ctx->Exec->MultiDrawElementsEXT(mode, count, type, indices, primcount);
 }
 
+/* GL_IBM_multimode_draw_arrays */
+static void exec_MultiModeDrawArraysIBM(const GLenum *mode, const GLint *first,
+					const GLsizei *count, GLsizei primcount,
+					GLint modestride)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   FLUSH_VERTICES(ctx, 0);
+   ctx->Exec->MultiModeDrawArraysIBM(mode, first, count, primcount, modestride);
+}
+
+/* GL_IBM_multimode_draw_arrays */
+static void exec_MultiModeDrawElementsIBM(const GLenum *mode,
+					  const GLsizei *count,
+					  GLenum type,
+					  const GLvoid * const *indices,
+					  GLsizei primcount, GLint modestride)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   FLUSH_VERTICES(ctx, 0);
+   ctx->Exec->MultiModeDrawElementsIBM(mode, count, type, indices, primcount,
+				       modestride);
+}
+
 
 
 /*
@@ -6475,6 +6500,10 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->WindowPos4sMESA = save_WindowPos4sMESA;
    table->WindowPos4svMESA = save_WindowPos4svMESA;
 
+   /* 200. GL_IBM_multimode_draw_arrays */
+   table->MultiModeDrawArraysIBM = exec_MultiModeDrawArraysIBM;
+   table->MultiModeDrawElementsIBM = exec_MultiModeDrawElementsIBM;
+
 #if FEATURE_NV_vertex_program
    /* 233. GL_NV_vertex_program */
    /* The following commands DO NOT go into display lists:
@@ -6482,9 +6511,9 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
     * VertexAttribPointerNV, GetProgram*, GetVertexAttrib*
     */
    table->BindProgramNV = save_BindProgramNV;
-   table->DeleteProgramsNV = _mesa_DeleteProgramsNV;
+   table->DeleteProgramsNV = _mesa_DeletePrograms;
    table->ExecuteProgramNV = save_ExecuteProgramNV;
-   table->GenProgramsNV = _mesa_GenProgramsNV;
+   table->GenProgramsNV = _mesa_GenPrograms;
    table->AreProgramsResidentNV = _mesa_AreProgramsResidentNV;
    table->RequestResidentProgramsNV = save_RequestResidentProgramsNV;
    table->GetProgramParameterfvNV = _mesa_GetProgramParameterfvNV;
@@ -6496,7 +6525,7 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    table->GetVertexAttribfvNV = _mesa_GetVertexAttribfvNV;
    table->GetVertexAttribivNV = _mesa_GetVertexAttribivNV;
    table->GetVertexAttribPointervNV = _mesa_GetVertexAttribPointervNV;
-   table->IsProgramNV = _mesa_IsProgramNV;
+   table->IsProgramNV = _mesa_IsProgram;
    table->LoadProgramNV = save_LoadProgramNV;
    table->ProgramParameter4dNV = save_ProgramParameter4dNV;
    table->ProgramParameter4dvNV = save_ProgramParameter4dvNV;

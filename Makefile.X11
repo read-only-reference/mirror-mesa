@@ -1,4 +1,4 @@
-# $Id: Makefile.X11,v 1.78 2003/06/10 14:46:24 brianp Exp $
+# $Id: Makefile.X11,v 1.81 2003/08/24 04:44:23 jonsmirl Exp $
 
 # Mesa 3-D graphics library
 # Version:  5.1
@@ -41,6 +41,7 @@ default:
 	@echo "  make darwin               for Darwin - Mac OS X"
 	@echo "  make freebsd              for FreeBSD systems with GCC"
 	@echo "  make freebsd-386          for FreeBSD systems with GCC, w/ Intel assembly"
+	@echo "  make gcc-sl               for a generic system with GCC for shared libs"
 	@echo "  make hpux9                for HP systems with HPUX 9.x"
 	@echo "  make hpux9-sl             for HP systems with HPUX 9.x, make shared libs"
 	@echo "  make hpux9-gcc            for HP systems with HPUX 9.x using GCC"
@@ -72,6 +73,7 @@ default:
 	@echo "  make linux-sparc-ultra    for Linux with UltraSparc optimizations"
 	@echo "  make linux-osmesa16       for 16-bit/channel OSMesa"
 	@echo "  make linux-osmesa32       for 32-bit/channel OSMesa"
+	@echo "  make linux-solo           for Linux standalone with dri drivers"
 	@echo "  make linux-icc            for Linux with the Intel C/C++ compiler"
 	@echo "  make lynxos               for LynxOS systems with GCC"
 	@echo "  make mklinux              for Linux on Power Macintosh"
@@ -99,7 +101,7 @@ default:
 # XXX we may have to split up this group of targets into those that
 # have a C++ compiler and those that don't for the SI-GLU library.
 
-aix aix-sl darwin freebsd freebsd-386 \
+aix aix-sl darwin freebsd freebsd-386 gcc-sl \
 hpux9 hpux9-sl hpux9-gcc hpux9-gcc-sl \
 hpux10 hpux10-sl hpux10-gcc hpux10-gcc-sl \
 linux linux-debug \
@@ -126,6 +128,9 @@ ultrix-gcc unixware:
 	if [ -d progs/samples ] ; then cd progs/samples ; $(MAKE) -f Makefile.X11 $@ ; fi
 	if [ -d progs/redbook ] ; then cd progs/redbook ; $(MAKE) -f Makefile.X11 $@ ; fi
 	if [ -d src/glw       ] ; then cd src/glw       ; $(MAKE) -f Makefile.X11 $@ ; fi
+
+gcc-mesa-sl:
+	if [ -d src ] ; then cd src  ; $(MAKE) -f Makefile.X11 $@ ; fi
 
 irix6-o32 irix6-o32-dso irix6-n32 irix6-n32-dso irix6-gcc-n32-sl:
 	-mkdir lib32
@@ -223,21 +228,55 @@ linux-osmesa16 linux-osmesa32:
 	if [ -d src ] ; then touch src/depend ; fi
 	if [ -d src ] ; then cd src ; $(MAKE) -f Makefile.OSMesa16 $@ ; fi
 	
+linux-solo:
+	-mkdir lib
+	if [ -d src/mesa     ] ; then touch src/mesa/depend     ; fi
+	if [ -d src/glx/mini ] ; then touch src/glx/mini/depend  ; fi
+	if [ -d src/glu/mini ] ; then touch src/glu/mini/depend  ; fi
+	if [ -d src/glut/mini ] ; then touch src/glut/mini/depend  ; fi
+	if [ -d src/mesa/drivers/dri/r200 ] ; then touch src/mesa/drivers/dri/r200/depend ; fi
+	if [ -d src/mesa/drivers/dri/r128 ] ; then touch src/mesa/drivers/dri/r128/depend ; fi
+	if [ -d src/mesa/drivers/dri/radeon ] ; then touch src/mesa/drivers/dri/radeon/depend ; fi
+	if [ -d src/mesa/drivers/dri/mga ] ; then touch src/mesa/drivers/dri/mga/depend ; fi
+	if [ -d src/mesa/drivers/dri/fb ] ; then touch src/mesa/drivers/dri/fb/depend ; fi
+	if [ -d src/glut/mini ] ; then touch src/glut/mini/depend ; fi
+	if [ -d progs/miniglx ] ; then touch progs/miniglx/depend ; fi
+	if [ -d progs/tests ] ; then touch progs/tests/depend ; fi
+	if [ -d src/mesa      ] ; then cd src/mesa      ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d src/mesa/drivers/dri/r200 ] ; then cd src/mesa/drivers/dri/r200     ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d src/mesa/drivers/dri/r128 ] ; then cd src/mesa/drivers/dri/r128     ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d src/mesa/drivers/dri/radeon ] ; then cd src/mesa/drivers/dri/radeon ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d src/mesa/drivers/dri/mga ] ; then cd src/mesa/drivers/dri/mga       ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d src/mesa/drivers/dri/fb ] ; then cd src/mesa/drivers/dri/fb         ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d src/glx/mini  ] ; then cd src/glx/mini  ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d src/glu/mini  ] ; then cd src/glu/mini  ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d src/glut/mini ] ; then cd src/glut/mini  ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d progs/demos   ] ; then cd progs/miniglx ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d progs/demos   ] ; then cd progs/tests   ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d progs/demos   ] ; then cd progs/demos   ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d progs/xdemos  ] ; then cd progs/xdemos  ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d progs/samples ] ; then cd progs/samples ; $(MAKE) -f Makefile.X11 $@ ; fi
+	if [ -d progs/redbook ] ; then cd progs/redbook ; $(MAKE) -f Makefile.X11 $@ ; fi
 
 # Remove .o files, emacs backup files, etc.
 clean:
 	-rm -f src/mesa/*/*.o
 	-rm -f src/mesa/drivers/*/*.o
-	-rm -f src/mesa/drivers/*/*.o
+	-rm -f src/mesa/drivers/*/*/*.o
+	-rm -f src/mesa/drivers/*/*/*/*.o
 	-rm -f include/*~
 	-rm -f include/GL/*~
 	-rm -f src/glu/mesa/*.o src/glu/mesa/*~ src-glu/*.a
 	-rm -f src/glu/sgi/*/*.o src/glu/sgi/*/*/*.o
 	-rm -f src/glut/glx/*.o
+	-rm -f src/miniglx/*.o
+	-rm -f src/miniglu/*.o
+	-rm -f src/miniglut/*.o
 	-rm -f progs/demos/*.o
 	-rm -f progs/redbook/*.o progs/redbook/*~
 	-rm -f progs/xdemos/*.o progs/xdemos/*~
 	-rm -f progs/samples/*.o progs/samples/*~
+	-rm -f progs/tests/*.o progs/tests/*~
 	-rm -f src/glw/*.o
 
 # Remove everything that can be remade

@@ -1128,6 +1128,7 @@ Mesa Version History
 	- GL_EXT_texture_rectangle (identical to GL_NV_texture_rectangle)
 	- GL_ARB_occlusion_query
 	- GL_ARB_texture_non_power_of_two
+	- GL_IBM_multimode_draw_arrays extension
 	- new X86 feature detection code (Petr Sebor)
 	- less memory used for display lists and vertex buffers
 	- demo of per-pixel lighting with a fragment program (demos/fplight.c)
@@ -1135,6 +1136,7 @@ Mesa Version History
     Bug fixes:
 	- really enable OpenGL 1.4 features in DOS driver.
 	- fixed issues in glDrawPixels and glCopyPixels for very wide images
+	- glPixelMapf/ui/usv()'s size parameter is GLsizei, not GLint
     Changes:
 	- dropped API trace feature (src/Trace/)
 	- documentation overhaul.  merged with website content.  more html.

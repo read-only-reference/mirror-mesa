@@ -20,7 +20,9 @@ SOURCES =accum.c \
 	api_loopback.c \
 	api_noop.c \
 	api_validate.c \
+	arbfragparse.c \
 	arbprogram.c \
+	arbvertparse.c \
  	attrib.c \
 	blend.c \
 	bufferobj.c \
@@ -57,6 +59,7 @@ SOURCES =accum.c \
 	pixel.c \
 	points.c \
 	polygon.c \
+	program.c \
 	rastpos.c \
 	state.c \
 	stencil.c \
@@ -75,7 +78,9 @@ OBJECTS=accum.obj,\
 api_loopback.obj,\
 api_noop.obj,\
 api_validate.obj,\
+arbfragparse.obj,\
 arbprogram.obj,\
+arbvertparse.obj,\
 attrib.obj,\
 blend.obj,\
 bufferobj.obj,\
@@ -112,6 +117,7 @@ occlude.obj,\
 pixel.obj,\
 points.obj,\
 polygon.obj,\
+program.obj,\
 rastpos.obj,\
 state.obj,\
 stencil.obj,\
@@ -144,7 +150,9 @@ accum.obj : accum.c
 api_loopback.obj : api_loopback.c
 api_noop.obj : api_noop.c
 api_validate.obj : api_validate.c
+arbfragparse.obj : arbfragparse.c
 arbprogram.obj : arbprogram.c
+arbvertparse.obj : arbvertparse.c
 attrib.obj : attrib.c
 blend.obj : blend.c
 bufferobj.obj : bufferobj.c
@@ -181,6 +189,7 @@ occlude.obj : occlude.c
 pixel.obj : pixel.c
 points.obj : points.c
 polygon.obj : polygon.c
+program.obj : program.c
 rastpos.obj : rastpos.c
 state.obj : state.c
 stencil.obj : stencil.c

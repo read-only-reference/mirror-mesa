@@ -3727,7 +3727,7 @@ texture_combine( const GLcontext *ctx, GLuint unit, GLuint n,
 #if CHAN_TYPE == GL_FLOAT
                rgba[i][ACOMP] = ((arg0[i][ACOMP] * arg2[i][ACOMP]) + arg1[i][ACOMP]) * Amult;
 #else
-               GLuint a = (PROD(arg0[i][ACOMP], arg2[i][ACOMP])
+               GLint a = (PROD(arg0[i][ACOMP], arg2[i][ACOMP])
 			   + ((GLuint) arg1[i][ACOMP] << CHAN_BITS))
 		    >> shift;
                rgba[i][ACOMP] = (GLchan) CLAMP(a, 0, CHAN_MAX);
@@ -4198,11 +4198,14 @@ _swrast_texture_span( GLcontext *ctx, struct sw_span *span )
 
          /* adjust texture lod (lambda) */
          if (span->arrayMask & SPAN_LAMBDA) {
-            if (texUnit->LodBias != 0.0F) {
+            if (texUnit->LodBias + curObj->LodBias != 0.0F) {
                /* apply LOD bias, but don't clamp yet */
+               const GLfloat bias = CLAMP(texUnit->LodBias + curObj->LodBias,
+                                          -ctx->Const.MaxTextureLodBias,
+                                          ctx->Const.MaxTextureLodBias);
                GLuint i;
                for (i = 0; i < span->end; i++) {
-                  lambda[i] += texUnit->LodBias;
+                  lambda[i] += bias;
                }
             }
 

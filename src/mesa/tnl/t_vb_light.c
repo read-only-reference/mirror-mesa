@@ -82,17 +82,25 @@ static void import_color_material( GLcontext *ctx,
    else
       to->StrideB = 4 * sizeof(GLfloat);
    
-   _math_trans_4f( (GLfloat (*)[4]) to->Ptr,
-		   from->Ptr,
-		   from->StrideB,
-		   from->Type,
-		   from->Size,
-		   0,
-		   count);
+   _math_trans_4fc( (GLfloat (*)[4]) to->Ptr,
+		    from->Ptr,
+		    from->StrideB,
+		    from->Type,
+		    from->Size,
+		    0,
+		    count);
 
    VB->ColorPtr[0] = to;
 }
 
+
+static void update_materials( GLcontext *ctx,
+			      const struct gl_material *src,
+			      GLuint bitmask )
+{
+   _mesa_copy_materials( &ctx->Light.Material, src, bitmask );
+   _mesa_update_material( ctx, bitmask );
+}
 
 /* Tables for all the shading functions.
  */

@@ -233,26 +233,58 @@ struct gl_color_table {
  * \name Bit flags used for updating material values.
  */
 /*@{*/
-#define FRONT_AMBIENT_BIT     0x1
-#define BACK_AMBIENT_BIT      0x2
-#define FRONT_DIFFUSE_BIT     0x4
-#define BACK_DIFFUSE_BIT      0x8
-#define FRONT_SPECULAR_BIT   0x10
-#define BACK_SPECULAR_BIT    0x20
-#define FRONT_EMISSION_BIT   0x40
-#define BACK_EMISSION_BIT    0x80
-#define FRONT_SHININESS_BIT 0x100
-#define BACK_SHININESS_BIT  0x200
-#define FRONT_INDEXES_BIT   0x400
-#define BACK_INDEXES_BIT    0x800
+#define MAT_ATTRIB_FRONT_AMBIENT           0 
+#define MAT_ATTRIB_BACK_AMBIENT            1
+#define MAT_ATTRIB_FRONT_DIFFUSE           2 
+#define MAT_ATTRIB_BACK_DIFFUSE            3
+#define MAT_ATTRIB_FRONT_SPECULAR          4 
+#define MAT_ATTRIB_BACK_SPECULAR           5
+#define MAT_ATTRIB_FRONT_EMISSION          6
+#define MAT_ATTRIB_BACK_EMISSION           7
+#define MAT_ATTRIB_FRONT_SHININESS         8
+#define MAT_ATTRIB_BACK_SHININESS          9
+#define MAT_ATTRIB_FRONT_INDEXES           10
+#define MAT_ATTRIB_BACK_INDEXES            11
+#define MAT_ATTRIB_MAX                     12
 
-#define FRONT_MATERIAL_BITS	(FRONT_EMISSION_BIT | FRONT_AMBIENT_BIT | \
-				 FRONT_DIFFUSE_BIT | FRONT_SPECULAR_BIT | \
-				 FRONT_SHININESS_BIT | FRONT_INDEXES_BIT)
+#define MAT_ATTRIB_AMBIENT(f)  (MAT_ATTRIB_FRONT_AMBIENT+(f))  
+#define MAT_ATTRIB_DIFFUSE(f)  (MAT_ATTRIB_FRONT_DIFFUSE+(f))  
+#define MAT_ATTRIB_SPECULAR(f) (MAT_ATTRIB_FRONT_SPECULAR+(f)) 
+#define MAT_ATTRIB_EMISSION(f) (MAT_ATTRIB_FRONT_EMISSION+(f)) 
+#define MAT_ATTRIB_SHININESS(f)(MAT_ATTRIB_FRONT_SHININESS+(f))
+#define MAT_ATTRIB_INDEXES(f)  (MAT_ATTRIB_FRONT_INDEXES+(f))  
 
-#define BACK_MATERIAL_BITS	(BACK_EMISSION_BIT | BACK_AMBIENT_BIT | \
-				 BACK_DIFFUSE_BIT | BACK_SPECULAR_BIT | \
-				 BACK_SHININESS_BIT | BACK_INDEXES_BIT)
+#define MAT_INDEX_AMBIENT  0
+#define MAT_INDEX_DIFFUSE  1
+#define MAT_INDEX_SPECULAR 2
+
+#define MAT_BIT_FRONT_AMBIENT         (1<<MAT_ATTRIB_FRONT_AMBIENT)
+#define MAT_BIT_BACK_AMBIENT          (1<<MAT_ATTRIB_BACK_AMBIENT)
+#define MAT_BIT_FRONT_DIFFUSE         (1<<MAT_ATTRIB_FRONT_DIFFUSE)
+#define MAT_BIT_BACK_DIFFUSE          (1<<MAT_ATTRIB_BACK_DIFFUSE)
+#define MAT_BIT_FRONT_SPECULAR        (1<<MAT_ATTRIB_FRONT_SPECULAR)
+#define MAT_BIT_BACK_SPECULAR         (1<<MAT_ATTRIB_BACK_SPECULAR)
+#define MAT_BIT_FRONT_EMISSION        (1<<MAT_ATTRIB_FRONT_EMISSION)
+#define MAT_BIT_BACK_EMISSION         (1<<MAT_ATTRIB_BACK_EMISSION)
+#define MAT_BIT_FRONT_SHININESS       (1<<MAT_ATTRIB_FRONT_SHININESS)
+#define MAT_BIT_BACK_SHININESS        (1<<MAT_ATTRIB_BACK_SHININESS)
+#define MAT_BIT_FRONT_INDEXES         (1<<MAT_ATTRIB_FRONT_INDEXES)
+#define MAT_BIT_BACK_INDEXES          (1<<MAT_ATTRIB_BACK_INDEXES)
+
+
+#define FRONT_MATERIAL_BITS	(MAT_BIT_FRONT_EMISSION | 	\
+				 MAT_BIT_FRONT_AMBIENT |	\
+				 MAT_BIT_FRONT_DIFFUSE | 	\
+				 MAT_BIT_FRONT_SPECULAR |	\
+				 MAT_BIT_FRONT_SHININESS | 	\
+				 MAT_BIT_FRONT_INDEXES)
+
+#define BACK_MATERIAL_BITS	(MAT_BIT_BACK_EMISSION |	\
+				 MAT_BIT_BACK_AMBIENT |		\
+				 MAT_BIT_BACK_DIFFUSE |		\
+				 MAT_BIT_BACK_SPECULAR |	\
+				 MAT_BIT_BACK_SHININESS |	\
+				 MAT_BIT_BACK_INDEXES)
 
 #define ALL_MATERIAL_BITS	(FRONT_MATERIAL_BITS | BACK_MATERIAL_BITS)
 /*@}*/
@@ -331,14 +363,7 @@ struct gl_lightmodel {
  */
 struct gl_material
 {
-   GLfloat Ambient[4];
-   GLfloat Diffuse[4];
-   GLfloat Specular[4];
-   GLfloat Emission[4];
-   GLfloat Shininess;
-   GLfloat AmbientIndex;	/**< for color index lighting */
-   GLfloat DiffuseIndex;	/**< for color index lighting */
-   GLfloat SpecularIndex;	/**< for color index lighting */
+   GLfloat Attrib[MAT_ATTRIB_MAX][4];
 };
 
 
@@ -534,7 +559,7 @@ struct gl_enable_attrib {
    GLboolean VertexProgram;
    GLboolean VertexProgramPointSize;
    GLboolean VertexProgramTwoSide;
-   /* GL_NV_point_sprite */
+   /* GL_ARB_point_sprite / GL_NV_point_sprite */
    GLboolean PointSprite;
 };
 
@@ -664,7 +689,7 @@ struct gl_light_attrib {
     * Must flush FLUSH_VERTICES before referencing:
     */
    /*@{*/
-   struct gl_material Material[2];	/**< Material 0=front, 1=back */
+   struct gl_material Material; 	/**< Includes front & back values */
    /*@}*/
 
    GLboolean Enabled;			/**< Lighting enabled flag */
@@ -821,9 +846,9 @@ struct gl_point_attrib {
    GLfloat MinSize, MaxSize;	/**< GL_EXT_point_parameters */
    GLfloat Threshold;		/**< GL_EXT_point_parameters */
    GLboolean _Attenuated;	/**< True if Params != [1, 0, 0] */
-   GLboolean PointSprite;	/**< GL_NV_point_sprite */
-   GLboolean CoordReplace[MAX_TEXTURE_UNITS]; /**< GL_NV_point_sprite */
-   GLenum SpriteRMode;		/**< GL_NV_point_sprite */
+   GLboolean PointSprite;	/**< GL_NV_point_sprite / GL_NV_point_sprite */
+   GLboolean CoordReplace[MAX_TEXTURE_UNITS]; /**< GL_NV_point_sprite / GL_NV_point_sprite */
+   GLenum SpriteRMode;		/**< GL_NV_point_sprite (only!) */
 };
 
 
@@ -1048,6 +1073,7 @@ struct gl_texture_object {
    GLenum MagFilter;		/**< magnification filter */
    GLfloat MinLod;		/**< min lambda, OpenGL 1.2 */
    GLfloat MaxLod;		/**< max lambda, OpenGL 1.2 */
+   GLfloat LodBias;		/**< OpenGL 1.4 */
    GLint BaseLevel;		/**< min mipmap level, OpenGL 1.2 */
    GLint MaxLevel;		/**< max mipmap level, OpenGL 1.2 */
    GLfloat MaxAnisotropy;	/**< GL_EXT_texture_filter_anisotropic */
@@ -1327,7 +1353,8 @@ struct gl_selection {
 /**
  * 1-D Evaluator control points
  */
-struct gl_1d_map {
+struct gl_1d_map
+{
    GLuint Order;	/**< Number of control points */
    GLfloat u1, u2, du;	/**< u1, u2, 1.0/(u2-u1) */
    GLfloat *Points;	/**< Points to contiguous control points */
@@ -1337,7 +1364,8 @@ struct gl_1d_map {
 /**
  * 2-D Evaluator control points
  */
-struct gl_2d_map {
+struct gl_2d_map
+{
    GLuint Uorder;		/**< Number of control points in U dimension */
    GLuint Vorder;		/**< Number of control points in V dimension */
    GLfloat u1, u2, du;
@@ -1349,7 +1377,8 @@ struct gl_2d_map {
 /**
  * All evaluator control points
  */
-struct gl_evaluators {
+struct gl_evaluators
+{
    /** 
     * \name 1-D maps
     */
@@ -1385,35 +1414,30 @@ struct gl_evaluators {
 
 
 /**
- * \name NV_vertex_program runtime state
- */
-/*@{*/
-
-
-/** 
- * Machine state (i.e. the register file) 
- */
-struct vp_machine
-{
-   GLfloat Registers[MAX_NV_VERTEX_PROGRAM_TEMPS
-                    + MAX_NV_VERTEX_PROGRAM_PARAMS
-                    + MAX_NV_VERTEX_PROGRAM_INPUTS
-                    + MAX_NV_VERTEX_PROGRAM_OUTPUTS][4];
-   GLint AddressReg;  /* might someday be a 4-vector */
-};
-
-
-/**
  * NV_fragment_program runtime state
  */
 struct fp_machine
 {
-   GLfloat Registers[MAX_NV_FRAGMENT_PROGRAM_TEMPS
-                    + MAX_NV_FRAGMENT_PROGRAM_PARAMS
-                    + MAX_NV_FRAGMENT_PROGRAM_INPUTS
-                    + MAX_NV_FRAGMENT_PROGRAM_OUTPUTS
-                    + MAX_NV_FRAGMENT_PROGRAM_WRITE_ONLYS][4];
+   GLfloat Temporaries[MAX_NV_FRAGMENT_PROGRAM_TEMPS][4];
+   GLfloat Inputs[MAX_NV_FRAGMENT_PROGRAM_INPUTS][4];
+   GLfloat Outputs[MAX_NV_FRAGMENT_PROGRAM_OUTPUTS][4];
    GLuint CondCodes[4];
+};
+
+
+/**
+ * Names of the various vertex/fragment register files
+ */
+enum register_file
+{
+   PROGRAM_TEMPORARY = 10,
+   PROGRAM_INPUT,
+   PROGRAM_OUTPUT,
+   PROGRAM_LOCAL_PARAM,
+   PROGRAM_ENV_PARAM,
+   PROGRAM_NAMED_PARAM,
+   PROGRAM_STATE_VAR,
+   PROGRAM_WRITE_ONLY
 };
 
 
@@ -1421,15 +1445,7 @@ struct fp_machine
 struct vp_instruction;
 struct fp_instruction;
 
-/**
- * Program parameters 
- */
-struct program_parameter
-{
-   const char *Name;
-   GLfloat Values[4];
-   GLboolean Constant;
-};
+struct program_parameter_list;
 
 
 /**
@@ -1474,8 +1490,7 @@ struct fragment_program
    GLuint NumAluInstructions; /**< GL_ARB_fragment_program */
    GLuint NumTexInstructions;
    GLuint NumTexIndirections;
-   struct program_parameter *Parameters; /**< array [NumParameters] */
-   GLuint NumParameters;
+   struct program_parameter_list *Parameters; /**< array [NumParameters] */
 };
 
 
@@ -1497,10 +1512,16 @@ struct vertex_program_state
    GLboolean PointSizeEnabled;           /**< GL_VERTEX_PROGRAM_POINT_SIZE_NV */
    GLboolean TwoSideEnabled;             /**< GL_VERTEX_PROGRAM_TWO_SIDE_NV */
    struct vertex_program *Current;       /**< ptr to currently bound program */
-   struct vp_machine Machine;            /**< machine state */
 
    GLenum TrackMatrix[MAX_NV_VERTEX_PROGRAM_PARAMS / 4];
    GLenum TrackMatrixTransform[MAX_NV_VERTEX_PROGRAM_PARAMS / 4];
+
+   GLfloat Parameters[MAX_NV_VERTEX_PROGRAM_PARAMS][4]; /* Env params */
+   /* Only used during program execution (may be moved someday): */
+   GLfloat Temporaries[MAX_NV_VERTEX_PROGRAM_TEMPS][4];
+   GLfloat Inputs[MAX_NV_VERTEX_PROGRAM_INPUTS][4];
+   GLfloat Outputs[MAX_NV_VERTEX_PROGRAM_OUTPUTS][4];
+   GLint AddressReg[4];
 
 #if FEATURE_MESA_program_debug
    GLprogramcallbackMESA Callback;
@@ -1519,6 +1540,7 @@ struct fragment_program_state
    GLboolean Enabled;                    /* GL_VERTEX_PROGRAM_NV */
    struct fragment_program *Current;     /* ptr to currently bound program */
    struct fp_machine Machine;            /* machine state */
+   GLfloat Parameters[MAX_NV_FRAGMENT_PROGRAM_PARAMS][4]; /* Env params */
 
 #if FEATURE_MESA_program_debug
    GLprogramcallbackMESA Callback;
@@ -1528,7 +1550,6 @@ struct fragment_program_state
 #endif
 };
 
-/*@}*/
 
 /*
  * State for GL_ARB_occlusion_query
@@ -1545,7 +1566,8 @@ struct occlusion_state
 /**
  * State which can be shared by multiple contexts:
  */
-struct gl_shared_state {
+struct gl_shared_state
+{
    _glthread_Mutex Mutex;		   /**< for thread safety */
    GLint RefCount;			   /**< Reference count */
    struct _mesa_HashTable *DisplayList;	   /**< Display lists hash table */
@@ -1588,7 +1610,8 @@ struct gl_shared_state {
  * In C++ terms, think of this as a base class from which device drivers
  * will make derived classes.
  */
-struct gl_frame_buffer {
+struct gl_frame_buffer
+{
    GLvisual Visual;		/**< The corresponding visual */
 
    GLuint Width, Height;	/**< size of frame buffer in pixels */
@@ -1639,7 +1662,8 @@ struct gl_frame_buffer {
  * Constants which may be overridden by device driver during context creation
  * but are never changed after that.
  */
-struct gl_constants {
+struct gl_constants
+{
    GLint MaxTextureLevels;		/**< Maximum number of allowed mipmap levels. */ 
    GLint Max3DTextureLevels;		/**< Maximum number of allowed mipmap levels for 3D texture targets. */
    GLint MaxCubeTextureLevels;          /**< Maximum number of allowed mipmap levels for GL_ARB_texture_cube_map */
@@ -1691,7 +1715,8 @@ struct gl_constants {
 /**
  * List of extensions.
  */
-struct gl_extensions {
+struct gl_extensions
+{
    /**
     * \name Flags to quickly test if certain extensions are available.
     * 
@@ -1705,6 +1730,7 @@ struct gl_extensions {
    GLboolean ARB_multisample;
    GLboolean ARB_multitexture;
    GLboolean ARB_occlusion_query;
+   GLboolean ARB_point_sprite;
    GLboolean ARB_shadow;
    GLboolean ARB_texture_border_clamp;
    GLboolean ARB_texture_compression;
@@ -1747,6 +1773,7 @@ struct gl_extensions {
    GLboolean EXT_vertex_array_set;
    GLboolean HP_occlusion_test;
    GLboolean IBM_rasterpos_clip;
+   GLboolean IBM_multimode_draw_arrays;
    GLboolean MESA_pack_invert;
    GLboolean MESA_packed_depth_stencil;
    GLboolean MESA_program_debug;

@@ -525,8 +525,7 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
 	 if (texUnit->LodBias == param[0])
 	    return;
 	 FLUSH_VERTICES(ctx, _NEW_TEXTURE);
-         texUnit->LodBias = CLAMP(param[0], -ctx->Const.MaxTextureLodBias,
-                                  ctx->Const.MaxTextureLodBias);
+         texUnit->LodBias = param[0];
       }
       else {
          TE_ERROR(GL_INVALID_ENUM, "glTexEnv(pname=%s)", pname);
@@ -534,8 +533,9 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
       }
    }
    else if (target == GL_POINT_SPRITE_NV) {
-      /* GL_NV_point_sprite */
-      if (!ctx->Extensions.NV_point_sprite) {
+      /* GL_ARB_point_sprite / GL_NV_point_sprite */
+      if (!ctx->Extensions.NV_point_sprite
+	  && !ctx->Extensions.ARB_point_sprite) {
 	 _mesa_error( ctx, GL_INVALID_ENUM, "glTexEnv(target=0x%x)", target );
 	 return;
       }
@@ -806,8 +806,9 @@ _mesa_GetTexEnvfv( GLenum target, GLenum pname, GLfloat *params )
       }
    }
    else if (target == GL_POINT_SPRITE_NV) {
-      /* GL_NV_point_sprite */
-      if (!ctx->Extensions.NV_point_sprite) {
+      /* GL_ARB_point_sprite / GL_NV_point_sprite */
+      if (!ctx->Extensions.NV_point_sprite
+	  && !ctx->Extensions.ARB_point_sprite) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glGetTexEnvfv(target)" );
          return;
       }
@@ -1020,8 +1021,9 @@ _mesa_GetTexEnviv( GLenum target, GLenum pname, GLint *params )
       }
    }
    else if (target == GL_POINT_SPRITE_NV) {
-      /* GL_NV_point_sprite */
-      if (!ctx->Extensions.NV_point_sprite) {
+      /* GL_ARB_point_sprite / GL_NV_point_sprite */
+      if (!ctx->Extensions.NV_point_sprite
+	  && !ctx->Extensions.ARB_point_sprite) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glGetTexEnviv(target)" );
          return;
       }
@@ -1394,6 +1396,15 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
             _mesa_error(ctx, GL_INVALID_ENUM,
                         "glTexParameter(pname=GL_DEPTH_TEXTURE_MODE_ARB)");
             return;
+         }
+         break;
+      case GL_TEXTURE_LOD_BIAS:
+         /* NOTE: this is really part of OpenGL 1.4, not EXT_texture_lod_bias*/
+         if (ctx->Extensions.EXT_texture_lod_bias) {
+            if (texObj->LodBias != params[0]) {
+               FLUSH_VERTICES(ctx, _NEW_TEXTURE);
+               texObj->LodBias = params[0];
+            }
          }
          break;
 
@@ -1772,6 +1783,12 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
             return;
          }
          break;
+      case GL_TEXTURE_LOD_BIAS:
+         if (ctx->Extensions.EXT_texture_lod_bias) {
+            *params = obj->LodBias;
+            break;
+         }
+         break;
       default:
          ; /* silence warnings */
    }
@@ -1798,6 +1815,12 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
    switch (pname) {
       case GL_TEXTURE_MAG_FILTER:
          *params = (GLint) obj->MagFilter;
+      case GL_TEXTURE_LOD_BIAS:
+         if (ctx->Extensions.EXT_texture_lod_bias) {
+            *params = (GLint) obj->LodBias;
+            break;
+         }
+         break;
          return;
       case GL_TEXTURE_MIN_FILTER:
          *params = (GLint) obj->MinFilter;
