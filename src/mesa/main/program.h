@@ -36,8 +36,12 @@
 
 
 /* for GL_ARB_v_p and GL_ARB_f_p SWZ instruction */
-#define SWIZZLE_ZERO 100
-#define SWIZZLE_ONE  101
+#define SWIZZLE_X    0
+#define SWIZZLE_Y    1
+#define SWIZZLE_Z    2
+#define SWIZZLE_W    3
+#define SWIZZLE_ZERO 4		/* keep these values together: KW */
+#define SWIZZLE_ONE  5		/* keep these values together: KW */
 
 
 /*
@@ -55,7 +59,7 @@ _mesa_find_line_column(const GLubyte *string, const GLubyte *pos,
                        GLint *line, GLint *col);
 
 extern struct program *
-_mesa_alloc_program(GLcontext *ctx, GLenum target, GLuint id);
+_mesa_new_program(GLcontext *ctx, GLenum target, GLuint id);
 
 extern void
 _mesa_delete_program(GLcontext *ctx, struct program *prog);

@@ -50,6 +50,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "tnl/tnl.h"
 #include "tnl/t_pipeline.h"
 
+#include "drivers/common/driverfuncs.h"
+
 #include "radeon_context.h"
 #include "radeon_ioctl.h"
 #include "radeon_state.h"
@@ -102,7 +104,7 @@ static const GLubyte *radeonGetString( GLcontext *ctx, GLenum name )
       offset = driGetRendererString( buffer, "Radeon", DRIVER_DATE,
 				     agp_mode );
 
-      sprintf( & buffer[ offset ], "%sTCL",
+      sprintf( & buffer[ offset ], " %sTCL",
 	       !(rmesa->TclFallback & RADEON_TCL_FALLBACK_TCL_DISABLE)
 	       ? "" : "NO-" );
 
@@ -130,19 +132,16 @@ static const char * const card_extensions[] =
     "GL_EXT_blend_subtract",
     "GL_EXT_secondary_color",
     "GL_EXT_texture_edge_clamp",
-    "GL_EXT_texture_env_add",
     "GL_EXT_texture_env_combine",
     "GL_EXT_texture_env_dot3",
     "GL_EXT_texture_filter_anisotropic",
     "GL_EXT_texture_lod_bias",
+    "GL_EXT_texture_mirror_clamp",
     "GL_ATI_texture_env_combine3",
     "GL_ATI_texture_mirror_once",
-    "GL_IBM_texture_mirrored_repeat",
     "GL_MESA_ycbcr_texture",
     "GL_NV_blend_square",
     "GL_SGIS_generate_mipmap",
-    "GL_SGIS_texture_border_clamp",
-    "GL_SGIS_texture_edge_clamp",
     NULL
 };
 
@@ -178,15 +177,11 @@ static const struct tnl_pipeline_stage *radeon_pipeline[] = {
 
 /* Initialize the driver's misc functions.
  */
-static void radeonInitDriverFuncs( GLcontext *ctx )
+static void radeonInitDriverFuncs( struct dd_function_table *functions )
 {
-    ctx->Driver.GetBufferSize		= radeonGetBufferSize;
-    ctx->Driver.ResizeBuffers           = _swrast_alloc_buffers;
-    ctx->Driver.GetString		= radeonGetString;
-
-    ctx->Driver.Error			= NULL;
-    ctx->Driver.DrawPixels		= NULL;
-    ctx->Driver.Bitmap			= NULL;
+    functions->GetBufferSize	= radeonGetBufferSize;
+    functions->ResizeBuffers	= _swrast_alloc_buffers;
+    functions->GetString	= radeonGetString;
 }
 
 static const struct dri_debug_control debug_control[] =
@@ -225,6 +220,7 @@ radeonCreateContext( const __GLcontextModes *glVisual,
 {
    __DRIscreenPrivate *sPriv = driContextPriv->driScreenPriv;
    radeonScreenPtr screen = (radeonScreenPtr)(sPriv->private);
+   struct dd_function_table functions;
    radeonContextPtr rmesa;
    GLcontext *ctx, *shareCtx;
    int i;
@@ -239,12 +235,29 @@ radeonCreateContext( const __GLcontextModes *glVisual,
    if ( !rmesa )
       return GL_FALSE;
 
+   /* Parse configuration files.
+    * Do this here so that initialMaxAnisotropy is set before we create
+    * the default textures.
+    */
+   driParseConfigFiles (&rmesa->optionCache, &screen->optionCache,
+			screen->driScreen->myNum, "radeon");
+   rmesa->initialMaxAnisotropy = driQueryOptionf(&rmesa->optionCache,
+                                                 "def_max_anisotropy");
+
+   /* Init default driver functions then plug in our Radeon-specific functions
+    * (the texture functions are especially important)
+    */
+   _mesa_init_driver_functions( &functions );
+   radeonInitDriverFuncs( &functions );
+   radeonInitTextureFuncs( &functions );
+
    /* Allocate the Mesa context */
    if (sharedContextPrivate)
       shareCtx = ((radeonContextPtr) sharedContextPrivate)->glCtx;
    else
       shareCtx = NULL;
-   rmesa->glCtx = _mesa_create_context(glVisual, shareCtx, (void *) rmesa, GL_TRUE);
+   rmesa->glCtx = _mesa_create_context(glVisual, shareCtx,
+                                       &functions, (void *) rmesa);
    if (!rmesa->glCtx) {
       FREE(rmesa);
       return GL_FALSE;
@@ -259,10 +272,6 @@ radeonCreateContext( const __GLcontextModes *glVisual,
    rmesa->dri.hwLock = &sPriv->pSAREA->lock;
    rmesa->dri.fd = sPriv->fd;
    rmesa->dri.drmMinor = sPriv->drmMinor;
-
-   /* Parse configuration files */
-   driParseConfigFiles (&rmesa->optionCache, &screen->optionCache,
-			screen->driScreen->myNum, "radeon");
 
    rmesa->radeonScreen = screen;
    rmesa->sarea = (RADEONSAREAPrivPtr)((GLubyte *)sPriv->pSAREA +
@@ -389,11 +398,10 @@ radeonCreateContext( const __GLcontextModes *glVisual,
    if (rmesa->dri.drmMinor >= 9)
       _mesa_enable_extension( ctx, "GL_NV_texture_rectangle");
 
-   radeonInitDriverFuncs( ctx );
+   /* XXX these should really go right after _mesa_init_driver_functions() */
    radeonInitIoctlFuncs( ctx );
    radeonInitStateFuncs( ctx );
    radeonInitSpanFuncs( ctx );
-   radeonInitTextureFuncs( ctx );
    radeonInitState( rmesa );
    radeonInitSwtcl( ctx );
 
@@ -564,7 +572,7 @@ radeonMakeCurrent( __DRIcontextPrivate *driContextPriv,
 	 (radeonContextPtr) driContextPriv->driverPrivate;
 
       if (RADEON_DEBUG & DEBUG_DRI)
-	 fprintf(stderr, "%s ctx %p\n", __FUNCTION__, newCtx->glCtx);
+	 fprintf(stderr, "%s ctx %p\n", __FUNCTION__, (void *) newCtx->glCtx);
 
       if ( newCtx->dri.drawable != driDrawPriv ) {
 	 driDrawableInitVBlank( driDrawPriv, newCtx->vblank_flags );
@@ -604,7 +612,7 @@ radeonUnbindContext( __DRIcontextPrivate *driContextPriv )
    radeonContextPtr rmesa = (radeonContextPtr) driContextPriv->driverPrivate;
 
    if (RADEON_DEBUG & DEBUG_DRI)
-      fprintf(stderr, "%s ctx %p\n", __FUNCTION__, rmesa->glCtx);
+      fprintf(stderr, "%s ctx %p\n", __FUNCTION__, (void *) rmesa->glCtx);
 
    return GL_TRUE;
 }

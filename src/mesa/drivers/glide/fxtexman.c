@@ -335,8 +335,12 @@ fxTMFindOldestObject(fxMesaContext fxMesa, int tmu)
       info = fxTMGetTexInfo(tmp);
 
       if (info && info->isInTM &&
-	  ((info->whichTMU == tmu) || (info->whichTMU == FX_TMU_BOTH) ||
-	   (info->whichTMU == FX_TMU_SPLIT))) {
+	  ((info->whichTMU == tmu) ||
+	   (info->whichTMU == FX_TMU_BOTH) ||
+	   (info->whichTMU == FX_TMU_SPLIT) ||
+	   fxMesa->HaveTexUma
+	  )
+	 ) {
 	 lasttime = info->lastTimeUsed;
 
 	 if (lasttime > bindnumber)
@@ -366,7 +370,9 @@ fxTMFindOldestObject(fxMesaContext fxMesa, int tmu)
    }
    else {
        if (TDFX_DEBUG & VERBOSE_TEXTURE) {
-          fprintf(stderr, "fxTMFindOldestObject: %d age=%d\n", obj->Name, old);
+          if (obj != NULL) {
+             fprintf(stderr, "fxTMFindOldestObject: %d age=%d\n", obj->Name, old);
+          }
        }
        return obj;
    }
@@ -436,7 +442,7 @@ fxTMMoveInTM_NoLock(fxMesaContext fxMesa, struct gl_texture_object *tObj,
 
       for (i = FX_largeLodValue(ti->info), l = ti->minLevel;
 	   i <= FX_smallLodValue(ti->info); i++, l++) {
-	 struct gl_texture_image *texImage = tObj->Image[l];
+	 struct gl_texture_image *texImage = tObj->Image[0][l];
 	 grTexDownloadMipMapLevel(where,
 					    ti->tm[where]->startAddr,
 					    FX_valueToLod(i),
@@ -458,7 +464,7 @@ fxTMMoveInTM_NoLock(fxMesaContext fxMesa, struct gl_texture_object *tObj,
 
       for (i = FX_largeLodValue(ti->info), l = ti->minLevel;
 	   i <= FX_smallLodValue(ti->info); i++, l++) {
-	 struct gl_texture_image *texImage = tObj->Image[l];
+	 struct gl_texture_image *texImage = tObj->Image[0][l];
 
 	 grTexDownloadMipMapLevel(GR_TMU0,
 					    ti->tm[FX_TMU0]->startAddr,
@@ -490,7 +496,7 @@ fxTMMoveInTM_NoLock(fxMesaContext fxMesa, struct gl_texture_object *tObj,
 
       for (i = FX_largeLodValue(ti->info), l = ti->minLevel;
 	   i <= FX_smallLodValue(ti->info); i++, l++) {
-	 struct gl_texture_image *texImage = tObj->Image[l];
+	 struct gl_texture_image *texImage = tObj->Image[0][l];
 	 grTexDownloadMipMapLevel(GR_TMU0,
 					    ti->tm[FX_TMU0]->startAddr,
 					    FX_valueToLod(i),
@@ -539,7 +545,7 @@ fxTMReloadMipMapLevel(fxMesaContext fxMesa, struct gl_texture_object *tObj,
    tfxTexInfo *ti = fxTMGetTexInfo(tObj);
    GrLOD_t lodlevel;
    GLint tmu;
-   struct gl_texture_image *texImage = tObj->Image[level];
+   struct gl_texture_image *texImage = tObj->Image[0][level];
    tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
 
    if (TDFX_DEBUG & VERBOSE_TEXTURE) {
@@ -634,7 +640,7 @@ fxTMReloadSubMipMapLevel(fxMesaContext fxMesa,
    GrLOD_t lodlevel;
    unsigned short *data;
    GLint tmu;
-   struct gl_texture_image *texImage = tObj->Image[level];
+   struct gl_texture_image *texImage = tObj->Image[0][level];
    tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
 
    assert(mml);
@@ -765,12 +771,8 @@ fxTMFreeTexture(fxMesaContext fxMesa, struct gl_texture_object *tObj)
    fxTMMoveOutTM(fxMesa, tObj);
 
    for (i = 0; i < MAX_TEXTURE_LEVELS; i++) {
-      struct gl_texture_image *texImage = tObj->Image[i];
+      struct gl_texture_image *texImage = tObj->Image[0][i];
       if (texImage) {
-         if (texImage->Data) {
-            MESA_PBUFFER_FREE(texImage->Data);
-            texImage->Data = NULL;
-         }
          if (texImage->DriverData) {
             FREE(texImage->DriverData);
             texImage->DriverData = NULL;

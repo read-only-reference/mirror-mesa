@@ -75,10 +75,14 @@ static void i810AlphaFunc(GLcontext *ctx, GLenum func, GLfloat ref)
    imesa->Setup[I810_CTXREG_ZA] |= a;
 }
 
-static void i810BlendEquation(GLcontext *ctx, GLenum mode)
+static void i810BlendEquationSeparate(GLcontext *ctx,
+				      GLenum modeRGB, GLenum modeA)
 {
+   assert( modeRGB == modeA );
+
    /* Can only do GL_ADD equation in hardware */
-   FALLBACK( I810_CONTEXT(ctx), I810_FALLBACK_BLEND_EQ, mode != GL_FUNC_ADD_EXT);
+   FALLBACK( I810_CONTEXT(ctx), I810_FALLBACK_BLEND_EQ, 
+	     modeRGB != GL_FUNC_ADD);
 
    /* BlendEquation sets ColorLogicOpEnabled in an unexpected
     * manner.
@@ -88,7 +92,9 @@ static void i810BlendEquation(GLcontext *ctx, GLenum mode)
 	      ctx->Color.LogicOp != GL_COPY));
 }
 
-static void i810BlendFunc(GLcontext *ctx, GLenum sfactor, GLenum dfactor)
+static void i810BlendFuncSeparate( GLcontext *ctx, GLenum sfactorRGB,
+				     GLenum dfactorRGB, GLenum sfactorA,
+				     GLenum dfactorA )
 {
    i810ContextPtr imesa = I810_CONTEXT(ctx);
    GLuint a = SDM_UPDATE_SRC_BLEND | SDM_UPDATE_DST_BLEND;
@@ -139,20 +145,6 @@ static void i810BlendFunc(GLcontext *ctx, GLenum sfactor, GLenum dfactor)
       imesa->Setup[I810_CTXREG_SDM] &= ~(SDM_SRC_MASK|SDM_DST_MASK);
       imesa->Setup[I810_CTXREG_SDM] |= a;
    }
-}
-
-
-/* Shouldn't be called as the extension is disabled.
- */
-static void i810BlendFuncSeparate( GLcontext *ctx, GLenum sfactorRGB,
-				     GLenum dfactorRGB, GLenum sfactorA,
-				     GLenum dfactorA )
-{
-   if (dfactorRGB != dfactorA || sfactorRGB != sfactorA) {
-      _mesa_error( ctx, GL_INVALID_OPERATION, "glBlendEquation (disabled)");
-   }
-
-   i810BlendFunc( ctx, sfactorRGB, dfactorRGB );
 }
 
 
@@ -973,8 +965,7 @@ void i810InitStateFuncs(GLcontext *ctx)
    /* API callbacks
     */
    ctx->Driver.AlphaFunc = i810AlphaFunc;
-   ctx->Driver.BlendEquation = i810BlendEquation;
-   ctx->Driver.BlendFunc = i810BlendFunc;
+   ctx->Driver.BlendEquationSeparate = i810BlendEquationSeparate;
    ctx->Driver.BlendFuncSeparate = i810BlendFuncSeparate;
    ctx->Driver.ClearColor = i810ClearColor;
    ctx->Driver.ColorMask = i810ColorMask;

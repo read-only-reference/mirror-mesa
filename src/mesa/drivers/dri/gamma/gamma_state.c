@@ -177,19 +177,12 @@ static void gammaDDAlphaFunc( GLcontext *ctx, GLenum func, GLfloat ref )
    gmesa->new_state |= GAMMA_NEW_ALPHA;
 }
 
-static void gammaDDBlendEquation( GLcontext *ctx, GLenum mode )
+static void gammaDDBlendEquationSeparate( GLcontext *ctx, 
+					  GLenum modeRGB, GLenum modeA )
 {
    gammaContextPtr gmesa = GAMMA_CONTEXT(ctx);
 
-   FLUSH_BATCH( gmesa );
-
-   gmesa->new_state |= GAMMA_NEW_ALPHA;
-}
-
-static void gammaDDBlendFunc( GLcontext *ctx, GLenum sfactor, GLenum dfactor )
-{
-   gammaContextPtr gmesa = GAMMA_CONTEXT(ctx);
-
+   assert( modeRGB == modeA );
    FLUSH_BATCH( gmesa );
 
    gmesa->new_state |= GAMMA_NEW_ALPHA;
@@ -1698,8 +1691,7 @@ void gammaDDInitStateFuncs( GLcontext *ctx )
    ctx->Driver.ColorMask		= gammaDDColorMask;
 
    ctx->Driver.AlphaFunc		= gammaDDAlphaFunc;
-   ctx->Driver.BlendEquation		= gammaDDBlendEquation;
-   ctx->Driver.BlendFunc		= gammaDDBlendFunc;
+   ctx->Driver.BlendEquationSeparate	= gammaDDBlendEquationSeparate;
    ctx->Driver.BlendFuncSeparate	= gammaDDBlendFuncSeparate;
    ctx->Driver.ClearDepth		= gammaDDClearDepth;
    ctx->Driver.CullFace			= gammaDDCullFace;

@@ -7,9 +7,9 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.1
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -195,6 +195,47 @@ enum {
 #define VERT_BIT_TEX7    (1 << VERT_ATTRIB_TEX7)
 
 #define VERT_BIT_TEX(u)  (1 << (VERT_ATTRIB_TEX0 + (u)))
+
+
+/* Fragment programs use a different but related set of attributes:
+ */
+
+/* Fragment input registers / attributes */
+#define FRAG_ATTRIB_WPOS  0
+#define FRAG_ATTRIB_COL0  1
+#define FRAG_ATTRIB_COL1  2
+#define FRAG_ATTRIB_FOGC  3
+#define FRAG_ATTRIB_TEX0  4
+#define FRAG_ATTRIB_TEX1  5
+#define FRAG_ATTRIB_TEX2  6
+#define FRAG_ATTRIB_TEX3  7
+#define FRAG_ATTRIB_TEX4  8
+#define FRAG_ATTRIB_TEX5  9
+#define FRAG_ATTRIB_TEX6  10
+#define FRAG_ATTRIB_TEX7  11
+
+/* Bitmasks for the above */
+#define FRAG_BIT_WPOS  (1 << FRAG_ATTRIB_WPOS)
+#define FRAG_BIT_COL0  (1 << FRAG_ATTRIB_COL0)
+#define FRAG_BIT_COL1  (1 << FRAG_ATTRIB_COL1)
+#define FRAG_BIT_FOGC  (1 << FRAG_ATTRIB_FOGC)
+#define FRAG_BIT_TEX0  (1 << FRAG_ATTRIB_TEX0)
+#define FRAG_BIT_TEX1  (1 << FRAG_ATTRIB_TEX1)
+#define FRAG_BIT_TEX2  (1 << FRAG_ATTRIB_TEX2)
+#define FRAG_BIT_TEX3  (1 << FRAG_ATTRIB_TEX3)
+#define FRAG_BIT_TEX4  (1 << FRAG_ATTRIB_TEX4)
+#define FRAG_BIT_TEX5  (1 << FRAG_ATTRIB_TEX5)
+#define FRAG_BIT_TEX6  (1 << FRAG_ATTRIB_TEX6)
+#define FRAG_BIT_TEX7  (1 << FRAG_ATTRIB_TEX7)
+
+#define FRAG_BITS_TEX_ANY (FRAG_BIT_TEX0|	\
+			   FRAG_BIT_TEX1|	\
+			   FRAG_BIT_TEX2|	\
+			   FRAG_BIT_TEX3|	\
+			   FRAG_BIT_TEX4|	\
+			   FRAG_BIT_TEX5|	\
+			   FRAG_BIT_TEX6|	\
+			   FRAG_BIT_TEX7)
 
 
 
@@ -419,7 +460,8 @@ struct gl_colorbuffer_attrib {
    GLenum BlendDstRGB;			/**< Blending destination operator */
    GLenum BlendSrcA;			/**< GL_INGR_blend_func_separate */
    GLenum BlendDstA;			/**< GL_INGR_blend_func_separate */
-   GLenum BlendEquation;		/**< Blending equation */
+   GLenum BlendEquationRGB;		/**< Blending equation */
+   GLenum BlendEquationA;		/**< GL_EXT_blend_equation_separate */
    GLfloat BlendColor[4];		/**< Blending color */
    /*@}*/
 
@@ -955,20 +997,31 @@ struct gl_stencil_attrib {
 #define ENABLE_TEXGEN(i) (ENABLE_TEXGEN0 << (i))
 #define ENABLE_TEXMAT(i) (ENABLE_TEXMAT0 << (i))
 
+
 /**
- * Texel fetch function prototype.
+ * Texel fetch function prototype.  We use texel fetch functions to
+ * extract RGBA, color indexes and depth components out of 1D, 2D and 3D
+ * texture images.  These functions help to isolate us from the gritty
+ * details of all the various texture image encodings.
  * 
  * \param texImage texture image.
  * \param col texel column.
  * \param row texel row.
- * \param img texel level.
- * \param texelOut output texel. If \p texImage is color-index, \p texelOut
- * returns <tt>GLchan[1]</tt>.  If \p texImage is depth, \p texelOut returns
- * <tt>GLfloat[1]</tt>.  Otherwise, \p texelOut returns <tt>GLchan[4]</tt>.
+ * \param img texel image level/layer.
+ * \param texelOut output texel (up to 4 GLchans)
  */
-typedef void (*FetchTexelFunc)( const struct gl_texture_image *texImage,
-                                GLint col, GLint row, GLint img,
-                                GLvoid *texelOut );
+typedef void (*FetchTexelFuncC)( const struct gl_texture_image *texImage,
+                                 GLint col, GLint row, GLint img,
+                                 GLchan *texelOut );
+
+/**
+ * As above, but returns floats.
+ * Used for depth component images and for upcoming signed/float
+ * texture images.
+ */
+typedef void (*FetchTexelFuncF)( const struct gl_texture_image *texImage,
+                                 GLint col, GLint row, GLint img,
+                                 GLfloat *texelOut );
 
 /**
  * Texture format record 
@@ -995,9 +1048,12 @@ struct gl_texture_format {
     * \name Texel fetch function pointers
     */
    /*@{*/
-   FetchTexelFunc FetchTexel1D;
-   FetchTexelFunc FetchTexel2D;
-   FetchTexelFunc FetchTexel3D;
+   FetchTexelFuncC FetchTexel1D;
+   FetchTexelFuncC FetchTexel2D;
+   FetchTexelFuncC FetchTexel3D;
+   FetchTexelFuncF FetchTexel1Df;
+   FetchTexelFuncF FetchTexel2Df;
+   FetchTexelFuncF FetchTexel3Df;
    /*@}*/
 };
 
@@ -1033,7 +1089,8 @@ struct gl_texture_image {
 
    const struct gl_texture_format *TexFormat;
 
-   FetchTexelFunc FetchTexel;	/**< Texel fetch function pointer */
+   FetchTexelFuncC FetchTexelc;	/**< GLchan texel fetch function pointer */
+   FetchTexelFuncF FetchTexelf;	/**< Float texel fetch function pointer */
 
    GLboolean IsCompressed;	/**< GL_ARB_texture_compression */
    GLuint CompressedSize;	/**< GL_ARB_texture_compression */
@@ -1046,6 +1103,13 @@ struct gl_texture_image {
    /*@}*/
 };
 
+#define FACE_POS_X   0
+#define FACE_NEG_X   1
+#define FACE_POS_Y   2
+#define FACE_NEG_Y   3
+#define FACE_POS_Z   4
+#define FACE_NEG_Z   5
+#define MAX_FACES  6
 
 /**
  * Texture object record
@@ -1084,20 +1148,7 @@ struct gl_texture_object {
    GLboolean GenerateMipmap;    /**< GL_SGIS_generate_mipmap */
    GLboolean _IsPowerOfTwo;	/**< Are all image dimensions powers of two? */
 
-   struct gl_texture_image *Image[MAX_TEXTURE_LEVELS];
-
-   /**
-    * \name Texture cube faces 
-    * 
-    * Image[] is alias for *PosX[MAX_TEXTURE_LEVELS];
-    */
-   /*@{*/
-   struct gl_texture_image *NegX[MAX_TEXTURE_LEVELS];
-   struct gl_texture_image *PosY[MAX_TEXTURE_LEVELS];
-   struct gl_texture_image *NegY[MAX_TEXTURE_LEVELS];
-   struct gl_texture_image *PosZ[MAX_TEXTURE_LEVELS];
-   struct gl_texture_image *NegZ[MAX_TEXTURE_LEVELS];
-   /*@}*/
+   struct gl_texture_image *Image[MAX_FACES][MAX_TEXTURE_LEVELS];
 
    /** GL_EXT_paletted_texture */
    struct gl_color_table Palette;
@@ -1652,10 +1703,10 @@ struct gl_frame_buffer
 
    /** \name Software alpha planes */
    /*@{*/
-   GLvoid *FrontLeftAlpha;	/**< array [Width*Height] of GLubyte */
-   GLvoid *BackLeftAlpha;	/**< array [Width*Height] of GLubyte */
-   GLvoid *FrontRightAlpha;	/**< array [Width*Height] of GLubyte */
-   GLvoid *BackRightAlpha;	/**< array [Width*Height] of GLubyte */
+   GLchan *FrontLeftAlpha;	/**< array [Width*Height] of GLchan */
+   GLchan *BackLeftAlpha;	/**< array [Width*Height] of GLchan */
+   GLchan *FrontRightAlpha;	/**< array [Width*Height] of GLchan */
+   GLchan *BackRightAlpha;	/**< array [Width*Height] of GLchan */
    /*@}*/
 
    /** 
@@ -1762,6 +1813,7 @@ struct gl_extensions
    GLboolean ATI_texture_mirror_once;
    GLboolean ATI_texture_env_combine3;
    GLboolean EXT_blend_color;
+   GLboolean EXT_blend_equation_separate;
    GLboolean EXT_blend_func_separate;
    GLboolean EXT_blend_logic_op;
    GLboolean EXT_blend_minmax;
@@ -1871,7 +1923,7 @@ struct matrix_stack
 /**
  * \name Bits to indicate what state has changed.  
  *
- * 6 unused flags.
+ * 4 unused flags.
  */
 /*@{*/
 #define _NEW_MODELVIEW		0x1        /**< __GLcontextRec::ModelView */
@@ -1965,7 +2017,7 @@ struct matrix_stack
  */
 /*@{*/
 #define _DD_NEW_FLATSHADE                _NEW_LIGHT
-#define _DD_NEW_SEPARATE_SPECULAR        (_NEW_LIGHT | _NEW_FOG)
+#define _DD_NEW_SEPARATE_SPECULAR        (_NEW_LIGHT | _NEW_FOG | _NEW_PROGRAM)
 #define _DD_NEW_TRI_CULL_FRONT_BACK      _NEW_POLYGON
 #define _DD_NEW_TRI_LIGHT_TWOSIDE        _NEW_LIGHT
 #define _DD_NEW_TRI_UNFILLED             _NEW_POLYGON

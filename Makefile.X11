@@ -1,7 +1,7 @@
-# $Id: Makefile.X11,v 1.104 2003/12/21 04:06:31 brianp Exp $
+# $Id: Makefile.X11,v 1.113 2004/01/30 23:32:19 brianp Exp $
 
 # Mesa 3-D graphics library
-# Version:  6.0
+# Version:  6.1
 # 
 # Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
 # 
@@ -33,8 +33,9 @@ SHELL = /bin/sh
 
 default:
 	@echo "Type one of the following:"
-	@echo "  make aix                   for IBM RS/6000 with AIX"
-	@echo "  make aix-sl                for IBM RS/6000, make shared libs"
+	@echo "  make aix                   for AIX systems with xlc"
+	@echo "  make aix-sl                for AIX systems, make shared libs"
+	@echo "  make aix-gcc               for AIX sytems with gcc"
 	@echo "  make beos-r4               for BeOS R4"
 	@echo "  make cygnus                for Win95/NT using Cygnus-Win32"
 	@echo "  make cygnus-linux          for Win95/NT using Cygnus-Win32 under Linux"
@@ -104,8 +105,8 @@ default:
 # XXX we may have to split up this group of targets into those that
 # have a C++ compiler and those that don't for the SI-GLU library.
 
-aix aix-sl darwin freebsd freebsd-386 gcc-sl \
-cygnus cygnus-linux:
+aix aix-sl aix-gcc darwin freebsd freebsd-386 gcc-sl \
+cygnus cygnus-linux \
 hpux9 hpux9-sl hpux9-gcc hpux9-gcc-sl \
 hpux10 hpux10-sl hpux10-gcc hpux10-gcc-sl \
 linux linux-debug \
@@ -181,7 +182,7 @@ irix6-o32 irix6-o32-dso irix6-n32 irix6-n32-dso irix6-gcc-n32-sl:
 	fi
 	if [ -d src/glw ] ; then \
 		cd src/glw ; \
-		touch src/glw/depend ; \
+		touch depend ; \
 		$(MAKE) -f Makefile.X11 $@ ; \
 	fi
 	if [ -d progs/demos ] ; then \
@@ -220,7 +221,7 @@ irix6-64 irix6-64-dso:
 	fi
 	if [ -d src/glw ] ; then \
 		cd src/glw ; \
-		touch src/glw/depend ; \
+		touch depend ; \
 		$(MAKE) -f Makefile.X11 $@ ; \
 	fi
 	if [ -d progs/demos ] ; then \
@@ -237,6 +238,19 @@ irix6-64 irix6-64-dso:
 	fi
 	if [ -d progs/redbook ] ; then \
 		cd progs/redbook ; \
+		$(MAKE) -f Makefile.X11 $@ ; \
+	fi
+
+irix6-mgl-n32-dso:
+	-mkdir libMGL32
+	if [ -d src/mesa ] ; then \
+		cd src/mesa ; \
+		touch depend ; \
+		$(MAKE) -f Makefile.X11 $@ ; \
+	fi
+	if [ -d src/glu/sgi ] ; then \
+		cd src/glu/sgi ; \
+		touch depend ; \
 		$(MAKE) -f Makefile.X11 $@ ; \
 	fi
 
@@ -302,7 +316,7 @@ linux-ggi linux-x86-ggi:
 	fi
 	if [ -d src/glw ] ; then \
 		cd src/glw ; \
-		touch src/glw/depend ; \
+		touch depend ; \
 		$(MAKE) -f Makefile.X11 $@ ; \
 	fi
 	if [ -d progs/demos ] ; then \
@@ -364,6 +378,7 @@ linux-solo:
 	cd src/mesa/drivers/dri/gamma  ; touch depend ; $(MAKE) -f Makefile.solo $@
 	cd src/mesa/drivers/dri/tdfx   ; touch depend ; $(MAKE) -f Makefile.solo $@
 	cd src/mesa/drivers/dri/fb     ; touch depend ; $(MAKE) -f Makefile.solo $@
+	cd src/mesa/drivers/dri/unichrome ; touch depend ; $(MAKE) -f Makefile.solo $@
 	cd src/glx/mini                ; touch depend ; $(MAKE) -f Makefile.solo $@
 	if [ -d src/glu/sgi ] ; then \
 		cd src/glu/sgi ; \
@@ -402,20 +417,20 @@ linux-solo:
 # Remove .o files, emacs backup files, etc.
 # XXX this should be cleaned up
 clean:
-	if ! [ -f src/mesa/depend      ] ; then touch src/mesa/depend      ; fi
-	if ! [ -f src/mesa/drivers/dri/r200/depend ];   then touch src/mesa/drivers/dri/r200/depend;   fi
-	if ! [ -f src/mesa/drivers/dri/r128/depend ];   then touch src/mesa/drivers/dri/r128/depend;   fi
-	if ! [ -f src/mesa/drivers/dri/radeon/depend ]; then touch src/mesa/drivers/dri/radeon/depend; fi
-	if ! [ -f src/mesa/drivers/dri/mga/depend ];    then touch src/mesa/drivers/dri/mga/depend;    fi
-	if ! [ -f src/mesa/drivers/dri/fb/depend ];     then touch src/mesa/drivers/dri/fb/depend;     fi
-	if ! [ -f src/glu/mesa/depend  ] ; then touch src/glu/mesa/depend  ; fi
-	if ! [ -f src/glu/sgi/depend   ] ; then touch src/glu/sgi/depend   ; fi
-	if ! [ -f src/glu/mini/depend  ] ; then touch src/glu/mini/depend  ; fi
-	if ! [ -f src/glut/glx/depend  ] ; then touch src/glut/glx/depend  ; fi
-	if ! [ -f src/glut/mini/depend ] ; then touch src/glut/mini/depend ; fi
-	if ! [ -f src/glx/mini/depend  ] ; then touch src/glx/mini/depend  ; fi
-	if ! [ -f progs/tests/depend   ] ; then touch progs/tests/depend   ; fi
-	if ! [ -f progs/miniglx/depend ] ; then touch progs/miniglx/depend ; fi
+#	if ! [ -f src/mesa/depend      ] ; then touch src/mesa/depend      ; fi
+#	if ! [ -f src/mesa/drivers/dri/r200/depend ];   then touch src/mesa/drivers/dri/r200/depend;   fi
+#	if ! [ -f src/mesa/drivers/dri/r128/depend ];   then touch src/mesa/drivers/dri/r128/depend;   fi
+#	if ! [ -f src/mesa/drivers/dri/radeon/depend ]; then touch src/mesa/drivers/dri/radeon/depend; fi
+#	if ! [ -f src/mesa/drivers/dri/mga/depend ];    then touch src/mesa/drivers/dri/mga/depend;    fi
+#	if ! [ -f src/mesa/drivers/dri/fb/depend ];     then touch src/mesa/drivers/dri/fb/depend;     fi
+#	if ! [ -f src/glu/mesa/depend  ] ; then touch src/glu/mesa/depend  ; fi
+#	if ! [ -f src/glu/sgi/depend   ] ; then touch src/glu/sgi/depend   ; fi
+#	if ! [ -f src/glu/mini/depend  ] ; then touch src/glu/mini/depend  ; fi
+#	if ! [ -f src/glut/glx/depend  ] ; then touch src/glut/glx/depend  ; fi
+#	if ! [ -f src/glut/mini/depend ] ; then touch src/glut/mini/depend ; fi
+#	if ! [ -f src/glx/mini/depend  ] ; then touch src/glx/mini/depend  ; fi
+#	if ! [ -f progs/tests/depend   ] ; then touch progs/tests/depend   ; fi
+#	if ! [ -f progs/miniglx/depend ] ; then touch progs/miniglx/depend ; fi
 	-rm -f include/GL/*~
 	cd src/mesa          && $(MAKE) -f Makefile.X11 $@ || true
 	cd src/mesa/drivers/dri/r200   && $(MAKE) -f Makefile.solo $@ || true
@@ -423,6 +438,7 @@ clean:
 	cd src/mesa/drivers/dri/radeon && $(MAKE) -f Makefile.solo $@ || true
 	cd src/mesa/drivers/dri/mga    && $(MAKE) -f Makefile.solo $@ || true
 	cd src/mesa/drivers/dri/fb     && $(MAKE) -f Makefile.solo $@ || true
+	cd src/mesa/drivers/dri/unichrome && $(MAKE) -f Makefile.solo $@ || true
 	cd src/glu/mesa      && $(MAKE) -f Makefile.X11 $@ || true
 	cd src/glu/sgi       && $(MAKE) -f Makefile.X11 $@ || true
 	cd src/glu/mini      && $(MAKE) -f Makefile.X11 $@ || true
@@ -436,20 +452,20 @@ clean:
 	cd progs/samples     && $(MAKE) -f Makefile.X11 $@ || true
 	cd progs/tests       && $(MAKE) -f Makefile.X11 $@ || true
 	cd progs/miniglx     && $(MAKE) -f Makefile.solo $@ || true
-	if [ -f src/mesa/depend      ] ; then rm src/mesa/depend      ; fi
-	if [ -f src/mesa/drivers/dri/r200/depend ];   then rm -f src/mesa/drivers/dri/r200/depend;   fi
-	if [ -f src/mesa/drivers/dri/r128/depend ];   then rm -f src/mesa/drivers/dri/r128/depend;   fi
-	if [ -f src/mesa/drivers/dri/radeon/depend ]; then rm -f src/mesa/drivers/dri/radeon/depend; fi
-	if [ -f src/mesa/drivers/dri/mga/depend ];    then rm -f src/mesa/drivers/dri/mga/depend;    fi
-	if [ -f src/mesa/drivers/dri/fb/depend ];     then rm -f src/mesa/drivers/dri/fb/depend;     fi
-	if [ -f src/glu/mesa/depend  ] ; then rm -f src/glu/mesa/depend  ; fi
-	if [ -f src/glu/sgi/depend   ] ; then rm -f src/glu/sgi/depend   ; fi
-	if [ -f src/glu/mini/depend  ] ; then rm -f src/glu/mini/depend  ; fi
-	if [ -f src/glut/glx/depend  ] ; then rm -f src/glut/glx/depend  ; fi
-	if [ -f src/glut/mini/depend ] ; then rm -f src/glut/mini/depend ; fi
-	if [ -f src/glx/mini/depend  ] ; then rm -f src/glx/mini/depend  ; fi
-	if [ -f progs/tests/depend   ] ; then rm -f progs/tests/depend   ; fi
-	if [ -f progs/miniglx/depend ] ; then rm -f progs/miniglx/depend ; fi
+#	if [ -f src/mesa/depend      ] ; then rm src/mesa/depend      ; fi
+#	if [ -f src/mesa/drivers/dri/r200/depend ];   then rm -f src/mesa/drivers/dri/r200/depend;   fi
+#	if [ -f src/mesa/drivers/dri/r128/depend ];   then rm -f src/mesa/drivers/dri/r128/depend;   fi
+#	if [ -f src/mesa/drivers/dri/radeon/depend ]; then rm -f src/mesa/drivers/dri/radeon/depend; fi
+#	if [ -f src/mesa/drivers/dri/mga/depend ];    then rm -f src/mesa/drivers/dri/mga/depend;    fi
+#	if [ -f src/mesa/drivers/dri/fb/depend ];     then rm -f src/mesa/drivers/dri/fb/depend;     fi
+#	if [ -f src/glu/mesa/depend  ] ; then rm -f src/glu/mesa/depend  ; fi
+#	if [ -f src/glu/sgi/depend   ] ; then rm -f src/glu/sgi/depend   ; fi
+#	if [ -f src/glu/mini/depend  ] ; then rm -f src/glu/mini/depend  ; fi
+#	if [ -f src/glut/glx/depend  ] ; then rm -f src/glut/glx/depend  ; fi
+#	if [ -f src/glut/mini/depend ] ; then rm -f src/glut/mini/depend ; fi
+#	if [ -f src/glx/mini/depend  ] ; then rm -f src/glx/mini/depend  ; fi
+#	if [ -f progs/tests/depend   ] ; then rm -f progs/tests/depend   ; fi
+#	if [ -f progs/miniglx/depend ] ; then rm -f progs/miniglx/depend ; fi
 
 
 # Remove everything that can be remade
@@ -472,10 +488,10 @@ cvsclean: realclean
 
 
 
-DIRECTORY = Mesa-6.0
-LIB_NAME = MesaLib-6.0
-DEMO_NAME = MesaDemos-6.0
-GLU_NAME = MesaGLU-6.0
+DIRECTORY = Mesa-6.1
+LIB_NAME = MesaLib-6.1
+DEMO_NAME = MesaDemos-6.1
+GLU_NAME = MesaGLU-6.1
 GLUT_NAME = GLUT-3.7
 
 
@@ -516,30 +532,39 @@ LIB_FILES =	\
 	$(DIRECTORY)/include/GL/xmesa.h					\
 	$(DIRECTORY)/include/GL/xmesa_x.h				\
 	$(DIRECTORY)/include/GL/xmesa_xf86.h				\
+	$(DIRECTORY)/src/descrip.mms					\
 	$(DIRECTORY)/src/mesa/Makefile*					\
 	$(DIRECTORY)/src/mesa/sources					\
 	$(DIRECTORY)/src/mesa/descrip.mms				\
 	$(DIRECTORY)/src/mesa/depend					\
 	$(DIRECTORY)/src/mesa/main/*.[chS]				\
 	$(DIRECTORY)/src/mesa/main/main.dsp				\
+	$(DIRECTORY)/src/mesa/main/descrip.mms				\
 	$(DIRECTORY)/src/mesa/glapi/*.[chS]				\
 	$(DIRECTORY)/src/mesa/glapi/glapi.dsp				\
+	$(DIRECTORY)/src/mesa/glapi/descrip.mms				\
 	$(DIRECTORY)/src/mesa/array_cache/*.[ch]			\
 	$(DIRECTORY)/src/mesa/array_cache/array_cache.dsp		\
+	$(DIRECTORY)/src/mesa/array_cache/descrip.mms			\
 	$(DIRECTORY)/src/mesa/math/*.[ch]				\
 	$(DIRECTORY)/src/mesa/math/math.dsp				\
+	$(DIRECTORY)/src/mesa/math/descrip.mms				\
 	$(DIRECTORY)/src/mesa/swrast/*.[ch]				\
 	$(DIRECTORY)/src/mesa/swrast/swrast.dsp				\
+	$(DIRECTORY)/src/mesa/swrast/descrip.mms			\
 	$(DIRECTORY)/src/mesa/swrast_setup/*.[ch]			\
 	$(DIRECTORY)/src/mesa/swrast_setup/swrast_setup.dsp		\
+	$(DIRECTORY)/src/mesa/swrast_setup/descrip.mms			\
 	$(DIRECTORY)/src/mesa/tnl/*.[ch]				\
 	$(DIRECTORY)/src/mesa/tnl/tnl.dsp				\
+	$(DIRECTORY)/src/mesa/tnl/descrip.mms				\
 	$(DIRECTORY)/src/mesa/tnl_dd/*.[ch]				\
 	$(DIRECTORY)/src/mesa/tnl_dd/imm/*.[ch]				\
 	$(DIRECTORY)/src/mesa/tnl_dd/imm/NOTES.imm			\
 	$(DIRECTORY)/src/mesa/drivers/beos/*.cpp			\
 	$(DIRECTORY)/src/mesa/drivers/beos/*.h				\
 	$(DIRECTORY)/src/mesa/drivers/common/*.[ch]			\
+	$(DIRECTORY)/src/mesa/drivers/common/descrip.mms		\
 	$(DIRECTORY)/src/mesa/drivers/dos/*.[chS]			\
 	$(DIRECTORY)/src/mesa/drivers/dri/common/*.[ch]			\
 	$(DIRECTORY)/src/mesa/drivers/fbdev/glfbdev.c			\
@@ -553,6 +578,7 @@ LIB_FILES =	\
 	$(DIRECTORY)/src/mesa/drivers/ggi/display/fbdev.conf.in		\
 	$(DIRECTORY)/src/mesa/drivers/ggi/include/ggi/mesa/*.h		\
 	$(DIRECTORY)/src/mesa/drivers/osmesa/Makefile.win		\
+	$(DIRECTORY)/src/mesa/drivers/osmesa/descrip.mms		\
 	$(DIRECTORY)/src/mesa/drivers/osmesa/osmesa.def			\
 	$(DIRECTORY)/src/mesa/drivers/osmesa/osmesa.dsp			\
 	$(DIRECTORY)/src/mesa/drivers/osmesa/*.[ch]			\
@@ -560,10 +586,12 @@ LIB_FILES =	\
 	$(DIRECTORY)/src/mesa/drivers/windows/*/*.[ch]			\
 	$(DIRECTORY)/src/mesa/drivers/windows/*/*.def			\
 	$(DIRECTORY)/src/mesa/drivers/windows/*/*.dsp			\
+	$(DIRECTORY)/src/mesa/drivers/x11/descrip.mms			\
 	$(DIRECTORY)/src/mesa/drivers/x11/*.[ch]			\
 	$(DIRECTORY)/src/mesa/sparc/*.[chS]				\
 	$(DIRECTORY)/src/mesa/x86/*.[ch]				\
 	$(DIRECTORY)/src/mesa/x86/*.S					\
+	$(DIRECTORY)/src/glu/descrip.mms				\
 	$(DIRECTORY)/src/glu/sgi/Makefile.X11				\
 	$(DIRECTORY)/src/glu/sgi/Makefile.win				\
 	$(DIRECTORY)/src/glu/sgi/Makefile.DJ				\
@@ -619,14 +647,16 @@ DEMO_FILES =	\
 	$(DIRECTORY)/src/glut/dos/*.[ch]		\
 	$(DIRECTORY)/src/glut/dos/Makefile.DJ		\
 	$(DIRECTORY)/src/glut/dos/PC_HW/*.[chS]		\
-	$(DIRECTORY)/progs/images/*			\
+	$(DIRECTORY)/progs/images/*.rgb			\
+	$(DIRECTORY)/progs/images/*.rgba		\
 	$(DIRECTORY)/progs/demos/Makefile*		\
 	$(DIRECTORY)/progs/demos/descrip.mms		\
 	$(DIRECTORY)/progs/demos/*.[ch]			\
 	$(DIRECTORY)/progs/demos/*.cxx			\
 	$(DIRECTORY)/progs/demos/*.dat			\
 	$(DIRECTORY)/progs/demos/README			\
-	$(DIRECTORY)/progs/demos/Windows/*		\
+	$(DIRECTORY)/progs/demos/Windows/*.dsp		\
+	$(DIRECTORY)/progs/demos/Windows/*.dsw		\
 	$(DIRECTORY)/progs/xdemos/Makefile*		\
 	$(DIRECTORY)/progs/xdemos/descrip.mms		\
 	$(DIRECTORY)/progs/xdemos/*.[chf]		\

@@ -1,4 +1,4 @@
-			Mesa 6.0 DOS/DJGPP Port v1.5
+			Mesa 6.1 DOS/DJGPP Port v1.6
 			~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
@@ -6,7 +6,7 @@
 Description:
 ~~~~~~~~~~~~
 
-Well, guess what... this is the DOS port of Mesa 6.0, for DJGPP fans... Whoa!
+Well, guess what... this is the DOS port of Mesa 6.1, for DJGPP fans... Whoa!
 The driver has its origins in ddsample.c, written by Brian Paul and found by me
 in Mesa 3.4.2.
 
@@ -65,7 +65,7 @@ Available options:
 
 Tested on:
 	CPU:		AMD Athlon XP 1800+
-	Mainboard:	GA-7VTXE w/ 256 MB DDRAM
+	Mainboard:	GA-7VTXE w/ 512 MB DDRAM
 	Video card:	Voodoo5 6000 AGP w/ 128 MB SDRAM
 	DJGPP:		djdev 2.04 + gcc v3.3.2 + make v3.80
 	OS:		DOS and Win98SE
@@ -105,8 +105,9 @@ FAQ:
       If you haven't, sorry; everything is done in software. Suggestions?
 
    Q) I tried to set refresh rate w/ DMesa, but without success.
-   A) Refresh rate control works only for VESA 3.0. If you were compiling for
-      Glide, see Glide info. If not, sorry!
+   A) Refresh rate control works only for VESA 3.0 and the 3dfx driver (in
+      which case FX_GLIDE_REFRESH will be overwritten if it is defined and
+      is not 0).
 
    Q) I made a simple application and it does nothing. It exits right away. Not
       even a blank screen.
@@ -114,6 +115,16 @@ FAQ:
    A) Another weird "feature" is that buffer width must be multiple of 8 (I'm a
       lazy programmer and I found that the easiest way to keep buffer handling
       at peak performance ;-).
+
+   Q) I'm getting a "bad font!" fatal error.
+   A) By default, DOS GLUT compiles with GLUT_IMPORT_LIB, to cope with variable
+      access inside dynamic modules (same mechanism used for Win32 _DLL). Since
+      -DGLUT_IMPORT_LIB affects Mesa's `glut.h', your apps must be compiled the
+      same way GLUT was compiled (either with or without defining it). If you
+      want to use another `glut.h' when building your own demos, or just don't
+      feel happy about this, make sure you remove the line with GLUT_IMPORT_LIB
+      from `Mesa/src/glut/dos/Makefile.DJ' before (re)making GLUT. Beware, this
+      means you will never EVER be able to safely use `glut.dxe'!
 
    Q) How do I query for a list of available video modes to choose as a visual?
    A) This is an ugly hack, for which I'm sure I'll burn in hell.
@@ -230,9 +241,15 @@ v1.4 (dec-2003)
 	* minor changes to PC_HW/timer interface
 	x hacked and slashed the 3dfx driver (w/ help from Hiroshi Morii)
 
-v1.5 (dec-2003)
+v1.5 (jan-2004)
 	+ added interface to query available "visuals" (GLFW - Marcus Geelnard)
+	+ added GLUT timer callback
 	- removed Matrox Millennium MGA2064W driver
+	x more changes to the 3dfx driver
+
+v1.6 (???-2004)
+	+ added DMesaGetProcAddress
+	! fixed a horrible bug in VGA initialization routine
 
 
 

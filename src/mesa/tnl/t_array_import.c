@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.0
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -79,7 +79,7 @@ static void _tnl_import_normal( GLcontext *ctx,
    inputs->Normal.data = (GLfloat (*)[4]) data;
    inputs->Normal.start = (GLfloat *) data;
    inputs->Normal.stride = tmp->StrideB;
-   inputs->Normal.size = 3; /* XXX is this right? */
+   inputs->Normal.size = 3;
 }
 
 
@@ -239,9 +239,7 @@ static void _tnl_import_attrib( GLcontext *ctx,
 
 
 
-
-
-void _tnl_vb_bind_arrays( GLcontext *ctx, GLint start, GLsizei count )
+void _tnl_vb_bind_arrays( GLcontext *ctx, GLint start, GLint end)
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct vertex_buffer *VB = &tnl->vb;
@@ -249,15 +247,10 @@ void _tnl_vb_bind_arrays( GLcontext *ctx, GLint start, GLsizei count )
    struct tnl_vertex_arrays *tmp = &tnl->array_inputs;
    GLuint i, index;
 
-   VB->Count = count - start;
+   VB->Count = end - start;
    VB->Elts = NULL;
 
-   if (ctx->Array.LockCount) {
-      assert(start == (GLint) ctx->Array.LockFirst);
-      assert(count == (GLint) ctx->Array.LockCount);
-   }
-
-   _ac_import_range( ctx, start, count );
+   _ac_import_range( ctx, start, end );
 
    /* When vertex program mode is enabled, the generic vertex program
     * attribute arrays have priority over the conventional attributes.
@@ -338,7 +331,7 @@ void _tnl_vb_bind_arrays( GLcontext *ctx, GLint start, GLsizei count )
     */
    if (inputs & _TNL_BITS_MAT_ANY) {
       for (i = _TNL_ATTRIB_MAT_FRONT_AMBIENT; i < _TNL_ATTRIB_INDEX; i++) {
-	 tmp->Attribs[i].count = count;
+	 tmp->Attribs[i].count = VB->Count;
 	 tmp->Attribs[i].data = (GLfloat (*)[4]) tnl->vtx.current[i];
 	 tmp->Attribs[i].start = tnl->vtx.current[i];
 	 tmp->Attribs[i].size = 4; 

@@ -124,12 +124,16 @@ static void updateBlendLogicOp(GLcontext *ctx)
              mmesa->hw.blend_func == (AC_src_src_alpha_sat | AC_dst_zero) );
 }
 
-static void mgaDDBlendEquation(GLcontext *ctx, GLenum mode)
+static void mgaDDBlendEquationSeparate(GLcontext *ctx, 
+				       GLenum modeRGB, GLenum modeA)
 {
+   assert( modeRGB == modeA );
    updateBlendLogicOp( ctx );
 }
 
-static void mgaDDBlendFunc(GLcontext *ctx, GLenum sfactor, GLenum dfactor)
+static void mgaDDBlendFuncSeparate( GLcontext *ctx, GLenum sfactorRGB,
+				    GLenum dfactorRGB, GLenum sfactorA,
+				    GLenum dfactorA )
 {
    mgaContextPtr mmesa = MGA_CONTEXT(ctx);
    GLuint   src;
@@ -193,13 +197,6 @@ static void mgaDDBlendFunc(GLcontext *ctx, GLenum sfactor, GLenum dfactor)
    FALLBACK( ctx, MGA_FALLBACK_BLEND,
              ctx->Color.BlendEnabled && !ctx->Color._LogicOpEnabled &&
              mmesa->hw.blend_func == (AC_src_src_alpha_sat | AC_dst_zero) );
-}
-
-static void mgaDDBlendFuncSeparate( GLcontext *ctx, GLenum sfactorRGB,
-				    GLenum dfactorRGB, GLenum sfactorA,
-				    GLenum dfactorA )
-{
-   mgaDDBlendFunc( ctx, sfactorRGB, dfactorRGB );
 }
 
 /* =============================================================
@@ -486,7 +483,7 @@ static void updateSpecularLighting( GLcontext *ctx )
    mgaContextPtr mmesa = MGA_CONTEXT(ctx);
    unsigned int specen;
 
-   specen = (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR) ? TMC_specen_enable : 0;
+   specen = NEED_SECONDARY_COLOR(ctx) ? TMC_specen_enable : 0;
 
    if ( specen != mmesa->hw.specen ) {
       mmesa->hw.specen = specen;
@@ -1198,8 +1195,7 @@ void mgaDDInitStateFuncs( GLcontext *ctx )
    ctx->Driver.Enable = mgaDDEnable;
    ctx->Driver.LightModelfv = mgaDDLightModelfv;
    ctx->Driver.AlphaFunc = mgaDDAlphaFunc;
-   ctx->Driver.BlendEquation = mgaDDBlendEquation;
-   ctx->Driver.BlendFunc = mgaDDBlendFunc;
+   ctx->Driver.BlendEquationSeparate = mgaDDBlendEquationSeparate;
    ctx->Driver.BlendFuncSeparate = mgaDDBlendFuncSeparate;
    ctx->Driver.DepthFunc = mgaDDDepthFunc;
    ctx->Driver.DepthMask = mgaDDDepthMask;

@@ -47,6 +47,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "tnl/t_pipeline.h"
 
+#include "drivers/common/driverfuncs.h"
+
 #include "i810screen.h"
 #include "i810_dri.h"
 
@@ -101,12 +103,9 @@ static const char * const card_extensions[] =
    "GL_ARB_texture_mirrored_repeat",
    "GL_EXT_stencil_wrap",
    "GL_EXT_texture_edge_clamp",
-   "GL_EXT_texture_env_add",
    "GL_EXT_texture_lod_bias",
-   "GL_IBM_texture_mirrored_repeat",
    "GL_MESA_ycbcr_texture",
    "GL_SGIS_generate_mipmap",
-   "GL_SGIS_texture_edge_clamp",
    NULL
 };
 
@@ -155,6 +154,7 @@ i810CreateContext( const __GLcontextModes *mesaVis,
    i810ScreenPrivate *i810Screen = (i810ScreenPrivate *)sPriv->private;
    I810SAREAPtr saPriv = (I810SAREAPtr)
       (((GLubyte *)sPriv->pSAREA) + i810Screen->sarea_priv_offset);
+   struct dd_function_table functions;
 
    /* Allocate i810 context */
    imesa = (i810ContextPtr) CALLOC_STRUCT(i810_context_t);
@@ -162,22 +162,32 @@ i810CreateContext( const __GLcontextModes *mesaVis,
       return GL_FALSE;
    }
 
-   /* Allocate the Mesa context */
-   if (sharedContextPrivate)
-      shareCtx = ((i810ContextPtr) sharedContextPrivate)->glCtx;
-   else
-      shareCtx = NULL;
-   imesa->glCtx = _mesa_create_context(mesaVis, shareCtx, (void*) imesa, GL_TRUE);
-   if (!imesa->glCtx) {
-      FREE(imesa);
-      return GL_FALSE;
-   }
    driContextPriv->driverPrivate = imesa;
 
    imesa->i810Screen = i810Screen;
    imesa->driScreen = sPriv;
    imesa->sarea = saPriv;
    imesa->glBuffer = NULL;
+
+   /* Init default driver functions then plug in our I810-specific functions
+    * (the texture functions are especially important)
+    */
+   _mesa_init_driver_functions( &functions );
+   i810InitIoctlFuncs( &functions );
+   i810InitTextureFuncs( &functions );
+
+
+   /* Allocate the Mesa context */
+   if (sharedContextPrivate)
+      shareCtx = ((i810ContextPtr) sharedContextPrivate)->glCtx;
+   else
+      shareCtx = NULL;
+   imesa->glCtx = _mesa_create_context(mesaVis, shareCtx,
+                                       &functions, (void*) imesa);
+   if (!imesa->glCtx) {
+      FREE(imesa);
+      return GL_FALSE;
+   }
 
    (void) memset( imesa->texture_heaps, 0, sizeof( imesa->texture_heaps ) );
    make_empty_list( & imesa->swapped );
@@ -188,7 +198,7 @@ i810CreateContext( const __GLcontextModes *mesaVis,
 	    12,
 	    I810_NR_TEX_REGIONS,
 	    imesa->sarea->texList,
-	    & imesa->sarea->texAge,
+	    (unsigned *) & imesa->sarea->texAge, /* XXX we shouldn't cast! */
 	    & imesa->swapped,
 	    sizeof( struct i810_texture_object_t ),
 	    (destroy_texture_object_t *) i810DestroyTexObj );
@@ -277,11 +287,10 @@ i810CreateContext( const __GLcontextModes *mesaVis,
    _math_matrix_ctr( &imesa->ViewportMatrix );
 
    driInitExtensions( ctx, card_extensions, GL_TRUE );
+   /* XXX these should really go right after _mesa_init_driver_functions() */
    i810InitStateFuncs( ctx );
-   i810InitTextureFuncs( ctx );
    i810InitTriFuncs( ctx );
    i810InitSpanFuncs( ctx );
-   i810InitIoctlFuncs( ctx );
    i810InitVB( ctx );
    i810InitState( ctx );
 
@@ -330,7 +339,7 @@ i810DestroyContext(__DRIcontextPrivate *driContextPriv)
 	 assert( is_empty_list( & imesa->swapped ) );
       }
 
-      Xfree(imesa);
+      FREE(imesa);
    }
 }
 

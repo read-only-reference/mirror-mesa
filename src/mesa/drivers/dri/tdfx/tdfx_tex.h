@@ -53,77 +53,14 @@
 extern void
 tdfxTexValidate(GLcontext * ctx, struct gl_texture_object *tObj);
 
-extern void
-tdfxDDBindTexture(GLcontext * ctx, GLenum target,
-                  struct gl_texture_object *tObj);
-
-extern void
-tdfxDDDeleteTexture(GLcontext * ctx, struct gl_texture_object *tObj);
-
-extern GLboolean
-tdfxDDIsTextureResident(GLcontext *ctx, struct gl_texture_object *tObj);
-
-extern void
-tdfxDDTexturePalette(GLcontext * ctx, struct gl_texture_object *tObj);
 
 #if 000 /* DEAD? */
 extern void
 fxDDTexUseGlobalPalette(GLcontext * ctx, GLboolean state);
 #endif
 
-extern void
-tdfxDDTexEnv(GLcontext * ctx, GLenum target, GLenum pname,
-             const GLfloat * param);
-
-extern void
-tdfxDDTexParameter(GLcontext * ctx, GLenum target,
-                   struct gl_texture_object *tObj,
-                   GLenum pname, const GLfloat * params);
-
-extern const struct gl_texture_format *
-tdfxDDChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
-                           GLenum srcFormat, GLenum srcType );
-
-extern void
-tdfxDDTexImage2D(GLcontext * ctx, GLenum target, GLint level,
-                 GLint internalFormat, GLint width, GLint height,
-                 GLint border,
-                 GLenum format, GLenum type, const GLvoid * pixels,
-                 const struct gl_pixelstore_attrib * packing,
-                 struct gl_texture_object * texObj,
-                 struct gl_texture_image * texImage);
-
-extern void
-tdfxDDTexSubImage2D(GLcontext *ctx, GLenum target, GLint level,
-                    GLint xoffset, GLint yoffset,
-                    GLsizei width, GLsizei height,
-                    GLenum format, GLenum type,
-                    const GLvoid *pixels,
-                    const struct gl_pixelstore_attrib *packing,
-                    struct gl_texture_object *texObj,
-                    struct gl_texture_image *texImage );
-
-#if 000
 extern GLboolean
-tdfxDDCompressedTexImage2D( GLcontext *ctx, GLenum target,
-                            GLint level, GLsizei imageSize,
-                            const GLvoid *data,
-                            struct gl_texture_object *texObj,
-                            struct gl_texture_image *texImage,
-                            GLboolean *retainInternalCopy);
-
-extern GLboolean
-tdfxDDCompressedTexSubImage2D( GLcontext *ctx, GLenum target,
-                               GLint level, GLint xoffset,
-                               GLint yoffset, GLsizei width,
-                               GLint height, GLenum format,
-                               GLsizei imageSize, const GLvoid *data,
-                               struct gl_texture_object *texObj,
-                               struct gl_texture_image *texImage );
-#endif
-
-extern GLboolean
-tdfxDDTestProxyTexImage(GLcontext *ctx, GLenum target,
+tdfxTestProxyTexImage(GLcontext *ctx, GLenum target,
                         GLint level, GLint internalFormat,
                         GLenum format, GLenum type,
                         GLint width, GLint height,
@@ -142,12 +79,12 @@ tdfxDDGetCompressedTexImage( GLcontext *ctx, GLenum target,
                              struct gl_texture_image *texImage );
 
 extern GLint
-tdfxDDSpecificCompressedTexFormat(GLcontext *ctx,
+tdfxSpecificCompressedTexFormat(GLcontext *ctx,
                                   GLint internalFormat,
                                   GLint numDimensions);
 
 extern GLint
-tdfxDDBaseCompressedTexFormat(GLcontext *ctx,
+tdfxBaseCompressedTexFormat(GLcontext *ctx,
                               GLint internalFormat);
 
 extern GLboolean
@@ -161,5 +98,8 @@ tdfxDDCompressedImageSize(GLcontext *ctx,
                           GLuint height,
                           GLuint depth);
 
+
+extern void
+tdfxInitTextureFuncs( struct dd_function_table *functions );
 
 #endif

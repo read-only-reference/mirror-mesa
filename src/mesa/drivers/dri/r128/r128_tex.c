@@ -50,6 +50,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "teximage.h"
 #include "imports.h"
 #include "colormac.h"
+#include "texobj.h"
 
 #include "xmlpool.h"
 
@@ -57,6 +58,14 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define TEX_1	2
 
 
+/**
+ * Set the texture wrap modes.  Currently \c GL_REPEAT, \c GL_CLAMP,
+ * \c GL_CLAMP_TO_EDGE, and \c GL_MIRRORED_REPEAT are supported.
+ * 
+ * \param t Texture object whose wrap modes are to be set
+ * \param swrap Wrap mode for the \a s texture coordinate
+ * \param twrap Wrap mode for the \a t texture coordinate
+ */
 static void r128SetTexWrap( r128TexObjPtr t, GLenum swrap, GLenum twrap )
 {
    t->setup.tex_cntl &= ~(R128_TEX_CLAMP_S_MASK | R128_TEX_CLAMP_T_MASK);
@@ -70,9 +79,6 @@ static void r128SetTexWrap( r128TexObjPtr t, GLenum swrap, GLenum twrap )
       break;
    case GL_REPEAT:
       t->setup.tex_cntl |= R128_TEX_CLAMP_S_WRAP;
-      break;
-   case GL_CLAMP_TO_BORDER:
-      t->setup.tex_cntl |= R128_TEX_CLAMP_S_BORDER_COLOR;
       break;
    case GL_MIRRORED_REPEAT:
       t->setup.tex_cntl |= R128_TEX_CLAMP_S_MIRROR;
@@ -88,9 +94,6 @@ static void r128SetTexWrap( r128TexObjPtr t, GLenum swrap, GLenum twrap )
       break;
    case GL_REPEAT:
       t->setup.tex_cntl |= R128_TEX_CLAMP_T_WRAP;
-      break;
-   case GL_CLAMP_TO_BORDER:
-      t->setup.tex_cntl |= R128_TEX_CLAMP_T_BORDER_COLOR;
       break;
    case GL_MIRRORED_REPEAT:
       t->setup.tex_cntl |= R128_TEX_CLAMP_T_MIRROR;
@@ -411,7 +414,7 @@ static void r128TexSubImage2D( GLcontext *ctx,
 }
 
 
-static void r128DDTexEnv( GLcontext *ctx, GLenum target,
+static void r128TexEnv( GLcontext *ctx, GLenum target,
 			  GLenum pname, const GLfloat *param )
 {
    r128ContextPtr rmesa = R128_CONTEXT(ctx);
@@ -457,8 +460,8 @@ static void r128DDTexEnv( GLcontext *ctx, GLenum target,
       }
       break;
 
-   case GL_TEXTURE_LOD_BIAS_EXT:
-      do {
+   case GL_TEXTURE_LOD_BIAS:
+      {
 	 CARD32 t = rmesa->setup.tex_cntl_c;
 	 GLint bias;
 	 CARD32 b;
@@ -490,7 +493,7 @@ static void r128DDTexEnv( GLcontext *ctx, GLenum target,
 	    rmesa->setup.tex_cntl_c = t;
 	    rmesa->dirty |= R128_UPLOAD_CONTEXT;
 	 }
-      } while (0);
+      }
       break;
 
    default:
@@ -499,9 +502,9 @@ static void r128DDTexEnv( GLcontext *ctx, GLenum target,
 }
 
 
-static void r128DDTexParameter( GLcontext *ctx, GLenum target,
-				struct gl_texture_object *tObj,
-				GLenum pname, const GLfloat *params )
+static void r128TexParameter( GLcontext *ctx, GLenum target,
+                              struct gl_texture_object *tObj,
+                              GLenum pname, const GLfloat *params )
 {
    r128ContextPtr rmesa = R128_CONTEXT(ctx);
    r128TexObjPtr t = (r128TexObjPtr)tObj->DriverData;
@@ -550,7 +553,7 @@ static void r128DDTexParameter( GLcontext *ctx, GLenum target,
    }
 }
 
-static void r128DDBindTexture( GLcontext *ctx, GLenum target,
+static void r128BindTexture( GLcontext *ctx, GLenum target,
 			       struct gl_texture_object *tObj )
 {
    if ( R128_DEBUG & DEBUG_VERBOSE_API ) {
@@ -558,14 +561,12 @@ static void r128DDBindTexture( GLcontext *ctx, GLenum target,
 	       ctx->Texture.CurrentUnit );
    }
 
-   if ( target == GL_TEXTURE_2D || target == GL_TEXTURE_1D ) {
-      if ( tObj->DriverData == NULL ) {
-	 r128AllocTexObj( tObj );
-      }
-   }
+   assert( (target != GL_TEXTURE_2D && target != GL_TEXTURE_1D) ||
+           (tObj->DriverData != NULL) );
 }
 
-static void r128DDDeleteTexture( GLcontext *ctx,
+
+static void r128DeleteTexture( GLcontext *ctx,
 				 struct gl_texture_object *tObj )
 {
    r128ContextPtr rmesa = R128_CONTEXT(ctx);
@@ -578,36 +579,37 @@ static void r128DDDeleteTexture( GLcontext *ctx,
 
       driDestroyTextureObject( t );
    }
+   /* Free mipmap images and the texture object itself */
+   _mesa_delete_texture_object(ctx, tObj);
 }
 
-void r128DDInitTextureFuncs( GLcontext *ctx )
+/**
+ * Allocate a new texture object.
+ * Called via ctx->Driver.NewTextureObject.
+ * Note: we could use containment here to 'derive' the driver-specific
+ * texture object from the core mesa gl_texture_object.  Not done at this time.
+ */
+static struct gl_texture_object *
+r128NewTextureObject( GLcontext *ctx, GLuint name, GLenum target )
 {
-   r128ContextPtr rmesa = R128_CONTEXT(ctx);
-
-
-   ctx->Driver.TexEnv			= r128DDTexEnv;
-   ctx->Driver.ChooseTextureFormat	= r128ChooseTextureFormat;
-   ctx->Driver.TexImage1D		= r128TexImage1D;
-   ctx->Driver.TexSubImage1D		= r128TexSubImage1D;
-   ctx->Driver.TexImage2D		= r128TexImage2D;
-   ctx->Driver.TexSubImage2D		= r128TexSubImage2D;
-   ctx->Driver.TexImage3D               = _mesa_store_teximage3d;
-   ctx->Driver.TexSubImage3D            = _mesa_store_texsubimage3d;
-   ctx->Driver.CopyTexImage1D           = _swrast_copy_teximage1d;
-   ctx->Driver.CopyTexImage2D           = _swrast_copy_teximage2d;
-   ctx->Driver.CopyTexSubImage1D        = _swrast_copy_texsubimage1d;
-   ctx->Driver.CopyTexSubImage2D        = _swrast_copy_texsubimage2d;
-   ctx->Driver.CopyTexSubImage3D        = _swrast_copy_texsubimage3d;
-   ctx->Driver.TestProxyTexImage        = _mesa_test_proxy_teximage;
-   ctx->Driver.TexParameter		= r128DDTexParameter;
-   ctx->Driver.BindTexture		= r128DDBindTexture;
-   ctx->Driver.DeleteTexture		= r128DDDeleteTexture;
-   ctx->Driver.UpdateTexturePalette	= NULL;
-   ctx->Driver.ActiveTexture		= NULL;
-   ctx->Driver.IsTextureResident	= driIsTextureResident;
-   ctx->Driver.PrioritizeTexture	= NULL;
-
-   driInitTextureObjects( ctx, & rmesa->swapped,
-			  DRI_TEXMGR_DO_TEXTURE_1D
-			  | DRI_TEXMGR_DO_TEXTURE_2D );
+   struct gl_texture_object *obj;
+   obj = _mesa_new_texture_object(ctx, name, target);
+   r128AllocTexObj( obj );
+   return obj;
 }
+
+void r128InitTextureFuncs( struct dd_function_table *functions )
+{
+   functions->TexEnv			= r128TexEnv;
+   functions->ChooseTextureFormat	= r128ChooseTextureFormat;
+   functions->TexImage1D		= r128TexImage1D;
+   functions->TexSubImage1D		= r128TexSubImage1D;
+   functions->TexImage2D		= r128TexImage2D;
+   functions->TexSubImage2D		= r128TexSubImage2D;
+   functions->TexParameter		= r128TexParameter;
+   functions->BindTexture		= r128BindTexture;
+   functions->NewTextureObject		= r128NewTextureObject;
+   functions->DeleteTexture		= r128DeleteTexture;
+   functions->IsTextureResident		= driIsTextureResident;
+}
+

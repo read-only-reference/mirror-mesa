@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.0
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -2638,7 +2638,7 @@ grammar_check (dict * di, const GLubyte * text, GLubyte ** production,
       return 0;
    }
 
-   memcpy (*production, ba->data, ba->len * sizeof (GLubyte));
+   _mesa_memcpy(*production, ba->data, ba->len * sizeof (GLubyte));
    *size = ba->len;
    barray_destroy (&ba);
 
@@ -2942,13 +2942,13 @@ parse_float (GLubyte ** inst, struct arb_program *Program)
    denom = 1; 
    while (denom < tmp[2])
       denom *= 10;
-   denom *= _mesa_pow( 10, leading_zeros );
+   denom *= (GLint) _mesa_pow( 10, leading_zeros );
    value += (GLfloat) tmp[2] / (GLfloat) denom;
 #if 0
    if (tmp[0])
       value *= -1;
 #endif
-   value *= _mesa_pow (10, (GLfloat) tmp[3] * (GLfloat) tmp[4]);
+   value *= (GLfloat) _mesa_pow (10, (GLfloat) tmp[3] * (GLfloat) tmp[4]);
 
    return value;
 }
@@ -4503,10 +4503,10 @@ parse_masked_dst_reg (GLcontext * ctx, GLubyte ** inst,
     */
    mask = *(*inst)++;
 
-   WriteMask[0] = (mask & (1 << 3)) >> 3;
-   WriteMask[1] = (mask & (1 << 2)) >> 2;
-   WriteMask[2] = (mask & (1 << 1)) >> 1;
-   WriteMask[3] = (mask & (1));
+   WriteMask[0] = (GLboolean) (mask & (1 << 3)) >> 3;
+   WriteMask[1] = (GLboolean) (mask & (1 << 2)) >> 2;
+   WriteMask[2] = (GLboolean) (mask & (1 << 1)) >> 1;
+   WriteMask[3] = (GLboolean) (mask & (1));
 
    return 0;
 }
@@ -4649,16 +4649,16 @@ parse_extended_swizzle_mask (GLubyte ** inst, GLubyte * mask, GLboolean * Negate
             mask[a] = SWIZZLE_ONE;
             break;
          case COMPONENT_X:
-            mask[a] = 0;
+            mask[a] = SWIZZLE_X;
             break;
          case COMPONENT_Y:
-            mask[a] = 1;
+            mask[a] = SWIZZLE_Y;
             break;
          case COMPONENT_Z:
-            mask[a] = 2;
+            mask[a] = SWIZZLE_Z;
             break;
          case COMPONENT_W:
-            mask[a] = 3;
+            mask[a] = SWIZZLE_W;
             break;
 
       }
@@ -5313,6 +5313,9 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
    /* The actual opcode name */
    code = *(*inst)++;
 
+   /* Record the position in the program string for debugging */
+   vp->StringPos = Program->Position;
+
    vp->SrcReg[0].RelAddr = vp->SrcReg[1].RelAddr = vp->SrcReg[2].RelAddr = 0;
 
    for (a = 0; a < 4; a++) {
@@ -5890,6 +5893,10 @@ parse_arb_program (GLcontext * ctx, GLubyte * inst, struct var_cache **vc_head,
                                                   (Program->Base.NumInstructions+1)*sizeof(struct fp_instruction));
 
       Program->FPInstructions[Program->Base.NumInstructions].Opcode = FP_OPCODE_END;
+      /* YYY Wrong Position in program, whatever, at least not random -> crash
+	 Program->Position = parse_position (&inst);
+      */
+      Program->FPInstructions[Program->Base.NumInstructions].StringPos = Program->Position;
    }
    else {
       Program->VPInstructions =
@@ -5898,6 +5905,10 @@ parse_arb_program (GLcontext * ctx, GLubyte * inst, struct var_cache **vc_head,
                                                   (Program->Base.NumInstructions+1)*sizeof(struct vp_instruction));
 
       Program->VPInstructions[Program->Base.NumInstructions].Opcode = VP_OPCODE_END;
+      /* YYY Wrong Position in program, whatever, at least not random -> crash
+	 Program->Position = parse_position (&inst);
+      */
+      Program->VPInstructions[Program->Base.NumInstructions].StringPos = Program->Position;
    }
 
    /* increment Program->Base.NumInstructions */

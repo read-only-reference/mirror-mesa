@@ -462,6 +462,7 @@ struct tfxMesaContext
    GLfloat fogStart, fogEnd;
    GrFog_t *fogTable;
    GLint textureAlign;
+   GLint textureMaxLod;
 
    /* Vertex building and storage:
     */
@@ -606,10 +607,23 @@ extern void fxDDCompressedTexSubImage2D(GLcontext *ctx, GLenum target,
                                         GLsizei imageSize, const GLvoid *data,
                                         struct gl_texture_object *texObj,
                                         struct gl_texture_image *texImage);
+extern void fxDDTexImage1D(GLcontext * ctx, GLenum target, GLint level,
+			   GLint internalFormat, GLint width,
+			   GLint border, GLenum format, GLenum type,
+			   const GLvoid * pixels,
+			   const struct gl_pixelstore_attrib *packing,
+			   struct gl_texture_object *texObj,
+			   struct gl_texture_image *texImage);
+extern GLboolean fxDDTestProxyTexImage (GLcontext *ctx, GLenum target,
+                                        GLint level, GLint internalFormat,
+                                        GLenum format, GLenum type,
+                                        GLint width, GLint height,
+                                        GLint depth, GLint border);
 extern void fxDDTexEnv(GLcontext *, GLenum, GLenum, const GLfloat *);
 extern void fxDDTexParam(GLcontext *, GLenum, struct gl_texture_object *,
 			 GLenum, const GLfloat *);
 extern void fxDDTexBind(GLcontext *, GLenum, struct gl_texture_object *);
+extern struct gl_texture_object *fxDDNewTextureObject( GLcontext *ctx, GLuint name, GLenum target );
 extern void fxDDTexDel(GLcontext *, struct gl_texture_object *);
 extern GLboolean fxDDIsTextureResident(GLcontext *, struct gl_texture_object *);
 extern void fxDDTexPalette(GLcontext *, struct gl_texture_object *);
@@ -617,9 +631,8 @@ extern void fxDDTexUseGlbPalette(GLcontext *, GLboolean);
 
 extern void fxDDEnable(GLcontext *, GLenum, GLboolean);
 extern void fxDDAlphaFunc(GLcontext *, GLenum, GLfloat);
-extern void fxDDBlendFunc(GLcontext *, GLenum, GLenum);
 extern void fxDDBlendFuncSeparate(GLcontext *, GLenum, GLenum, GLenum, GLenum);
-extern void fxDDBlendEquation(GLcontext *, GLenum);
+extern void fxDDBlendEquationSeparate(GLcontext *, GLenum, GLenum);
 extern void fxDDDepthMask(GLcontext *, GLboolean);
 extern void fxDDDepthFunc(GLcontext *, GLenum);
 extern void fxDDStencilFunc (GLcontext *ctx, GLenum func, GLint ref, GLuint mask);
@@ -696,7 +709,7 @@ void fxSetupDepthTest (GLcontext *ctx);
 void fxSetupTexture (GLcontext *ctx);
 
 /* Flags for software fallback cases */
-#define FX_FALLBACK_TEXTURE_1D_3D	0x0001
+#define FX_FALLBACK_TEXTURE_MAP		0x0001
 #define FX_FALLBACK_DRAW_BUFFER		0x0002
 #define FX_FALLBACK_SPECULAR		0x0004
 #define FX_FALLBACK_STENCIL		0x0008

@@ -39,6 +39,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "api_arrayelt.h"
 #include "enums.h"
 #include "colormac.h"
+#include "light.h"
 
 #include "swrast/swrast.h"
 #include "array_cache/acache.h"
@@ -103,12 +104,15 @@ static void r200AlphaFunc( GLcontext *ctx, GLenum func, GLfloat ref )
    rmesa->hw.ctx.cmd[CTX_PP_MISC] = pp_misc;
 }
 
-static void r200BlendEquation( GLcontext *ctx, GLenum mode )
+static void r200BlendEquationSeparate( GLcontext *ctx, 
+				       GLenum modeRGB, GLenum modeA )
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
    GLuint b = rmesa->hw.ctx.cmd[CTX_RB3D_BLENDCNTL] & ~R200_COMB_FCN_MASK;
 
-   switch ( mode ) {
+   assert( modeRGB == modeA );
+
+   switch ( modeRGB ) {
    case GL_FUNC_ADD:
    case GL_LOGIC_OP:
       b |= R200_COMB_FCN_ADD_CLAMP;
@@ -136,14 +140,16 @@ static void r200BlendEquation( GLcontext *ctx, GLenum mode )
 
    R200_STATECHANGE( rmesa, ctx );
    rmesa->hw.ctx.cmd[CTX_RB3D_BLENDCNTL] = b;
-   if ( ctx->Color.ColorLogicOpEnabled ) {
+   if ( ctx->Color._LogicOpEnabled ) {
       rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] |=  R200_ROP_ENABLE;
    } else {
       rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] &= ~R200_ROP_ENABLE;
    }
 }
 
-static void r200BlendFunc( GLcontext *ctx, GLenum sfactor, GLenum dfactor )
+static void r200BlendFuncSeparate( GLcontext *ctx,
+				     GLenum sfactorRGB, GLenum dfactorRGB,
+				     GLenum sfactorA, GLenum dfactorA )
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
    GLuint b = rmesa->hw.ctx.cmd[CTX_RB3D_BLENDCNTL] & 
@@ -248,13 +254,6 @@ static void r200BlendFunc( GLcontext *ctx, GLenum sfactor, GLenum dfactor )
 
    R200_STATECHANGE( rmesa, ctx );
    rmesa->hw.ctx.cmd[CTX_RB3D_BLENDCNTL] = b;
-}
-
-static void r200BlendFuncSeparate( GLcontext *ctx,
-				     GLenum sfactorRGB, GLenum dfactorRGB,
-				     GLenum sfactorA, GLenum dfactorA )
-{
-   r200BlendFunc( ctx, sfactorRGB, dfactorRGB );
 }
 
 
@@ -963,15 +962,13 @@ void r200UpdateMaterial( GLcontext *ctx )
       fcmd[MTL_SHININESS]       = mat[MAT_ATTRIB_FRONT_SHININESS][0];
    }
 
-   if (R200_DB_STATECHANGE( rmesa, &rmesa->hw.mtl[0] )) {
-      for (p = 0 ; p < MAX_LIGHTS; p++) 
-	 update_light_colors( ctx, p );
+   R200_DB_STATECHANGE( rmesa, &rmesa->hw.mtl[0] );
 
-      check_twoside_fallback( ctx );
-      update_global_ambient( ctx );
-   }
-   else if (R200_DEBUG & (DEBUG_PRIMS|DEBUG_STATE))
-      fprintf(stderr, "%s: Elided noop material call\n", __FUNCTION__);
+   for (p = 0 ; p < MAX_LIGHTS; p++)
+      update_light_colors( ctx, p );
+
+   check_twoside_fallback( ctx );
+   update_global_ambient( ctx );
 }
 
 /* _NEW_LIGHT
@@ -1108,6 +1105,10 @@ static void r200Lightfv( GLcontext *ctx, GLenum light,
    case GL_CONSTANT_ATTENUATION:
       R200_STATECHANGE(rmesa, lit[p]);
       fcmd[LIT_ATTEN_CONST] = params[0];
+      if ( params[0] == 0.0 )
+	 fcmd[LIT_ATTEN_CONST_INV] = FLT_MAX;
+      else
+	 fcmd[LIT_ATTEN_CONST_INV] = 1.0 / params[0];
       break;
    case GL_LINEAR_ATTENUATION:
       R200_STATECHANGE(rmesa, lit[p]);
@@ -1121,6 +1122,41 @@ static void r200Lightfv( GLcontext *ctx, GLenum light,
       return;
    }
 
+   /* Set RANGE_ATTEN only when needed */
+   switch (pname) {
+   case GL_POSITION:
+   case GL_CONSTANT_ATTENUATION:
+   case GL_LINEAR_ATTENUATION:
+   case GL_QUADRATIC_ATTENUATION: {
+      GLuint *icmd = (GLuint *)R200_DB_STATE( tcl );
+      GLuint idx = TCL_PER_LIGHT_CTL_0 + p/2;
+      GLuint atten_flag = ( p&1 ) ? R200_LIGHT_1_ENABLE_RANGE_ATTEN
+				  : R200_LIGHT_0_ENABLE_RANGE_ATTEN;
+      GLuint atten_const_flag = ( p&1 ) ? R200_LIGHT_1_CONSTANT_RANGE_ATTEN
+				  : R200_LIGHT_0_CONSTANT_RANGE_ATTEN;
+
+      if ( l->EyePosition[3] == 0.0F ||
+	   ( ( fcmd[LIT_ATTEN_CONST] == 0.0 || fcmd[LIT_ATTEN_CONST] == 1.0 ) &&
+	     fcmd[LIT_ATTEN_QUADRATIC] == 0.0 && fcmd[LIT_ATTEN_LINEAR] == 0.0 ) ) {
+	 /* Disable attenuation */
+	 icmd[idx] &= ~atten_flag;
+      } else {
+	 if ( fcmd[LIT_ATTEN_QUADRATIC] == 0.0 && fcmd[LIT_ATTEN_LINEAR] == 0.0 ) {
+	    /* Enable only constant portion of attenuation calculation */
+	    icmd[idx] |= ( atten_flag | atten_const_flag );
+	 } else {
+	    /* Enable full attenuation calculation */
+	    icmd[idx] &= ~atten_const_flag;
+	    icmd[idx] |= atten_flag;
+	 }
+      }
+
+      R200_DB_STATECHANGE( rmesa, &rmesa->hw.tcl );
+      break;
+   }
+   default:
+     break;
+   }
 }
 
 		  
@@ -1673,7 +1709,7 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
       } else {
 	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] &= ~R200_ALPHA_BLEND_ENABLE;
       }
-      if ( ctx->Color.ColorLogicOpEnabled ) {
+      if ( ctx->Color._LogicOpEnabled ) {
 	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] |=  R200_ROP_ENABLE;
       } else {
 	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] &= ~R200_ROP_ENABLE;
@@ -1699,8 +1735,7 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
 
    case GL_COLOR_MATERIAL:
       r200ColorMaterial( ctx, 0, 0 );
-      if (!state) 
-	 r200UpdateMaterial( ctx );
+      r200UpdateMaterial( ctx );
       break;
 
    case GL_CULL_FACE:
@@ -1797,7 +1832,7 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
 
    case GL_COLOR_LOGIC_OP:
       R200_STATECHANGE( rmesa, ctx );
-      if ( state ) {
+      if ( ctx->Color._LogicOpEnabled ) {
 	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] |=  R200_ROP_ENABLE;
       } else {
 	 rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] &= ~R200_ROP_ENABLE;
@@ -2145,57 +2180,60 @@ static void r200WrapRunPipeline( GLcontext *ctx )
 
 /* Initialize the driver's state functions.
  */
-void r200InitStateFuncs( GLcontext *ctx )
+void r200InitStateFuncs( struct dd_function_table *functions )
 {
-   ctx->Driver.UpdateState		= r200InvalidateState;
-   ctx->Driver.LightingSpaceChange      = r200LightingSpaceChange;
+   functions->UpdateState		= r200InvalidateState;
+   functions->LightingSpaceChange	= r200LightingSpaceChange;
 
-   ctx->Driver.DrawBuffer		= r200DrawBuffer;
-   ctx->Driver.ReadBuffer		= r200ReadBuffer;
+   functions->DrawBuffer		= r200DrawBuffer;
+   functions->ReadBuffer		= r200ReadBuffer;
 
-   ctx->Driver.AlphaFunc		= r200AlphaFunc;
-   ctx->Driver.BlendEquation		= r200BlendEquation;
-   ctx->Driver.BlendFunc		= r200BlendFunc;
-   ctx->Driver.BlendFuncSeparate	= r200BlendFuncSeparate;
-   ctx->Driver.ClearColor		= r200ClearColor;
-   ctx->Driver.ClearDepth		= NULL;
-   ctx->Driver.ClearIndex		= NULL;
-   ctx->Driver.ClearStencil		= r200ClearStencil;
-   ctx->Driver.ClipPlane		= r200ClipPlane;
-   ctx->Driver.ColorMask		= r200ColorMask;
-   ctx->Driver.CullFace			= r200CullFace;
-   ctx->Driver.DepthFunc		= r200DepthFunc;
-   ctx->Driver.DepthMask		= r200DepthMask;
-   ctx->Driver.DepthRange		= r200DepthRange;
-   ctx->Driver.Enable			= r200Enable;
-   ctx->Driver.Fogfv			= r200Fogfv;
-   ctx->Driver.FrontFace		= r200FrontFace;
-   ctx->Driver.Hint			= NULL;
-   ctx->Driver.IndexMask		= NULL;
-   ctx->Driver.LightModelfv		= r200LightModelfv;
-   ctx->Driver.Lightfv			= r200Lightfv;
-   ctx->Driver.LineStipple              = r200LineStipple;
-   ctx->Driver.LineWidth                = r200LineWidth;
-   ctx->Driver.LogicOpcode		= r200LogicOpCode;
-   ctx->Driver.PolygonMode		= r200PolygonMode;
-   ctx->Driver.PolygonOffset		= r200PolygonOffset;
-   ctx->Driver.PolygonStipple		= r200PolygonStipple;
-   ctx->Driver.PointSize                = r200PointSize;
-   ctx->Driver.RenderMode		= r200RenderMode;
-   ctx->Driver.Scissor			= r200Scissor;
-   ctx->Driver.ShadeModel		= r200ShadeModel;
-   ctx->Driver.StencilFunc		= r200StencilFunc;
-   ctx->Driver.StencilMask		= r200StencilMask;
-   ctx->Driver.StencilOp		= r200StencilOp;
-   ctx->Driver.Viewport			= r200Viewport;
+   functions->AlphaFunc			= r200AlphaFunc;
+   functions->BlendEquationSeparate	= r200BlendEquationSeparate;
+   functions->BlendFuncSeparate		= r200BlendFuncSeparate;
+   functions->ClearColor		= r200ClearColor;
+   functions->ClearDepth		= NULL;
+   functions->ClearIndex		= NULL;
+   functions->ClearStencil		= r200ClearStencil;
+   functions->ClipPlane			= r200ClipPlane;
+   functions->ColorMask			= r200ColorMask;
+   functions->CullFace			= r200CullFace;
+   functions->DepthFunc			= r200DepthFunc;
+   functions->DepthMask			= r200DepthMask;
+   functions->DepthRange		= r200DepthRange;
+   functions->Enable			= r200Enable;
+   functions->Fogfv			= r200Fogfv;
+   functions->FrontFace			= r200FrontFace;
+   functions->Hint			= NULL;
+   functions->IndexMask			= NULL;
+   functions->LightModelfv		= r200LightModelfv;
+   functions->Lightfv			= r200Lightfv;
+   functions->LineStipple		= r200LineStipple;
+   functions->LineWidth			= r200LineWidth;
+   functions->LogicOpcode		= r200LogicOpCode;
+   functions->PolygonMode		= r200PolygonMode;
+   functions->PolygonOffset		= r200PolygonOffset;
+   functions->PolygonStipple		= r200PolygonStipple;
+   functions->PointSize			= r200PointSize;
+   functions->RenderMode		= r200RenderMode;
+   functions->Scissor			= r200Scissor;
+   functions->ShadeModel		= r200ShadeModel;
+   functions->StencilFunc		= r200StencilFunc;
+   functions->StencilMask		= r200StencilMask;
+   functions->StencilOp			= r200StencilOp;
+   functions->Viewport			= r200Viewport;
 
    /* Swrast hooks for imaging extensions:
     */
-   ctx->Driver.CopyColorTable		= _swrast_CopyColorTable;
-   ctx->Driver.CopyColorSubTable	= _swrast_CopyColorSubTable;
-   ctx->Driver.CopyConvolutionFilter1D	= _swrast_CopyConvolutionFilter1D;
-   ctx->Driver.CopyConvolutionFilter2D	= _swrast_CopyConvolutionFilter2D;
+   functions->CopyColorTable		= _swrast_CopyColorTable;
+   functions->CopyColorSubTable		= _swrast_CopyColorSubTable;
+   functions->CopyConvolutionFilter1D	= _swrast_CopyConvolutionFilter1D;
+   functions->CopyConvolutionFilter2D	= _swrast_CopyConvolutionFilter2D;
+}
 
+
+void r200InitTnlFuncs( GLcontext *ctx )
+{
    TNL_CONTEXT(ctx)->Driver.NotifyMaterialChange = r200UpdateMaterial;
    TNL_CONTEXT(ctx)->Driver.RunPipeline = r200WrapRunPipeline;
 }

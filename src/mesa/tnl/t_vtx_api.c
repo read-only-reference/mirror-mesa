@@ -52,32 +52,47 @@ static void init_attrfv( TNLcontext *tnl );
 static void _tnl_wrap_buffers( GLcontext *ctx )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
-   GLuint last_prim = tnl->vtx.prim[tnl->vtx.prim_count-1].mode;
-   GLuint last_count = tnl->vtx.prim[tnl->vtx.prim_count-1].count;
+   
 
-   if (ctx->Driver.CurrentExecPrimitive != GL_POLYGON+1) {
-      GLint i = tnl->vtx.prim_count - 1;
-      assert(i >= 0);
-      tnl->vtx.prim[i].count = ((tnl->vtx.initial_counter - tnl->vtx.counter) - 
-				tnl->vtx.prim[i].start);
+   if (tnl->vtx.prim_count == 0) {
+      tnl->vtx.copied.nr = 0;
+      tnl->vtx.counter = tnl->vtx.initial_counter;
+      tnl->vtx.vbptr = tnl->vtx.buffer;
    }
+   else {
+      GLuint last_prim = tnl->vtx.prim[tnl->vtx.prim_count-1].mode;
+      GLuint last_count = tnl->vtx.prim[tnl->vtx.prim_count-1].count;
 
-   /* Execute the buffer and save copied vertices.
-    */
-   _tnl_flush_vtx( ctx );
+      if (ctx->Driver.CurrentExecPrimitive != GL_POLYGON+1) {
+	 GLint i = tnl->vtx.prim_count - 1;
+	 assert(i >= 0);
+	 tnl->vtx.prim[i].count = ((tnl->vtx.initial_counter - 
+				    tnl->vtx.counter) - 
+				   tnl->vtx.prim[i].start);
+      }
 
-   /* Emit a glBegin to start the new list.
-    */
-   assert(tnl->vtx.prim_count == 0);
+      /* Execute the buffer and save copied vertices.
+       */
+      if (tnl->vtx.counter != tnl->vtx.initial_counter)
+	 _tnl_flush_vtx( ctx );
+      else {
+	 tnl->vtx.prim_count = 0;
+	 tnl->vtx.copied.nr = 0;
+      }
 
-   if (ctx->Driver.CurrentExecPrimitive != GL_POLYGON+1) {
-      tnl->vtx.prim[0].mode = ctx->Driver.CurrentExecPrimitive;
-      tnl->vtx.prim[0].start = 0;
-      tnl->vtx.prim[0].count = 0;
-      tnl->vtx.prim_count++;
+      /* Emit a glBegin to start the new list.
+       */
+      assert(tnl->vtx.prim_count == 0);
+
+      if (ctx->Driver.CurrentExecPrimitive != GL_POLYGON+1) {
+	 tnl->vtx.prim[0].mode = ctx->Driver.CurrentExecPrimitive;
+	 tnl->vtx.prim[0].start = 0;
+	 tnl->vtx.prim[0].count = 0;
+	 tnl->vtx.prim_count++;
       
-      if (tnl->vtx.copied.nr == last_count)
-	 tnl->vtx.prim[0].mode |= last_prim & PRIM_BEGIN;
+	 if (tnl->vtx.copied.nr == last_count)
+	    tnl->vtx.prim[0].mode |= last_prim & PRIM_BEGIN;
+      }
    }
 }
 
@@ -98,7 +113,8 @@ static void _tnl_wrap_filled_vertex( GLcontext *ctx )
    assert(tnl->vtx.counter > tnl->vtx.copied.nr);
 
    for (i = 0 ; i < tnl->vtx.copied.nr ; i++) {
-      memcpy( tnl->vtx.vbptr, data, tnl->vtx.vertex_size * sizeof(GLfloat));
+      _mesa_memcpy( tnl->vtx.vbptr, data, 
+		    tnl->vtx.vertex_size * sizeof(GLfloat));
       tnl->vtx.vbptr += tnl->vtx.vertex_size;
       data += tnl->vtx.vertex_size;
       tnl->vtx.counter--;
@@ -107,13 +123,20 @@ static void _tnl_wrap_filled_vertex( GLcontext *ctx )
    tnl->vtx.copied.nr = 0;
 }
 
+
+/*
+ * Copy the active vertex's values to the ctx->Current fields.
+ */
 static void _tnl_copy_to_current( GLcontext *ctx )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx); 
    GLuint i;
 
-   for (i = _TNL_ATTRIB_POS+1 ; i <= _TNL_ATTRIB_INDEX ; i++) 
+   for (i = _TNL_ATTRIB_POS+1 ; i <= _TNL_ATTRIB_INDEX ; i++)
       if (tnl->vtx.attrsz[i]) {
+         /* Note: the tnl->vtx.current[i] pointers points to
+          * the ctx->Current fields.  The first 16 or so, anyway.
+          */
 	 ASSIGN_4V( tnl->vtx.current[i], 0, 0, 0, 1 );
 	 COPY_SZ_4V(tnl->vtx.current[i], 
 		    tnl->vtx.attrsz[i], 
@@ -166,9 +189,6 @@ static void _tnl_copy_from_current( GLcontext *ctx )
 }
 
 
-
-
-
 /* Flush existing data, set new attrib size, replay copied vertices.
  */ 
 static void _tnl_wrap_upgrade_vertex( GLcontext *ctx, 
@@ -186,6 +206,7 @@ static void _tnl_wrap_upgrade_vertex( GLcontext *ctx,
     * to tnl->vtx.copied.
     */
    _tnl_wrap_buffers( ctx );
+
 
    /* Do a COPY_TO_CURRENT to ensure back-copying works for the case
     * when the attribute already exists in the vertex and is having
@@ -271,7 +292,7 @@ static void _tnl_wrap_upgrade_vertex( GLcontext *ctx,
 static void _tnl_fixup_vertex( GLcontext *ctx, GLuint attr, GLuint sz )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
-   static float id[4] = { 0, 0, 0, 1 };
+   static const GLfloat id[4] = { 0, 0, 0, 1 };
    int i;
 
    if (tnl->vtx.attrsz[attr] < sz) {
@@ -889,13 +910,13 @@ static void GLAPIENTRY _tnl_EvalCoord1f( GLfloat u )
    }
 
 
-   memcpy( tnl->vtx.copied.buffer, tnl->vtx.vertex, 
-	   tnl->vtx.vertex_size * sizeof(GLfloat));
+   _mesa_memcpy( tnl->vtx.copied.buffer, tnl->vtx.vertex, 
+                 tnl->vtx.vertex_size * sizeof(GLfloat));
 
    _tnl_do_EvalCoord1f( ctx, u );
 
-   memcpy( tnl->vtx.vertex, tnl->vtx.copied.buffer,
-	   tnl->vtx.vertex_size * sizeof(GLfloat));
+   _mesa_memcpy( tnl->vtx.vertex, tnl->vtx.copied.buffer,
+                 tnl->vtx.vertex_size * sizeof(GLfloat));
 }
 
 static void GLAPIENTRY _tnl_EvalCoord2f( GLfloat u, GLfloat v )
@@ -920,13 +941,13 @@ static void GLAPIENTRY _tnl_EvalCoord2f( GLfloat u, GLfloat v )
 	    _tnl_fixup_vertex( ctx, _TNL_ATTRIB_NORMAL, 3 );
    }
 
-   memcpy( tnl->vtx.copied.buffer, tnl->vtx.vertex, 
-	   tnl->vtx.vertex_size * sizeof(GLfloat));
+   _mesa_memcpy( tnl->vtx.copied.buffer, tnl->vtx.vertex, 
+                 tnl->vtx.vertex_size * sizeof(GLfloat));
 
    _tnl_do_EvalCoord2f( ctx, u, v );
 
-   memcpy( tnl->vtx.vertex, tnl->vtx.copied.buffer, 
-	   tnl->vtx.vertex_size * sizeof(GLfloat));
+   _mesa_memcpy( tnl->vtx.vertex, tnl->vtx.copied.buffer, 
+                 tnl->vtx.vertex_size * sizeof(GLfloat));
 }
 
 static void GLAPIENTRY _tnl_EvalCoord1fv( const GLfloat *u )
@@ -977,7 +998,8 @@ static void GLAPIENTRY _tnl_Begin( GLenum mode )
 
       if (ctx->NewState) {
 	 _mesa_update_state( ctx );
-	 ctx->Exec->Begin(mode);
+	 if (!(tnl->Driver.NotifyBegin && tnl->Driver.NotifyBegin( ctx, mode )))
+	     ctx->Exec->Begin(mode);
 	 return;
       }
 
@@ -1120,22 +1142,23 @@ void _tnl_FlushVertices( GLcontext *ctx, GLuint flags )
    ctx->Driver.NeedFlush = 0;
 }
 
+
 static void _tnl_current_init( GLcontext *ctx ) 
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    GLint i;
 
+   /* setup the pointers for the typical 16 vertex attributes */
    for (i = 0; i < VERT_ATTRIB_MAX; i++) 
       tnl->vtx.current[i] = ctx->Current.Attrib[i];
 
+   /* setup pointers for the 12 material attributes */
    for (i = 0; i < MAT_ATTRIB_MAX; i++)
       tnl->vtx.current[_TNL_ATTRIB_MAT_FRONT_AMBIENT + i] = 
 	 ctx->Light.Material.Attrib[i];
 
    tnl->vtx.current[_TNL_ATTRIB_INDEX] = &ctx->Current.Index;
 }
-
-
 
 
 void _tnl_vtx_init( GLcontext *ctx )

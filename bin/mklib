@@ -109,11 +109,12 @@ fi
 #
 case $ARCH in
 
-    'Linux')
+    'Linux' | 'OpenBSD')
+	# GCC-based environment
 	LIBNAME="lib${LIBNAME}"     # prefix with "lib"
 
         if [ $STATIC = 1 ] ; then
-            echo "mklib: Making Linux static library: " ${LIBNAME}.a
+            echo "mklib: Making" $ARCH "static library: " ${LIBNAME}.a
             LINK="ar"
             OPTS="-ruv"
             # make lib
@@ -121,10 +122,14 @@ case $ARCH in
             # finish up
             FINAL_LIBS="${LIBNAME}.a"
         else
-            OPTS="-Xlinker -Bsymbolic -shared -Wl,-soname,${LIBNAME}.so.${MAJOR}"
+	    if [ $ARCH = 'Linux' ] ; then
+		OPTS="-Xlinker -Bsymbolic -shared -Wl,-soname,${LIBNAME}.so.${MAJOR}"
+	    else
+		OPTS="-shared -Wl,-soname,${LIBNAME}.so.${MAJOR}"
+	    fi
             VERSION="${MAJOR}.${MINOR}.${PATCH}"
 
-            echo "mklib: Making Linux shared library: " ${LIBNAME}.so.${VERSION}
+            echo "mklib: Making " $ARCH " shared library: " ${LIBNAME}.so.${VERSION}
 
             if [ $CPLUSPLUS = 1 ] ; then
                 LINK="g++"
@@ -150,12 +155,14 @@ case $ARCH in
     'SunOS')
 	LIBNAME="lib${LIBNAME}.so"
 	echo "mklib: Making SunOS shared library: " ${LIBNAME}
+	# XXX OPTS for gcc should be -shared, but that doesn't work.
+	# Using -G does work though.
 	if [ $CPLUSPLUS = 1 ] ; then
 	    # determine linker and options for C++ code
 	    if [ "x${CXX}" = "xg++" ] ; then
 		# use g++
 		LINK="g++"
-		OPTS="-shared"
+		OPTS="-G"
 	    elif [ "x${CXX}" = "xCC" ] ; then
 		# use Sun CC
 		LINK="CC"
@@ -171,7 +178,7 @@ case $ARCH in
 	    elif [ `type g++` ] ; then
 		# use g++
 		LINK="g++"
-		OPTS="-shared"
+		OPTS="-G"
 	    else
 		echo "mklib: warning: can't find C++ comiler, trying CC."
 		LINK="CC"
@@ -180,16 +187,17 @@ case $ARCH in
 	elif [ "x${CC}" = "xgcc" ] ; then
 	    # use gcc for linking
 	    LINK="gcc"
-	    OPTS="-shared"
+	    OPTS="-G"
 	else
 	    # use native Sun linker
 	    LINK="ld"
 	    OPTS="-G"
 	fi
 	echo "mklib: linker is" ${LINK} ${OPTS}
-	rm -f ${LIBNAME}
-	${LINK} ${OPTS} -o ${LIBNAME} ${OBJECTS} ${DEPS}
-	FINAL_LIBS=${LIBNAME}
+	rm -f ${LIBNAME}.${MAJOR} ${LIBNAME}
+	${LINK} ${OPTS} -o ${LIBNAME}.${MAJOR} ${OBJECTS} ${DEPS}
+	ln -s ${LIBNAME}.${MAJOR} ${LIBNAME}
+	FINAL_LIBS="${LIBNAME}.${MAJOR} ${LIBNAME}"
 	;;
 
     'FreeBSD')
@@ -204,18 +212,6 @@ case $ARCH in
 	FINAL_LIBS="${SHLIB} ${STLIB}"
 	;;
 
-    'OpenBSD')
-	LIBNAME="lib${LIBNAME}"
-	VERSION="${MAJOR}.${MINOR}"
-	echo "Building OpenBSD PIC library: " ${LIBNAME}
-	rm -f ${LIBNAME}_pic.a ${LIBNAME}.so.${VERSION}
-	ar cq ${LIBNAME}_pic.a ${OBJECTS}
-	ranlib ${LIBNAME}_pic.a
-	ld -x -Bshareable -Bforcearchive -o ${LIBNAME}.so.${VERSION} ${LIBNAME}_pic.a
-	ln -s ${LIBNAME}.so.${VERSION} ${LIBNAME}.so
-	FINAL_LIBS="${LIBNAME}_pic.a ${LIBNAME}.so.${VERSION} ${LIBNAME}.so"
-	;;
-
     'NetBSD')
 	LIBNAME="lib${LIBNAME}"
 	echo "mklib: Making NetBSD PIC shared library: " ${LIBNAME}
@@ -227,13 +223,13 @@ case $ARCH in
 	FINAL_LIBS="${LIBNAME}_pic.a ${LIBNAME}.so.${VERSION}"
 	;;
 
-    'IRIX')
+    'IRIX' | 'IRIX64')
 	LIBNAME="lib${LIBNAME}.so"  # prefix with "lib", suffix with ".so"
-	if [ $ARCHOPTS = "64" ] ; then
+	if [ $ARCHOPT = "64" ] ; then
 	    # 64-bit ABI
 	    OPTS="-64 -shared -all"
 	    echo "mklib: Making IRIX 64-bit shared library: " ${LIBNAME}
-	elif [ $ARCHOPTS = "o32" ] ; then
+	elif [ $ARCHOPT = "o32" ] ; then
 	    # old 32-bit ABI
 	    OPTS="-32 -shared -all"
 	    echo "mklib: Making IRIX o32-bit shared library: " ${LIBNAME}
@@ -242,16 +238,12 @@ case $ARCH in
 	    OPTS="-n32 -shared -all"
 	    echo "mklib: Making IRIX n32-bit shared library: " ${LIBNAME}
 	fi
-	ld ${OPTS} -o ${LIBNAME} ${OBJECTS} ${DEPS}
-	FINAL_LIBS="${LIBNAME}"
-	;;
-
-    'IRIX64')
-	LIBNAME="lib${LIBNAME}.so"  # prefix with "lib", suffix with ".so"
-	echo "mklib: Making IRIX64 library: " ${LIBNAME}
-	# 64-bit ABI
-	OPTS="-64 -shared -all"
-	ld ${OPTS} -o ${LIBNAME} ${OBJECTS} ${DEPS}
+	if [ $CPLUSPLUS = 1 ] ; then
+	    LINK="CC"
+	else
+	    LINK="ld"
+	fi
+	${LINK} ${OPTS} -o ${LIBNAME} ${OBJECTS} ${DEPS}
 	FINAL_LIBS="${LIBNAME}"
 	;;
 
@@ -374,6 +366,20 @@ case $ARCH in
         fi
 	;;
 
+    'aix-gcc')
+	# AIX with gcc
+	LIBNAME="lib${LIBNAME}.so"  # prefix with "lib", suffix with ".so"
+	echo "mklib: Making AIX GCC shared library: " ${LIBNAME}
+	# remove old lib
+	rm -f ${LIBNAME}
+	# make the lib
+	gcc -shared -Wl,-G ${OBJECTS} ${DEPS} -o ${LIBNAME}
+
+	# NOTE: the application linking with this library must specify
+	# the -Wl,-brtl flags to gcc
+
+	FINAL_LIBS=${LIBNAME}
+	;;
 
     'example')
 	# If you're adding support for a new architecture, you can

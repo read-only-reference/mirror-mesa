@@ -50,6 +50,8 @@
 
 #include "tnl/t_pipeline.h"
 
+#include "drivers/common/driverfuncs.h"
+
 #include "i830_screen.h"
 #include "i830_dri.h"
 
@@ -57,7 +59,6 @@
 #include "i830_tex.h"
 #include "i830_span.h"
 #include "i830_tris.h"
-#include "i830_vb.h"
 #include "i830_ioctl.h"
 
 
@@ -155,18 +156,13 @@ static const char * const card_extensions[] =
    "GL_EXT_secondary_color",
    "GL_EXT_stencil_wrap",
    "GL_EXT_texture_edge_clamp",
-   "GL_EXT_texture_env_add",
    "GL_EXT_texture_env_combine",
    "GL_EXT_texture_env_dot3",
    "GL_EXT_texture_filter_anisotropic",
    "GL_EXT_texture_lod_bias",
-   "GL_IBM_texture_mirrored_repeat",
-   "GL_INGR_blend_func_separate",
+   "GL_EXT_texture_rectangle",
    "GL_MESA_ycbcr_texture",
-   "GL_NV_texture_rectangle",
    "GL_SGIS_generate_mipmap",
-   "GL_SGIS_texture_border_clamp",
-   "GL_SGIS_texture_edge_clamp",
    NULL
 };
 
@@ -217,17 +213,27 @@ GLboolean i830CreateContext( const __GLcontextModes *mesaVis,
    i830ScreenPrivate *screen = (i830ScreenPrivate *)sPriv->private;
    I830SAREAPtr saPriv=(I830SAREAPtr)
        (((GLubyte *)sPriv->pSAREA)+screen->sarea_priv_offset);
+   struct dd_function_table functions;
 
    /* Allocate i830 context */
    imesa = (i830ContextPtr) CALLOC_STRUCT(i830_context_t);
-   if (!imesa) return GL_FALSE;
+   if (!imesa)
+      return GL_FALSE;
+
+   /* Init default driver functions then plug in our I830-specific functions
+    * (the texture functions are especially important)
+    */
+   _mesa_init_driver_functions(&functions);
+   i830InitIoctlFuncs(&functions);
+   i830InitTextureFuncs(&functions);
 
    /* Allocate the Mesa context */
    if (sharedContextPrivate)
      shareCtx = ((i830ContextPtr) sharedContextPrivate)->glCtx;
    else
      shareCtx = NULL;
-   imesa->glCtx = _mesa_create_context(mesaVis, shareCtx, (void*) imesa, GL_TRUE);
+   imesa->glCtx = _mesa_create_context(mesaVis, shareCtx,
+                                       &functions, (void*) imesa);
    if (!imesa->glCtx) {
       FREE(imesa);
       return GL_FALSE;
@@ -250,7 +256,7 @@ GLboolean i830CreateContext( const __GLcontextModes *mesaVis,
 	    12,
 	    I830_NR_TEX_REGIONS,
 	    imesa->sarea->texList,
-	    & imesa->sarea->texAge,
+	    (unsigned *) & imesa->sarea->texAge, /* XXX shouldn't need cast! */
 	    & imesa->swapped,
 	    sizeof( struct i830_texture_object_t ),
 	    (destroy_texture_object_t *) i830DestroyTexObj );
@@ -266,7 +272,7 @@ GLboolean i830CreateContext( const __GLcontextModes *mesaVis,
    ctx->Const.MaxTextureImageUnits = 2;
    ctx->Const.MaxTextureCoordUnits = 2;
 
-   /* FIXME: driCalcualteMaxTextureLevels assumes that mipmaps are tightly
+   /* FIXME: driCalculateMaxTextureLevels assumes that mipmaps are tightly
     * FIXME: packed, but they're not in Intel graphics hardware.
     */
    driCalculateMaxTextureLevels( imesa->texture_heaps,
@@ -320,8 +326,6 @@ GLboolean i830CreateContext( const __GLcontextModes *mesaVis,
    imesa->hHWContext = driContextPriv->hHWContext;
    imesa->driFd = sPriv->fd;
    imesa->driHwLock = &sPriv->pSAREA->lock;
-   imesa->vertex_format = 0;
-
    imesa->hw_stencil = mesaVis->stencilBits && mesaVis->depthBits == 24;
 
    switch(mesaVis->depthBits) {
@@ -360,12 +364,10 @@ GLboolean i830CreateContext( const __GLcontextModes *mesaVis,
    _math_matrix_ctr (&imesa->ViewportMatrix);
 
    driInitExtensions( ctx, card_extensions, GL_TRUE );
+   /* XXX these should really go right after _mesa_init_driver_functions() */
    i830DDInitStateFuncs( ctx );
-   i830DDInitTextureFuncs( ctx );
    i830InitTriFuncs (ctx);
    i830DDInitSpanFuncs( ctx );
-   i830DDInitIoctlFuncs( ctx );
-   i830InitVB (ctx);
    i830DDInitState (ctx);
 
 #if DO_DEBUG
@@ -380,7 +382,6 @@ GLboolean i830CreateContext( const __GLcontextModes *mesaVis,
       fprintf(stderr, "disabling 3D rasterization\n");
       FALLBACK(imesa, I830_FALLBACK_USER, 1); 
    }
-
 
    return GL_TRUE;
 }
@@ -400,8 +401,6 @@ void i830DestroyContext(__DRIcontextPrivate *driContextPriv)
       _ac_DestroyContext (imesa->glCtx);
       _swrast_DestroyContext (imesa->glCtx);
 
-      i830FreeVB (imesa->glCtx);
-
       /* free the Mesa context */
       imesa->glCtx->DriverCtx = NULL;
       _mesa_destroy_context(imesa->glCtx);
@@ -420,7 +419,7 @@ void i830DestroyContext(__DRIcontextPrivate *driContextPriv)
 	 assert( is_empty_list( & imesa->swapped ) );
       }
 
-      Xfree (imesa);
+      FREE(imesa);
    }
 }
 

@@ -83,13 +83,13 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  * wrong-footed on replay.
  */
 static GLuint _save_copy_vertices( GLcontext *ctx, 
-				   struct tnl_vertex_list *node )
+				   const struct tnl_vertex_list *node )
 {
    TNLcontext *tnl = TNL_CONTEXT( ctx );
-   struct tnl_prim *prim = &node->prim[node->prim_count-1];
+   const struct tnl_prim *prim = &node->prim[node->prim_count-1];
    GLuint nr = prim->count;
    GLuint sz = tnl->save.vertex_size;
-   GLfloat *src = node->buffer + prim->start * sz;
+   const GLfloat *src = node->buffer + prim->start * sz;
    GLfloat *dst = tnl->save.copied.buffer;
    GLuint ovf, i;
 
@@ -103,23 +103,23 @@ static GLuint _save_copy_vertices( GLcontext *ctx,
    case GL_LINES:
       ovf = nr&1;
       for (i = 0 ; i < ovf ; i++)
-	 memcpy( dst+i*sz, src+(nr-ovf+i)*sz, sz*sizeof(GLfloat) );
+	 _mesa_memcpy( dst+i*sz, src+(nr-ovf+i)*sz, sz*sizeof(GLfloat) );
       return i;
    case GL_TRIANGLES:
       ovf = nr%3;
       for (i = 0 ; i < ovf ; i++)
-	 memcpy( dst+i*sz, src+(nr-ovf+i)*sz, sz*sizeof(GLfloat) );
+	 _mesa_memcpy( dst+i*sz, src+(nr-ovf+i)*sz, sz*sizeof(GLfloat) );
       return i;
    case GL_QUADS:
       ovf = nr&3;
       for (i = 0 ; i < ovf ; i++)
-	 memcpy( dst+i*sz, src+(nr-ovf+i)*sz, sz*sizeof(GLfloat) );
+	 _mesa_memcpy( dst+i*sz, src+(nr-ovf+i)*sz, sz*sizeof(GLfloat) );
       return i;
    case GL_LINE_STRIP:
       if (nr == 0) 
 	 return 0;
       else {
-	 memcpy( dst, src+(nr-1)*sz, sz*sizeof(GLfloat) );
+	 _mesa_memcpy( dst, src+(nr-1)*sz, sz*sizeof(GLfloat) );
 	 return 1;
       }
    case GL_LINE_LOOP:
@@ -128,11 +128,11 @@ static GLuint _save_copy_vertices( GLcontext *ctx,
       if (nr == 0) 
 	 return 0;
       else if (nr == 1) {
-	 memcpy( dst, src+0, sz*sizeof(GLfloat) );
+	 _mesa_memcpy( dst, src+0, sz*sizeof(GLfloat) );
 	 return 1;
       } else {
-	 memcpy( dst, src+0, sz*sizeof(GLfloat) );
-	 memcpy( dst+sz, src+(nr-1)*sz, sz*sizeof(GLfloat) );
+	 _mesa_memcpy( dst, src+0, sz*sizeof(GLfloat) );
+	 _mesa_memcpy( dst+sz, src+(nr-1)*sz, sz*sizeof(GLfloat) );
 	 return 2;
       }
    case GL_TRIANGLE_STRIP:
@@ -143,7 +143,7 @@ static GLuint _save_copy_vertices( GLcontext *ctx,
       default: ovf = 2 + (nr&1); break;
       }
       for (i = 0 ; i < ovf ; i++)
-	 memcpy( dst+i*sz, src+(nr-ovf+i)*sz, sz*sizeof(GLfloat) );
+	 _mesa_memcpy( dst+i*sz, src+(nr-ovf+i)*sz, sz*sizeof(GLfloat) );
       return i;
    default:
       assert(0);
@@ -237,7 +237,7 @@ static void _save_compile_vertex_list( GLcontext *ctx )
 
    /* Duplicate our template, increment refcounts to the storage structs:
     */
-   memcpy(node->attrsz, tnl->save.attrsz, sizeof(node->attrsz));
+   _mesa_memcpy(node->attrsz, tnl->save.attrsz, sizeof(node->attrsz));
    node->vertex_size = tnl->save.vertex_size;
    node->buffer = tnl->save.buffer;
    node->wrap_count = tnl->save.copied.nr;
@@ -295,7 +295,7 @@ static void _save_compile_vertex_list( GLcontext *ctx )
    /* Deal with GL_COMPILE_AND_EXECUTE:
     */
    if (ctx->ExecuteFlag) {
-      _tnl_playback_vertex_list( ctx, (void *)node );
+      _tnl_playback_vertex_list( ctx, (void *) node );
    }
 }
 
@@ -350,7 +350,7 @@ static void _save_wrap_filled_vertex( GLcontext *ctx )
    assert(tnl->save.counter > tnl->save.copied.nr);
 
    for (i = 0 ; i < tnl->save.copied.nr ; i++) {
-      memcpy( tnl->save.vbptr, data, tnl->save.vertex_size * sizeof(GLfloat));
+      _mesa_memcpy( tnl->save.vbptr, data, tnl->save.vertex_size * sizeof(GLfloat));
       data += tnl->save.vertex_size;
       tnl->save.vbptr += tnl->save.vertex_size;
       tnl->save.counter--;
@@ -440,6 +440,8 @@ static void _save_upgrade_vertex( GLcontext *ctx,
    tnl->save.vertex_size += newsz - oldsz;
    tnl->save.counter = ((SAVE_BUFFER_SIZE - tnl->save.vertex_store->used) / 
 			tnl->save.vertex_size);
+   if (tnl->save.counter > ctx->Const.MaxArrayLockSize )
+      tnl->save.counter = ctx->Const.MaxArrayLockSize;
    tnl->save.initial_counter = tnl->save.counter;
 
 
@@ -1278,11 +1280,11 @@ static void GLAPIENTRY _save_OBE_Rectf( GLfloat x1, GLfloat y1, GLfloat x2, GLfl
 {
    GET_CURRENT_CONTEXT(ctx);
    _save_NotifyBegin( ctx, GL_QUADS | PRIM_WEAK );
-   glVertex2f( x1, y1 );
-   glVertex2f( x2, y1 );
-   glVertex2f( x2, y2 );
-   glVertex2f( x1, y2 );
-   glEnd();
+   _glapi_Dispatch->Vertex2f( x1, y1 );
+   _glapi_Dispatch->Vertex2f( x2, y1 );
+   _glapi_Dispatch->Vertex2f( x2, y2 );
+   _glapi_Dispatch->Vertex2f( x1, y2 );
+   _glapi_Dispatch->End();
 }
 
 
@@ -1296,8 +1298,8 @@ static void GLAPIENTRY _save_OBE_DrawArrays(GLenum mode, GLint start, GLsizei co
 
    _save_NotifyBegin( ctx, mode | PRIM_WEAK );
    for (i = start ; i < count ; i++)
-      glArrayElement( i );
-   glEnd();
+      _glapi_Dispatch->ArrayElement( i );
+   _glapi_Dispatch->End();
 }
 
 
@@ -1315,22 +1317,22 @@ static void GLAPIENTRY _save_OBE_DrawElements(GLenum mode, GLsizei count, GLenum
    switch (type) {
    case GL_UNSIGNED_BYTE:
       for (i = 0 ; i < count ; i++)
-	 glArrayElement( ((GLubyte *)indices)[i] );
+	 _glapi_Dispatch->ArrayElement( ((GLubyte *)indices)[i] );
       break;
    case GL_UNSIGNED_SHORT:
       for (i = 0 ; i < count ; i++)
-	 glArrayElement( ((GLushort *)indices)[i] );
+	 _glapi_Dispatch->ArrayElement( ((GLushort *)indices)[i] );
       break;
    case GL_UNSIGNED_INT:
       for (i = 0 ; i < count ; i++)
-	 glArrayElement( ((GLuint *)indices)[i] );
+	 _glapi_Dispatch->ArrayElement( ((GLuint *)indices)[i] );
       break;
    default:
       _mesa_error( ctx, GL_INVALID_ENUM, "glDrawElements(type)" );
       break;
    }
 
-   glEnd();
+   _glapi_Dispatch->End();
 }
 
 static void GLAPIENTRY _save_OBE_DrawRangeElements(GLenum mode,

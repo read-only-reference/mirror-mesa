@@ -797,6 +797,7 @@ fxDDReadPixels565 (GLcontext * ctx,
       GrLfbInfo_t info;
 
       BEGIN_BOARD_LOCK();
+      info.size = sizeof(info);
       if (grLfbLock(GR_LFB_READ_ONLY,
 		    fxMesa->currentFB,
 		    GR_LFBWRITEMODE_ANY,
@@ -909,6 +910,7 @@ fxDDReadPixels555 (GLcontext * ctx,
       GrLfbInfo_t info;
 
       BEGIN_BOARD_LOCK();
+      info.size = sizeof(info);
       if (grLfbLock(GR_LFB_READ_ONLY,
 		    fxMesa->currentFB,
 		    GR_LFBWRITEMODE_ANY,
@@ -1021,6 +1023,7 @@ fxDDReadPixels8888 (GLcontext * ctx,
       GrLfbInfo_t info;
 
       BEGIN_BOARD_LOCK();
+      info.size = sizeof(info);
       if (grLfbLock(GR_LFB_READ_ONLY,
 		    fxMesa->currentFB,
 		    GR_LFBWRITEMODE_ANY,
@@ -1338,17 +1341,27 @@ fxDDInitFxMesaContext(fxMesaContext fxMesa)
    fxMesa->textureAlign = FX_grGetInteger(GR_TEXTURE_ALIGN);
    /* [koolsmoky] */
    {
+    char *env;
     int textureLevels = 0;
     int textureSize = FX_grGetInteger(GR_MAX_TEXTURE_SIZE);
     do {
         textureLevels++;
     } while ((textureSize >>= 0x1) & 0x7ff);
     ctx->Const.MaxTextureLevels = textureLevels;
+#if 1||FX_RESCALE_BIG_TEXURES
+    fxMesa->textureMaxLod = textureLevels - 1;
+    if ((env = getenv("MESA_FX_MAXLOD")) != NULL) {
+       int maxLevels = atoi(env) + 1;
+       if ((maxLevels <= MAX_TEXTURE_LEVELS) && (maxLevels > textureLevels)) {
+          ctx->Const.MaxTextureLevels = maxLevels;
+       }
+    }
+#endif
    }
-   ctx->Const.MaxTextureCoordUnits = fxMesa->haveTwoTMUs ? 2 : 1;
+   ctx->Const.MaxTextureCoordUnits =
    ctx->Const.MaxTextureImageUnits = fxMesa->haveTwoTMUs ? 2 : 1;
    ctx->Const.MaxTextureUnits = MAX2(ctx->Const.MaxTextureImageUnits, ctx->Const.MaxTextureCoordUnits);
-
+   
    fxMesa->new_state = _NEW_ALL;
    if (!fxMesa->haveHwStencil) {
       /* don't touch stencil if there is none */
@@ -1409,7 +1422,6 @@ fxDDDestroyFxMesaContext(fxMesaContext fxMesa)
       FREE(fxMesa->state);
    if (fxMesa->fogTable)
       FREE(fxMesa->fogTable);
-   fxTMClose(fxMesa);
    fxFreeVB(fxMesa->glCtx);
 }
 
@@ -1485,6 +1497,16 @@ fxDDInitExtensions(GLcontext * ctx)
    if (fxMesa->HaveMirExt) {
       _mesa_enable_extension(ctx, "GL_ARB_texture_mirrored_repeat");
    }
+
+   /* core-level extensions */
+#if 1
+   _mesa_enable_extension(ctx, "GL_ARB_vertex_buffer_object");
+#endif
+   /* not just yet */
+#if 0
+   _mesa_enable_extension(ctx, "GL_ARB_fragment_program");
+   _mesa_enable_extension(ctx, "GL_ARB_vertex_program");
+#endif
 }
 
 
@@ -1514,15 +1536,22 @@ fx_check_IsInHardware(GLcontext * ctx)
    }
 
    if (ctx->Color.BlendEnabled) {
-      if (ctx->Color.BlendEquation != GL_FUNC_ADD_EXT) {
+      if (ctx->Color.BlendEquationRGB != GL_FUNC_ADD) {
          if (!fxMesa->HavePixExt ||
-             ((ctx->Color.BlendEquation != GL_FUNC_SUBTRACT_EXT) &&
-              (ctx->Color.BlendEquation != GL_FUNC_REVERSE_SUBTRACT_EXT))) {
+             ((ctx->Color.BlendEquationRGB != GL_FUNC_SUBTRACT) &&
+              (ctx->Color.BlendEquationRGB != GL_FUNC_REVERSE_SUBTRACT))) {
             return FX_FALLBACK_BLEND;
          }
       }
    }
 
+   /* [dBorca]
+    * We could avoid this for certain `sfactor/dfactor'
+    * I do not think that is even worthwhile to check
+    * because if someone is using blending they use more
+    * interesting settings and also it would add more
+    * state tracking to a lot of the code.
+    */
    if (ctx->Color.ColorLogicOpEnabled && (ctx->Color.LogicOp != GL_COPY)) {
       return FX_FALLBACK_LOGICOP;
    }
@@ -1541,32 +1570,33 @@ fx_check_IsInHardware(GLcontext * ctx)
 
    /* Unsupported texture/multitexture cases */
 
-   if (fxMesa->haveTwoTMUs) {
-      /* we can only do 2D textures */
-      if (ctx->Texture.Unit[0]._ReallyEnabled & ~TEXTURE_2D_BIT)
-	 return FX_FALLBACK_TEXTURE_1D_3D;
-      if (ctx->Texture.Unit[1]._ReallyEnabled & ~TEXTURE_2D_BIT)
-	 return FX_FALLBACK_TEXTURE_1D_3D;
+   /* we can only do 1D/2D textures */
+   if (ctx->Texture.Unit[0]._ReallyEnabled & ~(TEXTURE_1D_BIT|TEXTURE_2D_BIT))
+      return FX_FALLBACK_TEXTURE_MAP;
 
-      if (ctx->Texture.Unit[0]._ReallyEnabled & TEXTURE_2D_BIT) {
+   if (fxMesa->haveTwoTMUs) {
+      if (ctx->Texture.Unit[1]._ReallyEnabled & ~(TEXTURE_1D_BIT|TEXTURE_2D_BIT))
+	 return FX_FALLBACK_TEXTURE_MAP;
+
+      if (ctx->Texture.Unit[0]._ReallyEnabled) {
          if (fxMesa->type < GR_SSTTYPE_Voodoo2)
 	 if (ctx->Texture.Unit[0].EnvMode == GL_BLEND &&
-	     (ctx->Texture.Unit[1]._ReallyEnabled & TEXTURE_2D_BIT ||
+	     (ctx->Texture.Unit[1]._ReallyEnabled ||
 	      ctx->Texture.Unit[0].EnvColor[0] != 0 ||
 	      ctx->Texture.Unit[0].EnvColor[1] != 0 ||
 	      ctx->Texture.Unit[0].EnvColor[2] != 0 ||
 	      ctx->Texture.Unit[0].EnvColor[3] != 1)) {
 	    return FX_FALLBACK_TEXTURE_ENV;
 	 }
-	 if (ctx->Texture.Unit[0]._Current->Image[0]->Border > 0)
+	 if (ctx->Texture.Unit[0]._Current->Image[0][0]->Border > 0)
 	    return FX_FALLBACK_TEXTURE_BORDER;
       }
 
-      if (ctx->Texture.Unit[1]._ReallyEnabled & TEXTURE_2D_BIT) {
+      if (ctx->Texture.Unit[1]._ReallyEnabled) {
          if (fxMesa->type < GR_SSTTYPE_Voodoo2)
 	 if (ctx->Texture.Unit[1].EnvMode == GL_BLEND)
 	    return FX_FALLBACK_TEXTURE_ENV;
-	 if (ctx->Texture.Unit[1]._Current->Image[0]->Border > 0)
+	 if (ctx->Texture.Unit[1]._Current->Image[0][0]->Border > 0)
 	    return FX_FALLBACK_TEXTURE_BORDER;
       }
 
@@ -1583,6 +1613,8 @@ fx_check_IsInHardware(GLcontext * ctx)
       if (ctx->Texture._EnabledUnits == 0x3) {
 	 /* Can't use multipass to blend a multitextured triangle - fall
 	  * back to software.
+          * [dBorca] we hit this case only when we try to emulate
+          * multitexture by multipass!
 	  */
 	 if (!fxMesa->haveTwoTMUs && ctx->Color.BlendEnabled) {
 	    return FX_FALLBACK_TEXTURE_MULTI;
@@ -1604,7 +1636,7 @@ fx_check_IsInHardware(GLcontext * ctx)
       }
 
       if (fxMesa->type < GR_SSTTYPE_Voodoo2)
-      if ((ctx->Texture.Unit[0]._ReallyEnabled & TEXTURE_2D_BIT) &&
+      if (ctx->Texture.Unit[0]._ReallyEnabled &&
 	  (ctx->Texture.Unit[0].EnvMode == GL_BLEND)) {
 	 return FX_FALLBACK_TEXTURE_ENV;
       }
@@ -1653,9 +1685,6 @@ fxSetupDDPointers(GLcontext * ctx)
    ctx->Driver.Clear = fxDDClear;
    ctx->Driver.DrawBuffer = fxDDSetDrawBuffer;
    ctx->Driver.GetBufferSize = fxDDBufferSize;
-   ctx->Driver.Accum = _swrast_Accum;
-   ctx->Driver.CopyPixels = _swrast_CopyPixels;
-   ctx->Driver.DrawPixels = _swrast_DrawPixels;
    switch (fxMesa->colDepth) {
           case 15:
                ctx->Driver.ReadPixels = fxDDReadPixels555;
@@ -1671,34 +1700,17 @@ fxSetupDDPointers(GLcontext * ctx)
                ctx->Driver.Bitmap = fxDDDrawBitmap4;
                break;
    }
-   ctx->Driver.ResizeBuffers = _swrast_alloc_buffers;
    ctx->Driver.Finish = fxDDFinish;
    ctx->Driver.Flush = NULL;
    ctx->Driver.ChooseTextureFormat = fxDDChooseTextureFormat;
-   ctx->Driver.TexImage1D = _mesa_store_teximage1d;
+   ctx->Driver.TexImage1D = fxDDTexImage1D;
    ctx->Driver.TexImage2D = fxDDTexImage2D;
-   ctx->Driver.TexImage3D = _mesa_store_teximage3d;
-   ctx->Driver.TexSubImage1D = _mesa_store_texsubimage1d;
    ctx->Driver.TexSubImage2D = fxDDTexSubImage2D;
-   ctx->Driver.TexSubImage3D = _mesa_store_texsubimage3d;
-   ctx->Driver.CompressedTexImage1D = _mesa_store_compressed_teximage1d;
    ctx->Driver.CompressedTexImage2D = fxDDCompressedTexImage2D;
-   ctx->Driver.CompressedTexImage3D = _mesa_store_compressed_teximage3d;
-   ctx->Driver.CompressedTexSubImage1D = _mesa_store_compressed_texsubimage1d;
    ctx->Driver.CompressedTexSubImage2D = fxDDCompressedTexSubImage2D;
-   ctx->Driver.CompressedTexSubImage3D = _mesa_store_compressed_texsubimage3d;
    ctx->Driver.IsCompressedFormat = fxDDIsCompressedFormat;
    ctx->Driver.CompressedTextureSize = fxDDCompressedTextureSize;
-   ctx->Driver.CopyTexImage1D = _swrast_copy_teximage1d;
-   ctx->Driver.CopyTexImage2D = _swrast_copy_teximage2d;
-   ctx->Driver.CopyTexSubImage1D = _swrast_copy_texsubimage1d;
-   ctx->Driver.CopyTexSubImage2D = _swrast_copy_texsubimage2d;
-   ctx->Driver.CopyTexSubImage3D = _swrast_copy_texsubimage3d;
-   ctx->Driver.TestProxyTexImage = _mesa_test_proxy_teximage;
-   ctx->Driver.CopyColorTable = _swrast_CopyColorTable;
-   ctx->Driver.CopyColorSubTable = _swrast_CopyColorSubTable;
-   ctx->Driver.CopyConvolutionFilter1D = _swrast_CopyConvolutionFilter1D;
-   ctx->Driver.CopyConvolutionFilter2D = _swrast_CopyConvolutionFilter2D;
+   ctx->Driver.TestProxyTexImage = fxDDTestProxyTexImage;
    ctx->Driver.TexEnv = fxDDTexEnv;
    ctx->Driver.TexParameter = fxDDTexParam;
    ctx->Driver.BindTexture = fxDDTexBind;
@@ -1706,9 +1718,8 @@ fxSetupDDPointers(GLcontext * ctx)
    ctx->Driver.IsTextureResident = fxDDIsTextureResident;
    ctx->Driver.UpdateTexturePalette = fxDDTexPalette;
    ctx->Driver.AlphaFunc = fxDDAlphaFunc;
-   ctx->Driver.BlendFunc = fxDDBlendFunc;
    ctx->Driver.BlendFuncSeparate = fxDDBlendFuncSeparate;
-   ctx->Driver.BlendEquation = fxDDBlendEquation;
+   ctx->Driver.BlendEquationSeparate = fxDDBlendEquationSeparate;
    ctx->Driver.DepthFunc = fxDDDepthFunc;
    ctx->Driver.DepthMask = fxDDDepthMask;
    ctx->Driver.ColorMask = fxDDColorMask;

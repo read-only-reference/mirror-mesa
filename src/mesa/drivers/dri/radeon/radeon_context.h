@@ -185,6 +185,7 @@ struct radeon_state_atom {
    GLuint is_tcl;
    int *cmd;			         /* one or more cmd's */
    int *lastcmd;			 /* one or more cmd's */
+   GLboolean dirty;                      /* dirty-mark in emit_state_list */
    GLboolean (*check)( GLcontext * );    /* is this state active? */
 };
    
@@ -339,9 +340,9 @@ struct radeon_state_atom {
 #define LIT_DIRECTION_Y            18
 #define LIT_DIRECTION_Z            19
 #define LIT_DIRECTION_W            20
-#define LIT_ATTEN_CONST            21
+#define LIT_ATTEN_QUADRATIC        21
 #define LIT_ATTEN_LINEAR           22
-#define LIT_ATTEN_QUADRATIC        23
+#define LIT_ATTEN_CONST            23
 #define LIT_ATTEN_XXX              24
 #define LIT_CMD_1                  25
 #define LIT_SPOT_DCD               26
@@ -349,7 +350,7 @@ struct radeon_state_atom {
 #define LIT_SPOT_CUTOFF            28
 #define LIT_SPECULAR_THRESH        29
 #define LIT_RANGE_CUTOFF           30 /* ? */
-#define LIT_RANGE_ATTEN            31 /* ? */
+#define LIT_ATTEN_CONST_INV        31
 #define LIT_STATE_SIZE             32
 
 /* Fog
@@ -699,7 +700,7 @@ struct radeon_context {
    driTexHeap          * texture_heaps[ RADEON_NR_TEX_HEAPS ];
    driTextureObject      swapped;
    int                   texture_depth;
-
+   float                 initialMaxAnisotropy;
 
    /* Rasterization and vertex state:
     */
@@ -748,8 +749,8 @@ struct radeon_context {
    GLuint vbl_seq;
    GLuint vblank_flags;
 
-   uint64_t swap_ust;
-   uint64_t swap_missed_ust;
+   int64_t swap_ust;
+   int64_t swap_missed_ust;
 
    GLuint swap_count;
    GLuint swap_missed_count;

@@ -1,5 +1,6 @@
+; DO NOT EDIT - This file generated automatically by mesadef.py script
 DESCRIPTION 'Mesa (OpenGL work-alike) for Win32'
-VERSION 5.1
+VERSION 6.0
 ;
 ; Module definition file for Mesa (OPENGL32.DLL)
 ;
@@ -28,7 +29,6 @@ VERSION 5.1
 ; However, this file is still needed to export "internal"
 ; Mesa symbols for the benefit of the OSMESA32.DLL.
 ;
-
 EXPORTS
 	glNewList
 	glEndList
@@ -697,6 +697,8 @@ EXPORTS
 	glWindowPos4ivMESA
 	glWindowPos4sMESA
 	glWindowPos4svMESA
+	glMultiModeDrawArraysIBM
+	glMultiModeDrawElementsIBM
 	glTbufferMask3DFX
 	glSampleMaskEXT
 	glSamplePatternEXT
@@ -923,8 +925,26 @@ EXPORTS
 	glGetQueryivARB
 	glGetQueryObjectivARB
 	glGetQueryObjectuivARB
-	glMultiModeDrawArraysIBM
-	glMultiModeDrawElementsIBM
+	glBindBuffer
+	glBufferData
+	glBufferSubData
+	glDeleteBuffers
+	glGenBuffers
+	glGetBufferParameteriv
+	glGetBufferPointerv
+	glGetBufferSubData
+	glIsBuffer
+	glMapBuffer
+	glUnmapBuffer
+	glGenQueries
+	glDeleteQueries
+	glIsQuery
+	glBeginQuery
+	glEndQuery
+	glGetQueryiv
+	glGetQueryObjectiv
+	glGetQueryObjectuiv
+;
 ; WGL API
 	wglChoosePixelFormat
 	wglCopyContext
@@ -949,6 +969,7 @@ EXPORTS
 	wglUseFontBitmapsW
 	wglUseFontOutlinesA
 	wglUseFontOutlinesW
+;
 ; Mesa internals - mostly for OSMESA
 	_ac_CreateContext
 	_ac_DestroyContext
@@ -978,6 +999,7 @@ EXPORTS
 	_mesa_free_context_data
 	_mesa_get_current_context
 	_mesa_init_default_imports
+	_mesa_init_driver_functions
 	_mesa_initialize_context
 	_mesa_make_current
 	_mesa_memcpy

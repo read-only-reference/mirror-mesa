@@ -43,6 +43,7 @@
 #include "image.h"
 #include "teximage.h"
 #include "texformat.h"
+#include "texobj.h"
 #include "texstore.h"
 #include "texutil.h"
 
@@ -55,8 +56,8 @@ fxPrintTextureData(tfxTexInfo * ti)
       fprintf(stderr, "\tName: %d\n", ti->tObj->Name);
       fprintf(stderr, "\tBaseLevel: %d\n", ti->tObj->BaseLevel);
       fprintf(stderr, "\tSize: %d x %d\n",
-	      ti->tObj->Image[ti->tObj->BaseLevel]->Width,
-	      ti->tObj->Image[ti->tObj->BaseLevel]->Height);
+	      ti->tObj->Image[0][ti->tObj->BaseLevel]->Width,
+	      ti->tObj->Image[0][ti->tObj->BaseLevel]->Height);
    }
    else
       fprintf(stderr, "\tName: UNNAMED\n");
@@ -70,7 +71,7 @@ fxPrintTextureData(tfxTexInfo * ti)
       fprintf(stderr, "\tMem1: %x-%x\n", (unsigned) ti->tm[1]->startAddr,
 	      (unsigned) ti->tm[1]->endAddr);
    fprintf(stderr, "\tMipmaps: %d-%d\n", ti->minLevel, ti->maxLevel);
-   fprintf(stderr, "\tFilters: min %d min %d\n",
+   fprintf(stderr, "\tFilters: min %d max %d\n",
 	   (int) ti->minFilt, (int) ti->maxFilt);
    fprintf(stderr, "\tClamps: s %d t %d\n", (int) ti->sClamp,
 	   (int) ti->tClamp);
@@ -140,13 +141,12 @@ fxDDTexBind(GLcontext * ctx, GLenum target, struct gl_texture_object *tObj)
       fprintf(stderr, "fxDDTexBind(%d, %x)\n", tObj->Name, (GLuint)tObj->DriverData);
    }
 
-   if (target != GL_TEXTURE_2D)
+   if ((target != GL_TEXTURE_1D) && (target != GL_TEXTURE_2D))
       return;
 
    if (!tObj->DriverData) {
       tObj->DriverData = fxAllocTexObjData(fxMesa);
    }
-
    ti = fxTMGetTexInfo(tObj);
 
    fxMesa->texBindNumber++;
@@ -196,16 +196,14 @@ fxDDTexParam(GLcontext * ctx, GLenum target, struct gl_texture_object *tObj,
                       _mesa_lookup_enum_by_nr(param));
    }
 
-   if (target != GL_TEXTURE_2D)
+   if ((target != GL_TEXTURE_1D) && (target != GL_TEXTURE_2D))
       return;
 
    if (!tObj->DriverData)
       tObj->DriverData = fxAllocTexObjData(fxMesa);
-
    ti = fxTMGetTexInfo(tObj);
 
    switch (pname) {
-
    case GL_TEXTURE_MIN_FILTER:
       switch (param) {
       case GL_NEAREST:
@@ -219,42 +217,52 @@ fxDDTexParam(GLcontext * ctx, GLenum target, struct gl_texture_object *tObj,
 	 ti->LODblend = FXFALSE;
 	 break;
       case GL_NEAREST_MIPMAP_LINEAR:
-        /* ZZZ: HACK ALERT! disable LODBlend, because we can't implement
-                on Napalm. Ohwell, until at least I decide what to do...
-                trilinear is bugged! mipmap blending produce
-                incorrect filtered colors for the smallest mipmap levels. */
-#if 0
-	 if (fxMesa->haveTwoTMUs) {
-	    ti->mmMode = GR_MIPMAP_NEAREST;
-	    ti->LODblend = FXTRUE;
-	 }
-	 else {
-	    ti->mmMode = GR_MIPMAP_NEAREST_DITHER;
-	    ti->LODblend = FXFALSE;
-	 }
-	 ti->minFilt = GR_TEXTUREFILTER_POINT_SAMPLED;
-	 break; /* ZZZ: we may have to fall through here for V3 */
-#endif
+         /* [koolsmoky]
+          * trilinear is bugged! mipmap blending produce
+          * incorrect filtered colors for the smallest mipmap levels.
+          * [dBorca]
+          * currently Napalm can't do single-pass trilinear,
+          * because the way its combiners are set. So we fall back
+          * to GL_NEAREST_MIPMAP_NEAREST. We'll let true trilinear
+          * enabled for V2, V3. If user shoots foot, not our problem!
+          */
+         if (!fxMesa->HaveCmbExt) {
+	    if (fxMesa->haveTwoTMUs) {
+	       ti->mmMode = GR_MIPMAP_NEAREST;
+	       ti->LODblend = FXTRUE;
+            } else {
+	       ti->mmMode = GR_MIPMAP_NEAREST_DITHER;
+	       ti->LODblend = FXFALSE;
+            }
+	    ti->minFilt = GR_TEXTUREFILTER_POINT_SAMPLED;
+	    break;
+         }
       case GL_NEAREST_MIPMAP_NEAREST:
 	 ti->mmMode = GR_MIPMAP_NEAREST;
 	 ti->minFilt = GR_TEXTUREFILTER_POINT_SAMPLED;
 	 ti->LODblend = FXFALSE;
 	 break;
       case GL_LINEAR_MIPMAP_LINEAR:
-        /* ZZZ: HACK ALERT! trilinear is bugged! mipmap blending produce
-                incorrect filtered colors for the smallest mipmap levels. */
-#if 0
-	 if (fxMesa->haveTwoTMUs) {
-	    ti->mmMode = GR_MIPMAP_NEAREST;
-	    ti->LODblend = FXTRUE;
-	 }
-	 else {
-	    ti->mmMode = GR_MIPMAP_NEAREST_DITHER;
-	    ti->LODblend = FXFALSE;
-	 }
-	 ti->minFilt = GR_TEXTUREFILTER_BILINEAR;
-	 break; /* ZZZ: we may have to fall through here for V3 */
-#endif
+         /* [koolsmoky]
+          * trilinear is bugged! mipmap blending produce
+          * incorrect filtered colors for the smallest mipmap levels.
+          * [dBorca]
+          * currently Napalm can't do single-pass trilinear,
+          * because the way its combiners are set. So we fall back
+          * to GL_LINEAR_MIPMAP_NEAREST. We'll let true trilinear
+          * enabled for V2, V3. If user shoots foot, not our problem!
+          */
+         if (!fxMesa->HaveCmbExt) {
+            if (fxMesa->haveTwoTMUs) {
+               ti->mmMode = GR_MIPMAP_NEAREST;
+               ti->LODblend = FXTRUE;
+            } else {
+               ti->mmMode = GR_MIPMAP_NEAREST_DITHER;
+               ti->LODblend = FXFALSE;
+            }
+            ti->minFilt = GR_TEXTUREFILTER_BILINEAR;
+            break;
+         }
       case GL_LINEAR_MIPMAP_NEAREST:
 	 ti->mmMode = GR_MIPMAP_NEAREST;
 	 ti->minFilt = GR_TEXTUREFILTER_BILINEAR;
@@ -277,7 +285,7 @@ fxDDTexParam(GLcontext * ctx, GLenum target, struct gl_texture_object *tObj,
       default:
 	 break;
       }
-      fxTexInvalidate(ctx, tObj);
+      fxMesa->new_state |= FX_NEW_TEXTURING;
       break;
 
    case GL_TEXTURE_WRAP_S:
@@ -355,7 +363,26 @@ fxDDTexDel(GLcontext * ctx, struct gl_texture_object *tObj)
 
    FREE(ti);
    tObj->DriverData = NULL;
+
+   /* Free mipmap images and the texture object itself */
+   _mesa_delete_texture_object(ctx, tObj);
 }
+
+
+/**
+ * Allocate a new texture object.
+ * Called via ctx->Driver.NewTextureObject.
+ * Note: this function will be called during context creation to
+ * allocate the default texture objects.
+ */
+struct gl_texture_object *
+fxDDNewTextureObject( GLcontext *ctx, GLuint name, GLenum target )
+{
+   struct gl_texture_object *obj;
+   obj = _mesa_new_texture_object(ctx, name, target);
+   return obj;
+}
+
 
 /*
  * Return true if texture is resident, false otherwise.
@@ -363,8 +390,8 @@ fxDDTexDel(GLcontext * ctx, struct gl_texture_object *tObj)
 GLboolean
 fxDDIsTextureResident(GLcontext *ctx, struct gl_texture_object *tObj)
 {
- tfxTexInfo *ti = fxTMGetTexInfo(tObj);
- return (ti && ti->isInTM);
+   tfxTexInfo *ti = fxTMGetTexInfo(tObj);
+   return (ti && ti->isInTM);
 }
 
 
@@ -450,8 +477,11 @@ fxDDTexPalette(GLcontext * ctx, struct gl_texture_object *tObj)
 	 fprintf(stderr, "fxDDTexPalette(%d, %x)\n",
 		 tObj->Name, (GLuint) tObj->DriverData);
       }
+      /* This might be a proxy texture. */
+      if (!tObj->Palette.Table)
+         return; 
       if (!tObj->DriverData)
-	 tObj->DriverData = fxAllocTexObjData(fxMesa);
+         tObj->DriverData = fxAllocTexObjData(fxMesa);
       ti = fxTMGetTexInfo(tObj);
       ti->paltype = convertPalette(fxMesa, ti->palette.data, &tObj->Palette);
       fxTexInvalidate(ctx, tObj);
@@ -484,13 +514,12 @@ fxDDTexUseGlbPalette(GLcontext * ctx, GLboolean state)
    else {
       fxMesa->haveGlobalPaletteTexture = 0;
 
+      /* [dBorca] tis beyond my comprehension */
       if ((ctx->Texture.Unit[0]._Current == ctx->Texture.Unit[0].Current2D) &&
 	  (ctx->Texture.Unit[0]._Current != NULL)) {
 	 struct gl_texture_object *tObj = ctx->Texture.Unit[0]._Current;
-
-	 if (!tObj->DriverData)
-	    tObj->DriverData = fxAllocTexObjData(fxMesa);
-
+         if (!tObj->DriverData)
+           tObj->DriverData = fxAllocTexObjData(fxMesa);
 	 fxTexInvalidate(ctx, tObj);
       }
    }
@@ -545,6 +574,7 @@ fxTexGetInfo(int w, int h, GrLOD_t * lodlevel, GrAspectRatio_t * ar,
    l = MAX2(logw, logh);
    aspectratio = logw - logh;
    ws = hs = 1;
+   s = t = 256.0f;
 
    /* hardware only allows a maximum aspect ratio of 8x1, so handle
     * |aspectratio| > 3 by scaling the image and using an 8x1 aspect
@@ -552,45 +582,33 @@ fxTexGetInfo(int w, int h, GrLOD_t * lodlevel, GrAspectRatio_t * ar,
     */
    switch (aspectratio) {
    case 0:
-      s = 256.0f;
-      t = 256.0f;
       break;
    case 1:
-      s = 256.0f;
       t = 128.0f;
       break;
    case 2:
-      s = 256.0f;
       t = 64.0f;
       break;
    case 3:
-      s = 256.0f;
       t = 32.0f;
       break;
    case -1:
       s = 128.0f;
-      t = 256.0f;
       break;
    case -2:
       s = 64.0f;
-      t = 256.0f;
       break;
    case -3:
       s = 32.0f;
-      t = 256.0f;
       break;
    default:
       if (aspectratio > 3) {
-         s = 256.0f;
          t = 32.0f;
-         ws = 1;
          hs = 1 << (aspectratio - 3);
          aspectratio = GR_ASPECT_LOG2_8x1;
       } else /*if (aspectratio < -3)*/ {
          s = 32.0f;
-         t = 256.0f;
          ws = 1 << (-aspectratio - 3);
-         hs = 1;
          aspectratio = GR_ASPECT_LOG2_1x8;
       }
    }
@@ -621,7 +639,7 @@ static GLboolean
 fxIsTexSupported(GLenum target, GLint internalFormat,
 		 const struct gl_texture_image *image)
 {
-   if (target != GL_TEXTURE_2D)
+   if ((target != GL_TEXTURE_1D) && (target != GL_TEXTURE_2D))
       return GL_FALSE;
 
 #if 0
@@ -645,13 +663,15 @@ fxIsTexSupported(GLenum target, GLint internalFormat,
  * may get defined in texutil.c) but we have to account for scaled texture
  * images on tdfx hardware (the 8:1 aspect ratio limit).
  * Hence, we need special functions here.
+ *
+ * [dBorca]
+ * this better be right, if we will advertise GL_SGIS_generate_mipmap!
  */
 
 static void
 fetch_intensity8(const struct gl_texture_image *texImage,
-		 GLint i, GLint j, GLint k, GLvoid * texelOut)
+		 GLint i, GLint j, GLint k, GLchan *rgba)
 {
-   GLchan *rgba = (GLchan *) texelOut;
    const tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
    const GLubyte *texel;
 
@@ -668,9 +688,8 @@ fetch_intensity8(const struct gl_texture_image *texImage,
 
 static void
 fetch_luminance8(const struct gl_texture_image *texImage,
-		 GLint i, GLint j, GLint k, GLvoid * texelOut)
+		 GLint i, GLint j, GLint k, GLchan *rgba)
 {
-   GLchan *rgba = (GLchan *) texelOut;
    const tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
    const GLubyte *texel;
 
@@ -687,9 +706,8 @@ fetch_luminance8(const struct gl_texture_image *texImage,
 
 static void
 fetch_alpha8(const struct gl_texture_image *texImage,
-	     GLint i, GLint j, GLint k, GLvoid * texelOut)
+	     GLint i, GLint j, GLint k, GLchan *rgba)
 {
-   GLchan *rgba = (GLchan *) texelOut;
    const tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
    const GLubyte *texel;
 
@@ -706,9 +724,8 @@ fetch_alpha8(const struct gl_texture_image *texImage,
 
 static void
 fetch_index8(const struct gl_texture_image *texImage,
-	     GLint i, GLint j, GLint k, GLvoid * texelOut)
+	     GLint i, GLint j, GLint k, GLchan *indexOut)
 {
-   GLchan *indexOut = (GLchan *) texelOut;
    const tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
    const GLubyte *texel;
 
@@ -722,9 +739,8 @@ fetch_index8(const struct gl_texture_image *texImage,
 
 static void
 fetch_luminance8_alpha8(const struct gl_texture_image *texImage,
-			GLint i, GLint j, GLint k, GLvoid * texelOut)
+			GLint i, GLint j, GLint k, GLchan *rgba)
 {
-   GLchan *rgba = (GLchan *) texelOut;
    const tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
    const GLubyte *texel;
 
@@ -741,9 +757,8 @@ fetch_luminance8_alpha8(const struct gl_texture_image *texImage,
 
 static void
 fetch_r5g6b5(const struct gl_texture_image *texImage,
-	     GLint i, GLint j, GLint k, GLvoid * texelOut)
+	     GLint i, GLint j, GLint k, GLchan *rgba)
 {
-   GLchan *rgba = (GLchan *) texelOut;
    const tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
    const GLushort *texel;
 
@@ -760,9 +775,8 @@ fetch_r5g6b5(const struct gl_texture_image *texImage,
 
 static void
 fetch_r4g4b4a4(const struct gl_texture_image *texImage,
-	       GLint i, GLint j, GLint k, GLvoid * texelOut)
+	       GLint i, GLint j, GLint k, GLchan *rgba)
 {
-   GLchan *rgba = (GLchan *) texelOut;
    const tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
    const GLushort *texel;
 
@@ -779,9 +793,8 @@ fetch_r4g4b4a4(const struct gl_texture_image *texImage,
 
 static void
 fetch_r5g5b5a1(const struct gl_texture_image *texImage,
-	       GLint i, GLint j, GLint k, GLvoid * texelOut)
+	       GLint i, GLint j, GLint k, GLchan *rgba)
 {
-   GLchan *rgba = (GLchan *) texelOut;
    const tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
    const GLushort *texel;
 
@@ -798,9 +811,8 @@ fetch_r5g5b5a1(const struct gl_texture_image *texImage,
 
 static void
 fetch_a8r8g8b8(const struct gl_texture_image *texImage,
-	       GLint i, GLint j, GLint k, GLvoid * texelOut)
+	       GLint i, GLint j, GLint k, GLchan *rgba)
 {
-    GLchan *rgba = (GLchan *) texelOut;
     const tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
     const GLuint *texel;
 
@@ -1150,7 +1162,7 @@ fxGlideFormat(GLint mesaFormat)
 }
 
 
-static FetchTexelFunc
+static FetchTexelFuncC
 fxFetchFunction(GLint mesaFormat)
 {
    switch (mesaFormat) {
@@ -1238,7 +1250,7 @@ fxDDTexImage2D(GLcontext * ctx, GLenum target, GLint level,
 
 #if 0 && FX_COMPRESS_S3TC_AS_FXT1_HACK
    /* [koolsmoky] substitute FXT1 for DXTn and Legacy S3TC */
-   /* [dborca] we should update texture's attribute, then,
+   /* [dBorca] we should update texture's attribute, then,
     * because if the application asks us to decompress, we
     * have to know the REAL format! Also, DXT3/5 might not
     * be correct, since it would mess with "compressedSize".
@@ -1261,7 +1273,7 @@ fxDDTexImage2D(GLcontext * ctx, GLenum target, GLint level,
    }
 #endif
 #if 1 || FX_COMPRESS_DXT5_AS_DXT3_HACK
-   /* [dborca] either VSA is stupid at DXT5, 
+   /* [dBorca] either VSA is stupid at DXT5, 
     * or our compression tool is broken. See
     * above for caveats.
     */
@@ -1379,7 +1391,7 @@ fxDDTexImage2D(GLcontext * ctx, GLenum target, GLint level,
    }
 
    ti->info.format = mml->glideFormat;
-   texImage->FetchTexel = fxFetchFunction(texImage->TexFormat->MesaFormat);
+   texImage->FetchTexelc = fxFetchFunction(texImage->TexFormat->MesaFormat);
 
    /* [dBorca]
     * Hack alert: unsure...
@@ -1590,7 +1602,7 @@ fxDDCompressedTexImage2D (GLcontext *ctx, GLenum target,
 #endif
 
    ti->info.format = mml->glideFormat;
-   texImage->FetchTexel = fxFetchFunction(texImage->TexFormat->MesaFormat);
+   texImage->FetchTexelc = fxFetchFunction(texImage->TexFormat->MesaFormat);
 
    /* [dBorca] Hack alert:
     * what about different size/texel? other anomalies? SW rescaling?
@@ -1659,6 +1671,41 @@ fxDDCompressedTexSubImage2D( GLcontext *ctx, GLenum target,
       fxTMReloadMipMapLevel(fxMesa, texObj, level);
    else
       fxTexInvalidate(ctx, texObj);
+}
+
+
+void
+fxDDTexImage1D (GLcontext *ctx, GLenum target, GLint level,
+	        GLint internalFormat, GLint width, GLint border,
+	        GLenum format, GLenum type, const GLvoid *pixels,
+	        const struct gl_pixelstore_attrib *packing,
+	        struct gl_texture_object *texObj,
+	        struct gl_texture_image *texImage)
+{
+ fxDDTexImage2D(ctx, target, level,
+	        internalFormat, width, 1, border,
+	        format, type, pixels,
+	        packing,
+	        texObj,
+	        texImage);
+}
+
+
+GLboolean
+fxDDTestProxyTexImage (GLcontext *ctx, GLenum target,
+                       GLint level, GLint internalFormat,
+                       GLenum format, GLenum type,
+                       GLint width, GLint height,
+                       GLint depth, GLint border)
+{
+ /* [dBorca]
+  * TODO - maybe through fxTexValidate()
+  */
+ return _mesa_test_proxy_teximage(ctx, target,
+                                  level, internalFormat,
+                                  format, type,
+                                  width, height,
+                                  depth, border);
 }
 
 

@@ -63,50 +63,103 @@ fxTexValidate(GLcontext * ctx, struct gl_texture_object *tObj)
 
    ti->tObj = tObj;
    minl = ti->minLevel = tObj->BaseLevel;
-   maxl = ti->maxLevel = MIN2(tObj->MaxLevel, tObj->Image[0]->MaxLog2);
+   maxl = ti->maxLevel = MIN2(tObj->MaxLevel, tObj->Image[0][0]->MaxLog2);
 
-   fxTexGetInfo(tObj->Image[minl]->Width, tObj->Image[minl]->Height,
+#if 1||FX_RESCALE_BIG_TEXURES
+{
+   extern void _mesa_rescale_teximage2d( GLuint bytesPerPixel,
+                                         GLuint dstRowStride,
+                                         GLint srcWidth, GLint srcHeight,
+                                         GLint dstWidth, GLint dstHeight,
+                                         const GLvoid *srcImage, GLvoid *dstImage );
+   fxMesaContext fxMesa = FX_CONTEXT(ctx);
+   if (maxl - minl > fxMesa->textureMaxLod) {
+      /* [dBorca]
+       * Ooooooook! Here's a(nother) long story.
+       * We get here because we need to handle a texture larger
+       * than hardware can support. Two cases:
+       * 1) we have mipmaps. Then we just push up to the first supported
+       *    LOD. A possible drawback is that Mesa will ignore the skipped
+       *    LODs on further texture handling.
+       *    Will this interfere with GL_TEXTURE_[MIN|BASE]_LEVEL? How?
+       * 2) we don't have mipmaps. We need to rescale texture; two ways:
+       *    a) create a new LOD and push up ti->minLevel and tObj->BaseLevel
+       *       but this means we need to rescale on both axes, which
+       *       yield unnecessary ugly texture. Also, same issues as 1)
+       *    b) rescale the biggest LOD in place and go two ways:
+       *       - update texImage->Width and texImage->Height, then
+       *         decrease maxLevel, so we won't rescale again on the
+       *         next validation. Changing texImage-> parameters is
+       *         not quite legal here (see convolution), but...
+       *       - leaving texImage-> parameters alone, while rescaling
+       *         texture and decreasing maxLevel makes Mesa puke. Also
+       *         this approach requires that mml->[wh]Scale go below 1,
+       *         otherwise bad ju-ju will be in our future (see fetch_texel)
+       *       Will this interfere with GL_TEXTURE_MAX_LEVEL? How?
+       *       The above approach is somehow dumb! we might have rescaled
+       *       once in TexImage2D to accomodate aspect ratio, and now we
+       *       are rescaling again. The thing is, in TexImage2D we don't
+       *       know whether we'll hit 1) or 2) by the time of validation.
+       * NB: we could handle mml->[wh]Scale nicely, using (biased) shifts.
+       *
+       * Which brings me to another issue. How can we handle NPOT textures?
+       * - rescaling NPOT to the next bigger POT (mml->[wh]Scale can't shift)
+       * - upping the max LOD to the next power-of-two, in fxTexGetInfo; then
+       *   choosing non-power-of-two values for ti->[st]Scale... Anyhow, we
+       *   still need to align mipmaps correctly in texture memory!
+       */
+      if ((tObj->MinFilter == GL_NEAREST) || (tObj->MinFilter == GL_LINEAR)) {
+         /* no mipmaps! need to rescale */
+         struct gl_texture_image *texImage = tObj->Image[0][minl];
+         tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
+         GLint texelBytes = texImage->TexFormat->TexelBytes;
+         GLvoid *texImage_Data = texImage->Data;
+         GLint _w = MIN2(mml->width, 1 << fxMesa->textureMaxLod);
+         GLint _h = MIN2(mml->height, 1 << fxMesa->textureMaxLod);
+         if (TDFX_DEBUG & VERBOSE_TEXTURE) {
+            fprintf(stderr, "fxTexValidate: rescaling %d x %d -> %d x %d\n",
+                            mml->width, mml->height,
+                            _w, _h);
+         }
+         fxTexGetInfo(_w, _h, NULL, NULL, NULL, NULL,
+                      &(mml->wScale), &(mml->hScale));
+         texImage->Width = _w / mml->wScale;
+         texImage->Height = _h / mml->hScale;
+         texImage->Data = MESA_PBUFFER_ALLOC(_w * _h * texelBytes);
+         _mesa_rescale_teximage2d(texelBytes,
+                                  _w * texelBytes, /* dst stride */
+                                  mml->width, mml->height, /* src */
+                                  _w, _h, /* dst */
+                                  texImage_Data /*src*/, texImage->Data /*dst*/ );
+         MESA_PBUFFER_FREE(texImage_Data);
+         mml->width = _w;
+         mml->height = _h;
+         maxl = ti->maxLevel = tObj->Image[0][0]->MaxLog2 = minl + fxMesa->textureMaxLod;
+      } else {
+         /* skip a certain number of LODs */
+         minl += maxl - fxMesa->textureMaxLod;
+         if (TDFX_DEBUG & VERBOSE_TEXTURE) {
+            fprintf(stderr, "fxTexValidate: skipping %d LODs\n", minl - ti->minLevel);
+         }
+         ti->minLevel = tObj->BaseLevel = minl;
+      }
+   }
+}
+#endif
+
+   fxTexGetInfo(tObj->Image[0][minl]->Width, tObj->Image[0][minl]->Height,
 		&(FX_largeLodLog2(ti->info)), &(FX_aspectRatioLog2(ti->info)),
 		&(ti->sScale), &(ti->tScale),
 		NULL, NULL);
 
    if ((tObj->MinFilter != GL_NEAREST) && (tObj->MinFilter != GL_LINEAR))
-      fxTexGetInfo(tObj->Image[maxl]->Width, tObj->Image[maxl]->Height,
+      fxTexGetInfo(tObj->Image[0][maxl]->Width, tObj->Image[0][maxl]->Height,
 		   &(FX_smallLodLog2(ti->info)), NULL,
 		   NULL, NULL, NULL, NULL);
    else
       FX_smallLodLog2(ti->info) = FX_largeLodLog2(ti->info);
 
-   ti->baseLevelInternalFormat = tObj->Image[minl]->Format;
-
-   switch (tObj->WrapS) {
-   case GL_MIRRORED_REPEAT:
-      ti->sClamp = GR_TEXTURECLAMP_MIRROR_EXT;
-      break;
-   case GL_CLAMP_TO_EDGE: /* CLAMP discarding border */
-   case GL_CLAMP:
-      ti->sClamp = GR_TEXTURECLAMP_CLAMP;
-      break;
-   case GL_REPEAT:
-      ti->sClamp = GR_TEXTURECLAMP_WRAP;
-      break;
-   default:
-      ;				/* silence compiler warning */
-   }
-   switch (tObj->WrapT) {
-   case GL_MIRRORED_REPEAT:
-      ti->tClamp = GR_TEXTURECLAMP_MIRROR_EXT;
-      break;
-   case GL_CLAMP_TO_EDGE: /* CLAMP discarding border */
-   case GL_CLAMP:
-      ti->tClamp = GR_TEXTURECLAMP_CLAMP;
-      break;
-   case GL_REPEAT:
-      ti->tClamp = GR_TEXTURECLAMP_WRAP;
-      break;
-   default:
-      ;				/* silence compiler warning */
-   }
+   ti->baseLevelInternalFormat = tObj->Image[0][minl]->Format;
 
    ti->validated = GL_TRUE;
 
@@ -484,7 +537,7 @@ fxSetupTextureSingleTMU_NoLock(GLcontext * ctx, GLuint textureset)
    GLuint unitsmode;
    GLint ifmt;
    tfxTexInfo *ti;
-   struct gl_texture_object *tObj = ctx->Texture.Unit[textureset].Current2D;
+   struct gl_texture_object *tObj = ctx->Texture.Unit[textureset]._Current;
    int tmu;
 
    if (TDFX_DEBUG & VERBOSE_DRIVER) {
@@ -868,8 +921,8 @@ fxSetupTextureDoubleTMU_NoLock(GLcontext * ctx)
    struct tdfx_texcombine tex0, tex1;
    GrCombineLocal_t localc, locala;
    tfxTexInfo *ti0, *ti1;
-   struct gl_texture_object *tObj0 = ctx->Texture.Unit[1].Current2D;
-   struct gl_texture_object *tObj1 = ctx->Texture.Unit[0].Current2D;
+   struct gl_texture_object *tObj0 = ctx->Texture.Unit[1]._Current;
+   struct gl_texture_object *tObj1 = ctx->Texture.Unit[0]._Current;
    GLuint envmode, ifmt, unitsmode;
    int tmu0 = 0, tmu1 = 1;
 
@@ -1216,15 +1269,15 @@ fxSetupTexture_NoLock(GLcontext * ctx)
 
    if (fxMesa->HaveCmbExt) {
       /* Texture Combine, Color Combine and Alpha Combine. */
-      if (ctx->Texture.Unit[0]._ReallyEnabled == TEXTURE_2D_BIT &&
-          ctx->Texture.Unit[1]._ReallyEnabled == TEXTURE_2D_BIT &&
+      if ((ctx->Texture.Unit[0]._ReallyEnabled & (TEXTURE_1D_BIT|TEXTURE_2D_BIT)) &&
+          (ctx->Texture.Unit[1]._ReallyEnabled & (TEXTURE_1D_BIT|TEXTURE_2D_BIT)) &&
           fxMesa->haveTwoTMUs) {
          fxSetupTextureDoubleTMUNapalm_NoLock(ctx);
       }
-      else if (ctx->Texture.Unit[0]._ReallyEnabled == TEXTURE_2D_BIT) {
+      else if (ctx->Texture.Unit[0]._ReallyEnabled & (TEXTURE_1D_BIT|TEXTURE_2D_BIT)) {
          fxSetupTextureSingleTMUNapalm_NoLock(ctx, 0);
       }
-      else if (ctx->Texture.Unit[1]._ReallyEnabled == TEXTURE_2D_BIT) {
+      else if (ctx->Texture.Unit[1]._ReallyEnabled & (TEXTURE_1D_BIT|TEXTURE_2D_BIT)) {
          fxSetupTextureSingleTMUNapalm_NoLock(ctx, 1);
       }
       else {
@@ -1232,15 +1285,15 @@ fxSetupTexture_NoLock(GLcontext * ctx)
       }
    } else {
       /* Texture Combine, Color Combine and Alpha Combine. */
-      if (ctx->Texture.Unit[0]._ReallyEnabled == TEXTURE_2D_BIT &&
-          ctx->Texture.Unit[1]._ReallyEnabled == TEXTURE_2D_BIT &&
+      if ((ctx->Texture.Unit[0]._ReallyEnabled & (TEXTURE_1D_BIT|TEXTURE_2D_BIT)) &&
+          (ctx->Texture.Unit[1]._ReallyEnabled & (TEXTURE_1D_BIT|TEXTURE_2D_BIT)) &&
           fxMesa->haveTwoTMUs) {
          fxSetupTextureDoubleTMU_NoLock(ctx);
       }
-      else if (ctx->Texture.Unit[0]._ReallyEnabled == TEXTURE_2D_BIT) {
+      else if (ctx->Texture.Unit[0]._ReallyEnabled & (TEXTURE_1D_BIT|TEXTURE_2D_BIT)) {
          fxSetupTextureSingleTMU_NoLock(ctx, 0);
       }
-      else if (ctx->Texture.Unit[1]._ReallyEnabled == TEXTURE_2D_BIT) {
+      else if (ctx->Texture.Unit[1]._ReallyEnabled & (TEXTURE_1D_BIT|TEXTURE_2D_BIT)) {
          fxSetupTextureSingleTMU_NoLock(ctx, 1);
       }
       else {
@@ -1474,26 +1527,21 @@ which are drawn front-to-back.
 }
 
 void
-fxDDBlendFunc(GLcontext * ctx, GLenum sfactor, GLenum dfactor)
-{
-   fxDDBlendFuncSeparate(ctx, sfactor, dfactor, sfactor, dfactor);
-}
-
-void
-fxDDBlendEquation(GLcontext * ctx, GLenum mode)
+fxDDBlendEquationSeparate(GLcontext * ctx, GLenum modeRGB, GLenum modeA)
 {
  fxMesaContext fxMesa = FX_CONTEXT(ctx);
  tfxUnitsState *us = &fxMesa->unitsState;
  GrAlphaBlendOp_t q;
 
- switch (mode) {
-        case GL_FUNC_ADD_EXT:
+ assert( modeRGB == modeA );
+ switch (modeRGB) {
+        case GL_FUNC_ADD:
              q = GR_BLEND_OP_ADD;
              break;
-        case GL_FUNC_SUBTRACT_EXT:
+        case GL_FUNC_SUBTRACT:
              q = GR_BLEND_OP_SUB;
              break;
-        case GL_FUNC_REVERSE_SUBTRACT_EXT:
+        case GL_FUNC_REVERSE_SUBTRACT:
              q = GR_BLEND_OP_REVSUB;
              break;
         default:
@@ -1991,6 +2039,7 @@ fxDDEnable(GLcontext * ctx, GLenum cap, GLboolean state)
    case GL_LINE_STIPPLE:
    case GL_POINT_SMOOTH:
    case GL_POLYGON_SMOOTH:
+   case GL_TEXTURE_1D:
    case GL_TEXTURE_2D:
       fxMesa->new_state |= FX_NEW_TEXTURING;
       break;

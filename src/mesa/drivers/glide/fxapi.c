@@ -42,6 +42,8 @@
 #if defined(FX)
 #include "fxdrv.h"
 
+#include "drivers/common/driverfuncs.h"
+
 #ifndef TDFX_DEBUG
 int TDFX_DEBUG = (0 
 /*		  | VERBOSE_VARRAY */
@@ -203,8 +205,10 @@ gl3DfxSetPaletteEXT(GLuint * pal)
 static GrScreenResolution_t fxBestResolution (int width, int height)
 {
  static int resolutions[][5] = {
+#if 1 /* Voodoo^2 can't fullscreen these, because of Glide */
         { 320,  200, GR_RESOLUTION_320x200  },
         { 320,  240, GR_RESOLUTION_320x240  },
+#endif
         { 512,  384, GR_RESOLUTION_512x384  },
         { 640,  400, GR_RESOLUTION_640x400  },
         { 640,  480, GR_RESOLUTION_640x480  },
@@ -255,6 +259,7 @@ fxMesaCreateContext(GLuint win,
 {
  fxMesaContext fxMesa = NULL;
  GLcontext *ctx = NULL, *shareCtx = NULL;
+ struct dd_function_table functions;
 
  int i;
  const char *str;
@@ -345,17 +350,17 @@ fxMesaCreateContext(GLuint win,
  }
 
  fxMesa->type = voodoo->type;
- fxMesa->HavePalExt = voodoo->HavePalExt;
- fxMesa->HavePixExt = voodoo->HavePixExt;
- fxMesa->HaveTexFmt = voodoo->HaveTexFmt;
- fxMesa->HaveCmbExt = voodoo->HaveCmbExt;
- fxMesa->HaveMirExt = voodoo->HaveMirExt;
- fxMesa->HaveTexUma = voodoo->HaveTexUma;
+ fxMesa->HavePalExt = voodoo->HavePalExt && !getenv("MESA_FX_IGNORE_PALEXT");
+ fxMesa->HavePixExt = voodoo->HavePixExt && !getenv("MESA_FX_IGNORE_PIXEXT");
+ fxMesa->HaveTexFmt = voodoo->HaveTexFmt && !getenv("MESA_FX_IGNORE_TEXFMT");
+ fxMesa->HaveCmbExt = voodoo->HaveCmbExt && !getenv("MESA_FX_IGNORE_CMBEXT");
+ fxMesa->HaveMirExt = voodoo->HaveMirExt && !getenv("MESA_FX_IGNORE_MIREXT");
+ fxMesa->HaveTexUma = voodoo->HaveTexUma && !getenv("MESA_FX_IGNORE_TEXUMA");
  fxMesa->Glide = glbHWConfig.Glide;
  Glide = &fxMesa->Glide;
  fxMesa->HaveTexus2 = Glide->txImgQuantize &&
                       Glide->txMipQuantize &&
-                      Glide->txPalToNcc;
+                      Glide->txPalToNcc && !getenv("MESA_FX_IGNORE_TEXUS2");
 
  /*
   * Pixel tables are used during pixel read-back
@@ -588,7 +593,7 @@ fxMesaCreateContext(GLuint win,
   }
   END_BOARD_LOCK();
 
-  sprintf(fxMesa->rendererString, "Mesa %s v0.51 %s %dMB FB, %dMB TM, %d TMU, %s",
+  sprintf(fxMesa->rendererString, "Mesa %s v0.60 %s %dMB FB, %dMB TM, %d TMU, %s",
                            grGetString(GR_RENDERER),
                            grGetString(GR_HARDWARE),
                            fbRam,
@@ -649,9 +654,9 @@ fxMesaCreateContext(GLuint win,
       goto errorhandler;
    }
 
-   ctx = fxMesa->glCtx = _mesa_create_context(fxMesa->glVis,
-                                              shareCtx,
-					      (void *) fxMesa, GL_TRUE);
+   _mesa_init_driver_functions(&functions);
+   ctx = fxMesa->glCtx = _mesa_create_context(fxMesa->glVis, shareCtx,
+					      &functions, (void *) fxMesa);
    if (!ctx) {
       str = "_mesa_create_context";
       goto errorhandler;
@@ -779,13 +784,21 @@ fxMesaDestroyContext(fxMesaContext fxMesa)
 
    glbTotNumCtx--;
 
+   /* [dBorca]
+    * close the hardware first, so we can debug
+    * atexit problems (memory leaks, etc).
+    * NB: fxDDDestroyFxMesaContext must be called
+    * before _mesa_destroy_context; which must be
+    * called before fxTMClose!
+    */
+   grSstWinClose(fxMesa->glideContext);
+   fxCloseHardware();
+
    fxDDDestroyFxMesaContext(fxMesa);
    _mesa_destroy_visual(fxMesa->glVis);
    _mesa_destroy_context(fxMesa->glCtx);
    _mesa_destroy_framebuffer(fxMesa->glBuffer);
-
-   grSstWinClose(fxMesa->glideContext);
-   fxCloseHardware();
+   fxTMClose(fxMesa);
 
    FREE(fxMesa);
 

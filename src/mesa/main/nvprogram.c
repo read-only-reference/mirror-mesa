@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.0
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -28,6 +28,14 @@
  * \author Brian Paul
  */
 
+/*
+ * Regarding GL_NV_fragment/vertex_program, GL_NV_vertex_program1_1, etc:
+ *
+ * Portions of this software may use or implement intellectual
+ * property owned and licensed by NVIDIA Corporation. NVIDIA disclaims
+ * any and all warranties with respect to such intellectual property,
+ * including any use thereof or modifications thereto.
+ */
 
 #include "glheader.h"
 #include "context.h"
@@ -60,6 +68,8 @@ _mesa_ExecuteProgramNV(GLenum target, GLuint id, const GLfloat *params)
       _mesa_error(ctx, GL_INVALID_ENUM, "glExecuteProgramNV");
       return;
    }
+
+   FLUSH_VERTICES(ctx, _NEW_PROGRAM);
 
    vprog = (struct vertex_program *)
       _mesa_HashLookup(ctx->Shared->Programs, id);
@@ -506,6 +516,8 @@ _mesa_LoadProgramNV(GLenum target, GLuint id, GLsizei len,
       return;
    }
 
+   FLUSH_VERTICES(ctx, _NEW_PROGRAM);
+
    prog = (struct program *) _mesa_HashLookup(ctx->Shared->Programs, id);
 
    if (prog && prog->Target != 0 && prog->Target != target) {
@@ -591,6 +603,7 @@ _mesa_ProgramParameter4fNV(GLenum target, GLuint index,
 
    if (target == GL_VERTEX_PROGRAM_NV && ctx->Extensions.NV_vertex_program) {
       if (index < MAX_NV_VERTEX_PROGRAM_PARAMS) {
+         FLUSH_VERTICES(ctx, _NEW_PROGRAM);
          ASSIGN_4V(ctx->VertexProgram.Parameters[index], x, y, z, w);
       }
       else {
@@ -692,6 +705,8 @@ _mesa_TrackMatrixNV(GLenum target, GLuint address,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
+   FLUSH_VERTICES(ctx, _NEW_PROGRAM);
+
    if (target == GL_VERTEX_PROGRAM_NV && ctx->Extensions.NV_vertex_program) {
       if (address & 0x3) {
          /* addr must be multiple of four */
@@ -753,6 +768,8 @@ _mesa_ProgramNamedParameter4fNV(GLuint id, GLsizei len, const GLubyte *name,
 
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
+
+   FLUSH_VERTICES(ctx, _NEW_PROGRAM);
 
    prog = (struct program *) _mesa_HashLookup(ctx->Shared->Programs, id);
    if (!prog || prog->Target != GL_FRAGMENT_PROGRAM_NV) {

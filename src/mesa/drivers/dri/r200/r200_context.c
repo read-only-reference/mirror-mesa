@@ -49,6 +49,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "tnl/tnl.h"
 #include "tnl/t_pipeline.h"
 
+#include "drivers/common/driverfuncs.h"
+
 #include "r200_context.h"
 #include "r200_ioctl.h"
 #include "r200_state.h"
@@ -132,21 +134,18 @@ static const char * const card_extensions[] =
     "GL_EXT_secondary_color",
     "GL_EXT_stencil_wrap",
     "GL_EXT_texture_edge_clamp",
-    "GL_EXT_texture_env_add",
     "GL_EXT_texture_env_combine",
     "GL_EXT_texture_env_dot3",
     "GL_EXT_texture_filter_anisotropic",
     "GL_EXT_texture_lod_bias",
+    "GL_EXT_texture_mirror_clamp",
+    "GL_EXT_texture_rectangle",
     "GL_ATI_texture_env_combine3",
     "GL_ATI_texture_mirror_once",
-    "GL_IBM_texture_mirrored_repeat",
     "GL_MESA_pack_invert",
     "GL_MESA_ycbcr_texture",
     "GL_NV_blend_square",
-    "GL_NV_texture_rectangle",
     "GL_SGIS_generate_mipmap",
-    "GL_SGIS_texture_border_clamp",
-    "GL_SGIS_texture_edge_clamp",
     NULL
 };
 
@@ -189,15 +188,15 @@ static const struct tnl_pipeline_stage *r200_pipeline[] = {
 
 /* Initialize the driver's misc functions.
  */
-static void r200InitDriverFuncs( GLcontext *ctx )
+static void r200InitDriverFuncs( struct dd_function_table *functions )
 {
-    ctx->Driver.GetBufferSize		= r200GetBufferSize;
-    ctx->Driver.ResizeBuffers           = _swrast_alloc_buffers;
-    ctx->Driver.GetString		= r200GetString;
+    functions->GetBufferSize		= r200GetBufferSize;
+    functions->ResizeBuffers           = _swrast_alloc_buffers;
+    functions->GetString		= r200GetString;
 
-    ctx->Driver.Error			= NULL;
-    ctx->Driver.DrawPixels		= NULL;
-    ctx->Driver.Bitmap			= NULL;
+    functions->Error			= NULL;
+    functions->DrawPixels		= NULL;
+    functions->Bitmap			= NULL;
 }
 
 static const struct dri_debug_control debug_control[] =
@@ -230,7 +229,7 @@ get_ust_nop( int64_t * ust )
 }
 
 
-/* Create the device specific context.
+/* Create the device specific rendering context.
  */
 GLboolean r200CreateContext( const __GLcontextModes *glVisual,
 			     __DRIcontextPrivate *driContextPriv,
@@ -238,6 +237,7 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
 {
    __DRIscreenPrivate *sPriv = driContextPriv->driScreenPriv;
    r200ScreenPtr screen = (r200ScreenPtr)(sPriv->private);
+   struct dd_function_table functions;
    r200ContextPtr rmesa;
    GLcontext *ctx, *shareCtx;
    int i;
@@ -252,12 +252,31 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    if ( !rmesa )
       return GL_FALSE;
 
-   /* Allocate the Mesa context */
+   /* Parse configuration files.
+    * Do this here so that initialMaxAnisotropy is set before we create
+    * the default textures.
+    */
+   driParseConfigFiles (&rmesa->optionCache, &screen->optionCache,
+			screen->driScreen->myNum, "r200");
+   rmesa->initialMaxAnisotropy = driQueryOptionf(&rmesa->optionCache,
+                                                 "def_max_anisotropy");
+
+   /* Init default driver functions then plug in our R200-specific functions
+    * (the texture functions are especially important)
+    */
+   _mesa_init_driver_functions(&functions);
+   r200InitDriverFuncs(&functions);
+   r200InitIoctlFuncs(&functions);
+   r200InitStateFuncs(&functions);
+   r200InitTextureFuncs(&functions);
+
+   /* Allocate and initialize the Mesa context */
    if (sharedContextPrivate)
       shareCtx = ((r200ContextPtr) sharedContextPrivate)->glCtx;
    else
       shareCtx = NULL;
-   rmesa->glCtx = _mesa_create_context(glVisual, shareCtx, (void *) rmesa, GL_TRUE);
+   rmesa->glCtx = _mesa_create_context(glVisual, shareCtx,
+                                       &functions, (void *) rmesa);
    if (!rmesa->glCtx) {
       FREE(rmesa);
       return GL_FALSE;
@@ -273,10 +292,6 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    rmesa->dri.fd = sPriv->fd;
    rmesa->dri.drmMinor = sPriv->drmMinor;
 
-   /* Parse configuration files */
-   driParseConfigFiles (&rmesa->optionCache, &screen->optionCache,
-			screen->driScreen->myNum, "r200");
-
    rmesa->r200Screen = screen;
    rmesa->sarea = (RADEONSAREAPrivPtr)((GLubyte *)sPriv->pSAREA +
 				       screen->sarea_priv_offset);
@@ -288,6 +303,7 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    make_empty_list( & rmesa->swapped );
 
    rmesa->nr_heaps = 1 /* screen->numTexHeaps */ ;
+   assert(rmesa->nr_heaps < R200_NR_TEX_HEAPS);
    for ( i = 0 ; i < rmesa->nr_heaps ; i++ ) {
       rmesa->texture_heaps[i] = driCreateTextureHeap( i, rmesa,
 	    screen->texSize[i],
@@ -384,12 +400,17 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    if (rmesa->r200Screen->drmSupportsCubeMaps)
       _mesa_enable_extension( ctx, "GL_ARB_texture_cube_map" );
 
+#if 0
    r200InitDriverFuncs( ctx );
    r200InitIoctlFuncs( ctx );
    r200InitStateFuncs( ctx );
-   r200InitSpanFuncs( ctx );
-   r200InitPixelFuncs( ctx );
    r200InitTextureFuncs( ctx );
+#endif
+   /* plug in a few more device driver functions */
+   /* XXX these should really go right after _mesa_init_driver_functions() */
+   r200InitPixelFuncs( ctx );
+   r200InitSpanFuncs( ctx );
+   r200InitTnlFuncs( ctx );
    r200InitState( rmesa );
    r200InitSwtcl( ctx );
 
@@ -436,13 +457,15 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    tcl_mode = driQueryOptioni(&rmesa->optionCache, "tcl_mode");
    if (driQueryOptionb(&rmesa->optionCache, "no_rast")) {
       fprintf(stderr, "disabling 3D acceleration\n");
-      FALLBACK(rmesa, R200_FALLBACK_DISABLE, 1); 
+      FALLBACK(rmesa, R200_FALLBACK_DISABLE, 1);
    }
-   else if (tcl_mode == DRI_CONF_TCL_SW || getenv("R200_NO_TCL")) {
+   else if (tcl_mode == DRI_CONF_TCL_SW || getenv("R200_NO_TCL") ||
+	    !(rmesa->r200Screen->chipset & R200_CHIPSET_TCL)) {
+      rmesa->r200Screen->chipset &= ~R200_CHIPSET_TCL;
       fprintf(stderr, "disabling TCL support\n");
-      TCL_FALLBACK(rmesa->glCtx, R200_TCL_FALLBACK_TCL_DISABLE, 1); 
+      TCL_FALLBACK(rmesa->glCtx, R200_TCL_FALLBACK_TCL_DISABLE, 1);
    }
-   else {
+   if (rmesa->r200Screen->chipset & R200_CHIPSET_TCL) {
       if (tcl_mode >= DRI_CONF_TCL_VTXFMT && !getenv("R200_NO_VTXFMT")) {
 	 r200VtxfmtInit( ctx, tcl_mode >= DRI_CONF_TCL_CODEGEN );
       }

@@ -89,9 +89,8 @@ static void TAG(emit)( GLcontext *ctx,
 
    if (start) {
       proj =  (GLfloat (*)[4])((GLubyte *)proj + start * proj_stride);
-      if (IND & SETUP_PSIZ) {
+      if (IND & SETUP_PSIZ)
          psize =  (GLfloat (*)[4])((GLubyte *)psize + start * psize_stride);
-      }
       if (IND & SETUP_TMU0)
 	 tc0 =  (GLfloat (*)[4])((GLubyte *)tc0 + start * tc0_stride);
       if (IND & SETUP_TMU1) 
@@ -214,8 +213,8 @@ static void TAG(interp)( GLcontext *ctx,
    GrVertex *dst = (GrVertex *) (fxverts + edst);
    const GrVertex *out = (const GrVertex *) (fxverts + eout);
    const GrVertex *in = (const GrVertex *) (fxverts + ein);
-   const GLfloat wout = 1.0F / out->oow;
-   const GLfloat win = 1.0F / in->oow;
+   const GLfloat wout = oow / out->oow;
+   const GLfloat win = oow / in->oow;
 
    VIEWPORT_X(dst->x,   dstclip[0] * oow);
    VIEWPORT_Y(dst->y,   dstclip[1] * oow);
@@ -248,68 +247,36 @@ static void TAG(interp)( GLcontext *ctx,
    }
 
    if (IND & SETUP_TMU0) {
+      INTERP_F( t,
+		dst->tmuvtx[0].sow,
+		out->tmuvtx[0].sow * wout,
+		in->tmuvtx[0].sow * win );
+      INTERP_F( t,
+		dst->tmuvtx[0].tow,
+		out->tmuvtx[0].tow * wout,
+		in->tmuvtx[0].tow * win );
       if (IND & SETUP_PTEX) {
-	 INTERP_F( t, 
-		   dst->tmuvtx[0].sow, 
-		   out->tmuvtx[0].sow * wout, 
-		   in->tmuvtx[0].sow * win );
 	 INTERP_F( t,
-		   dst->tmuvtx[0].tow,
-		   out->tmuvtx[0].tow * wout, 
-		   in->tmuvtx[0].tow * win );
-	 INTERP_F( t, 
 		   dst->tmuvtx[0].oow, 
 		   out->tmuvtx[0].oow * wout, 
 		   in->tmuvtx[0].oow * win );
-
-	 dst->tmuvtx[0].sow *= oow;
-	 dst->tmuvtx[0].tow *= oow;
-	 dst->tmuvtx[0].oow *= oow;
-      } else {
-	 INTERP_F( t, 
-		   dst->tmuvtx[0].sow, 
-		   out->tmuvtx[0].sow * wout, 
-		   in->tmuvtx[0].sow * win );
-	 INTERP_F( t,
-		   dst->tmuvtx[0].tow,
-		   out->tmuvtx[0].tow * wout, 
-		   in->tmuvtx[0].tow * win );
-
-	 dst->tmuvtx[0].sow *= oow;
-	 dst->tmuvtx[0].tow *= oow;
       }
    }
 
    if (IND & SETUP_TMU1) {
+      INTERP_F( t,
+		dst->tmuvtx[1].sow,
+		out->tmuvtx[1].sow * wout,
+		in->tmuvtx[1].sow * win );
+      INTERP_F( t,
+		dst->tmuvtx[1].tow,
+		out->tmuvtx[1].tow * wout,
+		in->tmuvtx[1].tow * win );
       if (IND & SETUP_PTEX) {
-	 INTERP_F( t, 
-		   dst->tmuvtx[1].sow, 
-		   out->tmuvtx[1].sow * wout, 
-		   in->tmuvtx[1].sow * win );
 	 INTERP_F( t,
-		   dst->tmuvtx[1].tow,
-		   out->tmuvtx[1].tow * wout, 
-		   in->tmuvtx[1].tow * win );
-	 INTERP_F( t, 
 		   dst->tmuvtx[1].oow, 
 		   out->tmuvtx[1].oow * wout, 
 		   in->tmuvtx[1].oow * win );
-
-	 dst->tmuvtx[1].sow *= oow;
-	 dst->tmuvtx[1].tow *= oow;
-	 dst->tmuvtx[1].oow *= oow;
-      } else {
-	 INTERP_F( t, 
-		   dst->tmuvtx[1].sow, 
-		   out->tmuvtx[1].sow * wout, 
-		   in->tmuvtx[1].sow * win );
-	 INTERP_F( t,
-		   dst->tmuvtx[1].tow,
-		   out->tmuvtx[1].tow * wout, 
-		   in->tmuvtx[1].tow * win );
-
-	 dst->tmuvtx[1].sow *= oow;
-	 dst->tmuvtx[1].tow *= oow;
       }
    }
 }

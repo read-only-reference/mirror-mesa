@@ -217,6 +217,10 @@ static GLboolean run_lighting( GLcontext *ctx,
     */
    store->light_func_tab[idx]( ctx, VB, stage, input );
 
+   VB->AttribPtr[_TNL_ATTRIB_COLOR0] = VB->ColorPtr[0];
+   VB->AttribPtr[_TNL_ATTRIB_COLOR1] = VB->SecondaryColorPtr[0];
+   VB->AttribPtr[_TNL_ATTRIB_INDEX] = VB->IndexPtr[0];
+
    return GL_TRUE;
 }
 
@@ -287,6 +291,11 @@ static GLboolean run_init_lighting( GLcontext *ctx,
    _mesa_vector4f_alloc( &store->LitIndex[0], 0, size, 32 );
    _mesa_vector4f_alloc( &store->LitIndex[1], 0, size, 32 );
 
+   store->LitColor[0].size = 4;
+   store->LitColor[1].size = 4;
+   store->LitSecondary[0].size = 3;
+   store->LitSecondary[1].size = 3;
+
    store->LitIndex[0].size = 1;
    store->LitIndex[0].stride = sizeof(GLfloat);
    store->LitIndex[1].size = 1;
@@ -343,7 +352,7 @@ static void dtr( struct tnl_pipeline_stage *stage )
 const struct tnl_pipeline_stage _tnl_lighting_stage =
 {
    "lighting",			/* name */
-   _NEW_LIGHT,			/* recheck */
+   _NEW_LIGHT|_NEW_PROGRAM,			/* recheck */
    _NEW_LIGHT|_NEW_MODELVIEW,	/* recalc -- modelview dependency
 				 * otherwise not captured by inputs
 				 * (which may be _TNL_BIT_POS) */

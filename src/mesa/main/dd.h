@@ -58,6 +58,9 @@ struct gl_pixelstore_attrib;
  *
  * Vertex transformation/clipping/lighting is patched into the T&L module.
  * Rasterization functions are patched into the swrast module.
+ *
+ * Note: when new functions are added here, the drivers/common/driverfuncs.c
+ * file should be updated too!!!
  */
 struct dd_function_table {
    /**
@@ -77,36 +80,6 @@ struct dd_function_table {
    void (*UpdateState)( GLcontext *ctx, GLuint new_state );
 
    /**
-    * Clear the color/depth/stencil/accum buffer(s).
-    *
-    * \param mask a bitmask of the DD_*_BIT values defined above that indicates
-    * which buffers need to be cleared.
-    * \param all if true then clear the whole buffer, else clear only the
-    * region defined by <tt>(x, y, width, height)</tt>.
-    * 
-    * This function must obey the glColorMask(), glIndexMask() and glStencilMask()
-    * settings!
-    * Software Mesa can do masked clears if the device driver can't.
-    */
-   void (*Clear)( GLcontext *ctx, GLbitfield mask, GLboolean all,
-		  GLint x, GLint y, GLint width, GLint height );
-
-   /**
-    * Specify the current buffer for writing.  
-    *
-    * Called via glDrawBuffer().  Note the driver must organize fallbacks (e.g.
-    * with swrast) if it cannot implement the requested mode.
-    */
-   void (*DrawBuffer)( GLcontext *ctx, GLenum buffer );
-
-   /**
-    * Specifies the current buffer for reading.  
-    *
-    * Called via glReadBuffer().
-    */
-   void (*ReadBuffer)( GLcontext *ctx, GLenum buffer );
-
-   /**
     * Get the width and height of the named buffer/window.
     *
     * Mesa uses this to determine when the driver's window size has changed.
@@ -123,6 +96,13 @@ struct dd_function_table {
    void (*ResizeBuffers)( GLframebuffer *buffer );
 
    /**
+    * Called whenever an error is generated.  
+    *
+    * __GLcontextRec::ErrorValue contains the error value.
+    */
+   void (*Error)( GLcontext *ctx );
+
+   /**
     * This is called whenever glFinish() is called.
     */
    void (*Finish)( GLcontext *ctx );
@@ -133,11 +113,19 @@ struct dd_function_table {
    void (*Flush)( GLcontext *ctx );
 
    /**
-    * Called whenever an error is generated.  
+    * Clear the color/depth/stencil/accum buffer(s).
     *
-    * __GLcontextRec::ErrorValue contains the error value.
+    * \param mask a bitmask of the DD_*_BIT values defined above that indicates
+    * which buffers need to be cleared.
+    * \param all if true then clear the whole buffer, else clear only the
+    * region defined by <tt>(x, y, width, height)</tt>.
+    * 
+    * This function must obey the glColorMask(), glIndexMask() and
+    * glStencilMask() settings!
+    * Software Mesa can do masked clears if the device driver can't.
     */
-   void (*Error)( GLcontext *ctx );
+   void (*Clear)( GLcontext *ctx, GLbitfield mask, GLboolean all,
+		  GLint x, GLint y, GLint width, GLint height );
 
 
    /**
@@ -505,23 +493,17 @@ struct dd_function_table {
                         struct gl_texture_object *tObj );
 
    /**
-    * Called when a texture object is created.
-    */
-   void (*CreateTexture)( GLcontext *ctx, struct gl_texture_object *tObj );
-
-   /**
     * Called to allocate a new texture object.
-    * 
-    * \note This function pointer should be initialized by drivers \e before
-    * calling _mesa_initialize_context() since context initialization involves
-    * allocating some texture objects!
+    * A new gl_texture_object should be returned.  The driver should
+    * attach to it any device-specific info it needs.
     */
    struct gl_texture_object * (*NewTextureObject)( GLcontext *ctx, GLuint name,
                                                    GLenum target );
    /**
     * Called when a texture object is about to be deallocated.  
     *
-    * Driver should free anything attached to the DriverData pointers.
+    * Driver should delete the gl_texture_object object and anything
+    * hanging off of it.
     */
    void (*DeleteTexture)( GLcontext *ctx, struct gl_texture_object *tObj );
 
@@ -582,6 +564,19 @@ struct dd_function_table {
 
 
    /**
+    * \name Vertex/fragment program functions
+    */
+   /*@{*/
+   /** Bind a vertex/fragment program */
+   void (*BindProgram)(GLcontext *ctx, GLenum target, struct program *prog);
+   /** Allocate a new program */
+   struct program * (*NewProgram)(GLcontext *ctx, GLenum target, GLuint id);
+   /** Delete a program */
+   void (*DeleteProgram)(GLcontext *ctx, struct program *prog);
+   /*@}*/
+
+
+   /**
     * \name State-changing functions.
     *
     * \note drawing functions are above.
@@ -596,9 +591,8 @@ struct dd_function_table {
    /** Set the blend color */
    void (*BlendColor)(GLcontext *ctx, const GLfloat color[4]);
    /** Set the blend equation */
-   void (*BlendEquation)(GLcontext *ctx, GLenum mode);
+   void (*BlendEquationSeparate)(GLcontext *ctx, GLenum modeRGB, GLenum modeA);
    /** Specify pixel arithmetic */
-   void (*BlendFunc)(GLcontext *ctx, GLenum sfactor, GLenum dfactor);
    void (*BlendFuncSeparate)(GLcontext *ctx,
                              GLenum sfactorRGB, GLenum dfactorRGB,
                              GLenum sfactorA, GLenum dfactorA);
@@ -627,6 +621,8 @@ struct dd_function_table {
    void (*DepthMask)(GLcontext *ctx, GLboolean flag);
    /** Specify mapping of depth values from normalized device coordinates to window coordinates */
    void (*DepthRange)(GLcontext *ctx, GLclampd nearval, GLclampd farval);
+   /** Specify the current buffer for writing */
+   void (*DrawBuffer)( GLcontext *ctx, GLenum buffer );
    /** Enable or disable server-side gl capabilities */
    void (*Enable)(GLcontext *ctx, GLenum cap, GLboolean state);
    /** Specify fog parameters */
@@ -656,6 +652,8 @@ struct dd_function_table {
    void (*PolygonOffset)(GLcontext *ctx, GLfloat factor, GLfloat units);
    /** Set the polygon stippling pattern */
    void (*PolygonStipple)(GLcontext *ctx, const GLubyte *mask );
+   /* Specifies the current buffer for reading */
+   void (*ReadBuffer)( GLcontext *ctx, GLenum buffer );
    /** Set rasterization mode */
    void (*RenderMode)(GLcontext *ctx, GLenum mode );
    /** Define the scissor box */
@@ -708,6 +706,11 @@ struct dd_function_table {
    void (*EdgeFlagPointer)(GLcontext *ctx, GLsizei stride, const GLvoid *ptr);
    void (*VertexAttribPointer)(GLcontext *ctx, GLuint index, GLint size,
                                GLenum type, GLsizei stride, const GLvoid *ptr);
+   void (*LockArraysEXT)( GLcontext *ctx, GLint first, GLsizei count );
+   void (*UnlockArraysEXT)( GLcontext *ctx );
+   /*@}*/
+
+
    /*@}*/
 
 
@@ -847,6 +850,12 @@ struct dd_function_table {
    void (*LightingSpaceChange)( GLcontext *ctx );
 
    /**
+    * Let the T&L component know when the context becomes current.
+    */
+   void (*MakeCurrent)( GLcontext *ctx, GLframebuffer *drawBuffer,
+			GLframebuffer *readBuffer );
+
+   /**
     * Called by glNewList().
     *
     * Let the T&L component know what is going on with display lists
@@ -873,22 +882,6 @@ struct dd_function_table {
     * \sa dd_function_table::BeginCallList.
     */
    void (*EndCallList)( GLcontext *ctx );
-
-   /**
-    * Let the T&L component know when the context becomes current.
-    */
-   void (*MakeCurrent)( GLcontext *ctx, GLframebuffer *drawBuffer,
-			GLframebuffer *readBuffer );
-
-   /**
-    * Called by glLockArraysEXT().
-    */
-   void (*LockArraysEXT)( GLcontext *ctx, GLint first, GLsizei count );
-   /**
-    * Called by UnlockArraysEXT().
-    */
-   void (*UnlockArraysEXT)( GLcontext *ctx );
-   /*@}*/
 
 };
 

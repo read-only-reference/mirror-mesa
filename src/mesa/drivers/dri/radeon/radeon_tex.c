@@ -42,6 +42,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "texformat.h"
 #include "texstore.h"
 #include "teximage.h"
+#include "texobj.h"
 
 
 #include "radeon_context.h"
@@ -87,12 +88,16 @@ static void radeonSetTexWrap( radeonTexObjPtr t, GLenum swrap, GLenum twrap )
    case GL_MIRRORED_REPEAT:
       t->pp_txfilter |= RADEON_CLAMP_S_MIRROR;
       break;
-   case GL_MIRROR_CLAMP_ATI:
+   case GL_MIRROR_CLAMP_EXT:
       t->pp_txfilter |= RADEON_CLAMP_S_MIRROR_CLAMP_GL;
       is_clamp = GL_TRUE;
       break;
-   case GL_MIRROR_CLAMP_TO_EDGE_ATI:
+   case GL_MIRROR_CLAMP_TO_EDGE_EXT:
       t->pp_txfilter |= RADEON_CLAMP_S_MIRROR_CLAMP_LAST;
+      break;
+   case GL_MIRROR_CLAMP_TO_BORDER_EXT:
+      t->pp_txfilter |= RADEON_CLAMP_S_MIRROR_CLAMP_GL;
+      is_clamp_to_border = GL_TRUE;
       break;
    default:
       _mesa_problem(NULL, "bad S wrap mode in %s", __FUNCTION__);
@@ -116,12 +121,16 @@ static void radeonSetTexWrap( radeonTexObjPtr t, GLenum swrap, GLenum twrap )
    case GL_MIRRORED_REPEAT:
       t->pp_txfilter |= RADEON_CLAMP_T_MIRROR;
       break;
-   case GL_MIRROR_CLAMP_ATI:
+   case GL_MIRROR_CLAMP_EXT:
       t->pp_txfilter |= RADEON_CLAMP_T_MIRROR_CLAMP_GL;
       is_clamp = GL_TRUE;
       break;
-   case GL_MIRROR_CLAMP_TO_EDGE_ATI:
+   case GL_MIRROR_CLAMP_TO_EDGE_EXT:
       t->pp_txfilter |= RADEON_CLAMP_T_MIRROR_CLAMP_LAST;
+      break;
+   case GL_MIRROR_CLAMP_TO_BORDER_EXT:
+      t->pp_txfilter |= RADEON_CLAMP_T_MIRROR_CLAMP_GL;
+      is_clamp_to_border = GL_TRUE;
       break;
    default:
       _mesa_problem(NULL, "bad T wrap mode in %s", __FUNCTION__);
@@ -501,7 +510,6 @@ static void radeonTexSubImage2D( GLcontext *ctx, GLenum target, GLint level,
    driTextureObject * t = (driTextureObject *) texObj->DriverData;
    GLuint face;
 
-
    /* which cube face or ordinary 2D image */
    switch (target) {
    case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
@@ -567,7 +575,7 @@ static void radeonTexEnv( GLcontext *ctx, GLenum target,
    }
 
    case GL_TEXTURE_LOD_BIAS_EXT: {
-      GLfloat bias;
+      GLfloat bias, min;
       GLuint b;
 
       /* The Radeon's LOD bias is a signed 2's complement value with a
@@ -575,7 +583,9 @@ static void radeonTexEnv( GLcontext *ctx, GLenum target,
        * functions, one mapping [-1.0,0.0] to [-128,0] and one mapping
        * [0.0,4.0] to [0,127].
        */
-      bias = CLAMP( *param, -1.0, 4.0 );
+      min = driQueryOptionb (&rmesa->optionCache, "no_neg_lod_bias") ?
+	  0.0 : -1.0;
+      bias = CLAMP( *param, min, 4.0 );
       if ( bias == 0 ) {
 	 b = 0;
       } else if ( bias > 0 ) {
@@ -656,7 +666,6 @@ static void radeonTexParameter( GLcontext *ctx, GLenum target,
 }
 
 
-
 static void radeonBindTexture( GLcontext *ctx, GLenum target,
 			       struct gl_texture_object *texObj )
 {
@@ -665,12 +674,11 @@ static void radeonBindTexture( GLcontext *ctx, GLenum target,
 	       ctx->Texture.CurrentUnit );
    }
 
-   if ( target == GL_TEXTURE_2D || target == GL_TEXTURE_1D ) {
-      if ( texObj->DriverData == NULL ) {
-	 radeonAllocTexObj( texObj );
-      }
-   }
+   assert( (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D &&
+            target != GL_TEXTURE_RECTANGLE_NV) ||
+           (texObj->DriverData != NULL) );
 }
+
 
 static void radeonDeleteTexture( GLcontext *ctx,
 				 struct gl_texture_object *texObj )
@@ -690,6 +698,9 @@ static void radeonDeleteTexture( GLcontext *ctx,
 
       driDestroyTextureObject( t );
    }
+
+   /* Free mipmap images and the texture object itself */
+   _mesa_delete_texture_object(ctx, texObj);
 }
 
 /* Need:  
@@ -712,39 +723,40 @@ static void radeonTexGen( GLcontext *ctx,
    rmesa->recheck_texgen[unit] = GL_TRUE;
 }
 
-
-void radeonInitTextureFuncs( GLcontext *ctx )
+/**
+ * Allocate a new texture object.
+ * Called via ctx->Driver.NewTextureObject.
+ * Note: we could use containment here to 'derive' the driver-specific
+ * texture object from the core mesa gl_texture_object.  Not done at this time.
+ */
+static struct gl_texture_object *
+radeonNewTextureObject( GLcontext *ctx, GLuint name, GLenum target )
 {
    radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
+   struct gl_texture_object *obj;
+   obj = _mesa_new_texture_object(ctx, name, target);
+   if (!obj)
+      return NULL;
+   obj->MaxAnisotropy = rmesa->initialMaxAnisotropy;
+   radeonAllocTexObj( obj );
+   return obj;
+}
 
 
-   ctx->Driver.ChooseTextureFormat	= radeonChooseTextureFormat;
-   ctx->Driver.TexImage1D		= radeonTexImage1D;
-   ctx->Driver.TexImage2D		= radeonTexImage2D;
-   ctx->Driver.TexImage3D		= _mesa_store_teximage3d;
-   ctx->Driver.TexSubImage1D		= radeonTexSubImage1D;
-   ctx->Driver.TexSubImage2D		= radeonTexSubImage2D;
-   ctx->Driver.TexSubImage3D		= _mesa_store_texsubimage3d;
-   ctx->Driver.CopyTexImage1D		= _swrast_copy_teximage1d;
-   ctx->Driver.CopyTexImage2D		= _swrast_copy_teximage2d;
-   ctx->Driver.CopyTexSubImage1D	= _swrast_copy_texsubimage1d;
-   ctx->Driver.CopyTexSubImage2D	= _swrast_copy_texsubimage2d;
-   ctx->Driver.CopyTexSubImage3D 	= _swrast_copy_texsubimage3d;
-   ctx->Driver.TestProxyTexImage	= _mesa_test_proxy_teximage;
+void radeonInitTextureFuncs( struct dd_function_table *functions )
+{
+   functions->ChooseTextureFormat	= radeonChooseTextureFormat;
+   functions->TexImage1D		= radeonTexImage1D;
+   functions->TexImage2D		= radeonTexImage2D;
+   functions->TexSubImage1D		= radeonTexSubImage1D;
+   functions->TexSubImage2D		= radeonTexSubImage2D;
 
-   ctx->Driver.BindTexture		= radeonBindTexture;
-   ctx->Driver.CreateTexture		= NULL; /* FIXME: Is this used??? */
-   ctx->Driver.DeleteTexture		= radeonDeleteTexture;
-   ctx->Driver.IsTextureResident	= driIsTextureResident;
-   ctx->Driver.PrioritizeTexture	= NULL;
-   ctx->Driver.ActiveTexture		= NULL;
-   ctx->Driver.UpdateTexturePalette	= NULL;
+   functions->NewTextureObject		= radeonNewTextureObject;
+   functions->BindTexture		= radeonBindTexture;
+   functions->DeleteTexture		= radeonDeleteTexture;
+   functions->IsTextureResident		= driIsTextureResident;
 
-   ctx->Driver.TexEnv			= radeonTexEnv;
-   ctx->Driver.TexParameter		= radeonTexParameter;
-   ctx->Driver.TexGen                   = radeonTexGen;
-
-   driInitTextureObjects( ctx, & rmesa->swapped,
-			  DRI_TEXMGR_DO_TEXTURE_1D
-			  | DRI_TEXMGR_DO_TEXTURE_2D );
+   functions->TexEnv			= radeonTexEnv;
+   functions->TexParameter		= radeonTexParameter;
+   functions->TexGen			= radeonTexGen;
 }

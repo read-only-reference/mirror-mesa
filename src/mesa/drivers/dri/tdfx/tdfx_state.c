@@ -267,15 +267,19 @@ static void tdfxDDAlphaFunc( GLcontext *ctx, GLenum func, GLfloat ref )
    fxMesa->new_state |= TDFX_NEW_ALPHA;
 }
 
-static void tdfxDDBlendEquation( GLcontext *ctx, GLenum mode )
+static void tdfxDDBlendEquationSeparate( GLcontext *ctx, 
+					 GLenum modeRGB, GLenum modeA )
 {
    tdfxContextPtr fxMesa = TDFX_CONTEXT( ctx );
 
+   assert( modeRGB == modeA );
    FLUSH_BATCH( fxMesa );
    fxMesa->new_state |= TDFX_NEW_ALPHA;
 }
 
-static void tdfxDDBlendFunc( GLcontext *ctx, GLenum sfactor, GLenum dfactor )
+static void tdfxDDBlendFuncSeparate( GLcontext *ctx,
+				     GLenum sfactorRGB, GLenum dfactorRGB,
+				     GLenum sfactorA, GLenum dfactorA )
 {
    tdfxContextPtr fxMesa = TDFX_CONTEXT( ctx );
 
@@ -287,16 +291,6 @@ static void tdfxDDBlendFunc( GLcontext *ctx, GLenum sfactor, GLenum dfactor )
     * blend modes.  To pass all the conformance tests we'd have to
     * fall back to software for many modes.  Revisit someday.
     */
-}
-
-static void tdfxDDBlendFuncSeparate( GLcontext *ctx,
-				     GLenum sfactorRGB, GLenum dfactorRGB,
-				     GLenum sfactorA, GLenum dfactorA )
-{
-   tdfxContextPtr fxMesa = TDFX_CONTEXT( ctx );
-
-   FLUSH_BATCH( fxMesa );
-   fxMesa->new_state |= TDFX_NEW_ALPHA;
 }
 
 /* =============================================================
@@ -1388,20 +1382,16 @@ void tdfxDDInitStateFuncs( GLcontext *ctx )
 
    /* State notification callbacks:
     */
-   ctx->Driver.ClearIndex		= NULL;
    ctx->Driver.ClearColor		= tdfxDDClearColor;
    ctx->Driver.DrawBuffer		= tdfxDDDrawBuffer;
    ctx->Driver.ReadBuffer		= tdfxDDReadBuffer;
 
-   ctx->Driver.IndexMask		= NULL;
    ctx->Driver.ColorMask		= tdfxDDColorMask;
 
    ctx->Driver.AlphaFunc		= tdfxDDAlphaFunc;
-   ctx->Driver.BlendEquation		= tdfxDDBlendEquation;
-   ctx->Driver.BlendFunc		= tdfxDDBlendFunc;
+   ctx->Driver.BlendEquationSeparate	= tdfxDDBlendEquationSeparate;
    ctx->Driver.BlendFuncSeparate	= tdfxDDBlendFuncSeparate;
    ctx->Driver.ClearDepth		= tdfxDDClearDepth;
-   ctx->Driver.ClearStencil		= NULL;
    ctx->Driver.CullFace			= tdfxDDCullFace;
    ctx->Driver.FrontFace		= tdfxDDFrontFace;
    ctx->Driver.DepthFunc		= tdfxDDDepthFunc;
@@ -1409,54 +1399,20 @@ void tdfxDDInitStateFuncs( GLcontext *ctx )
    ctx->Driver.DepthRange		= tdfxDDDepthRange;
    ctx->Driver.Enable			= tdfxDDEnable;
    ctx->Driver.Fogfv			= tdfxDDFogfv;
-   ctx->Driver.Hint			= NULL;
-   ctx->Driver.Lightfv			= NULL;
    ctx->Driver.LightModelfv		= tdfxDDLightModelfv;
-   ctx->Driver.LineStipple		= NULL;
    ctx->Driver.LineWidth		= tdfxDDLineWidth;
    ctx->Driver.PolygonStipple		= tdfxDDPolygonStipple;
    ctx->Driver.RenderMode               = tdfxDDRenderMode;
    ctx->Driver.Scissor			= tdfxDDScissor;
    ctx->Driver.ShadeModel		= tdfxDDShadeModel;
 
-   ctx->Driver.BindTexture		= tdfxDDBindTexture;
-   ctx->Driver.DeleteTexture		= tdfxDDDeleteTexture;
-   ctx->Driver.TexEnv			= tdfxDDTexEnv;
-   ctx->Driver.TexParameter		= tdfxDDTexParameter;
-   ctx->Driver.ChooseTextureFormat      = tdfxDDChooseTextureFormat;
-   ctx->Driver.TexImage2D		= tdfxDDTexImage2D;
-   ctx->Driver.TexSubImage2D		= tdfxDDTexSubImage2D;
-   /*
-   ctx->Driver.TexImage2D               = _mesa_store_teximage2d;
-   ctx->Driver.TexSubImage2D            = _mesa_store_texsubimage2d;
-   */
-
-   ctx->Driver.TexImage1D               = _mesa_store_teximage1d;
-   ctx->Driver.TexImage3D               = _mesa_store_teximage3d;
-   ctx->Driver.TexSubImage1D            = _mesa_store_texsubimage1d;
-   ctx->Driver.TexSubImage3D            = _mesa_store_texsubimage3d;
-   ctx->Driver.CopyTexImage1D           = _swrast_copy_teximage1d;
-   ctx->Driver.CopyTexImage2D           = _swrast_copy_teximage2d;
-   ctx->Driver.CopyTexSubImage1D        = _swrast_copy_texsubimage1d;
-   ctx->Driver.CopyTexSubImage2D        = _swrast_copy_texsubimage2d;
-   ctx->Driver.CopyTexSubImage3D        = _swrast_copy_texsubimage3d;
-   ctx->Driver.TestProxyTexImage        = _mesa_test_proxy_teximage;
-
-/*     ctx->Driver.GetTexImage		= tdfxDDGetTexImage; */
-   ctx->Driver.UpdateTexturePalette	= tdfxDDTexturePalette;
-
    if ( fxMesa->haveHwStencil ) {
       ctx->Driver.StencilFunc		= tdfxDDStencilFunc;
       ctx->Driver.StencilMask		= tdfxDDStencilMask;
       ctx->Driver.StencilOp		= tdfxDDStencilOp;
-   } else {
-      ctx->Driver.StencilFunc		= NULL;
-      ctx->Driver.StencilMask		= NULL;
-      ctx->Driver.StencilOp		= NULL;
    }
 
    ctx->Driver.Viewport			= tdfxDDViewport;
-
 
    /* Swrast hooks for imaging extensions:
     */

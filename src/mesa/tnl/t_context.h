@@ -83,6 +83,18 @@
 #define MAX_PIPELINE_STAGES     30
 
 
+/*
+ * Note: The first attributes match the VERT_ATTRIB_* definitions
+ * in mtypes.h.  However, the tnl module has additional attributes
+ * for materials, color indexes, edge flags, etc.
+ */
+/* Note: These are currently being used to define both inputs and
+ * outputs from the tnl pipeline.  A better solution (which would also
+ * releive the congestion to slightly prolong the life of the bitmask
+ * below) is to have the fixed function pipeline populate a set of
+ * arrays named after those produced by the vertex program stage, and
+ * have the rest the mesa backend work on those.
+ */
 enum {
 	_TNL_ATTRIB_POS = 0,
 	_TNL_ATTRIB_WEIGHT = 1,
@@ -114,7 +126,8 @@ enum {
 	_TNL_ATTRIB_MAT_BACK_INDEXES = 27, 
 	_TNL_ATTRIB_INDEX = 28,        
 	_TNL_ATTRIB_EDGEFLAG = 29,     
-	_TNL_ATTRIB_MAX = 30
+	_TNL_ATTRIB_POINTSIZE = 30,
+	_TNL_ATTRIB_MAX = 31
 } ;
 
 /* Will probably have to revise this scheme fairly shortly, eg. by
@@ -151,8 +164,10 @@ enum {
 #define _TNL_BIT_MAT_BACK_INDEXES    (1<<27)
 #define _TNL_BIT_INDEX               (1<<28)
 #define _TNL_BIT_EDGEFLAG            (1<<29)
+#define _TNL_BIT_POINTSIZE           (1<<30)
 
 #define _TNL_BIT_TEX(u)  (1 << (_TNL_ATTRIB_TEX0 + (u)))
+
 
 
 #define _TNL_BITS_MAT_ANY  (_TNL_BIT_MAT_FRONT_AMBIENT   | 	\
@@ -451,6 +466,7 @@ struct tnl_pipeline_stage {
 				 * call to 'run'.
 				 */
 
+
    /* Private data for the pipeline stage:
     */
    void *privatePtr;
@@ -488,6 +504,26 @@ struct tnl_pipeline {
    GLuint nr_stages;
 };
 
+struct tnl_clipspace_attr;
+
+typedef void (*extract_func)( const struct tnl_clipspace_attr *a, GLfloat *out, 
+			      const GLubyte *v );
+
+typedef void (*insert_func)( const struct tnl_clipspace_attr *a, GLubyte *v, 
+			     const GLfloat *in );
+
+
+struct tnl_clipspace_attr {
+   int attrib;
+   int vertoffset;
+   int vertattrsize;
+   GLubyte *inputptr;
+   int inputstride;
+   insert_func *insert;
+   insert_func emit;
+   extract_func extract;
+   const GLfloat *vp;
+};
 
 
 
@@ -506,6 +542,26 @@ typedef void (*copy_pv_func)( GLcontext *ctx, GLuint dst, GLuint src );
 typedef void (*setup_func)( GLcontext *ctx,
 			    GLuint start, GLuint end,
 			    GLuint new_inputs);
+
+
+
+
+struct tnl_clipspace {
+   GLboolean need_extras;
+   
+   GLuint new_inputs;
+
+   GLubyte *vertex_buf;
+   GLuint vertex_size;
+   GLuint max_vertex_size;
+
+   struct tnl_clipspace_attr attr[_TNL_ATTRIB_MAX];
+   GLuint attr_count;
+
+   void (*emit)( GLcontext *ctx, GLuint start, GLuint end, void *dest );
+   interp_func interp;
+   copy_pv_func copy_pv;
+};
 
 
 struct tnl_device_driver {
@@ -638,12 +694,21 @@ typedef struct {
    struct tnl_vertex_arrays array_inputs;
 
 
+   /* Clipspace/ndc/window vertex managment:
+    */
+   struct tnl_clipspace clipspace;
+
+
    /* Probably need a better configuration mechanism:
     */
    GLboolean NeedNdcCoords;
    GLboolean LoopbackDListCassettes;
    GLboolean CalcDListNormalLengths;
    GLboolean IsolateMaterials;
+
+   /* 
+    */
+   GLuint render_inputs;
 
 
    GLvertexformat exec_vtxfmt;

@@ -186,6 +186,7 @@ struct r200_state_atom {
    GLuint idx;
    int *cmd;			         /* one or more cmd's */
    int *lastcmd;			 /* one or more cmd's */
+   GLboolean dirty;
    GLboolean (*check)( GLcontext *, int );    /* is this state active? */
 };
    
@@ -398,9 +399,9 @@ struct r200_state_atom {
 #define LIT_DIRECTION_Y            18
 #define LIT_DIRECTION_Z            19
 #define LIT_DIRECTION_W            20
-#define LIT_ATTEN_CONST            21
+#define LIT_ATTEN_QUADRATIC        21
 #define LIT_ATTEN_LINEAR           22
-#define LIT_ATTEN_QUADRATIC        23
+#define LIT_ATTEN_CONST            23
 #define LIT_ATTEN_XXX              24
 #define LIT_CMD_1                  25
 #define LIT_SPOT_DCD               26
@@ -409,7 +410,7 @@ struct r200_state_atom {
 #define LIT_SPOT_CUTOFF            29
 #define LIT_SPECULAR_THRESH        30
 #define LIT_RANGE_CUTOFF           31 /* ? */
-#define LIT_RANGE_ATTEN            32 /* ? */
+#define LIT_ATTEN_CONST_INV        32
 #define LIT_STATE_SIZE             33
 
 /* Fog
@@ -780,7 +781,7 @@ struct r200_context {
    driTexHeap          * texture_heaps[ R200_NR_TEX_HEAPS ];
    driTextureObject      swapped;
    int                   texture_depth;
-
+   float                 initialMaxAnisotropy;
 
    /* Rasterization and vertex state:
     */
@@ -835,8 +836,8 @@ struct r200_context {
    GLuint vbl_seq;
    GLuint vblank_flags;
 
-   uint64_t swap_ust;
-   uint64_t swap_missed_ust;
+   int64_t swap_ust;
+   int64_t swap_missed_ust;
 
    GLuint swap_count;
    GLuint swap_missed_count;

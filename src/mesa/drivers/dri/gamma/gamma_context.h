@@ -149,7 +149,7 @@ struct gamma_texture_object_t {
    GLuint max_level;
    GLuint dirty_images;
 
-   GLint firstLevel, lastLevel;  /* upload tObj->Image[first .. lastLevel] */
+   GLint firstLevel, lastLevel;  /* upload tObj->Image[0][first .. lastLevel] */
 
    struct { 
       const struct gl_texture_image *image;
@@ -191,7 +191,8 @@ void gammaDDInitSpanFuncs( GLcontext *ctx );
 void gammaDDInitState( gammaContextPtr gmesa );
 void gammaInitHW( gammaContextPtr gmesa );
 void gammaDDInitStateFuncs( GLcontext *ctx );
-void gammaDDInitTextureFuncs( GLcontext *ctx );
+void gammaDDInitTextureFuncs( struct dd_function_table *table );
+void gammaInitTextureObjects( GLcontext *ctx );
 void gammaDDInitTriFuncs( GLcontext *ctx );
 
 void gammaUpdateWindow( GLcontext *ctx );

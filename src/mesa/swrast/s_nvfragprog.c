@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.0
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -22,6 +22,14 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+/*
+ * Regarding GL_NV_fragment_program:
+ *
+ * Portions of this software may use or implement intellectual
+ * property owned and licensed by NVIDIA Corporation. NVIDIA disclaims
+ * any and all warranties with respect to such intellectual property,
+ * including any use thereof or modifications thereto.
+ */
 
 #include "glheader.h"
 #include "colormac.h"
@@ -48,6 +56,7 @@ fetch_texel( GLcontext *ctx, const GLfloat texcoord[4], GLfloat lambda,
    GLchan rgba[4];
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
 
+   /* XXX use a float-valued TextureSample routine here!!! */
    swrast->TextureSample[unit](ctx, unit, ctx->Texture.Unit[unit]._Current,
                                1, (const GLfloat (*)[4]) texcoord,
                                &lambda, &rgba);
@@ -69,7 +78,7 @@ fetch_texel_deriv( GLcontext *ctx, const GLfloat texcoord[4],
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const struct gl_texture_object *texObj = ctx->Texture.Unit[unit]._Current;
-   const struct gl_texture_image *texImg = texObj->Image[texObj->BaseLevel];
+   const struct gl_texture_image *texImg = texObj->Image[0][texObj->BaseLevel];
    const GLfloat texW = (GLfloat) texImg->WidthScale;
    const GLfloat texH = (GLfloat) texImg->HeightScale;
    GLchan rgba[4];

@@ -44,6 +44,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "texutil.h"
 #include "texmem.h"
 #include "teximage.h"
+#include "texobj.h"
 
 #include "r200_context.h"
 #include "r200_state.h"
@@ -88,12 +89,16 @@ static void r200SetTexWrap( r200TexObjPtr t, GLenum swrap, GLenum twrap, GLenum 
    case GL_MIRRORED_REPEAT:
       t->pp_txfilter |= R200_CLAMP_S_MIRROR;
       break;
-   case GL_MIRROR_CLAMP_ATI:
+   case GL_MIRROR_CLAMP_EXT:
       t->pp_txfilter |= R200_CLAMP_S_MIRROR_CLAMP_GL;
       is_clamp = GL_TRUE;
       break;
-   case GL_MIRROR_CLAMP_TO_EDGE_ATI:
+   case GL_MIRROR_CLAMP_TO_EDGE_EXT:
       t->pp_txfilter |= R200_CLAMP_S_MIRROR_CLAMP_LAST;
+      break;
+   case GL_MIRROR_CLAMP_TO_BORDER_EXT:
+      t->pp_txfilter |= R200_CLAMP_S_MIRROR_CLAMP_GL;
+      is_clamp_to_border = GL_TRUE;
       break;
    default:
       _mesa_problem(NULL, "bad S wrap mode in %s", __FUNCTION__);
@@ -117,12 +122,16 @@ static void r200SetTexWrap( r200TexObjPtr t, GLenum swrap, GLenum twrap, GLenum 
    case GL_MIRRORED_REPEAT:
       t->pp_txfilter |= R200_CLAMP_T_MIRROR;
       break;
-   case GL_MIRROR_CLAMP_ATI:
+   case GL_MIRROR_CLAMP_EXT:
       t->pp_txfilter |= R200_CLAMP_T_MIRROR_CLAMP_GL;
       is_clamp = GL_TRUE;
       break;
-   case GL_MIRROR_CLAMP_TO_EDGE_ATI:
+   case GL_MIRROR_CLAMP_TO_EDGE_EXT:
       t->pp_txfilter |= R200_CLAMP_T_MIRROR_CLAMP_LAST;
+      break;
+   case GL_MIRROR_CLAMP_TO_BORDER_EXT:
+      t->pp_txfilter |= R200_CLAMP_T_MIRROR_CLAMP_GL;
+      is_clamp_to_border = GL_TRUE;
       break;
    default:
       _mesa_problem(NULL, "bad T wrap mode in %s", __FUNCTION__);
@@ -148,12 +157,16 @@ static void r200SetTexWrap( r200TexObjPtr t, GLenum swrap, GLenum twrap, GLenum 
    case GL_MIRRORED_REPEAT:
       t->pp_txformat_x |= R200_CLAMP_Q_MIRROR;
       break;
-   case GL_MIRROR_CLAMP_ATI:
+   case GL_MIRROR_CLAMP_EXT:
       t->pp_txformat_x |= R200_CLAMP_Q_MIRROR_CLAMP_GL;
       is_clamp = GL_TRUE;
       break;
-   case GL_MIRROR_CLAMP_TO_EDGE_ATI:
+   case GL_MIRROR_CLAMP_TO_EDGE_EXT:
       t->pp_txformat_x |= R200_CLAMP_Q_MIRROR_CLAMP_LAST;
+      break;
+   case GL_MIRROR_CLAMP_TO_BORDER_EXT:
+      t->pp_txformat_x |= R200_CLAMP_Q_MIRROR_CLAMP_GL;
+      is_clamp_to_border = GL_TRUE;
       break;
    default:
       _mesa_problem(NULL, "bad R wrap mode in %s", __FUNCTION__);
@@ -670,7 +683,6 @@ static void r200TexSubImage2D( GLcontext *ctx, GLenum target, GLint level,
    driTextureObject * t = (driTextureObject *) texObj->DriverData;
    GLuint face;
 
-
    /* which cube face or ordinary 2D image */
    switch (target) {
    case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
@@ -831,7 +843,7 @@ static void r200TexEnv( GLcontext *ctx, GLenum target,
    }
 
    case GL_TEXTURE_LOD_BIAS_EXT: {
-      GLfloat bias;
+      GLfloat bias, min;
       GLuint b;
       const int fixed_one = 0x8000000;
 
@@ -841,7 +853,9 @@ static void r200TexEnv( GLcontext *ctx, GLenum target,
        * NOTE: Add a small bias to the bias for conform mipsel.c test.
        */
       bias = *param + .01;
-      bias = CLAMP( bias, -16.0, 16.0 );
+      min = driQueryOptionb (&rmesa->optionCache, "no_neg_lod_bias") ?
+	  0.0 : -16.0;
+      bias = CLAMP( bias, min, 16.0 );
       b = (int)(bias * fixed_one) & R200_LOD_BIAS_MASK;
       
       if ( (rmesa->hw.tex[unit].cmd[TEX_PP_TXFORMAT_X] & R200_LOD_BIAS_MASK) != b ) {
@@ -927,12 +941,17 @@ static void r200BindTexture( GLcontext *ctx, GLenum target,
 	       ctx->Texture.CurrentUnit );
    }
 
-   if ( target == GL_TEXTURE_2D || target == GL_TEXTURE_1D ) {
-      if ( texObj->DriverData == NULL ) {
-	 r200AllocTexObj( texObj );
-      }
+   if ( (target == GL_TEXTURE_1D)
+	|| (target == GL_TEXTURE_2D) 
+#if ENABLE_HW_3D_TEXTURE
+	|| (target == GL_TEXTURE_3D)
+#endif
+	|| (target == GL_TEXTURE_CUBE_MAP)
+	|| (target == GL_TEXTURE_RECTANGLE_NV) ) {
+      assert( texObj->DriverData != NULL );
    }
 }
+
 
 static void r200DeleteTexture( GLcontext *ctx,
 				 struct gl_texture_object *texObj )
@@ -952,6 +971,8 @@ static void r200DeleteTexture( GLcontext *ctx,
 
       driDestroyTextureObject( t );
    }
+   /* Free mipmap images and the texture object itself */
+   _mesa_delete_texture_object(ctx, texObj);
 }
 
 /* Need:  
@@ -975,46 +996,69 @@ static void r200TexGen( GLcontext *ctx,
 }
 
 
-void r200InitTextureFuncs( GLcontext *ctx )
+/**
+ * Allocate a new texture object.
+ * Called via ctx->Driver.NewTextureObject.
+ * Note: this function will be called during context creation to
+ * allocate the default texture objects.
+ * Note: we could use containment here to 'derive' the driver-specific
+ * texture object from the core mesa gl_texture_object.  Not done at this time.
+ * Fixup MaxAnisotropy according to user preference.
+ */
+static struct gl_texture_object *
+r200NewTextureObject( GLcontext *ctx, GLuint name, GLenum target )
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
+   struct gl_texture_object *obj;
+   obj = _mesa_new_texture_object(ctx, name, target);
+   if (!obj)
+      return NULL;
+   obj->MaxAnisotropy = rmesa->initialMaxAnisotropy;
+   r200AllocTexObj( obj );
+   return obj;
+}
 
 
-   ctx->Driver.ChooseTextureFormat	= r200ChooseTextureFormat;
-   ctx->Driver.TexImage1D		= r200TexImage1D;
-   ctx->Driver.TexImage2D		= r200TexImage2D;
+void r200InitTextureFuncs( struct dd_function_table *functions )
+{
+   /* Note: we only plug in the functions we implement in the driver
+    * since _mesa_init_driver_functions() was already called.
+    */
+   functions->ChooseTextureFormat	= r200ChooseTextureFormat;
+   functions->TexImage1D		= r200TexImage1D;
+   functions->TexImage2D		= r200TexImage2D;
 #if ENABLE_HW_3D_TEXTURE
-   ctx->Driver.TexImage3D		= r200TexImage3D;
+   functions->TexImage3D		= r200TexImage3D;
 #else
-   ctx->Driver.TexImage3D		= _mesa_store_teximage3d;
+   functions->TexImage3D		= _mesa_store_teximage3d;
 #endif
-   ctx->Driver.TexSubImage1D		= r200TexSubImage1D;
-   ctx->Driver.TexSubImage2D		= r200TexSubImage2D;
+   functions->TexSubImage1D		= r200TexSubImage1D;
+   functions->TexSubImage2D		= r200TexSubImage2D;
 #if ENABLE_HW_3D_TEXTURE
-   ctx->Driver.TexSubImage3D		= r200TexSubImage3D;
+   functions->TexSubImage3D		= r200TexSubImage3D;
 #else
-   ctx->Driver.TexSubImage3D		= _mesa_store_texsubimage3d;
+   functions->TexSubImage3D		= _mesa_store_texsubimage3d;
 #endif
-   ctx->Driver.CopyTexImage1D		= _swrast_copy_teximage1d;
-   ctx->Driver.CopyTexImage2D		= _swrast_copy_teximage2d;
-   ctx->Driver.CopyTexSubImage1D	= _swrast_copy_texsubimage1d;
-   ctx->Driver.CopyTexSubImage2D	= _swrast_copy_texsubimage2d;
-   ctx->Driver.CopyTexSubImage3D 	= _swrast_copy_texsubimage3d;
-   ctx->Driver.TestProxyTexImage	= _mesa_test_proxy_teximage;
+   functions->NewTextureObject		= r200NewTextureObject;
+   functions->BindTexture		= r200BindTexture;
+   functions->DeleteTexture		= r200DeleteTexture;
+   functions->IsTextureResident		= driIsTextureResident;
 
-   ctx->Driver.BindTexture		= r200BindTexture;
-   ctx->Driver.CreateTexture		= NULL; /* FIXME: Is this used??? */
-   ctx->Driver.DeleteTexture		= r200DeleteTexture;
-   ctx->Driver.IsTextureResident	= driIsTextureResident;
-   ctx->Driver.PrioritizeTexture	= NULL;
-   ctx->Driver.ActiveTexture		= NULL;
-   ctx->Driver.UpdateTexturePalette	= NULL;
+   functions->TexEnv			= r200TexEnv;
+   functions->TexParameter		= r200TexParameter;
+   functions->TexGen			= r200TexGen;
 
-   ctx->Driver.TexEnv			= r200TexEnv;
-   ctx->Driver.TexParameter		= r200TexParameter;
-   ctx->Driver.TexGen                   = r200TexGen;
-
+#if 000
+   /* moved or obsolete code */
+   r200ContextPtr rmesa = R200_CONTEXT(ctx);
    driInitTextureObjects( ctx, & rmesa->swapped,
 			  DRI_TEXMGR_DO_TEXTURE_1D
 			  | DRI_TEXMGR_DO_TEXTURE_2D );
+
+   /* Hack: r200NewTextureObject is not yet installed when the
+    * default textures are created. Therefore set MaxAnisotropy of the
+    * default 2D texture now. */
+   ctx->Shared->Default2D->MaxAnisotropy = driQueryOptionf (&rmesa->optionCache,
+							    "def_max_anisotropy");
+#endif
 }

@@ -400,10 +400,7 @@ static struct {
 #define GET_VERTEX(e) (fxMesa->verts + e)
 
 #ifdef USE_IEEE
-/* type-punning, keep -fstrict-aliasing happy */
-typedef union { GLfloat f; GLuint u; } fu_type;
-/* 0/1 value, to allow XOR'ing with other booleans */
-#define AREA_IS_CCW( a ) (((fu_type *)&(a))->u >> 31)
+#define AREA_IS_CCW( a ) (((fi_type *)&(a))->i < 0)
 #else
 #define AREA_IS_CCW( a ) (a < 0)
 #endif
@@ -882,6 +879,17 @@ static void fx_render_vb_quads( GLcontext *ctx,
 
    INIT(GL_QUADS);
 
+#if 1
+   /* [dBorca] Hack alert:
+    * since VTX-0-2 we get here with start = 0, count = 2,
+    * causing around 4 billion triangles. Revise this after
+    * a while
+    */
+   if (count < 3) {
+      return;
+   }
+#endif
+
    for (i = start ; i < count-3 ; i += 4 ) {
 #define VERT(x) (fxVB + (x))
       GrVertex *_v_[4];
@@ -1207,14 +1215,14 @@ static void fxRunPipeline( GLcontext *ctx )
          struct gl_texture_unit *t0 = &ctx->Texture.Unit[fxMesa->tmu_source[0]];
          struct gl_texture_unit *t1 = &ctx->Texture.Unit[fxMesa->tmu_source[1]];
       
-         if (t0 && t0->_Current && FX_TEXTURE_DATA(t0)) {
+         if (t0->_Current && FX_TEXTURE_DATA(t0)) {
             fxMesa->s0scale = FX_TEXTURE_DATA(t0)->sScale;
             fxMesa->t0scale = FX_TEXTURE_DATA(t0)->tScale;
             fxMesa->inv_s0scale = 1.0 / fxMesa->s0scale;
             fxMesa->inv_t0scale = 1.0 / fxMesa->t0scale;
          }
       
-         if (t1 && t1->_Current && FX_TEXTURE_DATA(t1)) {
+         if (t1->_Current && FX_TEXTURE_DATA(t1)) {
             fxMesa->s1scale = FX_TEXTURE_DATA(t1)->sScale;
             fxMesa->t1scale = FX_TEXTURE_DATA(t1)->tScale;
             fxMesa->inv_s1scale = 1.0 / fxMesa->s1scale;
@@ -1291,7 +1299,7 @@ static void fxRenderFinish( GLcontext *ctx )
 /**********************************************************************/
 
 static char *fallbackStrings[] = {
-   "1D/3D Texture map",
+   "3D/Rect/Cube Texture map",
    "glDrawBuffer(GL_FRONT_AND_BACK)",
    "Separate specular color",
    "glEnable/Disable(GL_STENCIL_TEST)",
@@ -1399,7 +1407,7 @@ GLboolean fxMultipass_ColorSum (GLcontext *ctx, GLuint pass)
              ctx->Texture.Unit[0]._ReallyEnabled = 0;
              ctx->Texture.Unit[1]._ReallyEnabled = 0;
              /* SUM the colors */
-             fxDDBlendEquation(ctx, GL_FUNC_ADD_EXT);
+             fxDDBlendEquationSeparate(ctx, GL_FUNC_ADD, GL_FUNC_ADD);
              fxDDBlendFuncSeparate(ctx, GL_ONE, GL_ONE, GL_ZERO, GL_ONE);
              fxDDEnable(ctx, GL_BLEND, GL_TRUE);
              /* make sure we draw only where we want to */

@@ -403,7 +403,7 @@ void r200CopyBuffer( const __DRIdrawablePrivate *dPriv )
    r200ContextPtr rmesa;
    GLint nbox, i, ret;
    GLboolean   missed_target;
-   int64_t     ust;
+   uint64_t ust;
 
    assert(dPriv);
    assert(dPriv->driContextPriv);
@@ -917,10 +917,10 @@ GLuint r200GartOffsetFromVirtual( r200ContextPtr rmesa, const GLvoid *pointer )
 
 
 
-void r200InitIoctlFuncs( GLcontext *ctx )
+void r200InitIoctlFuncs( struct dd_function_table *functions )
 {
-    ctx->Driver.Clear = r200Clear;
-    ctx->Driver.Finish = r200Finish;
-    ctx->Driver.Flush = r200Flush;
+    functions->Clear = r200Clear;
+    functions->Finish = r200Finish;
+    functions->Flush = r200Flush;
 }
 

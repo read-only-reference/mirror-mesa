@@ -8,9 +8,9 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.1
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -368,6 +368,7 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
 #if _HAVE_FULL_GL
    exec->BlendColor = _mesa_BlendColor;
    exec->BlendEquation = _mesa_BlendEquation;
+   exec->BlendEquationSeparateEXT = _mesa_BlendEquationSeparateEXT;
    exec->ColorSubTable = _mesa_ColorSubTable;
    exec->ColorTable = _mesa_ColorTable;
    exec->ColorTableParameterfv = _mesa_ColorTableParameterfv;
@@ -740,16 +741,13 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
 /*@{*/
 
 
-/*
- * Update items which depend on vertex/fragment programs.
- */
 static void
-update_program( GLcontext *ctx )
+update_separate_specular( GLcontext *ctx )
 {
-   if (ctx->FragmentProgram.Enabled && ctx->FragmentProgram.Current) {
-      if (ctx->FragmentProgram.Current->InputsRead & (1 << FRAG_ATTRIB_COL1))
-         ctx->_TriangleCaps |= DD_SEPARATE_SPECULAR;
-   }
+   if (NEED_SECONDARY_COLOR(ctx))
+      ctx->_TriangleCaps |= DD_SEPARATE_SPECULAR;
+   else
+      ctx->_TriangleCaps &= ~DD_SEPARATE_SPECULAR;
 }
 
 
@@ -872,7 +870,7 @@ update_arrays( GLcontext *ctx )
  */
 void _mesa_update_state( GLcontext *ctx )
 {
-   const GLuint new_state = ctx->NewState;
+   GLuint new_state = ctx->NewState;
 
    if (MESA_VERBOSE & VERBOSE_STATE)
       _mesa_print_state("_mesa_update_state", new_state);
@@ -880,7 +878,7 @@ void _mesa_update_state( GLcontext *ctx )
    if (new_state & (_NEW_MODELVIEW|_NEW_PROJECTION))
       _mesa_update_modelview_project( ctx, new_state );
 
-   if (new_state & (_NEW_TEXTURE|_NEW_TEXTURE_MATRIX))
+   if (new_state & (_NEW_PROGRAM|_NEW_TEXTURE|_NEW_TEXTURE_MATRIX))
       _mesa_update_texture( ctx, new_state );
 
    if (new_state & (_NEW_SCISSOR|_NEW_BUFFERS))
@@ -895,10 +893,10 @@ void _mesa_update_state( GLcontext *ctx )
    if (new_state & _IMAGE_NEW_TRANSFER_STATE)
       _mesa_update_pixel( ctx, new_state );
 
-   if (new_state & _NEW_PROGRAM)
-      update_program( ctx );
+   if (new_state & _DD_NEW_SEPARATE_SPECULAR)
+      update_separate_specular( ctx );
 
-   if (new_state & _NEW_ARRAY)
+   if (new_state & (_NEW_ARRAY | _NEW_PROGRAM))
       update_arrays( ctx );
 
    /* ctx->_NeedEyeCoords is now up to date.
@@ -914,22 +912,18 @@ void _mesa_update_state( GLcontext *ctx )
       _mesa_update_tnl_spaces( ctx, new_state );
 
    /*
-    * Here the driver sets up all the ctx->Driver function pointers
-    * to it's specific, private functions, and performs any
-    * internal state management necessary, including invalidating
-    * state of active modules.
+    * Give the driver a chance to act upon the new_state flags.
+    * The driver might plug in different span functions, for example.
+    * Also, this is where the driver can invalidate the state of any
+    * active modules (such as swrast_setup, swrast, tnl, etc).
     *
     * Set ctx->NewState to zero to avoid recursion if
     * Driver.UpdateState() has to call FLUSH_VERTICES().  (fixed?)
     */
+   new_state = ctx->NewState;
    ctx->NewState = 0;
    ctx->Driver.UpdateState(ctx, new_state);
    ctx->Array.NewState = 0;
-
-   /* At this point we can do some assertions to be sure the required
-    * device driver function pointers are all initialized.
-    */
-   _mesa_check_driver_hooks( ctx );
 }
 
 /*@}*/

@@ -21,8 +21,9 @@ static GLint numverts;
 
 static GLfloat xrot;
 static GLfloat yrot;
-static GLboolean useArrays = GL_FALSE;
-static GLboolean useProgram = GL_FALSE;
+static GLboolean useArrays = GL_TRUE;
+static GLboolean useProgram = GL_TRUE;
+static GLboolean useList = GL_FALSE;
 
 
 static void read_surface( char *filename )
@@ -71,23 +72,27 @@ static void Display(void)
             glEnableClientState( GL_VERTEX_ATTRIB_ARRAY0_NV );
             glVertexAttribPointerNV( 2, 3, GL_FLOAT, 6 * sizeof(GLfloat), ((GLfloat *) data) + 3);
             glEnableClientState( GL_VERTEX_ATTRIB_ARRAY2_NV);
-
-            glDisableClientState( GL_VERTEX_ARRAY );
-            glDisableClientState( GL_NORMAL_ARRAY );
          }
          else {
             glVertexPointer( 3, GL_FLOAT, 6 * sizeof(GLfloat), data );
             glEnableClientState( GL_VERTEX_ARRAY );
             glNormalPointer( GL_FLOAT, 6 * sizeof(GLfloat), ((GLfloat *) data) + 3);
             glEnableClientState( GL_NORMAL_ARRAY );
-
-            glDisableClientState( GL_VERTEX_ATTRIB_ARRAY0_NV );
-            glDisableClientState( GL_VERTEX_ATTRIB_ARRAY2_NV);
          }
 
-         glDrawArrays(GL_TRIANGLE_STRIP, 0, numverts);
+         if (useList) {
+            /* dumb, but a good test */
+            glNewList(1,GL_COMPILE);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, numverts);
+            glEndList();
+            glCallList(1);
+         }
+         else {
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, numverts);
+         }
 
          glDisableClientState( GL_VERTEX_ATTRIB_ARRAY0_NV );
+         glDisableClientState( GL_VERTEX_ATTRIB_ARRAY2_NV);
          glDisableClientState( GL_VERTEX_ARRAY );
          glDisableClientState( GL_NORMAL_ARRAY );
       }
@@ -229,6 +234,10 @@ static void Key( unsigned char key, int x, int y )
    case 'a':
       useArrays = !useArrays;
       printf("use arrays: %s\n", useArrays ? "yes" : "no");
+      break;
+   case 'l':
+      useList = !useList;
+      printf("use list: %s\n", useList ? "yes" : "no");
       break;
    case 'p':
       useProgram = !useProgram;

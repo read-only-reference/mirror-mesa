@@ -218,7 +218,6 @@ struct __pixelformat__ pix[] = {
      FXMESA_NONE}
    }
 };
-static int qt_pix = sizeof(pix) / sizeof(pix[0]);
 
 static fxMesaContext ctx = NULL;
 static WNDPROC hWNDOldProc;
@@ -291,6 +290,14 @@ __wglMonitor(HWND hwnd, UINT message, UINT wParam, LONG lParam)
    return (ret);
 }
 
+static void wgl_error (long error)
+{
+#define WGL_INVALID_PIXELFORMAT ERROR_INVALID_PIXEL_FORMAT
+ SetLastError(0xC0000000 /* error severity */
+             |0x00070000 /* error facility (who we are) */
+             |error);
+}
+
 GLAPI BOOL GLAPIENTRY
 wglCopyContext(HGLRC hglrcSrc, HGLRC hglrcDst, UINT mask)
 {
@@ -315,7 +322,7 @@ wglCreateContext(HDC hdc)
    }
 
    if (curPFD == 0) {
-      SetLastError(0);
+      wgl_error(WGL_INVALID_PIXELFORMAT);
       return (NULL);
    }
 
@@ -324,9 +331,14 @@ wglCreateContext(HDC hdc)
       SetWindowLong(hWnd, GWL_WNDPROC, (LONG) __wglMonitor);
    }
 
-#if FX_DEBUG
-   freopen("MESA.LOG", "w", stderr);
+   {
+    char *env;
+    /* always log when debugging, or if user demands */
+#if !FX_DEBUG
+    if ((env = getenv("MESA_FX_INFO")) && env[0] == 'r')
 #endif
+      freopen("MESA.LOG", "w", stderr);
+   }
 
    {
      RECT cliRect;
@@ -504,6 +516,13 @@ wglGetProcAddress(LPCSTR lpszProc)
    return (NULL);
 }
 
+GLAPI PROC GLAPIENTRY
+wglGetDefaultProcAddress(LPCSTR lpszProc)
+{ 
+   SetLastError(0);
+   return (NULL);
+}
+
 GLAPI BOOL GLAPIENTRY
 wglMakeCurrent(HDC hdc, HGLRC hglrc)
 {
@@ -664,6 +683,14 @@ wglSwapLayerBuffers(HDC hdc, UINT fuPlanes)
    return (FALSE);
 }
 
+static int pfd_tablen (void)
+{
+ /* we should take an envvar for `fxMesaSelectCurrentBoard' */
+ return (fxMesaSelectCurrentBoard(0) < GR_SSTTYPE_Voodoo4)
+        ? 2                               /* only 16bit entries */
+        : sizeof(pix) / sizeof(pix[0]);   /* full table */
+}
+
 GLAPI int GLAPIENTRY
 wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR * ppfd)
 {
@@ -700,8 +727,8 @@ wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR * ppfd)
   fprintf(pix_file, "dwLayerMask     = %d\n",ppfd->dwLayerMask);
   fprintf(pix_file, "dwVisibleMask   = %d\n",ppfd->dwVisibleMask);
   fprintf(pix_file, "dwDamageMask    = %d\n",ppfd->dwDamageMask);
-  }
   fclose(pix_file);
+  }
 #endif
 
 #if 1 || QUAKE2
@@ -711,7 +738,7 @@ wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR * ppfd)
   }
 #endif
 
-   qt_valid_pix = qt_pix;
+   qt_valid_pix = pfd_tablen();
 
    if (ppfd->nSize != sizeof(PIXELFORMATDESCRIPTOR) || ppfd->nVersion != 1) {
       SetLastError(0);
@@ -775,7 +802,7 @@ wglDescribePixelFormat(HDC hdc, int iPixelFormat, UINT nBytes,
 {
    int qt_valid_pix;
 
-   qt_valid_pix = qt_pix;
+   qt_valid_pix = pfd_tablen();
 
    if (iPixelFormat < 1 || iPixelFormat > qt_valid_pix ||
        ((nBytes != sizeof(PIXELFORMATDESCRIPTOR)) && (nBytes != 0))) {
@@ -818,12 +845,19 @@ wglSetPixelFormat(HDC hdc, int iPixelFormat, const PIXELFORMATDESCRIPTOR * ppfd)
 {
    int qt_valid_pix;
 
-   qt_valid_pix = qt_pix;
+   qt_valid_pix = pfd_tablen();
 
-   if (iPixelFormat < 1 || iPixelFormat > qt_valid_pix
-       || ppfd->nSize != sizeof(PIXELFORMATDESCRIPTOR)) {
-      SetLastError(0);
-      return (FALSE);
+   if (iPixelFormat < 1 || iPixelFormat > qt_valid_pix) {
+      if (ppfd == NULL) {
+         PIXELFORMATDESCRIPTOR my_pfd;
+         if (!wglDescribePixelFormat(hdc, iPixelFormat, sizeof(PIXELFORMATDESCRIPTOR), &my_pfd)) {
+            SetLastError(0);
+            return (FALSE);
+         }
+      } else if (ppfd->nSize != sizeof(PIXELFORMATDESCRIPTOR)) {
+         SetLastError(0);
+         return (FALSE);
+      }
    }
    curPFD = iPixelFormat;
 

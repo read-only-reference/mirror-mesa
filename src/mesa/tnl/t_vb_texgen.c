@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.0
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -26,6 +26,14 @@
  *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
+/*
+ * Regarding GL_NV_texgen_reflection:
+ *
+ * Portions of this software may use or implement intellectual
+ * property owned and licensed by NVIDIA Corporation. NVIDIA disclaims
+ * any and all warranties with respect to such intellectual property,
+ * including any use thereof or modifications thereto.
+ */
 
 #include "glheader.h"
 #include "colormac.h"
@@ -524,7 +532,8 @@ static GLboolean run_texgen_stage( GLcontext *ctx,
 	 if (stage->changed_inputs & (_TNL_BIT_POS | _TNL_BIT_NORMAL | _TNL_BIT_TEX(i)))
 	    store->TexgenFunc[i]( ctx, store, i );
 
-	 VB->TexCoordPtr[i] = &store->texcoord[i];
+	 VB->AttribPtr[VERT_ATTRIB_TEX0+i] = 
+	    VB->TexCoordPtr[i] = &store->texcoord[i];
       }
 
    return GL_TRUE;
@@ -669,7 +678,7 @@ static void free_texgen_data( struct tnl_pipeline_stage *stage )
 const struct tnl_pipeline_stage _tnl_texgen_stage =
 {
    "texgen",			/* name */
-   _NEW_TEXTURE,		/* when to call check() */
+   _NEW_TEXTURE|_NEW_PROGRAM,	/* when to call check() */
    _NEW_TEXTURE,		/* when to invalidate stored data */
    GL_FALSE,			/* active? */
    0,				/* inputs */

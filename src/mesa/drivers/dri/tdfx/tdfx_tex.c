@@ -40,6 +40,7 @@
 #include "texformat.h"
 #include "teximage.h"
 #include "texstore.h"
+#include "texobj.h"
 #include "tdfx_context.h"
 #include "tdfx_tex.h"
 #include "tdfx_texman.h"
@@ -170,20 +171,20 @@ static void RevalidateTexture(GLcontext *ctx, struct gl_texture_object *tObj)
 
     minl = maxl = tObj->BaseLevel;
 
-    if (tObj->Image[minl]) {
-       maxl = MIN2(tObj->MaxLevel, tObj->Image[minl]->MaxLog2);
+    if (tObj->Image[0][minl]) {
+       maxl = MIN2(tObj->MaxLevel, tObj->Image[0][minl]->MaxLog2);
 
        /* compute largeLodLog2, aspect ratio and texcoord scale factors */
-       tdfxTexGetInfo(ctx, tObj->Image[minl]->Width, tObj->Image[minl]->Height,
+       tdfxTexGetInfo(ctx, tObj->Image[0][minl]->Width, tObj->Image[0][minl]->Height,
                       &ti->info.largeLodLog2,
                       &ti->info.aspectRatioLog2,
                       &(ti->sScale), &(ti->tScale), NULL, NULL);
     }
 
-    if (tObj->Image[maxl] && (tObj->MinFilter != GL_NEAREST) && (tObj->MinFilter != GL_LINEAR)) {
+    if (tObj->Image[0][maxl] && (tObj->MinFilter != GL_NEAREST) && (tObj->MinFilter != GL_LINEAR)) {
         /* mipmapping: need to compute smallLodLog2 */
-        tdfxTexGetInfo(ctx, tObj->Image[maxl]->Width,
-                       tObj->Image[maxl]->Height,
+        tdfxTexGetInfo(ctx, tObj->Image[0][maxl]->Width,
+                       tObj->Image[0][maxl]->Height,
                        &ti->info.smallLodLog2, NULL,
                        NULL, NULL, NULL, NULL);
     }
@@ -232,9 +233,8 @@ fxAllocTexObjData(tdfxContextPtr fxMesa)
 /*
  * Called via glBindTexture.
  */
-
-void
-tdfxDDBindTexture(GLcontext * ctx, GLenum target,
+static void
+tdfxBindTexture(GLcontext * ctx, GLenum target,
                   struct gl_texture_object *tObj)
 {
     tdfxContextPtr fxMesa = TDFX_CONTEXT(ctx);
@@ -262,8 +262,8 @@ tdfxDDBindTexture(GLcontext * ctx, GLenum target,
 /*
  * Called via glTexEnv.
  */
-void
-tdfxDDTexEnv(GLcontext * ctx, GLenum target, GLenum pname,
+static void
+tdfxTexEnv(GLcontext * ctx, GLenum target, GLenum pname,
              const GLfloat * param)
 {
     tdfxContextPtr fxMesa = TDFX_CONTEXT(ctx);
@@ -288,8 +288,8 @@ tdfxDDTexEnv(GLcontext * ctx, GLenum target, GLenum pname,
 /*
  * Called via glTexParameter.
  */
-void
-tdfxDDTexParameter(GLcontext * ctx, GLenum target,
+static void
+tdfxTexParameter(GLcontext * ctx, GLenum target,
                    struct gl_texture_object *tObj,
                    GLenum pname, const GLfloat * params)
 {
@@ -442,13 +442,15 @@ tdfxDDTexParameter(GLcontext * ctx, GLenum target,
  * Called via glDeleteTextures to delete a texture object.
  * Here, we delete the Glide data associated with the texture.
  */
-void
-tdfxDDDeleteTexture(GLcontext * ctx, struct gl_texture_object *tObj)
+static void
+tdfxDeleteTexture(GLcontext * ctx, struct gl_texture_object *tObj)
 {
     if (ctx && ctx->DriverCtx) {
         tdfxContextPtr fxMesa = TDFX_CONTEXT(ctx);
         tdfxTMFreeTexture(fxMesa, tObj);
         fxMesa->new_state |= TDFX_NEW_TEXTURE;
+        /* Free mipmap images and the texture object itself */
+        _mesa_delete_texture_object(ctx, tObj);
     }
 }
 
@@ -456,8 +458,8 @@ tdfxDDDeleteTexture(GLcontext * ctx, struct gl_texture_object *tObj)
 /*
  * Return true if texture is resident, false otherwise.
  */
-GLboolean
-tdfxDDIsTextureResident(GLcontext *ctx, struct gl_texture_object *tObj)
+static GLboolean
+tdfxIsTextureResident(GLcontext *ctx, struct gl_texture_object *tObj)
 {
     tdfxTexInfo *ti = TDFX_TEXTURE_DATA(tObj);
     return (GLboolean) (ti && ti->isInTM);
@@ -534,8 +536,8 @@ convertPalette(FxU32 data[256], const struct gl_color_table *table)
 
 
 
-void
-tdfxDDTexturePalette(GLcontext * ctx, struct gl_texture_object *tObj)
+static void
+tdfxUpdateTexturePalette(GLcontext * ctx, struct gl_texture_object *tObj)
 {
     tdfxContextPtr fxMesa = TDFX_CONTEXT(ctx);
 
@@ -550,6 +552,7 @@ tdfxDDTexturePalette(GLcontext * ctx, struct gl_texture_object *tObj)
         if (!tObj->DriverData)
             tObj->DriverData = fxAllocTexObjData(fxMesa);
         ti = TDFX_TEXTURE_DATA(tObj);
+        assert(ti);
         convertPalette(ti->palette.data, &tObj->Palette);
         /*tdfxTexInvalidate(ctx, tObj);*/
     }
@@ -584,8 +587,8 @@ fxTexusError(const char *string, FxBool fatal)
 #endif
 
 
-const struct gl_texture_format *
-tdfxDDChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
+static const struct gl_texture_format *
+tdfxChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
                            GLenum srcFormat, GLenum srcType )
 {
    tdfxContextPtr fxMesa = TDFX_CONTEXT(ctx);
@@ -655,7 +658,7 @@ tdfxDDChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
    case GL_COLOR_INDEX16_EXT:
       return &_mesa_texformat_ci8;
    default:
-      _mesa_problem(ctx, "unexpected format in tdfxDDChooseTextureFormat");
+      _mesa_problem(ctx, "unexpected format in tdfxChooseTextureFormat");
       return NULL;
    }
 }
@@ -702,9 +705,8 @@ fxGlideFormat(GLint mesaFormat)
 
 static void
 fetch_intensity8(const struct gl_texture_image *texImage,
-		 GLint i, GLint j, GLint k, GLvoid * texelOut)
+		 GLint i, GLint j, GLint k, GLchan * rgba)
 {
-    GLchan *rgba = (GLchan *) texelOut;
     const tdfxMipMapLevel *mml = TDFX_TEXIMAGE_DATA(texImage);
     const GLubyte *texel;
 
@@ -721,9 +723,8 @@ fetch_intensity8(const struct gl_texture_image *texImage,
 
 static void
 fetch_luminance8(const struct gl_texture_image *texImage,
-		 GLint i, GLint j, GLint k, GLvoid * texelOut)
+		 GLint i, GLint j, GLint k, GLchan * rgba)
 {
-    GLchan *rgba = (GLchan *) texelOut;
     const tdfxMipMapLevel *mml = TDFX_TEXIMAGE_DATA(texImage);
     const GLubyte *texel;
 
@@ -740,9 +741,8 @@ fetch_luminance8(const struct gl_texture_image *texImage,
 
 static void
 fetch_alpha8(const struct gl_texture_image *texImage,
-	     GLint i, GLint j, GLint k, GLvoid * texelOut)
+	     GLint i, GLint j, GLint k, GLchan * rgba)
 {
-    GLchan *rgba = (GLchan *) texelOut;
     const tdfxMipMapLevel *mml = TDFX_TEXIMAGE_DATA(texImage);
     const GLubyte *texel;
 
@@ -761,7 +761,7 @@ fetch_alpha8(const struct gl_texture_image *texImage,
 
 static void
 fetch_index8(const struct gl_texture_image *texImage,
-	     GLint i, GLint j, GLint k, GLvoid * texelOut)
+	     GLint i, GLint j, GLint k, GLchan * rgba)
 {
     const tdfxMipMapLevel *mml = TDFX_TEXIMAGE_DATA(texImage);
     (void) mml;
@@ -771,28 +771,26 @@ fetch_index8(const struct gl_texture_image *texImage,
 
 static void
 fetch_luminance8_alpha8(const struct gl_texture_image *texImage,
-			GLint i, GLint j, GLint k, GLvoid * texelOut)
+			GLint i, GLint j, GLint k, GLchan * rgba)
 {
-    GLchan *rgba = (GLchan *) texelOut;
     const tdfxMipMapLevel *mml = TDFX_TEXIMAGE_DATA(texImage);
     const GLubyte *texel;
 
-   i = i * mml->wScale;
-   j = j * mml->hScale;
+    i = i * mml->wScale;
+    j = j * mml->hScale;
 
-   texel = ((GLubyte *) texImage->Data) + (j * mml->width + i) * 2;
-   rgba[RCOMP] = texel[0];
-   rgba[GCOMP] = texel[0];
-   rgba[BCOMP] = texel[0];
-   rgba[ACOMP] = texel[1];
+    texel = ((GLubyte *) texImage->Data) + (j * mml->width + i) * 2;
+    rgba[RCOMP] = texel[0];
+    rgba[GCOMP] = texel[0];
+    rgba[BCOMP] = texel[0];
+    rgba[ACOMP] = texel[1];
 }
 
 
 static void
 fetch_r5g6b5(const struct gl_texture_image *texImage,
-	     GLint i, GLint j, GLint k, GLvoid * texelOut)
+	     GLint i, GLint j, GLint k, GLchan * rgba)
 {
-    GLchan *rgba = (GLchan *) texelOut;
     const tdfxMipMapLevel *mml = TDFX_TEXIMAGE_DATA(texImage);
     const GLushort *texel;
 
@@ -809,9 +807,8 @@ fetch_r5g6b5(const struct gl_texture_image *texImage,
 
 static void
 fetch_r4g4b4a4(const struct gl_texture_image *texImage,
-	       GLint i, GLint j, GLint k, GLvoid * texelOut)
+	       GLint i, GLint j, GLint k, GLchan * rgba)
 {
-    GLchan *rgba = (GLchan *) texelOut;
     const tdfxMipMapLevel *mml = TDFX_TEXIMAGE_DATA(texImage);
     const GLushort *texel;
 
@@ -828,9 +825,8 @@ fetch_r4g4b4a4(const struct gl_texture_image *texImage,
 
 static void
 fetch_r5g5b5a1(const struct gl_texture_image *texImage,
-	       GLint i, GLint j, GLint k, GLvoid * texelOut)
+	       GLint i, GLint j, GLint k, GLchan * rgba)
 {
-    GLchan *rgba = (GLchan *) texelOut;
     const tdfxMipMapLevel *mml = TDFX_TEXIMAGE_DATA(texImage);
     const GLushort *texel;
 
@@ -847,9 +843,8 @@ fetch_r5g5b5a1(const struct gl_texture_image *texImage,
 
 static void
 fetch_a8r8g8b8(const struct gl_texture_image *texImage,
-	       GLint i, GLint j, GLint k, GLvoid * texelOut)
+	       GLint i, GLint j, GLint k, GLchan * rgba)
 {
-    GLchan *rgba = (GLchan *) texelOut;
     const tdfxMipMapLevel *mml = TDFX_TEXIMAGE_DATA(texImage);
     const GLuint *texel;
 
@@ -864,7 +859,7 @@ fetch_a8r8g8b8(const struct gl_texture_image *texImage,
 }
 
 
-static FetchTexelFunc
+static FetchTexelFuncC
 fxFetchFunction(GLint mesaFormat)
 {
    switch (mesaFormat) {
@@ -894,8 +889,8 @@ fxFetchFunction(GLint mesaFormat)
 }
 
 
-void
-tdfxDDTexImage2D(GLcontext *ctx, GLenum target, GLint level,
+static void
+tdfxTexImage2D(GLcontext *ctx, GLenum target, GLint level,
                GLint internalFormat, GLint width, GLint height, GLint border,
                GLenum format, GLenum type, const GLvoid *pixels,
                const struct gl_pixelstore_attrib *packing,
@@ -922,6 +917,7 @@ tdfxDDTexImage2D(GLcontext *ctx, GLenum target, GLint level,
         }
         ti = TDFX_TEXTURE_DATA(texObj);
     }
+    assert(ti);
 
     mml = TDFX_TEXIMAGE_DATA(texImage);
     if (!mml) {
@@ -955,7 +951,7 @@ tdfxDDTexImage2D(GLcontext *ctx, GLenum target, GLint level,
     assert(texImage->TexFormat);
     mml->glideFormat = fxGlideFormat(texImage->TexFormat->MesaFormat);
     ti->info.format = mml->glideFormat;
-    texImage->FetchTexel = fxFetchFunction(texImage->TexFormat->MesaFormat);
+    texImage->FetchTexelc = fxFetchFunction(texImage->TexFormat->MesaFormat);
     texelBytes = texImage->TexFormat->TexelBytes;
 
     if (mml->width != width || mml->height != height) {
@@ -1012,8 +1008,8 @@ tdfxDDTexImage2D(GLcontext *ctx, GLenum target, GLint level,
 }
 
 
-void
-tdfxDDTexSubImage2D(GLcontext *ctx, GLenum target, GLint level,
+static void
+tdfxTexSubImage2D(GLcontext *ctx, GLenum target, GLint level,
                     GLint xoffset, GLint yoffset,
                     GLsizei width, GLsizei height,
                     GLenum format, GLenum type,
@@ -1109,7 +1105,7 @@ tdfxDDTexSubImage2D(GLcontext *ctx, GLenum target, GLint level,
 
 #if 0000
 GLboolean
-tdfxDDCompressedTexImage2D( GLcontext *ctx, GLenum target,
+tdfxCompressedTexImage2D( GLcontext *ctx, GLenum target,
                             GLint level, GLsizei imageSize,
                             const GLvoid *data,
                             struct gl_texture_object *texObj,
@@ -1129,10 +1125,8 @@ tdfxDDCompressedTexImage2D( GLcontext *ctx, GLenum target,
     if (target != GL_TEXTURE_2D || texImage->Border > 0)
         return GL_FALSE;
 
-    if (!texObj->DriverData)
-        texObj->DriverData = fxAllocTexObjData(fxMesa);
-
     ti = TDFX_TEXTURE_DATA(texObj);
+    assert(ti);
     mml = &ti->mipmapLevel[level];
 
     isCompressedFormat = tdfxDDIsCompressedGlideFormatMacro(texImage->IntFormat);
@@ -1204,7 +1198,7 @@ tdfxDDCompressedTexImage2D( GLcontext *ctx, GLenum target,
 }
 
 GLboolean
-tdfxDDCompressedTexSubImage2D( GLcontext *ctx, GLenum target,
+tdfxCompressedTexSubImage2D( GLcontext *ctx, GLenum target,
                                GLint level, GLint xoffset,
                                GLint yoffset, GLsizei width,
                                GLint height, GLenum format,
@@ -1262,7 +1256,7 @@ PrintTexture(int w, int h, int c, const GLubyte * data)
 
 
 GLboolean
-tdfxDDTestProxyTexImage(GLcontext *ctx, GLenum target,
+tdfxTestProxyTexImage(GLcontext *ctx, GLenum target,
                         GLint level, GLint internalFormat,
                         GLenum format, GLenum type,
                         GLint width, GLint height,
@@ -1285,13 +1279,14 @@ tdfxDDTestProxyTexImage(GLcontext *ctx, GLenum target,
             if (!tObj->DriverData)
                 tObj->DriverData = fxAllocTexObjData(fxMesa);
             ti = TDFX_TEXTURE_DATA(tObj);
+            assert(ti);
 
             /* assign the parameters to test against */
-            tObj->Image[level]->Width = width;
-            tObj->Image[level]->Height = height;
-            tObj->Image[level]->Border = border;
+            tObj->Image[0][level]->Width = width;
+            tObj->Image[0][level]->Height = height;
+            tObj->Image[0][level]->Border = border;
 #if 0
-            tObj->Image[level]->IntFormat = internalFormat;
+            tObj->Image[0][level]->IntFormat = internalFormat;
 #endif
             if (level == 0) {
                /* don't use mipmap levels > 0 */
@@ -1346,7 +1341,7 @@ tdfxDDTestProxyTexImage(GLcontext *ctx, GLenum target,
  * copy out the compressed data.
  */
 void
-tdfxDDGetCompressedTexImage( GLcontext *ctx, GLenum target,
+tdfxGetCompressedTexImage( GLcontext *ctx, GLenum target,
                              GLint lod, void *image,
                              const struct gl_texture_object *texObj,
                              struct gl_texture_image *texImage )
@@ -1361,6 +1356,7 @@ tdfxDDGetCompressedTexImage( GLcontext *ctx, GLenum target,
         return;
 
     ti = TDFX_TEXTURE_DATA(texObj);
+    assert(ti);
     mml = &ti->mipmapLevel[lod];
     if (mml->data) {
         MEMCPY(image, mml->data, mml->dataSize);
@@ -1373,7 +1369,7 @@ tdfxDDGetCompressedTexImage( GLcontext *ctx, GLenum target,
  * texture format.
  */
 GLint
-tdfxDDSpecificCompressedTexFormat(GLcontext *ctx,
+tdfxSpecificCompressedTexFormat(GLcontext *ctx,
                                   GLint internalFormat,
                                   GLint numDimensions)
 {
@@ -1407,7 +1403,7 @@ tdfxDDSpecificCompressedTexFormat(GLcontext *ctx,
  * texture format.
  */
 GLint
-tdfxDDBaseCompressedTexFormat(GLcontext *ctx,
+tdfxBaseCompressedTexFormat(GLcontext *ctx,
                               GLint internalFormat)
 {
     switch (internalFormat) {
@@ -1471,3 +1467,37 @@ tdfxDDCompressedImageSize(GLcontext *ctx,
     }
     return 0;
 }
+
+
+
+/**
+ * Allocate a new texture object.
+ * Called via ctx->Driver.NewTextureObject.
+ * Note: this function will be called during context creation to
+ * allocate the default texture objects.
+ * Note: we could use containment here to 'derive' the driver-specific
+ * texture object from the core mesa gl_texture_object.  Not done at this time.
+ */
+static struct gl_texture_object *
+tdfxNewTextureObject( GLcontext *ctx, GLuint name, GLenum target )
+{
+   struct gl_texture_object *obj;
+   obj = _mesa_new_texture_object(ctx, name, target);
+   return obj;
+}
+
+
+void tdfxInitTextureFuncs( struct dd_function_table *functions )
+{
+   functions->BindTexture		= tdfxBindTexture;
+   functions->NewTextureObject		= tdfxNewTextureObject;
+   functions->DeleteTexture		= tdfxDeleteTexture;
+   functions->TexEnv			= tdfxTexEnv;
+   functions->TexParameter		= tdfxTexParameter;
+   functions->ChooseTextureFormat       = tdfxChooseTextureFormat;
+   functions->TexImage2D		= tdfxTexImage2D;
+   functions->TexSubImage2D		= tdfxTexSubImage2D;
+   functions->IsTextureResident		= tdfxIsTextureResident;
+   functions->UpdateTexturePalette      = tdfxUpdateTexturePalette;
+}
+

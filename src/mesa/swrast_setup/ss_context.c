@@ -28,22 +28,14 @@
 
 #include "glheader.h"
 #include "imports.h"
+#include "colormac.h"
 #include "ss_context.h"
 #include "ss_triangle.h"
-#include "ss_vb.h"
 #include "swrast_setup.h"
 #include "tnl/tnl.h"
 #include "tnl/t_context.h"
 #include "tnl/t_pipeline.h"
-
-
-#define _SWSETUP_NEW_VERTS (_NEW_RENDERMODE|	\
-                            _NEW_POLYGON|       \
-                            _NEW_LIGHT|         \
-			    _NEW_TEXTURE|	\
-			    _NEW_COLOR|		\
-			    _NEW_FOG|		\
-			    _NEW_POINT)
+#include "tnl/t_vertex.h"
 
 #define _SWSETUP_NEW_RENDERINDEX (_NEW_POLYGON|_NEW_LIGHT)
 
@@ -51,24 +43,19 @@
 GLboolean
 _swsetup_CreateContext( GLcontext *ctx )
 {
-   TNLcontext *tnl = TNL_CONTEXT(ctx);
    SScontext *swsetup = (SScontext *)CALLOC(sizeof(SScontext));
 
    if (!swsetup)
       return GL_FALSE;
 
-   swsetup->verts = (SWvertex *) ALIGN_CALLOC( sizeof(SWvertex) * tnl->vb.Size,
-					       32);
-   if (!swsetup->verts) {
-      FREE(swsetup);
-      return GL_FALSE;
-   }
-
    ctx->swsetup_context = swsetup;
 
    swsetup->NewState = ~0;
-   _swsetup_vb_init( ctx );
    _swsetup_trifuncs_init( ctx );
+
+   _tnl_init_vertices( ctx, ctx->Const.MaxArrayLockSize + 12, 
+		       sizeof(SWvertex) );
+
 
    return GL_TRUE;
 }
@@ -79,18 +66,11 @@ _swsetup_DestroyContext( GLcontext *ctx )
    SScontext *swsetup = SWSETUP_CONTEXT(ctx);
 
    if (swsetup) {
-      if (swsetup->verts)
-	 ALIGN_FREE(swsetup->verts);
-
-      if (swsetup->ChanSecondaryColor.Ptr) 
-	 ALIGN_FREE((void *) swsetup->ChanSecondaryColor.Ptr);
-
-      if (swsetup->ChanColor.Ptr) 
-	 ALIGN_FREE((void *) swsetup->ChanColor.Ptr);
-
       FREE(swsetup);
       ctx->swsetup_context = 0;
    }
+
+   _tnl_free_vertices( ctx );
 }
 
 static void
@@ -100,6 +80,18 @@ _swsetup_RenderPrimitive( GLcontext *ctx, GLenum mode )
    _swrast_render_primitive( ctx, mode );
 }
 
+#define SWZ ((SWvertex *)0)
+#define SWOffset(MEMBER) (((char *)&(SWZ->MEMBER)) - ((char *)SWZ))
+
+#define EMIT_ATTR( ATTR, STYLE, MEMBER )	\
+do {						\
+   map[e].attrib = (ATTR);			\
+   map[e].format = (STYLE);			\
+   map[e].offset = SWOffset(MEMBER);	       	\
+   e++;						\
+} while (0)
+
+
 /*
  * We patch this function into tnl->Driver.Render.Start.
  * It's called when we start rendering a vertex buffer.
@@ -108,19 +100,60 @@ static void
 _swsetup_RenderStart( GLcontext *ctx )
 {
    SScontext *swsetup = SWSETUP_CONTEXT(ctx);
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   struct vertex_buffer *VB = &tnl->vb;
    GLuint new_state = swsetup->NewState;
 
    if (new_state & _SWSETUP_NEW_RENDERINDEX) {
       _swsetup_choose_trifuncs( ctx );
    }
 
-   if (new_state & _SWSETUP_NEW_VERTS) {
-      _swsetup_choose_rastersetup_func( ctx );
-   }
-
    swsetup->NewState = 0;
 
    _swrast_render_start( ctx );
+
+   /* Important:
+    */
+   VB->AttribPtr[VERT_ATTRIB_POS] = VB->NdcPtr;
+
+
+   if (tnl->render_inputs != swsetup->last_index) {
+      GLuint index = tnl->render_inputs;
+      struct tnl_attr_map map[_TNL_ATTRIB_MAX];
+      int i, e = 0;
+
+      EMIT_ATTR( _TNL_ATTRIB_POS, EMIT_4F_VIEWPORT, win );
+   
+      if (index & _TNL_BIT_COLOR0)
+	 EMIT_ATTR( _TNL_ATTRIB_COLOR0, EMIT_4CHAN_4F_RGBA, color );
+
+      if (index & _TNL_BIT_COLOR1)
+	 EMIT_ATTR( _TNL_ATTRIB_COLOR1, EMIT_4CHAN_4F_RGBA, specular);
+
+      if (index & _TNL_BIT_FOG) 
+	 EMIT_ATTR( _TNL_ATTRIB_FOG, EMIT_1F, fog);
+	 
+      if (index & _TNL_BITS_TEX_ANY) {
+	 for (i = 0; i < MAX_TEXTURE_COORD_UNITS; i++) {
+	    if (index & _TNL_BIT_TEX(i)) {
+	       EMIT_ATTR( _TNL_ATTRIB_TEX0+i, EMIT_4F, texcoord[i] );
+	    }
+	 }
+      }
+      
+      if (index & _TNL_BIT_INDEX) 
+	 EMIT_ATTR( _TNL_ATTRIB_INDEX, EMIT_1F, index );
+ 
+      if (index & _TNL_BIT_POINTSIZE)
+	 EMIT_ATTR( _TNL_ATTRIB_POINTSIZE, EMIT_1F, pointSize );
+   
+      _tnl_install_attrs( ctx, map, e,
+			  ctx->Viewport._WindowMap.m,
+			  sizeof(SWvertex) ); 
+      
+      swsetup->last_index = index;
+   }
+
 }
 
 /*
@@ -138,6 +171,7 @@ _swsetup_InvalidateState( GLcontext *ctx, GLuint new_state )
 {
    SScontext *swsetup = SWSETUP_CONTEXT(ctx);
    swsetup->NewState |= new_state;
+   _tnl_invalidate_vertex_state( ctx, new_state );
 }
 
 
@@ -145,11 +179,13 @@ void
 _swsetup_Wakeup( GLcontext *ctx )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
+   SScontext *swsetup = SWSETUP_CONTEXT(ctx);
+
    tnl->Driver.Render.Start = _swsetup_RenderStart;
    tnl->Driver.Render.Finish = _swsetup_RenderFinish;
    tnl->Driver.Render.PrimitiveNotify = _swsetup_RenderPrimitive;
-   /* interp */
-   /* copypv */
+   tnl->Driver.Render.Interp = _tnl_interp;
+   tnl->Driver.Render.CopyPV = _tnl_copy_pv;
    tnl->Driver.Render.ClippedPolygon = _tnl_RenderClippedPolygon; /* new */
    tnl->Driver.Render.ClippedLine = _tnl_RenderClippedLine; /* new */
    /* points */
@@ -159,8 +195,54 @@ _swsetup_Wakeup( GLcontext *ctx )
    tnl->Driver.Render.PrimTabVerts = _tnl_render_tab_verts;
    tnl->Driver.Render.PrimTabElts = _tnl_render_tab_elts;
    tnl->Driver.Render.ResetLineStipple = _swrast_ResetLineStipple;
-   /* buildvertices */
+   tnl->Driver.Render.BuildVertices = _tnl_build_vertices;
    tnl->Driver.Render.Multipass = 0;
+
+   _tnl_invalidate_vertices( ctx, ~0 );
    _tnl_need_projected_coords( ctx, GL_TRUE );
    _swsetup_InvalidateState( ctx, ~0 );
+
+   swsetup->verts = (SWvertex *)tnl->clipspace.vertex_buf;
+   swsetup->last_index = 0;
 }
+
+
+
+
+
+/* Populate a swrast SWvertex from an attrib-style vertex.
+ */
+void 
+_swsetup_Translate( GLcontext *ctx, const void *vertex, SWvertex *dest )
+{
+   const GLfloat *m = ctx->Viewport._WindowMap.m;
+   GLfloat tmp[4];
+   GLuint i;
+
+   _tnl_get_attr( ctx, vertex, _TNL_ATTRIB_POS, tmp );
+
+   dest->win[0] = m[0]  * tmp[0] + m[12];
+   dest->win[1] = m[5]  * tmp[1] + m[13];
+   dest->win[2] = m[10] * tmp[2] + m[15];
+   dest->win[3] =         tmp[3];
+
+
+   for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++)
+      _tnl_get_attr( ctx, vertex, _TNL_ATTRIB_TEX0+i, dest->texcoord[i] );
+	  
+   _tnl_get_attr( ctx, vertex, _TNL_ATTRIB_COLOR0, tmp );
+   UNCLAMPED_FLOAT_TO_RGBA_CHAN( dest->color, tmp );
+
+   _tnl_get_attr( ctx, vertex, _TNL_ATTRIB_COLOR1, tmp );
+   UNCLAMPED_FLOAT_TO_RGBA_CHAN( dest->specular, tmp );
+
+   _tnl_get_attr( ctx, vertex, _TNL_ATTRIB_FOG, tmp );
+   dest->fog = tmp[0];
+
+   _tnl_get_attr( ctx, vertex, _TNL_ATTRIB_INDEX, tmp );
+   dest->index = (GLuint) tmp[0];
+
+   _tnl_get_attr( ctx, vertex, _TNL_ATTRIB_POINTSIZE, tmp );
+   dest->pointSize = tmp[0];
+}
+

@@ -45,7 +45,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "texformat.h"
 #include "texmem.h"
 #include "swrast/swrast.h"
-
+#include "texobj.h"
 #include "mm.h"
 
 #include "i830_screen.h"
@@ -276,6 +276,7 @@ static void i830TexParameter( GLcontext *ctx, GLenum target,
    i830ContextPtr imesa = I830_CONTEXT(ctx);
    i830TextureObjectPtr t = (i830TextureObjectPtr) tObj->DriverData;
    GLuint unit = ctx->Texture.CurrentUnit;
+
    if (!t)
       return;
 
@@ -419,16 +420,14 @@ static void i830TexSubImage2D( GLcontext *ctx,
 static void i830BindTexture( GLcontext *ctx, GLenum target,
 			     struct gl_texture_object *tObj )
 {
-   if (!tObj->DriverData) {
-      i830AllocTexObj( tObj );
-   }
+   assert( (target != GL_TEXTURE_2D && target != GL_TEXTURE_RECTANGLE_NV) ||
+           (tObj->DriverData != NULL) );
 }
 
 
 static void i830DeleteTexture( GLcontext *ctx, struct gl_texture_object *tObj )
 {
    driTextureObject * t = (driTextureObject *) tObj->DriverData;
-
    if ( t != NULL ) {
       i830ContextPtr imesa = I830_CONTEXT( ctx );
 
@@ -438,6 +437,8 @@ static void i830DeleteTexture( GLcontext *ctx, struct gl_texture_object *tObj )
 
       driDestroyTextureObject( t );
    }
+   /* Free mipmap images and the texture object itself */
+   _mesa_delete_texture_object(ctx, tObj);
 }
 
 
@@ -549,31 +550,32 @@ i830ChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
    return NULL; /* never get here */
 }
 
-void i830DDInitTextureFuncs( GLcontext *ctx )
+/**
+ * Allocate a new texture object.
+ * Called via ctx->Driver.NewTextureObject.
+ * Note: this function will be called during context creation to
+ * allocate the default texture objects.
+ * Note: we could use containment here to 'derive' the driver-specific
+ * texture object from the core mesa gl_texture_object.  Not done at this time.
+ */
+static struct gl_texture_object *
+i830NewTextureObject( GLcontext *ctx, GLuint name, GLenum target )
 {
-   i830ContextPtr imesa = I830_CONTEXT(ctx);
+   struct gl_texture_object *obj;
+   obj = _mesa_new_texture_object(ctx, name, target);
+   i830AllocTexObj( obj );
+   return obj;
+}
 
-   ctx->Driver.TexEnv                    = i830TexEnv;
-   ctx->Driver.ChooseTextureFormat       = i830ChooseTextureFormat;
-   ctx->Driver.TexImage1D                = _mesa_store_teximage1d;
-   ctx->Driver.TexImage2D                = i830TexImage2D;
-   ctx->Driver.TexImage3D                = _mesa_store_teximage3d;
-   ctx->Driver.TexSubImage1D             = _mesa_store_texsubimage1d;
-   ctx->Driver.TexSubImage2D             = i830TexSubImage2D;
-   ctx->Driver.TexSubImage3D             = _mesa_store_texsubimage3d;
-   ctx->Driver.CopyTexImage1D            = _swrast_copy_teximage1d;
-   ctx->Driver.CopyTexImage2D            = _swrast_copy_teximage2d;
-   ctx->Driver.CopyTexSubImage1D         = _swrast_copy_texsubimage1d;
-   ctx->Driver.CopyTexSubImage2D         = _swrast_copy_texsubimage2d;
-   ctx->Driver.CopyTexSubImage3D         = _swrast_copy_texsubimage3d;
-   ctx->Driver.BindTexture               = i830BindTexture;
-   ctx->Driver.DeleteTexture             = i830DeleteTexture;
-   ctx->Driver.TexParameter              = i830TexParameter;
-   ctx->Driver.UpdateTexturePalette      = NULL;
-   ctx->Driver.IsTextureResident         = driIsTextureResident;
-   ctx->Driver.TestProxyTexImage         = _mesa_test_proxy_teximage;
-
-   driInitTextureObjects( ctx, & imesa->swapped,
-			  DRI_TEXMGR_DO_TEXTURE_2D
-			  | DRI_TEXMGR_DO_TEXTURE_RECT );
+void i830InitTextureFuncs( struct dd_function_table *functions )
+{
+   functions->NewTextureObject          = i830NewTextureObject;
+   functions->DeleteTexture             = i830DeleteTexture;
+   functions->ChooseTextureFormat       = i830ChooseTextureFormat;
+   functions->TexImage2D                = i830TexImage2D;
+   functions->TexSubImage2D             = i830TexSubImage2D;
+   functions->BindTexture               = i830BindTexture;
+   functions->TexParameter              = i830TexParameter;
+   functions->TexEnv                    = i830TexEnv;
+   functions->IsTextureResident         = driIsTextureResident;
 }

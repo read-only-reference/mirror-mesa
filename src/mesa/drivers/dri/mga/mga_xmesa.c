@@ -40,6 +40,8 @@
 
 #include "tnl/t_pipeline.h"
 
+#include "drivers/common/driverfuncs.h"
+
 #include "mgadd.h"
 #include "mgastate.h"
 #include "mgatex.h"
@@ -289,13 +291,11 @@ static const char * const g400_extensions[] =
 {
    "GL_ARB_multitexture",
    "GL_ARB_texture_env_add",
-   "GL_EXT_texture_env_add",
    "GL_ARB_texture_env_combine",
-   "GL_EXT_texture_env_combine",
    "GL_ARB_texture_env_crossbar",
-   "GL_ATI_texture_env_combine3",
+   "GL_EXT_texture_env_combine",
    "GL_EXT_texture_edge_clamp",
-   "GL_SGIS_texture_edge_clamp",
+   "GL_ATI_texture_env_combine3",
 #if defined (MESA_packed_depth_stencil)
    "GL_MESA_packed_depth_stencil",
 #endif
@@ -315,10 +315,10 @@ static const char * const card_extensions[] =
 #endif
    "GL_EXT_secondary_color",
    "GL_EXT_stencil_wrap",
+   "GL_EXT_texture_rectangle",
    "GL_MESA_ycbcr_texture",
    "GL_SGIS_generate_mipmap",
    "GL_SGIS_texture_lod",
-   "GL_NV_texture_rectangle",
    NULL
 };
 
@@ -354,6 +354,7 @@ mgaCreateContext( const __GLcontextModes *mesaVis,
    mgaScreenPrivate *mgaScreen = (mgaScreenPrivate *)sPriv->private;
    MGASAREAPrivPtr saPriv=(MGASAREAPrivPtr)(((char*)sPriv->pSAREA)+
 					      mgaScreen->sarea_priv_offset);
+   struct dd_function_table functions;
 
    if (MGA_DEBUG&DEBUG_VERBOSE_DRI)
       fprintf(stderr, "mgaCreateContext\n");
@@ -364,12 +365,21 @@ mgaCreateContext( const __GLcontextModes *mesaVis,
       return GL_FALSE;
    }
 
+   /* Init default driver functions then plug in our Radeon-specific functions
+    * (the texture functions are especially important)
+    */
+   _mesa_init_driver_functions( &functions );
+   mgaInitDriverFuncs( &functions );
+   mgaInitTextureFuncs( &functions );
+   mgaInitIoctlFuncs( &functions );
+
    /* Allocate the Mesa context */
    if (sharedContextPrivate)
       shareCtx = ((mgaContextPtr) sharedContextPrivate)->glCtx;
    else 
       shareCtx = NULL;
-   mmesa->glCtx = _mesa_create_context(mesaVis, shareCtx, (void *) mmesa, GL_TRUE);
+   mmesa->glCtx = _mesa_create_context(mesaVis, shareCtx,
+                                       &functions, (void *) mmesa);
    if (!mmesa->glCtx) {
       FREE(mmesa);
       return GL_FALSE;
@@ -511,11 +521,9 @@ mgaCreateContext( const __GLcontextModes *mesaVis,
       driInitExtensions( ctx, g400_extensions, GL_FALSE );
    }
 
+   /* XXX these should really go right after _mesa_init_driver_functions() */
    mgaDDInitStateFuncs( ctx );
-   mgaDDInitTextureFuncs( ctx );
    mgaDDInitSpanFuncs( ctx );
-   mgaDDInitDriverFuncs( ctx );
-   mgaDDInitIoctlFuncs( ctx );
    mgaDDInitPixelFuncs( ctx );
    mgaDDInitTriFuncs( ctx );
 

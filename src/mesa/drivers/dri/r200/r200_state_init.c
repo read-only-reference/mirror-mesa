@@ -461,6 +461,12 @@ void r200InitState( r200ContextPtr rmesa )
 #else
 						R200_VC_NO_SWAP;
 #endif
+
+   if (!(rmesa->r200Screen->chipset & R200_CHIPSET_TCL)) {
+      /* Bypass TCL */
+      rmesa->hw.cst.cmd[CST_SE_VAP_CNTL_STATUS] |= (1<<8);
+   }
+
    rmesa->hw.cst.cmd[CST_RE_POINTSIZE] = 0x100010;
    rmesa->hw.cst.cmd[CST_SE_TCL_INPUT_VTX_0] =
       (0x0 << R200_VERTEX_POSITION_ADDR__SHIFT);
@@ -498,11 +504,16 @@ void r200InitState( r200ContextPtr rmesa )
           0x100000);	/* Small default bias */
 
       rmesa->hw.cube[i].cmd[CUBE_PP_CUBIC_FACES] = 0;
-      rmesa->hw.cube[i].cmd[CUBE_PP_CUBIC_OFFSET_F1] = 0;
-      rmesa->hw.cube[i].cmd[CUBE_PP_CUBIC_OFFSET_F2] = 0;
-      rmesa->hw.cube[i].cmd[CUBE_PP_CUBIC_OFFSET_F3] = 0;
-      rmesa->hw.cube[i].cmd[CUBE_PP_CUBIC_OFFSET_F4] = 0;
-      rmesa->hw.cube[i].cmd[CUBE_PP_CUBIC_OFFSET_F5] = 0;
+      rmesa->hw.cube[i].cmd[CUBE_PP_CUBIC_OFFSET_F1] =
+         rmesa->r200Screen->texOffset[RADEON_CARD_HEAP];
+      rmesa->hw.cube[i].cmd[CUBE_PP_CUBIC_OFFSET_F2] =
+         rmesa->r200Screen->texOffset[RADEON_CARD_HEAP];
+      rmesa->hw.cube[i].cmd[CUBE_PP_CUBIC_OFFSET_F3] =
+         rmesa->r200Screen->texOffset[RADEON_CARD_HEAP];
+      rmesa->hw.cube[i].cmd[CUBE_PP_CUBIC_OFFSET_F4] =
+         rmesa->r200Screen->texOffset[RADEON_CARD_HEAP];
+      rmesa->hw.cube[i].cmd[CUBE_PP_CUBIC_OFFSET_F5] =
+         rmesa->r200Screen->texOffset[RADEON_CARD_HEAP];
    }
 
    rmesa->hw.pix[0].cmd[PIX_PP_TXCBLEND] =  
@@ -672,6 +683,7 @@ void r200InitState( r200ContextPtr rmesa )
 			   &l->LinearAttenuation );
       ctx->Driver.Lightfv( ctx, p, GL_QUADRATIC_ATTENUATION, 
 			   &l->QuadraticAttenuation );
+      *(float *)&(rmesa->hw.lit[i].cmd[LIT_ATTEN_XXX]) = 0.0;
    }
 
    ctx->Driver.LightModelfv( ctx, GL_LIGHT_MODEL_AMBIENT, 
