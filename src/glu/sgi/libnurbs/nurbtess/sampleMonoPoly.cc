@@ -31,10 +31,10 @@
 ** published by SGI, but has not been independently verified as being
 ** compliant with the OpenGL(R) version 1.2.1 Specification.
 **
-** $Date: 2001/03/17 00:25:41 $ $Revision: 1.1 $
+** $Date: 2002/11/08 17:38:13 $ $Revision: 1.3 $
 */
 /*
-** $Header: /home/krh/git/sync/mesa-cvs-repo/Mesa/src/glu/sgi/libnurbs/nurbtess/sampleMonoPoly.cc,v 1.1 2001/03/17 00:25:41 brianp Exp $
+** $Header: /home/krh/git/sync/mesa-cvs-repo/Mesa/src/glu/sgi/libnurbs/nurbtess/sampleMonoPoly.cc,v 1.3 2002/11/08 17:38:13 brianp Exp $
 */
 
 #include "gluos.h"
@@ -483,7 +483,7 @@ rightChain->print();
 
 
       Real tempMin = rightChain->getVertex(index2)[0];
-      Real tempI = index2;
+      Int tempI = index2;
       for(i=index2+1; i<= rightChainEndIndex; i++)
 	if(rightChain->getVertex(i)[0] < tempMin)
 	  {
@@ -505,7 +505,7 @@ rightChain->print();
      else
        {
 	 ret_leftCornerWhere = 2; //right
-	 ret_leftCornerIndex = (int)tempI;
+	 ret_leftCornerIndex = tempI;
        }
     }
   else if(index2> rightChainEndIndex) /*index1<=leftChainEndIndex*/
@@ -517,7 +517,7 @@ rightChain->print();
        *either this vertex or the botvertex can be used as the right corner
        */
 
-      Real tempI;
+      Int tempI;
       //skip those points which are equal to v. (avoid degeneratcy)
       for(tempI = index1; tempI <= leftChainEndIndex; tempI++)
 	if(leftChain->getVertex(tempI)[1] < v) 
@@ -527,7 +527,7 @@ rightChain->print();
       else
 	{
 	  Real tempMax = leftChain->getVertex(tempI)[0];
-	  for(i=(int)tempI; i<= leftChainEndIndex; i++)
+	  for(i=tempI; i<= leftChainEndIndex; i++)
 	    if(leftChain->getVertex(i)[0] > tempMax)
 	      {
 		tempI = i;
@@ -552,7 +552,7 @@ rightChain->print();
 	  else
 	    {
 	      ret_rightCornerWhere = 0;
-	      ret_rightCornerIndex = (int)tempI;
+	      ret_rightCornerIndex = tempI;
 	    }
 	}
       

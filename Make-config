@@ -1,7 +1,7 @@
-# $Id: Make-config,v 1.65 2002/10/31 14:58:36 brianp Exp $
+# $Id: Make-config,v 1.68 2002/11/14 16:14:52 brianp Exp $
 
 MESA_MAJOR=5
-MESA_MINOR=0
+MESA_MINOR=1
 MESA_TINY=0
 VERSION=$(MESA_MAJOR).$(MESA_MINOR)
 
@@ -155,7 +155,7 @@ cygnus:
 	"CFLAGS = -I. -DWIN32 -D__WIN32__ -D_WINDOWS \
 		-O2 -funroll-loops \
 		-fexpensive-optimizations -fomit-frame-pointer -ffast-math \
-		-malign-loops=2 -malign-jumps=2 -malign-functions=2" \
+		-malign-loops=2 -malign-functions=2" \
 	"CCFLAGS = $(CFLAGS)" \
 	"MAKELIB = ../bin/mklib.ar-ruv" \
 	"WLIBS = ../lib/wing32.a -lkernel32 -luser32 -lgdi32"
@@ -174,7 +174,7 @@ cygnus-linux:
 	"CFLAGS = -I. -DWIN32 -D__WIN32__ -D_WINDOWS \
 		-O2 -funroll-loops \
 		-fexpensive-optimizations -fomit-frame-pointer -ffast-math \
-		-malign-loops=2 -malign-jumps=2 -malign-functions=2" \
+		-malign-loops=2 -malign-functions=2" \
 	"MAKELIB = ../bin/mklib.cygnus-linux" \
 	"WLIBS = ../lib/wing32.a -lkernel32 -luser32 -lgdi32"
 
@@ -308,6 +308,7 @@ hpux9-gcc-sl:
 	"MAKELIB = ../bin/mklib.hpux" \
 	"APP_LIB_DEPS = -L/usr/lib/X11R5 -lXext -lXmu -lXi -lX11 -lm"
 
+# The hpux10 configs should work for hpux11 as well.
 hpux10:
 	$(MAKE) $(MFLAGS) -f Makefile.X11 targets \
 	"GL_LIB = libGL.a" \
@@ -318,7 +319,7 @@ hpux10:
 	"CC = cc" \
 	"CPLUSPLUS = aCC" \
 	"CFLAGS = +O3 +DAportable -Aa -D_HPUX_SOURCE -I/usr/include/X11R6 -I/usr/contrib/X11R6/include -DUSE_XSHM" \
-	"CCFLAGS = $(CFLAGS)" \
+	"CCFLAGS = +O3 +DAportable -Aa -D_HPUX_SOURCE -I/usr/include/X11R6 -I/usr/contrib/X11R6/include -DUSE_XSHM" \
 	"MAKELIB = ../bin/mklib.ar-ruv" \
 	"APP_LIB_DEPS = -L/usr/lib/X11R6 -L/usr/contrib/X11R6/lib -lXext -lXmu -lXi -lX11 -lm -L/usr/lib -lCsup"
 
@@ -327,12 +328,12 @@ hpux10-sl:
 	"GL_LIB = libGL" \
 	"GLU_LIB = libGLU" \
 	"GLUT_LIB = libglut" \
-	"GLW_LIB = libGLw.a" \
-	"OSMESA_LIB = libOSMesa.a" \
+	"GLW_LIB = libGLw" \
+	"OSMESA_LIB = libOSMesa" \
 	"CC = cc" \
 	"CPLUSPLUS = aCC" \
-	"CFLAGS = +z -Ae +O2 +Onolimit +Oaggressive -D_HPUX_SOURCE -I/usr/include/X11R6 -I/usr/contrib/X11R6/include -DUSE_XSHM" \
-	"CCFLAGS = $(CFLAGS)" \
+	"CFLAGS = +O3 +DAportable +z -Aa -D_HPUX_SOURCE -I/usr/include/X11R6 -I/usr/contrib/X11R6/include -DUSE_XSHM" \
+	"CCFLAGS = +O3 +DAportable +Z -Aa -D_HPUX_SOURCE -I/usr/include/X11R6 -I/usr/contrib/X11R6/include -DUSE_XSHM" \
 	"MAKELIB = ../bin/mklib.hpux" \
 	"APP_LIB_DEPS = -L/usr/lib/X11R6 -L/usr/contrib/X11R6/lib -lXext -lXmu -lXi -lX11 -lm"
 
@@ -645,7 +646,7 @@ linux-x86-static:
 	"OSMESA_LIB = libOSMesa.a" \
 	"CC = gcc" \
 	"CPLUSPLUS = g++" \
-	"CFLAGS = -Wall -O3 -ansi -pedantic -fPIC -ffast-math -funroll-loops -fomit-frame-pointer -malign-loops=2 -malign-jumps=2 -malign-functions=2 -D_POSIX_SOURCE -D_POSIX_C_SOURCE=199309L -D_SVID_SOURCE -D_BSD_SOURCE -DUSE_XSHM -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_3DNOW_ASM -DUSE_SSE_ASM -DPTHREADS -I/usr/X11R6/include" \
+	"CFLAGS = -Wall -O3 -ansi -pedantic -fPIC -ffast-math -funroll-loops -fomit-frame-pointer -malign-loops=2 -malign-functions=2 -D_POSIX_SOURCE -D_POSIX_C_SOURCE=199309L -D_SVID_SOURCE -D_BSD_SOURCE -DUSE_XSHM -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_3DNOW_ASM -DUSE_SSE_ASM -DPTHREADS -I/usr/X11R6/include" \
 	"MAKELIB = ../bin/mklib.ar-ruv" \
 	"GL_LIB_DEPS = -L/usr/X11R6/lib -lX11 -lXext -lm -lm -lpthread" \
 	"GLU_LIB_DEPS = -L../lib -lGL -lm" \
@@ -741,7 +742,7 @@ linux-386-opt-glide:
 	"OSMESA_LIB = libOSMesa.so" \
 	"CC = gcc" \
 	"CPLUSPLUS = g++" \
-	"CFLAGS = -O3 -m486 -fomit-frame-pointer -pipe -ansi -pedantic -ffast-math -fexpensive-optimizations -malign-loops=2 -malign-jumps=2 -malign-functions=2 -D_SVID_SOURCE -D_BSD_SOURCE -DUSE_XSHM -DFX -DUSE_X86_ASM -DPTHREADS -I/usr/X11R6/include -I/usr/include/glide -I/usr/local/glide/include" \
+	"CFLAGS = -O3 -m486 -fomit-frame-pointer -pipe -ansi -pedantic -ffast-math -fexpensive-optimizations -malign-loops=2 -malign-functions=2 -D_SVID_SOURCE -D_BSD_SOURCE -DUSE_XSHM -DFX -DUSE_X86_ASM -DPTHREADS -I/usr/X11R6/include -I/usr/include/glide -I/usr/local/glide/include" \
 	"CCFLAGS = $(CFLAGS)" \
 	"MAKELIB = ../bin/mklib.linux" \
 	"GL_LIB_DEPS = -L/usr/X11R6/lib -lX11 -lXext -lm -L/usr/local/glide/lib -lglide2x -lm -lpthread" \
@@ -761,7 +762,7 @@ linux-x86-glide:
 	"OSMESA_LIB = libOSMesa.so" \
 	"CC = gcc" \
 	"CPLUSPLUS = g++" \
-	"CFLAGS = -O3 -ansi -pedantic -fPIC -ffast-math -funroll-loops -fomit-frame-pointer -malign-loops=2 -malign-jumps=2 -malign-functions=2 -D_SVID_SOURCE -D_BSD_SOURCE -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_3DNOW_ASM -DUSE_SSE_ASM -DUSE_XSHM -DFX -DPTHREADS -I/usr/X11R6/include -I/usr/include/glide -I/usr/local/glide/include -I/usr/src/mesa-glx/src/FX/X86" \
+	"CFLAGS = -O3 -ansi -pedantic -fPIC -ffast-math -funroll-loops -fomit-frame-pointer -malign-loops=2 -malign-functions=2 -D_SVID_SOURCE -D_BSD_SOURCE -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_3DNOW_ASM -DUSE_SSE_ASM -DUSE_XSHM -DFX -DPTHREADS -I/usr/X11R6/include -I/usr/include/glide -I/usr/local/glide/include -I/usr/src/mesa-glx/src/FX/X86" \
 	"MAKELIB = ../bin/mklib.linux" \
 	"GL_LIB_DEPS = -L/usr/X11R6/lib -lX11 -lXext -lm -L/usr/local/glide/lib -lglide2x -lm -lpthread" \
 	"GLU_LIB_DEPS = -L../lib -lGL -lm" \
@@ -918,7 +919,7 @@ linux-osmesa32:
 # May want to add these CFLAGS for better performance under LynxOS and GCC:
 # -fPIC -O2 -ansi -pedantic -mieee-fp -DUSE_XSHM -funroll-loops
 # -fexpensive-optimizations -fomit-frame-pointer -ffast-math
-# and  -malign-loops=2 -malign-jumps=2 -malign-functions=2 for Pentium
+# and  -malign-loops=2 -malign-functions=2 for Pentium
 lynxos:
 	$(MAKE) $(MFLAGS) -f Makefile.X11 targets \
 	"GL_LIB = libGL.a" \
@@ -1552,7 +1553,7 @@ linux-x86-debug:
 	"OSMESA_LIB = libOSMesa.so" \
 	"CC = gcc" \
 	"CPLUSPLUS = g++" \
-	"CFLAGS = -O2 -g -ansi -pedantic -Wall -Wmissing-prototypes -fPIC -ffast-math -malign-loops=2 -malign-jumps=2 -malign-functions=2 -D_POSIX_SOURCE -D_POSIX_C_SOURCE=199309L -D_SVID_SOURCE -D_BSD_SOURCE -DUSE_XSHM -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_3DNOW_ASM -DUSE_SSE_ASM -DPTHREADS -I/usr/X11R6/include -DDEBUG -DMESA_DEBUG" \
+	"CFLAGS = -O2 -g -ansi -pedantic -Wall -Wmissing-prototypes -fPIC -ffast-math -malign-loops=2 -malign-functions=2 -D_POSIX_SOURCE -D_POSIX_C_SOURCE=199309L -D_SVID_SOURCE -D_BSD_SOURCE -DUSE_XSHM -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_3DNOW_ASM -DUSE_SSE_ASM -DPTHREADS -I/usr/X11R6/include -DDEBUG -DMESA_DEBUG" \
 	"MAKELIB = ../bin/mklib.linux" \
 	"GL_LIB_DEPS = -L/usr/X11R6/lib -lX11 -lXext -lm -lm -lpthread" \
 	"GLU_LIB_DEPS = -L../lib -lGL -lm" \

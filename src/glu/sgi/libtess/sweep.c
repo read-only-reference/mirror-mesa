@@ -35,8 +35,8 @@
 /*
 ** Author: Eric Veach, July 1994.
 **
-** $Date: 2001/09/20 21:47:52 $ $Revision: 1.2 $
-** $Header: /home/krh/git/sync/mesa-cvs-repo/Mesa/src/glu/sgi/libtess/sweep.c,v 1.2 2001/09/20 21:47:52 kschultz Exp $
+** $Date: 2002/11/07 14:17:05 $ $Revision: 1.5 $
+** $Header: /home/krh/git/sync/mesa-cvs-repo/Mesa/src/glu/sgi/libtess/sweep.c,v 1.5 2002/11/07 14:17:05 brianp Exp $
 */
 
 #include "gluos.h"
@@ -1174,7 +1174,9 @@ static void InitEdgeDict( GLUtesselator *tess )
 static void DoneEdgeDict( GLUtesselator *tess )
 {
   ActiveRegion *reg;
+#ifndef NDEBUG
   int fixedEdges = 0;
+#endif
 
   /* __GL_DICTLISTKEY */ /* __GL_DICTLISTMIN */
   while( (reg = (ActiveRegion *)dictKey( dictMin( tess->dict ))) != NULL ) {

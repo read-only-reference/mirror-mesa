@@ -1,7 +1,7 @@
-# $Id: Makefile.X11,v 1.66 2002/10/29 23:09:37 brianp Exp $
+# $Id: Makefile.X11,v 1.70 2002/11/14 16:14:50 brianp Exp $
 
 # Mesa 3-D graphics library
-# Version:  5.0
+# Version:  5.1
 # 
 # Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
 # 
@@ -51,8 +51,8 @@ default:
 	@echo "  make hpux9-sl             for HP systems with HPUX 9.x, make shared libs"
 	@echo "  make hpux9-gcc            for HP systems with HPUX 9.x using GCC"
 	@echo "  make hpux9-gcc-sl         for HP systems with HPUX 9.x, GCC, make shared libs"
-	@echo "  make hpux10               for HP systems with HPUX 10.x"
-	@echo "  make hpux10-sl            for HP systems with HPUX 10.x, shared libs"
+	@echo "  make hpux10               for HP systems with HPUX 10.x and 11.x"
+	@echo "  make hpux10-sl            for HP systems with HPUX 10.x and 11.x, shared libs"
 	@echo "  make hpux10-gcc           for HP systems with HPUX 10.x w/ GCC"
 	@echo "  make hpux10-gcc-sl        for HP systems with HPUX 10.x w/ GCC, shared libs"
 	@echo "  make irix4                for SGI systems with IRIX 4.x"
@@ -69,7 +69,6 @@ default:
 
 	@echo "  make linux                for Linux systems, make shared .so libs"
 	@echo "  make linux-static         for Linux systems, make static .a libs"
-	@echo "  make linux-trace          for Linux systems, with API trace extension"
 	@echo "  make linux-x86            for Linux on Intel, make shared .so libs"
 	@echo "  make linux-x86-static     for Linux on Intel, make static .a libs"
 	@echo "  make linux-ggi            for Linux systems with libggi"
@@ -330,10 +329,10 @@ realclean: clean
 	cd samples     && $(MAKE) -f Makefile.X11 realclean || true
 
 
-DIRECTORY = Mesa-5.0
-LIB_NAME = MesaLib-5.0
-DEMO_NAME = MesaDemos-5.0
-GLU_NAME = MesaGLU-5.0
+DIRECTORY = Mesa-5.1
+LIB_NAME = MesaLib-5.1
+DEMO_NAME = MesaDemos-5.1
+GLU_NAME = MesaGLU-5.1
 GLUT_NAME = GLUT-3.7
 
 
@@ -354,12 +353,11 @@ LIB_FILES =	\
 	$(DIRECTORY)/missing						\
 	$(DIRECTORY)/mkinstalldirs					\
 	$(DIRECTORY)/stamp-h.in						\
-	$(DIRECTORY)/docs/CONFIG					\
+	$(DIRECTORY)/docs/index.html					\
 	$(DIRECTORY)/docs/CONFORM					\
 	$(DIRECTORY)/docs/COPYING					\
 	$(DIRECTORY)/docs/COPYRIGHT					\
 	$(DIRECTORY)/docs/DEVINFO					\
-	$(DIRECTORY)/docs/IAFA-PACKAGE					\
 	$(DIRECTORY)/docs/INSTALL					\
 	$(DIRECTORY)/docs/INSTALL.GNU					\
 	$(DIRECTORY)/docs/README					\
@@ -400,7 +398,6 @@ LIB_FILES =	\
 	$(DIRECTORY)/include/GL/xmesa_x.h				\
 	$(DIRECTORY)/include/GL/xmesa_xf86.h				\
 	$(DIRECTORY)/include/GLView.h					\
-	$(DIRECTORY)/include/dmesadxe.h					\
 	$(DIRECTORY)/include/Makefile.in				\
 	$(DIRECTORY)/include/Makefile.am				\
 	$(DIRECTORY)/src/Makefile*					\
@@ -473,9 +470,6 @@ LIB_FILES =	\
 	$(DIRECTORY)/src/SVGA/Makefile.am				\
 	$(DIRECTORY)/src/SVGA/Makefile.in				\
 	$(DIRECTORY)/src/SVGA/*.[ch]					\
-	$(DIRECTORY)/src/Trace/*.[ch]					\
-	$(DIRECTORY)/src/Trace/Makefile.am				\
-	$(DIRECTORY)/src/Trace/Makefile.in				\
 	$(DIRECTORY)/src/Windows/*.[ch]					\
 	$(DIRECTORY)/src/Windows/*.def					\
 	$(DIRECTORY)/src/X/Makefile.am					\
