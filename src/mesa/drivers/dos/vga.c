@@ -31,13 +31,15 @@
  */
 
 
+#include <pc.h>
 #include <stdlib.h>
 
+#include "video.h"
 #include "vga.h"
 
 
 
-static vl_mode modes[4] = {
+static vl_mode modes[] = {
        {0x13 | 0x4000, 320, 200, 320, 8, -1, 320*200},
        {0xffff, -1, -1, -1, -1, -1, -1}
 };
@@ -98,7 +100,7 @@ static vl_mode *vga_init (void)
  *
  * Note: -
  */
-static void vga_finit (void)
+static void vga_fini (void)
 {
  if (vga_ver) {
     _remove_selector(&linear_selector);
@@ -119,7 +121,7 @@ static int vga_entermode (vl_mode *p, int refresh)
  if (!(p->mode & 0x4000)) {
     return -1;
  }
- VGA.blit = vl_can_mmx() ? vesa_l_dump_virtual_mmx : vesa_l_dump_virtual;
+ VGA.blit = _can_mmx() ? vesa_l_dump_virtual_mmx : vesa_l_dump_virtual;
 
  if (oldmode == -1) {
     __asm("\n\
@@ -133,6 +135,8 @@ static int vga_entermode (vl_mode *p, int refresh)
  __asm("int $0x10"::"a"(p->mode&0xff));
 
  return 0;
+
+ (void)refresh; /* silence compiler warning */
 }
 
 
@@ -158,22 +162,23 @@ static void vga_restore (void)
  * In  : color index, R, G, B
  * Out : -
  *
- * Note: uses normalized values
+ * Note: uses integer values
  */
-static void vga_setCI_f (int index, float red, float green, float blue)
+static void vga_setCI_i (int index, int red, int green, int blue)
 {
- float max = (1 << vga_color_precision) - 1;
-
- int _red = red * max;
- int _green = green * max;
- int _blue = blue * max;
-
+#if 0
  __asm("\n\
 		movw $0x1010, %%ax	\n\
 		movb %1, %%dh		\n\
 		movb %2, %%ch		\n\
 		int  $0x10		\n\
- "::"b"(index), "m"(_red), "m"(_green), "c"(_blue):"%eax", "%edx");
+ "::"b"(index), "m"(red), "m"(green), "c"(blue):"%eax", "%edx");
+#else
+ outportb(0x03C8, index);
+ outportb(0x03C9, red);
+ outportb(0x03C9, green);
+ outportb(0x03C9, blue);
+#endif
 }
 
 
@@ -183,30 +188,34 @@ static void vga_setCI_f (int index, float red, float green, float blue)
  * In  : color index, R, G, B
  * Out : -
  *
- * Note: uses integer values
+ * Note: uses normalized values
  */
-static void vga_setCI_i (int index, int red, int green, int blue)
+static void vga_setCI_f (int index, float red, float green, float blue)
 {
- __asm("\n\
-		movw $0x1010, %%ax	\n\
-		movb %1, %%dh		\n\
-		movb %2, %%ch		\n\
-		int  $0x10		\n\
-"::"b"(index), "m"(red), "m"(green), "c"(blue):"%eax", "%edx");
+ float max = (1 << vga_color_precision) - 1;
+
+ vga_setCI_i(index, (int)(red * max), (int)(green * max), (int)(blue * max));
 }
 
 
 
-/* Desc: retrieve CI precision
+/* Desc: state retrieval
  *
- * In  : -
- * Out : precision in bits
+ * In  : parameter name, ptr to storage
+ * Out : 0 if request successfully processed
  *
  * Note: -
  */
-static int vga_getCIprec (void)
+static int vga_get (int pname, int *params)
 {
- return vga_color_precision;
+ switch (pname) {
+        case VL_GET_CI_PREC:
+             params[0] = vga_color_precision;
+             break;
+        default:
+             return -1;
+ }
+ return 0;
 }
 
 
@@ -220,7 +229,7 @@ vl_driver VGA = {
           NULL,
           vga_setCI_f,
           vga_setCI_i,
-          vga_getCIprec,
+          vga_get,
           vga_restore,
-          vga_finit
+          vga_fini
 };

@@ -35,16 +35,17 @@
 
 #include <stdlib.h>
 
-#include "video.h"
 #include "internal.h"
-#include "vesa/vesa.h"
-#include "vga/vga.h"
+#include "vesa.h"
+#include "vga.h"
+#include "video.h"
 
 
 
 static vl_driver *drv;
 /* based upon mode specific data: valid entire session */
 int vl_video_selector;
+static vl_mode *video_mode;
 static int video_scanlen, video_bypp;
 /* valid until next buffer */
 void *vl_current_draw_buffer, *vl_current_read_buffer;
@@ -55,22 +56,22 @@ int vl_current_offset, vl_current_delta;
 
 /* lookup table for scaling 5 bit colors up to 8 bits */
 static int _rgb_scale_5[32] = {
-   0,   8,   16,  24,  32,  41,  49,  57,
-   65,  74,  82,  90,  98,  106, 115, 123,
-   131, 139, 148, 156, 164, 172, 180, 189,
-   197, 205, 213, 222, 230, 238, 246, 255
+   0,   8,   16,  25,  33,  41,  49,  58,
+   66,  74,  82,  90,  99,  107, 115, 123,
+   132, 140, 148, 156, 165, 173, 181, 189,
+   197, 206, 214, 222, 230, 239, 247, 255
 };
 
 /* lookup table for scaling 6 bit colors up to 8 bits */
 static int _rgb_scale_6[64] = {
    0,   4,   8,   12,  16,  20,  24,  28,
-   32,  36,  40,  44,  48,  52,  56,  60,
-   64,  68,  72,  76,  80,  85,  89,  93,
+   32,  36,  40,  45,  49,  53,  57,  61,
+   65,  69,  73,  77,  81,  85,  89,  93,
    97,  101, 105, 109, 113, 117, 121, 125,
-   129, 133, 137, 141, 145, 149, 153, 157,
-   161, 165, 170, 174, 178, 182, 186, 190,
-   194, 198, 202, 206, 210, 214, 218, 222,
-   226, 230, 234, 238, 242, 246, 250, 255
+   130, 134, 138, 142, 146, 150, 154, 158,
+   162, 166, 170, 174, 178, 182, 186, 190,
+   194, 198, 202, 206, 210, 215, 219, 223,
+   227, 231, 235, 239, 243, 247, 251, 255
 };
 
 /* FakeColor data */
@@ -93,6 +94,7 @@ int (*vl_mixfix) (fixed r, fixed g, fixed b);
 int (*vl_mixrgb) (const unsigned char rgb[]);
 int (*vl_mixrgba) (const unsigned char rgba[]);
 void (*vl_getrgba) (unsigned int offset, unsigned char rgba[4]);
+int (*vl_getpixel) (unsigned int offset);
 void (*vl_clear) (int color);
 void (*vl_rect) (int x, int y, int width, int height, int color);
 void (*vl_flip) (void);
@@ -243,6 +245,33 @@ static void v_getrgba32 (unsigned int offset, unsigned char rgba[4])
 
 
 
+/* Desc: pixel retrieval
+ *
+ * In  : pixel offset
+ * Out : pixel value
+ *
+ * Note: uses current read buffer
+ */
+static int v_getpixel8 (unsigned int offset)
+{
+ return ((word8 *)vl_current_read_buffer)[offset];
+}
+#define v_getpixel15 v_getpixel16
+static int v_getpixel16 (unsigned int offset)
+{
+ return ((word16 *)vl_current_read_buffer)[offset];
+}
+static int v_getpixel24 (unsigned int offset)
+{
+ return *(word32 *)((long)vl_current_read_buffer+offset*3);
+}
+static int v_getpixel32 (unsigned int offset)
+{
+ return ((word32 *)vl_current_read_buffer)[offset];
+}
+
+
+
 /* Desc: set one palette entry
  *
  * In  : index, R, G, B
@@ -257,26 +286,12 @@ void vl_setCI (int index, float red, float green, float blue)
 
 
 
-/* Desc: read pixel from 8bit buffer
- *
- * In  : pixel offset
- * Out : pixel read
- *
- * Note: used only for CI modes
- */
-int vl_getCIpixel (unsigned int offset)
-{
- return ((word8 *)vl_current_read_buffer)[offset];
-}
-
-
-
 /* Desc: set one palette entry
  *
  * In  : color, R, G, B
  * Out : -
  *
- * Note: color components are in range [0 .. 63]
+ * Note: -
  */
 static void fake_setcolor (int c, int r, int g, int b)
 {
@@ -326,49 +341,59 @@ static void fake_buildpalette (int bits)
 
 /* Desc: sync buffer with video hardware
  *
- * In  : old buffer, position, size
- * Out : new buffer
+ * In  : ptr to old buffer, position, size
+ * Out : 0 if success
  *
  * Note: -
  */
-void *vl_sync_buffer (void *buffer, int x, int y, int width, int height)
+int vl_sync_buffer (void **buffer, int x, int y, int width, int height)
 {
- void *newbuf;
-
- if (width&7) {
-    return NULL;
+ if ((width & 7) || (x < 0) || (y < 0) || (x+width > video_mode->xres) || (y+height > video_mode->yres)) {
+    return -1;
  } else {
-    if ((newbuf=realloc(buffer, width * height * video_bypp)) != NULL) {
-       vl_current_width = width;
-       vl_current_height = height;
-       vl_current_stride = vl_current_width * video_bypp;
-       vl_current_bytes = vl_current_stride * height;
+    void *newbuf = *buffer;
 
-       vl_current_offset = video_scanlen * y + video_bypp * x;
-       vl_current_delta = video_scanlen - vl_current_stride;
+    if ((newbuf == NULL) || (vl_current_width != width) || (vl_current_height != height)) {
+       newbuf = realloc(newbuf, width * height * video_bypp);
     }
-    return vl_current_draw_buffer = vl_current_read_buffer = newbuf;
+
+    if (newbuf == NULL) {
+       return -2;
+    }
+
+    vl_current_width = width;
+    vl_current_height = height;
+    vl_current_stride = vl_current_width * video_bypp;
+    vl_current_bytes = vl_current_stride * height;
+
+    vl_current_offset = video_scanlen * y + video_bypp * x;
+    vl_current_delta = video_scanlen - vl_current_stride;
+
+    vl_current_draw_buffer = vl_current_read_buffer = *buffer = newbuf;
+    return 0;
  }
 }
 
 
 
-/* Desc: retrieve CPU MMX capability
+/* Desc: state retrieval
  *
- * In  : -
- * Out : FALSE if CPU cannot do MMX
+ * In  : name, storage
+ * Out : -
  *
  * Note: -
  */
-int vl_can_mmx (void)
+int vl_get (int pname, int *params)
 {
-#ifdef USE_MMX_ASM
- extern int _mesa_identify_x86_cpu_features (void);
- int _mesa_x86_cpu_features = _mesa_identify_x86_cpu_features();
- return (_mesa_x86_cpu_features & 0x00800000);
-#else
+ switch (pname) {
+        case VL_GET_SCREEN_SIZE:
+             params[0] = video_mode->xres;
+             params[1] = video_mode->yres;
+             break;
+        default:
+             return drv->get(pname, params);
+ }
  return 0;
-#endif
 }
 
 
@@ -382,14 +407,19 @@ int vl_can_mmx (void)
  */
 static int vl_setup_mode (vl_mode *p)
 {
+ if (p == NULL) {
+    return -1;
+ }
+
 #define INITPTR(bpp) \
         vl_putpixel = v_putpixel##bpp; \
         vl_getrgba = v_getrgba##bpp;   \
+        vl_getpixel = v_getpixel##bpp; \
         vl_rect = v_rect##bpp;         \
         vl_mixfix = vl_mixfix##bpp;    \
         vl_mixrgb = vl_mixrgb##bpp;    \
         vl_mixrgba = vl_mixrgba##bpp;  \
-        vl_clear = vl_can_mmx() ? v_clear##bpp##_mmx : v_clear##bpp
+        vl_clear = _can_mmx() ? v_clear##bpp##_mmx : v_clear##bpp
         
  switch (p->bpp) {
         case 8:
@@ -413,6 +443,7 @@ static int vl_setup_mode (vl_mode *p)
 
 #undef INITPTR
 
+ video_mode = p;
  video_bypp = (p->bpp+7)/8;
  video_scanlen = p->scanlen;
  vl_video_selector = p->sel;
@@ -432,7 +463,7 @@ static int vl_setup_mode (vl_mode *p)
 void vl_video_exit (void)
 {
  drv->restore();
- drv->finit();
+ drv->fini();
 }
 
 
@@ -476,11 +507,11 @@ int vl_video_init (int width, int height, int bpp, int rgb, int refresh)
      }
  }
 
- /* check, setup and enter mode */
- if ((p!=NULL) && (vl_setup_mode(p) == 0) && (drv->entermode(p, refresh) == 0)) {
+ /* setup and enter mode */
+ if ((vl_setup_mode(p) == 0) && (drv->entermode(p, refresh) == 0)) {
     vl_flip = drv->blit;
     if (fake) {
-       min = drv->getCIprec();
+       drv->get(VL_GET_CI_PREC, (int *)(&min));
        fake_buildpalette(min);
        if (min == 8) {
           vl_getrgba = v_getrgba8fake8;

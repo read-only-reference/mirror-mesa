@@ -1,4 +1,4 @@
-/* $Id: nvprogram.c,v 1.1 2003/01/14 04:55:46 brianp Exp $ */
+/* $Id: nvprogram.c,v 1.6 2003/02/27 19:00:00 kschultz Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -45,6 +45,86 @@
 #include "nvprogram.h"
 
 
+/**
+ * Symbol table entry.
+ * Used for named program parameters.
+ */
+struct symbol
+{
+   const char *Name;
+   enum symbol_type Type;
+   GLfloat Value[4];
+   GLuint Register;
+   struct symbol *Next;
+};
+
+
+
+void
+_mesa_add_symbol(struct symbol_table *symbolTable,
+                 const char *name, enum symbol_type type, const GLfloat *value)
+{
+   struct symbol *s = MALLOC_STRUCT(symbol);
+   if (s) {
+      s->Name = _mesa_strdup(name);
+      s->Type = type;
+      s->Value[0] = value[0];
+      s->Value[1] = value[1];
+      s->Value[2] = value[2];
+      s->Value[3] = value[3];
+      s->Next = symbolTable->Head;
+      symbolTable->Head = s;
+   }
+}
+
+
+GLboolean
+_mesa_lookup_symbol(const struct symbol_table *symbolTable,
+                    const char *name, GLfloat *value)
+{
+   const struct symbol *s;
+   for (s = symbolTable->Head; s; s = s->Next) {
+      if (_mesa_strcmp(s->Name, name) == 0) {
+         value[0] = s->Value[0];
+         value[1] = s->Value[1];
+         value[2] = s->Value[2];
+         value[3] = s->Value[3];
+         return GL_TRUE;
+      }
+   }
+   printf("lookup %s failed\n", name);
+   return GL_FALSE;
+}
+
+
+static GLint
+_mesa_lookup_program_register(const struct symbol_table *symbolTable,
+                              GLsizei len, const GLubyte *name)
+{
+   const struct symbol *s;
+   for (s = symbolTable->Head; s; s = s->Next) {
+      if (_mesa_strcmp(s->Name, (const char *) name) == 0 &&
+          _mesa_strlen(s->Name) == (size_t) len) {
+         return s->Register;
+      }
+   }
+   return -1;
+}
+
+
+void
+_mesa_assign_program_registers(struct symbol_table *symbolTable)
+{
+   struct symbol *s;
+   GLuint reg = 0;
+   for (s = symbolTable->Head; s; s = s->Next) {
+      if (s->Type == Declaration) {
+         s->Register = reg++;
+      }
+   }
+}
+
+
 
 /**
  * Set the vertex/fragment program error state (position and error string).
@@ -59,6 +139,51 @@ _mesa_set_program_error(GLcontext *ctx, GLint pos, const char *string)
       string = "";
    ctx->Program.ErrorString = _mesa_strdup(string);
 }
+
+
+/**
+ * Find the line number and column for 'pos' within 'string'.
+ * Return a copy of the line which contains 'pos'.  Free the line with
+ * _mesa_free().
+ * \param string  the program string
+ * \param pos     the position within the string
+ * \param line    returns the line number corresponding to 'pos'.
+ * \param col     returns the column number corresponding to 'pos'.
+ * \return copy of the line containing 'pos'.
+ */
+const GLubyte *
+_mesa_find_line_column(const GLubyte *string, const GLubyte *pos,
+                       GLint *line, GLint *col)
+{
+   const GLubyte *lineStart = string;
+   const GLubyte *p = string;
+   GLubyte *s;
+   int len;
+
+   *line = 1;
+
+   while (p != pos) {
+      if (*p == (GLubyte) '\n') {
+         (*line)++;
+         lineStart = p + 1;
+      }
+      p++;
+   }
+
+   *col = (pos - lineStart) + 1;
+
+   /* return copy of this line */
+   while (*p != 0 && *p != '\n')
+      p++;
+   len = p - lineStart;
+   s = (GLubyte *) _mesa_malloc(len + 1);
+   _mesa_memcpy(s, lineStart, len);
+   s[len] = 0;
+
+   return s;
+}
+
+
 
 
 /**
@@ -799,7 +924,8 @@ void
 _mesa_ProgramParameter4dNV(GLenum target, GLuint index,
                            GLdouble x, GLdouble y, GLdouble z, GLdouble w)
 {
-   _mesa_ProgramParameter4fNV(target, index, x, y, z, w);
+   _mesa_ProgramParameter4fNV(target, index, 
+		   	      (GLfloat)x, (GLfloat)y, (GLfloat)z, (GLfloat)w);
 }
 
 
@@ -812,7 +938,8 @@ _mesa_ProgramParameter4dvNV(GLenum target, GLuint index,
                             const GLdouble *params)
 {
    _mesa_ProgramParameter4fNV(target, index,
-                              params[0], params[1], params[2], params[3]);
+                              (GLfloat)params[0], (GLfloat)params[1], 
+			      (GLfloat)params[2], (GLfloat)params[3]);
 }
 
 
@@ -982,20 +1109,13 @@ _mesa_TrackMatrixNV(GLenum target, GLuint address,
 }
 
 
-static GLfloat *
-lookup_program_parameter(struct fragment_program *fprog,
-                         GLsizei len, const GLubyte *name)
-{
-   return NULL;
-}
-
-
-void
+GLAPI void GLAPIENTRY
 glProgramNamedParameter4fNV(GLuint id, GLsizei len, const GLubyte *name,
                             GLfloat x, GLfloat y, GLfloat z, GLfloat w)
 {
    struct program *prog;
-   GLfloat *p;
+   struct fragment_program *fragProg;
+   GLint reg;
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
@@ -1010,20 +1130,21 @@ glProgramNamedParameter4fNV(GLuint id, GLsizei len, const GLubyte *name,
       return;
    }
 
-   p = lookup_program_parameter((struct fragment_program *) prog, len, name);
-   if (!p) {
+   fragProg = (struct fragment_program *) prog;
+   reg = _mesa_lookup_program_register(&(fragProg->SymbolTable), len, name);
+   if (reg < 0) {
       _mesa_error(ctx, GL_INVALID_VALUE, "glProgramNamedParameterNV");
       return;
    }
 
-   p[0] = x;
-   p[1] = y;
-   p[2] = z;
-   p[3] = w;
+   fragProg->LocalParams[reg][0] = x;
+   fragProg->LocalParams[reg][1] = y;
+   fragProg->LocalParams[reg][2] = z;
+   fragProg->LocalParams[reg][3] = w;
 }
 
 
-void
+GLAPI void GLAPIENTRY
 glProgramNamedParameter4fvNV(GLuint id, GLsizei len, const GLubyte *name,
                              const float v[])
 {
@@ -1031,28 +1152,31 @@ glProgramNamedParameter4fvNV(GLuint id, GLsizei len, const GLubyte *name,
 }
 
 
-void
+GLAPI void GLAPIENTRY
 glProgramNamedParameter4dNV(GLuint id, GLsizei len, const GLubyte *name,
                             GLdouble x, GLdouble y, GLdouble z, GLdouble w)
 {
-   glProgramNamedParameter4fNV(id, len, name, x, y, z, w);
+   glProgramNamedParameter4fNV(id, len, name, (GLfloat)x, (GLfloat)y, 
+		   			      (GLfloat)z, (GLfloat)w);
 }
 
 
-void
+GLAPI void GLAPIENTRY
 glProgramNamedParameter4dvNV(GLuint id, GLsizei len, const GLubyte *name,
                              const double v[])
 {
-   glProgramNamedParameter4fNV(id, len, name, v[0], v[1], v[2], v[3]);
+   glProgramNamedParameter4fNV(id, len, name, (GLfloat)v[0], (GLfloat)v[1], 
+		   			      (GLfloat)v[2], (GLfloat)v[3]);
 }
 
 
-void
+GLAPI void GLAPIENTRY
 glGetProgramNamedParameterfvNV(GLuint id, GLsizei len, const GLubyte *name,
                                GLfloat *params)
 {
    struct program *prog;
-   const GLfloat *p;
+   struct fragment_program *fragProg;
+   GLint reg;
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
@@ -1067,20 +1191,21 @@ glGetProgramNamedParameterfvNV(GLuint id, GLsizei len, const GLubyte *name,
       return;
    }
 
-   p = lookup_program_parameter((struct fragment_program *) prog, len, name);
-   if (!p) {
+   fragProg = (struct fragment_program *) prog;
+   reg = _mesa_lookup_program_register(&(fragProg->SymbolTable), len, name);
+   if (reg < 0) {
       _mesa_error(ctx, GL_INVALID_VALUE, "glGetProgramNamedParameterNV");
       return;
    }
 
-   params[0] = p[0];
-   params[1] = p[1];
-   params[2] = p[2];
-   params[3] = p[3];
+   params[0] = fragProg->LocalParams[reg][0];
+   params[1] = fragProg->LocalParams[reg][1];
+   params[2] = fragProg->LocalParams[reg][2];
+   params[3] = fragProg->LocalParams[reg][3];
 }
 
 
-void
+GLAPI void GLAPIENTRY
 glGetProgramNamedParameterdvNV(GLuint id, GLsizei len, const GLubyte *name,
                                GLdouble *params)
 {
@@ -1090,7 +1215,7 @@ glGetProgramNamedParameterdvNV(GLuint id, GLsizei len, const GLubyte *name,
 }
 
 
-void
+GLAPI void GLAPIENTRY
 glProgramLocalParameter4fARB(GLenum target, GLuint index,
                              GLfloat x, GLfloat y, GLfloat z, GLfloat w)
 {
@@ -1119,7 +1244,7 @@ glProgramLocalParameter4fARB(GLenum target, GLuint index,
 }
 
 
-void
+GLAPI void GLAPIENTRY
 glProgramLocalParameter4fvARB(GLenum target, GLuint index,
                               const GLfloat *params)
 {
@@ -1128,24 +1253,26 @@ glProgramLocalParameter4fvARB(GLenum target, GLuint index,
 }
 
 
-void
+GLAPI void GLAPIENTRY
 glProgramLocalParameter4dARB(GLenum target, GLuint index,
                              GLdouble x, GLdouble y, GLdouble z, GLdouble w)
 {
-   glProgramLocalParameter4fARB(target, index, x, y, z, w);
+   glProgramLocalParameter4fARB(target, index, (GLfloat)x, (GLfloat)y, 
+		   			       (GLfloat)z, (GLfloat)w);
 }
 
 
-void
+GLAPI void GLAPIENTRY
 glProgramLocalParameter4dvARB(GLenum target, GLuint index,
                               const GLdouble *params)
 {
-   glProgramLocalParameter4fARB(target, index, params[0], params[1],
-                                params[2], params[3]);
+   glProgramLocalParameter4fARB(target, index, (GLfloat)params[0], 
+		   		(GLfloat)params[1], (GLfloat)params[2],
+				(GLfloat)params[3]);
 }
 
 
-void
+GLAPI void GLAPIENTRY
 glGetProgramLocalParameterfvARB(GLenum target, GLuint index, GLfloat *params)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -1173,7 +1300,7 @@ glGetProgramLocalParameterfvARB(GLenum target, GLuint index, GLfloat *params)
 }
 
 
-void
+GLAPI void GLAPIENTRY
 glGetProgramLocalParameterdvARB(GLenum target, GLuint index, GLdouble *params)
 {
    GLfloat floatParams[4];

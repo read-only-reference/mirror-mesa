@@ -1,9 +1,9 @@
-# $Id: Makefile.X11,v 1.71 2002/12/19 15:18:22 brianp Exp $
+# $Id: Makefile.X11,v 1.74 2003/02/20 15:53:38 brianp Exp $
 
 # Mesa 3-D graphics library
 # Version:  5.1
 # 
-# Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+# Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
 # 
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the "Software"),
@@ -328,6 +328,13 @@ realclean: clean
 	cd book        && $(MAKE) -f Makefile.X11 realclean || true
 	cd samples     && $(MAKE) -f Makefile.X11 realclean || true
 
+# Remove everything not in CVS
+cvsclean: realclean
+	-rm -f acinclude.m4 aclocal.m4
+	-rm -f conf.h conf.h.in config.guess config.log config.status
+	-rm -f config.sub configure
+	-rm -f install-sh libtool ltmain.sh Makefile.in
+	-rm -f missing mkinstalldirs stamp-h stamp-h.in
 
 DIRECTORY = Mesa-5.1
 LIB_NAME = MesaLib-5.1
@@ -429,8 +436,7 @@ LIB_FILES =	\
 	$(DIRECTORY)/src/windml/man3/*.3				\
 	$(DIRECTORY)/src/windml/man3/*.html				\
 	$(DIRECTORY)/src/DOS/*.[chS]					\
-	$(DIRECTORY)/src/DOS/vesa/*.[chS]				\
-	$(DIRECTORY)/src/DOS/vga/*.[ch]					\
+	$(DIRECTORY)/src/DOS/mga/*.[ch]					\
 	$(DIRECTORY)/src/BeOS/*.cpp					\
 	$(DIRECTORY)/src/FX/Makefile.am					\
 	$(DIRECTORY)/src/FX/Makefile.in					\
@@ -703,33 +709,31 @@ OBSOLETE_GLUT_FILES = \
 	$(DIRECTORY)/src-glut.beos/*.h
 
 
-lib_tar:
+lib_gz:
 	cp Makefile.X11 Makefile ; \
 	cd .. ; \
 	tar -cvf $(LIB_NAME).tar $(LIB_FILES) ; \
 	gzip $(LIB_NAME).tar ; \
 	mv $(LIB_NAME).tar.gz $(DIRECTORY)
 
-demo_tar:
+demo_gz:
 	cd .. ; \
 	tar -cvf $(DEMO_NAME).tar $(DEMO_FILES) ; \
 	gzip $(DEMO_NAME).tar ; \
 	mv $(DEMO_NAME).tar.gz $(DIRECTORY)
 
-glu_tar:
+lib_bz2:
 	cp Makefile.X11 Makefile ; \
 	cd .. ; \
-	tar -cvf $(GLU_NAME).tar $(GLU_FILES) ; \
-	gzip $(GLU_NAME).tar ; \
-	mv $(GLU_NAME).tar.gz $(DIRECTORY)
+	tar -cvf $(LIB_NAME).tar $(LIB_FILES) ; \
+	bzip2 $(LIB_NAME).tar ; \
+	mv $(LIB_NAME).tar.bz2 $(DIRECTORY)
 
-glut_tar:
-	cp Makefile.X11 Makefile ; \
+demo_bz2:
 	cd .. ; \
-	tar -cvf $(GLUT_NAME).tar $(GLUT_FILES) ; \
-	gzip $(GLUT_NAME).tar ; \
-	mv $(GLUT_NAME).tar.gz $(DIRECTORY)
-
+	tar -cvf $(DEMO_NAME).tar $(DEMO_FILES) ; \
+	bzip2 $(DEMO_NAME).tar ; \
+	mv $(DEMO_NAME).tar.bz2 $(DIRECTORY)
 
 lib_zip:
 	-rm $(LIB_NAME).zip ; \
@@ -744,20 +748,29 @@ demo_zip:
 	zip -r $(DEMO_NAME).zip $(DEMO_FILES) ; \
 	mv $(DEMO_NAME).zip $(DIRECTORY)
 
+md5:
+	@-md5sum $(LIB_NAME).tar.gz
+	@-md5sum $(LIB_NAME).tar.bz2
+	@-md5sum $(LIB_NAME).zip
+	@-md5sum $(DEMO_NAME).tar.gz
+	@-md5sum $(DEMO_NAME).tar.bz2
+	@-md5sum $(DEMO_NAME).zip
+
+# Everything for new Mesa release:
+tarballs: lib_gz demo_gz lib_bz2 demo_bz2 lib_zip demo_zip md5
 
 
-SRC_FILES =	\
-	RELNOTES		\
-	src/Makefile*		\
-	src/depend		\
-	src/*.[chS]		\
-	src/*/*.[ch]		\
-	include/GL/*.h
+# not used
+glu_gz:
+	cp Makefile.X11 Makefile ; \
+	cd .. ; \
+	tar -cvf $(GLU_NAME).tar $(GLU_FILES) ; \
+	gzip $(GLU_NAME).tar ; \
+	mv $(GLU_NAME).tar.gz $(DIRECTORY)
 
-srctar:
-	tar -cvf src.tar $(SRC_FILES) ; \
-	gzip src.tar
-
-srctar.zip:
-	-rm src.zip
-	zip -r src.zip $(SRC_FILES) ; \
+glut_gz:
+	cp Makefile.X11 Makefile ; \
+	cd .. ; \
+	tar -cvf $(GLUT_NAME).tar $(GLUT_FILES) ; \
+	gzip $(GLUT_NAME).tar ; \
+	mv $(GLUT_NAME).tar.gz $(DIRECTORY)

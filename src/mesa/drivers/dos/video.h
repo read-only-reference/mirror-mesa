@@ -36,6 +36,12 @@
 
 typedef int fixed;
 
+#define VL_GET_CARD_NAME   0x0100
+#define VL_GET_VRAM        0x0101
+#define VL_GET_CI_PREC     0x0200
+#define VL_GET_HPIXELS     0x0201
+#define VL_GET_SCREEN_SIZE 0x0202
+
 extern int (*vl_mixfix) (fixed r, fixed g, fixed b);
 extern int (*vl_mixrgb) (const unsigned char rgb[]);
 extern int (*vl_mixrgba) (const unsigned char rgba[]);
@@ -45,11 +51,12 @@ extern void (*vl_clear) (int color);
 extern void (*vl_rect) (int x, int y, int width, int height, int color);
 extern void (*vl_flip) (void);
 extern void (*vl_putpixel) (unsigned int offset, int color);
+extern int (*vl_getpixel) (unsigned int offset);
 
 void vl_setCI (int index, float red, float green, float blue);
-int vl_getCIpixel (unsigned int offset);
 
-void *vl_sync_buffer (void *buffer, int x, int y, int width, int height);
+int vl_sync_buffer (void **buffer, int x, int y, int width, int height);
+int vl_get (int pname, int *params);
 
 void vl_video_exit (void);
 int vl_video_init (int width, int height, int bpp, int rgb, int refresh);

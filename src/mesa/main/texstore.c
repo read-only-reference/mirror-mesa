@@ -1,4 +1,4 @@
-/* $Id: texstore.c,v 1.51 2003/01/28 00:10:41 brianp Exp $ */
+/* $Id: texstore.c,v 1.53 2003/02/25 19:25:52 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -194,6 +194,7 @@ transfer_teximage(GLcontext *ctx, GLuint dimensions,
           texDestFormat == GL_ALPHA ||
           texDestFormat == GL_RGB ||
           texDestFormat == GL_RGBA ||
+          texDestFormat == GL_COLOR_INDEX ||
           texDestFormat == GL_DEPTH_COMPONENT);
    ASSERT(texDestAddr);
    ASSERT(srcWidth >= 1);
@@ -1161,7 +1162,7 @@ _mesa_store_compressed_teximage2d(GLcontext *ctx, GLenum target, GLint level,
    }
 
    /* copy the data */
-   ASSERT(texImage->CompressedSize == imageSize);
+   ASSERT(texImage->CompressedSize == (GLuint) imageSize);
    MEMCPY(texImage->Data, data, imageSize);
 }
 

@@ -1,10 +1,10 @@
-/* $Id: s_aaline.c,v 1.17 2003/01/14 04:55:46 brianp Exp $ */
+/* $Id: s_aaline.c,v 1.19 2003/02/28 15:08:49 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  5.0.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -180,12 +180,16 @@ solve_plane_recip(GLfloat x, GLfloat y, const GLfloat plane[4])
 static INLINE GLchan
 solve_plane_chan(GLfloat x, GLfloat y, const GLfloat plane[4])
 {
-   GLfloat z = (plane[3] + plane[0] * x + plane[1] * y) / -plane[2] + 0.5F;
-   if (z < 0.0F)
+   const GLfloat z = (plane[3] + plane[0] * x + plane[1] * y) / -plane[2];
+#if CHAN_TYPE == GL_FLOAT
+   return CLAMP(z, 0.0F, CHAN_MAXF);
+#else
+   if (z < 0)
       return 0;
-   else if (z > CHAN_MAXF)
-      return (GLchan) CHAN_MAXF;
-   return (GLchan) (GLint) z;
+   else if (z > CHAN_MAX)
+      return CHAN_MAX;
+   return (GLchan) IROUND_POS(z);
+#endif
 }
 
 
