@@ -209,7 +209,8 @@ GLIDE_DRIVER_SOURCES =			\
 	drivers/glide/fxtexman.c	\
 	drivers/glide/fxtris.c		\
 	drivers/glide/fxvb.c		\
-	drivers/glide/fxglidew.c
+	drivers/glide/fxglidew.c	\
+	drivers/glide/fxg.c
 
 SVGA_DRIVER_SOURCES =			\
 	drivers/svga/svgamesa.c		\
@@ -236,11 +237,13 @@ CORE_SOURCES = \
 # This will probably get set to $(X86_SOURCES) in Make-config:
 ASM_SOURCES =
 
+ifndef SOLO
 # This should get set in Make-config someday:
 DRIVER_SOURCES = \
 	$(X11_DRIVER_SOURCES) \
 	$(GLIDE_DRIVER_SOURCES) \
 	$(SVGA_DRIVER_SOURCES)
+endif
 
 
 ### Object files
@@ -304,7 +307,7 @@ targets: $(LIBDIR)/$(GL_LIB) $(LIBDIR)/$(OSMESA_LIB) $(LIBMESA)
 $(LIBDIR)/$(GL_LIB): $(OBJECTS)
 	$(TOP)/bin/mklib -o $(GL_LIB_NAME) -major $(GL_MAJOR) \
 		-minor $(GL_MINOR) -patch $(GL_TINY) -install $(LIBDIR) \
-		$(GL_LIB_DEPS) $(OBJECTS)
+		$(MKLIB_OPTIONS) $(GL_LIB_DEPS) $(OBJECTS)
 
 
 # Make the OSMesa library
@@ -313,7 +316,7 @@ $(LIBDIR)/$(OSMESA_LIB): $(OSMESA_OBJECTS)
 		$(TOP)/bin/mklib -o $(OSMESA_LIB_NAME) -major $(MESA_MAJOR) \
 			-minor $(MESA_MINOR) -patch $(GL_TINY) -L$(LIBDIR) \
 			-l$(GL_LIB_NAME) -install $(LIBDIR) \
-			$(OSMESA_OBJECTS) ; \
+			$(MKLIB_OPTIONS) $(OSMESA_OBJECTS) ; \
 	fi
 
 
@@ -348,9 +351,9 @@ tags:
 
 # Remove .o and backup files
 clean:
-	-rm *.a
+	-rm -f *.a
 	-rm -f */*.o */*~ */*.o */*~
-	-rm -f drivers/*/*.o
+	-rm -f drivers/*/*.o drivers/*/*/*.o
 
 
 include $(TOP)/Make-config

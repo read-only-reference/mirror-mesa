@@ -1,5 +1,3 @@
-/* $Id: fxvbtmp.h,v 1.12 2002/10/29 20:28:57 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  4.1
@@ -29,6 +27,10 @@
  */
 
 
+#define VIEWPORT_X(dst,x) dst = s[0]  * x + s[12]
+#define VIEWPORT_Y(dst,y) dst = s[5]  * y + s[13]
+#define VIEWPORT_Z(dst,z) dst = s[10] * z + s[14]
+
 static void TAG(emit)( GLcontext *ctx,
 		       GLuint start, GLuint end,
 		       void *dest )
@@ -45,6 +47,7 @@ static void TAG(emit)( GLcontext *ctx,
    GLuint proj_stride = VB->NdcPtr->stride;
    GrVertex *v = (GrVertex *)dest;
    GLfloat u0scale,v0scale,u1scale,v1scale;
+   const GLubyte *mask = VB->ClipMask;
    const GLfloat *const s = ctx->Viewport._WindowMap.m;
    int i;
 
@@ -86,11 +89,16 @@ static void TAG(emit)( GLcontext *ctx,
 
    for (i=start; i < end; i++, v++) {
       if (IND & SETUP_XYZW) {
-	 /* unclipped */
-	 v->x   = s[0]  * proj[0][0] + s[12];	
-	 v->y   = s[5]  * proj[0][1] + s[13];	
-	 v->ooz = s[10] * proj[0][2] + s[14];	
-	 v->oow = proj[0][3];	
+         if (mask[i] == 0) {
+	    /* unclipped */
+	    VIEWPORT_X(v->x,   proj[0][0]);
+	    VIEWPORT_Y(v->y,   proj[0][1]);
+	    VIEWPORT_Z(v->ooz, proj[0][2]);
+	    v->oow = proj[0][3];
+         } else {
+            /* clipped */
+            v->oow = 1.0;
+         }
 
 	 if (IND & SETUP_SNAP) {
 #if defined(USE_IEEE)
@@ -108,40 +116,32 @@ static void TAG(emit)( GLcontext *ctx,
 	 proj =  (GLfloat (*)[4])((GLubyte *)proj +  proj_stride);
       }
       if (IND & SETUP_RGBA) {
-	 v->r = (GLfloat) col[0][0];
-	 v->g = (GLfloat) col[0][1];
-	 v->b = (GLfloat) col[0][2];
-	 v->a = (GLfloat) col[0][3];
+	 v->pargb[2] = col[0][0];
+	 v->pargb[1] = col[0][1];
+	 v->pargb[0] = col[0][2];
+	 v->pargb[3] = col[0][3];
 	 STRIDE_4UB(col, col_stride);
       }
       if (IND & SETUP_TMU0) {
 	 GLfloat w = v->oow;
+         v->tmuvtx[0].sow = tc0[0][0] * u0scale * w;
+         v->tmuvtx[0].tow = tc0[0][1] * v0scale * w;
 	 if (IND & SETUP_PTEX) {
-	    v->tmuvtx[0].sow = tc0[0][0] * u0scale * w;
-	    v->tmuvtx[0].tow = tc0[0][1] * v0scale * w;
 	    v->tmuvtx[0].oow = w;
 	    if (tc0_size == 4) 
-	       v->tmuvtx[0].oow = tc0[0][3] * w;
-	 } 
-	 else {
-	    v->tmuvtx[0].sow = tc0[0][0] * u0scale * w;
-	    v->tmuvtx[0].tow = tc0[0][1] * v0scale * w;
+	       v->tmuvtx[0].oow *= tc0[0][3];
 	 } 
 	 tc0 =  (GLfloat (*)[4])((GLubyte *)tc0 +  tc0_stride);
       }
       if (IND & SETUP_TMU1) {
 	 GLfloat w = v->oow;
+         v->tmuvtx[1].sow = tc1[0][0] * u1scale * w;
+         v->tmuvtx[1].tow = tc1[0][1] * v1scale * w;
 	 if (IND & SETUP_PTEX) {
-	    v->tmuvtx[1].sow = tc1[0][0] * u1scale * w;
-	    v->tmuvtx[1].tow = tc1[0][1] * v1scale * w;
 	    v->tmuvtx[1].oow = w;
 	    if (tc1_size == 4) 
-	       v->tmuvtx[1].oow = tc1[0][3] * w;
+	       v->tmuvtx[1].oow *= tc1[0][3];
 	 } 
-	 else {
-	    v->tmuvtx[1].sow = tc1[0][0] * u1scale * w;
-	    v->tmuvtx[1].tow = tc1[0][1] * v1scale * w;
-	 }
 	 tc1 =  (GLfloat (*)[4])((GLubyte *)tc1 +  tc1_stride);
       } 
    }
@@ -191,9 +191,9 @@ static void TAG(interp)( GLcontext *ctx,
    const GLfloat wout = 1.0F / out->oow;
    const GLfloat win = 1.0F / in->oow;
 
-   dst->x   = s[0]  * dstclip[0] * oow + s[12];	
-   dst->y   = s[5]  * dstclip[1] * oow + s[13];	
-   dst->ooz = s[10] * dstclip[2] * oow + s[14];	
+   VIEWPORT_X(dst->x,   dstclip[0] * oow);
+   VIEWPORT_Y(dst->y,   dstclip[1] * oow);
+   VIEWPORT_Z(dst->ooz, dstclip[2] * oow);
    dst->oow = oow;	
    
    if (IND & SETUP_SNAP) {
@@ -210,10 +210,10 @@ static void TAG(interp)( GLcontext *ctx,
    }
 
    
-   INTERP_F( t, dst->r, out->r, in->r );
-   INTERP_F( t, dst->g, out->g, in->g );
-   INTERP_F( t, dst->b, out->b, in->b );
-   INTERP_F( t, dst->a, out->a, in->a );
+   INTERP_UB( t, dst->pargb[0], out->pargb[0], in->pargb[0] );
+   INTERP_UB( t, dst->pargb[1], out->pargb[1], in->pargb[1] );
+   INTERP_UB( t, dst->pargb[2], out->pargb[2], in->pargb[2] );
+   INTERP_UB( t, dst->pargb[3], out->pargb[3], in->pargb[3] );
 
    if (IND & SETUP_TMU0) {
       if (IND & SETUP_PTEX) {

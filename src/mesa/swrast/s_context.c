@@ -269,7 +269,7 @@ _swrast_validate_point( GLcontext *ctx, const SWvertex *v0 )
 }
 
 
-static void
+static void _ASMAPI
 _swrast_validate_blend_func( GLcontext *ctx, GLuint n,
 			     const GLubyte mask[],
 			     GLchan src[][4],
@@ -311,11 +311,6 @@ _swrast_validate_texture_sample( GLcontext *ctx, GLuint texUnit,
 
    swrast->TextureSample[texUnit]( ctx, texUnit, tObj, n, texcoords,
                                    lambda, rgba );
-
-   /* GL_SGI_texture_color_table */
-   if (ctx->Texture.Unit[texUnit].ColorTableEnabled) {
-      _swrast_texture_table_lookup(&ctx->Texture.Unit[texUnit].ColorTable, n, rgba);
-   }
 }
 
 

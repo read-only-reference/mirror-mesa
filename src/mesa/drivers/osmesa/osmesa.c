@@ -226,20 +226,20 @@ clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
    GLchan *P = osmesa->rowaddr[Y] + 4 * (X)
 #define INC_PIXEL_PTR(P) P += 4
 #if CHAN_TYPE == GL_FLOAT
-#define STORE_RGB_PIXEL(P, R, G, B) \
+#define STORE_RGB_PIXEL(P, X, Y, R, G, B) \
    P[0] = MAX2((R), 0.0F); \
    P[1] = MAX2((G), 0.0F); \
    P[2] = MAX2((B), 0.0F); \
    P[3] = CHAN_MAXF
-#define STORE_RGBA_PIXEL(P, R, G, B, A) \
+#define STORE_RGBA_PIXEL(P, X, Y, R, G, B, A) \
    P[0] = MAX2((R), 0.0F); \
    P[1] = MAX2((G), 0.0F); \
    P[2] = MAX2((B), 0.0F); \
    P[3] = CLAMP((A), 0.0F, CHAN_MAXF)
 #else
-#define STORE_RGB_PIXEL(P, R, G, B) \
+#define STORE_RGB_PIXEL(P, X, Y, R, G, B) \
    P[0] = R;  P[1] = G;  P[2] = B;  P[3] = CHAN_MAX
-#define STORE_RGBA_PIXEL(P, R, G, B, A) \
+#define STORE_RGBA_PIXEL(P, X, Y, R, G, B, A) \
    P[0] = R;  P[1] = G;  P[2] = B;  P[3] = A
 #endif
 #define FETCH_RGBA_PIXEL(R, G, B, A, P) \
@@ -253,9 +253,9 @@ clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 #define INIT_PIXEL_PTR(P, X, Y) \
    GLchan *P = osmesa->rowaddr[Y] + 4 * (X)
 #define INC_PIXEL_PTR(P) P += 4
-#define STORE_RGB_PIXEL(P, R, G, B) \
+#define STORE_RGB_PIXEL(P, X, Y, R, G, B) \
    P[2] = R;  P[1] = G;  P[0] = B;  P[3] = CHAN_MAX
-#define STORE_RGBA_PIXEL(P, R, G, B, A) \
+#define STORE_RGBA_PIXEL(P, X, Y, R, G, B, A) \
    P[2] = R;  P[1] = G;  P[0] = B;  P[3] = A
 #define FETCH_RGBA_PIXEL(R, G, B, A, P) \
    R = P[2];  G = P[1];  B = P[0];  A = P[3]
@@ -268,9 +268,9 @@ clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 #define INIT_PIXEL_PTR(P, X, Y) \
    GLchan *P = osmesa->rowaddr[Y] + 4 * (X)
 #define INC_PIXEL_PTR(P) P += 4
-#define STORE_RGB_PIXEL(P, R, G, B) \
+#define STORE_RGB_PIXEL(P, X, Y, R, G, B) \
    P[1] = R;  P[2] = G;  P[3] = B;  P[0] = CHAN_MAX
-#define STORE_RGBA_PIXEL(P, R, G, B, A) \
+#define STORE_RGBA_PIXEL(P, X, Y, R, G, B, A) \
    P[1] = R;  P[2] = G;  P[3] = B;  P[0] = A
 #define FETCH_RGBA_PIXEL(R, G, B, A, P) \
    R = P[1];  G = P[2];  B = P[3];  A = P[0]
@@ -283,9 +283,9 @@ clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 #define INIT_PIXEL_PTR(P, X, Y) \
    GLchan *P = osmesa->rowaddr[Y] + 4 * (X)
 #define INC_PIXEL_PTR(P) P += 4
-#define STORE_RGB_PIXEL(P, R, G, B) \
+#define STORE_RGB_PIXEL(P, X, Y, R, G, B) \
    P[0] = R;  P[1] = G;  P[2] = B
-#define STORE_RGBA_PIXEL(P, R, G, B, A) \
+#define STORE_RGBA_PIXEL(P, X, Y, R, G, B, A) \
    P[0] = R;  P[1] = G;  P[2] = B
 #define FETCH_RGBA_PIXEL(R, G, B, A, P) \
    R = P[0];  G = P[1];  B = P[2];  A = CHAN_MAX
@@ -298,9 +298,9 @@ clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 #define INIT_PIXEL_PTR(P, X, Y) \
    GLchan *P = osmesa->rowaddr[Y] + 4 * (X)
 #define INC_PIXEL_PTR(P) P += 4
-#define STORE_RGB_PIXEL(P, R, G, B) \
+#define STORE_RGB_PIXEL(P, X, Y, R, G, B) \
    P[0] = B;  P[1] = G;  P[2] = R
-#define STORE_RGBA_PIXEL(P, R, G, B, A) \
+#define STORE_RGBA_PIXEL(P, X, Y, R, G, B, A) \
    P[0] = B;  P[1] = G;  P[2] = R
 #define FETCH_RGBA_PIXEL(R, G, B, A, P) \
    B = P[0];  G = P[1];  R = P[2];  A = CHAN_MAX
@@ -314,9 +314,9 @@ clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 #define INIT_PIXEL_PTR(P, X, Y) \
    GLushort *P = (GLushort *) osmesa->rowaddr[Y] + (X)
 #define INC_PIXEL_PTR(P) P += 1
-#define STORE_RGB_PIXEL(P, R, G, B) \
+#define STORE_RGB_PIXEL(P, X, Y, R, G, B) \
    *P = ( (((R) & 0xf8) << 8) | (((G) & 0xfc) << 3) | ((B) >> 3) )
-#define STORE_RGBA_PIXEL(P, R, G, B, A) \
+#define STORE_RGBA_PIXEL(P, X, Y, R, G, B, A) \
    *P = ( (((R) & 0xf8) << 8) | (((G) & 0xfc) << 3) | ((B) >> 3) )
 #define FETCH_RGBA_PIXEL(R, G, B, A, P) \
    R = ( (((*P) >> 8) & 0xf8) | (((*P) >> 11) & 0x7) ); \
@@ -682,16 +682,6 @@ hook_in_driver_functions( GLcontext *ctx )
    ctx->Driver.CopyConvolutionFilter1D = _swrast_CopyConvolutionFilter1D;
    ctx->Driver.CopyConvolutionFilter2D = _swrast_CopyConvolutionFilter2D;
 
-#if FEATURE_ARB_vertex_buffer_object
-   ctx->Driver.NewBufferObject = _mesa_new_buffer_object;
-   ctx->Driver.DeleteBuffer = _mesa_delete_buffer_object;
-   ctx->Driver.BindBuffer = NULL;
-   ctx->Driver.BufferData = _mesa_buffer_data;
-   ctx->Driver.BufferSubData = _mesa_buffer_subdata;
-   ctx->Driver.MapBuffer = _mesa_buffer_map;
-   ctx->Driver.UnmapBuffer = NULL;
-#endif
-
    swdd->SetBuffer = set_buffer;
 
    /* RGB(A) span/pixel functions */
@@ -793,8 +783,9 @@ hook_in_driver_functions( GLcontext *ctx )
 GLAPI OSMesaContext GLAPIENTRY
 OSMesaCreateContext( GLenum format, OSMesaContext sharelist )
 {
+   const GLint accumBits = (format == OSMESA_COLOR_INDEX) ? 0 : 16;
    return OSMesaCreateContextExt(format, DEFAULT_SOFTWARE_DEPTH_BITS,
-                                 8, 16, sharelist);
+                                 8, accumBits, sharelist);
 }
 
 

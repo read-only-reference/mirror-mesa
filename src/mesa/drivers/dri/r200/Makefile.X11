@@ -1,4 +1,4 @@
-# $Id: Makefile.X11,v 1.3 2003/09/30 10:29:15 alanh Exp $
+# $Id: Makefile.X11,v 1.6 2003/10/21 06:05:46 jonsmirl Exp $
 
 # Mesa 3-D graphics library
 # Version:  5.0
@@ -33,6 +33,7 @@ DRIVER_SOURCES = r200_context.c \
 		 ../common/utils.c \
 		 ../common/texmem.c \
 		 ../common/vblank.c \
+		 ../common/xmlconfig.c \
 		 r200_cmdbuf.c \
 		 r200_pixel.c \
 		 r200_tex.c \
@@ -118,6 +119,10 @@ r200_dri.so:  $(SYMLINKS) $(OBJECTS) $(MESA_MODULES) $(WINOBJ) Makefile.X11
 	rm -f $(TOP)/lib/r200_dri.so && \
 	install r200_dri.so $(TOP)/lib/r200_dri.so
 
+$(TOP)/lib/r200_dri.so:	r200_dri.so
+	rm -f $(TOP)/lib/r200_dri.so && \
+	install r200_dri.so $(TOP)/lib/r200_dri.so
+
 # Run 'make -f Makefile.X11 dep' to update the dependencies if you change
 # what's included by any source file.
 depend: $(C_SOURCES) $(ASM_SOURCES)
@@ -133,6 +138,7 @@ tags:
 # Remove .o and backup files
 clean:
 	-rm -f *.o */*.o *~ *.o *~ *.so server/*.o
+	-rm -f $(SYMLINKS)
 
 
 include $(TOP)/Make-config

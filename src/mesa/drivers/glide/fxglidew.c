@@ -1,5 +1,3 @@
-/* $Id: fxglidew.c,v 1.21 2003/08/19 15:52:53 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
  * Version:  4.0
@@ -41,7 +39,6 @@
 #endif
 
 #if defined(FX)
-#include "glide.h"
 #include "fxglidew.h"
 #include "fxdrv.h"
 
@@ -57,8 +54,8 @@ FX_grGetInteger_NoLock(FxU32 pname)
     return result;
  }
 
- if (MESA_VERBOSE & VERBOSE_DRIVER) {
-    fprintf(stderr, "Wrong parameter in FX_grGetInteger!\n");
+ if (TDFX_DEBUG & VERBOSE_DRIVER) {
+    fprintf(stderr, "%s: wrong parameter (%lx)\n", __FUNCTION__, pname);
  }
  return -1;
 }
@@ -122,23 +119,6 @@ FX_grSstPerfStats(GrSstPerfStats_t * st)
 }
 
 void
-FX_grAADrawLine(GrVertex * a, GrVertex * b)
-{
-   /* ToDo */
-   BEGIN_CLIP_LOOP();
-   grDrawLine(a, b);
-   END_CLIP_LOOP();
-}
-
-void
-FX_grAADrawPoint(GrVertex * a)
-{
-   BEGIN_CLIP_LOOP();
-   grDrawPoint(a);
-   END_CLIP_LOOP();
-}
-
-void
 FX_setupGrVertexLayout(void)
 {
    BEGIN_BOARD_LOCK();
@@ -146,8 +126,7 @@ FX_setupGrVertexLayout(void)
 
    grCoordinateSpace(GR_WINDOW_COORDS);
    grVertexLayout(GR_PARAM_XY, GR_VERTEX_X_OFFSET << 2, GR_PARAM_ENABLE);
-   grVertexLayout(GR_PARAM_RGB, GR_VERTEX_R_OFFSET << 2, GR_PARAM_ENABLE);
-   grVertexLayout(GR_PARAM_A, GR_VERTEX_A_OFFSET << 2, GR_PARAM_ENABLE);
+   grVertexLayout(GR_PARAM_PARGB, GR_VERTEX_PARGB_OFFSET << 2, GR_PARAM_ENABLE);
    grVertexLayout(GR_PARAM_Q, GR_VERTEX_OOW_OFFSET << 2, GR_PARAM_ENABLE);
    grVertexLayout(GR_PARAM_Z, GR_VERTEX_OOZ_OFFSET << 2, GR_PARAM_ENABLE);
    grVertexLayout(GR_PARAM_ST0, GR_VERTEX_SOW_TMU0_OFFSET << 2,
@@ -224,89 +203,45 @@ FX_grSstQueryHardware(GrHwConfiguration * config)
       } else if (strstr(extension, "Voodoo5")) {
          config->SSTs[i].type = GR_SSTTYPE_Voodoo5;
       } else { /* Voodoo1,2,rush */
-         /* ZZZ TO DO */
+         /* ZZZ TO DO: Need to distinguish whether we have V1 or V2 or Rush. */
          config->SSTs[i].type = GR_SSTTYPE_VOODOO;
       }
 
-      grGet(GR_MEMORY_FB, 4, &result);
-      config->SSTs[i].VoodooConfig.fbRam = result / (1024 * 1024);
+      grGet(GR_MEMORY_FB, 4, &result); /* ZZZ: differs after grSstWinOpen */
+      config->SSTs[i].fbRam = result / (1024 * 1024);
 
       grGet(GR_NUM_TMU, 4, &result);
-      config->SSTs[i].VoodooConfig.nTexelfx = result;
+      config->SSTs[i].nTexelfx = result;
 
       grGet(GR_REVISION_FB, 4, &result);
-      config->SSTs[i].VoodooConfig.fbiRev = result;
+      config->SSTs[i].fbiRev = result;
 
-      for (j = 0; j < config->SSTs[i].VoodooConfig.nTexelfx; j++) {
-	 grGet(GR_MEMORY_TMU, 4, &result);
-	 config->SSTs[i].VoodooConfig.tmuConfig[j].tmuRam = result / (1024 * 1024);
+      for (j = 0; j < config->SSTs[i].nTexelfx; j++) {
+	 grGet(GR_MEMORY_TMU, 4, &result); /* ZZZ: differs after grSstWinOpen */
+	 config->SSTs[i].tmuConfig[j].tmuRam = result / (1024 * 1024);
 	 grGet(GR_REVISION_TMU, 4, &result);
-	 config->SSTs[i].VoodooConfig.tmuConfig[j].tmuRev = result;
+	 config->SSTs[i].tmuConfig[j].tmuRev = result;
       }
 
       extension = grGetString(GR_EXTENSION);
-      if (strstr(extension, " PIXEXT ")) {
-         config->SSTs[i].VoodooConfig.grSstWinOpenExt = grGetProcAddress("grSstWinOpenExt");
-      }
+      config->SSTs[i].HavePalExt = (strstr(extension, " PALETTE6666 ") != NULL);
+      config->SSTs[i].HavePixExt = (strstr(extension, " PIXEXT ") != NULL);
+      config->SSTs[i].HaveTexFmt = (strstr(extension, " TEXFMT ") != NULL);
+      config->SSTs[i].HaveCmbExt = (strstr(extension, " COMBINE ") != NULL);
+      config->SSTs[i].HaveMirExt = (strstr(extension, " TEXMIRROR ") != NULL);
+      config->SSTs[i].HaveTexUma = (strstr(extension, " TEXUMA ") != NULL);
+      config->SSTs[i].HaveTexus2 = GL_FALSE;
 
-      /* [koolsmoky] */
-      grGet(GR_MAX_TEXTURE_SIZE, 4, &result);
-      config->SSTs[i].VoodooConfig.maxTextureSize = result;
-
-      /* need to get the number of SLI units for napalm */
+      /* number of Voodoo chips */
       grGet(GR_NUM_FB, 4, (void *) &numFB);
-      config->SSTs[i].VoodooConfig.numChips = numFB;
-      /* this can only be useful for Voodoo2:
-       * sliDetect = ((config->SSTs[i].type == GR_SSTTYPE_Voodoo2) && (numFB > 1));
-       */
+      config->SSTs[i].numChips = numFB;
+
    }
+
+   tdfx_hook_glide(&config->Glide);
+
    END_BOARD_LOCK();
    return 1;
-}
-
-
-/* It appears to me that this function is needed either way. */
-GrContext_t
-FX_grSstWinOpen(struct SstCard_St *c,
-		FxU32 hWnd,
-		GrScreenResolution_t screen_resolution,
-		GrScreenRefresh_t refresh_rate,
-		GrColorFormat_t color_format,
-		GrPixelFormat_t pixel_format,
-		GrOriginLocation_t origin_location,
-		int nColBuffers, int nAuxBuffers)
-{
-   GrContext_t i;
-   BEGIN_BOARD_LOCK();
-   if (c->VoodooConfig.grSstWinOpenExt) {
-      i = c->VoodooConfig.grSstWinOpenExt(hWnd,
-                    screen_resolution,
-                    refresh_rate,
-                    color_format, origin_location,
-                    pixel_format,
-                    nColBuffers, nAuxBuffers);
-   } else
-   i = grSstWinOpen(hWnd,
-		    screen_resolution,
-		    refresh_rate,
-		    color_format, origin_location, nColBuffers, nAuxBuffers);
-
-   /*
-      fprintf(stderr, 
-      "grSstWinOpen( win %d res %d ref %d fmt %d\n"
-      "              org %d ncol %d naux %d )\n"
-      " ==> %d\n",
-      hWnd,
-      screen_resolution,
-      refresh_rate,
-      color_format,
-      origin_location,
-      nColBuffers,
-      nAuxBuffers,
-      i);
-    */
-   END_BOARD_LOCK();
-   return i;
 }
 
 
