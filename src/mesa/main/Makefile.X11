@@ -1,4 +1,4 @@
-# $Id: Makefile.X11,v 1.27 2000/10/31 18:09:44 keithw Exp $
+# $Id: Makefile.X11,v 1.35 2000/11/24 15:21:59 keithw Exp $
 
 # Mesa 3-D graphics library
 # Version:  3.5
@@ -19,11 +19,34 @@ INCDIR = ../include
 LIBDIR = ../lib
 
 
+
 CORE_SOURCES = \
+	tnl/t_vtxfmt.c \
+	tnl/t_bbox.c \
+	tnl/t_clip.c \
+	tnl/t_context.c \
+	tnl/t_cva.c \
+	tnl/t_debug.c \
+	tnl/t_dlist.c \
+	tnl/t_eval.c \
+	tnl/t_fog.c \
+	tnl/t_light.c \
+	tnl/t_pipeline.c \
+	tnl/t_shade.c \
+	tnl/t_stages.c \
+	tnl/t_texture.c \
+	tnl/t_trans_elt.c \
+	tnl/t_varray.c \
+	tnl/t_vb.c \
+	tnl/t_vbcull.c \
+	tnl/t_vbindirect.c \
+	tnl/t_vbrender.c \
+	tnl/t_vbxform.c \
+	api_loopback.c \
+	api_noop.c \
 	accum.c \
 	alpha.c \
 	attrib.c \
-	bbox.c \
 	bitmap.c \
 	blend.c \
 	buffers.c \
@@ -33,8 +56,7 @@ CORE_SOURCES = \
 	context.c \
 	convolve.c \
 	copypix.c \
-	cva.c \
-	debug_xform.c \
+	debug.c \
 	depth.c \
 	dispatch.c \
 	dlist.c \
@@ -52,8 +74,8 @@ CORE_SOURCES = \
 	hash.c \
 	highpc.c \
 	hint.c \
+	histogram.c \
 	image.c \
-	imaging.c \
 	imports.c \
 	light.c \
 	lines.c \
@@ -63,17 +85,13 @@ CORE_SOURCES = \
 	matrix.c \
 	mem.c \
 	mmath.c \
-	pipeline.c \
 	pixel.c \
 	pixeltex.c \
 	points.c \
 	polygon.c \
 	rastpos.c \
 	readpix.c \
-	rect.c \
 	scissor.c \
-	shade.c \
-	stages.c \
 	state.c \
 	stencil.c \
 	teximage.c \
@@ -81,22 +99,14 @@ CORE_SOURCES = \
 	texstate.c \
 	texture.c \
 	texutil.c \
-	translate.c \
 	varray.c \
-	vb.c \
-	vbcull.c \
-	vbfill.c \
-	vbindirect.c \
-	vbrender.c \
-	vbxform.c \
-	vector.c \
-	vertices.c \
+	vtxfmt.c \
 	winpos.c \
-	xform.c \
 	X86/x86.c \
 	X86/common_x86.c \
 	X86/3dnow.c \
 	X86/katmai.c \
+	swrast/s_aaline.c \
 	swrast/s_aatriangle.c \
 	swrast/s_accum.c \
 	swrast/s_alpha.c \
@@ -108,8 +118,9 @@ CORE_SOURCES = \
 	swrast/s_context.c \
 	swrast/s_depth.c \
 	swrast/s_drawpix.c \
+	swrast/s_feedback.c \
 	swrast/s_fog.c \
-	swrast/s_imaging.c \
+	swrast/s_histogram.c \
 	swrast/s_lines.c \
 	swrast/s_logic.c \
 	swrast/s_masking.c \
@@ -123,11 +134,33 @@ CORE_SOURCES = \
 	swrast/s_stencil.c \
 	swrast/s_texture.c \
 	swrast/s_triangle.c \
-	swrast/s_zoom.c 
+	swrast/s_zoom.c \
+	swrast_setup/ss_context.c \
+	swrast_setup/ss_triangle.c \
+	swrast_setup/ss_vb.c \
+	math/m_debug_xform.c \
+	math/m_matrix.c \
+	math/m_translate.c \
+	math/m_vector.c \
+	math/m_vertices.c \
+	math/m_xform.c  
 
 
 
 DRIVER_SOURCES = \
+	FX/fxvtxfmt.c \
+	FX/fxvtxprims.c \
+	FX/fxapi.c \
+	FX/fxdd.c \
+	FX/fxddspan.c \
+	FX/fxddtex.c \
+	FX/fxfastpath.c \
+	FX/fxpipeline.c \
+	FX/fxsetup.c \
+	FX/fxtexman.c \
+	FX/fxtrifuncs.c \
+	FX/fxvsetup.c \
+	FX/fxglidew.c \
 	X/glxapi.c \
 	X/fakeglx.c \
 	X/xfonts.c \
@@ -142,27 +175,12 @@ DRIVER_SOURCES = \
 	SVGA/svgamesa16.c \
 	SVGA/svgamesa24.c \
 	SVGA/svgamesa32.c \
-	FX/fxapi.c \
-	FX/fxclip.c \
-	FX/fxdd.c \
-	FX/fxddspan.c \
-	FX/fxddtex.c \
-	FX/fxfastpath.c \
-	FX/fxpipeline.c \
-	FX/fxrender.c \
-	FX/fxsanity.c \
-	FX/fxsetup.c \
-	FX/fxtexman.c \
-	FX/fxtrifuncs.c \
-	FX/fxvsetup.c \
-	FX/fxglidew.c \
-	Trace/tr_2string.c \
-	Trace/tr_attrib.c \
 	Trace/tr_context.c \
 	Trace/tr_control.c \
 	Trace/tr_error.c \
-	Trace/tr_print.c \
-	Trace/tr_wrapper.c
+	Trace/tr_support.c \
+	Trace/tr_wrapper.c \
+	Trace/tr_write.c
 
 
 ASM_SOURCES = 

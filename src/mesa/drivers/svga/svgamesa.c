@@ -1,4 +1,4 @@
-/* $Id: svgamesa.c,v 1.6 2000/09/26 20:54:12 brianp Exp $ */
+/* $Id: svgamesa.c,v 1.10 2000/11/22 08:55:53 joukj Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -39,12 +39,13 @@
 #else
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <vga.h>
 #include "GL/svgamesa.h"
 #include "context.h"
+#include "extensions.h"
 #include "matrix.h"
-#include "types.h"
-#include <string.h>
+#include "mtypes.h"
 #endif
 
 #include "svgapix.h"
@@ -72,7 +73,7 @@ void SVGAlog(char * what)
  if (!logfile) return;
  fprintf(logfile,"%s\n",what);
  fclose(logfile);
-} 
+}
 #endif
 
 /**********************************************************************/
@@ -80,23 +81,23 @@ void SVGAlog(char * what)
 /**********************************************************************/
 
 int SVGAMesaInit( int GraphMode )
-{  
+{
    vga_init();
    if (!vga_hasmode(GraphMode))
    {
     fprintf(stderr,"GraphMode %d unavailable...",GraphMode);
 #ifdef SVGA_DEBUG
     SVGAlog("SVGAMesaInit: invalid GraphMode (doesn't exist)");
-#endif    
+#endif
     return(1);
    }
-   SVGAInfo=vga_getmodeinfo(GraphMode);           
+   SVGAInfo=vga_getmodeinfo(GraphMode);
    if (SVGAInfo->flags & IS_MODEX)
    {
     fprintf(stderr,"ModeX not implemented...");
 #ifdef SVGA_DEBUG
     SVGAlog("SVGAMesaInit: invalid GraphMode (ModeX)");
-#endif    
+#endif
     return(2);
    }
    if (!SVGAInfo->bytesperpixel)
@@ -104,7 +105,7 @@ int SVGAMesaInit( int GraphMode )
     fprintf(stderr,"1 / 4 bit color not implemented...");
 #ifdef SVGA_DEBUG
     SVGAlog("SVGAMesaInit: invalid GraphMode (1 or 4 bit)");
-#endif    
+#endif
     return(3);
    }
    switch (SVGAInfo->colors) {
@@ -124,21 +125,21 @@ int SVGAMesaInit( int GraphMode )
 		 SVGABuffer.Depth,GraphMode,SVGAInfo->linewidth, \
 		 SVGAInfo->height,SVGABuffer.BufferSize);
    SVGAlog(cbuf);
-#endif    
+#endif
    SVGABuffer.FrontBuffer=(void*)malloc(SVGABuffer.BufferSize + 4);
    if (!SVGABuffer.FrontBuffer) {
     {
      fprintf(stderr,"Not enough RAM for FRONT_LEFT_BUFFER...");
 #ifdef SVGA_DEBUG
      SVGAlog("SVGAMesaInit: Not enough RAM (front buffer)");
-#endif    
+#endif
      return(4);
     }
-   }       
+   }
 #ifdef SVGA_DEBUG
    sprintf(cbuf,"SVGAMesaInit: FrontBuffer - %p",SVGABuffer.FrontBuffer);
    SVGAlog(cbuf);
-#endif    
+#endif
    SVGABuffer.BackBuffer=(void*)malloc(SVGABuffer.BufferSize + 4);
    if (!SVGABuffer.BackBuffer) {
     {
@@ -146,14 +147,14 @@ int SVGAMesaInit( int GraphMode )
      fprintf(stderr,"Not enough RAM for BACK_LEFT_BUFFER...");
 #ifdef SVGA_DEBUG
      SVGAlog("SVGAMesaInit: Not enough RAM (back buffer)");
-#endif    
+#endif
      return(5);
     }
-   }       
+   }
 #ifdef SVGA_DEBUG
    sprintf(cbuf,"SVGAMesaInit: BackBuffer - %p",SVGABuffer.BackBuffer);
    SVGAlog(cbuf);
-#endif    
+#endif
 
    vga_setmode(GraphMode);
    SVGABuffer.VideoRam=vga_getgraphmem();
@@ -168,11 +169,11 @@ int SVGAMesaInit( int GraphMode )
    SVGABuffer.ReadBuffer = SVGABuffer.BackBuffer;
 
    return 0;
-}   
+}
 
 int SVGAMesaClose( void )
-{  
-   vga_setmode(TEXT); 
+{
+   vga_setmode(TEXT);
    free(SVGABuffer.FrontBuffer);
    free(SVGABuffer.BackBuffer);
    return 0;
@@ -194,17 +195,17 @@ static void copy_buffer( const GLubyte * buffer) {
 #ifdef SVGA_DEBUG
    sprintf(cbuf,"copy_buffer: copy %p to %p",buffer,SVGABuffer.VideoRam);
    SVGAlog(cbuf);
-#endif    
+#endif
 
  while(size>0) {
  vga_setpage(page++);
-  if (size>>16) { 
+  if (size>>16) {
    memcpy(SVGABuffer.VideoRam,buffer,0x10000);
    buffer+=0x10000;
-  }else{    
+  }else{
    memcpy(SVGABuffer.VideoRam,buffer,size & 0xffff);
   }
-  size-=0xffff; 
+  size-=0xffff;
  }
 }
 
@@ -227,7 +228,7 @@ static GLboolean set_draw_buffer( GLcontext *ctx, GLenum buffer )
       SVGABuffer.FrontBuffer=tmpptr;
 #endif
       return GL_TRUE;
-   }    
+   }
    else if (buffer == GL_BACK_LEFT) {
       SVGABuffer.DrawBuffer = SVGABuffer.BackBuffer;
 #if 0
@@ -291,7 +292,6 @@ static void svgamesa_update_state( GLcontext *ctx )
    switch (SVGABuffer.Depth) {
     case  8: ctx->Driver.ClearIndex = __clear_index8;
              ctx->Driver.Clear 	    = __clear8;
-             ctx->Driver.Index 	    = __set_index8; 
 
              ctx->Driver.ReadCI32Span         = __read_ci32_span8;
              ctx->Driver.ReadCI32Pixels       = __read_ci32_pixels8;
@@ -302,12 +302,11 @@ static void svgamesa_update_state( GLcontext *ctx )
              ctx->Driver.WriteMonoCIPixels    = __write_mono_ci_pixels8;
 #ifdef SVGA_DEBUG
     SVGAlog("SVGAUpdateState: 8 bit mode.");
-#endif    
+#endif
 
 	     break;
     case 15: ctx->Driver.ClearColor = __clear_color15;
              ctx->Driver.Clear 	    = __clear15;
-             ctx->Driver.Color 	    = __set_color15;
 
              ctx->Driver.ReadRGBASpan         = __read_rgba_span15;
              ctx->Driver.ReadRGBAPixels       = __read_rgba_pixels15;
@@ -317,11 +316,10 @@ static void svgamesa_update_state( GLcontext *ctx )
              ctx->Driver.WriteMonoRGBAPixels  = __write_mono_rgba_pixels15;
 #ifdef SVGA_DEBUG
     SVGAlog("SVGAUpdateState: 15 bit mode.");
-#endif    
+#endif
 	     break;
     case 16: ctx->Driver.ClearColor = __clear_color16;
              ctx->Driver.Clear 	    = __clear16;
-             ctx->Driver.Color 	    = __set_color16;
 
              ctx->Driver.ReadRGBASpan         = __read_rgba_span16;
              ctx->Driver.ReadRGBAPixels       = __read_rgba_pixels16;
@@ -332,10 +330,9 @@ static void svgamesa_update_state( GLcontext *ctx )
 	     break;
 #ifdef SVGA_DEBUG
     SVGAlog("SVGAUpdateState: 16 bit mode.");
-#endif    
+#endif
     case 24: ctx->Driver.ClearColor = __clear_color24;
              ctx->Driver.Clear 	    = __clear24;
-             ctx->Driver.Color 	    = __set_color24;
 
              ctx->Driver.ReadRGBASpan         = __read_rgba_span24;
              ctx->Driver.ReadRGBAPixels       = __read_rgba_pixels24;
@@ -346,10 +343,9 @@ static void svgamesa_update_state( GLcontext *ctx )
 	     break;
 #ifdef SVGA_DEBUG
     SVGAlog("SVGAUpdateState: 32 bit mode.");
-#endif    
+#endif
     case 32: ctx->Driver.ClearColor = __clear_color32;
              ctx->Driver.Clear 	    = __clear32;
-             ctx->Driver.Color 	    = __set_color32;
 
              ctx->Driver.ReadRGBASpan         = __read_rgba_span32;
              ctx->Driver.ReadRGBAPixels       = __read_rgba_pixels32;
@@ -357,7 +353,7 @@ static void svgamesa_update_state( GLcontext *ctx )
              ctx->Driver.WriteRGBAPixels      = __write_rgba_pixels32;
              ctx->Driver.WriteMonoRGBASpan    = __write_mono_rgba_span32;
              ctx->Driver.WriteMonoRGBAPixels  = __write_mono_rgba_pixels32;
-   }	     
+   }	
 }
 
 /*
@@ -423,14 +419,13 @@ SVGAMesaContext SVGAMesaCreateContext( GLboolean doubleBuffer )
                                        NULL,  /* share list context */
                                        (void *) ctx, GL_TRUE );
 
+   _mesa_enable_sw_extensions(ctx->gl_ctx);
+
    ctx->gl_buffer = _mesa_create_framebuffer( ctx->gl_vis,
                                               ctx->gl_vis->DepthBits > 0,
                                               ctx->gl_vis->StencilBits > 0,
                                               ctx->gl_vis->AccumRedBits > 0,
                                               ctx->gl_vis->AlphaBits > 0 );
-
-   ctx->index = 1;
-   ctx->red = ctx->green = ctx->blue = 255;
 
    ctx->width = ctx->height = 0;  /* temporary until first "make-current" */
 #endif
@@ -495,9 +490,9 @@ void SVGAMesaSwapBuffers( void )
    copy_buffer(SVGABuffer.BackBuffer);
 
 #ifndef DEV
-   FLUSH_VB( SVGAMesa->gl_ctx, "swap buffers" );
-   if (SVGAMesa->gl_vis->DBflag) 
-#endif /* DEV */   
+   _mesa_swapbuffers( SVGAMesa->gl_ctx );
+   if (SVGAMesa->gl_vis->DBflag)
+#endif /* DEV */
    {
 #ifdef SVGA_DEBUG
       sprintf(cbuf,"SVGAMesaSwapBuffers : Swapping...");

@@ -1,21 +1,21 @@
-/* $Id: drawpix.c,v 1.44 2000/10/31 18:09:44 keithw Exp $ */
+/* $Id: drawpix.c,v 1.46 2000/11/22 07:32:16 joukj Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -31,12 +31,13 @@
 #include "glheader.h"
 #include "colormac.h"
 #include "context.h"
+#include "drawpix.h"
 #include "feedback.h"
 #include "macros.h"
 #include "mem.h"
 #include "mmath.h"
 #include "state.h"
-#include "types.h"
+#include "mtypes.h"
 #include "swrast/swrast.h"
 #endif
 
@@ -52,7 +53,7 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
                   GLenum format, GLenum type, const GLvoid *pixels )
 {
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glDrawPixels");
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH( ctx, "_mesa_DrawPixels" );
 
    if (ctx->RenderMode==GL_RENDER) {
       GLint x, y;
@@ -86,6 +87,9 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
       if (ctx->Current.RasterPosValid) {
          GLfloat color[4];
 	 GLfloat texcoord[4], invq;
+
+	 FLUSH_TNL( ctx, FLUSH_UPDATE_CURRENT );
+
          color[0] = CHAN_TO_FLOAT(ctx->Current.Color[0]);
          color[1] = CHAN_TO_FLOAT(ctx->Current.Color[1]);
          color[2] = CHAN_TO_FLOAT(ctx->Current.Color[2]);

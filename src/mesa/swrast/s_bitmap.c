@@ -1,4 +1,4 @@
-/* $Id: s_bitmap.c,v 1.1 2000/10/31 18:00:04 keithw Exp $ */
+/* $Id: s_bitmap.c,v 1.3 2000/11/16 21:05:41 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -30,6 +30,7 @@
 #include "macros.h"
 #include "pixel.h"
 
+#include "s_context.h"
 #include "s_fog.h"
 #include "s_pb.h"
 
@@ -44,7 +45,7 @@ _swrast_Bitmap( GLcontext *ctx, GLint px, GLint py,
 		const struct gl_pixelstore_attrib *unpack,
 		const GLubyte *bitmap )
 {
-   struct pixel_buffer *PB = ctx->PB;
+   struct pixel_buffer *PB = SWRAST_CONTEXT(ctx)->PB;
    GLint row, col;
    GLdepth fragZ;
    GLfixed fogCoord;
@@ -52,10 +53,8 @@ _swrast_Bitmap( GLcontext *ctx, GLint px, GLint py,
    ASSERT(ctx->RenderMode == GL_RENDER);
    ASSERT(bitmap);
 
-   if (ctx->PB->primitive != GL_BITMAP) {
-      gl_flush_pb( ctx );
-      ctx->PB->primitive = GL_BITMAP;
-   }
+   if (SWRAST_CONTEXT(ctx)->NewState)
+      _swrast_validate_derived( ctx );
 
    /* Set bitmap drawing color */
    if (ctx->Visual.RGBAflag) {

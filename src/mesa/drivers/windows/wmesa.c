@@ -1,4 +1,4 @@
-/* $Id: wmesa.c,v 1.9 2000/09/28 22:44:32 brianp Exp $ */
+/* $Id: wmesa.c,v 1.12 2000/11/17 21:01:47 brianp Exp $ */
 
 /*
  * Windows (Win32) device driver for Mesa 3.4
@@ -488,25 +488,6 @@ static GLbitfield clear(GLcontext* ctx, GLbitfield mask,
 
 
 
-/* Set the current color index. */
-static void set_index(GLcontext* ctx, GLuint index)
-{
-    STARTPROFILE
-        Current->pixel=index;
-    ENDPROFILE(set_index)
-}
-
-
-
-/* Set the current RGBA color. */
-static void set_color( GLcontext* ctx, GLubyte r, GLubyte g, GLubyte b, GLubyte a )
-{
-    STARTPROFILE
-        Current->pixel = RGB( r, g, b );
-    ENDPROFILE(set_color)
-}
-
-
 static void enable( GLcontext* ctx, GLenum pname, GLboolean enable )
 {
    if (!Current)
@@ -650,8 +631,8 @@ static void fast_rgb_points( GLcontext* ctx, GLuint first, GLuint last )
 extern points_func choose_points_function( GLcontext* ctx )
 {
     STARTPROFILE
-        if (ctx->Point.Size==1.0 && !ctx->Point.SmoothFlag && ctx->RasterMask==0
-            && !ctx->Texture.ReallyEnabled  && ctx->Visual->RGBAflag) {
+        if (ctx->Point.Size==1.0 && !ctx->Point.SmoothFlag && ctx->_RasterMask==0
+            && !ctx->Texture._ReallyEnabled  && ctx->Visual->RGBAflag) {
             ENDPROFILE(choose_points_function)
                 return fast_rgb_points;
         }
@@ -708,8 +689,8 @@ static line_func choose_line_function( GLcontext* ctx )
 {
     STARTPROFILE
     if (ctx->Line.Width==1.0 && !ctx->Line.SmoothFlag && !ctx->Line.StippleFlag
-        && ctx->Light.ShadeModel==GL_FLAT && ctx->RasterMask==0
-        && !ctx->Texture.ReallyEnabled && Current->rgb_flag) {
+        && ctx->Light.ShadeModel==GL_FLAT && ctx->_RasterMask==0
+        && !ctx->Texture._ReallyEnabled && Current->rgb_flag) {
        ENDPROFILE(choose_line_function)
        return fast_flat_rgb_line;
     }
@@ -766,7 +747,7 @@ static void write_ci8_span( const GLcontext* ctx,
 */
 static void write_mono_ci_span(const GLcontext* ctx,
                                GLuint n,GLint x,GLint y,
-                               const GLubyte mask[])
+                               GLuint colorIndex, const GLubyte mask[])
 {
    STARTPROFILE
    GLuint i;
@@ -774,7 +755,7 @@ static void write_mono_ci_span(const GLcontext* ctx,
    assert(Current->rgb_flag==GL_FALSE);
    for (i=0; i<n; i++)
       if (mask[i])
-         Mem[i]=Current->pixel;
+         Mem[i]=colorIndex;
    ENDPROFILE(write_mono_ci_span)
 }
 
@@ -874,8 +855,9 @@ static void write_rgb_span( const GLcontext* ctx,
 */
 static void write_mono_rgba_span( const GLcontext* ctx,
                                   GLuint n, GLint x, GLint y,
-                                  const GLubyte mask[])
+                                  const GLchan color[4], const GLubyte mask[])
 {
+    ULONG pixel =  RGB( color[RCOMP], color[GCOMP], color[BCOMP] );
     STARTPROFILE
     GLuint i;
     HDC DC=DD_GETDC;
@@ -886,12 +868,12 @@ static void write_mono_rgba_span( const GLcontext* ctx,
         for (i=0; i<n; i++)
             if (mask[i])
                 // Trying
-                wmSetPixel(pwc,y,x+i,GetRValue(Current->pixel), GetGValue(Current->pixel), GetBValue(Current->pixel));
+                wmSetPixel(pwc,y,x+i,color[RCOMP], color[GCOMP], color[BCOMP]);
     }
     else {
         for (i=0; i<n; i++)
             if (mask[i])
-                SetPixel(DC, y, x+i, Current->pixel);
+                SetPixel(DC, y, x+i, pixel);
     }
     DD_RELEASEDC;
     ENDPROFILE(write_mono_rgba_span)
@@ -930,7 +912,7 @@ static void write_ci32_pixels( const GLcontext* ctx,
 static void write_mono_ci_pixels( const GLcontext* ctx,
                                   GLuint n,
                                   const GLint x[], const GLint y[],
-                                  const GLubyte mask[] )
+                                  GLuint colorIndex, const GLubyte mask[] )
 {
    STARTPROFILE
    GLuint i;
@@ -938,7 +920,7 @@ static void write_mono_ci_pixels( const GLcontext* ctx,
    for (i=0; i<n; i++) {
       if (mask[i]) {
          BYTE *Mem=Current->ScreenMem+FLIP(y[i])*Current->ScanWidth+x[i];
-         *Mem = Current->pixel;
+         *Mem = colorIndex;
       }
    }
    ENDPROFILE(write_mono_ci_pixels)
@@ -958,7 +940,8 @@ static void write_rgba_pixels( const GLcontext* ctx,
     assert(Current->rgb_flag==GL_TRUE);
     for (i=0; i<n; i++)
        if (mask[i])
-          wmSetPixel(pwc, FLIP(y[i]),x[i],rgba[i][RCOMP],rgba[i][GCOMP],rgba[i][BCOMP]);
+          wmSetPixel(pwc, FLIP(y[i]), x[i],
+                     rgba[i][RCOMP], rgba[i][GCOMP], rgba[i][BCOMP]);
     DD_RELEASEDC;
     ENDPROFILE(write_rgba_pixels)
 }
@@ -972,6 +955,7 @@ static void write_rgba_pixels( const GLcontext* ctx,
 static void write_mono_rgba_pixels( const GLcontext* ctx,
                                     GLuint n,
                                     const GLint x[], const GLint y[],
+                                    const GLchan color[4],
                                     const GLubyte mask[] )
 {
     STARTPROFILE
@@ -981,8 +965,8 @@ static void write_mono_rgba_pixels( const GLcontext* ctx,
     assert(Current->rgb_flag==GL_TRUE);
     for (i=0; i<n; i++)
         if (mask[i])
-            wmSetPixel(pwc, FLIP(y[i]),x[i],GetRValue(Current->pixel),
-                       GetGValue(Current->pixel), GetBValue(Current->pixel));
+            wmSetPixel(pwc, FLIP(y[i]),x[i],color[RCOMP],
+                       color[GCOMP], color[BCOMP]);
     DD_RELEASEDC;
     ENDPROFILE(write_mono_rgba_pixels)
 }
@@ -1108,9 +1092,6 @@ void setup_DD_pointers( GLcontext* ctx )
     ctx->Driver.ClearIndex = clear_index;
     ctx->Driver.ClearColor = clear_color;
     ctx->Driver.Clear = clear;
-
-    ctx->Driver.Index = set_index;
-    ctx->Driver.Color = set_color;
 
     ctx->Driver.Enable = enable;
 
@@ -1302,6 +1283,8 @@ WMesaContext WMesaCreateContext( HWND hWnd, HPALETTE* Pal,
         free(c);
         return NULL;
     }
+
+    _mesa_enable_sw_extensions(c->gl_ctx);
 
     c->gl_buffer = _mesa_create_framebuffer( c->gl_visual,
                                           c->gl_visual->DepthBits > 0,
@@ -2851,11 +2834,11 @@ static triangle_func choose_triangle_function( GLcontext *ctx )
     int depth = wmesa->cColorBits;
 
     if (ctx->Polygon.SmoothFlag)     return NULL;
-    if (ctx->Texture.ReallyEnabled)  return NULL;
+    if (ctx->Texture._ReallyEnabled)  return NULL;
     if (!wmesa->db_flag) return NULL;
     /*if (wmesa->xm_buffer->buffer==XIMAGE)*/ {
     if (   ctx->Light.ShadeModel==GL_SMOOTH
-        && ctx->RasterMask==DEPTH_BIT
+        && ctx->_RasterMask==DEPTH_BIT
         && ctx->Depth.Func==GL_LESS
         && ctx->Depth.Mask==GL_TRUE
         && ctx->Polygon.StippleFlag==GL_FALSE) {
@@ -2875,7 +2858,7 @@ static triangle_func choose_triangle_function( GLcontext *ctx )
         }
     }
     if (   ctx->Light.ShadeModel==GL_FLAT
-        && ctx->RasterMask==DEPTH_BIT
+        && ctx->_RasterMask==DEPTH_BIT
         && ctx->Depth.Func==GL_LESS
         && ctx->Depth.Mask==GL_TRUE
         && ctx->Polygon.StippleFlag==GL_FALSE) {
@@ -2894,7 +2877,7 @@ static triangle_func choose_triangle_function( GLcontext *ctx )
             return NULL;
         }
     }
-    if (   ctx->RasterMask==0   /* no depth test */
+    if (   ctx->_RasterMask==0   /* no depth test */
         && ctx->Light.ShadeModel==GL_SMOOTH
         && ctx->Polygon.StippleFlag==GL_FALSE) {
         switch (wmesa->pixelformat) {
@@ -2913,7 +2896,7 @@ static triangle_func choose_triangle_function( GLcontext *ctx )
         }
     }
 
-    if (   ctx->RasterMask==0   /* no depth test */
+    if (   ctx->_RasterMask==0   /* no depth test */
         && ctx->Light.ShadeModel==GL_FLAT
         && ctx->Polygon.StippleFlag==GL_FALSE) {
         switch (wmesa->pixelformat) {

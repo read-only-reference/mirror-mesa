@@ -1,21 +1,21 @@
-/* $Id: attrib.c,v 1.32 2000/10/30 16:32:42 brianp Exp $ */
+/* $Id: attrib.c,v 1.37 2000/11/27 18:59:09 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -38,7 +38,7 @@
 #include "mem.h"
 #include "simple_list.h"
 #include "texstate.h"
-#include "types.h"
+#include "mtypes.h"
 #endif
 
 
@@ -85,12 +85,10 @@ copy_texobj_state( struct gl_texture_object *dest,
    dest->MaxLod = src->MaxLod;
    dest->BaseLevel = src->BaseLevel;
    dest->MaxLevel = src->MaxLevel;
-   dest->P = src->P;
-   dest->M = src->M;
-   dest->MinMagThresh = src->MinMagThresh;
+   dest->_P = src->_P;
+   dest->_M = src->_M;
    dest->Palette = src->Palette;
    dest->Complete = src->Complete;
-   dest->SampleFunc = src->SampleFunc;
 }
 
 
@@ -138,6 +136,9 @@ _mesa_PushAttrib(GLbitfield mask)
 
    if (mask & GL_CURRENT_BIT) {
       struct gl_current_attrib *attr;
+
+      FLUSH_TNL( ctx, FLUSH_UPDATE_CURRENT );
+
       attr = MALLOC_STRUCT( gl_current_attrib );
       MEMCPY( attr, &ctx->Current, sizeof(struct gl_current_attrib) );
       newnode = new_attrib_node( GL_CURRENT_BIT );
@@ -349,17 +350,18 @@ _mesa_PushAttrib(GLbitfield mask)
       GLuint u;
       /* Take care of texture object reference counters */
       for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-	 ctx->Texture.Unit[u].CurrentD[1]->RefCount++;
-	 ctx->Texture.Unit[u].CurrentD[2]->RefCount++;
-	 ctx->Texture.Unit[u].CurrentD[3]->RefCount++;
+	 ctx->Texture.Unit[u].Current1D->RefCount++;
+	 ctx->Texture.Unit[u].Current2D->RefCount++;
+	 ctx->Texture.Unit[u].Current3D->RefCount++;
+	 ctx->Texture.Unit[u].CurrentCubeMap->RefCount++;
       }
       attr = MALLOC_STRUCT( gl_texture_attrib );
       MEMCPY( attr, &ctx->Texture, sizeof(struct gl_texture_attrib) );
       /* copy state of the currently bound texture objects */
       for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-         copy_texobj_state(&attr->Unit[u].Saved1D, attr->Unit[u].CurrentD[1]);
-         copy_texobj_state(&attr->Unit[u].Saved2D, attr->Unit[u].CurrentD[2]);
-         copy_texobj_state(&attr->Unit[u].Saved3D, attr->Unit[u].CurrentD[3]);
+         copy_texobj_state(&attr->Unit[u].Saved1D, attr->Unit[u].Current1D);
+         copy_texobj_state(&attr->Unit[u].Saved2D, attr->Unit[u].Current2D);
+         copy_texobj_state(&attr->Unit[u].Saved3D, attr->Unit[u].Current3D);
          copy_texobj_state(&attr->Unit[u].SavedCubeMap, attr->Unit[u].CurrentCubeMap);
       }
       newnode = new_attrib_node( GL_TEXTURE_BIT );
@@ -614,6 +616,7 @@ _mesa_PopAttrib(void)
             }
             break;
          case GL_CURRENT_BIT:
+	    FLUSH_TNL( ctx, FLUSH_UPDATE_CURRENT );
             MEMCPY( &ctx->Current, attr->data,
 		    sizeof(struct gl_current_attrib) );
             break;
@@ -666,8 +669,8 @@ _mesa_PopAttrib(void)
                   (*ctx->Driver.Fogfv)( ctx, GL_FOG_INDEX, &index );
                   (*ctx->Driver.Fogfv)( ctx, GL_FOG_COLOR, ctx->Fog.Color );
                }
-	       ctx->Enabled &= ~ENABLE_FOG;
-	       if (ctx->Fog.Enabled) ctx->Enabled |= ENABLE_FOG;
+	       ctx->_Enabled &= ~ENABLE_FOG;
+	       if (ctx->Fog.Enabled) ctx->_Enabled |= ENABLE_FOG;
             }
             break;
          case GL_HINT_BIT:
@@ -697,14 +700,14 @@ _mesa_PopAttrib(void)
                (*ctx->Driver.Enable)( ctx, GL_LIGHTING, ctx->Light.Enabled );
             }
             if (ctx->Light.ShadeModel == GL_FLAT)
-               ctx->TriangleCaps |= DD_FLATSHADE;
+               ctx->_TriangleCaps |= DD_FLATSHADE;
             else
-               ctx->TriangleCaps &= ~DD_FLATSHADE;
+               ctx->_TriangleCaps &= ~DD_FLATSHADE;
             if (ctx->Driver.ShadeModel)
                (*ctx->Driver.ShadeModel)(ctx, ctx->Light.ShadeModel);
-	    ctx->Enabled &= ~ENABLE_LIGHT;
-	    if (ctx->Light.Enabled && !is_empty_list(&ctx->Light.EnabledList))
-	       ctx->Enabled |= ENABLE_LIGHT;
+	    ctx->_Enabled &= ~ENABLE_LIGHT;
+	    if (ctx->Light.Enabled)
+	       ctx->_Enabled |= ENABLE_LIGHT;
             break;
          case GL_LINE_BIT:
             MEMCPY( &ctx->Line, attr->data, sizeof(struct gl_line_attrib) );
@@ -758,7 +761,7 @@ _mesa_PopAttrib(void)
 	 case GL_POLYGON_STIPPLE_BIT:
 	    MEMCPY( ctx->PolygonStipple, attr->data, 32*sizeof(GLuint) );
 	    ctx->NewState |= _NEW_POLYGONSTIPPLE;
-	    if (ctx->Driver.PolygonStipple) 
+	    if (ctx->Driver.PolygonStipple)
 	       ctx->Driver.PolygonStipple( ctx, (const GLubyte *) attr->data );
 	    break;
          case GL_SCISSOR_BIT:
@@ -787,9 +790,9 @@ _mesa_PopAttrib(void)
                (*ctx->Driver.ClearStencil)( ctx, ctx->Stencil.Clear );
             if (ctx->Driver.Enable)
                (*ctx->Driver.Enable)( ctx, GL_STENCIL_TEST, ctx->Stencil.Enabled );
-	    ctx->TriangleCaps &= ~DD_STENCIL;
+	    ctx->_TriangleCaps &= ~DD_STENCIL;
 	    if (ctx->Stencil.Enabled)
-	       ctx->TriangleCaps |= DD_STENCIL;
+	       ctx->_TriangleCaps |= DD_STENCIL;
 
             break;
          case GL_TRANSFORM_BIT:
@@ -800,44 +803,44 @@ _mesa_PopAttrib(void)
                (*ctx->Driver.Enable)( ctx, GL_NORMALIZE, ctx->Transform.Normalize );
                (*ctx->Driver.Enable)( ctx, GL_RESCALE_NORMAL_EXT, ctx->Transform.RescaleNormals );
             }
-	    ctx->Enabled &= ~(ENABLE_NORMALIZE|ENABLE_RESCALE);
-	    if (ctx->Transform.Normalize) ctx->Enabled |= ENABLE_NORMALIZE;
-	    if (ctx->Transform.RescaleNormals) ctx->Enabled |= ENABLE_RESCALE;
+	    ctx->_Enabled &= ~(ENABLE_NORMALIZE|ENABLE_RESCALE);
+	    if (ctx->Transform.Normalize) ctx->_Enabled |= ENABLE_NORMALIZE;
+	    if (ctx->Transform.RescaleNormals) ctx->_Enabled |= ENABLE_RESCALE;
             break;
          case GL_TEXTURE_BIT:
             /* Take care of texture object reference counters */
             {
                GLuint u;
                for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-		  ctx->Texture.Unit[u].CurrentD[1]->RefCount--;
-		  ctx->Texture.Unit[u].CurrentD[2]->RefCount--;
-		  ctx->Texture.Unit[u].CurrentD[3]->RefCount--;
+		  ctx->Texture.Unit[u].Current1D->RefCount--;
+		  ctx->Texture.Unit[u].Current2D->RefCount--;
+		  ctx->Texture.Unit[u].Current3D->RefCount--;
+		  ctx->Texture.Unit[u].CurrentCubeMap->RefCount--;
                }
                MEMCPY( &ctx->Texture, attr->data,
                        sizeof(struct gl_texture_attrib) );
 	       ctx->NewState |= _NEW_TEXTURE;
                /* restore state of the currently bound texture objects */
                for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-                  copy_texobj_state( ctx->Texture.Unit[u].CurrentD[1],
+                  copy_texobj_state( ctx->Texture.Unit[u].Current1D,
                                      &(ctx->Texture.Unit[u].Saved1D) );
-                  copy_texobj_state( ctx->Texture.Unit[u].CurrentD[2],
+                  copy_texobj_state( ctx->Texture.Unit[u].Current2D,
                                      &(ctx->Texture.Unit[u].Saved2D) );
-                  copy_texobj_state( ctx->Texture.Unit[u].CurrentD[3],
+                  copy_texobj_state( ctx->Texture.Unit[u].Current3D,
                                      &(ctx->Texture.Unit[u].Saved3D) );
                   copy_texobj_state( ctx->Texture.Unit[u].CurrentCubeMap,
                                      &(ctx->Texture.Unit[u].SavedCubeMap) );
 
-                  gl_put_texobj_on_dirty_list( ctx, ctx->Texture.Unit[u].CurrentD[1] );
-                  gl_put_texobj_on_dirty_list( ctx, ctx->Texture.Unit[u].CurrentD[2] );
-                  gl_put_texobj_on_dirty_list( ctx, ctx->Texture.Unit[u].CurrentD[3] );
-                  gl_put_texobj_on_dirty_list( ctx, ctx->Texture.Unit[u].CurrentCubeMap );
-
+                  ctx->Texture.Unit[u].Current1D->Complete = GL_FALSE;
+                  ctx->Texture.Unit[u].Current2D->Complete = GL_FALSE;
+                  ctx->Texture.Unit[u].Current3D->Complete = GL_FALSE;
+                  ctx->Texture.Unit[u].CurrentCubeMap->Complete = GL_FALSE;
                }
             }
             break;
-         case GL_VIEWPORT_BIT: 
+         case GL_VIEWPORT_BIT:
 	 {
-	    struct gl_viewport_attrib *v = 
+	    struct gl_viewport_attrib *v =
 	       (struct gl_viewport_attrib *)attr->data;
 
 	    ctx->NewState |= _NEW_VIEWPORT;

@@ -1,21 +1,21 @@
-/* $Id: points.c,v 1.19 2000/10/31 18:09:44 keithw Exp $ */
+/* $Id: points.c,v 1.24 2000/11/22 07:32:17 joukj Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.4
- * 
+ *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -35,8 +35,7 @@
 #include "mmath.h"
 #include "points.h"
 #include "texstate.h"
-#include "types.h"
-#include "vb.h"
+#include "mtypes.h"
 #endif
 
 
@@ -52,12 +51,12 @@ _mesa_PointSize( GLfloat size )
       return;
    }
 
-   if (ctx->Point.UserSize != size) {
-      ctx->Point.UserSize = size;
-      ctx->Point.Size = CLAMP(size, ctx->Const.MinPointSize, ctx->Const.MaxPointSize);
-      ctx->TriangleCaps &= ~DD_POINT_SIZE;
+   if (ctx->Point.Size != size) {
+      ctx->Point.Size = size;
+      ctx->Point._Size = CLAMP(size, ctx->Const.MinPointSize, ctx->Const.MaxPointSize);
+      ctx->_TriangleCaps &= ~DD_POINT_SIZE;
       if (size != 1.0)
-         ctx->TriangleCaps |= DD_POINT_SIZE;
+         ctx->_TriangleCaps |= DD_POINT_SIZE;
       ctx->NewState |= _NEW_POINT;
    }
 }
@@ -80,15 +79,16 @@ _mesa_PointParameterfvEXT( GLenum pname, const GLfloat *params)
    switch (pname) {
       case GL_DISTANCE_ATTENUATION_EXT:
          {
-            const GLboolean tmp = ctx->Point.Attenuated;
+            const GLboolean tmp = ctx->Point._Attenuated;
             COPY_3V(ctx->Point.Params, params);
-            ctx->Point.Attenuated = (params[0] != 1.0 ||
-                                     params[1] != 0.0 ||
-                                     params[2] != 0.0);
+            ctx->Point._Attenuated = (params[0] != 1.0 ||
+				      params[1] != 0.0 ||
+				      params[2] != 0.0);
 
-            if (tmp != ctx->Point.Attenuated) {
-               ctx->Enabled ^= ENABLE_POINT_ATTEN;
-               ctx->TriangleCaps ^= DD_POINT_ATTEN;
+            if (tmp != ctx->Point._Attenuated) {
+               ctx->_Enabled ^= ENABLE_POINT_ATTEN;
+               ctx->_TriangleCaps ^= DD_POINT_ATTEN;
+	       ctx->_NeedEyeCoords ^= NEED_EYE_POINT_ATTEN;
             }
          }
          break;

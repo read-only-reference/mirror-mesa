@@ -1,4 +1,4 @@
-/* $Id: state.c,v 1.39 2000/10/31 18:09:45 keithw Exp $ */
+/* $Id: state.c,v 1.50 2000/11/28 00:07:51 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -37,6 +37,7 @@
 #include "glheader.h"
 #include "accum.h"
 #include "alpha.h"
+#include "api_loopback.h"
 #include "attrib.h"
 #include "bitmap.h"
 #include "blend.h"
@@ -46,7 +47,6 @@
 #include "context.h"
 #include "convolve.h"
 #include "copypix.h"
-#include "cva.h"
 #include "depth.h"
 #include "dlist.h"
 #include "drawpix.h"
@@ -56,35 +56,33 @@
 #include "feedback.h"
 #include "fog.h"
 #include "hint.h"
-#include "imaging.h"
+#include "histogram.h"
 #include "light.h"
 #include "lines.h"
 #include "logic.h"
 #include "masking.h"
 #include "matrix.h"
 #include "mmath.h"
-#include "pipeline.h"
 #include "pixel.h"
 #include "pixeltex.h"
 #include "points.h"
 #include "polygon.h"
 #include "rastpos.h"
 #include "readpix.h"
-#include "rect.h"
 #include "scissor.h"
-#include "shade.h"
 #include "state.h"
 #include "stencil.h"
 #include "teximage.h"
 #include "texobj.h"
 #include "texstate.h"
 #include "texture.h"
-#include "types.h"
+#include "mtypes.h"
 #include "varray.h"
-#include "vbfill.h"
-#include "vbrender.h"
 #include "winpos.h"
+
 #include "swrast/swrast.h"
+#include "math/m_matrix.h"
+#include "math/m_xform.h"
 #endif
 
 
@@ -117,6 +115,9 @@ _mesa_init_no_op_table(struct _glapi_table *table, GLuint tableSize)
 /*
  * Initialize the given dispatch table with pointers to Mesa's
  * immediate-mode commands.
+ *
+ * Pointers to begin/end object commands and a few others
+ * are provided via the vtxfmt interface elsewhere.
  */
 void
 _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
@@ -124,10 +125,11 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    /* first initialize all dispatch slots to no-op */
    _mesa_init_no_op_table(exec, tableSize);
 
+   _mesa_loopback_init_api_table( exec, GL_FALSE );
+
    /* load the dispatch slots we understand */
    exec->Accum = _mesa_Accum;
    exec->AlphaFunc = _mesa_AlphaFunc;
-   exec->Begin = _mesa_Begin;
    exec->Bitmap = _mesa_Bitmap;
    exec->BlendFunc = _mesa_BlendFunc;
    exec->CallList = _mesa_CallList;
@@ -139,38 +141,6 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->ClearIndex = _mesa_ClearIndex;
    exec->ClearStencil = _mesa_ClearStencil;
    exec->ClipPlane = _mesa_ClipPlane;
-   exec->Color3b = _mesa_Color3b;
-   exec->Color3bv = _mesa_Color3bv;
-   exec->Color3d = _mesa_Color3d;
-   exec->Color3dv = _mesa_Color3dv;
-   exec->Color3f = _mesa_Color3f;
-   exec->Color3fv = _mesa_Color3fv;
-   exec->Color3i = _mesa_Color3i;
-   exec->Color3iv = _mesa_Color3iv;
-   exec->Color3s = _mesa_Color3s;
-   exec->Color3sv = _mesa_Color3sv;
-   exec->Color3ub = _mesa_Color3ub;
-   exec->Color3ubv = _mesa_Color3ubv;
-   exec->Color3ui = _mesa_Color3ui;
-   exec->Color3uiv = _mesa_Color3uiv;
-   exec->Color3us = _mesa_Color3us;
-   exec->Color3usv = _mesa_Color3usv;
-   exec->Color4b = _mesa_Color4b;
-   exec->Color4bv = _mesa_Color4bv;
-   exec->Color4d = _mesa_Color4d;
-   exec->Color4dv = _mesa_Color4dv;
-   exec->Color4f = _mesa_Color4f;
-   exec->Color4fv = _mesa_Color4fv;
-   exec->Color4i = _mesa_Color4i;
-   exec->Color4iv = _mesa_Color4iv;
-   exec->Color4s = _mesa_Color4s;
-   exec->Color4sv = _mesa_Color4sv;
-   exec->Color4ub = _mesa_Color4ub;
-   exec->Color4ubv = _mesa_Color4ubv;
-   exec->Color4ui = _mesa_Color4ui;
-   exec->Color4uiv = _mesa_Color4uiv;
-   exec->Color4us = _mesa_Color4us;
-   exec->Color4usv = _mesa_Color4usv;
    exec->ColorMask = _mesa_ColorMask;
    exec->ColorMaterial = _mesa_ColorMaterial;
    exec->CopyPixels = _mesa_CopyPixels;
@@ -182,33 +152,12 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->Disable = _mesa_Disable;
    exec->DrawBuffer = _mesa_DrawBuffer;
    exec->DrawPixels = _mesa_DrawPixels;
-   exec->EdgeFlag = _mesa_EdgeFlag;
-   exec->EdgeFlagv = _mesa_EdgeFlagv;
    exec->Enable = _mesa_Enable;
-   exec->End = _mesa_End;
    exec->EndList = _mesa_EndList;
-   exec->EvalCoord1d = _mesa_EvalCoord1d;
-   exec->EvalCoord1dv = _mesa_EvalCoord1dv;
-   exec->EvalCoord1f = _mesa_EvalCoord1f;
-   exec->EvalCoord1fv = _mesa_EvalCoord1fv;
-   exec->EvalCoord2d = _mesa_EvalCoord2d;
-   exec->EvalCoord2dv = _mesa_EvalCoord2dv;
-   exec->EvalCoord2f = _mesa_EvalCoord2f;
-   exec->EvalCoord2fv = _mesa_EvalCoord2fv;
-   exec->EvalMesh1 = _mesa_EvalMesh1;
-   exec->EvalMesh2 = _mesa_EvalMesh2;
-   exec->EvalPoint1 = _mesa_EvalPoint1;
-   exec->EvalPoint2 = _mesa_EvalPoint2;
    exec->FeedbackBuffer = _mesa_FeedbackBuffer;
    exec->Finish = _mesa_Finish;
    exec->Flush = _mesa_Flush;
-
-   exec->FogCoordfEXT = _mesa_FogCoordfEXT;
-   exec->FogCoordfvEXT = _mesa_FogCoordfvEXT;
-   exec->FogCoorddEXT = _mesa_FogCoorddEXT;
-   exec->FogCoorddvEXT = _mesa_FogCoorddvEXT;
    exec->FogCoordPointerEXT = _mesa_FogCoordPointerEXT;
-
    exec->Fogf = _mesa_Fogf;
    exec->Fogfv = _mesa_Fogfv;
    exec->Fogi = _mesa_Fogi;
@@ -246,14 +195,6 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->GetTexParameteriv = _mesa_GetTexParameteriv;
    exec->Hint = _mesa_Hint;
    exec->IndexMask = _mesa_IndexMask;
-   exec->Indexd = _mesa_Indexd;
-   exec->Indexdv = _mesa_Indexdv;
-   exec->Indexf = _mesa_Indexf;
-   exec->Indexfv = _mesa_Indexfv;
-   exec->Indexi = _mesa_Indexi;
-   exec->Indexiv = _mesa_Indexiv;
-   exec->Indexs = _mesa_Indexs;
-   exec->Indexsv = _mesa_Indexsv;
    exec->InitNames = _mesa_InitNames;
    exec->IsEnabled = _mesa_IsEnabled;
    exec->IsList = _mesa_IsList;
@@ -281,24 +222,10 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->MapGrid1f = _mesa_MapGrid1f;
    exec->MapGrid2d = _mesa_MapGrid2d;
    exec->MapGrid2f = _mesa_MapGrid2f;
-   exec->Materialf = _mesa_Materialf;
-   exec->Materialfv = _mesa_Materialfv;
-   exec->Materiali = _mesa_Materiali;
-   exec->Materialiv = _mesa_Materialiv;
    exec->MatrixMode = _mesa_MatrixMode;
    exec->MultMatrixd = _mesa_MultMatrixd;
    exec->MultMatrixf = _mesa_MultMatrixf;
    exec->NewList = _mesa_NewList;
-   exec->Normal3b = _mesa_Normal3b;
-   exec->Normal3bv = _mesa_Normal3bv;
-   exec->Normal3d = _mesa_Normal3d;
-   exec->Normal3dv = _mesa_Normal3dv;
-   exec->Normal3f = _mesa_Normal3f;
-   exec->Normal3fv = _mesa_Normal3fv;
-   exec->Normal3i = _mesa_Normal3i;
-   exec->Normal3iv = _mesa_Normal3iv;
-   exec->Normal3s = _mesa_Normal3s;
-   exec->Normal3sv = _mesa_Normal3sv;
    exec->Ortho = _mesa_Ortho;
    exec->PassThrough = _mesa_PassThrough;
    exec->PixelMapfv = _mesa_PixelMapfv;
@@ -345,74 +272,18 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->RasterPos4sv = _mesa_RasterPos4sv;
    exec->ReadBuffer = _mesa_ReadBuffer;
    exec->ReadPixels = _mesa_ReadPixels;
-   exec->Rectd = _mesa_Rectd;
-   exec->Rectdv = _mesa_Rectdv;
-   exec->Rectf = _mesa_Rectf;
-   exec->Rectfv = _mesa_Rectfv;
-   exec->Recti = _mesa_Recti;
-   exec->Rectiv = _mesa_Rectiv;
-   exec->Rects = _mesa_Rects;
-   exec->Rectsv = _mesa_Rectsv;
    exec->RenderMode = _mesa_RenderMode;
    exec->Rotated = _mesa_Rotated;
    exec->Rotatef = _mesa_Rotatef;
    exec->Scaled = _mesa_Scaled;
    exec->Scalef = _mesa_Scalef;
    exec->Scissor = _mesa_Scissor;
-   exec->SecondaryColor3bEXT = _mesa_SecondaryColor3bEXT;
-   exec->SecondaryColor3bvEXT = _mesa_SecondaryColor3bvEXT;
-   exec->SecondaryColor3sEXT = _mesa_SecondaryColor3sEXT;
-   exec->SecondaryColor3svEXT = _mesa_SecondaryColor3svEXT;
-   exec->SecondaryColor3iEXT = _mesa_SecondaryColor3iEXT;
-   exec->SecondaryColor3ivEXT = _mesa_SecondaryColor3ivEXT;
-   exec->SecondaryColor3fEXT = _mesa_SecondaryColor3fEXT;
-   exec->SecondaryColor3fvEXT = _mesa_SecondaryColor3fvEXT;
-   exec->SecondaryColor3dEXT = _mesa_SecondaryColor3dEXT;
-   exec->SecondaryColor3dvEXT = _mesa_SecondaryColor3dvEXT;
-   exec->SecondaryColor3ubEXT = _mesa_SecondaryColor3ubEXT;
-   exec->SecondaryColor3ubvEXT = _mesa_SecondaryColor3ubvEXT;
-   exec->SecondaryColor3usEXT = _mesa_SecondaryColor3usEXT;
-   exec->SecondaryColor3usvEXT = _mesa_SecondaryColor3usvEXT;
-   exec->SecondaryColor3uiEXT = _mesa_SecondaryColor3uiEXT;
-   exec->SecondaryColor3uivEXT = _mesa_SecondaryColor3uivEXT;
    exec->SecondaryColorPointerEXT = _mesa_SecondaryColorPointerEXT;
    exec->SelectBuffer = _mesa_SelectBuffer;
    exec->ShadeModel = _mesa_ShadeModel;
    exec->StencilFunc = _mesa_StencilFunc;
    exec->StencilMask = _mesa_StencilMask;
    exec->StencilOp = _mesa_StencilOp;
-   exec->TexCoord1d = _mesa_TexCoord1d;
-   exec->TexCoord1dv = _mesa_TexCoord1dv;
-   exec->TexCoord1f = _mesa_TexCoord1f;
-   exec->TexCoord1fv = _mesa_TexCoord1fv;
-   exec->TexCoord1i = _mesa_TexCoord1i;
-   exec->TexCoord1iv = _mesa_TexCoord1iv;
-   exec->TexCoord1s = _mesa_TexCoord1s;
-   exec->TexCoord1sv = _mesa_TexCoord1sv;
-   exec->TexCoord2d = _mesa_TexCoord2d;
-   exec->TexCoord2dv = _mesa_TexCoord2dv;
-   exec->TexCoord2f = _mesa_TexCoord2f;
-   exec->TexCoord2fv = _mesa_TexCoord2fv;
-   exec->TexCoord2i = _mesa_TexCoord2i;
-   exec->TexCoord2iv = _mesa_TexCoord2iv;
-   exec->TexCoord2s = _mesa_TexCoord2s;
-   exec->TexCoord2sv = _mesa_TexCoord2sv;
-   exec->TexCoord3d = _mesa_TexCoord3d;
-   exec->TexCoord3dv = _mesa_TexCoord3dv;
-   exec->TexCoord3f = _mesa_TexCoord3f;
-   exec->TexCoord3fv = _mesa_TexCoord3fv;
-   exec->TexCoord3i = _mesa_TexCoord3i;
-   exec->TexCoord3iv = _mesa_TexCoord3iv;
-   exec->TexCoord3s = _mesa_TexCoord3s;
-   exec->TexCoord3sv = _mesa_TexCoord3sv;
-   exec->TexCoord4d = _mesa_TexCoord4d;
-   exec->TexCoord4dv = _mesa_TexCoord4dv;
-   exec->TexCoord4f = _mesa_TexCoord4f;
-   exec->TexCoord4fv = _mesa_TexCoord4fv;
-   exec->TexCoord4i = _mesa_TexCoord4i;
-   exec->TexCoord4iv = _mesa_TexCoord4iv;
-   exec->TexCoord4s = _mesa_TexCoord4s;
-   exec->TexCoord4sv = _mesa_TexCoord4sv;
    exec->TexEnvf = _mesa_TexEnvf;
    exec->TexEnvfv = _mesa_TexEnvfv;
    exec->TexEnvi = _mesa_TexEnvi;
@@ -431,35 +302,10 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->TexParameteriv = _mesa_TexParameteriv;
    exec->Translated = _mesa_Translated;
    exec->Translatef = _mesa_Translatef;
-   exec->Vertex2d = _mesa_Vertex2d;
-   exec->Vertex2dv = _mesa_Vertex2dv;
-   exec->Vertex2f = _mesa_Vertex2f;
-   exec->Vertex2fv = _mesa_Vertex2fv;
-   exec->Vertex2i = _mesa_Vertex2i;
-   exec->Vertex2iv = _mesa_Vertex2iv;
-   exec->Vertex2s = _mesa_Vertex2s;
-   exec->Vertex2sv = _mesa_Vertex2sv;
-   exec->Vertex3d = _mesa_Vertex3d;
-   exec->Vertex3dv = _mesa_Vertex3dv;
-   exec->Vertex3f = _mesa_Vertex3f;
-   exec->Vertex3fv = _mesa_Vertex3fv;
-   exec->Vertex3i = _mesa_Vertex3i;
-   exec->Vertex3iv = _mesa_Vertex3iv;
-   exec->Vertex3s = _mesa_Vertex3s;
-   exec->Vertex3sv = _mesa_Vertex3sv;
-   exec->Vertex4d = _mesa_Vertex4d;
-   exec->Vertex4dv = _mesa_Vertex4dv;
-   exec->Vertex4f = _mesa_Vertex4f;
-   exec->Vertex4fv = _mesa_Vertex4fv;
-   exec->Vertex4i = _mesa_Vertex4i;
-   exec->Vertex4iv = _mesa_Vertex4iv;
-   exec->Vertex4s = _mesa_Vertex4s;
-   exec->Vertex4sv = _mesa_Vertex4sv;
    exec->Viewport = _mesa_Viewport;
 
    /* 1.1 */
    exec->AreTexturesResident = _mesa_AreTexturesResident;
-   exec->ArrayElement = _mesa_ArrayElement;
    exec->BindTexture = _mesa_BindTexture;
    exec->ColorPointer = _mesa_ColorPointer;
    exec->CopyTexImage1D = _mesa_CopyTexImage1D;
@@ -468,15 +314,11 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->CopyTexSubImage2D = _mesa_CopyTexSubImage2D;
    exec->DeleteTextures = _mesa_DeleteTextures;
    exec->DisableClientState = _mesa_DisableClientState;
-   exec->DrawArrays = _mesa_DrawArrays;
-   exec->DrawElements = _mesa_DrawElements;
    exec->EdgeFlagPointer = _mesa_EdgeFlagPointer;
    exec->EnableClientState = _mesa_EnableClientState;
    exec->GenTextures = _mesa_GenTextures;
    exec->GetPointerv = _mesa_GetPointerv;
    exec->IndexPointer = _mesa_IndexPointer;
-   exec->Indexub = _mesa_Indexub;
-   exec->Indexubv = _mesa_Indexubv;
    exec->InterleavedArrays = _mesa_InterleavedArrays;
    exec->IsTexture = _mesa_IsTexture;
    exec->NormalPointer = _mesa_NormalPointer;
@@ -490,7 +332,6 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
 
    /* 1.2 */
    exec->CopyTexSubImage3D = _mesa_CopyTexSubImage3D;
-   exec->DrawRangeElements = _mesa_DrawRangeElements;
    exec->TexImage3D = _mesa_TexImage3D;
    exec->TexSubImage3D = _mesa_TexSubImage3D;
 
@@ -632,38 +473,6 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    /* ARB 1. GL_ARB_multitexture */
    exec->ActiveTextureARB = _mesa_ActiveTextureARB;
    exec->ClientActiveTextureARB = _mesa_ClientActiveTextureARB;
-   exec->MultiTexCoord1dARB = _mesa_MultiTexCoord1dARB;
-   exec->MultiTexCoord1dvARB = _mesa_MultiTexCoord1dvARB;
-   exec->MultiTexCoord1fARB = _mesa_MultiTexCoord1fARB;
-   exec->MultiTexCoord1fvARB = _mesa_MultiTexCoord1fvARB;
-   exec->MultiTexCoord1iARB = _mesa_MultiTexCoord1iARB;
-   exec->MultiTexCoord1ivARB = _mesa_MultiTexCoord1ivARB;
-   exec->MultiTexCoord1sARB = _mesa_MultiTexCoord1sARB;
-   exec->MultiTexCoord1svARB = _mesa_MultiTexCoord1svARB;
-   exec->MultiTexCoord2dARB = _mesa_MultiTexCoord2dARB;
-   exec->MultiTexCoord2dvARB = _mesa_MultiTexCoord2dvARB;
-   exec->MultiTexCoord2fARB = _mesa_MultiTexCoord2fARB;
-   exec->MultiTexCoord2fvARB = _mesa_MultiTexCoord2fvARB;
-   exec->MultiTexCoord2iARB = _mesa_MultiTexCoord2iARB;
-   exec->MultiTexCoord2ivARB = _mesa_MultiTexCoord2ivARB;
-   exec->MultiTexCoord2sARB = _mesa_MultiTexCoord2sARB;
-   exec->MultiTexCoord2svARB = _mesa_MultiTexCoord2svARB;
-   exec->MultiTexCoord3dARB = _mesa_MultiTexCoord3dARB;
-   exec->MultiTexCoord3dvARB = _mesa_MultiTexCoord3dvARB;
-   exec->MultiTexCoord3fARB = _mesa_MultiTexCoord3fARB;
-   exec->MultiTexCoord3fvARB = _mesa_MultiTexCoord3fvARB;
-   exec->MultiTexCoord3iARB = _mesa_MultiTexCoord3iARB;
-   exec->MultiTexCoord3ivARB = _mesa_MultiTexCoord3ivARB;
-   exec->MultiTexCoord3sARB = _mesa_MultiTexCoord3sARB;
-   exec->MultiTexCoord3svARB = _mesa_MultiTexCoord3svARB;
-   exec->MultiTexCoord4dARB = _mesa_MultiTexCoord4dARB;
-   exec->MultiTexCoord4dvARB = _mesa_MultiTexCoord4dvARB;
-   exec->MultiTexCoord4fARB = _mesa_MultiTexCoord4fARB;
-   exec->MultiTexCoord4fvARB = _mesa_MultiTexCoord4fvARB;
-   exec->MultiTexCoord4iARB = _mesa_MultiTexCoord4iARB;
-   exec->MultiTexCoord4ivARB = _mesa_MultiTexCoord4ivARB;
-   exec->MultiTexCoord4sARB = _mesa_MultiTexCoord4sARB;
-   exec->MultiTexCoord4svARB = _mesa_MultiTexCoord4svARB;
 
    /* ARB 3. GL_ARB_transpose_matrix */
    exec->LoadTransposeMatrixdARB = _mesa_LoadTransposeMatrixdARB;
@@ -689,435 +498,155 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
 /**********************************************************************/
 
 
-
-/*
- * Recompute the value of ctx->RasterMask, etc. according to
- * the current context.
- */
-static void update_rasterflags( GLcontext *ctx )
+static void
+update_polygon( GLcontext *ctx )
 {
-   ctx->RasterMask = 0;
+   ctx->_TriangleCaps &= ~DD_TRI_CULL_FRONT_BACK;
 
-   if (ctx->Color.AlphaEnabled)           ctx->RasterMask |= ALPHATEST_BIT;
-   if (ctx->Color.BlendEnabled)           ctx->RasterMask |= BLEND_BIT;
-   if (ctx->Depth.Test)                   ctx->RasterMask |= DEPTH_BIT;
-   if (ctx->Fog.Enabled)                  ctx->RasterMask |= FOG_BIT;
-   if (ctx->Scissor.Enabled)              ctx->RasterMask |= SCISSOR_BIT;
-   if (ctx->Stencil.Enabled)              ctx->RasterMask |= STENCIL_BIT;
-   if (ctx->Visual.RGBAflag) {
-      const GLuint colorMask = *((GLuint *) &ctx->Color.ColorMask);
-      if (colorMask != 0xffffffff)        ctx->RasterMask |= MASKING_BIT;
-      if (ctx->Color.ColorLogicOpEnabled) ctx->RasterMask |= LOGIC_OP_BIT;
-      if (ctx->Texture.ReallyEnabled)     ctx->RasterMask |= TEXTURE_BIT;
+   /* Setup CullBits bitmask */
+   if (ctx->Polygon.CullFlag) {
+      switch(ctx->Polygon.CullFaceMode) {
+      case GL_BACK:
+	 ctx->Polygon._CullBits = 1;
+	 break;
+      case GL_FRONT:
+	 ctx->Polygon._CullBits = 2;
+	 break;
+      default:
+      case GL_FRONT_AND_BACK:
+	 ctx->Polygon._CullBits = 0;
+	 ctx->_TriangleCaps |= DD_TRI_CULL_FRONT_BACK;
+	 break;
+      }
    }
    else {
-      if (ctx->Color.IndexMask != 0xffffffff) ctx->RasterMask |= MASKING_BIT;
-      if (ctx->Color.IndexLogicOpEnabled)     ctx->RasterMask |= LOGIC_OP_BIT;
+      ctx->Polygon._CullBits = 3;
    }
 
-   if (ctx->DrawBuffer->UseSoftwareAlphaBuffers
-       && ctx->Color.ColorMask[ACOMP]
-       && ctx->Color.DrawBuffer != GL_NONE)
-      ctx->RasterMask |= ALPHABUF_BIT;
+   /* Any Polygon offsets enabled? */
+   ctx->_TriangleCaps &= ~DD_TRI_OFFSET;
 
-   if (   ctx->Viewport.X < 0
-       || ctx->Viewport.X + ctx->Viewport.Width > ctx->DrawBuffer->Width
-       || ctx->Viewport.Y < 0
-       || ctx->Viewport.Y + ctx->Viewport.Height > ctx->DrawBuffer->Height) {
-      ctx->RasterMask |= WINCLIP_BIT;
-   }
-
-   if (ctx->Depth.OcclusionTest)
-      ctx->RasterMask |= OCCLUSION_BIT;
-
-
-   /* If we're not drawing to exactly one color buffer set the
-    * MULTI_DRAW_BIT flag.  Also set it if we're drawing to no
-    * buffers or the RGBA or CI mask disables all writes.
-    */
-   ctx->TriangleCaps &= ~DD_MULTIDRAW;
-
-   if (ctx->Color.MultiDrawBuffer) {
-      ctx->RasterMask |= MULTI_DRAW_BIT;
-      ctx->TriangleCaps |= DD_MULTIDRAW;
-   }
-   else if (ctx->Color.DrawBuffer==GL_NONE) {
-      ctx->RasterMask |= MULTI_DRAW_BIT;
-      ctx->TriangleCaps |= DD_MULTIDRAW;
-   }
-   else if (ctx->Visual.RGBAflag && *((GLuint *) ctx->Color.ColorMask) == 0) {
-      /* all RGBA channels disabled */
-      ctx->RasterMask |= MULTI_DRAW_BIT;
-      ctx->TriangleCaps |= DD_MULTIDRAW;
-   }
-   else if (!ctx->Visual.RGBAflag && ctx->Color.IndexMask==0) {
-      /* all color index bits disabled */
-      ctx->RasterMask |= MULTI_DRAW_BIT;
-      ctx->TriangleCaps |= DD_MULTIDRAW;
-   }
+   if (ctx->Polygon.OffsetPoint ||
+       ctx->Polygon.OffsetLine ||
+       ctx->Polygon.OffsetFill)
+      ctx->_TriangleCaps |= DD_TRI_OFFSET;
 }
 
-
-void gl_print_state( const char *msg, GLuint state )
+static void
+calculate_model_project_matrix( GLcontext *ctx )
 {
-   fprintf(stderr,
-	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
-	   msg,
-	   state,
-	   (state & _NEW_MODELVIEW)       ? "ctx->ModelView, " : "",
-	   (state & _NEW_PROJECTION)      ? "ctx->Projection, " : "",
-	   (state & _NEW_TEXTURE_MATRIX)  ? "ctx->TextureMatrix, " : "",
-	   (state & _NEW_COLOR_MATRIX)    ? "ctx->ColorMatrix, " : "",
-	   (state & _NEW_ACCUM)           ? "ctx->Accum, " : "",
-	   (state & _NEW_COLOR)           ? "ctx->Color, " : "",
-	   (state & _NEW_DEPTH)           ? "ctx->Depth, " : "",
-	   (state & _NEW_EVAL)            ? "ctx->Eval/EvalMap, " : "",
-	   (state & _NEW_FOG)             ? "ctx->Fog, " : "",
-	   (state & _NEW_HINT)            ? "ctx->Hint, " : "",
-	   (state & _NEW_IMAGING)         ? "ctx->Histogram/MinMax/Convolve/Seperable, ": "",
-	   (state & _NEW_LIGHT)           ? "ctx->Light, " : "",
-	   (state & _NEW_LINE)            ? "ctx->Line, " : "",
-	   (state & _NEW_FEEDBACK_SELECT) ? "ctx->Feedback/Select, " : "",
-	   (state & _NEW_PIXEL)           ? "ctx->Pixel, " : "",
-	   (state & _NEW_POINT)           ? "ctx->Point, " : "",
-	   (state & _NEW_POLYGON)         ? "ctx->Polygon, " : "",
-	   (state & _NEW_POLYGONSTIPPLE)  ? "ctx->PolygonStipple, " : "",
-	   (state & _NEW_SCISSOR)         ? "ctx->Scissor, " : "",
-	   (state & _NEW_TEXTURE)         ? "ctx->Texture, " : "",
-	   (state & _NEW_TRANSFORM)       ? "ctx->Transform, " : "",
-	   (state & _NEW_VIEWPORT)        ? "ctx->Viewport, " : "",
-	   (state & _NEW_PACKUNPACK)      ? "ctx->Pack/Unpack, " : "",
-	   (state & _NEW_ARRAY)           ? "ctx->Array, " : "",
-	   (state & _NEW_COLORTABLE)      ? "ctx->{*}ColorTable, " : "",
-	   (state & _NEW_RENDERMODE)      ? "ctx->RenderMode, " : "",
-	   (state & _NEW_BUFFERS)         ? "ctx->Visual, ctx->DrawBuffer,, " : "");
+   if (!ctx->_NeedEyeCoords) {
+      _math_matrix_mul_matrix( &ctx->_ModelProjectMatrix,
+			       &ctx->ProjectionMatrix,
+			       &ctx->ModelView );
+
+      _math_matrix_analyse( &ctx->_ModelProjectMatrix );
+   }
 }
 
-
-void gl_print_enable_flags( const char *msg, GLuint flags )
+static void
+update_modelview_scale( GLcontext *ctx )
 {
-   fprintf(stderr,
-	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s\n",
-	   msg,
-	   flags,
-	   (flags & ENABLE_TEX0)       ? "tex-0, " : "",
-	   (flags & ENABLE_TEX1)       ? "tex-1, " : "",
-	   (flags & ENABLE_LIGHT)      ? "light, " : "",
-	   (flags & ENABLE_FOG)        ? "fog, " : "",
-	   (flags & ENABLE_USERCLIP)   ? "userclip, " : "",
-	   (flags & ENABLE_TEXGEN0)    ? "tex-gen-0, " : "",
-	   (flags & ENABLE_TEXGEN1)    ? "tex-gen-1, " : "",
-	   (flags & ENABLE_TEXMAT0)    ? "tex-mat-0, " : "",
-	   (flags & ENABLE_TEXMAT1)    ? "tex-mat-1, " : "",
-	   (flags & ENABLE_NORMALIZE)  ? "normalize, " : "",
-	   (flags & ENABLE_RESCALE)    ? "rescale, " : "");
+   ctx->_ModelViewInvScale = 1.0F;
+   if (ctx->ModelView.flags & (MAT_FLAG_UNIFORM_SCALE |
+			       MAT_FLAG_GENERAL_SCALE |
+			       MAT_FLAG_GENERAL_3D |
+			       MAT_FLAG_GENERAL) ) {
+      const GLfloat *m = ctx->ModelView.inv;
+      GLfloat f = m[2] * m[2] + m[6] * m[6] + m[10] * m[10];
+      if (f < 1e-12) f = 1.0;
+      if (ctx->_NeedEyeCoords)
+	 ctx->_ModelViewInvScale = 1.0/GL_SQRT(f);
+      else
+	 ctx->_ModelViewInvScale = GL_SQRT(f);
+   }
 }
 
 
-/*
- * If ctx->NewState is non-zero then this function MUST be called before
- * rendering any primitive.  Basically, function pointers and miscellaneous
- * flags are updated to reflect the current state of the state machine.
+/* Bring uptodate any state that relies on _NeedEyeCoords.
  */
-void gl_update_state( GLcontext *ctx )
+static void
+update_tnl_spaces( GLcontext *ctx, GLuint oldneedeyecoords )
 {
-   GLuint i;
-
-   if (MESA_VERBOSE & VERBOSE_STATE)
-      gl_print_state("", ctx->NewState);
-
-   if (ctx->NewState & _NEW_PIXEL)
-      _mesa_update_image_transfer_state(ctx);
-
-   if (ctx->NewState & _NEW_ARRAY)
-      gl_update_client_state( ctx );
-
-   if (ctx->NewState & _NEW_TEXTURE_MATRIX) {
-      ctx->Enabled &= ~(ENABLE_TEXMAT0 | ENABLE_TEXMAT1 | ENABLE_TEXMAT2);
-
-      for (i=0; i < ctx->Const.MaxTextureUnits; i++) {
-	 if (ctx->TextureMatrix[i].flags & MAT_DIRTY_ALL_OVER) {
-	    gl_matrix_analyze( &ctx->TextureMatrix[i] );
-	    ctx->TextureMatrix[i].flags &= ~MAT_DIRTY_DEPENDENTS;
-
-	    if (ctx->Texture.Unit[i].Enabled &&
-		ctx->TextureMatrix[i].type != MATRIX_IDENTITY)
-	       ctx->Enabled |= ENABLE_TEXMAT0 << i;
-	 }
-      }
-   }
-
-   if (ctx->NewState & _NEW_TEXTURE) {
-      ctx->Texture.MultiTextureEnabled = GL_FALSE;
-      ctx->Texture.NeedNormals = GL_FALSE;
-      gl_update_dirty_texobjs(ctx);
-      ctx->Enabled &= ~(ENABLE_TEXGEN0 | ENABLE_TEXGEN1 | ENABLE_TEXGEN2);
-      ctx->Texture.ReallyEnabled = 0;
-
-      for (i=0; i < ctx->Const.MaxTextureUnits; i++) {
-	 if (ctx->Texture.Unit[i].Enabled) {
-	    gl_update_texture_unit( ctx, &ctx->Texture.Unit[i] );
-
-	    ctx->Texture.ReallyEnabled |=
-	       ctx->Texture.Unit[i].ReallyEnabled << (i * 4);
-
-	    if (ctx->Texture.Unit[i].GenFlags != 0) {
-	       ctx->Enabled |= ENABLE_TEXGEN0 << i;
-
-	       if (ctx->Texture.Unit[i].GenFlags & TEXGEN_NEED_NORMALS) {
-		  ctx->Texture.NeedNormals = GL_TRUE;
-		  ctx->Texture.NeedEyeCoords = GL_TRUE;
-	       }
-
-	       if (ctx->Texture.Unit[i].GenFlags & TEXGEN_NEED_EYE_COORD) {
-		  ctx->Texture.NeedEyeCoords = GL_TRUE;
-	       }
-	    }
-
-            if (i > 0 && ctx->Texture.Unit[i].ReallyEnabled) {
-               ctx->Texture.MultiTextureEnabled = GL_TRUE;
-            }
-	 }
-         else {
-            ctx->Texture.Unit[i].ReallyEnabled = 0;
-         }
-      }
-      ctx->Enabled = (ctx->Enabled & ~ENABLE_TEX_ANY) | ctx->Texture.ReallyEnabled;
-      ctx->NeedNormals = (ctx->Light.Enabled || ctx->Texture.NeedNormals);
-   }
-
-
-   if (ctx->NewState & _SWRAST_NEW_RASTERMASK) 
-      update_rasterflags(ctx);
-   
-   if (ctx->NewState & (_NEW_BUFFERS|_NEW_SCISSOR)) {
-      /* update scissor region */
-      ctx->DrawBuffer->Xmin = 0;
-      ctx->DrawBuffer->Ymin = 0;
-      ctx->DrawBuffer->Xmax = ctx->DrawBuffer->Width;
-      ctx->DrawBuffer->Ymax = ctx->DrawBuffer->Height;
-      if (ctx->Scissor.Enabled) {
-         if (ctx->Scissor.X > ctx->DrawBuffer->Xmin) {
-            ctx->DrawBuffer->Xmin = ctx->Scissor.X;
-         }
-         if (ctx->Scissor.Y > ctx->DrawBuffer->Ymin) {
-            ctx->DrawBuffer->Ymin = ctx->Scissor.Y;
-         }
-         if (ctx->Scissor.X + ctx->Scissor.Width < ctx->DrawBuffer->Xmax) {
-            ctx->DrawBuffer->Xmax = ctx->Scissor.X + ctx->Scissor.Width;
-         }
-         if (ctx->Scissor.Y + ctx->Scissor.Height < ctx->DrawBuffer->Ymax) {
-            ctx->DrawBuffer->Ymax = ctx->Scissor.Y + ctx->Scissor.Height;
-         }
-      }
-   }
-
-   if (ctx->NewState & _NEW_LIGHT) {
-      ctx->TriangleCaps &= ~(DD_TRI_LIGHT_TWOSIDE|DD_LIGHTING_CULL);
-      if (ctx->Light.Enabled) {
-         if (ctx->Light.Model.TwoSide)
-            ctx->TriangleCaps |= (DD_TRI_LIGHT_TWOSIDE|DD_LIGHTING_CULL);
-         gl_update_lighting(ctx);
-      }
-   }
-
-   if (ctx->NewState & (_NEW_POLYGON | _NEW_LIGHT)) {
-
-      ctx->TriangleCaps &= ~DD_TRI_CULL_FRONT_BACK;
-
-      if (ctx->NewState & _NEW_POLYGON) {
-	 /* Setup CullBits bitmask */
-	 if (ctx->Polygon.CullFlag) {
-	    ctx->backface_sign = 1;
-	    switch(ctx->Polygon.CullFaceMode) {
-	    case GL_BACK:
-	       if(ctx->Polygon.FrontFace==GL_CCW)
-		  ctx->backface_sign = -1;
-	       ctx->Polygon.CullBits = 1;
-	       break;
-	    case GL_FRONT:
-	       if(ctx->Polygon.FrontFace!=GL_CCW)
-		  ctx->backface_sign = -1;
-	       ctx->Polygon.CullBits = 2;
-	       break;
-	    default:
-	    case GL_FRONT_AND_BACK:
-	       ctx->backface_sign = 0;
-	       ctx->Polygon.CullBits = 0;
-	       ctx->TriangleCaps |= DD_TRI_CULL_FRONT_BACK;
-	       break;
-	    }
-	 }
-	 else {
-	    ctx->Polygon.CullBits = 3;
-	    ctx->backface_sign = 0;
-	 }
-
-	 /* Any Polygon offsets enabled? */
-	 ctx->TriangleCaps &= ~DD_TRI_OFFSET;
-
-	 if (ctx->Polygon.OffsetPoint ||
-	     ctx->Polygon.OffsetLine ||
-	     ctx->Polygon.OffsetFill)
-	    ctx->TriangleCaps |= DD_TRI_OFFSET;
-      }
-   }
-
-   if (ctx->NewState & (_NEW_LIGHT|
-			_NEW_TEXTURE|
-			_NEW_FOG|
-			_NEW_POLYGON))
-      gl_update_clipmask(ctx);
-
-   if (ctx->NewState & ctx->Driver.UpdateStateNotify)
-   {
-      ctx->IndirectTriangles = ctx->TriangleCaps & ~ctx->Driver.TriangleCaps;
-      ctx->IndirectTriangles |= DD_SW_RASTERIZE;
-
-      if (MESA_VERBOSE&VERBOSE_CULL)
-	 gl_print_tri_caps("initial indirect tris", ctx->IndirectTriangles);
-
-      ctx->Driver.PointsFunc = NULL;
-      ctx->Driver.LineFunc = NULL;
-      ctx->Driver.TriangleFunc = NULL;
-      ctx->Driver.QuadFunc = NULL;
-      ctx->Driver.RectFunc = NULL;
-      ctx->Driver.RenderVBClippedTab = NULL;
-      ctx->Driver.RenderVBCulledTab = NULL;
-      ctx->Driver.RenderVBRawTab = NULL;
-
-      /*
-       * Here the driver sets up all the ctx->Driver function pointers to
-       * it's specific, private functions.
-       */
-      ctx->Driver.UpdateState(ctx);
-
-      if (MESA_VERBOSE&VERBOSE_CULL)
-	 gl_print_tri_caps("indirect tris", ctx->IndirectTriangles);
-
-      /*
-       * In case the driver didn't hook in an optimized point, line or
-       * triangle function we'll now select "core/fallback" point, line
-       * and triangle functions.
-       */
-      if (ctx->IndirectTriangles & DD_SW_RASTERIZE) {
-	 _swrast_set_point_function(ctx);
-	 _swrast_set_line_function(ctx);
-	 _swrast_set_triangle_function(ctx);
-	 _swrast_set_quad_function(ctx);
-
-	 if ((ctx->IndirectTriangles & 
-	      (DD_TRI_SW_RASTERIZE|DD_QUAD_SW_RASTERIZE|DD_TRI_CULL)) ==
-	     (DD_TRI_SW_RASTERIZE|DD_QUAD_SW_RASTERIZE|DD_TRI_CULL)) 
-	    ctx->IndirectTriangles &= ~DD_TRI_CULL;
-      }
-
-      if (MESA_VERBOSE&VERBOSE_CULL)
-	 gl_print_tri_caps("indirect tris 2", ctx->IndirectTriangles);
-
-      gl_set_render_vb_function(ctx);
-   }
-
-   /* Should only be calc'd when !need_eye_coords and not culling.
+   /* Check if the truth-value interpretations of the bitfields have
+    * changed:
     */
-   if (ctx->NewState & (_NEW_MODELVIEW|_NEW_PROJECTION)) {
-      if (ctx->NewState & _NEW_MODELVIEW) {
-	 gl_matrix_analyze( &ctx->ModelView );
-	 ctx->ProjectionMatrix.flags &= ~MAT_DIRTY_DEPENDENTS;
-      }
+   if ((oldneedeyecoords == 0) != (ctx->_NeedEyeCoords == 0)) {
+      /* Recalculate all state that depends on _NeedEyeCoords.
+       */
+      update_modelview_scale(ctx);
+      calculate_model_project_matrix(ctx);
+      gl_compute_light_positions( ctx );
 
-      if (ctx->NewState & _NEW_PROJECTION) {
-	 gl_matrix_analyze( &ctx->ProjectionMatrix );
-	 ctx->ProjectionMatrix.flags &= ~MAT_DIRTY_DEPENDENTS;
-
-	 if (ctx->Transform.AnyClip) {
-	    gl_update_userclip( ctx );
-	 }
-      }
-
-      gl_calculate_model_project_matrix( ctx );
+      if (ctx->Driver.LightingSpaceChange)
+	 ctx->Driver.LightingSpaceChange( ctx );
    }
+   else {
+      GLuint new_state = ctx->NewState;
 
-   if (ctx->NewState & _NEW_COLOR_MATRIX) {
-      gl_matrix_analyze( &ctx->ColorMatrix );
+      /* Recalculate that same state if and only if it has been
+       * invalidated by other statechanges.
+       */
+      if (new_state & _NEW_MODELVIEW)
+	 update_modelview_scale(ctx);
+
+      if (new_state & (_NEW_MODELVIEW|_NEW_PROJECTION))
+	 calculate_model_project_matrix(ctx);
+	
+      if (new_state & (_NEW_LIGHT|_NEW_MODELVIEW))
+	 gl_compute_light_positions( ctx );
    }
-
-   /* Figure out whether we can light in object space or not.  If we
-    * can, find the current positions of the lights in object space
-    */
-   if ((ctx->Enabled & (ENABLE_POINT_ATTEN | ENABLE_LIGHT | ENABLE_FOG |
-			ENABLE_TEXGEN0 | ENABLE_TEXGEN1 | ENABLE_TEXGEN2)) &&
-       (ctx->NewState & (_NEW_LIGHT | 
-			 _NEW_TEXTURE |
-                         _NEW_FOG |
-			 _NEW_TRANSFORM | 
-			 _NEW_MODELVIEW | 
-			 _NEW_PROJECTION |
-			 _NEW_POINT |
-			 _NEW_RENDERMODE |
-			 _NEW_TRANSFORM)))
-   {
-      GLboolean oldcoord, oldnorm;
-
-      oldcoord = ctx->NeedEyeCoords;
-      oldnorm = ctx->NeedEyeNormals;
-
-      ctx->NeedNormals = (ctx->Light.Enabled || ctx->Texture.NeedNormals);
-      ctx->NeedEyeCoords = (ctx->Fog.Enabled || ctx->Point.Attenuated);
-      ctx->NeedEyeNormals = GL_FALSE;
-
-      if (ctx->Light.Enabled) {
-	 if ((ctx->Light.Flags & LIGHT_POSITIONAL) ||
-             ctx->Light.NeedVertices ||
-             !TEST_MAT_FLAGS( &ctx->ModelView, MAT_FLAGS_LENGTH_PRESERVING)) {
-            /* Need length for attenuation or need angle for spotlights
-             * or non-uniform scale matrix
-             */
-            ctx->NeedEyeCoords = GL_TRUE;
-	 }
-	 ctx->NeedEyeNormals = ctx->NeedEyeCoords;
-      }
-      if (ctx->Texture.ReallyEnabled || ctx->RenderMode==GL_FEEDBACK) {
-	 if (ctx->Texture.NeedEyeCoords) ctx->NeedEyeCoords = GL_TRUE;
-	 if (ctx->Texture.NeedNormals)
-	    ctx->NeedNormals = ctx->NeedEyeNormals = GL_TRUE;
-      }
-
-      ctx->vb_proj_matrix = &ctx->ModelProjectMatrix;
-
-      if (ctx->NeedEyeCoords)
-	 ctx->vb_proj_matrix = &ctx->ProjectionMatrix;
-
-      if (ctx->Light.Enabled) {
-	 gl_update_lighting_function(ctx);
-
-	 if ( (ctx->NewState & _NEW_LIGHT) ||
-	      ((ctx->NewState & (_NEW_MODELVIEW|_NEW_PROJECTION)) &&
-	       !ctx->NeedEyeCoords) ||
-	      oldcoord != ctx->NeedEyeCoords ||
-	      oldnorm != ctx->NeedEyeNormals) {
-	    gl_compute_light_positions(ctx);
-	 }
-
-	 ctx->rescale_factor = 1.0F;
-	 if (ctx->ModelView.flags & (MAT_FLAG_UNIFORM_SCALE |
-				     MAT_FLAG_GENERAL_SCALE |
-				     MAT_FLAG_GENERAL_3D |
-				     MAT_FLAG_GENERAL) ) {
-	    const GLfloat *m = ctx->ModelView.inv;
-	    const GLfloat f = m[2] * m[2] + m[6] * m[6] + m[10] * m[10];
-	    if (f > 1e-12 && (f - 1.0) * (f - 1.0) > 1e-12)
-	       ctx->rescale_factor = 1.0 / GL_SQRT(f);
-	 }
-      }
-
-      gl_update_normal_transform( ctx );
-   }
-
-   gl_update_pipelines(ctx);
-   ctx->NewState = 0;
 }
 
+
+static void
+update_drawbuffer( GLcontext *ctx )
+{
+   ctx->DrawBuffer->_Xmin = 0;
+   ctx->DrawBuffer->_Ymin = 0;
+   ctx->DrawBuffer->_Xmax = ctx->DrawBuffer->Width;
+   ctx->DrawBuffer->_Ymax = ctx->DrawBuffer->Height;
+   if (ctx->Scissor.Enabled) {
+      if (ctx->Scissor.X > ctx->DrawBuffer->_Xmin) {
+	 ctx->DrawBuffer->_Xmin = ctx->Scissor.X;
+      }
+      if (ctx->Scissor.Y > ctx->DrawBuffer->_Ymin) {
+	 ctx->DrawBuffer->_Ymin = ctx->Scissor.Y;
+      }
+      if (ctx->Scissor.X + ctx->Scissor.Width < ctx->DrawBuffer->_Xmax) {
+	 ctx->DrawBuffer->_Xmax = ctx->Scissor.X + ctx->Scissor.Width;
+      }
+      if (ctx->Scissor.Y + ctx->Scissor.Height < ctx->DrawBuffer->_Ymax) {
+	 ctx->DrawBuffer->_Ymax = ctx->Scissor.Y + ctx->Scissor.Height;
+      }
+   }
+}
+
+
+/* NOTE: This routine references Tranform attribute values to compute
+ * userclip positions in clip space, but is only called on
+ * _NEW_PROJECTION.  The _mesa_ClipPlane() function keeps these values
+ * uptodate across changes to the Transform attributes.
+ */
+static void
+update_projection( GLcontext *ctx )
+{
+   _math_matrix_analyse( &ctx->ProjectionMatrix );
+      
+   /* Recompute clip plane positions in clipspace.  This is also done
+    * in _mesa_ClipPlane().
+    */
+   if (ctx->Transform._AnyClip) {
+      GLuint p;
+      for (p = 0; p < ctx->Const.MaxClipPlanes; p++) {
+	 if (ctx->Transform.ClipEnabled[p]) {
+	    gl_transform_vector( ctx->Transform._ClipUserPlane[p],
+				 ctx->Transform.EyeUserPlane[p],
+				 ctx->ProjectionMatrix.inv );
+	 }
+      }
+   }
+}
 
 
 
@@ -1125,8 +654,8 @@ void gl_update_state( GLcontext *ctx )
  * Return a bitmask of IMAGE_*_BIT flags which to indicate which
  * pixel transfer operations are enabled.
  */
-void
-_mesa_update_image_transfer_state(GLcontext *ctx)
+static void
+update_image_transfer_state(GLcontext *ctx)
 {
    GLuint mask = 0;
 
@@ -1138,7 +667,7 @@ _mesa_update_image_transfer_state(GLcontext *ctx)
 
    if (ctx->Pixel.IndexShift || ctx->Pixel.IndexOffset)
       mask |= IMAGE_SHIFT_OFFSET_BIT;
-   
+
    if (ctx->Pixel.MapColorFlag)
       mask |= IMAGE_MAP_COLOR_BIT;
 
@@ -1147,8 +676,19 @@ _mesa_update_image_transfer_state(GLcontext *ctx)
 
    if (ctx->Pixel.Convolution1DEnabled ||
        ctx->Pixel.Convolution2DEnabled ||
-       ctx->Pixel.Separable2DEnabled)
+       ctx->Pixel.Separable2DEnabled) {
       mask |= IMAGE_CONVOLUTION_BIT;
+      if (ctx->Pixel.PostConvolutionScale[0] != 1.0F ||
+          ctx->Pixel.PostConvolutionScale[1] != 1.0F ||
+          ctx->Pixel.PostConvolutionScale[2] != 1.0F ||
+          ctx->Pixel.PostConvolutionScale[3] != 1.0F ||
+          ctx->Pixel.PostConvolutionBias[0] != 0.0F ||
+          ctx->Pixel.PostConvolutionBias[1] != 0.0F ||
+          ctx->Pixel.PostConvolutionBias[2] != 0.0F ||
+          ctx->Pixel.PostConvolutionBias[3] != 0.0F) {
+         mask |= IMAGE_POST_CONVOLUTION_SCALE_BIAS;
+      }
+   }
 
    if (ctx->Pixel.PostConvolutionColorTableEnabled)
       mask |= IMAGE_POST_CONVOLUTION_COLOR_TABLE_BIT;
@@ -1173,5 +713,96 @@ _mesa_update_image_transfer_state(GLcontext *ctx)
    if (ctx->Pixel.MinMaxEnabled)
       mask |= IMAGE_MIN_MAX_BIT;
 
-   ctx->ImageTransferState = mask;
+   ctx->_ImageTransferState = mask;
+}
+
+
+/*
+ * If ctx->NewState is non-zero then this function MUST be called before
+ * rendering any primitive.  Basically, function pointers and miscellaneous
+ * flags are updated to reflect the current state of the state machine.
+ *
+ * Special care is taken with the derived value _NeedEyeCoords.  These
+ * is a bitflag which is updated with information from a number of
+ * attribute groups (MODELVIEW, LIGHT, TEXTURE).  A lot of derived
+ * state references this value, and must be treated with care to
+ * ensure that updates are done correctly.  All state dependent on
+ * _NeedEyeCoords is calculated from within _mesa_update_tnl_spaces(),
+ * and from nowhere else.
+ */
+void gl_update_state( GLcontext *ctx )
+{
+   GLuint new_state = ctx->NewState;
+   GLuint oldneedeyecoords = ctx->_NeedEyeCoords;
+
+   if (MESA_VERBOSE & VERBOSE_STATE)
+      gl_print_state("", new_state);
+
+   if (new_state & _NEW_MODELVIEW)
+      _math_matrix_analyse( &ctx->ModelView );
+
+   if (new_state & _NEW_PROJECTION)
+      update_projection( ctx );
+
+   if (new_state & _NEW_TEXTURE_MATRIX)
+      _mesa_update_texture_matrices( ctx );
+
+   if (new_state & _NEW_COLOR_MATRIX)
+      _math_matrix_analyse( &ctx->ColorMatrix );
+
+   /* References ColorMatrix.type (derived above).
+    */
+   if (new_state & (_NEW_PIXEL|_NEW_COLOR_MATRIX))
+      update_image_transfer_state(ctx);
+
+   /* Contributes to NeedEyeCoords, NeedNormals.
+    */
+   if (new_state & _NEW_TEXTURE)
+      _mesa_update_texture_state( ctx );
+
+   if (new_state & (_NEW_BUFFERS|_NEW_SCISSOR))
+      update_drawbuffer( ctx );
+
+   if (new_state & _NEW_POLYGON)
+      update_polygon( ctx );
+
+   /* Contributes to NeedEyeCoords, NeedNormals.
+    */
+   if (new_state & _NEW_LIGHT)
+      gl_update_lighting( ctx );
+
+   /* We can light in object space if the modelview matrix preserves
+    * lengths and relative angles.
+    */
+   if (new_state & (_NEW_MODELVIEW|_NEW_LIGHT)) {
+      ctx->_NeedEyeCoords &= ~NEED_EYE_LIGHT_MODELVIEW;
+      if (ctx->Light.Enabled &&
+	  !TEST_MAT_FLAGS( &ctx->ModelView, MAT_FLAGS_LENGTH_PRESERVING))
+	    ctx->_NeedEyeCoords |= NEED_EYE_LIGHT_MODELVIEW;
+   }
+
+   /* ctx->_NeedEyeCoords and ctx->_NeedEyeNormals are now uptodate.
+    *
+    * If the truth value of either has changed, update for the new
+    * lighting space and recompute the positions of lights and the
+    * normal transform.
+    *
+    * If the lighting space hasn't changed, may still need to recompute
+    * light positions & normal transforms for other reasons.
+    */
+   if (new_state & (_NEW_MODELVIEW |
+		    _NEW_PROJECTION |
+		    _TNL_NEW_NORMAL_TRANSFORM |
+		    _NEW_LIGHT |
+		    _TNL_NEW_NEED_EYE_COORDS))
+      update_tnl_spaces( ctx, oldneedeyecoords );
+
+   /*
+    * Here the driver sets up all the ctx->Driver function pointers
+    * to it's specific, private functions, and performs any
+    * internal state management necessary, including invalidating
+    * state of active modules.
+    */
+   ctx->Driver.UpdateState(ctx);
+   ctx->NewState = 0;
 }

@@ -1,4 +1,3 @@
-/* -*- mode: C; tab-width:8; c-basic-offset:2 -*- */
 
 /*
  * Mesa 3-D graphics library
@@ -53,11 +52,13 @@
 #if defined(FX)
 
 #include "image.h"
-#include "types.h"
+#include "mtypes.h"
 #include "fxdrv.h"
 #include "enums.h"
 #include "extensions.h"
 #include "swrast/swrast.h"
+#include "swrast_setup/swrast_setup.h"
+#include "tnl/tnl.h"
 
 /* These lookup table are used to extract RGB values in [0,255] from
  * 16-bit pixel values.
@@ -120,22 +121,6 @@ static void fxDDBufferSize(GLcontext *ctx, GLuint *width, GLuint *height)
 }
 
 
-/* Set current drawing color */
-static void fxDDSetColor(GLcontext *ctx, GLubyte red, GLubyte green,
-                         GLubyte blue, GLubyte alpha )
-{
-  fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
-  GLubyte col[4];
-  ASSIGN_4V( col, red, green, blue, alpha );
-  
-  if (MESA_VERBOSE&VERBOSE_DRIVER) {
-    fprintf(stderr,"fxmesa: fxDDSetColor(%d,%d,%d,%d)\n",red,green,blue,alpha);
-  }
-
-  fxMesa->color=FXCOLOR4(col);
-}
-
-
 /* Implements glClearColor() */
 static void fxDDClearColor(GLcontext *ctx, GLubyte red, GLubyte green,
                            GLubyte blue, GLubyte alpha )
@@ -150,7 +135,7 @@ static void fxDDClearColor(GLcontext *ctx, GLubyte red, GLubyte green,
   if (MESA_VERBOSE&VERBOSE_DRIVER) {
     fprintf(stderr,"fxmesa: fxDDClearColor(%d,%d,%d,%d)\n",red,green,blue,alpha);
   }
- 
+
   fxMesa->clearC=FXCOLOR4( col );
   fxMesa->clearA=alpha;
 }
@@ -324,21 +309,6 @@ static void fxDDSetReadBuffer(GLcontext *ctx, GLframebuffer *buffer,
 }
 
 
-#ifdef XF86DRI
-/* test if window coord (px,py) is visible */
-static GLboolean inClipRects(fxMesaContext fxMesa, int px, int py)
-{
-  int i;
-  for (i=0; i<fxMesa->numClipRects; i++) {
-    if ((px>=fxMesa->pClipRects[i].x1) && 
-	(px<fxMesa->pClipRects[i].x2) &&
-	(py>=fxMesa->pClipRects[i].y1) && 
-	(py<fxMesa->pClipRects[i].y2)) return GL_TRUE;
-  }
-  return GL_FALSE;
-}
-#endif
-
 
 static GLboolean fxDDDrawBitmap(GLcontext *ctx, GLint px, GLint py,
                                 GLsizei width, GLsizei height,
@@ -352,22 +322,25 @@ static GLboolean fxDDDrawBitmap(GLcontext *ctx, GLint px, GLint py,
   struct gl_pixelstore_attrib scissoredUnpack;
 
   /* check if there's any raster operations enabled which we can't handle */
-  if (ctx->RasterMask & (ALPHATEST_BIT |
-                         BLEND_BIT |
-                         DEPTH_BIT |
-                         FOG_BIT |
-                         LOGIC_OP_BIT |
-                         SCISSOR_BIT |
-                         STENCIL_BIT |
-                         MASKING_BIT |
-                         ALPHABUF_BIT |
-                         MULTI_DRAW_BIT))
+  if (ctx->Color.AlphaEnabled ||
+      ctx->Color.BlendEnabled ||
+      ctx->Depth.Test ||
+      ctx->Fog.Enabled ||
+      ctx->Color.ColorLogicOpEnabled ||
+      ctx->Stencil.Enabled ||
+      ctx->Scissor.Enabled ||
+      (  ctx->DrawBuffer->UseSoftwareAlphaBuffers &&
+         ctx->Color.ColorMask[ACOMP]) ||
+      ctx->Color.MultiDrawBuffer)
     return GL_FALSE;
+
 
   if (ctx->Scissor.Enabled) {
     /* This is a bit tricky, but by carefully adjusting the px, py,
      * width, height, skipPixels and skipRows values we can do
      * scissoring without special code in the rendering loop.
+     *
+     * KW: This code is never reached, see the test above.
      */
 
     /* we'll construct a new pixelstore struct */
@@ -399,7 +372,7 @@ static GLboolean fxDDDrawBitmap(GLcontext *ctx, GLint px, GLint py,
 
     if (width <= 0 || height <= 0)
       return GL_TRUE;  /* totally scissored away */
-  }  
+  }
   else {
     finalUnpack = unpack;
   }
@@ -435,25 +408,15 @@ static GLboolean fxDDDrawBitmap(GLcontext *ctx, GLint px, GLint py,
     return GL_TRUE;
   }
 
-#ifdef XF86DRI
-#define INSIDE(c, x, y) inClipRects((c), (x), (y))
-#else
-#define INSIDE(c, x, y) (1)
-#endif
-
   {
-    const GLint winX = fxMesa->x_offset;
-    const GLint winY = fxMesa->y_offset + fxMesa->height - 1;
+    const GLint winX = 0;
+    const GLint winY = fxMesa->height - 1;
     /* The dest stride depends on the hardware and whether we're drawing
      * to the front or back buffer.  This compile-time test seems to do
      * the job for now.
      */
-#ifdef XF86DRI
-    const GLint dstStride = (fxMesa->glCtx->Color.DrawBuffer == GL_FRONT)
-                          ? (fxMesa->screen_width) : (info.strideInBytes / 2);
-#else
     const GLint dstStride = info.strideInBytes / 2; /* stride in GLushorts */
-#endif
+
     GLint row;
     /* compute dest address of bottom-left pixel in bitmap */
     GLushort *dst = (GLushort *) info.lfbPtr
@@ -469,8 +432,7 @@ static GLboolean fxDDDrawBitmap(GLcontext *ctx, GLint px, GLint py,
         GLint col;
         for (col=0; col<width; col++) {
           if (*src & mask) {
-            if (INSIDE(fxMesa, winX + px + col, winY - py - row))
-              dst[col] = color;
+	    dst[col] = color;
           }
           if (mask == 128U) {
             src++;
@@ -489,8 +451,7 @@ static GLboolean fxDDDrawBitmap(GLcontext *ctx, GLint px, GLint py,
         GLint col;
         for (col=0; col<width; col++) {
           if (*src & mask) {
-            if (INSIDE(fxMesa, winX + px + col, winY - py - row))
-              dst[col] = color;
+	    dst[col] = color;
           }
           if (mask == 1U) {
             src++;
@@ -507,8 +468,6 @@ static GLboolean fxDDDrawBitmap(GLcontext *ctx, GLint px, GLint py,
     }
   }
 
-#undef INSIDE
-
   FX_grLfbUnlock(GR_LFB_WRITE_ONLY,fxMesa->currentFB);
   return GL_TRUE;
 }
@@ -520,7 +479,7 @@ static GLboolean fxDDReadPixels( GLcontext *ctx, GLint x, GLint y,
                                  const struct gl_pixelstore_attrib *packing,
                                  GLvoid *dstImage )
 {
-  if (ctx->ImageTransferState) {
+  if (ctx->_ImageTransferState) {
     return GL_FALSE;  /* can't do this */
   }
   else {
@@ -535,14 +494,9 @@ static GLboolean fxDDReadPixels( GLcontext *ctx, GLint x, GLint y,
                   GR_ORIGIN_UPPER_LEFT,
                   FXFALSE,
                   &info)) {
-      const GLint winX = fxMesa->x_offset;
-      const GLint winY = fxMesa->y_offset + fxMesa->height - 1;
-#ifdef XF86DRI
-      const GLint srcStride = (fxMesa->glCtx->Color.DrawBuffer == GL_FRONT)
-                          ? (fxMesa->screen_width) : (info.strideInBytes / 2);
-#else
+      const GLint winX = 0;
+      const GLint winY = fxMesa->height - 1;
       const GLint srcStride = info.strideInBytes / 2; /* stride in GLushorts */
-#endif
       const GLushort *src = (const GLushort *) info.lfbPtr
                           + (winY - y) * srcStride + (winX + x);
       GLubyte *dst = (GLubyte *) _mesa_image_address(packing, dstImage,
@@ -640,25 +594,8 @@ static void fxDDFinish(GLcontext *ctx)
 }
 
 
-static GLint fxDDGetParameteri(const GLcontext *ctx, GLint param)
-{
-  switch(param) {
-  case DD_HAVE_HARDWARE_FOG:
-    return 1;
-  default:
-    fprintf(stderr,"fx Driver: internal error in fxDDGetParameteri(): %x\n", (int) param);
-    fxCloseHardware();
-    exit(-1);
-    return 0;
-  }
-}
 
 
-void fxDDSetNearFar(GLcontext *ctx, GLfloat n, GLfloat f)
-{
-   FX_CONTEXT(ctx)->new_state |= FX_NEW_FOG;
-   ctx->Driver.RenderStart = fxSetupFXUnits;
-}
 
 /* KW: Put the word Mesa in the render string because quakeworld
  * checks for this rather than doing a glGet(GL_MAX_TEXTURE_SIZE).
@@ -666,46 +603,13 @@ void fxDDSetNearFar(GLcontext *ctx, GLfloat n, GLfloat f)
  */
 static const GLubyte *fxDDGetString(GLcontext *ctx, GLenum name)
 {
-#if defined(GLX_DIRECT_RENDERING)
-  /* Building for DRI driver */
-  switch (name) {
-    case GL_RENDERER:
-      {
-        static char buffer[100];
-        char hardware[100];
-        strcpy(hardware, grGetString(GR_HARDWARE));
-        if (strcmp(hardware, "Voodoo3 (tm)") == 0)
-          strcpy(hardware, "Voodoo3");
-        else if (strcmp(hardware, "Voodoo Banshee (tm)") == 0)
-          strcpy(hardware, "VoodooBanshee");
-        else {
-          /* unexpected result: replace spaces with hyphens */
-          int i;
-          for (i = 0; hardware[i]; i++) {
-            if (hardware[i] == ' ' || hardware[i] == '\t')
-              hardware[i] = '-';
-          }
-        }
-        /* now make the GL_RENDERER string */
-        sprintf(buffer, "Mesa DRI %s 20000510", hardware);
-        return buffer;
-      }
-    case GL_VENDOR:
-      return "Precision Insight, Inc.";
-    default:
-      return NULL;
-  }
-
-#else
-
-  /* Building for Voodoo1/2 stand-alone Mesa */
   switch (name) {
     case GL_RENDERER:
       {
         static char buf[80];
 
         if (glbHWConfig.SSTs[glbCurrentBoard].type==GR_SSTTYPE_VOODOO) {
-          GrVoodooConfig_t *vc = 
+          GrVoodooConfig_t *vc =
             &glbHWConfig.SSTs[glbCurrentBoard].sstBoard.VoodooConfig;
 
           sprintf(buf,
@@ -719,7 +623,7 @@ static const GLubyte *fxDDGetString(GLcontext *ctx, GLenum name)
                   (vc->sliDetect ? "SLI" : "NOSLI"));
         }
         else if (glbHWConfig.SSTs[glbCurrentBoard].type==GR_SSTTYPE_SST96) {
-          GrSst96Config_t *sc = 
+          GrSst96Config_t *sc =
             &glbHWConfig.SSTs[glbCurrentBoard].sstBoard.SST96Config;
 
           sprintf(buf,
@@ -738,23 +642,22 @@ static const GLubyte *fxDDGetString(GLcontext *ctx, GLenum name)
     default:
       return NULL;
   }
-#endif
 }
 
 
 int fxDDInitFxMesaContext( fxMesaContext fxMesa )
 {
-  
+
    FX_setupGrVertexLayout();
-   
-   if (getenv("FX_EMULATE_SINGLE_TMU")) 
+
+   if (getenv("FX_EMULATE_SINGLE_TMU"))
       fxMesa->haveTwoTMUs = GL_FALSE;
-      
+
    fxMesa->emulateTwoTMUs = fxMesa->haveTwoTMUs;
-   
-   if (!getenv("FX_DONT_FAKE_MULTITEX")) 
+
+   if (!getenv("FX_DONT_FAKE_MULTITEX"))
       fxMesa->emulateTwoTMUs = GL_TRUE;
-      
+
    if(getenv("FX_GLIDE_SWAPINTERVAL"))
       fxMesa->swapInterval=atoi(getenv("FX_GLIDE_SWAPINTERVAL"));
    else
@@ -764,7 +667,7 @@ int fxDDInitFxMesaContext( fxMesaContext fxMesa )
       fxMesa->maxPendingSwapBuffers=atoi(getenv("MESA_FX_SWAP_PENDING"));
    else
       fxMesa->maxPendingSwapBuffers=2;
-   
+
    if(getenv("MESA_FX_INFO"))
       fxMesa->verbose=GL_TRUE;
    else
@@ -807,12 +710,10 @@ int fxDDInitFxMesaContext( fxMesaContext fxMesa )
       fxMesa->currentFB=GR_BUFFER_FRONTBUFFER;
       FX_grRenderBuffer(GR_BUFFER_FRONTBUFFER);
    }
-  
-   fxMesa->state 	= NULL;
-   fxMesa->fogTable 	= NULL;
-  
-   fxMesa->state 	= malloc(FX_grGetInteger(FX_GLIDE_STATE_SIZE));
-   fxMesa->fogTable 	= malloc(FX_grGetInteger(FX_FOG_TABLE_ENTRIES)*sizeof(GrFog_t));
+    
+   fxMesa->state = malloc(FX_grGetInteger(FX_GLIDE_STATE_SIZE));
+   fxMesa->fogTable = malloc(FX_grGetInteger(FX_FOG_TABLE_ENTRIES) * 
+			     sizeof(GrFog_t));
   
    if (!fxMesa->state || !fxMesa->fogTable) {
       if (fxMesa->state) free(fxMesa->state);
@@ -822,7 +723,7 @@ int fxDDInitFxMesaContext( fxMesaContext fxMesa )
 
    if(fxMesa->haveZBuffer)
       FX_grDepthBufferMode(GR_DEPTHBUFFER_ZBUFFER);
-    
+
 #if (!FXMESA_USE_ARGB)
    FX_grLfbWriteColorFormat(GR_COLORFORMAT_ABGR); /* Not every Glide has this */
 #endif
@@ -832,34 +733,37 @@ int fxDDInitFxMesaContext( fxMesaContext fxMesa )
    fxMesa->glCtx->Const.MaxTextureSize=256;
    fxMesa->glCtx->Const.MaxTextureUnits=fxMesa->emulateTwoTMUs ? 2 : 1;
    fxMesa->new_state = _NEW_ALL;
-  
+
    fxDDSetupInit();
-   fxDDClipInit();
    fxDDTrifuncInit();
    fxDDFastPathInit();
 
-   fxSetupDDPointers(fxMesa->glCtx);
-   fxDDRenderInit(fxMesa->glCtx);
-   fxDDInitExtensions(fxMesa->glCtx);  
 
-   fxDDSetNearFar(fxMesa->glCtx,1.0,100.0);
-  
+   /* Initialize the software rasterizer and helper modules.
+    */
+   fxMesa->glCtx->Driver.RegisterVB = fxDDRegisterVB;
+
+   _swrast_CreateContext( fxMesa->glCtx );
+   _swsetup_CreateContext( fxMesa->glCtx );
+   _tnl_CreateContext( fxMesa->glCtx );
+
+   fxSetupDDPointers(fxMesa->glCtx);
+
+   /* Tell the software rasterizer to use pixel fog always.
+    */
+   _swrast_allow_vertex_fog( fxMesa->glCtx, GL_FALSE );
+   _swrast_allow_pixel_fog( fxMesa->glCtx, GL_TRUE );
+
+   fxDDInitExtensions(fxMesa->glCtx);  
+   fxDDInitVtxfmt(fxMesa->glCtx);
+
    FX_grGlideGetState((GrState*)fxMesa->state);
 
-   /* XXX Fix me: callback not registered when main VB is created.
-    */
-   if (fxMesa->glCtx->VB) 
-      fxDDRegisterVB( fxMesa->glCtx->VB );
-  
    /* XXX Fix me too: need to have the 'struct dd' prepared prior to
     * creating the context... The below is broken if you try to insert
-    * new stages.  
+    * new stages.
     */
-   if (fxMesa->glCtx->NrPipelineStages)
-      fxMesa->glCtx->NrPipelineStages = fxDDRegisterPipelineStages( 
-	 fxMesa->glCtx->PipelineStage,
-	 fxMesa->glCtx->PipelineStage,
-	 fxMesa->glCtx->NrPipelineStages);
+   fxDDRegisterPipelineStages( fxMesa->glCtx );
 
    /* Run the config file */
    _mesa_context_initialize( fxMesa->glCtx );
@@ -868,13 +772,6 @@ int fxDDInitFxMesaContext( fxMesaContext fxMesa )
 }
 
 
-#if 0
-/* Example extension function */
-static void fxFooBarEXT(GLint i)
-{
-   printf("You called glFooBarEXT(%d)\n", i);
-}
-#endif
 
 
 void fxDDInitExtensions( GLcontext *ctx )
@@ -888,32 +785,12 @@ void fxDDInitExtensions( GLcontext *ctx )
    gl_extensions_disable(ctx, "GL_EXT_fog_coord");
 
    gl_extensions_add(ctx, GL_TRUE, "3DFX_set_global_palette", 0);
-   
+
    if (!fxMesa->haveTwoTMUs)
       gl_extensions_disable(ctx, "GL_EXT_texture_env_add");
-   
-   if (!fxMesa->emulateTwoTMUs) 
+
+   if (!fxMesa->emulateTwoTMUs)
       gl_extensions_disable(ctx, "GL_ARB_multitexture");
-
-
-   /* Example of hooking in an extension function.
-    * For DRI-based drivers, also see __driRegisterExtensions in the
-    * tdfx_xmesa.c file.
-    */
-#if 0
-   {
-     void **dispatchTable = (void **) ctx->Exec;
-     const int _gloffset_FooBarEXT = 555;  /* just an example number! */
-     const int tabSize = _glapi_get_dispatch_table_size();
-     assert(_gloffset_FooBarEXT < tabSize);
-     dispatchTable[_gloffset_FooBarEXT] = (void *) fxFooBarEXT;
-     /* XXX You would also need to hook into the display list dispatch
-      * table.  Really, the implementation of extensions might as well
-      * be in the core of Mesa since core Mesa and the device driver
-      * is one big shared lib.
-      */
-  }
-#endif
 }
 
 
@@ -921,7 +798,7 @@ void fxDDInitExtensions( GLcontext *ctx )
 /************************************************************************/
 /************************************************************************/
 
-/* Check if the hardware supports the current context 
+/* Check if the hardware supports the current context
  *
  * Performs similar work to fxDDChooseRenderState() - should be merged.
  */
@@ -929,48 +806,52 @@ static GLboolean fxIsInHardware(GLcontext *ctx)
 {
    fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
 
+   if (ctx->RenderMode != GL_RENDER)
+     return GL_FALSE;
+
   if (!ctx->Hint.AllowDrawMem)
      return GL_TRUE;		/* you'll take it and like it */
 
-  if((ctx->RasterMask & (STENCIL_BIT | MULTI_DRAW_BIT)) ||
-     ((ctx->Color.BlendEnabled) && (ctx->Color.BlendEquation!=GL_FUNC_ADD_EXT)) ||
-     ((ctx->Color.ColorLogicOpEnabled) && (ctx->Color.LogicOp!=GL_COPY)) ||
-     (ctx->Light.Model.ColorControl==GL_SEPARATE_SPECULAR_COLOR) ||
-     (!((ctx->Color.ColorMask[RCOMP]==ctx->Color.ColorMask[GCOMP]) &&
-        (ctx->Color.ColorMask[GCOMP]==ctx->Color.ColorMask[BCOMP]) &&
-        (ctx->Color.ColorMask[ACOMP]==ctx->Color.ColorMask[ACOMP])))
-     )
+  if (ctx->Stencil.Enabled ||
+      ctx->Color.MultiDrawBuffer ||
+      ((ctx->Color.BlendEnabled) && (ctx->Color.BlendEquation!=GL_FUNC_ADD_EXT)) ||
+      ((ctx->Color.ColorLogicOpEnabled) && (ctx->Color.LogicOp!=GL_COPY)) ||
+      (ctx->Light.Model.ColorControl==GL_SEPARATE_SPECULAR_COLOR) ||
+      (!((ctx->Color.ColorMask[RCOMP]==ctx->Color.ColorMask[GCOMP]) &&
+	 (ctx->Color.ColorMask[GCOMP]==ctx->Color.ColorMask[BCOMP]) &&
+	 (ctx->Color.ColorMask[ACOMP]==ctx->Color.ColorMask[ACOMP])))
+    )
   {
      return GL_FALSE;
   }
   /* Unsupported texture/multitexture cases */
 
   if(fxMesa->emulateTwoTMUs) {
-    if((ctx->Enabled & (TEXTURE0_3D | TEXTURE1_3D)) ||
+    if((ctx->_Enabled & (TEXTURE0_3D | TEXTURE1_3D)) ||
        /* Not very well written ... */
-       ((ctx->Enabled & (TEXTURE0_1D | TEXTURE1_1D)) && 
-        ((ctx->Enabled & (TEXTURE0_2D | TEXTURE1_2D))!=(TEXTURE0_2D | TEXTURE1_2D)))
+       ((ctx->_Enabled & (TEXTURE0_1D | TEXTURE1_1D)) &&
+        ((ctx->_Enabled & (TEXTURE0_2D | TEXTURE1_2D))!=(TEXTURE0_2D | TEXTURE1_2D)))
        ) {
       return GL_FALSE;
     }
 
-    if (ctx->Texture.ReallyEnabled & TEXTURE0_2D) {
+    if (ctx->Texture._ReallyEnabled & TEXTURE0_2D) {
       if (ctx->Texture.Unit[0].EnvMode == GL_BLEND &&
-	  (ctx->Texture.ReallyEnabled & TEXTURE1_2D ||
+	  (ctx->Texture._ReallyEnabled & TEXTURE1_2D ||
 	   ctx->Texture.Unit[0].EnvColor[0] != 0 ||
 	   ctx->Texture.Unit[0].EnvColor[1] != 0 ||
 	   ctx->Texture.Unit[0].EnvColor[2] != 0 ||
 	   ctx->Texture.Unit[0].EnvColor[3] != 1)) {
         return GL_FALSE;
       }
-      if (ctx->Texture.Unit[0].Current->Image[0]->Border > 0)
+      if (ctx->Texture.Unit[0]._Current->Image[0]->Border > 0)
         return GL_FALSE;
     }
 
-    if (ctx->Texture.ReallyEnabled & TEXTURE1_2D) {
+    if (ctx->Texture._ReallyEnabled & TEXTURE1_2D) {
       if (ctx->Texture.Unit[1].EnvMode == GL_BLEND)
         return GL_FALSE;
-      if (ctx->Texture.Unit[0].Current->Image[0]->Border > 0)
+      if (ctx->Texture.Unit[0]._Current->Image[0]->Border > 0)
         return GL_FALSE;
     }
 
@@ -982,8 +863,8 @@ static GLboolean fxIsInHardware(GLcontext *ctx)
     /* KW: This was wrong (I think) and I changed it... which doesn't mean
      * it is now correct...
      */
-    if((ctx->Enabled & (TEXTURE0_1D | TEXTURE0_2D | TEXTURE0_3D)) &&
-       (ctx->Enabled & (TEXTURE1_1D | TEXTURE1_2D | TEXTURE1_3D)))
+    if((ctx->_Enabled & (TEXTURE0_1D | TEXTURE0_2D | TEXTURE0_3D)) &&
+       (ctx->_Enabled & (TEXTURE1_1D | TEXTURE1_2D | TEXTURE1_3D)))
     {
        /* Can't use multipass to blend a multitextured triangle - fall
 	* back to software.
@@ -991,7 +872,7 @@ static GLboolean fxIsInHardware(GLcontext *ctx)
       if (!fxMesa->haveTwoTMUs && ctx->Color.BlendEnabled) {
 	  return GL_FALSE;
       }
-	  
+	
        if ((ctx->Texture.Unit[0].EnvMode!=ctx->Texture.Unit[1].EnvMode) &&
 	   (ctx->Texture.Unit[0].EnvMode!=GL_MODULATE) &&
 	   (ctx->Texture.Unit[0].EnvMode!=GL_REPLACE)) /* q2, seems ok... */
@@ -1002,16 +883,16 @@ static GLboolean fxIsInHardware(GLcontext *ctx)
        }
     }
   } else {
-    if((ctx->Enabled & (TEXTURE1_1D | TEXTURE1_2D | TEXTURE1_3D)) ||
+    if((ctx->_Enabled & (TEXTURE1_1D | TEXTURE1_2D | TEXTURE1_3D)) ||
        /* Not very well written ... */
-       ((ctx->Enabled & TEXTURE0_1D) && 
-        (!(ctx->Enabled & TEXTURE0_2D)))
+       ((ctx->_Enabled & TEXTURE0_1D) &&
+        (!(ctx->_Enabled & TEXTURE0_2D)))
        ) {
       return GL_FALSE;
     }
 
-    
-    if((ctx->Texture.ReallyEnabled & TEXTURE0_2D) &&
+
+    if((ctx->Texture._ReallyEnabled & TEXTURE0_2D) &&
        (ctx->Texture.Unit[0].EnvMode==GL_BLEND)) {
       return GL_FALSE;
     }
@@ -1020,53 +901,78 @@ static GLboolean fxIsInHardware(GLcontext *ctx)
   return GL_TRUE;
 }
 
+static void update_texture_scales( GLcontext *ctx )
+{
+   fxMesaContext fxMesa = FX_CONTEXT(ctx);
+   struct gl_texture_unit *t0 = &ctx->Texture.Unit[fxMesa->tmu_source[0]];
+   struct gl_texture_unit *t1 = &ctx->Texture.Unit[fxMesa->tmu_source[1]];
+     
+   if (t0 && t0->_Current && FX_TEXTURE_DATA(t0)) {
+      fxMesa->s0scale = FX_TEXTURE_DATA(t0)->sScale;
+      fxMesa->t0scale = FX_TEXTURE_DATA(t0)->tScale;
+      fxMesa->inv_s0scale = 1.0 / fxMesa->s0scale;
+      fxMesa->inv_t0scale = 1.0 / fxMesa->t0scale;
+   }
+   
+   if (t1 && t1->_Current && FX_TEXTURE_DATA(t1)) {
+      fxMesa->s1scale = FX_TEXTURE_DATA(t1)->sScale;
+      fxMesa->t1scale = FX_TEXTURE_DATA(t1)->tScale;
+      fxMesa->inv_s1scale = 1.0 / fxMesa->s1scale;
+      fxMesa->inv_t1scale = 1.0 / fxMesa->t1scale;
+   }
+}
 
 static void fxDDUpdateDDPointers(GLcontext *ctx)
 {
-  fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
-  GLuint new_state = ctx->NewState;
+   fxMesaContext fxMesa = FX_CONTEXT(ctx);
+   GLuint new_state = ctx->NewState;
 
-  if (MESA_VERBOSE&(VERBOSE_DRIVER|VERBOSE_STATE)) 
-    fprintf(stderr,"fxmesa: fxDDUpdateDDPointers(...)\n");
+   _swrast_InvalidateState( ctx, new_state );
+   _swsetup_InvalidateState( ctx, new_state );
+   _tnl_InvalidateState( ctx, new_state );
 
-  if (new_state & _FX_NEW_FALLBACK)
-     fxMesa->is_in_hardware = fxIsInHardware(ctx);
+   /* Recalculate fog table on projection matrix changes.  This used to
+    * be triggered by the NearFar callback.
+    */
+   if (new_state & _NEW_PROJECTION) 
+      fxMesa->new_state |= FX_NEW_FOG;
 
-  if (fxMesa->is_in_hardware) {
-    if (fxMesa->new_state)
-      fxSetupFXUnits(ctx);
+   if (new_state & (_FX_NEW_IS_IN_HARDWARE |
+		    _FX_NEW_RENDERSTATE |
+		    _FX_NEW_SETUP_FUNCTION | 
+		    _NEW_TEXTURE))
+   {
+      fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
 
-    if (new_state & _FX_NEW_RENDERSTATE) {
-      fxDDChooseRenderState( ctx );
-
-      fxMesa->RenderVBTables=fxDDChooseRenderVBTables(ctx);
-      fxMesa->RenderVBClippedTab=fxMesa->RenderVBTables[0];
-      fxMesa->RenderVBCulledTab=fxMesa->RenderVBTables[1];
-      fxMesa->RenderVBRawTab=fxMesa->RenderVBTables[2];
-    }
+      if (new_state & _FX_NEW_IS_IN_HARDWARE)
+	 fxMesa->is_in_hardware = fxIsInHardware(ctx);
     
-    if (new_state & _FX_NEW_SETUP_FUNCTION)
-      ctx->Driver.RasterSetup=fxDDChooseSetupFunction(ctx);      
+      if (fxMesa->new_state)
+	 fxSetupFXUnits(ctx);
 
+      if (new_state & _FX_NEW_RENDERSTATE) 
+	 fxDDChooseRenderState( ctx );
+    
+      if (new_state & _FX_NEW_SETUP_FUNCTION)
+	 ctx->Driver.RasterSetup = fxDDChooseSetupFunction(ctx);      
 
-    ctx->Driver.PointsFunc=fxMesa->PointsFunc;
-    ctx->Driver.LineFunc=fxMesa->LineFunc;
-    ctx->Driver.TriangleFunc=fxMesa->TriangleFunc;
-    ctx->Driver.QuadFunc=fxMesa->QuadFunc;
-  } else {
-     fxMesa->render_index = FX_FALLBACK;
-  }
+      if (new_state & _NEW_TEXTURE) 
+	 update_texture_scales( ctx );
+
+   }
+
+   if (fxMesa->allow_vfmt) {
+      if (new_state & _NEW_LIGHT)
+	 fx_update_lighting( ctx );
+
+      if (new_state & _FX_NEW_VTXFMT)
+	 fxDDCheckVtxfmt( ctx );
+      else if (fxMesa->vtxfmt_fallback_count > 1)
+	 fxMesa->vtxfmt_fallback_count--;
+   }
 }
 
-static void fxDDReducedPrimitiveChange(GLcontext *ctx, GLenum prim)
-{
-  if (ctx->Polygon.CullFlag) {
-    if (ctx->ReducedPrimitive != GL_POLYGON) { /* Lines or Points */
-      FX_grCullMode(GR_CULL_DISABLE);
-      FX_CONTEXT(ctx)->cullMode=GR_CULL_DISABLE;
-    }
-  }
-}
+
 
 void fxSetupDDPointers(GLcontext *ctx)
 {
@@ -1074,32 +980,18 @@ void fxSetupDDPointers(GLcontext *ctx)
     fprintf(stderr,"fxmesa: fxSetupDDPointers()\n");
   }
 
-  ctx->Driver.UpdateStateNotify = (_FX_NEW_SETUP_FUNCTION|
-				   _FX_NEW_RENDERSTATE|
-				   _FX_NEW_FALLBACK|
-				   _SWRAST_NEW_TRIANGLE|
-				   _SWRAST_NEW_LINE|
-				   _SWRAST_NEW_POINT);
-
   ctx->Driver.UpdateState=fxDDUpdateDDPointers;
 
   ctx->Driver.WriteDepthSpan=fxDDWriteDepthSpan;
   ctx->Driver.WriteDepthPixels=fxDDWriteDepthPixels;
   ctx->Driver.ReadDepthSpan=fxDDReadDepthSpan;
   ctx->Driver.ReadDepthPixels=fxDDReadDepthPixels;
-         
+
   ctx->Driver.GetString=fxDDGetString;
-
-  ctx->Driver.NearFar=fxDDSetNearFar;
-
-  ctx->Driver.GetParameteri=fxDDGetParameteri;
 
   ctx->Driver.ClearIndex=NULL;
   ctx->Driver.ClearColor=fxDDClearColor;
   ctx->Driver.Clear=fxDDClear;
-
-  ctx->Driver.Index=NULL;
-  ctx->Driver.Color=fxDDSetColor;
 
   ctx->Driver.SetDrawBuffer=fxDDSetDrawBuffer;
   ctx->Driver.SetReadBuffer=fxDDSetReadBuffer;
@@ -1112,8 +1004,8 @@ void fxSetupDDPointers(GLcontext *ctx)
   ctx->Driver.Finish=fxDDFinish;
   ctx->Driver.Flush=NULL;
 
-  ctx->Driver.RenderStart=NULL;
-  ctx->Driver.RenderFinish=NULL;
+  ctx->Driver.RenderStart=fxSetupFXUnits;
+  ctx->Driver.RenderFinish=_swrast_flush;
 
   ctx->Driver.TexImage2D = fxDDTexImage2D;
   ctx->Driver.TexSubImage2D = fxDDTexSubImage2D;
@@ -1123,8 +1015,6 @@ void fxSetupDDPointers(GLcontext *ctx)
   ctx->Driver.BindTexture=fxDDTexBind;
   ctx->Driver.DeleteTexture=fxDDTexDel;
   ctx->Driver.UpdateTexturePalette=fxDDTexPalette;
-
-  ctx->Driver.RectFunc=NULL;
 
   ctx->Driver.AlphaFunc=fxDDAlphaFunc;
   ctx->Driver.BlendFunc=fxDDBlendFunc;
@@ -1137,27 +1027,14 @@ void fxSetupDDPointers(GLcontext *ctx)
   ctx->Driver.CullFace=fxDDCullFace;
   ctx->Driver.ShadeModel=fxDDShadeModel;
   ctx->Driver.Enable=fxDDEnable;
-  ctx->Driver.ReducedPrimitiveChange=fxDDReducedPrimitiveChange;
 
   ctx->Driver.RegisterVB=fxDDRegisterVB;
   ctx->Driver.UnregisterVB=fxDDUnregisterVB;
 
-  ctx->Driver.RegisterPipelineStages = fxDDRegisterPipelineStages;
-
-  ctx->Driver.OptimizeImmediatePipeline = 0; /* nothing done yet */
-  ctx->Driver.OptimizePrecalcPipeline = 0;
-
-/*    if (getenv("MESA_USE_FAST") || getenv("FX_USE_FAST")) */
-/*       ctx->Driver.OptimizePrecalcPipeline = fxDDOptimizePrecalcPipeline; */
-
-  if (!getenv("FX_NO_FAST")) 
-      ctx->Driver.BuildPrecalcPipeline = fxDDBuildPrecalcPipeline; 
-
-  ctx->Driver.TriangleCaps = DD_TRI_CULL|DD_TRI_OFFSET|DD_TRI_LIGHT_TWOSIDE;
+  if (!getenv("FX_NO_FAST"))
+      ctx->Driver.BuildPrecalcPipeline = fxDDBuildPrecalcPipeline;
 
   fxSetupDDSpanPointers(ctx);
-
-  FX_CONTEXT(ctx)->render_index = 1; /* force an update */
   fxDDUpdateDDPointers(ctx);
 }
 
@@ -1169,6 +1046,7 @@ void fxSetupDDPointers(GLcontext *ctx)
  * Need this to provide at least one external definition.
  */
 
+extern int gl_fx_dummy_function_dd(void);
 int gl_fx_dummy_function_dd(void)
 {
   return 0;

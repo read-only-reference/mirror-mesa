@@ -1,4 +1,4 @@
-/* $Id: x86.c,v 1.9 2000/10/23 00:16:28 gareth Exp $ */
+/* $Id: x86.c,v 1.13 2000/11/22 08:55:53 joukj Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -30,13 +30,16 @@
 
 #include "glheader.h"
 #include "context.h"
-#include "types.h"
-#include "vertices.h"
-#include "xform.h"
+#include "mtypes.h"
 #include "x86.h"
 
+#include "math/m_vertices.h"
+#include "math/m_xform.h"
+
+#include "tnl/t_context.h"
+
 #ifdef DEBUG
-#include "debug_xform.h"
+#include "math/m_debug_xform.h"
 #endif
 
 
@@ -131,7 +134,7 @@ void gl_init_x86_vertex_asm( void )
    gl_xform_points3_v16_general	= gl_v16_x86_general_xform;
    gl_cliptest_points4_v16	= gl_v16_x86_cliptest_points4;
 
-#if 0
+#ifdef DEBUG_NOT
    gl_test_all_vertex_functions( "x86" );
 #endif
 #endif

@@ -1,21 +1,21 @@
-/* $Id: teximage.c,v 1.58 2000/10/31 18:09:45 keithw Exp $ */
+/* $Id: teximage.c,v 1.65 2000/11/22 07:32:17 joukj Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -38,7 +38,8 @@
 #include "state.h"
 #include "teximage.h"
 #include "texstate.h"
-#include "types.h"
+#include "mtypes.h"
+#include "swrast/s_span.h" /* XXX SWRAST hack */
 #endif
 
 
@@ -543,15 +544,15 @@ _mesa_select_tex_object(GLcontext *ctx, const struct gl_texture_unit *texUnit,
 {
    switch (target) {
       case GL_TEXTURE_1D:
-         return texUnit->CurrentD[1];
+         return texUnit->Current1D;
       case GL_PROXY_TEXTURE_1D:
          return ctx->Texture.Proxy1D;
       case GL_TEXTURE_2D:
-         return texUnit->CurrentD[2];
+         return texUnit->Current2D;
       case GL_PROXY_TEXTURE_2D:
          return ctx->Texture.Proxy2D;
       case GL_TEXTURE_3D:
-         return texUnit->CurrentD[3];
+         return texUnit->Current3D;
       case GL_PROXY_TEXTURE_3D:
          return ctx->Texture.Proxy3D;
       case GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB:
@@ -583,15 +584,15 @@ _mesa_select_tex_image(GLcontext *ctx, const struct gl_texture_unit *texUnit,
    ASSERT(texUnit);
    switch (target) {
       case GL_TEXTURE_1D:
-         return texUnit->CurrentD[1]->Image[level];
+         return texUnit->Current1D->Image[level];
       case GL_PROXY_TEXTURE_1D:
          return ctx->Texture.Proxy1D->Image[level];
       case GL_TEXTURE_2D:
-         return texUnit->CurrentD[2]->Image[level];
+         return texUnit->Current2D->Image[level];
       case GL_PROXY_TEXTURE_2D:
          return ctx->Texture.Proxy2D->Image[level];
       case GL_TEXTURE_3D:
-         return texUnit->CurrentD[3]->Image[level];
+         return texUnit->Current3D->Image[level];
       case GL_PROXY_TEXTURE_3D:
          return ctx->Texture.Proxy3D->Image[level];
       case GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB:
@@ -706,7 +707,7 @@ fill_texture_image( GLcontext *ctx, GLuint dimensions,
    texComponents = components_in_intformat(texFormat);
 
    /* try common 2D texture cases first */
-   if (!ctx->ImageTransferState && dimensions == 2
+   if (!ctx->_ImageTransferState && dimensions == 2
        && srcType == GL_UNSIGNED_BYTE) {
 
       if (srcFormat == texFormat) {
@@ -758,7 +759,7 @@ fill_texture_image( GLcontext *ctx, GLuint dimensions,
          }
          return;  /* all done */
       }
-   }      
+   }
 
    /*
     * General case solutions
@@ -777,7 +778,7 @@ fill_texture_image( GLcontext *ctx, GLuint dimensions,
                 srcAddr, srcWidth, srcHeight, srcFormat, srcType, img, row, 0);
             _mesa_unpack_index_span(ctx, srcWidth, texType, destRow,
                                     srcType, src, srcPacking,
-                                    ctx->ImageTransferState);
+                                    ctx->_ImageTransferState);
             destRow += dstRowStride;
          }
          dest += dstImageStride;
@@ -818,7 +819,7 @@ fill_texture_image( GLcontext *ctx, GLuint dimensions,
                                               srcFormat, srcType, img, row, 0);
                _mesa_unpack_float_color_span(ctx, srcWidth, GL_RGBA, dstf,
                           srcFormat, srcType, src, srcPacking,
-                          ctx->ImageTransferState & IMAGE_PRE_CONVOLUTION_BITS,
+                          ctx->_ImageTransferState & IMAGE_PRE_CONVOLUTION_BITS,
                           GL_TRUE);
                dstf += srcWidth * 4;
             }
@@ -828,7 +829,7 @@ fill_texture_image( GLcontext *ctx, GLuint dimensions,
                ASSERT(ctx->Pixel.Convolution1DEnabled);
                _mesa_convolve_1d_image(ctx, &convWidth, tmpImage, convImage);
             }
-            else {         
+            else {
                if (ctx->Pixel.Convolution2DEnabled) {
                   _mesa_convolve_2d_image(ctx, &convWidth, &convHeight,
                                           tmpImage, convImage);
@@ -849,7 +850,7 @@ fill_texture_image( GLcontext *ctx, GLuint dimensions,
                                           (const GLfloat (*)[4]) srcf,
                                           texFormat, GL_UNSIGNED_BYTE,
                                           dest, &_mesa_native_packing,
-                                          ctx->ImageTransferState
+                                          ctx->_ImageTransferState
                                           & IMAGE_POST_CONVOLUTION_BITS);
                srcf += convWidth * 4;
                dest += dstRowStride;
@@ -875,7 +876,7 @@ fill_texture_image( GLcontext *ctx, GLuint dimensions,
                                               srcFormat, srcType, img, row, 0);
                _mesa_unpack_chan_color_span(ctx, srcWidth, texFormat, destRow,
                                        srcFormat, srcType, srcRow, srcPacking,
-                                       ctx->ImageTransferState);
+                                       ctx->_ImageTransferState);
                destRow += dstRowStride;
             }
             dest += dstImageStride;
@@ -926,7 +927,7 @@ make_texture_image( GLcontext *ctx, GLuint dimensions,
    if (ctx->NewState & _NEW_PIXEL)
       gl_update_state(ctx);
 
-   if (ctx->ImageTransferState & IMAGE_CONVOLUTION_BIT) {
+   if (ctx->_ImageTransferState & IMAGE_CONVOLUTION_BIT) {
       adjust_texture_size_for_convolution(ctx, dimensions,
                                           &convWidth, &convHeight);
    }
@@ -1246,7 +1247,7 @@ subtexture_error_check( GLcontext *ctx, GLuint dimensions,
       return GL_TRUE;
    }
 
-   destTex = texUnit->CurrentD[2]->Image[level];
+   destTex = texUnit->Current2D->Image[level];
    if (!destTex) {
       gl_error(ctx, GL_INVALID_OPERATION, "glTexSubImage2D");
       return GL_TRUE;
@@ -1441,7 +1442,7 @@ copytexsubimage_error_check( GLcontext *ctx, GLuint dimensions,
       return GL_TRUE;
    }
 
-   teximage = texUnit->CurrentD[dimensions]->Image[level];
+   teximage = _mesa_select_tex_image(ctx, texUnit, target, level);
    if (!teximage) {
       char message[100];
       sprintf(message, "glCopyTexSubImage%dD(undefined texture)", dimensions);
@@ -1638,7 +1639,7 @@ _mesa_TexImage1D( GLenum target, GLint level, GLint internalFormat,
       }
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-      texObj = texUnit->CurrentD[1];
+      texObj = texUnit->Current1D;
       texImage = texObj->Image[level];
 
       if (!texImage) {
@@ -1664,7 +1665,7 @@ _mesa_TexImage1D( GLenum target, GLint level, GLint internalFormat,
       if (pixels) {
          GLboolean retain = GL_TRUE;
          GLboolean success = GL_FALSE;
-         if (!ctx->ImageTransferState && ctx->Driver.TexImage1D) {
+         if (!ctx->_ImageTransferState && ctx->Driver.TexImage1D) {
             /* let device driver try to use raw image */
             success = (*ctx->Driver.TexImage1D)( ctx, target, level, format,
                                                  type, pixels, &ctx->Unpack,
@@ -1699,7 +1700,7 @@ _mesa_TexImage1D( GLenum target, GLint level, GLint internalFormat,
       }
 
       /* state update */
-      gl_put_texobj_on_dirty_list( ctx, texObj );
+      texObj->Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
    }
    else if (target == GL_PROXY_TEXTURE_1D) {
@@ -1803,7 +1804,7 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
       if (pixels) {
          GLboolean retain = GL_TRUE;
          GLboolean success = GL_FALSE;
-         if (!ctx->ImageTransferState && ctx->Driver.TexImage2D) {
+         if (!ctx->_ImageTransferState && ctx->Driver.TexImage2D) {
             /* let device driver try to use raw image */
             success = (*ctx->Driver.TexImage2D)( ctx, target, level, format,
                                                  type, pixels, &ctx->Unpack,
@@ -1837,17 +1838,8 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
          }
       }
 
-#define OLD_DD_TEXTURE
-#ifdef OLD_DD_TEXTURE
-      /* XXX this will be removed in the future */
-      if (ctx->Driver.TexImage) {
-         (*ctx->Driver.TexImage)( ctx, target, texObj, level, internalFormat,
-                                  texImage );
-      }
-#endif
-
       /* state update */
-      gl_put_texobj_on_dirty_list( ctx, texObj );
+      texObj->Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
    }
    else if (target == GL_PROXY_TEXTURE_2D) {
@@ -1919,7 +1911,7 @@ _mesa_TexImage3D( GLenum target, GLint level, GLint internalFormat,
       }
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-      texObj = texUnit->CurrentD[3];
+      texObj = texUnit->Current3D;
       texImage = texObj->Image[level];
 
       if (!texImage) {
@@ -1946,7 +1938,7 @@ _mesa_TexImage3D( GLenum target, GLint level, GLint internalFormat,
       if (pixels) {
          GLboolean retain = GL_TRUE;
          GLboolean success = GL_FALSE;
-         if (!ctx->ImageTransferState && ctx->Driver.TexImage3D) {
+         if (!ctx->_ImageTransferState && ctx->Driver.TexImage3D) {
             /* let device driver try to use raw image */
             success = (*ctx->Driver.TexImage3D)( ctx, target, level, format,
                                                  type, pixels, &ctx->Unpack,
@@ -1981,7 +1973,7 @@ _mesa_TexImage3D( GLenum target, GLint level, GLint internalFormat,
       }
 
       /* state update */
-      gl_put_texobj_on_dirty_list( ctx, texObj );
+      texObj->Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
    }
    else if (target == GL_PROXY_TEXTURE_3D) {
@@ -2140,7 +2132,7 @@ _mesa_get_teximages_from_driver(GLcontext *ctx,
           * all but this is easier.  We're on a (slow) software path
           * anyway.
           */
-         for (level = 0; level <= texObj->P; level++) {
+         for (level = 0; level <= texObj->_P; level++) {
             struct gl_texture_image *texImg = texObj->Image[level];
             if (texImg && !texImg->Data) {
                _mesa_get_teximage_from_driver(ctx, target, level, texObj);
@@ -2197,8 +2189,7 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
 
    texUnit = &(ctx->Texture.Unit[ctx->Texture.CurrentUnit]);
    texObj = _mesa_select_tex_object(ctx, texUnit, target);
-   texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-   if (!texObj || !texImage ||
+   if (!texObj ||
        target == GL_PROXY_TEXTURE_1D ||
        target == GL_PROXY_TEXTURE_2D ||
        target == GL_PROXY_TEXTURE_3D) {
@@ -2206,8 +2197,9 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
       return;
    }
 
+   texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
    if (!texImage) {
-      /* invalid mipmap level */
+      /* invalid mipmap level, not an error */
       return;
    }
 
@@ -2229,7 +2221,7 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
       if (ctx->NewState & _NEW_PIXEL)
          gl_update_state(ctx);
 
-      if (ctx->ImageTransferState & IMAGE_CONVOLUTION_BIT) {
+      if (ctx->_ImageTransferState & IMAGE_CONVOLUTION_BIT) {
          /* convert texture image to GL_RGBA, GL_FLOAT */
          GLfloat *tmpImage, *convImage;
          const GLint comps = components_in_intformat(texImage->Format);
@@ -2257,7 +2249,7 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
                _mesa_unpack_float_color_span(ctx, width, GL_RGBA, dst,
                           texImage->Format, GL_UNSIGNED_BYTE,
                           src, &_mesa_native_packing,
-                          ctx->ImageTransferState & IMAGE_PRE_CONVOLUTION_BITS,
+                          ctx->_ImageTransferState & IMAGE_PRE_CONVOLUTION_BITS,
                           GL_FALSE);
             }
 
@@ -2290,7 +2282,7 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
                _mesa_pack_float_rgba_span(ctx, convWidth,
                         (const GLfloat(*)[4]) src,
                         format, type, dest, &ctx->Pack,
-                        ctx->ImageTransferState & IMAGE_POST_CONVOLUTION_BITS);
+                        ctx->_ImageTransferState & IMAGE_POST_CONVOLUTION_BITS);
             }
          }
 
@@ -2311,7 +2303,7 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
                                      + (img * height + row ) * width * 4;
                   _mesa_pack_rgba_span( ctx, width, (CONST GLchan (*)[4]) src,
                                         format, type, dest, &ctx->Pack,
-                                        ctx->ImageTransferState );
+                                        ctx->_ImageTransferState );
                }
                else {
                   /* general case:  convert row to RGBA format */
@@ -2373,7 +2365,7 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
                   }
                   _mesa_pack_rgba_span( ctx, width, (const GLchan (*)[4])rgba,
                                         format, type, dest, &ctx->Pack,
-                                        ctx->ImageTransferState );
+                                        ctx->_ImageTransferState );
                } /* format */
             } /* row */
          } /* img */
@@ -2411,7 +2403,7 @@ _mesa_TexSubImage1D( GLenum target, GLint level,
    }
 
    texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-   texObj = texUnit->CurrentD[1];
+   texObj = texUnit->Current1D;
    texImage = texObj->Image[level];
    assert(texImage);
 
@@ -2421,7 +2413,7 @@ _mesa_TexSubImage1D( GLenum target, GLint level,
    if (ctx->NewState & _NEW_PIXEL)
       gl_update_state(ctx);
 
-   if (!ctx->ImageTransferState && ctx->Driver.TexSubImage1D) {
+   if (!ctx->_ImageTransferState && ctx->Driver.TexSubImage1D) {
       success = (*ctx->Driver.TexSubImage1D)( ctx, target, level, xoffset,
                                               width, format, type, pixels,
                                               &ctx->Unpack, texObj, texImage );
@@ -2439,7 +2431,7 @@ _mesa_TexSubImage1D( GLenum target, GLint level,
       }
 
       fill_texture_image(ctx, 1, texImage->Format, texImage->Data,
-                         width, 1, 1, xoffset, 0, 0, /* size and offsets */
+                         width, 1, 1, xoffset + texImage->Border, 0, 0, /* size and offsets */
                          0, 0, /* strides */
                          format, type, pixels, &ctx->Unpack);
 
@@ -2492,7 +2484,7 @@ _mesa_TexSubImage2D( GLenum target, GLint level,
    if (ctx->NewState & _NEW_PIXEL)
       gl_update_state(ctx);
 
-   if (!ctx->ImageTransferState && ctx->Driver.TexSubImage2D) {
+   if (!ctx->_ImageTransferState && ctx->Driver.TexSubImage2D) {
       success = (*ctx->Driver.TexSubImage2D)( ctx, target, level, xoffset,
                                      yoffset, width, height, format, type,
                                      pixels, &ctx->Unpack, texObj, texImage );
@@ -2513,8 +2505,8 @@ _mesa_TexSubImage2D( GLenum target, GLint level,
       }
 
       fill_texture_image(ctx, 2, texImage->Format, texImage->Data,
-                         width, height, 1, xoffset, yoffset, 0,
-                         texRowStride, 0,
+                         width, height, 1, xoffset + texImage->Border,
+                         yoffset + texImage->Border, 0, texRowStride, 0,
                          format, type, pixels, &ctx->Unpack);
 
       if (ctx->Driver.TexImage2D) {
@@ -2528,19 +2520,6 @@ _mesa_TexSubImage2D( GLenum target, GLint level,
          FREE(texImage->Data);
          texImage->Data = NULL;
       }
-
-#ifdef OLD_DD_TEXTURE
-      /* XXX this will be removed in the future */
-      if (ctx->Driver.TexSubImage) {
-         (*ctx->Driver.TexSubImage)(ctx, target, texObj, level,
-                                    xoffset, yoffset, width, height,
-                                    texImage->IntFormat, texImage);
-      }
-      else if (ctx->Driver.TexImage) {
-         (*ctx->Driver.TexImage)(ctx, GL_TEXTURE_2D, texObj,
-                                 level, texImage->IntFormat, texImage );
-      }
-#endif
    }
 }
 
@@ -2565,7 +2544,7 @@ _mesa_TexSubImage3D( GLenum target, GLint level,
    }
 
    texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-   texObj = texUnit->CurrentD[3];
+   texObj = texUnit->Current3D;
    texImage = texObj->Image[level];
    assert(texImage);
 
@@ -2575,7 +2554,7 @@ _mesa_TexSubImage3D( GLenum target, GLint level,
    if (ctx->NewState & _NEW_PIXEL)
       gl_update_state(ctx);
 
-   if (!ctx->ImageTransferState && ctx->Driver.TexSubImage3D) {
+   if (!ctx->_ImageTransferState && ctx->Driver.TexSubImage3D) {
       success = (*ctx->Driver.TexSubImage3D)( ctx, target, level, xoffset,
                                 yoffset, zoffset, width, height, depth, format,
                                 type, pixels, &ctx->Unpack, texObj, texImage );
@@ -2597,9 +2576,10 @@ _mesa_TexSubImage3D( GLenum target, GLint level,
       }
 
       fill_texture_image(ctx, 3, texImage->Format, texImage->Data,
-                         width, height, depth, xoffset, yoffset, zoffset,
-                         texRowStride, texImgStride,
-                         format, type, pixels, &ctx->Unpack);
+                         width, height, depth, xoffset + texImage->Border,
+                         yoffset + texImage->Border,
+                         zoffset + texImage->Border, texRowStride,
+                         texImgStride, format, type, pixels, &ctx->Unpack);
 
       if (ctx->Driver.TexImage3D) {
          (*ctx->Driver.TexImage3D)(ctx, target, level, texImage->Format,
@@ -2640,6 +2620,8 @@ read_color_image( GLcontext *ctx, GLint x, GLint y,
    (*ctx->Driver.SetReadBuffer)( ctx, ctx->ReadBuffer,
                                  ctx->Pixel.DriverReadBuffer );
 
+   RENDER_START(ctx);
+
    dst = image;
    stride = width * 4;
    for (i = 0; i < height; i++) {
@@ -2647,6 +2629,8 @@ read_color_image( GLcontext *ctx, GLint x, GLint y,
                          (GLchan (*)[4]) dst );
       dst += stride;
    }
+
+   RENDER_FINISH(ctx);
 
    /* Read from draw buffer (the default) */
    (*ctx->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer,
@@ -2673,7 +2657,7 @@ _mesa_CopyTexImage1D( GLenum target, GLint level,
    if (ctx->NewState & _NEW_PIXEL)
       gl_update_state(ctx);
 
-   if (ctx->ImageTransferState || !ctx->Driver.CopyTexImage1D 
+   if (ctx->_ImageTransferState || !ctx->Driver.CopyTexImage1D
        || !(*ctx->Driver.CopyTexImage1D)(ctx, target, level,
                          internalFormat, x, y, width, border)) {
       struct gl_pixelstore_attrib unpackSave;
@@ -2713,7 +2697,7 @@ _mesa_CopyTexImage2D( GLenum target, GLint level, GLenum internalFormat,
    if (ctx->NewState & _NEW_PIXEL)
       gl_update_state(ctx);
 
-   if (ctx->ImageTransferState || !ctx->Driver.CopyTexImage2D
+   if (ctx->_ImageTransferState || !ctx->Driver.CopyTexImage2D
        || !(*ctx->Driver.CopyTexImage2D)(ctx, target, level,
                          internalFormat, x, y, width, height, border)) {
       struct gl_pixelstore_attrib unpackSave;
@@ -2752,7 +2736,7 @@ _mesa_CopyTexSubImage1D( GLenum target, GLint level,
    if (ctx->NewState & _NEW_PIXEL)
       gl_update_state(ctx);
 
-   if (ctx->ImageTransferState || !ctx->Driver.CopyTexSubImage1D
+   if (ctx->_ImageTransferState || !ctx->Driver.CopyTexSubImage1D
        || !(*ctx->Driver.CopyTexSubImage1D)(ctx, target, level,
                                             xoffset, x, y, width)) {
       struct gl_texture_unit *texUnit;
@@ -2761,7 +2745,7 @@ _mesa_CopyTexSubImage1D( GLenum target, GLint level,
       GLchan *image;
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-      teximage = texUnit->CurrentD[1]->Image[level];
+      teximage = texUnit->Current1D->Image[level];
       assert(teximage);
 
       /* get image from frame buffer */
@@ -2770,7 +2754,7 @@ _mesa_CopyTexSubImage1D( GLenum target, GLint level,
          gl_error( ctx, GL_OUT_OF_MEMORY, "glCopyTexSubImage2D" );
          return;
       }
-      
+
       /* now call glTexSubImage1D to do the real work */
       unpackSave = ctx->Unpack;
       ctx->Unpack = _mesa_native_packing;
@@ -2799,7 +2783,7 @@ _mesa_CopyTexSubImage2D( GLenum target, GLint level,
    if (ctx->NewState & _NEW_PIXEL)
       gl_update_state(ctx);
 
-   if (ctx->ImageTransferState || !ctx->Driver.CopyTexSubImage2D
+   if (ctx->_ImageTransferState || !ctx->Driver.CopyTexSubImage2D
        || !(*ctx->Driver.CopyTexSubImage2D)(ctx, target, level,
                                 xoffset, yoffset, x, y, width, height )) {
       struct gl_texture_unit *texUnit;
@@ -2808,7 +2792,7 @@ _mesa_CopyTexSubImage2D( GLenum target, GLint level,
       GLchan *image;
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-      teximage = texUnit->CurrentD[2]->Image[level];
+      teximage = texUnit->Current2D->Image[level];
       assert(teximage);
 
       /* get image from frame buffer */
@@ -2824,7 +2808,7 @@ _mesa_CopyTexSubImage2D( GLenum target, GLint level,
       _mesa_TexSubImage2D(target, level, xoffset, yoffset, width, height,
                           GL_RGBA, GL_UNSIGNED_BYTE, image);
       ctx->Unpack = unpackSave;
-      
+
       FREE(image);
    }
 }
@@ -2846,7 +2830,7 @@ _mesa_CopyTexSubImage3D( GLenum target, GLint level,
    if (ctx->NewState & _NEW_PIXEL)
       gl_update_state(ctx);
 
-   if (ctx->ImageTransferState || !ctx->Driver.CopyTexSubImage3D
+   if (ctx->_ImageTransferState || !ctx->Driver.CopyTexSubImage3D
        || !(*ctx->Driver.CopyTexSubImage3D)(ctx, target, level,
                      xoffset, yoffset, zoffset, x, y, width, height )) {
       struct gl_texture_unit *texUnit;
@@ -2855,7 +2839,7 @@ _mesa_CopyTexSubImage3D( GLenum target, GLint level,
       GLchan *image;
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-      teximage = texUnit->CurrentD[3]->Image[level];
+      teximage = texUnit->Current3D->Image[level];
       assert(teximage);
 
       /* get image from frame buffer */
@@ -2871,7 +2855,7 @@ _mesa_CopyTexSubImage3D( GLenum target, GLint level,
       _mesa_TexSubImage3D(target, level, xoffset, yoffset, zoffset,
                           width, height, 1, GL_RGBA, GL_UNSIGNED_BYTE, image);
       ctx->Unpack = unpackSave;
-      
+
       FREE(image);
    }
 }
@@ -2913,7 +2897,7 @@ _mesa_CompressedTexImage1DARB(GLenum target, GLint level,
       }
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-      texObj = texUnit->CurrentD[1];
+      texObj = texUnit->Current1D;
       texImage = texObj->Image[level];
 
       if (!texImage) {
@@ -2974,7 +2958,7 @@ _mesa_CompressedTexImage1DARB(GLenum target, GLint level,
       }
 
       /* state update */
-      gl_put_texobj_on_dirty_list( ctx, texObj );
+      texObj->Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
    }
    else if (target == GL_PROXY_TEXTURE_1D) {
@@ -3043,7 +3027,7 @@ _mesa_CompressedTexImage2DARB(GLenum target, GLint level,
       }
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-      texObj = texUnit->CurrentD[2];
+      texObj = texUnit->Current2D;
       texImage = texObj->Image[level];
 
       if (!texImage) {
@@ -3109,7 +3093,7 @@ _mesa_CompressedTexImage2DARB(GLenum target, GLint level,
       }
 
       /* state update */
-      gl_put_texobj_on_dirty_list( ctx, texObj );
+      texObj->Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
    }
    else if (target == GL_PROXY_TEXTURE_2D) {
@@ -3175,7 +3159,7 @@ _mesa_CompressedTexImage3DARB(GLenum target, GLint level,
       }
 
       texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-      texObj = texUnit->CurrentD[3];
+      texObj = texUnit->Current3D;
       texImage = texObj->Image[level];
 
       if (!texImage) {
@@ -3238,7 +3222,7 @@ _mesa_CompressedTexImage3DARB(GLenum target, GLint level,
       }
 
       /* state update */
-      gl_put_texobj_on_dirty_list( ctx, texObj );
+      texObj->Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
    }
    else if (target == GL_PROXY_TEXTURE_3D) {
@@ -3397,11 +3381,11 @@ _mesa_GetCompressedTexImageARB(GLenum target, GLint level, GLvoid *img)
 
    switch (target) {
       case GL_TEXTURE_1D:
-         texObj = ctx->Texture.Unit[ctx->Texture.CurrentUnit].CurrentD[1];
+         texObj = ctx->Texture.Unit[ctx->Texture.CurrentUnit].Current1D;
          texImage = texObj->Image[level];
          break;
       case GL_TEXTURE_2D:
-         texObj = ctx->Texture.Unit[ctx->Texture.CurrentUnit].CurrentD[2];
+         texObj = ctx->Texture.Unit[ctx->Texture.CurrentUnit].Current2D;
          texImage = texObj->Image[level];
          break;
       case GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB:
@@ -3429,7 +3413,7 @@ _mesa_GetCompressedTexImageARB(GLenum target, GLint level, GLvoid *img)
          texImage = texObj->NegZ[level];
          break;
       case GL_TEXTURE_3D:
-         texObj = ctx->Texture.Unit[ctx->Texture.CurrentUnit].CurrentD[3];
+         texObj = ctx->Texture.Unit[ctx->Texture.CurrentUnit].Current3D;
          texImage = texObj->Image[level];
          break;
       default:

@@ -1,4 +1,3 @@
-/* -*- mode: C; tab-width:8; c-basic-offset:2 -*- */
 
 /*
  * Mesa 3-D graphics library
@@ -100,7 +99,6 @@ static void fxTexInvalidate(GLcontext *ctx, struct gl_texture_object *tObj)
 
   ti->validated=GL_FALSE;
   fxMesa->new_state|=FX_NEW_TEXTURING;
-  ctx->Driver.RenderStart = fxSetupFXUnits;
 }
 
 static tfxTexInfo *fxAllocTexObjData(fxMesaContext fxMesa)
@@ -160,7 +158,6 @@ void fxDDTexBind(GLcontext *ctx, GLenum target, struct gl_texture_object *tObj)
   ti->lastTimeUsed=fxMesa->texBindNumber;
 
   fxMesa->new_state|=FX_NEW_TEXTURING;
-  ctx->Driver.RenderStart = fxSetupFXUnits;
 }
 
 void fxDDTexEnv(GLcontext *ctx, GLenum target, GLenum pname, const GLfloat *param)
@@ -185,7 +182,6 @@ void fxDDTexEnv(GLcontext *ctx, GLenum target, GLenum pname, const GLfloat *para
    }
 
    fxMesa->new_state|=FX_NEW_TEXTURING;
-   ctx->Driver.RenderStart = fxSetupFXUnits;
 }
 
 void fxDDTexParam(GLcontext *ctx, GLenum target, struct gl_texture_object *tObj,
@@ -283,7 +279,6 @@ void fxDDTexParam(GLcontext *ctx, GLenum target, struct gl_texture_object *tObj,
       break;
     }
     fxMesa->new_state|=FX_NEW_TEXTURING;
-    ctx->Driver.RenderStart = fxSetupFXUnits;
     break;
 
   case GL_TEXTURE_WRAP_T:
@@ -298,7 +293,6 @@ void fxDDTexParam(GLcontext *ctx, GLenum target, struct gl_texture_object *tObj,
       break;
     }
     fxMesa->new_state|=FX_NEW_TEXTURING;
-    ctx->Driver.RenderStart = fxSetupFXUnits;
     break;
 
   case GL_TEXTURE_BORDER_COLOR:
@@ -440,7 +434,6 @@ void fxDDTexPalette(GLcontext *ctx, struct gl_texture_object *tObj)
     }
     convertPalette(fxMesa->glbPalette.data, &ctx->Texture.Palette);
     fxMesa->new_state |= FX_NEW_TEXTURING;
-    ctx->Driver.RenderStart = fxSetupFXUnits;
   }
 }
 
@@ -463,9 +456,9 @@ void fxDDTexUseGlbPalette(GLcontext *ctx, GLboolean state)
   else {
     fxMesa->haveGlobalPaletteTexture = 0;
 
-    if ((ctx->Texture.Unit[0].Current == ctx->Texture.Unit[0].CurrentD[2]) &&
-        (ctx->Texture.Unit[0].Current != NULL)) {
-      struct gl_texture_object *tObj = ctx->Texture.Unit[0].Current;
+    if ((ctx->Texture.Unit[0]._Current == ctx->Texture.Unit[0].Current2D) &&
+        (ctx->Texture.Unit[0]._Current != NULL)) {
+      struct gl_texture_object *tObj = ctx->Texture.Unit[0]._Current;
 
       if (!tObj->DriverData)
         tObj->DriverData = fxAllocTexObjData(fxMesa);
@@ -1192,6 +1185,7 @@ GLvoid *fxDDGetTexImage(GLcontext *ctx, GLenum target, GLint level,
  * Need this to provide at least one external definition.
  */
 
+extern int gl_fx_dummy_function_ddtex(void);
 int gl_fx_dummy_function_ddtex(void)
 {
   return 0;

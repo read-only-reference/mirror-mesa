@@ -1,21 +1,21 @@
-/* $Id: varray.h,v 1.8 2000/10/27 16:44:41 keithw Exp $ */
+/* $Id: varray.h,v 1.11 2000/11/24 10:25:06 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
- * 
+ *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -29,12 +29,18 @@
 #define VARRAY_H
 
 
-#include "types.h"
+#include "mtypes.h"
 
 
 extern void
 _mesa_VertexPointer(GLint size, GLenum type, GLsizei stride,
                     const GLvoid *ptr);
+
+extern void
+_mesa_UnlockArraysEXT( void );
+
+extern void
+_mesa_LockArraysEXT(GLint first, GLsizei count);
 
 
 extern void
@@ -91,57 +97,13 @@ extern void
 _mesa_FogCoordPointerEXT(GLenum type, GLsizei stride, const GLvoid *ptr);
 
 extern void
-_mesa_SecondaryColorPointerEXT(GLint size, GLenum type, 
+_mesa_SecondaryColorPointerEXT(GLint size, GLenum type,
 			       GLsizei stride, const GLvoid *ptr);
-
-
-extern void
-_mesa_ArrayElement( GLint );
-
-
-extern void
-_mesa_DrawArrays(GLenum mode, GLint first, GLsizei count);
-
-
-extern void
-_mesa_save_DrawArrays(GLenum mode, GLint first, GLsizei count);
-
-
-extern void
-_mesa_DrawElements(GLenum mode, GLsizei count, GLenum type,
-                   const GLvoid *indices);
-
-
-extern void
-_mesa_save_DrawElements(GLenum mode, GLsizei count,
-                        GLenum type, const GLvoid *indices);
 
 
 extern void
 _mesa_InterleavedArrays(GLenum format, GLsizei stride, const GLvoid *pointer);
 
-extern void
-_mesa_save_InterleavedArrays(GLenum format, GLsizei stride,
-                             const GLvoid *pointer);
-
-
-extern void
-_mesa_DrawRangeElements(GLenum mode, GLuint start,
-                        GLuint end, GLsizei count, GLenum type,
-                        const GLvoid *indices);
-
-extern void
-_mesa_save_DrawRangeElements(GLenum mode,
-                             GLuint start, GLuint end, GLsizei count,
-                             GLenum type, const GLvoid *indices );
-
-
-extern void gl_exec_array_elements( GLcontext *ctx, 
-				    struct immediate *IM,
-				    GLuint start, 
-				    GLuint end );
-
-extern void gl_update_client_state( GLcontext *ctx );
 
 
 #endif

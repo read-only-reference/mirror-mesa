@@ -1,4 +1,4 @@
-/* $Id: s_copypix.c,v 1.2 2000/10/31 23:11:06 brianp Exp $ */
+/* $Id: s_copypix.c,v 1.7 2000/11/28 22:34:46 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -35,8 +35,9 @@
 #include "mmath.h"
 #include "pixel.h"
 
+#include "s_context.h"
 #include "s_depth.h"
-#include "s_imaging.h"
+#include "s_histogram.h"
 #include "s_pixeltex.h"
 #include "s_span.h"
 #include "s_stencil.h"
@@ -81,7 +82,7 @@ copy_conv_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
    GLboolean changeBuffer;
    GLchan *saveReadAlpha;
    const GLboolean zoom = ctx->Pixel.ZoomX != 1.0F || ctx->Pixel.ZoomY != 1.0F;
-   const GLuint transferOps = ctx->ImageTransferState;
+   const GLuint transferOps = ctx->_ImageTransferState;
    GLfloat *dest, *tmpImage, *convImage;
 
    if (ctx->Depth.Test || ctx->Fog.Enabled) {
@@ -94,7 +95,7 @@ copy_conv_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
       }
    }
 
-   if (ctx->RasterMask == 0
+   if (SWRAST_CONTEXT(ctx)->_RasterMask == 0
        && !zoom
        && destx >= 0
        && destx + width <= ctx->DrawBuffer->Width) {
@@ -166,7 +167,11 @@ copy_conv_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
 
       /* scale & bias */
       if (transferOps & IMAGE_SCALE_BIAS_BIT) {
-         _mesa_scale_and_bias_rgba(ctx, width, rgba);
+         _mesa_scale_and_bias_rgba(ctx, width, rgba,
+                                   ctx->Pixel.RedScale, ctx->Pixel.GreenScale,
+                                   ctx->Pixel.BlueScale, ctx->Pixel.AlphaScale,
+                                   ctx->Pixel.RedBias, ctx->Pixel.GreenBias,
+                                   ctx->Pixel.BlueBias, ctx->Pixel.AlphaBias);
       }
       /* color map lookup */
       if (transferOps & IMAGE_MAP_COLOR_BIT) {
@@ -231,7 +236,7 @@ copy_conv_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
          rgba[i][ACOMP] = (GLchan) CLAMP(a, 0, CHAN_MAX);
       }
 
-      if (ctx->Texture.ReallyEnabled && ctx->Pixel.PixelTextureEnabled) {
+      if (ctx->Texture._ReallyEnabled && ctx->Pixel.PixelTextureEnabled) {
          GLfloat s[MAX_WIDTH], t[MAX_WIDTH], r[MAX_WIDTH], q[MAX_WIDTH];
          GLchan primary_rgba[MAX_WIDTH][4];
          GLuint unit;
@@ -284,7 +289,7 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
    GLchan *saveReadAlpha;
    const GLboolean zoom = ctx->Pixel.ZoomX != 1.0F || ctx->Pixel.ZoomY != 1.0F;
    GLint overlapping;
-   const GLuint transferOps = ctx->ImageTransferState;
+   const GLuint transferOps = ctx->_ImageTransferState;
 
    if (ctx->Pixel.Convolution2DEnabled || ctx->Pixel.Separable2DEnabled) {
       copy_conv_rgba_pixels(ctx, srcx, srcy, width, height, destx, desty);
@@ -316,7 +321,7 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
       }
    }
 
-   if (ctx->RasterMask == 0
+   if (SWRAST_CONTEXT(ctx)->_RasterMask == 0
        && !zoom
        && destx >= 0
        && destx + width <= ctx->DrawBuffer->Width) {
@@ -414,7 +419,11 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
          }
          /* scale & bias */
          if (transferOps & IMAGE_SCALE_BIAS_BIT) {
-            _mesa_scale_and_bias_rgba(ctx, width, rgbaFloat);
+            _mesa_scale_and_bias_rgba(ctx, width, rgbaFloat,
+                                   ctx->Pixel.RedScale, ctx->Pixel.GreenScale,
+                                   ctx->Pixel.BlueScale, ctx->Pixel.AlphaScale,
+                                   ctx->Pixel.RedBias, ctx->Pixel.GreenBias,
+                                   ctx->Pixel.BlueBias, ctx->Pixel.AlphaBias);
          }
          /* color map lookup */
          if (transferOps & IMAGE_MAP_COLOR_BIT) {
@@ -427,6 +436,18 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
          /* convolution */
          if (transferOps & IMAGE_CONVOLUTION_BIT) {
             /* XXX to do */
+         }
+         /* GL_POST_CONVOLUTION_RED/GREEN/BLUE/ALPHA_SCALE/BIAS */
+         if (transferOps & IMAGE_POST_CONVOLUTION_SCALE_BIAS) {
+            _mesa_scale_and_bias_rgba(ctx, width, rgbaFloat,
+                                      ctx->Pixel.PostConvolutionScale[RCOMP],
+                                      ctx->Pixel.PostConvolutionScale[GCOMP],
+                                      ctx->Pixel.PostConvolutionScale[BCOMP],
+                                      ctx->Pixel.PostConvolutionScale[ACOMP],
+                                      ctx->Pixel.PostConvolutionBias[RCOMP],
+                                      ctx->Pixel.PostConvolutionBias[GCOMP],
+                                      ctx->Pixel.PostConvolutionBias[BCOMP],
+                                      ctx->Pixel.PostConvolutionBias[ACOMP]);
          }
          /* GL_POST_CONVOLUTION_COLOR_TABLE lookup */
          if (transferOps & IMAGE_POST_CONVOLUTION_COLOR_TABLE_BIT) {
@@ -461,7 +482,7 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
          }
       }
 
-      if (ctx->Texture.ReallyEnabled && ctx->Pixel.PixelTextureEnabled) {
+      if (ctx->Texture._ReallyEnabled && ctx->Pixel.PixelTextureEnabled) {
          GLfloat s[MAX_WIDTH], t[MAX_WIDTH], r[MAX_WIDTH], q[MAX_WIDTH];
          GLchan primary_rgba[MAX_WIDTH][4];
          GLuint unit;
@@ -629,7 +650,7 @@ static void copy_depth_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
    const GLboolean zoom = ctx->Pixel.ZoomX != 1.0F || ctx->Pixel.ZoomY != 1.0F;
    GLint overlapping;
 
-   if (!ctx->ReadBuffer->DepthBuffer || !ctx->DrawBuffer->DepthBuffer) {
+   if (!ctx->Visual.DepthBits) {
       gl_error( ctx, GL_INVALID_OPERATION, "glCopyPixels" );
       return;
    }
@@ -737,7 +758,7 @@ static void copy_stencil_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
    const GLboolean shift_or_offset = ctx->Pixel.IndexShift || ctx->Pixel.IndexOffset;
    GLint overlapping;
 
-   if (!ctx->DrawBuffer->Stencil || !ctx->ReadBuffer->Stencil) {
+   if (!ctx->Visual.StencilBits) {
       gl_error( ctx, GL_INVALID_OPERATION, "glCopyPixels" );
       return;
    }
@@ -817,6 +838,9 @@ _swrast_CopyPixels( GLcontext *ctx,
 		    GLint destx, GLint desty,
 		    GLenum type )
 {
+   if (SWRAST_CONTEXT(ctx)->NewState)
+      _swrast_validate_derived( ctx );
+
    if (type == GL_COLOR && ctx->Visual.RGBAflag) {
       copy_rgba_pixels( ctx, srcx, srcy, width, height, destx, desty );
    }

@@ -1,4 +1,4 @@
-/* $Id: colortab.c,v 1.25 2000/10/31 18:09:44 keithw Exp $ */
+/* $Id: colortab.c,v 1.30 2000/11/23 02:50:56 jtaylor Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -35,6 +35,8 @@
 #include "macros.h"
 #include "mem.h"
 #include "mmath.h"
+#include "state.h"
+#include "swrast/s_span.h" /* XXX SWRAST hack */
 #endif
 
 
@@ -216,15 +218,15 @@ _mesa_ColorTable( GLenum target, GLenum internalFormat,
 
    switch (target) {
       case GL_TEXTURE_1D:
-         texObj = texUnit->CurrentD[1];
+         texObj = texUnit->Current1D;
          table = &texObj->Palette;
          break;
       case GL_TEXTURE_2D:
-         texObj = texUnit->CurrentD[2];
+         texObj = texUnit->Current2D;
          table = &texObj->Palette;
          break;
       case GL_TEXTURE_3D:
-         texObj = texUnit->CurrentD[3];
+         texObj = texUnit->Current3D;
          table = &texObj->Palette;
          break;
       case GL_PROXY_TEXTURE_1D:
@@ -457,15 +459,15 @@ _mesa_ColorSubTable( GLenum target, GLsizei start,
 
    switch (target) {
       case GL_TEXTURE_1D:
-         texObj = texUnit->CurrentD[1];
+         texObj = texUnit->Current1D;
          table = &texObj->Palette;
          break;
       case GL_TEXTURE_2D:
-         texObj = texUnit->CurrentD[2];
+         texObj = texUnit->Current2D;
          table = &texObj->Palette;
          break;
       case GL_TEXTURE_3D:
-         texObj = texUnit->CurrentD[3];
+         texObj = texUnit->Current3D;
          table = &texObj->Palette;
          break;
       case GL_SHARED_TEXTURE_PALETTE_EXT:
@@ -632,7 +634,9 @@ _mesa_CopyColorTable(GLenum target, GLenum internalformat,
       width = MAX_WIDTH;
 
    /* read the data from framebuffer */
+   RENDER_START(ctx);
    gl_read_rgba_span( ctx, ctx->ReadBuffer, width, x, y, data );
+   RENDER_FINISH(ctx);
 
    /* Restore reading from draw buffer (the default) */
    (*ctx->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer,
@@ -661,7 +665,9 @@ _mesa_CopyColorSubTable(GLenum target, GLsizei start,
       width = MAX_WIDTH;
 
    /* read the data from framebuffer */
+   RENDER_START(ctx);
    gl_read_rgba_span( ctx, ctx->ReadBuffer, width, x, y, data );
+   RENDER_FINISH(ctx);
 
    /* Restore reading from draw buffer (the default) */
    (*ctx->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer,
@@ -684,15 +690,19 @@ _mesa_GetColorTable( GLenum target, GLenum format,
 
    ASSERT_OUTSIDE_BEGIN_END(ctx, "glGetColorTable");
 
+   if (ctx->NewState) {
+      gl_update_state(ctx);
+   }
+
    switch (target) {
       case GL_TEXTURE_1D:
-         table = &texUnit->CurrentD[1]->Palette;
+         table = &texUnit->Current1D->Palette;
          break;
       case GL_TEXTURE_2D:
-         table = &texUnit->CurrentD[2]->Palette;
+         table = &texUnit->Current2D->Palette;
          break;
       case GL_TEXTURE_3D:
-         table = &texUnit->CurrentD[3]->Palette;
+         table = &texUnit->Current3D->Palette;
          break;
       case GL_SHARED_TEXTURE_PALETTE_EXT:
          table = &ctx->Texture.Palette;
@@ -949,13 +959,13 @@ _mesa_GetColorTableParameterfv( GLenum target, GLenum pname, GLfloat *params )
 
    switch (target) {
       case GL_TEXTURE_1D:
-         table = &texUnit->CurrentD[1]->Palette;
+         table = &texUnit->Current1D->Palette;
          break;
       case GL_TEXTURE_2D:
-         table = &texUnit->CurrentD[2]->Palette;
+         table = &texUnit->Current2D->Palette;
          break;
       case GL_TEXTURE_3D:
-         table = &texUnit->CurrentD[3]->Palette;
+         table = &texUnit->Current3D->Palette;
          break;
       case GL_PROXY_TEXTURE_1D:
          table = &ctx->Texture.Proxy1D->Palette;
@@ -1080,13 +1090,13 @@ _mesa_GetColorTableParameteriv( GLenum target, GLenum pname, GLint *params )
 
    switch (target) {
       case GL_TEXTURE_1D:
-         table = &texUnit->CurrentD[1]->Palette;
+         table = &texUnit->Current1D->Palette;
          break;
       case GL_TEXTURE_2D:
-         table = &texUnit->CurrentD[2]->Palette;
+         table = &texUnit->Current2D->Palette;
          break;
       case GL_TEXTURE_3D:
-         table = &texUnit->CurrentD[3]->Palette;
+         table = &texUnit->Current3D->Palette;
          break;
       case GL_PROXY_TEXTURE_1D:
          table = &ctx->Texture.Proxy1D->Palette;

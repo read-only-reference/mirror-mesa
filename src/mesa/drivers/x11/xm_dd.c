@@ -1,21 +1,21 @@
-/* $Id: xm_dd.c,v 1.2 2000/09/08 21:44:57 brianp Exp $ */
+/* $Id: xm_dd.c,v 1.7 2000/11/22 07:32:18 joukj Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
- * 
+ *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -32,11 +32,12 @@
 #include "state.h"
 #include "depth.h"
 #include "macros.h"
-#include "vb.h"
-#include "types.h"
+#include "mtypes.h"
 #include "xmesaP.h"
 #include "extensions.h"
-
+#include "swrast/swrast.h"
+#include "swrast_setup/swrast_setup.h"
+#include "tnl/tnl.h"
 
 /*
  * Return the size (width,height of the current color buffer.
@@ -142,40 +143,6 @@ flush( GLcontext *ctx )
 }
 
 
-#if 0
-static GLboolean
-set_buffer( GLcontext *ctx, GLenum mode )
-{
-   const XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   if (mode == GL_FRONT_LEFT) {
-      /* read/write front buffer */
-      xmesa->xm_buffer->buffer = xmesa->xm_buffer->frontbuffer;
-      ctx->NewState |= NEW_RASTER_OPS;
-      gl_update_state(ctx);
-      return GL_TRUE;
-   }
-   else if (mode==GL_BACK_LEFT && xmesa->xm_buffer->db_state) {
-      /* read/write back buffer */
-      if (xmesa->xm_buffer->backpixmap) {
-         xmesa->xm_buffer->buffer =
-	     (XMesaDrawable)xmesa->xm_buffer->backpixmap;
-      }
-      else if (xmesa->xm_buffer->backimage) {
-         xmesa->xm_buffer->buffer = None;
-      }
-      else {
-         /* just in case there wasn't enough memory for back buffer */
-         xmesa->xm_buffer->buffer = xmesa->xm_buffer->frontbuffer;
-      }
-      ctx->NewState |= NEW_RASTER_OPS;
-      gl_update_state(ctx);
-      return GL_TRUE;
-   }
-   else {
-      return GL_FALSE;
-   }
-}
-#endif
 
 
 static GLboolean
@@ -274,33 +241,6 @@ clear_color( GLcontext *ctx, GLubyte r, GLubyte g, GLubyte b, GLubyte a )
    XMesaSetForeground( xmesa->display, xmesa->xm_buffer->cleargc,
                        xmesa->clearpixel );
    _glthread_UNLOCK_MUTEX(_xmesa_lock);
-}
-
-
-
-/* Set current color index */
-static void
-set_index( GLcontext *ctx, GLuint index )
-{
-   const XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   unsigned long p = (unsigned long) index;
-   xmesa->pixel = p;
-   XMesaSetForeground( xmesa->display, xmesa->xm_buffer->gc1, p );
-}
-
-
-
-/* Set current drawing color */
-static void
-set_color( GLcontext *ctx, GLubyte r, GLubyte g, GLubyte b, GLubyte a )
-{
-   const XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   xmesa->red   = r;
-   xmesa->green = g;
-   xmesa->blue  = b;
-   xmesa->alpha = a;
-   xmesa->pixel = xmesa_color_to_pixel( xmesa, r, g, b, a, xmesa->pixelformat );;
-   XMesaSetForeground( xmesa->display, xmesa->xm_buffer->gc1, xmesa->pixel );
 }
 
 
@@ -494,14 +434,14 @@ clear_16bit_ximage( GLcontext *ctx, GLboolean all,
       }
       else {
          pixel = pixel | (pixel<<16);
-         n = xmesa->xm_buffer->backimage->bytes_per_line 
+         n = xmesa->xm_buffer->backimage->bytes_per_line
             * xmesa->xm_buffer->height / 4;
          do {
             *ptr4++ = pixel;
                n--;
          } while (n!=0);
-         
-         if ((xmesa->xm_buffer->backimage->bytes_per_line * 
+
+         if ((xmesa->xm_buffer->backimage->bytes_per_line *
               xmesa->xm_buffer->height) & 0x2)
             *(GLushort *)ptr4 = pixel & 0xffff;
       }
@@ -823,7 +763,7 @@ clear_buffers( GLcontext *ctx, GLbitfield mask,
 
 
 
-#ifndef XFree86Server
+#if 0
 /*
  * This function implements glDrawPixels() with an XPutImage call when
  * drawing to the front buffer (X Window drawable).
@@ -840,7 +780,7 @@ drawpixels_8R8G8B( GLcontext *ctx,
    const XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
    XMesaDisplay *dpy = xmesa->xm_visual->display;
    XMesaDrawable buffer = xmesa->xm_buffer->buffer;
-   XMesaGC gc = xmesa->xm_buffer->gc1;
+   XMesaGC gc = xmesa->xm_buffer->gc;
    assert(dpy);
    assert(buffer);
    assert(gc);
@@ -922,39 +862,70 @@ enable( GLcontext *ctx, GLenum pname, GLboolean state )
 }
 
 
-
-/*
- * Initialize all the DD.* function pointers depending on the color
- * buffer configuration.  This is mainly called by XMesaMakeCurrent.
- */
-void
-xmesa_update_state( GLcontext *ctx )
+void xmesa_update_state( GLcontext *ctx )
 {
-   XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   /*int depth=GET_VISUAL_DEPTH(xmesa->xm_visual);*/
+   const XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
 
-   (void) DitherValues;  /* silenced unused var warning */
-#ifndef XFree86Server
-   (void) drawpixels_8R8G8B;
-#endif
-
-   /*
-    * Always the same:
+   /* Propogate statechange information to swrast and swrast_setup
+    * modules.  The X11 driver has no internal GL-dependent state.
     */
+   _swrast_InvalidateState( ctx, ctx->NewState );
+   _swsetup_InvalidateState( ctx, ctx->NewState );
+   _tnl_InvalidateState( ctx, ctx->NewState );
+
+
+   /* setup pointers to front and back buffer clear functions */
+   xmesa->xm_buffer->front_clear_func = clear_front_pixmap;
+   if (xmesa->xm_buffer->backpixmap != XIMAGE) {
+      xmesa->xm_buffer->back_clear_func = clear_back_pixmap;
+   }
+   else if (sizeof(GLushort)!=2 || sizeof(GLuint)!=4) {
+      xmesa->xm_buffer->back_clear_func = clear_nbit_ximage;
+   }
+   else switch (xmesa->xm_visual->BitsPerPixel) {
+   case 8:
+      if (xmesa->xm_visual->hpcr_clear_flag) {
+	 xmesa->xm_buffer->back_clear_func = clear_HPCR_ximage;
+      }
+      else {
+	 xmesa->xm_buffer->back_clear_func = clear_8bit_ximage;
+      }
+      break;
+   case 16:
+      xmesa->xm_buffer->back_clear_func = clear_16bit_ximage;
+      break;
+   case 24:
+      xmesa->xm_buffer->back_clear_func = clear_24bit_ximage;
+      break;
+   case 32:
+      xmesa->xm_buffer->back_clear_func = clear_32bit_ximage;
+      break;
+   default:
+      xmesa->xm_buffer->back_clear_func = clear_nbit_ximage;
+      break;
+   }
+
+   xmesa_update_span_funcs(ctx);
+}
+
+
+
+/* Setup pointers and other driver state that is constant for the life
+ * of a context.
+ */
+void xmesa_init_pointers( GLcontext *ctx )
+{
    ctx->Driver.GetString = get_string;
-   ctx->Driver.UpdateState = xmesa_update_state;
    ctx->Driver.GetBufferSize = get_buffer_size;
    ctx->Driver.Flush = flush;
    ctx->Driver.Finish = finish;
-   
+
    ctx->Driver.RenderStart = 0;
-   ctx->Driver.RenderFinish = 0;
+   ctx->Driver.RenderFinish = _swrast_flush;
 
    ctx->Driver.SetDrawBuffer = set_draw_buffer;
    ctx->Driver.SetReadBuffer = set_read_buffer;
 
-   ctx->Driver.Index = set_index;
-   ctx->Driver.Color = set_color;
    ctx->Driver.ClearIndex = clear_index;
    ctx->Driver.ClearColor = clear_color;
    ctx->Driver.Clear = clear_buffers;
@@ -962,48 +933,13 @@ xmesa_update_state( GLcontext *ctx )
    ctx->Driver.ColorMask = color_mask;
    ctx->Driver.Enable = enable;
 
-   ctx->Driver.PointsFunc = xmesa_get_points_func( ctx );
-   ctx->Driver.LineFunc = xmesa_get_line_func( ctx );
-   ctx->Driver.TriangleFunc = xmesa_get_triangle_func( ctx );
+   ctx->Driver.PointsFunc = _swsetup_Points;
+   ctx->Driver.LineFunc = _swsetup_Line;
+   ctx->Driver.TriangleFunc = _swsetup_Triangle;
+   ctx->Driver.QuadFunc = _swsetup_Quad;
+   ctx->Driver.RasterSetup = _swsetup_RasterSetup;
+   ctx->Driver.RegisterVB = _swsetup_RegisterVB;
+   ctx->Driver.UnregisterVB = _swsetup_UnregisterVB;
 
-/*     ctx->Driver.TriangleCaps = DD_TRI_CULL; */
-
-   /* setup pointers to front and back buffer clear functions */
-   /* XXX this bit of code could be moved to a one-time init */
-   xmesa->xm_buffer->front_clear_func = clear_front_pixmap;
-   if (xmesa->xm_buffer->backpixmap != XIMAGE) {
-      /* back buffer is a pixmap */
-      xmesa->xm_buffer->back_clear_func = clear_back_pixmap;
-   }
-   else if (sizeof(GLushort)!=2 || sizeof(GLuint)!=4) {
-      /* Do this on Crays */
-      xmesa->xm_buffer->back_clear_func = clear_nbit_ximage;
-   }
-   else {
-      /* Do this on most machines */
-      switch (xmesa->xm_visual->BitsPerPixel) {
-         case 8:
-	    if (xmesa->xm_visual->hpcr_clear_flag) {
-               xmesa->xm_buffer->back_clear_func = clear_HPCR_ximage;
-            }
-            else {
-               xmesa->xm_buffer->back_clear_func = clear_8bit_ximage;
-            }
-            break;
-         case 16:
-            xmesa->xm_buffer->back_clear_func = clear_16bit_ximage;
-            break;
-         case 24:
-            xmesa->xm_buffer->back_clear_func = clear_24bit_ximage;
-            break;
-         case 32:
-            xmesa->xm_buffer->back_clear_func = clear_32bit_ximage;
-            break;
-         default:
-            xmesa->xm_buffer->back_clear_func = clear_nbit_ximage;
-            break;
-      }
-   }
-
-   xmesa_update_span_funcs(ctx);
+   (void) DitherValues;  /* silenced unused var warning */
 }

@@ -27,6 +27,9 @@
 #include <ggi/internal/ggi-dl.h>
 #include <ggi/mesa/ggimesa_int.h>
 
+#include "swrast/swrast.h"
+#include "swrast_setup/swrast_setup.h"
+
 /**********************************************************************/
 /*****            Write spans of pixels                           *****/
 /**********************************************************************/
@@ -299,20 +302,23 @@ int GGIsetup_driver(GGIMesaContext ggictx,struct ggi_mesa_info *info)
 
 	ctx->Driver.WriteRGBASpan	= GGIwrite_rgba_span;
 	ctx->Driver.WriteRGBSpan	= GGIwrite_rgb_span;
-	ctx->Driver.WriteMonoRGBASpan   = GGIwrite_mono_span;
+//	ctx->Driver.WriteMonoRGBASpan   = GGIwrite_mono_span;
 	ctx->Driver.WriteRGBAPixels     = GGIwrite_rgba_pixels;
-	ctx->Driver.WriteMonoRGBAPixels = GGIwrite_mono_pixels;
+//	ctx->Driver.WriteMonoRGBAPixels = GGIwrite_mono_pixels;
 
 	ctx->Driver.WriteCI32Span       = GGIwrite_ci32_span;
 	ctx->Driver.WriteCI8Span       	= GGIwrite_ci8_span;
-	ctx->Driver.WriteMonoCISpan   	= GGIwrite_mono_span;
+//	ctx->Driver.WriteMonoCISpan   	= GGIwrite_mono_span;
 	ctx->Driver.WriteCI32Pixels     = GGIwrite_ci32_pixels;
-	ctx->Driver.WriteMonoCIPixels 	= GGIwrite_mono_pixels;
+//	ctx->Driver.WriteMonoCIPixels 	= GGIwrite_mono_pixels;
 
 	ctx->Driver.ReadCI32Span 	= GGIread_ci32_span;
 	ctx->Driver.ReadRGBASpan	= GGIread_rgba_span;
 	ctx->Driver.ReadCI32Pixels	= GGIread_ci32_pixels;
 	ctx->Driver.ReadRGBAPixels	= GGIread_rgba_pixels;
+	
+	ctx->Driver.RegisterVB		= _swsetup_RegisterVB;
+	ctx->Driver.UnregisterVB		= _swsetup_UnregisterVB;
 
 	return 0;
 }
@@ -339,7 +345,7 @@ void GGItriangle_flat(GLcontext *ctx,GLuint v0,GLuint v1,GLuint v2,GLuint pv)
 #define INNER_LOOP(LEFT,RIGHT,Y)				\
 		ggiDrawHLine(VIS,LEFT,FLIP(Y),RIGHT-LEFT);	
 		
-#include "tritemp.h"
+//#include "tritemp.h"
 }
 
 
@@ -380,7 +386,7 @@ void GGItriangle_flat_depth(GLcontext *ctx, GLuint v0, GLuint v1, GLuint v2, GLu
 	if (length) ggiDrawHLine(VIS,startx,yy,length);			\
 	}
 
-#include "tritemp.h"	
+//#include "tritemp.h"	
 }
 
 
@@ -389,7 +395,7 @@ triangle_func ggiGetTriangleFunc(GLcontext *ctx)
 	if (ctx->Stencil.Enabled) return NULL;
 	if (ctx->Polygon.SmoothFlag) return NULL;
 	if (ctx->Polygon.StippleFlag) return NULL;
-	if (ctx->Texture.ReallyEnabled) return NULL;  
+	if (ctx->Texture._ReallyEnabled) return NULL;  
 	if (ctx->Light.ShadeModel==GL_SMOOTH) return NULL;
 	if (ctx->Depth.Test && ctx->Depth.Func != GL_LESS) return NULL;
 

@@ -1,21 +1,21 @@
-/* $Id: matrix.h,v 1.8 2000/10/29 18:12:15 brianp Exp $ */
+/* $Id: matrix.h,v 1.10 2000/11/22 07:32:17 joukj Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -29,7 +29,7 @@
 #define MATRIX_H
 
 
-#include "types.h"
+#include "mtypes.h"
 
 
 #ifdef VMS
@@ -38,38 +38,7 @@
 
 
 extern void
-gl_matrix_transposef( GLfloat to[16], const GLfloat from[16] );
-
-extern void
-gl_matrix_transposed( GLdouble to[16], const GLdouble from[16] );
-
-
-extern void
-gl_rotation_matrix( GLfloat angle, GLfloat x, GLfloat y, GLfloat z,
-                    GLfloat m[] );
-
-
-extern void
 gl_calculate_model_project_matrix( GLcontext *ctx );
-
-extern void
-gl_matrix_ctr( GLmatrix *m );
-
-extern void
-gl_matrix_dtr( GLmatrix *m );
-
-extern void
-gl_matrix_alloc_inv( GLmatrix *m );
-
-extern void
-gl_matrix_mul( GLmatrix *dest, const GLmatrix *a, const GLmatrix *b );
-
-extern void
-gl_matrix_analyze( GLmatrix *mat );
-
-extern void
-gl_print_matrix( const GLmatrix *m );
-
 
 
 extern void

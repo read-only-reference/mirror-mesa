@@ -1,4 +1,4 @@
-/* $Id: dd.h,v 1.37 2000/10/31 18:09:44 keithw Exp $ */
+/* $Id: dd.h,v 1.43 2000/11/24 10:25:05 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -29,12 +29,11 @@
 #ifndef DD_INCLUDED
 #define DD_INCLUDED
 
-/* THIS FILE ONLY INCLUDED BY types.h !!!!! */
+/* THIS FILE ONLY INCLUDED BY mtypes.h !!!!! */
 
 
 struct gl_pixelstore_attrib;
 struct vertex_buffer;
-struct immediate;
 struct gl_pipeline;
 struct gl_pipeline_stage;
 
@@ -109,9 +108,6 @@ struct gl_pipeline_stage;
 
 
 
-/* Used by the GetParameteri device driver function */
-#define DD_HAVE_HARDWARE_FOG         3
-
 
 
 /* Mask bits sent to the driver Clear() function */
@@ -123,6 +119,30 @@ struct gl_pipeline_stage;
 #define DD_STENCIL_BIT     GL_STENCIL_BUFFER_BIT  /* 0x00000400 */
 #define DD_ACCUM_BIT       GL_ACCUM_BUFFER_BIT    /* 0x00000200 */
 
+
+
+
+
+
+
+/* Point, line, triangle, quadrilateral and rectangle rasterizer
+ * functions.  These are specific to the tnl module and will shortly
+ * move to a driver interface specific to that module.
+ */
+typedef void (*points_func)( GLcontext *ctx, GLuint first, GLuint last );
+
+typedef void (*line_func)( GLcontext *ctx, GLuint v1, GLuint v2, GLuint pv );
+
+typedef void (*triangle_func)( GLcontext *ctx,
+                               GLuint v1, GLuint v2, GLuint v3, GLuint pv );
+
+typedef void (*quad_func)( GLcontext *ctx, GLuint v1, GLuint v2,
+                           GLuint v3, GLuint v4, GLuint pv );
+
+typedef void (*render_func)( struct vertex_buffer *VB, 
+			     GLuint start,
+			     GLuint count,
+			     GLuint parity );
 
 
 /*
@@ -141,12 +161,6 @@ struct dd_function_table {
     * NULL can be returned.
     */
 
-   GLuint UpdateStateNotify;
-   /*
-    * Tell mesa exactly when to call UpdateState.  This is a bitwise
-    * or of the _NEW_* flags defined in types.h. 
-    */
-   
    void (*UpdateState)( GLcontext *ctx );
    /*
     * UpdateState() is called whenver Mesa thinks the device driver should
@@ -178,19 +192,6 @@ struct dd_function_table {
     * region defined by (x,y,width,height).
     * This function must obey the glColorMask, glIndexMask and glStencilMask
     * settings!  Software Mesa can do masked clears if the device driver can't.
-    */
-
-   void (*Index)( GLcontext *ctx, GLuint index );
-   /*
-    * Sets current color index for drawing flat-shaded primitives.
-    * This index should also be used in the "mono" drawing functions.
-    */
-
-   void (*Color)( GLcontext *ctx,
-                  GLchan red, GLchan green, GLchan glue, GLchan alpha );
-   /*
-    * Sets current color for drawing flat-shaded primitives.
-    * This color should also be used in the "mono" drawing functions.
     */
 
    GLboolean (*SetDrawBuffer)( GLcontext *ctx, GLenum buffer );
@@ -246,9 +247,8 @@ struct dd_function_table {
     */
 
    void (*WriteMonoRGBASpan)( const GLcontext *ctx, GLuint n, GLint x, GLint y,
-                              const GLubyte mask[] );
-   /* Write a horizontal run of RGBA pixels all with the color last
-    * specified by the Color function.
+                              const GLchan color[4], const GLubyte mask[] );
+   /* Write a horizontal run of RGBA pixels all with the same color.
     */
 
    void (*WriteRGBAPixels)( const GLcontext *ctx,
@@ -259,7 +259,7 @@ struct dd_function_table {
 
    void (*WriteMonoRGBAPixels)( const GLcontext *ctx,
                                 GLuint n, const GLint x[], const GLint y[],
-                                const GLubyte mask[] );
+                                const GLchan color[4], const GLubyte mask[] );
    /* Write an array of mono-RGBA pixels at random locations.
     */
 
@@ -273,7 +273,7 @@ struct dd_function_table {
     */
 
    void (*WriteMonoCISpan)( const GLcontext *ctx, GLuint n, GLint x, GLint y,
-                            const GLubyte mask[] );
+                            GLuint colorIndex, const GLubyte mask[] );
    /* Write a horizontal run of color index pixels using the color index
     * last specified by the Index() function.
     */
@@ -287,7 +287,7 @@ struct dd_function_table {
 
    void (*WriteMonoCIPixels)( const GLcontext *ctx,
                               GLuint n, const GLint x[], const GLint y[],
-                              const GLubyte mask[] );
+                              GLuint colorIndex, const GLubyte mask[] );
    /* Write a random array of color index pixels using the color index
     * last specified by the Index() function.
     */
@@ -342,27 +342,6 @@ struct dd_function_table {
    /*
     * Called whenever an error is generated.  ctx->ErrorValue contains
     * the error value.
-    */
-
-   void (*NearFar)( GLcontext *ctx, GLfloat nearVal, GLfloat farVal );
-   /*
-    * Called from glFrustum and glOrtho to tell device driver the
-    * near and far clipping plane Z values.  The 3Dfx driver, for example,
-    * uses this.
-    */
-
-   GLint (*GetParameteri)( const GLcontext *ctx, GLint param );
-   /* Query the device driver to get an integer parameter.
-    * Current parameters:
-    *     DD_MAX_TEXTURE_SIZE         return maximum texture size
-    *
-    *     DD_MAX_TEXTURES             number of texture sets/stages, usually 1
-    *
-    *     DD_HAVE_HARDWARE_FOG        the driver should return 1 (0 otherwise)
-    *                                 when the hardware support per fragment
-    *                                 fog for free (like the Voodoo Graphics)
-    *                                 so the Mesa core will start to ever use
-    *                                 per fragment fog
     */
 
 
@@ -483,30 +462,6 @@ struct dd_function_table {
    /***
     *** Texture mapping functions:
     ***/
-
-   void (*TexImage)( GLcontext *ctx, GLenum target,
-                     struct gl_texture_object *tObj, GLint level,
-                     GLint internalFormat,
-                     const struct gl_texture_image *image );
-   /* XXX this function is obsolete */
-   /* Called whenever a texture object's image is changed.
-    *    texObject is the number of the texture object being changed.
-    *    level indicates the mipmap level.
-    *    internalFormat is the format in which the texture is to be stored.
-    *    image is a pointer to a gl_texture_image struct which contains
-    *       the actual image data.
-    */
-
-   void (*TexSubImage)( GLcontext *ctx, GLenum target,
-                        struct gl_texture_object *tObj, GLint level,
-                        GLint xoffset, GLint yoffset,
-                        GLsizei width, GLsizei height,
-                        GLint internalFormat,
-                        const struct gl_texture_image *image );
-   /* XXX this function is obsolete */
-   /* Called from glTexSubImage() to define a sub-region of a texture.
-    */
-
 
    GLboolean (*TexImage1D)( GLcontext *ctx, GLenum target, GLint level,
                             GLenum format, GLenum type, const GLvoid *pixels,
@@ -799,14 +754,13 @@ struct dd_function_table {
 
 
    /***
-    *** Accelerated point, line, polygon, quad and rect functions:
+    *** Accelerated point, line, polygon and quad functions:
     ***/
 
    points_func   PointsFunc;
    line_func     LineFunc;
    triangle_func TriangleFunc;
    quad_func     QuadFunc;
-   rect_func     RectFunc;    
    
 
    /***
@@ -840,20 +794,6 @@ struct dd_function_table {
     * gl_render_vb() function in vbrender.c for more details.  
     */
 
-   void (*ReducedPrimitiveChange)( GLcontext *ctx, GLenum primitive );
-   /* If registered, this will be called when rendering transitions between
-    * points, lines and triangles.  It is not called on transitions between 
-    * primtives such as GL_TRIANGLES and GL_TRIANGLE_STRIPS, or between
-    * triangles and quads or triangles and polygons.
-    */
-
-   GLuint TriangleCaps;
-   /* Holds a list of the reasons why we might normally want to call
-    * render_triangle, but which are in fact implemented by the
-    * driver.  The FX driver sets this to DD_TRI_CULL, and will soon
-    * implement DD_TRI_OFFSET.
-    */
-
    GLboolean (*MultipassFunc)( struct vertex_buffer *VB, GLuint passno );
    /* Driver may request additional render passes by returning GL_TRUE
     * when this function is called.  This function will be called
@@ -867,7 +807,7 @@ struct dd_function_table {
    /***
     *** NEW in Mesa 3.x
     ***/
-
+   
    void (*RegisterVB)( struct vertex_buffer *VB );
    void (*UnregisterVB)( struct vertex_buffer *VB );
    /* When Mesa creates a new vertex buffer it calls Driver.RegisterVB()
@@ -878,24 +818,6 @@ struct dd_function_table {
     */
 
 
-   void (*ResetVB)( struct vertex_buffer *VB );
-   void (*ResetCvaVB)( struct vertex_buffer *VB, GLuint stages );
-   /* Do any reset operations necessary to the driver data associated
-    * with these vertex buffers.
-    */
-
-   GLuint RenderVectorFlags;
-   /* What do the render tables require of the vectors they deal
-    * with?  
-    */
-
-   GLuint (*RegisterPipelineStages)( struct gl_pipeline_stage *out,
-				     const struct gl_pipeline_stage *in,
-				     GLuint nr );
-   /* Register new pipeline stages, or modify existing ones.  See also
-    * the OptimizePipeline() functions.
-    */
-
 
    GLboolean (*BuildPrecalcPipeline)( GLcontext *ctx );
    GLboolean (*BuildEltPipeline)( GLcontext *ctx );
@@ -903,10 +825,56 @@ struct dd_function_table {
     */
 
 
-   void (*OptimizePrecalcPipeline)( GLcontext *ctx, struct gl_pipeline *pipe );
-   void (*OptimizeImmediatePipeline)( GLcontext *ctx, struct gl_pipeline *pipe);
-   /* Check to see if a fast path exists for this combination of stages 
-    * in the precalc and immediate (elt) pipelines.
+   /***
+    *** Support for multiple t&l engines
+    ***/
+
+#define FLUSH_INSIDE_BEGIN_END 0x1
+#define FLUSH_STORED_VERTICES  0x2
+#define FLUSH_UPDATE_CURRENT   0x4
+
+   GLuint NeedFlush;
+   /* Set by the driver-supplied t&l engine.  
+    * Bitflags defined above are set whenever 
+    *     - the engine *might* be inside a begin/end object.
+    *     - there *might* be buffered vertices to be flushed.
+    *     - the ctx->Current values *might* not be uptodate.
+    *
+    * The FlushVertices() call below may be used to resolve 
+    * these conditions.
+    */
+
+   GLboolean (*FlushVertices)( GLcontext *ctx, GLuint flags );
+   /* If inside begin/end, returns GL_FALSE.  
+    * Otherwise, 
+    *   if (flags & FLUSH_STORED_VERTICES) flushes any buffered vertices,
+    *   if (flags & FLUSH_UPDATE_CURRENT) updates ctx->Current,
+    *   returns GL_TRUE. 
+    *
+    * Note that the default t&l engine never clears the
+    * FLUSH_UPDATE_CURRENT bit, even after performing the update.
+    */
+
+   void (*LightingSpaceChange)( GLcontext *ctx );
+   /* Notify driver that the special derived value _NeedEyeCoords has
+    * changed.  
+    */
+
+   void (*NewList)( GLcontext *ctx, GLuint list, GLenum mode );
+   void (*EndList)( GLcontext *ctx );
+   /* Let the t&l component know what is going on with display lists
+    * in time to make changes to dispatch tables, etc.
+    */
+
+   void (*MakeCurrent)( GLcontext *ctx, GLframebuffer *drawBuffer, 
+			GLframebuffer *readBuffer );
+   /* Let the t&l component know when the context becomes current.
+    */
+
+
+   void (*LockArraysEXT)( GLcontext *ctx, GLint first, GLsizei count );
+   void (*UnlockArraysEXT)( GLcontext *ctx );
+   /* 
     */
 
 
@@ -926,9 +894,11 @@ struct dd_function_table {
 			      GLenum dfactorRGB, GLenum sfactorA,
 			      GLenum dfactorA );
    void (*ClearDepth)(GLcontext *ctx, GLclampd d);
+   void (*ClearStencil)(GLcontext *ctx, GLint s);
    void (*ColorMask)(GLcontext *ctx, GLboolean rmask, GLboolean gmask,
                      GLboolean bmask, GLboolean amask );
    void (*CullFace)(GLcontext *ctx, GLenum mode);
+   void (*ClipPlane)(GLcontext *ctx, GLenum plane, const GLfloat *equation );
    void (*FrontFace)(GLcontext *ctx, GLenum mode);
    void (*DepthFunc)(GLcontext *ctx, GLenum func);
    void (*DepthMask)(GLcontext *ctx, GLboolean flag);
@@ -938,7 +908,7 @@ struct dd_function_table {
    void (*Hint)(GLcontext *ctx, GLenum target, GLenum mode);
    void (*IndexMask)(GLcontext *ctx, GLuint mask);
    void (*Lightfv)(GLcontext *ctx, GLenum light,
-		   GLenum pname, const GLfloat *params, GLint nparams );
+		   GLenum pname, const GLfloat *params );
    void (*LightModelfv)(GLcontext *ctx, GLenum pname, const GLfloat *params);
    void (*LineStipple)(GLcontext *ctx, GLint factor, GLushort pattern );
    void (*LineWidth)(GLcontext *ctx, GLfloat width);
@@ -947,10 +917,12 @@ struct dd_function_table {
    void (*PolygonStipple)(GLcontext *ctx, const GLubyte *mask );
    void (*Scissor)(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h);
    void (*ShadeModel)(GLcontext *ctx, GLenum mode);
-   void (*ClearStencil)(GLcontext *ctx, GLint s);
    void (*StencilFunc)(GLcontext *ctx, GLenum func, GLint ref, GLuint mask);
    void (*StencilMask)(GLcontext *ctx, GLuint mask);
    void (*StencilOp)(GLcontext *ctx, GLenum fail, GLenum zfail, GLenum zpass);
+   void (*TexGen)(GLcontext *ctx, GLenum coord, GLenum pname, 
+		  const GLfloat *params );
+   void (*TextureMatrix)(GLcontext *ctx, GLuint unit, const GLmatrix *mat);
    void (*Viewport)(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h);
 
    /* State-query functions
@@ -962,8 +934,134 @@ struct dd_function_table {
    GLboolean (*GetFloatv)(GLcontext *ctx, GLenum pname, GLfloat *result);
    GLboolean (*GetIntegerv)(GLcontext *ctx, GLenum pname, GLint *result);
    GLboolean (*GetPointerv)(GLcontext *ctx, GLenum pname, GLvoid **result);
+
+
+   void (*VertexPointer)(GLcontext *ctx, GLint size, GLenum type, 
+			 GLsizei stride, const GLvoid *ptr);
+   void (*NormalPointer)(GLcontext *ctx, GLenum type, 
+			 GLsizei stride, const GLvoid *ptr);
+   void (*ColorPointer)(GLcontext *ctx, GLint size, GLenum type, 
+			GLsizei stride, const GLvoid *ptr);
+   void (*FogCoordPointer)(GLcontext *ctx, GLenum type, 
+			   GLsizei stride, const GLvoid *ptr);
+   void (*IndexPointer)(GLcontext *ctx, GLenum type, 
+			GLsizei stride, const GLvoid *ptr);
+   void (*SecondaryColorPointer)(GLcontext *ctx, GLint size, GLenum type, 
+				 GLsizei stride, const GLvoid *ptr);
+   void (*TexCoordPointer)(GLcontext *ctx, GLint size, GLenum type, 
+			   GLsizei stride, const GLvoid *ptr);
+   void (*EdgeFlagPointer)(GLcontext *ctx, GLsizei stride, const GLvoid *ptr);
 };
 
+
+
+
+
+
+
+typedef struct {
+
+   void (*ArrayElement)( GLint ); /* NOTE */
+   void (*Color3f)( GLfloat, GLfloat, GLfloat );
+   void (*Color3fv)( const GLfloat * );
+   void (*Color3ub)( GLubyte, GLubyte, GLubyte );
+   void (*Color3ubv)( const GLubyte * );
+   void (*Color4f)( GLfloat, GLfloat, GLfloat, GLfloat );
+   void (*Color4fv)( const GLfloat * );
+   void (*Color4ub)( GLubyte, GLubyte, GLubyte, GLubyte );
+   void (*Color4ubv)( const GLubyte * );
+   void (*EdgeFlag)( GLboolean );
+   void (*EdgeFlagv)( const GLboolean * );
+   void (*EvalCoord1f)( GLfloat );          /* NOTE */
+   void (*EvalCoord1fv)( const GLfloat * );          /* NOTE */
+   void (*EvalCoord2f)( GLfloat, GLfloat ); /* NOTE */
+   void (*EvalCoord2fv)( const GLfloat * ); /* NOTE */
+   void (*EvalPoint1)( GLint );             /* NOTE */
+   void (*EvalPoint2)( GLint, GLint );      /* NOTE */
+   void (*FogCoordfEXT)( GLfloat );
+   void (*FogCoordfvEXT)( const GLfloat * );
+   void (*Indexi)( GLint );
+   void (*Indexiv)( const GLint * );
+   void (*Materialfv)( GLenum face, GLenum pname, const GLfloat * ); /* NOTE */ 
+   void (*MultiTexCoord1fARB)( GLenum, GLfloat );
+   void (*MultiTexCoord1fvARB)( GLenum, const GLfloat * );
+   void (*MultiTexCoord2fARB)( GLenum, GLfloat, GLfloat );
+   void (*MultiTexCoord2fvARB)( GLenum, const GLfloat * );
+   void (*MultiTexCoord3fARB)( GLenum, GLfloat, GLfloat, GLfloat );
+   void (*MultiTexCoord3fvARB)( GLenum, const GLfloat * );
+   void (*MultiTexCoord4fARB)( GLenum, GLfloat, GLfloat, GLfloat, GLfloat );
+   void (*MultiTexCoord4fvARB)( GLenum, const GLfloat * );
+   void (*Normal3f)( GLfloat, GLfloat, GLfloat );
+   void (*Normal3fv)( const GLfloat * );
+   void (*SecondaryColor3fEXT)( GLfloat, GLfloat, GLfloat );
+   void (*SecondaryColor3fvEXT)( const GLfloat * );
+   void (*SecondaryColor3ubEXT)( GLubyte, GLubyte, GLubyte );
+   void (*SecondaryColor3ubvEXT)( const GLubyte * );
+   void (*TexCoord1f)( GLfloat );
+   void (*TexCoord1fv)( const GLfloat * );
+   void (*TexCoord2f)( GLfloat, GLfloat );
+   void (*TexCoord2fv)( const GLfloat * );
+   void (*TexCoord3f)( GLfloat, GLfloat, GLfloat );
+   void (*TexCoord3fv)( const GLfloat * );
+   void (*TexCoord4f)( GLfloat, GLfloat, GLfloat, GLfloat );
+   void (*TexCoord4fv)( const GLfloat * );
+   void (*Vertex2f)( GLfloat, GLfloat );
+   void (*Vertex2fv)( const GLfloat * );
+   void (*Vertex3f)( GLfloat, GLfloat, GLfloat );
+   void (*Vertex3fv)( const GLfloat * );
+   void (*Vertex4f)( GLfloat, GLfloat, GLfloat, GLfloat );
+   void (*Vertex4fv)( const GLfloat * );
+   void (*CallList)( GLuint );	/* NOTE */
+   void (*Begin)( GLenum );
+   void (*End)( void );
+   /* Drivers present a reduced set of the functions possible in
+    * begin/end objects.  Core mesa provides translation stubs for the
+    * remaining functions to map down to these entrypoints.  
+    *
+    * These are the initial values to be installed into dispatch by
+    * mesa.  If the t&l driver wants to modify the dispatch table
+    * while installed, it must do so itself.  It would be possible for
+    * the vertexformat to install it's own initial values for these
+    * functions, but this way there is an obvious list of what is
+    * expected of the driver.
+    *
+    * If the driver wants to hook in entrypoints other than those
+    * listed above, it must restore them to their original values in
+    * the disable() callback, below.  
+    */
+
+   void (*Rectf)( GLfloat, GLfloat, GLfloat, GLfloat );
+   /* 
+    */
+
+
+   void (*DrawArrays)( GLenum mode, GLint start, GLsizei count );
+   void (*DrawElements)( GLenum mode, GLsizei count, GLenum type, 
+			 const GLvoid *indices );
+   void (*DrawRangeElements)(GLenum mode, GLuint start,
+			     GLuint end, GLsizei count,
+			     GLenum type, const GLvoid *indices);
+   /* These may or may not belong here.  Heuristic: If an array is
+    * enabled, the installed vertex format should support that array and
+    * it's current size natively.
+    */
+
+   void (*EvalMesh1)( GLenum mode, GLint i1, GLint i2 );
+   void (*EvalMesh2)( GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2 );
+   /* If you don't support eval, fallback to the default vertex format
+    * on receiving an eval call and use the pipeline mechanism to
+    * provide partial t&l acceleration.
+    *
+    * Mesa will provide a set of helper functions to do eval within
+    * accelerated vertex formats, eventually...
+    */
+
+   GLboolean prefer_float_colors;
+   /* Should core send non-standard colors to glColor4f or glColor4ub
+    */
+
+
+} GLvertexformat;
 
 
 #endif

@@ -1,4 +1,3 @@
-/* -*- mode: C; tab-width:8; c-basic-offset:2 -*- */
 
 /*
  * Mesa 3-D graphics library
@@ -67,64 +66,10 @@
 #if !defined(FXMESA_USE_ARGB) 
 
 
-#if defined(FX_GLIDE3) && defined(XF86DRI)
-
-static FxBool writeRegionClipped(fxMesaContext fxMesa, GrBuffer_t dst_buffer,
-			  FxU32 dst_x, FxU32 dst_y, GrLfbSrcFmt_t src_format,
-			  FxU32 src_width, FxU32 src_height, FxI32 src_stride,
-			  void *src_data)
-{
-  int i, x, w, srcElt;
-  void *data;
-
-  if (src_width==1 && src_height==1) { /* Easy case writing a point */
-    for (i=0; i<fxMesa->numClipRects; i++) {
-      if ((dst_x>=fxMesa->pClipRects[i].x1) && 
-	  (dst_x<fxMesa->pClipRects[i].x2) &&
-	  (dst_y>=fxMesa->pClipRects[i].y1) && 
-	  (dst_y<fxMesa->pClipRects[i].y2)) {
-	FX_grLfbWriteRegion(dst_buffer, dst_x, dst_y, src_format,
-			    1, 1, src_stride, src_data);
-	return GL_TRUE;
-      }
-    }
-  } else if (src_height==1) { /* Writing a span */
-    if (src_format==GR_LFB_SRC_FMT_8888) srcElt=4;
-    else if (src_format==GR_LFB_SRC_FMT_ZA16) srcElt=2;
-    else {
-      fprintf(stderr, "Unknown src_format passed to writeRegionClipped\n");
-      return GL_FALSE;
-    }
-    for (i=0; i<fxMesa->numClipRects; i++) {
-      if (dst_y>=fxMesa->pClipRects[i].y1 && dst_y<fxMesa->pClipRects[i].y2) {
-	if (dst_x<fxMesa->pClipRects[i].x1) {
-	  x=fxMesa->pClipRects[i].x1;
-	  data=((char*)src_data)+srcElt*(x - dst_x);
-	  w=src_width-(x-dst_x);
-	} else {
-	  x=dst_x;
-	  data=src_data;
-	  w=src_width;
-	}
-	if (x+w>fxMesa->pClipRects[i].x2) {
-	  w=fxMesa->pClipRects[i].x2-x;
-	}
-	FX_grLfbWriteRegion(dst_buffer, x, dst_y, src_format, w, 1,
-			    src_stride, data);
-      }
-    }
-  } else { /* Punt on the case of arbitrary rectangles */
-    return GL_FALSE;
-  }
-  return GL_TRUE;
-}
-
-#else
 
 #define writeRegionClipped(fxm,dst_buffer,dst_x,dst_y,src_format,src_width,src_height,src_stride,src_data)		\
   FX_grLfbWriteRegion(dst_buffer,dst_x,dst_y,src_format,src_width,src_height,src_stride,src_data)
 
-#endif
 
 
 /* KW: Rearranged the args in the call to grLfbWriteRegion().
@@ -197,13 +142,12 @@ static void fxDDWriteRGBASpan(const GLcontext *ctx,
 {
   fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
   GLuint i;
-  GLint bottom=fxMesa->height+fxMesa->y_offset-1; 
+  GLint bottom=fxMesa->height-1; 
 
   if (MESA_VERBOSE&VERBOSE_DRIVER) {
      fprintf(stderr,"fxmesa: fxDDWriteRGBASpan(...)\n");
   }
 
-  x+=fxMesa->x_offset;
   if (mask) {
     int span=0;
 
@@ -234,14 +178,13 @@ static void fxDDWriteRGBSpan(const GLcontext *ctx,
 {
   fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
   GLuint i;
-  GLint bottom=fxMesa->height+fxMesa->y_offset-1;
+  GLint bottom=fxMesa->height-1;
   GLubyte rgba[MAX_WIDTH][4];
 
   if (MESA_VERBOSE&VERBOSE_DRIVER) {
      fprintf(stderr,"fxmesa: fxDDWriteRGBSpan()\n");
   }
 
-  x+=fxMesa->x_offset;
   if (mask) {
     int span=0;
 
@@ -280,24 +223,24 @@ static void fxDDWriteRGBSpan(const GLcontext *ctx,
 
 static void fxDDWriteMonoRGBASpan(const GLcontext *ctx, 
                                   GLuint n, GLint x, GLint y,
-                                  const GLubyte mask[])
+                                  const GLchan color[4], const GLubyte mask[])
 {
   fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
   GLuint i;
-  GLint bottom=fxMesa->height+fxMesa->y_offset-1;
+  GLint bottom=fxMesa->height-1;
   GLuint data[MAX_WIDTH];
+  GrColor_t gColor = FXCOLOR4(color);
 
   if (MESA_VERBOSE&VERBOSE_DRIVER) {
      fprintf(stderr,"fxmesa: fxDDWriteMonoRGBASpan(...)\n");
   }
 
-  x+=fxMesa->x_offset;
   if (mask) {
     int span=0;
 
     for (i=0;i<n;i++) {
       if (mask[i]) {
-        data[span] = (GLuint) fxMesa->color;
+        data[span] = (GLuint) gColor;
         ++span;
       } else {
         if (span > 0) {
@@ -315,7 +258,7 @@ static void fxDDWriteMonoRGBASpan(const GLcontext *ctx,
                         (void *) data );
   } else {
     for (i=0;i<n;i++) {
-      data[i]=(GLuint) fxMesa->color;
+      data[i]=(GLuint) gColor;
     }
 
     writeRegionClipped(fxMesa,  fxMesa->currentFB, x, bottom-y, GR_LFB_SRC_FMT_8888,
@@ -331,7 +274,7 @@ static void fxDDReadRGBASpan(const GLcontext *ctx,
   fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
   GLushort data[MAX_WIDTH];
   GLuint i;
-  GLint bottom=fxMesa->height+fxMesa->y_offset-1;
+  GLint bottom=fxMesa->height-1;
 
   printf("read span %d, %d, %d\n", x,y,n);
   if (MESA_VERBOSE&VERBOSE_DRIVER) {
@@ -340,7 +283,6 @@ static void fxDDReadRGBASpan(const GLcontext *ctx,
 
   assert(n < MAX_WIDTH);
 
-  x+=fxMesa->x_offset;
   FX_grLfbReadRegion( fxMesa->currentFB, x, bottom-y, n, 1, 0, data);
 
   for (i=0;i<n;i++) {
@@ -370,14 +312,9 @@ static void read_R5G6B5_span(const GLcontext *ctx,
                 GR_ORIGIN_UPPER_LEFT,
                 FXFALSE,
                 &info)) {
-    const GLint winX = fxMesa->x_offset;
-    const GLint winY = fxMesa->y_offset + fxMesa->height - 1;
-#ifdef XF86DRI
-    const GLint srcStride = (fxMesa->glCtx->Color.DrawBuffer == GL_FRONT)
-                          ? (fxMesa->screen_width) : (info.strideInBytes / 2);
-#else
+    const GLint winX = 0;
+    const GLint winY = fxMesa->height - 1;
     const GLint srcStride = info.strideInBytes / 2; /* stride in GLushorts */
-#endif
     const GLushort *data16 = (const GLushort *) info.lfbPtr
                            + (winY - y) * srcStride
                            + (winX + x);
@@ -422,7 +359,7 @@ static void fxDDWriteRGBAPixels(const GLcontext *ctx,
 {
   fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
   GLuint i;
-  GLint bottom=fxMesa->height+fxMesa->y_offset-1;
+  GLint bottom=fxMesa->height-1;
 
   if (MESA_VERBOSE&VERBOSE_DRIVER) {
      fprintf(stderr,"fxmesa: fxDDWriteRGBAPixels(...)\n");
@@ -430,17 +367,18 @@ static void fxDDWriteRGBAPixels(const GLcontext *ctx,
 
   for(i=0;i<n;i++)
     if(mask[i])
-       LFB_WRITE_SPAN_MESA(fxMesa->currentFB, x[i]+fxMesa->x_offset, bottom-y[i],
+       LFB_WRITE_SPAN_MESA(fxMesa->currentFB, x[i], bottom-y[i],
                        1, 1, (void *)rgba[i]);
 }
 
 static void fxDDWriteMonoRGBAPixels(const GLcontext *ctx,
                                     GLuint n, const GLint x[], const GLint y[],
-                                    const GLubyte mask[])
+                                    const GLchan color[4], const GLubyte mask[])
 {
   fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
   GLuint i;
-  GLint bottom=fxMesa->height+fxMesa->y_offset-1;
+  GLint bottom=fxMesa->height-1;
+  GrColor_t gColor = FXCOLOR4(color);
 
   if (MESA_VERBOSE&VERBOSE_DRIVER) {
      fprintf(stderr,"fxmesa: fxDDWriteMonoRGBAPixels(...)\n");
@@ -448,8 +386,8 @@ static void fxDDWriteMonoRGBAPixels(const GLcontext *ctx,
 
   for(i=0;i<n;i++)
     if(mask[i])
-      writeRegionClipped(fxMesa, fxMesa->currentFB,x[i]+fxMesa->x_offset,bottom-y[i],
-                       GR_LFB_SRC_FMT_8888,1,1,0,(void *) &fxMesa->color);
+      writeRegionClipped(fxMesa, fxMesa->currentFB,x[i],bottom-y[i],
+                       GR_LFB_SRC_FMT_8888,1,1,0,(void *) &gColor);
 }
 
 
@@ -466,14 +404,9 @@ static void read_R5G6B5_pixels(const GLcontext *ctx,
                 GR_ORIGIN_UPPER_LEFT,
                 FXFALSE,
                 &info)) {
-#ifdef XF86DRI
-    const GLint srcStride = (fxMesa->glCtx->Color.DrawBuffer == GL_FRONT)
-                          ? (fxMesa->screen_width) : (info.strideInBytes / 2);
-#else
     const GLint srcStride = info.strideInBytes / 2; /* stride in GLushorts */
-#endif
-    const GLint winX = fxMesa->x_offset;
-    const GLint winY = fxMesa->y_offset + fxMesa->height - 1;
+    const GLint winX = 0;
+    const GLint winY = fxMesa->height - 1;
     GLuint i;
     for(i=0;i<n;i++) {
       if(mask[i]) {
@@ -503,13 +436,12 @@ void fxDDWriteDepthSpan(GLcontext *ctx,
                         const GLubyte mask[])
 {
   fxMesaContext fxMesa = (fxMesaContext)ctx->DriverCtx;
-  GLint bottom = fxMesa->height + fxMesa->y_offset - 1;
+  GLint bottom = fxMesa->height - 1;
 
   if (MESA_VERBOSE & VERBOSE_DRIVER) {
      fprintf(stderr, "fxmesa: fxDDWriteDepthSpan(...)\n");
   }
 
-  x += fxMesa->x_offset;
 
   if (mask) {
     GLint i;
@@ -537,7 +469,7 @@ void fxDDReadDepthSpan(GLcontext *ctx,
                        GLuint n, GLint x, GLint y, GLdepth depth[])
 {
   fxMesaContext fxMesa = (fxMesaContext)ctx->DriverCtx;
-  GLint bottom = fxMesa->height + fxMesa->y_offset - 1;
+  GLint bottom = fxMesa->height - 1;
   GLushort depth16[MAX_WIDTH];
   GLuint i;
 
@@ -545,7 +477,6 @@ void fxDDReadDepthSpan(GLcontext *ctx,
      fprintf(stderr, "fxmesa: fxDDReadDepthSpan(...)\n");
   }
 
-  x += fxMesa->x_offset;
   FX_grLfbReadRegion(GR_BUFFER_AUXBUFFER, x, bottom - y, n, 1, 0, depth16);
   for (i = 0; i < n; i++) {
     depth[i] = depth16[i];
@@ -559,7 +490,7 @@ void fxDDWriteDepthPixels(GLcontext *ctx,
                           const GLdepth depth[], const GLubyte mask[])
 {
   fxMesaContext fxMesa = (fxMesaContext)ctx->DriverCtx;
-  GLint bottom = fxMesa->height + fxMesa->y_offset - 1;
+  GLint bottom = fxMesa->height - 1;
   GLuint i;
 
   if (MESA_VERBOSE & VERBOSE_DRIVER) {
@@ -568,7 +499,7 @@ void fxDDWriteDepthPixels(GLcontext *ctx,
 
   for (i = 0; i < n; i++) {
     if (mask[i]) {
-      int xpos = x[i] + fxMesa->x_offset;
+      int xpos = x[i];
       int ypos = bottom - y[i];
       GLushort d = depth[i];
       writeRegionClipped(fxMesa, GR_BUFFER_AUXBUFFER, xpos, ypos,
@@ -582,7 +513,7 @@ void fxDDReadDepthPixels(GLcontext *ctx, GLuint n,
                          const GLint x[], const GLint y[], GLdepth depth[])
 {
   fxMesaContext fxMesa = (fxMesaContext)ctx->DriverCtx;
-  GLint bottom = fxMesa->height + fxMesa->y_offset - 1;
+  GLint bottom = fxMesa->height - 1;
   GLuint i;
 
   if (MESA_VERBOSE & VERBOSE_DRIVER) {
@@ -590,7 +521,7 @@ void fxDDReadDepthPixels(GLcontext *ctx, GLuint n,
   }
 
   for (i = 0; i < n; i++) {
-    int xpos = x[i] + fxMesa->x_offset;
+    int xpos = x[i];
     int ypos = bottom - y[i];
     GLushort d;
     FX_grLfbReadRegion(GR_BUFFER_AUXBUFFER, xpos, ypos, 1, 1, 0, &d);
@@ -634,6 +565,7 @@ void fxSetupDDSpanPointers(GLcontext *ctx)
  * Need this to provide at least one external definition.
  */
 
+extern int gl_fx_dummy_function_span(void);
 int gl_fx_dummy_function_span(void)
 {
   return 0;

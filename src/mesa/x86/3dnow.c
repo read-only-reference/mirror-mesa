@@ -1,4 +1,4 @@
-/* $Id: 3dnow.c,v 1.8 2000/10/23 00:16:28 gareth Exp $ */
+/* $Id: 3dnow.c,v 1.12 2000/11/22 08:55:53 joukj Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -31,13 +31,16 @@
 
 #include "glheader.h"
 #include "context.h"
-#include "types.h"
-#include "vertices.h"
-#include "xform.h"
+#include "mtypes.h"
 #include "3dnow.h"
 
+#include "math/m_vertices.h"
+#include "math/m_xform.h"
+
+#include "tnl/t_context.h"
+
 #ifdef DEBUG
-#include "debug_xform.h"
+#include "math/m_debug_xform.h"
 #endif
 
 
@@ -178,7 +181,7 @@ void gl_init_3dnow_vertex_asm( void )
    gl_project_v16		= gl_3dnow_project_vertices;
    gl_project_clipped_v16	= gl_3dnow_project_clipped_vertices;
 
-#if 0
+#ifdef DEBUG_NOT
    gl_test_all_vertex_functions( "3DNow!" );
 #endif
 #endif

@@ -1,21 +1,21 @@
-/* $Id: pixel.c,v 1.18 2000/10/30 16:32:43 brianp Exp $ */
+/* $Id: pixel.c,v 1.20 2000/11/28 00:07:51 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -34,7 +34,7 @@
 #include "macros.h"
 #include "mem.h"
 #include "pixel.h"
-#include "types.h"
+#include "mtypes.h"
 #endif
 
 
@@ -653,38 +653,34 @@ _mesa_PixelTransferi( GLenum pname, GLint param )
  * Apply scale and bias factors to an array of RGBA pixels.
  */
 void
-_mesa_scale_and_bias_rgba(const GLcontext *ctx, GLuint n, GLfloat rgba[][4])
+_mesa_scale_and_bias_rgba(const GLcontext *ctx, GLuint n, GLfloat rgba[][4],
+                          GLfloat rScale, GLfloat gScale,
+                          GLfloat bScale, GLfloat aScale,
+                          GLfloat rBias, GLfloat gBias,
+                          GLfloat bBias, GLfloat aBias)
 {
-   if (ctx->Pixel.RedScale != 1.0 || ctx->Pixel.RedBias != 0.0) {
-      const GLfloat scale = ctx->Pixel.RedScale;
-      const GLfloat bias = ctx->Pixel.RedBias;
+   if (rScale != 1.0 || rBias != 0.0) {
       GLuint i;
       for (i = 0; i < n; i++) {
-         rgba[i][RCOMP] = rgba[i][RCOMP] * scale + bias;
+         rgba[i][RCOMP] = rgba[i][RCOMP] * rScale + rBias;
       }
    }
-   if (ctx->Pixel.GreenScale != 1.0 || ctx->Pixel.GreenBias != 0.0) {
-      const GLfloat scale = ctx->Pixel.GreenScale;
-      const GLfloat bias = ctx->Pixel.GreenBias;
+   if (gScale != 1.0 || gBias != 0.0) {
       GLuint i;
       for (i = 0; i < n; i++) {
-         rgba[i][GCOMP] = rgba[i][GCOMP] * scale + bias;
+         rgba[i][GCOMP] = rgba[i][GCOMP] * gScale + gBias;
       }
    }
-   if (ctx->Pixel.BlueScale != 1.0 || ctx->Pixel.BlueBias != 0.0) {
-      const GLfloat scale = ctx->Pixel.BlueScale;
-      const GLfloat bias = ctx->Pixel.BlueBias;
+   if (bScale != 1.0 || bBias != 0.0) {
       GLuint i;
       for (i = 0; i < n; i++) {
-         rgba[i][BCOMP] = rgba[i][BCOMP] * scale + bias;
+         rgba[i][BCOMP] = rgba[i][BCOMP] * bScale + bBias;
       }
    }
-   if (ctx->Pixel.AlphaScale != 1.0 || ctx->Pixel.AlphaBias != 0.0) {
-      const GLfloat scale = ctx->Pixel.AlphaScale;
-      const GLfloat bias = ctx->Pixel.AlphaBias;
+   if (aScale != 1.0 || aBias != 0.0) {
       GLuint i;
       for (i = 0; i < n; i++) {
-         rgba[i][ACOMP] = rgba[i][ACOMP] * scale + bias;
+         rgba[i][ACOMP] = rgba[i][ACOMP] * aScale + aBias;
       }
    }
 }

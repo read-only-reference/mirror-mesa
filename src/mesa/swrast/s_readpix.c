@@ -1,4 +1,4 @@
-/* $Id: s_readpix.c,v 1.1 2000/10/31 18:00:04 keithw Exp $ */
+/* $Id: s_readpix.c,v 1.4 2000/11/28 00:04:39 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -36,6 +36,7 @@
 #include "pixel.h"
 
 #include "s_alphabuf.h"
+#include "s_context.h"
 #include "s_depth.h"
 #include "s_span.h"
 #include "s_stencil.h"
@@ -497,7 +498,7 @@ read_fast_rgba_pixels( GLcontext *ctx,
                        const struct gl_pixelstore_attrib *packing )
 {
    /* can't do scale, bias, mapping, etc */
-   if (ctx->ImageTransferState)
+   if (ctx->_ImageTransferState)
        return GL_FALSE;
 
    /* can't do fancy pixel packing */
@@ -519,24 +520,24 @@ read_fast_rgba_pixels( GLcontext *ctx,
          rowLength = width;
 
       /* horizontal clipping */
-      if (srcX < ctx->ReadBuffer->Xmin) {
-         skipPixels += (ctx->ReadBuffer->Xmin - srcX);
-         readWidth  -= (ctx->ReadBuffer->Xmin - srcX);
-         srcX = ctx->ReadBuffer->Xmin;
+      if (srcX < ctx->ReadBuffer->_Xmin) {
+         skipPixels += (ctx->ReadBuffer->_Xmin - srcX);
+         readWidth  -= (ctx->ReadBuffer->_Xmin - srcX);
+         srcX = ctx->ReadBuffer->_Xmin;
       }
-      if (srcX + readWidth > ctx->ReadBuffer->Xmax)
-         readWidth -= (srcX + readWidth - ctx->ReadBuffer->Xmax);
+      if (srcX + readWidth > ctx->ReadBuffer->_Xmax)
+         readWidth -= (srcX + readWidth - ctx->ReadBuffer->_Xmax);
       if (readWidth <= 0)
          return GL_TRUE;
 
       /* vertical clipping */
-      if (srcY < ctx->ReadBuffer->Ymin) {
-         skipRows   += (ctx->ReadBuffer->Ymin - srcY);
-         readHeight -= (ctx->ReadBuffer->Ymin - srcY);
-         srcY = ctx->ReadBuffer->Ymin;
+      if (srcY < ctx->ReadBuffer->_Ymin) {
+         skipRows   += (ctx->ReadBuffer->_Ymin - srcY);
+         readHeight -= (ctx->ReadBuffer->_Ymin - srcY);
+         srcY = ctx->ReadBuffer->_Ymin;
       }
-      if (srcY + readHeight > ctx->ReadBuffer->Ymax)
-         readHeight -= (srcY + readHeight - ctx->ReadBuffer->Ymax);
+      if (srcY + readHeight > ctx->ReadBuffer->_Ymax)
+         readHeight -= (srcY + readHeight - ctx->ReadBuffer->_Ymax);
       if (readHeight <= 0)
          return GL_TRUE;
 
@@ -636,7 +637,7 @@ static void read_rgba_pixels( GLcontext *ctx,
    }
 
    if (ctx->Pixel.Convolution2DEnabled || ctx->Pixel.Separable2DEnabled) {
-      const GLuint transferOps = ctx->ImageTransferState;
+      const GLuint transferOps = ctx->_ImageTransferState;
       GLfloat *dest, *src, *tmpImage, *convImage;
       GLint row;
 
@@ -687,7 +688,7 @@ static void read_rgba_pixels( GLcontext *ctx,
       src = convImage;
       for (row = 0; row < height; row++) {
          GLvoid *dest;
-         dest = _mesa_image_address(packing, pixels, width, height,
+         dest = _mesa_image_address(packing, pixels, readWidth, height,
                                     format, type, 0, row, 0);
          _mesa_pack_float_rgba_span(ctx, readWidth,
                                     (const GLfloat (*)[4]) src,
@@ -717,7 +718,7 @@ static void read_rgba_pixels( GLcontext *ctx,
                                    format, type, 0, row, 0);
          _mesa_pack_rgba_span(ctx, readWidth, (const GLchan (*)[4]) rgba,
                               format, type, dst, packing,
-                              ctx->ImageTransferState);
+                              ctx->_ImageTransferState);
       }
    }
 
@@ -734,6 +735,9 @@ _swrast_ReadPixels( GLcontext *ctx,
 		    GLvoid *pixels )
 {
    (void) pack;
+
+   if (SWRAST_CONTEXT(ctx)->NewState)
+      _swrast_validate_derived( ctx );
 
    switch (format) {
       case GL_COLOR_INDEX:

@@ -1,8 +1,8 @@
-/* $Id: gl.h,v 1.45 2000/09/15 19:45:00 brianp Exp $ */
+/* $Id: gl.h,v 1.47 2000/11/03 15:14:18 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
  *
@@ -2249,6 +2249,8 @@ GLAPI void GLAPIENTRY glResizeBuffersMESA( void );
 #define GL_TRACE_ARRAYS_BIT_MESA		0x0008
 #define GL_TRACE_TEXTURES_BIT_MESA		0x0010
 #define GL_TRACE_PIXELS_BIT_MESA		0x0020
+#define GL_TRACE_MASK_MESA			0x8755
+#define GL_TRACE_NAME_MESA			0x8756
 
 GLAPI void GLAPIENTRY glEnableTrace( GLbitfield mask );
 GLAPI void GLAPIENTRY glDisableTrace( GLbitfield mask );
@@ -2263,6 +2265,21 @@ GLAPI void GLAPIENTRY glTracePointerRange( const GLvoid* first, const GLvoid* la
 
 #endif /* GL_MESA_trace */
 
+
+/*
+ * ???. GL_MESA_packed_depth_stencil
+ * XXX this will be in glext.h someday
+ */
+#ifndef GL_MESA_packed_depth_stencil
+#define GL_MESA_packed_depth_stencil 1
+
+#define GL_DEPTH_STENCIL_MESA			0x8750
+#define GL_UNSIGNED_INT_24_8_MESA		0x8751
+#define GL_UNSIGNED_INT_8_24_REV_MESA		0x8752
+#define GL_UNSIGNED_SHORT_15_1_MESA		0x8753
+#define GL_UNSIGNED_SHORT_1_15_REV_MESA		0x8754
+
+#endif /* GL_MESA_packed_depth_stencil */
 
 
 

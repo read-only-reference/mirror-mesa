@@ -1,4 +1,3 @@
-/* -*- mode: C; tab-width:8; c-basic-offset:2 -*- */
 
 /*
  * Mesa 3-D graphics library
@@ -55,6 +54,8 @@
 #include "fxdrv.h"
 #include "enums.h"
 
+#include "tnl/t_context.h"
+
 static GLuint fxGetTexSetConfiguration(GLcontext *ctx,
 				struct gl_texture_object *tObj0,
 				struct gl_texture_object *tObj1);
@@ -68,7 +69,7 @@ static void fxSetupBlend(GLcontext *ctx);
 static void fxSetupDepthTest(GLcontext *ctx);
 static void fxSetupScissor(GLcontext *ctx);
 static void fxSetupCull(GLcontext *ctx);
-static void gl_print_fx_state_flags( const char *msg, GLuint flags);
+static void fx_print_state_flags( const char *msg, GLuint flags);
 /*static GLboolean fxMultipassBlend(struct vertex_buffer *, GLuint);*/
 static GLboolean fxMultipassTexture( struct vertex_buffer *, GLuint );
 
@@ -455,7 +456,7 @@ static void fxSetupTextureSingleTMU_NoLock(GLcontext *ctx, GLuint textureset)
   GLuint unitsmode;
   GLint ifmt;
   tfxTexInfo *ti;
-  struct gl_texture_object *tObj=ctx->Texture.Unit[textureset].CurrentD[2];
+  struct gl_texture_object *tObj=ctx->Texture.Unit[textureset].Current2D;
   int tmu;
 
   if (MESA_VERBOSE&VERBOSE_DRIVER) {
@@ -746,8 +747,8 @@ static void fxSetupTextureDoubleTMU_NoLock(GLcontext *ctx)
   fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
   GrCombineLocal_t localc,locala;
   tfxTexInfo *ti0,*ti1;
-  struct gl_texture_object *tObj0=ctx->Texture.Unit[0].CurrentD[2];
-  struct gl_texture_object *tObj1=ctx->Texture.Unit[1].CurrentD[2];
+  struct gl_texture_object *tObj0=ctx->Texture.Unit[0].Current2D;
+  struct gl_texture_object *tObj1=ctx->Texture.Unit[1].Current2D;
   GLuint envmode,ifmt,unitsmode;
   int tmu0=0, tmu1=1;
 
@@ -1078,10 +1079,10 @@ static void fxSetupTexture_NoLock(GLcontext *ctx)
 
   /* Texture Combine, Color Combine and Alpha Combine.
    */  
-  tex2Denabled = (ctx->Texture.ReallyEnabled & TEXTURE0_2D);
+  tex2Denabled = (ctx->Texture._ReallyEnabled & TEXTURE0_2D);
 
   if (fxMesa->emulateTwoTMUs)
-     tex2Denabled |= (ctx->Texture.ReallyEnabled & TEXTURE1_2D);
+     tex2Denabled |= (ctx->Texture._ReallyEnabled & TEXTURE1_2D);
   
   switch(tex2Denabled) {
   case TEXTURE0_2D:
@@ -1180,7 +1181,6 @@ void fxDDBlendFunc(GLcontext *ctx, GLenum sfactor, GLenum dfactor)
     us->blendSrcFuncRGB=sfact;
     us->blendSrcFuncAlpha=asfact;
     fxMesa->new_state |= FX_NEW_BLEND;
-    ctx->Driver.RenderStart = fxSetupFXUnits;
   }
 
   switch(dfactor) {
@@ -1234,7 +1234,6 @@ void fxDDBlendFunc(GLcontext *ctx, GLenum sfactor, GLenum dfactor)
     us->blendDstFuncRGB=dfact;
     us->blendDstFuncAlpha=adfact;
     fxMesa->new_state |= FX_NEW_BLEND;
-    ctx->Driver.RenderStart = fxSetupFXUnits;
   }
 }
 
@@ -1295,13 +1294,11 @@ void fxDDAlphaFunc(GLcontext *ctx, GLenum func, GLclampf ref)
   if(newfunc!=us->alphaTestFunc) {
     us->alphaTestFunc=newfunc;
     fxMesa->new_state |= FX_NEW_ALPHA;
-    ctx->Driver.RenderStart = fxSetupFXUnits;
   }
 
   if(ctx->Color.AlphaRef!=us->alphaTestRefValue) {
     us->alphaTestRefValue=ctx->Color.AlphaRef;
     fxMesa->new_state |= FX_NEW_ALPHA;
-    ctx->Driver.RenderStart = fxSetupFXUnits;
   }
 }
 
@@ -1362,7 +1359,6 @@ void fxDDDepthFunc(GLcontext *ctx, GLenum func)
   if(dfunc!=us->depthTestFunc) {
     us->depthTestFunc=dfunc;
     fxMesa->new_state |= FX_NEW_DEPTH;
-    ctx->Driver.RenderStart = fxSetupFXUnits;
   }
 
 }
@@ -1375,7 +1371,6 @@ void fxDDDepthMask(GLcontext *ctx, GLboolean flag)
   if(flag!=us->depthMask) {
     us->depthMask=flag;
     fxMesa->new_state |= FX_NEW_DEPTH;
-    ctx->Driver.RenderStart = fxSetupFXUnits;
   }
 }
 
@@ -1404,7 +1399,6 @@ void fxDDColorMask(GLcontext *ctx,
 {
   fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
   fxMesa->new_state |= FX_NEW_COLOR_MASK;
-  ctx->Driver.RenderStart = fxSetupFXUnits;
   (void) r; (void) g; (void) b; (void) a;
 }
 
@@ -1481,7 +1475,6 @@ static void fxSetupFog(GLcontext *ctx)
 void fxDDFogfv( GLcontext *ctx, GLenum pname, const GLfloat *params )
 {
    FX_CONTEXT(ctx)->new_state |= FX_NEW_FOG;
-   ctx->Driver.RenderStart = fxSetupFXUnits;  /* XXX why is this here? */
 }
 
 /************************************************************************/
@@ -1508,10 +1501,6 @@ void fxSetScissorValues(GLcontext *ctx)
     ymax=fxMesa->height;
     check=0;
   }
-  xmin+=fxMesa->x_offset;
-  xmax+=fxMesa->x_offset;
-  ymin+=fxMesa->y_delta;
-  ymax+=fxMesa->y_delta;
   if (xmin<fxMesa->clipMinX) xmin=fxMesa->clipMinX;
   if (xmax>fxMesa->clipMaxX) xmax=fxMesa->clipMaxX;
   if (ymin<fxMesa->screen_height-fxMesa->clipMaxY) 
@@ -1523,18 +1512,14 @@ void fxSetScissorValues(GLcontext *ctx)
 
 static void fxSetupScissor(GLcontext *ctx)
 {
-  fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
-  if (!fxMesa->needClip) {
     BEGIN_BOARD_LOCK();
     fxSetScissorValues(ctx);
     END_BOARD_LOCK();
-  }
 }
 
 void fxDDScissor( GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h )
 {
    FX_CONTEXT(ctx)->new_state |= FX_NEW_SCISSOR;
-   ctx->Driver.RenderStart = fxSetupFXUnits;
 }
 
 /************************************************************************/
@@ -1546,14 +1531,12 @@ void fxDDCullFace(GLcontext *ctx, GLenum mode)
 {
    (void) mode;
    FX_CONTEXT(ctx)->new_state |= FX_NEW_CULL;
-   ctx->Driver.RenderStart = fxSetupFXUnits;   
 }
 
 void fxDDFrontFace(GLcontext *ctx, GLenum mode)
 {
    (void) mode;
    FX_CONTEXT(ctx)->new_state |= FX_NEW_CULL;
-   ctx->Driver.RenderStart = fxSetupFXUnits;   
 }
 
 
@@ -1580,6 +1563,7 @@ static void fxSetupCull(GLcontext *ctx)
       break;
     }
   } else FX_CONTEXT(ctx)->cullMode=GR_CULL_DISABLE;
+
   FX_grCullMode(FX_CONTEXT(ctx)->cullMode);
 }
 
@@ -1602,21 +1586,18 @@ void fxDDEnable(GLcontext *ctx, GLenum cap, GLboolean state)
     if(state!=us->alphaTestEnabled) {
       us->alphaTestEnabled=state;
       fxMesa->new_state |= FX_NEW_ALPHA;
-      ctx->Driver.RenderStart = fxSetupFXUnits;
     }
     break;
   case GL_BLEND:
     if(state!=us->blendEnabled) {
       us->blendEnabled=state;
       fxMesa->new_state |= FX_NEW_BLEND;
-      ctx->Driver.RenderStart = fxSetupFXUnits;
     }
     break;
   case GL_DEPTH_TEST:
     if(state!=us->depthTestEnabled) {
       us->depthTestEnabled=state;
       fxMesa->new_state |= FX_NEW_DEPTH;
-      ctx->Driver.RenderStart = fxSetupFXUnits;
     }
     break;
   case GL_DITHER:
@@ -1628,18 +1609,15 @@ void fxDDEnable(GLcontext *ctx, GLenum cap, GLboolean state)
     break;
   case GL_SCISSOR_TEST:
      fxMesa->new_state |= FX_NEW_SCISSOR;
-     ctx->Driver.RenderStart = fxSetupFXUnits;
      break;
   case GL_SHARED_TEXTURE_PALETTE_EXT:
      fxDDTexUseGlbPalette(ctx, state);
      break;
   case GL_FOG:
      fxMesa->new_state |= FX_NEW_FOG;
-     ctx->Driver.RenderStart = fxSetupFXUnits;
      break;
   case GL_CULL_FACE:
      fxMesa->new_state |= FX_NEW_CULL;
-     ctx->Driver.RenderStart = fxSetupFXUnits;
      break;
   case GL_LINE_SMOOTH:
   case GL_LINE_STIPPLE:
@@ -1647,7 +1625,6 @@ void fxDDEnable(GLcontext *ctx, GLenum cap, GLboolean state)
   case GL_POLYGON_SMOOTH:
   case GL_TEXTURE_2D:
       fxMesa->new_state |= FX_NEW_TEXTURING;
-      ctx->Driver.RenderStart = fxSetupFXUnits;
       break;
   default:
     ;  /* XXX no-op? */
@@ -1786,7 +1763,6 @@ static GLboolean fxMultipassTexture( struct vertex_buffer *VB, GLuint pass )
 void fxDDShadeModel(GLcontext *ctx, GLenum mode)
 {
    FX_CONTEXT(ctx)->new_state |= FX_NEW_TEXTURING;
-   ctx->Driver.RenderStart = fxSetupFXUnits;
 }
 
 
@@ -1794,7 +1770,7 @@ void fxDDShadeModel(GLcontext *ctx, GLenum mode)
 /************************************************************************/
 /****************************** Units SetUp *****************************/
 /************************************************************************/
-static void gl_print_fx_state_flags( const char *msg, GLuint flags )
+static void fx_print_state_flags( const char *msg, GLuint flags )
 {
    fprintf(stderr, 
 	   "%s: (0x%x) %s%s%s%s%s%s%s\n",
@@ -1815,7 +1791,7 @@ void fxSetupFXUnits( GLcontext *ctx )
   GLuint newstate = fxMesa->new_state;
 
   if (MESA_VERBOSE&VERBOSE_DRIVER)
-     gl_print_fx_state_flags("fxmesa: fxSetupFXUnits", newstate);
+     fx_print_state_flags("fxmesa: fxSetupFXUnits", newstate);
 
   if (newstate) {
      if (newstate & FX_NEW_TEXTURING)
@@ -1842,8 +1818,10 @@ void fxSetupFXUnits( GLcontext *ctx )
      if (newstate & FX_NEW_CULL)
 	fxSetupCull(ctx);     
 
+     fxMesa->draw_point = fxMesa->initial_point;
+     fxMesa->draw_line = fxMesa->initial_line;
+     fxMesa->draw_tri = fxMesa->initial_tri;
      fxMesa->new_state = 0;
-/*       ctx->Driver.RenderStart = 0; */
   }
 }
 
@@ -1856,6 +1834,7 @@ void fxSetupFXUnits( GLcontext *ctx )
  * Need this to provide at least one external definition.
  */
 
+extern int gl_fx_dummy_function_setup(void);
 int gl_fx_dummy_function_setup(void)
 {
   return 0;

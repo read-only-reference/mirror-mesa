@@ -1,21 +1,21 @@
-/* $Id: texstate.c,v 1.20 2000/10/31 18:09:45 keithw Exp $ */
+/* $Id: texstate.c,v 1.25 2000/11/24 10:25:06 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -34,13 +34,13 @@
 #include "enums.h"
 #include "extensions.h"
 #include "macros.h"
-#include "matrix.h"
 #include "texobj.h"
 #include "teximage.h"
 #include "texstate.h"
 #include "texture.h"
-#include "types.h"
-#include "xform.h"
+#include "mtypes.h"
+#include "math/m_xform.h"
+#include "math/m_matrix.h"
 #include "swrast/swrast.h"
 #endif
 
@@ -343,7 +343,7 @@ _mesa_TexEnvfv( GLenum target, GLenum pname, const GLfloat *param )
    }
 
    if (MESA_VERBOSE&(VERBOSE_API|VERBOSE_TEXTURE))
-      fprintf(stderr, "glTexEnv %s %s %.1f(%s) ...\n",  
+      fprintf(stderr, "glTexEnv %s %s %.1f(%s) ...\n",
 	      gl_lookup_enum_by_nr(target),
 	      gl_lookup_enum_by_nr(pname),
 	      *param,
@@ -608,7 +608,7 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glTexParameterfv");
 
    if (MESA_VERBOSE&(VERBOSE_API|VERBOSE_TEXTURE))
-      fprintf(stderr, "texPARAM %s %s %d...\n", 
+      fprintf(stderr, "texPARAM %s %s %d...\n",
 	      gl_lookup_enum_by_nr(target),
 	      gl_lookup_enum_by_nr(pname),
 	      eparam);
@@ -616,13 +616,13 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
 
    switch (target) {
       case GL_TEXTURE_1D:
-         texObj = texUnit->CurrentD[1];
+         texObj = texUnit->Current1D;
          break;
       case GL_TEXTURE_2D:
-         texObj = texUnit->CurrentD[2];
+         texObj = texUnit->Current2D;
          break;
       case GL_TEXTURE_3D_EXT:
-         texObj = texUnit->CurrentD[3];
+         texObj = texUnit->Current3D;
          break;
       case GL_TEXTURE_CUBE_MAP_ARB:
          if (ctx->Extensions.ARB_texture_cube_map) {
@@ -737,7 +737,7 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
    }
 
    ctx->NewState |= _NEW_TEXTURE;
-   gl_put_texobj_on_dirty_list( ctx, texObj );
+   texObj->Complete = GL_FALSE;
 
    if (ctx->Driver.TexParameter) {
       (*ctx->Driver.TexParameter)( ctx, target, texObj, pname, params );
@@ -1072,7 +1072,7 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx, "glTexGenfv");
 
    if (MESA_VERBOSE&(VERBOSE_API|VERBOSE_TEXTURE))
-      fprintf(stderr, "texGEN %s %s %x...\n", 
+      fprintf(stderr, "texGEN %s %s %x...\n",
 	      gl_lookup_enum_by_nr(coord),
 	      gl_lookup_enum_by_nr(pname),
 	      *(int *)params);
@@ -1084,23 +1084,23 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
 	    switch (mode) {
 	    case GL_OBJECT_LINEAR:
 	       texUnit->GenModeS = mode;
-	       texUnit->GenBitS = TEXGEN_OBJ_LINEAR;
+	       texUnit->_GenBitS = TEXGEN_OBJ_LINEAR;
 	       break;
 	    case GL_EYE_LINEAR:
 	       texUnit->GenModeS = mode;
-	       texUnit->GenBitS = TEXGEN_EYE_LINEAR;
+	       texUnit->_GenBitS = TEXGEN_EYE_LINEAR;
 	       break;
 	    case GL_REFLECTION_MAP_NV:
 	       texUnit->GenModeS = mode;
-	       texUnit->GenBitS = TEXGEN_REFLECTION_MAP_NV;
+	       texUnit->_GenBitS = TEXGEN_REFLECTION_MAP_NV;
 	       break;
 	    case GL_NORMAL_MAP_NV:
 	       texUnit->GenModeS = mode;
-	       texUnit->GenBitS = TEXGEN_NORMAL_MAP_NV;
+	       texUnit->_GenBitS = TEXGEN_NORMAL_MAP_NV;
 	       break;
 	    case GL_SPHERE_MAP:
 	       texUnit->GenModeS = mode;
-	       texUnit->GenBitS = TEXGEN_SPHERE_MAP;
+	       texUnit->_GenBitS = TEXGEN_SPHERE_MAP;
 	       break;
 	    default:
 	       gl_error( ctx, GL_INVALID_ENUM, "glTexGenfv(param)" );
@@ -1116,7 +1116,7 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
 	 else if (pname==GL_EYE_PLANE) {
             /* Transform plane equation by the inverse modelview matrix */
             if (ctx->ModelView.flags & MAT_DIRTY_INVERSE) {
-               gl_matrix_analyze( &ctx->ModelView );
+               _math_matrix_analyse( &ctx->ModelView );
             }
             gl_transform_vector( texUnit->EyePlaneS, params,
                                  ctx->ModelView.inv );
@@ -1132,23 +1132,23 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
 	    switch (mode) {
                case GL_OBJECT_LINEAR:
                   texUnit->GenModeT = GL_OBJECT_LINEAR;
-                  texUnit->GenBitT = TEXGEN_OBJ_LINEAR;
+                  texUnit->_GenBitT = TEXGEN_OBJ_LINEAR;
                   break;
                case GL_EYE_LINEAR:
                   texUnit->GenModeT = GL_EYE_LINEAR;
-                  texUnit->GenBitT = TEXGEN_EYE_LINEAR;
+                  texUnit->_GenBitT = TEXGEN_EYE_LINEAR;
                   break;
                case GL_REFLECTION_MAP_NV:
                   texUnit->GenModeT = GL_REFLECTION_MAP_NV;
-                  texUnit->GenBitT = TEXGEN_REFLECTION_MAP_NV;
+                  texUnit->_GenBitT = TEXGEN_REFLECTION_MAP_NV;
                   break;
                case GL_NORMAL_MAP_NV:
                   texUnit->GenModeT = GL_NORMAL_MAP_NV;
-                  texUnit->GenBitT = TEXGEN_NORMAL_MAP_NV;
+                  texUnit->_GenBitT = TEXGEN_NORMAL_MAP_NV;
                   break;
                case GL_SPHERE_MAP:
                   texUnit->GenModeT = GL_SPHERE_MAP;
-                  texUnit->GenBitT = TEXGEN_SPHERE_MAP;
+                  texUnit->_GenBitT = TEXGEN_SPHERE_MAP;
                   break;
                default:
                   gl_error( ctx, GL_INVALID_ENUM, "glTexGenfv(param)" );
@@ -1164,7 +1164,7 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
 	 else if (pname==GL_EYE_PLANE) {
             /* Transform plane equation by the inverse modelview matrix */
             if (ctx->ModelView.flags & MAT_DIRTY_INVERSE) {
-               gl_matrix_analyze( &ctx->ModelView );
+               _math_matrix_analyse( &ctx->ModelView );
             }
             gl_transform_vector( texUnit->EyePlaneT, params,
                                  ctx->ModelView.inv );
@@ -1180,19 +1180,19 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
 	    switch (mode) {
 	    case GL_OBJECT_LINEAR:
 	       texUnit->GenModeR = GL_OBJECT_LINEAR;
-	       texUnit->GenBitR = TEXGEN_OBJ_LINEAR;
+	       texUnit->_GenBitR = TEXGEN_OBJ_LINEAR;
 	       break;
 	    case GL_REFLECTION_MAP_NV:
 	       texUnit->GenModeR = GL_REFLECTION_MAP_NV;
-	       texUnit->GenBitR = TEXGEN_REFLECTION_MAP_NV;
+	       texUnit->_GenBitR = TEXGEN_REFLECTION_MAP_NV;
 	       break;
 	    case GL_NORMAL_MAP_NV:
 	       texUnit->GenModeR = GL_NORMAL_MAP_NV;
-	       texUnit->GenBitR = TEXGEN_NORMAL_MAP_NV;
+	       texUnit->_GenBitR = TEXGEN_NORMAL_MAP_NV;
 	       break;
 	    case GL_EYE_LINEAR:
 	       texUnit->GenModeR = GL_EYE_LINEAR;
-	       texUnit->GenBitR = TEXGEN_EYE_LINEAR;
+	       texUnit->_GenBitR = TEXGEN_EYE_LINEAR;
 	       break;
 	    default:
 	       gl_error( ctx, GL_INVALID_ENUM, "glTexGenfv(param)" );
@@ -1208,7 +1208,7 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
 	 else if (pname==GL_EYE_PLANE) {
             /* Transform plane equation by the inverse modelview matrix */
             if (ctx->ModelView.flags & MAT_DIRTY_INVERSE) {
-               gl_matrix_analyze( &ctx->ModelView );
+               _math_matrix_analyse( &ctx->ModelView );
             }
             gl_transform_vector( texUnit->EyePlaneR, params,
                                  ctx->ModelView.inv );
@@ -1222,13 +1222,13 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
          if (pname==GL_TEXTURE_GEN_MODE) {
 	    GLenum mode = (GLenum) (GLint) *params;
 	    switch (mode) {
-	    case GL_OBJECT_LINEAR: 
+	    case GL_OBJECT_LINEAR:
 	       texUnit->GenModeQ = GL_OBJECT_LINEAR;
-	       texUnit->GenBitQ = TEXGEN_OBJ_LINEAR;
+	       texUnit->_GenBitQ = TEXGEN_OBJ_LINEAR;
 	       break;
 	    case GL_EYE_LINEAR:
 	       texUnit->GenModeQ = GL_EYE_LINEAR;
-	       texUnit->GenBitQ = TEXGEN_EYE_LINEAR;
+	       texUnit->_GenBitQ = TEXGEN_EYE_LINEAR;
 	       break;
 	    default:
 	       gl_error( ctx, GL_INVALID_ENUM, "glTexGenfv(param)" );
@@ -1244,7 +1244,7 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
 	 else if (pname==GL_EYE_PLANE) {
             /* Transform plane equation by the inverse modelview matrix */
             if (ctx->ModelView.flags & MAT_DIRTY_INVERSE) {
-               gl_matrix_analyze( &ctx->ModelView );
+               _math_matrix_analyse( &ctx->ModelView );
             }
             gl_transform_vector( texUnit->EyePlaneQ, params,
                                  ctx->ModelView.inv );
@@ -1258,6 +1258,9 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
          gl_error( ctx, GL_INVALID_ENUM, "glTexGenfv(coord)" );
 	 return;
    }
+   
+   if (ctx->Driver.TexGen)
+      ctx->Driver.TexGen( ctx, coord, pname, params );
 
    ctx->NewState |= _NEW_TEXTURE;
 }
@@ -1577,7 +1580,7 @@ _mesa_ActiveTextureARB( GLenum target )
    ASSERT_OUTSIDE_BEGIN_END( ctx, "glActiveTextureARB" );
 
    if (MESA_VERBOSE & (VERBOSE_API|VERBOSE_TEXTURE))
-      fprintf(stderr, "glActiveTexture %s\n", 
+      fprintf(stderr, "glActiveTexture %s\n",
 	      gl_lookup_enum_by_nr(target));
 
    if (target >= GL_TEXTURE0_ARB && target < GL_TEXTURE0_ARB + maxUnits) {
@@ -1612,81 +1615,4 @@ _mesa_ClientActiveTextureARB( GLenum target )
    else {
       gl_error(ctx, GL_INVALID_OPERATION, "glActiveTextureARB(target)");
    }
-}
-
-
-
-/*
- * Put the given texture object into the list of dirty texture objects.
- * When a texture object is dirty we have to reexamine it for completeness
- * and perhaps choose a different texture sampling function.
- */
-void gl_put_texobj_on_dirty_list( GLcontext *ctx, struct gl_texture_object *t )
-{
-   ASSERT(ctx);
-   ASSERT(t);
-   /* Only insert if not already in the dirty list.
-    * The Dirty flag is only set iff the texture object is in the dirty list.
-    */
-   if (!t->Dirty) {
-      ASSERT(t->NextDirty == NULL);
-      t->Dirty = GL_TRUE;
-      t->NextDirty = ctx->Shared->DirtyTexObjList;
-      ctx->Shared->DirtyTexObjList = t;
-   }
-#ifdef DEBUG
-   else {
-      /* make sure t is in the list */
-      struct gl_texture_object *obj = ctx->Shared->DirtyTexObjList;
-      while (obj) {
-         if (obj == t) {
-            return;
-         }
-         obj = obj->NextDirty;
-      }
-      gl_problem(ctx, "Error in gl_put_texobj_on_dirty_list");
-   }
-#endif
-}
-
-
-/*
- * Remove a texture object from the dirty texture list.
- */
-void gl_remove_texobj_from_dirty_list( struct gl_shared_state *shared,
-                                       struct gl_texture_object *tObj )
-{
-   struct gl_texture_object *t, *prev = NULL;
-   ASSERT(shared);
-   ASSERT(tObj);
-   for (t = shared->DirtyTexObjList; t; t = t->NextDirty) {
-      if (t == tObj) {
-         if (prev) {
-            prev->NextDirty = t->NextDirty;
-         }
-         else {
-            shared->DirtyTexObjList = t->NextDirty;
-         }
-         return;
-      }
-      prev = t;
-   }
-}
-
-
-/*
- * This is called by gl_update_state() if the _NEW_TEXTURE bit in
- * ctx->NewState is set.
- */
-void gl_update_dirty_texobjs( GLcontext *ctx )
-{
-   struct gl_texture_object *t, *next;
-   for (t = ctx->Shared->DirtyTexObjList; t; t = next) {
-      next = t->NextDirty;
-      _mesa_test_texobj_completeness(ctx, t);
-      _swrast_set_texture_sampler(t); /*  swrast should do this internally */
-      t->NextDirty = NULL;
-      t->Dirty = GL_FALSE;
-   }
-   ctx->Shared->DirtyTexObjList = NULL;
 }

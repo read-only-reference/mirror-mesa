@@ -1,21 +1,21 @@
-/* $Id: buffers.c,v 1.18 2000/10/31 18:09:44 keithw Exp $ */
+/* $Id: buffers.c,v 1.20 2000/11/22 07:32:16 joukj Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -39,7 +39,7 @@
 #include "mem.h"
 #include "stencil.h"
 #include "state.h"
-#include "types.h"
+#include "mtypes.h"
 #include "swrast/swrast.h"
 #endif
 
@@ -88,7 +88,7 @@ _mesa_ClearColor( GLclampf red, GLclampf green,
 
 
 
-void 
+void
 _mesa_Clear( GLbitfield mask )
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -98,14 +98,14 @@ _mesa_Clear( GLbitfield mask )
       fprintf(stderr, "glClear 0x%x\n", mask);
 
    if (ctx->NewState) {
-      gl_update_state( ctx );
+      gl_update_state( ctx );	/* update _Xmin, etc */
    }
 
    if (ctx->RenderMode==GL_RENDER) {
-      const GLint x = ctx->DrawBuffer->Xmin;
-      const GLint y = ctx->DrawBuffer->Ymin;
-      const GLint height = ctx->DrawBuffer->Ymax - ctx->DrawBuffer->Ymin;
-      const GLint width  = ctx->DrawBuffer->Xmax - ctx->DrawBuffer->Xmin;
+      const GLint x = ctx->DrawBuffer->_Xmin;
+      const GLint y = ctx->DrawBuffer->_Ymin;
+      const GLint height = ctx->DrawBuffer->_Ymax - ctx->DrawBuffer->_Ymin;
+      const GLint width  = ctx->DrawBuffer->_Xmax - ctx->DrawBuffer->_Xmin;
       GLbitfield ddMask;
       GLbitfield newMask;
 

@@ -1,21 +1,21 @@
-/* $Id: context.h,v 1.20 2000/10/29 18:12:14 brianp Exp $ */
+/* $Id: context.h,v 1.22 2000/11/22 07:32:16 joukj Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.3
- * 
+ *
  * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -30,7 +30,7 @@
 
 
 #include "glapi.h"
-#include "types.h"
+#include "mtypes.h"
 
 
 /*
@@ -169,32 +169,15 @@ _mesa_get_current_context(void);
 
 
 /*
- * Macros for fetching current context, input buffer, etc.
+ * Macros for fetching current context.
  */
 #ifdef THREADS
 
 #define GET_CURRENT_CONTEXT(C)	GLcontext *C = (GLcontext *) (_glapi_Context ? _glapi_Context : _glapi_get_context())
 
-#define GET_IMMEDIATE  struct immediate *IM = ((GLcontext *) (_glapi_Context ? _glapi_Context : _glapi_get_context()))->input
-
-#define SET_IMMEDIATE(ctx, im)		\
-do {					\
-   ctx->input = im;			\
-} while (0)
-
 #else
 
-extern struct immediate *_mesa_CurrentInput;
-
 #define GET_CURRENT_CONTEXT(C)  GLcontext *C = (GLcontext *) _glapi_Context
-
-#define GET_IMMEDIATE struct immediate *IM = _mesa_CurrentInput
-
-#define SET_IMMEDIATE(ctx, im)		\
-do {					\
-   ctx->input = im;			\
-   _mesa_CurrentInput = im;		\
-} while (0)
 
 #endif
 
