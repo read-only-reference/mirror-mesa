@@ -27,7 +27,6 @@
  *
  * \author Ian Romanick <idr@us.ibm.com>
  */
-/* $XFree86: xc/lib/GL/glx/glxextensions.h,v 1.2tsi Exp $ */
 
 #ifndef GLX_GLXEXTENSIONS_H
 #define GLX_GLXEXTENSIONS_H
@@ -76,6 +75,7 @@ enum {
 enum {
    GL_ARB_depth_texture_bit = 0,
    GL_ARB_fragment_program_bit,
+   GL_ARB_fragment_program_shadow_bit,
    GL_ARB_imaging_bit,
    GL_ARB_multisample_bit,
    GL_ARB_multitexture_bit,
@@ -129,6 +129,7 @@ enum {
    GL_EXT_subtexture_bit,
    GL_EXT_texture_bit,
    GL_EXT_texture3D_bit,
+   GL_EXT_texture_compression_dxt1_bit,
    GL_EXT_texture_compression_s3tc_bit,
    GL_EXT_texture_edge_clamp_bit,
    GL_EXT_texture_env_combine_bit,
@@ -142,6 +143,7 @@ enum {
    GL_3DFX_texture_compression_FXT1_bit,
    GL_APPLE_packed_pixels_bit,
    GL_APPLE_ycbcr_422_bit,
+   GL_ATI_text_fragment_shader_bit,
    GL_ATI_texture_env_combine3_bit,
    GL_ATI_texture_float_bit,
    GL_ATI_texture_mirror_once_bit,
@@ -158,13 +160,24 @@ enum {
    GL_NV_copy_depth_to_color_bit,
    GL_NV_depth_clamp_bit,
    GL_NV_fog_distance_bit,
+   GL_NV_fragment_program_bit,
+   GL_NV_fragment_program_option_bit,
+   GL_NV_fragment_program2_bit,
    GL_NV_light_max_exponent_bit,
    GL_NV_multisample_filter_hint_bit,
    GL_NV_point_sprite_bit,
    GL_NV_texgen_reflection_bit,
    GL_NV_texture_compression_vtc_bit,
    GL_NV_texture_env_combine4_bit,
+   GL_NV_vertex_program_bit,
+   GL_NV_vertex_program1_1_bit,
+   GL_NV_vertex_program2_bit,
+   GL_NV_vertex_program2_option_bit,
+   GL_NV_vertex_program3_bit,
+   GL_OES_compressed_paletted_texture_bit,
    GL_OES_read_format_bit,
+   GL_SGI_color_matrix_bit,
+   GL_SGI_texture_color_table_bit,
    GL_SGIS_generate_mipmap_bit,
    GL_SGIS_multisample_bit,
    GL_SGIS_texture_lod_bit,
@@ -213,15 +226,24 @@ enum {
    GL_SUN_multi_draw_arrays_bit = GL_EXT_multi_draw_arrays_bit
 };
 
-extern GLboolean __glXExtensionBitIsEnabled( __GLXscreenConfigs *psc, unsigned bit );
+#define __GL_EXT_BYTES   ((__NUM_GL_EXTS + 7) / 8)
+
+struct __GLXscreenConfigsRec;
+struct __GLXcontextRec;
+
+extern GLboolean __glXExtensionBitIsEnabled( struct __GLXscreenConfigsRec *psc, unsigned bit );
 extern const char * __glXGetClientExtensions( void );
-extern void __glXCalculateUsableExtensions( __GLXscreenConfigs *psc,
+extern void __glXCalculateUsableExtensions( struct __GLXscreenConfigsRec *psc,
     GLboolean display_is_direct_capable, int server_minor_version );
-extern void __glXScrEnableExtension( __GLXscreenConfigs *psc, const char * name );
-extern void __glXCalculateUsableGLExtensions( __GLXcontext * gc,
+extern void __glXScrEnableExtension( struct __GLXscreenConfigsRec *psc, const char * name );
+extern void __glXCalculateUsableGLExtensions( struct __GLXcontextRec * gc,
     const char * server_string, int major_version, int minor_version );
 extern void __glXGetGLVersion( int * major_version, int * minor_version );
 extern char * __glXGetClientGLExtensionString( void );
+
+extern GLboolean __glExtensionBitIsEnabled( const struct __GLXcontextRec * gc, 
+    unsigned bit );
+
 
 /* Source-level backwards compatibility with old drivers. They won't
  * find the respective functions, though. 

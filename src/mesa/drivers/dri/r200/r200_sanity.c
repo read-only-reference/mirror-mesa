@@ -144,6 +144,12 @@ static struct {
    { RADEON_PP_TEX_SIZE_2, 2, "RADEON_PP_TEX_SIZE_2" },
    { R200_RB3D_BLENDCOLOR, 3, "R200_RB3D_BLENDCOLOR" },
    { R200_SE_TCL_POINT_SPRITE_CNTL, 1, "R200_SE_TCL_POINT_SPRITE_CNTL" },
+   { RADEON_PP_CUBIC_FACES_0, 1, "RADEON_PP_CUBIC_FACES_0" },
+   { RADEON_PP_CUBIC_OFFSET_T0_0, 5, "RADEON_PP_CUBIC_OFFSET_T0_0" },
+   { RADEON_PP_CUBIC_FACES_1, 1, "RADEON_PP_CUBIC_FACES_1" },
+   { RADEON_PP_CUBIC_OFFSET_T1_0, 5, "RADEON_PP_CUBIC_OFFSET_T1_0" },
+   { RADEON_PP_CUBIC_FACES_2, 1, "RADEON_PP_CUBIC_FACES_2" },
+   { RADEON_PP_CUBIC_OFFSET_T2_0, 5, "RADEON_PP_CUBIC_OFFSET_T2_0" },
 };
 
 struct reg_names {
@@ -617,7 +623,7 @@ static struct reg *lookup_reg( struct reg *tab, int reg )
    }
 
    fprintf(stderr, "*** unknown reg 0x%x\n", reg);
-   return 0;
+   return NULL;
 }
 
 
@@ -925,7 +931,7 @@ static char *primname[0x10] = {
    "TRIANGLE_FAN",
    "TRIANGLE_STRIP",
    "RECT_LIST",
-   0,
+   NULL,
    "3VRT_POINTS",
    "3VRT_LINES",
    "POINT_SPRITES",

@@ -32,6 +32,7 @@
 #include "dd.h"
 #include "context.h"
 #include "swrast/swrast.h"
+#include "colormac.h"
 
 #include "mm.h"
 #include "savagecontext.h"
@@ -346,8 +347,21 @@ static void savageDDClear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 	   clearDepth = (GLuint) ((1.0 - ctx->Depth.Clear) * DEPTH_SCALE_24);
    }
 
-   colorMask = *((GLuint *) &ctx->Color.ColorMask);
+   colorMask = 0;
    depthMask = 0;
+   switch (imesa->savageScreen->cpp) {
+   case 2:
+       colorMask = PACK_COLOR_565(ctx->Color.ColorMask[0],
+				  ctx->Color.ColorMask[1],
+				  ctx->Color.ColorMask[2]);
+       break;
+   case 4:
+       colorMask = PACK_COLOR_8888(ctx->Color.ColorMask[3],
+				   ctx->Color.ColorMask[2],
+				   ctx->Color.ColorMask[1],
+				   ctx->Color.ColorMask[0]);
+       break;
+   }
 
    flags = 0;
 
@@ -401,8 +415,6 @@ static void savageDDClear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 	   cmd[1].clear1.mask = depthMask;
 	   cmd[1].clear1.value = clearDepth;
        }
-
-       imesa->dirty |= SAVAGE_UPLOAD_CLIPRECTS;
    }
 
    if (mask) 
@@ -531,9 +543,6 @@ void savageFlushVertices( savageContextPtr imesa )
 void savageFlushCmdBufLocked( savageContextPtr imesa, GLboolean discard )
 {
     __DRIdrawablePrivate *dPriv = imesa->driDrawable;
-    drm_savage_cmdbuf_t cmdbuf;
-    drm_savage_cmd_header_t *start;
-    int ret;
 
     if (!imesa->dmaVtxBuf.total)
 	discard = GL_FALSE;
@@ -541,53 +550,85 @@ void savageFlushCmdBufLocked( savageContextPtr imesa, GLboolean discard )
     /* complete indexed drawing commands */
     savageFlushElts(imesa);
 
-    if (imesa->cmdBuf.write == imesa->cmdBuf.start && !discard)
-	return;
+    if (imesa->cmdBuf.write != imesa->cmdBuf.start || discard) {
+	drm_savage_cmdbuf_t cmdbuf;
+	drm_savage_cmd_header_t *start;
+	int ret;
 
-    /* If we lost the context we must restore the initial state (at
-     * the start of the command buffer). */
-    if (imesa->lostContext) {
-	start = imesa->cmdBuf.base;
-	imesa->lostContext = GL_FALSE;
-    } else
-	start = imesa->cmdBuf.start;
+	/* If we lost the context we must restore the initial state (at
+	 * the start of the command buffer). */
+	if (imesa->lostContext) {
+	    start = imesa->cmdBuf.base;
+	    imesa->lostContext = GL_FALSE;
+	} else
+	    start = imesa->cmdBuf.start;
 
-    if ((SAVAGE_DEBUG & DEBUG_DMA) && discard)
-	fprintf (stderr, "Discarding DMA buffer, used=%u\n",
-		 imesa->dmaVtxBuf.used);
+	if ((SAVAGE_DEBUG & DEBUG_DMA) && discard)
+	    fprintf (stderr, "Discarding DMA buffer, used=%u\n",
+		     imesa->dmaVtxBuf.used);
 
-    cmdbuf.dma_idx = imesa->dmaVtxBuf.idx;
-    cmdbuf.discard = discard;
-    cmdbuf.vb_addr = imesa->clientVtxBuf.buf;
-    cmdbuf.vb_size = imesa->clientVtxBuf.total*4;
-    cmdbuf.vb_stride = imesa->HwVertexSize;
-    cmdbuf.cmd_addr = start;
-    cmdbuf.size = (imesa->cmdBuf.write - start);
-    if (!imesa->inSwap && imesa->glCtx->Scissor.Enabled) {
-	drm_clip_rect_t *box = dPriv->pClipRects, *ibox;
-	GLuint nbox = dPriv->numClipRects, nibox;
-	ibox = malloc(dPriv->numClipRects*sizeof(drm_clip_rect_t));
-	if (!ibox) {
-	    fprintf(stderr, "Out of memory.\n");
+	cmdbuf.dma_idx = imesa->dmaVtxBuf.idx;
+	cmdbuf.discard = discard;
+	cmdbuf.vb_addr = imesa->clientVtxBuf.buf;
+	cmdbuf.vb_size = imesa->clientVtxBuf.total*4;
+	cmdbuf.vb_stride = imesa->HwVertexSize;
+	cmdbuf.cmd_addr = start;
+	cmdbuf.size = (imesa->cmdBuf.write - start);
+	if (!imesa->inSwap && imesa->scissor.enabled) {
+	    drm_clip_rect_t *box = dPriv->pClipRects, *ibox;
+	    drm_clip_rect_t scissor;
+	    GLuint nbox = dPriv->numClipRects, nibox;
+	    /* transform and clip scissor to viewport */
+	    scissor.x1 = MAX2(imesa->scissor.x, 0) + dPriv->x;
+	    scissor.y1 = MAX2(dPriv->h - imesa->scissor.y - imesa->scissor.h,
+			      0) + dPriv->y;
+	    scissor.x2 = MIN2(imesa->scissor.x + imesa->scissor.w,
+			      dPriv->w) + dPriv->x;
+	    scissor.y2 = MIN2(dPriv->h - imesa->scissor.y,
+			      dPriv->h) + dPriv->y;
+	    /* intersect cliprects with scissor */
+	    ibox = malloc(dPriv->numClipRects*sizeof(drm_clip_rect_t));
+	    if (!ibox) {
+		fprintf(stderr, "Out of memory.\n");
+		exit(1);
+	    }
+	    nibox = savageIntersectClipRects(ibox, box, nbox, &scissor);
+	    cmdbuf.nbox = nibox;
+	    cmdbuf.box_addr = ibox;
+	} else {
+	    cmdbuf.nbox = dPriv->numClipRects;
+	    cmdbuf.box_addr = dPriv->pClipRects;
+	}
+
+	ret = drmCommandWrite( imesa->driFd, DRM_SAVAGE_BCI_CMDBUF,
+			       &cmdbuf, sizeof(cmdbuf) );
+	if (ret) {
+	    fprintf (stderr, "cmdbuf ioctl returned %d\n", ret);
 	    exit(1);
 	}
-	nibox = savageIntersectClipRects(ibox, box, nbox, &imesa->scissor_rect);
-	cmdbuf.nbox = nibox;
-	cmdbuf.box_addr = ibox;
-    } else {
-	cmdbuf.nbox = dPriv->numClipRects;
-	cmdbuf.box_addr = dPriv->pClipRects;
-    }
 
-    ret = drmCommandWrite( imesa->driFd, DRM_SAVAGE_BCI_CMDBUF,
-			   &cmdbuf, sizeof(cmdbuf) );
-    if (ret) {
-	fprintf (stderr, "cmdbuf ioctl returned %d\n", ret);
-	exit(1);
-    }
+	if (cmdbuf.box_addr != dPriv->pClipRects) {
+	    free(cmdbuf.box_addr);
+	}
 
-    if (cmdbuf.box_addr != dPriv->pClipRects) {
-	free(cmdbuf.box_addr);
+	/* Save the current state at the start of the command buffer. That
+	 * state will only be emitted, if the context was lost since the
+	 * last command buffer. */
+	imesa->cmdBuf.write = imesa->cmdBuf.base;
+	savageEmitOldState(imesa);
+	imesa->cmdBuf.start = imesa->cmdBuf.write;
+
+	/* Timestamp current texture objects for texture heap aging.
+	 * Only useful with long-lived 32-bit event tags available
+	 * with Savage DRM 2.3.x or later. */
+	if ((imesa->CurrentTexObj[0] || imesa->CurrentTexObj[1]) &&
+	    imesa->savageScreen->driScrnPriv->drmMinor >= 3) {
+	    unsigned int e = savageEmitEventLocked(imesa, 0);
+	    if (imesa->CurrentTexObj[0])
+		imesa->CurrentTexObj[0]->timestamp = e;
+	    if (imesa->CurrentTexObj[1])
+		imesa->CurrentTexObj[1]->timestamp = e;
+	}
     }
 
     if (discard) {
@@ -600,13 +641,6 @@ void savageFlushCmdBufLocked( savageContextPtr imesa, GLboolean discard )
 	imesa->clientVtxBuf.used = 0;
 	imesa->clientVtxBuf.flushed = 0;
     }
-    imesa->cmdBuf.write = imesa->cmdBuf.base;
-
-    /* Save the current state at the start of the command buffer. That
-     * state will only be emitted, if the context was lost since the
-     * last command buffer. */
-    savageEmitOldState(imesa);
-    imesa->cmdBuf.start = imesa->cmdBuf.write;
 }
 
 

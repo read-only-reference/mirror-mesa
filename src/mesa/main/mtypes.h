@@ -94,7 +94,8 @@
 
 
 /**
- * Depth buffer data type.
+ * Used for storing intermediate depth buffer values.
+ * The actual depth/Z buffer might use 16 or 32-bit values.
  *
  * \note Must be 32-bits!
  */
@@ -1250,13 +1251,9 @@ struct gl_texture_object
    GLfloat Priority;		/**< in [0,1] */
    GLfloat BorderColor[4];	/**< unclamped */
    GLchan _BorderChan[4];	/**< clamped, as GLchan */
-   /** \name Wrap modes
-    * Are GL_CLAMP, REPEAT, GL_CLAMP_TO_EDGE, and GL_CLAMP_TO_BORDER_ARB. */
-   /*@{*/
-   GLenum WrapS;
-   GLenum WrapT;
-   GLenum WrapR;
-   /*@}*/
+   GLenum WrapS;		/**< S-axis texture image wrap mode */
+   GLenum WrapT;		/**< T-axis texture image wrap mode */
+   GLenum WrapR;		/**< R-axis texture image wrap mode */
    GLenum MinFilter;		/**< minification filter */
    GLenum MagFilter;		/**< magnification filter */
    GLfloat MinLod;		/**< min lambda, OpenGL 1.2 */
@@ -1267,7 +1264,7 @@ struct gl_texture_object
    GLfloat MaxAnisotropy;	/**< GL_EXT_texture_filter_anisotropic */
    GLboolean CompareFlag;	/**< GL_SGIX_shadow */
    GLenum CompareOperator;	/**< GL_SGIX_shadow */
-   GLfloat ShadowAmbient;
+   GLfloat ShadowAmbient;       /**< GL_ARB_shadow_ambient */
    GLenum CompareMode;		/**< GL_ARB_shadow */
    GLenum CompareFunc;		/**< GL_ARB_shadow */
    GLenum DepthMode;		/**< GL_ARB_depth_texture */
@@ -1275,21 +1272,23 @@ struct gl_texture_object
    GLfloat _MaxLambda;		/**< = _MaxLevel - BaseLevel (q - b in spec) */
    GLboolean GenerateMipmap;    /**< GL_SGIS_generate_mipmap */
    GLboolean _IsPowerOfTwo;	/**< Are all image dimensions powers of two? */
+   GLboolean Complete;		/**< Is texture object complete? */
 
+   /** Actual texture images, indexed by [cube face] and [mipmap level] */
    struct gl_texture_image *Image[MAX_FACES][MAX_TEXTURE_LEVELS];
 
    /** GL_EXT_paletted_texture */
    struct gl_color_table Palette;
 
-   GLboolean Complete;			/**< Is texture object complete? */
-   struct gl_texture_object *Next;	/**< Next in linked list */
 
    /**
-    * \name For device driver
+    * \name For device driver.
+    * Note: instead of attaching driver data to this pointer, it's preferable
+    * to instead use this struct as a base class for your own texture object
+    * class.  Driver->NewTextureObject() can be used to implement the
+    * allocation.
     */
-   /*@{*/
    void *DriverData;	/**< Arbitrary device driver data */
-   /*@}*/
 };
 
 
@@ -1753,11 +1752,11 @@ struct fragment_program
 
 struct ati_fragment_shader
 {
-  struct program Base;
-  struct atifs_instruction *Instructions;
-  GLfloat Constants[8][4];
-  GLint NumPasses;
-  GLint cur_pass;
+   struct program Base;
+   struct atifs_instruction *Instructions;
+   GLfloat Constants[8][4];
+   GLint NumPasses;
+   GLint cur_pass;
 };
 
 /**
@@ -1825,11 +1824,11 @@ struct gl_fragment_program_state
  */
 struct gl_ati_fragment_shader_state
 {
-  GLboolean Enabled;
-  GLboolean _Enabled;
-  GLboolean Compiling;
-  struct atifs_machine Machine;            /* machine state */
-  struct ati_fragment_shader *Current;
+   GLboolean Enabled;
+   GLboolean _Enabled;
+   GLboolean Compiling;
+   struct atifs_machine Machine;            /* machine state */
+   struct ati_fragment_shader *Current;
 };
 
 /*
@@ -1849,80 +1848,80 @@ struct gl_occlusion_state
  */
 enum gl2_uiid
 {
-	UIID_UNKNOWN,							/* supported by all objects */
-	UIID_GENERIC,							/* generic object */
-	UIID_CONTAINER,							/* contains generic objects */
-	UIID_SHADER,							/* shader object */
-	UIID_FRAGMENT_SHADER,					/* fragment shader */
-	UIID_VERTEX_SHADER,						/* vertex shader */
-	UIID_PROGRAM,							/* program object */
-	UIID_3DLABS_SHHANDLE					/* encapsulates 3dlabs' ShHandle */
+   UIID_UNKNOWN,		/* supported by all objects */
+   UIID_GENERIC,		/* generic object */
+   UIID_CONTAINER,		/* contains generic objects */
+   UIID_SHADER,			/* shader object */
+   UIID_FRAGMENT_SHADER,	/* fragment shader */
+   UIID_VERTEX_SHADER,		/* vertex shader */
+   UIID_PROGRAM,		/* program object */
+   UIID_3DLABS_SHHANDLE		/* encapsulates 3dlabs' ShHandle */
 };
 
 struct gl2_unknown_intf
 {
-	GLvoid (* AddRef) (struct gl2_unknown_intf **);
-	GLvoid (* Release) (struct gl2_unknown_intf **);
-	struct gl2_unknown_intf **(* QueryInterface) (struct gl2_unknown_intf **, enum gl2_uiid uiid);
+   GLvoid (* AddRef) (struct gl2_unknown_intf **);
+   GLvoid (* Release) (struct gl2_unknown_intf **);
+   struct gl2_unknown_intf **(* QueryInterface) (struct gl2_unknown_intf **, enum gl2_uiid uiid);
 };
 
 struct gl2_generic_intf
 {
-	struct gl2_unknown_intf _unknown;
-	GLvoid (* Delete) (struct gl2_generic_intf **);
-	GLenum (* GetType) (struct gl2_generic_intf **);
-	GLhandleARB (* GetName) (struct gl2_generic_intf **);
-	GLboolean (* GetDeleteStatus) (struct gl2_generic_intf **);
-	const GLcharARB *(* GetInfoLog) (struct gl2_generic_intf **);
+   struct gl2_unknown_intf _unknown;
+   GLvoid (* Delete) (struct gl2_generic_intf **);
+   GLenum (* GetType) (struct gl2_generic_intf **);
+   GLhandleARB (* GetName) (struct gl2_generic_intf **);
+   GLboolean (* GetDeleteStatus) (struct gl2_generic_intf **);
+   const GLcharARB *(* GetInfoLog) (struct gl2_generic_intf **);
 };
 
 struct gl2_container_intf
 {
-	struct gl2_generic_intf _generic;
-	GLboolean (* Attach) (struct gl2_container_intf **, struct gl2_generic_intf **);
-	GLboolean (* Detach) (struct gl2_container_intf **, struct gl2_generic_intf **);
-	GLsizei (* GetAttachedCount) (struct gl2_container_intf **);
-	struct gl2_generic_intf **(* GetAttached) (struct gl2_container_intf **, GLuint);
+   struct gl2_generic_intf _generic;
+   GLboolean (* Attach) (struct gl2_container_intf **, struct gl2_generic_intf **);
+   GLboolean (* Detach) (struct gl2_container_intf **, struct gl2_generic_intf **);
+   GLsizei (* GetAttachedCount) (struct gl2_container_intf **);
+   struct gl2_generic_intf **(* GetAttached) (struct gl2_container_intf **, GLuint);
 };
 
 struct gl2_shader_intf
 {
-	struct gl2_generic_intf _generic;
-	GLenum (* GetSubType) (struct gl2_shader_intf **);
-	GLboolean (* GetCompileStatus) (struct gl2_shader_intf **);
-	GLvoid (* SetSource) (struct gl2_shader_intf **, GLcharARB *, GLint *, GLsizei);
-	const GLcharARB *(* GetSource) (struct gl2_shader_intf **);
-	GLvoid (* Compile) (struct gl2_shader_intf **);
+   struct gl2_generic_intf _generic;
+   GLenum (* GetSubType) (struct gl2_shader_intf **);
+   GLboolean (* GetCompileStatus) (struct gl2_shader_intf **);
+   GLvoid (* SetSource) (struct gl2_shader_intf **, GLcharARB *, GLint *, GLsizei);
+   const GLcharARB *(* GetSource) (struct gl2_shader_intf **);
+   GLvoid (* Compile) (struct gl2_shader_intf **);
 };
 
 struct gl2_program_intf
 {
-	struct gl2_container_intf _container;
-	GLboolean (* GetLinkStatus) (struct gl2_program_intf **);
-	GLboolean (* GetValidateStatus) (struct gl2_program_intf **);
-	GLvoid (* Link) (struct gl2_program_intf **);
-	GLvoid (* Validate) (struct gl2_program_intf **);
+   struct gl2_container_intf _container;
+   GLboolean (* GetLinkStatus) (struct gl2_program_intf **);
+   GLboolean (* GetValidateStatus) (struct gl2_program_intf **);
+   GLvoid (* Link) (struct gl2_program_intf **);
+   GLvoid (* Validate) (struct gl2_program_intf **);
 };
 
 struct gl2_fragment_shader_intf
 {
-	struct gl2_shader_intf _shader;
+   struct gl2_shader_intf _shader;
 };
 
 struct gl2_vertex_shader_intf
 {
-	struct gl2_shader_intf _shader;
+   struct gl2_shader_intf _shader;
 };
 
 struct gl2_3dlabs_shhandle_intf
 {
-	struct gl2_unknown_intf _unknown;
-	GLvoid *(* GetShHandle) (struct gl2_3dlabs_shhandle_intf **);
+   struct gl2_unknown_intf _unknown;
+   GLvoid *(* GetShHandle) (struct gl2_3dlabs_shhandle_intf **);
 };
 
 struct gl_shader_objects_state
 {
-	struct gl2_program_intf **current_program;
+   struct gl2_program_intf **current_program;
 };
 
 
@@ -1935,7 +1934,6 @@ struct gl_shared_state
    GLint RefCount;			   /**< Reference count */
    struct _mesa_HashTable *DisplayList;	   /**< Display lists hash table */
    struct _mesa_HashTable *TexObjects;	   /**< Texture objects hash table */
-   struct gl_texture_object *TexObjectList;/**< Linked list of texture objects */
 
    /**
     * \name Default texture objects (shared by all multi-texture units)
@@ -1949,7 +1947,7 @@ struct gl_shared_state
    /*@}*/
 
    /**
-    * \name GL_NV_vertex/_program 
+    * \name Vertex/fragment programs
     */
    /*@{*/
    struct _mesa_HashTable *Programs;
@@ -1964,11 +1962,16 @@ struct gl_shared_state
 #endif
    /*@}*/
 
-#if FEATURE_ARB_vertex_buffer_object
+#if FEATURE_ARB_vertex_buffer_object || FEATURE_ARB_pixel_buffer_object
    struct _mesa_HashTable *BufferObjects;
 #endif
 
    struct _mesa_HashTable *GL2Objects;
+
+#if FEATURE_EXT_framebuffer_object
+   struct _mesa_HashTable *RenderBuffers;
+   struct _mesa_HashTable *FrameBuffers;
+#endif
 
    void *DriverData;  /**< Device driver shared state */
 };
@@ -2093,6 +2096,9 @@ struct gl_constants
    /* GL_OES_read_format */
    GLenum ColorReadFormat;
    GLenum ColorReadType;
+   /* GL_EXT_framebuffer_object */
+   GLuint MaxColorAttachments;
+   GLuint MaxRenderbufferSize;
 };
 
 
@@ -2150,6 +2156,7 @@ struct gl_extensions
    GLboolean EXT_copy_texture;
    GLboolean EXT_depth_bounds_test;
    GLboolean EXT_draw_range_elements;
+   GLboolean EXT_framebuffer_object;
    GLboolean EXT_fog_coord;
    GLboolean EXT_histogram;
    GLboolean EXT_multi_draw_arrays;
@@ -2623,6 +2630,11 @@ struct __GLcontextRec
 
    struct gl_shader_objects_state ShaderObjects;	/* GL_ARB_shader_objects */
    /*@}*/
+
+#if FEATURE_EXT_framebuffer_object
+   struct gl_framebuffer *CurrentFramebuffer;
+   struct gl_renderbuffer *CurrentRenderbuffer;
+#endif
 
    GLenum ErrorValue;        /**< Last error code */
    GLenum RenderMode;        /**< either GL_RENDER, GL_SELECT, GL_FEEDBACK */

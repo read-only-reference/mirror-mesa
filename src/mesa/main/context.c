@@ -897,6 +897,16 @@ alloc_shared_state( GLcontext *ctx )
    ss->DefaultCubeMap->RefCount += MAX_TEXTURE_IMAGE_UNITS;
    ss->DefaultRect->RefCount += MAX_TEXTURE_IMAGE_UNITS;
 
+#if FEATURE_EXT_framebuffer_object
+   ss->FrameBuffers = _mesa_NewHashTable();
+   if (!ss->FrameBuffers)
+      goto cleanup;
+   ss->RenderBuffers = _mesa_NewHashTable();
+   if (!ss->RenderBuffers)
+      goto cleanup;
+#endif
+
+
    return GL_TRUE;
 
  cleanup:
@@ -928,6 +938,13 @@ alloc_shared_state( GLcontext *ctx )
 
    if (ss->GL2Objects)
       _mesa_DeleteHashTable (ss->GL2Objects);
+
+#if FEATURE_EXT_framebuffer_object
+   if (ss->FrameBuffers)
+      _mesa_DeleteHashTable(ss->FrameBuffers);
+   if (ss->RenderBuffers)
+      _mesa_DeleteHashTable(ss->RenderBuffers);
+#endif
 
    if (ss->Default1D)
       (*ctx->Driver.DeleteTexture)(ctx, ss->Default1D);
@@ -1027,6 +1044,11 @@ free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
 #endif
 
    _mesa_DeleteHashTable (ss->GL2Objects);
+
+#if FEATURE_EXT_framebuffer_object
+   _mesa_DeleteHashTable(ss->FrameBuffers);
+   _mesa_DeleteHashTable(ss->RenderBuffers);
+#endif
 
    _glthread_DESTROY_MUTEX(ss->Mutex);
 
@@ -1136,8 +1158,14 @@ _mesa_init_constants( GLcontext *ctx )
 
    ctx->Const.MaxDrawBuffers = MAX_DRAW_BUFFERS;
 
+   /* GL_OES_read_format */
    ctx->Const.ColorReadFormat = GL_RGBA;
    ctx->Const.ColorReadType = GL_UNSIGNED_BYTE;
+
+#if FEATURE_EXT_framebuffer_object
+   ctx->Const.MaxColorAttachments = MAX_COLOR_ATTACHMENTS;
+   ctx->Const.MaxRenderbufferSize = MAX_WIDTH;
+#endif
 
    /* sanity checks */
    ASSERT(ctx->Const.MaxTextureUnits == MAX2(ctx->Const.MaxTextureImageUnits, ctx->Const.MaxTextureCoordUnits));
@@ -1166,7 +1194,6 @@ init_attrib_groups( GLcontext *ctx )
    /* Attribute Groups */
    _mesa_init_accum( ctx );
    _mesa_init_attrib( ctx );
-   _mesa_init_buffers( ctx );
    _mesa_init_buffer_objects( ctx );
    _mesa_init_color( ctx );
    _mesa_init_colortables( ctx );
@@ -1182,12 +1209,14 @@ init_attrib_groups( GLcontext *ctx )
    _mesa_init_line( ctx );
    _mesa_init_lighting( ctx );
    _mesa_init_matrix( ctx );
+   _mesa_init_multisample( ctx );
    _mesa_init_occlude( ctx );
    _mesa_init_pixel( ctx );
    _mesa_init_point( ctx );
    _mesa_init_polygon( ctx );
    _mesa_init_program( ctx );
    _mesa_init_rastpos( ctx );
+   _mesa_init_scissor( ctx );
    _mesa_init_shaderobjects (ctx);
    _mesa_init_stencil( ctx );
    _mesa_init_transform( ctx );

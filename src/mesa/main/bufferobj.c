@@ -474,7 +474,7 @@ _mesa_BindBufferARB(GLenum target, GLuint buffer)
 {
    GET_CURRENT_CONTEXT(ctx);
    struct gl_buffer_object *oldBufObj;
-   struct gl_buffer_object *newBufObj = 0;
+   struct gl_buffer_object *newBufObj = NULL;
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    oldBufObj = buffer_object_get_target( ctx, target, "BindBufferARB" );
@@ -689,6 +689,7 @@ _mesa_GenBuffersARB(GLsizei n, GLuint *buffer)
       GLenum target = 0;
       bufObj = (*ctx->Driver.NewBufferObject)( ctx, name, target );
       if (!bufObj) {
+         _glthread_UNLOCK_MUTEX(ctx->Shared->Mutex);
          _mesa_error(ctx, GL_OUT_OF_MEMORY, "glGenBuffersARB");
          return;
       }

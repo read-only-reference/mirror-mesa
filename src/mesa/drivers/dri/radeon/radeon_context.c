@@ -172,7 +172,7 @@ static const struct tnl_pipeline_stage *radeon_pipeline[] = {
 
    &_radeon_render_stage,
    &_tnl_render_stage,		/* FALLBACK:  */
-   0,
+   NULL,
 };
 
 
@@ -254,6 +254,9 @@ radeonCreateContext( const __GLcontextModes *glVisual,
       else
 	 rmesa->using_hyperz = GL_TRUE;
    }
+
+   if ( sPriv->drmMinor >= 15 )
+      rmesa->texmicrotile = GL_TRUE;
 
    /* Init default driver functions then plug in our Radeon-specific functions
     * (the texture functions are especially important)
@@ -338,6 +341,13 @@ radeonCreateContext( const __GLcontextModes *glVisual,
 				 11, /* max rect texture size is 2048x2048. */
 				 12,
 				 GL_FALSE );
+
+   /* adjust max texture size a bit. Hack, but I really want to use larger textures
+      which will work just fine in 99.999999% of all cases, especially with texture compression... */
+   if (driQueryOptionb( &rmesa->optionCache, "texture_level_hack" ))
+   {
+     if (ctx->Const.MaxTextureLevels < 12) ctx->Const.MaxTextureLevels += 1;
+   }
 
    ctx->Const.MaxTextureMaxAnisotropy = 16.0;
 
@@ -523,7 +533,7 @@ void radeonDestroyContext( __DRIcontextPrivate *driContextPriv )
 
       if (rmesa->state.scissor.pClipRects) {
 	 FREE(rmesa->state.scissor.pClipRects);
-	 rmesa->state.scissor.pClipRects = 0;
+	 rmesa->state.scissor.pClipRects = NULL;
       }
 
       if ( release_texture_heaps ) {
@@ -609,7 +619,7 @@ radeonMakeCurrent( __DRIcontextPrivate *driContextPriv,
    } else {
       if (RADEON_DEBUG & DEBUG_DRI)
 	 fprintf(stderr, "%s ctx is null\n", __FUNCTION__);
-      _mesa_make_current( 0, 0 );
+      _mesa_make_current( NULL, NULL );
    }
 
    if (RADEON_DEBUG & DEBUG_DRI)

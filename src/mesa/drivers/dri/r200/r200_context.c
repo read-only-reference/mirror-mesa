@@ -182,7 +182,7 @@ static const struct tnl_pipeline_stage *r200_pipeline[] = {
     */
 /*    &_r200_render_stage,  */ /* FIXME: bugs with ut2003 */
    &_tnl_render_stage,		/* FALLBACK:  */
-   0,
+   NULL,
 };
 
 
@@ -272,6 +272,9 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
       else
 	 rmesa->using_hyperz = GL_TRUE;
    }
+ 
+   if ( sPriv->drmMinor >= 15 )
+      rmesa->texmicrotile = GL_TRUE;
 
    /* Init default driver functions then plug in our R200-specific functions
     * (the texture functions are especially important)
@@ -362,6 +365,13 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
 				 12,
 				 GL_FALSE );
 
+   /* adjust max texture size a bit. Hack, but I really want to use larger textures
+      which will work just fine in 99.999999% of all cases, especially with texture compression... */
+   if (driQueryOptionb( &rmesa->optionCache, "texture_level_hack" ))
+   {
+     if (ctx->Const.MaxTextureLevels < 12) ctx->Const.MaxTextureLevels += 1;
+   }
+
    ctx->Const.MaxTextureMaxAnisotropy = 16.0;
 
    /* No wide points.
@@ -412,9 +422,9 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    _math_matrix_set_identity( &rmesa->tmpmat );
 
    driInitExtensions( ctx, card_extensions, GL_TRUE );
-   if (rmesa->r200Screen->chipset & R200_CHIPSET_REAL_R200) {
-   /* yuv textures only work with r200 chips for unknown reasons, the
-      others get the bit ordering right but don't actually do YUV-RGB conversion */
+   if (!(rmesa->r200Screen->chipset & R200_CHIPSET_YCBCR_BROKEN)) {
+     /* yuv textures don't work with some chips - R200 / rv280 okay so far
+	others get the bit ordering right but don't actually do YUV-RGB conversion */
       _mesa_enable_extension( ctx, "GL_MESA_ycbcr_texture" );
    }
    if (rmesa->glCtx->Mesa_DXTn) {
@@ -558,7 +568,7 @@ void r200DestroyContext( __DRIcontextPrivate *driContextPriv )
 
       if (rmesa->state.scissor.pClipRects) {
 	 FREE(rmesa->state.scissor.pClipRects);
-	 rmesa->state.scissor.pClipRects = 0;
+	 rmesa->state.scissor.pClipRects = NULL;
       }
 
       if ( release_texture_heaps ) {
@@ -645,7 +655,7 @@ r200MakeCurrent( __DRIcontextPrivate *driContextPriv,
    } else {
       if (R200_DEBUG & DEBUG_DRI)
 	 fprintf(stderr, "%s ctx is null\n", __FUNCTION__);
-      _mesa_make_current( 0, 0 );
+      _mesa_make_current( NULL, NULL );
    }
 
    if (R200_DEBUG & DEBUG_DRI)

@@ -83,12 +83,13 @@ DRI_CONF_BEGIN
         DRI_CONF_MAX_TEXTURE_UNITS(2,1,2)
         SAVAGE_ENABLE_VDMA(true)
         SAVAGE_ENABLE_FASTPATH(true)
+    	DRI_CONF_TEXTURE_HEAPS(DRI_CONF_TEXTURE_HEAPS_ALL)
     DRI_CONF_SECTION_END
     DRI_CONF_SECTION_DEBUG
         DRI_CONF_NO_RAST(false)
     DRI_CONF_SECTION_END
 DRI_CONF_END;
-static const GLuint __driNConfigOptions = 7;
+static const GLuint __driNConfigOptions = 8;
 
 #ifdef USE_NEW_INTERFACE
 static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
@@ -295,6 +296,7 @@ savageCreateContext( const __GLcontextModes *mesaVis,
    savageScreenPrivate *savageScreen = (savageScreenPrivate *)sPriv->private;
    drm_savage_sarea_t *saPriv=(drm_savage_sarea_t *)(((char*)sPriv->pSAREA)+
 						 savageScreen->sarea_priv_offset);
+   int textureSize[SAVAGE_NR_TEX_HEAPS];
    int i;
    imesa = (savageContextPtr)Xcalloc(sizeof(savageContext), 1);
    if (!imesa) {
@@ -367,11 +369,25 @@ savageCreateContext( const __GLcontextModes *mesaVis,
    (void) memset( imesa->textureHeaps, 0, sizeof( imesa->textureHeaps ) );
    make_empty_list( & imesa->swapped );
 
+   textureSize[SAVAGE_CARD_HEAP] = savageScreen->textureSize[SAVAGE_CARD_HEAP];
+   textureSize[SAVAGE_AGP_HEAP] = savageScreen->textureSize[SAVAGE_AGP_HEAP];
    imesa->lastTexHeap = savageScreen->texVirtual[SAVAGE_AGP_HEAP] ? 2 : 1;
+   switch(driQueryOptioni (&imesa->optionCache, "texture_heaps")) {
+   case DRI_CONF_TEXTURE_HEAPS_CARD: /* only use card memory, if available */
+       if (textureSize[SAVAGE_CARD_HEAP])
+	   imesa->lastTexHeap = 1;
+       break;
+   case DRI_CONF_TEXTURE_HEAPS_GART: /* only use gart memory, if available */
+       if (imesa->lastTexHeap == 2 && textureSize[SAVAGE_AGP_HEAP])
+	   textureSize[SAVAGE_CARD_HEAP] = 0;
+       break;
+   /*default: Nothing to do, use all available memory. */
+   }
+   
    for (i = 0; i < imesa->lastTexHeap; i++) {
        imesa->textureHeaps[i] = driCreateTextureHeap(
 	   i, imesa,
-	   savageScreen->textureSize[i],
+	   textureSize[i],
 	   11,					/* 2^11 = 2k alignment */
 	   SAVAGE_NR_TEX_REGIONS,
 	   (drmTextureRegionPtr)imesa->sarea->texList[i],
@@ -379,8 +395,11 @@ savageCreateContext( const __GLcontextModes *mesaVis,
 	    &imesa->swapped,
 	    sizeof( savageTexObj ),
 	    (destroy_texture_object_t *) savageDestroyTexObj );
-       driSetTextureSwapCounterLocation( imesa->textureHeaps[i],
-					 & imesa->c_textureSwaps );
+       /* If textureSize[i] == 0 textureHeaps[i] is NULL. This can happen
+	* if there is not enough card memory for a card texture heap. */
+       if (imesa->textureHeaps[i])
+	   driSetTextureSwapCounterLocation( imesa->textureHeaps[i],
+					     & imesa->c_textureSwaps );
    }
    imesa->texture_depth = driQueryOptioni (&imesa->optionCache,
 					   "texture_depth");
@@ -461,18 +480,28 @@ savageCreateContext( const __GLcontextModes *mesaVis,
     */
    _tnl_destroy_pipeline( ctx );
    _tnl_install_pipeline( ctx, savage_pipeline );
+
+   imesa->enable_fastpath = driQueryOptionb(&imesa->optionCache,
+					    "enable_fastpath");
    /* DRM versions before 2.1.3 would only render triangle lists. ELTS
     * support was added in 2.2.0. */
-   if (sPriv->drmMinor < 2) {
-      imesa->enable_fastpath = GL_FALSE;
+   if (imesa->enable_fastpath && sPriv->drmMinor < 2) {
       fprintf (stderr,
 	       "*** Disabling fast path because your DRM version is buggy "
 	       "or doesn't\n*** support ELTS. You need at least Savage DRM "
 	       "version 2.2.\n");
-   } else
-      imesa->enable_fastpath = driQueryOptionb(&imesa->optionCache,
-					       "enable_fastpath");
+      imesa->enable_fastpath = GL_FALSE;
+   }
+      
    imesa->enable_vdma = driQueryOptionb(&imesa->optionCache, "enable_vdma");
+   if (imesa->enable_vdma && savageScreen->chipset == S3_SUPERSAVAGE) {
+       fprintf (stderr,
+		"*** Disabling vertex DMA on SuperSavage. Someone has to "
+		"find out, how to make\n*** it work without locking up. "
+		"To disable this message set option enable_vdma\n"
+		"*** to \"false\" in DRIConf.\n");
+       imesa->enable_vdma = GL_FALSE;
+   }
 
    /* Configure swrast to match hardware characteristics:
     */
@@ -582,11 +611,10 @@ void savageXMesaSetFrontClipRects( savageContextPtr imesa )
 
    imesa->numClipRects = dPriv->numClipRects;
    imesa->pClipRects = dPriv->pClipRects;
-   imesa->dirty |= SAVAGE_UPLOAD_CLIPRECTS;
    imesa->drawX = dPriv->x;
    imesa->drawY = dPriv->y;
 
-   savageEmitDrawingRectangle( imesa );
+   savageCalcViewport( imesa->glCtx );
 }
 
 
@@ -611,10 +639,7 @@ void savageXMesaSetBackClipRects( savageContextPtr imesa )
       imesa->drawY = dPriv->backY;
    }
 
-   savageEmitDrawingRectangle( imesa );
-   imesa->dirty |= SAVAGE_UPLOAD_CLIPRECTS;
-
-
+   savageCalcViewport( imesa->glCtx );
 }
 
 
@@ -717,6 +742,7 @@ void savageGetLock( savageContextPtr imesa, GLuint flags )
    int me = imesa->hHWContext;
    int stamp = dPriv->lastStamp; 
    int heap;
+   unsigned int timestamp = 0;
 
   
 
@@ -750,13 +776,21 @@ void savageGetLock( savageContextPtr imesa, GLuint flags )
 		       SAVAGE_UPLOAD_FOGTBL |
 		       SAVAGE_UPLOAD_TEX0 |
 		       SAVAGE_UPLOAD_TEX1 |
-		       SAVAGE_UPLOAD_TEXGLOBAL |
-		       SAVAGE_UPLOAD_CLIPRECTS);
+		       SAVAGE_UPLOAD_TEXGLOBAL);
       imesa->lostContext = GL_TRUE;
       sarea->ctxOwner = me;
    }
 
    for (heap = 0; heap < imesa->lastTexHeap; ++heap) {
+      /* If a heap was changed, update its timestamp. Do this before
+       * DRI_AGE_TEXTURES updates the local_age. */
+      if (imesa->textureHeaps[heap] &&
+	  imesa->textureHeaps[heap]->global_age[0] >
+	  imesa->textureHeaps[heap]->local_age) {
+	 if (timestamp == 0)
+	    timestamp = savageEmitEventLocked(imesa, 0);
+	 imesa->textureHeaps[heap]->timestamp = timestamp;
+      }
       DRI_AGE_TEXTURES( imesa->textureHeaps[heap] );
    }
 
@@ -910,7 +944,7 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
    __DRIscreenPrivate *psp;
    static const __DRIversion ddx_expected = { 2, 0, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
-   static const __DRIversion drm_expected = { 2, 0, 0 };
+   static const __DRIversion drm_expected = { 2, 1, 0 };
 
    if ( ! driCheckDriDdxDrmVersions2( "Savage",
 				      dri_version, & dri_expected,

@@ -149,6 +149,7 @@ static const struct dri_debug_control debug_control[] = {
 	{"sync", DEBUG_SYNC},
 	{"pix", DEBUG_PIXEL},
 	{"mem", DEBUG_MEMORY},
+	{"allmsg", ~DEBUG_SYNC}, /* avoid the term "sync" because the parser uses strstr */
 	{NULL, 0}
 };
 
@@ -194,14 +195,18 @@ static const struct dri_debug_control debug_control[] = {
 #define PCI_CHIP_R300_AF		0x4146
 #define PCI_CHIP_R300_AG		0x4147
 #define PCI_CHIP_RV350_AP               0x4150
+#define PCI_CHIP_RV350_AR               0x4152
 #define PCI_CHIP_RV350_AS               0x4153
 #define PCI_CHIP_RV350_NP               0x4E50
+#define PCI_CHIP_RV350_NQ               0x4E51			/* Saphire 9600 256MB card */
 #define PCI_CHIP_RV350_NT               0x4E54
+#define PCI_CHIP_RV350_NQ_2             0x4E71			/* Saphire 9600 256MB card - Second Head */
 #define PCI_CHIP_R300_ND		0x4E44
 #define PCI_CHIP_R300_NE		0x4E45
 #define PCI_CHIP_R300_NF		0x4E46
 #define PCI_CHIP_R300_NG		0x4E47
 #define PCI_CHIP_R350_NH                0x4E48
+#define PCI_CHIP_R420_JK                0x4a4b
 #endif
 
 #ifdef USE_NEW_INTERFACE
@@ -366,9 +371,12 @@ static radeonScreenPtr radeonCreateScreen(__DRIscreenPrivate * sPriv)
 	case PCI_CHIP_R300_AF:
 	case PCI_CHIP_R300_AG:
 	case PCI_CHIP_RV350_AP:
+	case PCI_CHIP_RV350_AR:
 	case PCI_CHIP_RV350_AS:
 	case PCI_CHIP_RV350_NP:
 	case PCI_CHIP_RV350_NT:
+	case PCI_CHIP_RV350_NQ:
+/*	case PCI_CHIP_RV350_NQ:  -- Should we have the second head in here too? */
 		screen->chipset = RADEON_CHIP_RV350;
 		break;
 
@@ -378,6 +386,10 @@ static radeonScreenPtr radeonCreateScreen(__DRIscreenPrivate * sPriv)
 	case PCI_CHIP_R300_NG:
 	case PCI_CHIP_R350_NH:
 		screen->chipset = RADEON_CHIP_R300;
+		break;
+
+	case PCI_CHIP_R420_JK:
+		screen->chipset = RADEON_CHIP_R420;
 		break;
 
 	default:

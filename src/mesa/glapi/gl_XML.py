@@ -142,7 +142,6 @@ class glParameter( glItem ):
 	p_type = None
 	p_type_string = ""
 	p_count = 0
-	p_count_parameters = None
 	counter = None
 	is_output = 0
 	is_counter = 0
@@ -151,7 +150,12 @@ class glParameter( glItem ):
 	def __init__(self, context, name, attrs):
 		p_name = attrs.get('name', None)
 		self.p_type_string = attrs.get('type', None)
-		self.p_count_parameters = attrs.get('variable_param', None)
+
+		temp = attrs.get('variable_param', None)
+		if temp:
+			self.count_parameter_list = temp.replace( ' ', '' ).split( ',' )
+		else:
+			self.count_parameter_list = []
 
 		self.p_type = context.context.find_type(self.p_type_string)
 		if self.p_type == None:
@@ -219,7 +223,7 @@ class glParameter( glItem ):
 
 
 
-		if self.p_count > 0 or self.counter or self.p_count_parameters:
+		if self.p_count > 0 or self.counter or self.count_parameter_list:
 			has_count = 1
 		else:
 			has_count = 0
@@ -258,7 +262,7 @@ class glParameter( glItem ):
 		to glCallLists, are not variable length arrays in this
 		sense."""
 
-		return self.p_count_parameters or self.counter or self.width
+		return self.count_parameter_list or self.counter or self.width
 
 
 	def is_array(self):
@@ -276,7 +280,7 @@ class glParameter( glItem ):
 		glDeleteTextures), or a general variable length vector."""
 
 		if self.is_array():
-			if self.p_count_parameters != None:
+			if self.count_parameter_list:
 				return "compsize"
 			elif self.counter != None:
 				return self.counter
@@ -287,7 +291,7 @@ class glParameter( glItem ):
 
 
 	def size(self):
-		if self.p_count_parameters or self.counter or self.width or self.is_output:
+		if self.count_parameter_list or self.counter or self.width or self.is_output:
 			return 0
 		elif self.p_count == 0:
 			return self.p_type.size
@@ -300,11 +304,16 @@ class glParameter( glItem ):
 			a_prod = "compsize"
 			b_prod = self.p_type.size
 
-			if self.p_count_parameters == None and self.counter != None:
+			# Handle functions like glCompressedTexImage2D that
+			# have a counted 'void *' parameter.
+
+			if b_prod == 0:	b_prod = 1
+
+			if not self.count_parameter_list and self.counter != None:
 				a_prod = self.counter
-			elif self.p_count_parameters != None and self.counter == None:
+			elif self.count_parameter_list and self.counter == None:
 				pass
-			elif self.p_count_parameters != None and self.counter != None:
+			elif self.count_parameter_list and self.counter != None:
 				b_prod = self.counter
 			elif self.width:
 				return "compsize"
@@ -339,16 +348,12 @@ class glParameterIterator:
 
 
 class glFunction( glItem ):
-	real_name = ""
-	fn_alias = None
-	fn_offset = -1
-	fn_return_type = "void"
-	fn_parameters = []
-
 	def __init__(self, context, name, attrs):
 		self.fn_alias = attrs.get('alias', None)
 		self.fn_parameters = []
 		self.image = None
+		self.count_parameter_list = []
+		self.fn_return_type = "void"
 
 		temp = attrs.get('offset', None)
 		if temp == None or temp == "?":
@@ -390,6 +395,8 @@ class glFunction( glItem ):
 			self.image = p
 
 		self.fn_parameters.append(p)
+		if p.count_parameter_list != []:
+			self.count_parameter_list.extend( p.count_parameter_list )
 
 
 	def set_return_type(self, t):
@@ -495,6 +502,7 @@ class FilterGLAPISpecBase(saxutils.XMLFilterBase):
 		self.xref = {}
 		self.factory = glItemFactory()
 		self.header_tag = None
+		self.undef_list = []
 
 
 	def find_type(self,type_name):
@@ -544,8 +552,12 @@ class FilterGLAPISpecBase(saxutils.XMLFilterBase):
 		self.printFunctions()
 		self.printRealFooter()
 		if self.header_tag:
-		    print ''
-		    print '#endif /* !defined( %s ) */' % (self.header_tag)
+			if self.undef_list:
+				print ''
+				for u in self.undef_list:
+					print "#  undef %s" % (u)
+			print ''
+			print '#endif /* !defined( %s ) */' % (self.header_tag)
 
 
 	def get_category_define(self):
@@ -599,6 +611,8 @@ class FilterGLAPISpecBase(saxutils.XMLFilterBase):
 			self.current_object.startElement(name, attrs)
 		elif name == "category":
 			self.current_category = attrs.get('name', "")
+		elif name == "include":
+			self.next_include = attrs.get('name', "")
 		else:
 			self.current_object = self.factory.create(self, name, attrs)
 		return
@@ -608,8 +622,54 @@ class FilterGLAPISpecBase(saxutils.XMLFilterBase):
 		if self.current_object != None:
 			if self.current_object.endElement(name):
 				self.current_object = None
+		elif name == "include":
+			parser = make_parser()
+			parser.setFeature(feature_namespaces, 0)
+			parser.setContentHandler(self)
+
+			f = open(self.next_include)
+			parser.parse(f)
+
 		return
 
+
+	def printPure(self):
+		self.undef_list.append("PURE")
+		print """#  if __GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ >= 96)
+#    define PURE __attribute__((pure))
+#  else
+#    define PURE
+#  endif"""
+
+	def printFastcall(self):
+		self.undef_list.append("FASTCALL")
+		print """#  if defined(__i386__) && defined(__GNUC__)
+#    define FASTCALL __attribute__((fastcall))
+#  else
+#    define FASTCALL
+#  endif"""
+
+	def printVisibility(self, S, s):
+		self.undef_list.append(S)
+		print """#  if __GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 3)
+#    define %s  __attribute__((visibility("%s")))
+#  else
+#    define %s
+#  endif""" % (S, s, S)
+
+	def printNoinline(self):
+		self.undef_list.append("NOINLINE")
+		print """#  if defined(__GNUC__)
+#    define NOINLINE __attribute__((noinline))
+#  else
+#    define NOINLINE
+#  endif"""
+
+	def printHaveAlias(self):
+		self.undef_list.append("HAVE_ALIAS")
+		print """#  if __GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ >= 95)
+#    define HAVE_ALIAS
+#  endif"""
 
 	def printFunction(self,offset):
 		"""Print a single function.

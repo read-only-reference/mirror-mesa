@@ -2,7 +2,7 @@
  * Mesa 3-D graphics library
  * Version:  6.3
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -58,6 +58,9 @@
 #include "get.h"
 #include "feedback.h"
 #include "fog.h"
+#if FEATURE_EXT_framebuffer_object
+#include "fbobject.h"
+#endif
 #include "hint.h"
 #include "histogram.h"
 #include "imports.h"
@@ -771,6 +774,26 @@ _mesa_init_exec_table(struct _glapi_table *exec)
    exec->AlphaFragmentOp3ATI = _mesa_AlphaFragmentOp3ATI;
    exec->SetFragmentShaderConstantATI = _mesa_SetFragmentShaderConstantATI;
 #endif
+
+#if FEATURE_EXT_framebuffer_object
+   exec->IsRenderbufferEXT = _mesa_IsRenderbufferEXT;
+   exec->BindRenderbufferEXT = _mesa_BindRenderbufferEXT;
+   exec->DeleteRenderbuffersEXT = _mesa_DeleteRenderbuffersEXT;
+   exec->GenRenderbuffersEXT = _mesa_GenRenderbuffersEXT;
+   exec->RenderbufferStorageEXT = _mesa_RenderbufferStorageEXT;
+   exec->GetRenderbufferParameterivEXT = _mesa_GetRenderbufferParameterivEXT;
+   exec->IsFramebufferEXT = _mesa_IsFramebufferEXT;
+   exec->BindFramebufferEXT = _mesa_BindFramebufferEXT;
+   exec->DeleteFramebuffersEXT = _mesa_DeleteFramebuffersEXT;
+   exec->GenFramebuffersEXT = _mesa_GenFramebuffersEXT;
+   exec->CheckFramebufferStatusEXT = _mesa_CheckFramebufferStatusEXT;
+   exec->FramebufferTexture1DEXT = _mesa_FramebufferTexture1DEXT;
+   exec->FramebufferTexture2DEXT = _mesa_FramebufferTexture2DEXT;
+   exec->FramebufferTexture3DEXT = _mesa_FramebufferTexture3DEXT;
+   exec->FramebufferRenderbufferEXT = _mesa_FramebufferRenderbufferEXT;
+   exec->GetFramebufferAttachmentParameterivEXT = _mesa_GetFramebufferAttachmentParameterivEXT;
+   exec->GenerateMipmapEXT = _mesa_GenerateMipmapEXT;
+#endif
 }
 
 
@@ -912,20 +935,21 @@ update_program(GLcontext *ctx)
 }
 
 
-/*
+/**
  * If __GLcontextRec::NewState is non-zero then this function \b must be called
  * before rendering any primitive.  Basically, function pointers and
  * miscellaneous flags are updated to reflect the current state of the state
  * machine.
  *
- * Calls dd_function_table::UpdateState to perform any internal state management
- * necessary.
+ * Calls dd_function_table::UpdateState to perform any internal state
+ * management necessary.
  * 
  * \sa _mesa_update_modelview_project(), _mesa_update_texture(),
- * _mesa_update_buffers(), _mesa_update_polygon(), _mesa_update_lighting() and
- * _mesa_update_tnl_spaces().
+ * _mesa_update_buffer_bounds(), _mesa_update_polygon(),
+ * _mesa_update_lighting() and _mesa_update_tnl_spaces().
  */
-void _mesa_update_state( GLcontext *ctx )
+void
+_mesa_update_state( GLcontext *ctx )
 {
    GLuint new_state = ctx->NewState;
 
@@ -942,7 +966,7 @@ void _mesa_update_state( GLcontext *ctx )
       _mesa_update_texture( ctx, new_state );
 
    if (new_state & (_NEW_SCISSOR|_NEW_BUFFERS))
-      _mesa_update_buffers( ctx );
+      _mesa_update_draw_buffer_bounds( ctx );
 
    if (new_state & _NEW_POLYGON)
       _mesa_update_polygon( ctx );

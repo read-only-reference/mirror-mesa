@@ -101,8 +101,9 @@ class glXPixelFunctionUtility(glX_XML.glXFunction):
 		self.set_return_type( func.fn_return_type )
 		self.glx_rop = ~0
 		self.can_be_large = func.can_be_large
-		self.count_parameters = func.count_parameters
+		self.count_parameter_list = func.count_parameter_list
 		self.counter = func.counter
+		self.img_reset = None
 		return
 
 
@@ -126,8 +127,8 @@ class PrintGlxProtoStubs(glX_XML.GlxProto):
 		print ''
 		print '#define __GLX_PAD(n) (((n) + 3) & ~3)'
 		print ''
-		glX_XML.printFastcall()
-		glX_XML.printNoinline()
+		self.printFastcall()
+		self.printNoinline()
 		print ''
 		print '#if !defined __GNUC__ || __GNUC__ < 3'
 		print '#  define __builtin_expect(x, y) x'
@@ -141,35 +142,77 @@ class PrintGlxProtoStubs(glX_XML.GlxProto):
 		print '         temp.s[0] = (size); temp.s[1] = (op); \\'
 		print '         *((int *)(dest)) = temp.i; } while(0)'
 		print ''
-		print """static NOINLINE CARD32
-read_reply( Display *dpy, size_t size, void * dest, GLboolean reply_is_always_array )
+		print """NOINLINE CARD32
+__glXReadReply( Display *dpy, size_t size, void * dest, GLboolean reply_is_always_array )
 {
     xGLXSingleReply reply;
     
     (void) _XReply(dpy, (xReply *) & reply, 0, False);
     if (size != 0) {
-	if ((reply.length > 0) || reply_is_always_array) {
-	    const GLint bytes = (reply_is_always_array) 
-	      ? (4 * reply.length) : (reply.size * size);
-	    const GLint extra = 4 - (bytes & 3);
+        if ((reply.length > 0) || reply_is_always_array) {
+            const GLint bytes = (reply_is_always_array) 
+              ? (4 * reply.length) : (reply.size * size);
+            const GLint extra = 4 - (bytes & 3);
 
-	    _XRead(dpy, dest, bytes);
-	    if ( extra < 4 ) {
-		_XEatData(dpy, extra);
-	    }
-	}
-	else {
-	    (void) memcpy( dest, &(reply.pad3), size);
-	}
+            _XRead(dpy, dest, bytes);
+            if ( extra < 4 ) {
+                _XEatData(dpy, extra);
+            }
+        }
+        else {
+            (void) memcpy( dest, &(reply.pad3), size);
+        }
     }
 
     return reply.retval;
 }
 
+NOINLINE void
+__glXReadPixelReply( Display *dpy, __GLXcontext * gc, unsigned max_dim,
+    GLint width, GLint height, GLint depth, GLenum format, GLenum type,
+    void * dest, GLboolean dimensions_in_reply )
+{
+    xGLXSingleReply reply;
+    GLint size;
+    
+    (void) _XReply(dpy, (xReply *) & reply, 0, False);
+
+    if ( dimensions_in_reply ) {
+        width  = reply.pad3;
+        height = reply.pad4;
+        depth  = reply.pad5;
+	
+	if ((height == 0) || (max_dim < 2)) { height = 1; }
+	if ((depth  == 0) || (max_dim < 3)) { depth  = 1; }
+    }
+
+    size = reply.length * 4;
+    if (size != 0) {
+        void * buf = Xmalloc( size );
+
+        if ( buf == NULL ) {
+            _XEatData(dpy, size);
+            __glXSetError(gc, GL_OUT_OF_MEMORY);
+        }
+        else {
+            const GLint extra = 4 - (size & 3);
+
+            _XRead(dpy, buf, size);
+            if ( extra < 4 ) {
+                _XEatData(dpy, extra);
+            }
+
+            __glEmptyImage(gc, 3, width, height, depth, format, type,
+                           buf, dest);
+            Xfree(buf);
+        }
+    }
+}
+
 #define X_GLXSingle 0
 
-static NOINLINE FASTCALL GLubyte *
-setup_single_request( __GLXcontext * gc, GLint sop, GLint cmdlen )
+NOINLINE FASTCALL GLubyte *
+__glXSetupSingleRequest( __GLXcontext * gc, GLint sop, GLint cmdlen )
 {
     xGLXSingleReq * req;
     Display * const dpy = gc->currentDpy;
@@ -183,8 +226,8 @@ setup_single_request( __GLXcontext * gc, GLint sop, GLint cmdlen )
     return (GLubyte *)(req) + sz_xGLXSingleReq;
 }
 
-static NOINLINE FASTCALL GLubyte *
-setup_vendor_request( __GLXcontext * gc, GLint code, GLint vop, GLint cmdlen )
+NOINLINE FASTCALL GLubyte *
+__glXSetupVendorRequest( __GLXcontext * gc, GLint code, GLint vop, GLint cmdlen )
 {
     xGLXVendorPrivateReq * req;
     Display * const dpy = gc->currentDpy;
@@ -218,7 +261,7 @@ const GLuint __glXDefaultPixelStore[9] = { 0, 0, 0, 0, 0, 0, 0, 0, 1 };
 		return
 
 	def printFunction(self, f):
-		if f.fn_offset < 0 or f.client_handcode or f.ignore: return
+		if f.client_handcode: return
 
 		if f.glx_rop != 0 or f.vectorequiv != None:
 			if f.image:
@@ -265,8 +308,9 @@ generic_%u_byte( GLint rop, const void * ptr )
 			r = 2
 
 		for p in f.parameterIterator(1, r):
-			self.common_emit_one_arg(p, offset, pc, indent, adjust)
-			offset += p.size()
+			if p.name != f.img_reset:
+				self.common_emit_one_arg(p, offset, pc, indent, adjust)
+				offset += p.size()
 
 		return offset
 
@@ -328,6 +372,9 @@ generic_%u_byte( GLint rop, const void * ptr )
 		# parameter.
 
 		if not f.glx_rop:
+			if f.image and f.image.is_output:
+				print '    const __GLXattribute * const state = gc->client_state_private;'
+
 			print '    Display * const dpy = gc->currentDpy;'
 			skip_condition = "dpy != NULL"
 		elif f.can_be_large:
@@ -339,17 +386,10 @@ generic_%u_byte( GLint rop, const void * ptr )
 		if f.fn_return_type != 'void':
 			print '    %s retval = (%s) 0;' % (f.fn_return_type, f.fn_return_type)
 
-		if f.count_parameters and not f.output_parameter():
-			print '    const GLuint compsize = __gl%s_size(%s);' % (f.name, f.count_parameters)
-		elif f.image:
-			[dim, w, h, d, junk] = f.dimensions()
-			
-			compsize = '__glImageSize(%s, %s, %s, %s, %s, %s)' % (w, h, d, f.image.img_format, f.image.img_type, f.image.img_target)
-			if not f.image.img_send_null:
-				compsize = '(%s != NULL) ? %s : 0' % (f.image.name, compsize)
-
-			print '    const GLuint compsize = %s;' % (compsize)
-
+		if not f.output_parameter():
+			compsize = self.size_call( f )
+			if compsize:
+				print '    const GLuint compsize = %s;' % (compsize)
 
 		print '    const GLuint cmdlen = %s;' % (f.command_length())
 
@@ -385,31 +425,48 @@ generic_%u_byte( GLint rop, const void * ptr )
 			pc_decl = "(void)"
 
 		if f.glx_vendorpriv != 0:
-			print '        %s setup_vendor_request(gc, %s, %s, cmdlen);' % (pc_decl, f.opcode_real_name(), f.opcode_name())
+			print '        %s __glXSetupVendorRequest(gc, %s, %s, cmdlen);' % (pc_decl, f.opcode_real_name(), f.opcode_name())
 		else:
-			print '        %s setup_single_request(gc, %s, cmdlen);' % (pc_decl, f.opcode_name())
+			print '        %s __glXSetupSingleRequest(gc, %s, cmdlen);' % (pc_decl, f.opcode_name())
 
 		self.common_emit_args(f, "pc", "    ", 0, 0)
+		if f.image and f.image.is_output:
+			o = f.command_fixed_length() - 4
+			print '        *(int32_t *)(pc + %u) = 0;' % (o)
+			if f.image.img_format != "GL_COLOR_INDEX" or f.image.img_type != "GL_BITMAP":
+				print '        * (int8_t *)(pc + %u) = state->storePack.swapEndian;' % (o)
+
+				if f.img_reset:
+					print '        * (int8_t *)(pc + %u) = %s;' % (o + 1, f.img_reset)
+
 
 		if f.needs_reply():
-			if f.output != None:
-				output_size = f.output.p_type.size
-				output_str = f.output.name
+			if f.image and f.image.is_output:
+				[dim, w, h, d, junk] = f.dimensions()
+				if f.dimensions_in_reply:
+					print "        __glXReadPixelReply(dpy, gc, %u, 0, 0, 0, %s, %s, %s, GL_TRUE);" % (dim, f.image.img_format, f.image.img_type, f.image.name)
+				else:
+					print "        __glXReadPixelReply(dpy, gc, %u, %s, %s, %s, %s, %s, %s, GL_FALSE);" % (dim, w, h, d, f.image.img_format, f.image.img_type, f.image.name)
 			else:
-				output_size = 0
-				output_str = "NULL"
+				if f.output != None:
+					output_size = f.output.p_type.size
+					output_str = f.output.name
+				else:
+					output_size = 0
+					output_str = "NULL"
 
-			if f.fn_return_type != 'void':
-				return_str = " retval = (%s)" % (f.fn_return_type)
-			else:
-				return_str = " (void)"
+				if f.fn_return_type != 'void':
+					return_str = " retval = (%s)" % (f.fn_return_type)
+				else:
+					return_str = " (void)"
 
-			if f.reply_always_array:
-				aa = "GL_TRUE"
-			else:
-				aa = "GL_FALSE"
+				if f.reply_always_array:
+					aa = "GL_TRUE"
+				else:
+					aa = "GL_FALSE"
 
-			print "       %s read_reply(dpy, %s, %s, %s);" % (return_str, output_size, output_str, aa)
+				print "       %s __glXReadReply(dpy, %s, %s, %s);" % (return_str, output_size, output_str, aa)
+
 		elif self.debug:
 			# Only emit the extra glFinish call for functions
 			# that don't already require a reply from the server.
@@ -740,8 +797,6 @@ __GLapi * __glXNewIndirectAPI( void )
 """
 
 	def printFunction(self, f):
-		if f.fn_offset < 0 or f.ignore: return
-		
 		if f.category != self.last_category:
 			self.last_category = f.category
 			print ''
@@ -769,15 +824,30 @@ class PrintGlxProtoInit_h(glX_XML.GlxProto):
  * \\author Ian Romanick <idr@us.ibm.com>
  */
 """
-		glX_XML.printVisibility( "HIDDEN", "hidden" )
+		self.printVisibility( "HIDDEN", "hidden" )
+		self.printFastcall()
+		self.printNoinline()
 
+		print """
+#include "glxclient.h"
 
-	def printRealFooter(self):
-		print "#  undef HIDDEN"
+extern HIDDEN NOINLINE CARD32 __glXReadReply( Display *dpy, size_t size,
+    void * dest, GLboolean reply_is_always_array );
+
+extern HIDDEN NOINLINE void __glXReadPixelReply( Display *dpy,
+    __GLXcontext * gc, unsigned max_dim, GLint width, GLint height,
+    GLint depth, GLenum format, GLenum type, void * dest,
+    GLboolean dimensions_in_reply );
+
+extern HIDDEN NOINLINE FASTCALL GLubyte * __glXSetupSingleRequest(
+    __GLXcontext * gc, GLint sop, GLint cmdlen );
+
+extern HIDDEN NOINLINE FASTCALL GLubyte * __glXSetupVendorRequest(
+    __GLXcontext * gc, GLint code, GLint vop, GLint cmdlen );
+"""
 
 
 	def printFunction(self, f):
-		if f.fn_offset < 0 or f.ignore: return
 		print 'extern HIDDEN %s __indirect_gl%s(%s);' % (f.fn_return_type, f.name, f.get_parameter_string())
 
 

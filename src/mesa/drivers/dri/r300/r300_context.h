@@ -56,13 +56,25 @@ typedef struct r300_context *r300ContextPtr;
 
 /* Checkpoint.. for convenience */
 #define CPT	{ fprintf(stderr, "%s:%s line %d\n", __FILE__, __FUNCTION__, __LINE__); }
-#define WARN_ONCE(a)	{ \
-	static int warn=1; \
-	if(warn){ \
-		fprintf(stderr, (a)); \
-		warn=0;\
+/* From http://gcc.gnu.org/onlinedocs/gcc-3.2.3/gcc/Variadic-Macros.html .
+   I suppose we could inline this and use macro to fetch out __LINE__ and stuff in case we run into trouble 
+   with other compilers ... GLUE!
+*/
+#if 1
+#define WARN_ONCE(a, ...)	{ \
+	static int warn##__LINE__=1; \
+	if(warn##__LINE__){ \
+		fprintf(stderr, "*********************************WARN_ONCE*********************************\n"); \
+		fprintf(stderr, "File %s function %s line %d\n", \
+			__FILE__, __FUNCTION__, __LINE__); \
+		fprintf(stderr,  a, ## __VA_ARGS__);\
+		fprintf(stderr, "***************************************************************************\n"); \
+		warn##__LINE__=0;\
 		} \
 	}
+#else
+#define WARN_ONCE(a, ...) {}
+#endif
 
 typedef GLuint uint32_t;
 typedef GLubyte uint8_t;
@@ -102,9 +114,12 @@ struct r300_dma_region {
 	struct r300_dma_buffer *buf;
 	char *address;		/* == buf->address */
 	int start, end, ptr;	/* offsets from start of buf */
-	int aos_start;
-	int aos_stride;
-	int aos_size;
+
+    int aos_offset;     /* address in GART memory */
+    int aos_stride;     /* distance between elements, in dwords */
+    int aos_size;       /* number of components (1-4) */
+    int aos_format;     /* format of components */
+    int aos_reg;        /* VAP register assignment */
 };
 
 struct r300_dma {
@@ -117,7 +132,11 @@ struct r300_dma {
 	void (*flush) (r300ContextPtr);
 
 	char *buf0_address;	/* start of buf[0], for index calcs */
-	GLuint nr_released_bufs;	/* flush after so many buffers released */
+
+	/* Number of "in-flight" DMA buffers, i.e. the number of buffers
+	 * for which a DISCARD command is currently queued in the command buffer.
+	 */
+	GLuint nr_released_bufs;
 };
 
        /* Texture related */
@@ -251,6 +270,13 @@ struct r300_state_atom {
 #define R300_PS_CMD_0		0
 #define R300_PS_POINTSIZE	1
 #define R300_PS_CMDSIZE		2
+
+#define R300_ZBS_CMD_0		0
+#define R300_ZBS_T_FACTOR	1
+#define R300_ZBS_T_CONSTANT	2
+#define R300_ZBS_W_FACTOR	3
+#define R300_ZBS_W_CONSTANT	4
+#define R300_ZBS_CMDSIZE	5
 
 #define R300_CUL_CMD_0		0
 #define R300_CUL_CULL		1
@@ -388,10 +414,15 @@ struct r300_hw_state {
 	struct r300_state_atom unk4214; /* (4214) */
 	struct r300_state_atom ps;	/* pointsize (421C) */
 	struct r300_state_atom unk4230; /* (4230) */
+	struct r300_state_atom lcntl;	/* line control */
+#ifdef EXP_C
+	struct r300_state_atom lsf;	/* line stipple factor */
+#endif
 	struct r300_state_atom unk4260; /* (4260) */
 	struct r300_state_atom unk4274; /* (4274) */
 	struct r300_state_atom unk4288; /* (4288) */
-	struct r300_state_atom unk42A0; /* (42A0) */
+	struct r300_state_atom unk42A0;	/* (42A0) */
+	struct r300_state_atom zbs;	/* zbias (42A4) */
 	struct r300_state_atom unk42B4; /* (42B4) */
 	struct r300_state_atom cul;	/* cull cntl (42B8) */
 	struct r300_state_atom unk42C0; /* (42C0) */
@@ -428,7 +459,6 @@ struct r300_hw_state {
 	struct r300_state_atom vpi;	/* vp instructions */
 	struct r300_state_atom vpp;	/* vp parameters */
 	struct r300_state_atom vps;	/* vertex point size (?) */
-
 		/* 8 texture units */
 		/* the state is grouped by function and not by
 		   texture unit. This makes single unit updates
@@ -441,8 +471,7 @@ struct r300_hw_state {
 		struct r300_state_atom format;
 		struct r300_state_atom offset;
 		struct r300_state_atom unknown4;
-		struct r300_state_atom unknown5;
-		//struct r300_state_atom border_color;
+		struct r300_state_atom border_color;
 		} tex;
 	struct r300_state_atom txe;	/* tex enable (4104) */
 };
@@ -485,7 +514,7 @@ struct r300_vap_reg_state {
 /* Vertex shader state */
 
 /* 64 appears to be the maximum */
-#define VSF_MAX_FRAGMENT_LENGTH 64
+#define VSF_MAX_FRAGMENT_LENGTH (64*4)
 
 
 struct r300_vertex_shader_fragment {
@@ -537,7 +566,10 @@ struct r300_vertex_program {
 	
 	struct r300_vertex_shader_fragment program;
 	struct r300_vertex_shader_fragment params;
-
+	
+	int t2rs;
+	unsigned long num_temporaries; /* Number of temp vars used by program */
+	int inputs[VERT_ATTRIB_MAX];
 };
 
 /* 64 appears to be the maximum */
@@ -630,9 +662,19 @@ struct r300_state {
 	struct r300_vap_reg_state vap_reg;
 	struct r300_vertex_shader_state vertex_shader;
 	struct r300_pixel_shader_state pixel_shader;
-	struct r300_aos_rec aos[R300_MAX_AOS_ARRAYS];
+
+	struct r300_dma_region aos[R300_MAX_AOS_ARRAYS];
 	int aos_count;
 
+	GLuint *Elts;
+	struct r300_dma_region elt_dma;
+	
+	GLuint render_inputs; /* actual render inputs that R300 was configured for. 
+				 They are the same as tnl->render_inputs for fixed pipeline */	
+	
+	struct {
+		int transform_offset;  /* Transform matrix offset, -1 if none */
+		} vap_param;  /* vertex processor parameter allocation - tells where to write parameters */
 	int hw_stencil;
 };
 
@@ -681,10 +723,25 @@ struct r300_context {
 
 #define R300_CONTEXT(ctx)		((r300ContextPtr)(ctx->DriverCtx))
 
+static __inline GLuint r300PackColor( GLuint cpp,
+					GLubyte r, GLubyte g,
+					GLubyte b, GLubyte a )
+{
+   switch ( cpp ) {
+   case 2:
+      return PACK_COLOR_565( r, g, b );
+   case 4:
+      return PACK_COLOR_8888( r, g, b, a );
+   default:
+      return 0;
+   }
+}
 extern void r300DestroyContext(__DRIcontextPrivate * driContextPriv);
 extern GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 				   __DRIcontextPrivate * driContextPriv,
 				   void *sharedContextPrivate);
+
 extern void r300InitVertexProgFuncs(struct dd_function_table *functions);
+extern void r300VertexProgUpdateParams(GLcontext *ctx, struct r300_vertex_program *vp);
 
 #endif				/* __R300_CONTEXT_H__ */

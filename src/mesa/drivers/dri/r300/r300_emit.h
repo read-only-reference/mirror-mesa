@@ -21,6 +21,7 @@
 #define RADEON_CP_PACKET3_3D_DRAW_IMMD              0xC0002900
 #define RADEON_CP_PACKET3_3D_DRAW_INDX              0xC0002A00
 #define RADEON_CP_PACKET3_LOAD_PALETTE              0xC0002C00
+#define RADEON_CP_PACKET3_INDX_BUFFER               0xC0003300
 #define RADEON_CP_PACKET3_3D_DRAW_VBUF_2            0xC0003400
 #define RADEON_CP_PACKET3_3D_DRAW_IMMD_2            0xC0003500
 #define RADEON_CP_PACKET3_3D_DRAW_INDX_2            0xC0003600
@@ -44,7 +45,7 @@
 #define LOCAL_VARS int cmd_reserved=0;\
 	int cmd_written=0; \
 	drm_radeon_cmd_header_t *cmd=NULL;
-	
+
 #define PREFIX_VOID r300ContextPtr rmesa
 
 #define PREFIX PREFIX_VOID ,
@@ -57,7 +58,7 @@ typedef GLuint CARD32;
 /* This files defines functions for accessing R300 hardware.
    It needs to be customized to whatever code r300_lib.c is used
    in */
-   
+
 void static inline check_space(int dwords)
 {
 }
@@ -183,6 +184,7 @@ static __inline__ uint32_t cmdcpdelay(unsigned short count)
 void static inline end_3d(PREFIX_VOID)
 {
 LOCAL_VARS
+(void)cmd_reserved; (void)cmd_written;
 
 cmd=(drm_radeon_cmd_header_t *) r300AllocCmdBuf(rmesa, \
 					0, \
@@ -194,6 +196,7 @@ cmd[0].header.cmd_type=R300_CMD_END3D;
 void static inline cp_delay(PREFIX unsigned short count)
 {
 LOCAL_VARS
+(void)cmd_reserved; (void)cmd_written;
 
 cmd=(drm_radeon_cmd_header_t *) r300AllocCmdBuf(rmesa, \
 					0, \
@@ -210,7 +213,7 @@ check_space(9);
 
 start_packet3(RADEON_CP_PACKET3_3D_DRAW_VBUF_2, 0);
 /*	e32(0x840c0024);  */
-	e32(R300_VAP_VF_CNTL__PRIM_WALK_VERTEX_LIST | (vertex_count<<16) | type); 
+	e32(R300_VAP_VF_CNTL__PRIM_WALK_VERTEX_LIST | (vertex_count<<16) | type);
 }
 
 /* these are followed by the corresponding data */
@@ -231,9 +234,9 @@ start_packet3(RADEON_CP_PACKET3_3D_DRAW_VBUF_2, 0);
 	start_packet3(RADEON_CP_PACKET3_3D_DRAW_INDX_2, _n); \
 		e32(R300_VAP_VF_CNTL__PRIM_WALK_INDICES | (_vc<<16) | type); \
 	}
-	
+
 /* Interestingly enough this ones needs the call to setup_AOS, even thought
-   some of the data so setup is not needed and some is not as arbitrary 
+   some of the data so setup is not needed and some is not as arbitrary
    as when used by DRAW_VBUF_2 or DRAW_INDX_2 */
 #define start_immediate_packet(vertex_count, type, vertex_size) \
 	{\

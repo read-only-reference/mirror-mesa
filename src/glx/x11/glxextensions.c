@@ -27,7 +27,6 @@
  *
  * \author Ian Romanick <idr@us.ibm.com>
  */
-/* $XFree86: xc/lib/GL/glx/glxextensions.c,v 1.1 2003/09/28 20:15:03 alanh Exp $ */
 
 #include "glxclient.h"
 #include <extutil.h>
@@ -113,7 +112,8 @@ static const struct extension_info known_glx_extensions[] = {
 
 static const struct extension_info known_gl_extensions[] = {
    { GL(ARB_depth_texture),              VER(1,4), Y, N, N, N },
-   { GL(ARB_fragment_program),           VER(0,0), N, N, N, N },
+   { GL(ARB_fragment_program),           VER(0,0), Y, N, N, N },
+   { GL(ARB_fragment_program_shadow),    VER(0,0), Y, N, N, N },
    { GL(ARB_imaging),                    VER(0,0), Y, N, N, N },
    { GL(ARB_multisample),                VER(1,3), Y, N, N, N },
    { GL(ARB_multitexture),               VER(1,3), Y, N, N, N },
@@ -123,7 +123,7 @@ static const struct extension_info known_gl_extensions[] = {
    { GL(ARB_shadow),                     VER(1,4), Y, N, N, N },
    { GL(ARB_shadow_ambient),             VER(0,0), Y, N, N, N },
    { GL(ARB_texture_border_clamp),       VER(1,3), Y, N, N, N },
-   { GL(ARB_texture_compression),        VER(1,3), N, N, N, N },
+   { GL(ARB_texture_compression),        VER(1,3), Y, N, N, N },
    { GL(ARB_texture_cube_map),           VER(1,3), Y, N, N, N },
    { GL(ARB_texture_env_add),            VER(1,3), Y, N, N, N },
    { GL(ARB_texture_env_combine),        VER(1,3), Y, N, N, N },
@@ -134,6 +134,7 @@ static const struct extension_info known_gl_extensions[] = {
    { GL(ARB_texture_rectangle),          VER(0,0), Y, N, N, N },
    { GL(ARB_transpose_matrix),           VER(1,3), Y, N, Y, N },
    { GL(ARB_vertex_buffer_object),       VER(1,5), N, N, N, N },
+   { GL(ARB_vertex_program),             VER(0,0), Y, N, N, N },
    { GL(ARB_window_pos),                 VER(1,4), Y, N, N, N },
    { GL(EXT_abgr),                       VER(0,0), Y, N, N, N },
    { GL(EXT_bgra),                       VER(1,2), Y, N, N, N },
@@ -167,7 +168,8 @@ static const struct extension_info known_gl_extensions[] = {
    { GL(EXT_subtexture),                 VER(1,1), Y, N, N, N },
    { GL(EXT_texture),                    VER(1,1), Y, N, N, N },
    { GL(EXT_texture3D),                  VER(1,2), Y, N, N, N },
-   { GL(EXT_texture_compression_s3tc),   VER(0,0), N, N, N, N },
+   { GL(EXT_texture_compression_dxt1),   VER(0,0), Y, N, N, N },
+   { GL(EXT_texture_compression_s3tc),   VER(0,0), Y, N, N, N },
    { GL(EXT_texture_edge_clamp),         VER(1,2), Y, N, N, N },
    { GL(EXT_texture_env_add),            VER(1,3), Y, N, N, N },
    { GL(EXT_texture_env_combine),        VER(1,3), Y, N, N, N },
@@ -179,9 +181,10 @@ static const struct extension_info known_gl_extensions[] = {
    { GL(EXT_texture_object),             VER(1,1), Y, N, N, N },
    { GL(EXT_texture_rectangle),          VER(0,0), Y, N, N, N },
    { GL(EXT_vertex_array),               VER(0,0), Y, N, N, N },
-   { GL(3DFX_texture_compression_FXT1),  VER(0,0), N, N, N, N },
+   { GL(3DFX_texture_compression_FXT1),  VER(0,0), Y, N, N, N },
    { GL(APPLE_packed_pixels),            VER(1,2), Y, N, N, N },
    { GL(APPLE_ycbcr_422),                VER(0,0), Y, N, N, N },
+   { GL(ATI_text_fragment_shader),       VER(0,0), Y, N, N, N },
    { GL(ATI_texture_env_combine3),       VER(0,0), Y, N, N, N },
    { GL(ATI_texture_float),              VER(0,0), Y, N, N, N },
    { GL(ATI_texture_mirror_once),        VER(0,0), Y, N, N, N },
@@ -201,14 +204,25 @@ static const struct extension_info known_gl_extensions[] = {
    { GL(NV_copy_depth_to_color),         VER(0,0), Y, N, N, N },
    { GL(NV_depth_clamp),                 VER(0,0), Y, N, N, N },
    { GL(NV_fog_distance),                VER(0,0), Y, N, N, N },
+   { GL(NV_fragment_program),            VER(0,0), Y, N, N, N },
+   { GL(NV_fragment_program_option),     VER(0,0), Y, N, N, N },
+   { GL(NV_fragment_program2),           VER(0,0), Y, N, N, N },
    { GL(NV_light_max_exponent),          VER(0,0), Y, N, N, N },
    { GL(NV_multisample_filter_hint),     VER(0,0), Y, N, N, N },
    { GL(NV_point_sprite),                VER(0,0), Y, N, N, N },
    { GL(NV_texgen_reflection),           VER(0,0), Y, N, N, N },
-   { GL(NV_texture_compression_vtc),     VER(0,0), N, N, N, N },
+   { GL(NV_texture_compression_vtc),     VER(0,0), Y, N, N, N },
    { GL(NV_texture_env_combine4),        VER(0,0), Y, N, N, N },
    { GL(NV_texture_rectangle),           VER(0,0), Y, N, N, N },
+   { GL(NV_vertex_program),              VER(0,0), Y, N, N, N },
+   { GL(NV_vertex_program1_1),           VER(0,0), Y, N, N, N },
+   { GL(NV_vertex_program2),             VER(0,0), Y, N, N, N },
+   { GL(NV_vertex_program2_option),      VER(0,0), Y, N, N, N },
+   { GL(NV_vertex_program3),             VER(0,0), Y, N, N, N },
    { GL(OES_read_format),                VER(0,0), Y, N, N, N },
+   { GL(OES_compressed_paletted_texture),VER(0,0), Y, N, N, N },
+   { GL(SGI_color_matrix),               VER(0,0), Y, N, N, N },
+   { GL(SGI_texture_color_table),        VER(0,0), Y, N, N, N },
    { GL(SGIS_generate_mipmap),           VER(1,4), Y, N, N, N },
    { GL(SGIS_multisample),               VER(0,0), Y, N, N, N },
    { GL(SGIS_texture_border_clamp),      VER(1,3), Y, N, N, N },
@@ -233,8 +247,6 @@ static const struct extension_info known_gl_extensions[] = {
    { NULL }
 };
 
-
-#define __GL_EXT_BYTES   ((__NUM_GL_EXTS + 7) / 8)
 
 /* global bit-fields of available extensions and their characteristics */
 static unsigned char client_glx_support[8];
@@ -491,6 +503,24 @@ __glXExtensionBitIsEnabled( __GLXscreenConfigs *psc, unsigned bit )
 
 
 /**
+ * Check if a certain extension is enabled in a given context.
+ *
+ */
+GLboolean
+__glExtensionBitIsEnabled( const __GLXcontext * gc, unsigned bit )
+{
+   GLboolean enabled = GL_FALSE;
+
+   if ( gc != NULL ) {
+      enabled = EXT_ENABLED( bit, gc->gl_extension_bits );
+   }
+
+   return enabled;
+}
+
+
+
+/**
  * Convert a bit-field to a string of supported extensions.
  */
 static char *
@@ -677,6 +707,7 @@ __glXCalculateUsableGLExtensions( __GLXcontext * gc,
 
    gc->extensions = (unsigned char *) 
      __glXGetStringFromTable( known_gl_extensions, usable );
+   (void) memcpy( gc->gl_extension_bits, usable, sizeof( usable ) );
 }
 
 

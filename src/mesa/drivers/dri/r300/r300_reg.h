@@ -232,7 +232,15 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 // experiments so far have shown that both *must* point to an instruction
 // inside the vertex program, otherwise the GPU locks up.
 // fglrx usually sets CNTL_3_UNKNOWN to the end of the program and
-// CNTL_1_UNKNOWN somewhere in the middle, but the criteria are not clear. */
+// CNTL_1_UNKNOWN somewhere in the middle, but the criteria are not clear. 
+
+// Some tests would indicate that CNTL_3_UNKNOWN is set to program len - 
+// number of "temp to result instrutions". I havent yet seen a case where 
+// "temp to result instrutions" have not been moved at the end of program.
+// However tests have shown that fgls vertex program implementation is
+// not perfect and im having hard-time trusting
+// it at the time being. -aet
+*/
 #define R300_VAP_PVS_CNTL_1                 0x22D0
 #       define R300_PVS_CNTL_1_PROGRAM_START_SHIFT   0
 #       define R300_PVS_CNTL_1_UNKNOWN_SHIFT         10
@@ -418,10 +426,38 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_POINTSIZE_Y_MASK             (0xFFFF << 0) /* GUESS */
 #       define R300_POINTSIZE_X_SHIFT            16
 #       define R300_POINTSIZE_X_MASK             (0xFFFF << 16) /* GUESS */
+#       define R300_POINTSIZE_MAX             (R300_POINTSIZE_Y_MASK / 6)
+
+/* The line width is given in multiples of 6.
+   R300_LINE_CNT_UNK1 must be on to obtain expected results. */
+#define R300_RE_LINE_CNT                      0x4234
+#       define R300_LINESIZE_SHIFT            0
+#       define R300_LINESIZE_MASK             (0xFFFF << 0) /* GUESS */
+#       define R300_LINESIZE_MAX             (R300_LINESIZE_MASK / 6)
+#       define R300_LINE_CNT_UNK1           (1 << 17)
+
+/* Linestipple factor. 3a088889 == 1.0, 3baaaaa9 == 10.0 */
+#define R300_RE_LINE_STIPPLE_FACTOR           0x4238
+
+#define R300_RE_POLYGON_MODE                  0x4288
+
+/* Not sure why there are duplicate of factor and constant values. 
+   My best guess so far is that there are seperate zbiases for test and write. 
+   Ordering might be wrong.
+   Some of the tests indicate that fgl has a fallback implementation of zbias
+   via pixel shaders. */
+#define R300_RE_ZBIAS_T_FACTOR                0x42A4
+#define R300_RE_ZBIAS_T_CONSTANT              0x42A8
+#define R300_RE_ZBIAS_W_FACTOR                0x42AC
+#define R300_RE_ZBIAS_W_CONSTANT              0x42B0
 
 /* This register needs to be set to (1<<1) for RV350 to correctly
    perform depth test (see --vb-triangles in r300_demo)
    Don't know about other chips. - Vladimir
+   This is set to 3 when GL_POLYGON_OFFSET_FILL is on.
+   My guess is that there are two bits for each zbias primitive (FILL, LINE, POINT).
+   One to enable depth test and one for depth write.
+   Yet this doesnt explain why depth writes work ...
     */
 #define R300_RE_OCCLUSION_CNTL		    0x42B4
 #	define R300_OCCLUSION_ON		(1<<1)
@@ -634,9 +670,9 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #	define R300_TX_FORMAT_DXT3	    	    0x10
 #	define R300_TX_FORMAT_DXT5	    	    0x11
 #	define R300_TX_FORMAT_D3DMFT_CxV8U8	    0x12     /* no swizzle */
-#	define R300_TX_FORMA_A8R8G8B8	    	    0x13     /* no swizzle */
-#	define R300_TX_FORMA_B8G8_B8G8	    	    0x14     /* no swizzle */
-#	define R300_TX_FORMA_G8R8_G8B8	    	    0x15     /* no swizzle */
+#	define R300_TX_FORMAT_A8R8G8B8	    	    0x13     /* no swizzle */
+#	define R300_TX_FORMAT_B8G8_B8G8	    	    0x14     /* no swizzle */
+#	define R300_TX_FORMAT_G8R8_G8B8	    	    0x15     /* no swizzle */
 						  /* 0x16 - some 16 bit green format.. ?? */
 	/* gap */
 	/* Floating point formats */
@@ -655,7 +691,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 # 	define R300_TX_FORMAT_ALPHA_4CH		    0x600
 # 	define R300_TX_FORMAT_ALPHA_NONE	    0xA00
 	/* Swizzling */
-	/* constats */
+	/* constants */
 #	define R300_TX_FORMAT_X		0
 #	define R300_TX_FORMAT_Y		1
 #	define R300_TX_FORMAT_Z		2
@@ -696,8 +732,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_TXO_OFFSET_SHIFT             5
 /* END */
 #define R300_TX_UNK4_0                      0x4580
-#define R300_TX_UNK5_0                      0x45C0
-#define R300_TX_BORDER_COLOR_0              0x45F0 //ff00ff00 == { 0, 1.0, 0, 1.0 }
+#define R300_TX_BORDER_COLOR_0              0x45C0 //ff00ff00 == { 0, 1.0, 0, 1.0 }
 
 /* END */
 
@@ -970,6 +1005,13 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_ALPHA_TEST_GREATER           (5 << 8)
 #       define R300_ALPHA_TEST_NEQUAL            (6 << 8)
 #       define R300_ALPHA_TEST_PASS              (7 << 8)
+/* // Possibly more correct values:
+#       define R300_ALPHA_TEST_LEQUAL            (3 << 8)
+#       define R300_ALPHA_TEST_EQUAL             (2 << 8)
+#       define R300_ALPHA_TEST_GEQUAL            (6 << 8)
+#       define R300_ALPHA_TEST_GREATER           (4 << 8)
+#       define R300_ALPHA_TEST_NEQUAL            (5 << 8)
+*/
 #       define R300_ALPHA_TEST_OP_MASK           (7 << 8)
 #       define R300_ALPHA_TEST_ENABLE            (1 << 11)
 
@@ -1163,12 +1205,14 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #define R300_VPI_OUT_OP_MIN                     (8 << 0)
 #define R300_VPI_OUT_OP_SGE                     (9 << 0)
 #define R300_VPI_OUT_OP_SLT                     (10 << 0)
+#define R300_VPI_OUT_OP_UNK1                    (12 << 0) /* Used in GL_POINT_DISTANCE_ATTENUATION_ARB */
 #define R300_VPI_OUT_OP_EXP                     (65 << 0)
 #define R300_VPI_OUT_OP_LOG                     (66 << 0)
 #define R300_VPI_OUT_OP_LIT                     (68 << 0)
 #define R300_VPI_OUT_OP_POW                     (69 << 0)
 #define R300_VPI_OUT_OP_RCP                     (70 << 0)
 #define R300_VPI_OUT_OP_RSQ                     (72 << 0)
+#define R300_VPI_OUT_OP_UNK2                    (73 << 0) /* Used in GL_POINT_DISTANCE_ATTENUATION_ARB */
 #define R300_VPI_OUT_OP_EX2                     (75 << 0)
 #define R300_VPI_OUT_OP_LG2                     (76 << 0)
 #define R300_VPI_OUT_OP_MAD_2                   (128 << 0)
@@ -1264,6 +1308,13 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 // Note that if the total number of arrays is odd, the third dword of
 // the last block is omitted.
 #define R300_PACKET3_3D_LOAD_VBPNTR         0x00002F00
+
+#define R300_PACKET3_INDX_BUFFER            0x00003300
+#    define R300_EB_UNK1_SHIFT                      24
+#    define R300_EB_UNK1                    (0x80<<24)
+#    define R300_EB_UNK2                        0x0810
+#define R300_PACKET3_3D_DRAW_INDX_2         0x00003600
+
 //END
 
 #endif /* _R300_REG_H */

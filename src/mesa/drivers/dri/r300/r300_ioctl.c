@@ -68,8 +68,8 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 	GLuint cboffset, cbpitch;
 	drm_r300_cmd_header_t* cmd2;
 	LOCAL_VARS;
-
-	if (1 || RADEON_DEBUG & DEBUG_IOCTL)
+	
+	if (RADEON_DEBUG & DEBUG_IOCTL)
 		fprintf(stderr, "%s: %s buffer (%i,%i %ix%i)\n",
 			__FUNCTION__, buffer ? "back" : "front",
 			dPriv->x, dPriv->y, dPriv->w, dPriv->h);
@@ -220,7 +220,7 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 		r300->hw.zs.cmd[R300_ZS_CNTL_0] = 0; // disable
 		r300->hw.zs.cmd[R300_ZS_CNTL_1] = 0;
 	}
-
+			
 	/* Make sure we have enough space */
 	r300EnsureCmdBufSpace(r300, r300->hw.max_state_size + 9+8, __FUNCTION__);
 
@@ -253,7 +253,7 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
    
    reg_start(0x4f18,0);
 	e32(0x00000003);
-         
+	
 }
 
 
@@ -268,6 +268,8 @@ static void r300Clear(GLcontext * ctx, GLbitfield mask, GLboolean all,
 	int flags = 0;
 	int bits = 0;
 	int swapped;
+	uint32_t unk42B4;
+	uint32_t zbs[4];
 
 	if (RADEON_DEBUG & DEBUG_IOCTL)
 		fprintf(stderr, "%s:  all=%d cx=%d cy=%d cw=%d ch=%d\n",
@@ -280,6 +282,24 @@ static void r300Clear(GLcontext * ctx, GLbitfield mask, GLboolean all,
 			return;
 	}
 
+#if 0	/* We shouldnt need this now */
+	/* When unk42B4==0 z-bias is still on for vb mode with points ... */
+	R300_STATECHANGE(r300, zbs);
+	zbs[0]=r300->hw.zbs.cmd[R300_ZBS_T_FACTOR];
+	zbs[1]=r300->hw.zbs.cmd[R300_ZBS_T_CONSTANT];
+	zbs[2]=r300->hw.zbs.cmd[R300_ZBS_W_FACTOR];
+	zbs[3]=r300->hw.zbs.cmd[R300_ZBS_W_CONSTANT];
+	
+	r300->hw.zbs.cmd[R300_ZBS_T_FACTOR] =
+	r300->hw.zbs.cmd[R300_ZBS_T_CONSTANT] =
+	r300->hw.zbs.cmd[R300_ZBS_W_FACTOR] =
+	r300->hw.zbs.cmd[R300_ZBS_W_CONSTANT] = r300PackFloat32(0.0);
+#endif	
+	/* Make sure z-bias isnt on */
+	R300_STATECHANGE(r300, unk42B4);
+	unk42B4=r300->hw.unk42B4.cmd[1];
+	r300->hw.unk42B4.cmd[1]=0;
+	
 	if (mask & DD_FRONT_LEFT_BIT) {
 		flags |= DD_FRONT_LEFT_BIT;
 		mask &= ~DD_FRONT_LEFT_BIT;
@@ -321,6 +341,18 @@ static void r300Clear(GLcontext * ctx, GLbitfield mask, GLboolean all,
 	 * but do keep it like this for now.
 	 */
 	r300ResetHwState(r300);
+	
+	R300_STATECHANGE(r300, unk42B4);
+	r300->hw.unk42B4.cmd[1]=unk42B4;
+	
+#if 0 	/* We shouldnt need this now */
+	/* Put real z-bias back */
+	R300_STATECHANGE(r300, zbs);
+	r300->hw.zbs.cmd[R300_ZBS_T_FACTOR] = zbs[0];
+	r300->hw.zbs.cmd[R300_ZBS_T_CONSTANT] = zbs[1];
+	r300->hw.zbs.cmd[R300_ZBS_W_FACTOR] = zbs[2];
+	r300->hw.zbs.cmd[R300_ZBS_W_CONSTANT] = zbs[3];
+#endif
 	/* r300ClearBuffer has trampled all over the hardware state.. */
 	r300->hw.all_dirty=GL_TRUE;
 }
@@ -338,13 +370,13 @@ void r300Flush(GLcontext * ctx)
 
 void r300RefillCurrentDmaRegion(r300ContextPtr rmesa)
 {
-	struct r200_dma_buffer *dmabuf;
+	struct r300_dma_buffer *dmabuf;
 	int fd = rmesa->radeon.dri.fd;
 	int index = 0;
 	int size = 0;
 	drmDMAReq dma;
 	int ret;
-
+	
 	if (RADEON_DEBUG & (DEBUG_IOCTL | DEBUG_DMA))
 		fprintf(stderr, "%s\n", __FUNCTION__);
 
@@ -371,19 +403,24 @@ void r300RefillCurrentDmaRegion(r300ContextPtr rmesa)
 
 	LOCK_HARDWARE(&rmesa->radeon);	/* no need to validate */
 
-	while (1) {
-		ret = drmDMA(fd, &dma);
-		if (ret == 0)
-			break;
+	ret = drmDMA(fd, &dma);
 
+	if (ret != 0) {
+		/* Try to release some buffers and wait until we can't get any more */
 		if (rmesa->dma.nr_released_bufs) {
-			r200FlushCmdBufLocked(rmesa, __FUNCTION__);
+			r300FlushCmdBufLocked(rmesa, __FUNCTION__);
 		}
 
-		if (rmesa->radeon.do_usleeps) {
+		if (RADEON_DEBUG & DEBUG_DMA)
+			fprintf(stderr, "Waiting for buffers\n");
+
+		radeonWaitForIdleLocked(&rmesa->radeon);
+		ret = drmDMA(fd, &dma);
+
+		if (ret != 0) {
 			UNLOCK_HARDWARE(&rmesa->radeon);
-			DO_USLEEP(1);
-			LOCK_HARDWARE(&rmesa->radeon);
+			fprintf(stderr, "Error: Could not get dma buffer... exiting\n");
+			exit(-1);
 		}
 	}
 
@@ -421,13 +458,13 @@ void r300ReleaseDmaRegion(r300ContextPtr rmesa,
 		if (RADEON_DEBUG & (DEBUG_IOCTL | DEBUG_DMA))
 			fprintf(stderr, "%s -- DISCARD BUF %d\n", __FUNCTION__,
 				region->buf->buf->idx);
-
 		cmd =
 		    (drm_radeon_cmd_header_t *) r300AllocCmdBuf(rmesa,
-								sizeof(*cmd),
+								sizeof(*cmd) / 4,
 								__FUNCTION__);
-		cmd->dma.cmd_type = RADEON_CMD_DMA_DISCARD;
+		cmd->dma.cmd_type = R300_CMD_DMA_DISCARD;
 		cmd->dma.buf_idx = region->buf->buf->idx;
+		
 		FREE(region->buf);
 		rmesa->dma.nr_released_bufs++;
 	}

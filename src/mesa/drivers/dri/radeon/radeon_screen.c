@@ -70,12 +70,13 @@ DRI_CONF_BEGIN
         DRI_CONF_COLOR_REDUCTION(DRI_CONF_COLOR_REDUCTION_DITHER)
         DRI_CONF_ROUND_MODE(DRI_CONF_ROUND_TRUNC)
         DRI_CONF_DITHER_MODE(DRI_CONF_DITHER_XERRORDIFF)
+        DRI_CONF_TEXTURE_LEVEL_HACK(false)
     DRI_CONF_SECTION_END
     DRI_CONF_SECTION_DEBUG
         DRI_CONF_NO_RAST(false)
     DRI_CONF_SECTION_END
 DRI_CONF_END;
-static const GLuint __driNConfigOptions = 12;
+static const GLuint __driNConfigOptions = 13;
 
 #if 1
 /* Including xf86PciInfo.h introduces a bunch of errors...
@@ -87,6 +88,8 @@ static const GLuint __driNConfigOptions = 12;
 
 #define PCI_CHIP_RADEON_QY	0x5159
 #define PCI_CHIP_RADEON_QZ	0x515A
+
+#define PCI_CHIP_RN50_5969	0x5969
 
 #define PCI_CHIP_RADEON_LW	0x4C57 /* mobility 7 - has tcl */
 #define PCI_CHIP_RADEON_LX	0x4C58 /* mobility FireGL 7800 m7 */
@@ -322,6 +325,7 @@ radeonScreenPtr radeonCreateScreen( __DRIscreenPrivate *sPriv )
       screen->chipset |= RADEON_CHIPSET_TCL;
    case PCI_CHIP_RADEON_QY:
    case PCI_CHIP_RADEON_QZ:
+   case PCI_CHIP_RN50_5969:
    case PCI_CHIP_RADEON_LY:
    case PCI_CHIP_RADEON_LZ:
    case PCI_CHIP_RS100_4136: /* IGPs don't have TCL */

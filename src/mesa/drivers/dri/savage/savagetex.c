@@ -46,6 +46,11 @@
 
 #include "xmlpool.h"
 
+/* On Savage4 the texure LOD-bias needs an offset of ~ 0.3 to get
+ * somewhere close to software rendering.
+ */
+#define SAVAGE4_LOD_OFFSET 10
+
 /* Size 1, 2 and 4 images are packed into the last subtile. Each image
  * is repeated to fill a 4x4 pixel area. The figure below shows the
  * layout of those 4x4 pixel areas in the 8x8 subtile.
@@ -78,6 +83,29 @@ static const savageTileInfo tileInfo_s3d_s4[5] = {
     {32, 16,  8, 2, 4, 8, {0xc0, 0x80}}, /* 32-bit */
 };
 
+/** \brief Template for subtile uploads.
+ * \param h   height in pixels
+ * \param w   width in bytes
+ */
+#define SUBTILE_FUNC(w,h)					\
+static __inline GLubyte *savageUploadSubtile_##w##x##h		\
+(GLubyte *dest, GLubyte *src, GLuint srcStride)			\
+{								\
+    GLuint y;							\
+    for (y = 0; y < h; ++y) {					\
+	memcpy (dest, src, w);					\
+	src += srcStride;					\
+	dest += w;						\
+    }								\
+    return dest;						\
+}
+
+SUBTILE_FUNC(2, 8) /* 4 bits per pixel, 4 pixels wide */
+SUBTILE_FUNC(4, 8)
+SUBTILE_FUNC(8, 8)
+SUBTILE_FUNC(16, 8)
+SUBTILE_FUNC(32, 8) /* 4 bytes per pixel, 8 pixels wide */
+
 /** \brief Upload a complete tile from src (srcStride) to dest
  *
  * \param tileInfo     Pointer to tiling information
@@ -102,16 +130,21 @@ static void savageUploadTile (const savageTileInfo *tileInfo,
 			      GLubyte *src, GLuint srcStride, GLubyte *dest) {
     GLuint subStride = tileInfo->subWidth * bpp;
     GLubyte *srcSRow = src, *srcSTile = src;
-    GLuint sx, sy, y;
+    GLubyte *(*subtileFunc) (GLubyte *, GLubyte *, GLuint);
+    GLuint sx, sy;
+    switch (subStride) {
+    case  2: subtileFunc = savageUploadSubtile_2x8; break;
+    case  4: subtileFunc = savageUploadSubtile_4x8; break;
+    case  8: subtileFunc = savageUploadSubtile_8x8; break;
+    case 16: subtileFunc = savageUploadSubtile_16x8; break;
+    case 32: subtileFunc = savageUploadSubtile_32x8; break;
+    default: assert(0);
+    }
     for (sy = 0; sy < hInSub; ++sy) {
 	srcSTile = srcSRow;
 	for (sx = 0; sx < wInSub; ++sx) {
 	    src = srcSTile;
-	    for (y = 0; y < tileInfo->subHeight; ++y) {
-		memcpy (dest, src, subStride);
-		src += srcStride;
-		dest += subStride;
-	    }
+	    dest = subtileFunc (dest, src, srcStride);
 	    srcSTile += subStride;
 	}
 	srcSRow += srcStride * tileInfo->subHeight;
@@ -234,7 +267,16 @@ static void savageUploadTexLevel( savageTexObjPtr t, int level )
 	    GLuint wInTiles = width / tileInfo->width;
 	    GLubyte *src = image->Data;
 	    GLubyte *dest = (GLubyte *)(t->bufAddr + t->image[level].offset);
+	    GLuint tileStride = tileInfo->width * bpp * height;
+	    savageContextPtr imesa = (savageContextPtr)t->base.heap->driverContext;
 	    GLuint x;
+	    /* Savage3D-based chips seem so use a constant tile stride
+	     * of 2048 for vertically incomplete tiles, but only if
+	     * the color depth is 32bpp. Nobody said this was supposed
+	     * to be logical!
+	     */
+	    if (bpp == 4 && imesa->savageScreen->chipset < S3_SAVAGE4)
+		tileStride = 2048;
 	    for (x = 0; x < wInTiles; ++x) {
 		if (*dirtyPtr & dirtyMask) {
 		    savageUploadTile (tileInfo,
@@ -243,7 +285,7 @@ static void savageUploadTexLevel( savageTexObjPtr t, int level )
 				      bpp, src, width * bpp, dest);
 		}
 		src += tileInfo->width * bpp;
-		dest += 2048; /* tile size is always 2k */
+		dest += tileStride;
 		if (dirtyMask == 1<<31) {
 		    dirtyMask = 1;
 		    dirtyPtr++;
@@ -728,7 +770,14 @@ static void savageUploadTexImages( savageContextPtr imesa, savageTexObjPtr t )
       savageFlushVertices (imesa);
       LOCK_HARDWARE(imesa);
       savageFlushCmdBufLocked (imesa, GL_FALSE);
-      WAIT_IDLE_EMPTY_LOCKED(imesa);
+      /* Heap timestamps are only reliable with Savage DRM 2.3.x or
+       * later. Earlier versions had only 16 bit time stamps which
+       * would wrap too frequently. */
+      if (imesa->savageScreen->driScrnPriv->drmMinor >= 3) {
+	  unsigned int heap = t->base.heap->heapId;
+	  savageWaitEvent (imesa, imesa->textureHeaps[heap]->timestamp);
+      } else
+	  WAIT_IDLE_EMPTY_LOCKED(imesa);
 
       for (i = 0 ; i < numLevels ; i++) {
          const GLint j = t->base.firstLevel + i;  /* the texObj's level */
@@ -736,11 +785,12 @@ static void savageUploadTexImages( savageContextPtr imesa, savageTexObjPtr t )
 	    savageMarkAllTiles(t, j);
 	    if (SAVAGE_DEBUG & DEBUG_VERBOSE_TEX)
 		fprintf (stderr, "*");
-	 } else if ((SAVAGE_DEBUG & DEBUG_VERBOSE_TEX) &&
-		    t->dirtySubImages & (1 << j))
-	    fprintf (stderr, ".");
-	 else
-	    fprintf (stderr, " ");
+	 } else if (SAVAGE_DEBUG & DEBUG_VERBOSE_TEX) {
+	    if (t->dirtySubImages & (1 << j))
+	       fprintf (stderr, ".");
+	    else
+	       fprintf (stderr, " ");
+	 }
 	 if ((t->base.dirty_images[0] | t->dirtySubImages) & (1 << j))
 	    savageUploadTexLevel( t, j );
       }
@@ -991,7 +1041,8 @@ static void savageUpdateTex0State_s4( GLcontext *ctx )
     if((ctx->Texture.Unit[0].LodBias !=0.0F) ||
        (imesa->regs.s4.texCtrl[0].ni.dBias != 0))
     {
-	int bias = (int)(ctx->Texture.Unit[0].LodBias * 32.0);
+	int bias = (int)(ctx->Texture.Unit[0].LodBias * 32.0) +
+	    SAVAGE4_LOD_OFFSET;
 	if (bias < -256)
 	    bias = -256;
 	else if (bias > 255)
@@ -1192,7 +1243,8 @@ static void savageUpdateTex1State_s4( GLcontext *ctx )
     if((ctx->Texture.Unit[1].LodBias !=0.0F) ||
        (imesa->regs.s4.texCtrl[1].ni.dBias != 0))
     {
-	int bias = (int)(ctx->Texture.Unit[1].LodBias * 32.0);
+	int bias = (int)(ctx->Texture.Unit[1].LodBias * 32.0) +
+	    SAVAGE4_LOD_OFFSET;
 	if (bias < -256)
 	    bias = -256;
 	else if (bias > 255)
@@ -1418,6 +1470,17 @@ static void savageTexEnv( GLcontext *ctx, GLenum target,
    } 
 }
 
+/* Update a heap's timestamp when a texture image is modified, so the
+ * new image is not uploaded while the old one is still in use.
+ * FIXME: this should be moved to ../common/texmem.c 
+ */
+static void savageTexImageChanged (savageTexObjPtr t) {
+    /* Update the heap's time stamp, so the new image is not uploaded
+     * while the old one is still in use. */
+    if (t->base.heap && t->base.timestamp > t->base.heap->timestamp)
+	t->base.heap->timestamp = t->base.timestamp;
+}
+
 static void savageTexImage1D( GLcontext *ctx, GLenum target, GLint level,
 			      GLint internalFormat,
 			      GLint width, GLint border,
@@ -1428,7 +1491,7 @@ static void savageTexImage1D( GLcontext *ctx, GLenum target, GLint level,
 {
    savageTexObjPtr t = (savageTexObjPtr) texObj->DriverData;
    if (t) {
-      /* Do nothing. Marking the image as dirty below is sufficient. */
+      savageTexImageChanged (t);
    } else {
       t = savageAllocTexObj(texObj);
       if (!t) {
@@ -1457,6 +1520,7 @@ static void savageTexSubImage1D( GLcontext *ctx,
    savageTexObjPtr t = (savageTexObjPtr) texObj->DriverData;
    assert( t ); /* this _should_ be true */
    if (t) {
+      savageTexImageChanged (t);
       savageMarkDirtyTiles(t, level, texImage->Width2, 1,
 			   xoffset, 0, width, 1);
    } else {
@@ -1484,7 +1548,7 @@ static void savageTexImage2D( GLcontext *ctx, GLenum target, GLint level,
 {
    savageTexObjPtr t = (savageTexObjPtr) texObj->DriverData;
    if (t) {
-      /* Do nothing. Marking the image as dirty below is sufficient. */
+      savageTexImageChanged (t);
    } else {
       t = savageAllocTexObj(texObj);
       if (!t) {
@@ -1513,6 +1577,7 @@ static void savageTexSubImage2D( GLcontext *ctx,
    savageTexObjPtr t = (savageTexObjPtr) texObj->DriverData;
    assert( t ); /* this _should_ be true */
    if (t) {
+      savageTexImageChanged (t);
       savageMarkDirtyTiles(t, level, texImage->Width2, texImage->Height2,
 			   xoffset, yoffset, width, height);
    } else {

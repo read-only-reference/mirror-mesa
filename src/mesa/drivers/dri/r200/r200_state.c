@@ -40,6 +40,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "enums.h"
 #include "colormac.h"
 #include "light.h"
+#include "buffers.h"
 
 #include "swrast/swrast.h"
 #include "array_cache/acache.h"
@@ -1631,6 +1632,8 @@ void r200UpdateWindow( GLcontext *ctx )
 static void r200Viewport( GLcontext *ctx, GLint x, GLint y,
 			    GLsizei width, GLsizei height )
 {
+   /* update size of Mesa/software ancillary buffers */
+   _mesa_ResizeBuffersMESA();
    /* Don't pipeline viewport changes, conflict with window offset
     * setting below.  Could apply deltas to rescue pipelined viewport
     * values, or keep the originals hanging around.
@@ -1653,8 +1656,8 @@ void r200UpdateViewportOffset( GLcontext *ctx )
    GLfloat yoffset = (GLfloat)dPriv->y + dPriv->h;
    const GLfloat *v = ctx->Viewport._WindowMap.m;
 
-   GLfloat tx = v[MAT_TX] + xoffset;
-   GLfloat ty = (- v[MAT_TY]) + yoffset;
+   GLfloat tx = v[MAT_TX] + xoffset + SUBPIXEL_X;
+   GLfloat ty = (- v[MAT_TY]) + yoffset + SUBPIXEL_Y;
 
    if ( rmesa->hw.vpt.cmd[VPT_SE_VPORT_XOFFSET] != *(GLuint *)&tx ||
 	rmesa->hw.vpt.cmd[VPT_SE_VPORT_YOFFSET] != *(GLuint *)&ty )
@@ -1915,7 +1918,7 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
       R200_STATECHANGE(rmesa, ctx );
       if ( state ) {
 	 rmesa->hw.ctx.cmd[CTX_PP_CNTL] |= R200_FOG_ENABLE;
-	 r200Fogfv( ctx, GL_FOG_MODE, 0 );
+	 r200Fogfv( ctx, GL_FOG_MODE, NULL );
       } else {
 	 rmesa->hw.ctx.cmd[CTX_PP_CNTL] &= ~R200_FOG_ENABLE;
 	 R200_STATECHANGE(rmesa, tcl);

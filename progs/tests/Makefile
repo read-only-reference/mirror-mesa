@@ -22,6 +22,7 @@ SOURCES = antialias.c \
 	blendminmax.c \
 	blendsquare.c \
 	bufferobj.c \
+	crossbar.c \
 	cva.c \
 	dinoshade.c \
 	floattex.c \
@@ -29,6 +30,7 @@ SOURCES = antialias.c \
 	fptest1.c \
 	fptexture.c \
 	getprocaddress.c \
+	invert.c \
 	manytex.c \
 	multipal.c \
 	no_s3tc.c \
@@ -97,6 +99,12 @@ texrect: texrect.o readtex.o
 	$(CC) texrect.o readtex.o $(LIBS) -o $@
 
 texrect.o: texrect.c readtex.h
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
+
+invert: invert.o readtex.o
+	$(CC) invert.o readtex.o $(LIBS) -o $@
+
+invert.o: invert.c readtex.h
 	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 readtex.o: readtex.c

@@ -35,9 +35,11 @@
 */
 
 #include <stdio.h>
+#include <assert.h>
 #include "glxclient.h"
 #include "packsingle.h"
 #include "glxextensions.h"
+#include "indirect_vertex_array.h"
 
 /* Used for GL_ARB_transpose_matrix */
 static void TransposeMatrixf(GLfloat m[16])
@@ -134,24 +136,166 @@ GLenum __indirect_glGetError(void)
     return retval;
 }
 
-#define CASE_ARRAY_ENABLE(enum_name,array,dest,gl_type) \
-    case GL_ ## enum_name ## _ARRAY: \
-      *dest = (gl_type) (IS_ARRAY_ENABLED(state, array)); break
-#define CASE_ARRAY_SIZE(enum_name,array,dest,gl_type) \
-    case GL_ ## enum_name ## _ARRAY_SIZE: \
-      *dest = (gl_type) state->vertArray.arrays[array ## _ARRAY].size ; break
-#define CASE_ARRAY_TYPE(enum_name,array,dest,gl_type) \
-    case GL_ ## enum_name ## _ARRAY_TYPE: \
-      *dest = (gl_type) state->vertArray.arrays[array ## _ARRAY].type ; break
-#define CASE_ARRAY_STRIDE(enum_name,array,dest,gl_type) \
-    case GL_ ## enum_name ## _ARRAY_STRIDE: \
-      *dest = (gl_type) state->vertArray.arrays[array ## _ARRAY].stride ; break
 
-#define CASE_ARRAY_ALL(enum_name,array,dest,gl_type) \
-	CASE_ARRAY_ENABLE(enum_name,array,dest,gl_type); \
-	CASE_ARRAY_STRIDE(enum_name,array,dest,gl_type); \
-	CASE_ARRAY_TYPE(enum_name,array,dest,gl_type); \
-	CASE_ARRAY_SIZE(enum_name,array,dest,gl_type)
+/**
+ * Get the selected attribute from the client state.
+ * 
+ * \returns
+ * On success \c GL_TRUE is returned.  Otherwise, \c GL_FALSE is returned.
+ */
+static GLboolean
+get_client_data( __GLXattribute * state, GLenum cap, GLintptr * data )
+{
+    GLboolean retval = GL_TRUE;
+    const GLint tex_unit = __glXGetActiveTextureUnit( state );
+
+
+    switch( cap ) {
+    case GL_VERTEX_ARRAY:
+    case GL_NORMAL_ARRAY:
+    case GL_COLOR_ARRAY:
+    case GL_INDEX_ARRAY:
+    case GL_EDGE_FLAG_ARRAY:
+    case GL_SECONDARY_COLOR_ARRAY:
+    case GL_FOG_COORD_ARRAY:
+	retval = __glXGetArrayEnable( state, cap, 0, data );
+	break;
+
+    case GL_VERTEX_ARRAY_SIZE:
+	retval = __glXGetArraySize( state, GL_VERTEX_ARRAY, 0, data );
+	break;
+    case GL_COLOR_ARRAY_SIZE:
+	retval = __glXGetArraySize( state, GL_COLOR_ARRAY, 0, data );
+	break;
+    case GL_SECONDARY_COLOR_ARRAY_SIZE:
+	retval = __glXGetArraySize( state, GL_SECONDARY_COLOR_ARRAY, 0, data );
+	break;
+
+    case GL_VERTEX_ARRAY_TYPE:
+	retval = __glXGetArrayType( state, GL_VERTEX_ARRAY, 0, data );
+	break;
+    case GL_NORMAL_ARRAY_TYPE:
+	retval = __glXGetArrayType( state, GL_NORMAL_ARRAY, 0, data );
+	break;
+    case GL_INDEX_ARRAY_TYPE:
+	retval = __glXGetArrayType( state, GL_INDEX_ARRAY, 0, data );
+	break;
+    case GL_COLOR_ARRAY_TYPE:
+	retval = __glXGetArrayType( state, GL_COLOR_ARRAY, 0, data );
+	break;
+    case GL_SECONDARY_COLOR_ARRAY_TYPE:
+	retval = __glXGetArrayType( state, GL_SECONDARY_COLOR_ARRAY, 0, data );
+	break;
+    case GL_FOG_COORD_ARRAY_TYPE:
+	retval = __glXGetArrayType( state, GL_FOG_COORD_ARRAY, 0, data );
+	break;
+
+    case GL_VERTEX_ARRAY_STRIDE:
+	retval = __glXGetArrayStride( state, GL_VERTEX_ARRAY, 0, data );
+	break;
+    case GL_NORMAL_ARRAY_STRIDE:
+	retval = __glXGetArrayStride( state, GL_NORMAL_ARRAY, 0, data );
+	break;
+    case GL_INDEX_ARRAY_STRIDE:
+	retval = __glXGetArrayStride( state, GL_INDEX_ARRAY, 0, data );
+	break;
+    case GL_EDGE_FLAG_ARRAY_STRIDE:
+	retval = __glXGetArrayStride( state, GL_EDGE_FLAG_ARRAY, 0, data );
+	break;
+    case GL_COLOR_ARRAY_STRIDE:
+	retval = __glXGetArrayStride( state, GL_COLOR_ARRAY, 0, data );
+	break;
+    case GL_SECONDARY_COLOR_ARRAY_STRIDE:
+	retval = __glXGetArrayStride( state, GL_SECONDARY_COLOR_ARRAY, 0, data );
+	break;
+    case GL_FOG_COORD_ARRAY_STRIDE:
+	retval = __glXGetArrayStride( state, GL_FOG_COORD_ARRAY, 0, data );
+	break;
+
+    case GL_TEXTURE_COORD_ARRAY:
+	retval = __glXGetArrayEnable( state, GL_TEXTURE_COORD_ARRAY, tex_unit, data );
+	break;
+    case GL_TEXTURE_COORD_ARRAY_SIZE:
+	retval = __glXGetArraySize( state, GL_TEXTURE_COORD_ARRAY, tex_unit, data );
+	break;
+    case GL_TEXTURE_COORD_ARRAY_TYPE:
+	retval = __glXGetArrayType( state, GL_TEXTURE_COORD_ARRAY, tex_unit, data );
+	break;
+    case GL_TEXTURE_COORD_ARRAY_STRIDE:
+	retval = __glXGetArrayStride( state, GL_TEXTURE_COORD_ARRAY, tex_unit, data );
+	break;
+
+    case GL_MAX_ELEMENTS_VERTICES:
+    case GL_MAX_ELEMENTS_INDICES:
+	retval = GL_TRUE;
+	*data = ~0UL;
+	break;
+
+    
+    case GL_PACK_ROW_LENGTH:
+	*data = (GLintptr)state->storePack.rowLength;
+	break;
+    case GL_PACK_IMAGE_HEIGHT:
+	*data = (GLintptr)state->storePack.imageHeight;
+	break;
+    case GL_PACK_SKIP_ROWS:
+	*data = (GLintptr)state->storePack.skipRows;
+	break;
+    case GL_PACK_SKIP_PIXELS:
+	*data = (GLintptr)state->storePack.skipPixels;
+	break;
+    case GL_PACK_SKIP_IMAGES:
+	*data = (GLintptr)state->storePack.skipImages;
+	break;
+    case GL_PACK_ALIGNMENT:
+	*data = (GLintptr)state->storePack.alignment;
+	break;
+    case GL_PACK_SWAP_BYTES:
+	*data = (GLintptr)state->storePack.swapEndian;
+	break;
+    case GL_PACK_LSB_FIRST:
+	*data = (GLintptr)state->storePack.lsbFirst;
+	break;
+    case GL_UNPACK_ROW_LENGTH:
+	*data = (GLintptr)state->storeUnpack.rowLength;
+	break;
+    case GL_UNPACK_IMAGE_HEIGHT:
+	*data = (GLintptr)state->storeUnpack.imageHeight;
+	break;
+    case GL_UNPACK_SKIP_ROWS:
+	*data = (GLintptr)state->storeUnpack.skipRows;
+	break;
+    case GL_UNPACK_SKIP_PIXELS:
+	*data = (GLintptr)state->storeUnpack.skipPixels;
+	break;
+    case GL_UNPACK_SKIP_IMAGES:
+	*data = (GLintptr)state->storeUnpack.skipImages;
+	break;
+    case GL_UNPACK_ALIGNMENT:
+	*data = (GLintptr)state->storeUnpack.alignment;
+	break;
+    case GL_UNPACK_SWAP_BYTES:
+	*data = (GLintptr)state->storeUnpack.swapEndian;
+	break;
+    case GL_UNPACK_LSB_FIRST:
+	*data = (GLintptr)state->storeUnpack.lsbFirst;
+	break;
+    case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH:
+	*data = (GLintptr)__GL_CLIENT_ATTRIB_STACK_DEPTH;
+	break;
+    case GL_CLIENT_ACTIVE_TEXTURE:
+	*data = (GLintptr)(tex_unit + GL_TEXTURE0);
+	break;
+
+    default:
+	retval = GL_FALSE;
+	break;
+    }
+
+
+    return retval;
+}
+
 
 void __indirect_glGetBooleanv(GLenum val, GLboolean *b)
 {
@@ -173,120 +317,28 @@ void __indirect_glGetBooleanv(GLenum val, GLboolean *b)
 	** Error occured; don't modify user's buffer.
 	*/
     } else {
+	GLintptr data;
+
 	/*
-	** For all the queries listed here, we use the locally stored
-	** values rather than the one returned by the server.  Note that
-	** we still needed to send the request to the server in order to
+	** We still needed to send the request to the server in order to
 	** find out whether it was legal to make a query (it's illegal,
 	** for example, to call a query between glBegin() and glEnd()).
 	*/
-	switch (val) {
-	  case GL_PACK_ROW_LENGTH:
-	    *b = (GLboolean)state->storePack.rowLength;
-	    break;
-	  case GL_PACK_IMAGE_HEIGHT:
-	    *b = (GLboolean)state->storePack.imageHeight;
-	    break;
-	  case GL_PACK_SKIP_ROWS:
-	    *b = (GLboolean)state->storePack.skipRows;
-	    break;
-	  case GL_PACK_SKIP_PIXELS:
-	    *b = (GLboolean)state->storePack.skipPixels;
-	    break;
-	  case GL_PACK_SKIP_IMAGES:
-	    *b = (GLboolean)state->storePack.skipImages;
-	    break;
-	  case GL_PACK_ALIGNMENT:
-	    *b = (GLboolean)state->storePack.alignment;
-	    break;
-	  case GL_PACK_SWAP_BYTES:
-	    *b = (GLboolean)state->storePack.swapEndian;
-	    break;
-	  case GL_PACK_LSB_FIRST:
-	    *b = (GLboolean)state->storePack.lsbFirst;
-	    break;
-	  case GL_UNPACK_ROW_LENGTH:
-	    *b = (GLboolean)state->storeUnpack.rowLength;
-	    break;
-	  case GL_UNPACK_IMAGE_HEIGHT:
-	    *b = (GLboolean)state->storeUnpack.imageHeight;
-	    break;
-	  case GL_UNPACK_SKIP_ROWS:
-	    *b = (GLboolean)state->storeUnpack.skipRows;
-	    break;
-	  case GL_UNPACK_SKIP_PIXELS:
-	    *b = (GLboolean)state->storeUnpack.skipPixels;
-	    break;
-	  case GL_UNPACK_SKIP_IMAGES:
-	    *b = (GLboolean)state->storeUnpack.skipImages;
-	    break;
-	  case GL_UNPACK_ALIGNMENT:
-	    *b = (GLboolean)state->storeUnpack.alignment;
-	    break;
-	  case GL_UNPACK_SWAP_BYTES:
-	    *b = (GLboolean)state->storeUnpack.swapEndian;
-	    break;
-	  case GL_UNPACK_LSB_FIRST:
-	    *b = (GLboolean)state->storeUnpack.lsbFirst;
-	    break;
 
-	  CASE_ARRAY_ALL(VERTEX, vertex, b, GLboolean);
-
-	  CASE_ARRAY_ENABLE(NORMAL, normal, b, GLboolean);
-	  CASE_ARRAY_TYPE(NORMAL, normal, b, GLboolean);
-	  CASE_ARRAY_STRIDE(NORMAL, normal, b, GLboolean);
-
-	  CASE_ARRAY_ALL(COLOR, color, b, GLboolean);
-
-	  CASE_ARRAY_ENABLE(INDEX, index, b, GLboolean);
-	  CASE_ARRAY_TYPE(INDEX, index, b, GLboolean);
-	  CASE_ARRAY_STRIDE(INDEX, index, b, GLboolean);
-
-	  case GL_TEXTURE_COORD_ARRAY:
-	    *b = (GLboolean)IS_TEXARRAY_ENABLED(state, state->vertArray.activeTexture);
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_SIZE:
-	    *b = (GLboolean)state->vertArray.texCoord[state->vertArray.activeTexture].size;
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_TYPE:
-	    *b = (GLboolean)state->vertArray.texCoord[state->vertArray.activeTexture].type;
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_STRIDE:
-	    *b = (GLboolean)state->vertArray.texCoord[state->vertArray.activeTexture].stride;
-	    break;
-
-	  CASE_ARRAY_ENABLE(EDGE_FLAG, edgeFlag, b, GLboolean);
-	  CASE_ARRAY_STRIDE(EDGE_FLAG, edgeFlag, b, GLboolean);
-
-	  CASE_ARRAY_ALL(SECONDARY_COLOR, secondaryColor, b, GLboolean);
-
-	  CASE_ARRAY_ENABLE(FOG_COORD, fogCoord, b, GLboolean);
-	  CASE_ARRAY_TYPE(FOG_COORD, fogCoord, b, GLboolean);
-	  CASE_ARRAY_STRIDE(FOG_COORD, fogCoord, b, GLboolean);
-
-	  case GL_MAX_ELEMENTS_VERTICES:
-	    *b = (GLboolean)state->vertArray.maxElementsVertices;
-	    break;
-	  case GL_MAX_ELEMENTS_INDICES:
-	    *b = (GLboolean)state->vertArray.maxElementsIndices;
-	    break;
-	  case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH:
-	    *b = (GLboolean)__GL_CLIENT_ATTRIB_STACK_DEPTH;
-	    break;
-	  case GL_CLIENT_ACTIVE_TEXTURE_ARB:
-	    *b = (GLboolean)(state->vertArray.activeTexture + GL_TEXTURE0_ARB);
-	    break;
-	  default:
+	if ( get_client_data( state, val, & data ) ) {
+	    *b = (GLboolean) data;
+	}
+	else {
 	    /*
-	    ** Not a local value, so use what we got from the server.
-	    */
+	     ** Not a local value, so use what we got from the server.
+	     */
 	    if (compsize == 1) {
 		__GLX_SINGLE_GET_CHAR(b);
 	    } else {
 		__GLX_SINGLE_GET_CHAR_ARRAY(b,compsize);
-                if (val != origVal) {
-                   /* matrix transpose */
-                   TransposeMatrixb(b);
+		if (val != origVal) {
+		    /* matrix transpose */
+		    TransposeMatrixb(b);
                 }
 	    }
 	}
@@ -314,110 +366,18 @@ void __indirect_glGetDoublev(GLenum val, GLdouble *d)
 	** Error occured; don't modify user's buffer.
 	*/
     } else {
+	GLintptr data;
+
 	/*
-	** For all the queries listed here, we use the locally stored
-	** values rather than the one returned by the server.  Note that
-	** we still needed to send the request to the server in order to
+	** We still needed to send the request to the server in order to
 	** find out whether it was legal to make a query (it's illegal,
 	** for example, to call a query between glBegin() and glEnd()).
 	*/
-	switch (val) {
-	  case GL_PACK_ROW_LENGTH:
-	    *d = (GLdouble)state->storePack.rowLength;
-	    break;
-	  case GL_PACK_IMAGE_HEIGHT:
-	    *d = (GLdouble)state->storePack.imageHeight;
-	    break;
-	  case GL_PACK_SKIP_ROWS:
-	    *d = (GLdouble)state->storePack.skipRows;
-	    break;
-	  case GL_PACK_SKIP_PIXELS:
-	    *d = (GLdouble)state->storePack.skipPixels;
-	    break;
-	  case GL_PACK_SKIP_IMAGES:
-	    *d = (GLdouble)state->storePack.skipImages;
-	    break;
-	  case GL_PACK_ALIGNMENT:
-	    *d = (GLdouble)state->storePack.alignment;
-	    break;
-	  case GL_PACK_SWAP_BYTES:
-	    *d = (GLdouble)state->storePack.swapEndian;
-	    break;
-	  case GL_PACK_LSB_FIRST:
-	    *d = (GLdouble)state->storePack.lsbFirst;
-	    break;
-	  case GL_UNPACK_ROW_LENGTH:
-	    *d = (GLdouble)state->storeUnpack.rowLength;
-	    break;
-	  case GL_UNPACK_IMAGE_HEIGHT:
-	    *d = (GLdouble)state->storeUnpack.imageHeight;
-	    break;
-	  case GL_UNPACK_SKIP_ROWS:
-	    *d = (GLdouble)state->storeUnpack.skipRows;
-	    break;
-	  case GL_UNPACK_SKIP_PIXELS:
-	    *d = (GLdouble)state->storeUnpack.skipPixels;
-	    break;
-	  case GL_UNPACK_SKIP_IMAGES:
-	    *d = (GLdouble)state->storeUnpack.skipImages;
-	    break;
-	  case GL_UNPACK_ALIGNMENT:
-	    *d = (GLdouble)state->storeUnpack.alignment;
-	    break;
-	  case GL_UNPACK_SWAP_BYTES:
-	    *d = (GLdouble)state->storeUnpack.swapEndian;
-	    break;
-	  case GL_UNPACK_LSB_FIRST:
-	    *d = (GLdouble)state->storeUnpack.lsbFirst;
-	    break;
 
-	  CASE_ARRAY_ALL(VERTEX, vertex, d, GLdouble);
-
-	  CASE_ARRAY_ENABLE(NORMAL, normal, d, GLdouble);
-	  CASE_ARRAY_TYPE(NORMAL, normal, d, GLdouble);
-	  CASE_ARRAY_STRIDE(NORMAL, normal, d, GLdouble);
-
-	  CASE_ARRAY_ALL(COLOR, color, d, GLdouble);
-
-	  CASE_ARRAY_ENABLE(INDEX, index, d, GLdouble);
-	  CASE_ARRAY_TYPE(INDEX, index, d, GLdouble);
-	  CASE_ARRAY_STRIDE(INDEX, index, d, GLdouble);
-
-	  case GL_TEXTURE_COORD_ARRAY:
-	    *d = (GLdouble) IS_TEXARRAY_ENABLED(state, state->vertArray.activeTexture);
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_SIZE:
-	    *d = (GLdouble)state->vertArray.texCoord[state->vertArray.activeTexture].size;
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_TYPE:
-	    *d = (GLdouble)state->vertArray.texCoord[state->vertArray.activeTexture].type;
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_STRIDE:
-	    *d = (GLdouble)state->vertArray.texCoord[state->vertArray.activeTexture].stride;
-	    break;
-
-	  CASE_ARRAY_ENABLE(EDGE_FLAG, edgeFlag, d, GLdouble);
-	  CASE_ARRAY_STRIDE(EDGE_FLAG, edgeFlag, d, GLdouble);
-
-	  CASE_ARRAY_ALL(SECONDARY_COLOR, secondaryColor, d, GLdouble);
-
-	  CASE_ARRAY_ENABLE(FOG_COORD, fogCoord, d, GLdouble);
-	  CASE_ARRAY_TYPE(FOG_COORD, fogCoord, d, GLdouble);
-	  CASE_ARRAY_STRIDE(FOG_COORD, fogCoord, d, GLdouble);
-
-	  case GL_MAX_ELEMENTS_VERTICES:
-	    *d = (GLdouble)state->vertArray.maxElementsVertices;
-	    break;
-	  case GL_MAX_ELEMENTS_INDICES:
-	    *d = (GLdouble)state->vertArray.maxElementsIndices;
-	    break;
-	  case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH:
-	    *d = (GLdouble)__GL_CLIENT_ATTRIB_STACK_DEPTH;
-	    break;
-	  case GL_CLIENT_ACTIVE_TEXTURE_ARB:
-	    *d = (GLdouble)(state->vertArray.activeTexture + GL_TEXTURE0_ARB);
-	    break;
-	  default:
+	if ( get_client_data( state, val, & data ) ) {
+	    *d = (GLdouble) data;
+	}
+	else {
 	    /*
 	     ** Not a local value, so use what we got from the server.
 	     */
@@ -425,10 +385,10 @@ void __indirect_glGetDoublev(GLenum val, GLdouble *d)
 		__GLX_SINGLE_GET_DOUBLE(d);
 	    } else {
 		__GLX_SINGLE_GET_DOUBLE_ARRAY(d,compsize);
-                if (val != origVal) {
-                   /* matrix transpose */
-                   TransposeMatrixd(d);
-                }
+		if (val != origVal) {
+		    /* matrix transpose */
+		    TransposeMatrixd(d);
+		}
 	    }
 	}
     }
@@ -455,120 +415,28 @@ void __indirect_glGetFloatv(GLenum val, GLfloat *f)
 	** Error occured; don't modify user's buffer.
 	*/
     } else {
+	GLintptr data;
+
 	/*
-	** For all the queries listed here, we use the locally stored
-	** values rather than the one returned by the server.  Note that
-	** we still needed to send the request to the server in order to
+	** We still needed to send the request to the server in order to
 	** find out whether it was legal to make a query (it's illegal,
 	** for example, to call a query between glBegin() and glEnd()).
 	*/
-	switch (val) {
-	  case GL_PACK_ROW_LENGTH:
-	    *f = (GLfloat)state->storePack.rowLength;
-	    break;
-	  case GL_PACK_IMAGE_HEIGHT:
-	    *f = (GLfloat)state->storePack.imageHeight;
-	    break;
-	  case GL_PACK_SKIP_ROWS:
-	    *f = (GLfloat)state->storePack.skipRows;
-	    break;
-	  case GL_PACK_SKIP_PIXELS:
-	    *f = (GLfloat)state->storePack.skipPixels;
-	    break;
-	  case GL_PACK_SKIP_IMAGES:
-	    *f = (GLfloat)state->storePack.skipImages;
-	    break;
-	  case GL_PACK_ALIGNMENT:
-	    *f = (GLfloat)state->storePack.alignment;
-	    break;
-	  case GL_PACK_SWAP_BYTES:
-	    *f = (GLfloat)state->storePack.swapEndian;
-	    break;
-	  case GL_PACK_LSB_FIRST:
-	    *f = (GLfloat)state->storePack.lsbFirst;
-	    break;
-	  case GL_UNPACK_ROW_LENGTH:
-	    *f = (GLfloat)state->storeUnpack.rowLength;
-	    break;
-	  case GL_UNPACK_IMAGE_HEIGHT:
-	    *f = (GLfloat)state->storeUnpack.imageHeight;
-	    break;
-	  case GL_UNPACK_SKIP_ROWS:
-	    *f = (GLfloat)state->storeUnpack.skipRows;
-	    break;
-	  case GL_UNPACK_SKIP_PIXELS:
-	    *f = (GLfloat)state->storeUnpack.skipPixels;
-	    break;
-	  case GL_UNPACK_SKIP_IMAGES:
-	    *f = (GLfloat)state->storeUnpack.skipImages;
-	    break;
-	  case GL_UNPACK_ALIGNMENT:
-	    *f = (GLfloat)state->storeUnpack.alignment;
-	    break;
-	  case GL_UNPACK_SWAP_BYTES:
-	    *f = (GLfloat)state->storeUnpack.swapEndian;
-	    break;
-	  case GL_UNPACK_LSB_FIRST:
-	    *f = (GLfloat)state->storeUnpack.lsbFirst;
-	    break;
 
-	  CASE_ARRAY_ALL(VERTEX, vertex, f, GLfloat);
-
-	  CASE_ARRAY_ENABLE(NORMAL, normal, f, GLfloat);
-	  CASE_ARRAY_TYPE(NORMAL, normal, f, GLfloat);
-	  CASE_ARRAY_STRIDE(NORMAL, normal, f, GLfloat);
-
-	  CASE_ARRAY_ALL(COLOR, color, f, GLfloat);
-
-	  CASE_ARRAY_ENABLE(INDEX, index, f, GLfloat);
-	  CASE_ARRAY_TYPE(INDEX, index, f, GLfloat);
-	  CASE_ARRAY_STRIDE(INDEX, index, f, GLfloat);
-
-	  case GL_TEXTURE_COORD_ARRAY:
-	    *f = (GLfloat) IS_TEXARRAY_ENABLED(state, state->vertArray.activeTexture);
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_SIZE:
-	    *f = (GLfloat)state->vertArray.texCoord[state->vertArray.activeTexture].size;
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_TYPE:
-	    *f = (GLfloat)state->vertArray.texCoord[state->vertArray.activeTexture].type;
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_STRIDE:
-	    *f = (GLfloat)state->vertArray.texCoord[state->vertArray.activeTexture].stride;
-	    break;
-
-	  CASE_ARRAY_ENABLE(EDGE_FLAG, edgeFlag, f, GLfloat);
-	  CASE_ARRAY_STRIDE(EDGE_FLAG, edgeFlag, f, GLfloat);
-
-	  CASE_ARRAY_ALL(SECONDARY_COLOR, secondaryColor, f, GLfloat);
-
-	  CASE_ARRAY_ENABLE(FOG_COORD, fogCoord, f, GLfloat);
-	  CASE_ARRAY_TYPE(FOG_COORD, fogCoord, f, GLfloat);
-	  CASE_ARRAY_STRIDE(FOG_COORD, fogCoord, f, GLfloat);
-
-	  case GL_MAX_ELEMENTS_VERTICES:
-	    *f = (GLfloat)state->vertArray.maxElementsVertices;
-	    break;
-	  case GL_MAX_ELEMENTS_INDICES:
-	    *f = (GLfloat)state->vertArray.maxElementsIndices;
-	    break;
-	  case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH:
-	    *f = (GLfloat)__GL_CLIENT_ATTRIB_STACK_DEPTH;
-	    break;
-	  case GL_CLIENT_ACTIVE_TEXTURE_ARB:
-	    *f = (GLfloat)(state->vertArray.activeTexture + GL_TEXTURE0_ARB);
-	    break;
-	  default:
+	if ( get_client_data( state, val, & data ) ) {
+	    *f = (GLfloat) data;
+	}
+	else {
 	    /*
-	    ** Not a local value, so use what we got from the server.
-	    */
+	     ** Not a local value, so use what we got from the server.
+	     */
 	    if (compsize == 1) {
 		__GLX_SINGLE_GET_FLOAT(f);
 	    } else {
 		__GLX_SINGLE_GET_FLOAT_ARRAY(f,compsize);
-                if (val != origVal) {
-                   /* matrix transpose */
-                   TransposeMatrixf(f);
+		if (val != origVal) {
+		    /* matrix transpose */
+		    TransposeMatrixf(f);
                 }
 	    }
 	}
@@ -596,120 +464,28 @@ void __indirect_glGetIntegerv(GLenum val, GLint *i)
 	** Error occured; don't modify user's buffer.
 	*/
     } else {
+	GLintptr data;
+
 	/*
-	** For all the queries listed here, we use the locally stored
-	** values rather than the one returned by the server.  Note that
-	** we still needed to send the request to the server in order to
+	** We still needed to send the request to the server in order to
 	** find out whether it was legal to make a query (it's illegal,
 	** for example, to call a query between glBegin() and glEnd()).
 	*/
-	switch (val) {
-	  case GL_PACK_ROW_LENGTH:
-	    *i = (GLint)state->storePack.rowLength;
-	    break;
-	  case GL_PACK_IMAGE_HEIGHT:
-	    *i = (GLint)state->storePack.imageHeight;
-	    break;
-	  case GL_PACK_SKIP_ROWS:
-	    *i = (GLint)state->storePack.skipRows;
-	    break;
-	  case GL_PACK_SKIP_PIXELS:
-	    *i = (GLint)state->storePack.skipPixels;
-	    break;
-	  case GL_PACK_SKIP_IMAGES:
-	    *i = (GLint)state->storePack.skipImages;
-	    break;
-	  case GL_PACK_ALIGNMENT:
-	    *i = (GLint)state->storePack.alignment;
-	    break;
-	  case GL_PACK_SWAP_BYTES:
-	    *i = (GLint)state->storePack.swapEndian;
-	    break;
-	  case GL_PACK_LSB_FIRST:
-	    *i = (GLint)state->storePack.lsbFirst;
-	    break;
-	  case GL_UNPACK_ROW_LENGTH:
-	    *i = (GLint)state->storeUnpack.rowLength;
-	    break;
-	  case GL_UNPACK_IMAGE_HEIGHT:
-	    *i = (GLint)state->storeUnpack.imageHeight;
-	    break;
-	  case GL_UNPACK_SKIP_ROWS:
-	    *i = (GLint)state->storeUnpack.skipRows;
-	    break;
-	  case GL_UNPACK_SKIP_PIXELS:
-	    *i = (GLint)state->storeUnpack.skipPixels;
-	    break;
-	  case GL_UNPACK_SKIP_IMAGES:
-	    *i = (GLint)state->storeUnpack.skipImages;
-	    break;
-	  case GL_UNPACK_ALIGNMENT:
-	    *i = (GLint)state->storeUnpack.alignment;
-	    break;
-	  case GL_UNPACK_SWAP_BYTES:
-	    *i = (GLint)state->storeUnpack.swapEndian;
-	    break;
-	  case GL_UNPACK_LSB_FIRST:
-	    *i = (GLint)state->storeUnpack.lsbFirst;
-	    break;
 
-	  CASE_ARRAY_ALL(VERTEX, vertex, i, GLint);
-
-	  CASE_ARRAY_ENABLE(NORMAL, normal, i, GLint);
-	  CASE_ARRAY_TYPE(NORMAL, normal, i, GLint);
-	  CASE_ARRAY_STRIDE(NORMAL, normal, i, GLint);
-
-	  CASE_ARRAY_ALL(COLOR, color, i, GLint);
-
-	  CASE_ARRAY_ENABLE(INDEX, index, i, GLint);
-	  CASE_ARRAY_TYPE(INDEX, index, i, GLint);
-	  CASE_ARRAY_STRIDE(INDEX, index, i, GLint);
-
-	  case GL_TEXTURE_COORD_ARRAY:
-	    *i = (GLint) IS_TEXARRAY_ENABLED(state, state->vertArray.activeTexture);
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_SIZE:
-	    *i = (GLint)state->vertArray.texCoord[state->vertArray.activeTexture].size;
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_TYPE:
-	    *i = (GLint)state->vertArray.texCoord[state->vertArray.activeTexture].type;
-	    break;
-	  case GL_TEXTURE_COORD_ARRAY_STRIDE:
-	    *i = (GLint)state->vertArray.texCoord[state->vertArray.activeTexture].stride;
-	    break;
-
-	  CASE_ARRAY_ENABLE(EDGE_FLAG, edgeFlag, i, GLint);
-	  CASE_ARRAY_STRIDE(EDGE_FLAG, edgeFlag, i, GLint);
-
-	  CASE_ARRAY_ALL(SECONDARY_COLOR, secondaryColor, i, GLint);
-
-	  CASE_ARRAY_ENABLE(FOG_COORD, fogCoord, i, GLint);
-	  CASE_ARRAY_TYPE(FOG_COORD, fogCoord, i, GLint);
-	  CASE_ARRAY_STRIDE(FOG_COORD, fogCoord, i, GLint);
-
-	  case GL_MAX_ELEMENTS_VERTICES:
-	    *i = (GLint)state->vertArray.maxElementsVertices;
-	    break;
-	  case GL_MAX_ELEMENTS_INDICES:
-	    *i = (GLint)state->vertArray.maxElementsIndices;
-	    break;
-	  case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH:
-	    *i = (GLint)__GL_CLIENT_ATTRIB_STACK_DEPTH;
-	    break;
-	  case GL_CLIENT_ACTIVE_TEXTURE_ARB:
-	    *i = (GLint)(state->vertArray.activeTexture + GL_TEXTURE0_ARB);
-	    break;
-	  default:
+	if ( get_client_data( state, val, & data ) ) {
+	    *i = (GLint) data;
+	}
+	else {
 	    /*
-	    ** Not a local value, so use what we got from the server.
-	    */
+	     ** Not a local value, so use what we got from the server.
+	     */
 	    if (compsize == 1) {
 		__GLX_SINGLE_GET_LONG(i);
 	    } else {
 		__GLX_SINGLE_GET_LONG_ARRAY(i,compsize);
-                if (val != origVal) {
-                   /* matrix transpose */
-                   TransposeMatrixi(i);
+		if (val != origVal) {
+		    /* matrix transpose */
+		    TransposeMatrixi(i);
                 }
 	    }
 	}
@@ -981,26 +757,28 @@ GLboolean __indirect_glIsEnabled(GLenum cap)
     __GLXattribute * state = (__GLXattribute *)(gc->client_state_private);
     xGLXSingleReply reply;
     GLboolean retval = 0;
+    GLintptr enable;
 
     if (!dpy) return 0;
 
     switch(cap) {
-      case GL_VERTEX_ARRAY:
-	  return IS_ARRAY_ENABLED(state, vertex);
-      case GL_NORMAL_ARRAY:
-	  return IS_ARRAY_ENABLED(state, normal);
-      case GL_COLOR_ARRAY:
-	  return IS_ARRAY_ENABLED(state, color);
-      case GL_INDEX_ARRAY:
-	  return IS_ARRAY_ENABLED(state, index);
-      case GL_TEXTURE_COORD_ARRAY:
-	  return IS_TEXARRAY_ENABLED(state, state->vertArray.activeTexture);
-      case GL_EDGE_FLAG_ARRAY:
-	  return IS_ARRAY_ENABLED(state, edgeFlag);
-      case GL_SECONDARY_COLOR_ARRAY:
-	  return IS_ARRAY_ENABLED(state, secondaryColor);
-      case GL_FOG_COORD_ARRAY:
-	  return IS_ARRAY_ENABLED(state, fogCoord);
+    case GL_VERTEX_ARRAY:
+    case GL_NORMAL_ARRAY:
+    case GL_COLOR_ARRAY:
+    case GL_INDEX_ARRAY:
+    case GL_EDGE_FLAG_ARRAY:
+    case GL_SECONDARY_COLOR_ARRAY:
+    case GL_FOG_COORD_ARRAY:
+	retval = __glXGetArrayEnable( state, cap, 0, & enable );
+	assert( retval );
+	return (GLboolean) enable;
+	break;
+    case GL_TEXTURE_COORD_ARRAY:
+	retval = __glXGetArrayEnable( state, GL_TEXTURE_COORD_ARRAY,
+				      __glXGetActiveTextureUnit( state ), & enable );
+	assert( retval );
+	return (GLboolean) enable;
+	break;
     }
 
     __GLX_SINGLE_LOAD_VARIABLES();
@@ -1021,37 +799,32 @@ void __indirect_glGetPointerv(GLenum pname, void **params)
     if (!dpy) return;
 
     switch(pname) {
-      case GL_VERTEX_ARRAY_POINTER:
-	  *params = (void *)state->vertArray.arrays[ vertex_ARRAY ].ptr;
-	  return;
-      case GL_NORMAL_ARRAY_POINTER:
-	  *params = (void *)state->vertArray.arrays[ normal_ARRAY ].ptr;
-	  return;
-      case GL_COLOR_ARRAY_POINTER:
-	  *params = (void *)state->vertArray.arrays[ color_ARRAY ].ptr;
-	  return;
-      case GL_INDEX_ARRAY_POINTER:
-	  *params = (void *)state->vertArray.arrays[ index_ARRAY ].ptr;
-	  return;
-      case GL_TEXTURE_COORD_ARRAY_POINTER:
-	  *params = (void *)state->vertArray.texCoord[state->vertArray.activeTexture].ptr;
-	  return;
-      case GL_EDGE_FLAG_ARRAY_POINTER:
-	  *params = (void *)state->vertArray.arrays[ edgeFlag_ARRAY ].ptr;
+    case GL_VERTEX_ARRAY_POINTER:
+    case GL_NORMAL_ARRAY_POINTER:
+    case GL_COLOR_ARRAY_POINTER:
+    case GL_INDEX_ARRAY_POINTER:
+    case GL_EDGE_FLAG_ARRAY_POINTER:
+	__glXGetArrayPointer( state, pname - GL_VERTEX_ARRAY_POINTER 
+			      + GL_VERTEX_ARRAY,
+			      0, params );
 	return;
-      case GL_SECONDARY_COLOR_ARRAY_POINTER:
-	  *params = (void *)state->vertArray.arrays[ secondaryColor_ARRAY ].ptr;
+    case GL_TEXTURE_COORD_ARRAY_POINTER:
+	__glXGetArrayPointer( state, GL_TEXTURE_COORD_ARRAY, 
+			      __glXGetActiveTextureUnit( state ), params );
 	return;
-      case GL_FOG_COORD_ARRAY_POINTER:
-	  *params = (void *)state->vertArray.arrays[ fogCoord_ARRAY ].ptr;
+    case GL_SECONDARY_COLOR_ARRAY_POINTER:
+    case GL_FOG_COORD_ARRAY_POINTER:
+	__glXGetArrayPointer( state, pname - GL_FOG_COORD_ARRAY_POINTER
+			      + GL_FOG_COORD_ARRAY, 
+			      0, params );
 	return;
-      case GL_FEEDBACK_BUFFER_POINTER:
+    case GL_FEEDBACK_BUFFER_POINTER:
 	*params = (void *)gc->feedbackBuf;
 	return;
-      case GL_SELECTION_BUFFER_POINTER:
+    case GL_SELECTION_BUFFER_POINTER:
 	*params = (void *)gc->selectBuf;
 	return;
-      default:
+    default:
 	__glXSetError(gc, GL_INVALID_ENUM);
 	return;
     }

@@ -1522,8 +1522,8 @@ void radeonUpdateViewportOffset( GLcontext *ctx )
    GLfloat yoffset = (GLfloat)dPriv->y + dPriv->h;
    const GLfloat *v = ctx->Viewport._WindowMap.m;
 
-   GLfloat tx = v[MAT_TX] + xoffset;
-   GLfloat ty = (- v[MAT_TY]) + yoffset;
+   GLfloat tx = v[MAT_TX] + xoffset + SUBPIXEL_X;
+   GLfloat ty = (- v[MAT_TY]) + yoffset + SUBPIXEL_Y;
 
    if ( rmesa->hw.vpt.cmd[VPT_SE_VPORT_XOFFSET] != *(GLuint *)&tx ||
 	rmesa->hw.vpt.cmd[VPT_SE_VPORT_YOFFSET] != *(GLuint *)&ty )
@@ -1808,7 +1808,7 @@ static void radeonEnable( GLcontext *ctx, GLenum cap, GLboolean state )
       RADEON_STATECHANGE(rmesa, ctx );
       if ( state ) {
 	 rmesa->hw.ctx.cmd[CTX_PP_CNTL] |= RADEON_FOG_ENABLE;
-	 radeonFogfv( ctx, GL_FOG_MODE, 0 );
+	 radeonFogfv( ctx, GL_FOG_MODE, NULL );
       } else {
 	 rmesa->hw.ctx.cmd[CTX_PP_CNTL] &= ~RADEON_FOG_ENABLE;
 	 RADEON_STATECHANGE(rmesa, tcl);

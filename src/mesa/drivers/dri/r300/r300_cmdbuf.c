@@ -92,27 +92,22 @@ int r300FlushCmdBufLocked(r300ContextPtr r300, const char* caller)
 		cmd.boxes = (drm_clip_rect_t *)r300->radeon.pClipRects;
 	}
 
-	if (cmd.nbox) {
-		ret = drmCommandWrite(r300->radeon.dri.fd,
-				DRM_RADEON_CMDBUF, &cmd, sizeof(cmd));
-		
-		if (RADEON_DEBUG & DEBUG_SYNC) {
-			fprintf(stderr, "Syncing in %s\n\n", __FUNCTION__);
-			radeonWaitForIdleLocked(&r300->radeon);
-		}
-	} else {
-		ret = 0;
-		if (RADEON_DEBUG & DEBUG_IOCTL)
-			fprintf(stderr, "%s: No cliprects\n", __FUNCTION__);
+	ret = drmCommandWrite(r300->radeon.dri.fd,
+			DRM_RADEON_CMDBUF, &cmd, sizeof(cmd));
+
+	if (RADEON_DEBUG & DEBUG_SYNC) {
+		fprintf(stderr, "Syncing in %s (from %s)\n\n", __FUNCTION__, caller);
+		radeonWaitForIdleLocked(&r300->radeon);
 	}
 
+	r300->dma.nr_released_bufs = 0;
 	r300->cmdbuf.count_used = 0;
 	r300->cmdbuf.count_reemit = 0;
 
 	return ret;
 }
 
- 
+
 int r300FlushCmdBuf(r300ContextPtr r300, const char* caller)
 {
 	int ret;
@@ -121,7 +116,7 @@ int r300FlushCmdBuf(r300ContextPtr r300, const char* caller)
 	int start;
 
 	LOCK_HARDWARE(&r300->radeon);
-	
+
 	ret=r300FlushCmdBufLocked(r300, caller);
 
 	UNLOCK_HARDWARE(&r300->radeon);
@@ -188,7 +183,6 @@ static __inline__ void r300DoEmitState(r300ContextPtr r300, GLboolean dirty)
 	}
 }
 
-
 /**
  * Copy dirty hardware state atoms into the command buffer.
  *
@@ -202,7 +196,7 @@ void r300EmitState(r300ContextPtr r300)
 
 	if (r300->cmdbuf.count_used && !r300->hw.is_dirty && !r300->hw.all_dirty)
 		return;
-
+	
 	/* To avoid going across the entire set of states multiple times, just check
 	 * for enough space for the case of emitting all state, and inline the
 	 * r300AllocCmdBuf code here without all the checks.
@@ -275,13 +269,13 @@ CHECK( vpu, vpucount(atom->cmd) ? (1 + vpucount(atom->cmd)*4) : 0 )
 
 #define ALLOC_STATE( ATOM, CHK, SZ, NM, IDX )				\
    do {									\
-      r300->hw.ATOM.cmd_size = SZ;					\
-      r300->hw.ATOM.cmd = (uint32_t*)CALLOC(SZ * sizeof(uint32_t));	\
-      r300->hw.ATOM.name = NM;						\
-      r300->hw.ATOM.idx = IDX;						\
+      r300->hw.ATOM.cmd_size = (SZ);					\
+      r300->hw.ATOM.cmd = (uint32_t*)CALLOC((SZ) * sizeof(uint32_t));	\
+      r300->hw.ATOM.name = (NM);					\
+      r300->hw.ATOM.idx = (IDX);					\
       r300->hw.ATOM.check = check_##CHK;				\
       r300->hw.ATOM.dirty = GL_FALSE;					\
-      r300->hw.max_state_size += SZ;					\
+      r300->hw.max_state_size += (SZ);					\
    } while (0)
 
 
@@ -292,9 +286,9 @@ CHECK( vpu, vpucount(atom->cmd) ? (1 + vpucount(atom->cmd)*4) : 0 )
 void r300InitCmdBuf(r300ContextPtr r300)
 {
 	int size, i, mtu;
-
-	r300->hw.max_state_size = 0;
 	
+	r300->hw.max_state_size = 0;
+
 	mtu = r300->radeon.glCtx->Const.MaxTextureUnits;
 	fprintf(stderr, "Using %d maximum texture units..\n", mtu);
 
@@ -341,6 +335,12 @@ void r300InitCmdBuf(r300ContextPtr r300)
 		r300->hw.ps.cmd[0] = cmducs(R300_RE_POINTSIZE, 1);
 	ALLOC_STATE( unk4230, always, 4, "unk4230", 0 );
 		r300->hw.unk4230.cmd[0] = cmducs(0x4230, 3);
+	ALLOC_STATE( lcntl, always, 2, "lcntl", 0 );
+		r300->hw.lcntl.cmd[0] = cmducs(R300_RE_LINE_CNT, 1);
+#ifdef EXP_C
+	ALLOC_STATE( lsf, always, 2, "lsf", 0 );
+		r300->hw.lsf.cmd[0] = cmducs(R300_RE_LINE_STIPPLE_FACTOR, 1);
+#endif
 	ALLOC_STATE( unk4260, always, 4, "unk4260", 0 );
 		r300->hw.unk4260.cmd[0] = cmducs(0x4260, 3);
 	ALLOC_STATE( unk4274, always, 5, "unk4274", 0 );
@@ -349,6 +349,8 @@ void r300InitCmdBuf(r300ContextPtr r300)
 		r300->hw.unk4288.cmd[0] = cmducs(0x4288, 5);
 	ALLOC_STATE( unk42A0, always, 2, "unk42A0", 0 );
 		r300->hw.unk42A0.cmd[0] = cmducs(0x42A0, 1);
+	ALLOC_STATE( zbs, always, R300_ZBS_CMDSIZE, "zbs", 0 );
+		r300->hw.zbs.cmd[R300_ZBS_CMD_0] = cmducs(R300_RE_ZBIAS_T_FACTOR, 4);
 	ALLOC_STATE( unk42B4, always, 2, "unk42B4", 0 );
 		r300->hw.unk42B4.cmd[0] = cmducs(0x42B4, 1);
 	ALLOC_STATE( cul, always, R300_CUL_CMDSIZE, "cul", 0 );
@@ -432,28 +434,25 @@ void r300InitCmdBuf(r300ContextPtr r300)
 	/* Textures */
 	ALLOC_STATE( tex.filter, variable, mtu+1, "tex_filter", 0 );
 		r300->hw.tex.filter.cmd[R300_TEX_CMD_0] = cmducs(R300_TX_FILTER_0, 0);
-		
+
 	ALLOC_STATE( tex.unknown1, variable, mtu+1, "tex_unknown1", 0 );
 		r300->hw.tex.unknown1.cmd[R300_TEX_CMD_0] = cmducs(R300_TX_UNK1_0, 0);
-		
+
 	ALLOC_STATE( tex.size, variable, mtu+1, "tex_size", 0 );
 		r300->hw.tex.size.cmd[R300_TEX_CMD_0] = cmducs(R300_TX_SIZE_0, 0);
-		
+
 	ALLOC_STATE( tex.format, variable, mtu+1, "tex_format", 0 );
 		r300->hw.tex.format.cmd[R300_TEX_CMD_0] = cmducs(R300_TX_FORMAT_0, 0);
-		
+
 	ALLOC_STATE( tex.offset, variable, mtu+1, "tex_offset", 0 );
 		r300->hw.tex.offset.cmd[R300_TEX_CMD_0] = cmducs(R300_TX_OFFSET_0, 0);
-		
+
 	ALLOC_STATE( tex.unknown4, variable, mtu+1, "tex_unknown4", 0 );
 		r300->hw.tex.unknown4.cmd[R300_TEX_CMD_0] = cmducs(R300_TX_UNK4_0, 0);
-		
-	ALLOC_STATE( tex.unknown5, variable, mtu+1, "tex_unknown5", 0 );
-		r300->hw.tex.unknown5.cmd[R300_TEX_CMD_0] = cmducs(R300_TX_UNK5_0, 0);
-		
-	//ALLOC_STATE( tex.border_color, variable, mtu+1, "tex_border_color", 0 );
-	//	r300->hw.tex.border_color.cmd[R300_TEX_CMD_0] = cmducs(R300_TX_BORDER_COLOR_0, 0);
-	
+
+	ALLOC_STATE( tex.border_color, variable, mtu+1, "tex_border_color", 0 );
+		r300->hw.tex.border_color.cmd[R300_TEX_CMD_0] = cmducs(R300_TX_BORDER_COLOR_0, 0);
+
 
 	/* Setup the atom linked list */
 	make_empty_list(&r300->hw.atomlist);
@@ -480,10 +479,15 @@ void r300InitCmdBuf(r300ContextPtr r300)
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4214);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.ps);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4230);
+	insert_at_tail(&r300->hw.atomlist, &r300->hw.lcntl);
+#ifdef EXP_C
+	insert_at_tail(&r300->hw.atomlist, &r300->hw.lsf);
+#endif
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4260);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4274);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4288);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk42A0);
+	insert_at_tail(&r300->hw.atomlist, &r300->hw.zbs);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk42B4);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.cul);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk42C0);
@@ -524,27 +528,32 @@ void r300InitCmdBuf(r300ContextPtr r300)
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.vpp);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.vps);
 
-	insert_at_tail(&r300->hw.atomlist, &r300->hw.tex.filter);	
+	insert_at_tail(&r300->hw.atomlist, &r300->hw.tex.filter);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.tex.unknown1);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.tex.size);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.tex.format);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.tex.offset);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.tex.unknown4);
-	insert_at_tail(&r300->hw.atomlist, &r300->hw.tex.unknown5);
-	//insert_at_tail(&r300->hw.atomlist, &r300->hw.tex.border_color);
+	insert_at_tail(&r300->hw.atomlist, &r300->hw.tex.border_color);
 
 	r300->hw.is_dirty = GL_TRUE;
 	r300->hw.all_dirty = GL_TRUE;
 
 	/* Initialize command buffer */
 	size = 256 * driQueryOptioni(&r300->radeon.optionCache, "command_buffer_size");
-	if (size < 2*r300->hw.max_state_size)
-		size = 2*r300->hw.max_state_size;
+	if (size < 2*r300->hw.max_state_size){
+		size = 2*r300->hw.max_state_size+65535;
+		}
 
-	if (RADEON_DEBUG & DEBUG_IOCTL)
+	if (1 || RADEON_DEBUG & DEBUG_IOCTL){
+		fprintf(stderr, "sizeof(drm_r300_cmd_header_t)=%d\n",
+			sizeof(drm_r300_cmd_header_t));
+		fprintf(stderr, "sizeof(drm_radeon_cmd_buffer_t)=%d\n",
+			sizeof(drm_radeon_cmd_buffer_t));
 		fprintf(stderr,
 			"Allocating %d bytes command buffer (max state is %d bytes)\n",
 			size*4, r300->hw.max_state_size*4);
+		}
 
 	r300->cmdbuf.size = size;
 	r300->cmdbuf.cmd_buf = (uint32_t*)CALLOC(size*4);
@@ -630,36 +639,31 @@ void r300EmitWait(r300ContextPtr rmesa, GLuint flags)
 	}
 }
 
-void r300EmitLOAD_VBPNTR(r300ContextPtr rmesa, int start)
+void r300EmitAOS(r300ContextPtr rmesa, GLuint nr, GLuint offset)
 {
-int i, a, count;
-GLuint dw;
-LOCAL_VARS
+	if (RADEON_DEBUG & DEBUG_VERTS)
+	    fprintf(stderr, "%s: nr=%d, ofs=0x%08x\n", __func__, nr, offset);
+    int sz = 1 + (nr >> 1) * 3 + (nr & 1) * 2;
+    int i;
+    LOCAL_VARS
 
-count=rmesa->state.aos_count;
+    start_packet3(RADEON_CP_PACKET3_3D_LOAD_VBPNTR, sz-1);
+    e32(nr);
+    for(i=0;i+1<nr;i+=2){
+        e32(  (rmesa->state.aos[i].aos_size << 0)
+             |(rmesa->state.aos[i].aos_stride << 8)
+             |(rmesa->state.aos[i+1].aos_size << 16)
+             |(rmesa->state.aos[i+1].aos_stride << 24)
+        );
+        e32(rmesa->state.aos[i].aos_offset+offset*4*rmesa->state.aos[i].aos_stride);
+        e32(rmesa->state.aos[i+1].aos_offset+offset*4*rmesa->state.aos[i+1].aos_stride);
+    }
+    if(nr & 1){
+        e32(  (rmesa->state.aos[nr-1].aos_size << 0)
+             |(rmesa->state.aos[nr-1].aos_stride << 8)
+        );
+        e32(rmesa->state.aos[nr-1].aos_offset+offset*4*rmesa->state.aos[nr-1].aos_stride);
+    }
 
-a=1+(count>>1)*3+(count & 1)*2;
-start_packet3(RADEON_CP_PACKET3_3D_LOAD_VBPNTR, a-1);
-e32(count);
-for(i=0;i+1<count;i+=2){
-	e32(  (rmesa->state.aos[i].element_size << 0) 
-	     |(rmesa->state.aos[i].stride << 8)
-	     |(rmesa->state.aos[i+1].element_size << 16)
-	     |(rmesa->state.aos[i+1].stride << 24)
-	    );
-	e32(rmesa->state.aos[i].offset+start*4*rmesa->state.aos[i].stride);
-	e32(rmesa->state.aos[i+1].offset+start*4*rmesa->state.aos[i+1].stride);
-	}
-if(count & 1){
-	e32(  (rmesa->state.aos[count-1].element_size << 0) 
-	     |(rmesa->state.aos[count-1].stride << 8)
-	    );
-	e32(rmesa->state.aos[count-1].offset+start*4*rmesa->state.aos[count-1].stride);	
-	}
-
-/* delay ? */
-#if 0
-e32(RADEON_CP_PACKET2);
-e32(RADEON_CP_PACKET2);
-#endif
 }
+

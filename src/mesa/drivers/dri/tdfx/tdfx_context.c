@@ -49,6 +49,7 @@
 #include "tdfx_span.h"
 #include "tdfx_texman.h"
 #include "extensions.h"
+#include "hash.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -560,11 +561,14 @@ tdfxDestroyContext( __DRIcontextPrivate *driContextPriv )
          /* This share group is about to go away, free our private
           * texture object data.
           */
-         struct gl_texture_object *tObj;
-         tObj = fxMesa->glCtx->Shared->TexObjectList;
-         while (tObj) {
+         struct _mesa_HashTable *textures = fxMesa->glCtx->Shared->TexObjects;
+         GLuint id;
+         for (id = _mesa_HashFirstEntry(textures);
+              id;
+              id = _mesa_HashNextEntry(textures, id)) {
+            struct gl_texture_object *tObj
+               = (struct gl_texture_object *) _mesa_HashLookup(textures, id);
             tdfxTMFreeTexture(fxMesa, tObj);
-            tObj = tObj->Next;
          }
       }
 
