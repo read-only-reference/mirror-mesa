@@ -23,7 +23,7 @@
  */
 
 /*
- * DOS/DJGPP device driver v1.1 for Mesa 4.0
+ * DOS/DJGPP device driver v1.3 for Mesa 5.0
  *
  *  Copyright (C) 2002 - Borca Daniel
  *  Email : dborca@yahoo.com
@@ -31,10 +31,12 @@
  */
 
 
-#ifndef DPMIINT_H_included
-#define DPMIINT_H_included
+#ifndef VGA_H_included
+#define VGA_H_included
 
-int _create_selector (int *segment, unsigned long base, int size);
-void _remove_selector (int *segment);
+#include "../internal.h"
+#include "../vesa/vesa.h"
+
+extern vl_driver VGA;
 
 #endif

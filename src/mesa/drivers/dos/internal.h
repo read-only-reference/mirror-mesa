@@ -23,7 +23,7 @@
  */
 
 /*
- * DOS/DJGPP device driver v1.1 for Mesa 4.0
+ * DOS/DJGPP device driver v1.3 for Mesa 5.0
  *
  *  Copyright (C) 2002 - Borca Daniel
  *  Email : dborca@yahoo.com
@@ -31,8 +31,10 @@
  */
 
 
-#ifndef VIDEOINT_H_included
-#define VIDEOINT_H_included
+#ifndef INTERNAL_H_included
+#define INTERNAL_H_included
+
+#include "../mmath.h"
 
 /*
  * general purpose defines, etc.
@@ -72,8 +74,12 @@ typedef struct vl_mode {
  * video driver structure
  */
 typedef struct {
-        vl_mode *(*getmodes) (void);
+        vl_mode *(*init) (void);
         int (*entermode) (vl_mode *p, int refresh);
+        void (*blit) (void);
+        void (*setCI_f) (int index, float red, float green, float blue);
+        void (*setCI_i) (int index, int red, int green, int blue);
+        int (*getCIprec) (void);
         void (*restore) (void);
         void (*finit) (void);
 } vl_driver;
@@ -81,19 +87,41 @@ typedef struct {
 
 
 /*
+ * memory mapping
+ */
+int _create_selector (int *segment, unsigned long base, int size);
+void _remove_selector (int *segment);
+
+/*
+ * system routines
+ */
+int vl_can_mmx (void);
+
+/*
  * asm routines to deal with virtual buffering
  */
+extern void v_clear8 (int color);
 #define v_clear15 v_clear16
-extern void v_clear16 (void *buffer, int bytes, int color);
-extern void v_clear32 (void *buffer, int bytes, int color);
-extern void v_clear24 (void *buffer, int bytes, int color);
+extern void v_clear16 (int color);
+extern void v_clear24 (int color);
+extern void v_clear32 (int color);
 
-extern void b_dump_virtual (void *buffer, int stride, int height);
-extern void l_dump_virtual (void *buffer, int stride, int height);
+extern void v_clear8_mmx (int color);
+#define v_clear15_mmx v_clear16_mmx
+extern void v_clear16_mmx (int color);
+extern void v_clear24_mmx (int color);
+extern void v_clear32_mmx (int color);
 
+extern void v_rect8 (int x, int y, int width, int height, int color);
+#define v_rect15 v_rect16
+extern void v_rect16 (int x, int y, int width, int height, int color);
+extern void v_rect24 (int x, int y, int width, int height, int color);
+extern void v_rect32 (int x, int y, int width, int height, int color);
+
+extern void v_putpixel8 (unsigned int offset, int color);
 #define v_putpixel15 v_putpixel16
-extern void v_putpixel16 (void *buffer, int offset, int color);
-extern void v_putpixel24 (void *buffer, int offset, int color);
-extern void v_putpixel32 (void *buffer, int offset, int color);
+extern void v_putpixel16 (unsigned int offset, int color);
+extern void v_putpixel24 (unsigned int offset, int color);
+extern void v_putpixel32 (unsigned int offset, int color);
 
 #endif

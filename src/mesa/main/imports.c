@@ -1,8 +1,8 @@
-/* $Id: imports.c,v 1.25 2002/10/30 20:40:46 brianp Exp $ */
+/* $Id: imports.c,v 1.27 2002/12/06 03:10:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  5.0
+ * Version:  5.1
  *
  * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
@@ -56,6 +56,8 @@
 
 #ifdef WIN32
 #define vsnprintf _vsnprintf
+#elif defined(__IBMC__) || defined(__IBMCPP__) || defined(VMS)
+extern int vsnprintf(char *str, size_t count, const char *fmt, va_list arg);
 #endif
 
 
@@ -427,14 +429,21 @@ _mesa_warning( GLcontext *ctx, const char *fmtString, ... )
  * path which may not be implemented fully or correctly.
  */
 void
-_mesa_problem( const GLcontext *ctx, const char *s )
+_mesa_problem( const GLcontext *ctx, const char *fmtString, ... )
 {
+   va_list args;
+   char str[MAXSTRING];
    (void) ctx;
+
+   va_start( args, fmtString );  
+   vsnprintf( str, MAXSTRING, fmtString, args );
+   va_end( args );
+
 #if defined(XFree86LOADER) && defined(IN_MODULE)
-   xf86fprintf(stderr, "Mesa implementation error: %s\n", s);
+   xf86fprintf(stderr, "Mesa implementation error: %s\n", str);
    xf86fprintf(stderr, "Please report to the DRI project at dri.sourceforge.net\n");
 #else
-   fprintf(stderr, "Mesa implementation error: %s\n", s);
+   fprintf(stderr, "Mesa implementation error: %s\n", str);
    fprintf(stderr, "Please report to the Mesa bug database at www.mesa3d.org\n" );
 #endif
 }
