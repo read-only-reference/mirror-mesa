@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.1
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -166,6 +166,8 @@ _mesa_initialize_buffer_object( struct gl_buffer_object *obj,
    _mesa_bzero(obj, sizeof(struct gl_buffer_object));
    obj->RefCount = 1;
    obj->Name = name;
+   obj->Usage = GL_STATIC_DRAW_ARB;
+   obj->Access = GL_READ_WRITE_ARB;
 }
 
 
@@ -329,7 +331,13 @@ _mesa_init_buffer_objects( GLcontext *ctx )
 {
    GLuint i;
 
+   /* Allocate the default buffer object and set refcount so high that
+    * it never gets deleted.
+    */
    ctx->Array.NullBufferObj = _mesa_new_buffer_object(ctx, 0, 0);
+   if (ctx->Array.NullBufferObj)
+      ctx->Array.NullBufferObj->RefCount = 1000;
+
    ctx->Array.ArrayBufferObj = ctx->Array.NullBufferObj;
    ctx->Array.ElementArrayBufferObj = ctx->Array.NullBufferObj;
 

@@ -90,7 +90,7 @@ void DMesaDestroyContext (DMesaContext c);
 /*
  * Return a handle to the current context.
  */
-void *DMesaGetCurrentContext (void);
+DMesaContext DMesaGetCurrentContext (void);
 
 
 
@@ -105,6 +105,11 @@ DMesaBuffer DMesaCreateBuffer (DMesaVisual visual,
  * Destroy Buffer.
  */
 void DMesaDestroyBuffer (DMesaBuffer b);
+
+/*
+ * Return a handle to the current buffer.
+ */
+DMesaBuffer DMesaGetCurrentBuffer (void);
 
 /*
  * Swap the front and back buffers for the given Buffer.
@@ -141,6 +146,7 @@ void *DMesaGetProcAddress (const char *name);
 #define DMESA_GET_SCREEN_SIZE 0x0100
 #define DMESA_GET_DRIVER_CAPS 0x0200
 #define DMESA_GET_VIDEO_MODES 0x0300
+#define DMESA_GET_BUFFER_ADDR 0x0400
 
 #define DMESA_DRIVER_SWDB_BIT 0x1 /* software double-buffered */
 #define DMESA_DRIVER_LLWO_BIT 0x2 /* lower-left window origin */

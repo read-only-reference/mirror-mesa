@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.1
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -28,7 +28,9 @@
 
 #include "imports.h"
 #include "context.h"
+#include "colormac.h"
 #include "mtypes.h"
+#include "program.h"
 #include "texobj.h"
 #include "nvfragprog.h"
 
@@ -141,13 +143,15 @@ _swrast_update_polygon( GLcontext *ctx )
 
 
 static void
-_swrast_update_hint( GLcontext *ctx )
+_swrast_update_fog_hint( GLcontext *ctx )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    swrast->_PreferPixelFog = (!swrast->AllowVertexFog ||
+                              ctx->FragmentProgram.Enabled ||
 			      (ctx->Hint.Fog == GL_NICEST &&
 			       swrast->AllowPixelFog));
 }
+
 
 
 /*
@@ -167,6 +171,46 @@ _swrast_update_texture_env( GLcontext *ctx )
       }
    }
 }
+
+
+/*
+ * Update swrast->_FogColor and swrast->_FogEnable values.
+ */
+static void
+_swrast_update_fog_state( GLcontext *ctx )
+{
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
+
+   /* convert fog color to GLchan values */
+   CLAMPED_FLOAT_TO_CHAN(swrast->_FogColor[RCOMP], ctx->Fog.Color[RCOMP]);
+   CLAMPED_FLOAT_TO_CHAN(swrast->_FogColor[GCOMP], ctx->Fog.Color[GCOMP]);
+   CLAMPED_FLOAT_TO_CHAN(swrast->_FogColor[BCOMP], ctx->Fog.Color[BCOMP]);
+
+   /* determine if fog is needed */
+   swrast->_FogEnabled = GL_FALSE;
+   if (ctx->Fog.Enabled) {
+      swrast->_FogEnabled = GL_TRUE;
+   }
+   else if (ctx->FragmentProgram.Enabled &&
+        ctx->FragmentProgram.Current->Base.Target == GL_FRAGMENT_PROGRAM_ARB) {
+      const struct fragment_program *p;
+      p = (struct fragment_program *) ctx->FragmentProgram.Current;
+      if (p->FogOption != GL_NONE) {
+         swrast->_FogEnabled = GL_TRUE;
+      }
+   }
+}
+
+
+static void
+_swrast_update_fragment_program( GLcontext *ctx )
+{
+   if (ctx->FragmentProgram.Enabled) {
+      struct fragment_program *program = ctx->FragmentProgram.Current;
+      _mesa_load_state_parameters(ctx, program->Parameters);
+   }
+}
+
 
 
 #define _SWRAST_NEW_DERIVED (_SWRAST_NEW_RASTERMASK |	\
@@ -393,11 +437,17 @@ _swrast_validate_derived( GLcontext *ctx )
       if (swrast->NewState & _NEW_POLYGON)
 	 _swrast_update_polygon( ctx );
 
-      if (swrast->NewState & _NEW_HINT)
-	 _swrast_update_hint( ctx );
+      if (swrast->NewState & (_NEW_HINT | _NEW_PROGRAM))
+	 _swrast_update_fog_hint( ctx );
 
       if (swrast->NewState & _SWRAST_NEW_TEXTURE_ENV_MODE)
 	 _swrast_update_texture_env( ctx );
+
+      if (swrast->NewState & _NEW_FOG)
+         _swrast_update_fog_state( ctx );
+
+      if (swrast->NewState & _NEW_PROGRAM)
+	 _swrast_update_fragment_program( ctx );
 
       swrast->NewState = 0;
       swrast->StateChanges = 0;

@@ -171,8 +171,11 @@ DRIVER_SOURCES += \
 	drivers/dos/vesa.c \
 	drivers/dos/blit.S \
 	drivers/dos/vga.c \
+	drivers/dos/null.c \
 	drivers/dos/dpmi.c
 endif
+
+#DRIVER_SOURCES += $(OSMESA_DRIVER_SOURCES)
 
 SOURCES = $(CORE_SOURCES) $(X86_SOURCES) $(COMMON_DRIVER_SOURCES) $(DRIVER_SOURCES)
 

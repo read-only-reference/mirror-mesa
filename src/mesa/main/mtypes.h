@@ -108,22 +108,20 @@ typedef int GLfixed;
 /*
  * Fixed point arithmetic macros
  */
-#ifdef FIXED_14
-#define FIXED_ONE       0x00004000
-#define FIXED_HALF      0x00002000
-#define FIXED_FRAC_MASK 0x00003FFF
-#define FIXED_SCALE     16384.0f
-#define FIXED_SHIFT     14
-#else
-#define FIXED_ONE       0x00000800
-#define FIXED_HALF      0x00000400
-#define FIXED_FRAC_MASK 0x000007FF
-#define FIXED_SCALE     2048.0f
-#define FIXED_SHIFT     11
+#ifndef FIXED_FRAC_BITS
+#define FIXED_FRAC_BITS 11
 #endif
+
+#define FIXED_SHIFT     FIXED_FRAC_BITS
+#define FIXED_ONE       (1 << FIXED_SHIFT)
+#define FIXED_HALF      (1 << (FIXED_SHIFT-1))
+#define FIXED_FRAC_MASK (FIXED_ONE - 1)
 #define FIXED_INT_MASK  (~FIXED_FRAC_MASK)
 #define FIXED_EPSILON   1
+#define FIXED_SCALE     ((float) FIXED_ONE)
+#define FIXED_DBL_SCALE ((double) FIXED_ONE)
 #define FloatToFixed(X) (IROUND((X) * FIXED_SCALE))
+#define FixedToDouble(X) ((X) * (1.0 / FIXED_DBL_SCALE))
 #define IntToFixed(I)   ((I) << FIXED_SHIFT)
 #define FixedToInt(X)   ((X) >> FIXED_SHIFT)
 #define FixedToUns(X)   (((unsigned int)(X)) >> FIXED_SHIFT)
@@ -254,8 +252,8 @@ struct gl_color_table {
    GLenum Format;         /**< GL_ALPHA, GL_RGB, GL_RGB, etc */
    GLenum IntFormat;
    GLuint Size;           /**< number of entries (rows) in table */
-   GLvoid *Table;         /**< either GLfloat * or GLchan * */
-   GLboolean FloatTable;  /**< are entries stored as floats? */
+   GLvoid *Table;         /**< points to data of <Type> */
+   GLenum Type;           /**< GL_UNSIGNED_BYTE or GL_FLOAT */
    GLubyte RedSize;
    GLubyte GreenSize;
    GLubyte BlueSize;
@@ -1164,6 +1162,25 @@ struct gl_texture_object {
    /*@}*/
 };
 
+/**
+ * Texture combine environment state.
+ * 
+ * \todo
+ * If GL_NV_texture_env_combine4 is ever supported, the arrays in this
+ * structure will need to be expanded for 4 elements.
+ */
+struct gl_tex_env_combine_state {
+   GLenum ModeRGB;       /**< GL_REPLACE, GL_DECAL, GL_ADD, etc. */
+   GLenum ModeA;         /**< GL_REPLACE, GL_DECAL, GL_ADD, etc. */
+   GLenum SourceRGB[3];  /**< GL_PRIMARY_COLOR, GL_TEXTURE, etc. */
+   GLenum SourceA[3];    /**< GL_PRIMARY_COLOR, GL_TEXTURE, etc. */
+   GLenum OperandRGB[3]; /**< SRC_COLOR, ONE_MINUS_SRC_COLOR, etc */
+   GLenum OperandA[3];   /**< SRC_ALPHA, ONE_MINUS_SRC_ALPHA, etc */
+   GLuint ScaleShiftRGB; /**< 0, 1 or 2 */
+   GLuint ScaleShiftA;   /**< 0, 1 or 2 */
+   GLuint _NumArgsRGB;   /**< Number of inputs used for the combine mode. */
+   GLuint _NumArgsA;     /**< Number of inputs used for the combine mode. */
+};
 
 /**
  * Texture unit record 
@@ -1201,16 +1218,19 @@ struct gl_texture_unit {
    /** 
     * \name GL_EXT_texture_env_combine 
     */
-   /*@{*/
-   GLenum CombineModeRGB;       /**< GL_REPLACE, GL_DECAL, GL_ADD, etc. */
-   GLenum CombineModeA;         /**< GL_REPLACE, GL_DECAL, GL_ADD, etc. */
-   GLenum CombineSourceRGB[3];  /**< GL_PRIMARY_COLOR, GL_TEXTURE, etc. */
-   GLenum CombineSourceA[3];    /**< GL_PRIMARY_COLOR, GL_TEXTURE, etc. */
-   GLenum CombineOperandRGB[3]; /**< SRC_COLOR, ONE_MINUS_SRC_COLOR, etc */
-   GLenum CombineOperandA[3];   /**< SRC_ALPHA, ONE_MINUS_SRC_ALPHA, etc */
-   GLuint CombineScaleShiftRGB; /**< 0, 1 or 2 */
-   GLuint CombineScaleShiftA;   /**< 0, 1 or 2 */
-   /*@}*/
+   struct gl_tex_env_combine_state Combine;
+
+   /**
+    * Derived state based on \c EnvMode and the \c BaseFormat of the
+    * currently enabled texture.
+    */
+   struct gl_tex_env_combine_state _EnvMode;
+
+   /**
+    * Currently enabled combiner state.  This will point to either
+    * \c Combine or \c _EnvMode.
+    */
+   struct gl_tex_env_combine_state *_CurrentCombine;
 
    struct gl_texture_object *Current1D;
    struct gl_texture_object *Current2D;
@@ -1551,6 +1571,7 @@ struct fragment_program
    GLuint NumAluInstructions; /**< GL_ARB_fragment_program */
    GLuint NumTexInstructions;
    GLuint NumTexIndirections;
+   GLenum FogOption;
    struct program_parameter_list *Parameters; /**< array [NumParameters] */
 };
 
@@ -1807,30 +1828,41 @@ struct gl_extensions
    GLboolean ARB_texture_env_dot3;
    GLboolean ARB_texture_mirrored_repeat;
    GLboolean ARB_texture_non_power_of_two;
+   GLboolean ARB_transpose_matrix;
    GLboolean ARB_vertex_buffer_object;
    GLboolean ARB_vertex_program;
    GLboolean ARB_window_pos;
-   GLboolean ATI_texture_mirror_once;
-   GLboolean ATI_texture_env_combine3;
+   GLboolean EXT_abgr;
+   GLboolean EXT_bgra;
    GLboolean EXT_blend_color;
    GLboolean EXT_blend_equation_separate;
    GLboolean EXT_blend_func_separate;
    GLboolean EXT_blend_logic_op;
    GLboolean EXT_blend_minmax;
    GLboolean EXT_blend_subtract;
+   GLboolean EXT_clip_volume_hint;
    GLboolean EXT_convolution;
    GLboolean EXT_compiled_vertex_array;
+   GLboolean EXT_copy_texture;
    GLboolean EXT_depth_bounds_test;
+   GLboolean EXT_draw_range_elements;
    GLboolean EXT_fog_coord;
    GLboolean EXT_histogram;
    GLboolean EXT_multi_draw_arrays;
    GLboolean EXT_paletted_texture;
+   GLboolean EXT_packed_pixels;
    GLboolean EXT_point_parameters;
+   GLboolean EXT_polygon_offset;
+   GLboolean EXT_rescale_normal;
    GLboolean EXT_shadow_funcs;
    GLboolean EXT_secondary_color;
+   GLboolean EXT_separate_specular_color;
    GLboolean EXT_shared_texture_palette;
    GLboolean EXT_stencil_wrap;
    GLboolean EXT_stencil_two_side;
+   GLboolean EXT_subtexture;
+   GLboolean EXT_texture;
+   GLboolean EXT_texture_object;
    GLboolean EXT_texture3D;
    GLboolean EXT_texture_compression_s3tc;
    GLboolean EXT_texture_env_add;
@@ -1839,7 +1871,13 @@ struct gl_extensions
    GLboolean EXT_texture_filter_anisotropic;
    GLboolean EXT_texture_lod_bias;
    GLboolean EXT_texture_mirror_clamp;
+   GLboolean EXT_vertex_array;
    GLboolean EXT_vertex_array_set;
+   /* vendor extensions */
+   GLboolean APPLE_client_storage;
+   GLboolean APPLE_packed_pixels;
+   GLboolean ATI_texture_mirror_once;
+   GLboolean ATI_texture_env_combine3;
    GLboolean HP_occlusion_test;
    GLboolean IBM_rasterpos_clip;
    GLboolean IBM_multimode_draw_arrays;
@@ -1850,7 +1888,9 @@ struct gl_extensions
    GLboolean MESA_ycbcr_texture;
    GLboolean NV_blend_square;
    GLboolean NV_fragment_program;
+   GLboolean NV_light_max_exponent;
    GLboolean NV_point_sprite;
+   GLboolean NV_texgen_reflection;
    GLboolean NV_texture_rectangle;
    GLboolean NV_vertex_program;
    GLboolean NV_vertex_program1_1;
@@ -1860,12 +1900,12 @@ struct gl_extensions
    GLboolean SGIS_generate_mipmap;
    GLboolean SGIS_pixel_texture;
    GLboolean SGIS_texture_edge_clamp;
+   GLboolean SGIS_texture_lod;
    GLboolean SGIX_depth_texture;
    GLboolean SGIX_pixel_texture;
    GLboolean SGIX_shadow;
    GLboolean SGIX_shadow_ambient; /* or GL_ARB_shadow_ambient */
    GLboolean TDFX_texture_compression_FXT1;
-   GLboolean APPLE_client_storage;
    GLboolean S3_s3tc;
    /*@}*/
    /* The extension string */
@@ -1903,6 +1943,8 @@ struct matrix_stack
 #define IMAGE_POST_COLOR_MATRIX_COLOR_TABLE_BIT   0x100
 #define IMAGE_HISTOGRAM_BIT                       0x200
 #define IMAGE_MIN_MAX_BIT                         0x400
+#define IMAGE_CLAMP_BIT                           0x800 /* extra */
+
 
 /** Transfer ops up to convolution */
 #define IMAGE_PRE_CONVOLUTION_BITS (IMAGE_SCALE_BIAS_BIT |     \
@@ -2066,7 +2108,7 @@ struct gl_tnl_module {
    /**
     * Vertex format to be lazily swapped into current dispatch.
     */
-   GLvertexformat *Current;
+   const GLvertexformat *Current;
 
    /**
     * \name Record of functions swapped out.  
@@ -2275,6 +2317,12 @@ struct __GLcontextRec {
    GLuint DepthMax;	/**< Max depth buffer value */
    GLfloat DepthMaxF;	/**< Float max depth buffer value */
    GLfloat MRD;		/**< minimum resolvable difference in Z values */
+   /*@}*/
+
+   /** \name Color clamping (tentative part of GL_ARB_color_clamp_control) */
+   /*@{*/
+   GLboolean ClampFragmentColors;
+   GLboolean ClampVertexColors;
    /*@}*/
 
    /** Should 3Dfx Glide driver catch signals? */

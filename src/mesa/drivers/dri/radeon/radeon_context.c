@@ -380,10 +380,12 @@ radeonCreateContext( const __GLcontextModes *glVisual,
    _tnl_isolate_materials( ctx, GL_TRUE );
 
 
-   /* Configure swrast to match hardware characteristics:
+   /* Configure swrast and T&L to match hardware characteristics:
     */
    _swrast_allow_pixel_fog( ctx, GL_FALSE );
    _swrast_allow_vertex_fog( ctx, GL_TRUE );
+   _tnl_allow_pixel_fog( ctx, GL_FALSE );
+   _tnl_allow_vertex_fog( ctx, GL_TRUE );
 
 
    _math_matrix_ctr( &rmesa->TexGenMatrix[0] );
@@ -438,12 +440,14 @@ radeonCreateContext( const __GLcontextModes *glVisual,
    tcl_mode = driQueryOptioni(&rmesa->optionCache, "tcl_mode");
    if (driQueryOptionb(&rmesa->optionCache, "no_rast")) {
       fprintf(stderr, "disabling 3D acceleration\n");
-      FALLBACK(rmesa, RADEON_FALLBACK_DISABLE, 1); 
+      FALLBACK(rmesa, RADEON_FALLBACK_DISABLE, 1);
    } else if (tcl_mode == DRI_CONF_TCL_SW ||
 	      !(rmesa->radeonScreen->chipset & RADEON_CHIPSET_TCL)) {
-      rmesa->radeonScreen->chipset &= ~RADEON_CHIPSET_TCL;
-      fprintf(stderr, "disabling TCL support\n");
-      TCL_FALLBACK(rmesa->glCtx, RADEON_TCL_FALLBACK_TCL_DISABLE, 1); 
+      if (rmesa->radeonScreen->chipset & RADEON_CHIPSET_TCL) {
+	 rmesa->radeonScreen->chipset &= ~RADEON_CHIPSET_TCL;
+	 fprintf(stderr, "Disabling HW TCL support\n");
+      }
+      TCL_FALLBACK(rmesa->glCtx, RADEON_TCL_FALLBACK_TCL_DISABLE, 1);
    }
 
    if (rmesa->radeonScreen->chipset & RADEON_CHIPSET_TCL) {

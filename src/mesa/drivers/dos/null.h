@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.0
+ * Version:  4.0
  * 
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -23,25 +23,19 @@
  */
 
 /*
- * DOS/DJGPP device driver v1.3 for Mesa  --  MGA2064W mode switching
+ * DOS/DJGPP device driver v1.6 for Mesa
  *
- *  Copyright (c) 2003 - Borca Daniel
+ *  Copyright (C) 2002 - Borca Daniel
  *  Email : dborca@yahoo.com
  *  Web   : http://www.geocities.com/dborca
  */
 
 
-#ifndef MGA_MODE_included
-#define MGA_MODE_included
+#ifndef NULL_H_included
+#define NULL_H_included
 
-typedef struct MGA_MODE {
-        int mode;
-        int xres, yres;
-        int bpp;
-} MGA_MODE;
+#include "internal.h"
 
-int mga_mode_switch (MGA_MODE *p, int refresh);
-int mga_mode_restore (void);
-MGA_MODE *mga_mode_find (int width, int height, int bpp);
+extern vl_driver NUL;
 
 #endif

@@ -33,6 +33,7 @@
 
 #include "glheader.h"
 #include "context.h"
+#include "imports.h"
 #ifndef FX
 #include "bufferobj.h"
 #include "extensions.h"
@@ -42,7 +43,6 @@
 #include "texformat.h"
 #include "teximage.h"
 #include "texstore.h"
-#include "imports.h"
 #include "array_cache/acache.h"
 #include "swrast/s_context.h"
 #include "swrast/s_depth.h"
@@ -69,11 +69,8 @@
  */
 struct dmesa_visual {
    GLvisual gl_visual;
-   GLboolean db_flag;           /* double buffered? */
-   GLboolean rgb_flag;          /* RGB mode? */
    GLboolean sw_alpha;          /* use Mesa's alpha buffer? */
-   GLuint depth;                /* bits per pixel (1, 8, 24, etc) */
-   int zbuffer;                 /* Z=buffer: 0=no, 1=SW, -1=HW */
+   int z_buffer;                /* Z=buffer: 0=no, 1=SW, -1=HW */
 };
 
 /*
@@ -95,7 +92,7 @@ struct dmesa_buffer {
 struct dmesa_context {
    GLcontext gl_ctx;            /* the core library context */
    DMesaVisual visual;
-   DMesaBuffer Buffer;
+   DMesaBuffer buffer;
    GLuint ClearColor;
    GLuint ClearIndex;
    /* etc... */
@@ -107,10 +104,10 @@ struct dmesa_context {
 /****************************************************************************
  * Read/Write pixels
  ***************************************************************************/
-#define FLIP(y)  (dmesa->Buffer->height - (y) - 1)
+#define FLIP(y)  (dmesa->buffer->height - (y) - 1)
 #define FLIP2(y) (_b_ - (y))
 
-#define DSTRIDE dmesa->Buffer->width
+#define DSTRIDE dmesa->buffer->width
 
 /****************************************************************************
  * RGB[A]
@@ -208,7 +205,7 @@ static void write_rgba_pixels (const GLcontext *ctx,
                                const GLubyte rgba[][4], const GLubyte mask[])
 {
  const DMesaContext dmesa = (DMesaContext)ctx;
- GLuint i, _w_ = DSTRIDE, _b_ = dmesa->Buffer->height - 1;
+ GLuint i, _w_ = DSTRIDE, _b_ = dmesa->buffer->height - 1;
 
  if (mask) {
     /* draw some pixels */
@@ -232,7 +229,7 @@ static void write_mono_rgba_pixels (const GLcontext *ctx,
                                     const GLchan color[4], const GLubyte mask[])
 {
  const DMesaContext dmesa = (DMesaContext)ctx;
- GLuint i, _w_ = DSTRIDE, _b_ = dmesa->Buffer->height - 1, rgba = vl_mixrgba(color);
+ GLuint i, _w_ = DSTRIDE, _b_ = dmesa->buffer->height - 1, rgba = vl_mixrgba(color);
 
  if (mask) {
     /* draw some pixels */
@@ -256,7 +253,7 @@ static void read_rgba_pixels (const GLcontext *ctx,
                               GLubyte rgba[][4], const GLubyte mask[])
 {
  const DMesaContext dmesa = (DMesaContext)ctx;
- GLuint i, _w_ = DSTRIDE, _b_ = dmesa->Buffer->height - 1;
+ GLuint i, _w_ = DSTRIDE, _b_ = dmesa->buffer->height - 1;
 
  if (mask) {
     /* read some pixels */
@@ -371,7 +368,7 @@ static void write_index_pixels (const GLcontext *ctx,
                                 const GLuint index[], const GLubyte mask[])
 {
  const DMesaContext dmesa = (DMesaContext)ctx;
- GLuint i, _w_ = DSTRIDE, _b_ = dmesa->Buffer->height - 1;
+ GLuint i, _w_ = DSTRIDE, _b_ = dmesa->buffer->height - 1;
 
  if (mask) {
     /* draw some pixels */
@@ -395,7 +392,7 @@ static void write_mono_index_pixels (const GLcontext *ctx,
                                      GLuint colorIndex, const GLubyte mask[])
 {
  const DMesaContext dmesa = (DMesaContext)ctx;
- GLuint i, _w_ = DSTRIDE, _b_ = dmesa->Buffer->height - 1;
+ GLuint i, _w_ = DSTRIDE, _b_ = dmesa->buffer->height - 1;
 
  if (mask) {
     /* draw some pixels */
@@ -419,7 +416,7 @@ static void read_index_pixels (const GLcontext *ctx,
                                GLuint index[], const GLubyte mask[])
 {
  const DMesaContext dmesa = (DMesaContext)ctx;
- GLuint i, _w_ = DSTRIDE, _b_ = dmesa->Buffer->height - 1;
+ GLuint i, _w_ = DSTRIDE, _b_ = dmesa->buffer->height - 1;
 
  if (mask) {
     /* read some pixels */
@@ -455,8 +452,8 @@ static void read_index_pixels (const GLcontext *ctx,
 
 #define SETUP_CODE \
  const DMesaContext dmesa = (DMesaContext)ctx; \
- GLuint _b_ = dmesa->Buffer->height - 1; \
- GLuint _w_ = dmesa->Buffer->width; \
+ GLuint _b_ = dmesa->buffer->height - 1; \
+ GLuint _w_ = dmesa->buffer->width; \
  GLuint rgb = vl_mixrgb(v2->color);
 
 #define RENDER_SPAN(span) \
@@ -479,8 +476,8 @@ static void read_index_pixels (const GLcontext *ctx,
 
 #define SETUP_CODE \
  const DMesaContext dmesa = (DMesaContext)ctx; \
- GLuint _b_ = dmesa->Buffer->height - 1; \
- GLuint _w_ = dmesa->Buffer->width; \
+ GLuint _b_ = dmesa->buffer->height - 1; \
+ GLuint _w_ = dmesa->buffer->width; \
  GLuint rgb = vl_mixrgb(v2->color);
 
 #define RENDER_SPAN(span) \
@@ -507,8 +504,8 @@ static void read_index_pixels (const GLcontext *ctx,
 
 #define SETUP_CODE \
  const DMesaContext dmesa = (DMesaContext)ctx; \
- GLuint _b_ = dmesa->Buffer->height - 1; \
- GLuint _w_ = dmesa->Buffer->width;
+ GLuint _b_ = dmesa->buffer->height - 1; \
+ GLuint _w_ = dmesa->buffer->width;
 
 #define RENDER_SPAN(span) \
  GLuint i, offset = FLIP2(span.y)*_w_ + span.x;				\
@@ -534,8 +531,8 @@ static void read_index_pixels (const GLcontext *ctx,
 
 #define SETUP_CODE \
  const DMesaContext dmesa = (DMesaContext)ctx; \
- GLuint _b_ = dmesa->Buffer->height - 1; \
- GLuint _w_ = dmesa->Buffer->width;
+ GLuint _b_ = dmesa->buffer->height - 1; \
+ GLuint _w_ = dmesa->buffer->width;
 
 #define RENDER_SPAN(span) \
  GLuint i, offset = FLIP2(span.y)*_w_ + span.x;				\
@@ -616,8 +613,8 @@ static void dmesa_choose_tri (GLcontext *ctx)
 
 #define SETUP_CODE \
  const DMesaContext dmesa = (DMesaContext)ctx; \
- GLuint _b_ = dmesa->Buffer->height - 1; \
- GLuint _w_ = dmesa->Buffer->width; \
+ GLuint _b_ = dmesa->buffer->height - 1; \
+ GLuint _w_ = dmesa->buffer->width; \
  GLuint rgb = vl_mixrgb(vert1->color);
 
 #define PLOT(X,Y) vl_putpixel(FLIP2(Y) * _w_ + X, rgb);
@@ -638,8 +635,8 @@ static void dmesa_choose_tri (GLcontext *ctx)
 
 #define SETUP_CODE \
  const DMesaContext dmesa = (DMesaContext)ctx; \
- GLuint _b_ = dmesa->Buffer->height - 1; \
- GLuint _w_ = dmesa->Buffer->width; \
+ GLuint _b_ = dmesa->buffer->height - 1; \
+ GLuint _w_ = dmesa->buffer->width; \
  GLuint rgb = vl_mixrgb(vert1->color);
 
 #define PLOT(X,Y) \
@@ -751,7 +748,7 @@ static void clear (GLcontext *ctx, GLbitfield mask, GLboolean all,
  /* we can't handle color or index masking */
  if ((*colorMask == 0xffffffff) && (ctx->Color.IndexMask == 0xffffffff)) {
     if (mask & DD_BACK_LEFT_BIT) {
-       int color = c->visual->rgb_flag ? c->ClearColor : c->ClearIndex;
+       int color = ((GLvisual *)(c->visual))->rgbMode ? c->ClearColor : c->ClearIndex;
 
        if (all) {
           vl_clear(color);
@@ -810,7 +807,7 @@ static const GLubyte* get_string (GLcontext *ctx, GLenum name)
  switch (name) {
         case GL_RENDERER:
              return (const GLubyte *)"Mesa DJGPP"
-                                     "\0port (c) Borca Daniel dec-2003";
+                                     "\0port (c) Borca Daniel feb-2004";
         default:
              return NULL;
  }
@@ -953,14 +950,9 @@ DMesaVisual DMesaCreateVisual (GLint width,
                                GLint stencilSize,
                                GLint accumSize)
 {
-#ifndef FX
  DMesaVisual v;
  GLint redBits, greenBits, blueBits, alphaBits, indexBits;
  GLboolean sw_alpha;
-
- if (!dbFlag) {
-    return NULL;
- }
 
  alphaBits = 0;
 
@@ -1017,9 +1009,35 @@ DMesaVisual DMesaCreateVisual (GLint width,
  alphaBits = alphaSize;
  sw_alpha = (alphaBits > 0);
 
+#ifndef FX
+ if (!dbFlag) {
+    return NULL;
+ }
  if ((colDepth=vl_video_init(width, height, colDepth, rgbFlag, refresh)) <= 0) {
     return NULL;
  }
+#else  /* FX */
+ if (!rgbFlag) {
+    return NULL;
+ } else {
+    char *env;
+
+    if ((env = getenv("MESA_FX_INFO")) && (env[0] == 'r')) {
+       freopen("MESA.LOG", "w", stderr);
+    }
+
+    if (refresh && (((env = getenv("FX_GLIDE_REFRESH")) == NULL) || !atoi(env))) {
+       /* if we are passed non-zero value for refresh, we need to override
+        * default refresh rate. However, if FX_GLIDE_REFRESH is already set
+        * to 0, we won't override it, because it has a special meaning for
+        * DJGPP Glide3x (switch via VESA, using BIOS default refresh).
+        */
+       char tmp[32];
+       sprintf(tmp, "FX_GLIDE_REFRESH=%u", refresh);
+       putenv(tmp);
+    }
+ }
+#endif /* FX */
 
  if ((v=(DMesaVisual)CALLOC_STRUCT(dmesa_visual)) != NULL) {
     /* Create core visual */
@@ -1040,51 +1058,13 @@ DMesaVisual DMesaCreateVisual (GLint width,
                             alphaBits?accumSize:0,	/* accumAlpha */
                             1);			/* numSamples */
 
-    v->depth = colDepth;
-    v->db_flag = dbFlag;
-    v->rgb_flag = rgbFlag;
+#ifndef FX
     v->sw_alpha = sw_alpha;
-
-    v->zbuffer = (depthSize > 0) ? 1 : 0;
+    v->z_buffer = (depthSize > 0) ? 1 : 0;
+#endif
  }
 
  return v;
-
-#else  /* FX */
-
- char *env;
- int i = 0, fx_attrib[32];
-
- if (!rgbFlag) {
-    return NULL;
- }
-
- if (dbFlag) fx_attrib[i++] = FXMESA_DOUBLEBUFFER;
- if (depthSize > 0) { fx_attrib[i++] = FXMESA_DEPTH_SIZE; fx_attrib[i++] = depthSize; }
- if (stencilSize > 0) { fx_attrib[i++] = FXMESA_STENCIL_SIZE; fx_attrib[i++] = stencilSize; }
- if (accumSize > 0) { fx_attrib[i++] = FXMESA_ACCUM_SIZE; fx_attrib[i++] = accumSize; }
- if (alphaSize) { fx_attrib[i++] = FXMESA_ALPHA_SIZE; fx_attrib[i++] = alphaSize; }
- fx_attrib[i++] = FXMESA_COLORDEPTH;
- fx_attrib[i++] = colDepth;
- fx_attrib[i] = FXMESA_NONE;
-
- if ((env = getenv("MESA_FX_INFO")) && (env[0] == 'r')) {
-    freopen("MESA.LOG", "w", stderr);
- }
-
- if (refresh && (((env = getenv("FX_GLIDE_REFRESH")) == NULL) || !atoi(env))) {
-    /* if we are passed non-zero value for refresh, we need to override
-     * default refresh rate. However, if FX_GLIDE_REFRESH is already set
-     * to 0, we won't override it, because it has a special meaning for
-     * DJGPP Glide3x (switch via VESA, using BIOS default refresh).
-     */
-    char tmp[256];
-    sprintf(tmp, "FX_GLIDE_REFRESH=%u", refresh);
-    putenv(tmp);
- }
-
- return (DMesaVisual)fxMesaCreateBestContext(-1, width, height, fx_attrib);
-#endif /* FX */
 }
 
 
@@ -1092,13 +1072,9 @@ DMesaVisual DMesaCreateVisual (GLint width,
 void DMesaDestroyVisual (DMesaVisual v)
 {
 #ifndef FX
- _mesa_destroy_visual((GLvisual *)v);
-
  vl_video_exit();
-
-#else
- fxMesaDestroyContext((fxMesaContext)v);
 #endif
+ _mesa_destroy_visual((GLvisual *)v);
 }
 
 
@@ -1113,7 +1089,7 @@ DMesaBuffer DMesaCreateBuffer (DMesaVisual visual,
  if ((b=(DMesaBuffer)CALLOC_STRUCT(dmesa_buffer)) != NULL) {
     _mesa_initialize_framebuffer((GLframebuffer *)b,
                                  (GLvisual *)visual,
-                                 visual->zbuffer == 1,
+                                 visual->z_buffer == 1,
                                  ((GLvisual *)visual)->stencilBits > 0,
                                  ((GLvisual *)visual)->accumRedBits > 0,
                                  visual->sw_alpha);
@@ -1124,9 +1100,22 @@ DMesaBuffer DMesaCreateBuffer (DMesaVisual visual,
  }
 
  return b;
-#else
- return (DMesaBuffer)visual;
-#endif
+#else  /* FX */
+
+ GLvisual *v = (GLvisual *)visual;
+ int i = 0, fx_attrib[32];
+
+ if (v->doubleBufferMode) fx_attrib[i++] = FXMESA_DOUBLEBUFFER;
+ if (v->depthBits > 0) { fx_attrib[i++] = FXMESA_DEPTH_SIZE; fx_attrib[i++] = v->depthBits; }
+ if (v->stencilBits > 0) { fx_attrib[i++] = FXMESA_STENCIL_SIZE; fx_attrib[i++] = v->stencilBits; }
+ if (v->accumRedBits > 0) { fx_attrib[i++] = FXMESA_ACCUM_SIZE; fx_attrib[i++] = v->accumRedBits; }
+ if (v->alphaBits) { fx_attrib[i++] = FXMESA_ALPHA_SIZE; fx_attrib[i++] = v->alphaBits; }
+ fx_attrib[i++] = FXMESA_COLORDEPTH;
+ fx_attrib[i++] = v->redBits + v->greenBits + v->blueBits;
+ fx_attrib[i] = FXMESA_NONE;
+
+ return (DMesaBuffer)fxMesaCreateBestContext(-1, width, height, fx_attrib);
+#endif /* FX */
 }
 
 
@@ -1134,8 +1123,12 @@ DMesaBuffer DMesaCreateBuffer (DMesaVisual visual,
 void DMesaDestroyBuffer (DMesaBuffer b)
 {
 #ifndef FX
- free(b->the_window);
+ if (b->the_window != NULL) {
+    free(b->the_window);
+ }
  _mesa_destroy_framebuffer((GLframebuffer *)b);
+#else
+ fxMesaDestroyContext((fxMesaContext)b);
 #endif
 }
 
@@ -1144,8 +1137,8 @@ void DMesaDestroyBuffer (DMesaBuffer b)
 DMesaContext DMesaCreateContext (DMesaVisual visual,
                                  DMesaContext share)
 {
-#ifndef FX
  GLcontext *c;
+#ifndef FX
  TNLcontext *tnl;
  struct dd_function_table functions;
 
@@ -1179,16 +1172,16 @@ DMesaContext DMesaCreateContext (DMesaVisual visual,
     tnl = TNL_CONTEXT(c);
     tnl->Driver.RunPipeline = _tnl_run_pipeline;
     /* swrast setup */
-    if (visual->rgb_flag) dmesa_register_swrast_functions(c);
+    if (((GLvisual *)visual)->rgbMode) dmesa_register_swrast_functions(c);
     dmesa_init_pointers(c);
     _swsetup_Wakeup(c);
  }
 
- return (DMesaContext)c;
-
 #else  /* FX */
- return (DMesaContext)visual;
+ c = (GLcontext *)0xdeadbeef;
 #endif /* FX */
+
+ return (DMesaContext)c;
 }
 
 
@@ -1212,19 +1205,16 @@ GLboolean DMesaMoveBuffer (GLint xpos, GLint ypos)
 {
 #ifndef FX
  GET_CURRENT_CONTEXT(ctx);
- DMesaBuffer b = ((DMesaContext)ctx)->Buffer;
+ DMesaBuffer b = ((DMesaContext)ctx)->buffer;
 
- if (vl_sync_buffer(&b->the_window, xpos, ypos, b->width, b->height) != 0) {
-    return GL_FALSE;
- } else {
+ if (vl_sync_buffer(&b->the_window, xpos, ypos, b->width, b->height) == 0) {
     b->xpos = xpos;
     b->ypos = ypos;
     return GL_TRUE;
  }
-
-#else
- return GL_FALSE;
 #endif
+
+ return GL_FALSE;
 }
 
 
@@ -1233,19 +1223,16 @@ GLboolean DMesaResizeBuffer (GLint width, GLint height)
 {
 #ifndef FX
  GET_CURRENT_CONTEXT(ctx);
- DMesaBuffer b = ((DMesaContext)ctx)->Buffer;
+ DMesaBuffer b = ((DMesaContext)ctx)->buffer;
 
- if (vl_sync_buffer(&b->the_window, b->xpos, b->ypos, width, height) != 0) {
-    return GL_FALSE;
- } else {
+ if (vl_sync_buffer(&b->the_window, b->xpos, b->ypos, width, height) == 0) {
     b->width = width;
     b->height = height;
     return GL_TRUE;
  }
-
-#else
- return GL_FALSE;
 #endif
+
+ return GL_FALSE;
 }
 
 
@@ -1261,7 +1248,7 @@ GLboolean DMesaMakeCurrent (DMesaContext c, DMesaBuffer b)
        return GL_FALSE;
     }
 
-    c->Buffer = b;
+    c->buffer = b;
 
     _mesa_make_current((GLcontext *)c, (GLframebuffer *)b);
     if (((GLcontext *)c)->Viewport.Width == 0) {
@@ -1274,7 +1261,7 @@ GLboolean DMesaMakeCurrent (DMesaContext c, DMesaBuffer b)
  }
 
 #else
- fxMesaMakeCurrent((fxMesaContext)c);
+ fxMesaMakeCurrent((fxMesaContext)b);
 #endif
 
  return GL_TRUE;
@@ -1305,13 +1292,34 @@ void DMesaSetCI (int ndx, GLfloat red, GLfloat green, GLfloat blue)
 
 
 
-void *DMesaGetCurrentContext (void)
+DMesaContext DMesaGetCurrentContext (void)
 {
-#ifndef FX
  GET_CURRENT_CONTEXT(ctx);
- return ctx;
+
+#ifndef FX
 #else
- return fxMesaGetCurrentContext();
+ if (ctx != NULL) {
+    ctx = (GLcontext *)0xdeadbeef;
+ }
+#endif
+
+ return (DMesaContext)ctx;
+}
+
+
+
+DMesaBuffer DMesaGetCurrentBuffer (void)
+{
+ const DMesaContext dmesa = DMesaGetCurrentContext();
+
+ if (dmesa == NULL) {
+    return NULL;
+ }
+
+#ifndef FX
+ return dmesa->buffer;
+#else
+ return (DMesaBuffer)fxMesaGetCurrentContext();
 #endif
 }
 
@@ -1391,6 +1399,21 @@ int DMesaGetIntegerv (GLenum pname, GLint *params)
               return n;
              }
              #endif
+        case DMESA_GET_BUFFER_ADDR:
+             #ifndef FX
+             {
+              DMesaContext c = (DMesaContext)DMesaGetCurrentContext();
+              if (c != NULL) {
+                 DMesaBuffer b = c->buffer;
+                 if (b != NULL) {
+                    params[0] = (GLint)b->the_window;
+                 }
+              }
+             }
+             #else
+             return -1;
+             #endif
+             break;
         default:
              return -1;
  }

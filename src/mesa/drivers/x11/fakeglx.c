@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.0.1
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -296,7 +296,7 @@ save_glx_visual( Display *dpy, XVisualInfo *vinfo,
    for (i=0; i<NumVisuals; i++) {
       XMesaVisual v = VisualTable[i];
       if (v->display == dpy
-          && v->level == level
+          && v->mesa_visual.level == level
           && v->ximage_flag == ximageFlag
           && v->mesa_visual.rgbMode == rgbFlag
           && v->mesa_visual.doubleBufferMode == dbFlag
@@ -911,13 +911,14 @@ static XVisualInfo *choose_x_overlay_visual( Display *dpy, int scr,
 /**********************************************************************/
 
 
-static XMesaVisual choose_visual( Display *dpy, int screen, const int *list )
+static XMesaVisual choose_visual( Display *dpy, int screen, const int *list,
+                                  GLboolean rgbModeDefault )
 {
    const int *parselist;
    XVisualInfo *vis;
    int min_ci = 0;
    int min_red=0, min_green=0, min_blue=0;
-   GLboolean rgb_flag = GL_FALSE;
+   GLboolean rgb_flag = rgbModeDefault;
    GLboolean alpha_flag = GL_FALSE;
    GLboolean double_flag = GL_FALSE;
    GLboolean stereo_flag = GL_FALSE;
@@ -933,6 +934,7 @@ static XMesaVisual choose_visual( Display *dpy, int screen, const int *list )
    int trans_value = DONT_CARE;
    GLint caveat = DONT_CARE;
    XMesaVisual xmvis = NULL;
+   int desiredVisualID = -1;
 
    parselist = list;
 
@@ -1088,8 +1090,13 @@ static XMesaVisual choose_visual( Display *dpy, int screen, const int *list )
             }
             parselist++;
             break;
+         case GLX_FBCONFIG_ID:
+            parselist++;
+            desiredVisualID = *parselist;
+            break;
 
 	 case None:
+            /* end of list */
 	    break;
 
 	 default:
@@ -1109,7 +1116,24 @@ static XMesaVisual choose_visual( Display *dpy, int screen, const int *list )
     * double buffering, depth buffer, etc. will be associated with the X
     * visual and stored in the VisualTable[].
     */
-   if (level==0) {
+   if (desiredVisualID != -1) {
+      /* try to get a specific visual, by visualID */
+      XVisualInfo temp;
+      int n;
+      temp.visualid = desiredVisualID;
+      temp.screen = screen;
+      vis = XGetVisualInfo(dpy, VisualIDMask | VisualScreenMask, &temp, &n);
+      if (vis) {
+         /* give the visual some useful GLX attributes */
+         double_flag = GL_TRUE;
+         if (vis->depth > 8)
+            rgb_flag = GL_TRUE;
+         depth_size = DEFAULT_SOFTWARE_DEPTH_BITS;
+         stencil_size = STENCIL_BITS;
+         /* XXX accum??? */
+      }
+   }
+   else if (level==0) {
       /* normal color planes */
       if (rgb_flag) {
          /* Get an RGB visual */
@@ -1182,7 +1206,7 @@ static XMesaVisual choose_visual( Display *dpy, int screen, const int *list )
 static XVisualInfo *
 Fake_glXChooseVisual( Display *dpy, int screen, int *list )
 {
-   XMesaVisual xmvis = choose_visual(dpy, screen, list);
+   XMesaVisual xmvis = choose_visual(dpy, screen, list, GL_FALSE);
    if (xmvis) {
 #if 0
       return xmvis->vishandle;
@@ -1535,7 +1559,7 @@ get_config( XMesaVisual xmvis, int attrib, int *value, GLboolean fbconfig )
 	 *value = xmvis->visinfo->depth;
 	 return 0;
       case GLX_LEVEL:
-	 *value = xmvis->level;
+	 *value = xmvis->mesa_visual.level;
 	 return 0;
       case GLX_RGBA:
 	 if (xmvis->mesa_visual.rgbMode) {
@@ -1599,11 +1623,11 @@ get_config( XMesaVisual xmvis, int attrib, int *value, GLboolean fbconfig )
          }
          return 0;
       case GLX_TRANSPARENT_TYPE_EXT:
-         if (xmvis->level==0) {
+         if (xmvis->mesa_visual.level==0) {
             /* normal planes */
             *value = GLX_NONE_EXT;
          }
-         else if (xmvis->level>0) {
+         else if (xmvis->mesa_visual.level>0) {
             /* overlay */
             if (xmvis->mesa_visual.rgbMode) {
                *value = GLX_TRANSPARENT_RGB_EXT;
@@ -1612,7 +1636,7 @@ get_config( XMesaVisual xmvis, int attrib, int *value, GLboolean fbconfig )
                *value = GLX_TRANSPARENT_INDEX_EXT;
             }
          }
-         else if (xmvis->level<0) {
+         else if (xmvis->mesa_visual.level<0) {
             /* underlay */
             *value = GLX_NONE_EXT;
          }
@@ -1644,8 +1668,8 @@ get_config( XMesaVisual xmvis, int attrib, int *value, GLboolean fbconfig )
        */
       case GLX_VISUAL_CAVEAT_EXT:
          /* test for zero, just in case */
-         if (xmvis->VisualCaveat > 0)
-            *value = xmvis->VisualCaveat;
+         if (xmvis->mesa_visual.visualRating > 0)
+            *value = xmvis->mesa_visual.visualRating;
          else
             *value = GLX_NONE_EXT;
          return 0;
@@ -1850,7 +1874,7 @@ static GLXFBConfig *
 Fake_glXChooseFBConfig( Display *dpy, int screen,
                         const int *attribList, int *nitems )
 {
-   XMesaVisual xmvis = choose_visual(dpy, screen, attribList);
+   XMesaVisual xmvis = choose_visual(dpy, screen, attribList, GL_TRUE);
    if (xmvis) {
       GLXFBConfig *config = (GLXFBConfig *) _mesa_malloc(sizeof(XMesaVisual));
       if (!config) {
@@ -1935,9 +1959,16 @@ static GLXWindow
 Fake_glXCreateWindow( Display *dpy, GLXFBConfig config, Window win,
                       const int *attribList )
 {
+   XMesaVisual xmvis = (XMesaVisual) config;
+   XMesaBuffer xmbuf;
+   if (!xmvis)
+      return 0;
+
+   xmbuf = XMesaCreateWindowBuffer2(xmvis, win, NULL);
+   if (!xmbuf)
+      return 0;
+
    (void) dpy;
-   (void) config;
-   (void) win;
    (void) attribList;  /* Ignored in GLX 1.3 */
 
    return win;  /* A hack for now */
