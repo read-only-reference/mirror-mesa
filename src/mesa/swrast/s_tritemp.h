@@ -1,4 +1,4 @@
-/* $Id: s_tritemp.h,v 1.43 2003/01/20 00:24:22 brianp Exp $ */
+/* $Id: s_tritemp.h,v 1.48 2003/03/25 02:23:48 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -43,8 +43,6 @@
  *    INTERP_TEX      - if defined, interpolate set 0 float STRQ texcoords
  *                         NOTE:  OpenGL STRQ = Mesa STUV (R was taken for red)
  *    INTERP_MULTITEX - if defined, interpolate N units of STRQ texcoords
- *    INTERP_FLOAT_RGBA - if defined, interpolate RGBA with floating point
- *    INTERP_FLOAT_SPEC - if defined, interpolate specular with floating point
  *
  * When one can directly address pixels in the color buffer the following
  * macros can be defined and used to compute pixel addresses during
@@ -72,24 +70,35 @@
 
 
 /*
- * This is a bit of a hack, but it's a centralized place to enable floating-
- * point color interpolation when GLchan is actually floating point.
+ * ColorTemp is used for intermediate color values.
  */
 #if CHAN_TYPE == GL_FLOAT
-
-#if defined(INTERP_RGB)
-#undef INTERP_RGB
-#undef INTERP_ALPHA
-#define INTERP_FLOAT_RGBA
+#define ColorTemp GLfloat
+#else
+#define ColorTemp GLint  /* same as GLfixed */
 #endif
 
-#if defined(INTERP_SPEC)
-#undef INTERP_SPEC
-#define INTERP_FLOAT_SPEC
+/*
+ * Either loop over all texture units, or just use unit zero.
+ */
+#ifdef INTERP_MULTITEX
+#define TEX_UNIT_LOOP(CODE)					\
+   {								\
+      GLuint u;							\
+      for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {	\
+         if (ctx->Texture.Unit[u]._ReallyEnabled) {		\
+            CODE						\
+         }							\
+      }								\
+   }
+#define INTERP_TEX
+#elif defined(INTERP_TEX)
+#define TEX_UNIT_LOOP(CODE)					\
+   {								\
+      const GLuint u = 0;					\
+      CODE							\
+   }
 #endif
-
-#endif /* CHAN_TYPE == GL_FLOAT */
-
 
 
 static void NAME(GLcontext *ctx, const SWvertex *v0,
@@ -292,43 +301,8 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
 
    {
       GLint scan_from_left_to_right;  /* true if scanning left-to-right */
-#ifdef INTERP_Z
-      GLfloat dzdx, dzdy;
-#endif
-#ifdef INTERP_FOG
-      GLfloat dfogdy;
-#endif
-#if defined(INTERP_RGB) || defined(INTERP_FLOAT_RGBA)
-      GLfloat drdx, drdy;
-      GLfloat dgdx, dgdy;
-      GLfloat dbdx, dbdy;
-#endif
-#if defined(INTERP_ALPHA) || defined(INTERP_FLOAT_RGBA)
-      GLfloat dadx, dady;
-#endif
-#if defined(INTERP_SPEC) || defined(INTERP_FLOAT_SPEC)
-      GLfloat dsrdx, dsrdy;
-      GLfloat dsgdx, dsgdy;
-      GLfloat dsbdx, dsbdy;
-#endif
 #ifdef INTERP_INDEX
       GLfloat didx, didy;
-#endif
-#ifdef INTERP_INT_TEX
-      GLfloat dsdx, dsdy;
-      GLfloat dtdx, dtdy;
-#endif
-#ifdef INTERP_TEX
-      GLfloat dsdx, dsdy;
-      GLfloat dtdx, dtdy;
-      GLfloat dudx, dudy;
-      GLfloat dvdx, dvdy;
-#endif
-#ifdef INTERP_MULTITEX
-      GLfloat dsdx[MAX_TEXTURE_COORD_UNITS], dsdy[MAX_TEXTURE_COORD_UNITS];
-      GLfloat dtdx[MAX_TEXTURE_COORD_UNITS], dtdy[MAX_TEXTURE_COORD_UNITS];
-      GLfloat dudx[MAX_TEXTURE_COORD_UNITS], dudy[MAX_TEXTURE_COORD_UNITS];
-      GLfloat dvdx[MAX_TEXTURE_COORD_UNITS], dvdy[MAX_TEXTURE_COORD_UNITS];
 #endif
 
       /*
@@ -345,22 +319,29 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
 #ifdef INTERP_Z
       span.interpMask |= SPAN_Z;
       {
-         GLfloat eMaj_dz, eBot_dz;
-         eMaj_dz = vMax->win[2] - vMin->win[2];
-         eBot_dz = vMid->win[2] - vMin->win[2];
-         dzdx = oneOverArea * (eMaj_dz * eBot.dy - eMaj.dy * eBot_dz);
-         if (dzdx > maxDepth || dzdx < -maxDepth) {
+         GLfloat eMaj_dz = vMax->win[2] - vMin->win[2];
+         GLfloat eBot_dz = vMid->win[2] - vMin->win[2];
+         span.dzdx = oneOverArea * (eMaj_dz * eBot.dy - eMaj.dy * eBot_dz);
+         if (span.dzdx > maxDepth || span.dzdx < -maxDepth) {
             /* probably a sliver triangle */
-            dzdx = 0.0;
-            dzdy = 0.0;
+            span.dzdx = 0.0;
+            span.dzdy = 0.0;
          }
          else {
-            dzdy = oneOverArea * (eMaj.dx * eBot_dz - eMaj_dz * eBot.dx);
+            span.dzdy = oneOverArea * (eMaj.dx * eBot_dz - eMaj_dz * eBot.dx);
          }
          if (depthBits <= 16)
-            span.zStep = SignedFloatToFixed(dzdx);
+            span.zStep = SignedFloatToFixed(span.dzdx);
          else
-            span.zStep = (GLint) dzdx;
+            span.zStep = (GLint) span.dzdx;
+      }
+#endif
+#ifdef INTERP_W
+      {
+         const GLfloat eMaj_dw = vMax->win[3] - vMin->win[3];
+         const GLfloat eBot_dw = vMid->win[3] - vMin->win[3];
+         span.dwdx = oneOverArea * (eMaj_dw * eBot.dy - eMaj.dy * eBot_dw);
+         span.dwdy = oneOverArea * (eMaj.dx * eBot_dw - eMaj_dw * eBot.dx);
       }
 #endif
 #ifdef INTERP_FOG
@@ -368,174 +349,99 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
       {
          const GLfloat eMaj_dfog = vMax->fog - vMin->fog;
          const GLfloat eBot_dfog = vMid->fog - vMin->fog;
-         span.fogStep = oneOverArea * (eMaj_dfog * eBot.dy - eMaj.dy * eBot_dfog);
-         dfogdy = oneOverArea * (eMaj.dx * eBot_dfog - eMaj_dfog * eBot.dx);
+         span.dfogdx = oneOverArea * (eMaj_dfog * eBot.dy - eMaj.dy * eBot_dfog);
+         span.dfogdy = oneOverArea * (eMaj.dx * eBot_dfog - eMaj_dfog * eBot.dx);
+         span.fogStep = span.dfogdx;
       }
 #endif
 #ifdef INTERP_RGB
       span.interpMask |= SPAN_RGBA;
       if (ctx->Light.ShadeModel == GL_SMOOTH) {
-         GLfloat eMaj_dr, eBot_dr;
-         GLfloat eMaj_dg, eBot_dg;
-         GLfloat eMaj_db, eBot_db;
+         GLfloat eMaj_dr = (GLfloat) ((ColorTemp) vMax->color[RCOMP] - vMin->color[RCOMP]);
+         GLfloat eBot_dr = (GLfloat) ((ColorTemp) vMid->color[RCOMP] - vMin->color[RCOMP]);
+         GLfloat eMaj_dg = (GLfloat) ((ColorTemp) vMax->color[GCOMP] - vMin->color[GCOMP]);
+         GLfloat eBot_dg = (GLfloat) ((ColorTemp) vMid->color[GCOMP] - vMin->color[GCOMP]);
+         GLfloat eMaj_db = (GLfloat) ((ColorTemp) vMax->color[BCOMP] - vMin->color[BCOMP]);
+         GLfloat eBot_db = (GLfloat) ((ColorTemp) vMid->color[BCOMP] - vMin->color[BCOMP]);
 #  ifdef INTERP_ALPHA
-         GLfloat eMaj_da, eBot_da;
+         GLfloat eMaj_da = (GLfloat) ((ColorTemp) vMax->color[ACOMP] - vMin->color[ACOMP]);
+         GLfloat eBot_da = (GLfloat) ((ColorTemp) vMid->color[ACOMP] - vMin->color[ACOMP]);
 #  endif
-         eMaj_dr = (GLfloat) ((GLint) vMax->color[RCOMP] - 
-			      (GLint) vMin->color[RCOMP]);
-         eBot_dr = (GLfloat) ((GLint) vMid->color[RCOMP] - 
-			      (GLint) vMin->color[RCOMP]);
-         drdx = oneOverArea * (eMaj_dr * eBot.dy - eMaj.dy * eBot_dr);
-         span.redStep = SignedFloatToFixed(drdx);
-         drdy = oneOverArea * (eMaj.dx * eBot_dr - eMaj_dr * eBot.dx);
-         eMaj_dg = (GLfloat) ((GLint) vMax->color[GCOMP] - 
-			      (GLint) vMin->color[GCOMP]);
-         eBot_dg = (GLfloat) ((GLint) vMid->color[GCOMP] - 
-			      (GLint) vMin->color[GCOMP]);
-         dgdx = oneOverArea * (eMaj_dg * eBot.dy - eMaj.dy * eBot_dg);
-         span.greenStep = SignedFloatToFixed(dgdx);
-         dgdy = oneOverArea * (eMaj.dx * eBot_dg - eMaj_dg * eBot.dx);
-         eMaj_db = (GLfloat) ((GLint) vMax->color[BCOMP] - 
-			      (GLint) vMin->color[BCOMP]);
-         eBot_db = (GLfloat) ((GLint) vMid->color[BCOMP] - 
-			      (GLint) vMin->color[BCOMP]);
-         dbdx = oneOverArea * (eMaj_db * eBot.dy - eMaj.dy * eBot_db);
-         span.blueStep = SignedFloatToFixed(dbdx);
-         dbdy = oneOverArea * (eMaj.dx * eBot_db - eMaj_db * eBot.dx);
+         span.drdx = oneOverArea * (eMaj_dr * eBot.dy - eMaj.dy * eBot_dr);
+         span.drdy = oneOverArea * (eMaj.dx * eBot_dr - eMaj_dr * eBot.dx);
+         span.dgdx = oneOverArea * (eMaj_dg * eBot.dy - eMaj.dy * eBot_dg);
+         span.dgdy = oneOverArea * (eMaj.dx * eBot_dg - eMaj_dg * eBot.dx);
+         span.dbdx = oneOverArea * (eMaj_db * eBot.dy - eMaj.dy * eBot_db);
+         span.dbdy = oneOverArea * (eMaj.dx * eBot_db - eMaj_db * eBot.dx);
+#  if CHAN_TYPE == GL_FLOAT
+         span.redStep   = span.drdx;
+         span.greenStep = span.dgdx;
+         span.blueStep  = span.dbdx;
+#  else
+         span.redStep   = SignedFloatToFixed(span.drdx);
+         span.greenStep = SignedFloatToFixed(span.dgdx);
+         span.blueStep  = SignedFloatToFixed(span.dbdx);
+#  endif /* GL_FLOAT */
 #  ifdef INTERP_ALPHA
-         eMaj_da = (GLfloat) ((GLint) vMax->color[ACOMP] - 
-			      (GLint) vMin->color[ACOMP]);
-         eBot_da = (GLfloat) ((GLint) vMid->color[ACOMP] - 
-			      (GLint) vMin->color[ACOMP]);
-         dadx = oneOverArea * (eMaj_da * eBot.dy - eMaj.dy * eBot_da);
-         span.alphaStep = SignedFloatToFixed(dadx);
-         dady = oneOverArea * (eMaj.dx * eBot_da - eMaj_da * eBot.dx);
-#  endif
+         span.dadx = oneOverArea * (eMaj_da * eBot.dy - eMaj.dy * eBot_da);
+         span.dady = oneOverArea * (eMaj.dx * eBot_da - eMaj_da * eBot.dx);
+#    if CHAN_TYPE == GL_FLOAT
+         span.alphaStep = span.dadx;
+#    else
+         span.alphaStep = SignedFloatToFixed(span.dadx);
+#    endif /* GL_FLOAT */
+#  endif /* INTERP_ALPHA */
       }
       else {
          ASSERT (ctx->Light.ShadeModel == GL_FLAT);
          span.interpMask |= SPAN_FLAT;
-         drdx = drdy = 0.0F;
-         dgdx = dgdy = 0.0F;
-         dbdx = dbdy = 0.0F;
-         span.redStep = 0;
-         span.greenStep = 0;
-         span.blueStep = 0;
+         span.drdx = span.drdy = span.redStep   = 0;
+         span.dgdx = span.dgdy = span.greenStep = 0;
+         span.dbdx = span.dbdy = span.blueStep  = 0;
 #  ifdef INTERP_ALPHA
-         dadx = dady = 0.0F;
-         span.alphaStep = 0;
+         span.dadx = span.dady = span.alphaStep = 0;
 #  endif
       }
-#endif
-#ifdef INTERP_FLOAT_RGBA
-      span.interpMask |= SPAN_RGBA;
-      if (ctx->Light.ShadeModel == GL_SMOOTH) {
-         GLfloat eMaj_dr, eBot_dr;
-         GLfloat eMaj_dg, eBot_dg;
-         GLfloat eMaj_db, eBot_db;
-         GLfloat eMaj_da, eBot_da;
-         eMaj_dr = vMax->color[RCOMP] - vMin->color[RCOMP];
-         eBot_dr = vMid->color[RCOMP] - vMin->color[RCOMP];
-         drdx = oneOverArea * (eMaj_dr * eBot.dy - eMaj.dy * eBot_dr);
-         span.redStep = drdx;
-         drdy = oneOverArea * (eMaj.dx * eBot_dr - eMaj_dr * eBot.dx);
-         eMaj_dg = vMax->color[GCOMP] - vMin->color[GCOMP];
-         eBot_dg = vMid->color[GCOMP] - vMin->color[GCOMP];
-         dgdx = oneOverArea * (eMaj_dg * eBot.dy - eMaj.dy * eBot_dg);
-         span.greenStep = dgdx;
-         dgdy = oneOverArea * (eMaj.dx * eBot_dg - eMaj_dg * eBot.dx);
-         eMaj_db = vMax->color[BCOMP] - vMin->color[BCOMP];
-         eBot_db = vMid->color[BCOMP] - vMin->color[BCOMP];
-         dbdx = oneOverArea * (eMaj_db * eBot.dy - eMaj.dy * eBot_db);
-         span.blueStep = dbdx;
-         dbdy = oneOverArea * (eMaj.dx * eBot_db - eMaj_db * eBot.dx);
-         eMaj_da = vMax->color[ACOMP] - vMin->color[ACOMP];
-         eBot_da = vMid->color[ACOMP] - vMin->color[ACOMP];
-         dadx = oneOverArea * (eMaj_da * eBot.dy - eMaj.dy * eBot_da);
-         span.alphaStep = dadx;
-         dady = oneOverArea * (eMaj.dx * eBot_da - eMaj_da * eBot.dx);
-      }
-      else {
-         drdx = drdy = span.redStep = 0.0F;
-         dgdx = dgdy = span.greenStep = 0.0F;
-         dbdx = dbdy = span.blueStep = 0.0F;
-         dadx = dady = span.alphaStep = 0.0F;
-      }
-#endif
+#endif /* INTERP_RGB */
 #ifdef INTERP_SPEC
       span.interpMask |= SPAN_SPEC;
       if (ctx->Light.ShadeModel == GL_SMOOTH) {
-         GLfloat eMaj_dsr, eBot_dsr;
-         GLfloat eMaj_dsg, eBot_dsg;
-         GLfloat eMaj_dsb, eBot_dsb;
-         eMaj_dsr = (GLfloat) ((GLint) vMax->specular[RCOMP] - 
-			       (GLint) vMin->specular[RCOMP]);
-         eBot_dsr = (GLfloat) ((GLint) vMid->specular[RCOMP] - 
-			       (GLint) vMin->specular[RCOMP]);
-         dsrdx = oneOverArea * (eMaj_dsr * eBot.dy - eMaj.dy * eBot_dsr);
-         span.specRedStep = SignedFloatToFixed(dsrdx);
-         dsrdy = oneOverArea * (eMaj.dx * eBot_dsr - eMaj_dsr * eBot.dx);
-         eMaj_dsg = (GLfloat) ((GLint) vMax->specular[GCOMP] - 
-			       (GLint) vMin->specular[GCOMP]);
-         eBot_dsg = (GLfloat) ((GLint) vMid->specular[GCOMP] - 
-			       (GLint) vMin->specular[GCOMP]);
-         dsgdx = oneOverArea * (eMaj_dsg * eBot.dy - eMaj.dy * eBot_dsg);
-         span.specGreenStep = SignedFloatToFixed(dsgdx);
-         dsgdy = oneOverArea * (eMaj.dx * eBot_dsg - eMaj_dsg * eBot.dx);
-         eMaj_dsb = (GLfloat) ((GLint) vMax->specular[BCOMP] - 
-			       (GLint) vMin->specular[BCOMP]);
-         eBot_dsb = (GLfloat) ((GLint) vMid->specular[BCOMP] - 
-			       (GLint) vMin->specular[BCOMP]);
-         dsbdx = oneOverArea * (eMaj_dsb * eBot.dy - eMaj.dy * eBot_dsb);
-         span.specBlueStep = SignedFloatToFixed(dsbdx);
-         dsbdy = oneOverArea * (eMaj.dx * eBot_dsb - eMaj_dsb * eBot.dx);
+         GLfloat eMaj_dsr = (GLfloat) ((ColorTemp) vMax->specular[RCOMP] - vMin->specular[RCOMP]);
+         GLfloat eBot_dsr = (GLfloat) ((ColorTemp) vMid->specular[RCOMP] - vMin->specular[RCOMP]);
+         GLfloat eMaj_dsg = (GLfloat) ((ColorTemp) vMax->specular[GCOMP] - vMin->specular[GCOMP]);
+         GLfloat eBot_dsg = (GLfloat) ((ColorTemp) vMid->specular[GCOMP] - vMin->specular[GCOMP]);
+         GLfloat eMaj_dsb = (GLfloat) ((ColorTemp) vMax->specular[BCOMP] - vMin->specular[BCOMP]);
+         GLfloat eBot_dsb = (GLfloat) ((ColorTemp) vMid->specular[BCOMP] - vMin->specular[BCOMP]);
+         span.dsrdx = oneOverArea * (eMaj_dsr * eBot.dy - eMaj.dy * eBot_dsr);
+         span.dsrdy = oneOverArea * (eMaj.dx * eBot_dsr - eMaj_dsr * eBot.dx);
+         span.dsgdx = oneOverArea * (eMaj_dsg * eBot.dy - eMaj.dy * eBot_dsg);
+         span.dsgdy = oneOverArea * (eMaj.dx * eBot_dsg - eMaj_dsg * eBot.dx);
+         span.dsbdx = oneOverArea * (eMaj_dsb * eBot.dy - eMaj.dy * eBot_dsb);
+         span.dsbdy = oneOverArea * (eMaj.dx * eBot_dsb - eMaj_dsb * eBot.dx);
+#  if CHAN_TYPE == GL_FLOAT
+         span.specRedStep   = span.dsrdx;
+         span.specGreenStep = span.dsgdx;
+         span.specBlueStep  = span.dsbdx;
+#  else
+         span.specRedStep   = SignedFloatToFixed(span.dsrdx);
+         span.specGreenStep = SignedFloatToFixed(span.dsgdx);
+         span.specBlueStep  = SignedFloatToFixed(span.dsbdx);
+#  endif
       }
       else {
-         dsrdx = dsrdy = 0.0F;
-         dsgdx = dsgdy = 0.0F;
-         dsbdx = dsbdy = 0.0F;
-         span.specRedStep = 0;
-         span.specGreenStep = 0;
-         span.specBlueStep = 0;
+         span.dsrdx = span.dsrdy = span.specRedStep   = 0;
+         span.dsgdx = span.dsgdy = span.specGreenStep = 0;
+         span.dsbdx = span.dsbdy = span.specBlueStep  = 0;
       }
-#endif
-#ifdef INTERP_FLOAT_SPEC
-      span.interpMask |= SPAN_SPEC;
-      if (ctx->Light.ShadeModel == GL_SMOOTH) {
-         GLfloat eMaj_dsr, eBot_dsr;
-         GLfloat eMaj_dsg, eBot_dsg;
-         GLfloat eMaj_dsb, eBot_dsb;
-         eMaj_dsr = vMax->specular[RCOMP] - vMin->specular[RCOMP];
-         eBot_dsr = vMid->specular[RCOMP] - vMin->specular[RCOMP];
-         dsrdx = oneOverArea * (eMaj_dsr * eBot.dy - eMaj.dy * eBot_dsr);
-         span.specRedStep = dsrdx;
-         dsrdy = oneOverArea * (eMaj.dx * eBot_dsr - eMaj_dsr * eBot.dx);
-         eMaj_dsg = vMax->specular[GCOMP] - vMin->specular[GCOMP];
-         eBot_dsg = vMid->specular[GCOMP] - vMin->specular[GCOMP];
-         dsgdx = oneOverArea * (eMaj_dsg * eBot.dy - eMaj.dy * eBot_dsg);
-         span.specGreenStep = dsgdx;
-         dsgdy = oneOverArea * (eMaj.dx * eBot_dsg - eMaj_dsg * eBot.dx);
-         eMaj_dsb = vMax->specular[BCOMP] - vMin->specular[BCOMP];
-         eBot_dsb = vMid->specular[BCOMP] - vMin->specular[BCOMP];
-         dsbdx = oneOverArea * (eMaj_dsb * eBot.dy - eMaj.dy * eBot_dsb);
-         span.specBlueStep = dsbdx;
-         dsbdy = oneOverArea * (eMaj.dx * eBot_dsb - eMaj_dsb * eBot.dx);
-      }
-      else {
-         dsrdx = dsrdy = span.specRedStep = 0;
-         dsgdx = dsgdy = span.specGreenStep = 0;
-         dsbdx = dsbdy = span.specBlueStep = 0;
-      }
-#endif
+#endif /* INTERP_SPEC */
 #ifdef INTERP_INDEX
       span.interpMask |= SPAN_INDEX;
       if (ctx->Light.ShadeModel == GL_SMOOTH) {
-         GLfloat eMaj_di, eBot_di;
-         eMaj_di = (GLfloat) ((GLint) vMax->index - (GLint) vMin->index);
-         eBot_di = (GLfloat) ((GLint) vMid->index - (GLint) vMin->index);
+         GLfloat eMaj_di = (GLfloat) ((GLint) vMax->index - (GLint) vMin->index);
+         GLfloat eBot_di = (GLfloat) ((GLint) vMid->index - (GLint) vMin->index);
          didx = oneOverArea * (eMaj_di * eBot.dy - eMaj.dy * eBot_di);
-         span.indexStep = SignedFloatToFixed(didx);
          didy = oneOverArea * (eMaj.dx * eBot_di - eMaj_di * eBot.dx);
+         span.indexStep = SignedFloatToFixed(didx);
       }
       else {
          span.interpMask |= SPAN_FLAT;
@@ -546,113 +452,41 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
 #ifdef INTERP_INT_TEX
       span.interpMask |= SPAN_INT_TEXTURE;
       {
-         GLfloat eMaj_ds, eBot_ds;
-         eMaj_ds = (vMax->texcoord[0][0] - vMin->texcoord[0][0]) * S_SCALE;
-         eBot_ds = (vMid->texcoord[0][0] - vMin->texcoord[0][0]) * S_SCALE;
-         dsdx = oneOverArea * (eMaj_ds * eBot.dy - eMaj.dy * eBot_ds);
-         span.intTexStep[0] = SignedFloatToFixed(dsdx);
-         dsdy = oneOverArea * (eMaj.dx * eBot_ds - eMaj_ds * eBot.dx);
+         GLfloat eMaj_ds = (vMax->texcoord[0][0] - vMin->texcoord[0][0]) * S_SCALE;
+         GLfloat eBot_ds = (vMid->texcoord[0][0] - vMin->texcoord[0][0]) * S_SCALE;
+         GLfloat eMaj_dt = (vMax->texcoord[0][1] - vMin->texcoord[0][1]) * T_SCALE;
+         GLfloat eBot_dt = (vMid->texcoord[0][1] - vMin->texcoord[0][1]) * T_SCALE;
+         span.texStepX[0][0] = oneOverArea * (eMaj_ds * eBot.dy - eMaj.dy * eBot_ds);
+         span.texStepY[0][0] = oneOverArea * (eMaj.dx * eBot_ds - eMaj_ds * eBot.dx);
+         span.texStepX[0][1] = oneOverArea * (eMaj_dt * eBot.dy - eMaj.dy * eBot_dt);
+         span.texStepY[0][1] = oneOverArea * (eMaj.dx * eBot_dt - eMaj_dt * eBot.dx);
+         span.intTexStep[0] = SignedFloatToFixed(span.texStepX[0][0]);
+         span.intTexStep[1] = SignedFloatToFixed(span.texStepX[0][1]);
       }
-      {
-         GLfloat eMaj_dt, eBot_dt;
-         eMaj_dt = (vMax->texcoord[0][1] - vMin->texcoord[0][1]) * T_SCALE;
-         eBot_dt = (vMid->texcoord[0][1] - vMin->texcoord[0][1]) * T_SCALE;
-         dtdx = oneOverArea * (eMaj_dt * eBot.dy - eMaj.dy * eBot_dt);
-         span.intTexStep[1] = SignedFloatToFixed(dtdx);
-         dtdy = oneOverArea * (eMaj.dx * eBot_dt - eMaj_dt * eBot.dx);
-      }
-
 #endif
 #ifdef INTERP_TEX
       span.interpMask |= SPAN_TEXTURE;
       {
-         GLfloat wMax = vMax->win[3];
-         GLfloat wMin = vMin->win[3];
-         GLfloat wMid = vMid->win[3];
-         GLfloat eMaj_ds, eBot_ds;
-         GLfloat eMaj_dt, eBot_dt;
-         GLfloat eMaj_du, eBot_du;
-         GLfloat eMaj_dv, eBot_dv;
-
-         eMaj_ds = vMax->texcoord[0][0] * wMax - vMin->texcoord[0][0] * wMin;
-         eBot_ds = vMid->texcoord[0][0] * wMid - vMin->texcoord[0][0] * wMin;
-         dsdx = oneOverArea * (eMaj_ds * eBot.dy - eMaj.dy * eBot_ds);
-         dsdy = oneOverArea * (eMaj.dx * eBot_ds - eMaj_ds * eBot.dx);
-         span.texStepX[0][0] = dsdx;
-         span.texStepY[0][0] = dsdy;
-
-         eMaj_dt = vMax->texcoord[0][1] * wMax - vMin->texcoord[0][1] * wMin;
-         eBot_dt = vMid->texcoord[0][1] * wMid - vMin->texcoord[0][1] * wMin;
-         dtdx = oneOverArea * (eMaj_dt * eBot.dy - eMaj.dy * eBot_dt);
-         dtdy = oneOverArea * (eMaj.dx * eBot_dt - eMaj_dt * eBot.dx);
-         span.texStepX[0][1] = dtdx;
-         span.texStepY[0][1] = dtdy;
-
-         eMaj_du = vMax->texcoord[0][2] * wMax - vMin->texcoord[0][2] * wMin;
-         eBot_du = vMid->texcoord[0][2] * wMid - vMin->texcoord[0][2] * wMin;
-         dudx = oneOverArea * (eMaj_du * eBot.dy - eMaj.dy * eBot_du);
-         dudy = oneOverArea * (eMaj.dx * eBot_du - eMaj_du * eBot.dx);
-         span.texStepX[0][2] = dudx;
-         span.texStepY[0][2] = dudy;
-
-         eMaj_dv = vMax->texcoord[0][3] * wMax - vMin->texcoord[0][3] * wMin;
-         eBot_dv = vMid->texcoord[0][3] * wMid - vMin->texcoord[0][3] * wMin;
-         dvdx = oneOverArea * (eMaj_dv * eBot.dy - eMaj.dy * eBot_dv);
-         dvdy = oneOverArea * (eMaj.dx * eBot_dv - eMaj_dv * eBot.dx);
-         span.texStepX[0][3] = dvdx;
-         span.texStepY[0][3] = dvdy;
-      }
-#endif
-#ifdef INTERP_MULTITEX
-      span.interpMask |= SPAN_TEXTURE;
-      {
-         GLfloat wMax = vMax->win[3];
-         GLfloat wMin = vMin->win[3];
-         GLfloat wMid = vMid->win[3];
-         GLuint u;
-         for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-            if (ctx->Texture.Unit[u]._ReallyEnabled) {
-               GLfloat eMaj_ds, eBot_ds;
-               GLfloat eMaj_dt, eBot_dt;
-               GLfloat eMaj_du, eBot_du;
-               GLfloat eMaj_dv, eBot_dv;
-               eMaj_ds = vMax->texcoord[u][0] * wMax
-                       - vMin->texcoord[u][0] * wMin;
-               eBot_ds = vMid->texcoord[u][0] * wMid
-                       - vMin->texcoord[u][0] * wMin;
-               dsdx[u] = oneOverArea * (eMaj_ds * eBot.dy - eMaj.dy * eBot_ds);
-               dsdy[u] = oneOverArea * (eMaj.dx * eBot_ds - eMaj_ds * eBot.dx);
-               span.texStepX[u][0] = dsdx[u];
-               span.texStepY[u][0] = dsdy[u];
-
-               eMaj_dt = vMax->texcoord[u][1] * wMax
-                       - vMin->texcoord[u][1] * wMin;
-               eBot_dt = vMid->texcoord[u][1] * wMid
-                       - vMin->texcoord[u][1] * wMin;
-               dtdx[u] = oneOverArea * (eMaj_dt * eBot.dy - eMaj.dy * eBot_dt);
-               dtdy[u] = oneOverArea * (eMaj.dx * eBot_dt - eMaj_dt * eBot.dx);
-               span.texStepX[u][1] = dtdx[u];
-               span.texStepY[u][1] = dtdy[u];
-
-               eMaj_du = vMax->texcoord[u][2] * wMax
-                       - vMin->texcoord[u][2] * wMin;
-               eBot_du = vMid->texcoord[u][2] * wMid
-                       - vMin->texcoord[u][2] * wMin;
-               dudx[u] = oneOverArea * (eMaj_du * eBot.dy - eMaj.dy * eBot_du);
-               dudy[u] = oneOverArea * (eMaj.dx * eBot_du - eMaj_du * eBot.dx);
-               span.texStepX[u][2] = dudx[u];
-               span.texStepY[u][2] = dudy[u];
-
-               eMaj_dv = vMax->texcoord[u][3] * wMax
-                       - vMin->texcoord[u][3] * wMin;
-               eBot_dv = vMid->texcoord[u][3] * wMid
-                       - vMin->texcoord[u][3] * wMin;
-               dvdx[u] = oneOverArea * (eMaj_dv * eBot.dy - eMaj.dy * eBot_dv);
-               dvdy[u] = oneOverArea * (eMaj.dx * eBot_dv - eMaj_dv * eBot.dx);
-               span.texStepX[u][3] = dvdx[u];
-               span.texStepY[u][3] = dvdy[u];
-            }
-         }
+         /* win[3] is 1/W */
+         const GLfloat wMax = vMax->win[3], wMin = vMin->win[3], wMid = vMid->win[3];
+         TEX_UNIT_LOOP(
+            GLfloat eMaj_ds = vMax->texcoord[u][0] * wMax - vMin->texcoord[u][0] * wMin;
+            GLfloat eBot_ds = vMid->texcoord[u][0] * wMid - vMin->texcoord[u][0] * wMin;
+            GLfloat eMaj_dt = vMax->texcoord[u][1] * wMax - vMin->texcoord[u][1] * wMin;
+            GLfloat eBot_dt = vMid->texcoord[u][1] * wMid - vMin->texcoord[u][1] * wMin;
+            GLfloat eMaj_du = vMax->texcoord[u][2] * wMax - vMin->texcoord[u][2] * wMin;
+            GLfloat eBot_du = vMid->texcoord[u][2] * wMid - vMin->texcoord[u][2] * wMin;
+            GLfloat eMaj_dv = vMax->texcoord[u][3] * wMax - vMin->texcoord[u][3] * wMin;
+            GLfloat eBot_dv = vMid->texcoord[u][3] * wMid - vMin->texcoord[u][3] * wMin;
+            span.texStepX[u][0] = oneOverArea * (eMaj_ds * eBot.dy - eMaj.dy * eBot_ds);
+            span.texStepY[u][0] = oneOverArea * (eMaj.dx * eBot_ds - eMaj_ds * eBot.dx);
+            span.texStepX[u][1] = oneOverArea * (eMaj_dt * eBot.dy - eMaj.dy * eBot_dt);
+            span.texStepY[u][1] = oneOverArea * (eMaj.dx * eBot_dt - eMaj_dt * eBot.dx);
+            span.texStepX[u][2] = oneOverArea * (eMaj_du * eBot.dy - eMaj.dy * eBot_du);
+            span.texStepY[u][2] = oneOverArea * (eMaj.dx * eBot_du - eMaj_du * eBot.dx);
+            span.texStepX[u][3] = oneOverArea * (eMaj_dv * eBot.dy - eMaj.dy * eBot_dv);
+            span.texStepY[u][3] = oneOverArea * (eMaj.dx * eBot_dv - eMaj_dv * eBot.dx);
+         )
       }
 #endif
 
@@ -723,49 +557,35 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
          DEPTH_TYPE *zRow = NULL;
          int dZRowOuter = 0, dZRowInner;  /* offset in bytes */
 #  endif
-         GLfixed fz = 0, fdzOuter = 0, fdzInner;
+         GLfixed zLeft = 0, fdzOuter = 0, fdzInner;
+#endif
+#ifdef INTERP_W
+         GLfloat wLeft, dwOuter, dwInner;
 #endif
 #ifdef INTERP_FOG
          GLfloat fogLeft = 0, dfogOuter = 0, dfogInner;
 #endif
 #ifdef INTERP_RGB
-         GLfixed fr = 0, fdrOuter = 0, fdrInner;
-         GLfixed fg = 0, fdgOuter = 0, fdgInner;
-         GLfixed fb = 0, fdbOuter = 0, fdbInner;
+         ColorTemp rLeft = 0, fdrOuter = 0, fdrInner;
+         ColorTemp gLeft = 0, fdgOuter = 0, fdgInner;
+         ColorTemp bLeft = 0, fdbOuter = 0, fdbInner;
 #endif
 #ifdef INTERP_ALPHA
-         GLfixed fa = 0, fdaOuter = 0, fdaInner;
-#endif
-#ifdef INTERP_FLOAT_RGBA
-         GLfloat fr, fdrOuter, fdrInner;
-         GLfloat fg, fdgOuter, fdgInner;
-         GLfloat fb, fdbOuter, fdbInner;
-         GLfloat fa, fdaOuter, fdaInner;
+         ColorTemp aLeft = 0, fdaOuter = 0, fdaInner;
 #endif
 #ifdef INTERP_SPEC
-         GLfixed fsr=0, fdsrOuter=0, fdsrInner;
-         GLfixed fsg=0, fdsgOuter=0, fdsgInner;
-         GLfixed fsb=0, fdsbOuter=0, fdsbInner;
-#endif
-#ifdef INTERP_FLOAT_SPEC
-         GLfloat fsr=0, fdsrOuter=0, fdsrInner;
-         GLfloat fsg=0, fdsgOuter=0, fdsgInner;
-         GLfloat fsb=0, fdsbOuter=0, fdsbInner;
+         ColorTemp srLeft=0, dsrOuter=0, dsrInner;
+         ColorTemp sgLeft=0, dsgOuter=0, dsgInner;
+         ColorTemp sbLeft=0, dsbOuter=0, dsbInner;
 #endif
 #ifdef INTERP_INDEX
-         GLfixed fi=0, fdiOuter=0, fdiInner;
+         GLfixed iLeft=0, diOuter=0, diInner;
 #endif
 #ifdef INTERP_INT_TEX
-         GLfixed fs=0, fdsOuter=0, fdsInner;
-         GLfixed ft=0, fdtOuter=0, fdtInner;
+         GLfixed sLeft=0, dsOuter=0, dsInner;
+         GLfixed tLeft=0, dtOuter=0, dtInner;
 #endif
 #ifdef INTERP_TEX
-         GLfloat sLeft=0, dsOuter=0, dsInner;
-         GLfloat tLeft=0, dtOuter=0, dtInner;
-         GLfloat uLeft=0, duOuter=0, duInner;
-         GLfloat vLeft=0, dvOuter=0, dvInner;
-#endif
-#ifdef INTERP_MULTITEX
          GLfloat sLeft[MAX_TEXTURE_COORD_UNITS];
          GLfloat tLeft[MAX_TEXTURE_COORD_UNITS];
          GLfloat uLeft[MAX_TEXTURE_COORD_UNITS];
@@ -867,197 +687,160 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
                   GLfloat z0 = vLower->win[2];
                   if (depthBits <= 16) {
                      /* interpolate fixed-pt values */
-                     GLfloat tmp = (z0 * FIXED_SCALE +
-                                    dzdx * adjx + dzdy * adjy) + FIXED_HALF;
+                     GLfloat tmp = (z0 * FIXED_SCALE + span.dzdx * adjx + span.dzdy * adjy) + FIXED_HALF;
                      if (tmp < MAX_GLUINT / 2)
-                        fz = (GLfixed) tmp;
+                        zLeft = (GLfixed) tmp;
                      else
-                        fz = MAX_GLUINT / 2;
-                     fdzOuter = SignedFloatToFixed(dzdy + dxOuter * dzdx);
+                        zLeft = MAX_GLUINT / 2;
+                     fdzOuter = SignedFloatToFixed(span.dzdy + dxOuter * span.dzdx);
                   }
                   else {
                      /* interpolate depth values exactly */
-                     fz = (GLint) (z0 + dzdx * FixedToFloat(adjx)
-                                   + dzdy * FixedToFloat(adjy));
-                     fdzOuter = (GLint) (dzdy + dxOuter * dzdx);
+                     zLeft = (GLint) (z0 + span.dzdx * FixedToFloat(adjx) + span.dzdy * FixedToFloat(adjy));
+                     fdzOuter = (GLint) (span.dzdy + dxOuter * span.dzdx);
                   }
 #  ifdef DEPTH_TYPE
                   zRow = (DEPTH_TYPE *)
-                    _mesa_zbuffer_address(ctx, FixedToInt(fxLeftEdge), span.y);
+                    _swrast_zbuffer_address(ctx, FixedToInt(fxLeftEdge), span.y);
                   dZRowOuter = (ctx->DrawBuffer->Width + idxOuter) * sizeof(DEPTH_TYPE);
 #  endif
                }
 #endif
+#ifdef INTERP_W
+               wLeft = vLower->win[3] + (span.dwdx * adjx + span.dwdy * adjy) * (1.0F/FIXED_SCALE);
+               dwOuter = span.dwdy + dxOuter * span.dwdx;
+#endif
 #ifdef INTERP_FOG
-               fogLeft = vLower->fog + (span.fogStep * adjx + dfogdy * adjy)
-                                       * (1.0F/FIXED_SCALE);
-               dfogOuter = dfogdy + dxOuter * span.fogStep;
+               fogLeft = vLower->fog + (span.dfogdx * adjx + span.dfogdy * adjy) * (1.0F/FIXED_SCALE);
+               dfogOuter = span.dfogdy + dxOuter * span.dfogdx;
 #endif
 #ifdef INTERP_RGB
                if (ctx->Light.ShadeModel == GL_SMOOTH) {
-                  fr = (GLfixed) (ChanToFixed(vLower->color[RCOMP])
-                                   + drdx * adjx + drdy * adjy) + FIXED_HALF;
-                  fdrOuter = SignedFloatToFixed(drdy + dxOuter * drdx);
-                  fg = (GLfixed) (ChanToFixed(vLower->color[GCOMP])
-                                   + dgdx * adjx + dgdy * adjy) + FIXED_HALF;
-                  fdgOuter = SignedFloatToFixed(dgdy + dxOuter * dgdx);
-                  fb = (GLfixed) (ChanToFixed(vLower->color[BCOMP])
-                                    + dbdx * adjx + dbdy * adjy) + FIXED_HALF;
-                  fdbOuter = SignedFloatToFixed(dbdy + dxOuter * dbdx);
+#  if CHAN_TYPE == GL_FLOAT
+                  rLeft = vLower->color[RCOMP] + (span.drdx * adjx + span.drdy * adjy) * (1.0F / FIXED_SCALE);
+                  gLeft = vLower->color[GCOMP] + (span.dgdx * adjx + span.dgdy * adjy) * (1.0F / FIXED_SCALE);
+                  bLeft = vLower->color[BCOMP] + (span.dbdx * adjx + span.dbdy * adjy) * (1.0F / FIXED_SCALE);
+                  fdrOuter = span.drdy + dxOuter * span.drdx;
+                  fdgOuter = span.dgdy + dxOuter * span.dgdx;
+                  fdbOuter = span.dbdy + dxOuter * span.dbdx;
+#  else
+                  rLeft = (ChanToFixed(vLower->color[RCOMP]) + span.drdx * adjx + span.drdy * adjy) + FIXED_HALF;
+                  gLeft = (ChanToFixed(vLower->color[GCOMP]) + span.dgdx * adjx + span.dgdy * adjy) + FIXED_HALF;
+                  bLeft = (ChanToFixed(vLower->color[BCOMP]) + span.dbdx * adjx + span.dbdy * adjy) + FIXED_HALF;
+                  fdrOuter = SignedFloatToFixed(span.drdy + dxOuter * span.drdx);
+                  fdgOuter = SignedFloatToFixed(span.dgdy + dxOuter * span.dgdx);
+                  fdbOuter = SignedFloatToFixed(span.dbdy + dxOuter * span.dbdx);
+#  endif
 #  ifdef INTERP_ALPHA
-                  fa = (GLfixed) (ChanToFixed(vLower->color[ACOMP])
-                                   + dadx * adjx + dady * adjy) + FIXED_HALF;
-                  fdaOuter = SignedFloatToFixed(dady + dxOuter * dadx);
+#    if CHAN_TYPE == GL_FLOAT
+                  aLeft = vLower->color[ACOMP] + (span.dadx * adjx + span.dady * adjy) * (1.0F / FIXED_SCALE);
+                  fdaOuter = span.dady + dxOuter * span.dadx;
+#    else
+                  aLeft = (ChanToFixed(vLower->color[ACOMP]) + span.dadx * adjx + span.dady * adjy) + FIXED_HALF;
+                  fdaOuter = SignedFloatToFixed(span.dady + dxOuter * span.dadx);
+#    endif
 #  endif
                }
                else {
                   ASSERT (ctx->Light.ShadeModel == GL_FLAT);
-                  fr = ChanToFixed(v2->color[RCOMP]);
-                  fg = ChanToFixed(v2->color[GCOMP]);
-                  fb = ChanToFixed(v2->color[BCOMP]);
+#  if CHAN_TYPE == GL_FLOAT
+                  rLeft = v2->color[RCOMP];
+                  gLeft = v2->color[GCOMP];
+                  bLeft = v2->color[BCOMP];
+                  fdrOuter = fdgOuter = fdbOuter = 0.0F;
+#  else
+                  rLeft = ChanToFixed(v2->color[RCOMP]);
+                  gLeft = ChanToFixed(v2->color[GCOMP]);
+                  bLeft = ChanToFixed(v2->color[BCOMP]);
                   fdrOuter = fdgOuter = fdbOuter = 0;
+#  endif
 #  ifdef INTERP_ALPHA
-                  fa =  ChanToFixed(v2->color[ACOMP]);
+#    if CHAN_TYPE == GL_FLOAT
+                  aLeft = v2->color[ACOMP];
+                  fdaOuter = 0.0F;
+#    else
+                  aLeft = ChanToFixed(v2->color[ACOMP]);
                   fdaOuter = 0;
+#    endif
 #  endif
                }
 #endif
-#ifdef INTERP_FLOAT_RGBA
-               if (ctx->Light.ShadeModel == GL_SMOOTH) {
-                  fr = vLower->color[RCOMP]
-                     + (drdx * adjx + drdy * adjy) * (1.0F / FIXED_SCALE);
-                  fdrOuter = drdy + dxOuter * drdx;
-                  fg = vLower->color[GCOMP]
-                     + (dgdx * adjx + dgdy * adjy) * (1.0F / FIXED_SCALE);
-                  fdgOuter = dgdy + dxOuter * dgdx;
-                  fb = vLower->color[BCOMP]
-                     + (dbdx * adjx + dbdy * adjy) * (1.0F / FIXED_SCALE);
-                  fdbOuter = dbdy + dxOuter * dbdx;
-                  fa = vLower->color[ACOMP]
-                     + (dadx * adjx + dady * adjy) * (1.0F / FIXED_SCALE);
-                  fdaOuter = dady + dxOuter * dadx;
-               }
-               else {
-                  fr = v2->color[RCOMP];
-                  fg = v2->color[GCOMP];
-                  fb = v2->color[BCOMP];
-                  fa = v2->color[ACOMP];
-                  fdrOuter = fdgOuter = fdbOuter = fdaOuter = 0.0F;
-               }
-#endif
+
 #ifdef INTERP_SPEC
                if (ctx->Light.ShadeModel == GL_SMOOTH) {
-                  fsr = (GLfixed) (ChanToFixed(vLower->specular[RCOMP])
-                                   + dsrdx * adjx + dsrdy * adjy) + FIXED_HALF;
-                  fdsrOuter = SignedFloatToFixed(dsrdy + dxOuter * dsrdx);
-                  fsg = (GLfixed) (ChanToFixed(vLower->specular[GCOMP])
-                                   + dsgdx * adjx + dsgdy * adjy) + FIXED_HALF;
-                  fdsgOuter = SignedFloatToFixed(dsgdy + dxOuter * dsgdx);
-                  fsb = (GLfixed) (ChanToFixed(vLower->specular[BCOMP])
-                                   + dsbdx * adjx + dsbdy * adjy) + FIXED_HALF;
-                  fdsbOuter = SignedFloatToFixed(dsbdy + dxOuter * dsbdx);
+#  if CHAN_TYPE == GL_FLOAT
+                  srLeft = vLower->specular[RCOMP] + (span.dsrdx * adjx + span.dsrdy * adjy) * (1.0F / FIXED_SCALE);
+                  sgLeft = vLower->specular[GCOMP] + (span.dsgdx * adjx + span.dsgdy * adjy) * (1.0F / FIXED_SCALE);
+                  sbLeft = vLower->specular[BCOMP] + (span.dsbdx * adjx + span.dsbdy * adjy) * (1.0F / FIXED_SCALE);
+                  dsrOuter = span.dsrdy + dxOuter * span.dsrdx;
+                  dsgOuter = span.dsgdy + dxOuter * span.dsgdx;
+                  dsbOuter = span.dsbdy + dxOuter * span.dsbdx;
+#  else
+                  srLeft = (GLfixed) (ChanToFixed(vLower->specular[RCOMP]) + span.dsrdx * adjx + span.dsrdy * adjy) + FIXED_HALF;
+                  sgLeft = (GLfixed) (ChanToFixed(vLower->specular[GCOMP]) + span.dsgdx * adjx + span.dsgdy * adjy) + FIXED_HALF;
+                  sbLeft = (GLfixed) (ChanToFixed(vLower->specular[BCOMP]) + span.dsbdx * adjx + span.dsbdy * adjy) + FIXED_HALF;
+                  dsrOuter = SignedFloatToFixed(span.dsrdy + dxOuter * span.dsrdx);
+                  dsgOuter = SignedFloatToFixed(span.dsgdy + dxOuter * span.dsgdx);
+                  dsbOuter = SignedFloatToFixed(span.dsbdy + dxOuter * span.dsbdx);
+#  endif
                }
                else {
-                  fsr = ChanToFixed(v2->specular[RCOMP]);
-                  fsg = ChanToFixed(v2->specular[GCOMP]);
-                  fsb = ChanToFixed(v2->specular[BCOMP]);
-                  fdsrOuter = fdsgOuter = fdsbOuter = 0;
+#if  CHAN_TYPE == GL_FLOAT
+                  srLeft = v2->specular[RCOMP];
+                  sgLeft = v2->specular[GCOMP];
+                  sbLeft = v2->specular[BCOMP];
+                  dsrOuter = dsgOuter = dsbOuter = 0.0F;
+#  else
+                  srLeft = ChanToFixed(v2->specular[RCOMP]);
+                  sgLeft = ChanToFixed(v2->specular[GCOMP]);
+                  sbLeft = ChanToFixed(v2->specular[BCOMP]);
+                  dsrOuter = dsgOuter = dsbOuter = 0;
+#  endif
                }
 #endif
-#ifdef INTERP_FLOAT_SPEC
-               if (ctx->Light.ShadeModel == GL_SMOOTH) {
-                  fsr = vLower->specular[RCOMP]
-                     + (dsrdx * adjx + dsrdy * adjy) * (1.0F / FIXED_SCALE);
-                  fdsrOuter = dsrdy + dxOuter * dsrdx;
-                  fsg = vLower->specular[GCOMP]
-                     + (dsgdx * adjx + dsgdy * adjy) * (1.0F / FIXED_SCALE);
-                  fdsgOuter = dsgdy + dxOuter * dsgdx;
-                  fsb = vLower->specular[BCOMP]
-                     + (dsbdx * adjx + dsbdy * adjy) * (1.0F / FIXED_SCALE);
-                  fdsbOuter = dsbdy + dxOuter * dsbdx;
-               }
-               else {
-                  fsr = v2->specular[RCOMP];
-                  fsg = v2->specular[GCOMP];
-                  fsb = v2->specular[BCOMP];
-                  fdsrOuter = fdsgOuter = fdsbOuter = 0.0F;
-               }
-#endif
+
 #ifdef INTERP_INDEX
                if (ctx->Light.ShadeModel == GL_SMOOTH) {
-                  fi = (GLfixed)(vLower->index * FIXED_SCALE
+                  iLeft = (GLfixed)(vLower->index * FIXED_SCALE
                                  + didx * adjx + didy * adjy) + FIXED_HALF;
-                  fdiOuter = SignedFloatToFixed(didy + dxOuter * didx);
+                  diOuter = SignedFloatToFixed(didy + dxOuter * didx);
                }
                else {
-                  fi = (GLfixed) (v2->index * FIXED_SCALE);
-                  fdiOuter = 0;
+                  iLeft = (GLfixed) (v2->index * FIXED_SCALE);
+                  diOuter = 0;
                }
 #endif
 #ifdef INTERP_INT_TEX
                {
                   GLfloat s0, t0;
                   s0 = vLower->texcoord[0][0] * S_SCALE;
-                  fs = (GLfixed)(s0 * FIXED_SCALE + dsdx * adjx
-                                 + dsdy * adjy) + FIXED_HALF;
-                  fdsOuter = SignedFloatToFixed(dsdy + dxOuter * dsdx);
+                  sLeft = (GLfixed)(s0 * FIXED_SCALE + span.texStepX[0][0] * adjx
+                                 + span.texStepY[0][0] * adjy) + FIXED_HALF;
+                  dsOuter = SignedFloatToFixed(span.texStepY[0][0] + dxOuter * span.texStepX[0][0]);
 
                   t0 = vLower->texcoord[0][1] * T_SCALE;
-                  ft = (GLfixed)(t0 * FIXED_SCALE + dtdx * adjx
-                                 + dtdy * adjy) + FIXED_HALF;
-                  fdtOuter = SignedFloatToFixed(dtdy + dxOuter * dtdx);
+                  tLeft = (GLfixed)(t0 * FIXED_SCALE + span.texStepX[0][1] * adjx
+                                 + span.texStepY[0][1] * adjy) + FIXED_HALF;
+                  dtOuter = SignedFloatToFixed(span.texStepY[0][1] + dxOuter * span.texStepX[0][1]);
                }
 #endif
 #ifdef INTERP_TEX
-               {
-                  GLfloat invW = vLower->win[3];
-                  GLfloat s0, t0, u0, v0;
-                  s0 = vLower->texcoord[0][0] * invW;
-                  sLeft = s0 + (span.texStepX[0][0] * adjx + dsdy * adjy)
-                     * (1.0F/FIXED_SCALE);
-                  dsOuter = dsdy + dxOuter * span.texStepX[0][0];
-                  t0 = vLower->texcoord[0][1] * invW;
-                  tLeft = t0 + (span.texStepX[0][1] * adjx + dtdy * adjy)
-                     * (1.0F/FIXED_SCALE);
-                  dtOuter = dtdy + dxOuter * span.texStepX[0][1];
-                  u0 = vLower->texcoord[0][2] * invW;
-                  uLeft = u0 + (span.texStepX[0][2] * adjx + dudy * adjy)
-                     * (1.0F/FIXED_SCALE);
-                  duOuter = dudy + dxOuter * span.texStepX[0][2];
-                  v0 = vLower->texcoord[0][3] * invW;
-                  vLeft = v0 + (span.texStepX[0][3] * adjx + dvdy * adjy)
-                     * (1.0F/FIXED_SCALE);
-                  dvOuter = dvdy + dxOuter * span.texStepX[0][3];
-               }
+               TEX_UNIT_LOOP(
+                  const GLfloat invW = vLower->win[3];
+                  const GLfloat s0 = vLower->texcoord[u][0] * invW;
+                  const GLfloat t0 = vLower->texcoord[u][1] * invW;
+                  const GLfloat u0 = vLower->texcoord[u][2] * invW;
+                  const GLfloat v0 = vLower->texcoord[u][3] * invW;
+                  sLeft[u] = s0 + (span.texStepX[u][0] * adjx + span.texStepY[u][0] * adjy) * (1.0F/FIXED_SCALE);
+                  tLeft[u] = t0 + (span.texStepX[u][1] * adjx + span.texStepY[u][1] * adjy) * (1.0F/FIXED_SCALE);
+                  uLeft[u] = u0 + (span.texStepX[u][2] * adjx + span.texStepY[u][2] * adjy) * (1.0F/FIXED_SCALE);
+                  vLeft[u] = v0 + (span.texStepX[u][3] * adjx + span.texStepY[u][3] * adjy) * (1.0F/FIXED_SCALE);
+                  dsOuter[u] = span.texStepY[u][0] + dxOuter * span.texStepX[u][0];
+                  dtOuter[u] = span.texStepY[u][1] + dxOuter * span.texStepX[u][1];
+                  duOuter[u] = span.texStepY[u][2] + dxOuter * span.texStepX[u][2];
+                  dvOuter[u] = span.texStepY[u][3] + dxOuter * span.texStepX[u][3];
+               )
 #endif
-#ifdef INTERP_MULTITEX
-               {
-                  GLuint u;
-                  for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-                     if (ctx->Texture.Unit[u]._ReallyEnabled) {
-                        GLfloat invW = vLower->win[3];
-                        GLfloat s0, t0, u0, v0;
-                        s0 = vLower->texcoord[u][0] * invW;
-                        sLeft[u] = s0 + (span.texStepX[u][0] * adjx + dsdy[u]
-                                         * adjy) * (1.0F/FIXED_SCALE);
-                        dsOuter[u] = dsdy[u] + dxOuter * span.texStepX[u][0];
-                        t0 = vLower->texcoord[u][1] * invW;
-                        tLeft[u] = t0 + (span.texStepX[u][1] * adjx + dtdy[u]
-                                         * adjy) * (1.0F/FIXED_SCALE);
-                        dtOuter[u] = dtdy[u] + dxOuter * span.texStepX[u][1];
-                        u0 = vLower->texcoord[u][2] * invW;
-                        uLeft[u] = u0 + (span.texStepX[u][2] * adjx + dudy[u]
-                                         * adjy) * (1.0F/FIXED_SCALE);
-                        duOuter[u] = dudy[u] + dxOuter * span.texStepX[u][2];
-                        v0 = vLower->texcoord[u][3] * invW;
-                        vLeft[u] = v0 + (span.texStepX[u][3] * adjx + dvdy[u]
-                                         * adjy) * (1.0F/FIXED_SCALE);
-                        dvOuter[u] = dvdy[u] + dxOuter * span.texStepX[u][3];
-                     }
-                  }
-               }
-#endif
-
             } /*if setupLeft*/
 
 
@@ -1081,47 +864,39 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
 #  endif
             fdzInner = fdzOuter + span.zStep;
 #endif
-#ifdef INTERP_FOG
-            dfogInner = dfogOuter + span.fogStep;
+#ifdef INTERP_W
+            dwInner = dwOuter + span.dwdx;
 #endif
-#if defined(INTERP_RGB) || defined(INTERP_FLOAT_RGBA)
+#ifdef INTERP_FOG
+            dfogInner = dfogOuter + span.dfogdx;
+#endif
+#if defined(INTERP_RGB)
             fdrInner = fdrOuter + span.redStep;
             fdgInner = fdgOuter + span.greenStep;
             fdbInner = fdbOuter + span.blueStep;
 #endif
-#if defined(INTERP_ALPHA) || defined(INTERP_FLOAT_RGBA)
+#if defined(INTERP_ALPHA)
             fdaInner = fdaOuter + span.alphaStep;
 #endif
-#if defined(INTERP_SPEC) || defined(INTERP_FLOAT_SPEC)
-            fdsrInner = fdsrOuter + span.specRedStep;
-            fdsgInner = fdsgOuter + span.specGreenStep;
-            fdsbInner = fdsbOuter + span.specBlueStep;
+#if defined(INTERP_SPEC)
+            dsrInner = dsrOuter + span.specRedStep;
+            dsgInner = dsgOuter + span.specGreenStep;
+            dsbInner = dsbOuter + span.specBlueStep;
 #endif
 #ifdef INTERP_INDEX
-            fdiInner = fdiOuter + span.indexStep;
+            diInner = diOuter + span.indexStep;
 #endif
 #ifdef INTERP_INT_TEX
-            fdsInner = fdsOuter + span.intTexStep[0];
-            fdtInner = fdtOuter + span.intTexStep[1];
+            dsInner = dsOuter + span.intTexStep[0];
+            dtInner = dtOuter + span.intTexStep[1];
 #endif
 #ifdef INTERP_TEX
-            dsInner = dsOuter + span.texStepX[0][0];
-            dtInner = dtOuter + span.texStepX[0][1];
-            duInner = duOuter + span.texStepX[0][2];
-            dvInner = dvOuter + span.texStepX[0][3];
-#endif
-#ifdef INTERP_MULTITEX
-            {
-               GLuint u;
-               for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-                  if (ctx->Texture.Unit[u]._ReallyEnabled) {
-                     dsInner[u] = dsOuter[u] + span.texStepX[u][0];
-                     dtInner[u] = dtOuter[u] + span.texStepX[u][1];
-                     duInner[u] = duOuter[u] + span.texStepX[u][2];
-                     dvInner[u] = dvOuter[u] + span.texStepX[u][3];
-                  }
-               }
-            }
+            TEX_UNIT_LOOP(
+               dsInner[u] = dsOuter[u] + span.texStepX[u][0];
+               dtInner[u] = dtOuter[u] + span.texStepX[u][1];
+               duInner[u] = duOuter[u] + span.texStepX[u][2];
+               dvInner[u] = dvOuter[u] + span.texStepX[u][3];
+            )
 #endif
 
             while (lines > 0) {
@@ -1137,51 +912,42 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
                   span.end = right - span.x;
 
 #ifdef INTERP_Z
-               span.z = fz;
+               span.z = zLeft;
+#endif
+#ifdef INTERP_W
+               span.w = wLeft;
 #endif
 #ifdef INTERP_FOG
                span.fog = fogLeft;
 #endif
-#if defined(INTERP_RGB) || defined(INTERP_FLOAT_RGBA)
-               span.red = fr;
-               span.green = fg;
-               span.blue = fb;
+#if defined(INTERP_RGB)
+               span.red = rLeft;
+               span.green = gLeft;
+               span.blue = bLeft;
 #endif
-#if defined(INTERP_ALPHA) || defined(INTERP_FLOAT_RGBA)
-               span.alpha = fa;
+#if defined(INTERP_ALPHA)
+               span.alpha = aLeft;
 #endif
-#if defined(INTERP_SPEC) || defined(INTERP_FLOAT_SPEC)
-               span.specRed = fsr;
-               span.specGreen = fsg;
-               span.specBlue = fsb;
+#if defined(INTERP_SPEC)
+               span.specRed = srLeft;
+               span.specGreen = sgLeft;
+               span.specBlue = sbLeft;
 #endif
 #ifdef INTERP_INDEX
-               span.index = fi;
+               span.index = iLeft;
 #endif
 #ifdef INTERP_INT_TEX
-               span.intTex[0] = fs;
-               span.intTex[1] = ft;
+               span.intTex[0] = sLeft;
+               span.intTex[1] = tLeft;
 #endif
 
 #ifdef INTERP_TEX
-               span.tex[0][0] = sLeft;
-               span.tex[0][1] = tLeft;
-               span.tex[0][2] = uLeft;
-               span.tex[0][3] = vLeft;
-#endif
-
-#ifdef INTERP_MULTITEX
-               {
-                  GLuint u;
-                  for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-                     if (ctx->Texture.Unit[u]._ReallyEnabled) {
-                        span.tex[u][0] = sLeft[u];
-                        span.tex[u][1] = tLeft[u];
-                        span.tex[u][2] = uLeft[u];
-                        span.tex[u][3] = vLeft[u];
-                     }
-                  }
-               }
+               TEX_UNIT_LOOP(
+                  span.tex[u][0] = sLeft[u];
+                  span.tex[u][1] = tLeft[u];
+                  span.tex[u][2] = uLeft[u];
+                  span.tex[u][3] = vLeft[u];
+               )
 #endif
 
 #ifdef INTERP_RGB
@@ -1275,49 +1041,41 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
 #  ifdef DEPTH_TYPE
                   zRow = (DEPTH_TYPE *) ((GLubyte *) zRow + dZRowOuter);
 #  endif
-                  fz += fdzOuter;
+                  zLeft += fdzOuter;
+#endif
+#ifdef INTERP_W
+                  wLeft += dwOuter;
 #endif
 #ifdef INTERP_FOG
                   fogLeft += dfogOuter;
 #endif
-#if defined(INTERP_RGB) || defined(INTERP_FLOAT_RGBA)
-                  fr += fdrOuter;
-                  fg += fdgOuter;
-                  fb += fdbOuter;
+#if defined(INTERP_RGB)
+                  rLeft += fdrOuter;
+                  gLeft += fdgOuter;
+                  bLeft += fdbOuter;
 #endif
-#if defined(INTERP_ALPHA) || defined(INTERP_FLOAT_RGBA)
-                  fa += fdaOuter;
+#if defined(INTERP_ALPHA)
+                  aLeft += fdaOuter;
 #endif
-#if defined(INTERP_SPEC) || defined(INTERP_FLOAT_SPEC)
-                  fsr += fdsrOuter;
-                  fsg += fdsgOuter;
-                  fsb += fdsbOuter;
+#if defined(INTERP_SPEC)
+                  srLeft += dsrOuter;
+                  sgLeft += dsgOuter;
+                  sbLeft += dsbOuter;
 #endif
 #ifdef INTERP_INDEX
-                  fi += fdiOuter;
+                  iLeft += diOuter;
 #endif
 #ifdef INTERP_INT_TEX
-                  fs += fdsOuter;
-                  ft += fdtOuter;
-#endif
-#ifdef INTERP_TEX
                   sLeft += dsOuter;
                   tLeft += dtOuter;
-                  uLeft += duOuter;
-                  vLeft += dvOuter;
 #endif
-#ifdef INTERP_MULTITEX
-                  {
-                     GLuint u;
-                     for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-                        if (ctx->Texture.Unit[u]._ReallyEnabled) {
-                           sLeft[u] += dsOuter[u];
-                           tLeft[u] += dtOuter[u];
-                           uLeft[u] += duOuter[u];
-                           vLeft[u] += dvOuter[u];
-                        }
-                     }
-                  }
+#ifdef INTERP_TEX
+                  TEX_UNIT_LOOP(
+                     sLeft[u] += dsOuter[u];
+                     tLeft[u] += dtOuter[u];
+                     uLeft[u] += duOuter[u];
+                     vLeft[u] += dvOuter[u];
+                  )
 #endif
                }
                else {
@@ -1328,49 +1086,41 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
 #  ifdef DEPTH_TYPE
                   zRow = (DEPTH_TYPE *) ((GLubyte *) zRow + dZRowInner);
 #  endif
-                  fz += fdzInner;
+                  zLeft += fdzInner;
+#endif
+#ifdef INTERP_W
+                  wLeft += dwInner;
 #endif
 #ifdef INTERP_FOG
                   fogLeft += dfogInner;
 #endif
-#if defined(INTERP_RGB) || defined(INTERP_FLOAT_RGBA)
-                  fr += fdrInner;
-                  fg += fdgInner;
-                  fb += fdbInner;
+#if defined(INTERP_RGB)
+                  rLeft += fdrInner;
+                  gLeft += fdgInner;
+                  bLeft += fdbInner;
 #endif
-#if defined(INTERP_ALPHA) || defined(INTERP_FLOAT_RGBA)
-                  fa += fdaInner;
+#if defined(INTERP_ALPHA)
+                  aLeft += fdaInner;
 #endif
-#if defined(INTERP_SPEC) || defined(INTERP_FLOAT_SPEC)
-                  fsr += fdsrInner;
-                  fsg += fdsgInner;
-                  fsb += fdsbInner;
+#if defined(INTERP_SPEC)
+                  srLeft += dsrInner;
+                  sgLeft += dsgInner;
+                  sbLeft += dsbInner;
 #endif
 #ifdef INTERP_INDEX
-                  fi += fdiInner;
+                  iLeft += diInner;
 #endif
 #ifdef INTERP_INT_TEX
-                  fs += fdsInner;
-                  ft += fdtInner;
-#endif
-#ifdef INTERP_TEX
                   sLeft += dsInner;
                   tLeft += dtInner;
-                  uLeft += duInner;
-                  vLeft += dvInner;
 #endif
-#ifdef INTERP_MULTITEX
-                  {
-                     GLuint u;
-                     for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-                        if (ctx->Texture.Unit[u]._ReallyEnabled) {
-                           sLeft[u] += dsInner[u];
-                           tLeft[u] += dtInner[u];
-                           uLeft[u] += duInner[u];
-                           vLeft[u] += dvInner[u];
-                        }
-                     }
-                  }
+#ifdef INTERP_TEX
+                  TEX_UNIT_LOOP(
+                     sLeft[u] += dsInner[u];
+                     tLeft[u] += dtInner[u];
+                     uLeft[u] += duInner[u];
+                     vLeft[u] += dvInner[u];
+                  )
 #endif
                }
             } /*while lines>0*/
@@ -1393,6 +1143,7 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
 #undef PIXEL_ADDRESS
 
 #undef INTERP_Z
+#undef INTERP_W
 #undef INTERP_FOG
 #undef INTERP_RGB
 #undef INTERP_ALPHA
@@ -1401,8 +1152,7 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
 #undef INTERP_INT_TEX
 #undef INTERP_TEX
 #undef INTERP_MULTITEX
-#undef INTERP_FLOAT_RGBA
-#undef INTERP_FLOAT_SPEC
+#undef TEX_UNIT_LOOP
 
 #undef S_SCALE
 #undef T_SCALE

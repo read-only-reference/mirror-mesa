@@ -1,10 +1,10 @@
-/* $Id: state.c,v 1.98 2003/01/14 04:55:46 brianp Exp $ */
+/* $Id: state.c,v 1.102 2003/03/29 17:01:01 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  5.0
+ * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -26,8 +26,8 @@
 
 
 /*
- * This file manages recalculation of derived values in the
- * __GLcontext.
+ * /brief This file manages recalculation of derived values in the
+ * __GLcontext.  Also, this is where we initialize the API dispatch table.
  */
 
 
@@ -36,6 +36,9 @@
 #include "api_loopback.h"
 #include "attrib.h"
 #include "blend.h"
+#if FEATURE_ARB_vertex_buffer_object
+#include "bufferobj.h"
+#endif
 #include "buffers.h"
 #include "clip.h"
 #include "colortab.h"
@@ -51,10 +54,10 @@
 #include "fog.h"
 #include "hint.h"
 #include "histogram.h"
+#include "imports.h"
 #include "light.h"
 #include "lines.h"
 #include "matrix.h"
-#include "mmath.h"
 #include "pixel.h"
 #include "points.h"
 #include "polygon.h"
@@ -504,7 +507,7 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->VertexAttribPointerNV = _mesa_VertexAttribPointerNV;
 #endif
 
-#if 0 && FEATURE_NV_fragment_program
+#if FEATURE_NV_fragment_program
    exec->ProgramNamedParameter4fNV = _mesa_ProgramNamedParameter4fNV;
    exec->ProgramNamedParameter4dNV = _mesa_ProgramNamedParameter4dNV;
    exec->ProgramNamedParameter4fvNV = _mesa_ProgramNamedParameter4fvNV;
@@ -550,6 +553,21 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
 
    /* ARB 14. GL_ARB_point_parameters */
    /* reuse EXT_point_parameters functions */
+
+   /* ARB 28. GL_ARB_vertex_buffer_object */
+#if FEATURE_ARB_vertex_buffer_object
+   exec->BindBufferARB = _mesa_BindBufferARB;
+   exec->DeleteBuffersARB = _mesa_DeleteBuffersARB;
+   exec->GenBuffersARB = _mesa_GenBuffersARB;
+   exec->IsBufferARB = _mesa_IsBufferARB;
+   exec->BufferDataARB = _mesa_BufferDataARB;
+   exec->BufferSubDataARB = _mesa_BufferSubDataARB;
+   exec->GetBufferSubDataARB = _mesa_GetBufferSubDataARB;
+   exec->MapBufferARB = _mesa_MapBufferARB;
+   exec->UnmapBufferARB = _mesa_UnmapBufferARB;
+   exec->GetBufferParameterivARB = _mesa_GetBufferParameterivARB;
+   exec->GetBufferPointervARB = _mesa_GetBufferPointervARB;
+#endif
 }
 
 
@@ -601,9 +619,9 @@ update_modelview_scale( GLcontext *ctx )
       GLfloat f = m[2] * m[2] + m[6] * m[6] + m[10] * m[10];
       if (f < 1e-12) f = 1.0;
       if (ctx->_NeedEyeCoords)
-	 ctx->_ModelViewInvScale = (GLfloat) (1.0/GL_SQRT(f));
+	 ctx->_ModelViewInvScale = 1.0F / SQRTF(f);
       else
-	 ctx->_ModelViewInvScale = (GLfloat) GL_SQRT(f);
+	 ctx->_ModelViewInvScale = SQRTF(f);
    }
 }
 
@@ -813,17 +831,26 @@ update_texture_state( GLcontext *ctx )
     */
    for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {
       struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
+      GLuint enableBits;
 
       texUnit->_ReallyEnabled = 0;
       texUnit->_GenFlags = 0;
 
-      if (!texUnit->Enabled)
-	 continue;
+      /* Get the bitmask of texture enables */
+      if (ctx->FragmentProgram.Enabled && ctx->FragmentProgram.Current) {
+         enableBits = ctx->FragmentProgram.Current->TexturesUsed[unit];
+      }
+      else {
+         if (!texUnit->Enabled)
+            continue;
+         enableBits = texUnit->Enabled;
+      }
 
       /* Look for the highest-priority texture target that's enabled and
-       * complete.  That's the one we'll use for texturing.
+       * complete.  That's the one we'll use for texturing.  If we're using
+       * a fragment program we're guaranteed that bitcount(enabledBits) <= 1.
        */
-      if (texUnit->Enabled & TEXTURE_CUBE_BIT) {
+      if (enableBits & TEXTURE_CUBE_BIT) {
          struct gl_texture_object *texObj = texUnit->CurrentCubeMap;
          if (!texObj->Complete) {
             _mesa_test_texobj_completeness(ctx, texObj);
@@ -834,7 +861,7 @@ update_texture_state( GLcontext *ctx )
          }
       }
 
-      if (!texUnit->_ReallyEnabled && (texUnit->Enabled & TEXTURE_3D_BIT)) {
+      if (!texUnit->_ReallyEnabled && (enableBits & TEXTURE_3D_BIT)) {
          struct gl_texture_object *texObj = texUnit->Current3D;
          if (!texObj->Complete) {
             _mesa_test_texobj_completeness(ctx, texObj);
@@ -845,7 +872,7 @@ update_texture_state( GLcontext *ctx )
          }
       }
 
-      if (!texUnit->_ReallyEnabled && (texUnit->Enabled & TEXTURE_RECT_BIT)) {
+      if (!texUnit->_ReallyEnabled && (enableBits & TEXTURE_RECT_BIT)) {
          struct gl_texture_object *texObj = texUnit->CurrentRect;
          if (!texObj->Complete) {
             _mesa_test_texobj_completeness(ctx, texObj);
@@ -856,7 +883,7 @@ update_texture_state( GLcontext *ctx )
          }
       }
 
-      if (!texUnit->_ReallyEnabled && (texUnit->Enabled & TEXTURE_2D_BIT)) {
+      if (!texUnit->_ReallyEnabled && (enableBits & TEXTURE_2D_BIT)) {
          struct gl_texture_object *texObj = texUnit->Current2D;
          if (!texObj->Complete) {
             _mesa_test_texobj_completeness(ctx, texObj);
@@ -867,7 +894,7 @@ update_texture_state( GLcontext *ctx )
          }
       }
 
-      if (!texUnit->_ReallyEnabled && (texUnit->Enabled & TEXTURE_1D_BIT)) {
+      if (!texUnit->_ReallyEnabled && (enableBits & TEXTURE_1D_BIT)) {
          struct gl_texture_object *texObj = texUnit->Current1D;
          if (!texObj->Complete) {
             _mesa_test_texobj_completeness(ctx, texObj);

@@ -20,7 +20,7 @@
 # AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-# DOS/DJGPP samples makefile v1.3 for Mesa 5.0
+# DOS/DJGPP samples makefile v1.3 for Mesa
 #
 #  Copyright (C) 2002 - Borca Daniel
 #  Email : dborca@yahoo.com
@@ -63,10 +63,11 @@ CFLAGS = -Wall -W -pedantic
 CFLAGS += -O2 -ffast-math -mcpu=$(CPU)
 CFLAGS += -I$(TOP)/include
 
+LD = gxx
 LDFLAGS = -s -L$(TOP)/lib
 
 ifeq ($(DXE),1)
-DMESADXE = $(TOP)/lib/dmesadxe.o
+DXE3TABLE = $(TOP)/lib/dxe3tbl.o
 LDLIBS += -liglut -liglu -ligl -ldl
 else
 LDLIBS = -lglut -lglu -lgl
@@ -79,7 +80,7 @@ endif
 .c.o:
 	$(CC) -o $@ $(CFLAGS) -c $<
 .o.exe:
-	$(CC) -o $@ $(LDFLAGS) $(DMESADXE) $< $(LDLIBS)
+	$(LD) -o $@ $(LDFLAGS) $(DXE3TABLE) $< $(LDLIBS)
 
 all:
 	$(error Must specify <filename.exe> to build)

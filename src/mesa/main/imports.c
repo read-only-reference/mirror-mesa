@@ -1,10 +1,10 @@
-/* $Id: imports.c,v 1.31 2003/02/08 15:56:34 brianp Exp $ */
+/* $Id: imports.c,v 1.33 2003/03/04 16:33:53 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -46,10 +46,8 @@
  */
 
 
-#include "glheader.h"
-#include "mtypes.h"
-#include "context.h"
 #include "imports.h"
+#include "context.h"
 
 
 #define MAXSTRING 4000  /* for vsnprintf() */
@@ -71,6 +69,11 @@ extern int vsnprintf(char *str, size_t count, const char *fmt, va_list arg);
  * qsort
  * bsearch
  * rand and RAND_MAX
+ */
+
+
+/**********************************************************************
+ * Memory
  */
 
 void *
@@ -224,6 +227,10 @@ _mesa_bzero( void *dst, size_t n )
 }
 
 
+/**********************************************************************
+ * Math
+ */
+
 double
 _mesa_sin(double a)
 {
@@ -247,12 +254,211 @@ _mesa_cos(double a)
 
 
 double
-_mesa_sqrt(double x)
+_mesa_sqrtd(double x)
 {
 #if defined(XFree86LOADER) && defined(IN_MODULE)
    return xf86sqrt(x);
 #else
    return sqrt(x);
+#endif
+}
+
+
+/*
+ * A High Speed, Low Precision Square Root
+ * by Paul Lalonde and Robert Dawson
+ * from "Graphics Gems", Academic Press, 1990
+ *
+ * SPARC implementation of a fast square root by table
+ * lookup.
+ * SPARC floating point format is as follows:
+ *
+ * BIT 31 	30 	23 	22 	0
+ *     sign	exponent	mantissa
+ */
+static short sqrttab[0x100];    /* declare table of square roots */
+
+static void init_sqrt_table(void)
+{
+#if defined(USE_IEEE) && !defined(DEBUG)
+   unsigned short i;
+   fi_type fi;     /* to access the bits of a float in  C quickly  */
+                   /* we use a union defined in glheader.h         */
+
+   for(i=0; i<= 0x7f; i++) {
+      fi.i = 0;
+
+      /*
+       * Build a float with the bit pattern i as mantissa
+       * and an exponent of 0, stored as 127
+       */
+
+      fi.i = (i << 16) | (127 << 23);
+      fi.f = _mesa_sqrtd(fi.f);
+
+      /*
+       * Take the square root then strip the first 7 bits of
+       * the mantissa into the table
+       */
+
+      sqrttab[i] = (fi.i & 0x7fffff) >> 16;
+
+      /*
+       * Repeat the process, this time with an exponent of
+       * 1, stored as 128
+       */
+
+      fi.i = 0;
+      fi.i = (i << 16) | (128 << 23);
+      fi.f = sqrt(fi.f);
+      sqrttab[i+0x80] = (fi.i & 0x7fffff) >> 16;
+   }
+#else
+   (void) sqrttab;  /* silence compiler warnings */
+#endif /*HAVE_FAST_MATH*/
+}
+
+
+float
+_mesa_sqrtf( float x )
+{
+#if defined(USE_IEEE) && !defined(DEBUG)
+   fi_type num;
+                                /* to access the bits of a float in C
+                                 * we use a union from glheader.h     */
+
+   short e;                     /* the exponent */
+   if (x == 0.0F) return 0.0F;  /* check for square root of 0 */
+   num.f = x;
+   e = (num.i >> 23) - 127;     /* get the exponent - on a SPARC the */
+                                /* exponent is stored with 127 added */
+   num.i &= 0x7fffff;           /* leave only the mantissa */
+   if (e & 0x01) num.i |= 0x800000;
+                                /* the exponent is odd so we have to */
+                                /* look it up in the second half of  */
+                                /* the lookup table, so we set the   */
+                                /* high bit                                */
+   e >>= 1;                     /* divide the exponent by two */
+                                /* note that in C the shift */
+                                /* operators are sign preserving */
+                                /* for signed operands */
+   /* Do the table lookup, based on the quaternary mantissa,
+    * then reconstruct the result back into a float
+    */
+   num.i = ((sqrttab[num.i >> 16]) << 16) | ((e + 127) << 23);
+
+   return num.f;
+#else
+   return (float) _mesa_sqrtd((double) x);
+#endif
+}
+
+
+/**
+ inv_sqrt - A single precision 1/sqrt routine for IEEE format floats.
+ written by Josh Vanderhoof, based on newsgroup posts by James Van Buskirk
+ and Vesa Karvonen.
+*/
+float
+_mesa_inv_sqrtf(float n)
+{
+#if defined(USE_IEEE) && !defined(DEBUG)
+        float r0, x0, y0;
+        float r1, x1, y1;
+        float r2, x2, y2;
+#if 0 /* not used, see below -BP */
+        float r3, x3, y3;
+#endif
+        union { float f; unsigned int i; } u;
+        unsigned int magic;
+
+        /*
+         Exponent part of the magic number -
+
+         We want to:
+         1. subtract the bias from the exponent,
+         2. negate it
+         3. divide by two (rounding towards -inf)
+         4. add the bias back
+
+         Which is the same as subtracting the exponent from 381 and dividing
+         by 2.
+
+         floor(-(x - 127) / 2) + 127 = floor((381 - x) / 2)
+        */
+
+        magic = 381 << 23;
+
+        /*
+         Significand part of magic number -
+
+         With the current magic number, "(magic - u.i) >> 1" will give you:
+
+         for 1 <= u.f <= 2: 1.25 - u.f / 4
+         for 2 <= u.f <= 4: 1.00 - u.f / 8
+
+         This isn't a bad approximation of 1/sqrt.  The maximum difference from
+         1/sqrt will be around .06.  After three Newton-Raphson iterations, the
+         maximum difference is less than 4.5e-8.  (Which is actually close
+         enough to make the following bias academic...)
+
+         To get a better approximation you can add a bias to the magic
+         number.  For example, if you subtract 1/2 of the maximum difference in
+         the first approximation (.03), you will get the following function:
+
+         for 1 <= u.f <= 2:    1.22 - u.f / 4
+         for 2 <= u.f <= 3.76: 0.97 - u.f / 8
+         for 3.76 <= u.f <= 4: 0.72 - u.f / 16
+         (The 3.76 to 4 range is where the result is < .5.)
+
+         This is the closest possible initial approximation, but with a maximum
+         error of 8e-11 after three NR iterations, it is still not perfect.  If
+         you subtract 0.0332281 instead of .03, the maximum error will be
+         2.5e-11 after three NR iterations, which should be about as close as
+         is possible.
+
+         for 1 <= u.f <= 2:    1.2167719 - u.f / 4
+         for 2 <= u.f <= 3.73: 0.9667719 - u.f / 8
+         for 3.73 <= u.f <= 4: 0.7167719 - u.f / 16
+
+        */
+
+        magic -= (int)(0.0332281 * (1 << 25));
+
+        u.f = n;
+        u.i = (magic - u.i) >> 1;
+
+        /*
+         Instead of Newton-Raphson, we use Goldschmidt's algorithm, which
+         allows more parallelism.  From what I understand, the parallelism
+         comes at the cost of less precision, because it lets error
+         accumulate across iterations.
+        */
+        x0 = 1.0f;
+        y0 = 0.5f * n;
+        r0 = u.f;
+
+        x1 = x0 * r0;
+        y1 = y0 * r0 * r0;
+        r1 = 1.5f - y1;
+
+        x2 = x1 * r1;
+        y2 = y1 * r1 * r1;
+        r2 = 1.5f - y2;
+
+#if 1
+        return x2 * r2;  /* we can stop here, and be conformant -BP */
+#else
+        x3 = x2 * r2;
+        y3 = y2 * r2 * r2;
+        r3 = 1.5f - y3;
+
+        return x3 * r3;
+#endif
+#elif defined(XFree86LOADER) && defined(IN_MODULE)
+        return 1.0F / xf86sqrt(n);
+#else
+        return 1.0F / sqrt(n);
 #endif
 }
 
@@ -268,6 +474,25 @@ _mesa_pow(double x, double y)
 }
 
 
+/*
+ * Return number of bits set in given GLuint.
+ */
+unsigned int
+_mesa_bitcount(unsigned int n)
+{
+   unsigned int bits;
+   for (bits = 0; n > 0; n = n >> 1) {
+      bits += (n & 1);
+   }
+   return bits;
+}
+
+
+
+/**********************************************************************
+ * Environment vars
+ */
+
 char *
 _mesa_getenv( const char *var )
 {
@@ -278,6 +503,10 @@ _mesa_getenv( const char *var )
 #endif
 }
 
+
+/**********************************************************************
+ * String
+ */
 
 char *
 _mesa_strstr( const char *haystack, const char *needle )
@@ -389,6 +618,10 @@ _mesa_strtod( const char *s, char **end )
 }
 
 
+/**********************************************************************
+ * I/O
+ */
+
 int
 _mesa_sprintf( char *str, const char *fmt, ... )
 {
@@ -420,6 +653,10 @@ _mesa_printf( const char *fmtString, ... )
 #endif
 }
 
+
+/**********************************************************************
+ * Diagnostics
+ */
 
 void
 _mesa_warning( GLcontext *ctx, const char *fmtString, ... )
@@ -673,12 +910,34 @@ default_GetDrawablePrivate(__GLcontext *gc)
 /*
  * Initialize a __GLimports object to point to the functions in
  * this file.  This is to be called from device drivers.
+ * Also, do some one-time initializations.
  * Input:  imports - the object to init
  *         driverCtx - pointer to device driver-specific data
  */
 void
 _mesa_init_default_imports(__GLimports *imports, void *driverCtx)
 {
+   /* XXX maybe move this one-time init stuff into context.c */
+   static GLboolean initialized = GL_FALSE;
+   if (!initialized) {
+      init_sqrt_table();
+
+#if defined(_FPU_GETCW) && defined(_FPU_SETCW)
+      {
+         const char *debug = _mesa_getenv("MESA_DEBUG");
+         if (debug && _mesa_strcmp(debug, "FP")==0) {
+            /* die on FP exceptions */
+            fpu_control_t mask;
+            _FPU_GETCW(mask);
+            mask &= ~(_FPU_MASK_IM | _FPU_MASK_DM | _FPU_MASK_ZM
+                      | _FPU_MASK_OM | _FPU_MASK_UM);
+            _FPU_SETCW(mask);
+         }
+      }
+#endif
+      initialized = GL_TRUE;
+   }
+
    imports->malloc = default_malloc;
    imports->calloc = default_calloc;
    imports->realloc = default_realloc;

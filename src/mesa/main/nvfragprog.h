@@ -1,4 +1,4 @@
-/* $Id: nvfragprog.h,v 1.3 2003/02/23 04:09:21 brianp Exp $ */
+/* $Id: nvfragprog.h,v 1.5 2003/03/15 17:33:26 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -36,6 +36,21 @@
 #include "config.h"
 
 
+/* Fragment input registers / attributes */
+#define FRAG_ATTRIB_WPOS  0
+#define FRAG_ATTRIB_COL0  1
+#define FRAG_ATTRIB_COL1  2
+#define FRAG_ATTRIB_FOGC  3
+#define FRAG_ATTRIB_TEX0  4
+#define FRAG_ATTRIB_TEX1  5
+#define FRAG_ATTRIB_TEX2  6
+#define FRAG_ATTRIB_TEX3  7
+#define FRAG_ATTRIB_TEX4  8
+#define FRAG_ATTRIB_TEX5  9
+#define FRAG_ATTRIB_TEX6  10
+#define FRAG_ATTRIB_TEX7  11
+
+
 /* Location of register sets within the whole register file */
 #define FP_INPUT_REG_START  0
 #define FP_INPUT_REG_END    (FP_INPUT_REG_START + MAX_NV_FRAGMENT_PROGRAM_INPUTS - 1)
@@ -49,7 +64,7 @@
 #define FP_DUMMY_REG_END    (FP_DUMMY_REG_START + MAX_NV_FRAGMENT_PROGRAM_WRITE_ONLYS - 1)
 
 
-
+/* condition codes */
 #define COND_GT  1  /* greater than zero */
 #define COND_EQ  2  /* equal to zero */
 #define COND_LT  3  /* less than zero */
@@ -59,6 +74,12 @@
 #define COND_NE  7  /* not equal to zero */
 #define COND_TR  8  /* always true */
 #define COND_FL  9  /* always false */
+
+
+/* instruction precision */
+#define FLOAT32  0x1
+#define FLOAT16  0x2
+#define FIXED12  0x4
 
 
 enum fp_opcode {
@@ -139,9 +160,9 @@ struct fp_instruction
    struct fp_dst_register DstReg;
    GLboolean Saturate;
    GLboolean UpdateCondRegister;
-   GLuint Precision;    /* SINGLE, HALF or FIXED */
-   GLuint TexSrcUnit;   /* texture unit for TEX, TXD, TXP instructions */
-   GLuint TexSrcIndex;  /* texture target for TEX, TXD, TXP instructions */
+   GLubyte Precision;    /* FLOAT32, FLOAT16 or FIXED12 */
+   GLubyte TexSrcUnit;   /* texture unit for TEX, TXD, TXP instructions */
+   GLubyte TexSrcBit;    /* TEXTURE_1D,2D,3D,CUBE,RECT_BIT source target */
 };
 
 

@@ -1,10 +1,10 @@
-/* $Id: s_span.h,v 1.17 2002/06/15 02:38:17 brianp Exp $ */
+/* $Id: s_span.h,v 1.19 2003/03/25 02:23:47 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  4.1
+ * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -34,38 +34,43 @@
 
 
 extern void
-_mesa_span_default_z( GLcontext *ctx, struct sw_span *span );
+_swrast_span_default_z( GLcontext *ctx, struct sw_span *span );
 
 extern void
-_mesa_span_interpolate_z( const GLcontext *ctx, struct sw_span *span );
+_swrast_span_interpolate_z( const GLcontext *ctx, struct sw_span *span );
 
 extern void
-_mesa_span_default_fog( GLcontext *ctx, struct sw_span *span );
+_swrast_span_default_fog( GLcontext *ctx, struct sw_span *span );
 
 extern void
-_mesa_span_default_color( GLcontext *ctx, struct sw_span *span );
+_swrast_span_default_color( GLcontext *ctx, struct sw_span *span );
 
 extern void
-_mesa_span_default_texcoords( GLcontext *ctx, struct sw_span *span );
+_swrast_span_default_texcoords( GLcontext *ctx, struct sw_span *span );
+
+extern GLfloat
+_swrast_compute_lambda(GLfloat dsdx, GLfloat dsdy, GLfloat dtdx, GLfloat dtdy,
+                     GLfloat dqdx, GLfloat dqdy, GLfloat texW, GLfloat texH,
+                     GLfloat s, GLfloat t, GLfloat q, GLfloat invQ);
 
 extern void
-_mesa_write_index_span( GLcontext *ctx, struct sw_span *span);
-
-
-extern void
-_mesa_write_rgba_span( GLcontext *ctx, struct sw_span *span);
-
-
-extern void
-_mesa_write_texture_span( GLcontext *ctx, struct sw_span *span);
+_swrast_write_index_span( GLcontext *ctx, struct sw_span *span);
 
 
 extern void
-_mesa_read_rgba_span( GLcontext *ctx, GLframebuffer *buffer,
+_swrast_write_rgba_span( GLcontext *ctx, struct sw_span *span);
+
+
+extern void
+_swrast_write_texture_span( GLcontext *ctx, struct sw_span *span);
+
+
+extern void
+_swrast_read_rgba_span( GLcontext *ctx, GLframebuffer *buffer,
                       GLuint n, GLint x, GLint y, GLchan rgba[][4] );
 
 extern void
-_mesa_read_index_span( GLcontext *ctx, GLframebuffer *buffer,
+_swrast_read_index_span( GLcontext *ctx, GLframebuffer *buffer,
                        GLuint n, GLint x, GLint y, GLuint indx[] );
 
 #endif

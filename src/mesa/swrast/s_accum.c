@@ -1,4 +1,4 @@
-/* $Id: s_accum.c,v 1.20 2002/10/30 19:49:30 brianp Exp $ */
+/* $Id: s_accum.c,v 1.22 2003/03/25 02:23:44 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -28,7 +28,6 @@
 #include "glheader.h"
 #include "context.h"
 #include "macros.h"
-#include "mmath.h"
 #include "imports.h"
 
 #include "s_accum.h"
@@ -68,7 +67,7 @@
 
 
 void
-_mesa_alloc_accum_buffer( GLframebuffer *buffer )
+_swrast_alloc_accum_buffer( GLframebuffer *buffer )
 {
    GET_CURRENT_CONTEXT(ctx);
    GLint n;
@@ -131,7 +130,7 @@ static void rescale_accum( GLcontext *ctx )
  * Clear the accumulation Buffer.
  */
 void
-_mesa_clear_accum_buffer( GLcontext *ctx )
+_swarst_clear_accum_buffer( GLcontext *ctx )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    GLuint buffersize;
@@ -326,7 +325,7 @@ _swrast_Accum( GLcontext *ctx, GLenum op, GLfloat value,
             for (j = 0; j < height; j++) {
 
                GLint i, i4;
-               _mesa_read_rgba_span(ctx, ctx->DrawBuffer, width, xpos, ypos, rgba);
+               _swrast_read_rgba_span(ctx, ctx->DrawBuffer, width, xpos, ypos, rgba);
                for (i = i4 = 0; i < width; i++, i4+=4) {
                   acc[i4+0] += rgba[i][RCOMP];
                   acc[i4+1] += rgba[i][GCOMP];
@@ -347,7 +346,7 @@ _swrast_Accum( GLcontext *ctx, GLenum op, GLfloat value,
             for (j=0;j<height;j++) {
                GLaccum *acc = ctx->DrawBuffer->Accum + ypos * width4 + xpos * 4;
                GLint i;
-               _mesa_read_rgba_span(ctx, ctx->DrawBuffer, width, xpos, ypos, rgba);
+               _swrast_read_rgba_span(ctx, ctx->DrawBuffer, width, xpos, ypos, rgba);
                for (i=0;i<width;i++) {
                   acc[0] += (GLaccum) ( (GLfloat) rgba[i][RCOMP] * rscale );
                   acc[1] += (GLaccum) ( (GLfloat) rgba[i][GCOMP] * gscale );
@@ -390,7 +389,7 @@ _swrast_Accum( GLcontext *ctx, GLenum op, GLfloat value,
             assert(swrast->_IntegerAccumScaler <= 1.0);
             for (j = 0; j < height; j++) {
                GLint i, i4;
-               _mesa_read_rgba_span(ctx, ctx->DrawBuffer, width, xpos, ypos, rgba);
+               _swrast_read_rgba_span(ctx, ctx->DrawBuffer, width, xpos, ypos, rgba);
                for (i = i4 = 0; i < width; i++, i4 += 4) {
                   acc[i4+0] = rgba[i][RCOMP];
                   acc[i4+1] = rgba[i][GCOMP];
@@ -413,7 +412,7 @@ _swrast_Accum( GLcontext *ctx, GLenum op, GLfloat value,
             GLint i, j;
             for (j = 0; j < height; j++) {
                GLaccum *acc = ctx->DrawBuffer->Accum + ypos * width4 + xpos * 4;
-               _mesa_read_rgba_span(ctx, ctx->DrawBuffer, width, xpos, ypos, rgba);
+               _swrast_read_rgba_span(ctx, ctx->DrawBuffer, width, xpos, ypos, rgba);
                for (i=0;i<width;i++) {
 #if 0
                   *acc++ = (GLaccum) ((GLfloat) rgba[i][RCOMP] * rscale + d);
@@ -473,13 +472,13 @@ _swrast_Accum( GLcontext *ctx, GLenum op, GLfloat value,
                   rgba[i][ACOMP] = multTable[acc[i4+3]];
                }
                if (colorMask != 0xffffffff) {
-                  _mesa_mask_rgba_array( ctx, width, xpos, ypos, rgba );
+                  _swrast_mask_rgba_array( ctx, width, xpos, ypos, rgba );
                }
                (*swrast->Driver.WriteRGBASpan)( ctx, width, xpos, ypos,
                                              (const GLchan (*)[4])rgba, NULL );
                if (ctx->DrawBuffer->UseSoftwareAlphaBuffers
                    && ctx->Color.ColorMask[ACOMP]) {
-                  _mesa_write_alpha_span(ctx, width, xpos, ypos,
+                  _swrast_write_alpha_span(ctx, width, xpos, ypos,
                                          (CONST GLchan (*)[4]) rgba, NULL);
                }
                ypos++;
@@ -508,13 +507,13 @@ _swrast_Accum( GLcontext *ctx, GLenum op, GLfloat value,
                   rgba[i][ACOMP] = CLAMP( a, 0, CHAN_MAX );
                }
                if (colorMask != 0xffffffff) {
-                  _mesa_mask_rgba_array( ctx, width, xpos, ypos, rgba );
+                  _swrast_mask_rgba_array( ctx, width, xpos, ypos, rgba );
                }
                (*swrast->Driver.WriteRGBASpan)( ctx, width, xpos, ypos,
                                              (const GLchan (*)[4])rgba, NULL );
                if (ctx->DrawBuffer->UseSoftwareAlphaBuffers
                    && ctx->Color.ColorMask[ACOMP]) {
-                  _mesa_write_alpha_span(ctx, width, xpos, ypos,
+                  _swrast_write_alpha_span(ctx, width, xpos, ypos,
                                          (CONST GLchan (*)[4]) rgba, NULL);
                }
                ypos++;

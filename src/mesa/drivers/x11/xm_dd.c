@@ -1,10 +1,10 @@
-/* $Id: xm_dd.c,v 1.42 2003/01/16 19:10:46 alanh Exp $ */
+/* $Id: xm_dd.c,v 1.45 2003/03/27 17:51:33 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  4.0.3
+ * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -23,7 +23,7 @@
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-/* $XFree86: xc/extras/Mesa/src/X/xm_dd.c,v 1.2 2002/02/26 23:37:31 tsi Exp $ */
+
 
 #include "glxheader.h"
 #include "context.h"
@@ -35,6 +35,7 @@
 #include "imports.h"
 #include "mtypes.h"
 #include "state.h"
+#include "texobj.h"
 #include "texstore.h"
 #include "texformat.h"
 #include "xmesaP.h"
@@ -244,6 +245,7 @@ color_mask(GLcontext *ctx,
          if (bmask)   m |= GET_BLUEMASK(xmesa->xm_visual);
       }
       XMesaSetPlaneMask( xmesa->display, xmesa->xm_draw_buffer->cleargc, m );
+      XMesaSetPlaneMask( xmesa->display, xmesa->xm_draw_buffer->gc, m );
    }
 }
 
@@ -705,7 +707,7 @@ clear_buffers( GLcontext *ctx, GLbitfield mask,
    if ((mask & (DD_FRONT_LEFT_BIT | DD_BACK_LEFT_BIT)) &&
        xmesa->xm_draw_buffer->mesa_buffer.UseSoftwareAlphaBuffers &&
        ctx->Color.ColorMask[ACOMP]) {
-      _mesa_clear_alpha_buffers(ctx);
+      _swrast_clear_alpha_buffers(ctx);
    }
 
    /* we can't handle color or index masking */

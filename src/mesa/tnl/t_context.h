@@ -1,4 +1,4 @@
-/* $Id: t_context.h,v 1.44 2003/01/14 04:55:47 brianp Exp $ */
+/* $Id: t_context.h,v 1.46 2003/03/31 18:19:56 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -143,9 +143,10 @@
 
 
 /**
- * KW: Represents everything that can take place between a begin and
- * end, and can represent multiple begin/end pairs.  Can be used to
- * losslessly encode this information in display lists.
+ * Stores everything that can take place between a glBegin and glEnd.
+ * Adjacent glBegin/glEnd pairs are stored back-to-back when there's no
+ * state changes between them.
+ * Used for immediate mode rendering and display lists.
  */
 struct immediate
 {
@@ -191,13 +192,12 @@ struct immediate
    GLuint  PrimitiveLength[IMM_SIZE]; /* BEGIN/END */
    GLuint  Flag[IMM_SIZE];	      /* VERT_BIT_* flags */
 
-   /* All vertex attributes (position, normal, color, secondary color,
-    * texcoords, fog coord) are stored in the Attrib[] arrays instead
-    * of individual arrays as we did prior to Mesa 4.1.
-    *
-    * XXX may need to use 32-byte aligned allocation for this!!!
+   /* Attrib is an array [MAX_VERT_ATTRIBS] of pointer to array [][4]
+    * of GLfloat.
+    * We only pre-allocate the vertex position array.  The other vertex
+    * attribute arrays are only allocated when needed to save memory.
     */
-   GLfloat Attrib[VERT_ATTRIB_MAX][IMM_SIZE][4];  /* GL_NV_vertex_program */
+   GLfloat (*Attrib[VERT_ATTRIB_MAX])[4];
 
    GLfloat *NormalLengthPtr; /* length of normal vectors (display list only) */
 
@@ -209,16 +209,21 @@ struct immediate
 
 struct vertex_arrays
 {
-   /* XXX move a bunch of these fields into the Attribs[] array??? */
+   /* Conventional vertex attribute arrays */
    GLvector4f  Obj;
    GLvector4f  Normal;
    struct gl_client_array Color;
    struct gl_client_array SecondaryColor;
-   GLvector1ui Index;
-   GLvector1ub EdgeFlag;
-   GLvector4f  TexCoord[MAX_TEXTURE_COORD_UNITS];
-   GLvector1ui Elt;
    GLvector4f  FogCoord;
+   GLvector4f  TexCoord[MAX_TEXTURE_COORD_UNITS];
+   GLvector1ub EdgeFlag;
+   GLvector1ui Index;
+   GLvector1ui Elt;
+
+   /* These attributes don't alias with the conventional attributes.
+    * The GL_NV_vertex_program extension defines 16 extra sets of vertex
+    * arrays which have precedent over the conventional arrays when enabled.
+    */
    GLvector4f  Attribs[VERT_ATTRIB_MAX];
 };
 

@@ -18,6 +18,7 @@ CORE_SRCS = \
 	accum.c \
 	attrib.c \
 	blend.c \
+	bufferobj.c \
 	buffers.c \
 	clip.c \
 	colortab.c \
@@ -45,7 +46,6 @@ CORE_SRCS = \
 	light.c \
 	lines.c \
 	matrix.c \
-	mmath.c \
 	nvprogram.c \
 	nvfragparse.c \
 	nvvertexec.c \
@@ -92,7 +92,6 @@ CORE_SRCS = \
 	swrast\s_drawpix.c \
 	swrast\s_feedback.c \
 	swrast\s_fog.c \
-	swrast\s_histogram.c \
 	swrast\s_imaging.c \
 	swrast\s_lines.c \
 	swrast\s_logic.c \

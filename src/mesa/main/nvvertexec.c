@@ -1,4 +1,4 @@
-/* $Id: nvvertexec.c,v 1.1 2003/01/14 04:55:46 brianp Exp $ */
+/* $Id: nvvertexec.c,v 1.5 2003/03/29 16:04:31 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -37,7 +37,6 @@
 #include "mtypes.h"
 #include "nvvertexec.h"
 #include "nvvertprog.h"
-#include "mmath.h"
 #include "math/m_matrix.h"
 
 
@@ -232,11 +231,11 @@ fetch_vector4( const struct vp_src_register *source,
    const GLfloat *src;
 
    if (source->RelAddr) {
-      GLint reg = source->Register + machine->AddressReg;
-      if (reg < VP_PROG_REG_START || reg > VP_PROG_REG_END)
+      const GLint reg = source->Register + machine->AddressReg;
+      if (reg < 0 || reg > MAX_NV_VERTEX_PROGRAM_PARAMS)
          src = zero;
       else
-         src = machine->Registers[reg];
+         src = machine->Registers[VP_PROG_REG_START + reg];
    }
    else {
       src = machine->Registers[source->Register];
@@ -269,11 +268,11 @@ fetch_vector1( const struct vp_src_register *source,
    const GLfloat *src;
 
    if (source->RelAddr) {
-      GLint reg = source->Register + machine->AddressReg;
-      if (reg < VP_PROG_REG_START || reg > VP_PROG_REG_END)
+      const GLint reg = source->Register + machine->AddressReg;
+      if (reg < 0 || reg > MAX_NV_VERTEX_PROGRAM_PARAMS)
          src = zero;
       else
-         src = machine->Registers[reg];
+         src = machine->Registers[VP_PROG_REG_START + reg];
    }
    else {
       src = machine->Registers[source->Register];
@@ -334,10 +333,6 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
    struct vp_machine *machine = &ctx->VertexProgram.Machine;
    const struct vp_instruction *inst;
 
-   /* XXX load vertex fields into input registers */
-   /* and do other initialization */
-
-
    for (inst = program->Instructions; inst->Opcode != VP_OPCODE_END; inst++) {
       switch (inst->Opcode) {
          case VP_OPCODE_MOV:
@@ -381,7 +376,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
             {
                GLfloat t[4];
                fetch_vector1( &inst->SrcReg[0], machine, t );
-               t[0] = (float) (1.0 / sqrt(fabs(t[0])));
+               t[0] = INV_SQRTF(FABSF(t[0]));
                t[1] = t[2] = t[3] = t[0];
                store_vector4( &inst->DstReg, machine, t );
             }
@@ -393,15 +388,11 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                floor_t0 = (float) floor(t[0]);
                if (floor_t0 > FLT_MAX_EXP) {
                   SET_POS_INFINITY(q[0]);
-                  q[1] = 0.0F;
                   SET_POS_INFINITY(q[2]);
-                  q[3] = 1.0F;
                }
                else if (floor_t0 < FLT_MIN_EXP) {
                   q[0] = 0.0F;
-                  q[1] = 0.0F;
                   q[2] = 0.0F;
-                  q[3] = 0.0F;
                }
                else {
 #ifdef USE_IEEE
@@ -412,11 +403,11 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
 #else
                   q[0] = (GLfloat) pow(2.0, floor_t0);
 #endif
-                  q[1] = t[0] - floor_t0;
                   q[2] = (GLfloat) (q[0] * LOG2(q[1]));
-                  q[3] = 1.0F;
                }
-               store_vector4( &inst->DstReg, machine, t );
+               q[1] = t[0] - floor_t0;
+               q[3] = 1.0F;
+               store_vector4( &inst->DstReg, machine, q );
             }
             break;
          case VP_OPCODE_LOG:

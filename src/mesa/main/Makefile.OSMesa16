@@ -1,8 +1,8 @@
-# $Id: Makefile.OSMesa16,v 1.11 2003/01/14 04:55:45 brianp Exp $
+# $Id: Makefile.OSMesa16,v 1.14 2003/03/29 17:01:02 brianp Exp $
 
 # Mesa 3-D graphics library
-# Version:  5.0
-# Copyright (C) 1995-2002  Brian Paul
+# Version:  5.1
+# Copyright (C) 1995-2003  Brian Paul
 
 # Makefile for building Mesa for 16/32-bit/channel rendering with the OSMesa
 # driver.
@@ -29,6 +29,7 @@ CORE_SOURCES = \
 	accum.c \
 	attrib.c \
 	blend.c \
+	bufferobj.c \
 	buffers.c \
 	clip.c \
 	colortab.c \
@@ -56,7 +57,6 @@ CORE_SOURCES = \
 	light.c \
 	lines.c \
 	matrix.c \
-	mmath.c \
 	nvprogram.c \
 	nvfragparse.c \
 	nvvertexec.c \
@@ -104,7 +104,6 @@ CORE_SOURCES = \
 	swrast/s_drawpix.c \
 	swrast/s_feedback.c \
 	swrast/s_fog.c \
-	swrast/s_histogram.c \
 	swrast/s_imaging.c \
 	swrast/s_lines.c \
 	swrast/s_logic.c \

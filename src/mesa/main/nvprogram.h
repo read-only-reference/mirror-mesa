@@ -1,4 +1,4 @@
-/* $Id: nvprogram.h,v 1.4 2003/02/25 19:30:29 brianp Exp $ */
+/* $Id: nvprogram.h,v 1.6 2003/03/29 16:37:08 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -32,26 +32,7 @@
 #define NVPROGRAM_H
 
 
-enum symbol_type
-{
-   Definition,
-   Declaration
-};
-
-
-extern void
-_mesa_add_symbol(struct symbol_table *symbolTable,
-                 const char *name, enum symbol_type type,
-                 const GLfloat *value);
-
-extern GLboolean
-_mesa_lookup_symbol(const struct symbol_table *symbolTable,
-                    const char *name, GLfloat *value);
-
-extern void
-_mesa_assign_program_registers(struct symbol_table *symbolTable);
-
-
+/** Internal functions **/
 extern void
 _mesa_set_program_error(GLcontext *ctx, GLint pos, const char *string);
 
@@ -62,6 +43,9 @@ _mesa_find_line_column(const GLubyte *string, const GLubyte *pos,
 extern void
 _mesa_delete_program(GLcontext *ctx, GLuint id);
 
+
+
+/** API functions **/
 
 extern void
 _mesa_BindProgramNV(GLenum target, GLuint id);
@@ -80,7 +64,6 @@ _mesa_AreProgramsResidentNV(GLsizei n, const GLuint *ids, GLboolean *residences)
 
 extern void
 _mesa_RequestResidentProgramsNV(GLsizei n, const GLuint *ids);
-
 
 extern void
 _mesa_GetProgramParameterfvNV(GLenum target, GLuint index, GLenum pname, GLfloat *params);
@@ -138,43 +121,53 @@ _mesa_TrackMatrixNV(GLenum target, GLuint address, GLenum matrix, GLenum transfo
 
 
 extern void
-_mesa_VertexAttribs1svNV(GLuint index, GLsizei n, const GLshort *v);
+_mesa_ProgramNamedParameter4fNV(GLuint id, GLsizei len, const GLubyte *name,
+                                GLfloat x, GLfloat y, GLfloat z, GLfloat w);
 
 extern void
-_mesa_VertexAttribs1fvNV(GLuint index, GLsizei n, const GLfloat *v);
+_mesa_ProgramNamedParameter4fvNV(GLuint id, GLsizei len, const GLubyte *name,
+                                 const float v[]);
 
 extern void
-_mesa_VertexAttribs1dvNV(GLuint index, GLsizei n, const GLdouble *v);
+_mesa_ProgramNamedParameter4dNV(GLuint id, GLsizei len, const GLubyte *name,
+                                GLdouble x, GLdouble y, GLdouble z, GLdouble w);
 
 extern void
-_mesa_VertexAttribs2svNV(GLuint index, GLsizei n, const GLshort *v);
+_mesa_ProgramNamedParameter4dvNV(GLuint id, GLsizei len, const GLubyte *name,
+                                 const double v[]);
 
 extern void
-_mesa_VertexAttribs2fvNV(GLuint index, GLsizei n, const GLfloat *v);
+_mesa_GetProgramNamedParameterfvNV(GLuint id, GLsizei len, const GLubyte *name,
+                                   GLfloat *params);
 
 extern void
-_mesa_VertexAttribs2dvNV(GLuint index, GLsizei n, const GLdouble *v);
+_mesa_GetProgramNamedParameterdvNV(GLuint id, GLsizei len, const GLubyte *name,
+                                   GLdouble *params);
 
 extern void
-_mesa_VertexAttribs3svNV(GLuint index, GLsizei n, const GLshort *v);
+_mesa_ProgramLocalParameter4fARB(GLenum target, GLuint index,
+                                 GLfloat x, GLfloat y, GLfloat z, GLfloat w);
 
 extern void
-_mesa_VertexAttribs3fvNV(GLuint index, GLsizei n, const GLfloat *v);
+_mesa_ProgramLocalParameter4fvARB(GLenum target, GLuint index,
+                                  const GLfloat *params);
 
 extern void
-_mesa_VertexAttribs3dvNV(GLuint index, GLsizei n, const GLdouble *v);
+_mesa_ProgramLocalParameter4dARB(GLenum target, GLuint index,
+                                 GLdouble x, GLdouble y,
+                                 GLdouble z, GLdouble w);
 
 extern void
-_mesa_VertexAttribs4svNV(GLuint index, GLsizei n, const GLshort *v);
+_mesa_ProgramLocalParameter4dvARB(GLenum target, GLuint index,
+                                  const GLdouble *params);
 
 extern void
-_mesa_VertexAttribs4fvNV(GLuint index, GLsizei n, const GLfloat *v);
+_mesa_GetProgramLocalParameterfvARB(GLenum target, GLuint index,
+                                    GLfloat *params);
 
 extern void
-_mesa_VertexAttribs4dvNV(GLuint index, GLsizei n, const GLdouble *v);
-
-extern void
-_mesa_VertexAttribs4ubvNV(GLuint index, GLsizei n, const GLubyte *v);
+_mesa_GetProgramLocalParameterdvARB(GLenum target, GLuint index,
+                                    GLdouble *params);
 
 
 #endif

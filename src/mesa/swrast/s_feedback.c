@@ -1,10 +1,10 @@
-/* $Id: s_feedback.c,v 1.9 2001/09/19 20:30:44 kschultz Exp $ */
+/* $Id: s_feedback.c,v 1.11 2003/03/25 02:23:46 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  5.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -30,7 +30,6 @@
 #include "enums.h"
 #include "feedback.h"
 #include "macros.h"
-#include "mmath.h"
 
 #include "s_context.h"
 #include "s_feedback.h"
@@ -86,12 +85,12 @@ static void feedback_vertex( GLcontext *ctx,
 /*
  * Put triangle in feedback buffer.
  */
-void _mesa_feedback_triangle( GLcontext *ctx,
+void _swrast_feedback_triangle( GLcontext *ctx,
                            const SWvertex *v0,
                            const SWvertex *v1,
 			   const SWvertex *v2)
 {
-   if (_mesa_cull_triangle( ctx, v0, v1, v2 )) {
+   if (_swrast_culltriangle( ctx, v0, v1, v2 )) {
       FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_POLYGON_TOKEN );
       FEEDBACK_TOKEN( ctx, (GLfloat) 3 );        /* three vertices */
 
@@ -108,7 +107,7 @@ void _mesa_feedback_triangle( GLcontext *ctx,
 }
 
 
-void _mesa_feedback_line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1 )
+void _swrast_feedback_line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1 )
 {
    GLenum token = GL_LINE_TOKEN;
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
@@ -130,19 +129,19 @@ void _mesa_feedback_line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1
 }
 
 
-void _mesa_feedback_point( GLcontext *ctx, const SWvertex *v )
+void _swrast_feedback_point( GLcontext *ctx, const SWvertex *v )
 {
    FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_POINT_TOKEN );
    feedback_vertex( ctx, v, v );
 }
 
 
-void _mesa_select_triangle( GLcontext *ctx,
+void _swrast_select_triangle( GLcontext *ctx,
                          const SWvertex *v0,
                          const SWvertex *v1,
 			 const SWvertex *v2)
 {
-   if (_mesa_cull_triangle( ctx, v0, v1, v2 )) {
+   if (_swrast_culltriangle( ctx, v0, v1, v2 )) {
       const GLfloat zs = 1.0F / ctx->DepthMaxF;
 
       _mesa_update_hitflag( ctx, v0->win[2] * zs );
@@ -152,7 +151,7 @@ void _mesa_select_triangle( GLcontext *ctx,
 }
 
 
-void _mesa_select_line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1 )
+void _swrast_select_line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1 )
 {
    const GLfloat zs = 1.0F / ctx->DepthMaxF;
    _mesa_update_hitflag( ctx, v0->win[2] * zs );
@@ -160,7 +159,7 @@ void _mesa_select_line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1 )
 }
 
 
-void _mesa_select_point( GLcontext *ctx, const SWvertex *v )
+void _swrast_select_point( GLcontext *ctx, const SWvertex *v )
 {
    const GLfloat zs = 1.0F / ctx->DepthMaxF;
    _mesa_update_hitflag( ctx, v->win[2] * zs );

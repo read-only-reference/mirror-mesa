@@ -1,4 +1,4 @@
-/* $Id: s_alpha.c,v 1.12 2002/10/04 19:10:12 brianp Exp $ */
+/* $Id: s_alpha.c,v 1.14 2003/03/25 02:23:44 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -33,21 +33,20 @@
 #include "context.h"
 #include "colormac.h"
 #include "macros.h"
-#include "mmath.h"
 
 #include "s_alpha.h"
 #include "s_context.h"
 
 
 /**
- * \fn GLint _mesa_alpha_test( const GLcontext *ctx, struct sw_span *span )
+ * \fn GLint _swrast_alpha_test( const GLcontext *ctx, struct sw_span *span )
  * \brief Apply the alpha test to a span of pixels.
  * \return
  *      - "0" = all pixels in the span failed the alpha test.
  *      - "1" = one or more pixels passed the alpha test.
  */
 GLint
-_mesa_alpha_test( const GLcontext *ctx, struct sw_span *span )
+_swrast_alpha_test( const GLcontext *ctx, struct sw_span *span )
 {
    const GLchan (*rgba)[4] = (const GLchan (*)[4]) span->array->rgba;
    GLchan ref;
@@ -92,7 +91,7 @@ _mesa_alpha_test( const GLcontext *ctx, struct sw_span *span )
             span->writeAll = GL_FALSE;
             return 0;
          default:
-            _mesa_problem( ctx, "Invalid alpha test in _mesa_alpha_test" );
+            _mesa_problem( ctx, "Invalid alpha test in _swrast_alpha_test" );
             return 0;
       }
    }

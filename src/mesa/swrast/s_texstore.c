@@ -1,10 +1,10 @@
-/* $Id: s_texstore.c,v 1.9 2002/10/24 23:57:24 brianp Exp $ */
+/* $Id: s_texstore.c,v 1.11 2003/03/25 02:23:48 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  4.1
+ * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -38,11 +38,12 @@
 
 
 
+#include "glheader.h"
+#include "imports.h"
 #include "colormac.h"
 #include "context.h"
 #include "convolve.h"
 #include "image.h"
-#include "imports.h"
 #include "macros.h"
 #include "texformat.h"
 #include "teximage.h"
@@ -80,7 +81,7 @@ read_color_image( GLcontext *ctx, GLint x, GLint y,
    dst = image;
    stride = width * 4;
    for (i = 0; i < height; i++) {
-      _mesa_read_rgba_span( ctx, ctx->ReadBuffer, width, x, y + i,
+      _swrast_read_rgba_span( ctx, ctx->ReadBuffer, width, x, y + i,
                          (GLchan (*)[4]) dst );
       dst += stride;
    }
@@ -113,7 +114,7 @@ read_depth_image( GLcontext *ctx, GLint x, GLint y,
 
    dst = image;
    for (i = 0; i < height; i++) {
-      _mesa_read_depth_span_float(ctx, width, x, y + i, dst);
+      _swrast_read_depth_span_float(ctx, width, x, y + i, dst);
       dst += width;
    }
 

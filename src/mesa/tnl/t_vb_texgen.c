@@ -1,10 +1,10 @@
-/* $Id: t_vb_texgen.c,v 1.16 2003/01/14 04:55:47 brianp Exp $ */
+/* $Id: t_vb_texgen.c,v 1.19 2003/03/31 16:48:35 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -33,7 +33,6 @@
 #include "colormac.h"
 #include "context.h"
 #include "macros.h"
-#include "mmath.h"
 #include "imports.h"
 #include "mtypes.h"
 
@@ -114,7 +113,7 @@ static void build_m3( GLfloat f[][3], GLfloat m[],
       fz = f[i][2] = u[2] - norm[2] * two_nu;
       m[i] = fx * fx + fy * fy + (fz + 1.0F) * (fz + 1.0F);
       if (m[i] != 0.0F) {
-	 m[i] = 0.5F / (GLfloat) GL_SQRT(m[i]);
+	 m[i] = 0.5F * _mesa_inv_sqrtf(m[i]);
       }
    }
 }
@@ -143,7 +142,7 @@ static void build_m2( GLfloat f[][3], GLfloat m[],
       fz = f[i][2] = u[2] - norm[2] * two_nu;
       m[i] = fx * fx + fy * fy + (fz + 1.0F) * (fz + 1.0F);
       if (m[i] != 0.0F) {
-	 m[i] = 0.5F / (GLfloat) GL_SQRT(m[i]);
+	 m[i] = 0.5F * _mesa_inv_sqrtf(m[i]);
       }
    }
 }
@@ -368,7 +367,7 @@ static void texgen( GLcontext *ctx,
    GLuint count = VB->Count;
    GLfloat (*f)[3] = store->tmp_f;
    GLfloat *m = store->tmp_m;
-	 GLuint holes = 0;
+   GLuint holes = 0;
 
 
    if (texUnit->_GenFlags & TEXGEN_NEED_M) {
@@ -400,6 +399,7 @@ static void texgen( GLcontext *ctx,
    }
 
    if (holes) {
+      if (holes & VEC_DIRTY_3) _mesa_vector4f_clean_elem(out, count, 3);
       if (holes & VEC_DIRTY_2) _mesa_vector4f_clean_elem(out, count, 2);
       if (holes & VEC_DIRTY_1) _mesa_vector4f_clean_elem(out, count, 1);
       if (holes & VEC_DIRTY_0) _mesa_vector4f_clean_elem(out, count, 0);

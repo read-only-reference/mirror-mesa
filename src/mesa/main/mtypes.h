@@ -1,4 +1,4 @@
-/* $Id: mtypes.h,v 1.104 2003/02/23 04:07:28 brianp Exp $ */
+/* $Id: mtypes.h,v 1.108 2003/03/29 17:01:00 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -109,6 +109,33 @@ typedef GLuint GLdepth;  /* Must be 32-bits! */
  * Fixed point data type:
  */
 typedef int GLfixed;
+/*
+ * Fixed point arithmetic macros
+ */
+#ifdef FIXED_14
+#define FIXED_ONE       0x00004000
+#define FIXED_HALF      0x00002000
+#define FIXED_FRAC_MASK 0x00003FFF
+#define FIXED_SCALE     16384.0f
+#define FIXED_SHIFT     14
+#else
+#define FIXED_ONE       0x00000800
+#define FIXED_HALF      0x00000400
+#define FIXED_FRAC_MASK 0x000007FF
+#define FIXED_SCALE     2048.0f
+#define FIXED_SHIFT     11
+#endif
+#define FIXED_INT_MASK  (~FIXED_FRAC_MASK)
+#define FIXED_EPSILON   1
+#define FloatToFixed(X) (IROUND((X) * FIXED_SCALE))
+#define IntToFixed(I)   ((I) << FIXED_SHIFT)
+#define FixedToInt(X)   ((X) >> FIXED_SHIFT)
+#define FixedToUns(X)   (((unsigned int)(X)) >> FIXED_SHIFT)
+#define FixedCeil(X)    (((X) + FIXED_ONE - FIXED_EPSILON) & FIXED_INT_MASK)
+#define FixedFloor(X)   ((X) & FIXED_INT_MASK)
+#define FixedToFloat(X) ((X) * (1.0F / FIXED_SCALE))
+#define PosFloatToFixed(X)      FloatToFixed(X)
+#define SignedFloatToFixed(X)   FloatToFixed(X)
 
 
 
@@ -1181,9 +1208,11 @@ struct fp_machine
 struct vp_instruction;
 struct fp_instruction;
 
-struct symbol_table
+/* Program parameters */
+struct program_parameter
 {
-   struct symbol *Head;
+   const char *Name;
+   GLfloat Values[4];
 };
 
 
@@ -1218,7 +1247,8 @@ struct fragment_program
    GLuint OutputsWritten; /* Bitmask of which output regs are written to */
    GLuint TexturesUsed[MAX_TEXTURE_IMAGE_UNITS];  /* TEXTURE_x_INDEX bitmask */
    GLfloat LocalParams[MAX_NV_FRAGMENT_PROGRAM_PARAMS][4];
-   struct symbol_table SymbolTable;
+   GLuint NumParameters;
+   struct program_parameter *Parameters; /* array [NumParameters] */
 };
 
 
@@ -1372,6 +1402,7 @@ struct gl_extensions {
    GLboolean ARB_texture_env_crossbar;
    GLboolean ARB_texture_env_dot3;
    GLboolean ARB_texture_mirrored_repeat;
+   GLboolean ARB_vertex_buffer_object;
    GLboolean ARB_window_pos;
    GLboolean ATI_texture_mirror_once;
    GLboolean ATI_texture_env_combine3;
@@ -1815,9 +1846,6 @@ struct __GLcontextRec {
 /* The string names for GL_POINT, GL_LINE_LOOP, etc */
 extern const char *_mesa_prim_name[GL_POLYGON+4];
 
-#ifndef MESA_DEBUG
-#define MESA_DEBUG
-#endif
 
 #ifdef MESA_DEBUG
 extern int MESA_VERBOSE;

@@ -1,10 +1,10 @@
-/* $Id: fakeglx.c,v 1.79 2003/02/25 19:25:58 brianp Exp $ */
+/* $Id: fakeglx.c,v 1.81 2003/03/24 23:41:10 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -49,7 +49,6 @@
 #include "config.h"
 #include "macros.h"
 #include "imports.h"
-#include "mmath.h"
 #include "mtypes.h"
 #include "xfonts.h"
 #include "xmesaP.h"
@@ -81,9 +80,10 @@
    "GLX_EXT_visual_rating " \
    "GLX_SGI_video_sync " \
    "GLX_SGIX_fbconfig " \
-   "GLX_SGIX_pbuffer" \
+   "GLX_SGIX_pbuffer "
+/*
    "GLX_ARB_render_texture"
-
+*/
 
 /* Silence compiler warnings */
 extern void Fake_glXDummyFunc( void );

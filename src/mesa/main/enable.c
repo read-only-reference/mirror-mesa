@@ -1,10 +1,10 @@
-/* $Id: enable.c,v 1.74 2003/01/26 14:37:16 brianp Exp $ */
+/* $Id: enable.c,v 1.77 2003/03/21 13:18:33 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -30,7 +30,6 @@
 #include "enable.h"
 #include "light.h"
 #include "macros.h"
-#include "mmath.h"
 #include "simple_list.h"
 #include "mtypes.h"
 #include "enums.h"
@@ -237,9 +236,9 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
          if (ctx->Light.ColorMaterialEnabled == state)
             return;
          FLUSH_VERTICES(ctx, _NEW_LIGHT);
+         FLUSH_CURRENT(ctx, 0);
          ctx->Light.ColorMaterialEnabled = state;
          if (state) {
-            FLUSH_CURRENT(ctx, 0);
             _mesa_update_color_material( ctx,
                                   ctx->Current.Attrib[VERT_ATTRIB_COLOR0] );
          }
@@ -885,7 +884,7 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
          CHECK_EXTENSION(NV_fragment_program, cap);
          if (ctx->FragmentProgram.Enabled == state)
             return;
-         FLUSH_VERTICES(ctx, _NEW_PROGRAM);
+         FLUSH_VERTICES(ctx, _NEW_PROGRAM | _NEW_TEXTURE);
          ctx->FragmentProgram.Enabled = state;
          break;
 #endif /* FEATURE_NV_fragment_program */

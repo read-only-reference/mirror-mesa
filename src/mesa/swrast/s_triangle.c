@@ -1,4 +1,4 @@
-/* $Id: s_triangle.c,v 1.66 2002/12/18 15:02:19 brianp Exp $ */
+/* $Id: s_triangle.c,v 1.70 2003/03/25 02:23:48 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -36,7 +36,6 @@
 #include "colormac.h"
 #include "imports.h"
 #include "macros.h"
-#include "mmath.h"
 #include "texformat.h"
 #include "teximage.h"
 #include "texstate.h"
@@ -52,7 +51,7 @@
 /*
  * Just used for feedback mode.
  */
-GLboolean _mesa_cull_triangle( GLcontext *ctx,
+GLboolean _swrast_culltriangle( GLcontext *ctx,
 			    const SWvertex *v0,
 			    const SWvertex *v1,
 			    const SWvertex *v2 )
@@ -81,7 +80,7 @@ GLboolean _mesa_cull_triangle( GLcontext *ctx,
    span.interpMask |= SPAN_INDEX;	\
    span.index = IntToFixed(v2->index);	\
    span.indexStep = 0;
-#define RENDER_SPAN( span )  _mesa_write_index_span(ctx, &span);
+#define RENDER_SPAN( span )  _swrast_write_index_span(ctx, &span);
 #include "s_tritemp.h"
 
 
@@ -93,7 +92,7 @@ GLboolean _mesa_cull_triangle( GLcontext *ctx,
 #define INTERP_Z 1
 #define INTERP_FOG 1
 #define INTERP_INDEX 1
-#define RENDER_SPAN( span )  _mesa_write_index_span(ctx, &span);
+#define RENDER_SPAN( span )  _swrast_write_index_span(ctx, &span);
 #include "s_tritemp.h"
 
 
@@ -117,7 +116,7 @@ GLboolean _mesa_cull_triangle( GLcontext *ctx,
    span.greenStep = 0;				\
    span.blueStep = 0;				\
    span.alphaStep = 0;
-#define RENDER_SPAN( span )  _mesa_write_rgba_span(ctx, &span);
+#define RENDER_SPAN( span )  _swrast_write_rgba_span(ctx, &span);
 #include "s_tritemp.h"
 
 
@@ -137,7 +136,7 @@ GLboolean _mesa_cull_triangle( GLcontext *ctx,
       ASSERT(ctx->Texture._EnabledUnits == 0);	\
       ASSERT(ctx->Light.ShadeModel==GL_SMOOTH);	\
    }
-#define RENDER_SPAN( span )  _mesa_write_rgba_span(ctx, &span);
+#define RENDER_SPAN( span )  _swrast_write_rgba_span(ctx, &span);
 #include "s_tritemp.h"
 
 
@@ -515,7 +514,7 @@ affine_span(GLcontext *ctx, struct sw_span *span,
    }
    span->interpMask &= ~SPAN_RGBA;
    ASSERT(span->arrayMask & SPAN_RGBA);
-   _mesa_write_rgba_span(ctx, span);
+   _swrast_write_rgba_span(ctx, span);
 
 #undef SPAN_NEAREST
 #undef SPAN_LINEAR
@@ -785,7 +784,7 @@ fast_persp_span(GLcontext *ctx, struct sw_span *span,
    }
    
    ASSERT(span->arrayMask & SPAN_RGBA);
-   _mesa_write_rgba_span(ctx, span);
+   _swrast_write_rgba_span(ctx, span);
 
 #undef SPAN_NEAREST
 #undef SPAN_LINEAR
@@ -871,13 +870,14 @@ fast_persp_span(GLcontext *ctx, struct sw_span *span,
  */
 #define NAME general_textured_triangle
 #define INTERP_Z 1
+#define INTERP_W 1
 #define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_SPEC 1
 #define INTERP_ALPHA 1
 #define INTERP_TEX 1
-#define RENDER_SPAN( span )   _mesa_write_texture_span(ctx, &span);
+#define RENDER_SPAN( span )   _swrast_write_texture_span(ctx, &span);
 #include "s_tritemp.h"
 
 
@@ -889,13 +889,14 @@ fast_persp_span(GLcontext *ctx, struct sw_span *span,
  */
 #define NAME multitextured_triangle
 #define INTERP_Z 1
+#define INTERP_W 1
 #define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
 #define INTERP_SPEC 1
 #define INTERP_MULTITEX 1
-#define RENDER_SPAN( span )   _mesa_write_texture_span(ctx, &span);
+#define RENDER_SPAN( span )   _swrast_write_texture_span(ctx, &span);
 #include "s_tritemp.h"
 
 
@@ -1030,7 +1031,7 @@ _swrast_choose_triangle( GLcontext *ctx )
    if (ctx->RenderMode==GL_RENDER) {
 
       if (ctx->Polygon.SmoothFlag) {
-         _mesa_set_aa_triangle_function(ctx);
+         _swrast_set_aa_triangle_function(ctx);
          ASSERT(swrast->Triangle);
          return;
       }
@@ -1067,6 +1068,7 @@ _swrast_choose_triangle( GLcontext *ctx )
 
          /* First see if we can use an optimized 2-D texture function */
          if (ctx->Texture._EnabledUnits == 1
+             && !ctx->FragmentProgram.Enabled
              && ctx->Texture.Unit[0]._ReallyEnabled == TEXTURE_2D_BIT
              && texObj2D->WrapS==GL_REPEAT
 	     && texObj2D->WrapT==GL_REPEAT
@@ -1141,10 +1143,10 @@ _swrast_choose_triangle( GLcontext *ctx )
       }
    }
    else if (ctx->RenderMode==GL_FEEDBACK) {
-      USE(_mesa_feedback_triangle);
+      USE(_swrast_feedback_triangle);
    }
    else {
       /* GL_SELECT mode */
-      USE(_mesa_select_triangle);
+      USE(_swrast_select_triangle);
    }
 }

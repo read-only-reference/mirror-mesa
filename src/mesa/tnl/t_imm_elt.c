@@ -1,10 +1,8 @@
-/* $Id: t_imm_elt.c,v 1.20 2002/10/29 20:29:02 brianp Exp $ */
-
 /*
  * Mesa 3-D graphics library
- * Version:  4.1
+ * Version:  5.1
  *
- * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -31,7 +29,6 @@
 #include "colormac.h"
 #include "context.h"
 #include "imports.h"
-#include "mmath.h"
 #include "mtypes.h"
 
 #include "math/m_translate.h"
@@ -44,8 +41,8 @@
 typedef void (*trans_elt_1f_func)(GLfloat *to,
 				  CONST void *ptr,
 				  GLuint stride,
-				  GLuint *flags,
-				  GLuint *elts,
+				  const GLuint *flags,
+				  const GLuint *elts,
 				  GLuint match,
 				  GLuint start,
 				  GLuint n );
@@ -53,8 +50,8 @@ typedef void (*trans_elt_1f_func)(GLfloat *to,
 typedef void (*trans_elt_1ui_func)(GLuint *to,
 				   CONST void *ptr,
 				   GLuint stride,
-				   GLuint *flags,
-				   GLuint *elts,
+				   const GLuint *flags,
+				   const GLuint *elts,
 				   GLuint match,
 				   GLuint start,
 				   GLuint n );
@@ -62,8 +59,8 @@ typedef void (*trans_elt_1ui_func)(GLuint *to,
 typedef void (*trans_elt_1ub_func)(GLubyte *to,
 				   CONST void *ptr,
 				   GLuint stride,
-				   GLuint *flags,
-				   GLuint *elts,
+				   const GLuint *flags,
+				   const GLuint *elts,
 				   GLuint match,
 				   GLuint start,
 				   GLuint n );
@@ -71,8 +68,8 @@ typedef void (*trans_elt_1ub_func)(GLubyte *to,
 typedef void (*trans_elt_4ub_func)(GLubyte (*to)[4],
                                    CONST void *ptr,
                                    GLuint stride,
-                                   GLuint *flags,
-                                   GLuint *elts,
+                                   const GLuint *flags,
+                                   const GLuint *elts,
                                    GLuint match,
                                    GLuint start,
                                    GLuint n );
@@ -80,8 +77,8 @@ typedef void (*trans_elt_4ub_func)(GLubyte (*to)[4],
 typedef void (*trans_elt_4us_func)(GLushort (*to)[4],
                                    CONST void *ptr,
                                    GLuint stride,
-                                   GLuint *flags,
-                                   GLuint *elts,
+                                   const GLuint *flags,
+                                   const GLuint *elts,
                                    GLuint match,
                                    GLuint start,
                                    GLuint n );
@@ -89,8 +86,8 @@ typedef void (*trans_elt_4us_func)(GLushort (*to)[4],
 typedef void (*trans_elt_4f_func)(GLfloat (*to)[4],
 				  CONST void *ptr,
 				  GLuint stride,
-				  GLuint *flags,
-				  GLuint *elts,
+				  const GLuint *flags,
+				  const GLuint *elts,
 				  GLuint match,
 				  GLuint start,
 				  GLuint n );
@@ -98,8 +95,8 @@ typedef void (*trans_elt_4f_func)(GLfloat (*to)[4],
 typedef void (*trans_elt_3f_func)(GLfloat (*to)[3],
 				  CONST void *ptr,
 				  GLuint stride,
-				  GLuint *flags,
-				  GLuint *elts,
+				  const GLuint *flags,
+				  const GLuint *elts,
 				  GLuint match,
 				  GLuint start,
 				  GLuint n );
@@ -135,7 +132,7 @@ static trans_elt_4f_func  _tnl_trans_elt_4f_tab[5][MAX_TYPES];
  * That the correct value for normal is used.
  */
 #define TAB(x) _tnl_trans_elt##x##_tab
-#define ARGS   GLuint *flags, GLuint *elts, GLuint match, \
+#define ARGS   const GLuint *flags, const GLuint *elts, GLuint match, \
                GLuint start, GLuint n
 #define SRC_START  0
 #define DST_START  start
@@ -601,8 +598,8 @@ void _tnl_imm_elt_init( void )
 #if 00
 static void _tnl_trans_elt_1f(GLfloat *to,
 		       const struct gl_client_array *from,
-		       GLuint *flags,
-		       GLuint *elts,
+		       const GLuint *flags,
+		       const GLuint *elts,
 		       GLuint match,
 		       GLuint start,
 		       GLuint n )
@@ -621,8 +618,8 @@ static void _tnl_trans_elt_1f(GLfloat *to,
 
 static void _tnl_trans_elt_1ui(GLuint *to,
 			const struct gl_client_array *from,
-			GLuint *flags,
-			GLuint *elts,
+			const GLuint *flags,
+			const GLuint *elts,
 			GLuint match,
 			GLuint start,
 			GLuint n )
@@ -641,8 +638,8 @@ static void _tnl_trans_elt_1ui(GLuint *to,
 
 static void _tnl_trans_elt_1ub(GLubyte *to,
 			const struct gl_client_array *from,
-			GLuint *flags,
-			GLuint *elts,
+			const GLuint *flags,
+			const GLuint *elts,
 			GLuint match,
 			GLuint start,
 			GLuint n )
@@ -662,8 +659,8 @@ static void _tnl_trans_elt_1ub(GLubyte *to,
 #if 0
 static void _tnl_trans_elt_4ub(GLubyte (*to)[4],
                                const struct gl_client_array *from,
-                               GLuint *flags,
-                               GLuint *elts,
+                               const GLuint *flags,
+                               const GLuint *elts,
                                GLuint match,
                                GLuint start,
                                GLuint n )
@@ -683,8 +680,8 @@ static void _tnl_trans_elt_4ub(GLubyte (*to)[4],
 #if 0
 static void _tnl_trans_elt_4us(GLushort (*to)[4],
                                const struct gl_client_array *from,
-                               GLuint *flags,
-                               GLuint *elts,
+                               const GLuint *flags,
+                               const GLuint *elts,
                                GLuint match,
                                GLuint start,
                                GLuint n )
@@ -703,8 +700,8 @@ static void _tnl_trans_elt_4us(GLushort (*to)[4],
 
 static void _tnl_trans_elt_4f(GLfloat (*to)[4],
                               const struct gl_client_array *from,
-                              GLuint *flags,
-                              GLuint *elts,
+                              const GLuint *flags,
+                              const GLuint *elts,
                               GLuint match,
                               GLuint start,
                               GLuint n )
@@ -725,8 +722,8 @@ static void _tnl_trans_elt_4f(GLfloat (*to)[4],
 #if 0
 static void _tnl_trans_elt_3f(GLfloat (*to)[3],
 		       const struct gl_client_array *from,
-		       GLuint *flags,
-		       GLuint *elts,
+		       const GLuint *flags,
+		       const GLuint *elts,
 		       GLuint match,
 		       GLuint start,
 		       GLuint n )
@@ -754,12 +751,29 @@ void _tnl_translate_array_elts( GLcontext *ctx, struct immediate *IM,
 				GLuint start, GLuint count )
 {
    GLuint *flags = IM->Flag;
-   GLuint *elts = IM->Elt;
+   const GLuint *elts = IM->Elt;
    GLuint translate = ctx->Array._Enabled;
-   GLuint i;
+   GLuint i, attr;
 
    if (MESA_VERBOSE & VERBOSE_IMMEDIATE)
       _mesa_debug(ctx, "exec_array_elements %d .. %d\n", start, count);
+
+   /* XXX It would be nice to replace this code with a loop over the vertex
+    * attributes but there's a fair number of special cases.
+    */
+
+   /* Allocate destination attribute arrays if needed */
+   ASSERT(IM->Attrib[VERT_ATTRIB_POS]);
+   for (attr = 1; attr < VERT_ATTRIB_MAX; attr++) {
+      if ((translate & (1 << attr)) && !IM->Attrib[attr]) {
+         IM->Attrib[attr] = _mesa_malloc(IMM_SIZE * 4 * sizeof(GLfloat));
+         if (!IM->Attrib[attr]) {
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "vertex processing2");
+            return;
+         }
+      }
+   }
+
 
    if (translate & VERT_BIT_POS) {
       _tnl_trans_elt_4f( IM->Attrib[VERT_ATTRIB_POS],
@@ -773,18 +787,11 @@ void _tnl_translate_array_elts( GLcontext *ctx, struct immediate *IM,
 	 translate |= VERT_BITS_OBJ_23;
    }
 
-
    if (translate & VERT_BIT_NORMAL)
       _tnl_trans_elt_4f( IM->Attrib[VERT_ATTRIB_NORMAL],
 			 &ctx->Array.Normal,
 			 flags, elts, (VERT_BIT_ELT|VERT_BIT_NORMAL),
 			 start, count);
-
-   if (translate & VERT_BIT_EDGEFLAG)
-      _tnl_trans_elt_1ub( IM->EdgeFlag,
-			  &ctx->Array.EdgeFlag,
-			  flags, elts, (VERT_BIT_ELT|VERT_BIT_EDGEFLAG),
-			  start, count);
 
    if (translate & VERT_BIT_COLOR0) {
       _tnl_trans_elt_4f( IM->Attrib[VERT_ATTRIB_COLOR0],
@@ -806,12 +813,6 @@ void _tnl_translate_array_elts( GLcontext *ctx, struct immediate *IM,
 			 flags, elts, (VERT_BIT_ELT|VERT_BIT_FOG),
 			 start, count);
 
-   if (translate & VERT_BIT_INDEX)
-      _tnl_trans_elt_1ui( IM->Index,
-			  &ctx->Array.Index,
-			  flags, elts, (VERT_BIT_ELT|VERT_BIT_INDEX),
-			  start, count);
-
    if (translate & VERT_BITS_TEX_ANY) {
       for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++)
 	 if (translate & VERT_BIT_TEX(i)) {
@@ -827,8 +828,21 @@ void _tnl_translate_array_elts( GLcontext *ctx, struct immediate *IM,
 	 }
    }
 
+   if (translate & VERT_BIT_INDEX)
+      _tnl_trans_elt_1ui( IM->Index,
+			  &ctx->Array.Index,
+			  flags, elts, (VERT_BIT_ELT|VERT_BIT_INDEX),
+			  start, count);
+
+   if (translate & VERT_BIT_EDGEFLAG)
+      _tnl_trans_elt_1ub( IM->EdgeFlag,
+			  &ctx->Array.EdgeFlag,
+			  flags, elts, (VERT_BIT_ELT|VERT_BIT_EDGEFLAG),
+			  start, count);
+
    for (i = start ; i < count ; i++)
-      if (flags[i] & VERT_BIT_ELT) flags[i] |= translate;
+      if (flags[i] & VERT_BIT_ELT)
+         flags[i] |= translate;
 
    IM->FlushElt = 0;
 }

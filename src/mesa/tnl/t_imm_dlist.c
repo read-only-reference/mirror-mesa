@@ -1,10 +1,10 @@
-/* $Id: t_imm_dlist.c,v 1.45 2003/01/14 04:55:47 brianp Exp $ */
+/* $Id: t_imm_dlist.c,v 1.49 2003/03/31 23:06:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -32,7 +32,7 @@
 #include "context.h"
 #include "dlist.h"
 #include "debug.h"
-#include "mmath.h"
+#include "macros.h"
 #include "imports.h"
 #include "state.h"
 
@@ -66,14 +66,15 @@ static void execute_compiled_cassette( GLcontext *ctx, void *data );
 static void loopback_compiled_cassette( GLcontext *ctx, struct immediate *IM );
 
 
-static void build_normal_lengths( struct immediate *IM )
+static void
+build_normal_lengths( struct immediate *IM )
 {
    GLuint i;
    GLfloat len;
    GLfloat (*data)[4] = IM->Attrib[VERT_ATTRIB_NORMAL] + IM->Start;
    GLfloat *dest = IM->NormalLengthPtr;
-   GLuint *flags = IM->Flag + IM->Start;
-   GLuint count = IM->Count - IM->Start;
+   const GLuint *flags = IM->Flag + IM->Start;
+   const GLuint count = IM->Count - IM->Start;
 
    if (!dest) {
       dest = IM->NormalLengthPtr = (GLfloat *) ALIGN_MALLOC( IMM_SIZE*sizeof(GLfloat), 32 );
@@ -93,17 +94,20 @@ static void build_normal_lengths( struct immediate *IM )
    } 
 }
 
-static void fixup_normal_lengths( struct immediate *IM ) 
+
+static void
+fixup_normal_lengths( struct immediate *IM ) 
 {
    GLuint i;
    GLfloat len = 1.0F;  /* just to silence warnings */
    GLfloat (*data)[4] = IM->Attrib[VERT_ATTRIB_NORMAL];
    GLfloat *dest = IM->NormalLengthPtr;
-   GLuint *flags = IM->Flag;
+   const GLuint *flags = IM->Flag;
 
    for (i = IM->CopyStart ; i <= IM->Start ; i++) {
       len = (GLfloat) LEN_3FV( data[i] );
-      if (len > 0.0F) len = 1.0F / len;
+      if (len > 0.0F)
+         len = 1.0F / len;
       dest[i] = len;
    } 
 
@@ -147,6 +151,9 @@ _tnl_compile_cassette( GLcontext *ctx, struct immediate *IM )
 
    _tnl_fixup_input( ctx, IM );
 
+   /* Allocate space for this structure in the display list currently
+    * being compiled.
+    */
    node = (TNLvertexcassette *)
       _mesa_alloc_instruction(ctx,
 			      tnl->opcode_vertex_cassette,
@@ -168,7 +175,10 @@ _tnl_compile_cassette( GLcontext *ctx, struct immediate *IM )
    node->MaterialOrMask = im->MaterialOrMask;
    node->MaterialAndMask = im->MaterialAndMask;
    
-   if (tnl->CalcDListNormalLengths) {
+   /*
+    * XXX always allocate VERT_ATTRIB_NORMAL array now???
+    */
+   if (tnl->CalcDListNormalLengths && IM->Attrib[VERT_ATTRIB_NORMAL]) {
       build_normal_lengths( im );
    }
 
@@ -202,7 +212,8 @@ _tnl_compile_cassette( GLcontext *ctx, struct immediate *IM )
 }
 
 
-static void fixup_compiled_primitives( GLcontext *ctx, struct immediate *IM )
+static void
+fixup_compiled_primitives( GLcontext *ctx, struct immediate *IM )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
 
@@ -240,7 +251,8 @@ static void fixup_compiled_primitives( GLcontext *ctx, struct immediate *IM )
 	    IM->LastPrimitive = IM->CopyStart;
 	 }
       }
-   } else {
+   }
+   else {
       GLuint i;
 
       if (IM->BeginState & VERT_ERROR_0)
@@ -249,6 +261,7 @@ static void fixup_compiled_primitives( GLcontext *ctx, struct immediate *IM )
       if (IM->CopyStart == IM->Start &&
 	  IM->Flag[IM->Start] & (VERT_BIT_END | VERT_BIT_END_VB))
       {
+         /* nothing */
       }
       else
       {
@@ -261,7 +274,7 @@ static void fixup_compiled_primitives( GLcontext *ctx, struct immediate *IM )
          ASSERT(IM->PrimitiveLength[IM->Start] > 0 ||
                 IM->Flag[IM->Start] & (VERT_BIT_END | VERT_BIT_END_VB));
 
-	 for (i = IM->Start ; i <= IM->Count ; i += IM->PrimitiveLength[i])
+	 for (i = IM->Start ; i <= IM->Count ; i += IM->PrimitiveLength[i]) {
 	    if (IM->Flag[i] & (VERT_BIT_END | VERT_BIT_END_VB)) {
 	       IM->PrimitiveLength[IM->CopyStart] = i - IM->CopyStart;
 	       if (IM->Flag[i] & VERT_BIT_END_VB) {
@@ -273,20 +286,22 @@ static void fixup_compiled_primitives( GLcontext *ctx, struct immediate *IM )
 	       }
 	       break;
 	    }
+         }
       }
    }
 }
 
+
 /* Undo any changes potentially made to the immediate in the range
  * IM->Start..IM->Count above.
  */
-static void restore_compiled_primitives( GLcontext *ctx, struct immediate *IM )
+static void
+restore_compiled_primitives( GLcontext *ctx, struct immediate *IM )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    IM->Primitive[IM->Start] = tnl->DlistPrimitive;
    IM->PrimitiveLength[IM->Start] = tnl->DlistPrimitiveLength;
 }
-
 
 
 static void
@@ -384,6 +399,7 @@ execute_compiled_cassette( GLcontext *ctx, void *data )
       tnl->ReplayHardBeginEnd = 0;
 }
 
+
 static void
 destroy_compiled_cassette( GLcontext *ctx, void *data )
 {
@@ -418,6 +434,7 @@ print_compiled_cassette( GLcontext *ctx, void *data )
 
    _tnl_print_cassette( node->IM );
 }
+
 
 void
 _tnl_BeginCallList( GLcontext *ctx, GLuint list )
@@ -505,7 +522,12 @@ _tnl_dlist_init( GLcontext *ctx )
 }
 
 
-static void emit_material( struct gl_material *src, GLuint bitmask )
+/**
+ * Call glMaterialfv for the attributes specified by bitmask, using the
+ * material colors in src.
+ */
+static void
+emit_material( const struct gl_material *src, GLuint bitmask )
 {
    if (bitmask & FRONT_EMISSION_BIT) 
       glMaterialfv( GL_FRONT, GL_EMISSION, src[0].Emission );
@@ -562,16 +584,14 @@ static void emit_material( struct gl_material *src, GLuint bitmask )
  * begin/end), or (for tnl hardware) implement their own display list
  * mechanism. 
  */
-static void loopback_compiled_cassette( GLcontext *ctx, struct immediate *IM )
+static void
+loopback_compiled_cassette( GLcontext *ctx, struct immediate *IM )
 {
-   GLuint i;
-   GLuint *flags = IM->Flag;
-   GLuint orflag = IM->OrFlag;
-   GLuint j;
+   const GLuint *flags = IM->Flag;
+   const GLuint orflag = IM->OrFlag;
    void (GLAPIENTRY *vertex)( const GLfloat * );
    void (GLAPIENTRY *texcoordfv[MAX_TEXTURE_COORD_UNITS])( GLenum, const GLfloat * );
-   GLuint maxtex = 0;
-   GLuint p, length, prim = 0;
+   GLuint i, j, p, length, prim = 0, maxtex = 0;
    
    if (orflag & VERT_BITS_OBJ_234)
       vertex = (void (GLAPIENTRY *)(const GLfloat *)) glVertex4fv;
