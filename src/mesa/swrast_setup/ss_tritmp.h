@@ -1,4 +1,4 @@
-/* $Id: ss_tritmp.h,v 1.15 2001/09/14 21:36:43 brianp Exp $ */
+/* $Id: ss_tritmp.h,v 1.19 2002/10/29 22:25:57 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,7 +24,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
 
@@ -54,6 +54,8 @@ static void TAG(triangle)(GLcontext *ctx, GLuint e0, GLuint e1, GLuint e2 )
       if (IND & (SS_TWOSIDE_BIT | SS_UNFILLED_BIT))
       {
 	 facing = (cc < 0.0) ^ ctx->Polygon._FrontBit;
+         if (ctx->Stencil.TestTwoSide)
+            ctx->_Facing = facing; /* for 2-sided stencil test */
 
 	 if (IND & SS_UNFILLED_BIT)
 	    mode = facing ? ctx->Polygon.BackMode : ctx->Polygon.FrontMode;
@@ -110,14 +112,14 @@ static void TAG(triangle)(GLcontext *ctx, GLuint e0, GLuint e1, GLuint e2 )
 	 v[1]->win[2] += offset;
 	 v[2]->win[2] += offset;
       }
-      _swsetup_render_point_tri( ctx, e0, e1, e2 );
+      _swsetup_render_point_tri( ctx, e0, e1, e2, facing );
    } else if (mode == GL_LINE) {
       if ((IND & SS_OFFSET_BIT) && ctx->Polygon.OffsetLine) {
 	 v[0]->win[2] += offset;
 	 v[1]->win[2] += offset;
 	 v[2]->win[2] += offset;
       }
-      _swsetup_render_line_tri( ctx, e0, e1, e2 );
+      _swsetup_render_line_tri( ctx, e0, e1, e2, facing );
    } else {
       if ((IND & SS_OFFSET_BIT) && ctx->Polygon.OffsetFill) {
 	 v[0]->win[2] += offset;

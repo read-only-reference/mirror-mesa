@@ -1,10 +1,10 @@
-/* $Id: vtxfmt_tmp.h,v 1.8 2001/12/14 02:55:08 brianp Exp $ */
+/* $Id: vtxfmt_tmp.h,v 1.11 2002/10/29 20:28:56 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -24,7 +24,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Gareth Hughes <gareth@valinux.com>
+ *    Gareth Hughes
  */
 
 #ifndef PRE_LOOPBACK
@@ -394,13 +394,13 @@ static void TAG(EvalMesh2)( GLenum mode, GLint i1, GLint i2,
 static void TAG(VertexAttrib4fNV)( GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w )
 {
    PRE_LOOPBACK( VertexAttrib4fNV );
-   glVertexAttrib4fNV( index, x, y, z, w );
+   _glapi_Dispatch->VertexAttrib4fNV( index, x, y, z, w );
 }
 
 static void TAG(VertexAttrib4fvNV)( GLuint index, const GLfloat *v )
 {
    PRE_LOOPBACK( VertexAttrib4fNV );
-   glVertexAttrib4fvNV( index, v );
+   _glapi_Dispatch->VertexAttrib4fvNV( index, v );
 }
 
 

@@ -1,4 +1,4 @@
-/* $Id: t_pipeline.c,v 1.22 2002/01/22 14:35:17 brianp Exp $ */
+/* $Id: t_pipeline.c,v 1.25 2002/10/29 20:29:03 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,12 +24,12 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
 #include "glheader.h"
 #include "context.h"
-#include "mem.h"
+#include "imports.h"
 #include "mmath.h"
 #include "state.h"
 #include "mtypes.h"
@@ -203,7 +203,9 @@ const struct gl_pipeline_stage *_tnl_default_pipeline[] = {
    &_tnl_texgen_stage,
    &_tnl_texture_transform_stage,
    &_tnl_point_attenuation_stage,
+#if FEATURE_NV_vertex_program
    &_tnl_vertex_program_stage,
+#endif
    &_tnl_render_stage,
    0
 };

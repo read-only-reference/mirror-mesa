@@ -31,9 +31,6 @@
  */
 
 
-#ifdef PC_HEADER
-#include "all.h"
-#else
 #include "glheader.h"
 #include "context.h"
 #include "GL/dmesa.h"
@@ -54,7 +51,6 @@
 #include "tnl/tnl.h"
 #include "tnl/t_context.h"
 #include "tnl/t_pipeline.h"
-#endif
 
 #include "video.h"
 
@@ -411,7 +407,7 @@ static swrast_tri_func dmesa_choose_tri_function (GLcontext *ctx)
 
  if (ctx->RenderMode != GL_RENDER)  return (swrast_tri_func) NULL;
  if (ctx->Polygon.SmoothFlag)       return (swrast_tri_func) NULL;
- if (ctx->Texture._ReallyEnabled)   return (swrast_tri_func) NULL;
+ if (ctx->Texture._EnabledUnits)    return (swrast_tri_func) NULL;
 
  if (ctx->Light.ShadeModel==GL_SMOOTH
      && swrast->_RasterMask==DEPTH_BIT
@@ -467,8 +463,13 @@ static void dmesa_choose_tri (GLcontext *ctx)
 
 static void clear_color (GLcontext *ctx, const GLchan color[4])
 {
+ const GLubyte col[4];
  DMesaContext c = (DMesaContext)ctx->DriverCtx;
- c->ClearColor = vl_mixrgba(color);
+ CLAMPED_FLOAT_TO_UBYTE(col[0], color[0]);
+ CLAMPED_FLOAT_TO_UBYTE(col[1], color[1]);
+ CLAMPED_FLOAT_TO_UBYTE(col[2], color[2]);
+ CLAMPED_FLOAT_TO_UBYTE(col[3], color[3]);
+ c->ClearColor = vl_mixrgba(col);
 }
 
 
@@ -931,6 +932,6 @@ void DMesaSwapBuffers (DMesaBuffer b)
 {
  /* copy/swap back buffer to front if applicable */
  GET_CURRENT_CONTEXT(ctx);
- _mesa_swapbuffers(ctx);
+ _mesa_notifySwapBuffers(ctx);
  vl_flip(b->the_window, b->stride, b->height);
 }

@@ -1,4 +1,4 @@
-/* $Id: texobj.c,v 1.57 2002/06/29 19:48:16 brianp Exp $ */
+/* $Id: texobj.c,v 1.62 2002/10/24 23:57:21 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,23 +24,17 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
-#ifdef PC_HEADER
-#include "all.h"
-#else
 #include "glheader.h"
 #include "colortab.h"
 #include "context.h"
 #include "enums.h"
 #include "hash.h"
+#include "imports.h"
 #include "macros.h"
-#include "mem.h"
 #include "teximage.h"
 #include "texstate.h"
 #include "texobj.h"
 #include "mtypes.h"
-#endif
-
 
 
 /*
@@ -99,7 +93,7 @@ _mesa_alloc_texture_object( struct gl_shared_state *shared,
       obj->CompareMode = GL_LUMINANCE;    /* ARB_shadow */
       obj->CompareFunc = GL_LEQUAL;       /* ARB_shadow */
       obj->DepthMode = GL_LUMINANCE;      /* ARB_depth_texture */
-      obj->ShadowAmbient = 0;             /* ARB/SGIX_shadow_ambient */
+      obj->ShadowAmbient = 0.0F;          /* ARB/SGIX_shadow_ambient */
       _mesa_init_colortable(&obj->Palette);
 
       /* insert into linked list */
@@ -572,26 +566,37 @@ _mesa_DeleteTextures( GLsizei n, const GLuint *texName)
                if (delObj == unit->Current1D) {
                   unit->Current1D = ctx->Shared->Default1D;
                   ctx->Shared->Default1D->RefCount++;
+                  delObj->RefCount--;
                   if (delObj == unit->_Current)
                      unit->_Current = unit->Current1D;
                }
                else if (delObj == unit->Current2D) {
                   unit->Current2D = ctx->Shared->Default2D;
                   ctx->Shared->Default2D->RefCount++;
+                  delObj->RefCount--;
                   if (delObj == unit->_Current)
                      unit->_Current = unit->Current2D;
                }
                else if (delObj == unit->Current3D) {
                   unit->Current3D = ctx->Shared->Default3D;
                   ctx->Shared->Default3D->RefCount++;
+                  delObj->RefCount--;
                   if (delObj == unit->_Current)
                      unit->_Current = unit->Current3D;
                }
                else if (delObj == unit->CurrentCubeMap) {
                   unit->CurrentCubeMap = ctx->Shared->DefaultCubeMap;
                   ctx->Shared->DefaultCubeMap->RefCount++;
+                  delObj->RefCount--;
                   if (delObj == unit->_Current)
                      unit->_Current = unit->CurrentCubeMap;
+               }
+               else if (delObj == unit->CurrentRect) {
+                  unit->CurrentRect = ctx->Shared->DefaultRect;
+                  ctx->Shared->DefaultRect->RefCount++;
+                  delObj->RefCount--;
+                  if (delObj == unit->_Current)
+                     unit->_Current = unit->CurrentRect;
                }
             }
             ctx->NewState |= _NEW_TEXTURE;

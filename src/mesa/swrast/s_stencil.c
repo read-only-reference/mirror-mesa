@@ -1,4 +1,4 @@
-/* $Id: s_stencil.c,v 1.26 2002/09/06 02:56:09 brianp Exp $ */
+/* $Id: s_stencil.c,v 1.28 2002/10/24 23:57:24 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -28,7 +28,7 @@
 #include "glheader.h"
 #include "context.h"
 #include "macros.h"
-#include "mem.h"
+#include "imports.h"
 
 #include "s_context.h"
 #include "s_depth.h"
@@ -1006,12 +1006,14 @@ stencil_and_ztest_pixels( GLcontext *ctx, struct sw_span *span, GLuint face )
  * GL_FALSE = all fragments failed.
  */
 GLboolean
-_mesa_stencil_and_ztest_span(GLcontext *ctx, struct sw_span *span, GLuint face)
+_mesa_stencil_and_ztest_span(GLcontext *ctx, struct sw_span *span)
 {
+   /* span->facing can only be non-zero if using two-sided stencil */
+   ASSERT(ctx->Stencil.TestTwoSide || span->facing == 0);
    if (span->arrayMask & SPAN_XY)
-      return stencil_and_ztest_pixels(ctx, span, face);
+      return stencil_and_ztest_pixels(ctx, span, span->facing);
    else
-      return stencil_and_ztest_span(ctx, span, face);
+      return stencil_and_ztest_span(ctx, span, span->facing);
 }
 
 

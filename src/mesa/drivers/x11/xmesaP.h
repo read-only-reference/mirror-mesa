@@ -1,4 +1,4 @@
-/* $Id: xmesaP.h,v 1.29 2002/07/09 01:22:52 brianp Exp $ */
+/* $Id: xmesaP.h,v 1.31 2002/10/05 18:27:41 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -163,6 +163,8 @@ struct xmesa_buffer {
 				/* frontbuffer, backpixmap or XIMAGE (None) */
 
    XMesaColormap cmap;		/* the X colormap */
+
+   unsigned long selectedEvents;/* for pbuffers only */
 
    GLint db_state;		/* 0 = single buffered */
 				/* BACK_PIXMAP = use Pixmap for back buffer */
@@ -538,5 +540,6 @@ extern GLboolean XMesaLoseCurrent(XMesaContext c);
 extern void XMesaReset( void );
 
 extern void xmesa_resize_buffers( GLframebuffer *buffer );
+
 
 #endif

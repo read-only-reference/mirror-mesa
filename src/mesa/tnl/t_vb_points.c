@@ -1,4 +1,4 @@
-/* $Id: t_vb_points.c,v 1.8 2002/01/22 14:35:17 brianp Exp $ */
+/* $Id: t_vb_points.c,v 1.10 2002/10/29 20:29:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,11 +24,11 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Brian Paul <brian@valinux.com>
+ *    Brian Paul
  */
 
 #include "mtypes.h"
-#include "mem.h"
+#include "imports.h"
 #include "t_context.h"
 #include "t_pipeline.h"
 

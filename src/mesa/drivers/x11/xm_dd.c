@@ -1,4 +1,4 @@
-/* $Id: xm_dd.c,v 1.36 2002/09/27 02:45:39 brianp Exp $ */
+/* $Id: xm_dd.c,v 1.41 2002/10/30 20:24:47 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -27,11 +27,12 @@
 
 #include "glxheader.h"
 #include "context.h"
+#include "colormac.h"
 #include "depth.h"
 #include "drawpix.h"
 #include "extensions.h"
 #include "macros.h"
-#include "mem.h"
+#include "imports.h"
 #include "mtypes.h"
 #include "state.h"
 #include "texstore.h"
@@ -122,7 +123,7 @@ flush( GLcontext *ctx )
  * lines, and triangles.
  */
 static void
-set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLenum mode )
+set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit )
 {
    /* We can make this cast since the XMesaBuffer wraps GLframebuffer.
     * GLframebuffer is the first member in a XMesaBuffer struct.
@@ -138,14 +139,14 @@ set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLenum mode )
    /*
     * Now determine front vs back color buffer.
     */
-   if (mode == GL_FRONT_LEFT) {
+   if (bufferBit == FRONT_LEFT_BIT) {
       target->buffer = target->frontbuffer;
    }
-   else if (mode == GL_BACK_LEFT) {
+   else if (bufferBit == BACK_LEFT_BIT) {
       ASSERT(target->db_state);
       if (target->backpixmap) {
          /* back buffer is a pixmape */
-         target->buffer = target->backpixmap;
+         target->buffer = target->backpixmap; /* incompatible types? */
       }
       else if (target->backimage) {
          /* back buffer is an XImage */
@@ -157,7 +158,7 @@ set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLenum mode )
       }
    }
    else {
-      _mesa_problem(ctx, "invalid buffer in set_buffer() in xmesa2.c");
+      _mesa_problem(ctx, "invalid buffer 0x%x in set_buffer() in xm_dd.c");
       return;
    }
    xmesa_update_span_funcs(ctx);
@@ -176,15 +177,18 @@ clear_index( GLcontext *ctx, GLuint index )
 
 
 static void
-clear_color( GLcontext *ctx, const GLchan color[4] )
+clear_color( GLcontext *ctx, const GLfloat color[4] )
 {
    const XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   xmesa->clearcolor[0] = color[0];
-   xmesa->clearcolor[1] = color[1];
-   xmesa->clearcolor[2] = color[2];
-   xmesa->clearcolor[3] = color[3];
-   xmesa->clearpixel = xmesa_color_to_pixel( xmesa, color[0], color[1],
-                                             color[2], color[3],
+   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[0], color[0]);
+   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[1], color[1]);
+   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[2], color[2]);
+   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[3], color[3]);
+   xmesa->clearpixel = xmesa_color_to_pixel( xmesa,
+                                             xmesa->clearcolor[0],
+                                             xmesa->clearcolor[1],
+                                             xmesa->clearcolor[2],
+                                             xmesa->clearcolor[3],
                                              xmesa->xm_visual->undithered_pf );
    _glthread_LOCK_MUTEX(_xmesa_lock);
    XMesaSetForeground( xmesa->display, xmesa->xm_draw_buffer->cleargc,

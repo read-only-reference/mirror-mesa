@@ -112,15 +112,15 @@ IMPLEMENT_READ_RGBA_PIXELS(32, unsigned long)
 /*****              Miscellaneous device driver funcs             *****/
 /**********************************************************************/
 
-static GLboolean set_buffer(GLcontext *ctx, GLenum mode)
+static GLboolean set_buffer(GLcontext *ctx, GLframebuffer *buffer, GLuint bit)
     {
     AMesaContext context = (AMesaContext)(ctx->DriverCtx);
     GLboolean    ok      = GL_TRUE;
 
-    if (mode == GL_FRONT_LEFT)
+    if (bit == FRONT_LEFT_BIT)
         context->Buffer->Active = context->Buffer->Screen;
 
-    else if (mode == GL_BACK_LEFT)
+    else if (bit == BACK_LEFT)
         {
         if (context->Buffer->Background)
             context->Buffer->Active = context->Buffer->Background;
@@ -329,7 +329,6 @@ AMesaContext AMesaCreateContext(AMesaVisual visual,
 {
    	AMesaContext context;
    	GLboolean    direct = GL_FALSE;
-	__GLimports imports;
 
 	context = (AMesaContext)calloc(1, sizeof(struct amesa_context));
 	if (!context)
@@ -339,10 +338,9 @@ AMesaContext AMesaCreateContext(AMesaVisual visual,
 	context->Buffer		  = NULL;
 	context->ClearColor   = 0;
 	context->CurrentColor = 0;
-	_mesa_init_default_imports( &imports, (void *) context);
 	context->GLContext    = _mesa_create_context(visual->GLVisual,
                                               share ? share->GLContext : NULL,
-                                  		&imports );
+                                  		(void *) context, GL_FALSE );
 	if (!context->GLContext)
         {
         	free(context);

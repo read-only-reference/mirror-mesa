@@ -1,7 +1,7 @@
-# $Id: Makefile.X11,v 1.69 2002/09/27 02:45:37 brianp Exp $
+# $Id: Makefile.X11,v 1.72 2002/10/29 23:09:40 brianp Exp $
 
 # Mesa 3-D graphics library
-# Version:  4.1
+# Version:  5.0
 # Copyright (C) 1995-2002  Brian Paul
 
 # Makefile for core library
@@ -10,7 +10,7 @@
 ##### MACROS #####
 
 GL_MAJOR = 1
-GL_MINOR = 3
+GL_MINOR = 4
 GL_TINY = 0$(MESA_MAJOR)0$(MESA_MINOR)0$(MESA_TINY)
 
 VPATH = RCS
@@ -55,7 +55,6 @@ CORE_SOURCES = \
 	light.c \
 	lines.c \
 	matrix.c \
-	mem.c \
 	mmath.c \
 	pixel.c \
 	points.c \
@@ -253,28 +252,3 @@ dep: $(CORE_SOURCES) $(DRIVER_SOURCES) $(OSMESA_SOURCES)
 
 tags:
 	etags `find . -name \*.[ch]` `find ../include`
-
-
-
-# XXX temporary for NV_vertex_program
-VPFILES = \
-	include/GL/glext.h \
-	src/Makefile.X11 \
-	src/vpparse.[ch] \
-	src/vpexec.[ch] \
-	src/vpstate.[ch] \
-	src/attrib.c \
-	src/context.c \
-	src/enable.c \
-	src/extensions.c \
-	src/get.c \
-	src/matrix.c \
-	src/mtypes.h \
-	src/varray.c \
-	src/tnl/t_vb_program.c \
-	tests/vptest1.c \
-	tests/vptest2.c
-
-vptar:
-	cd .. ; tar cvf vpfiles.tar $(VPFILES) ; gzip vpfiles.tar
-

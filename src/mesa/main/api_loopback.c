@@ -1,4 +1,4 @@
-/* $Id: api_loopback.c,v 1.15 2002/01/14 16:06:35 brianp Exp $ */
+/* $Id: api_loopback.c,v 1.17 2002/10/29 20:28:43 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,7 +24,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
 
@@ -1408,7 +1408,7 @@ loopback_VertexAttrib2fNV(GLuint index, GLfloat x, GLfloat y)
 static void
 loopback_VertexAttrib2dNV(GLuint index, GLdouble x, GLdouble y)
 {
-   ATTRIB(index, (GLfloat) x, y, 0.0F, 1.0F);
+   ATTRIB(index, (GLfloat) x, (GLfloat) y, 0.0F, 1.0F);
 }
 
 static void
@@ -1481,7 +1481,7 @@ loopback_VertexAttrib2fvNV(GLuint index, const GLfloat *v)
 static void
 loopback_VertexAttrib2dvNV(GLuint index, const GLdouble *v)
 {
-   ATTRIB(index, (GLfloat) v[0], (GLdouble) v[1], 0.0F, 1.0F);
+   ATTRIB(index, (GLfloat) v[0], (GLfloat) v[1], 0.0F, 1.0F);
 }
 
 static void

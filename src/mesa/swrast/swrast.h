@@ -1,4 +1,4 @@
-/* $Id: swrast.h,v 1.27 2002/09/17 15:46:36 brianp Exp $ */
+/* $Id: swrast.h,v 1.32 2002/10/29 20:29:00 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -28,7 +28,7 @@
 /**
  * \file swrast/swrast.h
  * \brief Defines basic structures for sw_rasterizer.
- * \author Keith Whitwell <keithw@valinux.com>
+ * \author Keith Whitwell <keith@tungstengraphics.com>
  */
 
 #ifndef SWRAST_H
@@ -63,6 +63,8 @@
  *     primitives unaccelerated), hook in swrast_setup instead.
  */
 typedef struct {
+   /** win[0], win[1] are the screen-coords of SWvertex. win[2] is the
+    * z-coord. what is win[3]? */
    GLfloat win[4];
    GLfloat texcoord[MAX_TEXTURE_UNITS][4];
    GLchan color[4];
@@ -97,7 +99,13 @@ typedef struct {
  */
 
 
-/* Values for interpMask and arrayMask */
+/**
+ * \defgroup SpanFlags SPAN_XXX-flags
+ * Bitmasks to indicate which span_arrays need to be computed
+ * (sw_span::interpMask) or have already been filled
+ * (sw_span::arrayMask)
+ */
+/*@{*/
 #define SPAN_RGBA         0x001
 #define SPAN_SPEC         0x002
 #define SPAN_INDEX        0x004
@@ -107,16 +115,21 @@ typedef struct {
 #define SPAN_INT_TEXTURE  0x040
 #define SPAN_LAMBDA       0x080
 #define SPAN_COVERAGE     0x100
-#define SPAN_FLAT         0x200  /* flat shading? */
-#define SPAN_XY           0x400  /* arrayMask only - for xArray, yArray */
-#define SPAN_MASK         0x800  /* arrayMask only */
+#define SPAN_FLAT         0x200  /**< flat shading? */
+/** sw_span::arrayMask only - for span_arrays::x, span_arrays::y */
+#define SPAN_XY           0x400
+#define SPAN_MASK         0x800  /**< sw_span::arrayMask only */
+/*@}*/
 
 
+/**
+ * \struct span_arrays 
+ * \brief Arrays of fragment values.
+ *
+ * These will either be computed from the x/xStep values above or
+ * filled in by glDraw/CopyPixels, etc.
+ */
 struct span_arrays {
-   /**
-    * Arrays of fragment values.  These will either be computed from the
-    * x/xStep values above or filled in by glDraw/CopyPixels, etc.
-    */
    GLchan  rgb[MAX_WIDTH][3];
    GLchan  rgba[MAX_WIDTH][4];
    GLuint  index[MAX_WIDTH];
@@ -147,9 +160,12 @@ struct sw_span {
    /** either GL_POLYGON, GL_LINE, GL_POLYGON, GL_BITMAP */
    GLenum primitive;
 
+   /** 0 = front-facing span, 1 = back-facing span (for two-sided stencil) */
+   GLuint facing;
+
    /**
-    * This bitmask (of SPAN_* flags) indicates which of the x/xStep
-    * variables are relevant.
+    * This bitmask (of  \link SpanFlags SPAN_* flags\endlink) indicates
+    * which of the x/xStep variables are relevant.
     */
    GLuint interpMask;
 
@@ -179,8 +195,8 @@ struct sw_span {
    GLfixed intTex[2], intTexStep[2];
 
    /**
-    * This bitmask (of SPAN_* flags) indicates which of the fragment arrays
-    * in the span_arrays struct are relevant.
+    * This bitmask (of \link SpanFlags SPAN_* flags\endlink) indicates
+    * which of the fragment arrays in the span_arrays struct are relevant.
     */
    GLuint arrayMask;
 
@@ -201,7 +217,8 @@ do {								\
    (S).arrayMask = (ARRAY_MASK);				\
    (S).start = 0;						\
    (S).end = (END);						\
-   (S).array = SWRAST_CONTEXT(ctx)->span_data;			\
+   (S).facing = 0;						\
+   (S).array = SWRAST_CONTEXT(ctx)->SpanArrays;			\
 } while (0)
 
 
@@ -303,6 +320,9 @@ extern void
 _swrast_flush( GLcontext *ctx );
 
 extern void
+_swrast_render_primitive( GLcontext *ctx, GLenum mode );
+
+extern void
 _swrast_render_start( GLcontext *ctx );
 
 extern void
@@ -383,23 +403,23 @@ _swrast_copy_texsubimage3d(GLcontext *ctx,
 
 
 
-/* The driver interface for the software rasterizer.  Unless otherwise
- * noted, all functions are mandatory.  
+/* The driver interface for the software rasterizer.
+ * Unless otherwise noted, all functions are mandatory.  
  */
 struct swrast_device_driver {
 
-   void (*SetBuffer)( GLcontext *ctx, GLframebuffer *buffer,
-                      GLenum colorBuffer );
+   void (*SetBuffer)( GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit);
    /*
     * Specifies the current buffer for span/pixel writing/reading.
     * buffer indicates which window to write to / read from.  Normally,
     * this'll be the buffer currently bound to the context, but it doesn't
     * have to be!
-    * colorBuffer indicates which color buffer, one of:
-    *    GL_FRONT_LEFT - this buffer always exists
-    *    GL_BACK_LEFT - when double buffering
-    *    GL_FRONT_RIGHT - when using stereo
-    *    GL_BACK_RIGHT - when using stereo and double buffering
+    * bufferBit indicates which color buffer, one of:
+    *    FRONT_LEFT_BIT - this buffer always exists
+    *    BACK_LEFT_BIT - when double buffering
+    *    FRONT_RIGHT_BIT - when using stereo
+    *    BACK_RIGHT_BIT - when using stereo and double buffering
+    *    AUXn_BIT - if aux buffers are implemented
     */
 
 

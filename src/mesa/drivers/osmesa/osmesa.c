@@ -1,8 +1,8 @@
-/* $Id: osmesa.c,v 1.88 2002/09/27 02:45:39 brianp Exp $ */
+/* $Id: osmesa.c,v 1.96 2002/10/30 19:49:30 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  4.1
+ * Version:  5.0
  *
  * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
@@ -45,7 +45,6 @@
 #include "imports.h"
 #include "macros.h"
 #include "matrix.h"
-#include "mem.h"
 #include "mmath.h"
 #include "mtypes.h"
 #include "texformat.h"
@@ -139,7 +138,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
    const GLuint i4 = 1;
    const GLubyte *i1 = (GLubyte *) &i4;
    const GLint little_endian = *i1;
-   __GLimports imports;
 
    rind = gind = bind = aind = 0;
    if (format==OSMESA_COLOR_INDEX) {
@@ -292,12 +290,12 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
          return NULL;
       }
 
-      _mesa_init_default_imports( &imports, (void *) osmesa );
       if (!_mesa_initialize_context(&osmesa->gl_ctx,
                                     osmesa->gl_visual,
                                     sharelist ? &sharelist->gl_ctx
                                               : (GLcontext *) NULL,
-                                    &imports)) {
+                                    (void *) osmesa,
+                                    GL_FALSE)) {
          _mesa_destroy_visual( osmesa->gl_visual );
          FREE(osmesa);
          return NULL;
@@ -305,6 +303,7 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
 
       _mesa_enable_sw_extensions(&(osmesa->gl_ctx));
       _mesa_enable_1_3_extensions(&(osmesa->gl_ctx));
+      _mesa_enable_1_4_extensions(&(osmesa->gl_ctx));
 
       osmesa->gl_buffer = _mesa_create_framebuffer( osmesa->gl_visual,
                            (GLboolean) ( osmesa->gl_visual->depthBits > 0 ),
@@ -654,7 +653,7 @@ OSMesaGetProcAddress( const char *funcName )
 {
    int i;
    for (i = 0; functions[i].Name; i++) {
-      if (strcmp(functions[i].Name, funcName) == 0)
+      if (_mesa_strcmp(functions[i].Name, funcName) == 0)
          return (void *) functions[i].Address;
    }
    return (void *) _glapi_get_proc_address(funcName);
@@ -671,12 +670,12 @@ OSMesaGetProcAddress( const char *funcName )
  */
 
 #if CHAN_TYPE == GL_FLOAT
-#define PACK_RGBA(DST, R, G, B, A)				\
-do {								\
-   (DST)[0] = (R < 0.0f) ? 0.0f : ((R > 1.0f) ? 1.0f : R);	\
-   (DST)[1] = (G < 0.0f) ? 0.0f : ((G > 1.0f) ? 1.0f : G);	\
-   (DST)[2] = (B < 0.0f) ? 0.0f : ((B > 1.0f) ? 1.0f : B);	\
-   (DST)[3] = (A < 0.0f) ? 0.0f : ((A > 1.0f) ? 1.0f : A);	\
+#define PACK_RGBA(DST, R, G, B, A)	\
+do {					\
+   (DST)[0] = MAX2( R, 0.0F );		\
+   (DST)[1] = MAX2( G, 0.0F );		\
+   (DST)[2] = MAX2( B, 0.0F );		\
+   (DST)[3] = CLAMP(A, 0.0F, CHAN_MAXF);\
 } while (0)
 #else
 #define PACK_RGBA(DST, R, G, B, A)	\
@@ -721,11 +720,11 @@ do {									\
 
 
 
-static void set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLenum mode )
+static void set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit )
 {
    /* separate read buffer not supported */
    ASSERT(buffer == ctx->DrawBuffer);
-   ASSERT(mode == GL_FRONT_LEFT);
+   ASSERT(bufferBit == FRONT_LEFT_BIT);
 }
 
 
@@ -767,9 +766,10 @@ static void clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 	    }
 	 }
 	 else if (osmesa->format == OSMESA_RGB) {
-	    const GLchan r = ctx->Color.ClearColor[0];
-	    const GLchan g = ctx->Color.ClearColor[1];
-	    const GLchan b = ctx->Color.ClearColor[2];
+            GLchan r, g, b;
+            CLAMPED_FLOAT_TO_CHAN(r, ctx->Color.ClearColor[0]);
+            CLAMPED_FLOAT_TO_CHAN(g, ctx->Color.ClearColor[1]);
+            CLAMPED_FLOAT_TO_CHAN(b, ctx->Color.ClearColor[2]);
 	    if (all) {
 	       /* Clear whole RGB buffer */
 	       GLuint n = osmesa->rowlength * osmesa->height;
@@ -793,9 +793,10 @@ static void clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 	    }
 	 }
 	 else if (osmesa->format == OSMESA_BGR) {
-	    const GLchan r = ctx->Color.ClearColor[0];
-	    const GLchan g = ctx->Color.ClearColor[1];
-	    const GLchan b = ctx->Color.ClearColor[2];
+            GLchan r, g, b;
+            CLAMPED_FLOAT_TO_CHAN(r, ctx->Color.ClearColor[0]);
+            CLAMPED_FLOAT_TO_CHAN(g, ctx->Color.ClearColor[1]);
+            CLAMPED_FLOAT_TO_CHAN(b, ctx->Color.ClearColor[2]);
 	    if (all) {
 	       /* Clear whole RGB buffer */
 	       const GLint n = osmesa->rowlength * osmesa->height;
@@ -819,10 +820,11 @@ static void clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 	    }
 	 }
          else if (osmesa->format == OSMESA_RGB_565) {
-	    const GLchan r = ctx->Color.ClearColor[0];
-	    const GLchan g = ctx->Color.ClearColor[1];
-	    const GLchan b = ctx->Color.ClearColor[2];
             GLushort clearPixel;
+            GLchan r, g, b;
+            CLAMPED_FLOAT_TO_CHAN(r, ctx->Color.ClearColor[0]);
+            CLAMPED_FLOAT_TO_CHAN(g, ctx->Color.ClearColor[1]);
+            CLAMPED_FLOAT_TO_CHAN(b, ctx->Color.ClearColor[2]);
             PACK_RGB_565(clearPixel, r, g, b);
             if (all) {
                /* Clear whole RGB buffer */
@@ -851,10 +853,10 @@ static void clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 	    /* 4-byte pixel value */
 	    GLuint clearPixel;
 	    GLchan *clr = (GLchan *) &clearPixel;
-	    clr[osmesa->rInd] = ctx->Color.ClearColor[0];
-	    clr[osmesa->gInd] = ctx->Color.ClearColor[1];
-	    clr[osmesa->bInd] = ctx->Color.ClearColor[2];
-	    clr[osmesa->aInd] = ctx->Color.ClearColor[3];
+            CLAMPED_FLOAT_TO_CHAN(clr[osmesa->rInd], ctx->Color.ClearColor[0]);
+            CLAMPED_FLOAT_TO_CHAN(clr[osmesa->gInd], ctx->Color.ClearColor[1]);
+            CLAMPED_FLOAT_TO_CHAN(clr[osmesa->bInd], ctx->Color.ClearColor[2]);
+            CLAMPED_FLOAT_TO_CHAN(clr[osmesa->aInd], ctx->Color.ClearColor[3]);
 	    if (all) {
 	       /* Clear whole RGBA buffer */
 	       const GLuint n = osmesa->rowlength * osmesa->height;
@@ -866,7 +868,7 @@ static void clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 		  }
 	       }
 	       else {
-		  BZERO(ptr4, n * sizeof(GLuint));
+		  _mesa_bzero(ptr4, n * sizeof(GLuint));
 	       }
 	    }
 	    else {
@@ -880,10 +882,11 @@ static void clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 	       }
 	    }
 #else
-	    const GLchan r = ctx->Color.ClearColor[0];
-	    const GLchan g = ctx->Color.ClearColor[1];
-	    const GLchan b = ctx->Color.ClearColor[2];
-	    const GLchan a = ctx->Color.ClearColor[3];
+            GLchan r, g, b, a;
+            CLAMPED_FLOAT_TO_CHAN(r, ctx->Color.ClearColor[0]);
+            CLAMPED_FLOAT_TO_CHAN(g, ctx->Color.ClearColor[1]);
+            CLAMPED_FLOAT_TO_CHAN(b, ctx->Color.ClearColor[2]);
+            CLAMPED_FLOAT_TO_CHAN(a, ctx->Color.ClearColor[3]);
 	    if (all) {
 	       /* Clear whole RGBA buffer */
 	       const GLuint n = osmesa->rowlength * osmesa->height;

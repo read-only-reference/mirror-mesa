@@ -30,6 +30,7 @@
 #include <ggi/mesa/ggimesa_int.h>
 #include <ggi/mesa/debug.h>
 #include "extensions.h"
+#include "colormac.h"
 #include "imports.h"
 #include "matrix.h"
 #include "swrast/swrast.h"
@@ -96,17 +97,22 @@ static void gl_ggiSetClearIndex(GLcontext *ctx, GLuint ci)
 	ggi_ctx->clearcolor = (ggi_pixel)ci;
 }
 
-static void gl_ggiSetClearColor(GLcontext *ctx, const GLchan color[4])
+static void gl_ggiSetClearColor(GLcontext *ctx, const GLfloat color[4])
 {
 	ggi_mesa_context_t ggi_ctx = (ggi_mesa_context_t)ctx->DriverCtx;
 	ggi_color rgb;
 	ggi_pixel col;
-	
+	GLubyte byteColor[3];
+
 	GGIMESADPRINT_CORE("gl_ggiSetClearColor() called\n");
 	
-	rgb.r = (uint16)color[0] << SHIFT;
-	rgb.g = (uint16)color[1] << SHIFT;
-	rgb.b = (uint16)color[2] << SHIFT;
+	CLAMPED_FLOAT_TO_UBYTE(byteColor[0], color[0]);
+	CLAMPED_FLOAT_TO_UBYTE(byteColor[1], color[1]);
+	CLAMPED_FLOAT_TO_UBYTE(byteColor[2], color[2]);
+
+	rgb.r = (uint16)byteColor[0] << SHIFT;
+	rgb.g = (uint16)byteColor[1] << SHIFT;
+	rgb.b = (uint16)byteColor[2] << SHIFT;
 	col = ggiMapColor(ggi_ctx->ggi_visual, &rgb);
 	ggiSetGCForeground(ggi_ctx->ggi_visual, col);
 	ggi_ctx->clearcolor = col;
@@ -146,14 +152,14 @@ static void gl_ggiClear(GLcontext *ctx, GLbitfield mask, GLboolean all,
 
 /* Set the buffer used for reading */
 /* XXX support for separate read/draw buffers hasn't been tested */
-static GLboolean gl_ggiSetBuffer(GLcontext *ctx, GLframebuffer *buffer, GLenum mode)
+static GLboolean gl_ggiSetBuffer(GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit)
 {
 	ggi_mesa_context_t ggi_ctx = (ggi_mesa_context_t)ctx->DriverCtx;
 	
-	printf("set read %d\n", mode);
+	printf("set read %d\n", bufferBit);
 	GGIMESADPRINT_CORE("gl_ggiSetBuffer() called\n");
 
-	if (mode == GL_FRONT_LEFT) 
+	if (bufferBit == FRONT_LEFT_BIT) 
 	{
 		ggiSetReadFrame(ggi_ctx->ggi_visual,
 				ggiGetDisplayFrame(ggi_ctx->ggi_visual));
@@ -161,7 +167,7 @@ static GLboolean gl_ggiSetBuffer(GLcontext *ctx, GLframebuffer *buffer, GLenum m
 				 ggiGetDisplayFrame(ggi_ctx->ggi_visual));
 		return GL_TRUE;
 	}
-	else if (mode == GL_BACK_LEFT) 
+	else if (bufferBit == BACK_LEFT_BIT)
 	{
 		ggiSetReadFrame(ggi_ctx->ggi_visual,
 				ggiGetDisplayFrame(ggi_ctx->ggi_visual)?0 : 1);
@@ -452,7 +458,6 @@ ggi_mesa_context_t ggiMesaCreateContext(ggi_visual_t vis)
 	int err;
 	ggi_color pal[256];
 	int i;
-	__GLimports imports;
 
 	GGIMESADPRINT_CORE("ggiMesaCreateContext() called\n");
 	
@@ -463,10 +468,9 @@ ggi_mesa_context_t ggiMesaCreateContext(ggi_visual_t vis)
 	ctx->ggi_visual = vis;
 	ctx->color = 0;
 
-	_mesa_init_default_imports( &imports, (void *) ctx);
 	ctx->gl_ctx =
 	  _mesa_create_context(&(LIBGGI_MESAEXT(vis)->mesa_visual.gl_visual),
-			       NULL, &imports);
+			       NULL, (void *) ctx, GL_FALSE);
 	if (!ctx->gl_ctx)
 		goto free_context;
 	
@@ -549,7 +553,7 @@ void ggiMesaSwapBuffers(void)
 	
 	GGIMESADPRINT_CORE("ggiMesaSwapBuffers() called\n");	
 	
-	_mesa_swapbuffers(ctx);
+	_mesa_notifySwapBuffers(ctx);
 	gl_ggiFlush(ctx);
 
 	ggiSetDisplayFrame(ggi_ctx->ggi_visual,

@@ -1,4 +1,4 @@
-/* $Id: vtxfmt.c,v 1.12 2002/06/29 19:48:16 brianp Exp $ */
+/* $Id: vtxfmt.c,v 1.14 2002/10/29 20:28:56 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,13 +24,14 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Keith Whitwell <keithw@valinux.com>
- *    Gareth Hughes <gareth@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
+ *    Gareth Hughes
  */
 
 #include "glheader.h"
 #include "api_loopback.h"
 #include "context.h"
+#include "imports.h"
 #include "mtypes.h"
 #include "state.h"
 #include "vtxfmt.h"

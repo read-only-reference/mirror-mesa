@@ -1,4 +1,4 @@
-/* $Id: ss_vb.c,v 1.20 2002/06/29 19:48:17 brianp Exp $ */
+/* $Id: ss_vb.c,v 1.22 2002/10/29 20:29:00 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,14 +24,14 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
 #include "glheader.h"
 #include "colormac.h"
 #include "context.h"
 #include "macros.h"
-#include "mem.h"
+#include "imports.h"
 
 #include "swrast/swrast.h"
 #include "tnl/t_context.h"

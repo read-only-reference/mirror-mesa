@@ -1,10 +1,10 @@
-/* $Id: glx.h,v 1.36 2002/08/22 21:10:38 brianp Exp $ */
+/* $Id: glx.h,v 1.38 2002/10/14 13:52:27 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  4.1
  * 
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -154,6 +154,7 @@ extern "C" {
 #define GLX_STATIC_COLOR		0x8005
 #define GLX_GRAY_SCALE			0x8006
 #define GLX_STATIC_GRAY			0x8007
+#define GLX_TRANSPARENT_RGB		0x8008
 #define GLX_TRANSPARENT_INDEX		0x8009
 #define GLX_RGBA_TYPE			0x8014
 #define GLX_COLOR_INDEX_TYPE		0x8015
@@ -295,16 +296,6 @@ extern void glXGetSelectedEvent( Display *dpy, GLXDrawable drawable,
 
 /* GLX 1.4 and later */
 extern void (*glXGetProcAddress(const GLubyte *procname))();
-
-
-/*
- * AGP memory allocator.
- */
-extern void *glXAllocateMemoryNV(GLsizei size, GLfloat readfreq, GLfloat writefreq, GLfloat priority);
-extern void glXFreeMemoryNV(GLvoid *pointer);
-typedef void * ( * PFNGLXALLOCATEMEMORYNVPROC) (GLsizei size, GLfloat readfreq, GLfloat writefreq, GLfloat priority);
-typedef void ( * PFNGLXFREEMEMORYNVPROC) (GLvoid *pointer);
-
 
 
 #ifndef GLX_GLXEXT_LEGACY
@@ -460,6 +451,38 @@ extern void (*glXGetProcAddressARB(const GLubyte *procName))();
 
 
 #endif /* GLX_GLXEXT_LEGACY */
+
+
+/**
+ ** The following aren't in glxext.h yet.
+ **/
+
+
+/*
+ * ???. GLX_NV_vertex_array_range
+ */
+#ifndef GLX_NV_vertex_array_range
+#define GLX_NV_vertex_array_range
+
+extern void *glXAllocateMemoryNV(GLsizei size, GLfloat readfreq, GLfloat writefreq, GLfloat priority);
+extern void glXFreeMemoryNV(GLvoid *pointer);
+typedef void * ( * PFNGLXALLOCATEMEMORYNVPROC) (GLsizei size, GLfloat readfreq, GLfloat writefreq, GLfloat priority);
+typedef void ( * PFNGLXFREEMEMORYNVPROC) (GLvoid *pointer);
+
+#endif /* GLX_NV_vertex_array_range */
+
+
+
+/*
+ * ???. GLX_MESA_agp_offset
+ */ 
+#ifndef GLX_MESA_agp_offset
+#define GLX_MESA_agp_offset 1
+
+extern GLuint glXGetAGPOffsetMESA(const GLvoid *pointer);
+typedef GLuint (* PFNGLXGETAGPOFFSETMESAPROC) (const GLvoid *pointer);
+
+#endif /* GLX_MESA_agp_offset */
 
 
 

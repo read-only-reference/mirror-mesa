@@ -1,4 +1,4 @@
-/* $Id: wmesa.c,v 1.36 2002/09/27 02:45:39 brianp Exp $ */
+/* $Id: wmesa.c,v 1.42 2002/10/29 22:32:50 brianp Exp $ */
 
 /*
  * Windows (Win32) device driver for Mesa 3.4
@@ -39,7 +39,6 @@
 #include "imports.h"
 #include "macros.h"
 #include "matrix.h"
-#include "mem.h"
 #include "mmath.h"
 #include "mtypes.h"
 #include "texformat.h"
@@ -101,7 +100,13 @@ WMesaContext WC = NULL;
 
 #ifdef COMPILE_SETPIXEL
 
-__forceinline void wmSetPixel(PWMC pwc, int iScanLine, int iPixel, BYTE r, BYTE g, BYTE b)
+#if defined(_MSC_VER) && _MSC_VER >= 1200
+#define FORCEINLINE __forceinline
+#else
+#define FORCEINLINE __inline
+#endif
+
+FORCEINLINE void wmSetPixel(PWMC pwc, int iScanLine, int iPixel, BYTE r, BYTE g, BYTE b)
 {
 	pwc->wmSetPixel(pwc,iScanLine,iPixel,r,g,b);
 }
@@ -365,9 +370,13 @@ static void clear_index(GLcontext* ctx, GLuint index)
 /*
  * Set the color used to clear the color buffer.
  */
-static void clear_color( GLcontext* ctx, const GLchan color[4] )
+static void clear_color( GLcontext* ctx, const GLfloat color[4] )
 {
-  Current->clearpixel = RGB(color[0], color[1], color[2]);
+  GLubyte col[4];
+  CLAMPED_FLOAT_TO_UBYTE(col[0], color[0]);
+  CLAMPED_FLOAT_TO_UBYTE(col[1], color[1]);
+  CLAMPED_FLOAT_TO_UBYTE(col[2], color[2]);
+  Current->clearpixel = RGB(col[0], col[1], col[2]);
 }
 
 
@@ -572,9 +581,9 @@ static void enable( GLcontext* ctx, GLenum pname, GLboolean enable )
 
 
 static void set_buffer(GLcontext *ctx, GLframebuffer *colorBuffer,
-                       GLenum buffer )
+                       GLuint bufferBit )
 {
-  /* XXX todo - examine buffer and set read/write pointers */
+  /* XXX todo - examine bufferBit and set read/write pointers */
   return;
 }
 
@@ -1245,7 +1254,6 @@ WMesaContext WMesaCreateContext( HWND hWnd, HPALETTE* Pal,
   RECT CR;
   WMesaContext c;
   GLboolean true_color_flag;
-  __GLimports imports;
 
   c = (struct wmesa_context * ) calloc(1,sizeof(struct wmesa_context));
   if (!c)
@@ -1333,10 +1341,8 @@ WMesaContext WMesaCreateContext( HWND hWnd, HPALETTE* Pal,
     return NULL;
   }
   
-   _mesa_init_default_imports( &imports, (void *) c );
-
   /* allocate a new Mesa context */
-  c->gl_ctx = _mesa_create_context( c->gl_visual, NULL, &imports );
+  c->gl_ctx = _mesa_create_context( c->gl_visual, NULL, (void *) c, GL_FALSE );
   
   if (!c->gl_ctx) {
     _mesa_destroy_visual( c->gl_visual );
@@ -1346,6 +1352,7 @@ WMesaContext WMesaCreateContext( HWND hWnd, HPALETTE* Pal,
   
   _mesa_enable_sw_extensions(c->gl_ctx);
   _mesa_enable_1_3_extensions(c->gl_ctx);
+  _mesa_enable_1_4_extensions(c->gl_ctx);
 
   c->gl_buffer = _mesa_create_framebuffer( c->gl_visual,
 					   c->gl_visual->depthBits > 0,
@@ -1449,7 +1456,7 @@ void WMesaSwapBuffers( void )
    * we have to flush any pending rendering commands first.
    */
   if (Current && Current->gl_ctx == ctx)
-    _mesa_swapbuffers(ctx);
+    _mesa_notifySwapBuffers(ctx);
   
   if (Current->db_flag)
     wmFlush(Current);

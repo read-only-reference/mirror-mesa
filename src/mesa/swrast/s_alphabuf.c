@@ -1,8 +1,8 @@
-/* $Id: s_alphabuf.c,v 1.11 2002/07/09 01:22:52 brianp Exp $ */
+/* $Id: s_alphabuf.c,v 1.15 2002/10/24 23:57:24 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  4.0.2
+ * Version:  4.1
  *
  * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
@@ -33,8 +33,9 @@
 
 #include "glheader.h"
 #include "context.h"
-#include "mem.h"
+#include "imports.h"
 
+#include "s_context.h"
 #include "s_alphabuf.h"
 
 
@@ -51,7 +52,7 @@ _mesa_alloc_alpha_buffers( GLframebuffer *buffer )
    if (buffer->FrontLeftAlpha) {
       MESA_PBUFFER_FREE( buffer->FrontLeftAlpha );
    }
-   buffer->FrontLeftAlpha = (GLchan *) MESA_PBUFFER_ALLOC( bytes );
+   buffer->FrontLeftAlpha = MESA_PBUFFER_ALLOC( bytes );
    if (!buffer->FrontLeftAlpha) {
       /* out of memory */
       _mesa_error( NULL, GL_OUT_OF_MEMORY,
@@ -62,7 +63,7 @@ _mesa_alloc_alpha_buffers( GLframebuffer *buffer )
       if (buffer->BackLeftAlpha) {
          MESA_PBUFFER_FREE( buffer->BackLeftAlpha );
       }
-      buffer->BackLeftAlpha = (GLchan *) MESA_PBUFFER_ALLOC( bytes );
+      buffer->BackLeftAlpha = MESA_PBUFFER_ALLOC( bytes );
       if (!buffer->BackLeftAlpha) {
          /* out of memory */
          _mesa_error( NULL, GL_OUT_OF_MEMORY,
@@ -74,7 +75,7 @@ _mesa_alloc_alpha_buffers( GLframebuffer *buffer )
       if (buffer->FrontRightAlpha) {
          MESA_PBUFFER_FREE( buffer->FrontRightAlpha );
       }
-      buffer->FrontRightAlpha = (GLchan *) MESA_PBUFFER_ALLOC( bytes );
+      buffer->FrontRightAlpha = MESA_PBUFFER_ALLOC( bytes );
       if (!buffer->FrontRightAlpha) {
          /* out of memory */
          _mesa_error( NULL, GL_OUT_OF_MEMORY,
@@ -85,7 +86,7 @@ _mesa_alloc_alpha_buffers( GLframebuffer *buffer )
          if (buffer->BackRightAlpha) {
             MESA_PBUFFER_FREE( buffer->BackRightAlpha );
          }
-         buffer->BackRightAlpha = (GLchan *) MESA_PBUFFER_ALLOC( bytes );
+         buffer->BackRightAlpha = MESA_PBUFFER_ALLOC( bytes );
          if (!buffer->BackRightAlpha) {
             /* out of memory */
             _mesa_error( NULL, GL_OUT_OF_MEMORY,
@@ -102,7 +103,7 @@ _mesa_alloc_alpha_buffers( GLframebuffer *buffer )
 void
 _mesa_clear_alpha_buffers( GLcontext *ctx )
 {
-   const GLchan aclear = ctx->Color.ClearColor[3];
+   const GLchan aclear = (GLchan) ctx->Color.ClearColor[3];
    GLuint bufferBit;
 
    ASSERT(ctx->DrawBuffer->UseSoftwareAlphaBuffers);
@@ -113,16 +114,16 @@ _mesa_clear_alpha_buffers( GLcontext *ctx )
       if (bufferBit & ctx->Color._DrawDestMask) {
          GLchan *buffer;
          if (bufferBit == FRONT_LEFT_BIT) {
-            buffer = ctx->DrawBuffer->FrontLeftAlpha;
+            buffer = (GLchan *) ctx->DrawBuffer->FrontLeftAlpha;
          }
          else if (bufferBit == FRONT_RIGHT_BIT) {
-            buffer = ctx->DrawBuffer->FrontRightAlpha;
+            buffer = (GLchan *) ctx->DrawBuffer->FrontRightAlpha;
          }
          else if (bufferBit == BACK_LEFT_BIT) {
-            buffer = ctx->DrawBuffer->BackLeftAlpha;
+            buffer = (GLchan *) ctx->DrawBuffer->BackLeftAlpha;
          }
          else {
-            buffer = ctx->DrawBuffer->BackRightAlpha;
+            buffer = (GLchan *) ctx->DrawBuffer->BackRightAlpha;
          }
 
          if (ctx->Scissor.Enabled) {
@@ -171,22 +172,24 @@ _mesa_clear_alpha_buffers( GLcontext *ctx )
 static INLINE
 GLchan *get_alpha_buffer( GLcontext *ctx )
 {
-   switch (ctx->Color._DriverDrawBuffer) {
-   case GL_FRONT_LEFT:
-      return ctx->DrawBuffer->FrontLeftAlpha;
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
+
+   switch (swrast->CurrentBuffer) {
+   case FRONT_LEFT_BIT:
+      return (GLchan *) ctx->DrawBuffer->FrontLeftAlpha;
       break;
-   case GL_BACK_LEFT:
-      return ctx->DrawBuffer->BackLeftAlpha;
+   case BACK_LEFT_BIT:
+      return (GLchan *) ctx->DrawBuffer->BackLeftAlpha;
       break;
-   case GL_FRONT_RIGHT:
-      return ctx->DrawBuffer->FrontRightAlpha;
+   case FRONT_RIGHT_BIT:
+      return (GLchan *) ctx->DrawBuffer->FrontRightAlpha;
       break;
-   case GL_BACK_RIGHT:
-      return ctx->DrawBuffer->BackRightAlpha;
+   case BACK_RIGHT_BIT:
+      return (GLchan *) ctx->DrawBuffer->BackRightAlpha;
       break;
    default:
-      _mesa_problem(ctx, "Bad DriverDrawBuffer in _mesa_write_alpha_span()");
-      return ctx->DrawBuffer->FrontLeftAlpha; /* aribitrary */
+      _mesa_problem(ctx, "Bad CurrentBuffer in get_alpha_buffer()");
+      return (GLchan *) ctx->DrawBuffer->FrontLeftAlpha;
    }
 }
 

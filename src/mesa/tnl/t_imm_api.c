@@ -1,4 +1,4 @@
-/* $Id: t_imm_api.c,v 1.31 2002/09/03 18:05:52 brianp Exp $ */
+/* $Id: t_imm_api.c,v 1.35 2002/10/29 20:29:01 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,7 +24,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
 
@@ -34,7 +34,7 @@
 #include "dlist.h"
 #include "enums.h"
 #include "light.h"
-#include "mem.h"
+#include "imports.h"
 #include "state.h"
 #include "colormac.h"
 #include "macros.h"
@@ -94,7 +94,7 @@ void _tnl_flush_vertices( GLcontext *ctx, GLuint flags )
    if (IM->Flag[IM->Start]) {
       if ((flags & FLUSH_UPDATE_CURRENT) || 
 	  IM->Count > IM->Start ||
-	  (IM->Flag[IM->Start] & (VERT_BEGIN|VERT_END))) {
+	  (IM->Flag[IM->Start] & (VERT_BIT_BEGIN | VERT_BIT_END))) {
 	 _tnl_flush_immediate( ctx, IM );
       }
    }
@@ -375,6 +375,7 @@ void
 _tnl_End(void)
 {
    GET_CURRENT_CONTEXT(ctx);
+
    _tnl_end( ctx );
 
    /* Need to keep save primitive uptodate in COMPILE and
@@ -1150,6 +1151,10 @@ _tnl_VertexAttrib4fNV( GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w 
             _tnl_flush_immediate( NULL, IM );
       }
    }
+   else {
+      GET_CURRENT_CONTEXT(ctx);
+      _mesa_error(ctx, GL_INVALID_VALUE, "glVertexAttribNV(index > 15)");
+   }
 }   
 
 static void
@@ -1166,6 +1171,10 @@ _tnl_VertexAttrib4fvNV( GLuint index, const GLfloat *v )
          if (count == IMM_MAXDATA - 1)
             _tnl_flush_immediate( NULL, IM );
       }
+   }
+   else {
+      GET_CURRENT_CONTEXT(ctx);
+      _mesa_error(ctx, GL_INVALID_VALUE, "glVertexAttribNV(index > 15)");
    }
 }   
 

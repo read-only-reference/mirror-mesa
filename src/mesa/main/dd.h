@@ -1,4 +1,4 @@
-/* $Id: dd.h,v 1.72 2002/09/27 02:45:37 brianp Exp $ */
+/* $Id: dd.h,v 1.74 2002/10/11 17:41:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -38,9 +38,13 @@ struct gl_pixelstore_attrib;
 #define DD_FRONT_RIGHT_BIT FRONT_RIGHT_BIT        /* 2 */
 #define DD_BACK_LEFT_BIT   BACK_LEFT_BIT          /* 4 */
 #define DD_BACK_RIGHT_BIT  BACK_RIGHT_BIT         /* 8 */
+#define DD_AUX0            AUX0_BIT               /* future use */
+#define DD_AUX1            AUX1_BIT               /* future use */
+#define DD_AUX2            AUX2_BIT               /* future use */
+#define DD_AUX3            AUX3_BIT               /* future use */
 #define DD_DEPTH_BIT       GL_DEPTH_BUFFER_BIT    /* 0x00000100 */
-#define DD_STENCIL_BIT     GL_STENCIL_BUFFER_BIT  /* 0x00000400 */
 #define DD_ACCUM_BIT       GL_ACCUM_BUFFER_BIT    /* 0x00000200 */
+#define DD_STENCIL_BIT     GL_STENCIL_BUFFER_BIT  /* 0x00000400 */
 
 
 /*
@@ -409,22 +413,14 @@ struct dd_function_table {
     *** They're ALSO called by the gl_PopAttrib() function!!!
     *** May add more functions like these to the device driver in the future.
     ***/
-#if 1
-   void (*AlphaFunc)(GLcontext *ctx, GLenum func, GLchan ref);
-#else
    void (*AlphaFunc)(GLcontext *ctx, GLenum func, GLfloat ref);
-#endif
    void (*BlendColor)(GLcontext *ctx, const GLfloat color[4]);
    void (*BlendEquation)(GLcontext *ctx, GLenum mode);
    void (*BlendFunc)(GLcontext *ctx, GLenum sfactor, GLenum dfactor);
    void (*BlendFuncSeparate)(GLcontext *ctx,
                              GLenum sfactorRGB, GLenum dfactorRGB,
                              GLenum sfactorA, GLenum dfactorA);
-#if 1
-   void (*ClearColor)(GLcontext *ctx, const GLchan color[4]);
-#else
    void (*ClearColor)(GLcontext *ctx, const GLfloat color[4]);
-#endif
    void (*ClearDepth)(GLcontext *ctx, GLclampd d);
    void (*ClearIndex)(GLcontext *ctx, GLuint index);
    void (*ClearStencil)(GLcontext *ctx, GLint s);

@@ -1,4 +1,4 @@
-/* $Id: t_imm_eval.c,v 1.25 2002/06/25 02:56:45 brianp Exp $ */
+/* $Id: t_imm_eval.c,v 1.27 2002/10/29 20:29:02 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,7 +24,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
  *    Brian Paul - vertex program updates
  */
 
@@ -33,7 +33,7 @@
 #include "colormac.h"
 #include "context.h"
 #include "macros.h"
-#include "mem.h"
+#include "imports.h"
 #include "mmath.h"
 #include "mtypes.h"
 #include "math/m_eval.h"

@@ -1,8 +1,8 @@
-/* $Id: get.c,v 1.92 2002/09/27 02:45:37 brianp Exp $ */
+/* $Id: get.c,v 1.98 2002/10/29 22:32:50 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  4.1
+ * Version:  5.0
  *
  * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
@@ -25,9 +25,6 @@
  */
 
 
-#ifdef PC_HEADER
-#include "all.h"
-#else
 #include "glheader.h"
 #include "colormac.h"
 #include "context.h"
@@ -40,7 +37,6 @@
 #include "mtypes.h"
 #include "texcompress.h"
 #include "math/m_matrix.h"
-#endif
 
 
 
@@ -173,7 +169,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = ENUM_TO_BOOL(ctx->Color.AlphaFunc);
          break;
       case GL_ALPHA_TEST_REF:
-         *params = FLOAT_TO_BOOL((GLfloat) ctx->Color.AlphaRef / CHAN_MAXF);
+         *params = ctx->Color.AlphaRef ? GL_TRUE : GL_FALSE;
          break;
       case GL_ATTRIB_STACK_DEPTH:
          *params = INT_TO_BOOL(ctx->AttribStackDepth);
@@ -908,6 +904,9 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
       case GL_UNPACK_IMAGE_HEIGHT_EXT:
          *params = ctx->Unpack.ImageHeight;
          break;
+      case GL_UNPACK_CLIENT_STORAGE_APPLE:
+         *params = ctx->Unpack.ClientStorage;
+         break;
       case GL_VIEWPORT:
 	 params[0] = INT_TO_BOOL(ctx->Viewport.X);
 	 params[1] = INT_TO_BOOL(ctx->Viewport.Y);
@@ -1345,7 +1344,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          *params = ENUM_TO_BOOL(ctx->Hint.GenerateMipmap);
          break;
 
-      /* GL_NV_vertex_program */
+#if FEATURE_NV_vertex_program
       case GL_VERTEX_PROGRAM_NV:
          CHECK_EXTENSION_B(NV_vertex_program, pname);
          *params = ctx->VertexProgram.Enabled;
@@ -1448,6 +1447,7 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
             *params = ctx->Eval.Map2Attrib[n];
          }
          break;
+#endif /* FEATURE_NV_vertex_program */
 
       /* GL_NV_texture_rectangle */
       case GL_TEXTURE_RECTANGLE_NV:
@@ -1537,7 +1537,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = ENUM_TO_DOUBLE(ctx->Color.AlphaFunc);
          break;
       case GL_ALPHA_TEST_REF:
-         *params = (GLdouble) ctx->Color.AlphaRef / CHAN_MAXF;
+         *params = (GLdouble) ctx->Color.AlphaRef;
          break;
       case GL_ATTRIB_STACK_DEPTH:
          *params = (GLdouble ) (ctx->AttribStackDepth);
@@ -1602,10 +1602,10 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
             *params = 0.0;
          break;
       case GL_COLOR_CLEAR_VALUE:
-         params[0] = (GLdouble) CHAN_TO_FLOAT(ctx->Color.ClearColor[0]);
-         params[1] = (GLdouble) CHAN_TO_FLOAT(ctx->Color.ClearColor[1]);
-         params[2] = (GLdouble) CHAN_TO_FLOAT(ctx->Color.ClearColor[2]);
-         params[3] = (GLdouble) CHAN_TO_FLOAT(ctx->Color.ClearColor[3]);
+         params[0] = (GLdouble) ctx->Color.ClearColor[0];
+         params[1] = (GLdouble) ctx->Color.ClearColor[1];
+         params[2] = (GLdouble) ctx->Color.ClearColor[2];
+         params[3] = (GLdouble) ctx->Color.ClearColor[3];
          break;
       case GL_COLOR_MATERIAL:
          *params = (GLdouble) ctx->Light.ColorMaterialEnabled;
@@ -2269,6 +2269,9 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
       case GL_UNPACK_IMAGE_HEIGHT_EXT:
          *params = (GLdouble) ctx->Unpack.ImageHeight;
          break;
+      case GL_UNPACK_CLIENT_STORAGE_APPLE:
+         *params = (GLdouble) ctx->Unpack.ClientStorage;
+         break;
       case GL_VIEWPORT:
 	 params[0] = (GLdouble) ctx->Viewport.X;
 	 params[1] = (GLdouble) ctx->Viewport.Y;
@@ -2706,7 +2709,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
          *params = (GLdouble) ctx->Hint.GenerateMipmap;
          break;
 
-      /* GL_NV_vertex_program */
+#if FEATURE_NV_vertex_program
       case GL_VERTEX_PROGRAM_NV:
          CHECK_EXTENSION_D(NV_vertex_program, pname);
          *params = (GLdouble) ctx->VertexProgram.Enabled;
@@ -2809,6 +2812,7 @@ _mesa_GetDoublev( GLenum pname, GLdouble *params )
             *params = (GLdouble) ctx->Eval.Map2Attrib[n];
          }
          break;
+#endif /* FEATURE_NV_vertex_program */
 
       /* GL_NV_texture_rectangle */
       case GL_TEXTURE_RECTANGLE_NV:
@@ -2898,7 +2902,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = ENUM_TO_FLOAT(ctx->Color.AlphaFunc);
          break;
       case GL_ALPHA_TEST_REF:
-         *params = (GLfloat) ctx->Color.AlphaRef / CHAN_MAXF;
+         *params = (GLfloat) ctx->Color.AlphaRef;
          break;
       case GL_ATTRIB_STACK_DEPTH:
          *params = (GLfloat) (ctx->AttribStackDepth);
@@ -2963,10 +2967,10 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
             *params = 0.0;
          break;
       case GL_COLOR_CLEAR_VALUE:
-         params[0] = CHAN_TO_FLOAT(ctx->Color.ClearColor[0]);
-         params[1] = CHAN_TO_FLOAT(ctx->Color.ClearColor[1]);
-         params[2] = CHAN_TO_FLOAT(ctx->Color.ClearColor[2]);
-         params[3] = CHAN_TO_FLOAT(ctx->Color.ClearColor[3]);
+         params[0] = ctx->Color.ClearColor[0];
+         params[1] = ctx->Color.ClearColor[1];
+         params[2] = ctx->Color.ClearColor[2];
+         params[3] = ctx->Color.ClearColor[3];
          break;
       case GL_COLOR_MATERIAL:
          *params = (GLfloat) ctx->Light.ColorMaterialEnabled;
@@ -3632,6 +3636,9 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
       case GL_UNPACK_IMAGE_HEIGHT_EXT:
          *params = (GLfloat) ctx->Unpack.ImageHeight;
          break;
+      case GL_UNPACK_CLIENT_STORAGE_APPLE:
+         *params = (GLfloat) ctx->Unpack.ClientStorage;
+         break;
       case GL_VIEWPORT:
 	 params[0] = (GLfloat) ctx->Viewport.X;
 	 params[1] = (GLfloat) ctx->Viewport.Y;
@@ -4043,7 +4050,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          *params = (GLfloat) ctx->Hint.GenerateMipmap;
          break;
 
-      /* GL_NV_vertex_program */
+#if FEATURE_NV_vertex_program
       case GL_VERTEX_PROGRAM_NV:
          CHECK_EXTENSION_F(NV_vertex_program, pname);
          *params = (GLfloat) ctx->VertexProgram.Enabled;
@@ -4160,6 +4167,7 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          CHECK_EXTENSION_F(NV_texture_rectangle, pname);
          *params = (GLfloat) ctx->Const.MaxTextureRectSize;
          break;
+#endif /* FEATURE_NV_vertex_program */
 
       /* GL_EXT_stencil_two_side */
       case GL_STENCIL_TEST_TWO_SIDE_EXT:
@@ -4233,7 +4241,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Color.AlphaEnabled;
          break;
       case GL_ALPHA_TEST_REF:
-         *params = FLOAT_TO_INT( (GLfloat) ctx->Color.AlphaRef / CHAN_MAXF );
+         *params = FLOAT_TO_INT(ctx->Color.AlphaRef);
          break;
       case GL_ALPHA_TEST_FUNC:
          *params = (GLint) ctx->Color.AlphaFunc;
@@ -4968,6 +4976,9 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       case GL_UNPACK_IMAGE_HEIGHT_EXT:
          *params = ctx->Unpack.ImageHeight;
          break;
+      case GL_UNPACK_CLIENT_STORAGE_APPLE:
+         *params = ctx->Unpack.ClientStorage;
+         break;
       case GL_VIEWPORT:
          params[0] = (GLint) ctx->Viewport.X;
          params[1] = (GLint) ctx->Viewport.Y;
@@ -5419,7 +5430,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          *params = (GLint) ctx->Hint.GenerateMipmap;
          break;
 
-      /* GL_NV_vertex_program */
+#if FEATURE_NV_vertex_program
       case GL_VERTEX_PROGRAM_NV:
          CHECK_EXTENSION_I(NV_vertex_program, pname);
          *params = (GLint) ctx->VertexProgram.Enabled;
@@ -5536,6 +5547,7 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
          CHECK_EXTENSION_I(NV_texture_rectangle, pname);
          *params = (GLint) ctx->Const.MaxTextureRectSize;
          break;
+#endif /* FEATURE_NV_vertex_program */
 
       /* GL_EXT_stencil_two_side */
       case GL_STENCIL_TEST_TWO_SIDE_EXT:
@@ -5616,9 +5628,9 @@ _mesa_GetString( GLenum name )
    GET_CURRENT_CONTEXT(ctx);
    static const char *vendor = "Brian Paul";
    static const char *renderer = "Mesa";
-   static const char *version_1_2 = "1.2 Mesa 4.1 beta";
-   static const char *version_1_3 = "1.3 Mesa 4.1 beta";
-   static const char *version_1_4 = "1.3 Mesa 4.1 beta"; /* change to 1.4 */
+   static const char *version_1_2 = "1.2 Mesa 4.1";
+   static const char *version_1_3 = "1.3 Mesa 4.1";
+   static const char *version_1_4 = "1.4 Mesa 5.0";
 
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, 0);
 

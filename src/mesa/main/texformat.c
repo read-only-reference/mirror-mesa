@@ -1,4 +1,4 @@
-/* $Id: texformat.c,v 1.16 2002/09/27 02:45:38 brianp Exp $ */
+/* $Id: texformat.c,v 1.18 2002/10/29 20:28:47 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,23 +24,19 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Author:
- *    Gareth Hughes <gareth@valinux.com>
+ *    Gareth Hughes
  */
 
-#ifdef PC_HEADER
-#include "all.h"
-#else
 #include "glheader.h"
 #include "colormac.h"
 #include "context.h"
 #include "image.h"
-#include "mem.h"
+#include "imports.h"
 #include "mmath.h"
 #include "mtypes.h"
 #include "texformat.h"
 #include "teximage.h"
 #include "texstate.h"
-#endif
 
 
 /* Texel fetch routines for all supported formats:

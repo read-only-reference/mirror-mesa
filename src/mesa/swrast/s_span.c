@@ -1,4 +1,4 @@
-/* $Id: s_span.c,v 1.47 2002/09/06 02:56:09 brianp Exp $ */
+/* $Id: s_span.c,v 1.51 2002/10/30 19:49:30 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -37,7 +37,7 @@
 #include "context.h"
 #include "macros.h"
 #include "mmath.h"
-#include "mem.h"
+#include "imports.h"
 
 #include "s_alpha.h"
 #include "s_alphabuf.h"
@@ -588,7 +588,7 @@ clip_span( GLcontext *ctx, struct sw_span *span )
       if (x < xmin) {
          ASSERT(x + n > xmin);
          span->writeAll = GL_FALSE;
-         BZERO(span->array->mask, (xmin - x) * sizeof(GLubyte));
+         _mesa_bzero(span->array->mask, (xmin - x) * sizeof(GLubyte));
       }
 
       /* Clip to right */
@@ -618,14 +618,9 @@ multi_write_index_span( GLcontext *ctx, struct sw_span *span )
          GLuint indexTmp[MAX_WIDTH];
          ASSERT(span->end < MAX_WIDTH);
 
-         if (bufferBit == FRONT_LEFT_BIT)
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_FRONT_LEFT);
-         else if (bufferBit == FRONT_RIGHT_BIT)
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_FRONT_RIGHT);
-         else if (bufferBit == BACK_LEFT_BIT)
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_BACK_LEFT);
-         else
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_BACK_RIGHT);
+         /* Set the current read/draw buffer */
+         swrast->CurrentBuffer = bufferBit;
+         (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, bufferBit);
 
          /* make copy of incoming indexes */
          MEMCPY( indexTmp, span->array->index, span->end * sizeof(GLuint) );
@@ -680,22 +675,9 @@ multi_write_rgba_span( GLcontext *ctx, struct sw_span *span )
          GLchan rgbaTmp[MAX_WIDTH][4];
          ASSERT(span->end < MAX_WIDTH);
 
-         if (bufferBit == FRONT_LEFT_BIT) {
-            ctx->Color._DriverDrawBuffer = GL_FRONT_LEFT;
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_FRONT_LEFT);
-         }
-         else if (bufferBit == FRONT_RIGHT_BIT) {
-            ctx->Color._DriverDrawBuffer = GL_FRONT_RIGHT;
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_FRONT_RIGHT);
-         }
-         else if (bufferBit == BACK_LEFT_BIT) {
-            ctx->Color._DriverDrawBuffer = GL_BACK_LEFT;
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_BACK_LEFT);
-         }
-         else {
-            ctx->Color._DriverDrawBuffer = GL_BACK_RIGHT;
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_BACK_RIGHT);
-         }
+         /* Set the current read/draw buffer */
+         swrast->CurrentBuffer = bufferBit;
+         (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, bufferBit);
 
          /* make copy of incoming colors */
          MEMCPY( rgbaTmp, span->array->rgba, 4 * span->end * sizeof(GLchan) );
@@ -803,8 +785,7 @@ _mesa_write_index_span( GLcontext *ctx, struct sw_span *span)
          _mesa_span_interpolate_z(ctx, span);
 
       if (ctx->Stencil.Enabled) {
-         const GLuint face = 0;  /* XXX stencil two side */
-         if (!_mesa_stencil_and_ztest_span(ctx, span, face)) {
+         if (!_mesa_stencil_and_ztest_span(ctx, span)) {
             span->arrayMask = origArrayMask;
             return;
          }
@@ -983,8 +964,7 @@ _mesa_write_rgba_span( GLcontext *ctx, struct sw_span *span)
          _mesa_span_interpolate_z(ctx, span);
 
       if (ctx->Stencil.Enabled) {
-         const GLuint face = 0;  /* XXX stencil two side */
-         if (!_mesa_stencil_and_ztest_span(ctx, span, face)) {
+         if (!_mesa_stencil_and_ztest_span(ctx, span)) {
             span->interpMask = origInterpMask;
             span->arrayMask = origArrayMask;
             return;
@@ -1214,8 +1194,7 @@ _mesa_write_texture_span( GLcontext *ctx, struct sw_span *span)
          _mesa_span_interpolate_z(ctx, span);
 
       if (ctx->Stencil.Enabled) {
-         const GLuint face = 0;  /* XXX stencil two side */
-         if (!_mesa_stencil_and_ztest_span(ctx, span, face)) {
+         if (!_mesa_stencil_and_ztest_span(ctx, span)) {
             span->arrayMask = origArrayMask;
             return;
          }
@@ -1341,7 +1320,7 @@ _mesa_read_rgba_span( GLcontext *ctx, GLframebuffer *buffer,
    if (y < 0 || y >= bufHeight || x + (GLint) n < 0 || x >= bufWidth) {
       /* completely above, below, or right */
       /* XXX maybe leave undefined? */
-      BZERO(rgba, 4 * n * sizeof(GLchan));
+      _mesa_bzero(rgba, 4 * n * sizeof(GLchan));
    }
    else {
       GLint skip, length;
@@ -1394,7 +1373,7 @@ _mesa_read_index_span( GLcontext *ctx, GLframebuffer *buffer,
 
    if (y < 0 || y >= bufHeight || x + (GLint) n < 0 || x >= bufWidth) {
       /* completely above, below, or right */
-      BZERO(indx, n * sizeof(GLuint));
+      _mesa_bzero(indx, n * sizeof(GLuint));
    }
    else {
       GLint skip, length;

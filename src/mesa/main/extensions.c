@@ -1,4 +1,4 @@
-/* $Id: extensions.c,v 1.81 2002/09/27 02:45:37 brianp Exp $ */
+/* $Id: extensions.c,v 1.85 2002/10/25 21:06:27 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,17 +24,12 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
-#ifdef PC_HEADER
-#include "all.h"
-#else
 #include "glheader.h"
+#include "imports.h"
 #include "context.h"
 #include "extensions.h"
-#include "mem.h"
 #include "simple_list.h"
 #include "mtypes.h"
-#endif
 
 
 #define MAX_EXT_NAMELEN 80
@@ -73,6 +68,7 @@ static struct {
    { OFF, "GL_ARB_texture_mirrored_repeat",    F(ARB_texture_mirrored_repeat)},
    { ON,  "GL_ARB_transpose_matrix",           0 },
    { ON,  "GL_ARB_window_pos",                 F(ARB_window_pos) },
+   { OFF, "GL_ATI_texture_mirror_once",        F(ATI_texture_mirror_once)},
    { ON,  "GL_EXT_abgr",                       0 },
    { ON,  "GL_EXT_bgra",                       0 },
    { OFF, "GL_EXT_blend_color",                F(EXT_blend_color) },
@@ -160,6 +156,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
       "GL_ARB_texture_env_crossbar",
       "GL_ARB_texture_env_dot3",
       "GL_ARB_texture_mirrored_repeat",
+      "GL_ATI_texture_mirror_once",
       "GL_EXT_blend_color",
       "GL_EXT_blend_func_separate",
       "GL_EXT_blend_logic_op",
@@ -190,8 +187,10 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
       "GL_NV_point_sprite",
       "GL_NV_texture_rectangle",
       "GL_NV_texgen_reflection",
+#if FEATURE_NV_vertex_program
       "GL_NV_vertex_program",
       "GL_NV_vertex_program1_1",
+#endif
       "GL_SGI_color_matrix",
       "GL_SGI_color_table",
       "GL_SGIS_generate_mipmap",
@@ -316,7 +315,7 @@ _mesa_add_extension( GLcontext *ctx,
    {
       struct extension *t = MALLOC_STRUCT(extension);
       t->enabled = enabled;
-      strncpy(t->name, name, MAX_EXT_NAMELEN);
+      _mesa_strncpy(t->name, name, MAX_EXT_NAMELEN);
       t->name[MAX_EXT_NAMELEN] = 0;
       t->flag = flag_ptr;
       if (t->flag)
@@ -338,7 +337,7 @@ set_extension( GLcontext *ctx, const char *name, GLint state )
     */
    struct extension *i;
    foreach( i, ctx->Extensions.ext_list )
-      if (strncmp(i->name, name, MAX_EXT_NAMELEN) == 0)
+      if (_mesa_strncmp(i->name, name, MAX_EXT_NAMELEN) == 0)
 	 break;
 
    if (i == ctx->Extensions.ext_list) {
@@ -380,7 +379,7 @@ _mesa_extension_is_enabled( GLcontext *ctx, const char *name)
 {
    struct extension *i;
    foreach( i, ctx->Extensions.ext_list )
-      if (strncmp(i->name, name, MAX_EXT_NAMELEN) == 0) {
+      if (_mesa_strncmp(i->name, name, MAX_EXT_NAMELEN) == 0) {
          if (i->enabled)
             return GL_TRUE;
          else
@@ -447,18 +446,18 @@ _mesa_extensions_get_string( GLcontext *ctx )
       GLuint len = 0;
       foreach (i, ctx->Extensions.ext_list)
 	 if (i->enabled)
-	    len += strlen(i->name) + 1;
+	    len += _mesa_strlen(i->name) + 1;
 
       if (len == 0)
 	 return "";
 
-      str = (char *)MALLOC(len * sizeof(char));
+      str = (char *) _mesa_malloc(len * sizeof(char));
       ctx->Extensions.ext_string = str;
 
       foreach (i, ctx->Extensions.ext_list)
 	 if (i->enabled) {
-	    strcpy(str, i->name);
-	    str += strlen(str);
+	    _mesa_strcpy(str, i->name);
+	    str += _mesa_strlen(str);
 	    *str++ = ' ';
 	 }
 

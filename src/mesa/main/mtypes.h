@@ -1,4 +1,4 @@
-/* $Id: mtypes.h,v 1.89 2002/09/27 02:45:37 brianp Exp $ */
+/* $Id: mtypes.h,v 1.97 2002/10/21 15:52:34 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -301,37 +301,31 @@ struct gl_accum_attrib {
 
 
 /*
- * Used in DrawDestMask below
+ * Used in _DrawDestMask and _ReadSrcMask below to identify color buffers.
  */
-#define FRONT_LEFT_BIT  1
-#define FRONT_RIGHT_BIT 2
-#define BACK_LEFT_BIT   4
-#define BACK_RIGHT_BIT  8
-
+#define FRONT_LEFT_BIT  0x1
+#define FRONT_RIGHT_BIT 0x2
+#define BACK_LEFT_BIT   0x4
+#define BACK_RIGHT_BIT  0x8
+#define AUX0_BIT        0x10
+#define AUX1_BIT        0x20
+#define AUX2_BIT        0x40
+#define AUX3_BIT        0x80
 
 struct gl_colorbuffer_attrib {
    GLuint ClearIndex;			/* Index to use for glClear */
-#if 1
-   GLchan ClearColor[4];		/* Color to use for glClear */
-#else
    GLclampf ClearColor[4];		/* Color to use for glClear */
-#endif
 
    GLuint IndexMask;			/* Color index write mask */
    GLubyte ColorMask[4];		/* Each flag is 0xff or 0x0 */
 
-   GLenum DrawBuffer;			/* Which buffer to draw into */
-   GLenum _DriverDrawBuffer;		/* Single src/dst buffer for drivers */
-   GLubyte _DrawDestMask;		/* bitwise-OR of bitflags above */
+   GLenum DrawBuffer;		/* Which buffer to draw into */
+   GLubyte _DrawDestMask;	/* bitwise-OR of FRONT/BACK_LEFT/RIGHT_BITs */
 
    /* alpha testing */
    GLboolean AlphaEnabled;		/* Alpha test enabled flag */
    GLenum AlphaFunc;			/* Alpha test function */
-#if 1
-   GLchan AlphaRef;			/* Alpha ref value as GLchan */
-#else
    GLclampf AlphaRef;
-#endif
 
    /* blending */
    GLboolean BlendEnabled;		/* Blending enabled flag */
@@ -606,7 +600,9 @@ struct gl_multisample_attrib {
 
 struct gl_pixel_attrib {
    GLenum ReadBuffer;		/* src buffer for glRead/CopyPixels */
-   GLenum _DriverReadBuffer;	/* Driver's current source buffer */
+   GLubyte _ReadSrcMask;	/* Not really a mask, but like _DrawDestMask */
+				/* May be: FRONT_LEFT_BIT, BACK_LEFT_BIT, */
+				/* FRONT_RIGHT_BIT or BACK_RIGHT_BIT. */
    GLfloat RedBias, RedScale;
    GLfloat GreenBias, GreenScale;
    GLfloat BlueBias, BlueScale;
@@ -692,18 +688,16 @@ struct gl_polygon_attrib {
    GLenum FrontFace;		/* Either GL_CW or GL_CCW */
    GLenum FrontMode;		/* Either GL_POINT, GL_LINE or GL_FILL */
    GLenum BackMode;		/* Either GL_POINT, GL_LINE or GL_FILL */
-   GLboolean _FrontBit;		/*  */
+   GLboolean _FrontBit;		/* 0=GL_CCW, 1=GL_CW */
    GLboolean CullFlag;		/* Culling on/off flag */
    GLboolean SmoothFlag;	/* True if GL_POLYGON_SMOOTH is enabled */
    GLboolean StippleFlag;	/* True if GL_POLYGON_STIPPLE is enabled */
    GLenum CullFaceMode;		/* Culling mode GL_FRONT or GL_BACK */
    GLfloat OffsetFactor;	/* Polygon offset factor, from user */
    GLfloat OffsetUnits;		/* Polygon offset units, from user */
-   GLfloat OffsetMRD;		/* = OffsetUnits * visual->MRD */
    GLboolean OffsetPoint;	/* Offset in GL_POINT mode */
    GLboolean OffsetLine;	/* Offset in GL_LINE mode */
    GLboolean OffsetFill;	/* Offset in GL_FILL mode */
-   GLboolean _OffsetAny;
 };
 
 
@@ -743,14 +737,6 @@ struct gl_stencil_attrib {
 #define TEXTURE_RECT_BIT 0x10
 
 #define NUM_TEXTURE_TARGETS 5   /* 1D, 2D, 3D, CUBE and RECT */
-
-/* Texture Enabled flags - XXX these are obsolete!!! */
-#define TEXTURE0_1D    TEXTURE_1D_BIT
-#define TEXTURE0_2D    TEXTURE_2D_BIT
-#define TEXTURE0_3D    TEXTURE_3D_BIT
-#define TEXTURE0_CUBE  TEXTURE_CUBE_BIT
-#define TEXTURE0_RECT  TEXTURE_RECT_BIT
-#define TEXTURE0_ANY   0x1F
 
 
 /* Bitmap versions of the GL_ constants. */
@@ -872,11 +858,8 @@ struct gl_texture_object {
    GLuint Name;			/* an unsigned integer */
    GLenum Target;               /* GL_TEXTURE_1D, GL_TEXTURE_2D, etc. */
    GLfloat Priority;		/* in [0,1] */
-   GLfloat BorderValues[4];     /* unclamped */
-#if 1
-   /* omit someday */
-   GLchan BorderColor[4];       /* clamped, as GLchan */
-#endif
+   GLfloat BorderColor[4];	/* unclamped */
+   GLchan _BorderChan[4];	/* clamped, as GLchan */
    GLenum WrapS;		/* Wrap modes are: GL_CLAMP, REPEAT */
    GLenum WrapT;		/*   GL_CLAMP_TO_EDGE, and          */
    GLenum WrapR;		/*   GL_CLAMP_TO_BORDER_ARB         */
@@ -889,11 +872,7 @@ struct gl_texture_object {
    GLfloat MaxAnisotropy;	/* GL_EXT_texture_filter_anisotropic */
    GLboolean CompareFlag;	/* GL_SGIX_shadow */
    GLenum CompareOperator;	/* GL_SGIX_shadow */
-#if 1
-   GLchan ShadowAmbient;	/* GL_SGIX/ARB_shadow_ambient */
-#else
    GLfloat ShadowAmbient;
-#endif
    GLenum CompareMode;		/* GL_ARB_shadow */
    GLenum CompareFunc;		/* GL_ARB_shadow */
    GLenum DepthMode;		/* GL_ARB_depth_texture */
@@ -981,12 +960,6 @@ struct gl_texture_attrib {
    GLuint CurrentUnit;	          /* Active texture unit */
 
    GLuint _EnabledUnits;        /* one bit set for each really-enabled unit */
-   /* XXX this field will go away, use _EnabledUnits instead! */
-   GLuint _ReallyEnabled;     /* enables for all texture units: */
-                             /* = (Unit[0]._ReallyEnabled << 0) | */
-                             /*   (Unit[1]._ReallyEnabled << 4) | */
-	                     /*   (Unit[2]._ReallyEnabled << 8) | etc... */
-
    GLuint _GenFlags;  /* for texgen */
    GLuint _TexGenEnabled;	
    GLuint _TexMatEnabled;
@@ -1331,17 +1304,11 @@ struct gl_frame_buffer {
    GLaccum *Accum;		/* array [4*Width*Height] of GLaccum values */
 
    /* Software alpha planes */
-#if 1
-   GLchan *FrontLeftAlpha;	/* array [Width*Height] of GLubyte */
-   GLchan *BackLeftAlpha;	/* array [Width*Height] of GLubyte */
-   GLchan *FrontRightAlpha;	/* array [Width*Height] of GLubyte */
-   GLchan *BackRightAlpha;	/* array [Width*Height] of GLubyte */
-#else
    GLvoid *FrontLeftAlpha;	/* array [Width*Height] of GLubyte */
    GLvoid *BackLeftAlpha;	/* array [Width*Height] of GLubyte */
    GLvoid *FrontRightAlpha;	/* array [Width*Height] of GLubyte */
    GLvoid *BackRightAlpha;	/* array [Width*Height] of GLubyte */
-#endif
+
    /* Drawing bounds: intersection of window size and scissor box */
    GLint _Xmin, _Ymin;  /* inclusive */
    GLint _Xmax, _Ymax;  /* exclusive */
@@ -1400,6 +1367,7 @@ struct gl_extensions {
    GLboolean ARB_texture_env_dot3;
    GLboolean ARB_texture_mirrored_repeat;
    GLboolean ARB_window_pos;
+   GLboolean ATI_texture_mirror_once;
    GLboolean EXT_blend_color;
    GLboolean EXT_blend_func_separate;
    GLboolean EXT_blend_logic_op;
@@ -1788,6 +1756,10 @@ struct __GLcontextRec {
 
    GLboolean OcclusionResult;       /**< for GL_HP_occlusion_test */
    GLboolean OcclusionResultSaved;  /**< for GL_HP_occlusion_test */
+   GLuint _Facing; /* This is a hack for 2-sided stencil test.  We don't */
+                   /* have a better way to communicate this value from */
+                   /* swrast_setup to swrast. */
+
 
    /* Z buffer stuff */
    GLuint DepthMax;	/**< Max depth buffer value */

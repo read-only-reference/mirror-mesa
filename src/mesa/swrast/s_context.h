@@ -1,4 +1,4 @@
-/* $Id: s_context.h,v 1.19 2002/08/07 00:45:07 brianp Exp $ */
+/* $Id: s_context.h,v 1.22 2002/10/29 20:29:00 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,13 +24,13 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
 /**
  * \file swrast/s_context.h
  * \brief fill in description
- * \author Keith Whitwell <keithw@valinux.com>
+ * \author Keith Whitwell <keith@tungstengraphics.com>
  */
 
 #ifndef S_CONTEXT_H
@@ -137,6 +137,8 @@ typedef struct
    GLuint StippleCounter;    /**< Line stipple counter */
    GLuint NewState;
    GLuint StateChanges;
+   GLenum Primitive;    /* current primitive being drawn (ala glBegin) */
+   GLuint CurrentBuffer; /* exactly one of FRONT_LEFT_BIT, BACK_LEFT_BIT, etc*/
 
    /** Mechanism to allow driver (like X11) to register further
     * software rasterization routines.
@@ -176,7 +178,12 @@ typedef struct
     * this object is big and causes problems when allocated on the stack
     * on some systems.
     */
-   struct span_arrays *span_data;
+   struct span_arrays *SpanArrays;
+
+   /**
+    * Used to buffer N GL_POINTS, instead of rendering one by one.
+    */
+   struct sw_span PointSpan;
 
    /** Internal hooks, kept uptodate by the same mechanism as above.
     */

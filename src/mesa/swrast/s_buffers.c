@@ -1,4 +1,4 @@
-/* $Id: s_buffers.c,v 1.12 2002/07/09 01:22:52 brianp Exp $ */
+/* $Id: s_buffers.c,v 1.15 2002/10/24 23:57:24 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -26,8 +26,9 @@
 
 
 #include "glheader.h"
+#include "colormac.h"
 #include "macros.h"
-#include "mem.h"
+#include "imports.h"
 
 #include "s_accum.h"
 #include "s_alphabuf.h"
@@ -53,19 +54,17 @@ clear_color_buffer_with_masking( GLcontext *ctx )
 
    if (ctx->Visual.rgbMode) {
       /* RGBA mode */
-      const GLchan r = ctx->Color.ClearColor[0];
-      const GLchan g = ctx->Color.ClearColor[1];
-      const GLchan b = ctx->Color.ClearColor[2];
-      const GLchan a = ctx->Color.ClearColor[3];
+      GLchan clearColor[4];
       GLint i;
+      CLAMPED_FLOAT_TO_CHAN(clearColor[RCOMP], ctx->Color.ClearColor[0]);
+      CLAMPED_FLOAT_TO_CHAN(clearColor[GCOMP], ctx->Color.ClearColor[1]);
+      CLAMPED_FLOAT_TO_CHAN(clearColor[BCOMP], ctx->Color.ClearColor[2]);
+      CLAMPED_FLOAT_TO_CHAN(clearColor[ACOMP], ctx->Color.ClearColor[3]);
       for (i = 0; i < height; i++) {
          GLchan rgba[MAX_WIDTH][4];
          GLint j;
          for (j = 0; j < width; j++) {
-            rgba[j][RCOMP] = r;
-            rgba[j][GCOMP] = g;
-            rgba[j][BCOMP] = b;
-            rgba[j][ACOMP] = a;
+            COPY_CHAN4(rgba[j], clearColor);
          }
          _mesa_mask_rgba_array( ctx, width, x, y + i, rgba );
          (*swrast->Driver.WriteRGBASpan)( ctx, width, x, y + i,
@@ -104,20 +103,19 @@ clear_color_buffer(GLcontext *ctx)
 
    if (ctx->Visual.rgbMode) {
       /* RGBA mode */
-      const GLchan r = ctx->Color.ClearColor[0];
-      const GLchan g = ctx->Color.ClearColor[1];
-      const GLchan b = ctx->Color.ClearColor[2];
-      const GLchan a = ctx->Color.ClearColor[3];
+      GLchan clearColor[4];
       GLchan span[MAX_WIDTH][4];
       GLint i;
+
+      CLAMPED_FLOAT_TO_CHAN(clearColor[RCOMP], ctx->Color.ClearColor[0]);
+      CLAMPED_FLOAT_TO_CHAN(clearColor[GCOMP], ctx->Color.ClearColor[1]);
+      CLAMPED_FLOAT_TO_CHAN(clearColor[BCOMP], ctx->Color.ClearColor[2]);
+      CLAMPED_FLOAT_TO_CHAN(clearColor[ACOMP], ctx->Color.ClearColor[3]);
 
       ASSERT(*((GLuint *) &ctx->Color.ColorMask) == 0xffffffff);
 
       for (i = 0; i < width; i++) {
-         span[i][RCOMP] = r;
-         span[i][GCOMP] = g;
-         span[i][BCOMP] = b;
-         span[i][ACOMP] = a;
+         COPY_CHAN4(span[i], clearColor);
       }
       for (i = 0; i < height; i++) {
          (*swrast->Driver.WriteRGBASpan)( ctx, width, x, y + i,
@@ -168,18 +166,7 @@ clear_color_buffers(GLcontext *ctx)
    /* loop over four possible dest color buffers */
    for (bufferBit = 1; bufferBit <= 8; bufferBit = bufferBit << 1) {
       if (bufferBit & ctx->Color._DrawDestMask) {
-         if (bufferBit == FRONT_LEFT_BIT) {
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_FRONT_LEFT);
-         }
-         else if (bufferBit == FRONT_RIGHT_BIT) {
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_FRONT_RIGHT);
-         }
-         else if (bufferBit == BACK_LEFT_BIT) {
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_BACK_LEFT);
-         }
-         else {
-            (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, GL_BACK_RIGHT);
-         }
+         (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, bufferBit);
 
          if (colorMask != 0xffffffff) {
             clear_color_buffer_with_masking(ctx);
@@ -276,10 +263,9 @@ _swrast_use_read_buffer( GLcontext *ctx )
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
 
    /* Do this so the software-emulated alpha plane span functions work! */
-   ctx->Color._DriverDrawBuffer = ctx->Pixel._DriverReadBuffer;
+   swrast->CurrentBuffer = ctx->Pixel._ReadSrcMask;
    /* Tell the device driver where to read/write spans */
-   (*swrast->Driver.SetBuffer)( ctx, ctx->ReadBuffer,
-                                ctx->Pixel._DriverReadBuffer );
+   (*swrast->Driver.SetBuffer)( ctx, ctx->ReadBuffer, swrast->CurrentBuffer );
 }
 
 
@@ -304,17 +290,16 @@ _swrast_use_draw_buffer( GLcontext *ctx )
     */
 
    if (ctx->Color._DrawDestMask & FRONT_LEFT_BIT)
-      ctx->Color._DriverDrawBuffer = GL_FRONT_LEFT;
+      swrast->CurrentBuffer = FRONT_LEFT_BIT;
    else if (ctx->Color._DrawDestMask & BACK_LEFT_BIT)
-      ctx->Color._DriverDrawBuffer = GL_BACK_LEFT;
+      swrast->CurrentBuffer = BACK_LEFT_BIT;
    else if (ctx->Color._DrawDestMask & FRONT_RIGHT_BIT)
-      ctx->Color._DriverDrawBuffer = GL_FRONT_RIGHT;
+      swrast->CurrentBuffer = FRONT_RIGHT_BIT;
    else if (ctx->Color._DrawDestMask & BACK_RIGHT_BIT)
-      ctx->Color._DriverDrawBuffer = GL_BACK_RIGHT;
+      swrast->CurrentBuffer = BACK_RIGHT_BIT;
    else
       /* glDrawBuffer(GL_NONE) */
-      ctx->Color._DriverDrawBuffer = GL_FRONT_LEFT; /* always have this */
+      swrast->CurrentBuffer = FRONT_LEFT_BIT; /* we always have this buffer */
 
-   (*swrast->Driver.SetBuffer)( ctx, ctx->DrawBuffer,
-                                ctx->Color._DriverDrawBuffer );
+   (*swrast->Driver.SetBuffer)( ctx, ctx->DrawBuffer, swrast->CurrentBuffer );
 }

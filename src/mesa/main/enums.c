@@ -1,4 +1,4 @@
-/* $Id: enums.c,v 1.21 2002/06/29 19:48:15 brianp Exp $ */
+/* $Id: enums.c,v 1.24 2002/10/29 20:28:45 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,18 +24,13 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Author:
- *    Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
 
-#ifdef PC_HEADER
-#include "all.h"
-#else
 #include "glheader.h"
 #include "enums.h"
 #include "imports.h"
-#include "mem.h"
-#endif
 
 
 typedef struct {
@@ -858,7 +853,7 @@ static int sorted = 0;
 
 static int compar_name( const enum_elt *a, const enum_elt *b )
 {
-   return strcmp(a->c, b->c);
+   return _mesa_strcmp(a->c, b->c);
 }
 
 
@@ -929,7 +924,7 @@ const char *_mesa_lookup_enum_by_nr( int nr )
    }
    else {
       /* this isn't re-entrant safe, no big deal here */
-      _mesa_sprintf(NULL, token_tmp, "0x%x", nr);
+      _mesa_sprintf(token_tmp, "0x%x", nr);
       return token_tmp;
    }
 }

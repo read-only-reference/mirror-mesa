@@ -1,4 +1,4 @@
-/* $Id: attrib.c,v 1.71 2002/09/06 02:56:08 brianp Exp $ */
+/* $Id: attrib.c,v 1.75 2002/10/24 23:57:19 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,11 +24,8 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
-#ifdef PC_HEADER
-#include "all.h"
-#else
 #include "glheader.h"
+#include "imports.h"
 #include "accum.h"
 #include "attrib.h"
 #include "blend.h"
@@ -43,7 +40,6 @@
 #include "light.h"
 #include "lines.h"
 #include "matrix.h"
-#include "mem.h"
 #include "points.h"
 #include "polygon.h"
 #include "simple_list.h"
@@ -52,9 +48,6 @@
 #include "texstate.h"
 #include "mtypes.h"
 #include "math/m_xform.h"
-#endif
-
-
 
 
 /*
@@ -421,8 +414,8 @@ pop_enable_group(GLcontext *ctx, const struct gl_enable_attrib *enable)
    for (i=0;i<MAX_CLIP_PLANES;i++) {
       const GLuint mask = 1 << i;
       if ((ctx->Transform.ClipPlanesEnabled & mask) != (enable->ClipPlanes & mask))
-         _mesa_set_enable(ctx, (GLenum) (GL_CLIP_PLANE0 + i),
-                          (enable->ClipPlanes & mask) ? GL_TRUE : GL_FALSE);
+	  _mesa_set_enable(ctx, (GLenum) (GL_CLIP_PLANE0 + i),
+			   (GLboolean) ((enable->ClipPlanes & mask) ? GL_TRUE : GL_FALSE));
    }
 
    TEST_AND_UPDATE(ctx->Light.ColorMaterialEnabled, enable->ColorMaterial,
@@ -739,7 +732,7 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
          }
          if (ctx->Extensions.SGIX_shadow_ambient) {
             _mesa_TexParameterf(target, GL_SHADOW_AMBIENT_SGIX,
-                                CHAN_TO_FLOAT(obj->ShadowAmbient));
+                                obj->ShadowAmbient);
          }
 
       }
@@ -809,10 +802,10 @@ _mesa_PopAttrib(void)
                const struct gl_colorbuffer_attrib *color;
                color = (const struct gl_colorbuffer_attrib *) attr->data;
                _mesa_ClearIndex((GLfloat) color->ClearIndex);
-               _mesa_ClearColor(CHAN_TO_FLOAT(color->ClearColor[0]),
-                                CHAN_TO_FLOAT(color->ClearColor[1]),
-                                CHAN_TO_FLOAT(color->ClearColor[2]),
-                                CHAN_TO_FLOAT(color->ClearColor[3]));
+               _mesa_ClearColor(color->ClearColor[0],
+                                color->ClearColor[1],
+                                color->ClearColor[2],
+                                color->ClearColor[3]);
                _mesa_IndexMask(color->IndexMask);
                _mesa_ColorMask((GLboolean) (color->ColorMask[0] != 0),
                                (GLboolean) (color->ColorMask[1] != 0),
@@ -820,8 +813,7 @@ _mesa_PopAttrib(void)
                                (GLboolean) (color->ColorMask[3] != 0));
                _mesa_DrawBuffer(color->DrawBuffer);
                _mesa_set_enable(ctx, GL_ALPHA_TEST, color->AlphaEnabled);
-               _mesa_AlphaFunc(color->AlphaFunc,
-                               CHAN_TO_FLOAT(color->AlphaRef));
+               _mesa_AlphaFunc(color->AlphaFunc, color->AlphaRef);
                _mesa_set_enable(ctx, GL_BLEND, color->BlendEnabled);
                _mesa_BlendFuncSeparateEXT(color->BlendSrcRGB,
                                           color->BlendDstRGB,
@@ -977,12 +969,16 @@ _mesa_PopAttrib(void)
                point = (const struct gl_point_attrib *) attr->data;
                _mesa_PointSize(point->Size);
                _mesa_set_enable(ctx, GL_POINT_SMOOTH, point->SmoothFlag);
-               _mesa_PointParameterfvEXT(GL_DISTANCE_ATTENUATION_EXT,
-                                         point->Params);
-               _mesa_PointParameterfEXT(GL_POINT_SIZE_MIN_EXT, point->MinSize);
-               _mesa_PointParameterfEXT(GL_POINT_SIZE_MAX_EXT, point->MaxSize);
-               _mesa_PointParameterfEXT(GL_POINT_FADE_THRESHOLD_SIZE_EXT,
-                                        point->Threshold);
+               if (ctx->Extensions.EXT_point_parameters) {
+                  _mesa_PointParameterfvEXT(GL_DISTANCE_ATTENUATION_EXT,
+                                            point->Params);
+                  _mesa_PointParameterfEXT(GL_POINT_SIZE_MIN_EXT,
+                                           point->MinSize);
+                  _mesa_PointParameterfEXT(GL_POINT_SIZE_MAX_EXT,
+                                           point->MaxSize);
+                  _mesa_PointParameterfEXT(GL_POINT_FADE_THRESHOLD_SIZE_EXT,
+                                           point->Threshold);
+               }
                if (ctx->Extensions.NV_point_sprite) {
                   GLuint u;
                   for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {

@@ -1,4 +1,4 @@
-/* $Id: blend.c,v 1.36 2002/06/15 02:38:15 brianp Exp $ */
+/* $Id: blend.c,v 1.38 2002/10/24 23:57:19 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -25,9 +25,6 @@
  */
 
 
-#ifdef PC_HEADER
-#include "all.h"
-#else
 #include "glheader.h"
 #include "blend.h"
 #include "colormac.h"
@@ -35,7 +32,6 @@
 #include "enums.h"
 #include "macros.h"
 #include "mtypes.h"
-#endif
 
 
 void
@@ -346,7 +342,6 @@ void
 _mesa_AlphaFunc( GLenum func, GLclampf ref )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLchan cref;
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    switch (func) {
@@ -358,18 +353,17 @@ _mesa_AlphaFunc( GLenum func, GLclampf ref )
    case GL_NOTEQUAL:
    case GL_GEQUAL:
    case GL_ALWAYS:
-      /* convert float alpha ref to GLchan type */
-      UNCLAMPED_FLOAT_TO_CHAN(cref, ref);
+      ref = CLAMP(ref, 0.0F, 1.0F);
 
-      if (ctx->Color.AlphaFunc == func && ctx->Color.AlphaRef == cref)
-         return;
+      if (ctx->Color.AlphaFunc == func && ctx->Color.AlphaRef == ref)
+         return; /* no change */
 
       FLUSH_VERTICES(ctx, _NEW_COLOR);
       ctx->Color.AlphaFunc = func;
-      ctx->Color.AlphaRef = cref;
+      ctx->Color.AlphaRef = ref;
 
       if (ctx->Driver.AlphaFunc)
-         ctx->Driver.AlphaFunc(ctx, func, cref);
+         ctx->Driver.AlphaFunc(ctx, func, ref);
       return;
 
    default:

@@ -1,4 +1,4 @@
-/* $Id: s_texture.c,v 1.67 2002/09/23 16:37:15 brianp Exp $ */
+/* $Id: s_texture.c,v 1.74 2002/10/28 23:01:24 kschultz Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -30,7 +30,7 @@
 #include "colormac.h"
 #include "macros.h"
 #include "mmath.h"
-#include "mem.h"
+#include "imports.h"
 #include "texformat.h"
 #include "teximage.h"
 
@@ -97,6 +97,31 @@
          U = 1.0F - (S - (GLfloat) flr);	/* flr is odd */	\
       else								\
          U = S - (GLfloat) flr;		/* flr is even */		\
+      U = (U * SIZE) - 0.5F;						\
+      I0 = IFLOOR(U);							\
+      I1 = I0 + 1;							\
+      if (I0 < 0)							\
+         I0 = 0;							\
+      if (I1 >= (GLint) SIZE)						\
+         I1 = SIZE - 1;							\
+   }									\
+   else if (wrapMode == GL_MIRROR_CLAMP_ATI) {				\
+      U = (GLfloat) fabs(S);						\
+      if (U >= 1.0F)							\
+         U = (GLfloat) SIZE;						\
+      else								\
+         U *= SIZE;							\
+      U -= 0.5F;							\
+      I0 = IFLOOR(U);							\
+      I1 = I0 + 1;							\
+   }									\
+   else if (wrapMode == GL_MIRROR_CLAMP_TO_EDGE_ATI) {			\
+      U = (GLfloat) fabs(S);						\
+      if (U >= 1.0F)							\
+         U = (GLfloat) SIZE;						\
+      else								\
+         U *= SIZE;							\
+      U -= 0.5F;							\
       I0 = IFLOOR(U);							\
       I1 = I0 + 1;							\
       if (I0 < 0)							\
@@ -163,6 +188,30 @@
          u = 1.0F - (S - (GLfloat) flr);	/* flr is odd */	\
       else								\
          u = S - (GLfloat) flr;		/* flr is even */		\
+      if (u < min)							\
+         I = 0;								\
+      else if (u > max)							\
+         I = SIZE - 1;							\
+      else								\
+         I = IFLOOR(u * SIZE);						\
+   }									\
+   else if (wrapMode == GL_MIRROR_CLAMP_ATI) {				\
+      /* s limited to [0,1] */						\
+      /* i limited to [0,size-1] */					\
+      const GLfloat u = (GLfloat) fabs(S);				\
+      if (u <= 0.0F)							\
+         I = 0;								\
+      else if (u >= 1.0F)						\
+         I = SIZE - 1;							\
+      else								\
+         I = IFLOOR(u * SIZE);						\
+   }									\
+   else if (wrapMode == GL_MIRROR_CLAMP_TO_EDGE_ATI) {			\
+      /* s limited to [min,max] */					\
+      /* i limited to [0, size-1] */					\
+      const GLfloat min = 1.0F / (2.0F * SIZE);				\
+      const GLfloat max = 1.0F - min;					\
+      const GLfloat u = (GLfloat) fabs(S);				\
       if (u < min)							\
          I = 0;								\
       else if (u > max)							\
@@ -417,7 +466,7 @@ sample_1d_nearest(GLcontext *ctx,
 
    if (i < 0 || i >= (GLint) img->Width) {
       /* Need this test for GL_CLAMP_TO_BORDER_ARB mode */
-      COPY_CHAN4(rgba, tObj->BorderColor);
+      COPY_CHAN4(rgba, tObj->_BorderChan);
    }
    else {
       (*img->FetchTexel)(img, i, 0, 0, (GLvoid *) rgba);
@@ -469,7 +518,7 @@ sample_1d_linear(GLcontext *ctx,
       GLchan t0[4], t1[4];  /* texels */
 
       if (useBorderColor & I0BIT) {
-         COPY_CHAN4(t0, tObj->BorderColor);
+         COPY_CHAN4(t0, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i0, 0, 0, (GLvoid *) t0);
@@ -478,7 +527,7 @@ sample_1d_linear(GLcontext *ctx,
          }
       }
       if (useBorderColor & I1BIT) {
-         COPY_CHAN4(t1, tObj->BorderColor);
+         COPY_CHAN4(t1, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i1, 0, 0, (GLvoid *) t1);
@@ -746,7 +795,7 @@ sample_2d_nearest(GLcontext *ctx,
 
    if (i < 0 || i >= (GLint) img->Width || j < 0 || j >= (GLint) img->Height) {
       /* Need this test for GL_CLAMP_TO_BORDER_ARB mode */
-      COPY_CHAN4(rgba, tObj->BorderColor);
+      COPY_CHAN4(rgba, tObj->_BorderChan);
    }
    else {
       (*img->FetchTexel)(img, i, j, 0, (GLvoid *) rgba);
@@ -814,7 +863,7 @@ sample_2d_linear(GLcontext *ctx,
       GLchan t11[4];
 
       if (useBorderColor & (I0BIT | J0BIT)) {
-         COPY_CHAN4(t00, tObj->BorderColor);
+         COPY_CHAN4(t00, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i0, j0, 0, (GLvoid *) t00);
@@ -823,7 +872,7 @@ sample_2d_linear(GLcontext *ctx,
          }
       }
       if (useBorderColor & (I1BIT | J0BIT)) {
-         COPY_CHAN4(t10, tObj->BorderColor);
+         COPY_CHAN4(t10, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i1, j0, 0, (GLvoid *) t10);
@@ -832,7 +881,7 @@ sample_2d_linear(GLcontext *ctx,
          }
       }
       if (useBorderColor & (I0BIT | J1BIT)) {
-         COPY_CHAN4(t01, tObj->BorderColor);
+         COPY_CHAN4(t01, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i0, j1, 0, (GLvoid *) t01);
@@ -841,7 +890,7 @@ sample_2d_linear(GLcontext *ctx,
          }
       }
       if (useBorderColor & (I1BIT | J1BIT)) {
-         COPY_CHAN4(t11, tObj->BorderColor);
+         COPY_CHAN4(t11, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i1, j1, 0, (GLvoid *) t11);
@@ -1334,7 +1383,7 @@ sample_3d_nearest(GLcontext *ctx,
        j < 0 || j >= (GLint) img->Height ||
        k < 0 || k >= (GLint) img->Depth) {
       /* Need this test for GL_CLAMP_TO_BORDER_ARB mode */
-      COPY_CHAN4(rgba, tObj->BorderColor);
+      COPY_CHAN4(rgba, tObj->_BorderChan);
    }
    else {
       (*img->FetchTexel)(img, i, j, k, (GLvoid *) rgba);
@@ -1417,7 +1466,7 @@ sample_3d_linear(GLcontext *ctx,
       GLchan t100[4], t110[4], t101[4], t111[4];
 
       if (useBorderColor & (I0BIT | J0BIT | K0BIT)) {
-         COPY_CHAN4(t000, tObj->BorderColor);
+         COPY_CHAN4(t000, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i0, j0, k0, (GLvoid *) t000);
@@ -1426,7 +1475,7 @@ sample_3d_linear(GLcontext *ctx,
          }
       }
       if (useBorderColor & (I1BIT | J0BIT | K0BIT)) {
-         COPY_CHAN4(t100, tObj->BorderColor);
+         COPY_CHAN4(t100, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i1, j0, k0, (GLvoid *) t100);
@@ -1435,7 +1484,7 @@ sample_3d_linear(GLcontext *ctx,
          }
       }
       if (useBorderColor & (I0BIT | J1BIT | K0BIT)) {
-         COPY_CHAN4(t010, tObj->BorderColor);
+         COPY_CHAN4(t010, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i0, j1, k0, (GLvoid *) t010);
@@ -1444,7 +1493,7 @@ sample_3d_linear(GLcontext *ctx,
          }
       }
       if (useBorderColor & (I1BIT | J1BIT | K0BIT)) {
-         COPY_CHAN4(t110, tObj->BorderColor);
+         COPY_CHAN4(t110, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i1, j1, k0, (GLvoid *) t110);
@@ -1454,7 +1503,7 @@ sample_3d_linear(GLcontext *ctx,
       }
 
       if (useBorderColor & (I0BIT | J0BIT | K1BIT)) {
-         COPY_CHAN4(t001, tObj->BorderColor);
+         COPY_CHAN4(t001, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i0, j0, k1, (GLvoid *) t001);
@@ -1463,7 +1512,7 @@ sample_3d_linear(GLcontext *ctx,
          }
       }
       if (useBorderColor & (I1BIT | J0BIT | K1BIT)) {
-         COPY_CHAN4(t101, tObj->BorderColor);
+         COPY_CHAN4(t101, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i1, j0, k1, (GLvoid *) t101);
@@ -1472,7 +1521,7 @@ sample_3d_linear(GLcontext *ctx,
          }
       }
       if (useBorderColor & (I0BIT | J1BIT | K1BIT)) {
-         COPY_CHAN4(t011, tObj->BorderColor);
+         COPY_CHAN4(t011, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i0, j1, k1, (GLvoid *) t011);
@@ -1481,7 +1530,7 @@ sample_3d_linear(GLcontext *ctx,
          }
       }
       if (useBorderColor & (I1BIT | J1BIT | K1BIT)) {
-         COPY_CHAN4(t111, tObj->BorderColor);
+         COPY_CHAN4(t111, tObj->_BorderChan);
       }
       else {
          (*img->FetchTexel)(img, i1, j1, k1, (GLvoid *) t111);
@@ -2153,10 +2202,14 @@ sample_linear_rect(GLcontext *ctx, GLuint texUnit,
       w11 =       a  *       b ;
 
       /* compute weighted average of samples */
-      rgba[i][0] = w00 * t00[0] + w10 * t10[0] + w01 * t01[0] + w11 * t11[0];
-      rgba[i][1] = w00 * t00[1] + w10 * t10[1] + w01 * t01[1] + w11 * t11[1];
-      rgba[i][2] = w00 * t00[2] + w10 * t10[2] + w01 * t01[2] + w11 * t11[2];
-      rgba[i][3] = w00 * t00[3] + w10 * t10[3] + w01 * t01[3] + w11 * t11[3];
+      rgba[i][0] = 
+	  (GLchan) (w00 * t00[0] + w10 * t10[0] + w01 * t01[0] + w11 * t11[0]);
+      rgba[i][1] = 
+	  (GLchan) (w00 * t00[1] + w10 * t10[1] + w01 * t01[1] + w11 * t11[1]);
+      rgba[i][2] = 
+	  (GLchan) (w00 * t00[2] + w10 * t10[2] + w01 * t01[2] + w11 * t11[2]);
+      rgba[i][3] = 
+	  (GLchan) (w00 * t00[3] + w10 * t10[3] + w01 * t01[3] + w11 * t11[3]);
    }
 }
 
@@ -2212,7 +2265,7 @@ sample_depth_texture( GLcontext *ctx, GLuint unit,
    const struct gl_texture_image *texImage = tObj->Image[baseLevel];
    const GLuint width = texImage->Width;
    const GLuint height = texImage->Height;
-   const GLchan ambient = tObj->ShadowAmbient;
+   GLchan ambient;
    GLenum function;
    GLchan result;
 
@@ -2222,6 +2275,8 @@ sample_depth_texture( GLcontext *ctx, GLuint unit,
    ASSERT(tObj->Target == GL_TEXTURE_1D ||
           tObj->Target == GL_TEXTURE_2D ||
           tObj->Target == GL_TEXTURE_RECTANGLE_NV);
+
+   UNCLAMPED_FLOAT_TO_CHAN(ambient, tObj->ShadowAmbient);
 
    /* XXXX if tObj->MinFilter != tObj->MagFilter, we're ignoring lambda */
 
@@ -2501,7 +2556,7 @@ sample_depth_texture2(const GLcontext *ctx,
    const struct gl_texture_image *texImage = texObj->Image[baseLevel];
    const GLuint width = texImage->Width;
    const GLuint height = texImage->Height;
-   const GLchan ambient = texObj->ShadowAmbient;
+   GLchan ambient;
    GLboolean lequal, gequal;
 
    if (texObj->Target != GL_TEXTURE_2D) {
@@ -2522,6 +2577,8 @@ sample_depth_texture2(const GLcontext *ctx,
       _mesa_problem(ctx,"GL_TEXTURE_COMPARE_SGIX enabled with non-depth texture");
       return;
    }
+
+   UNCLAMPED_FLOAT_TO_CHAN(ambient, tObj->ShadowAmbient);
 
    if (texObj->CompareOperator == GL_TEXTURE_LEQUAL_R_SGIX) {
       lequal = GL_TRUE;

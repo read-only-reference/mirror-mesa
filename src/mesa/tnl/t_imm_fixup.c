@@ -1,4 +1,4 @@
-/* $Id: t_imm_fixup.c,v 1.37 2002/06/29 19:48:17 brianp Exp $ */
+/* $Id: t_imm_fixup.c,v 1.39 2002/10/29 20:29:03 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -26,7 +26,7 @@
 
 /*
  * Authors:
- *    Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
 
@@ -37,7 +37,7 @@
 #include "colormac.h"
 #include "light.h"
 #include "macros.h"
-#include "mem.h"
+#include "imports.h"
 #include "mmath.h"
 #include "state.h"
 #include "mtypes.h"

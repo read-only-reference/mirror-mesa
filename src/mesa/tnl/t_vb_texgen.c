@@ -1,4 +1,4 @@
-/* $Id: t_vb_texgen.c,v 1.13 2002/06/29 19:48:17 brianp Exp $ */
+/* $Id: t_vb_texgen.c,v 1.15 2002/10/29 20:29:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,8 +24,8 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Brian Paul <brian@valinux.com>
- *    Keith Whitwell <keithw@valinux.com>
+ *    Brian Paul
+ *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
 
@@ -34,7 +34,7 @@
 #include "context.h"
 #include "macros.h"
 #include "mmath.h"
-#include "mem.h"
+#include "imports.h"
 #include "mtypes.h"
 
 #include "math/m_xform.h"

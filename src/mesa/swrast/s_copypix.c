@@ -1,8 +1,8 @@
-/* $Id: s_copypix.c,v 1.40 2002/08/07 00:45:07 brianp Exp $ */
+/* $Id: s_copypix.c,v 1.42 2002/10/30 20:16:43 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  4.1
+ * Version:  5.0
  *
  * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
@@ -31,7 +31,7 @@
 #include "convolve.h"
 #include "feedback.h"
 #include "macros.h"
-#include "mem.h"
+#include "imports.h"
 #include "mmath.h"
 #include "pixel.h"
 
@@ -414,7 +414,8 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
          }
          /* convolution */
          if (transferOps & IMAGE_CONVOLUTION_BIT) {
-            abort();  /* should never get here; caught at top of function */
+            _mesa_problem(ctx, "Convolution should not be enabled in copy_rgba_pixels()");
+            return;
          }
          /* GL_POST_CONVOLUTION_RED/GREEN/BLUE/ALPHA_SCALE/BIAS */
          if (transferOps & IMAGE_POST_CONVOLUTION_SCALE_BIAS) {

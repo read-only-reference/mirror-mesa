@@ -1,4 +1,4 @@
-/* $Id: texstate.c,v 1.79 2002/09/27 02:45:38 brianp Exp $ */
+/* $Id: texstate.c,v 1.85 2002/10/29 20:28:51 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -25,9 +25,6 @@
  */
 
 
-#ifdef PC_HEADER
-#include "all.h"
-#else
 #include "glheader.h"
 #include "colormac.h"
 #include "context.h"
@@ -40,7 +37,6 @@
 #include "mtypes.h"
 #include "math/m_xform.h"
 #include "math/m_matrix.h"
-#endif
 
 
 
@@ -114,6 +110,8 @@ _mesa_copy_texture_state( const GLcontext *src, GLcontext *dst )
                                 src->Texture.Unit[i].Current3D);
       _mesa_copy_texture_object(dst->Texture.Unit[i].CurrentCubeMap,
                                 src->Texture.Unit[i].CurrentCubeMap);
+      _mesa_copy_texture_object(dst->Texture.Unit[i].CurrentRect,
+                                src->Texture.Unit[i].CurrentRect);
    }
 }
 
@@ -554,7 +552,7 @@ _mesa_TexEnviv( GLenum target, GLenum pname, const GLint *param )
       p[3] = INT_TO_FLOAT( param[3] );
    }
    else {
-      p[0] = (GLint) param[0];
+      p[0] = (GLfloat) param[0];
       p[1] = p[2] = p[3] = 0;  /* init to zero, just to be safe */
    }
    _mesa_TexEnvfv( target, pname, p );
@@ -1093,7 +1091,11 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
          else if (texObj->Target != GL_TEXTURE_RECTANGLE_NV &&
                   (eparam == GL_REPEAT ||
                    (eparam == GL_MIRRORED_REPEAT_ARB &&
-                    ctx->Extensions.ARB_texture_mirrored_repeat))) {
+                    ctx->Extensions.ARB_texture_mirrored_repeat) ||
+                   (eparam == GL_MIRROR_CLAMP_ATI &&
+                    ctx->Extensions.ATI_texture_mirror_once) ||
+                   (eparam == GL_MIRROR_CLAMP_TO_EDGE_ATI &&
+                    ctx->Extensions.ATI_texture_mirror_once))) {
             /* non-rectangle texture */
             FLUSH_VERTICES(ctx, _NEW_TEXTURE);
             texObj->WrapS = eparam;
@@ -1116,7 +1118,11 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
          else if (texObj->Target != GL_TEXTURE_RECTANGLE_NV &&
                   (eparam == GL_REPEAT ||
                    (eparam == GL_MIRRORED_REPEAT_ARB &&
-                    ctx->Extensions.ARB_texture_mirrored_repeat))) {
+                    ctx->Extensions.ARB_texture_mirrored_repeat) ||
+                   (eparam == GL_MIRROR_CLAMP_ATI &&
+                    ctx->Extensions.ATI_texture_mirror_once) ||
+                   (eparam == GL_MIRROR_CLAMP_TO_EDGE_ATI &&
+                    ctx->Extensions.ATI_texture_mirror_once))) {
             /* non-rectangle texture */
             FLUSH_VERTICES(ctx, _NEW_TEXTURE);
             texObj->WrapT = eparam;
@@ -1139,7 +1145,11 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
          else if (texObj->Target != GL_TEXTURE_RECTANGLE_NV &&
                   (eparam == GL_REPEAT ||
                    (eparam == GL_MIRRORED_REPEAT_ARB &&
-                    ctx->Extensions.ARB_texture_mirrored_repeat))) {
+                    ctx->Extensions.ARB_texture_mirrored_repeat) ||
+                   (eparam == GL_MIRROR_CLAMP_ATI &&
+                    ctx->Extensions.ATI_texture_mirror_once) ||
+                   (eparam == GL_MIRROR_CLAMP_TO_EDGE_ATI &&
+                    ctx->Extensions.ATI_texture_mirror_once))) {
             /* non-rectangle texture */
             FLUSH_VERTICES(ctx, _NEW_TEXTURE);
             texObj->WrapR = eparam;
@@ -1148,28 +1158,16 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
             _mesa_error( ctx, GL_INVALID_VALUE, "glTexParameter(param)" );
          }
          break;
-#if 0 /* someday */
-      case GL_TEXTUER_BORDER_VALUES_NV:
-         /* don't clamp */
-         FLUSH_VERTICES(ctx, _NEW_TEXTURE);
-         COPY_4V(texObj->BorderValues, params);
-         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[0], params[0]);
-         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[1], params[1]);
-         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[2], params[2]);
-         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[3], params[3]);
-         break;
-#endif
       case GL_TEXTURE_BORDER_COLOR:
-         /* clamp */
          FLUSH_VERTICES(ctx, _NEW_TEXTURE);
-         texObj->BorderValues[0] = CLAMP(params[0], 0.0F, 1.0F);
-         texObj->BorderValues[1] = CLAMP(params[1], 0.0F, 1.0F);
-         texObj->BorderValues[2] = CLAMP(params[2], 0.0F, 1.0F);
-         texObj->BorderValues[3] = CLAMP(params[3], 0.0F, 1.0F);
-         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[0], texObj->BorderValues[0]);
-         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[1], texObj->BorderValues[1]);
-         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[2], texObj->BorderValues[2]);
-         UNCLAMPED_FLOAT_TO_CHAN(texObj->BorderColor[3], texObj->BorderValues[3]);
+         texObj->BorderColor[RCOMP] = params[0];
+         texObj->BorderColor[GCOMP] = params[1];
+         texObj->BorderColor[BCOMP] = params[2];
+         texObj->BorderColor[ACOMP] = params[3];
+         UNCLAMPED_FLOAT_TO_CHAN(texObj->_BorderChan[RCOMP], params[0]);
+         UNCLAMPED_FLOAT_TO_CHAN(texObj->_BorderChan[GCOMP], params[1]);
+         UNCLAMPED_FLOAT_TO_CHAN(texObj->_BorderChan[BCOMP], params[2]);
+         UNCLAMPED_FLOAT_TO_CHAN(texObj->_BorderChan[ACOMP], params[3]);
          break;
       case GL_TEXTURE_MIN_LOD:
          if (texObj->MinLod == params[0])
@@ -1204,7 +1202,6 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
          texObj->MaxLevel = (GLint) params[0];
          break;
       case GL_TEXTURE_PRIORITY:
-         /* (keithh@netcomuk.co.uk) */
          FLUSH_VERTICES(ctx, _NEW_TEXTURE);
          texObj->Priority = CLAMP( params[0], 0.0F, 1.0F );
          break;
@@ -1255,7 +1252,7 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
       case GL_SHADOW_AMBIENT_SGIX: /* aka GL_TEXTURE_COMPARE_FAIL_VALUE_ARB */
          if (ctx->Extensions.SGIX_shadow_ambient) {
             FLUSH_VERTICES(ctx, _NEW_TEXTURE);
-            UNCLAMPED_FLOAT_TO_CHAN(texObj->ShadowAmbient, params[0]);
+            texObj->ShadowAmbient = CLAMP(params[0], 0.0F, 1.0F);
          }
          else {
             _mesa_error(ctx, GL_INVALID_ENUM,
@@ -1623,21 +1620,11 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
       case GL_TEXTURE_WRAP_R_EXT:
          *params = ENUM_TO_FLOAT(obj->WrapR);
          return;
-#if 0 /* someday */
-      case GL_TEXTURE_BORDER_VALUES_NV:
-         /* unclamped */
-         params[0] = obj->BorderValues[0];
-         params[1] = obj->BorderValues[1];
-         params[2] = obj->BorderValues[2];
-         params[3] = obj->BorderValues[3];
-         return;
-#endif
       case GL_TEXTURE_BORDER_COLOR:
-         /* clamped */
-         params[0] = obj->BorderColor[0] / CHAN_MAXF;
-         params[1] = obj->BorderColor[1] / CHAN_MAXF;
-         params[2] = obj->BorderColor[2] / CHAN_MAXF;
-         params[3] = obj->BorderColor[3] / CHAN_MAXF;
+         params[0] = CLAMP(obj->BorderColor[0], 0.0F, 1.0F);
+         params[1] = CLAMP(obj->BorderColor[1], 0.0F, 1.0F);
+         params[2] = CLAMP(obj->BorderColor[2], 0.0F, 1.0F);
+         params[3] = CLAMP(obj->BorderColor[3], 0.0F, 1.0F);
          return;
       case GL_TEXTURE_RESIDENT:
          {
@@ -1684,7 +1671,7 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
          break;
       case GL_SHADOW_AMBIENT_SGIX: /* aka GL_TEXTURE_COMPARE_FAIL_VALUE_ARB */
          if (ctx->Extensions.SGIX_shadow_ambient) {
-            *params = CHAN_TO_FLOAT(obj->ShadowAmbient);
+            *params = obj->ShadowAmbient;
             return;
          }
          break;
@@ -1750,23 +1737,13 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
       case GL_TEXTURE_WRAP_R_EXT:
          *params = (GLint) obj->WrapR;
          return;
-#if 0 /* someday */
-      case GL_TEXTURE_BORDER_VALUES_NV:
-         /* unclamped */
-         params[0] = FLOAT_TO_INT(obj->BorderValues[0]);
-         params[1] = FLOAT_TO_INT(obj->BorderValues[1]);
-         params[2] = FLOAT_TO_INT(obj->BorderValues[2]);
-         params[3] = FLOAT_TO_INT(obj->BorderValues[3]);
-         return;
-#endif
       case GL_TEXTURE_BORDER_COLOR:
-         /* clamped */
          {
             GLfloat b[4];
-            b[0] = CLAMP(obj->BorderValues[0], 0.0F, 1.0F);
-            b[1] = CLAMP(obj->BorderValues[1], 0.0F, 1.0F);
-            b[2] = CLAMP(obj->BorderValues[2], 0.0F, 1.0F);
-            b[3] = CLAMP(obj->BorderValues[3], 0.0F, 1.0F);
+            b[0] = CLAMP(obj->BorderColor[0], 0.0F, 1.0F);
+            b[1] = CLAMP(obj->BorderColor[1], 0.0F, 1.0F);
+            b[2] = CLAMP(obj->BorderColor[2], 0.0F, 1.0F);
+            b[3] = CLAMP(obj->BorderColor[3], 0.0F, 1.0F);
             params[0] = FLOAT_TO_INT(b[0]);
             params[1] = FLOAT_TO_INT(b[1]);
             params[2] = FLOAT_TO_INT(b[2]);
@@ -1818,8 +1795,7 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
          break;
       case GL_SHADOW_AMBIENT_SGIX: /* aka GL_TEXTURE_COMPARE_FAIL_VALUE_ARB */
          if (ctx->Extensions.SGIX_shadow_ambient) {
-            GLfloat a = CHAN_TO_FLOAT(obj->ShadowAmbient);
-            *params = (GLint) FLOAT_TO_INT(a);
+            *params = (GLint) FLOAT_TO_INT(obj->ShadowAmbient);
             return;
          }
          break;

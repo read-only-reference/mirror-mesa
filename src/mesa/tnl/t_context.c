@@ -1,4 +1,4 @@
-/* $Id: t_context.c,v 1.28 2002/08/21 13:05:37 brianp Exp $ */
+/* $Id: t_context.c,v 1.30 2002/10/29 20:29:01 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,14 +24,14 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
 
 #include "glheader.h"
+#include "imports.h"
 #include "macros.h"
 #include "mtypes.h"
-#include "mem.h"
 #include "dlist.h"
 #include "light.h"
 #include "vtxfmt.h"

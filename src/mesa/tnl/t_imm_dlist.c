@@ -1,4 +1,4 @@
-/* $Id: t_imm_dlist.c,v 1.42 2002/06/15 02:38:18 brianp Exp $ */
+/* $Id: t_imm_dlist.c,v 1.44 2002/10/29 20:29:02 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -24,7 +24,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
 
@@ -33,7 +33,7 @@
 #include "dlist.h"
 #include "debug.h"
 #include "mmath.h"
-#include "mem.h"
+#include "imports.h"
 #include "state.h"
 
 #include "t_context.h"

@@ -1,4 +1,4 @@
-/* $Id: state.c,v 1.92 2002/09/27 02:45:38 brianp Exp $ */
+/* $Id: state.c,v 1.96 2002/10/24 23:57:21 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -31,9 +31,6 @@
  */
 
 
-#ifdef PC_HEADER
-#include "all.h"
-#else
 #include "glheader.h"
 #include "accum.h"
 #include "api_loopback.h"
@@ -69,18 +66,19 @@
 #include "texstate.h"
 #include "mtypes.h"
 #include "varray.h"
+#if FEATURE_NV_vertex_program
 #include "vpstate.h"
+#endif
 
 #include "math/m_matrix.h"
 #include "math/m_xform.h"
-#endif
 
 
 static int
 generic_noop(void)
 {
 #ifdef DEBUG
-   _mesa_problem(NULL, "undefined function dispatch");
+   _mesa_problem(NULL, "User called no-op dispatch function");
 #endif
    return 0;
 }
@@ -462,6 +460,7 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->WindowPos4svMESA = _mesa_WindowPos4svMESA;
 
    /* 233. GL_NV_vertex_program */
+#if FEATURE_NV_vertex_program
    exec->BindProgramNV = _mesa_BindProgramNV;
    exec->DeleteProgramsNV = _mesa_DeleteProgramsNV;
    exec->ExecuteProgramNV = _mesa_ExecuteProgramNV;
@@ -487,6 +486,7 @@ _mesa_init_exec_table(struct _glapi_table *exec, GLuint tableSize)
    exec->ProgramParameters4fvNV = _mesa_ProgramParameters4fvNV;
    exec->TrackMatrixNV = _mesa_TrackMatrixNV;
    exec->VertexAttribPointerNV = _mesa_VertexAttribPointerNV;
+#endif
 
    /* 262. GL_NV_point_sprite */
    exec->PointParameteriNV = _mesa_PointParameteriNV;
@@ -542,23 +542,21 @@ update_polygon( GLcontext *ctx )
       ctx->_TriangleCaps |= DD_TRI_CULL_FRONT_BACK;
 
    /* Any Polygon offsets enabled? */
-   ctx->Polygon._OffsetAny = GL_FALSE;
    if (ctx->Polygon.OffsetPoint ||
        ctx->Polygon.OffsetLine ||
        ctx->Polygon.OffsetFill) {
       ctx->_TriangleCaps |= DD_TRI_OFFSET;
-      ctx->Polygon._OffsetAny = GL_TRUE;
    }
 }
 
 static void
 calculate_model_project_matrix( GLcontext *ctx )
 {
-      _math_matrix_mul_matrix( &ctx->_ModelProjectMatrix,
-			       ctx->ProjectionMatrixStack.Top,
-			       ctx->ModelviewMatrixStack.Top );
+   _math_matrix_mul_matrix( &ctx->_ModelProjectMatrix,
+                            ctx->ProjectionMatrixStack.Top,
+                            ctx->ModelviewMatrixStack.Top );
 
-      _math_matrix_analyse( &ctx->_ModelProjectMatrix );
+   _math_matrix_analyse( &ctx->_ModelProjectMatrix );
 }
 
 static void
@@ -774,7 +772,6 @@ update_texture_state( GLcontext *ctx )
 {
    GLuint unit;
 
-   ctx->Texture._ReallyEnabled = 0;  /* XXX obsolete */
    ctx->Texture._EnabledUnits = 0;
    ctx->Texture._GenFlags = 0;
    ctx->_NeedNormals &= ~NEED_NORMALS_TEXGEN;
@@ -856,15 +853,8 @@ update_texture_state( GLcontext *ctx )
 	 continue;
       }
 
-      /* Texture._ReallyEnabled records the enable state for all units in
-       * one word.
-       */
-      {
-         GLuint flag = texUnit->_ReallyEnabled << (unit * NUM_TEXTURE_TARGETS);
-	 ctx->Texture._ReallyEnabled |= flag;  /* XXX obsolete field! */
-         if (texUnit->_ReallyEnabled)
-            ctx->Texture._EnabledUnits |= (1 << unit);
-      }
+      if (texUnit->_ReallyEnabled)
+         ctx->Texture._EnabledUnits |= (1 << unit);
 
       if (texUnit->TexGenEnabled) {
 	 if (texUnit->TexGenEnabled & S_BIT) {
