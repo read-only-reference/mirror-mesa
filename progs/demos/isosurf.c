@@ -33,7 +33,7 @@
 #include <windows.h>
 #undef CLIP_MASK
 #endif
-#define GL_GLEXT_LEGACY
+#define GL_GLEXT_PROTOTYPES
 #include "GL/glut.h"
 
 #include "readtex.c"   /* I know, this is a hack.  KW: me too. */

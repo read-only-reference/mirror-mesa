@@ -36,6 +36,7 @@
 #include "glheader.h"
 #include "GL/osmesa.h"
 #include "buffers.h"
+#include "bufferobj.h"
 #include "context.h"
 #include "colormac.h"
 #include "depth.h"
@@ -681,6 +682,16 @@ hook_in_driver_functions( GLcontext *ctx )
    ctx->Driver.CopyConvolutionFilter1D = _swrast_CopyConvolutionFilter1D;
    ctx->Driver.CopyConvolutionFilter2D = _swrast_CopyConvolutionFilter2D;
 
+#if FEATURE_ARB_vertex_buffer_object
+   ctx->Driver.NewBufferObject = _mesa_new_buffer_object;
+   ctx->Driver.DeleteBuffer = _mesa_delete_buffer_object;
+   ctx->Driver.BindBuffer = NULL;
+   ctx->Driver.BufferData = _mesa_buffer_data;
+   ctx->Driver.BufferSubData = _mesa_buffer_subdata;
+   ctx->Driver.MapBuffer = _mesa_buffer_map;
+   ctx->Driver.UnmapBuffer = NULL;
+#endif
+
    swdd->SetBuffer = set_buffer;
 
    /* RGB(A) span/pixel functions */
@@ -981,6 +992,7 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       _mesa_enable_sw_extensions(&(osmesa->mesa));
       _mesa_enable_1_3_extensions(&(osmesa->mesa));
       _mesa_enable_1_4_extensions(&(osmesa->mesa));
+      _mesa_enable_1_5_extensions(&(osmesa->mesa));
 
       osmesa->gl_buffer = _mesa_create_framebuffer( osmesa->gl_visual,
                            (GLboolean) ( osmesa->gl_visual->depthBits > 0 ),

@@ -1,4 +1,3 @@
-
 /*
  * Mesa 3-D graphics library
  * Version:  5.1
@@ -120,7 +119,8 @@ static void eval1_4f_ca( struct gl_client_array *dest,
 {
    const GLfloat u1 = map->u1;
    const GLfloat du = map->du;
-   GLfloat (*to)[4] = (GLfloat (*)[4])dest->Ptr;
+   GLubyte *destData = ADD_POINTERS(dest->Ptr, dest->BufferObj->Data);
+   GLfloat (*to)[4] = (GLfloat (*)[4]) destData;
    GLuint i;
 
    ASSERT(dest->Type == GL_FLOAT);
@@ -258,7 +258,8 @@ static void eval2_4f_ca( struct gl_client_array *dest,
    const GLfloat du = map->du;
    const GLfloat v1 = map->v1;
    const GLfloat dv = map->dv;
-   GLfloat (*to)[4] = (GLfloat (*)[4])dest->Ptr;
+   GLubyte *destData = ADD_POINTERS(dest->Ptr, dest->BufferObj->Data);
+   GLfloat (*to)[4] = (GLfloat (*)[4]) destData;
    GLuint i;
 
    ASSERT(dest->Type == GL_FLOAT);
@@ -506,7 +507,7 @@ void _tnl_eval_immediate( GLcontext *ctx, struct immediate *IM )
    /* Allocate vertex attribute storage now */
    for (attr = 0; attr < VERT_ATTRIB_MAX; attr++) {
       if ((req & (1 << attr)) && !store->Attrib[attr]) {
-         store->Attrib[attr] = _mesa_malloc(IMM_SIZE * 4 * sizeof(GLfloat));
+         store->Attrib[attr] = (GLfloat (*)[4]) _mesa_malloc(IMM_SIZE * 4 * sizeof(GLfloat));
          if (!store->Attrib[attr]) {
             _mesa_error(ctx, GL_OUT_OF_MEMORY, "evaluator processing");
             return;
@@ -540,13 +541,15 @@ void _tnl_eval_immediate( GLcontext *ctx, struct immediate *IM )
    if (req & VERT_BIT_COLOR0) {
       GLuint generated = 0;
 
-      if (copycount) 
-	 copy_4f_stride( store->Attrib[VERT_ATTRIB_COLOR0] + IM->CopyStart, 
-			 (GLfloat *)tmp->Color.Ptr, 
-			 tmp->Color.StrideB,
-			 copycount );
+      if (copycount) {
+         GLubyte *destData = ADD_POINTERS(tmp->Color.Ptr, tmp->Color.BufferObj->Data);
+         copy_4f_stride( store->Attrib[VERT_ATTRIB_COLOR0] + IM->CopyStart, 
+                         (GLfloat *) destData,
+                         tmp->Color.StrideB,
+                         copycount );
+      }
 
-      tmp->Color.Ptr = store->Attrib[VERT_ATTRIB_COLOR0] + IM->CopyStart;
+      tmp->Color.Ptr = (GLubyte *) (store->Attrib[VERT_ATTRIB_COLOR0] + IM->CopyStart);
       tmp->Color.StrideB = 4 * sizeof(GLfloat);
       tmp->Color.Flags = 0;
       tnl->vb.importable_data &= ~VERT_BIT_COLOR0;

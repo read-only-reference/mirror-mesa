@@ -39,6 +39,9 @@
 #include "attrib.h"
 #include "blend.h"
 #include "buffers.h"
+#if FEATURE_ARB_vertex_buffer_object
+#include "bufferobj.h"
+#endif
 #include "clip.h"
 #include "colormac.h"
 #include "colortab.h"
@@ -81,40 +84,61 @@
 
 
 /**
- * Functions which aren't compiled but executed immediately:
- * - glIsList
- * - glGenLists
- * - glDeleteLists
- * - glEndList  --- BUT:  call ctx->Driver.EndList at end of list execution?
- * - glFeedbackBuffer
- * - glSelectBuffer
- * - glRenderMode
- * - glReadPixels
- * - glPixelStore
- * - glFlush
- * - glFinish
- * - glIsEnabled
- * - glGet*
+ * Macro to assert that the API call was made outside the
+ * glBegin()/glEnd() pair, with return value.
  * 
- * Functions which cause errors if called while compiling a display list:
- *  - glNewList
+ * \param ctx GL context.
+ * \param retval value to return value in case the assertion fails.
  */
-
-
+#define ASSERT_OUTSIDE_SAVE_BEGIN_END_WITH_RETVAL(ctx, retval)		\
+do {									\
+   if (ctx->Driver.CurrentSavePrimitive <= GL_POLYGON ||		\
+       ctx->Driver.CurrentSavePrimitive == PRIM_INSIDE_UNKNOWN_PRIM) {	\
+      _mesa_compile_error( ctx, GL_INVALID_OPERATION, "begin/end" );	\
+      return retval;							\
+   }									\
+} while (0)
 
 /**
- * Display list instructions are stored as sequences of "nodes".  Nodes
- * are allocated in blocks.  Each block has BLOCK_SIZE nodes.  Blocks
- * are linked together with a pointer.
+ * Macro to assert that the API call was made outside the
+ * glBegin()/glEnd() pair.
+ * 
+ * \param ctx GL context.
  */
-
+#define ASSERT_OUTSIDE_SAVE_BEGIN_END(ctx)				\
+do {									\
+   if (ctx->Driver.CurrentSavePrimitive <= GL_POLYGON ||		\
+       ctx->Driver.CurrentSavePrimitive == PRIM_INSIDE_UNKNOWN_PRIM) {	\
+      _mesa_compile_error( ctx, GL_INVALID_OPERATION, "begin/end" );	\
+      return;								\
+   }									\
+} while (0)
 
 /**
- * How many nodes to allocate at a time.
+ * Macro to assert that the API call was made outside the
+ * glBegin()/glEnd() pair and flush the vertices.
  * 
- * \note Reduced now that we hold vertices etc. elsewhere.
+ * \param ctx GL context.
  */
-#define BLOCK_SIZE 256
+#define ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx)			\
+do {									\
+   ASSERT_OUTSIDE_SAVE_BEGIN_END(ctx);					\
+   FLUSH_VERTICES(ctx, 0);						\
+} while (0)
+
+/**
+ * Macro to assert that the API call was made outside the
+ * glBegin()/glEnd() pair and flush the vertices, with return value.
+ * 
+ * \param ctx GL context.
+ * \param retval value to return value in case the assertion fails.
+ */
+#define ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, retval)\
+do {									\
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_WITH_RETVAL(ctx, retval);		\
+   FLUSH_VERTICES(ctx, 0);						\
+} while (0)
+
 
 
 /**
@@ -266,6 +290,10 @@ typedef enum {
         OPCODE_ACTIVE_STENCIL_FACE_EXT,
         /* GL_EXT_depth_bounds_test */
         OPCODE_DEPTH_BOUNDS_EXT,
+        /* GL_ARB_vertex/fragment_program */
+        OPCODE_PROGRAM_STRING_ARB,
+        OPCODE_PROGRAM_ENV_PARAMETER_ARB,
+
 	/* The following three are meta instructions */
 	OPCODE_ERROR,	        /* raise compiled-in error */
 	OPCODE_CONTINUE,
@@ -274,8 +302,13 @@ typedef enum {
 } OpCode;
 
 
+
 /**
  * Display list node.
+ *
+ * Display list instructions are stored as sequences of "nodes".  Nodes
+ * are allocated in blocks.  Each block has BLOCK_SIZE nodes.  Blocks
+ * are linked together with a pointer.
  *
  * Each instruction in the display list is stored as a sequence of
  * contiguous nodes in memory.
@@ -298,7 +331,16 @@ union node {
 
 
 /**
- * Number of nodes of storage needed for each instruction.  
+ * How many nodes to allocate at a time.
+ *
+ * \note Reduced now that we hold vertices etc. elsewhere.
+ */
+#define BLOCK_SIZE 256
+
+
+
+/**
+ * Number of nodes of storage needed for each instruction.
  * Sizes for dynamically allocated opcodes are stored in the context struct.
  */
 static GLuint InstSize[ OPCODE_END_OF_LIST+1 ];
@@ -437,17 +479,23 @@ void _mesa_destroy_list( GLcontext *ctx, GLuint list )
             break;
 #if FEATURE_NV_vertex_program
          case OPCODE_LOAD_PROGRAM_NV:
-            FREE(n[4].data);
+            FREE(n[4].data);  /* program string */
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_REQUEST_RESIDENT_PROGRAMS_NV:
-            FREE(n[2].data);
+            FREE(n[2].data);  /* array of program ids */
             n += InstSize[n[0].opcode];
             break;
 #endif
 #if FEATURE_NV_fragment_program
          case OPCODE_PROGRAM_NAMED_PARAMETER_NV:
-            FREE(n[3].data);
+            FREE(n[3].data);  /* parameter name */
+            n += InstSize[n[0].opcode];
+            break;
+#endif
+#if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
+         case OPCODE_PROGRAM_STRING_ARB:
+            FREE(n[4].data);  /* program string */
             n += InstSize[n[0].opcode];
             break;
 #endif
@@ -682,6 +730,10 @@ void _mesa_init_lists( void )
       InstSize[OPCODE_ACTIVE_STENCIL_FACE_EXT] = 2;
       /* GL_EXT_depth_bounds_test */
       InstSize[OPCODE_DEPTH_BOUNDS_EXT] = 3;
+#if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
+      InstSize[OPCODE_PROGRAM_STRING_ARB] = 5;
+      InstSize[OPCODE_PROGRAM_ENV_PARAMETER_ARB] = 7;
+#endif
    }
    init_flag = 1;
 }
@@ -1442,7 +1494,7 @@ save_ConvolutionParameterfv(GLenum target, GLenum pname, const GLfloat *params)
 }
 
 
-static void 
+static void
 save_CopyPixels( GLint x, GLint y,
 		 GLsizei width, GLsizei height, GLenum type )
 {
@@ -2350,7 +2402,7 @@ static void save_MapGrid2f( GLint un, GLfloat u1, GLfloat u2,
 static void save_MapGrid2d( GLint un, GLdouble u1, GLdouble u2,
                             GLint vn, GLdouble v1, GLdouble v2 )
 {
-   save_MapGrid2f(un, (GLfloat) u1, (GLfloat) u2, 
+   save_MapGrid2f(un, (GLfloat) u1, (GLfloat) u2,
 		  vn, (GLfloat) v1, (GLfloat) v2);
 }
 
@@ -2873,7 +2925,7 @@ static void save_RasterPos3sv(const GLshort *v)
 
 static void save_RasterPos4dv(const GLdouble *v)
 {
-   save_RasterPos4f((GLfloat) v[0], (GLfloat) v[1], 
+   save_RasterPos4f((GLfloat) v[0], (GLfloat) v[1],
 		    (GLfloat) v[2], (GLfloat) v[3]);
 }
 
@@ -2884,7 +2936,7 @@ static void save_RasterPos4fv(const GLfloat *v)
 
 static void save_RasterPos4iv(const GLint *v)
 {
-   save_RasterPos4f((GLfloat) v[0], (GLfloat) v[1], 
+   save_RasterPos4f((GLfloat) v[0], (GLfloat) v[1],
 		    (GLfloat) v[2], (GLfloat) v[3]);
 }
 
@@ -3613,7 +3665,7 @@ static void save_WindowPos3svMESA(const GLshort *v)
 
 static void save_WindowPos4dvMESA(const GLdouble *v)
 {
-   save_WindowPos4fMESA((GLfloat) v[0], (GLfloat) v[1], 
+   save_WindowPos4fMESA((GLfloat) v[0], (GLfloat) v[1],
 			(GLfloat) v[2], (GLfloat) v[3]);
 }
 
@@ -3624,7 +3676,7 @@ static void save_WindowPos4fvMESA(const GLfloat *v)
 
 static void save_WindowPos4ivMESA(const GLint *v)
 {
-   save_WindowPos4fMESA((GLfloat) v[0], (GLfloat) v[1], 
+   save_WindowPos4fMESA((GLfloat) v[0], (GLfloat) v[1],
 			(GLfloat) v[2], (GLfloat) v[3]);
 }
 
@@ -4167,8 +4219,7 @@ save_RequestResidentProgramsNV(GLsizei num, const GLuint *ids)
 {
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
-   GLuint *idCopy;
-   idCopy = _mesa_malloc(num * sizeof(GLuint));
+   GLuint *idCopy = (GLuint *) _mesa_malloc(num * sizeof(GLuint));
    if (!idCopy) {
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glRequestResidentProgramsNV");
       return;
@@ -4305,9 +4356,7 @@ save_ProgramNamedParameter4fNV(GLuint id, GLsizei len, const GLubyte *name,
 {
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
-   GLubyte *nameCopy;
-
-   nameCopy = _mesa_malloc(len);
+   GLubyte *nameCopy = (GLubyte *) _mesa_malloc(len);
    if (!nameCopy) {
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glProgramNamedParameter4fNV");
       return;
@@ -4393,6 +4442,94 @@ static void save_DepthBoundsEXT( GLclampd zmin, GLclampd zmax )
    }
 }
 
+
+
+#if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
+
+static void
+save_ProgramStringARB(GLenum target, GLenum format, GLsizei len,
+                      const GLvoid *string)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   GLubyte *programCopy;
+
+   programCopy = (GLubyte *) _mesa_malloc(len);
+   if (!programCopy) {
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glProgramStringARB");
+      return;
+   }
+   _mesa_memcpy(programCopy, string, len);
+
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_PROGRAM_STRING_ARB, 4 );
+   if (n) {
+      n[1].e = target;
+      n[2].e = format;
+      n[3].i = len;
+      n[4].data = programCopy;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->ProgramStringARB)(target, format, len, string);
+   }
+}
+
+
+static void
+save_ProgramEnvParameter4fARB(GLenum target, GLuint index,
+                              GLfloat x, GLfloat y, GLfloat z, GLfloat w)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION( ctx, OPCODE_PROGRAM_ENV_PARAMETER_ARB, 6 );
+   if (n) {
+      n[1].e = target;
+      n[2].ui = index;
+      n[3].f = x;
+      n[4].f = y;
+      n[5].f = z;
+      n[6].f = w;
+   }
+   if (ctx->ExecuteFlag) {
+      (*ctx->Exec->ProgramEnvParameter4fARB)( target, index, x, y, z, w);
+   }
+}
+
+
+static void
+save_ProgramEnvParameter4fvARB(GLenum target, GLuint index,
+                               const GLfloat *params)
+{
+   save_ProgramEnvParameter4fARB(target, index, params[0], params[1],
+                                 params[2], params[3]);
+}
+
+
+static void
+save_ProgramEnvParameter4dARB(GLenum target, GLuint index,
+                              GLdouble x, GLdouble y, GLdouble z, GLdouble w)
+{
+   save_ProgramEnvParameter4fARB(target, index,
+                                 (GLfloat) x,
+                                 (GLfloat) y,
+                                 (GLfloat) z,
+                                 (GLfloat) w);
+}
+
+
+static void
+save_ProgramEnvParameter4dvARB(GLenum target, GLuint index,
+                               const GLdouble *params)
+{
+   save_ProgramEnvParameter4fARB(target, index,
+                                 (GLfloat) params[0],
+                                 (GLfloat) params[1],
+                                 (GLfloat) params[2],
+                                 (GLfloat) params[3]);
+}
+
+#endif /* FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program */
 
 
 
@@ -5111,10 +5248,12 @@ execute_list( GLcontext *ctx, GLuint list )
             }
             break;
          case OPCODE_REQUEST_RESIDENT_PROGRAMS_NV:
-            (*ctx->Exec->RequestResidentProgramsNV)(n[1].ui, n[2].data);
+            (*ctx->Exec->RequestResidentProgramsNV)(n[1].ui,
+                                                    (GLuint *) n[2].data);
             break;
          case OPCODE_LOAD_PROGRAM_NV:
-            (*ctx->Exec->LoadProgramNV)(n[1].e, n[2].ui, n[3].i, n[4].data);
+            (*ctx->Exec->LoadProgramNV)(n[1].e, n[2].ui, n[3].i,
+                                        (const GLubyte *) n[4].data);
             break;
          case OPCODE_PROGRAM_PARAMETER4F_NV:
             (*ctx->Exec->ProgramParameter4fNV)(n[1].e, n[2].ui, n[3].f,
@@ -5131,7 +5270,8 @@ execute_list( GLcontext *ctx, GLuint list )
                                                      n[4].f, n[5].f, n[6].f);
             break;
          case OPCODE_PROGRAM_NAMED_PARAMETER_NV:
-            (*ctx->Exec->ProgramNamedParameter4fNV)(n[1].ui, n[2].i, n[3].data,
+            (*ctx->Exec->ProgramNamedParameter4fNV)(n[1].ui, n[2].i,
+                                               (const GLubyte *) n[3].data,
                                                n[4].f, n[5].f, n[6].f, n[7].f);
             break;
 #endif
@@ -5142,7 +5282,15 @@ execute_list( GLcontext *ctx, GLuint list )
          case OPCODE_DEPTH_BOUNDS_EXT:
             (*ctx->Exec->DepthBoundsEXT)(n[1].f, n[2].f);
             break;
-
+#if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
+         case OPCODE_PROGRAM_STRING_ARB:
+            (*ctx->Exec->ProgramStringARB)(n[1].e, n[2].e, n[3].i, n[4].data);
+            break;
+         case OPCODE_PROGRAM_ENV_PARAMETER_ARB:
+            (*ctx->Exec->ProgramEnvParameter4fARB)(n[1].e, n[2].ui, n[3].f,
+                                                   n[4].f, n[5].f, n[6].f);
+            break;
+#endif
 	 case OPCODE_CONTINUE:
 	    n = (Node *) n[1].next;
 	    break;
@@ -5358,7 +5506,7 @@ _mesa_CallList( GLuint list )
    /* execute the display list, and restore the CompileFlag. */
 
    if (MESA_VERBOSE & VERBOSE_API)
-      _mesa_debug(ctx, "glCallList %d\n", list); 
+      _mesa_debug(ctx, "glCallList %d\n", list);
 
    if (list == 0) {
       _mesa_error(ctx, GL_INVALID_VALUE, "glCallList(list==0)");
@@ -5396,7 +5544,7 @@ _mesa_CallLists( GLsizei n, GLenum type, const GLvoid *lists )
    GLboolean save_compile_flag;
 
    if (MESA_VERBOSE & VERBOSE_API)
-      _mesa_debug(ctx, "glCallLists %d\n", n); 
+      _mesa_debug(ctx, "glCallLists %d\n", n);
 
    switch (type) {
       case GL_BYTE:
@@ -5747,7 +5895,7 @@ static void exec_DisableClientState( GLenum cap )
    ctx->Exec->DisableClientState( cap );
 }
 
-static void exec_EdgeFlagPointer(GLsizei stride, const void *vptr)
+static void exec_EdgeFlagPointer(GLsizei stride, const GLvoid *vptr)
 {
    GET_CURRENT_CONTEXT(ctx);
    FLUSH_VERTICES(ctx, 0);
@@ -6126,8 +6274,9 @@ static void exec_MultiModeDrawElementsIBM(const GLenum *mode,
 
 
 
-/*
- * Assign all the pointers in <table> to point to Mesa's display list
+
+/**
+ * Setup the given dispatch table to point to Mesa's display list
  * building functions.
  *
  * This does not include any of the tnl functions - they are
@@ -6592,11 +6741,52 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
    /* aliased with MESA_window_pos functions */
 
    /* ARB 26. GL_ARB_vertex_program */
-   /* XXX todo */
-   /* ARB 27. GL_ARB_vertex_program */
-   /* XXX todo */
+   /* ARB 27. GL_ARB_fragment_program */
+#if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
+   /* glVertexAttrib* functions alias the NV ones, handled elsewhere */
+   table->VertexAttribPointerARB = _mesa_VertexAttribPointerARB;
+   table->EnableVertexAttribArrayARB = _mesa_EnableVertexAttribArrayARB;
+   table->DisableVertexAttribArrayARB = _mesa_DisableVertexAttribArrayARB;
+   table->ProgramStringARB = save_ProgramStringARB;
+   table->BindProgramNV = _mesa_BindProgram;
+   table->DeleteProgramsNV = _mesa_DeletePrograms;
+   table->GenProgramsNV = _mesa_GenPrograms;
+   table->IsProgramNV = _mesa_IsProgram;
+   table->GetVertexAttribdvNV = _mesa_GetVertexAttribdvNV;
+   table->GetVertexAttribfvNV = _mesa_GetVertexAttribfvNV;
+   table->GetVertexAttribivNV = _mesa_GetVertexAttribivNV;
+   table->GetVertexAttribPointervNV = _mesa_GetVertexAttribPointervNV;
+   table->ProgramEnvParameter4dARB = save_ProgramEnvParameter4dARB;
+   table->ProgramEnvParameter4dvARB = save_ProgramEnvParameter4dvARB;
+   table->ProgramEnvParameter4fARB = save_ProgramEnvParameter4fARB;
+   table->ProgramEnvParameter4fvARB = save_ProgramEnvParameter4fvARB;
+   table->ProgramLocalParameter4dARB = save_ProgramLocalParameter4dARB;
+   table->ProgramLocalParameter4dvARB = save_ProgramLocalParameter4dvARB;
+   table->ProgramLocalParameter4fARB = save_ProgramLocalParameter4fARB;
+   table->ProgramLocalParameter4fvARB = save_ProgramLocalParameter4fvARB;
+   table->GetProgramEnvParameterdvARB = _mesa_GetProgramEnvParameterdvARB;
+   table->GetProgramEnvParameterfvARB = _mesa_GetProgramEnvParameterfvARB;
+   table->GetProgramLocalParameterdvARB = _mesa_GetProgramLocalParameterdvARB;
+   table->GetProgramLocalParameterfvARB = _mesa_GetProgramLocalParameterfvARB;
+   table->GetProgramivARB = _mesa_GetProgramivARB;
+   table->GetProgramStringARB = _mesa_GetProgramStringARB;
+#endif
+
    /* ARB 28. GL_ARB_vertex_buffer_object */
-   /* XXX todo */
+#if FEATURE_ARB_vertex_buffer_object
+   /* None of the extension's functions get compiled */
+   table->BindBufferARB = _mesa_BindBufferARB;
+   table->BufferDataARB = _mesa_BufferDataARB;
+   table->BufferSubDataARB = _mesa_BufferSubDataARB;
+   table->DeleteBuffersARB = _mesa_DeleteBuffersARB;
+   table->GenBuffersARB = _mesa_GenBuffersARB;
+   table->GetBufferParameterivARB = _mesa_GetBufferParameterivARB;
+   table->GetBufferPointervARB = _mesa_GetBufferPointervARB;
+   table->GetBufferSubDataARB = _mesa_GetBufferSubDataARB;
+   table->IsBufferARB = _mesa_IsBufferARB;
+   table->MapBufferARB = _mesa_MapBufferARB;
+   table->UnmapBufferARB = _mesa_UnmapBufferARB;
+#endif
 }
 
 
@@ -6746,12 +6936,12 @@ static void print_list( GLcontext *ctx, GLuint list )
                          _mesa_lookup_enum_by_nr(n[1].ui));
 	    break;
 	 case OPCODE_MAP1:
-	    _mesa_printf("Map1 %s %.3f %.3f %d %d\n", 
+	    _mesa_printf("Map1 %s %.3f %.3f %d %d\n",
 		    _mesa_lookup_enum_by_nr(n[1].ui),
 		    n[2].f, n[3].f, n[4].i, n[5].i);
 	    break;
 	 case OPCODE_MAP2:
-	    _mesa_printf("Map2 %s %.3f %.3f %.3f %.3f %d %d %d %d\n", 
+	    _mesa_printf("Map2 %s %.3f %.3f %.3f %.3f %d %d %d %d\n",
                          _mesa_lookup_enum_by_nr(n[1].ui),
                          n[2].f, n[3].f, n[4].f, n[5].f,
                          n[6].i, n[7].i, n[8].i, n[9].i);
@@ -6761,7 +6951,7 @@ static void print_list( GLcontext *ctx, GLuint list )
                          n[1].i, n[2].f, n[3].f);
 	    break;
 	 case OPCODE_MAPGRID2:
-	    _mesa_printf("MapGrid2 %d %.3f %.3f, %d %.3f %.3f\n", 
+	    _mesa_printf("MapGrid2 %d %.3f %.3f, %d %.3f %.3f\n",
                          n[1].i, n[2].f, n[3].f,
                          n[4].i, n[5].f, n[6].f);
 	    break;

@@ -516,14 +516,15 @@ static void _tnl_trans_elt_1ui(GLuint *to,
 			GLuint start,
 			GLuint n )
 {
+   GLubyte *fromData = ADD_POINTERS( from->Ptr, from->BufferObj->Data );
    _tnl_trans_elt_1ui_tab[TYPE_IDX(from->Type)]( to,
-					       from->Ptr,
-					       from->StrideB,
-					       flags,
-					       elts,
-					       match,
-					       start,
-					       n );
+                                                 fromData,
+                                                 from->StrideB,
+                                                 flags,
+                                                 elts,
+                                                 match,
+                                                 start,
+                                                 n );
 
 }
 
@@ -536,8 +537,9 @@ static void _tnl_trans_elt_1ub(GLubyte *to,
 			GLuint start,
 			GLuint n )
 {
+   GLubyte *fromData = ADD_POINTERS( from->Ptr, from->BufferObj->Data );
    _tnl_trans_elt_1ub_tab[TYPE_IDX(from->Type)]( to,
-                                                 from->Ptr,
+                                                 fromData,
                                                  from->StrideB,
                                                  flags,
                                                  elts,
@@ -555,8 +557,9 @@ static void _tnl_trans_elt_4f(GLfloat (*to)[4],
                               GLuint start,
                               GLuint n )
 {
+   GLubyte *fromData = ADD_POINTERS( from->Ptr, from->BufferObj->Data );
    _tnl_trans_elt_4f_tab[from->Size][TYPE_IDX(from->Type)]( to,
-					      from->Ptr,
+					      fromData,
 					      from->StrideB,
 					      flags,
 					      elts,
@@ -575,8 +578,9 @@ static void _tnl_trans_elt_4fc(GLfloat (*to)[4],
 			       GLuint start,
 			       GLuint n )
 {
+   GLubyte *fromData = ADD_POINTERS( from->Ptr, from->BufferObj->Data );
    _tnl_trans_elt_4fc_tab[from->Size][TYPE_IDX(from->Type)]( to,
-					      from->Ptr,
+					      fromData,
 					      from->StrideB,
 					      flags,
 					      elts,
@@ -615,7 +619,7 @@ void _tnl_translate_array_elts( GLcontext *ctx, struct immediate *IM,
    ASSERT(IM->Attrib[VERT_ATTRIB_POS]);
    for (attr = 1; attr < VERT_ATTRIB_MAX; attr++) {
       if ((translate & (1 << attr)) && !IM->Attrib[attr]) {
-         IM->Attrib[attr] = _mesa_malloc(IMM_SIZE * 4 * sizeof(GLfloat));
+         IM->Attrib[attr] = (GLfloat (*)[4]) _mesa_malloc(IMM_SIZE * 4 * sizeof(GLfloat));
          if (!IM->Attrib[attr]) {
             _mesa_error(ctx, GL_OUT_OF_MEMORY, "vertex processing2");
             return;

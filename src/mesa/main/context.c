@@ -56,16 +56,16 @@
  * Selecting the <b>Main page</b> link will display a summary of the module
  * (this page).
  *
- * Selecting <b>Compound List</b> will list all C structures.
+ * Selecting <b>Data Structures</b> will list all C structures.
  *
  * Selecting the <b>File List</b> link will list all the source files in
  * the module.
  * Selecting a filename will show a list of all functions defined in that file.
  *
- * Selecting the <b>Compound Members</b> link will display a list of all
+ * Selecting the <b>Data Fields</b> link will display a list of all
  * documented structure members.
  *
- * Selecting the <b>File Members</b> link will display a list
+ * Selecting the <b>Globals</b> link will display a list
  * of all functions, structures, global variables and macros in the module.
  *
  */
@@ -77,6 +77,7 @@
 #include "attrib.h"
 #include "blend.h"
 #include "buffers.h"
+#include "bufferobj.h"
 #include "colortab.h"
 #include "context.h"
 #include "debug.h"
@@ -101,6 +102,9 @@
 #include "pixel.h"
 #include "points.h"
 #include "polygon.h"
+#if FEATURE_NV_vertex_program || FEATURE_NV_fragment_program
+#include "program.h"
+#endif
 #include "rastpos.h"
 #include "simple_list.h"
 #include "state.h"
@@ -110,20 +114,12 @@
 #include "texstate.h"
 #include "mtypes.h"
 #include "varray.h"
-#if FEATURE_NV_vertex_program || FEATURE_NV_fragment_program
-#include "program.h"
-#endif
 #include "vtxfmt.h"
 #if _HAVE_FULL_GL
 #include "math/m_translate.h"
 #include "math/m_matrix.h"
 #include "math/m_xform.h"
 #include "math/mathmod.h"
-#endif
-
-#if defined(MESA_TRACE)
-#include "Trace/tr_context.h"
-#include "Trace/tr_wrapper.h"
 #endif
 
 #ifdef USE_SPARC_ASM
@@ -840,6 +836,8 @@ alloc_shared_state( GLcontext *ctx )
       goto cleanup;
 #endif
 
+   ss->BufferObjects = _mesa_NewHashTable();
+
    ss->Default1D = (*ctx->Driver.NewTextureObject)(ctx, 0, GL_TEXTURE_1D);
    if (!ss->Default1D)
       goto cleanup;
@@ -895,6 +893,9 @@ alloc_shared_state( GLcontext *ctx )
    if (ss->DefaultFragmentProgram)
       _mesa_delete_program(ctx, ss->DefaultFragmentProgram);
 #endif
+   if (ss->BufferObjects)
+      _mesa_DeleteHashTable(ss->BufferObjects);
+
    if (ss->Default1D)
       (*ctx->Driver.DeleteTexture)(ctx, ss->Default1D);
    if (ss->Default2D)
@@ -971,6 +972,8 @@ free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
    }
    _mesa_DeleteHashTable(ss->Programs);
 #endif
+
+   _mesa_DeleteHashTable(ss->BufferObjects);
 
    _glthread_DESTROY_MUTEX(ss->Mutex);
 
@@ -1085,6 +1088,7 @@ init_attrib_groups( GLcontext *ctx )
    _mesa_init_accum( ctx );
    _mesa_init_attrib( ctx );
    _mesa_init_buffers( ctx );
+   _mesa_init_buffer_objects( ctx );
    _mesa_init_color( ctx );
    _mesa_init_colortables( ctx );
    _mesa_init_current( ctx );

@@ -100,8 +100,9 @@ static const struct {
    { OFF, "GL_EXT_texture_env_combine",        F(EXT_texture_env_combine) },
    { OFF, "GL_EXT_texture_env_dot3",           F(EXT_texture_env_dot3) },
    { OFF, "GL_EXT_texture_filter_anisotropic", F(EXT_texture_filter_anisotropic) },
-   { ON,  "GL_EXT_texture_object",             0 },
    { OFF, "GL_EXT_texture_lod_bias",           F(EXT_texture_lod_bias) },
+   { OFF, "GL_EXT_texture_mirror_clamp",       F(EXT_texture_mirror_clamp) },
+   { ON,  "GL_EXT_texture_object",             0 },
    { OFF, "GL_EXT_texture_rectangle",          F(NV_texture_rectangle) },
    { ON,  "GL_EXT_vertex_array",               0 },
    { OFF, "GL_EXT_vertex_array_set",           F(EXT_vertex_array_set) },
@@ -155,7 +156,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
 {
    ctx->Extensions.ARB_depth_texture = GL_TRUE;
 #if FEATURE_ARB_fragment_program
-   ctx->Extensions.ARB_fragment_program = GL_TRUE;
+   /*ctx->Extensions.ARB_fragment_program = GL_TRUE;*/
 #endif
    ctx->Extensions.ARB_imaging = GL_TRUE;
    ctx->Extensions.ARB_multitexture = GL_TRUE;
@@ -173,6 +174,9 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
    ctx->Extensions.ARB_texture_non_power_of_two = GL_TRUE;
 #if FEATURE_ARB_vertex_program
    /*ctx->Extensions.ARB_vertex_program = GL_TRUE;*/
+#endif
+#if FEATURE_ARB_vertex_buffer_object
+   ctx->Extensions.ARB_vertex_buffer_object = GL_TRUE;
 #endif
    ctx->Extensions.ATI_texture_env_combine3 = GL_TRUE;
    ctx->Extensions.ATI_texture_mirror_once = GL_TRUE;
@@ -196,6 +200,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
    ctx->Extensions.EXT_texture_env_add = GL_TRUE;
    ctx->Extensions.EXT_texture_env_combine = GL_TRUE;
    ctx->Extensions.EXT_texture_env_dot3 = GL_TRUE;
+   ctx->Extensions.EXT_texture_mirror_clamp = GL_TRUE;
    ctx->Extensions.EXT_texture_lod_bias = GL_TRUE;
    ctx->Extensions.HP_occlusion_test = GL_TRUE;
    ctx->Extensions.IBM_multimode_draw_arrays = GL_TRUE;
@@ -298,13 +303,11 @@ _mesa_enable_1_4_extensions(GLcontext *ctx)
 /**
  * Enable all OpenGL 1.5 features and extensions.
  * A convenience function to be called by drivers.
- * XXX TENTATIVE!!!
  */
 void
 _mesa_enable_1_5_extensions(GLcontext *ctx)
 {
    ctx->Extensions.ARB_occlusion_query = GL_TRUE;
-   ctx->Extensions.ARB_point_sprite = GL_TRUE;
    ctx->Extensions.ARB_vertex_buffer_object = GL_TRUE;
    ctx->Extensions.ARB_texture_non_power_of_two = GL_TRUE;
    ctx->Extensions.EXT_shadow_funcs = GL_TRUE;
@@ -420,7 +423,7 @@ _mesa_make_extension_string( GLcontext *ctx )
          extStrLen += _mesa_strlen(default_extensions[i].name) + 1;
       }
    }
-   s = _mesa_malloc(extStrLen);
+   s = (GLubyte *) _mesa_malloc(extStrLen);
 
    /* second, build the extension string */
    extStrLen = 0;

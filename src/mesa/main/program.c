@@ -36,6 +36,9 @@
 #include "macros.h"
 #include "mtypes.h"
 #include "program.h"
+#include "nvfragparse.h"
+#include "nvfragprog.h"
+#include "nvvertparse.h"
 
 
 /**********************************************************************/
@@ -257,9 +260,10 @@ add_parameter(struct program_parameter_list *paramList,
 {
    const GLuint n = paramList->NumParameters;
 
-   paramList->Parameters = _mesa_realloc(paramList->Parameters,
-                                   n * sizeof(struct program_parameter),
-                                   (n + 1) * sizeof(struct program_parameter));
+   paramList->Parameters = (struct program_parameter *)
+      _mesa_realloc(paramList->Parameters,
+                    n * sizeof(struct program_parameter),
+                    (n + 1) * sizeof(struct program_parameter));
    if (!paramList->Parameters) {
       /* out of memory */
       paramList->NumParameters = 0;
@@ -325,17 +329,25 @@ _mesa_add_unnamed_constant(struct program_parameter_list *paramList,
 /**
  * Add a new state reference to the parameter list.
  * \param paramList - the parameter list
- * \param values - four float values
+ * \param state     - an array of 6 state tokens
+ *
  * \return index of the new parameter.
  */
 GLint
 _mesa_add_state_reference(struct program_parameter_list *paramList,
-                          const char *stateString)
+                          GLint *stateTokens)
 {
    /* XXX Should we parse <stateString> here and produce the parameter's
     * list of STATE_* tokens here, or in the parser?
     */
-   return add_parameter(paramList, stateString, NULL, STATE);
+   GLint a, idx;
+
+   idx = add_parameter(paramList, "Some State", NULL, STATE);
+	
+   for (a=0; a<6; a++)
+      paramList->Parameters[idx].StateIndexes[a] = stateTokens[a];
+
+   return idx;
 }
 
 
@@ -360,7 +372,7 @@ _mesa_lookup_parameter_value(struct program_parameter_list *paramList,
       /* name is not null-terminated, use nameLen */
       for (i = 0; i < paramList->NumParameters; i++) {
          if (_mesa_strncmp(paramList->Parameters[i].Name, name, nameLen) == 0
-             && _mesa_strlen(paramList->Parameters[i].Name) == nameLen)
+             && _mesa_strlen(paramList->Parameters[i].Name) == (size_t)nameLen)
             return paramList->Parameters[i].Values;
       }
    }
@@ -389,7 +401,7 @@ _mesa_lookup_parameter_index(struct program_parameter_list *paramList,
       /* name is not null-terminated, use nameLen */
       for (i = 0; i < (GLint) paramList->NumParameters; i++) {
          if (_mesa_strncmp(paramList->Parameters[i].Name, name, nameLen) == 0
-             && _mesa_strlen(paramList->Parameters[i].Name) == nameLen)
+             && _mesa_strlen(paramList->Parameters[i].Name) == (size_t)nameLen)
             return i;
       }
    }
@@ -480,6 +492,21 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
             return;
          case STATE_SPOT_DIRECTION:
             COPY_4V(value, ctx->Light.Light[ln].EyeDirection);
+            return;
+         case STATE_HALF:
+            {
+               GLfloat eye_z[] = {0, 0, 1};
+					
+               /* Compute infinite half angle vector:
+                *   half-vector = light_position + (0, 0, 1) 
+                * and then normalize.  w = 0
+					 *
+					 * light.EyePosition.w should be 0 for infinite lights.
+                */
+					ADD_3V(value, eye_z, ctx->Light.Light[ln].EyePosition);
+					NORMALIZE_3FV(value);
+					value[3] = 0;
+            }						  
             return;
          default:
             _mesa_problem(ctx, "Invalid light state in fetch_state");
@@ -583,6 +610,13 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
          }
       }
       return;
+   case STATE_TEXENV_COLOR:
+      {		
+         /* state[1] is the texture unit */
+         const GLuint unit = (GLuint) state[1];
+         COPY_4V(value, ctx->Texture.Unit[unit].EnvColor);
+      }			
+      return;
    case STATE_FOG_COLOR:
       COPY_4V(value, ctx->Fog.Color);
       return;
@@ -590,7 +624,7 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
       value[0] = ctx->Fog.Density;
       value[1] = ctx->Fog.Start;
       value[2] = ctx->Fog.End;
-      value[3] = 1.0F / (ctx->Fog.End - ctx->Fog.End);
+      value[3] = 1.0F / (ctx->Fog.End - ctx->Fog.Start);
       return;
    case STATE_CLIPPLANE:
       {
@@ -671,6 +705,47 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
             }
          }
       }
+      return;
+   case STATE_DEPTH_RANGE:
+      value[0] = ctx->Viewport.Near;                     /* near       */		
+      value[1] = ctx->Viewport.Far;                      /* far        */		
+      value[2] = ctx->Viewport.Far - ctx->Viewport.Near; /* far - near */		
+      value[3] = 0;		
+      return;
+   case STATE_FRAGMENT_PROGRAM:
+      {
+         /* state[1] = {STATE_ENV, STATE_LOCAL} */
+         /* state[2] = parameter index          */
+         int idx = state[2];				  
+
+         switch (state[1]) {
+            case STATE_ENV:
+               COPY_4V(value, ctx->FragmentProgram.Parameters[idx]);						  
+               break;
+
+            case STATE_LOCAL:
+               COPY_4V(value, ctx->FragmentProgram.Current->Base.LocalParams[idx]);
+               break;				
+         }				  
+      }			
+      return;
+		
+   case STATE_VERTEX_PROGRAM:
+      {		
+         /* state[1] = {STATE_ENV, STATE_LOCAL} */
+         /* state[2] = parameter index          */
+         int idx = state[2];				  
+			
+         switch (state[1]) {
+            case STATE_ENV:
+               COPY_4V(value, ctx->VertexProgram.Parameters[idx]);						  
+               break;
+
+            case STATE_LOCAL:
+               COPY_4V(value, ctx->VertexProgram.Current->Base.LocalParams[idx]);
+               break;				
+         }				  
+      }			
       return;
    default:
       _mesa_problem(ctx, "Invalid state in fetch_state");
@@ -924,4 +999,226 @@ _mesa_IsProgram(GLuint id)
       return GL_TRUE;
    else
       return GL_FALSE;
+}
+
+
+
+/**********************************************************************/
+/* GL_MESA_program_debug extension                                    */
+/**********************************************************************/
+
+
+/* XXX temporary */
+void
+glProgramCallbackMESA(GLenum target, GLprogramcallbackMESA callback,
+                      GLvoid *data)
+{
+   _mesa_ProgramCallbackMESA(target, callback, data);
+}
+
+
+void
+_mesa_ProgramCallbackMESA(GLenum target, GLprogramcallbackMESA callback,
+                          GLvoid *data)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   switch (target) {
+      case GL_FRAGMENT_PROGRAM_ARB:
+         if (!ctx->Extensions.ARB_fragment_program) {
+            _mesa_error(ctx, GL_INVALID_ENUM, "glProgramCallbackMESA(target)");
+            return;
+         }
+         ctx->FragmentProgram.Callback = callback;
+         ctx->FragmentProgram.CallbackData = data;
+         break;
+      case GL_FRAGMENT_PROGRAM_NV:
+         if (!ctx->Extensions.NV_fragment_program) {
+            _mesa_error(ctx, GL_INVALID_ENUM, "glProgramCallbackMESA(target)");
+            return;
+         }
+         ctx->FragmentProgram.Callback = callback;
+         ctx->FragmentProgram.CallbackData = data;
+         break;
+      case GL_VERTEX_PROGRAM_ARB: /* == GL_VERTEX_PROGRAM_NV */
+         if (!ctx->Extensions.ARB_vertex_program &&
+             !ctx->Extensions.NV_vertex_program) {
+            _mesa_error(ctx, GL_INVALID_ENUM, "glProgramCallbackMESA(target)");
+            return;
+         }
+         ctx->VertexProgram.Callback = callback;
+         ctx->VertexProgram.CallbackData = data;
+         break;
+      default:
+         _mesa_error(ctx, GL_INVALID_ENUM, "glProgramCallbackMESA(target)");
+         return;
+   }
+}
+
+
+/* XXX temporary */
+void
+glGetProgramRegisterfvMESA(GLenum target,
+                           GLsizei len, const GLubyte *registerName,
+                           GLfloat *v)
+{
+   _mesa_GetProgramRegisterfvMESA(target, len, registerName, v);
+}
+
+
+void
+_mesa_GetProgramRegisterfvMESA(GLenum target,
+                               GLsizei len, const GLubyte *registerName,
+                               GLfloat *v)
+{
+   char reg[1000];
+   GET_CURRENT_CONTEXT(ctx);
+
+   /* We _should_ be inside glBegin/glEnd */
+#if 0
+   if (ctx->Driver.CurrentExecPrimitive == PRIM_OUTSIDE_BEGIN_END) {
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glGetProgramRegisterfvMESA");
+      return;
+   }
+#endif
+
+   /* make null-terminated copy of registerName */
+   len = MIN2((unsigned int) len, sizeof(reg) - 1);
+   _mesa_memcpy(reg, registerName, len);
+   reg[len] = 0;
+
+   switch (target) {
+      case GL_VERTEX_PROGRAM_NV:
+         if (!ctx->Extensions.ARB_vertex_program &&
+             !ctx->Extensions.NV_vertex_program) {
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetProgramRegisterfvMESA(target)");
+            return;
+         }
+         if (!ctx->VertexProgram.Enabled) {
+            _mesa_error(ctx, GL_INVALID_OPERATION,
+                        "glGetProgramRegisterfvMESA");
+            return;
+         }
+         /* GL_NV_vertex_program */
+         if (reg[0] == 'R') {
+            /* Temp register */
+            GLint i = _mesa_atoi(reg + 1);
+            if (i >= (GLint)ctx->Const.MaxVertexProgramTemps) {
+               _mesa_error(ctx, GL_INVALID_VALUE,
+                           "glGetProgramRegisterfvMESA(registerName)");
+               return;
+            }
+            COPY_4V(v, ctx->VertexProgram.Temporaries[i]);
+         }
+         else if (reg[0] == 'v' && reg[1] == '[') {
+            /* Vertex Input attribute */
+            GLuint i;
+            for (i = 0; i < ctx->Const.MaxVertexProgramAttribs; i++) {
+               const char *name = _mesa_nv_vertex_input_register_name(i);
+               char number[10];
+               sprintf(number, "%d", i);
+               if (_mesa_strncmp(reg + 2, name, 4) == 0 ||
+                   _mesa_strncmp(reg + 2, number, _mesa_strlen(number)) == 0) {
+                  COPY_4V(v, ctx->VertexProgram.Inputs[i]);
+                  return;
+               }
+            }
+            _mesa_error(ctx, GL_INVALID_VALUE,
+                        "glGetProgramRegisterfvMESA(registerName)");
+            return;
+         }
+         else if (reg[0] == 'o' && reg[1] == '[') {
+            /* Vertex output attribute */
+         }
+         /* GL_ARB_vertex_program */
+         else if (_mesa_strncmp(reg, "vertex.", 7) == 0) {
+
+         }
+         else {
+            _mesa_error(ctx, GL_INVALID_VALUE,
+                        "glGetProgramRegisterfvMESA(registerName)");
+            return;
+         }
+         break;
+      case GL_FRAGMENT_PROGRAM_ARB:
+         if (!ctx->Extensions.ARB_fragment_program) {
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetProgramRegisterfvMESA(target)");
+            return;
+         }
+         if (!ctx->FragmentProgram.Enabled) {
+            _mesa_error(ctx, GL_INVALID_OPERATION,
+                        "glGetProgramRegisterfvMESA");
+            return;
+         }
+         /* XXX to do */
+         break;
+      case GL_FRAGMENT_PROGRAM_NV:
+         if (!ctx->Extensions.NV_fragment_program) {
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glGetProgramRegisterfvMESA(target)");
+            return;
+         }
+         if (!ctx->FragmentProgram.Enabled) {
+            _mesa_error(ctx, GL_INVALID_OPERATION,
+                        "glGetProgramRegisterfvMESA");
+            return;
+         }
+         if (reg[0] == 'R') {
+            /* Temp register */
+            GLint i = _mesa_atoi(reg + 1);
+            if (i >= (GLint)ctx->Const.MaxFragmentProgramTemps) {
+               _mesa_error(ctx, GL_INVALID_VALUE,
+                           "glGetProgramRegisterfvMESA(registerName)");
+               return;
+            }
+            COPY_4V(v, ctx->FragmentProgram.Machine.Temporaries[i]);
+         }
+         else if (reg[0] == 'f' && reg[1] == '[') {
+            /* Fragment input attribute */
+            GLuint i;
+            for (i = 0; i < ctx->Const.MaxFragmentProgramAttribs; i++) {
+               const char *name = _mesa_nv_fragment_input_register_name(i);
+               if (_mesa_strncmp(reg + 2, name, 4) == 0) {
+                  COPY_4V(v, ctx->FragmentProgram.Machine.Inputs[i]);
+                  return;
+               }
+            }
+            _mesa_error(ctx, GL_INVALID_VALUE,
+                        "glGetProgramRegisterfvMESA(registerName)");
+            return;
+         }
+         else if (_mesa_strcmp(reg, "o[COLR]") == 0) {
+            /* Fragment output color */
+            COPY_4V(v, ctx->FragmentProgram.Machine.Outputs[FRAG_OUTPUT_COLR]);
+         }
+         else if (_mesa_strcmp(reg, "o[COLH]") == 0) {
+            /* Fragment output color */
+            COPY_4V(v, ctx->FragmentProgram.Machine.Outputs[FRAG_OUTPUT_COLH]);
+         }
+         else if (_mesa_strcmp(reg, "o[DEPR]") == 0) {
+            /* Fragment output depth */
+            COPY_4V(v, ctx->FragmentProgram.Machine.Outputs[FRAG_OUTPUT_DEPR]);
+         }
+         else {
+            /* try user-defined identifiers */
+            const GLfloat *value = _mesa_lookup_parameter_value(
+                       ctx->FragmentProgram.Current->Parameters, -1, reg);
+            if (value) {
+               COPY_4V(v, value);
+            }
+            else {
+               _mesa_error(ctx, GL_INVALID_VALUE,
+                           "glGetProgramRegisterfvMESA(registerName)");
+               return;
+            }
+         }
+         break;
+      default:
+         _mesa_error(ctx, GL_INVALID_ENUM,
+                     "glGetProgramRegisterfvMESA(target)");
+         return;
+   }
+
 }

@@ -39,12 +39,7 @@
 #include "config.h"		/* Hardwired parameters */
 #include "glapitable.h"
 #include "glthread.h"
-
 #include "math/m_matrix.h"	/* GLmatrix */
-
-#if defined(MESA_TRACE)
-#include "Trace/tr_context.h"
-#endif
 
 
 /**
@@ -1252,6 +1247,21 @@ struct gl_attrib_node {
 
 
 /**
+ * GL_ARB_vertex_buffer_object buffer object
+ */
+struct gl_buffer_object {
+   GLint RefCount;
+   GLuint Name;
+   GLenum Usage;
+   GLenum Access;
+   GLvoid *Pointer;   /**< Only valid while buffer is mapped */
+   GLuint Size;       /**< Size of data array in bytes */
+   GLubyte *Data;     /**< The storage */
+};
+
+
+
+/**
  * Client pixel packing/unpacking attributes
  */
 struct gl_pixelstore_attrib {
@@ -1279,10 +1289,13 @@ struct gl_client_array {
    GLenum Type;
    GLsizei Stride;		/**< user-specified stride */
    GLsizei StrideB;		/**< actual stride in bytes */
-   void *Ptr;
+   GLubyte *Ptr;
    GLuint Flags;
    GLuint Enabled;		/**< one of the _NEW_ARRAY_ bits */
    GLboolean Normalized;        /**< GL_ARB_vertex_program */
+
+   /**< GL_ARB_vertex_buffer_object */
+   struct gl_buffer_object *BufferObj;
 };
 
 
@@ -1303,25 +1316,17 @@ struct gl_array_attrib {
 
    GLint TexCoordInterleaveFactor;
    GLint ActiveTexture;		/**< Client Active Texture */
-   GLuint LockFirst;
-   GLuint LockCount;
+   GLuint LockFirst;            /**< GL_EXT_compiled_vertex_array */
+   GLuint LockCount;            /**< GL_EXT_compiled_vertex_array */
 
    GLuint _Enabled;		/**< _NEW_ARRAY_* - bit set if array enabled */
    GLuint NewState;		/**< _NEW_ARRAY_* */
 
-   /* GL_ARB_vertex_buffer_object */
-   GLuint ArrayBufferBinding;
-   GLuint VertexArrayBufferBinding;
-   GLuint NormalArrayBufferBinding;
-   GLuint ColorArrayBufferBinding;
-   GLuint IndexArrayBufferBinding;
-   GLuint TextureArrayBufferBinding;
-   GLuint EdgeFlagArrayBufferBinding;
-   GLuint SecondaryColorArrayBufferBinding;
-   GLuint FogCoordArrayBufferBinding;
-   GLuint WeightArrayBufferBinding;
-   GLuint ElementArrayBufferBinding;
-   GLuint VertexAttribArrayBufferBinding[VERT_ATTRIB_MAX];
+#if FEATURE_ARB_vertex_buffer_object
+   struct gl_buffer_object *NullBufferObj;
+   struct gl_buffer_object *ArrayBufferObj;
+   struct gl_buffer_object *ElementArrayBufferObj;
+#endif
 };
 
 
@@ -1598,6 +1603,10 @@ struct gl_shared_state
 #endif
    /*@}*/
 
+#if FEATURE_ARB_vertex_buffer_object
+   struct _mesa_HashTable *BufferObjects;
+#endif
+
    void *DriverData;  /**< Device driver shared state */
 };
 
@@ -1770,6 +1779,7 @@ struct gl_extensions
    GLboolean EXT_texture_env_dot3;
    GLboolean EXT_texture_filter_anisotropic;
    GLboolean EXT_texture_lod_bias;
+   GLboolean EXT_texture_mirror_clamp;
    GLboolean EXT_vertex_array_set;
    GLboolean HP_occlusion_test;
    GLboolean IBM_rasterpos_clip;
@@ -2199,22 +2209,11 @@ struct __GLcontextRec {
 
    /** \name For debugging/development only */
    /*@{*/
-   GLboolean NoRaster;
    GLboolean FirstTimeCurrent;
    /*@}*/
 
    /** Dither disable via MESA_NO_DITHER env var */
    GLboolean NoDither;
-
-   GLboolean Rendering;
-
-#if defined(MESA_TRACE)
-   struct _glapi_table *TraceDispatch;
-   trace_context_t     *TraceCtx;
-#else
-   void *TraceDispatch;
-   void *TraceCtx;
-#endif
 
    /** Core tnl module support */
    struct gl_tnl_module TnlModule;
@@ -2273,101 +2272,6 @@ enum _debug {
 
 
 #define Elements(x) sizeof(x)/sizeof(*(x))
-
-
-/**
- * Flush vertices.
- *
- * \param ctx GL context.
- * \param newstate new state.
- *
- * Checks if dd_function_table::NeedFlush is marked to flush stored vertices,
- * and calls dd_function_table::FlushVertices if so. Marks
- * __GLcontextRec::NewState with \p newstate.
- * 
- * \todo Eventually let the driver specify what state changes require a flush:
- */
-#define FLUSH_VERTICES(ctx, newstate)				\
-do {								\
-   if (MESA_VERBOSE & VERBOSE_STATE)				\
-      _mesa_debug(ctx, "FLUSH_VERTICES in %s\n", __FUNCTION__);	\
-   if (ctx->Driver.NeedFlush & FLUSH_STORED_VERTICES)		\
-      ctx->Driver.FlushVertices(ctx, FLUSH_STORED_VERTICES);	\
-   ctx->NewState |= newstate;					\
-} while (0)
-
-/**
- * Flush current state.
- *
- * \param ctx GL context.
- * \param newstate new state.
- *
- * Checks if dd_function_table::NeedFlush is marked to flush current state,
- * and calls dd_function_table::FlushVertices if so. Marks
- * __GLcontextRec::NewState with \p newstate.
- */
-#define FLUSH_CURRENT(ctx, newstate)				\
-do {								\
-   if (MESA_VERBOSE & VERBOSE_STATE)				\
-      _mesa_debug(ctx, "FLUSH_CURRENT in %s\n", __FUNCTION__);	\
-   if (ctx->Driver.NeedFlush & FLUSH_UPDATE_CURRENT)		\
-      ctx->Driver.FlushVertices(ctx, FLUSH_UPDATE_CURRENT);	\
-   ctx->NewState |= newstate;					\
-} while (0)
-
-/**
- * Macro to assert that the API call was made outside the
- * glBegin()/glEnd() pair, with return value.
- * 
- * \param ctx GL context.
- * \param retval value to return value in case the assertion fails.
- */
-#define ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, retval)		\
-do {									\
-   if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END) {	\
-      _mesa_error( ctx, GL_INVALID_OPERATION, "begin/end" );		\
-      return retval;							\
-   }									\
-} while (0)
-
-/**
- * Macro to assert that the API call was made outside the
- * glBegin()/glEnd() pair.
- * 
- * \param ctx GL context.
- */
-#define ASSERT_OUTSIDE_BEGIN_END(ctx)					\
-do {									\
-   if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END) {	\
-      _mesa_error( ctx, GL_INVALID_OPERATION, "begin/end" );		\
-      return;								\
-   }									\
-} while (0)
-
-/**
- * Macro to assert that the API call was made outside the
- * glBegin()/glEnd() pair and flush the vertices.
- * 
- * \param ctx GL context.
- */
-#define ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx)				\
-do {									\
-   ASSERT_OUTSIDE_BEGIN_END(ctx);					\
-   FLUSH_VERTICES(ctx, 0);						\
-} while (0)
-
-/**
- * Macro to assert that the API call was made outside the
- * glBegin()/glEnd() pair and flush the vertices, with return value.
- * 
- * \param ctx GL context.
- * \param retval value to return value in case the assertion fails.
- */
-#define ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, retval)	\
-do {									\
-   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, retval);			\
-   FLUSH_VERTICES(ctx, 0);						\
-} while (0)
 
 
 #endif /* TYPES_H */

@@ -24,15 +24,6 @@ See the VERSIONS file for a list of bugs fixed in this release.
 New Features in Mesa 5.1
 ------------------------
 
-New directory tree
-   The whole Mesa directory tree has been cleaned up and reorganized.
-   Some old stuff has been abandoned.  Lots of non-Unix makefiles will
-   have to be updated.
-
-   For now, autoconf/automake support has been removed.  New autoconf/automake
-   files will added if they meet certain criteria.
-
-
 GL_ATI_texture_env_combine3 extension
    This adds a few new texture combine modes.
    Contributed by Ian Romanick.
@@ -66,6 +57,13 @@ GL_ARB_occlusion_query
 GL_ARB_texture_non_power_of_two
    Removes the restriction that texture dimensions must be powers of two.
 
+GL_ARB_vertex_buffer_object
+   Allows server-side vertex arrays, optimized host/card data transfers, etc.
+
+GL_ARB_point_sprite
+   ARB-approved version of GL_NV_point_sprite.  Basically allows textures
+   to be applied to points.
+
 GL_IBM_multimode_draw_arrays
    Allows multiple vertex arrays to be drawn with one call, including arrays
    of different types of primitives.
@@ -74,23 +72,32 @@ GL_SUN_multi_draw_arrays
    An alias for GL_EXT_multi_draw_arrays, standard in OpenGL 1.4.
 
 
+With the addition of GL_ARB_occlusion_query, GL_ARB_vertex_buffer_object,
+GL_ARB_texture_non_power_of_two and GL_EXT_shadow_funcs, Mesa 5.1 supports
+all the new features of OpenGL 1.5.  Mesa 6.0 (the next stable release)
+will advertise GL_VERSION = "1.5".
+ 
 
-Build System Changes
---------------------
 
-The "old style" makefile system has been updated:
-   1. Make-config has been trimmed down to fewer, modern configurations.
-   2. Most of the bin/mklib.* scripts have been rolled into a new "mklib"
-      script that works on all sorts of systems.  There are probably some
-      bugs in it, but it's been tested on Linux, SunOS 5.8 and IRIX 6.5.
-      Improvements/contributes are greatly appreciated.
-   3. The Makefile.X11 files have been cleaned up in various ways
+Vertex/Fragment program debugger
+--------------------------------
 
-The GNU automake/autoconf support has been removed.  As it was, it seldom
-worked on anything but Linux.  The Mesa developers aren't big fans of
-automake/autoconf and didn't have the time to maintain it.  If someone
-wants to contribute new automake/autoconf support (and is willing to
-maintain it), it may be re-incorporated into Mesa.
+GL_MESA_program_debug is an experimental extension to support
+interactive debugging of vertex and fragment programs.  See the
+docs/MESA_program_debug.spec file for details.
+
+The bulk of the vertex/fragment program debugger is implemented
+outside of Mesa.  The GL_MESA_program_debug extension just has minimal
+hooks for stopping running programs and inspecting programs.
+
+The progs/tests/debugger.c (only in CVS) program is an example of how
+the extension can be used.  Presently, the debugger code and demo code
+is in the same file.  Eventually the debugger code should be moved
+into a reusable module.
+
+As it is now, the demo lets you set breakpoings in vertex/fragment
+programs, single step, and print intermediate register values.  It's
+basically just a proof of concept.
 
 
 
@@ -103,7 +110,27 @@ in appropriate subdirectories.
 
 The Mesa source code and drivers has been reorganized under src/mesa/.
 
-All demonstration programs and test are now in subdirectories under progs/.
+All demonstration programs and tests are now in subdirectories under progs/.
+
+
+
+Build System Changes
+--------------------
+
+The GNU automake/autoconf support has been removed.  As it was, it seldom
+worked on anything but Linux.  The Mesa developers aren't big fans of
+automake/autoconf/libtool and didn't have the time to maintain it.
+If someone wants to contribute new automake/autoconf support (and is
+willing to maintain it), it may be re-incorporated into Mesa, subject
+to some requirements.
+
+The "old style" makefile system has been updated:
+   1. Make-config has been trimmed down to fewer, modern configurations.
+   2. Most of the bin/mklib.* scripts have been rolled into a new "mklib"
+      script that works on all sorts of systems.  There are probably some
+      bugs in it, but it's been tested on Linux, SunOS 5.8 and IRIX 6.5.
+      Improvements/contributes are greatly appreciated.
+   3. The Makefile.X11 files have been cleaned up in various ways
 
 
 
@@ -119,20 +146,21 @@ Old files:
 	vpparse.[ch]
 	vpstate.[ch]
 New files:
+	program.[ch]              - generic ARB/NV program code
+	arbprogram.[ch]           - ARB program API functions
+	nvprogram.[ch]            - NV program API functions
 	nvvertprog.h              - NV vertex program definitions
 	nvfragprog.h              - NV fragment program definitions
 	nvvertparse.[ch]          - NV vertex program parser
 	nvfragparse.[ch]          - NV fragment program parser
-	nvprogram.[ch]            - NV program API functions
 	nvvertexec.[ch]           - NV vertex program execution
 	swrast/s_nvfragprog.[ch]  - NV fragment program execution
 
 Removed files:
-	swrast/s_historgram.[ch]	- moved into src/histogram.c
+	swrast/s_histogram.[ch] - moved into src/histogram.c
 
 Other New files:
 	bufferobj.[ch]		- GL_ARB_vertex_buffer_object functions
-	arbprogram.[ch]		- GL_ARB_vertex/fragment_program functions
 	version.h		- defines the Mesa version info
 
 
@@ -154,6 +182,13 @@ New ctx->Texture._EnabledCoordUnits field:
    This new field indicates which sets of texture coordinates are needed.
    If a bit is set in the ctx->Texture._EnabledUnits bitmask is set, the
    same bit MUST be set in ctx->Texture._EnabledCoordUnits.
+
+The ctx->_TriangleCaps field is deprecated.
+   Instead of testing the DD_* bits in _TriangleCaps, you should instead
+   directly test the relevant state variables, or use one of the helper
+   functions like NEED_SECONDARY_COLOR() at the bottom of context.h
+   While testing _TriangleCaps bits was fast, it was kludgey, and setting
+   the bits in the first place could be error prone.
 
 
 

@@ -298,7 +298,7 @@ static void _tnl_vb_bind_immediate( GLcontext *ctx, struct immediate *IM )
    }
 
    if (inputs & VERT_BIT_COLOR1) {
-      tmp->SecondaryColor.Ptr = IM->Attrib[VERT_ATTRIB_COLOR1] + start;
+      tmp->SecondaryColor.Ptr = (GLubyte *) (IM->Attrib[VERT_ATTRIB_COLOR1] + start);
       VB->SecondaryColorPtr[0] = &tmp->SecondaryColor;
    }
 
@@ -308,12 +308,12 @@ static void _tnl_vb_bind_immediate( GLcontext *ctx, struct immediate *IM )
 
    if (inputs & VERT_BIT_COLOR0) {
       if (IM->CopyOrFlag & VERT_BIT_COLOR0) {
-	 tmp->Color.Ptr = IM->Attrib[VERT_ATTRIB_COLOR0] + start;
+	 tmp->Color.Ptr = (GLubyte *) (IM->Attrib[VERT_ATTRIB_COLOR0] + start);
 	 tmp->Color.StrideB = 4 * sizeof(GLfloat);
 	 tmp->Color.Flags = 0;
       }
       else {
-	 tmp->Color.Ptr = ctx->Current.Attrib[VERT_ATTRIB_COLOR0];
+	 tmp->Color.Ptr = (GLubyte *) ctx->Current.Attrib[VERT_ATTRIB_COLOR0];
 	 tmp->Color.StrideB = 0;
 	 tmp->Color.Flags = CA_CLIENT_DATA; /* hack */
 	 VB->import_source = IM;
@@ -538,6 +538,7 @@ void _tnl_imm_init( GLcontext *ctx )
    tmp->Color.Stride = 0;
    tmp->Color.StrideB = 4 * sizeof(GLfloat);
    tmp->Color.Flags = 0;
+   tmp->Color.BufferObj = ctx->Array.NullBufferObj;
 
    tmp->SecondaryColor.Ptr = NULL;
    tmp->SecondaryColor.Type = GL_FLOAT;
@@ -545,6 +546,7 @@ void _tnl_imm_init( GLcontext *ctx )
    tmp->SecondaryColor.Stride = 0;
    tmp->SecondaryColor.StrideB = 4 * sizeof(GLfloat);
    tmp->SecondaryColor.Flags = 0;
+   tmp->SecondaryColor.BufferObj = ctx->Array.NullBufferObj;
 
    _mesa_vector4f_init( &tmp->FogCoord, 0, 0 );
    _mesa_vector1ui_init( &tmp->Index, 0, 0 );
