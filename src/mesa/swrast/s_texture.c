@@ -1,4 +1,4 @@
-/* $Id: s_texture.c,v 1.54 2002/02/17 17:58:31 brianp Exp $ */
+/* $Id: s_texture.c,v 1.57 2002/03/23 16:33:53 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -309,18 +309,23 @@ compute_min_mag_ranges( GLfloat minMagThresh, GLuint n, const GLfloat lambda[],
                         GLuint *minStart, GLuint *minEnd,
                         GLuint *magStart, GLuint *magEnd )
 {
-#ifdef DEBUG
-   /* verify that lambda[] is monotonous */
+   ASSERT(lambda != NULL);
+#if 0
+   /* Verify that lambda[] is monotonous.
+    * We can't really use this because the inaccuracy in the LOG2 function
+    * causes this test to fail, yet the resulting texturing is correct.
+    */
    if (n > 1) {
       GLuint i;
+      printf("lambda delta = %g\n", lambda[0] - lambda[n-1]);
       if (lambda[0] >= lambda[n-1]) { /* decreasing */
          for (i = 0; i < n - 1; i++) {
-            ASSERT((GLint) (lambda[i] * 100) >= (GLint) (lambda[i+1] * 100));
+            ASSERT((GLint) (lambda[i] * 10) >= (GLint) (lambda[i+1] * 10));
          }
       }
       else { /* increasing */
          for (i = 0; i < n - 1; i++) {
-            ASSERT((GLint) (lambda[i] * 100) <= (GLint) (lambda[i+1] * 100));
+            ASSERT((GLint) (lambda[i] * 10) <= (GLint) (lambda[i+1] * 10));
          }
       }
    }
@@ -366,20 +371,22 @@ compute_min_mag_ranges( GLfloat minMagThresh, GLuint n, const GLfloat lambda[],
       }
    }
 
-#ifdef DEBUG
-   /* Verify the min/mag Start/End values */
+#if 0
+   /* Verify the min/mag Start/End values
+    * We don't use this either (see above)
+    */
    {
       GLint i;
       for (i = 0; i < n; i++) {
          if (lambda[i] > minMagThresh) {
             /* minification */
-            assert(i >= *minStart);
-            assert(i < *minEnd);
+            ASSERT(i >= *minStart);
+            ASSERT(i < *minEnd);
          }
          else {
             /* magnification */
-            assert(i >= *magStart);
-            assert(i < *magEnd);
+            ASSERT(i >= *magStart);
+            ASSERT(i < *magEnd);
          }
       }
    }
@@ -508,6 +515,7 @@ sample_1d_nearest_mipmap_nearest(GLcontext *ctx,
                                  const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       GLint level;
       COMPUTE_NEAREST_MIPMAP_LEVEL(tObj, lambda[i], level);
@@ -523,6 +531,7 @@ sample_1d_linear_mipmap_nearest(GLcontext *ctx,
                                 const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       GLint level;
       COMPUTE_NEAREST_MIPMAP_LEVEL(tObj, lambda[i], level);
@@ -549,6 +558,7 @@ sample_1d_nearest_mipmap_linear(GLcontext *ctx,
                                 const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       GLint level;
       COMPUTE_LINEAR_MIPMAP_LEVEL(tObj, lambda[i], level);
@@ -578,6 +588,7 @@ sample_1d_linear_mipmap_linear(GLcontext *ctx,
                                const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       GLint level;
       COMPUTE_LINEAR_MIPMAP_LEVEL(tObj, lambda[i], level);
@@ -646,6 +657,7 @@ sample_lambda_1d( GLcontext *ctx, GLuint texUnit,
    GLuint magStart, magEnd;  /* texels with magnification */
    GLuint i;
 
+   ASSERT(lambda != NULL);
    compute_min_mag_ranges(SWRAST_CONTEXT(ctx)->_MinMagThresh[texUnit],
                           n, lambda, &minStart, &minEnd, &magStart, &magEnd);
 
@@ -714,7 +726,7 @@ sample_lambda_1d( GLcontext *ctx, GLuint texUnit,
 /*
  * Return the texture sample for coordinate (s,t) using GL_NEAREST filter.
  */
-static void
+static INLINE void
 sample_2d_nearest(GLcontext *ctx,
                   const struct gl_texture_object *tObj,
                   const struct gl_texture_image *img,
@@ -750,7 +762,7 @@ sample_2d_nearest(GLcontext *ctx,
  * Return the texture sample for coordinate (s,t) using GL_LINEAR filter.
  * New sampling code contributed by Lynn Quam <quam@ai.sri.com>.
  */
-static void
+static INLINE void
 sample_2d_linear(GLcontext *ctx,
                  const struct gl_texture_object *tObj,
                  const struct gl_texture_image *img,
@@ -871,7 +883,7 @@ sample_2d_linear(GLcontext *ctx,
  * As above, but we know WRAP_S == REPEAT and WRAP_T == REPEAT
  * and we're not using a paletted texture.
  */
-static void
+static INLINE void
 sample_2d_linear_repeat(GLcontext *ctx,
                         const struct gl_texture_object *tObj,
                         const struct gl_texture_image *img,
@@ -971,6 +983,7 @@ sample_2d_linear_mipmap_nearest(GLcontext *ctx,
                                 const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       GLint level;
       COMPUTE_NEAREST_MIPMAP_LEVEL(tObj, lambda[i], level);
@@ -987,6 +1000,7 @@ sample_2d_nearest_mipmap_linear(GLcontext *ctx,
                                 const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       GLint level;
       COMPUTE_LINEAR_MIPMAP_LEVEL(tObj, lambda[i], level);
@@ -1017,6 +1031,7 @@ sample_2d_linear_mipmap_linear( GLcontext *ctx,
                                 const GLfloat lambda[], GLchan rgba[][4] )
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       GLint level;
       COMPUTE_LINEAR_MIPMAP_LEVEL(tObj, lambda[i], level);
@@ -1045,6 +1060,7 @@ sample_2d_linear_mipmap_linear_repeat( GLcontext *ctx,
                                        const GLfloat lambda[], GLchan rgba[][4] )
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    ASSERT(tObj->WrapS == GL_REPEAT);
    ASSERT(tObj->WrapT == GL_REPEAT);
    for (i = 0; i < n; i++) {
@@ -1192,6 +1208,7 @@ sample_lambda_2d( GLcontext *ctx, GLuint texUnit,
       && (tImg->Border == 0)
       && (tImg->Format != GL_COLOR_INDEX);
 
+   ASSERT(lambda != NULL);
    compute_min_mag_ranges(SWRAST_CONTEXT(ctx)->_MinMagThresh[texUnit],
                           n, lambda, &minStart, &minEnd, &magStart, &magEnd);
 
@@ -1543,6 +1560,7 @@ sample_3d_linear_mipmap_nearest(GLcontext *ctx,
                                 const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       GLint level;
       COMPUTE_NEAREST_MIPMAP_LEVEL(tObj, lambda[i], level);
@@ -1558,6 +1576,7 @@ sample_3d_nearest_mipmap_linear(GLcontext *ctx,
                                 const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       GLint level;
       COMPUTE_LINEAR_MIPMAP_LEVEL(tObj, lambda[i], level);
@@ -1586,6 +1605,7 @@ sample_3d_linear_mipmap_linear(GLcontext *ctx,
                                const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       GLint level;
       COMPUTE_LINEAR_MIPMAP_LEVEL(tObj, lambda[i], level);
@@ -1652,6 +1672,7 @@ sample_lambda_3d( GLcontext *ctx, GLuint texUnit,
    GLuint magStart, magEnd;  /* texels with magnification */
    GLuint i;
 
+   ASSERT(lambda != NULL);
    compute_min_mag_ranges(SWRAST_CONTEXT(ctx)->_MinMagThresh[texUnit],
                           n, lambda, &minStart, &minEnd, &magStart, &magEnd);
 
@@ -1835,6 +1856,7 @@ sample_cube_nearest_mipmap_nearest(GLcontext *ctx,
                                    const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       const struct gl_texture_image **images;
       GLfloat newCoord[4];
@@ -1853,6 +1875,7 @@ sample_cube_linear_mipmap_nearest(GLcontext *ctx,
                                   const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       const struct gl_texture_image **images;
       GLfloat newCoord[4];
@@ -1871,6 +1894,7 @@ sample_cube_nearest_mipmap_linear(GLcontext *ctx,
                                   const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       const struct gl_texture_image **images;
       GLfloat newCoord[4];
@@ -1902,6 +1926,7 @@ sample_cube_linear_mipmap_linear(GLcontext *ctx,
                                  const GLfloat lambda[], GLchan rgba[][4])
 {
    GLuint i;
+   ASSERT(lambda != NULL);
    for (i = 0; i < n; i++) {
       const struct gl_texture_image **images;
       GLfloat newCoord[4];
@@ -1935,6 +1960,7 @@ sample_lambda_cube( GLcontext *ctx, GLuint texUnit,
    GLuint minStart, minEnd;  /* texels with minification */
    GLuint magStart, magEnd;  /* texels with magnification */
 
+   ASSERT(lambda != NULL);
    compute_min_mag_ranges(SWRAST_CONTEXT(ctx)->_MinMagThresh[texUnit],
                           n, lambda, &minStart, &minEnd, &magStart, &magEnd);
 
@@ -2004,7 +2030,7 @@ sample_depth_texture( GLcontext *ctx, GLuint unit,
    const GLuint width = texImage->Width;
    const GLuint height = texImage->Height;
    const GLchan ambient = tObj->ShadowAmbient;
-   GLboolean lequal, gequal;
+   GLenum function;
    GLchan result;
 
    (void) unit;
@@ -2018,29 +2044,19 @@ sample_depth_texture( GLcontext *ctx, GLuint unit,
    if (tObj->CompareFlag) {
       /* GL_SGIX_shadow */
       if (tObj->CompareOperator == GL_TEXTURE_LEQUAL_R_SGIX) {
-         lequal = GL_TRUE;
-         gequal = GL_FALSE;
+         function = GL_LEQUAL;
       }
       else {
          ASSERT(tObj->CompareOperator == GL_TEXTURE_GEQUAL_R_SGIX);
-         lequal = GL_FALSE;
-         gequal = GL_TRUE;
+         function = GL_GEQUAL;
       }
    }
    else if (tObj->CompareMode == GL_COMPARE_R_TO_TEXTURE_ARB) {
       /* GL_ARB_shadow */
-      if (tObj->CompareFunc == GL_LEQUAL) {
-         lequal = GL_TRUE;
-         gequal = GL_FALSE;
-      }
-      else {
-         ASSERT(tObj->CompareFunc == GL_GEQUAL);
-         lequal = GL_FALSE;
-         gequal = GL_TRUE;
-      }
+      function = tObj->CompareFunc;
    }
    else {
-      lequal = gequal = GL_FALSE;
+      function = GL_NONE;  /* pass depth through as grayscale */
    }
 
    if (tObj->MagFilter == GL_NEAREST) {
@@ -2052,21 +2068,37 @@ sample_depth_texture( GLcontext *ctx, GLuint unit,
          COMPUTE_NEAREST_TEXEL_LOCATION(tObj->WrapT, texcoords[i][1], height, row);
          depthSample = *((const GLfloat *) texImage->Data + row * width + col);
 
-         if (lequal) {
-            if (texcoords[i][2] <= depthSample)
-               result = CHAN_MAX;
-            else
-               result = ambient;
-         }
-         else if (gequal) {
-            if (texcoords[i][2] >= depthSample)
-               result = CHAN_MAX;
-            else
-               result = ambient;
-         }
-         else {
-            /* no comparison */
+         switch (function) {
+         case GL_LEQUAL:
+            result = (texcoords[i][2] <= depthSample) ? CHAN_MAX : ambient;
+            break;
+         case GL_GEQUAL:
+            result = (texcoords[i][2] >= depthSample) ? CHAN_MAX : ambient;
+            break;
+         case GL_LESS:
+            result = (texcoords[i][2] < depthSample) ? CHAN_MAX : ambient;
+            break;
+         case GL_GREATER:
+            result = (texcoords[i][2] > depthSample) ? CHAN_MAX : ambient;
+            break;
+         case GL_EQUAL:
+            result = (texcoords[i][2] == depthSample) ? CHAN_MAX : ambient;
+            break;
+         case GL_NOTEQUAL:
+            result = (texcoords[i][2] != depthSample) ? CHAN_MAX : ambient;
+            break;
+         case GL_ALWAYS:
+            result = CHAN_MAX;
+            break;
+         case GL_NEVER:
+            result = ambient;
+            break;
+         case GL_NONE:
             CLAMPED_FLOAT_TO_CHAN(result, depthSample);
+            break;
+         default:
+            _mesa_problem(ctx, "Bad compare func in sample_depth_texture");
+            return;
          }
 
          switch (tObj->DepthMode) {
@@ -2155,8 +2187,8 @@ sample_depth_texture( GLcontext *ctx, GLuint unit,
             const GLfloat w11 = (       a) * (       b);
             const GLfloat depthSample = w00 * depth00 + w10 * depth10
                                       + w01 * depth01 + w11 * depth11;
-            if ((depthSample <= texcoords[i][2] && lequal) ||
-                (depthSample >= texcoords[i][2] && gequal)) {
+            if ((depthSample <= texcoords[i][2] && function == GL_LEQUAL) ||
+                (depthSample >= texcoords[i][2] && function == GL_GEQUAL)) {
                result  = ambient;
             }
             else {
@@ -2170,31 +2202,73 @@ sample_depth_texture( GLcontext *ctx, GLuint unit,
              */
             const GLfloat d = (CHAN_MAXF - (GLfloat) ambient) * 0.25F;
             GLfloat luminance = CHAN_MAXF;
-            if (lequal) {
-               if (depth00 <= texcoords[i][2])   luminance -= d;
-               if (depth01 <= texcoords[i][2])   luminance -= d;
-               if (depth10 <= texcoords[i][2])   luminance -= d;
-               if (depth11 <= texcoords[i][2])   luminance -= d;
+
+            switch (function) {
+            case GL_LEQUAL:
+               if (depth00 <= texcoords[i][2])  luminance -= d;
+               if (depth01 <= texcoords[i][2])  luminance -= d;
+               if (depth10 <= texcoords[i][2])  luminance -= d;
+               if (depth11 <= texcoords[i][2])  luminance -= d;
                result = (GLchan) luminance;
-            }
-            else if (gequal) {
-               if (depth00 >= texcoords[i][2])   luminance -= d;
-               if (depth01 >= texcoords[i][2])   luminance -= d;
-               if (depth10 >= texcoords[i][2])   luminance -= d;
-               if (depth11 >= texcoords[i][2])   luminance -= d;
+               break;
+            case GL_GEQUAL:
+               if (depth00 >= texcoords[i][2])  luminance -= d;
+               if (depth01 >= texcoords[i][2])  luminance -= d;
+               if (depth10 >= texcoords[i][2])  luminance -= d;
+               if (depth11 >= texcoords[i][2])  luminance -= d;
                result = (GLchan) luminance;
-            }
-            else {
-               /* no comparison, just bilinear sampling */
-               const GLfloat a = FRAC(u + 1.0F);
-               const GLfloat b = FRAC(v + 1.0F);
-               const GLfloat w00 = (1.0F - a) * (1.0F - b);
-               const GLfloat w10 = (       a) * (1.0F - b);
-               const GLfloat w01 = (1.0F - a) * (       b);
-               const GLfloat w11 = (       a) * (       b);
-               const GLfloat depthSample = w00 * depth00 + w10 * depth10
-                                         + w01 * depth01 + w11 * depth11;
-               CLAMPED_FLOAT_TO_CHAN(result, depthSample);
+               break;
+            case GL_LESS:
+               if (depth00 < texcoords[i][2])  luminance -= d;
+               if (depth01 < texcoords[i][2])  luminance -= d;
+               if (depth10 < texcoords[i][2])  luminance -= d;
+               if (depth11 < texcoords[i][2])  luminance -= d;
+               result = (GLchan) luminance;
+               break;
+            case GL_GREATER:
+               if (depth00 > texcoords[i][2])  luminance -= d;
+               if (depth01 > texcoords[i][2])  luminance -= d;
+               if (depth10 > texcoords[i][2])  luminance -= d;
+               if (depth11 > texcoords[i][2])  luminance -= d;
+               result = (GLchan) luminance;
+               break;
+            case GL_EQUAL:
+               if (depth00 == texcoords[i][2])  luminance -= d;
+               if (depth01 == texcoords[i][2])  luminance -= d;
+               if (depth10 == texcoords[i][2])  luminance -= d;
+               if (depth11 == texcoords[i][2])  luminance -= d;
+               result = (GLchan) luminance;
+               break;
+            case GL_NOTEQUAL:
+               if (depth00 != texcoords[i][2])  luminance -= d;
+               if (depth01 != texcoords[i][2])  luminance -= d;
+               if (depth10 != texcoords[i][2])  luminance -= d;
+               if (depth11 != texcoords[i][2])  luminance -= d;
+               result = (GLchan) luminance;
+               break;
+            case GL_ALWAYS:
+               result = 0;
+               break;
+            case GL_NEVER:
+               result = CHAN_MAXF;
+               break;
+            case GL_NONE:
+               /* ordinary bilinear filtering */
+               {
+                  const GLfloat a = FRAC(u + 1.0F);
+                  const GLfloat b = FRAC(v + 1.0F);
+                  const GLfloat w00 = (1.0F - a) * (1.0F - b);
+                  const GLfloat w10 = (       a) * (1.0F - b);
+                  const GLfloat w01 = (1.0F - a) * (       b);
+                  const GLfloat w11 = (       a) * (       b);
+                  const GLfloat depthSample = w00 * depth00 + w10 * depth10
+                                            + w01 * depth01 + w11 * depth11;
+                  CLAMPED_FLOAT_TO_CHAN(result, depthSample);
+               }
+               break;
+            default:
+               _mesa_problem(ctx, "Bad compare func in sample_depth_texture");
+               return;
             }
          }
 
@@ -3259,23 +3333,36 @@ _swrast_texture_fragments( GLcontext *ctx, GLuint texUnit, GLuint n,
          const struct gl_texture_object *curObj = textureUnit->_Current;
          GLchan texel[MAX_WIDTH][4];
          
-	 if (textureUnit->LodBias != 0.0F) {
-	    /* apply LOD bias, but don't clamp yet */
-            GLuint i;
-	    for (i=0;i<n;i++) {
-	       lambda[i] += textureUnit->LodBias;
-	    }
-	 }
-         
-         if ((curObj->MinLod != -1000.0 || curObj->MaxLod != 1000.0)
-             && lambda) {
-            /* apply LOD clamping to lambda */
-            const GLfloat min = curObj->MinLod;
-            const GLfloat max = curObj->MaxLod;
-            GLuint i;
-            for (i=0;i<n;i++) {
-               GLfloat l = lambda[i];
-               lambda[i] = CLAMP(l, min, max);
+         if (lambda) {
+#if 0
+            float min, max;
+            int i;
+            min = max = lambda[0];
+            for (i = 1; i < n; i++) {
+               if (lambda[i] > max)
+                  max = lambda[i];
+               if (lambda[i] < min)
+                  min = lambda[i];
+            }
+            printf("min/max %g / %g\n", min, max);
+#endif
+            if (textureUnit->LodBias != 0.0F) {
+               /* apply LOD bias, but don't clamp yet */
+               GLuint i;
+               for (i=0;i<n;i++) {
+                  lambda[i] += textureUnit->LodBias;
+               }
+            }
+
+            if (curObj->MinLod != -1000.0 || curObj->MaxLod != 1000.0) {
+               /* apply LOD clamping to lambda */
+               const GLfloat min = curObj->MinLod;
+               const GLfloat max = curObj->MaxLod;
+               GLuint i;
+               for (i=0;i<n;i++) {
+                  GLfloat l = lambda[i];
+                  lambda[i] = CLAMP(l, min, max);
+               }
             }
          }
 

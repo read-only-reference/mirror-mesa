@@ -1,10 +1,10 @@
-/* $Id: image.c,v 1.63 2001/07/14 17:53:04 brianp Exp $ */
+/* $Id: image.c,v 1.65 2002/03/19 16:47:04 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -541,6 +541,46 @@ _mesa_image_row_stride( const struct gl_pixelstore_attrib *packing,
       return bytesPerRow;
    }
 }
+
+
+
+/*
+ * Compute the stride between images in a 3D texture (in bytes) for the given
+ * pixel packing parameters and image width, format and type.
+ */
+GLint
+_mesa_image_image_stride( const struct gl_pixelstore_attrib *packing,
+                          GLint width, GLint height,
+                          GLenum format, GLenum type )
+{
+   ASSERT(packing);
+   ASSERT(type != GL_BITMAP);
+
+   {
+      const GLint bytesPerPixel = _mesa_bytes_per_pixel(format, type);
+      GLint bytesPerRow, bytesPerImage, remainder;
+
+      if (bytesPerPixel <= 0)
+         return -1;  /* error */
+      if (packing->RowLength == 0) {
+         bytesPerRow = bytesPerPixel * width;
+      }
+      else {
+         bytesPerRow = bytesPerPixel * packing->RowLength;
+      }
+      remainder = bytesPerRow % packing->Alignment;
+      if (remainder > 0)
+         bytesPerRow += (packing->Alignment - remainder);
+
+      if (packing->ImageHeight == 0)
+         bytesPerImage = bytesPerRow * height;
+      else
+         bytesPerImage = bytesPerRow * packing->ImageHeight;
+
+      return bytesPerImage;
+   }
+}
+
 
 
 
@@ -1747,6 +1787,18 @@ _mesa_pack_rgba_span( GLcontext *ctx,
          dest += 3;
       }
    }
+   else if (transferOps == 0 && dstFormat == GL_RGBA && dstType == GL_UNSIGNED_BYTE) {
+      /* common simple case */
+      GLuint i;
+      GLubyte *dest = (GLubyte *) dstAddr;
+      for (i = 0; i < n; i++) {
+         dest[0] = CHAN_TO_UBYTE(srcRgba[i][RCOMP]);
+         dest[1] = CHAN_TO_UBYTE(srcRgba[i][GCOMP]);
+         dest[2] = CHAN_TO_UBYTE(srcRgba[i][BCOMP]);
+         dest[3] = CHAN_TO_UBYTE(srcRgba[i][ACOMP]);
+         dest += 4;
+      }
+   }
    else {
       /* general solution */
       GLuint i;
@@ -2521,51 +2573,117 @@ _mesa_unpack_chan_color_span( GLcontext *ctx,
           srcType == GL_UNSIGNED_INT_2_10_10_10_REV);
 
    /* Try simple cases first */
-   if (transferOps == 0 && srcType == CHAN_TYPE) {
-      if (dstFormat == GL_RGBA) {
-         if (srcFormat == GL_RGBA) {
-            MEMCPY( dest, source, n * 4 * sizeof(GLchan) );
-            return;
-         }
-         else if (srcFormat == GL_RGB) {
-            GLuint i;
-            const GLchan *src = (const GLchan *) source;
-            GLchan *dst = dest;
-            for (i = 0; i < n; i++) {
-               dst[0] = src[0];
-               dst[1] = src[1];
-               dst[2] = src[2];
-               dst[3] = CHAN_MAX;
-               src += 3;
-               dst += 4;
+   if (transferOps == 0 ){
+      if (srcType == CHAN_TYPE) {
+         if (dstFormat == GL_RGBA) {
+            if (srcFormat == GL_RGBA) {
+               MEMCPY( dest, source, n * 4 * sizeof(GLchan) );
+               return;
             }
+            else if (srcFormat == GL_RGB) {
+               GLuint i;
+               const GLchan *src = (const GLchan *) source;
+               GLchan *dst = dest;
+               for (i = 0; i < n; i++) {
+                  dst[0] = src[0];
+                  dst[1] = src[1];
+                  dst[2] = src[2];
+                  dst[3] = CHAN_MAX;
+                  src += 3;
+                  dst += 4;
+               }
+               return;
+            }
+         }
+         else if (dstFormat == GL_RGB) {
+            if (srcFormat == GL_RGB) {
+               MEMCPY( dest, source, n * 3 * sizeof(GLchan) );
+               return;
+            }
+            else if (srcFormat == GL_RGBA) {
+               GLuint i;
+               const GLchan *src = (const GLchan *) source;
+               GLchan *dst = dest;
+               for (i = 0; i < n; i++) {
+                  dst[0] = src[0];
+                  dst[1] = src[1];
+                  dst[2] = src[2];
+                  src += 4;
+                  dst += 3;
+               }
+               return;
+            }
+         }
+         else if (dstFormat == srcFormat) {
+            GLint comps = _mesa_components_in_format(srcFormat);
+            assert(comps > 0);
+            MEMCPY( dest, source, n * comps * sizeof(GLchan) );
             return;
          }
       }
-      else if (dstFormat == GL_RGB) {
-         if (srcFormat == GL_RGB) {
-            MEMCPY( dest, source, n * 3 * sizeof(GLchan) );
-            return;
-         }
-         else if (srcFormat == GL_RGBA) {
-            GLuint i;
-            const GLchan *src = (const GLchan *) source;
-            GLchan *dst = dest;
-            for (i = 0; i < n; i++) {
-               dst[0] = src[0];
-               dst[1] = src[1];
-               dst[2] = src[2];
-               src += 4;
-               dst += 3;
+      /*
+       * Common situation, loading 8bit RGBA/RGB source images
+       * into 16/32 bit destination. (OSMesa16/32)
+       */
+      else if (srcType == GL_UNSIGNED_BYTE) {
+         if (dstFormat == GL_RGBA) {
+            if (srcFormat == GL_RGB) {
+               GLuint i;
+               const GLubyte *src = (const GLubyte *) source;
+               GLchan *dst = dest;
+               for (i = 0; i < n; i++) {
+                  dst[0] = UBYTE_TO_CHAN(src[0]);
+                  dst[1] = UBYTE_TO_CHAN(src[1]);
+                  dst[2] = UBYTE_TO_CHAN(src[2]);
+                  dst[3] = CHAN_MAX;
+                  src += 3;
+                  dst += 4;
+               }
+               return;
             }
-            return;
+            else if (srcFormat == GL_RGBA) {
+               GLuint i;
+               const GLubyte *src = (const GLubyte *) source;
+               GLchan *dst = dest;
+               for (i = 0; i < n; i++) {
+                  dst[0] = UBYTE_TO_CHAN(src[0]);
+                  dst[1] = UBYTE_TO_CHAN(src[1]);
+                  dst[2] = UBYTE_TO_CHAN(src[2]);
+                  dst[3] = UBYTE_TO_CHAN(src[3]);
+                  src += 4;
+                  dst += 4;
+               }
+               return;
+             }
          }
-      }
-      else if (dstFormat == srcFormat) {
-         GLint comps = _mesa_components_in_format(srcFormat);
-         assert(comps > 0);
-         MEMCPY( dest, source, n * comps * sizeof(GLchan) );
-         return;
+         else if (dstFormat == GL_RGB) {
+            if (srcFormat == GL_RGB) {
+               GLuint i;
+               const GLubyte *src = (const GLubyte *) source;
+               GLchan *dst = dest;
+               for (i = 0; i < n; i++) {
+                  dst[0] = UBYTE_TO_CHAN(src[0]);
+                  dst[1] = UBYTE_TO_CHAN(src[1]);
+                  dst[2] = UBYTE_TO_CHAN(src[2]);
+                  src += 3;
+                  dst += 3;
+               }
+               return;
+            }
+            else if (srcFormat == GL_RGBA) {
+               GLuint i;
+               const GLubyte *src = (const GLubyte *) source;
+               GLchan *dst = dest;
+               for (i = 0; i < n; i++) {
+                  dst[0] = UBYTE_TO_CHAN(src[0]);
+                  dst[1] = UBYTE_TO_CHAN(src[1]);
+                  dst[2] = UBYTE_TO_CHAN(src[2]);
+                  src += 4;
+                  dst += 3;
+               }
+               return;
+            }
+         }
       }
    }
 

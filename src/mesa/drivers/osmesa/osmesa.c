@@ -1,4 +1,4 @@
-/* $Id: osmesa.c,v 1.73 2002/01/30 16:53:03 brianp Exp $ */
+/* $Id: osmesa.c,v 1.76 2002/03/29 17:20:48 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -426,21 +426,19 @@ static void compute_row_addresses( OSMesaContext ctx )
  * with the lower-left image pixel stored in the first array position
  * (ie. bottom-to-top).
  *
- * Since the only type initially supported is GL_UNSIGNED_BYTE, if the
- * context is in RGBA mode, each pixel will be stored as a 4-byte RGBA
- * value.  If the context is in color indexed mode, each pixel will be
- * stored as a 1-byte value.
- *
  * If the context's viewport hasn't been initialized yet, it will now be
  * initialized to (0,0,width,height).
  *
  * Input:  ctx - the rendering context
  *         buffer - the image buffer memory
- *         type - data type for pixel components, only GL_UNSIGNED_BYTE
- *                and GL_UNSIGNED_SHORT_5_6_5 supported now.
+ *         type - data type for pixel components
+ *            Normally, only GL_UNSIGNED_BYTE and GL_UNSIGNED_SHORT_5_6_5
+ *            are supported.  But if Mesa's been compiled with CHAN_BITS==16
+ *            then type must be GL_UNSIGNED_SHORT.  And if Mesa's been build
+ *            with CHAN_BITS==32 then type must be GL_FLOAT.
  *         width, height - size of image buffer in pixels, at least 1
  * Return:  GL_TRUE if success, GL_FALSE if error because of invalid ctx,
- *          invalid buffer address, type!=GL_UNSIGNED_BYTE, width<1, height<1,
+ *          invalid buffer address, invalid type, width<1, height<1,
  *          width>internal limit or height>internal limit.
  */
 GLAPI GLboolean GLAPIENTRY
@@ -877,11 +875,16 @@ static void clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 
 
 
-static void buffer_size( GLcontext *ctx, GLuint *width, GLuint *height )
+static void buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
 {
-   OSMesaContext osmesa = OSMESA_CONTEXT(ctx);
-   *width = osmesa->width;
-   *height = osmesa->height;
+   /* don't use GET_CURRENT_CONTEXT(ctx) here - it's a problem on Windows */
+   GLcontext *ctx = (GLcontext *) _glapi_get_context();
+   (void) buffer;
+   if (ctx) {
+      OSMesaContext osmesa = OSMESA_CONTEXT(ctx);
+      *width = osmesa->width;
+      *height = osmesa->height;
+   }
 }
 
 
@@ -2025,7 +2028,7 @@ static void osmesa_update_state( GLcontext *ctx, GLuint new_state )
    ctx->Driver.GetString = get_string;
    ctx->Driver.UpdateState = osmesa_update_state;
    ctx->Driver.SetDrawBuffer = set_draw_buffer;
-   ctx->Driver.ResizeBuffersMESA = _swrast_alloc_buffers;
+   ctx->Driver.ResizeBuffers = _swrast_alloc_buffers;
    ctx->Driver.GetBufferSize = buffer_size;
 
    ctx->Driver.Accum = _swrast_Accum;

@@ -1,4 +1,4 @@
-/* $Id: mtypes.h,v 1.65 2002/02/15 16:37:36 brianp Exp $ */
+/* $Id: mtypes.h,v 1.69 2002/03/29 17:27:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -379,7 +379,7 @@ struct gl_enable_attrib {
    GLboolean AlphaTest;
    GLboolean AutoNormal;
    GLboolean Blend;
-   GLboolean ClipPlane[MAX_CLIP_PLANES];
+   GLuint ClipPlanes;
    GLboolean ColorMaterial;
    GLboolean Convolution1D;
    GLboolean Convolution2D;
@@ -1009,8 +1009,7 @@ struct gl_transform_attrib {
    GLenum MatrixMode;				/* Matrix mode */
    GLfloat EyeUserPlane[MAX_CLIP_PLANES][4];
    GLfloat _ClipUserPlane[MAX_CLIP_PLANES][4];	/* derived */
-   GLboolean ClipEnabled[MAX_CLIP_PLANES];
-   GLubyte   _AnyClip;				/* How many ClipEnabled? */
+   GLuint ClipPlanesEnabled;                    /* on/off bitmask */
    GLboolean Normalize;				/* Normalize all normals? */
    GLboolean RescaleNormals;			/* GL_EXT_rescale_normal */
    GLboolean RasterPositionUnclipped;           /* GL_IBM_rasterpos_clip */
@@ -1212,6 +1211,10 @@ enum vp_opcode
    SGE,
    MAD,
    ARL,
+   DPH,
+   RCC,
+   SUB,
+   ABS,
    END
 };
 
@@ -1251,6 +1254,7 @@ struct vp_program
    GLenum Target;      /* GL_VERTEX_PROGRAM_NV or GL_VERTEX_STATE_PROGRAM_NV */
    GLint ErrorPos;            /* Position in string where error was detected */
    GLint RefCount;            /* Since programs can be shared among contexts */
+   GLboolean IsPositionInvariant;  /* GL_NV_vertex_program1_1 */
    GLboolean Resident;
    GLuint InputsRead;     /* Bitmask of which input regs are read */
    GLuint OutputsWritten; /* Bitmask of which output regs are written to */
@@ -1307,7 +1311,7 @@ struct gl_shared_state {
 struct gl_frame_buffer {
    GLvisual Visual;		/* The corresponding visual */
 
-   GLint Width, Height;		/* size of frame buffer in pixels */
+   GLuint Width, Height;	/* size of frame buffer in pixels */
 
    GLboolean UseSoftwareDepthBuffer;
    GLboolean UseSoftwareAccumBuffer;
@@ -1403,6 +1407,7 @@ struct gl_extensions {
    GLboolean EXT_point_parameters;
    GLboolean EXT_polygon_offset;
    GLboolean EXT_rescale_normal;
+   GLboolean EXT_shadow_funcs;
    GLboolean EXT_secondary_color;
    GLboolean EXT_shared_texture_palette;
    GLboolean EXT_stencil_wrap;
@@ -1424,6 +1429,7 @@ struct gl_extensions {
    GLboolean NV_blend_square;
    GLboolean NV_texgen_reflection;
    GLboolean NV_vertex_program;
+   GLboolean NV_vertex_program1_1;
    GLboolean SGI_color_matrix;
    GLboolean SGI_color_table;
    GLboolean SGIS_generate_mipmap;

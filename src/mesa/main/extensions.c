@@ -1,4 +1,4 @@
-/* $Id: extensions.c,v 1.69 2002/02/15 16:32:06 brianp Exp $ */
+/* $Id: extensions.c,v 1.71 2002/03/23 16:33:53 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -90,6 +90,7 @@ static struct {
    { ON,  "GL_EXT_polygon_offset",             F(EXT_polygon_offset) },
    { ON,  "GL_EXT_rescale_normal",             F(EXT_rescale_normal) },
    { OFF, "GL_EXT_secondary_color",            F(EXT_secondary_color) },
+   { OFF, "GL_EXT_shadow_funcs",               F(EXT_shadow_funcs) },
    { OFF, "GL_EXT_shared_texture_palette",     F(EXT_shared_texture_palette) },
    { OFF, "GL_EXT_stencil_wrap",               F(EXT_stencil_wrap) },
    { ON,  "GL_EXT_texture3D",                  F(EXT_texture3D) },
@@ -113,6 +114,7 @@ static struct {
    { OFF, "GL_NV_blend_square",                F(NV_blend_square) },
    { ON,  "GL_NV_texgen_reflection",           F(NV_texgen_reflection) },
    { OFF, "GL_NV_vertex_program",              F(NV_vertex_program) },
+   { OFF, "GL_NV_vertex_program1_1",           F(NV_vertex_program1_1) },
    { OFF, "GL_SGI_color_matrix",               F(SGI_color_matrix) },
    { OFF, "GL_SGI_color_table",                F(SGI_color_table) },
    { OFF, "GL_SGIS_generate_mipmap",           F(SGIS_generate_mipmap) },
@@ -158,6 +160,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
       "GL_EXT_histogram",
       "GL_EXT_paletted_texture",
       "GL_EXT_point_parameters",
+      "GL_EXT_shadow_funcs",
       "GL_EXT_secondary_color",
       "GL_EXT_shared_texture_palette",
       "GL_EXT_stencil_wrap",
@@ -172,6 +175,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
       "GL_NV_blend_square",
       "GL_NV_texgen_reflection",
       "GL_NV_vertex_program",
+      "GL_NV_vertex_program1_1",
       "GL_SGI_color_matrix",
       "GL_SGI_color_table",
       "GL_SGIS_generate_mipmap",

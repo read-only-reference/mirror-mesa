@@ -20,7 +20,7 @@
 # AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-# DOS/DJGPP core makefile v0.2 for Mesa 4.0
+# DOS/DJGPP core makefile v0.4 for Mesa 4.0
 #
 #  Copyright (C) 2002 - Borca Daniel
 #  Email : dborca@yahoo.com
@@ -36,7 +36,15 @@ AR = ar
 ARFLAGS = ruv
 LIBDIR = $(TOP)/lib
 
+ifeq ($(wildcard $(DJDIR)/lib/dxe2.ld),)
+DXE2GEN =
+else
+DXE2GEN = $(wildcard $(addsuffix /dxe2gen.exe,$(subst ;, ,$(PATH))))
+endif
+
 GL_LIB = libgl.a
+GL_DXE = gl.dxe
+GL_IMP = libigl.a
 
 CORE_SOURCES = \
 	swrast_setup/ss_context.c \
@@ -157,7 +165,7 @@ CORE_SOURCES = \
 	tnl/t_vb_texmat.c \
 	tnl/t_vb_vertex.c
 
-DRIVER_SOURCES = DOS/dmesa.c DOS/video.c DOS/vbeaf.c DOS/dpmi.c
+DRIVER_SOURCES = DOS/dmesa.c DOS/video.c DOS/dpmi.c
 
 SOURCES = $(CORE_SOURCES) $(DRIVER_SOURCES)
 
@@ -166,10 +174,18 @@ OBJECTS = $(SOURCES:.c=.o)
 .c.o:
 	gcc -o $@ -c $(CFLAGS) $<
 
-all: $(LIBDIR)/$(GL_LIB)
+all: $(LIBDIR)/$(GL_LIB) $(LIBDIR)/$(GL_DXE) $(LIBDIR)/$(GL_IMP)
 
 $(LIBDIR)/$(GL_LIB): $(OBJECTS)
 	$(AR) $(ARFLAGS) $(LIBDIR)/$(GL_LIB) $(OBJECTS)
+
+$(LIBDIR)/$(GL_DXE) $(LIBDIR)/$(GL_IMP): $(OBJECTS)
+ifeq ($(DXE2GEN),)
+	@echo Missing DXE2GEN and/or DXE2.LD! You must have DXE2GEN
+	@echo somewhere in PATH, and DXE2.LD in DJGPP/LIB directory.
+else
+	dxe2gen -o $(LIBDIR)/$(GL_DXE) -I $(LIBDIR)/$(GL_IMP) $(OBJECTS) -D "DOS Mesa" -U
+endif
 
 clean:
 	-$(RM) *.o
@@ -184,6 +200,5 @@ DOS/dmesa.o: DOS/dmesa.c glheader.h ../include/GL/gl.h context.h glapi.h \
   swrast/s_depth.h swrast/s_lines.h swrast/s_triangle.h swrast/s_trispan.h \
   swrast_setup/swrast_setup.h tnl/tnl.h tnl/t_context.h math/m_vector.h \
   math/m_xform.h tnl/t_pipeline.h DOS/video.h swrast/s_tritemp.h
-DOS/dpmi.o: DOS/dpmi.c DOS/vbeaf.h DOS/dpmiint.h
-DOS/vbeaf.o: DOS/vbeaf.c DOS/dpmiint.h DOS/vbeaf.h DOS/video.h
-DOS/video.o: DOS/video.c DOS/video.h DOS/dpmiint.h DOS/vbeafint.h DOS/vbeaf.h
+DOS/dpmi.o: DOS/dpmi.c DOS/dpmiint.h
+DOS/video.o: DOS/video.c DOS/video.h DOS/dpmiint.h

@@ -1,18 +1,12 @@
-		    Mesa 4.0.1 DOS/DJGPP Port version 0.2
-		    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+		     Mesa 4.0 DOS/DJGPP Port version 0.4
+		     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 
 
 Description:
 ~~~~~~~~~~~~
 
-This is the DOS port of MESA 4.0, for DJGPP programmers... It features some
-sort of hardware acceleration, but it's pretty thin: it is entirely based on
-VBEAF.DRV from the FreeBE/AF project (http://www.talula.demon.co.uk/freebe/).
-Note that SciTech's driver isn't supported because I hate the `nearptr' hack.
-Anyway, these drivers don't provide ANY 3D function :-( Moreover, it seems to
-me the FreeBE/AF project is not really up to date... Well, it's not much, my
-intention was to open the door ;-)
+Well, guess what... this is the DOS port of MESA 4.0, for DJGPP fans... Whoa!
 
 
 
@@ -27,16 +21,29 @@ Installation:
 ~~~~~~~~~~~~~
 
 Type "make -f Makefile.DJ" to compile the libraries. Long filename support is
-required during compilation. The examples are not built automagically (see
-Pitfalls below).
+required during compilation. Also, you must have the DXE2 package (available
+on SimTel.Net, courtesy of Andrew Zabolotny) installed in order to build the
+dynamic modules; if you encounter errors, you can fetch a patched version from
+my web page.
+The demos are not built automagically (see Pitfalls below). To make them, use
+one of the following rules:
+	Static:
+	    gcc -o OUT.exe IN.c -lglut -lglu -lgl
+	Dynamic:
+	    gcc -o OUT.exe -include dmesadxe.h IN.c -ligl -liglu -liglut -ldl
+Usage of the dynamic modules requires three things:
+	- include DMESADXE.H in one of the sources, so references inside
+	  dynamic modules will get resolved (or use `-include' directive)
+	- link against import libraries (libIgl*.a) and LIBDL.A, which will do
+	  the dynamic linkage job for you
+	- put the DXEs somewhere along the library path (LD_LIBRARY_PATH) or
+	  in the current directory
 
 Tested on:
 	CPU:		Intel Pentium w/ MMX @166 MHz
 	Mainboard:	ViA Apollo VP2 w/ 128 MB SDRAM
 	Video card:	Matrox Millenium 2064W w/ 2048 kB WRAM, BIOS v3.0
-	DJGPP:		djdev 2.03
-			gcc v3.0.3
-			make v3.79
+	DJGPP:		djdev 2.03 + gcc v3.0.3 + make v3.79
 
 
 
@@ -54,17 +61,11 @@ style :-( Sorry!
 Pitfalls:
 1. The current version supports only RGB[A] modes, for it made no sense to me
    to endorse color-index (aka palette) modes.
-2. Double-buffered uses page flipping if acceleration is available, else falls
-   back to virtual buffer.
-3. Single-buffered is not allowed with 24-bit modes, because direct access was
-   wrong and fixing it would mean to slow down the other routines; until this
-   is really, really necessary, it won't get reimplemented.
-4. Another weird "feature" is that buffer width must be multiple of 4 (I'm a
+2. Single-buffered is not allowed at all. Until I can find a way to use *REAL*
+   hardware acceleration, it won't get implemented.
+3. Another weird "feature" is that buffer width must be multiple of 4 (I'm a
    lazy programmer and I found that the easiest way to keep buffer handling at
    peak performance ;-).
-5. The FreeBE/AF driver is searched in the current directory only; therefore,
-   to disable hardware acceleration, make sure you don't have VBEAF.DRV where
-   your application resides.
 
 
 
@@ -88,7 +89,11 @@ My keyboard driver used only scancodes, but since GLUT requires ASCII values
 for keys, I borrowed the translation tables (and maybe more) from Allegro.
 Ctrl-Alt-Del (plus Ctrl-Alt-End, for Windows users) will shut down the GLUT
 engine unconditionally: it will raise SIGINT, which in turn will call the
-destructors (let's hope), thus cleaning up your/my mess ;-)
+destructors (let's hope), thus cleaning up your/my mess ;-) NB: since the
+DJGPP guys ensured signal handlers won't go beyond program's space (and since
+dynamic modules shall) the SIGINT can't be hooked (well, it can, but it is
+useless), therefore you must live with the 'Exiting due to signal SIGINT'
+message...
 
 The mouse driver is far from complete (lack of positioning, drawing, etc),
 but is enough to make almost all the demos work.
@@ -102,7 +107,8 @@ but timer B will probably loose precision!
 As an addition, stdout and stderr are redirected and dumped upon exit. This
 means that printf can be safely called during graphics, but all messages come
 in bulk! A bit of a hack, I know, but I think it's better than to miss them
-at all.
+at all. "Borrowed" from RHIDE (Robert Hoehne) or SETEDIT (Salvador Eduardo
+Tropea)... I'm not sure.
 
 Window creating defaults: 640x480x16 at (0,0), 8-bit stencil, 16-bit accum.
 However, the video mode is chosen in such a way that first window will fit.
@@ -123,6 +129,9 @@ v0.2	feb-2002	+ fast triangle rasterizers
 			+ glut has now an internal timer
 			* glut changed to support multi-window (unfinished)
 			! minor PC_HW corrections
+v0.3	mar-2002	- removed FreeBE/AF code
+			- removed single-buffer modes
+v0.4	mar-2002	+ dynamic module support
 
 
 

@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.154 2002/02/05 23:21:45 brianp Exp $ */
+/* $Id: context.c,v 1.158 2002/03/29 17:27:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -398,31 +398,31 @@ _mesa_free_framebuffer_data( GLframebuffer *buffer )
       return;
 
    if (buffer->DepthBuffer) {
-      FREE( buffer->DepthBuffer );
+      MESA_PBUFFER_FREE( buffer->DepthBuffer );
       buffer->DepthBuffer = NULL;
    }
    if (buffer->Accum) {
-      FREE( buffer->Accum );
+      MESA_PBUFFER_FREE( buffer->Accum );
       buffer->Accum = NULL;
    }
    if (buffer->Stencil) {
-      FREE( buffer->Stencil );
+      MESA_PBUFFER_FREE( buffer->Stencil );
       buffer->Stencil = NULL;
    }
    if (buffer->FrontLeftAlpha) {
-      FREE( buffer->FrontLeftAlpha );
+      MESA_PBUFFER_FREE( buffer->FrontLeftAlpha );
       buffer->FrontLeftAlpha = NULL;
    }
    if (buffer->BackLeftAlpha) {
-      FREE( buffer->BackLeftAlpha );
+      MESA_PBUFFER_FREE( buffer->BackLeftAlpha );
       buffer->BackLeftAlpha = NULL;
    }
    if (buffer->FrontRightAlpha) {
-      FREE( buffer->FrontRightAlpha );
+      MESA_PBUFFER_FREE( buffer->FrontRightAlpha );
       buffer->FrontRightAlpha = NULL;
    }
    if (buffer->BackRightAlpha) {
-      FREE( buffer->BackRightAlpha );
+      MESA_PBUFFER_FREE( buffer->BackRightAlpha );
       buffer->BackRightAlpha = NULL;
    }
 }
@@ -1182,10 +1182,9 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Transform.RescaleNormals = GL_FALSE;
    ctx->Transform.RasterPositionUnclipped = GL_FALSE;
    for (i=0;i<MAX_CLIP_PLANES;i++) {
-      ctx->Transform.ClipEnabled[i] = GL_FALSE;
       ASSIGN_4V( ctx->Transform.EyeUserPlane[i], 0.0, 0.0, 0.0, 0.0 );
    }
-   ctx->Transform._AnyClip = GL_FALSE;
+   ctx->Transform.ClipPlanesEnabled = 0;
 
    /* Viewport group */
    ctx->Viewport.X = 0;
@@ -1965,6 +1964,7 @@ _mesa_get_current_context( void )
 /*
  * This should be called by device drivers just before they do a
  * swapbuffers.  Any pending rendering commands will be executed.
+ * XXX we should really rename this function to _mesa_flush() or something.
  */
 void
 _mesa_swapbuffers(GLcontext *ctx)
@@ -2082,6 +2082,9 @@ _mesa_error( GLcontext *ctx, GLenum error, const char *where )
       }
       fprintf(stderr, "Mesa user error: %s in %s\n", errstr, where);
    }
+
+   if (!ctx)
+      return;
 
    if (ctx->ErrorValue == GL_NO_ERROR) {
       ctx->ErrorValue = error;

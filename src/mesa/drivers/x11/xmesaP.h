@@ -1,8 +1,8 @@
-/* $Id: xmesaP.h,v 1.25 2002/02/15 19:15:33 brianp Exp $ */
+/* $Id: xmesaP.h,v 1.27 2002/03/16 00:53:15 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  4.2
+ * Version:  4.0.2
  *
  * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
@@ -144,7 +144,6 @@ struct xmesa_buffer {
    GLboolean wasCurrent;	/* was ever the current buffer? */
    XMesaVisual xm_visual;	/* the X/Mesa visual */
 
-   XMesaContext xm_context;     /* the context associated with this buffer */
    XMesaDisplay *display;
    GLboolean pixmap_flag;	/* is the buffer a Pixmap? */
    GLboolean pbuffer_flag;	/* is the buffer a Pbuffer? */
@@ -532,5 +531,7 @@ extern void XMesaReset( void );
 
 extern void xmesa_set_read_buffer( GLcontext *ctx, 
 				   GLframebuffer *buffer, GLenum mode );
+
+extern void xmesa_resize_buffers( GLframebuffer *buffer );
 
 #endif

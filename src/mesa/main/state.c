@@ -1,10 +1,10 @@
-/* $Id: state.c,v 1.77 2002/02/13 00:53:19 keithw Exp $ */
+/* $Id: state.c,v 1.79 2002/03/29 17:27:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  4.1
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2002  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -650,10 +650,10 @@ update_projection( GLcontext *ctx )
    /* Recompute clip plane positions in clipspace.  This is also done
     * in _mesa_ClipPlane().
     */
-   if (ctx->Transform._AnyClip) {
+   if (ctx->Transform.ClipPlanesEnabled) {
       GLuint p;
       for (p = 0; p < ctx->Const.MaxClipPlanes; p++) {
-	 if (ctx->Transform.ClipEnabled[p]) {
+	 if (ctx->Transform.ClipPlanesEnabled & (1 << p)) {
 	    _mesa_transform_vector( ctx->Transform._ClipUserPlane[p],
 				 ctx->Transform.EyeUserPlane[p],
 				 ctx->ProjectionMatrixStack.Top->inv );
@@ -1013,7 +1013,7 @@ void _mesa_update_state( GLcontext *ctx )
    ASSERT(ctx->Driver.ReadPixels);
    ASSERT(ctx->Driver.CopyPixels);
    ASSERT(ctx->Driver.Bitmap);
-   ASSERT(ctx->Driver.ResizeBuffersMESA);
+   ASSERT(ctx->Driver.ResizeBuffers);
    ASSERT(ctx->Driver.TexImage1D);
    ASSERT(ctx->Driver.TexImage2D);
    ASSERT(ctx->Driver.TexImage3D);
