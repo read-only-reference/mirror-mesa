@@ -1,10 +1,10 @@
-/* $Id: light.h,v 1.10 2001/02/15 01:33:52 keithw Exp $ */
+/* $Id: light.h,v 1.12 2001/03/12 00:48:38 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -92,34 +92,31 @@ do {									\
 
 
 
-extern GLuint gl_material_bitmask( GLcontext *ctx,
-				   GLenum face, GLenum pname,
-				   GLuint legal,
-				   const char * );
+extern GLuint _mesa_material_bitmask( GLcontext *ctx,
+                                      GLenum face, GLenum pname,
+                                      GLuint legal,
+                                      const char * );
 
-extern void gl_set_material( GLcontext *ctx, GLuint bitmask,
-                             const GLfloat *params);
+extern void _mesa_invalidate_spot_exp_table( struct gl_light *l );
 
+extern void _mesa_invalidate_shine_table( GLcontext *ctx, GLuint i );
 
-extern void gl_invalidate_spot_exp_table( struct gl_light *l );
-extern void gl_invalidate_shine_table( GLcontext *ctx, GLuint i );
-extern void gl_validate_all_lighting_tables( GLcontext *ctx );
+extern void _mesa_validate_all_lighting_tables( GLcontext *ctx );
 
+extern void _mesa_update_lighting( GLcontext *ctx );
 
-extern void gl_update_lighting( GLcontext *ctx );
+extern void _mesa_compute_light_positions( GLcontext *ctx );
 
-extern void gl_compute_light_positions( GLcontext *ctx );
+extern void _mesa_update_material( GLcontext *ctx,
+                                   const struct gl_material src[2],
+                                   GLuint bitmask );
 
-extern void gl_update_material( GLcontext *ctx,
-				const struct gl_material src[2],
-				GLuint bitmask );
+extern void _mesa_copy_material_pairs( struct gl_material dst[2],
+                                       const struct gl_material src[2],
+                                       GLuint bitmask );
 
-extern void gl_copy_material_pairs( struct gl_material dst[2],
-				    const struct gl_material src[2],
-				    GLuint bitmask );
-
-extern void gl_update_color_material( GLcontext *ctx, const GLchan rgba[4] );
+extern void _mesa_update_color_material( GLcontext *ctx,
+                                         const GLchan rgba[4] );
 
 
 #endif
-

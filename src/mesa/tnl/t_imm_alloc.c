@@ -1,10 +1,10 @@
-/* $Id: t_imm_alloc.c,v 1.3 2001/02/15 01:33:52 keithw Exp $ */
+/* $Id: t_imm_alloc.c,v 1.5 2001/03/12 00:48:43 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -50,7 +50,7 @@ struct immediate *_tnl_alloc_immediate( GLcontext *ctx )
    IM->FlushElt = 0;
    IM->LastPrimitive = IMM_MAX_COPIED_VERTS;
    IM->Count = IMM_MAX_COPIED_VERTS;
-   IM->Start = IMM_MAX_COPIED_VERTS;	
+   IM->Start = IMM_MAX_COPIED_VERTS;
    IM->Material = 0;
    IM->MaterialMask = 0;
    IM->MaxTextureUnits = ctx->Const.MaxTextureUnits;
@@ -64,8 +64,10 @@ struct immediate *_tnl_alloc_immediate( GLcontext *ctx )
     */
    IM->TexCoord[0] = IM->TexCoord0;
 
-   for (j = 1; j < ctx->Const.MaxTextureUnits; j++) 
-      IM->TexCoord[j] = ALIGN_MALLOC( IMM_SIZE * sizeof(GLfloat) * 4, 32 );
+   for (j = 1; j < ctx->Const.MaxTextureUnits; j++) {
+      IM->TexCoord[j] = (GLfloat (*)[4])
+         ALIGN_MALLOC( IMM_SIZE * sizeof(GLfloat) * 4, 32 );
+   }
 
    /* KW: Removed initialization of normals as these are now treated
     * identically to all other data types.
@@ -89,7 +91,7 @@ void _tnl_free_immediate( struct immediate *IM )
       IM->MaterialMask = 0;
    }
 
-   for (j = 1; j < IM->MaxTextureUnits; j++) 
+   for (j = 1; j < IM->MaxTextureUnits; j++)
       ALIGN_FREE( IM->TexCoord[j] );
 
 
@@ -97,6 +99,3 @@ void _tnl_free_immediate( struct immediate *IM )
    freed++;
 /*     printf("outstanding %d\n", id - freed);    */
 }
-
-
-

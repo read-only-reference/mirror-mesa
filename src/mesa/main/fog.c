@@ -1,10 +1,10 @@
-/* $Id: fog.c,v 1.32 2001/01/05 02:26:48 keithw Exp $ */
+/* $Id: fog.c,v 1.34 2001/03/12 00:48:37 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -95,7 +95,7 @@ _mesa_Fogfv( GLenum pname, const GLfloat *params )
 	 case GL_EXP2:
 	    break;
 	 default:
-	    gl_error( ctx, GL_INVALID_ENUM, "glFog" );
+	    _mesa_error( ctx, GL_INVALID_ENUM, "glFog" );
             return;
 	 }
 	 if (ctx->Fog.Mode == m)
@@ -105,7 +105,7 @@ _mesa_Fogfv( GLenum pname, const GLfloat *params )
 	 break;
       case GL_FOG_DENSITY:
 	 if (*params<0.0) {
-	    gl_error( ctx, GL_INVALID_VALUE, "glFog" );
+	    _mesa_error( ctx, GL_INVALID_VALUE, "glFog" );
             return;
 	 }
 	 if (ctx->Fog.Density == *params)
@@ -132,7 +132,7 @@ _mesa_Fogfv( GLenum pname, const GLfloat *params )
  	 ctx->Fog.Index = *params;
 	 break;
       case GL_FOG_COLOR:
-	 if (TEST_EQ_4V(ctx->Fog.Color, params)) 
+	 if (TEST_EQ_4V(ctx->Fog.Color, params))
 	    return;
 	 FLUSH_VERTICES(ctx, _NEW_FOG);
 	 ctx->Fog.Color[0] = params[0];
@@ -143,7 +143,7 @@ _mesa_Fogfv( GLenum pname, const GLfloat *params )
       case GL_FOG_COORDINATE_SOURCE_EXT: {
 	 GLenum p = (GLenum)(GLint) *params;
 	 if (p != GL_FOG_COORDINATE_EXT && p != GL_FRAGMENT_DEPTH_EXT) {
-	    gl_error( ctx, GL_INVALID_ENUM, "glFog" );
+	    _mesa_error( ctx, GL_INVALID_ENUM, "glFog" );
 	    return;
 	 }
 	 if (ctx->Fog.FogCoordinateSource == p)
@@ -153,7 +153,7 @@ _mesa_Fogfv( GLenum pname, const GLfloat *params )
 	 break;
       }
       default:
-         gl_error( ctx, GL_INVALID_ENUM, "glFog" );
+         _mesa_error( ctx, GL_INVALID_ENUM, "glFog" );
          return;
    }
 
@@ -161,5 +161,3 @@ _mesa_Fogfv( GLenum pname, const GLfloat *params )
       (*ctx->Driver.Fogfv)( ctx, pname, params );
    }
 }
-
-

@@ -1,10 +1,10 @@
-/* $Id: enums.c,v 1.11 2001/01/17 02:49:38 keithw Exp $ */
+/* $Id: enums.c,v 1.16 2001/03/26 19:42:40 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -22,7 +22,7 @@
  * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  * Author:
  *    Keith Whitwell <keithw@valinux.com>
  */
@@ -837,6 +837,12 @@ enum_elt all_enums[] =
    { "GL_DOT3_RGB_EXT", 0x8740 },
    { "GL_DOT3_RGBA_EXT", 0x8741 },
 
+   /* GL_ARB_texture_env_dot3 */
+   { "GL_DOT3_RGB_EXT", 0x86ae },
+   { "GL_DOT3_RGBA_EXT", 0x86af },
+
+   /* GL_ARB_texture_border_clamp */
+   { "GL_CLAMP_TO_BORDER_ARB", 0x812D },
 };
 
 #define Elements(x) sizeof(x)/sizeof(*x)
@@ -862,7 +868,7 @@ static int compar_nr( const enum_elt **a, const enum_elt **b )
 
 static void sort_enums( void )
 {
-   int i;
+   GLuint i;
    index1 = (enum_elt **)MALLOC( Elements(all_enums) * sizeof(enum_elt *) );
    sorted = 1;
 
@@ -877,7 +883,7 @@ static void sort_enums( void )
 
 
 
-int gl_lookup_enum_by_name( const char *symbol )
+int _mesa_lookup_enum_by_name( const char *symbol )
 {
    enum_elt tmp;
    enum_elt *e;
@@ -896,7 +902,7 @@ int gl_lookup_enum_by_name( const char *symbol )
 }
 
 
-const char *gl_lookup_enum_by_nr( int nr )
+const char *_mesa_lookup_enum_by_nr( int nr )
 {
    enum_elt tmp, *e, **f;
 
@@ -911,5 +917,3 @@ const char *gl_lookup_enum_by_nr( int nr )
 
    return f ? (*f)->c : "(unknown)";
 }
-
-

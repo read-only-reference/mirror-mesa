@@ -1,10 +1,10 @@
-/* $Id: matrix.h,v 1.10 2000/11/22 07:32:17 joukj Exp $ */
+/* $Id: matrix.h,v 1.12 2001/03/12 00:48:38 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -30,15 +30,6 @@
 
 
 #include "mtypes.h"
-
-
-#ifdef VMS
-#define gl_calculate_model_project_matrix gl_calculate_model_project_matr
-#endif
-
-
-extern void
-gl_calculate_model_project_matrix( GLcontext *ctx );
 
 
 extern void
@@ -109,7 +100,7 @@ extern void
 _mesa_Viewport( GLint x, GLint y, GLsizei width, GLsizei height );
 
 extern void
-gl_Viewport( GLcontext *ctx, GLint x, GLint y, GLsizei width, GLsizei height );
+_mesa_set_viewport( GLcontext *ctx, GLint x, GLint y, GLsizei width, GLsizei height );
 
 extern void
 _mesa_DepthRange( GLclampd nearval, GLclampd farval );

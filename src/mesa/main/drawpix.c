@@ -1,10 +1,10 @@
-/* $Id: drawpix.c,v 1.48 2001/01/29 20:47:39 keithw Exp $ */
+/* $Id: drawpix.c,v 1.51 2001/03/19 02:25:35 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -61,19 +61,15 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
       }
 
       if (ctx->NewState) {
-         gl_update_state(ctx);
+         _mesa_update_state(ctx);
       }
 
       x = (GLint) (ctx->Current.RasterPos[0] + 0.5F);
       y = (GLint) (ctx->Current.RasterPos[1] + 0.5F);
 
       ctx->OcclusionResult = GL_TRUE;
-
-      /* see if device driver can do the drawpix */
-      RENDER_START(ctx);
       ctx->Driver.DrawPixels(ctx, x, y, width, height, format, type,
 			     &ctx->Unpack, pixels);
-      RENDER_FINISH(ctx);
    }
    else if (ctx->RenderMode==GL_FEEDBACK) {
       if (ctx->Current.RasterPosValid) {
@@ -91,15 +87,14 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
          texcoord[2] = ctx->Current.Texcoord[0][2] * invq;
          texcoord[3] = ctx->Current.Texcoord[0][3];
          FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_DRAW_PIXEL_TOKEN );
-         gl_feedback_vertex( ctx,
+         _mesa_feedback_vertex( ctx,
                              ctx->Current.RasterPos,
                              color, ctx->Current.Index, texcoord );
       }
    }
    else if (ctx->RenderMode==GL_SELECT) {
       if (ctx->Current.RasterPosValid) {
-         gl_update_hitflag( ctx, ctx->Current.RasterPos[2] );
+         _mesa_update_hitflag( ctx, ctx->Current.RasterPos[2] );
       }
    }
 }
-

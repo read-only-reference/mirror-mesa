@@ -1,21 +1,21 @@
-/* $Id: s_stencil.c,v 1.7 2001/02/23 23:14:11 brianp Exp $ */
+/* $Id: s_stencil.c,v 1.11 2001/03/19 02:25:36 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -42,11 +42,11 @@
 /* Stencil Logic:
 
 IF stencil test fails THEN
-   Apply fail-op to stencil value   
+   Apply fail-op to stencil value
    Don't write the pixel (RGBA,Z)
 ELSE
    IF doing depth test && depth test fails THEN
-      Apply zfail-op to stencil value   
+      Apply zfail-op to stencil value
       Write RGBA and Z to appropriate buffers
    ELSE
       Apply zpass-op to stencil value
@@ -219,7 +219,7 @@ static void apply_stencil_op( const GLcontext *ctx, GLenum oper,
 	 }
 	 break;
       default:
-         gl_problem(ctx, "Bad stencil op in apply_stencil_op");
+         _mesa_problem(ctx, "Bad stencil op in apply_stencil_op");
    }
 }
 
@@ -391,7 +391,7 @@ do_stencil_test( GLcontext *ctx, GLuint n, GLstencil stencil[],
 	 }
 	 break;
       default:
-         gl_problem(ctx, "Bad stencil func in gl_stencil_span");
+         _mesa_problem(ctx, "Bad stencil func in gl_stencil_span");
          return 0;
    }
 
@@ -416,7 +416,7 @@ do_stencil_test( GLcontext *ctx, GLuint n, GLstencil stencil[],
  *          mask - array [n] of flags (1=stencil and depth test passed)
  * Return: GL_TRUE - all fragments failed the testing
  *         GL_FALSE - one or more fragments passed the testing
- * 
+ *
  */
 static GLboolean
 stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
@@ -499,12 +499,13 @@ stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
  * Output:  mask - array [n] of flags (1=stencil and depth test passed)
  * Return: GL_TRUE - all fragments failed the testing
  *         GL_FALSE - one or more fragments passed the testing
- * 
+ *
  */
 GLboolean
 _mesa_stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
                               const GLdepth z[], GLubyte mask[] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    GLstencil stencilRow[MAX_WIDTH];
    GLstencil *stencil;
    GLboolean result;
@@ -513,10 +514,10 @@ _mesa_stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
    ASSERT(n <= MAX_WIDTH);
 
    /* Get initial stencil values */
-   if (ctx->Driver.WriteStencilSpan) {
-      ASSERT(ctx->Driver.ReadStencilSpan);
+   if (swrast->Driver.WriteStencilSpan) {
+      ASSERT(swrast->Driver.ReadStencilSpan);
       /* Get stencil values from the hardware stencil buffer */
-      (*ctx->Driver.ReadStencilSpan)(ctx, n, x, y, stencilRow);
+      (*swrast->Driver.ReadStencilSpan)(ctx, n, x, y, stencilRow);
       stencil = stencilRow;
    }
    else {
@@ -527,9 +528,9 @@ _mesa_stencil_and_ztest_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
    /* do all the stencil/depth testing/updating */
    result = stencil_and_ztest_span( ctx, n, x, y, z, stencil, mask );
 
-   if (ctx->Driver.WriteStencilSpan) {
+   if (swrast->Driver.WriteStencilSpan) {
       /* Write updated stencil values into hardware stencil buffer */
-      (ctx->Driver.WriteStencilSpan)(ctx, n, x, y, stencil, mask );
+      (swrast->Driver.WriteStencilSpan)(ctx, n, x, y, stencil, mask );
    }
 
    return result;
@@ -556,7 +557,7 @@ apply_stencil_op_to_pixels( const GLcontext *ctx,
    const GLstencil invmask = (GLstencil) (~ctx->Stencil.WriteMask);
    GLuint i;
 
-   ASSERT(!ctx->Driver.WriteStencilSpan);  /* software stencil buffer only! */
+   ASSERT(!SWRAST_CONTEXT(ctx)->Driver.WriteStencilSpan);  /* software stencil buffer only! */
 
    switch (oper) {
       case GL_KEEP:
@@ -697,7 +698,7 @@ apply_stencil_op_to_pixels( const GLcontext *ctx,
 	 }
 	 break;
       default:
-         gl_problem(ctx, "Bad stencilop in apply_stencil_op_to_pixels");
+         _mesa_problem(ctx, "Bad stencilop in apply_stencil_op_to_pixels");
    }
 }
 
@@ -722,7 +723,7 @@ stencil_test_pixels( GLcontext *ctx, GLuint n,
    GLuint i;
    GLboolean allfail = GL_FALSE;
 
-   ASSERT(!ctx->Driver.WriteStencilSpan);  /* software stencil buffer only! */
+   ASSERT(!SWRAST_CONTEXT(ctx)->Driver.WriteStencilSpan);  /* software stencil buffer only! */
 
    /*
     * Perform stencil test.  The results of this operation are stored
@@ -875,7 +876,7 @@ stencil_test_pixels( GLcontext *ctx, GLuint n,
 	 }
 	 break;
       default:
-         gl_problem(ctx, "Bad stencil func in gl_stencil_pixels");
+         _mesa_problem(ctx, "Bad stencil func in gl_stencil_pixels");
          return 0;
    }
 
@@ -896,7 +897,7 @@ stencil_test_pixels( GLcontext *ctx, GLuint n,
  * The comments in this function are a bit sparse but the code is
  * almost identical to stencil_and_ztest_span(), which is well
  * commented.
- * 
+ *
  * Input:  n - number of pixels in the array
  *         x, y - array of [n] pixel positions
  *         z - array [n] of z values
@@ -910,16 +911,17 @@ _mesa_stencil_and_ztest_pixels( GLcontext *ctx,
                                 GLuint n, const GLint x[], const GLint y[],
                                 const GLdepth z[], GLubyte mask[] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    ASSERT(ctx->Stencil.Enabled);
    ASSERT(n <= PB_SIZE);
 
-   if (ctx->Driver.WriteStencilPixels) {
+   if (swrast->Driver.WriteStencilPixels) {
       /*** Hardware stencil buffer ***/
       GLstencil stencil[PB_SIZE];
       GLubyte origMask[PB_SIZE];
 
-      ASSERT(ctx->Driver.ReadStencilPixels);
-      (*ctx->Driver.ReadStencilPixels)(ctx, n, x, y, stencil);
+      ASSERT(swrast->Driver.ReadStencilPixels);
+      (*swrast->Driver.ReadStencilPixels)(ctx, n, x, y, stencil);
 
       MEMCPY(origMask, mask, n * sizeof(GLubyte));
 
@@ -954,7 +956,7 @@ _mesa_stencil_and_ztest_pixels( GLcontext *ctx,
       }
 
       /* Write updated stencil values into hardware stencil buffer */
-      (ctx->Driver.WriteStencilPixels)(ctx, n, x, y, stencil, origMask);
+      (swrast->Driver.WriteStencilPixels)(ctx, n, x, y, stencil, origMask);
 
       return GL_TRUE;
    }
@@ -1011,6 +1013,7 @@ void
 _mesa_read_stencil_span( GLcontext *ctx,
                          GLint n, GLint x, GLint y, GLstencil stencil[] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    if (y < 0 || y >= ctx->DrawBuffer->Height ||
        x + n <= 0 || x >= ctx->DrawBuffer->Width) {
       /* span is completely outside framebuffer */
@@ -1033,8 +1036,8 @@ _mesa_read_stencil_span( GLcontext *ctx,
 
 
    ASSERT(n >= 0);
-   if (ctx->Driver.ReadStencilSpan) {
-      (*ctx->Driver.ReadStencilSpan)( ctx, (GLuint) n, x, y, stencil );
+   if (swrast->Driver.ReadStencilSpan) {
+      (*swrast->Driver.ReadStencilSpan)( ctx, (GLuint) n, x, y, stencil );
    }
    else if (ctx->DrawBuffer->Stencil) {
       const GLstencil *s = STENCIL_ADDRESS( x, y );
@@ -1061,6 +1064,7 @@ void
 _mesa_write_stencil_span( GLcontext *ctx, GLint n, GLint x, GLint y,
                           const GLstencil stencil[] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    if (y < 0 || y >= ctx->DrawBuffer->Height ||
        x + n <= 0 || x >= ctx->DrawBuffer->Width) {
       /* span is completely outside framebuffer */
@@ -1081,8 +1085,8 @@ _mesa_write_stencil_span( GLcontext *ctx, GLint n, GLint x, GLint y,
       return;
    }
 
-   if (ctx->Driver.WriteStencilSpan) {
-      (*ctx->Driver.WriteStencilSpan)( ctx, n, x, y, stencil, NULL );
+   if (swrast->Driver.WriteStencilSpan) {
+      (*swrast->Driver.WriteStencilSpan)( ctx, n, x, y, stencil, NULL );
    }
    else if (ctx->DrawBuffer->Stencil) {
       GLstencil *s = STENCIL_ADDRESS( x, y );
@@ -1118,7 +1122,7 @@ _mesa_alloc_stencil_buffer( GLcontext *ctx )
    if (!ctx->DrawBuffer->Stencil) {
       /* out of memory */
 /*        _mesa_set_enable( ctx, GL_STENCIL_TEST, GL_FALSE ); */
-      gl_error( ctx, GL_OUT_OF_MEMORY, "_mesa_alloc_stencil_buffer" );
+      _mesa_error( ctx, GL_OUT_OF_MEMORY, "_mesa_alloc_stencil_buffer" );
    }
 }
 
@@ -1212,8 +1216,9 @@ clear_software_stencil_buffer( GLcontext *ctx )
 static void
 clear_hardware_stencil_buffer( GLcontext *ctx )
 {
-   ASSERT(ctx->Driver.WriteStencilSpan);
-   ASSERT(ctx->Driver.ReadStencilSpan);
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
+   ASSERT(swrast->Driver.WriteStencilSpan);
+   ASSERT(swrast->Driver.ReadStencilSpan);
 
    if (ctx->Scissor.Enabled) {
       /* clear scissor region only */
@@ -1228,11 +1233,11 @@ clear_hardware_stencil_buffer( GLcontext *ctx )
             const GLstencil clearVal = (ctx->Stencil.Clear & mask);
             GLstencil stencil[MAX_WIDTH];
             GLint i;
-            (*ctx->Driver.ReadStencilSpan)(ctx, width, x, y, stencil);
+            (*swrast->Driver.ReadStencilSpan)(ctx, width, x, y, stencil);
             for (i = 0; i < width; i++) {
                stencil[i] = (stencil[i] & invMask) | clearVal;
             }
-            (*ctx->Driver.WriteStencilSpan)(ctx, width, x, y, stencil, NULL);
+            (*swrast->Driver.WriteStencilSpan)(ctx, width, x, y, stencil, NULL);
          }
       }
       else {
@@ -1243,7 +1248,7 @@ clear_hardware_stencil_buffer( GLcontext *ctx )
             stencil[i] = ctx->Stencil.Clear;
          }
          for (y = ctx->DrawBuffer->_Ymin; y < ctx->DrawBuffer->_Ymax; y++) {
-            (*ctx->Driver.WriteStencilSpan)(ctx, width, x, y, stencil, NULL);
+            (*swrast->Driver.WriteStencilSpan)(ctx, width, x, y, stencil, NULL);
          }
       }
    }
@@ -1260,12 +1265,12 @@ clear_hardware_stencil_buffer( GLcontext *ctx )
          GLint y;
          for (y = 0; y < height; y++) {
             GLstencil stencil[MAX_WIDTH];
-            GLuint i;
-            (*ctx->Driver.ReadStencilSpan)(ctx, width, x, y, stencil);
+            GLint i;
+            (*swrast->Driver.ReadStencilSpan)(ctx, width, x, y, stencil);
             for (i = 0; i < width; i++) {
                stencil[i] = (stencil[i] & invMask) | clearVal;
             }
-            (*ctx->Driver.WriteStencilSpan)(ctx, width, x, y, stencil, NULL);
+            (*swrast->Driver.WriteStencilSpan)(ctx, width, x, y, stencil, NULL);
          }
       }
       else {
@@ -1279,7 +1284,7 @@ clear_hardware_stencil_buffer( GLcontext *ctx )
             stencil[i] = ctx->Stencil.Clear;
          }
          for (y = 0; y < height; y++) {
-            (*ctx->Driver.WriteStencilSpan)(ctx, width, x, y, stencil, NULL);
+            (*swrast->Driver.WriteStencilSpan)(ctx, width, x, y, stencil, NULL);
          }
       }
    }
@@ -1293,12 +1298,12 @@ clear_hardware_stencil_buffer( GLcontext *ctx )
 void
 _mesa_clear_stencil_buffer( GLcontext *ctx )
 {
-   if (ctx->Driver.WriteStencilSpan) {
-      ASSERT(ctx->Driver.ReadStencilSpan);
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
+   if (swrast->Driver.WriteStencilSpan) {
+      ASSERT(swrast->Driver.ReadStencilSpan);
       clear_hardware_stencil_buffer(ctx);
    }
    else {
       clear_software_stencil_buffer(ctx);
    }
 }
-

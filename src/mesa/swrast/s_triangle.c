@@ -1,21 +1,21 @@
-/* $Id: s_triangle.c,v 1.13 2001/02/16 18:14:41 keithw Exp $ */
+/* $Id: s_triangle.c,v 1.24 2001/03/29 16:50:32 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -26,11 +26,10 @@
 
 
 /*
- * Triangle rasterizers
- * When the device driver doesn't implement triangle rasterization Mesa
- * will use these functions to draw triangles.
+ * When the device driver doesn't implement triangle rasterization it
+ * can hook in _swrast_Triangle, which eventually calls one of these
+ * functions to draw triangles.
  */
-
 
 #include "glheader.h"
 #include "context.h"
@@ -38,6 +37,7 @@
 #include "macros.h"
 #include "mem.h"
 #include "mmath.h"
+#include "texformat.h"
 #include "teximage.h"
 #include "texstate.h"
 
@@ -47,10 +47,10 @@
 #include "s_feedback.h"
 #include "s_span.h"
 #include "s_triangle.h"
- 
-GLboolean gl_cull_triangle( GLcontext *ctx,
-			    const SWvertex *v0, 
-			    const SWvertex *v1, 
+
+GLboolean _mesa_cull_triangle( GLcontext *ctx,
+			    const SWvertex *v0,
+			    const SWvertex *v1,
 			    const SWvertex *v2 )
 {
    GLfloat ex = v1->win[0] - v0->win[0];
@@ -61,20 +61,22 @@ GLboolean gl_cull_triangle( GLcontext *ctx,
 
    if (c * SWRAST_CONTEXT(ctx)->_backface_sign > 0)
       return 0;
-   
+
    return 1;
 }
+
 
 
 /*
  * Render a flat-shaded color index triangle.
  */
 static void flat_ci_triangle( GLcontext *ctx,
-			      const SWvertex *v0, 
-			      const SWvertex *v1, 
+			      const SWvertex *v0,
+			      const SWvertex *v1,
 			      const SWvertex *v2 )
 {
 #define INTERP_Z 1
+#define INTERP_FOG 1
 
 #define INNER_LOOP( LEFT, RIGHT, Y )				\
 	{							\
@@ -89,12 +91,12 @@ static void flat_ci_triangle( GLcontext *ctx,
 		 fogspan[i] = fffog / 256;			\
 		 fffog += fdfogdx;				\
 	      }							\
-	      gl_write_monoindex_span( ctx, n, LEFT, Y, zspan,	\
+	      _mesa_write_monoindex_span( ctx, n, LEFT, Y, zspan,	\
                          fogspan, v0->index, GL_POLYGON );	\
 	   }							\
 	}
 
-#include "s_tritemp.h"	      
+#include "s_tritemp.h"
 }
 
 
@@ -103,11 +105,12 @@ static void flat_ci_triangle( GLcontext *ctx,
  * Render a smooth-shaded color index triangle.
  */
 static void smooth_ci_triangle( GLcontext *ctx,
-				const SWvertex *v0, 
-				const SWvertex *v1, 
+				const SWvertex *v0,
+				const SWvertex *v1,
 				const SWvertex *v2 )
 {
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_INDEX 1
 
 #define INNER_LOOP( LEFT, RIGHT, Y )				\
@@ -126,7 +129,7 @@ static void smooth_ci_triangle( GLcontext *ctx,
 		 fogspan[i] = fffog / 256;			\
 		 fffog += fdfogdx;				\
 	      }							\
-	      gl_write_index_span( ctx, n, LEFT, Y, zspan, fogspan,	\
+	      _mesa_write_index_span( ctx, n, LEFT, Y, zspan, fogspan,	\
 	                           index, GL_POLYGON );		\
 	   }							\
 	}
@@ -145,6 +148,7 @@ static void flat_rgba_triangle( GLcontext *ctx,
 				const SWvertex *v2 )
 {
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 
 #define INNER_LOOP( LEFT, RIGHT, Y )				\
@@ -160,7 +164,7 @@ static void flat_rgba_triangle( GLcontext *ctx,
 		 fogspan[i] = fffog / 256;			\
 		 fffog += fdfogdx;				\
 	      }							\
-              gl_write_monocolor_span( ctx, n, LEFT, Y, zspan,	\
+              _mesa_write_monocolor_span( ctx, n, LEFT, Y, zspan,	\
                                        fogspan, v2->color,	\
 			               GL_POLYGON );		\
 	   }							\
@@ -184,6 +188,7 @@ static void smooth_rgba_triangle( GLcontext *ctx,
 {
 
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
@@ -210,7 +215,7 @@ static void smooth_rgba_triangle( GLcontext *ctx,
 		 ffb += fdbdx;					\
 		 ffa += fdadx;					\
 	      }							\
-	      gl_write_rgba_span( ctx, n, LEFT, Y,		\
+	      _mesa_write_rgba_span( ctx, n, LEFT, Y,		\
                                   (CONST GLdepth *) zspan,	\
                                   fogspan,                      \
 	                          rgba, GL_POLYGON );		\
@@ -239,6 +244,7 @@ static void simple_textured_triangle( GLcontext *ctx,
 #define S_SCALE twidth
 #define T_SCALE theight
 #define SETUP_CODE							\
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);                             \
    struct gl_texture_object *obj = ctx->Texture.Unit[0].Current2D;	\
    GLint b = obj->BaseLevel;						\
    GLfloat twidth = (GLfloat) obj->Image[b]->Width;			\
@@ -271,7 +277,7 @@ static void simple_textured_triangle( GLcontext *ctx,
 		 ffs += fdsdx;					\
 		 fft += fdtdx;					\
 	      }							\
-              (*ctx->Driver.WriteRGBSpan)( ctx, n, LEFT, Y,	\
+              (*swrast->Driver.WriteRGBSpan)( ctx, n, LEFT, Y,	\
                            (CONST GLchan (*)[3]) rgb, NULL );	\
 	   }							\
 	}
@@ -284,7 +290,7 @@ static void simple_textured_triangle( GLcontext *ctx,
  * Render an RGB, GL_DECAL, textured triangle.
  * Interpolate S,T, GL_LESS depth test, w/out mipmapping or
  * perspective correction.
- * 
+ *
  * No fog.
  */
 static void simple_z_textured_triangle( GLcontext *ctx,
@@ -293,11 +299,13 @@ static void simple_z_textured_triangle( GLcontext *ctx,
 					const SWvertex *v2 )
 {
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_INT_TEX 1
 #define S_SCALE twidth
 #define T_SCALE theight
 #define SETUP_CODE							\
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);                             \
    struct gl_texture_object *obj = ctx->Texture.Unit[0].Current2D;	\
    GLint b = obj->BaseLevel;						\
    GLfloat twidth = (GLfloat) obj->Image[b]->Width;			\
@@ -341,7 +349,7 @@ static void simple_z_textured_triangle( GLcontext *ctx,
 		 ffs += fdsdx;					\
 		 fft += fdtdx;					\
 	      }							\
-              (*ctx->Driver.WriteRGBSpan)( ctx, n, LEFT, Y,	\
+              (*swrast->Driver.WriteRGBSpan)( ctx, n, LEFT, Y,	\
                            (CONST GLchan (*)[3]) rgb, mask );	\
 	   }							\
 	}
@@ -360,6 +368,7 @@ static void affine_textured_triangle( GLcontext *ctx,
 				      const SWvertex *v2 )
 {
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
@@ -388,10 +397,10 @@ static void affine_textured_triangle( GLcontext *ctx,
    }									\
    if (envmode == GL_BLEND || envmode == GL_ADD) {                      \
       /* potential off-by-one error here? (1.0f -> 2048 -> 0) */        \
-      er = FloatToFixed(unit->EnvColor[0]);                             \
-      eg = FloatToFixed(unit->EnvColor[1]);                             \
-      eb = FloatToFixed(unit->EnvColor[2]);                             \
-      ea = FloatToFixed(unit->EnvColor[3]);                             \
+      er = FloatToFixed(unit->EnvColor[RCOMP]);                         \
+      eg = FloatToFixed(unit->EnvColor[GCOMP]);                         \
+      eb = FloatToFixed(unit->EnvColor[BCOMP]);                         \
+      ea = FloatToFixed(unit->EnvColor[ACOMP]);                         \
    }                                                                    \
    switch (format) {                                                    \
    case GL_ALPHA:                                                       \
@@ -409,23 +418,23 @@ static void affine_textured_triangle( GLcontext *ctx,
       comp = 4;                                                         \
       break;                                                            \
    default:                                                             \
-      gl_problem(NULL, "Bad texture format in affine_texture_triangle");\
+      _mesa_problem(NULL, "Bad texture format in affine_texture_triangle");\
       return;                                                           \
    }                                                                    \
    tbytesline = obj->Image[b]->Width * comp;                            \
-   tsize = theight * tbytesline;
+   tsize = obj->Image[b]->Height * tbytesline;
 
 
-  /* Instead of defining a function for each mode, a test is done 
+  /* Instead of defining a function for each mode, a test is done
    * between the outer and inner loops. This is to reduce code size
-   * and complexity. Observe that an optimizing compiler kills 
+   * and complexity. Observe that an optimizing compiler kills
    * unused variables (for instance tf,sf,ti,si in case of GL_NEAREST).
-   */ 
+   */
 
 #define NEAREST_RGB    \
-        tr = tex00[0]; \
-        tg = tex00[1]; \
-        tb = tex00[2]; \
+        tr = tex00[RCOMP]; \
+        tg = tex00[GCOMP]; \
+        tb = tex00[BCOMP]; \
         ta = 0xff
 
 #define LINEAR_RGB                                                      \
@@ -438,10 +447,10 @@ static void affine_textured_triangle( GLcontext *ctx,
 	ta = 0xff
 
 #define NEAREST_RGBA   \
-        tr = tex00[0]; \
-        tg = tex00[1]; \
-        tb = tex00[2]; \
-        ta = tex00[3]
+        tr = tex00[RCOMP]; \
+        tg = tex00[GCOMP]; \
+        tb = tex00[BCOMP]; \
+        ta = tex00[ACOMP]
 
 #define LINEAR_RGBA                                                     \
 	tr = (ti * (si * tex00[0] + sf * tex01[0]) +                    \
@@ -454,34 +463,34 @@ static void affine_textured_triangle( GLcontext *ctx,
               tf * (si * tex10[3] + sf * tex11[3])) >> 2 * FIXED_SHIFT
 
 #define MODULATE                                       \
-        dest[0] = ffr * (tr + 1) >> (FIXED_SHIFT + 8); \
-        dest[1] = ffg * (tg + 1) >> (FIXED_SHIFT + 8); \
-        dest[2] = ffb * (tb + 1) >> (FIXED_SHIFT + 8); \
-        dest[3] = ffa * (ta + 1) >> (FIXED_SHIFT + 8)
+        dest[RCOMP] = ffr * (tr + 1) >> (FIXED_SHIFT + 8); \
+        dest[GCOMP] = ffg * (tg + 1) >> (FIXED_SHIFT + 8); \
+        dest[BCOMP] = ffb * (tb + 1) >> (FIXED_SHIFT + 8); \
+        dest[ACOMP] = ffa * (ta + 1) >> (FIXED_SHIFT + 8)
 
 #define DECAL                                                                \
-	dest[0] = ((0xff - ta) * ffr + ((ta + 1) * tr << FIXED_SHIFT)) >> (FIXED_SHIFT + 8); \
-	dest[1] = ((0xff - ta) * ffg + ((ta + 1) * tg << FIXED_SHIFT)) >> (FIXED_SHIFT + 8); \
-	dest[2] = ((0xff - ta) * ffb + ((ta + 1) * tb << FIXED_SHIFT)) >> (FIXED_SHIFT + 8); \
-	dest[3] = FixedToInt(ffa)
+	dest[RCOMP] = ((0xff - ta) * ffr + ((ta + 1) * tr << FIXED_SHIFT)) >> (FIXED_SHIFT + 8); \
+	dest[GCOMP] = ((0xff - ta) * ffg + ((ta + 1) * tg << FIXED_SHIFT)) >> (FIXED_SHIFT + 8); \
+	dest[BCOMP] = ((0xff - ta) * ffb + ((ta + 1) * tb << FIXED_SHIFT)) >> (FIXED_SHIFT + 8); \
+	dest[ACOMP] = FixedToInt(ffa)
 
 #define BLEND                                                               \
-        dest[0] = ((0xff - tr) * ffr + (tr + 1) * er) >> (FIXED_SHIFT + 8); \
-        dest[1] = ((0xff - tg) * ffg + (tg + 1) * eg) >> (FIXED_SHIFT + 8); \
-        dest[2] = ((0xff - tb) * ffb + (tb + 1) * eb) >> (FIXED_SHIFT + 8); \
-        dest[3] = ffa * (ta + 1) >> (FIXED_SHIFT + 8)
+        dest[RCOMP] = ((0xff - tr) * ffr + (tr + 1) * er) >> (FIXED_SHIFT + 8); \
+        dest[GCOMP] = ((0xff - tg) * ffg + (tg + 1) * eg) >> (FIXED_SHIFT + 8); \
+        dest[BCOMP] = ((0xff - tb) * ffb + (tb + 1) * eb) >> (FIXED_SHIFT + 8); \
+        dest[ACOMP] = ffa * (ta + 1) >> (FIXED_SHIFT + 8)
 
 #define REPLACE       \
-        dest[0] = tr; \
-        dest[1] = tg; \
-        dest[2] = tb; \
-        dest[3] = ta
+        dest[RCOMP] = tr; \
+        dest[GCOMP] = tg; \
+        dest[BCOMP] = tb; \
+        dest[ACOMP] = ta
 
 #define ADD                                                          \
-        dest[0] = ((ffr << 8) + (tr + 1) * er) >> (FIXED_SHIFT + 8); \
-        dest[1] = ((ffg << 8) + (tg + 1) * eg) >> (FIXED_SHIFT + 8); \
-        dest[2] = ((ffb << 8) + (tb + 1) * eb) >> (FIXED_SHIFT + 8); \
-        dest[3] = ffa * (ta + 1) >> (FIXED_SHIFT + 8)
+        dest[RCOMP] = ((ffr << 8) + (tr + 1) * er) >> (FIXED_SHIFT + 8); \
+        dest[GCOMP] = ((ffg << 8) + (tg + 1) * eg) >> (FIXED_SHIFT + 8); \
+        dest[BCOMP] = ((ffb << 8) + (tb + 1) * eb) >> (FIXED_SHIFT + 8); \
+        dest[ACOMP] = ffa * (ta + 1) >> (FIXED_SHIFT + 8)
 
 /* shortcuts */
 
@@ -648,7 +657,7 @@ static void affine_textured_triangle( GLcontext *ctx,
 	         }                                         \
                  break;                                    \
 	      }                                            \
-              gl_write_rgba_span(ctx, n, LEFT, Y, zspan,   \
+              _mesa_write_rgba_span(ctx, n, LEFT, Y, zspan,   \
                                  fogspan,                  \
                                  rgba, GL_POLYGON);        \
               /* explicit kill of variables: */            \
@@ -683,12 +692,13 @@ static void near_persp_textured_triangle(GLcontext *ctx,
 /* The BIAS value is used to shift negative values into positive values.
  * Without this, negative texture values don't GL_REPEAT correctly at just
  * below zero, because (int)-0.5 = 0 = (int)0.5. We're not going to worry
- * about texture coords less than -BIAS. This could be fixed by using 
+ * about texture coords less than -BIAS. This could be fixed by using
  * FLOORF etc. instead, but this is slower...
  */
 #define BIAS 4096.0F
 
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
@@ -713,10 +723,10 @@ static void near_persp_textured_triangle(GLcontext *ctx,
       return;								\
    }									\
    if (envmode == GL_BLEND || envmode == GL_ADD) {                      \
-      er = FloatToFixed(unit->EnvColor[0]);                             \
-      eg = FloatToFixed(unit->EnvColor[1]);                             \
-      eb = FloatToFixed(unit->EnvColor[2]);                             \
-      ea = FloatToFixed(unit->EnvColor[3]);                             \
+      er = FloatToFixed(unit->EnvColor[RCOMP]);                         \
+      eg = FloatToFixed(unit->EnvColor[GCOMP]);                         \
+      eb = FloatToFixed(unit->EnvColor[BCOMP]);                         \
+      ea = FloatToFixed(unit->EnvColor[ACOMP]);                         \
    }                                                                    \
    sscale = twidth;                                                     \
    tscale = theight;                                                    \
@@ -728,7 +738,7 @@ static void near_persp_textured_triangle(GLcontext *ctx,
       GLint s = (int)(SS * invQ + BIAS) & smask;      \
       GLint t = (int)(TT * invQ + BIAS) & tmask;      \
       GLint pos = COMP * ((t << twidth_log2) + s);    \
-      GLchan *tex00 = texture + pos;                  \
+      const GLchan *tex00 = texture + pos;            \
       zspan[i] = FixedToDepth(ffz);                   \
       fogspan[i] = fffog / 256;                       \
       DO_TEX;                                         \
@@ -817,7 +827,7 @@ static void near_persp_textured_triangle(GLcontext *ctx,
       DRAW_LINE (DO_TEX);					\
       x_m ++;							\
    }								\
-} 
+}
 
 #define SPAN3(DO_TEX, COMP, TEX_COORD) {				\
    GLfloat x_min = FLOORF (x_tex);					\
@@ -854,7 +864,7 @@ static void near_persp_textured_triangle(GLcontext *ctx,
       DRAW_LINE (DO_TEX);						\
    }									\
 }
-					
+
 #define SPAN4(DO_TEX, COMP, TEX_COORD)					\
 {									\
    GLfloat x_min = FLOORF(x_tex);					\
@@ -1385,7 +1395,7 @@ static void near_persp_textured_triangle(GLcontext *ctx,
                break;							\
             }								\
          }								\
-         gl_write_rgba_span( ctx, n, LEFT, Y, zspan,			\
+         _mesa_write_rgba_span( ctx, n, LEFT, Y, zspan,			\
                              fogspan, rgba, GL_POLYGON);		\
          ffr = ffg = ffb = ffa = 0;					\
       }									\
@@ -1420,6 +1430,7 @@ static void lin_persp_textured_triangle( GLcontext *ctx,
 					 const SWvertex *v2 )
 {
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
@@ -1444,10 +1455,10 @@ static void lin_persp_textured_triangle( GLcontext *ctx,
       return;								\
    }									\
    if (envmode == GL_BLEND || envmode == GL_ADD) {                      \
-      er = FloatToFixed(unit->EnvColor[0]);                             \
-      eg = FloatToFixed(unit->EnvColor[1]);                             \
-      eb = FloatToFixed(unit->EnvColor[2]);                             \
-      ea = FloatToFixed(unit->EnvColor[3]);                             \
+      er = FloatToFixed(unit->EnvColor[RCOMP]);                         \
+      eg = FloatToFixed(unit->EnvColor[GCOMP]);                         \
+      eb = FloatToFixed(unit->EnvColor[BCOMP]);                         \
+      ea = FloatToFixed(unit->EnvColor[ACOMP]);                         \
    }                                                                    \
    switch (format) {                                                    \
    case GL_ALPHA:							\
@@ -1465,7 +1476,7 @@ static void lin_persp_textured_triangle( GLcontext *ctx,
       comp = 4;                                                         \
       break;                                                            \
    default:								\
-      gl_problem(NULL, "Bad texture format in lin_persp_texture_triangle"); \
+      _mesa_problem(NULL, "Bad texture format in lin_persp_texture_triangle"); \
       return;                                                           \
    }                                                                    \
    sscale = FIXED_SCALE * twidth;                                       \
@@ -1570,7 +1581,7 @@ static void lin_persp_textured_triangle( GLcontext *ctx,
                abort();					\
             }						\
          }						\
-         gl_write_rgba_span( ctx, n, LEFT, Y, zspan,	\
+         _mesa_write_rgba_span( ctx, n, LEFT, Y, zspan,	\
                              fogspan,                   \
                              rgba, GL_POLYGON );	\
          ffr = ffg = ffb = ffa = 0;			\
@@ -1595,6 +1606,7 @@ static void general_textured_triangle( GLcontext *ctx,
 				       const SWvertex *v2 )
 {
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
@@ -1603,10 +1615,10 @@ static void general_textured_triangle( GLcontext *ctx,
    GLboolean flat_shade = (ctx->Light.ShadeModel==GL_FLAT);	\
    GLint r, g, b, a;						\
    if (flat_shade) {						\
-      r = v2->color[0];						\
-      g = v2->color[1];						\
-      b = v2->color[2];						\
-      a = v2->color[3];						\
+      r = v2->color[RCOMP];					\
+      g = v2->color[GCOMP];					\
+      b = v2->color[BCOMP];					\
+      a = v2->color[ACOMP];					\
    }
 #define INNER_LOOP( LEFT, RIGHT, Y )				\
 	{							\
@@ -1661,7 +1673,7 @@ static void general_textured_triangle( GLcontext *ctx,
 		    vv += dvdx;					\
 		 }						\
               }							\
-	      gl_write_texture_span( ctx, n, LEFT, Y, zspan, fogspan,	\
+	      _mesa_write_texture_span( ctx, n, LEFT, Y, zspan, fogspan,	\
                                      s, t, u, NULL, 		\
 	                             rgba, \
                                      NULL, GL_POLYGON );	\
@@ -1689,6 +1701,7 @@ static void general_textured_spec_triangle1( GLcontext *ctx,
                                              GLchan spec[MAX_WIDTH][4] )
 {
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_SPEC 1
@@ -1698,13 +1711,13 @@ static void general_textured_spec_triangle1( GLcontext *ctx,
    GLboolean flat_shade = (ctx->Light.ShadeModel==GL_FLAT);	\
    GLint r, g, b, a, sr, sg, sb;				\
    if (flat_shade) {						\
-      r = v2->color[0];						\
-      g = v2->color[1];						\
-      b = v2->color[2];						\
-      a = v2->color[3];						\
-      sr = v2->specular[0]; 					\
-      sg = v2->specular[1]; 					\
-      sb = v2->specular[2]; 					\
+      r = v2->color[RCOMP];					\
+      g = v2->color[GCOMP];					\
+      b = v2->color[BCOMP];					\
+      a = v2->color[ACOMP];					\
+      sr = v2->specular[RCOMP];					\
+      sg = v2->specular[GCOMP];					\
+      sb = v2->specular[BCOMP];					\
    }
 #define INNER_LOOP( LEFT, RIGHT, Y )				\
 	{							\
@@ -1765,7 +1778,7 @@ static void general_textured_spec_triangle1( GLcontext *ctx,
 		    vv += dvdx;					\
 		 }						\
               }							\
-	      gl_write_texture_span( ctx, n, LEFT, Y, zspan,	\
+	      _mesa_write_texture_span( ctx, n, LEFT, Y, zspan,	\
                                    fogspan,                     \
                                    s, t, u, NULL, rgba,		\
                                    (CONST GLchan (*)[4]) spec,	\
@@ -1774,26 +1787,6 @@ static void general_textured_spec_triangle1( GLcontext *ctx,
 	}
 
 #include "s_tritemp.h"
-}
-
-
-
-/*
- * Compute the lambda value for a fragment. (texture level of detail)
- */
-static INLINE GLfloat
-compute_lambda( GLfloat dsdx, GLfloat dsdy, GLfloat dtdx, GLfloat dtdy,
-                GLfloat invQ, GLfloat width, GLfloat height ) 
-{
-   GLfloat dudx = dsdx * invQ * width;
-   GLfloat dudy = dsdy * invQ * width;
-   GLfloat dvdx = dtdx * invQ * height;
-   GLfloat dvdy = dtdy * invQ * height;
-   GLfloat r1 = dudx * dudx + dudy * dudy;
-   GLfloat r2 = dvdx * dvdx + dvdy * dvdy;
-   GLfloat rho2 = r1 + r2;     /* used to be:  rho2 = MAX2(r1,r2); */
-   /* return log base 2 of rho */
-   return log(rho2) * 1.442695 * 0.5;       /* 1.442695 = 1/log(2) */
 }
 
 
@@ -1807,12 +1800,13 @@ compute_lambda( GLfloat dsdx, GLfloat dsdy, GLfloat dtdx, GLfloat dtdy,
 static void lambda_textured_triangle1( GLcontext *ctx,
 				       const SWvertex *v0,
 				       const SWvertex *v1,
-				       const SWvertex *v2, 
+				       const SWvertex *v2,
                                        GLfloat s[MAX_WIDTH],
                                        GLfloat t[MAX_WIDTH],
                                        GLfloat u[MAX_WIDTH] )
 {
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
@@ -1828,10 +1822,10 @@ static void lambda_textured_triangle1( GLcontext *ctx,
    const GLboolean flat_shade = (ctx->Light.ShadeModel==GL_FLAT);	\
    GLint r, g, b, a;							\
    if (flat_shade) {							\
-      r = v2->color[0];							\
-      g = v2->color[1];							\
-      b = v2->color[2];							\
-      a = v2->color[3];							\
+      r = v2->color[RCOMP];						\
+      g = v2->color[GCOMP];						\
+      b = v2->color[BCOMP];						\
+      a = v2->color[ACOMP];						\
    }
 
 #define INNER_LOOP( LEFT, RIGHT, Y )					\
@@ -1855,7 +1849,7 @@ static void lambda_textured_triangle1( GLcontext *ctx,
 		    s[i] = ss*invQ;					\
 		    t[i] = tt*invQ;					\
 		    u[i] = uu*invQ;					\
-                    lambda[i] = COMPUTE_LAMBDA(invQ);			\
+                    COMPUTE_LAMBDA(lambda[i], invQ);			\
 		    ffz += fdzdx;					\
 		    fffog += fdfogdx;					\
 		    ss += dsdx;						\
@@ -1876,7 +1870,7 @@ static void lambda_textured_triangle1( GLcontext *ctx,
 		    s[i] = ss*invQ;					\
 		    t[i] = tt*invQ;					\
 		    u[i] = uu*invQ;					\
-                    lambda[i] = COMPUTE_LAMBDA(invQ);			\
+                    COMPUTE_LAMBDA(lambda[i], invQ);			\
 		    ffz += fdzdx;					\
 		    fffog += fdfogdx;					\
 		    ffr += fdrdx;					\
@@ -1889,7 +1883,7 @@ static void lambda_textured_triangle1( GLcontext *ctx,
 		    vv += dvdx;						\
 		 }							\
               }								\
-	      gl_write_texture_span( ctx, n, LEFT, Y, zspan, fogspan,	\
+	      _mesa_write_texture_span( ctx, n, LEFT, Y, zspan, fogspan,	\
                                      s, t, u, lambda,	 		\
 	                             rgba, NULL, GL_POLYGON );		\
 	   }								\
@@ -1916,6 +1910,7 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
                                             GLfloat u[MAX_WIDTH] )
 {
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_SPEC 1
@@ -1932,13 +1927,13 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
    const GLboolean flat_shade = (ctx->Light.ShadeModel==GL_FLAT);	\
    GLint r, g, b, a, sr, sg, sb;					\
    if (flat_shade) {							\
-      r = v2->color[0];							\
-      g = v2->color[1];							\
-      b = v2->color[2];							\
-      a = v2->color[3];							\
-      sr = v2->specular[0];						\
-      sg = v2->specular[1];						\
-      sb = v2->specular[2];						\
+      r = v2->color[RCOMP];						\
+      g = v2->color[GCOMP];						\
+      b = v2->color[BCOMP];						\
+      a = v2->color[ACOMP];						\
+      sr = v2->specular[RCOMP];						\
+      sg = v2->specular[GCOMP];						\
+      sb = v2->specular[BCOMP];						\
    }
 
 #define INNER_LOOP( LEFT, RIGHT, Y )					\
@@ -1966,7 +1961,7 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
 		    s[i] = ss*invQ;					\
 		    t[i] = tt*invQ;					\
 		    u[i] = uu*invQ;					\
-                    lambda[i] = COMPUTE_LAMBDA(invQ);			\
+                    COMPUTE_LAMBDA(lambda[i], invQ);			\
 		    fffog += fdfogdx;					\
 		    ffz += fdzdx;					\
 		    ss += dsdx;						\
@@ -1990,7 +1985,7 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
 		    s[i] = ss*invQ;					\
 		    t[i] = tt*invQ;					\
 		    u[i] = uu*invQ;					\
-                    lambda[i] = COMPUTE_LAMBDA(invQ);			\
+                    COMPUTE_LAMBDA(lambda[i], invQ);			\
 		    fffog += fdfogdx;					\
 		    ffz += fdzdx;					\
 		    ffr += fdrdx;					\
@@ -2006,7 +2001,7 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
 		    vv += dvdx;						\
 		 }							\
               }								\
-	      gl_write_texture_span( ctx, n, LEFT, Y, zspan, fogspan,	\
+	      _mesa_write_texture_span( ctx, n, LEFT, Y, zspan, fogspan,	\
                                      s, t, u, lambda,	 		\
 	                             rgba, (CONST GLchan (*)[4]) spec,	\
                                      GL_POLYGON );			\
@@ -2022,7 +2017,7 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
  * Interpolate Z, RGB, Alpha, and two sets of texture coordinates.
  * Yup, it's slow.
  */
-static void 
+static void
 lambda_multitextured_triangle1( GLcontext *ctx,
 				const SWvertex *v0,
 				const SWvertex *v1,
@@ -2032,117 +2027,110 @@ lambda_multitextured_triangle1( GLcontext *ctx,
 				GLfloat u[MAX_TEXTURE_UNITS][MAX_WIDTH])
 {
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
 #define INTERP_MULTITEX 1
+#define INTERP_MULTILAMBDA 1
 
-#define SETUP_CODE								\
-   GLchan rgba[MAX_WIDTH][4];							\
-   const GLboolean flat_shade = (ctx->Light.ShadeModel==GL_FLAT);		\
-   GLfloat twidth[MAX_TEXTURE_UNITS], theight[MAX_TEXTURE_UNITS];		\
-   GLint r, g, b, a;								\
-   if (flat_shade) {								\
-      r = v2->color[0];								\
-      g = v2->color[1];								\
-      b = v2->color[2];								\
-      a = v2->color[3];								\
-   }										\
-   {										\
-      GLuint unit;								\
-      for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {		\
-         if (ctx->Texture.Unit[unit]._ReallyEnabled) {				\
+#define SETUP_CODE							\
+   GLchan rgba[MAX_WIDTH][4];						\
+   const GLboolean flat_shade = (ctx->Light.ShadeModel==GL_FLAT);	\
+   GLfloat twidth[MAX_TEXTURE_UNITS], theight[MAX_TEXTURE_UNITS];	\
+   GLint r, g, b, a;							\
+   if (flat_shade) {							\
+      r = v2->color[0];							\
+      g = v2->color[1];							\
+      b = v2->color[2];							\
+      a = v2->color[3];							\
+   }									\
+   {									\
+      GLuint unit;							\
+      for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {	\
+         if (ctx->Texture.Unit[unit]._ReallyEnabled) {			\
             const struct gl_texture_object *obj = ctx->Texture.Unit[unit]._Current; \
-            const GLint baseLevel = obj->BaseLevel;				\
-            const struct gl_texture_image *texImage = obj->Image[baseLevel];	\
-            twidth[unit] = (GLfloat) texImage->Width;				\
-            theight[unit] = (GLfloat) texImage->Height;				\
-         }									\
-      }										\
+            const GLint baseLevel = obj->BaseLevel;			\
+            const struct gl_texture_image *texImage = obj->Image[baseLevel];\
+            twidth[unit] = (GLfloat) texImage->Width;			\
+            theight[unit] = (GLfloat) texImage->Height;			\
+         }								\
+      }									\
    }
 
-
-
-#define INNER_LOOP( LEFT, RIGHT, Y )						\
-   {										\
-      GLint i;									\
-      const GLint n = RIGHT-LEFT;						\
-      GLdepth zspan[MAX_WIDTH];							\
-      GLfixed fogspan[MAX_WIDTH];						\
-      GLfloat lambda[MAX_TEXTURE_UNITS][MAX_WIDTH];				\
-      if (n > 0) {								\
-         if (flat_shade) {							\
-	    for (i=0;i<n;i++) {							\
-	       zspan[i] = FixedToDepth(ffz);					\
-	       fogspan[i] = fffog / 256;					\
-               fffog += fdfogdx;						\
-	       ffz += fdzdx;							\
-	       rgba[i][RCOMP] = r;						\
-	       rgba[i][GCOMP] = g;						\
-	       rgba[i][BCOMP] = b;						\
-	       rgba[i][ACOMP] = a;						\
-	       {								\
-		  GLuint unit;							\
-		  for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {	\
-		     if (ctx->Texture.Unit[unit]._ReallyEnabled) {		\
-			GLdouble invQ = 1.0 / vv[unit];				\
-			s[unit][i] = ss[unit] * invQ;				\
-			t[unit][i] = tt[unit] * invQ;				\
-			u[unit][i] = uu[unit] * invQ;				\
-			lambda[unit][i] = compute_lambda(dsdx[unit], dsdy[unit],\
-				   dtdx[unit], dtdy[unit], invQ,		\
-				   twidth[unit], theight[unit] );		\
-			ss[unit] += dsdx[unit];					\
-			tt[unit] += dtdx[unit];					\
-			uu[unit] += dudx[unit];					\
-			vv[unit] += dvdx[unit];					\
-		     }								\
-		  }								\
-	       }								\
-	    }									\
-	 }									\
-	 else { /* smooth shade */						\
-	    for (i=0;i<n;i++) {							\
-	       zspan[i] = FixedToDepth(ffz);					\
-	       fogspan[i] = fffog / 256;					\
-	       ffz += fdzdx;							\
-	       fffog += fdfogdx;						\
-	       rgba[i][RCOMP] = FixedToInt(ffr);				\
-	       rgba[i][GCOMP] = FixedToInt(ffg);				\
-	       rgba[i][BCOMP] = FixedToInt(ffb);				\
-	       rgba[i][ACOMP] = FixedToInt(ffa);				\
-	       ffr += fdrdx;							\
-	       ffg += fdgdx;							\
-	       ffb += fdbdx;							\
-	       ffa += fdadx;							\
-	       {								\
-		  GLuint unit;							\
-		  for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {	\
-		     if (ctx->Texture.Unit[unit]._ReallyEnabled) {		\
-			GLdouble invQ = 1.0 / vv[unit];				\
-			s[unit][i] = ss[unit] * invQ;				\
-			t[unit][i] = tt[unit] * invQ;				\
-			u[unit][i] = uu[unit] * invQ;				\
-			lambda[unit][i] = compute_lambda(dsdx[unit], dsdy[unit],\
-				   dtdx[unit], dtdy[unit], invQ,		\
-				   twidth[unit], theight[unit] );		\
-			ss[unit] += dsdx[unit];					\
-			tt[unit] += dtdx[unit];					\
-			uu[unit] += dudx[unit];					\
-			vv[unit] += dvdx[unit];					\
-		     }								\
-		  }								\
-	       }								\
-	    }									\
-	 }									\
-	 gl_write_multitexture_span( ctx, n, LEFT, Y, zspan, fogspan,		\
-				     (const GLfloat (*)[MAX_WIDTH]) s,		\
-				     (const GLfloat (*)[MAX_WIDTH]) t,		\
-				     (const GLfloat (*)[MAX_WIDTH]) u,		\
-				     (GLfloat (*)[MAX_WIDTH]) lambda,		\
-				     rgba, NULL, GL_POLYGON );			\
-      }										\
+#define INNER_LOOP( LEFT, RIGHT, Y )					\
+   {									\
+      GLint i;								\
+      const GLint n = RIGHT-LEFT;					\
+      GLdepth zspan[MAX_WIDTH];						\
+      GLfixed fogspan[MAX_WIDTH];					\
+      GLfloat lambda[MAX_TEXTURE_UNITS][MAX_WIDTH];			\
+      if (n > 0) {							\
+         if (flat_shade) {						\
+	    for (i=0;i<n;i++) {						\
+               GLuint unit;						\
+	       zspan[i] = FixedToDepth(ffz);				\
+	       fogspan[i] = fffog / 256;				\
+               fffog += fdfogdx;					\
+	       ffz += fdzdx;						\
+	       rgba[i][RCOMP] = r;					\
+	       rgba[i][GCOMP] = g;					\
+	       rgba[i][BCOMP] = b;					\
+	       rgba[i][ACOMP] = a;					\
+	       for (unit=0; unit < ctx->Const.MaxTextureUnits; unit++) {\
+                  if (ctx->Texture.Unit[unit]._ReallyEnabled) {		\
+		     GLdouble invQ = 1.0 / vv[unit];			\
+		     s[unit][i] = ss[unit] * invQ;			\
+		     t[unit][i] = tt[unit] * invQ;			\
+		     u[unit][i] = uu[unit] * invQ;			\
+                     COMPUTE_MULTILAMBDA(lambda[unit][i], invQ, unit);	\
+	             ss[unit] += dsdx[unit];				\
+		     tt[unit] += dtdx[unit];				\
+		     uu[unit] += dudx[unit];				\
+		     vv[unit] += dvdx[unit];				\
+		  }							\
+	       }							\
+	    }								\
+	 }								\
+	 else { /* smooth shade */					\
+	    for (i=0;i<n;i++) {						\
+               GLuint unit;						\
+	       zspan[i] = FixedToDepth(ffz);				\
+	       fogspan[i] = fffog / 256;				\
+	       ffz += fdzdx;						\
+	       fffog += fdfogdx;					\
+	       rgba[i][RCOMP] = FixedToInt(ffr);			\
+	       rgba[i][GCOMP] = FixedToInt(ffg);			\
+	       rgba[i][BCOMP] = FixedToInt(ffb);			\
+	       rgba[i][ACOMP] = FixedToInt(ffa);			\
+	       ffr += fdrdx;						\
+	       ffg += fdgdx;						\
+	       ffb += fdbdx;						\
+	       ffa += fdadx;						\
+               for (unit=0; unit < ctx->Const.MaxTextureUnits; unit++) {\
+		  if (ctx->Texture.Unit[unit]._ReallyEnabled) {		\
+		     GLdouble invQ = 1.0 / vv[unit];			\
+		     s[unit][i] = ss[unit] * invQ;			\
+		     t[unit][i] = tt[unit] * invQ;			\
+		     u[unit][i] = uu[unit] * invQ;			\
+                     COMPUTE_MULTILAMBDA(lambda[unit][i], invQ, unit);  \
+		     ss[unit] += dsdx[unit];				\
+		     tt[unit] += dtdx[unit];				\
+		     uu[unit] += dudx[unit];				\
+		     vv[unit] += dvdx[unit];				\
+		  }							\
+	       }							\
+	    }								\
+	 }								\
+	 _mesa_write_multitexture_span(ctx, n, LEFT, Y, zspan, fogspan,	\
+				       (const GLfloat (*)[MAX_WIDTH]) s,\
+                                       (const GLfloat (*)[MAX_WIDTH]) t,\
+                                       (const GLfloat (*)[MAX_WIDTH]) u,\
+                                       (GLfloat (*)[MAX_WIDTH]) lambda,	\
+                                       rgba, NULL, GL_POLYGON );	\
+      }									\
    }
+
 #include "s_tritemp.h"
 }
 
@@ -2158,7 +2146,7 @@ static void general_textured_spec_triangle(GLcontext *ctx,
 					   const SWvertex *v2 )
 {
    GLdepth zspan[MAX_WIDTH];
-   GLfixed fogspan[MAX_WIDTH];	                   
+   GLfixed fogspan[MAX_WIDTH];
    GLchan rgba[MAX_WIDTH][4], spec[MAX_WIDTH][4];
    general_textured_spec_triangle1(ctx,v0,v1,v2,zspan,fogspan,rgba,spec);
 }
@@ -2194,9 +2182,9 @@ static void lambda_multitextured_triangle( GLcontext *ctx,
    GLfloat t[MAX_TEXTURE_UNITS][MAX_WIDTH];
    DEFMARRAY(GLfloat,u,MAX_TEXTURE_UNITS,MAX_WIDTH);
    CHECKARRAY(u,return);
-   
+
    lambda_multitextured_triangle1(ctx,v0,v1,v2,s,t,u);
-   
+
    UNDEFARRAY(u);
 }
 
@@ -2213,6 +2201,7 @@ static void occlusion_zless_triangle( GLcontext *ctx,
 
 #define DO_OCCLUSION_TEST
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define DEPTH_TYPE DEFAULT_SOFTWARE_DEPTH_TYPE
 #define INNER_LOOP( LEFT, RIGHT, Y )		\
    {						\
@@ -2231,7 +2220,13 @@ static void occlusion_zless_triangle( GLcontext *ctx,
 #include "s_tritemp.h"
 }
 
-
+static void nodraw_triangle( GLcontext *ctx,
+			     const SWvertex *v0,
+			     const SWvertex *v1,
+			     const SWvertex *v2 )
+{
+   (void) (ctx && v0 && v1 && v2);
+}
 
 void _swrast_add_spec_terms_triangle( GLcontext *ctx,
 				      const SWvertex *v0,
@@ -2251,16 +2246,29 @@ void _swrast_add_spec_terms_triangle( GLcontext *ctx,
    SWRAST_CONTEXT(ctx)->SpecTriangle( ctx, ncv0, ncv1, ncv2 );
    COPY_CHAN4( ncv0->color, c[0] );
    COPY_CHAN4( ncv1->color, c[1] );
-   COPY_CHAN4( ncv2->color, c[2] );   
+   COPY_CHAN4( ncv2->color, c[2] );
 }
 
 
 
-#if 0
-# define dputs(s) puts(s)
+#ifdef DEBUG
+
+/* record the current triangle function name */
+static const char *triFuncName = NULL;
+
+#define USE(triFunc)                   \
+do {                                   \
+    triFuncName = #triFunc;            \
+    /*printf("%s\n", triFuncName);*/   \
+    swrast->Triangle = triFunc;        \
+} while (0)
+
 #else
-# define dputs(s)
+
+#define USE(triFunc)  swrast->Triangle = triFunc;
+
 #endif
+
 
 
 
@@ -2271,11 +2279,17 @@ void _swrast_add_spec_terms_triangle( GLcontext *ctx,
  * Please update the summary flag _SWRAST_NEW_TRIANGLE if you add or
  * remove tests to this code.
  */
-void 
+void
 _swrast_choose_triangle( GLcontext *ctx )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const GLboolean rgbmode = ctx->Visual.rgbMode;
+
+   if (ctx->Polygon.CullFlag &&
+       ctx->Polygon.CullFaceMode == GL_FRONT_AND_BACK) {
+      USE(nodraw_triangle);
+      return;
+   }
 
    if (ctx->RenderMode==GL_RENDER) {
 
@@ -2291,80 +2305,74 @@ _swrast_choose_triangle( GLcontext *ctx )
           ctx->Depth.Func == GL_LESS &&
           !ctx->Stencil.Enabled) {
          if ((rgbmode &&
-              ctx->Color.ColorMask[0] == 0 && 
-              ctx->Color.ColorMask[1] == 0 && 
+              ctx->Color.ColorMask[0] == 0 &&
+              ctx->Color.ColorMask[1] == 0 &&
               ctx->Color.ColorMask[2] == 0 &&
               ctx->Color.ColorMask[3] == 0)
              ||
              (!rgbmode && ctx->Color.IndexMask == 0)) {
-            dputs("occlusion_test_triangle");
-            swrast->Triangle = occlusion_zless_triangle;
+            USE(occlusion_zless_triangle);
             return;
          }
       }
 
       if (ctx->Texture._ReallyEnabled) {
          /* Ugh, we do a _lot_ of tests to pick the best textured tri func */
-	 GLint format, filter;
-	 const struct gl_texture_object *current2Dtex = ctx->Texture.Unit[0].Current2D;
-         const struct gl_texture_image *image;
+	 const struct gl_texture_object *texObj2D;
+         const struct gl_texture_image *texImg;
+         GLenum minFilter, magFilter, envMode;
+         GLint format;
+         texObj2D = ctx->Texture.Unit[0].Current2D;
+         texImg = texObj2D ? texObj2D->Image[texObj2D->BaseLevel] : NULL;
+         format = texImg ? texImg->TexFormat->MesaFormat : -1;
+         minFilter = texObj2D ? texObj2D->MinFilter : (GLenum) 0;
+         magFilter = texObj2D ? texObj2D->MagFilter : (GLenum) 0;
+         envMode = ctx->Texture.Unit[0].EnvMode;
+
          /* First see if we can used an optimized 2-D texture function */
          if (ctx->Texture._ReallyEnabled==TEXTURE0_2D
-             && current2Dtex->WrapS==GL_REPEAT
-	     && current2Dtex->WrapT==GL_REPEAT
-             && ((image = current2Dtex->Image[current2Dtex->BaseLevel]) != 0)  /* correct! */
-             && image->Border==0
-             && ((format = image->Format)==GL_RGB || format==GL_RGBA)
-             && image->Type == CHAN_TYPE
-	     && (filter = current2Dtex->MinFilter)==current2Dtex->MagFilter
-	     /* ==> current2Dtex->MinFilter != GL_XXX_MIPMAP_XXX */
-	     && ctx->Light.Model.ColorControl==GL_SINGLE_COLOR
-	     && ctx->Texture.Unit[0].EnvMode!=GL_COMBINE_EXT) {
-
+             && texObj2D->WrapS==GL_REPEAT
+	     && texObj2D->WrapT==GL_REPEAT
+             && texImg->Border==0
+             && (format == MESA_FORMAT_RGB || format == MESA_FORMAT_RGBA)
+	     && minFilter == magFilter
+	     && ctx->Light.Model.ColorControl == GL_SINGLE_COLOR
+	     && ctx->Texture.Unit[0].EnvMode != GL_COMBINE_EXT) {
 	    if (ctx->Hint.PerspectiveCorrection==GL_FASTEST) {
-	     
-	       if (filter==GL_NEAREST
-		   && format==GL_RGB
-		   && (ctx->Texture.Unit[0].EnvMode==GL_REPLACE
-		       || ctx->Texture.Unit[0].EnvMode==GL_DECAL)
-		   && ((swrast->_RasterMask==DEPTH_BIT
-			&& ctx->Depth.Func==GL_LESS
-			&& ctx->Depth.Mask==GL_TRUE)
-		       || swrast->_RasterMask==0)
-		   && ctx->Polygon.StippleFlag==GL_FALSE) {
-
+	       if (minFilter == GL_NEAREST
+		   && format == GL_RGB
+		   && (envMode == GL_REPLACE || envMode == GL_DECAL)
+		   && ((swrast->_RasterMask == DEPTH_BIT
+			&& ctx->Depth.Func == GL_LESS
+			&& ctx->Depth.Mask == GL_TRUE)
+		       || swrast->_RasterMask == 0)
+		   && ctx->Polygon.StippleFlag == GL_FALSE) {
 		  if (swrast->_RasterMask==DEPTH_BIT) {
-		     swrast->Triangle = simple_z_textured_triangle;
-		     dputs("simple_z_textured_triangle");
+		     USE(simple_z_textured_triangle);
 		  }
 		  else {
-		     swrast->Triangle = simple_textured_triangle;
-		     dputs("simple_textured_triangle");
+		     USE(simple_textured_triangle);
 		  }
 	       }
 	       else {
                   if (ctx->Texture.Unit[0].EnvMode==GL_ADD) {
-                     swrast->Triangle = general_textured_triangle;
-                     dputs("general_textured_triangle");
+                     USE(general_textured_triangle);
                   }
                   else {
-                     swrast->Triangle = affine_textured_triangle;
-                     dputs("affine_textured_triangle");
+                     USE(affine_textured_triangle);
                   }
 	       }
 	    }
 	    else {
 #if 00 /* XXX these function have problems with texture coord interpolation */
 	       if (filter==GL_NEAREST) {
-		 swrast->Triangle = near_persp_textured_triangle;
-		 dputs("near_persp_textured_triangle");
+                  USE(near_persp_textured_triangle);
 	       }
 	       else {
-		 swrast->Triangle = lin_persp_textured_triangle;
-		 dputs("lin_persp_textured_triangle");
+                  USE(lin_persp_textured_triangle);
 	       }
 #endif
-               swrast->Triangle = general_textured_triangle;
+               USE(general_textured_triangle);
 	    }
 	 }
          else {
@@ -2377,62 +2385,54 @@ _swrast_choose_triangle( GLcontext *ctx )
             else
                needLambda = GL_FALSE;
             if (swrast->_MultiTextureEnabled) {
-               swrast->Triangle = lambda_multitextured_triangle;
-	       dputs("lambda_multitextured_triangle");
+               USE(lambda_multitextured_triangle);
             }
-            else if (ctx->_TriangleCaps & DD_SEPERATE_SPECULAR) {
+            else if (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR) {
                /* separate specular color interpolation */
                if (needLambda) {
-                  swrast->Triangle = lambda_textured_spec_triangle;
-		  dputs("lambda_textured_spec_triangle");
+                  USE(lambda_textured_spec_triangle);
 	       }
                else {
-                  swrast->Triangle = general_textured_spec_triangle;
-		  dputs("general_textured_spec_triangle");
+                  USE(general_textured_spec_triangle);
 	       }
             }
             else {
                if (needLambda) {
-		  swrast->Triangle = lambda_textured_triangle;
-		  dputs("lambda_textured_triangle");
+		  USE(lambda_textured_triangle);
 	       }
                else {
-                  swrast->Triangle = general_textured_triangle;
-		  dputs("general_textured_triangle");
+                  USE(general_textured_triangle);
 	       }
             }
          }
       }
       else {
+         ASSERT(!ctx->Texture._ReallyEnabled);
 	 if (ctx->Light.ShadeModel==GL_SMOOTH) {
 	    /* smooth shaded, no texturing, stippled or some raster ops */
             if (rgbmode) {
-	       dputs("smooth_rgba_triangle");
-	       swrast->Triangle = smooth_rgba_triangle;
+	       USE(smooth_rgba_triangle);
             }
             else {
-               dputs("smooth_ci_triangle");
-               swrast->Triangle = smooth_ci_triangle;
+               USE(smooth_ci_triangle);
             }
 	 }
 	 else {
 	    /* flat shaded, no texturing, stippled or some raster ops */
             if (rgbmode) {
-	       dputs("flat_rgba_triangle");
-	       swrast->Triangle = flat_rgba_triangle;
+	       USE(flat_rgba_triangle);
             }
             else {
-               dputs("flat_ci_triangle");
-               swrast->Triangle = flat_ci_triangle;
+               USE(flat_ci_triangle);
             }
 	 }
       }
    }
    else if (ctx->RenderMode==GL_FEEDBACK) {
-      swrast->Triangle = gl_feedback_triangle;
+      USE(_mesa_feedback_triangle);
    }
    else {
       /* GL_SELECT mode */
-      swrast->Triangle = gl_select_triangle;
+      USE(_mesa_select_triangle);
    }
 }

@@ -1,21 +1,21 @@
-/* $Id: t_vb_cliptmp.h,v 1.8 2001/01/29 20:47:39 keithw Exp $ */
+/* $Id: t_vb_cliptmp.h,v 1.10 2001/03/19 02:25:37 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -23,7 +23,7 @@
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
- * Author:
+ * Authors:
  *    Keith Whitwell <keithw@valinux.com>
  */
 
@@ -122,8 +122,9 @@ static __inline void TAG(clip_line)( GLcontext *ctx,
 				     GLuint i, GLuint j,
 				     GLubyte mask )
 {
-   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
-   interp_func interp = ctx->Driver.RenderInterp;
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   struct vertex_buffer *VB = &tnl->vb;
+   interp_func interp = tnl->Driver.RenderInterp;
    GLfloat (*coord)[4] = VB->ClipPtr->data;
    GLuint ii = i, jj = j, p;
 
@@ -151,20 +152,21 @@ static __inline void TAG(clip_line)( GLcontext *ctx,
    }
 
    if ((ctx->_TriangleCaps & DD_FLATSHADE) && j != jj)
-      ctx->Driver.RenderCopyPV( ctx, jj, j );
+      tnl->Driver.RenderCopyPV( ctx, jj, j );
 
-   ctx->Driver.RenderClippedLine( ctx, ii, jj );
+   tnl->Driver.RenderClippedLine( ctx, ii, jj );
 }
 
 
 /* Clip a triangle against the viewport and user clip planes.
  */
-static __inline void TAG(clip_tri)( GLcontext *ctx, 
+static __inline void TAG(clip_tri)( GLcontext *ctx,
 			   GLuint v0, GLuint v1, GLuint v2,
 			   GLubyte mask )
 {
-   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
-   interp_func interp = ctx->Driver.RenderInterp;
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   struct vertex_buffer *VB = &tnl->vb;
+   interp_func interp = tnl->Driver.RenderInterp;
    GLfloat (*coord)[4] = VB->ClipPtr->data;
    GLuint pv = v0;
    GLuint vlist[2][MAX_CLIPPED_VERTICES];
@@ -201,22 +203,23 @@ static __inline void TAG(clip_tri)( GLcontext *ctx,
    if (ctx->_TriangleCaps & DD_FLATSHADE) {
       if (pv != inlist[0]) {
 	 ASSERT( inlist[0] >= VB->FirstClipped );
-	 ctx->Driver.RenderCopyPV( ctx, inlist[0], pv );
+	 tnl->Driver.RenderCopyPV( ctx, inlist[0], pv );
       }
    }
 
-   ctx->Driver.RenderClippedPolygon( ctx, inlist, n );
+   tnl->Driver.RenderClippedPolygon( ctx, inlist, n );
 }
 
 
 /* Clip a quad against the viewport and user clip planes.
  */
-static __inline void TAG(clip_quad)( GLcontext *ctx, 
+static __inline void TAG(clip_quad)( GLcontext *ctx,
 				     GLuint v0, GLuint v1, GLuint v2, GLuint v3,
 				     GLubyte mask )
 {
-   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
-   interp_func interp = ctx->Driver.RenderInterp;
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   struct vertex_buffer *VB = &tnl->vb;
+   interp_func interp = tnl->Driver.RenderInterp;
    GLfloat (*coord)[4] = VB->ClipPtr->data;
    GLuint pv = v0;
    GLuint vlist[2][MAX_CLIPPED_VERTICES];
@@ -253,11 +256,11 @@ static __inline void TAG(clip_quad)( GLcontext *ctx,
    if (ctx->_TriangleCaps & DD_FLATSHADE) {
       if (pv != inlist[0]) {
 	 ASSERT( inlist[0] >= VB->FirstClipped );
-	 ctx->Driver.RenderCopyPV( ctx, inlist[0], pv );
+	 tnl->Driver.RenderCopyPV( ctx, inlist[0], pv );
       }
    }
 
-   ctx->Driver.RenderClippedPolygon( ctx, inlist, n );
+   tnl->Driver.RenderClippedPolygon( ctx, inlist, n );
 }
 
 #undef W

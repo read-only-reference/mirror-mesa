@@ -1,4 +1,4 @@
-/* $Id: mtypes.h,v 1.22 2001/02/28 00:27:48 brianp Exp $ */
+/* $Id: mtypes.h,v 1.38 2001/03/29 21:16:25 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -38,12 +38,6 @@
 
 #if defined(MESA_TRACE)
 #include "Trace/tr_context.h"
-#endif
-
-
-/* This is a macro on IRIX */
-#ifdef _P
-#undef _P
 #endif
 
 
@@ -680,22 +674,22 @@ struct gl_stencil_attrib {
 #define TEXTURE3_3D   (TEXTURE0_3D << 12)
 #define TEXTURE3_CUBE (TEXTURE0_CUBE << 12)
 #define TEXTURE3_ANY  (TEXTURE3_1D | TEXTURE3_2D | TEXTURE3_3D | TEXTURE3_CUBE)
-#define TEXTURE4_1D   (TEXTURE0_1D << 16)    /* Texture unit 3 */
+#define TEXTURE4_1D   (TEXTURE0_1D << 16)    /* Texture unit 4 */
 #define TEXTURE4_2D   (TEXTURE0_2D << 16)
 #define TEXTURE4_3D   (TEXTURE0_3D << 16)
 #define TEXTURE4_CUBE (TEXTURE0_CUBE << 16)
 #define TEXTURE5_ANY  (TEXTURE3_1D | TEXTURE3_2D | TEXTURE3_3D | TEXTURE3_CUBE)
-#define TEXTURE5_1D   (TEXTURE0_1D << 20)    /* Texture unit 3 */
+#define TEXTURE5_1D   (TEXTURE0_1D << 20)    /* Texture unit 5 */
 #define TEXTURE5_2D   (TEXTURE0_2D << 20)
 #define TEXTURE5_3D   (TEXTURE0_3D << 20)
 #define TEXTURE5_CUBE (TEXTURE0_CUBE << 20)
 #define TEXTURE5_ANY  (TEXTURE3_1D | TEXTURE3_2D | TEXTURE3_3D | TEXTURE3_CUBE)
-#define TEXTURE6_1D   (TEXTURE0_1D << 24)    /* Texture unit 3 */
+#define TEXTURE6_1D   (TEXTURE0_1D << 24)    /* Texture unit 6 */
 #define TEXTURE6_2D   (TEXTURE0_2D << 24)
 #define TEXTURE6_3D   (TEXTURE0_3D << 24)
 #define TEXTURE6_CUBE (TEXTURE0_CUBE << 24)
 #define TEXTURE6_ANY  (TEXTURE3_1D | TEXTURE3_2D | TEXTURE3_3D | TEXTURE3_CUBE)
-#define TEXTURE7_1D   (TEXTURE0_1D << 28)    /* Texture unit 3 */
+#define TEXTURE7_1D   (TEXTURE0_1D << 28)    /* Texture unit 7 */
 #define TEXTURE7_2D   (TEXTURE0_2D << 28)
 #define TEXTURE7_3D   (TEXTURE0_3D << 28)
 #define TEXTURE7_CUBE (TEXTURE0_CUBE << 28)
@@ -709,16 +703,9 @@ struct gl_stencil_attrib {
 #define TEXGEN_REFLECTION_MAP_NV 0x8
 #define TEXGEN_NORMAL_MAP_NV     0x10
 
-#define TEXGEN_NEED_M            (TEXGEN_SPHERE_MAP)
-#define TEXGEN_NEED_F            (TEXGEN_SPHERE_MAP        | \
-				  TEXGEN_REFLECTION_MAP_NV)
 #define TEXGEN_NEED_NORMALS      (TEXGEN_SPHERE_MAP        | \
 				  TEXGEN_REFLECTION_MAP_NV | \
 				  TEXGEN_NORMAL_MAP_NV)
-#define TEXGEN_NEED_VERTICES     (TEXGEN_OBJ_LINEAR | 		\
-				  TEXGEN_EYE_LINEAR |		\
-				  TEXGEN_REFLECTION_MAP_NV |	\
-				  TEXGEN_SPHERE_MAP )
 #define TEXGEN_NEED_EYE_COORD    (TEXGEN_SPHERE_MAP        | \
 				  TEXGEN_REFLECTION_MAP_NV | \
 				  TEXGEN_NORMAL_MAP_NV     | \
@@ -736,35 +723,18 @@ struct gl_stencil_attrib {
 #define ENABLE_TEXGEN5        0x20
 #define ENABLE_TEXGEN6        0x40
 #define ENABLE_TEXGEN7        0x80
-#define ENABLE_TEXMAT0        0x100	/* Ie. not the identity matrix */
-#define ENABLE_TEXMAT1        0x200
-#define ENABLE_TEXMAT2        0x400
-#define ENABLE_TEXMAT3        0x800
-#define ENABLE_TEXMAT4        0x1000
-#define ENABLE_TEXMAT5        0x2000
-#define ENABLE_TEXMAT6        0x4000
-#define ENABLE_TEXMAT7        0x8000
-#define ENABLE_LIGHT          0x10000
-#define ENABLE_FOG            0x20000
-#define ENABLE_USERCLIP       0x40000
-#define ENABLE_NORMALIZE      0x100000
-#define ENABLE_RESCALE        0x200000
-#define ENABLE_POINT_ATTEN    0x400000
 
-
-#define ENABLE_TEXGEN_ANY (ENABLE_TEXGEN0 | ENABLE_TEXGEN1 | \
-                           ENABLE_TEXGEN2 | ENABLE_TEXGEN3 | \
-                           ENABLE_TEXGEN4 | ENABLE_TEXGEN5 | \
-                           ENABLE_TEXGEN6 | ENABLE_TEXGEN7)
-
-#define ENABLE_TEXMAT_ANY (ENABLE_TEXMAT0 | ENABLE_TEXMAT1 | \
-                           ENABLE_TEXMAT2 | ENABLE_TEXMAT3 | \
-                           ENABLE_TEXMAT4 | ENABLE_TEXMAT5 | \
-                           ENABLE_TEXMAT6 | ENABLE_TEXMAT7)
+#define ENABLE_TEXMAT0        0x1	/* Ie. not the identity matrix */
+#define ENABLE_TEXMAT1        0x2
+#define ENABLE_TEXMAT2        0x4
+#define ENABLE_TEXMAT3        0x8
+#define ENABLE_TEXMAT4        0x10
+#define ENABLE_TEXMAT5        0x20
+#define ENABLE_TEXMAT6        0x40
+#define ENABLE_TEXMAT7        0x80
 
 #define ENABLE_TEXGEN(i) (ENABLE_TEXGEN0 << (i))
 #define ENABLE_TEXMAT(i) (ENABLE_TEXMAT0 << (i))
-
 
 /*
  * If teximage is color-index, texelOut returns GLchan[1].
@@ -775,23 +745,36 @@ typedef void (*FetchTexelFunc)( const struct gl_texture_image *texImage,
                                 GLint col, GLint row, GLint img,
                                 GLvoid *texelOut );
 
+/* Texture format record */
+struct gl_texture_format {
+   GLint MesaFormat;		/* One of the MESA_FORMAT_* values */
+
+   GLenum IntFormat;		/* Internal format as GL enum value */
+   GLenum Type;			/* Internal type as GL enum value */
+
+   GLubyte RedBits;		/* Bits per texel component */
+   GLubyte GreenBits;
+   GLubyte BlueBits;
+   GLubyte AlphaBits;
+   GLubyte LuminanceBits;
+   GLubyte IntensityBits;
+   GLubyte IndexBits;
+   GLubyte DepthBits;
+
+   GLint TexelBytes;
+
+   FetchTexelFunc FetchTexel1D;	/* Texel fetch function pointers */
+   FetchTexelFunc FetchTexel2D;
+   FetchTexelFunc FetchTexel3D;
+};
 
 /* Texture image record */
 struct gl_texture_image {
    GLenum Format;		/* GL_ALPHA, GL_LUMINANCE, GL_LUMINANCE_ALPHA,
-				 * GL_INTENSITY, GL_RGB, GL_RGBA, or
-				 * GL_COLOR_INDEX only
+				 * GL_INTENSITY, GL_RGB, GL_RGBA,
+                                 * GL_COLOR_INDEX or GL_DEPTH_COMPONENT only.
 				 */
-   GLenum Type;			/* Texel type: GL_UNSIGNED_BYTE, etc. */
-   GLenum IntFormat;		/* Internal format as given by the user */
-   GLubyte RedBits;		/* Bits per texel component              */
-   GLubyte GreenBits;		/*   These are initialized by Mesa but   */
-   GLubyte BlueBits;		/*   may be reassigned by the device     */
-   GLubyte AlphaBits;		/*   driver to indicate the true texture */
-   GLubyte IntensityBits;	/*   color resolution.                   */
-   GLubyte LuminanceBits;
-   GLubyte IndexBits;
-   GLubyte DepthBits;
+   GLint IntFormat;		/* Internal format as given by the user */
    GLuint Border;		/* 0 or 1 */
    GLuint Width;		/* = 2^WidthLog2 + 2*Border */
    GLuint Height;		/* = 2^HeightLog2 + 2*Border */
@@ -805,7 +788,9 @@ struct gl_texture_image {
    GLuint MaxLog2;		/* = MAX(WidthLog2, HeightLog2) */
    GLvoid *Data;		/* Image data, accessed via FetchTexel() */
 
-   FetchTexelFunc FetchTexel;	/* texel fetch function pointer */
+   const struct gl_texture_format *TexFormat;
+
+   FetchTexelFunc FetchTexel;	/* Texel fetch function pointer */
 
    GLboolean IsCompressed;	/* GL_ARB_texture_compression */
    GLuint CompressedSize;	/* GL_ARB_texture_compression */
@@ -823,15 +808,16 @@ struct gl_texture_object {
    GLuint Dimensions;		/* 1 or 2 or 3 or 6 (cube map) */
    GLfloat Priority;		/* in [0,1] */
    GLchan BorderColor[4];
-   GLenum WrapS;		/* GL_CLAMP, REPEAT or CLAMP_TO_EDGE */
-   GLenum WrapT;		/* GL_CLAMP, REPEAT or CLAMP_TO_EDGE */
-   GLenum WrapR;		/* GL_CLAMP, REPEAT or CLAMP_TO_EDGE */
+   GLenum WrapS;		/* Wrap modes are: GL_CLAMP, REPEAT */
+   GLenum WrapT;		/*   GL_CLAMP_TO_EDGE, and          */
+   GLenum WrapR;		/*   GL_CLAMP_TO_BORDER_ARB         */
    GLenum MinFilter;		/* minification filter */
    GLenum MagFilter;		/* magnification filter */
    GLfloat MinLod;		/* min lambda, OpenGL 1.2 */
    GLfloat MaxLod;		/* max lambda, OpenGL 1.2 */
    GLint BaseLevel;		/* min mipmap level, OpenGL 1.2 */
    GLint MaxLevel;		/* max mipmap level, OpenGL 1.2 */
+   GLfloat MaxAnisotropy;	/* GL_EXT_texture_filter_anisotropic */
    GLboolean CompareFlag;	/* GL_SGIX_shadow */
    GLenum CompareOperator;	/* GL_SGIX_shadow */
    GLchan ShadowAmbient;	/* GL_SGIX_shadow_ambient */
@@ -921,7 +907,10 @@ struct gl_texture_attrib {
                              /* = (Unit[0]._ReallyEnabled << 0) | */
                              /*   (Unit[1]._ReallyEnabled << 4) | */
 	                     /*   (Unit[2]._ReallyEnabled << 8) | etc... */
+
    GLuint _GenFlags;  /* for texgen */
+   GLuint _TexGenEnabled;	
+   GLuint _TexMatEnabled;
 
    struct gl_texture_unit Unit[MAX_TEXTURE_UNITS];
 
@@ -963,7 +952,6 @@ struct gl_attrib_node {
 };
 
 
-
 /*
  * Client pixel packing/unpacking attributes
  */
@@ -992,8 +980,6 @@ struct gl_client_array {
 };
 
 
-
-
 struct gl_array_attrib {
    struct gl_client_array Vertex;	     /* client data descriptors */
    struct gl_client_array Normal;
@@ -1014,8 +1000,6 @@ struct gl_array_attrib {
 };
 
 
-
-
 struct gl_feedback {
    GLenum Type;
    GLuint _Mask;		/* FB_* bits */
@@ -1023,7 +1007,6 @@ struct gl_feedback {
    GLuint BufferSize;
    GLuint Count;
 };
-
 
 
 struct gl_selection {
@@ -1036,7 +1019,6 @@ struct gl_selection {
    GLboolean HitFlag;
    GLfloat HitMinZ, HitMaxZ;
 };
-
 
 
 /*
@@ -1089,7 +1071,6 @@ struct gl_evaluators {
 };
 
 
-
 /*
  * State which can be shared by multiple contexts:
  */
@@ -1108,7 +1089,6 @@ struct gl_shared_state {
 
    void *DriverData;  /* Device driver shared state */
 };
-
 
 
 /*
@@ -1150,13 +1130,15 @@ struct gl_frame_buffer {
 
 
 /*
- * Constants which may be overriden by device driver.
+ * Constants which may be overriden by device driver during context creation
+ * but are never changed after that.
  */
 struct gl_constants {
    GLint MaxTextureSize;
    GLint MaxCubeTextureSize;
    GLint MaxTextureLevels;
    GLuint MaxTextureUnits;
+   GLfloat MaxTextureMaxAnisotropy;	/* GL_EXT_texture_filter_anisotropic */
    GLuint MaxArrayLockSize;
    GLint SubPixelBits;
    GLfloat MinPointSize, MaxPointSize;		/* aliased */
@@ -1188,9 +1170,9 @@ struct gl_extensions {
     */
    GLboolean ARB_imaging;
    GLboolean ARB_multitexture;
+   GLboolean ARB_texture_border_clamp;
    GLboolean ARB_texture_compression;
    GLboolean ARB_texture_cube_map;
-   GLboolean ARB_texture_env_add;
    GLboolean EXT_blend_color;
    GLboolean EXT_blend_func_separate;
    GLboolean EXT_blend_logic_op;
@@ -1214,6 +1196,7 @@ struct gl_extensions {
    GLboolean EXT_texture_env_add;
    GLboolean EXT_texture_env_combine;
    GLboolean EXT_texture_env_dot3;
+   GLboolean EXT_texture_filter_anisotropic;
    GLboolean EXT_texture_object;
    GLboolean EXT_texture_lod_bias;
    GLboolean EXT_vertex_array_set;
@@ -1280,25 +1263,21 @@ struct gl_extensions {
 #define _NEW_EVAL		0x80       /* ctx->Eval, ctx->EvalMap */
 #define _NEW_FOG		0x100      /* ctx->Fog */
 #define _NEW_HINT		0x200      /* ctx->Hint */
-#define _NEW_400		0x400      /*  */
-#define _NEW_LIGHT		0x800      /* ctx->Light */
-#define _NEW_1000              	0x1000     /*  */
-#define _NEW_LINE		0x2000     /* ctx->Line */
-#define _NEW_4000               0x4000     /*  */
-#define _NEW_PIXEL		0x8000     /* ctx->Pixel */
-#define _NEW_POINT		0x10000    /* ctx->Point */
-#define _NEW_POLYGON		0x20000    /* ctx->Polygon */
-#define _NEW_POLYGONSTIPPLE	0x40000    /* ctx->PolygonStipple */
-#define _NEW_SCISSOR		0x80000    /* ctx->Scissor */
-#define _NEW_STENCIL		0x100000   /* ctx->Stencil */
-#define _NEW_TEXTURE		0x200000   /* ctx->Texture */
-#define _NEW_TRANSFORM		0x400000   /* ctx->Transform */
-#define _NEW_VIEWPORT		0x800000   /* ctx->Viewport */
-#define _NEW_PACKUNPACK		0x1000000  /* ctx->Pack, ctx->Unpack */
-#define _NEW_ARRAY	        0x2000000  /* ctx->Array */
-#define _NEW_COLORTABLE		0x4000000  /* ctx->{*}ColorTable */
-#define _NEW_RENDERMODE		0x8000000  /* RenderMode, Feedback, Select */
-#define _NEW_BUFFERS            0x10000000 /* ctx->Visual, ctx->DrawBuffer, */
+#define _NEW_LIGHT		0x400      /* ctx->Light */
+#define _NEW_LINE		0x800     /* ctx->Line */
+#define _NEW_PIXEL		0x1000     /* ctx->Pixel */
+#define _NEW_POINT		0x2000    /* ctx->Point */
+#define _NEW_POLYGON		0x4000    /* ctx->Polygon */
+#define _NEW_POLYGONSTIPPLE	0x8000    /* ctx->PolygonStipple */
+#define _NEW_SCISSOR		0x10000    /* ctx->Scissor */
+#define _NEW_STENCIL		0x20000   /* ctx->Stencil */
+#define _NEW_TEXTURE		0x40000   /* ctx->Texture */
+#define _NEW_TRANSFORM		0x80000   /* ctx->Transform */
+#define _NEW_VIEWPORT		0x100000   /* ctx->Viewport */
+#define _NEW_PACKUNPACK		0x200000  /* ctx->Pack, ctx->Unpack */
+#define _NEW_ARRAY	        0x400000  /* ctx->Array */
+#define _NEW_RENDERMODE		0x800000  /* RenderMode, Feedback, Select */
+#define _NEW_BUFFERS            0x1000000 /* ctx->Visual, ctx->DrawBuffer, */
 
 #define _NEW_ALL ~0
 
@@ -1323,36 +1302,30 @@ struct gl_extensions {
 #define _NEW_ARRAY_TEXCOORD_7       0x4000
 #define _NEW_ARRAY_ALL              0x7fff
 
-#define _NEW_ARRAY_TEXCOORD(i) (_NEW_ARRAY_TEXCOORD_0<<(i))
+#define _NEW_ARRAY_TEXCOORD(i) (_NEW_ARRAY_TEXCOORD_0 << (i))
 
 /* A bunch of flags that we think might be useful to drivers.
  */
-#define DD_FEEDBACK                 0x1
-#define DD_SELECT                   0x2
-#define DD_FLATSHADE                0x4
-#define DD_SEPERATE_SPECULAR        0x10
-#define DD_TRI_LIGHT_TWOSIDE        0x20
-#define DD_TRI_UNFILLED             0x40
-#define DD_TRI_SMOOTH               0x80
-#define DD_TRI_STIPPLE              0x100
-#define DD_TRI_OFFSET               0x200
-#define DD_LINE_SMOOTH              0x800
-#define DD_LINE_STIPPLE             0x1000
-#define DD_LINE_WIDTH               0x2000
-#define DD_POINT_SMOOTH             0x4000
-#define DD_POINT_SIZE               0x8000
-#define DD_POINT_ATTEN              0x10000
-#define DD_TRI_CULL_FRONT_BACK      0x400000 /* special case on some hw */
-#define DD_Z_NEVER                  0x800000 /* special case on some hw */
-#define DD_STENCIL                  0x1000000
+#define DD_FLATSHADE                0x1
+#define DD_SEPARATE_SPECULAR        0x2
+#define DD_TRI_CULL_FRONT_BACK      0x4 /* special case on some hw */
+#define DD_TRI_LIGHT_TWOSIDE        0x8
+#define DD_TRI_UNFILLED             0x10
+#define DD_TRI_SMOOTH               0x20
+#define DD_TRI_STIPPLE              0x40
+#define DD_TRI_OFFSET               0x80
+#define DD_LINE_SMOOTH              0x100
+#define DD_LINE_STIPPLE             0x200
+#define DD_LINE_WIDTH               0x400
+#define DD_POINT_SMOOTH             0x800
+#define DD_POINT_SIZE               0x1000
+#define DD_POINT_ATTEN              0x2000
 
 /* Define the state changes under which each of these bits might change
  */
-#define _DD_NEW_FEEDBACK                 _NEW_RENDERMODE
-#define _DD_NEW_SELECT                   _NEW_RENDERMODE
 #define _DD_NEW_FLATSHADE                _NEW_LIGHT
-#define _DD_NEW_MULTIDRAW                _NEW_COLOR
-#define _DD_NEW_SEPERATE_SPECULAR        (_NEW_LIGHT|_NEW_FOG)
+#define _DD_NEW_SEPARATE_SPECULAR        (_NEW_LIGHT | _NEW_FOG)
+#define _DD_NEW_TRI_CULL_FRONT_BACK      _NEW_POLYGON
 #define _DD_NEW_TRI_LIGHT_TWOSIDE        _NEW_LIGHT
 #define _DD_NEW_TRI_UNFILLED             _NEW_POLYGON
 #define _DD_NEW_TRI_SMOOTH               _NEW_POLYGON
@@ -1364,20 +1337,16 @@ struct gl_extensions {
 #define _DD_NEW_POINT_SMOOTH             _NEW_POINT
 #define _DD_NEW_POINT_SIZE               _NEW_POINT
 #define _DD_NEW_POINT_ATTEN              _NEW_POINT
-#define _DD_NEW_LIGHTING_CULL            _NEW_LIGHT
-#define _DD_NEW_TRI_CULL_FRONT_BACK      _NEW_POLYGON
-#define _DD_NEW_Z_NEVER                  _NEW_DEPTH
-#define _DD_NEW_STENCIL                  _NEW_STENCIL
 
+#define _MESA_NEW_NEED_EYE_COORDS         (_NEW_LIGHT |		\
+                                           _NEW_TEXTURE |	\
+                                           _NEW_POINT |		\
+                                           _NEW_MODELVIEW)
 
-#define _MESA_NEW_NEED_EYE_COORDS         (_NEW_LIGHT|		\
-                                            _NEW_TEXTURE|		\
-                                            _NEW_POINT|		\
-                                            _NEW_MODELVIEW)
+#define _MESA_NEW_NEED_NORMALS            (_NEW_LIGHT |		\
+                                           _NEW_TEXTURE)
 
-#define _MESA_NEW_NEED_NORMALS            (_NEW_LIGHT|		\
-                                            _NEW_TEXTURE)
-#define _IMAGE_NEW_TRANSFER_STATE        (_NEW_PIXEL|_NEW_COLOR_MATRIX)
+#define _IMAGE_NEW_TRANSFER_STATE         (_NEW_PIXEL | _NEW_COLOR_MATRIX)
 
 
 #define NEED_NORMALS_TEXGEN      0x1
@@ -1389,7 +1358,6 @@ struct gl_extensions {
 #define NEED_EYE_POINT_ATTEN     0x8
 
 
-
 /*
  * Forward declaration of display list datatypes:
  */
@@ -1397,11 +1365,26 @@ union node;
 typedef union node Node;
 
 
-
-
-
 /* This has to be included here. */
 #include "dd.h"
+
+
+/*
+ * Core Mesa's support for tnl modules:
+ */
+#define NUM_VERTEX_FORMAT_ENTRIES (sizeof(GLvertexformat) / sizeof(void *))
+
+struct gl_tnl_module {
+   /* Vertex format to be lazily swapped into current dispatch.
+    */
+   GLvertexformat *Current;
+
+   /* Record of functions swapped out.  On restore, only need to swap
+    * these functions back in.
+    */
+   void *Swapped[NUM_VERTEX_FORMAT_ENTRIES][2];
+   GLuint SwapCount;
+};
 
 
 /*
@@ -1532,7 +1515,6 @@ struct __GLcontextRec {
    GLuint NewState;          /* bitwise-or of _NEW_* flags */
 
    /* Derived */
-   GLuint _Enabled;           /* bitwise-or of ENABLE_* flags */
    GLuint _TriangleCaps;      /* bitwise-or of DD_* flags */
    GLuint _ImageTransferState;/* bitwise-or of IMAGE_*_BIT flags */
    GLfloat _EyeZDir[3];
@@ -1574,6 +1556,9 @@ struct __GLcontextRec {
    void *TraceCtx;
 #endif
 
+   /* Core tnl module support */
+   struct gl_tnl_module TnlModule;
+
    /* Hooks for module contexts.  These will eventually live
     * in the driver or elsewhere.
     */
@@ -1588,7 +1573,6 @@ struct __GLcontextRec {
 
 /* The string names for GL_POINT, GL_LINE_LOOP, etc */
 extern const char *_mesa_prim_name[GL_POLYGON+4];
-extern GLenum gl_reduce_prim[];
 
 
 #ifdef MESA_DEBUG
@@ -1604,20 +1588,20 @@ extern int MESA_DEBUG_FLAGS;
 
 
 enum _verbose {
-   VERBOSE_VARRAY          = 0x1,
-   VERBOSE_TEXTURE         = 0x2,
-   VERBOSE_IMMEDIATE       = 0x4,
-   VERBOSE_PIPELINE        = 0x8,
-   VERBOSE_DRIVER          = 0x10,
-   VERBOSE_STATE           = 0x20,
-   VERBOSE_API             = 0x40,
-   VERBOSE_DISPLAY_LIST    = 0x200,
-   VERBOSE_LIGHTING        = 0x400
+   VERBOSE_VARRAY		= 0x0001,
+   VERBOSE_TEXTURE		= 0x0002,
+   VERBOSE_IMMEDIATE		= 0x0004,
+   VERBOSE_PIPELINE		= 0x0008,
+   VERBOSE_DRIVER		= 0x0010,
+   VERBOSE_STATE		= 0x0020,
+   VERBOSE_API			= 0x0040,
+   VERBOSE_DISPLAY_LIST		= 0x0200,
+   VERBOSE_LIGHTING		= 0x0400
 };
 
 
 enum _debug {
-   DEBUG_ALWAYS_FLUSH          = 0x1
+   DEBUG_ALWAYS_FLUSH		= 0x1
 };
 
 
@@ -1628,35 +1612,40 @@ enum _debug {
 
 /* Eventually let the driver specify what statechanges require a flush:
  */
-#define FLUSH_VERTICES(ctx, newstate)			\
-do {							\
-   if (ctx->Driver.NeedFlush & FLUSH_STORED_VERTICES)	\
-      ctx->Driver.FlushVertices(ctx, FLUSH_STORED_VERTICES);	\
-   ctx->NewState |= newstate;				\
+#define FLUSH_VERTICES(ctx, newstate)					\
+do {									\
+   if (ctx->Driver.NeedFlush & FLUSH_STORED_VERTICES)			\
+      ctx->Driver.FlushVertices(ctx, FLUSH_STORED_VERTICES);		\
+   ctx->NewState |= newstate;						\
 } while (0)
 
-#define FLUSH_CURRENT(ctx, newstate)			\
-do {							\
-   if (ctx->Driver.NeedFlush & FLUSH_UPDATE_CURRENT)	\
-      ctx->Driver.FlushVertices(ctx, FLUSH_UPDATE_CURRENT);	\
-   ctx->NewState |= newstate;				\
+#define FLUSH_CURRENT(ctx, newstate)					\
+do {									\
+   if (ctx->Driver.NeedFlush & FLUSH_UPDATE_CURRENT)			\
+      ctx->Driver.FlushVertices(ctx, FLUSH_UPDATE_CURRENT);		\
+   ctx->NewState |= newstate;						\
 } while (0)
 
-#define ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, retval)	\
-do {								\
-   if (ctx->Driver.CurrentExecPrimitive != GL_POLYGON+1) {	\
-      gl_error( ctx, GL_INVALID_OPERATION, "begin/end" );	\
-      return retval;						\
-   }								\
+#define ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, retval)		\
+do {									\
+   if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END) {	\
+      _mesa_error( ctx, GL_INVALID_OPERATION, "begin/end" );		\
+      return retval;							\
+   }									\
 } while (0)
 
-#define ASSERT_OUTSIDE_BEGIN_END(ctx) \
-   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx,)
+#define ASSERT_OUTSIDE_BEGIN_END(ctx)					\
+do {									\
+   if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END) {	\
+      _mesa_error( ctx, GL_INVALID_OPERATION, "begin/end" );		\
+      return;								\
+   }									\
+} while (0)
 
-#define ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx)	\
-do {						\
-   ASSERT_OUTSIDE_BEGIN_END(ctx);		\
-   FLUSH_VERTICES(ctx, 0);			\
+#define ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx)				\
+do {									\
+   ASSERT_OUTSIDE_BEGIN_END(ctx);					\
+   FLUSH_VERTICES(ctx, 0);						\
 } while (0)
 
 #define ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, retval)	\
@@ -1666,43 +1655,6 @@ do {									\
 } while (0)
 
 
-#ifdef DEBUG
-
-#define RENDER_START(CTX)			\
-   do {						\
-      assert(!(CTX)->Rendering);		\
-      (CTX)->Rendering = GL_TRUE;		\
-      if ((CTX)->Driver.RenderStart) {		\
-         (*(CTX)->Driver.RenderStart)(CTX);	\
-      }						\
-   } while (0)
-
-#define RENDER_FINISH(CTX)			\
-   do {						\
-      assert((CTX)->Rendering);			\
-      (CTX)->Rendering = GL_FALSE;		\
-      if ((CTX)->Driver.RenderFinish) {		\
-         (*(CTX)->Driver.RenderFinish)(CTX);	\
-      }						\
-   } while (0)
-
-#else
-
-#define RENDER_START(CTX)			\
-   do {						\
-      if ((CTX)->Driver.RenderStart) {		\
-         (*(CTX)->Driver.RenderStart)(CTX);	\
-      }						\
-   } while (0)
-
-#define RENDER_FINISH(CTX)			\
-   do {						\
-      if ((CTX)->Driver.RenderFinish) {		\
-         (*(CTX)->Driver.RenderFinish)(CTX);	\
-      }						\
-   } while (0)
-
-#endif
 
 
 #endif /* TYPES_H */

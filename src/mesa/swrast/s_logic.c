@@ -1,21 +1,21 @@
-/* $Id: s_logic.c,v 1.3 2001/02/13 23:50:25 brianp Exp $ */
+/* $Id: s_logic.c,v 1.6 2001/03/19 02:25:36 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -155,7 +155,7 @@ static void index_logicop( GLcontext *ctx, GLuint n,
 	 }
 	 break;
       default:
-	 gl_problem(ctx, "bad mode in index_logic()");
+	 _mesa_problem(ctx, "bad mode in index_logic()");
    }
 }
 
@@ -169,9 +169,10 @@ void
 _mesa_logicop_ci_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
                        GLuint index[], const GLubyte mask[] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    GLuint dest[MAX_WIDTH];
    /* Read dest values from frame buffer */
-   (*ctx->Driver.ReadCI32Span)( ctx, n, x, y, dest );
+   (*swrast->Driver.ReadCI32Span)( ctx, n, x, y, dest );
    index_logicop( ctx, n, index, dest, mask );
 }
 
@@ -186,9 +187,10 @@ _mesa_logicop_ci_pixels( GLcontext *ctx,
                          GLuint n, const GLint x[], const GLint y[],
                          GLuint index[], const GLubyte mask[] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    GLuint dest[PB_SIZE];
    /* Read dest values from frame buffer */
-   (*ctx->Driver.ReadCI32Pixels)( ctx, n, x, y, dest, mask );
+   (*swrast->Driver.ReadCI32Pixels)( ctx, n, x, y, dest, mask );
    index_logicop( ctx, n, index, dest, mask );
 }
 
@@ -321,7 +323,7 @@ static void rgba_logicop( const GLcontext *ctx, GLuint n,
          break;
       default:
          /* should never happen */
-         gl_problem(ctx, "Bad function in rgba_logicop");
+         _mesa_problem(ctx, "Bad function in rgba_logicop");
    }
 }
 
@@ -337,7 +339,7 @@ _mesa_logicop_rgba_span( GLcontext *ctx,
                          GLchan rgba[][4], const GLubyte mask[] )
 {
    GLchan dest[MAX_WIDTH][4];
-   gl_read_rgba_span( ctx, ctx->DrawBuffer, n, x, y, dest );
+   _mesa_read_rgba_span( ctx, ctx->DrawBuffer, n, x, y, dest );
    rgba_logicop( ctx, n, mask, (GLuint *) rgba, (const GLuint *) dest );
 }
 
@@ -352,8 +354,9 @@ _mesa_logicop_rgba_pixels( GLcontext *ctx,
                            GLuint n, const GLint x[], const GLint y[],
                            GLchan rgba[][4], const GLubyte mask[] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    GLchan dest[PB_SIZE][4];
-   (*ctx->Driver.ReadRGBAPixels)( ctx, n, x, y, dest, mask );
+   (*swrast->Driver.ReadRGBAPixels)( ctx, n, x, y, dest, mask );
    if (SWRAST_CONTEXT(ctx)->_RasterMask & ALPHABUF_BIT) {
       _mesa_read_alpha_pixels( ctx, n, x, y, dest, mask );
    }

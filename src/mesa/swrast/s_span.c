@@ -1,21 +1,21 @@
-/* $Id: s_span.c,v 1.9 2001/02/20 16:42:26 brianp Exp $ */
+/* $Id: s_span.c,v 1.12 2001/03/19 02:25:36 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -99,7 +99,7 @@ static GLuint clip_span( GLcontext *ctx,
       }
       else {
          /* partially off left side */
-         BZERO(mask, -x * sizeof(GLubyte)); 
+         BZERO(mask, -x * sizeof(GLubyte));
       }
    }
 
@@ -127,6 +127,7 @@ static void multi_write_index_span( GLcontext *ctx, GLuint n,
                                     GLint x, GLint y, const GLuint indexes[],
                                     const GLubyte mask[] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    GLuint bufferBit;
 
    if (ctx->Color.DrawBuffer == GL_NONE)
@@ -158,7 +159,7 @@ static void multi_write_index_span( GLcontext *ctx, GLuint n,
          else if (ctx->Color.IndexMask != 0xffffffff) {
             _mesa_mask_index_span( ctx, n, x, y, indexTmp );
          }
-         (*ctx->Driver.WriteCI32Span)( ctx, n, x, y, indexTmp, mask );
+         (*swrast->Driver.WriteCI32Span)( ctx, n, x, y, indexTmp, mask );
       }
    }
 
@@ -177,7 +178,7 @@ static void multi_write_index_span( GLcontext *ctx, GLuint n,
  *         index - array of [n] color indexes
  *         primitive - either GL_POINT, GL_LINE, GL_POLYGON, or GL_BITMAP
  */
-void gl_write_index_span( GLcontext *ctx,
+void _mesa_write_index_span( GLcontext *ctx,
                           GLuint n, GLint x, GLint y, const GLdepth z[],
 			  const GLfixed fog[],
 			  GLuint indexIn[], GLenum primitive )
@@ -261,15 +262,15 @@ void gl_write_index_span( GLcontext *ctx,
       }
 
       /* write pixels */
-      (*ctx->Driver.WriteCI32Span)( ctx, n, x, y, index, mask );
+      (*swrast->Driver.WriteCI32Span)( ctx, n, x, y, index, mask );
    }
 }
 
 
 
 
-void gl_write_monoindex_span( GLcontext *ctx,
-                              GLuint n, GLint x, GLint y, 
+void _mesa_write_monoindex_span( GLcontext *ctx,
+                              GLuint n, GLint x, GLint y,
 			      const GLdepth z[],
 			      const GLfixed fog[],
 			      GLuint index, GLenum primitive )
@@ -350,7 +351,7 @@ void gl_write_monoindex_span( GLcontext *ctx,
          else if (ctx->Color.IndexMask != 0xffffffff) {
             _mesa_mask_index_span( ctx, n, x, y, indexes );
          }
-         (*ctx->Driver.WriteCI32Span)( ctx, n, x, y, indexes, mask );
+         (*swrast->Driver.WriteCI32Span)( ctx, n, x, y, indexes, mask );
       }
    }
    else {
@@ -366,7 +367,7 @@ void gl_write_monoindex_span( GLcontext *ctx,
       }
       else {
          /* normal situation: draw to exactly one buffer */
-         (*ctx->Driver.WriteMonoCISpan)( ctx, n, x, y, index, mask );
+         (*swrast->Driver.WriteMonoCISpan)( ctx, n, x, y, index, mask );
       }
    }
 }
@@ -426,10 +427,10 @@ static void multi_write_rgba_span( GLcontext *ctx, GLuint n,
             _mesa_mask_rgba_span( ctx, n, x, y, rgbaTmp );
          }
 
-         (*ctx->Driver.WriteRGBASpan)( ctx, n, x, y, 
+         (*swrast->Driver.WriteRGBASpan)( ctx, n, x, y,
 				       (const GLchan (*)[4]) rgbaTmp, mask );
          if (swrast->_RasterMask & ALPHABUF_BIT) {
-            _mesa_write_alpha_span( ctx, n, x, y, 
+            _mesa_write_alpha_span( ctx, n, x, y,
                                     (const GLchan (*)[4])rgbaTmp, mask );
          }
       }
@@ -441,7 +442,7 @@ static void multi_write_rgba_span( GLcontext *ctx, GLuint n,
 
 
 
-void gl_write_rgba_span( GLcontext *ctx,
+void _mesa_write_rgba_span( GLcontext *ctx,
                          GLuint n, GLint x, GLint y, const GLdepth z[],
 			 const GLfixed *fog,
                          GLchan rgbaIn[][4],
@@ -523,7 +524,7 @@ void gl_write_rgba_span( GLcontext *ctx,
 
    /* Per-pixel fog */
    if (ctx->Fog.Enabled) {
-      if (fog && !swrast->_PreferPixelFog) 
+      if (fog && !swrast->_PreferPixelFog)
 	 _mesa_fog_rgba_pixels( ctx, n, fog, rgba );
       else
 	 _mesa_depth_fog_rgba_pixels( ctx, n, z, rgba );
@@ -553,13 +554,13 @@ void gl_write_rgba_span( GLcontext *ctx,
       }
 
       /* write pixels */
-      (*ctx->Driver.WriteRGBASpan)( ctx, n, x, y, 
-				    (const GLchan (*)[4]) rgba, 
+      (*swrast->Driver.WriteRGBASpan)( ctx, n, x, y,
+				    (const GLchan (*)[4]) rgba,
 				    write_all ? Null : mask );
 
       if (swrast->_RasterMask & ALPHABUF_BIT) {
-         _mesa_write_alpha_span( ctx, n, x, y, 
-                                 (const GLchan (*)[4]) rgba, 
+         _mesa_write_alpha_span( ctx, n, x, y,
+                                 (const GLchan (*)[4]) rgba,
                                  write_all ? Null : mask );
       }
    }
@@ -577,7 +578,7 @@ void gl_write_rgba_span( GLcontext *ctx,
  *         r, g, b, a - the color of the pixels
  *         primitive - either GL_POINT, GL_LINE, GL_POLYGON or GL_BITMAP.
  */
-void gl_write_monocolor_span( GLcontext *ctx,
+void _mesa_write_monocolor_span( GLcontext *ctx,
                               GLuint n, GLint x, GLint y, const GLdepth z[],
 			      const GLfixed fog[],
 			      const GLchan color[4],
@@ -693,12 +694,12 @@ void gl_write_monocolor_span( GLcontext *ctx,
          }
 
          /* write pixels */
-         (*ctx->Driver.WriteRGBASpan)( ctx, n, x, y, 
-				       (const GLchan (*)[4]) rgba, 
+         (*swrast->Driver.WriteRGBASpan)( ctx, n, x, y,
+				       (const GLchan (*)[4]) rgba,
 				       write_all ? Null : mask );
          if (swrast->_RasterMask & ALPHABUF_BIT) {
-            _mesa_write_alpha_span( ctx, n, x, y, 
-                                    (const GLchan (*)[4]) rgba, 
+            _mesa_write_alpha_span( ctx, n, x, y,
+                                    (const GLchan (*)[4]) rgba,
                                     write_all ? Null : mask );
          }
       }
@@ -714,11 +715,11 @@ void gl_write_monocolor_span( GLcontext *ctx,
                COPY_CHAN4(rgba[i], color);
             }
          }
-         multi_write_rgba_span( ctx, n, x, y, 
+         multi_write_rgba_span( ctx, n, x, y,
 				(const GLchan (*)[4]) rgba, mask );
       }
       else {
-         (*ctx->Driver.WriteMonoRGBASpan)( ctx, n, x, y, color, mask );
+         (*swrast->Driver.WriteMonoRGBASpan)( ctx, n, x, y, color, mask );
          if (swrast->_RasterMask & ALPHABUF_BIT) {
             _mesa_write_mono_alpha_span( ctx, n, x, y, (GLchan) color[ACOMP],
                                          write_all ? Null : mask );
@@ -760,7 +761,7 @@ static void add_colors(GLuint n, GLchan rgba[][4], CONST GLchan specular[][4] )
  *         rgba - array of [n] color components
  *         primitive - either GL_POINT, GL_LINE, GL_POLYGON or GL_BITMAP.
  */
-void gl_write_texture_span( GLcontext *ctx,
+void _mesa_write_texture_span( GLcontext *ctx,
                             GLuint n, GLint x, GLint y, const GLdepth z[],
 			    const GLfixed fog[],
 			    const GLfloat s[], const GLfloat t[],
@@ -811,7 +812,7 @@ void gl_write_texture_span( GLcontext *ctx,
       stipple_polygon_span( ctx, n, x, y, mask );
       write_all = GL_FALSE;
    }
-   
+
    /* Texture with alpha test*/
    if (ctx->Color.AlphaEnabled) {
       /* Texturing without alpha is done after depth-testing which
@@ -819,7 +820,7 @@ void gl_write_texture_span( GLcontext *ctx,
       ASSERT(ctx->Texture._ReallyEnabled);
       _swrast_texture_fragments( ctx, 0, n, s, t, u, lambda,
                                  (CONST GLchan (*)[4]) rgba, rgba );
-     
+
       /* Do the alpha test */
       if (_mesa_alpha_test( ctx, n, (const GLchan (*)[4]) rgba, mask ) == 0) {
          return;
@@ -856,7 +857,7 @@ void gl_write_texture_span( GLcontext *ctx,
    }
 
    /* Add base and specular colors */
-   if (spec && 
+   if (spec &&
        (ctx->Fog.ColorSumEnabled ||
 	(ctx->Light.Enabled && ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR)))
      add_colors( n, rgba, spec );   /* rgba = rgba + spec */
@@ -887,10 +888,10 @@ void gl_write_texture_span( GLcontext *ctx,
          _mesa_mask_rgba_span( ctx, n, x, y, rgba );
       }
 
-      (*ctx->Driver.WriteRGBASpan)( ctx, n, x, y, (const GLchan (*)[4])rgba,
+      (*swrast->Driver.WriteRGBASpan)( ctx, n, x, y, (const GLchan (*)[4])rgba,
 				    write_all ? Null : mask );
       if (swrast->_RasterMask & ALPHABUF_BIT) {
-         _mesa_write_alpha_span( ctx, n, x, y, (const GLchan (*)[4]) rgba, 
+         _mesa_write_alpha_span( ctx, n, x, y, (const GLchan (*)[4]) rgba,
                                  write_all ? Null : mask );
       }
    }
@@ -902,7 +903,7 @@ void gl_write_texture_span( GLcontext *ctx,
  * As above but perform multiple stages of texture application.
  */
 void
-gl_write_multitexture_span( GLcontext *ctx,
+_mesa_write_multitexture_span( GLcontext *ctx,
                             GLuint n, GLint x, GLint y,
                             const GLdepth z[],
 			    const GLfixed fog[],
@@ -969,7 +970,7 @@ gl_write_multitexture_span( GLcontext *ctx,
       for (i = 0; i < texUnits; i++)
          _swrast_texture_fragments( ctx, i, n, s[i], t[i], u[i], lambda[i],
                                     (CONST GLchan (*)[4]) rgbaIn, rgba );
-     
+
       /* Do the alpha test */
       if (_mesa_alpha_test( ctx, n, (const GLchan (*)[4])rgba, mask ) == 0) {
          return;
@@ -1007,9 +1008,9 @@ gl_write_multitexture_span( GLcontext *ctx,
    }
 
    /* Add base and specular colors */
-   if (spec && 
+   if (spec &&
        (ctx->Fog.ColorSumEnabled ||
-	(ctx->Light.Enabled && 
+	(ctx->Light.Enabled &&
 	 ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR)))
       add_colors( n, rgba, spec );   /* rgba = rgba + spec */
 
@@ -1042,7 +1043,7 @@ gl_write_multitexture_span( GLcontext *ctx,
          _mesa_mask_rgba_span( ctx, n, x, y, rgba );
       }
 
-      (*ctx->Driver.WriteRGBASpan)( ctx, n, x, y, (const GLchan (*)[4])rgba,
+      (*swrast->Driver.WriteRGBASpan)( ctx, n, x, y, (const GLchan (*)[4])rgba,
                                     write_all ? Null : mask );
       if (swrast->_RasterMask & ALPHABUF_BIT) {
          _mesa_write_alpha_span( ctx, n, x, y, (const GLchan (*)[4])rgba,
@@ -1057,10 +1058,11 @@ gl_write_multitexture_span( GLcontext *ctx,
  * Read RGBA pixels from frame buffer.  Clipping will be done to prevent
  * reading ouside the buffer's boundaries.
  */
-void gl_read_rgba_span( GLcontext *ctx, GLframebuffer *buffer,
+void _mesa_read_rgba_span( GLcontext *ctx, GLframebuffer *buffer,
                         GLuint n, GLint x, GLint y,
                         GLchan rgba[][4] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    if (y < 0 || y >= buffer->Height
        || x + (GLint) n < 0 || x >= buffer->Width) {
       /* completely above, below, or right */
@@ -1096,7 +1098,7 @@ void gl_read_rgba_span( GLcontext *ctx, GLframebuffer *buffer,
          length = (GLint) n;
       }
 
-      (*ctx->Driver.ReadRGBASpan)( ctx, length, x + skip, y, rgba + skip );
+      (*swrast->Driver.ReadRGBASpan)( ctx, length, x + skip, y, rgba + skip );
       if (buffer->UseSoftwareAlphaBuffers) {
          _mesa_read_alpha_span( ctx, length, x + skip, y, rgba + skip );
       }
@@ -1110,9 +1112,10 @@ void gl_read_rgba_span( GLcontext *ctx, GLframebuffer *buffer,
  * Read CI pixels from frame buffer.  Clipping will be done to prevent
  * reading ouside the buffer's boundaries.
  */
-void gl_read_index_span( GLcontext *ctx, GLframebuffer *buffer,
+void _mesa_read_index_span( GLcontext *ctx, GLframebuffer *buffer,
                          GLuint n, GLint x, GLint y, GLuint indx[] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    if (y < 0 || y >= buffer->Height
        || x + (GLint) n < 0 || x >= buffer->Width) {
       /* completely above, below, or right */
@@ -1147,6 +1150,6 @@ void gl_read_index_span( GLcontext *ctx, GLframebuffer *buffer,
          length = (GLint) n;
       }
 
-      (*ctx->Driver.ReadCI32Span)( ctx, length, skip + x, y, indx + skip );
+      (*swrast->Driver.ReadCI32Span)( ctx, length, skip + x, y, indx + skip );
    }
 }

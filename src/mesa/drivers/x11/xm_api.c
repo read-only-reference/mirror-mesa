@@ -1,4 +1,4 @@
-/* $Id: xm_api.c,v 1.16 2001/01/23 23:39:37 brianp Exp $ */
+/* $Id: xm_api.c,v 1.19 2001/03/19 02:25:36 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -431,7 +431,7 @@ static void free_xmesa_buffer(int client, XMesaBuffer buffer)
       prev = b;
    }
    /* buffer not found in XMesaBufferList */
-   gl_problem(NULL,"free_xmesa_buffer() - buffer not found\n");
+   _mesa_problem(NULL,"free_xmesa_buffer() - buffer not found\n");
 }
 
 
@@ -1410,7 +1410,7 @@ xmesa_color_to_pixel( XMesaContext xmesa, GLubyte r, GLubyte g, GLubyte b, GLuby
             return p;
          }
       default:
-         gl_problem(NULL, "Bad pixel format in xmesa_color_to_pixel");
+         _mesa_problem(NULL, "Bad pixel format in xmesa_color_to_pixel");
    }
    return 0;
 }
@@ -1659,10 +1659,6 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
    c->driContextPriv = driContextPriv;
 #endif
 
-   /* Set up some constant pointers:
-    */
-   xmesa_init_pointers( ctx );
-
    /* Initialize the software rasterizer and helper modules.
     */
    _swrast_CreateContext( ctx );
@@ -1671,6 +1667,11 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
    _swsetup_CreateContext( ctx );
 
    xmesa_register_swrast_functions( ctx );
+
+   /* Set up some constant pointers:
+    */
+   xmesa_init_pointers( ctx );
+
 
    /* Run the config file
     */
@@ -1692,6 +1693,8 @@ void XMesaDestroyContext( XMesaContext c )
    if (c->gl_ctx) {
       _swsetup_DestroyContext( c->gl_ctx );
       _swrast_DestroyContext( c->gl_ctx );
+      _tnl_DestroyContext( c->gl_ctx );
+      _ac_DestroyContext( c->gl_ctx );
       _mesa_destroy_context( c->gl_ctx );
    }
 
@@ -2237,7 +2240,8 @@ GLboolean XMesaSetFXmode( GLint mode )
 static void FXgetImage( XMesaBuffer b )
 {
    static unsigned short pixbuf[MAX_WIDTH];
-   int x, y;
+   GLuint x, y;
+   int xpos, ypos;
    XMesaWindow root;
    unsigned int bw, depth, width, height;
    XMesaContext xmesa = (XMesaContext) b->xm_context->gl_ctx->DriverCtx;
@@ -2252,7 +2256,7 @@ static void FXgetImage( XMesaBuffer b )
    depth = b->frontbuffer->depth;
 #else
    XGetGeometry( xmesa->xm_visual->display, b->frontbuffer,
-                 &root, &x, &y, &width, &height, &bw, &depth);
+                 &root, &xpos, &ypos, &width, &height, &bw, &depth);
 #endif
    if (b->width != width || b->height != height) {
       b->width = MIN2((int)width, xmesa->xm_buffer->FXctx->width);
@@ -2630,7 +2634,7 @@ unsigned long XMesaDitherColor( XMesaContext xmesa, GLint x, GLint y,
             return p;
          }
       default:
-         gl_problem(NULL, "Bad pixel format in XMesaDitherColor");
+         _mesa_problem(NULL, "Bad pixel format in XMesaDitherColor");
    }
    return 0;
 }

@@ -1,10 +1,10 @@
-/* $Id: dispatch.c,v 1.19 2001/01/08 04:09:41 keithw Exp $ */
+/* $Id: dispatch.c,v 1.22 2001/03/28 17:20:20 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -28,9 +28,7 @@
 /*
  * This file generates all the gl* function entyrpoints.
  * But if we're using X86-optimized dispatch (X86/glapi_x86.S) then
- * each of the entrypoints will be prefixed with _glapi_fallback_*
- * and will be called by the glapi_x86.S code when we're in thread-
- * safe mode.
+ * we don't use this file's code.
  *
  * Eventually this file may be replaced by automatically generated
  * code from an API spec file.
@@ -39,7 +37,6 @@
  * based device driver.
  *
  */
-
 
 
 #ifdef PC_HEADER
@@ -51,70 +48,28 @@
 #include "glthread.h"
 #endif
 
-
+#if !defined(USE_X86_ASM)
 
 #define KEYWORD1
 #define KEYWORD2 GLAPIENTRY
-#if defined(USE_X86_ASM) && !defined(__WIN32__) && !defined(XF86DRI)
-#define NAME(func) _glapi_fallback_##func
-#elif defined(USE_MGL_NAMESPACE)
+#if defined(USE_MGL_NAMESPACE)
 #define NAME(func)  mgl##func
 #else
 #define NAME(func)  gl##func
 #endif
 
-#ifdef DEBUG
+#define DISPATCH(FUNC, ARGS, MESSAGE)		\
+   (_glapi_Dispatch->FUNC) ARGS
 
-#if 0
-static int
-trace(void)
-{
-   static int trace = -1;
-   if (trace < 0)
-      trace = getenv("MESA_TRACE") ? 1 : 0;
-   return trace > 0;
-}
-#endif
-
-#define F stderr
-
-#define DISPATCH(FUNC, ARGS, MESSAGE)					\
-   const struct _glapi_table *dispatch;					\
-   dispatch = _glapi_Dispatch ? _glapi_Dispatch : _glapi_get_dispatch();\
-   (dispatch->FUNC) ARGS
-
-#define RETURN_DISPATCH(FUNC, ARGS, MESSAGE) 				\
-   const struct _glapi_table *dispatch;					\
-   dispatch = _glapi_Dispatch ? _glapi_Dispatch : _glapi_get_dispatch();\
-   return (dispatch->FUNC) ARGS
-
-#if 0
-   /* From both macros above... */
-   if (trace()) {							\
-      fprintf MESSAGE;							\
-      fprintf(F, "\n");							\
-   }
-#endif
-
-#else
-
-#define DISPATCH(FUNC, ARGS, MESSAGE)					\
-   const struct _glapi_table *dispatch;					\
-   dispatch = _glapi_Dispatch ? _glapi_Dispatch : _glapi_get_dispatch();\
-   (dispatch->FUNC) ARGS
-
-#define RETURN_DISPATCH(FUNC, ARGS, MESSAGE)				\
-   const struct _glapi_table *dispatch;					\
-   dispatch = _glapi_Dispatch ? _glapi_Dispatch : _glapi_get_dispatch();\
-   return (dispatch->FUNC) ARGS
-
-#endif
+#define RETURN_DISPATCH(FUNC, ARGS, MESSAGE) 	\
+   return (_glapi_Dispatch->FUNC) ARGS
 
 
 #ifndef GLAPIENTRY
 #define GLAPIENTRY
 #endif
 
-#define DO_GEOMETRY
 #include "glapitemp.h"
 
+
+#endif /* USE_X86_ASM */

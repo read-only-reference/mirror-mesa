@@ -1,4 +1,4 @@
-/* $Id: s_texture.c,v 1.13 2001/02/26 18:24:37 brianp Exp $ */
+/* $Id: s_texture.c,v 1.21 2001/03/28 20:40:52 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -31,12 +31,26 @@
 #include "macros.h"
 #include "mmath.h"
 #include "mem.h"
+#include "texformat.h"
 #include "teximage.h"
 
 #include "s_context.h"
 #include "s_pb.h"
 #include "s_texture.h"
 
+
+/* XXX this is temporary, until GL/glext.h is updated. */
+#ifndef GL_DOT3_RGB_ARB
+#define GL_DOT3_RGB_ARB 0x86AE
+#endif
+#ifndef GL_DOT3_RGBA_ARB
+#define GL_DOT3_RGBA_ARB 0x86AF
+#endif
+
+/* XXX this is temporary, until GL/glext.h is updated. */
+#ifndef GL_CLAMP_TO_BORDER_ARB
+#define GL_CLAMP_TO_BORDER_ARB 0x812D
+#endif
 
 
 /*
@@ -50,7 +64,7 @@
 /*
  * Used to compute texel locations for linear sampling.
  * Input:
- *    wrapMode = GL_REPEAT, GL_CLAMP or GL_CLAMP_TO_EDGE
+ *    wrapMode = GL_REPEAT, GL_CLAMP, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_BORDER_ARB
  *    S = texcoord in [0,1]
  *    SIZE = width (or height or depth) of texture
  * Output:
@@ -64,21 +78,45 @@
       I0 = IFLOOR(U) & (SIZE - 1);					\
       I1 = (I0 + 1) & (SIZE - 1);					\
    }									\
-   else {								\
-      U = S * SIZE;							\
-      if (U < 0.0F)							\
+   else if (wrapMode == GL_CLAMP_TO_EDGE) {				\
+      if (S <= 0.0F)							\
          U = 0.0F;							\
-      else if (U >= SIZE)						\
+      else if (S >= 1.0F)						\
          U = SIZE;							\
+      else								\
+         U = S * SIZE;							\
       U -= 0.5F;							\
       I0 = IFLOOR(U);							\
       I1 = I0 + 1;							\
-      if (wrapMode == GL_CLAMP_TO_EDGE) {				\
-         if (I0 < 0)							\
-            I0 = 0;							\
-         if (I1 >= SIZE)						\
-            I1 = SIZE - 1;						\
-      }									\
+      if (I0 < 0)							\
+         I0 = 0;							\
+      if (I1 >= (GLint) SIZE)						\
+         I1 = SIZE - 1;							\
+   }									\
+   else  if (wrapMode == GL_CLAMP_TO_BORDER_ARB) {			\
+      const GLfloat min = -1.0F / (2.0F * SIZE);			\
+      const GLfloat max = 1.0F - min;					\
+      if (S <= min)							\
+         U = min * SIZE;						\
+      else if (S >= max)						\
+         U = max * SIZE;						\
+      else								\
+         U = S * SIZE;							\
+      U -= 0.5F;							\
+      I0 = IFLOOR(U);							\
+      I1 = I0 + 1;							\
+   }									\
+   else {								\
+      ASSERT(wrapMode == GL_CLAMP);					\
+      if (S <= 0.0F)							\
+         U = 0.0F;							\
+      else if (S >= 1.0F)						\
+         U = SIZE;							\
+      else								\
+         U = S * SIZE;							\
+      U -= 0.5F;							\
+      I0 = IFLOOR(U);							\
+      I1 = I0 + 1;							\
    }									\
 }
 
@@ -90,13 +128,13 @@
 {									\
    if (wrapMode == GL_REPEAT) {						\
       /* s limited to [0,1) */						\
-      /* i limited to [0,width-1] */					\
-      I = (GLint) (S * SIZE);						\
-      if (S < 0.0F)							\
-         I -= 1;							\
+      /* i limited to [0,size-1] */					\
+      I = IFLOOR(S * SIZE);						\
       I &= (SIZE - 1);							\
    }									\
    else if (wrapMode == GL_CLAMP_TO_EDGE) {				\
+      /* s limited to [min,max] */					\
+      /* i limited to [0, size-1] */					\
       const GLfloat min = 1.0F / (2.0F * SIZE);				\
       const GLfloat max = 1.0F - min;					\
       if (S < min)							\
@@ -104,18 +142,30 @@
       else if (S > max)							\
          I = SIZE - 1;							\
       else								\
-         I = (GLint) (S * SIZE);					\
+         I = IFLOOR(S * SIZE);						\
+   }									\
+   else if (wrapMode == GL_CLAMP_TO_BORDER_ARB) {			\
+      /* s limited to [min,max] */					\
+      /* i limited to [-1, size] */					\
+      const GLfloat min = -1.0F / (2.0F * SIZE);			\
+      const GLfloat max = 1.0F - min;					\
+      if (S <= min)							\
+         I = -1;							\
+      else if (S >= max)						\
+         I = SIZE;							\
+      else								\
+         I = IFLOOR(S * SIZE);						\
    }									\
    else {								\
       ASSERT(wrapMode == GL_CLAMP);					\
       /* s limited to [0,1] */						\
-      /* i limited to [0,width-1] */					\
+      /* i limited to [0,size-1] */					\
       if (S <= 0.0F)							\
          I = 0;								\
       else if (S >= 1.0F)						\
          I = SIZE - 1;							\
       else								\
-         I = (GLint) (S * SIZE);					\
+         I = IFLOOR(S * SIZE);						\
    }									\
 }
 
@@ -208,7 +258,7 @@ palette_sample(const GLcontext *ctx,
          rgba[ACOMP] = palette[(index << 2) + 3];
          return;
       default:
-         gl_problem(ctx, "Bad palette format in palette_sample");
+         _mesa_problem(ctx, "Bad palette format in palette_sample");
    }
 }
 
@@ -272,8 +322,8 @@ sample_1d_linear(GLcontext *ctx,
    {
       const GLfloat a = FRAC(u);
       /* compute sample weights in fixed point in [0,WEIGHT_SCALE] */
-      const GLint w0 = (GLint) ((1.0F-a) * WEIGHT_SCALE + 0.5F);
-      const GLint w1 = (GLint) (      a  * WEIGHT_SCALE + 0.5F);
+      const GLint w0 = IROUND((1.0F-a) * WEIGHT_SCALE);
+      const GLint w1 = IROUND(      a  * WEIGHT_SCALE);
 
       GLchan t0[4], t1[4];  /* texels */
 
@@ -467,7 +517,7 @@ sample_lambda_1d( GLcontext *ctx, GLuint texUnit,
                                               rgba[i]);
                break;
             default:
-               gl_problem(NULL, "Bad min filter in sample_1d_texture");
+               _mesa_problem(NULL, "Bad min filter in sample_1d_texture");
                return;
          }
       }
@@ -483,7 +533,7 @@ sample_lambda_1d( GLcontext *ctx, GLuint texUnit,
                                 s[i], rgba[i]);
                break;
             default:
-               gl_problem(NULL, "Bad mag filter in sample_1d_texture");
+               _mesa_problem(NULL, "Bad mag filter in sample_1d_texture");
                return;
          }
       }
@@ -565,10 +615,10 @@ sample_2d_linear(GLcontext *ctx,
       const GLfloat a = FRAC(u);
       const GLfloat b = FRAC(v);
       /* compute sample weights in fixed point in [0,WEIGHT_SCALE] */
-      const GLint w00 = (GLint) ((1.0F-a)*(1.0F-b) * WEIGHT_SCALE + 0.5F);
-      const GLint w10 = (GLint) (      a *(1.0F-b) * WEIGHT_SCALE + 0.5F);
-      const GLint w01 = (GLint) ((1.0F-a)*      b  * WEIGHT_SCALE + 0.5F);
-      const GLint w11 = (GLint) (      a *      b  * WEIGHT_SCALE + 0.5F);
+      const GLint w00 = IROUND((1.0F-a) * (1.0F-b) * WEIGHT_SCALE);
+      const GLint w10 = IROUND(      a  * (1.0F-b) * WEIGHT_SCALE);
+      const GLint w01 = IROUND((1.0F-a) *       b  * WEIGHT_SCALE);
+      const GLint w11 = IROUND(      a  *       b  * WEIGHT_SCALE);
       GLchan t00[4];
       GLchan t10[4];
       GLchan t01[4];
@@ -752,22 +802,20 @@ sample_lambda_2d( GLcontext *ctx, GLuint texUnit,
    GLuint i;
    (void) u;
 
-   /* check if lambda is monotonous-array */
+   /* since lambda is monotonous-array use this check first */
    if (lambda[0] <= minMagThresh && lambda[n-1] <= minMagThresh) {
-      /* magnification */
+      /* magnification for whole span */
       switch (tObj->MagFilter) {
       case GL_NEAREST:
-         for (i = 0; i < n; i++)
-            sample_2d_nearest(ctx, tObj, tObj->Image[tObj->BaseLevel],
-                              s[i], t[i], rgba[i] );
+	 sample_nearest_2d(ctx, texUnit, tObj, n, s, t, u,
+                           lambda, rgba);
          break;
       case GL_LINEAR:
-         for (i = 0; i < n; i++)
-            sample_2d_linear(ctx, tObj, tObj->Image[tObj->BaseLevel],
-                             s[i], t[i], rgba[i] );
+	 sample_linear_2d(ctx, texUnit, tObj, n, s, t, u,
+                         lambda, rgba);
          break;
       default:
-         gl_problem(NULL, "Bad mag filter in sample_2d_texture");
+         _mesa_problem(NULL, "Bad mag filter in sample_lambda_2d");
       }
    }
    else {
@@ -800,7 +848,7 @@ sample_lambda_2d( GLcontext *ctx, GLuint texUnit,
                                                  lambda[i], rgba[i] );
                   break;
                default:
-                  gl_problem(NULL, "Bad min filter in sample_2d_texture");
+                  _mesa_problem(NULL, "Bad min filter in sample_2d_texture");
                   return;
             }
          }
@@ -816,7 +864,7 @@ sample_lambda_2d( GLcontext *ctx, GLuint texUnit,
                                    s[i], t[i], rgba[i] );
                   break;
                default:
-                  gl_problem(NULL, "Bad mag filter in sample_2d_texture");
+                  _mesa_problem(NULL, "Bad mag filter in sample_2d_texture");
             }
          }
       }
@@ -988,14 +1036,14 @@ sample_3d_linear(GLcontext *ctx,
       const GLfloat b = FRAC(v);
       const GLfloat c = FRAC(w);
       /* compute sample weights in fixed point in [0,WEIGHT_SCALE] */
-      GLint w000 = (GLint) ((1.0F-a)*(1.0F-b)*(1.0F-c) * WEIGHT_SCALE + 0.5F);
-      GLint w100 = (GLint) (      a *(1.0F-b)*(1.0F-c) * WEIGHT_SCALE + 0.5F);
-      GLint w010 = (GLint) ((1.0F-a)*      b *(1.0F-c) * WEIGHT_SCALE + 0.5F);
-      GLint w110 = (GLint) (      a *      b *(1.0F-c) * WEIGHT_SCALE + 0.5F);
-      GLint w001 = (GLint) ((1.0F-a)*(1.0F-b)*      c  * WEIGHT_SCALE + 0.5F);
-      GLint w101 = (GLint) (      a *(1.0F-b)*      c  * WEIGHT_SCALE + 0.5F);
-      GLint w011 = (GLint) ((1.0F-a)*      b *      c  * WEIGHT_SCALE + 0.5F);
-      GLint w111 = (GLint) (      a *      b *      c  * WEIGHT_SCALE + 0.5F);
+      GLint w000 = IROUND((1.0F-a) * (1.0F-b) * (1.0F-c) * WEIGHT_SCALE);
+      GLint w100 = IROUND(      a  * (1.0F-b) * (1.0F-c) * WEIGHT_SCALE);
+      GLint w010 = IROUND((1.0F-a) *       b  * (1.0F-c) * WEIGHT_SCALE);
+      GLint w110 = IROUND(      a  *       b  * (1.0F-c) * WEIGHT_SCALE);
+      GLint w001 = IROUND((1.0F-a) * (1.0F-b) *       c  * WEIGHT_SCALE);
+      GLint w101 = IROUND(      a  * (1.0F-b) *       c  * WEIGHT_SCALE);
+      GLint w011 = IROUND((1.0F-a) *       b  *       c  * WEIGHT_SCALE);
+      GLint w111 = IROUND(      a  *       b  *       c  * WEIGHT_SCALE);
 
       GLchan t000[4], t010[4], t001[4], t011[4];
       GLchan t100[4], t110[4], t101[4], t111[4];
@@ -1249,7 +1297,7 @@ sample_lambda_3d( GLcontext *ctx, GLuint texUnit,
                                               lambda[i], rgba[i]);
                break;
             default:
-               gl_problem(NULL, "Bad min filterin sample_3d_texture");
+               _mesa_problem(NULL, "Bad min filterin sample_3d_texture");
          }
       }
       else {
@@ -1264,7 +1312,7 @@ sample_lambda_3d( GLcontext *ctx, GLuint texUnit,
                                 s[i], t[i], u[i], rgba[i]);
                break;
             default:
-               gl_problem(NULL, "Bad mag filter in sample_3d_texture");
+               _mesa_problem(NULL, "Bad mag filter in sample_3d_texture");
          }
       }
    }
@@ -1532,7 +1580,7 @@ sample_lambda_cube( GLcontext *ctx, GLuint texUnit,
                                                 lambda[i], rgba[i]);
                break;
             default:
-               gl_problem(NULL, "Bad min filter in sample_lambda_cube");
+               _mesa_problem(NULL, "Bad min filter in sample_lambda_cube");
          }
       }
       else {
@@ -1551,7 +1599,7 @@ sample_lambda_cube( GLcontext *ctx, GLuint texUnit,
                                 newS, newT, rgba[i]);
                break;
             default:
-               gl_problem(NULL, "Bad mag filter in sample_lambda_cube");
+               _mesa_problem(NULL, "Bad mag filter in sample_lambda_cube");
          }
       }
    }
@@ -1624,15 +1672,13 @@ _swrast_choose_texture_sample_func( GLcontext *ctx, GLuint texUnit,
                if (t->WrapS == GL_REPEAT &&
                    t->WrapT == GL_REPEAT &&
                    t->Image[baseLevel]->Border == 0 &&
-                   t->Image[baseLevel]->Format == GL_RGB &&
-                   t->Image[baseLevel]->Type == CHAN_TYPE) {
+                   t->Image[baseLevel]->TexFormat->MesaFormat == MESA_FORMAT_RGB) {
                   swrast->TextureSample[texUnit] = opt_sample_rgb_2d;
                }
                else if (t->WrapS == GL_REPEAT &&
                         t->WrapT == GL_REPEAT &&
                         t->Image[baseLevel]->Border == 0 &&
-                        t->Image[baseLevel]->Format==GL_RGBA &&
-                        t->Image[baseLevel]->Type == CHAN_TYPE) {
+                        t->Image[baseLevel]->TexFormat->MesaFormat == MESA_FORMAT_RGBA) {
                   swrast->TextureSample[texUnit] = opt_sample_rgba_2d;
                }
                else
@@ -1664,7 +1710,7 @@ _swrast_choose_texture_sample_func( GLcontext *ctx, GLuint texUnit,
             }
             break;
          default:
-            gl_problem(NULL, "invalid dimensions in _mesa_set_texture_sampler");
+            _mesa_problem(NULL, "invalid dimensions in _mesa_set_texture_sampler");
       }
    }
 }
@@ -1690,6 +1736,9 @@ texture_combine(const GLcontext *ctx,
 
    ASSERT(ctx->Extensions.EXT_texture_env_combine);
 
+   /*
+    * Do operand setup for up to 3 operands.  Loop over the terms.
+    */
    for (j = 0; j < 3; j++) {
       switch (textureUnit->CombineSourceA[j]) {
          case GL_TEXTURE:
@@ -1711,7 +1760,7 @@ texture_combine(const GLcontext *ctx,
             }
             break;
          default:
-            gl_problem(NULL, "invalid combine source");
+            _mesa_problem(NULL, "invalid combine source");
       }
 
       switch (textureUnit->CombineSourceRGB[j]) {
@@ -1740,7 +1789,7 @@ texture_combine(const GLcontext *ctx,
             }
             break;
          default:
-            gl_problem(NULL, "invalid combine source");
+            _mesa_problem(NULL, "invalid combine source");
       }
 
       if (textureUnit->CombineOperandRGB[j] != GL_SRC_COLOR) {
@@ -1764,7 +1813,8 @@ texture_combine(const GLcontext *ctx,
                dst[i][BCOMP] = src[i][ACOMP];
             }
          }
-         else {                      /*  GL_ONE_MINUS_SRC_ALPHA  */
+         else {
+            ASSERT(textureUnit->CombineOperandRGB[j] ==GL_ONE_MINUS_SRC_ALPHA);
             src = (const GLchan (*)[4]) argA[j];
             for (i = 0; i < n; i++) {
                dst[i][RCOMP] = CHAN_MAX - src[i][ACOMP];
@@ -1795,6 +1845,9 @@ texture_combine(const GLcontext *ctx,
       }
    }
 
+   /*
+    * Do the texture combine.
+    */
    switch (textureUnit->CombineModeRGB) {
       case GL_REPLACE:
          {
@@ -1888,6 +1941,8 @@ texture_combine(const GLcontext *ctx,
          break;
       case GL_DOT3_RGB_EXT:
       case GL_DOT3_RGBA_EXT:
+      case GL_DOT3_RGB_ARB:
+      case GL_DOT3_RGBA_ARB:
          {
             const GLubyte (*arg0)[4] = (const GLubyte (*)[4]) argRGB[0];
             const GLubyte (*arg1)[4] = (const GLubyte (*)[4]) argRGB[1];
@@ -1909,7 +1964,7 @@ texture_combine(const GLcontext *ctx,
          }
          break;
       default:
-         gl_problem(NULL, "invalid combine mode");
+         _mesa_problem(NULL, "invalid combine mode");
    }
 
    switch (textureUnit->CombineModeA) {
@@ -1976,12 +2031,13 @@ texture_combine(const GLcontext *ctx,
          }
          break;
       default:
-         gl_problem(NULL, "invalid combine mode");
+         _mesa_problem(NULL, "invalid combine mode");
    }
 
    /* Fix the alpha component for GL_DOT3_RGBA_EXT combining.
     */
-   if (textureUnit->CombineModeRGB == GL_DOT3_RGBA_EXT) {
+   if (textureUnit->CombineModeRGB == GL_DOT3_RGBA_EXT ||
+       textureUnit->CombineModeRGB == GL_DOT3_RGBA_ARB) {
       for (i = 0; i < n; i++) {
 	 rgba[i][ACOMP] = rgba[i][RCOMP];
       }
@@ -2086,7 +2142,7 @@ apply_texture( const GLcontext *ctx,
 	       }
 	       break;
             default:
-               gl_problem(ctx, "Bad format (GL_REPLACE) in apply_texture");
+               _mesa_problem(ctx, "Bad format (GL_REPLACE) in apply_texture");
                return;
 	 }
 	 break;
@@ -2152,7 +2208,7 @@ apply_texture( const GLcontext *ctx,
 	       }
 	       break;
             default:
-               gl_problem(ctx, "Bad format (GL_MODULATE) in apply_texture");
+               _mesa_problem(ctx, "Bad format (GL_MODULATE) in apply_texture");
                return;
 	 }
 	 break;
@@ -2185,7 +2241,7 @@ apply_texture( const GLcontext *ctx,
 	       }
 	       break;
             default:
-               gl_problem(ctx, "Bad format (GL_DECAL) in apply_texture");
+               _mesa_problem(ctx, "Bad format (GL_DECAL) in apply_texture");
                return;
 	 }
 	 break;
@@ -2255,7 +2311,7 @@ apply_texture( const GLcontext *ctx,
 	       }
 	       break;
             default:
-               gl_problem(ctx, "Bad format (GL_BLEND) in apply_texture");
+               _mesa_problem(ctx, "Bad format (GL_BLEND) in apply_texture");
                return;
 	 }
 	 break;
@@ -2330,7 +2386,7 @@ apply_texture( const GLcontext *ctx,
                }
                break;
             default:
-               gl_problem(ctx, "Bad format (GL_ADD) in apply_texture");
+               _mesa_problem(ctx, "Bad format (GL_ADD) in apply_texture");
                return;
 	 }
 	 break;
@@ -2340,7 +2396,7 @@ apply_texture( const GLcontext *ctx,
          break;
 
       default:
-         gl_problem(ctx, "Bad env mode in apply_texture");
+         _mesa_problem(ctx, "Bad env mode in apply_texture");
          return;
    }
 }
@@ -2371,12 +2427,12 @@ sample_depth_texture(const GLcontext *ctx,
    GLboolean lequal, gequal;
 
    if (texObj->Dimensions != 2) {
-      gl_problem(ctx, "only 2-D depth textures supported at this time");
+      _mesa_problem(ctx, "only 2-D depth textures supported at this time");
       return;
    }
 
    if (texObj->MinFilter != texObj->MagFilter) {
-      gl_problem(ctx, "mipmapped depth textures not supported at this time");
+      _mesa_problem(ctx, "mipmapped depth textures not supported at this time");
       return;
    }
 
@@ -2385,7 +2441,7 @@ sample_depth_texture(const GLcontext *ctx,
     * isn't a depth texture.
     */
    if (texImage->Format != GL_DEPTH_COMPONENT) {
-      gl_problem(ctx,"GL_TEXTURE_COMPARE_SGIX enabled with non-depth texture");
+      _mesa_problem(ctx,"GL_TEXTURE_COMPARE_SGIX enabled with non-depth texture");
       return;
    }
 
@@ -2406,17 +2462,17 @@ sample_depth_texture(const GLcontext *ctx,
          COMPUTE_NEAREST_TEXEL_LOCATION(texObj->WrapS, s[i], width, col);
          COMPUTE_NEAREST_TEXEL_LOCATION(texObj->WrapT, t[i], height, row);
          depthSample = *((const GLfloat *) texImage->Data + row * width + col);
-         if ((depthSample <= r[i] && lequal) ||
-             (depthSample >= r[i] && gequal)) {
-            texel[i][RCOMP] = ambient;
-            texel[i][GCOMP] = ambient;
-            texel[i][BCOMP] = ambient;
-            texel[i][ACOMP] = CHAN_MAX;
-         }
-         else {
+         if ((r[i] <= depthSample && lequal) ||
+             (r[i] >= depthSample && gequal)) {
             texel[i][RCOMP] = CHAN_MAX;
             texel[i][GCOMP] = CHAN_MAX;
             texel[i][BCOMP] = CHAN_MAX;
+            texel[i][ACOMP] = CHAN_MAX;
+         }
+         else {
+            texel[i][RCOMP] = ambient;
+            texel[i][GCOMP] = ambient;
+            texel[i][BCOMP] = ambient;
             texel[i][ACOMP] = CHAN_MAX;
          }
       }
@@ -2441,10 +2497,10 @@ sample_depth_texture(const GLcontext *ctx,
             j1 += texImage->Border;
          }
          else {
-            if (i0 < 0 || i0 >= width)   useBorderTexel |= I0BIT;
-            if (i1 < 0 || i1 >= width)   useBorderTexel |= I1BIT;
-            if (j0 < 0 || j0 >= height)  useBorderTexel |= J0BIT;
-            if (j1 < 0 || j1 >= height)  useBorderTexel |= J1BIT;
+            if (i0 < 0 || i0 >= (GLint) width)   useBorderTexel |= I0BIT;
+            if (i1 < 0 || i1 >= (GLint) width)   useBorderTexel |= I1BIT;
+            if (j0 < 0 || j0 >= (GLint) height)  useBorderTexel |= J0BIT;
+            if (j1 < 0 || j1 >= (GLint) height)  useBorderTexel |= J1BIT;
          }
 
          /* get four depth samples from the texture */
@@ -2548,12 +2604,12 @@ sample_depth_texture2(const GLcontext *ctx,
    GLboolean lequal, gequal;
 
    if (texObj->Dimensions != 2) {
-      gl_problem(ctx, "only 2-D depth textures supported at this time");
+      _mesa_problem(ctx, "only 2-D depth textures supported at this time");
       return;
    }
 
    if (texObj->MinFilter != texObj->MagFilter) {
-      gl_problem(ctx, "mipmapped depth textures not supported at this time");
+      _mesa_problem(ctx, "mipmapped depth textures not supported at this time");
       return;
    }
 
@@ -2562,7 +2618,7 @@ sample_depth_texture2(const GLcontext *ctx,
     * isn't a depth texture.
     */
    if (texImage->Format != GL_DEPTH_COMPONENT) {
-      gl_problem(ctx,"GL_TEXTURE_COMPARE_SGIX enabled with non-depth texture");
+      _mesa_problem(ctx,"GL_TEXTURE_COMPARE_SGIX enabled with non-depth texture");
       return;
    }
 
@@ -2647,8 +2703,9 @@ _swrast_texture_fragments( GLcontext *ctx, GLuint texUnit, GLuint n,
 	    }
 	 }
 
-         if (textureUnit->_Current->MinLod != -1000.0
-             || textureUnit->_Current->MaxLod != 1000.0) {
+         if ((textureUnit->_Current->MinLod != -1000.0
+              || textureUnit->_Current->MaxLod != 1000.0)
+             && lambda) {
             /* apply LOD clamping to lambda */
             const GLfloat min = textureUnit->_Current->MinLod;
             const GLfloat max = textureUnit->_Current->MaxLod;

@@ -1,8 +1,8 @@
-# $Id: Makefile.X11,v 1.45 2001/02/16 18:14:41 keithw Exp $
+# $Id: Makefile.X11,v 1.51 2001/03/29 06:46:15 gareth Exp $
 
 # Mesa 3-D graphics library
 # Version:  3.5
-# Copyright (C) 1995-2000  Brian Paul
+# Copyright (C) 1995-2001  Brian Paul
 
 # Makefile for core library
 
@@ -74,10 +74,8 @@ CORE_SOURCES = \
 	fog.c \
 	get.c \
 	glapi.c \
-	glapinoop.c \
 	glthread.c \
 	hash.c \
-	highpc.c \
 	hint.c \
 	histogram.c \
 	image.c \
@@ -85,7 +83,6 @@ CORE_SOURCES = \
 	light.c \
 	lines.c \
 	logic.c \
-	lowpc.c \
 	masking.c \
 	matrix.c \
 	mem.c \
@@ -99,6 +96,7 @@ CORE_SOURCES = \
 	scissor.c \
 	state.c \
 	stencil.c \
+	texformat.c \
 	teximage.c \
 	texobj.c \
 	texstate.c \
@@ -110,7 +108,7 @@ CORE_SOURCES = \
 	X86/x86.c \
 	X86/common_x86.c \
 	X86/3dnow.c \
-	X86/katmai.c \
+	X86/sse.c \
 	math/m_debug_norm.c \
 	math/m_debug_vertex.c \
 	math/m_debug_xform.c \
@@ -137,6 +135,7 @@ CORE_SOURCES = \
 	swrast/s_feedback.c \
 	swrast/s_fog.c \
 	swrast/s_histogram.c \
+	swrast/s_imaging.c \
 	swrast/s_lines.c \
 	swrast/s_logic.c \
 	swrast/s_masking.c \
@@ -148,6 +147,7 @@ CORE_SOURCES = \
 	swrast/s_span.c \
 	swrast/s_stencil.c \
 	swrast/s_texture.c \
+	swrast/s_texstore.c \
 	swrast/s_triangle.c \
 	swrast/s_zoom.c
 
@@ -277,10 +277,17 @@ X86/x86.o: X86/x86.c
 	$(CC) -c -I. -I$(INCDIR) $(CFLAGS) $< -o $@
 X86/common_x86.o: X86/common_x86.c
 	$(CC) -c -I. -I$(INCDIR) $(CFLAGS) $< -o $@
+X86/common_x86_asm.o: X86/common_x86_asm.S X86/matypes.h
 X86/3dnow.o: X86/3dnow.c
 	$(CC) -c -I. -I$(INCDIR) $(CFLAGS) $< -o $@
-X86/katmai.o: X86/katmai.c
+X86/sse.o: X86/sse.c
 	$(CC) -c -I. -I$(INCDIR) $(CFLAGS) $< -o $@
+X86/matypes.h: mtypes.h tnl/t_context.h X86/gen_matypes.c
+	$(CC) -I. -I$(INCDIR) $(CFLAGS) X86/gen_matypes.c -o X86/gen_matypes
+	./X86/gen_matypes > X86/matypes.h
+	rm -f X86/gen_matypes X86/*.o
+
+$(ASM_SOURCES): X86/matypes.h
 
 GGI/ggimesa.o: GGI/ggimesa.c
 	$(CC) -c -I. -I$(INCDIR) $(CFLAGS) $< -o $@

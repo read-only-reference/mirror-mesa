@@ -1,10 +1,10 @@
-/* $Id: s_feedback.h,v 1.3 2000/11/22 07:32:18 joukj Exp $ */
+/* $Id: s_feedback.h,v 1.5 2001/03/12 00:48:42 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -33,21 +33,20 @@
 #include "swrast.h"
 
 
-extern void gl_feedback_point( GLcontext *ctx, const SWvertex *v );
+extern void _mesa_feedback_point( GLcontext *ctx, const SWvertex *v );
 
-extern void gl_feedback_line( GLcontext *ctx,
+extern void _mesa_feedback_line( GLcontext *ctx,
                               const SWvertex *v1, const SWvertex *v2 );
 
-extern void gl_feedback_triangle( GLcontext *ctx, const SWvertex *v0,
+extern void _mesa_feedback_triangle( GLcontext *ctx, const SWvertex *v0,
                                   const SWvertex *v1, const SWvertex *v2 );
 
-extern void gl_select_point( GLcontext *ctx, const SWvertex *v );
+extern void _mesa_select_point( GLcontext *ctx, const SWvertex *v );
 
-extern void gl_select_line( GLcontext *ctx,
+extern void _mesa_select_line( GLcontext *ctx,
                             const SWvertex *v1, const SWvertex *v2 );
 
-extern void gl_select_triangle( GLcontext *ctx, const SWvertex *v0,
+extern void _mesa_select_triangle( GLcontext *ctx, const SWvertex *v0,
                                 const SWvertex *v1, const SWvertex *v2 );
 
 #endif
-

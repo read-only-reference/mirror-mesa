@@ -1,4 +1,4 @@
-/* $Id: s_aaline.c,v 1.4 2001/01/23 23:39:37 brianp Exp $ */
+/* $Id: s_aaline.c,v 1.7 2001/03/28 21:37:24 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -31,7 +31,7 @@
 #include "swrast/s_context.h"
 #include "swrast/swrast.h"
 #include "mtypes.h"
-
+#include "mmath.h"
 
 
 #define SUB_PIXEL 4
@@ -170,7 +170,7 @@ solve_plane_chan(GLfloat x, GLfloat y, const GLfloat plane[4])
    if (z < 0.0F)
       return 0;
    else if (z > CHAN_MAXF)
-      return CHAN_MAXF;
+      return (GLchan) CHAN_MAXF;
    return (GLchan) (GLint) z;
 }
 
@@ -234,8 +234,8 @@ make_sample_table(GLint xSamples, GLint ySamples, GLfloat samples[][2])
          else {
             j = i++;
          }
-         samples[j][0] = x * dx;
-         samples[j][1] = y * dy;
+         samples[j][0] = x * dx + 0.5 * dx;
+         samples[j][1] = y * dy + 0.5 * dy;
       }
    }
 }
@@ -506,4 +506,3 @@ _swrast_choose_aa_line_function(GLcontext *ctx)
       swrast->Line = aa_ci_line;
    }
 }
-

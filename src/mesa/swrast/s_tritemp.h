@@ -1,21 +1,21 @@
-/* $Id: s_tritemp.h,v 1.10 2001/02/12 17:02:00 brianp Exp $ */
+/* $Id: s_tritemp.h,v 1.14 2001/03/12 00:48:42 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -33,17 +33,20 @@
  * The following macros may be defined to indicate what auxillary information
  * must be interplated across the triangle:
  *    INTERP_Z        - if defined, interpolate Z values
+ *    INTERP_FOG      - if defined, interpolate fog values
  *    INTERP_RGB      - if defined, interpolate RGB values
- *    INTERP_SPEC     - if defined, interpolate specular RGB values
  *    INTERP_ALPHA    - if defined, interpolate Alpha values
+ *    INTERP_SPEC     - if defined, interpolate specular RGB values
  *    INTERP_INDEX    - if defined, interpolate color index values
  *    INTERP_INT_TEX  - if defined, interpolate integer ST texcoords
  *                         (fast, simple 2-D texture mapping)
- *    INTERP_LAMBDA   - if defined, the lambda value is computed at every
- *                         pixel, to apply MIPMAPPING, and min/maxification
  *    INTERP_TEX      - if defined, interpolate set 0 float STRQ texcoords
  *                         NOTE:  OpenGL STRQ = Mesa STUV (R was taken for red)
  *    INTERP_MULTITEX - if defined, interpolate N units of STRQ texcoords
+ *    INTERP_LAMBDA   - if defined, the lambda value is computed at every
+ *                         pixel, to apply MIPMAPPING, and min/maxification
+ *    INTERP_MULTILAMBDA - like above but for multitexturing, i.e.
+ *                         a lambda value for every texture unit
  *
  * When one can directly address pixels in the color buffer the following
  * macros can be defined and used to compute pixel addresses during
@@ -59,7 +62,7 @@
  *
  * Optionally, one may provide one-time setup code per triangle:
  *    SETUP_CODE    - code which is to be executed once per triangle
- * 
+ *
  * The following macro MUST be defined:
  *    INNER_LOOP(LEFT,RIGHT,Y) - code to write a span of pixels.
  *        Something like:
@@ -228,7 +231,7 @@
     * By stepping rasterization parameters along the major edge,
     * we can avoid recomputing them at the discontinuity where
     * the top and bottom edges meet.  However, this forces us to
-    * be able to scan both left-to-right and right-to-left. 
+    * be able to scan both left-to-right and right-to-left.
     * Also, we must determine whether the major edge is at the
     * left or right side of the triangle.  We do this by
     * computing the magnitude of the cross-product of the major
@@ -251,6 +254,8 @@
       GLint ltor;		/* true if scanning left-to-right */
 #ifdef INTERP_Z
       GLfloat dzdx, dzdy;      GLfixed fdzdx;
+#endif
+#ifdef INTERP_FOG
       GLfloat dfogdx, dfogdy;      GLfixed fdfogdx;
 #endif
 #ifdef INTERP_RGB
@@ -285,13 +290,20 @@
       GLfloat dudx[MAX_TEXTURE_UNITS], dudy[MAX_TEXTURE_UNITS];
       GLfloat dvdx[MAX_TEXTURE_UNITS], dvdy[MAX_TEXTURE_UNITS];
 #endif
-#ifdef INTERP_LAMBDA
 
+#ifdef INTERP_LAMBDA
 #ifndef INTERP_TEX
 #error "Mipmapping without texturing doesn't make sense."
 #endif
       GLfloat lambda_nominator;
 #endif /* INTERP_LAMBDA */
+
+#ifdef INTERP_MULTILAMBDA
+#ifndef INTERP_MULTITEX
+#error "Multi-Mipmapping without multi-texturing doesn't make sense."
+#endif
+      GLfloat lambda_nominator[MAX_TEXTURE_UNITS];
+#endif /* INTERP_MULTILAMBDA */
 
 
       /*
@@ -323,6 +335,8 @@
          else
             fdzdx = (GLint) dzdx;
       }
+#endif
+#ifdef INTERP_FOG
       {
          GLfloat eMaj_dfog, eBot_dfog;
          eMaj_dfog = (vMax->fog - vMin->fog) * 256;
@@ -447,7 +461,7 @@
 	 eBot_dt = vMid->texcoord[0][1] * wMid - vMin->texcoord[0][1] * wMin;
 	 dtdx = oneOverArea * (eMaj_dt * eBot.dy - eMaj.dy * eBot_dt);
 	 dtdy = oneOverArea * (eMaj.dx * eBot_dt - eMaj_dt * eBot.dx);
-	 
+
 	 eMaj_du = vMax->texcoord[0][2] * wMax - vMin->texcoord[0][2] * wMin;
 	 eBot_du = vMid->texcoord[0][2] * wMid - vMin->texcoord[0][2] * wMin;
 	 dudx = oneOverArea * (eMaj_du * eBot.dy - eMaj.dy * eBot_du);
@@ -484,14 +498,14 @@
 		       - vMin->texcoord[u][1] * wMin;
 	       dtdx[u] = oneOverArea * (eMaj_dt * eBot.dy - eMaj.dy * eBot_dt);
 	       dtdy[u] = oneOverArea * (eMaj.dx * eBot_dt - eMaj_dt * eBot.dx);
-	       
+
 	       eMaj_du = vMax->texcoord[u][2] * wMax
                        - vMin->texcoord[u][2] * wMin;
 	       eBot_du = vMid->texcoord[u][2] * wMid
                        - vMin->texcoord[u][2] * wMin;
 	       dudx[u] = oneOverArea * (eMaj_du * eBot.dy - eMaj.dy * eBot_du);
 	       dudy[u] = oneOverArea * (eMaj.dx * eBot_du - eMaj_du * eBot.dx);
-	       
+
 	       eMaj_dv = vMax->texcoord[u][3] * wMax
                        - vMin->texcoord[u][3] * wMin;
 	       eBot_dv = vMid->texcoord[u][3] * wMid
@@ -526,7 +540,7 @@
        * inside the triangle.
        *
        * Next we creep down the major edge until we reach that y,
-       * and compute the corresponding x coordinate on the edge. 
+       * and compute the corresponding x coordinate on the edge.
        * Then we find the half-integral x that lies on or just
        * inside the edge.  This is the first pixel that might lie in
        * the interior of the triangle.  (We won't know for sure
@@ -570,6 +584,8 @@
          int dZRowOuter, dZRowInner;  /* offset in bytes */
 #  endif
          GLfixed fz, fdzOuter, fdzInner;
+#endif
+#ifdef INTERP_FOG
          GLfixed ffog, fdfogOuter, fdfogInner;
 #endif
 #ifdef INTERP_RGB
@@ -715,10 +731,11 @@
                   dZRowOuter = (ctx->DrawBuffer->Width + idxOuter) * sizeof(DEPTH_TYPE);
 #  endif
                }
-	       {
-		  ffog = FloatToFixed(vLower->fog) * 256 + dfogdx * adjx + dfogdy * adjy + FIXED_HALF;
-		  fdfogOuter = SignedFloatToFixed(dfogdy + dxOuter * dfogdx);
-	       }
+#endif
+#ifdef INTERP_FOG
+               ffog = FloatToFixed(vLower->fog * 256 + dfogdx * adjx
+                                   + dfogdy * adjy) + FIXED_HALF;
+               fdfogOuter = SignedFloatToFixed(dfogdy + dxOuter * dfogdx);
 #endif
 #ifdef INTERP_RGB
                fr = (GLfixed)(IntToFixed(vLower->color[0])
@@ -832,6 +849,8 @@
             dZRowInner = dZRowOuter + sizeof(DEPTH_TYPE);
 #  endif
             fdzInner = fdzOuter + fdzdx;
+#endif
+#ifdef INTERP_FOG
             fdfogInner = fdfogOuter + fdfogdx;
 #endif
 #ifdef INTERP_RGB
@@ -881,6 +900,8 @@
                GLint right = FixedToInt(fxRightEdge);
 #ifdef INTERP_Z
                GLfixed ffz = fz;
+#endif
+#ifdef INTERP_FOG
                GLfixed fffog = ffog;
 #endif
 #ifdef INTERP_RGB
@@ -974,19 +995,46 @@
  *     which saves some computation time.
  */
 	       {
-		 GLfloat dudx = dsdx /* * invQ*/ * twidth;
-		 GLfloat dudy = dsdy /* * invQ*/ * twidth;
-		 GLfloat dvdx = dtdx /* * invQ*/ * theight;
-		 GLfloat dvdy = dtdy /* * invQ*/ * theight;
-		 GLfloat r1 = dudx * dudx + dudy * dudy;
-		 GLfloat r2 = dvdx * dvdx + dvdy * dvdy;
-		 GLfloat rho2 = r1 + r2; /* used to be:  rho2 = MAX2(r1,r2); */
-		 lambda_nominator = rho2;
+                  GLfloat dudx = dsdx /* * invQ*/ * twidth;
+                  GLfloat dudy = dsdy /* * invQ*/ * twidth;
+                  GLfloat dvdx = dtdx /* * invQ*/ * theight;
+                  GLfloat dvdy = dtdy /* * invQ*/ * theight;
+                  GLfloat r1 = dudx * dudx + dudy * dudy;
+                  GLfloat r2 = dvdx * dvdx + dvdy * dvdy;
+                  GLfloat rho2 = r1 + r2; /* was:  rho2 = MAX2(r1,r2); */
+                  lambda_nominator = rho2;
 	       }
-	       
-	       /* return log base 2 of sqrt(rho) */ 
-#define COMPUTE_LAMBDA(X)  log( lambda_nominator * (X)*(X) ) * 1.442695F * 0.5F  /* 1.442695 = 1/log(2) */
+
+	       /* set DEST to log_(base 2) of sqrt(rho) */
+               /* 1.442695 = 1/log(2) */
+#define COMPUTE_LAMBDA(DEST, X)  \
+   DEST = log( lambda_nominator * (X)*(X) ) * 1.442695F * 0.5F
 #endif
+
+#ifdef INTERP_MULTILAMBDA
+/*
+ *  Read the comment for INTERP_LAMBDA, but apply to each texture unit
+ */
+	       {
+                  GLuint unit;
+                  for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {
+                     if (ctx->Texture.Unit[unit]._ReallyEnabled) {
+                        GLfloat dudx = dsdx[unit] /* * invQ*/ * twidth[unit];
+                        GLfloat dudy = dsdy[unit] /* * invQ*/ * twidth[unit];
+                        GLfloat dvdx = dtdx[unit] /* * invQ*/ * theight[unit];
+                        GLfloat dvdy = dtdy[unit] /* * invQ*/ * theight[unit];
+                        GLfloat r1 = dudx * dudx + dudy * dudy;
+                        GLfloat r2 = dvdx * dvdx + dvdy * dvdy;
+                        GLfloat rho2 = r1 + r2; /* used to be:  rho2 = MAX2(r1,r2); */
+                        lambda_nominator[unit] = rho2;
+                     }
+                  }
+	       }
+	       /* set DEST to log_(base 2) of sqrt(rho) */
+#define COMPUTE_MULTILAMBDA(DEST, X, unit)  \
+   DEST = log( lambda_nominator[unit] * (X)*(X) ) * 1.442695F * 0.5F
+#endif
+
 
                INNER_LOOP( left, right, iy );
 
@@ -1014,7 +1062,9 @@
                   zRow = (DEPTH_TYPE *) ((GLubyte*)zRow + dZRowOuter);
 #  endif
                   fz += fdzOuter;
-                  ffog += fdfogOuter; 
+#endif
+#ifdef INTERP_FOG
+                  ffog += fdfogOuter;
 #endif
 #ifdef INTERP_RGB
                   fr += fdrOuter;   fg += fdgOuter;   fb += fdbOuter;
@@ -1060,6 +1110,8 @@
                   zRow = (DEPTH_TYPE *) ((GLubyte*)zRow + dZRowInner);
 #  endif
                   fz += fdzInner;
+#endif
+#ifdef INTERP_FOG
                   ffog += fdfogInner;
 #endif
 #ifdef INTERP_RGB
@@ -1113,15 +1165,18 @@
 #undef PIXEL_ADDRESS
 
 #undef INTERP_Z
+#undef INTERP_FOG
 #undef INTERP_RGB
 #undef INTERP_SPEC
 #undef INTERP_ALPHA
 #undef INTERP_INDEX
-#undef INTERP_LAMBDA
-#undef COMPUTE_LAMBDA
 #undef INTERP_INT_TEX
 #undef INTERP_TEX
 #undef INTERP_MULTITEX
+#undef INTERP_LAMBDA
+#undef COMPUTE_LAMBDA
+#undef INTERP_MULTILAMBDA
+#undef COMPUTE_MULTILAMBDA
 
 #undef S_SCALE
 #undef T_SCALE

@@ -1,8 +1,10 @@
+/* $Id: s_context.h,v 1.9 2001/03/29 16:50:32 brianp Exp $ */
+
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -98,6 +100,10 @@ typedef void (*swrast_tri_func)( GLcontext *ctx, const SWvertex *,
 
 typedef struct
 {
+   /* Driver interface:
+    */
+   struct swrast_device_driver Driver;
+
    /* Configuration mechanisms to make software rasterizer match
     * characteristics of the hardware rasterizer (if present):
     */
@@ -109,7 +115,7 @@ typedef struct
     */
    GLuint _RasterMask;
    GLboolean _MultiTextureEnabled;
-   GLuint _MinMagThresh[MAX_TEXTURE_UNITS];
+   GLfloat _MinMagThresh[MAX_TEXTURE_UNITS];
    GLfloat _backface_sign;
    GLboolean _PreferPixelFog;
 
@@ -146,8 +152,8 @@ typedef struct
    swrast_line_func Line;
    swrast_tri_func Triangle;
 
-   /* Placeholders for when seperate specular (or secondary color) is
-    * enabled but texturing is not.  
+   /* Placeholders for when separate specular (or secondary color) is
+    * enabled but texturing is not.
     */
    swrast_point_func SpecPoint;
    swrast_line_func SpecLine;
@@ -168,6 +174,19 @@ _swrast_validate_derived( GLcontext *ctx );
 
 #define SWRAST_CONTEXT(ctx) ((SWcontext *)ctx->swrast_context)
 
+#define RENDER_START(SWctx, GLctx)			\
+   do {						\
+      if ((SWctx)->Driver.SpanRenderStart) {		\
+         (*(SWctx)->Driver.SpanRenderStart)(GLctx);	\
+      }						\
+   } while (0)
+
+#define RENDER_FINISH(SWctx, GLctx)			\
+   do {						\
+      if ((SWctx)->Driver.SpanRenderFinish) {		\
+         (*(SWctx)->Driver.SpanRenderFinish)(GLctx);	\
+      }						\
+   } while (0)
 
 
 #endif

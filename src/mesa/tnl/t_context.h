@@ -1,10 +1,10 @@
-/* $Id: t_context.h,v 1.15 2001/02/20 18:28:52 keithw Exp $ */
+/* $Id: t_context.h,v 1.18 2001/03/19 02:25:37 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -48,7 +48,7 @@
 #define IMM_SIZE             (IMM_MAXDATA + MAX_CLIPPED_VERTICES)
 
 
-/* Values for IM->BeginState 
+/* Values for IM->BeginState
  */
 #define VERT_BEGIN_0    0x1	   /* glBegin (if initially inside beg/end) */
 #define VERT_BEGIN_1    0x2	   /* glBegin (if initially outside beg/end) */
@@ -66,16 +66,16 @@
 
 
 /* Flags that describe the inputs and outputs of pipeline stages, and
- * the contents of a vertex-cassette. 
+ * the contents of a vertex-cassette.
  *
  * 5 spare flags, rearrangement of eval flags can secure at least 3
- * more. 
+ * more.
  */
-#define VERT_OBJ             _NEW_ARRAY_VERTEX	
-#define VERT_RGBA            _NEW_ARRAY_COLOR	
-#define VERT_NORM            _NEW_ARRAY_NORMAL	
-#define VERT_INDEX           _NEW_ARRAY_INDEX	
-#define VERT_EDGE            _NEW_ARRAY_EDGEFLAG	
+#define VERT_OBJ             _NEW_ARRAY_VERTEX
+#define VERT_RGBA            _NEW_ARRAY_COLOR
+#define VERT_NORM            _NEW_ARRAY_NORMAL
+#define VERT_INDEX           _NEW_ARRAY_INDEX
+#define VERT_EDGE            _NEW_ARRAY_EDGEFLAG
 #define VERT_SPEC_RGB        _NEW_ARRAY_SECONDARYCOLOR
 #define VERT_FOG_COORD       _NEW_ARRAY_FOGCOORD
 #define VERT_TEX0            _NEW_ARRAY_TEXCOORD_0
@@ -161,7 +161,7 @@
  */
 struct immediate
 {
-   struct __GLcontextRec *backref;		
+   struct __GLcontextRec *backref;
    GLuint id, ref_count;
 
    /* This must be saved when immediates are shared in display lists.
@@ -171,7 +171,7 @@ struct immediate
    GLuint AndFlag, OrFlag;
    GLuint TexSize;		/* keep track of texcoord sizes */
    GLuint BeginState, SavedBeginState;
-   GLuint LastPrimitive;	
+   GLuint LastPrimitive;
 
    GLuint ArrayEltFlags;	/* precalc'ed for glArrayElt */
    GLuint ArrayEltIncr;
@@ -180,7 +180,7 @@ struct immediate
 
    GLuint MaxTextureUnits;	/* precalc'ed for glMultiTexCoordARB */
 
-   /* Temporary values created when vertices are copied into the 
+   /* Temporary values created when vertices are copied into the
     * first 3 slots of the struct:
     */
    GLuint CopyOrFlag;
@@ -200,8 +200,8 @@ struct immediate
    GLuint  Primitive[IMM_SIZE];	    /* BEGIN/END */
    GLuint  PrimitiveLength[IMM_SIZE]; /* BEGIN/END */
    GLuint  Flag[IMM_SIZE];	    /* VERT_* flags */
-   GLchan  Color[IMM_SIZE][4];	  
-   GLfloat Obj[IMM_SIZE][4];	  
+   GLchan  Color[IMM_SIZE][4];
+   GLfloat Obj[IMM_SIZE][4];
    GLfloat Normal[IMM_SIZE][3];
    GLfloat TexCoord0[IMM_SIZE][4];  /* just VERT_TEX0 */
    GLuint  Elt[IMM_SIZE];
@@ -265,27 +265,27 @@ typedef struct vertex_buffer
    GLuint      *Primitive;	                /* GL_(mode)|PRIM_* flags */
    GLuint      *PrimitiveLength;	        /* integers */
 
-   
+
    GLuint importable_data;
    void (*import_data)( GLcontext *ctx, GLuint flags, GLuint vecflags );
    /* Callback to the provider of the untransformed input for the
     * render stage (or other stages) to call if they need to write into
     * write-protected arrays, or fixup the stride on input arrays.
-    * 
+    *
     * This is currently only necessary for client arrays that make it
     * as far down the pipeline as the render stage.
     */
 
    GLuint LastClipped;
    /* Private data from _tnl_render_stage that has no business being
-    * in this struct.  
+    * in this struct.
     */
 
 } TNLvertexbuffer;
 
 
 
-/* Describes an individual operation on the pipeline. 
+/* Describes an individual operation on the pipeline.
  */
 struct gl_pipeline_stage {
    const char *name;
@@ -299,9 +299,9 @@ struct gl_pipeline_stage {
     */
    GLuint run_state;		/* All state referenced in run() --
 				 * When is the cached output of the
-				 * stage invalidated?  
+				 * stage invalidated?
 				 */
-   
+
    GLboolean active;		/* True if runnable in current state */
    GLuint inputs;		/* VERT_* inputs to the stage */
    GLuint outputs;		/* VERT_* outputs of the stage */
@@ -310,26 +310,26 @@ struct gl_pipeline_stage {
     */
    GLuint changed_inputs;	/* Generated value -- inputs to the
 				 * stage that have changed since last
-				 * call to 'run'. 
+				 * call to 'run'.
 				 */
 
    /* Private data for the pipeline stage:
     */
-   void *private;
+   void *privatePtr;
 
    /* Free private data.  May not be null.
     */
    void (*destroy)( struct gl_pipeline_stage * );
 
    /* Called from _tnl_validate_pipeline().  Must update all fields in
-    * the pipeline_stage struct for the current state. 
+    * the pipeline_stage struct for the current state.
     */
    void (*check)( GLcontext *ctx, struct gl_pipeline_stage * );
 
    /* Called from _tnl_run_pipeline().  The stage.changed_inputs value
     * encodes all inputs to thee struct which have changed.  If
     * non-zero, recompute all affected outputs of the stage, otherwise
-    * execute any 'sideeffects' of the stage.  
+    * execute any 'sideeffects' of the stage.
     *
     * Return value: GL_TRUE - keep going
     *               GL_FALSE - finished pipeline
@@ -354,17 +354,116 @@ struct tnl_eval_store {
    GLuint EvalMap2Flags;
    GLuint EvalNewState;
 
-   GLfloat Coord[IMM_SIZE][4];	  
-   GLfloat Obj[IMM_SIZE][4];	  
-   GLfloat TexCoord[IMM_SIZE][4];  
+   GLfloat Coord[IMM_SIZE][4];
+   GLfloat Obj[IMM_SIZE][4];
+   GLfloat TexCoord[IMM_SIZE][4];
    GLfloat Normal[IMM_SIZE][3];
-   GLchan  Color[IMM_SIZE][4];	  
+   GLchan  Color[IMM_SIZE][4];
    GLuint  Index[IMM_SIZE];
    GLuint  Flag[IMM_SIZE];
    GLuint  Elts[IMM_SIZE];
 };
 
-typedef struct {	
+
+typedef void (*points_func)( GLcontext *ctx, GLuint first, GLuint last );
+typedef void (*line_func)( GLcontext *ctx, GLuint v1, GLuint v2 );
+typedef void (*triangle_func)( GLcontext *ctx,
+                               GLuint v1, GLuint v2, GLuint v3 );
+typedef void (*quad_func)( GLcontext *ctx, GLuint v1, GLuint v2,
+                           GLuint v3, GLuint v4 );
+typedef void (*render_func)( GLcontext *ctx, GLuint start, GLuint count,
+			     GLuint flags );
+typedef void (*interp_func)( GLcontext *ctx,
+			     GLfloat t, GLuint dst, GLuint in, GLuint out,
+			     GLboolean force_boundary );
+typedef void (*copy_pv_func)( GLcontext *ctx, GLuint dst, GLuint src );
+
+
+struct tnl_device_driver {
+   /***
+    *** TNL Pipeline
+    ***/
+
+   void (*PipelineStart)(GLcontext *ctx);
+   void (*PipelineFinish)(GLcontext *ctx);
+   /* Called before and after all pipeline stages.
+    * These are a suitable place for grabbing/releasing hardware locks.
+    */
+
+   /***
+    *** Rendering
+    ***/
+
+   void (*RenderStart)(GLcontext *ctx);
+   void (*RenderFinish)(GLcontext *ctx);
+   /* Called before and after all rendering operations, including DrawPixels,
+    * ReadPixels, Bitmap, span functions, and CopyTexImage, etc commands.
+    * These are a suitable place for grabbing/releasing hardware locks.
+    */
+
+   void (*RenderPrimitive)(GLcontext *ctx, GLenum mode);
+   /* Called between RednerStart() and RenderFinish() to indicate the
+    * type of primitive we're about to draw.  Mode will be one of the
+    * modes accepted by glBegin().
+    */
+
+   interp_func RenderInterp;
+   copy_pv_func RenderCopyPV;
+   void (*RenderClippedPolygon)( GLcontext *ctx, const GLuint *elts, GLuint n );
+   void (*RenderClippedLine)( GLcontext *ctx, GLuint v0, GLuint v1 );
+   /* Functions to interpolate between prebuilt vertices, copy flat-shade
+    * provoking color, and to render clipped primitives.
+    */
+
+   points_func           PointsFunc; /* must now respect vb->elts */
+   line_func             LineFunc;
+   triangle_func         TriangleFunc;
+   quad_func             QuadFunc;
+   /* These functions are called in order to render points, lines,
+    * triangles and quads.  These are only called via the T&L module.
+    */
+
+   render_func          *RenderTabVerts;
+   render_func          *RenderTabElts;
+   /* Render whole unclipped primitives (points, lines, linestrips,
+    * lineloops, etc).  The tables are indexed by the GL enum of the
+    * primitive to be rendered.
+    */
+
+   void (*ResetLineStipple)( GLcontext *ctx );
+   /* Reset the hardware's line stipple counter.
+    */
+
+   void (*BuildProjectedVertices)( GLcontext *ctx,
+				   GLuint start, GLuint end,
+				   GLuint new_inputs);
+   /* This function is called whenever new vertices are required for
+    * rendering.  The vertices in question are those n such that start
+    * <= n < end.  The new_inputs parameter indicates those fields of
+    * the vertex which need to be updated, if only a partial repair of
+    * the vertex is required.
+    *
+    * This function is called only from _tnl_render_stage in tnl/t_render.c.
+    */
+
+
+   GLboolean (*MultipassFunc)( GLcontext *ctx, GLuint passno );
+   /* Driver may request additional render passes by returning GL_TRUE
+    * when this function is called.  This function will be called
+    * after the first pass, and passes will be made until the function
+    * returns GL_FALSE.  If no function is registered, only one pass
+    * is made.
+    *
+    * This function will be first invoked with passno == 1.
+    */
+};
+
+
+typedef struct {
+
+   /* Driver interface.
+    */
+   struct tnl_device_driver Driver;
 
    /* Track whether the module is active.
     */
@@ -386,16 +485,19 @@ typedef struct {
    GLuint *tmp_primitive;
    GLuint *tmp_primitive_length;
 
-   /* Set when executing an internally generated immediate.
+   /* Set when executing an internally generated begin/end object.  If
+    * such an object is encountered in a display list, it will be
+    * replayed only if the list is outside any existing begin/end
+    * objects.  
     */
-   GLboolean ReplayHardBeginEnd;    
+   GLboolean ReplayHardBeginEnd;
    GLenum CurrentPrimitive;
 
    /* Note which vertices need copying over succesive immediates.
     * Will add save versions to precompute vertex copying where
     * possible.
     */
-   struct immediate *ExecCopySource; 
+   struct immediate *ExecCopySource;
    GLuint ExecCopyCount;
    GLuint ExecCopyElts[IMM_MAX_COPIED_VERTS];
    GLuint ExecCopyTexSize;

@@ -1,10 +1,10 @@
-/* $Id: t_context.c,v 1.11 2001/01/13 18:28:20 keithw Exp $ */
+/* $Id: t_context.c,v 1.16 2001/03/19 02:25:36 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -24,7 +24,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *   Keith Whitwell <keithw@valinux.com>
+ *    Keith Whitwell <keithw@valinux.com>
  */
 
 
@@ -51,8 +51,8 @@ struct immediate *_tnl_CurrentInput = NULL;
 
 
 void
-_tnl_MakeCurrent( GLcontext *ctx, 
-		  GLframebuffer *drawBuffer, 
+_tnl_MakeCurrent( GLcontext *ctx,
+		  GLframebuffer *drawBuffer,
 		  GLframebuffer *readBuffer )
 {
 #ifndef THREADS
@@ -70,9 +70,6 @@ install_driver_callbacks( GLcontext *ctx )
    ctx->Driver.MakeCurrent = _tnl_MakeCurrent;
    ctx->Driver.BeginCallList = _tnl_BeginCallList;
    ctx->Driver.EndCallList = _tnl_EndCallList;
-
-   ctx->Driver.RenderTabElts = _tnl_render_tab_elts;
-   ctx->Driver.RenderTabVerts = _tnl_render_tab_verts;
 }
 
 
@@ -84,7 +81,7 @@ _tnl_CreateContext( GLcontext *ctx )
 
    /* Create the TNLcontext structure
     */
-   ctx->swtnl_context = tnl = CALLOC( sizeof(TNLcontext) );
+   ctx->swtnl_context = tnl = (TNLcontext *) CALLOC( sizeof(TNLcontext) );
 
    if (!tnl) {
       return GL_FALSE;
@@ -92,7 +89,7 @@ _tnl_CreateContext( GLcontext *ctx )
 
    /* Initialize the VB.
     */
-   tnl->vb.Size = MAX2( IMM_SIZE, 
+   tnl->vb.Size = MAX2( IMM_SIZE,
 			ctx->Const.MaxArrayLockSize + MAX_CLIPPED_VERTICES);
 
 
@@ -106,14 +103,14 @@ _tnl_CreateContext( GLcontext *ctx )
 
 
    tnl->NeedProjCoords = GL_TRUE;
-    
+
    /* Hook our functions into exec and compile dispatch tables.
     */
    _mesa_install_exec_vtxfmt( ctx, &tnl->vtxfmt );
    _mesa_install_save_vtxfmt( ctx, &tnl->vtxfmt );
-   ctx->Save->CallList = _mesa_save_CallList;	/* fixme */
+   ctx->Save->CallList = _mesa_save_CallList;	
    ctx->Save->CallLists = _mesa_save_CallLists;
-   ctx->Save->EvalMesh1 = _mesa_save_EvalMesh1;	/* fixme */
+   ctx->Save->EvalMesh1 = _mesa_save_EvalMesh1;	
    ctx->Save->EvalMesh2 = _mesa_save_EvalMesh2;
    ctx->Save->Begin = _tnl_save_Begin;
 
@@ -123,6 +120,9 @@ _tnl_CreateContext( GLcontext *ctx )
    ctx->Driver.NeedFlush = FLUSH_UPDATE_CURRENT;
    ctx->Driver.CurrentExecPrimitive = PRIM_OUTSIDE_BEGIN_END;
    ctx->Driver.CurrentSavePrimitive = PRIM_UNKNOWN;
+
+   tnl->Driver.RenderTabElts = _tnl_render_tab_elts;
+   tnl->Driver.RenderTabVerts = _tnl_render_tab_verts;
    return GL_TRUE;
 }
 
@@ -157,7 +157,7 @@ _tnl_InvalidateState( GLcontext *ctx, GLuint new_state )
    }
 
    tnl->pipeline.run_state_changes |= new_state;
-   tnl->pipeline.build_state_changes |= (new_state & 
+   tnl->pipeline.build_state_changes |= (new_state &
 					 tnl->pipeline.build_state_trigger);
 
    tnl->eval.EvalNewState |= new_state;
@@ -168,7 +168,7 @@ void
 _tnl_wakeup_exec( GLcontext *ctx )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
-   
+
    install_driver_callbacks(ctx);
    ctx->Driver.NeedFlush |= FLUSH_UPDATE_CURRENT;
 
@@ -182,7 +182,7 @@ _tnl_wakeup_exec( GLcontext *ctx )
 
    /* Assume we haven't been getting state updates either:
     */
-   _tnl_InvalidateState( ctx, ~0 ); 
+   _tnl_InvalidateState( ctx, ~0 );
    tnl->pipeline.run_input_changes = ~0;
 }
 

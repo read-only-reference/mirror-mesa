@@ -1,4 +1,4 @@
-/* $Id: attrib.c,v 1.44 2001/02/20 16:42:25 brianp Exp $ */
+/* $Id: attrib.c,v 1.47 2001/03/18 08:53:49 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -101,6 +101,7 @@ copy_texobj_state( struct gl_texture_object *dest,
    dest->MaxLod = src->MaxLod;
    dest->BaseLevel = src->BaseLevel;
    dest->MaxLevel = src->MaxLevel;
+   dest->MaxAnisotropy = src->MaxAnisotropy;
    dest->CompareFlag = src->CompareFlag;
    dest->CompareOperator = src->CompareOperator;
    dest->ShadowAmbient = src->ShadowAmbient;
@@ -125,7 +126,7 @@ _mesa_PushAttrib(GLbitfield mask)
       fprintf(stderr, "glPushAttrib %x\n", (int)mask);
 
    if (ctx->AttribStackDepth >= MAX_ATTRIB_STACK_DEPTH) {
-      gl_error( ctx, GL_STACK_OVERFLOW, "glPushAttrib" );
+      _mesa_error( ctx, GL_STACK_OVERFLOW, "glPushAttrib" );
       return;
    }
 
@@ -573,7 +574,7 @@ _mesa_PopAttrib(void)
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (ctx->AttribStackDepth == 0) {
-      gl_error( ctx, GL_STACK_UNDERFLOW, "glPopAttrib" );
+      _mesa_error( ctx, GL_STACK_UNDERFLOW, "glPopAttrib" );
       return;
    }
 
@@ -583,7 +584,7 @@ _mesa_PopAttrib(void)
    while (attr) {
 
       if (MESA_VERBOSE&VERBOSE_API)
-	 fprintf(stderr, "glPopAttrib %s\n", gl_lookup_enum_by_nr(attr->kind));
+	 fprintf(stderr, "glPopAttrib %s\n", _mesa_lookup_enum_by_nr(attr->kind));
 
       switch (attr->kind) {
          case GL_ACCUM_BUFFER_BIT:
@@ -871,7 +872,7 @@ _mesa_PopAttrib(void)
             }
             break;
          default:
-            gl_problem( ctx, "Bad attrib flag in PopAttrib");
+            _mesa_problem( ctx, "Bad attrib flag in PopAttrib");
             break;
       }
 
@@ -897,7 +898,7 @@ _mesa_PushClientAttrib(GLbitfield mask)
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (ctx->ClientAttribStackDepth >= MAX_CLIENT_ATTRIB_STACK_DEPTH) {
-      gl_error( ctx, GL_STACK_OVERFLOW, "glPushClientAttrib" );
+      _mesa_error( ctx, GL_STACK_OVERFLOW, "glPushClientAttrib" );
       return;
    }
 
@@ -948,7 +949,7 @@ _mesa_PopClientAttrib(void)
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (ctx->ClientAttribStackDepth == 0) {
-      gl_error( ctx, GL_STACK_UNDERFLOW, "glPopClientAttrib" );
+      _mesa_error( ctx, GL_STACK_UNDERFLOW, "glPopClientAttrib" );
       return;
    }
 
@@ -973,7 +974,7 @@ _mesa_PopClientAttrib(void)
 	    ctx->NewState = _NEW_ARRAY;
             break;
          default:
-            gl_problem( ctx, "Bad attrib flag in PopClientAttrib");
+            _mesa_problem( ctx, "Bad attrib flag in PopClientAttrib");
             break;
       }
 
@@ -983,6 +984,3 @@ _mesa_PopClientAttrib(void)
       attr = next;
    }
 }
-
-
-

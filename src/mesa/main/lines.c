@@ -1,10 +1,10 @@
-/* $Id: lines.c,v 1.27 2001/01/14 06:14:21 keithw Exp $ */
+/* $Id: lines.c,v 1.29 2001/03/12 00:48:38 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -47,21 +47,21 @@ _mesa_LineWidth( GLfloat width )
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (width<=0.0) {
-      gl_error( ctx, GL_INVALID_VALUE, "glLineWidth" );
+      _mesa_error( ctx, GL_INVALID_VALUE, "glLineWidth" );
       return;
    }
 
-   if (ctx->Line.Width == width) 
+   if (ctx->Line.Width == width)
       return;
 
    FLUSH_VERTICES(ctx, _NEW_LINE);
    ctx->Line.Width = width;
-   ctx->Line._Width = CLAMP(width, 
+   ctx->Line._Width = CLAMP(width,
 			    ctx->Const.MinLineWidth,
 			    ctx->Const.MaxLineWidth);
 
 
-   if (width != 1.0) 
+   if (width != 1.0)
       ctx->_TriangleCaps |= DD_LINE_WIDTH;
    else
       ctx->_TriangleCaps &= ~DD_LINE_WIDTH;
@@ -91,5 +91,3 @@ _mesa_LineStipple( GLint factor, GLushort pattern )
    if (ctx->Driver.LineStipple)
       ctx->Driver.LineStipple( ctx, factor, pattern );
 }
-
-

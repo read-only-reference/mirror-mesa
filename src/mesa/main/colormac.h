@@ -1,10 +1,10 @@
-/* $Id: colormac.h,v 1.6 2001/01/03 15:59:30 brianp Exp $ */
+/* $Id: colormac.h,v 1.9 2001/03/11 18:49:11 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -51,6 +51,7 @@
 #define INT_TO_CHAN(i)    ((i) < 0 ? 0 : (GLchan) ((i) >> 23))
 #define UINT_TO_CHAN(i)   ((GLchan) ((i) >> 24))
 
+#define CHAN_TO_UBYTE(c)  (c)
 #define CHAN_TO_FLOAT(c)  UBYTE_TO_FLOAT(c)
 
 #define CLAMPED_FLOAT_TO_CHAN(c, f)    CLAMPED_FLOAT_TO_UBYTE(c, f)
@@ -63,14 +64,15 @@
 
 #elif CHAN_BITS == 16
 
-#define BYTE_TO_CHAN(b)   ((b) < 0 ? 0 : (GLchan) ((b) * 516))
-#define UBYTE_TO_CHAN(b)  ((GLchan) (((b) << 8) | (b)))
+#define BYTE_TO_CHAN(b)   ((b) < 0 ? 0 : (((GLchan) (b)) * 516))
+#define UBYTE_TO_CHAN(b)  ((((GLchan) (b)) << 8) | ((GLchan) (b)))
 #define SHORT_TO_CHAN(s)  ((s) < 0 ? 0 : (GLchan) (s))
 #define USHORT_TO_CHAN(s) (s)
 #define INT_TO_CHAN(i)    ((i) < 0 ? 0 : (GLchan) ((i) >> 15))
 #define UINT_TO_CHAN(i)   ((GLchan) ((i) >> 16))
 
-#define CHAN_TO_FLOAT(c)  ((GLfloat) ((c) * (1.0 / CHAN_MAXF) + 0.5F))
+#define CHAN_TO_UBYTE(c)  ((c) >> 8)
+#define CHAN_TO_FLOAT(c)  ((GLfloat) ((c) * (1.0 / CHAN_MAXF)))
 
 #define CLAMPED_FLOAT_TO_CHAN(c, f) \
    c = ((GLchan) IROUND((f) * CHAN_MAXF))
@@ -92,6 +94,7 @@
 #define INT_TO_CHAN(i)    ((GLfloat) ((i) * (1.0F / 2147483647.0F)))
 #define UINT_TO_CHAN(i)   ((GLfloat) ((i) * (1.0F / 4294967295.0F)))
 
+#define CHAN_TO_UBYTE(c)  FLOAT_TO_UBYTE(c)
 #define CHAN_TO_FLOAT(c)  (c)
 
 #define CLAMPED_FLOAT_TO_CHAN(c, f)  c = (f)
@@ -101,7 +104,7 @@
 
 #define CHAN_PRODUCT(a, b)    ((a) * (b))
 
-#else 
+#else
 
 #error unexpected CHAN_BITS size
 

@@ -1,21 +1,21 @@
-/* $Id: s_buffers.c,v 1.5 2001/02/13 23:58:38 brianp Exp $ */
+/* $Id: s_buffers.c,v 1.8 2001/03/19 02:25:36 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -31,6 +31,7 @@
 
 #include "s_accum.h"
 #include "s_alphabuf.h"
+#include "s_context.h"
 #include "s_depth.h"
 #include "s_masking.h"
 #include "s_stencil.h"
@@ -44,6 +45,7 @@
 static void
 clear_color_buffer_with_masking( GLcontext *ctx )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const GLint x = ctx->DrawBuffer->_Xmin;
    const GLint y = ctx->DrawBuffer->_Ymin;
    const GLint height = ctx->DrawBuffer->_Ymax - ctx->DrawBuffer->_Ymin;
@@ -66,7 +68,7 @@ clear_color_buffer_with_masking( GLcontext *ctx )
             rgba[j][ACOMP] = a;
          }
          _mesa_mask_rgba_span( ctx, width, x, y + i, rgba );
-         (*ctx->Driver.WriteRGBASpan)( ctx, width, x, y + i,
+         (*swrast->Driver.WriteRGBASpan)( ctx, width, x, y + i,
 				       (CONST GLchan (*)[4]) rgba, NULL );
       }
    }
@@ -81,7 +83,7 @@ clear_color_buffer_with_masking( GLcontext *ctx )
             span[j] = ctx->Color.ClearIndex;
          }
          _mesa_mask_index_span( ctx, width, x, y + i, span );
-         (*ctx->Driver.WriteCI32Span)( ctx, width, x, y + i, span, mask );
+         (*swrast->Driver.WriteCI32Span)( ctx, width, x, y + i, span, mask );
       }
    }
 }
@@ -94,6 +96,7 @@ clear_color_buffer_with_masking( GLcontext *ctx )
 static void
 clear_color_buffer(GLcontext *ctx)
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const GLint x = ctx->DrawBuffer->_Xmin;
    const GLint y = ctx->DrawBuffer->_Ymin;
    const GLint height = ctx->DrawBuffer->_Ymax - ctx->DrawBuffer->_Ymin;
@@ -117,21 +120,21 @@ clear_color_buffer(GLcontext *ctx)
          span[i][ACOMP] = a;
       }
       for (i = 0; i < height; i++) {
-         (*ctx->Driver.WriteRGBASpan)( ctx, width, x, y + i,
+         (*swrast->Driver.WriteRGBASpan)( ctx, width, x, y + i,
                                        (CONST GLchan (*)[4]) span, NULL );
       }
    }
    else {
       /* Color index mode */
       ASSERT((ctx->Color.IndexMask & ((1 << ctx->Visual.indexBits) - 1))
-             == ((1 << ctx->Visual.indexBits) - 1));
+             == (GLuint) ((1 << ctx->Visual.indexBits) - 1));
       if (ctx->Visual.indexBits == 8) {
          /* 8-bit clear */
          GLubyte span[MAX_WIDTH];
          GLint i;
          MEMSET(span, ctx->Color.ClearIndex, width);
          for (i = 0; i < height; i++) {
-            (*ctx->Driver.WriteCI8Span)( ctx, width, x, y + i, span, NULL );
+            (*swrast->Driver.WriteCI8Span)( ctx, width, x, y + i, span, NULL );
          }
       }
       else {
@@ -142,7 +145,7 @@ clear_color_buffer(GLcontext *ctx)
             span[i] = ctx->Color.ClearIndex;
          }
          for (i = 0; i < height; i++) {
-            (*ctx->Driver.WriteCI32Span)( ctx, width, x, y + i, span, NULL );
+            (*swrast->Driver.WriteCI32Span)( ctx, width, x, y + i, span, NULL );
          }
       }
    }
@@ -158,6 +161,7 @@ clear_color_buffer(GLcontext *ctx)
 static void
 clear_color_buffers(GLcontext *ctx)
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const GLuint colorMask = *((GLuint *) &ctx->Color.ColorMask);
    GLuint bufferBit;
 
@@ -166,21 +170,21 @@ clear_color_buffers(GLcontext *ctx)
       if (bufferBit & ctx->Color.DrawDestMask) {
          if (bufferBit == FRONT_LEFT_BIT) {
             (void) (*ctx->Driver.SetDrawBuffer)( ctx, GL_FRONT_LEFT);
-            (void) (*ctx->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer, GL_FRONT_LEFT);
+            (void) (*swrast->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer, GL_FRONT_LEFT);
          }
          else if (bufferBit == FRONT_RIGHT_BIT) {
             (void) (*ctx->Driver.SetDrawBuffer)( ctx, GL_FRONT_RIGHT);
-            (void) (*ctx->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer, GL_FRONT_RIGHT);
+            (void) (*swrast->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer, GL_FRONT_RIGHT);
          }
          else if (bufferBit == BACK_LEFT_BIT) {
             (void) (*ctx->Driver.SetDrawBuffer)( ctx, GL_BACK_LEFT);
-            (void) (*ctx->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer, GL_BACK_LEFT);
+            (void) (*swrast->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer, GL_BACK_LEFT);
          }
          else {
             (void) (*ctx->Driver.SetDrawBuffer)( ctx, GL_BACK_RIGHT);
-            (void) (*ctx->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer, GL_BACK_RIGHT);
+            (void) (*swrast->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer, GL_BACK_RIGHT);
          }
-         
+
          if (colorMask != 0xffffffff) {
             clear_color_buffer_with_masking(ctx);
          }
@@ -192,17 +196,17 @@ clear_color_buffers(GLcontext *ctx)
 
    /* restore default read/draw buffers */
    (void) (*ctx->Driver.SetDrawBuffer)( ctx, ctx->Color.DriverDrawBuffer );
-   (void) (*ctx->Driver.SetReadBuffer)( ctx, ctx->ReadBuffer, ctx->Pixel.DriverReadBuffer );
+   (void) (*swrast->Driver.SetReadBuffer)( ctx, ctx->ReadBuffer, ctx->Pixel.DriverReadBuffer );
 }
 
 
 
-void 
+void
 _swrast_Clear( GLcontext *ctx, GLbitfield mask,
-	       GLboolean all, 
+	       GLboolean all,
 	       GLint x, GLint y, GLint width, GLint height )
 {
-
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
 #ifdef DEBUG
    {
       GLbitfield legalBits = DD_FRONT_LEFT_BIT |
@@ -216,7 +220,7 @@ _swrast_Clear( GLcontext *ctx, GLbitfield mask,
    }
 #endif
 
-   RENDER_START(ctx);
+   RENDER_START(swrast,ctx);
 
    /* do software clearing here */
    if (mask) {
@@ -233,7 +237,7 @@ _swrast_Clear( GLcontext *ctx, GLbitfield mask,
       _mesa_clear_alpha_buffers( ctx );
    }
 
-   RENDER_FINISH(ctx);
+   RENDER_FINISH(swrast,ctx);
 }
 
 
@@ -254,5 +258,3 @@ _swrast_alloc_buffers( GLcontext *ctx )
       _mesa_alloc_alpha_buffers( ctx );
    }
 }
-
-

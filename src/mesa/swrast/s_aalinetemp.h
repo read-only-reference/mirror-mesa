@@ -1,21 +1,21 @@
-/* $Id: s_aalinetemp.h,v 1.5 2001/01/29 23:38:41 brianp Exp $ */
+/* $Id: s_aalinetemp.h,v 1.7 2001/03/12 00:48:41 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -41,7 +41,7 @@ NAME(plot)(GLcontext *ctx, const struct LineInfo *line,
    const GLfloat fy = (GLfloat) iy;
    const GLfloat coverage = compute_coveragef(line, ix, iy);
    GLdepth z;
-   GLfloat fog;
+   GLfixed fog;
    GLchan red, green, blue, alpha;
    GLint frac, indx, index;
    GLchan specRed, specGreen, specBlue;
@@ -60,9 +60,9 @@ NAME(plot)(GLcontext *ctx, const struct LineInfo *line,
    z = 0.0;
 #endif
 #ifdef DO_FOG
-   fog = solve_plane(fx, fy, line->fPlane);
+   fog = FloatToFixed( solve_plane(fx, fy, line->fPlane) );
 #else
-   fog = 0.0;
+   fog = 0;
 #endif
 #ifdef DO_RGBA
    red   = solve_plane_chan(fx, fy, line->rPlane);

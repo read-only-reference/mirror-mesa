@@ -1,19 +1,21 @@
+/* $Id: ss_vbtmp.h,v 1.13 2001/03/29 16:50:33 brianp Exp $ */
+
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -39,7 +41,7 @@ static void TAG(rs)(GLcontext *ctx, GLuint start, GLuint end, GLuint newinputs )
    GLfloat *fog;
    GLfloat *pointSize;
    GLuint tsz[MAX_TEXTURE_UNITS];
-   int i;
+   GLuint i;
    GLfloat *m = ctx->Viewport._WindowMap.m;
    const GLfloat sx = m[0];
    const GLfloat sy = m[5];
@@ -61,12 +63,12 @@ static void TAG(rs)(GLcontext *ctx, GLuint start, GLuint end, GLuint newinputs )
 		       (VB->ClipOrMask
 			? VEC_NOT_WRITEABLE|VEC_BAD_STRIDE
 			: VEC_BAD_STRIDE));
-   
+
    if (IND & TEX0) {
       tc[0] = VB->TexCoordPtr[0]->data;
       tsz[0] = VB->TexCoordPtr[0]->size;
    }
-   
+
    if (IND & MULTITEX) {
       for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++) {
 	 if (VB->TexCoordPtr[i]) {
@@ -80,16 +82,16 @@ static void TAG(rs)(GLcontext *ctx, GLuint start, GLuint end, GLuint newinputs )
 
    /* Tie up some dangling pointers for flat/twoside code in ss_tritmp.h
     */
-   if ((ctx->_TriangleCaps & DD_SEPERATE_SPECULAR) == 0) {
+   if ((ctx->_TriangleCaps & DD_SEPARATE_SPECULAR) == 0) {
       VB->SecondaryColorPtr[0] = VB->ColorPtr[0];
       VB->SecondaryColorPtr[1] = VB->ColorPtr[1];
    }
-     
+
 
    proj = VB->ProjectedClipPtr->data;
    if (IND & FOG)
-      fog = VB->FogCoordPtr->data;   
-   if (IND & COLOR) 
+      fog = VB->FogCoordPtr->data;
+   if (IND & COLOR)
       color = VB->ColorPtr[0]->data;
    if (IND & SPEC)
       spec = VB->SecondaryColorPtr[0]->data;
@@ -106,28 +108,28 @@ static void TAG(rs)(GLcontext *ctx, GLuint start, GLuint end, GLuint newinputs )
 	 v->win[1] = sy * proj[i][1] + ty;
 	 v->win[2] = sz * proj[i][2] + tz;
 	 v->win[3] =      proj[i][3];
-	 
-	 if (IND & TEX0) 
+
+	 if (IND & TEX0)
 	    COPY_CLEAN_4V( v->texcoord[0], tsz[0], tc[0][i] );
 
 	 if (IND & MULTITEX) {
 	    GLuint u;
 	    for (u = 0 ; u < maxtex ; u++)
-	       if (tc[u]) 
+	       if (tc[u])
 		  COPY_CLEAN_4V( v->texcoord[u], tsz[u], tc[u][i] );
 	 }
 
 	 if (IND & COLOR)
-	    COPY_4UBV(v->color, color[i]);
-	 
-	 if (IND & SPEC) 
-	    COPY_4UBV(v->specular, spec[i]);
+	    COPY_CHAN4(v->color, color[i]);
+
+	 if (IND & SPEC)
+	    COPY_CHAN4(v->specular, spec[i]);
 
 	 if (IND & FOG)
-	    v->fog = fog[i]; 
+	    v->fog = fog[i];
 
 	 if (IND & INDEX)
-	    v->index = index[i]; 
+	    v->index = index[i];
 
          if (IND & POINT)
             v->pointSize = pointSize[i];

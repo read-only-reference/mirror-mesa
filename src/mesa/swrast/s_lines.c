@@ -1,21 +1,21 @@
-/* $Id: s_lines.c,v 1.11 2001/02/16 18:14:41 keithw Exp $ */
+/* $Id: s_lines.c,v 1.15 2001/03/29 16:50:32 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -52,7 +52,6 @@
  */
 
 
-
 /* Flat, color index line */
 static void flat_ci_line( GLcontext *ctx,
                           const SWvertex *vert0,
@@ -67,7 +66,7 @@ static void flat_ci_line( GLcontext *ctx,
 
 #include "s_linetemp.h"
 
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -82,11 +81,12 @@ static void flat_ci_z_line( GLcontext *ctx,
 
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define PLOT(X,Y)  PB_WRITE_PIXEL(PB, X, Y, Z, fog0);
 
 #include "s_linetemp.h"
 
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -105,7 +105,7 @@ static void flat_rgba_line( GLcontext *ctx,
 
 #include "s_linetemp.h"
 
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -121,11 +121,12 @@ static void flat_rgba_z_line( GLcontext *ctx,
 
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define PLOT(X,Y)   PB_WRITE_PIXEL(PB, X, Y, Z, fog0);
 
 #include "s_linetemp.h"
 
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -155,7 +156,7 @@ static void smooth_ci_line( GLcontext *ctx,
 #include "s_linetemp.h"
 
    PB->count = count;
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -176,6 +177,7 @@ static void smooth_ci_z_line( GLcontext *ctx,
 
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_INDEX 1
 
 #define PLOT(X,Y)		\
@@ -188,7 +190,7 @@ static void smooth_ci_z_line( GLcontext *ctx,
 #include "s_linetemp.h"
 
    PB->count = count;
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -222,7 +224,7 @@ static void smooth_rgba_line( GLcontext *ctx,
 #include "s_linetemp.h"
 
    PB->count = count;
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -245,6 +247,7 @@ static void smooth_rgba_z_line( GLcontext *ctx,
 
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
 
@@ -262,14 +265,14 @@ static void smooth_rgba_z_line( GLcontext *ctx,
 #include "s_linetemp.h"
 
    PB->count = count;
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
 #define CHECK_FULL(count)		\
    if (count >= PB_SIZE-MAX_WIDTH) {	\
       PB->count = count;		\
-      gl_flush_pb(ctx);			\
+      _mesa_flush_pb(ctx);			\
       count = PB->count;		\
    }
 
@@ -294,6 +297,7 @@ static void general_smooth_ci_line( GLcontext *ctx,
       /* stippled */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_INDEX 1
 #define WIDE 1
 #define STIPPLE 1
@@ -313,6 +317,7 @@ static void general_smooth_ci_line( GLcontext *ctx,
          /* special case: unstippled and width=2 */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_INDEX 1
 #define XMAJOR_PLOT(X,Y)				\
 	pbx[count] = X;  pbx[count+1] = X;		\
@@ -336,6 +341,7 @@ static void general_smooth_ci_line( GLcontext *ctx,
          /* unstippled, any width */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_INDEX 1
 #define WIDE 1
 #define PLOT(X,Y)		\
@@ -351,7 +357,7 @@ static void general_smooth_ci_line( GLcontext *ctx,
    }
 
    PB->count = count;
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -373,6 +379,7 @@ static void general_flat_ci_line( GLcontext *ctx,
       /* stippled, any width */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define WIDE 1
 #define STIPPLE 1
 #define PLOT(X,Y)		\
@@ -390,6 +397,7 @@ static void general_flat_ci_line( GLcontext *ctx,
          /* special case: unstippled and width=2 */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define XMAJOR_PLOT(X,Y)				\
 	pbx[count] = X;  pbx[count+1] = X;		\
 	pby[count] = Y;  pby[count+1] = Y+1;		\
@@ -410,6 +418,7 @@ static void general_flat_ci_line( GLcontext *ctx,
          /* unstippled, any width */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define WIDE 1
 #define PLOT(X,Y)		\
 	pbx[count] = X;		\
@@ -423,7 +432,7 @@ static void general_flat_ci_line( GLcontext *ctx,
    }
 
    PB->count = count;
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -446,6 +455,7 @@ static void general_smooth_rgba_line( GLcontext *ctx,
       /* stippled */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
 #define WIDE 1
@@ -469,6 +479,7 @@ static void general_smooth_rgba_line( GLcontext *ctx,
          /* special case: unstippled and width=2 */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
 #define XMAJOR_PLOT(X,Y)				\
@@ -507,6 +518,7 @@ static void general_smooth_rgba_line( GLcontext *ctx,
          /* unstippled, any width */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
 #define WIDE 1
@@ -526,7 +538,7 @@ static void general_smooth_rgba_line( GLcontext *ctx,
    }
 
    PB->count = count;
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -542,6 +554,7 @@ static void general_flat_rgba_line( GLcontext *ctx,
       /* stippled */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define WIDE 1
 #define STIPPLE 1
 #define PLOT(X,Y)  PB_WRITE_PIXEL(PB, X, Y, Z, fog0);
@@ -553,6 +566,7 @@ static void general_flat_rgba_line( GLcontext *ctx,
          /* special case: unstippled and width=2 */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define XMAJOR_PLOT(X,Y) PB_WRITE_PIXEL(PB, X, Y, Z, fog0); \
                          PB_WRITE_PIXEL(PB, X, Y+1, Z, fog0);
 #define YMAJOR_PLOT(X,Y)  PB_WRITE_PIXEL(PB, X, Y, Z, fog0); \
@@ -563,13 +577,14 @@ static void general_flat_rgba_line( GLcontext *ctx,
          /* unstippled, any width */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define WIDE 1
 #define PLOT(X,Y) PB_WRITE_PIXEL(PB, X, Y, Z, fog0);
 #include "s_linetemp.h"
       }
    }
 
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -595,6 +610,7 @@ static void flat_textured_line( GLcontext *ctx,
       /* stippled */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_TEX 1
 #define WIDE 1
 #define STIPPLE 1
@@ -616,6 +632,7 @@ static void flat_textured_line( GLcontext *ctx,
       /* unstippled */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_TEX 1
 #define WIDE 1
 #define PLOT(X,Y)			\
@@ -634,7 +651,7 @@ static void flat_textured_line( GLcontext *ctx,
    }
 
    PB->count = count;
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -661,6 +678,7 @@ static void smooth_textured_line( GLcontext *ctx,
       /* stippled */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
 #define INTERP_TEX 1
@@ -688,6 +706,7 @@ static void smooth_textured_line( GLcontext *ctx,
       /* unstippled */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_RGB 1
 #define INTERP_ALPHA 1
 #define INTERP_TEX 1
@@ -712,7 +731,7 @@ static void smooth_textured_line( GLcontext *ctx,
    }
 
    PB->count = count;
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -738,6 +757,7 @@ static void smooth_multitextured_line( GLcontext *ctx,
       /* stippled */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_RGB 1
 #define INTERP_SPEC 1
 #define INTERP_ALPHA 1
@@ -775,6 +795,7 @@ static void smooth_multitextured_line( GLcontext *ctx,
       /* unstippled */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_RGB 1
 #define INTERP_SPEC 1
 #define INTERP_ALPHA 1
@@ -809,7 +830,7 @@ static void smooth_multitextured_line( GLcontext *ctx,
    }
 
    PB->count = count;
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
@@ -839,6 +860,7 @@ static void flat_multitextured_line( GLcontext *ctx,
       /* stippled */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_ALPHA 1
 #define INTERP_MULTITEX 1
 #define WIDE 1
@@ -874,6 +896,7 @@ static void flat_multitextured_line( GLcontext *ctx,
       /* unstippled */
 #define INTERP_XY 1
 #define INTERP_Z 1
+#define INTERP_FOG 1
 #define INTERP_ALPHA 1
 #define INTERP_MULTITEX 1
 #define WIDE 1
@@ -906,11 +929,11 @@ static void flat_multitextured_line( GLcontext *ctx,
    }
 
    PB->count = count;
-   gl_flush_pb(ctx);
+   _mesa_flush_pb(ctx);
 }
 
 
-void _swrast_add_spec_terms_line( GLcontext *ctx, 
+void _swrast_add_spec_terms_line( GLcontext *ctx,
 				  const SWvertex *v0,
 				  const SWvertex *v1 )
 {
@@ -996,7 +1019,7 @@ _swrast_choose_line( GLcontext *ctx )
       }
       else if (ctx->Texture._ReallyEnabled) {
          if (swrast->_MultiTextureEnabled ||
-	     (ctx->_TriangleCaps & DD_SEPERATE_SPECULAR)) {
+	     (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR)) {
             /* multi-texture and/or separate specular color */
             if (ctx->Light.ShadeModel==GL_SMOOTH)
                swrast->Line = smooth_multitextured_line;
@@ -1060,11 +1083,11 @@ _swrast_choose_line( GLcontext *ctx )
       }
    }
    else if (ctx->RenderMode==GL_FEEDBACK) {
-      swrast->Line = gl_feedback_line;
+      swrast->Line = _mesa_feedback_line;
    }
    else {
       /* GL_SELECT mode */
-      swrast->Line = gl_select_line;
+      swrast->Line = _mesa_select_line;
    }
 
    /*_mesa_print_line_function(ctx);*/

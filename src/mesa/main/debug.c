@@ -1,10 +1,36 @@
+/* $Id: debug.c,v 1.12 2001/03/29 21:16:25 keithw Exp $ */
+
+/*
+ * Mesa 3-D graphics library
+ * Version:  3.5
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included
+ * in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+ * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 #include "mtypes.h"
 #include "debug.h"
 
-void gl_print_state( const char *msg, GLuint state )
+void _mesa_print_state( const char *msg, GLuint state )
 {
    fprintf(stderr,
-	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
+	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
 	   msg,
 	   state,
 	   (state & _NEW_MODELVIEW)       ? "ctx->ModelView, " : "",
@@ -29,51 +55,20 @@ void gl_print_state( const char *msg, GLuint state )
 	   (state & _NEW_VIEWPORT)        ? "ctx->Viewport, " : "",
 	   (state & _NEW_PACKUNPACK)      ? "ctx->Pack/Unpack, " : "",
 	   (state & _NEW_ARRAY)           ? "ctx->Array, " : "",
-	   (state & _NEW_COLORTABLE)      ? "ctx->{*}ColorTable, " : "",
 	   (state & _NEW_RENDERMODE)      ? "ctx->RenderMode, " : "",
 	   (state & _NEW_BUFFERS)         ? "ctx->Visual, ctx->DrawBuffer,, " : "");
 }
 
 
-void gl_print_enable_flags( const char *msg, GLuint flags )
-{
-   fprintf(stderr,
-	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
-	   msg,
-	   flags,
-	   (flags & ENABLE_LIGHT)      ? "light, " : "",
-	   (flags & ENABLE_FOG)        ? "fog, " : "",
-	   (flags & ENABLE_USERCLIP)   ? "userclip, " : "",
-	   (flags & ENABLE_TEXGEN0)    ? "tex-gen-0, " : "",
-	   (flags & ENABLE_TEXGEN1)    ? "tex-gen-1, " : "",
-	   (flags & ENABLE_TEXGEN2)    ? "tex-gen-2, " : "",
-	   (flags & ENABLE_TEXGEN3)    ? "tex-gen-3, " : "",
-	   (flags & ENABLE_TEXGEN4)    ? "tex-gen-4, " : "",
-	   (flags & ENABLE_TEXGEN5)    ? "tex-gen-5, " : "",
-	   (flags & ENABLE_TEXGEN6)    ? "tex-gen-6, " : "",
-	   (flags & ENABLE_TEXGEN7)    ? "tex-gen-7, " : "",
-	   (flags & ENABLE_TEXMAT0)    ? "tex-mat-0, " : "",
-	   (flags & ENABLE_TEXMAT1)    ? "tex-mat-1, " : "",
-	   (flags & ENABLE_TEXMAT2)    ? "tex-mat-2, " : "",
-	   (flags & ENABLE_TEXMAT3)    ? "tex-mat-3, " : "",
-	   (flags & ENABLE_TEXMAT4)    ? "tex-mat-4, " : "",
-	   (flags & ENABLE_TEXMAT5)    ? "tex-mat-5, " : "",
-	   (flags & ENABLE_TEXMAT6)    ? "tex-mat-6, " : "",
-	   (flags & ENABLE_TEXMAT7)    ? "tex-mat-7, " : "",
-	   (flags & ENABLE_NORMALIZE)  ? "normalize, " : "",
-	   (flags & ENABLE_RESCALE)    ? "rescale, " : "");
-}
 
-void gl_print_tri_caps( const char *name, GLuint flags )
+void _mesa_print_tri_caps( const char *name, GLuint flags )
 {
    fprintf(stderr,
-	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
+	   "%s: (0x%x) %s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
 	   name,
 	   flags,
-	   (flags & DD_FEEDBACK)            ? "feedback, " : "",
-	   (flags & DD_SELECT)              ? "select, " : "",
 	   (flags & DD_FLATSHADE)           ? "flat-shade, " : "",
-	   (flags & DD_SEPERATE_SPECULAR)   ? "seperate-specular, " : "",
+	   (flags & DD_SEPARATE_SPECULAR)   ? "separate-specular, " : "",
 	   (flags & DD_TRI_LIGHT_TWOSIDE)   ? "tri-light-twoside, " : "",
 	   (flags & DD_TRI_UNFILLED)        ? "tri-unfilled, " : "",
 	   (flags & DD_TRI_STIPPLE)         ? "tri-stipple, " : "",
@@ -85,7 +80,6 @@ void gl_print_tri_caps( const char *name, GLuint flags )
 	   (flags & DD_POINT_SMOOTH)        ? "point-smooth, " : "",
 	   (flags & DD_POINT_SIZE)          ? "point-size, " : "",
 	   (flags & DD_POINT_ATTEN)         ? "point-atten, " : "",
-	   (flags & DD_TRI_CULL_FRONT_BACK) ? "cull-all, " : "",
-	   (flags & DD_STENCIL)             ? "stencil, " : ""
+	   (flags & DD_TRI_CULL_FRONT_BACK) ? "cull-all, " : ""
       );
 }

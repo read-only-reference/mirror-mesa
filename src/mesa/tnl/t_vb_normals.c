@@ -1,10 +1,10 @@
-/* $Id: t_vb_normals.c,v 1.3 2001/02/15 01:33:52 keithw Exp $ */
+/* $Id: t_vb_normals.c,v 1.8 2001/03/30 14:44:44 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -23,7 +23,7 @@
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
- * Author:
+ * Authors:
  *    Keith Whitwell <keithw@valinux.com>
  */
 
@@ -44,16 +44,16 @@
 
 
 struct normal_stage_data {
-   normal_func *NormalTransform; 
+   normal_func NormalTransform;
    GLvector3f normal;
 };
 
-#define NORMAL_STAGE_DATA(stage) ((struct normal_stage_data *)stage->private)
+#define NORMAL_STAGE_DATA(stage) ((struct normal_stage_data *)stage->privatePtr)
 
 
 
 
-static GLboolean run_normal_stage( GLcontext *ctx, 
+static GLboolean run_normal_stage( GLcontext *ctx,
 				   struct gl_pipeline_stage *stage )
 {
    struct normal_stage_data *store = NORMAL_STAGE_DATA(stage);
@@ -62,20 +62,19 @@ static GLboolean run_normal_stage( GLcontext *ctx,
    ASSERT(store->NormalTransform);
 
    if (stage->changed_inputs)
-      (store->NormalTransform[0])(&ctx->ModelView,
-				  ctx->_ModelViewInvScale,
-				  VB->NormalPtr,
-				  0, 
-				  0,
-				  &store->normal);
+      store->NormalTransform( &ctx->ModelView,
+			      ctx->_ModelViewInvScale,
+			      VB->NormalPtr,
+			      0,
+			      &store->normal );
 
    VB->NormalPtr = &store->normal;
    return GL_TRUE;
 }
 
 
-static GLboolean run_validate_normal_stage( GLcontext *ctx, 
-						struct gl_pipeline_stage *stage)
+static GLboolean run_validate_normal_stage( GLcontext *ctx,
+					    struct gl_pipeline_stage *stage )
 {
    struct normal_stage_data *store = NORMAL_STAGE_DATA(stage);
 
@@ -89,26 +88,26 @@ static GLboolean run_validate_normal_stage( GLcontext *ctx,
 				  MAT_FLAG_GENERAL_3D |
 				  MAT_FLAG_PERSPECTIVE))
 	 transform = NORM_TRANSFORM;
-	
-	
+
+
       if (ctx->Transform.Normalize) {
-	 store->NormalTransform = gl_normal_tab[transform | NORM_NORMALIZE];
+	 store->NormalTransform = _mesa_normal_tab[transform | NORM_NORMALIZE];
       }
       else if (ctx->Transform.RescaleNormals &&
 	       ctx->_ModelViewInvScale != 1.0) {
-	 store->NormalTransform = gl_normal_tab[transform | NORM_RESCALE];
+	 store->NormalTransform = _mesa_normal_tab[transform | NORM_RESCALE];
       }
       else {
-	 store->NormalTransform = gl_normal_tab[transform];
+	 store->NormalTransform = _mesa_normal_tab[transform];
       }
    }
    else {
       if (ctx->Transform.Normalize) {
-	 store->NormalTransform = gl_normal_tab[NORM_NORMALIZE];
+	 store->NormalTransform = _mesa_normal_tab[NORM_NORMALIZE];
       }
       else if (!ctx->Transform.RescaleNormals &&
 	       ctx->_ModelViewInvScale != 1.0) {
-	 store->NormalTransform = gl_normal_tab[NORM_RESCALE];
+	 store->NormalTransform = _mesa_normal_tab[NORM_RESCALE];
       }
       else {
 	 store->NormalTransform = 0;
@@ -131,22 +130,22 @@ static void check_normal_transform( GLcontext *ctx,
    stage->active = ctx->_NeedNormals;
    /* Don't clobber the initialize function:
     */
-   if (stage->private) 
+   if (stage->privatePtr)
       stage->run = run_validate_normal_stage;
 }
 
 
-static GLboolean alloc_normal_data( GLcontext *ctx, 
+static GLboolean alloc_normal_data( GLcontext *ctx,
 				 struct gl_pipeline_stage *stage )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct normal_stage_data *store;
-   stage->private = MALLOC(sizeof(*store));
+   stage->privatePtr = MALLOC(sizeof(*store));
    store = NORMAL_STAGE_DATA(stage);
    if (!store)
       return GL_FALSE;
 
-   gl_vector3f_alloc( &store->normal, 0, tnl->vb.Size, 32 );
+   _mesa_vector3f_alloc( &store->normal, 0, tnl->vb.Size, 32 );
 
    /* Now run the stage.
     */
@@ -160,9 +159,9 @@ static void free_normal_data( struct gl_pipeline_stage *stage )
 {
    struct normal_stage_data *store = NORMAL_STAGE_DATA(stage);
    if (store) {
-      gl_vector3f_free( &store->normal );
+      _mesa_vector3f_free( &store->normal );
       FREE( store );
-      stage->private = 0;
+      stage->privatePtr = NULL;
    }
 }
 
@@ -173,8 +172,8 @@ static void free_normal_data( struct gl_pipeline_stage *stage )
 
 
 
-const struct gl_pipeline_stage _tnl_normal_transform_stage = 
-{ 
+const struct gl_pipeline_stage _tnl_normal_transform_stage =
+{
    "normal transform",
    _TNL_NEW_NORMAL_TRANSFORM,	/* re-check */
    _TNL_NEW_NORMAL_TRANSFORM,	/* re-run */
@@ -184,4 +183,3 @@ const struct gl_pipeline_stage _tnl_normal_transform_stage =
    check_normal_transform,	/* check */
    alloc_normal_data		/* run -- initially set to alloc */
 };
-

@@ -1,10 +1,10 @@
-/* $Id: texobj.c,v 1.41 2001/02/26 18:25:25 brianp Exp $ */
+/* $Id: texobj.c,v 1.46 2001/03/28 21:31:54 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -54,7 +54,7 @@
  * Return:  pointer to new texture object
  */
 struct gl_texture_object *
-_mesa_alloc_texture_object( struct gl_shared_state *shared, 
+_mesa_alloc_texture_object( struct gl_shared_state *shared,
 			    GLuint name, GLuint dimensions )
 {
    struct gl_texture_object *obj;
@@ -79,6 +79,7 @@ _mesa_alloc_texture_object( struct gl_shared_state *shared,
       obj->MaxLod = 1000.0;
       obj->BaseLevel = 0;
       obj->MaxLevel = 1000;
+      obj->MaxAnisotropy = 1.0;
       obj->CompareFlag = GL_FALSE;
       obj->CompareOperator = GL_TEXTURE_LEQUAL_R_SGIX;
       obj->ShadowAmbient = 0;
@@ -214,8 +215,8 @@ _mesa_test_texobj_completeness( const GLcontext *ctx,
 
    if (t->Dimensions == 6) {
       /* make sure that all six cube map level 0 images are the same size */
-      const GLint w = t->Image[baseLevel]->Width2;
-      const GLint h = t->Image[baseLevel]->Height2;
+      const GLuint w = t->Image[baseLevel]->Width2;
+      const GLuint h = t->Image[baseLevel]->Height2;
       if (!t->NegX[baseLevel] ||
           t->NegX[baseLevel]->Width2 != w ||
           t->NegX[baseLevel]->Height2 != h ||
@@ -254,7 +255,7 @@ _mesa_test_texobj_completeness( const GLcontext *ctx,
       /* Test dimension-independent attributes */
       for (i = minLevel; i <= maxLevel; i++) {
          if (t->Image[i]) {
-            if (t->Image[i]->Format != t->Image[baseLevel]->Format) {
+            if (t->Image[i]->TexFormat != t->Image[baseLevel]->TexFormat) {
                t->Complete = GL_FALSE;
                incomplete(t, "Format[i] != Format[baseLevel]");
                return;
@@ -405,7 +406,7 @@ _mesa_test_texobj_completeness( const GLcontext *ctx,
       }
       else {
          /* Dimensions = ??? */
-         gl_problem(ctx, "Bug in gl_test_texture_object_completeness\n");
+         _mesa_problem(ctx, "Bug in gl_test_texture_object_completeness\n");
       }
    }
 }
@@ -426,7 +427,7 @@ _mesa_GenTextures( GLsizei n, GLuint *texName )
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (n < 0) {
-      gl_error( ctx, GL_INVALID_VALUE, "glGenTextures" );
+      _mesa_error( ctx, GL_INVALID_VALUE, "glGenTextures" );
       return;
    }
 
@@ -531,7 +532,7 @@ _mesa_BindTexture( GLenum target, GLuint texName )
 
    if (MESA_VERBOSE & (VERBOSE_API|VERBOSE_TEXTURE))
       fprintf(stderr, "glBindTexture %s %d\n",
-	      gl_lookup_enum_by_nr(target), (GLint) texName);
+	      _mesa_lookup_enum_by_nr(target), (GLint) texName);
 
    switch (target) {
       case GL_TEXTURE_1D:
@@ -554,7 +555,7 @@ _mesa_BindTexture( GLenum target, GLuint texName )
          }
          /* fallthrough */
       default:
-         gl_error( ctx, GL_INVALID_ENUM, "glBindTexture(target)" );
+         _mesa_error( ctx, GL_INVALID_ENUM, "glBindTexture(target)" );
          return;
    }
 
@@ -591,7 +592,7 @@ _mesa_BindTexture( GLenum target, GLuint texName )
          /* error checking */
          if (newTexObj->Dimensions > 0 && newTexObj->Dimensions != targetDim) {
             /* the named texture object's dimensions don't match the target */
-            gl_error( ctx, GL_INVALID_OPERATION, "glBindTexture" );
+            _mesa_error( ctx, GL_INVALID_OPERATION, "glBindTexture" );
             return;
          }
       }
@@ -600,7 +601,7 @@ _mesa_BindTexture( GLenum target, GLuint texName )
 	 newTexObj = _mesa_alloc_texture_object( ctx->Shared, texName,
 						 targetDim);
          if (!newTexObj) {
-            gl_error(ctx, GL_OUT_OF_MEMORY, "glBindTexture");
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glBindTexture");
             return;
          }
       }
@@ -609,7 +610,7 @@ _mesa_BindTexture( GLenum target, GLuint texName )
 
    newTexObj->RefCount++;
 
-   
+
    /* do the actual binding, but first flush outstanding vertices:
     */
    FLUSH_VERTICES(ctx, _NEW_TEXTURE);
@@ -628,7 +629,7 @@ _mesa_BindTexture( GLenum target, GLuint texName )
          texUnit->CurrentCubeMap = newTexObj;
          break;
       default:
-         gl_problem(ctx, "bad target in BindTexture");
+         _mesa_problem(ctx, "bad target in BindTexture");
    }
 
    /* Pass BindTexture call to device driver */
@@ -661,7 +662,7 @@ _mesa_PrioritizeTextures( GLsizei n, const GLuint *texName,
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (n < 0) {
-      gl_error( ctx, GL_INVALID_VALUE, "glPrioritizeTextures" );
+      _mesa_error( ctx, GL_INVALID_VALUE, "glPrioritizeTextures" );
       return;
    }
 
@@ -698,7 +699,7 @@ _mesa_AreTexturesResident(GLsizei n, const GLuint *texName,
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
 
    if (n < 0) {
-      gl_error(ctx, GL_INVALID_VALUE, "glAreTexturesResident(n)");
+      _mesa_error(ctx, GL_INVALID_VALUE, "glAreTexturesResident(n)");
       return GL_FALSE;
    }
 
@@ -708,7 +709,7 @@ _mesa_AreTexturesResident(GLsizei n, const GLuint *texName,
    for (i = 0; i < n; i++) {
       struct gl_texture_object *t;
       if (texName[i] == 0) {
-         gl_error(ctx, GL_INVALID_VALUE, "glAreTexturesResident(textures)");
+         _mesa_error(ctx, GL_INVALID_VALUE, "glAreTexturesResident(textures)");
          return GL_FALSE;
       }
       t = (struct gl_texture_object *)
@@ -724,7 +725,7 @@ _mesa_AreTexturesResident(GLsizei n, const GLuint *texName,
          }
       }
       else {
-         gl_error(ctx, GL_INVALID_VALUE, "glAreTexturesResident(textures)");
+         _mesa_error(ctx, GL_INVALID_VALUE, "glAreTexturesResident(textures)");
          return GL_FALSE;
       }
    }
@@ -743,4 +744,3 @@ _mesa_IsTexture( GLuint texture )
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
    return texture > 0 && _mesa_HashLookup(ctx->Shared->TexObjects, texture);
 }
-

@@ -1,21 +1,21 @@
-/* $Id: s_linetemp.h,v 1.5 2001/02/07 18:36:52 brianp Exp $ */
+/* $Id: s_linetemp.h,v 1.7 2001/03/12 00:48:42 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -32,7 +32,8 @@
  *
  * The following macros may be defined to indicate what auxillary information
  * must be interplated along the line:
- *    INTERP_Z        - if defined, interpolate Z and FOG values
+ *    INTERP_Z        - if defined, interpolate Z values
+ *    INTERP_FOG      - if defined, interpolate FOG values
  *    INTERP_RGB      - if defined, interpolate RGB values
  *    INTERP_SPEC     - if defined, interpolate specular RGB values
  *    INTERP_ALPHA    - if defined, interpolate Alpha values
@@ -57,7 +58,7 @@
  *
  * To enable line stippling define STIPPLE = 1
  * To enable wide lines define WIDE = 1
- * 
+ *
  * To actually "plot" each pixel either the PLOT macro or
  * (XMAJOR_PLOT and YMAJOR_PLOT macros) must be defined...
  *    PLOT(X,Y) - code to plot a pixel.  Example:
@@ -92,8 +93,10 @@
    GLint zPtrXstep, zPtrYstep;
    DEPTH_TYPE *zPtr;
 #  endif
+#endif
+#ifdef INTERP_FOG
    GLfixed fog0 = FloatToFixed(vert0->fog);
-   GLfixed dfog = FloatToFixed(vert1->fog) - fog0;   
+   GLfixed dfog = FloatToFixed(vert1->fog) - fog0;
 #endif
 #ifdef INTERP_RGB
    GLfixed r0 = IntToFixed(vert0->color[0]);
@@ -293,6 +296,8 @@
       GLint errorDec = error-dx;
 #ifdef INTERP_Z
       dz = (z1-z0) / dx;
+#endif
+#ifdef INTERP_FOG
       dfog /= dx;
 #endif
 #ifdef INTERP_RGB
@@ -398,6 +403,8 @@
          zPtr = (DEPTH_TYPE *) ((GLubyte*) zPtr + zPtrXstep);
 #  endif
          z0 += dz;
+#endif
+#ifdef INTERP_FOG
 	 fog0 += dfog;
 #endif
 #ifdef INTERP_RGB
@@ -464,6 +471,8 @@
       GLint errorDec = error-dy;
 #ifdef INTERP_Z
       dz = (z1-z0) / dy;
+#endif
+#ifdef INTERP_FOG
       dfog /= dy;
 #endif
 #ifdef INTERP_RGB
@@ -569,6 +578,8 @@
          zPtr = (DEPTH_TYPE *) ((GLubyte*) zPtr + zPtrYstep);
 #  endif
          z0 += dz;
+#endif
+#ifdef INTERP_FOG
 	 fog0 += dfog;
 #endif
 #ifdef INTERP_RGB
@@ -632,6 +643,7 @@
 
 #undef INTERP_XY
 #undef INTERP_Z
+#undef INTERP_FOG
 #undef INTERP_RGB
 #undef INTERP_SPEC
 #undef INTERP_ALPHA

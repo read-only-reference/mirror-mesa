@@ -1,10 +1,10 @@
-/* $Id: eval.h,v 1.4 2000/11/22 07:32:16 joukj Exp $ */
+/* $Id: eval.h,v 1.6 2001/03/12 00:48:37 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -32,7 +32,7 @@
 #include "mtypes.h"
 
 
-extern void gl_init_eval( void );
+extern void _mesa_init_eval( void );
 
 
 extern GLuint _mesa_evaluator_components( GLenum target );
@@ -42,20 +42,20 @@ extern void gl_free_control_points( GLcontext *ctx,
                                     GLenum target, GLfloat *data );
 
 
-extern GLfloat *gl_copy_map_points1f( GLenum target,
+extern GLfloat *_mesa_copy_map_points1f( GLenum target,
                                       GLint ustride, GLint uorder,
                                       const GLfloat *points );
 
-extern GLfloat *gl_copy_map_points1d( GLenum target,
+extern GLfloat *_mesa_copy_map_points1d( GLenum target,
                                       GLint ustride, GLint uorder,
                                       const GLdouble *points );
 
-extern GLfloat *gl_copy_map_points2f( GLenum target,
+extern GLfloat *_mesa_copy_map_points2f( GLenum target,
                                       GLint ustride, GLint uorder,
                                       GLint vstride, GLint vorder,
                                       const GLfloat *points );
 
-extern GLfloat *gl_copy_map_points2d(GLenum target,
+extern GLfloat *_mesa_copy_map_points2d(GLenum target,
                                      GLint ustride, GLint uorder,
                                      GLint vstride, GLint vorder,
                                      const GLdouble *points );

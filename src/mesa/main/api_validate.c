@@ -1,11 +1,10 @@
-
-/* $Id: api_validate.c,v 1.3 2001/01/05 02:26:48 keithw Exp $ */
+/* $Id: api_validate.c,v 1.5 2001/03/12 00:48:37 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -34,33 +33,33 @@
 
 GLboolean
 _mesa_validate_DrawElements(GLcontext *ctx,
-			    GLenum mode, GLsizei count, GLenum type, 
+			    GLenum mode, GLsizei count, GLenum type,
 			    const GLvoid *indices)
 {
-   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx,  GL_FALSE); 
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx,  GL_FALSE);
 
    if (count <= 0) {
       if (count < 0)
-	 gl_error(ctx, GL_INVALID_VALUE, "glDrawElements(count)" );
+	 _mesa_error(ctx, GL_INVALID_VALUE, "glDrawElements(count)" );
       return GL_FALSE;
    }
 
-   if (mode < 0 || 
+   if (mode < 0 ||
        mode > GL_POLYGON) {
-      gl_error(ctx, GL_INVALID_ENUM, "glDrawArrays(mode)" );
+      _mesa_error(ctx, GL_INVALID_ENUM, "glDrawArrays(mode)" );
       return GL_FALSE;
    }
 
-   if (type != GL_UNSIGNED_INT && 
-       type != GL_UNSIGNED_BYTE && 
+   if (type != GL_UNSIGNED_INT &&
+       type != GL_UNSIGNED_BYTE &&
        type != GL_UNSIGNED_SHORT)
    {
-      gl_error(ctx, GL_INVALID_ENUM, "glDrawElements(type)" );
+      _mesa_error(ctx, GL_INVALID_ENUM, "glDrawElements(type)" );
       return GL_FALSE;
    }
 
    if (ctx->NewState)
-      gl_update_state( ctx );
+      _mesa_update_state( ctx );
 
    if (!ctx->Array.Vertex.Enabled)
       return GL_FALSE;
@@ -70,39 +69,39 @@ _mesa_validate_DrawElements(GLcontext *ctx,
 
 
 GLboolean
-_mesa_validate_DrawRangeElements(GLcontext *ctx, GLenum mode, 
-				 GLuint start, GLuint end, 
-				 GLsizei count, GLenum type, 
+_mesa_validate_DrawRangeElements(GLcontext *ctx, GLenum mode,
+				 GLuint start, GLuint end,
+				 GLsizei count, GLenum type,
 				 const GLvoid *indices)
 {
-   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE); 
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
 
    if (count <= 0) {
       if (count < 0)
-	 gl_error(ctx, GL_INVALID_VALUE, "glDrawElements(count)" );
+	 _mesa_error(ctx, GL_INVALID_VALUE, "glDrawElements(count)" );
       return GL_FALSE;
    }
 
    if (mode < 0 || mode > GL_POLYGON) {
-      gl_error(ctx, GL_INVALID_ENUM, "glDrawArrays(mode)" );
+      _mesa_error(ctx, GL_INVALID_ENUM, "glDrawArrays(mode)" );
       return GL_FALSE;
    }
 
    if (end < start) {
-      gl_error(ctx, GL_INVALID_VALUE, "glDrawRangeElements(end<start)");
+      _mesa_error(ctx, GL_INVALID_VALUE, "glDrawRangeElements(end<start)");
       return GL_FALSE;
    }
 
-   if (type != GL_UNSIGNED_INT && 
-       type != GL_UNSIGNED_BYTE && 
+   if (type != GL_UNSIGNED_INT &&
+       type != GL_UNSIGNED_BYTE &&
        type != GL_UNSIGNED_SHORT)
    {
-      gl_error(ctx, GL_INVALID_ENUM, "glDrawElements(type)" );
+      _mesa_error(ctx, GL_INVALID_ENUM, "glDrawElements(type)" );
       return GL_FALSE;
    }
 
    if (ctx->NewState)
-      gl_update_state( ctx );
+      _mesa_update_state( ctx );
 
    if (!ctx->Array.Vertex.Enabled)
       return GL_FALSE;
@@ -113,27 +112,26 @@ _mesa_validate_DrawRangeElements(GLcontext *ctx, GLenum mode,
 
 
 GLboolean
-_mesa_validate_DrawArrays(GLcontext *ctx, 
+_mesa_validate_DrawArrays(GLcontext *ctx,
 			  GLenum mode, GLint start, GLsizei count)
 {
-   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE); 
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
 
    if (count<0) {
-      gl_error(ctx, GL_INVALID_VALUE, "glDrawArrays(count)" );
+      _mesa_error(ctx, GL_INVALID_VALUE, "glDrawArrays(count)" );
       return GL_FALSE;
    }
 
    if (mode < 0 || mode > GL_POLYGON) {
-      gl_error(ctx, GL_INVALID_ENUM, "glDrawArrays(mode)" );
+      _mesa_error(ctx, GL_INVALID_ENUM, "glDrawArrays(mode)" );
       return GL_FALSE;
    }
 
    if (ctx->NewState)
-      gl_update_state( ctx );
+      _mesa_update_state( ctx );
 
-   if (!ctx->Array.Vertex.Enabled) 
+   if (!ctx->Array.Vertex.Enabled)
       return GL_FALSE;
 
    return GL_TRUE;
 }
-

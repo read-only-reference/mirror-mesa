@@ -1,10 +1,10 @@
-/* $Id: s_context.c,v 1.15 2001/02/24 18:25:52 keithw Exp $ */
+/* $Id: s_context.c,v 1.20 2001/03/29 17:08:27 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -162,7 +162,7 @@ _swrast_update_hint( GLcontext *ctx )
                               _SWRAST_NEW_RASTERMASK|		\
                               _NEW_LIGHT|			\
                               _NEW_FOG |			\
-			      _DD_NEW_SEPERATE_SPECULAR)
+			      _DD_NEW_SEPARATE_SPECULAR)
 
 #define _SWRAST_NEW_LINE (_SWRAST_NEW_DERIVED |		\
 			  _NEW_RENDERMODE|		\
@@ -171,7 +171,7 @@ _swrast_update_hint( GLcontext *ctx )
                           _NEW_LIGHT|			\
                           _NEW_FOG|			\
                           _NEW_DEPTH |			\
-                          _DD_NEW_SEPERATE_SPECULAR)
+                          _DD_NEW_SEPARATE_SPECULAR)
 
 #define _SWRAST_NEW_POINT (_SWRAST_NEW_DERIVED |	\
 			   _NEW_RENDERMODE |		\
@@ -179,7 +179,7 @@ _swrast_update_hint( GLcontext *ctx )
 			   _NEW_TEXTURE |		\
 			   _NEW_LIGHT |			\
 			   _NEW_FOG |			\
-                           _DD_NEW_SEPERATE_SPECULAR)
+                           _DD_NEW_SEPARATE_SPECULAR)
 
 #define _SWRAST_NEW_TEXTURE_SAMPLE_FUNC _NEW_TEXTURE
 
@@ -201,7 +201,7 @@ _swrast_validate_triangle( GLcontext *ctx,
    _swrast_validate_derived( ctx );
    swrast->choose_triangle( ctx );
 
-   if ((ctx->_TriangleCaps & DD_SEPERATE_SPECULAR) && 
+   if ((ctx->_TriangleCaps & DD_SEPARATE_SPECULAR) &&
        !ctx->Texture._ReallyEnabled) {
       swrast->SpecTriangle = swrast->Triangle;
       swrast->Triangle = _swrast_add_spec_terms_triangle;
@@ -218,7 +218,7 @@ _swrast_validate_line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1 )
    _swrast_validate_derived( ctx );
    swrast->choose_line( ctx );
 
-   if ((ctx->_TriangleCaps & DD_SEPERATE_SPECULAR) && 
+   if ((ctx->_TriangleCaps & DD_SEPARATE_SPECULAR) &&
        !ctx->Texture._ReallyEnabled) {
       swrast->SpecLine = swrast->Line;
       swrast->Line = _swrast_add_spec_terms_line;
@@ -236,7 +236,7 @@ _swrast_validate_point( GLcontext *ctx, const SWvertex *v0 )
    _swrast_validate_derived( ctx );
    swrast->choose_point( ctx );
 
-   if ((ctx->_TriangleCaps & DD_SEPERATE_SPECULAR) && 
+   if ((ctx->_TriangleCaps & DD_SEPARATE_SPECULAR) &&
        !ctx->Texture._ReallyEnabled) {
       swrast->SpecPoint = swrast->Point;
       swrast->Point = _swrast_add_spec_terms_point;
@@ -316,6 +316,27 @@ _swrast_invalidate_state( GLcontext *ctx, GLuint new_state )
    if (new_state & _SWRAST_NEW_TEXTURE_SAMPLE_FUNC)
       for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++)
 	 swrast->TextureSample[i] = _swrast_validate_texture_sample;
+
+
+   if (ctx->Visual.rgbMode) {
+      ASSERT(swrast->Driver.WriteRGBASpan);
+      ASSERT(swrast->Driver.WriteRGBSpan);
+      ASSERT(swrast->Driver.WriteMonoRGBASpan);
+      ASSERT(swrast->Driver.WriteRGBAPixels);
+      ASSERT(swrast->Driver.WriteMonoRGBAPixels);
+      ASSERT(swrast->Driver.ReadRGBASpan);
+      ASSERT(swrast->Driver.ReadRGBAPixels);
+   }
+   else {
+      ASSERT(swrast->Driver.WriteCI32Span);
+      ASSERT(swrast->Driver.WriteCI8Span);
+      ASSERT(swrast->Driver.WriteMonoCISpan);
+      ASSERT(swrast->Driver.WriteCI32Pixels);
+      ASSERT(swrast->Driver.WriteMonoCIPixels);
+      ASSERT(swrast->Driver.ReadCI32Span);
+      ASSERT(swrast->Driver.ReadCI32Pixels);
+   }
+
 }
 
 
@@ -346,7 +367,7 @@ _swrast_validate_derived( GLcontext *ctx )
    }
 }
 
-
+#define SWRAST_DEBUG 0
 
 /* Public entrypoints:  See also s_accum.c, s_bitmap.c, etc.
  */
@@ -355,6 +376,13 @@ _swrast_Quad( GLcontext *ctx,
 	      const SWvertex *v0, const SWvertex *v1,
               const SWvertex *v2, const SWvertex *v3 )
 {
+   if (SWRAST_DEBUG) {
+      fprintf(stderr, "_swrast_Quad\n");
+      _swrast_print_vertex( ctx, v0 );
+      _swrast_print_vertex( ctx, v1 );
+      _swrast_print_vertex( ctx, v2 );
+      _swrast_print_vertex( ctx, v3 );
+   }
    SWRAST_CONTEXT(ctx)->Triangle( ctx, v0, v1, v2 );
    SWRAST_CONTEXT(ctx)->Triangle( ctx, v0, v2, v3 );
 }
@@ -363,45 +391,60 @@ void
 _swrast_Triangle( GLcontext *ctx, const SWvertex *v0,
                   const SWvertex *v1, const SWvertex *v2 )
 {
-/*     fprintf(stderr, "%s\n", __FUNCTION__); */
-/*     _swrast_print_vertex( ctx, v0 ); */
-/*     _swrast_print_vertex( ctx, v1 ); */
-/*     _swrast_print_vertex( ctx, v2 ); */
+   if (SWRAST_DEBUG) {
+      fprintf(stderr, "_swrast_Triangle\n");
+      _swrast_print_vertex( ctx, v0 );
+      _swrast_print_vertex( ctx, v1 );
+      _swrast_print_vertex( ctx, v2 );
+   }
    SWRAST_CONTEXT(ctx)->Triangle( ctx, v0, v1, v2 );
 }
 
 void
 _swrast_Line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1 )
 {
-/*     fprintf(stderr, "%s\n", __FUNCTION__); */
-/*     _swrast_print_vertex( ctx, v0 ); */
-/*     _swrast_print_vertex( ctx, v1 ); */
+   if (SWRAST_DEBUG) {
+      fprintf(stderr, "_swrast_Line\n");
+      _swrast_print_vertex( ctx, v0 );
+      _swrast_print_vertex( ctx, v1 );
+   }
    SWRAST_CONTEXT(ctx)->Line( ctx, v0, v1 );
 }
 
 void
 _swrast_Point( GLcontext *ctx, const SWvertex *v0 )
 {
-/*     fprintf(stderr, "%s\n", __FUNCTION__); */
-/*     _swrast_print_vertex( ctx, v0 ); */
+   if (SWRAST_DEBUG) {
+      fprintf(stderr, "_swrast_Point\n");
+      _swrast_print_vertex( ctx, v0 );
+   }
    SWRAST_CONTEXT(ctx)->Point( ctx, v0 );
 }
 
 void
 _swrast_InvalidateState( GLcontext *ctx, GLuint new_state )
 {
+   if (SWRAST_DEBUG) {
+      fprintf(stderr, "_swrast_InvalidateState\n");
+   }
    SWRAST_CONTEXT(ctx)->InvalidateState( ctx, new_state );
 }
 
 void
 _swrast_ResetLineStipple( GLcontext *ctx )
 {
+   if (SWRAST_DEBUG) {
+      fprintf(stderr, "_swrast_ResetLineStipple\n");
+   }
    SWRAST_CONTEXT(ctx)->StippleCounter = 0;
 }
 
 void
 _swrast_allow_vertex_fog( GLcontext *ctx, GLboolean value )
 {
+   if (SWRAST_DEBUG) {
+      fprintf(stderr, "_swrast_allow_vertex_fog %d\n", value);
+   }
    SWRAST_CONTEXT(ctx)->InvalidateState( ctx, _NEW_HINT );
    SWRAST_CONTEXT(ctx)->AllowVertexFog = value;
 }
@@ -409,6 +452,9 @@ _swrast_allow_vertex_fog( GLcontext *ctx, GLboolean value )
 void
 _swrast_allow_pixel_fog( GLcontext *ctx, GLboolean value )
 {
+   if (SWRAST_DEBUG) {
+      fprintf(stderr, "_swrast_allow_pixel_fog %d\n", value);
+   }
    SWRAST_CONTEXT(ctx)->InvalidateState( ctx, _NEW_HINT );
    SWRAST_CONTEXT(ctx)->AllowPixelFog = value;
 }
@@ -419,10 +465,15 @@ _swrast_CreateContext( GLcontext *ctx )
 {
    GLuint i;
    SWcontext *swrast = (SWcontext *)CALLOC(sizeof(SWcontext));
+
+   if (SWRAST_DEBUG) {
+      fprintf(stderr, "_swrast_CreateContext\n");
+   }
+
    if (!swrast)
       return GL_FALSE;
 
-   swrast->PB = gl_alloc_pb();
+   swrast->PB = _mesa_alloc_pb();
    if (!swrast->PB) {
       FREE(swrast);
       return GL_FALSE;
@@ -464,6 +515,10 @@ _swrast_DestroyContext( GLcontext *ctx )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
 
+   if (SWRAST_DEBUG) {
+      fprintf(stderr, "_swrast_DestroyContext\n");
+   }
+
    FREE( swrast->PB );
    FREE( swrast );
 
@@ -471,25 +526,36 @@ _swrast_DestroyContext( GLcontext *ctx )
 }
 
 
+struct swrast_device_driver *
+_swrast_GetDeviceDriverReference( GLcontext *ctx )
+{
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
+   return &swrast->Driver;
+}
+
+#define SWRAST_DEBUG_VERTICES 0
+
 void
 _swrast_print_vertex( GLcontext *ctx, const SWvertex *v )
 {
    GLuint i;
 
-   fprintf(stderr, "win %f %f %f %f\n", 
-	   v->win[0], v->win[1], v->win[2], v->win[3]);
+   if (SWRAST_DEBUG_VERTICES) {
+      fprintf(stderr, "win %f %f %f %f\n",
+	      v->win[0], v->win[1], v->win[2], v->win[3]);
 
-   for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++)
-      fprintf(stderr, "texcoord[%d] %f %f %f %f\n", i,
-	      v->texcoord[i][0], v->texcoord[i][1], 
-	      v->texcoord[i][2], v->texcoord[i][3]);
+      for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++)
+	 fprintf(stderr, "texcoord[%d] %f %f %f %f\n", i,
+		 v->texcoord[i][0], v->texcoord[i][1],
+		 v->texcoord[i][2], v->texcoord[i][3]);
 
-   fprintf(stderr, "color %d %d %d %d\n", 
-	   v->color[0], v->color[1], v->color[2], v->color[3]);
-   fprintf(stderr, "spec %d %d %d %d\n",
-	   v->specular[0], v->specular[1], v->specular[2], v->specular[3]);
-   fprintf(stderr, "fog %f\n", v->fog);
-   fprintf(stderr, "index %d\n", v->index);
-   fprintf(stderr, "pointsize %f\n", v->pointSize);
-   fprintf(stderr, "\n");
+      fprintf(stderr, "color %d %d %d %d\n",
+	      v->color[0], v->color[1], v->color[2], v->color[3]);
+      fprintf(stderr, "spec %d %d %d %d\n",
+	      v->specular[0], v->specular[1], v->specular[2], v->specular[3]);
+      fprintf(stderr, "fog %f\n", v->fog);
+      fprintf(stderr, "index %d\n", v->index);
+      fprintf(stderr, "pointsize %f\n", v->pointSize);
+      fprintf(stderr, "\n");
+   }
 }

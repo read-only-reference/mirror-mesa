@@ -1,21 +1,21 @@
-/* $Id: m_clip_tmp.h,v 1.3 2001/01/13 05:48:25 keithw Exp $ */
+/* $Id: m_clip_tmp.h,v 1.6 2001/03/12 00:48:41 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.1
- * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
- * 
+ * Version:  3.5
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -35,11 +35,11 @@
  * the case where the cliptest passes.  This isn't essential,
  * and an asm implementation needn't replicate that behaviour.
  */
-static GLvector4f * _XFORMAPI TAG(cliptest_points4)( GLvector4f *clip_vec, 
-					   GLvector4f *proj_vec, 
-					   GLubyte clipMask[],
-					   GLubyte *orMask, 
-					   GLubyte *andMask )
+static GLvector4f * _XFORMAPI TAG(cliptest_points4)( GLvector4f *clip_vec,
+                                                     GLvector4f *proj_vec,
+                                                     GLubyte clipMask[],
+                                                     GLubyte *orMask,
+                                                     GLubyte *andMask )
 {
    const GLuint stride = clip_vec->stride;
    const GLfloat *from = (GLfloat *)clip_vec->start;
@@ -83,12 +83,12 @@ static GLvector4f * _XFORMAPI TAG(cliptest_points4)( GLvector4f *clip_vec,
 	 vProj[i][2] = 0;
 	 vProj[i][3] = 1;
       } else {
-	 GLfloat oow = 1.0F / cw;	 
+	 GLfloat oow = 1.0F / cw;
 	 vProj[i][0] = cx * oow;
 	 vProj[i][1] = cy * oow;
-	 vProj[i][2] = cz * oow;      
+	 vProj[i][2] = cz * oow;
 	 vProj[i][3] = oow;
-      }	 
+      }
    }
 
    *orMask = tmpOrMask;
@@ -102,10 +102,10 @@ static GLvector4f * _XFORMAPI TAG(cliptest_points4)( GLvector4f *clip_vec,
 
 
 
-static GLvector4f * _XFORMAPI TAG(cliptest_np_points4)( GLvector4f *clip_vec, 
-							GLvector4f *proj_vec, 
+static GLvector4f * _XFORMAPI TAG(cliptest_np_points4)( GLvector4f *clip_vec,
+							GLvector4f *proj_vec,
 							GLubyte clipMask[],
-							GLubyte *orMask, 
+							GLubyte *orMask,
 							GLubyte *andMask )
 {
    const GLuint stride = clip_vec->stride;
@@ -144,7 +144,7 @@ static GLvector4f * _XFORMAPI TAG(cliptest_np_points4)( GLvector4f *clip_vec,
 	 c++;
 	 tmpAndMask &= mask;
 	 tmpOrMask |= mask;
-      }	 
+      }
    }
 
    *orMask = tmpOrMask;
@@ -153,11 +153,11 @@ static GLvector4f * _XFORMAPI TAG(cliptest_np_points4)( GLvector4f *clip_vec,
 }
 
 
-static GLvector4f * _XFORMAPI TAG(cliptest_points3)( GLvector4f *clip_vec, 
-					   GLvector4f *proj_vec, 
-					   GLubyte clipMask[],
-					   GLubyte *orMask, 
-					   GLubyte *andMask )
+static GLvector4f * _XFORMAPI TAG(cliptest_points3)( GLvector4f *clip_vec,
+                                                     GLvector4f *proj_vec,
+                                                     GLubyte clipMask[],
+                                                     GLubyte *orMask,
+                                                     GLubyte *andMask )
 {
    const GLuint stride = clip_vec->stride;
    const GLuint count = clip_vec->count;
@@ -186,11 +186,11 @@ static GLvector4f * _XFORMAPI TAG(cliptest_points3)( GLvector4f *clip_vec,
 }
 
 
-static GLvector4f * _XFORMAPI TAG(cliptest_points2)( GLvector4f *clip_vec, 
-					   GLvector4f *proj_vec, 
-					   GLubyte clipMask[],
-					   GLubyte *orMask, 
-					   GLubyte *andMask )
+static GLvector4f * _XFORMAPI TAG(cliptest_points2)( GLvector4f *clip_vec,
+                                                     GLvector4f *proj_vec,
+                                                     GLubyte clipMask[],
+                                                     GLubyte *orMask,
+                                                     GLubyte *andMask )
 {
    const GLuint stride = clip_vec->stride;
    const GLuint count = clip_vec->count;
@@ -219,11 +219,11 @@ static GLvector4f * _XFORMAPI TAG(cliptest_points2)( GLvector4f *clip_vec,
 
 static void TAG(init_c_cliptest)( void )
 {
-   gl_clip_tab[4] = TAG(cliptest_points4);
-   gl_clip_tab[3] = TAG(cliptest_points3);
-   gl_clip_tab[2] = TAG(cliptest_points2);
+   _mesa_clip_tab[4] = TAG(cliptest_points4);
+   _mesa_clip_tab[3] = TAG(cliptest_points3);
+   _mesa_clip_tab[2] = TAG(cliptest_points2);
 
-   gl_clip_np_tab[4] = TAG(cliptest_np_points4);
-   gl_clip_np_tab[3] = TAG(cliptest_points3);
-   gl_clip_np_tab[2] = TAG(cliptest_points2);
+   _mesa_clip_np_tab[4] = TAG(cliptest_np_points4);
+   _mesa_clip_np_tab[3] = TAG(cliptest_points3);
+   _mesa_clip_np_tab[2] = TAG(cliptest_points2);
 }

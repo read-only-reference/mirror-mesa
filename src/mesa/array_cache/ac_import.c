@@ -1,4 +1,4 @@
-/* $Id: ac_import.c,v 1.7 2001/02/20 18:28:52 keithw Exp $ */
+/* $Id: ac_import.c,v 1.11 2001/03/19 02:25:36 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -23,7 +23,7 @@
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
- * Author:
+ * Authors:
  *    Keith Whitwell <keithw@valinux.com>
  */
 
@@ -35,11 +35,11 @@
 
 #include "math/m_translate.h"
 #include "array_cache/ac_context.h"
-#include "math/m_translate.h"	
+#include "math/m_translate.h"
 
 #define STRIDE_ARRAY( array, offset ) 		\
 do {						\
-   char *tmp = (array).Ptr;			\
+   char *tmp = (char *) (array).Ptr;		\
    tmp += (offset) * (array).StrideB;		\
    (array).Ptr = tmp;				\
 } while (0)
@@ -59,7 +59,7 @@ static void reset_texcoord( GLcontext *ctx, GLuint unit )
    else {
       ac->Raw.TexCoord[unit] = ac->Fallback.TexCoord[unit];
 
-      if (ctx->Current.Texcoord[unit][3] != 1.0) 
+      if (ctx->Current.Texcoord[unit][3] != 1.0)
 	 ac->Raw.TexCoord[unit].Size = 4;
       else if (ctx->Current.Texcoord[unit][2] != 0.0)
 	 ac->Raw.TexCoord[unit].Size = 3;
@@ -108,7 +108,7 @@ static void reset_color( GLcontext *ctx )
       ac->Raw.Color = ctx->Array.Color;
       STRIDE_ARRAY(ac->Raw.Color, ac->start);
    }
-   else 
+   else
       ac->Raw.Color = ac->Fallback.Color;
 
    ac->IsCached.Color = GL_FALSE;
@@ -124,7 +124,7 @@ static void reset_secondarycolor( GLcontext *ctx )
       ac->Raw.SecondaryColor = ctx->Array.SecondaryColor;
       STRIDE_ARRAY(ac->Raw.SecondaryColor, ac->start);
    }
-   else 
+   else
       ac->Raw.SecondaryColor = ac->Fallback.SecondaryColor;
 
    ac->IsCached.SecondaryColor = GL_FALSE;
@@ -140,7 +140,7 @@ static void reset_index( GLcontext *ctx )
       ac->Raw.Index = ctx->Array.Index;
       STRIDE_ARRAY(ac->Raw.Index, ac->start);
    }
-   else 
+   else
       ac->Raw.Index = ac->Fallback.Index;
 
    ac->IsCached.Index = GL_FALSE;
@@ -155,7 +155,7 @@ static void reset_fogcoord( GLcontext *ctx )
       ac->Raw.FogCoord = ctx->Array.FogCoord;
       STRIDE_ARRAY(ac->Raw.FogCoord, ac->start);
    }
-   else 
+   else
       ac->Raw.FogCoord = ac->Fallback.FogCoord;
 
    ac->IsCached.FogCoord = GL_FALSE;
@@ -170,7 +170,7 @@ static void reset_edgeflag( GLcontext *ctx )
       ac->Raw.EdgeFlag = ctx->Array.EdgeFlag;
       STRIDE_ARRAY(ac->Raw.EdgeFlag, ac->start);
    }
-   else 
+   else
       ac->Raw.EdgeFlag = ac->Fallback.EdgeFlag;
 
    ac->IsCached.EdgeFlag = GL_FALSE;
@@ -192,13 +192,13 @@ static void import_texcoord( GLcontext *ctx, GLuint unit,
    ASSERT(type == GL_FLOAT);
    ASSERT(stride == 4*sizeof(GLfloat) || stride == 0);
    ASSERT(ac->count - ac->start < ctx->Const.MaxArrayLockSize);
-   
-   _math_trans_4f( to->Ptr,
+
+   _math_trans_4f( (GLfloat (*)[4]) to->Ptr,
 		   from->Ptr,
 		   from->StrideB,
 		   from->Type,
 		   from->Size,
-		   ac->start, 
+		   ac->start,
 		   ac->count);
 
    to->Size = from->Size;
@@ -219,12 +219,12 @@ static void import_vertex( GLcontext *ctx,
    ASSERT(type == GL_FLOAT);
    ASSERT(stride == 4*sizeof(GLfloat) || stride == 0);
 
-   _math_trans_4f( to->Ptr,
+   _math_trans_4f( (GLfloat (*)[4]) to->Ptr,
 		   from->Ptr,
 		   from->StrideB,
 		   from->Type,
 		   from->Size,
-		   0, 
+		   0,
 		   ac->count - ac->start);
 
    to->Size = from->Size;
@@ -245,11 +245,11 @@ static void import_normal( GLcontext *ctx,
    ASSERT(type == GL_FLOAT);
    ASSERT(stride == 3*sizeof(GLfloat) || stride == 0);
 
-   _math_trans_3f( to->Ptr,
+   _math_trans_3f( (GLfloat (*)[3]) to->Ptr,
 		   from->Ptr,
 		   from->StrideB,
 		   from->Type,
-		   0, 
+		   0,
 		   ac->count - ac->start);
 
    to->StrideB = 3 * sizeof(GLfloat);
@@ -266,16 +266,15 @@ static void import_color( GLcontext *ctx,
 
    /* Limited choices at this stage:
     */
-   /* XXX GLchan: is this right for GLchan? */
    ASSERT(type == CHAN_TYPE);
    ASSERT(stride == 4 * sizeof(GLchan) || stride == 0);
 
-   _math_trans_4chan( to->Ptr,
+   _math_trans_4chan( (GLchan (*)[4]) to->Ptr,
 		      from->Ptr,
 		      from->StrideB,
 		      from->Type,
 		      from->Size,
-		      0, 
+		      0,
 		      ac->count - ac->start);
 
    to->Size = from->Size;
@@ -296,11 +295,11 @@ static void import_index( GLcontext *ctx,
    ASSERT(type == GL_UNSIGNED_INT);
    ASSERT(stride == sizeof(GLuint) || stride == 0);
 
-   _math_trans_1ui( to->Ptr,
+   _math_trans_1ui( (GLuint *) to->Ptr,
 		    from->Ptr,
 		    from->StrideB,
 		    from->Type,
-		    0, 
+		    0,
 		    ac->count - ac->start);
 
    to->StrideB = sizeof(GLuint);
@@ -320,12 +319,12 @@ static void import_secondarycolor( GLcontext *ctx,
    ASSERT(type == CHAN_TYPE);
    ASSERT(stride == 4 * sizeof(GLchan) || stride == 0);
 
-   _math_trans_4chan( to->Ptr,
+   _math_trans_4chan( (GLchan (*)[4]) to->Ptr,
 		      from->Ptr,
 		      from->StrideB,
 		      from->Type,
 		      from->Size,
-		      0, 
+		      0,
 		      ac->count - ac->start);
 
    to->StrideB = 4 * sizeof(GLchan);
@@ -345,13 +344,13 @@ static void import_fogcoord( GLcontext *ctx,
    ASSERT(type == GL_FLOAT);
    ASSERT(stride == sizeof(GLfloat) || stride == 0);
 
-   _math_trans_1f( to->Ptr,
+   _math_trans_1f( (GLfloat *) to->Ptr,
 		   from->Ptr,
 		   from->StrideB,
 		   from->Type,
-		   0, 
+		   0,
 		   ac->count - ac->start);
-   
+
    to->StrideB = sizeof(GLfloat);
    to->Type = GL_FLOAT;
    ac->IsCached.FogCoord = GL_TRUE;
@@ -366,18 +365,18 @@ static void import_edgeflag( GLcontext *ctx,
 
    /* Limited choices at this stage:
     */
-   ASSERT(type == GL_FLOAT);
-   ASSERT(stride == sizeof(GLfloat) || stride == 0);
+   ASSERT(type == GL_UNSIGNED_BYTE);
+   ASSERT(stride == sizeof(GLubyte) || stride == 0);
 
-   _math_trans_1f( to->Ptr,
-		   from->Ptr,
-		   from->StrideB,
-		   from->Type,
-		   0, 
-		   ac->count - ac->start);
-   
-   to->StrideB = sizeof(GLfloat);
-   to->Type = GL_FLOAT;
+   _math_trans_1ub( (GLubyte *) to->Ptr,
+		    from->Ptr,
+		    from->StrideB,
+		    from->Type,
+		    0,
+		    ac->count - ac->start);
+
+   to->StrideB = sizeof(GLubyte);
+   to->Type = GL_UNSIGNED_BYTE;
    ac->IsCached.EdgeFlag = GL_TRUE;
 }
 
@@ -385,10 +384,10 @@ static void import_edgeflag( GLcontext *ctx,
 
 /* Externals to request arrays with specific properties:
  */
-struct gl_client_array *_ac_import_texcoord( GLcontext *ctx, 
+struct gl_client_array *_ac_import_texcoord( GLcontext *ctx,
 					     GLuint unit,
 					     GLenum type,
-					     GLuint reqstride, 
+					     GLuint reqstride,
 					     GLuint reqsize,
 					     GLboolean reqwriteable,
 					     GLboolean *writeable )
@@ -402,14 +401,14 @@ struct gl_client_array *_ac_import_texcoord( GLcontext *ctx,
 
    /* Is the request impossible?
     */
-   if (reqsize != 0 && ac->Raw.TexCoord[unit].Size > reqsize)
+   if (reqsize != 0 && ac->Raw.TexCoord[unit].Size > (GLint) reqsize)
       return 0;
 
    /* Do we need to pull in a copy of the client data:
     */
    if (ac->Raw.TexCoord[unit].Type != type ||
-       (reqstride != 0 && ac->Raw.TexCoord[unit].StrideB != reqstride) ||
-       reqwriteable) 
+       (reqstride != 0 && ac->Raw.TexCoord[unit].StrideB != (GLint)reqstride) ||
+       reqwriteable)
    {
       if (!ac->IsCached.TexCoord[unit])
 	 import_texcoord(ctx, unit, type, reqstride );
@@ -422,9 +421,9 @@ struct gl_client_array *_ac_import_texcoord( GLcontext *ctx,
    }
 }
 
-struct gl_client_array *_ac_import_vertex( GLcontext *ctx, 
+struct gl_client_array *_ac_import_vertex( GLcontext *ctx,
 					   GLenum type,
-					   GLuint reqstride, 
+					   GLuint reqstride,
 					   GLuint reqsize,
 					   GLboolean reqwriteable,
 					   GLboolean *writeable )
@@ -438,14 +437,14 @@ struct gl_client_array *_ac_import_vertex( GLcontext *ctx,
 
    /* Is the request impossible?
     */
-   if (reqsize != 0 && ac->Raw.Vertex.Size > reqsize)
+   if (reqsize != 0 && ac->Raw.Vertex.Size > (GLint) reqsize)
       return 0;
 
    /* Do we need to pull in a copy of the client data:
     */
    if (ac->Raw.Vertex.Type != type ||
-       (reqstride != 0 && ac->Raw.Vertex.StrideB != reqstride) ||
-       reqwriteable) 
+       (reqstride != 0 && ac->Raw.Vertex.StrideB != (GLint) reqstride) ||
+       reqwriteable)
    {
       if (!ac->IsCached.Vertex)
 	 import_vertex(ctx, type, reqstride );
@@ -458,24 +457,24 @@ struct gl_client_array *_ac_import_vertex( GLcontext *ctx,
    }
 }
 
-struct gl_client_array *_ac_import_normal( GLcontext *ctx, 
-					     GLenum type,
-					     GLuint reqstride, 
-					     GLboolean reqwriteable,
-					     GLboolean *writeable )
+struct gl_client_array *_ac_import_normal( GLcontext *ctx,
+					   GLenum type,
+					   GLuint reqstride,
+					   GLboolean reqwriteable,
+					   GLboolean *writeable )
 {
    ACcontext *ac = AC_CONTEXT(ctx);
 
    /* Can we keep the existing version?
     */
-   if (ac->NewArrayState & _NEW_ARRAY_NORMAL) 
+   if (ac->NewArrayState & _NEW_ARRAY_NORMAL)
       reset_normal( ctx );
 
    /* Do we need to pull in a copy of the client data:
     */
    if (ac->Raw.Normal.Type != type ||
-       (reqstride != 0 && ac->Raw.Normal.StrideB != reqstride) ||
-       reqwriteable) 
+       (reqstride != 0 && ac->Raw.Normal.StrideB != (GLint) reqstride) ||
+       reqwriteable)
    {
       if (!ac->IsCached.Normal)
 	 import_normal(ctx, type, reqstride );
@@ -488,9 +487,9 @@ struct gl_client_array *_ac_import_normal( GLcontext *ctx,
    }
 }
 
-struct gl_client_array *_ac_import_color( GLcontext *ctx, 
+struct gl_client_array *_ac_import_color( GLcontext *ctx,
 					  GLenum type,
-					  GLuint reqstride, 
+					  GLuint reqstride,
 					  GLuint reqsize,
 					  GLboolean reqwriteable,
 					  GLboolean *writeable )
@@ -499,20 +498,20 @@ struct gl_client_array *_ac_import_color( GLcontext *ctx,
 
    /* Can we keep the existing version?
     */
-   if (ac->NewArrayState & _NEW_ARRAY_COLOR) 
+   if (ac->NewArrayState & _NEW_ARRAY_COLOR)
       reset_color( ctx );
 
    /* Is the request impossible?
     */
-   if (reqsize != 0 && ac->Raw.Color.Size > reqsize) {
+   if (reqsize != 0 && ac->Raw.Color.Size > (GLint) reqsize) {
       return 0;
    }
 
    /* Do we need to pull in a copy of the client data:
     */
    if (ac->Raw.Color.Type != type ||
-       (reqstride != 0 && ac->Raw.Color.StrideB != reqstride) ||
-       reqwriteable) 
+       (reqstride != 0 && ac->Raw.Color.StrideB != (GLint) reqstride) ||
+       reqwriteable)
    {
       if (!ac->IsCached.Color)
 	 import_color(ctx, type, reqstride );
@@ -525,9 +524,9 @@ struct gl_client_array *_ac_import_color( GLcontext *ctx,
    }
 }
 
-struct gl_client_array *_ac_import_index( GLcontext *ctx, 
+struct gl_client_array *_ac_import_index( GLcontext *ctx,
 					  GLenum type,
-					  GLuint reqstride, 
+					  GLuint reqstride,
 					  GLboolean reqwriteable,
 					  GLboolean *writeable )
 {
@@ -535,15 +534,15 @@ struct gl_client_array *_ac_import_index( GLcontext *ctx,
 
    /* Can we keep the existing version?
     */
-   if (ac->NewArrayState & _NEW_ARRAY_INDEX) 
+   if (ac->NewArrayState & _NEW_ARRAY_INDEX)
       reset_index( ctx );
 
 
    /* Do we need to pull in a copy of the client data:
     */
    if (ac->Raw.Index.Type != type ||
-       (reqstride != 0 && ac->Raw.Index.StrideB != reqstride) ||
-       reqwriteable) 
+       (reqstride != 0 && ac->Raw.Index.StrideB != (GLint) reqstride) ||
+       reqwriteable)
    {
       if (!ac->IsCached.Index)
 	 import_index(ctx, type, reqstride );
@@ -556,9 +555,9 @@ struct gl_client_array *_ac_import_index( GLcontext *ctx,
    }
 }
 
-struct gl_client_array *_ac_import_secondarycolor( GLcontext *ctx, 
+struct gl_client_array *_ac_import_secondarycolor( GLcontext *ctx,
 						   GLenum type,
-						   GLuint reqstride, 
+						   GLuint reqstride,
 						   GLuint reqsize,
 						   GLboolean reqwriteable,
 						   GLboolean *writeable )
@@ -567,19 +566,19 @@ struct gl_client_array *_ac_import_secondarycolor( GLcontext *ctx,
 
    /* Can we keep the existing version?
     */
-   if (ac->NewArrayState & _NEW_ARRAY_SECONDARYCOLOR) 
+   if (ac->NewArrayState & _NEW_ARRAY_SECONDARYCOLOR)
       reset_secondarycolor( ctx );
 
    /* Is the request impossible?
     */
-   if (reqsize != 0 && ac->Raw.SecondaryColor.Size > reqsize)
+   if (reqsize != 0 && ac->Raw.SecondaryColor.Size > (GLint) reqsize)
       return 0;
 
    /* Do we need to pull in a copy of the client data:
     */
    if (ac->Raw.SecondaryColor.Type != type ||
-       (reqstride != 0 && ac->Raw.SecondaryColor.StrideB != reqstride) ||
-       reqwriteable) 
+       (reqstride != 0 && ac->Raw.SecondaryColor.StrideB != (GLint)reqstride) ||
+       reqwriteable)
    {
       if (!ac->IsCached.SecondaryColor)
 	 import_secondarycolor(ctx, type, reqstride );
@@ -592,9 +591,9 @@ struct gl_client_array *_ac_import_secondarycolor( GLcontext *ctx,
    }
 }
 
-struct gl_client_array *_ac_import_fogcoord( GLcontext *ctx, 
+struct gl_client_array *_ac_import_fogcoord( GLcontext *ctx,
 					     GLenum type,
-					     GLuint reqstride, 
+					     GLuint reqstride,
 					     GLboolean reqwriteable,
 					     GLboolean *writeable )
 {
@@ -602,14 +601,14 @@ struct gl_client_array *_ac_import_fogcoord( GLcontext *ctx,
 
    /* Can we keep the existing version?
     */
-   if (ac->NewArrayState & _NEW_ARRAY_FOGCOORD) 
+   if (ac->NewArrayState & _NEW_ARRAY_FOGCOORD)
       reset_fogcoord( ctx );
 
    /* Do we need to pull in a copy of the client data:
     */
    if (ac->Raw.FogCoord.Type != type ||
-       (reqstride != 0 && ac->Raw.FogCoord.StrideB != reqstride) ||
-       reqwriteable) 
+       (reqstride != 0 && ac->Raw.FogCoord.StrideB != (GLint) reqstride) ||
+       reqwriteable)
    {
       if (!ac->IsCached.FogCoord)
 	 import_fogcoord(ctx, type, reqstride );
@@ -625,9 +624,9 @@ struct gl_client_array *_ac_import_fogcoord( GLcontext *ctx,
 
 
 
-struct gl_client_array *_ac_import_edgeflag( GLcontext *ctx, 
+struct gl_client_array *_ac_import_edgeflag( GLcontext *ctx,
 					     GLenum type,
-					     GLuint reqstride, 
+					     GLuint reqstride,
 					     GLboolean reqwriteable,
 					     GLboolean *writeable )
 {
@@ -635,14 +634,14 @@ struct gl_client_array *_ac_import_edgeflag( GLcontext *ctx,
 
    /* Can we keep the existing version?
     */
-   if (ac->NewArrayState & _NEW_ARRAY_EDGEFLAG) 
+   if (ac->NewArrayState & _NEW_ARRAY_EDGEFLAG)
       reset_edgeflag( ctx );
 
    /* Do we need to pull in a copy of the client data:
     */
    if (ac->Raw.EdgeFlag.Type != type ||
-       (reqstride != 0 && ac->Raw.EdgeFlag.StrideB != reqstride) ||
-       reqwriteable) 
+       (reqstride != 0 && ac->Raw.EdgeFlag.StrideB != (GLint) reqstride) ||
+       reqwriteable)
    {
       if (!ac->IsCached.EdgeFlag)
 	 import_edgeflag(ctx, type, reqstride );
@@ -660,17 +659,11 @@ struct gl_client_array *_ac_import_edgeflag( GLcontext *ctx,
 
 
 /* Clients must call this function to validate state and set bounds
- * before importing any data: 
+ * before importing any data:
  */
 void _ac_import_range( GLcontext *ctx, GLuint start, GLuint count )
 {
    ACcontext *ac = AC_CONTEXT(ctx);
-
-   /* Discard cached data which has been invalidated by state changes
-    * since last time.  **ALREADY DONE**
-   if (ac->NewState)
-      _ac_update_state( ctx );
-    */
 
    if (!ctx->Array.LockCount) {
       /* Not locked, discard cached data.  Changes to lock
@@ -685,7 +678,7 @@ void _ac_import_range( GLcontext *ctx, GLuint start, GLuint count )
        * the whole locked range always be dealt with, otherwise hard to
        * maintain cached data in the face of clipping.
        */
-      ac->NewArrayState |= ~ctx->Array._Enabled; 
+      ac->NewArrayState |= ~ctx->Array._Enabled;
       ac->start = ctx->Array.LockFirst;
       ac->count = ctx->Array.LockCount;
       ASSERT(ac->start == start); /* hmm? */
@@ -706,15 +699,15 @@ _ac_import_elements( GLcontext *ctx,
 		     CONST void *indices )
 {
    ACcontext *ac = AC_CONTEXT(ctx);
-      
+
    if (old_type == new_type)
       return indices;
 
    if (ac->elt_size < count * sizeof(GLuint)) {
       if (ac->Elts) FREE(ac->Elts);
-      while (ac->elt_size < count * sizeof(GLuint)) 
+      while (ac->elt_size < count * sizeof(GLuint))
 	 ac->elt_size *= 2;
-      ac->Elts = MALLOC(ac->elt_size);
+      ac->Elts = (GLuint *) MALLOC(ac->elt_size);
    }
 
    switch (new_type) {
@@ -727,7 +720,7 @@ _ac_import_elements( GLcontext *ctx,
    case GL_UNSIGNED_INT: {
       GLuint *out = (GLuint *)ac->Elts;
       GLuint i;
-      
+
       switch (old_type) {
       case GL_UNSIGNED_BYTE: {
 	 CONST GLubyte *in = (CONST GLubyte *)indices;
@@ -754,4 +747,3 @@ _ac_import_elements( GLcontext *ctx,
 
    return 0;
 }
-

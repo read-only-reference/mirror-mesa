@@ -1,10 +1,10 @@
-/* $Id: clip.c,v 1.19 2000/12/26 05:09:27 keithw Exp $ */
+/* $Id: clip.c,v 1.22 2001/03/12 00:48:37 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -59,8 +59,8 @@ _mesa_ClipPlane( GLenum plane, const GLdouble *eq )
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    p = (GLint) plane - (GLint) GL_CLIP_PLANE0;
-   if (p < 0 || p >= ctx->Const.MaxClipPlanes) {
-      gl_error( ctx, GL_INVALID_ENUM, "glClipPlane" );
+   if (p < 0 || p >= (GLint) ctx->Const.MaxClipPlanes) {
+      _mesa_error( ctx, GL_INVALID_ENUM, "glClipPlane" );
       return;
    }
 
@@ -80,23 +80,23 @@ _mesa_ClipPlane( GLenum plane, const GLdouble *eq )
    if (ctx->ModelView.flags & MAT_DIRTY)
       _math_matrix_analyse( &ctx->ModelView );
 
-   gl_transform_vector( equation, equation, ctx->ModelView.inv );
+   _mesa_transform_vector( equation, equation, ctx->ModelView.inv );
 
    if (TEST_EQ_4V(ctx->Transform.EyeUserPlane[p], equation))
       return;
-   
+
    FLUSH_VERTICES(ctx, _NEW_TRANSFORM);
    COPY_4FV(ctx->Transform.EyeUserPlane[p], equation);
 
    /* Update derived state.  This state also depends on the projection
     * matrix, and is recalculated on changes to the projection matrix by
-    * code in gl_update_state().
+    * code in _mesa_update_state().
     */
    if (ctx->Transform.ClipEnabled[p]) {
       if (ctx->ProjectionMatrix.flags & MAT_DIRTY)
 	 _math_matrix_analyse( &ctx->ProjectionMatrix );
 
-      gl_transform_vector( ctx->Transform._ClipUserPlane[p],
+      _mesa_transform_vector( ctx->Transform._ClipUserPlane[p],
 			   ctx->Transform.EyeUserPlane[p],
 			   ctx->ProjectionMatrix.inv );
    }
@@ -114,8 +114,8 @@ _mesa_GetClipPlane( GLenum plane, GLdouble *equation )
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    p = (GLint) (plane - GL_CLIP_PLANE0);
-   if (p < 0 || p >= ctx->Const.MaxClipPlanes) {
-      gl_error( ctx, GL_INVALID_ENUM, "glGetClipPlane" );
+   if (p < 0 || p >= (GLint) ctx->Const.MaxClipPlanes) {
+      _mesa_error( ctx, GL_INVALID_ENUM, "glGetClipPlane" );
       return;
    }
 

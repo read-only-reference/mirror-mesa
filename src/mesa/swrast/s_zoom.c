@@ -1,21 +1,21 @@
-/* $Id: s_zoom.c,v 1.2 2000/11/05 18:24:41 keithw Exp $ */
+/* $Id: s_zoom.c,v 1.4 2001/03/12 00:48:42 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -44,10 +44,10 @@
  *         y0 - location of first row in the image we're drawing.
  */
 void
-gl_write_zoomed_rgba_span( GLcontext *ctx,
-                           GLuint n, GLint x, GLint y, const GLdepth z[],
-			   const GLfixed *fog,
-                           CONST GLchan rgba[][4], GLint y0 )
+_mesa_write_zoomed_rgba_span( GLcontext *ctx,
+                              GLuint n, GLint x, GLint y, const GLdepth z[],
+                              const GLfixed *fog,
+                              CONST GLchan rgba[][4], GLint y0 )
 {
    GLint m;
    GLint r0, r1, row, r;
@@ -142,7 +142,7 @@ gl_write_zoomed_rgba_span( GLcontext *ctx,
 
    /* write the span */
    for (r=r0; r<r1; r++) {
-      gl_write_rgba_span( ctx, m, x+skipcol, r, zdepth, 
+      _mesa_write_rgba_span( ctx, m, x+skipcol, r, zdepth,
 			  (fog ? zfog : 0),
 			  zrgba, GL_BITMAP );
    }
@@ -151,10 +151,10 @@ gl_write_zoomed_rgba_span( GLcontext *ctx,
 
 
 void
-gl_write_zoomed_rgb_span( GLcontext *ctx,
-                          GLuint n, GLint x, GLint y, const GLdepth z[],
-			  const GLfixed *fog,
-                          CONST GLchan rgb[][3], GLint y0 )
+_mesa_write_zoomed_rgb_span( GLcontext *ctx,
+                             GLuint n, GLint x, GLint y, const GLdepth z[],
+                             const GLfixed *fog,
+                             CONST GLchan rgb[][3], GLint y0 )
 {
    GLint m;
    GLint r0, r1, row, r;
@@ -253,7 +253,7 @@ gl_write_zoomed_rgb_span( GLcontext *ctx,
 
    /* write the span */
    for (r=r0; r<r1; r++) {
-      gl_write_rgba_span( ctx, m, x+skipcol, r, zdepth, 
+      _mesa_write_rgba_span( ctx, m, x+skipcol, r, zdepth,
 			  (fog ? zfog : 0), zrgba, GL_BITMAP );
    }
 }
@@ -264,10 +264,10 @@ gl_write_zoomed_rgb_span( GLcontext *ctx,
  * As above, but write CI pixels.
  */
 void
-gl_write_zoomed_index_span( GLcontext *ctx,
-                            GLuint n, GLint x, GLint y, const GLdepth z[],
-			    const GLfixed *fog,
-                            const GLuint indexes[], GLint y0 )
+_mesa_write_zoomed_index_span( GLcontext *ctx,
+                               GLuint n, GLint x, GLint y, const GLdepth z[],
+                               const GLfixed *fog,
+                               const GLuint indexes[], GLint y0 )
 {
    GLint m;
    GLint r0, r1, row, r;
@@ -360,7 +360,7 @@ gl_write_zoomed_index_span( GLcontext *ctx,
 
    /* write the span */
    for (r=r0; r<r1; r++) {
-      gl_write_index_span( ctx, m, x+skipcol, r, zdepth, 
+      _mesa_write_index_span( ctx, m, x+skipcol, r, zdepth,
 			   (fog ? zfog : 0), zindexes, GL_BITMAP );
    }
 }
@@ -371,9 +371,9 @@ gl_write_zoomed_index_span( GLcontext *ctx,
  * As above, but write stencil values.
  */
 void
-gl_write_zoomed_stencil_span( GLcontext *ctx,
-                              GLuint n, GLint x, GLint y,
-                              const GLstencil stencil[], GLint y0 )
+_mesa_write_zoomed_stencil_span( GLcontext *ctx,
+                                 GLuint n, GLint x, GLint y,
+                                 const GLstencil stencil[], GLint y0 )
 {
    GLint m;
    GLint r0, r1, row, r;

@@ -1,10 +1,10 @@
-/* $Id: t_vb_points.c,v 1.1 2000/12/26 05:09:33 keithw Exp $ */
+/* $Id: t_vb_points.c,v 1.4 2001/03/12 00:48:44 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -23,7 +23,7 @@
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
- * Author:
+ * Authors:
  *    Brian Paul <brian@valinux.com>
  */
 
@@ -34,16 +34,16 @@
 
 
 struct point_stage_data {
-   GLvector1f PointSize;	
+   GLvector1f PointSize;
 };
 
-#define POINT_STAGE_DATA(stage) ((struct point_stage_data *)stage->private)
+#define POINT_STAGE_DATA(stage) ((struct point_stage_data *)stage->privatePtr)
 
 
 /*
  * Compute attenuated point sizes
  */
-static GLboolean run_point_stage( GLcontext *ctx, 
+static GLboolean run_point_stage( GLcontext *ctx,
 				  struct gl_pipeline_stage *stage )
 {
    struct point_stage_data *store = POINT_STAGE_DATA(stage);
@@ -66,7 +66,7 @@ static GLboolean run_point_stage( GLcontext *ctx,
    }
 
    VB->PointSizePtr = &store->PointSize;
-   
+
    return GL_TRUE;
 }
 
@@ -84,12 +84,12 @@ static GLboolean alloc_point_data( GLcontext *ctx,
 {
    struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
    struct point_stage_data *store;
-   stage->private = MALLOC(sizeof(*store));
+   stage->privatePtr = MALLOC(sizeof(*store));
    store = POINT_STAGE_DATA(stage);
    if (!store)
       return GL_FALSE;
 
-   gl_vector1f_alloc( &store->PointSize, 0, VB->Size, 32 );
+   _mesa_vector1f_alloc( &store->PointSize, 0, VB->Size, 32 );
 
    /* Now run the stage.
     */
@@ -102,14 +102,14 @@ static void free_point_data( struct gl_pipeline_stage *stage )
 {
    struct point_stage_data *store = POINT_STAGE_DATA(stage);
    if (store) {
-      gl_vector1f_free( &store->PointSize );
+      _mesa_vector1f_free( &store->PointSize );
       FREE( store );
-      stage->private = 0;
+      stage->privatePtr = 0;
    }
 }
 
-const struct gl_pipeline_stage _tnl_point_attenuation_stage = 
-{ 
+const struct gl_pipeline_stage _tnl_point_attenuation_stage =
+{
    "point size attenuation",	/* name */
    _NEW_POINT,			/* build_state_change */
    _NEW_POINT,			/* run_state_change */

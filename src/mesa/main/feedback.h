@@ -1,10 +1,10 @@
-/* $Id: feedback.h,v 1.5 2000/11/22 07:32:17 joukj Exp $ */
+/* $Id: feedback.h,v 1.7 2001/03/12 00:48:37 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
- * Version:  3.3
+ * Version:  3.5
  *
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -39,14 +39,14 @@
 	CTX->Feedback.Count++;
 
 
-extern void gl_feedback_vertex( GLcontext *ctx,
+extern void _mesa_feedback_vertex( GLcontext *ctx,
                                 const GLfloat win[4],
                                 const GLfloat color[4],
 				GLuint index,
                                 const GLfloat texcoord[4] );
 
 
-extern void gl_update_hitflag( GLcontext *ctx, GLfloat z );
+extern void _mesa_update_hitflag( GLcontext *ctx, GLfloat z );
 
 
 extern void
@@ -75,4 +75,3 @@ _mesa_RenderMode( GLenum mode );
 
 
 #endif
-

@@ -1,10 +1,10 @@
-/* $Id: m_debug_xform.c,v 1.2 2001/02/03 08:41:04 gareth Exp $ */
+/* $Id: m_debug_xform.c,v 1.8 2001/03/30 14:44:43 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -126,23 +126,18 @@ static char *mstrings[7] = {
 };
 
 
-/* ================================================================
+/* =============================================================
  * Reference transformations
  */
 
 static void ref_transform( GLvector4f *dst,
                            const GLmatrix *mat,
-                           const GLvector4f *src,
-                           const GLubyte *clipmask,
-                           const GLubyte flag )
+                           const GLvector4f *src )
 {
-   int i;
+   GLuint i;
    GLfloat *s = (GLfloat *)src->start;
    GLfloat (*d)[4] = (GLfloat (*)[4])dst->start;
    const GLfloat *m = mat->m;
-
-   (void) clipmask;
-   (void) flag;
 
    for ( i = 0 ; i < src->count ; i++ ) {
       TRANSFORM_POINT( d[i], m, s );
@@ -151,21 +146,20 @@ static void ref_transform( GLvector4f *dst,
 }
 
 
-/* ================================================================
+/* =============================================================
  * Vertex transformation tests
  */
 
-static GLfloat s[TEST_COUNT][5] ALIGN16;
+static GLfloat s[TEST_COUNT][4] ALIGN16;
 static GLfloat d[TEST_COUNT][4] ALIGN16;
 static GLfloat r[TEST_COUNT][4] ALIGN16;
 
-static int test_transform_function( transform_func func, int psize, int mtype,
-                                    int masked, long *cycles )
+static int test_transform_function( transform_func func, int psize,
+				    int mtype, long *cycles )
 {
    GLvector4f source[1], dest[1], ref[1];
    GLmatrix mat[1];
    GLfloat *m;
-   GLubyte mask[TEST_COUNT];
    int i, j;
 #ifdef  RUN_DEBUG_BENCHMARK
    int cycle_i;                /* the counter for the benchmarks we run */
@@ -174,7 +168,7 @@ static int test_transform_function( transform_func func, int psize, int mtype,
    (void) cycles;
 
    if ( psize > 4 ) {
-      gl_problem( NULL, "test_transform_function called with psize > 4\n" );
+      _mesa_problem( NULL, "test_transform_function called with psize > 4\n" );
       return 0;
    }
 
@@ -182,6 +176,7 @@ static int test_transform_function( transform_func func, int psize, int mtype,
    mat->type = mtypes[mtype];
 
    m = mat->m;
+   ASSERT( ((GLuint)m & 15) == 0 );
 
    init_matrix( m );
 
@@ -206,7 +201,6 @@ static int test_transform_function( transform_func func, int psize, int mtype,
    }
 
    for ( i = 0 ; i < TEST_COUNT ; i++) {
-      mask[i] = i % 2;				/* mask every 2nd element */
       ASSIGN_4V( d[i], 0.0, 0.0, 0.0, 1.0 );
       ASSIGN_4V( s[i], 0.0, 0.0, 0.0, 1.0 );
       for ( j = 0 ; j < psize ; j++ )
@@ -234,31 +228,18 @@ static int test_transform_function( transform_func func, int psize, int mtype,
    ref->size = 0;
    ref->flags = 0;
 
-   ref_transform( ref, mat, source, NULL, 0 );
+   ref_transform( ref, mat, source );
 
    if ( mesa_profile ) {
-      if ( masked ) {
-         BEGIN_RACE( *cycles );
-         func( dest, mat->m, source, mask, 1 );
-         END_RACE( *cycles );
-      } else {
-         BEGIN_RACE( *cycles );
-         func( dest, mat->m, source, NULL, 0 );
-         END_RACE( *cycles );
-     }
+      BEGIN_RACE( *cycles );
+      func( dest, mat->m, source );
+      END_RACE( *cycles );
    }
    else {
-      if ( masked ) {
-         func( dest, mat->m, source, mask, 1 );
-      } else {
-         func( dest, mat->m, source, NULL, 0 );
-      }
+      func( dest, mat->m, source );
    }
 
    for ( i = 0 ; i < TEST_COUNT ; i++ ) {
-      if ( masked && (mask[i] & 1) )
-         continue;
-
       for ( j = 0 ; j < 4 ; j++ ) {
          if ( significand_match( d[i][j], r[i][j] ) < REQUIRED_PRECISION ) {
             printf( "-----------------------------\n" );
@@ -286,8 +267,8 @@ static int test_transform_function( transform_func func, int psize, int mtype,
 
 void _math_test_all_transform_functions( char *description )
 {
-   int masked, psize, mtype;
-   long benchmark_tab[2][4][7];
+   int psize, mtype;
+   long benchmark_tab[4][7];
    static int first_time = 1;
 
    if ( first_time ) {
@@ -305,47 +286,41 @@ void _math_test_all_transform_functions( char *description )
    }
 #endif
 
-   for ( masked = 0 ; masked <= 1 ; masked++ ) {
-      int cma = masked ? 1 : 0;
-      char *cmastring = masked ? "CULL_MASK_ACTIVE" : "0";
-
 #ifdef RUN_DEBUG_BENCHMARK
-      if ( mesa_profile ) {
-         printf( "\n culling: %s \n", masked ? "CULL_MASK_ACTIVE" : "0" );
-         for ( psize = 1 ; psize <= 4 ; psize++ ) {
-            printf( " p%d\t", psize );
-         }
-         printf( "\n--------------------------------------------------------\n" );
+   if ( mesa_profile ) {
+      printf( "\n" );
+      for ( psize = 1 ; psize <= 4 ; psize++ ) {
+	 printf( " p%d\t", psize );
       }
+      printf( "\n--------------------------------------------------------\n" );
+   }
 #endif
 
-      for ( mtype = 0 ; mtype < 7 ; mtype++ ) {
-         for ( psize = 1 ; psize <= 4 ; psize++ ) {
-            transform_func func = gl_transform_tab[cma][psize][mtypes[mtype]];
-            long *cycles = &(benchmark_tab[cma][psize-1][mtype]);
+   for ( mtype = 0 ; mtype < 7 ; mtype++ ) {
+      for ( psize = 1 ; psize <= 4 ; psize++ ) {
+	 transform_func func = _mesa_transform_tab[psize][mtypes[mtype]];
+	 long *cycles = &(benchmark_tab[psize-1][mtype]);
 
-            if ( test_transform_function( func, psize, mtype,
-					  masked, cycles ) == 0 ) {
-               char buf[100];
-               sprintf( buf, "gl_transform_tab[%s][%d][%s] failed test (%s)",
-                        cmastring, psize, mstrings[mtype], description );
-               gl_problem( NULL, buf );
-            }
+	 if ( test_transform_function( func, psize, mtype, cycles ) == 0 ) {
+	    char buf[100];
+	    sprintf( buf, "_mesa_transform_tab[0][%d][%s] failed test (%s)",
+		     psize, mstrings[mtype], description );
+	    _mesa_problem( NULL, buf );
+	 }
 #ifdef RUN_DEBUG_BENCHMARK
-            if ( mesa_profile )
-               printf( " %li\t", benchmark_tab[cma][psize-1][mtype] );
-#endif
-         }
-#ifdef RUN_DEBUG_BENCHMARK
-         if ( mesa_profile )
-            printf( " | [%s]\n", mstrings[mtype] );
+	 if ( mesa_profile )
+	    printf( " %li\t", benchmark_tab[psize-1][mtype] );
 #endif
       }
 #ifdef RUN_DEBUG_BENCHMARK
       if ( mesa_profile )
-         printf( "\n" );
+	 printf( " | [%s]\n", mstrings[mtype] );
 #endif
    }
+#ifdef RUN_DEBUG_BENCHMARK
+   if ( mesa_profile )
+      printf( "\n" );
+#endif
 }
 
 

@@ -1,4 +1,4 @@
-/* $Id: texstore.c,v 1.8 2001/02/21 16:02:27 brianp Exp $ */
+/* $Id: texstore.c,v 1.21 2001/03/28 20:40:51 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -44,409 +44,9 @@
 #include "image.h"
 #include "macros.h"
 #include "mem.h"
+#include "texformat.h"
 #include "teximage.h"
 #include "texstore.h"
-#include "swrast/s_depth.h"  /* XXX this is kind of a cheat */
-#include "swrast/s_span.h"
-
-
-/*
- * Default 1-D texture texel fetch function.  This will typically be
- * overridden by hardware drivers which store their texture images in
- * special ways.
- */
-static void
-fetch_1d_texel(const struct gl_texture_image *img,
-               GLint i, GLint j, GLint k, GLvoid *texel)
-{
-   switch (img->Format) {
-   case GL_RGBA:
-      {
-         const GLchan *src = (GLchan *) img->Data + i * 4;
-         GLchan *rgba = (GLchan *) texel;
-         COPY_CHAN4(rgba, src);
-         return;
-      }
-   case GL_RGB:
-      {
-         const GLchan *src = (GLchan *) img->Data + i * 3;
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[1];
-         rgba[BCOMP] = src[2];
-         rgba[ACOMP] = CHAN_MAX;
-         return;
-      }
-   case GL_ALPHA:
-      {
-         const GLchan *src = (GLchan *) img->Data + i;
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = 0;
-         rgba[GCOMP] = 0;
-         rgba[BCOMP] = 0;
-         rgba[ACOMP] = src[0];
-         return;
-      }
-   case GL_LUMINANCE:
-      {
-         const GLchan *src = (GLchan *) img->Data + i;
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[0];
-         rgba[BCOMP] = src[0];
-         rgba[ACOMP] = CHAN_MAX;
-         return;
-      }
-   case GL_INTENSITY:
-      {
-         const GLchan *src = (GLchan *) img->Data + i;
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[0];
-         rgba[BCOMP] = src[0];
-         rgba[ACOMP] = src[0];
-         return;
-      }
-   case GL_LUMINANCE_ALPHA:
-      {
-         const GLchan *src = (GLchan *) img->Data + i * 2;
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[0];
-         rgba[BCOMP] = src[0];
-         rgba[ACOMP] = src[1];
-         return;
-      }
-   case GL_COLOR_INDEX:
-      {
-         const GLchan *src = (GLchan *) img->Data + i;
-         GLchan *index = (GLchan *) texel;
-         *index = *src;
-         return;
-      }
-   case GL_DEPTH_COMPONENT:
-      {
-         const GLfloat *src = (GLfloat *) img->Data + i;
-         GLfloat *depth = (GLfloat *) texel;
-         *depth = *src;
-         return;
-      }
-   default:
-      gl_problem(NULL, "Bad format in fetch_1d_texel");
-   }
-}
-
-
-/*
- * Default 2-D texture texel fetch function.
- */
-static void
-fetch_2d_texel(const struct gl_texture_image *img,
-               GLint i, GLint j, GLint k, GLvoid *texel)
-{
-   switch (img->Format) {
-   case GL_RGBA:
-      {
-         const GLchan *src = (GLchan *) img->Data + (img->Width * j + i) * 4;
-         GLchan *rgba = (GLchan *) texel;
-         COPY_CHAN4(rgba, src);
-         return;
-      }
-   case GL_RGB:
-      {
-         const GLchan *src = (GLchan *) img->Data + (img->Width * j + i) * 3;
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[1];
-         rgba[BCOMP] = src[2];
-         rgba[ACOMP] = CHAN_MAX;
-         return;
-      }
-   case GL_ALPHA:
-      {
-         const GLchan *src = (GLchan *) img->Data + (img->Width * j + i);
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = 0;
-         rgba[GCOMP] = 0;
-         rgba[BCOMP] = 0;
-         rgba[ACOMP] = src[0];
-         return;
-      }
-   case GL_LUMINANCE:
-      {
-         const GLchan *src = (GLchan *) img->Data + (img->Width * j + i);
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[0];
-         rgba[BCOMP] = src[0];
-         rgba[ACOMP] = CHAN_MAX;
-         return;
-      }
-   case GL_INTENSITY:
-      {
-         const GLchan *src = (GLchan *) img->Data + (img->Width * j + i);
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[0];
-         rgba[BCOMP] = src[0];
-         rgba[ACOMP] = src[0];
-         return;
-      }
-   case GL_LUMINANCE_ALPHA:
-      {
-         const GLchan *src = (GLchan *) img->Data + (img->Width * j + i) * 2;
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[0];
-         rgba[BCOMP] = src[0];
-         rgba[ACOMP] = src[1];
-         return;
-      }
-   case GL_COLOR_INDEX:
-      {
-         const GLchan *src = (GLchan *) img->Data + (img->Width * j + i);
-         GLchan *index = (GLchan *) texel;
-         *index = *src;
-         return;
-      }
-   case GL_DEPTH_COMPONENT:
-      {
-         const GLfloat *src = (GLfloat *) img->Data + (img->Width * j + i);
-         GLfloat *depth = (GLfloat *) texel;
-         *depth = *src;
-         return;
-      }
-   default:
-      gl_problem(NULL, "Bad format in fetch_2d_texel");
-   }
-}
-
-
-/*
- * Default 2-D texture texel fetch function.
- */
-static void
-fetch_3d_texel(const struct gl_texture_image *img,
-               GLint i, GLint j, GLint k, GLvoid *texel)
-{
-   const GLint width = img->Width;
-   const GLint rectArea = width * img->Height;
-
-   switch (img->Format) {
-   case GL_RGBA:
-      {
-         const GLchan *src = (GLchan *) img->Data
-                           + (rectArea * k + width * j + i) * 4;
-         GLchan *rgba = (GLchan *) texel;
-         COPY_CHAN4(rgba, src);
-         return;
-      }
-   case GL_RGB:
-      {
-         const GLchan *src = (GLchan *) img->Data
-                           + (rectArea * k + width * j + i) * 3;
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[1];
-         rgba[BCOMP] = src[2];
-         rgba[ACOMP] = CHAN_MAX;
-         return;
-      }
-   case GL_ALPHA:
-      {
-         const GLchan *src = (GLchan *) img->Data
-                           + (rectArea * k + width * j + i);
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = 0;
-         rgba[GCOMP] = 0;
-         rgba[BCOMP] = 0;
-         rgba[ACOMP] = src[0];
-         return;
-      }
-   case GL_LUMINANCE:
-      {
-         const GLchan *src = (GLchan *) img->Data
-                           + (rectArea * k + width * j + i);
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[0];
-         rgba[BCOMP] = src[0];
-         rgba[ACOMP] = CHAN_MAX;
-         return;
-      }
-   case GL_INTENSITY:
-      {
-         const GLchan *src = (GLchan *) img->Data
-                           + (rectArea * k + width * j + i);
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[0];
-         rgba[BCOMP] = src[0];
-         rgba[ACOMP] = src[0];
-         return;
-      }
-   case GL_LUMINANCE_ALPHA:
-      {
-         const GLchan *src = (GLchan *) img->Data
-                           + (rectArea * k + width * j + i) * 2;
-         GLchan *rgba = (GLchan *) texel;
-         rgba[RCOMP] = src[0];
-         rgba[GCOMP] = src[0];
-         rgba[BCOMP] = src[0];
-         rgba[ACOMP] = src[1];
-         return;
-      }
-   case GL_COLOR_INDEX:
-      {
-         const GLchan *src = (GLchan *) img->Data
-                           + (rectArea * k + width * j + i);
-         GLchan *index = (GLchan *) texel;
-         *index = *src;
-         return;
-      }
-   case GL_DEPTH_COMPONENT:
-      {
-         const GLfloat *src = (GLfloat *) img->Data
-                            + (rectArea * k + width * j + i);
-         GLfloat *depth = (GLfloat *) texel;
-         *depth = *src;
-         return;
-      }
-   default:
-      gl_problem(NULL, "Bad format in fetch_3d_texel");
-   }
-}
-
-
-
-/*
- * Examine the texImage->Format field and set the Red, Green, Blue, etc
- * texel component sizes to default values.
- * These fields are set only here by core Mesa but device drivers may
- * overwritting these fields to indicate true texel resolution.
- */
-static void
-set_teximage_component_sizes( struct gl_texture_image *texImage )
-{
-   switch (texImage->Format) {
-      case GL_ALPHA:
-         texImage->RedBits = 0;
-         texImage->GreenBits = 0;
-         texImage->BlueBits = 0;
-         texImage->AlphaBits = 8 * sizeof(GLchan);
-         texImage->IntensityBits = 0;
-         texImage->LuminanceBits = 0;
-         texImage->IndexBits = 0;
-         texImage->DepthBits = 0;
-         break;
-      case GL_LUMINANCE:
-         texImage->RedBits = 0;
-         texImage->GreenBits = 0;
-         texImage->BlueBits = 0;
-         texImage->AlphaBits = 0;
-         texImage->IntensityBits = 0;
-         texImage->LuminanceBits = 8 * sizeof(GLchan);
-         texImage->IndexBits = 0;
-         texImage->DepthBits = 0;
-         break;
-      case GL_LUMINANCE_ALPHA:
-         texImage->RedBits = 0;
-         texImage->GreenBits = 0;
-         texImage->BlueBits = 0;
-         texImage->AlphaBits = 8 * sizeof(GLchan);
-         texImage->IntensityBits = 0;
-         texImage->LuminanceBits = 8 * sizeof(GLchan);
-         texImage->IndexBits = 0;
-         texImage->DepthBits = 0;
-         break;
-      case GL_INTENSITY:
-         texImage->RedBits = 0;
-         texImage->GreenBits = 0;
-         texImage->BlueBits = 0;
-         texImage->AlphaBits = 0;
-         texImage->IntensityBits = 8 * sizeof(GLchan);
-         texImage->LuminanceBits = 0;
-         texImage->IndexBits = 0;
-         texImage->DepthBits = 0;
-         break;
-      case GL_RED:
-         texImage->RedBits = 8 * sizeof(GLchan);
-         texImage->GreenBits = 0;
-         texImage->BlueBits = 0;
-         texImage->AlphaBits = 0;
-         texImage->IntensityBits = 0;
-         texImage->LuminanceBits = 0;
-         texImage->IndexBits = 0;
-         texImage->DepthBits = 0;
-         break;
-      case GL_GREEN:
-         texImage->RedBits = 0;
-         texImage->GreenBits = 8 * sizeof(GLchan);
-         texImage->BlueBits = 0;
-         texImage->AlphaBits = 0;
-         texImage->IntensityBits = 0;
-         texImage->LuminanceBits = 0;
-         texImage->IndexBits = 0;
-         texImage->DepthBits = 0;
-         break;
-      case GL_BLUE:
-         texImage->RedBits = 0;
-         texImage->GreenBits = 0;
-         texImage->BlueBits = 8 * sizeof(GLchan);
-         texImage->AlphaBits = 0;
-         texImage->IntensityBits = 0;
-         texImage->LuminanceBits = 0;
-         texImage->IndexBits = 0;
-         texImage->DepthBits = 0;
-         break;
-      case GL_RGB:
-      case GL_BGR:
-         texImage->RedBits = 8 * sizeof(GLchan);
-         texImage->GreenBits = 8 * sizeof(GLchan);
-         texImage->BlueBits = 8 * sizeof(GLchan);
-         texImage->AlphaBits = 0;
-         texImage->IntensityBits = 0;
-         texImage->LuminanceBits = 0;
-         texImage->IndexBits = 0;
-         texImage->DepthBits = 0;
-         break;
-      case GL_RGBA:
-      case GL_BGRA:
-      case GL_ABGR_EXT:
-         texImage->RedBits = 8 * sizeof(GLchan);
-         texImage->GreenBits = 8 * sizeof(GLchan);
-         texImage->BlueBits = 8 * sizeof(GLchan);
-         texImage->AlphaBits = 8 * sizeof(GLchan);
-         texImage->IntensityBits = 0;
-         texImage->LuminanceBits = 0;
-         texImage->IndexBits = 0;
-         texImage->DepthBits = 0;
-         break;
-      case GL_COLOR_INDEX:
-         texImage->RedBits = 0;
-         texImage->GreenBits = 0;
-         texImage->BlueBits = 0;
-         texImage->AlphaBits = 0;
-         texImage->IntensityBits = 0;
-         texImage->LuminanceBits = 0;
-         texImage->IndexBits = 8 * sizeof(GLchan);
-         texImage->DepthBits = 0;
-         break;
-      case GL_DEPTH_COMPONENT:
-         texImage->RedBits = 0;
-         texImage->GreenBits = 0;
-         texImage->BlueBits = 0;
-         texImage->AlphaBits = 0;
-         texImage->IntensityBits = 0;
-         texImage->LuminanceBits = 0;
-         texImage->IndexBits = 0;
-         texImage->DepthBits = 8 * sizeof(GLfloat);
-         break;
-      default:
-         gl_problem(NULL, "unexpected format in set_teximage_component_sizes");
-   }
-}
-
 
 
 /*
@@ -454,6 +54,9 @@ set_teximage_component_sizes( struct gl_texture_image *texImage )
  * corresponding _base_ internal format:  GL_ALPHA, GL_LUMINANCE,
  * GL_LUMANCE_ALPHA, GL_INTENSITY, GL_RGB, or GL_RGBA.  Return the
  * number of components for the format.  Return -1 if invalid enum.
+ *
+ * GH: Do we really need this?  We have the number of bytes per texel
+ * in the texture format structures, so why don't we just use that?
  */
 static GLint
 components_in_intformat( GLint format )
@@ -542,18 +145,18 @@ components_in_intformat( GLint format )
  *   dimensions - 1, 2, or 3
  *   texFormat - GL_LUMINANCE, GL_INTENSITY, GL_LUMINANCE_ALPHA, GL_ALPHA,
  *               GL_RGB or GL_RGBA
- *   texAddr - destination image address
+ *   texDestAddr - destination image address
  *   srcWidth, srcHeight, srcDepth - size (in pixels) of src and dest images
  *   dstXoffset, dstYoffset, dstZoffset - position to store the image within
  *      the destination 3D texture
- *   dstRowStride, dstImageStride - dest image strides in GLchan's
+ *   dstRowStride, dstImageStride - dest image strides in bytes
  *   srcFormat - source image format (GL_ALPHA, GL_RED, GL_RGB, etc)
  *   srcType - GL_UNSIGNED_BYTE, GL_UNSIGNED_SHORT_5_6_5, GL_FLOAT, etc
  *   srcPacking - describes packing of incoming image.
  */
 void
 _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
-                        GLenum texFormat, GLchan *texAddr,
+                        GLenum texDestFormat, GLvoid *texDestAddr,
                         GLint srcWidth, GLint srcHeight, GLint srcDepth,
                         GLint dstXoffset, GLint dstYoffset, GLint dstZoffset,
                         GLint dstRowStride, GLint dstImageStride,
@@ -565,7 +168,7 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
 
    ASSERT(ctx);
    ASSERT(dimensions >= 1 && dimensions <= 3);
-   ASSERT(texAddr);
+   ASSERT(texDestAddr);
    ASSERT(srcWidth >= 1);
    ASSERT(srcHeight >= 1);
    ASSERT(srcDepth >= 1);
@@ -577,12 +180,12 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
    ASSERT(srcAddr);
    ASSERT(srcPacking);
 
-   texComponents = components_in_intformat(texFormat);
+   texComponents = components_in_intformat(texDestFormat);
 
    /* try common 2D texture cases first */
    if (!ctx->_ImageTransferState && dimensions == 2 && srcType == CHAN_TYPE) {
 
-      if (srcFormat == texFormat) {
+      if (srcFormat == texDestFormat) {
          /* This will cover the common GL_RGB, GL_RGBA, GL_ALPHA,
           * GL_LUMINANCE_ALPHA, etc. texture formats.  Use memcpy().
           */
@@ -592,7 +195,7 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
          const GLint srcRowStride = _mesa_image_row_stride(srcPacking,
                                                srcWidth, srcFormat, srcType);
          const GLint widthInBytes = srcWidth * texComponents * sizeof(GLchan);
-         GLchan *dst = texAddr + dstYoffset * dstRowStride
+         GLchan *dst = (GLchan *) texDestAddr + dstYoffset * dstRowStride
                       + dstXoffset * texComponents;
          if (srcRowStride == widthInBytes && dstRowStride == widthInBytes) {
             MEMCPY(dst, src, srcHeight * widthInBytes);
@@ -607,14 +210,14 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
          }
          return;  /* all done */
       }
-      else if (srcFormat == GL_RGBA && texFormat == GL_RGB) {
+      else if (srcFormat == GL_RGBA && texDestFormat == GL_RGB) {
          /* commonly used by Quake */
          const GLchan *src = (const GLchan *) _mesa_image_address(
                                    srcPacking, srcAddr, srcWidth, srcHeight,
                                    srcFormat, srcType, 0, 0, 0);
          const GLint srcRowStride = _mesa_image_row_stride(srcPacking,
                                                srcWidth, srcFormat, srcType);
-         GLchan *dst = texAddr + dstYoffset * dstRowStride
+         GLchan *dst = (GLchan *) texDestAddr + dstYoffset * dstRowStride
                       + dstXoffset * texComponents;
          GLint i, j;
          for (i = 0; i < srcHeight; i++) {
@@ -636,11 +239,11 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
    /*
     * General case solutions
     */
-   if (texFormat == GL_COLOR_INDEX) {
+   if (texDestFormat == GL_COLOR_INDEX) {
       /* color index texture */
       const GLenum texType = CHAN_TYPE;
       GLint img, row;
-      GLchan *dest = texAddr + dstZoffset * dstImageStride
+      GLchan *dest = (GLchan *) texDestAddr + dstZoffset * dstImageStride
                     + dstYoffset * dstRowStride
                     + dstXoffset * texComponents;
       for (img = 0; img < srcDepth; img++) {
@@ -656,18 +259,19 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
          dest += dstImageStride;
       }
    }
-   else if (texFormat == GL_DEPTH_COMPONENT) {
+   else if (texDestFormat == GL_DEPTH_COMPONENT) {
       /* Depth texture (shadow maps) */
       GLint img, row;
-      GLfloat *dest = (GLfloat *) texAddr + dstZoffset * dstImageStride
+      GLubyte *dest = (GLubyte *) texDestAddr
+                    + dstZoffset * dstImageStride
                     + dstYoffset * dstRowStride
                     + dstXoffset * texComponents;
       for (img = 0; img < srcDepth; img++) {
-         GLfloat *destRow = dest;
+         GLubyte *destRow = dest;
          for (row = 0; row < srcHeight; row++) {
             const GLvoid *src = _mesa_image_address(srcPacking,
                 srcAddr, srcWidth, srcHeight, srcFormat, srcType, img, row, 0);
-            _mesa_unpack_depth_span(ctx, srcWidth, destRow,
+            _mesa_unpack_depth_span(ctx, srcWidth, (GLfloat *) destRow,
                                     srcType, src, srcPacking);
             destRow += dstRowStride;
          }
@@ -687,12 +291,12 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
          GLfloat *tmpImage, *convImage;
          tmpImage = (GLfloat *) MALLOC(srcWidth * srcHeight * 4 * sizeof(GLfloat));
          if (!tmpImage) {
-            gl_error(ctx, GL_OUT_OF_MEMORY, "glTexImage");
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexImage");
             return;
          }
          convImage = (GLfloat *) MALLOC(srcWidth * srcHeight * 4 * sizeof(GLfloat));
          if (!convImage) {
-            gl_error(ctx, GL_OUT_OF_MEMORY, "glTexImage");
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexImage");
             FREE(tmpImage);
             return;
          }
@@ -733,12 +337,12 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
 
             /* packing and transfer ops after convolution */
             srcf = convImage;
-            dest = texAddr + (dstZoffset + img) * dstImageStride
+            dest = (GLchan *) texDestAddr + (dstZoffset + img) * dstImageStride
                  + dstYoffset * dstRowStride;
             for (row = 0; row < convHeight; row++) {
                _mesa_pack_float_rgba_span(ctx, convWidth,
                                           (const GLfloat (*)[4]) srcf,
-                                          texFormat, CHAN_TYPE,
+                                          texDestFormat, CHAN_TYPE,
                                           dest, &_mesa_native_packing,
                                           ctx->_ImageTransferState
                                           & IMAGE_POST_CONVOLUTION_BITS);
@@ -755,7 +359,7 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
           * no convolution
           */
          GLint img, row;
-         GLchan *dest = texAddr + dstZoffset * dstImageStride
+         GLchan *dest = (GLchan *) texDestAddr + dstZoffset * dstImageStride
                        + dstYoffset * dstRowStride
                        + dstXoffset * texComponents;
          for (img = 0; img < srcDepth; img++) {
@@ -764,9 +368,9 @@ _mesa_transfer_teximage(GLcontext *ctx, GLuint dimensions,
                const GLvoid *srcRow = _mesa_image_address(srcPacking,
                                               srcAddr, srcWidth, srcHeight,
                                               srcFormat, srcType, img, row, 0);
-               _mesa_unpack_chan_color_span(ctx, srcWidth, texFormat, destRow,
-                                       srcFormat, srcType, srcRow, srcPacking,
-                                       ctx->_ImageTransferState);
+               _mesa_unpack_chan_color_span(ctx, srcWidth, texDestFormat,
+                                       destRow, srcFormat, srcType, srcRow,
+                                       srcPacking, ctx->_ImageTransferState);
                destRow += dstRowStride;
             }
             dest += dstImageStride;
@@ -793,29 +397,20 @@ _mesa_store_teximage1d(GLcontext *ctx, GLenum target, GLint level,
                        struct gl_texture_object *texObj,
                        struct gl_texture_image *texImage)
 {
-   const GLint components = components_in_intformat(internalFormat);
-   GLint compSize;
    GLint postConvWidth = width;
+   GLint texelBytes;
 
    if (ctx->_ImageTransferState & IMAGE_CONVOLUTION_BIT) {
       _mesa_adjust_image_for_convolution(ctx, 1, &postConvWidth, NULL);
    }
 
    /* setup the teximage struct's fields */
-   texImage->Format = (GLenum) _mesa_base_tex_format(ctx, internalFormat);
-   if (format == GL_DEPTH_COMPONENT) {
-      texImage->Type = GL_FLOAT; /* XXX or GL_UNSIGNED_INT? */
-      compSize = sizeof(GLfloat);
-   }
-   else {
-      texImage->Type = CHAN_TYPE; /* usually GL_UNSIGNED_BYTE */
-      compSize = sizeof(CHAN_TYPE);
-   }
-   texImage->FetchTexel = fetch_1d_texel;
-   set_teximage_component_sizes(texImage);
+   _mesa_init_tex_format( ctx, internalFormat, texImage );
+
+   texelBytes = texImage->TexFormat->TexelBytes;
 
    /* allocate memory */
-   texImage->Data = (GLchan *) MALLOC(postConvWidth * components * compSize);
+   texImage->Data = (GLchan *) MALLOC(postConvWidth * texelBytes);
    if (!texImage->Data)
       return;      /* out of memory */
 
@@ -844,9 +439,8 @@ _mesa_store_teximage2d(GLcontext *ctx, GLenum target, GLint level,
                        struct gl_texture_object *texObj,
                        struct gl_texture_image *texImage)
 {
-   const GLint components = components_in_intformat(internalFormat);
-   GLint compSize;
    GLint postConvWidth = width, postConvHeight = height;
+   GLint texelBytes;
 
    if (ctx->_ImageTransferState & IMAGE_CONVOLUTION_BIT) {
       _mesa_adjust_image_for_convolution(ctx, 2, &postConvWidth,
@@ -854,28 +448,20 @@ _mesa_store_teximage2d(GLcontext *ctx, GLenum target, GLint level,
    }
 
    /* setup the teximage struct's fields */
-   texImage->Format = (GLenum) _mesa_base_tex_format(ctx, internalFormat);
-   if (format == GL_DEPTH_COMPONENT) {
-      texImage->Type = GL_FLOAT; /* XXX or GL_UNSIGNED_INT? */
-      compSize = sizeof(GLfloat);
-   }
-   else {
-      texImage->Type = CHAN_TYPE; /* usually GL_UNSIGNED_BYTE */
-      compSize = sizeof(CHAN_TYPE);
-   }
-   texImage->FetchTexel = fetch_2d_texel;
-   set_teximage_component_sizes(texImage);
+   _mesa_init_tex_format( ctx, internalFormat, texImage );
+
+   texelBytes = texImage->TexFormat->TexelBytes;
 
    /* allocate memory */
-   texImage->Data = (GLchan *) MALLOC(postConvWidth * postConvHeight
-                                      * components * compSize);
+   texImage->Data = (GLchan *) MALLOC(postConvWidth * postConvHeight *
+                                      texelBytes);
    if (!texImage->Data)
       return;      /* out of memory */
 
    /* unpack image, apply transfer ops and store in texImage->Data */
    _mesa_transfer_teximage(ctx, 2, texImage->Format, texImage->Data,
                            width, height, 1, 0, 0, 0,
-                           texImage->Width * components * sizeof(GLchan),
+                           texImage->Width * texelBytes,
                            0, /* dstImageStride */
                            format, type, pixels, packing);
 }
@@ -898,34 +484,23 @@ _mesa_store_teximage3d(GLcontext *ctx, GLenum target, GLint level,
                        struct gl_texture_object *texObj,
                        struct gl_texture_image *texImage)
 {
-   const GLint components = components_in_intformat(internalFormat);
-   GLint compSize;
+   GLint texelBytes;
 
    /* setup the teximage struct's fields */
-   texImage->Format = (GLenum) _mesa_base_tex_format(ctx, internalFormat);
-   if (format == GL_DEPTH_COMPONENT) {
-      texImage->Type = GL_FLOAT; /* XXX or GL_UNSIGNED_INT? */
-      compSize = sizeof(GLfloat);
-   }
-   else {
-      texImage->Type = CHAN_TYPE; /* usually GL_UNSIGNED_BYTE */
-      compSize = sizeof(CHAN_TYPE);
-   }
-   texImage->FetchTexel = fetch_3d_texel;
-   set_teximage_component_sizes(texImage);
+   _mesa_init_tex_format( ctx, internalFormat, texImage );
+
+   texelBytes = texImage->TexFormat->TexelBytes;
 
    /* allocate memory */
-   texImage->Data = (GLchan *) MALLOC(width * height * depth
-                                      * components * compSize);
+   texImage->Data = (GLchan *) MALLOC(width * height * depth * texelBytes);
    if (!texImage->Data)
       return;      /* out of memory */
 
    /* unpack image, apply transfer ops and store in texImage->Data */
    _mesa_transfer_teximage(ctx, 3, texImage->Format, texImage->Data,
                            width, height, depth, 0, 0, 0,
-                           texImage->Width * components * sizeof(GLchan),
-                           texImage->Width * texImage->Height * components
-                           * sizeof(GLchan),
+                           texImage->Width * texelBytes,
+                           texImage->Width * texImage->Height * texelBytes,
                            format, type, pixels, packing);
 }
 
@@ -964,12 +539,10 @@ _mesa_store_texsubimage2d(GLcontext *ctx, GLenum target, GLint level,
                           struct gl_texture_object *texObj,
                           struct gl_texture_image *texImage)
 {
-   const GLint components = components_in_intformat(texImage->IntFormat);
-   const GLint compSize = _mesa_sizeof_type(texImage->Type);
    _mesa_transfer_teximage(ctx, 2, texImage->Format, texImage->Data,
                            width, height, 1, /* src size */
                            xoffset, yoffset, 0, /* dest offsets */
-                           texImage->Width * components * compSize,
+                           texImage->Width * texImage->TexFormat->TexelBytes,
                            0, /* dstImageStride */
                            format, type, pixels, packing);
 }
@@ -987,369 +560,15 @@ _mesa_store_texsubimage3d(GLcontext *ctx, GLenum target, GLint level,
                           struct gl_texture_object *texObj,
                           struct gl_texture_image *texImage)
 {
-   const GLint components = components_in_intformat(texImage->IntFormat);
-   const GLint compSize = _mesa_sizeof_type(texImage->Type);
+   const GLint texelBytes = texImage->TexFormat->TexelBytes;
    _mesa_transfer_teximage(ctx, 3, texImage->Format, texImage->Data,
                            width, height, depth, /* src size */
                            xoffset, yoffset, xoffset, /* dest offsets */
-                           texImage->Width * components * compSize,
-                           texImage->Width * texImage->Height * components
-                           * compSize,
+                           texImage->Width * texelBytes,
+                           texImage->Width * texImage->Height * texelBytes,
                            format, type, pixels, packing);
 }
 
-
-
-
-/*
- * Read an RGBA image from the frame buffer.
- * This is used by glCopyTex[Sub]Image[12]D().
- * Input:  ctx - the context
- *         x, y - lower left corner
- *         width, height - size of region to read
- * Return: pointer to block of GL_RGBA, GLchan data.
- */
-static GLchan *
-read_color_image( GLcontext *ctx, GLint x, GLint y,
-                  GLsizei width, GLsizei height )
-{
-   GLint stride, i;
-   GLchan *image, *dst;
-
-   image = (GLchan *) MALLOC(width * height * 4 * sizeof(GLchan));
-   if (!image)
-      return NULL;
-
-   /* Select buffer to read from */
-   (*ctx->Driver.SetReadBuffer)( ctx, ctx->ReadBuffer,
-                                 ctx->Pixel.DriverReadBuffer );
-
-   RENDER_START(ctx);
-
-   dst = image;
-   stride = width * 4;
-   for (i = 0; i < height; i++) {
-      gl_read_rgba_span( ctx, ctx->ReadBuffer, width, x, y + i,
-                         (GLchan (*)[4]) dst );
-      dst += stride;
-   }
-
-   RENDER_FINISH(ctx);
-
-   /* Read from draw buffer (the default) */
-   (*ctx->Driver.SetReadBuffer)( ctx, ctx->DrawBuffer,
-                                 ctx->Color.DriverDrawBuffer );
-
-   return image;
-}
-
-
-/*
- * As above, but read data from depth buffer.
- */
-static GLfloat *
-read_depth_image( GLcontext *ctx, GLint x, GLint y,
-                  GLsizei width, GLsizei height )
-{
-   GLint i;
-   GLfloat *image, *dst;
-
-   image = (GLfloat *) MALLOC(width * height * sizeof(GLfloat));
-   if (!image)
-      return NULL;
-
-   RENDER_START(ctx);
-
-   dst = image;
-   for (i = 0; i < height; i++) {
-      _mesa_read_depth_span_float(ctx, width, x, y + i, dst);
-      dst += width;
-   }
-
-   RENDER_FINISH(ctx);
-
-   return image;
-}
-
-
-
-static GLboolean
-is_depth_format(GLenum format)
-{
-   switch (format) {
-      case GL_DEPTH_COMPONENT:
-      case GL_DEPTH_COMPONENT16_SGIX:
-      case GL_DEPTH_COMPONENT24_SGIX:
-      case GL_DEPTH_COMPONENT32_SGIX:
-         return GL_TRUE;
-      default:
-         return GL_FALSE;
-   }
-}
-
-
-/*
- * Fallback for Driver.CopyTexImage1D().
- */
-void
-_mesa_copy_teximage1d( GLcontext *ctx, GLenum target, GLint level,
-                       GLenum internalFormat,
-                       GLint x, GLint y, GLsizei width, GLint border )
-{
-   struct gl_texture_unit *texUnit;
-   struct gl_texture_object *texObj;
-   struct gl_texture_image *texImage;
-
-   texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-   texObj = _mesa_select_tex_object(ctx, texUnit, target);
-   ASSERT(texObj);
-   texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-   ASSERT(texImage);
-
-   ASSERT(ctx->Driver.TexImage1D);
-
-   if (is_depth_format(internalFormat)) {
-      /* read depth image from framebuffer */
-      GLfloat *image = read_depth_image(ctx, x, y, width, 1);
-      if (!image) {
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glCopyTexImage1D");
-         return;
-      }
-
-      /* call glTexImage1D to redefine the texture */
-      (*ctx->Driver.TexImage1D)(ctx, target, level, internalFormat,
-                                width, border,
-                                GL_DEPTH_COMPONENT, GL_FLOAT, image,
-                                &_mesa_native_packing, texObj, texImage);
-      FREE(image);
-   }
-   else {
-      /* read RGBA image from framebuffer */
-      GLchan *image = read_color_image(ctx, x, y, width, 1);
-      if (!image) {
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glCopyTexImage1D");
-         return;
-      }
-
-      /* call glTexImage1D to redefine the texture */
-      (*ctx->Driver.TexImage1D)(ctx, target, level, internalFormat,
-                                width, border,
-                                GL_RGBA, CHAN_TYPE, image,
-                                &_mesa_native_packing, texObj, texImage);
-      FREE(image);
-   }
-}
-
-
-/*
- * Fallback for Driver.CopyTexImage2D().
- */
-void
-_mesa_copy_teximage2d( GLcontext *ctx, GLenum target, GLint level,
-                       GLenum internalFormat,
-                       GLint x, GLint y, GLsizei width, GLsizei height,
-                       GLint border )
-{
-   struct gl_texture_unit *texUnit;
-   struct gl_texture_object *texObj;
-   struct gl_texture_image *texImage;
-
-   texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-   texObj = _mesa_select_tex_object(ctx, texUnit, target);
-   ASSERT(texObj);
-   texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-   ASSERT(texImage);
-
-   ASSERT(ctx->Driver.TexImage2D);
-
-   if (is_depth_format(internalFormat)) {
-      /* read depth image from framebuffer */
-      GLfloat *image = read_depth_image(ctx, x, y, width, height);
-      if (!image) {
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glCopyTexImage2D");
-         return;
-      }
-
-      /* call glTexImage2D to redefine the texture */
-      (*ctx->Driver.TexImage2D)(ctx, target, level, internalFormat,
-                                width, height, border,
-                                GL_DEPTH_COMPONENT, GL_FLOAT, image,
-                                &_mesa_native_packing, texObj, texImage);
-      FREE(image);
-   }
-   else {
-      /* read RGBA image from framebuffer */
-      GLchan *image = read_color_image(ctx, x, y, width, height);
-      if (!image) {
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glCopyTexImage2D");
-         return;
-      }
-
-      /* call glTexImage2D to redefine the texture */
-      (*ctx->Driver.TexImage2D)(ctx, target, level, internalFormat,
-                                width, height, border,
-                                GL_RGBA, CHAN_TYPE, image,
-                                &_mesa_native_packing, texObj, texImage);
-      FREE(image);
-   }
-}
-
-
-/*
- * Fallback for Driver.CopyTexSubImage1D().
- */
-void
-_mesa_copy_texsubimage1d(GLcontext *ctx, GLenum target, GLint level,
-                         GLint xoffset, GLint x, GLint y, GLsizei width)
-{
-   struct gl_texture_unit *texUnit;
-   struct gl_texture_object *texObj;
-   struct gl_texture_image *texImage;
-
-   texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-   texObj = _mesa_select_tex_object(ctx, texUnit, target);
-   ASSERT(texObj);
-   texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-   ASSERT(texImage);
-
-   ASSERT(ctx->Driver.TexImage1D);
-
-   if (is_depth_format(texImage->IntFormat)) {
-      /* read depth image from framebuffer */
-      GLfloat *image = read_depth_image(ctx, x, y, width, 1);
-      if (!image) {
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glCopyTexSubImage1D");
-         return;
-      }
-
-      /* call glTexImage1D to redefine the texture */
-      (*ctx->Driver.TexSubImage1D)(ctx, target, level, xoffset, width,
-                                   GL_DEPTH_COMPONENT, GL_FLOAT, image,
-                                   &_mesa_native_packing, texObj, texImage);
-      FREE(image);
-   }
-   else {
-      GLchan *image = read_color_image(ctx, x, y, width, 1);
-      if (!image) {
-         gl_error( ctx, GL_OUT_OF_MEMORY, "glCopyTexSubImage1D" );
-         return;
-      }
-
-      /* now call glTexSubImage1D to do the real work */
-      (*ctx->Driver.TexSubImage1D)(ctx, target, level, xoffset, width,
-                                   GL_RGBA, CHAN_TYPE, image,
-                                   &_mesa_native_packing, texObj, texImage);
-      FREE(image);
-   }
-}
-
-
-/*
- * Fallback for Driver.CopyTexSubImage2D().
- */
-void
-_mesa_copy_texsubimage2d( GLcontext *ctx,
-                          GLenum target, GLint level,
-                          GLint xoffset, GLint yoffset,
-                          GLint x, GLint y, GLsizei width, GLsizei height )
-{
-   struct gl_texture_unit *texUnit;
-   struct gl_texture_object *texObj;
-   struct gl_texture_image *texImage;
-
-   texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-   texObj = _mesa_select_tex_object(ctx, texUnit, target);
-   ASSERT(texObj);
-   texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-   ASSERT(texImage);
-
-   ASSERT(ctx->Driver.TexImage2D);
-
-   if (is_depth_format(texImage->IntFormat)) {
-      /* read depth image from framebuffer */
-      GLfloat *image = read_depth_image(ctx, x, y, width, height);
-      if (!image) {
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glCopyTexSubImage2D");
-         return;
-      }
-
-      /* call glTexImage1D to redefine the texture */
-      (*ctx->Driver.TexSubImage2D)(ctx, target, level,
-                                   xoffset, yoffset, width, height,
-                                   GL_DEPTH_COMPONENT, GL_FLOAT, image,
-                                   &_mesa_native_packing, texObj, texImage);
-      FREE(image);
-   }
-   else {
-      /* read RGBA image from framebuffer */
-      GLchan *image = read_color_image(ctx, x, y, width, height);
-      if (!image) {
-         gl_error( ctx, GL_OUT_OF_MEMORY, "glCopyTexSubImage2D" );
-         return;
-      }
-
-      /* now call glTexSubImage2D to do the real work */
-      (*ctx->Driver.TexSubImage2D)(ctx, target, level,
-                                   xoffset, yoffset, width, height,
-                                   GL_RGBA, CHAN_TYPE, image,
-                                   &_mesa_native_packing, texObj, texImage);
-      FREE(image);
-   }
-}
-
-
-/*
- * Fallback for Driver.CopyTexSubImage3D().
- */
-void
-_mesa_copy_texsubimage3d( GLcontext *ctx,
-                          GLenum target, GLint level,
-                          GLint xoffset, GLint yoffset, GLint zoffset,
-                          GLint x, GLint y, GLsizei width, GLsizei height )
-{
-   struct gl_texture_unit *texUnit;
-   struct gl_texture_object *texObj;
-   struct gl_texture_image *texImage;
-
-   texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
-   texObj = _mesa_select_tex_object(ctx, texUnit, target);
-   ASSERT(texObj);
-   texImage = _mesa_select_tex_image(ctx, texUnit, target, level);
-   ASSERT(texImage);
-
-   ASSERT(ctx->Driver.TexImage3D);
-
-   if (is_depth_format(texImage->IntFormat)) {
-      /* read depth image from framebuffer */
-      GLfloat *image = read_depth_image(ctx, x, y, width, height);
-      if (!image) {
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glCopyTexSubImage3D");
-         return;
-      }
-
-      /* call glTexImage1D to redefine the texture */
-      (*ctx->Driver.TexSubImage3D)(ctx, target, level,
-                                   xoffset, yoffset, zoffset, width, height, 1,
-                                   GL_DEPTH_COMPONENT, GL_FLOAT, image,
-                                   &_mesa_native_packing, texObj, texImage);
-      FREE(image);
-   }
-   else {
-      /* read RGBA image from framebuffer */
-      GLchan *image = read_color_image(ctx, x, y, width, height);
-      if (!image) {
-         gl_error( ctx, GL_OUT_OF_MEMORY, "glCopyTexSubImage3D" );
-         return;
-      }
-
-      /* now call glTexSubImage3D to do the real work */
-      (*ctx->Driver.TexSubImage3D)(ctx, target, level,
-                                   xoffset, yoffset, zoffset, width, height, 1,
-                                   GL_RGBA, CHAN_TYPE, image,
-                                   &_mesa_native_packing, texObj, texImage);
-      FREE(image);
-   }
-}
 
 
 
@@ -1422,7 +641,6 @@ _mesa_test_proxy_teximage(GLcontext *ctx, GLenum target, GLint level,
    struct gl_texture_unit *texUnit;
    struct gl_texture_object *texObj;
    struct gl_texture_image *texImage;
-   GLint compSize;
 
    (void) format;
    (void) type;
@@ -1437,17 +655,7 @@ _mesa_test_proxy_teximage(GLcontext *ctx, GLenum target, GLint level,
     * have to override this function.
     */
    /* setup the teximage struct's fields */
-   texImage->Format = (GLenum) _mesa_base_tex_format(ctx, internalFormat);
-   if (format == GL_DEPTH_COMPONENT) {
-      texImage->Type = GL_FLOAT; /* XXX or GL_UNSIGNED_INT? */
-      compSize = sizeof(GLfloat);
-   }
-   else {
-      texImage->Type = CHAN_TYPE; /* usually GL_UNSIGNED_BYTE */
-      compSize = sizeof(CHAN_TYPE);
-   }
-   set_teximage_component_sizes(texImage);
+   _mesa_init_tex_format( ctx, internalFormat, texImage );
 
    return GL_TRUE;
 }
-

@@ -1,4 +1,4 @@
-/* $Id: rastpos.c,v 1.20 2001/01/23 23:39:36 brianp Exp $ */
+/* $Id: rastpos.c,v 1.22 2001/03/12 00:48:38 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -128,10 +128,10 @@ shade_rastpos(GLcontext *ctx,
       }
       else {
 	 GLfloat d;
-	
+
 	 SUB_3V(VP, light->_Position, vertex);
 	 d = LEN_3FV( VP );
-	
+
 	 if ( d > 1e-6) {
 	    GLfloat invd = 1.0F / d;
 	    SELF_SCALE_SCALAR_3V(VP, invd);
@@ -139,10 +139,10 @@ shade_rastpos(GLcontext *ctx,
 	 attenuation = 1.0F / (light->ConstantAttenuation + d *
 			       (light->LinearAttenuation + d *
 				light->QuadraticAttenuation));
-	
+
 	 if (light->_Flags & LIGHT_SPOT) {
 	    GLfloat PV_dot_dir = - DOT3(VP, light->_NormDirection);
-	
+
 	    if (PV_dot_dir<light->_CosCutoff) {
 	       continue;
 	    }
@@ -188,7 +188,7 @@ shade_rastpos(GLcontext *ctx,
 	    h = light->_h_inf_norm;
 	    normalized = 1;
 	 }
-	
+
 	 n_dot_h = DOT3(normal, h);
 
 	 if (n_dot_h > 0.0F) {
@@ -201,7 +201,7 @@ shade_rastpos(GLcontext *ctx,
 	       n_dot_h /= LEN_SQUARED_3FV( h );
 	       shininess *= .5;
 	    }
-	
+
 	    GET_SHINE_TAB_ENTRY( ctx->_ShineTable[0], n_dot_h, spec_coef );
 
 	    if (spec_coef > 1.0e-10) {
@@ -247,7 +247,7 @@ raster_pos4f(GLcontext *ctx, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
    FLUSH_CURRENT(ctx, 0);
 
    if (ctx->NewState)
-      gl_update_state( ctx );
+      _mesa_update_state( ctx );
 
    ASSIGN_4V( v, x, y, z, w );
    TRANSFORM_POINT( eye, ctx->ModelView.m, v );
@@ -331,7 +331,7 @@ raster_pos4f(GLcontext *ctx, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
    }
 
    if (ctx->RenderMode==GL_SELECT) {
-      gl_update_hitflag( ctx, ctx->Current.RasterPos[2] );
+      _mesa_update_hitflag( ctx, ctx->Current.RasterPos[2] );
    }
 
 }

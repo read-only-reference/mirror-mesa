@@ -1,21 +1,21 @@
-/* $Id: s_aatritemp.h,v 1.5 2001/01/05 02:26:49 keithw Exp $ */
+/* $Id: s_aatritemp.h,v 1.9 2001/03/28 21:36:31 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -137,10 +137,10 @@
    /* plane setup */
 #ifdef DO_Z
    compute_plane(p0, p1, p2, p0[2], p1[2], p2[2], zPlane);
-   compute_plane(p0, p1, p2, 
-		 v0->fog, 
-		 v1->fog, 
-		 v2->fog, 
+   compute_plane(p0, p1, p2,
+		 v0->fog,
+		 v1->fog,
+		 v2->fog,
 		 fogPlane);
 #endif
 #ifdef DO_RGBA
@@ -322,7 +322,7 @@
          n = (GLuint) ix - (GLuint) startX;
 #ifdef DO_MULTITEX
 #  ifdef DO_SPEC
-         gl_write_multitexture_span(ctx, n, startX, iy, z, fog,
+         _mesa_write_multitexture_span(ctx, n, startX, iy, z, fog,
                                     (const GLfloat (*)[MAX_WIDTH]) s,
                                     (const GLfloat (*)[MAX_WIDTH]) t,
                                     (const GLfloat (*)[MAX_WIDTH]) u,
@@ -330,7 +330,7 @@
                                     rgba, (const GLchan (*)[4]) spec,
                                     GL_POLYGON);
 #  else
-         gl_write_multitexture_span(ctx, n, startX, iy, z, fog,
+         _mesa_write_multitexture_span(ctx, n, startX, iy, z, fog,
                                     (const GLfloat (*)[MAX_WIDTH]) s,
                                     (const GLfloat (*)[MAX_WIDTH]) t,
                                     (const GLfloat (*)[MAX_WIDTH]) u,
@@ -338,18 +338,18 @@
 #  endif
 #elif defined(DO_TEX)
 #  ifdef DO_SPEC
-         gl_write_texture_span(ctx, n, startX, iy, z, fog,
+         _mesa_write_texture_span(ctx, n, startX, iy, z, fog,
                                s, t, u, lambda, rgba,
                                (const GLchan (*)[4]) spec, GL_POLYGON);
 #  else
-         gl_write_texture_span(ctx, n, startX, iy, z, fog,
+         _mesa_write_texture_span(ctx, n, startX, iy, z, fog,
                                s, t, u, lambda,
                                rgba, NULL, GL_POLYGON);
 #  endif
 #elif defined(DO_RGBA)
-         gl_write_rgba_span(ctx, n, startX, iy, z, fog, rgba, GL_POLYGON);
+         _mesa_write_rgba_span(ctx, n, startX, iy, z, fog, rgba, GL_POLYGON);
 #elif defined(DO_INDEX)
-         gl_write_index_span(ctx, n, startX, iy, z, fog, index, GL_POLYGON);
+         _mesa_write_index_span(ctx, n, startX, iy, z, fog, index, GL_POLYGON);
 #endif
       }
    }
@@ -366,6 +366,12 @@
          GLint ix, left, startX = (GLint) (x + xAdj);
          GLuint count, n;
          GLfloat coverage = 0.0F;
+
+         /* make sure we're not past the window edge */
+         if (startX >= ctx->DrawBuffer->_Xmax) {
+            startX = ctx->DrawBuffer->_Xmax - 1;
+         }
+
          /* skip fragments with zero coverage */
          while (startX >= 0) {
             coverage = compute_coveragef(pMin, pMax, pMid, startX, iy);
@@ -437,7 +443,7 @@
             for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {
                if (ctx->Texture.Unit[unit]._ReallyEnabled) {
                   GLint j;
-                  for (j = 0; j < n; j++) {
+                  for (j = 0; j < (GLint) n; j++) {
                      s[unit][j] = s[unit][j + left];
                      t[unit][j] = t[unit][j + left];
                      u[unit][j] = u[unit][j + left];
@@ -447,7 +453,7 @@
             }
          }
 #  ifdef DO_SPEC
-         gl_write_multitexture_span(ctx, n, left, iy, z + left, fog + left,
+         _mesa_write_multitexture_span(ctx, n, left, iy, z + left, fog + left,
                                     (const GLfloat (*)[MAX_WIDTH]) s,
                                     (const GLfloat (*)[MAX_WIDTH]) t,
                                     (const GLfloat (*)[MAX_WIDTH]) u,
@@ -455,7 +461,7 @@
                                     (const GLchan (*)[4]) (spec + left),
                                     GL_POLYGON);
 #  else
-         gl_write_multitexture_span(ctx, n, left, iy, z + left, fog + left,
+         _mesa_write_multitexture_span(ctx, n, left, iy, z + left, fog + left,
                                     (const GLfloat (*)[MAX_WIDTH]) s,
                                     (const GLfloat (*)[MAX_WIDTH]) t,
                                     (const GLfloat (*)[MAX_WIDTH]) u,
@@ -464,22 +470,22 @@
 #  endif
 #elif defined(DO_TEX)
 #  ifdef DO_SPEC
-         gl_write_texture_span(ctx, n, left, iy, z + left, fog + left,
+         _mesa_write_texture_span(ctx, n, left, iy, z + left, fog + left,
                                s + left, t + left, u + left,
                                lambda + left, rgba + left,
                                (const GLchan (*)[4]) (spec + left),
                                GL_POLYGON);
 #  else
-         gl_write_texture_span(ctx, n, left, iy, z + left, fog + left, 
+         _mesa_write_texture_span(ctx, n, left, iy, z + left, fog + left,
                                s + left, t + left,
                                u + left, lambda + left,
                                rgba + left, NULL, GL_POLYGON);
 #  endif
 #elif defined(DO_RGBA)
-         gl_write_rgba_span(ctx, n, left, iy, z + left, fog + left, 
+         _mesa_write_rgba_span(ctx, n, left, iy, z + left, fog + left,
                             rgba + left, GL_POLYGON);
 #elif defined(DO_INDEX)
-         gl_write_index_span(ctx, n, left, iy, z + left, fog + left, 
+         _mesa_write_index_span(ctx, n, left, iy, z + left, fog + left,
                              index + left, GL_POLYGON);
 #endif
       }

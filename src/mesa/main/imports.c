@@ -1,10 +1,10 @@
-/* $Id: imports.c,v 1.5 2001/02/06 04:06:35 keithw Exp $ */
+/* $Id: imports.c,v 1.9 2001/03/27 19:18:02 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -69,6 +69,15 @@ _mesa_Free(__GLcontext *gc, void *addr)
    FREE(addr);
 }
 
+/* Must be before '#undef getenv' for inclusion in XFree86.
+ */
+static char *
+_mesa_getenv(__GLcontext *gc, const char *var)
+{
+   (void) gc;
+   return getenv(var);
+}
+
 static void
 _mesa_warning(__GLcontext *gc, char *str)
 {
@@ -79,7 +88,7 @@ _mesa_warning(__GLcontext *gc, char *str)
 /* Whacko XFree86 macro:
  */
 #ifdef getenv
-#undef getenv			
+#undef getenv
 #endif
    if (gc->imports.getenv(gc, "MESA_DEBUG")) {
       debug = GL_TRUE;
@@ -98,13 +107,6 @@ _mesa_fatal(__GLcontext *gc, char *str)
 {
    fprintf(stderr, "%s\n", str);
    abort();
-}
-
-static char *
-_mesa_getenv(__GLcontext *gc, const char *var)
-{
-   (void) gc;
-   return gc->imports.getenv(gc, var);
 }
 
 static int
@@ -130,14 +132,14 @@ _mesa_fopen(__GLcontext *gc, const char *path, const char *mode)
 static int
 _mesa_fclose(__GLcontext *gc, void *stream)
 {
-   return fclose(stream);
+   return fclose((FILE *) stream);
 }
 
 static int
 _mesa_fprintf(__GLcontext *gc, void *stream, const char *fmt, ...)
 {
    /* XXX fix this */
-   return fprintf(stream, fmt);
+   return fprintf((FILE *) stream, fmt);
 }
 
 /* XXX this really is driver-specific and can't be here */

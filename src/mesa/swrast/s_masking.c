@@ -1,21 +1,21 @@
-/* $Id: s_masking.c,v 1.2 2000/11/05 18:24:40 keithw Exp $ */
+/* $Id: s_masking.c,v 1.5 2001/03/19 02:25:36 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -58,7 +58,7 @@ _mesa_mask_rgba_span( GLcontext *ctx,
    GLuint *rgba32 = (GLuint *) rgba;
    GLuint *dest32 = (GLuint *) dest;
 
-   gl_read_rgba_span( ctx, ctx->DrawBuffer, n, x, y, dest );
+   _mesa_read_rgba_span( ctx, ctx->DrawBuffer, n, x, y, dest );
    for (i = 0; i < n; i++) {
       rgba32[i] = (rgba32[i] & srcMask) | (dest32[i] & dstMask);
    }
@@ -70,7 +70,7 @@ _mesa_mask_rgba_span( GLcontext *ctx,
    const GLint bMask = ctx->Color.ColorMask[BCOMP];
    const GLint aMask = ctx->Color.ColorMask[ACOMP];
 
-   gl_read_rgba_span( ctx, ctx->DrawBuffer, n, x, y, dest );
+   _mesa_read_rgba_span( ctx, ctx->DrawBuffer, n, x, y, dest );
    for (i = 0; i < n; i++) {
       if (!rMask)  rgba[i][RCOMP] = dest[i][RCOMP];
       if (!gMask)  rgba[i][GCOMP] = dest[i][GCOMP];
@@ -91,6 +91,7 @@ _mesa_mask_rgba_pixels( GLcontext *ctx,
                         GLuint n, const GLint x[], const GLint y[],
                         GLchan rgba[][4], const GLubyte mask[] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    GLchan dest[PB_SIZE][4];
    GLuint i;
 
@@ -101,7 +102,7 @@ _mesa_mask_rgba_pixels( GLcontext *ctx,
    GLuint *rgba32 = (GLuint *) rgba;
    GLuint *dest32 = (GLuint *) dest;
 
-   (*ctx->Driver.ReadRGBAPixels)( ctx, n, x, y, dest, mask );
+   (*swrast->Driver.ReadRGBAPixels)( ctx, n, x, y, dest, mask );
    if (SWRAST_CONTEXT(ctx)->_RasterMask & ALPHABUF_BIT) {
       _mesa_read_alpha_pixels( ctx, n, x, y, dest, mask );
    }
@@ -117,7 +118,7 @@ _mesa_mask_rgba_pixels( GLcontext *ctx,
    const GLint bMask = ctx->Color.ColorMask[BCOMP];
    const GLint aMask = ctx->Color.ColorMask[ACOMP];
 
-   (*ctx->Driver.ReadRGBAPixels)( ctx, n, x, y, dest, mask );
+   (*swrast->Driver.ReadRGBAPixels)( ctx, n, x, y, dest, mask );
    if (SWRAST_CONTEXT(ctx)->_RasterMask & ALPHABUF_BIT) {
       _mesa_read_alpha_pixels( ctx, n, x, y, dest, mask );
    }
@@ -145,7 +146,7 @@ _mesa_mask_index_span( GLcontext *ctx,
    GLuint fbindexes[MAX_WIDTH];
    GLuint msrc, mdest;
 
-   gl_read_index_span( ctx, ctx->DrawBuffer, n, x, y, fbindexes );
+   _mesa_read_index_span( ctx, ctx->DrawBuffer, n, x, y, fbindexes );
 
    msrc = ctx->Color.IndexMask;
    mdest = ~msrc;
@@ -165,11 +166,12 @@ _mesa_mask_index_pixels( GLcontext *ctx,
                          GLuint n, const GLint x[], const GLint y[],
                          GLuint index[], const GLubyte mask[] )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    GLuint i;
    GLuint fbindexes[PB_SIZE];
    GLuint msrc, mdest;
 
-   (*ctx->Driver.ReadCI32Pixels)( ctx, n, x, y, fbindexes, mask );
+   (*swrast->Driver.ReadCI32Pixels)( ctx, n, x, y, fbindexes, mask );
 
    msrc = ctx->Color.IndexMask;
    mdest = ~msrc;
@@ -178,4 +180,3 @@ _mesa_mask_index_pixels( GLcontext *ctx,
       index[i] = (index[i] & msrc) | (fbindexes[i] & mdest);
    }
 }
-

@@ -1,4 +1,4 @@
-/* $Id: gl.h,v 1.51 2001/01/29 16:18:37 brianp Exp $ */
+/* $Id: gl.h,v 1.54 2001/03/26 20:02:38 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -44,11 +44,11 @@
 #define OPENSTEP
 #endif
 
-#if defined(_WIN32) && !defined(__WIN32__)
+#if defined(_WIN32) && !defined(__WIN32__) && !defined(__CYGWIN__)
 #define __WIN32__
 #endif
 
-#if !defined(OPENSTEP) && (defined(__WIN32__) || defined(__CYGWIN__))
+#if !defined(OPENSTEP) && (defined(__WIN32__) && !defined(__CYGWIN__))
 #  if defined(_MSC_VER) && defined(BUILD_GL32) /* tag specify we're building mesa as a DLL */
 #    define GLAPI __declspec(dllexport)
 #  elif defined(_MSC_VER) && defined(_DLL) /* tag specifying we're building for DLL runtime support */
@@ -63,7 +63,7 @@
 #  define GLAPIENTRY
 #endif /* WIN32 / CYGWIN bracket */
 
-#if defined(_WIN32) && !defined(_WINGDI_) && !defined(_GNU_H_WINDOWS32_DEFINES) && !defined(OPENSTEP)
+#if defined(_WIN32) && !defined(_WINGDI_) && !defined(_GNU_H_WINDOWS32_DEFINES) && !defined(OPENSTEP) && !defined(__CYGWIN__)
 #include <gl/mesa_wgl.h>
 #endif
 
@@ -745,7 +745,7 @@ typedef double		GLclampd;	/* double precision float in [0,1] */
 
 
 /*
- * OpenGL 1.2 imaging subset (NOT IMPLEMENTED BY MESA)
+ * OpenGL 1.2 imaging subset
  */
 /* GL_EXT_color_table */
 #define GL_COLOR_TABLE				0x80D0
@@ -1591,7 +1591,7 @@ GLAPI void GLAPIENTRY glDrawRangeElements( GLenum mode, GLuint start,
 	GLuint end, GLsizei count, GLenum type, const GLvoid *indices );
 
 GLAPI void GLAPIENTRY glTexImage3D( GLenum target, GLint level,
-                                      GLint internalFormat,
+                                      GLenum internalFormat,
                                       GLsizei width, GLsizei height,
                                       GLsizei depth, GLint border,
                                       GLenum format, GLenum type,

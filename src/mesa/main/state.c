@@ -1,4 +1,4 @@
-/* $Id: state.c,v 1.59 2001/02/20 16:42:25 brianp Exp $ */
+/* $Id: state.c,v 1.64 2001/03/29 21:16:25 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -88,7 +88,7 @@ static int
 generic_noop(void)
 {
 #ifdef DEBUG
-   gl_problem(NULL, "undefined function dispatch");
+   _mesa_problem(NULL, "undefined function dispatch");
 #endif
    return 0;
 }
@@ -557,7 +557,7 @@ update_tnl_spaces( GLcontext *ctx, GLuint oldneedeyecoords )
        */
       update_modelview_scale(ctx);
       calculate_model_project_matrix(ctx);
-      gl_compute_light_positions( ctx );
+      _mesa_compute_light_positions( ctx );
 
       if (ctx->Driver.LightingSpaceChange)
 	 ctx->Driver.LightingSpaceChange( ctx );
@@ -566,16 +566,16 @@ update_tnl_spaces( GLcontext *ctx, GLuint oldneedeyecoords )
       GLuint new_state = ctx->NewState;
 
       /* Recalculate that same state only if it has been invalidated
-       * by other statechanges. 
+       * by other statechanges.
        */
       if (new_state & _NEW_MODELVIEW)
 	 update_modelview_scale(ctx);
 
       if (new_state & (_NEW_MODELVIEW|_NEW_PROJECTION))
 	 calculate_model_project_matrix(ctx);
-	
+
       if (new_state & (_NEW_LIGHT|_NEW_MODELVIEW))
-	 gl_compute_light_positions( ctx );
+	 _mesa_compute_light_positions( ctx );
    }
 }
 
@@ -613,7 +613,7 @@ static void
 update_projection( GLcontext *ctx )
 {
    _math_matrix_analyse( &ctx->ProjectionMatrix );
-      
+
    /* Recompute clip plane positions in clipspace.  This is also done
     * in _mesa_ClipPlane().
     */
@@ -621,7 +621,7 @@ update_projection( GLcontext *ctx )
       GLuint p;
       for (p = 0; p < ctx->Const.MaxClipPlanes; p++) {
 	 if (ctx->Transform.ClipEnabled[p]) {
-	    gl_transform_vector( ctx->Transform._ClipUserPlane[p],
+	    _mesa_transform_vector( ctx->Transform._ClipUserPlane[p],
 				 ctx->Transform.EyeUserPlane[p],
 				 ctx->ProjectionMatrix.inv );
 	 }
@@ -712,7 +712,7 @@ update_texture_matrices( GLcontext *ctx )
 {
    GLuint i;
 
-   ctx->_Enabled &= ~ENABLE_TEXMAT_ANY;
+   ctx->Texture._TexMatEnabled = 0;
 
    for (i=0; i < ctx->Const.MaxTextureUnits; i++) {
       if (ctx->TextureMatrix[i].flags & MAT_DIRTY) {
@@ -723,7 +723,7 @@ update_texture_matrices( GLcontext *ctx )
 
 	 if (ctx->Texture.Unit[i]._ReallyEnabled &&
 	     ctx->TextureMatrix[i].type != MATRIX_IDENTITY)
-	    ctx->_Enabled |= ENABLE_TEXMAT0 << i;
+	    ctx->Texture._TexMatEnabled |= ENABLE_TEXMAT(i);
       }
    }
 }
@@ -746,8 +746,8 @@ update_texture_state( GLcontext *ctx )
    ctx->Texture._GenFlags = 0;
    ctx->_NeedNormals &= ~NEED_NORMALS_TEXGEN;
    ctx->_NeedEyeCoords &= ~NEED_EYE_TEXGEN;
-   ctx->_Enabled &= ~(ENABLE_TEXGEN_ANY |
-		      ENABLE_TEXMAT_ANY);
+   ctx->Texture._TexMatEnabled = 0;
+   ctx->Texture._TexGenEnabled = 0;
 
    /* Update texture unit state.
     */
@@ -831,12 +831,12 @@ update_texture_state( GLcontext *ctx )
 	    texUnit->_GenFlags |= texUnit->_GenBitR;
 	 }
 
-	 ctx->_Enabled |= ENABLE_TEXGEN0 << i;
+	 ctx->Texture._TexGenEnabled |= ENABLE_TEXGEN(i);
 	 ctx->Texture._GenFlags |= texUnit->_GenFlags;
       }
 
       if (ctx->TextureMatrix[i].type != MATRIX_IDENTITY)
-	 ctx->_Enabled |= ENABLE_TEXMAT0 << i;
+	 ctx->Texture._TexMatEnabled |= ENABLE_TEXMAT(i);
    }
 
    if (ctx->Texture._GenFlags & TEXGEN_NEED_NORMALS) {
@@ -865,15 +865,15 @@ update_texture_state( GLcontext *ctx )
  * state references this value, and must be treated with care to
  * ensure that updates are done correctly.  All state dependent on
  * _NeedEyeCoords is calculated from within _mesa_update_tnl_spaces(),
- * and from nowhere else.  
+ * and from nowhere else.
  */
-void gl_update_state( GLcontext *ctx )
+void _mesa_update_state( GLcontext *ctx )
 {
    const GLuint new_state = ctx->NewState;
    const GLuint oldneedeyecoords = ctx->_NeedEyeCoords;
 
    if (MESA_VERBOSE & VERBOSE_STATE)
-      gl_print_state("", new_state);
+      _mesa_print_state("", new_state);
 
    if (new_state & _NEW_MODELVIEW)
       _math_matrix_analyse( &ctx->ModelView );
@@ -906,7 +906,7 @@ void gl_update_state( GLcontext *ctx )
    /* Contributes to NeedEyeCoords, NeedNormals.
     */
    if (new_state & _NEW_LIGHT)
-      gl_update_lighting( ctx );
+      _mesa_update_lighting( ctx );
 
    /* We can light in object space if the modelview matrix preserves
     * lengths and relative angles.
@@ -926,7 +926,7 @@ void gl_update_state( GLcontext *ctx )
     * normal transform.
     *
     * If the lighting space hasn't changed, may still need to recompute
-    * light positions & normal transforms for other reasons. 
+    * light positions & normal transforms for other reasons.
     */
    if (new_state & (_NEW_MODELVIEW |
 		    _NEW_PROJECTION |
@@ -948,37 +948,13 @@ void gl_update_state( GLcontext *ctx )
    ctx->Array.NewState = 0;
 
    /* At this point we can do some assertions to be sure the required
-    * device driver function pointers are all initialized. 
-    *
-    * KW: Moved the some of these asserts to t_vb_render.c, as they
-    * are strictly only required for that stage.  The Driver struct
-    * should probably be split; the read/write span/pixels functions
-    * should be referenced only from swrast, for instance.  
+    * device driver function pointers are all initialized.
     */
    ASSERT(ctx->Driver.GetString);
    ASSERT(ctx->Driver.UpdateState);
    ASSERT(ctx->Driver.Clear);
    ASSERT(ctx->Driver.SetDrawBuffer);
-   ASSERT(ctx->Driver.SetReadBuffer);
    ASSERT(ctx->Driver.GetBufferSize);
-   if (ctx->Visual.rgbMode) {
-      ASSERT(ctx->Driver.WriteRGBASpan);
-      ASSERT(ctx->Driver.WriteRGBSpan);
-      ASSERT(ctx->Driver.WriteMonoRGBASpan);
-      ASSERT(ctx->Driver.WriteRGBAPixels);
-      ASSERT(ctx->Driver.WriteMonoRGBAPixels);
-      ASSERT(ctx->Driver.ReadRGBASpan);
-      ASSERT(ctx->Driver.ReadRGBAPixels);
-   }
-   else {
-      ASSERT(ctx->Driver.WriteCI32Span);
-      ASSERT(ctx->Driver.WriteCI8Span);
-      ASSERT(ctx->Driver.WriteMonoCISpan);
-      ASSERT(ctx->Driver.WriteCI32Pixels);
-      ASSERT(ctx->Driver.WriteMonoCIPixels);
-      ASSERT(ctx->Driver.ReadCI32Span);
-      ASSERT(ctx->Driver.ReadCI32Pixels);
-   }
    if (ctx->Visual.accumRedBits > 0) {
       ASSERT(ctx->Driver.Accum);
    }
@@ -1009,6 +985,4 @@ void gl_update_state( GLcontext *ctx )
       ASSERT(ctx->Driver.GetCompressedTexImage);
       ASSERT(ctx->Driver.BaseCompressedTexFormat);
    }
-   ASSERT(ctx->Driver.RenderStart);
-   ASSERT(ctx->Driver.RenderFinish);
 }

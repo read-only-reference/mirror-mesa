@@ -1,4 +1,4 @@
-/* $Id: feedback.c,v 1.21 2001/01/23 23:39:36 brianp Exp $ */
+/* $Id: feedback.c,v 1.24 2001/03/29 17:08:26 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -52,19 +52,19 @@ void
 _mesa_FeedbackBuffer( GLsizei size, GLenum type, GLfloat *buffer )
 {
    GET_CURRENT_CONTEXT(ctx);
-   ASSERT_OUTSIDE_BEGIN_END(ctx); 
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (ctx->RenderMode==GL_FEEDBACK) {
-      gl_error( ctx, GL_INVALID_OPERATION, "glFeedbackBuffer" );
+      _mesa_error( ctx, GL_INVALID_OPERATION, "glFeedbackBuffer" );
       return;
    }
    if (size<0) {
-      gl_error( ctx, GL_INVALID_VALUE, "glFeedbackBuffer(size<0)" );
+      _mesa_error( ctx, GL_INVALID_VALUE, "glFeedbackBuffer(size<0)" );
       return;
    }
    if (!buffer) {
-      gl_error( ctx, GL_INVALID_VALUE, "glFeedbackBuffer(buffer==NULL)" );
-      ctx->Feedback.BufferSize = 0; 
+      _mesa_error( ctx, GL_INVALID_VALUE, "glFeedbackBuffer(buffer==NULL)" );
+      ctx->Feedback.BufferSize = 0;
       return;
    }
 
@@ -76,21 +76,21 @@ _mesa_FeedbackBuffer( GLsizei size, GLenum type, GLfloat *buffer )
 	 ctx->Feedback._Mask = FB_3D;
 	 break;
       case GL_3D_COLOR:
-	 ctx->Feedback._Mask = (FB_3D | 
+	 ctx->Feedback._Mask = (FB_3D |
 				(ctx->Visual.rgbMode ? FB_COLOR : FB_INDEX));
 	 break;
       case GL_3D_COLOR_TEXTURE:
-	 ctx->Feedback._Mask = (FB_3D | 
-				(ctx->Visual.rgbMode ? FB_COLOR : FB_INDEX) | 
+	 ctx->Feedback._Mask = (FB_3D |
+				(ctx->Visual.rgbMode ? FB_COLOR : FB_INDEX) |
 				FB_TEXTURE);
 	 break;
       case GL_4D_COLOR_TEXTURE:
-	 ctx->Feedback._Mask = (FB_3D | FB_4D | 
+	 ctx->Feedback._Mask = (FB_3D | FB_4D |
 				(ctx->Visual.rgbMode ? FB_COLOR : FB_INDEX) |
 				FB_TEXTURE);
 	 break;
       default:
-         gl_error( ctx, GL_INVALID_ENUM, "glFeedbackBuffer" );
+         _mesa_error( ctx, GL_INVALID_ENUM, "glFeedbackBuffer" );
 	 return;
    }
 
@@ -120,7 +120,7 @@ _mesa_PassThrough( GLfloat token )
 /*
  * Put a vertex into the feedback buffer.
  */
-void gl_feedback_vertex( GLcontext *ctx,
+void _mesa_feedback_vertex( GLcontext *ctx,
                          const GLfloat win[4],
 			 const GLfloat color[4],
 			 GLuint index,
@@ -167,7 +167,7 @@ _mesa_SelectBuffer( GLsizei size, GLuint *buffer )
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (ctx->RenderMode==GL_SELECT) {
-      gl_error( ctx, GL_INVALID_OPERATION, "glSelectBuffer" );
+      _mesa_error( ctx, GL_INVALID_OPERATION, "glSelectBuffer" );
       return;			/* KW: added return */
    }
 
@@ -189,7 +189,7 @@ _mesa_SelectBuffer( GLsizei size, GLuint *buffer )
 
 
 
-void gl_update_hitflag( GLcontext *ctx, GLfloat z )
+void _mesa_update_hitflag( GLcontext *ctx, GLfloat z )
 {
    ctx->Select.HitFlag = GL_TRUE;
    if (z < ctx->Select.HitMinZ) {
@@ -259,7 +259,7 @@ _mesa_LoadName( GLuint name )
       return;
    }
    if (ctx->Select.NameStackDepth == 0) {
-      gl_error( ctx, GL_INVALID_OPERATION, "glLoadName" );
+      _mesa_error( ctx, GL_INVALID_OPERATION, "glLoadName" );
       return;
    }
 
@@ -292,7 +292,7 @@ _mesa_PushName( GLuint name )
       write_hit_record( ctx );
    }
    if (ctx->Select.NameStackDepth >= MAX_NAME_STACK_DEPTH) {
-      gl_error( ctx, GL_STACK_OVERFLOW, "glPushName" );
+      _mesa_error( ctx, GL_STACK_OVERFLOW, "glPushName" );
    }
    else
       ctx->Select.NameStack[ctx->Select.NameStackDepth++] = name;
@@ -315,7 +315,7 @@ _mesa_PopName( void )
       write_hit_record( ctx );
    }
    if (ctx->Select.NameStackDepth == 0) {
-      gl_error( ctx, GL_STACK_UNDERFLOW, "glPopName" );
+      _mesa_error( ctx, GL_STACK_UNDERFLOW, "glPopName" );
    }
    else
       ctx->Select.NameStackDepth--;
@@ -340,10 +340,9 @@ _mesa_RenderMode( GLenum mode )
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, 0);
 
    if (MESA_VERBOSE & VERBOSE_API)
-      fprintf(stderr, "glRenderMode %s\n", gl_lookup_enum_by_nr(mode));
+      fprintf(stderr, "glRenderMode %s\n", _mesa_lookup_enum_by_nr(mode));
 
    FLUSH_VERTICES(ctx, _NEW_RENDERMODE);
-   ctx->_TriangleCaps &= ~(DD_FEEDBACK|DD_SELECT);
 
    switch (ctx->RenderMode) {
       case GL_RENDER:
@@ -378,7 +377,7 @@ _mesa_RenderMode( GLenum mode )
 	 ctx->Feedback.Count = 0;
 	 break;
       default:
-	 gl_error( ctx, GL_INVALID_ENUM, "glRenderMode" );
+	 _mesa_error( ctx, GL_INVALID_ENUM, "glRenderMode" );
 	 return 0;
    }
 
@@ -386,28 +385,25 @@ _mesa_RenderMode( GLenum mode )
       case GL_RENDER:
          break;
       case GL_SELECT:
-	 ctx->_TriangleCaps |= DD_SELECT;
 	 if (ctx->Select.BufferSize==0) {
 	    /* haven't called glSelectBuffer yet */
-	    gl_error( ctx, GL_INVALID_OPERATION, "glRenderMode" );
+	    _mesa_error( ctx, GL_INVALID_OPERATION, "glRenderMode" );
 	 }
 	 break;
       case GL_FEEDBACK:
-	 ctx->_TriangleCaps |= DD_FEEDBACK;
 	 if (ctx->Feedback.BufferSize==0) {
 	    /* haven't called glFeedbackBuffer yet */
-	    gl_error( ctx, GL_INVALID_OPERATION, "glRenderMode" );
+	    _mesa_error( ctx, GL_INVALID_OPERATION, "glRenderMode" );
 	 }
 	 break;
       default:
-	 gl_error( ctx, GL_INVALID_ENUM, "glRenderMode" );
+	 _mesa_error( ctx, GL_INVALID_ENUM, "glRenderMode" );
 	 return 0;
    }
 
    ctx->RenderMode = mode;
-   if (ctx->Driver.RenderMode) 
+   if (ctx->Driver.RenderMode)
       ctx->Driver.RenderMode( ctx, mode );
 
    return result;
 }
-

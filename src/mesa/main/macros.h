@@ -1,21 +1,21 @@
-/* $Id: macros.h,v 1.18 2001/01/24 00:04:58 brianp Exp $ */
+/* $Id: macros.h,v 1.20 2001/03/18 08:53:49 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -68,7 +68,7 @@
 #define TEST_BITS(WORD, BITS)   ((WORD) & (BITS))
 
 
-/* Stepping a GLfloat pointer by a byte stride 
+/* Stepping a GLfloat pointer by a byte stride
  */
 #define STRIDE_F(p, i)  (p = (GLfloat *)((GLubyte *)p + i))
 #define STRIDE_UI(p, i)  (p = (GLuint *)((GLubyte *)p + i))
@@ -92,7 +92,7 @@
 			  (a)[2] == (b)[2])
 
 #if defined(__i386__)
-#define TEST_EQ_4UBV(DST, SRC) *((GLuint*)(DST)) == *((GLuint*)(SRC))	
+#define TEST_EQ_4UBV(DST, SRC) *((GLuint*)(DST)) == *((GLuint*)(SRC))
 #else
 #define TEST_EQ_4UBV(DST, SRC) TEST_EQ_4V(DST, SRC)
 #endif
@@ -169,7 +169,7 @@ do {						\
    case 2: (DST)[1] = (SRC)[1];			\
    case 1: (DST)[0] = (SRC)[0];			\
    }  						\
-} while(0)			   
+} while(0)
 
 #define COPY_CLEAN_4V(DST, SZ, SRC) 		\
 do {						\
@@ -441,6 +441,33 @@ do {						\
    (n)[1] = (u)[2]*(v)[0] - (u)[0]*(v)[2]; 	\
    (n)[2] = (u)[0]*(v)[1] - (u)[1]*(v)[0];	\
 } while (0)
+
+
+
+/* Generic color packing macros
+ */
+
+#define PACK_COLOR_8888( a, b, c, d )					\
+   (((a) << 24) | ((b) << 16) | ((c) << 8) | (d))
+
+#define PACK_COLOR_888( a, b, c )					\
+   (((a) << 16) | ((b) << 8) | (c))
+
+#define PACK_COLOR_565( a, b, c )					\
+   ((((a) & 0xf8) << 8) | (((b) & 0xfc) << 3) | (((c) & 0xf8) >> 3))
+
+#define PACK_COLOR_1555( a, b, c, d )					\
+   ((((b) & 0xf8) << 7) | (((c) & 0xf8) << 2) | (((d) & 0xf8) >> 3) |	\
+    ((a) ? 0x8000 : 0))
+
+#define PACK_COLOR_4444( a, b, c, d )					\
+   ((((a) & 0xf0) << 8) | (((b) & 0xf0) << 4) | ((c) & 0xf0) | ((d) >> 4))
+
+#define PACK_COLOR_88( a, b )						\
+   (((a) << 8) | (b))
+
+#define PACK_COLOR_332( a, b, c )					\
+   (((a) & 0xe0) | (((b) & 0xe0) >> 3) | (((c) & 0xc0) >> 6))
 
 
 #endif

@@ -1,21 +1,21 @@
-/* $Id: s_aatriangle.c,v 1.7 2001/02/16 18:14:41 keithw Exp $ */
+/* $Id: s_aatriangle.c,v 1.12 2001/03/29 16:50:32 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -123,7 +123,7 @@ solve_plane_chan(GLfloat x, GLfloat y, const GLfloat plane[4])
    if (z < 0.0F)
       return 0;
    else if (z > CHAN_MAXF)
-      return CHAN_MAXF;
+      return (GLchan) CHAN_MAXF;
    return (GLchan) (GLint) z;
 }
 
@@ -138,25 +138,26 @@ static GLfloat
 compute_coveragef(const GLfloat v0[3], const GLfloat v1[3],
                   const GLfloat v2[3], GLint winx, GLint winy)
 {
+#define B 0.125
    static const GLfloat samples[16][2] = {
       /* start with the four corners */
-      { 0.00, 0.00 },
-      { 0.75, 0.00 },
-      { 0.00, 0.75 },
-      { 0.75, 0.75 },
+      { 0.00+B, 0.00+B },
+      { 0.75+B, 0.00+B },
+      { 0.00+B, 0.75+B },
+      { 0.75+B, 0.75+B },
       /* continue with interior samples */
-      { 0.25, 0.00 },
-      { 0.50, 0.00 },
-      { 0.00, 0.25 },
-      { 0.25, 0.25 },
-      { 0.50, 0.25 },
-      { 0.75, 0.25 },
-      { 0.00, 0.50 },
-      { 0.25, 0.50 },
-      { 0.50, 0.50 },
-      { 0.75, 0.50 },
-      { 0.25, 0.75 },
-      { 0.50, 0.75 }
+      { 0.25+B, 0.00+B },
+      { 0.50+B, 0.00+B },
+      { 0.00+B, 0.25+B },
+      { 0.25+B, 0.25+B },
+      { 0.50+B, 0.25+B },
+      { 0.75+B, 0.25+B },
+      { 0.00+B, 0.50+B },
+      { 0.25+B, 0.50+B },
+      { 0.50+B, 0.50+B },
+      { 0.75+B, 0.50+B },
+      { 0.25+B, 0.75+B },
+      { 0.50+B, 0.75+B }
    };
    const GLfloat x = (GLfloat) winx;
    const GLfloat y = (GLfloat) winy;
@@ -226,23 +227,23 @@ compute_coveragei(const GLfloat v0[3], const GLfloat v1[3],
     */
    static const GLfloat samples[15][2] = {
       /* start with the four corners */
-      { 0.00, 0.00 },
-      { 0.75, 0.00 },
-      { 0.00, 0.75 },
-      { 0.75, 0.75 },
+      { 0.00+B, 0.00+B },
+      { 0.75+B, 0.00+B },
+      { 0.00+B, 0.75+B },
+      { 0.75+B, 0.75+B },
       /* continue with interior samples */
-      { 0.25, 0.00 },
-      { 0.50, 0.00 },
-      { 0.00, 0.25 },
-      { 0.25, 0.25 },
-      { 0.50, 0.25 },
-      { 0.75, 0.25 },
-      { 0.00, 0.50 },
-      { 0.25, 0.50 },
+      { 0.25+B, 0.00+B },
+      { 0.50+B, 0.00+B },
+      { 0.00+B, 0.25+B },
+      { 0.25+B, 0.25+B },
+      { 0.50+B, 0.25+B },
+      { 0.75+B, 0.25+B },
+      { 0.00+B, 0.50+B },
+      { 0.25+B, 0.50+B },
       /*{ 0.50, 0.50 },*/
-      { 0.75, 0.50 },
-      { 0.25, 0.75 },
-      { 0.50, 0.75 }
+      { 0.75+B, 0.50+B },
+      { 0.25+B, 0.75+B },
+      { 0.50+B, 0.75+B }
    };
    const GLfloat x = (GLfloat) winx;
    const GLfloat y = (GLfloat) winy;
@@ -395,7 +396,7 @@ spec_multitex_aa_tri(GLcontext *ctx,
 
 
 /*
- * Examine GL state and set ctx->Driver.TriangleFunc to an
+ * Examine GL state and set swrast->Triangle to an
  * appropriate antialiased triangle rasterizer function.
  */
 void
@@ -405,7 +406,7 @@ _mesa_set_aa_triangle_function(GLcontext *ctx)
    ASSERT(ctx->Polygon.SmoothFlag);
 
    if (ctx->Texture._ReallyEnabled) {
-      if (ctx->_TriangleCaps & DD_SEPERATE_SPECULAR) {
+      if (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR) {
          if (swrast->_MultiTextureEnabled) {
             SWRAST_CONTEXT(ctx)->Triangle = spec_multitex_aa_tri;
          }

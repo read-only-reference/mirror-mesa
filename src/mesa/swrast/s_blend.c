@@ -1,21 +1,21 @@
-/* $Id: s_blend.c,v 1.2 2000/11/05 18:24:40 keithw Exp $ */
+/* $Id: s_blend.c,v 1.7 2001/03/19 02:25:36 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -98,12 +98,20 @@ blend_transparency( GLcontext *ctx, GLuint n, const GLubyte mask[],
             const GLint b = DIV255(rgba[i][BCOMP] * t + dest[i][BCOMP] * s);
             const GLint a = DIV255(rgba[i][ACOMP] * t + dest[i][ACOMP] * s);
 #undef DIV255
-#else
-            const GLint s = CHAN_MAX - t;
-            const GLint r = (rgba[i][RCOMP] * t + dest[i][RCOMP] * s) / CHAN_MAX;
-            const GLint g = (rgba[i][GCOMP] * t + dest[i][GCOMP] * s) / CHAN_MAX;
-            const GLint b = (rgba[i][BCOMP] * t + dest[i][BCOMP] * s) / CHAN_MAX;
-            const GLint a = (rgba[i][ACOMP] * t + dest[i][ACOMP] * s) / CHAN_MAX;
+#elif CHAN_BITS == 16
+            const GLfloat tt = (GLfloat) t / CHAN_MAXF;
+            const GLfloat s = 1.0 - tt;
+            const GLint r = (GLint) (rgba[i][RCOMP] * tt + dest[i][RCOMP] * s);
+            const GLint g = (GLint) (rgba[i][GCOMP] * tt + dest[i][GCOMP] * s);
+            const GLint b = (GLint) (rgba[i][BCOMP] * tt + dest[i][BCOMP] * s);
+            const GLint a = (GLint) (rgba[i][ACOMP] * tt + dest[i][ACOMP] * s);
+#else /* CHAN_BITS == 32 */
+            const GLfloat tt = (GLfloat) t / CHAN_MAXF;
+            const GLfloat s = 1.0 - tt;
+            const GLfloat r = rgba[i][RCOMP] * tt + dest[i][RCOMP] * s;
+            const GLfloat g = rgba[i][GCOMP] * tt + dest[i][GCOMP] * s;
+            const GLfloat b = rgba[i][BCOMP] * tt + dest[i][BCOMP] * s;
+            const GLfloat a = rgba[i][ACOMP] * tt + dest[i][ACOMP] * s;
 #endif
 #endif
             ASSERT(r <= CHAN_MAX);
@@ -325,7 +333,7 @@ blend_general( GLcontext *ctx, GLuint n, const GLubyte mask[],
                break;
             default:
                /* this should never happen */
-               gl_problem(ctx, "Bad blend source RGB factor in do_blend");
+               _mesa_problem(ctx, "Bad blend source RGB factor in do_blend");
 	       return;
          }
 
@@ -379,7 +387,7 @@ blend_general( GLcontext *ctx, GLuint n, const GLubyte mask[],
             default:
                /* this should never happen */
                sA = 0.0F;
-               gl_problem(ctx, "Bad blend source A factor in do_blend");
+               _mesa_problem(ctx, "Bad blend source A factor in do_blend");
          }
 
          /* Dest RGB factor */
@@ -441,7 +449,7 @@ blend_general( GLcontext *ctx, GLuint n, const GLubyte mask[],
             default:
                /* this should never happen */
                dR = dG = dB = 0.0F;
-               gl_problem(ctx, "Bad blend dest RGB factor in do_blend");
+               _mesa_problem(ctx, "Bad blend dest RGB factor in do_blend");
          }
 
          /* Dest Alpha factor */
@@ -491,7 +499,7 @@ blend_general( GLcontext *ctx, GLuint n, const GLubyte mask[],
             default:
                /* this should never happen */
                dA = 0.0F;
-               gl_problem(ctx, "Bad blend dest A factor in do_blend");
+               _mesa_problem(ctx, "Bad blend dest A factor in do_blend");
 	       return;
          }
 
@@ -537,7 +545,7 @@ blend_general( GLcontext *ctx, GLuint n, const GLubyte mask[],
          else {
             /* should never get here */
             r = g = b = a = 0.0F;  /* silence uninitialized var warning */
-            gl_problem(ctx, "unexpected BlendEquation in blend_general()");
+            _mesa_problem(ctx, "unexpected BlendEquation in blend_general()");
          }
 
          /* final clamping */
@@ -569,11 +577,11 @@ void _swrast_choose_blend_func( GLcontext *ctx )
       SWRAST_CONTEXT(ctx)->BlendFunc = blend_general;
    }
    else if (eq==GL_FUNC_ADD_EXT && srcRGB==GL_SRC_ALPHA
-	    && dstRGB==GL_ONE_MINUS_SRC_ALPHA) 
+	    && dstRGB==GL_ONE_MINUS_SRC_ALPHA)
    {
 #if defined(USE_MMX_ASM)
       if ( cpu_has_mmx ) {
-	 SWRAST_CONTEXT(ctx)->BlendFunc = gl_mmx_blend_transparency;
+	 SWRAST_CONTEXT(ctx)->BlendFunc = _mesa_mmx_blend_transparency;
       }
       else
 #endif
@@ -622,10 +630,10 @@ _mesa_blend_span( GLcontext *ctx, GLuint n, GLint x, GLint y,
    }
 
    /* Read span of current frame buffer pixels */
-   gl_read_rgba_span( ctx, ctx->DrawBuffer, n, x, y, dest );
+   _mesa_read_rgba_span( ctx, ctx->DrawBuffer, n, x, y, dest );
 
-   SWRAST_CONTEXT(ctx)->BlendFunc( ctx, n, mask, rgba, 
-				   (const GLchan (*)[4])dest );
+   SWRAST_CONTEXT(ctx)->BlendFunc( ctx, n, mask, rgba,
+				   (const GLchan (*)[4]) dest );
 }
 
 
@@ -652,12 +660,10 @@ _mesa_blend_pixels( GLcontext *ctx,
    }
 
    /* Read pixels from current color buffer */
-   (*ctx->Driver.ReadRGBAPixels)( ctx, n, x, y, dest, mask );
+   (*swrast->Driver.ReadRGBAPixels)( ctx, n, x, y, dest, mask );
    if (swrast->_RasterMask & ALPHABUF_BIT) {
       _mesa_read_alpha_pixels( ctx, n, x, y, dest, mask );
    }
 
    swrast->BlendFunc( ctx, n, mask, rgba, (const GLchan (*)[4])dest );
 }
-
-

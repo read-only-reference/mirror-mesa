@@ -1,4 +1,4 @@
-/* $Id: fakeglx.c,v 1.46 2001/02/17 00:17:31 brianp Exp $ */
+/* $Id: fakeglx.c,v 1.48 2001/03/23 21:37:05 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -1081,14 +1081,14 @@ Fake_glXChooseVisual( Display *dpy, int screen, int *list )
       /* we only support one size of stencil and accum buffers. */
       if (stencil_size > 0)
          stencil_size = STENCIL_BITS;
-      if (accumRedSize > 0)
+      if (accumRedSize > 0 || accumGreenSize > 0 || accumBlueSize > 0 ||
+          accumAlphaSize > 0) {
          accumRedSize = ACCUM_BITS;
-      if (accumGreenSize > 0)
          accumGreenSize = ACCUM_BITS;
-      if (accumBlueSize > 0)
          accumBlueSize = ACCUM_BITS;
-      if (accumAlphaSize > 0)
-         accumAlphaSize = ACCUM_BITS;
+         accumAlphaSize = alpha_flag ? ACCUM_BITS : 0;
+      }
+
       if (!save_glx_visual( dpy, vis, rgb_flag, alpha_flag, double_flag,
                             stereo_flag, depth_size, stencil_size,
                             accumRedSize, accumGreenSize,
@@ -2206,7 +2206,7 @@ struct _glxapi_table *_mesa_GetGLXDispatchTable(void)
 
    /* be sure our dispatch table size <= libGL's table */
    {
-      int size = sizeof(struct _glxapi_table) / sizeof(void *);
+      GLuint size = sizeof(struct _glxapi_table) / sizeof(void *);
       (void) size;
       assert(_glxapi_get_dispatch_table_size() >= size);
    }

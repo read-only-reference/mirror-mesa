@@ -1,21 +1,21 @@
-/* $Id: s_readpix.c,v 1.7 2001/02/16 23:29:14 brianp Exp $ */
+/* $Id: s_readpix.c,v 1.11 2001/03/19 02:25:36 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
+ *
  * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -53,16 +53,17 @@ read_index_pixels( GLcontext *ctx,
                    GLenum type, GLvoid *pixels,
                    const struct gl_pixelstore_attrib *packing )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    GLint i, readWidth;
 
    /* error checking */
    if (ctx->Visual.rgbMode) {
-      gl_error( ctx, GL_INVALID_OPERATION, "glReadPixels" );
+      _mesa_error( ctx, GL_INVALID_OPERATION, "glReadPixels" );
       return;
    }
 
-   ASSERT(ctx->Driver.SetReadBuffer);
-   (*ctx->Driver.SetReadBuffer)(ctx, ctx->ReadBuffer,
+   ASSERT(swrast->Driver.SetReadBuffer);
+   (*swrast->Driver.SetReadBuffer)(ctx, ctx->ReadBuffer,
                                 ctx->Pixel.DriverReadBuffer);
 
    readWidth = (width > MAX_WIDTH) ? MAX_WIDTH : width;
@@ -72,7 +73,7 @@ read_index_pixels( GLcontext *ctx,
       GLuint index[MAX_WIDTH];
       GLvoid *dest;
 
-      (*ctx->Driver.ReadCI32Span)(ctx, readWidth, x, y + i, index);
+      (*swrast->Driver.ReadCI32Span)(ctx, readWidth, x, y + i, index);
 
       dest = _mesa_image_address(packing, pixels, width, height,
                                  GL_COLOR_INDEX, type, 0, i, 0);
@@ -81,7 +82,7 @@ read_index_pixels( GLcontext *ctx,
                             &ctx->Pack, ctx->_ImageTransferState);
    }
 
-   (*ctx->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer,
+   (*swrast->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer,
                                 ctx->Color.DriverDrawBuffer);
 }
 
@@ -100,7 +101,7 @@ read_depth_pixels( GLcontext *ctx,
    /* Error checking */
    if (ctx->Visual.depthBits <= 0) {
       /* No depth buffer */
-      gl_error( ctx, GL_INVALID_OPERATION, "glReadPixels" );
+      _mesa_error( ctx, GL_INVALID_OPERATION, "glReadPixels" );
       return;
    }
 
@@ -113,7 +114,7 @@ read_depth_pixels( GLcontext *ctx,
        type != GL_INT &&
        type != GL_UNSIGNED_INT &&
        type != GL_FLOAT) {
-      gl_error( ctx, GL_INVALID_OPERATION, "glReadPixels(depth type)");
+      _mesa_error( ctx, GL_INVALID_OPERATION, "glReadPixels(depth type)");
       return;
    }
 
@@ -155,7 +156,8 @@ read_depth_pixels( GLcontext *ctx,
          dest = _mesa_image_address(packing, pixels, width, height,
                                     GL_DEPTH_COMPONENT, type, 0, j, 0);
 
-         _mesa_pack_depth_span(ctx, readWidth, dest, type, depth, &ctx->Pack);
+         _mesa_pack_depth_span(ctx, readWidth, (GLdepth *) dest, type,
+                               depth, &ctx->Pack);
       }
    }
 }
@@ -179,7 +181,7 @@ read_stencil_pixels( GLcontext *ctx,
        type != GL_UNSIGNED_INT &&
        type != GL_FLOAT &&
        type != GL_BITMAP) {
-      gl_error( ctx, GL_INVALID_OPERATION, "glReadPixels(stencil type)");
+      _mesa_error( ctx, GL_INVALID_OPERATION, "glReadPixels(stencil type)");
       return;
    }
 
@@ -187,7 +189,7 @@ read_stencil_pixels( GLcontext *ctx,
 
    if (ctx->Visual.stencilBits <= 0) {
       /* No stencil buffer */
-      gl_error( ctx, GL_INVALID_OPERATION, "glReadPixels" );
+      _mesa_error( ctx, GL_INVALID_OPERATION, "glReadPixels" );
       return;
    }
 
@@ -220,6 +222,7 @@ read_fast_rgba_pixels( GLcontext *ctx,
                        GLvoid *pixels,
                        const struct gl_pixelstore_attrib *packing )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    /* can't do scale, bias, mapping, etc */
    if (ctx->_ImageTransferState)
        return GL_FALSE;
@@ -282,7 +285,7 @@ read_fast_rgba_pixels( GLcontext *ctx,
                          + (skipRows * rowLength + skipPixels) * 4;
          GLint row;
          for (row=0; row<readHeight; row++) {
-            (*ctx->Driver.ReadRGBASpan)(ctx, readWidth, srcX, srcY,
+            (*swrast->Driver.ReadRGBASpan)(ctx, readWidth, srcX, srcY,
                                         (GLchan (*)[4]) dest);
             if (ctx->DrawBuffer->UseSoftwareAlphaBuffers) {
                _mesa_read_alpha_span(ctx, readWidth, srcX, srcY,
@@ -312,15 +315,16 @@ read_rgba_pixels( GLcontext *ctx,
                   GLenum format, GLenum type, GLvoid *pixels,
                   const struct gl_pixelstore_attrib *packing )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    GLint readWidth;
 
-   (*ctx->Driver.SetReadBuffer)(ctx, ctx->ReadBuffer, ctx->Pixel.DriverReadBuffer);
+   (*swrast->Driver.SetReadBuffer)(ctx, ctx->ReadBuffer, ctx->Pixel.DriverReadBuffer);
 
    /* Try optimized path first */
    if (read_fast_rgba_pixels( ctx, x, y, width, height,
                               format, type, pixels, packing )) {
 
-      (*ctx->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer, ctx->Color.DriverDrawBuffer);
+      (*swrast->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer, ctx->Color.DriverDrawBuffer);
       return; /* done! */
    }
 
@@ -350,13 +354,13 @@ read_rgba_pixels( GLcontext *ctx,
          /* valid pixel type */
          break;
       default:
-         gl_error( ctx, GL_INVALID_ENUM, "glReadPixels(type)" );
+         _mesa_error( ctx, GL_INVALID_ENUM, "glReadPixels(type)" );
          return;
    }
 
    if (!_mesa_is_legal_format_and_type(format, type) ||
        format == GL_INTENSITY) {
-      gl_error(ctx, GL_INVALID_OPERATION, "glReadPixels(format or type)");
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glReadPixels(format or type)");
       return;
    }
 
@@ -367,13 +371,13 @@ read_rgba_pixels( GLcontext *ctx,
 
       tmpImage = (GLfloat *) MALLOC(width * height * 4 * sizeof(GLfloat));
       if (!tmpImage) {
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glReadPixels");
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glReadPixels");
          return;
       }
       convImage = (GLfloat *) MALLOC(width * height * 4 * sizeof(GLfloat));
       if (!convImage) {
          FREE(tmpImage);
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glReadPixels");
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glReadPixels");
          return;
       }
 
@@ -382,11 +386,11 @@ read_rgba_pixels( GLcontext *ctx,
       for (row = 0; row < height; row++, y++) {
          GLchan rgba[MAX_WIDTH][4];
          if (ctx->Visual.rgbMode) {
-            gl_read_rgba_span(ctx, ctx->ReadBuffer, readWidth, x, y, rgba);
+            _mesa_read_rgba_span(ctx, ctx->ReadBuffer, readWidth, x, y, rgba);
          }
          else {
             GLuint index[MAX_WIDTH];
-            (*ctx->Driver.ReadCI32Span)(ctx, readWidth, x, y, index);
+            (*swrast->Driver.ReadCI32Span)(ctx, readWidth, x, y, index);
             if (ctx->Pixel.IndexShift != 0 || ctx->Pixel.IndexOffset !=0 ) {
                _mesa_map_ci(ctx, readWidth, index);
             }
@@ -428,11 +432,11 @@ read_rgba_pixels( GLcontext *ctx,
          GLchan rgba[MAX_WIDTH][4];
          GLvoid *dst;
          if (ctx->Visual.rgbMode) {
-            gl_read_rgba_span(ctx, ctx->ReadBuffer, readWidth, x, y, rgba);
+            _mesa_read_rgba_span(ctx, ctx->ReadBuffer, readWidth, x, y, rgba);
          }
          else {
             GLuint index[MAX_WIDTH];
-            (*ctx->Driver.ReadCI32Span)(ctx, readWidth, x, y, index);
+            (*swrast->Driver.ReadCI32Span)(ctx, readWidth, x, y, index);
             if (ctx->Pixel.IndexShift != 0 || ctx->Pixel.IndexOffset != 0) {
                _mesa_map_ci(ctx, readWidth, index);
             }
@@ -464,7 +468,7 @@ read_rgba_pixels( GLcontext *ctx,
       }
    }
 
-   (*ctx->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer, ctx->Color.DriverDrawBuffer);
+   (*swrast->Driver.SetReadBuffer)(ctx, ctx->DrawBuffer, ctx->Color.DriverDrawBuffer);
 }
 
 
@@ -472,14 +476,17 @@ read_rgba_pixels( GLcontext *ctx,
 void
 _swrast_ReadPixels( GLcontext *ctx,
 		    GLint x, GLint y, GLsizei width, GLsizei height,
-		    GLenum format, GLenum type, 
+		    GLenum format, GLenum type,
 		    const struct gl_pixelstore_attrib *pack,
 		    GLvoid *pixels )
 {
+   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    (void) pack;
 
-   if (SWRAST_CONTEXT(ctx)->NewState)
+   if (swrast->NewState)
       _swrast_validate_derived( ctx );
+
+   RENDER_START(swrast,ctx);
 
    switch (format) {
       case GL_COLOR_INDEX:
@@ -506,6 +513,8 @@ _swrast_ReadPixels( GLcontext *ctx,
                           format, type, pixels, &ctx->Pack);
 	 break;
       default:
-	 gl_error( ctx, GL_INVALID_ENUM, "glReadPixels(format)" );
+	 _mesa_error( ctx, GL_INVALID_ENUM, "glReadPixels(format)" );
    }
+
+   RENDER_FINISH(swrast,ctx);
 }

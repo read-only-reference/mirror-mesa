@@ -1,19 +1,21 @@
+/* $Id: t_dd_vertex.h,v 1.8 2001/03/20 18:33:41 gareth Exp $ */
+
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
- * 
- * Copyright (C) 1999  Brian Paul   All Rights Reserved.
- * 
+ *
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
  * to deal in the Software without restriction, including without limitation
  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
  * and/or sell copies of the Software, and to permit persons to whom the
  * Software is furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included
  * in all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
@@ -21,50 +23,72 @@
  * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
- * Author:
- *   Keith Whitwell <keithw@valinux.com>
+ * Authors:
+ *    Keith Whitwell <keithw@valinux.com>
  */
 
-#if (COLOR_IS_RBGA)
 typedef struct {
-  GLubyte red;
-  GLubyte green;
-  GLubyte blue;
-  GLubyte alpha;
-} TAG(_color);
-#else 
+   GLfloat x, y, z, w;
+} TAG(_coord_t);
+
+#ifdef COLOR_IS_RGBA
 typedef struct {
-  GLubyte blue;
-  GLubyte green;
-  GLubyte red;
-  GLubyte alpha;
-} TAG(_color);
+   GLubyte red;
+   GLubyte green;
+   GLubyte blue;
+   GLubyte alpha;
+} TAG(_color_t);
+#else
+typedef struct {
+   GLubyte blue;
+   GLubyte green;
+   GLubyte red;
+   GLubyte alpha;
+} TAG(_color_t);
 #endif
 
 typedef union {
    struct {
-      float x, y, z, w;
-      TAG(_color) color;
-      TAG(_color) specular;
-      float u0, v0;
-      float u1, v1;
-      float u2, v2;
-      float u3, v3;
+      GLfloat x, y, z, w;
+      TAG(_color_t) color;
+      TAG(_color_t) specular;
+      GLfloat u0, v0;
+      GLfloat u1, v1;
+      GLfloat u2, v2;
+      GLfloat u3, v3;
    } v;
    struct {
-      float x, y, z, w;
-      TAG(_color) color;
-      TAG(_color) specular;
-      float u0, v0, q0;
-      float u1, v1, q1;
-      float u2, v2, q2;
-      float u3, v3, q3;
+      GLfloat x, y, z, w;
+      TAG(_color_t) color;
+      TAG(_color_t) specular;
+      GLfloat u0, v0, q0;
+      GLfloat u1, v1, q1;
+      GLfloat u2, v2, q2;
+      GLfloat u3, v3, q3;
    } pv;
    struct {
-      float x, y, z;
-      TAG(_color) color;
+      GLfloat x, y, z;
+      TAG(_color_t) color;
    } tv;
-   float f[16];
-   unsigned int ui[16];
-   unsigned char ub4[4][16];
+   GLfloat f[24];
+   GLuint  ui[24];
+   GLubyte ub4[24][4];
 } TAG(Vertex), *TAG(VertexPtr);
+
+typedef struct {
+   GLfloat obj[4];
+   GLfloat normal[4];
+
+   GLfloat clip[4];
+   GLuint mask;
+
+   GLubyte color[4];
+   GLubyte specular[4];
+   GLuint __padding0;
+
+   GLfloat win[4];
+   GLfloat eye[4];
+
+   GLfloat texture[MAX_TEXTURE_UNITS][4];
+   GLuint __padding1[8]; /* FIXME: This is kinda evil... */
+} TAG(TnlVertex), *TAG(TnlVertexPtr);

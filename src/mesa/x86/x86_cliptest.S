@@ -1,10 +1,10 @@
-/* $Id: x86_cliptest.S,v 1.4 2001/01/13 05:48:25 keithw Exp $ */
+/* $Id: x86_cliptest.S,v 1.6 2001/03/28 20:44:44 gareth Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -24,7 +24,7 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "assyntax.h"
+#include "matypes.h"
 #include "clip_args.h"
 
 #define FP_ONE		1065353216
@@ -71,7 +71,7 @@ clip_table:
 	SEG_TEXT
 
 /*
- * gl_x86_cliptest_points4
+ * _mesa_x86_cliptest_points4
  *
  *   AL:  ormask
  *   AH:  andmask
@@ -88,8 +88,8 @@ clip_table:
 #endif
 
 ALIGNTEXT16
-GLOBL GLNAME( gl_x86_cliptest_points4 )
-GLNAME( gl_x86_cliptest_points4 ):
+GLOBL GLNAME( _mesa_x86_cliptest_points4 )
+GLNAME( _mesa_x86_cliptest_points4 ):
 
 #ifdef ELFPIC
 #define FRAME_OFFSET 20
@@ -254,8 +254,8 @@ LLBL( ctp4_finish ):
 
 
 ALIGNTEXT16
-GLOBL GLNAME( gl_x86_cliptest_points4_np )
-GLNAME( gl_x86_cliptest_points4_np ):
+GLOBL GLNAME( _mesa_x86_cliptest_points4_np )
+GLNAME( _mesa_x86_cliptest_points4_np ):
 
 #ifdef ELFPIC
 #define FRAME_OFFSET 20
@@ -379,30 +379,3 @@ LLBL( ctp4_np_finish ):
 	POP_L( ESI )
 
 	RET
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-	
-
-
-
-
-
-
-
-
-
-	

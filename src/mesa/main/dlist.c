@@ -1,4 +1,4 @@
-/* $Id: dlist.c,v 1.64 2001/02/06 21:42:48 brianp Exp $ */
+/* $Id: dlist.c,v 1.68 2001/03/27 16:42:37 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -313,7 +313,7 @@ static Node *make_empty_list( void )
  * Destroy all nodes in a display list.
  * Input:  list - display list number
  */
-void gl_destroy_list( GLcontext *ctx, GLuint list )
+void _mesa_destroy_list( GLcontext *ctx, GLuint list )
 {
    Node *n, *block;
    GLboolean done;
@@ -329,8 +329,8 @@ void gl_destroy_list( GLcontext *ctx, GLuint list )
 
       /* check for extension opcodes first */
 
-      int i = (int)n[0].opcode - (int)OPCODE_DRV_0;
-      if (i >= 0 && i < ctx->listext.nr_opcodes) {
+      GLint i = (GLint) n[0].opcode - (GLint) OPCODE_DRV_0;
+      if (i >= 0 && i < (GLint) ctx->listext.nr_opcodes) {
 	 ctx->listext.opcode[i].destroy(ctx, &n[1]);
 	 n += ctx->listext.opcode[i].size;
       }
@@ -503,7 +503,7 @@ static GLuint translate_id( GLsizei n, GLenum type, const GLvoid *list )
 /*****                        Public                              *****/
 /**********************************************************************/
 
-void gl_init_lists( void )
+void _mesa_init_lists( void )
 {
    static int init_flag = 0;
 
@@ -658,7 +658,7 @@ _mesa_alloc_instruction( GLcontext *ctx, int opcode, GLint sz )
 
 #ifdef DEBUG
    if (opcode < (int) OPCODE_DRV_0) {
-      assert( (GLint) count == InstSize[opcode] );
+      assert( count == InstSize[opcode] );
    }
 #endif
 
@@ -668,7 +668,7 @@ _mesa_alloc_instruction( GLcontext *ctx, int opcode, GLint sz )
       n[0].opcode = OPCODE_CONTINUE;
       newblock = (Node *) MALLOC( sizeof(Node) * BLOCK_SIZE );
       if (!newblock) {
-         gl_error( ctx, GL_OUT_OF_MEMORY, "Building display list" );
+         _mesa_error( ctx, GL_OUT_OF_MEMORY, "Building display list" );
          return NULL;
       }
       n[1].next = (Node *) newblock;
@@ -2133,7 +2133,7 @@ static void save_Map1d( GLenum target, GLdouble u1, GLdouble u2, GLint stride,
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
    n = ALLOC_INSTRUCTION( ctx, OPCODE_MAP1, 6 );
    if (n) {
-      GLfloat *pnts = gl_copy_map_points1d( target, stride, order, points );
+      GLfloat *pnts = _mesa_copy_map_points1d( target, stride, order, points );
       n[1].e = target;
       n[2].f = u1;
       n[3].f = u2;
@@ -2154,7 +2154,7 @@ static void save_Map1f( GLenum target, GLfloat u1, GLfloat u2, GLint stride,
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
    n = ALLOC_INSTRUCTION( ctx, OPCODE_MAP1, 6 );
    if (n) {
-      GLfloat *pnts = gl_copy_map_points1f( target, stride, order, points );
+      GLfloat *pnts = _mesa_copy_map_points1f( target, stride, order, points );
       n[1].e = target;
       n[2].f = u1;
       n[3].f = u2;
@@ -2178,7 +2178,7 @@ static void save_Map2d( GLenum target,
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
    n = ALLOC_INSTRUCTION( ctx, OPCODE_MAP2, 10 );
    if (n) {
-      GLfloat *pnts = gl_copy_map_points2d( target, ustride, uorder,
+      GLfloat *pnts = _mesa_copy_map_points2d( target, ustride, uorder,
                                             vstride, vorder, points );
       n[1].e = target;
       n[2].f = u1;
@@ -2210,7 +2210,7 @@ static void save_Map2f( GLenum target,
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
    n = ALLOC_INSTRUCTION( ctx, OPCODE_MAP2, 10 );
    if (n) {
-      GLfloat *pnts = gl_copy_map_points2f( target, ustride, uorder,
+      GLfloat *pnts = _mesa_copy_map_points2f( target, ustride, uorder,
                                             vstride, vorder, points );
       n[1].e = target;
       n[2].f = u1;
@@ -2350,7 +2350,7 @@ static void save_NewList( GLuint list, GLenum mode )
 {
    GET_CURRENT_CONTEXT(ctx);
    /* It's an error to call this function while building a display list */
-   gl_error( ctx, GL_INVALID_OPERATION, "glNewList" );
+   _mesa_error( ctx, GL_INVALID_OPERATION, "glNewList" );
    (void) list;
    (void) mode;
 }
@@ -2379,7 +2379,8 @@ static void save_Ortho( GLdouble left, GLdouble right,
 }
 
 
-static void save_PixelMapfv( GLenum map, GLint mapsize, const GLfloat *values )
+static void
+save_PixelMapfv( GLenum map, GLint mapsize, const GLfloat *values )
 {
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
@@ -2397,7 +2398,8 @@ static void save_PixelMapfv( GLenum map, GLint mapsize, const GLfloat *values )
 }
 
 
-static void save_PixelMapuiv(GLenum map, GLint mapsize, const GLuint *values )
+static void
+save_PixelMapuiv(GLenum map, GLint mapsize, const GLuint *values )
 {
    GLfloat fvalues[MAX_PIXEL_MAP_TABLE];
    GLint i;
@@ -2415,7 +2417,8 @@ static void save_PixelMapuiv(GLenum map, GLint mapsize, const GLuint *values )
 }
 
 
-static void save_PixelMapusv(GLenum map, GLint mapsize, const GLushort *values)
+static void
+save_PixelMapusv(GLenum map, GLint mapsize, const GLushort *values)
 {
    GLfloat fvalues[MAX_PIXEL_MAP_TABLE];
    GLint i;
@@ -2433,7 +2436,8 @@ static void save_PixelMapusv(GLenum map, GLint mapsize, const GLushort *values)
 }
 
 
-static void save_PixelTransferf( GLenum pname, GLfloat param )
+static void
+save_PixelTransferf( GLenum pname, GLfloat param )
 {
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
@@ -2449,13 +2453,15 @@ static void save_PixelTransferf( GLenum pname, GLfloat param )
 }
 
 
-static void save_PixelTransferi( GLenum pname, GLint param )
+static void
+save_PixelTransferi( GLenum pname, GLint param )
 {
    save_PixelTransferf( pname, (GLfloat) param );
 }
 
 
-static void save_PixelZoom( GLfloat xfactor, GLfloat yfactor )
+static void
+save_PixelZoom( GLfloat xfactor, GLfloat yfactor )
 {
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
@@ -2471,7 +2477,8 @@ static void save_PixelZoom( GLfloat xfactor, GLfloat yfactor )
 }
 
 
-static void save_PointParameterfvEXT( GLenum pname, const GLfloat *params )
+static void
+save_PointParameterfvEXT( GLenum pname, const GLfloat *params )
 {
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
@@ -3221,7 +3228,7 @@ static void save_TexImage2D( GLenum target,
 
 
 static void save_TexImage3D( GLenum target,
-                             GLint level, GLint internalFormat,
+                             GLint level, GLenum internalFormat,
                              GLsizei width, GLsizei height, GLsizei depth,
                              GLint border,
                              GLenum format, GLenum type,
@@ -3242,7 +3249,7 @@ static void save_TexImage3D( GLenum target,
       if (n) {
          n[1].e = target;
          n[2].i = level;
-         n[3].i = internalFormat;
+         n[3].i = (GLint) internalFormat;
          n[4].i = (GLint) width;
          n[5].i = (GLint) height;
          n[6].i = (GLint) depth;
@@ -3587,7 +3594,8 @@ static void save_LoadTransposeMatrixfARB( const GLfloat m[16] )
 }
 
 
-static void save_MultTransposeMatrixdARB( const GLdouble m[16] )
+static void
+save_MultTransposeMatrixdARB( const GLdouble m[16] )
 {
    GLfloat tm[16];
    _math_transposefd(tm, m);
@@ -3595,7 +3603,8 @@ static void save_MultTransposeMatrixdARB( const GLdouble m[16] )
 }
 
 
-static void save_MultTransposeMatrixfARB( const GLfloat m[16] )
+static void
+save_MultTransposeMatrixfARB( const GLfloat m[16] )
 {
    GLfloat tm[16];
    _math_transposef(tm, m);
@@ -3603,7 +3612,8 @@ static void save_MultTransposeMatrixfARB( const GLfloat m[16] )
 }
 
 
-static void save_PixelTexGenSGIX(GLenum mode)
+static void
+save_PixelTexGenSGIX(GLenum mode)
 {
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
@@ -3638,7 +3648,7 @@ save_CompressedTexImage1DARB(GLenum target, GLint level,
       /* make copy of image */
       image = MALLOC(imageSize);
       if (!image) {
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage1DARB");
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage1DARB");
          return;
       }
       MEMCPY(image, data, imageSize);
@@ -3682,7 +3692,7 @@ save_CompressedTexImage2DARB(GLenum target, GLint level,
       /* make copy of image */
       image = MALLOC(imageSize);
       if (!image) {
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage2DARB");
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage2DARB");
          return;
       }
       MEMCPY(image, data, imageSize);
@@ -3727,7 +3737,7 @@ save_CompressedTexImage3DARB(GLenum target, GLint level,
       /* make copy of image */
       image = MALLOC(imageSize);
       if (!image) {
-         gl_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage3DARB");
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage3DARB");
          return;
       }
       MEMCPY(image, data, imageSize);
@@ -3768,7 +3778,7 @@ save_CompressedTexSubImage1DARB(GLenum target, GLint level, GLint xoffset,
    /* make copy of image */
    image = MALLOC(imageSize);
    if (!image) {
-      gl_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexSubImage1DARB");
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexSubImage1DARB");
       return;
    }
    MEMCPY(image, data, imageSize);
@@ -3807,7 +3817,7 @@ save_CompressedTexSubImage2DARB(GLenum target, GLint level, GLint xoffset,
    /* make copy of image */
    image = MALLOC(imageSize);
    if (!image) {
-      gl_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexSubImage2DARB");
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexSubImage2DARB");
       return;
    }
    MEMCPY(image, data, imageSize);
@@ -3848,7 +3858,7 @@ save_CompressedTexSubImage3DARB(GLenum target, GLint level, GLint xoffset,
    /* make copy of image */
    image = MALLOC(imageSize);
    if (!image) {
-      gl_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexSubImage3DARB");
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexSubImage3DARB");
       return;
    }
    MEMCPY(image, data, imageSize);
@@ -3878,7 +3888,8 @@ save_CompressedTexSubImage3DARB(GLenum target, GLint level, GLint xoffset,
 
 /* GL_SGIS_pixel_texture */
 
-static void save_PixelTexGenParameteriSGIS(GLenum target, GLint value)
+static void
+save_PixelTexGenParameteriSGIS(GLenum target, GLint value)
 {
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
@@ -3894,19 +3905,22 @@ static void save_PixelTexGenParameteriSGIS(GLenum target, GLint value)
 }
 
 
-static void save_PixelTexGenParameterfSGIS(GLenum target, GLfloat value)
+static void
+save_PixelTexGenParameterfSGIS(GLenum target, GLfloat value)
 {
    save_PixelTexGenParameteriSGIS(target, (GLint) value);
 }
 
 
-static void save_PixelTexGenParameterivSGIS(GLenum target, const GLint *value)
+static void
+save_PixelTexGenParameterivSGIS(GLenum target, const GLint *value)
 {
    save_PixelTexGenParameteriSGIS(target, *value);
 }
 
 
-static void save_PixelTexGenParameterfvSGIS(GLenum target, const GLfloat *value)
+static void
+save_PixelTexGenParameterfvSGIS(GLenum target, const GLfloat *value)
 {
    save_PixelTexGenParameteriSGIS(target, (GLint) *value);
 }
@@ -3917,7 +3931,8 @@ static void save_PixelTexGenParameterfvSGIS(GLenum target, const GLfloat *value)
  * Will appear in the list before the vertex buffer containing the
  * command that provoked the error.  I don't see this as a problem.
  */
-void gl_save_error( GLcontext *ctx, GLenum error, const char *s )
+void
+_mesa_save_error( GLcontext *ctx, GLenum error, const char *s )
 {
    Node *n;
    n = ALLOC_INSTRUCTION( ctx, OPCODE_ERROR, 2 );
@@ -3953,7 +3968,8 @@ islist(GLcontext *ctx, GLuint list)
  * the absolute list number, not relative to ListBase.
  * Input:  list - display list number
  */
-static void execute_list( GLcontext *ctx, GLuint list )
+static void
+execute_list( GLcontext *ctx, GLuint list )
 {
    Node *n;
    GLboolean done;
@@ -3976,14 +3992,14 @@ static void execute_list( GLcontext *ctx, GLuint list )
       OpCode opcode = n[0].opcode;
       int i = (int)n[0].opcode - (int)OPCODE_DRV_0;
 
-      if (i >= 0 && i < ctx->listext.nr_opcodes) {
+      if (i >= 0 && i < (GLint) ctx->listext.nr_opcodes) {
 	 ctx->listext.opcode[i].execute(ctx, &n[1]);
 	 n += ctx->listext.opcode[i].size;
       }
       else {
 	 switch (opcode) {
 	 case OPCODE_ERROR:
-	    gl_error( ctx, n[1].e, (const char *) n[2].data );
+	    _mesa_error( ctx, n[1].e, (const char *) n[2].data );
 	    break;
          case OPCODE_ACCUM:
 	    (*ctx->Exec->Accum)( n[1].e, n[2].f );
@@ -4601,7 +4617,7 @@ static void execute_list( GLcontext *ctx, GLuint list )
             {
                char msg[1000];
                sprintf(msg, "Error in execute_list: opcode=%d", (int) opcode);
-               gl_problem( ctx, msg );
+               _mesa_problem( ctx, msg );
             }
             done = GL_TRUE;
 	 }
@@ -4654,11 +4670,11 @@ _mesa_DeleteLists( GLuint list, GLsizei range )
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (range<0) {
-      gl_error( ctx, GL_INVALID_VALUE, "glDeleteLists" );
+      _mesa_error( ctx, GL_INVALID_VALUE, "glDeleteLists" );
       return;
    }
    for (i=list;i<list+range;i++) {
-      gl_destroy_list( ctx, i );
+      _mesa_destroy_list( ctx, i );
    }
 }
 
@@ -4677,7 +4693,7 @@ _mesa_GenLists(GLsizei range )
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, 0);
 
    if (range<0) {
-      gl_error( ctx, GL_INVALID_VALUE, "glGenLists" );
+      _mesa_error( ctx, GL_INVALID_VALUE, "glGenLists" );
       return 0;
    }
    if (range==0) {
@@ -4716,21 +4732,21 @@ _mesa_NewList( GLuint list, GLenum mode )
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (MESA_VERBOSE&VERBOSE_API)
-      fprintf(stderr, "glNewList %u %s\n", list, gl_lookup_enum_by_nr(mode));
+      fprintf(stderr, "glNewList %u %s\n", list, _mesa_lookup_enum_by_nr(mode));
 
    if (list==0) {
-      gl_error( ctx, GL_INVALID_VALUE, "glNewList" );
+      _mesa_error( ctx, GL_INVALID_VALUE, "glNewList" );
       return;
    }
 
    if (mode!=GL_COMPILE && mode!=GL_COMPILE_AND_EXECUTE) {
-      gl_error( ctx, GL_INVALID_ENUM, "glNewList" );
+      _mesa_error( ctx, GL_INVALID_ENUM, "glNewList" );
       return;
    }
 
    if (ctx->CurrentListPtr) {
       /* already compiling a display list */
-      gl_error( ctx, GL_INVALID_OPERATION, "glNewList" );
+      _mesa_error( ctx, GL_INVALID_OPERATION, "glNewList" );
       return;
    }
 
@@ -4751,7 +4767,7 @@ _mesa_NewList( GLuint list, GLenum mode )
 
 
 /*
- * End definition of current display list.  Is the current 
+ * End definition of current display list.  Is the current
  * ASSERT_OUTSIDE_BEGIN_END strong enough to really guarentee that
  * we are outside begin/end calls?
  */
@@ -4768,14 +4784,14 @@ _mesa_EndList( void )
 
    /* Check that a list is under construction */
    if (!ctx->CurrentListPtr) {
-      gl_error( ctx, GL_INVALID_OPERATION, "glEndList" );
+      _mesa_error( ctx, GL_INVALID_OPERATION, "glEndList" );
       return;
    }
 
    (void) ALLOC_INSTRUCTION( ctx, OPCODE_END_OF_LIST, 0 );
 
    /* Destroy old list, if any */
-   gl_destroy_list(ctx, ctx->CurrentListNum);
+   _mesa_destroy_list(ctx, ctx->CurrentListNum);
    /* Install the list */
    _mesa_HashInsert(ctx->Shared->DisplayList, ctx->CurrentListNum, ctx->CurrentListPtr);
 
@@ -5072,7 +5088,7 @@ static void exec_GetTexLevelParameteriv( GLenum target, GLint level,
    ctx->Exec->GetTexLevelParameteriv( target, level, pname, params );
 }
 
-static void exec_GetTexParameterfv( GLenum target, GLenum pname, 
+static void exec_GetTexParameterfv( GLenum target, GLenum pname,
 				    GLfloat *params )
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5145,7 +5161,7 @@ static GLboolean exec_AreTexturesResident(GLsizei n, const GLuint *texName,
    return ctx->Exec->AreTexturesResident( n, texName, residences);
 }
 
-static void exec_ColorPointer(GLint size, GLenum type, GLsizei stride, 
+static void exec_ColorPointer(GLint size, GLenum type, GLsizei stride,
 			      const GLvoid *ptr)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5202,7 +5218,7 @@ static void exec_IndexPointer(GLenum type, GLsizei stride, const GLvoid *ptr)
    ctx->Exec->IndexPointer( type, stride, ptr);
 }
 
-static void exec_InterleavedArrays(GLenum format, GLsizei stride, 
+static void exec_InterleavedArrays(GLenum format, GLsizei stride,
 				   const GLvoid *pointer)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5238,7 +5254,7 @@ static void exec_PushClientAttrib(GLbitfield mask)
    ctx->Exec->PushClientAttrib( mask);
 }
 
-static void exec_TexCoordPointer(GLint size, GLenum type, GLsizei stride, 
+static void exec_TexCoordPointer(GLint size, GLenum type, GLsizei stride,
 				 const GLvoid *ptr)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5246,7 +5262,7 @@ static void exec_TexCoordPointer(GLint size, GLenum type, GLsizei stride,
    ctx->Exec->TexCoordPointer( size,  type,  stride, ptr);
 }
 
-static void exec_GetCompressedTexImageARB(GLenum target, GLint level, 
+static void exec_GetCompressedTexImageARB(GLenum target, GLint level,
 					  GLvoid *img)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5254,7 +5270,7 @@ static void exec_GetCompressedTexImageARB(GLenum target, GLint level,
    ctx->Exec->GetCompressedTexImageARB( target, level, img);
 }
 
-static void exec_VertexPointer(GLint size, GLenum type, GLsizei stride, 
+static void exec_VertexPointer(GLint size, GLenum type, GLsizei stride,
 			       const GLvoid *ptr)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5262,7 +5278,7 @@ static void exec_VertexPointer(GLint size, GLenum type, GLsizei stride,
    ctx->Exec->VertexPointer( size, type, stride, ptr);
 }
 
-static void exec_CopyConvolutionFilter1D(GLenum target, GLenum internalFormat, 
+static void exec_CopyConvolutionFilter1D(GLenum target, GLenum internalFormat,
 					 GLint x, GLint y, GLsizei width)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5288,7 +5304,7 @@ static void exec_GetColorTable( GLenum target, GLenum format,
    ctx->Exec->GetColorTable( target, format, type, data );
 }
 
-static void exec_GetColorTableParameterfv( GLenum target, GLenum pname, 
+static void exec_GetColorTableParameterfv( GLenum target, GLenum pname,
 					   GLfloat *params )
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5296,7 +5312,7 @@ static void exec_GetColorTableParameterfv( GLenum target, GLenum pname,
    ctx->Exec->GetColorTableParameterfv( target, pname, params );
 }
 
-static void exec_GetColorTableParameteriv( GLenum target, GLenum pname, 
+static void exec_GetColorTableParameteriv( GLenum target, GLenum pname,
 					   GLint *params )
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5312,7 +5328,7 @@ static void exec_GetConvolutionFilter(GLenum target, GLenum format, GLenum type,
    ctx->Exec->GetConvolutionFilter( target, format, type, image);
 }
 
-static void exec_GetConvolutionParameterfv(GLenum target, GLenum pname, 
+static void exec_GetConvolutionParameterfv(GLenum target, GLenum pname,
 					   GLfloat *params)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5328,7 +5344,7 @@ static void exec_GetConvolutionParameteriv(GLenum target, GLenum pname,
    ctx->Exec->GetConvolutionParameteriv( target, pname, params);
 }
 
-static void exec_GetHistogram(GLenum target, GLboolean reset, GLenum format, 
+static void exec_GetHistogram(GLenum target, GLboolean reset, GLenum format,
 			      GLenum type, GLvoid *values)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5336,7 +5352,7 @@ static void exec_GetHistogram(GLenum target, GLboolean reset, GLenum format,
    ctx->Exec->GetHistogram( target, reset, format, type, values);
 }
 
-static void exec_GetHistogramParameterfv(GLenum target, GLenum pname, 
+static void exec_GetHistogramParameterfv(GLenum target, GLenum pname,
 					 GLfloat *params)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5344,7 +5360,7 @@ static void exec_GetHistogramParameterfv(GLenum target, GLenum pname,
    ctx->Exec->GetHistogramParameterfv( target, pname, params);
 }
 
-static void exec_GetHistogramParameteriv(GLenum target, GLenum pname, 
+static void exec_GetHistogramParameteriv(GLenum target, GLenum pname,
 					 GLint *params)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5352,7 +5368,7 @@ static void exec_GetHistogramParameteriv(GLenum target, GLenum pname,
    ctx->Exec->GetHistogramParameteriv( target, pname, params);
 }
 
-static void exec_GetMinmax(GLenum target, GLboolean reset, GLenum format, 
+static void exec_GetMinmax(GLenum target, GLboolean reset, GLenum format,
 			   GLenum type, GLvoid *values)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5376,7 +5392,7 @@ static void exec_GetMinmaxParameteriv(GLenum target, GLenum pname,
    ctx->Exec->GetMinmaxParameteriv( target, pname, params);
 }
 
-static void exec_GetSeparableFilter(GLenum target, GLenum format, GLenum type, 
+static void exec_GetSeparableFilter(GLenum target, GLenum format, GLenum type,
 				    GLvoid *row, GLvoid *column, GLvoid *span)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5486,7 +5502,7 @@ static void exec_SecondaryColorPointerEXT(GLint size, GLenum type,
    ctx->Exec->SecondaryColorPointerEXT( size, type, stride, ptr);
 }
 
-static void exec_FogCoordPointerEXT(GLenum type, GLsizei stride, 
+static void exec_FogCoordPointerEXT(GLenum type, GLsizei stride,
 				    const GLvoid *ptr)
 {
    GET_CURRENT_CONTEXT(ctx);
@@ -5876,7 +5892,7 @@ _mesa_init_dlist_table( struct _glapi_table *table, GLuint tableSize )
  ***/
 static const char *enum_string( GLenum k )
 {
-   return gl_lookup_enum_by_nr( k );
+   return _mesa_lookup_enum_by_nr( k );
 }
 
 
@@ -5901,12 +5917,13 @@ static void print_list( GLcontext *ctx, FILE *f, GLuint list )
    done = n ? GL_FALSE : GL_TRUE;
    while (!done) {
       OpCode opcode = n[0].opcode;
-      int i = (int)n[0].opcode - (int)OPCODE_DRV_0;
+      GLint i = (GLint) n[0].opcode - (GLint) OPCODE_DRV_0;
 
-      if (i >= 0 && i < ctx->listext.nr_opcodes) {
+      if (i >= 0 && i < (GLint) ctx->listext.nr_opcodes) {
 	 ctx->listext.opcode[i].print(ctx, &n[1]);
 	 n += ctx->listext.opcode[i].size;
-      } else {
+      }
+      else {
 	 switch (opcode) {
          case OPCODE_ACCUM:
             fprintf(f,"accum %s %g\n", enum_string(n[1].e), n[2].f );
@@ -5997,11 +6014,11 @@ static void print_list( GLcontext *ctx, FILE *f, GLuint list )
             fprintf(f,"Translate %g %g %g\n", n[1].f, n[2].f, n[3].f );
             break;
          case OPCODE_BIND_TEXTURE:
-	    fprintf(f,"BindTexture %s %d\n", gl_lookup_enum_by_nr(n[1].ui),
+	    fprintf(f,"BindTexture %s %d\n", _mesa_lookup_enum_by_nr(n[1].ui),
 		    n[2].ui);
 	    break;
          case OPCODE_SHADE_MODEL:
-	    fprintf(f,"ShadeModel %s\n", gl_lookup_enum_by_nr(n[1].ui));
+	    fprintf(f,"ShadeModel %s\n", _mesa_lookup_enum_by_nr(n[1].ui));
 	    break;
 
 	 /*
