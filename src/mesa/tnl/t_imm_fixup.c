@@ -1,4 +1,4 @@
-/* $Id: t_imm_fixup.c,v 1.9 2001/03/12 00:48:43 gareth Exp $ */
+/* $Id: t_imm_fixup.c,v 1.13 2001/04/30 21:08:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -35,6 +35,7 @@
 #include "enums.h"
 #include "dlist.h"
 #include "colormac.h"
+#include "light.h"
 #include "macros.h"
 #include "mem.h"
 #include "mmath.h"
@@ -47,13 +48,16 @@
 #include "t_context.h"
 #include "t_imm_alloc.h"
 #include "t_imm_debug.h"
+#include "t_imm_elt.h"
 #include "t_imm_fixup.h"
 #include "t_pipeline.h"
 
 
+static const GLuint increment[GL_POLYGON+2] = { 1,2,1,1,3,1,1,4,2,1,1 };
+static const GLuint intro[GL_POLYGON+2]     = { 0,0,2,2,0,2,2,0,2,2,0 };
 
-static void
-fixup_4f( GLfloat data[][4], GLuint flag[], GLuint start, GLuint match )
+void
+_tnl_fixup_4f( GLfloat data[][4], GLuint flag[], GLuint start, GLuint match )
 {
    GLuint i = start;
 
@@ -65,8 +69,8 @@ fixup_4f( GLfloat data[][4], GLuint flag[], GLuint start, GLuint match )
    }
 }
 
-static void
-fixup_3f( float data[][3], GLuint flag[], GLuint start, GLuint match )
+void
+_tnl_fixup_3f( float data[][3], GLuint flag[], GLuint start, GLuint match )
 {
    GLuint i = start;
 
@@ -79,8 +83,8 @@ fixup_3f( float data[][3], GLuint flag[], GLuint start, GLuint match )
 }
 
 
-static void
-fixup_1ui( GLuint *data, GLuint flag[], GLuint start, GLuint match )
+void
+_tnl_fixup_1ui( GLuint *data, GLuint flag[], GLuint start, GLuint match )
 {
    GLuint i = start;
 
@@ -94,8 +98,8 @@ fixup_1ui( GLuint *data, GLuint flag[], GLuint start, GLuint match )
 }
 
 
-static void
-fixup_1f( GLfloat *data, GLuint flag[], GLuint start, GLuint match )
+void
+_tnl_fixup_1f( GLfloat *data, GLuint flag[], GLuint start, GLuint match )
 {
    GLuint i = start;
 
@@ -108,29 +112,14 @@ fixup_1f( GLfloat *data, GLuint flag[], GLuint start, GLuint match )
    flag[i] |= match;
 }
 
-static void
-fixup_1ub( GLubyte *data, GLuint flag[], GLuint start, GLuint match )
+void
+_tnl_fixup_1ub( GLubyte *data, GLuint flag[], GLuint start, GLuint match )
 {
    GLuint i = start;
 
    for (;;) {
       if ((flag[++i] & match) == 0) {
 	 data[i] = data[i-1];
-	 if (flag[i] & VERT_END_VB) break;
-      }
-   }
-   flag[i] |= match;
-}
-
-
-static void
-fixup_4chan( GLchan data[][4], GLuint flag[], GLuint start, GLuint match )
-{
-   GLuint i = start;
-
-   for (;;) {
-      if ((flag[++i] & match) == 0) {
-	 COPY_CHAN4(data[i], data[i-1]);
 	 if (flag[i] & VERT_END_VB) break;
       }
    }
@@ -196,18 +185,6 @@ fixup_first_1ub( GLubyte data[], GLuint flag[], GLuint match,
 }
 
 
-static void
-fixup_first_4chan( GLchan data[][4], GLuint flag[], GLuint match,
-                   GLuint start, GLchan dflt[4] )
-{
-   GLuint i = start-1;
-   match |= VERT_END_VB;
-
-   while ((flag[++i]&match) == 0)
-      COPY_CHAN4(data[i], dflt);
-}
-
-
 void _tnl_fixup_input( GLcontext *ctx, struct immediate *IM )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
@@ -243,18 +220,20 @@ void _tnl_fixup_input( GLcontext *ctx, struct immediate *IM )
        * immediate.
        */
       if (ctx->ExecuteFlag && copy) {
-/*  	 _tnl_print_vert_flags("copy from current", copy); */
+
+	 if (MESA_VERBOSE&VERBOSE_IMMEDIATE)
+	    _tnl_print_vert_flags("copy from current", copy); 
 
 	 if (copy & VERT_NORM) {
 	    COPY_3V( IM->Normal[start], ctx->Current.Normal );
 	 }
 
 	 if (copy & VERT_RGBA) {
-	    COPY_CHAN4( IM->Color[start], ctx->Current.Color);
+	    COPY_4FV( IM->Color[start], ctx->Current.Color);
 	 }
 
 	 if (copy & VERT_SPEC_RGB)
-	    COPY_CHAN4( IM->SecondaryColor[start], ctx->Current.SecondaryColor);
+	    COPY_4FV( IM->SecondaryColor[start], ctx->Current.SecondaryColor);
 
 	 if (copy & VERT_FOG_COORD)
 	    IM->FogCoord[start] = ctx->Current.FogCoord;
@@ -275,73 +254,97 @@ void _tnl_fixup_input( GLcontext *ctx, struct immediate *IM )
       }
 
       if (MESA_VERBOSE&VERBOSE_IMMEDIATE)
-/*  	 _tnl_print_vert_flags("fixup", fixup); */
+  	 _tnl_print_vert_flags("fixup", fixup); 
 
       if (fixup & VERT_TEX_ANY) {
 	 GLuint i;
 	 for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++) {
 	    if (fixup & VERT_TEX(i)) {
 	       if (orflag & VERT_TEX(i))
-		  fixup_4f( IM->TexCoord[i], IM->Flag, start, VERT_TEX(i) );
+		  _tnl_fixup_4f( IM->TexCoord[i], IM->Flag, start,
+				 VERT_TEX(i) );
 	       else
 		  fixup_first_4f( IM->TexCoord[i], IM->Flag, VERT_END_VB, start,
 				  IM->TexCoord[i][start]);
 	    }
 	 }
       }
-   }
+   
 
-   if (fixup & VERT_EDGE) {
-      if (orflag & VERT_EDGE)
-	 fixup_1ub( IM->EdgeFlag, IM->Flag, start, VERT_EDGE );
-      else
-	 fixup_first_1ub( IM->EdgeFlag, IM->Flag, VERT_END_VB, start,
-			  IM->EdgeFlag[start] );
-   }
+      if (fixup & VERT_EDGE) {
+	 if (orflag & VERT_EDGE)
+	    _tnl_fixup_1ub( IM->EdgeFlag, IM->Flag, start, VERT_EDGE );
+	 else
+	    fixup_first_1ub( IM->EdgeFlag, IM->Flag, VERT_END_VB, start,
+			     IM->EdgeFlag[start] );
+      }
 
-   if (fixup & VERT_INDEX) {
-      if (orflag & VERT_INDEX)
-	 fixup_1ui( IM->Index, IM->Flag, start, VERT_INDEX );
-      else
-	 fixup_first_1ui( IM->Index, IM->Flag, VERT_END_VB, start, IM->Index[start] );
-   }
+      if (fixup & VERT_INDEX) {
+	 if (orflag & VERT_INDEX)
+	    _tnl_fixup_1ui( IM->Index, IM->Flag, start, VERT_INDEX );
+	 else
+	    fixup_first_1ui( IM->Index, IM->Flag, VERT_END_VB, start, 
+			     IM->Index[start] );
+      }
 
-   if (fixup & VERT_RGBA) {
-      if (orflag & VERT_RGBA)
-	 fixup_4chan( IM->Color, IM->Flag, start, VERT_RGBA );
-      else
-	 fixup_first_4chan( IM->Color, IM->Flag, VERT_END_VB, start, IM->Color[start] );
-   }
+      if (fixup & VERT_RGBA) {
+	 if (orflag & VERT_RGBA)
+	    _tnl_fixup_4f( IM->Color, IM->Flag, start, VERT_RGBA );
+/*  	 else */
+/*  	    fixup_first_4f( IM->Color, IM->Flag, VERT_END_VB, start,  */
+/*  			    IM->Color[start] ); */
+      }
+      
+      if (fixup & VERT_SPEC_RGB) {
+	 if (orflag & VERT_SPEC_RGB)
+	    _tnl_fixup_4f( IM->SecondaryColor, IM->Flag, start, 
+			   VERT_SPEC_RGB );
+	 else
+	    fixup_first_4f( IM->SecondaryColor, IM->Flag, VERT_END_VB, start,
+			    IM->SecondaryColor[start] );
+      }
+      
+      if (fixup & VERT_FOG_COORD) {
+	 if (orflag & VERT_FOG_COORD)
+	    _tnl_fixup_1f( IM->FogCoord, IM->Flag, start, VERT_FOG_COORD );
+	 else
+	    fixup_first_1f( IM->FogCoord, IM->Flag, VERT_END_VB, start,
+			    IM->FogCoord[start] );
+      }
 
-   if (fixup & VERT_SPEC_RGB) {
-      if (orflag & VERT_SPEC_RGB)
-	 fixup_4chan( IM->SecondaryColor, IM->Flag, start, VERT_SPEC_RGB );
-      else
-	 fixup_first_4chan( IM->SecondaryColor, IM->Flag, VERT_END_VB, start,
-                            IM->SecondaryColor[start] );
+      if (fixup & VERT_NORM) {
+	 if (orflag & VERT_NORM)
+	    _tnl_fixup_3f( IM->Normal, IM->Flag, start, VERT_NORM );
+	 else
+	    fixup_first_3f( IM->Normal, IM->Flag, VERT_END_VB, start,
+			    IM->Normal[start] );
+      }
    }
-
-   if (fixup & VERT_FOG_COORD) {
-      if (orflag & VERT_FOG_COORD)
-	 fixup_1f( IM->FogCoord, IM->Flag, start, VERT_FOG_COORD );
-      else
-	 fixup_first_1f( IM->FogCoord, IM->Flag, VERT_END_VB, start,
-			 IM->FogCoord[start] );
-   }
-
-   if (fixup & VERT_NORM) {
-      if (orflag & VERT_NORM)
-	 fixup_3f( IM->Normal, IM->Flag, start, VERT_NORM );
-      else
-	 fixup_first_3f( IM->Normal, IM->Flag, VERT_END_VB, start,
-			 IM->Normal[start] );
-   }
-
+      
    /* Prune possible half-filled slot.
     */
    IM->Flag[IM->LastData+1] &= ~VERT_END_VB;
    IM->Flag[IM->Count] |= VERT_END_VB;
 
+
+   /* Materials:
+    */
+   if (IM->MaterialOrMask & ~IM->MaterialAndMask) {
+      GLuint vulnerable = IM->MaterialOrMask;
+      GLuint i = IM->Start;
+
+      do {
+	 while (!(IM->Flag[i] & VERT_MATERIAL))
+	    i++;
+
+	 vulnerable &= ~IM->MaterialMask[i];
+	 _mesa_copy_material_pairs( IM->Material[i],
+				    ctx->Light.Material,
+				    vulnerable );
+
+
+      } while (vulnerable);
+   }
 }
 
 
@@ -357,7 +360,7 @@ static void copy_material( struct immediate *next,
       next->MaterialMask = (GLuint *) MALLOC( sizeof(GLuint) * IMM_SIZE );
    }
 
-   next->MaterialMask[dst] = prev->MaterialMask[src];
+   next->MaterialMask[dst] = prev->MaterialOrMask;
    MEMCPY(next->Material[dst], prev->Material[src], 2*sizeof(GLmaterial));
 }
 
@@ -372,102 +375,117 @@ static void copy_material( struct immediate *next,
  * Have to be careful with the transitions between display list
  * replay, compile and normal execute modes.
  */
-static void copy_vertices( GLcontext *ctx,
-			   struct immediate *next,
-			   struct immediate *prev,
-			   GLuint count,
-			   GLuint *elts )
+void _tnl_copy_immediate_vertices( GLcontext *ctx, struct immediate *next )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
+   struct immediate *prev = tnl->ExecCopySource;
+   struct vertex_arrays *inputs = &tnl->imm_inputs;
+   GLuint count = tnl->ExecCopyCount;
+   GLuint *elts = tnl->ExecCopyElts;
    GLuint offset = IMM_MAX_COPIED_VERTS - count;
    GLuint i;
 
-   next->CopyStart = next->Start - count;
-
-   /* Copy the vertices
-    */
-   for (i = 0 ; i < count ; i++)
-   {
-      GLuint src = elts[i+offset];
-      GLuint dst = next->CopyStart+i;
-
-      COPY_4FV( next->Obj[dst], prev->Obj[src] );
-      COPY_3FV( next->Normal[dst], prev->Normal[src] );
-      COPY_CHAN4( next->Color[dst], prev->Color[src] );
-
-      if (prev->OrFlag & VERT_TEX_ANY) {
-	 GLuint i;
-	 for (i = 0 ; i < prev->MaxTextureUnits ; i++) {
-	    if (prev->OrFlag & VERT_TEX(i))
-	       COPY_4FV( next->TexCoord[i][dst], prev->TexCoord[i][src] );
-	 }
-      }
-
-      if (prev->Flag[src] & VERT_MATERIAL)
-	 copy_material(next, prev, dst, src);
-
-      next->Elt[dst] = prev->Elt[src];
-      next->EdgeFlag[dst] = prev->EdgeFlag[src];
-      next->Index[dst] = prev->Index[src];
-      COPY_CHAN4( next->SecondaryColor[dst], prev->SecondaryColor[src] );
-      next->FogCoord[dst] = prev->FogCoord[src];
-      next->Flag[dst] = (prev->CopyOrFlag & VERT_FIXUP);
-      next->CopyOrFlag |= prev->Flag[src];  /* redundant for current_im */
-      next->CopyAndFlag &= prev->Flag[src]; /* redundant for current_im */
+   if (!prev) {
+      ASSERT(tnl->ExecCopyCount == 0);
+      return;
    }
 
+   next->CopyStart = next->Start - count;
+/*     fprintf(stderr, "%s prim %s count %d source %p\n", */
+/*  	   __FUNCTION__,  */
+/*  	   _mesa_lookup_enum_by_nr(ctx->Driver.CurrentExecPrimitive), */
+/*  	   count, prev); */
 
-   ASSERT(prev == tnl->ExecCopySource);
+   if ((prev->CopyOrFlag & VERT_DATA) == VERT_ELT &&
+       ctx->Array.LockCount &&
+       ctx->Array.Vertex.Enabled)
+   {
+      /* Copy Elt values only
+       */
+      for (i = 0 ; i < count ; i++)
+      {
+	 GLuint src = elts[i+offset];
+	 GLuint dst = next->CopyStart+i;
+
+	 next->Elt[dst] = prev->Elt[src];
+	 next->Flag[dst] = VERT_ELT;
+	 next->CopyOrFlag |= VERT_ELT;
+	 next->CopyAndFlag &= VERT_ELT;
+      }
+   }
+   else {
+      /* prev->CopyOrFlag is hacked to include values generated by eval:
+       */
+      GLuint copy = tnl->pipeline.inputs & prev->CopyOrFlag;
+
+/*        _tnl_print_vert_flags(__FUNCTION__, copy); */
+	   
+	   
+      next->TexSize |= tnl->ExecCopyTexSize;
+
+      /* Copy whole vertices
+       */
+      for (i = 0 ; i < count ; i++)
+      {
+	 GLuint src = elts[i+offset];
+	 GLuint isrc = src - prev->CopyStart;
+	 GLuint dst = next->CopyStart+i;
+
+/*  	 fprintf(stderr, "src %d isrc %d dst %d\n", src, isrc, dst); */
+
+	 /* Values subject to eval must be copied out of the 'inputs'
+	  * struct.  (Copied rows should not be evaluated twice).
+	  *
+	  * Note these pointers are null when inactive.
+	  */
+	 COPY_4FV( next->Obj[dst], inputs->Obj.data[isrc] );
+
+	 if (copy & VERT_NORM) 
+	    COPY_3FV( next->Normal[dst], inputs->Normal.data[isrc] );
+
+	 if (copy & VERT_RGBA)
+	    COPY_4FV( next->Color[dst], 
+		      ((GLfloat (*)[4])inputs->Color.Ptr)[isrc] );
+
+	 if (copy & VERT_INDEX)
+	    next->Index[dst] = inputs->Index.data[isrc];
+
+	 if (copy & VERT_TEX_ANY) {
+	    GLuint i;
+	    for (i = 0 ; i < prev->MaxTextureUnits ; i++) {
+	       if (copy & VERT_TEX(i))
+		  COPY_4FV( next->TexCoord[i][dst], 
+			    inputs->TexCoord[i].data[isrc] );
+	    }
+	 }
+
+	 /* Remaining values should be the same in the 'input' struct and the
+	  * original immediate.
+	  */
+	 if (copy & (VERT_ELT|VERT_EDGE|VERT_SPEC_RGB|VERT_FOG_COORD|
+		     VERT_MATERIAL)) {
+
+	    if (prev->Flag[src] & VERT_MATERIAL)
+	       copy_material(next, prev, dst, src);
+
+	    next->Elt[dst] = prev->Elt[src];
+	    next->EdgeFlag[dst] = prev->EdgeFlag[src];
+	    COPY_4FV( next->SecondaryColor[dst], prev->SecondaryColor[src] );
+	    next->FogCoord[dst] = prev->FogCoord[src];
+	 }
+
+	 next->Flag[dst] = (prev->CopyOrFlag & VERT_FIXUP);
+      }
+
+      next->CopyOrFlag |= (prev->CopyOrFlag & VERT_FIXUP);
+      next->CopyAndFlag &= (prev->CopyOrFlag & VERT_FIXUP);
+   }
 
    if (--tnl->ExecCopySource->ref_count == 0)
       _tnl_free_immediate( tnl->ExecCopySource );
 
-   next->ref_count++;
-   tnl->ExecCopySource = next;
-
-   tnl->ExecCopyElts[0] = next->Start-3;
-   tnl->ExecCopyElts[1] = next->Start-2;
-   tnl->ExecCopyElts[2] = next->Start-1;
-}
-
-/* Copy vertices to an empty immediate struct.
- */
-void _tnl_copy_immediate_vertices( GLcontext *ctx, struct immediate *IM )
-{
-   TNLcontext *tnl = TNL_CONTEXT(ctx);
-
-   ASSERT(IM == TNL_CURRENT_IM(ctx));
-   ASSERT(IM->Count == IM->Start);
-
-   /* Need to push this in now as it won't be computed anywhere else/
-    */
-   IM->TexSize = tnl->ExecCopyTexSize;
-
-   /* A wrapped primitive.  We may be copying into a revived
-    * display list immediate, or onto the front of a new execute-mode
-    * immediate.
-    */
-   copy_vertices( ctx, IM,
-		  tnl->ExecCopySource,
-		  tnl->ExecCopyCount,
-		  tnl->ExecCopyElts );
-
-   if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1) {
-      /* Immediates are built by default to be correct in this state,
-       * and copying to the first slots of an immediate doesn't remove
-       * this property.
-       */
-      ASSERT(tnl->ExecCopyTexSize == 0);
-      ASSERT(tnl->ExecCopyCount == 0);
-      ASSERT(IM->CopyStart == IM->Start);
-   }
-
-   /* Copy the primitive information:
-    */
-   IM->Primitive[IM->CopyStart] = (ctx->Driver.CurrentExecPrimitive | PRIM_LAST);
-   IM->LastPrimitive = IM->CopyStart;
-   if (tnl->ExecParity)
-      IM->Primitive[IM->CopyStart] |= PRIM_PARITY;
+   tnl->ExecCopySource = 0;
+   tnl->ExecCopyCount = 0;
 }
 
 
@@ -482,22 +500,27 @@ void _tnl_fixup_compiled_cassette( GLcontext *ctx, struct immediate *IM )
    GLuint count = IM->Count;
    GLuint start = IM->Start;
 
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
+
    if (count == start)
       return;
 
-   IM->CopyOrFlag = IM->OrFlag;	  /* redundant for current_im */
-   IM->CopyAndFlag = IM->AndFlag; /* redundant for current_im */
+   IM->CopyOrFlag = IM->OrFlag;	  
+   IM->CopyAndFlag = IM->AndFlag; 
    IM->CopyTexSize = IM->TexSize | tnl->ExecCopyTexSize;
 
-   copy_vertices( ctx, IM,
-		  tnl->ExecCopySource,
-		  tnl->ExecCopyCount,
-		  tnl->ExecCopyElts );
+   _tnl_copy_immediate_vertices( ctx, IM );
 
    if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1) {
-      ASSERT(tnl->ExecCopyTexSize == 0);
-      ASSERT(tnl->ExecCopyCount == 0);
       ASSERT(IM->CopyStart == IM->Start);
+   }
+
+   /* Naked array elements can be copied into the first cassette in a
+    * display list.  Need to translate them away:
+    */
+   if (IM->CopyOrFlag & VERT_ELT) {
+      ASSERT(IM->CopyStart < IM->Start);
+      _tnl_translate_array_elts( ctx, IM, IM->CopyStart, IM->Start );
    }
 
    fixup = tnl->pipeline.inputs & ~IM->Flag[start] & VERT_FIXUP;
@@ -521,12 +544,13 @@ void _tnl_fixup_compiled_cassette( GLcontext *ctx, struct immediate *IM )
 			 ctx->Current.Index );
 
       if (fixup & VERT_RGBA)
-	 fixup_first_4chan(IM->Color, IM->Flag, VERT_RGBA, start,
-                           ctx->Current.Color );
+	 if (IM->CopyOrFlag & VERT_RGBA)
+	    fixup_first_4f(IM->Color, IM->Flag, VERT_RGBA, start,
+			   ctx->Current.Color );
 
       if (fixup & VERT_SPEC_RGB)
-	 fixup_first_4chan(IM->SecondaryColor, IM->Flag, VERT_SPEC_RGB, start,
-                           ctx->Current.SecondaryColor );
+	 fixup_first_4f(IM->SecondaryColor, IM->Flag, VERT_SPEC_RGB, start,
+			ctx->Current.SecondaryColor );
 
       if (fixup & VERT_FOG_COORD)
 	 fixup_first_1f(IM->FogCoord, IM->Flag, VERT_FOG_COORD, start,
@@ -538,6 +562,24 @@ void _tnl_fixup_compiled_cassette( GLcontext *ctx, struct immediate *IM )
       }
    }
 
+   /* Materials:
+    */
+   if (IM->MaterialOrMask & ~IM->MaterialAndMask) {
+      GLuint vulnerable = IM->MaterialOrMask;
+      GLuint i = IM->Start;
+
+      do {
+	 while (!(IM->Flag[i] & VERT_MATERIAL))
+	    i++;
+
+	 vulnerable &= ~IM->MaterialMask[i];
+	 _mesa_copy_material_pairs( IM->Material[i],
+				    ctx->Light.Material,
+				    vulnerable );
+
+
+      } while (vulnerable);
+   }
 
    /* Can potentially overwrite primitive details - need to save the
     * first slot:
@@ -573,8 +615,6 @@ void _tnl_fixup_compiled_cassette( GLcontext *ctx, struct immediate *IM )
 	    IM->LastPrimitive = IM->CopyStart;
 	 }
       }
-      /* Shouldn't immediates be set up to have this structure *by default*?
-       */
    } else {
       GLuint i;
 
@@ -612,6 +652,11 @@ void _tnl_fixup_compiled_cassette( GLcontext *ctx, struct immediate *IM )
    else
       ctx->Driver.CurrentExecPrimitive =
 	 IM->Primitive[IM->LastPrimitive] & PRIM_MODE_MASK;
+
+/*     fprintf(stderr, "setting cep %x in %s\n",  */
+/*  	   ctx->Driver.CurrentExecPrimitive, __FUNCTION__); */
+/*     fprintf(stderr, "%s lastprim %d: %x\n", __FUNCTION__,  */
+/*  	   IM->LastPrimitive, IM->Primitive[IM->LastPrimitive]); */
 }
 
 
@@ -699,8 +744,6 @@ static copy_func copy_tab[GL_POLYGON+2] =
 void
 _tnl_get_exec_copy_verts( GLcontext *ctx, struct immediate *IM )
 {
-   static const GLuint increment[GL_POLYGON+2] = { 1,2,1,1,3,1,1,4,2,1,1 };
-   static const GLuint intro[GL_POLYGON+2]     = { 0,0,2,2,0,2,2,0,2,2,0 };
 
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    GLuint last = IM->LastPrimitive;
@@ -709,19 +752,20 @@ _tnl_get_exec_copy_verts( GLcontext *ctx, struct immediate *IM )
    GLuint pintro = intro[prim];
    GLuint ovf = 0;
 
+/*     fprintf(stderr, "_tnl_get_exec_copy_verts %s\n",  */
+/*  	   _mesa_lookup_enum_by_nr(prim)); */
 
-   if (tnl->ExecCopySource != IM) {
-      if (--tnl->ExecCopySource->ref_count == 0)
-	 _tnl_free_immediate( tnl->ExecCopySource );
-      IM->ref_count++;
-      tnl->ExecCopySource = IM;
-   }
+   ASSERT(tnl->ExecCopySource == 0);
 
    if (prim == GL_POLYGON+1) {
       tnl->ExecCopyCount = 0;
       tnl->ExecCopyTexSize = 0;
       tnl->ExecParity = 0;
    } else {
+      /* Remember this immediate as the one to copy from.
+       */
+      IM->ref_count++;
+      tnl->ExecCopySource = IM;
       tnl->ExecCopyCount = 0;
       tnl->ExecCopyTexSize = IM->CopyTexSize;
       tnl->ExecParity = IM->PrimitiveLength[IM->LastPrimitive] & 1;
@@ -735,62 +779,59 @@ _tnl_get_exec_copy_verts( GLcontext *ctx, struct immediate *IM )
 }
 
 
-/* If we receive evalcoords in an immediate struct for maps which
- * don't have a vertex enabled, need to do an additional fixup, as
- * those rows containing evalcoords must now be ignored.  The
- * evalcoords may still generate colors, normals, etc, so have to
- * respect the relative order between calls to EvalCoord and Normal
- * etc.
- *
- * Generate the index list that will be used to render this immediate
- * struct.
- *
- * Finally, generate a new primitives list for rendering the indices.
+/* Recalculate ExecCopyElts, ExecParity, etc.  
  */
-#if 0
-void _tnl_fixup_purged_eval( GLcontext *ctx,
-			     GLuint fixup, GLuint purge )
+void 
+_tnl_get_purged_copy_verts( GLcontext *ctx, struct immediate *IM ) 
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
-   struct tnl_eval_store *store = &tnl->eval;
-   GLuint *flags = tnl->vb.Flag;
-   GLuint i, j, nextprim;
-   GLuint fixup_fence = purge|VERT_OBJ;
-   GLuint good_index = (VERT_EVAL_ANY & ~purge)|VERT_OBJ;
-   GLuint prim_length = 0, lastprim = 0, nextprim = 0;
 
-   if (fixup & VERT_TEX0)
-      fixup_4f( store->TexCoord, flags, 0, VERT_TEX0|fixup_fence );
+   if (ctx->Driver.CurrentExecPrimitive != GL_POLYGON+1) {
+      GLuint last = IM->LastPrimitive;
+      GLenum prim = IM->Primitive[last];
+      GLuint pincr = increment[prim];
+      GLuint pintro = intro[prim];
+      GLuint ovf = 0, i;
 
-   if (fixup & VERT_INDEX)
-      fixup_1ui( store->Index, flags, 0, VERT_INDEX|fixup_fence );
+      tnl->ExecCopyCount = 0;
+      tnl->ExecParity = IM->PrimitiveLength[last] & 1;
 
-   if (fixup & VERT_RGBA)
-      fixup_4chan( store->Color, flags, 0, VERT_RGBA|fixup_fence );
+      if (pincr != 1 && (IM->Count - last - pintro))
+	 ovf = (IM->Count - last - pintro) % pincr;
 
-   if (fixup & VERT_NORM)
-      fixup_3f( store->Normal, flags, 0, VERT_NORM|fixup_fence );
+      if (last < IM->Count)
+	 copy_tab[prim]( tnl, last, IM->Count, ovf );
 
-   for (i = 0, j = 0 ; i < tnl->vb.Count ; i++) {
-      if (flags[i] & good_index) {
-	 store->Elts[j++] = i;
-	 prim_length++;
-      }
-      if (i == nextprim) {
-	 VB->PrimitiveLength[lastprim] = prim_length;
-	 VB->Primitive[j] = VB->Primitive[i];
-	 nextprim += lastprimlen;
-	 lastprim = i;
-	 lastprimlen = VB->PrimitiveLength[i];
-      }
-   }
-
-   VB->Elts = store->Elts;
-
-   /* What about copying???  No immediate exists with the right
-    * vertices in place...
-    */
-   if (tnl->CurrentPrimitive != GL_POLYGON+1) {
+      for (i = 0 ; i < tnl->ExecCopyCount ; i++)
+	 tnl->ExecCopyElts[i] = IM->Elt[tnl->ExecCopyElts[i]];
    }
 }
-#endif
+
+
+void _tnl_upgrade_current_data( GLcontext *ctx,
+				GLuint required,
+				GLuint flags )
+{
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   struct immediate *IM = TNL_CURRENT_IM(ctx); /* hmmm */
+   struct vertex_buffer *VB = &tnl->vb;
+
+   ASSERT(IM);
+
+/*     _tnl_print_vert_flags("_tnl_upgrade_client_data", required); */
+
+   if ((required & VERT_RGBA) && (VB->ColorPtr[0]->Flags & CA_CLIENT_DATA)) {
+      struct gl_client_array *tmp = &tnl->imm_inputs.Color;
+      GLuint start = IM->CopyStart;
+
+      tmp->Ptr = IM->Color + start;
+      tmp->StrideB = 4 * sizeof(GLfloat);
+      tmp->Flags = 0;
+
+      COPY_4FV( IM->Color[start], ctx->Current.Color);   
+      fixup_first_4f( IM->Color, IM->Flag, VERT_END_VB, start, 
+		      IM->Color[start] );
+
+      VB->importable_data &= ~VERT_RGBA;
+   }
+}

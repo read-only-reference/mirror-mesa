@@ -1,4 +1,4 @@
-/* $Id: xm_dd.c,v 1.19 2001/03/19 02:25:36 keithw Exp $ */
+/* $Id: xm_dd.c,v 1.23 2001/04/27 21:18:25 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -35,6 +35,7 @@
 #include "mtypes.h"
 #include "state.h"
 #include "texstore.h"
+#include "texformat.h"
 #include "xmesaP.h"
 #include "array_cache/acache.h"
 #include "swrast/swrast.h"
@@ -680,16 +681,16 @@ clear_32bit_ximage( GLcontext *ctx, GLboolean all,
                     GLint x, GLint y, GLint width, GLint height )
 {
    const XMesaContext xmesa = (XMesaContext) ctx->DriverCtx;
-   if (all) {
-      register GLint n = xmesa->xm_buffer->width * xmesa->xm_buffer->height;
-      register GLuint *ptr4 = (GLuint *) xmesa->xm_buffer->backimage->data;
-      register GLuint pixel = (GLuint) xmesa->clearpixel;
-      if (xmesa->swapbytes) {
-         pixel = ((pixel >> 24) & 0x000000ff)
+   register GLuint pixel = (GLuint) xmesa->clearpixel;
+   if (xmesa->swapbytes) {
+      pixel = ((pixel >> 24) & 0x000000ff)
             | ((pixel >> 8)  & 0x0000ff00)
             | ((pixel << 8)  & 0x00ff0000)
             | ((pixel << 24) & 0xff000000);
-      }
+   }
+   if (all) {
+      register GLint n = xmesa->xm_buffer->width * xmesa->xm_buffer->height;
+      register GLuint *ptr4 = (GLuint *) xmesa->xm_buffer->backimage->data;
       if (pixel==0) {
          MEMSET( ptr4, pixel, 4*n );
       }
@@ -702,7 +703,6 @@ clear_32bit_ximage( GLcontext *ctx, GLboolean all,
    }
    else {
       register int i, j;
-      register GLuint pixel = (GLuint) xmesa->clearpixel;
       for (j=0;j<height;j++) {
          register GLuint *ptr4 = PIXELADDR4( xmesa->xm_buffer, x, y+j );
          for (i=0;i<width;i++) {
@@ -751,7 +751,7 @@ clear_buffers( GLcontext *ctx, GLbitfield mask,
    const GLuint *colorMask = (GLuint *) &ctx->Color.ColorMask;
 
    if ((mask & (DD_FRONT_LEFT_BIT | DD_BACK_LEFT_BIT)) &&
-       xmesa->xm_buffer->gl_buffer->UseSoftwareAlphaBuffers &&
+       xmesa->xm_buffer->mesa_buffer.UseSoftwareAlphaBuffers &&
        ctx->Color.ColorMask[ACOMP]) {
       _mesa_clear_alpha_buffers(ctx);
    }
@@ -953,6 +953,7 @@ void xmesa_init_pointers( GLcontext *ctx )
 
    /* Software texture functions:
     */
+   ctx->Driver.ChooseTextureFormat = _mesa_choose_tex_format;
    ctx->Driver.TexImage1D = _mesa_store_teximage1d;
    ctx->Driver.TexImage2D = _mesa_store_teximage2d;
    ctx->Driver.TexImage3D = _mesa_store_teximage3d;

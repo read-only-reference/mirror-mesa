@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.131 2001/03/28 17:20:20 brianp Exp $ */
+/* $Id: context.c,v 1.135 2001/04/28 08:39:17 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -361,7 +361,7 @@ _mesa_initialize_framebuffer( GLframebuffer *buffer,
       assert(visual->alphaBits > 0);
    }
 
-   buffer->Visual = *visual;  /* XXX copy instead? */
+   buffer->Visual = *visual;
    buffer->UseSoftwareDepthBuffer = softwareDepth;
    buffer->UseSoftwareStencilBuffer = softwareStencil;
    buffer->UseSoftwareAccumBuffer = softwareAccum;
@@ -376,28 +376,48 @@ void
 _mesa_destroy_framebuffer( GLframebuffer *buffer )
 {
    if (buffer) {
-      if (buffer->DepthBuffer) {
-         FREE( buffer->DepthBuffer );
-      }
-      if (buffer->Accum) {
-         FREE( buffer->Accum );
-      }
-      if (buffer->Stencil) {
-         FREE( buffer->Stencil );
-      }
-      if (buffer->FrontLeftAlpha) {
-         FREE( buffer->FrontLeftAlpha );
-      }
-      if (buffer->BackLeftAlpha) {
-         FREE( buffer->BackLeftAlpha );
-      }
-      if (buffer->FrontRightAlpha) {
-         FREE( buffer->FrontRightAlpha );
-      }
-      if (buffer->BackRightAlpha) {
-         FREE( buffer->BackRightAlpha );
-      }
+      _mesa_free_framebuffer_data(buffer);
       FREE(buffer);
+   }
+}
+
+
+/*
+ * Free the data hanging off of <buffer>, but not <buffer> itself.
+ */
+void
+_mesa_free_framebuffer_data( GLframebuffer *buffer )
+{
+   if (!buffer)
+      return;
+
+   if (buffer->DepthBuffer) {
+      FREE( buffer->DepthBuffer );
+      buffer->DepthBuffer = NULL;
+   }
+   if (buffer->Accum) {
+      FREE( buffer->Accum );
+      buffer->Accum = NULL;
+   }
+   if (buffer->Stencil) {
+      FREE( buffer->Stencil );
+      buffer->Stencil = NULL;
+   }
+   if (buffer->FrontLeftAlpha) {
+      FREE( buffer->FrontLeftAlpha );
+      buffer->FrontLeftAlpha = NULL;
+   }
+   if (buffer->BackLeftAlpha) {
+      FREE( buffer->BackLeftAlpha );
+      buffer->BackLeftAlpha = NULL;
+   }
+   if (buffer->FrontRightAlpha) {
+      FREE( buffer->FrontRightAlpha );
+      buffer->FrontRightAlpha = NULL;
+   }
+   if (buffer->BackRightAlpha) {
+      FREE( buffer->BackRightAlpha );
+      buffer->BackRightAlpha = NULL;
    }
 }
 
@@ -476,32 +496,20 @@ alloc_shared_state( void )
    if (!ss->Default1D) {
       outOfMemory = GL_TRUE;
    }
-   else {
-      ss->Default1D->RefCount++;
-   }
 
    ss->Default2D = _mesa_alloc_texture_object(ss, 0, 2);
    if (!ss->Default2D) {
       outOfMemory = GL_TRUE;
-   }
-   else {
-      ss->Default2D->RefCount++;
    }
 
    ss->Default3D = _mesa_alloc_texture_object(ss, 0, 3);
    if (!ss->Default3D) {
       outOfMemory = GL_TRUE;
    }
-   else {
-      ss->Default1D->RefCount++;
-   }
 
    ss->DefaultCubeMap = _mesa_alloc_texture_object(ss, 0, 6);
    if (!ss->DefaultCubeMap) {
       outOfMemory = GL_TRUE;
-   }
-   else {
-      ss->DefaultCubeMap->RefCount++;
    }
 
    if (!ss->DisplayList || !ss->TexObjects || outOfMemory) {
@@ -546,8 +554,7 @@ free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
    _mesa_DeleteHashTable(ss->DisplayList);
 
    /* Free texture objects */
-   while (ss->TexObjectList)
-   {
+   while (ss->TexObjectList) {
       if (ctx->Driver.DeleteTexture)
          (*ctx->Driver.DeleteTexture)( ctx, ss->TexObjectList );
       /* this function removes from linked list too! */
@@ -810,7 +817,7 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Color.MultiDrawBuffer = GL_FALSE;
 
    /* Current group */
-   ASSIGN_4V( ctx->Current.Color, CHAN_MAX, CHAN_MAX, CHAN_MAX, CHAN_MAX );
+   ASSIGN_4V( ctx->Current.Color, 1.0, 1.0, 1.0, 1.0 );
    ctx->Current.Index = 1;
    for (i=0; i<MAX_TEXTURE_UNITS; i++)
       ASSIGN_4V( ctx->Current.Texcoord[i], 0.0, 0.0, 0.0, 1.0 );
@@ -1149,22 +1156,40 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Array.Vertex.StrideB = 0;
    ctx->Array.Vertex.Ptr = NULL;
    ctx->Array.Vertex.Enabled = GL_FALSE;
+   ctx->Array.Vertex.Flags = CA_CLIENT_DATA;
    ctx->Array.Normal.Type = GL_FLOAT;
    ctx->Array.Normal.Stride = 0;
    ctx->Array.Normal.StrideB = 0;
    ctx->Array.Normal.Ptr = NULL;
    ctx->Array.Normal.Enabled = GL_FALSE;
+   ctx->Array.Normal.Flags = CA_CLIENT_DATA;
    ctx->Array.Color.Size = 4;
    ctx->Array.Color.Type = GL_FLOAT;
    ctx->Array.Color.Stride = 0;
    ctx->Array.Color.StrideB = 0;
    ctx->Array.Color.Ptr = NULL;
    ctx->Array.Color.Enabled = GL_FALSE;
+   ctx->Array.Color.Flags = CA_CLIENT_DATA;
+   ctx->Array.SecondaryColor.Size = 4;
+   ctx->Array.SecondaryColor.Type = GL_FLOAT;
+   ctx->Array.SecondaryColor.Stride = 0;
+   ctx->Array.SecondaryColor.StrideB = 0;
+   ctx->Array.SecondaryColor.Ptr = NULL;
+   ctx->Array.SecondaryColor.Enabled = GL_FALSE;
+   ctx->Array.SecondaryColor.Flags = CA_CLIENT_DATA;
+   ctx->Array.FogCoord.Size = 1;
+   ctx->Array.FogCoord.Type = GL_FLOAT;
+   ctx->Array.FogCoord.Stride = 0;
+   ctx->Array.FogCoord.StrideB = 0;
+   ctx->Array.FogCoord.Ptr = NULL;
+   ctx->Array.FogCoord.Enabled = GL_FALSE;
+   ctx->Array.FogCoord.Flags = CA_CLIENT_DATA;
    ctx->Array.Index.Type = GL_FLOAT;
    ctx->Array.Index.Stride = 0;
    ctx->Array.Index.StrideB = 0;
    ctx->Array.Index.Ptr = NULL;
    ctx->Array.Index.Enabled = GL_FALSE;
+   ctx->Array.Index.Flags = CA_CLIENT_DATA;
    for (i = 0; i < MAX_TEXTURE_UNITS; i++) {
       ctx->Array.TexCoord[i].Size = 4;
       ctx->Array.TexCoord[i].Type = GL_FLOAT;
@@ -1172,12 +1197,14 @@ init_attrib_groups( GLcontext *ctx )
       ctx->Array.TexCoord[i].StrideB = 0;
       ctx->Array.TexCoord[i].Ptr = NULL;
       ctx->Array.TexCoord[i].Enabled = GL_FALSE;
+      ctx->Array.TexCoord[i].Flags = CA_CLIENT_DATA;
    }
    ctx->Array.TexCoordInterleaveFactor = 1;
    ctx->Array.EdgeFlag.Stride = 0;
    ctx->Array.EdgeFlag.StrideB = 0;
    ctx->Array.EdgeFlag.Ptr = NULL;
    ctx->Array.EdgeFlag.Enabled = GL_FALSE;
+   ctx->Array.EdgeFlag.Flags = CA_CLIENT_DATA;
    ctx->Array.ActiveTexture = 0;   /* GL_ARB_multitexture */
 
    /* Pixel transfer */
@@ -1367,11 +1394,11 @@ _mesa_initialize_context( GLcontext *ctx,
    ctx->ReadBuffer = NULL;
 
    if (share_list) {
-      /* share the group of display lists of another context */
+      /* share state with another context */
       ctx->Shared = share_list->Shared;
    }
    else {
-      /* allocate new group of display lists */
+      /* allocate new, unshared state */
       ctx->Shared = alloc_shared_state();
       if (!ctx->Shared) {
          return GL_FALSE;
@@ -1380,6 +1407,12 @@ _mesa_initialize_context( GLcontext *ctx,
    _glthread_LOCK_MUTEX(ctx->Shared->Mutex);
    ctx->Shared->RefCount++;
    _glthread_UNLOCK_MUTEX(ctx->Shared->Mutex);
+
+   /* Effectively bind the default textures to all texture units */
+   ctx->Shared->Default1D->RefCount += MAX_TEXTURE_UNITS;
+   ctx->Shared->Default2D->RefCount += MAX_TEXTURE_UNITS;
+   ctx->Shared->Default3D->RefCount += MAX_TEXTURE_UNITS;
+   ctx->Shared->DefaultCubeMap->RefCount += MAX_TEXTURE_UNITS;
 
    init_attrib_groups( ctx );
 
@@ -1885,7 +1918,11 @@ _mesa_get_dispatch(GLcontext *ctx)
 void _mesa_problem( const GLcontext *ctx, const char *s )
 {
    fprintf( stderr, "Mesa implementation error: %s\n", s );
-   fprintf( stderr, "Report to Mesa bug database at www.mesa3d.org\n" );
+#ifdef XF86DRI
+   fprintf( stderr, "Please report to the DRI bug database at dri.sourceforge.net\n");
+#else
+   fprintf( stderr, "Please report to the Mesa bug database at www.mesa3d.org\n" );
+#endif
    (void) ctx;
 }
 

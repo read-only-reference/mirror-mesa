@@ -1,4 +1,4 @@
-/* $Id: t_imm_elt.c,v 1.6 2001/03/12 00:48:43 gareth Exp $ */
+/* $Id: t_imm_elt.c,v 1.9 2001/04/30 21:08:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -138,7 +138,6 @@ static trans_elt_4f_func  _tnl_trans_elt_4f_tab[5][MAX_TYPES];
                GLuint start, GLuint n
 #define SRC_START  0
 #define DST_START  start
-#undef	CHECK
 #define CHECK  if ((flags[i]&match) == VERT_ELT)
 #define NEXT_F  (void)1
 #define NEXT_F2 f = first + elts[i] * stride;
@@ -648,6 +647,7 @@ static void _tnl_trans_elt_1ub(GLubyte *to,
 }
 
 
+#if 0
 static void _tnl_trans_elt_4ub(GLubyte (*to)[4],
                                const struct gl_client_array *from,
                                GLuint *flags,
@@ -666,7 +666,9 @@ static void _tnl_trans_elt_4ub(GLubyte (*to)[4],
                                                              n );
 
 }
+#endif
 
+#if 0
 static void _tnl_trans_elt_4us(GLushort (*to)[4],
                                const struct gl_client_array *from,
                                GLuint *flags,
@@ -685,6 +687,7 @@ static void _tnl_trans_elt_4us(GLushort (*to)[4],
                                                              n );
 
 }
+#endif
 
 static void _tnl_trans_elt_4f(GLfloat (*to)[4],
                               const struct gl_client_array *from,
@@ -703,25 +706,6 @@ static void _tnl_trans_elt_4f(GLfloat (*to)[4],
 					      start,
 					      n );
 
-}
-
-static void _tnl_trans_elt_4chan(GLchan (*to)[4],
-                               const struct gl_client_array *from,
-                               GLuint *flags,
-                               GLuint *elts,
-                               GLuint match,
-                               GLuint start,
-                               GLuint n )
-{
-#if CHAN_TYPE == GL_UNSIGNED_BYTE
-      _tnl_trans_elt_4ub( to, from, flags, elts, match, start, n );
-      (void)_tnl_trans_elt_4us;
-#elif CHAN_TYPE == GL_UNSIGNED_SHORT
-      _tnl_trans_elt_4us( to, from, flags, elts, match, start, n );
-#elif CHAN_TYPE == GL_FLOAT
-      _tnl_trans_elt_4f( to, from, flags, elts, match, start, n );
-      (void)_tnl_trans_elt_4us;
-#endif
 }
 
 
@@ -790,17 +774,17 @@ void _tnl_translate_array_elts( GLcontext *ctx, struct immediate *IM,
 			  start, count);
 
    if (translate & VERT_RGBA) {
-      _tnl_trans_elt_4chan( IM->Color,
-                          &ctx->Array.Color,
-                          flags, elts, (VERT_ELT|VERT_RGBA),
-                          start, count);
+      _tnl_trans_elt_4f( IM->Color,
+			 &ctx->Array.Color,
+			 flags, elts, (VERT_ELT|VERT_RGBA),
+			 start, count);
    }
 
    if (translate & VERT_SPEC_RGB) {
-      _tnl_trans_elt_4chan( IM->SecondaryColor,
-			    &ctx->Array.SecondaryColor,
-			    flags, elts, (VERT_ELT|VERT_SPEC_RGB),
-			    start, count);
+      _tnl_trans_elt_4f( IM->SecondaryColor,
+			 &ctx->Array.SecondaryColor,
+			 flags, elts, (VERT_ELT|VERT_SPEC_RGB),
+			 start, count);
    }
 
    if (translate & VERT_FOG_COORD)
@@ -832,6 +816,4 @@ void _tnl_translate_array_elts( GLcontext *ctx, struct immediate *IM,
 
    for (i = start ; i < count ; i++)
       if (flags[i] & VERT_ELT) flags[i] |= translate;
-
-   IM->CopyOrFlag |= translate;
 }

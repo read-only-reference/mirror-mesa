@@ -1,4 +1,4 @@
-/* $Id: enums.c,v 1.16 2001/03/26 19:42:40 brianp Exp $ */
+/* $Id: enums.c,v 1.19 2001/04/30 21:08:51 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -833,6 +833,9 @@ enum_elt all_enums[] =
    { "GL_PRIMARY_COLOR_EXT", 0x8577 },
    { "GL_PREVIOUS_EXT", 0x8578 },
 
+   /* GL_ARB_texture_env_combine */
+   { "GL_SUBTRACT_ARB", 0x84E7 },
+
    /* GL_EXT_texture_env_dot3 */
    { "GL_DOT3_RGB_EXT", 0x8740 },
    { "GL_DOT3_RGBA_EXT", 0x8741 },
@@ -902,6 +905,8 @@ int _mesa_lookup_enum_by_name( const char *symbol )
 }
 
 
+static char token_tmp[20];
+
 const char *_mesa_lookup_enum_by_nr( int nr )
 {
    enum_elt tmp, *e, **f;
@@ -915,5 +920,12 @@ const char *_mesa_lookup_enum_by_nr( int nr )
    f = (enum_elt **)bsearch( &e, index1, Elements(all_enums),
 			     sizeof(*index1), (cfunc) compar_nr );
 
-   return f ? (*f)->c : "(unknown)";
+   if (f) {
+      return (*f)->c;
+   }
+   else {
+      /* this isn't re-entrant safe, no big deal here */
+      sprintf(token_tmp, "0x%x", nr);
+      return token_tmp;
+   }
 }

@@ -1,4 +1,4 @@
-/* $Id: teximage.c,v 1.91 2001/03/30 21:12:15 brianp Exp $ */
+/* $Id: teximage.c,v 1.93 2001/04/24 03:00:17 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -418,6 +418,7 @@ _mesa_select_tex_object(GLcontext *ctx, const struct gl_texture_unit *texUnit,
       case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y_ARB:
       case GL_TEXTURE_CUBE_MAP_POSITIVE_Z_ARB:
       case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB:
+      case GL_TEXTURE_CUBE_MAP_ARB:
          return ctx->Extensions.ARB_texture_cube_map
                 ? texUnit->CurrentCubeMap : NULL;
       case GL_PROXY_TEXTURE_CUBE_MAP_ARB:
@@ -1347,7 +1348,10 @@ _mesa_TexImage1D( GLenum target, GLint level, GLint internalFormat,
       }
 
       ASSERT(texImage->TexFormat);
-      texImage->FetchTexel = texImage->TexFormat->FetchTexel1D;
+      if (!texImage->FetchTexel) {
+         /* If driver didn't explicitly set this, use the default */
+         texImage->FetchTexel = texImage->TexFormat->FetchTexel1D;
+      }
       ASSERT(texImage->FetchTexel);
 
       /* state update */
@@ -1457,7 +1461,10 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
       }
 
       ASSERT(texImage->TexFormat);
-      texImage->FetchTexel = texImage->TexFormat->FetchTexel2D;
+      if (!texImage->FetchTexel) {
+         /* If driver didn't explicitly set this, use the default */
+         texImage->FetchTexel = texImage->TexFormat->FetchTexel2D;
+      }
       ASSERT(texImage->FetchTexel);
 
       /* state update */
@@ -1561,7 +1568,10 @@ _mesa_TexImage3D( GLenum target, GLint level, GLenum internalFormat,
       }
 
       ASSERT(texImage->TexFormat);
-      texImage->FetchTexel = texImage->TexFormat->FetchTexel3D;
+      if (!texImage->FetchTexel) {
+         /* If driver didn't explicitly set this, use the default */
+         texImage->FetchTexel = texImage->TexFormat->FetchTexel3D;
+      }
       ASSERT(texImage->FetchTexel);
 
       /* state update */
@@ -1800,7 +1810,10 @@ _mesa_CopyTexImage1D( GLenum target, GLint level,
                                  x, y, width, border);
 
    ASSERT(texImage->TexFormat);
-   texImage->FetchTexel = texImage->TexFormat->FetchTexel1D;
+   if (!texImage->FetchTexel) {
+      /* If driver didn't explicitly set this, use the default */
+      texImage->FetchTexel = texImage->TexFormat->FetchTexel1D;
+   }
    ASSERT(texImage->FetchTexel);
 
    /* state update */
@@ -1860,7 +1873,10 @@ _mesa_CopyTexImage2D( GLenum target, GLint level, GLenum internalFormat,
                                  x, y, width, height, border);
 
    ASSERT(texImage->TexFormat);
-   texImage->FetchTexel = texImage->TexFormat->FetchTexel2D;
+   if (!texImage->FetchTexel) {
+      /* If driver didn't explicitly set this, use the default */
+      texImage->FetchTexel = texImage->TexFormat->FetchTexel2D;
+   }
    ASSERT(texImage->FetchTexel);
 
    /* state update */

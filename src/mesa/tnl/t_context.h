@@ -1,4 +1,4 @@
-/* $Id: t_context.h,v 1.18 2001/03/19 02:25:37 keithw Exp $ */
+/* $Id: t_context.h,v 1.22 2001/04/30 21:08:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -194,20 +194,21 @@ struct immediate
    GLuint *MaterialMask;
    GLuint LastMaterial;
    GLuint MaterialOrMask;
+   GLuint MaterialAndMask;
 
    GLfloat (*TexCoord[MAX_TEXTURE_UNITS])[4];
 
    GLuint  Primitive[IMM_SIZE];	    /* BEGIN/END */
    GLuint  PrimitiveLength[IMM_SIZE]; /* BEGIN/END */
    GLuint  Flag[IMM_SIZE];	    /* VERT_* flags */
-   GLchan  Color[IMM_SIZE][4];
+   GLfloat Color[IMM_SIZE][4];
    GLfloat Obj[IMM_SIZE][4];
    GLfloat Normal[IMM_SIZE][3];
    GLfloat TexCoord0[IMM_SIZE][4];  /* just VERT_TEX0 */
    GLuint  Elt[IMM_SIZE];
    GLubyte EdgeFlag[IMM_SIZE];
    GLuint  Index[IMM_SIZE];
-   GLchan  SecondaryColor[IMM_SIZE][4];
+   GLfloat SecondaryColor[IMM_SIZE][4];
    GLfloat FogCoord[IMM_SIZE];
 };
 
@@ -216,8 +217,8 @@ struct vertex_arrays
 {
    GLvector4f  Obj;
    GLvector3f  Normal;
-   GLvector4chan Color;
-   GLvector4chan SecondaryColor;
+   struct gl_client_array Color;
+   struct gl_client_array SecondaryColor;
    GLvector1ui Index;
    GLvector1ub EdgeFlag;
    GLvector4f  TexCoord[MAX_TEXTURE_UNITS];
@@ -255,8 +256,8 @@ typedef struct vertex_buffer
    GLboolean   *EdgeFlag;	                /* VERT_EDGE */
    GLvector4f  *TexCoordPtr[MAX_TEXTURE_UNITS];	/* VERT_TEX_0..n */
    GLvector1ui *IndexPtr[2];	                /* VERT_INDEX */
-   GLvector4chan *ColorPtr[2];	                /* VERT_RGBA */
-   GLvector4chan *SecondaryColorPtr[2];         /* VERT_SPEC_RGB */
+   struct gl_client_array *ColorPtr[2];	                /* VERT_RGBA */
+   struct gl_client_array *SecondaryColorPtr[2];         /* VERT_SPEC_RGB */
    GLvector1f  *FogCoordPtr;	                /* VERT_FOG_COORD */
    GLvector1f  *PointSizePtr;	                /* VERT_POINT_SIZE */
    GLmaterial (*Material)[2];                   /* VERT_MATERIAL, optional */
@@ -353,15 +354,7 @@ struct tnl_eval_store {
    GLuint EvalMap1Flags;
    GLuint EvalMap2Flags;
    GLuint EvalNewState;
-
-   GLfloat Coord[IMM_SIZE][4];
-   GLfloat Obj[IMM_SIZE][4];
-   GLfloat TexCoord[IMM_SIZE][4];
-   GLfloat Normal[IMM_SIZE][3];
-   GLchan  Color[IMM_SIZE][4];
-   GLuint  Index[IMM_SIZE];
-   GLuint  Flag[IMM_SIZE];
-   GLuint  Elts[IMM_SIZE];
+   struct immediate *im;	/* used for temporary data */
 };
 
 
@@ -491,7 +484,6 @@ typedef struct {
     * objects.  
     */
    GLboolean ReplayHardBeginEnd;
-   GLenum CurrentPrimitive;
 
    /* Note which vertices need copying over succesive immediates.
     * Will add save versions to precompute vertex copying where
@@ -506,6 +498,10 @@ typedef struct {
    GLuint DlistPrimitive;
    GLuint DlistPrimitiveLength;
    GLuint DlistLastPrimitive;
+
+   /* Cache a single free immediate (refcount == 0)
+    */
+   struct immediate *freed_immediate;   
 
    /* Probably need a better configuration mechanism:
     */

@@ -144,6 +144,15 @@ All the drivers have been updated, but not all of them have been
 tested since I can't test some platforms (DOS, Windows, Allegro, etc).
 
 
+X/Mesa Driver
+-------------
+
+The source files for the X/Mesa driver in src/X have been renamed.
+The xmesa[1234].c files are gone.  The new files are xm_api.c,
+xm_dd.c, xm_line.c, xm_span.c and xm_tri.c.
+
+
+
 Multitexture
 ------------
 
@@ -182,5 +191,21 @@ interface structures like __GLimports and __GLexports.
 5. New file: imports.c to setup default import functions for Mesa.
 
 
+
+
+16-bit color channels
+---------------------
+
+There's experimental support for 16-bit color channels (64-bit pixels)
+in Mesa 3.5.  Only the OSMesa interface can be used for 16-bit rendering.
+Type "make linux-osmesa16" in the top-level directory to build the
+special libOSMesa16.so library.
+
+This hasn't been tested very thoroughly yet so please file bug reports
+if you have trouble.
+
+In the future I hope to implement support for 32-bit, floating point
+color channels.
+
 ----------------------------------------------------------------------
-$Id: RELNOTES-3.5,v 1.10 2001/03/26 19:45:08 brianp Exp $
+$Id: RELNOTES-3.5,v 1.12 2001/04/26 22:33:34 brianp Exp $

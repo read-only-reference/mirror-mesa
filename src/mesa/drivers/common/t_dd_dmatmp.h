@@ -1,4 +1,4 @@
-/* $Id: t_dd_dmatmp.h,v 1.7 2001/03/18 00:46:04 keithw Exp $ */
+/* $Id: t_dd_dmatmp.h,v 1.10 2001/04/09 15:41:11 alanh Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -64,6 +64,10 @@ do { 						\
    EMIT_ELT( offset, elt0 ); 			\
    EMIT_ELT( offset+1, elt1 ); 			\
 } while (0)
+#endif
+
+#ifndef FINISH
+#define FINISH
 #endif
 
 /**********************************************************************/
@@ -136,6 +140,9 @@ static void TAG(render_points_verts)( GLcontext *ctx,
 	 EMIT_VERTS( ctx, j, nr );
 	 currentsz = dmasz;
       }
+
+      FINISH;
+
    } else {
       VERT_FALLBACK( ctx, start, count, flags );
    }
@@ -168,6 +175,9 @@ static void TAG(render_lines_verts)( GLcontext *ctx,
 	 EMIT_VERTS( ctx, j, nr );
 	 currentsz = dmasz;
       }
+
+      FINISH;
+
    } else {
       VERT_FALLBACK( ctx, start, count, flags );
    }
@@ -196,6 +206,9 @@ static void TAG(render_line_strip_verts)( GLcontext *ctx,
 	 EMIT_VERTS( ctx, j, nr );
 	 currentsz = dmasz;
       }
+ 
+      FINISH;
+
    } else {
       VERT_FALLBACK( ctx, start, count, flags );
    }
@@ -238,6 +251,8 @@ static void TAG(render_line_loop_verts)( GLcontext *ctx,
       if (start < count - 1 && (flags & PRIM_END))
 	 EMIT_VERTS( ctx, start, 1 );
 
+      FINISH;
+
    } else {
       VERT_FALLBACK( ctx, start, count, flags );
    }
@@ -269,6 +284,7 @@ static void TAG(render_triangles_verts)( GLcontext *ctx,
       EMIT_VERTS( ctx, j, nr );
       currentsz = dmasz;
    }
+   FINISH;
 }
 
 
@@ -312,6 +328,9 @@ static void TAG(render_tri_strip_verts)( GLcontext *ctx,
 	 EMIT_VERTS( ctx, j, nr );
 	 currentsz = dmasz;
       }
+
+      FINISH;
+
    } else {
       VERT_FALLBACK( ctx, start, count, flags );
    }
@@ -342,6 +361,9 @@ static void TAG(render_tri_fan_verts)( GLcontext *ctx,
 	 EMIT_VERTS( ctx, j, nr - 1 );
 	 currentsz = dmasz;
       }
+
+      FINISH;
+
    }
    else {
       /* Could write code to emit these as indexed vertices (for the
@@ -377,6 +399,9 @@ static void TAG(render_poly_verts)( GLcontext *ctx,
 	 EMIT_VERTS( ctx, j, nr - 1 );
 	 currentsz = dmasz;
       }
+
+      FINISH;
+
    }
    else if (HAVE_TRI_FANS && !(ctx->_TriangleCaps & DD_FLATSHADE)) {
       TAG(render_tri_fan_verts)( ctx, start, count, flags );
@@ -392,9 +417,38 @@ static void TAG(render_quad_strip_verts)( GLcontext *ctx,
 {
    GLuint j, nr;
 
-   if (HAVE_QUAD_STRIPS && 0) {
-      /* TODO.
-       */
+   if (HAVE_QUAD_STRIPS) {
+      LOCAL_VARS;
+      GLuint j, nr;
+      int dmasz = GET_SUBSEQUENT_VB_MAX_VERTS();
+      int currentsz;
+
+      INIT(GL_QUAD_STRIP);
+      NEW_PRIMITIVE();
+
+      currentsz = GET_CURRENT_VB_MAX_VERTS();
+
+      if (currentsz < 8) {
+	 FIRE_VERTICES();
+	 currentsz = dmasz;
+      }
+
+      if (flags & PRIM_PARITY) {
+	    EMIT_VERTS( ctx, start, 1 );
+	    currentsz--;
+      }
+
+      dmasz -= (dmasz & 2);
+      currentsz -= (currentsz & 2);
+
+      for (j = start ; j < count - 3; j += nr - 2 ) {
+	 nr = MIN2( currentsz, count - j );
+	 EMIT_VERTS( ctx, j, nr );
+	 currentsz = dmasz;
+      }
+
+      FINISH;
+
    } else if (HAVE_TRI_STRIPS && ctx->_TriangleCaps & DD_FLATSHADE) {
       if (TAG(emit_elt_verts)( ctx, start, count )) {
 	 LOCAL_VARS;
@@ -478,6 +532,9 @@ static void TAG(render_quad_strip_verts)( GLcontext *ctx,
 	 EMIT_VERTS( ctx, j, nr );
 	 currentsz = dmasz;
       }
+
+      FINISH;
+
    } else {
       VERT_FALLBACK( ctx, start, count, flags );
    }
@@ -489,7 +546,28 @@ static void TAG(render_quads_verts)( GLcontext *ctx,
 				     GLuint count,
 				     GLuint flags )
 {
-   if (HAVE_QUADS && 0) {
+   if (HAVE_QUADS) {
+      LOCAL_VARS;
+      int dmasz = (GET_SUBSEQUENT_VB_MAX_VERTS()/4) * 4;
+      int currentsz = (GET_CURRENT_VB_MAX_VERTS()/4) * 4;
+      GLuint j, nr;
+
+      INIT(GL_QUADS);
+
+      /* Emit whole number of quads in total.  dmasz is already a multiple
+       * of 4.
+       */
+      count -= (count-start)%4;
+
+      if (currentsz < 8)
+         currentsz = dmasz;
+
+      for (j = start; j < count; j += nr) {
+         nr = MIN2( currentsz, count - j );
+         EMIT_VERTS( ctx, j, nr );
+         currentsz = dmasz;
+      }
+      FINISH;
    } else if (TAG(emit_elt_verts)( ctx, start, count )) {
       /* Hardware doesn't have a quad primitive type -- try to
        * simulate it using indexed vertices and the triangle

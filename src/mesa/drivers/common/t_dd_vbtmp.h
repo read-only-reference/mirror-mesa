@@ -1,4 +1,4 @@
-/* $Id: t_dd_vbtmp.h,v 1.9 2001/03/17 17:31:42 keithw Exp $ */
+/* $Id: t_dd_vbtmp.h,v 1.13 2001/04/29 08:41:09 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -102,11 +102,15 @@
 #endif
 
 #if (HAVE_HW_DIVIDE && !HAVE_PTEX_VERTICES)
-#error "can't cope with this combination"
-#endif
+#error "can't cope with this combination" 
+#endif 
 
 #ifndef LOCALVARS
 #define LOCALVARS
+#endif
+
+#ifndef CHECK_HW_DIVIDE
+#define CHECK_HW_DIVIDE 1
 #endif
 
 #if (HAVE_HW_DIVIDE || DO_SPEC || DO_TEX0 || DO_FOG || !HAVE_TINY_VERTICES)
@@ -132,7 +136,7 @@ static void TAG(emit)( GLcontext *ctx,
    const GLubyte *mask = VB->ClipMask;
    int i;
 
-   if (HAVE_HW_VIEWPORT && HAVE_HW_DIVIDE) {
+   if (HAVE_HW_VIEWPORT && HAVE_HW_DIVIDE && CHECK_HW_DIVIDE) {
       (void) s;
       coord = VB->ClipPtr->data;
       coord_stride = VB->ClipPtr->stride;
@@ -175,13 +179,17 @@ static void TAG(emit)( GLcontext *ctx,
    }
 
    if (DO_RGBA) {
-      col = VB->ColorPtr[0]->data;
-      col_stride = VB->ColorPtr[0]->stride;
+      if (VB->ColorPtr[0]->Type != GL_UNSIGNED_BYTE)
+	 IMPORT_FLOAT_COLORS( ctx );
+      col = (GLubyte (*)[4])VB->ColorPtr[0]->Ptr;
+      col_stride = VB->ColorPtr[0]->StrideB;
    }
 
    if (DO_SPEC) {
-      spec = VB->SecondaryColorPtr[0]->data;
-      spec_stride = VB->SecondaryColorPtr[0]->stride;
+      if (VB->SecondaryColorPtr[0]->Type != GL_UNSIGNED_BYTE)
+	 IMPORT_FLOAT_SPEC_COLORS( ctx );
+      spec = (GLubyte (*)[4])VB->SecondaryColorPtr[0]->Ptr;
+      spec_stride = VB->SecondaryColorPtr[0]->StrideB;
    }
 
    if (DO_FOG) {
@@ -341,9 +349,9 @@ static void TAG(emit)( GLcontext *ctx,
 	    v->v.specular.alpha = fog[i] * 255.0;
 	 }
 	 if (DO_TEX0) {
+	    v->v.u0 = tc0[i][0];
+	    v->v.v0 = tc0[i][1];
 	    if (DO_PTEX) {
-	       v->pv.u0 = tc0[i][0];
-	       v->pv.v0 = tc0[i][1];
 	       if (HAVE_PTEX_VERTICES) {
 		  if (tc0_size == 4) 
 		     v->pv.q0 = tc0[i][3];
@@ -359,10 +367,6 @@ static void TAG(emit)( GLcontext *ctx,
 		  v->v.v0 *= rhw;
 	       } 
 	    } 
-	    else {
-	       v->v.u0 = tc0[i][0];
-	       v->v.v0 = tc0[i][1];
-	    }
 	 }
 	 if (DO_TEX1) {
 	    if (DO_PTEX) {
@@ -393,8 +397,8 @@ static void TAG(emit)( GLcontext *ctx, GLuint start, GLuint end,
 {
    LOCALVARS
    struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
-   GLubyte (*col)[4] = VB->ColorPtr[0]->data;
-   GLuint col_stride = VB->ColorPtr[0]->stride;
+   GLubyte (*col)[4];
+   GLuint col_stride;
    GLfloat (*coord)[4] = VB->ProjectedClipPtr->data;
    GLuint coord_stride = VB->ProjectedClipPtr->stride;
    GLfloat *v = (GLfloat *)dest;
@@ -405,6 +409,16 @@ static void TAG(emit)( GLcontext *ctx, GLuint start, GLuint end,
    (void) s;
 
    ASSERT(stride == 4);
+
+   if (VB->ColorPtr[0]->Type != GL_UNSIGNED_BYTE)
+      IMPORT_FLOAT_COLORS( ctx );
+
+   col = (GLubyte (*)[4])VB->ColorPtr[0]->Ptr;
+   col_stride = VB->ColorPtr[0]->StrideB;
+   ASSERT(VB->ColorPtr[0]->Type == GL_UNSIGNED_BYTE);
+
+/*     fprintf(stderr, "%s stride %d importable %d\n",  */
+/*  	   __FUNCTION__, col_stride, VB->importable_data); */
 
    /* Pack what's left into a 4-dword vertex.  Color is in a different
     * place, and there is no 'w' coordinate.
@@ -465,10 +479,16 @@ static void TAG(emit)( GLcontext *ctx, GLuint start, GLuint end,
 {
    LOCALVARS
    struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
-   GLubyte (*col)[4] = VB->ColorPtr[0]->data;
-   GLuint col_stride = VB->ColorPtr[0]->stride;
+   GLubyte (*col)[4];
+   GLuint col_stride;
    GLfloat *v = (GLfloat *)dest;
    int i;
+
+   if (VB->ColorPtr[0]->Type != GL_UNSIGNED_BYTE)
+      IMPORT_FLOAT_COLORS( ctx );
+
+   col = VB->ColorPtr[0]->Ptr;
+   col_stride = VB->ColorPtr[0]->StrideB;
 
    if (start)
       STRIDE_4UB(col, col_stride * start);
@@ -583,26 +603,26 @@ static void TAG(interp)( GLcontext *ctx,
    const GLfloat *s = GET_VIEWPORT_MAT();
 
    VERTEX *dst = (VERTEX *)(ddverts + (edst << shift));
-   VERTEX *in  = (VERTEX *)(ddverts + (eout << shift));
-   VERTEX *out = (VERTEX *)(ddverts + (ein << shift));
+   VERTEX *in  = (VERTEX *)(ddverts + (ein << shift));
+   VERTEX *out = (VERTEX *)(ddverts + (eout << shift));
 
    (void)s;
 
-
-   if (!HAVE_HW_DIVIDE) {
-      w = 1.0 / dstclip[3];
-      VIEWPORT_X( dst->v.x, dstclip[0] * w );
-      VIEWPORT_Y( dst->v.y, dstclip[1] * w );
-      VIEWPORT_Z( dst->v.z, dstclip[2] * w );
-   }
-   else {
+   if (HAVE_HW_DIVIDE && CHECK_HW_DIVIDE) {
       VIEWPORT_X( dst->v.x, dstclip[0] );
       VIEWPORT_Y( dst->v.y, dstclip[1] );
       VIEWPORT_Z( dst->v.z, dstclip[2] );
       w = dstclip[3];
    }
+   else {
+      w = 1.0 / dstclip[3];
+      VIEWPORT_X( dst->v.x, dstclip[0] * w );
+      VIEWPORT_Y( dst->v.y, dstclip[1] * w );
+      VIEWPORT_Z( dst->v.z, dstclip[2] * w );
+   }
 
-   if (HAVE_HW_DIVIDE || DO_FOG || DO_SPEC || DO_TEX0 || DO_TEX1 ||
+   if ((HAVE_HW_DIVIDE && CHECK_HW_DIVIDE) || 
+       DO_FOG || DO_SPEC || DO_TEX0 || DO_TEX1 ||
        DO_TEX2 || DO_TEX3) {
 
       dst->v.w = w;

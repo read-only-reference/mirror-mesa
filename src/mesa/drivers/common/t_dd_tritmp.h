@@ -1,11 +1,10 @@
-/* $Id: t_dd_tritmp.h,v 1.7 2001/03/13 17:39:56 gareth Exp $ */
+/* $Id: t_dd_tritmp.h,v 1.10 2001/04/28 15:47:48 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2001
-Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -178,23 +177,30 @@ static void TAG(triangle)( GLcontext *ctx, GLuint e0, GLuint e1, GLuint e2 )
 		  }
 	       }
 	       else {
-		  GLchan (*vbcolor)[4] = VB->ColorPtr[1]->data;
-		  ASSERT(VB->ColorPtr[1]->stride == 4*sizeof(GLchan));
+		  GLfloat (*vbcolor)[4] = VB->ColorPtr[1]->Ptr;
+		  ASSERT(VB->ColorPtr[1]->Type == GL_FLOAT);
+		  ASSERT(VB->ColorPtr[1]->StrideB == 4*sizeof(GLfloat));
 		  (void) vbcolor;
 
 		  if (!DO_FLAT) {
+		     VERT_SAVE_RGBA( 0 );
+		     VERT_SAVE_RGBA( 1 );
 		     VERT_SET_RGBA( v[0], vbcolor[e0] );
 		     VERT_SET_RGBA( v[1], vbcolor[e1] );
 		  }
+		  VERT_SAVE_RGBA( 2 );
 		  VERT_SET_RGBA( v[2], vbcolor[e2] );
 
 		  if (HAVE_SPEC && VB->SecondaryColorPtr[1]) {
-		     GLchan (*vbspec)[4] = VB->SecondaryColorPtr[1]->data;
+		     GLfloat (*vbspec)[4] = VB->SecondaryColorPtr[1]->Ptr;
 
 		     if (!DO_FLAT) {
+			VERT_SAVE_SPEC( 0 );
+			VERT_SAVE_SPEC( 1 );
 			VERT_SET_SPEC( v[0], vbspec[e0] );
 			VERT_SET_SPEC( v[1], vbspec[e1] );
 		     }
+		     VERT_SAVE_SPEC( 2 );
 		     VERT_SET_SPEC( v[2], vbspec[e2] );
 		  }
 	       }
@@ -289,37 +295,17 @@ static void TAG(triangle)( GLcontext *ctx, GLuint e0, GLuint e1, GLuint e2 )
    if (DO_TWOSIDE && facing == 1)
    {
       if (HAVE_RGBA) {
-	 if (HAVE_BACK_COLORS) {
+	 if (!DO_FLAT) {
 	    VERT_RESTORE_RGBA( 0 );
 	    VERT_RESTORE_RGBA( 1 );
-	    VERT_RESTORE_RGBA( 2 );
-	    if (HAVE_SPEC) {
+	 }
+	 VERT_RESTORE_RGBA( 2 );
+	 if (HAVE_SPEC) {
+	    if (!DO_FLAT) {
 	       VERT_RESTORE_SPEC( 0 );
 	       VERT_RESTORE_SPEC( 1 );
-	       VERT_RESTORE_SPEC( 2 );
 	    }
-	 }
-	 else {
-	    GLchan (*vbcolor)[4] = VB->ColorPtr[0]->data;
-	    ASSERT(VB->ColorPtr[0]->stride == 4*sizeof(GLchan));
-	    (void) vbcolor;
-
-	    if (!DO_FLAT) {
-	       VERT_SET_RGBA( v[0], vbcolor[e0] );
-	       VERT_SET_RGBA( v[1], vbcolor[e1] );
-	    }
-	    VERT_SET_RGBA( v[2], vbcolor[e2] );
-
-	    if (HAVE_SPEC && VB->SecondaryColorPtr[0]) {
-	       GLchan (*vbspec)[4] = VB->SecondaryColorPtr[0]->data;
-	       ASSERT(VB->SecondaryColorPtr[0]->stride == 4*sizeof(GLchan));
-
-	       if (!DO_FLAT) {
-		  VERT_SET_SPEC( v[0], vbspec[e0] );
-		  VERT_SET_SPEC( v[1], vbspec[e1] );
-	       }
-	       VERT_SET_SPEC( v[2], vbspec[e2] );
-	    }
+	    VERT_RESTORE_SPEC( 2 );
 	 }
       }
       else {
@@ -399,25 +385,33 @@ static void TAG(quad)( GLcontext *ctx,
 	 if (DO_TWOSIDE && facing == 1)
 	 {
 	    if (HAVE_RGBA) {
-	       GLchan (*vbcolor)[4] = VB->ColorPtr[1]->data;
+	       GLfloat (*vbcolor)[4] = VB->ColorPtr[1]->Ptr;
 	       (void)vbcolor;
 
 	       if (!DO_FLAT) {
+		  VERT_SAVE_RGBA( 0 );
+		  VERT_SAVE_RGBA( 1 );
+		  VERT_SAVE_RGBA( 2 );
 		  VERT_SET_RGBA( v[0], vbcolor[e0] );
 		  VERT_SET_RGBA( v[1], vbcolor[e1] );
 		  VERT_SET_RGBA( v[2], vbcolor[e2] );
 	       }
+	       VERT_SAVE_RGBA( 3 );
 	       VERT_SET_RGBA( v[3], vbcolor[e3] );
 
-	       if (HAVE_SPEC && VB->SecondaryColorPtr[facing]) {
-		  GLchan (*vbspec)[4] = VB->SecondaryColorPtr[1]->data;
-		  ASSERT(VB->SecondaryColorPtr[1]->stride == 4*sizeof(GLchan));
+	       if (HAVE_SPEC && VB->SecondaryColorPtr[1]) {
+		  GLchan (*vbspec)[4] = VB->SecondaryColorPtr[1]->Ptr;
+		  ASSERT(VB->SecondaryColorPtr[1]->StrideB==4*sizeof(GLfloat));
 
 		  if (!DO_FLAT) {
+		     VERT_SAVE_SPEC( 0 );
+		     VERT_SAVE_SPEC( 1 );
+		     VERT_SAVE_SPEC( 2 );
 		     VERT_SET_SPEC( v[0], vbspec[e0] );
 		     VERT_SET_SPEC( v[1], vbspec[e1] );
 		     VERT_SET_SPEC( v[2], vbspec[e2] );
 		  }
+		  VERT_SAVE_SPEC( 3 );
 		  VERT_SET_SPEC( v[3], vbspec[e3] );
 	       }
 	    }
@@ -522,27 +516,19 @@ static void TAG(quad)( GLcontext *ctx,
    if (DO_TWOSIDE && facing == 1)
    {
       if (HAVE_RGBA) {
-	 GLchan (*vbcolor)[4] = VB->ColorPtr[0]->data;
-	 ASSERT(VB->ColorPtr[0]->stride == 4*sizeof(GLchan));
-	 (void) vbcolor;
-
 	 if (!DO_FLAT) {
-	    VERT_SET_RGBA( v[0], vbcolor[e0] );
-	    VERT_SET_RGBA( v[1], vbcolor[e1] );
-	    VERT_SET_RGBA( v[2], vbcolor[e2] );
+	    VERT_RESTORE_RGBA( 0 );
+	    VERT_RESTORE_RGBA( 1 );
+	    VERT_RESTORE_RGBA( 2 );
 	 }
-	 VERT_SET_RGBA( v[3], vbcolor[e3] );
-
-	 if (HAVE_SPEC && VB->SecondaryColorPtr[0]) {
-	    GLchan (*vbspec)[4] = VB->SecondaryColorPtr[0]->data;
-	    ASSERT(VB->SecondaryColorPtr[0]->stride == 4*sizeof(GLchan));
-
+	 VERT_RESTORE_RGBA( 3 );
+	 if (HAVE_SPEC) {
 	    if (!DO_FLAT) {
-	       VERT_SET_SPEC( v[0], vbspec[e0] );
-	       VERT_SET_SPEC( v[1], vbspec[e1] );
-	       VERT_SET_SPEC( v[2], vbspec[e2] );
+	       VERT_RESTORE_SPEC( 0 );
+	       VERT_RESTORE_SPEC( 1 );
+	       VERT_RESTORE_SPEC( 2 );
 	    }
-	    VERT_SET_SPEC( v[3], vbspec[e3] );
+	    VERT_RESTORE_SPEC( 3 );
 	 }
       }
       else {

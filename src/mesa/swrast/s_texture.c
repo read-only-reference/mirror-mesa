@@ -1,4 +1,4 @@
-/* $Id: s_texture.c,v 1.21 2001/03/28 20:40:52 gareth Exp $ */
+/* $Id: s_texture.c,v 1.27 2001/04/23 18:06:09 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -37,20 +37,6 @@
 #include "s_context.h"
 #include "s_pb.h"
 #include "s_texture.h"
-
-
-/* XXX this is temporary, until GL/glext.h is updated. */
-#ifndef GL_DOT3_RGB_ARB
-#define GL_DOT3_RGB_ARB 0x86AE
-#endif
-#ifndef GL_DOT3_RGBA_ARB
-#define GL_DOT3_RGBA_ARB 0x86AF
-#endif
-
-/* XXX this is temporary, until GL/glext.h is updated. */
-#ifndef GL_CLAMP_TO_BORDER_ARB
-#define GL_CLAMP_TO_BORDER_ARB 0x812D
-#endif
 
 
 /*
@@ -199,6 +185,15 @@
 
 
 
+/*
+ * Note, the FRAC macro has to work perfectly.  Otherwise you'll sometimes
+ * see 1-pixel bands of improperly weighted linear-sampled texels.
+ * In particular, #define FRAC(f) ((f) - IFLOOR(f)) doesn't work.
+ * Also note, FRAC(x) doesn't truly return the fractional part of x for x < 0.
+ * Instead, if x < 0 then FRAC(x) = 1 - true_frac(x).
+ */
+#define FRAC(f)  ((f) - floor(f))
+
 
 /*
  * Bitflags for texture border color sampling.
@@ -285,9 +280,15 @@ sample_1d_nearest(GLcontext *ctx,
    /* skip over the border, if any */
    i += img->Border;
 
-   (*img->FetchTexel)(img, i, 0, 0, (GLvoid *) rgba);
-   if (img->Format == GL_COLOR_INDEX) {
-      palette_sample(ctx, tObj, rgba[0], rgba);
+   if (i < 0 || i >= img->Width) {
+      /* Need this test for GL_CLAMP_TO_BORDER_ARB mode */
+      COPY_CHAN4(rgba, tObj->BorderColor);
+   }
+   else {
+      (*img->FetchTexel)(img, i, 0, 0, (GLvoid *) rgba);
+      if (img->Format == GL_COLOR_INDEX) {
+         palette_sample(ctx, tObj, rgba[0], rgba);
+      }
    }
 }
 
@@ -320,10 +321,10 @@ sample_1d_linear(GLcontext *ctx,
    }
 
    {
-      const GLfloat a = FRAC(u);
+      const GLfloat a = FRAC(u + 1.0F);
       /* compute sample weights in fixed point in [0,WEIGHT_SCALE] */
-      const GLint w0 = IROUND((1.0F-a) * WEIGHT_SCALE);
-      const GLint w1 = IROUND(      a  * WEIGHT_SCALE);
+      const GLint w0 = IROUND_POS((1.0F-a) * WEIGHT_SCALE);
+      const GLint w1 = IROUND_POS(      a  * WEIGHT_SCALE);
 
       GLchan t0[4], t1[4];  /* texels */
 
@@ -569,9 +570,15 @@ sample_2d_nearest(GLcontext *ctx,
    i += img->Border;
    j += img->Border;
 
-   (*img->FetchTexel)(img, i, j, 0, (GLvoid *) rgba);
-   if (img->Format == GL_COLOR_INDEX) {
-      palette_sample(ctx, tObj, rgba[0], rgba);
+   if (i < 0 || i >= img->Width || j < 0 || j >= img->Height) {
+      /* Need this test for GL_CLAMP_TO_BORDER_ARB mode */
+      COPY_CHAN4(rgba, tObj->BorderColor);
+   }
+   else {
+      (*img->FetchTexel)(img, i, j, 0, (GLvoid *) rgba);
+      if (img->Format == GL_COLOR_INDEX) {
+         palette_sample(ctx, tObj, rgba[0], rgba);
+      }
    }
 }
 
@@ -612,13 +619,13 @@ sample_2d_linear(GLcontext *ctx,
    }
 
    {
-      const GLfloat a = FRAC(u);
-      const GLfloat b = FRAC(v);
+      const GLfloat a = FRAC(u - 1.0);
+      const GLfloat b = FRAC(v - 1.0);
       /* compute sample weights in fixed point in [0,WEIGHT_SCALE] */
-      const GLint w00 = IROUND((1.0F-a) * (1.0F-b) * WEIGHT_SCALE);
-      const GLint w10 = IROUND(      a  * (1.0F-b) * WEIGHT_SCALE);
-      const GLint w01 = IROUND((1.0F-a) *       b  * WEIGHT_SCALE);
-      const GLint w11 = IROUND(      a  *       b  * WEIGHT_SCALE);
+      const GLint w00 = IROUND_POS((1.0F-a) * (1.0F-b) * WEIGHT_SCALE);
+      const GLint w10 = IROUND_POS(      a  * (1.0F-b) * WEIGHT_SCALE);
+      const GLint w01 = IROUND_POS((1.0F-a) *       b  * WEIGHT_SCALE);
+      const GLint w11 = IROUND_POS(      a  *       b  * WEIGHT_SCALE);
       GLchan t00[4];
       GLchan t10[4];
       GLchan t01[4];
@@ -983,9 +990,17 @@ sample_3d_nearest(GLcontext *ctx,
    COMPUTE_NEAREST_TEXEL_LOCATION(tObj->WrapT, t, height, j);
    COMPUTE_NEAREST_TEXEL_LOCATION(tObj->WrapR, r, depth,  k);
 
-   (*img->FetchTexel)(img, i, j, k, (GLvoid *) rgba);
-   if (img->Format == GL_COLOR_INDEX) {
-      palette_sample(ctx, tObj, rgba[0], rgba);
+   if (i < 0 || i >= img->Width ||
+       j < 0 || j >= img->Height ||
+       k < 0 || k >= img->Depth) {
+      /* Need this test for GL_CLAMP_TO_BORDER_ARB mode */
+      COPY_CHAN4(rgba, tObj->BorderColor);
+   }
+   else {
+      (*img->FetchTexel)(img, i, j, k, (GLvoid *) rgba);
+      if (img->Format == GL_COLOR_INDEX) {
+         palette_sample(ctx, tObj, rgba[0], rgba);
+      }
    }
 }
 
@@ -1032,18 +1047,18 @@ sample_3d_linear(GLcontext *ctx,
    }
 
    {
-      const GLfloat a = FRAC(u);
-      const GLfloat b = FRAC(v);
-      const GLfloat c = FRAC(w);
+      const GLfloat a = FRAC(u + 1.0F);
+      const GLfloat b = FRAC(v + 1.0F);
+      const GLfloat c = FRAC(w + 1.0F);
       /* compute sample weights in fixed point in [0,WEIGHT_SCALE] */
-      GLint w000 = IROUND((1.0F-a) * (1.0F-b) * (1.0F-c) * WEIGHT_SCALE);
-      GLint w100 = IROUND(      a  * (1.0F-b) * (1.0F-c) * WEIGHT_SCALE);
-      GLint w010 = IROUND((1.0F-a) *       b  * (1.0F-c) * WEIGHT_SCALE);
-      GLint w110 = IROUND(      a  *       b  * (1.0F-c) * WEIGHT_SCALE);
-      GLint w001 = IROUND((1.0F-a) * (1.0F-b) *       c  * WEIGHT_SCALE);
-      GLint w101 = IROUND(      a  * (1.0F-b) *       c  * WEIGHT_SCALE);
-      GLint w011 = IROUND((1.0F-a) *       b  *       c  * WEIGHT_SCALE);
-      GLint w111 = IROUND(      a  *       b  *       c  * WEIGHT_SCALE);
+      GLint w000 = IROUND_POS((1.0F-a) * (1.0F-b) * (1.0F-c) * WEIGHT_SCALE);
+      GLint w100 = IROUND_POS(      a  * (1.0F-b) * (1.0F-c) * WEIGHT_SCALE);
+      GLint w010 = IROUND_POS((1.0F-a) *       b  * (1.0F-c) * WEIGHT_SCALE);
+      GLint w110 = IROUND_POS(      a  *       b  * (1.0F-c) * WEIGHT_SCALE);
+      GLint w001 = IROUND_POS((1.0F-a) * (1.0F-b) *       c  * WEIGHT_SCALE);
+      GLint w101 = IROUND_POS(      a  * (1.0F-b) *       c  * WEIGHT_SCALE);
+      GLint w011 = IROUND_POS((1.0F-a) *       b  *       c  * WEIGHT_SCALE);
+      GLint w111 = IROUND_POS(      a  *       b  *       c  * WEIGHT_SCALE);
 
       GLchan t000[4], t010[4], t001[4], t011[4];
       GLchan t100[4], t110[4], t101[4], t111[4];
@@ -1734,7 +1749,8 @@ texture_combine(const GLcontext *ctx,
    const GLuint RGBshift = textureUnit->CombineScaleShiftRGB;
    const GLuint Ashift   = textureUnit->CombineScaleShiftA;
 
-   ASSERT(ctx->Extensions.EXT_texture_env_combine);
+   ASSERT(ctx->Extensions.EXT_texture_env_combine ||
+          ctx->Extensions.ARB_texture_env_combine);
 
    /*
     * Do operand setup for up to 3 operands.  Loop over the terms.
@@ -1776,14 +1792,16 @@ texture_combine(const GLcontext *ctx,
          case GL_CONSTANT_EXT:
             {
                GLchan (*c)[4] = ccolor[j];
-               GLchan red, green, blue;
+               GLchan red, green, blue, alpha;
                UNCLAMPED_FLOAT_TO_CHAN(red,   textureUnit->EnvColor[0]);
                UNCLAMPED_FLOAT_TO_CHAN(green, textureUnit->EnvColor[1]);
                UNCLAMPED_FLOAT_TO_CHAN(blue,  textureUnit->EnvColor[2]);
+               UNCLAMPED_FLOAT_TO_CHAN(alpha, textureUnit->EnvColor[3]);
                for (i = 0; i < n; i++) {
                   c[i][RCOMP] = red;
                   c[i][GCOMP] = green;
                   c[i][BCOMP] = blue;
+                  c[i][ACOMP] = alpha;
                }
                argRGB[j] = (const GLchan (*)[4]) ccolor[j];
             }
@@ -1796,6 +1814,7 @@ texture_combine(const GLcontext *ctx,
          const GLchan (*src)[4] = argRGB[j];
          GLchan (*dst)[4] = ccolor[j];
 
+         /* point to new arg[j] storage */
          argRGB[j] = (const GLchan (*)[4]) ccolor[j];
 
          if (textureUnit->CombineOperandRGB[j] == GL_ONE_MINUS_SRC_COLOR) {
@@ -1806,7 +1825,6 @@ texture_combine(const GLcontext *ctx,
             }
          }
          else if (textureUnit->CombineOperandRGB[j] == GL_SRC_ALPHA) {
-            src = (const GLchan (*)[4]) argA[j];
             for (i = 0; i < n; i++) {
                dst[i][RCOMP] = src[i][ACOMP];
                dst[i][GCOMP] = src[i][ACOMP];
@@ -1815,7 +1833,6 @@ texture_combine(const GLcontext *ctx,
          }
          else {
             ASSERT(textureUnit->CombineOperandRGB[j] ==GL_ONE_MINUS_SRC_ALPHA);
-            src = (const GLchan (*)[4]) argA[j];
             for (i = 0; i < n; i++) {
                dst[i][RCOMP] = CHAN_MAX - src[i][ACOMP];
                dst[i][GCOMP] = CHAN_MAX - src[i][ACOMP];
@@ -1939,6 +1956,20 @@ texture_combine(const GLcontext *ctx,
             }
          }
          break;
+      case GL_SUBTRACT_ARB:
+         {
+            const GLchan (*arg0)[4] = (const GLchan (*)[4]) argRGB[0];
+            const GLchan (*arg1)[4] = (const GLchan (*)[4]) argRGB[1];
+            for (i = 0; i < n; i++) {
+               GLint r = ((GLint) arg0[i][RCOMP] - (GLint) arg1[i][RCOMP]) << RGBshift;
+               GLint g = ((GLint) arg0[i][GCOMP] - (GLint) arg1[i][GCOMP]) << RGBshift;
+               GLint b = ((GLint) arg0[i][BCOMP] - (GLint) arg1[i][BCOMP]) << RGBshift;
+               rgba[i][RCOMP] = (GLchan) CLAMP(r, 0, CHAN_MAX);
+               rgba[i][GCOMP] = (GLchan) CLAMP(g, 0, CHAN_MAX);
+               rgba[i][BCOMP] = (GLchan) CLAMP(b, 0, CHAN_MAX);
+            }
+         }
+         break;
       case GL_DOT3_RGB_EXT:
       case GL_DOT3_RGBA_EXT:
       case GL_DOT3_RGB_ARB:
@@ -1957,9 +1988,8 @@ texture_combine(const GLcontext *ctx,
 				   (GLint)arg1[i][GCOMP] - 128) +
 			    S_PROD((GLint)arg0[i][BCOMP] - 128,
 				   (GLint)arg1[i][BCOMP] - 128)) >> 6;
-               rgba[i][RCOMP] = (GLubyte) CLAMP(dot, 0, 255);
-               rgba[i][GCOMP] = (GLubyte) CLAMP(dot, 0, 255);
-               rgba[i][BCOMP] = (GLubyte) CLAMP(dot, 0, 255);
+               dot = CLAMP(dot, 0, 255);
+               rgba[i][RCOMP] = rgba[i][GCOMP] = rgba[i][BCOMP] = (GLubyte)dot;
             }
          }
          break;
@@ -2030,6 +2060,17 @@ texture_combine(const GLcontext *ctx,
             }
          }
          break;
+      case GL_SUBTRACT_ARB:
+         {
+            const GLchan (*arg0)[4] = (const GLchan (*)[4]) argRGB[0];
+            const GLchan (*arg1)[4] = (const GLchan (*)[4]) argRGB[1];
+            for (i = 0; i < n; i++) {
+               GLint a = ((GLint) arg0[i][ACOMP] - (GLint) arg1[i][ACOMP]) << RGBshift;
+               rgba[i][ACOMP] = (GLchan) CLAMP(a, 0, CHAN_MAX);
+            }
+         }
+         break;
+
       default:
          _mesa_problem(NULL, "invalid combine mode");
    }
@@ -2531,8 +2572,8 @@ sample_depth_texture(const GLcontext *ctx,
 
          if (0) {
             /* compute a single weighted depth sample and do one comparison */
-            const GLfloat a = FRAC(u);
-            const GLfloat b = FRAC(v);
+            const GLfloat a = FRAC(u + 1.0F);
+            const GLfloat b = FRAC(v + 1.0F);
             const GLfloat w00 = (1.0F - a) * (1.0F - b);
             const GLfloat w10 = (       a) * (1.0F - b);
             const GLfloat w01 = (1.0F - a) * (       b);

@@ -1,4 +1,4 @@
-/* $Id: t_imm_dlist.c,v 1.11 2001/03/12 00:48:43 gareth Exp $ */
+/* $Id: t_imm_dlist.c,v 1.15 2001/04/30 21:08:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -59,6 +59,7 @@ typedef struct {
    GLuint LastPrimitive;
    GLuint LastMaterial;
    GLuint MaterialOrMask;
+   GLuint MaterialAndMask;
 } TNLvertexcassette;
 
 static void execute_compiled_cassette( GLcontext *ctx, void *data );
@@ -74,7 +75,6 @@ _tnl_compile_cassette( GLcontext *ctx, struct immediate *IM )
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    TNLvertexcassette *node;
    GLuint new_beginstate;
-
 
    _tnl_compute_orflag( IM );
 
@@ -95,14 +95,13 @@ _tnl_compile_cassette( GLcontext *ctx, struct immediate *IM )
 	    andflag &= IM->Flag[i];
 	 IM->CopyAndFlag = IM->AndFlag = andflag;
       }
+      IM->CopyOrFlag |= ctx->Array._Enabled;
    }
 
    _tnl_fixup_input( ctx, IM );
 
-   /* Mark the last primitive:
-    */
-   IM->PrimitiveLength[IM->LastPrimitive] = IM->Count - IM->LastPrimitive;
-   ASSERT(IM->Primitive[IM->LastPrimitive] & PRIM_LAST);
+   
+/*     _tnl_print_cassette( IM ); */
 
 
    node = (TNLvertexcassette *)
@@ -124,6 +123,7 @@ _tnl_compile_cassette( GLcontext *ctx, struct immediate *IM )
    node->LastPrimitive = im->LastPrimitive;
    node->LastMaterial = im->LastMaterial;
    node->MaterialOrMask = im->MaterialOrMask;
+   node->MaterialAndMask = im->MaterialAndMask;
 
    if (ctx->ExecuteFlag) {
       execute_compiled_cassette( ctx, (void *)node );
@@ -141,10 +141,9 @@ _tnl_compile_cassette( GLcontext *ctx, struct immediate *IM )
       /* Call it full...
        */
       struct immediate *new_im = _tnl_alloc_immediate(ctx);
-      if (!new_im) return;
       new_im->ref_count++;
-      im->ref_count--;		/* remove CURRENT_IM reference */
-      ASSERT(im->ref_count > 0);
+      im->ref_count--;		 /* remove CURRENT_IM reference */
+      ASSERT(im->ref_count > 0); /* it is compiled into a display list */
       SET_IMMEDIATE( ctx, new_im );
       _tnl_reset_input( ctx, IMM_MAX_COPIED_VERTS,
 			new_beginstate, node->SavedBeginState );
@@ -182,6 +181,7 @@ execute_compiled_cassette( GLcontext *ctx, void *data )
    IM->LastPrimitive = node->LastPrimitive;
    IM->LastMaterial = node->LastMaterial;
    IM->MaterialOrMask = node->MaterialOrMask;
+   IM->MaterialAndMask = node->MaterialAndMask;
 
    if ((MESA_VERBOSE & VERBOSE_DISPLAY_LIST) &&
        (MESA_VERBOSE & VERBOSE_IMMEDIATE))
@@ -251,6 +251,7 @@ print_compiled_cassette( GLcontext *ctx, void *data )
    IM->LastPrimitive = node->LastPrimitive;
    IM->LastMaterial = node->LastMaterial;
    IM->MaterialOrMask = node->MaterialOrMask;
+   IM->MaterialAndMask = node->MaterialAndMask;
 
    _tnl_print_cassette( node->IM );
 }
@@ -264,39 +265,28 @@ _tnl_BeginCallList( GLcontext *ctx, GLuint list )
 }
 
 
-/* Called at the tail of a CallList.  Copy vertices out of the display
- * list if necessary.
+/* Called at the tail of a CallList.  Nothing to do.
  */
 void
 _tnl_EndCallList( GLcontext *ctx )
 {
-   /* May have to copy vertices from a dangling begin/end inside the
-    * list to the current immediate.
-    */
-   if (ctx->CallDepth == 0) {
-      TNLcontext *tnl = TNL_CONTEXT(ctx);
-      struct immediate *IM = TNL_CURRENT_IM(ctx);
-
-      if (tnl->ExecCopySource != IM)
-	 _tnl_copy_immediate_vertices( ctx, IM );
-   }
 }
 
 
 void
 _tnl_EndList( GLcontext *ctx )
 {
-   TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct immediate *IM = TNL_CURRENT_IM(ctx);
+
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
 
    ctx->swtnl_im = 0;
    IM->ref_count--;
-   if (IM == tnl->ExecCopySource) {
-      IM->ref_count--;
-   } else {
-      if ( --tnl->ExecCopySource->ref_count == 0 )
-	 _tnl_free_immediate( tnl->ExecCopySource );
-   }
+
+   /* outside begin/end, even in COMPILE_AND_EXEC,
+    * so no vertices to copy, right?
+    */
+   ASSERT(TNL_CONTEXT(ctx)->ExecCopyCount == 0);
 
    /* If this one isn't free, get a clean one.  (Otherwise we'll be
     * using one that's already half full).
@@ -306,18 +296,10 @@ _tnl_EndList( GLcontext *ctx )
 
    ASSERT(IM->ref_count == 0);
 
-   tnl->ExecCopySource = IM;
-   IM->ref_count++;
-
    SET_IMMEDIATE( ctx, IM );
    IM->ref_count++;
 
    _tnl_reset_input( ctx, IMM_MAX_COPIED_VERTS, 0, 0 );
-
-   /* outside begin/end, even in COMPILE_AND_EXEC,
-    * so no vertices to copy, right?
-    */
-   ASSERT(TNL_CONTEXT(ctx)->ExecCopyCount == 0);
 }
 
 

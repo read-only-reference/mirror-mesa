@@ -1,4 +1,4 @@
-/* $Id: t_array_import.c,v 1.11 2001/03/12 00:48:43 gareth Exp $ */
+/* $Id: t_array_import.c,v 1.14 2001/04/28 08:39:18 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -43,8 +43,8 @@
 
 
 static void _tnl_import_vertex( GLcontext *ctx,
-			   GLboolean writeable,
-			   GLboolean stride )
+				GLboolean writeable,
+				GLboolean stride )
 {
    struct gl_client_array *tmp;
    GLboolean is_writeable = 0;
@@ -69,8 +69,8 @@ static void _tnl_import_vertex( GLcontext *ctx,
 }
 
 static void _tnl_import_normal( GLcontext *ctx,
-			   GLboolean writeable,
-			   GLboolean stride )
+				GLboolean writeable,
+				GLboolean stride )
 {
    struct gl_client_array *tmp;
    GLboolean is_writeable = 0;
@@ -92,6 +92,7 @@ static void _tnl_import_normal( GLcontext *ctx,
 
 
 static void _tnl_import_color( GLcontext *ctx,
+			       GLenum type,
 			       GLboolean writeable,
 			       GLboolean stride )
 {
@@ -99,51 +100,41 @@ static void _tnl_import_color( GLcontext *ctx,
    GLboolean is_writeable = 0;
    struct vertex_arrays *inputs = &TNL_CONTEXT(ctx)->array_inputs;
 
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
+
    tmp = _ac_import_color(ctx,
-			  GL_UNSIGNED_BYTE,
-			  stride ? 4*sizeof(GLubyte) : 0,
+			  type,
+			  stride ? 4*sizeof(GLfloat) : 0,
 			  4,
 			  writeable,
 			  &is_writeable);
 
-   inputs->Color.data = (GLchan (*)[4]) tmp->Ptr;
-   inputs->Color.start = (GLchan *) tmp->Ptr;
-   inputs->Color.stride = tmp->StrideB;
-   inputs->Color.flags &= ~(VEC_BAD_STRIDE|VEC_NOT_WRITEABLE);
-   if (inputs->Color.stride != 4*sizeof(GLchan))
-      inputs->Color.flags |= VEC_BAD_STRIDE;
-   if (!is_writeable)
-      inputs->Color.flags |= VEC_NOT_WRITEABLE;
+   inputs->Color = *tmp;
 }
 
 
 static void _tnl_import_secondarycolor( GLcontext *ctx,
-				   GLboolean writeable,
-				   GLboolean stride )
+					GLenum type,
+					GLboolean writeable,
+					GLboolean stride )
 {
    struct gl_client_array *tmp;
    GLboolean is_writeable = 0;
    struct vertex_arrays *inputs = &TNL_CONTEXT(ctx)->array_inputs;
 
-   tmp = _ac_import_secondarycolor(ctx, GL_UNSIGNED_BYTE,
-				   stride ? 4*sizeof(GLubyte) : 0,
+   tmp = _ac_import_secondarycolor(ctx, 
+				   type,
+				   stride ? 4*sizeof(GLfloat) : 0,
 				   4,
 				   writeable,
 				   &is_writeable);
 
-   inputs->SecondaryColor.data = (GLchan (*)[4]) tmp->Ptr;
-   inputs->SecondaryColor.start = (GLchan *) tmp->Ptr;
-   inputs->SecondaryColor.stride = tmp->StrideB;
-   inputs->SecondaryColor.flags &= ~(VEC_BAD_STRIDE|VEC_NOT_WRITEABLE);
-   if (inputs->SecondaryColor.stride != 4*sizeof(GLubyte))
-      inputs->SecondaryColor.flags |= VEC_BAD_STRIDE;
-   if (!is_writeable)
-      inputs->SecondaryColor.flags |= VEC_NOT_WRITEABLE;
+   inputs->SecondaryColor = *tmp;
 }
 
 static void _tnl_import_fogcoord( GLcontext *ctx,
-			     GLboolean writeable,
-			     GLboolean stride )
+				  GLboolean writeable,
+				  GLboolean stride )
 {
    struct vertex_arrays *inputs = &TNL_CONTEXT(ctx)->array_inputs;
     struct gl_client_array *tmp;
@@ -164,8 +155,8 @@ static void _tnl_import_fogcoord( GLcontext *ctx,
 }
 
 static void _tnl_import_index( GLcontext *ctx,
-			  GLboolean writeable,
-			  GLboolean stride )
+			       GLboolean writeable,
+			       GLboolean stride )
 {
    struct vertex_arrays *inputs = &TNL_CONTEXT(ctx)->array_inputs;
    struct gl_client_array *tmp;
@@ -187,9 +178,9 @@ static void _tnl_import_index( GLcontext *ctx,
 
 
 static void _tnl_import_texcoord( GLcontext *ctx,
-			     GLuint i,
-			     GLboolean writeable,
-			     GLboolean stride )
+				  GLuint i,
+				  GLboolean writeable,
+				  GLboolean stride )
 {
    struct vertex_arrays *inputs = &TNL_CONTEXT(ctx)->array_inputs;
    struct gl_client_array *tmp;
@@ -214,8 +205,8 @@ static void _tnl_import_texcoord( GLcontext *ctx,
 
 
 static void _tnl_import_edgeflag( GLcontext *ctx,
-			     GLboolean writeable,
-			     GLboolean stride )
+				  GLboolean writeable,
+				  GLboolean stride )
 {
    struct vertex_arrays *inputs = &TNL_CONTEXT(ctx)->array_inputs;
    struct gl_client_array *tmp;
@@ -251,7 +242,10 @@ static void _tnl_upgrade_client_data( GLcontext *ctx,
    GLboolean writeable = (flags & VEC_NOT_WRITEABLE) != 0;
    GLboolean stride = (flags & VEC_BAD_STRIDE) != 0;
    struct vertex_arrays *inputs = &TNL_CONTEXT(ctx)->array_inputs;
+   GLuint ca_flags = 0;
    (void) inputs;
+
+   if (writeable || stride) ca_flags |= CA_CLIENT_DATA;
 
    if ((required & VERT_CLIP) && VB->ClipPtr == VB->ObjPtr)
       required |= VERT_OBJ;
@@ -270,15 +264,16 @@ static void _tnl_upgrade_client_data( GLcontext *ctx,
       VB->importable_data &= ~VERT_NORM;
    }
 
-   if ((required & VERT_RGBA) && (VB->ColorPtr[0]->flags & flags)) {
+   if ((required & VERT_RGBA) && (VB->ColorPtr[0]->Flags & ca_flags)) {
       ASSERT(VB->ColorPtr[0] == &inputs->Color);
-      _tnl_import_color( ctx, writeable, stride );
+      _tnl_import_color( ctx, GL_FLOAT, writeable, stride );
       VB->importable_data &= ~VERT_RGBA;
    }
 
-   if ((required & VERT_SPEC_RGB) && (VB->SecondaryColorPtr[0]->flags&flags)) {
+   if ((required & VERT_SPEC_RGB) && 
+       (VB->SecondaryColorPtr[0]->Flags & ca_flags)) {
       ASSERT(VB->SecondaryColorPtr[0] == &inputs->SecondaryColor);
-      _tnl_import_secondarycolor( ctx, writeable, stride );
+      _tnl_import_secondarycolor( ctx, GL_FLOAT, writeable, stride );
       VB->importable_data &= ~VERT_SPEC_RGB;
    }
 
@@ -306,8 +301,6 @@ static void _tnl_upgrade_client_data( GLcontext *ctx,
 
 
 
-
-
 void _tnl_vb_bind_arrays( GLcontext *ctx, GLint start, GLsizei count )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
@@ -317,7 +310,7 @@ void _tnl_vb_bind_arrays( GLcontext *ctx, GLint start, GLsizei count )
    struct vertex_arrays *tmp = &tnl->array_inputs;
 
 /*     fprintf(stderr, "_tnl_vb_bind_arrays %d..%d // %d..%d\n", */
-/*  	   start, count, ctx->Array.LockFirst, ctx->Array.LockCount); */
+/*    	   start, count, ctx->Array.LockFirst, ctx->Array.LockCount);  */
 
    if (ctx->Array.LockCount) {
       ASSERT(start == (GLint) ctx->Array.LockFirst);
@@ -358,11 +351,13 @@ void _tnl_vb_bind_arrays( GLcontext *ctx, GLint start, GLsizei count )
 
    if (inputs & VERT_RGBA) {
       if (imports & VERT_RGBA) {
-	 _tnl_import_color( ctx, 0, 0 );
-	 tmp->Color.count = VB->Count;
+	 _tnl_import_color( ctx, 0, 0, 0 );
       }
       VB->ColorPtr[0] = &tmp->Color;
       VB->ColorPtr[1] = 0;
+/*        fprintf(stderr, "VB->ColorPtr[0]->StrideB %d Type %s\n",  */
+/*  	      VB->ColorPtr[0]->StrideB, */
+/*  	      _mesa_lookup_enum_by_nr(VB->ColorPtr[0]->Type)); */
    }
 
    if (inputs & VERT_INDEX) {
@@ -390,9 +385,9 @@ void _tnl_vb_bind_arrays( GLcontext *ctx, GLint start, GLsizei count )
 
    if (inputs & VERT_SPEC_RGB) {
       if (imports & VERT_SPEC_RGB) {
-	 _tnl_import_secondarycolor( ctx, 0, 0 );
-	 tmp->SecondaryColor.count = VB->Count;
+	 _tnl_import_secondarycolor( ctx, 0, 0, 0 );
       }
+
       VB->SecondaryColorPtr[0] = &tmp->SecondaryColor;
       VB->SecondaryColorPtr[1] = 0;
    }
@@ -412,9 +407,10 @@ void _tnl_vb_bind_arrays( GLcontext *ctx, GLint start, GLsizei count )
    VB->Primitive = tnl->tmp_primitive;
    VB->PrimitiveLength = tnl->tmp_primitive_length;
    VB->import_data = _tnl_upgrade_client_data;
-   VB->importable_data = imports & VERT_FIXUP;
-/*     _tnl_print_vert_flags("_tnl_vb_bind_arrays: importable", VB->importable_data); */
+   VB->importable_data = inputs & VERT_FIXUP;
 
+/*     _tnl_print_vert_flags("_tnl_vb_bind_arrays: importable",  */
+/*  			 VB->importable_data); */
 }
 
 
@@ -467,21 +463,21 @@ void _tnl_fill_immediate_drawarrays( GLcontext *ctx, struct immediate *IM,
    }
 
    if (required & VERT_RGBA) {
-      _math_trans_4chan( IM->Color + IM->Start,
-		       ctx->Array.Color.Ptr,
-		       ctx->Array.Color.StrideB,
-		       ctx->Array.Color.Type,
-		       ctx->Array.Color.Size,
-		       start, n );
+      _math_trans_4f( IM->Color + IM->Start,
+		      ctx->Array.Color.Ptr,
+		      ctx->Array.Color.StrideB,
+		      ctx->Array.Color.Type,
+		      ctx->Array.Color.Size,
+		      start, n );
    }
 
    if (required & VERT_SPEC_RGB) {
-      _math_trans_4chan( IM->SecondaryColor + IM->Start,
-			 ctx->Array.SecondaryColor.Ptr,
-			 ctx->Array.SecondaryColor.StrideB,
-			 ctx->Array.SecondaryColor.Type,
-			 ctx->Array.SecondaryColor.Size,
-			 start, n );
+      _math_trans_4f( IM->SecondaryColor + IM->Start,
+		      ctx->Array.SecondaryColor.Ptr,
+		      ctx->Array.SecondaryColor.StrideB,
+		      ctx->Array.SecondaryColor.Type,
+		      ctx->Array.SecondaryColor.Size,
+		      start, n );
    }
 
    if (required & VERT_FOG_COORD) {
@@ -506,8 +502,8 @@ void _tnl_fill_immediate_drawarrays( GLcontext *ctx, struct immediate *IM,
 	    _math_trans_4f( IM->TexCoord[i] + IM->Start,
 			    ctx->Array.TexCoord[i].Ptr,
 			    ctx->Array.TexCoord[i].StrideB,
-			    ctx->Array.TexCoord[i].Size,
 			    ctx->Array.TexCoord[i].Type,
+			    ctx->Array.TexCoord[i].Size,
 			    start, n );
 
 	    if (ctx->Array.TexCoord[i].Size == 4)

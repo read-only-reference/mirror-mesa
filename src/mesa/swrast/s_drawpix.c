@@ -1,4 +1,4 @@
-/* $Id: s_drawpix.c,v 1.15 2001/03/19 02:25:36 keithw Exp $ */
+/* $Id: s_drawpix.c,v 1.17 2001/04/20 19:21:41 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -190,7 +190,7 @@ fast_draw_pixels(GLcontext *ctx, GLint x, GLint y,
             zSpan[i] = z;
 
          /* save Y value of first row */
-         zoomY0 = (GLint) (ctx->Current.RasterPos[1] + 0.5F);
+         zoomY0 = IROUND(ctx->Current.RasterPos[1]);
       }
 
 
@@ -833,11 +833,11 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
 
          if (quickDraw) {
             (*swrast->Driver.WriteRGBASpan)( ctx, width, x, y,
-                                          (CONST GLchan (*)[]) rgba, NULL);
+                                          (CONST GLchan (*)[4]) rgba, NULL);
          }
          else if (zoom) {
             _mesa_write_zoomed_rgba_span( ctx, width, x, y, zspan, 0,
-				       (CONST GLchan (*)[]) rgba, desty );
+				       (CONST GLchan (*)[4]) rgba, desty );
          }
          else {
             _mesa_write_rgba_span( ctx, (GLuint) width, x, y, zspan, 0,

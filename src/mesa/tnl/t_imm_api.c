@@ -1,4 +1,4 @@
-/* $Id: t_imm_api.c,v 1.9 2001/03/19 02:25:37 keithw Exp $ */
+/* $Id: t_imm_api.c,v 1.12 2001/04/30 21:08:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -52,6 +52,11 @@ void _tnl_flush_immediate( struct immediate *IM )
 {
    GLcontext *ctx = IM->backref;
 
+   /* Mark the last primitive:
+    */
+   IM->PrimitiveLength[IM->LastPrimitive] = IM->Count - IM->LastPrimitive;
+   IM->Primitive[IM->LastPrimitive] |= PRIM_LAST;
+
    if (ctx->CompileFlag)
       _tnl_compile_cassette( ctx, IM );
    else
@@ -76,7 +81,8 @@ _tnl_begin( GLcontext *ctx, GLenum p )
    GLuint inflags, state;
 
    if (MESA_VERBOSE&VERBOSE_API)
-      fprintf(stderr, "glBegin(IM %d) %s\n", IM->id, _mesa_lookup_enum_by_nr(p));
+      fprintf(stderr, "glBegin(IM %d) %s\n", IM->id, 
+	      _mesa_lookup_enum_by_nr(p));
 
    if (ctx->NewState)
       _mesa_update_state(ctx);
@@ -106,17 +112,15 @@ _tnl_begin( GLcontext *ctx, GLenum p )
       GLuint count = IM->Count;
       GLuint last = IM->LastPrimitive;
 
-      ASSERT(IM->Primitive[IM->LastPrimitive] & PRIM_LAST);
-
       state |= (VERT_BEGIN_0|VERT_BEGIN_1);
       IM->Flag[count] |= VERT_BEGIN;
-      IM->Primitive[IM->LastPrimitive] &= ~PRIM_LAST;
-      IM->Primitive[count] = p | PRIM_BEGIN | PRIM_LAST;
+      IM->Primitive[count] = p | PRIM_BEGIN;
       IM->PrimitiveLength[IM->LastPrimitive] = count - IM->LastPrimitive;
       IM->LastPrimitive = count;
 
       /* Not quite right.  Need to use the fallback '_aa_ArrayElement'
-       * when not known to be inside begin/end and arrays are unlocked.
+       * when not known to be inside begin/end and arrays are
+       * unlocked.  
        */
       if (IM->FlushElt) {
 	 _tnl_translate_array_elts( ctx, IM, last, count );
@@ -155,8 +159,10 @@ _tnl_Begin( GLenum mode )
       else if (ctx->Driver.CurrentSavePrimitive == PRIM_OUTSIDE_BEGIN_END)
 	 ctx->Driver.CurrentSavePrimitive = mode;
       }
-   else if (ctx->Driver.CurrentExecPrimitive == PRIM_OUTSIDE_BEGIN_END)
+   else if (ctx->Driver.CurrentExecPrimitive == PRIM_OUTSIDE_BEGIN_END) {
+/*        fprintf(stderr, "setting cep %x in %s\n", mode, __FUNCTION__); */
       ctx->Driver.CurrentExecPrimitive = mode;
+   }
 }
 
 
@@ -177,6 +183,8 @@ _tnl_hard_begin( GLcontext *ctx, GLenum p )
       /* Set this for the duration:
        */
       ctx->Driver.CurrentExecPrimitive = p;
+/*        fprintf(stderr, "setting cep %x in %s\n",  */
+/*  	      ctx->Driver.CurrentExecPrimitive, __FUNCTION__); */
       return GL_TRUE;
    }
 
@@ -216,11 +224,8 @@ _tnl_hard_begin( GLcontext *ctx, GLenum p )
       count = IM->Count;
       last = IM->LastPrimitive;
 
-      ASSERT(IM->Primitive[IM->LastPrimitive] & PRIM_LAST);
-
       IM->Flag[count] |= VERT_BEGIN;
-      IM->Primitive[last] &= ~PRIM_LAST;
-      IM->Primitive[count] = p | PRIM_BEGIN | PRIM_LAST;
+      IM->Primitive[count] = p | PRIM_BEGIN;
       IM->PrimitiveLength[last] = count - last;
       IM->LastPrimitive = count;
 
@@ -251,7 +256,7 @@ _tnl_save_Begin( GLenum mode )
 {
    GET_CURRENT_CONTEXT(ctx);
 
-    if (mode > GL_POLYGON) {
+   if (mode > GL_POLYGON) {
       _mesa_compile_error( ctx, GL_INVALID_ENUM, "glBegin" );
       return;
    }
@@ -274,27 +279,6 @@ _tnl_save_Begin( GLenum mode )
 
 
 
-/* Note the continuation of a partially completed primitive.  For
- * driver t&l fallbacks between begin/end primitives.  Has basically
- * the same effects as a primitive wrapping onto a second immediate
- * struct.
- *
- * ==> Can actually call this from _tnl_wakeup_exec, taking mode from
- *     ctx->Driver.CurrentExecPrimitive.
- */
-#if 0
-void _tnl_fallback_begin( GLcontext *ctx, GLenum mode )
-{
-   struct immediate *IM = TNL_CURRENT_IM(ctx);
-   ASSERT( IM->Count == IM->Start );
-   ASSERT( IM->Flag[IM->Start] == 0 );
-   ASSERT( mode < GL_POLYGON+1 );
-   _tnl_begin( ctx, mode );
-   IM->Primitive[IM->Start] &= ~PRIM_BEGIN;
-}
-#endif
-
-
 /* Both streams now outside begin/end.
  *
  * Leave SavedBeginState untouched -- attempt to gather several
@@ -314,14 +298,11 @@ _tnl_end( GLcontext *ctx )
       GLuint count = IM->Count;
       GLuint last = IM->LastPrimitive;
 
-      ASSERT(IM->Primitive[IM->LastPrimitive] & PRIM_LAST);
-
       state &= ~(VERT_BEGIN_0|VERT_BEGIN_1); /* update state */
       IM->Flag[count] |= VERT_END;
       IM->Primitive[last] |= PRIM_END;
-      IM->Primitive[last] &= ~PRIM_LAST;
       IM->PrimitiveLength[last] = count - last;
-      IM->Primitive[count] = (GL_POLYGON+1) | PRIM_LAST;
+      IM->Primitive[count] = PRIM_OUTSIDE_BEGIN_END;
       IM->LastPrimitive = count;
 
       if (IM->FlushElt) {
@@ -332,9 +313,11 @@ _tnl_end( GLcontext *ctx )
 
    IM->BeginState = state;
 
-   if (!ctx->CompileFlag)
+   if (!ctx->CompileFlag) {
       ctx->Driver.CurrentExecPrimitive = PRIM_OUTSIDE_BEGIN_END;
-
+/*        fprintf(stderr, "setting cep %x in %s\n",  */
+/*  	      ctx->Driver.CurrentExecPrimitive, __FUNCTION__); */
+   }
 
    /* You can set this flag to get the old 'flush_vb on glEnd()'
     * behaviour.
@@ -368,56 +351,29 @@ _tnl_End(void)
    IM->Color[count][3] = a;			\
 }
 
-#define COLORV( IM, v )				\
-{						\
-   GLuint count = IM->Count;			\
-   IM->Flag[count] |= VERT_RGBA;		\
-   COPY_CHAN4(IM->Color[count], v);		\
-}
-
-
 static void
 _tnl_Color3f( GLfloat red, GLfloat green, GLfloat blue )
 {
-   GLchan col[4];
    GET_IMMEDIATE;
-   UNCLAMPED_FLOAT_TO_CHAN(col[0], red);
-   UNCLAMPED_FLOAT_TO_CHAN(col[1], green);
-   UNCLAMPED_FLOAT_TO_CHAN(col[2], blue);
-   col[3] = CHAN_MAX;
-   COLORV( IM, col );
+   COLOR( IM, red, green, blue, 1.0 );
 }
-
 
 static void
 _tnl_Color3ub( GLubyte red, GLubyte green, GLubyte blue )
 {
-#if CHAN_BITS == 8
-   GET_IMMEDIATE;
-   COLOR( IM, red, green, blue, CHAN_MAX );
-#else
    GET_IMMEDIATE;
    COLOR(IM,
-         UBYTE_TO_CHAN(red),
-         UBYTE_TO_CHAN(green),
-         UBYTE_TO_CHAN(blue),
-         CHAN_MAX);
-#endif
+         UBYTE_TO_FLOAT(red),
+         UBYTE_TO_FLOAT(green),
+         UBYTE_TO_FLOAT(blue),
+         1.0);
 }
-
-
-
 
 static void
 _tnl_Color4f( GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha )
 {
-   GLchan col[4];
    GET_IMMEDIATE;
-   UNCLAMPED_FLOAT_TO_CHAN(col[0], red);
-   UNCLAMPED_FLOAT_TO_CHAN(col[1], green);
-   UNCLAMPED_FLOAT_TO_CHAN(col[2], blue);
-   UNCLAMPED_FLOAT_TO_CHAN(col[3], alpha);
-   COLORV( IM, col );
+   COLOR( IM, red, green, blue, alpha );
 }
 
 static void
@@ -425,61 +381,46 @@ _tnl_Color4ub( GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha )
 {
    GET_IMMEDIATE;
    COLOR(IM,
-         UBYTE_TO_CHAN(red),
-         UBYTE_TO_CHAN(green),
-         UBYTE_TO_CHAN(blue),
-         UBYTE_TO_CHAN(alpha));
+         UBYTE_TO_FLOAT(red),
+         UBYTE_TO_FLOAT(green),
+         UBYTE_TO_FLOAT(blue),
+         UBYTE_TO_FLOAT(alpha));
 }
-
 
 static void
 _tnl_Color3fv( const GLfloat *v )
 {
-   GLchan col[4];
    GET_IMMEDIATE;
-   UNCLAMPED_FLOAT_TO_CHAN(col[0], v[0]);
-   UNCLAMPED_FLOAT_TO_CHAN(col[1], v[1]);
-   UNCLAMPED_FLOAT_TO_CHAN(col[2], v[2]);
-   col[3] = CHAN_MAX;
-   COLORV( IM, col );
+   COLOR( IM, v[0], v[1], v[2], 1.0 );
 }
-
-
 
 static void
 _tnl_Color3ubv( const GLubyte *v )
 {
    GET_IMMEDIATE;
    COLOR(IM,
-         UBYTE_TO_CHAN(v[0]),
-         UBYTE_TO_CHAN(v[1]),
-         UBYTE_TO_CHAN(v[2]),
-         CHAN_MAX );
+         UBYTE_TO_FLOAT(v[0]),
+         UBYTE_TO_FLOAT(v[1]),
+         UBYTE_TO_FLOAT(v[2]),
+         1.0 );
 }
 
 static void
 _tnl_Color4fv( const GLfloat *v )
 {
-   GLchan col[4];
    GET_IMMEDIATE;
-   UNCLAMPED_FLOAT_TO_CHAN(col[0], v[0]);
-   UNCLAMPED_FLOAT_TO_CHAN(col[1], v[1]);
-   UNCLAMPED_FLOAT_TO_CHAN(col[2], v[2]);
-   UNCLAMPED_FLOAT_TO_CHAN(col[3], v[3]);
-   COLORV( IM, col );
+   COLOR( IM, v[0], v[1], v[2], v[3] );
 }
-
-
 
 static void
 _tnl_Color4ubv( const GLubyte *v)
 {
    GET_IMMEDIATE;
    COLOR(IM,
-         UBYTE_TO_CHAN(v[0]),
-         UBYTE_TO_CHAN(v[1]),
-         UBYTE_TO_CHAN(v[2]),
-         UBYTE_TO_CHAN(v[3]));
+         UBYTE_TO_FLOAT(v[0]),
+         UBYTE_TO_FLOAT(v[1]),
+         UBYTE_TO_FLOAT(v[2]),
+         UBYTE_TO_FLOAT(v[3]));
 }
 
 
@@ -494,65 +435,38 @@ _tnl_Color4ubv( const GLubyte *v)
    IM->SecondaryColor[count][2] = b;		\
 }
 
-#define SECONDARY_COLORV( IM, v )		\
-{						\
-   GLuint count = IM->Count;			\
-   IM->Flag[count] |= VERT_SPEC_RGB;		\
-   IM->SecondaryColor[count][0] = v[0];		\
-   IM->SecondaryColor[count][1] = v[1];		\
-   IM->SecondaryColor[count][2] = v[2];		\
-}
-
-
-
-
 static void
 _tnl_SecondaryColor3fEXT( GLfloat red, GLfloat green, GLfloat blue )
 {
-   GLchan col[3];
    GET_IMMEDIATE;
-   UNCLAMPED_FLOAT_TO_CHAN(col[0], red);
-   UNCLAMPED_FLOAT_TO_CHAN(col[1], green);
-   UNCLAMPED_FLOAT_TO_CHAN(col[2], blue);
-   SECONDARY_COLORV( IM, col );
+   SECONDARY_COLOR( IM, red, green, blue );
 }
-
-
 
 static void
 _tnl_SecondaryColor3ubEXT( GLubyte red, GLubyte green, GLubyte blue )
 {
    GET_IMMEDIATE;
    SECONDARY_COLOR(IM,
-                   UBYTE_TO_CHAN(red),
-                   UBYTE_TO_CHAN(green),
-                   UBYTE_TO_CHAN(blue));
+                   UBYTE_TO_FLOAT(red),
+                   UBYTE_TO_FLOAT(green),
+                   UBYTE_TO_FLOAT(blue));
 }
-
-
-
 
 static void
 _tnl_SecondaryColor3fvEXT( const GLfloat *v )
 {
-   GLchan col[3];
    GET_IMMEDIATE;
-   UNCLAMPED_FLOAT_TO_CHAN(col[0], v[0]);
-   UNCLAMPED_FLOAT_TO_CHAN(col[1], v[1]);
-   UNCLAMPED_FLOAT_TO_CHAN(col[2], v[2]);
-   SECONDARY_COLORV( IM, col );
+   SECONDARY_COLOR( IM, v[0], v[1], v[2] );
 }
-
-
 
 static void
 _tnl_SecondaryColor3ubvEXT( const GLubyte *v )
 {
    GET_IMMEDIATE;
    SECONDARY_COLOR(IM,
-                   UBYTE_TO_CHAN(v[0]),
-                   UBYTE_TO_CHAN(v[1]),
-                   UBYTE_TO_CHAN(v[2]));
+                   UBYTE_TO_FLOAT(v[0]),
+                   UBYTE_TO_FLOAT(v[1]),
+                   UBYTE_TO_FLOAT(v[2]));
 }
 
 
@@ -1205,6 +1119,8 @@ _tnl_Rectf( GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2 )
 {
    GET_CURRENT_CONTEXT(ctx);
 
+/*     fprintf(stderr, "%s\n", __FUNCTION__); */
+
    if (_tnl_hard_begin( ctx, GL_QUADS )) {
       _tnl_vertex2f( ctx, x1, y1 );
       _tnl_vertex2f( ctx, x2, y1 );
@@ -1231,16 +1147,18 @@ _tnl_Materialfv( GLenum face, GLenum pname, const GLfloat *params )
 	 IM->Material = (GLmaterial (*)[2]) MALLOC( sizeof(GLmaterial) *
 						    IMM_SIZE * 2 );
 	 IM->MaterialMask = (GLuint *) MALLOC( sizeof(GLuint) * IMM_SIZE );
+	 IM->MaterialMask[IM->LastMaterial] = 0;
       }
       else if (IM->MaterialOrMask & ~bitmask) {
 	 _mesa_copy_material_pairs( IM->Material[count],
-				 IM->Material[IM->LastMaterial],
-				 IM->MaterialOrMask & ~bitmask );
+				    IM->Material[IM->LastMaterial],
+				    IM->MaterialOrMask & ~bitmask );
       }
 
       IM->Flag[count] |= VERT_MATERIAL;
-      IM->LastMaterial = count;
       IM->MaterialMask[count] = 0;
+      IM->MaterialAndMask &= IM->MaterialMask[IM->LastMaterial];
+      IM->LastMaterial = count;
    }
 
    IM->MaterialOrMask |= bitmask;

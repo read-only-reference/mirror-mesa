@@ -1,4 +1,4 @@
-/* $Id: t_imm_fixup.h,v 1.2 2001/03/12 00:48:43 gareth Exp $ */
+/* $Id: t_imm_fixup.h,v 1.5 2001/04/30 21:08:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -31,7 +31,20 @@
 #include "mtypes.h"
 #include "t_context.h"
 
+extern void _tnl_fixup_1ub( GLubyte *data, GLuint flag[],
+			    GLuint start, GLuint match );
 
+extern void _tnl_fixup_1f( GLfloat *data, GLuint flag[],
+			   GLuint start, GLuint match );
+
+extern void _tnl_fixup_1ui( GLuint *data, GLuint flag[],
+			    GLuint start, GLuint match );
+
+extern void _tnl_fixup_3f( float data[][3], GLuint flag[],
+			   GLuint start, GLuint match );
+
+extern void _tnl_fixup_4f( GLfloat data[][4], GLuint flag[],
+			   GLuint start, GLuint match );
 
 extern void _tnl_fixup_input( GLcontext *ctx, struct immediate *IM );
 
@@ -41,12 +54,14 @@ extern void _tnl_fixup_compiled_cassette( GLcontext *ctx,
 extern void _tnl_restore_compiled_cassette( GLcontext *ctx,
 					    struct immediate *IM );
 
+extern void _tnl_copy_immediate_vertices( GLcontext *ctx, 
+					  struct immediate *IM );
 
-extern void _tnl_fixup_purged_eval( GLcontext *ctx,
-				    GLuint fixup, GLuint purge );
+extern void _tnl_get_purged_copy_verts( GLcontext *ctx, struct immediate *IM );
 
-
-extern void _tnl_copy_immediate_vertices( GLcontext *ctx, struct immediate *IM );
 extern void _tnl_get_exec_copy_verts( GLcontext *ctx, struct immediate *IM );
+
+extern void _tnl_upgrade_current_data( GLcontext *ctx, GLuint required,
+				       GLuint flags );
 
 #endif

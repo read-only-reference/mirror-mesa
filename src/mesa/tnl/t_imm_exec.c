@@ -1,4 +1,4 @@
-/* $Id: t_imm_exec.c,v 1.16 2001/03/12 00:48:43 gareth Exp $ */
+/* $Id: t_imm_exec.c,v 1.19 2001/04/30 21:08:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -57,13 +57,12 @@
 
 
 
-/* Called to initialize new buffers, and to recycle old ones.
- */
 void _tnl_reset_input( GLcontext *ctx,
 		       GLuint start,
 		       GLuint beginstate,
 		       GLuint savedbeginstate )
 {
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct immediate *IM = TNL_CURRENT_IM(ctx);
 
    /* Clear the dirty part of the flag array.
@@ -71,19 +70,33 @@ void _tnl_reset_input( GLcontext *ctx,
    if (start < IM->Count+2)
       MEMSET(IM->Flag + start, 0, sizeof(GLuint) * (IM->Count+2-start));
 
-   IM->CopyStart = IM->Start = IM->Count = start;
-   IM->Primitive[IM->Start] = (ctx->Driver.CurrentExecPrimitive | PRIM_LAST);
-   IM->LastPrimitive = IM->Start;
+   IM->Start = IM->Count = start;
+   IM->CopyStart = IM->Start - tnl->ExecCopyCount;
+   IM->Primitive[IM->CopyStart] = ctx->Driver.CurrentExecPrimitive;
+   if (tnl->ExecParity)
+      IM->Primitive[IM->CopyStart] |= PRIM_PARITY;
+
+   if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1) {
+      ASSERT(tnl->ExecCopyTexSize == 0);
+      ASSERT(tnl->ExecCopyCount == 0);
+      ASSERT(IM->CopyStart == IM->Start);
+   }
+
+   IM->LastPrimitive = IM->CopyStart;
    IM->BeginState = beginstate;
    IM->SavedBeginState = savedbeginstate;
    IM->TexSize = 0;
-   IM->LastMaterial = 0;
+   IM->LastMaterial = IM->Start;
    IM->MaterialOrMask = 0;
+
+   if (IM->MaterialMask) 
+      IM->MaterialMask[IM->Start] = 0;
 
    IM->ArrayEltFlags = ~ctx->Array._Enabled;
    IM->ArrayEltIncr = ctx->Array.Vertex.Enabled ? 1 : 0;
    IM->ArrayEltFlush = !ctx->Array.LockCount;
 }
+
 
 
 
@@ -105,7 +118,7 @@ void _tnl_copy_to_current( GLcontext *ctx, struct immediate *IM,
       ctx->Current.EdgeFlag = IM->EdgeFlag[count];
 
    if (flag & VERT_RGBA) {
-      COPY_CHAN4(ctx->Current.Color, IM->Color[count]);
+      COPY_4FV(ctx->Current.Color, IM->Color[count]);
       if (ctx->Light.ColorMaterialEnabled) {
 	 _mesa_update_color_material( ctx, ctx->Current.Color );
 	 _mesa_validate_all_lighting_tables( ctx );
@@ -113,7 +126,7 @@ void _tnl_copy_to_current( GLcontext *ctx, struct immediate *IM,
    }
 
    if (flag & VERT_SPEC_RGB)
-      COPY_CHAN4(ctx->Current.SecondaryColor, IM->SecondaryColor[count]);
+      COPY_4FV(ctx->Current.SecondaryColor, IM->SecondaryColor[count]);
 
    if (flag & VERT_FOG_COORD)
       ctx->Current.FogCoord = IM->FogCoord[count];
@@ -170,6 +183,9 @@ void _tnl_compute_orflag( struct immediate *IM )
    IM->CopyAndFlag = IM->AndFlag = andflag;
    IM->CopyOrFlag = IM->OrFlag = orflag;
 }
+
+
+
 
 
 
@@ -264,9 +280,7 @@ static void _tnl_vb_bind_immediate( GLcontext *ctx, struct immediate *IM )
    }
 
    if (inputs & VERT_SPEC_RGB) {
-      tmp->SecondaryColor.data = IM->SecondaryColor + start;
-      tmp->SecondaryColor.start = (GLchan *)(IM->SecondaryColor + start);
-      tmp->SecondaryColor.count = count;
+      tmp->SecondaryColor.Ptr = IM->SecondaryColor + start;
       VB->SecondaryColorPtr[0] = &tmp->SecondaryColor;
    }
 
@@ -275,9 +289,17 @@ static void _tnl_vb_bind_immediate( GLcontext *ctx, struct immediate *IM )
    }
 
    if (inputs & VERT_RGBA) {
-      tmp->Color.data = IM->Color + start;
-      tmp->Color.start = (GLchan *)(IM->Color + start);
-      tmp->Color.count = count;
+      if (IM->CopyOrFlag & VERT_RGBA) {
+	 tmp->Color.Ptr = IM->Color + start;
+	 tmp->Color.StrideB = 4 * sizeof(GLfloat);
+	 tmp->Color.Flags = 0;
+      } else {
+	 tmp->Color.Ptr = ctx->Current.Color;
+	 tmp->Color.StrideB = 0;
+	 tmp->Color.Flags = CA_CLIENT_DATA; /* hack */
+	 VB->importable_data |= VERT_RGBA;
+	 VB->import_data = _tnl_upgrade_current_data;
+      }
       VB->ColorPtr[0] = &tmp->Color;
    }
 
@@ -309,7 +331,8 @@ static void _tnl_vb_bind_immediate( GLcontext *ctx, struct immediate *IM )
 
 
 
-/* Called by exec_cassette and execute_compiled_cassette.
+/* Called by exec_cassette execute_compiled_cassette, but not
+ * exec_elt_cassette.
  */
 void _tnl_run_cassette( GLcontext *ctx, struct immediate *IM )
 {
@@ -318,11 +341,7 @@ void _tnl_run_cassette( GLcontext *ctx, struct immediate *IM )
    _tnl_vb_bind_immediate( ctx, IM );
 
    if (IM->CopyOrFlag & VERT_EVAL_ANY)
-      _tnl_eval_vb( ctx,
-		    IM->Obj + IM->CopyStart,
-		    IM->CopyOrFlag,
-		    IM->CopyAndFlag );
-
+      _tnl_eval_immediate( ctx, IM );
 
    /* Invalidate all stored data before and after run:
     */
@@ -333,7 +352,32 @@ void _tnl_run_cassette( GLcontext *ctx, struct immediate *IM )
    _tnl_copy_to_current( ctx, IM, IM->OrFlag );
 }
 
+/* Called for regular vertex cassettes.
+ */
+static void exec_vert_cassette( GLcontext *ctx, struct immediate *IM )
+{
+   if (IM->OrFlag & VERT_ELT) {
+      GLuint andflag = ~0;
+      GLuint i;
+      GLuint start = IM->FlushElt ? IM->LastPrimitive : IM->CopyStart;
+      _tnl_translate_array_elts( ctx, IM, start, IM->Count );
 
+      /* Need to recompute andflag and orflag for fixup.
+       */
+      if (IM->CopyAndFlag & VERT_ELT)
+	 IM->CopyAndFlag |= ctx->Array._Enabled;
+      else {
+	 for (i = IM->CopyStart ; i < IM->Count ; i++)
+	    andflag &= IM->Flag[i];
+	 IM->CopyAndFlag = andflag;
+      }
+      IM->CopyOrFlag |= ctx->Array._Enabled;
+   }
+
+   _tnl_fixup_input( ctx, IM );
+   _tnl_print_cassette( IM );
+   _tnl_run_cassette( ctx, IM );
+}
 
 
 /* Called for pure, locked VERT_ELT cassettes instead of
@@ -346,6 +390,8 @@ static void exec_elt_cassette( GLcontext *ctx, struct immediate *IM )
 
    _tnl_vb_bind_arrays( ctx, ctx->Array.LockFirst, ctx->Array.LockCount );
 
+   /* Take only elements and primitive information from the immediate:
+    */
    VB->Elts = IM->Elt + IM->CopyStart;
    VB->Primitive = IM->Primitive + IM->CopyStart;
    VB->PrimitiveLength = IM->PrimitiveLength + IM->CopyStart;
@@ -365,31 +411,13 @@ static void exec_elt_cassette( GLcontext *ctx, struct immediate *IM )
 }
 
 
-
-/* Called for regular vertex cassettes.
- */
-static void exec_vert_cassette( GLcontext *ctx, struct immediate *IM )
+static void
+exec_empty_cassette( GLcontext *ctx, struct immediate *IM )
 {
-   if (IM->OrFlag & VERT_ELT) {
-      GLuint andflag = ~0;
-      GLuint i;
-      GLuint start = IM->FlushElt ? IM->LastPrimitive : IM->CopyStart;
-      _tnl_translate_array_elts( ctx, IM, start, IM->Count );
+   if (IM->OrFlag & VERT_ELT)
+      _tnl_translate_array_elts( ctx, IM, IM->CopyStart, IM->CopyStart );
 
-      /* Need to recompute andflag.
-       */
-      if (IM->CopyAndFlag & VERT_ELT)
-	 IM->CopyAndFlag |= ctx->Array._Enabled;
-      else {
-	 for (i = IM->CopyStart ; i < IM->Count ; i++)
-	    andflag &= IM->Flag[i];
-	 IM->CopyAndFlag = andflag;
-      }
-   }
-
-   _tnl_fixup_input( ctx, IM );
-/*     _tnl_print_cassette( IM ); */
-   _tnl_run_cassette( ctx, IM );
+   _tnl_copy_to_current( ctx, IM, IM->OrFlag );
 }
 
 
@@ -401,27 +429,17 @@ void _tnl_execute_cassette( GLcontext *ctx, struct immediate *IM )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
 
-   ASSERT(tnl->ExecCopySource == IM);
-
    _tnl_compute_orflag( IM );
-
-   /* Mark the last primitive:
-    */
-   IM->PrimitiveLength[IM->LastPrimitive] = IM->Count - IM->LastPrimitive;
-   ASSERT(IM->Primitive[IM->LastPrimitive] & PRIM_LAST);
+   _tnl_copy_immediate_vertices( ctx, IM ); /* ?? flags, orflag above */
+   _tnl_get_exec_copy_verts( ctx, IM );
 
    if (tnl->pipeline.build_state_changes)
       _tnl_validate_pipeline( ctx );
 
-   _tnl_get_exec_copy_verts( ctx, IM );
-
    if (IM->CopyStart == IM->Count) {
-      if (IM->OrFlag & VERT_ELT)
-	 _tnl_translate_array_elts( ctx, IM, IM->CopyStart, IM->CopyStart );
-
-      _tnl_copy_to_current( ctx, IM, IM->OrFlag );
+      exec_empty_cassette( ctx, IM );
    }
-   else if ((IM->OrFlag & VERT_DATA) == VERT_ELT &&
+   else if ((IM->CopyOrFlag & VERT_DATA) == VERT_ELT &&
 	    ctx->Array.LockCount &&
 	    ctx->Array.Vertex.Enabled) {
       exec_elt_cassette( ctx, IM );
@@ -430,15 +448,23 @@ void _tnl_execute_cassette( GLcontext *ctx, struct immediate *IM )
       exec_vert_cassette( ctx, IM );
    }
 
-   _tnl_reset_input( ctx,
-		     IMM_MAX_COPIED_VERTS,
-		     IM->BeginState & (VERT_BEGIN_0|VERT_BEGIN_1),
-		     IM->SavedBeginState );
-
-   /* Copy vertices and primitive information to immediate before it
-    * can be overwritten.
+   /* Only reuse the immediate if there are no copied vertices living
+    * inside it:
     */
-   _tnl_copy_immediate_vertices( ctx, IM );
+   { 
+      GLuint begin_state = IM->BeginState & (VERT_BEGIN_0|VERT_BEGIN_1);
+      GLuint saved_begin_state = IM->SavedBeginState;
+
+      if (--IM->ref_count != 0) {
+	 IM = _tnl_alloc_immediate( ctx );
+	 SET_IMMEDIATE( ctx, IM );
+      }
+
+      IM->ref_count++;
+	 
+      _tnl_reset_input( ctx, IMM_MAX_COPIED_VERTS, 
+			begin_state, saved_begin_state );
+   }
 
    if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1)
       ctx->Driver.NeedFlush &= ~FLUSH_STORED_VERTICES;
@@ -466,15 +492,27 @@ void _tnl_imm_init( GLcontext *ctx )
 
    tnl->ExecCopyTexSize = 0;
    tnl->ExecCopyCount = 0;
-   tnl->ExecCopySource = TNL_CURRENT_IM(ctx);
-   TNL_CURRENT_IM(ctx)->ref_count++;
+   tnl->ExecCopySource = 0;
 
    TNL_CURRENT_IM(ctx)->CopyStart = IMM_MAX_COPIED_VERTS;
 
    _mesa_vector4f_init( &tmp->Obj, 0, 0 );
    _mesa_vector3f_init( &tmp->Normal, 0, 0 );
-   _mesa_vector4chan_init( &tmp->Color, 0, 0 );
-   _mesa_vector4chan_init( &tmp->SecondaryColor, 0, 0 );
+
+   tmp->Color.Ptr = 0;
+   tmp->Color.Type = GL_FLOAT;
+   tmp->Color.Size = 4;
+   tmp->Color.Stride = 0;
+   tmp->Color.StrideB = 4 * sizeof(GLfloat);
+   tmp->Color.Flags = 0;
+
+   tmp->SecondaryColor.Ptr = 0;
+   tmp->SecondaryColor.Type = GL_FLOAT;
+   tmp->SecondaryColor.Size = 4;
+   tmp->SecondaryColor.Stride = 0;
+   tmp->SecondaryColor.StrideB = 4 * sizeof(GLfloat);
+   tmp->SecondaryColor.Flags = 0;
+
    _mesa_vector1f_init( &tmp->FogCoord, 0, 0 );
    _mesa_vector1ui_init( &tmp->Index, 0, 0 );
    _mesa_vector1ub_init( &tmp->EdgeFlag, 0, 0 );
@@ -493,7 +531,9 @@ void _tnl_imm_init( GLcontext *ctx )
 
 void _tnl_imm_destroy( GLcontext *ctx )
 {
-   if (TNL_CURRENT_IM(ctx))
+   if (TNL_CURRENT_IM(ctx)) {
+      TNL_CURRENT_IM(ctx)->ref_count--;
       _tnl_free_immediate( TNL_CURRENT_IM(ctx) );
-
+      SET_IMMEDIATE(ctx, 0);
+   }
 }

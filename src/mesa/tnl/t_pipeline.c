@@ -1,4 +1,4 @@
-/* $Id: t_pipeline.c,v 1.15 2001/03/19 02:25:37 keithw Exp $ */
+/* $Id: t_pipeline.c,v 1.17 2001/04/30 09:04:00 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -119,6 +119,7 @@ void _tnl_validate_pipeline( GLcontext *ctx )
 void _tnl_run_pipeline( GLcontext *ctx )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
+   struct vertex_buffer *VB = &tnl->vb;
    struct gl_pipeline *pipe = &tnl->pipeline;
    struct gl_pipeline_stage *s = pipe->stages;
    GLuint changed_state = pipe->run_state_changes;
@@ -131,6 +132,9 @@ void _tnl_run_pipeline( GLcontext *ctx )
     */
    ASSERT(pipe->build_state_changes == 0);
 
+/*     _tnl_print_vert_flags( "run_pipeline, new inputs", changed_inputs ); */
+/*     _mesa_print_state( "run_pipeline, new state", changed_state ); */
+   
    START_FAST_MATH(__tmp);
    if (tnl->Driver.PipelineStart)
       tnl->Driver.PipelineStart( ctx );
@@ -145,7 +149,6 @@ void _tnl_run_pipeline( GLcontext *ctx )
       s->changed_inputs |= s->inputs & changed_inputs;
 
       if (s->run_state & changed_state) {
-/*  	 changed_inputs |= s->check(ctx, s); */
 	 s->changed_inputs = s->inputs;
       }
 
@@ -154,8 +157,13 @@ void _tnl_run_pipeline( GLcontext *ctx )
 	    if (s->changed_inputs)
 	       changed_inputs |= s->outputs;
 
-/*  	    fprintf(stderr, "run %s\n", s->name); */
+  	    if (0)
+	       fprintf(stderr, "run %s inputs %x\n", 
+		       s->name, s->changed_inputs); 
+
 	    running = s->run( ctx, s );
+	    s->changed_inputs = 0;             /* readded this apr 30  */
+	    VB->importable_data &= ~s->outputs;
 	 }
       }
    }

@@ -1,4 +1,4 @@
-/* $Id: t_dd_vb.c,v 1.8 2001/03/30 00:39:02 keithw Exp $ */
+/* $Id: t_dd_vb.c,v 1.13 2001/04/30 21:08:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -26,6 +26,7 @@
  * Authors:
  *    Keith Whitwell <keithw@valinux.com>
  */
+#include "math/m_translate.h"
 
 #if (HAVE_HW_VIEWPORT)
 #define UNVIEWPORT_VARS
@@ -36,6 +37,10 @@
 
 #ifndef LOCALVARS
 #define LOCALVARS
+#endif
+
+#ifndef CHECK_HW_DIVIDE
+#define CHECK_HW_DIVIDE 1
 #endif
 
 /* These don't need to be duplicated, but there's currently nowhere
@@ -102,10 +107,9 @@ void TAG(translate_vertex)(GLcontext *ctx,
       dst->color[3] = src->tv.color.alpha;
    }
    else {
-      GLfloat oow = (HAVE_HW_DIVIDE) ? 1.0 / src->v.w : src->v.w;
-
       if (HAVE_HW_VIEWPORT) {
-	 if (HAVE_HW_DIVIDE) {
+	 if (HAVE_HW_DIVIDE && CHECK_HW_DIVIDE) {
+	    GLfloat oow = 1.0 / src->v.w;
 	    dst->win[0] = s[0]  * src->v.x * oow + s[12];
 	    dst->win[1] = s[5]  * src->v.y * oow + s[13];
 	    dst->win[2] = s[10] * src->v.z * oow + s[14];
@@ -114,13 +118,13 @@ void TAG(translate_vertex)(GLcontext *ctx,
 	    dst->win[0] = s[0]  * src->v.x + s[12];
 	    dst->win[1] = s[5]  * src->v.y + s[13];
 	    dst->win[2] = s[10] * src->v.z + s[14];
-	    dst->win[3] = oow;
+	    dst->win[3] = src->v.w;
 	 }
       } else {
 	 dst->win[0] = UNVIEWPORT_X( src->v.x );
 	 dst->win[1] = UNVIEWPORT_Y( src->v.y );
 	 dst->win[2] = UNVIEWPORT_Z( src->v.z );
-	 dst->win[3] = oow;
+	 dst->win[3] = src->v.w;
       }
 
       dst->color[0] = src->v.color.red;
@@ -212,5 +216,122 @@ void TAG(print_vertex)( GLcontext *ctx, const VERTEX *v )
    fprintf(stderr, "\n");
 }
 
+static void do_import( struct vertex_buffer *VB,
+		       struct gl_client_array *to,
+		       struct gl_client_array *from )
+{
+   GLuint count = VB->Count;
 
+   if (!to->Ptr) {
+      to->Ptr = ALIGN_MALLOC( VB->Size * 4 * sizeof(GLubyte), 32 );
+      to->Type = GL_UNSIGNED_BYTE;
+   }
+
+   /* No need to transform the same value 3000 times.
+    */
+   if (!from->StrideB) {
+      to->StrideB = 0;
+      count = 1;
+   }
+   else
+      to->StrideB = 4 * sizeof(GLubyte);
+   
+   _math_trans_4ub( (GLubyte (*)[4]) to->Ptr,
+		    from->Ptr,
+		    from->StrideB,
+		    from->Type,
+		    from->Size,
+		    0,
+		    count);
+}
+
+#ifndef IMPORT_QUALIFIER
+#define IMPORT_QUALIFIER static
+#endif
+
+IMPORT_QUALIFIER void TAG(import_float_colors)( GLcontext *ctx )
+{
+   LOCALVARS
+   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
+   struct gl_client_array *to = GET_UBYTE_COLOR_STORE();
+   do_import( VB, to, VB->ColorPtr[0] );
+   VB->ColorPtr[0] = to;
+}
+
+IMPORT_QUALIFIER void TAG(import_float_spec_colors)( GLcontext *ctx )
+{
+   LOCALVARS
+   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
+   struct gl_client_array *to = GET_UBYTE_SPEC_COLOR_STORE();
+   do_import( VB, to, VB->SecondaryColorPtr[0] );
+   VB->SecondaryColorPtr[0] = to;
+}
+
+/* Interpolate the elements of the VB not included in typical hardware
+ * vertices.  
+ *
+ * NOTE: All these arrays are guarenteed by tnl to be writeable and
+ * have good stride.
+ */
+#ifndef INTERP_QUALIFIER 
+#define INTERP_QUALIFIER static
+#endif
+
+#define GET_COLOR(ptr, idx) (((GLfloat (*)[4])((ptr)->Ptr))[idx])
+
+
+INTERP_QUALIFIER void TAG(interp_extras)( GLcontext *ctx,
+					  GLfloat t,
+					  GLuint dst, GLuint out, GLuint in,
+					  GLboolean force_boundary )
+{
+   LOCALVARS
+   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
+
+   if (VB->ColorPtr[1]) {
+      INTERP_4F( t,
+		 GET_COLOR(VB->ColorPtr[1], dst),
+		 GET_COLOR(VB->ColorPtr[1], out),
+		 GET_COLOR(VB->ColorPtr[1], in) );
+
+      if (VB->SecondaryColorPtr[1]) {
+	 INTERP_3F( t,
+		    GET_COLOR(VB->SecondaryColorPtr[1], dst),
+		    GET_COLOR(VB->SecondaryColorPtr[1], out),
+		    GET_COLOR(VB->SecondaryColorPtr[1], in) );
+      }
+   }
+
+   if (VB->EdgeFlag) {
+      VB->EdgeFlag[dst] = VB->EdgeFlag[out] || force_boundary || 1;
+   }
+
+   INTERP_VERTEX(ctx, t, dst, out, in, force_boundary);
+}
+
+INTERP_QUALIFIER void TAG(copy_pv_extras)( GLcontext *ctx, 
+					   GLuint dst, GLuint src )
+{
+   LOCALVARS
+   struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
+
+   if (VB->ColorPtr[1]) {
+	 COPY_4FV( GET_COLOR(VB->ColorPtr[1], dst), 
+		   GET_COLOR(VB->ColorPtr[1], src) );
+
+	 if (VB->SecondaryColorPtr[1]) {
+	    COPY_4FV( GET_COLOR(VB->SecondaryColorPtr[1], dst), 
+		      GET_COLOR(VB->SecondaryColorPtr[1], src) );
+	 }
+   }
+
+   COPY_PV_VERTEX(ctx, dst, src);
+}
+
+
+#undef INTERP_QUALIFIER
+#undef IMPORT_QUALIFIER
+#undef GET_COLOR
+
+#undef IND
 #undef TAG

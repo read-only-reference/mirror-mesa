@@ -1,4 +1,4 @@
-/* $Id: glxinfo.c,v 1.12 2001/03/23 21:41:44 brianp Exp $ */
+/* $Id: glxinfo.c,v 1.14 2001/04/24 20:57:36 brianp Exp $ */
 
 /*
  * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
@@ -44,6 +44,7 @@
 #include <GL/glx.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 
 #ifndef GLX_NONE_EXT
@@ -140,7 +141,14 @@ print_extension_list(const char *ext)
 
 
 static void
-print_screen_info(Display *dpy, int scrnum)
+print_display_info(Display *dpy)
+{
+   printf("name of display: %s\n", DisplayString(dpy));
+}
+
+
+static void
+print_screen_info(Display *dpy, int scrnum, Bool allowDirect)
 {
    Window win;
    int attribSingle[] = {
@@ -184,7 +192,7 @@ print_screen_info(Display *dpy, int scrnum)
 		       0, visinfo->depth, InputOutput,
 		       visinfo->visual, mask, &attr);
 
-   ctx = glXCreateContext( dpy, visinfo, NULL, True );
+   ctx = glXCreateContext( dpy, visinfo, NULL, allowDirect );
    if (!ctx) {
       fprintf(stderr, "Error: glXCreateContext failed\n");
       XDestroyWindow(dpy, win);
@@ -203,11 +211,26 @@ print_screen_info(Display *dpy, int scrnum)
       const char *glRenderer = (const char *) glGetString(GL_RENDERER);
       const char *glVersion = (const char *) glGetString(GL_VERSION);
       const char *glExtensions = (const char *) glGetString(GL_EXTENSIONS);
+      char *displayName = NULL;
+      char *colon = NULL, *period = NULL;
 #ifdef DO_GLU
       const char *gluVersion = (const char *) gluGetString(GLU_VERSION);
       const char *gluExtensions = (const char *) gluGetString(GLU_EXTENSIONS);
 #endif
-      printf("display: %s  screen:%d\n", DisplayString(dpy), scrnum);
+      /* Strip the screen number from the display name, if present. */
+      if (!(displayName = malloc(strlen(DisplayString(dpy)) + 1))) {
+         fprintf(stderr, "Error: malloc() failed\n");
+         exit(1);
+      }
+      strcpy(displayName, DisplayString(dpy));
+      colon = strrchr(displayName, ':');
+      if (colon) {
+         period = strchr(colon, '.');
+         if (period)
+            *period = '\0';
+      }
+      printf("display: %s  screen: %d\n", displayName, scrnum);
+      free(displayName);
       printf("direct rendering: %s\n", glXIsDirect(dpy, ctx) ? "Yes" : "No");
       printf("server glx vendor string: %s\n", serverVendor);
       printf("server glx version string: %s\n", serverVersion);
@@ -594,6 +617,19 @@ find_best_visual(Display *dpy, int scrnum)
 }
 
 
+static void
+usage(void)
+{
+   printf("Usage: glxinfo [-v] [-t] [-h] [-i] [-b] [-display <dname>]\n");
+   printf("\t-v: Print visuals info in verbose form.\n");
+   printf("\t-t: Print verbose table.\n");
+   printf("\t-display <dname>: Print GLX visuals on specified server.\n");
+   printf("\t-h: This information.\n");
+   printf("\t-i: Force an indirect rendering context.\n");
+   printf("\t-b: Find the 'best' visual and print it's number.\n");
+}
+
+
 int
 main(int argc, char *argv[])
 {
@@ -602,6 +638,7 @@ main(int argc, char *argv[])
    int numScreens, scrnum;
    InfoMode mode = Normal;
    GLboolean findBest = GL_FALSE;
+   Bool allowDirect = True;
    int i;
 
    for (i = 1; i < argc; i++) {
@@ -617,6 +654,18 @@ main(int argc, char *argv[])
       }
       else if (strcmp(argv[i], "-b") == 0) {
          findBest = GL_TRUE;
+      }
+      else if (strcmp(argv[i], "-i") == 0) {
+         allowDirect = False;
+      }
+      else if (strcmp(argv[i], "-h") == 0) {
+         usage();
+         return 0;
+      }
+      else {
+         printf("Unknown option `%s'\n", argv[i]);
+         usage();
+         return 0;
       }
    }
 
@@ -634,9 +683,10 @@ main(int argc, char *argv[])
    }
    else {
       numScreens = ScreenCount(dpy);
+      print_display_info(dpy);
       for (scrnum = 0; scrnum < numScreens; scrnum++) {
          mesa_hack(dpy, scrnum);
-         print_screen_info(dpy, scrnum);
+         print_screen_info(dpy, scrnum, allowDirect);
          printf("\n");
          print_visual_info(dpy, scrnum, mode);
          if (scrnum + 1 < numScreens)
