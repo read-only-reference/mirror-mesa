@@ -1,10 +1,10 @@
-/* $Id: enable.c,v 1.40 2001/01/23 23:39:36 brianp Exp $ */
+/* $Id: enable.c,v 1.43 2001/02/27 22:33:59 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -238,8 +238,8 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
       ctx->_Enabled ^= ENABLE_FOG;
       break;
    case GL_HISTOGRAM:
-      if (!ctx->Extensions.EXT_histogram) {
-	 gl_error(ctx, GL_INVALID_ENUM, "enable GL_HISTOGRAM");
+      if (!ctx->Extensions.EXT_histogram && !ctx->Extensions.ARB_imaging) {
+	 gl_error(ctx, GL_INVALID_ENUM, "glEnable(GL_HISTOGRAM)");
 	 return;
       }
       if (ctx->Pixel.HistogramEnabled == state)
@@ -273,6 +273,14 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
       FLUSH_VERTICES(ctx, _NEW_LIGHT);
       ctx->Light.Enabled = state;
       ctx->_Enabled ^= ENABLE_LIGHT;
+
+      if ((ctx->Light.Enabled &&
+	   ctx->Light.Model.ColorControl==GL_SEPARATE_SPECULAR_COLOR)
+	  || ctx->Fog.ColorSumEnabled)
+	 ctx->_TriangleCaps |= DD_SEPERATE_SPECULAR; 
+      else
+	 ctx->_TriangleCaps &= ~DD_SEPERATE_SPECULAR; 
+
       break;
    case GL_LINE_SMOOTH:
       if (ctx->Line.SmoothFlag == state) 
@@ -635,7 +643,7 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
 
       /* GL_SGI_color_table */
    case GL_COLOR_TABLE_SGI:
-      if (!ctx->Extensions.SGI_color_table) {
+      if (!ctx->Extensions.SGI_color_table && !ctx->Extensions.ARB_imaging) {
 	 gl_error( ctx, GL_INVALID_ENUM, state ? "glEnable": "glDisable" );
 	 return;
       }
@@ -645,7 +653,7 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
       ctx->Pixel.ColorTableEnabled = state;
       break;
    case GL_POST_CONVOLUTION_COLOR_TABLE_SGI:
-      if (!ctx->Extensions.SGI_color_table) {
+      if (!ctx->Extensions.SGI_color_table && !ctx->Extensions.ARB_imaging) {
 	 gl_error( ctx, GL_INVALID_ENUM, state ? "glEnable": "glDisable" );
 	 return;
       }
@@ -655,7 +663,7 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
       ctx->Pixel.PostConvolutionColorTableEnabled = state;
       break;
    case GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI:
-      if (!ctx->Extensions.SGI_color_table) {
+      if (!ctx->Extensions.SGI_color_table && !ctx->Extensions.ARB_imaging) {
 	 gl_error( ctx, GL_INVALID_ENUM, state ? "glEnable": "glDisable" );
 	 return;
       }
@@ -667,7 +675,7 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
 
       /* GL_EXT_convolution */
    case GL_CONVOLUTION_1D:
-      if (!ctx->Extensions.EXT_convolution) {
+      if (!ctx->Extensions.EXT_convolution && !ctx->Extensions.ARB_imaging) {
 	 gl_error(ctx, GL_INVALID_ENUM, state ? "glEnable" : "glDisable");
 	 return;
       }
@@ -677,7 +685,7 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
       ctx->Pixel.Convolution1DEnabled = state;
       break;
    case GL_CONVOLUTION_2D:
-      if (!ctx->Extensions.EXT_convolution) {
+      if (!ctx->Extensions.EXT_convolution && !ctx->Extensions.ARB_imaging) {
 	 gl_error(ctx, GL_INVALID_ENUM, state ? "glEnable" : "glDisable");
 	 return;
       }
@@ -687,7 +695,7 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
       ctx->Pixel.Convolution2DEnabled = state;
       break;
    case GL_SEPARABLE_2D:
-      if (!ctx->Extensions.EXT_convolution) {
+      if (!ctx->Extensions.EXT_convolution && !ctx->Extensions.ARB_imaging) {
 	 gl_error(ctx, GL_INVALID_ENUM, state ? "glEnable" : "glDisable");
 	 return;
       }
@@ -724,7 +732,14 @@ void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
 	 return;
       FLUSH_VERTICES(ctx, _NEW_FOG);
       ctx->Fog.ColorSumEnabled = state;
-      ctx->_TriangleCaps ^= DD_SEPERATE_SPECULAR;
+      
+      if ((ctx->Light.Enabled &&
+	   ctx->Light.Model.ColorControl==GL_SEPARATE_SPECULAR_COLOR)
+	  || ctx->Fog.ColorSumEnabled)
+	 ctx->_TriangleCaps |= DD_SEPERATE_SPECULAR; 
+      else
+	 ctx->_TriangleCaps &= ~DD_SEPERATE_SPECULAR; 
+
       break;
 
       /* GL_MESA_sprite_point */
@@ -803,7 +818,7 @@ _mesa_IsEnabled( GLenum cap )
       case GL_FOG:
 	 return ctx->Fog.Enabled;
       case GL_HISTOGRAM:
-         if (ctx->Extensions.EXT_histogram) {
+         if (ctx->Extensions.EXT_histogram || ctx->Extensions.ARB_imaging) {
             return ctx->Pixel.HistogramEnabled;
          }
          else {

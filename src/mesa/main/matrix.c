@@ -1,4 +1,4 @@
-/* $Id: matrix.c,v 1.30 2001/01/23 23:39:36 brianp Exp $ */
+/* $Id: matrix.c,v 1.32 2001/02/13 23:51:34 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -104,7 +104,7 @@ _mesa_Frustum( GLdouble left, GLdouble right,
       return;
    }
 
-   _math_matrix_frustrum( mat, left, right, bottom, top, nearval, farval );
+   _math_matrix_frustum( mat, left, right, bottom, top, nearval, farval );
 }
 
 
@@ -123,7 +123,7 @@ _mesa_Ortho( GLdouble left, GLdouble right,
        bottom == top ||
        nearval == farval)
    {
-      gl_error( ctx,  GL_INVALID_VALUE, "gl_Ortho" );
+      gl_error( ctx,  GL_INVALID_VALUE, "glOrtho" );
       return;
    }
 

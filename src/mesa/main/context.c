@@ -1,4 +1,4 @@
-/* $Id: context.c,v 1.119 2001/01/24 04:56:19 brianp Exp $ */
+/* $Id: context.c,v 1.124 2001/02/28 00:27:48 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -51,7 +51,6 @@
 #include "state.h"
 #include "teximage.h"
 #include "texobj.h"
-#include "texture.h"
 #include "mtypes.h"
 #include "varray.h"
 
@@ -304,16 +303,15 @@ _mesa_destroy_visual( GLvisual *vis )
  * Create a new framebuffer.  A GLframebuffer is a struct which
  * encapsulates the depth, stencil and accum buffers and related
  * parameters.
- * Input:  visual - a GLvisual pointer
+ * Input:  visual - a GLvisual pointer (we copy the struct contents)
  *         softwareDepth - create/use a software depth buffer?
  *         softwareStencil - create/use a software stencil buffer?
  *         softwareAccum - create/use a software accum buffer?
  *         softwareAlpha - create/use a software alpha buffer?
-
  * Return:  pointer to new GLframebuffer struct or NULL if error.
  */
 GLframebuffer *
-_mesa_create_framebuffer( GLvisual *visual,
+_mesa_create_framebuffer( const GLvisual *visual,
                           GLboolean softwareDepth,
                           GLboolean softwareStencil,
                           GLboolean softwareAccum,
@@ -336,7 +334,7 @@ _mesa_create_framebuffer( GLvisual *visual,
  */
 void
 _mesa_initialize_framebuffer( GLframebuffer *buffer,
-                              GLvisual *visual,
+                              const GLvisual *visual,
                               GLboolean softwareDepth,
                               GLboolean softwareStencil,
                               GLboolean softwareAccum,
@@ -363,7 +361,7 @@ _mesa_initialize_framebuffer( GLframebuffer *buffer,
       assert(visual->alphaBits > 0);
    }
 
-   buffer->Visual = visual;
+   buffer->Visual = *visual;  /* XXX copy instead? */
    buffer->UseSoftwareDepthBuffer = softwareDepth;
    buffer->UseSoftwareStencilBuffer = softwareStencil;
    buffer->UseSoftwareAccumBuffer = softwareAccum;
@@ -432,8 +430,8 @@ one_time_init( void )
 
       gl_init_lists();
 
-      _mesa_init_math();
       _math_init();
+      _mesa_init_math();
 
       if (getenv("MESA_DEBUG")) {
          _glapi_noop_enable_warnings(GL_TRUE);
@@ -917,11 +915,11 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Histogram.Width = 0;
    ctx->Histogram.Format = GL_RGBA;
    ctx->Histogram.Sink = GL_FALSE;
-   ctx->Histogram.RedSize       = 0xffffffff;
-   ctx->Histogram.GreenSize     = 0xffffffff;
-   ctx->Histogram.BlueSize      = 0xffffffff;
-   ctx->Histogram.AlphaSize     = 0xffffffff;
-   ctx->Histogram.LuminanceSize = 0xffffffff;
+   ctx->Histogram.RedSize       = 0;
+   ctx->Histogram.GreenSize     = 0;
+   ctx->Histogram.BlueSize      = 0;
+   ctx->Histogram.AlphaSize     = 0;
+   ctx->Histogram.LuminanceSize = 0;
    for (i = 0; i < HISTOGRAM_TABLE_SIZE; i++) {
       ctx->Histogram.Count[i][0] = 0;
       ctx->Histogram.Count[i][1] = 0;
@@ -938,7 +936,7 @@ init_attrib_groups( GLcontext *ctx )
    ctx->MinMax.Min[ACOMP] = 1000;    ctx->MinMax.Max[ACOMP] = -1000;
 
    /* Extensions */
-   gl_extensions_ctr( ctx );
+   _mesa_extensions_ctr( ctx );
 
    /* Lighting group */
    for (i=0;i<MAX_LIGHTS;i++) {
@@ -975,6 +973,7 @@ init_attrib_groups( GLcontext *ctx )
    ctx->Line.SmoothFlag = GL_FALSE;
    ctx->Line.StippleFlag = GL_FALSE;
    ctx->Line.Width = 1.0;
+   ctx->Line._Width = 1.0;
    ctx->Line.StipplePattern = 0xffff;
    ctx->Line.StippleFactor = 1;
 
@@ -1342,7 +1341,7 @@ alloc_proxy_textures( GLcontext *ctx )
  */
 GLboolean
 _mesa_initialize_context( GLcontext *ctx,
-                          GLvisual *visual,
+                          const GLvisual *visual,
                           GLcontext *share_list,
                           void *driver_ctx,
                           GLboolean direct )
@@ -1495,13 +1494,13 @@ _mesa_initialize_context( GLcontext *ctx,
 
 /*
  * Allocate and initialize a GLcontext structure.
- * Input:  visual - a GLvisual pointer
+ * Input:  visual - a GLvisual pointer (we copy the struct contents)
  *         sharelist - another context to share display lists with or NULL
  *         driver_ctx - pointer to device driver's context state struct
  * Return:  pointer to a new __GLcontextRec or NULL if error.
  */
 GLcontext *
-_mesa_create_context( GLvisual *visual,
+_mesa_create_context( const GLvisual *visual,
                       GLcontext *share_list,
                       void *driver_ctx,
                       GLboolean direct )
@@ -1615,7 +1614,7 @@ _mesa_free_context_data( GLcontext *ctx )
    _mesa_free_colortable_data( &ctx->PostColorMatrixColorTable );
    _mesa_free_colortable_data( &ctx->Texture.Palette );
 
-   gl_extensions_dtr(ctx);
+   _mesa_extensions_dtr(ctx);
 
    FREE(ctx->Exec);
    FREE(ctx->Save);
@@ -1774,6 +1773,20 @@ _mesa_make_current2( GLcontext *newCtx, GLframebuffer *drawBuffer,
 {
    if (MESA_VERBOSE)
       fprintf(stderr, "_mesa_make_current2()\n");
+
+   /* Check that the context's and framebuffer's visuals are compatible.
+    * We could do a lot more checking here but this'll catch obvious
+    * problems.
+    */
+   if (newCtx && drawBuffer && readBuffer) {
+      if (newCtx->Visual.rgbMode != drawBuffer->Visual.rgbMode ||
+          newCtx->Visual.redBits != drawBuffer->Visual.redBits ||
+          newCtx->Visual.depthBits != drawBuffer->Visual.depthBits ||
+          newCtx->Visual.stencilBits != drawBuffer->Visual.stencilBits ||
+          newCtx->Visual.accumRedBits != drawBuffer->Visual.accumRedBits) {
+         return; /* incompatible */
+      }
+   }
 
    /* We call this function periodically (just here for now) in
     * order to detect when multithreading has begun.

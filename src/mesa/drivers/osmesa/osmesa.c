@@ -1,4 +1,4 @@
-/* $Id: osmesa.c,v 1.43 2001/01/29 20:56:32 keithw Exp $ */
+/* $Id: osmesa.c,v 1.47 2001/02/19 20:01:42 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -35,20 +35,19 @@
  */
 
 
-#ifdef PC_HEADER
-#include "all.h"
-#else
 #include "glheader.h"
 #include "GL/osmesa.h"
 #include "context.h"
 #include "colormac.h"
 #include "depth.h"
+#include "extensions.h"
 #include "macros.h"
-#include "mem.h"
 #include "matrix.h"
+#include "mem.h"
 #include "mmath.h"
 #include "mtypes.h"
-#include "extensions.h"
+#include "texstore.h"
+#include "array_cache/acache.h"
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
 #include "swrast/s_context.h"
@@ -56,9 +55,6 @@
 #include "swrast/s_lines.h"
 #include "swrast/s_triangle.h"
 #include "tnl/tnl.h"
-#include "array_cache/acache.h"
-#endif
-
 
 
 
@@ -546,7 +542,10 @@ OSMesaGetDepthBuffer( OSMesaContext c, GLint *width, GLint *height,
    else {
       *width = c->gl_buffer->Width;
       *height = c->gl_buffer->Height;
-      *bytesPerValue = sizeof(GLdepth);
+      if (c->gl_visual->depthBits <= 16)
+         *bytesPerValue = sizeof(GLushort);
+      else
+         *bytesPerValue = sizeof(GLuint);
       *buffer = c->gl_buffer->DepthBuffer;
       return GL_TRUE;
    }
@@ -1770,9 +1769,24 @@ static void osmesa_update_state( GLcontext *ctx, GLuint new_state )
 
    ctx->Driver.GetString = get_string;
    ctx->Driver.UpdateState = osmesa_update_state;
-
    ctx->Driver.SetDrawBuffer = set_draw_buffer;
    ctx->Driver.SetReadBuffer = set_read_buffer;
+   ctx->Driver.ResizeBuffersMESA = _swrast_alloc_buffers;
+   ctx->Driver.GetBufferSize = buffer_size;
+
+   ctx->Driver.RenderStart = _swsetup_RenderStart;
+   ctx->Driver.RenderFinish = _swsetup_RenderFinish;
+   ctx->Driver.BuildProjectedVertices = _swsetup_BuildProjectedVertices;
+   ctx->Driver.RenderPrimitive = _swsetup_RenderPrimitive;
+   ctx->Driver.PointsFunc = _swsetup_Points;
+   ctx->Driver.LineFunc = _swsetup_Line;
+   ctx->Driver.TriangleFunc = _swsetup_Triangle;
+   ctx->Driver.QuadFunc = _swsetup_Quad;
+   ctx->Driver.ResetLineStipple = _swrast_ResetLineStipple;
+   ctx->Driver.RenderInterp = _swsetup_RenderInterp;
+   ctx->Driver.RenderCopyPV = _swsetup_RenderCopyPV;
+   ctx->Driver.RenderClippedLine = _swsetup_RenderClippedLine;
+   ctx->Driver.RenderClippedPolygon = _swsetup_RenderClippedPolygon;
 
    ctx->Driver.Accum = _swrast_Accum;
    ctx->Driver.Bitmap = _swrast_Bitmap;
@@ -1780,22 +1794,20 @@ static void osmesa_update_state( GLcontext *ctx, GLuint new_state )
    ctx->Driver.CopyPixels = _swrast_CopyPixels;
    ctx->Driver.DrawPixels = _swrast_DrawPixels;
    ctx->Driver.ReadPixels = _swrast_ReadPixels;
-   ctx->Driver.ResizeBuffersMESA = _swrast_alloc_buffers;
 
-   ctx->Driver.GetBufferSize = buffer_size;
+   ctx->Driver.TexImage1D = _mesa_store_teximage1d;
+   ctx->Driver.TexImage2D = _mesa_store_teximage2d;
+   ctx->Driver.TexImage3D = _mesa_store_teximage3d;
+   ctx->Driver.TexSubImage1D = _mesa_store_texsubimage1d;
+   ctx->Driver.TexSubImage2D = _mesa_store_texsubimage2d;
+   ctx->Driver.TexSubImage3D = _mesa_store_texsubimage3d;
+   ctx->Driver.CopyTexImage1D = _mesa_copy_teximage1d;
+   ctx->Driver.CopyTexImage2D = _mesa_copy_teximage2d;
+   ctx->Driver.CopyTexSubImage1D = _mesa_copy_texsubimage1d;
+   ctx->Driver.CopyTexSubImage2D = _mesa_copy_texsubimage2d;
+   ctx->Driver.CopyTexSubImage3D = _mesa_copy_texsubimage3d;
+   ctx->Driver.TestProxyTexImage = _mesa_test_proxy_teximage;
 
-   ctx->Driver.PointsFunc = _swsetup_Points;
-   ctx->Driver.LineFunc = _swsetup_Line;
-   ctx->Driver.TriangleFunc = _swsetup_Triangle;
-   ctx->Driver.QuadFunc = _swsetup_Quad;
-   ctx->Driver.BuildProjectedVertices = _swsetup_BuildProjectedVertices;
-   ctx->Driver.RenderPrimitive = _swsetup_RenderPrimitive;
-   ctx->Driver.RenderStart = _swsetup_RenderStart;
-   ctx->Driver.RenderFinish = _swsetup_RenderFinish;
-   ctx->Driver.RenderInterp = _swsetup_RenderInterp;
-   ctx->Driver.RenderCopyPV = _swsetup_RenderCopyPV;
-   ctx->Driver.RenderClippedLine = _swsetup_RenderClippedLine;
-   ctx->Driver.RenderClippedPolygon = _swsetup_RenderClippedPolygon;
 
    /* RGB(A) span/pixel functions */
    if (osmesa->format == OSMESA_RGB) {

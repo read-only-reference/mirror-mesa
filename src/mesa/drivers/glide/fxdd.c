@@ -56,12 +56,13 @@
 #include "fxdrv.h"
 #include "enums.h"
 #include "extensions.h"
+#include "texstore.h"
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
 #include "tnl/tnl.h"
+#include "tnl/t_pipeline.h"
 #include "array_cache/acache.h"
 
-#include "tnl/t_pipeline.h"
 
 
 float gl_ubyte_to_float_255_color_tab[256];
@@ -654,8 +655,7 @@ static const GLubyte *fxDDGetString(GLcontext *ctx, GLenum name)
 }
 
 static const struct gl_pipeline_stage *fx_pipeline[] = {
-   &_tnl_update_material_stage, /* TODO: Add the fastpath here */
-   &_tnl_vertex_transform_stage, 
+   &_tnl_vertex_transform_stage, /* TODO: Add the fastpath here */
    &_tnl_normal_transform_stage, 
    &_tnl_lighting_stage,	
    &_tnl_fog_coordinate_stage,	/* TODO: Omit fog stage */
@@ -832,22 +832,17 @@ void fxDDInitExtensions( GLcontext *ctx )
 {
    fxMesaContext fxMesa=(fxMesaContext)ctx->DriverCtx;
 
-   gl_extensions_disable(ctx, "GL_EXT_blend_logic_op");
-   gl_extensions_disable(ctx, "GL_EXT_blend_minmax");
-   gl_extensions_disable(ctx, "GL_EXT_blend_subtract");
-   gl_extensions_disable(ctx, "GL_EXT_blend_color");
-   gl_extensions_disable(ctx, "GL_EXT_fog_coord");
+   _mesa_add_extension(ctx, GL_TRUE, "3DFX_set_global_palette", 0);
+   _mesa_enable_extension(ctx, "GL_EXT_point_parameters"); 
+   _mesa_enable_extension(ctx, "GL_EXT_paletted_texture");
+   _mesa_enable_extension(ctx, "GL_EXT_texture_lod_bias");
+   _mesa_enable_extension(ctx, "GL_EXT_shared_texture_palette");
 
-   if (1)
-      gl_extensions_disable(ctx, "GL_EXT_point_parameters"); 
+   if (fxMesa->haveTwoTMUs)
+      _mesa_enable_extension(ctx, "GL_EXT_texture_env_add");
 
-   gl_extensions_add(ctx, GL_TRUE, "3DFX_set_global_palette", 0);
-
-   if (!fxMesa->haveTwoTMUs)
-      gl_extensions_disable(ctx, "GL_EXT_texture_env_add");
-
-   if (!fxMesa->emulateTwoTMUs)
-      gl_extensions_disable(ctx, "GL_ARB_multitexture");
+   if (fxMesa->emulateTwoTMUs)
+      _mesa_enable_extension(ctx, "GL_ARB_multitexture");
 }
 
 
@@ -880,14 +875,11 @@ static GLboolean fxIsInHardware(GLcontext *ctx)
   }
   /* Unsupported texture/multitexture cases */
 
-  if(fxMesa->emulateTwoTMUs) {
-    if((ctx->_Enabled & (TEXTURE0_3D | TEXTURE1_3D)) ||
-       /* Not very well written ... */
-       ((ctx->_Enabled & (TEXTURE0_1D | TEXTURE1_1D)) &&
-        ((ctx->_Enabled & (TEXTURE0_2D | TEXTURE1_2D))!=(TEXTURE0_2D | TEXTURE1_2D)))
-       ) {
-      return GL_FALSE;
-    }
+  if (fxMesa->emulateTwoTMUs) {
+    if (ctx->Texture._ReallyEnabled & (TEXTURE0_3D | TEXTURE1_3D))
+      return GL_FALSE;  /* can't do 3D textures */
+    if (ctx->Texture._ReallyEnabled & (TEXTURE0_1D | TEXTURE1_1D))
+      return GL_FALSE;  /* can't do 1D textures */
 
     if (ctx->Texture._ReallyEnabled & TEXTURE0_2D) {
       if (ctx->Texture.Unit[0].EnvMode == GL_BLEND &&
@@ -1106,14 +1098,24 @@ void fxSetupDDPointers(GLcontext *ctx)
    ctx->Driver.RenderClippedLine = _swsetup_RenderClippedLine;
    ctx->Driver.RenderClippedPolygon = _swsetup_RenderClippedPolygon;
 
+   ctx->Driver.TexImage1D = _mesa_store_teximage1d;
    ctx->Driver.TexImage2D = fxDDTexImage2D;
+   ctx->Driver.TexImage3D = _mesa_store_teximage3d;
+   ctx->Driver.TexSubImage1D = _mesa_store_texsubimage1d;
    ctx->Driver.TexSubImage2D = fxDDTexSubImage2D;
-   ctx->Driver.GetTexImage = fxDDGetTexImage;
-   ctx->Driver.TexEnv=fxDDTexEnv;
-   ctx->Driver.TexParameter=fxDDTexParam;
-   ctx->Driver.BindTexture=fxDDTexBind;
-   ctx->Driver.DeleteTexture=fxDDTexDel;
-   ctx->Driver.UpdateTexturePalette=fxDDTexPalette;
+   ctx->Driver.TexSubImage3D = _mesa_store_texsubimage3d;
+   ctx->Driver.CopyTexImage1D = _mesa_copy_teximage1d;
+   ctx->Driver.CopyTexImage2D = _mesa_copy_teximage2d;
+   ctx->Driver.CopyTexSubImage1D = _mesa_copy_texsubimage1d;
+   ctx->Driver.CopyTexSubImage2D = _mesa_copy_texsubimage2d;
+   ctx->Driver.CopyTexSubImage3D = _mesa_copy_texsubimage3d;
+   ctx->Driver.TestProxyTexImage = _mesa_test_proxy_teximage;
+
+   ctx->Driver.TexEnv = fxDDTexEnv;
+   ctx->Driver.TexParameter = fxDDTexParam;
+   ctx->Driver.BindTexture = fxDDTexBind;
+   ctx->Driver.DeleteTexture = fxDDTexDel;
+   ctx->Driver.UpdateTexturePalette = fxDDTexPalette;
 
    ctx->Driver.AlphaFunc=fxDDAlphaFunc;
    ctx->Driver.BlendFunc=fxDDBlendFunc;

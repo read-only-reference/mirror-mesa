@@ -1,4 +1,4 @@
-/* $Id: ss_context.c,v 1.9 2001/01/29 20:47:39 keithw Exp $ */
+/* $Id: ss_context.c,v 1.11 2001/02/16 18:14:41 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -152,7 +152,7 @@ _swsetup_RenderStart( GLcontext *ctx )
    if (VB->ClipMask && VB->importable_data) 
       VB->import_data( ctx,
 		       VB->importable_data,
-		       VEC_NOT_WRITEABLE|VEC_BAD_STRIDE);
+		       VEC_NOT_WRITEABLE|VEC_BAD_STRIDE);     
 }
 
 void

@@ -1,4 +1,4 @@
-/* $Id: t_imm_fixup.c,v 1.4 2001/01/24 00:04:59 brianp Exp $ */
+/* $Id: t_imm_fixup.c,v 1.7 2001/02/15 01:33:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -39,7 +39,6 @@
 #include "mem.h"
 #include "mmath.h"
 #include "state.h"
-#include "texture.h"
 #include "mtypes.h"
 
 #include "math/m_matrix.h"
@@ -417,20 +416,6 @@ static void copy_vertices( GLcontext *ctx,
       next->CopyAndFlag &= prev->Flag[src]; /* redundant for current_im */
    }
    
-   /* Only needed when copying to a compiled cassette
-    */
-   if (next->NormalLengths) {
-      for (i = 0 ; i < count ; i++)
-      {
-	 GLuint src = elts[i+offset];
-	 GLuint dst = next->CopyStart+i;
-
-	 if (prev->NormalLengths) 
-	    next->NormalLengths[dst] = prev->NormalLengths[src];
-	 else
-	    next->NormalLengths[dst] = 1.0/LEN_3FV(prev->Normal[src]);
-      }
-   }
 
    ASSERT(prev == tnl->ExecCopySource);
 
@@ -550,9 +535,6 @@ void _tnl_fixup_compiled_cassette( GLcontext *ctx, struct immediate *IM )
       if (fixup & VERT_NORM) {
 	 fixup_first_3f(IM->Normal, IM->Flag, VERT_NORM, start,
 			ctx->Current.Normal );
-	 if (IM->NormalLengths)
-	    fixup_first_1f(IM->NormalLengths, IM->Flag, VERT_NORM, start,
-			   1.0F / (GLfloat) LEN_3FV(ctx->Current.Normal) );
       }
    }
 
@@ -573,7 +555,7 @@ void _tnl_fixup_compiled_cassette( GLcontext *ctx, struct immediate *IM )
       GLuint i;
 
       if (IM->BeginState & VERT_ERROR_1) 
-	 gl_error( ctx, GL_INVALID_OPERATION, "begin/end");
+	 gl_error( ctx, GL_INVALID_OPERATION, "glBegin/glEnd");
 
       for (i = IM->Start ; i <= IM->Count ; i += IM->PrimitiveLength[i])
 	 if (IM->Flag[i] & (VERT_BEGIN|VERT_END_VB)) 
@@ -597,7 +579,7 @@ void _tnl_fixup_compiled_cassette( GLcontext *ctx, struct immediate *IM )
       GLuint i;
 
       if (IM->BeginState & VERT_ERROR_0) 
-	 gl_error( ctx, GL_INVALID_OPERATION, "begin/end");
+	 gl_error( ctx, GL_INVALID_OPERATION, "glBegin/glEnd");
       
       if (IM->CopyStart == IM->Start &&
 	  IM->Flag[IM->Start] & (VERT_END|VERT_END_VB))

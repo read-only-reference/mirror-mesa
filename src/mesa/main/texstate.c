@@ -1,10 +1,10 @@
-/* $Id: texstate.c,v 1.29 2001/01/29 20:47:39 keithw Exp $ */
+/* $Id: texstate.c,v 1.34 2001/02/28 19:31:39 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  *
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -37,7 +37,6 @@
 #include "texobj.h"
 #include "teximage.h"
 #include "texstate.h"
-#include "texture.h"
 #include "mtypes.h"
 #include "math/m_xform.h"
 #include "math/m_matrix.h"
@@ -771,6 +770,40 @@ _mesa_TexParameterfv( GLenum target, GLenum pname, const GLfloat *params )
          /* (keithh@netcomuk.co.uk) */
          texObj->Priority = CLAMP( params[0], 0.0F, 1.0F );
          break;
+      case GL_TEXTURE_COMPARE_SGIX:
+         if (ctx->Extensions.SGIX_shadow) {
+            texObj->CompareFlag = params[0] ? GL_TRUE : GL_FALSE;
+         }
+         else {
+            gl_error(ctx, GL_INVALID_ENUM, "glTexParameter(pname)");
+            return;
+         }
+         break;
+      case GL_TEXTURE_COMPARE_OPERATOR_SGIX:
+         if (ctx->Extensions.SGIX_shadow) {
+            GLenum op = (GLenum) params[0];
+            if (op == GL_TEXTURE_LEQUAL_R_SGIX ||
+                op == GL_TEXTURE_GEQUAL_R_SGIX) {
+               texObj->CompareOperator = op;
+            }
+            else {
+               gl_error(ctx, GL_INVALID_ENUM, "glTexParameter(param)");
+            }
+         }
+         else {
+            gl_error(ctx, GL_INVALID_ENUM, "glTexParameter(pname)");
+            return;
+         }
+         break;
+      case GL_SHADOW_AMBIENT_SGIX:
+         if (ctx->Extensions.SGIX_shadow_ambient) {
+            UNCLAMPED_FLOAT_TO_CHAN(texObj->ShadowAmbient, params[0]);
+         }
+         else {
+            gl_error(ctx, GL_INVALID_ENUM, "glTexParameter(pname)");
+            return;
+         }
+         break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glTexParameter(pname)" );
          return;
@@ -878,22 +911,10 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
          *params = img->Width;
          return;
       case GL_TEXTURE_HEIGHT:
-         if (dimensions > 1) {
-            *params = img->Height;
-         }
-         else {
-            gl_error( ctx, GL_INVALID_ENUM,
-                      "glGetTexLevelParameter[if]v(pname=GL_TEXTURE_HEIGHT)" );
-         }
+         *params = img->Height;
          return;
       case GL_TEXTURE_DEPTH:
-         if (dimensions > 2) {
-            *params = img->Depth;
-         }
-         else {
-            gl_error( ctx, GL_INVALID_ENUM,
-                      "glGetTexLevelParameter[if]v(pname=GL_TEXTURE_DEPTH)" );
-         }
+         *params = img->Depth;
          return;
       case GL_TEXTURE_COMPONENTS:
          *params = img->IntFormat;
@@ -921,6 +942,15 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
          return;
       case GL_TEXTURE_INDEX_SIZE_EXT:
          *params = img->IndexBits;
+         return;
+      case GL_DEPTH_BITS:
+         /* XXX this isn't in the GL_SGIX_depth_texture spec
+          * but seems appropriate.
+          */
+         if (ctx->Extensions.SGIX_depth_texture)
+            *params = img->DepthBits;
+         else
+            gl_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(pname)");
          return;
 
       /* GL_ARB_texture_compression */
@@ -1013,6 +1043,33 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
       case GL_TEXTURE_MAX_LEVEL:
          *params = (GLfloat) obj->MaxLevel;
          break;
+      case GL_TEXTURE_COMPARE_SGIX:
+         if (ctx->Extensions.SGIX_shadow) {
+            *params = (GLfloat) obj->CompareFlag;
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetTexParameterfv(pname)" );
+            return;
+         }
+         break;
+      case GL_TEXTURE_COMPARE_OPERATOR_SGIX:
+         if (ctx->Extensions.SGIX_shadow) {
+            *params = (GLfloat) obj->CompareOperator;
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetTexParameterfv(pname)" );
+            return;
+         }
+         break;
+      case GL_SHADOW_AMBIENT_SGIX:
+         if (ctx->Extensions.SGIX_shadow_ambient) {
+            *params = CHAN_TO_FLOAT(obj->ShadowAmbient);
+         }
+         else {
+            gl_error(ctx, GL_INVALID_ENUM, "glGetTexParameterfv(pname)");
+            return;
+         }
+         break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glGetTexParameterfv(pname)" );
    }
@@ -1086,6 +1143,34 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
          break;
       case GL_TEXTURE_MAX_LEVEL:
          *params = obj->MaxLevel;
+         break;
+      case GL_TEXTURE_COMPARE_SGIX:
+         if (ctx->Extensions.SGIX_shadow) {
+            *params = (GLint) obj->CompareFlag;
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetTexParameteriv(pname)" );
+            return;
+         }
+         break;
+      case GL_TEXTURE_COMPARE_OPERATOR_SGIX:
+         if (ctx->Extensions.SGIX_shadow) {
+            *params = (GLint) obj->CompareOperator;
+         }
+         else {
+            gl_error( ctx, GL_INVALID_ENUM, "glGetTexParameteriv(pname)" );
+            return;
+         }
+         break;
+      case GL_SHADOW_AMBIENT_SGIX:
+         if (ctx->Extensions.SGIX_shadow_ambient) {
+            /* XXX range? */
+            *params = CHAN_TO_FLOAT(obj->ShadowAmbient);
+         }
+         else {
+            gl_error(ctx, GL_INVALID_ENUM, "glGetTexParameteriv(pname)");
+            return;
+         }
          break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glGetTexParameteriv(pname)" );

@@ -1,10 +1,10 @@
-/* $Id: s_span.c,v 1.6 2001/01/05 21:28:31 brianp Exp $ */
+/* $Id: s_span.c,v 1.9 2001/02/20 16:42:26 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -99,7 +99,7 @@ static GLuint clip_span( GLcontext *ctx,
       }
       else {
          /* partially off left side */
-         MEMSET(mask, 0, -x); 
+         BZERO(mask, -x * sizeof(GLubyte)); 
       }
    }
 
@@ -193,7 +193,7 @@ void gl_write_index_span( GLcontext *ctx,
 
    if ((swrast->_RasterMask & WINCLIP_BIT) || primitive==GL_BITMAP) {
       if ((n = clip_span(ctx,n,x,y,mask)) == 0) {
-	 return;
+         return;
       }
    }
 
@@ -210,8 +210,8 @@ void gl_write_index_span( GLcontext *ctx,
 
    /* Do the scissor test */
    if (ctx->Scissor.Enabled) {
-      if (gl_scissor_span( ctx, n, x, y, mask ) == 0) {
-	 return;
+      if ((n = _mesa_scissor_span( ctx, n, x, y, mask )) == 0) {
+         return;
       }
    }
 
@@ -223,7 +223,7 @@ void gl_write_index_span( GLcontext *ctx,
    if (ctx->Stencil.Enabled) {
       /* first stencil test */
       if (_mesa_stencil_and_ztest_span(ctx, n, x, y, z, mask) == GL_FALSE) {
-	 return;
+         return;
       }
    }
    else if (ctx->Depth.Test) {
@@ -289,8 +289,8 @@ void gl_write_monoindex_span( GLcontext *ctx,
 
    /* Do the scissor test */
    if (ctx->Scissor.Enabled) {
-      if (gl_scissor_span( ctx, n, x, y, mask ) == 0) {
-	 return;
+      if ((n = _mesa_scissor_span( ctx, n, x, y, mask )) == 0) {
+         return;
       }
    }
 
@@ -333,10 +333,6 @@ void gl_write_monoindex_span( GLcontext *ctx,
  	    _mesa_fog_ci_pixels( ctx, n, fog, indexes );
  	 else
  	    _mesa_depth_fog_ci_pixels( ctx, n, z, indexes );
-      }
-
-      if (ctx->Color.IndexLogicOpEnabled) {
-	 _mesa_logicop_ci_span( ctx, n, x, y, indexes, mask );
       }
 
       if (swrast->_RasterMask & MULTI_DRAW_BIT) {
@@ -483,10 +479,11 @@ void gl_write_rgba_span( GLcontext *ctx,
 
    /* Do the scissor test */
    if (ctx->Scissor.Enabled) {
-      if (gl_scissor_span( ctx, n, x, y, mask ) == 0) {
-	 return;
+      if ((n = _mesa_scissor_span( ctx, n, x, y, mask )) == 0) {
+         return;
       }
-      write_all = GL_FALSE;
+      if (mask[0] == 0)
+	write_all = GL_FALSE;
    }
 
    /* Polygon Stippling */
@@ -607,10 +604,11 @@ void gl_write_monocolor_span( GLcontext *ctx,
 
    /* Do the scissor test */
    if (ctx->Scissor.Enabled) {
-      if (gl_scissor_span( ctx, n, x, y, mask ) == 0) {
-	 return;
+      if ((n = _mesa_scissor_span( ctx, n, x, y, mask )) == 0) {
+         return;
       }
-      write_all = GL_FALSE;
+      if (mask[0] == 0)
+         write_all = GL_FALSE;
    }
 
    /* Polygon Stippling */
@@ -801,10 +799,11 @@ void gl_write_texture_span( GLcontext *ctx,
 
    /* Do the scissor test */
    if (ctx->Scissor.Enabled) {
-      if (gl_scissor_span( ctx, n, x, y, mask ) == 0) {
-	 return;
+      if ((n = _mesa_scissor_span( ctx, n, x, y, mask )) == 0) {
+         return;
       }
-      write_all = GL_FALSE;
+      if (mask[0] == 0)
+         write_all = GL_FALSE;
    }
 
    /* Polygon Stippling */
@@ -818,7 +817,8 @@ void gl_write_texture_span( GLcontext *ctx,
       /* Texturing without alpha is done after depth-testing which
          gives a potential speed-up. */
       ASSERT(ctx->Texture._ReallyEnabled);
-      _swrast_texture_fragments( ctx, 0, n, s, t, u, lambda, rgba, rgba );
+      _swrast_texture_fragments( ctx, 0, n, s, t, u, lambda,
+                                 (CONST GLchan (*)[4]) rgba, rgba );
      
       /* Do the alpha test */
       if (_mesa_alpha_test( ctx, n, (const GLchan (*)[4]) rgba, mask ) == 0) {
@@ -851,7 +851,8 @@ void gl_write_texture_span( GLcontext *ctx,
    /* Texture without alpha test */
    if (! ctx->Color.AlphaEnabled) {
       ASSERT(ctx->Texture._ReallyEnabled);
-      _swrast_texture_fragments( ctx, 0, n, s, t, u, lambda, rgba, rgba );
+      _swrast_texture_fragments( ctx, 0, n, s, t, u, lambda,
+                                 (CONST GLchan (*)[4]) rgba, rgba );
    }
 
    /* Add base and specular colors */
@@ -946,10 +947,11 @@ gl_write_multitexture_span( GLcontext *ctx,
 
    /* Do the scissor test */
    if (ctx->Scissor.Enabled) {
-      if (gl_scissor_span( ctx, n, x, y, mask ) == 0) {
-	 return;
+      if ((n = _mesa_scissor_span( ctx, n, x, y, mask )) == 0) {
+         return;
       }
-      write_all = GL_FALSE;
+      if (mask[0] == 0)
+         write_all = GL_FALSE;
    }
 
    /* Polygon Stippling */
@@ -965,8 +967,8 @@ gl_write_multitexture_span( GLcontext *ctx,
        */
       ASSERT(ctx->Texture._ReallyEnabled);
       for (i = 0; i < texUnits; i++)
-         _swrast_texture_fragments( ctx, i, n, s[i], t[i], u[i],
-                                    lambda[i], rgbaIn, rgba );
+         _swrast_texture_fragments( ctx, i, n, s[i], t[i], u[i], lambda[i],
+                                    (CONST GLchan (*)[4]) rgbaIn, rgba );
      
       /* Do the alpha test */
       if (_mesa_alpha_test( ctx, n, (const GLchan (*)[4])rgba, mask ) == 0) {
@@ -1000,8 +1002,8 @@ gl_write_multitexture_span( GLcontext *ctx,
    if (! ctx->Color.AlphaEnabled) {
       ASSERT(ctx->Texture._ReallyEnabled);
       for (i = 0; i < texUnits; i++)
-         _swrast_texture_fragments( ctx, i, n, s[i], t[i], u[i],
-                                    lambda[i], rgbaIn, rgba );
+         _swrast_texture_fragments( ctx, i, n, s[i], t[i], u[i], lambda[i],
+                                    (CONST GLchan (*)[4]) rgbaIn, rgba );
    }
 
    /* Add base and specular colors */

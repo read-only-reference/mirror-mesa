@@ -1,4 +1,4 @@
-/* $Id: texobj.c,v 1.38 2001/01/29 20:47:39 keithw Exp $ */
+/* $Id: texobj.c,v 1.41 2001/02/26 18:25:25 brianp Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -79,6 +79,9 @@ _mesa_alloc_texture_object( struct gl_shared_state *shared,
       obj->MaxLod = 1000.0;
       obj->BaseLevel = 0;
       obj->MaxLevel = 1000;
+      obj->CompareFlag = GL_FALSE;
+      obj->CompareOperator = GL_TEXTURE_LEQUAL_R_SGIX;
+      obj->ShadowAmbient = 0;
       _mesa_init_colortable(&obj->Palette);
 
       /* insert into linked list */
@@ -402,7 +405,7 @@ _mesa_test_texobj_completeness( const GLcontext *ctx,
       }
       else {
          /* Dimensions = ??? */
-         gl_problem(NULL, "Bug in gl_test_texture_object_completeness\n");
+         gl_problem(ctx, "Bug in gl_test_texture_object_completeness\n");
       }
    }
 }

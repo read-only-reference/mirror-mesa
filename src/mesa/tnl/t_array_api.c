@@ -1,4 +1,4 @@
-/* $Id: t_array_api.c,v 1.4 2001/01/24 00:04:59 brianp Exp $ */
+/* $Id: t_array_api.c,v 1.7 2001/02/20 18:28:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -45,6 +45,121 @@
 #include "t_context.h"
 #include "t_pipeline.h"
 
+static void fallback_drawarrays( GLcontext *ctx, GLenum mode, GLint start,
+				 GLsizei count )
+{
+   /* Need to produce immediate structs, either for compiling or
+    * because the array range is too large to process in a single
+    * VB.  In GL_EXECUTE mode, this introduces two redundant
+    * operations: producing the flag array and computing the orflag
+    * of the flag array.
+    */
+#if 1
+   if (_tnl_hard_begin( ctx, mode )) {
+      GLuint j;
+      for (j = 0 ; j < count ; ) {
+	 struct immediate *IM = TNL_CURRENT_IM(ctx);
+	 GLuint nr = MIN2( IMM_MAXDATA - IM->Start, count - j );
+	 GLuint sf = IM->Flag[IM->Start];
+
+	 _tnl_fill_immediate_drawarrays( ctx, IM, j, j+nr );
+
+	 if (j == 0) IM->Flag[IM->Start] |= sf;
+
+	 IM->Count = IM->Start + nr;
+	 j += nr;
+
+	 if (j == count)
+	    _tnl_end( ctx );
+
+	 _tnl_flush_immediate( IM );
+      }
+   }
+#else
+   /* Simple alternative to above code.
+    */
+   if (_tnl_hard_begin( ctx, mode )) 
+   {
+      GLuint i;
+      for (i=start;i<count;i++) {
+	 _tnl_array_element( ctx, i );
+      }
+      _tnl_end( ctx );
+   }
+#endif
+}
+
+
+static void _tnl_draw_elements( GLcontext *ctx, GLenum mode, GLsizei count, 
+				const GLuint *indices)
+{
+#if 1
+   /* Optimized code that fakes the effect of calling
+    * _tnl_array_element for each index in the list.
+    */
+   if (_tnl_hard_begin( ctx, mode )) {
+      GLuint i,j;
+      for (j = 0 ; j < count ; ) {
+	 struct immediate *IM = TNL_CURRENT_IM(ctx);
+	 GLuint start = IM->Start;
+	 GLuint nr = MIN2( IMM_MAXDATA - start, count - j ) + start;
+	 GLuint sf = IM->Flag[start];
+	 IM->FlushElt |= 1;
+
+	 for (i = start ; i < nr ; i++) {
+	    IM->Elt[i] = (GLuint) *indices++;
+	    IM->Flag[i] = VERT_ELT;
+	 }
+
+	 if (j == 0) IM->Flag[start] |= sf;
+
+	 IM->Count = nr;
+	 j += nr - start;
+
+	 if (j == count)
+	    _tnl_end( ctx );
+
+	 _tnl_flush_immediate( IM );
+      }
+   }
+#else
+   /* Simple version of the above code.
+    */
+   if (_tnl_hard_begin(ctx, mode)) {
+      GLuint i;
+      for (i = 0 ; i < count ; i++)
+	 _tnl_array_element( ctx, indices[i] );
+      _tnl_end( ctx );
+   }
+#endif
+}
+
+
+static void _tnl_draw_range_elements( GLcontext *ctx, GLenum mode, 
+				      GLuint start, GLuint end, 
+				      GLsizei count, const GLuint *indices )
+   
+{
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   FLUSH_CURRENT( ctx, 0 );
+
+   _tnl_vb_bind_arrays( ctx, start, end );
+
+   tnl->vb.FirstPrimitive = 0;
+   tnl->vb.Primitive[0] = mode | PRIM_BEGIN | PRIM_END | PRIM_LAST;
+   tnl->vb.PrimitiveLength[0] = count;
+   tnl->vb.Elts = (GLuint *)indices;
+
+   if (ctx->Array.LockCount) 
+      _tnl_run_pipeline( ctx );
+   else {
+      /* Note that arrays may have changed before/after execution.
+       */
+      tnl->pipeline.run_input_changes |= ctx->Array._Enabled;
+      _tnl_run_pipeline( ctx );
+      tnl->pipeline.run_input_changes |= ctx->Array._Enabled;
+   }
+}
 
 
 
@@ -96,122 +211,27 @@ _tnl_DrawArrays(GLenum mode, GLint start, GLsizei count)
 	 tnl->pipeline.run_input_changes |= ctx->Array._Enabled;
       }
    } 
-   else {
-      /* Need to produce immediate structs, either for compiling or
-       * because the array range is too large to process in a single
-       * VB.  In GL_EXECUTE mode, this introduces two redundant
-       * operations: producing the flag array and computing the orflag
-       * of the flag array.
+   else if (!ctx->CompileFlag && mode == GL_TRIANGLE_STRIP) {
+      int bufsz = (ctx->Const.MaxArrayLockSize - 2) & ~1;
+      int j, nr;
+
+      FLUSH_CURRENT( ctx, 0 );
+
+      /* TODO: other non-fan primitives.
        */
-#if 1
-      if (_tnl_hard_begin( ctx, mode )) {
-	 GLuint j;
-	 for (j = 0 ; j < count ; ) {
-	    struct immediate *IM = TNL_CURRENT_IM(ctx);
-	    GLuint nr = MIN2( IMM_MAXDATA - IM->Start, count - j );
-	    GLuint sf = IM->Flag[IM->Start];
-
-	    _tnl_fill_immediate_drawarrays( ctx, IM, j, j+nr );
-
-	    if (j == 0) IM->Flag[IM->Start] |= sf;
-
-	    IM->Count = IM->Start + nr;
-	    j += nr;
-
-	    if (j == count)
-	       _tnl_end( ctx );
-
-	    _tnl_flush_immediate( IM );
-	 }
+      for (j = start ; j < count - 2; j += nr - 2 ) {
+	 nr = MIN2( bufsz, count - j );
+	 _tnl_vb_bind_arrays( ctx, j, j + nr );
+	 VB->FirstPrimitive = 0;
+	 VB->Primitive[0] = mode | PRIM_BEGIN | PRIM_END | PRIM_LAST;      
+	 VB->PrimitiveLength[0] = nr;	 
+	 tnl->pipeline.run_input_changes |= ctx->Array._Enabled;
+	 _tnl_run_pipeline( ctx );
+	 tnl->pipeline.run_input_changes |= ctx->Array._Enabled;
       }
-#else
-      /* Simple alternative to above code.
-       */
-      if (_tnl_hard_begin( ctx, mode )) 
-      {
-	 GLuint i;
-	 for (i=start;i<count;i++) {
-	    _tnl_array_element( ctx, i );
-	 }
-	 _tnl_end( ctx );
-      }
-#endif
+   } else {
+      fallback_drawarrays( ctx, mode, start, count );
    }
-}
-
-
-
-static void _tnl_draw_range_elements( GLcontext *ctx, GLenum mode, 
-				      GLuint start, GLuint end, 
-				      GLsizei count, const GLuint *indices )
-   
-{
-   TNLcontext *tnl = TNL_CONTEXT(ctx);
-   FLUSH_CURRENT( ctx, 0 );
-
-   _tnl_vb_bind_arrays( ctx, start, end );
-
-   tnl->vb.FirstPrimitive = 0;
-   tnl->vb.Primitive[0] = mode | PRIM_BEGIN | PRIM_END | PRIM_LAST;
-   tnl->vb.PrimitiveLength[0] = count;
-   tnl->vb.Elts = (GLuint *)indices;
-
-   if (ctx->Array.LockCount) 
-      _tnl_run_pipeline( ctx );
-   else {
-      /* Note that arrays may have changed before/after execution.
-       */
-      tnl->pipeline.run_input_changes |= ctx->Array._Enabled;
-      _tnl_run_pipeline( ctx );
-      tnl->pipeline.run_input_changes |= ctx->Array._Enabled;
-   }
-}
-
-
-
-
-static void _tnl_draw_elements( GLcontext *ctx, GLenum mode, GLsizei count, 
-				const GLuint *indices)
-{
-#if 1
-   /* Optimized code that fakes the effect of calling
-    * _tnl_array_element for each index in the list.
-    */
-   if (_tnl_hard_begin( ctx, mode )) {
-      GLuint i,j;
-      for (j = 0 ; j < count ; ) {
-	 struct immediate *IM = TNL_CURRENT_IM(ctx);
-	 GLuint start = IM->Start;
-	 GLuint nr = MIN2( IMM_MAXDATA - start, count - j ) + start;
-	 GLuint sf = IM->Flag[start];
-	 IM->FlushElt |= 1;
-
-	 for (i = start ; i < nr ; i++) {
-	    IM->Elt[i] = (GLuint) *indices++;
-	    IM->Flag[i] = VERT_ELT;
-	 }
-
-	 if (j == 0) IM->Flag[start] |= sf;
-
-	 IM->Count = nr;
-	 j += nr - start;
-
-	 if (j == count)
-	    _tnl_end( ctx );
-
-	 _tnl_flush_immediate( IM );
-      }
-   }
-#else
-   /* Simple version of the above code.
-    */
-   if (_tnl_hard_begin(ctx, mode)) {
-      GLuint i;
-      for (i = 0 ; i < count ; i++)
-	 _tnl_array_element( ctx, indices[i] );
-      _tnl_end( ctx );
-   }
-#endif
 }
 
 
@@ -254,6 +274,8 @@ _tnl_DrawRangeElements(GLenum mode,
 	  * May be able to get away with just setting LockCount==0,
 	  * though this raises the problems of dependent state.  May
 	  * have to call glUnlockArrays() directly?
+	  *
+	  * Or scan the list and replace bad indices?
 	  */
 	 gl_problem( ctx, 
 		     "DrawRangeElements references "
@@ -261,8 +283,8 @@ _tnl_DrawRangeElements(GLenum mode,
       }
    }
    else if (end + 1 - start < ctx->Const.MaxArrayLockSize) {
-      /* The arrays aren't locked but we can still fit them inside a single
-       * vertexbuffer.
+      /* The arrays aren't locked but we can still fit them inside a
+       * single vertexbuffer.
        */
       _tnl_draw_range_elements( ctx, mode, start, end + 1, count, ui_indices );
    } else {
@@ -293,7 +315,6 @@ _tnl_DrawElements(GLenum mode, GLsizei count, GLenum type,
    ui_indices = (GLuint *)_ac_import_elements( ctx, GL_UNSIGNED_INT, 
 					       count, type, indices );
 
-#if 1            
    if (ctx->Array.LockCount) {
       _tnl_draw_range_elements( ctx, mode, 
 				ctx->Array.LockFirst,
@@ -311,13 +332,10 @@ _tnl_DrawElements(GLenum mode, GLsizei count, GLenum type,
 
       if (max_elt < ctx->Const.MaxArrayLockSize && /* can we use it? */
 	  max_elt < count) 	                   /* do we want to use it? */
-	 _tnl_draw_range_elements( ctx, mode, 0, max_elt + 1, count, ui_indices );
+	 _tnl_draw_range_elements( ctx, mode, 0, max_elt+1, count, ui_indices );
       else
 	 _tnl_draw_elements( ctx, mode, count, ui_indices );
    }
-#else
-	 _tnl_draw_elements( ctx, mode, count, ui_indices );
-#endif
 }
 
 
@@ -336,16 +354,8 @@ void _tnl_array_init( GLcontext *ctx )
     */
    gl_vector4f_init( &tmp->Obj, 0, 0 );
    gl_vector3f_init( &tmp->Normal, 0, 0 );
-#if CHAN_TYPE == GL_UNSIGNED_BYTE
-   gl_vector4ub_init( &tmp->Color, 0, 0 );
-   gl_vector4ub_init( &tmp->SecondaryColor, 0, 0 );
-#elif CHAN_TYPE == GL_UNSIGNED_SHORT
-   gl_vector4us_init( &tmp->Color, 0, 0 );
-   gl_vector4us_init( &tmp->SecondaryColor, 0, 0 );
-#elif CHAN_TYPE == GL_FLOAT
-   gl_vector4f_init( &tmp->Color, 0, 0 );
-   gl_vector4f_init( &tmp->SecondaryColor, 0, 0 );
-#endif
+   gl_vector4chan_init( &tmp->Color, 0, 0 );
+   gl_vector4chan_init( &tmp->SecondaryColor, 0, 0 );
    gl_vector1f_init( &tmp->FogCoord, 0, 0 );
    gl_vector1ui_init( &tmp->Index, 0, 0 );
    gl_vector1ub_init( &tmp->EdgeFlag, 0, 0 );

@@ -1,4 +1,4 @@
-/* $Id: light.c,v 1.35 2001/01/23 23:39:36 brianp Exp $ */
+/* $Id: light.c,v 1.38 2001/02/16 18:14:41 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -421,7 +421,14 @@ _mesa_LightModelfv( GLenum pname, const GLfloat *params )
 	    return;
 	 FLUSH_VERTICES(ctx, _NEW_LIGHT);
 	 ctx->Light.Model.ColorControl = newenum;
-	 ctx->_TriangleCaps ^= DD_SEPERATE_SPECULAR;
+
+	 if ((ctx->Light.Enabled &&
+	      ctx->Light.Model.ColorControl==GL_SEPARATE_SPECULAR_COLOR)
+	     || ctx->Fog.ColorSumEnabled)
+	    ctx->_TriangleCaps |= DD_SEPERATE_SPECULAR; 
+	 else
+	    ctx->_TriangleCaps &= ~DD_SEPERATE_SPECULAR; 
+
          break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glLightModel" );
@@ -535,6 +542,54 @@ GLuint gl_material_bitmask( GLcontext *ctx, GLenum face, GLenum pname,
 }
 
 
+/* Perform a straight copy between pairs of materials.
+ */
+void gl_copy_material_pairs( struct gl_material dst[2],
+			     const struct gl_material src[2],
+			     GLuint bitmask )
+{
+   if (bitmask & FRONT_EMISSION_BIT) {
+      COPY_4FV( dst[0].Emission, src[0].Emission );
+   }
+   if (bitmask & BACK_EMISSION_BIT) {
+      COPY_4FV( dst[1].Emission, src[1].Emission );
+   }
+   if (bitmask & FRONT_AMBIENT_BIT) {
+      COPY_4FV( dst[0].Ambient, src[0].Ambient );
+   }
+   if (bitmask & BACK_AMBIENT_BIT) {
+      COPY_4FV( dst[1].Ambient, src[1].Ambient );
+   }
+   if (bitmask & FRONT_DIFFUSE_BIT) {
+      COPY_4FV( dst[0].Diffuse, src[0].Diffuse );
+   }
+   if (bitmask & BACK_DIFFUSE_BIT) {
+      COPY_4FV( dst[1].Diffuse, src[1].Diffuse );
+   }
+   if (bitmask & FRONT_SPECULAR_BIT) {
+      COPY_4FV( dst[0].Specular, src[0].Specular );
+   }
+   if (bitmask & BACK_SPECULAR_BIT) {
+      COPY_4FV( dst[1].Specular, src[1].Specular );
+   }
+   if (bitmask & FRONT_SHININESS_BIT) {
+      dst[0].Shininess = src[0].Shininess;
+   }
+   if (bitmask & BACK_SHININESS_BIT) {
+      dst[1].Shininess = src[1].Shininess;
+   }
+   if (bitmask & FRONT_INDEXES_BIT) {
+      dst[0].AmbientIndex = src[0].AmbientIndex;
+      dst[0].DiffuseIndex = src[0].DiffuseIndex;
+      dst[0].SpecularIndex = src[0].SpecularIndex;
+   }
+   if (bitmask & BACK_INDEXES_BIT) {
+      dst[1].AmbientIndex = src[1].AmbientIndex;
+      dst[1].DiffuseIndex = src[1].DiffuseIndex;
+      dst[1].SpecularIndex = src[1].SpecularIndex;
+   }
+}
+
 
 /*
  * Check if the global material has to be updated with info that was
@@ -545,11 +600,7 @@ GLuint gl_material_bitmask( GLcontext *ctx, GLenum face, GLenum pname,
  *
  * src[0] is front material, src[1] is back material
  *
- * KW: Added code here to keep the precomputed variables uptodate.
- *     This means we can use the faster shade functions when using
- *     GL_COLOR_MATERIAL, and we can also now use the precomputed
- *     values in the slower shading functions, which further offsets
- *     the cost of doing this here.
+ * Additionally keeps the precomputed lighting state uptodate.  
  */
 void gl_update_material( GLcontext *ctx,
 			 const struct gl_material src[2],
@@ -610,9 +661,6 @@ void gl_update_material( GLcontext *ctx,
    if (bitmask & FRONT_DIFFUSE_BIT) {
       struct gl_material *mat = &ctx->Light.Material[0];
       COPY_4FV( mat->Diffuse, src[0].Diffuse );
-/*        fprintf(stderr, "FRONT_DIFFUSE %f %f %f %f\n",  */
-/*  	      mat->Diffuse[0], mat->Diffuse[1], */
-/*  	      mat->Diffuse[2], mat->Diffuse[3]); */
       foreach (light, list) {
 	 SCALE_3V( light->_MatDiffuse[0], light->Diffuse, mat->Diffuse );
       }
@@ -621,9 +669,6 @@ void gl_update_material( GLcontext *ctx,
    if (bitmask & BACK_DIFFUSE_BIT) {
       struct gl_material *mat = &ctx->Light.Material[1];
       COPY_4FV( mat->Diffuse, src[1].Diffuse );
-/*        fprintf(stderr, "BACK_DIFFUSE %f %f %f %f\n",  */
-/*  	      mat->Diffuse[0], mat->Diffuse[1], */
-/*  	      mat->Diffuse[2], mat->Diffuse[3]); */
       foreach (light, list) {
 	 SCALE_3V( light->_MatDiffuse[1], light->Diffuse, mat->Diffuse );
       }
@@ -647,7 +692,6 @@ void gl_update_material( GLcontext *ctx,
    }
 
    if (bitmask & FRONT_SHININESS_BIT) {
-/*        fprintf(stderr, "FRONT_SHININESS_BIT %f\n", src[0].Shininess); */
       ctx->Light.Material[0].Shininess = src[0].Shininess;
       gl_invalidate_shine_table( ctx, 0 );
    }
@@ -688,6 +732,9 @@ void gl_update_material( GLcontext *ctx,
 	      mat->Ambient[2]);
    }
 }
+
+
+
 
 
 
@@ -1100,10 +1147,12 @@ gl_validate_all_lighting_tables( GLcontext *ctx )
    GLfloat shininess;
 
    shininess = ctx->Light.Material[0].Shininess;
-   if (!ctx->_ShineTable[0]) validate_shine_table( ctx, 0, shininess );
+   if (!ctx->_ShineTable[0] || ctx->_ShineTable[0]->shininess != shininess)
+      validate_shine_table( ctx, 0, shininess );
 
    shininess = ctx->Light.Material[1].Shininess;
-   if (!ctx->_ShineTable[1]) validate_shine_table( ctx, 1, shininess );
+   if (!ctx->_ShineTable[1] || ctx->_ShineTable[1]->shininess != shininess)
+      validate_shine_table( ctx, 1, shininess );
 
    for (i = 0 ; i < MAX_LIGHTS ; i++) 
       if (ctx->Light.Light[i]._SpotExpTable[0][0] == -1)

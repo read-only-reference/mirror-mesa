@@ -1,4 +1,4 @@
-/* $Id: s_triangle.c,v 1.10 2001/01/29 18:51:25 brianp Exp $ */
+/* $Id: s_triangle.c,v 1.13 2001/02/16 18:14:41 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -34,6 +34,7 @@
 
 #include "glheader.h"
 #include "context.h"
+#include "colormac.h"
 #include "macros.h"
 #include "mem.h"
 #include "mmath.h"
@@ -243,14 +244,12 @@ static void simple_textured_triangle( GLcontext *ctx,
    GLfloat twidth = (GLfloat) obj->Image[b]->Width;			\
    GLfloat theight = (GLfloat) obj->Image[b]->Height;			\
    GLint twidth_log2 = obj->Image[b]->WidthLog2;			\
-   GLchan *texture = obj->Image[b]->Data;				\
+   const GLchan *texture = (const GLchan *) obj->Image[b]->Data;	\
    GLint smask = obj->Image[b]->Width - 1;				\
    GLint tmask = obj->Image[b]->Height - 1;				\
    if (!texture) {							\
-      if (!_mesa_get_teximages_from_driver(ctx, obj))			\
-         return;							\
-      texture = obj->Image[b]->Data;					\
-      ASSERT(texture);							\
+      /* this shouldn't happen */					\
+      return;								\
    }
 
 #define INNER_LOOP( LEFT, RIGHT, Y )				\
@@ -304,14 +303,12 @@ static void simple_z_textured_triangle( GLcontext *ctx,
    GLfloat twidth = (GLfloat) obj->Image[b]->Width;			\
    GLfloat theight = (GLfloat) obj->Image[b]->Height;			\
    GLint twidth_log2 = obj->Image[b]->WidthLog2;			\
-   GLchan *texture = obj->Image[b]->Data;				\
+   const GLchan *texture = (const GLchan *) obj->Image[b]->Data;	\
    GLint smask = obj->Image[b]->Width - 1;				\
    GLint tmask = obj->Image[b]->Height - 1;				\
    if (!texture) {							\
-      if (!_mesa_get_teximages_from_driver(ctx, obj))			\
-         return;							\
-      texture = obj->Image[b]->Data;					\
-      ASSERT(texture);							\
+      /* this shouldn't happen */					\
+      return;								\
    }
 
 #define INNER_LOOP( LEFT, RIGHT, Y )				\
@@ -376,7 +373,7 @@ static void affine_textured_triangle( GLcontext *ctx,
    GLfloat twidth = (GLfloat) obj->Image[b]->Width;			\
    GLfloat theight = (GLfloat) obj->Image[b]->Height;			\
    GLint twidth_log2 = obj->Image[b]->WidthLog2;			\
-   GLchan *texture = obj->Image[b]->Data;				\
+   const GLchan *texture = (const GLchan *) obj->Image[b]->Data;	\
    GLint smask = obj->Image[b]->Width - 1;				\
    GLint tmask = obj->Image[b]->Height - 1;                             \
    GLint format = obj->Image[b]->Format;                                \
@@ -386,10 +383,8 @@ static void affine_textured_triangle( GLcontext *ctx,
    GLfixed er, eg, eb, ea;                                              \
    GLint tr, tg, tb, ta;                                                \
    if (!texture) {							\
-      if (!_mesa_get_teximages_from_driver(ctx, obj))			\
-         return;							\
-      texture = obj->Image[b]->Data;					\
-      ASSERT(texture);							\
+      /* this shouldn't happen */					\
+      return;								\
    }									\
    if (envmode == GL_BLEND || envmode == GL_ADD) {                      \
       /* potential off-by-one error here? (1.0f -> 2048 -> 0) */        \
@@ -499,7 +494,7 @@ static void affine_textured_triangle( GLcontext *ctx,
            GLint s = FixedToInt(ffs) & smask;              \
            GLint t = FixedToInt(fft) & tmask;              \
            GLint pos = (t << twidth_log2) + s;             \
-           GLchan *tex00 = texture + COMP * pos;           \
+           const GLchan *tex00 = texture + COMP * pos;     \
 	   zspan[i] = FixedToDepth(ffz);                   \
 	   fogspan[i] = fffog / 256;                       \
            DO_TEX;                                         \
@@ -523,10 +518,10 @@ static void affine_textured_triangle( GLcontext *ctx,
            GLint si = FIXED_FRAC_MASK - sf;                \
            GLint ti = FIXED_FRAC_MASK - tf;                \
            GLint pos = (t << twidth_log2) + s;             \
-           GLchan *tex00 = texture + COMP * pos;           \
-           GLchan *tex10 = tex00 + tbytesline;             \
-           GLchan *tex01 = tex00 + COMP;                   \
-           GLchan *tex11 = tex10 + COMP;                   \
+           const GLchan *tex00 = texture + COMP * pos;     \
+           const GLchan *tex10 = tex00 + tbytesline;       \
+           const GLchan *tex01 = tex00 + COMP;             \
+           const GLchan *tex11 = tex10 + COMP;             \
            if (t == tmask) {                               \
               tex10 -= tsize;                              \
               tex11 -= tsize;                              \
@@ -705,7 +700,7 @@ static void near_persp_textured_triangle(GLcontext *ctx,
    const GLfloat twidth = (GLfloat) obj->Image[b]->Width;	      	\
    const GLfloat theight = (GLfloat) obj->Image[b]->Height;		\
    const GLint twidth_log2 = obj->Image[b]->WidthLog2;			\
-   GLchan *texture = obj->Image[b]->Data;				\
+   const GLchan *texture = (const GLchan *) obj->Image[b]->Data;	\
    const GLint smask = (obj->Image[b]->Width - 1);                      \
    const GLint tmask = (obj->Image[b]->Height - 1);                     \
    const GLint format = obj->Image[b]->Format;                          \
@@ -714,10 +709,8 @@ static void near_persp_textured_triangle(GLcontext *ctx,
    GLfixed er, eg, eb, ea;                                              \
    GLint tr, tg, tb, ta;                                                \
    if (!texture) {							\
-      if (!_mesa_get_teximages_from_driver(ctx, obj))			\
-         return;							\
-      texture = obj->Image[b]->Data;					\
-      ASSERT(texture);							\
+      /* this shouldn't happen */					\
+      return;								\
    }									\
    if (envmode == GL_BLEND || envmode == GL_ADD) {                      \
       er = FloatToFixed(unit->EnvColor[0]);                             \
@@ -1448,10 +1441,7 @@ static void lin_persp_textured_triangle( GLcontext *ctx,
    GLfixed er, eg, eb, ea;                                              \
    GLint tr, tg, tb, ta;                                                \
    if (!texture) {							\
-      if (!_mesa_get_teximages_from_driver(ctx, obj))			\
-         return;							\
-      texture = obj->Image[b]->Data;					\
-      ASSERT(texture);							\
+      return;								\
    }									\
    if (envmode == GL_BLEND || envmode == GL_ADD) {                      \
       er = FloatToFixed(unit->EnvColor[0]);                             \
@@ -1629,7 +1619,7 @@ static void general_textured_triangle( GLcontext *ctx,
 	   if (n>0) {						\
               if (flat_shade) {					\
                  for (i=0;i<n;i++) {				\
-		    GLdouble invQ = 1.0 / vv;			\
+		    GLdouble invQ = vv ? (1.0 / vv) : 1.0;	\
 		    zspan[i] = FixedToDepth(ffz);		\
 		    fogspan[i] = fffog / 256;          		\
 		    rgba[i][RCOMP] = r;				\
@@ -1649,7 +1639,7 @@ static void general_textured_triangle( GLcontext *ctx,
               }							\
               else {						\
                  for (i=0;i<n;i++) {				\
-		    GLdouble invQ = 1.0 / vv;			\
+		    GLdouble invQ = vv ? (1.0 / vv) : 1.0;	\
 		    zspan[i] = FixedToDepth(ffz);		\
 		    rgba[i][RCOMP] = FixedToInt(ffr);		\
 		    rgba[i][GCOMP] = FixedToInt(ffg);		\
@@ -1724,7 +1714,7 @@ static void general_textured_spec_triangle1( GLcontext *ctx,
 	   if (n>0) {						\
               if (flat_shade) {					\
                  for (i=0;i<n;i++) {				\
-		    GLdouble invQ = 1.0 / vv;			\
+		    GLdouble invQ = vv ? (1.0 / vv) : 1.0;	\
 		    zspan[i] = FixedToDepth(ffz);		\
 		    fogspan[i] = fffog / 256;			\
 		    rgba[i][RCOMP] = r;				\
@@ -1747,7 +1737,7 @@ static void general_textured_spec_triangle1( GLcontext *ctx,
               }							\
               else {						\
                  for (i=0;i<n;i++) {				\
-		    GLdouble invQ = 1.0 / vv;			\
+		    GLdouble invQ = vv ? (1.0 / vv) : 1.0;	\
 		    zspan[i] = FixedToDepth(ffz);		\
 		    fogspan[i] = fffog / 256;			\
 		    rgba[i][RCOMP] = FixedToInt(ffr);		\
@@ -1855,7 +1845,7 @@ static void lambda_textured_triangle1( GLcontext *ctx,
 	   if (n>0) {							\
 	      if (flat_shade) {						\
 		 for (i=0;i<n;i++) {					\
-		    GLdouble invQ = 1.0 / vv;				\
+		    GLdouble invQ = vv ? (1.0 / vv) : 1.0;		\
 		    zspan[i] = FixedToDepth(ffz);			\
 		    fogspan[i] = fffog / 256;          			\
 		    rgba[i][RCOMP] = r;					\
@@ -1876,7 +1866,7 @@ static void lambda_textured_triangle1( GLcontext *ctx,
               }								\
               else {							\
 		 for (i=0;i<n;i++) {					\
-		    GLdouble invQ = 1.0 / vv;				\
+		    GLdouble invQ = vv ? (1.0 / vv) : 1.0;		\
 		    zspan[i] = FixedToDepth(ffz);			\
 		    fogspan[i] = fffog / 256;          			\
 		    rgba[i][RCOMP] = FixedToInt(ffr);			\
@@ -1963,7 +1953,7 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
 	   if (n>0) {							\
 	      if (flat_shade) {						\
 		 for (i=0;i<n;i++) {					\
-		    GLdouble invQ = 1.0 / vv;				\
+		    GLdouble invQ = vv ? (1.0 / vv) : 1.0;		\
 		    zspan[i] = FixedToDepth(ffz);			\
 		    fogspan[i] = fffog / 256;				\
 		    rgba[i][RCOMP] = r;					\
@@ -1987,7 +1977,7 @@ static void lambda_textured_spec_triangle1( GLcontext *ctx,
               }								\
               else {							\
 		 for (i=0;i<n;i++) {					\
-		    GLdouble invQ = 1.0 / vv;				\
+		    GLdouble invQ = vv ? (1.0 / vv) : 1.0;		\
 		    zspan[i] = FixedToDepth(ffz);			\
 		    fogspan[i] = fffog / 256;				\
 		    rgba[i][RCOMP] = FixedToInt(ffr);			\
@@ -2243,6 +2233,27 @@ static void occlusion_zless_triangle( GLcontext *ctx,
 
 
 
+void _swrast_add_spec_terms_triangle( GLcontext *ctx,
+				      const SWvertex *v0,
+				      const SWvertex *v1,
+				      const SWvertex *v2 )
+{
+   SWvertex *ncv0 = (SWvertex *)v0; /* drop const qualifier */
+   SWvertex *ncv1 = (SWvertex *)v1;
+   SWvertex *ncv2 = (SWvertex *)v2;
+   GLchan c[3][4];
+   COPY_CHAN4( c[0], ncv0->color );
+   COPY_CHAN4( c[1], ncv1->color );
+   COPY_CHAN4( c[2], ncv2->color );
+   ACC_3V( ncv0->color, ncv0->specular );
+   ACC_3V( ncv1->color, ncv1->specular );
+   ACC_3V( ncv2->color, ncv2->specular );
+   SWRAST_CONTEXT(ctx)->SpecTriangle( ctx, ncv0, ncv1, ncv2 );
+   COPY_CHAN4( ncv0->color, c[0] );
+   COPY_CHAN4( ncv1->color, c[1] );
+   COPY_CHAN4( ncv2->color, c[2] );   
+}
+
 
 
 #if 0
@@ -2304,6 +2315,7 @@ _swrast_choose_triangle( GLcontext *ctx )
              && ((image = current2Dtex->Image[current2Dtex->BaseLevel]) != 0)  /* correct! */
              && image->Border==0
              && ((format = image->Format)==GL_RGB || format==GL_RGBA)
+             && image->Type == CHAN_TYPE
 	     && (filter = current2Dtex->MinFilter)==current2Dtex->MagFilter
 	     /* ==> current2Dtex->MinFilter != GL_XXX_MIPMAP_XXX */
 	     && ctx->Light.Model.ColorControl==GL_SINGLE_COLOR
@@ -2368,9 +2380,7 @@ _swrast_choose_triangle( GLcontext *ctx )
                swrast->Triangle = lambda_multitextured_triangle;
 	       dputs("lambda_multitextured_triangle");
             }
-            else if ((ctx->Light.Enabled &&
-		      ctx->Light.Model.ColorControl==GL_SEPARATE_SPECULAR_COLOR)
-		     || ctx->Fog.ColorSumEnabled) {
+            else if (ctx->_TriangleCaps & DD_SEPERATE_SPECULAR) {
                /* separate specular color interpolation */
                if (needLambda) {
                   swrast->Triangle = lambda_textured_spec_triangle;
@@ -2397,8 +2407,8 @@ _swrast_choose_triangle( GLcontext *ctx )
 	 if (ctx->Light.ShadeModel==GL_SMOOTH) {
 	    /* smooth shaded, no texturing, stippled or some raster ops */
             if (rgbmode) {
-               dputs("smooth_rgba_triangle");
-               swrast->Triangle = smooth_rgba_triangle;
+	       dputs("smooth_rgba_triangle");
+	       swrast->Triangle = smooth_rgba_triangle;
             }
             else {
                dputs("smooth_ci_triangle");
@@ -2408,8 +2418,8 @@ _swrast_choose_triangle( GLcontext *ctx )
 	 else {
 	    /* flat shaded, no texturing, stippled or some raster ops */
             if (rgbmode) {
-               dputs("flat_rgba_triangle");
-               swrast->Triangle = flat_rgba_triangle;
+	       dputs("flat_rgba_triangle");
+	       swrast->Triangle = flat_rgba_triangle;
             }
             else {
                dputs("flat_ci_triangle");

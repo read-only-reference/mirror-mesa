@@ -60,7 +60,6 @@
 #include "macros.h"
 #include "matrix.h"
 #include "mem.h"
-#include "texture.h"
 #include "mtypes.h"
 
 #include "GL/fxmesa.h"
@@ -212,10 +211,14 @@ typedef struct MemRange_t {
 
 typedef struct {
   GLsizei width, height;              /* image size */
+  GLint wScale, hScale;               /* image scale factor */
   GrTextureFormat_t glideFormat;      /* Glide image format */
-  unsigned short *data;               /* Glide-formated texture image */
 } tfxMipMapLevel;
 
+/*
+ * TDFX-specific texture object data.  This hangs off of the
+ * struct gl_texture_object DriverData pointer.
+ */
 typedef struct tfxTexInfo_t {
   struct tfxTexInfo *next;
   struct gl_texture_object *tObj;
@@ -223,8 +226,6 @@ typedef struct tfxTexInfo_t {
   GLuint lastTimeUsed;
   FxU32 whichTMU;
   GLboolean isInTM;
-
-  tfxMipMapLevel mipmapLevel[MAX_TEXTURE_LEVELS];
 
   MemRange *tm[FX_NUM_TMU];
 
@@ -301,7 +302,12 @@ typedef struct {
 
 
 #define FX_CONTEXT(ctx) ((fxMesaContext)((ctx)->DriverCtx))
-#define FX_TEXTURE_DATA(t) fxTMGetTexInfo((t)->_Current)
+
+#define FX_TEXTURE_DATA(texUnit) fxTMGetTexInfo((texUnit)->_Current)
+
+#define fxTMGetTexInfo(o) ((tfxTexInfo*)((o)->DriverData))
+
+#define FX_MIPMAP_DATA(img)  ((tfxMipMapLevel *) (img)->DriverData)
 
 #define BEGIN_BOARD_LOCK()
 #define END_BOARD_LOCK()
@@ -541,23 +547,20 @@ extern void fxUpdateDDSpanPointers(GLcontext *);
 extern void fxSetupDDSpanPointers(GLcontext *);
 
 extern void fxPrintTextureData(tfxTexInfo *ti);
-extern GLboolean fxDDTexImage2D(GLcontext *ctx, GLenum target, GLint level,
-                              GLenum format, GLenum type, const GLvoid *pixels,
-                              const struct gl_pixelstore_attrib *packing,
-                              struct gl_texture_object *texObj,
-                              struct gl_texture_image *texImage,
-                              GLboolean *retainInternalCopy);
-extern GLboolean fxDDTexSubImage2D(GLcontext *ctx, GLenum target, GLint level,
+extern void fxDDTexImage2D(GLcontext *ctx, GLenum target, GLint level,
+               GLint internalFormat, GLint width, GLint height, GLint border,
+               GLenum format, GLenum type, const GLvoid *pixels,
+               const struct gl_pixelstore_attrib *packing,
+               struct gl_texture_object *texObj,
+               struct gl_texture_image *texImage);
+
+extern void fxDDTexSubImage2D(GLcontext *ctx, GLenum target, GLint level,
                               GLint xoffset, GLint yoffset,
                               GLsizei width, GLsizei height,
                               GLenum format, GLenum type, const GLvoid *pixels,
                               const struct gl_pixelstore_attrib *packing,
                               struct gl_texture_object *texObj,
                               struct gl_texture_image *texImage);
-extern GLvoid *fxDDGetTexImage(GLcontext *ctx, GLenum target, GLint level,
-                               const struct gl_texture_object *texObj,
-                               GLenum *formatOut, GLenum *typeOut,
-                               GLboolean *freeImageOut );
 extern void fxDDTexEnv(GLcontext *, GLenum, GLenum, const GLfloat *);
 extern void fxDDTexParam(GLcontext *, GLenum, struct gl_texture_object *,
 			 GLenum, const GLfloat *);
@@ -574,7 +577,6 @@ extern void fxDDDepthFunc(GLcontext *, GLenum);
 
 extern void fxDDInitExtensions( GLcontext *ctx );
 
-#define fxTMGetTexInfo(o) ((tfxTexInfo*)((o)->DriverData))
 extern void fxTMInit(fxMesaContext ctx);
 extern void fxTMClose(fxMesaContext ctx);
 extern void fxTMRestoreTextures_NoLock(fxMesaContext ctx);

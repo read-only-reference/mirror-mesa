@@ -1,4 +1,4 @@
-/* $Id: t_vb_light.c,v 1.6 2001/01/29 22:10:24 brianp Exp $ */
+/* $Id: t_vb_light.c,v 1.9 2001/02/20 18:28:52 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -49,16 +49,8 @@ typedef void (*light_func)( GLcontext *ctx,
 			    GLvector4f *input );
 
 struct light_stage_data {
-#if CHAN_TYPE == GL_UNSIGNED_BYTE
-   GLvector4ub LitColor[2];
-   GLvector4ub LitSecondary[2];
-#elif CHAN_TYPE == GL_UNSIGNED_SHORT
-   GLvector4us LitColor[2];
-   GLvector4us LitSecondary[2];
-#elif CHAN_TYPE == GL_FLOAT
-   GLvector4f LitColor[2];
-   GLvector4f LitSecondary[2];
-#endif
+   GLvector4chan LitColor[2];
+   GLvector4chan LitSecondary[2];
    GLvector1ui LitIndex[2];
    light_func *light_func_tab;
 };
@@ -133,17 +125,21 @@ static GLboolean run_lighting( GLcontext *ctx, struct gl_pipeline_stage *stage )
    GLuint ind;
 
    /* Make sure we can talk about elements 0..2 in the vector we are
-    * lighting.  TODO:  Don't repeat this in CVA!
+    * lighting.
     */
-   if (input->size <= 2) {
-      if (input->flags & VEC_NOT_WRITEABLE) {
-	 ASSERT(VB->importable_data & VERT_OBJ);
-	 VB->import_data( ctx, VERT_OBJ, VEC_NOT_WRITEABLE );
-	 input = ctx->_NeedEyeCoords ? VB->EyePtr : VB->ObjPtr;
-	 ASSERT((input->flags & VEC_NOT_WRITEABLE) == 0);
-      }
+   if (stage->changed_inputs & (VERT_EYE|VERT_OBJ)) {
+      if (input->size <= 2) {
+	 if (input->flags & VEC_NOT_WRITEABLE) {
+	    ASSERT(VB->importable_data & VERT_OBJ);
 
-      gl_vector4f_clean_elem(input, VB->Count, 2);
+	    VB->import_data( ctx, VERT_OBJ, VEC_NOT_WRITEABLE );
+	    input = ctx->_NeedEyeCoords ? VB->EyePtr : VB->ObjPtr;
+
+	    ASSERT((input->flags & VEC_NOT_WRITEABLE) == 0);
+	 }
+
+	 gl_vector4f_clean_elem(input, VB->Count, 2);
+      }
    }
       
    if (VB->Flag)
@@ -170,8 +166,7 @@ static GLboolean run_validate_lighting( GLcontext *ctx,
    
    if (ctx->Visual.rgbMode) {
       if (ctx->Light._NeedVertices) {
-	 if (ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR &&
-             ctx->Texture._ReallyEnabled) 
+	 if (ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR)
 	    tab = _tnl_light_spec_tab;
 	 else
 	    tab = _tnl_light_tab;	 
@@ -182,7 +177,6 @@ static GLboolean run_validate_lighting( GLcontext *ctx,
 	 else
 	    tab = _tnl_light_fast_tab;
       }
-/*  	    tab = _tnl_light_tab;	  */
    }
    else
       tab = _tnl_light_ci_tab;
@@ -224,22 +218,10 @@ static GLboolean run_init_lighting( GLcontext *ctx,
     */
    init_lighting();
 
-#if CHAN_TYPE == GL_UNSIGNED_BYTE
-   gl_vector4ub_alloc( &store->LitColor[0], 0, size, 32 );
-   gl_vector4ub_alloc( &store->LitColor[1], 0, size, 32 );
-   gl_vector4ub_alloc( &store->LitSecondary[0], 0, size, 32 );
-   gl_vector4ub_alloc( &store->LitSecondary[1], 0, size, 32 );
-#elif CHAN_TYPE == GL_UNSIGNED_SHORT
-   gl_vector4us_alloc( &store->LitColor[0], 0, size, 32 );
-   gl_vector4us_alloc( &store->LitColor[1], 0, size, 32 );
-   gl_vector4us_alloc( &store->LitSecondary[0], 0, size, 32 );
-   gl_vector4us_alloc( &store->LitSecondary[1], 0, size, 32 );
-#elif CHAN_TYPE == GL_FLOAT
-   gl_vector4f_alloc( &store->LitColor[0], 0, size, 32 );
-   gl_vector4f_alloc( &store->LitColor[1], 0, size, 32 );
-   gl_vector4f_alloc( &store->LitSecondary[0], 0, size, 32 );
-   gl_vector4f_alloc( &store->LitSecondary[1], 0, size, 32 );
-#endif
+   gl_vector4chan_alloc( &store->LitColor[0], 0, size, 32 );
+   gl_vector4chan_alloc( &store->LitColor[1], 0, size, 32 );
+   gl_vector4chan_alloc( &store->LitSecondary[0], 0, size, 32 );
+   gl_vector4chan_alloc( &store->LitSecondary[1], 0, size, 32 );
    gl_vector1ui_alloc( &store->LitIndex[0], 0, size, 32 );
    gl_vector1ui_alloc( &store->LitIndex[1], 0, size, 32 );
 
@@ -268,8 +250,7 @@ static void check_lighting( GLcontext *ctx, struct gl_pipeline_stage *stage )
 	 stage->inputs |= VERT_RGBA;
 
       stage->outputs = VERT_RGBA;
-      if (ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR &&
-          ctx->Texture._ReallyEnabled)
+      if (ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR)
 	 stage->outputs |= VERT_SPEC_RGB;
    }
 }
@@ -280,22 +261,10 @@ static void dtr( struct gl_pipeline_stage *stage )
    struct light_stage_data *store = LIGHT_STAGE_DATA(stage);
 
    if (store) {
-#if CHAN_TYPE == GL_UNSIGNED_BYTE
-      gl_vector4ub_free( &store->LitColor[0] );      
-      gl_vector4ub_free( &store->LitColor[1] );      
-      gl_vector4ub_free( &store->LitSecondary[0] );  
-      gl_vector4ub_free( &store->LitSecondary[1] );  
-#elif CHAN_TYPE == GL_UNSIGNED_SHORT
-      gl_vector4us_free( &store->LitColor[0] );      
-      gl_vector4us_free( &store->LitColor[1] );      
-      gl_vector4us_free( &store->LitSecondary[0] );  
-      gl_vector4us_free( &store->LitSecondary[1] );  
-#elif CHAN_TYPE == GL_FLOAT
-      gl_vector4f_free( &store->LitColor[0] );      
-      gl_vector4f_free( &store->LitColor[1] );      
-      gl_vector4f_free( &store->LitSecondary[0] );  
-      gl_vector4f_free( &store->LitSecondary[1] );  
-#endif
+      gl_vector4chan_free( &store->LitColor[0] );      
+      gl_vector4chan_free( &store->LitColor[1] );      
+      gl_vector4chan_free( &store->LitSecondary[0] );  
+      gl_vector4chan_free( &store->LitSecondary[1] );  
       gl_vector1ui_free( &store->LitIndex[0] );      
       gl_vector1ui_free( &store->LitIndex[1] );      
       FREE( store );

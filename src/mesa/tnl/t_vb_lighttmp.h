@@ -1,10 +1,10 @@
-/* $Id: t_vb_lighttmp.h,v 1.4 2001/01/24 00:05:00 brianp Exp $ */
+/* $Id: t_vb_lighttmp.h,v 1.8 2001/02/16 18:14:42 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
  * Version:  3.5
  * 
- * Copyright (C) 1999-2000  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -113,6 +113,8 @@ static void TAG(light_rgba_spec)( GLcontext *ctx,
    (void) flags;
    (void) nstride; 
    (void) vstride;
+
+/*     fprintf(stderr, "%s\n", __FUNCTION__ ); */
 
    if (IDX & LIGHT_COLORMATERIAL) {
       CMcolor = (GLchan (*)[4]) VB->ColorPtr[0]->data;
@@ -279,15 +281,6 @@ static void TAG(light_rgba_spec)( GLcontext *ctx,
 	 Bcolor[j][3] = sumA[1];
       }
    } 
-
-   if ( CHECK_COLOR_MATERIAL(j) ) 
-      gl_update_color_material( ctx, CMcolor[j] );
-   
-   if ( CHECK_MATERIAL(j) )
-      gl_update_material( ctx, new_material[j], new_material_mask[j] );
-
-   if ( CHECK_VALIDATE(j) )
-      gl_validate_all_lighting_tables( ctx );
 }
 
 
@@ -318,6 +311,7 @@ static void TAG(light_rgba)( GLcontext *ctx,
    GLuint *new_material_mask = VB->MaterialMask;
    GLuint nr = VB->Count;
 
+/*     fprintf(stderr, "%s\n", __FUNCTION__ ); */
    (void) flags;
    (void) nstride; 
    (void) vstride;
@@ -483,15 +477,6 @@ static void TAG(light_rgba)( GLcontext *ctx,
 	 Bcolor[j][3] = sumA[1];
       }
    } 
-
-   if ( CHECK_COLOR_MATERIAL(j) ) 
-      gl_update_color_material( ctx, (GLchan *)CMcolor[j] );
-   
-   if ( CHECK_MATERIAL(j) )
-      gl_update_material( ctx, new_material[j], new_material_mask[j] );
-
-   if ( CHECK_VALIDATE(j) )
-      gl_validate_all_lighting_tables( ctx );
 }
 
 
@@ -521,6 +506,7 @@ static void TAG(light_fast_rgba_single)( GLcontext *ctx,
    GLfloat base[2][3];
    GLuint nr = VB->Count;
 
+/*     fprintf(stderr, "%s\n", __FUNCTION__ ); */
    (void) input;		/* doesn't refer to Eye or Obj */
    (void) flags;
    (void) nr;
@@ -538,19 +524,20 @@ static void TAG(light_fast_rgba_single)( GLcontext *ctx,
    if (stage->changed_inputs == 0)
       return;
 
-   if ( CHECK_COLOR_MATERIAL(j) ) 
-      gl_update_color_material( ctx, (GLchan *)CMcolor[j] );
-
-   if ( CHECK_MATERIAL(j) ) 
-      gl_update_material( ctx, new_material[j], new_material_mask[j] );
-
-   if ( CHECK_VALIDATE(j) )
-      gl_validate_all_lighting_tables( ctx );
-
-   baseubyte[0][3] = ctx->Light._BaseAlpha[0];
-   baseubyte[1][3] = ctx->Light._BaseAlpha[1];
-
    do {
+
+      if ( CHECK_COLOR_MATERIAL(j) ) 
+	 gl_update_color_material( ctx, (GLchan *)CMcolor[j] );
+      
+      if ( CHECK_MATERIAL(j) ) 
+	 gl_update_material( ctx, new_material[j], new_material_mask[j] );
+
+      if ( CHECK_VALIDATE(j) )
+	 gl_validate_all_lighting_tables( ctx );
+
+      baseubyte[0][3] = ctx->Light._BaseAlpha[0];
+      baseubyte[1][3] = ctx->Light._BaseAlpha[1];
+
       /* No attenuation, so incoporate _MatAmbient into base color.
        */
       {
@@ -610,17 +597,6 @@ static void TAG(light_fast_rgba_single)( GLcontext *ctx,
 	 STRIDE_F(normal, NSTRIDE);
       }
 
-      /* Have to recompute our base colors on material change.
-       */
-      if ( CHECK_MATERIAL(j) ) 
-	 gl_update_material( ctx, new_material[j], new_material_mask[j] );
-
-      if ( CHECK_COLOR_MATERIAL(j) ) 
-	 gl_update_color_material( ctx, (GLchan *)CMcolor[j] );
-
-      if ( CHECK_VALIDATE(j) )
-	 gl_validate_all_lighting_tables( ctx );
-
    } while (!CHECK_END_VB(j));
 } 
 
@@ -647,6 +623,7 @@ static void TAG(light_fast_rgba)( GLcontext *ctx,
    GLuint nr = VB->Count;
    struct gl_light *light;
 
+/*     fprintf(stderr, "%s\n", __FUNCTION__ ); */
    (void) flags;
    (void) input;
    (void) nr;
@@ -664,18 +641,19 @@ static void TAG(light_fast_rgba)( GLcontext *ctx,
    if (stage->changed_inputs == 0)
       return;
 
-   if ( CHECK_COLOR_MATERIAL(j) ) 
-      gl_update_color_material( ctx, *CMcolor );
-
-   if ( CHECK_MATERIAL(j) ) 
-      gl_update_material( ctx, new_material[j], new_material_mask[j] );
-
-   if ( CHECK_VALIDATE(j) )
-      gl_validate_all_lighting_tables( ctx );
-
    do {
       do {
 	 GLfloat sum[2][3];
+
+	 if ( CHECK_COLOR_MATERIAL(j) ) 
+	    gl_update_color_material( ctx, CMcolor[j] );
+
+	 if ( CHECK_MATERIAL(j) ) 
+	    gl_update_material( ctx, new_material[j], new_material_mask[j] );
+
+	 if ( CHECK_VALIDATE(j) )
+	    gl_validate_all_lighting_tables( ctx );
+
 
 	 COPY_3V(sum[0], ctx->Light._BaseColor[0]);
 	 if (IDX & LIGHT_TWOSIDE) 
@@ -734,15 +712,6 @@ static void TAG(light_fast_rgba)( GLcontext *ctx,
 	 STRIDE_F(normal, NSTRIDE);
       }
 
-      if ( CHECK_COLOR_MATERIAL(j) ) 
-	 gl_update_color_material( ctx, CMcolor[j] );
-
-      if ( CHECK_MATERIAL(j) ) 
-	 gl_update_material( ctx, new_material[j], new_material_mask[j] );
-
-      if ( CHECK_VALIDATE(j) )
-	 gl_validate_all_lighting_tables( ctx );
-
    } while (!CHECK_END_VB(j));
 } 
 
@@ -766,18 +735,19 @@ static void TAG(light_ci)( GLcontext *ctx,
 {
    struct light_stage_data *store = LIGHT_STAGE_DATA(stage);
    GLuint j;
-   GLuint  vstride = input->stride;
+   GLuint vstride = input->stride;
    const GLfloat *vertex = (GLfloat *) input->data;
-   GLuint  nstride = VB->NormalPtr->stride; 
+   GLuint nstride = VB->NormalPtr->stride; 
    const GLfloat *normal = (GLfloat *)VB->NormalPtr->data;
    GLchan (*CMcolor)[4];
    GLuint CMstride;
    GLuint *flags = VB->Flag;
-   GLuint  *indexResult[2];
+   GLuint *indexResult[2];
    struct gl_material (*new_material)[2] = VB->Material;
    GLuint *new_material_mask = VB->MaterialMask;
    GLuint nr = VB->Count;
 
+/*     fprintf(stderr, "%s\n", __FUNCTION__ ); */
    (void) flags;
    (void) nstride; 
    (void) vstride;
@@ -790,7 +760,8 @@ static void TAG(light_ci)( GLcontext *ctx,
       return;
 
    indexResult[0] = VB->IndexPtr[0]->data;
-   indexResult[1] = VB->IndexPtr[1]->data;
+   if (IDX & LIGHT_TWOSIDE)
+      indexResult[1] = VB->IndexPtr[1]->data;
 
    if (IDX & LIGHT_COLORMATERIAL) {
       CMcolor = VB->ColorPtr[0]->data;
@@ -852,7 +823,7 @@ static void TAG(light_ci)( GLcontext *ctx,
 	    /* spotlight attenuation */
 	    if (light->_Flags & LIGHT_SPOT) {
 	       GLfloat PV_dot_dir = - DOT3(VP, light->_NormDirection);
-	       if (PV_dot_dir<light->_CosCutoff) {
+	       if (PV_dot_dir < light->_CosCutoff) {
 		  continue; /* this light makes no contribution */
 	       }
 	       else {
@@ -893,7 +864,10 @@ static void TAG(light_ci)( GLcontext *ctx,
 	 }
 	 else if (light->_Flags & LIGHT_POSITIONAL) {
 	    h = VP;
-	    ACC_3V(h, ctx->_EyeZDir);
+            /* Strangely, disabling this addition fixes a conformance
+             * problem.  If this code is enabled, l_sed.c fails.
+             */
+	    /*ACC_3V(h, ctx->_EyeZDir);*/
 	    NORMALIZE_3FV(h);
 	 }
          else {
@@ -901,9 +875,7 @@ static void TAG(light_ci)( GLcontext *ctx,
 	 }
 
 	 n_dot_h = correction * DOT3(normal, h);
-
-	 if (n_dot_h > 0.0F) 
-	 {
+	 if (n_dot_h > 0.0F) {
 	    GLfloat spec_coef;
 	    struct gl_shine_tab *tab = ctx->_ShineTable[side];
 	    GET_SHINE_TAB_ENTRY( tab, n_dot_h, spec_coef);
@@ -934,15 +906,6 @@ static void TAG(light_ci)( GLcontext *ctx,
 	 indexResult[side][j] = (GLuint) (GLint) index;
       }
    } /*for vertex*/
-
-   if ( CHECK_COLOR_MATERIAL(j) ) 
-      gl_update_color_material( ctx, CMcolor[j] );
-	 
-   if ( CHECK_MATERIAL(j) )
-      gl_update_material( ctx, new_material[j], new_material_mask[j] );
-
-   if ( CHECK_VALIDATE(j) )
-      gl_validate_all_lighting_tables( ctx );
 }
 
 
