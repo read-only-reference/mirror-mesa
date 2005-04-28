@@ -1,4 +1,4 @@
-/* $Id: gld_vb_mesa_render_dx9.c,v 1.2 2004/07/01 13:14:07 keithw Exp $ */
+/* $Id: gld_vb_mesa_render_dx9.c,v 1.5 2005/04/22 22:47:10 keithw Exp $ */
 
 /*
  * Mesa 3-D graphics library
@@ -52,7 +52,7 @@
 #include "context.h"
 #include "macros.h"
 #include "mtypes.h"
-#include "mmath.h"
+//#include "mmath.h"
 
 #include "math/m_matrix.h"
 #include "math/m_xform.h"
@@ -66,10 +66,10 @@
 
 #if defined(USE_IEEE)
 #define NEGATIVE(x) (GET_FLOAT_BITS(x) & (1<<31))
-#define DIFFERENT_SIGNS(x,y) ((GET_FLOAT_BITS(x) ^ GET_FLOAT_BITS(y)) & (1<<31))
+//#define DIFFERENT_SIGNS(x,y) ((GET_FLOAT_BITS(x) ^ GET_FLOAT_BITS(y)) & (1<<31))
 #else
 #define NEGATIVE(x) (x < 0)
-#define DIFFERENT_SIGNS(x,y) (x * y <= 0 && x - y != 0)
+//#define DIFFERENT_SIGNS(x,y) (x * y <= 0 && x - y != 0)
 /* Could just use (x*y<0) except for the flatshading requirements.
  * Maybe there's a better way?
  */
@@ -305,14 +305,13 @@ tnl_quad_func _gldSetupQuad[4] = {
 
 static GLboolean _gld_mesa_render_stage_run(
 	GLcontext *ctx,
-	struct gl_pipeline_stage *stage)
+	struct tnl_pipeline_stage *stage)
 {
 	GLD_context				*gldCtx	= GLD_GET_CONTEXT(ctx);
 	GLD_driver_dx9			*gld	= GLD_GET_DX9_DRIVER(gldCtx);
 		
 	TNLcontext				*tnl = TNL_CONTEXT(ctx);
 	struct vertex_buffer	*VB = &tnl->vb;
-	GLuint					new_inputs = stage->changed_inputs;
 	tnl_render_func				*tab;
 	GLint					pass = 0;
 	GLD_pb_dx9				*gldPB;
@@ -376,7 +375,7 @@ static GLboolean _gld_mesa_render_stage_run(
 	ASSERT(tnl->Driver.Render.ClippedPolygon);
 	ASSERT(tnl->Driver.Render.Finish);
 	
-	tnl->Driver.Render.BuildVertices( ctx, 0, VB->Count, new_inputs );
+	tnl->Driver.Render.BuildVertices( ctx, 0, VB->Count, ~0 );
 	
 	if (VB->ClipOrMask) {
 		tab = VB->Elts ? clip_render_tab_elts : clip_render_tab_verts;
@@ -390,10 +389,10 @@ static GLboolean _gld_mesa_render_stage_run(
 	
 	do {
 		GLuint i, length, flags = 0;
-		for (i = 0 ; !(flags & PRIM_LAST) ; i += length) {
-			flags = VB->Primitive[i];
-			length= VB->PrimitiveLength[i];
-			ASSERT(length || (flags & PRIM_LAST));
+		for (i = 0 ; !(flags & PRIM_END) ; i += length) {
+			flags = VB->Primitive[i].mode;
+			length= VB->Primitive[i].count;
+			ASSERT(length || (flags & PRIM_END));
 			ASSERT((flags & PRIM_MODE_MASK) <= GL_POLYGON+1);
 			if (length)
 				tab[flags & PRIM_MODE_MASK]( ctx, i, i + length, flags );
@@ -433,77 +432,14 @@ static GLboolean _gld_mesa_render_stage_run(
 
 
 
-/* Quite a bit of work involved in finding out the inputs for the
- * render stage.
- */
-static void _gld_mesa_render_stage_check(
-	GLcontext *ctx,
-	struct gl_pipeline_stage *stage)
-{
-   GLuint inputs = VERT_BIT_CLIP;
-   GLuint i;
 
-   if (ctx->Visual.rgbMode) {
-	   inputs |= VERT_BIT_COLOR0;
-	   
-	   if (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR)
-		   inputs |= VERT_BIT_COLOR1; //VERT_BIT_SPEC_RGB;
-	   
-	   //if (ctx->Texture._ReallyEnabled) {
-	   for (i=0; i<ctx->Const.MaxTextureUnits; i++) {
-		   if (ctx->Texture.Unit[i]._ReallyEnabled)
-			   inputs |= VERT_BIT_TEX(i);
-	   }
-	   //}
-   } else {
-	   inputs |= VERT_BIT_INDEX;
-   }
-
-   if (ctx->Point._Attenuated)
-      inputs |= VERT_BIT_POINT_SIZE;
-
-   /* How do drivers turn this off?
-    */
-   if (ctx->Fog.Enabled)
-      inputs |= VERT_BIT_FOG; // VERT_FOG_COORD;
-
-   if (ctx->_TriangleCaps & DD_TRI_UNFILLED)
-      inputs |= VERT_BIT_EDGEFLAG;
-
-   if (ctx->RenderMode==GL_FEEDBACK)
-      inputs |= VERT_BITS_TEX_ANY;
-
-   stage->inputs = inputs;
-}
-
-//---------------------------------------------------------------------------
-
-// Destructor
-static void _gld_mesa_render_stage_dtr(
-	struct gl_pipeline_stage *stage)
-{
-}
-
-//---------------------------------------------------------------------------
-
-const struct gl_pipeline_stage _gld_mesa_render_stage =
+const struct tnl_pipeline_stage _gld_mesa_render_stage =
 {
    "gld_mesa_render_stage",
-   (_NEW_BUFFERS |
-    _DD_NEW_SEPARATE_SPECULAR |
-    _DD_NEW_FLATSHADE |
-    _NEW_TEXTURE|
-    _NEW_LIGHT|
-    _NEW_POINT|
-    _NEW_FOG|
-    _DD_NEW_TRI_UNFILLED |
-    _NEW_RENDERMODE),		// re-check (new inputs, interp function)
-   0,				/* re-run (always runs) */
-   GL_TRUE,			/* active */
-   0, 0,			/* inputs (set in check_render), outputs */
-   0, 0,			/* changed_inputs, private */
-   _gld_mesa_render_stage_dtr,				/* destructor */
-   _gld_mesa_render_stage_check,		/* check */
+   NULL,
+   NULL,
+   NULL,
+   NULL,
    _gld_mesa_render_stage_run	/* run */
 };
 

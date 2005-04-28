@@ -466,18 +466,22 @@ static void inline fire_EB(PREFIX unsigned long addr, int vertex_count, int type
 	LOCAL_VARS
 	unsigned long addr_a;
 	
-	addr_a = addr & 0x1c;
+	if(addr & 1){
+		WARN_ONCE("Badly aligned buffer\n");
+		return ;
+	}
+	addr_a = 0; /*addr & 0x1c;*/
 	
 	check_space(6);
 	
 	start_packet3(RADEON_CP_PACKET3_3D_DRAW_INDX_2, 0);
-	/* TODO: Check if R300_VAP_VF_CNTL__INDEX_SIZE_32bit works. */
+	/* TODO: R300_VAP_VF_CNTL__INDEX_SIZE_32bit . */
 	e32(R300_VAP_VF_CNTL__PRIM_WALK_INDICES | (vertex_count<<16) | type);
 
 	start_packet3(RADEON_CP_PACKET3_INDX_BUFFER, 2);
 	e32(R300_EB_UNK1 | (addr_a << 16) | R300_EB_UNK2);
-	e32(addr & 0xffffffe3);
-	e32((vertex_count+1)/2 + addr_a/4);
+	e32(addr /*& 0xffffffe3*/);
+	e32((vertex_count+1)/2 /*+ addr_a/4*/); /* Total number of dwords needed? */
 }
 
 static void r300_render_vb_primitive(r300ContextPtr rmesa,
@@ -500,7 +504,7 @@ static void r300_render_vb_primitive(r300ContextPtr rmesa,
 
    if(rmesa->state.Elts){
 	r300EmitAOS(rmesa, rmesa->state.aos_count, 0);
-#if 1
+#if 0
 	start_index32_packet(num_verts, type);
 	for(i=0; i < num_verts; i++)
 		e32(rmesa->state.Elts[start+i]); /* start ? */
@@ -654,7 +658,7 @@ do {										\
 		if (1 || RADEON_DEBUG & DEBUG_FALLBACKS)				\
 			fprintf(stderr, "%s: fallback:%s\n",			\
 				__FUNCTION__, #expr);				\
-		stage->active = GL_FALSE;					\
+		/*stage->active = GL_FALSE*/;					\
 		return;								\
 	}									\
 } while(0)
@@ -669,7 +673,7 @@ static void r300_check_render(GLcontext *ctx, struct tnl_pipeline_stage *stage)
 
 	/* We only support rendering in hardware for now */
 	if (ctx->RenderMode != GL_RENDER) {
-		stage->active = GL_FALSE;
+		//stage->active = GL_FALSE;
 		return;
 	}
 		
@@ -720,13 +724,15 @@ static void dtr(struct tnl_pipeline_stage *stage)
 	(void)stage;
 }
 
+GLboolean r300_create_render(GLcontext *ctx, struct tnl_pipeline_stage *stage){
+	return GL_TRUE;	
+}
+
+
 const struct tnl_pipeline_stage _r300_render_stage = {
 	"r300 hw rasterize",
-	_NEW_ALL,		/* re-check (always re-check for now) */
-	0,			/* re-run (always runs) */
-	GL_TRUE,		/* active */
-	0, 0,			/* inputs (set in check_render), outputs */
-	0, 0,			/* changed_inputs, private */
+	NULL,
+	r300_create_render,
 	dtr,			/* destructor */
 	r300_check_render,	/* check */
 	r300_run_render		/* run */
@@ -742,6 +748,12 @@ static GLboolean r300_run_tcl_render(GLcontext *ctx,
 
 	if (RADEON_DEBUG & DEBUG_PRIMS)
 		fprintf(stderr, "%s\n", __FUNCTION__);
+	if(hw_tcl_on == GL_FALSE)
+		return GL_TRUE;
+	if(ctx->VertexProgram._Enabled == GL_FALSE){
+		_tnl_UpdateFixedFunctionProgram(ctx);
+		r300ProgramStringNotify(ctx, GL_VERTEX_PROGRAM_ARB, &ctx->_TnlProgram);
+	}
 
 	return r300_run_vb_render(ctx, stage);
 }
@@ -756,24 +768,15 @@ static void r300_check_tcl_render(GLcontext *ctx, struct tnl_pipeline_stage *sta
 
 	/* We only support rendering in hardware for now */
 	if (ctx->RenderMode != GL_RENDER) {
-		stage->active = GL_FALSE;
+		//stage->active = GL_FALSE;
 		return;
-	}
-	if(VERTPROG_ACTIVE(ctx)) {
-		stage->active = GL_TRUE;
-		stage->inputs = ctx->VertexProgram.Current->InputsRead;
-	} else {
-		stage->active = GL_FALSE;
 	}
 }
 
 const struct tnl_pipeline_stage _r300_tcl_stage = {
 	"r300 tcl",
-	_NEW_ALL,		/* re-check (always re-check for now) */
-	0,			/* re-run (always runs) */
-	GL_TRUE,		/* active */
-	0, 0,			/* inputs (set in check_render), outputs */
-	0, 0,			/* changed_inputs, private */
+	NULL,
+	r300_create_render,
 	dtr,			/* destructor */
 	r300_check_tcl_render,	/* check */
 	r300_run_tcl_render	/* run */

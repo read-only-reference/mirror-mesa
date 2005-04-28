@@ -118,16 +118,18 @@ TNL_SOURCES = \
 	tnl/t_save_api.c \
 	tnl/t_save_loopback.c \
 	tnl/t_save_playback.c \
-	tnl/t_vb_cull.c \
-	tnl/t_vb_fog.c \
-	tnl/t_vb_light.c \
-	tnl/t_vb_normals.c \
-	tnl/t_vb_points.c \
+	tnl/t_vb_arbprogram.c \
 	tnl/t_vb_program.c \
 	tnl/t_vb_render.c \
 	tnl/t_vb_texgen.c \
 	tnl/t_vb_texmat.c \
 	tnl/t_vb_vertex.c \
+	tnl/t_vb_cull.c \
+	tnl/t_vb_fog.c \
+	tnl/t_vb_light.c \
+	tnl/t_vb_normals.c \
+	tnl/t_vb_points.c \
+	tnl/t_vp_build.c \
 	tnl/t_vertex.c \
 	tnl/t_vertex_c.c \
 	tnl/t_vertex_codegen.c \
@@ -136,6 +138,8 @@ TNL_SOURCES = \
 	tnl/t_vtx_x86.c \
 	tnl/t_vtx_eval.c \
 	tnl/t_vtx_exec.c 
+
+
 
 SHADER_SOURCES = \
 	shader/arbfragparse.c \
@@ -149,11 +153,10 @@ SHADER_SOURCES = \
 	shader/nvvertexec.c \
 	shader/nvvertparse.c \
 	shader/program.c \
-	shader/shaderobjects.c
+	shader/shaderobjects.c \
+	shader/shaderobjects_3dlabs.c
 
-#	shader/shaderobjects_3dlabs.c
-
-SLANG_SOURCES = \
+SLANG_C_SOURCES = \
 	shader/slang/MachineIndependent/preprocessor/atom.c \
 	shader/slang/MachineIndependent/preprocessor/cpp.c \
 	shader/slang/MachineIndependent/preprocessor/cppstruct.c \
@@ -180,6 +183,11 @@ SLANG_CPP_SOURCES = \
 	shader/slang/MachineIndependent/SymbolTable.cpp	\
 	shader/slang/OGLCompilersDLL/Initialisation.cpp	\
 	shader/slang/OSDependent/Linux/ossource.cpp
+	
+SLANG_SOURCES =	\
+	shader/slang/slang_compile.c	\
+	shader/slang/slang_preprocess.c	\
+	shader/slang/slang_utility.c
 
 ASM_C_SOURCES =	\
 	x86/common_x86.c \
@@ -273,6 +281,8 @@ CORE_SOURCES = \
 	$(SWRAST_SETUP_SOURCES)	\
 	$(ASM_C_SOURCES)	\
 	$(SLANG_SOURCES)
+
+#	$(SLANG_C_SOURCES)
 
 
 ### Object files

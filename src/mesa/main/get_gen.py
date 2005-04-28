@@ -508,8 +508,9 @@ StateVars = [
 	  [],
 	  """GLint formats[100];
          GLuint i, n = _mesa_get_compressed_formats(ctx, formats);
+         ASSERT(n <= 100);
          for (i = 0; i < n; i++)
-            params[i] = ENUM_TO_BOOLEAN(formats[i]);""",
+            params[i] = ENUM_TO_INT(formats[i]);""",
 	  "ARB_texture_compression" ),
 
 	# GL_EXT_compiled_vertex_array
@@ -963,7 +964,22 @@ StateVars = [
 	  "EXT_framebuffer_object" ),
 	( "GL_MAX_RENDERBUFFER_SIZE_EXT", GLint,
 	  ["ctx->Const.MaxRenderbufferSize"], "",
-	  "EXT_framebuffer_object" )
+	  "EXT_framebuffer_object" ),
+
+	# GL_ARB_fragment_shader
+	( "GL_MAX_FRAGMENT_UNIFORM_COMPONENTS_ARB", GLint, ["MAX_FRAGMENT_UNIFORM_COMPONENTS"], "",
+	"ARB_fragment_shader" ),
+	( "GL_FRAGMENT_SHADER_DERIVATIVE_HINT_ARB", GLenum, ["ctx->Hint.FragmentShaderDerivative"], "",
+	"ARB_fragment_shader" ),
+
+	# GL_ARB_vertex_shader
+	( "GL_MAX_VERTEX_UNIFORM_COMPONENTS_ARB", GLint, ["MAX_VERTEX_UNIFORM_COMPONENTS"], "",
+	"ARB_vertex_shader" ),
+	( "GL_MAX_VARYING_FLOATS_ARB", GLint, ["MAX_VARYING_FLOATS"], "", "ARB_vertex_shader" ),
+	( "GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS_ARB", GLint, ["MAX_VERTEX_TEXTURE_IMAGE_UNITS"], "",
+	"ARB_vertex_shader" ),
+	( "GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS_ARB", GLint, ["MAX_COMBINED_TEXTURE_IMAGE_UNITS"], "",
+	"ARB_vertex_shader" )
 ]
 
 

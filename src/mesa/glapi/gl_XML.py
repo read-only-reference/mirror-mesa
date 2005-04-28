@@ -30,6 +30,47 @@ from xml.sax import make_parser
 from xml.sax.handler import feature_namespaces
 
 import re
+import sys
+
+def is_attr_true( attrs, name ):
+	"""Read a name value from an element's attributes.
+	
+	The value read from the attribute list must be either 'true' or
+	'false'.  If the value is 'false', zero will be returned.  If the
+	value is 'true', non-zero will be returned.  An exception will be
+	raised for any other value."""
+
+	value = attrs.get((None, name), "false")
+	if value == "true":
+		return 1
+	elif value == "false":
+		return 0
+	else:
+		raise RuntimeError('Invalid value "%s" for boolean "%s".' % (value, name))
+
+
+def parse_GL_API( handler, file_name ):
+	"""Boiler-plate code to create an XML parser and use it.
+
+	Creates an XML parser and uses that parser with the application
+	supplied SAX callback, which should be derived from
+	FilterGLAPISpecBase.
+	"""
+
+	parser = make_parser()
+	parser.setFeature(feature_namespaces, 1)
+	parser.setContentHandler( handler )
+
+	handler.printHeader()
+
+	if not file_name or file_name == "-":
+		parser.parse( sys.stdin )
+	else:
+		parser.parse( file_name )
+
+	handler.printFooter()
+	return
+	
 
 class glItem:
 	"""Generic class on which all other API entity types are based."""
@@ -43,7 +84,7 @@ class glItem:
 		context.append(tag_name, self)
 		return
 	
-	def startElement(self, name, attrs):
+	def startElementNS(self, name, qname, attrs):
 		"""Generic startElement handler.
 		
 		The startElement handler is called for all elements except
@@ -53,7 +94,7 @@ class glItem:
 		twice."""
 		return
 
-	def endElement(self, name):
+	def endElementNS(self, name, qname):
 		"""Generic endElement handler.
 
 		Generic endElement handler.    Returns 1 if the tag containing
@@ -70,7 +111,7 @@ class glItem:
 		associated with an object, even the element that started the
 		object.  See the description of startElement an example."""
 
-		if name == self.tag_name:
+		if name == (None, self.tag_name):
 			return 1
 		else:
 			return 0
@@ -85,12 +126,12 @@ class glEnum( glItem ):
 	This class is not complete, and is not really used yet."""
 
 	def __init__(self, context, name, attrs):
-		self.value = int(attrs.get('value', "0x0000"), 0)
+		self.value = int(attrs.get((None, 'value'), "0x0000"), 0)
 
-		enum_name = "GL_" + attrs.get('name', None)
+		enum_name = "GL_" + attrs.get((None, 'name'), None)
 		glItem.__init__(self, name, enum_name, context)
 
-		temp = attrs.get('count', None)
+		temp = attrs.get((None, 'count'), None)
 		self.default_count = 0
 		if temp == "?":
 			self.default_count = -1
@@ -105,9 +146,9 @@ class glEnum( glItem ):
 
 
 	def process_attributes(self, attrs):
-		name = attrs.get('name', None)
+		name = attrs.get((None, 'name'), None)
 
-		temp = attrs.get('count', None)
+		temp = attrs.get((None, 'count'), None)
 		if temp == None:
 			c = self.default_count
 		else:
@@ -116,7 +157,7 @@ class glEnum( glItem ):
 			except Exception,e:
 				raise RuntimeError('Invalid count value "%s" for enum "%s" in function "%s" when an integer was expected.' % (temp, self.name, n))
 
-		mode_str = attrs.get('mode', "set")
+		mode_str = attrs.get((None, 'mode'), "set")
 		if mode_str == "set":
 			mode = 1
 		elif mode_str == "get":
@@ -131,10 +172,10 @@ class glType( glItem ):
 	"""Subclass of glItem for representing GL types."""
 
 	def __init__(self, context, name, attrs):
-		self.size = int(attrs.get('size', "0"))
-		self.glx_name = attrs.get('glx_name', "")
+		self.size = int(attrs.get((None, 'size'), "0"))
+		self.glx_name = attrs.get((None, 'glx_name'), "")
 
-		type_name = "GL" + attrs.get('name', None)
+		type_name = "GL" + attrs.get((None, 'name'), None)
 		glItem.__init__(self, name, type_name, context)
 
 
@@ -149,12 +190,12 @@ class glParameter( glItem ):
 	is_pointer = 0
 
 	def __init__(self, context, name, attrs):
-		p_name = attrs.get('name', None)
-		self.p_type_string = attrs.get('type', None)
+		p_name = attrs.get((None, 'name'), None)
+		self.p_type_string = attrs.get((None, 'type'), None)
 
-		temp = attrs.get('variable_param', None)
+		temp = attrs.get((None, 'variable_param'), None)
 		if temp:
-			self.count_parameter_list = temp.replace( ' ', '' ).split( ',' )
+			self.count_parameter_list = temp.split( ' ' )
 		else:
 			self.count_parameter_list = []
 
@@ -168,7 +209,7 @@ class glParameter( glItem ):
 		# statement will throw an exception, and the except block will
 		# take over.
 
-		c = attrs.get('count', "0")
+		c = attrs.get((None, 'count'), "0")
 		try: 
 			self.p_count = int(c)
 			self.counter = None
@@ -176,55 +217,31 @@ class glParameter( glItem ):
 			self.p_count = 0
 			self.counter = c
 
-		self.count_scale = int(attrs.get('count_scale', "1"))
-			
-		if attrs.get('counter', "false") == "true":
-			self.is_counter = 1
-		else:
-			self.is_counter = 0
+		self.count_scale = int(attrs.get((None, 'count_scale'), "1"))
 
-		if attrs.get('output', "false") == "true":
-			self.is_output = 1
-		else:
-			self.is_output = 0
+		self.is_counter = is_attr_true( attrs, 'counter' )
+		self.is_output  = is_attr_true( attrs, 'output' )
 
-			
+
 		# Pixel data has special parameters.
 
-		self.width      = attrs.get('img_width',  None)
-		self.height     = attrs.get('img_height', None)
-		self.depth      = attrs.get('img_depth',  None)
-		self.extent     = attrs.get('img_extent', None)
+		self.width      = attrs.get((None, 'img_width'),  None)
+		self.height     = attrs.get((None, 'img_height'), None)
+		self.depth      = attrs.get((None, 'img_depth'),  None)
+		self.extent     = attrs.get((None, 'img_extent'), None)
 
-		self.img_xoff   = attrs.get('img_xoff',   None)
-		self.img_yoff   = attrs.get('img_yoff',   None)
-		self.img_zoff   = attrs.get('img_zoff',   None)
-		self.img_woff   = attrs.get('img_woff',   None)
+		self.img_xoff   = attrs.get((None, 'img_xoff'),   None)
+		self.img_yoff   = attrs.get((None, 'img_yoff'),   None)
+		self.img_zoff   = attrs.get((None, 'img_zoff'),   None)
+		self.img_woff   = attrs.get((None, 'img_woff'),   None)
 
-		self.img_format = attrs.get('img_format', None)
-		self.img_type   = attrs.get('img_type',   None)
-		self.img_target = attrs.get('img_target', None)
+		self.img_format = attrs.get((None, 'img_format'), None)
+		self.img_type   = attrs.get((None, 'img_type'),   None)
+		self.img_target = attrs.get((None, 'img_target'), None)
 
-		pad = attrs.get('img_pad_dimensions', "false")
-		if pad == "true":
-			self.img_pad_dimensions = 1
-		else:
-			self.img_pad_dimensions = 0
-
-
-		null_flag = attrs.get('img_null_flag', "false")
-		if null_flag == "true":
-			self.img_null_flag = 1
-		else:
-			self.img_null_flag = 0
-
-		send_null = attrs.get('img_send_null', "false")
-		if send_null == "true":
-			self.img_send_null = 1
-		else:
-			self.img_send_null = 0
-
-
+		self.img_pad_dimensions = is_attr_true( attrs, 'img_pad_dimensions' )
+		self.img_null_flag      = is_attr_true( attrs, 'img_null_flag' )
+		self.img_send_null      = is_attr_true( attrs, 'img_send_null' )
 
 		if self.p_count > 0 or self.counter or self.count_parameter_list:
 			has_count = 1
@@ -358,19 +375,19 @@ class glParameterIterator:
 
 class glFunction( glItem ):
 	def __init__(self, context, name, attrs):
-		self.fn_alias = attrs.get('alias', None)
+		self.fn_alias = attrs.get((None, 'alias'), None)
 		self.fn_parameters = []
 		self.image = None
 		self.count_parameter_list = []
 		self.fn_return_type = "void"
 
-		temp = attrs.get('offset', None)
+		temp = attrs.get((None, 'offset'), None)
 		if temp == None or temp == "?":
 			self.fn_offset = -1
 		else:
 			self.fn_offset = int(temp)
 
-		fn_name = attrs.get('name', None)
+		fn_name = attrs.get((None, 'name'), None)
 		if self.fn_alias != None:
 			self.real_name = self.fn_alias
 		else:
@@ -387,19 +404,20 @@ class glFunction( glItem ):
 		return glParameterIterator(self.fn_parameters)
 
 
-	def startElement(self, name, attrs):
-		if name == "param":
+	def startElementNS(self, name, qname, attrs):
+		[uri, true_name] = name
+		if true_name == "param":
 			try:
-				self.context.factory.create(self, name, attrs)
+				self.context.factory.create(self, true_name, attrs)
 			except RuntimeError:
 				print "Error with parameter '%s' in function '%s'." \
-					% (attrs.get('name','(unknown)'), self.name)
+					% (attrs.get((None, 'name'),'(unknown)'), self.name)
 				raise
-		elif name == "return":
-			self.set_return_type(attrs.get('type', None))
+		elif true_name == "return":
+			self.set_return_type(attrs.get((None, 'type'), None))
 
 
-	def endElement(self, name):
+	def endElementNS(self, name, qname):
 		"""Handle the end of a <function> element.
 
 		At the end of a <function> element, there is some semantic
@@ -407,7 +425,8 @@ class glFunction( glItem ):
 		exceptions from being thrown elsewhere in the code.
 		"""
 
-		if name == "function":
+		[uri, true_name] = name
+		if true_name == "function":
 			for p in self.variable_length_parameters:
 				if p.counter:
 					counter = self.parameters_by_name[ p.counter ]
@@ -614,16 +633,21 @@ class FilterGLAPISpecBase(saxutils.XMLFilterBase):
 			# offset, then we do not need to track it.  These are
 			# functions that don't have an assigned offset
 
-			if obj.fn_offset >= 0 or obj.fn_alias != None:
-				if obj.fn_offset >= 0:
-					index = obj.fn_offset
-				else:
-					index = self.next_alias
-					self.next_alias -= 1
+			if not self.functions_by_name.has_key(obj.name):
+				self.functions_by_name[obj.name] = obj
 
-				self.functions[index] = obj
+				if obj.fn_offset >= 0 or obj.fn_alias != None:
+					if obj.fn_offset >= 0:
+						index = obj.fn_offset
+					else:
+						index = self.next_alias
+						self.next_alias -= 1
 
-			self.functions_by_name[obj.name] = obj
+					self.functions[index] = obj
+			else:
+				# We should do some checking here to make
+				# sure the functions are an identical match.
+				pass
 
 		elif object_type == "type":
 			self.types[obj.name] = obj
@@ -631,7 +655,7 @@ class FilterGLAPISpecBase(saxutils.XMLFilterBase):
 		return
 
 
-	def startElement(self, name, attrs):
+	def startElementNS(self, name, qname, attrs):
 		"""Start a new element in the XML stream.
 		
 		Starts a new element.  There are three types of elements that
@@ -647,24 +671,26 @@ class FilterGLAPISpecBase(saxutils.XMLFilterBase):
 		additional XML data, GLX protocol information,  that the base
 		classes do not know about."""
 
-		if self.current_object != None:
-			self.current_object.startElement(name, attrs)
-		elif name == "category":
-			self.current_category = attrs.get('name', "")
-		elif name == "include":
-			self.next_include = attrs.get('name', "")
-		else:
-			self.current_object = self.factory.create(self, name, attrs)
+		[uri, true_name] = name
+		if uri is None:
+			if self.current_object != None:
+				self.current_object.startElementNS(name, qname, attrs)
+			elif true_name == "category":
+				self.current_category = attrs.get((None, 'name'), "")
+			elif true_name == "include":
+				self.next_include = attrs.get((None, 'name'), "")
+			else:
+				self.current_object = self.factory.create(self, true_name, attrs)
 		return
 
 
-	def endElement(self, name):
+	def endElementNS(self, name, qname):
 		if self.current_object != None:
-			if self.current_object.endElement(name):
+			if self.current_object.endElementNS(name, qname):
 				self.current_object = None
 		elif name == "include":
 			parser = make_parser()
-			parser.setFeature(feature_namespaces, 0)
+			parser.setFeature(feature_namespaces, 1)
 			parser.setContentHandler(self)
 
 			f = open(self.next_include)

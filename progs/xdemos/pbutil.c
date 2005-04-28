@@ -9,7 +9,6 @@
  * to the GLX_SGIX_fbconfig/pbuffer extensions.
  */
 
-
 #include <stdio.h>
 #include <string.h>
 #include "pbutil.h"
@@ -89,13 +88,10 @@ GetAllFBConfigs(Display *dpy, int screen, int *nConfigs)
 #endif
 #if defined(GLX_SGIX_fbconfig) && defined(GLX_SGIX_pbuffer)
    if (pbSupport == 2) {
-      /* this *seems* to work, but may not be perfect */
-      static int fbAttribs[] = {
-         GLX_RENDER_TYPE, 0,
-         GLX_DRAWABLE_TYPE, 0,
-         None
-      };
-      return glXChooseFBConfigSGIX(dpy, screen, fbAttribs, nConfigs);
+      /* The GLX_SGIX_fbconfig extensions says to pass NULL to get list
+       * of all available configurations.
+       */
+      return glXChooseFBConfigSGIX(dpy, screen, NULL, nConfigs);
    }
 #endif
    return NULL;
@@ -294,6 +290,43 @@ PrintFBConfigInfo(Display *dpy, int screen, FBCONFIG config, Bool horizFormat)
    }
 }
 
+
+
+GLXContext
+CreateContext(Display *dpy, int screen, FBCONFIG config)
+{
+   int pbSupport = QueryPbuffers(dpy, screen);
+#if defined(GLX_VERSION_1_3)
+   if (pbSupport == 1) {
+      /* GLX 1.3 */
+      GLXContext c;
+      c = glXCreateNewContext(dpy, config, GLX_RGBA_TYPE, NULL, True);
+      if (!c) {
+         /* try indirect */
+         c = glXCreateNewContext(dpy, config, GLX_RGBA_TYPE, NULL, False);
+      }
+      return c;
+   }
+#endif
+#if defined(GLX_SGIX_fbconfig) && defined(GLX_SGIX_pbuffer)
+   if (pbSupport == 2) {
+      GLXContext c;
+      c = glXCreateContextWithConfigSGIX(dpy, config, GLX_RGBA_TYPE_SGIX, NULL, True);
+      if (!c) {
+         c = glXCreateContextWithConfigSGIX(dpy, config, GLX_RGBA_TYPE_SGIX, NULL, False);
+      }
+      return c;
+   }
+#endif
+   return 0;
+}
+
+
+void
+DestroyContext(Display *dpy, GLXContext ctx)
+{
+   glXDestroyContext(dpy, ctx);
+}
 
 
 /* This is only used by CreatePbuffer() */

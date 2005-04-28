@@ -38,8 +38,6 @@
  * 24 bits |    ?     0x312   0x315    0x318      ?      0x31B     0x31F
  * 32 bits |    ?       ?       ?        ?      0x164      ?
  */
-
-
 #ifdef USE_GLFBDEV_DRIVER
 
 #include "glheader.h"
@@ -328,7 +326,7 @@ glFBDevGetProcAddress( const char *procName )
          return entry->func;
       }
    }
-   return _glapi_get_proc_address(procName);
+   return (const void *)_glapi_get_proc_address(procName);
 }
 
 
@@ -797,5 +795,4 @@ glFBDevMakeCurrent( GLFBDevContextPtr context,
    return 1;
 }
 
-#endif /* USE_GLFBDEV_DRIVER */
-
+#endif

@@ -25,10 +25,6 @@
 # Authors:
 #    Ian Romanick <idr@us.ibm.com>
 
-from xml.sax import saxutils
-from xml.sax import make_parser
-from xml.sax.handler import feature_namespaces
-
 import gl_XML
 import glX_XML
 import license
@@ -246,8 +242,9 @@ class PrintGlxReqSize_common(glX_XML.GlxProto):
 		self.size_functions = []
 
 
-	def endElement(self, name):
-		if name == "function":
+	def endElementNS(self, name, qname):
+		[uri, true_name] = name
+		if true_name == "function":
 			f = self.current_object
 			if f.glx_rop and not f.ignore and f.fn_alias == None and f.vectorequiv == None:
 
@@ -259,7 +256,7 @@ class PrintGlxReqSize_common(glX_XML.GlxProto):
 							self.size_functions.append( f )
 							break
 
-		glX_XML.GlxProto.endElement(self, name)
+		glX_XML.GlxProto.endElementNS(self, name, qname)
 
 
 	def functionIterator(self):
@@ -532,12 +529,4 @@ if __name__ == '__main__':
 	else:
 		show_usage()
 
-	parser = make_parser()
-	parser.setFeature(feature_namespaces, 0)
-	parser.setContentHandler(dh)
-
-	f = open(file_name)
-
-	dh.printHeader()
-	parser.parse(f)
-	dh.printFooter()
+	gl_XML.parse_GL_API( dh, file_name )

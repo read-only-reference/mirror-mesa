@@ -214,6 +214,27 @@ enum
 
 
 /**
+ * Indexes for vertex program result attributes
+ */
+#define VERT_RESULT_HPOS 0
+#define VERT_RESULT_COL0 1
+#define VERT_RESULT_COL1 2
+#define VERT_RESULT_BFC0 3
+#define VERT_RESULT_BFC1 4
+#define VERT_RESULT_FOGC 5
+#define VERT_RESULT_PSIZ 6
+#define VERT_RESULT_TEX0 7
+#define VERT_RESULT_TEX1 8
+#define VERT_RESULT_TEX2 9
+#define VERT_RESULT_TEX3 10
+#define VERT_RESULT_TEX4 11
+#define VERT_RESULT_TEX5 12
+#define VERT_RESULT_TEX6 13
+#define VERT_RESULT_TEX7 14
+#define VERT_RESULT_MAX  15
+
+
+/**
  * Indexes for fragment program input attributes.
  */
 enum
@@ -707,6 +728,7 @@ struct gl_hint_attrib
    GLenum ClipVolumeClipping;   /**< GL_EXT_clip_volume_hint */
    GLenum TextureCompression;   /**< GL_ARB_texture_compression */
    GLenum GenerateMipmap;       /**< GL_SGIS_generate_mipmap */
+   GLenum FragmentShaderDerivative; /**< GL_ARB_fragment_shader */
 };
 
 
@@ -1678,7 +1700,7 @@ struct atifs_machine
  */
 enum register_file
 {
-   PROGRAM_TEMPORARY = 10,
+   PROGRAM_TEMPORARY,
    PROGRAM_INPUT,
    PROGRAM_OUTPUT,
    PROGRAM_LOCAL_PARAM,
@@ -2126,6 +2148,7 @@ struct gl_extensions
    GLboolean ARB_occlusion_query;
    GLboolean ARB_point_sprite;
    GLboolean ARB_shader_objects;
+   GLboolean ARB_shading_language_100;
    GLboolean ARB_shadow;
    GLboolean ARB_texture_border_clamp;
    GLboolean ARB_texture_compression;
@@ -2625,6 +2648,9 @@ struct __GLcontextRec
    struct gl_vertex_program_state VertexProgram;   /**< GL_NV_vertex_program */
    struct gl_fragment_program_state FragmentProgram;  /**< GL_NV_fragment_program */
    struct gl_ati_fragment_shader_state ATIFragmentShader;  /**< GL_ATI_fragment_shader */
+
+   struct fragment_program _TexEnvProgram;     /**< Texture state as fragment program */
+   struct vertex_program _TnlProgram;          /**< Fixed func TNL state as vertex program */
 
    struct gl_occlusion_state Occlusion;  /**< GL_ARB_occlusion_query */
 

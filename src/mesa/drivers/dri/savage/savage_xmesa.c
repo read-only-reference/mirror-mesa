@@ -34,6 +34,8 @@
 
 #include "utils.h"
 
+#include "extensions.h"
+
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
 #include "tnl/tnl.h"
@@ -90,12 +92,13 @@ DRI_CONF_BEGIN
         SAVAGE_SYNC_FRAMES(false)
         DRI_CONF_MAX_TEXTURE_UNITS(2,1,2)
     	DRI_CONF_TEXTURE_HEAPS(DRI_CONF_TEXTURE_HEAPS_ALL)
+        DRI_CONF_FORCE_S3TC_ENABLE(false)
     DRI_CONF_SECTION_END
     DRI_CONF_SECTION_DEBUG
         DRI_CONF_NO_RAST(false)
     DRI_CONF_SECTION_END
 DRI_CONF_END;
-static const GLuint __driNConfigOptions = 9;
+static const GLuint __driNConfigOptions = 10;
 
 #ifdef USE_NEW_INTERFACE
 static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
@@ -123,10 +126,15 @@ unsigned long time_sum=0;
 struct timeval tv_s1,tv_f1;
 #endif
 
-static const char *const card_extensions[] =
+static const char *const common_extensions[] =
 {
     "GL_ARB_multitexture",
     "GL_EXT_texture_lod_bias",
+    "GL_ARB_texture_compression",
+    NULL
+};
+static const char *const s4_extensions[] =
+{
     "GL_EXT_texture_env_add",
     NULL
 };
@@ -213,7 +221,7 @@ savageInitDriver(__DRIscreenPrivate *sPriv)
        savageScreen->agpTextures.map = NULL;
 
    savageScreen->texVirtual[SAVAGE_CARD_HEAP] = 
-             (drmAddress)(((unsigned int)sPriv->pFB)+gDRIPriv->textureOffset);
+             (drmAddress)(((GLubyte *)sPriv->pFB)+gDRIPriv->textureOffset);
    savageScreen->texVirtual[SAVAGE_AGP_HEAP] = 
                         (drmAddress)(savageScreen->agpTextures.map);
 
@@ -364,8 +372,8 @@ savageCreateContext( const __GLcontextModes *mesaVis,
 
    for(i=0;i<5;i++)
    {
-       imesa->apertureBase[i] = ((GLuint)savageScreen->aperture.map + 
-                                 0x01000000 * i );
+       imesa->apertureBase[i] = (GLubyte *)savageScreen->aperture.map + 
+	   0x01000000 * i;
    }
    
    imesa->aperturePitch = savageScreen->aperturePitch;
@@ -522,7 +530,17 @@ savageCreateContext( const __GLcontextModes *mesaVis,
 				       debug_control );
 #endif
 
-   driInitExtensions( ctx, card_extensions, GL_TRUE );
+   driInitExtensions( ctx, common_extensions, GL_TRUE );
+   if (savageScreen->chipset >= S3_SAVAGE4)
+       driInitExtensions( ctx, s4_extensions, GL_FALSE );
+   if (ctx->Mesa_DXTn ||
+       driQueryOptionb (&imesa->optionCache, "force_s3tc_enable")) {
+       _mesa_enable_extension( ctx, "GL_S3_s3tc" );
+       if (savageScreen->chipset >= S3_SAVAGE4)
+	   /* This extension needs DXT3 and DTX5 support in hardware.
+	    * Not available on Savage3D/MX/IX. */
+	   _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
+   }
 
    savageDDInitStateFuncs( ctx );
    savageDDInitSpanFuncs( ctx );

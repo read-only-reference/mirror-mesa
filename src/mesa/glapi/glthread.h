@@ -64,9 +64,10 @@
 #define GLTHREAD_H
 
 
-#if defined(PTHREADS) || defined(SOLARIS_THREADS) || defined(WIN32_THREADS) || \
-	defined(XTHREADS) || defined(BEOS_THREADS)
-#define THREADS
+#if (defined(PTHREADS) || defined(SOLARIS_THREADS) ||\
+     defined(WIN32_THREADS) || defined(XTHREADS) || defined(BEOS_THREADS)) \
+    && !defined(THREADS)
+# define THREADS
 #endif
 
 #ifdef VMS
@@ -306,7 +307,14 @@ _glthread_GetTSD(_glthread_TSD *);
 extern void
 _glthread_SetTSD(_glthread_TSD *, void *);
 
-#ifndef GL_CALL
+#if defined(GLX_USE_TLS)
+
+extern __thread struct _glapi_table * _glapi_tls_Dispatch
+    __attribute__((tls_model("initial-exec")));
+
+# define GL_CALL(name) (*(_glapi_tls_Dispatch-> name))
+
+#elif !defined(GL_CALL)
 # if defined(THREADS)
 extern struct _glapi_table * _glapi_DispatchTSD;
 #  define GL_CALL(name) \

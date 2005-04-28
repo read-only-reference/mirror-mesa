@@ -368,6 +368,7 @@ _mesa_free_parameters(struct program_parameter_list *paramList)
       _mesa_free((void *) paramList->Parameters[i].Name);
    }
    _mesa_free(paramList->Parameters);
+   _mesa_free(paramList->ParameterValues);
    paramList->NumParameters = 0;
    paramList->Parameters = NULL;
 }
@@ -387,7 +388,13 @@ add_parameter(struct program_parameter_list *paramList,
       _mesa_realloc(paramList->Parameters,
                     n * sizeof(struct program_parameter),
                     (n + 1) * sizeof(struct program_parameter));
-   if (!paramList->Parameters) {
+   paramList->ParameterValues = (GLfloat (*)[4])
+      _mesa_realloc(paramList->ParameterValues,
+                    n * 4 * sizeof(GLfloat),
+                    (n + 1) * 4 * sizeof(GLfloat));
+
+   if (!paramList->Parameters ||
+       !paramList->ParameterValues) {
       /* out of memory */
       paramList->NumParameters = 0;
       return -1;
@@ -397,7 +404,7 @@ add_parameter(struct program_parameter_list *paramList,
       paramList->Parameters[n].Name = _mesa_strdup(name);
       paramList->Parameters[n].Type = type;
       if (values)
-         COPY_4V(paramList->Parameters[n].Values, values);
+         COPY_4V(paramList->ParameterValues[n], values);
       return (GLint) n;
    }
 }
@@ -491,7 +498,7 @@ _mesa_lookup_parameter_value(struct program_parameter_list *paramList,
       /* name is null-terminated */
       for (i = 0; i < paramList->NumParameters; i++) {
          if (_mesa_strcmp(paramList->Parameters[i].Name, name) == 0)
-            return paramList->Parameters[i].Values;
+            return paramList->ParameterValues[i];
       }
    }
    else {
@@ -499,7 +506,7 @@ _mesa_lookup_parameter_value(struct program_parameter_list *paramList,
       for (i = 0; i < paramList->NumParameters; i++) {
          if (_mesa_strncmp(paramList->Parameters[i].Name, name, nameLen) == 0
              && _mesa_strlen(paramList->Parameters[i].Name) == (size_t)nameLen)
-            return paramList->Parameters[i].Values;
+            return paramList->ParameterValues[i];
       }
    }
    return NULL;
@@ -619,7 +626,8 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
             value[3] = ctx->Light.Light[ln].SpotExponent;
             return;
          case STATE_SPOT_DIRECTION:
-            COPY_4V(value, ctx->Light.Light[ln].EyeDirection);
+            COPY_3V(value, ctx->Light.Light[ln].EyeDirection);
+            value[3] = ctx->Light.Light[ln]._CosCutoff;
             return;
          case STATE_HALF:
             {
@@ -628,13 +636,17 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
                /* Compute infinite half angle vector:
                 *   half-vector = light_position + (0, 0, 1) 
                 * and then normalize.  w = 0
-					 *
-					 * light.EyePosition.w should be 0 for infinite lights.
+		*
+		* light.EyePosition.w should be 0 for infinite lights.
                 */
-					ADD_3V(value, eye_z, ctx->Light.Light[ln].EyePosition);
-					NORMALIZE_3FV(value);
-					value[3] = 0;
+	       ADD_3V(value, eye_z, ctx->Light.Light[ln].EyePosition);
+	       NORMALIZE_3FV(value);
+	       value[3] = 0;
             }						  
+            return;
+	 case STATE_POSITION_NORMALIZED:
+            COPY_4V(value, ctx->Light.Light[ln].EyePosition);
+	    NORMALIZE_3FV( value );
             return;
          default:
             _mesa_problem(ctx, "Invalid light state in fetch_state");
@@ -648,20 +660,22 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
       if (state[1] == 0) {
          /* front */
          GLint i;
-         for (i = 0; i < 4; i++) {
+         for (i = 0; i < 3; i++) {
             value[i] = ctx->Light.Model.Ambient[i]
                * ctx->Light.Material.Attrib[MAT_ATTRIB_FRONT_AMBIENT][i]
                + ctx->Light.Material.Attrib[MAT_ATTRIB_FRONT_EMISSION][i];
          }
+	 value[3] = ctx->Light.Material.Attrib[MAT_ATTRIB_FRONT_DIFFUSE][3];
       }
       else {
          /* back */
          GLint i;
-         for (i = 0; i < 4; i++) {
+         for (i = 0; i < 3; i++) {
             value[i] = ctx->Light.Model.Ambient[i]
                * ctx->Light.Material.Attrib[MAT_ATTRIB_BACK_AMBIENT][i]
                + ctx->Light.Material.Attrib[MAT_ATTRIB_BACK_EMISSION][i];
          }
+	 value[3] = ctx->Light.Material.Attrib[MAT_ATTRIB_BACK_DIFFUSE][3];
       }
       return;
    case STATE_LIGHTPROD:
@@ -806,7 +820,9 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
          }
          if (modifier == STATE_MATRIX_INVERSE ||
              modifier == STATE_MATRIX_INVTRANS) {
-            /* XXX be sure inverse is up to date */
+            /* Be sure inverse is up to date:
+	     */
+	    _math_matrix_analyse( (GLmatrix*) matrix );
             m = matrix->inv;
          }
          else {
@@ -874,6 +890,20 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
          }
       }
       return;
+
+   case STATE_INTERNAL:
+      {
+         switch (state[1]) {
+	    case STATE_NORMAL_SCALE:
+               ASSIGN_4V(value, ctx->_ModelViewInvScale, 0, 0, 1);
+               break;
+	    default:
+               _mesa_problem(ctx, "Bad state switch in _mesa_fetch_state()");
+               return;
+         }
+      }
+      return;
+
    default:
       _mesa_problem(ctx, "Invalid state in _mesa_fetch_state");
       return;
@@ -898,8 +928,9 @@ _mesa_load_state_parameters(GLcontext *ctx,
 
    for (i = 0; i < paramList->NumParameters; i++) {
       if (paramList->Parameters[i].Type == STATE) {
-         _mesa_fetch_state(ctx, paramList->Parameters[i].StateIndexes,
-                           paramList->Parameters[i].Values);
+         _mesa_fetch_state(ctx, 
+			   paramList->Parameters[i].StateIndexes,
+                           paramList->ParameterValues[i]);
       }
    }
 }

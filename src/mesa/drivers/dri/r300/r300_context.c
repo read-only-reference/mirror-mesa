@@ -62,6 +62,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "utils.h"
 #include "xmlpool.h"		/* for symbolic values of enum-type options */
 
+int hw_tcl_on=1;
 
 /* Extension strings exported by the R300 driver.
  */
@@ -118,7 +119,7 @@ static const struct tnl_pipeline_stage *r300_pipeline[] = {
 	&_tnl_fog_coordinate_stage,
 	&_tnl_texgen_stage,
 	&_tnl_texture_transform_stage,
-	//&_tnl_vertex_program_stage,
+	&_tnl_vertex_program_stage,
 
 	/* Try again to go to tcl?
 	 *     - no good for asymmetric-twoside (do with multipass)
@@ -173,7 +174,7 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	r300InitIoctlFuncs(&functions);
 	r300InitStateFuncs(&functions);
 	r300InitTextureFuncs(&functions);
-	r300InitVertexProgFuncs(&functions);
+	r300InitShaderFuncs(&functions);
 	
 	if (!radeonInitContext(&r300->radeon, &functions,
 			       glVisual, driContextPriv, sharedContextPrivate)) {
@@ -292,7 +293,9 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	tcl_mode = driQueryOptioni(&r300->radeon.optionCache, "tcl_mode");
 	if (driQueryOptionb(&r300->radeon.optionCache, "no_rast")) {
 		fprintf(stderr, "disabling 3D acceleration\n");
+#if R200_MERGED
 		FALLBACK(&r300->radeon, RADEON_FALLBACK_DISABLE, 1);
+#endif
 	}
 	if (tcl_mode == DRI_CONF_TCL_SW ||
 	    !(r300->radeon.radeonScreen->chipset & RADEON_CHIPSET_TCL)) {

@@ -28,6 +28,8 @@
  * \author Michal Krol
  */
 
+/* Set this to 1 when we are ready to use 3dlabs' front-end */
+#define USE_3DLABS_FRONTEND 0
 
 #include "glheader.h"
 #include "shaderobjects.h"
@@ -35,8 +37,13 @@
 #include "context.h"
 #include "macros.h"
 #include "hash.h"
+
+#if USE_3DLABS_FRONTEND
 #include "slang_mesa.h"
 #include "Public/ShaderLang.h"
+#else
+#include "slang_compile.h"
+#endif
 
 struct gl2_unknown_obj
 {
@@ -399,7 +406,9 @@ _container_constructor (struct gl2_container_impl *impl)
 struct gl2_3dlabs_shhandle_obj
 {
 	struct gl2_unkinner_obj _unknown;
+#if USE_3DLABS_FRONTEND
 	ShHandle handle;
+#endif
 };
 
 struct gl2_3dlabs_shhandle_impl
@@ -411,18 +420,22 @@ struct gl2_3dlabs_shhandle_impl
 static void
 _3dlabs_shhandle_destructor (struct gl2_unknown_intf **intf)
 {
+#if USE_3DLABS_FRONTEND
 	struct gl2_3dlabs_shhandle_impl *impl = (struct gl2_3dlabs_shhandle_impl *) intf;
-
 	ShDestruct (impl->_obj.handle);
+#endif
 	_unkinner_destructor (intf);
 }
 
 static GLvoid *
 _3dlabs_shhandle_GetShHandle (struct gl2_3dlabs_shhandle_intf **intf)
 {
+#if USE_3DLABS_FRONTEND
 	struct gl2_3dlabs_shhandle_impl *impl = (struct gl2_3dlabs_shhandle_impl *) intf;
-
 	return impl->_obj.handle;
+#else
+	return NULL;
+#endif
 }
 
 static struct gl2_3dlabs_shhandle_intf _3dlabs_shhandle_vftbl = {
@@ -439,7 +452,9 @@ _3dlabs_shhandle_constructor (struct gl2_3dlabs_shhandle_impl *impl, struct gl2_
 {
 	_unkinner_constructor ((struct gl2_unkinner_impl *) impl, outer);
 	impl->_vftbl = &_3dlabs_shhandle_vftbl;
+#if USE_3DLABS_FRONTEND
 	impl->_obj.handle = NULL;
+#endif
 }
 
 struct gl2_shader_obj
@@ -472,18 +487,22 @@ _shader_destructor (struct gl2_unknown_intf **intf)
 static struct gl2_unknown_intf **
 _shader_QueryInterface (struct gl2_unknown_intf **intf, enum gl2_uiid uiid)
 {
+#if USE_3DLABS_FRONTEND
 	struct gl2_shader_impl *impl = (struct gl2_shader_impl *) intf;
+#endif
 
 	if (uiid == UIID_SHADER)
 	{
 		(**intf).AddRef (intf);
 		return intf;
 	}
+#if USE_3DLABS_FRONTEND
 	if (uiid == UIID_3DLABS_SHHANDLE)
 	{
 		(**intf).AddRef (intf);
 		return (struct gl2_unknown_intf **) &impl->_obj._3dlabs_shhandle._vftbl;
 	}
+#endif
 	return _generic_QueryInterface (intf, uiid);
 }
 
@@ -525,13 +544,20 @@ static GLvoid
 _shader_Compile (struct gl2_shader_intf **intf)
 {
 	struct gl2_shader_impl *impl = (struct gl2_shader_impl *) intf;
+#if USE_3DLABS_FRONTEND
 	char **strings;
 	TBuiltInResource res;
+#else
+	slang_translation_unit unit;
+	slang_unit_type type;
+	slang_info_log info_log;
+#endif
 
 	impl->_obj.compile_status = GL_FALSE;
 	_mesa_free ((void *) impl->_obj._generic.info_log);
 	impl->_obj._generic.info_log = NULL;
 
+#if USE_3DLABS_FRONTEND
 	/* 3dlabs compiler expects us to feed it with null-terminated string array,
 	we've got only one big string with offsets, so we must split it; but when
 	there's only one string to deal with, we pass its address directly */
@@ -584,7 +610,6 @@ _shader_Compile (struct gl2_shader_intf **intf)
 	if (ShCompile (impl->_obj._3dlabs_shhandle._obj.handle, strings, impl->_obj.offset_count,
 			EShOptFull, &res, 0))
 		impl->_obj.compile_status = GL_TRUE;
-
 	if (impl->_obj.offset_count > 1)
 	{
 		GLsizei i;
@@ -596,6 +621,22 @@ _shader_Compile (struct gl2_shader_intf **intf)
 
 	impl->_obj._generic.info_log = _mesa_strdup (ShGetInfoLog (
 		impl->_obj._3dlabs_shhandle._obj.handle));
+#else
+	if (impl->_vftbl->GetSubType (intf) == GL_FRAGMENT_SHADER)
+		type = slang_unit_fragment_shader;
+	else
+		type = slang_unit_vertex_shader;
+	slang_info_log_construct (&info_log);
+	if (_slang_compile (impl->_obj.source, &unit, type, &info_log))
+	{
+		impl->_obj.compile_status = GL_TRUE;
+	}
+	else
+	{
+		impl->_obj._generic.info_log = _mesa_strdup (info_log.text);
+	}
+	slang_info_log_destruct (&info_log);
+#endif
 }
 
 static struct gl2_shader_intf _shader_vftbl = {
@@ -637,8 +678,10 @@ struct gl2_program_obj
 	struct gl2_container_obj _container;
 	GLboolean link_status;
 	GLboolean validate_status;
+#if USE_3DLABS_FRONTEND
 	ShHandle linker;
 	ShHandle uniforms;
+#endif
 };
 
 struct gl2_program_impl
@@ -650,10 +693,12 @@ struct gl2_program_impl
 static void
 _program_destructor (struct gl2_unknown_intf **intf)
 {
+#if USE_3DLABS_FRONTEND
 	struct gl2_program_impl *impl = (struct gl2_program_impl *) intf;
 
 	ShDestruct (impl->_obj.linker);
 	ShDestruct (impl->_obj.uniforms);
+#endif
 	_container_destructor (intf);
 }
 
@@ -711,13 +756,16 @@ static GLvoid
 _program_Link (struct gl2_program_intf **intf)
 {
 	struct gl2_program_impl *impl = (struct gl2_program_impl *) intf;
+#if USE_3DLABS_FRONTEND
 	ShHandle *handles;
 	GLuint i;
+#endif
 
 	impl->_obj.link_status = GL_FALSE;
 	_mesa_free ((void *) impl->_obj._container._generic.info_log);
 	impl->_obj._container._generic.info_log = NULL;
 
+#if USE_3DLABS_FRONTEND
 	handles = (ShHandle *) _mesa_malloc (impl->_obj._container.attached_count * sizeof (ShHandle));
 	if (handles == NULL)
 		return;
@@ -746,6 +794,7 @@ _program_Link (struct gl2_program_intf **intf)
 		impl->_obj.link_status = GL_TRUE;
 
 	impl->_obj._container._generic.info_log = _mesa_strdup (ShGetInfoLog (impl->_obj.linker));
+#endif
 }
 
 static GLvoid
@@ -793,8 +842,10 @@ _program_constructor (struct gl2_program_impl *impl)
 	impl->_obj._container._generic._unknown._destructor = _program_destructor;
 	impl->_obj.link_status = GL_FALSE;
 	impl->_obj.validate_status = GL_FALSE;
+#if USE_3DLABS_FRONTEND
 	impl->_obj.linker = ShConstructLinker (EShExVertexFragment, 0);
 	impl->_obj.uniforms = ShConstructUniformMap ();
+#endif
 }
 
 struct gl2_fragment_shader_obj
@@ -864,7 +915,9 @@ _fragment_shader_constructor (struct gl2_fragment_shader_impl *impl)
 	_shader_constructor ((struct gl2_shader_impl *) impl);
 	impl->_vftbl = &_fragment_shader_vftbl;
 	impl->_obj._shader._generic._unknown._destructor = _fragment_shader_destructor;
+#if USE_3DLABS_FRONTEND
 	impl->_obj._shader._3dlabs_shhandle._obj.handle = ShConstructCompiler (EShLangFragment, 0);
+#endif
 }
 
 struct gl2_vertex_shader_obj
@@ -934,7 +987,9 @@ _vertex_shader_constructor (struct gl2_vertex_shader_impl *impl)
 	_shader_constructor ((struct gl2_shader_impl *) impl);
 	impl->_vftbl = &_vertex_shader_vftbl;
 	impl->_obj._shader._generic._unknown._destructor = _vertex_shader_destructor;
+#if USE_3DLABS_FRONTEND
 	impl->_obj._shader._3dlabs_shhandle._obj.handle = ShConstructCompiler (EShLangVertex, 0);
+#endif
 }
 
 GLhandleARB
@@ -989,7 +1044,9 @@ _mesa_3dlabs_create_program_object (void)
 void
 _mesa_init_shaderobjects_3dlabs (GLcontext *ctx)
 {
+#if USE_3DLABS_FRONTEND
 	_glslang_3dlabs_InitProcess ();
 	_glslang_3dlabs_ShInitialize ();
+#endif
 }
 

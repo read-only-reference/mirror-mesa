@@ -25,10 +25,6 @@
 # Authors:
 #    Ian Romanick <idr@us.ibm.com>
 
-from xml.sax import saxutils
-from xml.sax import make_parser
-from xml.sax.handler import feature_namespaces
-
 import gl_XML
 import license
 import sys, getopt, string
@@ -230,8 +226,9 @@ class glXEnum(gl_XML.glEnum):
 		gl_XML.glEnum.__init__(self, context, name, attrs)
 
 
-	def startElement(self, name, attrs):
-		if name == "size":
+	def startElementNS(self, name, qname, attrs):
+		[uri, true_name] = name
+		if true_name == "size":
 			[temp_n, c, mode] = self.process_attributes(attrs)
 
 			if temp_n == "Get":
@@ -247,7 +244,7 @@ class glXEnum(gl_XML.glEnum):
 
 				self.context.glx_enum_functions[ n ].append( c, self.value, self.name )
 		else:
-			gl_XML.glEnum.startElement(self, context, name, attrs)
+			gl_XML.glEnum.startElementNS(self, name, qname, attrs)
 		return
 
 
@@ -311,7 +308,7 @@ class glXFunction(gl_XML.glFunction):
 	can_be_large = 0
 
 	def __init__(self, context, name, attrs):
-		self.vectorequiv = attrs.get('vectorequiv', None)
+		self.vectorequiv = attrs.get((None, 'vectorequiv'), None)
 		self.counter = None
 		self.output = None
 		self.can_be_large = 0
@@ -331,19 +328,20 @@ class glXFunction(gl_XML.glFunction):
 		return glXParameterIterator(self.fn_parameters, skip_output, max_order)
 
 		
-	def startElement(self, name, attrs):
+	def startElementNS(self, name, qname, attrs):
 		"""Process elements within a function that are specific to GLX."""
 
-		if name == "glx":
-			self.glx_rop = int(attrs.get('rop', "0"))
-			self.glx_sop = int(attrs.get('sop', "0"))
-			self.glx_vendorpriv = int(attrs.get('vendorpriv', "0"))
-			self.img_reset = attrs.get('img_reset', None)
+		[uri, true_name] = name
+		if true_name == "glx":
+			self.glx_rop = int(attrs.get((None, 'rop'), "0"))
+			self.glx_sop = int(attrs.get((None, 'sop'), "0"))
+			self.glx_vendorpriv = int(attrs.get((None, 'vendorpriv'), "0"))
+			self.img_reset = attrs.get((None, 'img_reset'), None)
 
 			# The 'handcode' attribute can be one of 'true',
 			# 'false', 'client', or 'server'.
 
-			handcode = attrs.get('handcode', "false")
+			handcode = attrs.get((None, 'handcode'), "false")
 			if handcode == "false":
 				self.server_handcode = 0
 				self.client_handcode = 0
@@ -359,37 +357,18 @@ class glXFunction(gl_XML.glFunction):
 			else:
 				raise RuntimeError('Invalid handcode mode "%s" in function "%s".' % (handcode, self.name))
 
-
-			if attrs.get('ignore', "false") == "true":
-				self.ignore = 1
-			else:
-				self.ignore = 0
-
-			if attrs.get('large', "false") == "true":
-				self.can_be_large = 1
-			else:
-				self.can_be_large = 0
-
-			if attrs.get('doubles_in_order', "false") == "true":
-				self.glx_doubles_in_order = 1
-			else:
-				self.glx_doubles_in_order = 0
-
-			if attrs.get('always_array', "false") == "true":
-				self.reply_always_array = 1
-			else:
-				self.reply_always_array = 0
-
-			if attrs.get('dimensions_in_reply', "false") == "true":
-				self.dimensions_in_reply = 1
-			else:
-				self.dimensions_in_reply = 0
+			self.ignore               = gl_XML.is_attr_true( attrs, 'ignore' )
+			self.can_be_large         = gl_XML.is_attr_true( attrs, 'large' )
+			self.glx_doubles_in_order = gl_XML.is_attr_true( attrs, 'doubles_in_order' )
+			self.reply_always_array   = gl_XML.is_attr_true( attrs, 'always_array' )
+			self.dimensions_in_reply  = gl_XML.is_attr_true( attrs, 'dimensions_in_reply' )
 		else:
-			gl_XML.glFunction.startElement(self, name, attrs)
+			gl_XML.glFunction.startElementNS(self, name, qname, attrs)
 
 
-	def endElement(self, name):
-		if name == "function":
+	def endElementNS(self, name, qname):
+		[uri, true_name] = name
+		if true_name == "function":
 			# Mark any function that does not have GLX protocol
 			# defined as "ignore".  This prevents bad things from
 			# happening when people add new functions to the GL
@@ -407,7 +386,7 @@ class glXFunction(gl_XML.glFunction):
 
 				self.ignore = 1
 
-		return gl_XML.glFunction.endElement(self, name)
+		return gl_XML.glFunction.endElementNS(self, name, qname)
 
 
 	def append(self, tag_name, p):
@@ -684,8 +663,9 @@ class GlxProto(gl_XML.FilterGLAPISpecBase):
 		self.glx_enum_functions = {}
 
 
-	def endElement(self, name):
-		if name == 'OpenGLAPI':
+	def endElementNS(self, name, qname):
+		[uri, true_name] = name
+		if true_name == 'OpenGLAPI':
 			# Once all the parsing is done, we have to go back and
 			# fix-up some cross references between different
 			# functions.
@@ -700,7 +680,7 @@ class GlxProto(gl_XML.FilterGLAPISpecBase):
 					else:
 						raise RuntimeError("Could not find the vector equiv. function %s for %s!" % (f.name, f.vectorequiv))
 		else:
-			gl_XML.FilterGLAPISpecBase.endElement(self, name)
+			gl_XML.FilterGLAPISpecBase.endElementNS(self, name, qname)
 		return
 
 

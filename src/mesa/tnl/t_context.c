@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.1
+ * Version:  6.3
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -124,7 +124,7 @@ _tnl_CreateContext( GLcontext *ctx )
    tnl->Driver.Render.PrimTabElts = _tnl_render_tab_elts;
    tnl->Driver.Render.PrimTabVerts = _tnl_render_tab_verts;
    tnl->Driver.NotifyMaterialChange = _mesa_validate_all_lighting_tables;
-   
+
    return GL_TRUE;
 }
 
@@ -156,16 +156,9 @@ _tnl_InvalidateState( GLcontext *ctx, GLuint new_state )
          || !tnl->AllowPixelFog;
    }
 
-   if (new_state & _NEW_ARRAY) {
-      tnl->pipeline.run_input_changes |= ctx->Array.NewState; /* overkill */
-   }
-
    _ae_invalidate_state(ctx, new_state);
 
-   tnl->pipeline.run_state_changes |= new_state;
-   tnl->pipeline.build_state_changes |= (new_state &
-					 tnl->pipeline.build_state_trigger);
-
+   tnl->pipeline.new_state |= new_state;
    tnl->vtx.eval.new_state |= new_state;
 
    /* Calculate tnl->render_inputs:
@@ -182,7 +175,9 @@ _tnl_InvalidateState( GLcontext *ctx, GLuint new_state )
       tnl->render_inputs |= (_TNL_BIT_POS|_TNL_BIT_INDEX);
    }
     
-   if (ctx->Fog.Enabled)
+   if (ctx->Fog.Enabled ||
+       (ctx->FragmentProgram.Enabled &&
+        ctx->FragmentProgram.Current->FogOption != GL_NONE))
       tnl->render_inputs |= _TNL_BIT_FOG;
 
    if (ctx->Polygon.FrontMode != GL_FILL || 
@@ -217,7 +212,6 @@ _tnl_wakeup_exec( GLcontext *ctx )
    /* Assume we haven't been getting state updates either:
     */
    _tnl_InvalidateState( ctx, ~0 );
-   tnl->pipeline.run_input_changes = ~0;
 
    if (ctx->Light.ColorMaterialEnabled) {
       _mesa_update_color_material( ctx, 
