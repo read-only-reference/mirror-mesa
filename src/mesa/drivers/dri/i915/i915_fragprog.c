@@ -245,7 +245,7 @@ do {									\
  */
 static void upload_program( struct i915_fragment_program *p )
 {
-   const struct fragment_program *program = p->ctx->FragmentProgram.Current;
+   const struct fragment_program *program = p->ctx->FragmentProgram._Current;
    const struct fp_instruction *inst = program->Instructions;
 
 /*    _mesa_debug_fp_inst(program->Base.NumInstructions, inst); */
@@ -788,7 +788,7 @@ static void check_wpos( struct i915_fragment_program *p )
    GLuint inputs = p->FragProg.InputsRead;
    GLint i;
 
-   p->wpos_tex = 0;
+   p->wpos_tex = -1;
 
    for (i = 0; i < p->ctx->Const.MaxTextureCoordUnits; i++) {
       if (inputs & FRAG_BIT_TEX(i)) 
@@ -886,10 +886,10 @@ static struct program *i915NewProgram( GLcontext *ctx,
 	 return NULL;
    }
 
-   case GL_FRAGMENT_PROGRAM_NV:
    default:
-      _mesa_problem(ctx, "bad target in _mesa_new_program");
-      return NULL;
+      /* Just fallback:
+       */
+      return _mesa_new_program( ctx, target, id );
    }
 }
 
@@ -949,7 +949,7 @@ void i915ValidateFragmentProgram( i915ContextPtr i915 )
    struct vertex_buffer *VB = &tnl->vb;
 
    struct i915_fragment_program *p = 
-      (struct i915_fragment_program *)ctx->FragmentProgram.Current;
+      (struct i915_fragment_program *)ctx->FragmentProgram._Current;
 
    GLuint inputsRead = p->FragProg.InputsRead;
    GLuint s4 = i915->state.Ctx[I915_CTXREG_LIS4] & ~S4_VFMT_MASK;
@@ -981,15 +981,27 @@ void i915ValidateFragmentProgram( i915ContextPtr i915 )
       EMIT_ATTR( _TNL_ATTRIB_COLOR0, EMIT_4UB_4F_BGRA, S4_VFMT_COLOR, 4 );
    }
    
-   if (inputsRead & FRAG_BIT_COL1) {
-      intel->specoffset = offset / 4;
-      EMIT_ATTR( _TNL_ATTRIB_COLOR1, EMIT_3UB_3F_BGR, S4_VFMT_SPEC_FOG, 3 );
-      EMIT_PAD( 1 );
+   if ((inputsRead & (FRAG_BIT_COL1|FRAG_BIT_FOGC)) || 
+       i915->vertex_fog != I915_FOG_NONE) {
+
+      if (inputsRead & FRAG_BIT_COL1) {
+	 intel->specoffset = offset / 4;
+	 EMIT_ATTR( _TNL_ATTRIB_COLOR1, EMIT_3UB_3F_BGR, S4_VFMT_SPEC_FOG, 3 );
+      }
+      else
+	 EMIT_PAD(3);
+
+      if ((inputsRead & FRAG_BIT_FOGC) || i915->vertex_fog != I915_FOG_NONE) 
+	 EMIT_ATTR( _TNL_ATTRIB_FOG, EMIT_1UB_1F, S4_VFMT_SPEC_FOG, 1 );
+      else
+	 EMIT_PAD( 1 );
    }
 
-   if (inputsRead & FRAG_BIT_FOGC) {
+#if 0
+   if ((inputsRead & FRAG_BIT_FOGC) || i915->vertex_fog != I915_FOG_NONE) {
       EMIT_ATTR( _TNL_ATTRIB_FOG, EMIT_1F, S4_VFMT_FOG_PARAM, 4 );
    }
+#endif
 
    for (i = 0; i < p->ctx->Const.MaxTextureCoordUnits; i++) {
       if (inputsRead & FRAG_BIT_TEX(i)) {

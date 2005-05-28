@@ -196,7 +196,7 @@ void r300EmitState(r300ContextPtr r300)
 
 	if (r300->cmdbuf.count_used && !r300->hw.is_dirty && !r300->hw.all_dirty)
 		return;
-	
+
 	/* To avoid going across the entire set of states multiple times, just check
 	 * for enough space for the case of emitting all state, and inline the
 	 * r300AllocCmdBuf code here without all the checks.
@@ -286,11 +286,13 @@ CHECK( vpu, vpucount(atom->cmd) ? (1 + vpucount(atom->cmd)*4) : 0 )
 void r300InitCmdBuf(r300ContextPtr r300)
 {
 	int size, i, mtu;
-	
+
 	r300->hw.max_state_size = 0;
 
 	mtu = r300->radeon.glCtx->Const.MaxTextureUnits;
-	fprintf(stderr, "Using %d maximum texture units..\n", mtu);
+	if (RADEON_DEBUG & DEBUG_TEXTURE) {
+		fprintf(stderr, "Using %d maximum texture units..\n", mtu);
+	}
 
 	/* Initialize state atoms */
 	ALLOC_STATE( vpt, always, R300_VPT_CMDSIZE, "vpt", 0 );
@@ -337,10 +339,6 @@ void r300InitCmdBuf(r300ContextPtr r300)
 		r300->hw.unk4230.cmd[0] = cmducs(0x4230, 3);
 	ALLOC_STATE( lcntl, always, 2, "lcntl", 0 );
 		r300->hw.lcntl.cmd[0] = cmducs(R300_RE_LINE_CNT, 1);
-#ifdef EXP_C
-	ALLOC_STATE( lsf, always, 2, "lsf", 0 );
-		r300->hw.lsf.cmd[0] = cmducs(R300_RE_LINE_STIPPLE_FACTOR, 1);
-#endif
 	ALLOC_STATE( unk4260, always, 4, "unk4260", 0 );
 		r300->hw.unk4260.cmd[0] = cmducs(0x4260, 3);
 	ALLOC_STATE( unk4274, always, 5, "unk4274", 0 );
@@ -480,9 +478,6 @@ void r300InitCmdBuf(r300ContextPtr r300)
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.ps);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4230);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.lcntl);
-#ifdef EXP_C
-	insert_at_tail(&r300->hw.atomlist, &r300->hw.lsf);
-#endif
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4260);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4274);
 	insert_at_tail(&r300->hw.atomlist, &r300->hw.unk4288);
@@ -541,11 +536,13 @@ void r300InitCmdBuf(r300ContextPtr r300)
 
 	/* Initialize command buffer */
 	size = 256 * driQueryOptioni(&r300->radeon.optionCache, "command_buffer_size");
-	if (size < 2*r300->hw.max_state_size){
+	if (size < 2*r300->hw.max_state_size) {
 		size = 2*r300->hw.max_state_size+65535;
-		}
+	}
+	if (size > 64*256)
+		size = 64*256;
 
-	if (1 || RADEON_DEBUG & DEBUG_IOCTL){
+	if (RADEON_DEBUG & (DEBUG_IOCTL|DEBUG_DMA)) {
 		fprintf(stderr, "sizeof(drm_r300_cmd_header_t)=%d\n",
 			sizeof(drm_r300_cmd_header_t));
 		fprintf(stderr, "sizeof(drm_radeon_cmd_buffer_t)=%d\n",
@@ -553,7 +550,7 @@ void r300InitCmdBuf(r300ContextPtr r300)
 		fprintf(stderr,
 			"Allocating %d bytes command buffer (max state is %d bytes)\n",
 			size*4, r300->hw.max_state_size*4);
-		}
+	}
 
 	r300->cmdbuf.size = size;
 	r300->cmdbuf.cmd_buf = (uint32_t*)CALLOC(size*4);

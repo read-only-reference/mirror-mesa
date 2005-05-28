@@ -61,6 +61,7 @@
 #if FEATURE_EXT_framebuffer_object
 #include "fbobject.h"
 #endif
+#include "framebuffer.h"
 #include "hint.h"
 #include "histogram.h"
 #include "imports.h"
@@ -89,6 +90,7 @@
 #include "nvfragprog.h"
 #include "nvprogram.h"
 #include "program.h"
+#include "texenvprogram.h"
 #endif
 #if FEATURE_ARB_shader_objects
 #include "shaderobjects.h"
@@ -933,6 +935,18 @@ update_program(GLcontext *ctx)
       && ctx->FragmentProgram.Current->Instructions;
    ctx->ATIFragmentShader._Enabled = ctx->ATIFragmentShader.Enabled
       && ctx->ATIFragmentShader.Current->Instructions;
+      
+   ctx->FragmentProgram._Current = ctx->FragmentProgram.Current;
+   ctx->FragmentProgram._Active = ctx->FragmentProgram._Enabled;
+
+   if (ctx->_MaintainTexEnvProgram && !ctx->FragmentProgram._Enabled) {
+      if (!ctx->_TexEnvProgram)
+	 ctx->_TexEnvProgram = (struct fragment_program *)
+	    ctx->Driver.NewProgram(ctx, GL_FRAGMENT_PROGRAM_ARB, 0);
+
+      ctx->FragmentProgram._Current = ctx->_TexEnvProgram;
+      ctx->FragmentProgram._Active = GL_TRUE;
+   }
 }
 
 
@@ -966,6 +980,9 @@ _mesa_update_state( GLcontext *ctx )
    if (new_state & (_NEW_PROGRAM|_NEW_TEXTURE|_NEW_TEXTURE_MATRIX))
       _mesa_update_texture( ctx, new_state );
 
+   if (new_state & (_NEW_BUFFERS | _NEW_COLOR | _NEW_PIXEL))
+      _mesa_update_framebuffer(ctx);
+
    if (new_state & (_NEW_SCISSOR|_NEW_BUFFERS))
       _mesa_update_draw_buffer_bounds( ctx );
 
@@ -983,6 +1000,11 @@ _mesa_update_state( GLcontext *ctx )
 
    if (new_state & (_NEW_ARRAY | _NEW_PROGRAM))
       update_arrays( ctx );
+
+   if (ctx->_MaintainTexEnvProgram) {
+      if (new_state & (_NEW_TEXTURE | _DD_NEW_SEPARATE_SPECULAR | _NEW_FOG))
+	 _mesa_UpdateTexEnvProgram(ctx);
+   }
 
    /* ctx->_NeedEyeCoords is now up to date.
     *

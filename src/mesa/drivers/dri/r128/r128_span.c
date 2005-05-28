@@ -93,11 +93,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define Y_FLIP( _y )		(height - _y - 1)
 
 
-#define HW_LOCK()							\
-   r128ContextPtr rmesa = R128_CONTEXT(ctx);				\
-   FLUSH_BATCH( rmesa );						\
-   LOCK_HARDWARE( rmesa );						\
-   r128WaitForIdleLocked( rmesa );
+#define HW_LOCK()
 
 #define HW_CLIPLOOP()							\
    do {									\
@@ -114,8 +110,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
       }									\
    } while (0)
 
-#define HW_UNLOCK()							\
-   UNLOCK_HARDWARE( rmesa )
+#define HW_UNLOCK()
 
 
 
@@ -153,8 +148,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /* 16-bit depth buffer functions
  */
-#define READ_DEPTH(d, _x, _y)                                           \
-    d = *(GLushort *)(buf + (_x)*2 + (_y)*pitch)
 
 #define WRITE_DEPTH_SPAN()						\
    r128WriteDepthSpanLocked( rmesa, n,					\
@@ -168,8 +161,6 @@ do {									\
    GLint oy[MAX_WIDTH];							\
    for ( i = 0 ; i < n ; i++ ) {					\
       ox[i] = x[i] + dPriv->x;						\
-   }									\
-   for ( i = 0 ; i < n ; i++ ) {					\
       oy[i] = Y_FLIP( y[i] ) + dPriv->y;				\
    }									\
    r128WriteDepthPixelsLocked( rmesa, n, ox, oy, depth, mask );		\
@@ -198,8 +189,8 @@ do {									\
    GLint i, remaining = n;						\
 									\
    while ( remaining > 0 ) {						\
-      GLint ox[MAX_WIDTH];						\
-      GLint oy[MAX_WIDTH];						\
+      GLint ox[128];							\
+      GLint oy[128];							\
       GLint count;							\
 									\
       if ( remaining <= 128 ) {						\
@@ -209,8 +200,6 @@ do {									\
       }									\
       for ( i = 0 ; i < count ; i++ ) {					\
 	 ox[i] = x[i] + dPriv->x;					\
-      }									\
-      for ( i = 0 ; i < count ; i++ ) {					\
 	 oy[i] = Y_FLIP( y[i] ) + dPriv->y;				\
       }									\
 									\
@@ -245,8 +234,6 @@ do {									\
    GLint oy[MAX_WIDTH];							\
    for ( i = 0 ; i < n ; i++ ) {					\
       ox[i] = x[i] + dPriv->x;						\
-   }									\
-   for ( i = 0 ; i < n ; i++ ) {					\
       oy[i] = Y_FLIP( y[i] ) + dPriv->y;				\
    }									\
    r128WriteDepthPixelsLocked( rmesa, n, ox, oy, depth, mask );		\
@@ -275,8 +262,8 @@ do {									\
    GLint i, remaining = n;						\
 									\
    while ( remaining > 0 ) {						\
-      GLint ox[MAX_WIDTH];						\
-      GLint oy[MAX_WIDTH];						\
+      GLint ox[128];							\
+      GLint oy[128];							\
       GLint count;							\
 									\
       if ( remaining <= 128 ) {						\
@@ -286,8 +273,6 @@ do {									\
       }									\
       for ( i = 0 ; i < count ; i++ ) {					\
 	 ox[i] = x[i] + dPriv->x;					\
-      }									\
-      for ( i = 0 ; i < count ; i++ ) {					\
 	 oy[i] = Y_FLIP( y[i] ) + dPriv->y;				\
       }									\
 									\
@@ -316,13 +301,6 @@ do {									\
 /* FIXME: Add support for hardware stencil buffers.
  */
 
-
-/* 32 bit depthbuffer functions */
-#define WRITE_DEPTH(_x, _y, d)                                                \
-    *(GLuint *)(buf + _x*4 + _y*pitch) = d
-
-
-
 /*
  * This function is called to specify which buffer to read and write
  * for software rasterization (swrast) fallbacks.  This doesn't necessarily
@@ -335,7 +313,7 @@ static void r128DDSetBuffer( GLcontext *ctx,
    r128ContextPtr rmesa = R128_CONTEXT(ctx);
 
    switch ( bufferBit ) {
-   case DD_FRONT_LEFT_BIT:
+   case BUFFER_BIT_FRONT_LEFT:
       if ( rmesa->sarea->pfCurrentPage == 1 ) {
          rmesa->drawOffset = rmesa->readOffset = rmesa->r128Screen->backOffset;
          rmesa->drawPitch  = rmesa->readPitch  = rmesa->r128Screen->backPitch;
@@ -344,7 +322,7 @@ static void r128DDSetBuffer( GLcontext *ctx,
          rmesa->drawPitch  = rmesa->readPitch  = rmesa->r128Screen->frontPitch;
       }
       break;
-   case DD_BACK_LEFT_BIT:
+   case BUFFER_BIT_BACK_LEFT:
       if ( rmesa->sarea->pfCurrentPage == 1 ) {
          rmesa->drawOffset = rmesa->readOffset = rmesa->r128Screen->frontOffset;
          rmesa->drawPitch  = rmesa->readPitch  = rmesa->r128Screen->frontPitch;
@@ -358,6 +336,20 @@ static void r128DDSetBuffer( GLcontext *ctx,
    }
 }
 
+void r128SpanRenderStart( GLcontext *ctx )
+{
+   r128ContextPtr rmesa = R128_CONTEXT(ctx);
+   FLUSH_BATCH(rmesa);
+   LOCK_HARDWARE(rmesa);
+   r128WaitForIdleLocked( rmesa );
+}
+
+void r128SpanRenderFinish( GLcontext *ctx )
+{
+   r128ContextPtr rmesa = R128_CONTEXT(ctx);
+   _swrast_flush( ctx );
+   UNLOCK_HARDWARE( rmesa );
+}
 
 void r128DDInitSpanFuncs( GLcontext *ctx )
 {
@@ -368,11 +360,15 @@ void r128DDInitSpanFuncs( GLcontext *ctx )
 
    switch ( rmesa->r128Screen->cpp ) {
    case 2:
+#if 0
       r128InitPointers_RGB565( swdd );
+#endif
       break;
 
    case 4:
+#if 0
       r128InitPointers_ARGB8888( swdd );
+#endif
       break;
 
    default:
@@ -381,17 +377,21 @@ void r128DDInitSpanFuncs( GLcontext *ctx )
 
    switch ( rmesa->glCtx->Visual.depthBits ) {
    case 16:
+#if 0
       swdd->ReadDepthSpan	= r128ReadDepthSpan_16;
       swdd->WriteDepthSpan	= r128WriteDepthSpan_16;
       swdd->ReadDepthPixels	= r128ReadDepthPixels_16;
       swdd->WriteDepthPixels	= r128WriteDepthPixels_16;
+#endif
       break;
 
    case 24:
+#if 0
       swdd->ReadDepthSpan	= r128ReadDepthSpan_24_8;
       swdd->WriteDepthSpan	= r128WriteDepthSpan_24_8;
       swdd->ReadDepthPixels	= r128ReadDepthPixels_24_8;
       swdd->WriteDepthPixels	= r128WriteDepthPixels_24_8;
+#endif
       break;
 
    default:
@@ -405,4 +405,47 @@ void r128DDInitSpanFuncs( GLcontext *ctx )
    swdd->WriteMonoCIPixels	= NULL;
    swdd->ReadCI32Span		= NULL;
    swdd->ReadCI32Pixels		= NULL;
+   swdd->SpanRenderStart	= r128SpanRenderStart;
+   swdd->SpanRenderFinish	= r128SpanRenderFinish;
+}
+
+
+/**
+ * Plug in the Get/Put routines for the given driRenderbuffer.
+ */
+void
+r128SetSpanFunctions(driRenderbuffer *drb, const GLvisual *vis)
+{
+   if (drb->Base.InternalFormat == GL_RGBA) {
+      if (vis->redBits == 5 && vis->greenBits == 6 && vis->blueBits == 5) {
+         r128InitPointers_RGB565(&drb->Base);
+      }
+      else {
+         r128InitPointers_ARGB8888(&drb->Base);
+      }
+   }
+   else if (drb->Base.InternalFormat == GL_DEPTH_COMPONENT16) {
+      drb->Base.GetRow        = r128ReadDepthSpan_16;
+      drb->Base.GetValues     = r128ReadDepthPixels_16;
+      drb->Base.PutRow        = r128WriteDepthSpan_16;
+      drb->Base.PutMonoRow    = r128WriteMonoDepthSpan_16;
+      drb->Base.PutValues     = r128WriteDepthPixels_16;
+      drb->Base.PutMonoValues = NULL;
+   }
+   else if (drb->Base.InternalFormat == GL_DEPTH_COMPONENT24) {
+      drb->Base.GetRow        = r128ReadDepthSpan_24_8;
+      drb->Base.GetValues     = r128ReadDepthPixels_24_8;
+      drb->Base.PutRow        = r128WriteDepthSpan_24_8;
+      drb->Base.PutMonoRow    = r128WriteMonoDepthSpan_24_8;
+      drb->Base.PutValues     = r128WriteDepthPixels_24_8;
+      drb->Base.PutMonoValues = NULL;
+   }
+   else if (drb->Base.InternalFormat == GL_STENCIL_INDEX8_EXT) {
+      drb->Base.GetRow        = NULL;
+      drb->Base.GetValues     = NULL;
+      drb->Base.PutRow        = NULL;
+      drb->Base.PutMonoRow    = NULL;
+      drb->Base.PutValues     = NULL;
+      drb->Base.PutMonoValues = NULL;
+   }
 }

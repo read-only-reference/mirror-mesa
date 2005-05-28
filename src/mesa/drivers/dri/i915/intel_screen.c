@@ -27,7 +27,9 @@
 
 #include "glheader.h"
 #include "context.h"
+#include "framebuffer.h"
 #include "matrix.h"
+#include "renderbuffer.h"
 #include "simple_list.h"
 #include "utils.h"
 #include "xmlpool.h"
@@ -79,7 +81,7 @@ static GLboolean intelInitDriver(__DRIscreenPrivate *sPriv)
 
 
    /* Allocate the private area */
-   intelScreen = (intelScreenPrivate *)MALLOC(sizeof(intelScreenPrivate));
+   intelScreen = (intelScreenPrivate *)CALLOC(sizeof(intelScreenPrivate));
    if (!intelScreen) {
       fprintf(stderr,"\nERROR!  Allocating private area failed\n");
       return GL_FALSE;
@@ -233,24 +235,78 @@ static void intelDestroyScreen(__DRIscreenPrivate *sPriv)
    sPriv->private = NULL;
 }
 
+
 static GLboolean intelCreateBuffer( __DRIscreenPrivate *driScrnPriv,
 				    __DRIdrawablePrivate *driDrawPriv,
 				    const __GLcontextModes *mesaVis,
 				    GLboolean isPixmap )
 {
+   intelScreenPrivate *screen = (intelScreenPrivate *) driScrnPriv->private;
+
    if (isPixmap) {
       return GL_FALSE; /* not implemented */
    } else {
       GLboolean swStencil = (mesaVis->stencilBits > 0 && 
 			     mesaVis->depthBits != 24);
 
+#if 0
       driDrawPriv->driverPrivate = (void *) 
 	 _mesa_create_framebuffer(mesaVis,
 				  GL_FALSE,  /* software depth buffer? */
 				  swStencil,
 				  mesaVis->accumRedBits > 0,
 				  GL_FALSE /* s/w alpha planes */);
-      
+#else
+      struct gl_framebuffer *fb = _mesa_create_framebuffer(mesaVis);
+
+      {
+         driRenderbuffer *frontRb
+            = driNewRenderbuffer(GL_RGBA, screen->cpp,
+                                 screen->frontOffset, screen->frontPitch);
+         intelSetSpanFunctions(frontRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_FRONT_LEFT, &frontRb->Base);
+      }
+
+      if (mesaVis->doubleBufferMode) {
+         driRenderbuffer *backRb
+            = driNewRenderbuffer(GL_RGBA, screen->cpp,
+                                 screen->backOffset, screen->backPitch);
+         intelSetSpanFunctions(backRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &backRb->Base);
+      }
+
+      if (mesaVis->depthBits == 16) {
+         driRenderbuffer *depthRb
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT16, screen->cpp,
+                                 screen->depthOffset, screen->depthPitch);
+         intelSetSpanFunctions(depthRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+      }
+      else if (mesaVis->depthBits == 24) {
+         driRenderbuffer *depthRb
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT24, screen->cpp,
+                                 screen->depthOffset, screen->depthPitch);
+         intelSetSpanFunctions(depthRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+      }
+
+      if (mesaVis->stencilBits > 0 && !swStencil) {
+         driRenderbuffer *stencilRb
+            = driNewRenderbuffer(GL_STENCIL_INDEX8_EXT, screen->cpp,
+                                 screen->depthOffset, screen->depthPitch);
+         intelSetSpanFunctions(stencilRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_STENCIL, &stencilRb->Base);
+      }
+
+      _mesa_add_soft_renderbuffers(fb,
+                                   GL_FALSE, /* color */
+                                   GL_FALSE, /* depth */
+                                   swStencil,
+                                   mesaVis->accumRedBits > 0,
+                                   GL_FALSE, /* alpha */
+                                   GL_FALSE /* aux */);
+      driDrawPriv->driverPrivate = (void *) fb;
+#endif
       return (driDrawPriv->driverPrivate != NULL);
    }
 }
@@ -293,6 +349,7 @@ static GLboolean intelCreateContext( const __GLcontextModes *mesaVis,
 
    case PCI_CHIP_I915_G:
    case PCI_CHIP_I915_GM:
+   case PCI_CHIP_I945_G:
       return i915CreateContext( mesaVis, driContextPriv, 
 			       sharedContextPrivate );
  
@@ -349,28 +406,30 @@ intelFillInModes( unsigned pixel_bits, unsigned depth_bits,
    GLenum fb_format;
    GLenum fb_type;
 
-   /* GLX_SWAP_COPY_OML is only supported because the MGA driver doesn't
+   /* GLX_SWAP_COPY_OML is only supported because the Intel driver doesn't
     * support pageflipping at all.
     */
    static const GLenum back_buffer_modes[] = {
       GLX_NONE, GLX_SWAP_UNDEFINED_OML, GLX_SWAP_COPY_OML
    };
 
-   u_int8_t depth_bits_array[2];
-   u_int8_t stencil_bits_array[2];
+   u_int8_t depth_bits_array[3];
+   u_int8_t stencil_bits_array[3];
 
 
    depth_bits_array[0] = 0;
    depth_bits_array[1] = depth_bits;
+   depth_bits_array[2] = depth_bits;
 
    /* Just like with the accumulation buffer, always provide some modes
     * with a stencil buffer.  It will be a sw fallback, but some apps won't
     * care about that.
     */
    stencil_bits_array[0] = 0;
-   stencil_bits_array[1] = (stencil_bits == 0) ? 8 : stencil_bits;
+   stencil_bits_array[1] = 0;
+   stencil_bits_array[2] = (stencil_bits == 0) ? 8 : stencil_bits;
 
-   depth_buffer_factor = ((depth_bits != 0) || (stencil_bits != 0)) ? 2 : 1;
+   depth_buffer_factor = ((depth_bits != 0) || (stencil_bits != 0)) ? 3 : 1;
    back_buffer_factor  = (have_back_buffer) ? 3 : 1;
 
    num_modes = depth_buffer_factor * back_buffer_factor * 4;

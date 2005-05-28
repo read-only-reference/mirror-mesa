@@ -40,6 +40,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "radeon_ioctl.h"
 #include "radeon_state.h"
 
+#include "framebuffer.h"
+
 #if DEBUG_LOCKING
 char *prevLockFile = NULL;
 int prevLockLine = 0;
@@ -53,7 +55,7 @@ static void radeonUpdatePageFlipping(radeonContextPtr radeon)
 
 	radeon->doPageFlip = radeon->sarea->pfState;
 
-	use_back = (radeon->glCtx->Color._DrawDestMask[0] == DD_BACK_LEFT_BIT);
+	use_back = (radeon->glCtx->DrawBuffer->_ColorDrawBufferMask[0] == BUFFER_BIT_BACK_LEFT);
 	use_back ^= (radeon->sarea->pfCurrentPage == 1);
 
 	if (use_back) {
@@ -83,7 +85,7 @@ static void r200RegainedLock(r200ContextPtr r200)
 		r200->hw.ctx.cmd[CTX_RB3D_COLORPITCH] =
 			r200->radeon.state.color.drawPitch;
 
-		if (r200->radeon.glCtx->Color._DrawDestMask[0] == DD_BACK_LEFT_BIT)
+		if (r200->radeon.glCtx->DrawBuffer->_ColorDrawBufferMask[0] == BUFFER_BIT_BACK_LEFT)
 			radeonSetCliprects(&r200->radeon, GL_BACK_LEFT);
 		else
 			radeonSetCliprects(&r200->radeon, GL_FRONT_LEFT);
@@ -102,9 +104,13 @@ static void r300RegainedLock(radeonContextPtr radeon)
 	__DRIdrawablePrivate *dPriv = radeon->dri.drawable;
 
 	if (radeon->lastStamp != dPriv->lastStamp) {
+		_mesa_resize_framebuffer(radeon->glCtx,
+			(GLframebuffer*)dPriv->driverPrivate,
+			dPriv->w, dPriv->h);
+
 		radeonUpdatePageFlipping(radeon);
 
-		if (radeon->glCtx->Color._DrawDestMask[0] == DD_BACK_LEFT_BIT)
+		if (radeon->glCtx->DrawBuffer->_ColorDrawBufferMask[0] == BUFFER_BIT_BACK_LEFT)
 			radeonSetCliprects(radeon, GL_BACK_LEFT);
 		else
 			radeonSetCliprects(radeon, GL_FRONT_LEFT);

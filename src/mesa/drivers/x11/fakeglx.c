@@ -105,8 +105,7 @@ struct fake_glx_context {
 #define DONT_CARE -1
 
 
-#define MAX_VISUALS 100
-static XMesaVisual VisualTable[MAX_VISUALS];
+static XMesaVisual *VisualTable = NULL;
 static int NumVisuals = 0;
 
 
@@ -331,11 +330,6 @@ save_glx_visual( Display *dpy, XVisualInfo *vinfo,
 
    /* Create a new visual and add it to the list. */
 
-   if (NumVisuals >= MAX_VISUALS) {
-      _mesa_problem(NULL, "GLX Error: maximum number of visuals exceeded");
-      return NULL;
-   }
-
    xmvis = XMesaCreateVisual( dpy, vinfo, rgbFlag, alphaFlag, dbFlag,
                               stereoFlag, ximageFlag,
                               depth_size, stencil_size,
@@ -347,6 +341,10 @@ save_glx_visual( Display *dpy, XVisualInfo *vinfo,
        * if we need to search for it in find_glx_visual().
        */
       xmvis->vishandle = vinfo;
+      /* Allocate more space for additional visual */
+      VisualTable = _mesa_realloc( VisualTable, 
+                                   sizeof(XMesaVisual) * NumVisuals, 
+                                   sizeof(XMesaVisual) * NumVisuals + 1);
       /* add xmvis to the list */
       VisualTable[NumVisuals] = xmvis;
       NumVisuals++;
@@ -417,11 +415,8 @@ create_glx_visual( Display *dpy, XVisualInfo *visinfo )
                                  GL_TRUE,   /* double */
                                  GL_FALSE,  /* stereo */
                                  zBits,
-                                 8 * sizeof(GLstencil),
-                                 0 * sizeof(GLaccum), /* r */
-                                 0 * sizeof(GLaccum), /* g */
-                                 0 * sizeof(GLaccum), /* b */
-                                 0 * sizeof(GLaccum), /* a */
+                                 STENCIL_BITS,
+                                 0, 0, 0, 0, /* accum bits */
                                  0,         /* level */
                                  0          /* numAux */
                                );
@@ -436,11 +431,11 @@ create_glx_visual( Display *dpy, XVisualInfo *visinfo )
                                  GL_TRUE,   /* double */
                                  GL_FALSE,  /* stereo */
                                  zBits,
-                                 8 * sizeof(GLstencil),
-                                 8 * sizeof(GLaccum), /* r */
-                                 8 * sizeof(GLaccum), /* g */
-                                 8 * sizeof(GLaccum), /* b */
-                                 8 * sizeof(GLaccum), /* a */
+                                 STENCIL_BITS,
+                                 ACCUM_BITS, /* r */
+                                 ACCUM_BITS, /* g */
+                                 ACCUM_BITS, /* b */
+                                 ACCUM_BITS, /* a */
                                  0,         /* level */
                                  0          /* numAux */
                                );
@@ -1418,7 +1413,7 @@ Fake_glXCreateGLXPixmap( Display *dpy, XVisualInfo *visinfo, Pixmap pixmap )
    if (!b) {
       return 0;
    }
-   return b->frontbuffer;
+   return b->frontxrb->pixmap;
 }
 
 
@@ -1444,7 +1439,7 @@ Fake_glXCreateGLXPixmapMESA( Display *dpy, XVisualInfo *visinfo,
    if (!b) {
       return 0;
    }
-   return b->frontbuffer;
+   return b->frontxrb->pixmap;
 }
 
 
@@ -2096,7 +2091,7 @@ Fake_glXCreatePbuffer( Display *dpy, GLXFBConfig config,
    /* A GLXPbuffer handle must be an X Drawable because that's what
     * glXMakeCurrent takes.
     */
-   return (GLXPbuffer) xmbuf->frontbuffer;
+   return (GLXPbuffer) xmbuf->frontxrb->pixmap;
 }
 
 
@@ -2357,7 +2352,7 @@ Fake_glXCreateGLXPixmapWithConfigSGIX(Display *dpy, GLXFBConfigSGIX config, Pixm
 {
    XMesaVisual xmvis = (XMesaVisual) config;
    XMesaBuffer xmbuf = XMesaCreatePixmapBuffer(xmvis, pixmap, 0);
-   return xmbuf->frontbuffer; /* need to return an X ID */
+   return xmbuf->frontxrb->pixmap; /* need to return an X ID */
 }
 
 
@@ -2451,7 +2446,7 @@ Fake_glXCreateGLXPbufferSGIX(Display *dpy, GLXFBConfigSGIX config,
    /* A GLXPbuffer handle must be an X Drawable because that's what
     * glXMakeCurrent takes.
     */
-   return (GLXPbuffer) xmbuf->frontbuffer;
+   return (GLXPbuffer) xmbuf->frontxrb->pixmap;
 }
 
 

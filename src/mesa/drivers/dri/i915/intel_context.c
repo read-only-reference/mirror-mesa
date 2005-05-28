@@ -31,6 +31,7 @@
 #include "matrix.h"
 #include "simple_list.h"
 #include "extensions.h"
+#include "framebuffer.h"
 #include "imports.h"
 
 #include "swrast/swrast.h"
@@ -72,7 +73,7 @@ int prevLockLine;
  * Mesa's Driver Functions
  ***************************************/
 
-#define DRIVER_DATE                     "20041217"
+#define DRIVER_DATE                     "20050225"
 
 const GLubyte *intelGetString( GLcontext *ctx, GLenum name )
 {
@@ -98,6 +99,8 @@ const GLubyte *intelGetString( GLcontext *ctx, GLenum name )
 	 chipset = "Intel(R) 915G"; break;
       case PCI_CHIP_I915_GM:
 	 chipset = "Intel(R) 915GM"; break;
+      case PCI_CHIP_I945_G:
+	 chipset = "Intel(R) 945G"; break;
       default:
 	 chipset = "Unknown Intel Chipset"; break;
       }
@@ -235,7 +238,7 @@ void intelInitDriverFunctions( struct dd_function_table *functions )
    functions->Clear = intelClear;
    functions->Finish = intelFinish;
    functions->GetBufferSize = intelBufferSize;
-   functions->ResizeBuffers = _swrast_alloc_buffers;
+   functions->ResizeBuffers = _mesa_resize_framebuffer;
    functions->GetString = intelGetString;
    functions->UpdateState = intelInvalidateState;
    functions->CopyColorTable = _swrast_CopyColorTable;
@@ -493,16 +496,21 @@ void intelSetBackClipRects( intelContextPtr intel )
 
 void intelWindowMoved( intelContextPtr intel )
 {
-   switch (intel->ctx.Color._DrawDestMask[0]) {
-   case DD_FRONT_LEFT_BIT:
+   if (!intel->ctx.DrawBuffer) {
       intelSetFrontClipRects( intel );
-      break;
-   case DD_BACK_LEFT_BIT:
-      intelSetBackClipRects( intel );
-      break;
-   default:
-      /* glDrawBuffer(GL_NONE or GL_FRONT_AND_BACK): software fallback */
-      intelSetFrontClipRects( intel );
+   }
+   else {
+      switch (intel->ctx.DrawBuffer->_ColorDrawBufferMask[0]) {
+      case BUFFER_BIT_FRONT_LEFT:
+	 intelSetFrontClipRects( intel );
+	 break;
+      case BUFFER_BIT_BACK_LEFT:
+	 intelSetBackClipRects( intel );
+	 break;
+      default:
+	 /* glDrawBuffer(GL_NONE or GL_FRONT_AND_BACK): software fallback */
+	 intelSetFrontClipRects( intel );
+      }
    }
 }
 
@@ -525,11 +533,13 @@ GLboolean intelMakeCurrent(__DRIcontextPrivate *driContextPriv,
 	 intelWindowMoved( intel );
       }
 
-      _mesa_make_current2(&intel->ctx,
-			  (GLframebuffer *) driDrawPriv->driverPrivate,
-			  (GLframebuffer *) driReadPriv->driverPrivate);
+      _mesa_make_current(&intel->ctx,
+			 (GLframebuffer *) driDrawPriv->driverPrivate,
+			 (GLframebuffer *) driReadPriv->driverPrivate);
+
+      intel->ctx.Driver.DrawBuffer( &intel->ctx, intel->ctx.Color.DrawBuffer[0] );
    } else {
-      _mesa_make_current(0,0);
+      _mesa_make_current(NULL, NULL, NULL);
    }
 
    return GL_TRUE;

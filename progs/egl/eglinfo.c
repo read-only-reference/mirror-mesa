@@ -33,6 +33,7 @@
 
 #define MAX_CONFIGS 1000
 #define MAX_MODES 1000
+#define MAX_SCREENS 10
 
 
 /**
@@ -97,24 +98,31 @@ PrintModes(EGLDisplay d)
 {
 #ifdef EGL_MESA_screen_surface
    const char *extensions = eglQueryString(d, EGL_EXTENSIONS);
-   if (strstr("EGL_MESA_screen_surface", extensions)) {
-      EGLint scrn, numScreens = 1;
+   if (strstr(extensions, "EGL_MESA_screen_surface")) {
+      EGLScreenMESA screens[MAX_SCREENS];
+      EGLint numScreens = 1, scrn;
       EGLModeMESA modes[MAX_MODES];
-      EGLint numModes, i;
+
+      eglGetScreensMESA(d, screens, MAX_SCREENS, &numScreens);
+      printf("Number of Screens: %d\n\n", numScreens);
 
       for (scrn = 0; scrn < numScreens; scrn++) {
-         eglGetModesMESA(d, scrn, modes, MAX_MODES, &numModes);
+         EGLint numModes, i;
+
+         eglGetModesMESA(d, screens[scrn], modes, MAX_MODES, &numModes);
 
          printf("Screen %d Modes:\n", scrn);
-         printf("  id width height refresh\n");
-         printf("-------------------------\n");
+         printf("  id  width height refresh  name\n");
+         printf("-----------------------------------------\n");
          for (i = 0; i < numModes; i++) {
             EGLint id, w, h, r;
+            const char *str;
             eglGetModeAttribMESA(d, modes[i], EGL_MODE_ID_MESA, &id);
             eglGetModeAttribMESA(d, modes[i], EGL_WIDTH, &w);
             eglGetModeAttribMESA(d, modes[i], EGL_HEIGHT, &h);
             eglGetModeAttribMESA(d, modes[i], EGL_REFRESH_RATE_MESA, &r);
-            printf("0x%02x %5d  %5d  %.3f\n", id, w, h, r / 1000.0);
+            str = eglQueryModeStringMESA(d, modes[i]);
+            printf("0x%02x %5d  %5d   %.3f  %s\n", id, w, h, r / 1000.0, str);
          }
       }
    }
@@ -127,7 +135,8 @@ int
 main(int argc, char *argv[])
 {
    int maj, min;
-   EGLDisplay d = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+   /*EGLDisplay d = eglGetDisplay(EGL_DEFAULT_DISPLAY);*/
+   EGLDisplay d = eglGetDisplay("!fb_dri");
 
    if (!eglInitialize(d, &maj, &min)) {
       printf("eglinfo: eglInitialize failed\n");

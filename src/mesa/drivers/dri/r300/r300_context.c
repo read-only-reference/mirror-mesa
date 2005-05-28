@@ -62,7 +62,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "utils.h"
 #include "xmlpool.h"		/* for symbolic values of enum-type options */
 
-int hw_tcl_on=1;
+/* hw_tcl_on derives from future_hw_tcl_on when its safe to change it. */
+int future_hw_tcl_on=0;
+int hw_tcl_on=0;
 
 /* Extension strings exported by the R300 driver.
  */
@@ -71,14 +73,17 @@ static const char *const card_extensions[] = {
 	"GL_ARB_multitexture",
 	"GL_ARB_texture_border_clamp",
 	"GL_ARB_texture_compression",
-	"GL_ARB_texture_cube_map",
+/* disable until we support it, fixes a few things in ut2004 */
+//	"GL_ARB_texture_cube_map", 
 	"GL_ARB_texture_env_add",
 	"GL_ARB_texture_env_combine",
 	"GL_ARB_texture_env_dot3",
 	"GL_ARB_texture_mirrored_repeat",
 	"GL_ARB_vertex_buffer_object",
 	"GL_ARB_vertex_program",
-	//"GL_ARB_fragment_program",
+#if USE_ARB_F_P == 1
+	"GL_ARB_fragment_program",
+#endif
 	"GL_EXT_blend_equation_separate",
 	"GL_EXT_blend_func_separate",
 	"GL_EXT_blend_minmax",
@@ -99,6 +104,7 @@ static const char *const card_extensions[] = {
 	"GL_NV_blend_square",
 	"GL_NV_vertex_program",
 	"GL_SGIS_generate_mipmap",
+	"GL_ARB_texture_env_crossbar",
 	NULL
 };
 
@@ -138,6 +144,55 @@ static const struct tnl_pipeline_stage *r300_pipeline[] = {
 	0,
 };
 
+void r300BufferData(GLcontext *ctx, GLenum target, GLsizeiptrARB size,
+		const GLvoid *data, GLenum usage, struct gl_buffer_object *obj)
+{
+	r300ContextPtr rmesa = R300_CONTEXT(ctx);
+	drm_radeon_mem_alloc_t alloc;
+	int offset, ret;
+
+	alloc.region = RADEON_MEM_REGION_GART;
+	alloc.alignment = 4;
+	alloc.size = size;
+	alloc.region_offset = &offset;
+
+	ret = drmCommandWriteRead( rmesa->radeon.dri.fd, DRM_RADEON_ALLOC, &alloc, sizeof(alloc));
+   	if(ret){
+		WARN_ONCE("Ran out of GART memory!\n");
+		_mesa_buffer_data(ctx, target, size, data, usage, obj);
+		return ;
+	}
+	obj->Data = ((char *)rmesa->radeon.radeonScreen->gartTextures.map) + offset;
+	memcpy(obj->Data, data, size);
+	obj->Size = size;
+	obj->Usage = usage;
+#if 0
+	fprintf(stderr, "allocated %d bytes at %p, offset=%d\n", size, obj->Data, offset);
+#endif
+}
+
+void r300DeleteBuffer(GLcontext *ctx, struct gl_buffer_object *obj)
+{
+	r300ContextPtr rmesa = R300_CONTEXT(ctx);
+	
+	if(r300IsGartMemory(rmesa, obj->Data, obj->Size)){
+		drm_radeon_mem_free_t memfree;
+		int ret;
+		
+		memfree.region = RADEON_MEM_REGION_GART;
+		memfree.region_offset = (char *)obj->Data - (char *)rmesa->radeon.radeonScreen->gartTextures.map;
+
+		ret = drmCommandWrite(rmesa->radeon.radeonScreen->driScreen->fd,
+				      DRM_RADEON_FREE, &memfree, sizeof(memfree));
+
+		if(ret){
+			WARN_ONCE("Failed to free GART memroy!\n");
+		}
+		obj->Data = NULL;
+	}
+	_mesa_delete_buffer_object(ctx, obj);
+}
+
 /* Create the device specific rendering context.
  */
 GLboolean r300CreateContext(const __GLcontextModes * glVisual,
@@ -175,6 +230,10 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	r300InitStateFuncs(&functions);
 	r300InitTextureFuncs(&functions);
 	r300InitShaderFuncs(&functions);
+	if(hw_tcl_on){
+		functions.BufferData = r300BufferData;
+		functions.DeleteBuffer = r300DeleteBuffer;
+	}
 	
 	if (!radeonInitContext(&r300->radeon, &functions,
 			       glVisual, driContextPriv, sharedContextPrivate)) {
@@ -244,6 +303,7 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	_ac_CreateContext(ctx);
 	_tnl_CreateContext(ctx);
 	_swsetup_CreateContext(ctx);
+	_swsetup_Wakeup(ctx);
 	_ae_create_context(ctx);
 
 	/* Install the customized pipeline:
@@ -262,12 +322,6 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	_tnl_allow_pixel_fog(ctx, GL_FALSE);
 	_tnl_allow_vertex_fog(ctx, GL_TRUE);
 
-#if 0
-	//if(driQueryOptionb(&rmesa->optionCache, "arb_vertex_program"))
-		_mesa_enable_extension( ctx, "GL_ARB_vertex_program");
-	//if(driQueryOptionb(&rmesa->optionCache, "nv_vertex_program"))
-		_mesa_enable_extension( ctx, "GL_NV_vertex_program");
-#endif
 	/* currently bogus data */
 	ctx->Const.MaxVertexProgramInstructions=VSF_MAX_FRAGMENT_LENGTH;
 	ctx->Const.MaxVertexProgramAttribs=16; // r420
@@ -275,7 +329,20 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	ctx->Const.MaxVertexProgramLocalParams=256; // r420
 	ctx->Const.MaxVertexProgramEnvParams=256; // r420
 	ctx->Const.MaxVertexProgramAddressRegs=1;
-		
+
+#if USE_ARB_F_P
+	ctx->Const.MaxFragmentProgramTemps = PFS_NUM_TEMP_REGS;
+	ctx->Const.MaxFragmentProgramAttribs = 11; /* copy i915... */
+	ctx->Const.MaxFragmentProgramLocalParams = PFS_NUM_CONST_REGS;
+	ctx->Const.MaxFragmentProgramEnvParams = PFS_NUM_CONST_REGS;
+	ctx->Const.MaxFragmentProgramAluInstructions = PFS_MAX_ALU_INST;
+	ctx->Const.MaxFragmentProgramTexInstructions = PFS_MAX_TEX_INST;
+	ctx->Const.MaxFragmentProgramInstructions = PFS_MAX_ALU_INST+PFS_MAX_TEX_INST;
+	ctx->Const.MaxFragmentProgramTexIndirections = PFS_MAX_TEX_INDIRECT;
+	ctx->Const.MaxFragmentProgramAddressRegs = 0; /* and these are?? */
+	ctx->_MaintainTexEnvProgram = GL_TRUE;
+#endif
+
 	driInitExtensions(ctx, card_extensions, GL_TRUE);
 	
 	radeonInitSpanFuncs(ctx);
@@ -317,12 +384,14 @@ void r300DestroyContext(__DRIcontextPrivate * driContextPriv)
 	r300ContextPtr r300 = (r300ContextPtr) driContextPriv->driverPrivate;
 	radeonContextPtr current = ctx ? RADEON_CONTEXT(ctx) : NULL;
 
-	fprintf(stderr, "Destroying context !\n");
-	sleep(1);
+	if (RADEON_DEBUG & DEBUG_DRI) {
+		fprintf(stderr, "Destroying context !\n");
+	}
+
 	/* check if we're deleting the currently bound context */
 	if (&r300->radeon == current) {
 		radeonFlush(r300->radeon.glCtx);
-		_mesa_make_current2(NULL, NULL, NULL);
+		_mesa_make_current(NULL, NULL, NULL);
 	}
 
 	/* Free r300 context resources */

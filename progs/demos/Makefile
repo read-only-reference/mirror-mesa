@@ -36,7 +36,6 @@ PROGS = \
 	morph3d \
 	multiarb \
 	occlude \
-	osdemo \
 	paltex \
 	pixeltex \
 	pointblast \
@@ -110,21 +109,7 @@ shadowtex: shadowtex.o showbuffer.o
 shadowtex.o: shadowtex.c showbuffer.h
 	$(CC) -c -I$(INCDIR) $(CFLAGS) shadowtex.c
 
-# special case: need the -lOSMesa library:
-osdemo: osdemo.c
-	$(CC) -I$(INCDIR) $(CFLAGS) osdemo.c $(OSMESA_LIBS) -o $@
-
-# another special case: need the -lOSMesa16 library:
-osdemo16: osdemo16.c
-	$(CC) -I$(INCDIR) $(CFLAGS) osdemo16.c $(OSMESA16_LIBS) -o $@
-
-# another special case: need the -lOSMesa32 library:
-osdemo32: osdemo32.c
-	$(CC) -I$(INCDIR) $(CFLAGS) osdemo32.c $(OSMESA32_LIBS) -o $@
-
-
-
 clean:
 	-rm -f $(PROGS)
 	-rm -f *.o *~
-	-rm -f readtex.[ch]
+	-rm -f readtex.[ch] showbuffer.[ch]

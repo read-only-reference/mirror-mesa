@@ -26,6 +26,7 @@ MAIN_SOURCES = \
 	main/fbobject.c \
 	main/feedback.c \
 	main/fog.c \
+	main/framebuffer.c \
 	main/get.c \
 	main/getstring.c \
 	main/hash.c \
@@ -41,13 +42,16 @@ MAIN_SOURCES = \
 	main/points.c \
 	main/polygon.c \
 	main/rastpos.c \
+	main/renderbuffer.c \
 	main/state.c \
 	main/stencil.c \
 	main/texcompress.c \
 	main/texcompress_s3tc.c \
 	main/texcompress_fxt1.c \
+	main/texenvprogram.c \
 	main/texformat.c \
 	main/teximage.c \
+	main/texrender.c \
 	main/texobj.c \
 	main/texstate.c \
 	main/texstore.c \
@@ -78,9 +82,7 @@ SWRAST_SOURCES = \
 	swrast/s_aatriangle.c \
 	swrast/s_accum.c \
 	swrast/s_alpha.c \
-	swrast/s_alphabuf.c \
 	swrast/s_atifragshader.c \
-	swrast/s_auxbuffer.c \
 	swrast/s_bitmap.c \
 	swrast/s_blend.c \
 	swrast/s_buffers.c \
@@ -131,8 +133,8 @@ TNL_SOURCES = \
 	tnl/t_vb_points.c \
 	tnl/t_vp_build.c \
 	tnl/t_vertex.c \
-	tnl/t_vertex_c.c \
-	tnl/t_vertex_codegen.c \
+	tnl/t_vertex_sse.c \
+	tnl/t_vertex_generic.c \
 	tnl/t_vtx_api.c \
 	tnl/t_vtx_generic.c \
 	tnl/t_vtx_x86.c \
@@ -147,7 +149,7 @@ SHADER_SOURCES = \
 	shader/arbprogram.c \
 	shader/arbvertparse.c \
 	shader/atifragshader.c \
-	shader/grammar_mesa.c \
+	shader/grammar/grammar_mesa.c \
 	shader/nvfragparse.c \
 	shader/nvprogram.c \
 	shader/nvvertexec.c \
@@ -185,8 +187,15 @@ SLANG_CPP_SOURCES = \
 	shader/slang/OSDependent/Linux/ossource.cpp
 	
 SLANG_SOURCES =	\
+	shader/slang/slang_assemble.c	\
+	shader/slang/slang_assemble_assignment.c	\
+	shader/slang/slang_assemble_conditional.c	\
+	shader/slang/slang_assemble_constructor.c	\
+	shader/slang/slang_assemble_typeinfo.c	\
 	shader/slang/slang_compile.c	\
+	shader/slang/slang_execute.c	\
 	shader/slang/slang_preprocess.c	\
+	shader/slang/slang_storage.c	\
 	shader/slang/slang_utility.c
 
 ASM_C_SOURCES =	\
@@ -195,7 +204,8 @@ ASM_C_SOURCES =	\
 	x86/3dnow.c \
 	x86/sse.c \
 	sparc/sparc.c \
-	ppc/common_ppc.c
+	ppc/common_ppc.c \
+	x86-64/x86-64.c
 
 X86_SOURCES =			\
 	x86/common_x86_asm.S	\
@@ -220,6 +230,9 @@ X86_SOURCES =			\
 X86_API =			\
 	x86/glapi_x86.S
 
+X86-64_SOURCES =		\
+	x86-64/xform4.S
+
 SPARC_SOURCES =			\
 	sparc/clip.S		\
 	sparc/norm.S		\
@@ -228,7 +241,7 @@ SPARC_SOURCES =			\
 SPARC_API =			\
 	sparc/glapi_sparc.S
 
-COMMON_DRIVER_SOURCES =		\
+COMMON_DRIVER_SOURCES =			\
 	drivers/common/driverfuncs.c
 
 X11_DRIVER_SOURCES =		\
@@ -236,6 +249,7 @@ X11_DRIVER_SOURCES =		\
 	drivers/x11/fakeglx.c	\
 	drivers/x11/xfonts.c	\
 	drivers/x11/xm_api.c	\
+	drivers/x11/xm_buffer.c	\
 	drivers/x11/xm_dd.c	\
 	drivers/x11/xm_line.c	\
 	drivers/x11/xm_span.c	\
@@ -306,6 +320,7 @@ INCLUDE_DIRS = \
 	-I$(TOP)/src/mesa/math \
 	-I$(TOP)/src/mesa/tnl \
 	-I$(TOP)/src/mesa/shader \
+	-I$(TOP)/src/mesa/shader/grammar \
 	-I$(TOP)/src/mesa/shader/slang \
 	-I$(TOP)/src/mesa/shader/slang/OSDependent/Linux \
 	-I$(TOP)/src/mesa/shader/slang/OGLCompilersDLL \

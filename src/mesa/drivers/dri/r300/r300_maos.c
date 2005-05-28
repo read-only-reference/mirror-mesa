@@ -75,7 +75,7 @@ do {						\
 
 static void emit_vec4(GLcontext * ctx,
 		      struct r300_dma_region *rvb,
-		      char *data, int stride, int count)
+		      GLvoid *data, int stride, int count)
 {
 	int i;
 	int *out = (int *)(rvb->address + rvb->start);
@@ -96,7 +96,7 @@ static void emit_vec4(GLcontext * ctx,
 
 static void emit_vec8(GLcontext * ctx,
 		      struct r300_dma_region *rvb,
-		      char *data, int stride, int count)
+		      GLvoid *data, int stride, int count)
 {
 	int i;
 	int *out = (int *)(rvb->address + rvb->start);
@@ -118,7 +118,7 @@ static void emit_vec8(GLcontext * ctx,
 
 static void emit_vec12(GLcontext * ctx,
 		       struct r300_dma_region *rvb,
-		       char *data, int stride, int count)
+		       GLvoid *data, int stride, int count)
 {
 	int i;
 	int *out = (int *)(rvb->address + rvb->start);
@@ -141,7 +141,7 @@ static void emit_vec12(GLcontext * ctx,
 
 static void emit_vec16(GLcontext * ctx,
 		       struct r300_dma_region *rvb,
-		       char *data, int stride, int count)
+		       GLvoid *data, int stride, int count)
 {
 	int i;
 	int *out = (int *)(rvb->address + rvb->start);
@@ -165,7 +165,7 @@ static void emit_vec16(GLcontext * ctx,
 
 static void emit_vector(GLcontext * ctx,
 			struct r300_dma_region *rvb,
-			char *data, int size, int stride, int count)
+			GLvoid *data, int size, int stride, int count)
 {
 	r300ContextPtr rmesa = R300_CONTEXT(ctx);
 
@@ -173,7 +173,22 @@ static void emit_vector(GLcontext * ctx,
 		fprintf(stderr, "%s count %d size %d stride %d\n",
 			__FUNCTION__, count, size, stride);
 
-	assert(!rvb->buf);
+	if(r300IsGartMemory(rmesa, data, size*stride)){
+		rvb->address = rmesa->radeon.radeonScreen->gartTextures.map;
+		rvb->start = (char *)data - rvb->address;
+		rvb->aos_offset = r300GartOffsetFromVirtual(rmesa, data);
+		
+		if(stride == 0)
+			rvb->aos_stride	= 0;
+		else
+			rvb->aos_stride	= stride / 4;
+		
+		rvb->aos_size = size;
+		return;
+	}
+	
+	/* Gets triggered when playing with future_hw_tcl_on ...*/
+	//assert(!rvb->buf);
 
 	if (stride == 0) {
 		r300AllocDmaRegion(rmesa, rvb, size * 4, 4);
@@ -187,7 +202,7 @@ static void emit_vector(GLcontext * ctx,
 		rvb->aos_stride	= size;
 		rvb->aos_size	= size;
 	}
-
+	
 	/* Emit the data
 	 */
 	switch (size) {
@@ -218,6 +233,13 @@ void r300EmitElts(GLcontext * ctx, GLuint *elts, unsigned long n_elts)
 	unsigned short int *out;
 	int i;
 	
+	if(r300IsGartMemory(rmesa, elts, n_elts*sizeof(unsigned short int))){
+		rvb->address = rmesa->radeon.radeonScreen->gartTextures.map;
+		rvb->start = (char *)elts - rvb->address;
+		rvb->aos_offset = rmesa->radeon.radeonScreen->gart_texture_offset + rvb->start;
+		return ;
+	}
+	
 	r300AllocDmaRegion(rmesa, rvb, n_elts*sizeof(unsigned short int), 2);
 	
 	out = (unsigned short int *)(rvb->address + rvb->start);
@@ -241,7 +263,6 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 	GLuint aa_vap_reg = 0; /* VAP register assignment */
 	GLuint i;
 	GLuint inputs = 0;
-	GLuint InputsRead = CURRENT_VERTEX_SHADER(ctx)->InputsRead;
 	
 
 #define CONFIGURE_AOS(r, f, v, sz, cn) { \
@@ -271,6 +292,7 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 }
 
 	if (hw_tcl_on) {
+		GLuint InputsRead = CURRENT_VERTEX_SHADER(ctx)->InputsRead;
 		struct r300_vertex_program *prog=(struct r300_vertex_program *)CURRENT_VERTEX_SHADER(ctx);
 		if (InputsRead & (1<<VERT_ATTRIB_POS)) {
 			inputs |= _TNL_BIT_POS;
@@ -374,11 +396,6 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 		}
 	}
 	
-
-int cmd_reserved=0;
-int cmd_written=0;
-drm_radeon_cmd_header_t *cmd = NULL;
-
 #define SHOW_INFO(n) do { \
 	if (RADEON_DEBUG & DEBUG_ALL) { \
 	fprintf(stderr, "RR[%d] - sz=%d, reg=%d, fmt=%d -- st=%d, of=0x%08x\n", \
@@ -507,7 +524,9 @@ drm_radeon_cmd_header_t *cmd = NULL;
 		if(OutputsWritten & (1<<VERT_RESULT_BFC1))
 			r300->hw.vof.cmd[R300_VOF_CNTL_0] |= R300_VAP_OUTPUT_VTX_FMT_0__COLOR_3_PRESENT;*/
 		//if(OutputsWritten & (1<<VERT_RESULT_FOGC))
-		//if(OutputsWritten & (1<<VERT_RESULT_PSIZ))
+
+		if(OutputsWritten & (1<<VERT_RESULT_PSIZ))
+			r300->hw.vof.cmd[R300_VOF_CNTL_0] |= R300_VAP_OUTPUT_VTX_FMT_0__PT_SIZE_PRESENT;
 
 		for(i=0;i < ctx->Const.MaxTextureUnits;i++)
 			if(OutputsWritten & (1<<(VERT_RESULT_TEX0+i)))

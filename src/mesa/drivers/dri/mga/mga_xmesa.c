@@ -21,9 +21,13 @@
  * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
  * OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+/**
+ * \file mga_xmesa.c
+ * MGA screen and context initialization / creation code.
  *
- * Authors:
- *    Keith Whitwell <keith@tungstengraphics.com>
+ * \author Keith Whitwell <keith@tungstengraphics.com>
  */
 
 #include <stdlib.h>
@@ -34,6 +38,8 @@
 #include "matrix.h"
 #include "simple_list.h"
 #include "imports.h"
+#include "framebuffer.h"
+#include "renderbuffer.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -54,7 +60,6 @@
 #include "mgapixel.h"
 #include "mga_xmesa.h"
 #include "mga_dri.h"
-
 
 #include "utils.h"
 #include "vblank.h"
@@ -80,8 +85,11 @@ DRI_CONF_BEGIN
         DRI_CONF_ARB_VERTEX_PROGRAM(true)
         DRI_CONF_NV_VERTEX_PROGRAM(true)
     DRI_CONF_SECTION_END
+    DRI_CONF_SECTION_DEBUG
+        DRI_CONF_NO_RAST(false)
+    DRI_CONF_SECTION_END
 DRI_CONF_END;
-static const GLuint __driNConfigOptions = 5;
+static const GLuint __driNConfigOptions = 6;
 
 #ifdef USE_NEW_INTERFACE
 static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
@@ -210,9 +218,6 @@ mgaInitDriver(__DRIscreenPrivate *sPriv)
 	    return GL_FALSE;
       }
    }
-   
-   mgaScreen->linecomp_sane = (sPriv->ddxMajor > 1) || (sPriv->ddxMinor > 1)
-       || ((sPriv->ddxMinor == 1) && (sPriv->ddxPatch > 0));
 
    if ( driCompareGLXAPIVersion( 20030813 ) >= 0 ) {
       PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
@@ -220,14 +225,11 @@ mgaInitDriver(__DRIscreenPrivate *sPriv)
       void * const psc = sPriv->psc->screenConfigs;
 
       if ( glx_enable_extension != NULL ) {
-	 if ( mgaScreen->linecomp_sane ) {
-	    (*glx_enable_extension)( psc, "GLX_SGI_swap_control" );
-	    (*glx_enable_extension)( psc, "GLX_SGI_video_sync" );
-	    (*glx_enable_extension)( psc, "GLX_MESA_swap_control" );
-	 }
-
-	 (*glx_enable_extension)( psc, "GLX_SGI_make_current_read" );
+	 (*glx_enable_extension)( psc, "GLX_MESA_swap_control" );
 	 (*glx_enable_extension)( psc, "GLX_MESA_swap_frame_usage" );
+	 (*glx_enable_extension)( psc, "GLX_SGI_make_current_read" );
+	 (*glx_enable_extension)( psc, "GLX_SGI_swap_control" );
+	 (*glx_enable_extension)( psc, "GLX_SGI_video_sync" );
 
 	 if ( driCompareGLXAPIVersion( 20030915 ) >= 0 ) {
 	    (*glx_enable_extension)( psc, "GLX_SGIX_fbconfig" );
@@ -246,9 +248,6 @@ mgaInitDriver(__DRIscreenPrivate *sPriv)
 
 
    mgaScreen->chipset = serverInfo->chipset;
-   mgaScreen->width = serverInfo->width;
-   mgaScreen->height = serverInfo->height;
-   mgaScreen->mem = serverInfo->mem;
    mgaScreen->cpp = serverInfo->cpp;
 
    mgaScreen->agpMode = serverInfo->agpMode;
@@ -259,6 +258,13 @@ mgaInitDriver(__DRIscreenPrivate *sPriv)
    mgaScreen->backPitch  =  serverInfo->backPitch;
    mgaScreen->depthOffset = serverInfo->depthOffset;
    mgaScreen->depthPitch  =  serverInfo->depthPitch;
+
+
+   /* The only reason that the MMIO region needs to be accessable and the
+    * primary DMA region base address needs to be known is so that the driver
+    * can busy wait for certain DMA operations to complete (see
+    * mgaWaitForFrameCompletion in mgaioctl.c).
+    */
 
    mgaScreen->mmio.handle = serverInfo->registers.handle;
    mgaScreen->mmio.size = serverInfo->registers.size;
@@ -273,24 +279,7 @@ mgaInitDriver(__DRIscreenPrivate *sPriv)
 
    mgaScreen->primary.handle = serverInfo->primary.handle;
    mgaScreen->primary.size = serverInfo->primary.size;
-   mgaScreen->buffers.handle = serverInfo->buffers.handle;
-   mgaScreen->buffers.size = serverInfo->buffers.size;
 
-#if 0
-   mgaScreen->agp.handle = serverInfo->agp;
-   mgaScreen->agp.size = serverInfo->agpSize;
-
-   if (drmMap(sPriv->fd,
-	      mgaScreen->agp.handle,
-	      mgaScreen->agp.size,
-	      (drmAddress *)&mgaScreen->agp.map) != 0)
-   {
-      Xfree(mgaScreen);
-      sPriv->private = NULL;
-      __driUtilMessage("Couldn't map agp region");
-      return GL_FALSE;
-   }
-#endif
 
    mgaScreen->textureOffset[MGA_CARD_HEAP] = serverInfo->textureOffset;
    mgaScreen->textureOffset[MGA_AGP_HEAP] = (serverInfo->agpTextureOffset |
@@ -299,38 +288,34 @@ mgaInitDriver(__DRIscreenPrivate *sPriv)
    mgaScreen->textureSize[MGA_CARD_HEAP] = serverInfo->textureSize;
    mgaScreen->textureSize[MGA_AGP_HEAP] = serverInfo->agpTextureSize;
 
-   mgaScreen->logTextureGranularity[MGA_CARD_HEAP] =
-      serverInfo->logTextureGranularity;
-   mgaScreen->logTextureGranularity[MGA_AGP_HEAP] =
-      serverInfo->logAgpTextureGranularity;
+   
+   /* The texVirtual array stores the base addresses in the CPU's address
+    * space of the texture memory pools.  The base address of the on-card
+    * memory pool is calculated as an offset of the base of video memory.  The
+    * AGP texture pool has to be mapped into the processes address space by
+    * the DRM. 
+    */
 
    mgaScreen->texVirtual[MGA_CARD_HEAP] = (char *)(mgaScreen->sPriv->pFB +
 					   serverInfo->textureOffset);
-   if (drmMap(sPriv->fd,
-              serverInfo->agpTextureOffset,
-              serverInfo->agpTextureSize,
-              (drmAddress *)&mgaScreen->texVirtual[MGA_AGP_HEAP]) != 0)
-   {
-      FREE(mgaScreen);
-      sPriv->private = NULL;
-      __driUtilMessage("Couldn't map agptexture region");
-      return GL_FALSE;
+
+   if ( serverInfo->agpTextureSize > 0 ) {
+      if (drmMap(sPriv->fd, serverInfo->agpTextureOffset,
+		 serverInfo->agpTextureSize,
+		 (drmAddress *)&mgaScreen->texVirtual[MGA_AGP_HEAP]) != 0) {
+	 FREE(mgaScreen);
+	 sPriv->private = NULL;
+	 __driUtilMessage("Couldn't map agptexture region");
+	 return GL_FALSE;
+      }
    }
 
-#if 0
-   mgaScreen->texVirtual[MGA_AGP_HEAP] = (mgaScreen->agp.map +
-					  serverInfo->agpTextureOffset);
-#endif
-
-   mgaScreen->mAccess = serverInfo->mAccess;
 
    /* For calculating setupdma addresses.
     */
-   mgaScreen->dmaOffset = serverInfo->buffers.handle;
 
    mgaScreen->bufs = drmMapBufs(sPriv->fd);
    if (!mgaScreen->bufs) {
-      /*drmUnmap(mgaScreen->agp_tex.map, mgaScreen->agp_tex.size);*/
       FREE(mgaScreen);
       sPriv->private = NULL;
       __driUtilMessage("Couldn't map dma buffers");
@@ -356,7 +341,6 @@ mgaDestroyScreen(__DRIscreenPrivate *sPriv)
 
    drmUnmapBufs(mgaScreen->bufs);
 
-   /*drmUnmap(mgaScreen->agp_tex.map, mgaScreen->agp_tex.size);*/
 
    /* free all option information */
    driDestroyOptionInfo (&mgaScreen->optionCache);
@@ -649,8 +633,7 @@ mgaCreateContext( const __GLcontextModes *mesaVis,
 				    debug_control );
 #endif
 
-   mmesa->vblank_flags = ((mmesa->mgaScreen->irq == 0) 
-			  || !mmesa->mgaScreen->linecomp_sane)
+   mmesa->vblank_flags = (mmesa->mgaScreen->irq == 0)
        ? VBLANK_FLAG_NO_IRQ : driGetDefaultVBlankFlags(&mmesa->optionCache);
 
    mmesa->get_ust = (PFNGLXGETUSTPROC) glXGetProcAddress( (const GLubyte *) "__glXGetUST" );
@@ -659,6 +642,11 @@ mgaCreateContext( const __GLcontextModes *mesaVis,
    }
 
    (*mmesa->get_ust)( & mmesa->swap_ust );
+
+   if (driQueryOptionb(&mmesa->optionCache, "no_rast")) {
+      fprintf(stderr, "disabling 3D acceleration\n");
+      FALLBACK(mmesa->glCtx, MGA_FALLBACK_DISABLE, 1);
+   }
 
    return GL_TRUE;
 }
@@ -721,6 +709,8 @@ mgaCreateBuffer( __DRIscreenPrivate *driScrnPriv,
                  const __GLcontextModes *mesaVis,
                  GLboolean isPixmap )
 {
+   mgaScreenPrivate *screen = (mgaScreenPrivate *) driScrnPriv->private;
+
    if (isPixmap) {
       return GL_FALSE; /* not implemented */
    }
@@ -728,12 +718,81 @@ mgaCreateBuffer( __DRIscreenPrivate *driScrnPriv,
       GLboolean swStencil = (mesaVis->stencilBits > 0 && 
 			     mesaVis->depthBits != 24);
 
+#if 0
       driDrawPriv->driverPrivate = (void *) 
          _mesa_create_framebuffer(mesaVis,
                                   GL_FALSE,  /* software depth buffer? */
                                   swStencil,
                                   mesaVis->accumRedBits > 0,
                                   mesaVis->alphaBits > 0 );
+#else
+      struct gl_framebuffer *fb = _mesa_create_framebuffer(mesaVis);
+
+      {
+         driRenderbuffer *frontRb
+            = driNewRenderbuffer(GL_RGBA, screen->cpp,
+                                 screen->frontOffset, screen->frontPitch);
+         mgaSetSpanFunctions(frontRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_FRONT_LEFT, &frontRb->Base);
+      }
+
+      if (mesaVis->doubleBufferMode) {
+         driRenderbuffer *backRb
+            = driNewRenderbuffer(GL_RGBA, screen->cpp,
+                                 screen->backOffset, screen->backPitch);
+         mgaSetSpanFunctions(backRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &backRb->Base);
+      }
+
+      if (mesaVis->depthBits == 16) {
+         driRenderbuffer *depthRb
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT16, screen->cpp,
+                                 screen->depthOffset, screen->depthPitch);
+         mgaSetSpanFunctions(depthRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+      }
+      else if (mesaVis->depthBits == 24) {
+         /* XXX is this right? */
+         if (mesaVis->stencilBits) {
+            driRenderbuffer *depthRb
+               = driNewRenderbuffer(GL_DEPTH_COMPONENT24, screen->cpp,
+                                 screen->depthOffset, screen->depthPitch);
+            mgaSetSpanFunctions(depthRb, mesaVis);
+            _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+         }
+         else {
+            driRenderbuffer *depthRb
+               = driNewRenderbuffer(GL_DEPTH_COMPONENT32, screen->cpp,
+                                 screen->depthOffset, screen->depthPitch);
+            mgaSetSpanFunctions(depthRb, mesaVis);
+            _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+         }
+      }
+      else if (mesaVis->depthBits == 32) {
+         driRenderbuffer *depthRb
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT32, screen->cpp,
+                                 screen->depthOffset, screen->depthPitch);
+         mgaSetSpanFunctions(depthRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+      }
+
+      if (mesaVis->stencilBits > 0 && !swStencil) {
+         driRenderbuffer *stencilRb
+            = driNewRenderbuffer(GL_STENCIL_INDEX8_EXT, screen->cpp,
+                                 screen->depthOffset, screen->depthPitch);
+         mgaSetSpanFunctions(stencilRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_STENCIL, &stencilRb->Base);
+      }
+
+      _mesa_add_soft_renderbuffers(fb,
+                                   GL_FALSE, /* color */
+                                   GL_FALSE, /* depth */
+                                   swStencil,
+                                   mesaVis->accumRedBits > 0,
+                                   GL_FALSE, /* alpha */
+                                   GL_FALSE /* aux */);
+      driDrawPriv->driverPrivate = (void *) fb;
+#endif
 
       return (driDrawPriv->driverPrivate != NULL);
    }
@@ -799,12 +858,12 @@ mgaMakeCurrent(__DRIcontextPrivate *driContextPriv,
 
       mmesa->driReadable = driReadPriv;
 
-      _mesa_make_current2(mmesa->glCtx,
-                          (GLframebuffer *) driDrawPriv->driverPrivate,
-                          (GLframebuffer *) driReadPriv->driverPrivate);
+      _mesa_make_current(mmesa->glCtx,
+                         (GLframebuffer *) driDrawPriv->driverPrivate,
+                         (GLframebuffer *) driReadPriv->driverPrivate);
    }
    else {
-      _mesa_make_current(NULL, NULL);
+      _mesa_make_current(NULL, NULL, NULL);
    }
 
    return GL_TRUE;
@@ -840,8 +899,6 @@ void mgaGetLock( mgaContextPtr mmesa, GLuint flags )
    for ( i = 0 ; i < mmesa->nr_heaps ; i++ ) {
       DRI_AGE_TEXTURES( mmesa->texture_heaps[ i ] );
    }
-
-   sarea->last_quiescent = -1;	/* just kill it for now */
 }
 
 
@@ -903,7 +960,7 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
 			     
 {
    __DRIscreenPrivate *psp;
-   static const __DRIversion ddx_expected = { 1, 0, 0 };
+   static const __DRIversion ddx_expected = { 1, 1, 1 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
    static const __DRIversion drm_expected = { 3, 0, 0 };
 

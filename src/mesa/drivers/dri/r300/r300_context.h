@@ -47,6 +47,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "colormac.h"
 #include "radeon_context.h"
 
+#define USE_ARB_F_P 1
+
 struct r300_context;
 typedef struct r300_context r300ContextRec;
 typedef struct r300_context *r300ContextPtr;
@@ -83,7 +85,11 @@ typedef GLubyte uint8_t;
       and pixel_shader structure later on */
 #define CARD32 GLuint
 #include "vertex_shader.h"
+#if USE_ARB_F_P == 1
+#include "r300_fragprog.h"
+#else
 #include "pixel_shader.h"
+#endif
 #undef CARD32
 
 static __inline__ uint32_t r300PackFloat32(float fl)
@@ -415,9 +421,6 @@ struct r300_hw_state {
 	struct r300_state_atom ps;	/* pointsize (421C) */
 	struct r300_state_atom unk4230; /* (4230) */
 	struct r300_state_atom lcntl;	/* line control */
-#ifdef EXP_C
-	struct r300_state_atom lsf;	/* line stipple factor */
-#endif
 	struct r300_state_atom unk4260; /* (4260) */
 	struct r300_state_atom unk4274; /* (4274) */
 	struct r300_state_atom unk4288; /* (4288) */
@@ -568,9 +571,9 @@ struct r300_vertex_shader_state {
 	
 extern int hw_tcl_on;
 
-#define CURRENT_VERTEX_SHADER(ctx) (ctx->VertexProgram._Enabled ? ctx->VertexProgram.Current : &ctx->_TnlProgram)
+#define CURRENT_VERTEX_SHADER(ctx) (ctx->VertexProgram._Enabled ? ctx->VertexProgram.Current : ctx->_TnlProgram)
 
-//#define TMU_ENABLED(ctx, unit) (hw_tcl_on ? ctx->Texture.Unit[unit]._ReallyEnabled && (OutputsWritten & (1<<(VERT_RESULT_TEX0+(unit)))) : \
+//#define TMU_ENABLED(ctx, unit) (hw_tcl_on ? ctx->Texture.Unit[unit]._ReallyEnabled && (OutputsWritten & (1<<(VERT_RESULT_TEX0+(unit)))) : 
 //	(r300->state.render_inputs & (_TNL_BIT_TEX0<<(unit))))
 #define TMU_ENABLED(ctx, unit) (hw_tcl_on ? ctx->Texture.Unit[unit]._ReallyEnabled && OutputsWritten & (1<<(VERT_RESULT_TEX0+(unit))) : \
 	ctx->Texture.Unit[unit]._ReallyEnabled && r300->state.render_inputs & (_TNL_BIT_TEX0<<(unit)))
@@ -585,11 +588,78 @@ struct r300_vertex_program {
 	struct r300_vertex_shader_fragment program;
 	struct r300_vertex_shader_fragment params;
 	
-	int t2rs;
+	int pos_end;
 	unsigned long num_temporaries; /* Number of temp vars used by program */
 	int inputs[VERT_ATTRIB_MAX];
+	int outputs[VERT_RESULT_MAX];
 };
 
+#if USE_ARB_F_P == 1
+#define PFS_MAX_ALU_INST	64
+#define PFS_MAX_TEX_INST	64
+#define PFS_MAX_TEX_INDIRECT 4
+#define PFS_NUM_TEMP_REGS	32
+#define PFS_NUM_CONST_REGS	32
+struct r300_fragment_program {
+	struct fragment_program mesa_program;
+
+	GLcontext *ctx;
+	GLboolean translated;
+	GLboolean error;
+
+	struct {
+		int length;
+		GLuint inst[PFS_MAX_TEX_INST];
+	} tex;
+
+	struct {
+		struct {
+			GLuint inst0;
+			GLuint inst1;
+			GLuint inst2;
+			GLuint inst3;
+		} inst[PFS_MAX_ALU_INST];
+	} alu;
+	int v_pos;
+	int s_pos;
+
+	struct {
+		int tex_offset;
+		int tex_end;
+		int alu_offset;
+		int alu_end;
+	} node[4];
+	int cur_node;
+	int first_node_has_tex;
+
+	int alu_offset;
+	int alu_end;
+	int tex_offset;
+	int tex_end;
+
+	/* Hardware constants */
+	GLfloat constant[PFS_NUM_CONST_REGS][4];
+	int const_nr;
+
+	/* Tracked parameters */
+	struct {
+		int idx;			/* hardware index */
+		GLfloat *values;	/* pointer to values */
+	} param[PFS_NUM_CONST_REGS];
+	int param_nr;
+	GLboolean params_uptodate;
+	
+	GLuint temps[PFS_NUM_TEMP_REGS];
+	int temp_in_use;
+	GLuint used_in_node;
+	GLuint dest_in_node;
+	GLuint inputs[32]; /* don't actually need 32... */
+
+	int hwreg_in_use;
+	int max_temp_idx;
+};
+
+#else
 /* 64 appears to be the maximum */
 #define PSF_MAX_PROGRAM_LENGTH 64
 
@@ -654,9 +724,10 @@ struct r300_pixel_shader_state {
 		float w;
 		} param[MAX_PIXEL_SHADER_PARAMS];
 	};
+#endif // USE_ARB_F_P
 
 /* 8 is somewhat bogus... it is probably something like 24 */
-#define R300_MAX_AOS_ARRAYS		8
+#define R300_MAX_AOS_ARRAYS		16
 
 #define AOS_FORMAT_FLOAT	1
 #define AOS_FORMAT_UBYTE	2
@@ -684,8 +755,9 @@ struct r300_state {
 	struct r300_texture_state texture;
 	struct r300_vap_reg_state vap_reg;
 	struct r300_vertex_shader_state vertex_shader;
+#if USE_ARB_F_P == 0
 	struct r300_pixel_shader_state pixel_shader;
-
+#endif
 	struct r300_dma_region aos[R300_MAX_AOS_ARRAYS];
 	int aos_count;
 

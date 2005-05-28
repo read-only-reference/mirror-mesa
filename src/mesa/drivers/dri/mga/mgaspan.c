@@ -36,6 +36,7 @@
 #define DBG 0
 
 #define LOCAL_VARS					\
+   mgaContextPtr mmesa = MGA_CONTEXT(ctx);				\
    __DRIdrawablePrivate *dPriv = mmesa->mesa_drawable;	\
    mgaScreenPrivate *mgaScreen = mmesa->mgaScreen;	\
    __DRIscreenPrivate *sPriv = mmesa->driScreen;	\
@@ -55,6 +56,7 @@
 
 
 #define LOCAL_DEPTH_VARS						\
+   mgaContextPtr mmesa = MGA_CONTEXT(ctx);				\
    __DRIdrawablePrivate *dPriv = mmesa->mesa_drawable;			\
    mgaScreenPrivate *mgaScreen = mmesa->mgaScreen;			\
    __DRIscreenPrivate *sPriv = mmesa->driScreen;			\
@@ -81,11 +83,7 @@
    }
 
 
-#define HW_LOCK()				\
-   mgaContextPtr mmesa = MGA_CONTEXT(ctx);	\
-   FLUSH_BATCH(mmesa);				\
-   LOCK_HARDWARE_QUIESCENT(mmesa);
-
+#define HW_LOCK()
 
 #define HW_CLIPLOOP()						\
   do {								\
@@ -100,10 +98,7 @@
     }						\
   } while (0)
 
-#define HW_UNLOCK()				\
-    UNLOCK_HARDWARE(mmesa);
-
-
+#define HW_UNLOCK()
 
 
 
@@ -204,9 +199,9 @@ static void mgaDDSetBuffer(GLcontext *ctx, GLframebuffer *buffer,
    mgaContextPtr mmesa = MGA_CONTEXT(ctx);
    unsigned int   offset;
 
-   assert((bufferBit == DD_FRONT_LEFT_BIT) || (bufferBit == DD_BACK_LEFT_BIT));
+   assert((bufferBit == BUFFER_BIT_FRONT_LEFT) || (bufferBit == BUFFER_BIT_BACK_LEFT));
 
-   offset = (bufferBit == DD_FRONT_LEFT_BIT)
+   offset = (bufferBit == BUFFER_BIT_FRONT_LEFT)
        ? mmesa->mgaScreen->frontOffset
        : mmesa->mgaScreen->backOffset;
 
@@ -218,6 +213,20 @@ static void mgaDDSetBuffer(GLcontext *ctx, GLframebuffer *buffer,
 
    mmesa->mesa_drawable = (buffer == mmesa->driDrawable->driverPrivate)
        ? mmesa->driDrawable : mmesa->driReadable;
+}
+
+void mgaSpanRenderStart( GLcontext *ctx )
+{
+   mgaContextPtr mmesa = MGA_CONTEXT(ctx);
+   FLUSH_BATCH( mmesa );
+   LOCK_HARDWARE_QUIESCENT( mmesa );
+}
+
+void mgaSpanRenderFinish( GLcontext *ctx )
+{
+   mgaContextPtr mmesa = MGA_CONTEXT(ctx);
+   _swrast_flush( ctx );
+   UNLOCK_HARDWARE( mmesa );
 }
 
 /**
@@ -237,15 +246,17 @@ void mgaDDInitSpanFuncs( GLcontext *ctx )
 
    switch (mmesa->mgaScreen->cpp) {
    case 2:
+#if 0
       mgaInitPointers_565( swdd );
-
       swdd->ReadDepthSpan = mgaReadDepthSpan_16;
       swdd->WriteDepthSpan = mgaWriteDepthSpan_16;
       swdd->ReadDepthPixels = mgaReadDepthPixels_16;
       swdd->WriteDepthPixels = mgaWriteDepthPixels_16;
+#endif
       break;
 
    case 4:
+#if 0
       mgaInitPointers_8888( swdd );
       
       if (!mmesa->hw_stencil) {
@@ -264,6 +275,58 @@ void mgaDDInitSpanFuncs( GLcontext *ctx )
 	 swdd->ReadStencilPixels = mgaReadStencilPixels_24_8;
 	 swdd->WriteStencilPixels = mgaWriteStencilPixels_24_8;
       }
+#endif
       break;
+   }
+   swdd->SpanRenderStart = mgaSpanRenderStart;
+   swdd->SpanRenderFinish = mgaSpanRenderFinish;
+}
+
+
+/**
+ * Plug in the Get/Put routines for the given driRenderbuffer.
+ */
+void
+mgaSetSpanFunctions(driRenderbuffer *drb, const GLvisual *vis)
+{
+   if (drb->Base.InternalFormat == GL_RGBA) {
+      if (vis->redBits == 5 && vis->greenBits == 6 && vis->blueBits == 5) {
+         mgaInitPointers_565(&drb->Base);
+      }
+      else {
+         mgaInitPointers_8888(&drb->Base);
+      }
+   }
+   else if (drb->Base.InternalFormat == GL_DEPTH_COMPONENT16) {
+      drb->Base.GetRow        = mgaReadDepthSpan_16;
+      drb->Base.GetValues     = mgaReadDepthPixels_16;
+      drb->Base.PutRow        = mgaWriteDepthSpan_16;
+      drb->Base.PutMonoRow    = mgaWriteMonoDepthSpan_16;
+      drb->Base.PutValues     = mgaWriteDepthPixels_16;
+      drb->Base.PutMonoValues = NULL;
+   }
+   else if (drb->Base.InternalFormat == GL_DEPTH_COMPONENT24) {
+      drb->Base.GetRow        = mgaReadDepthSpan_24_8;
+      drb->Base.GetValues     = mgaReadDepthPixels_24_8;
+      drb->Base.PutRow        = mgaWriteDepthSpan_24_8;
+      drb->Base.PutMonoRow    = mgaWriteMonoDepthSpan_24_8;
+      drb->Base.PutValues     = mgaWriteDepthPixels_24_8;
+      drb->Base.PutMonoValues = NULL;
+   }
+   else if (drb->Base.InternalFormat == GL_DEPTH_COMPONENT32) {
+      drb->Base.GetRow        = mgaReadDepthSpan_32;
+      drb->Base.GetValues     = mgaReadDepthPixels_32;
+      drb->Base.PutRow        = mgaWriteDepthSpan_32;
+      drb->Base.PutMonoRow    = mgaWriteMonoDepthSpan_32;
+      drb->Base.PutValues     = mgaWriteDepthPixels_32;
+      drb->Base.PutMonoValues = NULL;
+   }
+   else if (drb->Base.InternalFormat == GL_STENCIL_INDEX8_EXT) {
+      drb->Base.GetRow        = mgaReadStencilSpan_24_8;
+      drb->Base.GetValues     = mgaReadStencilPixels_24_8;
+      drb->Base.PutRow        = mgaWriteStencilSpan_24_8;
+      drb->Base.PutMonoRow    = mgaWriteMonoStencilSpan_24_8;
+      drb->Base.PutValues     = mgaWriteStencilPixels_24_8;
+      drb->Base.PutMonoValues = NULL;
    }
 }

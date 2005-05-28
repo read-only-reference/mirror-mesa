@@ -55,51 +55,34 @@ demoInitialize(_EGLDriver *drv, EGLDisplay dpy, EGLint *major, EGLint *minor)
    _EGLScreen *scrn;
    EGLint i;
 
-   disp->NumScreens = 1;
-   disp->Screens = (_EGLScreen *) calloc(disp->NumScreens, sizeof(_EGLScreen));
-   scrn = disp->Screens + 0;
-   scrn->NumModes = 4;
-   scrn->Modes = (_EGLMode *) calloc(scrn->NumModes, sizeof(_EGLMode));
-   scrn->Modes[0].Width = 1600;
-   scrn->Modes[0].Height = 1200;
-   scrn->Modes[0].Depth = 32;
-   scrn->Modes[0].RefreshRate = 72 * 1000;
-   scrn->Modes[1].Width = 1280;
-   scrn->Modes[1].Height = 1024;
-   scrn->Modes[1].Depth = 32;
-   scrn->Modes[1].RefreshRate = 72 * 1000;
-   scrn->Modes[2].Width = 1280;
-   scrn->Modes[2].Height = 1024;
-   scrn->Modes[2].Depth = 16;
-   scrn->Modes[2].RefreshRate = 72 * 1000;
-   scrn->Modes[3].Width = 1024;
-   scrn->Modes[3].Height = 768;
-   scrn->Modes[3].Depth = 16;
-   scrn->Modes[3].RefreshRate = 72 * 1000;
-   for (i = 0; i < scrn->NumModes; i++)
-      scrn->Modes[i].Handle = i + 1;
+   /* Create a screen */
+   scrn = calloc(1, sizeof(*scrn));
+   _eglAddScreen(disp, scrn);
 
-   /* Create list of visual configs - this is a silly example */
-   disp->NumConfigs = 4;
-   disp->Configs = (_EGLConfig *) calloc(disp->NumConfigs, sizeof(_EGLConfig));
-   for (i = 0; i < disp->NumConfigs; i++) {
-      _EGLConfig *config = disp->Configs + i;
-      _eglInitConfig(config, i + 1);
-      SET_CONFIG_ATTRIB(config, EGL_RED_SIZE, 8);
-      SET_CONFIG_ATTRIB(config, EGL_GREEN_SIZE, 8);
-      SET_CONFIG_ATTRIB(config, EGL_BLUE_SIZE, 8);
-      SET_CONFIG_ATTRIB(config, EGL_ALPHA_SIZE, 8);
-      SET_CONFIG_ATTRIB(config, EGL_BUFFER_SIZE, 32);
+   /* Create the screen's modes - silly example */
+   _eglAddMode(scrn, 1600, 1200, 72 * 1000, "1600x1200-72");
+   _eglAddMode(scrn, 1280, 1024, 72 * 1000, "1280x1024-70");
+   _eglAddMode(scrn, 1280, 1024, 70 * 1000, "1280x1024-70");
+   _eglAddMode(scrn, 1024,  768, 72 * 1000, "1024x768-72");
 
+   /* Create the display's visual configs - silly example */
+   for (i = 0; i < 4; i++) {
+      _EGLConfig config;
+      _eglInitConfig(&config, i + 1);
+      _eglSetConfigAttrib(&config, EGL_RED_SIZE, 8);
+      _eglSetConfigAttrib(&config, EGL_GREEN_SIZE, 8);
+      _eglSetConfigAttrib(&config, EGL_BLUE_SIZE, 8);
+      _eglSetConfigAttrib(&config, EGL_ALPHA_SIZE, 8);
+      _eglSetConfigAttrib(&config, EGL_BUFFER_SIZE, 32);
       if (i & 1) {
-         SET_CONFIG_ATTRIB(config, EGL_DEPTH_SIZE, 32);
+         _eglSetConfigAttrib(&config, EGL_DEPTH_SIZE, 32);
       }
       if (i & 2) {
-         SET_CONFIG_ATTRIB(config, EGL_STENCIL_SIZE, 8);
+         _eglSetConfigAttrib(&config, EGL_STENCIL_SIZE, 8);
       }
-
-      SET_CONFIG_ATTRIB(config, EGL_SURFACE_TYPE,
-                        (EGL_WINDOW_BIT | EGL_PIXMAP_BIT | EGL_PBUFFER_BIT));
+      _eglSetConfigAttrib(&config, EGL_SURFACE_TYPE,
+                          (EGL_WINDOW_BIT | EGL_PIXMAP_BIT | EGL_PBUFFER_BIT));
+      _eglAddConfig(disp, &config);
    }
 
    drv->Initialized = EGL_TRUE;
@@ -231,68 +214,20 @@ demoCreatePixmapSurface(_EGLDriver *drv, EGLDisplay dpy, EGLConfig config, Nativ
 
 
 static EGLSurface
-demoCreatePbufferSurface(_EGLDriver *drv, EGLDisplay dpy, EGLConfig config, const EGLint *attrib_list)
+demoCreatePbufferSurface(_EGLDriver *drv, EGLDisplay dpy, EGLConfig config,
+                         const EGLint *attrib_list)
 {
-   _EGLConfig *conf;
-   EGLint i, width = 0, height = 0, largest, texFormat, texTarget, mipmapTex;
-   DemoSurface *surf;
-
-   conf = _eglLookupConfig(drv, dpy, config);
-   if (!conf) {
-      _eglError(EGL_BAD_CONFIG, "eglCreatePbufferSurface");
-      return EGL_NO_SURFACE;
-   }
-
-   for (i = 0; attrib_list && attrib_list[i] != EGL_NONE; i++) {
-      switch (attrib_list[i]) {
-      case EGL_WIDTH:
-         width = attrib_list[++i];
-         break;
-      case EGL_HEIGHT:
-         height = attrib_list[++i];
-         break;
-      case EGL_LARGEST_PBUFFER:
-         largest = attrib_list[++i];
-         break;
-      case EGL_TEXTURE_FORMAT:
-         texFormat = attrib_list[++i];
-         break;
-      case EGL_TEXTURE_TARGET:
-         texTarget = attrib_list[++i];
-         break;
-      case EGL_MIPMAP_TEXTURE:
-         mipmapTex = attrib_list[++i];
-         break;
-      default:
-         _eglError(EGL_BAD_ATTRIBUTE, "eglCreatePbufferSurface");
-         return EGL_NO_SURFACE;
-      }
-   }
-
-   if (width <= 0 || height <= 0) {
-      _eglError(EGL_BAD_ATTRIBUTE, "eglCreatePbufferSurface(width or height)");
-      return EGL_NO_SURFACE;
-   }
-
-   surf = (DemoSurface *) calloc(1, sizeof(DemoSurface));
+   DemoSurface *surf = (DemoSurface *) calloc(1, sizeof(DemoSurface));
    if (!surf)
       return EGL_NO_SURFACE;
 
-   surf->Base.Config = conf;
-   surf->Base.Type = EGL_PBUFFER_BIT;
-   surf->Base.Width = width;
-   surf->Base.Height = height;
-   surf->Base.TextureFormat = texFormat;
-   surf->Base.TextureTarget = texTarget;
-   surf->Base.MipmapTexture = mipmapTex;
-   surf->Base.MipmapLevel = 0;
-   surf->Base.SwapInterval = 0;
+   if (_eglInitPbufferSurface(&surf->Base, drv, dpy, config, attrib_list)
+       == EGL_NO_SURFACE) {
+      free(surf);
+      return EGL_NO_SURFACE;
+   }
 
-   printf("eglCreatePbufferSurface()\n");
-
-   /* insert into hash table */
-   _eglSaveSurface(&surf->Base);
-   assert(surf->Base.Handle);
+   /* a real driver would allocate the pbuffer memory here */
 
    return surf->Base.Handle;
 }
@@ -351,20 +286,6 @@ demoMakeCurrent(_EGLDriver *drv, EGLDisplay dpy, EGLSurface draw, EGLSurface rea
 }
 
 
-static const char *
-demoQueryString(_EGLDriver *drv, EGLDisplay dpy, EGLint name)
-{
-   if (name == EGL_EXTENSIONS) {
-      return "EGL_MESA_screen_surface";
-   }
-   else {
-      return _eglQueryString(drv, dpy, name);
-   }
-}
-
-
-
-
 /*
  * Just to silence warning
  */
@@ -398,6 +319,10 @@ _eglMain(NativeDisplayType dpy)
    demo->Base.CreatePbufferSurface = demoCreatePbufferSurface;
    demo->Base.DestroySurface = demoDestroySurface;
    demo->Base.DestroyContext = demoDestroyContext;
-   demo->Base.QueryString = demoQueryString;
+
+   /* enable supported extensions */
+   demo->Base.MESA_screen_surface = EGL_TRUE;
+   demo->Base.MESA_copy_context = EGL_TRUE;
+
    return &demo->Base;
 }

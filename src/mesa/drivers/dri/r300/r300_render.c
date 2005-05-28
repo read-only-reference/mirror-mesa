@@ -58,6 +58,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r300_maos.h"
 #include "r300_emit.h"
 
+extern int future_hw_tcl_on;
+
 /**********************************************************************
 *                     Hardware rasterization
 *
@@ -193,39 +195,6 @@ static int r300_get_num_verts(r300ContextPtr rmesa,
 	return num_verts - verts_off;
 }
 
-void dump_inputs(GLcontext *ctx, int render_inputs)
-{
-	int k;
-	fprintf(stderr, "inputs:");
-	fprintf(stderr, "%08x ", render_inputs);
-
-	if(render_inputs & _TNL_BIT_POS)
-		fprintf(stderr, "_TNL_BIT_POS ");
-	if(render_inputs & _TNL_BIT_NORMAL)
-		fprintf(stderr, "_TNL_BIT_NORMAL ");
-
-		/* color components */
-	if(render_inputs & _TNL_BIT_COLOR0)
-		fprintf(stderr, "_TNL_BIT_COLOR0 ");
-	if(render_inputs & _TNL_BIT_COLOR1)
-		fprintf(stderr, "_TNL_BIT_COLOR1 ");
-
-	if(render_inputs & _TNL_BIT_FOG)
-		fprintf(stderr, "_TNL_BIT_FOG ");
-
-		/* texture coordinates */
-	for(k=0;k < ctx->Const.MaxTextureUnits;k++)
-		if(render_inputs & (_TNL_BIT_TEX0<<k))
-			fprintf(stderr, "_TNL_BIT_TEX%d ", k);
-
-	if(render_inputs & _TNL_BIT_INDEX)
-		fprintf(stderr, "_TNL_BIT_INDEX ");
-	if(render_inputs & _TNL_BIT_POINTSIZE)
-		fprintf(stderr, "_TNL_BIT_POINTSIZE ");
-
-	fprintf(stderr, "\n");
-}
-
 /* This function compiles GL context into state registers that
    describe data routing inside of R300 pipeline.
 
@@ -305,7 +274,6 @@ static void r300_render_immediate_primitive(r300ContextPtr rmesa,
 	return;
    	}
 
-	//dump_inputs(ctx, render_inputs); return ;
 
    start_immediate_packet(num_verts, type, 4*rmesa->state.aos_count);
 
@@ -414,23 +382,6 @@ static GLboolean r300_run_immediate_render(GLcontext *ctx,
 
    r300EmitState(rmesa);
 
-#if 0
-   reg_start(R300_RB3D_COLORMASK, 0);
-   	e32(0xf);
-
-   vsf_start_fragment(0x406, 4);
-   efloat(0.0);
-   efloat(0.0);
-   efloat(0.0);
-   efloat(1.0);
-
-   vsf_start_fragment(0x400, 4);
-   efloat(0.0);
-   efloat(0.0);
-   efloat(0.0);
-   efloat(1.0);
-#endif
-
 /* Setup INPUT_ROUTE and INPUT_CNTL */
 	r300EmitArrays(ctx, GL_TRUE);
 
@@ -458,6 +409,7 @@ static GLboolean r300_run_immediate_render(GLcontext *ctx,
 
    return GL_FALSE;
 }
+
 
 /* vertex buffer implementation */
 
@@ -542,9 +494,8 @@ static GLboolean r300_run_vb_render(GLcontext *ctx,
 		fprintf(stderr, "%s\n", __FUNCTION__);
 	
 
-	r300ReleaseArrays(ctx);
+   	r300ReleaseArrays(ctx);
 	r300EmitArrays(ctx, GL_FALSE);
-	//dump_inputs(ctx, rmesa->state.render_inputs);
 
 //	LOCK_HARDWARE(&(rmesa->radeon));
 
@@ -554,6 +505,9 @@ static GLboolean r300_run_vb_render(GLcontext *ctx,
 	reg_start(0x4f18,0);
 	e32(0x00000003);
 	r300EmitState(rmesa);
+	
+	if(hw_tcl_on) /* FIXME */
+		r300FlushCmdBuf(rmesa, __FUNCTION__);
 
 	rmesa->state.Elts = VB->Elts;
 
@@ -608,40 +562,6 @@ static GLboolean r300_run_render(GLcontext *ctx,
 #endif
 #else
 	return GL_TRUE;
-#endif
-
-#if 0
-   mgaContextPtr mmesa = MGA_CONTEXT(ctx);
-   TNLcontext *tnl = TNL_CONTEXT(ctx);
-   struct vertex_buffer *VB = &tnl->vb;
-   GLuint i;
-
-   /* Don't handle clipping or indexed vertices or vertex manipulations.
-    */
-   if (mmesa->RenderIndex != 0 ||
-       !mga_validate_render( ctx, VB )) {
-      return GL_TRUE;
-   }
-
-   tnl->Driver.Render.Start( ctx );
-   mmesa->SetupNewInputs = ~0;
-
-   for (i = 0 ; i < VB->PrimitiveCount ; i++)
-   {
-      GLuint prim = VB->Primitive[i].mode;
-      GLuint start = VB->Primitive[i].start;
-      GLuint length = VB->Primitive[i].count;
-
-      if (!length)
-	 continue;
-
-      mga_render_tab_verts[prim & PRIM_MODE_MASK]( ctx, start, start + length,
-						   prim);
-   }
-
-   tnl->Driver.Render.Finish( ctx );
-
-   return GL_FALSE;		/* finished the pipe */
 #endif
 }
 
@@ -737,7 +657,7 @@ const struct tnl_pipeline_stage _r300_render_stage = {
 	r300_check_render,	/* check */
 	r300_run_render		/* run */
 };
-	
+
 static GLboolean r300_run_tcl_render(GLcontext *ctx,
 				 struct tnl_pipeline_stage *stage)
 {
@@ -745,15 +665,33 @@ static GLboolean r300_run_tcl_render(GLcontext *ctx,
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct vertex_buffer *VB = &tnl->vb;
    GLuint i;
-
+   struct r300_vertex_program *vp;
+   
+   	hw_tcl_on=future_hw_tcl_on;
+   
 	if (RADEON_DEBUG & DEBUG_PRIMS)
 		fprintf(stderr, "%s\n", __FUNCTION__);
 	if(hw_tcl_on == GL_FALSE)
 		return GL_TRUE;
 	if(ctx->VertexProgram._Enabled == GL_FALSE){
 		_tnl_UpdateFixedFunctionProgram(ctx);
-		r300ProgramStringNotify(ctx, GL_VERTEX_PROGRAM_ARB, &ctx->_TnlProgram);
 	}
+	vp = CURRENT_VERTEX_SHADER(ctx);
+	if(vp->translated == GL_FALSE)
+		translate_vertex_shader(vp);
+	if(vp->translated == GL_FALSE){
+		fprintf(stderr, "Failing back to sw-tcl\n");
+		debug_vp(ctx, vp);
+		hw_tcl_on=future_hw_tcl_on=0;
+		r300ResetHwState(rmesa);
+		return GL_TRUE;
+	}
+		
+	r300_setup_textures(ctx);
+	r300_setup_rs_unit(ctx);
+
+	r300SetupVertexShader(rmesa);
+	r300SetupPixelShader(rmesa);
 
 	return r300_run_vb_render(ctx, stage);
 }

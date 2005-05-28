@@ -28,6 +28,8 @@
 #include "dri_util.h"
 #include "glheader.h"
 #include "context.h"
+#include "framebuffer.h"
+#include "renderbuffer.h"
 #include "matrix.h"
 #include "simple_list.h"
 #include "vblank.h"
@@ -119,7 +121,7 @@ viaInitDriver(__DRIscreenPrivate *sPriv)
     viaScreen->width = gDRIPriv->width;
     viaScreen->height = gDRIPriv->height;
     viaScreen->mem = gDRIPriv->mem;
-    viaScreen->bitsPerPixel = gDRIPriv->bytesPerPixel << 3;
+    viaScreen->bitsPerPixel = gDRIPriv->bytesPerPixel * 8;
     viaScreen->bytesPerPixel = gDRIPriv->bytesPerPixel;
     viaScreen->fbOffset = 0;
     viaScreen->fbSize = gDRIPriv->fbSize;
@@ -212,12 +214,15 @@ viaDestroyScreen(__DRIscreenPrivate *sPriv)
     sPriv->private = NULL;
 }
 
+
 static GLboolean
 viaCreateBuffer(__DRIscreenPrivate *driScrnPriv,
                 __DRIdrawablePrivate *driDrawPriv,
                 const __GLcontextModes *mesaVis,
                 GLboolean isPixmap)
 {
+    viaScreenPrivate *screen = (viaScreenPrivate *) driScrnPriv->private;
+
     GLboolean swStencil = (mesaVis->stencilBits > 0 && 
 			   mesaVis->depthBits != 24);
 
@@ -238,13 +243,72 @@ viaCreateBuffer(__DRIscreenPrivate *driScrnPriv,
 	return GL_FALSE;
     }
     else {
+#if 0
         driDrawPriv->driverPrivate = (void *)
             _mesa_create_framebuffer(mesaVis,
                                      GL_FALSE,	/* software depth buffer? */
                                      swStencil,
                                      mesaVis->accumRedBits > 0,
                                      GL_FALSE 	/* s/w alpha planes */);
-	
+#else
+      struct gl_framebuffer *fb = _mesa_create_framebuffer(mesaVis);
+
+      /* XXX check/fix the offset/pitch parameters! */
+      {
+         driRenderbuffer *frontRb
+            = driNewRenderbuffer(GL_RGBA, screen->bytesPerPixel,
+                                 0, screen->width);
+         viaSetSpanFunctions(frontRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_FRONT_LEFT, &frontRb->Base);
+      }
+
+      if (mesaVis->doubleBufferMode) {
+         driRenderbuffer *backRb
+            = driNewRenderbuffer(GL_RGBA, screen->bytesPerPixel,
+                                 0, screen->width);
+         viaSetSpanFunctions(backRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &backRb->Base);
+      }
+
+      if (mesaVis->depthBits == 16) {
+         driRenderbuffer *depthRb
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT16, screen->bytesPerPixel,
+                                 0, screen->width);
+         viaSetSpanFunctions(depthRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+      }
+      else if (mesaVis->depthBits == 24) {
+         driRenderbuffer *depthRb
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT24, screen->bytesPerPixel,
+                                 0, screen->width);
+         viaSetSpanFunctions(depthRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+      }
+      else if (mesaVis->depthBits == 32) {
+         driRenderbuffer *depthRb
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT32, screen->bytesPerPixel,
+                                 0, screen->width);
+         viaSetSpanFunctions(depthRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+      }
+
+      if (mesaVis->stencilBits > 0 && !swStencil) {
+         driRenderbuffer *stencilRb
+            = driNewRenderbuffer(GL_STENCIL_INDEX8_EXT, screen->bytesPerPixel,
+                                 0, screen->width);
+         viaSetSpanFunctions(stencilRb, mesaVis);
+         _mesa_add_renderbuffer(fb, BUFFER_STENCIL, &stencilRb->Base);
+      }
+
+      _mesa_add_soft_renderbuffers(fb,
+                                   GL_FALSE, /* color */
+                                   GL_FALSE, /* depth */
+                                   swStencil,
+                                   mesaVis->accumRedBits > 0,
+                                   GL_FALSE, /* alpha */
+                                   GL_FALSE /* aux */);
+      driDrawPriv->driverPrivate = (void *) fb;
+#endif
         return (driDrawPriv->driverPrivate != NULL);
    }
 }

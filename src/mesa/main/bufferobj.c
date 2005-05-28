@@ -449,11 +449,11 @@ _mesa_validate_pbo_access(GLuint dimensions,
                               format, type, depth-1, height-1, width);
 
 
-   if ((const GLubyte *) start > (const GLubyte *) pack->BufferObj->Size) {
+   if ((const GLubyte *) start > (const GLubyte *)(uintptr_t) pack->BufferObj->Size) {
       /* This will catch negative values / wrap-around */
       return GL_FALSE;
    }
-   if ((const GLubyte *) end > (const GLubyte *) pack->BufferObj->Size) {
+   if ((const GLubyte *) end > (const GLubyte *)(uintptr_t) pack->BufferObj->Size) {
       /* Image read goes beyond end of buffer */
       return GL_FALSE;
    }
@@ -900,7 +900,7 @@ _mesa_GetBufferParameterivARB(GLenum target, GLenum pname, GLint *params)
 
    switch (pname) {
       case GL_BUFFER_SIZE_ARB:
-         *params = bufObj->Size;
+         *params = (GLint) bufObj->Size;
          break;
       case GL_BUFFER_USAGE_ARB:
          *params = bufObj->Usage;

@@ -73,11 +73,6 @@ _swrast_update_rasterflags( GLcontext *ctx )
       if (ctx->Color.IndexLogicOpEnabled)     rasterMask |= LOGIC_OP_BIT;
    }
 
-   if (ctx->DrawBuffer->UseSoftwareAlphaBuffers
-       && ctx->Color.ColorMask[ACOMP]
-       && ctx->Color.DrawBuffer != GL_NONE)
-      rasterMask |= ALPHABUF_BIT;
-
    if (   ctx->Viewport.X < 0
        || ctx->Viewport.X + ctx->Viewport.Width > (GLint) ctx->DrawBuffer->Width
        || ctx->Viewport.Y < 0
@@ -93,7 +88,9 @@ _swrast_update_rasterflags( GLcontext *ctx )
     * MULTI_DRAW_BIT flag.  Also set it if we're drawing to no
     * buffers or the RGBA or CI mask disables all writes.
     */
-   if (_mesa_bitcount(ctx->Color._DrawDestMask[0]) != 1) {
+#if NEW_RENDERBUFFER
+   if (ctx->DrawBuffer->_NumColorDrawBuffers[0] != 1) {
+#endif
       /* more than one color buffer designated for writing (or zero buffers) */
       rasterMask |= MULTI_DRAW_BIT;
    }
@@ -104,7 +101,7 @@ _swrast_update_rasterflags( GLcontext *ctx )
       rasterMask |= MULTI_DRAW_BIT; /* all color index bits disabled */
    }
 
-   if (ctx->FragmentProgram._Enabled) {
+   if (ctx->FragmentProgram._Active) {
       rasterMask |= FRAGPROG_BIT;
    }
 
@@ -161,7 +158,7 @@ _swrast_update_fog_hint( GLcontext *ctx )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    swrast->_PreferPixelFog = (!swrast->AllowVertexFog ||
-                              ctx->FragmentProgram._Enabled ||
+                              ctx->FragmentProgram._Enabled || /* not _Active! */
 			      (ctx->Hint.Fog == GL_NICEST &&
 			       swrast->AllowPixelFog));
 }
@@ -202,10 +199,10 @@ _swrast_update_fog_state( GLcontext *ctx )
 
    /* determine if fog is needed, and if so, which fog mode */
    swrast->_FogEnabled = GL_FALSE;
-   if (ctx->FragmentProgram._Enabled) {
-      if (ctx->FragmentProgram.Current->Base.Target==GL_FRAGMENT_PROGRAM_ARB) {
+   if (ctx->FragmentProgram._Active) {
+      if (ctx->FragmentProgram._Current->Base.Target==GL_FRAGMENT_PROGRAM_ARB) {
          const struct fragment_program *p
-            = (struct fragment_program *) ctx->FragmentProgram.Current;
+            = (struct fragment_program *) ctx->FragmentProgram._Current;
          if (p->FogOption != GL_NONE) {
             swrast->_FogEnabled = GL_TRUE;
             swrast->_FogMode = p->FogOption;
@@ -226,8 +223,8 @@ _swrast_update_fog_state( GLcontext *ctx )
 static void
 _swrast_update_fragment_program( GLcontext *ctx )
 {
-   if (ctx->FragmentProgram._Enabled) {
-      struct fragment_program *program = ctx->FragmentProgram.Current;
+   if (ctx->FragmentProgram._Active) {
+      struct fragment_program *program = ctx->FragmentProgram._Current;
       _mesa_load_state_parameters(ctx, program->Parameters);
    }
 }
@@ -295,7 +292,7 @@ _swrast_validate_triangle( GLcontext *ctx,
 
    if (ctx->Texture._EnabledUnits == 0
        && NEED_SECONDARY_COLOR(ctx)
-       && !ctx->FragmentProgram._Enabled) {
+       && !ctx->FragmentProgram._Active) {
       /* separate specular color, but no texture */
       swrast->SpecTriangle = swrast->Triangle;
       swrast->Triangle = _swrast_add_spec_terms_triangle;
@@ -318,7 +315,7 @@ _swrast_validate_line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1 )
 
    if (ctx->Texture._EnabledUnits == 0
        && NEED_SECONDARY_COLOR(ctx)
-       && !ctx->FragmentProgram._Enabled) {
+       && !ctx->FragmentProgram._Active) {
       swrast->SpecLine = swrast->Line;
       swrast->Line = _swrast_add_spec_terms_line;
    }
@@ -341,7 +338,7 @@ _swrast_validate_point( GLcontext *ctx, const SWvertex *v0 )
 
    if (ctx->Texture._EnabledUnits == 0
        && NEED_SECONDARY_COLOR(ctx)
-       && !ctx->FragmentProgram._Enabled) {
+       && !ctx->FragmentProgram._Active) {
       swrast->SpecPoint = swrast->Point;
       swrast->Point = _swrast_add_spec_terms_point;
    }
@@ -446,26 +443,6 @@ _swrast_invalidate_state( GLcontext *ctx, GLuint new_state )
    if (new_state & _SWRAST_NEW_TEXTURE_SAMPLE_FUNC)
       for (i = 0 ; i < ctx->Const.MaxTextureUnits ; i++)
 	 swrast->TextureSample[i] = _swrast_validate_texture_sample;
-
-   /* Debug checks */
-   if (ctx->Visual.rgbMode) {
-      ASSERT(swrast->Driver.WriteRGBASpan);
-      ASSERT(swrast->Driver.WriteRGBSpan);
-      ASSERT(swrast->Driver.WriteMonoRGBASpan);
-      ASSERT(swrast->Driver.WriteRGBAPixels);
-      ASSERT(swrast->Driver.WriteMonoRGBAPixels);
-      ASSERT(swrast->Driver.ReadRGBASpan);
-      ASSERT(swrast->Driver.ReadRGBAPixels);
-   }
-   else {
-      ASSERT(swrast->Driver.WriteCI32Span);
-      ASSERT(swrast->Driver.WriteCI8Span);
-      ASSERT(swrast->Driver.WriteMonoCISpan);
-      ASSERT(swrast->Driver.WriteCI32Pixels);
-      ASSERT(swrast->Driver.WriteMonoCIPixels);
-      ASSERT(swrast->Driver.ReadCI32Span);
-      ASSERT(swrast->Driver.ReadCI32Pixels);
-   }
 }
 
 
@@ -625,12 +602,12 @@ _swrast_CreateContext( GLcontext *ctx )
    swrast->AllowPixelFog = GL_TRUE;
 
    if (ctx->Visual.doubleBufferMode)
-      swrast->CurrentBufferBit = DD_BACK_LEFT_BIT;
+      swrast->CurrentBufferBit = BUFFER_BIT_BACK_LEFT;
    else
-      swrast->CurrentBufferBit = DD_FRONT_LEFT_BIT;
+      swrast->CurrentBufferBit = BUFFER_FRONT_LEFT;
 
    /* Optimized Accum buffer */
-   swrast->_IntegerAccumMode = GL_TRUE;
+   swrast->_IntegerAccumMode = GL_FALSE;
    swrast->_IntegerAccumScaler = 0.0;
 
    for (i = 0; i < MAX_TEXTURE_IMAGE_UNITS; i++)

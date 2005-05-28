@@ -17,6 +17,7 @@
 #include "radeon_ioctl.h"
 #include "radeon_state.h"
 #include "r300_context.h"
+#if USE_ARB_F_P == 0
 #include "r300_ioctl.h"
 #include "r300_state.h"
 #include "r300_reg.h"
@@ -209,7 +210,7 @@ GLuint emit_texenv(r300ContextPtr r300, GLuint tc_reg, GLuint unit)
 		return get_source(ps, GL_TEXTURE, unit, tc_reg);
 		break;
 	default:
-		WARN_ONCE("Unknown EnvMode == %d, name=%d\n", envmode,
+		WARN_ONCE("Unknown EnvMode == %d, name=%s\n", envmode,
 						_mesa_lookup_enum_by_nr(envmode));
 		return get_source(ps, GL_TEXTURE, unit, tc_reg);
 		break;
@@ -223,7 +224,10 @@ void r300GenerateTextureFragmentShader(r300ContextPtr r300)
 	struct r300_pixel_shader_program *p = &ps->program;
 	GLcontext *ctx = r300->radeon.glCtx;
 	int i, tc_reg;
-	GLuint OutputsWritten = CURRENT_VERTEX_SHADER(ctx)->OutputsWritten;
+	GLuint OutputsWritten;
+	
+	if(hw_tcl_on)
+		OutputsWritten = CURRENT_VERTEX_SHADER(ctx)->OutputsWritten;
 
 	p->tex.length = 0;
 	p->alu.length = 0;
@@ -262,4 +266,5 @@ void r300GenerateTextureFragmentShader(r300ContextPtr r300)
 	p->alu_end		= ps->program.alu.length - 1;
 	p->alu_offset	= 0;
 }
+#endif // USE_ARB_F_P == 0
 

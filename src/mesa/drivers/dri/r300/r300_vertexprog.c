@@ -180,7 +180,7 @@ void dump_program_params(GLcontext *ctx, struct vertex_program *vp)
 	}
 }
 
-static void debug_vp(GLcontext *ctx, struct vertex_program *vp)
+void debug_vp(GLcontext *ctx, struct vertex_program *vp)
 {
 	struct vp_instruction *vpi;
 	int i, operand_index;
@@ -230,8 +230,8 @@ static void debug_vp(GLcontext *ctx, struct vertex_program *vp)
 			}
 			fprintf(stderr, "%d.", vpi->SrcReg[operand_index].Index);
 			
-			/*for(i=0; i < 4; i++)
-				fprintf(stderr, "%s", dst_mask_names[vpi->SrcReg[operand_index].Swizzle[i]]);*/
+			for(i=0; i < 4; i++)
+				fprintf(stderr, "%s", dst_mask_names[GET_SWZ(vpi->SrcReg[operand_index].Swizzle, i)]);
 			
 			if(operand_index+1 < (op_names[operator_index].ip & (~FLAG_MASK)) )
 				fprintf(stderr, ",");
@@ -313,35 +313,14 @@ static unsigned long t_dst_class(enum register_file file)
 
 static unsigned long t_dst_index(struct r300_vertex_program *vp, struct vp_dst_register *dst)
 {
-	if(dst->File == PROGRAM_OUTPUT)
-		switch(dst->Index){
-			case VERT_RESULT_HPOS:
-				return 0;
-			case VERT_RESULT_COL0:
-				return 1;
-			case VERT_RESULT_TEX0:
-				return 2;
-			case VERT_RESULT_TEX1:
-				return 3;
-			case VERT_RESULT_TEX2:
-				return 4;
-			case VERT_RESULT_TEX3:
-				return 5;
-			case VERT_RESULT_TEX4:
-				return 6;
-			case VERT_RESULT_TEX5:
-				return 7;
-			case VERT_RESULT_TEX6:
-				return 8;
-			case VERT_RESULT_TEX7:
-				return 9;
-			case VERT_RESULT_COL1:
-			case VERT_RESULT_BFC0:
-			case VERT_RESULT_BFC1:
-			case VERT_RESULT_FOGC:
-			case VERT_RESULT_PSIZ:
-			default: WARN_ONCE("Unknown output\n"); return 1;
+	if(dst->File == PROGRAM_OUTPUT) {
+		if (vp->outputs[dst->Index] != -1)
+			return vp->outputs[dst->Index];
+		else {
+			WARN_ONCE("Unknown output %d\n", dst->Index);
+			return 10;
 		}
+	}
 	return dst->Index;
 }
 
@@ -502,8 +481,7 @@ void translate_vertex_shader(struct r300_vertex_program *vp)
 {
 	struct vertex_program *mesa_vp=(void *)vp;
 	struct vp_instruction *vpi;
-	int operand_index, i;
-	VERTEX_SHADER_INSTRUCTION t2rs[1024];
+	int i, cur_reg=0;
 	VERTEX_SHADER_INSTRUCTION *o_inst;
 	unsigned long operands;
 	int are_srcs_scalar;
@@ -517,12 +495,46 @@ void translate_vertex_shader(struct r300_vertex_program *vp)
 #else	
 #define src	vpi->SrcReg	
 #endif			
-	vp->t2rs=0;
+	vp->pos_end=0; /* Not supported yet */
 	vp->program.length=0;
 	vp->num_temporaries=mesa_vp->Base.NumTemporaries;
 	
 	for(i=0; i < VERT_ATTRIB_MAX; i++)
-		vp->inputs[i]=-1;
+		vp->inputs[i] = -1;
+
+	for(i=0; i < VERT_RESULT_MAX; i++)
+		vp->outputs[i] = -1;
+	
+	assert(mesa_vp->OutputsWritten & (1 << VERT_RESULT_HPOS));
+	assert(mesa_vp->OutputsWritten & (1 << VERT_RESULT_COL0));
+	
+	/* Assign outputs */
+	if(mesa_vp->OutputsWritten & (1 << VERT_RESULT_HPOS))
+		vp->outputs[VERT_RESULT_HPOS] = cur_reg++;
+	
+	if(mesa_vp->OutputsWritten & (1 << VERT_RESULT_PSIZ))
+		vp->outputs[VERT_RESULT_PSIZ] = cur_reg++;
+	
+	if(mesa_vp->OutputsWritten & (1 << VERT_RESULT_COL0))
+		vp->outputs[VERT_RESULT_COL0] = cur_reg++;
+	
+#if 0 /* Not supported yet */
+	if(mesa_vp->OutputsWritten & (1 << VERT_RESULT_BFC0))
+		vp->outputs[VERT_RESULT_BFC0] = cur_reg++;
+	
+	if(mesa_vp->OutputsWritten & (1 << VERT_RESULT_COL1))
+		vp->outputs[VERT_RESULT_COL1] = cur_reg++;
+	
+	if(mesa_vp->OutputsWritten & (1 << VERT_RESULT_BFC1))
+		vp->outputs[VERT_RESULT_BFC1] = cur_reg++;
+	
+	if(mesa_vp->OutputsWritten & (1 << VERT_RESULT_FOGC))
+		vp->outputs[VERT_RESULT_FOGC] = cur_reg++;
+#endif
+	
+	for(i=VERT_RESULT_TEX0; i <= VERT_RESULT_TEX7; i++)
+		if(mesa_vp->OutputsWritten & (1 << i))
+			vp->outputs[i] = cur_reg++;
 	
 	o_inst=vp->program.body.i;
 	for(vpi=mesa_vp->Instructions; vpi->Opcode != VP_OPCODE_END; vpi++, o_inst++){
@@ -593,6 +605,7 @@ void translate_vertex_shader(struct r300_vertex_program *vp)
 					t_src_class(src[0].File), VSF_FLAG_NONE);
 
 			o_inst->src3=0;
+
 			goto next;
 			
 		case VP_OPCODE_ADD:
@@ -906,23 +919,8 @@ void translate_vertex_shader(struct r300_vertex_program *vp)
 			}
 		}
 		next: ;
-#if 0				
-		/* If instruction writes to result and one of the inputs is tmp, we move it at the end of program */
-		if(vpi->DstReg.File == PROGRAM_OUTPUT){
-			for(operand_index=0; operand_index < operands; operand_index++)
-				if(src[operand_index].File == PROGRAM_TEMPORARY){
-					t2rs[vp->t2rs++]=*o_inst;
-					o_inst--; /* FIXME */
-					break;
-				}
-		}
-#endif		
 	}
-#if 0	
-	/* Put "tmp to result" instructions in */
-	for(i=0; i < vp->t2rs; i++, o_inst++)
-		*o_inst=t2rs[i];
-#endif		
+	
 	vp->program.length=(o_inst - vp->program.body.i) * 4;
 	
 	if(u_temp_i < vp->num_temporaries)

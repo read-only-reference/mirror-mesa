@@ -62,10 +62,10 @@ _eglGetCurrentDisplay(void)
 
 
 void
-_eglDeleteDisplay(_EGLDisplay *disp)
+_eglCleanupDisplay(_EGLDisplay *disp)
 {
    /* XXX incomplete */
    free(disp->Configs);
-   free(disp);
+   free(disp->Name);
+   /* driver deletes _EGLDisplay */
 }
-

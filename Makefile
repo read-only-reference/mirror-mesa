@@ -61,6 +61,7 @@ darwin \
 darwin-static \
 freebsd \
 freebsd-dri \
+freebsd-dri-amd64 \
 freebsd-dri-x86 \
 hpux10 \
 hpux10-gcc \
@@ -108,7 +109,9 @@ linux-x86 \
 linux-x86-debug \
 linux-x86-32 \
 linux-x86-64 \
+linux-x86-64-debug \
 linux-x86-64-static \
+linux-x86-xcb \
 linux-x86-glide \
 linux-x86-static \
 netbsd \

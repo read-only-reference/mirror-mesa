@@ -649,6 +649,14 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
       _mesa_TexGenfv(GL_T, GL_EYE_PLANE, unit->EyePlaneT);
       _mesa_TexGenfv(GL_R, GL_EYE_PLANE, unit->EyePlaneR);
       _mesa_TexGenfv(GL_Q, GL_EYE_PLANE, unit->EyePlaneQ);
+      _mesa_set_enable(ctx, GL_TEXTURE_GEN_S,
+                       ((unit->TexGenEnabled & S_BIT) ? GL_TRUE : GL_FALSE));
+      _mesa_set_enable(ctx, GL_TEXTURE_GEN_T,
+                       ((unit->TexGenEnabled & T_BIT) ? GL_TRUE : GL_FALSE));
+      _mesa_set_enable(ctx, GL_TEXTURE_GEN_R,
+                       ((unit->TexGenEnabled & R_BIT) ? GL_TRUE : GL_FALSE));
+      _mesa_set_enable(ctx, GL_TEXTURE_GEN_Q,
+                       ((unit->TexGenEnabled & Q_BIT) ? GL_TRUE : GL_FALSE));
       if (ctx->Extensions.EXT_texture_lod_bias) {
          _mesa_TexEnvf(GL_TEXTURE_FILTER_CONTROL_EXT,
                        GL_TEXTURE_LOD_BIAS_EXT, unit->LodBias);
@@ -833,8 +841,13 @@ _mesa_PopAttrib(void)
                                (GLboolean) (color->ColorMask[1] != 0),
                                (GLboolean) (color->ColorMask[2] != 0),
                                (GLboolean) (color->ColorMask[3] != 0));
+#if 0
                _mesa_DrawBuffersARB(ctx->Const.MaxDrawBuffers,
                                     color->DrawBuffer);
+#else
+               _mesa_drawbuffers(ctx, ctx->Const.MaxDrawBuffers,
+                                 color->DrawBuffer, NULL);
+#endif
                _mesa_set_enable(ctx, GL_ALPHA_TEST, color->AlphaEnabled);
                _mesa_AlphaFunc(color->AlphaFunc, color->AlphaRef);
                _mesa_set_enable(ctx, GL_BLEND, color->BlendEnabled);
@@ -992,6 +1005,8 @@ _mesa_PopAttrib(void)
             break;
          case GL_PIXEL_MODE_BIT:
             MEMCPY( &ctx->Pixel, attr->data, sizeof(struct gl_pixel_attrib) );
+            /* XXX what other pixel state needs to be set by function calls? */
+            _mesa_ReadBuffer(ctx->Pixel.ReadBuffer);
 	    ctx->NewState |= _NEW_PIXEL;
             break;
          case GL_POINT_BIT:

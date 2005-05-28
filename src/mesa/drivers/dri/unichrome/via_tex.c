@@ -947,7 +947,16 @@ void viaInitTextureFuncs(struct dd_function_table * functions)
    functions->NewTextureImage = viaNewTextureImage;
    functions->DeleteTexture = _mesa_delete_texture_object;
    functions->FreeTexImageData = viaFreeTextureImageData;
-					    
+
+#if defined( USE_SSE_ASM )
+   if (getenv("VIA_NO_SSE"))
+      functions->TextureMemCpy = _mesa_memcpy;
+   else
+      functions->TextureMemCpy = via_sse_memcpy;
+#else
+   functions->TextureMemCpy = _mesa_memcpy;
+#endif
+
    functions->UpdateTexturePalette = 0;
    functions->IsTextureResident = viaIsTextureResident;
 }

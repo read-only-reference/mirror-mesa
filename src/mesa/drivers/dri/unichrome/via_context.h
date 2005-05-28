@@ -63,7 +63,7 @@ enum VIACHIPTAGS {
 #define VIA_FALLBACK_BLEND_FUNC        	0x400
 #define VIA_FALLBACK_USER_DISABLE      	0x800
 #define VIA_FALLBACK_PROJ_TEXTURE      	0x1000
-#define VIA_FALLBACK_STIPPLE		0x2000
+#define VIA_FALLBACK_POLY_STIPPLE	0x2000
 
 #define VIA_DMA_BUFSIZ                  4096
 #define VIA_DMA_HIGHWATER               (VIA_DMA_BUFSIZ - 128)
@@ -184,6 +184,7 @@ struct via_context {
    GLmatrix ViewportMatrix;
    GLenum renderPrimitive;
    GLenum hwPrimitive;
+   GLenum hwShadeModel;
    unsigned char *verts;
 
    /* drmBufPtr dma_buffer;
@@ -386,7 +387,7 @@ extern void viaEmitHwStateLocked(struct via_context *vmesa);
 extern void viaEmitScissorValues(struct via_context *vmesa, int box_nr, int emit);
 extern void viaXMesaSetBackClipRects(struct via_context *vmesa);
 extern void viaXMesaSetFrontClipRects(struct via_context *vmesa);
-extern void viaReAllocateBuffers(GLframebuffer *drawbuffer);
+extern void viaReAllocateBuffers(GLcontext *ctx, GLframebuffer *drawbuffer, GLuint width, GLuint height);
 extern void viaXMesaWindowMoved(struct via_context *vmesa);
 
 extern GLboolean viaTexCombineState(struct via_context *vmesa,

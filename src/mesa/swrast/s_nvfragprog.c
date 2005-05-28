@@ -207,13 +207,13 @@ fetch_vector4_deriv( GLcontext *ctx,
       if (xOrY == 'X') {
          src[0] = 1.0;
          src[1] = 0.0;
-         src[2] = span->dzdx / ctx->DepthMaxF;
+         src[2] = span->dzdx / ctx->DrawBuffer->_DepthMaxF;
          src[3] = span->dwdx;
       }
       else {
          src[0] = 0.0;
          src[1] = 1.0;
-         src[2] = span->dzdy / ctx->DepthMaxF;
+         src[2] = span->dzdy / ctx->DrawBuffer->_DepthMaxF;
          src[3] = span->dwdy;
       }
       break;
@@ -1179,7 +1179,23 @@ execute_program( GLcontext *ctx,
                /* Note: we pass 0 for LOD.  The ARB extension requires it
                 * while the NV extension says it's implementation dependant.
                 */
-               fetch_texel( ctx, texcoord, 0.0F, inst->TexSrcUnit, color );
+               /* KW: Previously lambda was passed as zero, but I
+		* believe this is incorrect, the spec seems to
+		* indicate rather that lambda should not be
+		* changed/biased, unlike TXB where texcoord[3] is
+		* added to the lambda calculations.  The lambda should
+		* still be calculated normally for TEX & TXP though,
+		* not set to zero.  Otherwise it's very difficult to
+		* implement normal GL semantics through the fragment
+		* shader.
+		*/
+               fetch_texel( ctx, texcoord, 
+			    span->array->lambda[inst->TexSrcUnit][column],
+			    inst->TexSrcUnit, color );
+#if DEBUG_FRAG
+               if (color[3])
+                  printf("color[3] = %f\n", color[3]);
+#endif
                store_vector4( inst, machine, color );
             }
             break;
@@ -1216,11 +1232,26 @@ execute_program( GLcontext *ctx,
             {
                GLfloat texcoord[4], color[4];
                fetch_vector4( ctx, &inst->SrcReg[0], machine, program, texcoord );
-               texcoord[0] /= texcoord[3];
-               texcoord[1] /= texcoord[3];
-               texcoord[2] /= texcoord[3];
-               /* Note: LOD=0 */
-               fetch_texel( ctx, texcoord, 0.0F, inst->TexSrcUnit, color );
+	       /* Not so sure about this test - if texcoord[3] is
+		* zero, we'd probably be fine except for an ASSERT in
+		* IROUND_POS() which gets triggered by the inf values created.
+		*/
+	       if (texcoord[3] != 0.0) {
+		  texcoord[0] /= texcoord[3];
+		  texcoord[1] /= texcoord[3];
+		  texcoord[2] /= texcoord[3];
+	       }
+               /* KW: Previously lambda was passed as zero, but I
+		* believe this is incorrect, the spec seems to
+		* indicate rather that lambda should not be
+		* changed/biased, unlike TXB where texcoord[3] is
+		* added to the lambda calculations.  The lambda should
+		* still be calculated normally for TEX & TXP though,
+		* not set to zero.
+		*/
+               fetch_texel( ctx, texcoord, 
+			    span->array->lambda[inst->TexSrcUnit][column],
+			    inst->TexSrcUnit, color );
                store_vector4( inst, machine, color );
             }
             break;
@@ -1229,7 +1260,8 @@ execute_program( GLcontext *ctx,
             {
                GLfloat texcoord[4], color[4];
                fetch_vector4( ctx, &inst->SrcReg[0], machine, program, texcoord );
-               if (inst->TexSrcIdx != TEXTURE_CUBE_INDEX) {
+               if (inst->TexSrcIdx != TEXTURE_CUBE_INDEX &&
+		   texcoord[3] != 0.0) {
                   texcoord[0] /= texcoord[3];
                   texcoord[1] /= texcoord[3];
                   texcoord[2] /= texcoord[3];
@@ -1362,7 +1394,7 @@ init_machine( GLcontext *ctx, struct fp_machine *machine,
       GLfloat *wpos = machine->Inputs[FRAG_ATTRIB_WPOS];
       wpos[0] = (GLfloat) span->x + col;
       wpos[1] = (GLfloat) span->y;
-      wpos[2] = (GLfloat) span->array->z[col] / ctx->DepthMaxF;
+      wpos[2] = (GLfloat) span->array->z[col] / ctx->DrawBuffer->_DepthMaxF;
       wpos[3] = span->w + col * span->dwdx;
    }
    if (inputsRead & (1 << FRAG_ATTRIB_COL0)) {
@@ -1410,15 +1442,19 @@ init_machine( GLcontext *ctx, struct fp_machine *machine,
 void
 _swrast_exec_fragment_program( GLcontext *ctx, struct sw_span *span )
 {
-   const struct fragment_program *program = ctx->FragmentProgram.Current;
+   const struct fragment_program *program = ctx->FragmentProgram._Current;
    GLuint i;
 
    ctx->_CurrentProgram = GL_FRAGMENT_PROGRAM_ARB; /* or NV, doesn't matter */
 
+   if (program->Parameters) {
+      _mesa_load_state_parameters(ctx, program->Parameters);
+   }   
+
    for (i = 0; i < span->end; i++) {
       if (span->array->mask[i]) {
          init_machine(ctx, &ctx->FragmentProgram.Machine,
-                      ctx->FragmentProgram.Current, span, i);
+                      ctx->FragmentProgram._Current, span, i);
 
 #ifdef USE_TCC
          if (!_swrast_execute_codegen_program(ctx, program, ~0,
@@ -1444,7 +1480,7 @@ _swrast_exec_fragment_program( GLcontext *ctx, struct sw_span *span )
          }
          /* depth value */
          if (program->OutputsWritten & (1 << FRAG_OUTPUT_DEPR))
-            span->array->z[i] = IROUND(ctx->FragmentProgram.Machine.Outputs[FRAG_OUTPUT_DEPR][0] * ctx->DepthMaxF);
+            span->array->z[i] = IROUND(ctx->FragmentProgram.Machine.Outputs[FRAG_OUTPUT_DEPR][0] * ctx->DrawBuffer->_DepthMaxF);
       }
    }
 

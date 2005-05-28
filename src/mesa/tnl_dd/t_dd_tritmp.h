@@ -1,9 +1,8 @@
-
 /*
  * Mesa 3-D graphics library
- * Version:  3.5
+ * Version:  6.3
  *
- * Copyright (C) 1999-2001  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -132,10 +131,10 @@ static void TAG(triangle)( GLcontext *ctx, GLuint e0, GLuint e1, GLuint e2 )
 {
    struct vertex_buffer *VB = &TNL_CONTEXT( ctx )->vb;
    VERTEX *v[3];
-   GLfloat offset;
+   GLfloat offset = 0;
    GLfloat z[3];
    GLenum mode = GL_FILL;
-   GLuint facing;
+   GLuint facing = 0;
    LOCAL_VARS(3);
 
 /*     fprintf(stderr, "%s\n", __FUNCTION__); */
@@ -274,7 +273,7 @@ static void TAG(triangle)( GLcontext *ctx, GLuint e0, GLuint e1, GLuint e2 )
 	    if ( bc < 0.0f ) bc = -bc;
 	    offset += MAX2( ac, bc ) * ctx->Polygon.OffsetFactor;
 	 }
-	 offset *= REVERSE_DEPTH ? -ctx->MRD : ctx->MRD;
+	 offset *= ctx->DrawBuffer->_MRD * (REVERSE_DEPTH ? -1.0 : 1.0);
       }
    }
 
@@ -399,10 +398,10 @@ static void TAG(quad)( GLcontext *ctx,
 {
    struct vertex_buffer *VB = &TNL_CONTEXT( ctx )->vb;
    VERTEX *v[4];
-   GLfloat offset;
+   GLfloat offset = 0;
    GLfloat z[4];
    GLenum mode = GL_FILL;
-   GLuint facing;
+   GLuint facing = 0;
    LOCAL_VARS(4);
 
    v[0] = (VERTEX *)GET_VERTEX(e0);
@@ -550,7 +549,7 @@ static void TAG(quad)( GLcontext *ctx,
 	    if ( bc < 0.0f ) bc = -bc;
 	    offset += MAX2( ac, bc ) * ctx->Polygon.OffsetFactor;
 	 }
-	 offset *= REVERSE_DEPTH ? -ctx->MRD : ctx->MRD;
+	 offset *= ctx->DrawBuffer->_MRD * (REVERSE_DEPTH ? -1.0 : 1.0);
       }
    }
 

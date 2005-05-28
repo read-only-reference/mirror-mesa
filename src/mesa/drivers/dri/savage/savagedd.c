@@ -24,6 +24,7 @@
 
 
 #include "mtypes.h"
+#include "framebuffer.h"
 
 #include <stdio.h>
 
@@ -41,7 +42,7 @@
 #include "utils.h"
 
 
-#define DRIVER_DATE "20050424"
+#define DRIVER_DATE "20050501"
 
 /***************************************
  * Mesa's Driver Functions
@@ -113,6 +114,6 @@ static void savageBufferSize(GLframebuffer *buffer, GLuint *width, GLuint *heigh
 void savageDDInitDriverFuncs( GLcontext *ctx )
 {
    ctx->Driver.GetBufferSize = savageBufferSize;
-   ctx->Driver.ResizeBuffers = _swrast_alloc_buffers;
+   ctx->Driver.ResizeBuffers = _mesa_resize_framebuffer;
    ctx->Driver.GetString = savageDDGetString;
 }

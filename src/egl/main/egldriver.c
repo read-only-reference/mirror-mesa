@@ -8,10 +8,11 @@
 #include "egldriver.h"
 #include "eglglobals.h"
 #include "eglmode.h"
+#include "eglscreen.h"
 #include "eglsurface.h"
 
 
-const char *DefaultDriverName = "demo";
+const char *DefaultDriverName = "demodriver";
 
 
 /**
@@ -74,7 +75,7 @@ _eglOpenDriver(_EGLDisplay *dpy, const char *driverName)
    char driverFilename[1000];
 
    /* XXX also prepend a directory path??? */
-   sprintf(driverFilename, "%sdriver.so", driverName);
+   sprintf(driverFilename, "%s.so", driverName);
 
 #if 1
    lib = dlopen(driverFilename, RTLD_NOW);
@@ -181,9 +182,36 @@ _eglInitDriverFallbacks(_EGLDriver *drv)
    drv->WaitNative = _eglWaitNative;
 
    /* EGL_MESA_screen */
+   drv->ChooseModeMESA = _eglChooseModeMESA; 
    drv->GetModesMESA = _eglGetModesMESA;
    drv->GetModeAttribMESA = _eglGetModeAttribMESA;
+   drv->GetScreensMESA = _eglGetScreensMESA;
+   drv->CreateScreenSurfaceMESA = _eglCreateScreenSurfaceMESA;
+   drv->ShowSurfaceMESA = _eglShowSurfaceMESA;
+   drv->ScreenPositionMESA = _eglScreenPositionMESA;
+   drv->QueryScreenMESA = _eglQueryScreenMESA;
+   drv->QueryScreenSurfaceMESA = _eglQueryScreenSurfaceMESA;
+   drv->QueryScreenModeMESA = _eglQueryScreenModeMESA;
+   drv->QueryModeStringMESA = _eglQueryModeStringMESA;
 }
+
+
+/**
+ * Examine the individual extension enable/disable flags and recompute
+ * the driver's Extensions string.
+ */
+static void
+UpdateExtensionsString(_EGLDriver *drv)
+{
+   drv->Extensions[0] = 0;
+
+   if (drv->MESA_screen_surface)
+      strcat(drv->Extensions, "EGL_MESA_screen_surface ");
+   if (drv->MESA_copy_context)
+      strcat(drv->Extensions, "EGL_MESA_copy_context ");
+   assert(strlen(drv->Extensions) < MAX_EXTENSIONS_LEN);
+}
+
 
 
 const char *
@@ -197,7 +225,8 @@ _eglQueryString(_EGLDriver *drv, EGLDisplay dpy, EGLint name)
    case EGL_VERSION:
       return "1.0";
    case EGL_EXTENSIONS:
-      return "";
+      UpdateExtensionsString(drv);
+      return drv->Extensions;
    default:
       _eglError(EGL_BAD_PARAMETER, "eglQueryString");
       return NULL;

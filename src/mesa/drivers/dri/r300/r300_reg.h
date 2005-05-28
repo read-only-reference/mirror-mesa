@@ -124,6 +124,10 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #define R300_VAP_INPUT_ROUTE_0_1            0x2154
 #define R300_VAP_INPUT_ROUTE_0_2            0x2158
 #define R300_VAP_INPUT_ROUTE_0_3            0x215C
+#define R300_VAP_INPUT_ROUTE_0_4            0x2160
+#define R300_VAP_INPUT_ROUTE_0_5            0x2164
+#define R300_VAP_INPUT_ROUTE_0_6            0x2168
+#define R300_VAP_INPUT_ROUTE_0_7            0x216C
 
 /* gap */
 /* Notes:
@@ -168,6 +172,10 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #define R300_VAP_INPUT_ROUTE_1_1            0x21E4
 #define R300_VAP_INPUT_ROUTE_1_2            0x21E8
 #define R300_VAP_INPUT_ROUTE_1_3            0x21EC
+#define R300_VAP_INPUT_ROUTE_1_4            0x21F0
+#define R300_VAP_INPUT_ROUTE_1_5            0x21F4
+#define R300_VAP_INPUT_ROUTE_1_6            0x21F8
+#define R300_VAP_INPUT_ROUTE_1_7            0x21FC
 
 /* END */
 
@@ -232,18 +240,14 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 // experiments so far have shown that both *must* point to an instruction
 // inside the vertex program, otherwise the GPU locks up.
 // fglrx usually sets CNTL_3_UNKNOWN to the end of the program and
-// CNTL_1_UNKNOWN somewhere in the middle, but the criteria are not clear. 
-
-// Some tests would indicate that CNTL_3_UNKNOWN is set to program len - 
-// number of "temp to result instrutions". I havent yet seen a case where 
-// "temp to result instrutions" have not been moved at the end of program.
-// However tests have shown that fgls vertex program implementation is
-// not perfect and im having hard-time trusting
-// it at the time being. -aet
+// CNTL_1_UNKNOWN points to instruction where last write to position takes place. 
+// Most likely this is used to ignore rest of the program in cases where group of verts arent visible.
+// For some reason this "section" is sometimes accepted other instruction that have
+// no relationship with position calculations. 
 */
 #define R300_VAP_PVS_CNTL_1                 0x22D0
 #       define R300_PVS_CNTL_1_PROGRAM_START_SHIFT   0
-#       define R300_PVS_CNTL_1_UNKNOWN_SHIFT         10
+#       define R300_PVS_CNTL_1_POS_END_SHIFT         10
 #       define R300_PVS_CNTL_1_PROGRAM_END_SHIFT     20
 /* Addresses are relative the the vertex program parameters area. */
 #define R300_VAP_PVS_CNTL_2                 0x22D4
@@ -292,11 +296,15 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #	define R300_GB_VAP_RASTER_VTX_FMT_1__TEX_6_COMP_CNT_SHIFT	18
 #	define R300_GB_VAP_RASTER_VTX_FMT_1__TEX_7_COMP_CNT_SHIFT	21
 
+/* UNK30 seems to enables point to quad transformation on textures
+   (or something closely related to that).
+   This bit is rather fatal at the time being due to lackings at pixel shader side */
 #define R300_GB_ENABLE	0x4008
 #	define R300_GB_POINT_STUFF_ENABLE	(1<<0)
 #	define R300_GB_LINE_STUFF_ENABLE	(1<<1)
 #	define R300_GB_TRIANGLE_STUFF_ENABLE	(1<<2)
 #	define R300_GB_STENCIL_AUTO_ENABLE	(1<<4)
+#	define R300_GB_UNK30			(1<<30)
 	/* each of the following is 2 bits wide */
 #define R300_GB_TEX_REPLICATE	0
 #define R300_GB_TEX_ST		1
@@ -430,17 +438,34 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_POINTSIZE_MAX             (R300_POINTSIZE_Y_MASK / 6)
 
 /* The line width is given in multiples of 6.
-   R300_LINE_CNT_UNK1 must be on to obtain expected results. */
+   In default mode lines are classified as vertical lines.
+   HO: horizontal
+   VE: vertical or horizontal
+   HO & VE: no classification
+*/
 #define R300_RE_LINE_CNT                      0x4234
 #       define R300_LINESIZE_SHIFT            0
 #       define R300_LINESIZE_MASK             (0xFFFF << 0) /* GUESS */
 #       define R300_LINESIZE_MAX             (R300_LINESIZE_MASK / 6)
-#       define R300_LINE_CNT_UNK1           (1 << 17)
+#       define R300_LINE_CNT_HO               (1 << 16)
+#       define R300_LINE_CNT_VE               (1 << 17)
 
-/* Linestipple factor. 3a088889 == 1.0, 3baaaaa9 == 10.0 */
-#define R300_RE_LINE_STIPPLE_FACTOR           0x4238
+/* Some sort of scale or clamp value for texcoordless textures. */
+#define R300_RE_UNK4238                       0x4238
 
+#define R300_RE_SHADE_MODEL                   0x4278
+#	define R300_RE_SHADE_MODEL_SMOOTH     0x3aaaa
+#	define R300_RE_SHADE_MODEL_FLAT       0x39595
+
+/* Dangerous */
 #define R300_RE_POLYGON_MODE                  0x4288
+#	define R300_PM_ENABLED                (1 << 0)
+#	define R300_PM_FRONT_POINT            (0 << 0)
+#	define R300_PM_BACK_POINT             (0 << 0)
+#	define R300_PM_FRONT_LINE             (1 << 4)
+#	define R300_PM_FRONT_FILL             (1 << 5)
+#	define R300_PM_BACK_LINE              (1 << 7)
+#	define R300_PM_BACK_FILL              (1 << 8)
 
 /* Not sure why there are duplicate of factor and constant values. 
    My best guess so far is that there are seperate zbiases for test and write. 
@@ -471,20 +496,19 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 
 
 /* BEGIN: Rasterization / Interpolators - many guesses
-// So far, 0_UNKOWN_7 has always been set.
 // 0_UNKNOWN_18 has always been set except for clear operations.
 // TC_CNT is the number of incoming texture coordinate sets (i.e. it depends
 // on the vertex program, *not* the fragment program) */
 #define R300_RS_CNTL_0                      0x4300
 #       define R300_RS_CNTL_TC_CNT_SHIFT         2
 #       define R300_RS_CNTL_TC_CNT_MASK          (7 << 2)
-#       define R300_RS_CNTL_0_UNKNOWN_7          (1 << 7)
+#       define R300_RS_CNTL_0_UNKNOWN_7          (1 << 7) /* Number of color interpolators used (shifted by 7) */
 #       define R300_RS_CNTL_0_UNKNOWN_18         (1 << 18)
 /* Guess: RS_CNTL_1 holds the index of the highest used RS_ROUTE_n register. */
 #define R300_RS_CNTL_1                      0x4304
 
 /* gap */
-/* Only used for texture coordinates (color seems to be always interpolated).
+/* Only used for texture coordinates.
 // Use the source field to route texture coordinate input from the vertex program
 // to the desired interpolator. Note that the source field is relative to the
 // outputs the vertex program *actually* writes. If a vertex program only writes
@@ -645,6 +669,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_TX_WIDTHMASK_MASK            (2047 << 0)
 #       define R300_TX_HEIGHTMASK_SHIFT          11
 #       define R300_TX_HEIGHTMASK_MASK           (2047 << 11)
+#       define R300_TX_UNK23                     (1 << 23)
 #       define R300_TX_SIZE_SHIFT                26 /* largest of width, height */
 #       define R300_TX_SIZE_MASK                 (15 << 26)
 #define R300_TX_FORMAT_0                    0x44C0
@@ -675,6 +700,8 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #	define R300_TX_FORMAT_B8G8_B8G8	    	    0x14     /* no swizzle */
 #	define R300_TX_FORMAT_G8R8_G8B8	    	    0x15     /* no swizzle */
 						  /* 0x16 - some 16 bit green format.. ?? */
+#	define R300_TX_FORMAT_UNK25		   (1 << 25) /* no swizzle */
+
 	/* gap */
 	/* Floating point formats */
 	/* Note - hardware supports both 16 and 32 bit floating point */
@@ -804,6 +831,13 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_FPITX_DST_MASK               (31 << 6)
 #       define R300_FPITX_IMAGE_SHIFT            11
 #       define R300_FPITX_IMAGE_MASK             (15 << 11) /* GUESS based on layout and native limits */
+/* Unsure if these are opcodes, or some kind of bitfield, but this is how
+ * they were set when I checked
+ */
+#		define R300_FPITX_OPCODE_SHIFT			15
+#			define R300_FPITX_OP_TEX			1
+#			define R300_FPITX_OP_TXP			3
+#			define R300_FPITX_OP_TXB			4
 
 /* ALU
 // The ALU instructions register blocks are enumerated according to the order
@@ -974,17 +1008,20 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_FPI2_ARG0A_SHIFT             0
 #       define R300_FPI2_ARG0A_MASK              (31 << 0)
 #       define R300_FPI2_ARG0A_NEG               (1 << 5)
+#		define R300_FPI2_ARG0A_ABS				 (1 << 6) /* GUESS */
 #       define R300_FPI2_ARG1A_SHIFT             7
 #       define R300_FPI2_ARG1A_MASK              (31 << 7)
 #       define R300_FPI2_ARG1A_NEG               (1 << 12)
+#		define R300_FPI2_ARG1A_ABS				 (1 << 13) /* GUESS */
 #       define R300_FPI2_ARG2A_SHIFT             14
-#       define R300_FPI2_AEG2A_MASK              (31 << 14)
+#       define R300_FPI2_ARG2A_MASK              (31 << 14)
 #       define R300_FPI2_ARG2A_NEG               (1 << 19)
+#		define R300_FPI2_ARG2A_ABS				 (1 << 20) /* GUESS */
 #       define R300_FPI2_SPECIAL_LRP             (1 << 21)
 #       define R300_FPI2_OUTA_MAD                (0 << 23)
 #       define R300_FPI2_OUTA_DP4                (1 << 23)
-#       define R300_RPI2_OUTA_MIN                (2 << 23)
-#       define R300_RPI2_OUTA_MAX                (3 << 23)
+#       define R300_FPI2_OUTA_MIN                (2 << 23)
+#       define R300_FPI2_OUTA_MAX                (3 << 23)
 #       define R300_FPI2_OUTA_CMP                (6 << 23)
 #       define R300_FPI2_OUTA_FRC                (7 << 23)
 #       define R300_FPI2_OUTA_EX2                (8 << 23)
@@ -1200,17 +1237,19 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #define R300_VPI_OUT_OP_MIN                     (8 << 0)
 #define R300_VPI_OUT_OP_SGE                     (9 << 0)
 #define R300_VPI_OUT_OP_SLT                     (10 << 0)
-#define R300_VPI_OUT_OP_UNK1                    (12 << 0) /* Used in GL_POINT_DISTANCE_ATTENUATION_ARB */
+#define R300_VPI_OUT_OP_UNK12                   (12 << 0) /* Used in GL_POINT_DISTANCE_ATTENUATION_ARB, vector(scalar, vector) */
 #define R300_VPI_OUT_OP_EXP                     (65 << 0)
 #define R300_VPI_OUT_OP_LOG                     (66 << 0)
+#define R300_VPI_OUT_OP_UNK67                   (67 << 0) /* Used in fog computations, scalar(scalar) */
 #define R300_VPI_OUT_OP_LIT                     (68 << 0)
 #define R300_VPI_OUT_OP_POW                     (69 << 0)
 #define R300_VPI_OUT_OP_RCP                     (70 << 0)
 #define R300_VPI_OUT_OP_RSQ                     (72 << 0)
-#define R300_VPI_OUT_OP_UNK2                    (73 << 0) /* Used in GL_POINT_DISTANCE_ATTENUATION_ARB */
+#define R300_VPI_OUT_OP_UNK73                   (73 << 0) /* Used in GL_POINT_DISTANCE_ATTENUATION_ARB, scalar(scalar) */
 #define R300_VPI_OUT_OP_EX2                     (75 << 0)
 #define R300_VPI_OUT_OP_LG2                     (76 << 0)
 #define R300_VPI_OUT_OP_MAD_2                   (128 << 0)
+#define R300_VPI_OUT_OP_UNK129                  (129 << 0) /* all temps, vector(scalar, vector, vector) */
 
 #define R300_VPI_OUT_REG_CLASS_TEMPORARY        (0 << 8)
 #define R300_VPI_OUT_REG_CLASS_RESULT           (2 << 8)

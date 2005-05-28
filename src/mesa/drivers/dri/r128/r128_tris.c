@@ -75,7 +75,6 @@ static void r128RenderPrimitive( GLcontext *ctx, GLenum prim );
 #define HAVE_POINTS 1
 #define HAVE_LE32_VERTS 1
 #define CTX_ARG r128ContextPtr rmesa
-#define CTX_ARG2 rmesa
 #define GET_VERTEX_DWORDS() rmesa->vertex_size
 #define ALLOC_VERTS( n, size ) r128AllocDmaLow( rmesa, (n), (size) * 4 )
 #undef LOCAL_VARS
@@ -350,7 +349,6 @@ r128_fallback_tri( r128ContextPtr rmesa,
    _swsetup_Translate( ctx, v0, &v[0] );
    _swsetup_Translate( ctx, v1, &v[1] );
    _swsetup_Translate( ctx, v2, &v[2] );
-   /* XXX: SpanRenderStart */
    _swrast_Triangle( ctx, &v[0], &v[1], &v[2] );
 }
 
@@ -674,8 +672,8 @@ static const char * const fallbackStrings[] = {
    "glRenderMode(selection or feedback)",
    "glLogicOp (mode != GL_COPY)",
    "GL_SEPARATE_SPECULAR_COLOR",
-   "glBlendEquation",
-   "glBlendFunc(mode != ADD)",
+   "glBlendEquation(mode != ADD)",
+   "glBlendFunc",
    "Projective texture",
    "Rasterization disable",
 };

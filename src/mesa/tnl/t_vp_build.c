@@ -30,8 +30,6 @@
  */
 
 
-#include <strings.h>
-
 #include "glheader.h"
 #include "macros.h"
 #include "enums.h"
@@ -48,6 +46,14 @@
  * instruction back into this file:
  */
 #define DISASSEM 0
+
+/* Should be tunable by the driver - do we want to do matrix
+ * multiplications with DP4's or with MUL/MAD's?  SSE works better
+ * with the latter, drivers may differ.
+ */
+#define PREFER_DP4 1
+
+#define MAX_INSN 200
 
 /* Use uregs to represent registers internally, translate to Mesa's
  * expected formats on emit.  
@@ -74,7 +80,7 @@ struct tnl_program {
    GLcontext *ctx;
    struct vertex_program *program;
    
-   GLuint temp_flag;
+   GLuint temp_in_use;
    GLuint temp_reserved;
    
    struct ureg eye_position;
@@ -142,13 +148,13 @@ static struct ureg swizzle1( struct ureg reg, int x )
 
 static struct ureg get_temp( struct tnl_program *p )
 {
-   int bit = ffs( ~p->temp_flag );
+   int bit = ffs( ~p->temp_in_use );
    if (!bit) {
       fprintf(stderr, "%s: out of temporaries\n", __FILE__);
       exit(1);
    }
 
-   p->temp_flag |= 1<<(bit-1);
+   p->temp_in_use |= 1<<(bit-1);
    return make_ureg(PROGRAM_TEMPORARY, bit-1);
 }
 
@@ -162,14 +168,14 @@ static struct ureg reserve_temp( struct tnl_program *p )
 static void release_temp( struct tnl_program *p, struct ureg reg )
 {
    if (reg.file == PROGRAM_TEMPORARY) {
-      p->temp_flag &= ~(1<<reg.idx);
-      p->temp_flag |= p->temp_reserved; /* can't release reserved temps */
+      p->temp_in_use &= ~(1<<reg.idx);
+      p->temp_in_use |= p->temp_reserved; /* can't release reserved temps */
    }
 }
 
 static void release_temps( struct tnl_program *p )
 {
-   p->temp_flag = p->temp_reserved;
+   p->temp_in_use = p->temp_reserved;
 }
 
 
@@ -203,6 +209,7 @@ static struct ureg register_const4f( struct tnl_program *p,
 }
 
 #define register_const1f(p, s0)         register_const4f(p, s0, 0, 0, 1)
+#define register_scalar_const(p, s0)    register_const4f(p, s0, s0, s0, s0)
 #define register_const2f(p, s0, s1)     register_const4f(p, s0, s1, 0, 1)
 #define register_const3f(p, s0, s1, s2) register_const4f(p, s0, s1, s2, 1)
 
@@ -316,7 +323,14 @@ static void emit_op3fn(struct tnl_program *p,
    GLuint nr = p->program->Base.NumInstructions++;
    struct vp_instruction *inst = &p->program->Instructions[nr];
       
+   if (p->program->Base.NumInstructions > MAX_INSN) {
+      _mesa_problem(p->ctx, "Out of instructions in emit_op3fn\n");
+      return;
+   }
+      
    inst->Opcode = op; 
+   inst->StringPos = 0;
+   inst->Data = 0;
    
    emit_arg( &inst->SrcReg[0], src0 );
    emit_arg( &inst->SrcReg[1], src1 );
@@ -367,6 +381,10 @@ static void emit_matrix_transform_vec4( struct tnl_program *p,
    emit_op2(p, VP_OPCODE_DP4, dest, WRITEMASK_W, src, mat[3]);
 }
 
+/* This version is much easier to implement if writemasks are not
+ * supported natively on the target or (like SSE), the target doesn't
+ * have a clean/obvious dotproduct implementation.
+ */
 static void emit_transpose_matrix_transform_vec4( struct tnl_program *p,
 						  struct ureg dest,
 						  const struct ureg *mat,
@@ -410,17 +428,34 @@ static void emit_normalize_vec3( struct tnl_program *p,
    release_temp(p, tmp);
 }
 
+static void emit_passthrough( struct tnl_program *p, 
+			      GLuint input,
+			      GLuint output )
+{
+   struct ureg out = register_output(p, output);
+   emit_op1(p, VP_OPCODE_MOV, out, 0, register_input(p, input)); 
+}
+
 static struct ureg get_eye_position( struct tnl_program *p )
 {
    if (is_undef(p->eye_position)) {
       struct ureg pos = register_input( p, VERT_ATTRIB_POS ); 
       struct ureg modelview[4];
 
-      register_matrix_param6( p, STATE_MATRIX, STATE_MODELVIEW, 0, 0, 3, 
-			      STATE_MATRIX_TRANSPOSE, modelview );
       p->eye_position = reserve_temp(p);
 
-      emit_transpose_matrix_transform_vec4(p, p->eye_position, modelview, pos);
+      if (PREFER_DP4) {
+	 register_matrix_param6( p, STATE_MATRIX, STATE_MODELVIEW, 0, 0, 3, 
+				 STATE_MATRIX, modelview );
+
+	 emit_matrix_transform_vec4(p, p->eye_position, modelview, pos);
+      }
+      else {
+	 register_matrix_param6( p, STATE_MATRIX, STATE_MODELVIEW, 0, 0, 3, 
+				 STATE_MATRIX_TRANSPOSE, modelview );
+
+	 emit_transpose_matrix_transform_vec4(p, p->eye_position, modelview, pos);
+      }
    }
    
    return p->eye_position;
@@ -479,9 +514,16 @@ static void build_hpos( struct tnl_program *p )
    struct ureg hpos = register_output( p, VERT_RESULT_HPOS );
    struct ureg mvp[4];
 
-   register_matrix_param6( p, STATE_MATRIX, STATE_MVP, 0, 0, 3, 
-			   STATE_MATRIX_TRANSPOSE, mvp );
-   emit_transpose_matrix_transform_vec4( p, hpos, mvp, pos );
+   if (PREFER_DP4) {
+      register_matrix_param6( p, STATE_MATRIX, STATE_MVP, 0, 0, 3, 
+			      STATE_MATRIX, mvp );
+      emit_matrix_transform_vec4( p, hpos, mvp, pos );
+   }
+   else {
+      register_matrix_param6( p, STATE_MATRIX, STATE_MVP, 0, 0, 3, 
+			      STATE_MATRIX_TRANSPOSE, mvp );
+      emit_transpose_matrix_transform_vec4( p, hpos, mvp, pos );
+   }
 }
 
 
@@ -682,6 +724,35 @@ static void build_lighting( struct tnl_program *p )
 	 _bfc1 = _bfc0;
    }
 
+
+   /* If no lights, still need to emit the scenecolor.
+    */
+   if (nr_lights == 0) {
+      {
+	 struct ureg res0 = register_output( p, VERT_RESULT_COL0 );
+	 emit_op1(p, VP_OPCODE_MOV, res0, 0, _col0);
+      }
+
+      if (separate) {
+	 struct ureg res1 = register_output( p, VERT_RESULT_COL1 );
+	 emit_op1(p, VP_OPCODE_MOV, res1, 0, _col1);
+      }
+
+      if (twoside) {
+	 struct ureg res0 = register_output( p, VERT_RESULT_BFC0 );
+	 emit_op1(p, VP_OPCODE_MOV, res0, 0, _bfc0);
+      }
+      
+      if (twoside && separate) {
+	 struct ureg res1 = register_output( p, VERT_RESULT_BFC1 );
+	 emit_op1(p, VP_OPCODE_MOV, res1, 0, _bfc1);
+      }
+      
+      release_temps(p);
+      return;
+   }
+
+
    for (i = 0; i < MAX_LIGHTS; i++) {
       struct gl_light *light = &ctx->Light.Light[i];
 
@@ -692,14 +763,12 @@ static void build_lighting( struct tnl_program *p )
 	 count++;
 
 	 if (light->EyePosition[3] == 0) {
-	    /* Can used precomputed constants in this case:
+	    /* Can used precomputed constants in this case.
+	     * Attenuation never applies to infinite lights.
 	     */
 	    VPpli = register_param3(p, STATE_LIGHT, i, 
 				    STATE_POSITION_NORMALIZED); 
 	    half = register_param3(p, STATE_LIGHT, i, STATE_HALF);
-	    
-	    /* Spot attenuation maybe applies to this case?  Could
-	     * precompute if so? */
 	 } 
 	 else {
 	    struct ureg Ppli = register_param3(p, STATE_LIGHT, i, 
@@ -767,7 +836,7 @@ static void build_lighting( struct tnl_program *p )
 	    if (!is_undef(att)) 
 	       emit_op2(p, VP_OPCODE_MUL, lit, 0, lit, att);
    
-   
+	    
 	    if (count == nr_lights) {
 	       if (separate) {
 		  res0 = register_output( p, VERT_RESULT_COL0 );
@@ -913,7 +982,7 @@ static void build_sphere_texgen( struct tnl_program *p,
    struct ureg normal = get_eye_normal(p);
    struct ureg eye_hat = get_eye_position_normalized(p);
    struct ureg tmp = get_temp(p);
-   struct ureg half = register_const1f(p, .5);
+   struct ureg half = register_scalar_const(p, .5);
    struct ureg r = get_temp(p);
    struct ureg inv_m = get_temp(p);
    struct ureg id = get_identity_param(p);
@@ -939,9 +1008,9 @@ static void build_sphere_texgen( struct tnl_program *p,
    /* 2/m */
    emit_op1(p, VP_OPCODE_RSQ, tmp, 0, tmp); 
    /* 1/m */
-   emit_op2(p, VP_OPCODE_MUL, inv_m, 0, tmp, swizzle1(half,X)); 
+   emit_op2(p, VP_OPCODE_MUL, inv_m, 0, tmp, half); 
    /* r/m + 1/2 */
-   emit_op3(p, VP_OPCODE_MAD, dest, writemask, r, inv_m, swizzle1(half,X)); 
+   emit_op3(p, VP_OPCODE_MAD, dest, writemask, r, inv_m, half); 
 	       
    release_temp(p, tmp);
    release_temp(p, r);
@@ -957,9 +1026,9 @@ static void build_texture_transform( struct tnl_program *p )
    for (i = 0; i < ctx->Const.MaxTextureCoordUnits; i++) {
       struct gl_texture_unit *texUnit = &ctx->Texture.Unit[i];
       GLuint texmat_enabled = ctx->Texture._TexMatEnabled & ENABLE_TEXMAT(i);
-      struct ureg out = register_output(p, VERT_RESULT_TEX0 + i);
 
       if (texUnit->TexGenEnabled || texmat_enabled) {
+	 struct ureg out = register_output(p, VERT_RESULT_TEX0 + i);
 	 struct ureg out_texgen = undef;
 
 	 if (texUnit->TexGenEnabled) {
@@ -1042,12 +1111,25 @@ static void build_texture_transform( struct tnl_program *p )
 	    struct ureg in = (!is_undef(out_texgen) ? 
 			      out_texgen : 
 			      register_input(p, VERT_ATTRIB_TEX0+i));
-	    register_matrix_param6( p, STATE_MATRIX, STATE_TEXTURE, i, 
-				    0, 3, 0, texmat );
-	    emit_matrix_transform_vec4( p, out, texmat, in );
+	    if (PREFER_DP4) {
+	       register_matrix_param6( p, STATE_MATRIX, STATE_TEXTURE, i, 
+				       0, 3, STATE_MATRIX, texmat );
+	       emit_matrix_transform_vec4( p, out, texmat, in );
+	    }
+	    else {
+	       register_matrix_param6( p, STATE_MATRIX, STATE_TEXTURE, i, 
+				       0, 3, STATE_MATRIX_TRANSPOSE, texmat );
+	       emit_matrix_transform_vec4( p, out, texmat, in );
+	    }
 	 }
 
 	 release_temps(p);
+      } 
+      else if (texUnit->_ReallyEnabled) {
+	 /* KW: _ReallyEnabled isn't sufficient?  Need to know whether
+	  * this texture unit is referenced by the fragment shader.  
+	  */
+	 emit_passthrough(p, VERT_ATTRIB_TEX0+i, VERT_RESULT_TEX0+i);
       }
    }
 }
@@ -1082,6 +1164,28 @@ static void build_pointsize( struct tnl_program *p )
 }
 
 
+static GLboolean programs_eq( struct vertex_program *a,
+			      struct vertex_program *b )
+{
+   if (!a || !b)
+      return GL_FALSE;
+
+   if (a->Base.NumInstructions != b->Base.NumInstructions ||
+       a->Parameters->NumParameters != b->Parameters->NumParameters)
+      return GL_FALSE;
+
+   if (memcmp(a->Instructions, b->Instructions, 
+	      a->Base.NumInstructions * sizeof(struct vp_instruction)) != 0)
+      return GL_FALSE;
+
+   if (memcmp(a->Parameters->Parameters, b->Parameters->Parameters,
+	      a->Parameters->NumParameters * 
+	      sizeof(struct program_parameter)) != 0)
+      return GL_FALSE;
+
+   return GL_TRUE;
+}
+
 
 void _tnl_UpdateFixedFunctionProgram( GLcontext *ctx )
 {
@@ -1089,22 +1193,24 @@ void _tnl_UpdateFixedFunctionProgram( GLcontext *ctx )
 
    if (ctx->VertexProgram._Enabled)
       return;
-
-   memset(&p, 0, sizeof(p));
-   p.ctx = ctx;
-   p.program = &ctx->_TnlProgram;
    
+
+   _mesa_memset(&p, 0, sizeof(p));
+   p.ctx = ctx;
+   p.program = (struct vertex_program *)ctx->Driver.NewProgram(ctx, GL_VERTEX_PROGRAM_ARB, 0);
    p.eye_position = undef;
    p.eye_position_normalized = undef;
    p.eye_normal = undef;
    p.identity = undef;
 
-   p.temp_flag = 0;
-   p.temp_reserved = ~((1<<MAX_NV_VERTEX_PROGRAM_TEMPS)-1);
+   p.temp_in_use = 0;
 
-   if (p.program->Instructions == NULL) {
-      p.program->Instructions = MALLOC(sizeof(struct vp_instruction) * 100);
-   }
+   if (ctx->Const.MaxVertexProgramTemps >= sizeof(int) * 8)
+      p.temp_reserved = 0;
+   else
+      p.temp_reserved = ~((1<<ctx->Const.MaxVertexProgramTemps)-1);
+
+   p.program->Instructions = MALLOC(sizeof(struct vp_instruction) * MAX_INSN);
 
    /* Initialize the arb_program struct */
    p.program->Base.String = 0;
@@ -1112,9 +1218,12 @@ void _tnl_UpdateFixedFunctionProgram( GLcontext *ctx )
    p.program->Base.NumTemporaries =
    p.program->Base.NumParameters =
    p.program->Base.NumAttributes = p.program->Base.NumAddressRegs = 0;
+ 
    if (p.program->Parameters)
-      _mesa_free_parameter_list(p.program->Parameters);
-   p.program->Parameters = _mesa_new_parameter_list ();
+      _mesa_free_parameters(p.program->Parameters);
+   else
+      p.program->Parameters = _mesa_new_parameter_list();
+
    p.program->InputsRead = 0;
    p.program->OutputsWritten = 0;
 
@@ -1126,6 +1235,8 @@ void _tnl_UpdateFixedFunctionProgram( GLcontext *ctx )
     */
    if (ctx->Light.Enabled)
       build_lighting(&p);
+   else
+      emit_passthrough(&p, VERT_ATTRIB_COLOR0, VERT_RESULT_COL0);
 
    if (ctx->Fog.Enabled)
       build_fog(&p);
@@ -1136,7 +1247,6 @@ void _tnl_UpdateFixedFunctionProgram( GLcontext *ctx )
    if (ctx->Point._Attenuated)
       build_pointsize(&p);
 
-
    /* Finish up:
     */
    emit_op1(&p, VP_OPCODE_END, undef, 0, undef);
@@ -1145,5 +1255,19 @@ void _tnl_UpdateFixedFunctionProgram( GLcontext *ctx )
     */
    if (DISASSEM) {
       _mesa_printf ("\n");
+   }
+
+
+   /* Notify driver the fragment program has (actually) changed.
+    */
+   if (!programs_eq(ctx->_TnlProgram, p.program) != 0) {
+      if (ctx->_TnlProgram)
+	 ctx->Driver.DeleteProgram( ctx, &ctx->_TnlProgram->Base );
+      ctx->_TnlProgram = p.program;
+   }
+   else if (p.program) {
+      /* Nothing changed...
+       */
+      ctx->Driver.DeleteProgram( ctx, &p.program->Base );
    }
 }

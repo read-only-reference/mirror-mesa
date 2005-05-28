@@ -15,7 +15,7 @@
 void
 _eglInitContext(_EGLContext *ctx)
 {
-   /* just init to zer for now */
+   /* just init to zero for now */
    memset(ctx, 0, sizeof(_EGLContext));
 }
 
@@ -223,4 +223,18 @@ _eglMakeCurrent(_EGLDriver *drv, EGLDisplay dpy, EGLSurface d, EGLSurface r, EGL
    _eglGlobal.CurrentContext = ctx;
 
    return EGL_TRUE;
+}
+
+
+/**
+ * This is defined by the EGL_MESA_copy_context extension.
+ */
+EGLBoolean
+_eglCopyContextMESA(_EGLDriver *drv, EGLDisplay dpy, EGLContext source,
+                    EGLContext dest, EGLint mask)
+{
+   /* This function will always have to be overridden/implemented in the
+    * device driver.  If the driver is based on Mesa, use _mesa_copy_context().
+    */
+   return EGL_FALSE;
 }

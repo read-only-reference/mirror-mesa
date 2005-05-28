@@ -31,7 +31,7 @@
 #include "mtypes.h"
 
 
-#define F(x) (int)(unsigned long)&(((struct gl_extensions *)0)->x)
+#define F(x) (int)(uintptr_t)&(((struct gl_extensions *)0)->x)
 #define ON GL_TRUE
 #define OFF GL_FALSE
 
@@ -227,7 +227,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
    ctx->Extensions.EXT_convolution = GL_TRUE;
    ctx->Extensions.EXT_depth_bounds_test = GL_TRUE;
    ctx->Extensions.EXT_fog_coord = GL_TRUE;
-   /*ctx->Extensions.EXT_framebuffer_object = GL_TRUE;*/
+   ctx->Extensions.EXT_framebuffer_object = GL_TRUE; /*FALSE;*/
    ctx->Extensions.EXT_histogram = GL_TRUE;
    ctx->Extensions.EXT_multi_draw_arrays = GL_TRUE;
    ctx->Extensions.EXT_paletted_texture = GL_TRUE;
@@ -489,7 +489,7 @@ _mesa_make_extension_string( GLcontext *ctx )
    for (i = 0 ; i < Elements(default_extensions) ; i++) {
       if (!default_extensions[i].flag_offset ||
           *(base + default_extensions[i].flag_offset)) {
-         extStrLen += _mesa_strlen(default_extensions[i].name) + 1;
+         extStrLen += (GLuint)_mesa_strlen(default_extensions[i].name) + 1;
       }
    }
    s = (GLubyte *) _mesa_malloc(extStrLen);
@@ -499,7 +499,7 @@ _mesa_make_extension_string( GLcontext *ctx )
    for (i = 0 ; i < Elements(default_extensions) ; i++) {
       if (!default_extensions[i].flag_offset ||
           *(base + default_extensions[i].flag_offset)) {
-         GLuint len = _mesa_strlen(default_extensions[i].name);
+         GLuint len = (GLuint)_mesa_strlen(default_extensions[i].name);
          _mesa_memcpy(s + extStrLen, default_extensions[i].name, len);
          extStrLen += len;
          s[extStrLen] = (GLubyte) ' ';

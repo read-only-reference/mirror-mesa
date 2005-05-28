@@ -75,12 +75,10 @@ struct dd_function_table {
                           GLuint *width, GLuint *height );
 
    /**
-    * Resize the driver's depth/stencil/accum/back buffers to match the
-    * size given in the GLframebuffer struct.  
-    *
-    * This is typically called when Mesa detects that a window size has changed.
+    * Resize the given framebuffer to the given size.
     */
-   void (*ResizeBuffers)( GLframebuffer *buffer );
+   void (*ResizeBuffers)( GLcontext *ctx, GLframebuffer *fb,
+                          GLuint width, GLuint height);
 
    /**
     * Called whenever an error is generated.  
@@ -517,6 +515,19 @@ struct dd_function_table {
    void (*FreeTexImageData)( GLcontext *ctx, struct gl_texture_image *tImage );
 
    /**
+    * Note: no context argument.  This function doesn't initially look
+    * like it belongs here, except that the driver is the only entity
+    * that knows for sure how the texture memory is allocated - via
+    * the above callbacks.  There is then an argument that the driver
+    * knows what memcpy paths might be fast.  Typically this is invoked with
+    * 
+    * to -- a pointer into texture memory allocated by NewTextureImage() above.
+    * from -- a pointer into client memory or a mesa temporary.
+    * sz -- nr bytes to copy.
+    */
+   void* (*TextureMemCpy)( void *to, const void *from, size_t sz );
+
+   /**
     * Called by glAreTextureResident().
     */
    GLboolean (*IsTextureResident)( GLcontext *ctx,
@@ -795,6 +806,13 @@ struct dd_function_table {
    /*@{*/
    struct gl_framebuffer * (*NewFramebuffer)(GLcontext *ctx, GLuint name);
    struct gl_renderbuffer * (*NewRenderbuffer)(GLcontext *ctx, GLuint name);
+   void (*FramebufferRenderbuffer)(GLcontext *ctx, 
+                                   struct gl_renderbuffer_attachment *att,
+                                   struct gl_renderbuffer *rb);
+   void (*RenderbufferTexture)(GLcontext *ctx,
+                               struct gl_renderbuffer_attachment *att,
+                               struct gl_texture_object *texObj,
+                               GLenum texTarget, GLuint level, GLuint zoffset);
    /*@}*/
 #endif
 

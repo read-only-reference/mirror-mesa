@@ -100,7 +100,7 @@ extern "C" {
  * this macro.
  * Both pointers/offsets are expressed in bytes.
  */
-#define ADD_POINTERS(A, B)  ( (GLubyte *) (A) + (unsigned long) (B) )
+#define ADD_POINTERS(A, B)  ( (GLubyte *) (A) + (uintptr_t) (B) )
 
 
 /**********************************************************************/
@@ -223,6 +223,11 @@ typedef union { GLfloat f; GLint i; } fi_type;
 #ifndef M_PI
 #define M_PI (3.1415926536)
 #endif
+
+#ifndef M_E
+#define M_E (2.7182818284590452354)
+#endif
+
 
 /* XXX this is a bit of a hack needed for compilation within XFree86 */
 #ifndef FLT_MIN

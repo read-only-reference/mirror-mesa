@@ -72,6 +72,7 @@ static const struct dri_debug_control debug_control[] =
     { "prims",  DEBUG_VERBOSE_PRIMS },
     { "count",  DEBUG_VERBOSE_COUNT },
     { "nowait", DEBUG_NOWAIT },
+    { "fall",   DEBUG_VERBOSE_FALLBACK },
     { NULL,    0 }
 };
 
@@ -230,6 +231,11 @@ GLboolean mach64CreateContext( const __GLcontextModes *glVisual,
 
    driContextPriv->driverPrivate = (void *)mmesa;
 
+   if (driQueryOptionb(&mmesa->optionCache, "no_rast")) {
+      fprintf(stderr, "disabling 3D acceleration\n");
+      FALLBACK(mmesa, MACH64_FALLBACK_DISABLE, 1);
+   }
+
    return GL_TRUE;
 }
 
@@ -306,14 +312,14 @@ mach64MakeCurrent( __DRIcontextPrivate *driContextPriv,
 	 mach64CalcViewport( newMach64Ctx->glCtx );
       }
 
-      _mesa_make_current2( newMach64Ctx->glCtx,
-                           (GLframebuffer *) driDrawPriv->driverPrivate,
-                           (GLframebuffer *) driReadPriv->driverPrivate );
+      _mesa_make_current( newMach64Ctx->glCtx,
+                          (GLframebuffer *) driDrawPriv->driverPrivate,
+                          (GLframebuffer *) driReadPriv->driverPrivate );
 
 
       newMach64Ctx->new_state |=  MACH64_NEW_CLIP;
    } else {
-      _mesa_make_current( 0, 0 );
+      _mesa_make_current( NULL, NULL, NULL );
    }
 
    return GL_TRUE;
