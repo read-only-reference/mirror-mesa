@@ -1,6 +1,27 @@
 #ifndef _R300_REG_H
 #define _R300_REG_H
 
+#define R300_MC_INIT_MISC_LAT_TIMER	0x180
+#	define R300_MC_MISC__MC_CPR_INIT_LAT_SHIFT	0
+#	define R300_MC_MISC__MC_VF_INIT_LAT_SHIFT	4
+#	define R300_MC_MISC__MC_DISP0R_INIT_LAT_SHIFT	8
+#	define R300_MC_MISC__MC_DISP1R_INIT_LAT_SHIFT	12
+#	define R300_MC_MISC__MC_FIXED_INIT_LAT_SHIFT	16
+#	define R300_MC_MISC__MC_E2R_INIT_LAT_SHIFT	20
+#	define R300_MC_MISC__MC_SAME_PAGE_PRIO_SHIFT	24
+#	define R300_MC_MISC__MC_GLOBW_INIT_LAT_SHIFT	28
+
+
+#define R300_MC_INIT_GFX_LAT_TIMER	0x154
+#	define R300_MC_MISC__MC_G3D0R_INIT_LAT_SHIFT	0
+#	define R300_MC_MISC__MC_G3D1R_INIT_LAT_SHIFT	4
+#	define R300_MC_MISC__MC_G3D2R_INIT_LAT_SHIFT	8
+#	define R300_MC_MISC__MC_G3D3R_INIT_LAT_SHIFT	12
+#	define R300_MC_MISC__MC_TX0R_INIT_LAT_SHIFT	16
+#	define R300_MC_MISC__MC_TX1R_INIT_LAT_SHIFT	20
+#	define R300_MC_MISC__MC_GLOBR_INIT_LAT_SHIFT	24
+#	define R300_MC_MISC__MC_GLOBW_FULL_LAT_SHIFT	28
+
 /*
 This file contains registers and constants for the R300. They have been
 found mostly by examining command buffers captured using glxtest, as well
@@ -502,7 +523,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #define R300_RS_CNTL_0                      0x4300
 #       define R300_RS_CNTL_TC_CNT_SHIFT         2
 #       define R300_RS_CNTL_TC_CNT_MASK          (7 << 2)
-#       define R300_RS_CNTL_0_UNKNOWN_7          (1 << 7) /* Number of color interpolators used (shifted by 7) */
+#		define R300_RS_CNTL_CI_CNT_SHIFT         7 /* number of color interpolators used */
 #       define R300_RS_CNTL_0_UNKNOWN_18         (1 << 18)
 /* Guess: RS_CNTL_1 holds the index of the highest used RS_ROUTE_n register. */
 #define R300_RS_CNTL_1                      0x4304
@@ -562,6 +583,11 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_RS_ROUTE_0_COLOR             (1 << 14)
 #       define R300_RS_ROUTE_0_COLOR_DEST_SHIFT  17
 #       define R300_RS_ROUTE_0_COLOR_DEST_MASK   (31 << 17) /* GUESS */
+/* As above, but for secondary color */
+#		define R300_RS_ROUTE_1_COLOR1            (1 << 14)
+#		define R300_RS_ROUTE_1_COLOR1_DEST_SHIFT 17
+#		define R300_RS_ROUTE_1_COLOR1_DEST_MASK  (31 << 17)
+#		define R300_RS_ROUTE_1_UNKNOWN11         (1 << 11)
 /* END */
 
 /* BEGIN: Scissors and cliprects
@@ -1121,7 +1147,8 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_COLOR_ENDIAN_NO_SWAP         (0 << 18) /* GUESS */
 #       define R300_COLOR_ENDIAN_WORD_SWAP       (1 << 18) /* GUESS */
 #       define R300_COLOR_ENDIAN_DWORD_SWAP      (2 << 18) /* GUESS */
-#       define R300_COLOR_UNKNOWN_22_23          (3 << 22) /* GUESS: Format? - (6<<21) for RGBA? */
+#       define R300_COLOR_FORMAT_RGB565          (2 << 22)
+#       define R300_COLOR_FORMAT_ARGB8888        (3 << 22)
 #define R300_RB3D_COLORPITCH1               0x4E3C /* GUESS */
 #define R300_RB3D_COLORPITCH2               0x4E40 /* GUESS */
 #define R300_RB3D_COLORPITCH3               0x4E44 /* GUESS */
@@ -1188,6 +1215,12 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #	define R300_RB3D_ZS2_STENCIL_MASK		0xFF
 #	define R300_RB3D_ZS2_STENCIL_MASK_SHIFT	        8
 #	define R300_RB3D_ZS2_STENCIL_WRITE_MASK_SHIFT	16
+
+/* gap */
+
+#define R300_RB3D_ZSTENCIL_FORMAT                   0x4F10
+#	define R300_DEPTH_FORMAT_16BIT_INT_Z     (0 << 0)
+#	define R300_DEPTH_FORMAT_24BIT_INT_Z     (2 << 0)
 
 /* gap */
 #define R300_RB3D_DEPTHOFFSET               0x4F20

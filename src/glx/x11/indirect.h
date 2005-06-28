@@ -543,10 +543,10 @@ extern HIDDEN void __indirect_glSecondaryColor3usEXT(GLushort red, GLushort gree
 extern HIDDEN void __indirect_glSecondaryColor3usvEXT(const GLushort * v);
 extern HIDDEN void __indirect_glSecondaryColorPointerEXT(GLint size, GLenum type, GLsizei stride, const GLvoid * pointer);
 extern HIDDEN GLboolean __indirect_glAreProgramsResidentNV(GLsizei n, const GLuint * ids, GLboolean * residences);
-extern HIDDEN void __indirect_glBindProgramNV(GLenum target, GLuint id);
-extern HIDDEN void __indirect_glDeleteProgramsNV(GLsizei n, const GLuint * ids);
+extern HIDDEN void __indirect_glBindProgramNV(GLenum target, GLuint program);
+extern HIDDEN void __indirect_glDeleteProgramsNV(GLsizei n, const GLuint * programs);
 extern HIDDEN void __indirect_glExecuteProgramNV(GLenum target, GLuint id, const GLfloat * params);
-extern HIDDEN void __indirect_glGenProgramsNV(GLsizei n, GLuint * ids);
+extern HIDDEN void __indirect_glGenProgramsNV(GLsizei n, GLuint * programs);
 extern HIDDEN void __indirect_glGetProgramParameterdvNV(GLenum target, GLuint index, GLenum pname, GLdouble * params);
 extern HIDDEN void __indirect_glGetProgramParameterfvNV(GLenum target, GLuint index, GLenum pname, GLfloat * params);
 extern HIDDEN void __indirect_glGetProgramivNV(GLuint id, GLenum pname, GLint * params);
@@ -555,8 +555,8 @@ extern HIDDEN void __indirect_glGetTrackMatrixivNV(GLenum target, GLuint address
 extern HIDDEN void __indirect_glGetVertexAttribdvARB(GLuint index, GLenum pname, GLdouble * params);
 extern HIDDEN void __indirect_glGetVertexAttribfvARB(GLuint index, GLenum pname, GLfloat * params);
 extern HIDDEN void __indirect_glGetVertexAttribivARB(GLuint index, GLenum pname, GLint * params);
-extern HIDDEN void __indirect_glGetVertexAttribPointervNV(GLuint index, GLenum pname, GLvoid ** pointer);
-extern HIDDEN GLboolean __indirect_glIsProgramNV(GLuint id);
+extern HIDDEN void __indirect_glGetVertexAttribPointervNV(GLuint index, GLenum pname, GLvoid ** params);
+extern HIDDEN GLboolean __indirect_glIsProgramNV(GLuint program);
 extern HIDDEN void __indirect_glLoadProgramNV(GLenum target, GLuint id, GLsizei len, const GLubyte * program);
 extern HIDDEN void __indirect_glProgramParameter4dNV(GLenum target, GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w);
 extern HIDDEN void __indirect_glProgramParameter4dvNV(GLenum target, GLuint index, const GLdouble * params);
@@ -606,7 +606,7 @@ extern HIDDEN void __indirect_glVertexAttribs4dvNV(GLuint index, GLsizei n, cons
 extern HIDDEN void __indirect_glVertexAttribs4fvNV(GLuint index, GLsizei n, const GLfloat * v);
 extern HIDDEN void __indirect_glVertexAttribs4svNV(GLuint index, GLsizei n, const GLshort * v);
 extern HIDDEN void __indirect_glVertexAttribs4ubvNV(GLuint index, GLsizei n, const GLubyte * v);
-extern HIDDEN void __indirect_glPointParameteriNV(GLenum pname, GLint params);
+extern HIDDEN void __indirect_glPointParameteriNV(GLenum pname, GLint param);
 extern HIDDEN void __indirect_glPointParameterivNV(GLenum pname, const GLint * params);
 extern HIDDEN void __indirect_glMultiDrawArraysEXT(GLenum mode, GLint * first, GLsizei * count, GLsizei primcount);
 extern HIDDEN void __indirect_glMultiDrawElementsEXT(GLenum mode, const GLsizei * count, GLenum type, const GLvoid ** indices, GLsizei primcount);
@@ -682,6 +682,23 @@ extern HIDDEN void __indirect_glVertexAttrib4sNV(GLuint index, GLshort x, GLshor
 extern HIDDEN void __indirect_glVertexAttrib4svNV(GLuint index, const GLshort * v);
 extern HIDDEN void __indirect_glVertexAttrib4ubNV(GLuint index, GLubyte x, GLubyte y, GLubyte z, GLubyte w);
 extern HIDDEN void __indirect_glVertexAttrib4ubvNV(GLuint index, const GLubyte * v);
+extern HIDDEN GLboolean __indirect_glIsRenderbufferEXT(GLuint renderbuffer);
+extern HIDDEN void __indirect_glBindRenderbufferEXT(GLenum target, GLuint renderbuffer);
+extern HIDDEN void __indirect_glDeleteRenderbuffersEXT(GLsizei n, const GLuint * renderbuffers);
+extern HIDDEN void __indirect_glGenRenderbuffersEXT(GLsizei n, GLuint * renderbuffers);
+extern HIDDEN void __indirect_glRenderbufferStorageEXT(GLenum target, GLenum internalformat, GLsizei width, GLsizei height);
+extern HIDDEN void __indirect_glGetRenderbufferParameterivEXT(GLenum target, GLenum pname, GLint * params);
+extern HIDDEN GLboolean __indirect_glIsFramebufferEXT(GLuint framebuffer);
+extern HIDDEN void __indirect_glBindFramebufferEXT(GLenum target, GLuint framebuffer);
+extern HIDDEN void __indirect_glDeleteFramebuffersEXT(GLsizei n, const GLuint * framebuffers);
+extern HIDDEN void __indirect_glGenFramebuffersEXT(GLsizei n, GLuint * framebuffers);
+extern HIDDEN GLenum __indirect_glCheckFramebufferStatusEXT(GLenum target);
+extern HIDDEN void __indirect_glFramebufferTexture1DEXT(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+extern HIDDEN void __indirect_glFramebufferTexture2DEXT(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+extern HIDDEN void __indirect_glFramebufferTexture3DEXT(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level, GLint zoffset);
+extern HIDDEN void __indirect_glFramebufferRenderbufferEXT(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer);
+extern HIDDEN void __indirect_glGetFramebufferAttachmentParameterivEXT(GLenum target, GLenum attachment, GLenum pname, GLint * params);
+extern HIDDEN void __indirect_glGenerateMipmapEXT(GLenum target);
 
 #  undef HIDDEN
 #  undef FASTCALL

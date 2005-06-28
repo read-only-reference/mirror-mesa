@@ -37,6 +37,8 @@
 
 extern void
 fbSetSpanFunctions(driRenderbuffer *drb, const GLvisual *vis);
+extern void 
+fbSetBuffer( GLcontext *ctx, GLframebuffer *colorBuffer, GLuint bufferBit);
 
 /**
  * fb driver-specific driver class derived from _EGLDriver
@@ -485,6 +487,7 @@ fbCreateContext(_EGLDriver *drv, EGLDisplay dpy, EGLConfig config, EGLContext sh
    {
       struct swrast_device_driver *swdd;
       swdd = _swrast_GetDeviceDriverReference( ctx );
+      swdd->SetBuffer = fbSetBuffer;
    }
 
    /* use default TCL pipeline */
@@ -833,7 +836,9 @@ fbSwapBuffers(_EGLDriver *drv, EGLDisplay dpy, EGLSurface draw)
    else {
       /* XXX this shouldn't be an error but we can't handle it for now */
       _mesa_problem(NULL, "fbSwapBuffers: drawable has no context!\n");
+      return EGL_FALSE;
    }
+   return EGL_TRUE;
 }
 
 

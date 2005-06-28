@@ -3268,7 +3268,7 @@ static const enum_elt all_enums[1612] =
 static const unsigned reduced_enums[1232] =
 {
        389, /* GL_FALSE */
-      1519, /* GL_TRUE */
+       561, /* GL_LINES */
        563, /* GL_LINE_LOOP */
        570, /* GL_LINE_STRIP */
       1515, /* GL_TRIANGLES */
@@ -3424,7 +3424,7 @@ static const unsigned reduced_enums[1232] =
         80, /* GL_BLEND_SRC */
         70, /* GL_BLEND */
        581, /* GL_LOGIC_OP_MODE */
-       580, /* GL_LOGIC_OP */
+       506, /* GL_INDEX_LOGIC_OP */
        156, /* GL_COLOR_LOGIC_OP */
         62, /* GL_AUX_BUFFERS */
        325, /* GL_DRAW_BUFFER */
@@ -3959,9 +3959,9 @@ static const unsigned reduced_enums[1232] =
        853, /* GL_NEAREST_CLIPMAP_LINEAR_SGIX */
        558, /* GL_LINEAR_CLIPMAP_NEAREST_SGIX */
        415, /* GL_FOG_COORDINATE_SOURCE */
-       408, /* GL_FOG_COORDINATE */
+       407, /* GL_FOG_COORD */
        431, /* GL_FRAGMENT_DEPTH */
-       258, /* GL_CURRENT_FOG_COORDINATE */
+       257, /* GL_CURRENT_FOG_COORD */
        414, /* GL_FOG_COORDINATE_ARRAY_TYPE */
        413, /* GL_FOG_COORDINATE_ARRAY_STRIDE */
        412, /* GL_FOG_COORDINATE_ARRAY_POINTER */

@@ -385,6 +385,7 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 	}
 #endif
 
+	r300->state.texture.tc_count = 0;
 	for (i = 0; i < ctx->Const.MaxTextureUnits; i++) {
 		if (inputs & (_TNL_BIT_TEX0 << i)) {
 			CONFIGURE_AOS(i_tex[i], AOS_FORMAT_FLOAT,
@@ -393,6 +394,7 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 							count);
 
 			vic_1 |= R300_INPUT_CNTL_TC0 << i;
+			r300->state.texture.tc_count++;
 		}
 	}
 	
@@ -436,7 +438,7 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 		}
 	/* Set the rest of INPUT_ROUTE_0 to 0 */
 	//for(i=((count+1)>>1); i<8; i++)r300->hw.vir[0].cmd[R300_VIR_CNTL_0+i]=(0x0);
-	((drm_r300_cmd_header_t*)r300->hw.vir[0].cmd)->unchecked_state.count = (nr+1)>>1;
+	((drm_r300_cmd_header_t*)r300->hw.vir[0].cmd)->packet0.count = (nr+1)>>1;
 
 
 	/* Mesa assumes that all missing components are from (0, 0, 0, 1) */
@@ -479,7 +481,7 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 		}
 	/* Set the rest of INPUT_ROUTE_1 to 0 */
 	//for(i=((count+1)>>1); i<8; i++)r300->hw.vir[1].cmd[R300_VIR_CNTL_0+i]=0x0;
-	((drm_r300_cmd_header_t*)r300->hw.vir[1].cmd)->unchecked_state.count = (nr+1)>>1;
+	((drm_r300_cmd_header_t*)r300->hw.vir[1].cmd)->packet0.count = (nr+1)>>1;
 
 	/* Set up input_cntl */
 	/* I don't think this is needed for vertex buffers, but it doesn't hurt anything */
@@ -536,6 +538,8 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 			r300->hw.vof.cmd[R300_VOF_CNTL_0] |= R300_VAP_OUTPUT_VTX_FMT_0__POS_PRESENT;
 		if(inputs & _TNL_BIT_COLOR0)
 			r300->hw.vof.cmd[R300_VOF_CNTL_0] |= R300_VAP_OUTPUT_VTX_FMT_0__COLOR_PRESENT;
+		if(inputs & _TNL_BIT_COLOR1)
+			r300->hw.vof.cmd[R300_VOF_CNTL_0] |= R300_VAP_OUTPUT_VTX_FMT_0__COLOR_1_PRESENT;
 
 		for(i=0;i < ctx->Const.MaxTextureUnits;i++)
 			if(inputs & (_TNL_BIT_TEX0<<i))

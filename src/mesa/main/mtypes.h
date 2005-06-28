@@ -1770,6 +1770,7 @@ struct vertex_program
    GLuint InputsRead;     /* Bitmask of which input regs are read */
    GLuint OutputsWritten; /* Bitmask of which output regs are written to */
    struct program_parameter_list *Parameters; /**< array [NumParameters] */
+   void *TnlData;		/* should probably use Base.DriverData */
 };
 
 
@@ -2183,7 +2184,7 @@ struct gl_framebuffer
    struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS][4];
    struct gl_renderbuffer *_ColorReadBuffer;
 
-#if OLD_RENDERBUFFER
+#if OLD_RENDERBUFFER || NEW_RENDERBUFFER
    /* XXX THIS IS TEMPORARY */
    GLuint _ColorDrawBit[MAX_DRAW_BUFFERS][4];
 #endif

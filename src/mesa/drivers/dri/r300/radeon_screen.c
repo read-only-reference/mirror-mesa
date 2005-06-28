@@ -211,6 +211,7 @@ static const struct dri_debug_control debug_control[] = {
 #define PCI_CHIP_R300_NF		0x4E46
 #define PCI_CHIP_R300_NG		0x4E47
 #define PCI_CHIP_R350_NH                0x4E48
+#define PCI_CHIP_R420_JI		0x4A49
 #define PCI_CHIP_R420_JK                0x4a4b
 #endif
 
@@ -393,6 +394,7 @@ static radeonScreenPtr radeonCreateScreen(__DRIscreenPrivate * sPriv)
 		screen->chipset = RADEON_CHIP_R300;
 		break;
 
+	case PCI_CHIP_R420_JI:
 	case PCI_CHIP_R420_JK:
 		screen->chipset = RADEON_CHIP_R420;
 		break;
@@ -833,11 +835,11 @@ void *__driCreateNewScreen(__DRInativeDisplay * dpy, int scrn,
 			   __GLcontextModes ** driver_modes)
 {
 	__DRIscreenPrivate *psp;
-	static const __DRIversion ddx_expected = { 4, 0, 0 };
+	static const __DRIutilversion2 ddx_expected = { 4, 5, 0, 0 };
 	static const __DRIversion dri_expected = { 4, 0, 0 };
 	static const __DRIversion drm_expected = { 1, 11, 1 };
 
-	if (!driCheckDriDdxDrmVersions2("R300",
+	if (!driCheckDriDdxDrmVersions3("R300",
 					dri_version, &dri_expected,
 					ddx_version, &ddx_expected,
 					drm_version, &drm_expected)) {

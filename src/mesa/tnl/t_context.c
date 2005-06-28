@@ -37,12 +37,13 @@
 #include "vtxfmt.h"
 #include "nvfragprog.h"
 
-#include "t_context.h"
-#include "t_array_api.h"
-#include "t_vtx_api.h"
-#include "t_save_api.h"
-#include "t_pipeline.h"
 #include "tnl.h"
+#include "t_array_api.h"
+#include "t_context.h"
+#include "t_pipeline.h"
+#include "t_save_api.h"
+#include "t_vp_build.h"
+#include "t_vtx_api.h"
 
 
 
@@ -95,7 +96,11 @@ _tnl_CreateContext( GLcontext *ctx )
    _tnl_save_init( ctx );
    _tnl_array_init( ctx );
    _tnl_vtx_init( ctx );
-   _tnl_install_pipeline( ctx, _tnl_default_pipeline );
+
+   if (ctx->_MaintainTnlProgram) 
+      _tnl_install_pipeline( ctx, _tnl_vp_pipeline );
+   else 
+      _tnl_install_pipeline( ctx, _tnl_default_pipeline );
 
    /* Initialize the arrayelt helper
     */
@@ -139,6 +144,8 @@ _tnl_DestroyContext( GLcontext *ctx )
    _tnl_save_destroy( ctx );
    _tnl_destroy_pipeline( ctx );
    _ae_destroy_context( ctx );
+
+   _tnl_ProgramCacheDestroy( ctx );
 
    FREE(tnl);
    ctx->swtnl_context = NULL;

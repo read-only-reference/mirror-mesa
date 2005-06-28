@@ -88,8 +88,6 @@ extern "C" {
 /** Set \p N bytes in \p DST to \p VAL */
 #define MEMSET( DST, VAL, N )      _mesa_memset(DST, VAL, N)
 
-#define MEMSET16( DST, VAL, N )   _mesa_memset16( (DST), (VAL), (size_t) (N) )
-
 /*@}*/
 
 
@@ -158,47 +156,6 @@ extern "C" {
 #endif
 
 /*@}*/
-
-
-/**********************************************************************/
-/** \name External pixel buffer allocation.
- *
- * If you want Mesa's depth/stencil/accum/etc buffers to be allocated with a
- * specialized allocator you can define MESA_EXTERNAL_BUFFERALLOC and implement
- * _ext_mesa_alloc_pixelbuffer() _ext_mesa_free_pixelbuffer() in your
- * application.
- *
- * \author
- * Contributed by Gerk Huisma (gerk@five-d.demon.nl).
- */
-/*@{*/
-
-/**
- * \def MESA_PBUFFER_ALLOC
- * Allocate a pixel buffer.
- */
-
-/**
- * \def MESA_PBUFFER_FREE
- * Free a pixel buffer.
- */
-
-#ifdef MESA_EXTERNAL_BUFFERALLOC
-extern void *_ext_mesa_alloc_pixelbuffer( unsigned int size );
-extern void _ext_mesa_free_pixelbuffer( void *pb );
-
-#define MESA_PBUFFER_ALLOC(BYTES)  (void *) _ext_mesa_alloc_pixelbuffer(BYTES)
-#define MESA_PBUFFER_FREE(PTR)     _ext_mesa_free_pixelbuffer(PTR)
-#else
-/* Default buffer allocation uses the aligned allocation routines: */
-#define MESA_PBUFFER_ALLOC(BYTES)  (void *) _mesa_align_malloc(BYTES, 512)
-#define MESA_PBUFFER_FREE(PTR)     _mesa_align_free(PTR)
-#endif
-
-/*@}*/
-
-
-/**********************************************************************/
 
 
 /**

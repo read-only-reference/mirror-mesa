@@ -91,11 +91,11 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 
 #ifndef CB_DPATH
 	R300_STATECHANGE(r300, vir[0]);
-	((drm_r300_cmd_header_t*)r300->hw.vir[0].cmd)->unchecked_state.count = 1;
+	((drm_r300_cmd_header_t*)r300->hw.vir[0].cmd)->packet0.count = 1;
 	r300->hw.vir[0].cmd[1] = 0x21030003;
 
 	R300_STATECHANGE(r300, vir[1]);
-	((drm_r300_cmd_header_t*)r300->hw.vir[1].cmd)->unchecked_state.count = 1;
+	((drm_r300_cmd_header_t*)r300->hw.vir[1].cmd)->packet0.count = 1;
 	r300->hw.vir[1].cmd[1] = 0xF688F688;
 
 	R300_STATECHANGE(r300, vic);
@@ -125,9 +125,17 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 	r300->hw.bld.cmd[R300_BLD_CBLEND] = 0;
 	r300->hw.bld.cmd[R300_BLD_ABLEND] = 0;
 	
+	if (r300->radeon.radeonScreen->cpp == 4)
+		cbpitch |= R300_COLOR_FORMAT_ARGB8888;
+	else
+		cbpitch |= R300_COLOR_FORMAT_RGB565;
+	
+	if (r300->radeon.sarea->tiling_enabled)
+		cbpitch |= R300_COLOR_TILE_ENABLE;
+	
 	R300_STATECHANGE(r300, cb);
 	r300->hw.cb.cmd[R300_CB_OFFSET] = cboffset;
-	r300->hw.cb.cmd[R300_CB_PITCH] = cbpitch | R300_COLOR_UNKNOWN_22_23;
+	r300->hw.cb.cmd[R300_CB_PITCH] = cbpitch;
 
 	R300_STATECHANGE(r300, unk221C);
 	r300->hw.unk221C.cmd[1] = R300_221C_CLEAR;
@@ -143,11 +151,11 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 
 	R300_STATECHANGE(r300, rc);
 	/* The second constant is needed to get glxgears display anything .. */
-	r300->hw.rc.cmd[1] = R300_RS_CNTL_0_UNKNOWN_7 | R300_RS_CNTL_0_UNKNOWN_18;
+	r300->hw.rc.cmd[1] = (1 << R300_RS_CNTL_CI_CNT_SHIFT) | R300_RS_CNTL_0_UNKNOWN_18;
 	r300->hw.rc.cmd[2] = 0;
 	
 	R300_STATECHANGE(r300, rr);
-	((drm_r300_cmd_header_t*)r300->hw.rr.cmd)->unchecked_state.count = 1;
+	((drm_r300_cmd_header_t*)r300->hw.rr.cmd)->packet0.count = 1;
 	r300->hw.rr.cmd[1] = 0x00004000;
 
 	R300_STATECHANGE(r300, cmk);
@@ -174,10 +182,10 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 	R300_STATECHANGE(r300, fpi[1]);
 	R300_STATECHANGE(r300, fpi[2]);
 	R300_STATECHANGE(r300, fpi[3]);
-	((drm_r300_cmd_header_t*)r300->hw.fpi[0].cmd)->unchecked_state.count = 1;
-	((drm_r300_cmd_header_t*)r300->hw.fpi[1].cmd)->unchecked_state.count = 1;
-	((drm_r300_cmd_header_t*)r300->hw.fpi[2].cmd)->unchecked_state.count = 1;
-	((drm_r300_cmd_header_t*)r300->hw.fpi[3].cmd)->unchecked_state.count = 1;
+	((drm_r300_cmd_header_t*)r300->hw.fpi[0].cmd)->packet0.count = 1;
+	((drm_r300_cmd_header_t*)r300->hw.fpi[1].cmd)->packet0.count = 1;
+	((drm_r300_cmd_header_t*)r300->hw.fpi[2].cmd)->packet0.count = 1;
+	((drm_r300_cmd_header_t*)r300->hw.fpi[3].cmd)->packet0.count = 1;
 
 	/* MOV o0, t0 */
 	r300->hw.fpi[0].cmd[1] = FP_INSTRC(MAD, FP_ARGC(SRC0C_XYZ), FP_ARGC(ONE), FP_ARGC(ZERO));
@@ -195,7 +203,7 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 		(1 << R300_PVS_CNTL_3_PROGRAM_UNKNOWN_SHIFT);
 
 	R300_STATECHANGE(r300, vpi);
-	((drm_r300_cmd_header_t*)r300->hw.vpi.cmd)->unchecked_state.count = 8;
+	((drm_r300_cmd_header_t*)r300->hw.vpi.cmd)->packet0.count = 8;
 
 	/* MOV o0, i0; */
 	r300->hw.vpi.cmd[1] = VP_OUT(ADD,OUT,0,XYZW);
@@ -257,8 +265,13 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 	reg_start(R300_RB3D_COLOROFFSET0, 0);
 	e32(cboffset);
 	
+	if (r300->radeon.radeonScreen->cpp == 4)
+		cbpitch |= R300_COLOR_FORMAT_ARGB8888;
+	else
+		cbpitch |= R300_COLOR_FORMAT_RGB565;
+	
 	reg_start(R300_RB3D_COLORPITCH0, 0);
-	e32(cbpitch | R300_COLOR_UNKNOWN_22_23);
+	e32(cbpitch);
 
 	R300_STATECHANGE(r300, cmk);
 	reg_start(R300_RB3D_COLORMASK, 0);
@@ -338,6 +351,7 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 	cmd2[6].u = r300PackFloat32(ctx->Color.ClearColor[1]);
 	cmd2[7].u = r300PackFloat32(ctx->Color.ClearColor[2]);
 	cmd2[8].u = r300PackFloat32(ctx->Color.ClearColor[3]);
+
 }
 
 #ifdef CB_DPATH

@@ -43,7 +43,6 @@
 static void
 clear_rgba_buffer_with_masking(GLcontext *ctx, struct gl_renderbuffer *rb)
 {
-   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const GLint x = ctx->DrawBuffer->_Xmin;
    const GLint y = ctx->DrawBuffer->_Ymin;
    const GLint height = ctx->DrawBuffer->_Ymax - ctx->DrawBuffer->_Ymin;
@@ -52,6 +51,7 @@ clear_rgba_buffer_with_masking(GLcontext *ctx, struct gl_renderbuffer *rb)
    GLint i;
 
    ASSERT(ctx->Visual.rgbMode);
+   ASSERT(rb->PutRow);
 
    CLAMPED_FLOAT_TO_CHAN(clearColor[RCOMP], ctx->Color.ClearColor[0]);
    CLAMPED_FLOAT_TO_CHAN(clearColor[GCOMP], ctx->Color.ClearColor[1]);
@@ -65,17 +65,7 @@ clear_rgba_buffer_with_masking(GLcontext *ctx, struct gl_renderbuffer *rb)
          COPY_CHAN4(rgba[j], clearColor);
       }
       _swrast_mask_rgba_array( ctx, rb, width, x, y + i, rgba );
-#if NEW_RENDERBUFFER
-      if (rb->PutRow) {
-         rb->PutRow(ctx, rb, width, x, y + i, rgba, NULL);
-      }
-#endif
-#if OLD_RENDERBUFFER
-      else {
-         swrast->Driver.WriteRGBASpan(ctx, rb, width, x, y + i,
-                                      (CONST GLchan (*)[4]) rgba, NULL);
-      }
-#endif
+      rb->PutRow(ctx, rb, width, x, y + i, rgba, NULL);
    }
 }
 
@@ -115,11 +105,13 @@ clear_ci_buffer_with_masking(GLcontext *ctx, struct gl_renderbuffer *rb)
 static void
 clear_rgba_buffer(GLcontext *ctx, struct gl_renderbuffer *rb)
 {
-   SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const GLint x = ctx->DrawBuffer->_Xmin;
    const GLint y = ctx->DrawBuffer->_Ymin;
    const GLint height = ctx->DrawBuffer->_Ymax - ctx->DrawBuffer->_Ymin;
    const GLint width  = ctx->DrawBuffer->_Xmax - ctx->DrawBuffer->_Xmin;
+   GLubyte clear8[4];
+   GLushort clear16[4];
+   GLvoid *clearVal;
    GLint i;
 
    ASSERT(ctx->Visual.rgbMode);
@@ -129,12 +121,9 @@ clear_rgba_buffer(GLcontext *ctx, struct gl_renderbuffer *rb)
           ctx->Color.ColorMask[2] &&
           ctx->Color.ColorMask[3]);             
 
-#if NEW_RENDERBUFFER
-   if (rb->PutMonoRow) { /* XXX assert this */
-      GLubyte clear8[4];
-      GLushort clear16[4];
-      GLvoid *clearVal;
-      switch (rb->DataType) {
+   ASSERT(rb->PutMonoRow);
+
+   switch (rb->DataType) {
       case GL_UNSIGNED_BYTE:
          clear8[0] = FLOAT_TO_UBYTE(ctx->Color.ClearColor[0]);
          clear8[1] = FLOAT_TO_UBYTE(ctx->Color.ClearColor[1]);
@@ -155,26 +144,11 @@ clear_rgba_buffer(GLcontext *ctx, struct gl_renderbuffer *rb)
       default:
          _mesa_problem(ctx, "Bad rb DataType in clear_color_buffer");
          return;
-      }
-      for (i = 0; i < height; i++) {
-         rb->PutMonoRow(ctx, rb, width, x, y + i, clearVal, NULL);
-      }
    }
-#endif
-#if OLD_RENDERBUFFER
-   else {
-      GLchan clearColor[4];
-      CLAMPED_FLOAT_TO_CHAN(clearColor[RCOMP], ctx->Color.ClearColor[0]);
-      CLAMPED_FLOAT_TO_CHAN(clearColor[GCOMP], ctx->Color.ClearColor[1]);
-      CLAMPED_FLOAT_TO_CHAN(clearColor[BCOMP], ctx->Color.ClearColor[2]);
-      CLAMPED_FLOAT_TO_CHAN(clearColor[ACOMP], ctx->Color.ClearColor[3]);
-      ASSERT(swrast->Driver.WriteRGBASpan);
-      for (i = 0; i < height; i++) {
-         swrast->Driver.WriteMonoRGBASpan(ctx, rb, width, x, y + i,
-                                          clearColor, NULL );
-      }
+
+   for (i = 0; i < height; i++) {
+      rb->PutMonoRow(ctx, rb, width, x, y + i, clearVal, NULL);
    }
-#endif
 }
 
 
@@ -188,20 +162,21 @@ clear_ci_buffer(GLcontext *ctx, struct gl_renderbuffer *rb)
    const GLint y = ctx->DrawBuffer->_Ymin;
    const GLint height = ctx->DrawBuffer->_Ymax - ctx->DrawBuffer->_Ymin;
    const GLint width  = ctx->DrawBuffer->_Xmax - ctx->DrawBuffer->_Xmin;
+   GLubyte clear8;
+   GLushort clear16;
+   GLuint clear32;
+   GLvoid *clearVal;
+   GLint i;
 
    ASSERT(!ctx->Visual.rgbMode);
 
    ASSERT((ctx->Color.IndexMask & ((1 << ctx->Visual.indexBits) - 1))
           == (GLuint) ((1 << ctx->Visual.indexBits) - 1));
 
-#if NEW_RENDERBUFFER
-   if (rb->PutMonoRow) { /* XXX assert this */
-      GLubyte clear8;
-      GLushort clear16;
-      GLuint clear32;
-      GLvoid *clearVal;
-      GLint i;
-      switch (rb->DataType) {
+   ASSERT(rb->PutMonoRow);
+
+   /* setup clear value */
+   switch (rb->DataType) {
       case GL_UNSIGNED_BYTE:
          clear8 = (GLubyte) ctx->Color.ClearIndex;
          clearVal = &clear8;
@@ -217,11 +192,10 @@ clear_ci_buffer(GLcontext *ctx, struct gl_renderbuffer *rb)
       default:
          _mesa_problem(ctx, "Bad rb DataType in clear_color_buffer");
          return;
-      }
-      for (i = 0; i < height; i++)
-         rb->PutMonoRow(ctx, rb, width, x, y + i, clearVal, NULL);
    }
-#endif
+
+   for (i = 0; i < height; i++)
+      rb->PutMonoRow(ctx, rb, width, x, y + i, clearVal, NULL);
 }
 
 
@@ -260,10 +234,11 @@ clear_color_buffers(GLcontext *ctx)
 
    for (i = 0; i < ctx->DrawBuffer->_NumColorDrawBuffers[0]; i++) {
       struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0][i];
-#if OLD_RENDERBUFFER /* this is obsolete code */
+#if OLD_RENDERBUFFER || NEW_RENDERBUFFER
+      /* SetBuffer will go away */
       if (swrast->Driver.SetBuffer)
          swrast->Driver.SetBuffer(ctx, ctx->DrawBuffer,
-                               ctx->DrawBuffer->_ColorDrawBit[0][i]);
+                                  ctx->DrawBuffer->_ColorDrawBit[0][i]);
 #endif
 
       if (ctx->Visual.rgbMode) {
@@ -383,7 +358,8 @@ _swrast_use_read_buffer( GLcontext *ctx )
    /* Do this so the software-emulated alpha plane span functions work! */
    swrast->CurrentBufferBit = ctx->ReadBuffer->_ColorReadBufferMask;
    /* Tell the device driver where to read/write spans */
-   swrast->Driver.SetBuffer(ctx, ctx->ReadBuffer, swrast->CurrentBufferBit);
+   if (swrast->Driver.SetBuffer)
+      swrast->Driver.SetBuffer(ctx, ctx->ReadBuffer, swrast->CurrentBufferBit);
 }
 
 
