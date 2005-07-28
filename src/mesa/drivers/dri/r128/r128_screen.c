@@ -75,6 +75,8 @@ static const GLuint __driNConfigOptions = 4;
 static const GLuint __driNConfigOptions = 3;
 #endif
 
+extern const struct dri_extension card_extensions[];
+
 #if 1
 /* Including xf86PciInfo.h introduces a bunch of errors...
  */
@@ -88,9 +90,6 @@ static const GLuint __driNConfigOptions = 3;
 #define PCI_CHIP_RAGE128RL	0x524C
 #endif
 
-#ifdef USE_NEW_INTERFACE
-static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
-#endif /* USE_NEW_INTERFACE */
 
 /* Create the device specific screen private data struct.
  */
@@ -99,6 +98,9 @@ r128CreateScreen( __DRIscreenPrivate *sPriv )
 {
    r128ScreenPtr r128Screen;
    R128DRIPtr r128DRIPriv = (R128DRIPtr)sPriv->pDevPriv;
+   PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
+     (PFNGLXSCRENABLEEXTENSIONPROC) (*dri_interface->getProcAddress("glxEnableExtension"));
+   void * const psc = sPriv->psc->screenConfigs;
 
 
    /* Allocate the private area */
@@ -211,21 +213,17 @@ r128CreateScreen( __DRIscreenPrivate *sPriv )
    }
 
    r128Screen->driScreen = sPriv;
-   if ( driCompareGLXAPIVersion( 20030813 ) >= 0 ) {
-      PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
-          (PFNGLXSCRENABLEEXTENSIONPROC) glXGetProcAddress( (const GLubyte *) "__glXScrEnableExtension" );
-      void * const psc = sPriv->psc->screenConfigs;
 
-      if ( glx_enable_extension != NULL ) {
-	 if ( r128Screen->irq != 0 ) {
-	    (*glx_enable_extension)( psc, "GLX_SGI_swap_control" );
-	    (*glx_enable_extension)( psc, "GLX_SGI_video_sync" );
-	    (*glx_enable_extension)( psc, "GLX_MESA_swap_control" );
-	 }
-
-	 (*glx_enable_extension)( psc, "GLX_MESA_swap_frame_usage" );
+   if ( glx_enable_extension != NULL ) {
+      if ( r128Screen->irq != 0 ) {
+	 (*glx_enable_extension)( psc, "GLX_SGI_swap_control" );
+	 (*glx_enable_extension)( psc, "GLX_SGI_video_sync" );
+	 (*glx_enable_extension)( psc, "GLX_MESA_swap_control" );
       }
+
+      (*glx_enable_extension)( psc, "GLX_MESA_swap_frame_usage" );
    }
+
    return r128Screen;
 }
 
@@ -392,23 +390,6 @@ static struct __DriverAPIRec r128API = {
 };
 
 
-#ifndef DRI_NEW_INTERFACE_ONLY
-/*
- * This is the bootstrap function for the driver.
- * The __driCreateScreen name is the symbol that libGL.so fetches.
- * Return:  pointer to a __DRIscreenPrivate.
- */
-void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
-                        int numConfigs, __GLXvisualConfig *config)
-{
-   __DRIscreenPrivate *psp;
-   psp = __driUtilCreateScreen(dpy, scrn, psc, numConfigs, config, &r128API);
-   return (void *) psp;
-}
-#endif /* DRI_NEW_INTERFACE_ONLY */
-
-
-#ifdef USE_NEW_INTERFACE
 static __GLcontextModes *
 r128FillInModes( unsigned pixel_bits, unsigned depth_bits,
 		 unsigned stencil_bits, GLboolean have_back_buffer )
@@ -458,7 +439,7 @@ r128FillInModes( unsigned pixel_bits, unsigned depth_bits,
         fb_type = GL_UNSIGNED_INT_8_8_8_8_REV;
     }
 
-    modes = (*create_context_modes)( num_modes, sizeof( __GLcontextModes ) );
+    modes = (*dri_interface->createContextModes)( num_modes, sizeof( __GLcontextModes ) );
     m = modes;
     if ( ! driFillInModes( & m, fb_format, fb_type,
 			   depth_bits_array, stencil_bits_array, depth_buffer_factor,
@@ -501,7 +482,7 @@ r128FillInModes( unsigned pixel_bits, unsigned depth_bits,
  *         failure.
  */
 PUBLIC
-void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
+void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,
 			     const __DRIversion * dri_version,
@@ -509,6 +490,7 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
 			     const __DRIframebuffer * frame_buffer,
 			     drmAddress pSAREA, int fd, 
 			     int internal_api_version,
+			     const __DRIinterfaceMethods * interface,
 			     __GLcontextModes ** driver_modes )
 			     
 {
@@ -517,6 +499,8 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
    static const __DRIversion dri_expected = { 4, 0, 0 };
    static const __DRIversion drm_expected = { 2, 2, 0 };
 
+
+   dri_interface = interface;
 
    if ( ! driCheckDriDdxDrmVersions2( "Rage128",
 				      dri_version, & dri_expected,
@@ -530,17 +514,22 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
 				  frame_buffer, pSAREA, fd,
 				  internal_api_version, &r128API);
    if ( psp != NULL ) {
-      create_context_modes = (PFNGLXCREATECONTEXTMODES)
-	  glXGetProcAddress( (const GLubyte *) "__glXCreateContextModes" );
-      if ( create_context_modes != NULL ) {
-	 R128DRIPtr dri_priv = (R128DRIPtr) psp->pDevPriv;
-	 *driver_modes = r128FillInModes( dri_priv->bpp,
-					  (dri_priv->bpp == 16) ? 16 : 24,
-					  (dri_priv->bpp == 16) ? 0  : 8,
-					  (dri_priv->backOffset != dri_priv->depthOffset) );
-      }
+      R128DRIPtr dri_priv = (R128DRIPtr) psp->pDevPriv;
+      *driver_modes = r128FillInModes( dri_priv->bpp,
+				       (dri_priv->bpp == 16) ? 16 : 24,
+				       (dri_priv->bpp == 16) ? 0  : 8,
+				       (dri_priv->backOffset != dri_priv->depthOffset) );
+
+      /* Calling driInitExtensions here, with a NULL context pointer, does not actually
+       * enable the extensions.  It just makes sure that all the dispatch offsets for all
+       * the extensions that *might* be enables are known.  This is needed because the
+       * dispatch offsets need to be known when _mesa_context_create is called, but we can't
+       * enable the extensions until we have a context pointer.
+       *
+       * Hello chicken.  Hello egg.  How are you two today?
+       */
+      driInitExtensions( NULL, card_extensions, GL_FALSE );
    }
 
    return (void *) psp;
 }
-#endif /* USE_NEW_INTERFACE */

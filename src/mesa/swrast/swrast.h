@@ -61,8 +61,11 @@
  *     primitives unaccelerated), hook in swrast_setup instead.
  */
 typedef struct {
-   /** win[0], win[1] are the screen-coords of SWvertex. win[2] is the
-    * z-coord. what is win[3]? */
+   /** win[0], win[1] are the screen-coords of SWvertex.
+    * win[2] is the z-buffer coord (if 16-bit Z buffer, in range [0,65535]).
+    * win[3] is 1/w where w is the clip-space W coord.  This is the value
+    * that clip{XYZ} were multiplied by to get ndc{XYZ}.
+    */
    GLfloat win[4];
    GLfloat texcoord[MAX_TEXTURE_COORD_UNITS][4];
    GLchan color[4];
@@ -257,7 +260,7 @@ _swrast_copy_texsubimage3d(GLcontext *ctx,
  * Unless otherwise noted, all functions are mandatory.  
  */
 struct swrast_device_driver {
-#if OLD_RENDERBUFFER || NEW_RENDERBUFFER
+#if OLD_RENDERBUFFER
    void (*SetBuffer)(GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit);
    /*
     * Specifies the current color buffer for span/pixel writing/reading.

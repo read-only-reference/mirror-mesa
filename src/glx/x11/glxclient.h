@@ -65,9 +65,6 @@
 #elif defined( PTHREADS )
 # include <pthread.h>
 #endif
-#ifdef GLX_BUILT_IN_XMESA
-#include "realglx.h"  /* just silences prototype warnings */
-#endif
 
 #define GLX_MAJOR_VERSION	1	/* current version numbers */
 #define GLX_MINOR_VERSION	4
@@ -84,15 +81,6 @@ typedef struct _glapi_table __GLapi;
 
 #include <GL/internal/dri_interface.h>
 
-typedef void *(*CreateScreenFunc)(Display *dpy, int scrn, __DRIscreen *psc,
-                                  int numConfigs, __GLXvisualConfig *config);
-
-typedef void *(*CreateNewScreenFunc)(Display *dpy, int scrn, __DRIscreen *psc,
-    const __GLcontextModes * modes, const __DRIversion * ddx_version,
-    const __DRIversion * dri_version, const __DRIversion * drm_version,
-    const __DRIframebuffer * frame_buffer, void * pSAREA,
-    int fd, int internal_api_version, __GLcontextModes ** driver_modes);
-
 
 /**
  * Display dependent methods.  This structure is initialized during the
@@ -105,17 +93,6 @@ struct __DRIdisplayRec {
     void (*destroyDisplay)(Display *dpy, void *displayPrivate);
 
     /**
-     * Methods to create the private DRI screen data and initialize the
-     * screen dependent methods.
-     * This is an array [indexed by screen number] of function pointers.
-     * 
-     * \deprecated  This array of function pointers has been replaced by
-     *              \c __DRIdisplayRec::createNewScreen.
-     * \sa __DRIdisplayRec::createNewScreen
-     */
-    CreateScreenFunc * createScreen;
-
-    /**
      * Opaque pointer to private per display direct rendering data.
      * \c NULL if direct rendering is not supported on this display.
      */
@@ -124,10 +101,8 @@ struct __DRIdisplayRec {
     /**
      * Array of pointers to methods to create and initialize the private DRI
      * screen data.
-     *
-     * \sa __DRIdisplayRec::createScreen
      */
-    CreateNewScreenFunc * createNewScreen;
+    PFNCREATENEWSCREENFUNC * createNewScreen;
 };
 
 
@@ -137,8 +112,7 @@ struct __DRIdisplayRec {
 struct __DRIdriverRec {
    const char *name;
    void *handle;
-   CreateScreenFunc createScreenFunc;
-   CreateNewScreenFunc createNewScreenFunc;
+   PFNCREATENEWSCREENFUNC createNewScreenFunc;
    struct __DRIdriverRec *next;
 };
 
@@ -160,6 +134,8 @@ extern const char *glXGetScreenDriver (Display *dpy, int scrNum);
 
 extern const char *glXGetDriverConfig (const char *driverName);
 
+extern Bool __glXWindowExists(Display *dpy, GLXDrawable draw);
+
 #endif
 
 /************************************************************************/
@@ -177,51 +153,6 @@ typedef struct __GLXpixelStoreModeRec {
     GLuint skipImages;
     GLuint alignment;
 } __GLXpixelStoreMode;
-
-/* The next 3 structures are deprecated.  Client state is no longer tracked
- * using them.  They only remain to maintain the layout / structure offset of
- * __GLXcontextRec.  In XFree86 5.0 they will be removed altogether.
- */
-
-typedef struct __GLXvertexArrayPointerStateRecDEPRECATED {
-    GLboolean enable;
-    void (*proc)(const void *);
-    const GLubyte *ptr;
-    GLsizei skip;
-    GLint size;
-    GLenum type;
-    GLsizei stride;
-} __GLXvertexArrayPointerStateDEPRECATED;
-
-typedef struct __GLXvertArrayStateRecDEPRECATED {
-    __GLXvertexArrayPointerStateDEPRECATED vertex;
-    __GLXvertexArrayPointerStateDEPRECATED normal;
-    __GLXvertexArrayPointerStateDEPRECATED color;
-    __GLXvertexArrayPointerStateDEPRECATED index;
-    __GLXvertexArrayPointerStateDEPRECATED texCoord[__GLX_MAX_TEXTURE_UNITS];
-    __GLXvertexArrayPointerStateDEPRECATED edgeFlag;
-    GLint maxElementsVertices;
-    GLint maxElementsIndices;
-    GLint activeTexture;
-} __GLXvertArrayStateDEPRECATED;
-
-typedef struct __GLXattributeRecDEPRECATED {
-	GLuint mask;
-
-	/*
-	** Pixel storage state.  Most of the pixel store mode state is kept
-	** here and used by the client code to manage the packing and
-	** unpacking of data sent to/received from the server.
-	*/
-	__GLXpixelStoreMode storePack, storeUnpack;
-
-	/*
-	** Vertex Array storage state.  The vertex array component
-	** state is stored here and is used to manage the packing of
-	** DrawArrays data sent to the server.
-	*/
-	__GLXvertArrayStateDEPRECATED vertArray;
-} __GLXattributeDEPRECATED;
 
 
 typedef struct __GLXattributeRec {
@@ -354,12 +285,9 @@ struct __GLXcontextRec {
 		      GLenum, const GLvoid*, GLubyte*, GLubyte*);
 
     /**
-     * \name Client side attribs.
+     * Client side attribs.
      */
-    /*@{*/
-    __GLXattributeDEPRECATED stateDEPRECATED;
     __GLXattributeMachine attributes;
-    /*@}*/
 
     /**
      * Client side error code.  This is set when client side gl API
@@ -513,14 +441,6 @@ extern void __glFreeAttributeState(__GLXcontext *);
  */
 typedef struct __GLXscreenConfigsRec {
     /**
-     * GLX visuals formated as \c __GLXvisualConfig structures.
-     */
-    /*@{*/
-    __GLXvisualConfig * old_configs;
-    int numOldConfigs;
-    /*@}*/
-
-    /**
      * GLX extension string reported by the X-server.
      */
     const char *serverGLXexts;
@@ -539,10 +459,10 @@ typedef struct __GLXscreenConfigsRec {
 #endif
 
     /**
-     * Linked list of configurations for this screen.  This is intended to
-     * be a superset of \c old_configs.
+     * Linked list of configurations for this screen.
      */
     __GLcontextModes *configs;
+
     /**
      * Per-screen dynamic GLX extension tracking.  The \c direct_support
      * field only contains enough bits for 64 extensions.  Should libGL
@@ -746,17 +666,6 @@ extern void _XFlush(Display*);
 extern Status _XReply(Display*, xReply*, int, Bool);
 extern void _XRead(Display*, void*, long);
 extern void _XSend(Display*, const void*, long);
-#endif
-
-
-/*
-** GLX_BUILT_IN_XMESA controls whether libGL has a built-in verions of
-** Mesa that can render to non-GLX displays.
-*/
-#ifdef GLX_BUILT_IN_XMESA
-#define GLX_PREFIX(function)  _real_##function
-#else
-#define GLX_PREFIX(function)  function
 #endif
 
 

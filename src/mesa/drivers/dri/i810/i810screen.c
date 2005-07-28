@@ -54,11 +54,6 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "GL/internal/dri_interface.h"
 
-#ifdef USE_NEW_INTERFACE
-static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
-#endif /* USE_NEW_INTERFACE */
-
-#ifdef USE_NEW_INTERFACE
 static __GLcontextModes *fill_in_modes( __GLcontextModes *modes,
 				       unsigned pixel_bits,
 				       unsigned depth_bits,
@@ -122,9 +117,8 @@ static __GLcontextModes *fill_in_modes( __GLcontextModes *modes,
     return modes;
 
 }
-#endif /* USE_NEW_INTERFACE */
 
-#ifdef USE_NEW_INTERFACE
+
 static __GLcontextModes *
 i810FillInModes( unsigned pixel_bits, unsigned depth_bits,
 		 unsigned stencil_bits, GLboolean have_back_buffer )
@@ -162,7 +156,7 @@ i810FillInModes( unsigned pixel_bits, unsigned depth_bits,
 
     num_modes = depth_buffer_factor * back_buffer_factor * 4;
 
-    modes = (*create_context_modes)( num_modes, sizeof( __GLcontextModes ) );
+    modes = (*dri_interface->createContextModes)( num_modes, sizeof( __GLcontextModes ) );
     m = modes;
     for ( i = 0 ; i < depth_buffer_factor ; i++ ) {
 	m = fill_in_modes( m, pixel_bits,
@@ -189,8 +183,6 @@ i810FillInModes( unsigned pixel_bits, unsigned depth_bits,
     return modes;
 
 }
-#endif /* USE_NEW_INTERFACE */
-
 
      
 /*  static int i810_malloc_proxy_buf(drmBufMapPtr buffers) */
@@ -421,21 +413,6 @@ static const struct __DriverAPIRec i810API = {
 };
 
 
-/*
- * This is the bootstrap function for the driver.
- * The __driCreateScreen name is the symbol that libGL.so fetches.
- * Return:  pointer to a __DRIscreenPrivate.
- */
-#if !defined(DRI_NEW_INTERFACE_ONLY)
-void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
-                        int numConfigs, __GLXvisualConfig *config)
-{
-   __DRIscreenPrivate *psp;
-   psp = __driUtilCreateScreen(dpy, scrn, psc, numConfigs, config, &i810API);
-   return (void *) psp;
-}
-#endif /* !defined(DRI_NEW_INTERFACE_ONLY) */
-
 /**
  * This is the bootstrap function for the driver.  libGL supplies all of the
  * requisite information about the system, and the driver initializes itself.
@@ -446,9 +423,8 @@ void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
  * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on 
  *         failure.
  */
-#ifdef USE_NEW_INTERFACE
 PUBLIC
-void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
+void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,
 			     const __DRIversion * dri_version,
@@ -456,6 +432,7 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
 			     const __DRIframebuffer * frame_buffer,
 			     drmAddress pSAREA, int fd,
 			     int internal_api_version,
+			     const __DRIinterfaceMethods * interface,
 			     __GLcontextModes ** driver_modes )
 
 {
@@ -463,6 +440,8 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
    static const __DRIversion ddx_expected = { 1, 0, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
    static const __DRIversion drm_expected = { 1, 2, 0 };
+
+   dri_interface = interface;
 
    if ( ! driCheckDriDdxDrmVersions2( "i810",
 				      dri_version, & dri_expected,
@@ -476,15 +455,10 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
 				  frame_buffer, pSAREA, fd,
 				  internal_api_version, &i810API);
    if ( psp != NULL ) {
-      create_context_modes = (PFNGLXCREATECONTEXTMODES)
-	  glXGetProcAddress( (const GLubyte *) "__glXCreateContextModes" );
-      if ( create_context_modes != NULL ) {
-	 *driver_modes = i810FillInModes( 16,
-					  16, 0,
-					  1);
-      }
+      *driver_modes = i810FillInModes( 16,
+				       16, 0,
+				       1);
    }
 
    return (void *) psp;
 }
-#endif /* USE_NEW_INTERFACE */

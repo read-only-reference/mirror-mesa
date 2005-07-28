@@ -70,11 +70,6 @@
 #include <stdarg.h>
 
 
-/* This is no longer uses since we dumped autoconf/automake! */
-#ifdef HAVE_CONFIG_H
-#include "conf.h"
-#endif
-
 /* Get typedefs for uintptr_t and friends */
 #if defined(_WIN32)
 #include <BaseTsd.h>
@@ -288,10 +283,11 @@ int INLINE ffs(int value)
 
 /* The __FUNCTION__ gcc variable is generally only used for debugging.
  * If we're not using gcc, define __FUNCTION__ as a cpp symbol here.
+ * Don't define it if using a newer Windows compiler.
  */
 #if defined(__VMS)
 #define __FUNCTION__ "VMS$NL:"
-#elif !(defined(__GNUC__) && __GNUC__ >= 2)
+#elif !(defined(__GNUC__) && __GNUC__ >= 2) && !(defined(_MSC_VER) && _MSC_VER >= 1300)
 #define __FUNCTION__ "unknown"
 #endif
 

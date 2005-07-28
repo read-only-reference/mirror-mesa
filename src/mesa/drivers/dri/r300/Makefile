@@ -5,7 +5,7 @@ TOP = ../../../../..
 include $(TOP)/configs/current
 
 LIBNAME = r300_dri.so
-DEFINES += -DCOMPILE_R300 -DGLX_DIRECT_RENDERING
+DEFINES += -DCOMPILE_R300 -DGLX_DIRECT_RENDERING -DR200_MERGED=0
 
 MINIGLX_SOURCES = server/radeon_dri.c
 
@@ -16,8 +16,7 @@ COMMON_SOURCES = \
 	../common/texmem.c \
 	../common/vblank.c \
 	../common/xmlconfig.c \
-	../common/dri_util.c \
-	../common/glcontextmodes.c
+	../common/dri_util.c
 
 DRIVER_SOURCES = \
 		 radeon_screen.c \

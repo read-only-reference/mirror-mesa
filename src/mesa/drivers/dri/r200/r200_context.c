@@ -131,7 +131,7 @@ static const GLubyte *r200GetString( GLcontext *ctx, GLenum name )
 
 /* Extension strings exported by the R200 driver.
  */
-static const struct dri_extension card_extensions[] =
+const struct dri_extension card_extensions[] =
 {
     { "GL_ARB_multisample",                GL_ARB_multisample_functions },
     { "GL_ARB_multitexture",               NULL },
@@ -162,17 +162,17 @@ static const struct dri_extension card_extensions[] =
     { NULL,                                NULL }
 };
 
-static const struct dri_extension blend_extensions[] = {
+const struct dri_extension blend_extensions[] = {
     { "GL_EXT_blend_equation_separate",    GL_EXT_blend_equation_separate_functions },
     { "GL_EXT_blend_func_separate",        GL_EXT_blend_func_separate_functions },
     { NULL,                                NULL }
 };
 							 
-static const struct dri_extension ARB_vp_extension[] = {
+const struct dri_extension ARB_vp_extension[] = {
     { "GL_ARB_vertex_program",             GL_ARB_vertex_program_functions }
 };
 
-static const struct dri_extension NV_vp_extension[] = {
+const struct dri_extension NV_vp_extension[] = {
     { "GL_NV_vertex_program",              GL_NV_vertex_program_functions }
 };
 
@@ -247,14 +247,6 @@ static const struct dri_debug_control debug_control[] =
     { "mem",   DEBUG_MEMORY },
     { NULL,    0 }
 };
-
-
-static int
-get_ust_nop( int64_t * ust )
-{
-   *ust = 1;
-   return 0;
-}
 
 
 /* Create the device specific rendering context.
@@ -481,9 +473,7 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    /* plug in a few more device driver functions */
    /* XXX these should really go right after _mesa_init_driver_functions() */
    r200InitPixelFuncs( ctx );
-#if 0
    r200InitSpanFuncs( ctx );
-#endif
    r200InitTnlFuncs( ctx );
    r200InitState( rmesa );
    r200InitSwtcl( ctx );
@@ -511,11 +501,7 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    rmesa->prefer_gart_client_texturing = 
       (getenv("R200_GART_CLIENT_TEXTURES") != 0);
 
-   rmesa->get_ust = (PFNGLXGETUSTPROC) glXGetProcAddress( (const GLubyte *) "__glXGetUST" );
-   if ( rmesa->get_ust == NULL ) {
-      rmesa->get_ust = get_ust_nop;
-   }
-   (*rmesa->get_ust)( & rmesa->swap_ust );
+   (*dri_interface->getUST)( & rmesa->swap_ust );
 
 
 #if DO_DEBUG

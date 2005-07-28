@@ -105,9 +105,6 @@ DRI_CONF_BEGIN
 DRI_CONF_END;
 static const GLuint __driNConfigOptions = 10;
 
-#ifdef USE_NEW_INTERFACE
-static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
-#endif /* USE_NEW_INTERFACE */
 
 static const struct dri_debug_control debug_control[] =
 {
@@ -131,7 +128,7 @@ unsigned long time_sum=0;
 struct timeval tv_s1,tv_f1;
 #endif
 
-static const struct dri_extension common_extensions[] =
+static const struct dri_extension card_extensions[] =
 {
     { "GL_ARB_multisample",                GL_ARB_multisample_functions },
     { "GL_ARB_multitexture",               NULL },
@@ -537,7 +534,7 @@ savageCreateContext( const __GLcontextModes *mesaVis,
 				       debug_control );
 #endif
 
-   driInitExtensions( ctx, common_extensions, GL_TRUE );
+   driInitExtensions( ctx, card_extensions, GL_TRUE );
    if (savageScreen->chipset >= S3_SAVAGE4)
        driInitExtensions( ctx, s4_extensions, GL_FALSE );
    if (ctx->Mesa_DXTn ||
@@ -905,25 +902,6 @@ static const struct __DriverAPIRec savageAPI = {
 };
 
 
-
-#ifndef DRI_NEW_INTERFACE_ONLY
-/*
- * This is the (old) bootstrap function for the driver.
- * The __driCreateScreen name is the symbol that libGL.so fetches.
- * Return:  pointer to a __DRIscreenPrivate.
- */
-void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
-                        int numConfigs, __GLXvisualConfig *config)
-{
-   __DRIscreenPrivate *psp;
-   psp = __driUtilCreateScreen(dpy, scrn, psc, numConfigs, config, &savageAPI);
-   return (void *) psp;
-}
-#endif /* DRI_NEW_INTERFACE_ONLY */
-
-
-
-#ifdef USE_NEW_INTERFACE
 static __GLcontextModes *
 savageFillInModes( unsigned pixel_bits, unsigned depth_bits,
 		   unsigned stencil_bits, GLboolean have_back_buffer )
@@ -976,7 +954,7 @@ savageFillInModes( unsigned pixel_bits, unsigned depth_bits,
         fb_type = GL_UNSIGNED_INT_8_8_8_8_REV;
     }
 
-    modes = (*create_context_modes)( num_modes, sizeof( __GLcontextModes ) );
+    modes = (*dri_interface->createContextModes)( num_modes, sizeof( __GLcontextModes ) );
     m = modes;
     if ( ! driFillInModes( & m, fb_format, fb_type,
 			   depth_bits_array, stencil_bits_array, depth_buffer_factor,
@@ -1019,7 +997,7 @@ savageFillInModes( unsigned pixel_bits, unsigned depth_bits,
  *         failure.
  */
 PUBLIC
-void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
+void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,
 			     const __DRIversion * dri_version,
@@ -1027,6 +1005,7 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
 			     const __DRIframebuffer * frame_buffer,
 			     drmAddress pSAREA, int fd, 
 			     int internal_api_version,
+			     const __DRIinterfaceMethods * interface,
 			     __GLcontextModes ** driver_modes )
 			     
 {
@@ -1034,6 +1013,8 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
    static const __DRIversion ddx_expected = { 2, 0, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
    static const __DRIversion drm_expected = { 2, 1, 0 };
+
+   dri_interface = interface;
 
    if ( ! driCheckDriDdxDrmVersions2( "Savage",
 				      dri_version, & dri_expected,
@@ -1047,17 +1028,22 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
 				  frame_buffer, pSAREA, fd,
 				  internal_api_version, &savageAPI);
    if ( psp != NULL ) {
-      create_context_modes = (PFNGLXCREATECONTEXTMODES)
-	  glXGetProcAddress( (const GLubyte *) "__glXCreateContextModes" );
-      if ( create_context_modes != NULL ) {
-	 SAVAGEDRIPtr dri_priv = (SAVAGEDRIPtr)psp->pDevPriv;
-	 *driver_modes = savageFillInModes( dri_priv->cpp*8,
-					    (dri_priv->cpp == 2) ? 16 : 24,
-					    (dri_priv->cpp == 2) ? 0  : 8,
-					    (dri_priv->backOffset != dri_priv->depthOffset) );
-      }
+      SAVAGEDRIPtr dri_priv = (SAVAGEDRIPtr)psp->pDevPriv;
+      *driver_modes = savageFillInModes( dri_priv->cpp*8,
+					 (dri_priv->cpp == 2) ? 16 : 24,
+					 (dri_priv->cpp == 2) ? 0  : 8,
+					 (dri_priv->backOffset != dri_priv->depthOffset) );
+
+      /* Calling driInitExtensions here, with a NULL context pointer, does not actually
+       * enable the extensions.  It just makes sure that all the dispatch offsets for all
+       * the extensions that *might* be enables are known.  This is needed because the
+       * dispatch offsets need to be known when _mesa_context_create is called, but we can't
+       * enable the extensions until we have a context pointer.
+       *
+       * Hello chicken.  Hello egg.  How are you two today?
+       */
+      driInitExtensions( NULL, card_extensions, GL_FALSE );
    }
 
    return (void *) psp;
 }
-#endif /* USE_NEW_INTERFACE */

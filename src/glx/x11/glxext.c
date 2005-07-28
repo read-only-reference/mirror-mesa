@@ -111,6 +111,10 @@ static int _mesa_sparc_needs_init = 1;
 #define INIT_MESA_SPARC
 #endif
 
+#ifdef GLX_DIRECT_RENDERING
+static __DRIscreen *__glXFindDRIScreen(__DRInativeDisplay *dpy, int scrn);
+#endif /* GLX_DIRECT_RENDERING */
+
 static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
     GLXDrawable read, GLXContext gc);
 
@@ -272,7 +276,6 @@ int __glXDebug = 0;
 */
 int __glXCloseDisplay(Display *dpy, XExtCodes *codes);
 
-static GLboolean FillInVisuals( __GLXscreenConfigs * psc );
 
 /************************************************************************/
 
@@ -352,12 +355,6 @@ static void FreeScreenConfigs(__GLXdisplayPrivate *priv)
 	    if(psc->effectiveGLXexts)
 		Xfree(psc->effectiveGLXexts);
 
-	    if ( psc->old_configs != NULL ) {
-		Xfree( psc->old_configs );
-		psc->old_configs = NULL;
-		psc->numOldConfigs = 0;
-	    }
-
 	    psc->configs = NULL;	/* NOTE: just for paranoia */
 	}
 
@@ -399,10 +396,6 @@ static int __glXFreeDisplayPrivate(XExtData *extension)
     priv->driDisplay.private = NULL;
 #endif
 
-#ifdef GLX_DIRECT_RENDERING
-    XFree(priv->driDisplay.createScreen);
-#endif
-
     Xfree((char*) priv);
     return 0;
 }
@@ -439,112 +432,6 @@ static Bool QueryVersion(Display *dpy, int opcode, int *major, int *minor)
     *major = reply.majorVersion;
     *minor = min(reply.minorVersion, GLX_MINOR_VERSION);
     return GL_TRUE;
-}
-
-
-/**
- * Determine if a \c __GLcontextModes structure has the right mojo to be
- * converted to a \c __GLXvisualConfig to be sent to an "old" style DRI
- * driver.
- */
-#define MODE_HAS_MOJO(m) \
-    ((m)->visualID != GLX_DONT_CARE) \
-	&& ((m)->sampleBuffers == 0) \
-	&& ((m)->samples == 0) \
-	&& (((m)->drawableType & GLX_WINDOW_BIT) != 0) \
-	&& (((m)->xRenderable == GL_TRUE) \
-	    || ((m)->xRenderable == GLX_DONT_CARE))
-
-
-/**
- * Convert the FBConfigs associated with a screen into an array of
- * \c __GLXvisualConfig structures.  These structures are passed into DRI
- * drivers that use the "old" interface.  The old-style drivers had a fairly
- * strict set of visual types that could be supported.  FBConfigs that
- * cannot be supported are not converted.
- *
- * \param psc  Screen whose FBConfigs need to be swizzled.
- *
- * \returns 
- * If memory could be allocated and at least one FBConfig could be converted
- * to a \c __GLXvisualConfig structure, \c GL_TRUE is returned.  Otherwise,
- * \c GL_FALSE is returned.
- *
- * \todo
- * When the old DRI driver interface is no longer supported, this function
- * can be removed.
- */
-static GLboolean
-FillInVisuals( __GLXscreenConfigs * psc )
-{
-    __GLcontextModes *modes;
-    int glx_visual_count;
-
-
-    glx_visual_count = 0;
-    for ( modes = psc->configs ; modes != NULL ; modes = modes->next ) {
-	if ( MODE_HAS_MOJO( modes ) ) {
-	    glx_visual_count++;
-	}
-    }
-
-    psc->old_configs = (__GLXvisualConfig *)
-	Xmalloc( sizeof( __GLXvisualConfig ) * glx_visual_count );
-    if ( psc->old_configs == NULL ) {
-	return GL_FALSE;
-    }
-
-    glx_visual_count = 0;
-    for ( modes = psc->configs ; modes != NULL ; modes = modes->next ) {
-	if ( MODE_HAS_MOJO( modes ) ) {
-
-#define COPY_VALUE(src_tag,dst_tag) \
-    psc->old_configs[glx_visual_count]. dst_tag = modes-> src_tag
-
-	    COPY_VALUE( visualID,  vid );
-	    COPY_VALUE( rgbMode,   rgba );
-	    COPY_VALUE( stereoMode, stereo );
-	    COPY_VALUE( doubleBufferMode, doubleBuffer );
-
-	    psc->old_configs[glx_visual_count].class = 
-		_gl_convert_to_x_visual_type( modes->visualType );
-
-	    COPY_VALUE( level, level );
-	    COPY_VALUE( numAuxBuffers, auxBuffers );
-
-	    COPY_VALUE( redBits,        redSize );
-	    COPY_VALUE( greenBits,      greenSize );
-	    COPY_VALUE( blueBits,       blueSize );
-	    COPY_VALUE( alphaBits,      alphaSize );
-	    COPY_VALUE( rgbBits,        bufferSize );
-	    COPY_VALUE( accumRedBits,   accumRedSize );
-	    COPY_VALUE( accumGreenBits, accumGreenSize );
-	    COPY_VALUE( accumBlueBits,  accumBlueSize );
-	    COPY_VALUE( accumAlphaBits, accumAlphaSize );
-	    COPY_VALUE( depthBits,      depthSize );
-	    COPY_VALUE( stencilBits,    stencilSize );
-
-	    COPY_VALUE( visualRating, visualRating );
-	    COPY_VALUE( transparentPixel, transparentPixel );
-	    COPY_VALUE( transparentRed,   transparentRed );
-	    COPY_VALUE( transparentGreen, transparentGreen );
-	    COPY_VALUE( transparentBlue,  transparentBlue );
-	    COPY_VALUE( transparentAlpha, transparentAlpha );
-	    COPY_VALUE( transparentIndex, transparentIndex );
-
-#undef COPY_VALUE
-
-	    glx_visual_count++;
-	}
-    }
-
-    psc->numOldConfigs = glx_visual_count;
-    if ( glx_visual_count == 0 ) {
-	Xfree( psc->old_configs );
-	psc->old_configs = NULL;
-    }
-
-    return (glx_visual_count != 0);
 }
 
 
@@ -784,6 +671,42 @@ filter_modes( __GLcontextModes ** server_modes,
 }
 
 
+/**
+ * Implement \c __DRIinterfaceMethods::getProcAddress.
+ */
+static __DRIfuncPtr get_proc_address( const char * proc_name )
+{
+    if (strcmp( proc_name, "glxEnableExtension" ) == 0) {
+	return (__DRIfuncPtr) __glXScrEnableExtension;
+    }
+    
+    return NULL;
+}
+
+
+/**
+ * Table of functions exported by the loader to the driver.
+ */
+static const __DRIinterfaceMethods interface_methods = {
+    get_proc_address,
+
+    _gl_context_modes_create,
+    _gl_context_modes_destroy,
+      
+    __glXFindDRIScreen,
+    __glXWindowExists,
+      
+    XF86DRICreateContextWithConfig,
+    XF86DRIDestroyContext,
+
+    XF86DRICreateDrawable,
+    XF86DRIDestroyDrawable,
+    XF86DRIGetDrawableInfo,
+
+    __glXGetUST,
+    glXGetMscRateOML,
+};
+
 
 /**
  * Perform the required libGL-side initialization and call the client-side
@@ -805,7 +728,7 @@ filter_modes( __GLcontextModes ** server_modes,
 static void *
 CallCreateNewScreen(Display *dpy, int scrn, __DRIscreen *psc,
 		    __DRIdisplay * driDpy,
-		    CreateNewScreenFunc createNewScreen)
+		    PFNCREATENEWSCREENFUNC createNewScreen)
 {
     __DRIscreenPrivate *psp = NULL;
 #ifndef GLX_USE_APPLEGL
@@ -865,9 +788,9 @@ CallCreateNewScreen(Display *dpy, int scrn, __DRIscreen *psc,
 		    char *driverName;
 
 		    /*
-		     * Get device name (like "tdfx") and the ddx version numbers.
-		     * We'll check the version in each DRI driver's "createScreen"
-		     * function.
+		     * Get device name (like "tdfx") and the ddx version
+		     * numbers.  We'll check the version in each DRI driver's
+		     * "createNewScreen" function.
 		     */
 		    err_msg = "XF86DRIGetClientDriverName";
 		    if (XF86DRIGetClientDriverName(dpy, scrn,
@@ -910,8 +833,9 @@ CallCreateNewScreen(Display *dpy, int scrn, __DRIscreen *psc,
 
 			    if ( status == 0 ) {
 				/*
-				 * Map the SAREA region.  Further mmap regions may be setup in
-				 * each DRI driver's "createScreen" function.
+				 * Map the SAREA region.  Further mmap regions
+				 * may be setup in each DRI driver's
+				 * "createNewScreen" function.
 				 */
 				status = drmMap(fd, hSAREA, SAREA_MAX, 
 						&pSAREA);
@@ -935,6 +859,7 @@ CallCreateNewScreen(Display *dpy, int scrn, __DRIscreen *psc,
 							     pSAREA,
 							     fd,
 							     api_ver,
+							     & interface_methods,
 							     & driver_modes );
 
 				    filter_modes( & configs->configs,
@@ -1156,6 +1081,9 @@ static Bool AllocAndFetchScreenConfigs(Display *dpy, __GLXdisplayPrivate *priv)
 	psc->ext_list_first_time = GL_TRUE;
 	/* Initialize the direct rendering per screen data and functions */
 	if (priv->driDisplay.private != NULL) {
+	    /* FIXME: Should it be some sort of an error if createNewScreen[i]
+	     * FIXME: is NULL?
+	     */
 	    if (priv->driDisplay.createNewScreen &&
 		priv->driDisplay.createNewScreen[i]) {
 
@@ -1164,21 +1092,6 @@ static Bool AllocAndFetchScreenConfigs(Display *dpy, __GLXdisplayPrivate *priv)
 		    CallCreateNewScreen(dpy, i, & psc->driScreen,
 					& priv->driDisplay,
 					priv->driDisplay.createNewScreen[i] );
-	    }
-	    else if (priv->driDisplay.createScreen &&
-		     priv->driDisplay.createScreen[i]) {
-		/* screen initialization (bootstrap the driver) */
-		if ( (psc->old_configs == NULL)
-		     && !FillInVisuals(psc) ) {
-		    FreeScreenConfigs(priv);
-		    return GL_FALSE;
-		}
-
-		psc->driScreen.screenConfigs = (void *)psc;
-		psc->driScreen.private =
-		    (*(priv->driDisplay.createScreen[i]))(dpy, i, &psc->driScreen,
-							  psc->numOldConfigs,
-							  psc->old_configs);
 	    }
 	}
 #endif
@@ -1273,7 +1186,6 @@ __GLXdisplayPrivate *__glXInitialize(Display* dpy)
         /* Assinging zero here assures we'll never go direct */
         dpyPriv->driDisplay.private = 0;
         dpyPriv->driDisplay.destroyDisplay = 0;
-        dpyPriv->driDisplay.createScreen = 0;
     }
     else {
         dpyPriv->driDisplay.private =
@@ -1607,44 +1519,23 @@ static Bool SendMakeCurrentRequest( Display *dpy, CARD8 opcode,
 }
 
 
+#ifdef GLX_DIRECT_RENDERING
 static Bool BindContextWrapper( Display *dpy, GLXContext gc,
 				GLXDrawable draw, GLXDrawable read )
 {
-#ifdef GLX_DIRECT_RENDERING
-    if ( gc->driContext.bindContext3 != NULL ) {
-	return (*gc->driContext.bindContext3)(dpy, gc->screen, draw, read, 
-					      & gc->driContext);
-    }
-#ifndef DRI_NEW_INTERFACE_ONLY
-    else {
-	return (*gc->driContext.bindContext2)(dpy, gc->screen, draw, read,
-					      gc);
-    }
-#endif
-#endif
-    return GL_FALSE;
+    return (*gc->driContext.bindContext)(dpy, gc->screen, draw, read,
+					 & gc->driContext);
 }
 
 
-static Bool UnbindContextWrapper( Display *dpy, GLXContext gc )
+static Bool UnbindContextWrapper( GLXContext gc )
 {
-#ifdef GLX_DIRECT_RENDERING
-    if ( gc->driContext.unbindContext3 != NULL ) {
-	return (*gc->driContext.unbindContext3)(dpy, gc->screen, 
-						gc->currentDrawable,
-						gc->currentReadable,
-						& gc->driContext );
-    }
-#ifndef DRI_NEW_INTERFACE_ONLY
-    else {
-	return (*gc->driContext.unbindContext2)(dpy, gc->screen,
-						gc->currentDrawable,
-						gc->currentReadable, gc);
-    }
-#endif
-#endif
-    return GL_FALSE;
+    return (*gc->driContext.unbindContext)(gc->currentDpy, gc->screen, 
+					   gc->currentDrawable,
+					   gc->currentReadable,
+					   & gc->driContext );
 }
+#endif /* GLX_DIRECT_RENDERING */
 
 
 /*
@@ -1707,7 +1598,7 @@ USED static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
     /* Unbind the old direct rendering context */
     if (oldGC->isDirect) {
 	if (oldGC->driContext.private) {
-	    if (! UnbindContextWrapper( oldGC->currentDpy, oldGC )) {
+	    if (! UnbindContextWrapper( oldGC )) {
 		/* The make current failed.  Just return GL_FALSE. */
 		return GL_FALSE;
 	    }
@@ -1879,8 +1770,7 @@ USED static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
 }
 
 
-PUBLIC Bool GLX_PREFIX(glXMakeCurrent)(Display *dpy, GLXDrawable draw,
-                                       GLXContext gc)
+PUBLIC Bool glXMakeCurrent(Display *dpy, GLXDrawable draw, GLXContext gc)
 {
     return MakeContextCurrent( dpy, draw, draw, gc );
 }

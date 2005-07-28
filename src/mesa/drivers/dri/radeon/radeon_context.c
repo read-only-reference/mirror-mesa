@@ -125,7 +125,7 @@ static const GLubyte *radeonGetString( GLcontext *ctx, GLenum name )
 
 /* Extension strings exported by the R100 driver.
  */
-static const struct dri_extension card_extensions[] =
+const struct dri_extension card_extensions[] =
 {
     { "GL_ARB_multisample",                GL_ARB_multisample_functions },
     { "GL_ARB_multitexture",               NULL },
@@ -211,14 +211,6 @@ static const struct dri_debug_control debug_control[] =
     { "sync",  DEBUG_SYNC },
     { NULL,    0 }
 };
-
-
-static int
-get_ust_nop( int64_t * ust )
-{
-   *ust = 1;
-   return 0;
-}
 
 
 /* Create the device specific context.
@@ -450,11 +442,7 @@ radeonCreateContext( const __GLcontextModes *glVisual,
    rmesa->vblank_flags = (rmesa->radeonScreen->irq != 0)
        ? driGetDefaultVBlankFlags(&rmesa->optionCache) : VBLANK_FLAG_NO_IRQ;
 
-   rmesa->get_ust = (PFNGLXGETUSTPROC) glXGetProcAddress( (const GLubyte *) "__glXGetUST" );
-   if ( rmesa->get_ust == NULL ) {
-      rmesa->get_ust = get_ust_nop;
-   }
-   (*rmesa->get_ust)( & rmesa->swap_ust );
+   (*dri_interface->getUST)( & rmesa->swap_ust );
 
 
 #if DO_DEBUG

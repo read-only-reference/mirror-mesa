@@ -42,6 +42,8 @@
 #include "arbprogparse.h"
 #include "grammar_mesa.h"
 
+#include "dispatch.h"
+
 #ifndef __extension__
 #if !defined(__GNUC__) || (__GNUC__ < 2) || \
     ((__GNUC__ == 2) && (__GNUC_MINOR__ <= 7))
@@ -2361,6 +2363,7 @@ parse_address_reg (GLcontext * ctx, GLubyte ** inst,
    return 0;
 }
 
+#if 0 /* unused */
 /**
  * Handle the parsing out of a masked address register
  *
@@ -2387,7 +2390,7 @@ parse_masked_address_reg (GLcontext * ctx, GLubyte ** inst,
 
    return 0;
 }
-
+#endif
 
 /**
  * Parse out a swizzle mask.
@@ -3114,6 +3117,7 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
       case OP_TEX_KIL:
 	 if (parse_fp_vector_src_reg(ctx, inst, vc_head, Program, &fp->SrcReg[0]))
             return 1;
+         fp->Opcode = FP_OPCODE_KIL;
          break;
    }
 
@@ -3882,7 +3886,8 @@ static int set_reg8 (GLcontext *ctx, grammar id, const byte *name, byte value)
 
 static int extension_is_supported (const GLubyte *ext)
 {
-   const GLubyte *extensions = GL_CALL(GetString)(GL_EXTENSIONS);
+   GET_CURRENT_CONTEXT(ctx);
+   const GLubyte *extensions = CALL_GetString(GET_DISPATCH(), (GL_EXTENSIONS));
    const GLubyte *end = extensions + _mesa_strlen ((const char *) extensions);
    const GLint ext_len = (GLint)_mesa_strlen ((const char *) ext);
 

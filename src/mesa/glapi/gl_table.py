@@ -52,6 +52,8 @@ class PrintGlTable(gl_XML.gl_print_base):
 		print '#define GLAPIENTRYP'
 		print '#endif'
 		print ''
+		print 'typedef void (*_glapi_proc)(void); /* generic function pointer */'
+		print ''
 		print 'struct _glapi_table'
 		print '{'
 		return
@@ -62,23 +64,122 @@ class PrintGlTable(gl_XML.gl_print_base):
 		return
 
 
+class PrintRemapTable(gl_XML.gl_print_base):
+	def __init__(self):
+		gl_XML.gl_print_base.__init__(self)
+
+		self.header_tag = '_DISPATCH_H_'
+		self.name = "gl_table.py (from Mesa)"
+		self.license = license.bsd_license_template % ("(C) Copyright IBM Corporation 2005", "IBM")
+		return
+
+
+	def printRealHeader(self):
+		print """/**
+ * \\file dispatch.h
+ * Macros for handling GL dispatch tables.
+ *
+ * For each known GL function, there are 3 macros in this file.  The first
+ * macro is named CALL_FuncName and is used to call that GL function using
+ * the specified dispatch table.  The other 2 macros, called GET_FuncName
+ * can SET_FuncName, are used to get and set the dispatch pointer for the
+ * named function in the specified dispatch table.
+ */
+"""
+		
+		return
+
+	def printBody(self, api):
+		print '#define CALL_by_offset(disp, cast, offset, parameters) \\'
+		print '    (*(cast (((_glapi_proc *)(disp))[offset]))) parameters'
+		print '#define GET_by_offset(disp, offset) \\'
+		print '    (((_glapi_proc *)(disp))[offset])'
+		print '#define SET_by_offset(disp, offset, fn) \\'
+		print '    ((((_glapi_proc *)(disp))[offset]) = (_glapi_proc) fn)'
+		print ''
+
+		abi = [ "1.0", "1.1", "1.2", "GL_ARB_multitexture" ]
+
+		functions = []
+		abi_functions = []
+		count = 0
+		for f in api.functionIterateByOffset():
+			[category, num] = api.get_category_for_name( f.name )
+			if category not in abi:
+				functions.append( [f, count] )
+				count += 1
+			else:
+				abi_functions.append( f )
+
+
+		for f in abi_functions:
+			print '#define CALL_%s(disp, parameters) (*((disp)->%s)) parameters' % (f.name, f.name)
+			print '#define GET_%s(disp) ((disp)->%s)' % (f.name, f.name)
+			print '#define SET_%s(disp, fn) ((disp)->%s = fn)' % (f.name, f.name)
+
+
+		print ''
+		print '#if !defined(IN_DRI_DRIVER)'
+		print ''
+
+		for [f, index] in functions:
+			print '#define CALL_%s(disp, parameters) (*((disp)->%s)) parameters' % (f.name, f.name)
+			print '#define GET_%s(disp) ((disp)->%s)' % (f.name, f.name)
+			print '#define SET_%s(disp, fn) ((disp)->%s = fn)' % (f.name, f.name)
+
+		print ''
+		print '#else'
+		print ''
+		print '#define driDispatchRemapTable_size %u' % (count)
+		print 'extern unsigned driDispatchRemapTable[ driDispatchRemapTable_size ];'
+		print ''
+
+		for [f, index] in functions:
+			print '#define %s_remap_index %u' % (f.name, index)
+
+		print ''
+
+		for [f, index] in functions:
+			arg_string = gl_XML.create_parameter_string( f.parameters, 0 )
+			cast = '%s (GLAPIENTRYP)(%s)' % (f.return_type, arg_string)
+
+			print '#define CALL_%s(disp, parameters) CALL_by_offset(disp, (%s), driDispatchRemapTable[%s_remap_index], parameters)' % (f.name, cast, f.name)
+			print '#define GET_%s(disp) GET_by_offset(disp, driDispatchRemapTable[%s_remap_index])' % (f.name, f.name)
+			print '#define SET_%s(disp, fn) SET_by_offset(disp, driDispatchRemapTable[%s_remap_index], fn)' % (f.name, f.name)
+
+
+		print ''
+		print '#endif /* !defined(IN_DRI_DRIVER) */'
+		return
+
+
 def show_usage():
-	print "Usage: %s [-f input_file_name]" % sys.argv[0]
+	print "Usage: %s [-f input_file_name] [-m mode]" % sys.argv[0]
+	print "    -m mode   Mode can be 'table' or 'remap_table'."
 	sys.exit(1)
 
 if __name__ == '__main__':
 	file_name = "gl_API.xml"
     
 	try:
-		(args, trail) = getopt.getopt(sys.argv[1:], "f:")
+		(args, trail) = getopt.getopt(sys.argv[1:], "f:m:")
 	except Exception,e:
 		show_usage()
 
+	mode = "table"
 	for (arg,val) in args:
 		if arg == "-f":
 			file_name = val
+		elif arg == "-m":
+			mode = val
+
+	if mode == "table":
+		printer = PrintGlTable()
+	elif mode == "remap_table":
+		printer = PrintRemapTable()
+	else:
+		show_usage()
 
 	api = gl_XML.parse_GL_API( file_name )
 
-	printer = PrintGlTable()
 	printer.Print( api )

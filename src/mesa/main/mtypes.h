@@ -1430,6 +1430,12 @@ struct gl_texture_unit
    GLboolean ColorTableEnabled;
 };
 
+struct texenvprog_cache {
+   GLuint hash;
+   void *key;
+   void *data;
+   struct texenvprog_cache *next;
+};
 
 /**
  * Texture attribute group (GL_TEXTURE_BIT).
@@ -1459,6 +1465,9 @@ struct gl_texture_attrib
    /** GL_EXT_shared_texture_palette */
    GLboolean SharedPalette;
    struct gl_color_table Palette;
+   
+   /** Cached texenv fragment programs */
+   struct texenvprog_cache *env_fp_cache;
 };
 
 
@@ -1729,7 +1738,8 @@ enum register_file
    PROGRAM_NAMED_PARAM,
    PROGRAM_STATE_VAR,
    PROGRAM_WRITE_ONLY,
-   PROGRAM_ADDRESS
+   PROGRAM_ADDRESS,
+   PROGRAM_UNDEFINED   /* invalid value */
 };
 
 
@@ -2184,7 +2194,7 @@ struct gl_framebuffer
    struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS][4];
    struct gl_renderbuffer *_ColorReadBuffer;
 
-#if OLD_RENDERBUFFER || NEW_RENDERBUFFER
+#if OLD_RENDERBUFFER
    /* XXX THIS IS TEMPORARY */
    GLuint _ColorDrawBit[MAX_DRAW_BUFFERS][4];
 #endif
@@ -2588,7 +2598,10 @@ struct gl_tnl_module
     * On restore, only need to swap these functions back in.
     */
    /*@{*/
-   void *Swapped[NUM_VERTEX_FORMAT_ENTRIES][2];
+   struct {
+       _glapi_proc * location;
+       _glapi_proc function;
+   } Swapped[NUM_VERTEX_FORMAT_ENTRIES];
    GLuint SwapCount;
    /*@}*/
 };

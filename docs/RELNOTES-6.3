@@ -1,7 +1,7 @@
 
                            Mesa 6.3 release notes
 
-                              month day, 2004
+                              July 20, 2005
 
                               PLEASE READ!!!!
 
@@ -28,7 +28,8 @@ GL_OES_read_format - allows one to query the fastest glReadPixels format
 GL_ARB_pixel_buffer_object - buffer objects for pixel read/write functions.
 
 GL_EXT_framebuffer_object - allows render-to-texture and provides a
-  window-system indepedent Pbuffer facility
+  window-system indepedent Pbuffer facility.
+  The Mesa CVS tree contains a couple tests of this extension.
 
 DirectFB driver, contributed by Claudio Ciccani.  See docs/README.directfb
 for details.
@@ -63,11 +64,25 @@ contexts so they can't be deleted until they're unbound in _all_ contexts.
 
 
 
+GL_EXT_framebuffer_object changes
+---------------------------------
+
+Implementing this extension involved changing a lot of code (for the better).
+
+The gl_framebuffer object now a collection of gl_renderbuffer objects.
+Renderbuffers may store colors, stencil indices, or depth values.  The
+gl_framebuffer and gl_renderbuffer types are object-oriented in design.
+
+All the old RGB, color index, stencil and depth-related span functions for
+reading/writing pixels from/to buffers has changed.  Now, all pixels are
+read/written through a set of common renderbuffer functions (methods).
+
+Most device drivers have been updated for these changes, but some haven't.
 
 
-To Do before release
---------------------
- Fix dinoshade bug
+
+To Do (someday) items
+---------------------
  Switch to freeglut
  Increase MAX_DRAWBUFFERS
  driver hooks for BeginQuery/EndQuery
@@ -77,7 +92,7 @@ To Do before release
 Miscellaneous
 -------------
 
-The main/get.c file is now generated with a Python script.
+The main/get.c file is now generated with a Python script (get_gen.py).
 
 
 
@@ -97,4 +112,4 @@ D3D			needs updating
 
 
 ----------------------------------------------------------------------
-$Id: RELNOTES-6.3,v 3.9 2005/05/04 20:11:35 brianp Exp $
+$Id: RELNOTES-6.3,v 3.13 2005/07/21 15:57:29 brianp Exp $

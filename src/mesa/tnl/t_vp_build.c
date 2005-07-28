@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.3.1
  *
  * Copyright (C) 2005  Tungsten Graphics   All Rights Reserved.
  *
@@ -247,7 +247,7 @@ static struct state_key *make_state_key( GLcontext *ctx )
  */
 struct ureg {
    GLuint file:4;
-   GLuint idx:8;
+   GLint idx:8;      /* relative addressing may be negative */
    GLuint negate:1;
    GLuint swz:12;
    GLuint pad:7;
@@ -289,7 +289,7 @@ const static struct ureg undef = {
 
 /* Construct a ureg:
  */
-static struct ureg make_ureg(GLuint file, GLuint idx)
+static struct ureg make_ureg(GLuint file, GLint idx)
 {
    struct ureg reg;
    reg.file = file;
@@ -377,7 +377,7 @@ static struct ureg register_const4f( struct tnl_program *p,
 			      GLfloat s3)
 {
    GLfloat values[4];
-   GLuint idx;
+   GLint idx;
    values[0] = s0;
    values[1] = s1;
    values[2] = s2;
@@ -413,7 +413,7 @@ static struct ureg register_param6( struct tnl_program *p,
 				   GLint s5)
 {
    GLint tokens[6];
-   GLuint idx;
+   GLint idx;
    tokens[0] = s0;
    tokens[1] = s1;
    tokens[2] = s2;

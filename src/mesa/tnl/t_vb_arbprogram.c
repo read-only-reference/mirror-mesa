@@ -110,6 +110,10 @@ static GLfloat ApproxPower(GLfloat x, GLfloat y)
    return (GLfloat) _mesa_pow(x, y);
 }
 
+static GLfloat rough_approx_log2_0_1(GLfloat x)
+{
+   return LOG2(x);
+}
 
 
 
@@ -273,13 +277,11 @@ static void do_EXP( struct arb_vp_machine *m, union instruction op )
    const GLfloat *arg0 = m->File[op.alu.file0][op.alu.idx0];
    GLfloat tmp = arg0[0];
    GLfloat flr_tmp = FLOORF(tmp);
+   GLfloat frac_tmp = tmp - flr_tmp;
 
-   /* KW: nvvertexec has an optimized version of this which is pretty
-    * hard to understand/validate, but avoids the RoughApproxExp2.
-    */
-   result[0] = (GLfloat) (1 << (int)flr_tmp);
-   result[1] = tmp - flr_tmp;
-   result[2] = RoughApproxExp2(tmp);
+   result[0] = LDEXPF(1.0, (int)flr_tmp);
+   result[1] = frac_tmp;
+   result[2] = LDEXPF(rough_approx_log2_0_1(frac_tmp), (int)flr_tmp);
    result[3] = 1.0F;
 }
 
@@ -322,18 +324,22 @@ static void do_LIT( struct arb_vp_machine *m, union instruction op )
 {
    GLfloat *result = m->File[0][op.alu.dst];
    const GLfloat *arg0 = m->File[op.alu.file0][op.alu.idx0];
-
-   const GLfloat epsilon = 1.0F / 256.0F; /* per NV spec */
    GLfloat tmp[4];
 
-   tmp[0] = MAX2(arg0[0], 0.0F);
-   tmp[1] = MAX2(arg0[1], 0.0F);
-   tmp[3] = CLAMP(arg0[3], -(128.0F - epsilon), (128.0F - epsilon));
+   tmp[0] = 1.0;
+   tmp[1] = 0.0;
+   tmp[2] = 0.0;
+   tmp[3] = 1.0;
 
-   result[0] = 1.0;
-   result[1] = tmp[0];
-   result[2] = (tmp[0] > 0.0) ? RoughApproxPower(tmp[1], tmp[3]) : 0.0F;
-   result[3] = 1.0;
+   if (arg0[0] > 0.0) {
+      tmp[1] = arg0[0];
+
+      if (arg0[1] > 0.0) {
+	 tmp[2] = RoughApproxPower(arg0[1], arg0[3]);
+      }
+   }
+
+   COPY_4V(result, tmp);
 }
 
 
@@ -345,11 +351,15 @@ static void do_LOG( struct arb_vp_machine *m, union instruction op )
    const GLfloat *arg0 = m->File[op.alu.file0][op.alu.idx0];
    GLfloat tmp = FABSF(arg0[0]);
    int exponent;
+#ifdef _WIN32
+   GLfloat mantissa = (GLfloat) frexp((double)tmp, &exponent);
+#else
    GLfloat mantissa = frexpf(tmp, &exponent);
+#endif
 
    result[0] = (GLfloat) (exponent - 1);
    result[1] = 2.0 * mantissa; /* map [.5, 1) -> [1, 2) */
-   result[2] = result[0] + LOG2(result[1]);
+   result[2] = exponent + LOG2(mantissa);
    result[3] = 1.0;
 }
 
@@ -1004,8 +1014,9 @@ static void cvp_emit_inst( struct compilation *cp,
 static void free_tnl_data( struct vertex_program *program  )
 {
    struct tnl_compiled_program *p = program->TnlData;
-   if (p->compiled_func) free((void *)p->compiled_func);
-   free(p);
+   if (p->compiled_func)
+      _mesa_free((void *)p->compiled_func);
+   _mesa_free(p);
    program->TnlData = NULL;
 }
 
@@ -1196,9 +1207,6 @@ run_arb_vertex_program(GLcontext *ctx, struct tnl_pipeline_stage *stage)
    p = (struct tnl_compiled_program *)program->TnlData;
    assert(p);
 
-   /* Initialize regs where necessary:
-    */
-   ASSIGN_4V(m->File[0][REG_ID], 0, 0, 0, 1);
 
    m->nr_inputs = m->nr_outputs = 0;
 
@@ -1346,7 +1354,11 @@ validate_vertex_program( GLcontext *ctx, struct tnl_pipeline_stage *stage )
        */
       m->File[FILE_LOCAL_PARAM] = program->Base.LocalParams;
       m->File[FILE_ENV_PARAM] = ctx->VertexProgram.Parameters;
-      m->File[FILE_STATE_PARAM] = program->Parameters->ParameterValues;
+      /* GL_NV_vertex_programs can't reference GL state */
+      if (program->Parameters)
+         m->File[FILE_STATE_PARAM] = program->Parameters->ParameterValues;
+      else
+         m->File[FILE_STATE_PARAM] = NULL;
    }
 }
 
@@ -1369,7 +1381,7 @@ static GLboolean init_vertex_program( GLcontext *ctx,
    const GLuint size = VB->Size;
    GLuint i;
 
-   stage->privatePtr = MALLOC(sizeof(*m));
+   stage->privatePtr = _mesa_malloc(sizeof(*m));
    m = ARB_VP_MACHINE(stage);
    if (!m)
       return GL_FALSE;
@@ -1380,6 +1392,15 @@ static GLboolean init_vertex_program( GLcontext *ctx,
    m->ctx = ctx;
 
    m->File[0] = ALIGN_MALLOC(REG_MAX * sizeof(GLfloat) * 4, 16);
+
+   /* Initialize regs where necessary:
+    */
+   ASSIGN_4V(m->File[0][REG_ID], 0, 0, 0, 1);
+   ASSIGN_4V(m->File[0][REG_ONES], 1, 1, 1, 1);
+   ASSIGN_4V(m->File[0][REG_SWZ], -1, 1, 0, 0);
+   ASSIGN_4V(m->File[0][REG_NEG], -1, -1, -1, -1);
+   ASSIGN_4V(m->File[0][REG_LIT], 1, 0, 0, 1);
+   ASSIGN_4V(m->File[0][REG_LIT2], 1, .5, .2, 1); /* debug value */
 
    if (_mesa_getenv("MESA_EXPERIMENTAL"))
       m->try_codegen = 1;
@@ -1396,6 +1417,9 @@ static GLboolean init_vertex_program( GLcontext *ctx,
 
    if (ctx->_MaintainTnlProgram)
       _mesa_allow_light_in_model( ctx, GL_FALSE );
+
+   m->fpucntl_rnd_neg = RND_NEG_FPU; /* const value */
+   m->fpucntl_restore = RESTORE_FPU; /* const value */
 
    return GL_TRUE;
 }
@@ -1422,7 +1446,7 @@ static void dtr( struct tnl_pipeline_stage *stage )
       ALIGN_FREE( m->clipmask );
       ALIGN_FREE( m->File[0] );
 
-      FREE( m );
+      _mesa_free( m );
       stage->privatePtr = NULL;
    }
 }

@@ -44,6 +44,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "swrast_setup/swrast_setup.h"
 #include "array_cache/acache.h"
 #include "tnl/tnl.h"
+#include "tnl/t_vp_build.h"
 
 #include "radeon_reg.h"
 #include "radeon_macros.h"
@@ -613,6 +614,8 @@ static void r300_check_render(GLcontext *ctx, struct tnl_pipeline_stage *stage)
 	//FALLBACK_IF(ctx->Polygon.SmoothFlag); // GL_POLYGON_SMOOTH disabling to get blender going
 	FALLBACK_IF(ctx->Polygon.StippleFlag); // GL_POLYGON_STIPPLE
 	FALLBACK_IF(ctx->Multisample.Enabled); // GL_MULTISAMPLE_ARB
+	
+	FALLBACK_IF(ctx->RenderMode != GL_RENDER);  // We do not do SELECT or FEEDBACK (yet ?)
 
 #if 0 /* ut2k3 fails to start if this is on */
 	/* One step at a time - let one texture pass.. */
@@ -644,7 +647,9 @@ static void dtr(struct tnl_pipeline_stage *stage)
 	(void)stage;
 }
 
-GLboolean r300_create_render(GLcontext *ctx, struct tnl_pipeline_stage *stage){
+static GLboolean r300_create_render(GLcontext *ctx,
+				    struct tnl_pipeline_stage *stage)
+{
 	return GL_TRUE;	
 }
 
@@ -676,12 +681,12 @@ static GLboolean r300_run_tcl_render(GLcontext *ctx,
 	if(ctx->VertexProgram._Enabled == GL_FALSE){
 		_tnl_UpdateFixedFunctionProgram(ctx);
 	}
-	vp = CURRENT_VERTEX_SHADER(ctx);
+	vp = (struct r300_vertex_program *)CURRENT_VERTEX_SHADER(ctx);
 	if(vp->translated == GL_FALSE)
 		translate_vertex_shader(vp);
 	if(vp->translated == GL_FALSE){
 		fprintf(stderr, "Failing back to sw-tcl\n");
-		debug_vp(ctx, vp);
+		debug_vp(ctx, &vp->mesa_program);
 		hw_tcl_on=future_hw_tcl_on=0;
 		r300ResetHwState(rmesa);
 		return GL_TRUE;

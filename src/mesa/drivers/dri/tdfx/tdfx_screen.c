@@ -65,6 +65,9 @@ DRI_CONF_END;
 
 static const GLuint __driNConfigOptions = 1;
 
+extern const struct dri_extension card_extensions[];
+extern const struct dri_extension napalm_extensions[];
+
 static GLboolean
 tdfxCreateScreen( __DRIscreenPrivate *sPriv )
 {
@@ -346,12 +349,6 @@ static const struct __DriverAPIRec tdfxAPI = {
    .SwapBuffersMSC  = NULL
 };
 
-#ifdef USE_NEW_INTERFACE
-/*
- * new interface code, derived from radeon_screen.c
- * XXX this may still be wrong
- */
-static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
 
 static __GLcontextModes *tdfxFillInModes(unsigned pixel_bits,
 					 unsigned depth_bits,
@@ -373,7 +370,7 @@ static __GLcontextModes *tdfxFillInModes(unsigned pixel_bits,
 
 	num_modes = (depth_bits == 16) ? 32 : 16;
 
-	modes = (*create_context_modes)(num_modes, sizeof(__GLcontextModes));
+	modes = (*dri_interface->createContextModes)(num_modes, sizeof(__GLcontextModes));
 	m = modes;
 
 	for (i = 0; i <= 1; i++) {
@@ -432,7 +429,7 @@ static __GLcontextModes *tdfxFillInModes(unsigned pixel_bits,
  *         failure.
  */
 PUBLIC
-void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
+void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,
 			     const __DRIversion * dri_version,
@@ -440,12 +437,15 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
 			     const __DRIframebuffer * frame_buffer,
 			     drmAddress pSAREA, int fd,
 			     int internal_api_version,
+			     const __DRIinterfaceMethods * interface,
 			     __GLcontextModes ** driver_modes )
 {
    __DRIscreenPrivate *psp;
    static const __DRIversion ddx_expected = { 1, 0, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
    static const __DRIversion drm_expected = { 1, 0, 0 };
+
+   dri_interface = interface;
 
    if ( ! driCheckDriDdxDrmVersions2( "tdfx",
 				      dri_version, & dri_expected,
@@ -459,10 +459,7 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
 				  frame_buffer, pSAREA, fd,
 				  internal_api_version, &tdfxAPI);
 
-   create_context_modes = (PFNGLXCREATECONTEXTMODES)
-      glXGetProcAddress((const GLubyte *)"__glXCreateContextModes");
-      
-   if (create_context_modes != NULL) {
+   if (psp != NULL) {
       /* divined from tdfx_dri.c, sketchy */
       TDFXDRIPtr dri_priv = (TDFXDRIPtr) psp->pDevPriv;
       int bpp = (dri_priv->cpp > 2) ? 24 : 16;
@@ -473,24 +470,18 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
       *driver_modes = tdfxFillInModes(bpp, (bpp == 16) ? 16 : 24,
 				(bpp == 16) ? 0 : 8,
 				(dri_priv->backOffset!=dri_priv->depthOffset));
+
+      /* Calling driInitExtensions here, with a NULL context pointer, does not actually
+       * enable the extensions.  It just makes sure that all the dispatch offsets for all
+       * the extensions that *might* be enables are known.  This is needed because the
+       * dispatch offsets need to be known when _mesa_context_create is called, but we can't
+       * enable the extensions until we have a context pointer.
+       *
+       * Hello chicken.  Hello egg.  How are you two today?
+       */
+      driInitExtensions( NULL, card_extensions, GL_FALSE );
+      driInitExtensions( NULL, napalm_extensions, GL_FALSE );
    }
 
    return (void *)psp;
 }
-#endif /* USE_NEW_INTERFACE */
-
-
-/*
- * This is the bootstrap function for the driver.
- * The __driCreateScreen name is the symbol that libGL.so fetches.
- * Return:  pointer to a __DRIscreenPrivate.
- */
-#if !defined(DRI_NEW_INTERFACE_ONLY)
-void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
-                        int numConfigs, __GLXvisualConfig *config)
-{
-   __DRIscreenPrivate *psp;
-   psp = __driUtilCreateScreen(dpy, scrn, psc, numConfigs, config, &tdfxAPI);
-   return (void *) psp;
-}
-#endif /* !defined(DRI_NEW_INTERFACE_ONLY) */

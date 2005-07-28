@@ -61,10 +61,7 @@ DRI_CONF_BEGIN
 DRI_CONF_END;
 static const GLuint __driNConfigOptions = 3;
 
-
-#ifdef USE_NEW_INTERFACE
-static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
-#endif /* USE_NEW_INTERFACE */
+extern const struct dri_extension card_extensions[];
 
 static int getSwapInfo( __DRIdrawablePrivate *dPriv, __DRIswapInfo * sInfo );
 
@@ -100,6 +97,9 @@ viaInitDriver(__DRIscreenPrivate *sPriv)
 {
     viaScreenPrivate *viaScreen;
     VIADRIPtr gDRIPriv = (VIADRIPtr)sPriv->pDevPriv;
+    PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
+      (PFNGLXSCRENABLEEXTENSIONPROC) (*dri_interface->getProcAddress("glxEnableExtension"));
+    void * const psc = sPriv->psc->screenConfigs;
 
 
     /* Allocate the private area */
@@ -170,30 +170,15 @@ viaInitDriver(__DRIscreenPrivate *sPriv)
 
     viaScreen->sareaPrivOffset = gDRIPriv->sarea_priv_offset;
 
+    if ( glx_enable_extension != NULL ) {
+       if ( viaScreen->irqEnabled ) {
+	  (*glx_enable_extension)( psc, "GLX_SGI_swap_control" );
+	  (*glx_enable_extension)( psc, "GLX_SGI_video_sync" );
+	  (*glx_enable_extension)( psc, "GLX_MESA_swap_control" );
+       }
 
-
-   if ( driCompareGLXAPIVersion( 20030813 ) >= 0 ) {
-      PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
-          (PFNGLXSCRENABLEEXTENSIONPROC) glXGetProcAddress( 
-	     (const GLubyte *) "__glXScrEnableExtension" );
-      void * const psc = sPriv->psc->screenConfigs;
-
-      if ( glx_enable_extension != NULL ) {
-	 if ( viaScreen->irqEnabled ) {
-	    (*glx_enable_extension)( psc, "GLX_SGI_swap_control" );
-	    (*glx_enable_extension)( psc, "GLX_SGI_video_sync" );
-	    (*glx_enable_extension)( psc, "GLX_MESA_swap_control" );
-	 }
-
-	 (*glx_enable_extension)( psc, "GLX_MESA_swap_frame_usage" );
-
-         if ( driCompareGLXAPIVersion( 20030915 ) >= 0 ) {
-	    (*glx_enable_extension)( psc, "GLX_SGIX_fbconfig" );
-	    (*glx_enable_extension)( psc, "GLX_OML_swap_method" );
-	 }
-
-      }
-   }
+       (*glx_enable_extension)( psc, "GLX_MESA_swap_frame_usage" );
+    }
 
     return GL_TRUE;
 }
@@ -340,23 +325,6 @@ static struct __DriverAPIRec viaAPI = {
 };
 
 
-/*
- * This is the bootstrap function for the driver.
- * The __driCreateScreen name is the symbol that libGL.so fetches.
- * Return:  pointer to a __DRIscreenPrivate.
- */
-#if !defined(DRI_NEW_INTERFACE_ONLY)
-void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
-                        int numConfigs, __GLXvisualConfig *config)
-{
-    __DRIscreenPrivate *psp;
-    psp = __driUtilCreateScreen(dpy, scrn, psc, numConfigs, config, &viaAPI);
-    return (void *)psp;
-}
-#endif /* !defined(DRI_NEW_INTERFACE_ONLY) */
-
-
-#ifdef USE_NEW_INTERFACE
 static __GLcontextModes *
 viaFillInModes( unsigned pixel_bits, GLboolean have_back_buffer )
 {
@@ -395,7 +363,7 @@ viaFillInModes( unsigned pixel_bits, GLboolean have_back_buffer )
         fb_type = GL_UNSIGNED_INT_8_8_8_8_REV;
     }
 
-    modes = (*create_context_modes)( num_modes, sizeof( __GLcontextModes ) );
+    modes = (*dri_interface->createContextModes)( num_modes, sizeof( __GLcontextModes ) );
     m = modes;
     if ( ! driFillInModes( & m, fb_format, fb_type,
 			   depth_bits_array, stencil_bits_array, 
@@ -419,7 +387,6 @@ viaFillInModes( unsigned pixel_bits, GLboolean have_back_buffer )
 
     return modes;
 }
-#endif /* USE_NEW_INTERFACE */
 
 
 /**
@@ -432,9 +399,8 @@ viaFillInModes( unsigned pixel_bits, GLboolean have_back_buffer )
  * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on 
  *         failure.
  */
-#ifdef USE_NEW_INTERFACE
 PUBLIC
-void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn,
+void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn,
 			     __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,
@@ -443,6 +409,7 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn,
 			     const __DRIframebuffer * frame_buffer,
 			     drmAddress pSAREA, int fd, 
 			     int internal_api_version,
+			     const __DRIinterfaceMethods * interface,
 			     __GLcontextModes ** driver_modes )
 			     
 {
@@ -450,6 +417,8 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn,
    static const __DRIversion ddx_expected = { 4, 0, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
    static const __DRIversion drm_expected = { 2, 3, 0 };
+
+   dri_interface = interface;
 
    if ( ! driCheckDriDdxDrmVersions2( "Unichrome",
 				      dri_version, & dri_expected,
@@ -463,19 +432,24 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn,
 				  frame_buffer, pSAREA, fd,
 				  internal_api_version, &viaAPI);
    if ( psp != NULL ) {
-      create_context_modes = (PFNGLXCREATECONTEXTMODES)
-	  glXGetProcAddress( (const GLubyte *) "__glXCreateContextModes" );
-      if ( create_context_modes != NULL ) {
-	 VIADRIPtr dri_priv = (VIADRIPtr) psp->pDevPriv;
-	 *driver_modes = viaFillInModes( dri_priv->bytesPerPixel * 8,
-					 GL_TRUE );
-      }
+      VIADRIPtr dri_priv = (VIADRIPtr) psp->pDevPriv;
+      *driver_modes = viaFillInModes( dri_priv->bytesPerPixel * 8,
+				      GL_TRUE );
+
+      /* Calling driInitExtensions here, with a NULL context pointer, does not actually
+       * enable the extensions.  It just makes sure that all the dispatch offsets for all
+       * the extensions that *might* be enables are known.  This is needed because the
+       * dispatch offsets need to be known when _mesa_context_create is called, but we can't
+       * enable the extensions until we have a context pointer.
+       *
+       * Hello chicken.  Hello egg.  How are you two today?
+       */
+      driInitExtensions( NULL, card_extensions, GL_FALSE );
    }
 
    fprintf(stderr, "%s - succeeded\n", __FUNCTION__);
    return (void *) psp;
 }
-#endif /* USE_NEW_INTERFACE */
 
 
 /**

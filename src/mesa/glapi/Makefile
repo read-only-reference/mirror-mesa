@@ -4,7 +4,10 @@
 # up to him/her to re-run this makefile and check in the newly generated files.
 
 
-OUTPUTS = glprocs.h glapitemp.h glapioffsets.h glapitable.h \
+TOP = ../../..
+include $(TOP)/configs/current
+
+OUTPUTS = glprocs.h glapitemp.h glapioffsets.h glapitable.h dispatch.h \
 	../main/enums.c \
 	../x86/glapi_x86.S \
 	../drivers/dri/common/extension_helper.h \
@@ -16,9 +19,6 @@ OUTPUTS = glprocs.h glapitemp.h glapioffsets.h glapitable.h \
 
 COMMON = gl_XML.py license.py gl_API.xml typeexpr.py
 COMMON_GLX = $(COMMON) glX_XML.py glX_proto_common.py
-
-PYTHON2 = python
-PYTHON_FLAGS = -t -O -O
 
 all: $(OUTPUTS)
 
@@ -33,6 +33,9 @@ glapioffsets.h: $(COMMON) gl_offsets.py
 
 glapitable.h: $(COMMON) gl_table.py
 	$(PYTHON2) $(PYTHON_FLAGS) gl_table.py > glapitable.h
+
+dispatch.h: $(COMMON) gl_table.py
+	$(PYTHON2) $(PYTHON_FLAGS) gl_table.py -m remap_table > dispatch.h
 
 ../main/enums.c: $(COMMON) gl_enums.py
 	$(PYTHON2) $(PYTHON_FLAGS) gl_enums.py > ../main/enums.c

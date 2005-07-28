@@ -8,7 +8,7 @@ CONFIG_NAME = default
 # Version info
 MESA_MAJOR=6
 MESA_MINOR=3
-MESA_TINY=0
+MESA_TINY=1
 
 # external projects
 DRM_SOURCE_PATH=$(TOP)/../drm
@@ -25,6 +25,10 @@ MKLIB_OPTIONS =
 MKDEP = makedepend
 MKDEP_OPTIONS = -fdepend
 MAKE = make
+
+# Python and flags (generally only needed by the developers)
+PYTHON2 = python
+PYTHON_FLAGS = -t -O -O
 
 # Library names (base name)
 GL_LIB = GL
@@ -61,9 +65,10 @@ PROGRAM_DIRS = demos redbook samples xdemos
 
 
 # Library/program dependencies
-GL_LIB_DEPS = -lX11 -lXext -lm -lpthread
+EXTRA_LIB_PATH ?=
+GL_LIB_DEPS = $(EXTRA_LIB_PATH) -lX11 -lXext -lm -lpthread
 OSMESA_LIB_DEPS = -L$(LIB_DIR) -l$(GL_LIB)
 GLU_LIB_DEPS = -L$(LIB_DIR) -l$(GL_LIB) -lm
-GLUT_LIB_DEPS = -L$(LIB_DIR) -l$(GLU_LIB) -l$(GL_LIB) -lX11 -lXmu -lXt -lXi -lm
-GLW_LIB_DEPS = -L$(LIB_DIR) -l$(GL_LIB) -lXt -lX11
+GLUT_LIB_DEPS = -L$(LIB_DIR) -l$(GLU_LIB) -l$(GL_LIB) $(EXTRA_LIB_PATH) -lX11 -lXmu -lXt -lXi -lm
+GLW_LIB_DEPS = -L$(LIB_DIR) -l$(GL_LIB) $(EXTRA_LIB_PATH) -lXt -lX11
 APP_LIB_DEPS = -L$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) -lm

@@ -26,14 +26,13 @@
  * Authors:
  *	Gareth Hughes <gareth@valinux.com>
  *	Leif Delgass <ldelgass@retinalburn.net>
- *	José Fonseca <j_r_fonseca@yahoo.co.uk>
+ *	Josï¿½Fonseca <j_r_fonseca@yahoo.co.uk>
  */
 
 #include "mach64_context.h"
 #include "mach64_ioctl.h"
 #include "mach64_state.h"
 #include "mach64_span.h"
-#include "mach64_tex.h"
 
 #include "swrast/swrast.h"
 
@@ -71,25 +70,11 @@
 
 #define LOCAL_STENCIL_VARS	LOCAL_DEPTH_VARS
 
-#define CLIPPIXEL( _x, _y )						\
-   ((_x >= minx) && (_x < maxx) && (_y >= miny) && (_y < maxy))
-
-
-#define CLIPSPAN( _x, _y, _n, _x1, _n1, _i )				\
-   if (( _y < miny) || (_y >= maxy)) {					\
-      _n1 = 0, _x1 = x;							\
-   } else {								\
-      _n1 = _n;								\
-      _x1 = _x;								\
-      if (_x1 < minx) _i += (minx-_x1), n1 -= (minx-_x1), _x1 = minx;	\
-      if (_x1 + _n1 >= maxx) n1 -= (_x1 + n1 - maxx);			\
-   }
-
 #define Y_FLIP( _y )	(height - _y - 1)
-
 
 #define HW_LOCK()
 
+/* FIXME could/should we use dPriv->numClipRects like the other drivers? */
 #define HW_CLIPLOOP()							\
    do {									\
       int _nc = mmesa->numClipRects;					\
@@ -114,8 +99,6 @@
 
 /* 16 bit, RGB565 color spanline and pixel functions
  */
-#define GET_SRC_PTR(_x, _y) (read_buf + _x * 2 + _y * pitch)
-#define GET_DST_PTR(_x, _y) (     buf + _x * 2 + _y * pitch)
 #define SPANTMP_PIXEL_FMT GL_RGB
 #define SPANTMP_PIXEL_TYPE GL_UNSIGNED_SHORT_5_6_5
 
@@ -126,8 +109,8 @@
 
 /* 32 bit, ARGB8888 color spanline and pixel functions
  */
-#define GET_SRC_PTR(_x, _y) (read_buf + _x * 4 + _y * pitch)
-#define GET_DST_PTR(_x, _y) (     buf + _x * 4 + _y * pitch)
+/* FIXME the old code always read back alpha as 0xff, i.e. fully opaque.
+   Was there a reason to do so ? If so that'll won't work with that template... */
 #define SPANTMP_PIXEL_FMT GL_BGRA
 #define SPANTMP_PIXEL_TYPE GL_UNSIGNED_INT_8_8_8_8_REV
 
@@ -197,63 +180,9 @@ static void mach64SpanRenderFinish( GLcontext *ctx )
 
 void mach64DDInitSpanFuncs( GLcontext *ctx )
 {
-#if 0
-   mach64ContextPtr mmesa = MACH64_CONTEXT(ctx);
-#endif
    struct swrast_device_driver *swdd = _swrast_GetDeviceDriverReference(ctx);
 
    swdd->SetBuffer = mach64DDSetBuffer;
-
-#if 0
-   switch ( mmesa->mach64Screen->cpp ) {
-   case 2:
-      swdd->WriteRGBASpan	= mach64WriteRGBASpan_RGB565;
-      swdd->WriteRGBSpan	= mach64WriteRGBSpan_RGB565;
-      swdd->WriteMonoRGBASpan	= mach64WriteMonoRGBASpan_RGB565;
-      swdd->WriteRGBAPixels	= mach64WriteRGBAPixels_RGB565;
-      swdd->WriteMonoRGBAPixels	= mach64WriteMonoRGBAPixels_RGB565;
-      swdd->ReadRGBASpan	= mach64ReadRGBASpan_RGB565;
-      swdd->ReadRGBAPixels	= mach64ReadRGBAPixels_RGB565;
-      break;
-
-   case 4:
-      swdd->WriteRGBASpan	= mach64WriteRGBASpan_ARGB8888;
-      swdd->WriteRGBSpan	= mach64WriteRGBSpan_ARGB8888;
-      swdd->WriteMonoRGBASpan	= mach64WriteMonoRGBASpan_ARGB8888;
-      swdd->WriteRGBAPixels	= mach64WriteRGBAPixels_ARGB8888;
-      swdd->WriteMonoRGBAPixels	= mach64WriteMonoRGBAPixels_ARGB8888;
-      swdd->ReadRGBASpan	= mach64ReadRGBASpan_ARGB8888;
-      swdd->ReadRGBAPixels	= mach64ReadRGBAPixels_ARGB8888;
-
-      break;
-
-   default:
-      break;
-   }
-#endif
-
-   /* Depth buffer is always 16 bit */
-#if 0
-   swdd->ReadDepthSpan		= mach64ReadDepthSpan_16;
-   swdd->WriteDepthSpan		= mach64WriteDepthSpan_16;
-   swdd->ReadDepthPixels	= mach64ReadDepthPixels_16;
-   swdd->WriteDepthPixels	= mach64WriteDepthPixels_16;
-#endif
-#if 0
-   /* No hardware stencil buffer */
-   swdd->ReadStencilSpan	= NULL;
-   swdd->WriteStencilSpan	= NULL;
-   swdd->ReadStencilPixels	= NULL;
-   swdd->WriteStencilPixels	= NULL;
-
-   swdd->WriteCI8Span		= NULL;
-   swdd->WriteCI32Span		= NULL;
-   swdd->WriteMonoCISpan	= NULL;
-   swdd->WriteCI32Pixels	= NULL;
-   swdd->WriteMonoCIPixels	= NULL;
-   swdd->ReadCI32Span		= NULL;
-   swdd->ReadCI32Pixels		= NULL;
-#endif
    swdd->SpanRenderStart	= mach64SpanRenderStart;
    swdd->SpanRenderFinish	= mach64SpanRenderFinish;
 }

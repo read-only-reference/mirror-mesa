@@ -51,24 +51,13 @@
 
 #define CAPI  /* XXX this should be globally defined somewhere */
 
-#ifdef DRI_NEW_INTERFACE_ONLY
-# include <GL/gl.h>
-#else
-# include "glxclient.h"
-#endif /* DRI_NEW_INTERFACE_ONLY */
+#include <GL/gl.h>
 #include "drm.h"
 #include "drm_sarea.h"
 #include "GL/internal/glcore.h"
 #include "GL/internal/dri_interface.h"
 
 #define GLX_BAD_CONTEXT                    5
-
-/* This is a temporary relic.  Once all drivers are converted to support
- * the new interface, it can go away.
- */
-#ifdef DRI_NEW_INTERFACE_ONLY
-#define USE_NEW_INTERFACE
-#endif
 
 typedef struct __DRIdisplayPrivateRec  __DRIdisplayPrivate;
 typedef struct __DRIscreenPrivateRec   __DRIscreenPrivate;
@@ -325,7 +314,7 @@ struct __DRIdrawablePrivateRec {
      * \name Display and screen information.
      * 
      * Basically just need these for when the locking code needs to call
-     * __driUtilUpdateDrawableInfo() which calls XF86DRIGetDrawableInfo().
+     * \c __driUtilUpdateDrawableInfo.
      */
     /*@{*/
     __DRInativeDisplay *display;
@@ -336,12 +325,6 @@ struct __DRIdrawablePrivateRec {
      * Called via glXSwapBuffers().
      */
     void (*swapBuffers)( __DRIdrawablePrivate *dPriv );
-
-    /**
-     * Get information about the location, size, and clip rects of the
-     * drawable within the display.
-     */
-    PFNGLXGETDRAWABLEINFOPROC getInfo;
 };
 
 /**
@@ -552,13 +535,6 @@ extern __DRIscreenPrivate * __driUtilCreateNewScreen( __DRInativeDisplay *dpy,
     drm_sarea_t *pSAREA, int fd, int internal_api_version,
     const struct __DriverAPIRec *driverAPI );
 
-#ifndef DRI_NEW_INTERFACE_ONLY
-extern __DRIscreenPrivate *
-__driUtilCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
-                      int numConfigs, __GLXvisualConfig *config,
-                      const struct __DriverAPIRec *driverAPI);
-#endif /* DRI_NEW_INTERFACE_ONLY */
-
 /* Test the version of the internal GLX API.  Returns a value like strcmp. */
 extern int
 driCompareGLXAPIVersion( GLint required_version );
@@ -567,10 +543,12 @@ extern float
 driCalculateSwapUsage( __DRIdrawablePrivate *dPriv,
 		       int64_t last_swap_ust, int64_t current_ust );
 
-/* Test for the GLX header glx.h */
-#ifndef GLX
-extern void 
-(*glXGetProcAddress(const GLubyte *procname))( void );
-#endif
+/**
+ * Pointer to the \c __DRIinterfaceMethods passed to the driver by the loader.
+ * 
+ * This pointer is set in the driver's \c __driCreateNewScreen function and
+ * is defined in dri_util.c.
+ */
+extern const __DRIinterfaceMethods * dri_interface;
 
 #endif /* _DRI_UTIL_H_ */

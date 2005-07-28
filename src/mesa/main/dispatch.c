@@ -45,7 +45,7 @@
 #include "glthread.h"
 
 
-#if !(defined(USE_X86_ASM) || defined(USE_SPARC_ASM))
+#if !(defined(USE_X86_ASM) || defined(USE_X86_64_ASM) || defined(USE_SPARC_ASM))
 
 #if defined(WIN32)
 #define KEYWORD1 GLAPI
@@ -66,19 +66,19 @@
 #define F stdout
 #define DISPATCH(FUNC, ARGS, MESSAGE)		\
    fprintf MESSAGE;				\
-   GL_CALL(FUNC) ARGS;
+   CALL_ ## FUNC(GET_DISPATCH(), ARGS);
 
 #define RETURN_DISPATCH(FUNC, ARGS, MESSAGE) 	\
    fprintf MESSAGE;				\
-   return GL_CALL(FUNC) ARGS;
+   return CALL_ ## FUNC(GET_DISPATCH(), ARGS);
 
 #else
 
 #define DISPATCH(FUNC, ARGS, MESSAGE)		\
-   GL_CALL(FUNC) ARGS;
+   CALL_ ## FUNC(GET_DISPATCH(), ARGS);
 
 #define RETURN_DISPATCH(FUNC, ARGS, MESSAGE) 	\
-   return GL_CALL(FUNC) ARGS;
+   return CALL_ ## FUNC(GET_DISPATCH(), ARGS);
 
 #endif /* logging */
 
@@ -87,6 +87,7 @@
 #define GLAPIENTRY
 #endif
 
+#include "dispatch.h"
 #include "glapitemp.h"
 
 #endif /* USE_X86_ASM */

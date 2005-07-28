@@ -6,7 +6,63 @@
 
 <BODY>
 
+<body bgcolor="#eeeeee">
+
 <H1>News</H1>
+
+
+<h2>July 20, 2005</h2>
+<p>
+Mesa 6.3 has been released.
+This is a development release with new features, changes and bug fixes.
+</p>
+<pre>
+    New:
+	- GL_EXT_framebuffer_object extension
+	- GL_ARB_draw_buffers extension
+	- GL_ARB_pixel_buffer_object extension
+	- GL_OES_read_format extension (Ian Romanick)
+	- DirectFB driver (Claudio Ciccani)
+	- x86_64 vertex transformation code (Mikko T.)
+    Changes:
+	- added -stereo option for glxgears demo (Jacek Rosik)
+	- updated the PBuffer demo code in xdemos/ directory
+	- glDeleteTextures/Programs/Buffers() now makes the object ID
+	  available for immediate re-use
+	- assorted 64-bit clean-ups fixes (x86_64 and Win64)
+	- lots of internal changes for GL_EXT_framebuffer_object
+    Bug fixes:
+	- some functions didn't support PBO functionality
+	- glGetTexImage didn't convert color index images to RGBA as required
+	- fragment program texcoords were sometimes wrong for points and lines
+	- fixed problem with negative dot product in arbfplight, fplight demos
+	- fixed bug in perspective correction of antialiased, textured lines
+	- querying GL_POST_CONVOLUTION_ALPHA_BIAS_EXT returned wrong value
+	- fixed a couple per-pixel fog bugs (Soju Matsumoto)
+	- glGetBooleanv(GL_FRAGMENT_PROGRAM_BINDING_NV) was broken
+	- fixed float parsing bug in ARB frag/vert programs (bug 2520)
+	- XMesaGetDepthBuffer() returned incorrect value for bytesPerValue
+	- GL_COLOR_MATERIAL with glColor3 didn't properly set diffuse alpha
+	- glXChooseFBConfig() crashed if attribList pointer was NULL
+	- program state.light[n].spot.direction.w was wrong value (bug 3083)
+	- fragment program fog option required glEnable(GL_FOG) - wrong.
+	- glColorTable() could produce a Mesa implementation error (bug 3135)
+	- RasterPos could get corrupted by color index rendering path
+	- Removed bad XTranslateCoordinates call when rendering to Pixmaps
+	- glPopAttrib() didn't properly restore GL_TEXTURE_GEN enable state
+	- fixed a few Darwin compilation problems
+</pre>
+<p>
+The MD5 checksums are:
+</p>
+<pre>
+0236f552d37514776945d5a013e5bb7b  MesaLib-6.3.tar.gz
+60e1a8f78c4a8c7750a1e95753190986  MesaLib-6.3.tar.bz2
+ca7c950fbace68c70caa822322db7223  MesaLib-6.3.zip
+25ea801645b376c014051804fe4974b2  MesaDemos-6.3.tar.gz
+9248e74872ea88c57ec25c900c295057  MesaDemos-6.3.tar.bz2
+8537dfa734ef258dcc7272097558d434  MesaDemos-6.3.zip
+</pre>
 
 
 <h2>December 9, 2004</h2>
@@ -960,6 +1016,6 @@ source code</a>.</p>
 
 
 <hr>
-$Id: news.html,v 3.19 2005/05/05 14:18:31 brianp Exp $
+$Id: news.html,v 3.22 2005/07/20 18:20:45 brianp Exp $
 </body>
 </html>

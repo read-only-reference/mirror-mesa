@@ -67,11 +67,7 @@ static const GLuint __driNConfigOptions = 3;
 static const GLuint __driNConfigOptions = 2;
 #endif
 
-#ifdef USE_NEW_INTERFACE
-static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
-#endif /* USE_NEW_INTERFACE */
 
-#ifdef USE_NEW_INTERFACE
 static __GLcontextModes * fill_in_modes( __GLcontextModes * modes,
 					 unsigned pixel_bits, 
 					 unsigned depth_bits,
@@ -136,10 +132,8 @@ static __GLcontextModes * fill_in_modes( __GLcontextModes * modes,
     
     return modes;
 }
-#endif /* USE_NEW_INTERFACE */
 
 
-#ifdef USE_NEW_INTERFACE
 static __GLcontextModes *
 mach64FillInModes( unsigned pixel_bits, unsigned depth_bits,
 		 unsigned stencil_bits, GLboolean have_back_buffer )
@@ -178,7 +172,7 @@ mach64FillInModes( unsigned pixel_bits, unsigned depth_bits,
 
     num_modes = depth_buffer_factor * back_buffer_factor * 4;
 
-    modes = (*create_context_modes)( num_modes, sizeof( __GLcontextModes ) );
+    modes = (*dri_interface->createContextModes)( num_modes, sizeof( __GLcontextModes ) );
     m = modes;
     for ( i = 0 ; i < depth_buffer_factor ; i++ ) {
 	m = fill_in_modes( m, pixel_bits, 
@@ -204,7 +198,6 @@ mach64FillInModes( unsigned pixel_bits, unsigned depth_bits,
 
     return modes;
 }
-#endif /* USE_NEW_INTERFACE */
 
 
 /* Create the device specific screen private data struct.
@@ -214,6 +207,10 @@ mach64CreateScreen( __DRIscreenPrivate *sPriv )
 {
    mach64ScreenPtr mach64Screen;
    ATIDRIPtr serverInfo = (ATIDRIPtr)sPriv->pDevPriv;
+   PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
+     (PFNGLXSCRENABLEEXTENSIONPROC) (*dri_interface->getProcAddress("glxEnableExtension"));
+   void * const psc = sPriv->psc->screenConfigs;
+
 
    if ( MACH64_DEBUG & DEBUG_VERBOSE_DRI ) 
       fprintf( stderr, "%s\n", __FUNCTION__ );
@@ -316,21 +313,17 @@ mach64CreateScreen( __DRIscreenPrivate *sPriv )
    }
 
    mach64Screen->driScreen = sPriv;
-   if ( driCompareGLXAPIVersion( 20030813 ) >= 0 ) {
-      PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
-          (PFNGLXSCRENABLEEXTENSIONPROC) glXGetProcAddress( (const GLubyte *) "__glXScrEnableExtension" );
-      void * const psc = sPriv->psc->screenConfigs;
 
-      if ( glx_enable_extension != NULL ) {
-	 if ( mach64Screen->irq != 0 ) {
-	    (*glx_enable_extension)( psc, "GLX_SGI_swap_control" );
-	    (*glx_enable_extension)( psc, "GLX_SGI_video_sync" );
-	    (*glx_enable_extension)( psc, "GLX_MESA_swap_control" );
-	 }
-
-	 (*glx_enable_extension)( psc, "GLX_MESA_swap_frame_usage" );
+   if ( glx_enable_extension != NULL ) {
+      if ( mach64Screen->irq != 0 ) {
+	 (*glx_enable_extension)( psc, "GLX_SGI_swap_control" );
+	 (*glx_enable_extension)( psc, "GLX_SGI_video_sync" );
+	 (*glx_enable_extension)( psc, "GLX_MESA_swap_control" );
       }
+
+      (*glx_enable_extension)( psc, "GLX_MESA_swap_frame_usage" );
    }
+
    return mach64Screen;
 }
 
@@ -492,21 +485,6 @@ static struct __DriverAPIRec mach64API = {
 };
 
 
-/*
- * This is the bootstrap function for the driver.
- * The __driCreateScreen name is the symbol that libGL.so fetches.
- * Return:  pointer to a __DRIscreenPrivate.
- */
-#if !defined(DRI_NEW_INTERFACE_ONLY)
-void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
-                        int numConfigs, __GLXvisualConfig *config)
-{
-   __DRIscreenPrivate *psp;
-   psp = __driUtilCreateScreen(dpy, scrn, psc, numConfigs, config, &mach64API);
-   return (void *) psp;
-}
-#endif /* !defined(DRI_NEW_INTERFACE_ONLY) */
-
 /**
  * This is the bootstrap function for the driver.  libGL supplies all of the
  * requisite information about the system, and the driver initializes itself.
@@ -517,9 +495,8 @@ void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
  * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on 
  *         failure.
  */
-#ifdef USE_NEW_INTERFACE
 PUBLIC
-void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
+void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,
 			     const __DRIversion * dri_version,
@@ -527,6 +504,7 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
 			     const __DRIframebuffer * frame_buffer,
 			     drmAddress pSAREA, int fd, 
 			     int internal_api_version,
+			     const __DRIinterfaceMethods * interface,
 			     __GLcontextModes ** driver_modes )
 			     
 {
@@ -534,6 +512,8 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
    static const __DRIversion ddx_expected = { 6, 4, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
    static const __DRIversion drm_expected = { 1, 0, 0 };
+
+   dri_interface = interface;
 
    if ( ! driCheckDriDdxDrmVersions2( "Mach64",
 				      dri_version, & dri_expected,
@@ -547,17 +527,12 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc
 				  frame_buffer, pSAREA, fd,
 				  internal_api_version, &mach64API);
    if ( psp != NULL ) {
-      create_context_modes = (PFNGLXCREATECONTEXTMODES)
-	  glXGetProcAddress( (const GLubyte *) "__glXCreateContextModes" );
-      if ( create_context_modes != NULL ) {
-	 ATIDRIPtr dri_priv = (ATIDRIPtr) psp->pDevPriv;
-	 *driver_modes = mach64FillInModes( dri_priv->cpp * 8,
-					    16,
-					    0,
-					    1);
-      }
+      ATIDRIPtr dri_priv = (ATIDRIPtr) psp->pDevPriv;
+      *driver_modes = mach64FillInModes( dri_priv->cpp * 8,
+					 16,
+					 0,
+					 1);
    }
 
    return (void *) psp;
 }
-#endif /* USE_NEW_INTERFACE */

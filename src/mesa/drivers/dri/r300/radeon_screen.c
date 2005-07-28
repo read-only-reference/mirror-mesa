@@ -132,6 +132,7 @@ DRI_CONF_BEGIN
 DRI_CONF_END;
 static const GLuint __driR300NConfigOptions = 13;
 
+extern const struct dri_extension card_extensions[];
 
 #ifndef RADEON_DEBUG
 int RADEON_DEBUG = 0;
@@ -202,6 +203,7 @@ static const struct dri_debug_control debug_control[] = {
 #define PCI_CHIP_RV350_AP               0x4150
 #define PCI_CHIP_RV350_AR               0x4152
 #define PCI_CHIP_RV350_AS               0x4153
+#define PCI_CHIP_RV350_NJ		0x4E4A
 #define PCI_CHIP_RV350_NP               0x4E50
 #define PCI_CHIP_RV350_NQ               0x4E51			/* Saphire 9600 256MB card */
 #define PCI_CHIP_RV350_NT               0x4E54
@@ -215,15 +217,11 @@ static const struct dri_debug_control debug_control[] = {
 #define PCI_CHIP_R420_JK                0x4a4b
 #endif
 
-#ifdef USE_NEW_INTERFACE
-static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
-#endif				/* USE_NEW_INTERFACE */
 
 static radeonScreenPtr __radeonScreen;
 
 static int getSwapInfo(__DRIdrawablePrivate * dPriv, __DRIswapInfo * sInfo);
 
-#ifdef USE_NEW_INTERFACE
 static __GLcontextModes *radeonFillInModes(unsigned pixel_bits,
 					 unsigned depth_bits,
 					 unsigned stencil_bits,
@@ -273,7 +271,7 @@ static __GLcontextModes *radeonFillInModes(unsigned pixel_bits,
 		fb_type = GL_UNSIGNED_INT_8_8_8_8_REV;
 	}
 
-	modes = (*create_context_modes) (num_modes, sizeof(__GLcontextModes));
+	modes = (*dri_interface->createContextModes) (num_modes, sizeof(__GLcontextModes));
 	m = modes;
 	if (!driFillInModes(&m, fb_format, fb_type,
 			    depth_bits_array, stencil_bits_array,
@@ -303,7 +301,7 @@ static __GLcontextModes *radeonFillInModes(unsigned pixel_bits,
 
 	return modes;
 }
-#endif				/* USE_NEW_INTERFACE */
+
 
 /* Create the device specific screen private data struct.
  */
@@ -312,6 +310,11 @@ static radeonScreenPtr radeonCreateScreen(__DRIscreenPrivate * sPriv)
 	radeonScreenPtr screen;
 	RADEONDRIPtr dri_priv = (RADEONDRIPtr) sPriv->pDevPriv;
 	unsigned char *RADEONMMIO;
+	PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
+	  (PFNGLXSCRENABLEEXTENSIONPROC)
+	      (*dri_interface->getProcAddress("glxEnableExtension"));
+	void *const psc = sPriv->psc->screenConfigs;
+
 
 	/* Allocate the private area */
 	screen = (radeonScreenPtr) CALLOC(sizeof(*screen));
@@ -379,6 +382,7 @@ static radeonScreenPtr radeonCreateScreen(__DRIscreenPrivate * sPriv)
 	case PCI_CHIP_RV350_AP:
 	case PCI_CHIP_RV350_AR:
 	case PCI_CHIP_RV350_AS:
+	case PCI_CHIP_RV350_NJ:
 	case PCI_CHIP_RV350_NP:
 	case PCI_CHIP_RV350_NT:
 	case PCI_CHIP_RV350_NQ:
@@ -578,48 +582,26 @@ static radeonScreenPtr radeonCreateScreen(__DRIscreenPrivate * sPriv)
 	screen->driScreen = sPriv;
 	screen->sarea_priv_offset = dri_priv->sarea_priv_offset;
 
-	if (driCompareGLXAPIVersion(20030813) >= 0) {
-		PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
-		    (PFNGLXSCRENABLEEXTENSIONPROC)
-		    glXGetProcAddress((const GLubyte *)
-				      "__glXScrEnableExtension");
-		void *const psc = sPriv->psc->screenConfigs;
+	if (glx_enable_extension != NULL) {
+		if (screen->irq != 0) {
+			(*glx_enable_extension) (psc, "GLX_SGI_swap_control");
+			(*glx_enable_extension) (psc, "GLX_SGI_video_sync");
+			(*glx_enable_extension) (psc, "GLX_MESA_swap_control");
+		}
 
-		if (glx_enable_extension != NULL) {
-			if (screen->irq != 0) {
-				(*glx_enable_extension) (psc,
-							 "GLX_SGI_swap_control");
-				(*glx_enable_extension) (psc,
-							 "GLX_SGI_video_sync");
-				(*glx_enable_extension) (psc,
-							 "GLX_MESA_swap_control");
-			}
-
-			(*glx_enable_extension) (psc,
-						 "GLX_MESA_swap_frame_usage");
+		(*glx_enable_extension) (psc, "GLX_MESA_swap_frame_usage");
+	}
 
 #if R200_MERGED
-			if (driCompareGLXAPIVersion(20030818) >= 0) {
-				sPriv->psc->allocateMemory =
-				    (void *)r200AllocateMemoryMESA;
-				sPriv->psc->freeMemory =
-				    (void *)r200FreeMemoryMESA;
-				sPriv->psc->memoryOffset =
-				    (void *)r200GetMemoryOffsetMESA;
+	sPriv->psc->allocateMemory = (void *)r200AllocateMemoryMESA;
+	sPriv->psc->freeMemory = (void *)r200FreeMemoryMESA;
+	sPriv->psc->memoryOffset = (void *)r200GetMemoryOffsetMESA;
 
-				(*glx_enable_extension) (psc,
-							 "GLX_MESA_allocate_memory");
-			}
+	if (glx_enable_extension != NULL) {
+		(*glx_enable_extension) (psc, "GLX_MESA_allocate_memory");
+	}
 #endif
 
-			if (driCompareGLXAPIVersion(20030915) >= 0) {
-				(*glx_enable_extension) (psc,
-							 "GLX_SGIX_fbconfig");
-				(*glx_enable_extension) (psc,
-							 "GLX_OML_swap_method");
-			}
-		}
-	}
 	return screen;
 }
 
@@ -797,22 +779,6 @@ static const struct __DriverAPIRec radeonAPI = {
 	.SwapBuffersMSC = NULL
 };
 
-/*
- * This is the bootstrap function for the driver.
- * The __driCreateScreen name is the symbol that libGL.so fetches.
- * Return:  pointer to a __DRIscreenPrivate.
- *
- */
-#if !defined(DRI_NEW_INTERFACE_ONLY)
-void *__driCreateScreen(Display * dpy, int scrn, __DRIscreen * psc,
-			int numConfigs, __GLXvisualConfig * config)
-{
-	__DRIscreenPrivate *psp;
-	psp =
-	    __driUtilCreateScreen(dpy, scrn, psc, numConfigs, config, &radeonAPI);
-	return (void *)psp;
-}
-#endif				/* !defined(DRI_NEW_INTERFACE_ONLY) */
 
 /**
  * This is the bootstrap function for the driver.  libGL supplies all of the
@@ -824,20 +790,22 @@ void *__driCreateScreen(Display * dpy, int scrn, __DRIscreen * psc,
  * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on
  *         failure.
  */
-#ifdef USE_NEW_INTERFACE
-void *__driCreateNewScreen(__DRInativeDisplay * dpy, int scrn,
+void *__driCreateNewScreen_20050727(__DRInativeDisplay * dpy, int scrn,
 			   __DRIscreen * psc, const __GLcontextModes * modes,
 			   const __DRIversion * ddx_version,
 			   const __DRIversion * dri_version,
 			   const __DRIversion * drm_version,
 			   const __DRIframebuffer * frame_buffer,
 			   drmAddress pSAREA, int fd, int internal_api_version,
+			   const __DRIinterfaceMethods * interface,
 			   __GLcontextModes ** driver_modes)
 {
 	__DRIscreenPrivate *psp;
 	static const __DRIutilversion2 ddx_expected = { 4, 5, 0, 0 };
 	static const __DRIversion dri_expected = { 4, 0, 0 };
-	static const __DRIversion drm_expected = { 1, 11, 1 };
+	static const __DRIversion drm_expected = { 1, 17, 0 };
+
+	dri_interface = interface;
 
 	if (!driCheckDriDdxDrmVersions3("R300",
 					dri_version, &dri_expected,
@@ -851,25 +819,28 @@ void *__driCreateNewScreen(__DRInativeDisplay * dpy, int scrn,
 				       frame_buffer, pSAREA, fd,
 				       internal_api_version, &radeonAPI);
 	if (psp != NULL) {
-		create_context_modes = (PFNGLXCREATECONTEXTMODES)
-		    glXGetProcAddress((const GLubyte *)
-				      "__glXCreateContextModes");
-		if (create_context_modes != NULL) {
-			RADEONDRIPtr dri_priv = (RADEONDRIPtr) psp->pDevPriv;
-			*driver_modes = radeonFillInModes(dri_priv->bpp,
-							(dri_priv->bpp ==
-							 16) ? 16 : 24,
-							(dri_priv->bpp ==
-							 16) ? 0 : 8,
-							(dri_priv->backOffset !=
-							 dri_priv->
-							 depthOffset));
-		}
+		RADEONDRIPtr dri_priv = (RADEONDRIPtr) psp->pDevPriv;
+		*driver_modes = radeonFillInModes(dri_priv->bpp,
+						  (dri_priv->bpp ==
+						   16) ? 16 : 24,
+						  (dri_priv->bpp ==
+						   16) ? 0 : 8,
+						  (dri_priv->backOffset !=
+						   dri_priv->depthOffset));
+		/* Calling driInitExtensions here, with a NULL context pointer, does not actually
+		 * enable the extensions.  It just makes sure that all the dispatch offsets for all
+		 * the extensions that *might* be enables are known.  This is needed because the
+		 * dispatch offsets need to be known when _mesa_context_create is called, but we can't
+		 * enable the extensions until we have a context pointer.
+		 *
+		 * Hello chicken.  Hello egg.  How are you two today?
+		 */
+		driInitExtensions( NULL, card_extensions, GL_FALSE );
 	}
 
 	return (void *)psp;
 }
-#endif				/* USE_NEW_INTERFACE */
+
 
 /**
  * Get information about previous buffer swaps.

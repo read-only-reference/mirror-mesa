@@ -59,11 +59,7 @@ DRI_CONF_BEGIN
 DRI_CONF_END;
 static const GLuint __driNConfigOptions = 2;
 
-#ifdef USE_NEW_INTERFACE
-static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
-#endif /* USE_NEW_INTERFACE */
 
-#ifdef USE_NEW_INTERFACE
 static __GLcontextModes *
 sisFillInModes(int bpp)
 {
@@ -103,7 +99,7 @@ sisFillInModes(int bpp)
       fb_type = GL_UNSIGNED_INT_8_8_8_8_REV;
    }
 
-   modes = (*create_context_modes)(num_modes, sizeof(__GLcontextModes));
+   modes = (*dri_interface->createContextModes)(num_modes, sizeof(__GLcontextModes));
    m = modes;
    if (!driFillInModes(&m, fb_format, fb_type, depth_bits_array,
 		       stencil_bits_array, depth_buffer_factor,
@@ -123,7 +119,7 @@ sisFillInModes(int bpp)
 
    return modes;
 }
-#endif /* USE_NEW_INTERFACE */
+
 
 /* Create the device specific screen private data struct.
  */
@@ -133,11 +129,6 @@ sisCreateScreen( __DRIscreenPrivate *sPriv )
    sisScreenPtr sisScreen;
    SISDRIPtr sisDRIPriv = (SISDRIPtr)sPriv->pDevPriv;
 
-#ifndef USE_NEW_INTERFACE
-   /* XXX Should this still be around for the old interface? */
-   if ( !driCheckDriDdxDrmVersions( sPriv, "SiS", 4, 0, 0, 1, 1, 0 ) )
-      return NULL;
-#endif
 
    /* Allocate the private area */
    sisScreen = (sisScreenPtr)CALLOC( sizeof(*sisScreen) );
@@ -410,20 +401,6 @@ static struct __DriverAPIRec sisAPI = {
 
 };
 
-/*
- * This is the bootstrap function for the driver.
- * The __driCreateScreen name is the symbol that libGL.so fetches.
- * Return:  pointer to a __DRIscreenPrivate.
- */
-#if !defined(DRI_NEW_INTERFACE_ONLY)
-void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
-                        int numConfigs, __GLXvisualConfig *config)
-{
-   __DRIscreenPrivate *psp;
-   psp = __driUtilCreateScreen(dpy, scrn, psc, numConfigs, config, &sisAPI);
-   return (void *)psp;
-}
-#endif /* !defined(DRI_NEW_INTERFACE_ONLY) */
 
 /**
  * This is the bootstrap function for the driver.  libGL supplies all of the
@@ -435,9 +412,8 @@ void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
  * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on 
  *         failure.
  */
-#ifdef USE_NEW_INTERFACE
 PUBLIC
-void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn,
+void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn,
 			     __DRIscreen *psc,
 			     const __GLcontextModes *modes,
 			     const __DRIversion *ddx_version,
@@ -446,6 +422,7 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn,
 			     const __DRIframebuffer *frame_buffer,
 			     drmAddress pSAREA, int fd,
 			     int internal_api_version,
+			     const __DRIinterfaceMethods * interface,
 			     __GLcontextModes **driver_modes )
 
 {
@@ -453,6 +430,8 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn,
    static const __DRIversion ddx_expected = {0, 1, 0};
    static const __DRIversion dri_expected = {4, 0, 0};
    static const __DRIversion drm_expected = {1, 0, 0};
+
+   dri_interface = interface;
 
    if (!driCheckDriDdxDrmVersions2("SiS", dri_version, &dri_expected,
 				   ddx_version, &ddx_expected,
@@ -465,14 +444,9 @@ void * __driCreateNewScreen( __DRInativeDisplay *dpy, int scrn,
 				  frame_buffer, pSAREA, fd,
 				  internal_api_version, &sisAPI);
    if (psp != NULL) {
-      create_context_modes = (PFNGLXCREATECONTEXTMODES)
-	 glXGetProcAddress((const GLubyte *)"__glXCreateContextModes");
-      if (create_context_modes != NULL) {
-	 SISDRIPtr dri_priv = (SISDRIPtr)psp->pDevPriv;
-	 *driver_modes = sisFillInModes(dri_priv->bytesPerPixel * 8);
-      }
+      SISDRIPtr dri_priv = (SISDRIPtr)psp->pDevPriv;
+      *driver_modes = sisFillInModes(dri_priv->bytesPerPixel * 8);
    }
 
    return (void *)psp;
 }
-#endif /* USE_NEW_INTERFACE */

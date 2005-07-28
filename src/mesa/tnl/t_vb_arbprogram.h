@@ -40,10 +40,13 @@
 #define MSK        (VP_MAX_OPCODE+1)
 #define REL        (VP_MAX_OPCODE+2)
 
-#define FILE_REG         0
-#define FILE_LOCAL_PARAM 1
-#define FILE_ENV_PARAM   2
-#define FILE_STATE_PARAM 3
+/**
+ * Register files for vertex programs
+ */
+#define FILE_REG         0  /* temporaries */
+#define FILE_LOCAL_PARAM 1  /* local parameters */
+#define FILE_ENV_PARAM   2  /* global parameters */
+#define FILE_STATE_PARAM 3  /* GL state references */
 
 #define REG_ARG0   0
 #define REG_ARG1   1
@@ -60,6 +63,9 @@
 #define REG_ONES   65		/* 1,1,1,1 */
 #define REG_SWZ    66		/* -1,1,0,0 */
 #define REG_NEG    67		/* -1,-1,-1,-1 */
+#define REG_LIT    68           /* 1,0,0,1 */
+#define REG_LIT2    69           /* 1,0,0,1 */
+#define REG_SCRATCH 70		/* internal temporary */
 #define REG_UNDEF  127		/* special case - never used */
 #define REG_MAX    128
 #define REG_INVALID ~0
@@ -125,6 +131,19 @@ struct output {
 
 
 /*--------------------------------------------------------------------------- */
+#if defined(USE_SSE_ASM)
+#ifdef NO_FAST_MATH
+#define RESTORE_FPU (DEFAULT_X86_FPU)
+#define RND_NEG_FPU (DEFAULT_X86_FPU | 0x400)
+#else
+#define RESTORE_FPU (FAST_X86_FPU)
+#define RND_NEG_FPU (FAST_X86_FPU | 0x400)
+#endif
+#else
+#define RESTORE_FPU 0
+#define RND_NEG_FPU 0
+#endif
+
 
 /*!
  * Private storage for the vertex program pipeline stage.
@@ -147,6 +166,9 @@ struct arb_vp_machine {
 
    struct vertex_buffer *VB;
    GLcontext *ctx;
+
+   GLshort fpucntl_rnd_neg;	/* constant value */
+   GLshort fpucntl_restore;	/* constant value */
 
    GLboolean try_codegen;
 };
