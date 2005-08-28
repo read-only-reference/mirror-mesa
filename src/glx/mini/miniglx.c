@@ -437,6 +437,8 @@ SetupFBDev( Display *dpy )
    width = dpy->driverContext.shared.virtualWidth;
    height = dpy->driverContext.shared.virtualHeight;
    
+   if (width==832)
+	width=800;
    /* Bump size up to next supported mode.
     */
    if (width <= 720 && height <= 480) { 
@@ -459,8 +461,6 @@ SetupFBDev( Display *dpy )
    } 
 
 
-   dpy->driverContext.shared.virtualHeight = height;
-   dpy->driverContext.shared.virtualWidth = width;
    dpy->driverContext.shared.fbStride = width * (dpy->driverContext.bpp / 8);
    
    /* set the depth, resolution, etc */
@@ -878,6 +878,7 @@ static int __read_config_file( Display *dpy )
    dpy->rotateMode = 0;
    dpy->driverContext.agpmode = 1;
    dpy->driverContext.isPCI = 0;
+   dpy->driverContext.colorTiling = 0;
 
    fname = getenv("MINIGLX_CONF");
    if (!fname) fname = "/etc/miniglx.conf";
@@ -949,6 +950,9 @@ static int __read_config_file( Display *dpy )
       }
       else if (strcmp(opt, "isPCI") == 0) {
 	 dpy->driverContext.isPCI = atoi(val) ? 1 : 0;
+      }
+      else if (strcmp(opt, "colorTiling") == 0) {
+	 dpy->driverContext.colorTiling = atoi(val) ? 1 : 0;
       }
    }
 

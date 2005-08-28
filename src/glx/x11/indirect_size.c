@@ -29,29 +29,28 @@
 #include <GL/gl.h>
 #include "indirect_size.h"
 
-#  if __GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ >= 95)
-#    define HAVE_ALIAS
-#  endif
-
 #  if __GNUC__ > 2 || (__GNUC__ == 2 && __GNUC_MINOR__ >= 96)
 #    define PURE __attribute__((pure))
 #  else
 #    define PURE
 #  endif
 
-#  if defined(__i386__) && defined(__GNUC__)
+#  if defined(__i386__) && defined(__GNUC__) && !defined(__CYGWIN__) && !defined(__MINGW32__)
 #    define FASTCALL __attribute__((fastcall))
 #  else
 #    define FASTCALL
 #  endif
 
-#  if __GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 3)
+#  if (__GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 3)) && defined(__ELF__)
 #    define INTERNAL  __attribute__((visibility("internal")))
 #  else
 #    define INTERNAL
 #  endif
 
 
+#if defined(__CYGWIN__) || defined(__MINGW32__) || defined(__APPLE__)
+#  undef HAVE_ALIAS
+#endif
 #ifdef HAVE_ALIAS
 #  define ALIAS2(from,to) \
     INTERNAL PURE FASTCALL GLint __gl ## from ## _size( GLenum e ) \
@@ -365,10 +364,7 @@ ALIAS( Map2f, Map2d )
 ALIAS( ColorTableParameteriv, ColorTableParameterfv )
 ALIAS( ConvolutionParameteriv, ConvolutionParameterfv )
 ALIAS( PointParameterivNV, PointParameterfvEXT )
-ALIAS( PointParameterfvARB, PointParameterfvEXT )
-ALIAS( PointParameteriv, PointParameterfvEXT )
 
-#  undef HAVE_ALIAS
 #  undef PURE
 #  undef FASTCALL
 #  undef INTERNAL

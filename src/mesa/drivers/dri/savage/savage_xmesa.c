@@ -133,6 +133,7 @@ static const struct dri_extension card_extensions[] =
     { "GL_ARB_multisample",                GL_ARB_multisample_functions },
     { "GL_ARB_multitexture",               NULL },
     { "GL_ARB_texture_compression",        GL_ARB_texture_compression_functions },
+    { "GL_EXT_stencil_wrap",               NULL },
     { "GL_EXT_texture_lod_bias",           NULL },
     { NULL,                                NULL }
 };
@@ -168,6 +169,11 @@ savageInitDriver(__DRIscreenPrivate *sPriv)
 {
   savageScreenPrivate *savageScreen;
   SAVAGEDRIPtr         gDRIPriv = (SAVAGEDRIPtr)sPriv->pDevPriv;
+
+   if (sPriv->devPrivSize != sizeof(SAVAGEDRIRec)) {
+      fprintf(stderr,"\nERROR!  sizeof(SAVAGEDRIRec) does not match passed size from device driver\n");
+      return GL_FALSE;
+   }
 
    /* Allocate the private area */
    savageScreen = (savageScreenPrivate *)Xmalloc(sizeof(savageScreenPrivate));

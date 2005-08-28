@@ -103,14 +103,23 @@ static void i810BlendFuncSeparate( GLcontext *ctx, GLenum sfactorRGB,
 
    switch (ctx->Color.BlendSrcRGB) {
    case GL_ZERO:                a |= SDM_SRC_ZERO; break;
-   case GL_SRC_ALPHA:           a |= SDM_SRC_SRC_ALPHA; break;
    case GL_ONE:                 a |= SDM_SRC_ONE; break;
-   case GL_DST_COLOR:           a |= SDM_SRC_DST_COLOR; break;
-   case GL_ONE_MINUS_DST_COLOR: a |= SDM_SRC_INV_DST_COLOR; break;
+   case GL_SRC_COLOR:           a |= SDM_SRC_SRC_COLOR; break;
+   case GL_ONE_MINUS_SRC_COLOR: a |= SDM_SRC_INV_SRC_COLOR; break;
+   case GL_SRC_ALPHA:           a |= SDM_SRC_SRC_ALPHA; break;
    case GL_ONE_MINUS_SRC_ALPHA: a |= SDM_SRC_INV_SRC_ALPHA; break;
    case GL_DST_ALPHA:           a |= SDM_SRC_ONE; break;
    case GL_ONE_MINUS_DST_ALPHA: a |= SDM_SRC_ZERO; break;
-   case GL_SRC_ALPHA_SATURATE:  /*a |= SDM_SRC_SRC_ALPHA; break;*/
+   case GL_DST_COLOR:           a |= SDM_SRC_DST_COLOR; break;
+   case GL_ONE_MINUS_DST_COLOR: a |= SDM_SRC_INV_DST_COLOR; break;
+
+   /* (f, f, f, 1), f = min(As, 1 - Ad) = min(As, 1 - 1) = 0
+    * So (f, f, f, 1) = (0, 0, 0, 1).  Since there is no destination alpha and
+    * the only supported alpha operation is GL_FUNC_ADD, the result modulating
+    * the source alpha with the alpha factor is largely irrelevant.
+    */
+   case GL_SRC_ALPHA_SATURATE:  a |= SDM_SRC_ZERO; break;
+
    case GL_CONSTANT_COLOR:
    case GL_ONE_MINUS_CONSTANT_COLOR:
    case GL_CONSTANT_ALPHA:
@@ -122,14 +131,17 @@ static void i810BlendFuncSeparate( GLcontext *ctx, GLenum sfactorRGB,
    }
 
    switch (ctx->Color.BlendDstRGB) {
-   case GL_SRC_ALPHA:           a |= SDM_DST_SRC_ALPHA; break;
-   case GL_ONE_MINUS_SRC_ALPHA: a |= SDM_DST_INV_SRC_ALPHA; break;
    case GL_ZERO:                a |= SDM_DST_ZERO; break;
    case GL_ONE:                 a |= SDM_DST_ONE; break;
    case GL_SRC_COLOR:           a |= SDM_DST_SRC_COLOR; break;
    case GL_ONE_MINUS_SRC_COLOR: a |= SDM_DST_INV_SRC_COLOR; break;
+   case GL_SRC_ALPHA:           a |= SDM_DST_SRC_ALPHA; break;
+   case GL_ONE_MINUS_SRC_ALPHA: a |= SDM_DST_INV_SRC_ALPHA; break;
    case GL_DST_ALPHA:           a |= SDM_DST_ONE; break;
    case GL_ONE_MINUS_DST_ALPHA: a |= SDM_DST_ZERO; break;
+   case GL_DST_COLOR:           a |= SDM_DST_DST_COLOR; break;
+   case GL_ONE_MINUS_DST_COLOR: a |= SDM_DST_INV_DST_COLOR; break;
+
    case GL_CONSTANT_COLOR:
    case GL_ONE_MINUS_CONSTANT_COLOR:
    case GL_CONSTANT_ALPHA:
@@ -734,13 +746,13 @@ void i810InitState( GLcontext *ctx )
 				     MC_UPDATE_DEST |
 				     MC_DEST_CURRENT |
 				     MC_UPDATE_ARG1 |
-				     MC_ARG1_ITERATED_COLOR |
-				     MC_ARG1_DONT_REPLICATE_ALPHA |
-				     MC_ARG1_DONT_INVERT |
+				     ((MC_ARG_ITERATED_COLOR |
+				       MC_ARG_DONT_REPLICATE_ALPHA |
+				       MC_ARG_DONT_INVERT) << MC_ARG1_SHIFT) |
 				     MC_UPDATE_ARG2 |
-				     MC_ARG2_ONE |
-				     MC_ARG2_DONT_REPLICATE_ALPHA |
-				     MC_ARG2_DONT_INVERT |
+				     ((MC_ARG_ONE |
+				       MC_ARG_DONT_REPLICATE_ALPHA |
+				       MC_ARG_DONT_INVERT) << MC_ARG2_SHIFT) |
 				     MC_UPDATE_OP |
 				     MC_OP_ARG1 );
 
@@ -749,13 +761,13 @@ void i810InitState( GLcontext *ctx )
 				     MC_UPDATE_DEST |
 				     MC_DEST_CURRENT |
 				     MC_UPDATE_ARG1 |
-				     MC_ARG1_ONE |
-				     MC_ARG1_DONT_REPLICATE_ALPHA |
-				     MC_ARG1_DONT_INVERT |
+				     ((MC_ARG_ONE |
+				       MC_ARG_DONT_REPLICATE_ALPHA |
+				       MC_ARG_DONT_INVERT) << MC_ARG1_SHIFT) |
 				     MC_UPDATE_ARG2 |
-				     MC_ARG2_ONE |
-				     MC_ARG2_DONT_REPLICATE_ALPHA |
-				     MC_ARG2_DONT_INVERT |
+				     ((MC_ARG_ONE |
+				       MC_ARG_DONT_REPLICATE_ALPHA |
+				       MC_ARG_DONT_INVERT) << MC_ARG2_SHIFT) |
 				     MC_UPDATE_OP |
 				     MC_OP_DISABLE );
 
@@ -765,13 +777,13 @@ void i810InitState( GLcontext *ctx )
 				     MC_UPDATE_DEST |
 				     MC_DEST_CURRENT |
 				     MC_UPDATE_ARG1 |
-				     MC_ARG1_CURRENT_COLOR |
-				     MC_ARG1_REPLICATE_ALPHA |
-				     MC_ARG1_DONT_INVERT |
+				     ((MC_ARG_CURRENT_COLOR |
+				       MC_ARG_REPLICATE_ALPHA |
+				       MC_ARG_DONT_INVERT) << MC_ARG1_SHIFT) |
 				     MC_UPDATE_ARG2 |
-				     MC_ARG2_ONE |
-				     MC_ARG2_DONT_REPLICATE_ALPHA |
-				     MC_ARG2_DONT_INVERT |
+				     ((MC_ARG_ONE |
+				       MC_ARG_DONT_REPLICATE_ALPHA |
+				       MC_ARG_DONT_INVERT) << MC_ARG2_SHIFT) |
 				     MC_UPDATE_OP |
 				     MC_OP_DISABLE );
 
@@ -779,11 +791,11 @@ void i810InitState( GLcontext *ctx )
    imesa->Setup[I810_CTXREG_MA0] = ( GFX_OP_MAP_ALPHA_STAGES |
 				     MA_STAGE_0 |
 				     MA_UPDATE_ARG1 |
-				     MA_ARG1_ITERATED_ALPHA |
-				     MA_ARG1_DONT_INVERT |
+				     ((MA_ARG_ITERATED_ALPHA |
+				       MA_ARG_DONT_INVERT) << MA_ARG1_SHIFT) |
 				     MA_UPDATE_ARG2 |
-				     MA_ARG2_CURRENT_ALPHA |
-				     MA_ARG2_DONT_INVERT |
+				     ((MA_ARG_CURRENT_ALPHA |
+				       MA_ARG_DONT_INVERT) << MA_ARG2_SHIFT) |
 				     MA_UPDATE_OP |
 				     MA_OP_ARG1 );
 
@@ -791,11 +803,11 @@ void i810InitState( GLcontext *ctx )
    imesa->Setup[I810_CTXREG_MA1] = ( GFX_OP_MAP_ALPHA_STAGES |
 				     MA_STAGE_1 |
 				     MA_UPDATE_ARG1 |
-				     MA_ARG1_CURRENT_ALPHA |
-				     MA_ARG1_DONT_INVERT |
+				     ((MA_ARG_CURRENT_ALPHA |
+				       MA_ARG_DONT_INVERT) << MA_ARG1_SHIFT) |
 				     MA_UPDATE_ARG2 |
-				     MA_ARG2_CURRENT_ALPHA |
-				     MA_ARG2_DONT_INVERT |
+				     ((MA_ARG_CURRENT_ALPHA |
+				       MA_ARG_DONT_INVERT) << MA_ARG2_SHIFT) |
 				     MA_UPDATE_OP |
 				     MA_OP_ARG1 );
 
@@ -803,11 +815,11 @@ void i810InitState( GLcontext *ctx )
    imesa->Setup[I810_CTXREG_MA2] = ( GFX_OP_MAP_ALPHA_STAGES |
 				     MA_STAGE_2 |
 				     MA_UPDATE_ARG1 |
-				     MA_ARG1_CURRENT_ALPHA |
-				     MA_ARG1_DONT_INVERT |
+				     ((MA_ARG_CURRENT_ALPHA |
+				       MA_ARG_DONT_INVERT) << MA_ARG1_SHIFT) |
 				     MA_UPDATE_ARG2 |
-				     MA_ARG2_CURRENT_ALPHA |
-				     MA_ARG2_DONT_INVERT |
+				     ((MA_ARG_CURRENT_ALPHA |
+				       MA_ARG_DONT_INVERT) << MA_ARG2_SHIFT) |
 				     MA_UPDATE_OP |
 				     MA_OP_ARG1 );
 

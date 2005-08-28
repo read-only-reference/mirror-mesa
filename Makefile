@@ -134,9 +134,9 @@ ultrix-gcc:
 
 # Rules for making release tarballs
 
-DIRECTORY = Mesa-6.3.1
-LIB_NAME = MesaLib-6.3.1
-DEMO_NAME = MesaDemos-6.3.1
+DIRECTORY = Mesa-6.5
+LIB_NAME = MesaLib-6.5
+DEMO_NAME = MesaDemos-6.5
 
 MAIN_FILES = \
 	$(DIRECTORY)/Makefile*						\
@@ -152,8 +152,9 @@ MAIN_FILES = \
 	$(DIRECTORY)/docs/VERSIONS					\
 	$(DIRECTORY)/docs/*.spec					\
 	$(DIRECTORY)/include/GL/internal/glcore.h			\
-	$(DIRECTORY)/include/GL/dmesa.h					\
 	$(DIRECTORY)/include/GL/amesa.h					\
+	$(DIRECTORY)/include/GL/dmesa.h					\
+	$(DIRECTORY)/include/GL/directfbgl.h				\
 	$(DIRECTORY)/include/GL/fxmesa.h				\
 	$(DIRECTORY)/include/GL/ggimesa.h				\
 	$(DIRECTORY)/include/GL/gl.h					\
@@ -212,7 +213,6 @@ MAIN_FILES = \
 	$(DIRECTORY)/src/mesa/drivers/directfb/*.[ch]			\
 	$(DIRECTORY)/src/mesa/drivers/directfb/Makefile			\
 	$(DIRECTORY)/src/mesa/drivers/dos/*.[chS]			\
-	$(DIRECTORY)/src/mesa/drivers/dri/common/*.[ch]			\
 	$(DIRECTORY)/src/mesa/drivers/fbdev/glfbdev.c			\
 	$(DIRECTORY)/src/mesa/drivers/glide/*.[ch]			\
 	$(DIRECTORY)/src/mesa/drivers/ggi/*.[ch]			\
@@ -259,17 +259,15 @@ MAIN_FILES = \
 	$(DIRECTORY)/windows/VC7/mesa/osmesa/osmesa.vcproj
 
 DRI_FILES = \
-	$(DIRECTORY)/include/GL/internal/*.h				\
 	$(DIRECTORY)/src/glx/Makefile					\
 	$(DIRECTORY)/src/glx/x11/Makefile				\
 	$(DIRECTORY)/src/glx/x11/*.[ch]					\
 	$(DIRECTORY)/src/mesa/drivers/dri/Makefile			\
 	$(DIRECTORY)/src/mesa/drivers/dri/Makefile.template		\
-	$(DIRECTORY)/src/mesa/drivers/dri/common/*.[ch]			\
 	$(DIRECTORY)/src/mesa/drivers/dri/common/xmlpool/*.[ch]		\
 	$(DIRECTORY)/src/mesa/drivers/dri/common/xmlpool/*.po		\
 	$(DIRECTORY)/src/mesa/drivers/dri/dri_client/imports/*.h	\
-	$(DIRECTORY)/src/mesa/drivers/dri/*/*.[ch]			\
+	$(DIRECTORY)/src/mesa/drivers/dri/*/*.[chS]			\
 	$(DIRECTORY)/src/mesa/drivers/dri/*/Makefile			\
 	$(DIRECTORY)/src/mesa/drivers/dri/*/Doxyfile			\
 	$(DIRECTORY)/src/mesa/drivers/dri/*/server/*.[ch]

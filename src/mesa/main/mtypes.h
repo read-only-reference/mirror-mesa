@@ -7,7 +7,7 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -584,7 +584,6 @@ struct gl_depthbuffer_attrib
    GLclampd Clear;		/**< Value to clear depth buffer to */
    GLboolean Test;		/**< Depth buffering enabled flag */
    GLboolean Mask;		/**< Depth buffer writable? */
-   GLboolean OcclusionTest;	/**< GL_HP_occlusion_test */
    GLboolean BoundsTest;        /**< GL_EXT_depth_bounds_test */
    GLfloat BoundsMin, BoundsMax;/**< GL_EXT_depth_bounds_test */
 };
@@ -926,7 +925,7 @@ struct gl_pixel_attrib
    GLint MapBtoBsize;
    GLint MapAtoAsize;
    GLint MapStoS[MAX_PIXEL_MAP_TABLE];	/**< Pixel map tables */
-   GLint MapItoI[MAX_PIXEL_MAP_TABLE];
+   GLfloat MapItoI[MAX_PIXEL_MAP_TABLE];
    GLfloat MapItoR[MAX_PIXEL_MAP_TABLE];
    GLfloat MapItoG[MAX_PIXEL_MAP_TABLE];
    GLfloat MapItoB[MAX_PIXEL_MAP_TABLE];
@@ -1854,7 +1853,7 @@ struct gl_vertex_program_state
 };
 
 
-/*
+/**
  * State for GL_ARB/NV_fragment_program
  */
 struct gl_fragment_program_state
@@ -1875,8 +1874,9 @@ struct gl_fragment_program_state
 #endif
 };
 
-/*
- * State for GL_fragment_shader
+
+/**
+ * State for GL_ATI_fragment_shader
  */
 struct gl_ati_fragment_shader_state
 {
@@ -1887,16 +1887,23 @@ struct gl_ati_fragment_shader_state
    struct ati_fragment_shader *Current;
 };
 
-/*
- * State for GL_ARB_occlusion_query
- */
-struct gl_occlusion_state
+
+struct gl_query_object
 {
-   GLboolean Active;
-   GLuint CurrentQueryObject;
-   GLuint PassedCounter;
-   struct _mesa_HashTable *QueryObjects;
+   GLenum Target;
+   GLuint Id;
+   GLuint Result;      /* the counter */
+   GLboolean Active;   /* inside Begin/EndQuery */
+   GLboolean Ready;    /* result is ready */
 };
+
+
+struct gl_query_state
+{
+   struct _mesa_HashTable *QueryObjects;
+   struct gl_query_object *CurrentOcclusionObject; /* GL_ARB_occlusion_query */
+};
+
 
 /**
  * gl2 unique interface identifier.
@@ -2358,7 +2365,6 @@ struct gl_extensions
    GLboolean ATI_texture_mirror_once;
    GLboolean ATI_texture_env_combine3;
    GLboolean ATI_fragment_shader;
-   GLboolean HP_occlusion_test;
    GLboolean IBM_rasterpos_clip;
    GLboolean IBM_multimode_draw_arrays;
    GLboolean MESA_pack_invert;
@@ -2804,7 +2810,7 @@ struct __GLcontextRec
    GLboolean _MaintainTexEnvProgram;
    GLboolean _MaintainTnlProgram;
 
-   struct gl_occlusion_state Occlusion;  /**< GL_ARB_occlusion_query */
+   struct gl_query_state Query;  /**< GL_ARB_occlusion_query */
 
    struct gl_shader_objects_state ShaderObjects;	/* GL_ARB_shader_objects */
    /*@}*/
@@ -2836,8 +2842,6 @@ struct __GLcontextRec
    struct gl_list_extensions ListExt; /**< driver dlist extensions */
 
 
-   GLboolean OcclusionResult;       /**< for GL_HP_occlusion_test */
-   GLboolean OcclusionResultSaved;  /**< for GL_HP_occlusion_test */
    GLuint _Facing; /**< This is a hack for 2-sided stencil test.
 		    *
 		    * We don't have a better way to communicate this value from

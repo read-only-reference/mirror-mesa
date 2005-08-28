@@ -11,8 +11,9 @@
 typedef struct {
     drm_handle_t handle;
     drmSize size;
-    drmAddress map;
 } viaRegion, *viaRegionPtr;
+
+typedef int Bool;
 
 typedef struct {
     viaRegion regs, agp;
@@ -25,7 +26,7 @@ typedef struct {
     int priv2;
     int fbOffset;
     int fbSize;
-    char drixinerama;
+    Bool drixinerama;
     int backOffset;
     int depthOffset;
     int textureOffset;

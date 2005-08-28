@@ -63,7 +63,7 @@
 #define GLOBL_FN(x) GLOBL x
 #endif
 
-#if defined(PTHREADS) || defined(XTHREADS) || defined(SOLARIS_THREADS) || defined(WIN32_THREADS) || defined(BEOS_THREADS)
+#if defined(PTHREADS) || defined(USE_XTHREADS) || defined(SOLARIS_THREADS) || defined(WIN32_THREADS) || defined(BEOS_THREADS)
 #  define THREADS
 #endif
 
@@ -82,7 +82,7 @@ GL_PREFIX(fn, fn_alt):					\
 ALIGNTEXT16;						\
 GLOBL_FN(GL_PREFIX(fn, fn_alt));			\
 GL_PREFIX(fn, fn_alt):					\
-	MOV_L(CONTENT(GLNAME(_glapi_DispatchTSD)), EAX) ;	\
+	MOV_L(CONTENT(GLNAME(_glapi_Dispatch)), EAX) ;	\
 	TEST_L(EAX, EAX) ;				\
 	JE(1f) ;					\
 	JMP(GL_OFFSET(off)) ;				\
@@ -93,7 +93,7 @@ GL_PREFIX(fn, fn_alt):					\
 ALIGNTEXT16;						\
 GLOBL_FN(GL_PREFIX(fn, fn_alt));			\
 GL_PREFIX(fn, fn_alt):					\
-	MOV_L(CONTENT(GLNAME(_glapi_DispatchTSD)), EAX) ;	\
+	MOV_L(CONTENT(GLNAME(_glapi_Dispatch)), EAX) ;	\
 	TEST_L(EAX, EAX) ;				\
 	JE(1f) ;					\
 	JMP(GL_OFFSET(off)) ;				\

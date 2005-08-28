@@ -46,16 +46,11 @@
 
 #include "glxclient.h"
 #include <stdio.h>
-#include <Xext.h>
-#include <extutil.h>
+#include <X11/extensions/Xext.h>
+#include <X11/extensions/extutil.h>
 #include <assert.h>
 #include "indirect_init.h"
 #include "glapi.h"
-#ifdef XTHREADS
-# include "Xthreads.h"
-#elif defined(PTHREADS)
-# include <pthread.h>
-#endif
 #include "glxextensions.h"
 #include "glcontextmodes.h"
 #include "glheader.h"
@@ -150,7 +145,7 @@ static __GLapi *IndirectAPI = NULL;
  * Current context management and locking
  */
 
-#if defined( XTHREADS )
+#if defined( USE_XTHREADS )
 
 /* thread safe */
 static GLboolean TSDinitialized = GL_FALSE;
@@ -733,7 +728,7 @@ CallCreateNewScreen(Display *dpy, int scrn, __DRIscreen *psc,
     __DRIscreenPrivate *psp = NULL;
 #ifndef GLX_USE_APPLEGL
     drm_handle_t hSAREA;
-    drmAddress pSAREA;
+    drmAddress pSAREA = MAP_FAILED;
     char *BusID;
     __DRIversion   ddx_version;
     __DRIversion   dri_version;
@@ -754,6 +749,7 @@ CallCreateNewScreen(Display *dpy, int scrn, __DRIscreen *psc,
     err_msg = "XF86DRIOpenConnection";
     err_extra = NULL;
 
+    framebuffer.base = MAP_FAILED;
     framebuffer.dev_priv = NULL;
 
     if (XF86DRIOpenConnection(dpy, scrn, &hSAREA, &BusID)) {
@@ -1111,7 +1107,7 @@ __GLXdisplayPrivate *__glXInitialize(Display* dpy)
     XEDataObject dataObj;
     int major, minor;
 
-#if defined(XTHREADS)
+#if defined(USE_XTHREADS)
     {
         static int firstCall = 1;
         if (firstCall) {
@@ -1593,7 +1589,9 @@ USED static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
 
 	oldGC->currentContextTag = 0;
     }
-    
+
+    _glapi_check_multithread();
+
 #ifdef GLX_DIRECT_RENDERING
     /* Unbind the old direct rendering context */
     if (oldGC->isDirect) {
@@ -1613,7 +1611,6 @@ USED static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
 	}
     } else {
 #endif
-        _glapi_check_multithread();
 	/* Send a glXMakeCurrent request to bind the new context. */
 	LockDisplay(dpy);
 

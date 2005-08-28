@@ -140,6 +140,7 @@ const struct dri_extension card_extensions[] =
     { "GL_ARB_texture_env_add",            NULL },
     { "GL_ARB_texture_env_combine",        NULL },
     { "GL_ARB_texture_env_dot3",           NULL },
+    { "GL_ARB_texture_env_crossbar",       NULL },
     { "GL_ARB_texture_mirrored_repeat",    NULL },
     { "GL_ARB_vertex_buffer_object",       GL_ARB_vertex_buffer_object_functions },
     { "GL_EXT_blend_minmax",               GL_EXT_blend_minmax_functions },
@@ -524,10 +525,11 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
       }
       TCL_FALLBACK(rmesa->glCtx, R200_TCL_FALLBACK_TCL_DISABLE, 1);
    }
+
    if (rmesa->r200Screen->chipset & R200_CHIPSET_TCL) {
-      if (tcl_mode >= DRI_CONF_TCL_VTXFMT && !getenv("R200_NO_VTXFMT")) {
+      if (tcl_mode >= DRI_CONF_TCL_VTXFMT)
 	 r200VtxfmtInit( ctx, tcl_mode >= DRI_CONF_TCL_CODEGEN );
-      }
+
       _tnl_need_dlist_norm_lengths( ctx, GL_FALSE );
    }
    return GL_TRUE;

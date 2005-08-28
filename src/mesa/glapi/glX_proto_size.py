@@ -313,8 +313,6 @@ class PrintGlxSizeStubs_c(PrintGlxSizeStubs_common):
 		print '#include "indirect_size.h"'
 
 		print ''
-		self.printHaveAlias()
-		print ''
 		self.printPure()
 		print ''
 		self.printFastcall()
@@ -322,6 +320,9 @@ class PrintGlxSizeStubs_c(PrintGlxSizeStubs_common):
 		self.printVisibility( "INTERNAL", "internal" )
 		print ''
 		print ''
+		print '#if defined(__CYGWIN__) || defined(__MINGW32__) || defined(__APPLE__)'
+		print '#  undef HAVE_ALIAS'
+		print '#endif'
 		print '#ifdef HAVE_ALIAS'
 		print '#  define ALIAS2(from,to) \\'
 		print '    INTERNAL PURE FASTCALL GLint __gl ## from ## _size( GLenum e ) \\'
@@ -437,8 +438,9 @@ class PrintGlxReqSize_c(PrintGlxReqSize_common):
 		print ''
 		print '#define __GLX_PAD(x)  (((x) + 3) & ~3)'
 		print ''
-		self.printHaveAlias()
-		print ''
+		print '#if defined(__CYGWIN__) || defined(__MINGW32__)'
+		print '#  undef HAVE_ALIAS'
+		print '#endif'
 		print '#ifdef HAVE_ALIAS'
 		print '#  define ALIAS2(from,to) \\'
 		print '    GLint __glX ## from ## ReqSize( const GLbyte * pc, Bool swap ) \\'

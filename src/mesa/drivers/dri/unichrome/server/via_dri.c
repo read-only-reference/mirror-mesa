@@ -22,19 +22,6 @@
  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
-#if 0
-#include "xf86.h"
-#include "xf86_OSproc.h"
-#include "xf86_ansic.h"
-#include "xf86Priv.h"
-
-#include "xf86PciInfo.h"
-#include "xf86Pci.h"
-
-#define _XF86DRI_SERVER_
-#include "GL/glxtokens.h"
-
-#else
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,7 +32,6 @@
 #include "driver.h"
 #include "drm.h"
 #include "imports.h"
-#endif
 
 #include "dri_util.h"
 
@@ -396,7 +382,6 @@ static int VIADRIScreenInit(DRIDriverContext * ctx)
     }
 
     pVIADRI->regs.size = VIA_MMIO_REGSIZE;
-    pVIADRI->regs.map = 0;
     pVIADRI->regs.handle = pVia->registerHandle;
     xf86DrvMsg(pScreen->myNum, X_INFO, "[drm] mmio Registers = 0x%08lx\n",
 	pVIADRI->regs.handle);

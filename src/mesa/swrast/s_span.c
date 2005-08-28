@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -849,17 +849,13 @@ _swrast_write_index_span( GLcontext *ctx, struct sw_span *span)
       }
    }
 
-   /* if we get here, something passed the depth test */
-   if (ctx->Depth.OcclusionTest) {
-      ctx->OcclusionResult = GL_TRUE;
-   }
-
 #if FEATURE_ARB_occlusion_query
-   if (ctx->Occlusion.Active) {
+   if (ctx->Query.CurrentOcclusionObject) {
       /* update count of 'passed' fragments */
+      struct gl_query_object *q = ctx->Query.CurrentOcclusionObject;
       GLuint i;
       for (i = 0; i < span->end; i++)
-         ctx->Occlusion.PassedCounter += span->array->mask[i];
+         q->Result += span->array->mask[i];
    }
 #endif
 
@@ -1219,17 +1215,13 @@ _swrast_write_rgba_span( GLcontext *ctx, struct sw_span *span)
       }
    }
 
-   /* if we get here, some fragments passed the depth test */
-   if (ctx->Depth.OcclusionTest) {
-      ctx->OcclusionResult = GL_TRUE;
-   }
-
 #if FEATURE_ARB_occlusion_query
-   if (ctx->Occlusion.Active) {
+   if (ctx->Query.CurrentOcclusionObject) {
       /* update count of 'passed' fragments */
+      struct gl_query_object *q = ctx->Query.CurrentOcclusionObject;
       GLuint i;
       for (i = 0; i < span->end; i++)
-         ctx->Occlusion.PassedCounter += span->array->mask[i];
+         q->Result += span->array->mask[i];
    }
 #endif
 

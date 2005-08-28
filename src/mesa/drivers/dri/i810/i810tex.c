@@ -282,48 +282,52 @@ static void i810TexParameter( GLcontext *ctx, GLenum target,
 }
 
 
+/**
+ * Setup hardware bits for new texture environment settings.
+ * 
+ * \todo
+ * Determine whether or not \c param can be used instead of
+ * \c texUnit->EnvColor in the \c GL_TEXTURE_ENV_COLOR case.
+ */
 static void i810TexEnv( GLcontext *ctx, GLenum target, 
 			GLenum pname, const GLfloat *param )
 {
    i810ContextPtr imesa = I810_CONTEXT( ctx );
-   GLuint unit = ctx->Texture.CurrentUnit;
+   const GLuint unit = ctx->Texture.CurrentUnit;
+   const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
 
    /* Only one env color.  Need a fallback if env colors are different
     * and texture setup references env color in both units.  
     */
    switch (pname) {
    case GL_TEXTURE_ENV_COLOR: {
-      struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
-      GLfloat *fc = texUnit->EnvColor;
-      GLuint r, g, b, a, col;
-      CLAMPED_FLOAT_TO_UBYTE(r, fc[0]);
-      CLAMPED_FLOAT_TO_UBYTE(g, fc[1]);
-      CLAMPED_FLOAT_TO_UBYTE(b, fc[2]);
-      CLAMPED_FLOAT_TO_UBYTE(a, fc[3]);
+      GLubyte c[4];
+      GLuint envColor;
 
-      col = ((a << 24) | 
-	     (r << 16) | 
-	     (g <<  8) | 
-	     (b <<  0));
- 
-      if (imesa->Setup[I810_CTXREG_CF1] != col) {
-	 I810_STATECHANGE(imesa, I810_UPLOAD_CTX);	
-	 imesa->Setup[I810_CTXREG_CF1] = col;      
+      UNCLAMPED_FLOAT_TO_RGBA_CHAN( c, texUnit->EnvColor );
+      envColor = PACK_COLOR_8888( c[3], c[0], c[1], c[2] );
+
+      if (imesa->Setup[I810_CTXREG_CF1] != envColor) {
+	 I810_STATECHANGE(imesa, I810_UPLOAD_CTX);
+	 imesa->Setup[I810_CTXREG_CF1] = envColor;
       }
       break;
    }
+
    case GL_TEXTURE_ENV_MODE:
       imesa->TexEnvImageFmt[unit] = 0; /* force recalc of env state */
       break;
 
-   case GL_TEXTURE_LOD_BIAS_EXT:
-      {
-         struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
-         i810TextureObjectPtr t = (i810TextureObjectPtr) tObj->DriverData;
-         t->Setup[I810_TEXREG_MLC] &= ~(MLC_LOD_BIAS_MASK);
-         t->Setup[I810_TEXREG_MLC] |= i810ComputeLodBias(*param);
+   case GL_TEXTURE_LOD_BIAS: {
+      if ( texUnit->_Current != NULL ) {
+	 const struct gl_texture_object *tObj = texUnit->_Current;
+	 i810TextureObjectPtr t = (i810TextureObjectPtr) tObj->DriverData;
+
+	 t->Setup[I810_TEXREG_MLC] &= ~(MLC_LOD_BIAS_MASK);
+	 t->Setup[I810_TEXREG_MLC] |= i810ComputeLodBias(*param);
       }
       break;
+   }
 
    default:
       break;
@@ -430,6 +434,12 @@ static void i810DeleteTexture( GLcontext *ctx, struct gl_texture_object *tObj )
    _mesa_delete_texture_object(ctx, tObj);
 }
 
+/**
+ * Choose a Mesa texture format to match the requested format.
+ * 
+ * The i810 only supports 5 texture modes that are useful to Mesa.  That
+ * makes this routine pretty simple.
+ */
 static const struct gl_texture_format *
 i810ChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
 			 GLenum format, GLenum type )
@@ -437,11 +447,18 @@ i810ChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
    switch ( internalFormat ) {
    case 4:
    case GL_RGBA:
+   case GL_RGBA2:
+   case GL_RGBA4:
+   case GL_RGB5_A1:
+   case GL_RGBA8:
+   case GL_RGB10_A2:
+   case GL_RGBA12:
+   case GL_RGBA16:
    case GL_COMPRESSED_RGBA:
-      if ( format == GL_BGRA ) {
-         if ( type == GL_UNSIGNED_SHORT_1_5_5_5_REV ) {
-	    return &_mesa_texformat_argb1555;
-	 }
+      if ( ((format == GL_BGRA) && (type == GL_UNSIGNED_SHORT_1_5_5_5_REV))
+	   || ((format == GL_RGBA) && (type == GL_UNSIGNED_SHORT_5_5_5_1))
+	   || (internalFormat == GL_RGB5_A1) ) {
+	 return &_mesa_texformat_argb1555;
       }
       return &_mesa_texformat_argb4444;
 
@@ -455,18 +472,7 @@ i810ChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
    case GL_RGB10:
    case GL_RGB12:
    case GL_RGB16:
-     return &_mesa_texformat_rgb565;
-
-   case GL_RGBA2:
-   case GL_RGBA4:
-   case GL_RGBA8:
-   case GL_RGB10_A2:
-   case GL_RGBA12:
-   case GL_RGBA16:
-      return &_mesa_texformat_argb4444;
-
-   case GL_RGB5_A1:
-      return &_mesa_texformat_argb1555;
+      return &_mesa_texformat_rgb565;
 
    case GL_ALPHA:
    case GL_ALPHA4:
@@ -474,8 +480,6 @@ i810ChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
    case GL_ALPHA12:
    case GL_ALPHA16:
    case GL_COMPRESSED_ALPHA:
-      return &_mesa_texformat_al88;
-
    case 1:
    case GL_LUMINANCE:
    case GL_LUMINANCE4:
@@ -483,8 +487,6 @@ i810ChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
    case GL_LUMINANCE12:
    case GL_LUMINANCE16:
    case GL_COMPRESSED_LUMINANCE:
-      return &_mesa_texformat_rgb565;
-
    case 2:
    case GL_LUMINANCE_ALPHA:
    case GL_LUMINANCE4_ALPHA4:
@@ -500,7 +502,7 @@ i810ChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
    case GL_INTENSITY12:
    case GL_INTENSITY16:
    case GL_COMPRESSED_INTENSITY:
-      return &_mesa_texformat_argb4444;
+      return &_mesa_texformat_al88;
 
    case GL_YCBCR_MESA:
       if (type == GL_UNSIGNED_SHORT_8_8_MESA ||

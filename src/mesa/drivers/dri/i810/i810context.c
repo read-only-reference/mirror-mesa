@@ -63,6 +63,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "utils.h"
 
 #define need_GL_ARB_multisample
+#define need_GL_ARB_texture_compression
 #include "extension_helper.h"
 
 #ifndef I810_DEBUG
@@ -72,13 +73,30 @@ int I810_DEBUG = (0);
 PUBLIC const char __driConfigOptions[] = { 0 };
 const GLuint __driNConfigOptions = 0;
 
+#define DRIVER_DATE                     "20050821"
+
 static const GLubyte *i810GetString( GLcontext *ctx, GLenum name )
 {
+   static char buffer[128];
+
    switch (name) {
    case GL_VENDOR:
       return (GLubyte *)"Keith Whitwell";
-   case GL_RENDERER:
-      return (GLubyte *)"Mesa DRI I810 20021125";
+   case GL_RENDERER: {
+      i810ContextPtr imesa = I810_CONTEXT(ctx);
+      const char * chipset;
+      
+      switch (imesa->i810Screen->deviceID) {
+      case PCI_CHIP_I810:       chipset = "i810"; break;
+      case PCI_CHIP_I810_DC100: chipset = "i810 DC-100"; break;
+      case PCI_CHIP_I810_E:     chipset = "i810E"; break;
+      case PCI_CHIP_I815:       chipset = "i815"; break;
+      default:                  chipset = "Unknown i810-class Chipset"; break;
+      }
+
+      (void) driGetRendererString( buffer, chipset, DRIVER_DATE, 0 );
+      return (GLubyte *) buffer;
+   }
    default:
       return 0;
    }
@@ -101,16 +119,21 @@ static void i810BufferSize(GLframebuffer *buffer, GLuint *width, GLuint *height)
 
 /* Extension strings exported by the i810 driver.
  */
-static const struct dri_extension card_extensions[] =
+const struct dri_extension card_extensions[] =
 {
     { "GL_ARB_multisample",                GL_ARB_multisample_functions },
     { "GL_ARB_multitexture",               NULL },
+    { "GL_ARB_texture_compression",        GL_ARB_texture_compression_functions },
     { "GL_ARB_texture_env_add",            NULL },
+    { "GL_ARB_texture_env_combine",        NULL },
+    { "GL_ARB_texture_env_crossbar",       NULL },
     { "GL_ARB_texture_mirrored_repeat",    NULL },
     { "GL_EXT_stencil_wrap",               NULL },
     { "GL_EXT_texture_edge_clamp",         NULL },
+    { "GL_EXT_texture_env_combine",        NULL },
     { "GL_EXT_texture_lod_bias",           NULL },
     { "GL_MESA_ycbcr_texture",             NULL },
+    { "GL_NV_blend_square",                NULL },
     { "GL_SGIS_generate_mipmap",           NULL },
     { NULL,                                NULL }
 };

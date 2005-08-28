@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -841,13 +841,8 @@ _mesa_PopAttrib(void)
                                (GLboolean) (color->ColorMask[1] != 0),
                                (GLboolean) (color->ColorMask[2] != 0),
                                (GLboolean) (color->ColorMask[3] != 0));
-#if 0
-               _mesa_DrawBuffersARB(ctx->Const.MaxDrawBuffers,
-                                    color->DrawBuffer);
-#else
                _mesa_drawbuffers(ctx, ctx->Const.MaxDrawBuffers,
                                  color->DrawBuffer, NULL);
-#endif
                _mesa_set_enable(ctx, GL_ALPHA_TEST, color->AlphaEnabled);
                _mesa_AlphaFunc(color->AlphaFunc, color->AlphaRef);
                _mesa_set_enable(ctx, GL_BLEND, color->BlendEnabled);
@@ -890,9 +885,6 @@ _mesa_PopAttrib(void)
                _mesa_ClearDepth(depth->Clear);
                _mesa_set_enable(ctx, GL_DEPTH_TEST, depth->Test);
                _mesa_DepthMask(depth->Mask);
-               if (ctx->Extensions.HP_occlusion_test)
-                  _mesa_set_enable(ctx, GL_OCCLUSION_TEST_HP,
-                                   depth->OcclusionTest);
             }
             break;
          case GL_ENABLE_BIT:

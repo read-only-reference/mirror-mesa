@@ -127,7 +127,7 @@ class PrintGenericStubs(gl_XML.gl_print_base):
 		print '#  define HIDDEN(x)'
 		print '#endif'
 		print ''
-		print '#if defined(PTHREADS) || defined(XTHREADS) || defined(SOLARIS_THREADS) || defined(WIN32_THREADS) || defined(BEOS_THREADS)'
+		print '#if defined(PTHREADS) || defined(USE_XTHREADS) || defined(SOLARIS_THREADS) || defined(WIN32_THREADS) || defined(BEOS_THREADS)'
 		print '#  define THREADS'
 		print '#endif'
 		print ''
@@ -142,7 +142,7 @@ class PrintGenericStubs(gl_XML.gl_print_base):
 		print ''
 		print '\t.p2align\t4,,15'
 		print '_x86_64_get_dispatch:'
-		print '\tmovq\t_glapi_tls_Disaptch@GOTTPOFF(%rip), %rax'
+		print '\tmovq\t_glapi_tls_Dispatch@GOTTPOFF(%rip), %rax'
 		print '\tmovq\t%fs:(%rax), %rax'
 		print '\tret'
 		print '\t.size\t_x86_64_get_dispatch, .-_x86_64_get_dispatch'
@@ -245,7 +245,7 @@ class PrintGenericStubs(gl_XML.gl_print_base):
 		print '\tjmp\t*%r11'
 
 		print '#else'
-		print '\tmovq\t_glapi_DispatchTSD(%rip), %rax'
+		print '\tmovq\t_glapi_Dispatch(%rip), %rax'
 		print '\ttestq\t%rax, %rax'
 		print '\tje\t1f'
 		print '\tmovq\t%u(%%rax), %%r11' % (f.offset * 8)

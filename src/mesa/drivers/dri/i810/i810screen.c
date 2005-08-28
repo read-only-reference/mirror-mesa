@@ -54,6 +54,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "GL/internal/dri_interface.h"
 
+extern const struct dri_extension card_extensions[];
+
 static __GLcontextModes *fill_in_modes( __GLcontextModes *modes,
 				       unsigned pixel_bits,
 				       unsigned depth_bits,
@@ -223,6 +225,10 @@ i810InitDriver(__DRIscreenPrivate *sPriv)
    i810ScreenPrivate *i810Screen;
    I810DRIPtr         gDRIPriv = (I810DRIPtr)sPriv->pDevPriv;
 
+   if (sPriv->devPrivSize != sizeof(I810DRIRec)) {
+      fprintf(stderr,"\nERROR!  sizeof(I810DRIRec) does not match passed size from device driver\n");
+      return GL_FALSE;
+   }
 
    /* Allocate the private area */
    i810Screen = (i810ScreenPrivate *)CALLOC(sizeof(i810ScreenPrivate));
@@ -458,6 +464,7 @@ void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIsc
       *driver_modes = i810FillInModes( 16,
 				       16, 0,
 				       1);
+      driInitExtensions( NULL, card_extensions, GL_TRUE );
    }
 
    return (void *) psp;
