@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -72,8 +72,6 @@ struct osmesa_context {
    GLint width, height;		/* size of image buffer */
    GLint rowlength;		/* number of pixels per row */
    GLint userRowLength;		/* user-specified number of pixels per row */
-   GLint rshift, gshift;	/* bit shifts for RGBA formats */
-   GLint bshift, ashift;
    GLint rInd, gInd, bInd, aInd;/* index offsets for RGBA formats */
    GLchan *rowaddr[MAX_HEIGHT];	/* address of first pixel in each image row */
    GLboolean yup;		/* TRUE  -> Y increases upward */
@@ -118,15 +116,6 @@ osmesa_update_state( GLcontext *ctx, GLuint new_state )
    _swsetup_InvalidateState( ctx, new_state );
    _ac_InvalidateState( ctx, new_state );
    _tnl_InvalidateState( ctx, new_state );
-}
-
-
-static void
-set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit )
-{
-   /* separate read buffer not supported */
-   ASSERT(buffer == ctx->DrawBuffer);
-   ASSERT(bufferBit == BUFFER_BIT_FRONT_LEFT);
 }
 
 
@@ -278,7 +267,7 @@ get_buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
    DST[ACOMP] = CHAN_MAX
 #include "swrast/s_spantemp.h"
 
-/* 16-bit BGR */
+/* 16-bit RGB */
 #if CHAN_TYPE == GL_UNSIGNED_BYTE
 #define NAME(PREFIX) PREFIX##_RGB_565
 #define FORMAT GL_RGBA
@@ -303,7 +292,7 @@ get_buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
 #define SPAN_VARS \
    const OSMesaContext osmesa = OSMESA_CONTEXT(ctx);
 #define INIT_PIXEL_PTR(P, X, Y) \
-   GLubyte *P = osmesa->rowaddr[Y] + (X)
+   GLubyte *P = (GLubyte *) osmesa->rowaddr[Y] + (X)
 #define INC_PIXEL_PTR(P) P += 1
 #define STORE_PIXEL(DST, X, Y, VALUE) \
    *DST = VALUE[0]
@@ -475,7 +464,7 @@ osmesa_choose_line_function( GLcontext *ctx )
    GLuint i;							\
    GLchan *img = PIXELADDR4(span.x, span.y); 			\
    for (i = 0; i < span.end; i++, img += 4) {			\
-      const GLdepth z = FixedToDepth(span.z);			\
+      const GLuint z = FixedToDepth(span.z);			\
       if (z < zRow[i]) {					\
          PACK_RGBA(img, FixedToChan(span.red),			\
             FixedToChan(span.green), FixedToChan(span.blue),	\
@@ -512,7 +501,7 @@ osmesa_choose_line_function( GLcontext *ctx )
    GLuint i;						\
    GLuint *img = (GLuint *) PIXELADDR4(span.x, span.y);	\
    for (i = 0; i < span.end; i++) {			\
-      const GLdepth z = FixedToDepth(span.z);		\
+      const GLuint z = FixedToDepth(span.z);		\
       if (z < zRow[i]) {				\
          img[i] = pixel;				\
          zRow[i] = z;					\
@@ -762,18 +751,13 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
 {
    OSMesaContext osmesa;
    struct dd_function_table functions;
-   GLint rshift, gshift, bshift, ashift;
    GLint rind, gind, bind, aind;
    GLint indexBits = 0, redBits = 0, greenBits = 0, blueBits = 0, alphaBits =0;
    GLboolean rgbmode;
-   const GLuint i4 = 1;
-   const GLubyte *i1 = (GLubyte *) &i4;
-   const GLint little_endian = *i1;
 
    rind = gind = bind = aind = 0;
    if (format==OSMESA_COLOR_INDEX) {
       indexBits = 8;
-      rshift = gshift = bshift = ashift = 0;
       rgbmode = GL_FALSE;
    }
    else if (format==OSMESA_RGBA) {
@@ -786,18 +770,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       gind = 1;
       bind = 2;
       aind = 3;
-      if (little_endian) {
-         rshift = 0;
-         gshift = 8;
-         bshift = 16;
-         ashift = 24;
-      }
-      else {
-         rshift = 24;
-         gshift = 16;
-         bshift = 8;
-         ashift = 0;
-      }
       rgbmode = GL_TRUE;
    }
    else if (format==OSMESA_BGRA) {
@@ -810,18 +782,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       gind = 1;
       rind = 2;
       aind = 3;
-      if (little_endian) {
-         bshift = 0;
-         gshift = 8;
-         rshift = 16;
-         ashift = 24;
-      }
-      else {
-         bshift = 24;
-         gshift = 16;
-         rshift = 8;
-         ashift = 0;
-      }
       rgbmode = GL_TRUE;
    }
    else if (format==OSMESA_ARGB) {
@@ -834,18 +794,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       rind = 1;
       gind = 2;
       bind = 3;
-      if (little_endian) {
-         ashift = 0;
-         rshift = 8;
-         gshift = 16;
-         bshift = 24;
-      }
-      else {
-         ashift = 24;
-         rshift = 16;
-         gshift = 8;
-         bshift = 0;
-      }
       rgbmode = GL_TRUE;
    }
    else if (format==OSMESA_RGB) {
@@ -854,10 +802,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       greenBits = CHAN_BITS;
       blueBits = CHAN_BITS;
       alphaBits = 0;
-      bshift = 0;
-      gshift = 8;
-      rshift = 16;
-      ashift = 24;
       rind = 0;
       gind = 1;
       bind = 2;
@@ -869,10 +813,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       greenBits = CHAN_BITS;
       blueBits = CHAN_BITS;
       alphaBits = 0;
-      bshift = 0;
-      gshift = 8;
-      rshift = 16;
-      ashift = 24;
       rind = 2;
       gind = 1;
       bind = 0;
@@ -885,10 +825,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       greenBits = 6;
       blueBits = 5;
       alphaBits = 0;
-      rshift = 11;
-      gshift = 5;
-      bshift = 0;
-      ashift = 0;
       rind = 0; /* not used */
       gind = 0;
       bind = 0;
@@ -970,10 +906,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       osmesa->userRowLength = 0;
       osmesa->rowlength = 0;
       osmesa->yup = GL_TRUE;
-      osmesa->rshift = rshift;
-      osmesa->gshift = gshift;
-      osmesa->bshift = bshift;
-      osmesa->ashift = ashift;
       osmesa->rInd = rind;
       osmesa->gInd = gind;
       osmesa->bInd = bind;
@@ -983,7 +915,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       {
 	 GLcontext *ctx = &osmesa->mesa;
          SWcontext *swrast;
-         struct swrast_device_driver *swdd;
          TNLcontext *tnl;
 
 	 if (!_swrast_CreateContext( ctx ) ||
@@ -1001,9 +932,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
          /* use default TCL pipeline */
          tnl = TNL_CONTEXT(ctx);
          tnl->Driver.RunPipeline = _tnl_run_pipeline;
-
-         swdd = _swrast_GetDeviceDriverReference( ctx );
-         swdd->SetBuffer = set_buffer;
 
          /* Extend the software rasterizer with our optimized line and triangle
           * drawing functions.
@@ -1052,7 +980,7 @@ compute_row_addresses( OSMesaContext ctx )
 
    if (ctx->format == OSMESA_COLOR_INDEX) {
       /* CI mode */
-      bytesPerPixel = 1 * sizeof(GLchan);
+      bytesPerPixel = 1 * sizeof(GLubyte);
    }
    else if ((ctx->format == OSMESA_RGB) || (ctx->format == OSMESA_BGR)) {
       /* RGB mode */
@@ -1149,10 +1077,6 @@ OSMesaMakeCurrent( OSMesaContext ctx, void *buffer, GLenum type,
 
    /* this will make ensure we recognize the new buffer size */
    _mesa_resize_framebuffer(&ctx->mesa, ctx->gl_buffer, width, height);
-
-   /* Added by Gerk Huisma: */
-   _tnl_MakeCurrent( &ctx->mesa, ctx->mesa.DrawBuffer,
-                     ctx->mesa.ReadBuffer );
 
    return GL_TRUE;
 }

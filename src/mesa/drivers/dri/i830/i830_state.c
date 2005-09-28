@@ -36,7 +36,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #include "glheader.h"
-#include "buffers.h"
 #include "context.h"
 #include "macros.h"
 #include "enums.h"
@@ -81,8 +80,9 @@ static __inline__ GLuint i830PackColor(GLuint format,
    }
 }
 
-static void i830StencilFunc(GLcontext *ctx, GLenum func, GLint ref,
-			    GLuint mask)
+static void
+i830StencilFuncSeparate(GLcontext *ctx, GLenum face, GLenum func, GLint ref,
+                        GLuint mask)
 {
    i830ContextPtr imesa = I830_CONTEXT(ctx);
    int test = 0;
@@ -134,7 +134,8 @@ static void i830StencilFunc(GLcontext *ctx, GLenum func, GLint ref,
 					    STENCIL_TEST_FUNC(test));
 }
 
-static void i830StencilMask(GLcontext *ctx, GLuint mask)
+static void
+i830StencilMaskSeparate(GLcontext *ctx, GLenum face, GLuint mask)
 {
    i830ContextPtr imesa = I830_CONTEXT(ctx);
 
@@ -149,8 +150,9 @@ static void i830StencilMask(GLcontext *ctx, GLuint mask)
 					STENCIL_WRITE_MASK(mask));
 }
 
-static void i830StencilOp(GLcontext *ctx, GLenum fail, GLenum zfail,
-			  GLenum zpass)
+static void
+i830StencilOpSeparate(GLcontext *ctx, GLenum face, GLenum fail, GLenum zfail,
+                      GLenum zpass)
 {
    i830ContextPtr imesa = I830_CONTEXT(ctx);
    int fop, dfop, dpop;
@@ -825,11 +827,6 @@ static void i830DrawBuffer(GLcontext *ctx, GLenum mode )
       FALLBACK( imesa, I830_FALLBACK_DRAW_BUFFER, GL_TRUE );
       return;
    }
-
-   /* We want to update the s/w rast state too so that i830SetBuffer()
-    * gets called.
-    */
-   _swrast_DrawBuffer(ctx, mode);
 }
 
 static void i830ReadBuffer(GLcontext *ctx, GLenum mode )
@@ -1229,8 +1226,6 @@ static void i830Viewport( GLcontext *ctx,
 			  GLint x, GLint y,
 			  GLsizei width, GLsizei height )
 {
-   /* update size of Mesa/software ancillary buffers */
-   _mesa_ResizeBuffersMESA();
    i830CalcViewport( ctx );
 }
 
@@ -1686,9 +1681,9 @@ void i830DDInitStateFuncs(GLcontext *ctx)
    ctx->Driver.Viewport = i830Viewport;
    ctx->Driver.LightModelfv = i830LightModelfv;
 
-   ctx->Driver.StencilFunc = i830StencilFunc;
-   ctx->Driver.StencilMask = i830StencilMask;
-   ctx->Driver.StencilOp = i830StencilOp;
+   ctx->Driver.StencilFuncSeparate = i830StencilFuncSeparate;
+   ctx->Driver.StencilMaskSeparate = i830StencilMaskSeparate;
+   ctx->Driver.StencilOpSeparate = i830StencilOpSeparate;
 
    /* Pixel path fallbacks.
     */

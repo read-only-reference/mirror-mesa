@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -55,13 +55,7 @@ void GLAPIENTRY
 _mesa_Accum( GLenum op, GLfloat value )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLuint xpos, ypos, width, height;
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
-
-   if (ctx->Visual.accumRedBits == 0 || ctx->DrawBuffer != ctx->ReadBuffer) {
-      _mesa_error(ctx, GL_INVALID_OPERATION, "glAccum");
-      return;
-   }
 
    switch (op) {
    case GL_ADD:
@@ -76,30 +70,34 @@ _mesa_Accum( GLenum op, GLfloat value )
       return;
    }
 
-   if (ctx->NewState)
-      _mesa_update_state( ctx );
-
-   if (ctx->RenderMode != GL_RENDER) {
-      /* no-op */
+   if (ctx->Visual.accumRedBits == 0) {
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glAccum(no accum buffer)");
       return;
    }
 
-   /* Determine region to operate upon. */
-   if (ctx->Scissor.Enabled) {
-      xpos = ctx->Scissor.X;
-      ypos = ctx->Scissor.Y;
-      width = ctx->Scissor.Width;
-      height = ctx->Scissor.Height;
-   }
-   else {
-      /* whole window */
-      xpos = 0;
-      ypos = 0;
-      width = ctx->DrawBuffer->Width;
-      height = ctx->DrawBuffer->Height;
+   if (ctx->DrawBuffer != ctx->ReadBuffer) {
+      /* See GLX_SGI_make_current_read or WGL_ARB_make_current_read */
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "glAccum(different read/draw buffers)");
+      return;
    }
 
-   ctx->Driver.Accum( ctx, op, value, xpos, ypos, width, height );
+   if (ctx->NewState)
+      _mesa_update_state(ctx);
+
+   if (ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
+                  "glAccum(incomplete framebuffer)");
+      return;
+   }
+
+   if (ctx->RenderMode == GL_RENDER) {
+      GLint x = ctx->DrawBuffer->_Xmin;
+      GLint y = ctx->DrawBuffer->_Ymin;
+      GLint width =  ctx->DrawBuffer->_Xmax - ctx->DrawBuffer->_Xmin;
+      GLint height = ctx->DrawBuffer->_Ymax - ctx->DrawBuffer->_Ymin;
+      ctx->Driver.Accum(ctx, op, value, x, y, width, height);
+   }
 }
 
 

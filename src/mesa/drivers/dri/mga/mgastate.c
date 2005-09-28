@@ -28,7 +28,6 @@
 
 
 #include "mtypes.h"
-#include "buffers.h"
 #include "colormac.h"
 #include "dd.h"
 
@@ -513,8 +512,9 @@ static void mgaDDLightModelfv(GLcontext *ctx, GLenum pname,
  */
 
 
-static void mgaDDStencilFunc(GLcontext *ctx, GLenum func, GLint ref,
-			     GLuint mask)
+static void
+mgaDDStencilFuncSeparate(GLcontext *ctx, GLenum face, GLenum func, GLint ref,
+                         GLuint mask)
 {
    mgaContextPtr mmesa = MGA_CONTEXT(ctx);
    GLuint  stencil;
@@ -557,7 +557,8 @@ static void mgaDDStencilFunc(GLcontext *ctx, GLenum func, GLint ref,
    mmesa->hw.stencilctl |= stencilctl;
 }
 
-static void mgaDDStencilMask(GLcontext *ctx, GLuint mask)
+static void
+mgaDDStencilMaskSeparate(GLcontext *ctx, GLenum face, GLuint mask)
 {
    mgaContextPtr mmesa = MGA_CONTEXT(ctx);
 
@@ -566,8 +567,9 @@ static void mgaDDStencilMask(GLcontext *ctx, GLuint mask)
    mmesa->hw.stencil |= MGA_FIELD( S_swtmsk, mask );
 }
 
-static void mgaDDStencilOp(GLcontext *ctx, GLenum fail, GLenum zfail,
-			   GLenum zpass)
+static void
+mgaDDStencilOpSeparate(GLcontext *ctx, GLenum face, GLenum fail, GLenum zfail,
+                       GLenum zpass)
 {
    mgaContextPtr mmesa = MGA_CONTEXT(ctx);
    GLuint  stencilctl;
@@ -696,8 +698,6 @@ static void mgaViewport( GLcontext *ctx,
 			  GLint x, GLint y, 
 			  GLsizei width, GLsizei height )
 {
-   /* update size of Mesa/software ancillary buffers */
-   _mesa_ResizeBuffersMESA();
    mgaCalcViewport( ctx );
 }
 
@@ -845,11 +845,6 @@ static void mgaDDDrawBuffer(GLcontext *ctx, GLenum mode )
       FALLBACK( ctx, MGA_FALLBACK_DRAW_BUFFER, GL_TRUE );
       return;
    }
-
-   /* We want to update the s/w rast state too so that r200SetBuffer()
-    * gets called.
-    */
-   _swrast_DrawBuffer(ctx, mode);
 }
 
 
@@ -1215,9 +1210,9 @@ void mgaDDInitStateFuncs( GLcontext *ctx )
 
    ctx->Driver.PolygonStipple = mgaDDPolygonStipple;
 
-   ctx->Driver.StencilFunc = mgaDDStencilFunc;
-   ctx->Driver.StencilMask = mgaDDStencilMask;
-   ctx->Driver.StencilOp = mgaDDStencilOp;
+   ctx->Driver.StencilFuncSeparate = mgaDDStencilFuncSeparate;
+   ctx->Driver.StencilMaskSeparate = mgaDDStencilMaskSeparate;
+   ctx->Driver.StencilOpSeparate = mgaDDStencilOpSeparate;
 
    ctx->Driver.DepthRange = mgaDepthRange;
    ctx->Driver.Viewport = mgaViewport;

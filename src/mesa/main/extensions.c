@@ -95,6 +95,7 @@ static const struct {
    { OFF, "GL_EXT_fog_coord",                  F(EXT_fog_coord) },
    { OFF, "GL_EXT_histogram",                  F(EXT_histogram) },
    { OFF, "GL_EXT_multi_draw_arrays",          F(EXT_multi_draw_arrays) },
+   { ON,  "GL_EXT_packed_depth_stencil",       F(EXT_packed_depth_stencil) },
    { ON,  "GL_EXT_packed_pixels",              F(EXT_packed_pixels) },
    { OFF, "GL_EXT_paletted_texture",           F(EXT_paletted_texture) },
    { OFF, "GL_EXT_pixel_buffer_object",        F(EXT_pixel_buffer_object) },
@@ -120,6 +121,7 @@ static const struct {
    { OFF, "GL_EXT_texture_mirror_clamp",       F(EXT_texture_mirror_clamp) },
    { ON,  "GL_EXT_texture_object",             F(EXT_texture_object) },
    { OFF, "GL_EXT_texture_rectangle",          F(NV_texture_rectangle) },
+   { OFF, "GL_EXT_timer_query",                F(EXT_timer_query) },
    { ON,  "GL_EXT_vertex_array",               F(EXT_vertex_array) },
    { OFF, "GL_EXT_vertex_array_set",           F(EXT_vertex_array_set) },
    { OFF, "GL_3DFX_texture_compression_FXT1",  F(TDFX_texture_compression_FXT1) },
@@ -231,6 +233,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
 #endif
    ctx->Extensions.EXT_histogram = GL_TRUE;
    ctx->Extensions.EXT_multi_draw_arrays = GL_TRUE;
+   ctx->Extensions.EXT_packed_depth_stencil = GL_TRUE;
    ctx->Extensions.EXT_paletted_texture = GL_TRUE;
 #if FEATURE_EXT_pixel_buffer_object
    ctx->Extensions.EXT_pixel_buffer_object = GL_TRUE;
@@ -375,7 +378,7 @@ _mesa_enable_2_0_extensions(GLcontext *ctx)
 #if 0 && FEATURE_ARB_shading_language_100
    ctx->Extensions.ARB_shading_language_100 = GL_TRUE;
 #endif
-   ctx->Extensions.EXT_stencil_two_side = GL_TRUE;
+   ctx->Extensions.EXT_stencil_two_side = GL_FALSE; /* yes, turn it off */
 #if 0 && FEATURE_ARB_vertex_shader
    ctx->Extensions.ARB_vertex_shader = GL_TRUE;
 #endif

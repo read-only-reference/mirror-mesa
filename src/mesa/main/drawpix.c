@@ -24,13 +24,105 @@
 
 #include "glheader.h"
 #include "imports.h"
-#include "colormac.h"
 #include "context.h"
 #include "drawpix.h"
 #include "feedback.h"
-#include "macros.h"
+#include "image.h"
 #include "state.h"
-#include "mtypes.h"
+
+
+/**
+ * Do error checking of the format/type parameters to glReadPixels and
+ * glDrawPixels.
+ * \param drawing if GL_TRUE do checking for DrawPixels, else do checking
+ *                for ReadPixels.
+ * \return GL_TRUE if error detected, GL_FALSE if no errors
+ */
+static GLboolean
+error_check_format_type(GLcontext *ctx, GLenum format, GLenum type,
+                        GLboolean drawing)
+{
+   const char *readDraw = drawing ? "Draw" : "Read";
+
+   /* basic combinations test */
+   if (!_mesa_is_legal_format_and_type(ctx, format, type)) {
+      _mesa_error(ctx, GL_INVALID_ENUM,
+                  "gl%sPixels(format or type)", readDraw);
+      return GL_TRUE;
+   }
+
+   /* additional checks */
+   switch (format) {
+   case GL_RED:
+   case GL_GREEN:
+   case GL_BLUE:
+   case GL_ALPHA:
+   case GL_LUMINANCE:
+   case GL_LUMINANCE_ALPHA:
+   case GL_RGB:
+   case GL_BGR:
+   case GL_RGBA:
+   case GL_BGRA:
+   case GL_ABGR_EXT:
+      if (drawing && !ctx->Visual.rgbMode) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                   "glDrawPixels(drawing RGB pixels into color index buffer)");
+         return GL_TRUE;
+      }
+      break;
+   case GL_COLOR_INDEX:
+      if (!drawing && ctx->Visual.rgbMode) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                    "glReadPixels(reading color index format from RGB buffer");
+         return GL_TRUE;
+      }
+      break;
+   case GL_STENCIL_INDEX:
+      if (ctx->DrawBuffer->Visual.stencilBits == 0) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "gl%sPixels(no stencil buffer)", readDraw);
+         return GL_TRUE;
+      }
+      break;
+   case GL_DEPTH_COMPONENT:
+      if (ctx->DrawBuffer->Visual.depthBits == 0) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "gl%sPixels(no depth buffer)", readDraw);
+         return GL_TRUE;
+      }
+      break;
+   case GL_DEPTH_STENCIL_EXT:
+      if (!ctx->Extensions.EXT_packed_depth_stencil ||
+          type != GL_UNSIGNED_INT_24_8_EXT) {
+         _mesa_error(ctx, GL_INVALID_ENUM, "gl%sPixels(type)", readDraw);
+         return GL_TRUE;
+      }
+      if (ctx->DrawBuffer->Visual.depthBits == 0 ||
+          ctx->ReadBuffer->Visual.depthBits == 0 ||
+          ctx->DrawBuffer->Visual.stencilBits == 0 ||
+          ctx->ReadBuffer->Visual.stencilBits == 0) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "gl%sPixels(no depth or stencil buffer)", readDraw);
+         return GL_TRUE;
+      }
+      break;
+   default:
+      /* this should have been caught in _mesa_is_legal_format_type() */
+      _mesa_problem(ctx, "unexpected format in _mesa_%sPixels", readDraw);
+      return GL_TRUE;
+   }
+
+   /* XXX might have to move this to the top of the function */
+   if (type == GL_UNSIGNED_INT_24_8_EXT && format != GL_DEPTH_STENCIL_EXT) {
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "gl%sPixels(format is not GL_DEPTH_STENCIL_EXT)", readDraw);
+      return GL_TRUE;
+   }
+
+   /* no errors */
+   return GL_FALSE;
+}
+      
 
 
 #if _HAVE_FULL_GL
@@ -56,39 +148,45 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
       return;
    }
 
-   if (ctx->RenderMode==GL_RENDER) {
-      GLint x, y;
-      if (!ctx->Current.RasterPosValid) {
-	 return;
-      }
+   if (error_check_format_type(ctx, format, type, GL_TRUE)) {
+      /* found an error */
+      return;
+   }
 
-      if (ctx->NewState) {
-         _mesa_update_state(ctx);
-      }
+   if (ctx->NewState) {
+      _mesa_update_state(ctx);
+   }
 
+   if (ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
+                  "glDrawPixels(incomplete framebuffer)" );
+      return;
+   }
+
+   if (!ctx->Current.RasterPosValid) {
+      return;
+   }
+
+   if (ctx->RenderMode == GL_RENDER) {
       /* Round, to satisfy conformance tests (matches SGI's OpenGL) */
-      x = IROUND(ctx->Current.RasterPos[0]);
-      y = IROUND(ctx->Current.RasterPos[1]);
-
+      GLint x = IROUND(ctx->Current.RasterPos[0]);
+      GLint y = IROUND(ctx->Current.RasterPos[1]);
       ctx->Driver.DrawPixels(ctx, x, y, width, height, format, type,
 			     &ctx->Unpack, pixels);
    }
-   else if (ctx->RenderMode==GL_FEEDBACK) {
+   else if (ctx->RenderMode == GL_FEEDBACK) {
       /* Feedback the current raster pos info */
-      if (ctx->Current.RasterPosValid) {
-	 FLUSH_CURRENT( ctx, 0 );
-         FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_DRAW_PIXEL_TOKEN );
-         _mesa_feedback_vertex( ctx,
-				ctx->Current.RasterPos,
-				ctx->Current.RasterColor,
-				ctx->Current.RasterIndex,
-				ctx->Current.RasterTexCoords[0] );
-      }
+      FLUSH_CURRENT( ctx, 0 );
+      FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_DRAW_PIXEL_TOKEN );
+      _mesa_feedback_vertex( ctx,
+                             ctx->Current.RasterPos,
+                             ctx->Current.RasterColor,
+                             ctx->Current.RasterIndex,
+                             ctx->Current.RasterTexCoords[0] );
    }
-   else if (ctx->RenderMode==GL_SELECT) {
-      if (ctx->Current.RasterPosValid) {
-         _mesa_update_hitflag( ctx, ctx->Current.RasterPos[2] );
-      }
+   else {
+      ASSERT(ctx->RenderMode == GL_SELECT);
+      /* Do nothing.  See OpenGL Spec, Appendix B, Corollary 6. */
    }
 }
 
@@ -98,7 +196,6 @@ _mesa_CopyPixels( GLint srcx, GLint srcy, GLsizei width, GLsizei height,
                   GLenum type )
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLint destx, desty;
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (ctx->FragmentProgram.Enabled && !ctx->FragmentProgram._Enabled) {
@@ -108,7 +205,46 @@ _mesa_CopyPixels( GLint srcx, GLint srcy, GLsizei width, GLsizei height,
    }
 
    if (width < 0 || height < 0) {
-      _mesa_error( ctx, GL_INVALID_VALUE, "glCopyPixels(width or height < 0)" );
+      _mesa_error(ctx, GL_INVALID_VALUE, "glCopyPixels(width or height < 0)");
+      return;
+   }
+
+   switch (type) {
+   case GL_COLOR:
+      /* OK */
+      break;
+   case GL_DEPTH:
+      if (ctx->DrawBuffer->Visual.depthBits == 0 ||
+          ctx->ReadBuffer->Visual.depthBits == 0) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glCopyPixels(no depth buffer)");
+         return;
+      }
+      break;
+   case GL_STENCIL:
+      if (ctx->DrawBuffer->Visual.stencilBits == 0 ||
+          ctx->ReadBuffer->Visual.stencilBits == 0) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glCopyPixels(no stencil buffer)");
+         return;
+      }
+      break;
+   case GL_DEPTH_STENCIL_EXT:
+      if (!ctx->Extensions.EXT_packed_depth_stencil) {
+         _mesa_error(ctx, GL_INVALID_ENUM, "glCopyPixels");
+         return;
+      }
+      if (ctx->DrawBuffer->Visual.depthBits == 0 ||
+          ctx->ReadBuffer->Visual.depthBits == 0 ||
+          ctx->DrawBuffer->Visual.stencilBits == 0 ||
+          ctx->ReadBuffer->Visual.stencilBits == 0) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glCopyPixels(no depth or stencil buffer)");
+         return;
+      }
+      break;
+   default:
+      _mesa_error(ctx, GL_INVALID_ENUM, "glCopyPixels");
       return;
    }
 
@@ -116,32 +252,36 @@ _mesa_CopyPixels( GLint srcx, GLint srcy, GLsizei width, GLsizei height,
       _mesa_update_state(ctx);
    }
 
-   if (ctx->RenderMode==GL_RENDER) {
-      /* Destination of copy: */
-      if (!ctx->Current.RasterPosValid) {
-	 return;
-      }
+   if (ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT ||
+       ctx->ReadBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
+                  "glCopyPixels(incomplete framebuffer)" );
+      return;
+   }
 
-      /* Round, to satisfy conformance tests (matches SGI's OpenGL) */
-      destx = IROUND(ctx->Current.RasterPos[0]);
-      desty = IROUND(ctx->Current.RasterPos[1]);
+   if (!ctx->Current.RasterPosValid) {
+      return;
+   }
 
+   if (ctx->RenderMode == GL_RENDER) {
+      /* Round to satisfy conformance tests (matches SGI's OpenGL) */
+      GLint destx = IROUND(ctx->Current.RasterPos[0]);
+      GLint desty = IROUND(ctx->Current.RasterPos[1]);
       ctx->Driver.CopyPixels( ctx, srcx, srcy, width, height, destx, desty,
 			      type );
    }
    else if (ctx->RenderMode == GL_FEEDBACK) {
-      if (ctx->Current.RasterPosValid) {
-         FLUSH_CURRENT( ctx, 0 );
-         FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_COPY_PIXEL_TOKEN );
-         _mesa_feedback_vertex( ctx, 
-                                ctx->Current.RasterPos,
-                                ctx->Current.RasterColor,
-                                ctx->Current.RasterIndex,
-                                ctx->Current.RasterTexCoords[0] );
-      }
+      FLUSH_CURRENT( ctx, 0 );
+      FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_COPY_PIXEL_TOKEN );
+      _mesa_feedback_vertex( ctx, 
+                             ctx->Current.RasterPos,
+                             ctx->Current.RasterColor,
+                             ctx->Current.RasterIndex,
+                             ctx->Current.RasterTexCoords[0] );
    }
-   else if (ctx->RenderMode == GL_SELECT) {
-      _mesa_update_hitflag( ctx, ctx->Current.RasterPos[2] );
+   else {
+      ASSERT(ctx->RenderMode == GL_SELECT);
+      /* Do nothing.  See OpenGL Spec, Appendix B, Corollary 6. */
    }
 }
 
@@ -154,6 +294,7 @@ _mesa_ReadPixels( GLint x, GLint y, GLsizei width, GLsizei height,
 		  GLenum format, GLenum type, GLvoid *pixels )
 {
    GET_CURRENT_CONTEXT(ctx);
+   const struct gl_renderbuffer *rb = ctx->ReadBuffer->_ColorReadBuffer;
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
    if (width < 0 || height < 0) {
@@ -162,8 +303,24 @@ _mesa_ReadPixels( GLint x, GLint y, GLsizei width, GLsizei height,
       return;
    }
 
+   if (error_check_format_type(ctx, format, type, GL_FALSE)) {
+      /* found an error */
+      return;
+   }
+
    if (ctx->NewState)
       _mesa_update_state(ctx);
+
+   if (ctx->ReadBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
+                  "glReadPixels(incomplete framebuffer)" );
+      return;
+   }
+
+   if (!rb) {
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glReadPixels(no readbuffer)");
+      return;
+   }
 
    ctx->Driver.ReadPixels(ctx, x, y, width, height,
 			  format, type, &ctx->Pack, pixels);
@@ -190,36 +347,39 @@ _mesa_Bitmap( GLsizei width, GLsizei height,
       return;
    }
 
-   if (ctx->Current.RasterPosValid == GL_FALSE) {
+   if (!ctx->Current.RasterPosValid) {
       return;    /* do nothing */
    }
 
-   if (ctx->RenderMode==GL_RENDER) {
+   if (ctx->NewState) {
+      _mesa_update_state(ctx);
+   }
+
+   if (ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
+                  "glBitmap(incomplete framebuffer)");
+      return;
+   }
+
+   if (ctx->RenderMode == GL_RENDER) {
       /* Truncate, to satisfy conformance tests (matches SGI's OpenGL). */
       GLint x = IFLOOR(ctx->Current.RasterPos[0] - xorig);
       GLint y = IFLOOR(ctx->Current.RasterPos[1] - yorig);
-
-      if (ctx->NewState) {
-         _mesa_update_state(ctx);
-      }
-
       ctx->Driver.Bitmap( ctx, x, y, width, height, &ctx->Unpack, bitmap );
    }
 #if _HAVE_FULL_GL
-   else if (ctx->RenderMode==GL_FEEDBACK) {
-      if (ctx->Current.RasterPosValid) {
-	 FLUSH_CURRENT(ctx, 0);
-         FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_BITMAP_TOKEN );
-         _mesa_feedback_vertex( ctx,
-				ctx->Current.RasterPos,
-				ctx->Current.RasterColor,
-				ctx->Current.RasterIndex, 
-				ctx->Current.RasterTexCoords[0] );
-      }
+   else if (ctx->RenderMode == GL_FEEDBACK) {
+      FLUSH_CURRENT(ctx, 0);
+      FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_BITMAP_TOKEN );
+      _mesa_feedback_vertex( ctx,
+                             ctx->Current.RasterPos,
+                             ctx->Current.RasterColor,
+                             ctx->Current.RasterIndex, 
+                             ctx->Current.RasterTexCoords[0] );
    }
    else {
       ASSERT(ctx->RenderMode == GL_SELECT);
-      /* Bitmaps don't generate selection hits.  See appendix B of 1.1 spec. */
+      /* Do nothing.  See OpenGL Spec, Appendix B, Corollary 6. */
    }
 #endif
 
@@ -253,40 +413,41 @@ _mesa_DrawDepthPixelsMESA( GLsizei width, GLsizei height,
       return;
    }
 
-   if (ctx->RenderMode==GL_RENDER) {
-      GLint x, y;
-      if (!colors || !depths || !ctx->Current.RasterPosValid) {
-	 return;
-      }
+   if (!ctx->Current.RasterPosValid) {
+      return;
+   }
 
-      if (ctx->NewState) {
-         _mesa_update_state(ctx);
-      }
+   if (ctx->NewState) {
+      _mesa_update_state(ctx);
+   }
 
+   if (ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
+                  "glDrawDepthPixelsMESA(incomplete framebuffer)");
+      return;
+   }
+
+   if (ctx->RenderMode == GL_RENDER) {
       /* Round, to satisfy conformance tests (matches SGI's OpenGL) */
-      x = IROUND(ctx->Current.RasterPos[0]);
-      y = IROUND(ctx->Current.RasterPos[1]);
-
+      GLint x = IROUND(ctx->Current.RasterPos[0]);
+      GLint y = IROUND(ctx->Current.RasterPos[1]);
       ctx->Driver.DrawDepthPixelsMESA(ctx, x, y, width, height,
                                       colorFormat, colorType, colors,
                                       depthType, depths, &ctx->Unpack);
    }
-   else if (ctx->RenderMode==GL_FEEDBACK) {
+   else if (ctx->RenderMode == GL_FEEDBACK) {
       /* Feedback the current raster pos info */
-      if (ctx->Current.RasterPosValid) {
-	 FLUSH_CURRENT( ctx, 0 );
-         FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_DRAW_PIXEL_TOKEN );
-         _mesa_feedback_vertex( ctx,
-				ctx->Current.RasterPos,
-				ctx->Current.RasterColor,
-				ctx->Current.RasterIndex,
-				ctx->Current.RasterTexCoords[0] );
-      }
+      FLUSH_CURRENT( ctx, 0 );
+      FEEDBACK_TOKEN( ctx, (GLfloat) (GLint) GL_DRAW_PIXEL_TOKEN );
+      _mesa_feedback_vertex( ctx,
+                             ctx->Current.RasterPos,
+                             ctx->Current.RasterColor,
+                             ctx->Current.RasterIndex,
+                             ctx->Current.RasterTexCoords[0] );
    }
-   else if (ctx->RenderMode==GL_SELECT) {
-      if (ctx->Current.RasterPosValid) {
-         _mesa_update_hitflag( ctx, ctx->Current.RasterPos[2] );
-      }
+   else {
+      ASSERT(ctx->RenderMode == GL_SELECT);
+      /* Do nothing.  See OpenGL Spec, Appendix B, Corollary 6. */
    }
 }
 

@@ -66,6 +66,7 @@
 #include "vblank.h"
 
 #include "extensions.h"
+#include "drirenderbuffer.h"
 
 #include "GL/internal/dri_interface.h"
 
@@ -370,6 +371,7 @@ static const struct tnl_pipeline_stage *mga_pipeline[] = {
    &_tnl_fog_coordinate_stage,
    &_tnl_texgen_stage, 
    &_tnl_texture_transform_stage, 
+   &_tnl_arb_vertex_program_stage,
    &_tnl_vertex_program_stage,
 
 				/* REMOVE: point attenuation stage */
@@ -735,24 +737,33 @@ mgaCreateBuffer( __DRIscreenPrivate *driScrnPriv,
 
       {
          driRenderbuffer *frontRb
-            = driNewRenderbuffer(GL_RGBA, screen->cpp,
-                                 screen->frontOffset, screen->frontPitch);
+            = driNewRenderbuffer(GL_RGBA,
+                                 NULL,
+                                 screen->cpp,
+                                 screen->frontOffset, screen->frontPitch,
+                                 driDrawPriv);
          mgaSetSpanFunctions(frontRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_FRONT_LEFT, &frontRb->Base);
       }
 
       if (mesaVis->doubleBufferMode) {
          driRenderbuffer *backRb
-            = driNewRenderbuffer(GL_RGBA, screen->cpp,
-                                 screen->backOffset, screen->backPitch);
+            = driNewRenderbuffer(GL_RGBA,
+                                 NULL,
+                                 screen->cpp,
+                                 screen->backOffset, screen->backPitch,
+                                 driDrawPriv);
          mgaSetSpanFunctions(backRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &backRb->Base);
       }
 
       if (mesaVis->depthBits == 16) {
          driRenderbuffer *depthRb
-            = driNewRenderbuffer(GL_DEPTH_COMPONENT16, screen->cpp,
-                                 screen->depthOffset, screen->depthPitch);
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT16,
+                                 NULL,
+                                 screen->cpp,
+                                 screen->depthOffset, screen->depthPitch,
+                                 driDrawPriv);
          mgaSetSpanFunctions(depthRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
       }
@@ -760,31 +771,43 @@ mgaCreateBuffer( __DRIscreenPrivate *driScrnPriv,
          /* XXX is this right? */
          if (mesaVis->stencilBits) {
             driRenderbuffer *depthRb
-               = driNewRenderbuffer(GL_DEPTH_COMPONENT24, screen->cpp,
-                                 screen->depthOffset, screen->depthPitch);
+               = driNewRenderbuffer(GL_DEPTH_COMPONENT24,
+                                    NULL,
+                                    screen->cpp,
+                                    screen->depthOffset, screen->depthPitch,
+                                    driDrawPriv);
             mgaSetSpanFunctions(depthRb, mesaVis);
             _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
          }
          else {
             driRenderbuffer *depthRb
-               = driNewRenderbuffer(GL_DEPTH_COMPONENT32, screen->cpp,
-                                 screen->depthOffset, screen->depthPitch);
+               = driNewRenderbuffer(GL_DEPTH_COMPONENT32,
+                                    NULL,
+                                    screen->cpp,
+                                    screen->depthOffset, screen->depthPitch,
+                                    driDrawPriv);
             mgaSetSpanFunctions(depthRb, mesaVis);
             _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
          }
       }
       else if (mesaVis->depthBits == 32) {
          driRenderbuffer *depthRb
-            = driNewRenderbuffer(GL_DEPTH_COMPONENT32, screen->cpp,
-                                 screen->depthOffset, screen->depthPitch);
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT32,
+                                 NULL,
+                                 screen->cpp,
+                                 screen->depthOffset, screen->depthPitch,
+                                 driDrawPriv);
          mgaSetSpanFunctions(depthRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
       }
 
       if (mesaVis->stencilBits > 0 && !swStencil) {
          driRenderbuffer *stencilRb
-            = driNewRenderbuffer(GL_STENCIL_INDEX8_EXT, screen->cpp,
-                                 screen->depthOffset, screen->depthPitch);
+            = driNewRenderbuffer(GL_STENCIL_INDEX8_EXT,
+                                 NULL,
+                                 screen->cpp,
+                                 screen->depthOffset, screen->depthPitch,
+                                 driDrawPriv);
          mgaSetSpanFunctions(stencilRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_STENCIL, &stencilRb->Base);
       }
@@ -889,6 +912,7 @@ void mgaGetLock( mgaContextPtr mmesa, GLuint flags )
       mmesa->SetupNewInputs |= VERT_BIT_POS;
       mmesa->dirty_cliprects = (MGA_FRONT|MGA_BACK);
       mgaUpdateRects( mmesa, (MGA_FRONT|MGA_BACK) );
+      driUpdateFramebufferSize(mmesa->glCtx, dPriv);
    }
 
    mmesa->dirty |= MGA_UPLOAD_CONTEXT | MGA_UPLOAD_CLIPRECTS;

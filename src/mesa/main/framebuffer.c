@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -103,11 +103,10 @@ _mesa_new_framebuffer(GLcontext *ctx, GLuint name)
    if (fb) {
       fb->Name = name;
       fb->RefCount = 1;
-      fb->Delete = _mesa_destroy_framebuffer;
       fb->ColorDrawBuffer[0] = GL_COLOR_ATTACHMENT0_EXT;
       fb->_ColorDrawBufferMask[0] = BUFFER_BIT_COLOR0;
       fb->ColorReadBuffer = GL_COLOR_ATTACHMENT0_EXT;
-      fb->_ColorReadBufferMask = BUFFER_BIT_COLOR0;
+      fb->_ColorReadBufferIndex = BUFFER_COLOR0;
       fb->Delete = _mesa_destroy_framebuffer;
    }
    return fb;
@@ -115,7 +114,8 @@ _mesa_new_framebuffer(GLcontext *ctx, GLuint name)
 
 
 /**
- * Initialize a gl_framebuffer object.
+ * Initialize a gl_framebuffer object.  Typically used to initialize
+ * window system-created framebuffers, not user-created framebuffers.
  * \sa _mesa_create_framebuffer
  */
 void
@@ -134,114 +134,32 @@ _mesa_initialize_framebuffer(struct gl_framebuffer *fb, const GLvisual *visual)
       fb->ColorDrawBuffer[0] = GL_BACK;
       fb->_ColorDrawBufferMask[0] = BUFFER_BIT_BACK_LEFT;
       fb->ColorReadBuffer = GL_BACK;
-      fb->_ColorReadBufferMask = BUFFER_BIT_BACK_LEFT;
+      fb->_ColorReadBufferIndex = BUFFER_BACK_LEFT;
    }
    else {
       fb->ColorDrawBuffer[0] = GL_FRONT;
       fb->_ColorDrawBufferMask[0] = BUFFER_BIT_FRONT_LEFT;
       fb->ColorReadBuffer = GL_FRONT;
-      fb->_ColorReadBufferMask = BUFFER_BIT_FRONT_LEFT;
+      fb->_ColorReadBufferIndex = BUFFER_FRONT_LEFT;
    }
 
    fb->Delete = _mesa_destroy_framebuffer;
+   fb->_Status = GL_FRAMEBUFFER_COMPLETE_EXT;
 
    compute_depth_max(fb);
 }
 
 
 /**
- * Create/attach software-based renderbuffers to the given framebuffer.
- * This is a helper routine for device drivers.  Drivers can just as well
- * call the individual _mesa_add_*_renderbuffer() routines directly.
- */
-void
-_mesa_add_soft_renderbuffers(struct gl_framebuffer *fb,
-                             GLboolean color,
-                             GLboolean depth,
-                             GLboolean stencil,
-                             GLboolean accum,
-                             GLboolean alpha,
-                             GLboolean aux)
-{
-   GLboolean frontLeft = GL_TRUE;
-   GLboolean backLeft = fb->Visual.doubleBufferMode;
-   GLboolean frontRight = fb->Visual.stereoMode;
-   GLboolean backRight = fb->Visual.stereoMode && fb->Visual.doubleBufferMode;
-
-   if (color) {
-      if (fb->Visual.rgbMode) {
-         assert(fb->Visual.redBits == fb->Visual.greenBits);
-         assert(fb->Visual.redBits == fb->Visual.blueBits);
-         _mesa_add_color_renderbuffers(NULL, fb,
-                                       fb->Visual.redBits,
-                                       fb->Visual.alphaBits,
-                                       frontLeft, backLeft,
-                                       frontRight, backRight);
-      }
-      else {
-         _mesa_add_color_index_renderbuffers(NULL, fb,
-                                             fb->Visual.indexBits,
-                                             frontLeft, backLeft,
-                                             frontRight, backRight);
-      }
-   }
-
-   if (depth) {
-      assert(fb->Visual.depthBits > 0);
-      _mesa_add_depth_renderbuffer(NULL, fb, fb->Visual.depthBits);
-   }
-
-   if (stencil) {
-      assert(fb->Visual.stencilBits > 0);
-      _mesa_add_stencil_renderbuffer(NULL, fb, fb->Visual.stencilBits);
-   }
-
-   if (accum) {
-      assert(fb->Visual.rgbMode);
-      assert(fb->Visual.accumRedBits > 0);
-      assert(fb->Visual.accumGreenBits > 0);
-      assert(fb->Visual.accumBlueBits > 0);
-      _mesa_add_accum_renderbuffer(NULL, fb,
-                                   fb->Visual.accumRedBits,
-                                   fb->Visual.accumGreenBits,
-                                   fb->Visual.accumBlueBits,
-                                   fb->Visual.accumAlphaBits);
-   }
-
-   if (aux) {
-      assert(fb->Visual.rgbMode);
-      assert(fb->Visual.numAuxBuffers > 0);
-      _mesa_add_aux_renderbuffers(NULL, fb, fb->Visual.redBits,
-                                  fb->Visual.numAuxBuffers);
-   }
-
-#if 1
-   if (alpha) {
-      assert(fb->Visual.rgbMode);
-      assert(fb->Visual.alphaBits > 0);
-      _mesa_add_alpha_renderbuffers(NULL, fb, fb->Visual.alphaBits,
-                                    frontLeft, backLeft,
-                                    frontRight, backRight);
-   }
-#endif
-
-#if 0
-   if (multisample) {
-      /* maybe someday */
-   }
-#endif
-}
-
-
-/**
  * Deallocate buffer and everything attached to it.
+ * Typically called via the gl_framebuffer->Delete() method.
  */
 void
-_mesa_destroy_framebuffer(struct gl_framebuffer *buffer)
+_mesa_destroy_framebuffer(struct gl_framebuffer *fb)
 {
-   if (buffer) {
-      _mesa_free_framebuffer_data(buffer);
-      FREE(buffer);
+   if (fb) {
+      _mesa_free_framebuffer_data(fb);
+      FREE(fb);
    }
 }
 
@@ -398,7 +316,7 @@ _mesa_update_draw_buffer_bounds(GLcontext *ctx)
 /**
  * The glGet queries of the framebuffer red/green/blue size, stencil size,
  * etc. are satisfied by the fields of ctx->DrawBuffer->Visual.  These can
- * change depending on the renderbuffer bindings.  This function update's
+ * change depending on the renderbuffer bindings.  This function updates
  * the given framebuffer's Visual from the current renderbuffer bindings.
  * This is only intended for user-created framebuffers.
  */
@@ -412,13 +330,13 @@ _mesa_update_framebuffer_visual(struct gl_framebuffer *fb)
 
    if (fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer) {
       fb->Visual.redBits
-         = fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer->ComponentSizes[0];
+         = fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer->RedBits;
       fb->Visual.greenBits
-         = fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer->ComponentSizes[1];
+         = fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer->GreenBits;
       fb->Visual.blueBits
-         = fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer->ComponentSizes[2];
+         = fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer->BlueBits;
       fb->Visual.alphaBits
-         = fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer->ComponentSizes[3];
+         = fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer->AlphaBits;
       fb->Visual.rgbBits
          = fb->Visual.redBits + fb->Visual.greenBits + fb->Visual.blueBits;
       fb->Visual.floatMode = GL_FALSE;
@@ -427,13 +345,13 @@ _mesa_update_framebuffer_visual(struct gl_framebuffer *fb)
    if (fb->Attachment[BUFFER_DEPTH].Renderbuffer) {
       fb->Visual.haveDepthBuffer = GL_TRUE;
       fb->Visual.depthBits
-         = fb->Attachment[BUFFER_DEPTH].Renderbuffer->ComponentSizes[0];
+         = fb->Attachment[BUFFER_DEPTH].Renderbuffer->DepthBits;
    }
 
    if (fb->Attachment[BUFFER_STENCIL].Renderbuffer) {
       fb->Visual.haveStencilBuffer = GL_TRUE;
       fb->Visual.stencilBits
-         = fb->Attachment[BUFFER_STENCIL].Renderbuffer->ComponentSizes[0];
+         = fb->Attachment[BUFFER_STENCIL].Renderbuffer->StencilBits;
    }
 
    compute_depth_max(fb);
@@ -441,28 +359,9 @@ _mesa_update_framebuffer_visual(struct gl_framebuffer *fb)
 
 
 /**
- * Given a framebuffer and a buffer bit (like BUFFER_BIT_FRONT_LEFT), return
- * the corresponding renderbuffer.
- */
-static struct gl_renderbuffer *
-get_renderbuffer(struct gl_framebuffer *fb, GLuint bufferBit)
-{
-   GLuint index;
-   for (index = 0; index < BUFFER_COUNT; index++) {
-      if ((1 << index) == bufferBit) {
-         return fb->Attachment[index].Renderbuffer;
-      }
-   }
-   _mesa_problem(NULL, "Bad bufferBit in get_renderbuffer");
-   return NULL;
-}
-
-
-/**
  * Update state related to the current draw/read framebuffers.
  * Specifically, update these framebuffer fields:
  *    _ColorDrawBuffers
- *    _ColorDrawBit
  *    _NumColorDrawBuffers
  *    _ColorReadBuffer
  * If the current framebuffer is user-created, make sure it's complete.
@@ -480,22 +379,22 @@ _mesa_update_framebuffer(GLcontext *ctx)
       _mesa_test_framebuffer_completeness(ctx, fb);
 
    /*
-    * Update the list of drawing renderbuffer pointers.
+    * Update the list of color drawing renderbuffer pointers.
     * Later, when we're rendering we'll loop from 0 to _NumColorDrawBuffers
-    * writing colors.  We have a loop because glDrawBuffer(GL_FRONT_AND_BACK)
-    * can specify writing to two or four color buffers.
+    * writing colors.  We need the inner loop here because
+    * glDrawBuffer(GL_FRONT_AND_BACK) can specify writing to two or four
+    * color buffers (for example).
     */
    for (output = 0; output < ctx->Const.MaxDrawBuffers; output++) {
-      GLuint bufferMask = fb->_ColorDrawBufferMask[output];
+      GLbitfield bufferMask = fb->_ColorDrawBufferMask[output];
       GLuint count = 0;
-      GLuint bufferBit;
-      /* for each bit that's set in the bufferMask... */
-      for (bufferBit = 1; bufferMask; bufferBit <<= 1) {
+      GLuint i;
+      for (i = 0; bufferMask && i < BUFFER_COUNT; i++) {
+         const GLuint bufferBit = 1 << i;
          if (bufferBit & bufferMask) {
-            struct gl_renderbuffer *rb = get_renderbuffer(fb, bufferBit);
+            struct gl_renderbuffer *rb = fb->Attachment[i].Renderbuffer;
             if (rb) {
                fb->_ColorDrawBuffers[output][count] = rb;
-               fb->_ColorDrawBit[output][count] = bufferBit;
                count++;
             }
             else {
@@ -508,13 +407,17 @@ _mesa_update_framebuffer(GLcontext *ctx)
    }
 
    /*
-    * Update the read renderbuffer pointer.
+    * Update the color read renderbuffer pointer.
     * Unlike the DrawBuffer, we can only read from one (or zero) color buffers.
     */
-   if (fb->_ColorReadBufferMask == 0x0)
+   if (fb->_ColorReadBufferIndex == -1) {
       fb->_ColorReadBuffer = NULL; /* legal! */
-   else
-      fb->_ColorReadBuffer = get_renderbuffer(fb, fb->_ColorReadBufferMask);
-
+   }
+   else {
+      ASSERT(fb->_ColorReadBufferIndex >= 0);
+      ASSERT(fb->_ColorReadBufferIndex < BUFFER_COUNT);
+      fb->_ColorReadBuffer
+         = fb->Attachment[fb->_ColorReadBufferIndex].Renderbuffer;
+   }
    compute_depth_max(fb);
 }

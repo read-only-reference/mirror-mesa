@@ -234,10 +234,6 @@
  */
 #define TRIANGLE_WALK_DOUBLE 0
 
-/**
- * Bits per accumulation buffer color component:  8, 16 or 32
- */
-#define ACCUM_BITS 16
 
 /**
  * Bits per depth buffer value.  
@@ -315,10 +311,6 @@
  * Used in array_cache and tnl modules.
  */
 #define MAX_CLIPPED_VERTICES ((2 * (6 + MAX_CLIP_PLANES))+1)
-
-
-/* XXX everything marked with OLD_RENDERBUFFER will be going away... */
-#define OLD_RENDERBUFFER 1
 
 
 #endif /* CONFIG_H */

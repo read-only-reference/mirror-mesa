@@ -203,7 +203,8 @@ radeonFillInModes( unsigned pixel_bits, unsigned depth_bits,
 
 /* Create the device specific screen private data struct.
  */
-radeonScreenPtr radeonCreateScreen( __DRIscreenPrivate *sPriv )
+static radeonScreenPtr
+radeonCreateScreen( __DRIscreenPrivate *sPriv )
 {
    radeonScreenPtr screen;
    RADEONDRIPtr dri_priv = (RADEONDRIPtr)sPriv->pDevPriv;
@@ -412,7 +413,8 @@ radeonScreenPtr radeonCreateScreen( __DRIscreenPrivate *sPriv )
 
 /* Destroy the device specific screen private data struct.
  */
-void radeonDestroyScreen( __DRIscreenPrivate *sPriv )
+static void
+radeonDestroyScreen( __DRIscreenPrivate *sPriv )
 {
    radeonScreenPtr screen = (radeonScreenPtr)sPriv->private;
 
@@ -472,53 +474,67 @@ radeonCreateBuffer( __DRIscreenPrivate *driScrnPriv,
       const GLboolean swAccum = mesaVis->accumRedBits > 0;
       const GLboolean swStencil = mesaVis->stencilBits > 0 &&
          mesaVis->depthBits != 24;
-#if 0
-      driDrawPriv->driverPrivate = (void *)
-         _mesa_create_framebuffer( mesaVis,
-                                   swDepth,
-                                   swStencil,
-                                   swAccum,
-                                   swAlpha );
-#else
       struct gl_framebuffer *fb = _mesa_create_framebuffer(mesaVis);
 
+      /* front color renderbuffer */
       {
          driRenderbuffer *frontRb
-            = driNewRenderbuffer(GL_RGBA, screen->cpp,
-                                 screen->frontOffset, screen->frontPitch);
+            = driNewRenderbuffer(GL_RGBA,
+                                 driScrnPriv->pFB + screen->frontOffset,
+                                 screen->cpp,
+                                 screen->frontOffset, screen->frontPitch,
+                                 driDrawPriv);
          radeonSetSpanFunctions(frontRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_FRONT_LEFT, &frontRb->Base);
       }
 
+      /* back color renderbuffer */
       if (mesaVis->doubleBufferMode) {
          driRenderbuffer *backRb
-            = driNewRenderbuffer(GL_RGBA, screen->cpp,
-                                 screen->backOffset, screen->backPitch);
+            = driNewRenderbuffer(GL_RGBA,
+                                 driScrnPriv->pFB + screen->backOffset,
+                                 screen->cpp,
+                                 screen->backOffset, screen->backPitch,
+                                 driDrawPriv);
          radeonSetSpanFunctions(backRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &backRb->Base);
       }
 
+      /* depth renderbuffer */
       if (mesaVis->depthBits == 16) {
          driRenderbuffer *depthRb
-            = driNewRenderbuffer(GL_DEPTH_COMPONENT16, screen->cpp,
-                                 screen->depthOffset, screen->depthPitch);
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT16,
+                                 driScrnPriv->pFB + screen->depthOffset,
+                                 screen->cpp,
+                                 screen->depthOffset, screen->depthPitch,
+                                 driDrawPriv);
          radeonSetSpanFunctions(depthRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+	 depthRb->depthHasSurface = screen->depthHasSurface;
       }
       else if (mesaVis->depthBits == 24) {
          driRenderbuffer *depthRb
-            = driNewRenderbuffer(GL_DEPTH_COMPONENT24, screen->cpp,
-                                 screen->depthOffset, screen->depthPitch);
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT24,
+                                 driScrnPriv->pFB + screen->depthOffset,
+                                 screen->cpp,
+                                 screen->depthOffset, screen->depthPitch,
+                                 driDrawPriv);
          radeonSetSpanFunctions(depthRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+	 depthRb->depthHasSurface = screen->depthHasSurface;
       }
 
+      /* stencil renderbuffer */
       if (mesaVis->stencilBits > 0 && !swStencil) {
          driRenderbuffer *stencilRb
-            = driNewRenderbuffer(GL_STENCIL_INDEX8_EXT, screen->cpp,
-                                 screen->depthOffset, screen->depthPitch);
+            = driNewRenderbuffer(GL_STENCIL_INDEX8_EXT,
+                                 driScrnPriv->pFB + screen->depthOffset,
+                                 screen->cpp,
+                                 screen->depthOffset, screen->depthPitch,
+                                 driDrawPriv);
          radeonSetSpanFunctions(stencilRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_STENCIL, &stencilRb->Base);
+	 stencilRb->depthHasSurface = screen->depthHasSurface;
       }
 
       _mesa_add_soft_renderbuffers(fb,
@@ -529,7 +545,7 @@ radeonCreateBuffer( __DRIscreenPrivate *driScrnPriv,
                                    swAlpha,
                                    GL_FALSE /* aux */);
       driDrawPriv->driverPrivate = (void *) fb;
-#endif
+
       return (driDrawPriv->driverPrivate != NULL);
    }
 }
@@ -569,8 +585,9 @@ static struct __DriverAPIRec radeonAPI = {
  * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on 
  *         failure.
  */
-PUBLIC
-void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
+PUBLIC void *
+__driCreateNewScreen_20050727( __DRInativeDisplay *dpy,
+                             int scrn, __DRIscreen *psc,
 			     const __GLcontextModes * modes,
 			     const __DRIversion * ddx_version,
 			     const __DRIversion * dri_version,
@@ -580,7 +597,6 @@ void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIsc
 			     int internal_api_version,
 			     const __DRIinterfaceMethods * interface,
 			     __GLcontextModes ** driver_modes )
-
 {
    __DRIscreenPrivate *psp;
    static const __DRIutilversion2 ddx_expected = { 4, 5, 0, 0 };
@@ -607,11 +623,13 @@ void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIsc
 					 (dri_priv->bpp == 16) ? 0  : 8,
 					 (dri_priv->backOffset != dri_priv->depthOffset) );
 
-      /* Calling driInitExtensions here, with a NULL context pointer, does not actually
-       * enable the extensions.  It just makes sure that all the dispatch offsets for all
-       * the extensions that *might* be enables are known.  This is needed because the
-       * dispatch offsets need to be known when _mesa_context_create is called, but we can't
-       * enable the extensions until we have a context pointer.
+      /* Calling driInitExtensions here, with a NULL context pointer,
+       * does not actually enable the extensions.  It just makes sure
+       * that all the dispatch offsets for all the extensions that
+       * *might* be enables are known.  This is needed because the
+       * dispatch offsets need to be known when _mesa_context_create
+       * is called, but we can't enable the extensions until we have a
+       * context pointer.
        *
        * Hello chicken.  Hello egg.  How are you two today?
        */

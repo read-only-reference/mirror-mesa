@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -105,8 +105,8 @@ get_buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
    unsigned int winwidth, winheight;
 #ifdef XFree86Server
    /* XFree86 GLX renderer */
-   winwidth = MIN2(xmBuffer->frontxrb->pixmap->width, MAX_WIDTH);
-   winheight = MIN2(xmBuffer->frontxrb->pixmap->height, MAX_HEIGHT);
+   winwidth = MIN2(xmBuffer->frontxrb->drawable->width, MAX_WIDTH);
+   winheight = MIN2(xmBuffer->frontxrb->drawable->height, MAX_HEIGHT);
 #else
    Window root;
    int winx, winy;
@@ -114,8 +114,8 @@ get_buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
 
    _glthread_LOCK_MUTEX(_xmesa_lock);
    XSync(xmBuffer->xm_visual->display, 0); /* added for Chromium */
-   XGetGeometry( xmBuffer->xm_visual->display, xmBuffer->frontxrb->pixmap, &root,
-		 &winx, &winy, &winwidth, &winheight, &bw, &d );
+   XGetGeometry( xmBuffer->xm_visual->display, xmBuffer->frontxrb->pixmap,
+                 &root, &winx, &winy, &winwidth, &winheight, &bw, &d );
    _glthread_UNLOCK_MUTEX(_xmesa_lock);
 #endif
 
@@ -610,9 +610,7 @@ xmesa_DrawPixels_8R8G8B( GLcontext *ctx,
       int dstY = y;
       int w = width;
       int h = height;
-      int srcX = unpack->SkipPixels;
-      int srcY = unpack->SkipRows;
-      int rowLength = unpack->RowLength ? unpack->RowLength : width;
+      struct gl_pixelstore_attrib clippedUnpack = *unpack;
 
       if (unpack->BufferObj->Name) {
          /* unpack from PBO */
@@ -636,11 +634,14 @@ xmesa_DrawPixels_8R8G8B( GLcontext *ctx,
          pixels = ADD_POINTERS(buf, pixels);
       }
 
-      if (_mesa_clip_drawpixels(ctx, &dstX, &dstY, &w, &h, &srcX, &srcY)) {
+      if (_mesa_clip_drawpixels(ctx, &dstX, &dstY, &w, &h, &clippedUnpack)) {
          /* This is a little tricky since all coordinates up to now have
           * been in the OpenGL bottom-to-top orientation.  X is top-to-bottom
           * so we have to carefully compute the Y coordinates/addresses here.
           */
+         int srcX = clippedUnpack.SkipPixels;
+         int srcY = clippedUnpack.SkipRows;
+         int rowLength = clippedUnpack.RowLength;
          XMesaImage ximage;
          MEMSET(&ximage, 0, sizeof(XMesaImage));
          ximage.width = width;
@@ -715,9 +716,7 @@ xmesa_DrawPixels_5R6G5B( GLcontext *ctx,
       int dstY = y;
       int w = width;
       int h = height;
-      int srcX = unpack->SkipPixels;
-      int srcY = unpack->SkipRows;
-      int rowLength = unpack->RowLength ? unpack->RowLength : width;
+      struct gl_pixelstore_attrib clippedUnpack = *unpack;
 
       if (unpack->BufferObj->Name) {
          /* unpack from PBO */
@@ -741,11 +740,14 @@ xmesa_DrawPixels_5R6G5B( GLcontext *ctx,
          pixels = ADD_POINTERS(buf, pixels);
       }
 
-      if (_mesa_clip_drawpixels(ctx, &dstX, &dstY, &w, &h, &srcX, &srcY)) {
+      if (_mesa_clip_drawpixels(ctx, &dstX, &dstY, &w, &h, &clippedUnpack)) {
          /* This is a little tricky since all coordinates up to now have
           * been in the OpenGL bottom-to-top orientation.  X is top-to-bottom
           * so we have to carefully compute the Y coordinates/addresses here.
           */
+         int srcX = clippedUnpack.SkipPixels;
+         int srcY = clippedUnpack.SkipRows;
+         int rowLength = clippedUnpack.RowLength;
          XMesaImage ximage;
          MEMSET(&ximage, 0, sizeof(XMesaImage));
          ximage.width = width;
@@ -1095,6 +1097,34 @@ choose_tex_format( GLcontext *ctx, GLint internalFormat,
 
 
 /**
+ * Get the current drawing (and reading) window's size and update the
+ * corresponding gl_framebuffer(s) if needed.
+ */
+static void
+update_framebuffer_size(GLcontext *ctx)
+{
+   struct gl_framebuffer *fb = ctx->WinSysDrawBuffer;
+   GLuint newWidth, newHeight;
+   get_buffer_size(fb, &newWidth, &newHeight);
+   if (newWidth != fb->Width || newHeight != fb->Height) {
+      xmesa_resize_buffers(ctx, fb, newWidth, newHeight);
+      ctx->NewState |= _NEW_BUFFERS;  /* to update scissor / window bounds */
+   }
+
+   if (ctx->WinSysReadBuffer != ctx->WinSysDrawBuffer) {
+      /* Update readbuffer's size */
+      struct gl_framebuffer *fb = ctx->WinSysReadBuffer;
+      GLuint newWidth, newHeight;
+      get_buffer_size(fb, &newWidth, &newHeight);
+      if (newWidth != fb->Width || newHeight != fb->Height) {
+         xmesa_resize_buffers(ctx, fb, newWidth, newHeight);
+         ctx->NewState |= _NEW_BUFFERS;
+      }
+   }
+}
+
+
+/**
  * Called by glViewport.
  * This is a good time for us to poll the current X window size and adjust
  * our renderbuffers to match the current window size.
@@ -1107,27 +1137,83 @@ choose_tex_format( GLcontext *ctx, GLint internalFormat,
 static void
 xmesa_viewport(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
 {
-#if 1
-   struct gl_framebuffer *fb = ctx->WinSysDrawBuffer;
-   GLuint newWidth, newHeight;
-
-   /*
-   printf("%s before %d x %d\n", __FUNCTION__, fb->Width, fb->Height);
-   */
-
-   get_buffer_size(fb, &newWidth, &newHeight);
-   if (newWidth != fb->Width || newHeight != fb->Height) {
-      xmesa_resize_buffers(ctx, fb, newWidth, newHeight);
-      ctx->NewState |= _NEW_BUFFERS;  /* to update scissor / window bounds */
-   }
-   /*
-   printf("%s after %d x %d\n", __FUNCTION__, fb->Width, fb->Height);
-   */
-#else
-   /* This also works: */
-   _mesa_ResizeBuffersMESA();
-#endif
+   update_framebuffer_size(ctx);
 }
+
+
+#if ENABLE_EXT_timer_query
+
+/*
+ * The GL_EXT_timer_query extension is not enabled for the XServer
+ * indirect renderer.  Not sure about how/if wrapping of gettimeofday()
+ * is done, etc.
+ */
+
+struct xmesa_query_object
+{
+   struct gl_query_object Base;
+   struct timeval StartTime;
+};
+
+
+static struct gl_query_object *
+xmesa_new_query_object(GLcontext *ctx, GLuint id)
+{
+   struct xmesa_query_object *q = CALLOC_STRUCT(xmesa_query_object);
+   if (q) {
+      q->Base.Id = id;
+      q->Base.Ready = GL_TRUE;
+   }
+   return &q->Base;
+}
+
+
+static void
+xmesa_begin_query(GLcontext *ctx, GLenum target, struct gl_query_object *q)
+{
+   if (target == GL_TIME_ELAPSED_EXT) {
+      struct xmesa_query_object *xq = (struct xmesa_query_object *) q;
+      (void) gettimeofday(&xq->StartTime, NULL);
+   }
+}
+
+
+/**
+ * Return the difference between the two given times in microseconds.
+ */
+#ifdef __VMS
+#define suseconds_t unsigned int
+#endif
+static unsigned int
+time_diff(const struct timeval *t0, const struct timeval *t1)
+{
+   time_t seconds0 = t0->tv_sec & 0xff;  /* 0 .. 255 seconds */
+   time_t seconds1 = t1->tv_sec & 0xff;  /* 0 .. 255 seconds */
+   suseconds_t useconds0 = seconds0 * 1000000 + t0->tv_usec;
+   suseconds_t useconds1 = seconds1 * 1000000 + t1->tv_usec;
+   return useconds1 - useconds0;
+}
+
+
+static void
+xmesa_end_query(GLcontext *ctx, GLenum target, struct gl_query_object *q)
+{
+   if (target == GL_TIME_ELAPSED_EXT) {
+      struct xmesa_query_object *xq = (struct xmesa_query_object *) q;
+      struct timeval endTime;
+      unsigned int dt;
+      (void) gettimeofday(&endTime, NULL);
+      dt = time_diff(&xq->StartTime, &endTime);
+      /* clamp if we'd overflow a 32-bit unsigned int */
+      if (dt >= 0xffffffffU / 1000U)
+         q->Result = 0xffffffffU;
+      else
+         q->Result = dt * 1000; /* result is in nanoseconds! */
+   }
+   q->Ready = GL_TRUE;
+}
+
+#endif /* ENABLE_timer_query */
 
 
 /**
@@ -1162,10 +1248,16 @@ xmesa_init_driver_functions( XMesaVisual xmvisual,
    }
 #endif
    driver->TestProxyTexImage = test_proxy_teximage;
-#if SWTC
+#if ENABLE_EXT_texure_compression_s3tc
    driver->ChooseTextureFormat = choose_tex_format;
 #else
    (void) choose_tex_format;
+#endif
+
+#if ENABLE_EXT_timer_query
+   driver->NewQueryObject = xmesa_new_query_object;
+   driver->BeginQuery = xmesa_begin_query;
+   driver->EndQuery = xmesa_end_query;
 #endif
 }
 

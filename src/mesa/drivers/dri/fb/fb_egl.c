@@ -37,8 +37,6 @@
 
 extern void
 fbSetSpanFunctions(driRenderbuffer *drb, const GLvisual *vis);
-extern void 
-fbSetBuffer( GLcontext *ctx, GLframebuffer *colorBuffer, GLuint bufferBit);
 
 /**
  * fb driver-specific driver class derived from _EGLDriver
@@ -85,7 +83,14 @@ typedef struct fb_context
 {
    _EGLContext Base;  /* base class/object */
    GLcontext *glCtx;
-} fbContext;
+   struct {
+      __DRIcontextPrivate *context;	
+      __DRIscreenPrivate *screen;	
+      __DRIdrawablePrivate *drawable; /* drawable bound to this ctx */
+   } dri;
+} fbContext, *fbContextPtr;
+
+#define FB_CONTEXT(ctx)		((fbContextPtr)(ctx->DriverCtx))
 
 
 static EGLBoolean
@@ -401,9 +406,21 @@ get_buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
 
 
 static void
+updateFramebufferSize(GLcontext *ctx)
+{
+   fbContextPtr fbmesa = FB_CONTEXT(ctx);
+   struct gl_framebuffer *fb = ctx->WinSysDrawBuffer;
+   if (fbmesa->dri.drawable->w != fb->Width ||
+       fbmesa->dri.drawable->h != fb->Height) {
+      driUpdateFramebufferSize(ctx, fbmesa->dri.drawable);
+   }
+}
+
+static void
 viewport(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
 {
-   _mesa_ResizeBuffersMESA();
+   /* XXX this should be called after we acquire the DRI lock, not here */
+   updateFramebufferSize(ctx);
 }
 
 
@@ -480,15 +497,6 @@ fbCreateContext(_EGLDriver *drv, EGLDisplay dpy, EGLConfig config, EGLContext sh
    _swsetup_CreateContext( ctx );
    _swsetup_Wakeup( ctx );
 
-
-   /* swrast init -- need to verify these tests - I just plucked the
-    * numbers out of the air.  (KW)
-    */
-   {
-      struct swrast_device_driver *swdd;
-      swdd = _swrast_GetDeviceDriverReference( ctx );
-      swdd->SetBuffer = fbSetBuffer;
-   }
 
    /* use default TCL pipeline */
    {
@@ -693,20 +701,21 @@ fbCreateScreenSurfaceMESA(_EGLDriver *drv, EGLDisplay dpy, EGLConfig cfg,
 
    /* front color renderbuffer */
    {
-      driRenderbuffer *drb = driNewRenderbuffer(GL_RGBA, bytesPerPixel,
-                                                origin, stride);
+      driRenderbuffer *drb = driNewRenderbuffer(GL_RGBA, display->pFB,
+                                                bytesPerPixel,
+                                                origin, stride, NULL);
       fbSetSpanFunctions(drb, &vis);
-      drb->Base.Data = display->pFB;
       _mesa_add_renderbuffer(surface->mesa_framebuffer,
                              BUFFER_FRONT_LEFT, &drb->Base);
    }
 
    /* back color renderbuffer */
    if (vis.doubleBufferMode) {
-      driRenderbuffer *drb = driNewRenderbuffer(GL_RGBA, bytesPerPixel,
-                                                origin, stride);
+      GLubyte *backBuf = _mesa_malloc(stride * height);
+      driRenderbuffer *drb = driNewRenderbuffer(GL_RGBA, backBuf,
+                                                bytesPerPixel,
+                                                origin, stride, NULL);
       fbSetSpanFunctions(drb, &vis);
-      drb->Base.Data =  _mesa_malloc(stride * height);
       _mesa_add_renderbuffer(surface->mesa_framebuffer,
                              BUFFER_BACK_LEFT, &drb->Base);
    }

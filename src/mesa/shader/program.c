@@ -40,6 +40,7 @@
 #include "nvfragprog.h"
 #include "nvvertparse.h"
 #include "nvvertprog.h"
+#include "atifragshader.h"
 
 
 /**********************************************************************/
@@ -324,8 +325,13 @@ _mesa_delete_program(GLcontext *ctx, struct program *prog)
    }
    else if (prog->Target == GL_FRAGMENT_SHADER_ATI) {
       struct ati_fragment_shader *atifs = (struct ati_fragment_shader *)prog;
-      if (atifs->Instructions)
-	 _mesa_free(atifs->Instructions);
+      GLuint i;
+      for (i = 0; i < MAX_NUM_PASSES_ATI; i++) {
+	 if (atifs->Instructions[i])
+	    _mesa_free(atifs->Instructions[i]);
+	 if (atifs->SetupInst[i])
+	    _mesa_free(atifs->SetupInst[i]);
+      }
    }
 
    _mesa_free(prog);
@@ -1298,7 +1304,7 @@ _mesa_GetProgramRegisterfvMESA(GLenum target,
             for (i = 0; i < ctx->Const.MaxVertexProgramAttribs; i++) {
                const char *name = _mesa_nv_vertex_input_register_name(i);
                char number[10];
-               sprintf(number, "%d", i);
+               _mesa_sprintf(number, "%d", i);
                if (_mesa_strncmp(reg + 2, name, 4) == 0 ||
                    _mesa_strncmp(reg + 2, number, _mesa_strlen(number)) == 0) {
                   COPY_4V(v, ctx->VertexProgram.Inputs[i]);

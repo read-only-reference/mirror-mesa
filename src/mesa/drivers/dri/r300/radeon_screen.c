@@ -74,6 +74,7 @@ DRI_CONF_BEGIN
 		DRI_CONF_TEXTURE_DEPTH(DRI_CONF_TEXTURE_DEPTH_FB)
 		DRI_CONF_DEF_MAX_ANISOTROPY(1.0, "1.0,2.0,4.0,8.0,16.0")
 		DRI_CONF_NO_NEG_LOD_BIAS(false)
+		DRI_CONF_FORCE_S3TC_ENABLE(false)
 		DRI_CONF_COLOR_REDUCTION(DRI_CONF_COLOR_REDUCTION_DITHER)
 		DRI_CONF_ROUND_MODE(DRI_CONF_ROUND_TRUNC)
 		DRI_CONF_DITHER_MODE(DRI_CONF_DITHER_XERRORDIFF)
@@ -86,7 +87,7 @@ DRI_CONF_BEGIN
 		DRI_CONF_NV_VERTEX_PROGRAM(false)
 	DRI_CONF_SECTION_END
 DRI_CONF_END;
-static const GLuint __driR200NConfigOptions = 13;
+static const GLuint __driR200NConfigOptions = 14;
 
 /* TODO: integrate these into xmlpool.h! */
 #define DRI_CONF_MAX_TEXTURE_IMAGE_UNITS(def,min,max) \
@@ -122,6 +123,7 @@ DRI_CONF_BEGIN
 		DRI_CONF_TEXTURE_DEPTH(DRI_CONF_TEXTURE_DEPTH_FB)
 		DRI_CONF_DEF_MAX_ANISOTROPY(1.0, "1.0,2.0,4.0,8.0,16.0")
 		DRI_CONF_NO_NEG_LOD_BIAS(false)
+                DRI_CONF_FORCE_S3TC_ENABLE(false)
 		DRI_CONF_COLOR_REDUCTION(DRI_CONF_COLOR_REDUCTION_DITHER)
 		DRI_CONF_ROUND_MODE(DRI_CONF_ROUND_TRUNC)
 		DRI_CONF_DITHER_MODE(DRI_CONF_DITHER_XERRORDIFF)
@@ -130,7 +132,7 @@ DRI_CONF_BEGIN
 		DRI_CONF_NO_RAST(false)
 	DRI_CONF_SECTION_END
 DRI_CONF_END;
-static const GLuint __driR300NConfigOptions = 13;
+static const GLuint __driR300NConfigOptions = 14;
 
 extern const struct dri_extension card_extensions[];
 
@@ -215,6 +217,7 @@ static const struct dri_debug_control debug_control[] = {
 #define PCI_CHIP_R350_NH                0x4E48
 #define PCI_CHIP_R420_JI		0x4A49
 #define PCI_CHIP_R420_JK                0x4a4b
+#define PCI_CHIP_RV370_5460		0x5460
 #endif
 
 
@@ -391,6 +394,7 @@ static radeonScreenPtr radeonCreateScreen(__DRIscreenPrivate * sPriv)
 	case PCI_CHIP_RV350_NT:
 	case PCI_CHIP_RV350_NQ:
 /*	case PCI_CHIP_RV350_NQ:  -- Should we have the second head in here too? */
+	case PCI_CHIP_RV370_5460:
 		screen->chipset = RADEON_CHIP_RV350;
 		break;
 
@@ -665,46 +669,59 @@ radeonCreateBuffer(__DRIscreenPrivate * driScrnPriv,
 		const GLboolean swAccum = mesaVis->accumRedBits > 0;
 		const GLboolean swStencil = mesaVis->stencilBits > 0 &&
 		    mesaVis->depthBits != 24;
-#if 0
-		driDrawPriv->driverPrivate = (void *)
-		    _mesa_create_framebuffer(mesaVis,
-					     swDepth,
-					     swStencil, swAccum, swAlpha);
-#else
+
 		struct gl_framebuffer *fb = _mesa_create_framebuffer(mesaVis);
 		{
 			driRenderbuffer *frontRb
-				= driNewRenderbuffer(GL_RGBA, screen->cpp,
-					screen->frontOffset, screen->frontPitch);
+				= driNewRenderbuffer(GL_RGBA, NULL,
+						     screen->cpp,
+						     screen->frontOffset,
+						     screen->frontPitch,
+						     driDrawPriv);
 			radeonSetSpanFunctions(frontRb, mesaVis);
 			_mesa_add_renderbuffer(fb, BUFFER_FRONT_LEFT, &frontRb->Base);
 		}
 		if (mesaVis->doubleBufferMode) {
 			driRenderbuffer *backRb
-				= driNewRenderbuffer(GL_RGBA, screen->cpp,
-					screen->backOffset, screen->backPitch);
+				= driNewRenderbuffer(GL_RGBA, NULL,
+						     screen->cpp,
+						     screen->backOffset,
+						     screen->backPitch,
+						     driDrawPriv);
 			radeonSetSpanFunctions(backRb, mesaVis);
 			_mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &backRb->Base);
 		}
 		if (mesaVis->depthBits == 16) {
 			driRenderbuffer *depthRb
-				= driNewRenderbuffer(GL_DEPTH_COMPONENT16, screen->cpp,
-					screen->depthOffset, screen->depthPitch);
+				= driNewRenderbuffer(GL_DEPTH_COMPONENT16,
+						     NULL,
+						     screen->cpp,
+						     screen->depthOffset,
+						     screen->depthPitch,
+						     driDrawPriv);
 			radeonSetSpanFunctions(depthRb, mesaVis);
 			_mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
 		}
 		else if (mesaVis->depthBits == 24) {
 			driRenderbuffer *depthRb
-				= driNewRenderbuffer(GL_DEPTH_COMPONENT24, screen->cpp,
-			screen->depthOffset, screen->depthPitch);
+				= driNewRenderbuffer(GL_DEPTH_COMPONENT24,
+						     NULL,
+						     screen->cpp,
+						     screen->depthOffset,
+						     screen->depthPitch,
+						     driDrawPriv);
 			radeonSetSpanFunctions(depthRb, mesaVis);
 			_mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
 		}
   	 
 		if (mesaVis->stencilBits > 0 && !swStencil) {
 			driRenderbuffer *stencilRb
-				= driNewRenderbuffer(GL_STENCIL_INDEX8_EXT, screen->cpp,
-					screen->depthOffset, screen->depthPitch);
+				= driNewRenderbuffer(GL_STENCIL_INDEX8_EXT,
+						     NULL,
+						     screen->cpp,
+						     screen->depthOffset,
+						     screen->depthPitch,
+						     driDrawPriv);
 			radeonSetSpanFunctions(stencilRb, mesaVis);
 			_mesa_add_renderbuffer(fb, BUFFER_STENCIL, &stencilRb->Base);
 		}
@@ -717,7 +734,7 @@ radeonCreateBuffer(__DRIscreenPrivate * driScrnPriv,
 					swAlpha,
 					GL_FALSE /* aux */);
 		driDrawPriv->driverPrivate = (void *) fb;	
-#endif
+
 		return (driDrawPriv->driverPrivate != NULL);
 	}
 }
@@ -746,6 +763,7 @@ static GLboolean radeonCreateContext(const __GLcontextModes * glVisual,
 	else
 		return r200CreateContext(glVisual, driContextPriv, sharedContextPriv);
 #endif
+        return GL_FALSE;
 }
 
 

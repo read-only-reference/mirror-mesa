@@ -49,9 +49,10 @@
 #define LOCAL_VARS							\
    __DRIdrawablePrivate *dPriv = fxMesa->driDrawable;			\
    tdfxScreenPrivate *fxPriv = fxMesa->fxScreen;			\
-   GLuint pitch = (fxMesa->glCtx->Color.DrawBuffer[0] == GL_FRONT)         \
-               ? (fxMesa->screen_width * BYTESPERPIXEL) :               \
-               (info.strideInBytes);                                    \
+   GLboolean isFront = (ctx->DrawBuffer->_ColorDrawBufferMask[0]	\
+                      == BUFFER_BIT_FRONT_LEFT);			\
+   GLuint pitch = isFront ? (fxMesa->screen_width * BYTESPERPIXEL)	\
+                          : info.strideInBytes;				\
    GLuint height = fxMesa->height;					\
    char *buf = (char *)((char *)info.lfbPtr +				\
 			 dPriv->x * fxPriv->cpp +			\
@@ -1334,25 +1335,6 @@ static void tdfxSpanRenderFinish( GLcontext *ctx )
    UNLOCK_HARDWARE(fxMesa);
 }
 
-/* Set the buffer used for reading */
-static void tdfxDDSetBuffer( GLcontext *ctx,
-                             GLframebuffer *buffer, GLuint bufferBit )
-{
-   tdfxContextPtr fxMesa = TDFX_CONTEXT(ctx);
-   (void) buffer;
-
-   switch ( bufferBit ) {
-   case BUFFER_BIT_FRONT_LEFT:
-      fxMesa->DrawBuffer = fxMesa->ReadBuffer = GR_BUFFER_FRONTBUFFER;
-      break;
-   case BUFFER_BIT_BACK_LEFT:
-      fxMesa->DrawBuffer = fxMesa->ReadBuffer = GR_BUFFER_BACKBUFFER;
-      break;
-   default:
-      break;
-   }
-}
-
 /**********************************************************************/
 /*                    Initialize swrast device driver                 */
 /**********************************************************************/
@@ -1360,7 +1342,6 @@ static void tdfxDDSetBuffer( GLcontext *ctx,
 void tdfxDDInitSpanFuncs( GLcontext *ctx )
 {
    struct swrast_device_driver *swdd = _swrast_GetDeviceDriverReference( ctx );
-   swdd->SetBuffer = tdfxDDSetBuffer;
    swdd->SpanRenderStart          = tdfxSpanRenderStart;
    swdd->SpanRenderFinish         = tdfxSpanRenderFinish; 
 }
@@ -1375,33 +1356,15 @@ tdfxSetSpanFunctions(driRenderbuffer *drb, const GLvisual *vis)
 {
    if (drb->Base.InternalFormat == GL_RGBA) {
       if (vis->redBits == 5 && vis->greenBits == 6 && vis->blueBits == 5) {
-         drb->Base.GetRow        = tdfxReadRGBASpan_RGB565;
-         drb->Base.GetValues     = tdfxReadRGBAPixels_RGB565;
-         drb->Base.PutRow        = tdfxWriteRGBASpan_RGB565;
-         drb->Base.PutRowRGB     = tdfxWriteRGBSpan_RGB565;
-         drb->Base.PutMonoRow    = tdfxWriteMonoRGBASpan_RGB565;
-         drb->Base.PutValues     = tdfxWriteRGBAPixels_RGB565;
-         drb->Base.PutMonoValues = tdfxWriteMonoRGBAPixels_RGB565;
+         tdfxInitPointers_RGB565(&drb->Base);
       }
       else if (vis->redBits == 8 && vis->greenBits == 8
                && vis->blueBits == 8 && vis->alphaBits == 0) {
-         drb->Base.GetRow        = tdfxReadRGBASpan_RGB888;
-         drb->Base.GetValues     = tdfxReadRGBAPixels_RGB888;
-         drb->Base.PutRow        = tdfxWriteRGBASpan_RGB888;
-         drb->Base.PutRowRGB     = tdfxWriteRGBSpan_RGB888;
-         drb->Base.PutMonoRow    = tdfxWriteMonoRGBASpan_RGB888;
-         drb->Base.PutValues     = tdfxWriteRGBAPixels_RGB888;
-         drb->Base.PutMonoValues = tdfxWriteMonoRGBAPixels_RGB888;
+         tdfxInitPointers_RGB888(&drb->Base);
       }
       else if (vis->redBits == 8 && vis->greenBits == 8
                && vis->blueBits == 8 && vis->alphaBits == 8) {
-         drb->Base.GetRow        = tdfxReadRGBASpan_ARGB8888;
-         drb->Base.GetValues     = tdfxReadRGBAPixels_ARGB8888;
-         drb->Base.PutRow        = tdfxWriteRGBASpan_ARGB8888;
-         drb->Base.PutRowRGB     = tdfxWriteRGBSpan_ARGB8888;
-         drb->Base.PutMonoRow    = tdfxWriteMonoRGBASpan_ARGB8888;
-         drb->Base.PutValues     = tdfxWriteRGBAPixels_ARGB8888;
-         drb->Base.PutMonoValues = tdfxWriteMonoRGBAPixels_ARGB8888;
+         tdfxInitPointers_ARGB8888(&drb->Base);
       }
       else {
          _mesa_problem(NULL, "problem in tdfxSetSpanFunctions");

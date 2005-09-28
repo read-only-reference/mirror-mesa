@@ -32,13 +32,15 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  * Authors:
  *   Keith Whitwell <keith@tungstengraphics.com>
  */
-#include <string.h>
  
 #include "r200_context.h"
 #include "r200_lock.h"
 #include "r200_tex.h"
 #include "r200_state.h"
 #include "r200_ioctl.h"
+
+#include "drirenderbuffer.h"
+
 
 #if DEBUG_LOCKING
 char *prevLockFile = NULL;
@@ -50,24 +52,9 @@ int prevLockLine = 0;
 static void
 r200UpdatePageFlipping( r200ContextPtr rmesa )
 {
-   int use_back;
    rmesa->doPageFlip = rmesa->sarea->pfState;
-
-   use_back = (rmesa->glCtx->DrawBuffer->_ColorDrawBufferMask[0] == BUFFER_BIT_BACK_LEFT);
-   use_back ^= (rmesa->sarea->pfCurrentPage == 1);
-   
-   if (use_back) {
-	 rmesa->state.color.drawOffset = rmesa->r200Screen->backOffset;
-	 rmesa->state.color.drawPitch  = rmesa->r200Screen->backPitch;
-   } else {
-	 rmesa->state.color.drawOffset = rmesa->r200Screen->frontOffset;
-	 rmesa->state.color.drawPitch  = rmesa->r200Screen->frontPitch;
-   }
-
-   R200_STATECHANGE( rmesa, ctx );
-   rmesa->hw.ctx.cmd[CTX_RB3D_COLOROFFSET] = rmesa->state.color.drawOffset
-					   + rmesa->r200Screen->fbLocation;
-   rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH]  = rmesa->state.color.drawPitch;
+   driFlipRenderbuffers(rmesa->glCtx->WinSysDrawBuffer,
+                        rmesa->sarea->pfCurrentPage);
 }
 
 
@@ -106,6 +93,7 @@ void r200GetLock( r200ContextPtr rmesa, GLuint flags )
       else
          r200SetCliprects( rmesa, GL_FRONT_LEFT );
       r200UpdateViewportOffset( rmesa->glCtx );
+      driUpdateFramebufferSize(rmesa->glCtx, dPriv);
       rmesa->lastStamp = dPriv->lastStamp;
    }
 

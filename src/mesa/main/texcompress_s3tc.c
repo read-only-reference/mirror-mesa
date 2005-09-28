@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.1
+ * Version:  6.5
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -69,10 +69,14 @@ dxtFetchTexelFuncExt fetch_ext_rgba_dxt1 = NULL;
 dxtFetchTexelFuncExt fetch_ext_rgba_dxt3 = NULL;
 dxtFetchTexelFuncExt fetch_ext_rgba_dxt5 = NULL;
 
-typedef void (*dxtCompressTexFuncExt)(GLint srccomps, GLint width, GLint height, const GLubyte *srcPixData, GLenum destformat, GLubyte *dest, GLint dstRowStride);
-dxtCompressTexFuncExt ext_tx_compress_dxtn = NULL;
+typedef void (*dxtCompressTexFuncExt)(GLint srccomps, GLint width,
+                                      GLint height, const GLchan *srcPixData,
+                                      GLenum destformat, GLubyte *dest,
+                                      GLint dstRowStride);
+static dxtCompressTexFuncExt ext_tx_compress_dxtn = NULL;
 
-void *dxtlibhandle = NULL;
+static void *dxtlibhandle = NULL;
+
 
 void
 _mesa_init_texture_s3tc( GLcontext *ctx )
@@ -478,6 +482,7 @@ const struct gl_texture_format _mesa_texformat_rgb_dxt1 = {
    0,					/* IntensityBits */
    0,					/* IndexBits */
    0,					/* DepthBits */
+   0,					/* StencilBits */
    0,					/* TexelBytes */
    texstore_rgb_dxt1,			/* StoreTexImageFunc */
    NULL, /*impossible*/ 		/* FetchTexel1D */
@@ -500,6 +505,7 @@ const struct gl_texture_format _mesa_texformat_rgba_dxt1 = {
    0,					/* IntensityBits */
    0,					/* IndexBits */
    0,					/* DepthBits */
+   0,					/* StencilBits */
    0,					/* TexelBytes */
    texstore_rgba_dxt1,			/* StoreTexImageFunc */
    NULL, /*impossible*/ 		/* FetchTexel1D */
@@ -522,6 +528,7 @@ const struct gl_texture_format _mesa_texformat_rgba_dxt3 = {
    0,					/* IntensityBits */
    0,					/* IndexBits */
    0,					/* DepthBits */
+   0,					/* StencilBits */
    0,					/* TexelBytes */
    texstore_rgba_dxt3,			/* StoreTexImageFunc */
    NULL, /*impossible*/ 		/* FetchTexel1D */
@@ -544,6 +551,7 @@ const struct gl_texture_format _mesa_texformat_rgba_dxt5 = {
    0,					/* IntensityBits */
    0,					/* IndexBits */
    0,					/* DepthBits */
+   0,					/* StencilBits */
    0,					/* TexelBytes */
    texstore_rgba_dxt5,			/* StoreTexImageFunc */
    NULL, /*impossible*/ 		/* FetchTexel1D */

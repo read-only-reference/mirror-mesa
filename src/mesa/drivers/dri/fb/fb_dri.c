@@ -114,9 +114,21 @@ get_buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
 
 
 static void
+updateFramebufferSize(GLcontext *ctx)
+{
+   fbContextPtr fbmesa = FB_CONTEXT(ctx);
+   struct gl_framebuffer *fb = ctx->WinSysDrawBuffer;
+   if (fbmesa->dri.drawable->w != fb->Width ||
+       fbmesa->dri.drawable->h != fb->Height) {
+      driUpdateFramebufferSize(ctx, fbmesa->dri.drawable);
+   }
+}
+
+static void
 viewport(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
 {
-   _mesa_ResizeBuffersMESA();
+   /* XXX this should be called after we acquire the DRI lock, not here */
+   updateFramebufferSize(ctx);
 }
 
 
@@ -313,12 +325,6 @@ fbDestroyScreen( __DRIscreenPrivate *sPriv )
 {
 }
 
-void fbSetBuffer( GLcontext *ctx,
-                             GLframebuffer *colorBuffer,
-                             GLuint bufferBit )
-{
-    /* NOP until SetBuffer is fully removed */
-}
 
 /* Create the device specific context.
  */
@@ -365,15 +371,6 @@ fbCreateContext( const __GLcontextModes *glVisual,
    _swsetup_CreateContext( ctx );
    _swsetup_Wakeup( ctx );
 
-
-   /* swrast init -- need to verify these tests - I just plucked the
-    * numbers out of the air.  (KW)
-    */
-   {
-      struct swrast_device_driver *swdd;
-      swdd = _swrast_GetDeviceDriverReference( ctx );
-      swdd->SetBuffer = fbSetBuffer;
-   }
 
    /* use default TCL pipeline */
    {
@@ -441,21 +438,27 @@ fbCreateBuffer( __DRIscreenPrivate *driScrnPriv,
 
       /* XXX double-check these parameters (bpp vs cpp, etc) */
       {
-         driRenderbuffer *drb = driNewRenderbuffer(GL_RGBA, driScrnPriv->fbBPP / 8,
-               driScrnPriv->fbOrigin,
-               driScrnPriv->fbStride);
+         driRenderbuffer *drb = driNewRenderbuffer(GL_RGBA,
+                                                   driScrnPriv->pFB,
+                                                   driScrnPriv->fbBPP / 8,
+                                                   driScrnPriv->fbOrigin,
+                                                   driScrnPriv->fbStride,
+                                                   driDrawPriv);
          fbSetSpanFunctions(drb, mesaVis);
-         drb->Base.Data = driScrnPriv->pFB;
          _mesa_add_renderbuffer(mesa_framebuffer,
                                 BUFFER_FRONT_LEFT, &drb->Base);
       }
       if (mesaVis->doubleBufferMode) {
          /* XXX what are the correct origin/stride values? */
-         driRenderbuffer *drb = driNewRenderbuffer(GL_RGBA, driScrnPriv->fbBPP /8,
-               driScrnPriv->fbOrigin,
-               driScrnPriv->fbStride);
+         GLvoid *backBuf = _mesa_malloc(driScrnPriv->fbStride
+                                        * driScrnPriv->fbHeight);
+         driRenderbuffer *drb = driNewRenderbuffer(GL_RGBA,
+                                                   backBuf,
+                                                   driScrnPriv->fbBPP /8,
+                                                   driScrnPriv->fbOrigin,
+                                                   driScrnPriv->fbStride,
+                                                   driDrawPriv);
          fbSetSpanFunctions(drb, mesaVis);
-         drb->Base.Data =  _mesa_malloc(driScrnPriv->fbStride * driScrnPriv->fbHeight);
          _mesa_add_renderbuffer(mesa_framebuffer,
                                 BUFFER_BACK_LEFT, &drb->Base);
       }
@@ -465,7 +468,7 @@ fbCreateBuffer( __DRIscreenPrivate *driScrnPriv,
                                    swDepth,
                                    swStencil,
                                    swAccum,
-                                   0,
+                                   swAlpha, /* or always zero? */
                                    GL_FALSE /* aux */);
       
       driDrawPriv->driverPrivate = mesa_framebuffer;
@@ -607,7 +610,8 @@ __driInitFBDev( struct DRIDriverContextRec *ctx )
       return 0;
    }
    fprintf(stderr, "[drm] added %d byte SAREA at 0x%08lx\n",
-           ctx->shared.SAREASize, ctx->shared.hSAREA);
+           ctx->shared.SAREASize,
+           (unsigned long) ctx->shared.hSAREA);
 
    if (drmMap( ctx->drmFD,
        ctx->shared.hSAREA,
@@ -619,7 +623,8 @@ __driInitFBDev( struct DRIDriverContextRec *ctx )
    }
    memset(ctx->pSAREA, 0, ctx->shared.SAREASize);
    fprintf(stderr, "[drm] mapped SAREA 0x%08lx to %p, size %d\n",
-           ctx->shared.hSAREA, ctx->pSAREA, ctx->shared.SAREASize);
+           (unsigned long) ctx->shared.hSAREA, ctx->pSAREA,
+           ctx->shared.SAREASize);
    
    /* Need to AddMap the framebuffer and mmio regions here:
    */
@@ -639,7 +644,7 @@ __driInitFBDev( struct DRIDriverContextRec *ctx )
    }
 
    fprintf(stderr, "[drm] framebuffer handle = 0x%08lx\n",
-           ctx->shared.hFrameBuffer);
+           (unsigned long) ctx->shared.hFrameBuffer);
 
    return 1;
 }

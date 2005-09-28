@@ -6,7 +6,7 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -121,6 +121,7 @@
 #include "texstate.h"
 #include "mtypes.h"
 #include "varray.h"
+#include "version.h"
 #include "vtxfmt.h"
 #if _HAVE_FULL_GL
 #include "math/m_translate.h"
@@ -526,18 +527,10 @@ _mesa_initialize_visual( GLvisual *vis,
    if (stencilBits < 0 || stencilBits > STENCIL_BITS) {
       return GL_FALSE;
    }
-   if (accumRedBits < 0 || accumRedBits > ACCUM_BITS) {
-      return GL_FALSE;
-   }
-   if (accumGreenBits < 0 || accumGreenBits > ACCUM_BITS) {
-      return GL_FALSE;
-   }
-   if (accumBlueBits < 0 || accumBlueBits > ACCUM_BITS) {
-      return GL_FALSE;
-   }
-   if (accumAlphaBits < 0 || accumAlphaBits > ACCUM_BITS) {
-      return GL_FALSE;
-   }
+   assert(accumRedBits >= 0);
+   assert(accumGreenBits >= 0);
+   assert(accumBlueBits >= 0);
+   assert(accumAlphaBits >= 0);
 
    vis->rgbMode          = rgbFlag;
    vis->doubleBufferMode = dbFlag;
@@ -652,7 +645,8 @@ one_time_init( GLcontext *ctx )
       }
 
 #if defined(DEBUG) && defined(__DATE__) && defined(__TIME__)
-      _mesa_debug(ctx, "Mesa DEBUG build %s %s\n", __DATE__, __TIME__);
+      _mesa_debug(ctx, "Mesa %s DEBUG build %s %s\n",
+                  MESA_VERSION_STRING, __DATE__, __TIME__);
 #endif
 
       alreadyCalled = GL_TRUE;
@@ -1047,11 +1041,11 @@ init_attrib_groups( GLcontext *ctx )
    _mesa_init_lighting( ctx );
    _mesa_init_matrix( ctx );
    _mesa_init_multisample( ctx );
-   _mesa_init_occlude( ctx );
    _mesa_init_pixel( ctx );
    _mesa_init_point( ctx );
    _mesa_init_polygon( ctx );
    _mesa_init_program( ctx );
+   _mesa_init_query( ctx );
    _mesa_init_rastpos( ctx );
    _mesa_init_scissor( ctx );
    _mesa_init_shaderobjects (ctx);
@@ -1223,6 +1217,8 @@ _mesa_initialize_context( GLcontext *ctx,
    ctx->_MaintainTexEnvProgram = (_mesa_getenv("MESA_TEX_PROG") != NULL);
    ctx->_MaintainTnlProgram = (_mesa_getenv("MESA_TNL_PROG") != NULL);
 
+   ctx->FirstTimeCurrent = GL_TRUE;
+
    return GL_TRUE;
 }
 
@@ -1290,7 +1286,7 @@ _mesa_free_context_data( GLcontext *ctx )
    _mesa_free_viewport_data( ctx );
    _mesa_free_colortables_data( ctx );
    _mesa_free_program_data(ctx);
-   _mesa_free_occlude_data(ctx);
+   _mesa_free_query_data(ctx);
 
 #if FEATURE_ARB_vertex_buffer_object
    _mesa_delete_buffer_object(ctx, ctx->Array.NullBufferObj);
@@ -1496,23 +1492,36 @@ check_compatible(const GLcontext *ctx, const GLframebuffer *buffer)
 
 
 /**
- * Bind the given context to the given draw-buffer and read-buffer and
- * make it the current context for this thread.
+ * Do one-time initialization for the given framebuffer.  Specifically,
+ * ask the driver for the window's current size and update the framebuffer
+ * object to match.
+ * Really, the device driver should totally take care of this.
+ */
+static void
+initialize_framebuffer_size(GLcontext *ctx, GLframebuffer *fb)
+{
+   GLuint width, height;
+   ASSERT(ctx->Driver.GetBufferSize);
+   ctx->Driver.GetBufferSize(fb, &width, &height);
+   if (ctx->Driver.ResizeBuffers)
+      ctx->Driver.ResizeBuffers(ctx, fb, width, height);
+   fb->Initialized = GL_TRUE;
+}
+
+
+/**
+ * Bind the given context to the given drawBuffer and readBuffer and
+ * make it the current context for the calling thread.
+ * We'll render into the drawBuffer and read pixels from the
+ * readBuffer (i.e. glRead/CopyPixels, glCopyTexImage, etc).
  *
- * \param newCtx new GL context. If NULL then there will be no current GL
- * context.
- * \param drawBuffer draw framebuffer.
- * \param readBuffer read framebuffer.
- * 
- * Check that the context's and framebuffer's visuals are compatible, returning
- * immediately otherwise. Sets the glapi current context via
- * _glapi_set_context(). If \p newCtx is not NULL, associates \p drawBuffer and
- * \p readBuffer with it and calls dd_function_table::ResizeBuffers if the buffers size has changed. 
- * Calls dd_function_table::MakeCurrent callback if defined.
+ * We check that the context's and framebuffer's visuals are compatible
+ * and return immediately if they're not.
  *
- * When a context is bound by the first time and the \c MESA_INFO environment
- * variable is set it calls print_info() as an aid for remote user
- * troubleshooting.
+ * \param newCtx  the new GL context. If NULL then there will be no current GL
+ *                context.
+ * \param drawBuffer  the drawing framebuffer
+ * \param readBuffer  the reading framebuffer
  */
 void
 _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
@@ -1566,43 +1575,20 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
 
 #if _HAVE_FULL_GL
          if (!drawBuffer->Initialized) {
-            /* get initial window size */
-            GLuint bufWidth, bufHeight;
-            /* ask device driver for size of the buffer */
-            (*newCtx->Driver.GetBufferSize)(drawBuffer, &bufWidth, &bufHeight);
-            /* set initial buffer size */
-            if (newCtx->Driver.ResizeBuffers)
-               newCtx->Driver.ResizeBuffers(newCtx, drawBuffer,
-                                            bufWidth, bufHeight);
-            drawBuffer->Initialized = GL_TRUE;
+            initialize_framebuffer_size(newCtx, drawBuffer);
          }
-
          if (readBuffer != drawBuffer && !readBuffer->Initialized) {
-            /* get initial window size */
-            GLuint bufWidth, bufHeight;
-            /* ask device driver for size of the buffer */
-            (*newCtx->Driver.GetBufferSize)(readBuffer, &bufWidth, &bufHeight);
-            /* set initial buffer size */
-            if (newCtx->Driver.ResizeBuffers)
-               newCtx->Driver.ResizeBuffers(newCtx, readBuffer,
-                                            bufWidth, bufHeight);
-            readBuffer->Initialized = GL_TRUE;
+            initialize_framebuffer_size(newCtx, readBuffer);
          }
 #endif
          if (newCtx->FirstTimeCurrent) {
             /* set initial viewport and scissor size now */
-            _mesa_set_viewport(newCtx, 0, 0, drawBuffer->Width, drawBuffer->Height);
+            _mesa_set_viewport(newCtx, 0, 0,
+                               drawBuffer->Width, drawBuffer->Height);
             newCtx->Scissor.Width = drawBuffer->Width;
             newCtx->Scissor.Height = drawBuffer->Height;
          }
       }
-
-      /* Alert the driver - usually passed on to the sw t&l module,
-       * but also used to detect threaded cases in the radeon codegen
-       * hw t&l module.
-       */
-      if (newCtx->Driver.MakeCurrent)
-	 newCtx->Driver.MakeCurrent( newCtx, drawBuffer, readBuffer );
 
       /* We can use this to help debug user's problems.  Tell them to set
        * the MESA_INFO env variable before running their app.  Then the

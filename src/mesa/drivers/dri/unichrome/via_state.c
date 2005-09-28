@@ -25,7 +25,6 @@
 #include <stdio.h>
 
 #include "glheader.h"
-#include "buffers.h"
 #include "context.h"
 #include "macros.h"
 #include "colormac.h"
@@ -659,12 +658,12 @@ static void viaDrawBuffer(GLcontext *ctx, GLenum mode)
    switch ( ctx->DrawBuffer->_ColorDrawBufferMask[0] ) {
    case BUFFER_BIT_FRONT_LEFT:
       VIA_FLUSH_DMA(vmesa);
-      vmesa->drawBuffer = vmesa->readBuffer = &vmesa->front;
+      vmesa->drawBuffer = &vmesa->front;
       FALLBACK(vmesa, VIA_FALLBACK_DRAW_BUFFER, GL_FALSE);
       break;
    case BUFFER_BIT_BACK_LEFT:
       VIA_FLUSH_DMA(vmesa);
-      vmesa->drawBuffer = vmesa->readBuffer = &vmesa->back;
+      vmesa->drawBuffer = &vmesa->back;
       FALLBACK(vmesa, VIA_FALLBACK_DRAW_BUFFER, GL_FALSE);
       break;
    default:
@@ -674,11 +673,6 @@ static void viaDrawBuffer(GLcontext *ctx, GLenum mode)
 
 
    viaXMesaWindowMoved(vmesa);
-
-   /* We want to update the s/w rast state too so that viaSetBuffer()
-    * gets called.
-    */
-   _swrast_DrawBuffer(ctx, mode);
 }
 
 static void viaClearColor(GLcontext *ctx, const GLfloat color[4])
@@ -743,8 +737,6 @@ static void viaViewport(GLcontext *ctx,
                         GLint x, GLint y,
                         GLsizei width, GLsizei height)
 {
-   /* update size of Mesa/software ancillary buffers */
-   _mesa_ResizeBuffersMESA();
     viaCalcViewport(ctx);
 }
 

@@ -35,12 +35,10 @@
 #include "colormac.h"
 #include "context.h"
 #include "nvfragprog.h"
-#include "macros.h"
 #include "program.h"
 
 #include "s_nvfragprog.h"
 #include "s_span.h"
-#include "s_texture.h"
 
 
 /* if 1, print some debugging info */
@@ -57,7 +55,7 @@ fetch_texel( GLcontext *ctx, const GLfloat texcoord[4], GLfloat lambda,
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
 
    /* XXX use a float-valued TextureSample routine here!!! */
-   swrast->TextureSample[unit](ctx, unit, ctx->Texture.Unit[unit]._Current,
+   swrast->TextureSample[unit](ctx, ctx->Texture.Unit[unit]._Current,
                                1, (const GLfloat (*)[4]) texcoord,
                                &lambda, &rgba);
    color[0] = CHAN_TO_FLOAT(rgba[0]);
@@ -90,7 +88,7 @@ fetch_texel_deriv( GLcontext *ctx, const GLfloat texcoord[4],
                                          texcoord[0], texcoord[1], texcoord[3],
                                          1.0F / texcoord[3]);
 
-   swrast->TextureSample[unit](ctx, unit, ctx->Texture.Unit[unit]._Current,
+   swrast->TextureSample[unit](ctx, ctx->Texture.Unit[unit]._Current,
                                1, (const GLfloat (*)[4]) texcoord,
                                &lambda, &rgba);
    color[0] = CHAN_TO_FLOAT(rgba[0]);
@@ -823,7 +821,7 @@ execute_program( GLcontext *ctx,
                result[0] = 1.0F;
                result[1] = a[0];
                /* XXX we could probably just use pow() here */
-               result[2] = (a[0] > 0.0F) ? (GLfloat) exp(a[3] * log(a[1])) : 0.0F;
+               result[2] = (a[0] > 0.0F) ? EXPF(a[3] * LOGF(a[1])) : 0.0F;
                result[3] = 1.0F;
                store_vector4( inst, machine, result );
             }
@@ -1036,8 +1034,8 @@ execute_program( GLcontext *ctx,
             {
                GLfloat a[4], result[4];
                fetch_vector1( ctx, &inst->SrcReg[0], machine, program, a );
-               result[0] = (GLfloat)cos(a[0]);
-               result[1] = (GLfloat)sin(a[0]);
+               result[0] = (GLfloat)_mesa_cos(a[0]);
+               result[1] = (GLfloat)_mesa_sin(a[0]);
                result[2] = 0.0;  /* undefined! */
                result[3] = 0.0;  /* undefined! */
                store_vector4( inst, machine, result );

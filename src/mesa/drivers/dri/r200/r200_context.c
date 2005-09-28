@@ -67,6 +67,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define need_GL_ARB_texture_compression
 #define need_GL_ARB_vertex_buffer_object
 #define need_GL_ARB_vertex_program
+#define need_GL_ATI_fragment_shader
 #define need_GL_EXT_blend_minmax
 #define need_GL_EXT_fog_coord
 #define need_GL_EXT_secondary_color
@@ -75,7 +76,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define need_GL_NV_vertex_program
 #include "extension_helper.h"
 
-#define DRIVER_DATE	"20041207"
+#define DRIVER_DATE	"20050831"
 
 #include "vblank.h"
 #include "utils.h"
@@ -177,6 +178,10 @@ const struct dri_extension NV_vp_extension[] = {
     { "GL_NV_vertex_program",              GL_NV_vertex_program_functions }
 };
 
+const struct dri_extension ATI_fs_extension[] = {
+    { "GL_ATI_fragment_shader",            GL_ATI_fragment_shader_functions }
+};
+
 extern const struct tnl_pipeline_stage _r200_render_stage;
 extern const struct tnl_pipeline_stage _r200_tcl_stage;
 
@@ -194,6 +199,7 @@ static const struct tnl_pipeline_stage *r200_pipeline[] = {
    &_tnl_fog_coordinate_stage,
    &_tnl_texgen_stage,
    &_tnl_texture_transform_stage,
+   &_tnl_arb_vertex_program_stage,
    &_tnl_vertex_program_stage,
 
    /* Try again to go to tcl? 
@@ -465,6 +471,8 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    if(driQueryOptionb(&rmesa->optionCache, "nv_vertex_program"))
       driInitSingleExtension( ctx, NV_vp_extension );
 
+   if ((ctx->Const.MaxTextureUnits == 6) && rmesa->r200Screen->drmSupportsFragShader)
+      driInitSingleExtension( ctx, ATI_fs_extension );
 #if 0
    r200InitDriverFuncs( ctx );
    r200InitIoctlFuncs( ctx );

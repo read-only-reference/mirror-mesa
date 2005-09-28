@@ -37,15 +37,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "imports.h"
 #include "api_arrayelt.h"
 #include "enums.h"
-#include "colormac.h"
+#include "light.h"
 #include "state.h"
-#include "buffers.h"
 #include "context.h"
 
 #include "array_cache/acache.h"
 #include "tnl/tnl.h"
 #include "tnl/t_pipeline.h"
-#include "main/light.h"
 #include "swrast_setup/swrast_setup.h"
 
 #include "radeon_context.h"
@@ -55,6 +53,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "radeon_tex.h"
 #include "radeon_swtcl.h"
 #include "radeon_vtxfmt.h"
+#include "drirenderbuffer.h"
 
 /* =============================================================
  * Alpha blending
@@ -1272,8 +1271,9 @@ static void radeonUpdateClipPlanes( GLcontext *ctx )
  * Stencil
  */
 
-static void radeonStencilFunc( GLcontext *ctx, GLenum func,
-			       GLint ref, GLuint mask )
+static void
+radeonStencilFuncSeparate( GLcontext *ctx, GLenum face, GLenum func,
+                           GLint ref, GLuint mask )
 {
    radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
    GLuint refmask = ((ctx->Stencil.Ref[0] << RADEON_STENCIL_REF_SHIFT) |
@@ -1316,7 +1316,8 @@ static void radeonStencilFunc( GLcontext *ctx, GLenum func,
    rmesa->hw.msk.cmd[MSK_RB3D_STENCILREFMASK] |= refmask;
 }
 
-static void radeonStencilMask( GLcontext *ctx, GLuint mask )
+static void
+radeonStencilMaskSeparate( GLcontext *ctx, GLenum face, GLuint mask )
 {
    radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
 
@@ -1326,8 +1327,8 @@ static void radeonStencilMask( GLcontext *ctx, GLuint mask )
       (ctx->Stencil.WriteMask[0] << RADEON_STENCIL_WRITEMASK_SHIFT);
 }
 
-static void radeonStencilOp( GLcontext *ctx, GLenum fail,
-			     GLenum zfail, GLenum zpass )
+static void radeonStencilOpSeparate( GLcontext *ctx, GLenum face, GLenum fail,
+                                     GLenum zfail, GLenum zpass )
 {
    radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
 
@@ -1467,6 +1468,11 @@ static void radeonClearStencil( GLcontext *ctx, GLint s )
 #define SUBPIXEL_X 0.125
 #define SUBPIXEL_Y 0.125
 
+
+/**
+ * Called when window size or position changes or viewport or depth range
+ * state is changed.  We update the hardware viewport state here.
+ */
 void radeonUpdateWindow( GLcontext *ctx )
 {
    radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
@@ -1493,12 +1499,9 @@ void radeonUpdateWindow( GLcontext *ctx )
 }
 
 
-
 static void radeonViewport( GLcontext *ctx, GLint x, GLint y,
 			    GLsizei width, GLsizei height )
 {
-   /* update size of Mesa/software ancillary buffers */
-   _mesa_ResizeBuffersMESA();
    /* Don't pipeline viewport changes, conflict with window offset
     * setting below.  Could apply deltas to rescue pipelined viewport
     * values, or keep the originals hanging around.
@@ -1616,16 +1619,15 @@ static void radeonLogicOpCode( GLcontext *ctx, GLenum opcode )
 }
 
 
-void radeonSetCliprects( radeonContextPtr rmesa, GLenum mode )
+/**
+ * Set up the cliprects for either front or back-buffer drawing.
+ */
+void radeonSetCliprects( radeonContextPtr rmesa )
 {
    __DRIdrawablePrivate *dPriv = rmesa->dri.drawable;
 
-   switch ( mode ) {
-   case GL_FRONT_LEFT:
-      rmesa->numClipRects = dPriv->numClipRects;
-      rmesa->pClipRects = dPriv->pClipRects;
-      break;
-   case GL_BACK_LEFT:
+   if (rmesa->glCtx->DrawBuffer->_ColorDrawBufferMask[0]
+       == BUFFER_BIT_BACK_LEFT) {
       /* Can't ignore 2d windows if we are page flipping.
        */
       if ( dPriv->numBackClipRects == 0 || rmesa->doPageFlip ) {
@@ -1636,10 +1638,11 @@ void radeonSetCliprects( radeonContextPtr rmesa, GLenum mode )
 	 rmesa->numClipRects = dPriv->numBackClipRects;
 	 rmesa->pClipRects = dPriv->pBackClipRects;
       }
-      break;
-   default:
-      fprintf(stderr, "bad mode in radeonSetCliprects\n");
-      return;
+   }
+   else {
+      /* front buffer (or none, or multiple buffers */
+      rmesa->numClipRects = dPriv->numClipRects;
+      rmesa->pClipRects = dPriv->pClipRects;
    }
 
    if (rmesa->state.scissor.enabled)
@@ -1647,6 +1650,9 @@ void radeonSetCliprects( radeonContextPtr rmesa, GLenum mode )
 }
 
 
+/**
+ * Called via glDrawBuffer.
+ */
 static void radeonDrawBuffer( GLcontext *ctx, GLenum mode )
 {
    radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
@@ -1658,36 +1664,25 @@ static void radeonDrawBuffer( GLcontext *ctx, GLenum mode )
    RADEON_FIREVERTICES(rmesa);	/* don't pipeline cliprect changes */
 
    /*
-    * _DrawDestMask is easier to cope with than <mode>.
+    * _ColorDrawBufferMask is easier to cope with than <mode>.
+    * Check for software fallback, update cliprects.
     */
    switch ( ctx->DrawBuffer->_ColorDrawBufferMask[0] ) {
    case BUFFER_BIT_FRONT_LEFT:
-      FALLBACK( rmesa, RADEON_FALLBACK_DRAW_BUFFER, GL_FALSE );
-      radeonSetCliprects( rmesa, GL_FRONT_LEFT );
-      break;
    case BUFFER_BIT_BACK_LEFT:
       FALLBACK( rmesa, RADEON_FALLBACK_DRAW_BUFFER, GL_FALSE );
-      radeonSetCliprects( rmesa, GL_BACK_LEFT );
       break;
    default:
-      /* GL_NONE or GL_FRONT_AND_BACK or stereo left&right, etc */
+      /* 0 (GL_NONE) buffers or multiple color drawing buffers */
       FALLBACK( rmesa, RADEON_FALLBACK_DRAW_BUFFER, GL_TRUE );
       return;
    }
 
-   /* We want to update the s/w rast state too so that r200SetBuffer()
-    * gets called.
-    */
-   _swrast_DrawBuffer(ctx, mode);
+   radeonSetCliprects( rmesa );
 
-   RADEON_STATECHANGE( rmesa, ctx );
-   rmesa->hw.ctx.cmd[CTX_RB3D_COLOROFFSET] = ((rmesa->state.color.drawOffset +
-					       rmesa->radeonScreen->fbLocation)
-					      & RADEON_COLOROFFSET_MASK);
-   rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] = rmesa->state.color.drawPitch;
-   if (rmesa->sarea->tiling_enabled) {
-      rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] |= RADEON_COLOR_TILE_ENABLE;
-   }
+   /* We'll set the drawing engine's offset/pitch parameters later
+    * when we update other state.
+    */
 }
 
 static void radeonReadBuffer( GLcontext *ctx, GLenum mode )
@@ -2078,11 +2073,11 @@ static void update_texturematrix( GLcontext *ctx )
 	    /* Need to preconcatenate any active texgen 
 	     * obj/eyeplane matrices:
 	     */
-	    _math_matrix_mul_matrix( &rmesa->tmpmat, 
-				     &rmesa->TexGenMatrix[unit],
-				     ctx->TextureMatrixStack[unit].Top );
+	    _math_matrix_mul_matrix( &rmesa->tmpmat,
+				     ctx->TextureMatrixStack[unit].Top,
+				     &rmesa->TexGenMatrix[unit] );
 	    upload_matrix( rmesa, rmesa->tmpmat.m, TEXMAT_0+unit );
-	 } 
+	 }
 	 else {
 	    rmesa->TexMatEnabled |= 
 	       (RADEON_TEXGEN_INPUT_TEXCOORD_0+unit) << inputshift;
@@ -2122,11 +2117,54 @@ static void update_texturematrix( GLcontext *ctx )
 }
 
 
+/**
+ * Tell the card where to render (offset, pitch).
+ * Effected by glDrawBuffer, etc
+ */
+void
+radeonUpdateDrawBuffer(GLcontext *ctx)
+{
+   radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
+   struct gl_framebuffer *fb = ctx->DrawBuffer;
+   driRenderbuffer *drb;
+
+   if (fb->_ColorDrawBufferMask[0] == BUFFER_BIT_FRONT_LEFT) {
+      /* draw to front */
+      drb = (driRenderbuffer *) fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer;
+   }
+   else if (fb->_ColorDrawBufferMask[0] == BUFFER_BIT_BACK_LEFT) {
+      /* draw to back */
+      drb = (driRenderbuffer *) fb->Attachment[BUFFER_BACK_LEFT].Renderbuffer;
+   }
+   else {
+      /* drawing to multiple buffers, or none */
+      return;
+   }
+
+   assert(drb);
+   assert(drb->flippedPitch);
+
+   RADEON_STATECHANGE( rmesa, ctx );
+
+   /* Note: we used the (possibly) page-flipped values */
+   rmesa->hw.ctx.cmd[CTX_RB3D_COLOROFFSET]
+     = ((drb->flippedOffset + rmesa->radeonScreen->fbLocation)
+	& RADEON_COLOROFFSET_MASK);
+   rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] = drb->flippedPitch;
+   if (rmesa->sarea->tiling_enabled) {
+      rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] |= RADEON_COLOR_TILE_ENABLE;
+   }
+}
+
 
 void radeonValidateState( GLcontext *ctx )
 {
    radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
    GLuint new_state = rmesa->NewGLState;
+
+   if (new_state & (_NEW_BUFFERS | _NEW_COLOR | _NEW_PIXEL)) {
+     radeonUpdateDrawBuffer(ctx);
+   }
 
    if (new_state & _NEW_TEXTURE) {
       radeonUpdateTextureState( ctx );
@@ -2271,9 +2309,9 @@ void radeonInitStateFuncs( GLcontext *ctx )
    ctx->Driver.RenderMode		= radeonRenderMode;
    ctx->Driver.Scissor			= radeonScissor;
    ctx->Driver.ShadeModel		= radeonShadeModel;
-   ctx->Driver.StencilFunc		= radeonStencilFunc;
-   ctx->Driver.StencilMask		= radeonStencilMask;
-   ctx->Driver.StencilOp		= radeonStencilOp;
+   ctx->Driver.StencilFuncSeparate	= radeonStencilFuncSeparate;
+   ctx->Driver.StencilMaskSeparate	= radeonStencilMaskSeparate;
+   ctx->Driver.StencilOpSeparate	= radeonStencilOpSeparate;
    ctx->Driver.Viewport			= radeonViewport;
 
    TNL_CONTEXT(ctx)->Driver.NotifyMaterialChange = radeonUpdateMaterial;

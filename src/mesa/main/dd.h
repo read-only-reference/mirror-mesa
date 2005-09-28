@@ -5,7 +5,7 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -687,14 +687,6 @@ struct dd_function_table {
    void (*Scissor)(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h);
    /** Select flat or smooth shading */
    void (*ShadeModel)(GLcontext *ctx, GLenum mode);
-   /** Set function and reference value for stencil testing */
-   void (*StencilFunc)(GLcontext *ctx, GLenum func, GLint ref, GLuint mask);
-   /** Control the writing of individual bits in the stencil planes */
-   void (*StencilMask)(GLcontext *ctx, GLuint mask);
-   /** Set stencil test actions */
-   void (*StencilOp)(GLcontext *ctx, GLenum fail, GLenum zfail, GLenum zpass);
-   /** Set active stencil face (GL_EXT_stencil_two_side) */
-   void (*ActiveStencilFace)(GLcontext *ctx, GLuint face);
    /** OpenGL 2.0 two-sided StencilFunc */
    void (*StencilFuncSeparate)(GLcontext *ctx, GLenum face, GLenum func,
                                GLint ref, GLuint mask);
@@ -820,8 +812,10 @@ struct dd_function_table {
     * \name Query objects
     */
    /*@{*/
-   void (*BeginQuery)(GLcontext *ctx, struct gl_query_object *q);
-   void (*EndQuery)(GLcontext *ctx, struct gl_query_object *q);
+   struct gl_query_object * (*NewQueryObject)(GLcontext *ctx, GLuint id);
+   void (*BeginQuery)(GLcontext *ctx, GLenum target,
+                      struct gl_query_object *q);
+   void (*EndQuery)(GLcontext *ctx, GLenum target, struct gl_query_object *q);
    /*@}*/
 
 
@@ -907,12 +901,6 @@ struct dd_function_table {
     * changed.
     */
    void (*LightingSpaceChange)( GLcontext *ctx );
-
-   /**
-    * Let the T&L component know when the context becomes current.
-    */
-   void (*MakeCurrent)( GLcontext *ctx, GLframebuffer *drawBuffer,
-			GLframebuffer *readBuffer );
 
    /**
     * Called by glNewList().

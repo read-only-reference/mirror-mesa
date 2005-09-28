@@ -317,8 +317,8 @@ static void flush_last_swtcl_prim( radeonContextPtr rmesa  )
 
 /* Alloc space in the current dma region.
  */
-static __inline void *radeonAllocDmaLowVerts( radeonContextPtr rmesa,
-					      int nverts, int vsize )
+static INLINE void *
+radeonAllocDmaLowVerts( radeonContextPtr rmesa, int nverts, int vsize )
 {
    GLuint bytes = vsize * nverts;
 
@@ -378,7 +378,8 @@ static const GLuint hw_prim[GL_POLYGON+1] = {
    0
 };
 
-static __inline void radeonDmaPrimitive( radeonContextPtr rmesa, GLenum prim )
+static INLINE void
+radeonDmaPrimitive( radeonContextPtr rmesa, GLenum prim )
 {
    RADEON_NEWPRIM( rmesa );
    rmesa->swtcl.hw_primitive = hw_prim[prim];
@@ -498,10 +499,20 @@ static GLboolean run_texrect_stage( GLcontext *ctx,
 	 GLint instride = VB->TexCoordPtr[i]->stride;
 	 GLfloat (*out)[4] = store->texcoord[i].data;
 	 GLint j;
-	 
+
+	 store->texcoord[i].size = VB->TexCoordPtr[i]->size;
 	 for (j = 0 ; j < VB->Count ; j++) {
-	    out[j][0] = in[0] * iw;
-	    out[j][1] = in[1] * ih;
+	    switch (VB->TexCoordPtr[i]->size) {
+	    case 4:
+	       out[j][3] = in[3];
+	    /* fallthrough */
+	    case 3:
+	       out[j][2] = in[2];
+	    /* fallthrough */
+	    default:
+	       out[j][0] = in[0] * iw;
+	       out[j][1] = in[1] * ih;
+	    }
 	    in = (GLfloat *)((GLubyte *)in + instride);
 	 }
 

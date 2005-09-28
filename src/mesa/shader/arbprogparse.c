@@ -560,7 +560,7 @@ var_cache_find (struct var_cache *va, GLubyte * name)
    /*struct var_cache *first = va;*/
 
    while (va) {
-      if (!strcmp ( (const char*) name, (const char*) va->name)) {
+      if (!_mesa_strcmp ( (const char*) name, (const char*) va->name)) {
          if (va->type == vt_alias)
             return va->alias_binding;
          return va;
@@ -2444,15 +2444,15 @@ parse_swizzle_mask (GLubyte ** inst, GLubyte * mask, GLint len)
 /**
  */
 static GLuint
-parse_extended_swizzle_mask (GLubyte ** inst, GLubyte * mask, GLboolean * Negate)
+parse_extended_swizzle_mask (GLubyte ** inst, GLubyte * mask, GLubyte * Negate)
 {
    GLint a;
    GLubyte swz;
 
-   *Negate = GL_FALSE;
+   *Negate = 0x0;
    for (a = 0; a < 4; a++) {
       if (parse_sign (inst) == -1)
-         *Negate = GL_TRUE;
+         *Negate |= 1<<a;
 
       swz = *(*inst)++;
 
@@ -3036,19 +3036,16 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
             return 1;
 
 	 {
-	    GLubyte Swizzle[4]; /* FP's swizzle mask is a GLubyte, while VP's is GLuint */
-	    GLubyte Negate[4];
+	    GLubyte Swizzle[4];
+	    GLubyte NegateMask;
 	    GLint File, Index;
 
 	    if (parse_src_reg(ctx, inst, vc_head, Program, &File, &Index, &rel))
 	       return 1;
-	    parse_extended_swizzle_mask (inst, Swizzle, Negate);
+	    parse_extended_swizzle_mask (inst, Swizzle, &NegateMask);
 	    fp->SrcReg[0].File = File;
 	    fp->SrcReg[0].Index = Index;
-	    fp->SrcReg[0].NegateBase = (Negate[0] << 0 |
-					Negate[1] << 1 |
-					Negate[2] << 2 |
-					Negate[3] << 3);
+	    fp->SrcReg[0].NegateBase = NegateMask;
 	    fp->SrcReg[0].Swizzle = (Swizzle[0] << 0 |
 				     Swizzle[1] << 3 |
 				     Swizzle[2] << 6 |
@@ -3423,8 +3420,8 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
                break;
          }
 	 {
-	    GLubyte Swizzle[4]; /* FP's swizzle mask is a GLubyte, while VP's is GLuint */
-	    GLubyte Negate[4];
+	    GLubyte Swizzle[4]; 
+	    GLubyte NegateMask;
 	    GLboolean RelAddr;
 	    GLint File, Index;
 
@@ -3433,13 +3430,10 @@ parse_vp_instruction (GLcontext * ctx, GLubyte ** inst,
 
 	    if (parse_src_reg(ctx, inst, vc_head, Program, &File, &Index, &RelAddr))
 	       return 1;
-	    parse_extended_swizzle_mask (inst, Swizzle, Negate);
+	    parse_extended_swizzle_mask (inst, Swizzle, &NegateMask);
 	    vp->SrcReg[0].File = File;
 	    vp->SrcReg[0].Index = Index;
-	    vp->SrcReg[0].Negate = (Negate[0] << 0 |
-				    Negate[1] << 1 |
-				    Negate[2] << 2 |
-				    Negate[3] << 3);
+	    vp->SrcReg[0].Negate = NegateMask;
 	    vp->SrcReg[0].Swizzle = (Swizzle[0] << 0 |
 				     Swizzle[1] << 3 |
 				     Swizzle[2] << 6 |
@@ -3886,14 +3880,13 @@ static int set_reg8 (GLcontext *ctx, grammar id, const byte *name, byte value)
 
 static int extension_is_supported (const GLubyte *ext)
 {
-   GET_CURRENT_CONTEXT(ctx);
    const GLubyte *extensions = CALL_GetString(GET_DISPATCH(), (GL_EXTENSIONS));
    const GLubyte *end = extensions + _mesa_strlen ((const char *) extensions);
    const GLint ext_len = (GLint)_mesa_strlen ((const char *) ext);
 
    while (extensions < end)
    {
-      const GLubyte *name_end = (const GLubyte *) strchr ((const char *) extensions, ' ');
+      const GLubyte *name_end = (const GLubyte *) _mesa_strstr ((const char *) extensions, " ");
       if (name_end == NULL)
          name_end = end;
       if (name_end - extensions == ext_len && _mesa_strncmp ((const char *) ext,
@@ -4044,7 +4037,7 @@ _mesa_parse_arb_program (GLcontext * ctx, const GLubyte * str, GLsizei len,
    strz[len] = '\0';
 
 #if DEBUG_PARSING
-   printf ("Checking Grammar!\n");
+   fprintf (stderr, "Checking Grammar!\n");
 #endif
    /* do a fast check on program string - initial production buffer is 4K */
    err = grammar_fast_check (arbprogram_syn_id, strz, &parsed, &parsed_len, 0x1000);
@@ -4057,21 +4050,23 @@ _mesa_parse_arb_program (GLcontext * ctx, const GLubyte * str, GLsizei len,
       _mesa_error (ctx, GL_INVALID_OPERATION, "glProgramStringARB(syntax error)");
 
       /* useful for debugging */
-      if (0) {
+#if DEBUG_PARSING
+      do {
          int line, col;
          char *s;
-         printf("Program: %s\n", (char *) strz);
-         printf("Error Pos: %d\n", ctx->Program.ErrorPos);
+         fprintf(stderr, "Program: %s\n", (char *) strz);
+         fprintf(stderr, "Error Pos: %d\n", ctx->Program.ErrorPos);
          s = (char *) _mesa_find_line_column(strz, strz+ctx->Program.ErrorPos, &line, &col);
-         printf("line %d col %d: %s\n", line, col, s);
-      }
+         fprintf(stderr, "line %d col %d: %s\n", line, col, s);
+      } while (0)
+#endif
 
       grammar_destroy (arbprogram_syn_id);
       return 1;
    }
 
 #if DEBUG_PARSING
-   printf ("Destroying grammer dict [parse retval: %d]\n", err);
+   fprintf (stderr, "Destroying grammer dict [parse retval: %d]\n", err);
 #endif
    grammar_destroy (arbprogram_syn_id);
 
@@ -4127,7 +4122,7 @@ _mesa_parse_arb_program (GLcontext * ctx, const GLubyte * str, GLsizei len,
 
    _mesa_free (parsed);
 #if DEBUG_PARSING
-   printf ("_mesa_parse_arb_program() done\n");
+   fprintf (stderr, "_mesa_parse_arb_program() done\n");
 #endif
    return err;
 }

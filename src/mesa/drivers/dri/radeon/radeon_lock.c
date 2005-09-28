@@ -35,11 +35,15 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #include "glheader.h"
+#include "mtypes.h"
 #include "radeon_context.h"
 #include "radeon_lock.h"
 #include "radeon_tex.h"
 #include "radeon_state.h"
 #include "radeon_ioctl.h"
+
+#include "drirenderbuffer.h"
+
 
 #if DEBUG_LOCKING
 char *prevLockFile = NULL;
@@ -51,33 +55,10 @@ int prevLockLine = 0;
 static void
 radeonUpdatePageFlipping( radeonContextPtr rmesa )
 {
-   int use_back;
-
-
    rmesa->doPageFlip = rmesa->sarea->pfState;
-
-   use_back = (rmesa->glCtx->DrawBuffer->_ColorDrawBufferMask[0] == BUFFER_BIT_BACK_LEFT);
-   use_back ^= (rmesa->sarea->pfCurrentPage == 1);
-
-   if ( RADEON_DEBUG & DEBUG_VERBOSE )
-      fprintf(stderr, "%s allow %d current %d\n", __FUNCTION__, 
-	      rmesa->doPageFlip,
-	      rmesa->sarea->pfCurrentPage );
-
-   if ( use_back ) {
-	 rmesa->state.color.drawOffset = rmesa->radeonScreen->backOffset;
-	 rmesa->state.color.drawPitch  = rmesa->radeonScreen->backPitch;
-   } else {
-	 rmesa->state.color.drawOffset = rmesa->radeonScreen->frontOffset;
-	 rmesa->state.color.drawPitch  = rmesa->radeonScreen->frontPitch;
-   }
-
-   RADEON_STATECHANGE( rmesa, ctx );
-   rmesa->hw.ctx.cmd[CTX_RB3D_COLOROFFSET] = rmesa->state.color.drawOffset
-					   + rmesa->radeonScreen->fbLocation;
-   rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH]  = rmesa->state.color.drawPitch;
+   driFlipRenderbuffers(rmesa->glCtx->WinSysDrawBuffer,
+                        rmesa->sarea->pfCurrentPage);
 }
-
 
 
 /* Update the hardware state.  This is called if another context has
@@ -108,11 +89,9 @@ void radeonGetLock( radeonContextPtr rmesa, GLuint flags )
 
    if ( rmesa->lastStamp != dPriv->lastStamp ) {
       radeonUpdatePageFlipping( rmesa );
-      if (rmesa->glCtx->DrawBuffer->_ColorDrawBufferMask[0] == BUFFER_BIT_BACK_LEFT)
-         radeonSetCliprects( rmesa, GL_BACK_LEFT );
-      else
-         radeonSetCliprects( rmesa, GL_FRONT_LEFT );
+      radeonSetCliprects( rmesa );
       radeonUpdateViewportOffset( rmesa->glCtx );
+      driUpdateFramebufferSize(rmesa->glCtx, dPriv);
       rmesa->lastStamp = dPriv->lastStamp;
    }
 
@@ -120,7 +99,9 @@ void radeonGetLock( radeonContextPtr rmesa, GLuint flags )
    if (rmesa->sarea->tiling_enabled) {
       rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] |= RADEON_COLOR_TILE_ENABLE;
    }
-   else rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] &= ~RADEON_COLOR_TILE_ENABLE;
+   else {
+      rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] &= ~RADEON_COLOR_TILE_ENABLE;
+   }
 
    if ( sarea->ctx_owner != rmesa->dri.hwContext ) {
       int i;

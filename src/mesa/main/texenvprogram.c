@@ -169,7 +169,7 @@ static GLuint translate_mode( GLenum mode )
 }
 
 #define TEXTURE_UNKNOWN_INDEX 7
-static GLuint translate_tex_src_bit( GLuint bit )
+static GLuint translate_tex_src_bit( GLbitfield bit )
 {
    switch (bit) {
    case TEXTURE_1D_BIT:   return TEXTURE_1D_INDEX;
@@ -350,17 +350,20 @@ static struct ureg get_temp( struct texenv_fragment_program *p )
    
    /* First try and reuse temps which have been used already:
     */
-   bit = ffs( ~p->temp_in_use & p->alu_temps );
+   bit = _mesa_ffs( ~p->temp_in_use & p->alu_temps );
 
    /* Then any unused temporary:
     */
    if (!bit)
-      bit = ffs( ~p->temp_in_use );
+      bit = _mesa_ffs( ~p->temp_in_use );
 
    if (!bit) {
       _mesa_problem(NULL, "%s: out of temporaries\n", __FILE__);
-      exit(1);
+      _mesa_exit(1);
    }
+
+   if (bit > p->program->Base.NumTemporaries)
+      p->program->Base.NumTemporaries = bit;
 
    p->temp_in_use |= 1<<(bit-1);
    return make_ureg(PROGRAM_TEMPORARY, (bit-1));
@@ -375,17 +378,20 @@ static struct ureg get_tex_temp( struct texenv_fragment_program *p )
     * ~p->temps_output isn't necessary, but will keep it there for
     * now:
     */
-   bit = ffs( ~p->temp_in_use & ~p->alu_temps & ~p->temps_output );
+   bit = _mesa_ffs( ~p->temp_in_use & ~p->alu_temps & ~p->temps_output );
 
    /* Then any unused temporary:
     */
    if (!bit) 
-      bit = ffs( ~p->temp_in_use );
+      bit = _mesa_ffs( ~p->temp_in_use );
 
    if (!bit) {
       _mesa_problem(NULL, "%s: out of temporaries\n", __FILE__);
-      exit(1);
+      _mesa_exit(1);
    }
+
+   if (bit > p->program->Base.NumTemporaries)
+      p->program->Base.NumTemporaries = bit;
 
    p->temp_in_use |= 1<<(bit-1);
    return make_ureg(PROGRAM_TEMPORARY, (bit-1));
@@ -474,7 +480,7 @@ emit_op(struct texenv_fragment_program *p,
    GLuint nr = p->program->Base.NumInstructions++;
    struct fp_instruction *inst = &p->program->Instructions[nr];
       
-   memset(inst, 0, sizeof(*inst));
+   _mesa_memset(inst, 0, sizeof(*inst));
    inst->Opcode = op;
    
    emit_arg( &inst->SrcReg[0], src0 );
@@ -786,7 +792,7 @@ static struct ureg emit_combine( struct texenv_fragment_program *p,
       emit_arith( p, FP_OPCODE_MAD, tmp0, WRITEMASK_XYZW, 0, 
 		  two, src[0], neg1);
 
-      if (memcmp(&src[0], &src[1], sizeof(struct ureg)) == 0)
+      if (_mesa_memcmp(&src[0], &src[1], sizeof(struct ureg)) == 0)
 	 tmp1 = tmp0;
       else
 	 emit_arith( p, FP_OPCODE_MAD, tmp1, WRITEMASK_XYZW, 0, 
@@ -1031,8 +1037,9 @@ static void create_new_program(struct state_key *key, GLcontext *ctx,
        */
       struct ureg s = register_input(&p, FRAG_ATTRIB_COL1);
       emit_arith( &p, FP_OPCODE_ADD, out, WRITEMASK_XYZ, 0, cf, s, undef );
+      emit_arith( &p, FP_OPCODE_MOV, out, WRITEMASK_W, 0, cf, undef, undef );
    }
-   else if (memcmp(&cf, &out, sizeof(cf)) != 0) {
+   else if (_mesa_memcmp(&cf, &out, sizeof(cf)) != 0) {
       /* Will wind up in here if no texture enabled or a couple of
        * other scenarios (GL_REPLACE for instance).
        */
@@ -1086,7 +1093,7 @@ static void *search_cache( struct texenvprog_cache *cache,
    struct texenvprog_cache *c;
 
    for (c = cache; c; c = c->next) {
-      if (c->hash == hash && memcmp(c->key, key, keysize) == 0)
+      if (c->hash == hash && _mesa_memcmp(c->key, key, keysize) == 0)
 	 return c->data;
    }
 

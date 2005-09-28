@@ -26,7 +26,6 @@
  */
 
 #include "mtypes.h"
-#include "buffers.h"
 #include "colormac.h"
 #include "mm.h"
 #include "ffb_dd.h"
@@ -266,7 +265,9 @@ static void ffbDDDepthMask(GLcontext *ctx, GLboolean flag)
 	}
 }
 
-static void ffbDDStencilFunc(GLcontext *ctx, GLenum func, GLint ref, GLuint mask)
+static void
+ffbDDStencilFuncSeparate(GLcontext *ctx, GLenum face, GLenum func,
+                         GLint ref, GLuint mask)
 {
 	ffbContextPtr fmesa = FFB_CONTEXT(ctx);
 	unsigned int stencil, stencilctl, consty;
@@ -310,7 +311,8 @@ static void ffbDDStencilFunc(GLcontext *ctx, GLenum func, GLint ref, GLuint mask
 	}
 }
 
-static void ffbDDStencilMask(GLcontext *ctx, GLuint mask)
+static void
+ffbDDStencilMaskSeparate(GLcontext *ctx, GLenum face, GLuint mask)
 {
 	ffbContextPtr fmesa = FFB_CONTEXT(ctx);
 
@@ -321,7 +323,9 @@ static void ffbDDStencilMask(GLcontext *ctx, GLuint mask)
 	}
 }
 
-static void ffbDDStencilOp(GLcontext *ctx, GLenum fail, GLenum zfail, GLenum zpass)
+static void
+ffbDDStencilOpSeparate(GLcontext *ctx, GLenum face, GLenum fail,
+                       GLenum zfail, GLenum zpass)
 {
 	ffbContextPtr fmesa = FFB_CONTEXT(ctx);
 	unsigned int stencilctl;
@@ -445,8 +449,6 @@ void ffbCalcViewport(GLcontext *ctx)
 static void ffbDDViewport(GLcontext *ctx, GLint x, GLint y,
 			  GLsizei width, GLsizei height)
 {
-	/* update size of Mesa/software ancillary buffers */
-	_mesa_ResizeBuffersMESA();
 	ffbCalcViewport(ctx);
 }
 
@@ -510,6 +512,13 @@ static void ffbDDReadBuffer(GLcontext *ctx, GLenum buffer)
 /*
  * Specifies buffer for sw fallbacks (spans)
  */
+#if 000
+/* XXX
+ * This function is obsolete.  It's not clear how this really effected
+ * span reading/writing above.  The span functions should use the
+ * incoming driRenderbuffer (gl_renderbuffer) pointer to determine how
+ * to read from the specified bufer.
+ */
 static void ffbDDSetBuffer(GLcontext *ctx, GLframebuffer *colorBuffer,
 			   GLuint bufferBit)
 {
@@ -546,6 +555,8 @@ static void ffbDDSetBuffer(GLcontext *ctx, GLframebuffer *colorBuffer,
 		FFB_MAKE_DIRTY(fmesa, FFB_STATE_FBC, 1);
 	}
 }
+#endif
+
 
 static void ffbDDClearColor(GLcontext *ctx, const GLfloat color[4])
 {
@@ -851,12 +862,13 @@ static void ffbDDEnable(GLcontext *ctx, GLenum cap, GLboolean state)
 
 		tmp = fmesa->fbc & ~FFB_FBC_YE_MASK;
 		if (state) {
-			ffbDDStencilFunc(ctx,
+			ffbDDStencilFuncSeparate(ctx, GL_FRONT,
 					 ctx->Stencil.Function[0],
 					 ctx->Stencil.Ref[0],
 					 ctx->Stencil.ValueMask[0]);
-			ffbDDStencilMask(ctx, ctx->Stencil.WriteMask[0]);
-			ffbDDStencilOp(ctx,
+			ffbDDStencilMaskSeparate(ctx, GL_FRONT,
+                                                 ctx->Stencil.WriteMask[0]);
+			ffbDDStencilOpSeparate(ctx, GL_FRONT,
 				       ctx->Stencil.FailFunc[0],
 				       ctx->Stencil.ZFailFunc[0],
 				       ctx->Stencil.ZPassFunc[0]);
@@ -1075,9 +1087,9 @@ void ffbDDInitStateFuncs(GLcontext *ctx)
 	ctx->Driver.DepthRange = ffbDDDepthRange;
 
 	if (fmesa->ffb_sarea->flags & FFB_DRI_FFB2PLUS) {
-		ctx->Driver.StencilFunc = ffbDDStencilFunc;
-		ctx->Driver.StencilMask = ffbDDStencilMask;
-		ctx->Driver.StencilOp = ffbDDStencilOp;
+		ctx->Driver.StencilFuncSeparate = ffbDDStencilFuncSeparate;
+		ctx->Driver.StencilMaskSeparate = ffbDDStencilMaskSeparate;
+		ctx->Driver.StencilOpSeparate = ffbDDStencilOpSeparate;
 	}
 
 	ctx->Driver.DrawBuffer = ffbDDDrawBuffer;
@@ -1091,14 +1103,6 @@ void ffbDDInitStateFuncs(GLcontext *ctx)
 	ctx->Driver.ClearIndex = 0;
 	ctx->Driver.IndexMask = 0;
         */
-
-	{
-		struct swrast_device_driver *swdd = 
-			_swrast_GetDeviceDriverReference(ctx);
-		swdd->SetBuffer = ffbDDSetBuffer;
-	}
-   
-
 }
 
 void ffbDDInitContextHwState(GLcontext *ctx)

@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -81,11 +81,6 @@ struct swrast_device_driver;
 
 /* These are the public-access functions exported from swrast.
  */
-extern void
-_swrast_use_read_buffer( GLcontext *ctx );
-
-extern void
-_swrast_use_draw_buffer( GLcontext *ctx );
 
 extern GLboolean
 _swrast_CreateContext( GLcontext *ctx );
@@ -137,13 +132,6 @@ _swrast_Accum( GLcontext *ctx, GLenum op,
 	       GLint width, GLint height );
 
 
-extern void
-_swrast_DrawBuffer( GLcontext *ctx, GLenum mode );
-
-
-extern void
-_swrast_DrawBuffers( GLcontext *ctx, GLsizei n, const GLenum *buffers );
-
 
 /* Reset the stipple counter
  */
@@ -185,7 +173,7 @@ _swrast_render_finish( GLcontext *ctx );
 /* Tell the software rasterizer about core state changes.
  */
 extern void
-_swrast_InvalidateState( GLcontext *ctx, GLuint new_state );
+_swrast_InvalidateState( GLcontext *ctx, GLbitfield new_state );
 
 /* Configure software rasterizer to match hardware rasterizer characteristics:
  */
@@ -256,42 +244,24 @@ _swrast_copy_texsubimage3d(GLcontext *ctx,
                            GLint x, GLint y, GLsizei width, GLsizei height);
 
 
-/* The driver interface for the software rasterizer.
- * Unless otherwise noted, all functions are mandatory.  
+/**
+ * The driver interface for the software rasterizer.
+ * XXX this may go away.
+ * We may move these functions to ctx->Driver.RenderStart, RenderEnd.
  */
 struct swrast_device_driver {
-#if OLD_RENDERBUFFER
-   void (*SetBuffer)(GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit);
    /*
-    * Specifies the current color buffer for span/pixel writing/reading.
-    * buffer indicates which window to write to / read from.  Normally,
-    * this'll be the buffer currently bound to the context, but it doesn't
-    * have to be!
-    * bufferBit indicates which color buffer, exactly one of:
-    *    DD_FRONT_LEFT_BIT - this buffer always exists
-    *    DD_BACK_LEFT_BIT - when double buffering
-    *    DD_FRONT_RIGHT_BIT - when using stereo
-    *    DD_BACK_RIGHT_BIT - when using stereo and double buffering
-    *    DD_AUXn_BIT - if aux buffers are implemented
-    */
-#endif
-
-   /***
-    *** Functions for synchronizing access to the framebuffer:
-    ***/
-
-   void (*SpanRenderStart)(GLcontext *ctx);
-   void (*SpanRenderFinish)(GLcontext *ctx);
-   /* OPTIONAL.
+    * These are called before and after accessing renderbuffers during
+    * software rasterization.
     *
-    * Called before and after all rendering operations, including DrawPixels,
-    * ReadPixels, Bitmap, span functions, and CopyTexImage, etc commands.
     * These are a suitable place for grabbing/releasing hardware locks.
     *
     * NOTE: The swrast triangle/line/point routines *DO NOT* call
     * these functions.  Locking in that case must be organized by the
     * driver by other mechanisms.
     */
+   void (*SpanRenderStart)(GLcontext *ctx);
+   void (*SpanRenderFinish)(GLcontext *ctx);
 };
 
 

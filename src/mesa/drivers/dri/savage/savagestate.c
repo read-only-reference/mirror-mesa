@@ -26,7 +26,6 @@
 #include <stdio.h>
 
 #include "mtypes.h"
-#include "buffers.h"
 #include "enums.h"
 #include "macros.h"
 #include "dd.h"
@@ -665,11 +664,6 @@ static void savageDDDrawBuffer(GLcontext *ctx, GLenum mode )
 	return;
     }
     
-    /* We want to update the s/w rast state too so that r200SetBuffer() (?)
-     * gets called.
-     */
-    _swrast_DrawBuffer(ctx, mode);
-
     if (destCtrl != imesa->regs.s4.destCtrl.ui)
         imesa->dirty |= SAVAGE_UPLOAD_GLOBAL;
 }
@@ -723,8 +717,6 @@ static void savageViewport( GLcontext *ctx,
 			    GLint x, GLint y, 
 			    GLsizei width, GLsizei height )
 {
-   /* update size of Mesa/software ancillary buffers */
-   _mesa_ResizeBuffersMESA();
    savageCalcViewport( ctx );
 }
 
@@ -997,8 +989,9 @@ static void savageDDFogfv(GLcontext *ctx, GLenum pname, const GLfloat *param)
 }
 
 
-static void savageDDStencilFunc(GLcontext *ctx, GLenum func, GLint ref,
-                                GLuint mask)
+static void
+savageDDStencilFuncSeparate(GLcontext *ctx, GLenum face, GLenum func,
+                            GLint ref, GLuint mask)
 {
     savageContextPtr imesa = SAVAGE_CONTEXT(ctx);
     unsigned a=0;
@@ -1029,7 +1022,8 @@ static void savageDDStencilFunc(GLcontext *ctx, GLenum func, GLint ref,
 	imesa->dirty |= SAVAGE_UPLOAD_GLOBAL;
 }
 
-static void savageDDStencilMask(GLcontext *ctx, GLuint mask)
+static void
+savageDDStencilMaskSeparate(GLcontext *ctx, GLenum face, GLuint mask)
 {
     savageContextPtr imesa = SAVAGE_CONTEXT(ctx);
 
@@ -1057,8 +1051,9 @@ static unsigned get_stencil_op_value( GLenum op )
     return STENCIL_Keep;
 }
 
-static void savageDDStencilOp(GLcontext *ctx, GLenum fail, GLenum zfail,
-                              GLenum zpass)
+static void
+savageDDStencilOpSeparate(GLcontext *ctx, GLenum face, GLenum fail,
+                          GLenum zfail, GLenum zpass)
 {
     savageContextPtr imesa = SAVAGE_CONTEXT(ctx);
     const u_int32_t stencilCtrl = imesa->regs.s4.stencilCtrl.ui;
@@ -1663,8 +1658,6 @@ void savageDDInitState( savageContextPtr imesa ) {
         imesa->regs.s4.destCtrl.ni.dstWidthInTile =
             (imesa->savageScreen->width+31)>>5;
     }
-    imesa->drawMap = imesa->apertureBase[imesa->toggle];
-    imesa->readMap = imesa->apertureBase[imesa->toggle];
     imesa->NotFirstFrame = GL_FALSE;
 
     imesa->regs.s4.zBufOffset.ni.offset=imesa->savageScreen->depthOffset>>11;
@@ -1739,9 +1732,9 @@ void savageDDInitStateFuncs(GLcontext *ctx)
 	ctx->Driver.ColorMask = savageDDColorMask_s4;
 	ctx->Driver.ShadeModel = savageDDShadeModel_s4;
 	ctx->Driver.LightModelfv = savageDDLightModelfv_s4;
-	ctx->Driver.StencilFunc = savageDDStencilFunc;
-	ctx->Driver.StencilMask = savageDDStencilMask;
-	ctx->Driver.StencilOp = savageDDStencilOp;
+	ctx->Driver.StencilFuncSeparate = savageDDStencilFuncSeparate;
+	ctx->Driver.StencilMaskSeparate = savageDDStencilMaskSeparate;
+	ctx->Driver.StencilOpSeparate = savageDDStencilOpSeparate;
     } else {
 	ctx->Driver.Enable = savageDDEnable_s3d;
 	ctx->Driver.AlphaFunc = savageDDAlphaFunc_s3d;
@@ -1751,9 +1744,9 @@ void savageDDInitStateFuncs(GLcontext *ctx)
 	ctx->Driver.ColorMask = savageDDColorMask_s3d;
 	ctx->Driver.ShadeModel = savageDDShadeModel_s3d;
 	ctx->Driver.LightModelfv = savageDDLightModelfv_s3d;
-	ctx->Driver.StencilFunc = 0;
-	ctx->Driver.StencilMask = 0;
-	ctx->Driver.StencilOp = 0;
+	ctx->Driver.StencilFuncSeparate = NULL;
+	ctx->Driver.StencilMaskSeparate = NULL;
+	ctx->Driver.StencilOpSeparate = NULL;
     }
 
    /* Swrast hooks for imaging extensions:

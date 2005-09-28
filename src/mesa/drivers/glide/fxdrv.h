@@ -642,9 +642,9 @@ extern void fxDDBlendFuncSeparate(GLcontext *, GLenum, GLenum, GLenum, GLenum);
 extern void fxDDBlendEquationSeparate(GLcontext *, GLenum, GLenum);
 extern void fxDDDepthMask(GLcontext *, GLboolean);
 extern void fxDDDepthFunc(GLcontext *, GLenum);
-extern void fxDDStencilFunc (GLcontext *ctx, GLenum func, GLint ref, GLuint mask);
-extern void fxDDStencilMask (GLcontext *ctx, GLuint mask);
-extern void fxDDStencilOp (GLcontext *ctx, GLenum sfail, GLenum zfail, GLenum zpass);
+extern void fxDDStencilFuncSeparate (GLcontext *ctx, GLenum face, GLenum func, GLint ref, GLuint mask);
+extern void fxDDStencilMaskSeparate (GLcontext *ctx, GLenum face, GLuint mask);
+extern void fxDDStencilOpSeparate (GLcontext *ctx, GLenum face, GLenum sfail, GLenum zfail, GLenum zpass);
 
 extern void fxDDInitExtensions(GLcontext * ctx);
 
@@ -674,18 +674,18 @@ extern void fxDDColorMask(GLcontext * ctx,
 			  GLboolean r, GLboolean g, GLboolean b, GLboolean a);
 
 extern void fxDDWriteDepthSpan(GLcontext * ctx, GLuint n, GLint x, GLint y,
-			       const GLdepth depth[], const GLubyte mask[]);
+			       const GLuint depth[], const GLubyte mask[]);
 
 extern void fxDDReadDepthSpan(GLcontext * ctx, GLuint n, GLint x, GLint y,
-			      GLdepth depth[]);
+			      GLuint depth[]);
 
 extern void fxDDWriteDepthPixels(GLcontext * ctx, GLuint n,
 				 const GLint x[], const GLint y[],
-				 const GLdepth depth[], const GLubyte mask[]);
+				 const GLuint depth[], const GLubyte mask[]);
 
 extern void fxDDReadDepthPixels(GLcontext * ctx, GLuint n,
 				const GLint x[], const GLint y[],
-				GLdepth depth[]);
+				GLuint depth[]);
 
 extern void fxDDShadeModel(GLcontext * ctx, GLenum mode);
 

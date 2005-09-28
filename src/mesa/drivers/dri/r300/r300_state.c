@@ -756,8 +756,8 @@ static void r300ShadeModel(GLcontext * ctx, GLenum mode)
 	}
 }
 
-static void r300StencilFunc(GLcontext * ctx, GLenum func,
-			    GLint ref, GLuint mask)
+static void r300StencilFuncSeparate(GLcontext * ctx, GLenum face,
+                                    GLenum func, GLint ref, GLuint mask)
 {
 	r300ContextPtr rmesa = R300_CONTEXT(ctx);
 	GLuint refmask = ((ctx->Stencil.Ref[0] << R300_RB3D_ZS2_STENCIL_REF_SHIFT) |
@@ -781,7 +781,7 @@ static void r300StencilFunc(GLcontext * ctx, GLenum func,
 	rmesa->hw.zs.cmd[R300_ZS_CNTL_2] |= refmask;
 }
 
-static void r300StencilMask(GLcontext * ctx, GLuint mask)
+static void r300StencilMaskSeparate(GLcontext * ctx, GLenum face, GLuint mask)
 {
 	r300ContextPtr rmesa = R300_CONTEXT(ctx);
 
@@ -791,8 +791,8 @@ static void r300StencilMask(GLcontext * ctx, GLuint mask)
 }
 
 
-static void r300StencilOp(GLcontext * ctx, GLenum fail,
-			  GLenum zfail, GLenum zpass)
+static void r300StencilOpSeparate(GLcontext * ctx, GLenum face, GLenum fail,
+                                  GLenum zfail, GLenum zpass)
 {
 	r300ContextPtr rmesa = R300_CONTEXT(ctx);
 
@@ -1942,9 +1942,9 @@ void r300ResetHwState(r300ContextPtr r300)
 	
 	/* stencil */
 	r300Enable(ctx, GL_STENCIL_TEST, ctx->Stencil.Enabled);
-	r300StencilMask(ctx, ctx->Stencil.WriteMask[0]);
-	r300StencilFunc(ctx, ctx->Stencil.Function[0], ctx->Stencil.Ref[0], ctx->Stencil.ValueMask[0]);
-	r300StencilOp(ctx, ctx->Stencil.FailFunc[0], ctx->Stencil.ZFailFunc[0], ctx->Stencil.ZPassFunc[0]);
+	r300StencilMaskSeparate(ctx, 0, ctx->Stencil.WriteMask[0]);
+	r300StencilFuncSeparate(ctx, 0, ctx->Stencil.Function[0], ctx->Stencil.Ref[0], ctx->Stencil.ValueMask[0]);
+	r300StencilOpSeparate(ctx, 0, ctx->Stencil.FailFunc[0], ctx->Stencil.ZFailFunc[0], ctx->Stencil.ZPassFunc[0]);
 
 	r300UpdateCulling(ctx);
 
@@ -2303,9 +2303,9 @@ void r300InitStateFuncs(struct dd_function_table* functions)
 
 	/* Stencil related */
 	functions->ClearStencil = r300ClearStencil;
-	functions->StencilFunc = r300StencilFunc;
-	functions->StencilMask = r300StencilMask;
-	functions->StencilOp = r300StencilOp;
+	functions->StencilFuncSeparate = r300StencilFuncSeparate;
+	functions->StencilMaskSeparate = r300StencilMaskSeparate;
+	functions->StencilOpSeparate = r300StencilOpSeparate;
 
 	/* Viewport related */
 	functions->Viewport = r300Viewport;

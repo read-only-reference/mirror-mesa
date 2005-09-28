@@ -1099,8 +1099,6 @@ void gammaUpdateWindow( GLcontext *ctx )
 static void gammaDDViewport( GLcontext *ctx, GLint x, GLint y,
 			    GLsizei width, GLsizei height )
 {
-   /* update size of Mesa/software ancillary buffers */
-   _mesa_ResizeBuffersMESA();
    gammaUpdateWindow( ctx );
 }
 
@@ -1722,9 +1720,5 @@ void gammaDDInitStateFuncs( GLcontext *ctx )
    ctx->Driver.PolygonStipple		= gammaDDPolygonStipple;
    ctx->Driver.Scissor			= gammaDDScissor;
    ctx->Driver.ShadeModel		= gammaDDShadeModel;
-   ctx->Driver.ClearStencil		= NULL;
-   ctx->Driver.StencilFunc		= NULL;
-   ctx->Driver.StencilMask		= NULL;
-   ctx->Driver.StencilOp		= NULL;
    ctx->Driver.Viewport			= gammaDDViewport;
 }

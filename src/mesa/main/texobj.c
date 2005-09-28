@@ -40,6 +40,9 @@
 #include "texobj.h"
 #include "mtypes.h"
 
+#ifdef __VMS
+#define _mesa_sprintf sprintf
+#endif
 
 /**********************************************************************/
 /** \name Internal functions */
@@ -246,7 +249,7 @@ _mesa_test_texobj_completeness( const GLcontext *ctx,
    /* Always need the base level image */
    if (!t->Image[0][baseLevel]) {
       char s[100];
-      sprintf(s, "obj %p (%d) Image[baseLevel=%d] == NULL",
+      _mesa_sprintf(s, "obj %p (%d) Image[baseLevel=%d] == NULL",
               (void *) t, t->Name, baseLevel);
       incomplete(t, s);
       t->Complete = GL_FALSE;

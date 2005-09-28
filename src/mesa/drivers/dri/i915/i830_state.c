@@ -40,8 +40,9 @@
 #include "i830_context.h"
 #include "i830_reg.h"
 
-static void i830StencilFunc(GLcontext *ctx, GLenum func, GLint ref,
-			    GLuint mask)
+static void
+i830StencilFuncSeparate(GLcontext *ctx, GLenum face, GLenum func, GLint ref,
+                        GLuint mask)
 {
    i830ContextPtr i830 = I830_CONTEXT(ctx);
    int test = intel_translate_compare_func(func);
@@ -65,7 +66,8 @@ static void i830StencilFunc(GLcontext *ctx, GLenum func, GLint ref,
 					    STENCIL_TEST_FUNC(test));
 }
 
-static void i830StencilMask(GLcontext *ctx, GLuint mask)
+static void
+i830StencilMaskSeparate(GLcontext *ctx, GLenum face, GLuint mask)
 {
    i830ContextPtr i830 = I830_CONTEXT(ctx);
 
@@ -80,8 +82,9 @@ static void i830StencilMask(GLcontext *ctx, GLuint mask)
 					STENCIL_WRITE_MASK(mask));
 }
 
-static void i830StencilOp(GLcontext *ctx, GLenum fail, GLenum zfail,
-			  GLenum zpass)
+static void
+i830StencilOpSeparate(GLcontext *ctx, GLenum face, GLenum fail, GLenum zfail,
+                      GLenum zpass)
 {
    i830ContextPtr i830 = I830_CONTEXT(ctx);
    int fop, dfop, dpop;
@@ -1000,16 +1003,16 @@ static void i830_init_packets( i830ContextPtr i830 )
    i830->state.Buffer[I830_DESTREG_CBUFADDR0] = _3DSTATE_BUF_INFO_CMD;
    i830->state.Buffer[I830_DESTREG_CBUFADDR1] = 
       (BUF_3D_ID_COLOR_BACK | 
-       BUF_3D_PITCH(screen->frontPitch * screen->cpp) |
+       BUF_3D_PITCH(screen->front.pitch * screen->cpp) |
        BUF_3D_USE_FENCE);
 
 
    i830->state.Buffer[I830_DESTREG_DBUFADDR0] = _3DSTATE_BUF_INFO_CMD;
    i830->state.Buffer[I830_DESTREG_DBUFADDR1] = 
       (BUF_3D_ID_DEPTH |
-       BUF_3D_PITCH(screen->depthPitch * screen->cpp) |
+       BUF_3D_PITCH(screen->depth.pitch * screen->cpp) |
        BUF_3D_USE_FENCE);
-   i830->state.Buffer[I830_DESTREG_DBUFADDR2] = screen->depthOffset;
+   i830->state.Buffer[I830_DESTREG_DBUFADDR2] = screen->depth.offset;
 
 
    i830->state.Buffer[I830_DESTREG_DV0] = _3DSTATE_DST_BUF_VARS_CMD;
@@ -1060,9 +1063,9 @@ void i830InitStateFuncs( struct dd_function_table *functions )
    functions->PolygonStipple = i830PolygonStipple;
    functions->Scissor = i830Scissor;
    functions->ShadeModel = i830ShadeModel;
-   functions->StencilFunc = i830StencilFunc;
-   functions->StencilMask = i830StencilMask;
-   functions->StencilOp = i830StencilOp;
+   functions->StencilFuncSeparate = i830StencilFuncSeparate;
+   functions->StencilMaskSeparate = i830StencilMaskSeparate;
+   functions->StencilOpSeparate = i830StencilOpSeparate;
 }
 
 void i830InitState( i830ContextPtr i830 )

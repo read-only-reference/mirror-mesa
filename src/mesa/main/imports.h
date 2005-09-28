@@ -39,6 +39,7 @@
 /* XXX some of the stuff in glheader.h should be moved into this file.
  */
 #include "glheader.h"
+#include <GL/internal/glcore.h>
 
 
 #ifdef __cplusplus
@@ -99,63 +100,6 @@ extern "C" {
  * Both pointers/offsets are expressed in bytes.
  */
 #define ADD_POINTERS(A, B)  ( (GLubyte *) (A) + (uintptr_t) (B) )
-
-
-/**********************************************************************/
-/** \name [Pseudo] static array declaration.
- *
- * MACs and BeOS don't support static larger than 32kb, so ...
- */
-/*@{*/
-
-/**
- * \def DEFARRAY
- * Define a [static] unidimensional array
- */
-
-/**
- * \def DEFMARRAY
- * Define a [static] bi-dimensional array
- */
-
-/**
- * \def DEFMNARRAY
- * Define a [static] tri-dimensional array
- */
-
-/**
- * \def CHECKARRAY
- * Verifies a [static] array was properly allocated.
- */
-
-/**
- * \def UNDEFARRAY
- * Undefine (free) a [static] array.
- */
-
-#if defined(macintosh) && !defined(__MRC__)
-/*extern char *AGLAlloc(int size);*/
-/*extern void AGLFree(char* ptr);*/
-#  define DEFARRAY(TYPE,NAME,SIZE)  			TYPE *NAME = (TYPE*)_mesa_alloc(sizeof(TYPE)*(SIZE))
-#  define DEFMARRAY(TYPE,NAME,SIZE1,SIZE2)		TYPE (*NAME)[SIZE2] = (TYPE(*)[SIZE2])_mesa_alloc(sizeof(TYPE)*(SIZE1)*(SIZE2))
-#  define DEFMNARRAY(TYPE,NAME,SIZE1,SIZE2,SIZE3)	TYPE (*NAME)[SIZE2][SIZE3] = (TYPE(*)[SIZE2][SIZE3])_mesa_alloc(sizeof(TYPE)*(SIZE1)*(SIZE2)*(SIZE3))
-#  define CHECKARRAY(NAME,CMD)				do {if (!(NAME)) {CMD;}} while (0)
-#  define UNDEFARRAY(NAME)          			do {if ((NAME)) {_mesa_free((char*)NAME);}  }while (0)
-#elif defined(__BEOS__)
-#  define DEFARRAY(TYPE,NAME,SIZE)  			TYPE *NAME = (TYPE*)_mesa_malloc(sizeof(TYPE)*(SIZE))
-#  define DEFMARRAY(TYPE,NAME,SIZE1,SIZE2)  		TYPE (*NAME)[SIZE2] = (TYPE(*)[SIZE2])_mesa_malloc(sizeof(TYPE)*(SIZE1)*(SIZE2))
-#  define DEFMNARRAY(TYPE,NAME,SIZE1,SIZE2,SIZE3)	TYPE (*NAME)[SIZE2][SIZE3] = (TYPE(*)[SIZE2][SIZE3])_mesa_malloc(sizeof(TYPE)*(SIZE1)*(SIZE2)*(SIZE3))
-#  define CHECKARRAY(NAME,CMD)				do {if (!(NAME)) {CMD;}} while (0)
-#  define UNDEFARRAY(NAME)          			do {if ((NAME)) {_mesa_free((char*)NAME);}  }while (0)
-#else
-#  define DEFARRAY(TYPE,NAME,SIZE)  			TYPE NAME[SIZE]
-#  define DEFMARRAY(TYPE,NAME,SIZE1,SIZE2)		TYPE NAME[SIZE1][SIZE2]
-#  define DEFMNARRAY(TYPE,NAME,SIZE1,SIZE2,SIZE3)	TYPE NAME[SIZE1][SIZE2][SIZE3]
-#  define CHECKARRAY(NAME,CMD)				do {} while(0)
-#  define UNDEFARRAY(NAME)
-#endif
-
-/*@}*/
 
 
 /**
@@ -331,6 +275,8 @@ static INLINE int GET_FLOAT_BITS( float x )
  *** CEILF: ceiling of float
  *** FLOORF: floor of float
  *** FABSF: absolute value of float
+ *** LOGF: the natural logarithm (base e) of the value
+ *** EXPF: raise e to the value
  *** LDEXPF: multiply value by an integral power of two
  *** FREXPF: extract mantissa and exponent from value
  ***/
@@ -338,6 +284,8 @@ static INLINE int GET_FLOAT_BITS( float x )
 #define CEILF(x)   ((GLfloat) xf86ceil(x))
 #define FLOORF(x)  ((GLfloat) xf86floor(x))
 #define FABSF(x)   ((GLfloat) xf86fabs(x))
+#define LOGF(x)    ((GLfloat) xf86log(x))
+#define EXPF(x)    ((GLfloat) xf86exp(x))
 #define LDEXPF(x,y)   ((GLfloat) xf86ldexp(x,y))
 #define FREXPF(x,y)   ((GLfloat) xf86frexp(x,y))
 #elif defined(__gnu_linux__)
@@ -345,12 +293,16 @@ static INLINE int GET_FLOAT_BITS( float x )
 #define CEILF(x)   ceilf(x)
 #define FLOORF(x)  floorf(x)
 #define FABSF(x)   fabsf(x)
+#define LOGF(x)    logf(x)
+#define EXPF(x)    expf(x)
 #define LDEXPF(x,y)  ldexpf(x,y)
 #define FREXPF(x,y)  frexpf(x,y)
 #else
 #define CEILF(x)   ((GLfloat) ceil(x))
 #define FLOORF(x)  ((GLfloat) floor(x))
 #define FABSF(x)   ((GLfloat) fabs(x))
+#define LOGF(x)    ((GLfloat) log(x))
+#define EXPF(x)    ((GLfloat) exp(x))
 #define LDEXPF(x,y)  ((GLfloat) ldexp(x,y))
 #define FREXPF(x,y)  ((GLfloat) frexp(x,y))
 #endif
@@ -670,6 +622,8 @@ _mesa_memset16( unsigned short *dst, unsigned short val, size_t n );
 extern void
 _mesa_bzero( void *dst, size_t n );
 
+extern int
+_mesa_memcmp( const void *s1, const void *s2, size_t n );
 
 extern double
 _mesa_sin(double a);
@@ -692,6 +646,9 @@ _mesa_pow(double x, double y);
 extern float
 _mesa_log2(float x);
 
+extern int
+_mesa_ffs(int i);
+
 extern unsigned int
 _mesa_bitcount(unsigned int n);
 
@@ -701,6 +658,10 @@ _mesa_float_to_half(float f);
 extern float
 _mesa_half_to_float(GLhalfARB h);
 
+
+extern void *
+_mesa_bsearch( const void *key, const void *base, size_t nmemb, size_t size, 
+               int (*compar)(const void *, const void *) );
 
 extern char *
 _mesa_getenv( const char *var );
@@ -741,6 +702,9 @@ _mesa_sprintf( char *str, const char *fmt, ... );
 extern void
 _mesa_printf( const char *fmtString, ... );
 
+extern int 
+_mesa_vsprintf( char *str, const char *fmt, va_list args );
+
 
 extern void
 _mesa_warning( __GLcontext *gc, const char *fmtString, ... );
@@ -753,6 +717,9 @@ _mesa_error( __GLcontext *ctx, GLenum error, const char *fmtString, ... );
 
 extern void
 _mesa_debug( const __GLcontext *ctx, const char *fmtString, ... );
+
+extern void 
+_mesa_exit( int status );
 
 
 extern void

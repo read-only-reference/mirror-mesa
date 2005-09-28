@@ -218,7 +218,7 @@ _swrast_culltriangle( GLcontext *ctx,
    span.intTex[0] -= FIXED_HALF; /* off-by-one error? */		\
    span.intTex[1] -= FIXED_HALF;					\
    for (i = 0; i < span.end; i++) {					\
-      const GLdepth z = FixedToDepth(span.z);				\
+      const GLuint z = FixedToDepth(span.z);				\
       if (z < zRow[i]) {						\
          GLint s = FixedToInt(span.intTex[0]) & smask;			\
          GLint t = FixedToInt(span.intTex[1]) & tmask;			\
@@ -920,7 +920,7 @@ fast_persp_span(GLcontext *ctx, struct sw_span *span,
       const GLushort *zRow = (const GLushort *)				\
          rb->GetPointer(ctx, rb, span.x, span.y);			\
       for (i = 0; i < span.end; i++) {					\
-         GLdepth z = FixedToDepth(span.z);				\
+         GLuint z = FixedToDepth(span.z);				\
          if (z < zRow[i]) {						\
             q->Result++;						\
          }								\
@@ -1073,7 +1073,7 @@ _swrast_choose_triangle( GLcontext *ctx )
          }
       }
 
-      if (ctx->Texture._EnabledCoordUnits || ctx->FragmentProgram._Active) {
+      if (ctx->Texture._EnabledCoordUnits || ctx->FragmentProgram._Active || ctx->ATIFragmentShader._Enabled) {
          /* Ugh, we do a _lot_ of tests to pick the best textured tri func */
 	 const struct gl_texture_object *texObj2D;
          const struct gl_texture_image *texImg;
@@ -1089,6 +1089,7 @@ _swrast_choose_triangle( GLcontext *ctx )
          /* First see if we can use an optimized 2-D texture function */
          if (ctx->Texture._EnabledCoordUnits == 0x1
              && !ctx->FragmentProgram._Active
+	     && !ctx->ATIFragmentShader._Enabled
              && ctx->Texture.Unit[0]._ReallyEnabled == TEXTURE_2D_BIT
              && texObj2D->WrapS == GL_REPEAT
 	     && texObj2D->WrapT == GL_REPEAT

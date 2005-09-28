@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -28,6 +28,7 @@
 #include "buffers.h"
 #include "context.h"
 #include "framebuffer.h"
+#include "occlude.h"
 #include "program.h"
 #include "renderbuffer.h"
 #include "texcompress.h"
@@ -137,8 +138,8 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->ColorMask = NULL;
    driver->ColorMaterial = NULL;
    driver->CullFace = NULL;
-   driver->DrawBuffer = _swrast_DrawBuffer;
-   driver->DrawBuffers = NULL; /***_swrast_DrawBuffers;***/
+   driver->DrawBuffer = NULL;
+   driver->DrawBuffers = NULL;
    driver->FrontFace = NULL;
    driver->DepthFunc = NULL;
    driver->DepthMask = NULL;
@@ -161,10 +162,9 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->RenderMode = NULL;
    driver->Scissor = NULL;
    driver->ShadeModel = NULL;
-   driver->StencilFunc = NULL;
-   driver->StencilMask = NULL;
-   driver->StencilOp = NULL;
-   driver->ActiveStencilFace = NULL;
+   driver->StencilFuncSeparate = NULL;
+   driver->StencilOpSeparate = NULL;
+   driver->StencilMaskSeparate = NULL;
    driver->TexGen = NULL;
    driver->TexEnv = NULL;
    driver->TexParameter = NULL;
@@ -210,6 +210,7 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
 #endif
 
    /* query objects */
+   driver->NewQueryObject = _mesa_new_query_object;
    driver->BeginQuery = NULL;
    driver->EndQuery = NULL;
 
@@ -225,7 +226,6 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->SaveFlushVertices = NULL;
    driver->NotifySaveBegin = NULL;
    driver->LightingSpaceChange = NULL;
-   driver->MakeCurrent = NULL;
 
    /* display list */
    driver->NewList = NULL;

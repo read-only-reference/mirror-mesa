@@ -44,8 +44,9 @@
 
 
 
-static void i915StencilFunc(GLcontext *ctx, GLenum func, GLint ref,
-			    GLuint mask)
+static void
+i915StencilFuncSeparate(GLcontext *ctx, GLenum face, GLenum func, GLint ref,
+                        GLuint mask)
 {
    i915ContextPtr i915 = I915_CONTEXT(ctx);
    int test = intel_translate_compare_func( func );
@@ -69,7 +70,8 @@ static void i915StencilFunc(GLcontext *ctx, GLenum func, GLint ref,
  				       (test << S5_STENCIL_TEST_FUNC_SHIFT)); 
 }
 
-static void i915StencilMask(GLcontext *ctx, GLuint mask)
+static void
+i915StencilMaskSeparate(GLcontext *ctx, GLenum face, GLuint mask)
 {
    i915ContextPtr i915 = I915_CONTEXT(ctx);
 
@@ -85,8 +87,9 @@ static void i915StencilMask(GLcontext *ctx, GLuint mask)
 }
 
 
-static void i915StencilOp(GLcontext *ctx, GLenum fail, GLenum zfail,
-			  GLenum zpass)
+static void
+i915StencilOpSeparate(GLcontext *ctx, GLenum face, GLenum fail, GLenum zfail,
+                      GLenum zpass)
 {
    i915ContextPtr i915 = I915_CONTEXT(ctx);
    int fop = intel_translate_stencil_op(fail); 
@@ -856,16 +859,16 @@ static void i915_init_packets( i915ContextPtr i915 )
       i915->state.Buffer[I915_DESTREG_CBUFADDR0] = _3DSTATE_BUF_INFO_CMD;
       i915->state.Buffer[I915_DESTREG_CBUFADDR1] = 
 	 (BUF_3D_ID_COLOR_BACK | 
-	  BUF_3D_PITCH(screen->frontPitch * screen->cpp) |
+	  BUF_3D_PITCH(screen->front.pitch * screen->cpp) |
 	  BUF_3D_USE_FENCE);
 
 
       i915->state.Buffer[I915_DESTREG_DBUFADDR0] = _3DSTATE_BUF_INFO_CMD;
       i915->state.Buffer[I915_DESTREG_DBUFADDR1] = 
 	 (BUF_3D_ID_DEPTH |
-	  BUF_3D_PITCH(screen->depthPitch * screen->cpp) |
+	  BUF_3D_PITCH(screen->depth.pitch * screen->cpp) |
 	  BUF_3D_USE_FENCE);
-      i915->state.Buffer[I915_DESTREG_DBUFADDR2] = screen->depthOffset;
+      i915->state.Buffer[I915_DESTREG_DBUFADDR2] = screen->depth.offset;
 
 
       i915->state.Buffer[I915_DESTREG_DV0] = _3DSTATE_DST_BUF_VARS_CMD;
@@ -928,9 +931,9 @@ void i915InitStateFunctions( struct dd_function_table *functions )
    functions->PolygonStipple = i915PolygonStipple;
    functions->Scissor = i915Scissor;
    functions->ShadeModel = i915ShadeModel;
-   functions->StencilFunc = i915StencilFunc;
-   functions->StencilMask = i915StencilMask;
-   functions->StencilOp = i915StencilOp;
+   functions->StencilFuncSeparate = i915StencilFuncSeparate;
+   functions->StencilMaskSeparate = i915StencilMaskSeparate;
+   functions->StencilOpSeparate = i915StencilOpSeparate;
 }
 
 

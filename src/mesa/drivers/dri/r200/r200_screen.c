@@ -84,7 +84,7 @@ DRI_CONF_BEGIN
         DRI_CONF_NO_RAST(false)
     DRI_CONF_SECTION_END
     DRI_CONF_SECTION_SOFTWARE
-        DRI_CONF_ARB_VERTEX_PROGRAM(true)
+        DRI_CONF_ARB_VERTEX_PROGRAM(false)
         DRI_CONF_NV_VERTEX_PROGRAM(false)
     DRI_CONF_SECTION_END
 DRI_CONF_END;
@@ -94,6 +94,7 @@ extern const struct dri_extension card_extensions[];
 extern const struct dri_extension blend_extensions[];
 extern const struct dri_extension ARB_vp_extension[];
 extern const struct dri_extension NV_vp_extension[];
+extern const struct dri_extension ATI_fs_extension[];
 
 #if 1
 /* Including xf86PciInfo.h introduces a bunch of errors...
@@ -173,7 +174,7 @@ r200FillInModes( unsigned pixel_bits, unsigned depth_bits,
 
     depth_bits_array[0] = depth_bits;
     depth_bits_array[1] = depth_bits;
-    
+
     /* Just like with the accumulation buffer, always provide some modes
      * with a stencil buffer.  It will be a sw fallback, but some apps won't
      * care about that.
@@ -357,8 +358,9 @@ r200CreateScreen( __DRIscreenPrivate *sPriv )
 	 /* Check if kernel module is new enough to support blend color and
 	    separate blend functions/equations */
 	 screen->drmSupportsBlendColor = (sPriv->drmMinor >= 11);
-
 	 screen->drmSupportsTriPerf = (sPriv->drmMinor >= 16);
+	 screen->drmSupportsFragShader = (sPriv->drmMinor >= 18);
+
       }
       /* Check if ddx has set up a surface reg to cover depth buffer */
       screen->depthHasSurface = (sPriv->ddxMajor > 4);
@@ -547,53 +549,67 @@ r200CreateBuffer( __DRIscreenPrivate *driScrnPriv,
       const GLboolean swAccum = mesaVis->accumRedBits > 0;
       const GLboolean swStencil = mesaVis->stencilBits > 0 &&
          mesaVis->depthBits != 24;
-#if 0
-      driDrawPriv->driverPrivate = (void *)
-         _mesa_create_framebuffer( mesaVis,
-                                   swDepth,
-                                   swStencil,
-                                   swAccum,
-                                   swAlpha );
-#else
       struct gl_framebuffer *fb = _mesa_create_framebuffer(mesaVis);
 
+      /* front color renderbuffer */
       {
          driRenderbuffer *frontRb
-            = driNewRenderbuffer(GL_RGBA, screen->cpp,
-                                 screen->frontOffset, screen->frontPitch);
+            = driNewRenderbuffer(GL_RGBA,
+                                 driScrnPriv->pFB + screen->frontOffset,
+                                 screen->cpp,
+                                 screen->frontOffset, screen->frontPitch,
+                                 driDrawPriv);
          r200SetSpanFunctions(frontRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_FRONT_LEFT, &frontRb->Base);
       }
 
+      /* back color renderbuffer */
       if (mesaVis->doubleBufferMode) {
          driRenderbuffer *backRb
-            = driNewRenderbuffer(GL_RGBA, screen->cpp,
-                                 screen->backOffset, screen->backPitch);
+            = driNewRenderbuffer(GL_RGBA,
+                                 driScrnPriv->pFB + screen->backOffset,
+                                 screen->cpp,
+                                 screen->backOffset, screen->backPitch,
+                                 driDrawPriv);
          r200SetSpanFunctions(backRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &backRb->Base);
       }
 
+      /* depth renderbuffer */
       if (mesaVis->depthBits == 16) {
          driRenderbuffer *depthRb
-            = driNewRenderbuffer(GL_DEPTH_COMPONENT16, screen->cpp,
-                                 screen->depthOffset, screen->depthPitch);
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT16,
+                                 driScrnPriv->pFB + screen->depthOffset,
+                                 screen->cpp,
+                                 screen->depthOffset, screen->depthPitch,
+                                 driDrawPriv);
          r200SetSpanFunctions(depthRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+	 depthRb->depthHasSurface = screen->depthHasSurface;
       }
       else if (mesaVis->depthBits == 24) {
          driRenderbuffer *depthRb
-            = driNewRenderbuffer(GL_DEPTH_COMPONENT24, screen->cpp,
-                                 screen->depthOffset, screen->depthPitch);
+            = driNewRenderbuffer(GL_DEPTH_COMPONENT24,
+                                 driScrnPriv->pFB + screen->depthOffset,
+                                 screen->cpp,
+                                 screen->depthOffset, screen->depthPitch,
+                                 driDrawPriv);
          r200SetSpanFunctions(depthRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
+	 depthRb->depthHasSurface = screen->depthHasSurface;
       }
 
+      /* stencil renderbuffer */
       if (mesaVis->stencilBits > 0 && !swStencil) {
          driRenderbuffer *stencilRb
-            = driNewRenderbuffer(GL_STENCIL_INDEX8_EXT, screen->cpp,
-                                 screen->depthOffset, screen->depthPitch);
+            = driNewRenderbuffer(GL_STENCIL_INDEX8_EXT,
+                                 driScrnPriv->pFB + screen->depthOffset,
+                                 screen->cpp,
+                                 screen->depthOffset, screen->depthPitch,
+                                 driDrawPriv);
          r200SetSpanFunctions(stencilRb, mesaVis);
          _mesa_add_renderbuffer(fb, BUFFER_STENCIL, &stencilRb->Base);
+	 stencilRb->depthHasSurface = screen->depthHasSurface;
       }
 
       _mesa_add_soft_renderbuffers(fb,
@@ -604,7 +620,7 @@ r200CreateBuffer( __DRIscreenPrivate *driScrnPriv,
                                    swAlpha,
                                    GL_FALSE /* aux */);
       driDrawPriv->driverPrivate = (void *) fb;
-#endif
+
       return (driDrawPriv->driverPrivate != NULL);
    }
 }
@@ -697,6 +713,7 @@ void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIsc
       driInitExtensions( NULL, blend_extensions, GL_FALSE );
       driInitSingleExtension( NULL, ARB_vp_extension );
       driInitSingleExtension( NULL, NV_vp_extension );
+      driInitSingleExtension( NULL, ATI_fs_extension );
    }
 
    return (void *) psp;

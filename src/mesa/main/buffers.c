@@ -183,10 +183,10 @@ _mesa_Clear( GLbitfield mask )
  * framebuffers we look at the framebuffer's visual.  But for user-
  * create framebuffers we look at the number of supported color attachments.
  */
-static GLuint
+static GLbitfield
 supported_buffer_bitmask(const GLcontext *ctx, GLuint framebufferID)
 {
-   GLuint mask = 0x0;
+   GLbitfield mask = 0x0;
    GLint i;
 
    if (framebufferID > 0) {
@@ -223,7 +223,7 @@ supported_buffer_bitmask(const GLcontext *ctx, GLuint framebufferID)
  * Given a GLenum naming one or more color buffers (such as
  * GL_FRONT_AND_BACK), return the corresponding bitmask of BUFFER_BIT_* flags.
  */
-static GLuint
+static GLbitfield
 draw_buffer_enum_to_bitmask(GLenum buffer)
 {
    switch (buffer) {
@@ -273,64 +273,66 @@ draw_buffer_enum_to_bitmask(GLenum buffer)
 
 /**
  * Helper routine used by glReadBuffer.
- * Given a GLenum naming (a) color buffer(s), return the corresponding
- * bitmask of DD_* flags.
+ * Given a GLenum naming a color buffer, return the index of the corresponding
+ * renderbuffer (a BUFFER_* value).
+ * return -1 for an invalid buffer.
  */
-static GLuint
-read_buffer_enum_to_bitmask(GLenum buffer)
+static GLint
+read_buffer_enum_to_index(GLenum buffer)
 {
    switch (buffer) {
       case GL_FRONT:
-         return BUFFER_BIT_FRONT_LEFT;
+         return BUFFER_FRONT_LEFT;
       case GL_BACK:
-         return BUFFER_BIT_BACK_LEFT;
+         return BUFFER_BACK_LEFT;
       case GL_RIGHT:
-         return BUFFER_BIT_FRONT_RIGHT;
+         return BUFFER_FRONT_RIGHT;
       case GL_FRONT_RIGHT:
-         return BUFFER_BIT_FRONT_RIGHT;
+         return BUFFER_FRONT_RIGHT;
       case GL_BACK_RIGHT:
-         return BUFFER_BIT_BACK_RIGHT;
+         return BUFFER_BACK_RIGHT;
       case GL_BACK_LEFT:
-         return BUFFER_BIT_BACK_LEFT;
+         return BUFFER_BACK_LEFT;
       case GL_LEFT:
-         return BUFFER_BIT_FRONT_LEFT;
+         return BUFFER_FRONT_LEFT;
       case GL_FRONT_LEFT:
-         return BUFFER_BIT_FRONT_LEFT;
+         return BUFFER_FRONT_LEFT;
       case GL_AUX0:
-         return BUFFER_BIT_AUX0;
+         return BUFFER_AUX0;
       case GL_AUX1:
-         return BUFFER_BIT_AUX1;
+         return BUFFER_AUX1;
       case GL_AUX2:
-         return BUFFER_BIT_AUX2;
+         return BUFFER_AUX2;
       case GL_AUX3:
-         return BUFFER_BIT_AUX3;
+         return BUFFER_AUX3;
       case GL_COLOR_ATTACHMENT0_EXT:
-         return BUFFER_BIT_COLOR0;
+         return BUFFER_COLOR0;
       case GL_COLOR_ATTACHMENT1_EXT:
-         return BUFFER_BIT_COLOR1;
+         return BUFFER_COLOR1;
       case GL_COLOR_ATTACHMENT2_EXT:
-         return BUFFER_BIT_COLOR2;
+         return BUFFER_COLOR2;
       case GL_COLOR_ATTACHMENT3_EXT:
-         return BUFFER_BIT_COLOR3;
+         return BUFFER_COLOR3;
       default:
          /* error */
-         return BAD_MASK;
+         return -1;
    }
 }
 
 
 /**
- * Specify which color buffer(s) to draw into for the first color output.
- * Recall that fragment programs can write to multiple outputs.
+ * Called by glDrawBuffer().
+ * Specify which renderbuffer(s) to draw into for the first color output.
+ * <buffer> can name zero, one, two or four renderbuffers!
  * \sa _mesa_DrawBuffersARB
  *
- * \param buffer  color buffer, such as GL_LEFT or GL_FRONT_AND_BACK.
+ * \param buffer  buffer token such as GL_LEFT or GL_FRONT_AND_BACK, etc.
  */
 void GLAPIENTRY
 _mesa_DrawBuffer(GLenum buffer)
 {
    GLuint bufferID;
-   GLuint destMask;
+   GLbitfield destMask;
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx); /* too complex... */
 
@@ -344,7 +346,7 @@ _mesa_DrawBuffer(GLenum buffer)
       destMask = 0x0;
    }
    else {
-      const GLuint supportedMask = supported_buffer_bitmask(ctx, bufferID);
+      const GLbitfield supportedMask = supported_buffer_bitmask(ctx, bufferID);
       destMask = draw_buffer_enum_to_bitmask(buffer);
       if (destMask == BAD_MASK) {
          /* totally bogus buffer */
@@ -365,17 +367,21 @@ _mesa_DrawBuffer(GLenum buffer)
 
 
 /**
- * Called by glDrawBuffersARB; specifies the destination color buffers
+ * Called by glDrawBuffersARB; specifies the destination color renderbuffers
  * for N fragment program color outputs.
  * \sa _mesa_DrawBuffer
+ * \param n  number of outputs
+ * \param buffers  array [n] of renderbuffer names.  Unlike glDrawBuffer, the
+ *                 names cannot specify more than one buffer.  For example,
+ *                 GL_FRONT_AND_BACK is illegal.
  */
 void GLAPIENTRY
 _mesa_DrawBuffersARB(GLsizei n, const GLenum *buffers)
 {
    GLint output;
-   GLuint usedBufferMask, supportedMask;
    GLuint bufferID;
-   GLuint destMask[MAX_DRAW_BUFFERS];
+   GLbitfield usedBufferMask, supportedMask;
+   GLbitfield destMask[MAX_DRAW_BUFFERS];
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
@@ -440,7 +446,8 @@ _mesa_DrawBuffersARB(GLsizei n, const GLenum *buffers)
  *                  (like BUFFER_BIT_FRONT_LEFT | BUFFER_BIT_BACK_LEFT).
  */
 static void
-set_color_output(GLcontext *ctx, GLuint output, GLenum buffer, GLuint destMask)
+set_color_output(GLcontext *ctx, GLuint output, GLenum buffer,
+                 GLbitfield destMask)
 {
    struct gl_framebuffer *fb = ctx->DrawBuffer;
 
@@ -473,15 +480,15 @@ set_color_output(GLcontext *ctx, GLuint output, GLenum buffer, GLuint destMask)
  */
 void
 _mesa_drawbuffers(GLcontext *ctx, GLsizei n, const GLenum *buffers,
-                  const GLuint *destMask)
+                  const GLbitfield *destMask)
 {
-   GLuint mask[MAX_DRAW_BUFFERS];
+   GLbitfield mask[MAX_DRAW_BUFFERS];
    GLint output;
 
    if (!destMask) {
       /* compute destMask values now */
       const GLuint bufferID = ctx->DrawBuffer->Name;
-      const GLuint supportedMask = supported_buffer_bitmask(ctx, bufferID);
+      const GLbitfield supportedMask = supported_buffer_bitmask(ctx, bufferID);
       for (output = 0; output < n; output++) {
          mask[output] = draw_buffer_enum_to_bitmask(buffers[output]);
          ASSERT(mask[output] != BAD_MASK);
@@ -513,18 +520,15 @@ _mesa_drawbuffers(GLcontext *ctx, GLsizei n, const GLenum *buffers,
 
 
 /**
- * Set the color buffer source for reading pixels.
- *
- * \param mode color buffer.
- *
- * \sa glReadBuffer().
- *
+ * Called by glReadBuffer to set the source renderbuffer for reading pixels.
+ * \param mode color buffer such as GL_FRONT, GL_BACK, etc.
  */
 void GLAPIENTRY
 _mesa_ReadBuffer(GLenum buffer)
 {
    struct gl_framebuffer *fb;
-   GLuint srcMask, supportedMask;
+   GLbitfield supportedMask;
+   GLint srcBuffer;
    GLuint bufferID;
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
@@ -536,18 +540,18 @@ _mesa_ReadBuffer(GLenum buffer)
       _mesa_debug(ctx, "glReadBuffer %s\n", _mesa_lookup_enum_by_nr(buffer));
 
    if (bufferID > 0 && buffer == GL_NONE) {
-      /* legal! */
-      srcMask = 0x0;
+      /* This is legal for user-created framebuffer objects */
+      srcBuffer = -1;
    }
    else {
-      /* general case */
-      srcMask = read_buffer_enum_to_bitmask(buffer);
-      if (srcMask == BAD_MASK) {
+      /* general case / window-system framebuffer */
+      srcBuffer = read_buffer_enum_to_index(buffer);
+      if (srcBuffer == -1) {
          _mesa_error(ctx, GL_INVALID_ENUM, "glReadBuffer(buffer)");
          return;
       }
       supportedMask = supported_buffer_bitmask(ctx, bufferID);
-      if ((srcMask & supportedMask) == 0) {
+      if (((1 << srcBuffer) & supportedMask) == 0) {
          _mesa_error(ctx, GL_INVALID_OPERATION, "glReadBuffer(buffer)");
          return;
       }
@@ -557,7 +561,7 @@ _mesa_ReadBuffer(GLenum buffer)
       ctx->Pixel.ReadBuffer = buffer;
    }
    fb->ColorReadBuffer = buffer;
-   fb->_ColorReadBufferMask = srcMask;
+   fb->_ColorReadBufferIndex = srcBuffer;
 
    ctx->NewState |= _NEW_PIXEL;
 
@@ -579,8 +583,8 @@ _mesa_ReadBuffer(GLenum buffer)
  * ResizeBuffers function.  The driver will then resize its color buffers
  * as needed, and maybe call the swrast's routine for reallocating
  * swrast-managed depth/stencil/accum/etc buffers.
- * \note This function may be called from within Mesa or called by the
- * user directly (see the GL_MESA_resize_buffers extension).
+ * \note This function should only be called through the GL API, not
+ * from device drivers (as was done in the past).
  */
 void GLAPIENTRY
 _mesa_ResizeBuffersMESA( void )
@@ -592,9 +596,11 @@ _mesa_ResizeBuffersMESA( void )
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glResizeBuffersMESA\n");
 
-   if (ctx->DrawBuffer && ctx->DrawBuffer->Name == 0) {
+   if (ctx->WinSysDrawBuffer) {
       GLuint newWidth, newHeight;
-      GLframebuffer *buffer = ctx->DrawBuffer;
+      GLframebuffer *buffer = ctx->WinSysDrawBuffer;
+
+      assert(buffer->Name == 0);
 
       /* ask device driver for size of output buffer */
       ctx->Driver.GetBufferSize( buffer, &newWidth, &newHeight );
@@ -606,10 +612,12 @@ _mesa_ResizeBuffersMESA( void )
       }
    }
 
-   if (ctx->ReadBuffer && ctx->ReadBuffer != ctx->DrawBuffer
-       && ctx->ReadBuffer->Name == 0) {
+   if (ctx->WinSysReadBuffer
+       && ctx->WinSysReadBuffer != ctx->WinSysDrawBuffer) {
       GLuint newWidth, newHeight;
-      GLframebuffer *buffer = ctx->ReadBuffer;
+      GLframebuffer *buffer = ctx->WinSysReadBuffer;
+
+      assert(buffer->Name == 0);
 
       /* ask device driver for size of read buffer */
       ctx->Driver.GetBufferSize( buffer, &newWidth, &newHeight );

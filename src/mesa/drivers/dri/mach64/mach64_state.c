@@ -37,7 +37,6 @@
 #include "mach64_tex.h"
 
 #include "context.h"
-#include "buffers.h"
 #include "enums.h"
 #include "colormac.h"
 #include "swrast/swrast.h"
@@ -647,8 +646,6 @@ static void mach64Viewport( GLcontext *ctx,
 			  GLint x, GLint y,
 			  GLsizei width, GLsizei height )
 {
-   /* update size of Mesa/software ancillary buffers */
-   _mesa_ResizeBuffersMESA();
    mach64CalcViewport( ctx );
 }
 
@@ -752,11 +749,6 @@ static void mach64DDDrawBuffer( GLcontext *ctx, GLenum mode )
 	 fprintf(stderr,"%s: fallback (mode=%d)\n", __FUNCTION__, mode);
       break;
    }
-
-   /* We want to update the s/w rast state too so that mach64SetBuffer()
-    * gets called.
-    */
-   _swrast_DrawBuffer(ctx, mode);
 
    mmesa->setup.dst_off_pitch = (((mmesa->drawPitch/8) << 22) |
 				 (mmesa->drawOffset >> 3));
@@ -1191,10 +1183,6 @@ void mach64DDInitStateFuncs( GLcontext *ctx )
    ctx->Driver.RenderMode		= mach64DDRenderMode;
    ctx->Driver.Scissor			= mach64DDScissor;
    ctx->Driver.ShadeModel		= mach64DDShadeModel;
-   ctx->Driver.ClearStencil		= NULL;
-   ctx->Driver.StencilFunc		= NULL;
-   ctx->Driver.StencilMask		= NULL;
-   ctx->Driver.StencilOp		= NULL;
    
    ctx->Driver.DepthRange		= mach64DepthRange;
    ctx->Driver.Viewport			= mach64Viewport;

@@ -23,7 +23,6 @@
  * \todo Functions still needed:
  * - scanf
  * - qsort
- * - bsearch
  * - rand and RAND_MAX
  *
  * \note When compiled into a XFree86 module these functions wrap around
@@ -32,7 +31,7 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -256,6 +255,19 @@ _mesa_bzero( void *dst, size_t n )
    bzero( dst, n );
 #else
    memset( dst, 0, n );
+#endif
+}
+
+/** Wrapper around either memcmp() or xf86memcmp() */
+int
+_mesa_memcmp( const void *s1, const void *s2, size_t n )
+{
+#if defined(XFree86LOADER) && defined(IN_MODULE)
+   return xf86memcmp( s1, s2, n );
+#elif defined(SUNOS4)
+   return memcmp( (char *) s1, (char *) s2, (int) n );
+#else
+   return memcmp(s1, s2, n);
 #endif
 }
 
@@ -517,6 +529,27 @@ _mesa_pow(double x, double y)
 
 
 /**
+ * Find the first bit set in a word.
+ */
+int
+_mesa_ffs(int i)
+{
+#if defined(_WIN32) && !defined(__MINGW32__)
+   int bit;
+   if (i == 0)
+      return 0;
+   for (bit = 1; !(i & 1); bit++)
+      i >>= 1;
+   return bit;
+#elif defined(XFree86LOADER) && defined(IN_MODULE)
+   return xf86ffs(i);
+#else
+   return ffs(i);
+#endif
+}
+
+
+/**
  * Return number of bits set in given GLuint.
  */
 unsigned int
@@ -666,6 +699,27 @@ _mesa_half_to_float(GLhalfARB val)
    flt = (flt_s << 31) | (flt_e << 23) | flt_m;
    result = *((float *) (void *) &flt);
    return result;
+}
+
+/*@}*/
+
+
+/**********************************************************************/
+/** \name Sort & Search */
+/*@{*/
+
+/**
+ * Wrapper for bsearch().
+ */
+void *
+_mesa_bsearch( const void *key, const void *base, size_t nmemb, size_t size, 
+               int (*compar)(const void *, const void *) )
+{
+#if defined(XFree86LOADER) && defined(IN_MODULE)
+   return xf86bsearch(key, base, nmemb, size, compar);
+#else
+   return bsearch(key, base, nmemb, size, compar);
+#endif
 }
 
 /*@}*/
@@ -847,6 +901,17 @@ _mesa_printf( const char *fmtString, ... )
 #endif
 }
 
+/** Wrapper around either vsprintf() or xf86vsprintf() */
+int
+_mesa_vsprintf( char *str, const char *fmt, va_list args )
+{
+#if defined(XFree86LOADER) && defined(IN_MODULE)
+   return xf86vsprintf( str, fmt, args );
+#else
+   return vsprintf( str, fmt, args );
+#endif
+}
+
 /*@}*/
 
 
@@ -1016,6 +1081,26 @@ _mesa_debug( const GLcontext *ctx, const char *fmtString, ... )
    xf86fprintf(stderr, "Mesa: %s", s);
 #else
    fprintf(stderr, "Mesa: %s", s);
+#endif
+}
+
+/*@}*/
+
+
+/**********************************************************************/
+/** \name Exit */
+/*@{*/
+
+/**
+ * Wrapper for exit().
+ */
+void
+_mesa_exit( int status )
+{
+#if defined(XFree86LOADER) && defined(IN_MODULE)
+   xf86exit(status);
+#else
+   exit(status);
 #endif
 }
 

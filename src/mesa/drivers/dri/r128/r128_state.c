@@ -41,7 +41,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r128_tex.h"
 
 #include "context.h"
-#include "buffers.h"
 #include "enums.h"
 #include "colormac.h"
 #include "swrast/swrast.h"
@@ -50,6 +49,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "swrast_setup/swrast_setup.h"
 
 #include "tnl/t_pipeline.h"
+
+#include "drirenderbuffer.h"
 
 
 /* =============================================================
@@ -628,22 +629,28 @@ static void r128DDShadeModel( GLcontext *ctx, GLenum mode )
  * Window position
  */
 
-void r128UpdateWindow( GLcontext *ctx )
+static void r128UpdateWindow( GLcontext *ctx )
 {
    r128ContextPtr rmesa = R128_CONTEXT(ctx);
    int x = rmesa->driDrawable->x;
    int y = rmesa->driDrawable->y;
+   struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0][0];
+   driRenderbuffer *drb = (driRenderbuffer *) rb;
 
    rmesa->setup.window_xy_offset = ((y << R128_WINDOW_Y_SHIFT) |
 				    (x << R128_WINDOW_X_SHIFT));
 
+   rmesa->setup.dst_pitch_offset_c = (((drb->flippedPitch/8) << 21) |
+                                      (drb->flippedOffset >> 5));
+
+
    rmesa->dirty |= R128_UPLOAD_CONTEXT | R128_UPLOAD_WINDOW;
 }
+
 
 /* =============================================================
  * Viewport
  */
-
 
 static void r128CalcViewport( GLcontext *ctx )
 {
@@ -665,8 +672,6 @@ static void r128Viewport( GLcontext *ctx,
 			  GLint x, GLint y,
 			  GLsizei width, GLsizei height )
 {
-   /* update size of Mesa/software ancillary buffers */
-   _mesa_ResizeBuffersMESA();
    r128CalcViewport( ctx );
 }
 
@@ -718,8 +723,6 @@ static void r128DDDrawBuffer( GLcontext *ctx, GLenum mode )
     */
    switch ( ctx->DrawBuffer->_ColorDrawBufferMask[0] ) {
    case BUFFER_BIT_FRONT_LEFT:
-      FALLBACK( rmesa, R128_FALLBACK_DRAW_BUFFER, GL_FALSE );
-      break;
    case BUFFER_BIT_BACK_LEFT:
       FALLBACK( rmesa, R128_FALLBACK_DRAW_BUFFER, GL_FALSE );
       break;
@@ -729,13 +732,6 @@ static void r128DDDrawBuffer( GLcontext *ctx, GLenum mode )
       break;
    }
 
-   /* We want to update the s/w rast state too so that r128DDSetBuffer()
-    * gets called.
-    */
-   _swrast_DrawBuffer(ctx, mode);
-
-   rmesa->setup.dst_pitch_offset_c = (((rmesa->drawPitch/8) << 21) |
-                                      (rmesa->drawOffset >> 5));
    rmesa->new_state |= R128_NEW_WINDOW;
 }
 
@@ -1094,19 +1090,8 @@ void r128DDInitState( r128ContextPtr rmesa )
 
    rmesa->Fallback = 0;
 
-   if ( rmesa->glCtx->Visual.doubleBufferMode && rmesa->sarea->pfCurrentPage == 0 ) {
-      rmesa->drawOffset = rmesa->readOffset = rmesa->r128Screen->backOffset;
-      rmesa->drawPitch  = rmesa->readPitch  = rmesa->r128Screen->backPitch;
-   } else {
-      rmesa->drawOffset = rmesa->readOffset = rmesa->r128Screen->frontOffset;
-      rmesa->drawPitch  = rmesa->readPitch  = rmesa->r128Screen->frontPitch;
-   }
-
-   /* Harware state:
+   /* Hardware state:
     */
-   rmesa->setup.dst_pitch_offset_c = (((rmesa->drawPitch/8) << 21) |
-				      (rmesa->drawOffset >> 5));
-
    rmesa->setup.dp_gui_master_cntl_c = (R128_GMC_DST_PITCH_OFFSET_CNTL |
 					R128_GMC_DST_CLIPPING |
 					R128_GMC_BRUSH_SOLID_COLOR |
@@ -1236,10 +1221,6 @@ void r128DDInitStateFuncs( GLcontext *ctx )
    ctx->Driver.RenderMode		= r128DDRenderMode;
    ctx->Driver.Scissor			= r128DDScissor;
    ctx->Driver.ShadeModel		= r128DDShadeModel;
-   ctx->Driver.ClearStencil		= NULL;
-   ctx->Driver.StencilFunc		= NULL;
-   ctx->Driver.StencilMask		= NULL;
-   ctx->Driver.StencilOp		= NULL;
 
    ctx->Driver.DepthRange               = r128DepthRange;
    ctx->Driver.Viewport                 = r128Viewport;

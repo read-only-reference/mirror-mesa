@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -31,6 +31,7 @@
 
 #include "s_depth.h"
 #include "s_context.h"
+#include "s_span.h"
 
 
 /**
@@ -1076,14 +1077,14 @@ depth_test_pixels( GLcontext *ctx, struct sw_span *span )
       /* read depth values from buffer, test, write back */
       if (rb->DataType == GL_UNSIGNED_SHORT) {
          GLushort zbuffer[MAX_WIDTH];
-         rb->GetValues(ctx, rb, count, x, y, zbuffer);
+         _swrast_get_values(ctx, rb, count, x, y, zbuffer, sizeof(GLushort));
          depth_test_span16(ctx, count, zbuffer, z, mask );
          rb->PutValues(ctx, rb, count, x, y, zbuffer, NULL);
       }
       else {
          GLuint zbuffer[MAX_WIDTH];
          ASSERT(rb->DataType == GL_UNSIGNED_INT);
-         rb->GetValues(ctx, rb, count, x, y, zbuffer);
+         _swrast_get_values(ctx, rb, count, x, y, zbuffer, sizeof(GLuint));
          depth_test_span32(ctx, count, zbuffer, z, mask );
          rb->PutValues(ctx, rb, count, x, y, zbuffer, NULL);
       }
@@ -1130,7 +1131,8 @@ _swrast_depth_bounds_test( GLcontext *ctx, struct sw_span *span )
       /* get 16-bit values */
       GLushort zbuffer16[MAX_WIDTH], *zbuffer;
       if (span->arrayMask & SPAN_XY) {
-         rb->GetValues(ctx, rb, count, span->array->x, span->array->y, zbuffer16);
+         _swrast_get_values(ctx, rb, count, span->array->x, span->array->y,
+                            zbuffer16, sizeof(GLushort));
          zbuffer = zbuffer16;
       }
       else {
@@ -1156,7 +1158,8 @@ _swrast_depth_bounds_test( GLcontext *ctx, struct sw_span *span )
       /* get 32-bit values */
       GLuint zbuffer32[MAX_WIDTH], *zbuffer;
       if (span->arrayMask & SPAN_XY) {
-         rb->GetValues(ctx, rb, count, span->array->x, span->array->y, zbuffer32);
+         _swrast_get_values(ctx, rb, count, span->array->x, span->array->y,
+                            zbuffer32, sizeof(GLuint));
          zbuffer = zbuffer32;
       }
       else {
@@ -1190,22 +1193,29 @@ _swrast_depth_bounds_test( GLcontext *ctx, struct sw_span *span )
 
 
 /**
- * Read a span of depth values from the depth buffer.
- * This function does clipping before calling the device driver function.
- *
- * XXXX this is no longer a swrast function!!!
- *
+ * Read a span of depth values from the given depth renderbuffer, returning
+ * the values as GLfloats.
+ * This function does clipping to prevent reading outside the depth buffer's
+ * bounds.  Though the clipping is redundant when we're called from
+ * _swrast_ReadPixels.
  */
 void
-_swrast_read_depth_span( GLcontext *ctx, struct gl_renderbuffer *rb,
-                         GLint n, GLint x, GLint y, GLuint depth[] )
+_swrast_read_depth_span_float( GLcontext *ctx, struct gl_renderbuffer *rb,
+                               GLint n, GLint x, GLint y, GLfloat depth[] )
 {
+   const GLfloat scale = 1.0F / ctx->DrawBuffer->_DepthMaxF;
+
+   if (!rb) {
+      /* really only doing this to prevent FP exceptions later */
+      _mesa_bzero(depth, n * sizeof(GLfloat));
+   }
+
+   ASSERT(rb->_BaseFormat == GL_DEPTH_COMPONENT);
+
    if (y < 0 || y >= (GLint) rb->Height ||
-       x + (GLint) n <= 0 || x >= (GLint) rb->Width) {
+       x + n <= 0 || x >= (GLint) rb->Width) {
       /* span is completely outside framebuffer */
-      GLint i;
-      for (i = 0; i < n; i++)
-         depth[i] = 0;
+      _mesa_bzero(depth, n * sizeof(GLfloat));
       return;
    }
 
@@ -1213,7 +1223,7 @@ _swrast_read_depth_span( GLcontext *ctx, struct gl_renderbuffer *rb,
       GLint dx = -x;
       GLint i;
       for (i = 0; i < dx; i++)
-         depth[i] = 0;
+         depth[i] = 0.0;
       x = 0;
       n -= dx;
       depth += dx;
@@ -1222,69 +1232,55 @@ _swrast_read_depth_span( GLcontext *ctx, struct gl_renderbuffer *rb,
       GLint dx = x + n - (GLint) rb->Width;
       GLint i;
       for (i = 0; i < dx; i++)
-         depth[n - i - 1] = 0;
+         depth[n - i - 1] = 0.0;
       n -= dx;
    }
    if (n <= 0) {
       return;
    }
 
-   /* we'll always return 32-bit values to our caller */
-   if (!rb) {
-      _mesa_bzero(depth, n * sizeof(GLuint));
-   }
-   else if (rb->DataType == GL_UNSIGNED_INT) {
-      rb->GetRow(ctx, rb, n, x, y, depth);
-   }
-   else {
-      GLushort temp[MAX_WIDTH];
-      GLuint i;
-      ASSERT(rb->DataType == GL_UNSIGNED_SHORT);
+   if (rb->DataType == GL_UNSIGNED_INT) {
+      GLuint temp[MAX_WIDTH];
+      GLint i;
       rb->GetRow(ctx, rb, n, x, y, temp);
       for (i = 0; i < n; i++) {
-         depth[i] = temp[i];
+         depth[i] = temp[i] * scale;
       }
    }
-}
-
-
-/**
- * Return a span of depth values from the depth buffer as floats in [0,1].
- * Input:  n - how many pixels
- *         x,y - location of first pixel
- * Output:  depth - the array of depth values
- */
-void
-_swrast_read_depth_span_float( GLcontext *ctx, struct gl_renderbuffer *rb,
-                               GLint n, GLint x, GLint y, GLfloat depth[] )
-{
-   const GLfloat scale = 1.0F / ctx->DrawBuffer->_DepthMaxF;
-   GLuint temp[MAX_WIDTH];
-   GLint i;
-
-   assert(n <= MAX_WIDTH);
-
-   _swrast_read_depth_span(ctx, rb, n, x, y, temp);
-   for (i = 0; i < n; i++) {
-      depth[i] = temp[i] * scale;
+   else if (rb->DataType == GL_UNSIGNED_SHORT) {
+      GLushort temp[MAX_WIDTH];
+      GLint i;
+      rb->GetRow(ctx, rb, n, x, y, temp);
+      for (i = 0; i < n; i++) {
+         depth[i] = temp[i] * scale;
+      }
+   }
+   else {
+      _mesa_problem(ctx, "Invalid depth renderbuffer data type");
    }
 }
 
 
 /**
- * Clear the depth buffer.
- * XXX this is no longer a swrast function!!!
+ * Clear the given z/depth renderbuffer.
  */
 void
 _swrast_clear_depth_buffer( GLcontext *ctx, struct gl_renderbuffer *rb )
 {
-   const GLuint clearValue
-      = (GLuint) (ctx->Depth.Clear * ctx->DrawBuffer->_DepthMaxF);
+   GLuint clearValue;
    GLint x, y, width, height;
 
    if (!rb || !ctx->Depth.Mask) {
       /* no depth buffer, or writing to it is disabled */
       return;
+   }
+
+   /* compute integer clearing value */
+   if (ctx->Depth.Clear == 1.0) {
+      clearValue = ctx->DrawBuffer->_DepthMax;
+   }
+   else {
+      clearValue = (GLuint) (ctx->Depth.Clear * ctx->DrawBuffer->_DepthMaxF);
    }
 
    assert(rb->_BaseFormat == GL_DEPTH_COMPONENT);
@@ -1300,8 +1296,9 @@ _swrast_clear_depth_buffer( GLcontext *ctx, struct gl_renderbuffer *rb )
        * memory, or perhaps the driver mmap'd the zbuffer memory.
        */
       if (rb->DataType == GL_UNSIGNED_SHORT) {
-         if (width == rb->Width &&
-             (clearValue & 0xff) == ((clearValue >> 8) & 0xff)) {
+         if ((clearValue & 0xff) == ((clearValue >> 8) & 0xff) &&
+             ((GLushort *) rb->GetPointer(ctx, rb, 0, 0) + width ==
+              (GLushort *) rb->GetPointer(ctx, rb, 0, 1))) {
             /* optimized case */
             GLushort *dst = (GLushort *) rb->GetPointer(ctx, rb, x, y);
             GLuint len = width * height * sizeof(GLushort);
@@ -1332,25 +1329,21 @@ _swrast_clear_depth_buffer( GLcontext *ctx, struct gl_renderbuffer *rb )
    else {
       /* Direct access not possible.  Use PutRow to write new values. */
       if (rb->DataType == GL_UNSIGNED_SHORT) {
-         GLushort clearRow[MAX_WIDTH];
-         GLint i, j;
-         for (j = 0; j < width; j++) {
-            clearRow[j] = clearValue;
-         }
+         GLushort clearVal16 = (GLushort) (clearValue & 0xffff);
+         GLint i;
          for (i = 0; i < height; i++) {
-            rb->PutRow(ctx, rb, width, x, y + i, clearRow, NULL);
+            rb->PutMonoRow(ctx, rb, width, x, y + i, &clearVal16, NULL);
+         }
+      }
+      else if (rb->DataType == GL_UNSIGNED_INT) {
+         GLint i;
+         ASSERT(sizeof(clearValue) == sizeof(GLuint));
+         for (i = 0; i < height; i++) {
+            rb->PutMonoRow(ctx, rb, width, x, y + i, &clearValue, NULL);
          }
       }
       else {
-         GLuint clearRow[MAX_WIDTH];
-         GLint i, j;
-         assert(rb->DataType == GL_UNSIGNED_INT);
-         for (j = 0; j < width; j++) {
-            clearRow[j] = clearValue;
-         }
-         for (i = 0; i < height; i++) {
-            rb->PutRow(ctx, rb, width, x, y + i, clearRow, NULL);
-         }
+         _mesa_problem(ctx, "bad depth renderbuffer DataType");
       }
    }
 }

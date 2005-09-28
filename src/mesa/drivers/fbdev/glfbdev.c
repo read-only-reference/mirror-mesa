@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.1
+ * Version:  6.5
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -38,6 +38,7 @@
  * 24 bits |    ?     0x312   0x315    0x318      ?      0x31B     0x31F
  * 32 bits |    ?       ?       ?        ?      0x164      ?
  */
+
 #ifdef USE_GLFBDEV_DRIVER
 
 #include "glheader.h"
@@ -164,14 +165,6 @@ viewport(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
 }
 
 
-/* specifies the buffer for swrast span rendering/reading */
-static void
-set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit )
-{
-   /* this is a no-op when using the new gl_renderbuffer span functions. */
-}
-
-
 /*
  * Generate code for span functions.
  */
@@ -194,7 +187,7 @@ set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit )
    DST[BCOMP] = SRC[0];  \
    DST[ACOMP] = CHAN_MAX
 
-#include "swrast/s_spantemp2.h"
+#include "swrast/s_spantemp.h"
 
 
 /* 32-bit BGRA */
@@ -216,7 +209,7 @@ set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit )
    DST[BCOMP] = SRC[0];  \
    DST[ACOMP] = SRC[3]
 
-#include "swrast/s_spantemp2.h"
+#include "swrast/s_spantemp.h"
 
 
 /* 16-bit BGR (XXX implement dithering someday) */
@@ -235,7 +228,7 @@ set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit )
    DST[BCOMP] = ( (((SRC[0]) << 3) & 0xf8) | (((SRC[0])      ) & 0x7) ); \
    DST[ACOMP] = CHAN_MAX
 
-#include "swrast/s_spantemp2.h"
+#include "swrast/s_spantemp.h"
 
 
 /* 15-bit BGR (XXX implement dithering someday) */
@@ -254,7 +247,7 @@ set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit )
    DST[BCOMP] = ( (((SRC[0]) << 3) & 0xf8) | (((SRC[0])      ) & 0x7) ); \
    DST[ACOMP] = CHAN_MAX
 
-#include "swrast/s_spantemp2.h"
+#include "swrast/s_spantemp.h"
 
 
 /* 8-bit color index */
@@ -270,7 +263,7 @@ set_buffer( GLcontext *ctx, GLframebuffer *buffer, GLuint bufferBit )
 #define FETCH_PIXEL(DST, SRC) \
    DST = SRC[0]
 
-#include "swrast/s_spantemp2.h"
+#include "swrast/s_spantemp.h"
 
 
 
@@ -294,7 +287,7 @@ glFBDevGetString( int str )
 }
 
 
-const GLFBDevProc
+GLFBDevProc
 glFBDevGetProcAddress( const char *procName )
 {
    struct name_address {
@@ -521,6 +514,7 @@ new_glfbdev_renderbuffer(void *bufferStart, int pixelFormat)
          rb->Base.GetRow = get_row_B8G8R8;
          rb->Base.GetValues = get_values_B8G8R8;
          rb->Base.PutRow = put_row_B8G8R8;
+         rb->Base.PutRowRGB = put_row_rgb_B8G8R8;
          rb->Base.PutMonoRow = put_mono_row_B8G8R8;
          rb->Base.PutValues = put_values_B8G8R8;
          rb->Base.PutMonoValues = put_mono_values_B8G8R8;
@@ -529,6 +523,7 @@ new_glfbdev_renderbuffer(void *bufferStart, int pixelFormat)
          rb->Base.GetRow = get_row_B8G8R8A8;
          rb->Base.GetValues = get_values_B8G8R8A8;
          rb->Base.PutRow = put_row_B8G8R8A8;
+         rb->Base.PutRowRGB = put_row_rgb_B8G8R8A8;
          rb->Base.PutMonoRow = put_mono_row_B8G8R8A8;
          rb->Base.PutValues = put_values_B8G8R8A8;
          rb->Base.PutMonoValues = put_mono_values_B8G8R8A8;
@@ -537,6 +532,7 @@ new_glfbdev_renderbuffer(void *bufferStart, int pixelFormat)
          rb->Base.GetRow = get_row_B5G6R5;
          rb->Base.GetValues = get_values_B5G6R5;
          rb->Base.PutRow = put_row_B5G6R5;
+         rb->Base.PutRowRGB = put_row_rgb_B5G6R5;
          rb->Base.PutMonoRow = put_mono_row_B5G6R5;
          rb->Base.PutValues = put_values_B5G6R5;
          rb->Base.PutMonoValues = put_mono_values_B5G6R5;
@@ -545,6 +541,7 @@ new_glfbdev_renderbuffer(void *bufferStart, int pixelFormat)
          rb->Base.GetRow = get_row_B5G5R5;
          rb->Base.GetValues = get_values_B5G5R5;
          rb->Base.PutRow = put_row_B5G5R5;
+         rb->Base.PutRowRGB = put_row_rgb_B5G5R5;
          rb->Base.PutMonoRow = put_mono_row_B5G5R5;
          rb->Base.PutValues = put_values_B5G5R5;
          rb->Base.PutMonoValues = put_mono_values_B5G5R5;
@@ -767,22 +764,6 @@ glFBDevCreateContext( const GLFBDevVisualPtr visual, GLFBDevContextPtr share )
    _swsetup_CreateContext( glctx );
    _swsetup_Wakeup( glctx );
 
-   /* swrast init */
-   {
-      struct swrast_device_driver *swdd;
-      swdd = _swrast_GetDeviceDriverReference( glctx );
-      swdd->SetBuffer = set_buffer;
-
-      /* no longer used */
-      swdd->WriteRGBASpan = NULL;
-      swdd->WriteRGBSpan = NULL;
-      swdd->WriteMonoRGBASpan = NULL;
-      swdd->WriteRGBAPixels = NULL;
-      swdd->WriteMonoRGBAPixels = NULL;
-      swdd->ReadRGBASpan = NULL;
-      swdd->ReadRGBAPixels = NULL;
-   }
-
    /* use default TCL pipeline */
    {
       TNLcontext *tnl = TNL_CONTEXT(glctx);
@@ -858,4 +839,4 @@ glFBDevMakeCurrent( GLFBDevContextPtr context,
    return 1;
 }
 
-#endif
+#endif /* USE_GLFBDEV_DRIVER */

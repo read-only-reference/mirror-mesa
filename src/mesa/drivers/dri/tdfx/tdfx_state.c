@@ -40,7 +40,6 @@
  */
 
 #include "mtypes.h"
-#include "buffers.h"
 #include "colormac.h"
 #include "texformat.h"
 #include "texstore.h"
@@ -476,8 +475,9 @@ static void tdfxUpdateStencil( GLcontext *ctx )
 }
 
 
-static void tdfxDDStencilFunc( GLcontext *ctx, GLenum func,
-			       GLint ref, GLuint mask )
+static void
+tdfxDDStencilFuncSeparate( GLcontext *ctx, GLenum face, GLenum func,
+                           GLint ref, GLuint mask )
 {
    tdfxContextPtr fxMesa = TDFX_CONTEXT(ctx);
 
@@ -485,7 +485,8 @@ static void tdfxDDStencilFunc( GLcontext *ctx, GLenum func,
    fxMesa->new_state |= TDFX_NEW_STENCIL;
 }
 
-static void tdfxDDStencilMask( GLcontext *ctx, GLuint mask )
+static void
+tdfxDDStencilMaskSeparate( GLcontext *ctx, GLenum face, GLuint mask )
 {
    tdfxContextPtr fxMesa = TDFX_CONTEXT(ctx);
 
@@ -493,8 +494,9 @@ static void tdfxDDStencilMask( GLcontext *ctx, GLuint mask )
    fxMesa->new_state |= TDFX_NEW_STENCIL;
 }
 
-static void tdfxDDStencilOp( GLcontext *ctx, GLenum sfail,
-			     GLenum zfail, GLenum zpass )
+static void
+tdfxDDStencilOpSeparate( GLcontext *ctx, GLenum face, GLenum sfail,
+                         GLenum zfail, GLenum zpass )
 {
    tdfxContextPtr fxMesa = TDFX_CONTEXT(ctx);
 
@@ -903,8 +905,6 @@ static void tdfxDDViewport( GLcontext *ctx, GLint x, GLint y,
 			    GLsizei w, GLsizei h )
 {
    tdfxContextPtr fxMesa = TDFX_CONTEXT(ctx);
-   /* update size of Mesa/software ancillary buffers */
-   _mesa_ResizeBuffersMESA();
    FLUSH_BATCH( fxMesa );
    fxMesa->new_state |= TDFX_NEW_VIEWPORT;
 }
@@ -1055,11 +1055,6 @@ static void tdfxDDDrawBuffer( GLcontext *ctx, GLenum mode )
       FALLBACK( fxMesa, TDFX_FALLBACK_DRAW_BUFFER, GL_TRUE );
       break;
    }
-
-   /* We want to update the s/w rast state too so that tdfxDDSetBuffer()
-    * gets called.
-    */
-   _swrast_DrawBuffer(ctx, mode);
 }
 
 
@@ -1433,9 +1428,9 @@ void tdfxDDInitStateFuncs( GLcontext *ctx )
    ctx->Driver.ShadeModel		= tdfxDDShadeModel;
 
    if ( fxMesa->haveHwStencil ) {
-      ctx->Driver.StencilFunc		= tdfxDDStencilFunc;
-      ctx->Driver.StencilMask		= tdfxDDStencilMask;
-      ctx->Driver.StencilOp		= tdfxDDStencilOp;
+      ctx->Driver.StencilFuncSeparate	= tdfxDDStencilFuncSeparate;
+      ctx->Driver.StencilMaskSeparate	= tdfxDDStencilMaskSeparate;
+      ctx->Driver.StencilOpSeparate	= tdfxDDStencilOpSeparate;
    }
 
    ctx->Driver.Viewport			= tdfxDDViewport;

@@ -47,7 +47,7 @@
 #include "s_nvfragprog.h"
 #include "s_span.h"
 #include "s_stencil.h"
-#include "s_texture.h"
+#include "s_texcombine.h"
 
 
 /**
@@ -313,7 +313,7 @@ _swrast_span_interpolate_z( const GLcontext *ctx, struct sw_span *span )
 
    if (ctx->Visual.depthBits <= 16) {
       GLfixed zval = span->z;
-      GLdepth *z = span->array->z; 
+      GLuint *z = span->array->z; 
       for (i = 0; i < n; i++) {
          z[i] = FixedToInt(zval);
          zval += span->zStep;
@@ -321,8 +321,8 @@ _swrast_span_interpolate_z( const GLcontext *ctx, struct sw_span *span )
    }
    else {
       /* Deep Z buffer, no fixed->int shift */
-      GLfixed zval = span->z;
-      GLdepth *z = span->array->z;
+      GLuint zval = span->z;
+      GLuint *z = span->array->z;
       for (i = 0; i < n; i++) {
          z[i] = zval;
          zval += span->zStep;
@@ -432,7 +432,7 @@ interpolate_texcoords(GLcontext *ctx, struct sw_span *span)
                GLfloat r = span->tex[u][2];
                GLfloat q = span->tex[u][3];
                GLuint i;
-               if (ctx->FragmentProgram._Active) {
+               if (ctx->FragmentProgram._Active || ctx->ATIFragmentShader._Enabled) {
                   /* do perspective correction but don't divide s, t, r by q */
                   const GLfloat dwdx = span->dwdx;
                   GLfloat w = span->w;
@@ -483,7 +483,7 @@ interpolate_texcoords(GLcontext *ctx, struct sw_span *span)
                GLfloat r = span->tex[u][2];
                GLfloat q = span->tex[u][3];
                GLuint i;
-               if (ctx->FragmentProgram._Active) {
+               if (ctx->FragmentProgram._Active || ctx->ATIFragmentShader._Enabled) {
                   /* do perspective correction but don't divide s, t, r by q */
                   const GLfloat dwdx = span->dwdx;
                   GLfloat w = span->w;
@@ -566,7 +566,7 @@ interpolate_texcoords(GLcontext *ctx, struct sw_span *span)
          GLfloat r = span->tex[0][2];
          GLfloat q = span->tex[0][3];
          GLuint i;
-         if (ctx->FragmentProgram._Active) {
+         if (ctx->FragmentProgram._Active || ctx->ATIFragmentShader._Enabled) {
             /* do perspective correction but don't divide s, t, r by q */
             const GLfloat dwdx = span->dwdx;
             GLfloat w = span->w;
@@ -617,7 +617,7 @@ interpolate_texcoords(GLcontext *ctx, struct sw_span *span)
          GLfloat r = span->tex[0][2];
          GLfloat q = span->tex[0][3];
          GLuint i;
-         if (ctx->FragmentProgram._Active) {
+         if (ctx->FragmentProgram._Active || ctx->ATIFragmentShader._Enabled) {
             /* do perspective correction but don't divide s, t, r by q */
             const GLfloat dwdx = span->dwdx;
             GLfloat w = span->w;
@@ -775,8 +775,8 @@ _swrast_write_index_span( GLcontext *ctx, struct sw_span *span)
    const SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const struct gl_framebuffer *fb = ctx->DrawBuffer;
    const GLuint output = 0;
-   const GLuint origInterpMask = span->interpMask;
-   const GLuint origArrayMask = span->arrayMask;
+   const GLbitfield origInterpMask = span->interpMask;
+   const GLbitfield origArrayMask = span->arrayMask;
    GLuint buf;
 
    ASSERT(span->end <= MAX_WIDTH);
@@ -983,11 +983,6 @@ _swrast_write_index_span( GLcontext *ctx, struct sw_span *span)
       }
    }
 
-#if OLD_RENDERBUFFER
-   /* restore default dest buffer */
-   _swrast_use_draw_buffer(ctx);
-#endif
-
    span->interpMask = origInterpMask;
    span->arrayMask = origArrayMask;
 }
@@ -1029,9 +1024,6 @@ add_colors(GLuint n, GLchan rgba[][4], GLchan specular[][4] )
 static void
 multi_write_rgba_span( GLcontext *ctx, struct sw_span *span )
 {
-#if OLD_RENDERBUFFER
-   SWcontext *swrast = SWRAST_CONTEXT(ctx);
-#endif
    const GLuint colorMask = *((GLuint *) ctx->Color.ColorMask);
    struct gl_framebuffer *fb = ctx->DrawBuffer;
    const GLuint output = 0;
@@ -1043,15 +1035,6 @@ multi_write_rgba_span( GLcontext *ctx, struct sw_span *span )
    for (i = 0; i < fb->_NumColorDrawBuffers[output]; i++) {
       struct gl_renderbuffer *rb = fb->_ColorDrawBuffers[output][i];
       GLchan rgbaTmp[MAX_WIDTH][4];
-
-#if OLD_RENDERBUFFER
-      /* obsolete code */
-      GLuint bufferBit = fb->_ColorDrawBit[output][i];
-      /* Set the current read/draw buffer */
-      swrast->CurrentBufferBit = bufferBit;
-      if (swrast->Driver.SetBuffer)
-         (*swrast->Driver.SetBuffer)(ctx, ctx->DrawBuffer, bufferBit);
-#endif
 
       /* make copy of incoming colors */
       MEMCPY( rgbaTmp, span->array->rgba, 4 * span->end * sizeof(GLchan) );
@@ -1080,11 +1063,6 @@ multi_write_rgba_span( GLcontext *ctx, struct sw_span *span )
                     span->array->mask);
       }
    }
-
-#if OLD_RENDERBUFFER
-   /* restore default dest buffer */
-   _swrast_use_draw_buffer(ctx);
-#endif
 }
 
 
@@ -1100,8 +1078,8 @@ _swrast_write_rgba_span( GLcontext *ctx, struct sw_span *span)
 {
    const GLuint colorMask = *((GLuint *) ctx->Color.ColorMask);
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
-   const GLuint origInterpMask = span->interpMask;
-   const GLuint origArrayMask = span->arrayMask;
+   const GLbitfield origInterpMask = span->interpMask;
+   const GLbitfield origArrayMask = span->arrayMask;
 
    ASSERT(span->primitive == GL_POINT  ||  span->primitive == GL_LINE ||
 	  span->primitive == GL_POLYGON  ||  span->primitive == GL_BITMAP);
@@ -1457,4 +1435,109 @@ _swrast_read_index_span( GLcontext *ctx, struct gl_renderbuffer *rb,
          rb->GetRow(ctx, rb, length, x + skip, y, index + skip);
       }
    }
+}
+
+
+/**
+ * Wrapper for gl_renderbuffer::GetValues() which does clipping to avoid
+ * reading values outside the buffer bounds.
+ * We can use this for reading any format/type of renderbuffer.
+ * \param valueSize is the size in bytes of each value put into the
+ *                  values array.
+ */
+void
+_swrast_get_values(GLcontext *ctx, struct gl_renderbuffer *rb,
+                   GLuint count, const GLint x[], const GLint y[],
+                   void *values, GLuint valueSize)
+{
+   GLuint i, inCount = 0, inStart = 0;
+
+   for (i = 0; i < count; i++) {
+      if (x[i] >= 0 && y[i] >= 0 && x[i] < rb->Width && y[i] < rb->Height) {
+         /* inside */
+         if (inCount == 0)
+            inStart = i;
+         inCount++;
+      }
+      else {
+         if (inCount > 0) {
+            /* read [inStart, inStart + inCount) */
+            rb->GetValues(ctx, rb, inCount, x + inStart, y + inStart,
+                          (GLubyte *) values + inStart * valueSize);
+            inCount = 0;
+         }
+      }
+   }
+   if (inCount > 0) {
+      /* read last values */
+      rb->GetValues(ctx, rb, inCount, x + inStart, y + inStart,
+                    (GLubyte *) values + inStart * valueSize);
+   }
+}
+
+
+/**
+ * Wrapper for gl_renderbuffer::PutRow() which does clipping.
+ */
+void
+_swrast_put_row(GLcontext *ctx, struct gl_renderbuffer *rb,
+                GLuint count, GLint x, GLint y,
+                const GLvoid *values, GLuint valueSize)
+{
+   GLint skip = 0;
+
+   if (y < 0 || y >= rb->Height)
+      return; /* above or below */
+
+   if (x + (GLint) count <= 0 || x >= rb->Width)
+      return; /* entirely left or right */
+
+   if (x + count > rb->Width) {
+      /* right clip */
+      GLint clip = x + count - rb->Width;
+      count -= clip;
+   }
+
+   if (x < 0) {
+      /* left clip */
+      skip = -x;
+      x = 0;
+      count -= skip;
+   }
+
+   rb->PutRow(ctx, rb, count, x, y,
+              (const GLubyte *) values + skip * valueSize, NULL);
+}
+
+
+/**
+ * Wrapper for gl_renderbuffer::GetRow() which does clipping.
+ */
+void
+_swrast_get_row(GLcontext *ctx, struct gl_renderbuffer *rb,
+                GLuint count, GLint x, GLint y,
+                GLvoid *values, GLuint valueSize)
+{
+   GLint skip = 0;
+
+   if (y < 0 || y >= rb->Height)
+      return; /* above or below */
+
+   if (x + (GLint) count <= 0 || x >= rb->Width)
+      return; /* entirely left or right */
+
+   if (x + count > rb->Width) {
+      /* right clip */
+      GLint clip = x + count - rb->Width;
+      count -= clip;
+   }
+
+   if (x < 0) {
+      /* left clip */
+      skip = -x;
+      x = 0;
+      count -= skip;
+   }
+
+   rb->GetRow(ctx, rb, count, x, y, (GLubyte *) values + skip * valueSize);
 }

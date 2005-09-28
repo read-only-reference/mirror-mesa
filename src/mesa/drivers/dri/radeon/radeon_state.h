@@ -45,10 +45,11 @@ extern void radeonInitStateFuncs( GLcontext *ctx );
 
 extern void radeonUpdateMaterial( GLcontext *ctx );
 
-extern void radeonSetCliprects( radeonContextPtr rmesa, GLenum mode );
+extern void radeonSetCliprects( radeonContextPtr rmesa );
 extern void radeonRecalcScissorRects( radeonContextPtr rmesa );
 extern void radeonUpdateViewportOffset( GLcontext *ctx );
 extern void radeonUpdateWindow( GLcontext *ctx );
+extern void radeonUpdateDrawBuffer(GLcontext *ctx);
 
 extern void radeonValidateState( GLcontext *ctx );
 

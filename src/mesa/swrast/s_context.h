@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.1
+ * Version:  6.5
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -50,8 +50,7 @@
 /**
  * \defgroup SpanFlags SPAN_XXX-flags
  * Bitmasks to indicate which span_arrays need to be computed
- * (sw_span::interpMask) or have already been filled
- * (sw_span::arrayMask)
+ * (sw_span::interpMask) or have already been filled in (sw_span::arrayMask)
  */
 /*@{*/
 #define SPAN_RGBA         0x001
@@ -65,9 +64,8 @@
 #define SPAN_LAMBDA       0x100
 #define SPAN_COVERAGE     0x200
 #define SPAN_FLAT         0x400  /**< flat shading? */
-/** sw_span::arrayMask only - for span_arrays::x, span_arrays::y */
 #define SPAN_XY           0x800
-#define SPAN_MASK        0x1000  /**< sw_span::arrayMask only */
+#define SPAN_MASK        0x1000
 /*@}*/
 
 
@@ -80,19 +78,20 @@
  * These arrays are separated out of sw_span to conserve memory.
  */
 struct span_arrays {
+   /* XXX the next three fields could go into a union */
    GLchan  rgb[MAX_WIDTH][3];
    GLchan  rgba[MAX_WIDTH][4];
    GLuint  index[MAX_WIDTH];
    GLchan  spec[MAX_WIDTH][4]; /* specular color */
    GLint   x[MAX_WIDTH];  /**< X/Y used for point/line rendering only */
    GLint   y[MAX_WIDTH];  /**< X/Y used for point/line rendering only */
-   GLdepth z[MAX_WIDTH];
+   GLuint  z[MAX_WIDTH];
    GLfloat fog[MAX_WIDTH];
    GLfloat texcoords[MAX_TEXTURE_COORD_UNITS][MAX_WIDTH][4];
    GLfloat lambda[MAX_TEXTURE_COORD_UNITS][MAX_WIDTH];
    GLfloat coverage[MAX_WIDTH];
 
-   /** This mask indicates if fragment is alive or culled */
+   /** This mask indicates which fragments are alive or culled */
    GLubyte mask[MAX_WIDTH];
 };
 
@@ -139,7 +138,7 @@ struct sw_span {
     * This bitmask (of  \link SpanFlags SPAN_* flags\endlink) indicates
     * which of the x/xStep variables are relevant.
     */
-   GLuint interpMask;
+   GLbitfield interpMask;
 
    /* For horizontal spans, step is the partial derivative wrt X.
     * For lines, step is the delta from one fragment to the next.
@@ -162,7 +161,7 @@ struct sw_span {
    GLfixed specBlue, specBlueStep;
 #endif
    GLfixed index, indexStep;
-   GLfixed z, zStep;
+   GLfixed z, zStep;    /* XXX z should probably be GLuint */
    GLfloat fog, fogStep;
    GLfloat tex[MAX_TEXTURE_COORD_UNITS][4];  /* s, t, r, q */
    GLfloat texStepX[MAX_TEXTURE_COORD_UNITS][4];
@@ -185,7 +184,7 @@ struct sw_span {
     * This bitmask (of \link SpanFlags SPAN_* flags\endlink) indicates
     * which of the fragment arrays in the span_arrays struct are relevant.
     */
-   GLuint arrayMask;
+   GLbitfield arrayMask;
 
    /**
     * We store the arrays of fragment values in a separate struct so
@@ -209,7 +208,7 @@ do {								\
 } while (0)
 
 
-typedef void (*texture_sample_func)(GLcontext *ctx, GLuint texUnit,
+typedef void (*texture_sample_func)(GLcontext *ctx,
                                     const struct gl_texture_object *tObj,
                                     GLuint n, const GLfloat texcoords[][4],
                                     const GLfloat lambda[], GLchan rgba[][4]);
@@ -279,8 +278,7 @@ typedef struct
    /** Derived values, invalidated on statechanges, updated from
     * _swrast_validate_derived():
     */
-   GLuint _RasterMask;
-   GLfloat _MinMagThresh[MAX_TEXTURE_IMAGE_UNITS];
+   GLbitfield _RasterMask;
    GLfloat _BackfaceSign;
    GLboolean _PreferPixelFog;    /* Compute fog blend factor per fragment? */
    GLboolean _AnyTextureCombine;
@@ -296,10 +294,9 @@ typedef struct
    /* Working values:
     */
    GLuint StippleCounter;    /**< Line stipple counter */
-   GLuint NewState;
+   GLbitfield NewState;
    GLuint StateChanges;
    GLenum Primitive;    /* current primitive being drawn (ala glBegin) */
-   GLbitfield CurrentBufferBit; /* exactly one the of DD_*_BIT buffer bits */
 
    /** Mechanism to allow driver (like X11) to register further
     * software rasterization routines.
@@ -309,14 +306,14 @@ typedef struct
    void (*choose_line)( GLcontext * );
    void (*choose_triangle)( GLcontext * );
 
-   GLuint invalidate_point;
-   GLuint invalidate_line;
-   GLuint invalidate_triangle;
+   GLbitfield invalidate_point;
+   GLbitfield invalidate_line;
+   GLbitfield invalidate_triangle;
    /*@}*/
 
    /** Function pointers for dispatch behind public entrypoints. */
    /*@{*/
-   void (*InvalidateState)( GLcontext *ctx, GLuint new_state );
+   void (*InvalidateState)( GLcontext *ctx, GLbitfield new_state );
 
    swrast_point_func Point;
    swrast_line_func Line;
@@ -346,7 +343,7 @@ typedef struct
     */
    struct sw_span PointSpan;
 
-   /** Internal hooks, kept uptodate by the same mechanism as above.
+   /** Internal hooks, kept up to date by the same mechanism as above.
     */
    blend_func BlendFunc;
    texture_sample_func TextureSample[MAX_TEXTURE_IMAGE_UNITS];

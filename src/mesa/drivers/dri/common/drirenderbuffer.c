@@ -1,15 +1,19 @@
 
 #include "mtypes.h"
 #include "drirenderbuffer.h"
+#include "framebuffer.h"
 #include "renderbuffer.h"
 #include "imports.h"
 
 
 /**
- * This will get called when a window is resized.
+ * This will get called when a window (gl_framebuffer) is resized (probably
+ * via driUpdateFramebufferSize(), below).
  * Just update width, height and internal format fields for now.
  * There's usually no memory allocation above because the present
- * DRI drivers use statically-allocated full-screen buffers.
+ * DRI drivers use statically-allocated full-screen buffers. If that's not
+ * the case for a DRI driver, a different AllocStorage method should
+ * be used.
  */
 static GLboolean
 driRenderbufferStorage(GLcontext *ctx, struct gl_renderbuffer *rb,
@@ -22,18 +26,32 @@ driRenderbufferStorage(GLcontext *ctx, struct gl_renderbuffer *rb,
 }
 
 
+static void
+driDeleteRenderbuffer(struct gl_renderbuffer *rb)
+{
+   /* don't free rb->Data  Chances are it's a memory mapped region for
+    * the dri drivers.
+    */
+   _mesa_free(rb);
+}
+
+
 /**
  * Allocate a new driRenderbuffer object.
  * Individual drivers are free to implement different versions of
  * this function.
  * \param format  Either GL_RGBA, GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT24,
  *                GL_DEPTH_COMPONENT32, or GL_STENCIL_INDEX8_EXT (for now).
+ * \param addr  address in main memory of the buffer.  Probably a memory
+ *              mapped region.
  * \param cpp  chars or bytes per pixel
- * \param offset  start of buffer with respect to framebuffer address
+ * \param offset  start of renderbuffer with respect to start of framebuffer
  * \param pitch   pixels per row
  */
 driRenderbuffer *
-driNewRenderbuffer(GLenum format, GLint cpp, GLint offset, GLint pitch)
+driNewRenderbuffer(GLenum format, GLvoid *addr,
+                   GLint cpp, GLint offset, GLint pitch,
+                   __DRIdrawablePrivate *dPriv)
 {
    driRenderbuffer *drb;
 
@@ -82,17 +100,89 @@ driNewRenderbuffer(GLenum format, GLint cpp, GLint offset, GLint pitch)
       }
 
       /* XXX if we were allocating a user-created renderbuffer, we'd have
-       * to fill in the ComponentSizes[] array too.
+       * to fill in the Red/Green/Blue/.../Bits values too.
        */
 
       drb->Base.AllocStorage = driRenderbufferStorage;
-      /* using default Delete function */
+      drb->Base.Delete = driDeleteRenderbuffer;
 
+      drb->Base.Data = addr;
 
       /* DRI renderbuffer-specific fields: */
+      drb->dPriv = dPriv;
       drb->offset = offset;
       drb->pitch = pitch;
       drb->cpp = cpp;
+
+      /* may be changed if page flipping is active: */
+      drb->flippedOffset = offset;
+      drb->flippedPitch = pitch;
+      drb->flippedData = addr;
    }
    return drb;
+}
+
+
+/**
+ * Update the front and back renderbuffers' flippedPitch/Offset/Data fields.
+ * If stereo, flip both the left and right pairs.
+ * This is used when we do double buffering via page flipping.
+ * \param fb  the framebuffer we're page flipping
+ * \param flipped  if true, set flipped values, else set non-flipped values
+ */
+void
+driFlipRenderbuffers(struct gl_framebuffer *fb, GLboolean flipped)
+{
+   const GLuint count = fb->Visual.stereoMode ? 2 : 1;
+   GLuint lr; /* left or right */
+
+   /* we shouldn't really call this function if single-buffered, but
+    * play it safe.
+    */
+   if (!fb->Visual.doubleBufferMode)
+      return;
+
+   for (lr = 0; lr < count; lr++) {
+      GLuint frontBuf = (lr == 0) ? BUFFER_FRONT_LEFT : BUFFER_FRONT_RIGHT;
+      GLuint backBuf  = (lr == 0) ? BUFFER_BACK_LEFT  : BUFFER_BACK_RIGHT;
+      driRenderbuffer *front_drb
+         = (driRenderbuffer *) fb->Attachment[frontBuf].Renderbuffer;
+      driRenderbuffer *back_drb
+         = (driRenderbuffer *) fb->Attachment[backBuf].Renderbuffer;
+
+      if (flipped) {
+         front_drb->flippedOffset = back_drb->offset;
+         front_drb->flippedPitch  = back_drb->pitch;
+         front_drb->flippedData   = back_drb->Base.Data;
+         back_drb->flippedOffset  = front_drb->offset;
+         back_drb->flippedPitch   = front_drb->pitch;
+         back_drb->flippedData    = front_drb->Base.Data;
+      }
+      else {
+         front_drb->flippedOffset = front_drb->offset;
+         front_drb->flippedPitch  = front_drb->pitch;
+         front_drb->flippedData   = front_drb->Base.Data;
+         back_drb->flippedOffset  = back_drb->offset;
+         back_drb->flippedPitch   = back_drb->pitch;
+         back_drb->flippedData    = back_drb->Base.Data;
+      }
+   }
+}
+
+
+/**
+ * Check that the gl_framebuffer associated with dPriv is the right size.
+ * Resize the gl_framebuffer if needed.
+ * It's expected that the dPriv->driverPrivate member points to a
+ * gl_framebuffer object.
+ */
+void
+driUpdateFramebufferSize(GLcontext *ctx, const __DRIdrawablePrivate *dPriv)
+{
+   struct gl_framebuffer *fb = (struct gl_framebuffer *) dPriv->driverPrivate;
+   if (fb && (dPriv->w != fb->Width || dPriv->h != fb->Height)) {
+      _mesa_resize_framebuffer(ctx, fb, dPriv->w, dPriv->h);
+      assert(fb->Width == dPriv->w);
+      assert(fb->Height == dPriv->h);
+   }
 }

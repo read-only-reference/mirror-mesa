@@ -37,6 +37,7 @@
 #include "simple_list.h"
 #include "extensions.h"
 #include "framebuffer.h"
+#include "renderbuffer.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -59,6 +60,7 @@
 
 #include <stdio.h>
 #include "macros.h"
+#include "drirenderbuffer.h"
 
 #define need_GL_ARB_multisample
 #define need_GL_ARB_point_parameters
@@ -127,6 +129,64 @@ buffer_align( unsigned width )
 }
 
 
+static void
+viaDeleteRenderbuffer(struct gl_renderbuffer *rb)
+{
+   /* Don't free() since we're contained in via_context struct. */
+}
+
+static GLboolean
+viaRenderbufferStorage(GLcontext *ctx, struct gl_renderbuffer *rb,
+                       GLenum internalFormat, GLuint width, GLuint height)
+{
+   rb->Width = width;
+   rb->Height = height;
+   rb->InternalFormat = internalFormat;
+   return GL_TRUE;
+}
+
+
+static void
+viaInitRenderbuffer(struct gl_renderbuffer *rb, GLenum format)
+{
+   const GLuint name = 0;
+
+   _mesa_init_renderbuffer(rb, name);
+
+   /* Make sure we're using a null-valued GetPointer routine */
+   assert(rb->GetPointer(NULL, rb, 0, 0) == NULL);
+
+   rb->InternalFormat = format;
+
+   if (format == GL_RGBA) {
+      /* Color */
+      rb->_BaseFormat = GL_RGBA;
+      rb->DataType = GL_UNSIGNED_BYTE;
+   }
+   else if (format == GL_DEPTH_COMPONENT16) {
+      /* Depth */
+      rb->_BaseFormat = GL_DEPTH_COMPONENT;
+      /* we always Get/Put 32-bit Z values */
+      rb->DataType = GL_UNSIGNED_INT;
+   }
+   else if (format == GL_DEPTH_COMPONENT24) {
+      /* Depth */
+      rb->_BaseFormat = GL_DEPTH_COMPONENT;
+      /* we always Get/Put 32-bit Z values */
+      rb->DataType = GL_UNSIGNED_INT;
+   }
+   else {
+      /* Stencil */
+      ASSERT(format == GL_STENCIL_INDEX8);
+      rb->_BaseFormat = GL_STENCIL_INDEX;
+      rb->DataType = GL_UNSIGNED_BYTE;
+   }
+
+   rb->Delete = viaDeleteRenderbuffer;
+   rb->AllocStorage = viaRenderbufferStorage;
+}
+
+
 /**
  * Calculate the framebuffer parameters for all buffers (front, back, depth,
  * and stencil) associated with the specified context.
@@ -138,12 +198,59 @@ buffer_align( unsigned width )
  * \sa AllocateBuffer
  */
 static GLboolean
-calculate_buffer_parameters( struct via_context *vmesa )
+calculate_buffer_parameters( struct via_context *vmesa,
+                             struct gl_framebuffer *fb )
 {
    const unsigned shift = vmesa->viaScreen->bitsPerPixel / 16;
    const unsigned extra = 32;
    unsigned w;
    unsigned h;
+
+   /* Normally, the renderbuffer would be added to the framebuffer just once
+    * when the framebuffer was created.  The VIA driver is a bit funny
+    * though in that the front/back/depth renderbuffers are in the per-context
+    * state!
+    * That should be fixed someday.
+    */
+
+   if (!vmesa->front.Base.InternalFormat) {
+      /* do one-time init for the renderbuffers */
+      viaInitRenderbuffer(&vmesa->front.Base, GL_RGBA);
+      viaSetSpanFunctions(&vmesa->front, &fb->Visual);
+      _mesa_add_renderbuffer(fb, BUFFER_FRONT_LEFT, &vmesa->front.Base);
+
+      if (fb->Visual.doubleBufferMode) {
+         viaInitRenderbuffer(&vmesa->back.Base, GL_RGBA);
+         viaSetSpanFunctions(&vmesa->back, &fb->Visual);
+         _mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &vmesa->back.Base);
+      }
+
+      if (vmesa->glCtx->Visual.depthBits > 0) {
+         viaInitRenderbuffer(&vmesa->depth.Base, 
+                             (vmesa->glCtx->Visual.depthBits == 16
+                              ? GL_DEPTH_COMPONENT16 : GL_DEPTH_COMPONENT24));
+         viaSetSpanFunctions(&vmesa->depth, &fb->Visual);
+         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &vmesa->depth.Base);
+      }
+
+      if (vmesa->glCtx->Visual.stencilBits > 0) {
+         viaInitRenderbuffer(&vmesa->stencil.Base, GL_STENCIL_INDEX8_EXT);
+         viaSetSpanFunctions(&vmesa->stencil, &fb->Visual);
+         _mesa_add_renderbuffer(fb, BUFFER_STENCIL, &vmesa->stencil.Base);
+      }
+   }
+
+   assert(vmesa->front.Base.InternalFormat);
+   assert(vmesa->front.Base.AllocStorage);
+   if (fb->Visual.doubleBufferMode) {
+      assert(fb->Attachment[BUFFER_BACK_LEFT].Renderbuffer);
+      assert(vmesa->front.Base.AllocStorage);
+   }
+   if (fb->Visual.depthBits) {
+      assert(fb->Attachment[BUFFER_DEPTH].Renderbuffer);
+      assert(vmesa->depth.Base.AllocStorage);
+   }
+
 
    /* Allocate front-buffer */
    if (vmesa->drawType == GLX_PBUFFER_BIT) {
@@ -151,7 +258,7 @@ calculate_buffer_parameters( struct via_context *vmesa )
       h = vmesa->driDrawable->h;
 
       vmesa->front.bpp = vmesa->viaScreen->bitsPerPixel;
-      vmesa->front.pitch = buffer_align( w ) << shift;
+      vmesa->front.pitch = buffer_align( w ) << shift; /* bytes, not pixels */
       vmesa->front.size = vmesa->front.pitch * h;
 
       if (vmesa->front.map)
@@ -164,7 +271,7 @@ calculate_buffer_parameters( struct via_context *vmesa )
       h = vmesa->viaScreen->height;
 
       vmesa->front.bpp = vmesa->viaScreen->bitsPerPixel;
-      vmesa->front.pitch = buffer_align( w ) << shift;
+      vmesa->front.pitch = buffer_align( w ) << shift; /* bytes, not pixels */
       vmesa->front.size = vmesa->front.pitch * h;
       if (getenv("ALTERNATE_SCREEN")) 
         vmesa->front.offset = vmesa->front.size;
@@ -215,6 +322,17 @@ calculate_buffer_parameters( struct via_context *vmesa )
       (void) memset( & vmesa->depth, 0, sizeof( vmesa->depth ) );
    }
 
+   /* stencil buffer is same as depth buffer */
+   vmesa->stencil.handle = vmesa->depth.handle;
+   vmesa->stencil.size = vmesa->depth.size;
+   vmesa->stencil.offset = vmesa->depth.offset;
+   vmesa->stencil.index = vmesa->depth.index;
+   vmesa->stencil.pitch = vmesa->depth.pitch;
+   vmesa->stencil.bpp = vmesa->depth.bpp;
+   vmesa->stencil.map = vmesa->depth.map;
+   vmesa->stencil.orig = vmesa->depth.orig;
+   vmesa->stencil.origMap = vmesa->depth.origMap;
+
    if( vmesa->viaScreen->width == vmesa->driDrawable->w && 
        vmesa->viaScreen->height == vmesa->driDrawable->h ) {
       vmesa->doPageFlip = vmesa->allowPageFlip;
@@ -232,13 +350,9 @@ void viaReAllocateBuffers(GLcontext *ctx, GLframebuffer *drawbuffer,
 {
     struct via_context *vmesa = VIA_CONTEXT(ctx);
 
-#if 0
-    _swrast_alloc_buffers( drawbuffer );
-#else
-    _mesa_resize_framebuffer(ctx, drawbuffer, width, height);
-#endif
+    calculate_buffer_parameters( vmesa, drawbuffer );
 
-    calculate_buffer_parameters( vmesa );
+    _mesa_resize_framebuffer(ctx, drawbuffer, width, height);
 }
 
 static void viaBufferSize(GLframebuffer *buffer, GLuint *width, GLuint *height)
@@ -646,7 +760,7 @@ void viaXMesaWindowMoved(struct via_context *vmesa)
 
    if (vmesa->drawW != dPriv->w ||
        vmesa->drawH != dPriv->h) 
-      calculate_buffer_parameters( vmesa );
+      calculate_buffer_parameters( vmesa, vmesa->glCtx->DrawBuffer );
 
    vmesa->drawXoff = (GLuint)(((dPriv->x * bytePerPixel) & 0x1f) / 
 			      bytePerPixel);  
@@ -692,19 +806,20 @@ viaMakeCurrent(__DRIcontextPrivate *driContextPriv,
         struct via_context *vmesa = 
 	   (struct via_context *)driContextPriv->driverPrivate;
 	GLcontext *ctx = vmesa->glCtx;
+        struct gl_framebuffer *drawBuffer, *readBuffer;
+
+        drawBuffer = (GLframebuffer *)driDrawPriv->driverPrivate;
+        readBuffer = (GLframebuffer *)driReadPriv->driverPrivate;
 
 	if ( vmesa->driDrawable != driDrawPriv ) {
 	   driDrawableInitVBlank( driDrawPriv, vmesa->vblank_flags );
 	   vmesa->driDrawable = driDrawPriv;
-	   if ( ! calculate_buffer_parameters( vmesa ) ) {
+	   if ( ! calculate_buffer_parameters( vmesa, drawBuffer ) ) {
 	      return GL_FALSE;
 	   }
 	}
 
-        _mesa_make_current(vmesa->glCtx,
-                           (GLframebuffer *)driDrawPriv->driverPrivate,
-                           (GLframebuffer *)driReadPriv->driverPrivate);
-	
+        _mesa_make_current(vmesa->glCtx, drawBuffer, readBuffer);
 
 	ctx->Driver.DrawBuffer( ctx, ctx->Color.DrawBuffer[0] );
 	   
@@ -738,6 +853,7 @@ void viaGetLock(struct via_context *vmesa, GLuint flags)
 
     if (vmesa->lastStamp != dPriv->lastStamp) {
        viaXMesaWindowMoved(vmesa);
+       driUpdateFramebufferSize(vmesa->glCtx, dPriv);
        vmesa->newEmitState = ~0;
        vmesa->lastStamp = dPriv->lastStamp;
     }

@@ -453,7 +453,7 @@ intelChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
 {
    intelContextPtr intel = INTEL_CONTEXT( ctx );
    const GLboolean do32bpt = ( intel->intelScreen->cpp == 4 &&
-			       intel->intelScreen->textureSize > 4*1024*1024);
+			       intel->intelScreen->tex.size > 4*1024*1024);
 
    switch ( internalFormat ) {
    case 4:
@@ -749,7 +749,7 @@ int intelUploadTexImages( intelContextPtr intel,
 
 	 /* Set the base offset of the texture image */
 	 t->BufAddr = intel->intelScreen->tex.map + t->base.memBlock->ofs;
-	 t->TextureOffset = intel->intelScreen->textureOffset + t->base.memBlock->ofs;
+	 t->TextureOffset = intel->intelScreen->tex.offset + t->base.memBlock->ofs;
 	 t->dirty = ~0;
       }
 

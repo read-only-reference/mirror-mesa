@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
  *
@@ -242,7 +242,8 @@ _mesa_base_tex_format( GLcontext *ctx, GLint internalFormat )
       }
    }
 
-   if (ctx->Extensions.SGIX_depth_texture) {
+   if (ctx->Extensions.SGIX_depth_texture ||
+       ctx->Extensions.ARB_depth_texture) {
       switch (internalFormat) {
          case GL_DEPTH_COMPONENT:
          case GL_DEPTH_COMPONENT16_SGIX:
@@ -335,6 +336,16 @@ _mesa_base_tex_format( GLcontext *ctx, GLint internalFormat )
          case GL_LUMINANCE_ALPHA16F_ARB:
          case GL_LUMINANCE_ALPHA32F_ARB:
             return GL_LUMINANCE_ALPHA;
+         default:
+            ; /* fallthrough */
+      }
+   }
+
+   if (ctx->Extensions.EXT_packed_depth_stencil) {
+      switch (internalFormat) {
+         case GL_DEPTH_STENCIL_EXT:
+         case GL_DEPTH24_STENCIL8_EXT:
+            return GL_DEPTH_STENCIL_EXT;
          default:
             ; /* fallthrough */
       }
@@ -492,6 +503,23 @@ is_ycbcr_format(GLenum format)
          return GL_FALSE;
    }
 }
+
+
+/**
+ * Test if the given image format is a Depth/Stencil format.
+ */
+static GLboolean
+is_depthstencil_format(GLenum format)
+{
+   switch (format) {
+      case GL_DEPTH24_STENCIL8_EXT:
+      case GL_DEPTH_STENCIL_EXT:
+         return GL_TRUE;
+      default:
+         return GL_FALSE;
+   }
+}
+
 
 
 /**
@@ -1368,7 +1396,8 @@ texture_error_check( GLcontext *ctx, GLenum target,
    if ((is_color_format(internalFormat) && !colorFormat && !indexFormat) ||
        (is_index_format(internalFormat) && !indexFormat) ||
        (is_depth_format(internalFormat) != is_depth_format(format)) ||
-       (is_ycbcr_format(internalFormat) != is_ycbcr_format(format))) {
+       (is_ycbcr_format(internalFormat) != is_ycbcr_format(format)) ||
+       (is_depthstencil_format(internalFormat) != is_depthstencil_format(format))) {
       if (!isProxy)
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "glTexImage(internalFormat/format)");
@@ -1982,11 +2011,17 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(format)");
    }
 
-   if (!ctx->Extensions.SGIX_depth_texture && is_depth_format(format)) {
+   if (!ctx->Extensions.SGIX_depth_texture &&
+       !ctx->Extensions.ARB_depth_texture && is_depth_format(format)) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(format)");
    }
 
    if (!ctx->Extensions.MESA_ycbcr_texture && is_ycbcr_format(format)) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(format)");
+   }
+
+   if (!ctx->Extensions.EXT_packed_depth_stencil
+       && is_depthstencil_format(format)) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(format)");
    }
 
@@ -2021,6 +2056,11 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
    }
    else if (is_ycbcr_format(format)
        && !is_ycbcr_format(texImage->TexFormat->BaseFormat)) {
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glGetTexImage(format mismatch)");
+      return;
+   }
+   else if (is_depthstencil_format(format)
+       && !is_depthstencil_format(texImage->TexFormat->BaseFormat)) {
       _mesa_error(ctx, GL_INVALID_OPERATION, "glGetTexImage(format mismatch)");
       return;
    }
@@ -2087,14 +2127,6 @@ _mesa_TexImage1D( GLenum target, GLint level, GLint internalFormat,
                                 &ctx->Unpack, texObj, texImage);
 
       ASSERT(texImage->TexFormat);
-
-      /* If driver didn't explicitly set this, use the defaults */
-      if (!texImage->FetchTexelc)
-         texImage->FetchTexelc = texImage->TexFormat->FetchTexel1D;
-      if (!texImage->FetchTexelf)
-         texImage->FetchTexelf = texImage->TexFormat->FetchTexel1Df;
-      ASSERT(texImage->FetchTexelc);
-      ASSERT(texImage->FetchTexelf);
 
       /* state update */
       texObj->Complete = GL_FALSE;
@@ -2187,14 +2219,6 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
 
       ASSERT(texImage->TexFormat);
 
-      /* If driver didn't explicitly set these, use the defaults */
-      if (!texImage->FetchTexelc)
-         texImage->FetchTexelc = texImage->TexFormat->FetchTexel2D;
-      if (!texImage->FetchTexelf)
-         texImage->FetchTexelf = texImage->TexFormat->FetchTexel2Df;
-      ASSERT(texImage->FetchTexelc);
-      ASSERT(texImage->FetchTexelf);
-
       /* state update */
       texObj->Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
@@ -2281,14 +2305,6 @@ _mesa_TexImage3D( GLenum target, GLint level, GLint internalFormat,
                                 pixels, &ctx->Unpack, texObj, texImage);
 
       ASSERT(texImage->TexFormat);
-
-      /* If driver didn't explicitly set these, use the defaults */
-      if (!texImage->FetchTexelc)
-         texImage->FetchTexelc = texImage->TexFormat->FetchTexel3D;
-      if (!texImage->FetchTexelf)
-         texImage->FetchTexelf = texImage->TexFormat->FetchTexel3Df;
-      ASSERT(texImage->FetchTexelc);
-      ASSERT(texImage->FetchTexelf);
 
       /* state update */
       texObj->Complete = GL_FALSE;
@@ -2517,14 +2533,6 @@ _mesa_CopyTexImage1D( GLenum target, GLint level,
 
    ASSERT(texImage->TexFormat);
 
-   /* If driver didn't explicitly set these, use the defaults */
-   if (!texImage->FetchTexelc)
-      texImage->FetchTexelc = texImage->TexFormat->FetchTexel1D;
-   if (!texImage->FetchTexelf)
-      texImage->FetchTexelf = texImage->TexFormat->FetchTexel1Df;
-   ASSERT(texImage->FetchTexelc);
-   ASSERT(texImage->FetchTexelf);
-
    /* state update */
    texObj->Complete = GL_FALSE;
    ctx->NewState |= _NEW_TEXTURE;
@@ -2578,14 +2586,6 @@ _mesa_CopyTexImage2D( GLenum target, GLint level, GLenum internalFormat,
                                  x, y, width, height, border);
 
    ASSERT(texImage->TexFormat);
-
-   /* If driver didn't explicitly set these, use the defaults */
-   if (!texImage->FetchTexelc)
-      texImage->FetchTexelc = texImage->TexFormat->FetchTexel2D;
-   if (!texImage->FetchTexelf)
-      texImage->FetchTexelf = texImage->TexFormat->FetchTexel2Df;
-   ASSERT(texImage->FetchTexelc);
-   ASSERT(texImage->FetchTexelf);
 
    /* state update */
    texObj->Complete = GL_FALSE;
