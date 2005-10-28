@@ -55,6 +55,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "radeon_vtxfmt.h"
 #include "drirenderbuffer.h"
 
+static void radeonUpdateSpecular( GLcontext *ctx );
+
 /* =============================================================
  * Alpha blending
  */
@@ -329,9 +331,6 @@ static void radeonFogfv( GLcontext *ctx, GLenum pname, const GLfloat *param )
    union { int i; float f; } c, d;
    GLchan col[4];
 
-   c.i = rmesa->hw.fog.cmd[FOG_C];
-   d.i = rmesa->hw.fog.cmd[FOG_D];
-
    switch (pname) {
    case GL_FOG_MODE:
       if (!ctx->Fog.Enabled)
@@ -341,73 +340,69 @@ static void radeonFogfv( GLcontext *ctx, GLenum pname, const GLfloat *param )
       switch (ctx->Fog.Mode) {
       case GL_LINEAR:
 	 rmesa->hw.tcl.cmd[TCL_UCP_VERT_BLEND_CTL] |= RADEON_TCL_FOG_LINEAR;
-	 if (ctx->Fog.Start == ctx->Fog.End) {
-	    c.f = 1.0F;
-	    d.f = 1.0F;
-	 }
-	 else {
-	    c.f = ctx->Fog.End/(ctx->Fog.End-ctx->Fog.Start);
-	    d.f = 1.0/(ctx->Fog.End-ctx->Fog.Start);
-	 }
 	 break;
       case GL_EXP:
 	 rmesa->hw.tcl.cmd[TCL_UCP_VERT_BLEND_CTL] |= RADEON_TCL_FOG_EXP;
-	 c.f = 0.0;
-	 d.f = ctx->Fog.Density;
 	 break;
       case GL_EXP2:
 	 rmesa->hw.tcl.cmd[TCL_UCP_VERT_BLEND_CTL] |= RADEON_TCL_FOG_EXP2;
-	 c.f = 0.0;
-	 d.f = -(ctx->Fog.Density * ctx->Fog.Density);
 	 break;
       default:
 	 return;
       }
-      break;
+   /* fallthrough */
    case GL_FOG_DENSITY:
+   case GL_FOG_START:
+   case GL_FOG_END:
+      if (!ctx->Fog.Enabled)
+	 return;
+      c.i = rmesa->hw.fog.cmd[FOG_C];
+      d.i = rmesa->hw.fog.cmd[FOG_D];
       switch (ctx->Fog.Mode) {
       case GL_EXP:
 	 c.f = 0.0;
-	 d.f = ctx->Fog.Density;
+	 /* While this is the opposite sign from the DDK, it makes the fog test
+	  * pass, and matches r200.
+	  */
+	 d.f = -ctx->Fog.Density;
 	 break;
       case GL_EXP2:
 	 c.f = 0.0;
 	 d.f = -(ctx->Fog.Density * ctx->Fog.Density);
 	 break;
-      default:
-	 break;
-      }
-      break;
-   case GL_FOG_START:
-   case GL_FOG_END:
-      if (ctx->Fog.Mode == GL_LINEAR) {
+      case GL_LINEAR:
 	 if (ctx->Fog.Start == ctx->Fog.End) {
 	    c.f = 1.0F;
 	    d.f = 1.0F;
 	 } else {
 	    c.f = ctx->Fog.End/(ctx->Fog.End-ctx->Fog.Start);
-	    d.f = 1.0/(ctx->Fog.End-ctx->Fog.Start);
+	    /* While this is the opposite sign from the DDK, it makes the fog
+	     * test pass, and matches r200.
+	     */
+	    d.f = -1.0/(ctx->Fog.End-ctx->Fog.Start);
 	 }
+	 break;
+      default:
+	 break;
+      }
+      if (c.i != rmesa->hw.fog.cmd[FOG_C] || d.i != rmesa->hw.fog.cmd[FOG_D]) {
+	 RADEON_STATECHANGE( rmesa, fog );
+	 rmesa->hw.fog.cmd[FOG_C] = c.i;
+	 rmesa->hw.fog.cmd[FOG_D] = d.i;
       }
       break;
    case GL_FOG_COLOR: 
       RADEON_STATECHANGE( rmesa, ctx );
       UNCLAMPED_FLOAT_TO_RGB_CHAN( col, ctx->Fog.Color );
-      rmesa->hw.ctx.cmd[CTX_PP_FOG_COLOR] =
+      rmesa->hw.ctx.cmd[CTX_PP_FOG_COLOR] &= ~RADEON_FOG_COLOR_MASK;
+      rmesa->hw.ctx.cmd[CTX_PP_FOG_COLOR] |=
 	 radeonPackColor( 4, col[0], col[1], col[2], 0 );
       break;
-   case GL_FOG_COORDINATE_SOURCE_EXT: 
-      /* What to do?
-       */
+   case GL_FOG_COORD_SRC:
+      radeonUpdateSpecular( ctx );
       break;
    default:
       return;
-   }
-
-   if (c.i != rmesa->hw.fog.cmd[FOG_C] || d.i != rmesa->hw.fog.cmd[FOG_D]) {
-      RADEON_STATECHANGE( rmesa, fog );
-      rmesa->hw.fog.cmd[FOG_C] = c.i;
-      rmesa->hw.fog.cmd[FOG_D] = d.i;
    }
 }
 
@@ -692,6 +687,7 @@ static void radeonUpdateSpecular( GLcontext *ctx )
 {
    radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
    u_int32_t p = rmesa->hw.ctx.cmd[CTX_PP_CNTL];
+   GLuint flag = 0;
 
    RADEON_STATECHANGE( rmesa, tcl );
 
@@ -730,13 +726,22 @@ static void radeonUpdateSpecular( GLcontext *ctx )
    }
 
    if (ctx->Fog.Enabled) {
-      rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXSEL] |= RADEON_TCL_COMPUTE_SPECULAR;
       rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXFMT] |= RADEON_TCL_VTX_PK_SPEC;
-
-      /* Bizzare: have to leave lighting enabled to get fog.
-       */
-      rmesa->hw.tcl.cmd[TCL_LIGHT_MODEL_CTL] |= RADEON_LIGHTING_ENABLE;
+      if (ctx->Fog.FogCoordinateSource == GL_FRAGMENT_DEPTH) {
+	 rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXSEL] |= RADEON_TCL_COMPUTE_SPECULAR;
+      /* Bizzare: have to leave lighting enabled to get fog. */
+	 rmesa->hw.tcl.cmd[TCL_LIGHT_MODEL_CTL] |= RADEON_LIGHTING_ENABLE;
+      }
+      else {
+      /* cannot do tcl fog factor calculation with fog coord source
+       * (send precomputed factors). Cannot use precomputed fog
+       * factors together with tcl spec light (need tcl fallback) */
+	 flag = (rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXSEL] &
+	    RADEON_TCL_COMPUTE_SPECULAR) != 0;
+      }
    }
+ 
+   TCL_FALLBACK( ctx, RADEON_TCL_FALLBACK_FOGCOORDSPEC, flag);
 
    if (NEED_SECONDARY_COLOR(ctx)) {
       assert( (p & RADEON_SPECULAR_ENABLE) != 0 );
@@ -1809,8 +1814,6 @@ static void radeonEnable( GLcontext *ctx, GLenum cap, GLboolean state )
 	 rmesa->hw.tcl.cmd[TCL_UCP_VERT_BLEND_CTL] &= ~RADEON_TCL_FOG_MASK;
       }
       radeonUpdateSpecular( ctx ); /* for PK_SPEC */
-      if (rmesa->TclFallback) 
-	 radeonChooseVertexState( ctx );
       _mesa_allow_light_in_model( ctx, !state );
       break;
 
@@ -1886,44 +1889,29 @@ static void radeonEnable( GLcontext *ctx, GLenum cap, GLboolean state )
       break;
 
    case GL_POLYGON_OFFSET_POINT:
-      if (rmesa->dri.drmMinor == 1) {
-	 radeonChooseRenderState( ctx );
-      } 
-      else {
-	 RADEON_STATECHANGE( rmesa, set );
-	 if ( state ) {
-	    rmesa->hw.set.cmd[SET_SE_CNTL] |=  RADEON_ZBIAS_ENABLE_POINT;
-	 } else {
-	    rmesa->hw.set.cmd[SET_SE_CNTL] &= ~RADEON_ZBIAS_ENABLE_POINT;
-	 }
+      RADEON_STATECHANGE( rmesa, set );
+      if ( state ) {
+	 rmesa->hw.set.cmd[SET_SE_CNTL] |=  RADEON_ZBIAS_ENABLE_POINT;
+      } else {
+	 rmesa->hw.set.cmd[SET_SE_CNTL] &= ~RADEON_ZBIAS_ENABLE_POINT;
       }
       break;
 
    case GL_POLYGON_OFFSET_LINE:
-      if (rmesa->dri.drmMinor == 1) {
-	 radeonChooseRenderState( ctx );
-      } 
-      else {
-	 RADEON_STATECHANGE( rmesa, set );
-	 if ( state ) {
-	    rmesa->hw.set.cmd[SET_SE_CNTL] |=  RADEON_ZBIAS_ENABLE_LINE;
-	 } else {
-	    rmesa->hw.set.cmd[SET_SE_CNTL] &= ~RADEON_ZBIAS_ENABLE_LINE;
-	 }
+      RADEON_STATECHANGE( rmesa, set );
+      if ( state ) {
+	 rmesa->hw.set.cmd[SET_SE_CNTL] |=  RADEON_ZBIAS_ENABLE_LINE;
+      } else {
+	 rmesa->hw.set.cmd[SET_SE_CNTL] &= ~RADEON_ZBIAS_ENABLE_LINE;
       }
       break;
 
    case GL_POLYGON_OFFSET_FILL:
-      if (rmesa->dri.drmMinor == 1) {
-	 radeonChooseRenderState( ctx );
-      } 
-      else {
-	 RADEON_STATECHANGE( rmesa, set );
-	 if ( state ) {
-	    rmesa->hw.set.cmd[SET_SE_CNTL] |=  RADEON_ZBIAS_ENABLE_TRI;
-	 } else {
-	    rmesa->hw.set.cmd[SET_SE_CNTL] &= ~RADEON_ZBIAS_ENABLE_TRI;
-	 }
+      RADEON_STATECHANGE( rmesa, set );
+      if ( state ) {
+	 rmesa->hw.set.cmd[SET_SE_CNTL] |=  RADEON_ZBIAS_ENABLE_TRI;
+      } else {
+	 rmesa->hw.set.cmd[SET_SE_CNTL] &= ~RADEON_ZBIAS_ENABLE_TRI;
       }
       break;
 
@@ -2024,7 +2012,105 @@ static void radeonLightingSpaceChange( GLcontext *ctx )
  * Deferred state management - matrices, textures, other?
  */
 
+static void texmat_set_texrect( radeonContextPtr rmesa,
+				struct gl_texture_object *tObj, GLuint unit )
+{
+   const struct gl_texture_image *baseImage = tObj->Image[0][tObj->BaseLevel];
+   _math_matrix_set_identity( &rmesa->tmpmat[unit] );
+   rmesa->tmpmat[unit].m[0] = 1.0 / baseImage->Width;
+   rmesa->tmpmat[unit].m[5] = 1.0 / baseImage->Height;
 
+}
+
+static void texmat_fixup_texrect( radeonContextPtr rmesa,
+				  struct gl_texture_object *tObj, GLuint unit )
+{
+   const struct gl_texture_image *baseImage = tObj->Image[0][tObj->BaseLevel];
+   GLuint i;
+   for (i = 0; i < 4; i++) {
+      rmesa->tmpmat[unit].m[i] = rmesa->tmpmat[unit].m[i] / baseImage->Width;
+      rmesa->tmpmat[unit].m[i+4] = rmesa->tmpmat[unit].m[i+4] / baseImage->Height;
+   }}
+
+
+void radeonUploadTexMatrix( radeonContextPtr rmesa,
+			    int unit, GLboolean swapcols )
+{
+/* Here's how this works: on r100, only 3 tex coords can be submitted, so the
+   vector looks like this probably: (s t r|q 0) (not sure if the last coord
+   is hardwired to 0, could be 1 too). Interestingly, it actually looks like
+   texgen generates all 4 coords, at least tests with projtex indicated that.
+   So: if we need the q coord in the end (solely determined by the texture
+   target, i.e. 2d / 1d / texrect targets) we swap the third and 4th row.
+   Additionally, if we don't have texgen but 4 tex coords submitted, we swap
+   column 3 and 4 (for the 2d / 1d / texrect targets) since the the q coord
+   will get submitted in the "wrong", i.e. 3rd, slot.
+   If an app submits 3 coords for 2d targets, we assume it is saving on vertex
+   size and using the texture matrix to swap the r and q coords around (ut2k3
+   does exactly that), so we don't need the 3rd / 4th column swap - still need
+   the 3rd / 4th row swap of course. This will potentially break for apps which
+   use TexCoord3x just for fun. Additionally, it will never work if an app uses
+   an "advanced" texture matrix and relies on all 4 texcoord inputs to generate
+   the maximum needed 3. This seems impossible to do with hw tcl on r100, and
+   incredibly hard to detect so we can't just fallback in such a case. Assume
+   it never happens... - rs
+*/
+
+   int idx = TEXMAT_0 + unit;
+   float *dest = ((float *)RADEON_DB_STATE( mat[idx] )) + MAT_ELT_0;
+   int i;
+   struct gl_texture_unit tUnit = rmesa->glCtx->Texture.Unit[unit];
+   GLfloat *src = rmesa->tmpmat[unit].m;
+
+   rmesa->TexMatColSwap &= ~(1 << unit);
+   if ((tUnit._ReallyEnabled & (TEXTURE_3D_BIT | TEXTURE_CUBE_BIT)) == 0) {
+      if (swapcols) {
+	 rmesa->TexMatColSwap |= 1 << unit;
+	 /* attention some elems are swapped 2 times! */
+	 *dest++ = src[0];
+	 *dest++ = src[4];
+	 *dest++ = src[12];
+	 *dest++ = src[8];
+	 *dest++ = src[1];
+	 *dest++ = src[5];
+	 *dest++ = src[13];
+	 *dest++ = src[9];
+	 *dest++ = src[2];
+	 *dest++ = src[6];
+	 *dest++ = src[15];
+	 *dest++ = src[11];
+	 /* those last 4 are probably never used */
+	 *dest++ = src[3];
+	 *dest++ = src[7];
+	 *dest++ = src[14];
+	 *dest++ = src[10];
+      }
+      else {
+	 for (i = 0; i < 2; i++) {
+	    *dest++ = src[i];
+	    *dest++ = src[i+4];
+	    *dest++ = src[i+8];
+	    *dest++ = src[i+12];
+	 }
+	 for (i = 3; i >= 2; i--) {
+	    *dest++ = src[i];
+	    *dest++ = src[i+4];
+	    *dest++ = src[i+8];
+	    *dest++ = src[i+12];
+	 }
+      }
+   }
+   else {
+      for (i = 0 ; i < 4 ; i++) {
+	 *dest++ = src[i];
+	 *dest++ = src[i+4];
+	 *dest++ = src[i+8];
+	 *dest++ = src[i+12];
+      }
+   }
+
+   RADEON_DB_STATECHANGE( rmesa, &rmesa->hw.mat[idx] );
+}
 
 
 static void upload_matrix( radeonContextPtr rmesa, GLfloat *src, int idx )
@@ -2057,59 +2143,69 @@ static void update_texturematrix( GLcontext *ctx )
    GLuint tpc = rmesa->hw.tcl.cmd[TCL_TEXTURE_PROC_CTL];
    GLuint vs = rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXSEL];
    int unit;
+   GLuint texMatEnabled = 0;
+   rmesa->NeedTexMatrix = 0;
+   rmesa->TexMatColSwap = 0;
 
-   rmesa->TexMatEnabled = 0;
+   for (unit = 0 ; unit < ctx->Const.MaxTextureUnits; unit++) {
+      if (ctx->Texture.Unit[unit]._ReallyEnabled) {
+	 GLboolean needMatrix = GL_FALSE;
+	 if (ctx->TextureMatrixStack[unit].Top->type != MATRIX_IDENTITY) {
+	    needMatrix = GL_TRUE;
+	    texMatEnabled |= (RADEON_TEXGEN_TEXMAT_0_ENABLE |
+			      RADEON_TEXMAT_0_ENABLE) << unit;
 
-   for (unit = 0 ; unit < 2; unit++) {
-      if (!ctx->Texture.Unit[unit]._ReallyEnabled) {
-      }
-      else if (ctx->TextureMatrixStack[unit].Top->type != MATRIX_IDENTITY) {
-	 GLuint inputshift = RADEON_TEXGEN_0_INPUT_SHIFT + unit*4;
-	 
-	 rmesa->TexMatEnabled |= (RADEON_TEXGEN_TEXMAT_0_ENABLE|
-				  RADEON_TEXMAT_0_ENABLE) << unit;
-
-	 if (rmesa->TexGenEnabled & (RADEON_TEXMAT_0_ENABLE << unit)) {
-	    /* Need to preconcatenate any active texgen 
-	     * obj/eyeplane matrices:
-	     */
-	    _math_matrix_mul_matrix( &rmesa->tmpmat,
+	    if (rmesa->TexGenEnabled & (RADEON_TEXMAT_0_ENABLE << unit)) {
+	       /* Need to preconcatenate any active texgen
+	        * obj/eyeplane matrices:
+	        */
+	       _math_matrix_mul_matrix( &rmesa->tmpmat[unit],
 				     ctx->TextureMatrixStack[unit].Top,
 				     &rmesa->TexGenMatrix[unit] );
-	    upload_matrix( rmesa, rmesa->tmpmat.m, TEXMAT_0+unit );
+	    }
+	    else {
+	       _math_matrix_copy( &rmesa->tmpmat[unit],
+		  ctx->TextureMatrixStack[unit].Top );
+	    }
 	 }
-	 else {
-	    rmesa->TexMatEnabled |= 
-	       (RADEON_TEXGEN_INPUT_TEXCOORD_0+unit) << inputshift;
-	    upload_matrix( rmesa, ctx->TextureMatrixStack[unit].Top->m, 
-			   TEXMAT_0+unit );
+	 else if (rmesa->TexGenEnabled & (RADEON_TEXMAT_0_ENABLE << unit)) {
+	    _math_matrix_copy( &rmesa->tmpmat[unit], &rmesa->TexGenMatrix[unit] );
+	    needMatrix = GL_TRUE;
 	 }
-      }
-      else if (rmesa->TexGenEnabled & (RADEON_TEXMAT_0_ENABLE << unit)) {
-	 upload_matrix( rmesa, rmesa->TexGenMatrix[unit].m, 
-			TEXMAT_0+unit );
+	 if (ctx->Texture.Unit[unit]._ReallyEnabled == TEXTURE_RECT_BIT) {
+	    texMatEnabled |= (RADEON_TEXGEN_TEXMAT_0_ENABLE |
+			      RADEON_TEXMAT_0_ENABLE) << unit;
+	    if (needMatrix)
+	       texmat_fixup_texrect( rmesa, ctx->Texture.Unit[unit]._Current, unit );
+	    else
+	       texmat_set_texrect( rmesa, ctx->Texture.Unit[unit]._Current, unit );
+	    needMatrix = GL_TRUE;
+	 }
+	 if (needMatrix) {
+	    rmesa->NeedTexMatrix |= 1 << unit;
+	    radeonUploadTexMatrix( rmesa, unit,
+			!ctx->Texture.Unit[unit].TexGenEnabled );
+	 }
       }
    }
 
+   tpc = (texMatEnabled | rmesa->TexGenEnabled);
 
-   tpc = (rmesa->TexMatEnabled | rmesa->TexGenEnabled);
+   /* TCL_TEX_COMPUTED_x is TCL_TEX_INPUT_x | 0x8 */
+   vs &= ~((RADEON_TCL_TEX_COMPUTED_TEX_0 << RADEON_TCL_TEX_0_OUTPUT_SHIFT) |
+	   (RADEON_TCL_TEX_COMPUTED_TEX_0 << RADEON_TCL_TEX_1_OUTPUT_SHIFT) |
+	   (RADEON_TCL_TEX_COMPUTED_TEX_0 << RADEON_TCL_TEX_2_OUTPUT_SHIFT));
 
-   vs &= ~((0xf << RADEON_TCL_TEX_0_OUTPUT_SHIFT) |
-	   (0xf << RADEON_TCL_TEX_1_OUTPUT_SHIFT));
-
-   if (tpc & RADEON_TEXGEN_TEXMAT_0_ENABLE)
-      vs |= RADEON_TCL_TEX_COMPUTED_TEX_0 << RADEON_TCL_TEX_0_OUTPUT_SHIFT;
-   else
-      vs |= RADEON_TCL_TEX_INPUT_TEX_0 << RADEON_TCL_TEX_0_OUTPUT_SHIFT;
-
-   if (tpc & RADEON_TEXGEN_TEXMAT_1_ENABLE)
-      vs |= RADEON_TCL_TEX_COMPUTED_TEX_1 << RADEON_TCL_TEX_1_OUTPUT_SHIFT;
-   else
-      vs |= RADEON_TCL_TEX_INPUT_TEX_1 << RADEON_TCL_TEX_1_OUTPUT_SHIFT;
+   vs |= (((tpc & RADEON_TEXGEN_TEXMAT_0_ENABLE) <<
+	 (RADEON_TCL_TEX_0_OUTPUT_SHIFT + 3)) |
+      ((tpc & RADEON_TEXGEN_TEXMAT_1_ENABLE) <<
+	 (RADEON_TCL_TEX_1_OUTPUT_SHIFT + 2)) |
+      ((tpc & RADEON_TEXGEN_TEXMAT_2_ENABLE) <<
+	 (RADEON_TCL_TEX_2_OUTPUT_SHIFT + 1)));
 
    if (tpc != rmesa->hw.tcl.cmd[TCL_TEXTURE_PROC_CTL] ||
        vs != rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXSEL]) {
-      
+
       RADEON_STATECHANGE(rmesa, tcl);
       rmesa->hw.tcl.cmd[TCL_TEXTURE_PROC_CTL] = tpc;
       rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXSEL] = vs;
@@ -2188,7 +2284,7 @@ void radeonValidateState( GLcontext *ctx )
     */
    if (new_state & _NEW_TEXTURE_MATRIX) {
       update_texturematrix( ctx );
-   }      
+   }
 
    if (new_state & (_NEW_LIGHT|_NEW_MODELVIEW|_MESA_NEW_NEED_EYE_COORDS)) {
       update_light( ctx );
@@ -2301,10 +2397,7 @@ void radeonInitStateFuncs( GLcontext *ctx )
    ctx->Driver.LineWidth                = radeonLineWidth;
    ctx->Driver.LogicOpcode		= radeonLogicOpCode;
    ctx->Driver.PolygonMode		= radeonPolygonMode;
-
-   if (RADEON_CONTEXT(ctx)->dri.drmMinor > 1)
-      ctx->Driver.PolygonOffset		= radeonPolygonOffset;
-
+   ctx->Driver.PolygonOffset		= radeonPolygonOffset;
    ctx->Driver.PolygonStipple		= radeonPolygonStipple;
    ctx->Driver.RenderMode		= radeonRenderMode;
    ctx->Driver.Scissor			= radeonScissor;

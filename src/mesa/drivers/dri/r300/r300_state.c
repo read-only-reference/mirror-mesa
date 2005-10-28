@@ -118,13 +118,13 @@ static void r300BlendColor(GLcontext * ctx, const GLfloat cf[4])
 
 	R300_STATECHANGE(rmesa, unk4E10);
 
-	/* Ordering might be wrong */
 	CLAMPED_FLOAT_TO_UBYTE(color[0], cf[0]);
 	CLAMPED_FLOAT_TO_UBYTE(color[1], cf[1]);
 	CLAMPED_FLOAT_TO_UBYTE(color[2], cf[2]);
 	CLAMPED_FLOAT_TO_UBYTE(color[3], cf[3]);
 
-	rmesa->hw.unk4E10.cmd[1]=r300PackColor(4, color[0], color[1], color[2], color[3]);
+	rmesa->hw.unk4E10.cmd[1] = r300PackColor(4, color[3], color[0],
+						 color[1], color[2]);
 }
 
 /**
@@ -194,6 +194,7 @@ static int blend_factor(GLenum factor, GLboolean is_src)
 		func = R200_BLEND_GL_ONE_MINUS_CONST_ALPHA;
 		break;
 	default:
+		fprintf(stderr, "unknown blend factor %x\n", factor);
 		func = (is_src) ? R200_BLEND_GL_ONE : R200_BLEND_GL_ZERO;
 	}
 	return func;
@@ -1015,7 +1016,6 @@ void r300_setup_textures(GLcontext *ctx)
 	struct r300_tex_obj *t;
 	r300ContextPtr r300 = R300_CONTEXT(ctx);
 	int max_texture_unit=-1; /* -1 translates into no setup costs for fields */
-	struct gl_texture_unit *texUnit;
 	GLuint OutputsWritten;
 	
 	if(hw_tcl_on)
@@ -1257,7 +1257,7 @@ void r300_setup_rs_unit(GLcontext *ctx)
 
 	r300->hw.rc.cmd[1] = 0
 			| (cur_reg /* count */ << R300_RS_CNTL_TC_CNT_SHIFT)
-			| R300_RS_CNTL_0_UNKNOWN_7
+			| (1 << R300_RS_CNTL_CI_CNT_SHIFT)
 			| R300_RS_CNTL_0_UNKNOWN_18;
 
 	if (r300->state.texture.tc_count > 0) {
@@ -1433,16 +1433,6 @@ static void r300GenerateSimpleVertexShader(r300ContextPtr r300)
 void r300SetupVertexShader(r300ContextPtr rmesa)
 {
 	GLcontext* ctx = rmesa->radeon.glCtx;
-	struct r300_vertex_shader_fragment unk4={
-			length: 4,
-			body: { f: {
-				/*0.0*/(rand()%100)/10.0,
-				/*0.0*/(rand()%100)/10.0,
-				/*1.0*/(rand()%100)/10.0,
-				/*0.0*/(rand()%100)/10.0
-				} }
-			};
-	LOCAL_VARS
 
 	/* Reset state, in case we don't use something */
 	((drm_r300_cmd_header_t*)rmesa->hw.vpp.cmd)->vpu.count = 0;
@@ -1513,7 +1503,6 @@ void r300SetupVertexProgram(r300ContextPtr rmesa)
 	GLcontext* ctx = rmesa->radeon.glCtx;
 	int inst_count;
 	int param_count;
-	LOCAL_VARS
 	struct r300_vertex_program *prog=(struct r300_vertex_program *)CURRENT_VERTEX_SHADER(ctx);
 			
 
@@ -1551,6 +1540,38 @@ void r300SetupVertexProgram(r300ContextPtr rmesa)
 	reg_start(R300_VAP_PVS_WAITIDLE,0);
 		e32(0x00000000);
 #endif
+}
+
+extern void _tnl_UpdateFixedFunctionProgram( GLcontext *ctx );
+
+extern int future_hw_tcl_on;
+void r300UpdateShaderStates(r300ContextPtr rmesa)
+{
+	GLcontext *ctx;
+	struct r300_vertex_program *vp;
+	
+	ctx = rmesa->radeon.glCtx; 
+	
+	if(ctx->VertexProgram._Enabled == GL_FALSE){
+		_tnl_UpdateFixedFunctionProgram(ctx);
+	}
+	vp = (struct r300_vertex_program *)CURRENT_VERTEX_SHADER(ctx);
+	if(vp->translated == GL_FALSE)
+		translate_vertex_shader(vp);
+	if(vp->translated == GL_FALSE){
+		fprintf(stderr, "Failing back to sw-tcl\n");
+		debug_vp(ctx, &vp->mesa_program);
+		hw_tcl_on=future_hw_tcl_on=0;
+		r300ResetHwState(rmesa);
+		
+		return ;
+	}
+		
+	r300_setup_textures(ctx);
+	r300_setup_rs_unit(ctx);
+
+	r300SetupVertexShader(rmesa);
+	r300SetupPixelShader(rmesa);
 }
 
 /* This is probably wrong for some values, I need to test this
@@ -1846,68 +1867,22 @@ static void r300InvalidateState(GLcontext * ctx, GLuint new_state)
 
 	/* Go inefficiency! */
 	r300ResetHwState(r300);
+#ifdef HW_VBOS
+	if(new_state & _NEW_ARRAY)
+		r300->state.VB.lock_uptodate = GL_FALSE;
+#endif
 }
 
-/* Checks that r300ResetHwState actually modifies all states.
-   Should probably be burried in somewhere else as this file is getting longish. */
-static void verify_r300ResetHwState(r300ContextPtr r300, int stage)
-{
-	struct r300_state_atom* atom;
-	int i;
-	drm_r300_cmd_header_t cmd;
-	
-	if(stage){ /* mess around with states */
-		unsigned long fp1, cb1;
-	
-		fp1=r300->hw.fp.cmd[R300_FP_CMD_1]; /* some special cases... */
-		cb1=r300->hw.cb.cmd[R300_CB_CMD_1];
-	
-		fprintf(stderr, "verify begin:\n");
-	
-		foreach(atom, &r300->hw.atomlist) {
-			for(i=1; i < (*atom->check)(r300, atom); i++)
-				atom->cmd[i]=0xdeadbeef;
-		}	
-		r300->hw.fp.cmd[R300_FP_CMD_1]=fp1;
-		r300->hw.cb.cmd[R300_CB_CMD_1]=cb1;
-			
-		foreach(atom, &r300->hw.atomlist) {
-			cmd.u=atom->cmd[0];
-			switch(cmd.header.cmd_type){
-			case R300_CMD_PACKET0:
-			case R300_CMD_VPU:
-			case R300_CMD_PACKET3:
-			case R300_CMD_END3D:
-			case R300_CMD_CP_DELAY:
-			case R300_CMD_DMA_DISCARD:
-				break;
-			default: fprintf(stderr, "unknown cmd_type %d in atom %s\n",
-					cmd.header.cmd_type, atom->name);
-			}
-		
-		}	
-	} else { /* check that they were set */
-		foreach(atom, &r300->hw.atomlist) {
-			for(i=1; i < (*atom->check)(r300, atom); i++)
-				if(atom->cmd[i]==0xdeadbeef)
-					fprintf(stderr, "atom %s is untouched\n", atom->name);
-		}	
-	}
-}
-		
 /**
  * Completely recalculates hardware state based on the Mesa state.
  */
 void r300ResetHwState(r300ContextPtr r300)
 {
 	GLcontext* ctx = r300->radeon.glCtx;
-	int i;
 
 	if (RADEON_DEBUG & DEBUG_STATE)
 		fprintf(stderr, "%s\n", __FUNCTION__);
 
-	//verify_r300ResetHwState(r300, 1);
-			
 		/* This is a place to initialize registers which
 		   have bitfields accessed by different functions
 		   and not all bits are used */
@@ -2229,7 +2204,6 @@ void r300ResetHwState(r300ContextPtr r300)
 	r300->hw.vps.cmd[R300_VPS_ZERO_3] = 0;
 
 //END: TODO
-	//verify_r300ResetHwState(r300, 0);
 	r300->hw.all_dirty = GL_TRUE;
 }
 
@@ -2275,10 +2249,11 @@ void r300InitState(r300ContextPtr r300)
 
 static void r300RenderMode( GLcontext *ctx, GLenum mode )
 {
-   r300ContextPtr rmesa = R300_CONTEXT(ctx);
-   WARN_ONCE("TODO: fallback properly when rendering mode is not GL_RENDER\n"
-   	     "\tThe way things are now neither selection nor feedback modes work\n")
-//   FALLBACK( rmesa, R300_FALLBACK_RENDER_MODE, (mode != GL_RENDER) );
+	r300ContextPtr rmesa = R300_CONTEXT(ctx);
+	(void)rmesa;
+	WARN_ONCE("TODO: fallback properly when rendering mode is not GL_RENDER\n"
+		"\tThe way things are now neither selection nor feedback modes work\n")
+//	FALLBACK( rmesa, R300_FALLBACK_RENDER_MODE, (mode != GL_RENDER) );
 }
 
 /**

@@ -152,6 +152,7 @@ void radeonSetUpAtomList( radeonContextPtr rmesa )
    for (i = 0; i < mtu; ++i) {
        insert_at_tail(&rmesa->hw.atomlist, &rmesa->hw.tex[i]);
        insert_at_tail(&rmesa->hw.atomlist, &rmesa->hw.txr[i]);
+       insert_at_tail(&rmesa->hw.atomlist, &rmesa->hw.cube[i]);
    }
    insert_at_tail(&rmesa->hw.atomlist, &rmesa->hw.zbs);
    insert_at_tail(&rmesa->hw.atomlist, &rmesa->hw.mtl);
@@ -773,15 +774,6 @@ void radeonAllocDmaRegion( radeonContextPtr rmesa,
    rmesa->dma.current.ptr += bytes; /* bug - if alignment > 7 */
    rmesa->dma.current.start = 
       rmesa->dma.current.ptr = (rmesa->dma.current.ptr + 0x7) & ~0x7;  
-}
-
-void radeonAllocDmaRegionVerts( radeonContextPtr rmesa, 
-				struct radeon_dma_region *region,
-				int numverts,
-				int vertsize,
-				int alignment )
-{
-   radeonAllocDmaRegion( rmesa, region, vertsize * numverts, alignment );
 }
 
 /* ================================================================

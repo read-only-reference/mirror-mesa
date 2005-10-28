@@ -43,7 +43,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "tnl/t_vertex.h"
 
 #include "sis_screen.h"
-#include "sis_common2.h"
+#include "sis_reg.h"
+#include "sis6326_reg.h"
 #include "sis_dri.h"
 
 /* for GLboolean */
@@ -65,7 +66,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define SIS_FALLBACK_TEXENV1		0x0010
 #define SIS_FALLBACK_DRAW_BUFFER	0x0020
 #define SIS_FALLBACK_STENCIL		0x0040
-#define SIS_FALLBACK_FORCE		0x8000
+#define SIS_FALLBACK_WRITEMASK		0x0080
+#define SIS_FALLBACK_DISABLE		0x0100
 
 /* Flags for hardware state that needs to be updated */
 #define GFLAG_ENABLESETTING		0x00000001
@@ -115,7 +117,10 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define SUBPIXEL_X  (-0.5F)
 #define SUBPIXEL_Y  (-0.5F)
 
+#define SIS_MAX_TEXTURE_SIZE 2048
+#define SIS_MAX_TEXTURES 2
 #define SIS_MAX_TEXTURE_LEVELS		11
+#define SIS_MAX_FRAME_LENGTH 3
 
 typedef struct {
    GLubyte *Data;		/* Pointer to texture in offscreen */
@@ -129,7 +134,8 @@ typedef struct sis_tex_obj {
    sisTexImage image[SIS_MAX_TEXTURE_LEVELS];	/* Image data for each mipmap
 						 * level */
    GLenum format;		/* One of GL_ALPHA, GL_INTENSITY, GL_LUMINANCE,
-				 * GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA */
+				 * GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA
+				 * MESA_YCBCR */
    GLint hwformat;              /* One of the TEXEL_ defines */
    GLint numImages;             /* Number of images loaded into .image */
 } sisTexObj, *sisTexObjPtr;
@@ -143,6 +149,7 @@ typedef struct __GLSiSTextureRec
   GLint hwTextureMip;
   GLint hwTextureClrHigh;
   GLint hwTextureClrLow;
+  GLint hwTexWidthHeight;	/* 6326: Texture Blending Setting */
   GLint hwTextureBorderColor;
 
   GLint texOffset0;
@@ -202,6 +209,7 @@ typedef struct __GLSiSHardwareRec
 
   GLint hwTexEnvColor;		/* Texture Blending Setting */
 
+  GLint hwTexBlendSet;		/* 6326 */
   GLint hwTexBlendColor0;
   GLint hwTexBlendColor1;
   GLint hwTexBlendAlpha0;
@@ -231,6 +239,19 @@ typedef void (*sis_line_func)( sisContextPtr,
 typedef void (*sis_point_func)( sisContextPtr,
 				sisVertex * );
 
+/**
+ * Derived from gl_renderbuffer.
+ */
+struct sis_renderbuffer {
+   struct gl_renderbuffer Base;  /* must be first! */
+   drmSize size;
+   GLuint offset;
+   void *handle;
+   GLuint pitch;
+   GLuint bpp;
+   char *map;
+};
+
 /* Device dependent context state */
 
 struct sis_context
@@ -252,6 +273,8 @@ struct sis_context
   void *vb_agp_handle;
   GLuint vb_agp_offset;
   GLboolean using_agp;
+  GLint coloroffset;		/* Offset in vertex format of current color */
+  GLint specoffset;		/* Offset in vertex format of specular color */
 
   GLuint NewGLState;
   GLuint Fallback;
@@ -264,8 +287,6 @@ struct sis_context
   unsigned char *IOBase;
   unsigned char *FbBase;
   unsigned int displayWidth;
-  unsigned int frontOffset;
-  unsigned int frontPitch;
 
   /* HW RGBA layout */
   unsigned int redMask, greenMask, blueMask, alphaMask;
@@ -306,11 +327,9 @@ struct sis_context
   __GLSiSHardware prev, current;
 
   int Chipset;
+  GLboolean is6326;
 
   GLint drawableID;
-
-  /* SGRAM block write */
-  GLboolean blockWrite;
 
   GLint GlobalFlag;
   GLuint last_tcl_state;
@@ -333,18 +352,11 @@ struct sis_context
   /* Front/back/depth buffer info */
   GLuint width, height;			/* size of buffers */
   GLint bottom;				/* used for FLIP macro */
-  GLvoid *backbuffer;
-  unsigned int backOffset;
-  unsigned int backPitch;
-  GLvoid *depthbuffer;
-  unsigned int depthOffset;
-  unsigned int depthPitch;
-  void *zbFree, *bbFree;		/* Cookies for freeing buffers */
-  ENGPACKET zClearPacket, cbClearPacket;
-
-  /* Drawable, cliprect and scissor information
-   */
-  GLint drawOffset, drawPitch;
+  /* XXX These don't belong here.  They should be per-drawable state. */
+  struct sis_renderbuffer front;
+  struct sis_renderbuffer back;
+  struct sis_renderbuffer depth;
+  struct sis_renderbuffer stencil; /* mirrors depth */
 
   /* Mirrors of some DRI state
    */
@@ -362,6 +374,7 @@ struct sis_context
 
    /* Configuration cache */
    driOptionCache optionCache;
+    GLint texture_depth;
 };
 
 #define SIS_CONTEXT(ctx)		((sisContextPtr)(ctx->DriverCtx))
@@ -388,15 +401,22 @@ struct sis_context
 #define MMIO_READ(reg) *(volatile GLint *)(smesa->IOBase + (reg))
 #define MMIO_READf(reg) *(volatile GLfloat *)(smesa->IOBase + (reg))
 
+#if defined(__i386__) || defined(__amd64__)
+#define MMIO_WMB()	__asm __volatile("" : : : "memory")
+#else
+#error platform needs WMB
+#endif
+
 #define mEndPrimitive()  \
 {       \
    *(volatile GLubyte *)(smesa->IOBase + REG_3D_EndPrimitiveList) = 0xff; \
    *(volatile GLuint *)(smesa->IOBase + 0x8b60) = 0xffffffff;		\
 }
 
-#define sis_fatal_error(msg)						\
+#define sis_fatal_error(...)						\
 do {									\
-	fprintf(stderr, "[%s:%d]: %s", __FILE__, __LINE__, msg);	\
+	fprintf(stderr, "[%s:%d]:", __FILE__, __LINE__);		\
+	fprintf(stderr, __VA_ARGS__);					\
 	exit(-1);							\
 } while (0)
 
@@ -422,6 +442,9 @@ extern GLboolean sisCreateContext( const __GLcontextModes *glVisual,
                                    void *sharedContextPrivate );
 extern void sisDestroyContext( __DRIcontextPrivate * );
 
+void sisReAllocateBuffers(GLcontext *ctx, GLframebuffer *drawbuffer,
+                          GLuint width, GLuint height);
+
 extern GLboolean sisMakeCurrent( __DRIcontextPrivate *driContextPriv,
                                   __DRIdrawablePrivate *driDrawPriv,
                                   __DRIdrawablePrivate *driReadPriv );
@@ -435,5 +458,20 @@ void WaitingFor3dIdle(sisContextPtr smesa, int wLen);
 /* update to hw */
 extern void sis_update_texture_state( sisContextPtr smesa );
 extern void sis_update_render_state( sisContextPtr smesa );
+extern void sis6326_update_texture_state( sisContextPtr smesa );
+extern void sis6326_update_render_state( sisContextPtr smesa );
 
+/* ================================================================
+ * Debugging:
+ */
+#define DO_DEBUG		1
+
+#if DO_DEBUG
+extern int SIS_DEBUG;
+#else
+#define SIS_DEBUG		0
 #endif
+
+#define DEBUG_FALLBACKS		0x01
+
+#endif /* _sis_ctx_h_ */

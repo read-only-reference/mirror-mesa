@@ -260,6 +260,8 @@ MAIN_FILES = \
 	$(DIRECTORY)/windows/VC7/mesa/osmesa/osmesa.vcproj
 
 DRI_FILES = \
+	$(DIRECTORY)/include/GL/internal/dri_interface.h		\
+	$(DIRECTORY)/include/GL/internal/sarea.h			\
 	$(DIRECTORY)/src/glx/Makefile					\
 	$(DIRECTORY)/src/glx/x11/Makefile				\
 	$(DIRECTORY)/src/glx/x11/*.[ch]					\
@@ -370,7 +372,7 @@ LIB_FILES = $(MAIN_FILES) $(DRI_FILES) $(SGI_GLU_FILES) $(GLW_FILES)
 
 
 # Everything for new a Mesa release:
-tarballs: rm_depend lib_gz demo_gz glut_gz lib_bz2 demo_bz2 glut_gz2 lib_zip demo_zip glut_zip md5
+tarballs: rm_depend lib_gz demo_gz glut_gz lib_bz2 demo_bz2 glut_bz2 lib_zip demo_zip glut_zip md5
 
 
 rm_depend:

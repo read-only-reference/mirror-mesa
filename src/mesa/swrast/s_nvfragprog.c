@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -821,7 +821,15 @@ execute_program( GLcontext *ctx,
                result[0] = 1.0F;
                result[1] = a[0];
                /* XXX we could probably just use pow() here */
-               result[2] = (a[0] > 0.0F) ? EXPF(a[3] * LOGF(a[1])) : 0.0F;
+               if (a[0] > 0.0F) {
+                  if (a[1] == 0.0 && a[3] == 0.0)
+                     result[2] = 1.0;
+                  else
+                     result[2] = EXPF(a[3] * LOGF(a[1]));
+               }
+               else {
+                  result[2] = 0.0;
+               }
                result[3] = 1.0F;
                store_vector4( inst, machine, result );
             }
@@ -1023,10 +1031,11 @@ execute_program( GLcontext *ctx,
             {
                GLfloat a[4], result[4];
                fetch_vector1( ctx, &inst->SrcReg[0], machine, program, a );
+               a[0] = FABSF(a[0]);
                result[0] = result[1] = result[2] = result[3] = INV_SQRTF(a[0]);
                store_vector4( inst, machine, result );
 #if DEBUG_FRAG
-               printf("RSQ %g = 1/sqrt(%g)\n", result[0], a[0]);
+               printf("RSQ %g = 1/sqrt(|%g|)\n", result[0], a[0]);
 #endif
             }
             break;
@@ -1155,15 +1164,15 @@ execute_program( GLcontext *ctx,
                GLuint i;
 
                /* do extended swizzling here */
-               for (i = 0; i < 3; i++) {
+               for (i = 0; i < 4; i++) {
                   if (GET_SWZ(source->Swizzle, i) == SWIZZLE_ZERO)
                      result[i] = 0.0;
                   else if (GET_SWZ(source->Swizzle, i) == SWIZZLE_ONE)
-                     result[i] = -1.0;
+                     result[i] = 1.0;
                   else
-                     result[i] = -src[GET_SWZ(source->Swizzle, i)];
+                     result[i] = src[GET_SWZ(source->Swizzle, i)];
 
-                  if (source->NegateBase)
+                  if (source->NegateBase & (1 << i))
                      result[i] = -result[i];
                }
                store_vector4( inst, machine, result );
@@ -1390,6 +1399,7 @@ init_machine( GLcontext *ctx, struct fp_machine *machine,
    /* Load input registers */
    if (inputsRead & (1 << FRAG_ATTRIB_WPOS)) {
       GLfloat *wpos = machine->Inputs[FRAG_ATTRIB_WPOS];
+      ASSERT(span->arrayMask & SPAN_Z);
       wpos[0] = (GLfloat) span->x + col;
       wpos[1] = (GLfloat) span->y;
       wpos[2] = (GLfloat) span->array->z[col] / ctx->DrawBuffer->_DepthMaxF;
@@ -1397,6 +1407,7 @@ init_machine( GLcontext *ctx, struct fp_machine *machine,
    }
    if (inputsRead & (1 << FRAG_ATTRIB_COL0)) {
       GLfloat *col0 = machine->Inputs[FRAG_ATTRIB_COL0];
+      ASSERT(span->arrayMask & SPAN_RGBA);
       col0[0] = CHAN_TO_FLOAT(span->array->rgba[col][RCOMP]);
       col0[1] = CHAN_TO_FLOAT(span->array->rgba[col][GCOMP]);
       col0[2] = CHAN_TO_FLOAT(span->array->rgba[col][BCOMP]);
@@ -1411,6 +1422,7 @@ init_machine( GLcontext *ctx, struct fp_machine *machine,
    }
    if (inputsRead & (1 << FRAG_ATTRIB_FOGC)) {
       GLfloat *fogc = machine->Inputs[FRAG_ATTRIB_FOGC];
+      ASSERT(span->arrayMask & SPAN_FOG);
       fogc[0] = span->array->fog[col];
       fogc[1] = 0.0F;
       fogc[2] = 0.0F;
@@ -1459,11 +1471,13 @@ _swrast_exec_fragment_program( GLcontext *ctx, struct sw_span *span )
 					      &ctx->FragmentProgram.Machine,
 					      span, i)) {
             span->array->mask[i] = GL_FALSE;  /* killed fragment */
+            span->writeAll = GL_FALSE;
          }
 #else
          if (!execute_program(ctx, program, ~0,
                               &ctx->FragmentProgram.Machine, span, i)) {
             span->array->mask[i] = GL_FALSE;  /* killed fragment */
+            span->writeAll = GL_FALSE;
          }
 #endif
 
@@ -1477,9 +1491,17 @@ _swrast_exec_fragment_program( GLcontext *ctx, struct sw_span *span )
             UNCLAMPED_FLOAT_TO_CHAN(span->array->rgba[i][ACOMP], colOut[3]);
          }
          /* depth value */
-         if (program->OutputsWritten & (1 << FRAG_OUTPUT_DEPR))
-            span->array->z[i] = IROUND(ctx->FragmentProgram.Machine.Outputs[FRAG_OUTPUT_DEPR][0] * ctx->DrawBuffer->_DepthMaxF);
+         if (program->OutputsWritten & (1 << FRAG_OUTPUT_DEPR)) {
+            const GLfloat depth
+               = ctx->FragmentProgram.Machine.Outputs[FRAG_OUTPUT_DEPR][2];
+            span->array->z[i] = IROUND(depth * ctx->DrawBuffer->_DepthMaxF);
+         }
       }
+   }
+
+   if (program->OutputsWritten & (1 << FRAG_OUTPUT_DEPR)) {
+      span->interpMask &= ~SPAN_Z;
+      span->arrayMask |= SPAN_Z;
    }
 
    ctx->_CurrentProgram = 0;

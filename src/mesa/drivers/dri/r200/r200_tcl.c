@@ -68,7 +68,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define HAVE_ELTS        1
 
 
-#define HW_POINTS           R200_VF_PRIM_POINTS
+#define HW_POINTS           ((ctx->_TriangleCaps & DD_POINT_SIZE) ? \
+				R200_VF_PRIM_POINT_SPRITES : R200_VF_PRIM_POINTS)
 #define HW_LINES            R200_VF_PRIM_LINES
 #define HW_LINE_LOOP        0
 #define HW_LINE_STRIP       R200_VF_PRIM_LINE_STRIP
@@ -394,12 +395,13 @@ static GLboolean r200_run_tcl_render( GLcontext *ctx,
     */
    if (ctx->Light.Enabled) {
       inputs |= VERT_BIT_NORMAL;
-      if (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR) {
-	 inputs |= VERT_BIT_COLOR1;
-      }
    }
 
-   if ( ctx->Fog.FogCoordinateSource == GL_FOG_COORD ) {
+   if (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR) {
+      inputs |= VERT_BIT_COLOR1;
+   }
+
+   if ( (ctx->Fog.FogCoordinateSource == GL_FOG_COORD) && ctx->Fog.Enabled ) {
       inputs |= VERT_BIT_FOG;
    }
 

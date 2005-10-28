@@ -46,19 +46,24 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "GL/internal/dri_interface.h"
 
+#define SIS_AGP_DISABLE(def) \
+DRI_CONF_OPT_BEGIN(agp_disable,bool,def)				\
+	DRI_CONF_DESC(en,"Disable AGP vertex dispatch")			\
+DRI_CONF_OPT_END
+
 PUBLIC const char __driConfigOptions[] =
 DRI_CONF_BEGIN
+	DRI_CONF_SECTION_QUALITY
+		DRI_CONF_TEXTURE_DEPTH(DRI_CONF_TEXTURE_DEPTH_FB)
+	DRI_CONF_SECTION_END
 	DRI_CONF_SECTION_DEBUG
-		DRI_CONF_OPT_BEGIN(agp_disable,bool,false)
-		DRI_CONF_DESC(en,"Disable AGP vertex dispatch")
-		DRI_CONF_OPT_END
-		DRI_CONF_OPT_BEGIN(fallback_force,bool,false)
-		DRI_CONF_DESC(en,"Force software fallback")
-		DRI_CONF_OPT_END
+		SIS_AGP_DISABLE(true)
+		DRI_CONF_NO_RAST(false)
 	DRI_CONF_SECTION_END
 DRI_CONF_END;
-static const GLuint __driNConfigOptions = 2;
+static const GLuint __driNConfigOptions = 3;
 
+extern const struct dri_extension card_extensions[];
 
 static __GLcontextModes *
 sisFillInModes(int bpp)
@@ -142,7 +147,6 @@ sisCreateScreen( __DRIscreenPrivate *sPriv )
    sisScreen->screenX = sisDRIPriv->width;
    sisScreen->screenY = sisDRIPriv->height;
    sisScreen->cpp = sisDRIPriv->bytesPerPixel;
-   sisScreen->irqEnabled = sisDRIPriv->bytesPerPixel;
    sisScreen->deviceID = sisDRIPriv->deviceID;
    sisScreen->AGPCmdBufOffset = sisDRIPriv->AGPCmdBufOffset;
    sisScreen->AGPCmdBufSize = sisDRIPriv->AGPCmdBufSize;
@@ -205,70 +209,21 @@ sisCreateBuffer( __DRIscreenPrivate *driScrnPriv,
                  GLboolean isPixmap )
 {
    sisScreenPtr screen = (sisScreenPtr) driScrnPriv->private;
+   struct gl_framebuffer *fb;
 
    if (isPixmap)
       return GL_FALSE; /* not implemented */
 
-   {
-      struct gl_framebuffer *fb = _mesa_create_framebuffer(mesaVis);
+   fb = _mesa_create_framebuffer(mesaVis);
 
-      /* XXX double-check the Offset/Pitch parameters! */
-      {
-         driRenderbuffer *frontRb
-            = driNewRenderbuffer(GL_RGBA, NULL, screen->cpp,
-                                 0, driScrnPriv->fbStride, driDrawPriv);
-         sisSetSpanFunctions(frontRb, mesaVis);
-         _mesa_add_renderbuffer(fb, BUFFER_FRONT_LEFT, &frontRb->Base);
-      }
-
-      if (mesaVis->doubleBufferMode) {
-         driRenderbuffer *backRb
-            = driNewRenderbuffer(GL_RGBA, NULL, screen->cpp,
-                                 0, driScrnPriv->fbStride, driDrawPriv);
-         sisSetSpanFunctions(backRb, mesaVis);
-         _mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &backRb->Base);
-      }
-
-      if (mesaVis->depthBits == 16) {
-         driRenderbuffer *depthRb
-            = driNewRenderbuffer(GL_DEPTH_COMPONENT16, NULL, screen->cpp,
-                                 0, driScrnPriv->fbStride, driDrawPriv);
-         sisSetSpanFunctions(depthRb, mesaVis);
-         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
-      }
-      else if (mesaVis->depthBits == 24) {
-         driRenderbuffer *depthRb
-            = driNewRenderbuffer(GL_DEPTH_COMPONENT24, NULL, screen->cpp,
-                                 0, driScrnPriv->fbStride, driDrawPriv);
-         sisSetSpanFunctions(depthRb, mesaVis);
-         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
-      }
-      else if (mesaVis->depthBits == 32) {
-         driRenderbuffer *depthRb
-            = driNewRenderbuffer(GL_DEPTH_COMPONENT32, NULL, screen->cpp,
-                                 0, driScrnPriv->fbStride, driDrawPriv);
-         sisSetSpanFunctions(depthRb, mesaVis);
-         _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &depthRb->Base);
-      }
-
-      /* no h/w stencil?
-      if (mesaVis->stencilBits > 0) {
-         driRenderbuffer *stencilRb
-            = driNewRenderbuffer(GL_STENCIL_INDEX8_EXT);
-         sisSetSpanFunctions(stencilRb, mesaVis);
-         _mesa_add_renderbuffer(fb, BUFFER_STENCIL, &stencilRb->Base);
-      }
-      */
-
-      _mesa_add_soft_renderbuffers(fb,
-                                   GL_FALSE, /* color */
-                                   GL_FALSE, /* depth */
-                                   mesaVis->stencilBits > 0,
-                                   mesaVis->accumRedBits > 0,
-                                   GL_FALSE, /* alpha */
-                                   GL_FALSE /* aux */);
-      driDrawPriv->driverPrivate = (void *) fb;
-   }
+   _mesa_add_soft_renderbuffers(fb,
+				GL_FALSE, /* color */
+				GL_FALSE, /* depth */
+				mesaVis->stencilBits > 0,
+				mesaVis->accumRedBits > 0,
+				GL_FALSE, /* alpha */
+				GL_FALSE /* aux */);
+   driDrawPriv->driverPrivate = (void *) fb;
 
    return (driDrawPriv->driverPrivate != NULL);
 }
@@ -280,63 +235,30 @@ sisDestroyBuffer(__DRIdrawablePrivate *driDrawPriv)
    _mesa_destroy_framebuffer((GLframebuffer *) (driDrawPriv->driverPrivate));
 }
 
-__inline__ static void
-sis_bitblt_copy_cmd (sisContextPtr smesa, ENGPACKET * pkt)
-{
-   GLint *lpdwDest, *lpdwSrc;
-   int i;
-
-   lpdwSrc = (GLint *) pkt;
-   lpdwDest = (GLint *) (GET_IOBase (smesa) + REG_SRC_ADDR);
-
-   mWait3DCmdQueue (10);
-
-   for (i = 0; i < 7; i++)
-      *lpdwDest++ = *lpdwSrc++;
-
-   MMIO(REG_CMD0, *(GLint *)&pkt->stdwCmd);
-   MMIO(REG_CommandQueue, -1);
-}
-
 static void sisCopyBuffer( __DRIdrawablePrivate *dPriv )
 {
    sisContextPtr smesa = (sisContextPtr)dPriv->driContextPriv->driverPrivate;
    int i;
-   ENGPACKET stEngPacket;
-  
-   memset(&stEngPacket, 0, sizeof(ENGPACKET));
 
    while ((*smesa->FrameCountPtr) - MMIO_READ(0x8a2c) > SIS_MAX_FRAME_LENGTH)
       ;
 
    LOCK_HARDWARE();
 
-   stEngPacket.dwSrcBaseAddr = smesa->backOffset;
-   stEngPacket.dwSrcPitch = smesa->backPitch |
-      ((smesa->bytesPerPixel == 2) ? 0x80000000 : 0xc0000000);
-   stEngPacket.dwDestBaseAddr = 0;
-   stEngPacket.wDestPitch = smesa->frontPitch;
-   /* TODO: set maximum value? */
-   stEngPacket.wDestHeight = smesa->virtualY;
-
-   stEngPacket.stdwCmd.cRop = 0xcc;
-
-   if (smesa->blockWrite)
-      stEngPacket.stdwCmd.cCmd0 = CMD0_PAT_FG_COLOR;
-   else
-      stEngPacket.stdwCmd.cCmd0 = 0;
-   stEngPacket.stdwCmd.cCmd1 = CMD1_DIR_X_INC | CMD1_DIR_Y_INC;
-
    for (i = 0; i < dPriv->numClipRects; i++) {
       drm_clip_rect_t *box = &dPriv->pClipRects[i];
-      stEngPacket.stdwSrcPos.wY = box->y1 - dPriv->y;
-      stEngPacket.stdwSrcPos.wX = box->x1 - dPriv->x;
-      stEngPacket.stdwDestPos.wY = box->y1;
-      stEngPacket.stdwDestPos.wX = box->x1;
 
-      stEngPacket.stdwDim.wWidth = (GLshort) box->x2 - box->x1;
-      stEngPacket.stdwDim.wHeight = (GLshort) box->y2 - box->y1;
-      sis_bitblt_copy_cmd( smesa, &stEngPacket );
+      mWait3DCmdQueue(10);
+      MMIO(REG_SRC_ADDR, smesa->back.offset);
+      MMIO(REG_SRC_PITCH, smesa->back.pitch | ((smesa->bytesPerPixel == 4) ? 
+			   BLIT_DEPTH_32 : BLIT_DEPTH_16));
+      MMIO(REG_SRC_X_Y, ((box->x1 - dPriv->x) << 16) | (box->y1 - dPriv->y));
+      MMIO(REG_DST_X_Y, ((box->x1 - dPriv->x) << 16) | (box->y1 - dPriv->y));
+      MMIO(REG_DST_ADDR, smesa->front.offset);
+      MMIO(REG_DST_PITCH_HEIGHT, (smesa->virtualY << 16) | smesa->front.pitch);
+      MMIO(REG_WIDTH_HEIGHT, ((box->y2 - box->y1) << 16) | (box->x2 - box->x1));
+      MMIO(REG_BLIT_CMD, CMD_DIR_X_INC | CMD_DIR_Y_INC | CMD_ROP_SRC);
+      MMIO(REG_CommandQueue, -1);
    }
 
    *(GLint *)(smesa->IOBase+0x8a2c) = *smesa->FrameCountPtr;
@@ -443,6 +365,16 @@ void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn,
    if (psp != NULL) {
       SISDRIPtr dri_priv = (SISDRIPtr)psp->pDevPriv;
       *driver_modes = sisFillInModes(dri_priv->bytesPerPixel * 8);
+
+      /* Calling driInitExtensions here, with a NULL context pointer, does not actually
+       * enable the extensions.  It just makes sure that all the dispatch offsets for all
+       * the extensions that *might* be enables are known.  This is needed because the
+       * dispatch offsets need to be known when _mesa_context_create is called, but we can't
+       * enable the extensions until we have a context pointer.
+       *
+       * Hello chicken.  Hello egg.  How are you two today?
+       */
+      driInitExtensions( NULL, card_extensions, GL_FALSE );
    }
 
    return (void *)psp;

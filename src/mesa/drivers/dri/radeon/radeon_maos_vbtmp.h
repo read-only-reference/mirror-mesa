@@ -47,9 +47,9 @@ static void TAG(emit)( GLcontext *ctx,
    GLuint tc0_stride, tc1_stride, col_stride, spec_stride, fog_stride;
    GLuint tc2_stride, norm_stride;
    GLuint fill_tex = 0;
+   GLuint rqcoordsnoswap = 0;
    GLuint (*coord)[4];
    GLuint coord_stride; /* object coordinates */
-   GLubyte dummy[4];
    int i;
 
    union emit_union *v = (union emit_union *)dest;
@@ -65,8 +65,11 @@ static void TAG(emit)( GLcontext *ctx,
 	 const GLuint t2 = GET_TEXSOURCE(2);
 	 tc2 = (GLuint (*)[4])VB->TexCoordPtr[t2]->data;
 	 tc2_stride = VB->TexCoordPtr[t2]->stride;
-	 if (DO_PTEX && VB->TexCoordPtr[t2]->size < 4) {
+	 if (DO_PTEX && VB->TexCoordPtr[t2]->size < 3) {
 	    fill_tex |= (1<<2);
+	 }
+	 else if (DO_PTEX && VB->TexCoordPtr[t2]->size < 4) {
+	    rqcoordsnoswap |= (1<<2);
 	 }
       } else {
 	 tc2 = (GLuint (*)[4])&ctx->Current.Attrib[VERT_ATTRIB_TEX2];
@@ -79,8 +82,11 @@ static void TAG(emit)( GLcontext *ctx,
 	 const GLuint t1 = GET_TEXSOURCE(1);
 	 tc1 = (GLuint (*)[4])VB->TexCoordPtr[t1]->data;
 	 tc1_stride = VB->TexCoordPtr[t1]->stride;
-	 if (DO_PTEX && VB->TexCoordPtr[t1]->size < 4) {
+	 if (DO_PTEX && VB->TexCoordPtr[t1]->size < 3) {
 	    fill_tex |= (1<<1);
+	 }
+	 else if (DO_PTEX && VB->TexCoordPtr[t1]->size < 4) {
+	    rqcoordsnoswap |= (1<<1);
 	 }
       } else {
 	 tc1 = (GLuint (*)[4])&ctx->Current.Attrib[VERT_ATTRIB_TEX1];
@@ -93,8 +99,11 @@ static void TAG(emit)( GLcontext *ctx,
 	 const GLuint t0 = GET_TEXSOURCE(0);
 	 tc0_stride = VB->TexCoordPtr[t0]->stride;
 	 tc0 = (GLuint (*)[4])VB->TexCoordPtr[t0]->data;
-	 if (DO_PTEX && VB->TexCoordPtr[t0]->size < 4) {
+	 if (DO_PTEX && VB->TexCoordPtr[t0]->size < 3) {
 	    fill_tex |= (1<<0);
+	 }
+	 else if (DO_PTEX && VB->TexCoordPtr[t0]->size < 4) {
+	    rqcoordsnoswap |= (1<<0);
 	 }
       } else {
 	 tc0 = (GLuint (*)[4])&ctx->Current.Attrib[VERT_ATTRIB_TEX0];
@@ -123,7 +132,7 @@ static void TAG(emit)( GLcontext *ctx,
       }
    }
 
-   if (DO_SPEC) {
+   if (DO_SPEC_OR_FOG) {
       if (VB->SecondaryColorPtr[0]) {
 	 spec = VB->SecondaryColorPtr[0]->data;
 	 spec_stride = VB->SecondaryColorPtr[0]->stride;
@@ -133,12 +142,12 @@ static void TAG(emit)( GLcontext *ctx,
       }
    }
 
-   if (DO_FOG) {
+   if (DO_SPEC_OR_FOG) {
       if (VB->FogCoordPtr) {
 	 fog = VB->FogCoordPtr->data;
 	 fog_stride = VB->FogCoordPtr->stride;
       } else {
-	 fog = (GLfloat (*)[4])&dummy; fog[0][0] = 0.0F;
+	 fog = (GLfloat (*)[4])ctx->Current.Attrib[VERT_ATTRIB_FOG];
 	 fog_stride = 0;
       }
    }
@@ -192,7 +201,7 @@ static void TAG(emit)( GLcontext *ctx,
 	    STRIDE_4F(col, col_stride);
 	    v++;
 	 }
-	 if (DO_SPEC || DO_FOG) {
+	 if (DO_SPEC_OR_FOG) {
 	    if (DO_SPEC) {
 	       UNCLAMPED_FLOAT_TO_UBYTE(v[0].rgba.red, spec[0][0]);
 	       UNCLAMPED_FLOAT_TO_UBYTE(v[0].rgba.green, spec[0][1]);
@@ -200,8 +209,8 @@ static void TAG(emit)( GLcontext *ctx,
 	       STRIDE_4F(spec, spec_stride);
 	    }
 	    if (DO_FOG) {
-	       UNCLAMPED_FLOAT_TO_UBYTE(v[0].rgba.alpha, fog[0][0]);
-	       fog = (GLfloat (*)[4])((GLubyte *)fog + fog_stride);
+	       UNCLAMPED_FLOAT_TO_UBYTE(v[0].rgba.alpha, radeonComputeFogBlendFactor(ctx, fog[0][0]));
+	       STRIDE_4F(fog, fog_stride);
 	    }
 	    if (TCL_DEBUG) fprintf(stderr, "%x ", v[0].ui);
 	    v++;
@@ -213,6 +222,8 @@ static void TAG(emit)( GLcontext *ctx,
 	    if (DO_PTEX) {
 	       if (fill_tex & (1<<0))
 		  v[2].f = 1.0;
+	       else if (rqcoordsnoswap & (1<<0))
+		  v[2].ui = tc0[0][2];
 	       else
 		  v[2].ui = tc0[0][3];
 	       if (TCL_DEBUG) fprintf(stderr, "%.2f ", v[2].f);
@@ -229,6 +240,8 @@ static void TAG(emit)( GLcontext *ctx,
 	    if (DO_PTEX) {
 	       if (fill_tex & (1<<1))
 		  v[2].f = 1.0;
+	       else if (rqcoordsnoswap & (1<<1))
+		  v[2].ui = tc1[0][2];
 	       else
 		  v[2].ui = tc1[0][3];
 	       if (TCL_DEBUG) fprintf(stderr, "%.2f ", v[2].f);
@@ -241,11 +254,15 @@ static void TAG(emit)( GLcontext *ctx,
 	 if (DO_TEX2) {
 	    v[0].ui = tc2[0][0];
 	    v[1].ui = tc2[0][1];
+	    if (TCL_DEBUG) fprintf(stderr, "t2: %.2f %.2f ", v[0].f, v[1].f);
 	    if (DO_PTEX) {
 	       if (fill_tex & (1<<2))
 		  v[2].f = 1.0;
+	       else if (rqcoordsnoswap & (1<<2))
+		  v[2].ui = tc2[0][2];
 	       else
 		  v[2].ui = tc2[0][3];
+	       if (TCL_DEBUG) fprintf(stderr, "%.2f ", v[2].f);
 	       v += 3;
 	    } 
 	    else
@@ -265,7 +282,7 @@ static void TAG(init)( void )
    if (DO_W) sz++;
    if (DO_NORM) sz += 3;
    if (DO_RGBA) sz++;
-   if (DO_SPEC || DO_FOG) sz++;
+   if (DO_SPEC_OR_FOG) sz++;
    if (DO_TEX0) sz += 2;
    if (DO_TEX0 && DO_PTEX) sz++;
    if (DO_TEX1) sz += 2;

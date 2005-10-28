@@ -312,8 +312,8 @@ enum {
  */
 struct gl_color_table
 {
-   GLenum Format;         /**< GL_ALPHA, GL_RGB, GL_RGB, etc */
-   GLenum IntFormat;
+   GLenum InternalFormat;      /**< The user-specified format */
+   GLenum _BaseFormat;         /**< GL_ALPHA, GL_RGBA, GL_RGB, etc */
    GLuint Size;           /**< number of entries (rows) in table */
    GLvoid *Table;         /**< points to data of <Type> */
    GLenum Type;           /**< GL_UNSIGNED_BYTE or GL_FLOAT */
@@ -1206,13 +1206,13 @@ struct gl_texture_format
  */
 struct gl_texture_image
 {
-   GLenum Format;		/**< Either GL_RGB, GL_RGBA, GL_ALPHA,
+   GLenum _BaseFormat;		/**< Either GL_RGB, GL_RGBA, GL_ALPHA,
 				 *   GL_LUMINANCE, GL_LUMINANCE_ALPHA,
-				 *   GL_INTENSITY, GL_COLOR_INDEX or
-				 *   GL_DEPTH_COMPONENT only.
-				 *   Used for choosing TexEnv arithmetic.
+				 *   GL_INTENSITY, GL_COLOR_INDEX,
+				 *   GL_DEPTH_COMPONENT or GL_DEPTH_STENCIL_EXT
+                                 *   only. Used for choosing TexEnv arithmetic.
 				 */
-   GLint IntFormat;		/**< Internal format as given by the user */
+   GLint InternalFormat;	/**< Internal format as given by the user */
    GLuint Border;		/**< 0 or 1 */
    GLuint Width;		/**< = 2^WidthLog2 + 2*Border */
    GLuint Height;		/**< = 2^HeightLog2 + 2*Border */
@@ -1299,7 +1299,6 @@ struct gl_texture_object
    GLint _MaxLevel;		/**< actual max mipmap level (q in the spec) */
    GLfloat _MaxLambda;		/**< = _MaxLevel - BaseLevel (q - b in spec) */
    GLboolean GenerateMipmap;    /**< GL_SGIS_generate_mipmap */
-   GLboolean _IsPowerOfTwo;	/**< Are all image dimensions powers of two? */
    GLboolean Complete;		/**< Is texture object complete? */
 
    /** Actual texture images, indexed by [cube face] and [mipmap level] */
@@ -1902,6 +1901,10 @@ struct gl_query_state
 
 
 /**
+ ** XXX do these gl2 structs really neeed to be here?
+ **/
+
+/**
  * gl2 unique interface identifier.
  * Each gl2 interface has its own interface id used for object queries.
  */
@@ -2009,7 +2012,7 @@ struct gl_shared_state
     * \name Vertex/fragment programs
     */
    /*@{*/
-   struct _mesa_HashTable *Programs;
+   struct _mesa_HashTable *Programs; /**< All vertex/fragment programs */
 #if FEATURE_ARB_vertex_program
    struct program *DefaultVertexProgram;
 #endif
@@ -2731,10 +2734,10 @@ struct __GLcontextRec
    GLboolean ExecuteFlag;	/**< Execute GL commands? */
    GLboolean CompileFlag;	/**< Compile GL commands into display list? */
 
-   /** Extensions */
+   /** Extension information */
    struct gl_extensions Extensions;
 
-   /** \name Renderer attribute stack */
+   /** \name State attribute stack (for glPush/PopAttrib) */
    /*@{*/
    GLuint AttribStackDepth;
    struct gl_attrib_node *AttribStack[MAX_ATTRIB_STACK_DEPTH];
@@ -2746,8 +2749,8 @@ struct __GLcontextRec
     * attributes easy.  Also it's a good organization.
     */
    /*@{*/
-   struct gl_accum_attrib	Accum;		/**< Accumulation buffer attributes */
-   struct gl_colorbuffer_attrib	Color;		/**< Color buffers attributes */
+   struct gl_accum_attrib	Accum;		/**< Accum buffer attributes */
+   struct gl_colorbuffer_attrib	Color;		/**< Color buffer attributes */
    struct gl_current_attrib	Current;	/**< Current attributes */
    struct gl_depthbuffer_attrib	Depth;		/**< Depth buffer attributes */
    struct gl_eval_attrib	Eval;		/**< Eval attributes */
@@ -2818,7 +2821,6 @@ struct __GLcontextRec
    /*@}*/
 
 #if FEATURE_EXT_framebuffer_object
-   /*struct gl_framebuffer *CurrentFramebuffer;*/
    struct gl_renderbuffer *CurrentRenderbuffer;
 #endif
 

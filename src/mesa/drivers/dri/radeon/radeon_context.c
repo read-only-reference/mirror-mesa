@@ -66,10 +66,11 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define need_GL_ARB_multisample
 #define need_GL_ARB_texture_compression
 #define need_GL_EXT_blend_minmax
+#define need_GL_EXT_fog_coord
 #define need_GL_EXT_secondary_color
 #include "extension_helper.h"
 
-#define DRIVER_DATE	"20050831"
+#define DRIVER_DATE	"20051013"
 
 #include "vblank.h"
 #include "utils.h"
@@ -139,6 +140,7 @@ const struct dri_extension card_extensions[] =
     { "GL_ARB_texture_mirrored_repeat",    NULL },
     { "GL_EXT_blend_logic_op",             NULL },
     { "GL_EXT_blend_subtract",             GL_EXT_blend_minmax_functions },
+    { "GL_EXT_fog_coord",                  GL_EXT_fog_coord_functions },
     { "GL_EXT_secondary_color",            GL_EXT_secondary_color_functions },
     { "GL_EXT_stencil_wrap",               NULL },
     { "GL_EXT_texture_edge_clamp",         NULL },
@@ -238,6 +240,9 @@ radeonCreateContext( const __GLcontextModes *glVisual,
    if ( !rmesa )
       return GL_FALSE;
 
+   /* init exp fog table data */
+   radeonInitStaticFogData();
+   
    /* Parse configuration files.
     * Do this here so that initialMaxAnisotropy is set before we create
     * the default textures.
@@ -327,9 +332,10 @@ radeonCreateContext( const __GLcontextModes *glVisual,
     */
 
    ctx = rmesa->glCtx;
-   ctx->Const.MaxTextureUnits = 2;
-   ctx->Const.MaxTextureImageUnits = 2;
-   ctx->Const.MaxTextureCoordUnits = 2;
+   ctx->Const.MaxTextureUnits = driQueryOptioni (&rmesa->optionCache,
+						 "texture_units");
+   ctx->Const.MaxTextureImageUnits = ctx->Const.MaxTextureUnits;
+   ctx->Const.MaxTextureCoordUnits = ctx->Const.MaxTextureUnits;
 
    driCalculateMaxTextureLevels( rmesa->texture_heaps,
 				 rmesa->nr_heaps,
@@ -337,7 +343,7 @@ radeonCreateContext( const __GLcontextModes *glVisual,
 				 4,
 				 11, /* max 2D texture size is 2048x2048 */
 				 0,  /* 3D textures unsupported. */
-				 0,  /* cube textures unsupported. */
+				 9,  /* \todo: max cube texture size seems to be 512x512(x6) */
 				 11, /* max rect texture size is 2048x2048. */
 				 12,
 				 GL_FALSE );
@@ -403,14 +409,16 @@ radeonCreateContext( const __GLcontextModes *glVisual,
    _tnl_allow_vertex_fog( ctx, GL_TRUE );
 
 
-   _math_matrix_ctr( &rmesa->TexGenMatrix[0] );
-   _math_matrix_ctr( &rmesa->TexGenMatrix[1] );
-   _math_matrix_ctr( &rmesa->tmpmat );
-   _math_matrix_set_identity( &rmesa->TexGenMatrix[0] );
-   _math_matrix_set_identity( &rmesa->TexGenMatrix[1] );
-   _math_matrix_set_identity( &rmesa->tmpmat );
+   for ( i = 0 ; i < RADEON_MAX_TEXTURE_UNITS ; i++ ) {
+      _math_matrix_ctr( &rmesa->TexGenMatrix[i] );
+      _math_matrix_ctr( &rmesa->tmpmat[i] );
+      _math_matrix_set_identity( &rmesa->TexGenMatrix[i] );
+      _math_matrix_set_identity( &rmesa->tmpmat[i] );
+   }
 
    driInitExtensions( ctx, card_extensions, GL_TRUE );
+   if (rmesa->radeonScreen->drmSupportsCubeMaps)
+      _mesa_enable_extension( ctx, "GL_ARB_texture_cube_map" );
    if (rmesa->glCtx->Mesa_DXTn) {
       _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
       _mesa_enable_extension( ctx, "GL_S3_s3tc" );

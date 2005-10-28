@@ -51,7 +51,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "radeon_maos.h"
 
 
-#define RADEON_TCL_MAX_SETUP 13
+#define RADEON_TCL_MAX_SETUP 19
 
 union emit_union { float f; GLuint ui; radeon_color_t rgba; };
 
@@ -63,14 +63,17 @@ static struct {
 
 #define DO_W    (IND & RADEON_CP_VC_FRMT_W0)
 #define DO_RGBA (IND & RADEON_CP_VC_FRMT_PKCOLOR)
-#define DO_SPEC (IND & RADEON_CP_VC_FRMT_PKSPEC)
-#define DO_FOG  (IND & RADEON_CP_VC_FRMT_PKSPEC)
+#define DO_SPEC_OR_FOG (IND & RADEON_CP_VC_FRMT_PKSPEC)
+#define DO_SPEC ((IND & RADEON_CP_VC_FRMT_PKSPEC) && \
+		 (ctx->_TriangleCaps & DD_SEPARATE_SPECULAR))
+#define DO_FOG  ((IND & RADEON_CP_VC_FRMT_PKSPEC) && ctx->Fog.Enabled && \
+		 (ctx->Fog.FogCoordinateSource == GL_FOG_COORD))
 #define DO_TEX0 (IND & RADEON_CP_VC_FRMT_ST0)
 #define DO_TEX1 (IND & RADEON_CP_VC_FRMT_ST1)
+#define DO_TEX2 (IND & RADEON_CP_VC_FRMT_ST2)
 #define DO_PTEX (IND & RADEON_CP_VC_FRMT_Q0)
 #define DO_NORM (IND & RADEON_CP_VC_FRMT_N0)
 
-#define DO_TEX2 0
 #define DO_TEX3 0
 
 #define GET_TEXSOURCE(n)  n
@@ -202,6 +205,77 @@ static struct {
 #define TAG(x) x##_w_rgba_spec_stq_stq_n
 #include "radeon_maos_vbtmp.h"
 
+#define IDX 13
+#define IND (RADEON_CP_VC_FRMT_XY|		\
+	     RADEON_CP_VC_FRMT_Z|		\
+	     RADEON_CP_VC_FRMT_PKCOLOR|		\
+	     RADEON_CP_VC_FRMT_ST0|		\
+	     RADEON_CP_VC_FRMT_ST1|		\
+	     RADEON_CP_VC_FRMT_ST2)
+#define TAG(x) x##_rgba_st_st_st
+#include "radeon_maos_vbtmp.h"
+
+#define IDX 14
+#define IND (RADEON_CP_VC_FRMT_XY|		\
+	     RADEON_CP_VC_FRMT_Z|		\
+	     RADEON_CP_VC_FRMT_PKCOLOR|		\
+	     RADEON_CP_VC_FRMT_PKSPEC|		\
+	     RADEON_CP_VC_FRMT_ST0|		\
+	     RADEON_CP_VC_FRMT_ST1|		\
+	     RADEON_CP_VC_FRMT_ST2)
+#define TAG(x) x##_rgba_spec_st_st_st
+#include "radeon_maos_vbtmp.h"
+
+#define IDX 15
+#define IND (RADEON_CP_VC_FRMT_XY|		\
+	     RADEON_CP_VC_FRMT_Z|		\
+	     RADEON_CP_VC_FRMT_ST0|		\
+	     RADEON_CP_VC_FRMT_ST1|		\
+	     RADEON_CP_VC_FRMT_ST2|		\
+	     RADEON_CP_VC_FRMT_N0)
+#define TAG(x) x##_st_st_st_n
+#include "radeon_maos_vbtmp.h"
+
+#define IDX 16
+#define IND (RADEON_CP_VC_FRMT_XY|		\
+	     RADEON_CP_VC_FRMT_Z|		\
+	     RADEON_CP_VC_FRMT_PKCOLOR|		\
+	     RADEON_CP_VC_FRMT_PKSPEC|		\
+	     RADEON_CP_VC_FRMT_ST0|		\
+	     RADEON_CP_VC_FRMT_ST1|		\
+	     RADEON_CP_VC_FRMT_ST2|		\
+	     RADEON_CP_VC_FRMT_N0)
+#define TAG(x) x##_rgba_spec_st_st_st_n
+#include "radeon_maos_vbtmp.h"
+
+#define IDX 17
+#define IND (RADEON_CP_VC_FRMT_XY|		\
+	     RADEON_CP_VC_FRMT_Z|		\
+	     RADEON_CP_VC_FRMT_PKCOLOR|		\
+	     RADEON_CP_VC_FRMT_ST0|		\
+	     RADEON_CP_VC_FRMT_Q0|		\
+	     RADEON_CP_VC_FRMT_ST1|		\
+	     RADEON_CP_VC_FRMT_Q1|		\
+	     RADEON_CP_VC_FRMT_ST2|		\
+	     RADEON_CP_VC_FRMT_Q2)
+#define TAG(x) x##_rgba_stq_stq_stq
+#include "radeon_maos_vbtmp.h"
+
+#define IDX 18
+#define IND (RADEON_CP_VC_FRMT_XY|		\
+	     RADEON_CP_VC_FRMT_Z|		\
+	     RADEON_CP_VC_FRMT_W0|		\
+	     RADEON_CP_VC_FRMT_PKCOLOR|		\
+	     RADEON_CP_VC_FRMT_PKSPEC|		\
+	     RADEON_CP_VC_FRMT_ST0|		\
+	     RADEON_CP_VC_FRMT_Q0|		\
+	     RADEON_CP_VC_FRMT_ST1|		\
+	     RADEON_CP_VC_FRMT_Q1|		\
+	     RADEON_CP_VC_FRMT_ST2|		\
+	     RADEON_CP_VC_FRMT_Q2|		\
+	     RADEON_CP_VC_FRMT_N0)
+#define TAG(x) x##_w_rgba_spec_stq_stq_stq_n
+#include "radeon_maos_vbtmp.h"
 
 
 
@@ -226,6 +300,12 @@ static void init_tcl_verts( void )
    init_rgba_stq();
    init_rgba_stq_stq();
    init_w_rgba_spec_stq_stq_n();
+   init_rgba_st_st_st();
+   init_rgba_spec_st_st_st();
+   init_st_st_st_n();
+   init_rgba_spec_st_st_st_n();
+   init_rgba_stq_stq_stq();
+   init_w_rgba_spec_stq_stq_stq_n();
 }
 
 
@@ -234,8 +314,9 @@ void radeonEmitArrays( GLcontext *ctx, GLuint inputs )
    radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
    struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
    GLuint req = 0;
+   GLuint unit;
    GLuint vtx = (rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXFMT] &
-		 ~(RADEON_TCL_VTX_Q0|RADEON_TCL_VTX_Q1));
+		 ~(RADEON_TCL_VTX_Q0|RADEON_TCL_VTX_Q1|RADEON_TCL_VTX_Q2));
    int i;
    static int firsttime = 1;
 
@@ -243,7 +324,7 @@ void radeonEmitArrays( GLcontext *ctx, GLuint inputs )
       init_tcl_verts();
       firsttime = 0;
    }
-		     
+
    if (1) {
       req |= RADEON_CP_VC_FRMT_Z;
       if (VB->ObjPtr->size == 4) {
@@ -254,30 +335,33 @@ void radeonEmitArrays( GLcontext *ctx, GLuint inputs )
    if (inputs & VERT_BIT_NORMAL) {
       req |= RADEON_CP_VC_FRMT_N0;
    }
-   
+
    if (inputs & VERT_BIT_COLOR0) {
       req |= RADEON_CP_VC_FRMT_PKCOLOR;
    }
 
-   if (inputs & VERT_BIT_COLOR1) {
+   if (inputs & (VERT_BIT_COLOR1|VERT_BIT_FOG)) {
       req |= RADEON_CP_VC_FRMT_PKSPEC;
    }
 
-   if (inputs & VERT_BIT_TEX0) {
-      req |= RADEON_CP_VC_FRMT_ST0;
-
-      if (VB->TexCoordPtr[0]->size == 4) {
-	 req |= RADEON_CP_VC_FRMT_Q0;
-	 vtx |= RADEON_TCL_VTX_Q0;
-      }
-   }
-
-   if (inputs & VERT_BIT_TEX1) {
-      req |= RADEON_CP_VC_FRMT_ST1;
-
-      if (VB->TexCoordPtr[1]->size == 4) {
-	 req |= RADEON_CP_VC_FRMT_Q1;
-	 vtx |= RADEON_TCL_VTX_Q1;
+   for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {
+      if (inputs & VERT_BIT_TEX(unit)) {
+	 req |= RADEON_ST_BIT(unit);
+	 /* assume we need the 3rd coord if texgen is active for r/q OR at least
+	    3 coords are submitted. This may not be 100% correct */
+	 if (VB->TexCoordPtr[unit]->size >= 3) {
+	    req |= RADEON_Q_BIT(unit);
+	    vtx |= RADEON_Q_BIT(unit);
+	 }
+	 if ( (ctx->Texture.Unit[unit].TexGenEnabled & (R_BIT | Q_BIT)) )
+	    vtx |= RADEON_Q_BIT(unit);
+	 else if ((VB->TexCoordPtr[unit]->size >= 3) &&
+	          ((ctx->Texture.Unit[unit]._ReallyEnabled & (TEXTURE_CUBE_BIT)) == 0)) {
+	    GLuint swaptexmatcol = (VB->TexCoordPtr[unit]->size - 3);
+	    if (((rmesa->NeedTexMatrix >> unit) & 1) &&
+		 (swaptexmatcol != ((rmesa->TexMatColSwap >> unit) & 1)))
+	       radeonUploadTexMatrix( rmesa, unit, swaptexmatcol ) ;
+	 }
       }
    }
 
@@ -297,11 +381,10 @@ void radeonEmitArrays( GLcontext *ctx, GLuint inputs )
    if (rmesa->tcl.indexed_verts.buf)
       radeonReleaseArrays( ctx, ~0 );
 
-   radeonAllocDmaRegionVerts( rmesa, 
-			      &rmesa->tcl.indexed_verts, 
-			      VB->Count,
-			      setup_tab[i].vertex_size * 4, 
-			      4);
+   radeonAllocDmaRegion( rmesa,
+			 &rmesa->tcl.indexed_verts, 
+			 VB->Count * setup_tab[i].vertex_size * 4, 
+			 4);
 
    /* The vertex code expects Obj to be clean to element 3.  To fix
     * this, add more vertex code (for obj-2, obj-3) or preferably move

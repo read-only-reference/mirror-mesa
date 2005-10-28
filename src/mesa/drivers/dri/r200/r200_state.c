@@ -485,19 +485,16 @@ static void r200Fogfv( GLcontext *ctx, GLenum pname, const GLfloat *param )
       rmesa->hw.ctx.cmd[CTX_PP_FOG_COLOR] |= i;
       break;
    case GL_FOG_COORD_SRC: {
-      GLuint fmt_0 = rmesa->hw.vtx.cmd[VTX_VTXFMT_0];
       GLuint out_0 = rmesa->hw.vtx.cmd[VTX_TCL_OUTPUT_VTXFMT_0];
       GLuint fog   = rmesa->hw.ctx.cmd[CTX_PP_FOG_COLOR];
 
       fog &= ~R200_FOG_USE_MASK;
       if ( ctx->Fog.FogCoordinateSource == GL_FOG_COORD ) {
 	 fog   |= R200_FOG_USE_VTX_FOG;
-	 fmt_0 |= R200_VTX_DISCRETE_FOG;
 	 out_0 |= R200_VTX_DISCRETE_FOG;
       }
       else {
 	 fog   |=  R200_FOG_USE_SPEC_ALPHA;
-	 fmt_0 &= ~R200_VTX_DISCRETE_FOG;
 	 out_0 &= ~R200_VTX_DISCRETE_FOG;
       }
 
@@ -506,10 +503,8 @@ static void r200Fogfv( GLcontext *ctx, GLenum pname, const GLfloat *param )
 	 rmesa->hw.ctx.cmd[CTX_PP_FOG_COLOR] = fog;
       }
 
-      if ( (fmt_0 != rmesa->hw.vtx.cmd[VTX_VTXFMT_0])
-	   || (out_0 != rmesa->hw.vtx.cmd[VTX_TCL_OUTPUT_VTXFMT_0])) {
+      if (out_0 != rmesa->hw.vtx.cmd[VTX_TCL_OUTPUT_VTXFMT_0]) {
 	 R200_STATECHANGE( rmesa, vtx );
-	 rmesa->hw.vtx.cmd[VTX_VTXFMT_0] = fmt_0;
 	 rmesa->hw.vtx.cmd[VTX_TCL_OUTPUT_VTXFMT_0] = out_0;	 
       }
 
@@ -689,7 +684,11 @@ static void r200FrontFace( GLcontext *ctx, GLenum mode )
  */
 static void r200PointSize( GLcontext *ctx, GLfloat size )
 {
-   if (0) fprintf(stderr, "%s: %f\n", __FUNCTION__, size );
+   r200ContextPtr rmesa = R200_CONTEXT(ctx);
+
+   R200_STATECHANGE( rmesa, cst );
+   rmesa->hw.cst.cmd[CST_RE_POINTSIZE] &= ~0xffff;
+   rmesa->hw.cst.cmd[CST_RE_POINTSIZE] |= ((GLuint)(ctx->Point.Size * 16.0));
 }
 
 /* =============================================================
@@ -1318,8 +1317,25 @@ static void r200Lightfv( GLcontext *ctx, GLenum light,
    }
 }
 
-		  
-
+static void r200UpdateLocalViewer ( GLcontext *ctx )
+{
+/* It looks like for the texgen modes GL_SPHERE_MAP, GL_NORMAL_MAP and
+   GL_REFLECTION_MAP we need R200_LOCAL_VIEWER set (fglrx does exactly that
+   for these and only these modes). This means specular highlights may turn out
+   wrong in some cases when lighting is enabled but GL_LIGHT_MODEL_LOCAL_VIEWER
+   is not set, though it seems to happen rarely and the effect seems quite
+   subtle. May need TCL fallback to fix it completely, though I'm not sure
+   how you'd identify the cases where the specular highlights indeed will
+   be wrong. Don't know if fglrx does something special in that case.
+*/
+   r200ContextPtr rmesa = R200_CONTEXT(ctx);
+   R200_STATECHANGE( rmesa, tcl );
+   if (ctx->Light.Model.LocalViewer ||
+       ctx->Texture._GenFlags & TEXGEN_NEED_NORMALS)
+      rmesa->hw.tcl.cmd[TCL_LIGHT_MODEL_CTL_0] |= R200_LOCAL_VIEWER;
+   else
+      rmesa->hw.tcl.cmd[TCL_LIGHT_MODEL_CTL_0] &= ~R200_LOCAL_VIEWER;
+}
 
 static void r200LightModelfv( GLcontext *ctx, GLenum pname,
 				const GLfloat *param )
@@ -1332,11 +1348,7 @@ static void r200LightModelfv( GLcontext *ctx, GLenum pname,
 	 break;
 
       case GL_LIGHT_MODEL_LOCAL_VIEWER:
-	 R200_STATECHANGE( rmesa, tcl );
-	 if (ctx->Light.Model.LocalViewer)
-	    rmesa->hw.tcl.cmd[TCL_LIGHT_MODEL_CTL_0] |= R200_LOCAL_VIEWER;
-	 else
-	    rmesa->hw.tcl.cmd[TCL_LIGHT_MODEL_CTL_0] &= ~R200_LOCAL_VIEWER;
+	 r200UpdateLocalViewer( ctx );
          break;
 
       case GL_LIGHT_MODEL_TWO_SIDE:
@@ -1982,10 +1994,10 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
       }
       break;
 
-      /* Pointsize registers on r200 don't seem to do anything.  Maybe
-       * have to pass pointsizes as vertex parameters?  In any case,
-       * setting pointmin == pointsizemax == 1.0, and doing nothing
-       * for aa is enough to satisfy conform.
+      /* Pointsize registers on r200 only work for point sprites, and point smooth
+       * doesn't work for point sprites (and isn't needed for 1.0 sized aa points).
+       * In any case, setting pointmin == pointsizemax == 1.0 for aa points
+       * is enough to satisfy conform.
        */
    case GL_POINT_SMOOTH:
       break;
@@ -2291,6 +2303,7 @@ void r200ValidateState( GLcontext *ctx )
    if (new_state & (_NEW_TEXTURE | _NEW_PROGRAM)) {
       r200UpdateTextureState( ctx );
       new_state |= rmesa->NewGLState; /* may add TEXTURE_MATRIX */
+      r200UpdateLocalViewer( ctx );
    }
 
    /* Need an event driven matrix update?

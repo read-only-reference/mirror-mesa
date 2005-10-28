@@ -39,6 +39,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "macros.h"
 
 static GLint convertFtToFogFt( GLfloat dwInValue );
+static GLint doFPtoFixedNoRound( GLfloat dwInValue, int nFraction );
 
 void
 sisDDFogfv( GLcontext *ctx, GLenum pname, const GLfloat *params )
@@ -52,6 +53,22 @@ sisDDFogfv( GLcontext *ctx, GLenum pname, const GLfloat *params )
 
    switch (pname)
    {
+   case GL_FOG_COORDINATE_SOURCE_EXT:
+      current->hwFog &= ~MASK_FogMode;
+      switch (ctx->Fog.FogCoordinateSource)
+      {
+      case GL_FOG_COORDINATE_EXT:
+         current->hwFog &= ~MASK_FogZLookup;
+         break;
+      case GL_FRAGMENT_DEPTH_EXT:
+         current->hwFog |= MASK_FogZLookup;
+         break;
+      }
+      if (current->hwFog != prev->hwFog) {
+         prev->hwFog = current->hwFog;
+         smesa->GlobalFlag |= GFLAG_FOGSETTING;
+      }
+      break;
    case GL_FOG_MODE:
       current->hwFog &= ~MASK_FogMode;
       switch (ctx->Fog.Mode)
@@ -114,7 +131,7 @@ sisDDFogfv( GLcontext *ctx, GLenum pname, const GLfloat *params )
    }
 }
 
-GLint
+static GLint
 doFPtoFixedNoRound( GLfloat dwInValue, int nFraction )
 {
    GLint dwMantissa;

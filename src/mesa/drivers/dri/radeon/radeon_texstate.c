@@ -153,7 +153,13 @@ static void radeonSetTexImages( radeonContextPtr rmesa,
    /* Compute which mipmap levels we really want to send to the hardware.
     */
 
-   driCalculateTextureFirstLastLevel( (driTextureObject *) t );
+   if (tObj->Target != GL_TEXTURE_CUBE_MAP)
+      driCalculateTextureFirstLastLevel( (driTextureObject *) t );
+   else {
+      /* r100 can't handle mipmaps for cube/3d textures, so don't waste
+         memory for them */
+      t->base.firstLevel = t->base.lastLevel = tObj->BaseLevel;
+   }
    log2Width  = tObj->Image[0][t->base.firstLevel]->WidthLog2;
    log2Height = tObj->Image[0][t->base.firstLevel]->HeightLog2;
    log2Depth  = tObj->Image[0][t->base.firstLevel]->DepthLog2;
@@ -284,6 +290,22 @@ static void radeonSetTexImages( radeonContextPtr rmesa,
     */
    t->base.totalSize = (curOffset + RADEON_OFFSET_MASK) & ~RADEON_OFFSET_MASK;
 
+   /* Setup remaining cube face blits, if needed */
+   if (tObj->Target == GL_TEXTURE_CUBE_MAP) {
+      const GLuint faceSize = t->base.totalSize;
+      GLuint face;
+      /* reuse face 0 x/y/width/height - just update the offset when uploading */
+      for (face = 1; face < 6; face++) {
+         for (i = 0; i < numLevels; i++) {
+            t->image[face][i].x =  t->image[0][i].x;
+            t->image[face][i].y =  t->image[0][i].y;
+            t->image[face][i].width  = t->image[0][i].width;
+            t->image[face][i].height = t->image[0][i].height;
+         }
+      }
+      t->base.totalSize = 6 * faceSize; /* total texmem needed */
+   }
+
    /* Hardware state:
     */
    t->pp_txfilter &= ~RADEON_MAX_MIP_LEVEL_MASK;
@@ -291,9 +313,26 @@ static void radeonSetTexImages( radeonContextPtr rmesa,
 
    t->pp_txformat &= ~(RADEON_TXFORMAT_WIDTH_MASK |
 		       RADEON_TXFORMAT_HEIGHT_MASK |
-                       RADEON_TXFORMAT_CUBIC_MAP_ENABLE);
+                       RADEON_TXFORMAT_CUBIC_MAP_ENABLE |
+                       RADEON_TXFORMAT_F5_WIDTH_MASK |
+                       RADEON_TXFORMAT_F5_HEIGHT_MASK);
    t->pp_txformat |= ((log2Width << RADEON_TXFORMAT_WIDTH_SHIFT) |
 		      (log2Height << RADEON_TXFORMAT_HEIGHT_SHIFT));
+
+   if (tObj->Target == GL_TEXTURE_CUBE_MAP) {
+      assert(log2Width == log2Height);
+      t->pp_txformat |= ((log2Width << RADEON_TXFORMAT_F5_WIDTH_SHIFT) |
+                         (log2Height << RADEON_TXFORMAT_F5_HEIGHT_SHIFT) |
+                         (RADEON_TXFORMAT_CUBIC_MAP_ENABLE));
+      t->pp_cubic_faces = ((log2Width << RADEON_FACE_WIDTH_1_SHIFT) |
+                           (log2Height << RADEON_FACE_HEIGHT_1_SHIFT) |
+                           (log2Width << RADEON_FACE_WIDTH_2_SHIFT) |
+                           (log2Height << RADEON_FACE_HEIGHT_2_SHIFT) |
+                           (log2Width << RADEON_FACE_WIDTH_3_SHIFT) |
+                           (log2Height << RADEON_FACE_HEIGHT_3_SHIFT) |
+                           (log2Width << RADEON_FACE_WIDTH_4_SHIFT) |
+                           (log2Height << RADEON_FACE_HEIGHT_4_SHIFT));
+   }
 
    t->pp_txsize = (((tObj->Image[0][t->base.firstLevel]->Width - 1) << 0) |
                    ((tObj->Image[0][t->base.firstLevel]->Height - 1) << 16));
@@ -816,14 +855,32 @@ static void import_tex_obj_state( radeonContextPtr rmesa,
    cmd[TEX_PP_TXFORMAT] |= texobj->pp_txformat & TEXOBJ_TXFORMAT_MASK;
    cmd[TEX_PP_TXOFFSET] = texobj->pp_txoffset;
    cmd[TEX_PP_BORDER_COLOR] = texobj->pp_border_color;
-   RADEON_DB_STATECHANGE( rmesa, &rmesa->hw.tex[unit] );
 
-   if (texobj->base.tObj->Target == GL_TEXTURE_RECTANGLE_NV) {
+   if (texobj->base.tObj->Target == GL_TEXTURE_CUBE_MAP) {
+      GLuint *cube_cmd = RADEON_DB_STATE( cube[unit] );
+      GLuint bytesPerFace = texobj->base.totalSize / 6;
+      ASSERT(texobj->totalSize % 6 == 0);
+
+      cube_cmd[CUBE_PP_CUBIC_FACES] = texobj->pp_cubic_faces;
+      /* dont know if this setup conforms to OpenGL.. 
+       * at least it matches the behavior of mesa software renderer
+       */
+      cube_cmd[CUBE_PP_CUBIC_OFFSET_0] = texobj->pp_txoffset; /* right */
+      cube_cmd[CUBE_PP_CUBIC_OFFSET_1] = texobj->pp_txoffset + 1 * bytesPerFace; /* left */
+      cube_cmd[CUBE_PP_CUBIC_OFFSET_2] = texobj->pp_txoffset + 2 * bytesPerFace; /* top */
+      cube_cmd[CUBE_PP_CUBIC_OFFSET_3] = texobj->pp_txoffset + 3 * bytesPerFace; /* bottom */
+      cube_cmd[CUBE_PP_CUBIC_OFFSET_4] = texobj->pp_txoffset + 4 * bytesPerFace; /* front */
+      RADEON_DB_STATECHANGE( rmesa, &rmesa->hw.cube[unit] );
+      cmd[TEX_PP_TXOFFSET] = texobj->pp_txoffset + 5 * bytesPerFace; /* back */
+   }
+   else if (texobj->base.tObj->Target == GL_TEXTURE_RECTANGLE_NV) {
       GLuint *txr_cmd = RADEON_DB_STATE( txr[unit] );
       txr_cmd[TXR_PP_TEX_SIZE] = texobj->pp_txsize; /* NPOT only! */
       txr_cmd[TXR_PP_TEX_PITCH] = texobj->pp_txpitch; /* NPOT only! */
       RADEON_DB_STATECHANGE( rmesa, &rmesa->hw.txr[unit] );
    }
+
+   RADEON_DB_STATECHANGE( rmesa, &rmesa->hw.tex[unit] );
 
    texobj->dirty_state &= ~(1<<unit);
 }
@@ -834,7 +891,9 @@ static void import_tex_obj_state( radeonContextPtr rmesa,
 static void set_texgen_matrix( radeonContextPtr rmesa, 
 			       GLuint unit,
 			       const GLfloat *s_plane,
-			       const GLfloat *t_plane )
+			       const GLfloat *t_plane,
+			       const GLfloat *r_plane,
+			       const GLfloat *q_plane )
 {
    rmesa->TexGenMatrix[unit].m[0]  = s_plane[0];
    rmesa->TexGenMatrix[unit].m[4]  = s_plane[1];
@@ -846,78 +905,116 @@ static void set_texgen_matrix( radeonContextPtr rmesa,
    rmesa->TexGenMatrix[unit].m[9]  = t_plane[2];
    rmesa->TexGenMatrix[unit].m[13] = t_plane[3];
 
+   rmesa->TexGenMatrix[unit].m[2]  = r_plane[0];
+   rmesa->TexGenMatrix[unit].m[6]  = r_plane[1];
+   rmesa->TexGenMatrix[unit].m[10] = r_plane[2];
+   rmesa->TexGenMatrix[unit].m[14] = r_plane[3];
+
+   rmesa->TexGenMatrix[unit].m[3]  = q_plane[0];
+   rmesa->TexGenMatrix[unit].m[7]  = q_plane[1];
+   rmesa->TexGenMatrix[unit].m[11] = q_plane[2];
+   rmesa->TexGenMatrix[unit].m[15] = q_plane[3];
+
    rmesa->TexGenEnabled |= RADEON_TEXMAT_0_ENABLE << unit;
    rmesa->NewGLState |= _NEW_TEXTURE_MATRIX;
 }
 
-/* Ignoring the Q texcoord for now.
- *
- * Returns GL_FALSE if fallback required.  
+/* Returns GL_FALSE if fallback required.
  */
 static GLboolean radeon_validate_texgen( GLcontext *ctx, GLuint unit )
-{  
+{
    radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
    GLuint inputshift = RADEON_TEXGEN_0_INPUT_SHIFT + unit*4;
    GLuint tmp = rmesa->TexGenEnabled;
+   static const GLfloat reflect[16] = {
+      -1,  0,  0,  0,
+       0, -1,  0,  0,
+       0,  0,  -1, 0,
+       0,  0,  0,  1 };
 
-   rmesa->TexGenEnabled &= ~(RADEON_TEXGEN_TEXMAT_0_ENABLE<<unit);
-   rmesa->TexGenEnabled &= ~(RADEON_TEXMAT_0_ENABLE<<unit);
-   rmesa->TexGenEnabled &= ~(RADEON_TEXGEN_INPUT_MASK<<inputshift);
+   rmesa->TexGenEnabled &= ~(RADEON_TEXGEN_TEXMAT_0_ENABLE << unit);
+   rmesa->TexGenEnabled &= ~(RADEON_TEXMAT_0_ENABLE << unit);
+   rmesa->TexGenEnabled &= ~(RADEON_TEXGEN_INPUT_MASK << inputshift);
    rmesa->TexGenNeedNormals[unit] = 0;
 
-   if ((texUnit->TexGenEnabled & (S_BIT|T_BIT)) == 0) {
+   if ((texUnit->TexGenEnabled & (S_BIT|T_BIT|R_BIT|Q_BIT)) == 0) {
       /* Disabled, no fallback:
        */
-      rmesa->TexGenEnabled |= 
-	 (RADEON_TEXGEN_INPUT_TEXCOORD_0+unit) << inputshift;
+      rmesa->TexGenEnabled |=
+	 (RADEON_TEXGEN_INPUT_TEXCOORD_0 + unit) << inputshift;
       return GL_TRUE;
    }
-   else if (texUnit->TexGenEnabled & Q_BIT) {
-      /* Very easy to do this, in fact would remove a fallback case
-       * elsewhere, but I haven't done it yet...  Fallback: 
-       */
-      if (RADEON_DEBUG & DEBUG_FALLBACKS) 
-	fprintf(stderr, "fallback Q_BIT\n");
-      return GL_FALSE;
-   }
-   else if ((texUnit->TexGenEnabled & (S_BIT|T_BIT)) != (S_BIT|T_BIT) ||
-	    texUnit->GenModeS != texUnit->GenModeT) {
-      /* Mixed modes, fallback:
-       */
-      if (RADEON_DEBUG & DEBUG_FALLBACKS) 
-        fprintf(stderr, "fallback mixed texgen\n");
-      return GL_FALSE;
-   }
-   else
+   /* the r100 cannot do texgen for some coords and not for others
+    * we do not detect such cases (certainly can't do it here) and just
+    * ASSUME that when S and T are texgen enabled we do not need other
+    * non-texgen enabled coords, no matter if the R and Q bits are texgen
+    * enabled. Still check for mixed mode texgen for all coords.
+    */
+   else if ( (texUnit->TexGenEnabled & S_BIT) &&
+	     (texUnit->TexGenEnabled & T_BIT) &&
+	     (texUnit->GenModeS == texUnit->GenModeT) ) {
+      if ( ((texUnit->TexGenEnabled & R_BIT) &&
+	    (texUnit->GenModeS != texUnit->GenModeR)) ||
+	   ((texUnit->TexGenEnabled & Q_BIT) &&
+	    (texUnit->GenModeS != texUnit->GenModeQ)) ) {
+	 /* Mixed modes, fallback:
+	  */
+	 if (RADEON_DEBUG & DEBUG_FALLBACKS)
+	    fprintf(stderr, "fallback mixed texgen\n");
+	 return GL_FALSE;
+      }
       rmesa->TexGenEnabled |= RADEON_TEXGEN_TEXMAT_0_ENABLE << unit;
+   }
+   else {
+   /* some texgen mode not including both S and T bits */
+      if (RADEON_DEBUG & DEBUG_FALLBACKS)
+	 fprintf(stderr, "fallback mixed texgen/nontexgen\n");
+      return GL_FALSE;
+   }
+
+   if ((texUnit->TexGenEnabled & (R_BIT | Q_BIT)) != 0) {
+      /* need this here for vtxfmt presumably. Argh we need to set
+         this from way too many places, would be much easier if we could leave
+         tcl q coord always enabled as on r200) */
+      RADEON_STATECHANGE( rmesa, tcl );
+      rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXFMT] |= RADEON_Q_BIT(unit);
+   }
 
    switch (texUnit->GenModeS) {
    case GL_OBJECT_LINEAR:
       rmesa->TexGenEnabled |= RADEON_TEXGEN_INPUT_OBJ << inputshift;
-      set_texgen_matrix( rmesa, unit, 
+      set_texgen_matrix( rmesa, unit,
 			 texUnit->ObjectPlaneS,
-			 texUnit->ObjectPlaneT);
+			 texUnit->ObjectPlaneT,
+			 texUnit->ObjectPlaneR,
+			 texUnit->ObjectPlaneQ);
       break;
 
    case GL_EYE_LINEAR:
       rmesa->TexGenEnabled |= RADEON_TEXGEN_INPUT_EYE << inputshift;
-      set_texgen_matrix( rmesa, unit, 
+      set_texgen_matrix( rmesa, unit,
 			 texUnit->EyePlaneS,
-			 texUnit->EyePlaneT);
+			 texUnit->EyePlaneT,
+			 texUnit->EyePlaneR,
+			 texUnit->EyePlaneQ);
       break;
 
    case GL_REFLECTION_MAP_NV:
       rmesa->TexGenNeedNormals[unit] = GL_TRUE;
-      rmesa->TexGenEnabled |= RADEON_TEXGEN_INPUT_EYE_REFLECT<<inputshift;
+      rmesa->TexGenEnabled |= RADEON_TEXGEN_INPUT_EYE_REFLECT << inputshift;
+      /* TODO: unknown if this is needed/correct */
+      set_texgen_matrix( rmesa, unit, reflect, reflect + 4,
+			reflect + 8, reflect + 12 );
       break;
 
    case GL_NORMAL_MAP_NV:
       rmesa->TexGenNeedNormals[unit] = GL_TRUE;
-      rmesa->TexGenEnabled |= RADEON_TEXGEN_INPUT_EYE_NORMAL<<inputshift;
+      rmesa->TexGenEnabled |= RADEON_TEXGEN_INPUT_EYE_NORMAL << inputshift;
       break;
 
    case GL_SPHERE_MAP:
+      /* the mode which everyone uses :-( */
    default:
       /* Unsupported mode, fallback:
        */
@@ -954,26 +1051,22 @@ static void disable_tex( GLcontext *ctx, int unit )
 	  ~((RADEON_TEX_0_ENABLE | RADEON_TEX_BLEND_0_ENABLE) << unit);
 
       RADEON_STATECHANGE( rmesa, tcl );
-      switch (unit) {
-      case 0:
-	 rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXFMT] &= ~(RADEON_TCL_VTX_ST0 |
-						   RADEON_TCL_VTX_Q0);
-	    break;
-      case 1:
-	 rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXFMT] &= ~(RADEON_TCL_VTX_ST1 |
-						   RADEON_TCL_VTX_Q1);
-	 break;
-      default:
-	 break;
-      }
-
+      rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXFMT] &= ~(RADEON_ST_BIT(unit) |
+						RADEON_Q_BIT(unit));
 
       if (rmesa->TclFallback & (RADEON_TCL_FALLBACK_TEXGEN_0<<unit)) {
 	 TCL_FALLBACK( ctx, (RADEON_TCL_FALLBACK_TEXGEN_0<<unit), GL_FALSE);
 	 rmesa->recheck_texgen[unit] = GL_TRUE;
       }
 
-
+      if (rmesa->hw.tex[unit].cmd[TEX_PP_TXFORMAT] & RADEON_TXFORMAT_CUBIC_MAP_ENABLE) {
+      /* this seems to be a genuine (r100 only?) hw bug. Need to remove the
+         cubic_map bit on unit 2 when the unit is disabled, otherwise every
+	 2nd (2d) mipmap on unit 0 will be broken (may not be needed for other
+	 units, better be safe than sorry though).*/
+	 RADEON_STATECHANGE( rmesa, tex[unit] );
+	 rmesa->hw.tex[unit].cmd[TEX_PP_TXFORMAT] &= ~RADEON_TXFORMAT_CUBIC_MAP_ENABLE;
+      }
 
       {
 	 GLuint inputshift = RADEON_TEXGEN_0_INPUT_SHIFT + unit*4;
@@ -1016,6 +1109,48 @@ static GLboolean enable_tex_2d( GLcontext *ctx, int unit )
       radeonUploadTexImages( rmesa, (radeonTexObjPtr) tObj->DriverData, 0 );
       if ( !t->base.memBlock ) 
 	return GL_FALSE;
+   }
+
+   return GL_TRUE;
+}
+
+static GLboolean enable_tex_cube( GLcontext *ctx, int unit )
+{
+   radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
+   struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
+   struct gl_texture_object *tObj = texUnit->_Current;
+   radeonTexObjPtr t = (radeonTexObjPtr) tObj->DriverData;
+   GLuint face;
+
+   /* Need to load the 2d images associated with this unit.
+    */
+   if (t->pp_txformat & RADEON_TXFORMAT_NON_POWER2) {
+      t->pp_txformat &= ~RADEON_TXFORMAT_NON_POWER2;
+      for (face = 0; face < 6; face++)
+         t->base.dirty_images[face] = ~0;
+   }
+
+   ASSERT(tObj->Target == GL_TEXTURE_CUBE_MAP);
+
+   if ( t->base.dirty_images[0] || t->base.dirty_images[1] ||
+        t->base.dirty_images[2] || t->base.dirty_images[3] ||
+        t->base.dirty_images[4] || t->base.dirty_images[5] ) {
+      /* flush */
+      RADEON_FIREVERTICES( rmesa );
+      /* layout memory space, once for all faces */
+      radeonSetTexImages( rmesa, tObj );
+   }
+
+   /* upload (per face) */
+   for (face = 0; face < 6; face++) {
+      if (t->base.dirty_images[face]) {
+         radeonUploadTexImages( rmesa, (radeonTexObjPtr) tObj->DriverData, face );
+      }
+   }
+      
+   if ( !t->base.memBlock ) {
+      /* texmem alloc failed, use s/w fallback */
+      return GL_FALSE;
    }
 
    return GL_TRUE;
@@ -1092,16 +1227,15 @@ static GLboolean update_tex_common( GLcontext *ctx, int unit )
 
       RADEON_STATECHANGE( rmesa, tcl );
 
-      if (unit == 0)
-	  rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXFMT] |= RADEON_TCL_VTX_ST0;
-      else 
-	  rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXFMT] |= RADEON_TCL_VTX_ST1;
+      rmesa->hw.tcl.cmd[TCL_OUTPUT_VTXFMT] |= RADEON_ST_BIT(unit);
 
       rmesa->recheck_texgen[unit] = GL_TRUE;
    }
 
    if (t->dirty_state & (1<<unit)) {
       import_tex_obj_state( rmesa, unit, t );
+      /* may need to update texture matrix (for texrect adjustments) */
+      rmesa->NewGLState |= _NEW_TEXTURE_MATRIX;
    }
 
    if (rmesa->recheck_texgen[unit]) {
@@ -1111,7 +1245,7 @@ static GLboolean update_tex_common( GLcontext *ctx, int unit )
       rmesa->NewGLState |= _NEW_TEXTURE_MATRIX;
    }
 
-   format = tObj->Image[0][tObj->BaseLevel]->Format;
+   format = tObj->Image[0][tObj->BaseLevel]->_BaseFormat;
    if ( rmesa->state.texture.unit[unit].format != format ||
 	rmesa->state.texture.unit[unit].envMode != texUnit->EnvMode ) {
       rmesa->state.texture.unit[unit].format = format;
@@ -1131,16 +1265,16 @@ static GLboolean radeonUpdateTextureUnit( GLcontext *ctx, int unit )
 {
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
 
-   TCL_FALLBACK( ctx, RADEON_TCL_FALLBACK_TEXRECT_0 << unit, 0 );
-
    if ( texUnit->_ReallyEnabled & (TEXTURE_RECT_BIT) ) {
-      TCL_FALLBACK( ctx, RADEON_TCL_FALLBACK_TEXRECT_0 << unit, 1 );
-
       return (enable_tex_rect( ctx, unit ) &&
 	      update_tex_common( ctx, unit ));
    }
    else if ( texUnit->_ReallyEnabled & (TEXTURE_1D_BIT | TEXTURE_2D_BIT) ) {
       return (enable_tex_2d( ctx, unit ) &&
+	      update_tex_common( ctx, unit ));
+   }
+   else if ( texUnit->_ReallyEnabled & (TEXTURE_CUBE_BIT) ) {
+      return (enable_tex_cube( ctx, unit ) &&
 	      update_tex_common( ctx, unit ));
    }
    else if ( texUnit->_ReallyEnabled ) {
@@ -1158,7 +1292,8 @@ void radeonUpdateTextureState( GLcontext *ctx )
    GLboolean ok;
 
    ok = (radeonUpdateTextureUnit( ctx, 0 ) &&
-	 radeonUpdateTextureUnit( ctx, 1 ));
+	 radeonUpdateTextureUnit( ctx, 1 ) &&
+	 radeonUpdateTextureUnit( ctx, 2 ));
 
    FALLBACK( rmesa, RADEON_FALLBACK_TEXTURE, !ok );
 

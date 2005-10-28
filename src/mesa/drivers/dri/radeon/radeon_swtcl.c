@@ -184,13 +184,18 @@ static void radeonSetVertexFormat( GLcontext *ctx )
 	    switch (sz) {
 	    case 1:
 	    case 2:
-	    case 3:
 	       EMIT_ATTR( _TNL_ATTRIB_TEX0+i, EMIT_2F,
 			  radeon_cp_vc_frmts[i][0] );
 	       break;
+	    case 3:
 	    case 4:
-	       EMIT_ATTR( _TNL_ATTRIB_TEX0+i, EMIT_3F_XYW,
-			  radeon_cp_vc_frmts[i][1] );
+	       if (ctx->Texture.Unit[i]._ReallyEnabled & (TEXTURE_CUBE_BIT) ) {
+		  EMIT_ATTR( _TNL_ATTRIB_TEX0+i, EMIT_3F,
+			     radeon_cp_vc_frmts[i][1] );
+	       } else {
+		  EMIT_ATTR( _TNL_ATTRIB_TEX0+i, EMIT_3F_XYW,
+			     radeon_cp_vc_frmts[i][1] );
+	       }
 	       break;
 	    default:
 	       continue;
@@ -386,7 +391,7 @@ radeonDmaPrimitive( radeonContextPtr rmesa, GLenum prim )
    assert(rmesa->dma.current.ptr == rmesa->dma.current.start);
 }
 
-#define LOCAL_VARS radeonContextPtr rmesa = RADEON_CONTEXT(ctx); (void)rmesa
+#define LOCAL_VARS radeonContextPtr rmesa = RADEON_CONTEXT(ctx)
 #define INIT( prim ) radeonDmaPrimitive( rmesa, prim )
 #define FLUSH()  RADEON_NEWPRIM( rmesa )
 #define GET_CURRENT_VB_MAX_VERTS() \
@@ -625,7 +630,7 @@ static void radeonResetLineStipple( GLcontext *ctx );
 
 #define RADEON_TWOSIDE_BIT	0x01
 #define RADEON_UNFILLED_BIT	0x02
-#define RADEON_MAX_TRIFUNC	0x08
+#define RADEON_MAX_TRIFUNC	0x04
 
 
 static struct {

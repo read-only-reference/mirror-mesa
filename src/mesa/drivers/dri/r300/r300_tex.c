@@ -64,7 +64,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 static void r300SetTexWrap(r300TexObjPtr t, GLenum swrap, GLenum twrap,
 			   GLenum rwrap)
 {
-	GLboolean is_clamp = GL_FALSE;
 	unsigned long hw_swrap=0, hw_twrap=0, hw_qwrap=0;
 
 	t->filter &=
@@ -76,7 +75,6 @@ static void r300SetTexWrap(r300TexObjPtr t, GLenum swrap, GLenum twrap,
 		break;
 	case GL_CLAMP:
 		hw_swrap |= R300_TX_CLAMP;
-		is_clamp = GL_TRUE;
 		break;
 	case GL_CLAMP_TO_EDGE:
 		hw_swrap |= R300_TX_CLAMP_TO_EDGE;
@@ -89,7 +87,6 @@ static void r300SetTexWrap(r300TexObjPtr t, GLenum swrap, GLenum twrap,
 		break;
 	case GL_MIRROR_CLAMP_EXT:
 		hw_swrap |= R300_TX_CLAMP | R300_TX_MIRRORED;
-		is_clamp = GL_TRUE;
 		break;
 	case GL_MIRROR_CLAMP_TO_EDGE_EXT:
 		hw_swrap |= R300_TX_CLAMP_TO_EDGE | R300_TX_MIRRORED;
@@ -107,7 +104,6 @@ static void r300SetTexWrap(r300TexObjPtr t, GLenum swrap, GLenum twrap,
 		break;
 	case GL_CLAMP:
 		hw_twrap |= R300_TX_CLAMP;
-		is_clamp = GL_TRUE;
 		break;
 	case GL_CLAMP_TO_EDGE:
 		hw_twrap |= R300_TX_CLAMP_TO_EDGE;
@@ -120,7 +116,6 @@ static void r300SetTexWrap(r300TexObjPtr t, GLenum swrap, GLenum twrap,
 		break;
 	case GL_MIRROR_CLAMP_EXT:
 		hw_twrap |= R300_TX_CLAMP | R300_TX_MIRRORED;
-		is_clamp = GL_TRUE;
 		break;
 	case GL_MIRROR_CLAMP_TO_EDGE_EXT:
 		hw_twrap |= R300_TX_CLAMP_TO_EDGE | R300_TX_MIRRORED;
@@ -138,7 +133,6 @@ static void r300SetTexWrap(r300TexObjPtr t, GLenum swrap, GLenum twrap,
 		break;
 	case GL_CLAMP:
 		hw_qwrap |= R300_TX_CLAMP;
-		is_clamp = GL_TRUE;
 		break;
 	case GL_CLAMP_TO_EDGE:
 		hw_qwrap |= R300_TX_CLAMP_TO_EDGE;
@@ -151,7 +145,6 @@ static void r300SetTexWrap(r300TexObjPtr t, GLenum swrap, GLenum twrap,
 		break;
 	case GL_MIRROR_CLAMP_EXT:
 		hw_qwrap |= R300_TX_CLAMP | R300_TX_MIRRORED;
-		is_clamp = GL_TRUE;
 		break;
 	case GL_MIRROR_CLAMP_TO_EDGE_EXT:
 		hw_qwrap |= R300_TX_CLAMP_TO_EDGE | R300_TX_MIRRORED;
@@ -220,10 +213,10 @@ static void r300SetTexFilter(r300TexObjPtr t, GLenum minf, GLenum magf)
 			t->filter |= R300_TX_MIN_FILTER_NEAREST_MIP_NEAREST;
 			break;
 		case GL_NEAREST_MIPMAP_LINEAR:
-			t->filter |= R300_TX_MIN_FILTER_LINEAR_MIP_NEAREST;
+			t->filter |= R300_TX_MIN_FILTER_NEAREST_MIP_LINEAR;
 			break;
 		case GL_LINEAR_MIPMAP_NEAREST:
-			t->filter |= R300_TX_MIN_FILTER_NEAREST_MIP_LINEAR;
+			t->filter |= R300_TX_MIN_FILTER_LINEAR_MIP_NEAREST;
 			break;
 		case GL_LINEAR_MIPMAP_LINEAR:
 			t->filter |= R300_TX_MIN_FILTER_LINEAR_MIP_LINEAR;
@@ -928,7 +921,6 @@ static void r300TexEnv(GLcontext * ctx, GLenum target,
 {
 	r300ContextPtr rmesa = R300_CONTEXT(ctx);
 	GLuint unit = ctx->Texture.CurrentUnit;
-	struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
 
 	if (RADEON_DEBUG & DEBUG_STATE) {
 		fprintf(stderr, "%s( %s )\n",
@@ -951,9 +943,9 @@ static void r300TexEnv(GLcontext * ctx, GLenum target,
 				R200_STATECHANGE(rmesa, tf);
 				rmesa->hw.tf.cmd[TF_TFACTOR_0 + unit] =
 				    envColor;
-			}
+			}*/
 			break;
-		*/}
+		}
 
 	case GL_TEXTURE_LOD_BIAS_EXT:{
 			GLfloat bias, min;
@@ -1084,27 +1076,6 @@ static void r300DeleteTexture(GLcontext * ctx, struct gl_texture_object *texObj)
 	_mesa_delete_texture_object(ctx, texObj);
 }
 
-/* Need:
- *  - Same GEN_MODE for all active bits
- *  - Same EyePlane/ObjPlane for all active bits when using Eye/Obj
- *  - STRQ presumably all supported (matrix means incoming R values
- *    can end up in STQ, this has implications for vertex support,
- *    presumably ok if maos is used, though?)
- *
- * Basically impossible to do this on the fly - just collect some
- * basic info & do the checks from ValidateState().
- */
-static void r300TexGen(GLcontext * ctx,
-		       GLenum coord, GLenum pname, const GLfloat * params)
-{
-	r300ContextPtr rmesa = R300_CONTEXT(ctx);
-	GLuint unit = ctx->Texture.CurrentUnit;
-#if 0 /* Disable this for now - looks like we will be recalculating everything
-	         anyway */
-	rmesa->recheck_texgen[unit] = GL_TRUE;
-#endif
-}
-
 /**
  * Allocate a new texture object.
  * Called via ctx->Driver.NewTextureObject.
@@ -1156,7 +1127,6 @@ void r300InitTextureFuncs(struct dd_function_table *functions)
 
 	functions->TexEnv = r300TexEnv;
 	functions->TexParameter = r300TexParameter;
-	functions->TexGen = r300TexGen;
 	
 	functions->CompressedTexImage2D	= r300CompressedTexImage2D;
 	functions->CompressedTexSubImage2D	= r300CompressedTexSubImage2D;

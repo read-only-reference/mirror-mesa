@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.2
+ * Version:  6.5
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -149,6 +149,7 @@ typedef union { GLfloat f; GLint i; } fi_type;
     defined(__hppa__) || defined(hpux) || \
     defined(__mips) || defined(_MIPS_ARCH) || \
     defined(__arm__) || \
+    defined(__sh__) || \
     (defined(__alpha__) && (defined(__IEEE_FLOAT) || !defined(VMS)))
 #define USE_IEEE
 #define IEEE_ONE 0x3f800000
@@ -608,6 +609,12 @@ extern void
 _mesa_align_free( void *ptr );
 
 extern void *
+_mesa_exec_malloc( GLuint size );
+
+extern void 
+_mesa_exec_free( void *addr );
+
+extern void *
 _mesa_realloc( void *oldBuffer, size_t oldSize, size_t newSize );
 
 extern void *
@@ -642,9 +649,6 @@ _mesa_inv_sqrtf(float x);
 
 extern double
 _mesa_pow(double x, double y);
-
-extern float
-_mesa_log2(float x);
 
 extern int
 _mesa_ffs(int i);

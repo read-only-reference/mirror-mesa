@@ -39,6 +39,35 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 /*
  * Define All the Register Address of 6327
  */
+#define REG_SRC_ADDR			0x8200
+#define REG_SRC_PITCH			0x8204
+#	define BLIT_DEPTH_8		0x00000000
+#	define BLIT_DEPTH_15		0x40000000
+#	define BLIT_DEPTH_16		0x80000000
+#	define BLIT_DEPTH_32		0xc0000000
+#define REG_SRC_X_Y			0x8208
+#define REG_DST_X_Y			0x820c
+#define REG_DST_ADDR			0x8210
+#define REG_DST_PITCH_HEIGHT		0x8214
+#define REG_WIDTH_HEIGHT		0x8218
+#define REG_PATFG			0x821c
+#define REG_PATBG			0x8220
+#define REG_SRCFG			0x8224
+#define REG_SRCBG			0x8228
+#define REG_MONOPAT0			0x822c
+#define REG_MONOPAT1			0x8230
+#define REG_CLIPLT			0x8234
+#define REG_CLIPRB			0x8238
+#define REG_BLIT_CMD			0x823c
+#	define CMD_ROP_PAT		0x0000f000
+#	define CMD_ROP_SRC		0x0000cc00
+#	define CMD_DD_ENABLE		0x00000006
+#	define CMD_SRC_VIDEO		0x00000000
+#	define CMD_SRC_CPU		0x00000010
+#	define CMD_DIR_X_DEC		0x00000000
+#	define CMD_DIR_X_INC		0x00010000
+#	define CMD_DIR_Y_DEC		0x00000000
+#	define CMD_DIR_Y_INC		0x00020000
 
 #define REG_CommandQueue		0x8240
  
@@ -234,12 +263,12 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  * wrong, new names SiS_PS_* based off of the 4.3.0 driver and research are
  * below.
  */
-#define SiS_PS_HAS_XYZ				0x08000000
-#define SiS_PS_HAS_W				0x04000000
-#define SiS_PS_HAS_SPECULAR			0x02000000 /* XXX ? */
-#define SiS_PS_HAS_DIFFUSE			0x01000000
-#define SiS_PS_HAS_UV0				0x00400000
-#define SiS_PS_HAS_UV1				0x00200000
+#define SiS_PS_HAS_XYZ				MASK_PsVertex_HAS_RHW
+#define SiS_PS_HAS_W				MASK_PsVertex_HAS_NORMALXYZ
+#define SiS_PS_HAS_DIFFUSE			MASK_PsVertex_HAS_SPECULAR
+#define SiS_PS_HAS_SPECULAR			MASK_PsVertex_HAS_DIFFUSE
+#define SiS_PS_HAS_UV0				MASK_PsVertex_HAS_UVSet2
+#define SiS_PS_HAS_UV1				MASK_PsVertex_HAS_UVSet3
 #define MASK_PsVertex_HAS_RHW			0x08000000
 #define MASK_PsVertex_HAS_NORMALXYZ		0x04000000
 #define MASK_PsVertex_HAS_DIFFUSE		0x02000000
@@ -589,23 +618,29 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define SiS_SFAIL_KEEP			0x00000000
 #define SiS_SFAIL_ZERO			0x00100000
 #define SiS_SFAIL_REPLACE		0x00200000
+#define SiS_SFAIL_INCR			0x00300000	/* guess -- was _WRAP */
+#define SiS_SFAIL_DECR			0x00400000	/* guess -- was _WRAP */
 #define SiS_SFAIL_INVERT		0x00500000
-#define SiS_SFAIL_INCR			0x00600000
-#define SiS_SFAIL_DECR			0x00700000
+#define SiS_SFAIL_INCR_WRAP		0x00600000	/* guess */
+#define SiS_SFAIL_DECR_WRAP		0x00700000	/* guess */
 
 #define SiS_SPASS_ZFAIL_KEEP		0x00000000
 #define SiS_SPASS_ZFAIL_ZERO		0x00010000
 #define SiS_SPASS_ZFAIL_REPLACE		0x00020000
+#define SiS_SPASS_ZFAIL_INCR		0x00030000	/* guess -- was _WRAP */
+#define SiS_SPASS_ZFAIL_DECR		0x00040000	/* guess -- was _WRAP */
 #define SiS_SPASS_ZFAIL_INVERT		0x00050000
-#define SiS_SPASS_ZFAIL_INCR		0x00060000
-#define SiS_SPASS_ZFAIL_DECR		0x00070000
+#define SiS_SPASS_ZFAIL_INCR_WRAP	0x00060000	/* guess */
+#define SiS_SPASS_ZFAIL_DECR_WRAP	0x00070000	/* guess */
 
 #define SiS_SPASS_ZPASS_KEEP		0x00000000
 #define SiS_SPASS_ZPASS_ZERO		0x00001000
 #define SiS_SPASS_ZPASS_REPLACE		0x00002000
+#define SiS_SPASS_ZPASS_INCR		0x00003000	/* guess -- was _WRAP */
+#define SiS_SPASS_ZPASS_DECR		0x00004000	/* guess -- was _WRAP */
 #define SiS_SPASS_ZPASS_INVERT		0x00005000
-#define SiS_SPASS_ZPASS_INCR		0x00006000
-#define SiS_SPASS_ZPASS_DECR		0x00007000
+#define SiS_SPASS_ZPASS_INCR_WRAP	0x00006000	/* guess */
+#define SiS_SPASS_ZPASS_DECR_WRAP	0x00007000	/* guess */
 
 /*
  * REG_3D_DstBlendMode			(0x8A50 - 0x8A53)
