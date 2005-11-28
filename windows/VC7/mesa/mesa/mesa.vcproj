@@ -129,16 +129,10 @@
 				RelativePath="..\..\..\..\src\mesa\main\api_validate.c">
 			</File>
 			<File
-				RelativePath="..\..\..\..\src\mesa\shader\arbfragparse.c">
-			</File>
-			<File
 				RelativePath="..\..\..\..\src\mesa\shader\arbprogparse.c">
 			</File>
 			<File
 				RelativePath="..\..\..\..\src\mesa\shader\arbprogram.c">
-			</File>
-			<File
-				RelativePath="..\..\..\..\src\mesa\shader\arbvertparse.c">
 			</File>
 			<File
 				RelativePath="..\..\..\..\src\mesa\shader\atifragshader.c">
@@ -172,6 +166,9 @@
 			</File>
 			<File
 				RelativePath="..\..\..\..\src\mesa\main\depth.c">
+			</File>
+			<File
+				RelativePath="..\..\..\..\src\mesa\main\depthstencil.c">
 			</File>
 			<File
 				RelativePath="..\..\..\..\src\mesa\main\dispatch.c">
@@ -613,9 +610,6 @@
 				RelativePath="..\..\..\..\src\mesa\main\api_validate.h">
 			</File>
 			<File
-				RelativePath="..\..\..\..\src\mesa\shader\arbfragparse.h">
-			</File>
-			<File
 				RelativePath="..\..\..\..\src\mesa\shader\arbprogparse.h">
 			</File>
 			<File
@@ -623,9 +617,6 @@
 			</File>
 			<File
 				RelativePath="..\..\..\..\src\mesa\shader\arbprogram_syn.h">
-			</File>
-			<File
-				RelativePath="..\..\..\..\src\mesa\shader\arbvertparse.h">
 			</File>
 			<File
 				RelativePath="..\..\..\..\src\mesa\shader\atifragshader.h">
@@ -668,6 +659,9 @@
 			</File>
 			<File
 				RelativePath="..\..\..\..\src\mesa\main\depth.h">
+			</File>
+			<File
+				RelativePath="..\..\..\..\src\mesa\main\depthstencil.h">
 			</File>
 			<File
 				RelativePath="..\..\..\..\src\mesa\main\dlist.h">

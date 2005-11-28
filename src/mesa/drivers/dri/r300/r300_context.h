@@ -580,7 +580,7 @@ struct r300_vertex_shader_state {
 	
 extern int hw_tcl_on;
 
-#define CURRENT_VERTEX_SHADER(ctx) (ctx->VertexProgram._Enabled ? ctx->VertexProgram.Current : ctx->_TnlProgram)
+#define CURRENT_VERTEX_SHADER(ctx) (ctx->VertexProgram._Current)
 
 //#define TMU_ENABLED(ctx, unit) (hw_tcl_on ? ctx->Texture.Unit[unit]._ReallyEnabled && (OutputsWritten & (1<<(VERT_RESULT_TEX0+(unit)))) : 
 //	(r300->state.render_inputs & (_TNL_BIT_TEX0<<(unit))))
@@ -598,7 +598,7 @@ struct r300_vertex_program {
 	struct r300_vertex_shader_fragment params;
 	
 	int pos_end;
-	unsigned long num_temporaries; /* Number of temp vars used by program */
+	int num_temporaries; /* Number of temp vars used by program */
 	int inputs[VERT_ATTRIB_MAX];
 	int outputs[VERT_RESULT_MAX];
 };
@@ -826,11 +826,12 @@ struct r300_context {
 	 */
 	struct r300_dma dma;
 	GLboolean save_on_next_unlock;
+	GLuint NewGLState;
 
 	/* Texture object bookkeeping
 	 */
 	unsigned nr_heaps;
-	driTexHeap *texture_heaps[R200_NR_TEX_HEAPS];
+	driTexHeap *texture_heaps[RADEON_NR_TEX_HEAPS];
 	driTextureObject swapped;
 	int texture_depth;
 	float initialMaxAnisotropy;
@@ -839,17 +840,6 @@ struct r300_context {
 	 */
 	GLuint prefer_gart_client_texturing;
 
-	/* TCL stuff
-	 */
-	GLmatrix TexGenMatrix[R300_MAX_TEXTURE_UNITS];
-	GLboolean recheck_texgen[R300_MAX_TEXTURE_UNITS];
-	GLboolean TexGenNeedNormals[R300_MAX_TEXTURE_UNITS];
-	GLuint TexMatEnabled;
-	GLuint TexMatCompSel;
-	GLuint TexGenEnabled;
-	GLuint TexGenInputs;
-	GLuint TexGenCompSel;
-	GLmatrix tmpmat;
 #ifdef USER_BUFFERS
 	key_t mm_ipc_key;
 	int mm_shm_id;
@@ -885,7 +875,8 @@ extern GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 
 void translate_vertex_shader(struct r300_vertex_program *vp);
 extern void r300InitShaderFuncs(struct dd_function_table *functions);
-extern void r300VertexProgUpdateParams(GLcontext *ctx, struct r300_vertex_program *vp);
+extern int r300VertexProgUpdateParams(GLcontext *ctx, struct r300_vertex_program *vp, float *dst);
+extern GLboolean r300Fallback(GLcontext *ctx);
 
 #ifdef RADEON_VTXFMT_A
 extern void radeon_init_vtxfmt_a(r300ContextPtr rmesa);

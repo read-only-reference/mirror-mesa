@@ -35,7 +35,6 @@
 #include "dlist.h"
 #include "light.h"
 #include "vtxfmt.h"
-#include "nvfragprog.h"
 
 #include "tnl.h"
 #include "t_array_api.h"
@@ -87,10 +86,19 @@ _tnl_CreateContext( GLcontext *ctx )
    _tnl_array_init( ctx );
    _tnl_vtx_init( ctx );
 
-   if (ctx->_MaintainTnlProgram) 
+   if (ctx->_MaintainTnlProgram) {
+      tnl->vp_cache = MALLOC(sizeof(*tnl->vp_cache));
+      tnl->vp_cache->size = 5;
+      tnl->vp_cache->n_items = 0;
+      tnl->vp_cache->items = MALLOC(tnl->vp_cache->size *
+				sizeof(*tnl->vp_cache->items));
+      _mesa_memset(tnl->vp_cache->items, 0, tnl->vp_cache->size *
+				sizeof(*tnl->vp_cache->items));
+      
       _tnl_install_pipeline( ctx, _tnl_vp_pipeline );
-   else 
+   } else {
       _tnl_install_pipeline( ctx, _tnl_default_pipeline );
+   }
 
    /* Initialize the arrayelt helper
     */
@@ -135,7 +143,8 @@ _tnl_DestroyContext( GLcontext *ctx )
    _tnl_destroy_pipeline( ctx );
    _ae_destroy_context( ctx );
 
-   _tnl_ProgramCacheDestroy( ctx );
+   if (ctx->_MaintainTnlProgram)
+      _tnl_ProgramCacheDestroy( ctx );
 
    FREE(tnl);
    ctx->swtnl_context = NULL;
@@ -264,6 +273,9 @@ _tnl_allow_vertex_fog( GLcontext *ctx, GLboolean value )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    tnl->AllowVertexFog = value;
+   tnl->_DoVertexFog = (tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
+      || !tnl->AllowPixelFog;
+
 }
 
 void
@@ -271,5 +283,7 @@ _tnl_allow_pixel_fog( GLcontext *ctx, GLboolean value )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    tnl->AllowPixelFog = value;
+   tnl->_DoVertexFog = (tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
+      || !tnl->AllowPixelFog;
 }
 

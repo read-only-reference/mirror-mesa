@@ -535,12 +535,26 @@ int
 _mesa_ffs(int i)
 {
 #if defined(_WIN32) && !defined(__MINGW32__)
-   int bit;
-   if (i == 0)
-      return 0;
-   for (bit = 1; !(i & 1); bit++)
-      i >>= 1;
-   return bit;
+   register int bit = 0;
+   if (i != 0) {
+      if ((i & 0xffff) == 0) {
+         bit += 16;
+         i >>= 16;
+      }
+      if ((i & 0xff) == 0) {
+         bit += 8;
+         i >>= 8;
+      }
+      if ((i & 0xf) == 0) {
+         bit += 4;
+         i >>= 4;
+      }
+      while ((i & 1) == 0) {
+         bit++;
+         i >>= 1;
+      }
+      return bit;
+   }
 #elif defined(XFree86LOADER) && defined(IN_MODULE)
    return xf86ffs(i);
 #else
@@ -1050,6 +1064,9 @@ _mesa_error( GLcontext *ctx, GLenum error, const char *fmtString, ... )
          case GL_TABLE_TOO_LARGE:
             errstr = "GL_TABLE_TOO_LARGE";
             break;
+         case GL_INVALID_FRAMEBUFFER_OPERATION_EXT:
+            errstr = "GL_INVALID_FRAMEBUFFER_OPERATION";
+            break;
 	 default:
 	    errstr = "unknown";
 	    break;
@@ -1251,20 +1268,6 @@ _mesa_init_default_imports(__GLimports *imports, void *driverCtx)
    static GLboolean initialized = GL_FALSE;
    if (!initialized) {
       init_sqrt_table();
-
-#if defined(_FPU_GETCW) && defined(_FPU_SETCW)
-      {
-         const char *debug = _mesa_getenv("MESA_DEBUG");
-         if (debug && _mesa_strcmp(debug, "FP")==0) {
-            /* die on FP exceptions */
-            fpu_control_t mask;
-            _FPU_GETCW(mask);
-            mask &= ~(_FPU_MASK_IM | _FPU_MASK_DM | _FPU_MASK_ZM
-                      | _FPU_MASK_OM | _FPU_MASK_UM);
-            _FPU_SETCW(mask);
-         }
-      }
-#endif
       initialized = GL_TRUE;
    }
 

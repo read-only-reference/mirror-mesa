@@ -183,7 +183,7 @@
 
 /** For GL_ARB_fragment_program */
 /*@{*/
-#define MAX_FRAGMENT_PROGRAM_ADDRESS_REGS 1
+#define MAX_FRAGMENT_PROGRAM_ADDRESS_REGS 0
 #define MAX_FRAGMENT_PROGRAM_ALU_INSTRUCTIONS 48
 #define MAX_FRAGMENT_PROGRAM_TEX_INSTRUCTIONS 24
 #define MAX_FRAGMENT_PROGRAM_TEX_INDIRECTIONS  4
@@ -302,6 +302,7 @@
 #define FEATURE_ARB_shading_language_100 FEATURE_ARB_shader_objects
 #define FEATURE_ATI_fragment_shader _HAVE_FULL_GL
 #define FEATURE_EXT_framebuffer_object _HAVE_FULL_GL
+#define FEATURE_EXT_framebuffer_blit _HAVE_FULL_GL
 /*@}*/
 
 

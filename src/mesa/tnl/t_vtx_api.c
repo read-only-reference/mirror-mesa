@@ -68,7 +68,7 @@ static void _tnl_wrap_buffers( GLcontext *ctx )
       GLuint last_prim = tnl->vtx.prim[tnl->vtx.prim_count-1].mode;
       GLuint last_count;
 
-      if (ctx->Driver.CurrentExecPrimitive != GL_POLYGON+1) {
+      if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END) {
 	 GLint i = tnl->vtx.prim_count - 1;
 	 assert(i >= 0);
 	 tnl->vtx.prim[i].count = ((tnl->vtx.initial_counter - 
@@ -91,7 +91,7 @@ static void _tnl_wrap_buffers( GLcontext *ctx )
        */
       assert(tnl->vtx.prim_count == 0);
 
-      if (ctx->Driver.CurrentExecPrimitive != GL_POLYGON+1) {
+      if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END) {
 	 tnl->vtx.prim[0].mode = ctx->Driver.CurrentExecPrimitive;
 	 tnl->vtx.prim[0].start = 0;
 	 tnl->vtx.prim[0].count = 0;
@@ -728,16 +728,18 @@ static void GLAPIENTRY _tnl_EvalPoint2( GLint i, GLint j )
 }
 
 
-/* Build a list of primitives on the fly.  Keep
- * ctx->Driver.CurrentExecPrimitive uptodate as well.
+/**
+ * Called from glBegin.
+ * ctx->Driver.CurrentExecPrimitive will be set to <mode>.
  */
 static void GLAPIENTRY _tnl_Begin( GLenum mode )
 {
    GET_CURRENT_CONTEXT( ctx ); 
 
-   if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1) {
+   if (ctx->Driver.CurrentExecPrimitive == PRIM_OUTSIDE_BEGIN_END) {
+      /* we're not inside a glBegin/End pair */
       TNLcontext *tnl = TNL_CONTEXT(ctx); 
-      int i;
+      GLuint i;
 
       if (ctx->NewState) {
 	 _mesa_update_state( ctx );
@@ -746,8 +748,18 @@ static void GLAPIENTRY _tnl_Begin( GLenum mode )
             (ctx->FragmentProgram.Enabled && !ctx->FragmentProgram._Enabled)) {
             _mesa_error(ctx, GL_INVALID_OPERATION,
                         "glBegin (invalid vertex/fragment program)");
+            tnl->DiscardPrimitive = GL_TRUE;
             return;
          }
+
+         if (ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+            _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
+                        "glBegin(incomplete framebuffer)");
+            tnl->DiscardPrimitive = GL_TRUE;
+            return;
+         }
+
+         tnl->DiscardPrimitive = GL_FALSE;
 
 	 if (!(tnl->Driver.NotifyBegin && 
 	       tnl->Driver.NotifyBegin( ctx, mode )))
@@ -768,16 +780,22 @@ static void GLAPIENTRY _tnl_Begin( GLenum mode )
 
       ctx->Driver.CurrentExecPrimitive = mode;
    }
-   else 
+   else {
+      /* already inside glBegin/End */
       _mesa_error( ctx, GL_INVALID_OPERATION, "glBegin" );
-      
+   }      
 }
 
+
+/**
+ * Called from glEnd.
+ */
 static void GLAPIENTRY _tnl_End( void )
 {
    GET_CURRENT_CONTEXT( ctx ); 
 
-   if (ctx->Driver.CurrentExecPrimitive != GL_POLYGON+1) {
+   if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END) {
+      /* closing an open glBegin primitive */
       TNLcontext *tnl = TNL_CONTEXT(ctx); 
       int idx = tnl->vtx.initial_counter - tnl->vtx.counter;
       int i = tnl->vtx.prim_count - 1;
@@ -785,7 +803,7 @@ static void GLAPIENTRY _tnl_End( void )
       tnl->vtx.prim[i].mode |= PRIM_END; 
       tnl->vtx.prim[i].count = idx - tnl->vtx.prim[i].start;
 
-      ctx->Driver.CurrentExecPrimitive = GL_POLYGON+1;
+      ctx->Driver.CurrentExecPrimitive = PRIM_OUTSIDE_BEGIN_END;
 
       /* Two choices which effect the way vertex attributes are
        * carried over (or not) between adjacent primitives.
@@ -799,8 +817,10 @@ static void GLAPIENTRY _tnl_End( void )
 #endif
 
    }
-   else 
+   else {
+      /* glBegin hasn't been called! */
       _mesa_error( ctx, GL_INVALID_OPERATION, "glEnd" );
+   }
 }
 
 
@@ -837,8 +857,17 @@ void _tnl_FlushVertices( GLcontext *ctx, GLuint flags )
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    (void) flags;
 
-   if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END)
+   if (ctx->Driver.CurrentExecPrimitive != PRIM_OUTSIDE_BEGIN_END) {
+      /* still inside a glBegin/End pair.  How'd we get here??? */
       return;
+   }
+
+   if (tnl->DiscardPrimitive) {
+      /* discard any primitives */
+      tnl->vtx.prim_count = 0;
+      tnl->vtx.counter = tnl->vtx.initial_counter;
+      tnl->vtx.vbptr = tnl->vtx.buffer;
+   }
 
    if (tnl->vtx.counter != tnl->vtx.initial_counter) {
       _tnl_flush_vtx( ctx );

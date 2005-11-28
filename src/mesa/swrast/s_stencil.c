@@ -25,9 +25,7 @@
 
 #include "glheader.h"
 #include "context.h"
-#include "macros.h"
 #include "imports.h"
-#include "fbobject.h"
 
 #include "s_context.h"
 #include "s_depth.h"
@@ -411,7 +409,7 @@ static GLboolean
 stencil_and_ztest_span(GLcontext *ctx, struct sw_span *span, GLuint face)
 {
    struct gl_framebuffer *fb = ctx->DrawBuffer;
-   struct gl_renderbuffer *rb = fb->Attachment[BUFFER_STENCIL].Renderbuffer;
+   struct gl_renderbuffer *rb = fb->_StencilBuffer;
    GLstencil stencilRow[MAX_WIDTH];
    GLstencil *stencil;
    const GLuint n = span->end;
@@ -441,6 +439,10 @@ stencil_and_ztest_span(GLcontext *ctx, struct sw_span *span, GLuint face)
    if (do_stencil_test( ctx, face, n, stencil, mask ) == GL_FALSE) {
       /* all fragments failed the stencil test, we're done. */
       span->writeAll = GL_FALSE;
+      if (!rb->GetPointer(ctx, rb, 0, 0)) {
+         /* put updated stencil values into buffer */
+         rb->PutRow(ctx, rb, n, x, y, stencil, NULL);
+      }
       return GL_FALSE;
    }
 
@@ -498,7 +500,7 @@ stencil_and_ztest_span(GLcontext *ctx, struct sw_span *span, GLuint face)
     * Write updated stencil values back into hardware stencil buffer.
     */
    if (!rb->GetPointer(ctx, rb, 0, 0)) {
-      rb->PutRow(ctx, rb, n, x, y, stencil, mask);
+      rb->PutRow(ctx, rb, n, x, y, stencil, NULL);
    }
    
    span->writeAll = GL_FALSE;
@@ -530,7 +532,7 @@ apply_stencil_op_to_pixels( GLcontext *ctx,
                             GLenum oper, GLuint face, const GLubyte mask[] )
 {
    struct gl_framebuffer *fb = ctx->DrawBuffer;
-   struct gl_renderbuffer *rb = fb->Attachment[BUFFER_STENCIL].Renderbuffer;
+   struct gl_renderbuffer *rb = fb->_StencilBuffer;
    const GLstencil stencilMax = (1 << fb->Visual.stencilBits) - 1;
    const GLstencil ref = ctx->Stencil.Ref[face];
    const GLstencil wrtmask = ctx->Stencil.WriteMask[face];
@@ -703,7 +705,7 @@ stencil_test_pixels( GLcontext *ctx, GLuint face, GLuint n,
                      const GLint x[], const GLint y[], GLubyte mask[] )
 {
    const struct gl_framebuffer *fb = ctx->DrawBuffer;
-   struct gl_renderbuffer *rb = fb->Attachment[BUFFER_STENCIL].Renderbuffer;
+   struct gl_renderbuffer *rb = fb->_StencilBuffer;
    GLubyte fail[MAX_WIDTH];
    GLstencil r, s;
    GLuint i;
@@ -901,7 +903,7 @@ static GLboolean
 stencil_and_ztest_pixels( GLcontext *ctx, struct sw_span *span, GLuint face )
 {
    struct gl_framebuffer *fb = ctx->DrawBuffer;
-   struct gl_renderbuffer *rb = fb->Attachment[BUFFER_STENCIL].Renderbuffer;
+   struct gl_renderbuffer *rb = fb->_StencilBuffer;
    const GLuint n = span->end;
    const GLint *x = span->array->x;
    const GLint *y = span->array->y;
@@ -1097,7 +1099,7 @@ _swrast_write_stencil_span(GLcontext *ctx, GLint n, GLint x, GLint y,
                            const GLstencil stencil[] )
 {
    struct gl_framebuffer *fb = ctx->DrawBuffer;
-   struct gl_renderbuffer *rb = fb->Attachment[BUFFER_STENCIL].Renderbuffer;
+   struct gl_renderbuffer *rb = fb->_StencilBuffer;
    const GLuint stencilMax = (1 << fb->Visual.stencilBits) - 1;
    const GLuint stencilMask = ctx->Stencil.WriteMask[0];
 
@@ -1191,7 +1193,7 @@ _swrast_clear_stencil_buffer( GLcontext *ctx, struct gl_renderbuffer *rb )
          /* no bit masking */
          if (width == rb->Width && rb->DataType == GL_UNSIGNED_BYTE) {
             /* optimized case */
-            /* XXX bottom-to-op raster assumed! */
+            /* Note: bottom-to-top raster assumed! */
             GLubyte *stencil = rb->GetPointer(ctx, rb, x, y);
             GLuint len = width * height * sizeof(GLubyte);
             _mesa_memset(stencil, clearVal, len);

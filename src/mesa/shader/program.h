@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
  * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
@@ -52,7 +52,6 @@
 #define SWIZZLE_ONE  5		/* keep these values together: KW */
 
 #define MAKE_SWIZZLE4(a,b,c,d) (((a)<<0) | ((b)<<3) | ((c)<<6) | ((d)<<9))
-#define MAKE_SWIZZLE(x)        MAKE_SWIZZLE4((x)[0], (x)[1], (x)[2], (x)[3])
 #define SWIZZLE_NOOP           MAKE_SWIZZLE4(0,1,2,3)
 #define GET_SWZ(swz, idx)      (((swz) >> ((idx)*3)) & 0x7)
 #define GET_BIT(msk, idx)      (((msk) >> (idx)) & 0x1)
@@ -107,11 +106,6 @@ _mesa_init_fragment_program(GLcontext *ctx,
                             GLenum target, GLuint id);
 
 extern struct program *
-_mesa_init_ati_fragment_shader(GLcontext *ctx,
-                               struct ati_fragment_shader *prog,
-                               GLenum target, GLuint id );
-
-extern struct program *
 _mesa_new_program(GLcontext *ctx, GLenum target, GLuint id);
 
 extern void
@@ -119,7 +113,7 @@ _mesa_delete_program(GLcontext *ctx, struct program *prog);
 
 
 
-/*
+/**
  * Used for describing GL state referenced from inside ARB vertex and
  * fragment programs.
  * A string such as "state.light[0].ambient" gets translated into a
@@ -185,40 +179,34 @@ enum state_index {
 
    STATE_INTERNAL,		/* Mesa additions */
    STATE_NORMAL_SCALE,
-   STATE_POSITION_NORMALIZED
+   STATE_POSITION_NORMALIZED    /* normalized light position */
 };
 
 
 
-/*
+/**
  * Named program parameters 
  * Used for NV_fragment_program "DEFINE"d constants and "DECLARE"d parameters,
  * and ARB_fragment_program global state references.  For the later, Name
  * might be "state.light[0].diffuse", for example.
  */
-
-enum parameter_type
-{
-   NAMED_PARAMETER,
-   CONSTANT,
-   STATE
-};
-
-
 struct program_parameter
 {
    const char *Name;                   /* Null-terminated */
-   enum parameter_type Type;
+   enum register_file Type; /** PROGRAM_NAMED_PARAM, CONSTANT or STATE_VAR */
    enum state_index StateIndexes[6];   /* Global state reference */
 };
 
 
 struct program_parameter_list
 {
-   GLuint Size;
-   GLuint NumParameters;
-   struct program_parameter *Parameters;
-   GLfloat (*ParameterValues)[4];
+   GLuint Size;           /** allocated size of Parameters, ParameterValues */
+   GLuint NumParameters;  /** number of parameters in arrays */
+   struct program_parameter *Parameters; /** Array [Size] */
+   GLfloat (*ParameterValues)[4];        /** Array [Size] */
+   GLuint StateFlags;		/** _NEW_* flags indicating which
+				    statechanges might invalidate
+				    ParameterValues[]  */
 };
 
 
@@ -249,7 +237,7 @@ _mesa_add_unnamed_constant(struct program_parameter_list *paramList,
 
 extern GLint
 _mesa_add_state_reference(struct program_parameter_list *paramList,
-                          GLint *stateTokens);
+                          const GLint *stateTokens);
 
 extern GLfloat *
 _mesa_lookup_parameter_value(struct program_parameter_list *paramList,
@@ -264,8 +252,19 @@ _mesa_load_state_parameters(GLcontext *ctx,
                             struct program_parameter_list *paramList);
 
 
+
+extern void
+_mesa_print_instruction(const struct prog_instruction *inst);
+
+extern void
+_mesa_print_program(const struct program *prog);
+
+extern void
+_mesa_print_program_parameters(GLcontext *ctx, const struct program *prog);
+
+
 /*
- * API functions
+ * API functions common to ARB/NV_vertex/fragment_program
  */
 
 extern void GLAPIENTRY

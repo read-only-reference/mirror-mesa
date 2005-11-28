@@ -34,7 +34,7 @@
 #include "macros.h"
 #include "mtypes.h"
 #include "nvvertexec.h"
-#include "nvvertprog.h"
+#include "program_instruction.h"
 #include "program.h"
 #include "math/m_matrix.h"
 
@@ -162,10 +162,10 @@ _mesa_init_vp_per_primitive_registers(GLcontext *ctx)
    }
    else {
       /* Using and ARB vertex program */
-      if (ctx->VertexProgram.Current->Parameters) {
+      if (ctx->VertexProgram.Current->Base.Parameters) {
          /* Grab the state GL state and put into registers */
          _mesa_load_state_parameters(ctx,
-                                     ctx->VertexProgram.Current->Parameters);
+                                 ctx->VertexProgram.Current->Base.Parameters);
       }
    }
 }
@@ -227,7 +227,7 @@ _mesa_dump_vp_state( const struct gl_vertex_program_state *state )
  * source register.
  */
 static INLINE const GLfloat *
-get_register_pointer( const struct vp_src_register *source,
+get_register_pointer( const struct prog_src_register *source,
                       const struct gl_vertex_program_state *state )
 {
    if (source->RelAddr) {
@@ -239,7 +239,7 @@ get_register_pointer( const struct vp_src_register *source,
       else if (source->File == PROGRAM_ENV_PARAM)
          return state->Parameters[reg];
       else
-         return state->Current->Parameters->ParameterValues[reg];
+         return state->Current->Base.Parameters->ParameterValues[reg];
    }
    else {
       switch (source->File) {
@@ -260,8 +260,8 @@ get_register_pointer( const struct vp_src_register *source,
             ASSERT(source->Index < MAX_NV_VERTEX_PROGRAM_PARAMS);
             return state->Parameters[source->Index];
          case PROGRAM_STATE_VAR:
-            ASSERT(source->Index < state->Current->Parameters->NumParameters);
-            return state->Current->Parameters->ParameterValues[source->Index];
+            ASSERT(source->Index < state->Current->Base.Parameters->NumParameters);
+            return state->Current->Base.Parameters->ParameterValues[source->Index];
          default:
             _mesa_problem(NULL,
                           "Bad source register file in get_register_pointer");
@@ -277,13 +277,13 @@ get_register_pointer( const struct vp_src_register *source,
  * Apply swizzling and negating as needed.
  */
 static INLINE void
-fetch_vector4( const struct vp_src_register *source,
+fetch_vector4( const struct prog_src_register *source,
                const struct gl_vertex_program_state *state,
                GLfloat result[4] )
 {
    const GLfloat *src = get_register_pointer(source, state);
 
-   if (source->Negate) {
+   if (source->NegateBase) {
       result[0] = -src[GET_SWZ(source->Swizzle, 0)];
       result[1] = -src[GET_SWZ(source->Swizzle, 1)];
       result[2] = -src[GET_SWZ(source->Swizzle, 2)];
@@ -303,13 +303,13 @@ fetch_vector4( const struct vp_src_register *source,
  * As above, but only return result[0] element.
  */
 static INLINE void
-fetch_vector1( const struct vp_src_register *source,
+fetch_vector1( const struct prog_src_register *source,
                const struct gl_vertex_program_state *state,
                GLfloat result[4] )
 {
    const GLfloat *src = get_register_pointer(source, state);
 
-   if (source->Negate) {
+   if (source->NegateBase) {
       result[0] = -src[GET_SWZ(source->Swizzle, 0)];
    }
    else {
@@ -322,7 +322,7 @@ fetch_vector1( const struct vp_src_register *source,
  * Store 4 floats into a register.
  */
 static void
-store_vector4( const struct vp_dst_register *dest,
+store_vector4( const struct prog_dst_register *dest,
                struct gl_vertex_program_state *state,
                const GLfloat value[4] )
 {
@@ -382,22 +382,23 @@ void
 _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
 {
    struct gl_vertex_program_state *state = &ctx->VertexProgram;
-   const struct vp_instruction *inst;
+   const struct prog_instruction *inst;
 
    ctx->_CurrentProgram = GL_VERTEX_PROGRAM_ARB; /* or NV, doesn't matter */
 
-   /* If the program is position invariant, multiply the input
-    * position and the MVP matrix and stick it into the output pos slot
+   /* If the program is position invariant, multiply the input position
+    * by the MVP matrix and store in the vertex position result register.
     */
    if (ctx->VertexProgram.Current->IsPositionInvariant) {
-      TRANSFORM_POINT( ctx->VertexProgram.Outputs[0], 
+      TRANSFORM_POINT( ctx->VertexProgram.Outputs[VERT_RESULT_HPOS], 
                        ctx->_ModelProjectMatrix.m, 
-                       ctx->VertexProgram.Inputs[0]);
+                       ctx->VertexProgram.Inputs[VERT_ATTRIB_POS]);
 
       /* XXX: This could go elsewhere */
-      ctx->VertexProgram.Current->OutputsWritten |= 0x1;
+      ctx->VertexProgram.Current->Base.OutputsWritten |= VERT_BIT_POS;
    }
-   for (inst = program->Instructions; ; inst++) {
+
+   for (inst = program->Base.Instructions; ; inst++) {
 
       if (ctx->VertexProgram.CallbackEnabled &&
           ctx->VertexProgram.Callback) {
@@ -407,14 +408,14 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
       }
 
       switch (inst->Opcode) {
-         case VP_OPCODE_MOV:
+         case OPCODE_MOV:
             {
                GLfloat t[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
                store_vector4( &inst->DstReg, state, t );
             }
             break;
-         case VP_OPCODE_LIT:
+         case OPCODE_LIT:
             {
                const GLfloat epsilon = 1.0F / 256.0F; /* per NV spec */
                GLfloat t[4], lit[4];
@@ -429,7 +430,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, lit );
             }
             break;
-         case VP_OPCODE_RCP:
+         case OPCODE_RCP:
             {
                GLfloat t[4];
                fetch_vector1( &inst->SrcReg[0], state, t );
@@ -439,7 +440,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, t );
             }
             break;
-         case VP_OPCODE_RSQ:
+         case OPCODE_RSQ:
             {
                GLfloat t[4];
                fetch_vector1( &inst->SrcReg[0], state, t );
@@ -448,7 +449,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, t );
             }
             break;
-         case VP_OPCODE_EXP:
+         case OPCODE_EXP:
             {
                GLfloat t[4], q[4], floor_t0;
                fetch_vector1( &inst->SrcReg[0], state, t );
@@ -477,7 +478,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, q );
             }
             break;
-         case VP_OPCODE_LOG:
+         case OPCODE_LOG:
             {
                GLfloat t[4], q[4], abs_t0;
                fetch_vector1( &inst->SrcReg[0], state, t );
@@ -514,7 +515,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, q );
             }
             break;
-         case VP_OPCODE_MUL:
+         case OPCODE_MUL:
             {
                GLfloat t[4], u[4], prod[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -526,7 +527,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, prod );
             }
             break;
-         case VP_OPCODE_ADD:
+         case OPCODE_ADD:
             {
                GLfloat t[4], u[4], sum[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -538,7 +539,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, sum );
             }
             break;
-         case VP_OPCODE_DP3:
+         case OPCODE_DP3:
             {
                GLfloat t[4], u[4], dot[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -548,7 +549,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, dot );
             }
             break;
-         case VP_OPCODE_DP4:
+         case OPCODE_DP4:
             {
                GLfloat t[4], u[4], dot[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -558,7 +559,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, dot );
             }
             break;
-         case VP_OPCODE_DST:
+         case OPCODE_DST:
             {
                GLfloat t[4], u[4], dst[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -570,7 +571,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, dst );
             }
             break;
-         case VP_OPCODE_MIN:
+         case OPCODE_MIN:
             {
                GLfloat t[4], u[4], min[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -582,7 +583,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, min );
             }
             break;
-         case VP_OPCODE_MAX:
+         case OPCODE_MAX:
             {
                GLfloat t[4], u[4], max[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -594,7 +595,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, max );
             }
             break;
-         case VP_OPCODE_SLT:
+         case OPCODE_SLT:
             {
                GLfloat t[4], u[4], slt[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -606,7 +607,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, slt );
             }
             break;
-         case VP_OPCODE_SGE:
+         case OPCODE_SGE:
             {
                GLfloat t[4], u[4], sge[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -618,7 +619,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, sge );
             }
             break;
-         case VP_OPCODE_MAD:
+         case OPCODE_MAD:
             {
                GLfloat t[4], u[4], v[4], sum[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -631,14 +632,14 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, sum );
             }
             break;
-         case VP_OPCODE_ARL:
+         case OPCODE_ARL:
             {
                GLfloat t[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
                state->AddressReg[0] = (GLint) FLOORF(t[0]);
             }
             break;
-         case VP_OPCODE_DPH:
+         case OPCODE_DPH:
             {
                GLfloat t[4], u[4], dot[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -648,7 +649,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, dot );
             }
             break;
-         case VP_OPCODE_RCC:
+         case OPCODE_RCC:
             {
                GLfloat t[4], u;
                fetch_vector1( &inst->SrcReg[0], state, t );
@@ -676,7 +677,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, t );
             }
             break;
-         case VP_OPCODE_SUB: /* GL_NV_vertex_program1_1 */
+         case OPCODE_SUB: /* GL_NV_vertex_program1_1 */
             {
                GLfloat t[4], u[4], sum[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -688,7 +689,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, sum );
             }
             break;
-         case VP_OPCODE_ABS: /* GL_NV_vertex_program1_1 */
+         case OPCODE_ABS: /* GL_NV_vertex_program1_1 */
             {
                GLfloat t[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -699,7 +700,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, t );
             }
             break;
-         case VP_OPCODE_FLR: /* GL_ARB_vertex_program */
+         case OPCODE_FLR: /* GL_ARB_vertex_program */
             {
                GLfloat t[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -710,7 +711,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, t );
             }
             break;
-         case VP_OPCODE_FRC: /* GL_ARB_vertex_program */
+         case OPCODE_FRC: /* GL_ARB_vertex_program */
             {
                GLfloat t[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -721,7 +722,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, t );
             }
             break;
-         case VP_OPCODE_EX2: /* GL_ARB_vertex_program */
+         case OPCODE_EX2: /* GL_ARB_vertex_program */
             {
                GLfloat t[4];
                fetch_vector1( &inst->SrcReg[0], state, t );
@@ -729,7 +730,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, t );
             }
             break;
-         case VP_OPCODE_LG2: /* GL_ARB_vertex_program */
+         case OPCODE_LG2: /* GL_ARB_vertex_program */
             {
                GLfloat t[4];
                fetch_vector1( &inst->SrcReg[0], state, t );
@@ -737,7 +738,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, t );
             }
             break;
-         case VP_OPCODE_POW: /* GL_ARB_vertex_program */
+         case OPCODE_POW: /* GL_ARB_vertex_program */
             {
                GLfloat t[4], u[4];
                fetch_vector1( &inst->SrcReg[0], state, t );
@@ -746,7 +747,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, t );
             }
             break;
-         case VP_OPCODE_XPD: /* GL_ARB_vertex_program */
+         case OPCODE_XPD: /* GL_ARB_vertex_program */
             {
                GLfloat t[4], u[4], cross[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -757,9 +758,9 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                store_vector4( &inst->DstReg, state, cross );
             }
             break;
-         case VP_OPCODE_SWZ: /* GL_ARB_vertex_program */
+         case OPCODE_SWZ: /* GL_ARB_vertex_program */
             {
-               const struct vp_src_register *source = &inst->SrcReg[0];
+               const struct prog_src_register *source = &inst->SrcReg[0];
                const GLfloat *src = get_register_pointer(source, state);
                GLfloat result[4];
                GLuint i;
@@ -772,13 +773,13 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                      result[i] = 1.0;
                   else
                      result[i] = src[GET_SWZ(source->Swizzle, i)];
-                  if (source->Negate & (1 << i))
+                  if (source->NegateBase & (1 << i))
                      result[i] = -result[i];
                }
                store_vector4( &inst->DstReg, state, result );
             }
             break;
-         case VP_OPCODE_PRINT:
+         case OPCODE_PRINT:
             if (inst->SrcReg[0].File) {
                GLfloat t[4];
                fetch_vector4( &inst->SrcReg[0], state, t );
@@ -789,7 +790,7 @@ _mesa_exec_vertex_program(GLcontext *ctx, const struct vertex_program *program)
                _mesa_printf("%s\n", (char *) inst->Data);
             }
             break;
-         case VP_OPCODE_END:
+         case OPCODE_END:
             ctx->_CurrentProgram = 0;
             return;
          default:
@@ -818,7 +819,7 @@ masking, relative addressing, etc. when they're not needed.
 
 For example:
 
-void simple_add( struct vp_instruction *inst )
+void simple_add( struct prog_instruction *inst )
 {
    GLfloat *sum = machine->Registers[inst->DstReg.Register];
    GLfloat *a = machine->Registers[inst->SrcReg[0].Register];

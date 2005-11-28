@@ -32,9 +32,6 @@
 #include "colormac.h"
 #include "mtypes.h"
 #include "program.h"
-#include "texobj.h"
-#include "nvfragprog.h"
-
 #include "swrast.h"
 #include "s_blend.h"
 #include "s_context.h"
@@ -107,6 +104,12 @@ _swrast_update_rasterflags( GLcontext *ctx )
    if (ctx->ATIFragmentShader._Enabled) {
       rasterMask |= ATIFRAGSHADER_BIT;
    }
+
+#if CHAN_TYPE == GL_FLOAT
+   if (ctx->Color.ClampFragmentColor == GL_TRUE) {
+      rasterMask |= CLAMPING_BIT;
+   }
+#endif
 
    SWRAST_CONTEXT(ctx)->_RasterMask = rasterMask;
 }
@@ -224,7 +227,7 @@ _swrast_update_fragment_program( GLcontext *ctx )
 {
    if (ctx->FragmentProgram._Active) {
       struct fragment_program *program = ctx->FragmentProgram._Current;
-      _mesa_load_state_parameters(ctx, program->Parameters);
+      _mesa_load_state_parameters(ctx, program->Base.Parameters);
    }
 }
 

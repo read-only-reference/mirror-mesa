@@ -339,7 +339,7 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
       if (overlapping) {
          /* get from buffered image */
          ASSERT(width < MAX_WIDTH);
-         MEMCPY(span.array->rgba, p, width * sizeof(GLchan) * 4);
+         _mesa_memcpy(span.array->rgba, p, width * sizeof(GLchan) * 4);
          p += width * 4;
       }
       else {
@@ -459,7 +459,7 @@ copy_ci_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
    for (j = 0; j < height; j++, sy += stepy, dy += stepy) {
       /* Get color indexes */
       if (overlapping) {
-         MEMCPY(span.array->index, p, width * sizeof(GLuint));
+         _mesa_memcpy(span.array->index, p, width * sizeof(GLuint));
          p += width;
       }
       else {
@@ -501,7 +501,7 @@ copy_depth_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    struct gl_framebuffer *fb = ctx->ReadBuffer;
-   struct gl_renderbuffer *readRb = fb->Attachment[BUFFER_DEPTH].Renderbuffer;
+   struct gl_renderbuffer *readRb = fb->_DepthBuffer;
    const GLfloat depthMax = fb->_DepthMaxF;
    GLfloat *p, *tmpImage;
    GLint sy, dy, stepy;
@@ -566,7 +566,7 @@ copy_depth_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
       GLfloat depth[MAX_WIDTH];
       /* get depth values */
       if (overlapping) {
-         MEMCPY(depth, p, width * sizeof(GLfloat));
+         _mesa_memcpy(depth, p, width * sizeof(GLfloat));
          p += width;
       }
       else {
@@ -610,7 +610,7 @@ copy_stencil_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
                      GLint destx, GLint desty )
 {
    struct gl_framebuffer *fb = ctx->ReadBuffer;
-   struct gl_renderbuffer *rb = fb->Attachment[BUFFER_STENCIL].Renderbuffer;
+   struct gl_renderbuffer *rb = fb->_StencilBuffer;
    GLint sy, dy, stepy;
    GLint j;
    GLstencil *p, *tmpImage;
@@ -669,7 +669,7 @@ copy_stencil_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
 
       /* Get stencil values */
       if (overlapping) {
-         MEMCPY(stencil, p, width * sizeof(GLstencil));
+         _mesa_memcpy(stencil, p, width * sizeof(GLstencil));
          p += width;
       }
       else {
@@ -700,7 +700,7 @@ copy_stencil_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
 
 
 /**
- * This isn't terribly efficient.  If a drivef really has combined
+ * This isn't terribly efficient.  If a driver really has combined
  * depth/stencil buffers the driver should implement an optimized
  * CopyPixels function.
  */
@@ -724,9 +724,9 @@ copy_depth_stencil_pixels(GLcontext *ctx,
       = ctx->Pixel.DepthScale != 1.0 || ctx->Pixel.DepthBias != 0.0;
    GLint overlapping;
 
-   depthDrawRb = ctx->DrawBuffer->Attachment[BUFFER_DEPTH].Renderbuffer;
-   depthReadRb = ctx->ReadBuffer->Attachment[BUFFER_DEPTH].Renderbuffer;
-   stencilReadRb = ctx->ReadBuffer->Attachment[BUFFER_STENCIL].Renderbuffer;
+   depthDrawRb = ctx->DrawBuffer->_DepthBuffer;
+   depthReadRb = ctx->ReadBuffer->_DepthBuffer;
+   stencilReadRb = ctx->ReadBuffer->_StencilBuffer;
 
    ASSERT(depthDrawRb);
    ASSERT(depthReadRb);

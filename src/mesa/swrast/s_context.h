@@ -245,6 +245,7 @@ typedef void (*swrast_tri_func)( GLcontext *ctx, const SWvertex *,
 #define TEXTURE_BIT		0x1000	/**< Texturing really enabled */
 #define FRAGPROG_BIT            0x2000  /**< Fragment program enabled */
 #define ATIFRAGSHADER_BIT       0x4000  /**< ATI Fragment shader enabled */
+#define CLAMPING_BIT            0x8000  /**< Clamp colors to [0,1] */
 /*@}*/
 
 #define _SWRAST_NEW_RASTERMASK (_NEW_BUFFERS|	\
@@ -390,19 +391,5 @@ _swrast_validate_derived( GLcontext *ctx );
 #define ChanToFixed(X)  IntToFixed(X)
 #define FixedToChan(X)  FixedToInt(X)
 #endif
-
-
-
-extern void 
-_swrast_translate_program( GLcontext *ctx );
-
-extern GLboolean 
-_swrast_execute_codegen_program(GLcontext *ctx,
-				const struct fragment_program *program, 
-				GLuint maxInst,
-				struct fp_machine *machine, 
-				const struct sw_span *span,
-				GLuint column );
-
 
 #endif

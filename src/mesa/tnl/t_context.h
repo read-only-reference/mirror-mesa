@@ -643,6 +643,11 @@ struct tnl_device_driver
    /* Alert tnl-aware drivers of changes to material.
     */
 
+   void (*NotifyInputChanges)(GLcontext *ctx, GLuint bitmask);
+   /* Alert tnl-aware drivers of changes to size and stride of input
+    * arrays.
+    */
+
    GLboolean (*NotifyBegin)(GLcontext *ctx, GLenum p);
    /* Allow drivers to hook in optimized begin/end engines.
     * Return value:  GL_TRUE - driver handled the begin
@@ -776,6 +781,12 @@ typedef struct
    GLboolean AllowCodegen;
 
    GLboolean _DoVertexFog;  /* eval fog function at each vertex? */
+
+   /* If True, it means we started a glBegin/End primtive with an invalid
+    * vertex/fragment program or incomplete framebuffer.  In that case,
+    * discard any buffered vertex data.
+    */
+   GLboolean DiscardPrimitive;
 
    GLuint render_inputs;
 

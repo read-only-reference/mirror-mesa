@@ -87,7 +87,6 @@
 #include "nvprogram.h"
 #endif
 #if FEATURE_NV_fragment_program
-#include "nvfragprog.h"
 #include "nvprogram.h"
 #include "program.h"
 #include "texenvprogram.h"
@@ -931,9 +930,9 @@ update_program(GLcontext *ctx)
     * have a runable program or shader.
     */
    ctx->VertexProgram._Enabled = ctx->VertexProgram.Enabled
-      && ctx->VertexProgram.Current->Instructions;
+      && ctx->VertexProgram.Current->Base.Instructions;
    ctx->FragmentProgram._Enabled = ctx->FragmentProgram.Enabled
-      && ctx->FragmentProgram.Current->Instructions;
+      && ctx->FragmentProgram.Current->Base.Instructions;
    ctx->ATIFragmentShader._Enabled = ctx->ATIFragmentShader.Enabled
       && ctx->ATIFragmentShader.Current->Instructions;
       

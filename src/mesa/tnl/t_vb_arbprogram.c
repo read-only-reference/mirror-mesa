@@ -43,17 +43,11 @@
 #include "t_pipeline.h"
 #include "t_vb_arbprogram.h"
 #include "tnl.h"
+#include "program_instruction.h"
 
 
 #define DISASSEM 0
 
-/*--------------------------------------------------------------------------- */
-
-struct opcode_info {
-   GLuint nr_args;
-   const char *string;
-   void (*print)( union instruction , const struct opcode_info * );
-};
 
 struct compilation {
    GLuint reg_active;
@@ -565,13 +559,13 @@ static void print_reg( GLuint file, GLuint reg )
 }
 
 
-static void print_RSW( union instruction op, const struct opcode_info *info )
+static void print_RSW( union instruction op )
 {
    GLuint swz = op.rsw.swz;
    GLuint neg = op.rsw.neg;
    GLuint i;
 
-   _mesa_printf("%s ", info->string);
+   _mesa_printf("RSW ");
    print_reg(0, op.rsw.dst);
    _mesa_printf(", ");
    print_reg(op.rsw.file0, op.rsw.idx0);
@@ -586,22 +580,22 @@ static void print_RSW( union instruction op, const struct opcode_info *info )
 }
 
 
-static void print_ALU( union instruction op, const struct opcode_info *info )
+static void print_ALU( union instruction op )
 {
-   _mesa_printf("%s ", info->string);
+   _mesa_printf("%s ", _mesa_opcode_string(op.alu.opcode));
    print_reg(0, op.alu.dst);
    _mesa_printf(", ");
    print_reg(op.alu.file0, op.alu.idx0);
-   if (info->nr_args > 1) {
+   if (_mesa_num_inst_src_regs(op.alu.opcode) > 1) {
       _mesa_printf(", ");
       print_reg(op.alu.file1, op.alu.idx1);
    }
    _mesa_printf("\n");
 }
 
-static void print_MSK( union instruction op, const struct opcode_info *info )
+static void print_MSK( union instruction op )
 {
-   _mesa_printf("%s ", info->string);
+   _mesa_printf("MSK ");
    print_reg(0, op.msk.dst);
    print_mask(op.msk.mask);
    _mesa_printf(", ");
@@ -609,64 +603,86 @@ static void print_MSK( union instruction op, const struct opcode_info *info )
    _mesa_printf("\n");
 }
 
-
-static void print_NOP( union instruction op, const struct opcode_info *info )
+static void print_NOP( union instruction op )
 {
 }
 
-#define NOP 0
-#define ALU 1
-#define SWZ 2
-
-static const struct opcode_info opcode_info[] = 
+void
+_tnl_disassem_vba_insn( union instruction op )
 {
-   { 1, "ABS", print_ALU },
-   { 2, "ADD", print_ALU },
-   { 1, "ARL", print_NOP },
-   { 2, "DP3", print_ALU },
-   { 2, "DP4", print_ALU },
-   { 2, "DPH", print_ALU },
-   { 2, "DST", print_ALU },
-   { 0, "END", print_NOP },
-   { 1, "EX2", print_ALU },
-   { 1, "EXP", print_ALU },
-   { 1, "FLR", print_ALU },
-   { 1, "FRC", print_ALU },
-   { 1, "LG2", print_ALU },
-   { 1, "LIT", print_ALU },
-   { 1, "LOG", print_ALU },
-   { 3, "MAD", print_NOP },
-   { 2, "MAX", print_ALU },
-   { 2, "MIN", print_ALU },
-   { 1, "MOV", print_ALU },
-   { 2, "MUL", print_ALU },
-   { 2, "POW", print_ALU },
-   { 1, "PRT", print_ALU }, /* PRINT */
-   { 1, "RCC", print_NOP },
-   { 1, "RCP", print_ALU },
-   { 1, "RSQ", print_ALU },
-   { 2, "SGE", print_ALU },
-   { 2, "SLT", print_ALU },
-   { 2, "SUB", print_ALU },
-   { 1, "SWZ", print_NOP },
-   { 2, "XPD", print_ALU },
-   { 1, "RSW", print_RSW },
-   { 2, "MSK", print_MSK },
-   { 1, "REL", print_ALU },
-};
-
-void _tnl_disassem_vba_insn( union instruction op )
-{
-   const struct opcode_info *info = &opcode_info[op.alu.opcode];
-   info->print( op, info );
+   switch (op.alu.opcode) {
+   case OPCODE_ABS:
+   case OPCODE_ADD:
+   case OPCODE_DP3:
+   case OPCODE_DP4:
+   case OPCODE_DPH:
+   case OPCODE_DST:
+   case OPCODE_EX2:
+   case OPCODE_EXP:
+   case OPCODE_FLR:
+   case OPCODE_FRC:
+   case OPCODE_LG2:
+   case OPCODE_LIT:
+   case OPCODE_LOG:
+   case OPCODE_MAX:
+   case OPCODE_MIN:
+   case OPCODE_MOV:
+   case OPCODE_MUL:
+   case OPCODE_POW:
+   case OPCODE_PRINT:
+   case OPCODE_RCP:
+   case OPCODE_RSQ:
+   case OPCODE_SGE:
+   case OPCODE_SLT:
+   case OPCODE_SUB:
+   case OPCODE_XPD:
+      print_ALU(op);
+      break;
+   case OPCODE_ARA:
+   case OPCODE_ARL:
+   case OPCODE_ARL_NV:
+   case OPCODE_ARR:
+   case OPCODE_BRA:
+   case OPCODE_CAL:
+   case OPCODE_END:
+   case OPCODE_MAD:
+   case OPCODE_POPA:
+   case OPCODE_PUSHA:
+   case OPCODE_RCC:
+   case OPCODE_RET:
+   case OPCODE_SSG:
+   case OPCODE_SWZ:
+      print_NOP(op);
+      break;
+   case RSW:
+      print_RSW(op);
+      break;
+   case MSK:
+      print_MSK(op);
+      break;
+   case REL:
+      print_ALU(op);
+      break;
+   default:
+      _mesa_problem(NULL, "Bad opcode in _tnl_disassem_vba_insn()");
+   }
 }
 
 
-static void (* const opcode_func[])(struct arb_vp_machine *, union instruction) = 
+static void (* const opcode_func[MAX_OPCODE+3])(struct arb_vp_machine *, union instruction) = 
 {
    do_ABS,
    do_ADD,
-   do_NOP,
+   do_NOP,/*ARA*/
+   do_NOP,/*ARL*/
+   do_NOP,/*ARL_NV*/
+   do_NOP,/*ARR*/
+   do_NOP,/*BRA*/
+   do_NOP,/*CAL*/
+   do_NOP,/*CMP*/
+   do_NOP,/*COS*/
+   do_NOP,/*DDX*/
+   do_NOP,/*DDY*/
    do_DP3,
    do_DP4,
    do_DPH,
@@ -676,23 +692,54 @@ static void (* const opcode_func[])(struct arb_vp_machine *, union instruction) 
    do_EXP,
    do_FLR,
    do_FRC,
+   do_NOP,/*KIL*/
+   do_NOP,/*KIL_NV*/
    do_LG2,
    do_LIT,
    do_LOG,
-   do_NOP,
+   do_NOP,/*LRP*/
+   do_NOP,/*MAD*/
    do_MAX,
    do_MIN,
    do_MOV,
    do_MUL,
+   do_NOP,/*PK2H*/
+   do_NOP,/*PK2US*/
+   do_NOP,/*PK4B*/
+   do_NOP,/*PK4UB*/
    do_POW,
+   do_NOP,/*POPA*/
    do_PRT,
-   do_NOP,
-   do_RCP,
+   do_NOP,/*PUSHA*/
+   do_NOP,/*RCC*/
+   do_RCP,/*RCP*/
+   do_NOP,/*RET*/
+   do_NOP,/*RFL*/
    do_RSQ,
+   do_NOP,/*SCS*/
+   do_NOP,/*SEQ*/
+   do_NOP,/*SFL*/
    do_SGE,
+   do_NOP,/*SGT*/
+   do_NOP,/*SIN*/
+   do_NOP,/*SLE*/
    do_SLT,
+   do_NOP,/*SNE*/
+   do_NOP,/*SSG*/
+   do_NOP,/*STR*/
    do_SUB,
-   do_RSW,
+   do_RSW,/*SWZ*/
+   do_NOP,/*TEX*/
+   do_NOP,/*TXB*/
+   do_NOP,/*TXD*/
+   do_NOP,/*TXL*/
+   do_NOP,/*TXP*/
+   do_NOP,/*TXP_NV*/
+   do_NOP,/*UP2H*/
+   do_NOP,/*UP2US*/
+   do_NOP,/*UP4B*/
+   do_NOP,/*UP4UB*/
+   do_NOP,/*X2D*/
    do_XPD,
    do_RSW,
    do_MSK,
@@ -774,13 +821,14 @@ static struct reg cvp_load_reg( struct compilation *cp,
    case PROGRAM_WRITE_ONLY:
    case PROGRAM_ADDRESS:
    default:
+      _mesa_problem(NULL, "Invalid register file %d in cvp_load_reg()");
       assert(0);
       return tmpreg;		/* can't happen */
    }
 }
 
 static struct reg cvp_emit_arg( struct compilation *cp,
-				const struct vp_src_register *src,
+				const struct prog_src_register *src,
 				GLuint arg )
 {
    struct reg reg = cvp_load_reg( cp, src->File, src->Index, src->RelAddr, arg );
@@ -789,7 +837,7 @@ static struct reg cvp_emit_arg( struct compilation *cp,
    /* Emit any necessary swizzling.  
     */
    rsw.dword = 0;
-   rsw.rsw.neg = src->Negate ? WRITEMASK_XYZW : 0;
+   rsw.rsw.neg = src->NegateBase ? WRITEMASK_XYZW : 0;
 
    /* we're expecting 2-bit swizzles below... */
    ASSERT(GET_SWZ(src->Swizzle, 0) < 4);
@@ -821,7 +869,7 @@ static struct reg cvp_emit_arg( struct compilation *cp,
 }
 
 static GLuint cvp_choose_result( struct compilation *cp,
-				 const struct vp_dst_register *dst,
+				 const struct prog_dst_register *dst,
 				 union instruction *fixup )
 {
    GLuint mask = dst->WriteMask;
@@ -884,7 +932,7 @@ static struct reg cvp_emit_rsw( struct compilation *cp,
       /* Oops.  Degenerate case:
        */
       union instruction *op = cvp_next_instruction(cp);
-      op->alu.opcode = VP_OPCODE_MOV;
+      op->alu.opcode = OPCODE_MOV;
       op->alu.dst = dst;
       op->alu.file0 = src.file;
       op->alu.idx0 = src.idx;
@@ -900,28 +948,27 @@ static struct reg cvp_emit_rsw( struct compilation *cp,
 
 
 static void cvp_emit_inst( struct compilation *cp,
-			   const struct vp_instruction *inst )
+			   const struct prog_instruction *inst )
 {
-   const struct opcode_info *info = &opcode_info[inst->Opcode];
    union instruction *op;
    union instruction fixup;
    struct reg reg[3];
-   GLuint result, i;
+   GLuint result, nr_args, i;
 
-   assert(sizeof(*op) == sizeof(GLuint));
+   assert(sizeof(*op) == sizeof(long long));
 
    /* Need to handle SWZ, ARL specially.
     */
    switch (inst->Opcode) {
       /* Split into mul and add:
        */
-   case VP_OPCODE_MAD:
+   case OPCODE_MAD:
       result = cvp_choose_result( cp, &inst->DstReg, &fixup );
       for (i = 0; i < 3; i++) 
 	 reg[i] = cvp_emit_arg( cp, &inst->SrcReg[i], REG_ARG0+i );
 
       op = cvp_next_instruction(cp);
-      op->alu.opcode = VP_OPCODE_MUL;
+      op->alu.opcode = OPCODE_MUL;
       op->alu.file0 = reg[0].file;
       op->alu.idx0 = reg[0].idx;
       op->alu.file1 = reg[1].file;
@@ -929,7 +976,7 @@ static void cvp_emit_inst( struct compilation *cp,
       op->alu.dst = REG_ARG0;
 
       op = cvp_next_instruction(cp);
-      op->alu.opcode = VP_OPCODE_ADD;
+      op->alu.opcode = OPCODE_ADD;
       op->alu.file0 = FILE_REG;
       op->alu.idx0 = REG_ARG0;
       op->alu.file1 = reg[2].file;
@@ -942,17 +989,17 @@ static void cvp_emit_inst( struct compilation *cp,
       }
       break;
 
-   case VP_OPCODE_ARL:
+   case OPCODE_ARL:
       reg[0] = cvp_emit_arg( cp, &inst->SrcReg[0], REG_ARG0 );
 
       op = cvp_next_instruction(cp);
-      op->alu.opcode = VP_OPCODE_FLR;
+      op->alu.opcode = OPCODE_FLR;
       op->alu.dst = REG_ADDR;
       op->alu.file0 = reg[0].file;
       op->alu.idx0 = reg[0].idx;
       break;
 
-   case VP_OPCODE_SWZ: {
+   case OPCODE_SWZ: {
       GLuint swz0 = 0, swz1 = 0;
       GLuint neg0 = 0, neg1 = 0;
       GLuint mask = 0;
@@ -964,7 +1011,7 @@ static void cvp_emit_inst( struct compilation *cp,
       for (i = 0; i < 4; i++) {
 	 GLuint swzelt = GET_SWZ(inst->SrcReg[0].Swizzle, i);
 	 if (swzelt >= SWIZZLE_ZERO) {
-	    neg0 |= inst->SrcReg[0].Negate & (1<<i);
+	    neg0 |= inst->SrcReg[0].NegateBase & (1<<i);
 	    if (swzelt == SWIZZLE_ONE)
 	       swz0 |= SWIZZLE_W << (i*2);
 	    else if (i < SWIZZLE_W)
@@ -972,7 +1019,7 @@ static void cvp_emit_inst( struct compilation *cp,
 	 }
 	 else {
 	    mask |= 1<<i;
-	    neg1 |= inst->SrcReg[0].Negate & (1<<i);
+	    neg1 |= inst->SrcReg[0].NegateBase & (1<<i);
 	    swz1 |= swzelt << (i*2);
 	 }
       }
@@ -1008,12 +1055,13 @@ static void cvp_emit_inst( struct compilation *cp,
       break;
    }
 
-   case VP_OPCODE_END:
+   case OPCODE_END:
       break;
 
    default:
       result = cvp_choose_result( cp, &inst->DstReg, &fixup );
-      for (i = 0; i < info->nr_args; i++) 
+      nr_args = _mesa_num_inst_src_regs(inst->Opcode);
+      for (i = 0; i < nr_args; i++) 
 	 reg[i] = cvp_emit_arg( cp, &inst->SrcReg[i], REG_ARG0 + i );
 
       op = cvp_next_instruction(cp);
@@ -1062,7 +1110,7 @@ static void compile_vertex_program( struct vertex_program *program,
    /* Compile instructions:
     */
    for (i = 0; i < program->Base.NumInstructions; i++) {
-      cvp_emit_inst(&cp, &program->Instructions[i]);
+      cvp_emit_inst(&cp, &program->Base.Instructions[i]);
    }
 
    /* Finish up:
@@ -1136,9 +1184,9 @@ static void userclip( GLcontext *ctx,
 }
 
 
-static GLboolean do_ndc_cliptest( struct arb_vp_machine *m )
+static GLboolean
+do_ndc_cliptest(GLcontext *ctx, struct arb_vp_machine *m)
 {
-   GLcontext *ctx = m->ctx;
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct vertex_buffer *VB = m->VB;
 
@@ -1216,13 +1264,14 @@ run_arb_vertex_program(GLcontext *ctx, struct tnl_pipeline_stage *stage)
    struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
    struct arb_vp_machine *m = ARB_VP_MACHINE(stage);
    struct tnl_compiled_program *p;
-   GLuint i, j, outputs;
+   GLuint i, j;
+   GLbitfield outputs;
 
    if (!program || program->IsNVProgram)
       return GL_TRUE;   
 
-   if (program->Parameters) {
-      _mesa_load_state_parameters(ctx, program->Parameters);
+   if (program->Base.Parameters) {
+      _mesa_load_state_parameters(ctx, program->Base.Parameters);
    }   
    
    p = (struct tnl_compiled_program *)program->TnlData;
@@ -1232,7 +1281,7 @@ run_arb_vertex_program(GLcontext *ctx, struct tnl_pipeline_stage *stage)
    m->nr_inputs = m->nr_outputs = 0;
 
    for (i = 0; i < _TNL_ATTRIB_MAX; i++) {
-      if (program->InputsRead & (1<<i)) {
+      if (program->Base.InputsRead & (1<<i)) {
 	 GLuint j = m->nr_inputs++;
 	 m->input[j].idx = i;
 	 m->input[j].data = (GLfloat *)m->VB->AttribPtr[i]->data;
@@ -1242,8 +1291,8 @@ run_arb_vertex_program(GLcontext *ctx, struct tnl_pipeline_stage *stage)
       }
    }     
 
-   for (i = 0; i < 15; i++) {
-      if (program->OutputsWritten & (1<<i)) {
+   for (i = 0; i < VERT_RESULT_MAX; i++) {
+      if (program->Base.OutputsWritten & (1 << i)) {
 	 GLuint j = m->nr_outputs++;
 	 m->output[j].idx = i;
 	 m->output[j].data = (GLfloat *)m->attribs[i].data;
@@ -1299,7 +1348,7 @@ run_arb_vertex_program(GLcontext *ctx, struct tnl_pipeline_stage *stage)
    VB->ClipPtr = &m->attribs[VERT_RESULT_HPOS];
    VB->ClipPtr->count = VB->Count;
 
-   outputs = program->OutputsWritten;
+   outputs = program->Base.OutputsWritten;
 
    if (outputs & (1<<VERT_RESULT_COL0)) {
       VB->ColorPtr[0] = &m->attribs[VERT_RESULT_COL0];
@@ -1352,7 +1401,7 @@ run_arb_vertex_program(GLcontext *ctx, struct tnl_pipeline_stage *stage)
 
    /* Perform NDC and cliptest operations:
     */
-   return do_ndc_cliptest(m);
+   return do_ndc_cliptest(ctx, m);
 }
 
 
@@ -1376,8 +1425,8 @@ validate_vertex_program( GLcontext *ctx, struct tnl_pipeline_stage *stage )
       m->File[FILE_LOCAL_PARAM] = program->Base.LocalParams;
       m->File[FILE_ENV_PARAM] = ctx->VertexProgram.Parameters;
       /* GL_NV_vertex_programs can't reference GL state */
-      if (program->Parameters)
-         m->File[FILE_STATE_PARAM] = program->Parameters->ParameterValues;
+      if (program->Base.Parameters)
+         m->File[FILE_STATE_PARAM] = program->Base.Parameters->ParameterValues;
       else
          m->File[FILE_STATE_PARAM] = NULL;
    }
@@ -1410,7 +1459,6 @@ static GLboolean init_vertex_program( GLcontext *ctx,
    /* arb_vertex_machine struct should subsume the VB:
     */
    m->VB = VB;
-   m->ctx = ctx;
 
    m->File[0] = ALIGN_MALLOC(REG_MAX * sizeof(GLfloat) * 4, 16);
 

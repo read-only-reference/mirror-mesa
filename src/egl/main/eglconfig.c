@@ -11,6 +11,7 @@
 #include "egldisplay.h"
 #include "egldriver.h"
 #include "eglglobals.h"
+#include "egllog.h"
 
 
 #define MIN2(A, B)  (((A) < (B)) ? (A) : (B))
@@ -146,11 +147,17 @@ _eglParseConfigAttribs(_EGLConfig *config, const EGLint *attrib_list)
 {
    EGLint i;
 
-   /* XXX set all config attribs to EGL_DONT_CARE */
+   /* set all config attribs to EGL_DONT_CARE */
+   for (i = 0; i < MAX_ATTRIBS; i++) {
+      config->Attrib[i] = EGL_DONT_CARE;
+   }
 
    for (i = 0; attrib_list && attrib_list[i] != EGL_NONE; i++) {
-      EGLint k = attrib_list[i] - FIRST_ATTRIB;
-      if (k >= 0 && k < MAX_ATTRIBS) {
+      if (attrib_list[i] >= EGL_BUFFER_SIZE &&
+          attrib_list[i] <= EGL_MAX_SWAP_INTERVAL) {
+         EGLint k = attrib_list[i] - FIRST_ATTRIB;
+         assert(k >= 0);
+         assert(k < MAX_ATTRIBS);
          config->Attrib[k] = attrib_list[++i];
       }
       else {
@@ -296,7 +303,8 @@ _eglCompareConfigs(const _EGLConfig *a, const _EGLConfig *b)
  * Typical fallback routine for eglChooseConfig
  */
 EGLBoolean
-_eglChooseConfig(_EGLDriver *drv, EGLDisplay dpy, const EGLint *attrib_list, EGLConfig *configs, EGLint config_size, EGLint *num_config)
+_eglChooseConfig(_EGLDriver *drv, EGLDisplay dpy, const EGLint *attrib_list,
+                 EGLConfig *configs, EGLint config_size, EGLint *num_config)
 {
    _EGLDisplay *disp = _eglLookupDisplay(dpy);
    _EGLConfig criteria;
@@ -332,7 +340,8 @@ _eglChooseConfig(_EGLDriver *drv, EGLDisplay dpy, const EGLint *attrib_list, EGL
  * Fallback for eglGetConfigAttrib.
  */
 EGLBoolean
-_eglGetConfigAttrib(_EGLDriver *drv, EGLDisplay dpy, EGLConfig config, EGLint attribute, EGLint *value)
+_eglGetConfigAttrib(_EGLDriver *drv, EGLDisplay dpy, EGLConfig config,
+                    EGLint attribute, EGLint *value)
 {
    const _EGLConfig *conf = _eglLookupConfig(drv, dpy, config);
    const EGLint k = attribute - FIRST_ATTRIB;
@@ -351,7 +360,8 @@ _eglGetConfigAttrib(_EGLDriver *drv, EGLDisplay dpy, EGLConfig config, EGLint at
  * Fallback for eglGetConfigs.
  */
 EGLBoolean
-_eglGetConfigs(_EGLDriver *drv, EGLDisplay dpy, EGLConfig *configs, EGLint config_size, EGLint *num_config)
+_eglGetConfigs(_EGLDriver *drv, EGLDisplay dpy, EGLConfig *configs,
+               EGLint config_size, EGLint *num_config)
 {
    _EGLDisplay *disp = _eglLookupDisplay(dpy);
 
@@ -442,11 +452,12 @@ _eglGetConfigs(_EGLDriver *drv, EGLDisplay dpy, EGLConfig *configs, EGLint confi
  */
 GLboolean
 _eglFillInConfigs(_EGLConfig * configs,
-                GLenum fb_format, GLenum fb_type,
-                const u_int8_t * depth_bits, const u_int8_t * stencil_bits,
-                unsigned num_depth_stencil_bits,
-                const GLenum * db_modes, unsigned num_db_modes,
-                int visType) {
+                  GLenum fb_format, GLenum fb_type,
+                  const u_int8_t * depth_bits, const u_int8_t * stencil_bits,
+                  unsigned num_depth_stencil_bits,
+                  const GLenum * db_modes, unsigned num_db_modes,
+                  int visType)
+{
    static const u_int8_t bits_table[3][4] = {
             /* R  G  B  A */
             { 5, 6, 5, 0 },  /* Any GL_UNSIGNED_SHORT_5_6_5 */
@@ -515,8 +526,9 @@ _eglFillInConfigs(_EGLConfig * configs,
    unsigned k;
 
    if ( bytes_per_pixel[index] == 0 ) {
-      fprintf(stderr, "[%s:%u] Framebuffer type 0x%04x has 0 bytes per pixel.\n",
-               __FUNCTION__, __LINE__, fb_type);
+      _eglLog(_EGL_INFO,
+              "[%s:%u] Framebuffer type 0x%04x has 0 bytes per pixel.",
+              __FUNCTION__, __LINE__, fb_type);
       return GL_FALSE;
    }
 
@@ -547,8 +559,9 @@ _eglFillInConfigs(_EGLConfig * configs,
       break;
 
    default:
-      fprintf(stderr, "[%s:%u] Framebuffer format 0x%04x is not GL_RGB, GL_RGBA, GL_BGR, or GL_BGRA.\n",
-               __FUNCTION__, __LINE__, fb_format);
+      _eglLog(_EGL_WARNING,
+              "[%s:%u] Framebuffer format 0x%04x is not GL_RGB, GL_RGBA, GL_BGR, or GL_BGRA.",
+              __FUNCTION__, __LINE__, fb_format);
       return GL_FALSE;
    }
 

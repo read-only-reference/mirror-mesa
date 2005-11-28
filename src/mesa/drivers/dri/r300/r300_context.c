@@ -218,7 +218,7 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	make_empty_list(&r300->swapped);
 
 	r300->nr_heaps = 1 /* screen->numTexHeaps */ ;
-	assert(r300->nr_heaps < R200_NR_TEX_HEAPS);
+	assert(r300->nr_heaps < RADEON_NR_TEX_HEAPS);
 	for (i = 0; i < r300->nr_heaps; i++) {
 		r300->texture_heaps[i] = driCreateTextureHeap(i, r300,
 							       screen->
@@ -267,9 +267,14 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	ctx->Const.MaxLineWidth = R300_LINESIZE_MAX;
 	ctx->Const.MaxLineWidthAA = R300_LINESIZE_MAX;
 	
+	if (hw_tcl_on)
+		ctx->_MaintainTnlProgram = GL_TRUE;
+	
 #ifdef USER_BUFFERS
 	/* Needs further modifications */
-	//ctx->Const.MaxArrayLockSize = (/*512*/RADEON_BUFFER_SIZE*16*1024) / (4*4);
+#if 0
+	ctx->Const.MaxArrayLockSize = (/*512*/RADEON_BUFFER_SIZE*16*1024) / (4*4);
+#endif
 #endif
 
 	/* Initialize the software rasterizer and helper modules.
@@ -298,23 +303,21 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	_tnl_allow_vertex_fog(ctx, GL_TRUE);
 
 	/* currently bogus data */
-	ctx->Const.MaxVertexProgramInstructions=VSF_MAX_FRAGMENT_LENGTH;
-	ctx->Const.MaxVertexProgramAttribs=16; // r420
-	ctx->Const.MaxVertexProgramTemps=VSF_MAX_FRAGMENT_TEMPS;
-	ctx->Const.MaxVertexProgramLocalParams=256; // r420
-	ctx->Const.MaxVertexProgramEnvParams=256; // r420
-	ctx->Const.MaxVertexProgramAddressRegs=1;
+	ctx->Const.VertexProgram.MaxNativeInstructions=VSF_MAX_FRAGMENT_LENGTH;
+	ctx->Const.VertexProgram.MaxNativeAttribs=16; /* r420 */
+	ctx->Const.VertexProgram.MaxNativeTemps=VSF_MAX_FRAGMENT_TEMPS;
+	ctx->Const.VertexProgram.MaxNativeParameters=256; /* r420 */
+	ctx->Const.VertexProgram.MaxNativeAddressRegs=1;
 
 #if USE_ARB_F_P
-	ctx->Const.MaxFragmentProgramTemps = PFS_NUM_TEMP_REGS;
-	ctx->Const.MaxFragmentProgramAttribs = 11; /* copy i915... */
-	ctx->Const.MaxFragmentProgramLocalParams = PFS_NUM_CONST_REGS;
-	ctx->Const.MaxFragmentProgramEnvParams = PFS_NUM_CONST_REGS;
-	ctx->Const.MaxFragmentProgramAluInstructions = PFS_MAX_ALU_INST;
-	ctx->Const.MaxFragmentProgramTexInstructions = PFS_MAX_TEX_INST;
-	ctx->Const.MaxFragmentProgramInstructions = PFS_MAX_ALU_INST+PFS_MAX_TEX_INST;
-	ctx->Const.MaxFragmentProgramTexIndirections = PFS_MAX_TEX_INDIRECT;
-	ctx->Const.MaxFragmentProgramAddressRegs = 0; /* and these are?? */
+	ctx->Const.FragmentProgram.MaxNativeTemps = PFS_NUM_TEMP_REGS;
+	ctx->Const.FragmentProgram.MaxNativeAttribs = 11; /* copy i915... */
+	ctx->Const.FragmentProgram.MaxNativeParameters = PFS_NUM_CONST_REGS;
+	ctx->Const.FragmentProgram.MaxNativeAluInstructions = PFS_MAX_ALU_INST;
+	ctx->Const.FragmentProgram.MaxNativeTexInstructions = PFS_MAX_TEX_INST;
+	ctx->Const.FragmentProgram.MaxNativeInstructions = PFS_MAX_ALU_INST+PFS_MAX_TEX_INST;
+	ctx->Const.FragmentProgram.MaxNativeTexIndirections = PFS_MAX_TEX_INDIRECT;
+	ctx->Const.FragmentProgram.MaxNativeAddressRegs = 0; /* and these are?? */
 	ctx->_MaintainTexEnvProgram = GL_TRUE;
 #endif
 
@@ -352,9 +355,9 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 #endif
 	}
 	if (tcl_mode == DRI_CONF_TCL_SW ||
-	    !(r300->radeon.radeonScreen->chipset & RADEON_CHIPSET_TCL)) {
-		if (r300->radeon.radeonScreen->chipset & RADEON_CHIPSET_TCL) {
-			r300->radeon.radeonScreen->chipset &= ~RADEON_CHIPSET_TCL;
+	    !(r300->radeon.radeonScreen->chip_flags & RADEON_CHIPSET_TCL)) {
+		if (r300->radeon.radeonScreen->chip_flags & RADEON_CHIPSET_TCL) {
+			r300->radeon.radeonScreen->chip_flags &= ~RADEON_CHIPSET_TCL;
 			fprintf(stderr, "Disabling HW TCL support\n");
 		}
 		TCL_FALLBACK(r300->radeon.glCtx, RADEON_TCL_FALLBACK_TCL_DISABLE, 1);

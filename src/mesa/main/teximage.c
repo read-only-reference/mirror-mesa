@@ -2,7 +2,7 @@
  * Mesa 3-D graphics library
  * Version:  6.5
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -25,13 +25,7 @@
 
 /**
  * \file teximage.c
- * Texture images manipulation functions.
- *
- * \note Mesa's native texture data type is GLchan.  Native formats are
- * GL_ALPHA, GL_LUMINANCE, GL_LUMANCE_ALPHA, GL_INTENSITY, GL_RGB, GL_RGBA, and
- * GL_COLOR_INDEX.
- *
- * \note Device drivers are free to implement any internal format they want.
+ * Texture image-related functions.
  */
 
 
@@ -667,8 +661,8 @@ _mesa_delete_texture_image( GLcontext *ctx, struct gl_texture_image *texImage )
  *
  * \return GL_TRUE if the target is a proxy target, GL_FALSE otherwise.
  */
-static GLboolean
-is_proxy_target(GLenum target)
+GLboolean
+_mesa_is_proxy_texture(GLenum target)
 {
    return (target == GL_PROXY_TEXTURE_1D ||
            target == GL_PROXY_TEXTURE_2D ||
@@ -1089,18 +1083,18 @@ _mesa_init_teximage_fields(GLcontext *ctx, GLenum target,
    img->Height = height;
    img->Depth = depth;
    img->RowStride = width;
-   img->WidthLog2 = logbase2(width - 2 * border);
+   img->Width2 = width - 2 * border;   /* == 1 << img->WidthLog2; */
+   img->Height2 = height - 2 * border; /* == 1 << img->HeightLog2; */
+   img->Depth2 = depth - 2 * border;   /* == 1 << img->DepthLog2; */
+   img->WidthLog2 = logbase2(img->Width2);
    if (height == 1)  /* 1-D texture */
       img->HeightLog2 = 0;
    else
-      img->HeightLog2 = logbase2(height - 2 * border);
+      img->HeightLog2 = logbase2(img->Height2);
    if (depth == 1)   /* 2-D texture */
       img->DepthLog2 = 0;
    else
-      img->DepthLog2 = logbase2(depth - 2 * border);
-   img->Width2 = width - 2 * border; /*1 << img->WidthLog2;*/
-   img->Height2 = height - 2 * border; /*1 << img->HeightLog2;*/
-   img->Depth2 = depth - 2 * border; /*1 << img->DepthLog2;*/
+      img->DepthLog2 = logbase2(img->Depth2);
    img->MaxLog2 = MAX2(img->WidthLog2, img->HeightLog2);
    img->IsCompressed = is_compressed_format(ctx, internalFormat);
    if (img->IsCompressed)
@@ -1109,9 +1103,9 @@ _mesa_init_teximage_fields(GLcontext *ctx, GLenum target,
    else
       img->CompressedSize = 0;
 
-   if ((width == 1 || _mesa_bitcount(width - 2 * border) == 1) &&
-       (height == 1 || _mesa_bitcount(height - 2 * border) == 1) &&
-       (depth == 1 || _mesa_bitcount(depth - 2 * border) == 1))
+   if ((width == 1 || _mesa_bitcount(img->Width2) == 1) &&
+       (height == 1 || _mesa_bitcount(img->Height2) == 1) &&
+       (depth == 1 || _mesa_bitcount(img->Depth2) == 1))
       img->_IsPowerOfTwo = GL_TRUE;
    else
       img->_IsPowerOfTwo = GL_FALSE;
@@ -1259,7 +1253,7 @@ texture_error_check( GLcontext *ctx, GLenum target,
                      GLint width, GLint height,
                      GLint depth, GLint border )
 {
-   const GLboolean isProxy = is_proxy_target(target);
+   const GLboolean isProxy = _mesa_is_proxy_texture(target);
    GLboolean sizeOK;
    GLboolean colorFormat, indexFormat;
 
@@ -1798,7 +1792,7 @@ copytexture_error_check( GLcontext *ctx, GLuint dimensions,
    }
    else if (is_depth_format(internalFormat)) {
       /* make sure we have depth/stencil buffers */
-      if (!ctx->ReadBuffer->Attachment[BUFFER_DEPTH].Renderbuffer) {
+      if (!ctx->ReadBuffer->_DepthBuffer) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "glCopyTexImage%D(no depth)", dimensions);
          return GL_TRUE;
@@ -1806,8 +1800,7 @@ copytexture_error_check( GLcontext *ctx, GLuint dimensions,
    }
    else if (is_depthstencil_format(internalFormat)) {
       /* make sure we have depth/stencil buffers */
-      if (!ctx->ReadBuffer->Attachment[BUFFER_DEPTH].Renderbuffer ||
-          !ctx->ReadBuffer->Attachment[BUFFER_STENCIL].Renderbuffer) {
+      if (!ctx->ReadBuffer->_DepthBuffer || !ctx->ReadBuffer->_StencilBuffer) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "glCopyTexImage%D(no depth/stencil buffer)", dimensions);
          return GL_TRUE;
@@ -1975,7 +1968,7 @@ copytexsubimage_error_check( GLcontext *ctx, GLuint dimensions,
    }
 
    if (teximage->_BaseFormat == GL_DEPTH_COMPONENT) {
-      if (!ctx->ReadBuffer->Attachment[BUFFER_DEPTH].Renderbuffer) {
+      if (!ctx->ReadBuffer->_DepthBuffer) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "glCopyTexSubImage%D(no depth buffer)",
                      dimensions);
@@ -1983,8 +1976,7 @@ copytexsubimage_error_check( GLcontext *ctx, GLuint dimensions,
       }
    }
    else if (teximage->_BaseFormat == GL_DEPTH_STENCIL_EXT) {
-      if (!ctx->ReadBuffer->Attachment[BUFFER_DEPTH].Renderbuffer ||
-          !ctx->ReadBuffer->Attachment[BUFFER_STENCIL].Renderbuffer) {
+      if (!ctx->ReadBuffer->_DepthBuffer || !ctx->ReadBuffer->_StencilBuffer) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "glCopyTexSubImage%D(no depth/stencil buffer)",
                      dimensions);
@@ -2019,7 +2011,7 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
 
    texUnit = &(ctx->Texture.Unit[ctx->Texture.CurrentUnit]);
    texObj = _mesa_select_tex_object(ctx, texUnit, target);
-   if (!texObj || is_proxy_target(target)) {
+   if (!texObj || _mesa_is_proxy_texture(target)) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(target)");
       return;
    }
@@ -3343,7 +3335,7 @@ _mesa_GetCompressedTexImageARB(GLenum target, GLint level, GLvoid *img)
       return;
    }
 
-   if (is_proxy_target(target)) {
+   if (_mesa_is_proxy_texture(target)) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetCompressedTexImageARB(target)");
       return;
    }

@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  5.1
+ * Version:  6.5
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -22,18 +22,34 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef ARBFRAGPARSE_H
-#define ARBFRAGPARSE_H
 
-#include "mtypes.h"
+#ifndef DEPTHSTENCIL_H
+#define DEPTHSTENCIL_H
+
+
+extern struct gl_renderbuffer *
+_mesa_new_z24_renderbuffer_wrapper(GLcontext *ctx,
+                                   struct gl_renderbuffer *dsrb);
+
+
+extern struct gl_renderbuffer *
+_mesa_new_s8_renderbuffer_wrapper(GLcontext *ctx,
+                                  struct gl_renderbuffer *dsrb);
+
 
 extern void
-_mesa_parse_arb_fragment_program(GLcontext * ctx, GLenum target,
-                                 const GLubyte * str, GLsizei len,
-                                 struct fragment_program *program);
+_mesa_merge_depth_stencil_buffers(GLcontext *ctx,
+                                  struct gl_renderbuffer *dest,
+                                  struct gl_renderbuffer *depth,
+                                  struct gl_renderbuffer *stencil);
+
 
 extern void
-_mesa_debug_fp_inst(GLint num, struct fp_instruction *fp);
+_mesa_split_depth_stencil_buffer(GLcontext *ctx,
+                                 struct gl_renderbuffer *source,
+                                 struct gl_renderbuffer *depth,
+                                 struct gl_renderbuffer *stencil);
 
 
-#endif
+
+#endif /* DEPTHSTENCIL_H */

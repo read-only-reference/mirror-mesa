@@ -44,9 +44,6 @@
 #include "macros.h"
 #include "imports.h"
 #include "mtypes.h"
-#include "nvfragprog.h"
-#include "math/m_matrix.h"
-#include "math/m_xform.h"
 
 #include "t_pipeline.h"
 
@@ -311,7 +308,7 @@ static GLboolean run_render( GLcontext *ctx,
 	 GLuint start = VB->Primitive[i].start;
 	 GLuint length = VB->Primitive[i].count;
 
-	 assert((prim & PRIM_MODE_MASK) < GL_POLYGON+1);
+	 assert((prim & PRIM_MODE_MASK) <= GL_POLYGON);
 
 	 if (MESA_VERBOSE & VERBOSE_PRIMS) 
 	    _mesa_debug(NULL, "MESA prim %s %d..%d\n", 

@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.2
+ * Version:  6.5
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -37,10 +37,16 @@
 #include "mtypes.h"
 #include "program.h"
 #include "nvfragparse.h"
-#include "nvfragprog.h"
+#include "program_instruction.h"
 #include "nvvertparse.h"
-#include "nvvertprog.h"
 #include "atifragshader.h"
+
+
+static const char *
+make_state_string(const GLint stateTokens[6]);
+
+static GLuint 
+make_state_flags(const GLint state[]);
 
 
 /**********************************************************************/
@@ -85,11 +91,12 @@ _mesa_init_program(GLcontext *ctx)
    ctx->FragmentProgram.Current->Base.RefCount++;
 #endif
 
+   /* XXX probably move this stuff */
 #if FEATURE_ATI_fragment_shader
    ctx->ATIFragmentShader.Enabled = GL_FALSE;
    ctx->ATIFragmentShader.Current = (struct ati_fragment_shader *) ctx->Shared->DefaultFragmentShader;
    assert(ctx->ATIFragmentShader.Current);
-   ctx->ATIFragmentShader.Current->Base.RefCount++;
+   ctx->ATIFragmentShader.Current->RefCount++;
 #endif
 }
 
@@ -114,11 +121,13 @@ _mesa_free_program_data(GLcontext *ctx)
          ctx->Driver.DeleteProgram(ctx, &(ctx->FragmentProgram.Current->Base));
    }
 #endif
+   /* XXX probably move this stuff */
 #if FEATURE_ATI_fragment_shader
    if (ctx->ATIFragmentShader.Current) {
-      ctx->ATIFragmentShader.Current->Base.RefCount--;
-      if (ctx->ATIFragmentShader.Current->Base.RefCount <= 0)
-	ctx->Driver.DeleteProgram(ctx, &(ctx->ATIFragmentShader.Current->Base));
+      ctx->ATIFragmentShader.Current->RefCount--;
+      if (ctx->ATIFragmentShader.Current->RefCount <= 0) {
+         _mesa_free(ctx->ATIFragmentShader.Current);
+      }
    }
 #endif
    _mesa_free((void *) ctx->Program.ErrorString);
@@ -231,21 +240,6 @@ _mesa_init_vertex_program( GLcontext *ctx, struct vertex_program *prog,
       return NULL;
 }
 
-/**
- * Initialize a new ATI fragment shader object.
- */
-struct program *
-_mesa_init_ati_fragment_shader( GLcontext *ctx,
-                                struct ati_fragment_shader *prog,
-                                GLenum target, GLuint id )
-{
-   if (prog) 
-      return _mesa_init_program_struct( ctx, &prog->Base, target, id );
-   else
-      return NULL;
-}
-
-
 
 /**
  * Allocate and initialize a new fragment/vertex program object but
@@ -270,10 +264,6 @@ _mesa_new_program(GLcontext *ctx, GLenum target, GLuint id)
    case GL_FRAGMENT_PROGRAM_ARB:
       return _mesa_init_fragment_program( ctx, CALLOC_STRUCT(fragment_program),
 					  target, id );
-   case GL_FRAGMENT_SHADER_ATI:
-      return _mesa_init_ati_fragment_shader( ctx, CALLOC_STRUCT(ati_fragment_shader),
-					  target, id );
-
    default:
       _mesa_problem(ctx, "bad target in _mesa_new_program");
       return NULL;
@@ -295,44 +285,18 @@ _mesa_delete_program(GLcontext *ctx, struct program *prog)
 
    if (prog->String)
       _mesa_free(prog->String);
-   if (prog->Target == GL_VERTEX_PROGRAM_NV ||
-       prog->Target == GL_VERTEX_STATE_PROGRAM_NV) {
-      struct vertex_program *vprog = (struct vertex_program *) prog;
-      if (vprog->Instructions) {
-         GLuint i;
-         for (i = 0; i < vprog->Base.NumInstructions; i++) {
-            if (vprog->Instructions[i].Data)
-               _mesa_free(vprog->Instructions[i].Data);
-         }
-         _mesa_free(vprog->Instructions);
-      }
-      if (vprog->Parameters)
-         _mesa_free_parameter_list(vprog->Parameters);
-   }
-   else if (prog->Target == GL_FRAGMENT_PROGRAM_NV ||
-            prog->Target == GL_FRAGMENT_PROGRAM_ARB) {
-      struct fragment_program *fprog = (struct fragment_program *) prog;
-      if (fprog->Instructions) {
-         GLuint i;
-         for (i = 0; i < fprog->Base.NumInstructions; i++) {
-            if (fprog->Instructions[i].Data)
-               _mesa_free(fprog->Instructions[i].Data);
-         }
-         _mesa_free(fprog->Instructions);
-      }
-      if (fprog->Parameters)
-         _mesa_free_parameter_list(fprog->Parameters);
-   }
-   else if (prog->Target == GL_FRAGMENT_SHADER_ATI) {
-      struct ati_fragment_shader *atifs = (struct ati_fragment_shader *)prog;
+
+   if (prog->Instructions) {
       GLuint i;
-      for (i = 0; i < MAX_NUM_PASSES_ATI; i++) {
-	 if (atifs->Instructions[i])
-	    _mesa_free(atifs->Instructions[i]);
-	 if (atifs->SetupInst[i])
-	    _mesa_free(atifs->SetupInst[i]);
+      for (i = 0; i < prog->NumInstructions; i++) {
+         if (prog->Instructions[i].Data)
+            _mesa_free(prog->Instructions[i].Data);
       }
+      _mesa_free(prog->Instructions);
    }
+
+   if (prog->Parameters)
+      _mesa_free_parameter_list(prog->Parameters);
 
    _mesa_free(prog);
 }
@@ -383,11 +347,12 @@ _mesa_free_parameters(struct program_parameter_list *paramList)
 
 /**
  * Helper function used by the functions below.
+ * \return  index of new parameter in the list, or -1 if error (out of mem)
  */
 static GLint
 add_parameter(struct program_parameter_list *paramList,
               const char *name, const GLfloat values[4],
-              enum parameter_type type)
+              enum register_file type)
 {
    const GLuint n = paramList->NumParameters;
 
@@ -442,7 +407,7 @@ GLint
 _mesa_add_named_parameter(struct program_parameter_list *paramList,
                           const char *name, const GLfloat values[4])
 {
-   return add_parameter(paramList, name, values, NAMED_PARAMETER);
+   return add_parameter(paramList, name, values, PROGRAM_NAMED_PARAM);
 }
 
 
@@ -456,7 +421,7 @@ GLint
 _mesa_add_named_constant(struct program_parameter_list *paramList,
                          const char *name, const GLfloat values[4])
 {
-   return add_parameter(paramList, name, values, CONSTANT);
+   return add_parameter(paramList, name, values, PROGRAM_CONSTANT);
 }
 
 
@@ -470,7 +435,7 @@ GLint
 _mesa_add_unnamed_constant(struct program_parameter_list *paramList,
                            const GLfloat values[4])
 {
-   return add_parameter(paramList, NULL, values, CONSTANT);
+   return add_parameter(paramList, NULL, values, PROGRAM_CONSTANT);
 }
 
 
@@ -483,19 +448,26 @@ _mesa_add_unnamed_constant(struct program_parameter_list *paramList,
  */
 GLint
 _mesa_add_state_reference(struct program_parameter_list *paramList,
-                          GLint *stateTokens)
+                          const GLint *stateTokens)
 {
-   /* XXX Should we parse <stateString> here and produce the parameter's
-    * list of STATE_* tokens here, or in the parser?
+   /* XXX we should probably search the current parameter list to see if
+    * the new state reference is already present.
     */
-   GLint a, idx;
+   GLint index;
+   const char *name = make_state_string(stateTokens);
 
-   idx = add_parameter(paramList, NULL, NULL, STATE);
-	
-   for (a=0; a<6; a++)
-      paramList->Parameters[idx].StateIndexes[a] = (enum state_index) stateTokens[a];
+   index = add_parameter(paramList, name, NULL, PROGRAM_STATE_VAR);
+   if (index >= 0) {
+      GLuint i;
+      for (i = 0; i < 6; i++)
+         paramList->Parameters[index].StateIndexes[i]
+            = (enum state_index) stateTokens[i];
 
-   return idx;
+	 paramList->StateFlags |= 
+	    make_state_flags(stateTokens);
+   }
+
+   return index;
 }
 
 
@@ -933,6 +905,344 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
 }
 
 
+/* Return a bit mask of the Mesa state flags under which a parameter's
+ * value might change.
+ */
+static GLuint make_state_flags(const GLint state[])
+{
+   switch (state[0]) {
+   case STATE_MATERIAL:
+   case STATE_LIGHT:
+   case STATE_LIGHTMODEL_AMBIENT:
+   case STATE_LIGHTMODEL_SCENECOLOR:
+   case STATE_LIGHTPROD:
+      return _NEW_LIGHT;
+
+   case STATE_TEXGEN:
+   case STATE_TEXENV_COLOR:
+      return _NEW_TEXTURE;
+
+   case STATE_FOG_COLOR:
+   case STATE_FOG_PARAMS:
+      return _NEW_FOG;
+
+   case STATE_CLIPPLANE:
+      return _NEW_TRANSFORM;
+
+   case STATE_POINT_SIZE:
+   case STATE_POINT_ATTENUATION:
+      return _NEW_POINT;
+
+   case STATE_MATRIX:
+      switch (state[1]) {
+      case STATE_MODELVIEW:
+	 return _NEW_MODELVIEW;
+      case STATE_PROJECTION:
+	 return _NEW_PROJECTION;
+      case STATE_MVP:
+	 return _NEW_MODELVIEW | _NEW_PROJECTION;
+      case STATE_TEXTURE:
+	 return _NEW_TEXTURE_MATRIX;
+      case STATE_PROGRAM:
+	 return _NEW_TRACK_MATRIX;
+      default:
+	 assert(0);
+	 return 0;
+      }
+
+   case STATE_DEPTH_RANGE:
+      return _NEW_VIEWPORT;
+
+   case STATE_FRAGMENT_PROGRAM:
+   case STATE_VERTEX_PROGRAM:
+      return _NEW_PROGRAM;
+
+   case STATE_INTERNAL:
+      switch (state[1]) {
+      case STATE_NORMAL_SCALE:
+	 return _NEW_MODELVIEW;
+      default:
+	 assert(0);
+	 return 0;
+      }
+
+   default:
+      assert(0);
+      return 0;
+   }
+}
+
+
+
+
+
+static void
+append(char *dst, const char *src)
+{
+   while (*dst)
+      dst++;
+   while (*src)
+     *dst++ = *src++;
+   *dst = 0;
+}
+
+static void
+append_token(char *dst, enum state_index k)
+{
+   switch (k) {
+   case STATE_MATERIAL:
+      append(dst, "material.");
+      break;
+   case STATE_LIGHT:
+      append(dst, "light");
+      break;
+   case STATE_LIGHTMODEL_AMBIENT:
+      append(dst, "lightmodel.ambient");
+      break;
+   case STATE_LIGHTMODEL_SCENECOLOR:
+      break;
+   case STATE_LIGHTPROD:
+      append(dst, "lightprod");
+      break;
+   case STATE_TEXGEN:
+      append(dst, "texgen");
+      break;
+   case STATE_FOG_COLOR:
+      append(dst, "fog.color");
+      break;
+   case STATE_FOG_PARAMS:
+      append(dst, "fog.params");
+      break;
+   case STATE_CLIPPLANE:
+      append(dst, "clip");
+      break;
+   case STATE_POINT_SIZE:
+      append(dst, "point.size");
+      break;
+   case STATE_POINT_ATTENUATION:
+      append(dst, "point.attenuation");
+      break;
+   case STATE_MATRIX:
+      append(dst, "matrix.");
+      break;
+   case STATE_MODELVIEW:
+      append(dst, "modelview");
+      break;
+   case STATE_PROJECTION:
+      append(dst, "projection");
+      break;
+   case STATE_MVP:
+      append(dst, "mvp");
+      break;
+   case STATE_TEXTURE:
+      append(dst, "texture");
+      break;
+   case STATE_PROGRAM:
+      append(dst, "program");
+      break;
+   case STATE_MATRIX_INVERSE:
+      append(dst, ".inverse");
+      break;
+   case STATE_MATRIX_TRANSPOSE:
+      append(dst, ".transpose");
+      break;
+   case STATE_MATRIX_INVTRANS:
+      append(dst, ".invtrans");
+      break;
+   case STATE_AMBIENT:
+      append(dst, "ambient");
+      break;
+   case STATE_DIFFUSE:
+      append(dst, "diffuse");
+      break;
+   case STATE_SPECULAR:
+      append(dst, "specular");
+      break;
+   case STATE_EMISSION:
+      append(dst, "emission");
+      break;
+   case STATE_SHININESS:
+      append(dst, "shininess");
+      break;
+   case STATE_HALF:
+      append(dst, "half");
+      break;
+   case STATE_POSITION:
+      append(dst, ".position");
+      break;
+   case STATE_ATTENUATION:
+      append(dst, ".attenuation");
+      break;
+   case STATE_SPOT_DIRECTION:
+      append(dst, ".spot.direction");
+      break;
+   case STATE_TEXGEN_EYE_S:
+      append(dst, "eye.s");
+      break;
+   case STATE_TEXGEN_EYE_T:
+      append(dst, "eye.t");
+      break;
+   case STATE_TEXGEN_EYE_R:
+      append(dst, "eye.r");
+      break;
+   case STATE_TEXGEN_EYE_Q:
+      append(dst, "eye.q");
+      break;
+   case STATE_TEXGEN_OBJECT_S:
+      append(dst, "object.s");
+      break;
+   case STATE_TEXGEN_OBJECT_T:
+      append(dst, "object.t");
+      break;
+   case STATE_TEXGEN_OBJECT_R:
+      append(dst, "object.r");
+      break;
+   case STATE_TEXGEN_OBJECT_Q:
+      append(dst, "object.q");
+      break;
+   case STATE_TEXENV_COLOR:
+      append(dst, "texenv");
+      break;
+   case STATE_DEPTH_RANGE:
+      append(dst, "depth.range");
+      break;
+   case STATE_VERTEX_PROGRAM:
+   case STATE_FRAGMENT_PROGRAM:
+      break;
+   case STATE_ENV:
+      append(dst, "env");
+      break;
+   case STATE_LOCAL:
+      append(dst, "local");
+      break;
+   case STATE_INTERNAL:
+   case STATE_NORMAL_SCALE:
+   case STATE_POSITION_NORMALIZED:
+      append(dst, "(internal)");
+      break;
+   default:
+      ;
+   }
+}
+
+static void
+append_face(char *dst, GLint face)
+{
+   if (face == 0)
+      append(dst, "front.");
+   else
+      append(dst, "back.");
+}
+
+static void
+append_index(char *dst, GLint index)
+{
+   char s[20];
+   _mesa_sprintf(s, "[%d].", index);
+   append(dst, s);
+}
+
+/**
+ * Make a string from the given state vector.
+ * For example, return "state.matrix.texture[2].inverse".
+ */
+static const char *
+make_state_string(const GLint state[6])
+{
+   char str[1000] = "";
+   char tmp[30];
+
+   append(str, "state.");
+   append_token(str, state[0]);
+
+   switch (state[0]) {
+   case STATE_MATERIAL:
+      append_face(str, state[1]);
+      append_token(str, state[2]);
+      break;
+   case STATE_LIGHT:
+      append(str, "light");
+      append_index(str, state[1]); /* light number [i]. */
+      append_token(str, state[2]); /* coefficients */
+      break;
+   case STATE_LIGHTMODEL_AMBIENT:
+      append(str, "lightmodel.ambient");
+      break;
+   case STATE_LIGHTMODEL_SCENECOLOR:
+      if (state[1] == 0) {
+         append(str, "lightmodel.front.scenecolor");
+      }
+      else {
+         append(str, "lightmodel.back.scenecolor");
+      }
+      break;
+   case STATE_LIGHTPROD:
+      append_index(str, state[1]); /* light number [i]. */
+      append_face(str, state[2]);
+      append_token(str, state[3]);
+      break;
+   case STATE_TEXGEN:
+      append_index(str, state[1]); /* tex unit [i] */
+      append_token(str, state[2]); /* plane coef */
+      break;
+   case STATE_TEXENV_COLOR:
+      append_index(str, state[1]); /* tex unit [i] */
+      append(str, "color");
+      break;
+   case STATE_FOG_COLOR:
+   case STATE_FOG_PARAMS:
+      break;
+   case STATE_CLIPPLANE:
+      append_index(str, state[1]); /* plane [i] */
+      append(str, "plane");
+      break;
+   case STATE_POINT_SIZE:
+   case STATE_POINT_ATTENUATION:
+      break;
+   case STATE_MATRIX:
+      {
+         /* state[1] = modelview, projection, texture, etc. */
+         /* state[2] = which texture matrix or program matrix */
+         /* state[3] = first column to fetch */
+         /* state[4] = last column to fetch */
+         /* state[5] = transpose, inverse or invtrans */
+         const enum state_index mat = state[1];
+         const GLuint index = (GLuint) state[2];
+         const GLuint first = (GLuint) state[3];
+         const GLuint last = (GLuint) state[4];
+         const enum state_index modifier = state[5];
+         append_token(str, mat);
+         if (index)
+            append_index(str, index);
+         if (modifier)
+            append_token(str, modifier);
+         if (first == last)
+            _mesa_sprintf(tmp, ".row[%d]", first);
+         else
+            _mesa_sprintf(tmp, ".row[%d..%d]", first, last);
+         append(str, tmp);
+      }
+      break;
+   case STATE_DEPTH_RANGE:
+      break;
+   case STATE_FRAGMENT_PROGRAM:
+   case STATE_VERTEX_PROGRAM:
+      /* state[1] = {STATE_ENV, STATE_LOCAL} */
+      /* state[2] = parameter index          */
+      append_token(str, state[1]);
+      append_index(str, state[2]);
+      break;
+   case STATE_INTERNAL:
+      break;
+   default:
+      _mesa_problem(NULL, "Invalid state in maka_state_string");
+      break;
+   }
+
+   return _mesa_strdup(str);
+}
+
+
 /**
  * Loop over all the parameters in a parameter list.  If the parameter
  * is a GL state reference, look up the current value of that state
@@ -949,11 +1259,422 @@ _mesa_load_state_parameters(GLcontext *ctx,
       return;
 
    for (i = 0; i < paramList->NumParameters; i++) {
-      if (paramList->Parameters[i].Type == STATE) {
+      if (paramList->Parameters[i].Type == PROGRAM_STATE_VAR) {
          _mesa_fetch_state(ctx, 
 			   paramList->Parameters[i].StateIndexes,
                            paramList->ParameterValues[i]);
       }
+   }
+}
+
+
+/**
+ * Initialize program instruction fields to defaults.
+ */
+void
+_mesa_init_instruction(struct prog_instruction *inst)
+{
+   _mesa_bzero(inst, sizeof(struct prog_instruction));
+
+   inst->SrcReg[0].File = PROGRAM_UNDEFINED;
+   inst->SrcReg[0].Swizzle = SWIZZLE_NOOP;
+   inst->SrcReg[1].File = PROGRAM_UNDEFINED;
+   inst->SrcReg[1].Swizzle = SWIZZLE_NOOP;
+   inst->SrcReg[2].File = PROGRAM_UNDEFINED;
+   inst->SrcReg[2].Swizzle = SWIZZLE_NOOP;
+
+   inst->DstReg.File = PROGRAM_UNDEFINED;
+   inst->DstReg.WriteMask = WRITEMASK_XYZW;
+   inst->DstReg.CondMask = COND_TR;
+   inst->DstReg.CondSwizzle = SWIZZLE_NOOP;
+
+   inst->SaturateMode = SATURATE_OFF;
+   inst->Precision = FLOAT32;
+}
+
+
+/**
+ * Basic info about each instruction
+ */
+struct instruction_info
+{
+   enum prog_opcode Opcode;
+   const char *Name;
+   GLuint NumSrcRegs;
+};
+
+/**
+ * Instruction info
+ * \note Opcode should equal array index!
+ */
+static const struct instruction_info InstInfo[MAX_OPCODE] = {
+   { OPCODE_ABS,    "ABS",   1 },
+   { OPCODE_ADD,    "ADD",   2 },
+   { OPCODE_ARA,    "ARA",   1 },
+   { OPCODE_ARL,    "ARL",   1 },
+   { OPCODE_ARL_NV, "ARL",   1 },
+   { OPCODE_ARR,    "ARL",   1 },
+   { OPCODE_BRA,    "BRA",   1 },
+   { OPCODE_CAL,    "CAL",   1 },
+   { OPCODE_CMP,    "CMP",   3 },
+   { OPCODE_COS,    "COS",   1 },
+   { OPCODE_DDX,    "DDX",   1 },
+   { OPCODE_DDY,    "DDY",   1 },
+   { OPCODE_DP3,    "DP3",   2 },
+   { OPCODE_DP4,    "DP4",   2 },
+   { OPCODE_DPH,    "DPH",   2 },
+   { OPCODE_DST,    "DST",   2 },
+   { OPCODE_END,    "END",   0 },
+   { OPCODE_EX2,    "EX2",   1 },
+   { OPCODE_EXP,    "EXP",   1 },
+   { OPCODE_FLR,    "FLR",   1 },
+   { OPCODE_FRC,    "FRC",   1 },
+   { OPCODE_KIL,    "KIL",   1 },
+   { OPCODE_KIL_NV, "KIL",   0 },
+   { OPCODE_LG2,    "LG2",   1 },
+   { OPCODE_LIT,    "LIT",   1 },
+   { OPCODE_LOG,    "LOG",   1 },
+   { OPCODE_LRP,    "LRP",   3 },
+   { OPCODE_MAD,    "MAD",   3 },
+   { OPCODE_MAX,    "MAX",   2 },
+   { OPCODE_MIN,    "MIN",   2 },
+   { OPCODE_MOV,    "MOV",   1 },
+   { OPCODE_MUL,    "MUL",   2 },
+   { OPCODE_PK2H,   "PK2H",  1 },
+   { OPCODE_PK2US,  "PK2US", 1 },
+   { OPCODE_PK4B,   "PK4B",  1 },
+   { OPCODE_PK4UB,  "PK4UB", 1 },
+   { OPCODE_POW,    "POW",   2 },
+   { OPCODE_POPA,   "POPA",  0 },
+   { OPCODE_PRINT,  "PRINT", 1 },
+   { OPCODE_PUSHA,  "PUSHA", 0 },
+   { OPCODE_RCC,    "RCC",   1 },
+   { OPCODE_RCP,    "RCP",   1 },
+   { OPCODE_RET,    "RET",   1 },
+   { OPCODE_RFL,    "RFL",   1 },
+   { OPCODE_RSQ,    "RSQ",   1 },
+   { OPCODE_SCS,    "SCS",   1 },
+   { OPCODE_SEQ,    "SEQ",   2 },
+   { OPCODE_SFL,    "SFL",   0 },
+   { OPCODE_SGE,    "SGE",   2 },
+   { OPCODE_SGT,    "SGT",   2 },
+   { OPCODE_SIN,    "SIN",   1 },
+   { OPCODE_SLE,    "SLE",   2 },
+   { OPCODE_SLT,    "SLT",   2 },
+   { OPCODE_SNE,    "SNE",   2 },
+   { OPCODE_SSG,    "SSG",   1 },
+   { OPCODE_STR,    "STR",   0 },
+   { OPCODE_SUB,    "SUB",   2 },
+   { OPCODE_SWZ,    "SWZ",   1 },
+   { OPCODE_TEX,    "TEX",   1 },
+   { OPCODE_TXB,    "TXB",   1 },
+   { OPCODE_TXD,    "TXD",   3 },
+   { OPCODE_TXL,    "TXL",   1 },
+   { OPCODE_TXP,    "TXP",   1 },
+   { OPCODE_TXP_NV, "TXP",   1 },
+   { OPCODE_UP2H,   "UP2H",  1 },
+   { OPCODE_UP2US,  "UP2US", 1 },
+   { OPCODE_UP4B,   "UP4B",  1 },
+   { OPCODE_UP4UB,  "UP4UB", 1 },
+   { OPCODE_X2D,    "X2D",   3 },
+   { OPCODE_XPD,    "XPD",   2 }
+};
+
+
+/**
+ * Return the number of src registers for the given instruction/opcode.
+ */
+GLuint
+_mesa_num_inst_src_regs(enum prog_opcode opcode)
+{
+   GLuint i;
+#ifdef DEBUG
+   for (i = 0; i < MAX_OPCODE; i++) {
+      ASSERT(i == InstInfo[i].Opcode);
+   }
+#endif
+   for (i = 0; i < MAX_OPCODE; i++) {
+      if (InstInfo[i].Opcode == opcode) {
+         return InstInfo[i].NumSrcRegs;
+      }
+   }
+   _mesa_problem(NULL, "invalid opcode in _mesa_num_inst_src_regs");
+   return 0;
+}
+
+
+/**
+ * Return string name for given program opcode.
+ */
+const char *
+_mesa_opcode_string(enum prog_opcode opcode)
+{
+   ASSERT(opcode < MAX_OPCODE);
+   return InstInfo[opcode].Name;
+}
+
+/**
+ * Return string name for given program/register file.
+ */
+static const char *
+program_file_string(enum register_file f)
+{
+   switch (f) {
+   case PROGRAM_TEMPORARY:
+      return "TEMP";
+   case PROGRAM_LOCAL_PARAM:
+      return "LOCAL";
+   case PROGRAM_ENV_PARAM:
+      return "ENV";
+   case PROGRAM_STATE_VAR:
+      return "STATE";
+   case PROGRAM_INPUT:
+      return "INPUT";
+   case PROGRAM_OUTPUT:
+      return "OUTPUT";
+   case PROGRAM_NAMED_PARAM:
+      return "NAMED";
+   case PROGRAM_CONSTANT:
+      return "CONST";
+   case PROGRAM_WRITE_ONLY:
+      return "WRITE_ONLY";
+   case PROGRAM_ADDRESS:
+      return "ADDR";
+   default:
+      return "!unkown!";
+   }
+}
+
+
+/**
+ * Return a string representation of the given swizzle word.
+ * If extended is true, use extended (comma-separated) format.
+ */
+static const char *
+swizzle_string(GLuint swizzle, GLuint negateBase, GLboolean extended)
+{
+   static const char swz[] = "xyzw01";
+   static char s[20];
+   GLuint i = 0;
+
+   if (!extended && swizzle == SWIZZLE_NOOP && negateBase == 0)
+      return ""; /* no swizzle/negation */
+
+   if (!extended)
+      s[i++] = '.';
+
+   if (negateBase & 0x1)
+      s[i++] = '-';
+   s[i++] = swz[GET_SWZ(swizzle, 0)];
+
+   if (extended) {
+      s[i++] = ',';
+   }
+
+   if (negateBase & 0x2)
+      s[i++] = '-';
+   s[i++] = swz[GET_SWZ(swizzle, 1)];
+
+   if (extended) {
+      s[i++] = ',';
+   }
+
+   if (negateBase & 0x4)
+      s[i++] = '-';
+   s[i++] = swz[GET_SWZ(swizzle, 2)];
+
+   if (extended) {
+      s[i++] = ',';
+   }
+
+   if (negateBase & 0x8)
+      s[i++] = '-';
+   s[i++] = swz[GET_SWZ(swizzle, 3)];
+
+   s[i] = 0;
+   return s;
+}
+
+
+static const char *
+writemask_string(GLuint writeMask)
+{
+   static char s[10];
+   GLuint i = 0;
+
+   if (writeMask == WRITEMASK_XYZW)
+      return "";
+
+   s[i++] = '.';
+   if (writeMask & WRITEMASK_X)
+      s[i++] = 'x';
+   if (writeMask & WRITEMASK_Y)
+      s[i++] = 'y';
+   if (writeMask & WRITEMASK_Z)
+      s[i++] = 'z';
+   if (writeMask & WRITEMASK_W)
+      s[i++] = 'w';
+
+   s[i] = 0;
+   return s;
+}
+
+static void
+print_dst_reg(const struct prog_dst_register *dstReg)
+{
+   _mesa_printf(" %s[%d]%s",
+                program_file_string(dstReg->File),
+                dstReg->Index,
+                writemask_string(dstReg->WriteMask));
+}
+
+static void
+print_src_reg(const struct prog_src_register *srcReg)
+{
+   _mesa_printf("%s[%d]%s",
+                program_file_string(srcReg->File),
+                srcReg->Index,
+                swizzle_string(srcReg->Swizzle,
+                               srcReg->NegateBase, GL_FALSE));
+}
+
+
+/**
+ * Print a single vertex/fragment program instruction.
+ */
+void
+_mesa_print_instruction(const struct prog_instruction *inst)
+{
+   switch (inst->Opcode) {
+   case OPCODE_PRINT:
+      _mesa_printf("PRINT '%s'", inst->Data);
+      if (inst->SrcReg[0].File != PROGRAM_UNDEFINED) {
+         _mesa_printf(", ");
+         _mesa_printf("%s[%d]%s",
+                      program_file_string(inst->SrcReg[0].File),
+                      inst->SrcReg[0].Index,
+                      swizzle_string(inst->SrcReg[0].Swizzle,
+                                     inst->SrcReg[0].NegateBase, GL_FALSE));
+      }
+      _mesa_printf(";\n");
+      break;
+   case OPCODE_SWZ:
+      _mesa_printf("SWZ");
+      if (inst->SaturateMode == SATURATE_ZERO_ONE)
+         _mesa_printf("_SAT");
+      print_dst_reg(&inst->DstReg);
+      _mesa_printf("%s[%d], %s;\n",
+                   program_file_string(inst->SrcReg[0].File),
+                   inst->SrcReg[0].Index,
+                   swizzle_string(inst->SrcReg[0].Swizzle,
+                                  inst->SrcReg[0].NegateBase, GL_TRUE));
+      break;
+   case OPCODE_TEX:
+   case OPCODE_TXP:
+   case OPCODE_TXB:
+      _mesa_printf("%s", _mesa_opcode_string(inst->Opcode));
+      if (inst->SaturateMode == SATURATE_ZERO_ONE)
+         _mesa_printf("_SAT");
+      _mesa_printf(" ");
+      print_dst_reg(&inst->DstReg);
+      _mesa_printf(", ");
+      print_src_reg(&inst->SrcReg[0]);
+      _mesa_printf(", texture[%d], ", inst->TexSrcUnit);
+      switch (inst->TexSrcTarget) {
+      case TEXTURE_1D_INDEX:   _mesa_printf("1D");    break;
+      case TEXTURE_2D_INDEX:   _mesa_printf("2D");    break;
+      case TEXTURE_3D_INDEX:   _mesa_printf("3D");    break;
+      case TEXTURE_CUBE_INDEX: _mesa_printf("CUBE");  break;
+      case TEXTURE_RECT_INDEX: _mesa_printf("RECT");  break;
+      default:
+         ;
+      }
+      _mesa_printf("\n");
+      break;
+   case OPCODE_ARL:
+      _mesa_printf("ARL addr.x, ");
+      print_src_reg(&inst->SrcReg[0]);
+      _mesa_printf(";\n");
+      break;
+   /* XXX may need for other special-case instructions */
+   default:
+      /* typical alu instruction */
+      {
+         const GLuint numRegs = _mesa_num_inst_src_regs(inst->Opcode);
+         GLuint j;
+
+         _mesa_printf("%s", _mesa_opcode_string(inst->Opcode));
+
+         /* frag prog only */
+         if (inst->SaturateMode == SATURATE_ZERO_ONE)
+            _mesa_printf("_SAT");
+
+         if (inst->DstReg.File != PROGRAM_UNDEFINED) {
+            _mesa_printf(" %s[%d]%s",
+                         program_file_string(inst->DstReg.File),
+                         inst->DstReg.Index,
+                         writemask_string(inst->DstReg.WriteMask));
+         }
+
+         if (numRegs > 0)
+            _mesa_printf(", ");
+
+         for (j = 0; j < numRegs; j++) {
+            print_src_reg(inst->SrcReg + j);
+            if (j + 1 < numRegs)
+               _mesa_printf(", ");
+         }
+
+         _mesa_printf(";\n");
+      }
+   }
+}
+
+
+/**
+ * Print a vertx/fragment program to stdout.
+ * XXX this function could be greatly improved.
+ */
+void
+_mesa_print_program(const struct program *prog)
+{
+   GLuint i;
+   for (i = 0; i < prog->NumInstructions; i++) {
+      _mesa_printf("%3d: ", i);
+      _mesa_print_instruction(prog->Instructions + i);
+   }
+}
+
+
+/**
+ * Print all of a program's parameters.
+ */
+void
+_mesa_print_program_parameters(GLcontext *ctx, const struct program *prog)
+{
+   GLint i;
+
+   _mesa_printf("NumInstructions=%d\n", prog->NumInstructions);
+   _mesa_printf("NumTemporaries=%d\n", prog->NumTemporaries);
+   _mesa_printf("NumParameters=%d\n", prog->NumParameters);
+   _mesa_printf("NumAttributes=%d\n", prog->NumAttributes);
+   _mesa_printf("NumAddressRegs=%d\n", prog->NumAddressRegs);
+	
+   _mesa_load_state_parameters(ctx, prog->Parameters);
+			
+#if 0	
+   _mesa_printf("Local Params:\n");
+   for (i = 0; i < MAX_PROGRAM_LOCAL_PARAMS; i++){
+      const GLfloat *p = prog->LocalParams[i];
+      _mesa_printf("%2d: %f, %f, %f, %f\n", i, p[0], p[1], p[2], p[3]);
+   }
+#endif	
+
+   for (i = 0; i < prog->Parameters->NumParameters; i++){
+      struct program_parameter *param = prog->Parameters->Parameters + i;
+      const GLfloat *v = prog->Parameters->ParameterValues[i];
+      _mesa_printf("param[%d] %s = {%.3f, %.3f, %.3f, %.3f};\n",
+                   i, param->Name, v[0], v[1], v[2], v[3]);
    }
 }
 
@@ -1291,7 +2012,7 @@ _mesa_GetProgramRegisterfvMESA(GLenum target,
          if (reg[0] == 'R') {
             /* Temp register */
             GLint i = _mesa_atoi(reg + 1);
-            if (i >= (GLint)ctx->Const.MaxVertexProgramTemps) {
+            if (i >= (GLint)ctx->Const.VertexProgram.MaxTemps) {
                _mesa_error(ctx, GL_INVALID_VALUE,
                            "glGetProgramRegisterfvMESA(registerName)");
                return;
@@ -1301,7 +2022,7 @@ _mesa_GetProgramRegisterfvMESA(GLenum target,
          else if (reg[0] == 'v' && reg[1] == '[') {
             /* Vertex Input attribute */
             GLuint i;
-            for (i = 0; i < ctx->Const.MaxVertexProgramAttribs; i++) {
+            for (i = 0; i < ctx->Const.VertexProgram.MaxAttribs; i++) {
                const char *name = _mesa_nv_vertex_input_register_name(i);
                char number[10];
                _mesa_sprintf(number, "%d", i);
@@ -1355,7 +2076,7 @@ _mesa_GetProgramRegisterfvMESA(GLenum target,
          if (reg[0] == 'R') {
             /* Temp register */
             GLint i = _mesa_atoi(reg + 1);
-            if (i >= (GLint)ctx->Const.MaxFragmentProgramTemps) {
+            if (i >= (GLint)ctx->Const.FragmentProgram.MaxTemps) {
                _mesa_error(ctx, GL_INVALID_VALUE,
                            "glGetProgramRegisterfvMESA(registerName)");
                return;
@@ -1365,7 +2086,7 @@ _mesa_GetProgramRegisterfvMESA(GLenum target,
          else if (reg[0] == 'f' && reg[1] == '[') {
             /* Fragment input attribute */
             GLuint i;
-            for (i = 0; i < ctx->Const.MaxFragmentProgramAttribs; i++) {
+            for (i = 0; i < ctx->Const.FragmentProgram.MaxAttribs; i++) {
                const char *name = _mesa_nv_fragment_input_register_name(i);
                if (_mesa_strncmp(reg + 2, name, 4) == 0) {
                   COPY_4V(v, ctx->FragmentProgram.Machine.Inputs[i]);
@@ -1378,20 +2099,20 @@ _mesa_GetProgramRegisterfvMESA(GLenum target,
          }
          else if (_mesa_strcmp(reg, "o[COLR]") == 0) {
             /* Fragment output color */
-            COPY_4V(v, ctx->FragmentProgram.Machine.Outputs[FRAG_OUTPUT_COLR]);
+            COPY_4V(v, ctx->FragmentProgram.Machine.Outputs[FRAG_RESULT_COLR]);
          }
          else if (_mesa_strcmp(reg, "o[COLH]") == 0) {
             /* Fragment output color */
-            COPY_4V(v, ctx->FragmentProgram.Machine.Outputs[FRAG_OUTPUT_COLH]);
+            COPY_4V(v, ctx->FragmentProgram.Machine.Outputs[FRAG_RESULT_COLH]);
          }
          else if (_mesa_strcmp(reg, "o[DEPR]") == 0) {
             /* Fragment output depth */
-            COPY_4V(v, ctx->FragmentProgram.Machine.Outputs[FRAG_OUTPUT_DEPR]);
+            COPY_4V(v, ctx->FragmentProgram.Machine.Outputs[FRAG_RESULT_DEPR]);
          }
          else {
             /* try user-defined identifiers */
             const GLfloat *value = _mesa_lookup_parameter_value(
-                       ctx->FragmentProgram.Current->Parameters, -1, reg);
+                       ctx->FragmentProgram.Current->Base.Parameters, -1, reg);
             if (value) {
                COPY_4V(v, value);
             }

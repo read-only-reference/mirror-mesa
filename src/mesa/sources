@@ -16,6 +16,7 @@ MAIN_SOURCES = \
 	main/convolve.c \
 	main/debug.c \
 	main/depth.c \
+	main/depthstencil.c \
 	main/dlist.c \
 	main/drawpix.c \
 	main/enable.c \
@@ -93,7 +94,6 @@ SWRAST_SOURCES = \
 	swrast/s_drawpix.c \
 	swrast/s_feedback.c \
 	swrast/s_fog.c \
-	swrast/s_fragprog_to_c.c \
 	swrast/s_imaging.c \
 	swrast/s_lines.c \
 	swrast/s_logic.c \
@@ -104,7 +104,6 @@ SWRAST_SOURCES = \
 	swrast/s_readpix.c \
 	swrast/s_span.c \
 	swrast/s_stencil.c \
-	swrast/s_tcc.c \
 	swrast/s_texcombine.c \
 	swrast/s_texfilter.c \
 	swrast/s_texstore.c \
@@ -148,10 +147,8 @@ TNL_SOURCES = \
 
 
 SHADER_SOURCES = \
-	shader/arbfragparse.c \
 	shader/arbprogparse.c \
 	shader/arbprogram.c \
-	shader/arbvertparse.c \
 	shader/atifragshader.c \
 	shader/grammar/grammar_mesa.c \
 	shader/nvfragparse.c \

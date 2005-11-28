@@ -658,7 +658,10 @@ struct dd_function_table {
    void (*Hint)(GLcontext *ctx, GLenum target, GLenum mode);
    /** Control the writing of individual bits in the color index buffers */
    void (*IndexMask)(GLcontext *ctx, GLuint mask);
-   /** Set light source parameters */
+   /** Set light source parameters.
+    * Note: for GL_POSITION and GL_SPOT_DIRECTION, params will have already
+    * been transformed to eye-space.
+    */
    void (*Lightfv)(GLcontext *ctx, GLenum light,
 		   GLenum pname, const GLfloat *params );
    /** Set the lighting model parameters */
@@ -799,13 +802,20 @@ struct dd_function_table {
    struct gl_framebuffer * (*NewFramebuffer)(GLcontext *ctx, GLuint name);
    struct gl_renderbuffer * (*NewRenderbuffer)(GLcontext *ctx, GLuint name);
    void (*FramebufferRenderbuffer)(GLcontext *ctx, 
-                                   struct gl_renderbuffer_attachment *att,
+                                   struct gl_framebuffer *fb,
+                                   GLenum attachment,
                                    struct gl_renderbuffer *rb);
    void (*RenderbufferTexture)(GLcontext *ctx,
                                struct gl_renderbuffer_attachment *att,
                                struct gl_texture_object *texObj,
                                GLenum texTarget, GLuint level, GLuint zoffset);
    /*@}*/
+#endif
+#if FEATURE_EXT_framebuffer_blit
+   void (*BlitFramebuffer)(GLcontext *ctx,
+                           GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+                           GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+                           GLbitfield mask, GLenum filter);
 #endif
 
    /**

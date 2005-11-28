@@ -7,6 +7,7 @@
 #include "egldisplay.h"
 #include "egldriver.h"
 #include "eglglobals.h"
+#include "egllog.h"
 #include "eglmode.h"
 #include "eglscreen.h"
 #include "eglsurface.h"
@@ -43,19 +44,19 @@ _eglChooseDriver(EGLDisplay display)
       /* use default */
    }
    else if (name[0] == ':' && (name[1] >= '0' && name[1] <= '9') && !name[2]) {
-      printf("EGL: Use driver for screen: %s\n", name);
       /* XXX probe hardware here to determine which driver to open */
       driverName = "libEGLdri";
    }
    else if (name[0] == '!') {
       /* use specified driver name */
       driverName = name + 1;
-      printf("EGL: Use driver named %s\n", driverName);
    }
    else {
       /* Maybe display was returned by XOpenDisplay? */
-      printf("EGL: can't parse display pointer\n");
+      _eglLog(_EGL_FATAL, "eglChooseDriver() bad name");
    }
+
+   _eglLog(_EGL_INFO, "eglChooseDriver() choosing %s", driverName);
 
    drv = _eglOpenDriver(dpy, driverName);
    dpy->Driver = drv;
@@ -79,15 +80,17 @@ _eglOpenDriver(_EGLDisplay *dpy, const char *driverName)
    /* XXX also prepend a directory path??? */
    sprintf(driverFilename, "%s.so", driverName);
 
+   _eglLog(_EGL_DEBUG, "dlopen(%s)", driverFilename);
    lib = dlopen(driverFilename, RTLD_NOW);
    if (!lib) {
-      fprintf(stderr, "EGLdebug: Error opening %s: %s\n", driverFilename, dlerror());
+      _eglLog(_EGL_WARNING, "Could not open %s (%s)",
+              driverFilename, dlerror());
       return NULL;
    }
 
    mainFunc = (_EGLMain_t) dlsym(lib, "_eglMain");
    if (!mainFunc) {
-      fprintf(stderr, "_eglMain not found in %s", (char *) driverFilename);
+      _eglLog(_EGL_WARNING, "_eglMain not found in %s", driverFilename);
       dlclose(lib);
       return NULL;
    }
@@ -113,13 +116,14 @@ _eglCloseDriver(_EGLDriver *drv, EGLDisplay dpy)
 {
    void *handle = drv->LibHandle;
    EGLBoolean b;
-   fprintf(stderr, "EGL debug: Closing driver\n");
+
+   _eglLog(_EGL_INFO, "Closing driver");
 
    /*
     * XXX check for currently bound context/surfaces and delete them?
     */
 
-   b = drv->Terminate(drv, dpy);
+   b = drv->API.Terminate(drv, dpy);
    dlclose(handle);
    return b;
 }
@@ -149,46 +153,46 @@ _eglInitDriverFallbacks(_EGLDriver *drv)
    /* If a pointer is set to NULL, then the device driver _really_ has
     * to implement it.
     */
-   drv->Initialize = NULL;
-   drv->Terminate = NULL;
+   drv->API.Initialize = NULL;
+   drv->API.Terminate = NULL;
 
-   drv->GetConfigs = _eglGetConfigs;
-   drv->ChooseConfig = _eglChooseConfig;
-   drv->GetConfigAttrib = _eglGetConfigAttrib;
+   drv->API.GetConfigs = _eglGetConfigs;
+   drv->API.ChooseConfig = _eglChooseConfig;
+   drv->API.GetConfigAttrib = _eglGetConfigAttrib;
 
-   drv->CreateContext = _eglCreateContext;
-   drv->DestroyContext = _eglDestroyContext;
-   drv->MakeCurrent = _eglMakeCurrent;
-   drv->QueryContext = _eglQueryContext;
+   drv->API.CreateContext = _eglCreateContext;
+   drv->API.DestroyContext = _eglDestroyContext;
+   drv->API.MakeCurrent = _eglMakeCurrent;
+   drv->API.QueryContext = _eglQueryContext;
 
-   drv->CreateWindowSurface = _eglCreateWindowSurface;
-   drv->CreatePixmapSurface = _eglCreatePixmapSurface;
-   drv->CreatePbufferSurface = _eglCreatePbufferSurface;
-   drv->DestroySurface = _eglDestroySurface;
-   drv->QuerySurface = _eglQuerySurface;
-   drv->SurfaceAttrib = _eglSurfaceAttrib;
-   drv->BindTexImage = _eglBindTexImage;
-   drv->ReleaseTexImage = _eglReleaseTexImage;
-   drv->SwapInterval = _eglSwapInterval;
-   drv->SwapBuffers = _eglSwapBuffers;
-   drv->CopyBuffers = _eglCopyBuffers;
+   drv->API.CreateWindowSurface = _eglCreateWindowSurface;
+   drv->API.CreatePixmapSurface = _eglCreatePixmapSurface;
+   drv->API.CreatePbufferSurface = _eglCreatePbufferSurface;
+   drv->API.DestroySurface = _eglDestroySurface;
+   drv->API.QuerySurface = _eglQuerySurface;
+   drv->API.SurfaceAttrib = _eglSurfaceAttrib;
+   drv->API.BindTexImage = _eglBindTexImage;
+   drv->API.ReleaseTexImage = _eglReleaseTexImage;
+   drv->API.SwapInterval = _eglSwapInterval;
+   drv->API.SwapBuffers = _eglSwapBuffers;
+   drv->API.CopyBuffers = _eglCopyBuffers;
 
-   drv->QueryString = _eglQueryString;
-   drv->WaitGL = _eglWaitGL;
-   drv->WaitNative = _eglWaitNative;
+   drv->API.QueryString = _eglQueryString;
+   drv->API.WaitGL = _eglWaitGL;
+   drv->API.WaitNative = _eglWaitNative;
 
    /* EGL_MESA_screen */
-   drv->ChooseModeMESA = _eglChooseModeMESA; 
-   drv->GetModesMESA = _eglGetModesMESA;
-   drv->GetModeAttribMESA = _eglGetModeAttribMESA;
-   drv->GetScreensMESA = _eglGetScreensMESA;
-   drv->CreateScreenSurfaceMESA = _eglCreateScreenSurfaceMESA;
-   drv->ShowSurfaceMESA = _eglShowSurfaceMESA;
-   drv->ScreenPositionMESA = _eglScreenPositionMESA;
-   drv->QueryScreenMESA = _eglQueryScreenMESA;
-   drv->QueryScreenSurfaceMESA = _eglQueryScreenSurfaceMESA;
-   drv->QueryScreenModeMESA = _eglQueryScreenModeMESA;
-   drv->QueryModeStringMESA = _eglQueryModeStringMESA;
+   drv->API.ChooseModeMESA = _eglChooseModeMESA; 
+   drv->API.GetModesMESA = _eglGetModesMESA;
+   drv->API.GetModeAttribMESA = _eglGetModeAttribMESA;
+   drv->API.GetScreensMESA = _eglGetScreensMESA;
+   drv->API.CreateScreenSurfaceMESA = _eglCreateScreenSurfaceMESA;
+   drv->API.ShowSurfaceMESA = _eglShowSurfaceMESA;
+   drv->API.ScreenPositionMESA = _eglScreenPositionMESA;
+   drv->API.QueryScreenMESA = _eglQueryScreenMESA;
+   drv->API.QueryScreenSurfaceMESA = _eglQueryScreenSurfaceMESA;
+   drv->API.QueryScreenModeMESA = _eglQueryScreenModeMESA;
+   drv->API.QueryModeStringMESA = _eglQueryModeStringMESA;
 }
 
 
@@ -197,15 +201,15 @@ _eglInitDriverFallbacks(_EGLDriver *drv)
  * the driver's Extensions string.
  */
 static void
-UpdateExtensionsString(_EGLDriver *drv)
+_eglUpdateExtensionsString(_EGLDriver *drv)
 {
-   drv->Extensions[0] = 0;
+   drv->Extensions.String[0] = 0;
 
-   if (drv->MESA_screen_surface)
-      strcat(drv->Extensions, "EGL_MESA_screen_surface ");
-   if (drv->MESA_copy_context)
-      strcat(drv->Extensions, "EGL_MESA_copy_context ");
-   assert(strlen(drv->Extensions) < MAX_EXTENSIONS_LEN);
+   if (drv->Extensions.MESA_screen_surface)
+      strcat(drv->Extensions.String, "EGL_MESA_screen_surface ");
+   if (drv->Extensions.MESA_copy_context)
+      strcat(drv->Extensions.String, "EGL_MESA_copy_context ");
+   assert(strlen(drv->Extensions.String) < MAX_EXTENSIONS_LEN);
 }
 
 
@@ -221,8 +225,8 @@ _eglQueryString(_EGLDriver *drv, EGLDisplay dpy, EGLint name)
    case EGL_VERSION:
       return "1.0";
    case EGL_EXTENSIONS:
-      UpdateExtensionsString(drv);
-      return drv->Extensions;
+      _eglUpdateExtensionsString(drv);
+      return drv->Extensions.String;
    default:
       _eglError(EGL_BAD_PARAMETER, "eglQueryString");
       return NULL;

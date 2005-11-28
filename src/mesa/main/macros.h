@@ -5,9 +5,9 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  6.0
+ * Version:  6.5
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -56,9 +56,6 @@ extern GLfloat _mesa_ubyte_to_float_color_tab[256];
 
 /** Convert GLushort in [0,65536] to GLfloat in [0.0,1.0] */
 #define USHORT_TO_FLOAT(S)  ((GLfloat) (S) * (1.0F / 65535.0F))
-
-/** Convert GLfloat in [0.0,1.0] to GLushort in [0,65536] */
-#define FLOAT_TO_USHORT(X)  ((GLushort) (GLint) ((X) * 65535.0F))
 
 /** Convert GLshort in [-32768,32767] to GLfloat in [-1.0,1.0] */
 #define SHORT_TO_FLOAT(S)   ((2.0F * (S) + 1.0F) * (1.0F/65535.0F))
@@ -176,15 +173,19 @@ do {                                \
 } while (0)
 #endif
 
-/** Copy a 4-element float vector (Use COPY_FLOAT to avoid loading FPU) */
-#define COPY_4FV( DST, SRC )        \
-do {                                \
-   COPY_FLOAT((DST)[0], (SRC)[0]);  \
-   COPY_FLOAT((DST)[1], (SRC)[1]);  \
-   COPY_FLOAT((DST)[2], (SRC)[2]);  \
-   COPY_FLOAT((DST)[3], (SRC)[3]);  \
+/**
+ * Copy a 4-element float vector (avoid using FPU registers)
+ * XXX Could use two 64-bit moves on 64-bit systems
+ */
+#define COPY_4FV( DST, SRC )                  \
+do {                                          \
+   const GLuint *_s = (const GLuint *) (SRC); \
+   GLuint *_d = (GLuint *) (DST);             \
+   _d[0] = _s[0];                             \
+   _d[1] = _s[1];                             \
+   _d[2] = _s[2];                             \
+   _d[3] = _s[3];                             \
 } while (0)
-
 
 /** Copy \p SZ elements into a 4-element vector */
 #define COPY_SZ_4V(DST, SZ, SRC)  \

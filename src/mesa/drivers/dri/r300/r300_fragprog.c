@@ -46,10 +46,9 @@
 #include "glheader.h"
 #include "macros.h"
 #include "enums.h"
-#include "arbfragparse.h"
 
 #include "program.h"
-#include "nvfragprog.h"
+#include "program_instruction.h"
 #include "r300_context.h"
 #if USE_ARB_F_P == 1
 #include "r300_fragprog.h"
@@ -400,7 +399,7 @@ static pfs_reg_t swizzle(struct r300_fragment_program *rp,
 }
 				
 static pfs_reg_t t_src(struct r300_fragment_program *rp,
-						struct fp_src_register fpsrc) {
+						struct prog_src_register fpsrc) {
 	pfs_reg_t r = pfs_default_reg;
 
 	switch (fpsrc.File) {
@@ -421,7 +420,7 @@ static pfs_reg_t t_src(struct r300_fragment_program *rp,
 		break;
 	case PROGRAM_STATE_VAR:
 	case PROGRAM_NAMED_PARAM:
-		r = emit_param4fv(rp, rp->mesa_program.Parameters->ParameterValues[fpsrc.Index]);
+		r = emit_param4fv(rp, rp->mesa_program.Base.Parameters->ParameterValues[fpsrc.Index]);
 		break;
 	default:
 		ERROR("unknown SrcReg->File %x\n", fpsrc.File);
@@ -442,7 +441,7 @@ static pfs_reg_t t_src(struct r300_fragment_program *rp,
 }
 
 static pfs_reg_t t_dst(struct r300_fragment_program *rp,
-				struct fp_dst_register dest) {
+				struct prog_dst_register dest) {
 	pfs_reg_t r = pfs_default_reg;
 	
 	switch (dest.File) {
@@ -489,7 +488,7 @@ static void sync_streams(struct r300_fragment_program *rp) {
 }
 
 static void emit_tex(struct r300_fragment_program *rp,
-				struct fp_instruction *fpi,
+				struct prog_instruction *fpi,
 				int opcode)
 {
 	pfs_reg_t coord = t_src(rp, fpi->SrcReg[0]);
@@ -747,37 +746,37 @@ static void emit_arith(struct r300_fragment_program *rp, int op,
 static GLboolean parse_program(struct r300_fragment_program *rp)
 {	
 	struct fragment_program *mp = &rp->mesa_program;
-	const struct fp_instruction *inst = mp->Instructions;
-	struct fp_instruction *fpi;
+	const struct prog_instruction *inst = mp->Base.Instructions;
+	struct prog_instruction *fpi;
 	pfs_reg_t src0, src1, src2, dest, temp;
 	int flags = 0;
 
-	if (!inst || inst[0].Opcode == FP_OPCODE_END) {
+	if (!inst || inst[0].Opcode == OPCODE_END) {
 		ERROR("empty program?\n");
 		return GL_FALSE;
 	}
 
-	for (fpi=mp->Instructions; fpi->Opcode != FP_OPCODE_END; fpi++) {
-		if (fpi->Saturate) {
+	for (fpi=mp->Base.Instructions; fpi->Opcode != OPCODE_END; fpi++) {
+		if (fpi->SaturateMode == SATURATE_ZERO_ONE) {
 			flags = PFS_FLAG_SAT;
 		}
 		
 		switch (fpi->Opcode) {
-		case FP_OPCODE_ABS:
+		case OPCODE_ABS:
 			ERROR("unknown fpi->Opcode %d\n", fpi->Opcode);
 			break;
-		case FP_OPCODE_ADD:
+		case OPCODE_ADD:
 			emit_arith(rp, PFS_OP_MAD, t_dst(rp, fpi->DstReg), fpi->DstReg.WriteMask,
 							t_src(rp, fpi->SrcReg[0]),
 							pfs_one,
 							t_src(rp, fpi->SrcReg[1]),
 							flags);
 			break;
-		case FP_OPCODE_CMP:
-		case FP_OPCODE_COS:
+		case OPCODE_CMP:
+		case OPCODE_COS:
 			ERROR("unknown fpi->Opcode %d\n", fpi->Opcode);
 			break;
-		case FP_OPCODE_DP3:
+		case OPCODE_DP3:
 			dest = t_dst(rp, fpi->DstReg);
 			if (fpi->DstReg.WriteMask & WRITEMASK_W) {
 				/* I assume these need to share the same alu slot */
@@ -792,18 +791,18 @@ static GLboolean parse_program(struct r300_fragment_program *rp)
 							t_src(rp, fpi->SrcReg[1]),
 							pfs_zero, flags);
 			break;
-		case FP_OPCODE_DP4:
-		case FP_OPCODE_DPH:
-		case FP_OPCODE_DST:
-		case FP_OPCODE_EX2:
-		case FP_OPCODE_FLR:
-		case FP_OPCODE_FRC:
-		case FP_OPCODE_KIL:
-		case FP_OPCODE_LG2:
-		case FP_OPCODE_LIT:
+		case OPCODE_DP4:
+		case OPCODE_DPH:
+		case OPCODE_DST:
+		case OPCODE_EX2:
+		case OPCODE_FLR:
+		case OPCODE_FRC:
+		case OPCODE_KIL:
+		case OPCODE_LG2:
+		case OPCODE_LIT:
 			ERROR("unknown fpi->Opcode %d\n", fpi->Opcode);
 			break;
-		case FP_OPCODE_LRP:
+		case OPCODE_LRP:
 			/* TODO: use the special LRP form if possible */
 			src0 = t_src(rp, fpi->SrcReg[0]);
 			src1 = t_src(rp, fpi->SrcReg[1]);
@@ -819,31 +818,31 @@ static GLboolean parse_program(struct r300_fragment_program *rp)
 							src0, src1, temp, flags);
 			free_temp(rp, temp);
 			break;			
-		case FP_OPCODE_MAD:
+		case OPCODE_MAD:
 			emit_arith(rp, PFS_OP_MAD, t_dst(rp, fpi->DstReg), fpi->DstReg.WriteMask,
 							t_src(rp, fpi->SrcReg[0]),
 							t_src(rp, fpi->SrcReg[1]),
 							t_src(rp, fpi->SrcReg[2]),
 							flags);
 			break;
-		case FP_OPCODE_MAX:
-		case FP_OPCODE_MIN:
+		case OPCODE_MAX:
+		case OPCODE_MIN:
 			ERROR("unknown fpi->Opcode %d\n", fpi->Opcode);
 			break;
-		case FP_OPCODE_MOV:
-		case FP_OPCODE_SWZ:
+		case OPCODE_MOV:
+		case OPCODE_SWZ:
 			emit_arith(rp, PFS_OP_MAD, t_dst(rp, fpi->DstReg), fpi->DstReg.WriteMask,
 							t_src(rp, fpi->SrcReg[0]), pfs_one, pfs_zero, 
 							flags);
 			break;
-		case FP_OPCODE_MUL:
+		case OPCODE_MUL:
 			emit_arith(rp, PFS_OP_MAD, t_dst(rp, fpi->DstReg), fpi->DstReg.WriteMask,
 							t_src(rp, fpi->SrcReg[0]),
 							t_src(rp, fpi->SrcReg[1]),
 							pfs_zero,
 							flags);
 			break;
-		case FP_OPCODE_POW:
+		case OPCODE_POW:
 			src0 = t_src(rp, fpi->SrcReg[0]);
 			src1 = t_src(rp, fpi->SrcReg[1]);
 			dest = t_dst(rp, fpi->DstReg);
@@ -857,38 +856,38 @@ static GLboolean parse_program(struct r300_fragment_program *rp)
 							temp, pfs_zero, pfs_zero, 0);
 			free_temp(rp, temp);
 			break;
-		case FP_OPCODE_RCP:
+		case OPCODE_RCP:
 			ERROR("unknown fpi->Opcode %d\n", fpi->Opcode);
 			break;
-		case FP_OPCODE_RSQ:
+		case OPCODE_RSQ:
 			emit_arith(rp, PFS_OP_RSQ, t_dst(rp, fpi->DstReg),
 							fpi->DstReg.WriteMask,
 							t_src(rp, fpi->SrcReg[0]), pfs_zero, pfs_zero,
 							flags | PFS_FLAG_ABS);
 			break;
-		case FP_OPCODE_SCS:
-		case FP_OPCODE_SGE:
-		case FP_OPCODE_SIN:
-		case FP_OPCODE_SLT:
+		case OPCODE_SCS:
+		case OPCODE_SGE:
+		case OPCODE_SIN:
+		case OPCODE_SLT:
 			ERROR("unknown fpi->Opcode %d\n", fpi->Opcode);
 			break;
-		case FP_OPCODE_SUB:
+		case OPCODE_SUB:
 			emit_arith(rp, PFS_OP_MAD, t_dst(rp, fpi->DstReg), fpi->DstReg.WriteMask,
 							t_src(rp, fpi->SrcReg[0]),
 							pfs_one,
 							negate(t_src(rp, fpi->SrcReg[1])),
 							flags);
 			break;
-		case FP_OPCODE_TEX:
+		case OPCODE_TEX:
 			emit_tex(rp, fpi, R300_FPITX_OP_TEX);
 			break;
-		case FP_OPCODE_TXB:
+		case OPCODE_TXB:
 			emit_tex(rp, fpi, R300_FPITX_OP_TXB);
 			break;
-		case FP_OPCODE_TXP:
+		case OPCODE_TXP:
 			emit_tex(rp, fpi, R300_FPITX_OP_TXP);
 			break;
-		case FP_OPCODE_XPD:
+		case OPCODE_XPD:
 			ERROR("unknown fpi->Opcode %d\n", fpi->Opcode);
 			break;
 		default:
@@ -909,8 +908,8 @@ static GLboolean parse_program(struct r300_fragment_program *rp)
 static void init_program(struct r300_fragment_program *rp)
 {
 	struct fragment_program *mp = &rp->mesa_program;	
-	struct fp_instruction *fpi;
-	GLuint InputsRead = mp->InputsRead;
+	struct prog_instruction *fpi;
+	GLuint InputsRead = mp->Base.InputsRead;
 	GLuint temps_used = 0; /* for rp->temps[] */
 	int i;
 
@@ -979,11 +978,11 @@ static void init_program(struct r300_fragment_program *rp)
 	 * Possibly not too bad actually, as we could add to this later and
 	 * find out when inputs are last used so we can reuse them as temps.
 	 */
-	if (!mp->Instructions) {
+	if (!mp->Base.Instructions) {
 		ERROR("No instructions found in program\n");
 		return;
 	}	
-	for (fpi=mp->Instructions;fpi->Opcode != FP_OPCODE_END; fpi++) {
+	for (fpi=mp->Base.Instructions;fpi->Opcode != OPCODE_END; fpi++) {
 		for (i=0;i<3;i++) {
 			if (fpi->SrcReg[i].File == PROGRAM_TEMPORARY) {
 				if (!(temps_used & (1 << fpi->SrcReg[i].Index))) {
@@ -1009,7 +1008,7 @@ static void update_params(struct r300_fragment_program *rp) {
 
 	/* Ask Mesa nicely to fill in ParameterValues for us */
 	if (rp->param_nr)
-		_mesa_load_state_parameters(rp->ctx, mp->Parameters);
+		_mesa_load_state_parameters(rp->ctx, mp->Base.Parameters);
 
 	for (i=0;i<rp->param_nr;i++)
 		COPY_4V(rp->constant[rp->param[i].idx], rp->param[i].values);
@@ -1054,9 +1053,7 @@ static void dump_program(struct r300_fragment_program *rp)
 			
 	fprintf(stderr, "Mesa program:\n");
 	fprintf(stderr, "-------------\n");
-		_mesa_debug_fp_inst(rp->mesa_program.NumTexInstructions +
-						rp->mesa_program.NumAluInstructions,
-		                rp->mesa_program.Instructions);
+        _mesa_print_program(&rp->mesa_program.Base);
 	fflush(stdout);
 
 	fprintf(stderr, "Hardware program\n");

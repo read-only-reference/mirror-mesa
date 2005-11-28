@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -45,7 +45,7 @@
 #include "mtypes.h"
 #include "nvprogram.h"
 #include "nvvertparse.h"
-#include "nvvertprog.h"
+#include "program_instruction.h"
 #include "program.h"
 
 
@@ -288,20 +288,9 @@ static const char *InputRegisters[MAX_NV_VERTEX_PROGRAM_INPUTS + 1] = {
 };
 
 static const char *OutputRegisters[MAX_NV_VERTEX_PROGRAM_OUTPUTS + 1] = {
-   "HPOS", "COL0", "COL1", "BFC0", "BFC1", "FOGC", "PSIZ",
-   "TEX0", "TEX1", "TEX2", "TEX3", "TEX4", "TEX5", "TEX6", "TEX7", NULL
-};
-
-/* NOTE: the order here must match opcodes in nvvertprog.h */
-static const char *Opcodes[] = {
-   "MOV", "LIT", "RCP", "RSQ", "EXP", "LOG", "MUL", "ADD", "DP3", "DP4",
-   "DST", "MIN", "MAX", "SLT", "SGE", "MAD", "ARL", "DPH", "RCC", "SUB",
-   "ABS", "END",
-   /* GL_ARB_vertex_program */
-   "FLR", "FRC", "EX2", "LG2", "POW", "XPD", "SWZ",
-   /* Mesa-specific */
-   "PRINT",
-   NULL
+   "HPOS", "COL0", "COL1", "FOGC", 
+   "TEX0", "TEX1", "TEX2", "TEX3", "TEX4", "TEX5", "TEX6", "TEX7", 
+   "PSIZ", "BFC0", "BFC1", NULL
 };
 
 
@@ -392,7 +381,7 @@ Parse_AbsParamReg(struct parse_state *parseState, GLint *regNum)
 
 
 static GLboolean
-Parse_ParamReg(struct parse_state *parseState, struct vp_src_register *srcReg)
+Parse_ParamReg(struct parse_state *parseState, struct prog_src_register *srcReg)
 {
    GLubyte token[100];
 
@@ -560,7 +549,7 @@ Parse_OutputReg(struct parse_state *parseState, GLint *outputRegNum)
 
 
 static GLboolean
-Parse_MaskedDstReg(struct parse_state *parseState, struct vp_dst_register *dstReg)
+Parse_MaskedDstReg(struct parse_state *parseState, struct prog_dst_register *dstReg)
 {
    GLubyte token[100];
    GLint idx;
@@ -641,7 +630,7 @@ Parse_MaskedDstReg(struct parse_state *parseState, struct vp_dst_register *dstRe
 
 
 static GLboolean
-Parse_SwizzleSrcReg(struct parse_state *parseState, struct vp_src_register *srcReg)
+Parse_SwizzleSrcReg(struct parse_state *parseState, struct prog_src_register *srcReg)
 {
    GLubyte token[100];
    GLint idx;
@@ -653,12 +642,12 @@ Parse_SwizzleSrcReg(struct parse_state *parseState, struct vp_src_register *srcR
       RETURN_ERROR;
    if (token[0] == '-') {
       (void) Parse_String(parseState, "-");
-      srcReg->Negate = GL_TRUE;
+      srcReg->NegateBase = GL_TRUE;
       if (!Peek_Token(parseState, token))
          RETURN_ERROR;
    }
    else {
-      srcReg->Negate = GL_FALSE;
+      srcReg->NegateBase = GL_FALSE;
    }
 
    /* Src reg can be R<n>, c[n], c[n +/- offset], or a named vertex attrib */
@@ -732,7 +721,7 @@ Parse_SwizzleSrcReg(struct parse_state *parseState, struct vp_src_register *srcR
 
 
 static GLboolean
-Parse_ScalarSrcReg(struct parse_state *parseState, struct vp_src_register *srcReg)
+Parse_ScalarSrcReg(struct parse_state *parseState, struct prog_src_register *srcReg)
 {
    GLubyte token[100];
    GLint idx;
@@ -743,13 +732,13 @@ Parse_ScalarSrcReg(struct parse_state *parseState, struct vp_src_register *srcRe
    if (!Peek_Token(parseState, token))
       RETURN_ERROR;
    if (token[0] == '-') {
-      srcReg->Negate = GL_TRUE;
+      srcReg->NegateBase = GL_TRUE;
       (void) Parse_String(parseState, "-"); /* consume '-' */
       if (!Peek_Token(parseState, token))
          RETURN_ERROR;
    }
    else {
-      srcReg->Negate = GL_FALSE;
+      srcReg->NegateBase = GL_FALSE;
    }
 
    /* Src reg can be R<n>, c[n], c[n +/- offset], or a named vertex attrib */
@@ -802,9 +791,10 @@ Parse_ScalarSrcReg(struct parse_state *parseState, struct vp_src_register *srcRe
 
 static GLint
 Parse_UnaryOpInstruction(struct parse_state *parseState,
-                         struct vp_instruction *inst, enum vp_opcode opcode)
+                         struct prog_instruction *inst,
+                         enum prog_opcode opcode)
 {
-   if (opcode == VP_OPCODE_ABS && !parseState->isVersion1_1)
+   if (opcode == OPCODE_ABS && !parseState->isVersion1_1)
       RETURN_ERROR1("ABS illegal for vertex program 1.0");
 
    inst->Opcode = opcode;
@@ -832,11 +822,12 @@ Parse_UnaryOpInstruction(struct parse_state *parseState,
 
 static GLboolean
 Parse_BiOpInstruction(struct parse_state *parseState,
-                      struct vp_instruction *inst, enum vp_opcode opcode)
+                      struct prog_instruction *inst,
+                      enum prog_opcode opcode)
 {
-   if (opcode == VP_OPCODE_DPH && !parseState->isVersion1_1)
+   if (opcode == OPCODE_DPH && !parseState->isVersion1_1)
       RETURN_ERROR1("DPH illegal for vertex program 1.0");
-   if (opcode == VP_OPCODE_SUB && !parseState->isVersion1_1)
+   if (opcode == OPCODE_SUB && !parseState->isVersion1_1)
       RETURN_ERROR1("SUB illegal for vertex program 1.0");
 
    inst->Opcode = opcode;
@@ -884,7 +875,8 @@ Parse_BiOpInstruction(struct parse_state *parseState,
 
 static GLboolean
 Parse_TriOpInstruction(struct parse_state *parseState,
-                       struct vp_instruction *inst, enum vp_opcode opcode)
+                       struct prog_instruction *inst,
+                       enum prog_opcode opcode)
 {
    inst->Opcode = opcode;
    inst->StringPos = parseState->curLine - parseState->start;
@@ -951,9 +943,10 @@ Parse_TriOpInstruction(struct parse_state *parseState,
 
 static GLboolean
 Parse_ScalarInstruction(struct parse_state *parseState,
-                        struct vp_instruction *inst, enum vp_opcode opcode)
+                        struct prog_instruction *inst,
+                        enum prog_opcode opcode)
 {
-   if (opcode == VP_OPCODE_RCC && !parseState->isVersion1_1)
+   if (opcode == OPCODE_RCC && !parseState->isVersion1_1)
       RETURN_ERROR1("RCC illegal for vertex program 1.0");
 
    inst->Opcode = opcode;
@@ -980,9 +973,9 @@ Parse_ScalarInstruction(struct parse_state *parseState,
 
 
 static GLboolean
-Parse_AddressInstruction(struct parse_state *parseState, struct vp_instruction *inst)
+Parse_AddressInstruction(struct parse_state *parseState, struct prog_instruction *inst)
 {
-   inst->Opcode = VP_OPCODE_ARL;
+   inst->Opcode = OPCODE_ARL;
    inst->StringPos = parseState->curLine - parseState->start;
 
    /* dest A0 reg */
@@ -1006,11 +999,11 @@ Parse_AddressInstruction(struct parse_state *parseState, struct vp_instruction *
 
 
 static GLboolean
-Parse_EndInstruction(struct parse_state *parseState, struct vp_instruction *inst)
+Parse_EndInstruction(struct parse_state *parseState, struct prog_instruction *inst)
 {
    GLubyte token[100];
 
-   inst->Opcode = VP_OPCODE_END;
+   inst->Opcode = OPCODE_END;
    inst->StringPos = parseState->curLine - parseState->start;
 
    /* this should fail! */
@@ -1035,16 +1028,16 @@ Parse_EndInstruction(struct parse_state *parseState, struct vp_instruction *inst
  *                         | "PRINT" <string literal> "," <dstReg>
  */
 static GLboolean
-Parse_PrintInstruction(struct parse_state *parseState, struct vp_instruction *inst)
+Parse_PrintInstruction(struct parse_state *parseState, struct prog_instruction *inst)
 {
    const GLubyte *str;
    GLubyte *msg;
    GLuint len;
    GLubyte token[100];
-   struct vp_src_register *srcReg = &inst->SrcReg[0];
+   struct prog_src_register *srcReg = &inst->SrcReg[0];
    GLint idx;
 
-   inst->Opcode = VP_OPCODE_PRINT;
+   inst->Opcode = OPCODE_PRINT;
    inst->StringPos = parseState->curLine - parseState->start;
 
    /* The first argument is a literal string 'just like this' */
@@ -1069,7 +1062,7 @@ Parse_PrintInstruction(struct parse_state *parseState, struct vp_instruction *in
          RETURN_ERROR;
 
       srcReg->RelAddr = GL_FALSE;
-      srcReg->Negate = GL_FALSE;
+      srcReg->NegateBase = GL_FALSE;
       srcReg->Swizzle = SWIZZLE_NOOP;
 
       /* Register can be R<n>, c[n], c[n +/- offset], a named vertex attrib,
@@ -1116,7 +1109,7 @@ Parse_PrintInstruction(struct parse_state *parseState, struct vp_instruction *in
 
 static GLboolean
 Parse_OptionSequence(struct parse_state *parseState,
-                     struct vp_instruction program[])
+                     struct prog_instruction program[])
 {
    (void) program;
    while (1) {
@@ -1136,92 +1129,92 @@ Parse_OptionSequence(struct parse_state *parseState,
 
 static GLboolean
 Parse_InstructionSequence(struct parse_state *parseState,
-                          struct vp_instruction program[])
+                          struct prog_instruction program[])
 {
    while (1) {
-      struct vp_instruction *inst = program + parseState->numInst;
+      struct prog_instruction *inst = program + parseState->numInst;
 
       /* Initialize the instruction */
-      _mesa_init_vp_instruction(inst);
+      _mesa_init_instruction(inst);
 
       if (Parse_String(parseState, "MOV")) {
-         if (!Parse_UnaryOpInstruction(parseState, inst, VP_OPCODE_MOV))
+         if (!Parse_UnaryOpInstruction(parseState, inst, OPCODE_MOV))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "LIT")) {
-         if (!Parse_UnaryOpInstruction(parseState, inst, VP_OPCODE_LIT))
+         if (!Parse_UnaryOpInstruction(parseState, inst, OPCODE_LIT))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "ABS")) {
-         if (!Parse_UnaryOpInstruction(parseState, inst, VP_OPCODE_ABS))
+         if (!Parse_UnaryOpInstruction(parseState, inst, OPCODE_ABS))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "MUL")) {
-         if (!Parse_BiOpInstruction(parseState, inst, VP_OPCODE_MUL))
+         if (!Parse_BiOpInstruction(parseState, inst, OPCODE_MUL))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "ADD")) {
-         if (!Parse_BiOpInstruction(parseState, inst, VP_OPCODE_ADD))
+         if (!Parse_BiOpInstruction(parseState, inst, OPCODE_ADD))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "DP3")) {
-         if (!Parse_BiOpInstruction(parseState, inst, VP_OPCODE_DP3))
+         if (!Parse_BiOpInstruction(parseState, inst, OPCODE_DP3))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "DP4")) {
-         if (!Parse_BiOpInstruction(parseState, inst, VP_OPCODE_DP4))
+         if (!Parse_BiOpInstruction(parseState, inst, OPCODE_DP4))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "DST")) {
-         if (!Parse_BiOpInstruction(parseState, inst, VP_OPCODE_DST))
+         if (!Parse_BiOpInstruction(parseState, inst, OPCODE_DST))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "MIN")) {
-         if (!Parse_BiOpInstruction(parseState, inst, VP_OPCODE_MIN))
+         if (!Parse_BiOpInstruction(parseState, inst, OPCODE_MIN))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "MAX")) {
-         if (!Parse_BiOpInstruction(parseState, inst, VP_OPCODE_MAX))
+         if (!Parse_BiOpInstruction(parseState, inst, OPCODE_MAX))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "SLT")) {
-         if (!Parse_BiOpInstruction(parseState, inst, VP_OPCODE_SLT))
+         if (!Parse_BiOpInstruction(parseState, inst, OPCODE_SLT))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "SGE")) {
-         if (!Parse_BiOpInstruction(parseState, inst, VP_OPCODE_SGE))
+         if (!Parse_BiOpInstruction(parseState, inst, OPCODE_SGE))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "DPH")) {
-         if (!Parse_BiOpInstruction(parseState, inst, VP_OPCODE_DPH))
+         if (!Parse_BiOpInstruction(parseState, inst, OPCODE_DPH))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "SUB")) {
-         if (!Parse_BiOpInstruction(parseState, inst, VP_OPCODE_SUB))
+         if (!Parse_BiOpInstruction(parseState, inst, OPCODE_SUB))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "MAD")) {
-         if (!Parse_TriOpInstruction(parseState, inst, VP_OPCODE_MAD))
+         if (!Parse_TriOpInstruction(parseState, inst, OPCODE_MAD))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "RCP")) {
-         if (!Parse_ScalarInstruction(parseState, inst, VP_OPCODE_RCP))
+         if (!Parse_ScalarInstruction(parseState, inst, OPCODE_RCP))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "RSQ")) {
-         if (!Parse_ScalarInstruction(parseState, inst, VP_OPCODE_RSQ))
+         if (!Parse_ScalarInstruction(parseState, inst, OPCODE_RSQ))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "EXP")) {
-         if (!Parse_ScalarInstruction(parseState, inst, VP_OPCODE_EXP))
+         if (!Parse_ScalarInstruction(parseState, inst, OPCODE_EXP))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "LOG")) {
-         if (!Parse_ScalarInstruction(parseState, inst, VP_OPCODE_LOG))
+         if (!Parse_ScalarInstruction(parseState, inst, OPCODE_LOG))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "RCC")) {
-         if (!Parse_ScalarInstruction(parseState, inst, VP_OPCODE_RCC))
+         if (!Parse_ScalarInstruction(parseState, inst, OPCODE_RCC))
             RETURN_ERROR;
       }
       else if (Parse_String(parseState, "ARL")) {
@@ -1270,7 +1263,7 @@ Parse_InstructionSequence(struct parse_state *parseState,
 
 static GLboolean
 Parse_Program(struct parse_state *parseState,
-              struct vp_instruction instBuffer[])
+              struct prog_instruction instBuffer[])
 {
    if (parseState->isVersion1_1) {
       if (!Parse_OptionSequence(parseState, instBuffer)) {
@@ -1292,8 +1285,8 @@ _mesa_parse_nv_vertex_program(GLcontext *ctx, GLenum dstTarget,
                               struct vertex_program *program)
 {
    struct parse_state parseState;
-   struct vp_instruction instBuffer[MAX_NV_VERTEX_PROGRAM_INSTRUCTIONS];
-   struct vp_instruction *newInst;
+   struct prog_instruction instBuffer[MAX_NV_VERTEX_PROGRAM_INSTRUCTIONS];
+   struct prog_instruction *newInst;
    GLenum target;
    GLubyte *programString;
 
@@ -1373,29 +1366,29 @@ _mesa_parse_nv_vertex_program(GLcontext *ctx, GLenum dstTarget,
 
       /* copy the compiled instructions */
       assert(parseState.numInst <= MAX_NV_VERTEX_PROGRAM_INSTRUCTIONS);
-      newInst = (struct vp_instruction *)
-         MALLOC(parseState.numInst * sizeof(struct vp_instruction));
+      newInst = (struct prog_instruction *)
+         _mesa_malloc(parseState.numInst * sizeof(struct prog_instruction));
       if (!newInst) {
          _mesa_error(ctx, GL_OUT_OF_MEMORY, "glLoadProgramNV");
-         FREE(programString);
+         _mesa_free(programString);
          return;  /* out of memory */
       }
-      MEMCPY(newInst, instBuffer,
-             parseState.numInst * sizeof(struct vp_instruction));
+      _mesa_memcpy(newInst, instBuffer,
+                   parseState.numInst * sizeof(struct prog_instruction));
 
       /* install the program */
       program->Base.Target = target;
       if (program->Base.String) {
-         FREE(program->Base.String);
+         _mesa_free(program->Base.String);
       }
       program->Base.String = programString;
       program->Base.Format = GL_PROGRAM_FORMAT_ASCII_ARB;
-      if (program->Instructions) {
-         FREE(program->Instructions);
+      if (program->Base.Instructions) {
+         _mesa_free(program->Base.Instructions);
       }
-      program->Instructions = newInst;
-      program->InputsRead = parseState.inputsRead;
-      program->OutputsWritten = parseState.outputsWritten;
+      program->Base.Instructions = newInst;
+      program->Base.InputsRead = parseState.inputsRead;
+      program->Base.OutputsWritten = parseState.outputsWritten;
       program->IsPositionInvariant = parseState.isPositionInvariant;
       program->IsNVProgram = GL_TRUE;
 
@@ -1418,10 +1411,10 @@ _mesa_parse_nv_vertex_program(GLcontext *ctx, GLenum dstTarget,
 
 
 static void
-PrintSrcReg(const struct vp_src_register *src)
+PrintSrcReg(const struct prog_src_register *src)
 {
    static const char comps[5] = "xyzw";
-   if (src->Negate)
+   if (src->NegateBase)
       _mesa_printf("-");
    if (src->RelAddr) {
       if (src->Index > 0)
@@ -1461,7 +1454,7 @@ PrintSrcReg(const struct vp_src_register *src)
 
 
 static void
-PrintDstReg(const struct vp_dst_register *dst)
+PrintDstReg(const struct prog_dst_register *dst)
 {
    if (dst->File == PROGRAM_OUTPUT) {
       _mesa_printf("o[%s]", OutputRegisters[dst->Index]);
@@ -1477,15 +1470,15 @@ PrintDstReg(const struct vp_dst_register *dst)
       _mesa_printf("R%d", dst->Index);
    }
 
-   if (dst->WriteMask != 0 && dst->WriteMask != 0xf) {
+   if (dst->WriteMask != 0 && dst->WriteMask != WRITEMASK_XYZW) {
       _mesa_printf(".");
-      if (dst->WriteMask & 0x1)
+      if (dst->WriteMask & WRITEMASK_X)
          _mesa_printf("x");
-      if (dst->WriteMask & 0x2)
+      if (dst->WriteMask & WRITEMASK_Y)
          _mesa_printf("y");
-      if (dst->WriteMask & 0x4)
+      if (dst->WriteMask & WRITEMASK_Z)
          _mesa_printf("z");
-      if (dst->WriteMask & 0x8)
+      if (dst->WriteMask & WRITEMASK_W)
          _mesa_printf("w");
    }
 }
@@ -1495,61 +1488,50 @@ PrintDstReg(const struct vp_dst_register *dst)
  * Print a single NVIDIA vertex program instruction.
  */
 void
-_mesa_print_nv_vertex_instruction(const struct vp_instruction *inst)
+_mesa_print_nv_vertex_instruction(const struct prog_instruction *inst)
 {
+   GLuint i, n;
+
    switch (inst->Opcode) {
-      case VP_OPCODE_MOV:
-      case VP_OPCODE_LIT:
-      case VP_OPCODE_RCP:
-      case VP_OPCODE_RSQ:
-      case VP_OPCODE_EXP:
-      case VP_OPCODE_LOG:
-      case VP_OPCODE_RCC:
-      case VP_OPCODE_ABS:
-         _mesa_printf("%s ", Opcodes[(int) inst->Opcode]);
+      case OPCODE_MOV:
+      case OPCODE_LIT:
+      case OPCODE_RCP:
+      case OPCODE_RSQ:
+      case OPCODE_EXP:
+      case OPCODE_LOG:
+      case OPCODE_RCC:
+      case OPCODE_ABS:
+      case OPCODE_MUL:
+      case OPCODE_ADD:
+      case OPCODE_DP3:
+      case OPCODE_DP4:
+      case OPCODE_DST:
+      case OPCODE_MIN:
+      case OPCODE_MAX:
+      case OPCODE_SLT:
+      case OPCODE_SGE:
+      case OPCODE_DPH:
+      case OPCODE_SUB:
+      case OPCODE_MAD:
+         _mesa_printf("%s ", _mesa_opcode_string(inst->Opcode));
          PrintDstReg(&inst->DstReg);
          _mesa_printf(", ");
-         PrintSrcReg(&inst->SrcReg[0]);
+         n = _mesa_num_inst_src_regs(inst->Opcode);
+         for (i = 0; i < n; i++) {
+            PrintSrcReg(&inst->SrcReg[i]);
+            if (i + 1 < n)
+               _mesa_printf(", ");
+         }
          _mesa_printf(";\n");
          break;
-      case VP_OPCODE_MUL:
-      case VP_OPCODE_ADD:
-      case VP_OPCODE_DP3:
-      case VP_OPCODE_DP4:
-      case VP_OPCODE_DST:
-      case VP_OPCODE_MIN:
-      case VP_OPCODE_MAX:
-      case VP_OPCODE_SLT:
-      case VP_OPCODE_SGE:
-      case VP_OPCODE_DPH:
-      case VP_OPCODE_SUB:
-         _mesa_printf("%s ", Opcodes[(int) inst->Opcode]);
-         PrintDstReg(&inst->DstReg);
-         _mesa_printf(", ");
-         PrintSrcReg(&inst->SrcReg[0]);
-         _mesa_printf(", ");
-         PrintSrcReg(&inst->SrcReg[1]);
-         _mesa_printf(";\n");
-         break;
-      case VP_OPCODE_MAD:
-         _mesa_printf("MAD ");
-         PrintDstReg(&inst->DstReg);
-         _mesa_printf(", ");
-         PrintSrcReg(&inst->SrcReg[0]);
-         _mesa_printf(", ");
-         PrintSrcReg(&inst->SrcReg[1]);
-         _mesa_printf(", ");
-         PrintSrcReg(&inst->SrcReg[2]);
-         _mesa_printf(";\n");
-         break;
-      case VP_OPCODE_ARL:
+      case OPCODE_ARL:
          _mesa_printf("ARL A0.x, ");
          PrintSrcReg(&inst->SrcReg[0]);
          _mesa_printf(";\n");
          break;
-      case VP_OPCODE_PRINT:
+      case OPCODE_PRINT:
          _mesa_printf("PRINT '%s'", inst->Data);
-         if (inst->SrcReg[0].File) {
+         if (inst->SrcReg[0].File != PROGRAM_UNDEFINED) {
             _mesa_printf(", ");
             PrintSrcReg(&inst->SrcReg[0]);
             _mesa_printf(";\n");
@@ -1558,7 +1540,7 @@ _mesa_print_nv_vertex_instruction(const struct vp_instruction *inst)
             _mesa_printf("\n");
          }
          break;
-      case VP_OPCODE_END:
+      case OPCODE_END:
          _mesa_printf("END\n");
          break;
       default:
@@ -1573,11 +1555,11 @@ _mesa_print_nv_vertex_instruction(const struct vp_instruction *inst)
 void
 _mesa_print_nv_vertex_program(const struct vertex_program *program)
 {
-   const struct vp_instruction *inst;
+   const struct prog_instruction *inst;
 
-   for (inst = program->Instructions; ; inst++) {
+   for (inst = program->Base.Instructions; ; inst++) {
       _mesa_print_nv_vertex_instruction(inst);
-      if (inst->Opcode == VP_OPCODE_END)
+      if (inst->Opcode == OPCODE_END)
          return;
    }
 }
@@ -1596,23 +1578,5 @@ _mesa_nv_vertex_output_register_name(GLuint i)
 {
    ASSERT(i < MAX_NV_VERTEX_PROGRAM_OUTPUTS);
    return OutputRegisters[i];
-}
-
-
-/**
- * Initialize vertex program instruction fields to defaults.
- */
-void
-_mesa_init_vp_instruction(struct vp_instruction *inst)
-{
-   _mesa_bzero(inst, sizeof(struct vp_instruction));
-   inst->SrcReg[0].File = PROGRAM_UNDEFINED;
-   inst->SrcReg[0].Swizzle = SWIZZLE_NOOP;
-   inst->SrcReg[1].File = PROGRAM_UNDEFINED;
-   inst->SrcReg[1].Swizzle = SWIZZLE_NOOP;
-   inst->SrcReg[2].File = PROGRAM_UNDEFINED;
-   inst->SrcReg[2].Swizzle = SWIZZLE_NOOP;
-   inst->DstReg.File = PROGRAM_UNDEFINED;
-   inst->DstReg.WriteMask = 0xf;
 }
 

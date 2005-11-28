@@ -43,6 +43,7 @@ error_check_format_type(GLcontext *ctx, GLenum format, GLenum type,
                         GLboolean drawing)
 {
    const char *readDraw = drawing ? "Draw" : "Read";
+   struct gl_framebuffer *fb = drawing ? ctx->DrawBuffer : ctx->ReadBuffer;
 
    if (ctx->Extensions.EXT_packed_depth_stencil
        && type == GL_UNSIGNED_INT_24_8_EXT
@@ -86,14 +87,14 @@ error_check_format_type(GLcontext *ctx, GLenum format, GLenum type,
       }
       break;
    case GL_STENCIL_INDEX:
-      if (ctx->DrawBuffer->Visual.stencilBits == 0) {
+      if (fb->Visual.stencilBits == 0) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "gl%sPixels(no stencil buffer)", readDraw);
          return GL_TRUE;
       }
       break;
    case GL_DEPTH_COMPONENT:
-      if (ctx->DrawBuffer->Visual.depthBits == 0) {
+      if (fb->Visual.depthBits == 0) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "gl%sPixels(no depth buffer)", readDraw);
          return GL_TRUE;
@@ -105,14 +106,13 @@ error_check_format_type(GLcontext *ctx, GLenum format, GLenum type,
          _mesa_error(ctx, GL_INVALID_ENUM, "gl%sPixels(type)", readDraw);
          return GL_TRUE;
       }
-      if (ctx->DrawBuffer->Visual.depthBits == 0 ||
-          ctx->ReadBuffer->Visual.depthBits == 0 ||
-          ctx->DrawBuffer->Visual.stencilBits == 0 ||
-          ctx->ReadBuffer->Visual.stencilBits == 0) {
+      if (fb->Visual.depthBits == 0 || fb->Visual.stencilBits == 0) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "gl%sPixels(no depth or stencil buffer)", readDraw);
          return GL_TRUE;
       }
+      ASSERT(fb->Attachment[BUFFER_DEPTH].Renderbuffer);
+      ASSERT(fb->Attachment[BUFFER_STENCIL].Renderbuffer);
       break;
    default:
       /* this should have been caught in _mesa_is_legal_format_type() */
@@ -149,13 +149,13 @@ _mesa_DrawPixels( GLsizei width, GLsizei height,
       return;
    }
 
+   if (ctx->NewState) {
+      _mesa_update_state(ctx);
+   }
+
    if (error_check_format_type(ctx, format, type, GL_TRUE)) {
       /* found an error */
       return;
-   }
-
-   if (ctx->NewState) {
-      _mesa_update_state(ctx);
    }
 
    if (ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
@@ -198,6 +198,10 @@ _mesa_CopyPixels( GLint srcx, GLint srcy, GLsizei width, GLsizei height,
 {
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
+
+   if (ctx->NewState) {
+      _mesa_update_state(ctx);
+   }
 
    if (ctx->FragmentProgram.Enabled && !ctx->FragmentProgram._Enabled) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
@@ -247,10 +251,6 @@ _mesa_CopyPixels( GLint srcx, GLint srcy, GLsizei width, GLsizei height,
    default:
       _mesa_error(ctx, GL_INVALID_ENUM, "glCopyPixels");
       return;
-   }
-
-   if (ctx->NewState) {
-      _mesa_update_state(ctx);
    }
 
    if (ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT ||
@@ -304,13 +304,13 @@ _mesa_ReadPixels( GLint x, GLint y, GLsizei width, GLsizei height,
       return;
    }
 
+   if (ctx->NewState)
+      _mesa_update_state(ctx);
+
    if (error_check_format_type(ctx, format, type, GL_FALSE)) {
       /* found an error */
       return;
    }
-
-   if (ctx->NewState)
-      _mesa_update_state(ctx);
 
    if (ctx->ReadBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
       _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,

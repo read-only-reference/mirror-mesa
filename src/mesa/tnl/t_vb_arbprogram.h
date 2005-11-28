@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
- * Copyright (C) 1999-2004  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -36,9 +36,9 @@
 
 /* New, internal instructions:
  */
-#define RSW        (VP_MAX_OPCODE)
-#define MSK        (VP_MAX_OPCODE+1)
-#define REL        (VP_MAX_OPCODE+2)
+#define RSW        (MAX_OPCODE)
+#define MSK        (MAX_OPCODE+1)
+#define REL        (MAX_OPCODE+2)
 
 /**
  * Register files for vertex programs
@@ -71,7 +71,7 @@
 #define REG_INVALID ~0
 
 /* ARB_vp instructions are broken down into one or more of the
- * following micro-instructions, each representable in a 32 bit packed
+ * following micro-instructions, each representable in a 64 bit packed
  * structure.
  */
 struct reg {
@@ -82,17 +82,18 @@ struct reg {
 
 union instruction {
    struct {
-      GLuint opcode:6;
+      GLuint opcode:7;
       GLuint dst:5;
       GLuint file0:2;
       GLuint idx0:7;
       GLuint file1:2;
       GLuint idx1:7;
-      GLuint pad:3;
+      GLuint pad:2;
+      GLuint pad2;
    } alu;
 
    struct {
-      GLuint opcode:6;
+      GLuint opcode:7;
       GLuint dst:5;
       GLuint file0:2;
       GLuint idx0:7;
@@ -101,15 +102,16 @@ union instruction {
    } rsw;
 
    struct {
-      GLuint opcode:6;
+      GLuint opcode:7;
       GLuint dst:5;
       GLuint file:2;
       GLuint idx:7;
       GLuint mask:4;
-      GLuint pad:1;
+      GLuint pad:7;
+      GLuint pad2;
    } msk;
 
-   GLuint dword;
+   long long dword;
 };
 
 
@@ -149,7 +151,7 @@ struct output {
 #endif
 
 
-/*!
+/**
  * Private storage for the vertex program pipeline stage.
  */
 struct arb_vp_machine {
@@ -158,7 +160,7 @@ struct arb_vp_machine {
    struct input input[_TNL_ATTRIB_MAX];
    GLuint nr_inputs;
 
-   struct output output[15];
+   struct output output[VERT_RESULT_MAX];
    GLuint nr_outputs;
 
    GLvector4f attribs[VERT_RESULT_MAX]; /**< result vectors. */
@@ -169,7 +171,6 @@ struct arb_vp_machine {
    GLuint vtx_nr;		/**< loop counter */
 
    struct vertex_buffer *VB;
-   GLcontext *ctx;
 
    GLshort fpucntl_rnd_neg;	/* constant value */
    GLshort fpucntl_restore;	/* constant value */
