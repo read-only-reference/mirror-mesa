@@ -450,11 +450,6 @@ struct vertex_buffer
 
    /* Inputs to the vertex program stage */
    GLvector4f *AttribPtr[_TNL_ATTRIB_MAX];      /* GL_NV_vertex_program */
-
-   GLuint LastClipped;
-   /* Private data from _tnl_render_stage that has no business being
-    * in this struct.
-    */
 };
 
 
@@ -568,7 +563,7 @@ struct tnl_clipspace_fastpath {
    GLuint attr_count;
    GLboolean match_strides;
 
-   struct {
+   struct attr_type {
       GLuint format;
       GLuint size;
       GLuint stride;

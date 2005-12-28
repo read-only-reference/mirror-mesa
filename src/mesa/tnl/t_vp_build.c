@@ -514,7 +514,7 @@ static void emit_op3fn(struct tnl_program *p,
       return;
    }
       
-   inst->Opcode = op; 
+   inst->Opcode = (enum prog_opcode) op; 
    inst->StringPos = 0;
    inst->Data = 0;
    
@@ -1406,7 +1406,7 @@ create_new_program( const struct state_key *key,
       p.temp_reserved = ~((1<<max_temps)-1);
 
    p.program->Base.Instructions
-      = MALLOC(sizeof(struct prog_instruction) * MAX_INSN);
+      = (struct prog_instruction*) MALLOC(sizeof(struct prog_instruction) * MAX_INSN);
    p.program->Base.String = 0;
    p.program->Base.NumInstructions =
    p.program->Base.NumTemporaries =
@@ -1441,7 +1441,7 @@ static void rehash( struct tnl_cache *cache )
    GLuint size, i;
 
    size = cache->size * 3;
-   items = MALLOC(size * sizeof(*items));
+   items = (struct tnl_cache_item**) _mesa_malloc(size * sizeof(*items));
    _mesa_memset(items, 0, size * sizeof(*items));
 
    for (i = 0; i < cache->size; i++)
@@ -1461,7 +1461,7 @@ static void cache_item( struct tnl_cache *cache,
 			void *key,
 			void *data )
 {
-   struct tnl_cache_item *c = MALLOC(sizeof(*c));
+   struct tnl_cache_item *c = (struct tnl_cache_item*) _mesa_malloc(sizeof(*c));
    c->hash = hash;
    c->key = key;
    c->data = data;
@@ -1516,6 +1516,9 @@ void _tnl_UpdateFixedFunctionProgram( GLcontext *ctx )
 	 create_new_program( key, ctx->_TnlProgram, 
 			     ctx->Const.VertexProgram.MaxTemps );
 
+	 if (ctx->Driver.ProgramStringNotify)
+	    ctx->Driver.ProgramStringNotify( ctx, GL_VERTEX_PROGRAM_ARB, 
+					     &ctx->_TnlProgram->Base );
 
 	 cache_item(tnl->vp_cache, hash, key, ctx->_TnlProgram );
       }
@@ -1533,7 +1536,8 @@ void _tnl_UpdateFixedFunctionProgram( GLcontext *ctx )
    /* Tell the driver about the change.  Could define a new target for
     * this?
     */
-   if (ctx->VertexProgram._Current != prev) 
+   if (ctx->VertexProgram._Current != prev &&
+       ctx->Driver.BindProgram) 
       ctx->Driver.BindProgram(ctx, GL_VERTEX_PROGRAM_ARB, (struct program *)
 			      ctx->VertexProgram._Current);   
 }

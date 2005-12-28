@@ -110,8 +110,6 @@ union instruction {
       GLuint pad:7;
       GLuint pad2;
    } msk;
-
-   long long dword;
 };
 
 

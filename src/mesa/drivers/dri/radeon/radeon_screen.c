@@ -574,6 +574,7 @@ radeonCreateScreen( __DRIscreenPrivate *sPriv )
    case PCI_CHIP_R420_JM:
    case PCI_CHIP_R420_JO:
    case PCI_CHIP_R420_JP:
+   case PCI_CHIP_RV410_5E4B:
       screen->chip_family = CHIP_FAMILY_R420;
       screen->chip_flags = RADEON_CHIPSET_TCL;
       break;
@@ -920,7 +921,7 @@ __driCreateNewScreen_20050727( __DRInativeDisplay *dpy,
    static const char *driver_name = "R300";
    static const __DRIutilversion2 ddx_expected = { 4, 5, 0, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
-   static const __DRIversion drm_expected = { 1, 17, 0 };
+   static const __DRIversion drm_expected = { 1, 20, 0 };
 #endif
 
    dri_interface = interface;

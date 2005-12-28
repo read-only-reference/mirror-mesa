@@ -2,11 +2,6 @@
 #define EGLSCREEN_INCLUDED
 
 
-/* NOTE: there is no public EGLScreen type, we refers to screens with
- * an integer.
- */
-
-
 /**
  * Per-screen information.
  * Note that an EGL screen doesn't have a size.  A screen may be set to
@@ -22,11 +17,17 @@ struct _egl_screen
 
    _EGLMode *CurrentMode;
    _EGLSurface *CurrentSurface;
-   EGLint OriginX, OriginY;
+
+   EGLint OriginX, OriginY; /**< Origin of scan-out region w.r.t. surface */
+   EGLint StepX, StepY;     /**< Screen position/origin granularity */
 
    EGLint NumModes;
-   _EGLMode *Modes;  /* array [NumModes] */
+   _EGLMode *Modes;  /**< array [NumModes] */
 };
+
+
+extern EGLScreenMESA
+_eglAllocScreenHandle(void);
 
 
 extern void
@@ -50,7 +51,7 @@ _eglCreateScreenSurfaceMESA(_EGLDriver *drv, EGLDisplay dpy, EGLConfig config, c
 
 
 extern EGLBoolean
-_eglShowSurfaceMESA(_EGLDriver *drv, EGLDisplay dpy, EGLScreenMESA screen, EGLSurface surface, EGLModeMESA mode);
+_eglShowScreenSurfaceMESA(_EGLDriver *drv, EGLDisplay dpy, EGLScreenMESA screen, EGLSurface surface, EGLModeMESA mode);
 
 
 extern EGLBoolean

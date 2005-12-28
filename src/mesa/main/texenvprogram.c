@@ -277,12 +277,9 @@ struct texenv_fragment_program {
    GLcontext *ctx;
    struct state_key *state;
 
-   GLuint alu_temps;		/* Track texture indirections, see spec. */
-   GLuint temps_output;		/* Track texture indirections, see spec. */
-
-   GLuint temp_in_use;		/* Tracks temporary regs which are in
-				 * use.
-				 */
+   GLbitfield alu_temps;	/* Track texture indirections, see spec. */
+   GLbitfield temps_output;	/* Track texture indirections, see spec. */
+   GLbitfield temp_in_use;	/* Tracks temporary regs which are in use. */
    GLboolean error;
 
    struct ureg src_texture[MAX_TEXTURE_UNITS];   
@@ -738,6 +735,8 @@ static struct ureg emit_combine( struct texenv_fragment_program *p,
    struct ureg tmp, half;
    GLuint i;
 
+   tmp = undef; /* silence warning (bug 5318) */
+
    for (i = 0; i < nr; i++)
       src[i] = emit_combine_source( p, mask, unit, opt[i].Source, opt[i].Operand );
 
@@ -998,7 +997,7 @@ create_new_program(struct state_key *key, GLcontext *ctx,
    p.program = program;
 
    p.program->Base.Instructions =
-      _mesa_malloc(sizeof(struct prog_instruction) * MAX_INSTRUCTIONS);
+      (struct prog_instruction*) _mesa_malloc(sizeof(struct prog_instruction) * MAX_INSTRUCTIONS);
    p.program->Base.NumInstructions = 0;
    p.program->Base.Target = GL_FRAGMENT_PROGRAM_ARB;
    p.program->NumTexIndirections = 1;	/* correct? */

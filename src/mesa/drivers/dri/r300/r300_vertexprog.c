@@ -463,7 +463,6 @@ void translate_vertex_shader(struct r300_vertex_program *vp)
 		vp->outputs[i] = -1;
 	
 	assert(mesa_vp->Base.OutputsWritten & (1 << VERT_RESULT_HPOS));
-	assert(mesa_vp->Base.OutputsWritten & (1 << VERT_RESULT_COL0));
 	
 	/* Assign outputs */
 	if(mesa_vp->Base.OutputsWritten & (1 << VERT_RESULT_HPOS))
@@ -475,12 +474,12 @@ void translate_vertex_shader(struct r300_vertex_program *vp)
 	if(mesa_vp->Base.OutputsWritten & (1 << VERT_RESULT_COL0))
 		vp->outputs[VERT_RESULT_COL0] = cur_reg++;
 	
+	if(mesa_vp->Base.OutputsWritten & (1 << VERT_RESULT_COL1))
+		vp->outputs[VERT_RESULT_COL1] = cur_reg++;
+	
 #if 0 /* Not supported yet */
 	if(mesa_vp->Base.OutputsWritten & (1 << VERT_RESULT_BFC0))
 		vp->outputs[VERT_RESULT_BFC0] = cur_reg++;
-	
-	if(mesa_vp->Base.OutputsWritten & (1 << VERT_RESULT_COL1))
-		vp->outputs[VERT_RESULT_COL1] = cur_reg++;
 	
 	if(mesa_vp->Base.OutputsWritten & (1 << VERT_RESULT_BFC1))
 		vp->outputs[VERT_RESULT_BFC1] = cur_reg++;

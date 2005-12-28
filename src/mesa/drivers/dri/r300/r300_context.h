@@ -52,7 +52,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //#define RADEON_VTXFMT_A
 //#define HW_VBOS
 //#define OPTIMIZE_ELTS
-//#define CB_DPATH
+#define CB_DPATH
 
 struct r300_context;
 typedef struct r300_context r300ContextRec;
@@ -177,10 +177,11 @@ struct r300_tex_obj {
 	/* Six, for the cube faces */
 
 
+	GLuint pitch; /* this isn't sent to hardware just used in calculations */
 	/* hardware register values */
 	/* Note that R200 has 8 registers per texture and R300 only 7 */
 	GLuint filter;
-	GLuint pitch; /* one of the unknown registers.. unknown 1 ?*/
+	GLuint pitch_reg;
 	GLuint size;	/* npot only */
 	GLuint format;
 	GLuint offset;	/* Image location in the card's address space.
@@ -481,6 +482,7 @@ struct r300_hw_state {
 		struct r300_state_atom unknown1;
 		struct r300_state_atom size;
 		struct r300_state_atom format;
+		struct r300_state_atom pitch;
 		struct r300_state_atom offset;
 		struct r300_state_atom unknown4;
 		struct r300_state_atom border_color;
@@ -584,8 +586,10 @@ extern int hw_tcl_on;
 
 //#define TMU_ENABLED(ctx, unit) (hw_tcl_on ? ctx->Texture.Unit[unit]._ReallyEnabled && (OutputsWritten & (1<<(VERT_RESULT_TEX0+(unit)))) : 
 //	(r300->state.render_inputs & (_TNL_BIT_TEX0<<(unit))))
-#define TMU_ENABLED(ctx, unit) (hw_tcl_on ? ctx->Texture.Unit[unit]._ReallyEnabled && OutputsWritten & (1<<(VERT_RESULT_TEX0+(unit))) : \
-	ctx->Texture.Unit[unit]._ReallyEnabled && r300->state.render_inputs & (_TNL_BIT_TEX0<<(unit)))
+//#define TMU_ENABLED(ctx, unit) (hw_tcl_on ? ctx->Texture.Unit[unit]._ReallyEnabled && OutputsWritten & (1<<(VERT_RESULT_TEX0+(unit))) : 
+//	ctx->Texture.Unit[unit]._ReallyEnabled && r300->state.render_inputs & (_TNL_BIT_TEX0<<(unit)))
+
+#define TMU_ENABLED(ctx, unit) (ctx->Texture.Unit[unit]._ReallyEnabled)
 
 /* r300_vertex_shader_state and r300_vertex_program should probably be merged together someday.
  * Keeping them them seperate for now should ensure fixed pipeline keeps functioning properly.

@@ -67,6 +67,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r300_tex.h"
 #include "r300_maos.h"
 
+#include "drirenderbuffer.h"
+
 static void r300AlphaFunc(GLcontext * ctx, GLenum func, GLfloat ref)
 {
 	r300ContextPtr rmesa = R300_CONTEXT(ctx);
@@ -454,10 +456,10 @@ static void r300Enable(GLcontext* ctx, GLenum cap, GLboolean state)
 		break;
 
 	case GL_STENCIL_TEST:
-		WARN_ONCE("TODO - double side stencil !\n");
 		if (r300->state.stencil.hw_stencil) {
 			R300_STATECHANGE(r300, zs);
 			if (state) {
+				WARN_ONCE("TODO - double side stencil !\n");
 				r300->hw.zs.cmd[R300_ZS_CNTL_0] |=
 				    R300_RB3D_STENCIL_ENABLE;
 			} else {
@@ -826,7 +828,7 @@ static void r300ClearStencil(GLcontext * ctx, GLint s)
 #define SUBPIXEL_X 0.125
 #define SUBPIXEL_Y 0.125
 
-static void r300UpdateWindow(GLcontext * ctx)
+void r300UpdateWindow(GLcontext * ctx)
 {
 	r300ContextPtr rmesa = R300_CONTEXT(ctx);
 	__DRIdrawablePrivate *dPriv = rmesa->radeon.dri.drawable;
@@ -866,6 +868,88 @@ static void r300Viewport(GLcontext * ctx, GLint x, GLint y,
 static void r300DepthRange(GLcontext * ctx, GLclampd nearval, GLclampd farval)
 {
 	r300UpdateWindow(ctx);
+}
+
+void r300UpdateViewportOffset( GLcontext *ctx )
+{
+	r300ContextPtr rmesa = R300_CONTEXT(ctx);
+	__DRIdrawablePrivate *dPriv = ((radeonContextPtr)rmesa)->dri.drawable;
+	GLfloat xoffset = (GLfloat)dPriv->x;
+	GLfloat yoffset = (GLfloat)dPriv->y + dPriv->h;
+	const GLfloat *v = ctx->Viewport._WindowMap.m;
+
+	GLfloat tx = v[MAT_TX] + xoffset + SUBPIXEL_X;
+	GLfloat ty = (- v[MAT_TY]) + yoffset + SUBPIXEL_Y;
+
+	if ( rmesa->hw.vpt.cmd[VPT_SE_VPORT_XOFFSET] != *(GLuint *)&tx ||
+		rmesa->hw.vpt.cmd[VPT_SE_VPORT_YOFFSET] != *(GLuint *)&ty )
+	{
+	/* Note: this should also modify whatever data the context reset
+	 * code uses...
+	 */
+	rmesa->hw.vpt.cmd[VPT_SE_VPORT_XOFFSET] = *(GLuint *)&tx;
+	rmesa->hw.vpt.cmd[VPT_SE_VPORT_YOFFSET] = *(GLuint *)&ty;
+      
+	}
+
+	radeonUpdateScissor( ctx );
+}
+
+/**
+ * Tell the card where to render (offset, pitch).
+ * Effected by glDrawBuffer, etc
+ */
+void
+r300UpdateDrawBuffer(GLcontext *ctx)
+{
+	r300ContextPtr rmesa = R300_CONTEXT(ctx);
+	r300ContextPtr r300 = rmesa;
+	struct gl_framebuffer *fb = ctx->DrawBuffer;
+	driRenderbuffer *drb;
+
+	if (fb->_ColorDrawBufferMask[0] == BUFFER_BIT_FRONT_LEFT) {
+		/* draw to front */
+		drb = (driRenderbuffer *) fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer;
+	}
+	else if (fb->_ColorDrawBufferMask[0] == BUFFER_BIT_BACK_LEFT) {
+		/* draw to back */
+		drb = (driRenderbuffer *) fb->Attachment[BUFFER_BACK_LEFT].Renderbuffer;
+	}
+	else {
+		/* drawing to multiple buffers, or none */
+		return;
+	}
+
+	assert(drb);
+	assert(drb->flippedPitch);
+
+
+	R300_STATECHANGE( rmesa, cb );
+	
+	r300->hw.cb.cmd[R300_CB_OFFSET] = drb->flippedOffset + //r300->radeon.state.color.drawOffset +
+		r300->radeon.radeonScreen->fbLocation;
+	r300->hw.cb.cmd[R300_CB_PITCH] = drb->flippedPitch;//r300->radeon.state.color.drawPitch;
+	
+	if (r300->radeon.radeonScreen->cpp == 4)
+		r300->hw.cb.cmd[R300_CB_PITCH] |= R300_COLOR_FORMAT_ARGB8888;
+	else
+		r300->hw.cb.cmd[R300_CB_PITCH] |= R300_COLOR_FORMAT_RGB565;
+	
+	if (r300->radeon.sarea->tiling_enabled)
+		r300->hw.cb.cmd[R300_CB_PITCH] |= R300_COLOR_TILE_ENABLE;
+#if 0
+	R200_STATECHANGE( rmesa, ctx );
+
+	/* Note: we used the (possibly) page-flipped values */
+	rmesa->hw.ctx.cmd[CTX_RB3D_COLOROFFSET]
+		= ((drb->flippedOffset + rmesa->r200Screen->fbLocation)
+		& R200_COLOROFFSET_MASK);
+	rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] = drb->flippedPitch;
+	
+	if (rmesa->sarea->tiling_enabled) {
+		rmesa->hw.ctx.cmd[CTX_RB3D_COLORPITCH] |= R200_COLOR_TILE_ENABLE;
+	}
+#endif
 }
 
 /* =============================================================
@@ -1009,16 +1093,13 @@ void r300_setup_textures(GLcontext *ctx)
 	struct r300_tex_obj *t;
 	r300ContextPtr r300 = R300_CONTEXT(ctx);
 	int max_texture_unit=-1; /* -1 translates into no setup costs for fields */
-	GLuint OutputsWritten;
-	
-	if(hw_tcl_on)
-		OutputsWritten = CURRENT_VERTEX_SHADER(ctx)->Base.OutputsWritten;
 
 	R300_STATECHANGE(r300, txe);
 	R300_STATECHANGE(r300, tex.filter);
 	R300_STATECHANGE(r300, tex.unknown1);
 	R300_STATECHANGE(r300, tex.size);
 	R300_STATECHANGE(r300, tex.format);
+	R300_STATECHANGE(r300, tex.pitch);
 	R300_STATECHANGE(r300, tex.offset);
 	R300_STATECHANGE(r300, tex.unknown4);
 	R300_STATECHANGE(r300, tex.border_color);
@@ -1070,6 +1151,7 @@ void r300_setup_textures(GLcontext *ctx)
 			r300->hw.tex.size.cmd[R300_TEX_VALUE_0+i]=t->size;
 			r300->hw.tex.format.cmd[R300_TEX_VALUE_0+i]=t->format;
 			//fprintf(stderr, "t->format=%08x\n", t->format);
+			r300->hw.tex.pitch.cmd[R300_TEX_VALUE_0+i]=t->pitch_reg;
 			r300->hw.tex.offset.cmd[R300_TEX_VALUE_0+i]=t->offset;
 			r300->hw.tex.unknown4.cmd[R300_TEX_VALUE_0+i]=0x0;
 			r300->hw.tex.border_color.cmd[R300_TEX_VALUE_0+i]=t->pp_border_color;
@@ -1080,6 +1162,7 @@ void r300_setup_textures(GLcontext *ctx)
 	((drm_r300_cmd_header_t*)r300->hw.tex.unknown1.cmd)->packet0.count = max_texture_unit+1;
 	((drm_r300_cmd_header_t*)r300->hw.tex.size.cmd)->packet0.count = max_texture_unit+1;
 	((drm_r300_cmd_header_t*)r300->hw.tex.format.cmd)->packet0.count = max_texture_unit+1;
+	((drm_r300_cmd_header_t*)r300->hw.tex.pitch.cmd)->packet0.count = max_texture_unit+1;
 	((drm_r300_cmd_header_t*)r300->hw.tex.offset.cmd)->packet0.count = max_texture_unit+1;
 	((drm_r300_cmd_header_t*)r300->hw.tex.unknown4.cmd)->packet0.count = max_texture_unit+1;
 	((drm_r300_cmd_header_t*)r300->hw.tex.border_color.cmd)->packet0.count = max_texture_unit+1;
@@ -1149,10 +1232,9 @@ void r300_setup_rs_unit(GLcontext *ctx)
 			if (OutputsWritten & (hw_tcl_on ? (1 << (VERT_RESULT_TEX0+i)) : (_TNL_BIT_TEX0<<i))) {
 				vp_reg++;
 			} else {
-				/* Unsure of how to handle this situation, for now print errors and
-				 * the program will just recieve bogus data
-				 */
+				/* Passing invalid data here can lock the GPU. */
 				fprintf(stderr, "fragprog wants coords for tex%d, vp doesn't provide them!\n", i);
+				exit(-1);
 			}
 			InputsRead &= ~(FRAG_BIT_TEX0<<i);
 			fp_reg++;
@@ -1160,8 +1242,10 @@ void r300_setup_rs_unit(GLcontext *ctx)
 	}
 
 	if (InputsRead & FRAG_BIT_COL0) {
-		if (!(OutputsWritten & (hw_tcl_on ? (1<<VERT_RESULT_COL0) : _TNL_BIT_COLOR0)))
+		if (!(OutputsWritten & (hw_tcl_on ? (1<<VERT_RESULT_COL0) : _TNL_BIT_COLOR0))) {
 			fprintf(stderr, "fragprog wants col0, vp doesn't provide it\n");
+			exit(-1);
+		}
 
 		r300->hw.rr.cmd[R300_RR_ROUTE_0] |= 0
 				| R300_RS_ROUTE_0_COLOR
@@ -1171,14 +1255,24 @@ void r300_setup_rs_unit(GLcontext *ctx)
 	}
 	
 	if (InputsRead & FRAG_BIT_COL1) {
-		if (!(OutputsWritten & (hw_tcl_on ? (1<<VERT_RESULT_COL1) : _TNL_BIT_COLOR1)))
+		if (!(OutputsWritten & (hw_tcl_on ? (1<<VERT_RESULT_COL1) : _TNL_BIT_COLOR1))) {
 			fprintf(stderr, "fragprog wants col1, vp doesn't provide it\n");
+			exit(-1);
+		}
 
 		r300->hw.rr.cmd[R300_RR_ROUTE_1] |= R300_RS_ROUTE_1_UNKNOWN11
 				| R300_RS_ROUTE_1_COLOR1
 				| (fp_reg++ << R300_RS_ROUTE_1_COLOR1_DEST_SHIFT);
 		InputsRead &= ~FRAG_BIT_COL1;
 		if (high_rr < 1) high_rr = 1;
+		col_interp_nr++;
+	}
+	
+	/* Need at least one. This might still lock as the values are undefined... */
+	if (in_texcoords == 0 && col_interp_nr == 0) {
+		r300->hw.rr.cmd[R300_RR_ROUTE_0] |= 0
+				| R300_RS_ROUTE_0_COLOR
+				| (fp_reg++ << R300_RS_ROUTE_0_COLOR_DEST_SHIFT);
 		col_interp_nr++;
 	}
 	
@@ -1573,6 +1667,36 @@ void r300UpdateShaderStates(r300ContextPtr rmesa)
 #ifdef CB_DPATH
 	r300UpdateTextureState(ctx);
 #endif
+
+#if 0
+#define B_FLAG(x) ((x)?1:0)
+
+	if(hw_tcl_on){
+		int i;
+		GLuint InputsRead;
+		GLuint OutputsWritten;
+		
+		InputsRead = ctx->FragmentProgram._Current->Base.InputsRead;
+		OutputsWritten = CURRENT_VERTEX_SHADER(ctx)->Base.OutputsWritten;
+		
+		for (i=0;i<ctx->Const.MaxTextureUnits;i++) {
+			/*if(B_FLAG(OutputsWritten & (1 << (VERT_RESULT_TEX0+i))) != B_FLAG(InputsRead & (FRAG_BIT_TEX0<<i))){
+				fprintf(stderr, "vp_out != fp_in fails for unit %d\n", i);
+				exit(1);
+			}*/
+			/*
+			if(B_FLAG(ctx->Texture.Unit[i]._ReallyEnabled) != B_FLAG(InputsRead & (FRAG_BIT_TEX0<<i))){
+				fprintf(stderr, "re != fp_in fails for unit %d\n", i);
+				exit(1);
+			}
+			
+			if(B_FLAG(ctx->Texture.Unit[i]._ReallyEnabled) != B_FLAG(OutputsWritten & (1 << (VERT_RESULT_TEX0+i)))){
+				fprintf(stderr, "re != vp_out fails for unit %d\n", i);
+				exit(1);
+			}*/
+		}
+	}
+#endif
 	
 	r300_setup_textures(ctx);
 	r300_setup_rs_unit(ctx);
@@ -1872,6 +1996,9 @@ static void r300InvalidateState(GLcontext * ctx, GLuint new_state)
 	_tnl_InvalidateState(ctx, new_state);
 	_ae_invalidate_state(ctx, new_state);
 
+	if (new_state & (_NEW_BUFFERS | _NEW_COLOR | _NEW_PIXEL)) {
+		r300UpdateDrawBuffer(ctx);
+	}
 #ifndef CB_DPATH
 	/* Go inefficiency! */
 	r300ResetHwState(r300);
@@ -2044,7 +2171,7 @@ void r300ResetHwState(r300ContextPtr r300)
 					     (6 << R300_POINTSIZE_Y_SHIFT);
 #endif
 
-	r300->hw.unk4230.cmd[1] = 0x01800000;//18000006;
+	r300->hw.unk4230.cmd[1] = 0x18000006;
 	r300->hw.unk4230.cmd[2] = 0x00020006;
 	r300->hw.unk4230.cmd[3] = r300PackFloat32(1.0 / 192.0);
 

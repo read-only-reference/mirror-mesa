@@ -1237,7 +1237,11 @@ _mesa_initialize_context( GLcontext *ctx,
 #endif
 
    ctx->_MaintainTexEnvProgram = (_mesa_getenv("MESA_TEX_PROG") != NULL);
+   ctx->_UseTexEnvProgram = ctx->_MaintainTexEnvProgram;
+
    ctx->_MaintainTnlProgram = (_mesa_getenv("MESA_TNL_PROG") != NULL);
+   if (ctx->_MaintainTnlProgram)
+      ctx->_MaintainTexEnvProgram = 1; /* this is required... */
 
    ctx->FirstTimeCurrent = GL_TRUE;
 
@@ -1607,8 +1611,10 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
             /* set initial viewport and scissor size now */
             _mesa_set_viewport(newCtx, 0, 0,
                                drawBuffer->Width, drawBuffer->Height);
-            newCtx->Scissor.Width = drawBuffer->Width;
-            newCtx->Scissor.Height = drawBuffer->Height;
+
+	    _mesa_set_scissor(newCtx, 0, 0, 
+			      drawBuffer->Width,
+			      drawBuffer->Height );
          }
       }
 

@@ -42,6 +42,23 @@ typedef struct radeon_driver
    GLuint radeonStuff;
 } radeonDriver;
 
+static int
+RADEONSetParam(driDisplay  *disp, int param, int value)
+{
+   drm_radeon_setparam_t sp;
+   int ret;
+
+   memset(&sp, 0, sizeof(sp));
+   sp.param = param;
+   sp.value = value;
+
+   if ((ret=drmCommandWrite(disp->drmFD, DRM_RADEON_SETPARAM, &sp, sizeof(sp)))) {
+     fprintf(stderr,"Set param failed\n", ret);
+      return -1;
+   }
+
+   return 0;
+}
 
 static int
 RADEONCheckDRMVersion(driDisplay *disp, RADEONInfoPtr info)
@@ -52,9 +69,9 @@ RADEONCheckDRMVersion(driDisplay *disp, RADEONInfoPtr info)
    if (version) {
       int req_minor, req_patch;
 
-      /* Need 1.8.x for proper cleanup-on-client-exit behaviour.
+      /* Need 1.21.x for card type detection getparam
        */
-      req_minor = 8;
+      req_minor = 21;
       req_patch = 0;
 
       if (version->version_major != 1 ||
@@ -327,13 +344,17 @@ RADEONMemoryInit(driDisplay *disp, RADEONInfoPtr info)
                               + RADEON_BUFFER_ALIGN)
                              & ~RADEON_BUFFER_ALIGN);
    int        l;
+   int        pcie_gart_table_size = 0;
 
    info->frontOffset = 0;
    info->frontPitch = disp->virtualWidth;
 
+   if (disp->card_type==RADEON_CARD_PCIE)
+     pcie_gart_table_size  = RADEON_PCIGART_TABLE_SIZE;
+
    /* Front, back and depth buffers - everything else texture??
     */
-   info->textureSize = disp->fbSize - 2 * bufferSize - depthSize;
+   info->textureSize = disp->fbSize - pcie_gart_table_size - 2 * bufferSize - depthSize;
 
    if (info->textureSize < 0)
       return 0;
@@ -357,7 +378,7 @@ RADEONMemoryInit(driDisplay *disp, RADEONInfoPtr info)
    }
 
    /* Reserve space for textures */
-   info->textureOffset = ((disp->fbSize - info->textureSize +
+   info->textureOffset = ((disp->fbSize - pcie_gart_table_size - info->textureSize +
                            RADEON_BUFFER_ALIGN) &
                           ~RADEON_BUFFER_ALIGN);
 
@@ -374,6 +395,8 @@ RADEONMemoryInit(driDisplay *disp, RADEONInfoPtr info)
                        ~RADEON_BUFFER_ALIGN);
    info->backPitch = disp->virtualWidth;
 
+   if (pcie_gart_table_size)
+     info->pcieGartTableOffset = disp->fbSize - pcie_gart_table_size;
 
    fprintf(stderr,
            "Will use back buffer at offset 0x%x, pitch %d\n",
@@ -384,6 +407,12 @@ RADEONMemoryInit(driDisplay *disp, RADEONInfoPtr info)
    fprintf(stderr,
            "Will use %d kb for textures at offset 0x%x\n",
            info->textureSize/1024, info->textureOffset);
+   if (pcie_gart_table_size)
+   { 
+     fprintf(stderr,
+	     "Will use %d kb for PCIE GART Table at offset 0x%x\n",
+	     pcie_gart_table_size/1024, info->pcieGartTableOffset);
+   }
 
    /* XXX I don't think these are needed. */
 #if 0
@@ -396,6 +425,9 @@ RADEONMemoryInit(driDisplay *disp, RADEONInfoPtr info)
    info->depthPitchOffset = (((info->depthPitch * cpp / 64) << 22) |
                              (info->depthOffset >> 10));
 #endif
+
+   if (pcie_gart_table_size)
+     RADEONSetParam(disp, RADEON_SETPARAM_PCIGART_LOCATION, info->pcieGartTableOffset);
 
    return 1;
 }
@@ -421,7 +453,9 @@ static int RADEONDRIKernelInit( driDisplay *disp,
 
    memset(&drmInfo, 0, sizeof(drmInfo));
 
-   if ( (info->ChipFamily == CHIP_FAMILY_R200) ||
+   if ( (info->ChipFamily >= CHIP_FAMILY_R300) )
+      drmInfo.func            = RADEON_INIT_R300_CP;
+   else if ( (info->ChipFamily == CHIP_FAMILY_R200) ||
         (info->ChipFamily == CHIP_FAMILY_RV250) ||
         (info->ChipFamily == CHIP_FAMILY_M9) ||
         (info->ChipFamily == CHIP_FAMILY_RV280) )
@@ -479,7 +513,7 @@ static int RADEONDRIBufInit( driDisplay *disp, RADEONInfoPtr info )
    info->bufNumBufs = drmAddBufs(disp->drmFD,
                                  info->bufMapSize / RADEON_BUFFER_SIZE,
                                  RADEON_BUFFER_SIZE,
-                                 disp->isPCI ? DRM_SG_BUFFER : DRM_AGP_BUFFER,
+				 (disp->card_type!=RADEON_CARD_AGP) ? DRM_SG_BUFFER : DRM_AGP_BUFFER,
                                  info->bufStart);
 
    if (info->bufNumBufs <= 0) {
@@ -543,6 +577,22 @@ static void RADEONDRIAgpHeapInit(driDisplay *disp,
    }
 }
 
+static int RADEONGetCardType(driDisplay *disp, RADEONInfoPtr info)
+{
+   drm_radeon_getparam_t gp;  
+   int ret;
+ 
+   gp.param = RADEON_PARAM_CARD_TYPE;
+   gp.value = &disp->card_type;
+
+   ret=drmCommandWriteRead(disp->drmFD, DRM_RADEON_GETPARAM, &gp, sizeof(gp));
+   if (ret) {
+     fprintf(stderr, "drm_radeon_getparam_t (RADEON_PARAM_CARD_TYPE) : %d\n", ret);
+     return -1;
+   }
+
+   return disp->card_type;
+}
 
 /**
  * Called at the start of each server generation.
@@ -662,7 +712,7 @@ RADEONScreenInit( driDisplay *disp, RADEONInfoPtr info,
    pRADEONDRI->height            = disp->virtualHeight;
    pRADEONDRI->depth             = disp->bpp; /* XXX: depth */
    pRADEONDRI->bpp               = disp->bpp;
-   pRADEONDRI->IsPCI             = disp->isPCI;
+   pRADEONDRI->IsPCI             = (disp->card_type != RADEON_CARD_AGP);;
    pRADEONDRI->frontOffset       = info->frontOffset;
    pRADEONDRI->frontPitch        = info->frontPitch;
    pRADEONDRI->backOffset        = info->backOffset;
@@ -757,6 +807,10 @@ static int get_chipfamily_from_chipset( RADEONInfoPtr info )
         info->ChipFamily = CHIP_FAMILY_R300;
         break;
 
+    case PCI_CHIP_RV370_5460:
+        info->ChipFamily = CHIP_FAMILY_RV380;
+	break;
+
     default:
         /* Original Radeon/7200 */
         info->ChipFamily = CHIP_FAMILY_RADEON;
@@ -810,12 +864,14 @@ static int radeonInitFBDev( driDisplay *disp, RADEONDRIPtr pRADEONDRI )
       fprintf(stderr, "==> Verify PCI BusID is correct in miniglx.conf\n");
       return 0;
    }
+#if 0
    if (info->ChipFamily >= CHIP_FAMILY_R300) {
       fprintf(stderr,
               "Direct rendering not yet supported on "
               "Radeon 9700 and newer cards\n");
       return 0;
    }
+#endif
 
 #if 00
    /* don't seem to need this here */
@@ -827,7 +883,10 @@ static int radeonInitFBDev( driDisplay *disp, RADEONDRIPtr pRADEONDRI )
       return 0;
    }
 
-   if (disp->isPCI) {
+   if (RADEONGetCardType(disp, info)<0)
+      return 0;
+
+   if (disp->card_type!=RADEON_CARD_AGP) {
       /* Initialize PCI */
       if (!RADEONDRIPciInit(disp, info))
          return 0;
@@ -937,10 +996,10 @@ radeonFillInConfigs(_EGLDisplay *disp, unsigned pixel_bits,
  * If surface is EGL_NO_SURFACE, disable the screen's output.
  */
 static EGLBoolean
-radeonShowSurfaceMESA(_EGLDriver *drv, EGLDisplay dpy, EGLScreenMESA screen,
+radeonShowScreenSurfaceMESA(_EGLDriver *drv, EGLDisplay dpy, EGLScreenMESA screen,
                       EGLSurface surface, EGLModeMESA m)
 {
-   EGLBoolean b = _eglDRIShowSurfaceMESA(drv, dpy, screen, surface, m);
+   EGLBoolean b = _eglDRIShowScreenSurfaceMESA(drv, dpy, screen, surface, m);
    return b;
 }
 
@@ -983,6 +1042,10 @@ radeonInitialize(_EGLDriver *drv, EGLDisplay dpy, EGLint *major, EGLint *minor)
       return EGL_FALSE;
 
    framebuffer.base = display->pFB;
+   framebuffer.width = display->virtualWidth;
+   framebuffer.height = display->virtualHeight;
+   framebuffer.stride = display->virtualWidth;
+   framebuffer.size = display->fbSize;
    radeonInitFBDev( display, framebuffer.dev_priv );
 
    if (!_eglDRICreateDisplay(display, &framebuffer))
@@ -1019,7 +1082,7 @@ _eglMain(_EGLDisplay *dpy)
 
    /* then plug in our radeon-specific functions */
    radeon->Base.API.Initialize = radeonInitialize;
-   radeon->Base.API.ShowSurfaceMESA = radeonShowSurfaceMESA;
+   radeon->Base.API.ShowScreenSurfaceMESA = radeonShowScreenSurfaceMESA;
 
    return &radeon->Base;
 }

@@ -582,11 +582,11 @@ static void print_RSW( union instruction op )
 
 static void print_ALU( union instruction op )
 {
-   _mesa_printf("%s ", _mesa_opcode_string(op.alu.opcode));
+   _mesa_printf("%s ", _mesa_opcode_string((enum prog_opcode) op.alu.opcode));
    print_reg(0, op.alu.dst);
    _mesa_printf(", ");
    print_reg(op.alu.file0, op.alu.idx0);
-   if (_mesa_num_inst_src_regs(op.alu.opcode) > 1) {
+   if (_mesa_num_inst_src_regs((enum prog_opcode) op.alu.opcode) > 1) {
       _mesa_printf(", ");
       print_reg(op.alu.file1, op.alu.idx1);
    }
@@ -749,7 +749,7 @@ static void (* const opcode_func[MAX_OPCODE+3])(struct arb_vp_machine *, union i
 static union instruction *cvp_next_instruction( struct compilation *cp )
 {
    union instruction *op = cp->csr++;
-   op->dword = 0;
+   _mesa_bzero(op, sizeof(*op));
    return op;
 }
 
@@ -836,28 +836,29 @@ static struct reg cvp_emit_arg( struct compilation *cp,
    
    /* Emit any necessary swizzling.  
     */
-   rsw.dword = 0;
+   _mesa_bzero(&rsw, sizeof(rsw));
    rsw.rsw.neg = src->NegateBase ? WRITEMASK_XYZW : 0;
 
    /* we're expecting 2-bit swizzles below... */
+#if 1 /* XXX THESE ASSERTIONS CURRENTLY FAIL DURING GLEAN TESTS! */
    ASSERT(GET_SWZ(src->Swizzle, 0) < 4);
    ASSERT(GET_SWZ(src->Swizzle, 1) < 4);
    ASSERT(GET_SWZ(src->Swizzle, 2) < 4);
    ASSERT(GET_SWZ(src->Swizzle, 3) < 4);
-
+#endif
    rsw.rsw.swz = ((GET_SWZ(src->Swizzle, 0) << 0) |
 		  (GET_SWZ(src->Swizzle, 1) << 2) |
 		  (GET_SWZ(src->Swizzle, 2) << 4) |
 		  (GET_SWZ(src->Swizzle, 3) << 6));
 
-   noop.dword = 0;
+   _mesa_bzero(&noop, sizeof(noop));
    noop.rsw.neg = 0;
    noop.rsw.swz = RSW_NOOP;
 
-   if (rsw.dword != noop.dword) {
+   if (_mesa_memcmp(&rsw, &noop, sizeof(rsw)) !=0) {
       union instruction *op = cvp_next_instruction(cp);
       struct reg rsw_reg = cvp_make_reg(FILE_REG, REG_ARG0 + arg);
-      op->dword = rsw.dword;
+      *op = rsw;
       op->rsw.opcode = RSW;
       op->rsw.file0 = reg.file;
       op->rsw.idx0 = reg.idx;
@@ -900,7 +901,7 @@ static GLuint cvp_choose_result( struct compilation *cp,
       return REG_RES;
    }
    else {
-      fixup->dword = 0;
+      _mesa_bzero(fixup, sizeof(*fixup));
       cp->reg_active |= 1 << idx;
       return idx;
    }
@@ -955,8 +956,6 @@ static void cvp_emit_inst( struct compilation *cp,
    struct reg reg[3];
    GLuint result, nr_args, i;
 
-   assert(sizeof(*op) == sizeof(long long));
-
    /* Need to handle SWZ, ARL specially.
     */
    switch (inst->Opcode) {
@@ -985,7 +984,7 @@ static void cvp_emit_inst( struct compilation *cp,
 
       if (result == REG_RES) {
 	 op = cvp_next_instruction(cp);
-	 op->dword = fixup.dword;
+	 *op = fixup;
       }
       break;
 
@@ -1050,7 +1049,7 @@ static void cvp_emit_inst( struct compilation *cp,
 
       if (result == REG_RES) {
 	 op = cvp_next_instruction(cp);
-	 op->dword = fixup.dword;
+	 *op = fixup;
       }
       break;
    }
@@ -1074,7 +1073,7 @@ static void cvp_emit_inst( struct compilation *cp,
 
       if (result == REG_RES) {
 	 op = cvp_next_instruction(cp);
-	 op->dword = fixup.dword;
+	 *op = fixup;
       }      	 
       break;
    }
@@ -1082,7 +1081,7 @@ static void cvp_emit_inst( struct compilation *cp,
 
 static void free_tnl_data( struct vertex_program *program  )
 {
-   struct tnl_compiled_program *p = program->TnlData;
+   struct tnl_compiled_program *p = (struct tnl_compiled_program *) program->TnlData;
    if (p->compiled_func)
       _mesa_free((void *)p->compiled_func);
    _mesa_free(p);
@@ -1460,7 +1459,7 @@ static GLboolean init_vertex_program( GLcontext *ctx,
     */
    m->VB = VB;
 
-   m->File[0] = ALIGN_MALLOC(REG_MAX * sizeof(GLfloat) * 4, 16);
+   m->File[0] = (GLfloat(*)[4])ALIGN_MALLOC(REG_MAX * sizeof(GLfloat) * 4, 16);
 
    /* Initialize regs where necessary:
     */
