@@ -1,3 +1,28 @@
+/**************************************************************************
+
+Copyright (C) 2004-2005 Nicolai Haehnle et al.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+on the rights to use, copy, modify, merge, publish, distribute, sub
+license, and/or sell copies of the Software, and to permit persons to whom
+the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
+THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+**************************************************************************/
+
 #ifndef _R300_REG_H
 #define _R300_REG_H
 
@@ -429,6 +454,9 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 /* END */
 
 /* gap */
+/* Zero to flush caches. */
+#define R300_TX_CNTL                        0x4100
+
 /* The upper enable bits are guessed, based on fglrx reported limits. */
 #define R300_TX_ENABLE                      0x4104
 #       define R300_TX_ENABLE_0                  (1 << 0)
@@ -863,7 +891,9 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_PFS_NODE_TEX_OFFSET_MASK     (31 << 12)
 #       define R300_PFS_NODE_TEX_END_SHIFT       17
 #       define R300_PFS_NODE_TEX_END_MASK        (31 << 17)
-#       define R300_PFS_NODE_LAST_NODE           (1 << 22)
+/*#       define R300_PFS_NODE_LAST_NODE           (1 << 22) */
+#		define R300_PFS_NODE_OUTPUT_COLOR        (1 << 22)
+#		define R300_PFS_NODE_OUTPUT_DEPTH        (1 << 23)
 
 /* TEX
 // As far as I can tell, texture instructions cannot write into output
@@ -882,6 +912,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
  */
 #		define R300_FPITX_OPCODE_SHIFT			15
 #			define R300_FPITX_OP_TEX			1
+#			define R300_FPITX_OP_KIL			2
 #			define R300_FPITX_OP_TXP			3
 #			define R300_FPITX_OP_TXB			4
 
@@ -957,9 +988,11 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_FPI1_SRC2C_CONST             (1 << 17)
 #       define R300_FPI1_DSTC_SHIFT              18
 #       define R300_FPI1_DSTC_MASK               (31 << 18)
+#		define R300_FPI1_DSTC_REG_MASK_SHIFT     23
 #       define R300_FPI1_DSTC_REG_X              (1 << 23)
 #       define R300_FPI1_DSTC_REG_Y              (1 << 24)
 #       define R300_FPI1_DSTC_REG_Z              (1 << 25)
+#		define R300_FPI1_DSTC_OUTPUT_MASK_SHIFT  26
 #       define R300_FPI1_DSTC_OUTPUT_X           (1 << 26)
 #       define R300_FPI1_DSTC_OUTPUT_Y           (1 << 27)
 #       define R300_FPI1_DSTC_OUTPUT_Z           (1 << 28)
@@ -978,6 +1011,7 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #       define R300_FPI3_DSTA_MASK               (31 << 18)
 #       define R300_FPI3_DSTA_REG                (1 << 23)
 #       define R300_FPI3_DSTA_OUTPUT             (1 << 24)
+#		define R300_FPI3_DSTA_DEPTH              (1 << 27)
 
 #define R300_PFS_INSTR0_0                   0x48C0
 #       define R300_FPI0_ARGC_SRC0C_XYZ          0
@@ -1241,6 +1275,8 @@ I am fairly certain that they are correct unless stated otherwise in comments.
 #define R300_RB3D_ZSTENCIL_FORMAT                   0x4F10
 #	define R300_DEPTH_FORMAT_16BIT_INT_Z     (0 << 0)
 #	define R300_DEPTH_FORMAT_24BIT_INT_Z     (2 << 0)
+ /* 16 bit format or some aditional bit ? */
+#	define R300_DEPTH_FORMAT_UNK32          (32 << 0)
 
 /* gap */
 #define R300_RB3D_DEPTHOFFSET               0x4F20

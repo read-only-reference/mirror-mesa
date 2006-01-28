@@ -85,7 +85,6 @@ typedef struct r300_context *r300ContextPtr;
 
 typedef GLuint uint32_t;
 typedef GLubyte uint8_t;
-struct r300_fragment_program;
 
   /* We should probably change types within vertex_shader
       and pixel_shader structure later on */
@@ -584,6 +583,9 @@ extern int hw_tcl_on;
 
 #define CURRENT_VERTEX_SHADER(ctx) (ctx->VertexProgram._Current)
 
+/* Should but doesnt work */
+//#define CURRENT_VERTEX_SHADER(ctx) (R300_CONTEXT(ctx)->curr_vp)
+
 //#define TMU_ENABLED(ctx, unit) (hw_tcl_on ? ctx->Texture.Unit[unit]._ReallyEnabled && (OutputsWritten & (1<<(VERT_RESULT_TEX0+(unit)))) : 
 //	(r300->state.render_inputs & (_TNL_BIT_TEX0<<(unit))))
 //#define TMU_ENABLED(ctx, unit) (hw_tcl_on ? ctx->Texture.Unit[unit]._ReallyEnabled && OutputsWritten & (1<<(VERT_RESULT_TEX0+(unit))) : 
@@ -605,6 +607,9 @@ struct r300_vertex_program {
 	int num_temporaries; /* Number of temp vars used by program */
 	int inputs[VERT_ATTRIB_MAX];
 	int outputs[VERT_RESULT_MAX];
+	int native;
+	int ref_count;
+	int use_ref_count;
 };
 
 #if USE_ARB_F_P == 1
@@ -613,12 +618,46 @@ struct r300_vertex_program {
 #define PFS_MAX_TEX_INDIRECT 4
 #define PFS_NUM_TEMP_REGS	32
 #define PFS_NUM_CONST_REGS	32
+
+/* Tracking data for Mesa registers */
+struct reg_acc {
+       int reg;        /* Assigned hw temp */
+       unsigned int refcount; /* Number of uses by mesa program */
+};
+
+struct r300_pfs_compile_state {
+       int v_pos, s_pos;       /* highest ALU slots used */
+
+       /* Track some information gathered during opcode
+        * construction.
+        * 
+        * NOTE: Data is only set by the code, and isn't used yet.
+        */
+       struct {
+               int vsrc[3];
+               int ssrc[3];
+               int umask;
+       } slot[PFS_MAX_ALU_INST];
+
+       /* Used to map Mesa's inputs/temps onto hardware temps */
+       int temp_in_use;
+       struct reg_acc temps[PFS_NUM_TEMP_REGS];
+       struct reg_acc inputs[32]; /* don't actually need 32... */
+
+       /* Track usage of hardware temps, for register allocation,
+        * indirection detection, etc. */
+       int hwreg_in_use;
+       GLuint used_in_node;
+       GLuint dest_in_node;
+};
+
 struct r300_fragment_program {
 	struct fragment_program mesa_program;
 
 	GLcontext *ctx;
 	GLboolean translated;
 	GLboolean error;
+	struct r300_pfs_compile_state *cs;
 
 	struct {
 		int length;
@@ -633,14 +672,13 @@ struct r300_fragment_program {
 			GLuint inst3;
 		} inst[PFS_MAX_ALU_INST];
 	} alu;
-	int v_pos;
-	int s_pos;
 
 	struct {
 		int tex_offset;
 		int tex_end;
 		int alu_offset;
 		int alu_end;
+		int flags;
 	} node[4];
 	int cur_node;
 	int first_node_has_tex;
@@ -661,14 +699,7 @@ struct r300_fragment_program {
 	} param[PFS_NUM_CONST_REGS];
 	int param_nr;
 	GLboolean params_uptodate;
-	
-	GLuint temps[PFS_NUM_TEMP_REGS];
-	int temp_in_use;
-	GLuint used_in_node;
-	GLuint dest_in_node;
-	GLuint inputs[32]; /* don't actually need 32... */
 
-	int hwreg_in_use;
 	int max_temp_idx;
 };
 
@@ -794,6 +825,8 @@ struct r300_state {
 	struct r300_vertex_shader_state vertex_shader;
 #if USE_ARB_F_P == 0
 	struct r300_pixel_shader_state pixel_shader;
+#else
+	struct r300_pfs_compile_state pfs_compile;
 #endif
 	struct r300_dma_region aos[R300_MAX_AOS_ARRAYS];
 	int aos_count;
@@ -825,6 +858,7 @@ struct r300_context {
 	struct r300_hw_state hw;
 	struct r300_cmdbuf cmdbuf;
 	struct r300_state state;
+	struct vertex_program *curr_vp;
 
 	/* Vertex buffers
 	 */
@@ -889,5 +923,10 @@ extern void radeon_init_vtxfmt_a(r300ContextPtr rmesa);
 #ifdef HW_VBOS
 extern void r300_init_vbo_funcs(struct dd_function_table *functions);
 #endif
+
+#define RADEON_D_CAPTURE 0
+#define RADEON_D_PLAYBACK 1
+#define RADEON_D_PLAYBACK_RAW 2
+#define RADEON_D_T 3
 
 #endif				/* __R300_CONTEXT_H__ */

@@ -58,12 +58,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r300_reg.h"
 #include "r300_program.h"
 #include "r300_emit.h"
-#if USE_ARB_F_P == 1
 #include "r300_fragprog.h"
-#else
-#include "r300_fixed_pipelines.h"
-#include "r300_texprog.h"
-#endif
 #include "r300_tex.h"
 #include "r300_maos.h"
 
@@ -1092,7 +1087,10 @@ void r300_setup_textures(GLcontext *ctx)
 	int i, mtu;
 	struct r300_tex_obj *t;
 	r300ContextPtr r300 = R300_CONTEXT(ctx);
-	int max_texture_unit=-1; /* -1 translates into no setup costs for fields */
+	int hw_tmu=0;
+	int first_hw_tmu=0, last_hw_tmu=-1; /* -1 translates into no setup costs for fields */
+	int tmu_mappings[R300_MAX_TEXTURE_UNITS] = { -1 };
+	struct r300_fragment_program *rp = ctx->FragmentProgram._Current;
 
 	R300_STATECHANGE(r300, txe);
 	R300_STATECHANGE(r300, tex.filter);
@@ -1115,14 +1113,16 @@ void r300_setup_textures(GLcontext *ctx)
 			mtu, R300_MAX_TEXTURE_UNITS);
 		exit(-1);
 	}
-	
+
+	/* We cannot let disabled tmu offsets pass DRM */
 	for(i=0; i < mtu; i++) {
-		/*if( ((r300->state.render_inputs & (_TNL_BIT_TEX0<<i))!=0) != ((ctx->Texture.Unit[i].Enabled)!=0) ) {
-			WARN_ONCE("Mismatch between render_inputs and ctx->Texture.Unit[i].Enabled value(%d vs %d).\n",
-					((r300->state.render_inputs & (_TNL_BIT_TEX0<<i))!=0), ((ctx->Texture.Unit[i].Enabled)!=0));
-		}*/
-		
 		if(TMU_ENABLED(ctx, i)) {
+			
+#if 0 /* Enables old behaviour */
+			hw_tmu = i;
+#endif
+			tmu_mappings[i] = hw_tmu;
+			
 			t=r300->state.texture.unit[i].texobj;
 			//fprintf(stderr, "format=%08x\n", r300->state.texture.unit[i].format);
 			
@@ -1140,38 +1140,62 @@ void r300_setup_textures(GLcontext *ctx)
 			
 			if (RADEON_DEBUG & DEBUG_STATE)
 				fprintf(stderr, "Activating texture unit %d\n", i);
-			max_texture_unit=i;
-			r300->hw.txe.cmd[R300_TXE_ENABLE]|=(1<<i);
 			
-			r300->hw.tex.filter.cmd[R300_TEX_VALUE_0+i]=gen_fixed_filter(t->filter) | (i << 28); 
-			//r300->hw.tex.unknown1.cmd[R300_TEX_VALUE_0+i]=0x0; /* move lod bias here? */
+			r300->hw.txe.cmd[R300_TXE_ENABLE] |= (1 << hw_tmu);
 			
-			/* No idea why linear filtered textures shake when puting random data */
-			/*r300->hw.tex.unknown1.cmd[R300_TEX_VALUE_0+i]=(rand()%0xffffffff) & (~0x1fff);*/
-			r300->hw.tex.size.cmd[R300_TEX_VALUE_0+i]=t->size;
-			r300->hw.tex.format.cmd[R300_TEX_VALUE_0+i]=t->format;
-			//fprintf(stderr, "t->format=%08x\n", t->format);
-			r300->hw.tex.pitch.cmd[R300_TEX_VALUE_0+i]=t->pitch_reg;
-			r300->hw.tex.offset.cmd[R300_TEX_VALUE_0+i]=t->offset;
-			r300->hw.tex.unknown4.cmd[R300_TEX_VALUE_0+i]=0x0;
-			r300->hw.tex.border_color.cmd[R300_TEX_VALUE_0+i]=t->pp_border_color;
+			r300->hw.tex.filter.cmd[R300_TEX_VALUE_0 + hw_tmu] = gen_fixed_filter(t->filter) | (hw_tmu << 28);
+			/* Currently disabled! */
+			r300->hw.tex.unknown1.cmd[R300_TEX_VALUE_0 + hw_tmu] = 0x0;
+			r300->hw.tex.size.cmd[R300_TEX_VALUE_0 + hw_tmu] = t->size;
+			r300->hw.tex.format.cmd[R300_TEX_VALUE_0 + hw_tmu] = t->format;
+			r300->hw.tex.pitch.cmd[R300_TEX_VALUE_0 + hw_tmu] = t->pitch_reg;
+			r300->hw.tex.offset.cmd[R300_TEX_VALUE_0 + hw_tmu] = t->offset;
+			r300->hw.tex.unknown4.cmd[R300_TEX_VALUE_0 + hw_tmu] = 0x0;
+			r300->hw.tex.border_color.cmd[R300_TEX_VALUE_0 + hw_tmu] = t->pp_border_color;
+			
+			last_hw_tmu = hw_tmu;
+			
+			hw_tmu++;
 		}
 	}
 	
-	((drm_r300_cmd_header_t*)r300->hw.tex.filter.cmd)->packet0.count = max_texture_unit+1;
-	((drm_r300_cmd_header_t*)r300->hw.tex.unknown1.cmd)->packet0.count = max_texture_unit+1;
-	((drm_r300_cmd_header_t*)r300->hw.tex.size.cmd)->packet0.count = max_texture_unit+1;
-	((drm_r300_cmd_header_t*)r300->hw.tex.format.cmd)->packet0.count = max_texture_unit+1;
-	((drm_r300_cmd_header_t*)r300->hw.tex.pitch.cmd)->packet0.count = max_texture_unit+1;
-	((drm_r300_cmd_header_t*)r300->hw.tex.offset.cmd)->packet0.count = max_texture_unit+1;
-	((drm_r300_cmd_header_t*)r300->hw.tex.unknown4.cmd)->packet0.count = max_texture_unit+1;
-	((drm_r300_cmd_header_t*)r300->hw.tex.border_color.cmd)->packet0.count = max_texture_unit+1;
-
+	r300->hw.tex.filter.cmd[R300_TEX_CMD_0] = cmdpacket0(R300_TX_FILTER_0, last_hw_tmu + 1);
+	r300->hw.tex.unknown1.cmd[R300_TEX_CMD_0] = cmdpacket0(R300_TX_FILTER1_0, last_hw_tmu + 1);
+	r300->hw.tex.size.cmd[R300_TEX_CMD_0] = cmdpacket0(R300_TX_SIZE_0, last_hw_tmu + 1);
+	r300->hw.tex.format.cmd[R300_TEX_CMD_0] = cmdpacket0(R300_TX_FORMAT_0, last_hw_tmu + 1);
+	r300->hw.tex.pitch.cmd[R300_TEX_CMD_0] = cmdpacket0(R300_TX_PITCH_0, last_hw_tmu + 1);
+	r300->hw.tex.offset.cmd[R300_TEX_CMD_0] = cmdpacket0(R300_TX_OFFSET_0, last_hw_tmu + 1);
+	r300->hw.tex.unknown4.cmd[R300_TEX_CMD_0] = cmdpacket0(R300_TX_CHROMA_KEY_0, last_hw_tmu + 1);
+	r300->hw.tex.border_color.cmd[R300_TEX_CMD_0] = cmdpacket0(R300_TX_BORDER_COLOR_0, last_hw_tmu + 1);
+	
+	
+	if (!rp)	/* should only happenen once, just after context is created */
+		return;
+	
+	R300_STATECHANGE(r300, fpt);
+	
+	for(i = 0; i < rp->tex.length; i++){
+		int unit;
+		unsigned long val;
+		
+		unit = rp->tex.inst[i] >> R300_FPITX_IMAGE_SHIFT;
+		unit &= 15;
+		
+		val = rp->tex.inst[i];
+		val &= ~R300_FPITX_IMAGE_MASK;
+		
+		assert(tmu_mappings[unit] >= 0);
+		
+		val |= tmu_mappings[unit] << R300_FPITX_IMAGE_SHIFT;
+		r300->hw.fpt.cmd[R300_FPT_INSTR_0+i] = val;
+	}
+	
+	r300->hw.fpt.cmd[R300_FPT_CMD_0] = cmdpacket0(R300_PFS_TEXI_0, rp->tex.length);
+	
 	if (RADEON_DEBUG & DEBUG_STATE)
-		fprintf(stderr, "TX_ENABLE: %08x  max_texture_unit=%d\n", r300->hw.txe.cmd[R300_TXE_ENABLE], max_texture_unit);
+		fprintf(stderr, "TX_ENABLE: %08x  last_hw_tmu=%d\n", r300->hw.txe.cmd[R300_TXE_ENABLE], last_hw_tmu);
 }
 
-#if USE_ARB_F_P == 1
 void r300_setup_rs_unit(GLcontext *ctx)
 {
 	r300ContextPtr r300 = R300_CONTEXT(ctx);
@@ -1188,7 +1212,7 @@ void r300_setup_rs_unit(GLcontext *ctx)
 	};
 	GLuint OutputsWritten;
 	GLuint InputsRead;
-	int vp_reg, fp_reg, high_rr;
+	int fp_reg, high_rr;
 	int in_texcoords, col_interp_nr;
 	int i;
 
@@ -1208,17 +1232,14 @@ void r300_setup_rs_unit(GLcontext *ctx)
 	R300_STATECHANGE(r300, rc);
 	R300_STATECHANGE(r300, rr);
 	
-	vp_reg = fp_reg = in_texcoords = col_interp_nr = high_rr = 0;
+	fp_reg = in_texcoords = col_interp_nr = high_rr = 0;
 	r300->hw.rr.cmd[R300_RR_ROUTE_0] = 0;
 	r300->hw.rr.cmd[R300_RR_ROUTE_1] = 0;
 
 	for (i=0;i<ctx->Const.MaxTextureUnits;i++) {
-		if (OutputsWritten & (hw_tcl_on ? (1 << (VERT_RESULT_TEX0+i)) : (_TNL_BIT_TEX0<<i)))
-			in_texcoords++;
-		
 		r300->hw.ri.cmd[R300_RI_INTERP_0+i] = 0
 				| R300_RS_INTERP_USED
-				| (vp_reg << R300_RS_INTERP_SRC_SHIFT)
+				| (in_texcoords << R300_RS_INTERP_SRC_SHIFT)
 				| interp_magic[i];
 
 		if (InputsRead & (FRAG_BIT_TEX0<<i)) {
@@ -1229,22 +1250,26 @@ void r300_setup_rs_unit(GLcontext *ctx)
 					| (fp_reg << R300_RS_ROUTE_DEST_SHIFT);
 			high_rr = fp_reg;
 
-			if (OutputsWritten & (hw_tcl_on ? (1 << (VERT_RESULT_TEX0+i)) : (_TNL_BIT_TEX0<<i))) {
-				vp_reg++;
-			} else {
+			if (!(OutputsWritten & (hw_tcl_on ? (1 << (VERT_RESULT_TEX0+i)) : (_TNL_BIT_TEX0<<i)))) {
 				/* Passing invalid data here can lock the GPU. */
-				fprintf(stderr, "fragprog wants coords for tex%d, vp doesn't provide them!\n", i);
-				exit(-1);
+				WARN_ONCE("fragprog wants coords for tex%d, vp doesn't provide them!\n", i);
+				//_mesa_print_program(&CURRENT_VERTEX_SHADER(ctx)->Base);
+				//exit(-1);
 			}
 			InputsRead &= ~(FRAG_BIT_TEX0<<i);
 			fp_reg++;
 		} 
+		/* Need to count all coords enabled at vof */
+		if (OutputsWritten & (hw_tcl_on ? (1 << (VERT_RESULT_TEX0+i)) : (_TNL_BIT_TEX0<<i)))
+			in_texcoords++;
 	}
 
 	if (InputsRead & FRAG_BIT_COL0) {
 		if (!(OutputsWritten & (hw_tcl_on ? (1<<VERT_RESULT_COL0) : _TNL_BIT_COLOR0))) {
-			fprintf(stderr, "fragprog wants col0, vp doesn't provide it\n");
-			exit(-1);
+			WARN_ONCE("fragprog wants col0, vp doesn't provide it\n");
+			goto out; /* FIXME */
+			//_mesa_print_program(&CURRENT_VERTEX_SHADER(ctx)->Base);
+			//exit(-1);
 		}
 
 		r300->hw.rr.cmd[R300_RR_ROUTE_0] |= 0
@@ -1253,11 +1278,12 @@ void r300_setup_rs_unit(GLcontext *ctx)
 		InputsRead &= ~FRAG_BIT_COL0;
 		col_interp_nr++;
 	}
+	out:
 	
 	if (InputsRead & FRAG_BIT_COL1) {
 		if (!(OutputsWritten & (hw_tcl_on ? (1<<VERT_RESULT_COL1) : _TNL_BIT_COLOR1))) {
-			fprintf(stderr, "fragprog wants col1, vp doesn't provide it\n");
-			exit(-1);
+			WARN_ONCE("fragprog wants col1, vp doesn't provide it\n");
+			//exit(-1);
 		}
 
 		r300->hw.rr.cmd[R300_RR_ROUTE_1] |= R300_RS_ROUTE_1_UNKNOWN11
@@ -1288,77 +1314,6 @@ void r300_setup_rs_unit(GLcontext *ctx)
 	if (InputsRead)
 		WARN_ONCE("Don't know how to satisfy InputsRead=0x%08x\n", InputsRead);
 }
-#else
-void r300_setup_rs_unit(GLcontext *ctx)
-{
-	r300ContextPtr r300 = R300_CONTEXT(ctx);
-	int i, cur_reg;
-	/* I'm still unsure if these are needed */
-	GLuint interp_magic[8] = {
-		0x00,
-		0x40,
-		0x80,
-		0xC0,
-		0x00,
-		0x00,
-		0x00,
-		0x00
-	};
-	GLuint OutputsWritten;
-	
-	if(hw_tcl_on)
-		OutputsWritten = CURRENT_VERTEX_SHADER(ctx)->Base.OutputsWritten;
-	
-	/* This needs to be rewritten - it is a hack at best */
-
-	R300_STATECHANGE(r300, ri);
-	R300_STATECHANGE(r300, rc);
-	R300_STATECHANGE(r300, rr);
-	
-	cur_reg = 0;
-	r300->hw.rr.cmd[R300_RR_ROUTE_0] = 0;
-
-	for (i=0;i<ctx->Const.MaxTextureUnits;i++) {
-		r300->hw.ri.cmd[R300_RI_INTERP_0+i] = 0
-				| R300_RS_INTERP_USED
-				| (cur_reg << R300_RS_INTERP_SRC_SHIFT)
-				| interp_magic[i];
-//		fprintf(stderr, "RS_INTERP[%d] = 0x%x\n", i, r300->hw.ri.cmd[R300_RI_INTERP_0+i]);
-
-		if (TMU_ENABLED(ctx, i)) {
-			assert(r300->state.texture.tc_count != 0);
-			r300->hw.rr.cmd[R300_RR_ROUTE_0 + cur_reg] = 0
-					| R300_RS_ROUTE_ENABLE
-					| i /* source INTERP */
-					| (cur_reg << R300_RS_ROUTE_DEST_SHIFT);
-//			fprintf(stderr, "RS_ROUTE[%d] = 0x%x\n", cur_reg, r300->hw.rr.cmd[R300_RR_ROUTE_0 + cur_reg]);
-			cur_reg++;
-		} 
-	}
-	if (hw_tcl_on ? OutputsWritten & (1<<VERT_RESULT_COL0) : r300->state.render_inputs & _TNL_BIT_COLOR0)
-		r300->hw.rr.cmd[R300_RR_ROUTE_0] |= 0
-				| R300_RS_ROUTE_0_COLOR
-				| (cur_reg << R300_RS_ROUTE_0_COLOR_DEST_SHIFT);
-
-//	fprintf(stderr, "ADJ_RR0 = 0x%x\n", r300->hw.rr.cmd[R300_RR_ROUTE_0]);
-
-	r300->hw.rc.cmd[1] = 0
-			| (cur_reg /* count */ << R300_RS_CNTL_TC_CNT_SHIFT)
-			| (1 << R300_RS_CNTL_CI_CNT_SHIFT)
-			| R300_RS_CNTL_0_UNKNOWN_18;
-
-	if (r300->state.texture.tc_count > 0) {
-			r300->hw.rr.cmd[R300_RR_CMD_0] = cmdpacket0(R300_RS_ROUTE_0, cur_reg);
-			r300->hw.rc.cmd[2] = 0xC0 | (cur_reg-1); /* index of highest */
-	} else {
-			r300->hw.rr.cmd[R300_RR_CMD_0] = cmdpacket0(R300_RS_ROUTE_0, 1);
-			r300->hw.rc.cmd[2] = 0x0;
-	}
-
-
-//	fprintf(stderr, "rendering with %d texture co-ordinate sets\n", cur_reg);
-}
-#endif // USE_ARB_F_P
 
 #define vpucount(ptr) (((drm_r300_cmd_header_t*)(ptr))->vpu.count)
 
@@ -1641,15 +1596,15 @@ void r300UpdateShaders(r300ContextPtr rmesa)
 	
 	if (rmesa->NewGLState && hw_tcl_on) {
 		rmesa->NewGLState = 0;
-		if (ctx->VertexProgram._Enabled == GL_FALSE)
-			_tnl_UpdateFixedFunctionProgram(ctx);
+		
+		_tnl_UpdateFixedFunctionProgram(ctx);
 	
 		vp = (struct r300_vertex_program *)CURRENT_VERTEX_SHADER(ctx);
 		if (vp->translated == GL_FALSE)
 			translate_vertex_shader(vp);
 		if (vp->translated == GL_FALSE) {
 			fprintf(stderr, "Failing back to sw-tcl\n");
-			debug_vp(ctx, &vp->mesa_program);
+//			debug_vp(ctx, &vp->mesa_program);
 			hw_tcl_on = future_hw_tcl_on = 0;
 			r300ResetHwState(rmesa);
 
@@ -1668,41 +1623,11 @@ void r300UpdateShaderStates(r300ContextPtr rmesa)
 	r300UpdateTextureState(ctx);
 #endif
 
-#if 0
-#define B_FLAG(x) ((x)?1:0)
-
-	if(hw_tcl_on){
-		int i;
-		GLuint InputsRead;
-		GLuint OutputsWritten;
-		
-		InputsRead = ctx->FragmentProgram._Current->Base.InputsRead;
-		OutputsWritten = CURRENT_VERTEX_SHADER(ctx)->Base.OutputsWritten;
-		
-		for (i=0;i<ctx->Const.MaxTextureUnits;i++) {
-			/*if(B_FLAG(OutputsWritten & (1 << (VERT_RESULT_TEX0+i))) != B_FLAG(InputsRead & (FRAG_BIT_TEX0<<i))){
-				fprintf(stderr, "vp_out != fp_in fails for unit %d\n", i);
-				exit(1);
-			}*/
-			/*
-			if(B_FLAG(ctx->Texture.Unit[i]._ReallyEnabled) != B_FLAG(InputsRead & (FRAG_BIT_TEX0<<i))){
-				fprintf(stderr, "re != fp_in fails for unit %d\n", i);
-				exit(1);
-			}
-			
-			if(B_FLAG(ctx->Texture.Unit[i]._ReallyEnabled) != B_FLAG(OutputsWritten & (1 << (VERT_RESULT_TEX0+i)))){
-				fprintf(stderr, "re != vp_out fails for unit %d\n", i);
-				exit(1);
-			}*/
-		}
-	}
-#endif
-	
-	r300_setup_textures(ctx);
-	r300_setup_rs_unit(ctx);
-
-	r300SetupVertexShader(rmesa);
 	r300SetupPixelShader(rmesa);
+	r300_setup_textures(ctx);
+	
+	r300SetupVertexShader(rmesa);
+	r300_setup_rs_unit(ctx);
 }
 
 /* This is probably wrong for some values, I need to test this
@@ -1735,28 +1660,21 @@ static unsigned int r300PackFloat24(float f)
 	return float24;
 }
 
-#if USE_ARB_F_P == 1
 void r300SetupPixelShader(r300ContextPtr rmesa)
 {
 	GLcontext *ctx = rmesa->radeon.glCtx;
-	struct r300_fragment_program *rp =
-	    (struct r300_fragment_program *)ctx->FragmentProgram._Current;
+	struct r300_fragment_program *rp = ctx->FragmentProgram._Current;
 	int i,k;
 
 	if (!rp)	/* should only happenen once, just after context is created */
 		return;
 	
-	translate_fragment_shader(rp);
+	r300_translate_fragment_shader(rp);
 	if (!rp->translated) {
 		fprintf(stderr, "%s: No valid fragment shader, exiting\n", __func__);
 		exit(-1);
 	}
 	
-	R300_STATECHANGE(rmesa, fpt);
-	for(i=0;i<rp->tex.length;i++)
-		rmesa->hw.fpt.cmd[R300_FPT_INSTR_0+i]=rp->tex.inst[i];
-	rmesa->hw.fpt.cmd[R300_FPT_CMD_0]=cmdpacket0(R300_PFS_TEXI_0, rp->tex.length);
-
 #define OUTPUT_FIELD(st, reg, field)  \
 		R300_STATECHANGE(rmesa, st); \
 		for(i=0;i<=rp->alu_end;i++) \
@@ -1778,7 +1696,7 @@ void r300SetupPixelShader(r300ContextPtr rmesa)
 				| (rp->node[i].alu_end  << R300_PFS_NODE_ALU_END_SHIFT)
 				| (rp->node[i].tex_offset << R300_PFS_NODE_TEX_OFFSET_SHIFT)
 				| (rp->node[i].tex_end  << R300_PFS_NODE_TEX_END_SHIFT)
-				| ( (k==3) ? R300_PFS_NODE_LAST_NODE : 0);
+				| rp->node[i].flags; /*  ( (k==3) ? R300_PFS_NODE_LAST_NODE : 0); */
 		} else {
 			rmesa->hw.fp.cmd[R300_FP_NODE0+(3-i)] = 0;
 		}
@@ -1806,182 +1724,6 @@ void r300SetupPixelShader(r300ContextPtr rmesa)
 	}
 	rmesa->hw.fpp.cmd[R300_FPP_CMD_0]=cmdpacket0(R300_PFS_PARAM_0_X, rp->const_nr*4);
 }
-#else
-/* just a skeleton for now.. */
-void r300GenerateTexturePixelShader(r300ContextPtr r300)
-{
-	int i, mtu;
-	mtu = r300->radeon.glCtx->Const.MaxTextureUnits;
-	GLenum envMode;
-	GLuint OutputsWritten = CURRENT_VERTEX_SHADER(r300->radeon.glCtx)->OutputsWritten;
-
-	int tex_inst=0, alu_inst=0;
-
-	for(i=0;i<mtu;i++){
-		/* No need to proliferate {} */
-		if(!TMU_ENABLED(r300->radeon.glCtx, i))continue;
-
-		envMode = r300->radeon.glCtx->Texture.Unit[i].EnvMode;
-		//fprintf(stderr, "envMode=%s\n", _mesa_lookup_enum_by_nr(envMode));
-
-		/* Fetch textured pixel */
-
-		r300->state.pixel_shader.program.tex.inst[tex_inst]=0x00018000;
-		tex_inst++;
-
-		switch(r300->radeon.glCtx->Texture.Unit[i]._CurrentCombine->ModeRGB){
-			case GL_REPLACE:
-				WARN_ONCE("ModeA==GL_REPLACE is possibly broken.\n");
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst0=
-					EASY_PFS_INSTR0(MAD, SRC0C_XYZ, ONE, ZERO);
-
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst1=
-					EASY_PFS_INSTR1(0, 0, 0 | PFS_FLAG_CONST, 0 | PFS_FLAG_CONST, NONE, ALL);
-				break;
-			case GL_MODULATE:
-				WARN_ONCE("ModeRGB==GL_MODULATE is possibly broken.\n");
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst0=
-					EASY_PFS_INSTR0(MAD, SRC0C_XYZ, SRC1C_XYZ, ZERO);
-
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst1=
-					EASY_PFS_INSTR1(0, 0, 1, 0 | PFS_FLAG_CONST, NONE, ALL);
-
-				break;
-			default:
-				WARN_ONCE("ModeRGB=%s is not implemented yet !\n",
-					 _mesa_lookup_enum_by_nr(r300->radeon.glCtx->Texture.Unit[i]._CurrentCombine->ModeRGB));
-				/* PFS_NOP */
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst0=
-					EASY_PFS_INSTR0(MAD, SRC0C_XYZ, ONE, ZERO);
-
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst1=
-					EASY_PFS_INSTR1(0, 0, 0 | PFS_FLAG_CONST, 0 | PFS_FLAG_CONST, NONE, ALL);
-			}
-		switch(r300->radeon.glCtx->Texture.Unit[i]._CurrentCombine->ModeA){
-			case GL_REPLACE:
-				WARN_ONCE("ModeA==GL_REPLACE is possibly broken.\n");
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst2=
-					EASY_PFS_INSTR2(MAD, SRC0A, ONE, ZERO);
-
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst3=
-					EASY_PFS_INSTR3(0, 0, 0| PFS_FLAG_CONST, 0 | PFS_FLAG_CONST, OUTPUT);
-
-#if 0
-				fprintf(stderr, "numArgsA=%d sourceA[0]=%s op=%d\n",
-					 r300->radeon.glCtx->Texture.Unit[i]._CurrentCombine->_NumArgsA,
-					 _mesa_lookup_enum_by_nr(r300->radeon.glCtx->Texture.Unit[i]._CurrentCombine->SourceA[0]),
-					 r300->radeon.glCtx->Texture.Unit[i]._CurrentCombine->OperandA[0]-GL_SRC_ALPHA);
-#endif
-				break;
-			case GL_MODULATE:
-				WARN_ONCE("ModeA==GL_MODULATE is possibly broken.\n");
-
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst2=
-					EASY_PFS_INSTR2(MAD, SRC0A, SRC1A, ZERO);
-
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst3=
-					EASY_PFS_INSTR3(0, 0, 1, 0 | PFS_FLAG_CONST, OUTPUT);
-
-				break;
-			default:
-				WARN_ONCE("ModeA=%s is not implemented yet !\n",
-					 _mesa_lookup_enum_by_nr(r300->radeon.glCtx->Texture.Unit[i]._CurrentCombine->ModeA));
-				/* PFS_NOP */
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst2=
-					EASY_PFS_INSTR2(MAD, SRC0A, ONE, ZERO);
-
-				r300->state.pixel_shader.program.alu.inst[alu_inst].inst3=
-					EASY_PFS_INSTR3(0, 0, 0 | PFS_FLAG_CONST, 0 | PFS_FLAG_CONST, OUTPUT);
-
-			}
-
-		alu_inst++;
-		}
-	
-	r300->state.pixel_shader.program.tex.length=tex_inst;
-	r300->state.pixel_shader.program.tex_offset=0;
-	r300->state.pixel_shader.program.tex_end=tex_inst-1;
-
-#if 0
-	/* saturate last instruction, like i915 driver does */
-	r300->state.pixel_shader.program.alu.inst[alu_inst-1].inst0|=R300_FPI0_OUTC_SAT;
-	r300->state.pixel_shader.program.alu.inst[alu_inst-1].inst2|=R300_FPI2_OUTA_SAT;
-#endif
-
-	r300->state.pixel_shader.program.alu.length=alu_inst;
-	r300->state.pixel_shader.program.alu_offset=0;
-	r300->state.pixel_shader.program.alu_end=alu_inst-1;
-}
-
-void r300SetupPixelShader(r300ContextPtr rmesa)
-{
-int i,k;
-
-	/* This needs to be replaced by pixel shader generation code */
-
-	/* textures enabled ? */
-	if(rmesa->state.texture.tc_count>0){
-#if 1
-		r300GenerateTextureFragmentShader(rmesa);
-#else
-		rmesa->state.pixel_shader=SINGLE_TEXTURE_PIXEL_SHADER;
-		r300GenerateTexturePixelShader(rmesa);
-#endif
-		} else {
-		rmesa->state.pixel_shader=FLAT_COLOR_PIXEL_SHADER;
-		}
-	
-	R300_STATECHANGE(rmesa, fpt);
-	for(i=0;i<rmesa->state.pixel_shader.program.tex.length;i++)
-		rmesa->hw.fpt.cmd[R300_FPT_INSTR_0+i]=rmesa->state.pixel_shader.program.tex.inst[i];
-	rmesa->hw.fpt.cmd[R300_FPT_CMD_0]=cmdpacket0(R300_PFS_TEXI_0, rmesa->state.pixel_shader.program.tex.length);
-
-#define OUTPUT_FIELD(st, reg, field)  \
-		R300_STATECHANGE(rmesa, st); \
-		for(i=0;i<rmesa->state.pixel_shader.program.alu.length;i++) \
-			rmesa->hw.st.cmd[R300_FPI_INSTR_0+i]=rmesa->state.pixel_shader.program.alu.inst[i].field;\
-		rmesa->hw.st.cmd[R300_FPI_CMD_0]=cmdpacket0(reg, rmesa->state.pixel_shader.program.alu.length);
-
-	OUTPUT_FIELD(fpi[0], R300_PFS_INSTR0_0, inst0);
-	OUTPUT_FIELD(fpi[1], R300_PFS_INSTR1_0, inst1);
-	OUTPUT_FIELD(fpi[2], R300_PFS_INSTR2_0, inst2);
-	OUTPUT_FIELD(fpi[3], R300_PFS_INSTR3_0, inst3);
-#undef OUTPUT_FIELD
-
-	R300_STATECHANGE(rmesa, fp);
-	for(i=0;i<4;i++){
-		rmesa->hw.fp.cmd[R300_FP_NODE0+i]=
-		(rmesa->state.pixel_shader.program.node[i].alu_offset << R300_PFS_NODE_ALU_OFFSET_SHIFT)
-		| (rmesa->state.pixel_shader.program.node[i].alu_end  << R300_PFS_NODE_ALU_END_SHIFT)
-		| (rmesa->state.pixel_shader.program.node[i].tex_offset << R300_PFS_NODE_TEX_OFFSET_SHIFT)
-		| (rmesa->state.pixel_shader.program.node[i].tex_end  << R300_PFS_NODE_TEX_END_SHIFT)
-		| ( (i==3) ? R300_PFS_NODE_LAST_NODE : 0);
-		}
-
-		/*  PFS_CNTL_0 */
-	rmesa->hw.fp.cmd[R300_FP_CNTL0]=
-		(rmesa->state.pixel_shader.program.active_nodes-1)
-		| (rmesa->state.pixel_shader.program.first_node_has_tex<<3);
-		/* PFS_CNTL_1 */
-	rmesa->hw.fp.cmd[R300_FP_CNTL1]=rmesa->state.pixel_shader.program.temp_register_count;
-		/* PFS_CNTL_2 */
-	rmesa->hw.fp.cmd[R300_FP_CNTL2]=
-		(rmesa->state.pixel_shader.program.alu_offset << R300_PFS_CNTL_ALU_OFFSET_SHIFT)
-		| (rmesa->state.pixel_shader.program.alu_end << R300_PFS_CNTL_ALU_END_SHIFT)
-		| (rmesa->state.pixel_shader.program.tex_offset << R300_PFS_CNTL_TEX_OFFSET_SHIFT)
-		| (rmesa->state.pixel_shader.program.tex_end << R300_PFS_CNTL_TEX_END_SHIFT);
-
-	R300_STATECHANGE(rmesa, fpp);
-	for(i=0;i<rmesa->state.pixel_shader.param_length;i++){
-		rmesa->hw.fpp.cmd[R300_FPP_PARAM_0+4*i+0]=r300PackFloat32(rmesa->state.pixel_shader.param[i].x);
-		rmesa->hw.fpp.cmd[R300_FPP_PARAM_0+4*i+1]=r300PackFloat32(rmesa->state.pixel_shader.param[i].y);
-		rmesa->hw.fpp.cmd[R300_FPP_PARAM_0+4*i+2]=r300PackFloat32(rmesa->state.pixel_shader.param[i].z);
-		rmesa->hw.fpp.cmd[R300_FPP_PARAM_0+4*i+3]=r300PackFloat32(rmesa->state.pixel_shader.param[i].w);
-		}
-	rmesa->hw.fpp.cmd[R300_FPP_CMD_0]=cmdpacket0(R300_PFS_PARAM_0_X, rmesa->state.pixel_shader.param_length);
-
-}
-#endif
 
 /**
  * Called by Mesa after an internal state update.
@@ -2063,6 +1805,8 @@ void r300ResetHwState(r300ContextPtr r300)
 	r300UpdateTextureState(ctx);
 
 //	r300_setup_routing(ctx, GL_TRUE);
+	
+#if 0 /* Done in prior to rendering */
 	if(hw_tcl_on == GL_FALSE){
 		r300EmitArrays(ctx, GL_TRUE); /* Just do the routing */
 		r300_setup_textures(ctx);
@@ -2071,6 +1815,7 @@ void r300ResetHwState(r300ContextPtr r300)
 		r300SetupVertexShader(r300);
 		r300SetupPixelShader(r300);
 	}
+#endif
 
 	r300_set_blend_state(ctx);
 
@@ -2080,7 +1825,7 @@ void r300ResetHwState(r300ContextPtr r300)
 		/* Initialize magic registers
 		 TODO : learn what they really do, or get rid of
 		 those we don't have to touch */
-	r300->hw.unk2080.cmd[1] = 0x0030045A; /* Dangerous */
+	r300->hw.unk2080.cmd[1] = 0x0030045A; //0x0030065a /* Dangerous */
 
 	r300->hw.vte.cmd[1] = R300_VPORT_X_SCALE_ENA
 				| R300_VPORT_X_OFFSET_ENA

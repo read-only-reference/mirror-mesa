@@ -68,8 +68,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "xmlpool.h"		/* for symbolic values of enum-type options */
 
 /* hw_tcl_on derives from future_hw_tcl_on when its safe to change it. */
-int future_hw_tcl_on=0;
-int hw_tcl_on=0;
+int future_hw_tcl_on=1;
+int hw_tcl_on=1;
 
 #define need_GL_ARB_multisample
 #define need_GL_ARB_texture_compression
@@ -95,9 +95,7 @@ const struct dri_extension card_extensions[] = {
   {"GL_ARB_texture_mirrored_repeat",	NULL},
   {"GL_ARB_vertex_buffer_object",	GL_ARB_vertex_buffer_object_functions},
   {"GL_ARB_vertex_program",		GL_ARB_vertex_program_functions},
-#if USE_ARB_F_P == 1
   {"GL_ARB_fragment_program",		NULL},
-#endif
   {"GL_EXT_blend_equation_separate",	GL_EXT_blend_equation_separate_functions},
   {"GL_EXT_blend_func_separate",	GL_EXT_blend_func_separate_functions},
   {"GL_EXT_blend_minmax",		GL_EXT_blend_minmax_functions},
@@ -122,7 +120,7 @@ const struct dri_extension card_extensions[] = {
 };
 
 extern struct tnl_pipeline_stage _r300_render_stage;
-extern struct tnl_pipeline_stage _r300_tcl_stage;
+extern const struct tnl_pipeline_stage _r300_tcl_stage;
 extern const struct tnl_pipeline_stage _r300_texrect_stage;
 
 static const struct tnl_pipeline_stage *r300_pipeline[] = {
@@ -308,11 +306,11 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	/* currently bogus data */
 	ctx->Const.VertexProgram.MaxNativeInstructions=VSF_MAX_FRAGMENT_LENGTH;
 	ctx->Const.VertexProgram.MaxNativeAttribs=16; /* r420 */
-	ctx->Const.VertexProgram.MaxNativeTemps=VSF_MAX_FRAGMENT_TEMPS;
+	ctx->Const.VertexProgram.MaxTemps=32;
+	ctx->Const.VertexProgram.MaxNativeTemps=/*VSF_MAX_FRAGMENT_TEMPS*/32;
 	ctx->Const.VertexProgram.MaxNativeParameters=256; /* r420 */
 	ctx->Const.VertexProgram.MaxNativeAddressRegs=1;
 
-#if USE_ARB_F_P
 	ctx->Const.FragmentProgram.MaxNativeTemps = PFS_NUM_TEMP_REGS;
 	ctx->Const.FragmentProgram.MaxNativeAttribs = 11; /* copy i915... */
 	ctx->Const.FragmentProgram.MaxNativeParameters = PFS_NUM_CONST_REGS;
@@ -322,7 +320,6 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	ctx->Const.FragmentProgram.MaxNativeTexIndirections = PFS_MAX_TEX_INDIRECT;
 	ctx->Const.FragmentProgram.MaxNativeAddressRegs = 0; /* and these are?? */
 	ctx->_MaintainTexEnvProgram = GL_TRUE;
-#endif
 
 	driInitExtensions(ctx, card_extensions, GL_TRUE);
 	
@@ -375,6 +372,7 @@ void r300DestroyContext(__DRIcontextPrivate * driContextPriv)
 {
 	GET_CURRENT_CONTEXT(ctx);
 	r300ContextPtr r300 = (r300ContextPtr) driContextPriv->driverPrivate;
+	radeonContextPtr radeon = (radeonContextPtr) r300;
 	radeonContextPtr current = ctx ? RADEON_CONTEXT(ctx) : NULL;
 
 	if (RADEON_DEBUG & DEBUG_DRI) {
@@ -398,8 +396,33 @@ void r300DestroyContext(__DRIcontextPrivate * driContextPriv)
 		_tnl_DestroyContext(r300->radeon.glCtx);
 		_ac_DestroyContext(r300->radeon.glCtx);
 		_swrast_DestroyContext(r300->radeon.glCtx);
-
+		
+		r300ReleaseArrays(r300->radeon.glCtx);
+		if (r300->dma.current.buf) {
+			r300ReleaseDmaRegion(r300, &r300->dma.current, __FUNCTION__ );
+			r300FlushCmdBuf(r300, __FUNCTION__ );
+		}
+				
 		r300DestroyCmdBuf(r300);
+
+		if (radeon->state.scissor.pClipRects) {
+			FREE(radeon->state.scissor.pClipRects);
+			radeon->state.scissor.pClipRects = NULL;
+		}
+
+		if (release_texture_heaps) {
+			/* This share group is about to go away, free our private
+			 * texture object data.
+			 */
+			int i;
+
+			for (i = 0; i < r300->nr_heaps; i++) {
+				driDestroyTextureHeap(r300->texture_heaps[i]);
+				r300->texture_heaps[i] = NULL;
+			}
+
+			assert(is_empty_list(&r300->swapped));
+		}
 
 		radeonCleanupContext(&r300->radeon);
 

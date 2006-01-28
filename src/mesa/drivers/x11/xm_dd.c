@@ -109,14 +109,23 @@ get_buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
    winheight = MIN2(xmBuffer->frontxrb->drawable->height, MAX_HEIGHT);
 #else
    Window root;
+   Status stat;
    int winx, winy;
    unsigned int bw, d;
 
    _glthread_LOCK_MUTEX(_xmesa_lock);
    XSync(xmBuffer->xm_visual->display, 0); /* added for Chromium */
-   XGetGeometry( xmBuffer->xm_visual->display, xmBuffer->frontxrb->pixmap,
+
+   stat = XGetGeometry( xmBuffer->xm_visual->display, xmBuffer->frontxrb->pixmap,
                  &root, &winx, &winy, &winwidth, &winheight, &bw, &d );
    _glthread_UNLOCK_MUTEX(_xmesa_lock);
+
+   if (!stat) {
+      /* probably querying a window that's recently been destroyed */
+      _mesa_warning(NULL, "XGetGeometry failed!\n");
+      *width = *height = 1;
+      return;
+   }
 #endif
 
    *width = winwidth;
@@ -452,6 +461,9 @@ clear_32bit_ximage(GLcontext *ctx, struct xmesa_renderbuffer *xrb,
 {
    const XMesaContext xmesa = XMESA_CONTEXT(ctx);
    register GLuint pixel = (GLuint) xmesa->clearpixel;
+
+   if (!xrb->ximage)
+      return;
 
    if (xmesa->swapbytes) {
       pixel = ((pixel >> 24) & 0x000000ff)
@@ -956,14 +968,13 @@ clear_color_HPCR_pixmap( GLcontext *ctx, const GLfloat color[4] )
 
 
 /**
- * Called when the driver should update it's state, based on the new_state
+ * Called when the driver should update its state, based on the new_state
  * flags.
  */
 void
-xmesa_update_state( GLcontext *ctx, GLuint new_state )
+xmesa_update_state( GLcontext *ctx, GLbitfield new_state )
 {
    const XMesaContext xmesa = XMESA_CONTEXT(ctx);
-   struct xmesa_renderbuffer *front_xrb, *back_xrb;
 
    /* Propagate statechange information to swrast and swrast_setup
     * modules.  The X11 driver has no internal GL-dependent state.
@@ -976,48 +987,55 @@ xmesa_update_state( GLcontext *ctx, GLuint new_state )
    if (ctx->DrawBuffer->Name != 0)
       return;
 
-   front_xrb = XMESA_BUFFER(ctx->DrawBuffer)->frontxrb;
-   if (front_xrb) {
-      /* XXX check for relevant new_state flags */
-      xmesa_set_renderbuffer_funcs(front_xrb, xmesa->pixelformat,
-                                   xmesa->xm_visual->BitsPerPixel);
-      /* setup pointers to front and back buffer clear functions */
-      front_xrb->clearFunc = clear_pixmap;
-   }
+   /*
+    * GL_DITHER and GL_READ/DRAW_BUFFER state effect renderbuffer funcs
+    */
+   if (new_state & (_NEW_COLOR | _NEW_PIXEL)) {
+      struct xmesa_renderbuffer *front_xrb, *back_xrb;
 
-   back_xrb = XMESA_BUFFER(ctx->DrawBuffer)->backxrb;
-   if (back_xrb) {
-      XMesaBuffer xmbuf = XMESA_BUFFER(ctx->DrawBuffer);
-
-      /* XXX check for relevant new_state flags */
-      xmesa_set_renderbuffer_funcs(back_xrb, xmesa->pixelformat,
-                                   xmesa->xm_visual->BitsPerPixel);
-
-      if (xmbuf->backxrb->pixmap) {
-         back_xrb->clearFunc = clear_pixmap;
+      front_xrb = XMESA_BUFFER(ctx->DrawBuffer)->frontxrb;
+      if (front_xrb) {
+         /* XXX check for relevant new_state flags */
+         xmesa_set_renderbuffer_funcs(front_xrb, xmesa->pixelformat,
+                                      xmesa->xm_visual->BitsPerPixel);
+         /* setup pointers to front and back buffer clear functions */
+         front_xrb->clearFunc = clear_pixmap;
       }
-      else {
-         switch (xmesa->xm_visual->BitsPerPixel) {
-         case 8:
-            if (xmesa->xm_visual->hpcr_clear_flag) {
-               back_xrb->clearFunc = clear_HPCR_ximage;
+
+      back_xrb = XMESA_BUFFER(ctx->DrawBuffer)->backxrb;
+      if (back_xrb) {
+         XMesaBuffer xmbuf = XMESA_BUFFER(ctx->DrawBuffer);
+
+         /* XXX check for relevant new_state flags */
+         xmesa_set_renderbuffer_funcs(back_xrb, xmesa->pixelformat,
+                                      xmesa->xm_visual->BitsPerPixel);
+
+         if (xmbuf->backxrb->pixmap) {
+            back_xrb->clearFunc = clear_pixmap;
+         }
+         else {
+            switch (xmesa->xm_visual->BitsPerPixel) {
+            case 8:
+               if (xmesa->xm_visual->hpcr_clear_flag) {
+                  back_xrb->clearFunc = clear_HPCR_ximage;
+               }
+               else {
+                  back_xrb->clearFunc = clear_8bit_ximage;
+               }
+               break;
+            case 16:
+               back_xrb->clearFunc = clear_16bit_ximage;
+               break;
+            case 24:
+               back_xrb->clearFunc = clear_24bit_ximage;
+               break;
+            case 32:
+               back_xrb->clearFunc = clear_32bit_ximage;
+               break;
+            default:
+               back_xrb->clearFunc = clear_nbit_ximage;
+               break;
             }
-            else {
-               back_xrb->clearFunc = clear_8bit_ximage;
-            }
-            break;
-         case 16:
-            back_xrb->clearFunc = clear_16bit_ximage;
-            break;
-         case 24:
-            back_xrb->clearFunc = clear_24bit_ximage;
-            break;
-         case 32:
-            back_xrb->clearFunc = clear_32bit_ximage;
-            break;
-         default:
-            back_xrb->clearFunc = clear_nbit_ximage;
-            break;
          }
       }
    }
@@ -1275,8 +1293,10 @@ xmesa_init_driver_functions( XMesaVisual xmvisual,
                             _SWRAST_NEW_RASTERMASK)
 
 
-/* Extend the software rasterizer with our line/point/triangle
+/**
+ * Extend the software rasterizer with our line/point/triangle
  * functions.
+ * Called during context creation only.
  */
 void xmesa_register_swrast_functions( GLcontext *ctx )
 {
@@ -1286,7 +1306,8 @@ void xmesa_register_swrast_functions( GLcontext *ctx )
    swrast->choose_line = xmesa_choose_line;
    swrast->choose_triangle = xmesa_choose_triangle;
 
-   swrast->invalidate_point |= XMESA_NEW_POINT;
-   swrast->invalidate_line |= XMESA_NEW_LINE;
-   swrast->invalidate_triangle |= XMESA_NEW_TRIANGLE;
+   /* XXX these lines have no net effect.  Remove??? */
+   swrast->InvalidatePointMask |= XMESA_NEW_POINT;
+   swrast->InvalidateLineMask |= XMESA_NEW_LINE;
+   swrast->InvalidateTriangleMask |= XMESA_NEW_TRIANGLE;
 }

@@ -1,18 +1,13 @@
-# src/mesa/drivers/dri/x11/Makefile
+# src/mesa/drivers/dri/glcore/Makefile
 
 TOP = ../../../../..
 include $(TOP)/configs/current
 
-LIBNAME = x11_dri.so
+LIBNAME = glcore_dri.so
 
-DRIVER_SOURCES = x11_dri.c \
+DRIVER_SOURCES = glcore_driver.c \
 		 $(TOP)/src/mesa/drivers/common/driverfuncs.c \
-		 ../common/dri_util.c \
-		 ../../x11/xm_api.c \
-		 ../../x11/xm_dd.c \
-		 ../../x11/xm_line.c \
-		 ../../x11/xm_span.c \
-		 ../../x11/xm_tri.c
+		 ../common/dri_util.c
 
 C_SOURCES = \
 	$(DRIVER_SOURCES) \
@@ -23,7 +18,6 @@ C_SOURCES = \
 INCLUDE_DIRS = \
 	-I. \
 	-I../common \
-	-I../../x11 \
 	-I../dri_client \
 	-I../dri_client/imports \
 	-Iserver \

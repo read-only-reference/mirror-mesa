@@ -365,11 +365,12 @@ radeonCreateScreen( __DRIscreenPrivate *sPriv )
 	    fprintf(stderr, "drm_radeon_getparam_t (RADEON_PARAM_IRQ_NR): %d\n", ret);
 	    return NULL;
 	 }
-	 screen->drmSupportsCubeMaps = (sPriv->drmMinor >= 7);
+	 screen->drmSupportsCubeMapsR200 = (sPriv->drmMinor >= 7);
 	 screen->drmSupportsBlendColor = (sPriv->drmMinor >= 11);
 	 screen->drmSupportsTriPerf = (sPriv->drmMinor >= 16);
 	 screen->drmSupportsFragShader = (sPriv->drmMinor >= 18);
 	 screen->drmSupportsPointSprites = (sPriv->drmMinor >= 13);
+	 screen->drmSupportsCubeMapsR100 = (sPriv->drmMinor >= 15);
       }
    }
 
@@ -586,7 +587,7 @@ radeonCreateScreen( __DRIscreenPrivate *sPriv )
    }
 
    if (screen->chip_family <= CHIP_FAMILY_RS200)
-      screen->chip_flags |= RADEON_CLASS_R200;
+      screen->chip_flags |= RADEON_CLASS_R100;
    else if (screen->chip_family <= CHIP_FAMILY_RV280)
       screen->chip_flags |= RADEON_CLASS_R200;
    else
@@ -921,7 +922,7 @@ __driCreateNewScreen_20050727( __DRInativeDisplay *dpy,
    static const char *driver_name = "R300";
    static const __DRIutilversion2 ddx_expected = { 4, 5, 0, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
-   static const __DRIversion drm_expected = { 1, 20, 0 };
+   static const __DRIversion drm_expected = { 1, 22, 0 };
 #endif
 
    dri_interface = interface;

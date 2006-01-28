@@ -24,6 +24,7 @@ PROGS = \
 	fogcoord \
 	fplight \
 	gamma \
+	gearbox \
 	gears \
 	geartrain \
 	glinfo \
@@ -73,8 +74,9 @@ PROGS = \
 
 ##### TARGETS #####
 
-default: readtex.o $(PROGS)
+default: $(PROGS)
 
+$(PROGS): readtex.o
 
 readtex.c: $(TOP)/progs/util/readtex.c
 	cp $< .

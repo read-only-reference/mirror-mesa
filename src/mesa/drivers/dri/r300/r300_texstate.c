@@ -128,8 +128,8 @@ static const struct {
 	    _ASSIGN(RGB565_REV, R300_EASY_TX_FORMAT(X, Y, Z, ONE, Z5Y6X5)),
 	    _ASSIGN(ARGB4444, R300_EASY_TX_FORMAT(X, Y, Z, W, W4Z4Y4X4)),
 	    _ASSIGN(ARGB4444_REV, R300_EASY_TX_FORMAT(X, Y, Z, W, W4Z4Y4X4)),
-	    _ASSIGN(ARGB1555, R300_EASY_TX_FORMAT(Z, Y, X, W, W1Z5Y5X5)),
-	    _ASSIGN(ARGB1555_REV, R300_EASY_TX_FORMAT(Z, Y, X, W, W1Z5Y5X5)),
+	    _ASSIGN(ARGB1555, R300_EASY_TX_FORMAT(X, Y, Z, W, W1Z5Y5X5)),
+	    _ASSIGN(ARGB1555_REV, R300_EASY_TX_FORMAT(X, Y, Z, W, W1Z5Y5X5)),
 	    _ASSIGN(AL88, R300_EASY_TX_FORMAT(X, X, X, Y, Y8X8)),
 	    _ASSIGN(AL88_REV, R300_EASY_TX_FORMAT(X, X, X, Y, Y8X8)),
 	    _ASSIGN(RGB332, R300_EASY_TX_FORMAT(X, Y, Z, ONE, Z3Y3X2)),
@@ -226,7 +226,7 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	  /* find image size in bytes */
 	  if (texImage->IsCompressed) {
 	    if ((t->format & R300_TX_FORMAT_DXT1) == R300_TX_FORMAT_DXT1) {
-	     // fprintf(stderr,"DXT 1 %d %08X\n", texImage->Width, t->format);
+	      // fprintf(stderr,"DXT 1 %d %08X\n", texImage->Width, t->format);
 	      if ((texImage->Width + 3) < 8) /* width one block */
 		size = texImage->CompressedSize * 4;
 	      else if ((texImage->Width + 3) < 16)
@@ -235,7 +235,7 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	    }
 	    else /* DXT3/5, 16 bytes per block */
 	    {
-	     // fprintf(stderr,"DXT 3/5 %d\n", texImage->Width);
+	      // fprintf(stderr,"DXT 3/5 %d\n", texImage->Width);
 	      if ((texImage->Width + 3) < 8)
 		size = texImage->CompressedSize * 2;
 	      else size = texImage->CompressedSize;
@@ -300,25 +300,17 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 
 	/* Setup remaining cube face blits, if needed */
 	if (tObj->Target == GL_TEXTURE_CUBE_MAP) {
-		WARN_ONCE("Cube map faces arent currently correctly positioned.\n");
-		/* Round totalSize up to multiple of BLIT_WIDTH_BYTES */
-		const GLuint faceSize =
-		    (t->base.totalSize + BLIT_WIDTH_BYTES - 1)
-		    & ~(BLIT_WIDTH_BYTES - 1);
-		const GLuint lines = faceSize / BLIT_WIDTH_BYTES;
 		GLuint face;
-		/* reuse face 0 x/y/width/height - just adjust y */
 		for (face = 1; face < 6; face++) {
 			for (i = 0; i < numLevels; i++) {
 				t->image[face][i].x = t->image[0][i].x;
-				t->image[face][i].y =
-				    t->image[0][i].y + face * lines;
+				t->image[face][i].y = t->image[0][i].y;
 				t->image[face][i].width = t->image[0][i].width;
 				t->image[face][i].height =
 				    t->image[0][i].height;
 			}
 		}
-		t->base.totalSize = 6 * faceSize;	/* total texmem needed */
+		t->base.totalSize *= 6;	/* total texmem needed */
 	}
 
 	/* Hardware state:
@@ -356,14 +348,6 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 				     (log2Height << R200_FACE_HEIGHT_4_SHIFT));
 	}
 	
-	if (!baseImage->IsCompressed) {
-		int vv;
-		vv = (tObj->Image[0][t->base.firstLevel]->Width * 4) % 64;
-		if (vv >= 4 && vv <= 32) {
-			WARN_ONCE("Corrupted texture ahead!\n");
-		}
-	}
-
 	t->size = (((tObj->Image[0][t->base.firstLevel]->Width - 1) << R300_TX_WIDTHMASK_SHIFT)
 			|((tObj->Image[0][t->base.firstLevel]->Height - 1) << R300_TX_HEIGHTMASK_SHIFT));
 
@@ -1140,7 +1124,7 @@ static GLboolean update_tex_common(GLcontext * ctx, int unit)
 		rmesa->NewGLState |= _NEW_TEXTURE_MATRIX;
 	}
 #endif
-
+#if 0
 	format = tObj->Image[0][tObj->BaseLevel]->_BaseFormat;
 	if (rmesa->state.texture.unit[unit].format != format ||
 	    rmesa->state.texture.unit[unit].envMode != texUnit->EnvMode) {
@@ -1150,7 +1134,7 @@ static GLboolean update_tex_common(GLcontext * ctx, int unit)
 			return GL_FALSE;
 		}
 	}
-
+#endif
 #if R200_MERGED
 	FALLBACK(&rmesa->radeon, RADEON_FALLBACK_BORDER_MODE, t->border_fallback);
 #endif
