@@ -617,7 +617,6 @@ static void r300DepthFunc(GLcontext* ctx, GLenum func)
  */
 static void r300DepthMask(GLcontext* ctx, GLboolean mask)
 {
-	r300ContextPtr r300 = R300_CONTEXT(ctx);
 	r300Enable(ctx, GL_DEPTH_TEST, ctx->Depth.Test);
 }
 
@@ -856,7 +855,6 @@ static void r300Viewport(GLcontext * ctx, GLint x, GLint y,
 	 * setting below.  Could apply deltas to rescue pipelined viewport
 	 * values, or keep the originals hanging around.
 	 */
-	R300_FIREVERTICES(R300_CONTEXT(ctx));
 	r300UpdateWindow(ctx);
 }
 
@@ -876,14 +874,14 @@ void r300UpdateViewportOffset( GLcontext *ctx )
 	GLfloat tx = v[MAT_TX] + xoffset + SUBPIXEL_X;
 	GLfloat ty = (- v[MAT_TY]) + yoffset + SUBPIXEL_Y;
 
-	if ( rmesa->hw.vpt.cmd[VPT_SE_VPORT_XOFFSET] != *(GLuint *)&tx ||
-		rmesa->hw.vpt.cmd[VPT_SE_VPORT_YOFFSET] != *(GLuint *)&ty )
+	if ( rmesa->hw.vpt.cmd[VPT_SE_VPORT_XOFFSET] != r300PackFloat32(tx) ||
+		rmesa->hw.vpt.cmd[VPT_SE_VPORT_YOFFSET] != r300PackFloat32(ty))
 	{
 	/* Note: this should also modify whatever data the context reset
 	 * code uses...
 	 */
-	rmesa->hw.vpt.cmd[VPT_SE_VPORT_XOFFSET] = *(GLuint *)&tx;
-	rmesa->hw.vpt.cmd[VPT_SE_VPORT_YOFFSET] = *(GLuint *)&ty;
+	rmesa->hw.vpt.cmd[VPT_SE_VPORT_XOFFSET] = r300PackFloat32(tx);
+	rmesa->hw.vpt.cmd[VPT_SE_VPORT_YOFFSET] = r300PackFloat32(ty);
       
 	}
 
@@ -1090,7 +1088,9 @@ void r300_setup_textures(GLcontext *ctx)
 	int hw_tmu=0;
 	int first_hw_tmu=0, last_hw_tmu=-1; /* -1 translates into no setup costs for fields */
 	int tmu_mappings[R300_MAX_TEXTURE_UNITS] = { -1 };
-	struct r300_fragment_program *rp = ctx->FragmentProgram._Current;
+	struct r300_fragment_program *rp =
+		(struct r300_fragment_program *)
+		(char *)ctx->FragmentProgram._Current;
 
 	R300_STATECHANGE(r300, txe);
 	R300_STATECHANGE(r300, tex.filter);
@@ -1663,7 +1663,9 @@ static unsigned int r300PackFloat24(float f)
 void r300SetupPixelShader(r300ContextPtr rmesa)
 {
 	GLcontext *ctx = rmesa->radeon.glCtx;
-	struct r300_fragment_program *rp = ctx->FragmentProgram._Current;
+	struct r300_fragment_program *rp =
+		(struct r300_fragment_program *)
+		(char *)ctx->FragmentProgram._Current;
 	int i,k;
 
 	if (!rp)	/* should only happenen once, just after context is created */
@@ -1864,6 +1866,7 @@ void r300ResetHwState(r300ContextPtr r300)
 	r300->hw.unk2220.cmd[3] = r300PackFloat32(1.0);
 	r300->hw.unk2220.cmd[4] = r300PackFloat32(1.0);
 
+	/* what about other chips than r300 or rv350??? */
 	if (r300->radeon.radeonScreen->chip_family == CHIP_FAMILY_R300)
 		r300->hw.unk2288.cmd[1] = R300_2288_R300;
 	else
@@ -1886,9 +1889,14 @@ void r300ResetHwState(r300ContextPtr r300)
 
 	r300->hw.gb_misc.cmd[R300_GB_MISC_MSPOS_0] = 0x66666666;
 	r300->hw.gb_misc.cmd[R300_GB_MISC_MSPOS_1] = 0x06666666;
-	if (r300->radeon.radeonScreen->chip_family == CHIP_FAMILY_R300)
+	if ((r300->radeon.radeonScreen->chip_family == CHIP_FAMILY_R300) || 
+	     (r300->radeon.radeonScreen->chip_family == CHIP_FAMILY_R350))
 		r300->hw.gb_misc.cmd[R300_GB_MISC_TILE_CONFIG] = R300_GB_TILE_ENABLE
 							| R300_GB_TILE_PIPE_COUNT_R300
+							| R300_GB_TILE_SIZE_16;
+	else if (r300->radeon.radeonScreen->chip_family == CHIP_FAMILY_RV410)
+		r300->hw.gb_misc.cmd[R300_GB_MISC_TILE_CONFIG] = R300_GB_TILE_ENABLE
+							| R300_GB_TILE_PIPE_COUNT_RV410
 							| R300_GB_TILE_SIZE_16;
 	else if (r300->radeon.radeonScreen->chip_family == CHIP_FAMILY_R420)
 		r300->hw.gb_misc.cmd[R300_GB_MISC_TILE_CONFIG] = R300_GB_TILE_ENABLE

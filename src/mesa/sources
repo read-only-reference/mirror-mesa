@@ -84,6 +84,7 @@ SWRAST_SOURCES = \
 	swrast/s_aatriangle.c \
 	swrast/s_accum.c \
 	swrast/s_alpha.c \
+	swrast/s_arbshader.c \
 	swrast/s_atifragshader.c \
 	swrast/s_bitmap.c \
 	swrast/s_blend.c \
@@ -123,6 +124,7 @@ TNL_SOURCES = \
 	tnl/t_save_playback.c \
 	tnl/t_vb_arbprogram.c \
 	tnl/t_vb_arbprogram_sse.c \
+	tnl/t_vb_arbshader.c\
 	tnl/t_vb_program.c \
 	tnl/t_vb_render.c \
 	tnl/t_vb_texgen.c \
@@ -198,6 +200,9 @@ SLANG_SOURCES =	\
 	shader/slang/slang_compile_struct.c	\
 	shader/slang/slang_compile_variable.c	\
 	shader/slang/slang_execute.c	\
+	shader/slang/slang_export.c	\
+	shader/slang/slang_library_noise.c	\
+	shader/slang/slang_link.c	\
 	shader/slang/slang_preprocess.c	\
 	shader/slang/slang_storage.c	\
 	shader/slang/slang_utility.c
@@ -210,7 +215,8 @@ ASM_C_SOURCES =	\
 	x86/rtasm/x86sse.c \
 	sparc/sparc.c \
 	ppc/common_ppc.c \
-	x86-64/x86-64.c
+	x86-64/x86-64.c \
+	shader/slang/slang_execute_x86.c
 
 X86_SOURCES =			\
 	x86/common_x86_asm.S	\

@@ -29,12 +29,23 @@
 extern "C" {
 #endif
 
+struct slang_translation_unit_;
+
 typedef enum slang_function_kind_
 {
 	slang_func_ordinary,
 	slang_func_constructor,
 	slang_func_operator
 } slang_function_kind;
+
+typedef struct slang_fixup_table_
+{
+	GLuint *table;
+	GLuint count;
+} slang_fixup_table;
+
+void slang_fixup_table_init (slang_fixup_table *);
+void slang_fixup_table_free (slang_fixup_table *);
 
 typedef struct slang_function_
 {
@@ -44,6 +55,7 @@ typedef struct slang_function_
 	unsigned int param_count;
 	slang_operation *body;
 	unsigned int address;
+	slang_fixup_table fixups;
 } slang_function;
 
 int slang_function_construct (slang_function *);
@@ -58,8 +70,11 @@ typedef struct slang_function_scope_
 
 int slang_function_scope_construct (slang_function_scope *);
 void slang_function_scope_destruct (slang_function_scope *);
-int slang_function_scope_find_by_name (slang_function_scope *, const char *, int);
+int slang_function_scope_find_by_name (slang_function_scope *, slang_atom, int);
 slang_function *slang_function_scope_find (slang_function_scope *, slang_function *, int);
+
+GLboolean _slang_build_export_code_table (slang_export_code_table *, slang_function_scope *,
+	struct slang_translation_unit_ *);
 
 #ifdef __cplusplus
 }

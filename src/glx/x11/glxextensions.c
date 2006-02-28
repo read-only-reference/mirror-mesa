@@ -107,6 +107,7 @@ static const struct extension_info known_glx_extensions[] = {
    { GLX(SGIX_video_source),           VER(0,0), N, N, N, N },
    { GLX(SGIX_visual_select_group),    VER(0,0), Y, Y, N, N },
    { GLX(SUN_get_transparent_index),   VER(0,0), N, N, N, N },
+   { GLX(EXT_texture_from_pixmap),     VER(0,0), Y, N, N, N },
    { NULL }
 };
 
@@ -153,6 +154,7 @@ static const struct extension_info known_gl_extensions[] = {
    { GL(EXT_depth_bounds_test),          VER(0,0), N, N, N, N },
    { GL(EXT_draw_range_elements),        VER(1,2), Y, N, Y, N },
    { GL(EXT_fog_coord),                  VER(1,4), Y, N, N, N },
+   { GL(EXT_framebuffer_object),         VER(0,0), Y, N, N, N },
    { GL(EXT_multi_draw_arrays),          VER(1,4), Y, N, Y, N },
    { GL(EXT_packed_pixels),              VER(1,2), Y, N, N, N },
    { GL(EXT_paletted_texture),           VER(0,0), Y, N, N, N },

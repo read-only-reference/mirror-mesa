@@ -69,7 +69,8 @@ enum {
    SGIX_video_resize_bit,
    SGIX_video_source_bit,
    SGIX_visual_select_group_bit,
-   SUN_get_transparent_index_bit
+   SUN_get_transparent_index_bit,
+   EXT_texture_from_pixmap_bit
 };
 
 enum {
@@ -115,6 +116,7 @@ enum {
    GL_EXT_depth_bounds_test_bit,
    GL_EXT_draw_range_elements_bit,
    GL_EXT_fog_coord_bit,
+   GL_EXT_framebuffer_object_bit,
    GL_EXT_multi_draw_arrays_bit,
    GL_EXT_packed_pixels_bit,
    GL_EXT_paletted_texture_bit,

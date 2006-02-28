@@ -420,7 +420,6 @@ fill_array_info_cache( struct array_state_vector * arrays )
 	}
     }
     
-    
     if ( arrays->new_DrawArrays_possible ) {
 	assert( ! arrays->new_DrawArrays_possible );
     }
@@ -530,7 +529,7 @@ static GLubyte *
 emit_DrawArrays_header_old( __GLXcontext * gc,
 			    struct array_state_vector * arrays,
 			    size_t * elements_per_request,
-			    size_t * total_requests,
+			    unsigned int * total_requests,
 			    GLenum mode, GLsizei count )
 {
     size_t command_size;

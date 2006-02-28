@@ -29,11 +29,21 @@
  */
 
 #include "imports.h"
-#include "slang_utility.h"
-#include "slang_compile_variable.h"
-#include "slang_compile_struct.h"
-#include "slang_compile_operation.h"
-#include "slang_compile_function.h"
+#include "slang_compile.h"
+
+/* slang_fixup_table */
+
+void slang_fixup_table_init (slang_fixup_table *fix)
+{
+	fix->table = NULL;
+	fix->count = 0;
+}
+
+void slang_fixup_table_free (slang_fixup_table *fix)
+{
+	slang_alloc_free (fix->table);
+	slang_fixup_table_init (fix);
+}
 
 /* slang_function */
 
@@ -57,6 +67,7 @@ int slang_function_construct (slang_function *func)
 	func->param_count = 0;
 	func->body = NULL;
 	func->address = ~0;
+	slang_fixup_table_init (&func->fixups);
 	return 1;
 }
 
@@ -70,6 +81,7 @@ void slang_function_destruct (slang_function *func)
 		slang_operation_destruct (func->body);
 		slang_alloc_free (func->body);
 	}
+	slang_fixup_table_free (&func->fixups);
 }
 
 /* slang_function_scope */
@@ -91,15 +103,15 @@ void slang_function_scope_destruct (slang_function_scope *scope)
 	slang_alloc_free (scope->functions);
 }
 
-int slang_function_scope_find_by_name (slang_function_scope *funcs, const char *name, int all_scopes)
+int slang_function_scope_find_by_name (slang_function_scope *funcs, slang_atom a_name, int all_scopes)
 {
 	unsigned int i;
 
 	for (i = 0; i < funcs->num_functions; i++)
-		if (slang_string_compare (name, funcs->functions[i].header.name) == 0)
+		if (a_name == funcs->functions[i].header.a_name)
 			return 1;
 	if (all_scopes && funcs->outer_scope != NULL)
-		return slang_function_scope_find_by_name (funcs->outer_scope, name, 1);
+		return slang_function_scope_find_by_name (funcs->outer_scope, a_name, 1);
 	return 0;
 }
 
@@ -110,10 +122,10 @@ slang_function *slang_function_scope_find (slang_function_scope *funcs, slang_fu
 
 	for (i = 0; i < funcs->num_functions; i++)
 	{
-		slang_function *f = funcs->functions + i;
+		slang_function *f = &funcs->functions[i];
 		unsigned int j;
 
-		if (slang_string_compare (fun->header.name, f->header.name) != 0)
+		if (fun->header.a_name != f->header.a_name)
 			continue;
 		if (fun->param_count != f->param_count)
 			continue;
@@ -129,5 +141,50 @@ slang_function *slang_function_scope_find (slang_function_scope *funcs, slang_fu
 	if (all_scopes && funcs->outer_scope != NULL)
 		return slang_function_scope_find (funcs->outer_scope, fun, 1);
 	return NULL;
+}
+
+/*
+ * _slang_build_export_code_table()
+ */
+
+GLboolean _slang_build_export_code_table (slang_export_code_table *tbl, slang_function_scope *funs,
+	slang_translation_unit *unit)
+{
+	slang_atom mainAtom;
+	GLuint i;
+
+	mainAtom = slang_atom_pool_atom (tbl->atoms, "main");
+	if (mainAtom == SLANG_ATOM_NULL)
+		return GL_FALSE;
+
+	for (i = 0; i < funs->num_functions; i++)
+	{
+		if (funs->functions[i].header.a_name == mainAtom)
+		{
+			slang_function *fun = &funs->functions[i];
+			slang_export_code_entry *e;
+			slang_assemble_ctx A;
+
+			e = slang_export_code_table_add (tbl);
+			if (e == NULL)
+				return GL_FALSE;
+			e->address = unit->assembly->count;
+			e->name = slang_atom_pool_atom (tbl->atoms, "@main");
+			if (e->name == SLANG_ATOM_NULL)
+				return GL_FALSE;
+
+			A.file = unit->assembly;
+			A.mach = unit->machine;
+			A.atoms = unit->atom_pool;
+			A.space.funcs = &unit->functions;
+			A.space.structs = &unit->structs;
+			A.space.vars = &unit->globals;
+			slang_assembly_file_push_label (unit->assembly, slang_asm_local_alloc, 20);
+			slang_assembly_file_push_label (unit->assembly, slang_asm_enter, 20);
+			_slang_assemble_function_call (&A, fun, NULL, 0, GL_FALSE);
+			slang_assembly_file_push (unit->assembly, slang_asm_exit);
+		}
+	}
+	return GL_TRUE;
 }
 

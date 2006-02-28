@@ -15,6 +15,7 @@ LIB_DEP = $(LIB_DIR)/$(GL_LIB_NAME) $(LIB_DIR)/$(GLU_LIB_NAME) $(LIB_DIR)/$(GLUT
 
 PROGS = \
 	arbfplight \
+	arbfslight \
 	arbocclude \
 	bounce \
 	clearspd \
@@ -29,6 +30,7 @@ PROGS = \
 	geartrain \
 	glinfo \
 	gloss \
+	glslnoise.c \
 	gltestperf \
 	glutfx \
 	isosurf \
