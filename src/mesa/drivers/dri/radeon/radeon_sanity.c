@@ -345,7 +345,7 @@ static void init_regs( void )
    struct reg_names *tmp;
    int i;
 
-   for (i = 0 ; i < Elements(regs) ; i++) {
+   for (i = 0 ; i < Elements(regs)-1 ; i++) {
       regs[i].idx = reg_names[i].idx;
       regs[i].closest = &reg_names[i];
       regs[i].flags = 0;
@@ -487,9 +487,11 @@ static int print_float_reg_assignment( struct reg *reg, float data )
 
 static int print_reg_assignment( struct reg *reg, int data )
 {
+   float_ui32_type datau;
+   datau.ui32 = data;
    reg->flags |= TOUCHED;
    if (reg->flags & ISFLOAT)
-      return print_float_reg_assignment( reg, *(float *)&data );
+      return print_float_reg_assignment( reg, datau.f );
    else
       return print_int_reg_assignment( reg, data );
 }

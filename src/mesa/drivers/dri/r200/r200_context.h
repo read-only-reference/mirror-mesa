@@ -53,6 +53,10 @@ struct r200_context;
 typedef struct r200_context r200ContextRec;
 typedef struct r200_context *r200ContextPtr;
 
+/* This union is used to avoid warnings/miscompilation
+   with float to uint32_t casts due to strict-aliasing */
+typedef union { GLfloat f; uint32_t ui32; } float_ui32_type;
+
 #include "r200_lock.h"
 #include "radeon_screen.h"
 #include "mm.h"
@@ -1002,6 +1006,8 @@ extern GLboolean r200CreateContext( const __GLcontextModes *glVisual,
 				    __DRIcontextPrivate *driContextPriv,
 				    void *sharedContextPrivate);
 extern void r200SwapBuffers( __DRIdrawablePrivate *dPriv );
+extern void r200CopySubBuffer( __DRIdrawablePrivate * dPriv,
+			       int x, int y, int w, int h );
 extern GLboolean r200MakeCurrent( __DRIcontextPrivate *driContextPriv,
 				  __DRIdrawablePrivate *driDrawPriv,
 				  __DRIdrawablePrivate *driReadPriv );

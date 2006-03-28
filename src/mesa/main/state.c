@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
- * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -786,6 +786,10 @@ _mesa_init_exec_table(struct _glapi_table *exec)
    /* GL_EXT_timer_query */
    SET_GetQueryObjecti64vEXT(exec, _mesa_GetQueryObjecti64vEXT);
    SET_GetQueryObjectui64vEXT(exec, _mesa_GetQueryObjectui64vEXT);
+
+#if FEATURE_EXT_framebuffer_blit
+   SET_BlitFramebufferEXT(exec, _mesa_BlitFramebufferEXT);
+#endif
 }
 
 
@@ -941,6 +945,26 @@ update_program(GLcontext *ctx)
 }
 
 
+static void
+update_viewport_matrix(GLcontext *ctx)
+{
+   const GLfloat depthMax = ctx->DrawBuffer->_DepthMaxF;
+
+   ASSERT(depthMax > 0);
+
+   /* Compute scale and bias values. This is really driver-specific
+    * and should be maintained elsewhere if at all.
+    * NOTE: RasterPos uses this.
+    */
+   _math_matrix_viewport(&ctx->Viewport._WindowMap,
+                         ctx->Viewport.X, ctx->Viewport.Y,
+                         ctx->Viewport.Width, ctx->Viewport.Height,
+                         ctx->Viewport.Near, ctx->Viewport.Far,
+                         depthMax);
+}
+
+
+
 /**
  * If __GLcontextRec::NewState is non-zero then this function \b must be called
  * before rendering any primitive.  Basically, function pointers and
@@ -997,6 +1021,9 @@ _mesa_update_state( GLcontext *ctx )
 
    if (new_state & (_NEW_ARRAY | _NEW_PROGRAM))
       update_arrays( ctx );
+
+   if (new_state & (_NEW_BUFFERS | _NEW_VIEWPORT))
+      update_viewport_matrix(ctx);
 
    if (ctx->_MaintainTexEnvProgram) {
       if (new_state & (_NEW_TEXTURE | _DD_NEW_SEPARATE_SPECULAR | _NEW_FOG))

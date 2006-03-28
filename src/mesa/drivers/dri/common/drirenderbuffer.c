@@ -40,6 +40,10 @@ driDeleteRenderbuffer(struct gl_renderbuffer *rb)
  * Allocate a new driRenderbuffer object.
  * Individual drivers are free to implement different versions of
  * this function.
+ *
+ * At this time, this function can only be used for window-system
+ * renderbuffers, not user-created RBOs.
+ *
  * \param format  Either GL_RGBA, GL_DEPTH_COMPONENT16, GL_DEPTH_COMPONENT24,
  *                GL_DEPTH_COMPONENT32, or GL_STENCIL_INDEX8_EXT (for now).
  * \param addr  address in main memory of the buffer.  Probably a memory
@@ -56,6 +60,8 @@ driNewRenderbuffer(GLenum format, GLvoid *addr,
    driRenderbuffer *drb;
 
    assert(format == GL_RGBA ||
+          format == GL_RGB5 ||
+          format == GL_RGBA8 ||
           format == GL_DEPTH_COMPONENT16 ||
           format == GL_DEPTH_COMPONENT24 ||
           format == GL_DEPTH_COMPONENT32 ||
@@ -75,34 +81,49 @@ driNewRenderbuffer(GLenum format, GLvoid *addr,
 
       drb->Base.InternalFormat = format;
 
-      if (format == GL_RGBA) {
+      if (format == GL_RGBA || format == GL_RGB5 || format == GL_RGBA8) {
          /* Color */
          drb->Base._BaseFormat = GL_RGBA;
          drb->Base.DataType = GL_UNSIGNED_BYTE;
+         if (format == GL_RGB5) {
+            drb->Base.RedBits = 5;
+            drb->Base.GreenBits = 6;
+            drb->Base.BlueBits = 5;
+         }
+         else {
+            drb->Base.RedBits =
+            drb->Base.GreenBits =
+            drb->Base.BlueBits =
+            drb->Base.AlphaBits = 8;
+         }
       }
       else if (format == GL_DEPTH_COMPONENT16) {
          /* Depth */
          drb->Base._BaseFormat = GL_DEPTH_COMPONENT;
          /* we always Get/Put 32-bit Z values */
          drb->Base.DataType = GL_UNSIGNED_INT;
+         drb->Base.DepthBits = 16;
       }
       else if (format == GL_DEPTH_COMPONENT24) {
          /* Depth */
          drb->Base._BaseFormat = GL_DEPTH_COMPONENT;
          /* we always Get/Put 32-bit Z values */
          drb->Base.DataType = GL_UNSIGNED_INT;
+         drb->Base.DepthBits = 24;
       }
       else if (format == GL_DEPTH_COMPONENT32) {
          /* Depth */
          drb->Base._BaseFormat = GL_DEPTH_COMPONENT;
          /* we always Get/Put 32-bit Z values */
          drb->Base.DataType = GL_UNSIGNED_INT;
+         drb->Base.DepthBits = 32;
       }
       else {
          /* Stencil */
          ASSERT(format == GL_STENCIL_INDEX8_EXT);
          drb->Base._BaseFormat = GL_STENCIL_INDEX;
          drb->Base.DataType = GL_UNSIGNED_BYTE;
+         drb->Base.StencilBits = 8;
       }
 
       /* XXX if we were allocating a user-created renderbuffer, we'd have

@@ -32,8 +32,9 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "glheader.h"
 #include "macros.h"
 #include "enums.h"
-
 #include "program.h"
+#include "nvvertexec.h"
+
 #include "r300_context.h"
 #include "r300_program.h"
 #include "program_instruction.h"
@@ -81,25 +82,7 @@ static struct{
 	OPN(END, 0, 0),
 };
 #undef OPN
-#define OPN(rf) {#rf, PROGRAM_##rf}
-
-static struct{
-	char *name;
-	int id;
-}register_file_names[]={
-	OPN(TEMPORARY),
-	OPN(INPUT),
-	OPN(OUTPUT),
-	OPN(LOCAL_PARAM),
-	OPN(ENV_PARAM),
-	OPN(NAMED_PARAM),
-	OPN(STATE_VAR),
-	OPN(WRITE_ONLY),
-	OPN(ADDRESS),
-};
 	
-static char *dst_mask_names[4]={ "X", "Y", "Z", "W" };
-
 int r300VertexProgUpdateParams(GLcontext *ctx, struct r300_vertex_program *vp, float *dst)
 {
 	int pi;
@@ -169,6 +152,8 @@ static unsigned long t_dst_class(enum register_file file)
 			return VSF_OUT_CLASS_TMP;
 		case PROGRAM_OUTPUT:
 			return VSF_OUT_CLASS_RESULT;
+		case PROGRAM_ADDRESS:
+			return VSF_OUT_CLASS_ADDR;
 		/*	
 		case PROGRAM_INPUT:
 		case PROGRAM_LOCAL_PARAM:
@@ -193,7 +178,10 @@ static unsigned long t_dst_index(struct r300_vertex_program *vp, struct prog_dst
 			WARN_ONCE("Unknown output %d\n", dst->Index);
 			return 10;
 		}
+	}else if(dst->File == PROGRAM_ADDRESS) {
+		assert(dst->Index == 0);
 	}
+	
 	return dst->Index;
 }
 
@@ -238,6 +226,7 @@ static unsigned long t_swizzle(GLubyte swizzle)
 	}
 }
 
+#if 0
 static void vp_dump_inputs(struct r300_vertex_program *vp, char *caller)
 {
 	int i;
@@ -253,6 +242,7 @@ static void vp_dump_inputs(struct r300_vertex_program *vp, char *caller)
 	fprintf(stderr, ">\n");
 	
 }
+#endif
 
 static unsigned long t_src_index(struct r300_vertex_program *vp, struct prog_src_register *src)
 {
@@ -286,7 +276,7 @@ static unsigned long t_src(struct r300_vertex_program *vp, struct prog_src_regis
 				t_swizzle(GET_SWZ(src->Swizzle, 2)),
 				t_swizzle(GET_SWZ(src->Swizzle, 3)),
 				t_src_class(src->File),
-				src->NegateBase ? VSF_FLAG_ALL : VSF_FLAG_NONE);
+				src->NegateBase ? VSF_FLAG_ALL : VSF_FLAG_NONE) | (src->RelAddr << 4);
 }
 
 static unsigned long t_src_scalar(struct r300_vertex_program *vp, struct prog_src_register *src)
@@ -390,7 +380,7 @@ static unsigned long op_operands(enum prog_opcode opcode)
 		u_temp_i=VSF_MAX_FRAGMENT_TEMPS-1; \
 	} while (0)
 
-void translate_vertex_shader(struct r300_vertex_program *vp)
+void r300_translate_vertex_shader(struct r300_vertex_program *vp)
 {
 	struct vertex_program *mesa_vp=(void *)vp;
 	struct prog_instruction *vpi;
@@ -405,6 +395,39 @@ void translate_vertex_shader(struct r300_vertex_program *vp)
 	int u_temp_i=VSF_MAX_FRAGMENT_TEMPS-1;
 	struct prog_src_register src[3];
 
+	if (getenv("R300_VP_SAFETY")) {
+		WARN_ONCE("R300_VP_SAFETY enabled.\n");
+		
+		vpi = malloc((mesa_vp->Base.NumInstructions + VSF_MAX_FRAGMENT_TEMPS) * sizeof(struct prog_instruction));
+		memset(vpi, 0, VSF_MAX_FRAGMENT_TEMPS * sizeof(struct prog_instruction));
+		
+		for (i=0; i < VSF_MAX_FRAGMENT_TEMPS; i++) {
+			vpi[i].Opcode = OPCODE_MOV;
+			vpi[i].StringPos = 0;
+			vpi[i].Data = 0;
+			
+			vpi[i].DstReg.File = PROGRAM_TEMPORARY;
+			vpi[i].DstReg.Index = i;
+			vpi[i].DstReg.WriteMask = WRITEMASK_XYZW;
+			vpi[i].DstReg.CondMask = COND_TR;
+					
+			vpi[i].SrcReg[0].File = PROGRAM_STATE_VAR;
+			vpi[i].SrcReg[0].Index = 0;
+			vpi[i].SrcReg[0].Swizzle = MAKE_SWIZZLE4(SWIZZLE_ONE, SWIZZLE_ONE, SWIZZLE_ONE, SWIZZLE_ONE);
+		}
+		
+		memcpy(&vpi[i], mesa_vp->Base.Instructions, mesa_vp->Base.NumInstructions * sizeof(struct prog_instruction));
+		
+		free(mesa_vp->Base.Instructions);
+		
+		mesa_vp->Base.Instructions = vpi;
+		
+		mesa_vp->Base.NumInstructions += VSF_MAX_FRAGMENT_TEMPS;
+		vpi = &mesa_vp->Base.Instructions[mesa_vp->Base.NumInstructions-1];
+		
+		assert(vpi->Opcode == OPCODE_END);
+	}
+	
 	if (mesa_vp->IsPositionInvariant) {
 		struct program_parameter_list *paramList;
 		GLint tokens[6] = { STATE_MATRIX, STATE_MVP, 0, 0, 0, STATE_MATRIX };
@@ -588,6 +611,14 @@ void translate_vertex_shader(struct r300_vertex_program *vp)
 		
 		/* These ops need special handling. */
 		switch(vpi->Opcode){
+		case OPCODE_ARL:
+			o_inst->op=MAKE_VSF_OP(R300_VPI_OUT_OP_ARL, t_dst_index(vp, &vpi->DstReg),
+					t_dst_mask(vpi->DstReg.WriteMask), t_dst_class(vpi->DstReg.File));
+			o_inst->src1=t_src_scalar(vp, &src[0]);
+			o_inst->src2=ZERO_SRC_0;
+			o_inst->src3=ZERO_SRC_0;
+			goto next;
+			
 		case OPCODE_POW:
 			o_inst->op=MAKE_VSF_OP(R300_VPI_OUT_OP_POW, t_dst_index(vp, &vpi->DstReg),
 					t_dst_mask(vpi->DstReg.WriteMask), t_dst_class(vpi->DstReg.File));
@@ -881,10 +912,6 @@ void translate_vertex_shader(struct r300_vertex_program *vp)
 		
 			goto next;
 
-		case OPCODE_ARL:
-			WARN_ONCE("ARL not implemented yet!\n");
-			goto next;
-			
 		case OPCODE_RCC:
 			fprintf(stderr, "Dont know how to handle op %d yet\n", vpi->Opcode);
 			exit(-1);
@@ -952,14 +979,17 @@ void translate_vertex_shader(struct r300_vertex_program *vp)
 		next: ;
 	}
 	
+	/* Will most likely segfault before we get here... fix later. */
+	if(o_inst - vp->program.body.i >= VSF_MAX_FRAGMENT_LENGTH/4) {
+		vp->program.length = 0;
+		vp->native = GL_FALSE;
+		return ;
+	}
 	vp->program.length=(o_inst - vp->program.body.i) * 4;
 #if 0
 	fprintf(stderr, "hw program:\n");
 	for(i=0; i < vp->program.length; i++)
 		fprintf(stderr, "%08x\n", vp->program.body.d[i]);
 #endif
-	
-	if (mesa_vp->IsNVProgram)
-		vp->native = GL_FALSE;
 }
 

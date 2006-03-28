@@ -40,6 +40,7 @@
 #include "texenvprogram.h"
 #include "mtypes.h"
 #include "math/m_xform.h"
+#include "shaderobjects.h"
 
 
 
@@ -2768,6 +2769,27 @@ update_texture_matrices( GLcontext *ctx )
 
 
 /**
+ * Helper function for determining which texture object (1D, 2D, cube, etc)
+ * should actually be used.
+ */
+static void
+texture_override(GLcontext *ctx,
+                 struct gl_texture_unit *texUnit, GLbitfield enableBits,
+                 struct gl_texture_object *texObj, GLuint textureBit)
+{
+   if (!texUnit->_ReallyEnabled && (enableBits & textureBit)) {
+      if (!texObj->Complete) {
+         _mesa_test_texobj_completeness(ctx, texObj);
+      }
+      if (texObj->Complete) {
+         texUnit->_ReallyEnabled = textureBit;
+         texUnit->_Current = texObj;
+      }
+   }
+}
+
+
+/**
  * \note This routine refers to derived texture matrix values to
  * compute the ENABLE_TEXMAT flags, but is only called on
  * _NEW_TEXTURE.  On changes to _NEW_TEXTURE_MATRIX, the ENABLE_TEXMAT
@@ -2779,6 +2801,8 @@ static void
 update_texture_state( GLcontext *ctx )
 {
    GLuint unit;
+   struct gl2_program_intf **prog = ctx->ShaderObjects.CurrentProgram;
+   GLbitfield progteximageusage[MAX_TEXTURE_IMAGE_UNITS];
 
    ctx->NewState |= _NEW_TEXTURE; /* TODO: only set this if there are 
 				   * actual changes. 
@@ -2789,9 +2813,17 @@ update_texture_state( GLcontext *ctx )
    ctx->Texture._TexMatEnabled = 0;
    ctx->Texture._TexGenEnabled = 0;
 
-   /* Update texture unit state.
-    * XXX this loop should probably be broken into separate loops for
-    * texture coord units and texture image units.
+   /*
+    * Grab texture image usage state from shader program. It must be
+    * grabbed every time uniform sampler changes, so maybe there is a
+    * better place to perform these rather expensive computations.
+    */
+   if (ctx->ShaderObjects._FragmentShaderPresent) {
+      (**prog).GetTextureImageUsage (prog, progteximageusage);
+   }
+
+   /*
+    * Update texture unit state.
     */
    for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {
       struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
@@ -2802,7 +2834,10 @@ update_texture_state( GLcontext *ctx )
       texUnit->_GenFlags = 0;
 
       /* Get the bitmask of texture enables */
-      if (ctx->FragmentProgram._Enabled) {
+      if (ctx->ShaderObjects._FragmentShaderPresent) {
+         enableBits = progteximageusage[unit];
+      }
+      else if (ctx->FragmentProgram._Enabled) {
          enableBits = ctx->FragmentProgram.Current->TexturesUsed[unit];
       }
       else {
@@ -2815,60 +2850,16 @@ update_texture_state( GLcontext *ctx )
        * complete.  That's the one we'll use for texturing.  If we're using
        * a fragment program we're guaranteed that bitcount(enabledBits) <= 1.
        */
-      if (enableBits & TEXTURE_CUBE_BIT) {
-         struct gl_texture_object *texObj = texUnit->CurrentCubeMap;
-         if (!texObj->Complete) {
-            _mesa_test_texobj_completeness(ctx, texObj);
-         }
-         if (texObj->Complete) {
-            texUnit->_ReallyEnabled = TEXTURE_CUBE_BIT;
-            texUnit->_Current = texObj;
-         }
-      }
-
-      if (!texUnit->_ReallyEnabled && (enableBits & TEXTURE_3D_BIT)) {
-         struct gl_texture_object *texObj = texUnit->Current3D;
-         if (!texObj->Complete) {
-            _mesa_test_texobj_completeness(ctx, texObj);
-         }
-         if (texObj->Complete) {
-            texUnit->_ReallyEnabled = TEXTURE_3D_BIT;
-            texUnit->_Current = texObj;
-         }
-      }
-
-      if (!texUnit->_ReallyEnabled && (enableBits & TEXTURE_RECT_BIT)) {
-         struct gl_texture_object *texObj = texUnit->CurrentRect;
-         if (!texObj->Complete) {
-            _mesa_test_texobj_completeness(ctx, texObj);
-         }
-         if (texObj->Complete) {
-            texUnit->_ReallyEnabled = TEXTURE_RECT_BIT;
-            texUnit->_Current = texObj;
-         }
-      }
-
-      if (!texUnit->_ReallyEnabled && (enableBits & TEXTURE_2D_BIT)) {
-         struct gl_texture_object *texObj = texUnit->Current2D;
-         if (!texObj->Complete) {
-            _mesa_test_texobj_completeness(ctx, texObj);
-         }
-         if (texObj->Complete) {
-            texUnit->_ReallyEnabled = TEXTURE_2D_BIT;
-            texUnit->_Current = texObj;
-         }
-      }
-
-      if (!texUnit->_ReallyEnabled && (enableBits & TEXTURE_1D_BIT)) {
-         struct gl_texture_object *texObj = texUnit->Current1D;
-         if (!texObj->Complete) {
-            _mesa_test_texobj_completeness(ctx, texObj);
-         }
-         if (texObj->Complete) {
-            texUnit->_ReallyEnabled = TEXTURE_1D_BIT;
-            texUnit->_Current = texObj;
-         }
-      }
+      texture_override(ctx, texUnit, enableBits,
+                       texUnit->CurrentCubeMap, TEXTURE_CUBE_BIT);
+      texture_override(ctx, texUnit, enableBits,
+                       texUnit->Current3D, TEXTURE_3D_BIT);
+      texture_override(ctx, texUnit, enableBits,
+                       texUnit->CurrentRect, TEXTURE_RECT_BIT);
+      texture_override(ctx, texUnit, enableBits,
+                       texUnit->Current2D, TEXTURE_2D_BIT);
+      texture_override(ctx, texUnit, enableBits,
+                       texUnit->Current1D, TEXTURE_1D_BIT);
 
       if (!texUnit->_ReallyEnabled) {
          continue;
@@ -2881,13 +2872,14 @@ update_texture_state( GLcontext *ctx )
 	 texUnit->_CurrentCombine = & texUnit->Combine;
       }
       else {
-         GLenum format = texUnit->_Current->Image[0][0]->_BaseFormat;
+         const struct gl_texture_object *texObj = texUnit->_Current;
+         GLenum format = texObj->Image[0][texObj->BaseLevel]->_BaseFormat;
          if (format == GL_COLOR_INDEX) {
             format = GL_RGBA;  /* a bit of a hack */
          }
          else if (format == GL_DEPTH_COMPONENT
                   || format == GL_DEPTH_STENCIL_EXT) {
-            format = texUnit->_Current->DepthMode;
+            format = texObj->DepthMode;
          }
 	 calculate_derived_texenv(&texUnit->_EnvMode, texUnit->EnvMode, format);
 	 texUnit->_CurrentCombine = & texUnit->_EnvMode;
@@ -2968,7 +2960,7 @@ update_texture_state( GLcontext *ctx )
     * corresponding texture images.
     */
    if (ctx->ShaderObjects.CurrentProgram != NULL) {
-      ctx->Texture._EnabledCoordUnits |= (1 << 8) - 1;
+      ctx->Texture._EnabledCoordUnits |= (1 << ctx->Const.MaxTextureCoordUnits) - 1;
    }
    else if (ctx->FragmentProgram._Enabled) {
       ctx->Texture._EnabledCoordUnits |=

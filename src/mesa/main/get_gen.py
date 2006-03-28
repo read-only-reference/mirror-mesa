@@ -51,7 +51,7 @@ TypeStrings = {
 #  - the state datatype, one of GLint, GLfloat, GLboolean or GLenum
 #  - list of code fragments to get the state, such as ["ctx->Foo.Bar"]
 #  - optional extra code or empty string
-#  - optional extension to check, or None  (XXX this should be a list!)
+#  - optional extensions to check, or None
 #
 StateVars = [
 	( "GL_ACCUM_RED_BITS", GLint, ["ctx->DrawBuffer->Visual.accumRedBits"],
@@ -183,7 +183,7 @@ StateVars = [
 	( "GL_DITHER", GLboolean, ["ctx->Color.DitherFlag"], "", None ),
 	( "GL_DOUBLEBUFFER", GLboolean,
 	  ["ctx->DrawBuffer->Visual.doubleBufferMode"], "", None ),
-	( "GL_DRAW_BUFFER", GLenum, ["ctx->Color.DrawBuffer[0]"], "", None ),
+	( "GL_DRAW_BUFFER", GLenum, ["ctx->DrawBuffer->ColorDrawBuffer[0]"], "", None ),
 	( "GL_EDGE_FLAG", GLboolean, ["ctx->Current.EdgeFlag"],
 	  "FLUSH_CURRENT(ctx, 0);", None ),
 	( "GL_FEEDBACK_BUFFER_SIZE", GLint, ["ctx->Feedback.BufferSize"], "", None ),
@@ -377,7 +377,7 @@ StateVars = [
 	  "const GLfloat *matrix = ctx->ProjectionMatrixStack.Top->m;", None ),
 	( "GL_PROJECTION_STACK_DEPTH", GLint,
 	  ["ctx->ProjectionMatrixStack.Depth + 1"], "", None ),
-	( "GL_READ_BUFFER", GLenum, ["ctx->Pixel.ReadBuffer"], "", None ),
+	( "GL_READ_BUFFER", GLenum, ["ctx->ReadBuffer->ColorReadBuffer"], "", None ),
 	( "GL_RED_BIAS", GLfloat, ["ctx->Pixel.RedBias"], "", None ),
 	( "GL_RED_BITS", GLint, [" ctx->DrawBuffer->Visual.redBits "], "", None ),
 	( "GL_RED_SCALE", GLfloat, ["ctx->Pixel.RedScale"], "", None ),
@@ -631,7 +631,8 @@ StateVars = [
 
 	# GL_EXT_secondary_color
 	( "GL_COLOR_SUM_EXT", GLboolean,
-	  ["ctx->Fog.ColorSumEnabled"], "", ["EXT_secondary_color"] ),
+	  ["ctx->Fog.ColorSumEnabled"], "",
+	  ["EXT_secondary_color", "ARB_vertex_program"] ),
 	( "GL_CURRENT_SECONDARY_COLOR_EXT", GLfloatN,
 	  ["ctx->Current.Attrib[VERT_ATTRIB_COLOR1][0]",
 	   "ctx->Current.Attrib[VERT_ATTRIB_COLOR1][1]",
@@ -691,42 +692,21 @@ StateVars = [
 	  ["ctx->Transform.RasterPositionUnclipped"], "", ["IBM_rasterpos_clip"] ),
 
 	# GL_NV_point_sprite
-	( "GL_POINT_SPRITE_NV", GLboolean, ["ctx->Point.PointSprite"],
-	  "", ["NV_point_sprite"] ), # OR ARB_point_sprite
+	( "GL_POINT_SPRITE_NV", GLboolean, ["ctx->Point.PointSprite"], # == GL_POINT_SPRITE_ARB
+	  "", ["NV_point_sprite", "ARB_point_sprite"] ),
 	( "GL_POINT_SPRITE_R_MODE_NV", GLenum, ["ctx->Point.SpriteRMode"],
-	  "", ["NV_point_sprite"] ), # OR ARB_point_sprite
+	  "", ["NV_point_sprite"] ),
 	( "GL_POINT_SPRITE_COORD_ORIGIN", GLenum, ["ctx->Point.SpriteOrigin"],
-	  "", ["NV_point_sprite"] ), # OR ARB_point_sprite
+	  "", ["NV_point_sprite", "ARB_point_sprite"] ),
 
 	# GL_SGIS_generate_mipmap
 	( "GL_GENERATE_MIPMAP_HINT_SGIS", GLenum, ["ctx->Hint.GenerateMipmap"],
 	  "", ["SGIS_generate_mipmap"] ),
 
 	# GL_NV_vertex_program
-	( "GL_VERTEX_PROGRAM_NV", GLboolean,
-	  ["ctx->VertexProgram.Enabled"], "", ["NV_vertex_program", "ARB_vertex_program"] ),
-	( "GL_VERTEX_PROGRAM_POINT_SIZE_NV", GLboolean,
-	  ["ctx->VertexProgram.PointSizeEnabled"], "", ["NV_vertex_program"] ),
-	( "GL_VERTEX_PROGRAM_TWO_SIDE_NV", GLboolean,
-	  ["ctx->VertexProgram.TwoSideEnabled"], "", ["NV_vertex_program"] ),
-	( "GL_MAX_TRACK_MATRIX_STACK_DEPTH_NV", GLint,
-	  ["ctx->Const.MaxProgramMatrixStackDepth"], "", ["NV_vertex_program"] ),
-	( "GL_MAX_TRACK_MATRICES_NV", GLint,
-	  ["ctx->Const.MaxProgramMatrices"], "", ["NV_vertex_program"] ),
-	( "GL_CURRENT_MATRIX_STACK_DEPTH_NV", GLboolean,
-	  ["ctx->CurrentStack->Depth + 1"], "", ["NV_vertex_program"] ),
-	( "GL_CURRENT_MATRIX_NV", GLfloat,
-	  ["matrix[0]", "matrix[1]", "matrix[2]", "matrix[3]",
-	   "matrix[4]", "matrix[5]", "matrix[6]", "matrix[7]",
-	   "matrix[8]", "matrix[9]", "matrix[10]", "matrix[11]",
-	   "matrix[12]", "matrix[13]", "matrix[14]", "matrix[15]" ],
-	  "const GLfloat *matrix = ctx->CurrentStack->Top->m;",
-	  ["NV_vertex_program"] ),
 	( "GL_VERTEX_PROGRAM_BINDING_NV", GLint,
 	  ["(ctx->VertexProgram.Current ? ctx->VertexProgram.Current->Base.Id : 0)"],
 	  "", ["NV_vertex_program"] ),
-	( "GL_PROGRAM_ERROR_POSITION_NV", GLint,
-	  ["ctx->Program.ErrorPos"], "", ["NV_vertex_program"] ),
 	( "GL_VERTEX_ATTRIB_ARRAY0_NV", GLboolean,
 	  ["ctx->Array.VertexAttrib[0].Enabled"], "", ["NV_vertex_program"] ),
 	( "GL_VERTEX_ATTRIB_ARRAY1_NV", GLboolean,
@@ -795,10 +775,6 @@ StateVars = [
 	# GL_NV_fragment_program
 	( "GL_FRAGMENT_PROGRAM_NV", GLboolean,
 	  ["ctx->FragmentProgram.Enabled"], "", ["NV_fragment_program"] ),
-	( "GL_MAX_TEXTURE_COORDS_NV", GLint,
-	  ["ctx->Const.MaxTextureCoordUnits"], "", ["NV_fragment_program"] ),
-	( "GL_MAX_TEXTURE_IMAGE_UNITS_NV", GLint,
-	  ["ctx->Const.MaxTextureImageUnits"], "", ["NV_fragment_program"] ),
 	( "GL_FRAGMENT_PROGRAM_BINDING_NV", GLint,
 	  ["ctx->FragmentProgram.Current ? ctx->FragmentProgram.Current->Base.Id : 0"],
 	  "", ["NV_fragment_program"] ),
@@ -861,19 +837,53 @@ StateVars = [
 	  ["ctx->Unpack.BufferObj->Name"], "", ["EXT_pixel_buffer_object"] ),
 
 	# GL_ARB_vertex_program
-	( "GL_MAX_VERTEX_ATTRIBS_ARB", GLint,
-	  ["ctx->Const.VertexProgram.MaxAttribs"], "", ["ARB_vertex_program"] ),
-
-	# GL_ARB_fragment_program
-	( "GL_FRAGMENT_PROGRAM_ARB", GLboolean,
-	  ["ctx->FragmentProgram.Enabled"], "", ["ARB_fragment_program"] ),
+	( "GL_VERTEX_PROGRAM_ARB", GLboolean, # == GL_VERTEX_PROGRAM_NV
+	  ["ctx->VertexProgram.Enabled"], "",
+	  ["ARB_vertex_program", "NV_vertex_program"] ),
+	( "GL_VERTEX_PROGRAM_POINT_SIZE_ARB", GLboolean, # == GL_VERTEX_PROGRAM_POINT_SIZE_NV
+	  ["ctx->VertexProgram.PointSizeEnabled"], "",
+	  ["ARB_vertex_program", "NV_vertex_program"] ),
+	( "GL_VERTEX_PROGRAM_TWO_SIDE_ARB", GLboolean, # == GL_VERTEX_PROGRAM_TWO_SIDE_NV
+	  ["ctx->VertexProgram.TwoSideEnabled"], "",
+	  ["ARB_vertex_program", "NV_vertex_program"] ),
+	( "GL_MAX_PROGRAM_MATRIX_STACK_DEPTH_ARB", GLint, # == GL_MAX_TRACK_MATRIX_STACK_DEPTH_NV
+	  ["ctx->Const.MaxProgramMatrixStackDepth"], "",
+	  ["ARB_vertex_program", "ARB_fragment_program", "NV_vertex_program"] ),
+	( "GL_MAX_PROGRAM_MATRICES_ARB", GLint, # == GL_MAX_TRACK_MATRICES_NV
+	  ["ctx->Const.MaxProgramMatrices"], "",
+	  ["ARB_vertex_program", "ARB_fragment_program", "NV_vertex_program"] ),
+	( "GL_CURRENT_MATRIX_STACK_DEPTH_ARB", GLboolean, # == GL_CURRENT_MATRIX_STACK_DEPTH_NV
+	  ["ctx->CurrentStack->Depth + 1"], "",
+	  ["ARB_vertex_program", "ARB_fragment_program", "NV_vertex_program"] ),
+	( "GL_CURRENT_MATRIX_ARB", GLfloat, # == GL_CURRENT_MATRIX_NV
+	  ["matrix[0]", "matrix[1]", "matrix[2]", "matrix[3]",
+	   "matrix[4]", "matrix[5]", "matrix[6]", "matrix[7]",
+	   "matrix[8]", "matrix[9]", "matrix[10]", "matrix[11]",
+	   "matrix[12]", "matrix[13]", "matrix[14]", "matrix[15]" ],
+	  "const GLfloat *matrix = ctx->CurrentStack->Top->m;",
+	  ["ARB_vertex_program", "ARB_fragment_program", "NV_fragment_program"] ),
 	( "GL_TRANSPOSE_CURRENT_MATRIX_ARB", GLfloat,
 	  ["matrix[0]", "matrix[4]", "matrix[8]", "matrix[12]",
 	   "matrix[1]", "matrix[5]", "matrix[9]", "matrix[13]",
 	   "matrix[2]", "matrix[6]", "matrix[10]", "matrix[14]",
 	   "matrix[3]", "matrix[7]", "matrix[11]", "matrix[15]"],
 	  "const GLfloat *matrix = ctx->CurrentStack->Top->m;",
-	  ["ARB_fragment_program"] ),
+	  ["ARB_vertex_program", "ARB_fragment_program"] ),
+	( "GL_MAX_VERTEX_ATTRIBS_ARB", GLint,
+	  ["ctx->Const.VertexProgram.MaxAttribs"], "", ["ARB_vertex_program"] ),
+	( "GL_PROGRAM_ERROR_POSITION_ARB", GLint, # == GL_PROGRAM_ERROR_POSITION_NV
+	  ["ctx->Program.ErrorPos"], "", ["NV_vertex_program",
+	   "ARB_vertex_program", "NV_fragment_program", "ARB_fragment_program"] ),
+
+	# GL_ARB_fragment_program
+	( "GL_FRAGMENT_PROGRAM_ARB", GLboolean,
+	  ["ctx->FragmentProgram.Enabled"], "", ["ARB_fragment_program"] ),
+	( "GL_MAX_TEXTURE_COORDS_ARB", GLint, # == GL_MAX_TEXTURE_COORDS_NV
+	  ["ctx->Const.MaxTextureCoordUnits"], "",
+	  ["ARB_fragment_program", "NV_fragment_program"] ),
+	( "GL_MAX_TEXTURE_IMAGE_UNITS_ARB", GLint, # == GL_MAX_TEXTURE_IMAGE_UNITS_NV
+	  ["ctx->Const.MaxTextureImageUnits"], "",
+	  ["ARB_fragment_program", "NV_fragment_program"] ),
 
 	# GL_EXT_depth_bounds_test
 	( "GL_DEPTH_BOUNDS_TEST_EXT", GLboolean,
@@ -896,7 +906,7 @@ StateVars = [
 	( "GL_MAX_DRAW_BUFFERS_ARB", GLint,
 	  ["ctx->Const.MaxDrawBuffers"], "", ["ARB_draw_buffers"] ),
 	( "GL_DRAW_BUFFER0_ARB", GLenum,
-	  ["ctx->Color.DrawBuffer[0]"], "", ["ARB_draw_buffers"] ),
+	  ["ctx->DrawBuffer->ColorDrawBuffer[0]"], "", ["ARB_draw_buffers"] ),
 	( "GL_DRAW_BUFFER1_ARB", GLenum,
 	  ["buffer"],
 	  """GLenum buffer;
@@ -904,7 +914,7 @@ StateVars = [
             _mesa_error(ctx, GL_INVALID_ENUM, "glGet(GL_DRAW_BUFFERx_ARB)");
             return;
          }
-         buffer = ctx->Color.DrawBuffer[1];""", ["ARB_draw_buffers"] ),
+         buffer = ctx->DrawBuffer->ColorDrawBuffer[1];""", ["ARB_draw_buffers"] ),
 	( "GL_DRAW_BUFFER2_ARB", GLenum,
 	  ["buffer"],
 	  """GLenum buffer;
@@ -912,7 +922,7 @@ StateVars = [
             _mesa_error(ctx, GL_INVALID_ENUM, "glGet(GL_DRAW_BUFFERx_ARB)");
             return;
          }
-         buffer = ctx->Color.DrawBuffer[2];""", ["ARB_draw_buffers"] ),
+         buffer = ctx->DrawBuffer->ColorDrawBuffer[2];""", ["ARB_draw_buffers"] ),
 	( "GL_DRAW_BUFFER3_ARB", GLenum,
 	  ["buffer"],
 	  """GLenum buffer;
@@ -920,7 +930,7 @@ StateVars = [
             _mesa_error(ctx, GL_INVALID_ENUM, "glGet(GL_DRAW_BUFFERx_ARB)");
             return;
          }
-         buffer = ctx->Color.DrawBuffer[3];""", ["ARB_draw_buffers"] ),
+         buffer = ctx->DrawBuffer->ColorDrawBuffer[3];""", ["ARB_draw_buffers"] ),
 	# XXX Add more GL_DRAW_BUFFERn_ARB entries as needed in the future
 
 	# GL_OES_read_format
@@ -1039,10 +1049,16 @@ def EmitGetFunction(stateVars, returnType):
 			if len(extensions) == 1:
 				print ('         CHECK_EXT1(%s, "%s");' %
 					   (extensions[0], function))
-			else:
-				assert len(extensions) == 2
+			elif len(extensions) == 2:
 				print ('         CHECK_EXT2(%s, %s, "%s");' %
 					   (extensions[0], extensions[1], function))
+			elif len(extensions) == 3:
+				print ('         CHECK_EXT3(%s, %s, %s, "%s");' %
+					   (extensions[0], extensions[1], extensions[2], function))
+			else:
+				assert len(extensions) == 4
+				print ('         CHECK_EXT4(%s, %s, %s, %s, "%s");' %
+					   (extensions[0], extensions[1], extensions[2], extensions[3], function))
 		if optionalCode:
 			print "         {"
 			print "         " + optionalCode
@@ -1102,7 +1118,7 @@ def EmitHeader():
  */
 #define CHECK_EXT1(EXT1, FUNC)                                         \\
    if (!ctx->Extensions.EXT1) {                                        \\
-      _mesa_error(ctx, GL_INVALID_VALUE, FUNC "(0x%x)", (int) pname);  \\
+      _mesa_error(ctx, GL_INVALID_ENUM, FUNC "(0x%x)", (int) pname);  \\
       return;                                                          \\
    }
 
@@ -1111,10 +1127,29 @@ def EmitHeader():
  */
 #define CHECK_EXT2(EXT1, EXT2, FUNC)                                   \\
    if (!ctx->Extensions.EXT1 && !ctx->Extensions.EXT2) {               \\
-      _mesa_error(ctx, GL_INVALID_VALUE, FUNC "(0x%x)", (int) pname);  \\
+      _mesa_error(ctx, GL_INVALID_ENUM, FUNC "(0x%x)", (int) pname);  \\
       return;                                                          \\
    }
 
+/*
+ * Check if either of three extensions is enabled.
+ */
+#define CHECK_EXT3(EXT1, EXT2, EXT3, FUNC)                             \\
+   if (!ctx->Extensions.EXT1 && !ctx->Extensions.EXT2 &&               \\
+       !ctx->Extensions.EXT3) {                                        \\
+      _mesa_error(ctx, GL_INVALID_ENUM, FUNC "(0x%x)", (int) pname);  \\
+      return;                                                          \\
+   }
+
+/*
+ * Check if either of four extensions is enabled.
+ */
+#define CHECK_EXT4(EXT1, EXT2, EXT3, EXT4, FUNC)                       \\
+   if (!ctx->Extensions.EXT1 && !ctx->Extensions.EXT2 &&               \\
+       !ctx->Extensions.EXT3 && !ctx->Extensions.EXT4) {               \\
+      _mesa_error(ctx, GL_INVALID_ENUM, FUNC "(0x%x)", (int) pname);  \\
+      return;                                                          \\
+   }
 
 """
 	return

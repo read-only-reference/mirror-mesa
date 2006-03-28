@@ -44,9 +44,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r300_state.h"
 #include "r300_ioctl.h"
 #include "radeon_ioctl.h"
-//#include "r300_swtcl.h"
 #include "r300_tex.h"
-//#include "r300_tcl.h"
 #include "r300_reg.h"
 
 #define R200_TXFORMAT_A8        R200_TXFORMAT_I8
@@ -71,7 +69,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     [ MESA_FORMAT_ ## f ] = { R200_TXFORMAT_ ## f, R200_YUV_TO_RGB }
 #define _INVALID(f) \
     [ MESA_FORMAT_ ## f ] = { 0xffffffff, 0 }
-#define VALID_FORMAT(f) ( ((f) <= MESA_FORMAT_RGBA_DXT5) \
+#define VALID_FORMAT(f) ( ((f) <= MESA_FORMAT_RGBA_DXT5 \
+	|| ((f) >= MESA_FORMAT_RGBA_FLOAT32 && (f) <= MESA_FORMAT_INTENSITY_FLOAT16)) \
 			     && tx_table[f].flag )
 
 #define _ASSIGN(entry, format)	\
@@ -143,6 +142,18 @@ static const struct {
 	    _ASSIGN(RGBA_DXT1, R300_EASY_TX_FORMAT(X, Y, Z, W, DXT1)),
 	    _ASSIGN(RGBA_DXT3, R300_EASY_TX_FORMAT(X, Y, Z, W, DXT3)),
 	    _ASSIGN(RGBA_DXT5, R300_EASY_TX_FORMAT(Y, Z, W, X, DXT5)),
+	    _ASSIGN(RGBA_FLOAT32, R300_EASY_TX_FORMAT(Z, Y, X, W, FL_R32G32B32A32)),
+	    _ASSIGN(RGBA_FLOAT16, R300_EASY_TX_FORMAT(Z, Y, X, W, FL_R16G16B16A16)),
+	    _ASSIGN(RGB_FLOAT32, 0xffffffff),
+	    _ASSIGN(RGB_FLOAT16, 0xffffffff),
+	    _ASSIGN(ALPHA_FLOAT32, R300_EASY_TX_FORMAT(ZERO, ZERO, ZERO, X, FL_I32)),
+	    _ASSIGN(ALPHA_FLOAT16, R300_EASY_TX_FORMAT(ZERO, ZERO, ZERO, X, FL_I16)),
+	    _ASSIGN(LUMINANCE_FLOAT32, R300_EASY_TX_FORMAT(X, X, X, ONE, FL_I32)),
+	    _ASSIGN(LUMINANCE_FLOAT16, R300_EASY_TX_FORMAT(X, X, X, ONE, FL_I16)),
+	    _ASSIGN(LUMINANCE_ALPHA_FLOAT32, R300_EASY_TX_FORMAT(X, X, X, Y, FL_I32A32)),
+	    _ASSIGN(LUMINANCE_ALPHA_FLOAT16, R300_EASY_TX_FORMAT(X, X, X, Y, FL_I16A16)),
+	    _ASSIGN(INTENSITY_FLOAT32, R300_EASY_TX_FORMAT(X, X, X, X, FL_I32)),
+	    _ASSIGN(INTENSITY_FLOAT16, R300_EASY_TX_FORMAT(X, X, X, X, FL_I16)),
 	    };
 
 #undef _COLOR
@@ -178,9 +189,7 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 
 	t->format &= ~(R200_TXFORMAT_FORMAT_MASK |
 			    R200_TXFORMAT_ALPHA_IN_MAP);
-#if 0
-	t->filter &= ~R200_YUV_TO_RGB;
-#endif
+
 	if (VALID_FORMAT(baseImage->TexFormat->MesaFormat)) {
 		t->format =
 		    tx_table[baseImage->TexFormat->MesaFormat].format;
@@ -214,6 +223,31 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	 */
 	curOffset = 0;
 	blitWidth = BLIT_WIDTH_BYTES;
+	t->tile_bits = 0;
+
+	/* figure out if this texture is suitable for tiling. */
+#if 0 /* Disabled for now */
+	if (texelBytes) {
+		if (rmesa->texmicrotile  && (tObj->Target != GL_TEXTURE_RECTANGLE_NV) &&
+		   /* texrect might be able to use micro tiling too in theory? */
+		   (baseImage->Height > 1)) {
+			
+			/* allow 32 (bytes) x 1 mip (which will use two times the space
+			   the non-tiled version would use) max if base texture is large enough */
+			if ((numLevels == 1) ||
+				(((baseImage->Width * texelBytes / baseImage->Height) <= 32) &&
+				(baseImage->Width * texelBytes > 64)) ||
+				((baseImage->Width * texelBytes / baseImage->Height) <= 16)) {
+				t->tile_bits |= R300_TXO_MICRO_TILE;
+			}
+		}
+		
+		if (tObj->Target != GL_TEXTURE_RECTANGLE_NV) {
+			/* we can set macro tiling even for small textures, they will be untiled anyway */
+			t->tile_bits |= R300_TXO_MACRO_TILE;
+		}
+	}
+#endif
 
 	for (i = 0; i < numLevels; i++) {
 	  const struct gl_texture_image *texImage;
@@ -235,6 +269,7 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	    }
 	    else /* DXT3/5, 16 bytes per block */
 	    {
+	      WARN_ONCE("DXT 3/5 suffers from multitexturing problems!\n");
 	      // fprintf(stderr,"DXT 3/5 %d\n", texImage->Width);
 	      if ((texImage->Width + 3) < 8)
 		size = texImage->CompressedSize * 2;
@@ -244,6 +279,13 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	  } else if (tObj->Target == GL_TEXTURE_RECTANGLE_NV) {
 	    size = ((texImage->Width * texelBytes + 63) & ~63) * texImage->Height;
 	    blitWidth = 64 / texelBytes;
+	  } else if (t->tile_bits & R300_TXO_MICRO_TILE) {
+		/* tile pattern is 16 bytes x2. mipmaps stay 32 byte aligned,
+		   though the actual offset may be different (if texture is less than
+		   32 bytes width) to the untiled case */
+		int w = (texImage->Width * texelBytes * 2 + 31) & ~31;
+		size = (w * ((texImage->Height + 1) / 2)) * texImage->Depth;
+		blitWidth = MAX2(texImage->Width, 64 / texelBytes);
 	  } else {
 	    int w = (texImage->Width * texelBytes + 31) & ~31;
 	    size = w * texImage->Height * texImage->Depth;
@@ -316,10 +358,6 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	/* Hardware state:
 	 */
 #if 0
-	t->filter &= ~R200_MAX_MIP_LEVEL_MASK;
-	t->filter |= (numLevels - 1) << R200_MAX_MIP_LEVEL_SHIFT;
-#endif
-#if 0
 	t->format &= ~(R200_TXFORMAT_WIDTH_MASK |
 			    R200_TXFORMAT_HEIGHT_MASK |
 			    R200_TXFORMAT_CUBIC_MAP_ENABLE |
@@ -349,7 +387,8 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	}
 	
 	t->size = (((tObj->Image[0][t->base.firstLevel]->Width - 1) << R300_TX_WIDTHMASK_SHIFT)
-			|((tObj->Image[0][t->base.firstLevel]->Height - 1) << R300_TX_HEIGHTMASK_SHIFT));
+			|((tObj->Image[0][t->base.firstLevel]->Height - 1) << R300_TX_HEIGHTMASK_SHIFT))
+			|((numLevels - 1) << R300_TX_MAX_MIP_LEVEL_SHIFT);
 
 	/* Only need to round to nearest 32 for textures, but the blitter
 	 * requires 64-byte aligned pitches, and we may/may not need the
@@ -358,7 +397,6 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	if (baseImage->IsCompressed) {
 		t->pitch =
 		    (tObj->Image[0][t->base.firstLevel]->Width + 63) & ~(63);
-		t->size |= ((log2Width>log2Height)?log2Width:log2Height)<<R300_TX_SIZE_SHIFT;
 	}
 	else if (tObj->Target == GL_TEXTURE_RECTANGLE_NV) {
 		unsigned int align = blitWidth - 1;
@@ -368,7 +406,6 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 		t->pitch_reg = (((tObj->Image[0][t->base.firstLevel]->Width) + align) & ~align) - 1;
 	}
 	else {
-		t->size |= ((log2Width>log2Height)?log2Width:log2Height)<<R300_TX_SIZE_SHIFT;
 		t->pitch =
 		    ((tObj->Image[0][t->base.firstLevel]->Width *
 		      texelBytes) + 63) & ~(63);
@@ -379,555 +416,10 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	/* FYI: r300UploadTexImages( rmesa, t ) used to be called here */
 }
 
-/* ================================================================
- * Texture combine functions
- */
-
-/* GL_ARB_texture_env_combine support
- */
-
-/* The color tables have combine functions for GL_SRC_COLOR,
- * GL_ONE_MINUS_SRC_COLOR, GL_SRC_ALPHA and GL_ONE_MINUS_SRC_ALPHA.
- */
-static GLuint r300_register_color[][R200_MAX_TEXTURE_UNITS] = {
-	{
-	 R200_TXC_ARG_A_R0_COLOR,
-	 R200_TXC_ARG_A_R1_COLOR,
-	 R200_TXC_ARG_A_R2_COLOR,
-	 R200_TXC_ARG_A_R3_COLOR,
-	 R200_TXC_ARG_A_R4_COLOR,
-	 R200_TXC_ARG_A_R5_COLOR},
-	{
-	 R200_TXC_ARG_A_R0_COLOR | R200_TXC_COMP_ARG_A,
-	 R200_TXC_ARG_A_R1_COLOR | R200_TXC_COMP_ARG_A,
-	 R200_TXC_ARG_A_R2_COLOR | R200_TXC_COMP_ARG_A,
-	 R200_TXC_ARG_A_R3_COLOR | R200_TXC_COMP_ARG_A,
-	 R200_TXC_ARG_A_R4_COLOR | R200_TXC_COMP_ARG_A,
-	 R200_TXC_ARG_A_R5_COLOR | R200_TXC_COMP_ARG_A},
-	{
-	 R200_TXC_ARG_A_R0_ALPHA,
-	 R200_TXC_ARG_A_R1_ALPHA,
-	 R200_TXC_ARG_A_R2_ALPHA,
-	 R200_TXC_ARG_A_R3_ALPHA,
-	 R200_TXC_ARG_A_R4_ALPHA,
-	 R200_TXC_ARG_A_R5_ALPHA},
-	{
-	 R200_TXC_ARG_A_R0_ALPHA | R200_TXC_COMP_ARG_A,
-	 R200_TXC_ARG_A_R1_ALPHA | R200_TXC_COMP_ARG_A,
-	 R200_TXC_ARG_A_R2_ALPHA | R200_TXC_COMP_ARG_A,
-	 R200_TXC_ARG_A_R3_ALPHA | R200_TXC_COMP_ARG_A,
-	 R200_TXC_ARG_A_R4_ALPHA | R200_TXC_COMP_ARG_A,
-	 R200_TXC_ARG_A_R5_ALPHA | R200_TXC_COMP_ARG_A},
-};
-
-static GLuint r300_tfactor_color[] = {
-	R200_TXC_ARG_A_TFACTOR_COLOR,
-	R200_TXC_ARG_A_TFACTOR_COLOR | R200_TXC_COMP_ARG_A,
-	R200_TXC_ARG_A_TFACTOR_ALPHA,
-	R200_TXC_ARG_A_TFACTOR_ALPHA | R200_TXC_COMP_ARG_A
-};
-
-static GLuint r300_primary_color[] = {
-	R200_TXC_ARG_A_DIFFUSE_COLOR,
-	R200_TXC_ARG_A_DIFFUSE_COLOR | R200_TXC_COMP_ARG_A,
-	R200_TXC_ARG_A_DIFFUSE_ALPHA,
-	R200_TXC_ARG_A_DIFFUSE_ALPHA | R200_TXC_COMP_ARG_A
-};
-
-/* GL_ZERO table - indices 0-3
- * GL_ONE  table - indices 1-4
- */
-static GLuint r300_zero_color[] = {
-	R200_TXC_ARG_A_ZERO,
-	R200_TXC_ARG_A_ZERO | R200_TXC_COMP_ARG_A,
-	R200_TXC_ARG_A_ZERO,
-	R200_TXC_ARG_A_ZERO | R200_TXC_COMP_ARG_A,
-	R200_TXC_ARG_A_ZERO
-};
-
-/* The alpha tables only have GL_SRC_ALPHA and GL_ONE_MINUS_SRC_ALPHA.
- */
-static GLuint r300_register_alpha[][R200_MAX_TEXTURE_UNITS] = {
-	{
-	 R200_TXA_ARG_A_R0_ALPHA,
-	 R200_TXA_ARG_A_R1_ALPHA,
-	 R200_TXA_ARG_A_R2_ALPHA,
-	 R200_TXA_ARG_A_R3_ALPHA,
-	 R200_TXA_ARG_A_R4_ALPHA,
-	 R200_TXA_ARG_A_R5_ALPHA},
-	{
-	 R200_TXA_ARG_A_R0_ALPHA | R200_TXA_COMP_ARG_A,
-	 R200_TXA_ARG_A_R1_ALPHA | R200_TXA_COMP_ARG_A,
-	 R200_TXA_ARG_A_R2_ALPHA | R200_TXA_COMP_ARG_A,
-	 R200_TXA_ARG_A_R3_ALPHA | R200_TXA_COMP_ARG_A,
-	 R200_TXA_ARG_A_R4_ALPHA | R200_TXA_COMP_ARG_A,
-	 R200_TXA_ARG_A_R5_ALPHA | R200_TXA_COMP_ARG_A},
-};
-
-static GLuint r300_tfactor_alpha[] = {
-	R200_TXA_ARG_A_TFACTOR_ALPHA,
-	R200_TXA_ARG_A_TFACTOR_ALPHA | R200_TXA_COMP_ARG_A
-};
-
-static GLuint r300_primary_alpha[] = {
-	R200_TXA_ARG_A_DIFFUSE_ALPHA,
-	R200_TXA_ARG_A_DIFFUSE_ALPHA | R200_TXA_COMP_ARG_A
-};
-
-/* GL_ZERO table - indices 0-1
- * GL_ONE  table - indices 1-2
- */
-static GLuint r300_zero_alpha[] = {
-	R200_TXA_ARG_A_ZERO,
-	R200_TXA_ARG_A_ZERO | R200_TXA_COMP_ARG_A,
-	R200_TXA_ARG_A_ZERO,
-};
-
-/* Extract the arg from slot A, shift it into the correct argument slot
- * and set the corresponding complement bit.
- */
-#define R200_COLOR_ARG( n, arg )			\
-do {							\
-   color_combine |=					\
-      ((color_arg[n] & R200_TXC_ARG_A_MASK)		\
-       << R200_TXC_ARG_##arg##_SHIFT);			\
-   color_combine |=					\
-      ((color_arg[n] >> R200_TXC_COMP_ARG_A_SHIFT)	\
-       << R200_TXC_COMP_ARG_##arg##_SHIFT);		\
-} while (0)
-
-#define R200_ALPHA_ARG( n, arg )			\
-do {							\
-   alpha_combine |=					\
-      ((alpha_arg[n] & R200_TXA_ARG_A_MASK)		\
-       << R200_TXA_ARG_##arg##_SHIFT);			\
-   alpha_combine |=					\
-      ((alpha_arg[n] >> R200_TXA_COMP_ARG_A_SHIFT)	\
-       << R200_TXA_COMP_ARG_##arg##_SHIFT);		\
-} while (0)
 
 /* ================================================================
  * Texture unit state management
  */
-
-static GLboolean r300UpdateTextureEnv(GLcontext * ctx, int unit)
-{
-	r300ContextPtr rmesa = R300_CONTEXT(ctx);
-	const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
-	GLuint color_combine, alpha_combine;
-
-#if 0 /* disable for now.. */
-	GLuint color_scale = rmesa->hw.pix[unit].cmd[PIX_PP_TXCBLEND2] &
-	    ~(R200_TXC_SCALE_MASK);
-	GLuint alpha_scale = rmesa->hw.pix[unit].cmd[PIX_PP_TXABLEND2] &
-	    ~(R200_TXA_DOT_ALPHA | R200_TXA_SCALE_MASK);
-#endif
-
-	GLuint color_scale=0, alpha_scale=0;
-
-	/* texUnit->_Current can be NULL if and only if the texture unit is
-	 * not actually enabled.
-	 */
-	assert((texUnit->_ReallyEnabled == 0)
-	       || (texUnit->_Current != NULL));
-
-	if (RADEON_DEBUG & DEBUG_TEXTURE) {
-		fprintf(stderr, "%s( %p, %d )\n", __FUNCTION__, (void *)ctx,
-			unit);
-	}
-
-	/* Set the texture environment state.  Isn't this nice and clean?
-	 * The chip will automagically set the texture alpha to 0xff when
-	 * the texture format does not include an alpha component.  This
-	 * reduces the amount of special-casing we have to do, alpha-only
-	 * textures being a notable exception.
-	 */
-	/* Don't cache these results.
-	 */
-#if 0
-	rmesa->state.texture.unit[unit].format = 0;
-#endif
-	rmesa->state.texture.unit[unit].envMode = 0;
-
-
-	if (!texUnit->_ReallyEnabled) {
-		if (unit == 0) {
-			color_combine =
-			    R200_TXC_ARG_A_ZERO | R200_TXC_ARG_B_ZERO |
-			    R200_TXC_ARG_C_DIFFUSE_COLOR | R200_TXC_OP_MADD;
-			alpha_combine =
-			    R200_TXA_ARG_A_ZERO | R200_TXA_ARG_B_ZERO |
-			    R200_TXA_ARG_C_DIFFUSE_ALPHA | R200_TXA_OP_MADD;
-		} else {
-			color_combine =
-			    R200_TXC_ARG_A_ZERO | R200_TXC_ARG_B_ZERO |
-			    R200_TXC_ARG_C_R0_COLOR | R200_TXC_OP_MADD;
-			alpha_combine =
-			    R200_TXA_ARG_A_ZERO | R200_TXA_ARG_B_ZERO |
-			    R200_TXA_ARG_C_R0_ALPHA | R200_TXA_OP_MADD;
-		}
-	} else {
-		GLuint color_arg[3], alpha_arg[3];
-		GLuint i;
-		const GLuint numColorArgs =
-		    texUnit->_CurrentCombine->_NumArgsRGB;
-		const GLuint numAlphaArgs = texUnit->_CurrentCombine->_NumArgsA;
-		GLuint RGBshift = texUnit->_CurrentCombine->ScaleShiftRGB;
-		GLuint Ashift = texUnit->_CurrentCombine->ScaleShiftA;
-
-		/* Step 1:
-		 * Extract the color and alpha combine function arguments.
-		 */
-		for (i = 0; i < numColorArgs; i++) {
-			const GLint op =
-			    texUnit->_CurrentCombine->OperandRGB[i] -
-			    GL_SRC_COLOR;
-			assert(op >= 0);
-			assert(op <= 3);
-			switch (texUnit->_CurrentCombine->SourceRGB[i]) {
-			case GL_TEXTURE:
-				color_arg[i] = r300_register_color[op][unit];
-				break;
-			case GL_CONSTANT:
-				color_arg[i] = r300_tfactor_color[op];
-				break;
-			case GL_PRIMARY_COLOR:
-				color_arg[i] = r300_primary_color[op];
-				break;
-			case GL_PREVIOUS:
-				if (unit == 0)
-					color_arg[i] = r300_primary_color[op];
-				else
-					color_arg[i] =
-					    r300_register_color[op][0];
-				break;
-			case GL_ZERO:
-				color_arg[i] = r300_zero_color[op];
-				break;
-			case GL_ONE:
-				color_arg[i] = r300_zero_color[op + 1];
-				break;
-			default:
-				return GL_FALSE;
-			}
-		}
-
-		for (i = 0; i < numAlphaArgs; i++) {
-			const GLint op =
-			    texUnit->_CurrentCombine->OperandA[i] -
-			    GL_SRC_ALPHA;
-			assert(op >= 0);
-			assert(op <= 1);
-			switch (texUnit->_CurrentCombine->SourceA[i]) {
-			case GL_TEXTURE:
-				alpha_arg[i] = r300_register_alpha[op][unit];
-				break;
-			case GL_CONSTANT:
-				alpha_arg[i] = r300_tfactor_alpha[op];
-				break;
-			case GL_PRIMARY_COLOR:
-				alpha_arg[i] = r300_primary_alpha[op];
-				break;
-			case GL_PREVIOUS:
-				if (unit == 0)
-					alpha_arg[i] = r300_primary_alpha[op];
-				else
-					alpha_arg[i] =
-					    r300_register_alpha[op][0];
-				break;
-			case GL_ZERO:
-				alpha_arg[i] = r300_zero_alpha[op];
-				break;
-			case GL_ONE:
-				alpha_arg[i] = r300_zero_alpha[op + 1];
-				break;
-			default:
-				return GL_FALSE;
-			}
-		}
-
-		/* Step 2:
-		 * Build up the color and alpha combine functions.
-		 */
-		switch (texUnit->_CurrentCombine->ModeRGB) {
-		case GL_REPLACE:
-			color_combine = (R200_TXC_ARG_A_ZERO |
-					 R200_TXC_ARG_B_ZERO |
-					 R200_TXC_OP_MADD);
-			R200_COLOR_ARG(0, C);
-			break;
-		case GL_MODULATE:
-			color_combine = (R200_TXC_ARG_C_ZERO |
-					 R200_TXC_OP_MADD);
-			R200_COLOR_ARG(0, A);
-			R200_COLOR_ARG(1, B);
-			break;
-		case GL_ADD:
-			color_combine = (R200_TXC_ARG_B_ZERO |
-					 R200_TXC_COMP_ARG_B |
-					 R200_TXC_OP_MADD);
-			R200_COLOR_ARG(0, A);
-			R200_COLOR_ARG(1, C);
-			break;
-		case GL_ADD_SIGNED:
-			color_combine = (R200_TXC_ARG_B_ZERO | R200_TXC_COMP_ARG_B | R200_TXC_BIAS_ARG_C |	/* new */
-					 R200_TXC_OP_MADD);	/* was ADDSIGNED */
-			R200_COLOR_ARG(0, A);
-			R200_COLOR_ARG(1, C);
-			break;
-		case GL_SUBTRACT:
-			color_combine = (R200_TXC_ARG_B_ZERO |
-					 R200_TXC_COMP_ARG_B |
-					 R200_TXC_NEG_ARG_C | R200_TXC_OP_MADD);
-			R200_COLOR_ARG(0, A);
-			R200_COLOR_ARG(1, C);
-			break;
-		case GL_INTERPOLATE:
-			color_combine = (R200_TXC_OP_LERP);
-			R200_COLOR_ARG(0, B);
-			R200_COLOR_ARG(1, A);
-			R200_COLOR_ARG(2, C);
-			break;
-
-		case GL_DOT3_RGB_EXT:
-		case GL_DOT3_RGBA_EXT:
-			/* The EXT version of the DOT3 extension does not support the
-			 * scale factor, but the ARB version (and the version in OpenGL
-			 * 1.3) does.
-			 */
-			RGBshift = 0;
-			/* FALLTHROUGH */
-
-		case GL_DOT3_RGB:
-		case GL_DOT3_RGBA:
-			/* DOT3 works differently on R200 than on R100.  On R100, just
-			 * setting the DOT3 mode did everything for you.  On R200, the
-			 * driver has to enable the biasing and scale in the inputs to
-			 * put them in the proper [-1,1] range.  This is what the 4x and
-			 * the -0.5 in the DOT3 spec do.  The post-scale is then set
-			 * normally.
-			 */
-
-			color_combine = (R200_TXC_ARG_C_ZERO |
-					 R200_TXC_OP_DOT3 |
-					 R200_TXC_BIAS_ARG_A |
-					 R200_TXC_BIAS_ARG_B |
-					 R200_TXC_SCALE_ARG_A |
-					 R200_TXC_SCALE_ARG_B);
-			R200_COLOR_ARG(0, A);
-			R200_COLOR_ARG(1, B);
-			break;
-
-		case GL_MODULATE_ADD_ATI:
-			color_combine = (R200_TXC_OP_MADD);
-			R200_COLOR_ARG(0, A);
-			R200_COLOR_ARG(1, C);
-			R200_COLOR_ARG(2, B);
-			break;
-		case GL_MODULATE_SIGNED_ADD_ATI:
-			color_combine = (R200_TXC_BIAS_ARG_C |	/* new */
-					 R200_TXC_OP_MADD);	/* was ADDSIGNED */
-			R200_COLOR_ARG(0, A);
-			R200_COLOR_ARG(1, C);
-			R200_COLOR_ARG(2, B);
-			break;
-		case GL_MODULATE_SUBTRACT_ATI:
-			color_combine = (R200_TXC_NEG_ARG_C | R200_TXC_OP_MADD);
-			R200_COLOR_ARG(0, A);
-			R200_COLOR_ARG(1, C);
-			R200_COLOR_ARG(2, B);
-			break;
-		default:
-			return GL_FALSE;
-		}
-
-		switch (texUnit->_CurrentCombine->ModeA) {
-		case GL_REPLACE:
-			alpha_combine = (R200_TXA_ARG_A_ZERO |
-					 R200_TXA_ARG_B_ZERO |
-					 R200_TXA_OP_MADD);
-			R200_ALPHA_ARG(0, C);
-			break;
-		case GL_MODULATE:
-			alpha_combine = (R200_TXA_ARG_C_ZERO |
-					 R200_TXA_OP_MADD);
-			R200_ALPHA_ARG(0, A);
-			R200_ALPHA_ARG(1, B);
-			break;
-		case GL_ADD:
-			alpha_combine = (R200_TXA_ARG_B_ZERO |
-					 R200_TXA_COMP_ARG_B |
-					 R200_TXA_OP_MADD);
-			R200_ALPHA_ARG(0, A);
-			R200_ALPHA_ARG(1, C);
-			break;
-		case GL_ADD_SIGNED:
-			alpha_combine = (R200_TXA_ARG_B_ZERO | R200_TXA_COMP_ARG_B | R200_TXA_BIAS_ARG_C |	/* new */
-					 R200_TXA_OP_MADD);	/* was ADDSIGNED */
-			R200_ALPHA_ARG(0, A);
-			R200_ALPHA_ARG(1, C);
-			break;
-		case GL_SUBTRACT:
-			alpha_combine = (R200_TXA_ARG_B_ZERO |
-					 R200_TXA_COMP_ARG_B |
-					 R200_TXA_NEG_ARG_C | R200_TXA_OP_MADD);
-			R200_ALPHA_ARG(0, A);
-			R200_ALPHA_ARG(1, C);
-			break;
-		case GL_INTERPOLATE:
-			alpha_combine = (R200_TXA_OP_LERP);
-			R200_ALPHA_ARG(0, B);
-			R200_ALPHA_ARG(1, A);
-			R200_ALPHA_ARG(2, C);
-			break;
-
-		case GL_MODULATE_ADD_ATI:
-			alpha_combine = (R200_TXA_OP_MADD);
-			R200_ALPHA_ARG(0, A);
-			R200_ALPHA_ARG(1, C);
-			R200_ALPHA_ARG(2, B);
-			break;
-		case GL_MODULATE_SIGNED_ADD_ATI:
-			alpha_combine = (R200_TXA_BIAS_ARG_C |	/* new */
-					 R200_TXA_OP_MADD);	/* was ADDSIGNED */
-			R200_ALPHA_ARG(0, A);
-			R200_ALPHA_ARG(1, C);
-			R200_ALPHA_ARG(2, B);
-			break;
-		case GL_MODULATE_SUBTRACT_ATI:
-			alpha_combine = (R200_TXA_NEG_ARG_C | R200_TXA_OP_MADD);
-			R200_ALPHA_ARG(0, A);
-			R200_ALPHA_ARG(1, C);
-			R200_ALPHA_ARG(2, B);
-			break;
-		default:
-			return GL_FALSE;
-		}
-
-		if ((texUnit->_CurrentCombine->ModeRGB == GL_DOT3_RGBA_EXT)
-		    || (texUnit->_CurrentCombine->ModeRGB == GL_DOT3_RGBA)) {
-			alpha_scale |= R200_TXA_DOT_ALPHA;
-			Ashift = RGBshift;
-		}
-
-		/* Step 3:
-		 * Apply the scale factor.
-		 */
-		color_scale |= (RGBshift << R200_TXC_SCALE_SHIFT);
-		alpha_scale |= (Ashift << R200_TXA_SCALE_SHIFT);
-
-		/* All done!
-		 */
-	}
-
-#if 0
-	fprintf(stderr, "color_combine=%08x alpha_combine=%08x color_scale=%08x alpha_scale=%08x\n",
-		color_combine, alpha_combine, color_scale, alpha_scale);
-#endif
-
-#if 0
-	if (rmesa->hw.pix[unit].cmd[PIX_PP_TXCBLEND] != color_combine ||
-	    rmesa->hw.pix[unit].cmd[PIX_PP_TXABLEND] != alpha_combine ||
-	    rmesa->hw.pix[unit].cmd[PIX_PP_TXCBLEND2] != color_scale ||
-	    rmesa->hw.pix[unit].cmd[PIX_PP_TXABLEND2] != alpha_scale) {
-		R300_STATECHANGE(rmesa, pix[unit]);
-		rmesa->hw.pix[unit].cmd[PIX_PP_TXCBLEND] = color_combine;
-		rmesa->hw.pix[unit].cmd[PIX_PP_TXABLEND] = alpha_combine;
-		rmesa->hw.pix[unit].cmd[PIX_PP_TXCBLEND2] = color_scale;
-		rmesa->hw.pix[unit].cmd[PIX_PP_TXABLEND2] = alpha_scale;
-	}
-
-#endif
-
-	return GL_TRUE;
-}
-
-#define TEXOBJ_TXFILTER_MASK (R200_MAX_MIP_LEVEL_MASK |		\
-			      R200_MIN_FILTER_MASK | 		\
-			      R200_MAG_FILTER_MASK |		\
-			      R200_MAX_ANISO_MASK |		\
-			      R200_YUV_TO_RGB |			\
-			      R200_YUV_TEMPERATURE_MASK |	\
-			      R200_CLAMP_S_MASK | 		\
-			      R200_CLAMP_T_MASK | 		\
-			      R200_BORDER_MODE_D3D )
-
-#define TEXOBJ_TXFORMAT_MASK (R200_TXFORMAT_WIDTH_MASK |	\
-			      R200_TXFORMAT_HEIGHT_MASK |	\
-			      R200_TXFORMAT_FORMAT_MASK |	\
-                              R200_TXFORMAT_F5_WIDTH_MASK |	\
-                              R200_TXFORMAT_F5_HEIGHT_MASK |	\
-			      R200_TXFORMAT_ALPHA_IN_MAP |	\
-			      R200_TXFORMAT_CUBIC_MAP_ENABLE |	\
-                              R200_TXFORMAT_NON_POWER2)
-
-#define TEXOBJ_TXFORMAT_X_MASK (R200_DEPTH_LOG2_MASK |		\
-                                R200_TEXCOORD_MASK |		\
-                                R200_CLAMP_Q_MASK | 		\
-                                R200_VOLUME_FILTER_MASK)
-
-static void disable_tex(GLcontext * ctx, int unit)
-{
-#if 0 /* This needs to be redone.. or done elsewhere */
-	r300ContextPtr rmesa = R300_CONTEXT(ctx);
-
-	if (rmesa->hw.ctx.cmd[CTX_PP_CNTL] & (R200_TEX_0_ENABLE << unit)) {
-		/* Texture unit disabled */
-		if (rmesa->state.texture.unit[unit].texobj != NULL) {
-			/* The old texture is no longer bound to this texture unit.
-			 * Mark it as such.
-			 */
-
-			rmesa->state.texture.unit[unit].texobj->base.bound &=
-			    ~(1UL << unit);
-			rmesa->state.texture.unit[unit].texobj = NULL;
-		}
-
-		R300_STATECHANGE(rmesa, ctx);
-		rmesa->hw.ctx.cmd[CTX_PP_CNTL] &= ~((R200_TEX_0_ENABLE |
-						     R200_TEX_BLEND_0_ENABLE) <<
-						    unit);
-		rmesa->hw.ctx.cmd[CTX_PP_CNTL] |= R200_TEX_BLEND_0_ENABLE;
-
-		R300_STATECHANGE(rmesa, tcl);
-		rmesa->hw.vtx.cmd[VTX_TCL_OUTPUT_VTXFMT_1] &=
-		    ~(7 << (unit * 3));
-
-		if (rmesa->radeon.TclFallback & (RADEON_TCL_FALLBACK_TEXGEN_0 << unit)) {
-			TCL_FALLBACK(ctx, (RADEON_TCL_FALLBACK_TEXGEN_0 << unit),
-				     GL_FALSE);
-		}
-
-		/* Actually want to keep all units less than max active texture
-		 * enabled, right?  Fix this for >2 texunits.
-		 */
-		/* FIXME: What should happen here if r300UpdateTextureEnv fails? */
-		if (unit == 0)
-			r300UpdateTextureEnv(ctx, unit);
-
-		{
-			GLuint inputshift =
-			    R200_TEXGEN_0_INPUT_SHIFT + unit * 4;
-			GLuint tmp = rmesa->TexGenEnabled;
-
-			rmesa->TexGenEnabled &=
-			    ~(R200_TEXGEN_TEXMAT_0_ENABLE << unit);
-			rmesa->TexGenEnabled &= ~(R200_TEXMAT_0_ENABLE << unit);
-			rmesa->TexGenEnabled &=
-			    ~(R200_TEXGEN_INPUT_MASK << inputshift);
-			rmesa->TexGenNeedNormals[unit] = 0;
-			rmesa->TexGenCompSel &= ~(R200_OUTPUT_TEX_0 << unit);
-			rmesa->TexGenInputs &=
-			    ~(R200_TEXGEN_INPUT_MASK << inputshift);
-
-			if (tmp != rmesa->TexGenEnabled) {
-				rmesa->recheck_texgen[unit] = GL_TRUE;
-				rmesa->NewGLState |= _NEW_TEXTURE_MATRIX;
-			}
-		}
-	}
-#endif
-}
 
 static GLboolean enable_tex_2d(GLcontext * ctx, int unit)
 {
@@ -935,15 +427,6 @@ static GLboolean enable_tex_2d(GLcontext * ctx, int unit)
 	struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
 	struct gl_texture_object *tObj = texUnit->_Current;
 	r300TexObjPtr t = (r300TexObjPtr) tObj->DriverData;
-
-	/* Need to load the 2d images associated with this unit.
-	 */
-#if 0
-	if (t->format & R200_TXFORMAT_NON_POWER2) {
-		t->format &= ~R200_TXFORMAT_NON_POWER2;
-		t->base.dirty_images[0] = ~0;
-	}
-#endif
 
 	ASSERT(tObj->Target == GL_TEXTURE_2D || tObj->Target == GL_TEXTURE_1D);
 
@@ -1044,13 +527,6 @@ static GLboolean enable_tex_rect(GLcontext * ctx, int unit)
 	struct gl_texture_object *tObj = texUnit->_Current;
 	r300TexObjPtr t = (r300TexObjPtr) tObj->DriverData;
 
-#if 0
-	if (!(t->format & R200_TXFORMAT_NON_POWER2)) {
-		t->format |= R200_TXFORMAT_NON_POWER2;
-		t->base.dirty_images[0] = ~0;
-	}
-#endif
-
 	ASSERT(tObj->Target == GL_TEXTURE_RECTANGLE_NV);
 
 	if (t->base.dirty_images[0]) {
@@ -1070,7 +546,6 @@ static GLboolean update_tex_common(GLcontext * ctx, int unit)
 	struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
 	struct gl_texture_object *tObj = texUnit->_Current;
 	r300TexObjPtr t = (r300TexObjPtr) tObj->DriverData;
-	GLenum format;
 
 	/* Fallback if there's a texture border */
 	if (tObj->Image[0][tObj->BaseLevel]->Border > 0)
@@ -1095,46 +570,6 @@ static GLboolean update_tex_common(GLcontext * ctx, int unit)
 		driUpdateTextureLRU((driTextureObject *) t);	/* XXX: should be locked! */
 	}
 
-#if 0 /* do elsewhere ? */
-	/* Newly enabled?
-	 */
-	if (1
-	    || !(rmesa->hw.ctx.
-		 cmd[CTX_PP_CNTL] & (R200_TEX_0_ENABLE << unit))) {
-		R300_STATECHANGE(rmesa, ctx);
-		rmesa->hw.ctx.cmd[CTX_PP_CNTL] |= (R200_TEX_0_ENABLE |
-						   R200_TEX_BLEND_0_ENABLE) <<
-		    unit;
-
-		R300_STATECHANGE(rmesa, vtx);
-		rmesa->hw.vtx.cmd[VTX_TCL_OUTPUT_VTXFMT_1] |= 4 << (unit * 3);
-
-		rmesa->recheck_texgen[unit] = GL_TRUE;
-	}
-
-	if (t->dirty_state & (1 << unit)) {
-		import_tex_obj_state(rmesa, unit, t);
-	}
-
-	if (rmesa->recheck_texgen[unit]) {
-		GLboolean fallback = !r300_validate_texgen(ctx, unit);
-		TCL_FALLBACK(ctx, (RADEON_TCL_FALLBACK_TEXGEN_0 << unit),
-			     fallback);
-		rmesa->recheck_texgen[unit] = 0;
-		rmesa->NewGLState |= _NEW_TEXTURE_MATRIX;
-	}
-#endif
-#if 0
-	format = tObj->Image[0][tObj->BaseLevel]->_BaseFormat;
-	if (rmesa->state.texture.unit[unit].format != format ||
-	    rmesa->state.texture.unit[unit].envMode != texUnit->EnvMode) {
-		//rmesa->state.texture.unit[unit].format = format;
-		rmesa->state.texture.unit[unit].envMode = texUnit->EnvMode;
-		if (!r300UpdateTextureEnv(ctx, unit)) {
-			return GL_FALSE;
-		}
-	}
-#endif
 #if R200_MERGED
 	FALLBACK(&rmesa->radeon, RADEON_FALLBACK_BORDER_MODE, t->border_fallback);
 #endif
@@ -1165,18 +600,12 @@ static GLboolean r300UpdateTextureUnit(GLcontext * ctx, int unit)
 	} else if (texUnit->_ReallyEnabled) {
 		return GL_FALSE;
 	} else {
-		disable_tex(ctx, unit);
 		return GL_TRUE;
-	}
+ 	}
 }
 
 void r300UpdateTextureState(GLcontext * ctx)
 {
-#if 0
-	r300ContextPtr rmesa = R300_CONTEXT(ctx);
-	GLuint dbg;
-	int i;
-#endif
 	GLboolean ok;
 
 	ok = (r300UpdateTextureUnit(ctx, 0) &&
@@ -1192,109 +621,4 @@ void r300UpdateTextureState(GLcontext * ctx)
 #if R200_MERGED
 	FALLBACK(&rmesa->radeon, RADEON_FALLBACK_TEXTURE, !ok);
 #endif	
-
-	/* This needs correction, or just be done elsewhere
-	if (rmesa->radeon.TclFallback)
-		r300ChooseVertexState(ctx);
-	*/
-
-#if 0 /* Workaround - disable.. */
-	if (GET_CHIP(rmesa->radeon.radeonScreen) == RADEON_CHIP_REAL_R200) {
-		/*
-		 * T0 hang workaround -------------
-		 * not needed for r200 derivatives?
-		 */
-		if ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_ENABLE_MASK) ==
-		    R200_TEX_0_ENABLE
-		    && (rmesa->hw.tex[0].
-			cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK) >
-		    R200_MIN_FILTER_LINEAR) {
-
-			R300_STATECHANGE(rmesa, ctx);
-			R300_STATECHANGE(rmesa, tex[1]);
-			rmesa->hw.ctx.cmd[CTX_PP_CNTL] |= R200_TEX_1_ENABLE;
-			rmesa->hw.tex[1].cmd[TEX_PP_TXFORMAT] &=
-			    ~TEXOBJ_TXFORMAT_MASK;
-			rmesa->hw.tex[1].cmd[TEX_PP_TXFORMAT] |= 0x08000000;
-		} else {
-			if ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_1_ENABLE)
-			    && (rmesa->hw.tex[1].
-				cmd[TEX_PP_TXFORMAT] & 0x08000000)) {
-				R300_STATECHANGE(rmesa, tex[1]);
-				rmesa->hw.tex[1].cmd[TEX_PP_TXFORMAT] &=
-				    ~0x08000000;
-			}
-		}
-
-		/* maybe needs to be done pairwise due to 2 parallel (physical) tex units ?
-		   looks like that's not the case, if 8500/9100 owners don't complain remove this...
-		   for ( i = 0; i < ctx->Const.MaxTextureUnits; i += 2) {
-		   if (((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & ((R200_TEX_0_ENABLE |
-		   R200_TEX_1_ENABLE ) << i)) == (R200_TEX_0_ENABLE << i)) &&
-		   ((rmesa->hw.tex[i].cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK) >
-		   R200_MIN_FILTER_LINEAR)) {
-		   R300_STATECHANGE(rmesa, ctx);
-		   R300_STATECHANGE(rmesa, tex[i+1]);
-		   rmesa->hw.ctx.cmd[CTX_PP_CNTL] |= (R200_TEX_1_ENABLE << i);
-		   rmesa->hw.tex[i+1].cmd[TEX_PP_TXFORMAT] &= ~TEXOBJ_TXFORMAT_MASK;
-		   rmesa->hw.tex[i+1].cmd[TEX_PP_TXFORMAT] |= 0x08000000;
-		   }
-		   else {
-		   if ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & (R200_TEX_1_ENABLE << i)) &&
-		   (rmesa->hw.tex[i+1].cmd[TEX_PP_TXFORMAT] & 0x08000000)) {
-		   R300_STATECHANGE(rmesa, tex[i+1]);
-		   rmesa->hw.tex[i+1].cmd[TEX_PP_TXFORMAT] &= ~0x08000000;
-		   }
-		   }
-		   } */
-
-		/*
-		 * Texture cache LRU hang workaround -------------
-		 * not needed for r200 derivatives?
-		 */
-		dbg = 0x0;
-
-		if (((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & (R200_TEX_0_ENABLE)) &&
-		     ((((rmesa->hw.tex[0].
-			 cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) & 0x04)
-		      == 0))
-		    || ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_2_ENABLE)
-			&&
-			((((rmesa->hw.tex[2].
-			    cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) &
-			  0x04) == 0))
-		    || ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_4_ENABLE)
-			&&
-			((((rmesa->hw.tex[4].
-			    cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) &
-			  0x04) == 0))) {
-			dbg |= 0x02;
-		}
-
-		if (((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & (R200_TEX_1_ENABLE)) &&
-		     ((((rmesa->hw.tex[1].
-			 cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) & 0x04)
-		      == 0))
-		    || ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_3_ENABLE)
-			&&
-			((((rmesa->hw.tex[3].
-			    cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) &
-			  0x04) == 0))
-		    || ((rmesa->hw.ctx.cmd[CTX_PP_CNTL] & R200_TEX_5_ENABLE)
-			&&
-			((((rmesa->hw.tex[5].
-			    cmd[TEX_PP_TXFILTER] & R200_MIN_FILTER_MASK)) &
-			  0x04) == 0))) {
-			dbg |= 0x04;
-		}
-
-		if (dbg != rmesa->hw.tam.cmd[TAM_DEBUG3]) {
-			R300_STATECHANGE(rmesa, tam);
-			rmesa->hw.tam.cmd[TAM_DEBUG3] = dbg;
-			if (0)
-				printf("TEXCACHE LRU HANG WORKAROUND %x\n",
-				       dbg);
-		}
-	}
-#endif
 }

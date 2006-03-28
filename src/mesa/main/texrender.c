@@ -22,7 +22,9 @@ struct texture_renderbuffer
 };
 
 
-
+/**
+ * Get row of values from the renderbuffer that wraps a texture image.
+ */
 static void
 texture_get_row(GLcontext *ctx, struct gl_renderbuffer *rb, GLuint count,
                 GLint x, GLint y, void *values)
@@ -30,12 +32,30 @@ texture_get_row(GLcontext *ctx, struct gl_renderbuffer *rb, GLuint count,
    const struct texture_renderbuffer *trb
       = (const struct texture_renderbuffer *) rb;
    const GLint z = trb->Zoffset;
-   GLchan *rgbaOut = (GLchan *) values;
    GLuint i;
-   for (i = 0; i < count; i++) {
-      trb->TexImage->FetchTexelc(trb->TexImage, x + i, y, z, rgbaOut + 4 * i);
+
+   ASSERT(trb->TexImage->Width == rb->Width);
+   ASSERT(trb->TexImage->Height == rb->Height);
+
+   if (rb->DataType == CHAN_TYPE) {
+      GLchan *rgbaOut = (GLchan *) values;
+      for (i = 0; i < count; i++) {
+         trb->TexImage->FetchTexelc(trb->TexImage, x + i, y, z, rgbaOut + 4 * i);
+      }
+   }
+   else if (rb->DataType == GL_UNSIGNED_INT_24_8_EXT) {
+      GLuint *zValues = (GLuint *) values;
+      for (i = 0; i < count; i++) {
+         GLfloat flt;
+         trb->TexImage->FetchTexelf(trb->TexImage, x + i, y, z, &flt);
+         zValues[i] = ((GLuint) (flt * 0xffffff)) << 8;
+      }
+   }
+   else {
+      _mesa_problem(ctx, "invalid rb->DataType in texture_get_row");
    }
 }
+
 
 static void
 texture_get_values(GLcontext *ctx, struct gl_renderbuffer *rb, GLuint count,
@@ -44,14 +64,32 @@ texture_get_values(GLcontext *ctx, struct gl_renderbuffer *rb, GLuint count,
    const struct texture_renderbuffer *trb
       = (const struct texture_renderbuffer *) rb;
    const GLint z = trb->Zoffset;
-   GLchan *rgbaOut = (GLchan *) values;
    GLuint i;
-   for (i = 0; i < count; i++) {
-      trb->TexImage->FetchTexelc(trb->TexImage, x[i], y[i], z,
-                                 rgbaOut + 4 * i);
+
+   if (rb->DataType == CHAN_TYPE) {
+      GLchan *rgbaOut = (GLchan *) values;
+      for (i = 0; i < count; i++) {
+         trb->TexImage->FetchTexelc(trb->TexImage, x[i], y[i], z,
+                                    rgbaOut + 4 * i);
+      }
+   }
+   else if (rb->DataType == GL_UNSIGNED_INT_24_8_EXT) {
+      GLuint *zValues = (GLuint *) values;
+      for (i = 0; i < count; i++) {
+         GLfloat flt;
+         trb->TexImage->FetchTexelf(trb->TexImage, x[i], y[i], z, &flt);
+         zValues[i] = ((GLuint) (flt * 0xffffff)) << 8;
+      }
+   }
+   else {
+      _mesa_problem(ctx, "invalid rb->DataType in texture_get_values");
    }
 }
 
+
+/**
+ * Put row of values into a renderbuffer that wraps a texture image.
+ */
 static void
 texture_put_row(GLcontext *ctx, struct gl_renderbuffer *rb, GLuint count,
                 GLint x, GLint y, const void *values, const GLubyte *mask)
@@ -59,15 +97,31 @@ texture_put_row(GLcontext *ctx, struct gl_renderbuffer *rb, GLuint count,
    const struct texture_renderbuffer *trb
       = (const struct texture_renderbuffer *) rb;
    const GLint z = trb->Zoffset;
-   const GLchan *rgba = (const GLchan *) values;
    GLuint i;
-   for (i = 0; i < count; i++) {
-      if (!mask || mask[i]) {
-         trb->Store(trb->TexImage, x + i, y, z, rgba);
+
+   if (rb->DataType == CHAN_TYPE) {
+      const GLchan *rgba = (const GLchan *) values;
+      for (i = 0; i < count; i++) {
+         if (!mask || mask[i]) {
+            trb->Store(trb->TexImage, x + i, y, z, rgba);
+         }
+         rgba += 4;
       }
-      rgba += 4;
+   }
+   else if (rb->DataType == GL_UNSIGNED_INT_24_8_EXT) {
+      const GLuint *zValues = (const GLuint *) values;
+      for (i = 0; i < count; i++) {
+         if (!mask || mask[i]) {
+            GLfloat flt = (zValues[i] >> 8) * (1.0 / 0xffffff);
+            trb->Store(trb->TexImage, x + i, y, z, &flt);
+         }
+      }
+   }
+   else {
+      _mesa_problem(ctx, "invalid rb->DataType in texture_put_row");
    }
 }
+
 
 static void
 texture_put_mono_row(GLcontext *ctx, struct gl_renderbuffer *rb, GLuint count,
@@ -76,14 +130,30 @@ texture_put_mono_row(GLcontext *ctx, struct gl_renderbuffer *rb, GLuint count,
    const struct texture_renderbuffer *trb
       = (const struct texture_renderbuffer *) rb;
    const GLint z = trb->Zoffset;
-   const GLchan *rgba = (const GLchan *) value;
    GLuint i;
-   for (i = 0; i < count; i++) {
-      if (!mask || mask[i]) {
-         trb->Store(trb->TexImage, x + i, y, z, rgba);
+
+   if (rb->DataType == CHAN_TYPE) {
+      const GLchan *rgba = (const GLchan *) value;
+      for (i = 0; i < count; i++) {
+         if (!mask || mask[i]) {
+            trb->Store(trb->TexImage, x + i, y, z, rgba);
+         }
       }
    }
+   else if (rb->DataType == GL_UNSIGNED_INT_24_8_EXT) {
+      const GLuint zValue = *((const GLuint *) value);
+      const GLfloat flt = (zValue >> 8) * (1.0 / 0xffffff);
+      for (i = 0; i < count; i++) {
+         if (!mask || mask[i]) {
+            trb->Store(trb->TexImage, x + i, y, z, &flt);
+         }
+      }
+   }
+   else {
+      _mesa_problem(ctx, "invalid rb->DataType in texture_put_mono_row");
+   }
 }
+
 
 static void
 texture_put_values(GLcontext *ctx, struct gl_renderbuffer *rb, GLuint count,
@@ -93,15 +163,31 @@ texture_put_values(GLcontext *ctx, struct gl_renderbuffer *rb, GLuint count,
    const struct texture_renderbuffer *trb
       = (const struct texture_renderbuffer *) rb;
    const GLint z = trb->Zoffset;
-   const GLchan *rgba = (const GLchan *) values;
    GLuint i;
-   for (i = 0; i < count; i++) {
-      if (!mask || mask[i]) {
-         trb->Store(trb->TexImage, x[i], y[i], z, rgba);
+
+   if (rb->DataType == CHAN_TYPE) {
+      const GLchan *rgba = (const GLchan *) values;
+      for (i = 0; i < count; i++) {
+         if (!mask || mask[i]) {
+            trb->Store(trb->TexImage, x[i], y[i], z, rgba);
+         }
+         rgba += 4;
       }
-      rgba += 4;
+   }
+   else if (rb->DataType == GL_UNSIGNED_INT_24_8_EXT) {
+      const GLuint *zValues = (const GLuint *) values;
+      for (i = 0; i < count; i++) {
+         if (!mask || mask[i]) {
+            GLfloat flt = (zValues[i] >> 8) * (1.0 / 0xffffff);
+            trb->Store(trb->TexImage, x[i], y[i], z, &flt);
+         }
+      }
+   }
+   else {
+      _mesa_problem(ctx, "invalid rb->DataType in texture_put_values");
    }
 }
+
 
 static void
 texture_put_mono_values(GLcontext *ctx, struct gl_renderbuffer *rb,
@@ -111,12 +197,27 @@ texture_put_mono_values(GLcontext *ctx, struct gl_renderbuffer *rb,
    const struct texture_renderbuffer *trb
       = (const struct texture_renderbuffer *) rb;
    const GLint z = trb->Zoffset;
-   const GLchan *rgba = (const GLchan *) value;
    GLuint i;
-   for (i = 0; i < count; i++) {
-      if (!mask || mask[i]) {
-         trb->Store(trb->TexImage, x[i], y[i], z, rgba);
+
+   if (rb->DataType == CHAN_TYPE) {
+      const GLchan *rgba = (const GLchan *) value;
+      for (i = 0; i < count; i++) {
+         if (!mask || mask[i]) {
+            trb->Store(trb->TexImage, x[i], y[i], z, rgba);
+         }
       }
+   }
+   else if (rb->DataType == GL_UNSIGNED_INT_24_8_EXT) {
+      const GLuint zValue = *((const GLuint *) value);
+      const GLfloat flt = (zValue >> 8) * (1.0 / 0xffffff);
+      for (i = 0; i < count; i++) {
+         if (!mask || mask[i]) {
+            trb->Store(trb->TexImage, x[i], y[i], z, &flt);
+         }
+      }
+   }
+   else {
+      _mesa_problem(ctx, "invalid rb->DataType in texture_put_mono_values");
    }
 }
 
@@ -130,10 +231,9 @@ delete_texture_wrapper(struct gl_renderbuffer *rb)
 
 
 /**
- * If a render buffer attachment specifies a texture image, we'll use
- * this function to make a gl_renderbuffer wrapper around the texture image.
- * This allows other parts of Mesa to access the texture image as if it
- * was a renderbuffer.
+ * This function creates a renderbuffer object which wraps a texture image.
+ * The new renderbuffer is plugged into the given attachment point.
+ * This allows rendering into the texture as if it were a renderbuffer.
  */
 static void
 wrap_texture(GLcontext *ctx, struct gl_renderbuffer_attachment *att)
@@ -143,9 +243,6 @@ wrap_texture(GLcontext *ctx, struct gl_renderbuffer_attachment *att)
 
    ASSERT(att->Type == GL_TEXTURE);
    ASSERT(att->Renderbuffer == NULL);
-   /*
-   ASSERT(att->Complete);
-   */
 
    trb = CALLOC_STRUCT(texture_renderbuffer);
    if (!trb) {
@@ -153,30 +250,11 @@ wrap_texture(GLcontext *ctx, struct gl_renderbuffer_attachment *att)
       return;
    }
 
+   /* init base gl_renderbuffer fields */
    _mesa_init_renderbuffer(&trb->Base, name);
-
-   trb->TexImage = att->Texture->Image[att->CubeMapFace][att->TextureLevel];
-   assert(trb->TexImage);
-
-   trb->Store = trb->TexImage->TexFormat->StoreTexel;
-   assert(trb->Store);
-
-   trb->Zoffset = att->Zoffset;
-
-   trb->Base.RefCount = 1;
-   trb->Base.Width = trb->TexImage->Width;
-   trb->Base.Height = trb->TexImage->Height;
-   trb->Base.InternalFormat = trb->TexImage->InternalFormat; /* XXX fix? */
-   trb->Base._BaseFormat = trb->TexImage->TexFormat->BaseFormat;
-#if 0
-   /* fix/avoid this assertion someday */
-   assert(trb->Base._BaseFormat == GL_RGB ||
-          trb->Base._BaseFormat == GL_RGBA ||
-          trb->Base._BaseFormat == GL_DEPTH_COMPONENT);
-#endif
-   trb->Base.DataType = GL_UNSIGNED_BYTE;  /* XXX fix! */
-   trb->Base.Data = trb->TexImage->Data;
-
+   /* plug in our texture_renderbuffer-specific functions */
+   trb->Base.Delete = delete_texture_wrapper;
+   trb->Base.AllocStorage = NULL; /* illegal! */
    trb->Base.GetRow = texture_get_row;
    trb->Base.GetValues = texture_get_values;
    trb->Base.PutRow = texture_put_row;
@@ -184,41 +262,102 @@ wrap_texture(GLcontext *ctx, struct gl_renderbuffer_attachment *att)
    trb->Base.PutValues = texture_put_values;
    trb->Base.PutMonoValues = texture_put_mono_values;
 
-   trb->Base.Delete = delete_texture_wrapper;
-   trb->Base.AllocStorage = NULL; /* illegal! */
-
-   /* XXX fix these */
-   trb->Base.RedBits = trb->TexImage->TexFormat->RedBits;
-   trb->Base.GreenBits = trb->TexImage->TexFormat->GreenBits;
-   trb->Base.BlueBits = trb->TexImage->TexFormat->BlueBits;
-   trb->Base.AlphaBits = trb->TexImage->TexFormat->AlphaBits;
-   trb->Base.DepthBits = trb->TexImage->TexFormat->DepthBits;
-
+   /* update attachment point */
    att->Renderbuffer = &(trb->Base);
 }
 
 
 
 /**
- * Software fallback for ctx->Driver.RenderbufferTexture.
- * This is called via the glRenderbufferTexture1D/2D/3D() functions.
- * If we're unbinding a texture, texObj will be NULL.
- * The framebuffer of interest is ctx->DrawBuffer.
+ * Update the renderbuffer wrapper for rendering to a texture.
+ * For example, update the width, height of the RB based on the texture size,
+ * update the internal format info, etc.
+ */
+static void
+update_wrapper(GLcontext *ctx, const struct gl_renderbuffer_attachment *att)
+{
+   struct texture_renderbuffer *trb
+      = (struct texture_renderbuffer *) att->Renderbuffer;
+
+   ASSERT(trb);
+
+   trb->TexImage = att->Texture->Image[att->CubeMapFace][att->TextureLevel];
+   ASSERT(trb->TexImage);
+
+   trb->Store = trb->TexImage->TexFormat->StoreTexel;
+   ASSERT(trb->Store);
+
+   trb->Zoffset = att->Zoffset;
+
+   trb->Base.Width = trb->TexImage->Width;
+   trb->Base.Height = trb->TexImage->Height;
+   trb->Base.InternalFormat = trb->TexImage->InternalFormat;
+   /* XXX may need more special cases here */
+   if (trb->TexImage->TexFormat->BaseFormat == GL_DEPTH_STENCIL_EXT) {
+      trb->Base._ActualFormat = GL_DEPTH24_STENCIL8_EXT;
+      trb->Base.DataType = GL_UNSIGNED_INT_24_8_EXT;
+   }
+   else if (trb->TexImage->TexFormat->BaseFormat == GL_DEPTH_COMPONENT) {
+      trb->Base._ActualFormat = GL_DEPTH_COMPONENT;
+      trb->Base.DataType = GL_FLOAT;
+   }
+   else {
+      trb->Base._ActualFormat = trb->TexImage->InternalFormat;
+      trb->Base.DataType = CHAN_TYPE;
+   }
+   trb->Base._BaseFormat = trb->TexImage->TexFormat->BaseFormat;
+#if 0
+   /* fix/avoid this assertion someday */
+   ASSERT(trb->Base._BaseFormat == GL_RGB ||
+          trb->Base._BaseFormat == GL_RGBA ||
+          trb->Base._BaseFormat == GL_DEPTH_COMPONENT);
+#endif
+   trb->Base.Data = trb->TexImage->Data;
+
+   trb->Base.RedBits = trb->TexImage->TexFormat->RedBits;
+   trb->Base.GreenBits = trb->TexImage->TexFormat->GreenBits;
+   trb->Base.BlueBits = trb->TexImage->TexFormat->BlueBits;
+   trb->Base.AlphaBits = trb->TexImage->TexFormat->AlphaBits;
+   trb->Base.DepthBits = trb->TexImage->TexFormat->DepthBits;
+}
+
+
+
+/**
+ * Called when rendering to a texture image begins, or when changing
+ * the dest mipmap level, cube face, etc.
+ * This is a fallback routine for software render-to-texture.
+ *
+ * Called via the glRenderbufferTexture1D/2D/3D() functions
+ * and elsewhere (such as glTexImage2D).
+ *
+ * The image we're rendering into is
+ * att->Texture->Image[att->CubeMapFace][att->TextureLevel];
+ * It'll never be NULL.
+ *
+ * \param fb  the framebuffer object the texture is being bound to
+ * \param att  the fb attachment point of the texture
+ *
  * \sa _mesa_framebuffer_renderbuffer
  */
 void
-_mesa_renderbuffer_texture(GLcontext *ctx,
-                           struct gl_renderbuffer_attachment *att,
-                           struct gl_texture_object *texObj,
-                           GLenum texTarget, GLuint level, GLuint zoffset)
+_mesa_render_texture(GLcontext *ctx,
+                     struct gl_framebuffer *fb,
+                     struct gl_renderbuffer_attachment *att)
 {
-   if (texObj) {
-      _mesa_set_texture_attachment(ctx, att, texObj,
-                                   texTarget, level, zoffset);
-      if (!att->Renderbuffer)
-         wrap_texture(ctx, att);
+   if (!att->Renderbuffer) {
+      wrap_texture(ctx, att);
    }
-   else {
-      _mesa_remove_attachment(ctx, att);
-   }
+   update_wrapper(ctx, att);
+}
+
+
+void
+_mesa_finish_render_texture(GLcontext *ctx,
+                            struct gl_renderbuffer_attachment *att)
+{
+   /* do nothing */
+   /* The renderbuffer texture wrapper will get deleted by the
+    * normal mechanism for deleting renderbuffers.
+    */
 }

@@ -1495,6 +1495,11 @@ _mesa_copy_context( const GLcontext *src, GLcontext *dst, GLuint mask )
 /**
  * Check if the given context can render into the given framebuffer
  * by checking visual attributes.
+ *
+ * XXX this may go away someday because we're moving toward more freedom
+ * in binding contexts to drawables with different visual attributes.
+ * The GL_EXT_f_b_o extension is prompting some of that.
+ *
  * \return GL_TRUE if compatible, GL_FALSE otherwise.
  */
 static GLboolean 
@@ -1508,8 +1513,11 @@ check_compatible(const GLcontext *ctx, const GLframebuffer *buffer)
 
    if (ctxvis->rgbMode != bufvis->rgbMode)
       return GL_FALSE;
+#if 0
+   /* disabling this fixes the fgl_glxgears pbuffer demo */
    if (ctxvis->doubleBufferMode && !bufvis->doubleBufferMode)
       return GL_FALSE;
+#endif
    if (ctxvis->stereoMode && !bufvis->stereoMode)
       return GL_FALSE;
    if (ctxvis->haveAccumBuffer && !bufvis->haveAccumBuffer)
@@ -1574,23 +1582,22 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
 
    /* Check that the context's and framebuffer's visuals are compatible.
     */
-   if (newCtx && drawBuffer && newCtx->DrawBuffer != drawBuffer) {
-      if (!check_compatible(newCtx, drawBuffer))
+   if (newCtx && drawBuffer && newCtx->WinSysDrawBuffer != drawBuffer) {
+      if (!check_compatible(newCtx, drawBuffer)) {
+         _mesa_warning(newCtx,
+              "MakeCurrent: incompatible visuals for context and drawbuffer");
          return;
+      }
    }
-   if (newCtx && readBuffer && newCtx->ReadBuffer != readBuffer) {
-      if (!check_compatible(newCtx, readBuffer))
+   if (newCtx && readBuffer && newCtx->WinSysReadBuffer != readBuffer) {
+      if (!check_compatible(newCtx, readBuffer)) {
+         _mesa_warning(newCtx,
+              "MakeCurrent: incompatible visuals for context and readbuffer");
          return;
+      }
    }
 
-#if !defined(IN_DRI_DRIVER)
-   /* We call this function periodically (just here for now) in
-    * order to detect when multithreading has begun.  In a DRI driver, this
-    * step is done by the driver loader (e.g., libGL).
-    */
-   _glapi_check_multithread();
-#endif /* !defined(IN_DRI_DRIVER) */
-
+   /* We used to call _glapi_check_multithread() here.  Now do it in drivers */
    _glapi_set_context((void *) newCtx);
    ASSERT(_mesa_get_current_context() == newCtx);
 
@@ -1607,9 +1614,15 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
          ASSERT(readBuffer->Name == 0);
          newCtx->WinSysDrawBuffer = drawBuffer;
          newCtx->WinSysReadBuffer = readBuffer;
-         /* don't replace user-buffer bindings with window system buffer */
+
+         /*
+          * Only set the context's Draw/ReadBuffer fields if they're NULL
+          * or not bound to a user-created FBO.
+          */
          if (!newCtx->DrawBuffer || newCtx->DrawBuffer->Name == 0) {
             newCtx->DrawBuffer = drawBuffer;
+         }
+         if (!newCtx->ReadBuffer || newCtx->ReadBuffer->Name == 0) {
             newCtx->ReadBuffer = readBuffer;
          }
 
@@ -1627,10 +1640,8 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
             /* set initial viewport and scissor size now */
             _mesa_set_viewport(newCtx, 0, 0,
                                drawBuffer->Width, drawBuffer->Height);
-
-	    _mesa_set_scissor(newCtx, 0, 0, 
-			      drawBuffer->Width,
-			      drawBuffer->Height );
+	    _mesa_set_scissor(newCtx, 0, 0,
+			      drawBuffer->Width, drawBuffer->Height );
          }
       }
 

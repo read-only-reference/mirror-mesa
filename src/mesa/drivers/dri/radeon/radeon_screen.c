@@ -76,7 +76,7 @@ DRI_CONF_BEGIN
         DRI_CONF_TCL_MODE(DRI_CONF_TCL_CODEGEN)
         DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
         DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
-        DRI_CONF_MAX_TEXTURE_UNITS(2,2,3)
+        DRI_CONF_MAX_TEXTURE_UNITS(3,2,3)
         DRI_CONF_HYPERZ(false)
     DRI_CONF_SECTION_END
     DRI_CONF_SECTION_QUALITY
@@ -87,7 +87,7 @@ DRI_CONF_BEGIN
         DRI_CONF_COLOR_REDUCTION(DRI_CONF_COLOR_REDUCTION_DITHER)
         DRI_CONF_ROUND_MODE(DRI_CONF_ROUND_TRUNC)
         DRI_CONF_DITHER_MODE(DRI_CONF_DITHER_XERRORDIFF)
-        DRI_CONF_ALLOW_LARGE_TEXTURES(0)
+        DRI_CONF_ALLOW_LARGE_TEXTURES(1)
     DRI_CONF_SECTION_END
     DRI_CONF_SECTION_DEBUG
         DRI_CONF_NO_RAST(false)
@@ -103,7 +103,7 @@ DRI_CONF_BEGIN
         DRI_CONF_TCL_MODE(DRI_CONF_TCL_CODEGEN)
         DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
         DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
-        DRI_CONF_MAX_TEXTURE_UNITS(4,2,6)
+        DRI_CONF_MAX_TEXTURE_UNITS(6,2,6)
         DRI_CONF_HYPERZ(false)
     DRI_CONF_SECTION_END
     DRI_CONF_SECTION_QUALITY
@@ -114,7 +114,7 @@ DRI_CONF_BEGIN
         DRI_CONF_COLOR_REDUCTION(DRI_CONF_COLOR_REDUCTION_DITHER)
         DRI_CONF_ROUND_MODE(DRI_CONF_ROUND_TRUNC)
         DRI_CONF_DITHER_MODE(DRI_CONF_DITHER_XERRORDIFF)
-        DRI_CONF_ALLOW_LARGE_TEXTURES(0)
+        DRI_CONF_ALLOW_LARGE_TEXTURES(1)
         DRI_CONF_TEXTURE_BLEND_QUALITY(1.0,"0.0:1.0")
     DRI_CONF_SECTION_END
     DRI_CONF_SECTION_DEBUG
@@ -637,6 +637,14 @@ radeonCreateScreen( __DRIscreenPrivate *sPriv )
 	      dri_priv->deviceID);
       return NULL;
    }
+   if (screen->chip_family == CHIP_FAMILY_R350 || 
+       screen->chip_family == CHIP_FAMILY_R300) {
+	   if (getenv("R300_FORCE_R300") == NULL) {
+		   fprintf(stderr, "Radeon 9500/9700/9800 cards are not currently stable.\n");
+		   fprintf(stderr, "More details can be found at https://bugs.freedesktop.org/show_bug.cgi?id=6318\n");
+		   return NULL;
+	   }
+   }
 
    if (screen->chip_family <= CHIP_FAMILY_RS200)
       screen->chip_flags |= RADEON_CLASS_R100;
@@ -708,6 +716,8 @@ radeonCreateScreen( __DRIscreenPrivate *sPriv )
       (*glx_enable_extension)( psc, "GLX_MESA_swap_frame_usage" );
       if (IS_R200_CLASS(screen))
 	 (*glx_enable_extension)( psc, "GLX_MESA_allocate_memory" );
+
+      (*glx_enable_extension)( psc, "GLX_MESA_copy_sub_buffer" );
    }
 
 #if RADEON_COMMON && defined(RADEON_COMMON_FOR_R200)
@@ -915,7 +925,8 @@ static struct __DriverAPIRec radeonAPI = {
    .GetMSC          = driGetMSC32,
    .WaitForMSC      = driWaitForMSC32,
    .WaitForSBC      = NULL,
-   .SwapBuffersMSC  = NULL
+   .SwapBuffersMSC  = NULL,
+   .CopySubBuffer   = radeonCopySubBuffer,
 };
 #else
 static const struct __DriverAPIRec r200API = {
@@ -932,7 +943,8 @@ static const struct __DriverAPIRec r200API = {
    .GetMSC          = driGetMSC32,
    .WaitForMSC      = driWaitForMSC32,
    .WaitForSBC      = NULL,
-   .SwapBuffersMSC  = NULL
+   .SwapBuffersMSC  = NULL,
+   .CopySubBuffer   = r200CopySubBuffer
 };
 #endif
 
@@ -974,7 +986,7 @@ __driCreateNewScreen_20050727( __DRInativeDisplay *dpy,
    static const char *driver_name = "R300";
    static const __DRIutilversion2 ddx_expected = { 4, 5, 0, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
-   static const __DRIversion drm_expected = { 1, 22, 0 };
+   static const __DRIversion drm_expected = { 1, 24, 0 };
 #endif
 
    dri_interface = interface;

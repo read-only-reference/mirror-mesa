@@ -327,6 +327,9 @@ typedef enum
    OPCODE_STENCIL_OP_SEPARATE,
    OPCODE_STENCIL_MASK_SEPARATE,
 
+   /* GL_EXT_framebuffer_blit */
+   OPCODE_BLIT_FRAMEBUFFER,
+
    /* Vertex attributes -- fallback for when optimized display
     * list build isn't active.
     */
@@ -648,7 +651,6 @@ translate_id(GLsizei n, GLenum type, const GLvoid * list)
 /**********************************************************************/
 /*****                        Public                              *****/
 /**********************************************************************/
-
 
 /**
  * Wrapper for _mesa_unpack_image() that handles pixel buffer objects.
@@ -5411,12 +5413,17 @@ save_MultiTexCoord4fv(GLenum target, const GLfloat * v)
 }
 
 
+/**
+ * Record a GL_INVALID_VALUE error when a invalid vertex attribute
+ * index is found.
+ */
 static void
-enum_error(void)
+index_error(void)
 {
    GET_CURRENT_CONTEXT(ctx);
-   _mesa_error(ctx, GL_INVALID_ENUM, "VertexAttribfNV");
+   _mesa_error(ctx, GL_INVALID_VALUE, "VertexAttribf(index)");
 }
+
 
 /* First level for NV_vertex_program:
  *
@@ -5428,7 +5435,7 @@ save_VertexAttrib1fNV(GLuint index, GLfloat x)
    if (index < VERT_ATTRIB_MAX)
       save_Attr1fNV(index, x);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5437,7 +5444,7 @@ save_VertexAttrib1fvNV(GLuint index, const GLfloat * v)
    if (index < VERT_ATTRIB_MAX)
       save_Attr1fNV(index, v[0]);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5446,7 +5453,7 @@ save_VertexAttrib2fNV(GLuint index, GLfloat x, GLfloat y)
    if (index < VERT_ATTRIB_MAX)
       save_Attr2fNV(index, x, y);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5455,7 +5462,7 @@ save_VertexAttrib2fvNV(GLuint index, const GLfloat * v)
    if (index < VERT_ATTRIB_MAX)
       save_Attr2fNV(index, v[0], v[1]);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5464,7 +5471,7 @@ save_VertexAttrib3fNV(GLuint index, GLfloat x, GLfloat y, GLfloat z)
    if (index < VERT_ATTRIB_MAX)
       save_Attr3fNV(index, x, y, z);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5473,7 +5480,7 @@ save_VertexAttrib3fvNV(GLuint index, const GLfloat * v)
    if (index < VERT_ATTRIB_MAX)
       save_Attr3fNV(index, v[0], v[1], v[2]);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5483,7 +5490,7 @@ save_VertexAttrib4fNV(GLuint index, GLfloat x, GLfloat y,
    if (index < VERT_ATTRIB_MAX)
       save_Attr4fNV(index, x, y, z, w);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5492,7 +5499,7 @@ save_VertexAttrib4fvNV(GLuint index, const GLfloat * v)
    if (index < VERT_ATTRIB_MAX)
       save_Attr4fNV(index, v[0], v[1], v[2], v[3]);
    else
-      enum_error();
+      index_error();
 }
 
 
@@ -5504,7 +5511,7 @@ save_VertexAttrib1fARB(GLuint index, GLfloat x)
    if (index < VERT_ATTRIB_MAX)
       save_Attr1fARB(index, x);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5513,7 +5520,7 @@ save_VertexAttrib1fvARB(GLuint index, const GLfloat * v)
    if (index < VERT_ATTRIB_MAX)
       save_Attr1fARB(index, v[0]);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5522,7 +5529,7 @@ save_VertexAttrib2fARB(GLuint index, GLfloat x, GLfloat y)
    if (index < VERT_ATTRIB_MAX)
       save_Attr2fARB(index, x, y);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5531,7 +5538,7 @@ save_VertexAttrib2fvARB(GLuint index, const GLfloat * v)
    if (index < VERT_ATTRIB_MAX)
       save_Attr2fARB(index, v[0], v[1]);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5540,7 +5547,7 @@ save_VertexAttrib3fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z)
    if (index < VERT_ATTRIB_MAX)
       save_Attr3fARB(index, x, y, z);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5549,7 +5556,7 @@ save_VertexAttrib3fvARB(GLuint index, const GLfloat * v)
    if (index < VERT_ATTRIB_MAX)
       save_Attr3fARB(index, v[0], v[1], v[2]);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5559,7 +5566,7 @@ save_VertexAttrib4fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z,
    if (index < VERT_ATTRIB_MAX)
       save_Attr4fARB(index, x, y, z, w);
    else
-      enum_error();
+      index_error();
 }
 
 static void GLAPIENTRY
@@ -5568,20 +5575,49 @@ save_VertexAttrib4fvARB(GLuint index, const GLfloat * v)
    if (index < VERT_ATTRIB_MAX)
       save_Attr4fARB(index, v[0], v[1], v[2], v[3]);
    else
-      enum_error();
+      index_error();
 }
 
 
+#if FEATURE_EXT_framebuffer_blit
+static void GLAPIENTRY
+save_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+                        GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+                        GLbitfield mask, GLenum filter)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = ALLOC_INSTRUCTION(ctx, OPCODE_BLIT_FRAMEBUFFER, 10);
+   if (n) {
+      n[1].i = srcX0;
+      n[2].i = srcY0;
+      n[3].i = srcX1;
+      n[4].i = srcY1;
+      n[5].i = dstX0;
+      n[6].i = dstY0;
+      n[7].i = dstX1;
+      n[8].i = dstY1;
+      n[9].i = mask;
+      n[10].e = filter;
+   }
+   if (ctx->ExecuteFlag) {
+      CALL_BlitFramebufferEXT(ctx->Exec, (srcX0, srcY0, srcX1, srcY1,
+                                          dstX0, dstY0, dstX1, dstY1,
+                                          mask, filter));
+   }
+}
+#endif
 
 
-
-/* KW: Compile commands
+/**
+ * Save an error-generating command into display list.
  *
- * Will appear in the list before the vertex buffer containing the
+ * KW: Will appear in the list before the vertex buffer containing the
  * command that provoked the error.  I don't see this as a problem.
  */
-void
-_mesa_save_error(GLcontext *ctx, GLenum error, const char *s)
+static void
+save_error(GLcontext *ctx, GLenum error, const char *s)
 {
    Node *n;
    n = ALLOC_INSTRUCTION(ctx, OPCODE_ERROR, 2);
@@ -5589,25 +5625,25 @@ _mesa_save_error(GLcontext *ctx, GLenum error, const char *s)
       n[1].e = error;
       n[2].data = (void *) s;
    }
-   /* execute already done */
 }
 
 
-/*
+/**
  * Compile an error into current display list.
  */
 void
 _mesa_compile_error(GLcontext *ctx, GLenum error, const char *s)
 {
    if (ctx->CompileFlag)
-      _mesa_save_error(ctx, error, s);
-
+      save_error(ctx, error, s);
    if (ctx->ExecuteFlag)
       _mesa_error(ctx, error, s);
 }
 
 
-
+/**
+ * Test if ID names a display list.
+ */
 static GLboolean
 islist(GLcontext *ctx, GLuint list)
 {
@@ -5632,7 +5668,7 @@ islist(GLcontext *ctx, GLuint list)
  * the absolute list number, not relative to ListBase.
  * \param list - display list number
  */
-static void GLAPIENTRY
+static void
 execute_list(GLcontext *ctx, GLuint list)
 {
    struct mesa_display_list *dlist;
@@ -6398,6 +6434,13 @@ execute_list(GLcontext *ctx, GLuint list)
                CALL_DrawBuffersARB(ctx->Exec, (n[1].i, buffers));
             }
             break;
+#if FEATURE_EXT_framebuffer_blit
+	 case OPCODE_BLIT_FRAMEBUFFER:
+	    CALL_BlitFramebufferEXT(ctx->Exec, (n[1].i, n[2].i, n[3].i, n[4].i,
+                                                n[5].i, n[6].i, n[7].i, n[8].i,
+                                                n[9].i, n[10].e));
+	    break;
+#endif
 #if FEATURE_ATI_fragment_shader
          case OPCODE_BIND_FRAGMENT_SHADER_ATI:
             CALL_BindFragmentShaderATI(ctx->Exec, (n[1].i));
@@ -8087,6 +8130,10 @@ _mesa_init_dlist_table(struct _glapi_table *table)
 #endif
    SET_DrawBuffersARB(table, save_DrawBuffersARB);
 
+#if FEATURE_EXT_framebuffer_blit
+   SET_BlitFramebufferEXT(table, save_BlitFramebufferEXT);
+#endif
+
    /* 299. GL_EXT_blend_equation_separate */
    SET_BlendEquationSeparateEXT(table, save_BlendEquationSeparateEXT);
 }
@@ -8111,14 +8158,13 @@ print_list(GLcontext *ctx, GLuint list)
    Node *n;
    GLboolean done;
 
-   if (!CALL_IsList(GET_DISPATCH(), (list))) {
+   if (!islist(ctx, list)) {
       _mesa_printf("%u is not a display list ID\n", list);
       return;
    }
 
-   dlist =
-      (struct mesa_display_list *) _mesa_HashLookup(ctx->Shared->DisplayList,
-                                                    list);
+   dlist = (struct mesa_display_list *)
+      _mesa_HashLookup(ctx->Shared->DisplayList, list);
    if (!dlist)
       return;
 

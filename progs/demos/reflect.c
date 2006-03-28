@@ -42,6 +42,9 @@
 #define INIT_WIDTH 400
 #define INIT_HEIGHT 300
 
+#ifdef _WIN32
+#undef CreateWindowA
+#endif
 
 struct window {
    int id;               /* returned by glutCreateWindow() */
@@ -299,10 +302,20 @@ DrawWindow(void)
    GLfloat dist = 20.0;
    GLfloat eyex, eyey, eyez;
 
-   glDrawBuffer(w->drawBuffer);
-   glReadBuffer(w->drawBuffer);
+   if (w->drawBuffer == GL_NONE) {
+      glDrawBuffer(GL_BACK);
+      glReadBuffer(GL_BACK);
+   }
+   else {
+      glDrawBuffer(w->drawBuffer);
+      glReadBuffer(w->drawBuffer);
+   }
 
    glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+   if (w->drawBuffer == GL_NONE) {
+      glDrawBuffer(GL_NONE);
+   }
 
    eyex = dist  *  cos(w->yrot * DEG2RAD)  *  cos(w->xrot * DEG2RAD);
    eyez = dist  *  sin(w->yrot * DEG2RAD)  *  cos(w->xrot * DEG2RAD);
@@ -373,10 +386,10 @@ DrawWindow(void)
       ShowAlphaBuffer(w->width, w->height);
    }
 
-   if (w->drawBuffer == GL_BACK)
-      glutSwapBuffers();
-   else
+   if (w->drawBuffer == GL_FRONT)
       glFinish();
+   else
+      glutSwapBuffers();
 
    /* calc/show frame rate */
    {
@@ -455,6 +468,10 @@ Key(unsigned char key, int x, int y)
          w->drawBuffer = GL_BACK;
       else
          w->drawBuffer = GL_FRONT;
+      glutPostRedisplay();
+      break;
+   case '0':
+      w->drawBuffer = GL_NONE;
       glutPostRedisplay();
       break;
    case ' ':

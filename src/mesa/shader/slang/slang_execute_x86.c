@@ -2,7 +2,7 @@
  * Mesa 3-D graphics library
  * Version:  6.5
  *
- * Copyright (C) 2005-2006  Brian Paul   All Rights Reserved.
+ * Copyright (C) 2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -29,11 +29,9 @@
  */
 
 #include "imports.h"
-#include "context.h"
-#include "colormac.h"
-#include "swrast/s_context.h"
 #include "slang_execute.h"
 #include "slang_library_noise.h"
+#include "slang_library_texsample.h"
 
 #if defined(USE_X86_ASM) || defined(SLANG_X86)
 
@@ -114,26 +112,9 @@ static GLfloat do_ceilf (GLfloat x)
 	return CEILF (x);
 }
 
-static void fetch_texel (GLuint sampler, const GLfloat texcoord[4], GLfloat lambda, GLfloat color[4])
+static GLfloat do_floorf (GLfloat x)
 {
-	GET_CURRENT_CONTEXT(ctx);
-	SWcontext *swrast = SWRAST_CONTEXT(ctx);
-	GLchan rgba[4];
-
-	/* XXX: the function pointer is NULL! */
-	swrast->TextureSample[sampler] (ctx, ctx->Texture.Unit[sampler]._Current, 1,
-		(const GLfloat (*)[4]) texcoord, &lambda, &rgba);
-	color[0] = CHAN_TO_FLOAT(rgba[0]);
-	color[1] = CHAN_TO_FLOAT(rgba[1]);
-	color[2] = CHAN_TO_FLOAT(rgba[2]);
-	color[3] = CHAN_TO_FLOAT(rgba[3]);
-}
-
-static GLvoid do_vec4_tex2d (GLfloat s, GLfloat t, GLuint sampler, GLfloat *rgba)
-{
-	GLfloat st[4] = { s, t, 0.0f, 1.0f };
-
-	fetch_texel (sampler, st, 0.0f, rgba);
+	return FLOORF (x);
 }
 
 static GLvoid do_print_float (GLfloat x)
@@ -150,6 +131,9 @@ static GLvoid do_print_bool (GLfloat x)
 {
 	_mesa_printf ("slang print: %s\n", (GLint) x ? "true" : "false");
 }
+
+#define FLOAT_ONE 0x3f800000
+#define FLOAT_ZERO 0
 
 static GLvoid codegen_assem (codegen_ctx *G, slang_assembly *a)
 {
@@ -223,16 +207,15 @@ static GLvoid codegen_assem (codegen_ctx *G, slang_assembly *a)
 		x86_mov_reg_imm (&G->f, G->r_ecx, 0x100);
 		x86_test (&G->f, G->r_eax, G->r_ecx);
 		{
-			GLfloat one = 1.0f, zero = 0.0f;
 			GLubyte *lab0, *lab1;
 
 			/* TODO: use jcc rel8 */
 			lab0 = x86_jcc_forward (&G->f, cc_E);
-			x86_mov_reg_imm (&G->f, G->r_ecx, *((GLint *) &one));
+			x86_mov_reg_imm (&G->f, G->r_ecx, FLOAT_ONE);
 			/* TODO: use jmp rel8 */
 			lab1 = x86_jmp_forward (&G->f);
 			x86_fixup_fwd_jump (&G->f, lab0);
-			x86_mov_reg_imm (&G->f, G->r_ecx, *((GLint *) &zero));
+			x86_mov_reg_imm (&G->f, G->r_ecx, FLOAT_ZERO);
 			x86_fixup_fwd_jump (&G->f, lab1);
 			x86_lea (&G->f, G->r_esp, x86_make_disp (G->r_esp, 4));
 			x86_mov (&G->f, x86_deref (G->r_esp), G->r_ecx);
@@ -246,16 +229,15 @@ static GLvoid codegen_assem (codegen_ctx *G, slang_assembly *a)
 		x86_mov_reg_imm (&G->f, G->r_ecx, 0x4000);
 		x86_test (&G->f, G->r_eax, G->r_ecx);
 		{
-			GLfloat one = 1.0f, zero = 0.0f;
 			GLubyte *lab0, *lab1;
 
 			/* TODO: use jcc rel8 */
 			lab0 = x86_jcc_forward (&G->f, cc_E);
-			x86_mov_reg_imm (&G->f, G->r_ecx, *((GLint *) &one));
+			x86_mov_reg_imm (&G->f, G->r_ecx, FLOAT_ONE);
 			/* TODO: use jmp rel8 */
 			lab1 = x86_jmp_forward (&G->f);
 			x86_fixup_fwd_jump (&G->f, lab0);
-			x86_mov_reg_imm (&G->f, G->r_ecx, *((GLint *) &zero));
+			x86_mov_reg_imm (&G->f, G->r_ecx, FLOAT_ZERO);
 			x86_fixup_fwd_jump (&G->f, lab1);
 			x86_lea (&G->f, G->r_esp, x86_make_disp (G->r_esp, 4));
 			x86_mov (&G->f, x86_deref (G->r_esp), G->r_ecx);
@@ -270,16 +252,15 @@ static GLvoid codegen_assem (codegen_ctx *G, slang_assembly *a)
 		x86_mov_reg_imm (&G->f, G->r_ecx, 0x4000);
 		x86_test (&G->f, G->r_eax, G->r_ecx);
 		{
-			GLfloat one = 1.0f, zero = 0.0f;
 			GLubyte *lab0, *lab1;
 
 			/* TODO: use jcc rel8 */
 			lab0 = x86_jcc_forward (&G->f, cc_E);
-			x86_mov_reg_imm (&G->f, G->r_ecx, *((GLint *) &one));
+			x86_mov_reg_imm (&G->f, G->r_ecx, FLOAT_ONE);
 			/* TODO: use jmp rel8 */
 			lab1 = x86_jmp_forward (&G->f);
 			x86_fixup_fwd_jump (&G->f, lab0);
-			x86_mov_reg_imm (&G->f, G->r_ecx, *((GLint *) &zero));
+			x86_mov_reg_imm (&G->f, G->r_ecx, FLOAT_ZERO);
 			x86_fixup_fwd_jump (&G->f, lab1);
 			x86_mov (&G->f, x86_deref (G->r_esp), G->r_ecx);
 		}
@@ -318,13 +299,10 @@ static GLvoid codegen_assem (codegen_ctx *G, slang_assembly *a)
 		x87_fstp (&G->f, x86_deref (G->r_esp));
 		break;
 	case slang_asm_float_floor:
-		set_fpu_round_neg_inf (G);
-		x87_fld (&G->f, x86_deref (G->r_esp));   
-		x87_fprndint (&G->f);   
+		x86_call (&G->f, (GLubyte *) do_floorf);
 		x87_fstp (&G->f, x86_deref (G->r_esp));
 		break;
 	case slang_asm_float_ceil:
-		/* TODO: use frndint */
 		x86_call (&G->f, (GLubyte *) do_ceilf);
 		x87_fstp (&G->f, x86_deref (G->r_esp));
 		break;
@@ -373,9 +351,29 @@ static GLvoid codegen_assem (codegen_ctx *G, slang_assembly *a)
 		x86_mul (&G->f, G->r_ecx);
 		x86_mov (&G->f, x86_deref (G->r_esp), G->r_eax);
 		break;
+	case slang_asm_vec4_tex1d:
+		x86_call (&G->f, (GLubyte *) _slang_library_tex1d);
+		x86_lea (&G->f, G->r_esp, x86_make_disp (G->r_esp, 12));
+		break;
 	case slang_asm_vec4_tex2d:
-		x86_call (&G->f, (GLubyte *) do_vec4_tex2d);
-		x86_lea (&G->f, G->r_ebp, x86_make_disp (G->r_esp, 12));
+		x86_call (&G->f, (GLubyte *) _slang_library_tex2d);
+		x86_lea (&G->f, G->r_esp, x86_make_disp (G->r_esp, 16));
+		break;
+	case slang_asm_vec4_tex3d:
+		x86_call (&G->f, (GLubyte *) _slang_library_tex3d);
+		x86_lea (&G->f, G->r_esp, x86_make_disp (G->r_esp, 20));
+		break;
+	case slang_asm_vec4_texcube:
+		x86_call (&G->f, (GLubyte *) _slang_library_texcube);
+		x86_lea (&G->f, G->r_esp, x86_make_disp (G->r_esp, 20));
+		break;
+	case slang_asm_vec4_shad1d:
+		x86_call (&G->f, (GLubyte *) _slang_library_shad1d);
+		x86_lea (&G->f, G->r_esp, x86_make_disp (G->r_esp, 20));
+		break;
+	case slang_asm_vec4_shad2d:
+		x86_call (&G->f, (GLubyte *) _slang_library_shad2d);
+		x86_lea (&G->f, G->r_esp, x86_make_disp (G->r_esp, 20));
 		break;
 	case slang_asm_jump:
 		add_fixup (G, a->param[0], x86_jmp_forward (&G->f));
@@ -460,7 +458,13 @@ GLboolean _slang_x86_codegen (slang_machine *mach, slang_assembly_file *file, GL
 	GLubyte *j_body, *j_exit;
 	GLuint i;
 
-	x86_init_func_size (&G.f, 4*1048576);
+	/*
+	 * We need as much as 1M because *all* assembly, including built-in library, is
+	 * being translated to x86.
+	 * The built-in library occupies 450K, so we can be safe for now.
+	 * It is going to change in the future, when we get assembly analysis running.
+	 */
+	x86_init_func_size (&G.f, 1048576);
 	G.r_eax = x86_make_reg (file_REG32, reg_AX);
 	G.r_ecx = x86_make_reg (file_REG32, reg_CX);
 	G.r_edx = x86_make_reg (file_REG32, reg_DX);
@@ -487,7 +491,7 @@ GLboolean _slang_x86_codegen (slang_machine *mach, slang_assembly_file *file, GL
 	x86_mov (&G.f, x86_deref (G.r_eax), G.r_ecx);
 	j_body = x86_jmp_forward (&G.f);
 
-	/* discard keywords go here */
+	/* "discard" instructions jump to this label */
 	G.l_discard = x86_get_label (&G.f);
 	x86_mov_reg_imm (&G.f, G.r_eax, (GLint) &G.mach->kill);
 	x86_mov_reg_imm (&G.f, G.r_ecx, 1);
@@ -503,7 +507,11 @@ GLboolean _slang_x86_codegen (slang_machine *mach, slang_assembly_file *file, GL
 		codegen_assem (&G, &file->code[i]);
 	}
 
-	/* restore stack and return */
+	/*
+	 * Restore stack and return.
+	 * This must be handled this way, because "discard" can be invoked from any
+	 * place in the code.
+	 */
 	x86_fixup_fwd_jump (&G.f, j_exit);
 	x86_mov_reg_imm (&G.f, G.r_eax, (GLint) &mach->x86.esp_restore);
 	x86_mov (&G.f, G.r_esp, x86_deref (G.r_eax));
@@ -526,7 +534,9 @@ GLboolean _slang_x86_codegen (slang_machine *mach, slang_assembly_file *file, GL
 	slang_alloc_free (G.fixups);
 	slang_alloc_free (G.labels);
 
-	/* TODO: free previous instance, if not NULL */
+	/* install new code */
+	if (mach->x86.compiled_func != NULL)
+		_mesa_exec_free (mach->x86.compiled_func);
 	mach->x86.compiled_func = (GLvoid (*) (slang_machine *)) x86_get_func (&G.f);
 
 	return GL_TRUE;

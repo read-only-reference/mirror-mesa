@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
- * Copyright (C) 1999-2003  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -54,14 +54,15 @@
 #include "glapi.h"
 #include "glapioffsets.h"
 #include "glapitable.h"
-#include "glthread.h"
 
 /***** BEGIN NO-OP DISPATCH *****/
 
 static GLboolean WarnFlag = GL_FALSE;
 static _glapi_warning_func warning_func;
 
+#if defined(PTHREADS) || defined(GLX_USE_TLS)
 static void init_glapi_relocs(void);
+#endif
 
 static _glapi_proc generate_entrypoint(GLuint functionOffset);
 static void fill_in_entrypoint_offset(_glapi_proc entrypoint, GLuint offset);
@@ -287,14 +288,14 @@ _glapi_get_context(void)
 
 /**
  * Set the global or per-thread dispatch table pointer.
+ * If the dispatch parameter is NULL we'll plug in the no-op dispatch
+ * table (__glapi_noop_table).
  */
 PUBLIC void
 _glapi_set_dispatch(struct _glapi_table *dispatch)
 {
 #if defined(PTHREADS) || defined(GLX_USE_TLS)
    static pthread_once_t once_control = PTHREAD_ONCE_INIT;
-
-
    pthread_once( & once_control, init_glapi_relocs );
 #endif
 
@@ -327,7 +328,6 @@ PUBLIC struct _glapi_table *
 _glapi_get_dispatch(void)
 {
    struct _glapi_table * api;
-
 #if defined(GLX_USE_TLS)
    api = _glapi_tls_Dispatch;
 #elif defined(THREADS)
@@ -337,11 +337,15 @@ _glapi_get_dispatch(void)
 #else
    api = _glapi_Dispatch;
 #endif
-
-   assert( api != NULL );
    return api;
 }
 
+
+
+/***
+ *** The rest of this file is pretty much concerned with GetProcAddress
+ *** functionality.
+ ***/
 
 #if !defined( USE_X86_ASM ) && !defined( XFree86Server ) && !defined ( XGLServer )
 #define NEED_FUNCTION_POINTER
@@ -359,13 +363,10 @@ static const glprocs_table_t *
 find_entry( const char * n )
 {
    GLuint i;
-
    for (i = 0; static_functions[i].Name_offset >= 0; i++) {
-      const char * test_name;
-
-      test_name = gl_string_table + static_functions[i].Name_offset;
-      if (strcmp(test_name, n) == 0) {
-	 return & static_functions[i];
+      const char *testName = gl_string_table + static_functions[i].Name_offset;
+      if (strcmp(testName, n) == 0) {
+	 return &static_functions[i];
       }
    }
    return NULL;
@@ -380,15 +381,14 @@ static GLint
 get_static_proc_offset(const char *funcName)
 {
    const glprocs_table_t * const f = find_entry( funcName );
-
-   if ( f != NULL ) {
+   if (f) {
       return f->Offset;
    }
    return -1;
 }
 
 
-#if !defined( XFree86Server ) && !defined( XGLServer )
+#if !defined(XFree86Server) && !defined(XGLServer)
 #ifdef USE_X86_ASM
 
 #if defined( GLX_USE_TLS )
@@ -404,41 +404,32 @@ extern const GLubyte gl_dispatch_functions_start[];
 #  define X86_DISPATCH_FUNCTION_SIZE  16
 # endif
 
+#endif /* USE_X86_ASM */
+
 
 /**
- * Return dispatch function address the named static (built-in) function.
+ * Return dispatch function address for the named static (built-in) function.
  * Return NULL if function not found.
  */
 static const _glapi_proc
 get_static_proc_address(const char *funcName)
 {
    const glprocs_table_t * const f = find_entry( funcName );
-
-   if ( f != NULL ) {
+   if (f) {
+#ifdef USE_X86_ASM
       return (_glapi_proc) (gl_dispatch_functions_start 
                             + (X86_DISPATCH_FUNCTION_SIZE * f->Offset));
+#else
+      return f->Address;
+#endif
    }
    else {
       return NULL;
    }
 }
 
-#else
+#endif /* !defined(XFree86Server) && !defined(XGLServer) */
 
-
-/**
- * Return pointer to the named static (built-in) function.
- * \return  NULL if function not found.
- */
-static const _glapi_proc
-get_static_proc_address(const char *funcName)
-{
-   const glprocs_table_t * const f = find_entry( funcName );
-   return ( f != NULL ) ? f->Address : NULL;
-}
-
-#endif /* USE_X86_ASM */
-#endif /* !defined( XFree86Server ) */
 
 
 /**
@@ -449,7 +440,6 @@ static const char *
 get_static_proc_name( GLuint offset )
 {
    GLuint i;
-
    for (i = 0; static_functions[i].Name_offset >= 0; i++) {
       if (static_functions[i].Offset == offset) {
 	 return gl_string_table + static_functions[i].Name_offset;
@@ -579,7 +569,7 @@ generate_entrypoint(GLuint functionOffset)
 	   0x81c0c000,	/* jmpl		%g3, %g0			  */
 	   0x01000000	/*  nop						  */
    };
-#endif
+#endif /* __arch64__ */
    unsigned int *code = (unsigned int *) malloc(sizeof(insn_template));
    unsigned long glapi_addr = (unsigned long) &_glapi_Dispatch;
    if (code) {
@@ -601,7 +591,7 @@ generate_entrypoint(GLuint functionOffset)
       __glapi_sparc_icache_flush(&code[0]);
       code[2] |= (functionOffset * 4);
       __glapi_sparc_icache_flush(&code[2]);
-#endif
+#endif /* __arch64__ */
    }
    return (_glapi_proc) code;
 #else
@@ -621,7 +611,6 @@ fill_in_entrypoint_offset(_glapi_proc entrypoint, GLuint offset)
 #if defined(USE_X86_ASM)
    GLubyte * const code = (GLubyte *) entrypoint;
 
-   
 #if X86_DISPATCH_FUNCTION_SIZE == 32
    *((unsigned int *)(code + 11)) = 4 * offset;
    *((unsigned int *)(code + 22)) = 4 * offset;
@@ -811,12 +800,10 @@ _glapi_add_dispatch( const char * const * function_names,
       }
    }
 
-
    if (offset == ~0) {
       offset = next_dynamic_offset;
       next_dynamic_offset++;
    }
-
 
    for ( i = 0 ; function_names[i] != NULL ; i++ ) {
       if (! is_static[i] ) {
@@ -828,7 +815,6 @@ _glapi_add_dispatch( const char * const * function_names,
 	       return -1;
 	    }
 	 }
-
 
 	 entry[i]->parameter_signature = str_dup(real_sig);
 	 fill_in_entrypoint_offset(entry[i]->dispatch_stub, offset);
@@ -853,7 +839,6 @@ _glapi_get_proc_offset(const char *funcName)
          return ExtEntryTable[i].dispatch_offset;
       }
    }
-
    /* search static functions */
    return get_static_proc_offset(funcName);
 }
@@ -1030,6 +1015,7 @@ _glapi_check_table(const struct _glapi_table *table)
 }
 
 
+#if defined(PTHREADS) || defined(GLX_USE_TLS)
 /**
  * Perform platform-specific GL API entry-point fixups.
  * 
@@ -1050,3 +1036,4 @@ init_glapi_relocs( void )
     }
 #endif /* defined( USE_X86_ASM ) && defined( GLX_USE_TLS ) */
 }
+#endif

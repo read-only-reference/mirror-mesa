@@ -7,7 +7,7 @@
  * Mesa 3-D graphics library
  * Version:  6.5
  *
- * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -130,6 +130,12 @@ _mesa_Clear( GLbitfield mask )
 
    if (ctx->NewState) {
       _mesa_update_state( ctx );	/* update _Xmin, etc */
+   }
+
+   if (ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
+                  "glClear(incomplete framebuffer)");
+      return;
    }
 
    if (ctx->RenderMode == GL_RENDER) {
@@ -547,12 +553,12 @@ _mesa_ReadBuffer(GLenum buffer)
       /* general case / window-system framebuffer */
       srcBuffer = read_buffer_enum_to_index(buffer);
       if (srcBuffer == -1) {
-         _mesa_error(ctx, GL_INVALID_ENUM, "glReadBuffer(buffer)");
+         _mesa_error(ctx, GL_INVALID_ENUM, "glReadBuffer(buffer=0x%x)", buffer);
          return;
       }
       supportedMask = supported_buffer_bitmask(ctx, bufferID);
       if (((1 << srcBuffer) & supportedMask) == 0) {
-         _mesa_error(ctx, GL_INVALID_OPERATION, "glReadBuffer(buffer)");
+         _mesa_error(ctx, GL_INVALID_OPERATION, "glReadBuffer(buffer=0x%x)", buffer);
          return;
       }
    }
@@ -669,8 +675,9 @@ _mesa_SampleCoverageARB(GLclampf value, GLboolean invert)
  * change flushes the vertices and notifies the driver via
  * the dd_function_table::Scissor callback.
  */
-void _mesa_set_scissor( GLcontext *ctx, 
-			GLint x, GLint y, GLsizei width, GLsizei height )
+void
+_mesa_set_scissor(GLcontext *ctx, 
+                  GLint x, GLint y, GLsizei width, GLsizei height)
 {
    if (x == ctx->Scissor.X &&
        y == ctx->Scissor.Y &&

@@ -81,6 +81,25 @@ static uint32_t radeonGetLastFrame(radeonContextPtr radeon)
 	return frame;
 }
 
+uint32_t radeonGetAge(radeonContextPtr radeon)
+{
+	drm_radeon_getparam_t gp;
+	int ret;
+	uint32_t age;
+
+	gp.param = RADEON_PARAM_LAST_CLEAR;
+	gp.value = (int *)&age;
+	ret = drmCommandWriteRead(radeon->dri.fd, DRM_RADEON_GETPARAM,
+				  &gp, sizeof(gp));
+	if (ret) {
+		fprintf(stderr, "%s: drmRadeonGetParam: %d\n", __FUNCTION__,
+			ret);
+		exit(1);
+	}
+
+	return age;
+}
+
 static void radeonEmitIrqLocked(radeonContextPtr radeon)
 {
 	drm_radeon_irq_emit_t ie;
@@ -145,7 +164,8 @@ static void radeonWaitForFrameCompletion(radeonContextPtr radeon)
 
 /* Copy the back color buffer to the front color buffer.
  */
-void radeonCopyBuffer(const __DRIdrawablePrivate * dPriv)
+void radeonCopyBuffer(const __DRIdrawablePrivate * dPriv,
+		      const drm_clip_rect_t	 * rect)
 {
 	radeonContextPtr radeon;
 	GLint nbox, i, ret;
@@ -174,10 +194,13 @@ void radeonCopyBuffer(const __DRIdrawablePrivate * dPriv)
 	 * request at a time.
 	 */
 	radeonWaitForFrameCompletion(radeon);
-	UNLOCK_HARDWARE(radeon);
-	driWaitForVBlank(dPriv, &radeon->vbl_seq, radeon->vblank_flags,
-			 &missed_target);
-	LOCK_HARDWARE(radeon);
+	if (!rect)
+	{
+	    UNLOCK_HARDWARE(radeon);
+	    driWaitForVBlank(dPriv, &radeon->vbl_seq, radeon->vblank_flags,
+			     &missed_target);
+	    LOCK_HARDWARE(radeon);
+	}
 
 	nbox = dPriv->numClipRects;	/* must be in locked region */
 
@@ -187,9 +210,28 @@ void radeonCopyBuffer(const __DRIdrawablePrivate * dPriv)
 		drm_clip_rect_t *b = radeon->sarea->boxes;
 		GLint n = 0;
 
-		for (; i < nr; i++) {
-			*b++ = box[i];
-			n++;
+		for ( ; i < nr ; i++ ) {
+
+		    *b = box[i];
+
+		    if (rect)
+		    {
+			if (rect->x1 > b->x1)
+			    b->x1 = rect->x1;
+			if (rect->y1 > b->y1)
+			    b->y1 = rect->y1;
+			if (rect->x2 < b->x2)
+			    b->x2 = rect->x2;
+			if (rect->y2 < b->y2)
+			    b->y2 = rect->y2;
+
+			if (b->x1 < b->x2 && b->y1 < b->y2)
+			    b++;
+		    }
+		    else
+			b++;
+
+		    n++;
 		}
 		radeon->sarea->nbox = n;
 
@@ -204,22 +246,24 @@ void radeonCopyBuffer(const __DRIdrawablePrivate * dPriv)
 	}
 
 	UNLOCK_HARDWARE(radeon);
-
-	if (IS_R200_CLASS(radeon->radeonScreen))
+	if (!rect)
+	{
+	    if (IS_R200_CLASS(radeon->radeonScreen))
 		((r200ContextPtr)radeon)->hw.all_dirty = GL_TRUE;
-	else
+	    else
 		((r300ContextPtr)radeon)->hw.all_dirty = GL_TRUE;
 
-	radeon->swap_count++;
-	(*dri_interface->getUST) (&ust);
-	if (missed_target) {
+	    radeon->swap_count++;
+	    (*dri_interface->getUST) (&ust);
+	    if (missed_target) {
 		radeon->swap_missed_count++;
 		radeon->swap_missed_ust = ust - radeon->swap_ust;
+	    }
+
+	    radeon->swap_ust = ust;
+
+	    sched_yield();
 	}
-
-	radeon->swap_ust = ust;
-
-	sched_yield();
 }
 
 void radeonPageFlip(const __DRIdrawablePrivate * dPriv)

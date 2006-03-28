@@ -123,6 +123,12 @@ _swrast_ReadPixels( GLcontext *ctx,
 		    GLvoid *pixels );
 
 extern void
+_swrast_BlitFramebuffer(GLcontext *ctx,
+                        GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+                        GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+                        GLbitfield mask, GLenum filter);
+
+extern void
 _swrast_Clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 	       GLint x, GLint y, GLint width, GLint height );
 
@@ -242,6 +248,10 @@ _swrast_copy_texsubimage3d(GLcontext *ctx,
                            GLenum target, GLint level,
                            GLint xoffset, GLint yoffset, GLint zoffset,
                            GLint x, GLint y, GLsizei width, GLsizei height);
+
+
+extern void
+_swrast_eject_texture_images(GLcontext *ctx);
 
 
 /**

@@ -47,10 +47,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "colormac.h"
 #include "radeon_context.h"
 
-#define USE_ARB_F_P 1
-//#define USER_BUFFERS
-//#define RADEON_VTXFMT_A
-//#define HW_VBOS
+/* PPC doesnt support 16 bit elts ... */
+#ifndef MESA_BIG_ENDIAN
+#define USER_BUFFERS
+#define RADEON_VTXFMT_A
+#define HW_VBOS
+#endif
+
 //#define OPTIMIZE_ELTS
 #define CB_DPATH
 
@@ -83,18 +86,11 @@ typedef struct r300_context *r300ContextPtr;
 #define WARN_ONCE(a, ...) {}
 #endif
 
-typedef GLuint uint32_t;
-typedef GLubyte uint8_t;
-
   /* We should probably change types within vertex_shader
       and pixel_shader structure later on */
 #define CARD32 GLuint
 #include "vertex_shader.h"
-#if USE_ARB_F_P == 1
 #include "r300_fragprog.h"
-#else
-#include "pixel_shader.h"
-#endif
 #undef CARD32
 
 static __inline__ uint32_t r300PackFloat32(float fl)
@@ -115,6 +111,7 @@ struct r300_dma_buffer {
 	drmBufPtr buf;
 	int id;
 };
+#undef GET_START
 #ifdef USER_BUFFERS
 #define GET_START(rvb) (r300GartOffsetFromVirtual(rmesa, (rvb)->address+(rvb)->start))
 #else
@@ -199,6 +196,8 @@ struct r300_tex_obj {
 
 
 	GLboolean border_fallback;
+
+	GLuint tile_bits; /* hw texture tile bits used on this texture */
 };
 
 struct r300_texture_env_state {
@@ -612,12 +611,11 @@ struct r300_vertex_program {
 	int use_ref_count;
 };
 
-#if USE_ARB_F_P == 1
 #define PFS_MAX_ALU_INST	64
 #define PFS_MAX_TEX_INST	64
 #define PFS_MAX_TEX_INDIRECT 4
 #define PFS_NUM_TEMP_REGS	32
-#define PFS_NUM_CONST_REGS	32
+#define PFS_NUM_CONST_REGS	16
 
 /* Tracking data for Mesa registers */
 struct reg_acc {
@@ -703,74 +701,6 @@ struct r300_fragment_program {
 	int max_temp_idx;
 };
 
-#else
-/* 64 appears to be the maximum */
-#define PSF_MAX_PROGRAM_LENGTH 64
-
-struct r300_pixel_shader_program {
-	struct {
-		int length;
-		GLuint inst[PSF_MAX_PROGRAM_LENGTH];
-		} tex;
-
-	/* ALU intructions (logic and integer) */
-	struct {
-		int length;
-		struct {
-			GLuint inst0;
-			GLuint inst1;
-			GLuint inst2;
-			GLuint inst3;
-			} inst[PSF_MAX_PROGRAM_LENGTH];
-		} alu;
-
-	/* node information */
-	/* nodes are used to synchronize ALU and TEX streams */
-	/* There could be up to 4 nodes each consisting of
-	   a number of TEX instructions followed by some ALU
-	   instructions */
-	/* the last node of a program should always be node3 */
-	struct {
-		int tex_offset;
-		int tex_end;
-		int alu_offset;
-		int alu_end;
-		} node[4];
-
-	int active_nodes;	/* must be between 1 and 4, inclusive */
-	int first_node_has_tex;  /* other nodes always have it */
-
-	int temp_register_count;  /* magic value goes into PFS_CNTL_1 */
-
-	/* entire program */
-	int tex_offset;
-	int tex_end;
-	int alu_offset;
-	int alu_end;
-
-	};
-
-#define MAX_PIXEL_SHADER_PARAMS 32
-struct r300_pixel_shader_state {
-	struct r300_pixel_shader_program program;
-	
-	int translated;
-	int have_sample;
-	GLuint color_reg;
-	GLuint src_previous;
-	
-	/* parameters */
-	int param_length;  /* to limit the number of unnecessary writes */
-	struct {
-		float x;
-		float y;
-		float z;
-		float w;
-		} param[MAX_PIXEL_SHADER_PARAMS];
-	};
-#endif // USE_ARB_F_P
-
-/* 8 is somewhat bogus... it is probably something like 24 */
 #define R300_MAX_AOS_ARRAYS		16
 
 #define AOS_FORMAT_FLOAT	1
@@ -781,7 +711,6 @@ struct r300_pixel_shader_state {
 #define REG_COLOR0	1
 #define REG_TEX0	2
 
-#ifdef USER_BUFFERS
 struct dt {
 	GLint size;
 	GLenum type;
@@ -803,7 +732,6 @@ struct radeon_vertex_buffer {
 	GLsizei LockCount;
 	int lock_uptodate;
 };
-#endif
 
 struct r300_aos_rec {
 	GLuint offset;
@@ -823,16 +751,10 @@ struct r300_state {
 	struct r300_texture_state texture;
 	struct r300_vap_reg_state vap_reg;
 	struct r300_vertex_shader_state vertex_shader;
-#if USE_ARB_F_P == 0
-	struct r300_pixel_shader_state pixel_shader;
-#else
 	struct r300_pfs_compile_state pfs_compile;
-#endif
 	struct r300_dma_region aos[R300_MAX_AOS_ARRAYS];
 	int aos_count;
-#ifdef USER_BUFFERS
 	struct radeon_vertex_buffer VB;
-#endif
 
 	GLuint *Elts;
 	struct r300_dma_region elt_dma;
@@ -848,6 +770,9 @@ struct r300_state {
 	
 };
 
+#define R300_FALLBACK_NONE 0
+#define R300_FALLBACK_TCL 1
+#define R300_FALLBACK_RAST 2
 
 /**
  * R300 context structure.
@@ -879,11 +804,12 @@ struct r300_context {
 	GLuint prefer_gart_client_texturing;
 
 #ifdef USER_BUFFERS
-	key_t mm_ipc_key;
-	int mm_shm_id;
-	int mm_sem_id;
 	struct radeon_memory_manager *rmm;
+	GLvector4f dummy_attrib[_TNL_ATTRIB_MAX];
+	GLvector4f *temp_attrib[_TNL_ATTRIB_MAX];
 #endif
+
+	GLboolean texmicrotile;
 };
 
 struct r300_buffer_object {
@@ -911,10 +837,13 @@ extern GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 				   __DRIcontextPrivate * driContextPriv,
 				   void *sharedContextPrivate);
 
-void translate_vertex_shader(struct r300_vertex_program *vp);
+void r300_translate_vertex_shader(struct r300_vertex_program *vp);
 extern void r300InitShaderFuncs(struct dd_function_table *functions);
 extern int r300VertexProgUpdateParams(GLcontext *ctx, struct r300_vertex_program *vp, float *dst);
-extern GLboolean r300Fallback(GLcontext *ctx);
+extern int r300Fallback(GLcontext *ctx);
+
+extern void radeon_vb_to_rvb(r300ContextPtr rmesa, struct radeon_vertex_buffer *rvb, struct vertex_buffer *vb);
+extern GLboolean r300_run_vb_render(GLcontext *ctx, struct tnl_pipeline_stage *stage);
 
 #ifdef RADEON_VTXFMT_A
 extern void radeon_init_vtxfmt_a(r300ContextPtr rmesa);
@@ -922,6 +851,7 @@ extern void radeon_init_vtxfmt_a(r300ContextPtr rmesa);
 
 #ifdef HW_VBOS
 extern void r300_init_vbo_funcs(struct dd_function_table *functions);
+extern void r300_evict_vbos(GLcontext *ctx, int amount);
 #endif
 
 #define RADEON_D_CAPTURE 0

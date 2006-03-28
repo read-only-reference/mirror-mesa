@@ -2,7 +2,7 @@
  * Mesa 3-D graphics library
  * Version:  6.5
  *
- * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -1226,6 +1226,43 @@ _mesa_texstore_argb8888(STORE_PARAMS)
             !srcPacking->SwapBytes &&
 	    dstFormat == &_mesa_texformat_argb8888 &&
             srcFormat == GL_RGBA &&
+            (srcType == GL_UNSIGNED_BYTE && littleEndian)) {
+
+      int img, row, col;
+      GLubyte *dstImage = (GLubyte *) dstAddr
+                        + dstZoffset * dstImageStride
+                        + dstYoffset * dstRowStride
+                        + dstXoffset * dstFormat->TexelBytes;
+
+      /* For some reason, streaming copies to write-combined regions
+       * are extremely sensitive to the characteristics of how the
+       * source data is retrieved.  By reordering the source reads to
+       * be in-order, the speed of this operation increases by half.
+       * Strangely the same isn't required for the RGB path, above.
+       */
+      for (img = 0; img < srcDepth; img++) {
+         const GLint srcRowStride = _mesa_image_row_stride(srcPacking,
+                                                 srcWidth, srcFormat, srcType);
+         GLubyte *srcRow = (GLubyte *) _mesa_image_address(dims, srcPacking,
+                  srcAddr, srcWidth, srcHeight, srcFormat, srcType, img, 0, 0);
+         GLubyte *dstRow = dstImage;
+         for (row = 0; row < srcHeight; row++) {
+            for (col = 0; col < srcWidth; col++) {
+               *(GLuint *)(dstRow + col * 4)  = (srcRow[col * 4 + RCOMP] << 16 |
+						 srcRow[col * 4 + GCOMP] << 8 |
+						 srcRow[col * 4 + BCOMP] << 0 |
+						 srcRow[col * 4 + ACOMP] << 24);
+            }
+            dstRow += dstRowStride;
+            srcRow += srcRowStride;
+         }
+         dstImage += dstImageStride;
+      }
+   }
+   else if (!ctx->_ImageTransferState &&
+            !srcPacking->SwapBytes &&
+	    dstFormat == &_mesa_texformat_argb8888 &&
+            srcFormat == GL_RGBA &&
             srcType == GL_UNSIGNED_BYTE) {
 
       int img, row, col;
@@ -1948,6 +1985,7 @@ _mesa_texstore_z24_s8(STORE_PARAMS)
 
    if (!ctx->_ImageTransferState &&
        !srcPacking->SwapBytes) {
+      /* simple path */
       memcpy_texture(ctx, dims,
                      dstFormat, dstAddr, dstXoffset, dstYoffset, dstZoffset,
                      dstRowStride, dstImageStride,
@@ -1955,7 +1993,44 @@ _mesa_texstore_z24_s8(STORE_PARAMS)
                      srcAddr, srcPacking);
    }
    else {
-      _mesa_problem(ctx, "_mesa_texstore_z24_s8 not finished");
+      /* general path */
+      const GLint srcRowStride
+         = _mesa_image_row_stride(srcPacking, srcWidth, srcFormat, srcType)
+         / sizeof(GLuint);
+      GLuint *dstImage = (GLuint *) dstAddr;
+      GLint img, row;
+
+      for (img = 0; img < srcDepth; img++) {
+         GLuint *dst = dstImage;
+         const GLuint *src
+            = (const GLuint *) _mesa_image_address(dims, srcPacking, srcAddr,
+                                                   srcWidth, srcHeight,
+                                                   srcFormat, srcType,
+                                                   img, 0, 0);
+         for (row = 0; row < srcHeight; row++) {
+            GLubyte stencil[MAX_WIDTH];
+            GLint i;
+            /* the 24 depth bits will be in the high position: */
+            _mesa_unpack_depth_span(ctx, srcWidth,
+                                    GL_UNSIGNED_INT, /* dst type */
+                                    dst, /* dst addr */
+                                    (GLfloat) 0xffffff, /* depthScale */
+                                    srcType, src, srcPacking);
+            /* get the 8-bit stencil values */
+            _mesa_unpack_stencil_span(ctx, srcWidth,
+                                      GL_UNSIGNED_BYTE, /* dst type */
+                                      stencil, /* dst addr */
+                                      srcType, src, srcPacking,
+                                      ctx->_ImageTransferState);
+            /* merge stencil values into depth values */
+            for (i = 0; i < srcWidth; i++)
+               dst[i] |= stencil[i];
+
+            src += srcRowStride;
+            dst += dstRowStride / sizeof(GLuint);
+         }
+         dstImage += dstImageStride / sizeof(GLuint);
+      }
    }
 
 
@@ -1976,7 +2051,7 @@ _mesa_texstore_z24_s8(STORE_PARAMS)
 GLboolean
 _mesa_texstore_rgba_float32(STORE_PARAMS)
 {
-   const GLint components = _mesa_components_in_format(baseInternalFormat);
+   const GLint components = _mesa_components_in_format(dstFormat->BaseFormat);
 
    ASSERT(dstFormat == &_mesa_texformat_rgba_float32 ||
           dstFormat == &_mesa_texformat_rgb_float32 ||
@@ -2044,7 +2119,7 @@ _mesa_texstore_rgba_float32(STORE_PARAMS)
 GLboolean
 _mesa_texstore_rgba_float16(STORE_PARAMS)
 {
-   const GLint components = _mesa_components_in_format(baseInternalFormat);
+   const GLint components = _mesa_components_in_format(dstFormat->BaseFormat);
 
    ASSERT(dstFormat == &_mesa_texformat_rgba_float16 ||
           dstFormat == &_mesa_texformat_rgb_float16 ||
@@ -2208,7 +2283,8 @@ FetchTexelFloatToChan( const struct gl_texture_image *texImage,
    GLfloat temp[4];
    ASSERT(texImage->FetchTexelf);
    texImage->FetchTexelf(texImage, i, j, k, temp);
-   if (texImage->TexFormat->BaseFormat == GL_DEPTH_COMPONENT) {
+   if (texImage->TexFormat->BaseFormat == GL_DEPTH_COMPONENT ||
+       texImage->TexFormat->BaseFormat == GL_DEPTH_STENCIL_EXT) {
       /* just one channel */
       UNCLAMPED_FLOAT_TO_CHAN(texelOut[0], temp[0]);
    }
@@ -2232,7 +2308,8 @@ FetchTexelChanToFloat( const struct gl_texture_image *texImage,
    GLchan temp[4];
    ASSERT(texImage->FetchTexelc);
    texImage->FetchTexelc(texImage, i, j, k, temp);
-   if (texImage->TexFormat->BaseFormat == GL_DEPTH_COMPONENT) {
+   if (texImage->TexFormat->BaseFormat == GL_DEPTH_COMPONENT ||
+       texImage->TexFormat->BaseFormat == GL_DEPTH_STENCIL_EXT) {
       /* just one channel */
       texelOut[0] = CHAN_TO_FLOAT(temp[0]);
    }
@@ -4001,8 +4078,8 @@ _mesa_upscale_teximage2d (GLsizei inWidth, GLsizei inHeight,
 void
 _mesa_get_teximage(GLcontext *ctx, GLenum target, GLint level,
                    GLenum format, GLenum type, GLvoid *pixels,
-                   const struct gl_texture_object *texObj,
-                   const struct gl_texture_image *texImage)
+                   struct gl_texture_object *texObj,
+                   struct gl_texture_image *texImage)
 {
    GLuint dimensions = (target == GL_TEXTURE_3D) ? 3 : 2;
 

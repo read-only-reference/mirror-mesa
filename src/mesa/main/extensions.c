@@ -48,7 +48,7 @@ static const struct {
    { OFF, "GL_ARB_draw_buffers",               F(ARB_draw_buffers) },
    { OFF, "GL_ARB_fragment_program",           F(ARB_fragment_program) },
    { OFF, "GL_ARB_fragment_shader",            F(ARB_fragment_shader) },
-   { OFF, "GL_MESAX_half_float_pixel",         F(ARB_half_float_pixel) },
+   { OFF, "GL_ARB_half_float_pixel",           F(ARB_half_float_pixel) },
    { OFF, "GL_ARB_imaging",                    F(ARB_imaging) },
    { OFF, "GL_ARB_multisample",                F(ARB_multisample) },
    { OFF, "GL_ARB_multitexture",               F(ARB_multitexture) },
@@ -96,7 +96,7 @@ static const struct {
    { OFF, "GL_EXT_fog_coord",                  F(EXT_fog_coord) },
    { OFF, "GL_EXT_histogram",                  F(EXT_histogram) },
    { OFF, "GL_EXT_multi_draw_arrays",          F(EXT_multi_draw_arrays) },
-   { ON,  "GL_EXT_packed_depth_stencil",       F(EXT_packed_depth_stencil) },
+   { OFF, "GL_EXT_packed_depth_stencil",       F(EXT_packed_depth_stencil) },
    { ON,  "GL_EXT_packed_pixels",              F(EXT_packed_pixels) },
    { OFF, "GL_EXT_paletted_texture",           F(EXT_paletted_texture) },
    { OFF, "GL_EXT_pixel_buffer_object",        F(EXT_pixel_buffer_object) },
@@ -182,7 +182,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
 #if FEATURE_ARB_fragment_shader
    ctx->Extensions.ARB_fragment_shader = GL_TRUE;
 #endif
-   /*ctx->Extensions.ARB_half_float_pixel = GL_TRUE;*/
+   ctx->Extensions.ARB_half_float_pixel = GL_TRUE;
    ctx->Extensions.ARB_imaging = GL_TRUE;
    ctx->Extensions.ARB_multitexture = GL_TRUE;
 #if FEATURE_ARB_occlusion_query
@@ -229,6 +229,8 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
    ctx->Extensions.EXT_fog_coord = GL_TRUE;
 #if FEATURE_EXT_framebuffer_object
    ctx->Extensions.EXT_framebuffer_object = GL_TRUE;
+#endif
+#if FEATURE_EXT_framebuffer_blit
    ctx->Extensions.EXT_framebuffer_blit = GL_TRUE;
 #endif
    ctx->Extensions.EXT_histogram = GL_TRUE;

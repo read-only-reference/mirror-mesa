@@ -9,7 +9,7 @@
  * Mesa 3-D graphics library
  * Version:  6.5
  *
- * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -319,6 +319,28 @@ enum {
 #define BUFFER_BIT_COLOR6       (1 << BUFFER_COLOR6)
 #define BUFFER_BIT_COLOR7       (1 << BUFFER_COLOR7)
 
+/**
+ * Mask of all the color buffer bits (but not accum).
+ */
+#define BUFFER_BITS_COLOR  (BUFFER_BIT_FRONT_LEFT | \
+                            BUFFER_BIT_BACK_LEFT | \
+                            BUFFER_BIT_FRONT_RIGHT | \
+                            BUFFER_BIT_BACK_RIGHT | \
+                            BUFFER_BIT_AUX0 | \
+                            BUFFER_BIT_AUX1 | \
+                            BUFFER_BIT_AUX2 | \
+                            BUFFER_BIT_AUX3 | \
+                            BUFFER_BIT_COLOR0 | \
+                            BUFFER_BIT_COLOR1 | \
+                            BUFFER_BIT_COLOR2 | \
+                            BUFFER_BIT_COLOR3 | \
+                            BUFFER_BIT_COLOR4 | \
+                            BUFFER_BIT_COLOR5 | \
+                            BUFFER_BIT_COLOR6 | \
+                            BUFFER_BIT_COLOR7)
+
+
+
 
 /**
  * Data structure for color tables
@@ -430,6 +452,7 @@ struct gl_light
    GLfloat EyeDirection[4];	/**< spotlight dir in eye coordinates */
    GLfloat SpotExponent;
    GLfloat SpotCutoff;		/**< in degrees */
+   GLfloat _CosCutoffNeg;	/**< = cos(SpotCutoff) */
    GLfloat _CosCutoff;		/**< = MAX(0, cos(SpotCutoff)) */
    GLfloat ConstantAttenuation;
    GLfloat LinearAttenuation;
@@ -659,7 +682,7 @@ struct gl_enable_attrib
    GLuint TexGen[MAX_TEXTURE_COORD_UNITS];
    /* SGI_texture_color_table */
    GLboolean TextureColorTable[MAX_TEXTURE_IMAGE_UNITS];
-   /* GL_NV_vertex_program */
+   /* GL_ARB_vertex_program / GL_NV_vertex_program */
    GLboolean VertexProgram;
    GLboolean VertexProgramPointSize;
    GLboolean VertexProgramTwoSide;
@@ -728,6 +751,7 @@ struct gl_fog_attrib
    GLenum Mode;			/**< Fog mode */
    GLboolean ColorSumEnabled;
    GLenum FogCoordinateSource;  /**< GL_EXT_fog_coord */
+   GLfloat _Scale;		/**< (End == Start) ? 1.0 : 1.0 / (End - Start) */
 };
 
 
@@ -1230,6 +1254,7 @@ struct gl_texture_image
    GLuint Height;		/**< = 2^HeightLog2 + 2*Border */
    GLuint Depth;		/**< = 2^DepthLog2 + 2*Border */
    GLuint RowStride;		/**< == Width unless IsClientData and padded */
+   GLuint ImageStride;          /**< Stride between images, in texels */
    GLuint Width2;		/**< = Width - 2*Border */
    GLuint Height2;		/**< = Height - 2*Border */
    GLuint Depth2;		/**< = Depth - 2*Border */
@@ -1778,7 +1803,7 @@ struct vertex_program
 {
    struct program Base;   /* base class */
    GLboolean IsNVProgram; /* GL_NV_vertex_program ? */
-   GLboolean IsPositionInvariant;  /* GL_NV_vertex_program1_1 */
+   GLboolean IsPositionInvariant;  /* GL_ARB_vertex_program / GL_NV_vertex_program1_1 */
    void *TnlData;		/* should probably use Base.DriverData */
 };
 
@@ -1804,8 +1829,8 @@ struct fragment_program
  */
 struct gl_program_state
 {
-   GLint ErrorPos;                       /* GL_PROGRAM_ERROR_POSITION_NV */
-   const char *ErrorString;              /* GL_PROGRAM_ERROR_STRING_NV */
+   GLint ErrorPos;                       /* GL_PROGRAM_ERROR_POSITION_ARB/NV */
+   const char *ErrorString;              /* GL_PROGRAM_ERROR_STRING_ARB/NV */
 };
 
 
@@ -1814,10 +1839,10 @@ struct gl_program_state
  */
 struct gl_vertex_program_state
 {
-   GLboolean Enabled;                  /**< GL_VERTEX_PROGRAM_NV */
+   GLboolean Enabled;                  /**< GL_VERTEX_PROGRAM_ARB/NV */
    GLboolean _Enabled;                 /**< Enabled and valid program? */
-   GLboolean PointSizeEnabled;         /**< GL_VERTEX_PROGRAM_POINT_SIZE_NV */
-   GLboolean TwoSideEnabled;           /**< GL_VERTEX_PROGRAM_TWO_SIDE_NV */
+   GLboolean PointSizeEnabled;         /**< GL_VERTEX_PROGRAM_POINT_SIZE_ARB/NV */
+   GLboolean TwoSideEnabled;           /**< GL_VERTEX_PROGRAM_TWO_SIDE_ARB/NV */
    struct vertex_program *Current;     /**< ptr to currently bound program */
    struct vertex_program *_Current;    /**< ptr to currently bound
 					   program, including internal
@@ -1950,6 +1975,8 @@ struct gl_query_state
 struct gl_shader_objects_state
 {
    struct gl2_program_intf **CurrentProgram;
+   GLboolean _VertexShaderPresent;
+   GLboolean _FragmentShaderPresent;
 };
 
 
@@ -2020,14 +2047,17 @@ struct gl_shared_state
  */
 struct gl_renderbuffer
 {
+   _glthread_Mutex Mutex;		   /**< for thread safety */
+   GLuint ClassID;        /**< Useful for drivers */
    GLuint Name;
    GLint RefCount;
    GLuint Width, Height;
-   GLenum InternalFormat; /* The user-specified value */
-   GLenum _BaseFormat;    /* Either GL_RGB, GL_RGBA, GL_DEPTH_COMPONENT or */
-                          /* GL_STENCIL_INDEX. */
-   GLenum DataType;       /* Type of values passed to the Get/Put functions */
-   GLubyte RedBits;       /**< Bits per image component */
+   GLenum InternalFormat; /**< The user-specified format */
+   GLenum _ActualFormat;  /**< The driver-chosen format */
+   GLenum _BaseFormat;    /**< Either GL_RGB, GL_RGBA, GL_DEPTH_COMPONENT or
+                               GL_STENCIL_INDEX. */
+   GLenum DataType;      /**< Type of values passed to the Get/Put functions */
+   GLubyte RedBits;      /**< Bits of red per pixel */
    GLubyte GreenBits;
    GLubyte BlueBits;
    GLubyte AlphaBits;
@@ -2135,10 +2165,13 @@ struct gl_renderbuffer_attachment
  */
 struct gl_framebuffer
 {
+   _glthread_Mutex Mutex;		   /**< for thread safety */
    GLuint Name;      /* if zero, this is a window system framebuffer */
    GLint RefCount;
 
-   GLvisual Visual;		/**< The corresponding visual */
+   GLvisual Visual;	/**< The framebuffer's visual.
+                             Immutable if this is a window system buffer.
+                             Computed from attachments if user-made FBO. */
 
    GLboolean Initialized;
 
@@ -2790,8 +2823,8 @@ struct __GLcontextRec
    struct gl_color_table ProxyPostColorMatrixColorTable;
 
    struct gl_program_state Program;        /**< for vertex or fragment progs */
-   struct gl_vertex_program_state VertexProgram;   /**< GL_NV_vertex_program */
-   struct gl_fragment_program_state FragmentProgram;  /**< GL_NV_fragment_program */
+   struct gl_vertex_program_state VertexProgram;   /**< GL_ARB/NV_vertex_program */
+   struct gl_fragment_program_state FragmentProgram;  /**< GL_ARB/NV_vertex_program */
    struct gl_ati_fragment_shader_state ATIFragmentShader;  /**< GL_ATI_fragment_shader */
 
    struct fragment_program *_TexEnvProgram;     /**< Texture state as fragment program */
@@ -2822,7 +2855,6 @@ struct __GLcontextRec
    GLfloat _ModelViewInvScale;
    GLboolean _NeedEyeCoords;
    GLboolean _ForceEyeCoords; 
-   GLboolean _RotateMode;
    GLenum _CurrentProgram;    /* currently executing program */
 
    struct gl_shine_tab *_ShineTable[2]; /**< Active shine tables */

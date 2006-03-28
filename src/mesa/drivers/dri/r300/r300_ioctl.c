@@ -552,7 +552,6 @@ static void r300Clear(GLcontext * ctx, GLbitfield mask, GLboolean all,
 	swapped = r300->radeon.doPageFlip && (r300->radeon.sarea->pfCurrentPage == 1);
 
 #ifdef CB_DPATH
-	WARN_ONCE("CB_DPATH has been enabled.\nPlease let me know if this introduces new instabilities.\n");
 	/* Make sure it fits there. */
 	r300EnsureCmdBufSpace(r300, 419*3, __FUNCTION__);
 	if(flags || bits)
@@ -601,11 +600,6 @@ void r300Flush(GLcontext * ctx)
 void r300RefillCurrentDmaRegion(r300ContextPtr rmesa)
 {
 	struct r300_dma_buffer *dmabuf;
-	int fd = rmesa->radeon.dri.fd;
-	int index = 0;
-	int size = 0;
-	drmDMAReq dma;
-	int ret;
 	
 	if (RADEON_DEBUG & (DEBUG_IOCTL | DEBUG_DMA))
 		fprintf(stderr, "%s\n", __FUNCTION__);
@@ -625,6 +619,28 @@ void r300RefillCurrentDmaRegion(r300ContextPtr rmesa)
 	dmabuf->refcount = 1;
 
 	dmabuf->id = radeon_mm_alloc(rmesa, 4, RADEON_BUFFER_SIZE*16);
+	if (dmabuf->id == 0) {
+		LOCK_HARDWARE(&rmesa->radeon);	/* no need to validate */
+		
+		r300FlushCmdBufLocked(rmesa, __FUNCTION__);
+		radeonWaitForIdleLocked(&rmesa->radeon);
+		
+		dmabuf->id = radeon_mm_alloc(rmesa, 4, RADEON_BUFFER_SIZE*16);
+
+#ifdef HW_VBOS
+		if (dmabuf->id == 0) {
+			/* Just kick all */
+			r300_evict_vbos(rmesa->radeon.glCtx, /*RADEON_BUFFER_SIZE*16*/1<<30);
+			dmabuf->id = radeon_mm_alloc(rmesa, 4, RADEON_BUFFER_SIZE*16);
+		}
+#endif
+		UNLOCK_HARDWARE(&rmesa->radeon);
+		
+		if (dmabuf->id == 0) {
+			fprintf(stderr, "Error: Could not get dma buffer... exiting\n");
+			exit(-1);
+		}
+	}
 			
 	rmesa->dma.current.buf = dmabuf;
 	rmesa->dma.current.address = radeon_mm_ptr(rmesa, dmabuf->id);

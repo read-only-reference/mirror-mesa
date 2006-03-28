@@ -644,7 +644,12 @@ static const struct
 	{ "float_noise3",   slang_asm_float_noise3,   slang_asm_float_copy },
 	{ "float_noise4",   slang_asm_float_noise4,   slang_asm_float_copy },
 	{ "int_to_float",   slang_asm_int_to_float,   slang_asm_float_copy },
+	{ "vec4_tex1d",     slang_asm_vec4_tex1d,     slang_asm_none },
 	{ "vec4_tex2d",     slang_asm_vec4_tex2d,     slang_asm_none },
+	{ "vec4_tex3d",     slang_asm_vec4_tex3d,     slang_asm_none },
+	{ "vec4_texcube",   slang_asm_vec4_texcube,   slang_asm_none },
+	{ "vec4_shad1d",    slang_asm_vec4_shad1d,    slang_asm_none },
+	{ "vec4_shad2d",    slang_asm_vec4_shad2d,    slang_asm_none },
 	/* mesa-specific extensions */
 	{ "float_print",    slang_asm_float_deref,    slang_asm_float_print },
 	{ "int_print",      slang_asm_int_deref,      slang_asm_int_print },
@@ -930,7 +935,9 @@ static GLboolean handle_field (slang_assemble_ctx *A, slang_assembly_typeinfo *t
 	else
 	{
 		GLuint i, struct_size = 0, field_offset = 0, field_size = 0;
+		GLboolean relocate, shrink;
 
+		/* calculate struct size, field offset and field size */
 		for (i = 0; i < tib->spec._struct->fields->num_variables; i++)
 		{
 			slang_variable *field;
@@ -960,28 +967,59 @@ static GLboolean handle_field (slang_assemble_ctx *A, slang_assembly_typeinfo *t
 				field_offset += size;
 		}
 
-		if (!PLAB (A->file, slang_asm_addr_push, field_offset))
-			return GL_FALSE;
+		/*
+		 * OPTIMIZATION: If selecting the last field, no relocation is needed.
+		 */
+		relocate = field_offset != struct_size - field_size;
+
+		/*
+		 * OPTIMIZATION: If field and struct sizes are equal, no partial free is needed.
+		 */
+		shrink = field_size != struct_size;
+
+		if (relocate)
+		{
+			if (!PLAB (A->file, slang_asm_addr_push, field_offset))
+				return GL_FALSE;
+		}
 
 		if (ref == slang_ref_force)
 		{
-			if (!PUSH (A->file, slang_asm_addr_add))
-				return GL_FALSE;
+			if (relocate)
+			{
+				if (!PUSH (A->file, slang_asm_addr_add))
+					return GL_FALSE;
+			}
 		}
 		else
 		{
-			GLuint i;
+			GLuint free_b = 0;
 
-			/* move the selected element to the beginning of the master expression */
-			for (i = 0; i < field_size; i += 4)
-				if (!PLAB2 (A->file, slang_asm_float_move, struct_size - field_size + i + 4, i + 4))
+			if (relocate)
+			{
+				GLuint i;
+
+				/*
+				 * Move the selected element to the end of the master expression.
+				 * Do it in reverse order to avoid overwriting itself.
+				 */
+				for (i = field_size; i > 0; i -= 4)
+					if (!PLAB2 (A->file, slang_asm_float_move, struct_size - field_size + i, i))
+						return GL_FALSE;
+				free_b += 4;
+			}
+
+			if (shrink)
+			{
+				/* free the rest of the master expression */
+				free_b += struct_size - field_size;
+			}
+
+			if (free_b)
+			{
+				if (!PLAB (A->file, slang_asm_local_free, free_b))
 					return GL_FALSE;
-			if (!PLAB (A->file, slang_asm_local_free, 4))
-				return GL_FALSE;
-
-			/* free the rest of the master expression */
-			if (!PLAB (A->file, slang_asm_local_free, struct_size - field_size))
-				return GL_FALSE;
+			}
 		}
 	}
 
@@ -1013,12 +1051,52 @@ GLboolean _slang_assemble_operation (slang_assemble_ctx *A, slang_operation *op,
 	case slang_oper_variable_decl:
 		{
 			GLuint i;
+			slang_operation assign;
+			GLboolean result;
 
+			/* Construct assignment expression placeholder. */
+			if (!slang_operation_construct (&assign))
+				return GL_FALSE;
+			assign.type = slang_oper_assign;
+			assign.children = (slang_operation *) slang_alloc_malloc (2 * sizeof (slang_operation));
+			if (assign.children == NULL)
+			{
+				slang_operation_destruct (&assign);
+				return GL_FALSE;
+			}
+			for (assign.num_children = 0; assign.num_children < 2; assign.num_children++)
+				if (!slang_operation_construct (&assign.children[assign.num_children]))
+				{
+					slang_operation_destruct (&assign);
+					return GL_FALSE;
+				}
+
+			result = GL_TRUE;
 			for (i = 0; i < op->num_children; i++)
 			{
-				/* TODO: perform initialization of op->children[i] */
-				/* TODO: clean-up stack */
+				slang_variable *var;
+
+				var = _slang_locate_variable (op->children[i].locals, op->children[i].a_id, GL_TRUE);
+				if (var == NULL)
+				{
+					result = GL_FALSE;
+					break;
+				}
+				if (var->initializer == NULL)
+					continue;
+
+				if (!slang_operation_copy (&assign.children[0], &op->children[i]) ||
+					!slang_operation_copy (&assign.children[1], var->initializer) ||
+					!_slang_assemble_assign (A, &assign, "=", slang_ref_forbid) ||
+					!_slang_cleanup_stack (A, &assign))
+				{
+					result = GL_FALSE;
+					break;
+				}
 			}
+			slang_operation_destruct (&assign);
+			if (!result)
+				return GL_FALSE;
 		}
 		break;
 	case slang_oper_asm:
@@ -1173,14 +1251,17 @@ GLboolean _slang_assemble_operation (slang_assemble_ctx *A, slang_operation *op,
 	case slang_oper_addassign:
 		if (!_slang_assemble_assign (A, op, "+=", ref))
 			return GL_FALSE;
+		A->ref = ref;
 		break;
 	case slang_oper_subassign:
 		if (!_slang_assemble_assign (A, op, "-=", ref))
 			return GL_FALSE;
+		A->ref = ref;
 		break;
 	case slang_oper_mulassign:
 		if (!_slang_assemble_assign (A, op, "*=", ref))
 			return GL_FALSE;
+		A->ref = ref;
 		break;
 	/*case slang_oper_modassign:*/
 	/*case slang_oper_lshassign:*/
@@ -1191,6 +1272,7 @@ GLboolean _slang_assemble_operation (slang_assemble_ctx *A, slang_operation *op,
 	case slang_oper_divassign:
 		if (!_slang_assemble_assign (A, op, "/=", ref))
 			return GL_FALSE;
+		A->ref = ref;
 		break;
 	case slang_oper_select:
 		if (!_slang_assemble_select (A, op))
@@ -1279,10 +1361,12 @@ GLboolean _slang_assemble_operation (slang_assemble_ctx *A, slang_operation *op,
 	case slang_oper_preincrement:
 		if (!_slang_assemble_assign (A, op, "++", ref))
 			return GL_FALSE;
+		A->ref = ref;
 		break;
 	case slang_oper_predecrement:
 		if (!_slang_assemble_assign (A, op, "--", ref))
 			return GL_FALSE;
+		A->ref = ref;
 		break;
 	case slang_oper_plus:
 		if (!_slang_dereference (A, op))

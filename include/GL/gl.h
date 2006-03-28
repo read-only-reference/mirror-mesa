@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
- * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -2257,6 +2257,28 @@ typedef void (APIENTRYP PFNGLGETQUERYOBJECTI64VEXTPROC) (GLuint id, GLenum pname
 typedef void (APIENTRYP PFNGLGETQUERYOBJECTUI64VEXTPROC) (GLuint id, GLenum pname, GLuint64EXT *params);
 
 #endif /* GL_EXT_timer_query */
+
+
+
+#ifndef GL_EXT_framebuffer_blit
+#define GL_EXT_framebuffer_blit 1
+
+#define GL_READ_FRAMEBUFFER_EXT                0x8CA8
+#define GL_DRAW_FRAMEBUFFER_EXT                0x8CA9
+#define GL_DRAW_FRAMEBUFFER_BINDING_EXT        0x8CA6
+#define GL_READ_FRAMEBUFFER_BINDING_EXT        0x8CAA
+
+GLAPI void GLAPIENTRY
+glBlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+                     GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+                     GLbitfield mask, GLenum filter);
+
+typedef void (APIENTRYP PFNGLBLITFRAMEBUFFEREXTPROC)
+        (GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+         GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+         GLbitfield mask, GLenum filter);
+
+#endif /* GL_EXT_framebuffer_blit */
 
 
 

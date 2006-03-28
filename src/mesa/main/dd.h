@@ -300,8 +300,8 @@ struct dd_function_table {
     */
    void (*GetTexImage)( GLcontext *ctx, GLenum target, GLint level,
                         GLenum format, GLenum type, GLvoid *pixels,
-                        const struct gl_texture_object *texObj,
-                        const struct gl_texture_image *texImage );
+                        struct gl_texture_object *texObj,
+                        struct gl_texture_image *texImage );
 
    /**
     * Called by glCopyTexImage1D().
@@ -801,17 +801,17 @@ struct dd_function_table {
    /*@{*/
    struct gl_framebuffer * (*NewFramebuffer)(GLcontext *ctx, GLuint name);
    struct gl_renderbuffer * (*NewRenderbuffer)(GLcontext *ctx, GLuint name);
+   void (*BindFramebuffer)(GLcontext *ctx, GLenum target,
+                           struct gl_framebuffer *fb);
    void (*FramebufferRenderbuffer)(GLcontext *ctx, 
                                    struct gl_framebuffer *fb,
                                    GLenum attachment,
                                    struct gl_renderbuffer *rb);
-   void (*RenderbufferTexture)(GLcontext *ctx,
-                               struct gl_renderbuffer_attachment *att,
-                               struct gl_texture_object *texObj,
-                               GLenum texTarget, GLuint level, GLuint zoffset);
+   void (*RenderTexture)(GLcontext *ctx,
+                         struct gl_framebuffer *fb,
+                         struct gl_renderbuffer_attachment *att);
    void (*FinishRenderTexture)(GLcontext *ctx,
-                               struct gl_texture_object *texObj,
-                               GLuint face, GLuint level);
+                               struct gl_renderbuffer_attachment *att);
    /*@}*/
 #endif
 #if FEATURE_EXT_framebuffer_blit

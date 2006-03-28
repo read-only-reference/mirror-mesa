@@ -88,9 +88,11 @@ struct gl2_program_intf
    GLvoid (* Validate) (struct gl2_program_intf **);
    GLvoid (* UpdateFixedUniforms) (struct gl2_program_intf **);
    GLvoid (* UpdateFixedAttribute) (struct gl2_program_intf **, GLuint, GLvoid *, GLuint, GLuint,
-	   GLboolean);
+      GLboolean);
    GLvoid (* UpdateFixedVarying) (struct gl2_program_intf **, GLuint, GLvoid *, GLuint, GLuint,
-	   GLboolean);
+      GLboolean);
+   GLvoid (* GetTextureImageUsage) (struct gl2_program_intf **, GLbitfield *);
+   GLboolean (* IsShaderPresent) (struct gl2_program_intf **, GLenum);
 };
 
 struct gl2_fragment_shader_intf

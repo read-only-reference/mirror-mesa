@@ -44,10 +44,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r200_context.h"
 #include "radeon_drm.h"
 
-extern void radeonCopyBuffer(const __DRIdrawablePrivate * drawable);
+extern void radeonCopyBuffer(const __DRIdrawablePrivate * drawable,
+			     const drm_clip_rect_t	* rect);
 extern void radeonPageFlip(const __DRIdrawablePrivate * drawable);
 extern void radeonFlush(GLcontext * ctx);
 extern void radeonFinish(GLcontext * ctx);
 extern void radeonWaitForIdleLocked(radeonContextPtr radeon);
+extern uint32_t radeonGetAge(radeonContextPtr radeon);
 
 #endif				/* __RADEON_IOCTL_H__ */

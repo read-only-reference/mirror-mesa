@@ -52,6 +52,10 @@ struct radeon_context;
 typedef struct radeon_context radeonContextRec;
 typedef struct radeon_context *radeonContextPtr;
 
+/* This union is used to avoid warnings/miscompilation
+   with float to uint32_t casts due to strict-aliasing */
+typedef union { GLfloat f; uint32_t ui32; } float_ui32_type;
+
 #include "radeon_lock.h"
 #include "radeon_screen.h"
 #include "mm.h"
@@ -846,6 +850,8 @@ extern GLboolean radeonCreateContext(const __GLcontextModes *glVisual,
 				     __DRIcontextPrivate *driContextPriv,
 				     void *sharedContextPrivate);
 extern void radeonSwapBuffers( __DRIdrawablePrivate *dPriv );
+extern void radeonCopySubBuffer(__DRIdrawablePrivate * dPriv,
+				int x, int y, int w, int h);
 extern GLboolean radeonMakeCurrent( __DRIcontextPrivate *driContextPriv,
 				    __DRIdrawablePrivate *driDrawPriv,
 				    __DRIdrawablePrivate *driReadPriv );

@@ -2,7 +2,7 @@
  * Mesa 3-D graphics library
  * Version:  6.5
  *
- * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -34,15 +34,10 @@
 #include "framebuffer.h"
 #include "hash.h"
 #include "renderbuffer.h"
+#include "state.h"
 #include "teximage.h"
+#include "texobj.h"
 #include "texstore.h"
-
-
-/* XXX temporarily here */
-#define GL_READ_FRAMEBUFFER_EXT                0x90
-#define GL_DRAW_FRAMEBUFFER_EXT                0x9a
-#define GL_DRAW_FRAMEBUFFER_BINDING_EXT        GL_FRAMEBUFFER_BINDING_EXT
-#define GL_READ_FRAMEBUFFER_BINDING_EXT        0x9b
 
 
 /**
@@ -72,8 +67,8 @@ static struct gl_renderbuffer DummyRenderbuffer;
 /**
  * Helper routine for getting a gl_renderbuffer.
  */
-static struct gl_renderbuffer *
-lookup_renderbuffer(GLcontext *ctx, GLuint id)
+struct gl_renderbuffer *
+_mesa_lookup_renderbuffer(GLcontext *ctx, GLuint id)
 {
    struct gl_renderbuffer *rb;
 
@@ -89,8 +84,8 @@ lookup_renderbuffer(GLcontext *ctx, GLuint id)
 /**
  * Helper routine for getting a gl_framebuffer.
  */
-static struct gl_framebuffer *
-lookup_framebuffer(GLcontext *ctx, GLuint id)
+struct gl_framebuffer *
+_mesa_lookup_framebuffer(GLcontext *ctx, GLuint id)
 {
    struct gl_framebuffer *fb;
 
@@ -161,9 +156,7 @@ _mesa_remove_attachment(GLcontext *ctx, struct gl_renderbuffer_attachment *att)
       else {
          /* tell driver that we're done rendering to this texture. */
          if (ctx->Driver.FinishRenderTexture) {
-            ctx->Driver.FinishRenderTexture(ctx, att->Texture,
-                                            att->CubeMapFace,
-                                            att->TextureLevel);
+            ctx->Driver.FinishRenderTexture(ctx, att);
          }
       }
       att->Texture = NULL;
@@ -188,6 +181,7 @@ _mesa_remove_attachment(GLcontext *ctx, struct gl_renderbuffer_attachment *att)
  */
 void
 _mesa_set_texture_attachment(GLcontext *ctx,
+                             struct gl_framebuffer *fb,
                              struct gl_renderbuffer_attachment *att,
                              struct gl_texture_object *texObj,
                              GLenum texTarget, GLuint level, GLuint zoffset)
@@ -214,6 +208,10 @@ _mesa_set_texture_attachment(GLcontext *ctx,
    }
    att->Zoffset = zoffset;
    att->Complete = GL_FALSE;
+
+   if (att->Texture->Image[att->CubeMapFace][att->TextureLevel]) {
+      ctx->Driver.RenderTexture(ctx, fb, att);
+   }
 }
 
 
@@ -226,6 +224,7 @@ _mesa_set_renderbuffer_attachment(GLcontext *ctx,
                                   struct gl_renderbuffer_attachment *att,
                                   struct gl_renderbuffer *rb)
 {
+   /* XXX check if re-doing same attachment, exit early */
    _mesa_remove_attachment(ctx, att);
    att->Type = GL_RENDERBUFFER_EXT;
    att->Renderbuffer = rb;
@@ -245,6 +244,10 @@ _mesa_framebuffer_renderbuffer(GLcontext *ctx, struct gl_framebuffer *fb,
 {
    struct gl_renderbuffer_attachment *att;
 
+   _glthread_LOCK_MUTEX(fb->Mutex);
+   if (rb)
+      _glthread_LOCK_MUTEX(rb->Mutex);
+
    att = _mesa_get_attachment(ctx, fb, attachment);
    ASSERT(att);
 
@@ -254,6 +257,10 @@ _mesa_framebuffer_renderbuffer(GLcontext *ctx, struct gl_framebuffer *fb,
    else {
       _mesa_remove_attachment(ctx, att);
    }
+
+   if (rb)
+      _glthread_UNLOCK_MUTEX(rb->Mutex);
+   _glthread_UNLOCK_MUTEX(fb->Mutex);
 }
 
 
@@ -323,18 +330,25 @@ test_attachment_completeness(const GLcontext *ctx, GLenum format,
       }
    }
    else if (att->Type == GL_RENDERBUFFER_EXT) {
-      if (att->Renderbuffer->Width < 1 || att->Renderbuffer->Height < 1) {
+      ASSERT(att->Renderbuffer);
+      if (!att->Renderbuffer->InternalFormat ||
+          att->Renderbuffer->Width < 1 ||
+          att->Renderbuffer->Height < 1) {
          att->Complete = GL_FALSE;
          return;
       }
       if (format == GL_COLOR) {
          if (att->Renderbuffer->_BaseFormat != GL_RGB &&
              att->Renderbuffer->_BaseFormat != GL_RGBA) {
+            ASSERT(att->Renderbuffer->RedBits);
+            ASSERT(att->Renderbuffer->GreenBits);
+            ASSERT(att->Renderbuffer->BlueBits);
             att->Complete = GL_FALSE;
             return;
          }
       }
       else if (format == GL_DEPTH) {
+         ASSERT(att->Renderbuffer->DepthBits);
          if (att->Renderbuffer->_BaseFormat == GL_DEPTH_COMPONENT) {
             /* OK */
          }
@@ -349,6 +363,7 @@ test_attachment_completeness(const GLcontext *ctx, GLenum format,
       }
       else {
          assert(format == GL_STENCIL);
+         ASSERT(att->Renderbuffer->StencilBits);
          if (att->Renderbuffer->_BaseFormat == GL_STENCIL_INDEX) {
             /* OK */
          }
@@ -367,6 +382,18 @@ test_attachment_completeness(const GLcontext *ctx, GLenum format,
       /* complete */
       return;
    }
+}
+
+
+/**
+ * Helpful for debugging
+ */
+static void
+fbo_incomplete(const char *msg, int index)
+{
+   /*
+   _mesa_debug(NULL, "FBO Incomplete: %s [%d]\n", msg, index);
+   */
 }
 
 
@@ -400,6 +427,7 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
          test_attachment_completeness(ctx, GL_DEPTH, att);
          if (!att->Complete) {
             fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT_EXT;
+            fbo_incomplete("depth attachment incomplete", -1);
             return;
          }
       }
@@ -408,6 +436,7 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
          test_attachment_completeness(ctx, GL_STENCIL, att);
          if (!att->Complete) {
             fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT_EXT;
+            fbo_incomplete("stencil attachment incomplete", -1);
             return;
          }
       }
@@ -416,6 +445,7 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
          test_attachment_completeness(ctx, GL_COLOR, att);
          if (!att->Complete) {
             fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT_EXT;
+            fbo_incomplete("color attachment incomplete", i);
             return;
          }
       }
@@ -427,9 +457,10 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
          h = texImg->Height;
          f = texImg->_BaseFormat;
          numImages++;
-         if (f != GL_RGB && f != GL_RGBA && f != GL_DEPTH_COMPONENT) {
-            /* XXX need GL_DEPTH_STENCIL_EXT test? */
+         if (f != GL_RGB && f != GL_RGBA && f != GL_DEPTH_COMPONENT
+             && f != GL_DEPTH_STENCIL_EXT) {
             fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_FORMATS_EXT;
+            fbo_incomplete("texture attachment incomplete", -1);
             return;
          }
       }
@@ -455,10 +486,12 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
          /* check that width, height, format are same */
          if (w != width || h != height) {
             fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS_EXT;
+            fbo_incomplete("width or height mismatch", -1);
             return;
          }
          if (intFormat != GL_NONE && f != intFormat) {
             fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_FORMATS_EXT;
+            fbo_incomplete("format mismatch", -1);
             return;
          }
       }
@@ -472,6 +505,7 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
          assert(att);
          if (att->Type == GL_NONE) {
             fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER_EXT;
+            fbo_incomplete("missing drawbuffer", i);
             return;
          }
       }
@@ -484,6 +518,7 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
       assert(att);
       if (att->Type == GL_NONE) {
          fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER_EXT;
+            fbo_incomplete("missing readbuffer", -1);
          return;
       }
    }
@@ -500,6 +535,7 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
             struct gl_renderbuffer *rb_j = fb->Attachment[j].Renderbuffer;
             if (rb_i == rb_j && rb_i->_BaseFormat != GL_DEPTH_STENCIL_EXT) {
                fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_DUPLICATE_ATTACHMENT_EXT;
+               fbo_incomplete("multiply bound renderbuffer", -1);
                return;
             }
          }
@@ -509,6 +545,7 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
 
    if (numImages == 0) {
       fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT_EXT;
+      fbo_incomplete("no attachments", -1);
       return;
    }
 
@@ -527,7 +564,7 @@ _mesa_IsRenderbufferEXT(GLuint renderbuffer)
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
    if (renderbuffer) {
-      struct gl_renderbuffer *rb = lookup_renderbuffer(ctx, renderbuffer);
+      struct gl_renderbuffer *rb = _mesa_lookup_renderbuffer(ctx, renderbuffer);
       if (rb != NULL && rb != &DummyRenderbuffer)
          return GL_TRUE;
    }
@@ -552,7 +589,7 @@ _mesa_BindRenderbufferEXT(GLenum target, GLuint renderbuffer)
    FLUSH_VERTICES(ctx, _NEW_BUFFERS);
 
    if (renderbuffer) {
-      newRb = lookup_renderbuffer(ctx, renderbuffer);
+      newRb = _mesa_lookup_renderbuffer(ctx, renderbuffer);
       if (newRb == &DummyRenderbuffer) {
          /* ID was reserved, but no real renderbuffer object made yet */
          newRb = NULL;
@@ -599,7 +636,7 @@ _mesa_DeleteRenderbuffersEXT(GLsizei n, const GLuint *renderbuffers)
    for (i = 0; i < n; i++) {
       if (renderbuffers[i] > 0) {
 	 struct gl_renderbuffer *rb;
-	 rb = lookup_renderbuffer(ctx, renderbuffers[i]);
+	 rb = _mesa_lookup_renderbuffer(ctx, renderbuffers[i]);
 	 if (rb) {
             /* check if deleting currently bound renderbuffer object */
             if (rb == ctx->CurrentRenderbuffer) {
@@ -659,11 +696,14 @@ _mesa_GenRenderbuffersEXT(GLsizei n, GLuint *renderbuffers)
 /**
  * Given an internal format token for a render buffer, return the
  * corresponding base format.
+ * This is very similar to _mesa_base_tex_format() but the set of valid
+ * internal formats is somewhat different.
+ *
  * \return one of GL_RGB, GL_RGBA, GL_STENCIL_INDEX, GL_DEPTH_COMPONENT
  *  GL_DEPTH_STENCIL_EXT or zero if error.
  */
-static GLenum
-base_internal_format(GLcontext *ctx, GLenum internalFormat)
+GLenum
+_mesa_base_fbo_format(GLcontext *ctx, GLenum internalFormat)
 {
    switch (internalFormat) {
    case GL_RGB:
@@ -723,7 +763,7 @@ _mesa_RenderbufferStorageEXT(GLenum target, GLenum internalFormat,
       return;
    }
 
-   baseFormat = base_internal_format(ctx, internalFormat);
+   baseFormat = _mesa_base_fbo_format(ctx, internalFormat);
    if (baseFormat == 0) {
       _mesa_error(ctx, GL_INVALID_ENUM,
                   "glRenderbufferStorageEXT(internalFormat)");
@@ -756,15 +796,26 @@ _mesa_RenderbufferStorageEXT(GLenum target, GLenum internalFormat,
       return;
    }
 
+   /* These MUST get set by the AllocStorage func */
+   rb->_ActualFormat = 0;
+   rb->RedBits =
+   rb->GreenBits =
+   rb->BlueBits =
+   rb->AlphaBits =
+   rb->IndexBits =
+   rb->DepthBits =
+   rb->StencilBits = 0;
+
    /* Now allocate the storage */
    ASSERT(rb->AllocStorage);
    if (rb->AllocStorage(ctx, rb, internalFormat, width, height)) {
       /* No error - check/set fields now */
+      assert(rb->_ActualFormat);
       assert(rb->Width == width);
       assert(rb->Height == height);
-      assert(rb->InternalFormat);
       assert(rb->RedBits || rb->GreenBits || rb->BlueBits || rb->AlphaBits ||
              rb->DepthBits || rb->StencilBits || rb->IndexBits);
+      rb->InternalFormat = internalFormat;
       rb->_BaseFormat = baseFormat;
    }
    else {
@@ -772,6 +823,7 @@ _mesa_RenderbufferStorageEXT(GLenum target, GLenum internalFormat,
       rb->Width = 0;
       rb->Height = 0;
       rb->InternalFormat = GL_NONE;
+      rb->_ActualFormat = GL_NONE;
       rb->_BaseFormat = GL_NONE;
       rb->RedBits =
       rb->GreenBits =
@@ -854,11 +906,27 @@ _mesa_IsFramebufferEXT(GLuint framebuffer)
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
    if (framebuffer) {
-      struct gl_framebuffer *rb = lookup_framebuffer(ctx, framebuffer);
+      struct gl_framebuffer *rb = _mesa_lookup_framebuffer(ctx, framebuffer);
       if (rb != NULL && rb != &DummyFramebuffer)
          return GL_TRUE;
    }
    return GL_FALSE;
+}
+
+
+static void
+check_begin_texture_render(GLcontext *ctx, struct gl_framebuffer *fb)
+{
+   GLuint i;
+   ASSERT(ctx->Driver.RenderTexture);
+   for (i = 0; i < BUFFER_COUNT; i++) {
+      struct gl_renderbuffer_attachment *att = fb->Attachment + i;
+      struct gl_texture_object *texObj = att->Texture;
+      if (texObj
+          && att->Texture->Image[att->CubeMapFace][att->TextureLevel]) {
+         ctx->Driver.RenderTexture(ctx, fb, att);
+      }
+   }
 }
 
 
@@ -868,7 +936,7 @@ _mesa_IsFramebufferEXT(GLuint framebuffer)
  * notify the device driver that the texture image may have changed.
  */
 static void
-check_texture_render(GLcontext *ctx, struct gl_framebuffer *fb)
+check_end_texture_render(GLcontext *ctx, struct gl_framebuffer *fb)
 {
    if (ctx->Driver.FinishRenderTexture) {
       GLuint i;
@@ -876,8 +944,7 @@ check_texture_render(GLcontext *ctx, struct gl_framebuffer *fb)
          struct gl_renderbuffer_attachment *att = fb->Attachment + i;
          struct gl_texture_object *texObj = att->Texture;
          if (texObj) {
-            ctx->Driver.FinishRenderTexture(ctx, texObj, att->CubeMapFace,
-                                            att->TextureLevel);
+            ctx->Driver.FinishRenderTexture(ctx, att);
          }
       }
    }
@@ -892,6 +959,12 @@ _mesa_BindFramebufferEXT(GLenum target, GLuint framebuffer)
    GET_CURRENT_CONTEXT(ctx);
 
    ASSERT_OUTSIDE_BEGIN_END(ctx);
+
+   if (!ctx->Extensions.EXT_framebuffer_object) {
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "glBindFramebufferEXT(unsupported)");
+      return;
+   }
 
    switch (target) {
 #if FEATURE_EXT_framebuffer_blit
@@ -925,7 +998,7 @@ _mesa_BindFramebufferEXT(GLenum target, GLuint framebuffer)
 
    if (framebuffer) {
       /* Binding a user-created framebuffer object */
-      newFb = lookup_framebuffer(ctx, framebuffer);
+      newFb = _mesa_lookup_framebuffer(ctx, framebuffer);
       if (newFb == &DummyFramebuffer) {
          /* ID was reserved, but no real framebuffer object made yet */
          newFb = NULL;
@@ -939,10 +1012,12 @@ _mesa_BindFramebufferEXT(GLenum target, GLuint framebuffer)
 	 }
          _mesa_HashInsert(ctx->Shared->FrameBuffers, framebuffer, newFb);
       }
+      _glthread_LOCK_MUTEX(newFb->Mutex);
       if (bindReadBuf)
          newFb->RefCount++;
       if (bindDrawBuf)
          newFb->RefCount++;
+      _glthread_UNLOCK_MUTEX(newFb->Mutex);
    }
    else {
       /* Binding the window system framebuffer (which was originally set
@@ -951,12 +1026,19 @@ _mesa_BindFramebufferEXT(GLenum target, GLuint framebuffer)
       newFb = ctx->WinSysDrawBuffer;
    }
 
+   ASSERT(newFb);
    ASSERT(newFb != &DummyFramebuffer);
+
+   /*
+    * XXX check if re-binding same buffer and skip some of this code.
+    */
 
    if (bindReadBuf) {
       oldFb = ctx->ReadBuffer;
       if (oldFb && oldFb->Name != 0) {
+         _glthread_LOCK_MUTEX(oldFb->Mutex);
          oldFb->RefCount--;
+         _glthread_UNLOCK_MUTEX(oldFb->Mutex);
          if (oldFb->RefCount == 0) {
             oldFb->Delete(oldFb);
          }
@@ -968,16 +1050,24 @@ _mesa_BindFramebufferEXT(GLenum target, GLuint framebuffer)
       oldFb = ctx->DrawBuffer;
       if (oldFb && oldFb->Name != 0) {
          /* check if old FB had any texture attachments */
-         if (ctx->Driver.FinishRenderTexture) {
-            check_texture_render(ctx, oldFb);
-         }
+         check_end_texture_render(ctx, oldFb);
          /* check if time to delete this framebuffer */
+         _glthread_LOCK_MUTEX(oldFb->Mutex);
          oldFb->RefCount--;
          if (oldFb->RefCount == 0) {
             oldFb->Delete(oldFb);
          }
+         _glthread_UNLOCK_MUTEX(oldFb->Mutex);
       }
       ctx->DrawBuffer = newFb;
+      if (newFb->Name != 0) {
+         /* check if newly bound framebuffer has any texture attachments */
+         check_begin_texture_render(ctx, newFb);
+      }
+   }
+
+   if (ctx->Driver.BindFramebuffer) {
+      ctx->Driver.BindFramebuffer(ctx, target, newFb);
    }
 }
 
@@ -994,7 +1084,7 @@ _mesa_DeleteFramebuffersEXT(GLsizei n, const GLuint *framebuffers)
    for (i = 0; i < n; i++) {
       if (framebuffers[i] > 0) {
 	 struct gl_framebuffer *fb;
-	 fb = lookup_framebuffer(ctx, framebuffers[i]);
+	 fb = _mesa_lookup_framebuffer(ctx, framebuffers[i]);
 	 if (fb) {
             ASSERT(fb == &DummyFramebuffer || fb->Name == framebuffers[i]);
 
@@ -1012,7 +1102,9 @@ _mesa_DeleteFramebuffersEXT(GLsizei n, const GLuint *framebuffers)
                /* But the object will not be freed until it's no longer
                 * bound in any context.
                 */
+               _glthread_LOCK_MUTEX(fb->Mutex);
                fb->RefCount--;
+               _glthread_UNLOCK_MUTEX(fb->Mutex);
                if (fb->RefCount == 0) {
                   fb->Delete(fb);
                }
@@ -1101,97 +1193,134 @@ _mesa_CheckFramebufferStatusEXT(GLenum target)
 
 
 /**
- * Do error checking common to glFramebufferTexture1D/2D/3DEXT.
- * \return GL_TRUE if any error, GL_FALSE otherwise
+ * Common code called by glFramebufferTexture1D/2D/3DEXT().
  */
-static GLboolean
-error_check_framebuffer_texture(GLcontext *ctx, GLuint dims,
-                                GLenum target, GLenum attachment,
-                                GLenum textarget, GLuint texture, GLint level)
+static void
+framebuffer_texture(GLuint dims, GLenum target, GLenum attachment,
+                    GLenum textarget, GLuint texture,
+                    GLint level, GLint zoffset)
 {
-   ASSERT(dims >= 1 && dims <= 3);
+   struct gl_renderbuffer_attachment *att;
+   struct gl_texture_object *texObj = NULL;
+   struct gl_framebuffer *fb;
+   GET_CURRENT_CONTEXT(ctx);
+
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (target != GL_FRAMEBUFFER_EXT) {
       _mesa_error(ctx, GL_INVALID_ENUM,
                   "glFramebufferTexture%dDEXT(target)", dims);
-      return GL_TRUE;
+      return;
    }
+
+   fb = ctx->DrawBuffer;
+   ASSERT(fb);
 
    /* check framebuffer binding */
-   if (ctx->DrawBuffer->Name == 0) {
+   if (fb->Name == 0) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
                   "glFramebufferTexture%dDEXT", dims);
-      return GL_TRUE;
+      return;
    }
 
-   /* only check textarget, level if texture ID is non-zero */
    if (texture) {
-      if ((dims == 1 && textarget != GL_TEXTURE_1D) ||
-	  (dims == 3 && textarget != GL_TEXTURE_3D) ||
-	  (dims == 2 && textarget != GL_TEXTURE_2D &&
-	   textarget != GL_TEXTURE_RECTANGLE_ARB &&
-	   !IS_CUBE_FACE(textarget))) {
-	 _mesa_error(ctx, GL_INVALID_VALUE,
-		     "glFramebufferTexture%dDEXT(textarget)", dims);
-	 return GL_TRUE;
-      }
-
-      if ((level < 0) || level >= _mesa_max_texture_levels(ctx, textarget)) {
-	 _mesa_error(ctx, GL_INVALID_VALUE,
-		     "glFramebufferTexture%dDEXT(level)", dims);
-	 return GL_TRUE;
-      }
+      texObj = _mesa_lookup_texture(ctx, texture);
    }
 
-   return GL_FALSE;
+   /* Check dimension-dependent things */
+   switch (dims) {
+   case 1:
+      if (textarget != GL_TEXTURE_1D) {
+         _mesa_error(ctx, GL_INVALID_ENUM,
+                     "glFramebufferTexture1DEXT(textarget)");
+         return;
+      }
+      if (texObj && texObj->Target != GL_TEXTURE_1D) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glFramebufferTexture1DEXT(texture target mismatch)");
+         return;
+      }
+      break;
+   case 2:
+      if (textarget != GL_TEXTURE_2D &&
+          textarget != GL_TEXTURE_RECTANGLE_ARB &&
+          !IS_CUBE_FACE(textarget)) {
+         _mesa_error(ctx, GL_INVALID_ENUM,
+                     "glFramebufferTexture2DEXT(textarget)");
+         return;
+      }
+      if (texObj) {
+         if ((texObj->Target == GL_TEXTURE_2D && textarget != GL_TEXTURE_2D) ||
+             (texObj->Target == GL_TEXTURE_RECTANGLE_ARB
+              && textarget != GL_TEXTURE_RECTANGLE_ARB) ||
+             (texObj->Target == GL_TEXTURE_CUBE_MAP
+              && !IS_CUBE_FACE(textarget))) {
+            _mesa_error(ctx, GL_INVALID_OPERATION,
+                        "glFramebufferTexture1DEXT(texture target mismatch)");
+            return;
+         }
+      }
+      break;
+   case 3:
+      if (textarget != GL_TEXTURE_3D) {
+         _mesa_error(ctx, GL_INVALID_ENUM,
+                     "glFramebufferTexture3DEXT(textarget)");
+         return;
+      }
+      if (texObj && texObj->Target != GL_TEXTURE_3D) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glFramebufferTexture3DEXT(texture target mismatch)");
+         return;
+      }
+      {
+         const GLint maxSize = 1 << (ctx->Const.Max3DTextureLevels - 1);
+         if (zoffset < 0 || zoffset >= maxSize) {
+            _mesa_error(ctx, GL_INVALID_VALUE,
+                        "glFramebufferTexture3DEXT(zoffset)");
+            return;
+         }
+      }
+      break;
+   default:
+      _mesa_problem(ctx, "Unexpected dims in error_check_framebuffer_texture");
+      return;
+   }
+
+   if ((level < 0) || level >= _mesa_max_texture_levels(ctx, textarget)) {
+      _mesa_error(ctx, GL_INVALID_VALUE,
+                  "glFramebufferTexture%dDEXT(level)", dims);
+      return;
+   }
+
+   att = _mesa_get_attachment(ctx, fb, attachment);
+   if (att == NULL) {
+      _mesa_error(ctx, GL_INVALID_ENUM,
+		  "glFramebufferTexture%dDEXT(attachment)", dims);
+      return;
+   }
+
+   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+
+   _glthread_LOCK_MUTEX(fb->Mutex);
+   if (texObj) {
+      _mesa_set_texture_attachment(ctx, fb, att, texObj, textarget,
+                                   level, zoffset);
+   }
+   else {
+      _mesa_remove_attachment(ctx, att);
+   }
+   _glthread_UNLOCK_MUTEX(fb->Mutex);
 }
+
 
 
 void GLAPIENTRY
 _mesa_FramebufferTexture1DEXT(GLenum target, GLenum attachment,
                               GLenum textarget, GLuint texture, GLint level)
 {
-   struct gl_renderbuffer_attachment *att;
-   struct gl_texture_object *texObj;
-   GET_CURRENT_CONTEXT(ctx);
-
-   ASSERT_OUTSIDE_BEGIN_END(ctx);
-
-   if (error_check_framebuffer_texture(ctx, 1, target, attachment,
-				       textarget, texture, level))
-      return;
-
-   ASSERT(textarget == GL_TEXTURE_1D);
-
-   /* XXX read blit */
-   att = _mesa_get_attachment(ctx, ctx->DrawBuffer, attachment);
-   if (att == NULL) {
-      _mesa_error(ctx, GL_INVALID_ENUM,
-		  "glFramebufferTexture1DEXT(attachment)");
-      return;
-   }
-
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
-
-   if (texture) {
-      texObj = (struct gl_texture_object *)
-	 _mesa_HashLookup(ctx->Shared->TexObjects, texture);
-      if (!texObj) {
-	 _mesa_error(ctx, GL_INVALID_VALUE,
-		     "glFramebufferTexture1DEXT(texture)");
-	 return;
-      }
-      if (texObj->Target != textarget) {
-	 _mesa_error(ctx, GL_INVALID_OPERATION, /* XXX correct error? */
-		     "glFramebufferTexture1DEXT(texture target)");
-	 return;
-      }
-   }
-   else {
-      /* remove texture attachment */
-      texObj = NULL;
-   }
-   ctx->Driver.RenderbufferTexture(ctx, att, texObj, textarget, level, 0);
+   const GLint zoffset = 0;
+   framebuffer_texture(1, target, attachment, textarget, texture,
+                       level, zoffset);
 }
 
 
@@ -1199,52 +1328,9 @@ void GLAPIENTRY
 _mesa_FramebufferTexture2DEXT(GLenum target, GLenum attachment,
                               GLenum textarget, GLuint texture, GLint level)
 {
-   struct gl_renderbuffer_attachment *att;
-   struct gl_texture_object *texObj;
-   GET_CURRENT_CONTEXT(ctx);
-
-   ASSERT_OUTSIDE_BEGIN_END(ctx);
-
-   if (error_check_framebuffer_texture(ctx, 2, target, attachment,
-				       textarget, texture, level))
-      return;
-
-   ASSERT(textarget == GL_TEXTURE_2D ||
-	  textarget == GL_TEXTURE_RECTANGLE_ARB ||
-	  IS_CUBE_FACE(textarget));
-
-   att = _mesa_get_attachment(ctx, ctx->DrawBuffer, attachment);
-   if (att == NULL) {
-      _mesa_error(ctx, GL_INVALID_ENUM,
-		  "glFramebufferTexture2DEXT(attachment)");
-      return;
-   }
-
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
-
-   if (texture) {
-      texObj = (struct gl_texture_object *)
-	 _mesa_HashLookup(ctx->Shared->TexObjects, texture);
-      if (!texObj) {
-	 _mesa_error(ctx, GL_INVALID_VALUE,
-		     "glFramebufferTexture2DEXT(texture)");
-	 return;
-      }
-      if ((texObj->Target == GL_TEXTURE_2D && textarget != GL_TEXTURE_2D) ||
-	  (texObj->Target == GL_TEXTURE_RECTANGLE_ARB
-	   && textarget != GL_TEXTURE_RECTANGLE_ARB) ||
-	  (texObj->Target == GL_TEXTURE_CUBE_MAP
-	   && !IS_CUBE_FACE(textarget))) {
-	 _mesa_error(ctx, GL_INVALID_OPERATION, /* XXX correct error? */
-		     "glFramebufferTexture2DEXT(texture target)");
-	 return;
-      }
-   }
-   else {
-      /* remove texture attachment */
-      texObj = NULL;
-   }
-   ctx->Driver.RenderbufferTexture(ctx, att, texObj, textarget, level, 0);
+   const GLint zoffset = 0;
+   framebuffer_texture(2, target, attachment, textarget, texture,
+                       level, zoffset);
 }
 
 
@@ -1253,54 +1339,10 @@ _mesa_FramebufferTexture3DEXT(GLenum target, GLenum attachment,
                               GLenum textarget, GLuint texture,
                               GLint level, GLint zoffset)
 {
-   struct gl_renderbuffer_attachment *att;
-   struct gl_texture_object *texObj;
-   GET_CURRENT_CONTEXT(ctx);
-
-   ASSERT_OUTSIDE_BEGIN_END(ctx);
-
-   if (error_check_framebuffer_texture(ctx, 3, target, attachment,
-				       textarget, texture, level))
-      return;
-
-   ASSERT(textarget == GL_TEXTURE_3D);
-
-   att = _mesa_get_attachment(ctx, ctx->DrawBuffer, attachment);
-   if (att == NULL) {
-      _mesa_error(ctx, GL_INVALID_ENUM,
-		  "glFramebufferTexture1DEXT(attachment)");
-      return;
-   }
-
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
-
-   if (texture) {
-      const GLint maxSize = 1 << (ctx->Const.Max3DTextureLevels - 1);
-      texObj = (struct gl_texture_object *)
-	 _mesa_HashLookup(ctx->Shared->TexObjects, texture);
-      if (!texObj) {
-	 _mesa_error(ctx, GL_INVALID_VALUE,
-		     "glFramebufferTexture3DEXT(texture)");
-	 return;
-      }
-      if (texObj->Target != textarget) {
-	 _mesa_error(ctx, GL_INVALID_OPERATION, /* XXX correct error? */
-		     "glFramebufferTexture3DEXT(texture target)");
-	 return;
-      }
-      if (zoffset < 0 || zoffset >= maxSize) {
-	 _mesa_error(ctx, GL_INVALID_VALUE,
-		     "glFramebufferTexture3DEXT(zoffset)");
-	 return;
-      }
-   }
-   else {
-      /* remove texture attachment */
-      texObj = NULL;
-   }
-   ctx->Driver.RenderbufferTexture(ctx, att, texObj, textarget,
-                                   level, zoffset);
+   framebuffer_texture(3, target, attachment, textarget, texture,
+                       level, zoffset);
 }
+
 
 
 void GLAPIENTRY
@@ -1363,7 +1405,7 @@ _mesa_FramebufferRenderbufferEXT(GLenum target, GLenum attachment,
    }
 
    if (renderbuffer) {
-      rb = lookup_renderbuffer(ctx, renderbuffer);
+      rb = _mesa_lookup_renderbuffer(ctx, renderbuffer);
       if (!rb) {
 	 _mesa_error(ctx, GL_INVALID_OPERATION,
 		     "glFramebufferRenderbufferEXT(renderbuffer)");
@@ -1379,6 +1421,11 @@ _mesa_FramebufferRenderbufferEXT(GLenum target, GLenum attachment,
 
    assert(ctx->Driver.FramebufferRenderbuffer);
    ctx->Driver.FramebufferRenderbuffer(ctx, fb, attachment, rb);
+
+   /* Some subsequent GL commands may depend on the framebuffer's visual
+    * after the binding is updated.  Update visual info now.
+    */
+   _mesa_update_framebuffer_visual(fb);
 }
 
 
@@ -1527,11 +1574,31 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
    ASSERT_OUTSIDE_BEGIN_END(ctx);
    FLUSH_VERTICES(ctx, _NEW_BUFFERS);
 
+   if (ctx->NewState) {
+      _mesa_update_state(ctx);
+   }
+
+   if (!ctx->ReadBuffer) {
+      /* XXX */
+   }
+
    /* check for complete framebuffers */
    if (ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT ||
        ctx->ReadBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
       _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
                   "glBlitFramebufferEXT(incomplete draw/read buffers)");
+      return;
+   }
+
+   if (filter != GL_NEAREST && filter != GL_LINEAR) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glBlitFramebufferEXT(filter)");
+      return;
+   }
+
+   if (mask & ~(GL_COLOR_BUFFER_BIT |
+                GL_DEPTH_BUFFER_BIT |
+                GL_STENCIL_BUFFER_BIT)) {
+      _mesa_error( ctx, GL_INVALID_VALUE, "glBlitFramebufferEXT(mask)");
       return;
    }
 
@@ -1543,11 +1610,24 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
       return;
    }
 
-   if (mask & ~(GL_COLOR_BUFFER_BIT |
-                GL_DEPTH_BUFFER_BIT |
-                GL_STENCIL_BUFFER_BIT)) {
-      _mesa_error( ctx, GL_INVALID_VALUE, "glBlitFramebufferEXT(mask)");
-      return;
+   if (mask & GL_STENCIL_BUFFER_BIT) {
+      struct gl_renderbuffer *readRb = ctx->ReadBuffer->_StencilBuffer;
+      struct gl_renderbuffer *drawRb = ctx->DrawBuffer->_StencilBuffer;
+      if (readRb->StencilBits != drawRb->StencilBits) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glBlitFramebufferEXT(stencil buffer size mismatch");
+         return;
+      }
+   }
+
+   if (mask & GL_DEPTH_BUFFER_BIT) {
+      struct gl_renderbuffer *readRb = ctx->ReadBuffer->_DepthBuffer;
+      struct gl_renderbuffer *drawRb = ctx->DrawBuffer->_DepthBuffer;
+      if (readRb->DepthBits != drawRb->DepthBits) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glBlitFramebufferEXT(depth buffer size mismatch");
+         return;
+      }
    }
 
    if (!ctx->Extensions.EXT_framebuffer_blit) {

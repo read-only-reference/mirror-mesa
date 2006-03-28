@@ -2,7 +2,7 @@
  * Mesa 3-D graphics library
  * Version:  6.5
  *
- * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -27,6 +27,12 @@
 #define FBOBJECT_H
 
 
+extern struct gl_renderbuffer *
+_mesa_lookup_renderbuffer(GLcontext *ctx, GLuint id);
+
+extern struct gl_framebuffer *
+_mesa_lookup_framebuffer(GLcontext *ctx, GLuint id);
+
 extern struct gl_renderbuffer_attachment *
 _mesa_get_attachment(GLcontext *ctx, struct gl_framebuffer *fb,
                      GLenum attachment);
@@ -38,6 +44,7 @@ _mesa_remove_attachment(GLcontext *ctx,
 
 extern void
 _mesa_set_texture_attachment(GLcontext *ctx,
+                             struct gl_framebuffer *fb,
                              struct gl_renderbuffer_attachment *att,
                              struct gl_texture_object *texObj,
                              GLenum texTarget, GLuint level, GLuint zoffset);
@@ -53,6 +60,9 @@ _mesa_framebuffer_renderbuffer(GLcontext *ctx, struct gl_framebuffer *fb,
 
 extern void
 _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb);
+
+extern GLenum
+_mesa_base_fbo_format(GLcontext *ctx, GLenum internalFormat);
 
 extern GLboolean GLAPIENTRY
 _mesa_IsRenderbufferEXT(GLuint renderbuffer);
