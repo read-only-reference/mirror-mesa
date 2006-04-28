@@ -602,6 +602,8 @@ osmesa_renderbuffer_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
    const OSMesaContext osmesa = OSMESA_CONTEXT(ctx);
 
    /* Note: we can ignoring internalFormat for "window-system" renderbuffers */
+   (void) internalFormat;
+
    if (osmesa->format == OSMESA_RGBA) {
       rb->GetRow = get_row_RGBA;
       rb->GetValues = get_values_RGBA;
@@ -691,6 +693,9 @@ osmesa_renderbuffer_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
    else {
       _mesa_problem(ctx, "bad pixel format in osmesa renderbuffer_storage");
    }
+
+   rb->Width = width;
+   rb->Height = height;
 
    return GL_TRUE;
 }

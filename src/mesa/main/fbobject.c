@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5
+ * Version:  6.5.1
  *
  * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
@@ -391,6 +391,8 @@ test_attachment_completeness(const GLcontext *ctx, GLenum format,
 static void
 fbo_incomplete(const char *msg, int index)
 {
+   (void) msg;
+   (void) index;
    /*
    _mesa_debug(NULL, "FBO Incomplete: %s [%d]\n", msg, index);
    */
@@ -410,6 +412,7 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
    GLenum intFormat = GL_NONE;
    GLuint w = 0, h = 0;
    GLint i;
+   GLuint j;
 
    assert(fb->Name != 0);
 
@@ -498,14 +501,14 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
    }
 
    /* Check that all DrawBuffers are present */
-   for (i = 0; i < ctx->Const.MaxDrawBuffers; i++) {
-      if (fb->ColorDrawBuffer[i] != GL_NONE) {
+   for (j = 0; j < ctx->Const.MaxDrawBuffers; j++) {
+      if (fb->ColorDrawBuffer[j] != GL_NONE) {
          const struct gl_renderbuffer_attachment *att
-            = _mesa_get_attachment(ctx, fb, fb->ColorDrawBuffer[i]);
+            = _mesa_get_attachment(ctx, fb, fb->ColorDrawBuffer[j]);
          assert(att);
          if (att->Type == GL_NONE) {
             fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER_EXT;
-            fbo_incomplete("missing drawbuffer", i);
+            fbo_incomplete("missing drawbuffer", j);
             return;
          }
       }
@@ -522,26 +525,6 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
          return;
       }
    }
-
-   /* Check if any renderbuffer is attached more than once.
-    * Note that there's one exception: a GL_DEPTH_STENCIL renderbuffer can be
-    * bound to both the stencil and depth attachment points at the same time.
-    */
-   for (i = 0; i < BUFFER_COUNT - 1; i++) {
-      struct gl_renderbuffer *rb_i = fb->Attachment[i].Renderbuffer;
-      if (rb_i) {
-         GLint j;
-         for (j = i + 1; j < BUFFER_COUNT; j++) {
-            struct gl_renderbuffer *rb_j = fb->Attachment[j].Renderbuffer;
-            if (rb_i == rb_j && rb_i->_BaseFormat != GL_DEPTH_STENCIL_EXT) {
-               fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_DUPLICATE_ATTACHMENT_EXT;
-               fbo_incomplete("multiply bound renderbuffer", -1);
-               return;
-            }
-         }
-      }
-   }
-
 
    if (numImages == 0) {
       fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT_EXT;
@@ -770,12 +753,12 @@ _mesa_RenderbufferStorageEXT(GLenum target, GLenum internalFormat,
       return;
    }
 
-   if (width < 1 || width > ctx->Const.MaxRenderbufferSize) {
+   if (width < 1 || width > (GLsizei) ctx->Const.MaxRenderbufferSize) {
       _mesa_error(ctx, GL_INVALID_VALUE, "glRenderbufferStorageEXT(width)");
       return;
    }
 
-   if (height < 1 || height > ctx->Const.MaxRenderbufferSize) {
+   if (height < 1 || height > (GLsizei) ctx->Const.MaxRenderbufferSize) {
       _mesa_error(ctx, GL_INVALID_VALUE, "glRenderbufferStorageEXT(height)");
       return;
    }
@@ -790,8 +773,8 @@ _mesa_RenderbufferStorageEXT(GLenum target, GLenum internalFormat,
    FLUSH_VERTICES(ctx, _NEW_BUFFERS);
 
    if (rb->InternalFormat == internalFormat &&
-       rb->Width == width &&
-       rb->Height == height) {
+       rb->Width == (GLuint) width &&
+       rb->Height == (GLuint) height) {
       /* no change in allocation needed */
       return;
    }
@@ -811,8 +794,8 @@ _mesa_RenderbufferStorageEXT(GLenum target, GLenum internalFormat,
    if (rb->AllocStorage(ctx, rb, internalFormat, width, height)) {
       /* No error - check/set fields now */
       assert(rb->_ActualFormat);
-      assert(rb->Width == width);
-      assert(rb->Height == height);
+      assert(rb->Width == (GLuint) width);
+      assert(rb->Height == (GLuint) height);
       assert(rb->RedBits || rb->GreenBits || rb->BlueBits || rb->AlphaBits ||
              rb->DepthBits || rb->StencilBits || rb->IndexBits);
       rb->InternalFormat = internalFormat;

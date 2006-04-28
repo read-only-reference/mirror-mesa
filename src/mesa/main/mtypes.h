@@ -41,6 +41,7 @@
 #include "glapitable.h"
 #include "glthread.h"
 #include "math/m_matrix.h"	/* GLmatrix */
+#include "bitset.h"
 
 
 /**
@@ -141,7 +142,7 @@ enum
    VERT_ATTRIB_COLOR0 = 3,
    VERT_ATTRIB_COLOR1 = 4,
    VERT_ATTRIB_FOG = 5,
-   VERT_ATTRIB_SIX = 6,
+   VERT_ATTRIB_COLOR_INDEX = 6,
    VERT_ATTRIB_SEVEN = 7,
    VERT_ATTRIB_TEX0 = 8,
    VERT_ATTRIB_TEX1 = 9,
@@ -155,7 +156,19 @@ enum
    VERT_ATTRIB_GENERIC1 = 17,
    VERT_ATTRIB_GENERIC2 = 18,
    VERT_ATTRIB_GENERIC3 = 19,
-   VERT_ATTRIB_MAX = 16  /* XXX not counting generic attribs yet */
+   VERT_ATTRIB_GENERIC4 = 20,
+   VERT_ATTRIB_GENERIC5 = 21,
+   VERT_ATTRIB_GENERIC6 = 22,
+   VERT_ATTRIB_GENERIC7 = 23,
+   VERT_ATTRIB_GENERIC8 = 24,
+   VERT_ATTRIB_GENERIC9 = 25,
+   VERT_ATTRIB_GENERIC10 = 26,
+   VERT_ATTRIB_GENERIC11 = 27,
+   VERT_ATTRIB_GENERIC12 = 28,
+   VERT_ATTRIB_GENERIC13 = 29,
+   VERT_ATTRIB_GENERIC14 = 30,
+   VERT_ATTRIB_GENERIC15 = 31,
+   VERT_ATTRIB_MAX = 32
 };
 
 /**
@@ -163,30 +176,59 @@ enum
  * These are used in bitfields in many places.
  */
 /*@{*/
-#define VERT_BIT_POS      (1 << VERT_ATTRIB_POS)
-#define VERT_BIT_WEIGHT   (1 << VERT_ATTRIB_WEIGHT)
-#define VERT_BIT_NORMAL   (1 << VERT_ATTRIB_NORMAL)
-#define VERT_BIT_COLOR0   (1 << VERT_ATTRIB_COLOR0)
-#define VERT_BIT_COLOR1   (1 << VERT_ATTRIB_COLOR1)
-#define VERT_BIT_FOG      (1 << VERT_ATTRIB_FOG)
-#define VERT_BIT_SIX      (1 << VERT_ATTRIB_SIX)
-#define VERT_BIT_SEVEN    (1 << VERT_ATTRIB_SEVEN)
-#define VERT_BIT_TEX0     (1 << VERT_ATTRIB_TEX0)
-#define VERT_BIT_TEX1     (1 << VERT_ATTRIB_TEX1)
-#define VERT_BIT_TEX2     (1 << VERT_ATTRIB_TEX2)
-#define VERT_BIT_TEX3     (1 << VERT_ATTRIB_TEX3)
-#define VERT_BIT_TEX4     (1 << VERT_ATTRIB_TEX4)
-#define VERT_BIT_TEX5     (1 << VERT_ATTRIB_TEX5)
-#define VERT_BIT_TEX6     (1 << VERT_ATTRIB_TEX6)
-#define VERT_BIT_TEX7     (1 << VERT_ATTRIB_TEX7)
-#define VERT_BIT_GENERIC0 (1 << VERT_ATTRIB_GENERIC0)
-#define VERT_BIT_GENERIC1 (1 << VERT_ATTRIB_GENERIC1)
-#define VERT_BIT_GENERIC2 (1 << VERT_ATTRIB_GENERIC2)
-#define VERT_BIT_GENERIC3 (1 << VERT_ATTRIB_GENERIC3)
+#define VERT_BIT_POS         (1 << VERT_ATTRIB_POS)
+#define VERT_BIT_WEIGHT      (1 << VERT_ATTRIB_WEIGHT)
+#define VERT_BIT_NORMAL      (1 << VERT_ATTRIB_NORMAL)
+#define VERT_BIT_COLOR0      (1 << VERT_ATTRIB_COLOR0)
+#define VERT_BIT_COLOR1      (1 << VERT_ATTRIB_COLOR1)
+#define VERT_BIT_FOG         (1 << VERT_ATTRIB_FOG)
+#define VERT_BIT_COLOR_INDEX (1 << VERT_ATTRIB_COLOR_INDEX)
+#define VERT_BIT_SEVEN       (1 << VERT_ATTRIB_SEVEN)
+#define VERT_BIT_TEX0        (1 << VERT_ATTRIB_TEX0)
+#define VERT_BIT_TEX1        (1 << VERT_ATTRIB_TEX1)
+#define VERT_BIT_TEX2        (1 << VERT_ATTRIB_TEX2)
+#define VERT_BIT_TEX3        (1 << VERT_ATTRIB_TEX3)
+#define VERT_BIT_TEX4        (1 << VERT_ATTRIB_TEX4)
+#define VERT_BIT_TEX5        (1 << VERT_ATTRIB_TEX5)
+#define VERT_BIT_TEX6        (1 << VERT_ATTRIB_TEX6)
+#define VERT_BIT_TEX7        (1 << VERT_ATTRIB_TEX7)
+#define VERT_BIT_GENERIC0    (1 << VERT_ATTRIB_GENERIC0)
+#define VERT_BIT_GENERIC1    (1 << VERT_ATTRIB_GENERIC1)
+#define VERT_BIT_GENERIC2    (1 << VERT_ATTRIB_GENERIC2)
+#define VERT_BIT_GENERIC3    (1 << VERT_ATTRIB_GENERIC3)
+#define VERT_BIT_GENERIC4    (1 << VERT_ATTRIB_GENERIC4)
+#define VERT_BIT_GENERIC5    (1 << VERT_ATTRIB_GENERIC5)
+#define VERT_BIT_GENERIC6    (1 << VERT_ATTRIB_GENERIC6)
+#define VERT_BIT_GENERIC7    (1 << VERT_ATTRIB_GENERIC7)
+#define VERT_BIT_GENERIC8    (1 << VERT_ATTRIB_GENERIC8)
+#define VERT_BIT_GENERIC9    (1 << VERT_ATTRIB_GENERIC9)
+#define VERT_BIT_GENERIC10   (1 << VERT_ATTRIB_GENERIC10)
+#define VERT_BIT_GENERIC11   (1 << VERT_ATTRIB_GENERIC11)
+#define VERT_BIT_GENERIC12   (1 << VERT_ATTRIB_GENERIC12)
+#define VERT_BIT_GENERIC13   (1 << VERT_ATTRIB_GENERIC13)
+#define VERT_BIT_GENERIC14   (1 << VERT_ATTRIB_GENERIC14)
+#define VERT_BIT_GENERIC15   (1 << VERT_ATTRIB_GENERIC15)
 
 #define VERT_BIT_TEX(u)  (1 << (VERT_ATTRIB_TEX0 + (u)))
 #define VERT_BIT_GENERIC(g)  (1 << (VERT_ATTRIB_GENERIC0 + (g)))
 /*@}*/
+
+/**
+ * GLSL allows shader writers to allocate vertex result attributes (varyings) in
+ * single float component granularity. This is in contrast to vertex / fragment
+ * programs, where result attributes (actually texcoords) were allocated
+ * in 4-component vectors of floats granularity.
+ * For performance reasons, it would be optimal to stick with this scheme on a scalar
+ * processor. Varyings will likely be allocated as 3-component vectors, so statistically
+ * we win 2 floats.
+ * The constant VARYINGS_PER_VECTOR tells us how much of float components we pack into
+ * one result vector. For scalar processor it would be 1, for vector processor - 4.
+ * 
+ * NOTE: Currently we pack varyings into vertex attributes.
+ */
+#define VARYINGS_PER_VECTOR 2
+#define VARYING_EMIT_STYLE  EMIT_2F
+#define MAX_VARYING_VECTORS ((MAX_VARYING_FLOATS + VARYINGS_PER_VECTOR - 1) / VARYINGS_PER_VECTOR)
 
 /**
  * Indexes for vertex program result attributes
@@ -571,29 +613,27 @@ struct gl_colorbuffer_attrib
 struct gl_current_attrib
 {
    /**
-    * \name Values valid only when FLUSH_VERTICES has been called.
+    * \name Current vertex attributes.
+    * \note Values are valid only after FLUSH_VERTICES has been called.
     */
    /*@{*/
-   GLfloat Attrib[VERT_ATTRIB_MAX][4];		/**< Current vertex attributes
-						  *  indexed by VERT_ATTRIB_* */
-   GLfloat Index;				/**< Current color index */
-   GLboolean EdgeFlag;				/**< Current edge flag */
+   GLfloat Attrib[VERT_ATTRIB_MAX][4];	/**< Position, color, texcoords, etc */
+   GLfloat Index;			/**< Current color index */
+   GLboolean EdgeFlag;			/**< Current edge flag */
    /*@}*/
 
    /**
-    * \name Values are always valid.  
-    * 
-    * \note BTW, note how similar this set of attributes is to the SWvertex
-    * data type in the software rasterizer...
+    * \name Current raster position attributes (always valid).
+    * \note This set of attributes is very similar to the SWvertex struct.
     */
    /*@{*/
-   GLfloat RasterPos[4];			/**< Current raster position */
-   GLfloat RasterDistance;			/**< Current raster distance */
-   GLfloat RasterColor[4];			/**< Current raster color */
-   GLfloat RasterSecondaryColor[4];             /**< Current raster secondary color */
-   GLfloat RasterIndex;				/**< Current raster index */
-   GLfloat RasterTexCoords[MAX_TEXTURE_UNITS][4];/**< Current raster texcoords */
-   GLboolean RasterPosValid;			/**< Raster pos valid flag */
+   GLfloat RasterPos[4];
+   GLfloat RasterDistance;
+   GLfloat RasterColor[4];
+   GLfloat RasterSecondaryColor[4];
+   GLfloat RasterIndex;
+   GLfloat RasterTexCoords[MAX_TEXTURE_COORD_UNITS][4];
+   GLboolean RasterPosValid;
    /*@}*/
 };
 
@@ -1006,8 +1046,8 @@ struct gl_point_attrib
    GLfloat MinSize, MaxSize;	/**< GL_EXT_point_parameters */
    GLfloat Threshold;		/**< GL_EXT_point_parameters */
    GLboolean _Attenuated;	/**< True if Params != [1, 0, 0] */
-   GLboolean PointSprite;	/**< GL_NV_point_sprite / GL_NV_point_sprite */
-   GLboolean CoordReplace[MAX_TEXTURE_UNITS]; /**< GL_NV/ARB_point_sprite */
+   GLboolean PointSprite;	/**< GL_NV/ARB_point_sprite */
+   GLboolean CoordReplace[MAX_TEXTURE_COORD_UNITS]; /**< GL_ARB_point_sprite */
    GLenum SpriteRMode;		/**< GL_NV_point_sprite (only!) */
    GLenum SpriteOrigin;		/**< GL_ARB_point_sprite */
 };
@@ -1599,7 +1639,9 @@ struct gl_client_array
  */
 struct gl_array_attrib
 {
-   struct gl_client_array Vertex;	     /**< client data descriptors */
+   /** Conventional vertex arrays */
+   /*@{*/
+   struct gl_client_array Vertex;
    struct gl_client_array Normal;
    struct gl_client_array Color;
    struct gl_client_array SecondaryColor;
@@ -1607,15 +1649,17 @@ struct gl_array_attrib
    struct gl_client_array Index;
    struct gl_client_array TexCoord[MAX_TEXTURE_COORD_UNITS];
    struct gl_client_array EdgeFlag;
+   /*@}*/
 
-   struct gl_client_array VertexAttrib[VERT_ATTRIB_MAX];  /**< GL_NV_vertex_program */
+   /** Generic arrays for vertex programs/shaders; */
+   struct gl_client_array VertexAttrib[VERT_ATTRIB_MAX];
 
    GLint ActiveTexture;		/**< Client Active Texture */
    GLuint LockFirst;            /**< GL_EXT_compiled_vertex_array */
    GLuint LockCount;            /**< GL_EXT_compiled_vertex_array */
 
-   GLbitfield _Enabled;		/**< _NEW_ARRAY_* - bit set if array enabled */
-   GLbitfield NewState;		/**< _NEW_ARRAY_* */
+   GLbitfield _Enabled;		/**< mask of _NEW_ARRAY_* values */
+   GLbitfield NewState;		/**< mask of _NEW_ARRAY_* values */
 
 #if FEATURE_ARB_vertex_buffer_object
    struct gl_buffer_object *NullBufferObj;
@@ -2260,7 +2304,7 @@ struct gl_constants
    GLint MaxTextureRectSize;            /* GL_NV_texture_rectangle */
    GLuint MaxTextureCoordUnits;
    GLuint MaxTextureImageUnits;
-   GLuint MaxTextureUnits;              /* = MAX(CoordUnits, ImageUnits) */
+   GLuint MaxTextureUnits;              /* = MIN(CoordUnits, ImageUnits) */
    GLfloat MaxTextureMaxAnisotropy;	/* GL_EXT_texture_filter_anisotropic */
    GLfloat MaxTextureLodBias;           /* GL_EXT_texture_lod_bias */
    GLuint MaxArrayLockSize;
@@ -2522,7 +2566,7 @@ struct matrix_stack
 #define _NEW_ARRAY_COLOR0           VERT_BIT_COLOR0
 #define _NEW_ARRAY_COLOR1           VERT_BIT_COLOR1
 #define _NEW_ARRAY_FOGCOORD         VERT_BIT_FOG
-#define _NEW_ARRAY_INDEX            VERT_BIT_SIX
+#define _NEW_ARRAY_INDEX            VERT_BIT_COLOR_INDEX
 #define _NEW_ARRAY_EDGEFLAG         VERT_BIT_SEVEN
 #define _NEW_ARRAY_TEXCOORD_0       VERT_BIT_TEX0
 #define _NEW_ARRAY_TEXCOORD_1       VERT_BIT_TEX1

@@ -12,9 +12,6 @@ C_SOURCES = \
 	  $(TOP)/src/mesa/glapi/glapi.c \
 	  $(TOP)/src/mesa/glapi/glthread.c \
 	  $(TOP)/src/mesa/drivers/dri/common/glcontextmodes.c \
-	  $(DRM_SOURCE_PATH)/libdrm/xf86drm.c \
-	  $(DRM_SOURCE_PATH)/libdrm/xf86drmHash.c \
-	  $(DRM_SOURCE_PATH)/libdrm/xf86drmRandom.c \
 	  miniglx.c \
 	  miniglx_events.c
 
@@ -35,8 +32,7 @@ INCLUDE_DIRS = \
 	-I$(TOP)/src/mesa/swrast \
 	-I$(TOP)/src/mesa/swrast_setup \
 	-I$(TOP)/src/mesa/drivers/dri/common \
-	-I$(DRM_SOURCE_PATH)/libdrm \
-	-I$(DRM_SOURCE_PATH)/shared
+	`pkg-config --cflags libdrm`
 
 
 ##### RULES #####
@@ -57,7 +53,7 @@ default: depend $(LIB_DIR)/$(GL_LIB_NAME)
 $(LIB_DIR)/$(GL_LIB_NAME):  $(OBJECTS) Makefile
 	$(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' \
 		-major 1 -minor 2 $(MKLIB_OPTIONS) \
-		-install $(LIB_DIR) $(GL_LIB_DEPS) $(OBJECTS)
+		-install $(LIB_DIR) $(GL_LIB_DEPS) $(OBJECTS) `/usr/bin/pkg-config --libs libdrm` `/usr/bin/pkg-config --libs pciaccess`
 	rm -f $(LIB_DIR)/miniglx.conf
 	install example.miniglx.conf $(LIB_DIR)/miniglx.conf
 

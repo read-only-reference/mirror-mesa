@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5
+ * Version:  6.5.1
  *
  * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
@@ -141,6 +141,7 @@ struct gl_framebuffer *
 _mesa_new_framebuffer(GLcontext *ctx, GLuint name)
 {
    struct gl_framebuffer *fb;
+   (void) ctx;
    assert(name != 0);
    fb = CALLOC_STRUCT(gl_framebuffer);
    if (fb) {
@@ -418,6 +419,13 @@ _mesa_update_framebuffer_visual(struct gl_framebuffer *fb)
    _mesa_bzero(&fb->Visual, sizeof(fb->Visual));
    fb->Visual.rgbMode = GL_TRUE; /* assume this */
 
+#if 0 /* this _might_ be needed */
+   if (fb->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      /* leave visual fields zero'd */
+      return;
+   }
+#endif
+
    /* find first RGB or CI renderbuffer */
    for (i = 0; i < BUFFER_COUNT; i++) {
       if (fb->Attachment[i].Renderbuffer) {
@@ -480,7 +488,9 @@ _mesa_update_depth_buffer(GLcontext *ctx,
 
    if (depthRb && depthRb->_ActualFormat == GL_DEPTH24_STENCIL8_EXT) {
       /* The attached depth buffer is a GL_DEPTH_STENCIL renderbuffer */
-      if (!fb->_DepthBuffer || fb->_DepthBuffer->Wrapped != depthRb) {
+      if (!fb->_DepthBuffer
+          || fb->_DepthBuffer->Wrapped != depthRb
+          || fb->_DepthBuffer->_BaseFormat != GL_DEPTH_COMPONENT) {
          /* need to update wrapper */
          struct gl_renderbuffer *wrapper
             = _mesa_new_z24_renderbuffer_wrapper(ctx, depthRb);
@@ -519,7 +529,9 @@ _mesa_update_stencil_buffer(GLcontext *ctx,
 
    if (stencilRb && stencilRb->_ActualFormat == GL_DEPTH24_STENCIL8_EXT) {
       /* The attached stencil buffer is a GL_DEPTH_STENCIL renderbuffer */
-      if (!fb->_StencilBuffer || fb->_StencilBuffer->Wrapped != stencilRb) {
+      if (!fb->_StencilBuffer
+          || fb->_StencilBuffer->Wrapped != stencilRb
+          || fb->_StencilBuffer->_BaseFormat != GL_STENCIL_INDEX) {
          /* need to update wrapper */
          struct gl_renderbuffer *wrapper
             = _mesa_new_s8_renderbuffer_wrapper(ctx, stencilRb);
@@ -581,6 +593,7 @@ update_color_draw_buffers(GLcontext *ctx, struct gl_framebuffer *fb)
 static void
 update_color_read_buffer(GLcontext *ctx, struct gl_framebuffer *fb)
 {
+   (void) ctx;
    if (fb->_ColorReadBufferIndex == -1) {
       fb->_ColorReadBuffer = NULL; /* legal! */
    }

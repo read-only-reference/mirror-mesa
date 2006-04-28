@@ -25,8 +25,7 @@ WINOBJ=
 WINLIB=-L$(MESA)/src/glx/mini
 MINIGLX_INCLUDES = -I$(TOP)/src/glx/mini
 INCLUDES = $(MINIGLX_INCLUDES) \
-	   -I$(DRM_SOURCE_PATH)/shared-core \
-	   -I$(DRM_SOURCE_PATH)/libdrm \
+	   `pkg-config --cflags libdrm` \
 	   $(SHARED_INCLUDES)
 
 OBJECTS = $(C_SOURCES:.c=.o) \
@@ -40,7 +39,7 @@ SHARED_INCLUDES = \
 	-I. \
 	-I$(TOP)/src/mesa/drivers/dri/common \
 	-Iserver \
-	-I$(DRM_SOURCE_PATH)/shared-core \
+	`pkg-config --cflags libdrm` \
 	-I$(TOP)/include \
 	-I$(TOP)/include/GL/internal \
 	-I$(TOP)/src/mesa \
@@ -57,10 +56,10 @@ SHARED_INCLUDES = \
 ##### RULES #####
 
 .c.o:
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DRIVER_DEFINES) $< -o $@
 
 .S.o:
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES)  $< -o $@
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DRIVER_DEFINES)  $< -o $@
 
 
 ##### TARGETS #####
@@ -85,11 +84,10 @@ $(LIB_DIR)/$(LIBNAME): $(LIBNAME)
 
 # Run 'make depend' to update the dependencies if you change
 # what's included by any source file.
-.PHONY: depend
 depend: $(C_SOURCES) $(ASM_SOURCES) $(SYMLINKS)
 	touch depend
-	$(MKDEP) $(MKDEP_OPTIONS) $(DEFINES) $(INCLUDES) $(C_SOURCES) $(ASM_SOURCES) \
-		>& /dev/null 
+	$(MKDEP) $(MKDEP_OPTIONS) $(DRIVER_DEFINES) $(INCLUDES) $(C_SOURCES) \
+		$(ASM_SOURCES) > /dev/null
 
 
 # Emacs tags

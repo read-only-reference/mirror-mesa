@@ -135,7 +135,8 @@ StateVars = [
 		"ctx->Current.Attrib[VERT_ATTRIB_COLOR0][2]",
 		"ctx->Current.Attrib[VERT_ATTRIB_COLOR0][3]" ],
 	  "FLUSH_CURRENT(ctx, 0);", None ),
-	( "GL_CURRENT_INDEX", GLfloat, ["ctx->Current.Index"],
+	( "GL_CURRENT_INDEX", GLfloat,
+	  [ "ctx->Current.Attrib[VERT_ATTRIB_COLOR_INDEX][0]" ],
 	  "FLUSH_CURRENT(ctx, 0);", None ),
 	( "GL_CURRENT_NORMAL", GLfloatN,
 	  [ "ctx->Current.Attrib[VERT_ATTRIB_NORMAL][0]",
@@ -495,8 +496,7 @@ StateVars = [
 
 	# GL_ARB_multitexture
 	( "GL_MAX_TEXTURE_UNITS_ARB", GLint,
-	  ["MIN2(ctx->Const.MaxTextureImageUnits, ctx->Const.MaxTextureCoordUnits)"],
-	  "", ["ARB_multitexture"] ),
+	  ["ctx->Const.MaxTextureUnits"], "", ["ARB_multitexture"] ),
 	( "GL_ACTIVE_TEXTURE_ARB", GLint,
 	  [ "GL_TEXTURE0_ARB + ctx->Texture.CurrentUnit"], "", ["ARB_multitexture"] ),
 	( "GL_CLIENT_ACTIVE_TEXTURE_ARB", GLint,
