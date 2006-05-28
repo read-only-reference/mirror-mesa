@@ -159,7 +159,7 @@ DRI_CONF_BEGIN
 		DRI_CONF_TCL_MODE(DRI_CONF_TCL_CODEGEN)
 		DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
 		DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
-		DRI_CONF_MAX_TEXTURE_IMAGE_UNITS(16, 2, 16)
+		DRI_CONF_MAX_TEXTURE_IMAGE_UNITS(8, 2, 8)
 		DRI_CONF_MAX_TEXTURE_COORD_UNITS(8, 2, 8)
 		DRI_CONF_COMMAND_BUFFER_SIZE(8, 8, 32)
 	DRI_CONF_SECTION_END
@@ -372,6 +372,7 @@ radeonCreateScreen( __DRIscreenPrivate *sPriv )
       screen->drmSupportsFragShader = (sPriv->drmMinor >= 18);
       screen->drmSupportsPointSprites = (sPriv->drmMinor >= 13);
       screen->drmSupportsCubeMapsR100 = (sPriv->drmMinor >= 15);
+      screen->drmSupportsVertexProgram = (sPriv->drmMinor >= 25);
    }
 
    screen->mmio.handle = dri_priv->registerHandle;

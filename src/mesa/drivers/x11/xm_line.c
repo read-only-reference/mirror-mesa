@@ -117,6 +117,9 @@ void xmesa_choose_point( GLcontext *ctx )
 /**********************************************************************/
 
 
+#if CHAN_BITS == 8
+
+
 #define GET_XRB(XRB)  struct xmesa_renderbuffer *XRB = \
    xmesa_renderbuffer(ctx->DrawBuffer->_ColorDrawBuffers[0][0]->Wrapped)
 
@@ -533,6 +536,7 @@ void xmesa_choose_point( GLcontext *ctx )
 
 
 
+
 #ifndef XFree86Server
 /**
  * Draw fast, XOR line with XDrawLine in front color buffer.
@@ -566,6 +570,9 @@ xor_line(GLcontext *ctx, const SWvertex *vert0, const SWvertex *vert1)
 #endif /* XFree86Server */
 
 
+#endif /* CHAN_BITS == 8 */
+
+
 /**
  * Return pointer to line drawing function, or NULL if we should use a
  * swrast fallback.
@@ -573,10 +580,14 @@ xor_line(GLcontext *ctx, const SWvertex *vert0, const SWvertex *vert1)
 static swrast_line_func
 get_line_func(GLcontext *ctx)
 {
+#if CHAN_BITS == 8
    XMesaContext xmesa = XMESA_CONTEXT(ctx);
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    int depth = GET_VISUAL_DEPTH(xmesa->xm_visual);
    struct xmesa_renderbuffer *xrb;
+
+   if (CHAN_BITS != 8)
+      return NULL;
 
    if ((ctx->DrawBuffer->_ColorDrawBufferMask[0]
         & (BUFFER_BIT_FRONT_LEFT | BUFFER_BIT_BACK_LEFT)) == 0)
@@ -661,6 +672,7 @@ get_line_func(GLcontext *ctx)
    }
 #endif /* XFree86Server */
 
+#endif /* CHAN_BITS == 8 */
    return (swrast_line_func) NULL;
 }
 

@@ -115,7 +115,7 @@ static struct state_key *make_state_key( GLcontext *ctx )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct vertex_buffer *VB = &tnl->vb;
-   struct fragment_program *fp = ctx->FragmentProgram._Current;
+   const struct fragment_program *fp = ctx->FragmentProgram._Current;
    struct state_key *key = CALLOC_STRUCT(state_key);
    GLuint i;
 
@@ -1154,6 +1154,8 @@ static void build_reflect_texgen( struct tnl_program *p,
    emit_op2(p, OPCODE_ADD, tmp, 0, tmp, tmp); 
    /* (-2n.u)n + u */
    emit_op3(p, OPCODE_MAD, dest, writemask, negate(tmp), normal, eye_hat);
+
+   release_temp(p, tmp);
 }
 
 static void build_sphere_texgen( struct tnl_program *p,
@@ -1491,7 +1493,7 @@ void _tnl_UpdateFixedFunctionProgram( GLcontext *ctx )
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    struct state_key *key;
    GLuint hash;
-   struct vertex_program *prev = ctx->VertexProgram._Current;
+   const struct vertex_program *prev = ctx->VertexProgram._Current;
 
    if (ctx->VertexProgram._Enabled == GL_FALSE) { 
       /* Grab all the relevent state and put it in a single structure:

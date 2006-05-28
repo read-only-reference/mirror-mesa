@@ -540,9 +540,21 @@ event_loop(Display *dpy, Window win)
 }
 
 
+static void
+usage(void)
+{
+   printf("Usage:\n");
+   printf("  -display <displayname>  set the display to run on\n");
+   printf("  -stereo                 run in stereo mode\n");
+   printf("  -fullscreen             run in fullscreen mode\n");
+   printf("  -info                   display OpenGL renderer info\n");
+}
+ 
+
 int
 main(int argc, char *argv[])
 {
+   const int winWidth = 300, winHeight = 300;
    Display *dpy;
    Window win;
    GLXContext ctx;
@@ -564,8 +576,10 @@ main(int argc, char *argv[])
       else if (strcmp(argv[i], "-fullscreen") == 0) {
          fullscreen = GL_TRUE;
       }
-      else
-	 printf("Warrning: unknown parameter: %s\n", argv[i]);
+      else {
+         usage();
+         return -1;
+      }
    }
 
    dpy = XOpenDisplay(dpyName);
@@ -575,7 +589,7 @@ main(int argc, char *argv[])
       return -1;
    }
 
-   make_window(dpy, "glxgears", 0, 0, 300, 300, &win, &ctx);
+   make_window(dpy, "glxgears", 0, 0, winWidth, winHeight, &win, &ctx);
    XMapWindow(dpy, win);
    glXMakeCurrent(dpy, win, ctx);
 
@@ -587,6 +601,12 @@ main(int argc, char *argv[])
    }
 
    init();
+
+   /* Set initial projection/viewing transformation.
+    * We can't be sure we'll get a ConfigureNotify event when the window
+    * first appears.
+    */
+   reshape(winWidth, winHeight);
 
    event_loop(dpy, win);
 

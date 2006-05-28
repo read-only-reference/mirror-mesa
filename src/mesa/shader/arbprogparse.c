@@ -1544,6 +1544,8 @@ parse_attrib_binding(GLcontext * ctx, GLubyte ** inst,
                    */
                   if (attrib > 0)
                      *inputReg = attrib + VERT_ATTRIB_GENERIC0;
+                  else
+                     *inputReg = 0;
                }
             }
             break;

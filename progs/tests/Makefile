@@ -45,6 +45,7 @@ SOURCES = \
 	invert.c \
 	jkrahntest.c \
 	manytex.c \
+	mipmap_limits.c \
 	multipal.c \
 	no_s3tc.c \
 	packedpixels.c \
@@ -57,6 +58,7 @@ SOURCES = \
 	stencil_wrap.c \
 	subtexrate.c \
 	tex1d.c \
+	texcompress2.c \
 	texfilt.c \
 	texline.c \
 	texobjshare.c \

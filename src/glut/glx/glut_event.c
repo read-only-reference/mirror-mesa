@@ -438,11 +438,16 @@ processEventsAndTimeouts(void)
           __glutFinishMenu(event.xbutton.window, event.xbutton.x, event.xbutton.y);
         } else {
           window = __glutGetWindow(event.xbutton.window);
+          /* added button check for mice with > 3 buttons */
           if (window) {
             GLUTmenu *menu;
 	    int menuNum;
 
-            menuNum = window->menu[event.xbutton.button - 1];
+            if (event.xbutton.button <= GLUT_MAX_MENUS)
+              menuNum = window->menu[event.xbutton.button - 1];
+            else
+              menuNum = 0;
+
             /* Make sure that __glutGetMenuByNum is only called if there
 	       really is a menu present. */
             if ((menuNum > 0) && (menu = __glutGetMenuByNum(menuNum))) {

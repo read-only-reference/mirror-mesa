@@ -1452,8 +1452,8 @@ r200StencilFuncSeparate( GLcontext *ctx, GLenum face, GLenum func,
                          GLint ref, GLuint mask )
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
-   GLuint refmask = ((ctx->Stencil.Ref[0] << R200_STENCIL_REF_SHIFT) |
-		     (ctx->Stencil.ValueMask[0] << R200_STENCIL_MASK_SHIFT));
+   GLuint refmask = (((ctx->Stencil.Ref[0] & 0xff) << R200_STENCIL_REF_SHIFT) |
+		     ((ctx->Stencil.ValueMask[0] & 0xff) << R200_STENCIL_MASK_SHIFT));
 
    R200_STATECHANGE( rmesa, ctx );
    R200_STATECHANGE( rmesa, msk );
@@ -1500,7 +1500,7 @@ r200StencilMaskSeparate( GLcontext *ctx, GLenum face, GLuint mask )
    R200_STATECHANGE( rmesa, msk );
    rmesa->hw.msk.cmd[MSK_RB3D_STENCILREFMASK] &= ~R200_STENCIL_WRITE_MASK;
    rmesa->hw.msk.cmd[MSK_RB3D_STENCILREFMASK] |=
-      (ctx->Stencil.WriteMask[0] << R200_STENCIL_WRITEMASK_SHIFT);
+      ((ctx->Stencil.WriteMask[0] & 0xff) << R200_STENCIL_WRITEMASK_SHIFT);
 }
 
 static void
@@ -1601,9 +1601,9 @@ static void r200ClearStencil( GLcontext *ctx, GLint s )
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
 
    rmesa->state.stencil.clear = 
-      ((GLuint) ctx->Stencil.Clear |
+      ((GLuint) (ctx->Stencil.Clear & 0xff) |
        (0xff << R200_STENCIL_MASK_SHIFT) |
-       (ctx->Stencil.WriteMask[0] << R200_STENCIL_WRITEMASK_SHIFT));
+       ((ctx->Stencil.WriteMask[0] & 0xff) << R200_STENCIL_WRITEMASK_SHIFT));
 }
 
 
@@ -2110,18 +2110,18 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
 	    if they didn't change) and restore tex coord routing */
 	 GLuint unit;
 	 for (unit = 0; unit < R200_MAX_TEXTURE_UNITS; unit++) {
+	    R200_STATECHANGE( rmesa, pix[unit] );
+	    R200_STATECHANGE( rmesa, tex[unit] );
 	    rmesa->hw.tex[unit].cmd[TEX_PP_TXFORMAT] &=
 		~(R200_TXFORMAT_ST_ROUTE_MASK | R200_TXFORMAT_LOOKUP_DISABLE);
 	    rmesa->hw.tex[unit].cmd[TEX_PP_TXFORMAT] |= unit << R200_TXFORMAT_ST_ROUTE_SHIFT;
 	    /* need to guard this with drmSupportsFragmentShader? Should never get here if
 	       we don't announce ATI_fs, right? */
 	    rmesa->hw.tex[unit].cmd[TEX_PP_TXMULTI_CTL] = 0;
-	    R200_STATECHANGE( rmesa, pix[unit] );
-	    R200_STATECHANGE( rmesa, tex[unit] );
          }
-	 rmesa->hw.cst.cmd[CST_PP_CNTL_X] = 0;
 	 R200_STATECHANGE( rmesa, cst );
 	 R200_STATECHANGE( rmesa, tf );
+	 rmesa->hw.cst.cmd[CST_PP_CNTL_X] = 0;
       }
       else {
 	 /* need to mark this dirty as pix/tf atoms have overwritten the data

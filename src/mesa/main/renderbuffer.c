@@ -47,6 +47,8 @@
 #include "fbobject.h"
 #include "renderbuffer.h"
 
+#include "rbadaptors.h"
+
 
 /* 32-bit color index format.  Not a public format. */
 #define COLOR_INDEX32 0x424243
@@ -624,10 +626,10 @@ static void
 get_row_ubyte4(GLcontext *ctx, struct gl_renderbuffer *rb, GLuint count,
                GLint x, GLint y, void *values)
 {
-   const GLbyte *src = (const GLbyte *) rb->Data + 4 * (y * rb->Width + x);
+   const GLubyte *src = (const GLubyte *) rb->Data + 4 * (y * rb->Width + x);
    ASSERT(rb->DataType == GL_UNSIGNED_BYTE);
    ASSERT(rb->_ActualFormat == GL_RGBA8);
-   _mesa_memcpy(values, src, 4 * count * sizeof(GLbyte));
+   _mesa_memcpy(values, src, 4 * count * sizeof(GLubyte));
 }
 
 
@@ -1509,7 +1511,7 @@ _mesa_new_renderbuffer(GLcontext *ctx, GLuint name)
 
 /**
  * Delete a gl_framebuffer.
- * This is the default function for framebuffer->Delete().
+ * This is the default function for renderbuffer->Delete().
  */
 void
 _mesa_delete_renderbuffer(struct gl_renderbuffer *rb)
@@ -2046,10 +2048,78 @@ _mesa_add_renderbuffer(struct gl_framebuffer *fb,
       assert(!rb->Name);
    }
 
+   /* If Mesa's compiled with deep color channels (16 or 32 bits / channel)
+    * and the device driver is expecting 8-bit values (GLubyte), we can
+    * use a "renderbuffer adaptor/wrapper" to do the necessary conversions.
+    */
+   if (rb->_BaseFormat == GL_RGBA) {
+      if (CHAN_BITS == 16 && rb->DataType == GL_UNSIGNED_BYTE) {
+         GET_CURRENT_CONTEXT(ctx);
+         rb = _mesa_new_renderbuffer_16wrap8(ctx, rb);
+      }
+      else if (CHAN_BITS == 32 && rb->DataType == GL_UNSIGNED_BYTE) {
+         GET_CURRENT_CONTEXT(ctx);
+         rb = _mesa_new_renderbuffer_32wrap8(ctx, rb);
+      }
+      else if (CHAN_BITS == 32 && rb->DataType == GL_UNSIGNED_SHORT) {
+         GET_CURRENT_CONTEXT(ctx);
+         rb = _mesa_new_renderbuffer_32wrap16(ctx, rb);
+      }
+   }
+
    fb->Attachment[bufferName].Type = GL_RENDERBUFFER_EXT;
    fb->Attachment[bufferName].Complete = GL_TRUE;
    fb->Attachment[bufferName].Renderbuffer = rb;
+
+   rb->RefCount++;
 }
+
+
+/**
+ * Remove the named renderbuffer from the given framebuffer.
+ */
+void
+_mesa_remove_renderbuffer(struct gl_framebuffer *fb, GLuint bufferName)
+{
+   struct gl_renderbuffer *rb;
+
+   assert(bufferName < BUFFER_COUNT);
+
+   rb = fb->Attachment[bufferName].Renderbuffer;
+   if (!rb)
+      return;
+
+   _mesa_dereference_renderbuffer(&rb);
+
+   fb->Attachment[bufferName].Renderbuffer = NULL;
+}
+
+
+/**
+ * Decrement the reference count on a renderbuffer and delete it when
+ * the refcount hits zero.
+ * Note: we pass the address of a pointer and set it to NULL if we delete it.
+ */
+void
+_mesa_dereference_renderbuffer(struct gl_renderbuffer **rb)
+{
+   GLboolean deleteFlag = GL_FALSE;
+
+   _glthread_LOCK_MUTEX((*rb)->Mutex);
+   {
+      ASSERT((*rb)->RefCount > 0);
+      (*rb)->RefCount--;
+      deleteFlag = ((*rb)->RefCount == 0);
+   }
+   _glthread_UNLOCK_MUTEX((*rb)->Mutex);
+
+   if (deleteFlag) {
+      (*rb)->Delete(*rb);
+      *rb = NULL;
+   }
+}
+
+
 
 
 /**
