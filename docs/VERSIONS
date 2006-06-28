@@ -1473,6 +1473,7 @@ Mesa Version History
 
 6.5.1  month, day, 2006
     New:
+	- GL_APPLE_vertex_array_object extension (Ian Romanick)
     Changes:
 	- The glVertexAttribARB functions no longer alias the conventional
 	  vertex attributes.
@@ -1491,3 +1492,6 @@ Mesa Version History
 	- fixed indirect rendering vertex array crashes (bug 6863)
 	- glDrawPixels GL_INDEX_OFFSET didn't always work
 	- fixed convolution memory leak (bug 7077)
+	- rectangular depth textures didn't work
+	- invalid mode to glBegin didn't generate an error (bug 7142)
+	- 'normalized' parameter to glVertexAttribPointerARB didn't work

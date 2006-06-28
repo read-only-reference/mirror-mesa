@@ -38,7 +38,6 @@ PROGS = \
 	lodbias \
 	morph3d \
 	multiarb \
-	occlude \
 	paltex \
 	pointblast \
 	ray \
@@ -60,6 +59,7 @@ PROGS = \
 	trispd \
 	tunnel \
 	tunnel2 \
+	vao_demo \
 	winpos
 
 
@@ -100,6 +100,16 @@ showbuffer.o: showbuffer.c showbuffer.h
 	$(CC) -c -I$(INCDIR) $(CFLAGS) showbuffer.c
 
 
+trackball.c: $(TOP)/progs/util/trackball.c
+	cp $< .
+
+trackball.h: $(TOP)/progs/util/trackball.h
+	cp $< .
+
+trackball.o: trackball.c trackball.h
+	$(CC) -c -I$(INCDIR) $(CFLAGS) trackball.c
+
+
 reflect: reflect.o showbuffer.o readtex.o
 	$(CC) -I$(INCDIR) $(CFLAGS) reflect.o showbuffer.o readtex.o $(APP_LIB_DEPS) -o $@
 
@@ -112,6 +122,14 @@ shadowtex: shadowtex.o showbuffer.o
 
 shadowtex.o: shadowtex.c showbuffer.h
 	$(CC) -c -I$(INCDIR) $(CFLAGS) shadowtex.c
+
+
+gloss: gloss.o trackball.o readtex.o
+	$(CC) -I$(INCDIR) $(CFLAGS) gloss.o trackball.o readtex.o $(APP_LIB_DEPS) -o $@
+
+gloss.o: gloss.c trackball.h
+	$(CC) -c -I$(INCDIR) $(CFLAGS) gloss.c
+
 
 clean:
 	-rm -f $(PROGS)

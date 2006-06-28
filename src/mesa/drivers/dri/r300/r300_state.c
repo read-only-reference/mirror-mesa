@@ -1316,8 +1316,6 @@ void r300_setup_rs_unit(GLcontext *ctx)
 	R300_STATECHANGE(r300, rr);
 	
 	fp_reg = in_texcoords = col_interp_nr = high_rr = 0;
-	r300->hw.rr.cmd[R300_RR_ROUTE_0] = 0;
-	r300->hw.rr.cmd[R300_RR_ROUTE_1] = 0;
 
 	for (i=0;i<ctx->Const.MaxTextureUnits;i++) {
 		r300->hw.ri.cmd[R300_RI_INTERP_0+i] = 0
@@ -1325,10 +1323,11 @@ void r300_setup_rs_unit(GLcontext *ctx)
 				| (in_texcoords << R300_RS_INTERP_SRC_SHIFT)
 				| interp_magic[i];
 
+		r300->hw.rr.cmd[R300_RR_ROUTE_0 + fp_reg] = 0;
 		if (InputsRead & (FRAG_BIT_TEX0<<i)) {
 			//assert(r300->state.texture.tc_count != 0);
-			r300->hw.rr.cmd[R300_RR_ROUTE_0 + fp_reg] = 0
-					| R300_RS_ROUTE_ENABLE
+			r300->hw.rr.cmd[R300_RR_ROUTE_0 + fp_reg] |=
+					  R300_RS_ROUTE_ENABLE
 					| i /* source INTERP */
 					| (fp_reg << R300_RS_ROUTE_DEST_SHIFT);
 			high_rr = fp_reg;
@@ -1677,10 +1676,6 @@ void r300UpdateShaders(r300ContextPtr rmesa)
 	struct r300_vertex_program *vp;
 	
 	ctx = rmesa->radeon.glCtx;
-	
-	/* Disable tnl programs when doing software vertex programs.
-	   I can only hope this actually disables it at the right time. */
-	ctx->_MaintainTnlProgram = hw_tcl_on;
 	
 	if (rmesa->NewGLState && hw_tcl_on) {
 		rmesa->NewGLState = 0;

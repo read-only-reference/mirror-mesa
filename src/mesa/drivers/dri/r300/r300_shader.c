@@ -3,6 +3,7 @@
 #include "enums.h"
 
 #include "program.h"
+#include "tnl/tnl.h"
 #include "r300_context.h"
 #include "r300_fragprog.h"
 
@@ -86,6 +87,8 @@ static void r300ProgramStringNotify(GLcontext *ctx, GLenum target,
 		fp->translated = GL_FALSE;
 	break;
 	}
+	/* need this for tcl fallbacks */
+	_tnl_program_string(ctx, target, prog);
 }
 
 static GLboolean r300IsProgramNative(GLcontext *ctx, GLenum target, struct program *prog)

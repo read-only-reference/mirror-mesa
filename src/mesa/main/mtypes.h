@@ -1664,10 +1664,14 @@ struct gl_client_array
 
 
 /**
- * Vertex array state
+ * Collection of vertex arrays.  Defined by the GL_APPLE_vertex_array_object
+ * extension, but a nice encapsulation in any case.
  */
-struct gl_array_attrib
+struct gl_array_object
 {
+   /** Name of the array object as received from glGenVertexArrayAPPLE. */
+   GLuint Name;
+
    /** Conventional vertex arrays */
    /*@{*/
    struct gl_client_array Vertex;
@@ -1680,14 +1684,26 @@ struct gl_array_attrib
    struct gl_client_array EdgeFlag;
    /*@}*/
 
-   /** Generic arrays for vertex programs/shaders; */
+   /** Generic arrays for vertex programs/shaders */
    struct gl_client_array VertexAttrib[VERT_ATTRIB_MAX];
+
+   /** Mask of _NEW_ARRAY_* values indicating which arrays are enabled */
+   GLbitfield _Enabled;
+};
+
+
+/**
+ * Vertex array state
+ */
+struct gl_array_attrib
+{
+   struct gl_array_object *ArrayObj;
+   struct gl_array_object *DefaultArrayObj;
 
    GLint ActiveTexture;		/**< Client Active Texture */
    GLuint LockFirst;            /**< GL_EXT_compiled_vertex_array */
    GLuint LockCount;            /**< GL_EXT_compiled_vertex_array */
 
-   GLbitfield _Enabled;		/**< mask of _NEW_ARRAY_* values */
    GLbitfield NewState;		/**< mask of _NEW_ARRAY_* values */
 
 #if FEATURE_ARB_vertex_buffer_object
@@ -2103,6 +2119,9 @@ struct gl_shared_state
    struct _mesa_HashTable *FrameBuffers;
 #endif
 
+   /** Objects associated with the GL_APPLE_vertex_array_object extension. */
+   struct _mesa_HashTable *ArrayObjects;
+
    void *DriverData;  /**< Device driver shared state */
 };
 
@@ -2460,6 +2479,7 @@ struct gl_extensions
    /* vendor extensions */
    GLboolean APPLE_client_storage;
    GLboolean APPLE_packed_pixels;
+   GLboolean APPLE_vertex_array_object;
    GLboolean ATI_texture_mirror_once;
    GLboolean ATI_texture_env_combine3;
    GLboolean ATI_fragment_shader;

@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5
+ * Version:  6.5.1
  *
  * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
@@ -43,6 +43,7 @@
 #if FEATURE_ARB_vertex_buffer_object
 #include "bufferobj.h"
 #endif
+#include "arrayobj.h"
 #include "clip.h"
 #include "colormac.h"
 #include "colortab.h"
@@ -427,26 +428,27 @@ make_list(GLuint list, GLuint count)
 }
 
 
+/**
+ * Lookup function to just encapsulate casting.
+ */
+static INLINE struct mesa_display_list *
+lookup_list(GLcontext *ctx, GLuint list)
+{
+   return (struct mesa_display_list *)
+      _mesa_HashLookup(ctx->Shared->DisplayList, list);
+}
+
+
 
 /**
- * Destroy all nodes in a display list.
- * \param list - display list number
+ * Delete the named display list, but don't remove from hash table.
+ * \param dlist - display list pointer
  */
 void
-_mesa_destroy_list(GLcontext *ctx, GLuint list)
+_mesa_delete_list(GLcontext *ctx, struct mesa_display_list *dlist)
 {
-   struct mesa_display_list *dlist;
    Node *n, *block;
    GLboolean done;
-
-   if (list == 0)
-      return;
-
-   dlist =
-      (struct mesa_display_list *) _mesa_HashLookup(ctx->Shared->DisplayList,
-                                                    list);
-   if (!dlist)
-      return;
 
    n = block = dlist->node;
 
@@ -587,9 +589,28 @@ _mesa_destroy_list(GLcontext *ctx, GLuint list)
    }
 
    _mesa_free(dlist);
-   _mesa_HashRemove(ctx->Shared->DisplayList, list);
 }
 
+
+/**
+ * Destroy a display list and remove from hash table.
+ * \param list - display list number
+ */
+static void
+destroy_list(GLcontext *ctx, GLuint list)
+{
+   struct mesa_display_list *dlist;
+
+   if (list == 0)
+      return;
+
+   dlist = lookup_list(ctx, list);
+   if (!dlist)
+      return;
+
+   _mesa_delete_list(ctx, dlist);
+   _mesa_HashRemove(ctx->Shared->DisplayList, list);
+}
 
 
 /*
@@ -5641,7 +5662,7 @@ _mesa_compile_error(GLcontext *ctx, GLenum error, const char *s)
 static GLboolean
 islist(GLcontext *ctx, GLuint list)
 {
-   if (list > 0 && _mesa_HashLookup(ctx->Shared->DisplayList, list)) {
+   if (list > 0 && lookup_list(ctx, list)) {
       return GL_TRUE;
    }
    else {
@@ -5677,10 +5698,7 @@ execute_list(GLcontext *ctx, GLuint list)
       return;
    }
 
-
-   dlist =
-      (struct mesa_display_list *) _mesa_HashLookup(ctx->Shared->DisplayList,
-                                                    list);
+   dlist = lookup_list(ctx, list);
    if (!dlist)
       return;
 
@@ -6615,7 +6633,7 @@ _mesa_DeleteLists(GLuint list, GLsizei range)
       return;
    }
    for (i = list; i < list + range; i++) {
-      _mesa_destroy_list(ctx, i);
+      destroy_list(ctx, i);
    }
 }
 
@@ -6744,7 +6762,7 @@ _mesa_EndList(void)
    (void) ALLOC_INSTRUCTION(ctx, OPCODE_END_OF_LIST, 0);
 
    /* Destroy old list, if any */
-   _mesa_destroy_list(ctx, ctx->ListState.CurrentListNum);
+   destroy_list(ctx, ctx->ListState.CurrentListNum);
    /* Install the list */
    _mesa_HashInsert(ctx->Shared->DisplayList, ctx->ListState.CurrentListNum,
                     ctx->ListState.CurrentList);
@@ -8031,6 +8049,12 @@ _mesa_init_dlist_table(struct _glapi_table *table)
    /* 268. GL_EXT_stencil_two_side */
    SET_ActiveStencilFaceEXT(table, save_ActiveStencilFaceEXT);
 
+   /* 273. GL_APPLE_vertex_array_object */
+   SET_BindVertexArrayAPPLE(table, _mesa_BindVertexArrayAPPLE);
+   SET_DeleteVertexArraysAPPLE(table, _mesa_DeleteVertexArraysAPPLE);
+   SET_GenVertexArraysAPPLE(table, _mesa_GenVertexArraysAPPLE);
+   SET_IsVertexArrayAPPLE(table, _mesa_IsVertexArrayAPPLE);
+
    /* ???. GL_EXT_depth_bounds_test */
    SET_DepthBoundsEXT(table, save_DepthBoundsEXT);
 
@@ -8157,8 +8181,7 @@ print_list(GLcontext *ctx, GLuint list)
       return;
    }
 
-   dlist = (struct mesa_display_list *)
-      _mesa_HashLookup(ctx->Shared->DisplayList, list);
+   dlist = lookup_list(ctx, list);
    if (!dlist)
       return;
 

@@ -460,7 +460,7 @@ static void emit_arg( struct prog_src_register *src,
    src->File = reg.file;
    src->Index = reg.idx;
    src->Swizzle = reg.swz;
-   src->NegateBase = reg.negate;
+   src->NegateBase = reg.negate ? NEGATE_XYZW : 0;
    src->Abs = 0;
    src->NegateAbs = 0;
    src->RelAddr = 0;
@@ -1544,6 +1544,16 @@ void _tnl_UpdateFixedFunctionProgram( GLcontext *ctx )
 			      ctx->VertexProgram._Current);   
 }
 
+void _tnl_ProgramCacheInit( GLcontext *ctx )
+{
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+
+   tnl->vp_cache = (struct tnl_cache *) MALLOC(sizeof(*tnl->vp_cache));
+   tnl->vp_cache->size = 17;
+   tnl->vp_cache->n_items = 0;
+   tnl->vp_cache->items = (struct tnl_cache_item**)
+      _mesa_calloc(tnl->vp_cache->size * sizeof(*tnl->vp_cache->items));
+}
 
 void _tnl_ProgramCacheDestroy( GLcontext *ctx )
 {

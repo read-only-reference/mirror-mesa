@@ -48,6 +48,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "tnl/tnl.h"
 #include "tnl/t_pipeline.h"
+#include "tnl/t_vp_build.h"
 
 #include "drivers/common/driverfuncs.h"
 
@@ -274,9 +275,6 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	ctx->Const.MaxLineWidth = R300_LINESIZE_MAX;
 	ctx->Const.MaxLineWidthAA = R300_LINESIZE_MAX;
 	
-	if (hw_tcl_on)
-		ctx->_MaintainTnlProgram = GL_TRUE;
-	
 #ifdef USER_BUFFERS
 	/* Needs further modifications */
 #if 0
@@ -310,7 +308,8 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	_tnl_allow_vertex_fog(ctx, GL_TRUE);
 
 	/* currently bogus data */
-	ctx->Const.VertexProgram.MaxNativeInstructions=VSF_MAX_FRAGMENT_LENGTH;
+	ctx->Const.VertexProgram.MaxInstructions=VSF_MAX_FRAGMENT_LENGTH/4;
+	ctx->Const.VertexProgram.MaxNativeInstructions=VSF_MAX_FRAGMENT_LENGTH/4;
 	ctx->Const.VertexProgram.MaxNativeAttribs=16; /* r420 */
 	ctx->Const.VertexProgram.MaxTemps=32;
 	ctx->Const.VertexProgram.MaxNativeTemps=/*VSF_MAX_FRAGMENT_TEMPS*/32;
@@ -325,6 +324,7 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	ctx->Const.FragmentProgram.MaxNativeInstructions = PFS_MAX_ALU_INST+PFS_MAX_TEX_INST;
 	ctx->Const.FragmentProgram.MaxNativeTexIndirections = PFS_MAX_TEX_INDIRECT;
 	ctx->Const.FragmentProgram.MaxNativeAddressRegs = 0; /* and these are?? */
+	_tnl_ProgramCacheInit(ctx);
 	ctx->_MaintainTexEnvProgram = GL_TRUE;
 
 	driInitExtensions(ctx, card_extensions, GL_TRUE);
@@ -386,8 +386,12 @@ static void r300FreeGartAllocations(r300ContextPtr r300)
 		if (r300->rmm->u_list[i].ptr == NULL) {
 			continue;
 		}
-		
-		assert(r300->rmm->u_list[i].pending);
+
+		/* check whether this buffer is still in use */
+		if (!r300->rmm->u_list[i].pending) {
+			continue;
+		}
+
 		assert(r300->rmm->u_list[i].h_pending == 0);
 		
 		tries = 0;
@@ -454,6 +458,7 @@ void r300DestroyContext(__DRIcontextPrivate * driContextPriv)
 
 		release_texture_heaps = (r300->radeon.glCtx->Shared->RefCount == 1);
 		_swsetup_DestroyContext(r300->radeon.glCtx);
+		_tnl_ProgramCacheDestroy(r300->radeon.glCtx);
 		_tnl_DestroyContext(r300->radeon.glCtx);
 		_ac_DestroyContext(r300->radeon.glCtx);
 		_swrast_DestroyContext(r300->radeon.glCtx);
@@ -485,6 +490,13 @@ void r300DestroyContext(__DRIcontextPrivate * driContextPriv)
 		}
 
 		radeonCleanupContext(&r300->radeon);
+
+#ifdef USER_BUFFERS
+		/* the memory manager might be accessed when Mesa frees the shared
+		 * state, so don't destroy it earlier
+		 */
+		radeon_mm_destroy(r300);
+#endif
 
 		/* free the option cache */
 		driDestroyOptionCache(&r300->radeon.optionCache);

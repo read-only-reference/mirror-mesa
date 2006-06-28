@@ -368,6 +368,12 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 				rmesa->state.aos[nr++].aos_reg = prog->inputs[VERT_ATTRIB_TEX0+i];
 			}
 		}
+		for (i = 0; i < _TNL_NUM_GENERIC; i++) {
+			if (InputsRead & (1<<(VERT_ATTRIB_GENERIC0+i))) {
+				RENDERINPUTS_SET( inputs_bitset, _TNL_ATTRIB_GENERIC(i) );
+				rmesa->state.aos[nr++].aos_reg = prog->inputs[VERT_ATTRIB_GENERIC0+i];
+			}
+		}
 		nr = 0;
 	} else {
 		RENDERINPUTS_COPY( inputs_bitset, TNL_CONTEXT(ctx)->render_inputs_bitset );
@@ -455,6 +461,15 @@ void r300EmitArrays(GLcontext * ctx, GLboolean immd)
 
 			vic_1 |= R300_INPUT_CNTL_TC0 << i;
 			r300->state.texture.tc_count++;
+		}
+	}
+
+	for (i = 0; i < _TNL_NUM_GENERIC; i++) {
+		if (RENDERINPUTS_TEST( inputs_bitset, _TNL_ATTRIB_GENERIC(i) )) {
+			CONFIGURE_AOS(i_attrib[i], AOS_FORMAT_FLOAT,
+							VB->AttribPtr[VERT_ATTRIB_GENERIC0+i],
+							immd ? 4 : VB->AttribPtr[VERT_ATTRIB_GENERIC0+i].size,
+							count);
 		}
 	}
 	for(i=0; i < nr; i++)
@@ -621,8 +636,12 @@ void r300UseArrays(GLcontext * ctx)
 	
 #ifdef HW_VBOS
 	
-#define USE_VBO(a) if (ctx->Array.a.BufferObj->Name && ctx->Array.a.Enabled) \
-		radeon_mm_use(rmesa, ((struct r300_buffer_object *)ctx->Array.a.BufferObj)->id)
+#define USE_VBO(a) \
+    do { \
+	if (ctx->Array.ArrayObj->a.BufferObj->Name \
+	    && ctx->Array.ArrayObj->a.Enabled) \
+	    radeon_mm_use(rmesa, ((struct r300_buffer_object *)ctx->Array.ArrayObj->a.BufferObj)->id); \
+    } while(0)
 	
 	if (ctx->Array.ElementArrayBufferObj->Name && ctx->Array.ElementArrayBufferObj->OnCard)
 		radeon_mm_use(rmesa, ((struct r300_buffer_object *)ctx->Array.ElementArrayBufferObj)->id);

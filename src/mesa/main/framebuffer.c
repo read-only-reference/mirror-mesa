@@ -328,7 +328,8 @@ _mesa_resize_framebuffer(GLcontext *ctx, struct gl_framebuffer *fb,
    fb->Height = height;
 
    /* to update scissor / window bounds */
-   _mesa_update_draw_buffer_bounds(ctx);
+   if (ctx)
+      _mesa_update_draw_buffer_bounds(ctx);
 }
 
 
@@ -380,6 +381,9 @@ void
 _mesa_update_draw_buffer_bounds(GLcontext *ctx)
 {
    struct gl_framebuffer *buffer = ctx->DrawBuffer;
+
+   if (!buffer)
+      return;
 
    if (buffer->Name) {
       /* user-created framebuffer size depends on the renderbuffers */
