@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5
+ * Version:  6.5.1
  *
  * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
@@ -1996,11 +1996,11 @@ copytexsubimage_error_check( GLcontext *ctx, GLuint dimensions,
    }
 
    if (teximage->IsCompressed) {
-   if (!_mesa_source_buffer_exists(ctx, teximage->_BaseFormat)) {
-      _mesa_error(ctx, GL_INVALID_OPERATION,
-                  "glCopyTexSubImage%dD(missing readbuffer)", dimensions);
-      return GL_TRUE;
-   }
+      if (!_mesa_source_buffer_exists(ctx, teximage->_BaseFormat)) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glCopyTexSubImage%dD(missing readbuffer)", dimensions);
+         return GL_TRUE;
+      }
 
       if (target != GL_TEXTURE_2D) {
          _mesa_error(ctx, GL_INVALID_ENUM,
@@ -2101,20 +2101,24 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
 
    if (!ctx->Extensions.EXT_paletted_texture && is_index_format(format)) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(format)");
+      return;
    }
 
    if (!ctx->Extensions.SGIX_depth_texture &&
        !ctx->Extensions.ARB_depth_texture && is_depth_format(format)) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(format)");
+      return;
    }
 
    if (!ctx->Extensions.MESA_ycbcr_texture && is_ycbcr_format(format)) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(format)");
+      return;
    }
 
    if (!ctx->Extensions.EXT_packed_depth_stencil
        && is_depthstencil_format(format)) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(format)");
+      return;
    }
 
    if (!pixels)
@@ -2156,6 +2160,18 @@ _mesa_GetTexImage( GLenum target, GLint level, GLenum format,
        && !is_depthstencil_format(texImage->TexFormat->BaseFormat)) {
       _mesa_error(ctx, GL_INVALID_OPERATION, "glGetTexImage(format mismatch)");
       return;
+   }
+
+   if (ctx->Pack.BufferObj->Name) {
+      /* packing texture image into a PBO */
+      const GLuint dimensions = (target == GL_TEXTURE_3D) ? 3 : 2;
+      if (!_mesa_validate_pbo_access(dimensions, &ctx->Pack, texImage->Width,
+                                     texImage->Height, texImage->Depth,
+                                     format, type, pixels)) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glGetTexImage(invalid PBO access)");
+         return;
+      }
    }
 
    /* typically, this will call _mesa_get_teximage() */

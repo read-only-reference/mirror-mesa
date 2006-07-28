@@ -1317,6 +1317,8 @@ void r300_setup_rs_unit(GLcontext *ctx)
 	
 	fp_reg = in_texcoords = col_interp_nr = high_rr = 0;
 
+	r300->hw.rr.cmd[R300_RR_ROUTE_1] = 0;
+	
 	for (i=0;i<ctx->Const.MaxTextureUnits;i++) {
 		r300->hw.ri.cmd[R300_RI_INTERP_0+i] = 0
 				| R300_RS_INTERP_USED
@@ -1674,14 +1676,24 @@ void r300UpdateShaders(r300ContextPtr rmesa)
 {
 	GLcontext *ctx;
 	struct r300_vertex_program *vp;
+	int i;
 	
 	ctx = rmesa->radeon.glCtx;
 	
 	if (rmesa->NewGLState && hw_tcl_on) {
 		rmesa->NewGLState = 0;
 		
+		for (i = _TNL_FIRST_MAT; i <= _TNL_LAST_MAT; i++) {
+			rmesa->temp_attrib[i] = TNL_CONTEXT(ctx)->vb.AttribPtr[i];
+			TNL_CONTEXT(ctx)->vb.AttribPtr[i] = &rmesa->dummy_attrib[i];
+		}
+		
 		_tnl_UpdateFixedFunctionProgram(ctx);
 	
+		for (i = _TNL_FIRST_MAT; i <= _TNL_LAST_MAT; i++) {
+			TNL_CONTEXT(ctx)->vb.AttribPtr[i] = rmesa->temp_attrib[i];
+		}
+		
 		vp = (struct r300_vertex_program *)CURRENT_VERTEX_SHADER(ctx);
 		if (vp->translated == GL_FALSE)
 			r300_translate_vertex_shader(vp);

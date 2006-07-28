@@ -50,6 +50,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #define ENABLE_HW_3D_TEXTURE 1  /* XXX this is temporary! */
 
+#ifndef R200_EMIT_VAP_PVS_CNTL
+#error This driver requires a newer libdrm to compile
+#endif
+
 struct r200_context;
 typedef struct r200_context r200ContextRec;
 typedef struct r200_context *r200ContextPtr;
@@ -96,7 +100,7 @@ typedef void (*r200_point_func)( r200ContextPtr,
 
 
 struct r200_vertex_program {
-        struct vertex_program mesa_program; /* Must be first */
+        struct gl_vertex_program mesa_program; /* Must be first */
         int translated;
         VERTEX_SHADER_INSTRUCTION instr[R200_VSF_MAX_INST + 2];
         int pos_end;

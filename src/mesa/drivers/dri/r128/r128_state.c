@@ -608,6 +608,14 @@ static void r128UpdateClipping( GLcontext *ctx )
          y1 = 0;
       else if ( y1 >= rmesa->driScreen->fbHeight )
          y1 = rmesa->driScreen->fbHeight - 1;
+      if ( x2 < 0 )
+         x2 = 0;
+      else if ( x2 >= rmesa->driScreen->fbWidth )
+         x2 = rmesa->driScreen->fbWidth - 1;
+      if ( y2 < 0 )
+         y2 = 0;
+      else if ( y2 >= rmesa->driScreen->fbHeight )
+         y2 = rmesa->driScreen->fbHeight - 1;
 
       rmesa->setup.sc_top_left_c     = (((y1 & 0x3FFF) << 16) | (x1 & 0x3FFF));
       rmesa->setup.sc_bottom_right_c = (((y2 & 0x3FFF) << 16) | (x2 & 0x3FFF));
@@ -1132,6 +1140,15 @@ void r128EmitHwStateLocked( r128ContextPtr rmesa )
 			R128_UPLOAD_WINDOW |
 			R128_UPLOAD_CORE) ) {
       memcpy( &sarea->context_state, regs, sizeof(sarea->context_state) );
+      
+      if( rmesa->dirty & R128_UPLOAD_CONTEXT )
+      {
+         /* One possible side-effect of uploading a new context is the
+          * setting of the R128_GMC_AUX_CLIP_DIS bit, which causes all
+          * auxilliary cliprects to be disabled. So the next command must
+          * upload them again. */
+         rmesa->dirty |= R128_UPLOAD_CLIPRECTS;
+      }
    }
 
    if ( (rmesa->dirty & R128_UPLOAD_TEX0) && t0 ) {
@@ -1217,7 +1234,10 @@ void r128DDUpdateHWState( GLcontext *ctx )
 	 r128UpdateMasks( ctx );
 
       if ( new_state & R128_NEW_WINDOW )
+      {
 	 r128UpdateWindow( ctx );
+	 r128CalcViewport( ctx );
+      }
 
       if ( rmesa->NewGLState & _NEW_TEXTURE ) {
 	 r128UpdateTextureState( ctx );

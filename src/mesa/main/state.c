@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5
+ * Version:  6.5.1
  *
  * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
@@ -955,7 +955,7 @@ update_program(GLcontext *ctx)
    if (ctx->_MaintainTexEnvProgram && !ctx->FragmentProgram._Enabled) {
 #if 0
       if (!ctx->_TexEnvProgram)
-	 ctx->_TexEnvProgram = (struct fragment_program *)
+	 ctx->_TexEnvProgram = (struct gl_fragment_program *)
 	    ctx->Driver.NewProgram(ctx, GL_FRAGMENT_PROGRAM_ARB, 0);
       ctx->FragmentProgram._Current = ctx->_TexEnvProgram;
 #endif
@@ -984,6 +984,20 @@ update_viewport_matrix(GLcontext *ctx)
                          depthMax);
 }
 
+
+/**
+ * Update derived color/blend/logicop state.
+ */
+static void
+update_color(GLcontext *ctx)
+{
+   /* This is needed to support 1.1's RGB logic ops AND
+    * 1.0's blending logicops.
+    */
+   ctx->Color._LogicOpEnabled = (ctx->Color.ColorLogicOpEnabled ||
+                                 (ctx->Color.BlendEnabled &&
+                                  ctx->Color.BlendEquationRGB == GL_LOGIC_OP));
+}
 
 
 /**
@@ -1045,6 +1059,9 @@ _mesa_update_state( GLcontext *ctx )
 
    if (new_state & (_NEW_BUFFERS | _NEW_VIEWPORT))
       update_viewport_matrix(ctx);
+
+   if (new_state & _NEW_COLOR)
+      update_color( ctx );
 
    if (ctx->_MaintainTexEnvProgram) {
       if (new_state & (_NEW_TEXTURE | _DD_NEW_SEPARATE_SPECULAR | _NEW_FOG))

@@ -41,6 +41,19 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "program_instruction.h"
 #include "tnl/tnl.h"
 
+#if SWIZZLE_X != VSF_IN_COMPONENT_X || \
+    SWIZZLE_Y != VSF_IN_COMPONENT_Y || \
+    SWIZZLE_Z != VSF_IN_COMPONENT_Z || \
+    SWIZZLE_W != VSF_IN_COMPONENT_W || \
+    SWIZZLE_ZERO != VSF_IN_COMPONENT_ZERO || \
+    SWIZZLE_ONE != VSF_IN_COMPONENT_ONE || \
+    WRITEMASK_X != VSF_FLAG_X || \
+    WRITEMASK_Y != VSF_FLAG_Y || \
+    WRITEMASK_Z != VSF_FLAG_Z || \
+    WRITEMASK_W != VSF_FLAG_W
+#error Cannot change these!
+#endif
+
 #define SCALAR_FLAG (1<<31)
 #define FLAG_MASK (1<<31)
 #define OP_MASK (0xf)  /* we are unlikely to have more than 15 */
@@ -88,8 +101,8 @@ static GLboolean r200VertexProgUpdateParams(GLcontext *ctx, struct r200_vertex_p
    r200ContextPtr rmesa = R200_CONTEXT( ctx );
    GLfloat *fcmd = (GLfloat *)&rmesa->hw.vpp[0].cmd[VPP_CMD_0 + 1];
    int pi;
-   struct vertex_program *mesa_vp = (void *)vp;
-   struct program_parameter_list *paramList;
+   struct gl_vertex_program *mesa_vp = (void *)vp;
+   struct gl_program_parameter_list *paramList;
    drm_radeon_cmd_header_t tmp;
 
    R200_STATECHANGE( rmesa, vpp[0] );
@@ -137,16 +150,10 @@ static GLboolean r200VertexProgUpdateParams(GLcontext *ctx, struct r200_vertex_p
    return GL_TRUE;
 }
 
-static unsigned long t_dst_mask(GLuint mask)
+static __inline unsigned long t_dst_mask(GLuint mask)
 {
-   unsigned long flags = 0;
-
-   if(mask & WRITEMASK_X) flags |= VSF_FLAG_X;
-   if(mask & WRITEMASK_Y) flags |= VSF_FLAG_Y;
-   if(mask & WRITEMASK_Z) flags |= VSF_FLAG_Z;
-   if(mask & WRITEMASK_W) flags |= VSF_FLAG_W;
-
-   return flags;
+   /* WRITEMASK_* is equivalent to VSF_FLAG_* */
+   return mask & VSF_FLAG_ALL;
 }
 
 static unsigned long t_dst(struct prog_dst_register *dst)
@@ -220,19 +227,6 @@ static unsigned long t_src_class(enum register_file file)
 static __inline unsigned long t_swizzle(GLubyte swizzle)
 {
 /* this is in fact a NOP as the Mesa SWIZZLE_* are all identical to VSF_IN_COMPONENT_* */
-/*
-   switch(swizzle){
-   case SWIZZLE_X: return VSF_IN_COMPONENT_X;
-   case SWIZZLE_Y: return VSF_IN_COMPONENT_Y;
-   case SWIZZLE_Z: return VSF_IN_COMPONENT_Z;
-   case SWIZZLE_W: return VSF_IN_COMPONENT_W;
-   case SWIZZLE_ZERO: return VSF_IN_COMPONENT_ZERO;
-   case SWIZZLE_ONE: return VSF_IN_COMPONENT_ONE;
-   default:
-      fprintf(stderr, "problem in %s", __FUNCTION__);
-      exit(0);
-   }
-*/
    return swizzle;
 }
 
@@ -397,7 +391,7 @@ static unsigned long op_operands(enum prog_opcode opcode)
 
 static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
 {
-   struct vertex_program *mesa_vp = (void *)vp;
+   struct gl_vertex_program *mesa_vp = (void *)vp;
    struct prog_instruction *vpi;
    int i;
    VERTEX_SHADER_INSTRUCTION *o_inst;
@@ -463,7 +457,7 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
    }*/
 /* FIXME: is changing the prog safe to do here? */
    if (mesa_vp->IsPositionInvariant) {
-      struct program_parameter_list *paramList;
+      struct gl_program_parameter_list *paramList;
       GLint tokens[6] = { STATE_MATRIX, STATE_MVP, 0, 0, 0, STATE_MATRIX };
 
 #ifdef PREFER_DP4
@@ -713,7 +707,7 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
 	 o_inst->src1 = ZERO_SRC_0;
 	 o_inst->src2 = UNUSED_SRC_1;
 	 goto next;
-      
+
       case OPCODE_MAD:
 	 hw_op=(src[0].File == PROGRAM_TEMPORARY &&
 	    src[1].File == PROGRAM_TEMPORARY &&
@@ -1059,7 +1053,8 @@ void r200SetupVertexProg( GLcontext *ctx ) {
 }
 
 
-static void r200BindProgram(GLcontext *ctx, GLenum target, struct program *prog)
+static void
+r200BindProgram(GLcontext *ctx, GLenum target, struct gl_program *prog)
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
 
@@ -1073,7 +1068,8 @@ static void r200BindProgram(GLcontext *ctx, GLenum target, struct program *prog)
    }
 }
 
-static struct program *r200NewProgram(GLcontext *ctx, GLenum target, GLuint id)
+static struct gl_program *
+r200NewProgram(GLcontext *ctx, GLenum target, GLuint id)
 {
    struct r200_vertex_program *vp;
 
@@ -1083,7 +1079,7 @@ static struct program *r200NewProgram(GLcontext *ctx, GLenum target, GLuint id)
       return _mesa_init_vertex_program(ctx, &vp->mesa_program, target, id);
    case GL_FRAGMENT_PROGRAM_ARB:
    case GL_FRAGMENT_PROGRAM_NV:
-      return _mesa_init_fragment_program( ctx, CALLOC_STRUCT(fragment_program), target, id );
+      return _mesa_init_fragment_program( ctx, CALLOC_STRUCT(gl_fragment_program), target, id );
    default:
       _mesa_problem(ctx, "Bad target in r200NewProgram");
    }
@@ -1091,19 +1087,21 @@ static struct program *r200NewProgram(GLcontext *ctx, GLenum target, GLuint id)
 }
 
 
-static void r200DeleteProgram(GLcontext *ctx, struct program *prog)
+static void
+r200DeleteProgram(GLcontext *ctx, struct gl_program *prog)
 {
    _mesa_delete_program(ctx, prog);
 }
 
-static void r200ProgramStringNotify(GLcontext *ctx, GLenum target, struct program *prog)
+static void
+r200ProgramStringNotify(GLcontext *ctx, GLenum target, struct gl_program *prog)
 {
    struct r200_vertex_program *vp = (void *)prog;
 
    switch(target) {
    case GL_VERTEX_PROGRAM_ARB:
       vp->translated = GL_FALSE;
-      memset(&vp->translated, 0, sizeof(struct r200_vertex_program) - sizeof(struct vertex_program));
+      memset(&vp->translated, 0, sizeof(struct r200_vertex_program) - sizeof(struct gl_vertex_program));
       /*r200_translate_vertex_shader(vp);*/
       break;
    }
@@ -1111,7 +1109,8 @@ static void r200ProgramStringNotify(GLcontext *ctx, GLenum target, struct progra
    _tnl_program_string(ctx, target, prog);
 }
 
-static GLboolean r200IsProgramNative(GLcontext *ctx, GLenum target, struct program *prog)
+static GLboolean
+r200IsProgramNative(GLcontext *ctx, GLenum target, struct gl_program *prog)
 {
    struct r200_vertex_program *vp = (void *)prog;
 
