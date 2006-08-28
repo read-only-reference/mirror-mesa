@@ -2152,6 +2152,26 @@ typedef void (APIENTRYP PFNGLMULTITEXCOORD4SVARBPROC) (GLenum target, const GLsh
 
 
 
+#if GL_ARB_shader_objects
+
+#ifndef GL_MESA_shader_debug
+#define GL_MESA_shader_debug 1
+
+#define GL_DEBUG_OBJECT_MESA              0x8759
+#define GL_DEBUG_PRINT_MESA               0x875A
+#define GL_DEBUG_ASSERT_MESA              0x875B
+
+GLAPI GLhandleARB APIENTRY glCreateDebugObjectMESA (void);
+GLAPI GLvoid APIENTRY glClearDebugLogMESA (GLhandleARB obj, GLenum logType, GLenum shaderType);
+GLAPI GLvoid APIENTRY glGetDebugLogMESA (GLhandleARB obj, GLenum logType, GLenum shaderType, GLsizei maxLength,
+                                         GLsizei *length, GLcharARB *debugLog);
+GLAPI GLsizei APIENTRY glGetDebugLogLengthMESA (GLhandleARB obj, GLenum logType, GLenum shaderType);
+
+#endif /* GL_MESA_shader_debug */
+
+#endif /* GL_ARB_shader_objects */
+
+
 /*
  * ???. GL_MESA_trace
  * XXX obsolete
@@ -2230,67 +2250,6 @@ typedef void (APIENTRYP PFNGLBLENDEQUATIONSEPARATEATIPROC) (GLenum modeRGB, GLen
 
 #endif /* GL_ATI_blend_equation_separate */
 
-
-
-#ifndef GL_EXT_timer_query
-#define GL_EXT_timer_query 1
-
-/* Define 64-bit types */
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
-   typedef long long int GLint64EXT;
-   typedef unsigned long long int GLuint64EXT;
-#elif defined(_WIN32)
-   typedef __int64 GLint64EXT;
-   typedef unsigned __int64 GLuint64EXT;
-#else
-   /* this might actually be a 32-bit type */
-   typedef long int GLint64EXT;
-   typedef unsigned long int GLuint64EXT;
-#endif
-
-#define GL_TIME_ELAPSED_EXT  0x88BF
-
-GLAPI void GLAPIENTRY glGetQueryObjecti64vEXT(GLuint id, GLenum pname, GLint64EXT *params);
-GLAPI void GLAPIENTRY glGetQueryObjectui64vEXT(GLuint id, GLenum pname, GLuint64EXT *params);
-
-typedef void (APIENTRYP PFNGLGETQUERYOBJECTI64VEXTPROC) (GLuint id, GLenum pname, GLint64EXT *params);
-typedef void (APIENTRYP PFNGLGETQUERYOBJECTUI64VEXTPROC) (GLuint id, GLenum pname, GLuint64EXT *params);
-
-#endif /* GL_EXT_timer_query */
-
-
-
-#ifndef GL_EXT_framebuffer_blit
-#define GL_EXT_framebuffer_blit 1
-
-#define GL_READ_FRAMEBUFFER_EXT                0x8CA8
-#define GL_DRAW_FRAMEBUFFER_EXT                0x8CA9
-#define GL_DRAW_FRAMEBUFFER_BINDING_EXT        0x8CA6
-#define GL_READ_FRAMEBUFFER_BINDING_EXT        0x8CAA
-
-GLAPI void GLAPIENTRY
-glBlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                     GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                     GLbitfield mask, GLenum filter);
-
-typedef void (APIENTRYP PFNGLBLITFRAMEBUFFEREXTPROC)
-        (GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-         GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-         GLbitfield mask, GLenum filter);
-
-#endif /* GL_EXT_framebuffer_blit */
-
-
-
-#ifndef GL_EXT_packed_depth_stencil
-#define GL_EXT_packed_depth_stencil 1
-
-#define GL_DEPTH_STENCIL_EXT          0x84F9
-#define GL_UNSIGNED_INT_24_8_EXT      0x84FA
-#define GL_DEPTH24_STENCIL8_EXT       0x88F0
-#define GL_TEXTURE_STENCIL_SIZE_EXT   0x88F1
-
-#endif /* GL_EXT_packed_depth_stencil */
 
 
 /**

@@ -236,10 +236,14 @@ class PrintGenericStubs(gl_XML.gl_print_base):
 			registers.append( ["%rbp", 0] )
 
 
+		name = f.dispatch_name()
+
 		print '\t.p2align\t4,,15'
-		print '\t.globl\tGL_PREFIX(%s)' % (f.name)
-		print '\t.type\tGL_PREFIX(%s), @function' % (f.name)
-		print 'GL_PREFIX(%s):' % (f.name)
+		print '\t.globl\tGL_PREFIX(%s)' % (name)
+		print '\t.type\tGL_PREFIX(%s), @function' % (name)
+		if not f.is_static_entry_point(f.name):
+			print '\tHIDDEN(GL_PREFIX(%s))' % (name)
+		print 'GL_PREFIX(%s):' % (name)
 		print '#if defined(GLX_USE_TLS)'
 		print '\tcall\t_x86_64_get_dispatch@PLT'
 		print '\tmovq\t%u(%%rax), %%r11' % (f.offset * 8)
@@ -273,7 +277,7 @@ class PrintGenericStubs(gl_XML.gl_print_base):
 		print '\tjmp\t*%r11'
 		print '#endif /* defined(GLX_USE_TLS) */'
 
-		print '\t.size\tGL_PREFIX(%s), .-GL_PREFIX(%s)' % (f.name, f.name)
+		print '\t.size\tGL_PREFIX(%s), .-GL_PREFIX(%s)' % (name, name)
 		print ''
 		return
 
@@ -284,9 +288,11 @@ class PrintGenericStubs(gl_XML.gl_print_base):
 
 
 		for f in api.functionIterateByOffset():
+			dispatch = f.dispatch_name()
 			for n in f.entry_points:
 				if n != f.name:
-					print '\t.globl GL_PREFIX(%s) ; .set GL_PREFIX(%s), GL_PREFIX(%s)' % (n, n, f.name)
+					if f.is_static_entry_point(n):
+						print '\t.globl GL_PREFIX(%s) ; .set GL_PREFIX(%s), GL_PREFIX(%s)' % (n, n, dispatch)
 
 		return
 

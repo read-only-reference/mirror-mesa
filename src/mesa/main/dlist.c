@@ -4468,6 +4468,38 @@ save_ProgramLocalParameter4fvARB(GLenum target, GLuint index,
 
 
 static void GLAPIENTRY
+save_ProgramLocalParameters4fvEXT(GLenum target, GLuint index, GLsizei count,
+				  const GLfloat *params)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+
+   if (count > 0) {
+      unsigned i;
+      const GLfloat * p = params;
+
+      for (i = 0 ; i < count ; i++) {
+	 n = ALLOC_INSTRUCTION(ctx, OPCODE_PROGRAM_LOCAL_PARAMETER_ARB, 6);
+	 if (n) {
+	    n[1].e = target;
+	    n[2].ui = index;
+	    n[3].f = p[0];
+	    n[4].f = p[1];
+	    n[5].f = p[2];
+	    n[6].f = p[3];
+	    p += 4;
+	 }
+      }
+   }
+
+   if (ctx->ExecuteFlag) {
+      CALL_ProgramLocalParameters4fvEXT(ctx->Exec, (target, index, count, params));
+   }
+}
+
+
+static void GLAPIENTRY
 save_ProgramLocalParameter4dARB(GLenum target, GLuint index,
                                 GLdouble x, GLdouble y,
                                 GLdouble z, GLdouble w)
@@ -4670,6 +4702,38 @@ save_ProgramEnvParameter4fvARB(GLenum target, GLuint index,
 
 
 static void GLAPIENTRY
+save_ProgramEnvParameters4fvEXT(GLenum target, GLuint index, GLsizei count,
+				const GLfloat * params)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+
+   if (count > 0) {
+      unsigned i;
+      const GLfloat * p = params;
+
+      for (i = 0 ; i < count ; i++) {
+	 n = ALLOC_INSTRUCTION(ctx, OPCODE_PROGRAM_ENV_PARAMETER_ARB, 6);
+	 if (n) {
+	    n[1].e = target;
+	    n[2].ui = index;
+	    n[3].f = p[0];
+	    n[4].f = p[1];
+	    n[5].f = p[2];
+	    n[6].f = p[3];
+	    p += 4;
+	 }
+      }
+   }
+
+   if (ctx->ExecuteFlag) {
+      CALL_ProgramEnvParameters4fvEXT(ctx->Exec, (target, index, count, params));
+   }
+}
+
+
+static void GLAPIENTRY
 save_ProgramEnvParameter4dARB(GLenum target, GLuint index,
                               GLdouble x, GLdouble y, GLdouble z, GLdouble w)
 {
@@ -4692,7 +4756,7 @@ save_ProgramEnvParameter4dvARB(GLenum target, GLuint index,
 #endif /* FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program */
 
 
-#ifdef FEATURE_ARB_occlusion_query
+#if FEATURE_ARB_occlusion_query
 
 static void GLAPIENTRY
 save_BeginQueryARB(GLenum target, GLuint id)
@@ -7861,11 +7925,11 @@ _mesa_init_dlist_table(struct _glapi_table *table)
    SET_CopyConvolutionFilter1D(table, exec_CopyConvolutionFilter1D);
    SET_CopyConvolutionFilter2D(table, exec_CopyConvolutionFilter2D);
    SET_GetColorTable(table, exec_GetColorTable);
-   SET_GetColorTableEXT(table, exec_GetColorTable);
+   SET_GetColorTableSGI(table, exec_GetColorTable);
    SET_GetColorTableParameterfv(table, exec_GetColorTableParameterfv);
-   SET_GetColorTableParameterfvEXT(table, exec_GetColorTableParameterfv);
+   SET_GetColorTableParameterfvSGI(table, exec_GetColorTableParameterfv);
    SET_GetColorTableParameteriv(table, exec_GetColorTableParameteriv);
-   SET_GetColorTableParameterivEXT(table, exec_GetColorTableParameteriv);
+   SET_GetColorTableParameterivSGI(table, exec_GetColorTableParameteriv);
    SET_GetConvolutionFilter(table, exec_GetConvolutionFilter);
    SET_GetConvolutionFilterEXT(table, exec_GetConvolutionFilter);
    SET_GetConvolutionParameterfv(table, exec_GetConvolutionParameterfv);
@@ -7907,6 +7971,15 @@ _mesa_init_dlist_table(struct _glapi_table *table)
    SET_TexSubImage3DEXT(table, save_TexSubImage3D);
 #endif
 
+   /* 14. GL_SGI_color_table */
+#if 0
+   SET_ColorTableSGI(table, save_ColorTable);
+   SET_ColorSubTableSGI(table, save_ColorSubTable);
+#endif
+   SET_GetColorTableSGI(table, exec_GetColorTable);
+   SET_GetColorTableParameterfvSGI(table, exec_GetColorTableParameterfv);
+   SET_GetColorTableParameterivSGI(table, exec_GetColorTableParameteriv);
+
    /* 30. GL_EXT_vertex_array */
    SET_ColorPointerEXT(table, exec_ColorPointerEXT);
    SET_EdgeFlagPointerEXT(table, exec_EdgeFlagPointerEXT);
@@ -7923,15 +7996,6 @@ _mesa_init_dlist_table(struct _glapi_table *table)
    /* 54. GL_EXT_point_parameters */
    SET_PointParameterfEXT(table, save_PointParameterfEXT);
    SET_PointParameterfvEXT(table, save_PointParameterfvEXT);
-
-   /* 78. GL_EXT_paletted_texture */
-#if 0
-   SET_ColorTableEXT(table, save_ColorTable);
-   SET_ColorSubTableEXT(table, save_ColorSubTable);
-#endif
-   SET_GetColorTableEXT(table, exec_GetColorTable);
-   SET_GetColorTableParameterfvEXT(table, exec_GetColorTableParameterfv);
-   SET_GetColorTableParameterivEXT(table, exec_GetColorTableParameteriv);
 
    /* 97. GL_EXT_compiled_vertex_array */
    SET_LockArraysEXT(table, exec_LockArraysEXT);
@@ -8154,6 +8218,12 @@ _mesa_init_dlist_table(struct _glapi_table *table)
 
    /* 299. GL_EXT_blend_equation_separate */
    SET_BlendEquationSeparateEXT(table, save_BlendEquationSeparateEXT);
+
+   /* GL_EXT_gpu_program_parmaeters */
+#if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
+   SET_ProgramEnvParameters4fvEXT(table, save_ProgramEnvParameters4fvEXT);
+   SET_ProgramLocalParameters4fvEXT(table, save_ProgramLocalParameters4fvEXT);
+#endif
 }
 
 

@@ -28,6 +28,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 /*
  * Authors:
  *   Aapo Tahkola <aet@rasterburn.org>
+ *   Roland Scheidegger <rscheidegger_lists@hispeed.ch>
  */
 #include "glheader.h"
 #include "macros.h"
@@ -101,7 +102,7 @@ static GLboolean r200VertexProgUpdateParams(GLcontext *ctx, struct r200_vertex_p
    r200ContextPtr rmesa = R200_CONTEXT( ctx );
    GLfloat *fcmd = (GLfloat *)&rmesa->hw.vpp[0].cmd[VPP_CMD_0 + 1];
    int pi;
-   struct gl_vertex_program *mesa_vp = (void *)vp;
+   struct gl_vertex_program *mesa_vp = &vp->mesa_program;
    struct gl_program_parameter_list *paramList;
    drm_radeon_cmd_header_t tmp;
 
@@ -132,7 +133,7 @@ static GLboolean r200VertexProgUpdateParams(GLcontext *ctx, struct r200_vertex_p
 	 break;
       }
       if (pi == 95) {
-	 fcmd = (GLfloat *)rmesa->hw.vpp[1].cmd[VPP_CMD_0 + 1];
+	 fcmd = (GLfloat *)&rmesa->hw.vpp[1].cmd[VPP_CMD_0 + 1];
       }
    }
    /* hack up the cmd_size so not the whole state atom is emitted always. */
@@ -389,9 +390,15 @@ static unsigned long op_operands(enum prog_opcode opcode)
 /* DP4 version seems to trigger some hw peculiarity - fglrx does this on r200 however */
 #define PREFER_DP4
 
+
+/**
+ * Generate an R200 vertex program from Mesa's internal representation.
+ *
+ * \return  GL_TRUE for success, GL_FALSE for failure.
+ */
 static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
 {
-   struct gl_vertex_program *mesa_vp = (void *)vp;
+   struct gl_vertex_program *mesa_vp = &vp->mesa_program;
    struct prog_instruction *vpi;
    int i;
    VERTEX_SHADER_INSTRUCTION *o_inst;
@@ -400,6 +407,10 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
    unsigned long hw_op;
 
    vp->native = GL_FALSE;
+   vp->translated = GL_TRUE;
+
+   if (mesa_vp->Base.NumInstructions == 0)
+      return GL_FALSE;
 
    if ((mesa_vp->Base.InputsRead &
       ~(VERT_BIT_POS | VERT_BIT_NORMAL | VERT_BIT_COLOR0 | VERT_BIT_COLOR1 |
@@ -408,6 +419,18 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
       if (R200_DEBUG & DEBUG_FALLBACKS) {
 	 fprintf(stderr, "can't handle vert prog inputs 0x%x\n",
 	    mesa_vp->Base.InputsRead);
+      }
+      return GL_FALSE;
+   }
+
+   if ((mesa_vp->Base.OutputsWritten &
+      ~((1 << VERT_RESULT_HPOS) | (1 << VERT_RESULT_COL0) | (1 << VERT_RESULT_COL1) |
+      (1 << VERT_RESULT_FOGC) | (1 << VERT_RESULT_TEX0) | (1 << VERT_RESULT_TEX1) |
+      (1 << VERT_RESULT_TEX2) | (1 << VERT_RESULT_TEX3) | (1 << VERT_RESULT_TEX4) |
+      (1 << VERT_RESULT_TEX5) | (1 << VERT_RESULT_PSIZ))) != 0) {
+      if (R200_DEBUG & DEBUG_FALLBACKS) {
+	 fprintf(stderr, "can't handle vert prog outputs 0x%x\n",
+	    mesa_vp->Base.OutputsWritten);
       }
       return GL_FALSE;
    }
@@ -423,38 +446,6 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
    int u_temp_i = R200_VSF_MAX_TEMPS - 1;
    struct prog_src_register src[3];
 
-/*   if (getenv("R300_VP_SAFETY")) {
-      WARN_ONCE("R300_VP_SAFETY enabled.\n");
-
-      vpi = malloc((mesa_vp->Base.NumInstructions + VSF_MAX_FRAGMENT_TEMPS) * sizeof(struct prog_instruction));
-      memset(vpi, 0, VSF_MAX_FRAGMENT_TEMPS * sizeof(struct prog_instruction));
-
-      for (i=0; i < VSF_MAX_FRAGMENT_TEMPS; i++) {
-	 vpi[i].Opcode = OPCODE_MOV;
-	 vpi[i].StringPos = 0;
-	 vpi[i].Data = 0;
-
-	 vpi[i].DstReg.File = PROGRAM_TEMPORARY;
-	 vpi[i].DstReg.Index = i;
-	 vpi[i].DstReg.WriteMask = WRITEMASK_XYZW;
-	 vpi[i].DstReg.CondMask = COND_TR;
-
-	 vpi[i].SrcReg[0].File = PROGRAM_STATE_VAR;
-	 vpi[i].SrcReg[0].Index = 0;
-	 vpi[i].SrcReg[0].Swizzle = MAKE_SWIZZLE4(SWIZZLE_ONE, SWIZZLE_ONE, SWIZZLE_ONE, SWIZZLE_ONE);
-      }
-
-      memcpy(&vpi[i], mesa_vp->Base.Instructions, mesa_vp->Base.NumInstructions * sizeof(struct prog_instruction));
-
-      free(mesa_vp->Base.Instructions);
-
-      mesa_vp->Base.Instructions = vpi;
-
-      mesa_vp->Base.NumInstructions += VSF_MAX_FRAGMENT_TEMPS;
-      vpi = &mesa_vp->Base.Instructions[mesa_vp->Base.NumInstructions-1];
-
-      assert(vpi->Opcode == OPCODE_END);
-   }*/
 /* FIXME: is changing the prog safe to do here? */
    if (mesa_vp->IsPositionInvariant) {
       struct gl_program_parameter_list *paramList;
@@ -470,6 +461,7 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
       vpi = malloc((mesa_vp->Base.NumInstructions + 4) * sizeof(struct prog_instruction));
       memset(vpi, 0, 4 * sizeof(struct prog_instruction));
 
+      /* emit four dot product instructions to do MVP transformation */
       for (i=0; i < 4; i++) {
 	 GLint idx;
 	 tokens[3] = tokens[4] = i;
@@ -524,10 +516,13 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
 #endif	
       }
 
+      /* now append original program after our new instructions */
       memcpy(&vpi[i], mesa_vp->Base.Instructions, mesa_vp->Base.NumInstructions * sizeof(struct prog_instruction));
 
+      /* deallocate original program */
       free(mesa_vp->Base.Instructions);
 
+      /* install new program */
       mesa_vp->Base.Instructions = vpi;
 
       mesa_vp->Base.NumInstructions += 4;
@@ -544,7 +539,10 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
 
    vp->pos_end = 0;
    mesa_vp->Base.NumNativeInstructions = 0;
-   mesa_vp->Base.NumNativeParameters = mesa_vp->Base.Parameters->NumParameters;
+   if (mesa_vp->Base.Parameters)
+      mesa_vp->Base.NumNativeParameters = mesa_vp->Base.Parameters->NumParameters;
+   else
+      mesa_vp->Base.NumNativeParameters = 0;
 
    for(i=0; i < VERT_ATTRIB_MAX; i++)
       vp->inputs[i] = -1;
@@ -576,27 +574,15 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
    Haven't seen attr 14 used, maybe that's for the hw pointsize vec1 (which is
    not possibe to use with vertex progs as it is lacking in vert prog specification) */
 
-   assert(mesa_vp->Base.OutputsWritten & (1 << VERT_RESULT_HPOS));
-
-   vp->translated = GL_TRUE;
+   if (!(mesa_vp->Base.OutputsWritten & (1 << VERT_RESULT_HPOS))) {
+      if (R200_DEBUG & DEBUG_FALLBACKS) {
+	 fprintf(stderr, "can't handle vert prog without position output\n");
+      }
+      return GL_FALSE;
+   }
 
    o_inst = vp->instr;
    for(vpi = mesa_vp->Base.Instructions; vpi->Opcode != OPCODE_END; vpi++, o_inst++){
-      if (u_temp_i < mesa_vp->Base.NumTemporaries) {
-	 if (R200_DEBUG & DEBUG_FALLBACKS) {
-	    fprintf(stderr, "Ran out of temps, num temps %d, us %d\n", mesa_vp->Base.NumTemporaries, u_temp_i);
-	 }
-	 return GL_FALSE;
-      }
-      u_temp_i = R200_VSF_MAX_TEMPS - 1;
-      if(o_inst - vp->instr >= R200_VSF_MAX_INST) {
-	 mesa_vp->Base.NumNativeInstructions = 129;
-	 if (R200_DEBUG & DEBUG_FALLBACKS) {
-	    fprintf(stderr, "more than 128 native instructions\n");
-	 }
-	 return GL_FALSE;
-      }
-
       operands = op_operands(vpi->Opcode);
       are_srcs_scalar = operands & SCALAR_FLAG;
       operands &= OP_MASK;
@@ -895,7 +881,7 @@ else {
 	 goto next;
 
       case OPCODE_END:
-	 break;
+	 assert(0);
       default:
 	 break;
       }
@@ -955,19 +941,30 @@ else {
 	 }
       }
       next:
+      if (mesa_vp->Base.NumNativeTemporaries <
+	 (mesa_vp->Base.NumTemporaries + (R200_VSF_MAX_TEMPS - 1 - u_temp_i))) {
+	 mesa_vp->Base.NumNativeTemporaries =
+	    mesa_vp->Base.NumTemporaries + (R200_VSF_MAX_TEMPS - 1 - u_temp_i);
+      }
+      if (u_temp_i < mesa_vp->Base.NumTemporaries) {
+	 if (R200_DEBUG & DEBUG_FALLBACKS) {
+	    fprintf(stderr, "Ran out of temps, num temps %d, us %d\n", mesa_vp->Base.NumTemporaries, u_temp_i);
+	 }
+	 return GL_FALSE;
+      }
+      u_temp_i = R200_VSF_MAX_TEMPS - 1;
+      if(o_inst - vp->instr >= R200_VSF_MAX_INST) {
+	 mesa_vp->Base.NumNativeInstructions = 129;
+	 if (R200_DEBUG & DEBUG_FALLBACKS) {
+	    fprintf(stderr, "more than 128 native instructions\n");
+	 }
+	 return GL_FALSE;
+      }
       if ((o_inst->op & R200_VSF_OUT_CLASS_MASK) == R200_VSF_OUT_CLASS_RESULT_POS) {
 	 vp->pos_end = (o_inst - vp->instr);
       }
    }
 
-   /* need to test again since some instructions require more than one (up to 3) native inst */
-   if(o_inst - vp->instr > R200_VSF_MAX_INST) {
-      mesa_vp->Base.NumNativeInstructions = 129;
-      if (R200_DEBUG & DEBUG_FALLBACKS) {
-	 fprintf(stderr, "more than 128 native instructions\n");
-      }
-      return GL_FALSE;
-   }
    vp->native = GL_TRUE;
    mesa_vp->Base.NumNativeInstructions = (o_inst - vp->instr);
 #if 0
@@ -1101,8 +1098,8 @@ r200ProgramStringNotify(GLcontext *ctx, GLenum target, struct gl_program *prog)
    switch(target) {
    case GL_VERTEX_PROGRAM_ARB:
       vp->translated = GL_FALSE;
-      memset(&vp->translated, 0, sizeof(struct r200_vertex_program) - sizeof(struct gl_vertex_program));
-      /*r200_translate_vertex_shader(vp);*/
+/*      memset(&vp->translated, 0, sizeof(struct r200_vertex_program) - sizeof(struct gl_vertex_program));*/
+      r200_translate_vertex_program(vp);
       break;
    }
    /* need this for tcl fallbacks */

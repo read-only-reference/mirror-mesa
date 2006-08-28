@@ -40,6 +40,63 @@ def parse_GL_API( file_name, factory = None ):
 	api = factory.create_item( "api", None, None )
 	api.process_element( doc )
 
+	# After the XML has been processed, we need to go back and assign
+	# dispatch offsets to the functions that request that their offsets
+	# be assigned by the scripts.  Typically this means all functions
+	# that are not part of the ABI.
+	#
+	# To bring some sanity to the generated offsets, we group all
+	# functions into four groups.  The groups have offsets assigned to
+	# their functions in order.  The groups are:
+	#
+	# 1. Core GL versions, sorted by version number.
+	# 2. ARB extensions, sorted by extension number.
+	# 3. Non-ARB extensions, sorted by extension number.
+	# 4. Un-numbered, non-ARB extensions, sorted by extension name.
+
+	lists = [{}, {}, {}, {}]
+
+	for func in api.functionIterateAll():
+		if func.assign_offset:
+			[cat_name, cat_number] = api.category_dict[func.name]
+
+			try:
+				core_version = float(cat_name)
+			except Exception,e:
+				core_version = 0.0
+
+			if core_version > 0.0:
+				func_cat_type = 0
+				key = cat_name
+			elif cat_name.startswith( "GL_ARB_" ):
+				func_cat_type = 1
+				key = int(cat_number)
+			else:
+				if cat_number != None:
+					func_cat_type = 2
+					key = int(cat_number)
+				else:
+					func_cat_type = 3
+					key = cat_name
+
+			if not lists[func_cat_type].has_key(key):
+				lists[func_cat_type][key] = {}
+
+			lists[func_cat_type][key][func.name] = func
+
+	for func_cat_type in range(0,4):
+		keys = lists[func_cat_type].keys()
+		keys.sort()
+
+		for key in keys:
+			names = lists[func_cat_type][key].keys()
+			names.sort()
+
+			for name in names:
+				func = lists[func_cat_type][key][name]
+				func.offset = api.next_offset;
+				api.next_offset += 1
+
 	doc.freeDoc()
 
 	return api
@@ -555,6 +612,10 @@ class gl_function( gl_item ):
 		self.initialized = 0
 		self.images = []
 
+		self.assign_offset = 0
+
+		self.static_entry_points = []
+
 		# Track the parameter string (for the function prototype)
 		# for each entry-point.  This is done because some functions
 		# change their prototype slightly when promoted from extension
@@ -575,6 +636,9 @@ class gl_function( gl_item ):
 		name = element.nsProp( "name", None )
 		alias = element.nsProp( "alias", None )
 
+		if is_attr_true(element, "static_dispatch"):
+			self.static_entry_points.append(name)
+
 		self.entry_points.append( name )
 		if alias:
 			true_name = alias
@@ -591,6 +655,8 @@ class gl_function( gl_item ):
 					self.offset = o
 				except Exception, e:
 					self.offset = -1
+					if offset == "assign":
+						self.assign_offset = 1
 
 
 		if not self.name:
@@ -668,6 +734,21 @@ class gl_function( gl_item ):
 		
 		return create_parameter_string( self.parameters, 1 )
 
+	def is_static_entry_point(self, name):
+		return name in self.static_entry_points
+
+	def dispatch_name(self):
+		if self.name in self.static_entry_points:
+			return self.name
+		else:
+			return "_dispatch_stub_%u" % (self.offset)
+
+	def static_name(self, name):
+		if name in self.static_entry_points:
+			return name
+		else:
+			return "_dispatch_stub_%u" % (self.offset)
+
 
 class gl_item_factory:
 	"""Factory to create objects derived from gl_item."""
@@ -695,6 +776,8 @@ class gl_api:
 		self.category_dict = {}
 
 		self.factory = factory
+
+		self.next_offset = 0
 
 		typeexpr.create_initial_types()
 		return
@@ -743,6 +826,9 @@ class gl_api:
 					else:
 						func = self.factory.create_item( "function", child, self )
 						self.functions_by_name[ func_name ] = func
+
+					if func.offset >= self.next_offset:
+						self.next_offset = func.offset + 1
 
 
 				elif child.name == "enum":

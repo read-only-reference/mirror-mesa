@@ -152,8 +152,8 @@ static void
 get_buffer_size( GLframebuffer *buffer, GLuint *width, GLuint *height )
 {
    const GLFBDevBufferPtr fbdevbuffer = GLFBDEV_BUFFER(buffer);
-   *width = fbdevbuffer->var.xres_virtual;
-   *height = fbdevbuffer->var.yres_virtual;
+   *width = fbdevbuffer->var.xres;
+   *height = fbdevbuffer->var.yres;
 }
 
 
@@ -281,7 +281,7 @@ glFBDevGetString( int str )
    case GLFBDEV_VENDOR:
       return "Mesa Project";
    case GLFBDEV_VERSION:
-      return "1.0.0";
+      return "1.0.1";
    default:
       return NULL;
    }
@@ -372,6 +372,10 @@ glFBDevCreateVisual( const struct fb_fix_screeninfo *fixInfo,
       case GLFBDEV_LEVEL:
          /* ignored for now */
          break;
+      case GLFBDEV_MULTISAMPLE:
+	 numSamples = attrib[1];
+	 attrib++;
+         break;
       default:
          /* unexpected token */
          _mesa_free(vis);
@@ -385,50 +389,37 @@ glFBDevCreateVisual( const struct fb_fix_screeninfo *fixInfo,
       blueBits  = varInfo->blue.length;
       alphaBits = varInfo->transp.length;
 
-      if ((fixInfo->visual == FB_VISUAL_TRUECOLOR ||
-           fixInfo->visual == FB_VISUAL_DIRECTCOLOR)
-          && varInfo->bits_per_pixel == 24
-          && varInfo->red.offset == 16
-          && varInfo->green.offset == 8
-          && varInfo->blue.offset == 0) {
-         vis->pixelFormat = PF_B8G8R8;
-      }
-      else if ((fixInfo->visual == FB_VISUAL_TRUECOLOR ||
-                fixInfo->visual == FB_VISUAL_DIRECTCOLOR)
-               && varInfo->bits_per_pixel == 32
-               && varInfo->red.offset == 16
-               && varInfo->green.offset == 8
-               && varInfo->blue.offset == 0
-               && varInfo->transp.offset == 24) {
-         vis->pixelFormat = PF_B8G8R8A8;
-      }
-      else if ((fixInfo->visual == FB_VISUAL_TRUECOLOR ||
-                fixInfo->visual == FB_VISUAL_DIRECTCOLOR)
-               && varInfo->bits_per_pixel == 16
-               && varInfo->red.offset == 11
-               && varInfo->green.offset == 5
-               && varInfo->blue.offset == 0) {
-         vis->pixelFormat = PF_B5G6R5;
-      }
-      else if ((fixInfo->visual == FB_VISUAL_TRUECOLOR ||
-                fixInfo->visual == FB_VISUAL_DIRECTCOLOR)
-               && varInfo->bits_per_pixel == 16
-               && varInfo->red.offset == 10
-               && varInfo->green.offset == 5
-               && varInfo->blue.offset == 0) {
-         vis->pixelFormat = PF_B5G5R5;
-      }
-      else {
-         _mesa_problem(NULL, "Unsupported fbdev RGB visual/bitdepth!\n");
-         /*
-         printf("fixInfo->visual = 0x%x\n", fixInfo->visual);
-         printf("varInfo->bits_per_pixel = %d\n", varInfo->bits_per_pixel);
-         printf("varInfo->red.offset = %d\n", varInfo->red.offset);
-         printf("varInfo->green.offset = %d\n", varInfo->green.offset);
-         printf("varInfo->blue.offset = %d\n", varInfo->blue.offset);
-         */
-         _mesa_free(vis);
-         return NULL;
+      if (fixInfo->visual == FB_VISUAL_TRUECOLOR ||
+	  fixInfo->visual == FB_VISUAL_DIRECTCOLOR) {
+	 if(varInfo->bits_per_pixel == 24
+	    && varInfo->red.offset == 16
+	    && varInfo->green.offset == 8
+	    && varInfo->blue.offset == 0)
+	    vis->pixelFormat = PF_B8G8R8;
+
+	 else if(varInfo->bits_per_pixel == 32
+		 && varInfo->red.offset == 16
+		 && varInfo->green.offset == 8
+		 && varInfo->blue.offset == 0)
+	    vis->pixelFormat = PF_B8G8R8A8;
+
+	 else if(varInfo->bits_per_pixel == 16
+		 && varInfo->red.offset == 11
+		 && varInfo->green.offset == 5
+		 && varInfo->blue.offset == 0)
+	    vis->pixelFormat = PF_B5G6R5;
+
+	 else if(varInfo->bits_per_pixel == 16
+		 && varInfo->red.offset == 10
+		 && varInfo->green.offset == 5
+		 && varInfo->blue.offset == 0)
+	    vis->pixelFormat = PF_B5G5R5;
+
+	 else {
+	    _mesa_problem(NULL, "Unsupported fbdev RGB visual/bitdepth!\n");
+	    _mesa_free(vis);
+	    return NULL;
+	 }
       }
    }
    else {
@@ -501,11 +492,13 @@ renderbuffer_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
 
 
 static struct GLFBDevRenderbufferRec *
-new_glfbdev_renderbuffer(void *bufferStart, int pixelFormat)
+new_glfbdev_renderbuffer(void *bufferStart, const GLFBDevVisualPtr visual)
 {
    struct GLFBDevRenderbufferRec *rb = CALLOC_STRUCT(GLFBDevRenderbufferRec);
    if (rb) {
       GLuint name = 0;
+      int pixelFormat = visual->pixelFormat;
+
       _mesa_init_renderbuffer(&rb->Base, name);
 
       rb->Base.Delete = delete_renderbuffer;
@@ -566,10 +559,23 @@ new_glfbdev_renderbuffer(void *bufferStart, int pixelFormat)
       }
       rb->Base.DataType = GL_UNSIGNED_BYTE;
       rb->Base.Data = bufferStart;
+
+      rb->rowStride = visual->var.xres_virtual * visual->var.bits_per_pixel / 8;
+      rb->bottom = (GLubyte *) bufferStart
+	  + (visual->var.yres - 1) * rb->rowStride;
+
+      rb->Base.Width = visual->var.xres;
+      rb->Base.Height = visual->var.yres;
+
+      rb->Base.RedBits = visual->var.red.length;
+      rb->Base.GreenBits = visual->var.green.length;
+      rb->Base.BlueBits = visual->var.blue.length;
+      rb->Base.AlphaBits = visual->var.transp.length;
+
+      rb->Base.InternalFormat = pixelFormat;
    }
    return rb;
 }
-
 
 GLFBDevBufferPtr
 glFBDevCreateBuffer( const struct fb_fix_screeninfo *fixInfo,
@@ -583,6 +589,11 @@ glFBDevCreateBuffer( const struct fb_fix_screeninfo *fixInfo,
    ASSERT(visual);
    ASSERT(frontBuffer);
    ASSERT(size > 0);
+
+   /* this is to update the visual if there was a resize and the
+      buffer is created again */
+   visual->var = *varInfo;
+   visual->fix = *fixInfo;
 
    if (visual->fix.visual != fixInfo->visual ||
        visual->fix.type != fixInfo->type ||
@@ -603,12 +614,26 @@ glFBDevCreateBuffer( const struct fb_fix_screeninfo *fixInfo,
    /* basic framebuffer setup */
    _mesa_initialize_framebuffer(&buf->glframebuffer, &visual->glvisual);
    /* add front renderbuffer */
-   frontrb = new_glfbdev_renderbuffer(frontBuffer, visual->pixelFormat);
+   frontrb = new_glfbdev_renderbuffer(frontBuffer, visual);
    _mesa_add_renderbuffer(&buf->glframebuffer, BUFFER_FRONT_LEFT,
                           &frontrb->Base);
    /* add back renderbuffer */
    if (visual->glvisual.doubleBufferMode) {
-      backrb = new_glfbdev_renderbuffer(backBuffer, visual->pixelFormat);
+      int malloced = !backBuffer;
+      if (malloced) {
+         /* malloc a back buffer */
+         backBuffer = _mesa_malloc(size);
+         if (!backBuffer) {
+            _mesa_free_framebuffer_data(&buf->glframebuffer);
+            _mesa_free(buf);
+            return NULL;
+         }
+      }
+
+      backrb = new_glfbdev_renderbuffer(backBuffer, visual);
+      if(malloced)
+	 backrb->mallocedBuffer = GL_TRUE;
+
       _mesa_add_renderbuffer(&buf->glframebuffer, BUFFER_BACK_LEFT,
                              &backrb->Base);
    }
@@ -621,36 +646,11 @@ glFBDevCreateBuffer( const struct fb_fix_screeninfo *fixInfo,
                                 GL_FALSE, /* alpha */
                                 GL_FALSE /* aux bufs */);
 
-
-
    buf->fix = *fixInfo;   /* struct assignment */
    buf->var = *varInfo;   /* struct assignment */
    buf->visual = visual;  /* ptr assignment */
    buf->size = size;
    buf->bytesPerPixel = visual->var.bits_per_pixel / 8;
-   frontrb->rowStride = visual->var.xres_virtual * buf->bytesPerPixel;
-   frontrb->bottom = (GLubyte *) frontrb->Base.Data
-      + (visual->var.yres_virtual - 1) * frontrb->rowStride;
-
-   if (visual->glvisual.doubleBufferMode) {
-      if (!backBuffer) {
-         /* malloc a back buffer */
-         backrb->Base.Data = _mesa_malloc(size);
-         if (!backrb->Base.Data) {
-            _mesa_free_framebuffer_data(&buf->glframebuffer);
-            _mesa_free(buf);
-            return NULL;
-         }
-         backrb->mallocedBuffer = GL_TRUE;
-      }
-      backrb->rowStride = frontrb->rowStride;
-      backrb->bottom = (GLubyte *) backrb->Base.Data
-         + (visual->var.yres_virtual - 1) * backrb->rowStride;
-   }
-   else {
-      backrb->bottom = NULL;
-      backrb->rowStride = 0;
-   }
 
    return buf;
 }

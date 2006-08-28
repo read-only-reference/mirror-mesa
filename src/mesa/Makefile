@@ -32,11 +32,12 @@ default:
 	elif [ "$(DRIVER_DIRS)" = "beos" ]; then \
 		$(MAKE) beos ; \
 	elif [ "$(DRIVER_DIRS)" = "directfb" ]; then \
-		$(MAKE) directfb; \
+		$(MAKE) directfb ; \
+	elif [ "$(DRIVER_DIRS)" = "fbdev" ]; then \
+		$(MAKE) fbdev ; \
 	else \
 		$(MAKE) stand-alone ; \
 	fi
-
 
 
 ######################################################################
@@ -66,21 +67,31 @@ linux-solo: depend subdirs libmesa.a
 libgl-core: $(CORE_OBJECTS)
 	@ $(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' \
 		-major $(MESA_MAJOR) -minor $(MESA_MINOR) -patch $(MESA_TINY) \
-		-install $(TOP)/$(LIB_DIR) $(MKLIB_OPTIONS) $(CORE_OBJECTS) $(GL_LIB_DEPS)
+		-install $(TOP)/$(LIB_DIR) $(MKLIB_OPTIONS) $(CORE_OBJECTS) \
+		$(GL_LIB_DEPS)
 
 directfb: depend subdirs libgl-core
-	cd drivers/directfb; $(MAKE)
+	cd drivers/directfb ; $(MAKE)
+
+
+#####################################################################
+# fbdev Mesa driver (libGL.so)
+
+fbdev: $(CORE_OBJECTS) $(FBDEV_DRIVER_OBJECTS) $(COMMON_DRIVER_OBJECTS)
+	@ $(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' \
+		-major $(MESA_MAJOR) -minor $(MESA_MINOR) -patch $(MESA_TINY) \
+		-install $(TOP)/$(LIB_DIR) $(MKLIB_OPTIONS) \
+		$(CORE_OBJECTS) $(FBDEV_DRIVER_OBJECTS) \
+		$(COMMON_DRIVER_OBJECTS) $(GL_LIB_DEPS)
 
 
 ######################################################################
 # Stand-alone Mesa libGL and libOSMesa
-
 STAND_ALONE_DRIVER_SOURCES = \
 	$(COMMON_DRIVER_SOURCES) \
 	$(X11_DRIVER_SOURCES) \
 	$(GLIDE_DRIVER_SOURCES) \
-	$(SVGA_DRIVER_SOURCES) \
-	$(FBDEV_DRIVER_SOURCES)
+	$(SVGA_DRIVER_SOURCES)
 
 STAND_ALONE_DRIVER_OBJECTS = $(STAND_ALONE_DRIVER_SOURCES:.c=.o)
 
@@ -127,15 +138,6 @@ $(TOP)/$(LIB_DIR)/$(OSMESA_LIB_NAME): $(OSMESA_DRIVER_OBJECTS) $(OSMESA16_OBJECT
 ######################################################################
 # Generic stuff
 
-ALL_SOURCES = \
-	$(GLAPI_SOURCES)	\
-	$(SOLO_SOURCES)		\
-	$(X86_SOURCES)		\
-	$(COMMON_DRIVER_SOURCES)\
-	$(X11_DRIVER_SOURCES)	\
-	$(OSMESA_DRIVER_SOURCES)
-
-
 depend: $(ALL_SOURCES)
 	@ echo "running $(MKDEP)"
 	@ touch depend
@@ -157,7 +159,6 @@ install: default
 		cd drivers/dri ; $(MAKE) install ; \
 	fi
 
-
 	## NOT YET:
 	## $(INSTALL) -d $(INSTALL_DIR)/include/GLES
 	## $(INSTALL) -m 644 include/GLES/*.h $(INSTALL_DIR)/include/GLES
@@ -175,5 +176,6 @@ clean:
 	(cd drivers/dri ; $(MAKE) clean)
 	(cd x86 ; $(MAKE) clean)
 	(cd x86-64 ; $(MAKE) clean)
+
 
 include depend

@@ -82,6 +82,7 @@ int hw_tcl_on=1;
 #define need_GL_EXT_secondary_color
 #define need_GL_EXT_blend_equation_separate
 #define need_GL_EXT_blend_func_separate
+#define need_GL_EXT_gpu_program_parameters
 #define need_GL_NV_vertex_program
 #include "extension_helper.h"
 
@@ -104,6 +105,7 @@ const struct dri_extension card_extensions[] = {
   {"GL_EXT_blend_minmax",		GL_EXT_blend_minmax_functions},
   {"GL_EXT_blend_subtract",		NULL},
 //  {"GL_EXT_fog_coord",			GL_EXT_fog_coord_functions },
+  {"GL_EXT_gpu_program_parameters",     GL_EXT_gpu_program_parameters_functions},
   {"GL_EXT_secondary_color", 		GL_EXT_secondary_color_functions},
   {"GL_EXT_stencil_wrap",		NULL},
   {"GL_EXT_texture_edge_clamp",		NULL},
@@ -329,13 +331,15 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 
 	driInitExtensions(ctx, card_extensions, GL_TRUE);
 	
-	if (r300->radeon.glCtx->Mesa_DXTn) {
+	if (r300->radeon.glCtx->Mesa_DXTn && !driQueryOptionb (&r300->radeon.optionCache, "disable_s3tc")) {
 	  _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
 	  _mesa_enable_extension( ctx, "GL_S3_s3tc" );
 	}
 	else if (driQueryOptionb (&r300->radeon.optionCache, "force_s3tc_enable")) {
 	  _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
 	}
+
+	r300->disable_lowimpact_fallback = driQueryOptionb(&r300->radeon.optionCache, "disable_lowimpact_fallback");
 
 	radeonInitSpanFuncs(ctx);
 	r300InitCmdBuf(r300);

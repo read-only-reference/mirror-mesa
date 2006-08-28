@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5
+ * Version:  6.5.1
  *
  * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
@@ -36,11 +36,14 @@
 #include "grammar_mesa.h"
 #include "program.h"
 #include "context.h"
+#include "macros.h"
 #include "mtypes.h"
 #include "program_instruction.h"
 
 
-#define MAX_INSTRUCTIONS 256
+/* For ARB programs, use the NV instruction limits */
+#define MAX_INSTRUCTIONS MAX2(MAX_NV_FRAGMENT_PROGRAM_INSTRUCTIONS, \
+                              MAX_NV_VERTEX_PROGRAM_INSTRUCTIONS)
 
 
 /**
@@ -2640,6 +2643,10 @@ parse_fp_vector_src_reg(GLcontext * ctx, GLubyte ** inst,
 }
 
 
+/**
+ * Parse fragment program destination register.
+ * \return 1 if error, 0 if no error.
+ */
 static GLuint 
 parse_fp_dst_reg(GLcontext * ctx, GLubyte ** inst,
 		 struct var_cache **vc_head, struct arb_program *Program,
@@ -2663,6 +2670,7 @@ parse_fp_dst_reg(GLcontext * ctx, GLubyte ** inst,
 
 /**
  * Parse fragment program scalar src register.
+ * \return 1 if error, 0 if no error.
  */
 static GLuint
 parse_fp_scalar_src_reg (GLcontext * ctx, GLubyte ** inst,
@@ -2700,6 +2708,7 @@ parse_fp_scalar_src_reg (GLcontext * ctx, GLubyte ** inst,
 /**
  * This is a big mother that handles getting opcodes into the instruction
  * and handling the src & dst registers for fragment program instructions
+ * \return 1 if error, 0 if no error
  */
 static GLuint
 parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
@@ -3048,7 +3057,14 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
 	       /* TODO ARB_fragment_program_shadow code */
 	       break;
          }
-         Program->TexturesUsed[texcoord] |= (1<<fp->TexSrcTarget);
+         Program->TexturesUsed[texcoord] |= (1 << fp->TexSrcTarget);
+         /* Check that both "2D" and "CUBE" (for example) aren't both used */
+         if (_mesa_bitcount(Program->TexturesUsed[texcoord]) > 1) {
+            char *msg = "multiple targets used on one texture image unit";
+            _mesa_set_program_error(ctx, Program->Position, msg);
+            _mesa_error(ctx, GL_INVALID_OPERATION, msg);
+            return 1;
+         }
          break;
 
       case OP_TEX_KIL:
@@ -3057,6 +3073,9 @@ parse_fp_instruction (GLcontext * ctx, GLubyte ** inst,
             return 1;
          fp->Opcode = OPCODE_KIL;
          break;
+      default:
+         _mesa_problem(ctx, "bad type 0x%x in parse_fp_instruction()", type);
+         return 1;
    }
 
    return 0;
@@ -3997,8 +4016,7 @@ _mesa_parse_arb_program(GLcontext *ctx, GLenum target,
 
    /* Initialize the arb_program struct */
    program->Base.String = strz;
-   program->Base.Instructions = (struct prog_instruction *)
-      _mesa_malloc(MAX_INSTRUCTIONS * sizeof(struct prog_instruction));
+   program->Base.Instructions = _mesa_alloc_instructions(MAX_INSTRUCTIONS);
    program->Base.NumInstructions =
    program->Base.NumTemporaries =
    program->Base.NumParameters =
@@ -4047,11 +4065,11 @@ _mesa_parse_arb_program(GLcontext *ctx, GLenum target,
    /* Reallocate the instruction array from size [MAX_INSTRUCTIONS]
     * to size [ap.Base.NumInstructions].
     */
-   program->Base.Instructions = (struct prog_instruction *)
-      _mesa_realloc(program->Base.Instructions,
-             MAX_INSTRUCTIONS * sizeof(struct prog_instruction),/*orig*/
-             program->Base.NumInstructions * sizeof(struct prog_instruction));
-   
+   program->Base.Instructions
+      = _mesa_realloc_instructions(program->Base.Instructions,
+                                   MAX_INSTRUCTIONS,
+                                   program->Base.NumInstructions);
+
    return !err;
 }
 
@@ -4080,6 +4098,11 @@ _mesa_parse_arb_fragment_program(GLcontext* ctx, GLenum target,
    program->Base.NumParameters   = ap.Base.NumParameters;
    program->Base.NumAttributes   = ap.Base.NumAttributes;
    program->Base.NumAddressRegs  = ap.Base.NumAddressRegs;
+   program->Base.NumNativeInstructions = ap.Base.NumNativeInstructions;
+   program->Base.NumNativeTemporaries = ap.Base.NumNativeTemporaries;
+   program->Base.NumNativeParameters = ap.Base.NumNativeParameters;
+   program->Base.NumNativeAttributes = ap.Base.NumNativeAttributes;
+   program->Base.NumNativeAddressRegs = ap.Base.NumNativeAddressRegs;
    program->NumAluInstructions   = ap.NumAluInstructions;
    program->NumTexInstructions   = ap.NumTexInstructions;
    program->NumTexIndirections   = ap.NumTexIndirections;
@@ -4135,6 +4158,11 @@ _mesa_parse_arb_vertex_program(GLcontext *ctx, GLenum target,
    program->Base.NumParameters   = ap.Base.NumParameters;
    program->Base.NumAttributes   = ap.Base.NumAttributes;
    program->Base.NumAddressRegs  = ap.Base.NumAddressRegs;
+   program->Base.NumNativeInstructions = ap.Base.NumNativeInstructions;
+   program->Base.NumNativeTemporaries = ap.Base.NumNativeTemporaries;
+   program->Base.NumNativeParameters = ap.Base.NumNativeParameters;
+   program->Base.NumNativeAttributes = ap.Base.NumNativeAttributes;
+   program->Base.NumNativeAddressRegs = ap.Base.NumNativeAddressRegs;
    program->Base.InputsRead     = ap.Base.InputsRead;
    program->Base.OutputsWritten = ap.Base.OutputsWritten;
    program->IsPositionInvariant = ap.HintPositionInvariant;

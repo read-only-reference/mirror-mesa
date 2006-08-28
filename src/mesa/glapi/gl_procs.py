@@ -87,8 +87,9 @@ class PrintGlProcs(gl_XML.gl_print_base):
 		base_offset = 0
 		table = []
 		for func in api.functionIterateByOffset():
-			self.printFunctionString( func.name )
-			table.append((base_offset, func.name, func.name))
+			name = func.dispatch_name()
+			self.printFunctionString(func.name)
+			table.append((base_offset, name, func.name))
 
 			# The length of the function's name, plus 2 for "gl",
 			# plus 1 for the NUL.
@@ -99,8 +100,9 @@ class PrintGlProcs(gl_XML.gl_print_base):
 		for func in api.functionIterateByOffset():
 			for n in func.entry_points:
 				if n != func.name:
+					name = func.dispatch_name()
 					self.printFunctionString( n )
-					table.append((base_offset, n, func.name))
+					table.append((base_offset, name, func.name))
 					base_offset += len(n) + 3
 
 
@@ -108,6 +110,17 @@ class PrintGlProcs(gl_XML.gl_print_base):
 			print '    ;'
 		else:
 			print '};'
+
+		print ''
+		print '/* FIXME: Having these (incorrect) prototypes here is ugly. */'
+		print '#ifdef NEED_FUNCTION_POINTER'
+		for func in api.functionIterateByOffset():
+			for n in func.entry_points:
+				if not func.is_static_entry_point(func.name):
+					print 'extern void gl_dispatch_stub_%u(void);' % (func.offset)
+					break
+
+		print '#endif /* NEED_FUNCTION_POINTER */'
 
 		print ''
 		print 'static const glprocs_table_t static_functions[] = {'

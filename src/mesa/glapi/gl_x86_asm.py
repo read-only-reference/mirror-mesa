@@ -197,20 +197,26 @@ class PrintGenericStubs(gl_XML.gl_print_base):
 
 	def printBody(self, api):
 		for f in api.functionIterateByOffset():
+			name = f.dispatch_name()
 			stack = self.get_stack_size(f)
+			alt = "%s@%u" % (name, stack)
 
-			alt = "%s@%u" % (f.name, stack)
-			print '\tGL_STUB(%s, _gloffset_%s, %s)' % (f.name, f.name, alt)
+			print '\tGL_STUB(%s, _gloffset_%s, %s)' % (name, f.name, alt)
+
+			if not f.is_static_entry_point(f.name):
+				print '\tHIDDEN(GL_PREFIX(%s, %s))' % (name, alt)
+
 
 		for f in api.functionIterateByOffset():
+			name = f.dispatch_name()
 			stack = self.get_stack_size(f)
+			alt = "%s@%u" % (name, stack)
 
-			alt = "%s@%u" % (f.name, stack)
-
-			for n in f.entry_points:
-				if n != f.name:
-					alt2 = "%s@%u" % (n, stack)
-					print '\tGL_STUB_ALIAS(%s, _gloffset_%s, %s, %s, %s)' % (n, f.name, alt2, f.name, alt)
+			if f.is_static_entry_point(f.name):
+				for n in f.entry_points:
+					if n != f.name:
+						alt2 = "%s@%u" % (n, stack)
+						print '\tGL_STUB_ALIAS(%s, _gloffset_%s, %s, %s, %s)' % (n, f.name, alt2, f.name, alt)
 
 		return
 

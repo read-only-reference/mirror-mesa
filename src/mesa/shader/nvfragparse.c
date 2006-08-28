@@ -1009,14 +1009,14 @@ Parse_VectorSrc(struct parse_state *parseState,
       srcReg->Index = idx;
    }
    else if (token[0] == 'f') {
-      /* XXX this might be an identier! */
+      /* XXX this might be an identifier! */
       srcReg->File = PROGRAM_INPUT;
       if (!Parse_FragReg(parseState, &idx))
          RETURN_ERROR;
       srcReg->Index = idx;
    }
    else if (token[0] == 'p') {
-      /* XXX this might be an identier! */
+      /* XXX this might be an identifier! */
       srcReg->File = PROGRAM_LOCAL_PARAM;
       if (!Parse_ProgramParamReg(parseState, &idx))
          RETURN_ERROR;
@@ -1143,6 +1143,20 @@ Parse_ScalarSrcReg(struct parse_state *parseState,
       if (!Parse_VectorConstant(parseState, values))
          RETURN_ERROR;
       paramIndex = _mesa_add_unnamed_constant(parseState->parameters, values);
+      srcReg->File = PROGRAM_NAMED_PARAM;
+      srcReg->Index = paramIndex;      
+   }
+   else if (IsLetter(token[0])){
+      /* named param/constant */
+      GLubyte ident[100];
+      GLint paramIndex;
+      if (!Parse_Identifier(parseState, ident))
+         RETURN_ERROR;
+      paramIndex = _mesa_lookup_parameter_index(parseState->parameters,
+                                                -1, (const char *) ident);
+      if (paramIndex < 0) {
+         RETURN_ERROR2("Undefined constant or parameter: ", ident);
+      }
       srcReg->File = PROGRAM_NAMED_PARAM;
       srcReg->Index = paramIndex;      
    }
@@ -1520,14 +1534,13 @@ _mesa_parse_nv_fragment_program(GLcontext *ctx, GLenum dstTarget,
 
       /* copy the compiled instructions */
       assert(parseState.numInst <= MAX_NV_FRAGMENT_PROGRAM_INSTRUCTIONS);
-      newInst = (struct prog_instruction *)
-         MALLOC(parseState.numInst * sizeof(struct prog_instruction));
+      newInst = _mesa_alloc_instructions(parseState.numInst);
       if (!newInst) {
          _mesa_error(ctx, GL_OUT_OF_MEMORY, "glLoadProgramNV");
          return;  /* out of memory */
       }
-      MEMCPY(newInst, instBuffer,
-             parseState.numInst * sizeof(struct prog_instruction));
+      _mesa_memcpy(newInst, instBuffer,
+                   parseState.numInst * sizeof(struct prog_instruction));
 
       /* install the program */
       program->Base.Target = target;

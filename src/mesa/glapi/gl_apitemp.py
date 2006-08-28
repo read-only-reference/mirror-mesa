@@ -39,6 +39,7 @@ class PrintGlOffsets(gl_XML.gl_print_base):
 (C) Copyright IBM Corporation 2004""", "BRIAN PAUL, IBM")
 
 		self.undef_list.append( "KEYWORD1" )
+		self.undef_list.append( "KEYWORD1_ALT" )
 		self.undef_list.append( "KEYWORD2" )
 		self.undef_list.append( "NAME" )
 		self.undef_list.append( "DISPATCH" )
@@ -53,6 +54,13 @@ class PrintGlOffsets(gl_XML.gl_print_base):
 		o_string = ""
 		t_string = ""
 		comma = ""
+
+		if f.is_static_entry_point(name):
+			keyword = "KEYWORD1"
+		else:
+			keyword = "KEYWORD1_ALT"
+
+		n = f.static_name(name)
 
 		for p in f.parameterIterator():
 			if p.is_pointer():
@@ -71,8 +79,11 @@ class PrintGlOffsets(gl_XML.gl_print_base):
 		else:
 			dispatch = "DISPATCH"
 
-		print 'KEYWORD1 %s KEYWORD2 NAME(%s)(%s)' \
-			% (f.return_type, name, f.get_parameter_string(name))
+		if not f.is_static_entry_point(name):
+			print '%s %s KEYWORD2 NAME(%s)(%s);' % (keyword, f.return_type, n, f.get_parameter_string(name))
+			print ''
+
+		print '%s %s KEYWORD2 NAME(%s)(%s)' % (keyword, f.return_type, n, f.get_parameter_string(name))
 		print '{'
 		if p_string == "":
 			print '   %s(%s, (), (F, "gl%s();\\n"));' \
@@ -85,6 +96,8 @@ class PrintGlOffsets(gl_XML.gl_print_base):
 		return
 
 	def printRealHeader(self):
+		print ''
+		self.printVisibility( "HIDDEN", "hidden" )
 		print """
 /*
  * This file is a template which generates the OpenGL API entry point
@@ -114,6 +127,10 @@ class PrintGlOffsets(gl_XML.gl_print_base):
 #if defined( NAME )
 #ifndef KEYWORD1
 #define KEYWORD1
+#endif
+
+#ifndef KEYWORD1_ALT
+#define KEYWORD1_ALT HIDDEN
 #endif
 
 #ifndef KEYWORD2
@@ -149,7 +166,7 @@ class PrintGlOffsets(gl_XML.gl_print_base):
 
 static _glapi_proc DISPATCH_TABLE_NAME[] = {"""
 		for f in api.functionIterateByOffset():
-			print '   TABLE_ENTRY(%s),' % (f.name)
+			print '   TABLE_ENTRY(%s),' % (f.dispatch_name())
 
 		print '   /* A whole bunch of no-op functions.  These might be called'
 		print '    * when someone tries to call a dynamically-registered'
@@ -176,7 +193,8 @@ static _glapi_proc UNUSED_TABLE_NAME[] = {"""
 		for f in api.functionIterateByOffset():
 			for n in f.entry_points:
 				if n != f.name:
-					print '   TABLE_ENTRY(%s),' % (n)
+					if f.is_static_entry_point(n):
+						print '   TABLE_ENTRY(%s),' % (n)
 
 		print '};'
 		print '#endif /*UNUSED_TABLE_NAME*/'
@@ -186,8 +204,13 @@ static _glapi_proc UNUSED_TABLE_NAME[] = {"""
 
 	def printBody(self, api):
 		for func in api.functionIterateByOffset():
+			got_stub = 0
 			for n in func.entry_points:
-				self.printFunction( func, n )
+				if func.is_static_entry_point(n):
+					self.printFunction(func, n)
+				elif not got_stub:
+					self.printFunction(func, n)
+					got_stub = 1
 
 		self.printInitDispatch(api)
 		self.printAliasedTable(api)

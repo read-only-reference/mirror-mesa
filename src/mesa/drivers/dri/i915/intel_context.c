@@ -279,16 +279,6 @@ void intelInitDriverFunctions( struct dd_function_table *functions )
 
 static void intel_emit_invarient_state( GLcontext *ctx )
 {
-   intelContextPtr intel = INTEL_CONTEXT(ctx);
-
-   intel->vtbl.emit_invarient_state( intel );
-   intel->prim.flush = 0;
-
-   /* Make sure this gets to the hardware, even if we have no cliprects:
-    */
-   LOCK_HARDWARE( intel );
-   intelFlushBatchLocked( intel, GL_TRUE, GL_FALSE, GL_TRUE );
-   UNLOCK_HARDWARE( intel );
 }
 
 
@@ -409,7 +399,7 @@ GLboolean intelInitContext( intelContextPtr intel,
      _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
      _mesa_enable_extension( ctx, "GL_S3_s3tc" );
    }
-   else if (driQueryOptionb (&intelScreen->optionCache, "force_s3tc_enable")) {
+   else if (driQueryOptionb (&intel->optionCache, "force_s3tc_enable")) {
      _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
    }
 
@@ -752,7 +742,6 @@ void intelCopySubBuffer( __DRIdrawablePrivate *dPriv,
       intel = (intelContextPtr) dPriv->driContextPriv->driverPrivate;
       ctx = &intel->ctx;
       if (ctx->Visual.doubleBufferMode) {
-         intelScreenPrivate *screen = intel->intelScreen;
 	 drm_clip_rect_t rect;
 	 rect.x1 = x + dPriv->x;
 	 rect.y1 = (dPriv->h - y - h) + dPriv->y;

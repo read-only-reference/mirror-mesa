@@ -160,6 +160,7 @@ SHADER_SOURCES = \
 	shader/nvvertexec.c \
 	shader/nvvertparse.c \
 	shader/program.c \
+	shader/programopt.c \
 	shader/shaderobjects.c \
 	shader/shaderobjects_3dlabs.c
 
@@ -303,6 +304,15 @@ FBDEV_DRIVER_SOURCES =			\
 
 ### All the core C sources
 
+ALL_SOURCES = \
+	$(GLAPI_SOURCES)	\
+	$(SOLO_SOURCES)		\
+	$(X86_SOURCES)		\
+	$(COMMON_DRIVER_SOURCES)\
+	$(X11_DRIVER_SOURCES)	\
+	$(FBDEV_DRIVER_SOURCES) \
+	$(OSMESA_DRIVER_SOURCES)
+
 SOLO_SOURCES = \
 	$(MAIN_SOURCES)		\
 	$(MATH_SOURCES)		\
@@ -313,7 +323,6 @@ SOLO_SOURCES = \
 	$(SWRAST_SETUP_SOURCES)	\
 	$(ASM_C_SOURCES)	\
 	$(SLANG_SOURCES)
-
 #	$(SLANG_C_SOURCES)
 
 CORE_SOURCES = \
@@ -336,6 +345,8 @@ CORE_OBJECTS = $(SOLO_OBJECTS) $(GLAPI_OBJECTS)
 OSMESA_DRIVER_OBJECTS = $(OSMESA_DRIVER_SOURCES:.c=.o)
 
 COMMON_DRIVER_OBJECTS = $(COMMON_DRIVER_SOURCES:.c=.o)
+
+FBDEV_DRIVER_OBJECTS = $(FBDEV_DRIVER_SOURCES:.c=.o)
 
 
 

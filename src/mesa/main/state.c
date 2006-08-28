@@ -70,7 +70,7 @@
 #include "lines.h"
 #include "macros.h"
 #include "matrix.h"
-#if FEATURE_ARB_occlusion_query
+#if FEATURE_ARB_occlusion_query || FEATURE_EXT_timer_query
 #include "occlude.h"
 #endif
 #include "pixel.h"
@@ -356,11 +356,11 @@ _mesa_init_exec_table(struct _glapi_table *exec)
    SET_CopyConvolutionFilter1D(exec, _mesa_CopyConvolutionFilter1D);
    SET_CopyConvolutionFilter2D(exec, _mesa_CopyConvolutionFilter2D);
    SET_GetColorTable(exec, _mesa_GetColorTable);
-   SET_GetColorTableEXT(exec, _mesa_GetColorTable);
+   SET_GetColorTableSGI(exec, _mesa_GetColorTable);
    SET_GetColorTableParameterfv(exec, _mesa_GetColorTableParameterfv);
-   SET_GetColorTableParameterfvEXT(exec, _mesa_GetColorTableParameterfv);
+   SET_GetColorTableParameterfvSGI(exec, _mesa_GetColorTableParameterfv);
    SET_GetColorTableParameteriv(exec, _mesa_GetColorTableParameteriv);
-   SET_GetColorTableParameterivEXT(exec, _mesa_GetColorTableParameteriv);
+   SET_GetColorTableParameterivSGI(exec, _mesa_GetColorTableParameteriv);
    SET_GetConvolutionFilter(exec, _mesa_GetConvolutionFilter);
    SET_GetConvolutionFilterEXT(exec, _mesa_GetConvolutionFilter);
    SET_GetConvolutionParameterfv(exec, _mesa_GetConvolutionParameterfv);
@@ -420,6 +420,17 @@ _mesa_init_exec_table(struct _glapi_table *exec)
    SET_GetMinmaxParameterivEXT(exec, _mesa_GetMinmaxParameteriv);
 #endif
 
+   /* 14. SGI_color_table */
+#if 0
+   SET_ColorTableSGI(exec, _mesa_ColorTable);
+   SET_ColorSubTableSGI(exec, _mesa_ColorSubTable);
+#endif
+#if _HAVE_FULL_GL
+   SET_GetColorTableSGI(exec, _mesa_GetColorTable);
+   SET_GetColorTableParameterfvSGI(exec, _mesa_GetColorTableParameterfv);
+   SET_GetColorTableParameterivSGI(exec, _mesa_GetColorTableParameteriv);
+#endif
+
    /* 30. GL_EXT_vertex_array */
 #if _HAVE_FULL_GL
    SET_ColorPointerEXT(exec, _mesa_ColorPointerEXT);
@@ -439,17 +450,6 @@ _mesa_init_exec_table(struct _glapi_table *exec)
 #if _HAVE_FULL_GL
    SET_PointParameterfEXT(exec, _mesa_PointParameterfEXT);
    SET_PointParameterfvEXT(exec, _mesa_PointParameterfvEXT);
-#endif
-
-   /* 78. GL_EXT_paletted_texture */
-#if 0
-   SET_ColorTableEXT(exec, _mesa_ColorTableEXT);
-   SET_ColorSubTableEXT(exec, _mesa_ColorSubTableEXT);
-#endif
-#if _HAVE_FULL_GL
-   SET_GetColorTableEXT(exec, _mesa_GetColorTable);
-   SET_GetColorTableParameterfvEXT(exec, _mesa_GetColorTableParameterfv);
-   SET_GetColorTableParameterivEXT(exec, _mesa_GetColorTableParameteriv);
 #endif
 
    /* 97. GL_EXT_compiled_vertex_array */
@@ -790,12 +790,19 @@ _mesa_init_exec_table(struct _glapi_table *exec)
    SET_GenerateMipmapEXT(exec, _mesa_GenerateMipmapEXT);
 #endif
 
-   /* GL_EXT_timer_query */
+#if FEATURE_EXT_timer_query
    SET_GetQueryObjecti64vEXT(exec, _mesa_GetQueryObjecti64vEXT);
    SET_GetQueryObjectui64vEXT(exec, _mesa_GetQueryObjectui64vEXT);
+#endif
 
 #if FEATURE_EXT_framebuffer_blit
    SET_BlitFramebufferEXT(exec, _mesa_BlitFramebufferEXT);
+#endif
+
+   /* GL_EXT_gpu_program_parameters */
+#if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
+   SET_ProgramEnvParameters4fvEXT(exec, _mesa_ProgramEnvParameters4fvEXT);
+   SET_ProgramLocalParameters4fvEXT(exec, _mesa_ProgramLocalParameters4fvEXT);
 #endif
 }
 
