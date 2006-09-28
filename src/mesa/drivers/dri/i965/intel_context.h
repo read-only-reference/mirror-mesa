@@ -174,33 +174,11 @@ struct intel_context
    
    GLboolean aub_wrap;
 
-   GLboolean flushBeforeFallback;
-
    struct intel_batchbuffer *batch;
-
-   struct {
-      GLuint id;
-      GLuint primitive;
-      GLubyte *start_ptr;      
-      void (*flush)( struct intel_context * );
-   } prim;
-
-   GLboolean locked;
-   GLboolean strict_conformance;
 
    GLubyte clear_chan[4];
    GLuint ClearColor;
    GLuint ClearDepth;
-
-   /* Offsets of fields within the current vertex:
-    */
-   GLuint coloroffset;
-   GLuint specoffset;
-   GLuint wpos_offset;
-   GLuint wpos_size;
-
-   struct tnl_attr_map vertex_attrs[VERT_ATTRIB_MAX];
-   GLuint vertex_attr_count;
 
    GLfloat depth_scale;
    GLfloat polygon_offset_scale; /* dependent on depth_scale, bpp */
@@ -210,10 +188,13 @@ struct intel_context
    GLboolean hw_stencil;
    GLboolean hw_stipple;
    GLboolean depth_buffer_is_float;
-   GLboolean perf_boxes;
    GLboolean no_hw;
    GLboolean no_rast;
    GLboolean thrashing;
+   GLboolean locked;
+   GLboolean strict_conformance;
+   GLboolean need_flush;
+
 
    
    /* AGP memory buffer manager:
@@ -223,25 +204,13 @@ struct intel_context
 
    /* State for intelvb.c and inteltris.c.
     */
-   GLuint RenderIndex;
-   GLmatrix ViewportMatrix;
    GLenum render_primitive;
    GLenum reduced_primitive;
-   GLuint vertex_size;
-   GLubyte *verts;			/* points to tnl->clipspace.vertex_buf */
-
 
    struct intel_region *front_region;
    struct intel_region *back_region;
    struct intel_region *draw_region;
    struct intel_region *depth_region;
-
-
-   /* Fallback rasterization functions 
-    */
-   intel_point_func draw_point;
-   intel_line_func draw_line;
-   intel_tri_func draw_tri;
 
    /* These refer to the current draw (front vs. back) buffer:
     */
@@ -395,6 +364,7 @@ extern int INTEL_DEBUG;
 #define DEBUG_SINGLE_THREAD   0x8000
 #define DEBUG_WM        0x10000
 #define DEBUG_URB       0x20000
+#define DEBUG_VS        0x40000
 
 
 #define PCI_CHIP_845_G			0x2562
@@ -508,6 +478,13 @@ extern GLboolean intel_intersect_cliprects( drm_clip_rect_t *dest,
 					    const drm_clip_rect_t *b );
 
 
+/* ================================================================
+ * intel_pixel_copy.c:
+ */
+void intelCopyPixels(GLcontext * ctx,
+                     GLint srcx, GLint srcy,
+                     GLsizei width, GLsizei height,
+                     GLint destx, GLint desty, GLenum type);
 
 #define _NEW_WINDOW_POS 0x40000000
 

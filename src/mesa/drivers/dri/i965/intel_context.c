@@ -78,7 +78,6 @@ int INTEL_DEBUG = (0);
 #define need_GL_EXT_fog_coord
 #define need_GL_EXT_multi_draw_arrays
 #define need_GL_EXT_secondary_color
-#define need_GL_NV_vertex_program
 #include "extension_helper.h"
 
 #ifndef VERBOSE
@@ -150,6 +149,10 @@ const struct dri_extension card_extensions[] =
     { "GL_ARB_texture_env_combine",        NULL },
     { "GL_ARB_texture_env_dot3",           NULL },
     { "GL_ARB_texture_mirrored_repeat",    NULL },
+    { "GL_ARB_texture_non_power_of_two",   NULL },
+    { "GL_ARB_texture_rectangle",          NULL },
+    { "GL_NV_texture_rectangle",           NULL },
+    { "GL_EXT_texture_rectangle",          NULL },
     { "GL_ARB_texture_rectangle",          NULL },
     { "GL_ARB_vertex_buffer_object",       GL_ARB_vertex_buffer_object_functions },
     { "GL_ARB_vertex_program",             GL_ARB_vertex_program_functions },
@@ -175,8 +178,6 @@ const struct dri_extension card_extensions[] =
     { "GL_MESA_pack_invert",               NULL },
     { "GL_MESA_ycbcr_texture",             NULL },
     { "GL_NV_blend_square",                NULL },
-    { "GL_NV_vertex_program",              GL_NV_vertex_program_functions },
-    { "GL_NV_vertex_program1_1",           NULL },
     { "GL_SGIS_generate_mipmap",           NULL },
     { NULL,                                NULL }
 };
@@ -204,6 +205,7 @@ static const struct dri_debug_control debug_control[] =
     { "sing",  DEBUG_SINGLE_THREAD },
     { "thre",  DEBUG_SINGLE_THREAD },
     { "wm",    DEBUG_WM },
+    { "vs",    DEBUG_VS },
     { NULL,    0 }
 };
 
@@ -257,9 +259,13 @@ void intelInitDriverFunctions( struct dd_function_table *functions )
     */
    functions->Accum = _swrast_Accum;
    functions->Bitmap = _swrast_Bitmap;
-   functions->CopyPixels = _swrast_CopyPixels;
    functions->ReadPixels = _swrast_ReadPixels;
    functions->DrawPixels = _swrast_DrawPixels;
+
+   /* CopyPixels can be accelerated even with the current memory
+    * manager:
+    */
+   functions->CopyPixels = intelCopyPixels;
 
    intelInitTextureFuncs( functions );
    intelInitStateFuncs( functions );
@@ -372,8 +378,6 @@ GLboolean intelInitContext( struct intel_context *intel,
       exit(1);
    }
  
-   _math_matrix_ctr (&intel->ViewportMatrix);
-
    driInitExtensions( ctx, card_extensions, 
 		      GL_TRUE );
 
@@ -447,8 +451,6 @@ GLboolean intelInitContext( struct intel_context *intel,
 /* 			  DRI_TEXMGR_DO_TEXTURE_2D |  */
 /* 			  DRI_TEXMGR_DO_TEXTURE_RECT ); */
 
-
-   intel->prim.primitive = ~0;
 
    if (getenv("INTEL_NO_RAST")) {
       fprintf(stderr, "disabling 3D rasterization\n");
@@ -538,12 +540,14 @@ GLboolean intelMakeCurrent(__DRIcontextPrivate *driContextPriv,
    return GL_TRUE;
 }
 
+
 static void intelContendedLock( struct intel_context *intel, GLuint flags )
 {
    __DRIdrawablePrivate *dPriv = intel->driDrawable;
    __DRIscreenPrivate *sPriv = intel->driScreen;
    volatile drmI830Sarea * sarea = intel->sarea;
    int me = intel->hHWContext;
+   int my_bufmgr = bmCtxId(intel);
 
    drmGetLock(intel->driFd, intel->hHWContext, flags);
 
@@ -557,29 +561,24 @@ static void intelContendedLock( struct intel_context *intel, GLuint flags )
 
 
    intel->locked = 1;
+   intel->need_flush = 1;
 
    /* Lost context?
     */
    if (sarea->ctxOwner != me) {
-      intel->perf_boxes |= I830_BOX_LOST_CONTEXT;
+      DBG("Lost Context: sarea->ctxOwner %x me %x\n", sarea->ctxOwner, me);
       sarea->ctxOwner = me;
-
-      /* Should also fence the frontbuffer even if ctxOwner doesn't
-       * change:
-       */
-      bm_fake_NotifyContendedLockTake( intel );
-
-
-      /* 
-       */
       intel->vtbl.lost_hardware( intel );
    }
 
-   /* Because the X server issues drawing commands without properly
-    * fencing them, we need to be paraniod about waiting for hardware
-    * rendering to finish after a contended lock.
+   /* As above, but don't evict the texture data on transitions
+    * between contexts which all share a local buffer manager.
     */
-   intel->flushBeforeFallback = GL_TRUE;
+   if (sarea->texAge != my_bufmgr) {
+      DBG("Lost Textures: sarea->texAge %x my_bufmgr %x\n", sarea->ctxOwner, my_bufmgr);
+      sarea->texAge = my_bufmgr;
+      bm_fake_NotifyContendedLockTake( intel ); 
+   }
 
    /* Drawable changed?
     */
@@ -615,19 +614,16 @@ void LOCK_HARDWARE( struct intel_context *intel )
    intel->locked = 1;
 
    if (intel->aub_wrap) {
-      /* Should also fence the frontbuffer even if ctxOwner doesn't
-       * change:
-       */
       bm_fake_NotifyContendedLockTake( intel ); 
-
-      /* 
-       */
       intel->vtbl.lost_hardware( intel );
       intel->vtbl.aub_wrap(intel);
-
       intel->aub_wrap = 0;
    }
 
+   if (bmError(intel)) {
+      bmEvictAll(intel);
+      intel->vtbl.lost_hardware( intel );
+   }
 
    /* Make sure nothing has been emitted prior to getting the lock: 
     */
@@ -635,7 +631,18 @@ void LOCK_HARDWARE( struct intel_context *intel )
 
    /* XXX: postpone, may not be needed:
     */
-   intel_batchbuffer_map(intel->batch);
+   if (!intel_batchbuffer_map(intel->batch)) {
+      bmEvictAll(intel);
+      intel->vtbl.lost_hardware( intel );
+
+      /* This could only fail if the batchbuffer was greater in size
+       * than the available texture memory:
+       */
+      if (!intel_batchbuffer_map(intel->batch)) {
+	 _mesa_printf("double failure to map batchbuffer\n");
+	 assert(0);
+      }
+   }
 }
  
   

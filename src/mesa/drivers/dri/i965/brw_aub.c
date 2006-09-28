@@ -59,6 +59,10 @@ static void init_aubfile( FILE *aub_file )
    struct aub_block_header bh;
    unsigned int data;
 
+   static int nr;
+   
+   nr++;
+
    /* Emit the aub header:
     */
    memset(&fh, 0, sizeof(fh));
@@ -67,13 +71,13 @@ static void init_aubfile( FILE *aub_file )
    fh.minor = 0x0;
    fh.major = 0x7;
    memcpy(fh.application, __progname, sizeof(fh.application));
-   fh.day = 0x0;
+   fh.day = (nr>>24) & 0xff;
    fh.month = 0x0;
    fh.year = 0x0;
    fh.timezone = 0x0;
-   fh.second = 0x0;
-   fh.minute = 0x0;
-   fh.hour = 0x0;
+   fh.second = nr & 0xff;
+   fh.minute = (nr>>8) & 0xff;
+   fh.hour = (nr>>16) & 0xff;
    fh.comment_length = 0x0;   
 
    if (fwrite(&fh, sizeof(fh), 1, aub_file) < 0) 
@@ -270,7 +274,7 @@ static void brw_aub_dump_bmp( struct intel_context *intel,
 /* Attempt to prevent monster aubfiles by closing and reopening when
  * the state pools wrap.
  */
-void brw_aub_wrap( struct intel_context *intel )
+static void brw_aub_wrap( struct intel_context *intel )
 {
    struct brw_context *brw = brw_context(&intel->ctx);   
    if (intel->aub_file) {
@@ -290,6 +294,9 @@ int brw_aub_init( struct brw_context *brw )
    static int i = 0;
 
    i++;
+
+   if (_mesa_getenv("INTEL_REPLAY"))
+      return 0;
 
    if (_mesa_getenv("INTEL_AUBFILE")) {
       val = snprintf(filename, sizeof(filename), "%s%d.aub", _mesa_getenv("INTEL_AUBFILE"), i%4);

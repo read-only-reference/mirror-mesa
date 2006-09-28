@@ -138,8 +138,6 @@ GLboolean brwCreateContext( const __GLcontextModes *mesaVis,
    driInitExtensions( ctx, brw_extensions, GL_FALSE );
 
    brw_aub_init( brw );
-   brw->intel.vtbl.aub_wrap = brw_aub_wrap;
-
 
    brw_init_attribs( brw );
    brw_init_metaops( brw );
@@ -163,6 +161,14 @@ GLboolean brwCreateContext( const __GLcontextModes *mesaVis,
     */
    brw_exec_init( ctx );
    brw_save_init( ctx );
+
+   {
+      const char *filename = getenv("INTEL_REPLAY");
+      if (filename) {
+	 brw_playback_aubfile(brw, filename);
+	 exit(0);
+      }
+   }
 
    return GL_TRUE;
 }

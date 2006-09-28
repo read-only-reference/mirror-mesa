@@ -160,7 +160,7 @@ static void update_current_size( struct gl_client_array *array)
    const GLfloat *ptr = (const GLfloat *)array->Ptr;
 
    assert(array->StrideB == 0);
-   assert(array->Type == GL_FLOAT);
+   assert(array->Type == GL_FLOAT || array->Type == GL_UNSIGNED_BYTE);
 
    if (ptr[3] != 1.0) 
       array->Size = 4;
@@ -192,17 +192,12 @@ static void brw_merge_inputs( struct brw_context *brw,
       if (arrays[i] && arrays[i]->Enabled)
       {
 	 brw->vb.inputs[i].glarray = arrays[i];
-	 brw->vb.info.varying[i/32] |= 1 << (i%32);
+	 brw->vb.info.varying |= 1 << i;
       }
       else 
       {
 	 brw->vb.inputs[i].glarray = &current_values[i];
-
-	 /* XXX: This will change on the Mesa trunk as Brian has moved
-	  * edgeflag, index into this range:
-	  */
-	 if (i < VERT_ATTRIB_GENERIC0)
-	    update_current_size(&current_values[i]);
+	 update_current_size(&current_values[i]);
       }
 
       brw->vb.info.sizes[i/16] |= (inputs[i].glarray->Size - 1) << ((i%16) * 2);
@@ -213,7 +208,7 @@ static void brw_merge_inputs( struct brw_context *brw,
    if (memcmp(brw->vb.info.sizes, old.sizes, sizeof(old.sizes)) != 0)
       brw->state.dirty.brw |= BRW_NEW_INPUT_DIMENSIONS;
 
-   if (memcmp(brw->vb.info.varying, old.varying, sizeof(old.varying)) != 0)
+   if (brw->vb.info.varying != old.varying)
       brw->state.dirty.brw |= BRW_NEW_INPUT_VARYING;
 }
 
@@ -270,14 +265,14 @@ static GLboolean check_fallbacks( struct brw_context *brw,
 }
 
 
-GLboolean brw_draw_prims( GLcontext *ctx,
-			  const struct gl_client_array *arrays[],
-			  const struct brw_draw_prim *prim,
-			  GLuint nr_prims,
-			  const struct brw_draw_index_buffer *ib,
-			  GLuint min_index,
-			  GLuint max_index,
-			  GLuint flags )
+static GLboolean brw_try_draw_prims( GLcontext *ctx,
+				     const struct gl_client_array *arrays[],
+				     const struct brw_draw_prim *prim,
+				     GLuint nr_prims,
+				     const struct brw_draw_index_buffer *ib,
+				     GLuint min_index,
+				     GLuint max_index,
+				     GLuint flags )
 {
    struct intel_context *intel = intel_context(ctx);
    struct brw_context *brw = brw_context(ctx);
@@ -333,6 +328,7 @@ GLboolean brw_draw_prims( GLcontext *ctx,
 	 brw_emit_prim(brw, &prim[i]);   
       }
       
+      intel->need_flush = GL_TRUE;
       retval = GL_TRUE;
    }
 
@@ -343,9 +339,12 @@ GLboolean brw_draw_prims( GLcontext *ctx,
     * way around this, as not every flush is due to a buffer filling
     * up.
     */
-   intel_batchbuffer_flush( brw->intel.batch );
+   if (!intel_batchbuffer_flush( brw->intel.batch )) {
+      DBG("%s intel_batchbuffer_flush failed\n", __FUNCTION__);
+      retval = GL_FALSE;
+   }
 
-   if (intel->thrashing) {
+   if (retval && intel->thrashing) {
       bmSetFence(intel);
    }
 
@@ -364,8 +363,53 @@ GLboolean brw_draw_prims( GLcontext *ctx,
    }
 
    UNLOCK_HARDWARE(intel);
+
+   if (!retval)
+      DBG("%s failed\n", __FUNCTION__);
+
    return retval;
 }
+
+
+GLboolean brw_draw_prims( GLcontext *ctx,
+			  const struct gl_client_array *arrays[],
+			  const struct brw_draw_prim *prim,
+			  GLuint nr_prims,
+			  const struct brw_draw_index_buffer *ib,
+			  GLuint min_index,
+			  GLuint max_index,
+			  GLuint flags )
+{
+   struct intel_context *intel = intel_context(ctx);
+   GLboolean retval;
+
+   retval = brw_try_draw_prims(ctx, arrays, prim, nr_prims, ib, min_index, max_index, flags);
+
+   
+   if (!retval && bmError(intel)) {
+
+      DBG("retrying\n");
+      /* This looks like out-of-memory but potentially we have
+       * situation where there is enough memory but it has become
+       * fragmented.  Clear out all heaps and start from scratch by
+       * faking a contended lock event:  (done elsewhere)
+       */
+
+      /* Then try a second time only to upload textures and draw the
+       * primitives:
+       */
+      retval = brw_try_draw_prims(ctx, arrays, prim, nr_prims, ib, min_index, max_index, flags);
+   }
+
+   if (intel->aub_file && (INTEL_DEBUG & DEBUG_SYNC)) {
+      intelFinish( &intel->ctx );
+      intel->aub_wrap = 1;
+   }
+
+
+   return retval;
+}
+
 
 static void brw_invalidate_vbo_cb( struct intel_context *intel, void *ptr )
 {

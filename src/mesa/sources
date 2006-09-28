@@ -39,6 +39,7 @@ MAIN_SOURCES = \
 	main/light.c \
 	main/lines.c \
 	main/matrix.c \
+	main/mipmap.c \
 	main/mm.c \
 	main/occlude.c \
 	main/pixel.c \
@@ -191,7 +192,7 @@ SLANG_CPP_SOURCES = \
 	shader/slang/MachineIndependent/SymbolTable.cpp	\
 	shader/slang/OGLCompilersDLL/Initialisation.cpp	\
 	shader/slang/OSDependent/Linux/ossource.cpp
-	
+
 SLANG_SOURCES =	\
 	shader/slang/slang_analyse.c	\
 	shader/slang/slang_assemble.c	\

@@ -188,6 +188,7 @@ enum state_index {
 
    STATE_INTERNAL,		/* Mesa additions */
    STATE_NORMAL_SCALE,
+   STATE_TEXRECT_SCALE,
    STATE_POSITION_NORMALIZED    /* normalized light position */
 };
 
@@ -263,6 +264,11 @@ _mesa_load_state_parameters(GLcontext *ctx,
 
 extern void
 _mesa_print_instruction(const struct prog_instruction *inst);
+
+void
+_mesa_print_alu_instruction(const struct prog_instruction *inst,
+			    const char *opcode_string, 
+			    GLuint numRegs);
 
 extern void
 _mesa_print_program(const struct gl_program *prog);

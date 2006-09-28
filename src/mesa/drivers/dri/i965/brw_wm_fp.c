@@ -520,6 +520,35 @@ static void precalc_lit( struct brw_wm_compile *c,
 static void precalc_tex( struct brw_wm_compile *c,
 			 const struct prog_instruction *inst )
 {
+   struct prog_src_register coord;
+   struct prog_dst_register tmpcoord;
+
+   if (inst->TexSrcTarget == TEXTURE_RECT_INDEX) {
+      struct prog_src_register scale = 
+	 search_or_add_param6( c, 
+			       STATE_INTERNAL, 
+			       STATE_TEXRECT_SCALE,
+			       inst->TexSrcUnit,
+			       0,0,0 );
+
+      tmpcoord = get_temp(c);
+
+      /* coord.xy   = MUL inst->SrcReg[0], { 1/width, 1/height }
+       */
+      emit_op(c,
+	      OPCODE_MUL,
+	      tmpcoord,
+	      0, 0, 0,
+	      inst->SrcReg[0],
+	      scale,
+	      src_undef());
+
+      coord = src_reg_from_dst(tmpcoord);
+   }
+   else {
+      coord = inst->SrcReg[0];
+   }
+
    /* Need to emit YUV texture conversions by hand.  Probably need to
     * do this here - the alternative is in brw_wm_emit.c, but the
     * conversion requires allocating a temporary variable which we
@@ -532,7 +561,7 @@ static void precalc_tex( struct brw_wm_compile *c,
 	      inst->SaturateMode,
 	      inst->TexSrcUnit,
 	      inst->TexSrcTarget,
-	      inst->SrcReg[0],
+	      coord,
 	      src_undef(),
 	      src_undef());
    }
@@ -604,7 +633,12 @@ static void precalc_tex( struct brw_wm_compile *c,
 	      src_swizzle1(tmpsrc, Z),
 	      src_swizzle1(C1, W),
 	      src_swizzle1(src_reg_from_dst(dst), Y));
+
+      release_temp(c, tmp);
    }
+
+   if (inst->TexSrcTarget == GL_TEXTURE_RECTANGLE_NV) 
+      release_temp(c, tmpcoord);
 }
 
 
@@ -769,6 +803,27 @@ static void validate_src_regs( struct brw_wm_compile *c,
 	 
 
 
+static void print_insns( const struct prog_instruction *insn,
+			 GLuint nr )
+{
+   GLuint i;
+   for (i = 0; i < nr; i++, insn++) {
+      _mesa_printf("%3d: ", i);
+      if (insn->Opcode < MAX_OPCODE)
+	 _mesa_print_instruction(insn);
+      else if (insn->Opcode < MAX_WM_OPCODE) {
+	 GLuint idx = insn->Opcode - MAX_OPCODE;
+
+	 _mesa_print_alu_instruction(insn,
+				     wm_opcode_strings[idx],
+				     3);
+      }
+      else 
+	 _mesa_printf("UNKNOWN\n");
+	   
+   }
+}
+
 void brw_wm_pass_fp( struct brw_wm_compile *c )
 {
    struct brw_fragment_program *fp = c->fp;
@@ -776,7 +831,7 @@ void brw_wm_pass_fp( struct brw_wm_compile *c )
 
    if (INTEL_DEBUG & DEBUG_WM) {
       _mesa_printf("\n\n\npre-fp:\n");
-/*       _mesa_print_program(&fp->program); */
+      _mesa_print_program(&fp->program.Base); 
       _mesa_printf("\n");
    }
 
@@ -867,7 +922,7 @@ void brw_wm_pass_fp( struct brw_wm_compile *c )
 
    if (INTEL_DEBUG & DEBUG_WM) {
       _mesa_printf("\n\n\npass_fp:\n");
-/*       _mesa_debug_fp_inst(c->nr_fp_insns, c->prog_instructions, wm_opcode_strings, wm_file_strings);  */
+      print_insns( c->prog_instructions, c->nr_fp_insns );
       _mesa_printf("\n");
    }
 }

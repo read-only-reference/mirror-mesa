@@ -135,6 +135,7 @@ struct brw_context;
 #define BRW_NEW_PSP                     0x800
 #define BRW_NEW_METAOPS                 0x1000
 #define BRW_NEW_FENCE                   0x2000
+#define BRW_NEW_LOCK                    0x4000
 
 
 
@@ -213,7 +214,8 @@ struct brw_vs_prog_data {
    GLuint urb_read_length;
    GLuint total_grf;
    GLuint outputs_written;
-   GLuint inputs_read;
+
+   GLuint64EXT inputs_read;
 
    /* Used for calculating urb partitions:
     */
@@ -399,7 +401,7 @@ struct brw_vertex_element {
 
 
 struct brw_vertex_info {
-   GLuint varying[ATTRIB_BIT_DWORDS];  /* varying:1[BRW_ATTRIB_MAX] */
+   GLuint64EXT varying;  /* varying:1[BRW_ATTRIB_MAX] */
    GLuint sizes[ATTRIB_BIT_DWORDS * 2]; /* sizes:2[BRW_ATTRIB_MAX] */
 };
 
@@ -428,8 +430,8 @@ struct brw_context
    GLuint primitive;
 
    GLboolean emit_state_always;
-   
    GLboolean wrap;
+   GLboolean tmp_fallback;
 
    struct {
       struct brw_state_flags dirty;
@@ -442,9 +444,6 @@ struct brw_context
    } state;
 
    struct brw_state_pointers attribs;
-
-   GLboolean tmp_fallback;
-
    struct brw_mem_pool pool[BRW_MAX_POOL];
    struct brw_cache cache[BRW_MAX_CACHE];
    struct brw_cached_batch_item *cached_batch_items;

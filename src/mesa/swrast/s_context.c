@@ -98,7 +98,7 @@ _swrast_update_rasterflags( GLcontext *ctx )
       rasterMask |= MULTI_DRAW_BIT; /* all color index bits disabled */
    }
 
-   if (ctx->FragmentProgram._Active) {
+   if (ctx->FragmentProgram._Enabled) {
       rasterMask |= FRAGPROG_BIT;
    }
 
@@ -199,14 +199,9 @@ _swrast_update_fog_state( GLcontext *ctx )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
 
-   /* convert fog color to GLchan values */
-   CLAMPED_FLOAT_TO_CHAN(swrast->_FogColor[RCOMP], ctx->Fog.Color[RCOMP]);
-   CLAMPED_FLOAT_TO_CHAN(swrast->_FogColor[GCOMP], ctx->Fog.Color[GCOMP]);
-   CLAMPED_FLOAT_TO_CHAN(swrast->_FogColor[BCOMP], ctx->Fog.Color[BCOMP]);
-
    /* determine if fog is needed, and if so, which fog mode */
    swrast->_FogEnabled = GL_FALSE;
-   if (ctx->FragmentProgram._Active) {
+   if (ctx->FragmentProgram._Enabled) {
       if (ctx->FragmentProgram._Current->Base.Target==GL_FRAGMENT_PROGRAM_ARB) {
          const struct gl_fragment_program *fp
             = ctx->FragmentProgram._Current;
@@ -230,7 +225,7 @@ _swrast_update_fog_state( GLcontext *ctx )
 static void
 _swrast_update_fragment_program( GLcontext *ctx )
 {
-   if (ctx->FragmentProgram._Active) {
+   if (ctx->FragmentProgram._Enabled) {
       const struct gl_fragment_program *fp = ctx->FragmentProgram._Current;
       _mesa_load_state_parameters(ctx, fp->Base.Parameters);
    }
@@ -296,10 +291,11 @@ _swrast_validate_triangle( GLcontext *ctx,
 
    _swrast_validate_derived( ctx );
    swrast->choose_triangle( ctx );
+   ASSERT(swrast->Triangle);
 
    if (ctx->Texture._EnabledUnits == 0
        && NEED_SECONDARY_COLOR(ctx)
-       && !ctx->FragmentProgram._Active) {
+       && !ctx->FragmentProgram._Enabled) {
       /* separate specular color, but no texture */
       swrast->SpecTriangle = swrast->Triangle;
       swrast->Triangle = _swrast_add_spec_terms_triangle;
@@ -319,10 +315,11 @@ _swrast_validate_line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1 )
 
    _swrast_validate_derived( ctx );
    swrast->choose_line( ctx );
+   ASSERT(swrast->Line);
 
    if (ctx->Texture._EnabledUnits == 0
        && NEED_SECONDARY_COLOR(ctx)
-       && !ctx->FragmentProgram._Active) {
+       && !ctx->FragmentProgram._Enabled) {
       swrast->SpecLine = swrast->Line;
       swrast->Line = _swrast_add_spec_terms_line;
    }
@@ -345,7 +342,7 @@ _swrast_validate_point( GLcontext *ctx, const SWvertex *v0 )
 
    if (ctx->Texture._EnabledUnits == 0
        && NEED_SECONDARY_COLOR(ctx)
-       && !ctx->FragmentProgram._Active) {
+       && !ctx->FragmentProgram._Enabled) {
       swrast->SpecPoint = swrast->Point;
       swrast->Point = _swrast_add_spec_terms_point;
    }
@@ -359,17 +356,16 @@ _swrast_validate_point( GLcontext *ctx, const SWvertex *v0 )
  * function, then call it.
  */
 static void _ASMAPI
-_swrast_validate_blend_func( GLcontext *ctx, GLuint n,
-			     const GLubyte mask[],
-			     GLchan src[][4],
-			     CONST GLchan dst[][4] )
+_swrast_validate_blend_func(GLcontext *ctx, GLuint n, const GLubyte mask[],
+                            GLvoid *src, const GLvoid *dst,
+                            GLenum chanType )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
 
-   _swrast_validate_derived( ctx );
-   _swrast_choose_blend_func( ctx );
+   _swrast_validate_derived( ctx ); /* why is this needed? */
+   _swrast_choose_blend_func( ctx, chanType );
 
-   swrast->BlendFunc( ctx, n, mask, src, dst );
+   swrast->BlendFunc( ctx, n, mask, src, dst, chanType );
 }
 
 
@@ -680,6 +676,17 @@ _swrast_CreateContext( GLcontext *ctx )
       FREE(swrast);
       return GL_FALSE;
    }
+   swrast->SpanArrays->ChanType = CHAN_TYPE;
+#if CHAN_TYPE == GL_UNSIGNED_BYTE
+   swrast->SpanArrays->rgba = swrast->SpanArrays->color.sz1.rgba;
+   swrast->SpanArrays->spec = swrast->SpanArrays->color.sz1.spec;
+#elif CHAN_TYPE == GL_UNSIGNED_SHORT
+   swrast->SpanArrays->rgba = swrast->SpanArrays->color.sz2.rgba;
+   swrast->SpanArrays->spec = swrast->SpanArrays->color.sz2.spec;
+#else
+   swrast->SpanArrays->rgba = swrast->SpanArrays->color.sz4.rgba;
+   swrast->SpanArrays->spec = swrast->SpanArrays->color.sz4.spec;
+#endif
 
    /* init point span buffer */
    swrast->PointSpan.primitive = GL_POINT;

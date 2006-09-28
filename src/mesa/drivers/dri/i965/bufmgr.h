@@ -84,7 +84,8 @@ int bmInitPool( struct intel_context *,
  * understood, and drivers can just pass the calls through without too
  * much thunking.
  */
-void bmGenBuffers(struct intel_context *, const char *, unsigned n, struct buffer **buffers);
+void bmGenBuffers(struct intel_context *, const char *, unsigned n, struct buffer **buffers,
+		  int align );
 void bmDeleteBuffers(struct intel_context *, unsigned n, struct buffer **buffers);
 
 
@@ -117,20 +118,20 @@ void bmBufferSetInvalidateCB(struct intel_context *,
  * client would, so flags here is more proscriptive than the usage
  * values in the ARB_vbo interface:
  */
-void bmBufferData(struct intel_context *, 
+int bmBufferData(struct intel_context *, 
 		  struct buffer *buf, 
 		  unsigned size, 
 		  const void *data, 
 		  unsigned flags );
 
-void bmBufferSubData(struct intel_context *, 
+int bmBufferSubData(struct intel_context *, 
 		     struct buffer *buf, 
 		     unsigned offset, 
 		     unsigned size, 
 		     const void *data );
 
 
-void bmBufferDataAUB(struct intel_context *, 
+int bmBufferDataAUB(struct intel_context *, 
 		     struct buffer *buf, 
 		     unsigned size, 
 		     const void *data, 
@@ -138,7 +139,7 @@ void bmBufferDataAUB(struct intel_context *,
 		     unsigned aubtype,
 		     unsigned aubsubtype );
 
-void bmBufferSubDataAUB(struct intel_context *, 
+int bmBufferSubDataAUB(struct intel_context *, 
 			struct buffer *buf, 
 			unsigned offset, 
 			unsigned size, 
@@ -181,6 +182,15 @@ void bmUnmapBufferAUB( struct intel_context *,
 int bmValidateBuffers( struct intel_context * );
 void bmReleaseBuffers( struct intel_context * );
 
+GLuint bmCtxId( struct intel_context *intel );
+
+
+GLboolean bmError( struct intel_context * );
+void bmEvictAll( struct intel_context * );
+
+void *bmFindVirtual( struct intel_context *intel,
+		     unsigned int offset,
+		     size_t sz );
 
 /* This functionality is used by the buffer manager, not really sure
  * if we need to be exposing it in this way, probably libdrm will

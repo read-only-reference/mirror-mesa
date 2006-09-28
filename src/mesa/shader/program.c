@@ -917,6 +917,15 @@ _mesa_fetch_state(GLcontext *ctx, const enum state_index state[],
 	    case STATE_NORMAL_SCALE:
                ASSIGN_4V(value, ctx->_ModelViewInvScale, 0, 0, 1);
                break;
+	    case STATE_TEXRECT_SCALE: {
+   	       const int unit = (int) state[2];
+	       const struct gl_texture_object *texObj = ctx->Texture.Unit[unit]._Current;
+	       if (texObj) {
+		  struct gl_texture_image *texImage = texObj->Image[0][0];
+		  ASSIGN_4V(value, 1.0 / texImage->Width, 1.0 / texImage->Height, 0, 1);
+	       }
+               break;
+	    }
 	    default:
                _mesa_problem(ctx, "Bad state switch in _mesa_fetch_state()");
                return;
@@ -988,6 +997,8 @@ static GLuint make_state_flags(const GLint state[])
       switch (state[1]) {
       case STATE_NORMAL_SCALE:
 	 return _NEW_MODELVIEW;
+      case STATE_TEXRECT_SCALE:
+	 return _NEW_TEXTURE;
       default:
          _mesa_problem(NULL, "unexpected int. state in make_state_flags()");
 	 return 0;
@@ -1450,19 +1461,8 @@ static const struct instruction_info InstInfo[MAX_OPCODE] = {
 GLuint
 _mesa_num_inst_src_regs(enum prog_opcode opcode)
 {
-   GLuint i;
-#ifdef DEBUG
-   for (i = 0; i < MAX_OPCODE; i++) {
-      ASSERT(i == InstInfo[i].Opcode);
-   }
-#endif
-   for (i = 0; i < MAX_OPCODE; i++) {
-      if (InstInfo[i].Opcode == opcode) {
-         return InstInfo[i].NumSrcRegs;
-      }
-   }
-   _mesa_problem(NULL, "invalid opcode in _mesa_num_inst_src_regs");
-   return 0;
+   ASSERT(opcode == InstInfo[opcode].Opcode);
+   return InstInfo[opcode].NumSrcRegs;
 }
 
 
@@ -1601,6 +1601,38 @@ print_src_reg(const struct prog_src_register *srcReg)
                                srcReg->NegateBase, GL_FALSE));
 }
 
+void
+_mesa_print_alu_instruction(const struct prog_instruction *inst,
+			    const char *opcode_string, 
+			    GLuint numRegs)
+{
+   GLuint j;
+
+   _mesa_printf("%s", opcode_string);
+
+   /* frag prog only */
+   if (inst->SaturateMode == SATURATE_ZERO_ONE)
+      _mesa_printf("_SAT");
+
+   if (inst->DstReg.File != PROGRAM_UNDEFINED) {
+      _mesa_printf(" %s[%d]%s",
+		   program_file_string((enum register_file) inst->DstReg.File),
+		   inst->DstReg.Index,
+		   writemask_string(inst->DstReg.WriteMask));
+   }
+
+   if (numRegs > 0)
+      _mesa_printf(", ");
+
+   for (j = 0; j < numRegs; j++) {
+      print_src_reg(inst->SrcReg + j);
+      if (j + 1 < numRegs)
+	 _mesa_printf(", ");
+   }
+
+   _mesa_printf(";\n");
+}
+
 
 /**
  * Print a single vertex/fragment program instruction.
@@ -1662,34 +1694,10 @@ _mesa_print_instruction(const struct prog_instruction *inst)
    /* XXX may need for other special-case instructions */
    default:
       /* typical alu instruction */
-      {
-         const GLuint numRegs = _mesa_num_inst_src_regs(inst->Opcode);
-         GLuint j;
-
-         _mesa_printf("%s", _mesa_opcode_string(inst->Opcode));
-
-         /* frag prog only */
-         if (inst->SaturateMode == SATURATE_ZERO_ONE)
-            _mesa_printf("_SAT");
-
-         if (inst->DstReg.File != PROGRAM_UNDEFINED) {
-            _mesa_printf(" %s[%d]%s",
-                         program_file_string((enum register_file) inst->DstReg.File),
-                         inst->DstReg.Index,
-                         writemask_string(inst->DstReg.WriteMask));
-         }
-
-         if (numRegs > 0)
-            _mesa_printf(", ");
-
-         for (j = 0; j < numRegs; j++) {
-            print_src_reg(inst->SrcReg + j);
-            if (j + 1 < numRegs)
-               _mesa_printf(", ");
-         }
-
-         _mesa_printf(";\n");
-      }
+      _mesa_print_alu_instruction(inst,
+				  _mesa_opcode_string(inst->Opcode),
+				  _mesa_num_inst_src_regs(inst->Opcode));
+      break;
    }
 }
 

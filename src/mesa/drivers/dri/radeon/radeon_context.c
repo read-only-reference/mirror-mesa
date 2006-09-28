@@ -157,7 +157,6 @@ const struct dri_extension card_extensions[] =
     { NULL,                                NULL }
 };
 
-extern const struct tnl_pipeline_stage _radeon_texrect_stage;
 extern const struct tnl_pipeline_stage _radeon_render_stage;
 extern const struct tnl_pipeline_stage _radeon_tcl_stage;
 
@@ -175,10 +174,6 @@ static const struct tnl_pipeline_stage *radeon_pipeline[] = {
    &_tnl_fog_coordinate_stage,
    &_tnl_texgen_stage,
    &_tnl_texture_transform_stage,
-
-   /* Scale texture rectangle to 0..1.
-    */
-   &_radeon_texrect_stage,
 
    &_radeon_render_stage,
    &_tnl_render_stage,		/* FALLBACK:  */
@@ -625,7 +620,8 @@ radeonMakeCurrent( __DRIcontextPrivate *driContextPriv,
 
       if ( newCtx->dri.drawable != driDrawPriv ) {
          /* XXX we may need to validate the drawable here!!! */
-	 driDrawableInitVBlank( driDrawPriv, newCtx->vblank_flags );
+	 driDrawableInitVBlank( driDrawPriv, newCtx->vblank_flags,
+				&newCtx->vbl_seq );
 	 newCtx->dri.drawable = driDrawPriv;
 	 radeonUpdateWindow( newCtx->glCtx );
 	 radeonUpdateViewportOffset( newCtx->glCtx );

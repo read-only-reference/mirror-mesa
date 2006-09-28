@@ -85,13 +85,23 @@ static GLuint translate_tex_format( GLuint mesa_format )
       return BRW_SURFACEFORMAT_L8A8_UNORM;
 
    case MESA_FORMAT_RGB888:
-      return BRW_SURFACEFORMAT_R8G8B8_UNORM;
+      assert(0);		/* not supported for sampling */
+      return BRW_SURFACEFORMAT_R8G8B8_UNORM;      
 
    case MESA_FORMAT_ARGB8888:
       return BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
 
    case MESA_FORMAT_RGBA8888_REV:
       return BRW_SURFACEFORMAT_R8G8B8A8_UNORM;
+
+   case MESA_FORMAT_RGB565:
+      return BRW_SURFACEFORMAT_B5G6R5_UNORM;
+
+   case MESA_FORMAT_ARGB1555:
+      return BRW_SURFACEFORMAT_B5G5R5A1_UNORM;
+
+   case MESA_FORMAT_ARGB4444:
+      return BRW_SURFACEFORMAT_B4G4R4A4_UNORM;
 
    case MESA_FORMAT_YCBCR_REV:
       return BRW_SURFACEFORMAT_YCRCB_NORMAL;
@@ -137,6 +147,7 @@ void brw_update_texture_surface( GLcontext *ctx,
     */
 /*    surf->ss0.data_return_format = BRW_SURFACERETURNFORMAT_S1; */
 
+   /* BRW_NEW_LOCK */
    surf->ss1.base_addr = bmBufferOffset(intel,
 					intelObj->mt->region->buffer);
 
@@ -198,6 +209,7 @@ static void upload_wm_surfaces(struct brw_context *brw )
       surf.ss0.writedisable_blue =  !brw->attribs.Color->ColorMask[2];
       surf.ss0.writedisable_alpha = !brw->attribs.Color->ColorMask[3];
 
+      /* BRW_NEW_LOCK */
       surf.ss1.base_addr = bmBufferOffset(&brw->intel, region->buffer);
 
 
@@ -240,7 +252,7 @@ const struct brw_tracked_state brw_wm_surfaces = {
    .dirty = {
       .mesa = _NEW_COLOR | _NEW_TEXTURE | _NEW_BUFFERS,
       .brw = (BRW_NEW_CONTEXT | 
-	      BRW_NEW_FENCE),	/* required for bmBufferOffset */
+	      BRW_NEW_LOCK),	/* required for bmBufferOffset */
       .cache = 0
    },
    .update = upload_wm_surfaces

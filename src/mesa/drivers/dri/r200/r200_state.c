@@ -215,7 +215,7 @@ static void r200_set_blend_state( GLcontext * ctx )
    R200_STATECHANGE( rmesa, ctx );
 
    if (rmesa->r200Screen->drmSupportsBlendColor) {
-      if (ctx->Color._LogicOpEnabled) {
+      if (ctx->Color.ColorLogicOpEnabled) {
          rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] =  cntl | R200_ROP_ENABLE;
          rmesa->hw.ctx.cmd[CTX_RB3D_ABLENDCNTL] = eqn | func;
          rmesa->hw.ctx.cmd[CTX_RB3D_CBLENDCNTL] = eqn | func;
@@ -231,7 +231,7 @@ static void r200_set_blend_state( GLcontext * ctx )
       }
    }
    else {
-      if (ctx->Color._LogicOpEnabled) {
+      if (ctx->Color.ColorLogicOpEnabled) {
          rmesa->hw.ctx.cmd[CTX_RB3D_CNTL] =  cntl | R200_ROP_ENABLE;
          rmesa->hw.ctx.cmd[CTX_RB3D_BLENDCNTL] = eqn | func;
          return;
@@ -1970,6 +1970,8 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
 
    case GL_LIGHTING:
       r200UpdateSpecular(ctx);
+      /* for reflection map fixup - might set recheck_texgen for all units too */
+      rmesa->NewGLState |= _NEW_TEXTURE;
       break;
 
    case GL_LINE_SMOOTH:
@@ -2103,6 +2105,7 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
    case GL_VERTEX_PROGRAM_ARB:
       if (!state) {
 	 GLuint i;
+	 rmesa->curr_vp_hw = NULL;
 	 R200_STATECHANGE( rmesa, vap );
 	 rmesa->hw.vap.cmd[VAP_SE_VAP_CNTL] &= ~R200_VAP_PROG_VTX_SHADER_ENABLE;
 	 /* mark all tcl atoms (tcl vector state got overwritten) dirty
@@ -2133,8 +2136,11 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
 	 /* FIXME: ugly as hell. need to call everything which might change tcl_output_vtxfmt0/1 and compsel */
 	 r200UpdateSpecular( ctx );
 	 r200Fogfv( ctx, GL_FOG_COORD_SRC, NULL );
+#if 1
 	/* shouldn't be necessary, as it's picked up anyway in r200ValidateState (_NEW_PROGRAM),
 	   but without it doom3 locks up at always the same places. Why? */
+	/* FIXME: This can (and should) be replaced by a call to the TCL_STATE_FLUSH reg before
+	   accessing VAP_SE_VAP_CNTL. Requires drm changes (done). Remove after some time... */
 	 r200UpdateTextureState( ctx );
 	 /* if we call r200UpdateTextureState we need the code below because we are calling it with
 	    non-current derived enabled values which may revert the state atoms for frag progs even when
@@ -2154,17 +2160,10 @@ static void r200Enable( GLcontext *ctx, GLenum cap, GLboolean state )
 	 R200_STATECHANGE( rmesa, cst );
 	 R200_STATECHANGE( rmesa, tf );
 	 rmesa->hw.cst.cmd[CST_PP_CNTL_X] = 0;
+#endif
       }
       else {
-	 R200_STATECHANGE( rmesa, vap );
-	 if (!rmesa->TclFallback) {
-	 /* FIXME: fglrx sets R200_VAP_SINGLE_BUF_STATE_ENABLE too. Do we need it? */
-	    rmesa->hw.vap.cmd[VAP_SE_VAP_CNTL] |= R200_VAP_PROG_VTX_SHADER_ENABLE /*| R200_VAP_SINGLE_BUF_STATE_ENABLE*/;
-	 }
-	 R200_STATECHANGE( rmesa, vpi[0] );
-	 R200_STATECHANGE( rmesa, vpi[1] );
-	 R200_STATECHANGE( rmesa, vpp[0] );
-	 R200_STATECHANGE( rmesa, vpp[1] );
+	 /* picked up later */
       }
       break;
 

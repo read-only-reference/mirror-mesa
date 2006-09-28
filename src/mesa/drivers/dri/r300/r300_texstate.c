@@ -47,68 +47,18 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r300_tex.h"
 #include "r300_reg.h"
 
-#define R200_TXFORMAT_A8        R200_TXFORMAT_I8
-#define R200_TXFORMAT_L8        R200_TXFORMAT_I8
-#define R200_TXFORMAT_AL88      R200_TXFORMAT_AI88
-#define R200_TXFORMAT_YCBCR     R200_TXFORMAT_YVYU422
-#define R200_TXFORMAT_YCBCR_REV R200_TXFORMAT_VYUY422
-#define R200_TXFORMAT_RGB_DXT1  R200_TXFORMAT_DXT1
-#define R200_TXFORMAT_RGBA_DXT1 R200_TXFORMAT_DXT1
-#define R200_TXFORMAT_RGBA_DXT3 R200_TXFORMAT_DXT23
-#define R200_TXFORMAT_RGBA_DXT5 R200_TXFORMAT_DXT45
 
-#define _COLOR(f) \
-    [ MESA_FORMAT_ ## f ] = { R200_TXFORMAT_ ## f, 0 }
-#define _COLOR_REV(f) \
-    [ MESA_FORMAT_ ## f ## _REV ] = { R200_TXFORMAT_ ## f, 0 }
-#define _ALPHA(f) \
-    [ MESA_FORMAT_ ## f ] = { R200_TXFORMAT_ ## f | R200_TXFORMAT_ALPHA_IN_MAP, 0 }
-#define _ALPHA_REV(f) \
-    [ MESA_FORMAT_ ## f ## _REV ] = { R200_TXFORMAT_ ## f | R200_TXFORMAT_ALPHA_IN_MAP, 0 }
-#define _YUV(f) \
-    [ MESA_FORMAT_ ## f ] = { R200_TXFORMAT_ ## f, R200_YUV_TO_RGB }
-#define _INVALID(f) \
-    [ MESA_FORMAT_ ## f ] = { 0xffffffff, 0 }
-#define VALID_FORMAT(f) ( ((f) <= MESA_FORMAT_RGBA_DXT5 \
-	|| ((f) >= MESA_FORMAT_RGBA_FLOAT32 && (f) <= MESA_FORMAT_INTENSITY_FLOAT16)) \
-			     && tx_table[f].flag )
+#define VALID_FORMAT(f) ( ((f) <= MESA_FORMAT_RGBA_DXT5			\
+			   || ((f) >= MESA_FORMAT_RGBA_FLOAT32 &&	\
+			       (f) <= MESA_FORMAT_INTENSITY_FLOAT16))	\
+			  && tx_table_le[f].flag )
 
-#define _ASSIGN(entry, format)	\
+#define _ASSIGN(entry, format)				\
 	[ MESA_FORMAT_ ## entry ] = { format, 0, 1}
 
 static const struct {
-	GLuint format, filter;
-} tx_table0[] = {
-	    _ALPHA(RGBA8888),
-	    _ALPHA_REV(RGBA8888),
-	    _ALPHA(ARGB8888),
-	    _ALPHA_REV(ARGB8888),
-	    _INVALID(RGB888),
-	    _COLOR(RGB565),
-	    _COLOR_REV(RGB565),
-	    _ALPHA(ARGB4444),
-	    _ALPHA_REV(ARGB4444),
-	    _ALPHA(ARGB1555),
-	    _ALPHA_REV(ARGB1555),
-	    _ALPHA(AL88),
-	    _ALPHA_REV(AL88),
-	    _ALPHA(A8),
-	    _COLOR(L8),
-	    _ALPHA(I8),
-	    _INVALID(CI8),
-	    _YUV(YCBCR),
-	    _YUV(YCBCR_REV),
-	    _INVALID(RGB_FXT1),
-	    _INVALID(RGBA_FXT1),
-	    _COLOR(RGB_DXT1),
-	    _ALPHA(RGBA_DXT1),
-	    _ALPHA(RGBA_DXT3),
-	    _ALPHA(RGBA_DXT5),
-	    };
-
-static const struct {
 	GLuint format, filter, flag;
-} tx_table[] = {
+} tx_table_be[] = {
 	/*
 	 * Note that the _REV formats are the same as the non-REV formats.
 	 * This is because the REV and non-REV formats are identical as a
@@ -118,9 +68,9 @@ static const struct {
 	 * byte-swapping), the R300 sees the REV and non-REV formats
 	 * identically.  -- paulus
 	 */
-	    _ASSIGN(RGBA8888, R300_EASY_TX_FORMAT(Y, Z, W, X, W8Z8Y8X8)),
+	    _ASSIGN(RGBA8888, R300_EASY_TX_FORMAT(Z, Y, X, W, W8Z8Y8X8)),
 	    _ASSIGN(RGBA8888_REV, R300_EASY_TX_FORMAT(Y, Z, W, X, W8Z8Y8X8)),
-	    _ASSIGN(ARGB8888, R300_EASY_TX_FORMAT(X, Y, Z, W, W8Z8Y8X8)),
+	    _ASSIGN(ARGB8888, R300_EASY_TX_FORMAT(W, Z, Y, X, W8Z8Y8X8)),
 	    _ASSIGN(ARGB8888_REV, R300_EASY_TX_FORMAT(X, Y, Z, W, W8Z8Y8X8)),
 	    _ASSIGN(RGB888, 0xffffffff),
 	    _ASSIGN(RGB565, R300_EASY_TX_FORMAT(X, Y, Z, ONE, Z5Y6X5)),
@@ -156,9 +106,47 @@ static const struct {
 	    _ASSIGN(INTENSITY_FLOAT16, R300_EASY_TX_FORMAT(X, X, X, X, FL_I16)),
 	    };
 
-#undef _COLOR
-#undef _ALPHA
-#undef _INVALID
+static const struct {
+	GLuint format, filter, flag;
+} tx_table_le[] = {
+	    _ASSIGN(RGBA8888, R300_EASY_TX_FORMAT(Y, Z, W, X, W8Z8Y8X8)),
+	    _ASSIGN(RGBA8888_REV, R300_EASY_TX_FORMAT(Z, Y, X, W, W8Z8Y8X8)),
+	    _ASSIGN(ARGB8888, R300_EASY_TX_FORMAT(X, Y, Z, W, W8Z8Y8X8)),
+	    _ASSIGN(ARGB8888_REV, R300_EASY_TX_FORMAT(W, Z, Y, X, W8Z8Y8X8)),
+	    _ASSIGN(RGB888, 0xffffffff),
+	    _ASSIGN(RGB565, R300_EASY_TX_FORMAT(X, Y, Z, ONE, Z5Y6X5)),
+	    _ASSIGN(RGB565_REV, R300_EASY_TX_FORMAT(X, Y, Z, ONE, Z5Y6X5)),
+	    _ASSIGN(ARGB4444, R300_EASY_TX_FORMAT(X, Y, Z, W, W4Z4Y4X4)),
+	    _ASSIGN(ARGB4444_REV, R300_EASY_TX_FORMAT(X, Y, Z, W, W4Z4Y4X4)),
+	    _ASSIGN(ARGB1555, R300_EASY_TX_FORMAT(X, Y, Z, W, W1Z5Y5X5)),
+	    _ASSIGN(ARGB1555_REV, R300_EASY_TX_FORMAT(X, Y, Z, W, W1Z5Y5X5)),
+	    _ASSIGN(AL88, R300_EASY_TX_FORMAT(X, X, X, Y, Y8X8)),
+	    _ASSIGN(AL88_REV, R300_EASY_TX_FORMAT(X, X, X, Y, Y8X8)),
+	    _ASSIGN(RGB332, R300_EASY_TX_FORMAT(X, Y, Z, ONE, Z3Y3X2)),
+	    _ASSIGN(A8, R300_EASY_TX_FORMAT(ZERO, ZERO, ZERO, X, X8)),
+	    _ASSIGN(L8, R300_EASY_TX_FORMAT(X, X, X, ONE, X8)),
+	    _ASSIGN(I8, R300_EASY_TX_FORMAT(X, X, X, X, X8)),
+	    _ASSIGN(CI8, R300_EASY_TX_FORMAT(X, X, X, X, X8)),
+	    _ASSIGN(YCBCR, R300_EASY_TX_FORMAT(X, Y, Z, ONE, G8R8_G8B8)|R300_TX_FORMAT_YUV_MODE ),
+	    _ASSIGN(YCBCR_REV, R300_EASY_TX_FORMAT(X, Y, Z, ONE, G8R8_G8B8)|R300_TX_FORMAT_YUV_MODE),
+	    _ASSIGN(RGB_DXT1, R300_EASY_TX_FORMAT(X, Y, Z, ONE, DXT1)),
+	    _ASSIGN(RGBA_DXT1, R300_EASY_TX_FORMAT(X, Y, Z, W, DXT1)),
+	    _ASSIGN(RGBA_DXT3, R300_EASY_TX_FORMAT(X, Y, Z, W, DXT3)),
+	    _ASSIGN(RGBA_DXT5, R300_EASY_TX_FORMAT(Y, Z, W, X, DXT5)),
+	    _ASSIGN(RGBA_FLOAT32, R300_EASY_TX_FORMAT(Z, Y, X, W, FL_R32G32B32A32)),
+	    _ASSIGN(RGBA_FLOAT16, R300_EASY_TX_FORMAT(Z, Y, X, W, FL_R16G16B16A16)),
+	    _ASSIGN(RGB_FLOAT32, 0xffffffff),
+	    _ASSIGN(RGB_FLOAT16, 0xffffffff),
+	    _ASSIGN(ALPHA_FLOAT32, R300_EASY_TX_FORMAT(ZERO, ZERO, ZERO, X, FL_I32)),
+	    _ASSIGN(ALPHA_FLOAT16, R300_EASY_TX_FORMAT(ZERO, ZERO, ZERO, X, FL_I16)),
+	    _ASSIGN(LUMINANCE_FLOAT32, R300_EASY_TX_FORMAT(X, X, X, ONE, FL_I32)),
+	    _ASSIGN(LUMINANCE_FLOAT16, R300_EASY_TX_FORMAT(X, X, X, ONE, FL_I16)),
+	    _ASSIGN(LUMINANCE_ALPHA_FLOAT32, R300_EASY_TX_FORMAT(X, X, X, Y, FL_I32A32)),
+	    _ASSIGN(LUMINANCE_ALPHA_FLOAT16, R300_EASY_TX_FORMAT(X, X, X, Y, FL_I16A16)),
+	    _ASSIGN(INTENSITY_FLOAT32, R300_EASY_TX_FORMAT(X, X, X, X, FL_I32)),
+	    _ASSIGN(INTENSITY_FLOAT16, R300_EASY_TX_FORMAT(X, X, X, X, FL_I16)),
+	    };
+
 #undef _ASSIGN
 
 
@@ -183,21 +171,24 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	GLint i, texelBytes;
 	GLint numLevels;
 	GLint log2Width, log2Height, log2Depth;
+	const GLuint ui = 1;
+	const GLubyte littleEndian = *((const GLubyte *) &ui);
 
 	/* Set the hardware texture format
 	 */
-
-	t->format &= ~(R200_TXFORMAT_FORMAT_MASK |
-			    R200_TXFORMAT_ALPHA_IN_MAP);
-
-	if (VALID_FORMAT(baseImage->TexFormat->MesaFormat) &&
-	    tx_table[baseImage->TexFormat->MesaFormat].flag) {
-		t->format =
-		    tx_table[baseImage->TexFormat->MesaFormat].format;
-#if 1
-		t->filter |=
-		    tx_table[baseImage->TexFormat->MesaFormat].filter;
-#endif
+	if (VALID_FORMAT(baseImage->TexFormat->MesaFormat)) {
+		if (littleEndian) {
+			t->format =
+			    tx_table_le[baseImage->TexFormat->MesaFormat].format;
+			t->filter |=
+			    tx_table_le[baseImage->TexFormat->MesaFormat].filter;
+		}
+		else {
+			t->format =
+			    tx_table_be[baseImage->TexFormat->MesaFormat].format;
+			t->filter |=
+			    tx_table_be[baseImage->TexFormat->MesaFormat].filter;
+		}
 	} else {
 		_mesa_problem(NULL, "unexpected texture format in %s",
 			      __FUNCTION__);
@@ -208,7 +199,6 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 
 	/* Compute which mipmap levels we really want to send to the hardware.
 	 */
-
 	driCalculateTextureFirstLastLevel((driTextureObject *) t);
 	log2Width = tObj->Image[0][t->base.firstLevel]->WidthLog2;
 	log2Height = tObj->Image[0][t->base.firstLevel]->HeightLog2;
@@ -223,7 +213,7 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	 * memory organized as a rectangle of width BLIT_WIDTH_BYTES.
 	 */
 	curOffset = 0;
-	blitWidth = BLIT_WIDTH_BYTES;
+	blitWidth = R300_BLIT_WIDTH_BYTES;
 	t->tile_bits = 0;
 
 	/* figure out if this texture is suitable for tiling. */
@@ -311,16 +301,16 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	    t->image[0][i].width = MIN2(size / texelBytes, blitWidth);
 	    t->image[0][i].height = (size / texelBytes) / t->image[0][i].width;
 	  } else {
-	    t->image[0][i].x = curOffset % BLIT_WIDTH_BYTES;
-	    t->image[0][i].y = curOffset / BLIT_WIDTH_BYTES;
-	    t->image[0][i].width = MIN2(size, BLIT_WIDTH_BYTES);
+	    t->image[0][i].x = curOffset % R300_BLIT_WIDTH_BYTES;
+	    t->image[0][i].y = curOffset / R300_BLIT_WIDTH_BYTES;
+	    t->image[0][i].width = MIN2(size, R300_BLIT_WIDTH_BYTES);
 	    t->image[0][i].height = size / t->image[0][i].width;
 	  }
 #if 0
 	  /* for debugging only and only  applicable to non-rectangle targets */
 	  assert(size % t->image[0][i].width == 0);
 	  assert(t->image[0][i].x == 0
-		 || (size < BLIT_WIDTH_BYTES
+		 || (size < R300_BLIT_WIDTH_BYTES
 		     && t->image[0][i].height == 1));
 #endif
 	  
@@ -367,7 +357,7 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	t->format |= ((log2Width << R200_TXFORMAT_WIDTH_SHIFT) |
 			   (log2Height << R200_TXFORMAT_HEIGHT_SHIFT));
 #endif
-
+#if 0
 	t->format_x &= ~(R200_DEPTH_LOG2_MASK | R200_TEXCOORD_MASK);
 	if (tObj->Target == GL_TEXTURE_3D) {
 		t->format_x |= (log2Depth << R200_DEPTH_LOG2_SHIFT);
@@ -385,6 +375,11 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 				     (log2Height << R200_FACE_HEIGHT_3_SHIFT) |
 				     (log2Width << R200_FACE_WIDTH_4_SHIFT) |
 				     (log2Height << R200_FACE_HEIGHT_4_SHIFT));
+	}
+#endif
+	if (tObj->Target == GL_TEXTURE_CUBE_MAP) {
+		ASSERT(log2Width == log2Height);
+		t->format |= R300_TX_FORMAT_CUBIC_MAP;
 	}
 	
 	t->size = (((tObj->Image[0][t->base.firstLevel]->Width - 1) << R300_TX_WIDTHMASK_SHIFT)
@@ -452,11 +447,12 @@ static GLboolean enable_tex_3d(GLcontext * ctx, int unit)
 
 	/* Need to load the 3d images associated with this unit.
 	 */
+#if 0
 	if (t->format & R200_TXFORMAT_NON_POWER2) {
 		t->format &= ~R200_TXFORMAT_NON_POWER2;
 		t->base.dirty_images[0] = ~0;
 	}
-
+#endif
 	ASSERT(tObj->Target == GL_TEXTURE_3D);
 
 	/* R100 & R200 do not support mipmaps for 3D textures.
@@ -487,12 +483,13 @@ static GLboolean enable_tex_cube(GLcontext * ctx, int unit)
 
 	/* Need to load the 2d images associated with this unit.
 	 */
+#if 0
 	if (t->format & R200_TXFORMAT_NON_POWER2) {
 		t->format &= ~R200_TXFORMAT_NON_POWER2;
 		for (face = 0; face < 6; face++)
 			t->base.dirty_images[face] = ~0;
 	}
-
+#endif
 	ASSERT(tObj->Target == GL_TEXTURE_CUBE_MAP);
 
 	if (t->base.dirty_images[0] || t->base.dirty_images[1] ||
@@ -571,10 +568,6 @@ static GLboolean update_tex_common(GLcontext * ctx, int unit)
 		driUpdateTextureLRU((driTextureObject *) t);	/* XXX: should be locked! */
 	}
 
-#if R200_MERGED
-	FALLBACK(&rmesa->radeon, RADEON_FALLBACK_BORDER_MODE, t->border_fallback);
-#endif
-		
 	return !t->border_fallback;
 }
 
@@ -618,8 +611,4 @@ void r300UpdateTextureState(GLcontext * ctx)
 	      r300UpdateTextureUnit(ctx, 6) &&
 	      r300UpdateTextureUnit(ctx, 7)
 	      );
-
-#if R200_MERGED
-	FALLBACK(&rmesa->radeon, RADEON_FALLBACK_TEXTURE, !ok);
-#endif	
 }

@@ -16,10 +16,12 @@ DRIVER_SOURCES = \
 	intel_regions.c \
 	intel_screen.c \
 	intel_span.c \
+	intel_pixel_copy.c \
 	intel_state.c \
 	intel_tex.c \
 	intel_tex_validate.c \
 	brw_aub.c \
+	brw_aub_playback.c \
 	brw_cc.c \
 	brw_clip.c \
 	brw_clip_line.c \
@@ -42,7 +44,6 @@ DRIVER_SOURCES = \
 	brw_exec_array.c \
 	brw_exec_draw.c \
 	brw_exec_eval.c \
-	brw_exec_generic.c \
 	brw_fallback.c \
 	brw_gs.c \
 	brw_gs_emit.c \

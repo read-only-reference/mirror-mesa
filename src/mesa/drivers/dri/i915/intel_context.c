@@ -388,7 +388,7 @@ GLboolean intelInitContext( intelContextPtr intel,
    intel->do_usleeps = (fthrottle_mode == DRI_CONF_FTHROTTLE_USLEEPS);
 
    intel->vblank_flags = (intel->intelScreen->irq_active != 0)
-       ? driGetDefaultVBlankFlags(&intelScreen->optionCache) : VBLANK_FLAG_NO_IRQ;
+       ? driGetDefaultVBlankFlags(&intel->optionCache) : VBLANK_FLAG_NO_IRQ;
 
    (*dri_interface->getUST)(&intel->swap_ust);
    _math_matrix_ctr (&intel->ViewportMatrix);
@@ -572,6 +572,36 @@ void intelWindowMoved( intelContextPtr intel )
    {
       GLcontext *ctx = &intel->ctx;
 
+      if (intel->intelScreen->driScrnPriv->ddxMinor >= 7) {
+	 drmI830Sarea *sarea = intel->sarea;
+	 drm_clip_rect_t drw_rect = { .x1 = dPriv->x, .x2 = dPriv->x + dPriv->w,
+				      .y1 = dPriv->y, .y2 = dPriv->y + dPriv->h };
+	 drm_clip_rect_t pipeA_rect = { .x1 = sarea->pipeA_x,
+					.x2 = sarea->pipeA_x + sarea->pipeA_w,
+					.y1 = sarea->pipeA_y,
+					.y2 = sarea->pipeA_y + sarea->pipeA_h };
+	 drm_clip_rect_t pipeB_rect = { .x1 = sarea->pipeB_x,
+					.x2 = sarea->pipeB_x + sarea->pipeB_w,
+					.y1 = sarea->pipeB_y,
+					.y2 = sarea->pipeB_y + sarea->pipeB_h };
+	 GLint areaA = driIntersectArea( drw_rect, pipeA_rect );
+	 GLint areaB = driIntersectArea( drw_rect, pipeB_rect );
+	 GLuint flags = intel->vblank_flags;
+
+	 if (areaB > areaA || (areaA > 0 && areaB > 0)) {
+	    flags = intel->vblank_flags | VBLANK_FLAG_SECONDARY;
+	 } else {
+	    flags = intel->vblank_flags & ~VBLANK_FLAG_SECONDARY;
+	 }
+
+	 if (flags != intel->vblank_flags) {
+	    intel->vblank_flags = flags;
+	    driGetCurrentVBlank(dPriv, intel->vblank_flags, &intel->vbl_seq);
+	 }
+      } else {
+	 intel->vblank_flags &= ~VBLANK_FLAG_SECONDARY;
+      }
+
       ctx->Driver.Scissor( ctx, ctx->Scissor.X, ctx->Scissor.Y,
 			   ctx->Scissor.Width, ctx->Scissor.Height );
       
@@ -596,7 +626,8 @@ GLboolean intelMakeCurrent(__DRIcontextPrivate *driContextPriv,
 
       if ( intel->driDrawable != driDrawPriv ) {
 	 /* Shouldn't the readbuffer be stored also? */
-	 driDrawableInitVBlank( driDrawPriv, intel->vblank_flags );
+	 driDrawableInitVBlank( driDrawPriv, intel->vblank_flags,
+				&intel->vbl_seq );
 
 	 intel->driDrawable = driDrawPriv;
 	 intelWindowMoved( intel );

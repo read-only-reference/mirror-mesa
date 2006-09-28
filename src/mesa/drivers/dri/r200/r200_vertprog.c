@@ -587,8 +587,46 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
       are_srcs_scalar = operands & SCALAR_FLAG;
       operands &= OP_MASK;
 
-      for(i = 0; i < operands; i++)
+      for(i = 0; i < operands; i++) {
 	 src[i] = vpi->SrcReg[i];
+	 /* hack up default attrib values as per spec as swizzling.
+	    normal, fog, secondary color. Crazy?
+	    May need more if we don't submit vec4 elements? */
+	 if (src[i].File == PROGRAM_INPUT) {
+	    if (src[i].Index == VERT_ATTRIB_NORMAL) {
+	       int j;
+	       for (j = 0; j < 4; j++) {
+		  if (GET_SWZ(src[i].Swizzle, j) == SWIZZLE_W) {
+		     src[i].Swizzle &= ~(SWIZZLE_W << (j*3));
+		     src[i].Swizzle |= SWIZZLE_ONE << (j*3);
+		  }
+	       }
+	    }
+	    else if (src[i].Index == VERT_ATTRIB_COLOR1) {
+	       int j;
+	       for (j = 0; j < 4; j++) {
+		  if (GET_SWZ(src[i].Swizzle, j) == SWIZZLE_W) {
+		     src[i].Swizzle &= ~(SWIZZLE_W << (j*3));
+		     src[i].Swizzle |= SWIZZLE_ZERO << (j*3);
+		  }
+	       }
+	    }
+	    else if (src[i].Index == VERT_ATTRIB_FOG) {
+	       int j;
+	       for (j = 0; j < 4; j++) {
+		  if (GET_SWZ(src[i].Swizzle, j) == SWIZZLE_W) {
+		     src[i].Swizzle &= ~(SWIZZLE_W << (j*3));
+		     src[i].Swizzle |= SWIZZLE_ONE << (j*3);
+		  }
+		  else if ((GET_SWZ(src[i].Swizzle, j) == SWIZZLE_Y) ||
+			    GET_SWZ(src[i].Swizzle, j) == SWIZZLE_Z) {
+		     src[i].Swizzle &= ~(SWIZZLE_W << (j*3));
+		     src[i].Swizzle |= SWIZZLE_ZERO << (j*3);
+		  }
+	       }
+	    }
+	 }
+      }
 
       if(operands == 3){
 	 if( CMP_SRCS(src[1], src[2]) || CMP_SRCS(src[0], src[2]) ){
@@ -989,7 +1027,12 @@ void r200SetupVertexProg( GLcontext *ctx ) {
    fallback = !(vp->native && r200VertexProgUpdateParams(ctx, vp) &&
       rmesa->r200Screen->drmSupportsVertexProgram);
    TCL_FALLBACK(ctx, R200_TCL_FALLBACK_VERTEX_PROGRAM, fallback);
-   if (fallback) return;
+   if (rmesa->TclFallback) return;
+
+   R200_STATECHANGE( rmesa, vap );
+   /* FIXME: fglrx sets R200_VAP_SINGLE_BUF_STATE_ENABLE too. Do we need it?
+             maybe only when using more than 64 inst / 96 param? */
+   rmesa->hw.vap.cmd[VAP_SE_VAP_CNTL] |= R200_VAP_PROG_VTX_SHADER_ENABLE /*| R200_VAP_SINGLE_BUF_STATE_ENABLE*/;
 
    R200_STATECHANGE( rmesa, pvs );
 
@@ -1094,12 +1137,14 @@ static void
 r200ProgramStringNotify(GLcontext *ctx, GLenum target, struct gl_program *prog)
 {
    struct r200_vertex_program *vp = (void *)prog;
+   r200ContextPtr rmesa = R200_CONTEXT(ctx);
 
    switch(target) {
    case GL_VERTEX_PROGRAM_ARB:
       vp->translated = GL_FALSE;
 /*      memset(&vp->translated, 0, sizeof(struct r200_vertex_program) - sizeof(struct gl_vertex_program));*/
       r200_translate_vertex_program(vp);
+      rmesa->curr_vp_hw = NULL;
       break;
    }
    /* need this for tcl fallbacks */

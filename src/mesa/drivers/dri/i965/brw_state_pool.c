@@ -47,6 +47,7 @@ GLboolean brw_pool_alloc( struct brw_mem_pool *pool,
    size = (size + 3) & ~3;
 
    if (pool->offset + fixup + size >= pool->size) {
+      _mesa_printf("%s failed\n", __FUNCTION__);
       assert(0);
       exit(0);
    }
@@ -95,7 +96,7 @@ static void brw_init_pool( struct brw_context *brw,
    pool->size = size;   
    pool->brw = brw;
    
-   bmGenBuffers(&brw->intel, "pool", 1, &pool->buffer);
+   bmGenBuffers(&brw->intel, "pool", 1, &pool->buffer, 12);
 
    /* Also want to say not to wait on fences when data is presented
     */
