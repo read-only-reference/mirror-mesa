@@ -1629,11 +1629,12 @@ static void
 initialize_framebuffer_size(GLcontext *ctx, GLframebuffer *fb)
 {
    GLuint width, height;
-   ASSERT(ctx->Driver.GetBufferSize);
-   ctx->Driver.GetBufferSize(fb, &width, &height);
-   if (ctx->Driver.ResizeBuffers)
-      ctx->Driver.ResizeBuffers(ctx, fb, width, height);
-   fb->Initialized = GL_TRUE;
+   if (ctx->Driver.GetBufferSize) {
+      ctx->Driver.GetBufferSize(fb, &width, &height);
+      if (ctx->Driver.ResizeBuffers)
+         ctx->Driver.ResizeBuffers(ctx, fb, width, height);
+      fb->Initialized = GL_TRUE;
+   }
 }
 
 
@@ -1706,6 +1707,9 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
 
 	 newCtx->NewState |= _NEW_BUFFERS;
 
+#if 1
+         /* We want to get rid of these lines: */
+
 #if _HAVE_FULL_GL
          if (!drawBuffer->Initialized) {
             initialize_framebuffer_size(newCtx, drawBuffer);
@@ -1716,6 +1720,23 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
 
 	 _mesa_resizebuffers(newCtx);
 #endif
+
+#else
+         /* We want the drawBuffer and readBuffer to be initialized by
+          * the driver.
+          * This generally means the Width and Height match the actual
+          * window size and the renderbuffers (both hardware and software
+          * based) are allocated to match.  The later can generally be
+          * done with a call to _mesa_resize_framebuffer().
+          *
+          * It's theoretically possible for a buffer to have zero width
+          * or height, but for now, assert check that the driver did what's
+          * expected of it.
+          */
+         ASSERT(drawBuffer->Width > 0);
+         ASSERT(drawBuffer->Height > 0);
+#endif
+
          if (newCtx->FirstTimeCurrent) {
             /* set initial viewport and scissor size now */
             _mesa_set_viewport(newCtx, 0, 0,

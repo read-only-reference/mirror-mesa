@@ -328,8 +328,8 @@ void viaEmitState(struct via_context *vmesa)
 	 /* KW:  This test never succeeds:
 	  */
 	 if (t->regTexFM == HC_HTXnFM_Index8) {
-	    struct gl_color_table *table = &texObj->Palette;
-	    GLfloat *tableF = (GLfloat *)table->Table;
+	    const struct gl_color_table *table = &texObj->Palette;
+	    const GLfloat *tableF = table->TableF;
 
 	    BEGIN_RING(2 + table->Size);
 	    OUT_RING( HC_HEADER2 );
@@ -453,8 +453,8 @@ void viaEmitState(struct via_context *vmesa)
 	 /* KW:  This test never succeeds:
 	  */
 	 if (t->regTexFM == HC_HTXnFM_Index8) {
-	    struct gl_color_table *table = &texObj->Palette;
-	    GLfloat *tableF = (GLfloat *)table->Table;
+	    const struct gl_color_table *table = &texObj->Palette;
+	    const GLfloat *tableF = table->TableF;
 
 	    BEGIN_RING(2 + table->Size);
 	    OUT_RING( HC_HEADER2 );
@@ -1524,19 +1524,6 @@ void viaInitStateFuncs(GLcontext *ctx)
     ctx->Driver.Viewport = viaViewport;
     ctx->Driver.Enable = viaEnable;
 
-    /* Pixel path fallbacks.
-     */
-    ctx->Driver.Accum = _swrast_Accum;
-    ctx->Driver.Bitmap = _swrast_Bitmap;
-    ctx->Driver.CopyPixels = _swrast_CopyPixels;
-    ctx->Driver.DrawPixels = _swrast_DrawPixels;
-    ctx->Driver.ReadPixels = _swrast_ReadPixels;
+    /* XXX this should go away */
     ctx->Driver.ResizeBuffers = viaReAllocateBuffers;
-
-    /* Swrast hooks for imaging extensions:
-     */
-    ctx->Driver.CopyColorTable = _swrast_CopyColorTable;
-    ctx->Driver.CopyColorSubTable = _swrast_CopyColorSubTable;
-    ctx->Driver.CopyConvolutionFilter1D = _swrast_CopyConvolutionFilter1D;
-    ctx->Driver.CopyConvolutionFilter2D = _swrast_CopyConvolutionFilter2D;
 }

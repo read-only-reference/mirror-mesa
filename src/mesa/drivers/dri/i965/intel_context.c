@@ -250,22 +250,14 @@ void intelInitDriverFunctions( struct dd_function_table *functions )
    functions->Finish = intelFinish;
    functions->GetString = intelGetString;
    functions->UpdateState = intelInvalidateState;
-   functions->CopyColorTable = _swrast_CopyColorTable;
-   functions->CopyColorSubTable = _swrast_CopyColorSubTable;
-   functions->CopyConvolutionFilter1D = _swrast_CopyConvolutionFilter1D;
-   functions->CopyConvolutionFilter2D = _swrast_CopyConvolutionFilter2D;
-
-   /* Pixel path fallbacks.
-    */
-   functions->Accum = _swrast_Accum;
-   functions->Bitmap = _swrast_Bitmap;
-   functions->ReadPixels = _swrast_ReadPixels;
-   functions->DrawPixels = _swrast_DrawPixels;
 
    /* CopyPixels can be accelerated even with the current memory
     * manager:
     */
-   functions->CopyPixels = intelCopyPixels;
+   if (!getenv("INTEL_NO_BLIT")) {
+      functions->CopyPixels = intelCopyPixels;
+      functions->Bitmap = intelBitmap;
+   }
 
    intelInitTextureFuncs( functions );
    intelInitStateFuncs( functions );
@@ -585,12 +577,6 @@ static void intelContendedLock( struct intel_context *intel, GLuint flags )
    if (dPriv && intel->lastStamp != dPriv->lastStamp) {
       intelWindowMoved( intel );
       intel->lastStamp = dPriv->lastStamp;
-
-      /* This works because the lock is always grabbed before emitting
-       * commands and commands are always flushed prior to releasing
-       * the lock.
-       */
-      intel->NewGLState |= _NEW_WINDOW_POS; 
    }
 }
 

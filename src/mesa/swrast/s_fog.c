@@ -32,13 +32,6 @@
 #include "s_fog.h"
 
 
-/** XXX temporary */
-#define UBYTE_RGBA  GLubyte (*rgba)[4] = span->array->color.sz1.rgba
-#define USHORT_RGBA  GLushort (*rgba)[4] = span->array->color.sz2.rgba
-#define FLOAT_RGBA  GLfloat (*rgba)[4] = span->array->color.sz4.rgba
-
-
-
 /**
  * Used to convert current raster distance to a fog factor in [0,1].
  */
@@ -107,17 +100,32 @@ do {									\
  * _PreferPixelFog should be in sync with that state!
  */
 void
-_swrast_fog_rgba_span( const GLcontext *ctx, struct sw_span *span )
+_swrast_fog_rgba_span( const GLcontext *ctx, SWspan *span )
 {
    const SWcontext *swrast = SWRAST_CONTEXT(ctx);
-   const GLfloat rFog = ctx->Fog.Color[RCOMP] * CHAN_MAX;
-   const GLfloat gFog = ctx->Fog.Color[GCOMP] * CHAN_MAX;
-   const GLfloat bFog = ctx->Fog.Color[BCOMP] * CHAN_MAX;
+   GLfloat rFog, gFog, bFog;
    const GLuint haveW = (span->interpMask & SPAN_W);
 
    ASSERT(swrast->_FogEnabled);
    ASSERT((span->interpMask | span->arrayMask) & SPAN_FOG);
    ASSERT(span->arrayMask & SPAN_RGBA);
+
+   if (span->array->ChanType == GL_UNSIGNED_BYTE) {
+      rFog = ctx->Fog.Color[RCOMP] * 255.0;
+      gFog = ctx->Fog.Color[GCOMP] * 255.0;
+      bFog = ctx->Fog.Color[BCOMP] * 255.0;
+   }
+   else if (span->array->ChanType == GL_UNSIGNED_SHORT) {
+      rFog = ctx->Fog.Color[RCOMP] * 65535.0;
+      gFog = ctx->Fog.Color[GCOMP] * 65535.0;
+      bFog = ctx->Fog.Color[BCOMP] * 65535.0;
+   }
+   else {
+      rFog = ctx->Fog.Color[RCOMP];
+      gFog = ctx->Fog.Color[GCOMP];
+      bFog = ctx->Fog.Color[BCOMP];
+   }
+
 
    /* NOTE: if haveW is true, that means the fog start/step values are
     * perspective-corrected and we have to divide each fog coord by W.
@@ -138,15 +146,15 @@ _swrast_fog_rgba_span( const GLcontext *ctx, struct sw_span *span )
       case GL_LINEAR:
 #define COMPUTE_F  f = (fogEnd - FABSF(fogCoord) / w) * fogScale;
          if (span->array->ChanType == GL_UNSIGNED_BYTE) {
-            UBYTE_RGBA;
+            GLubyte (*rgba)[4] = span->array->color.sz1.rgba;
             FOG_LOOP(GLubyte, COMPUTE_F);
          }
          else if (span->array->ChanType == GL_UNSIGNED_SHORT) {
-            USHORT_RGBA;
+            GLushort (*rgba)[4] = span->array->color.sz2.rgba;
             FOG_LOOP(GLushort, COMPUTE_F);
          }
          else {
-            FLOAT_RGBA;
+            GLfloat (*rgba)[4] = span->array->color.sz4.rgba;
             ASSERT(span->array->ChanType == GL_FLOAT);
             FOG_LOOP(GLfloat, COMPUTE_F);
          }
@@ -156,15 +164,15 @@ _swrast_fog_rgba_span( const GLcontext *ctx, struct sw_span *span )
       case GL_EXP:
 #define COMPUTE_F  f = EXPF(density * FABSF(fogCoord) / w);
          if (span->array->ChanType == GL_UNSIGNED_BYTE) {
-            UBYTE_RGBA;
+            GLubyte (*rgba)[4] = span->array->color.sz1.rgba;
             FOG_LOOP(GLubyte, COMPUTE_F);
          }
          else if (span->array->ChanType == GL_UNSIGNED_SHORT) {
-            USHORT_RGBA;
+            GLushort (*rgba)[4] = span->array->color.sz2.rgba;
             FOG_LOOP(GLushort, COMPUTE_F);
          }
          else {
-            FLOAT_RGBA;
+            GLfloat (*rgba)[4] = span->array->color.sz4.rgba;
             ASSERT(span->array->ChanType == GL_FLOAT);
             FOG_LOOP(GLfloat, COMPUTE_F);
          }
@@ -178,15 +186,15 @@ _swrast_fog_rgba_span( const GLcontext *ctx, struct sw_span *span )
                       tmp = FLT_MIN_10_EXP; \
                    f = EXPF(tmp);
          if (span->array->ChanType == GL_UNSIGNED_BYTE) {
-            UBYTE_RGBA;
+            GLubyte (*rgba)[4] = span->array->color.sz1.rgba;
             FOG_LOOP(GLubyte, COMPUTE_F);
          }
          else if (span->array->ChanType == GL_UNSIGNED_SHORT) {
-            USHORT_RGBA;
+            GLushort (*rgba)[4] = span->array->color.sz2.rgba;
             FOG_LOOP(GLushort, COMPUTE_F);
          }
          else {
-            FLOAT_RGBA;
+            GLfloat (*rgba)[4] = span->array->color.sz4.rgba;
             ASSERT(span->array->ChanType == GL_FLOAT);
             FOG_LOOP(GLfloat, COMPUTE_F);
          }
@@ -204,7 +212,7 @@ _swrast_fog_rgba_span( const GLcontext *ctx, struct sw_span *span )
        */
       GLuint i;
       if (span->array->ChanType == GL_UNSIGNED_BYTE) {
-         UBYTE_RGBA;
+         GLubyte (*rgba)[4] = span->array->color.sz1.rgba;
          for (i = 0; i < span->end; i++) {
             const GLfloat f = span->array->fog[i];
             const GLfloat oneMinusF = 1.0F - f;
@@ -214,7 +222,7 @@ _swrast_fog_rgba_span( const GLcontext *ctx, struct sw_span *span )
          }
       }
       else if (span->array->ChanType == GL_UNSIGNED_SHORT) {
-         USHORT_RGBA;
+         GLushort (*rgba)[4] = span->array->color.sz2.rgba;
          for (i = 0; i < span->end; i++) {
             const GLfloat f = span->array->fog[i];
             const GLfloat oneMinusF = 1.0F - f;
@@ -224,7 +232,7 @@ _swrast_fog_rgba_span( const GLcontext *ctx, struct sw_span *span )
          }
       }
       else {
-         FLOAT_RGBA;
+         GLfloat (*rgba)[4] = span->array->color.sz4.rgba;
          ASSERT(span->array->ChanType == GL_FLOAT);
          for (i = 0; i < span->end; i++) {
             const GLfloat f = span->array->fog[i];
@@ -242,15 +250,15 @@ _swrast_fog_rgba_span( const GLcontext *ctx, struct sw_span *span )
        */
 #define COMPUTE_F f = fogCoord / w;
       if (span->array->ChanType == GL_UNSIGNED_BYTE) {
-         UBYTE_RGBA;
+         GLubyte (*rgba)[4] = span->array->color.sz1.rgba;
          FOG_LOOP(GLubyte, COMPUTE_F);
       }
       else if (span->array->ChanType == GL_UNSIGNED_SHORT) {
-         USHORT_RGBA;
+         GLushort (*rgba)[4] = span->array->color.sz2.rgba;
          FOG_LOOP(GLushort, COMPUTE_F);
       }
       else {
-         FLOAT_RGBA;
+         GLfloat (*rgba)[4] = span->array->color.sz4.rgba;
          ASSERT(span->array->ChanType == GL_FLOAT);
          FOG_LOOP(GLfloat, COMPUTE_F);
       }
@@ -263,7 +271,7 @@ _swrast_fog_rgba_span( const GLcontext *ctx, struct sw_span *span )
  * As above, but color index mode.
  */
 void
-_swrast_fog_ci_span( const GLcontext *ctx, struct sw_span *span )
+_swrast_fog_ci_span( const GLcontext *ctx, SWspan *span )
 {
    const SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const GLuint haveW = (span->interpMask & SPAN_W);

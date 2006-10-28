@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.1
+ * Version:  6.5.2
  *
  * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
@@ -77,10 +77,7 @@ _mesa_ExecuteProgramNV(GLenum target, GLuint id, const GLfloat *params)
       return;
    }
    
-   _mesa_init_vp_per_vertex_registers(ctx);
-   _mesa_init_vp_per_primitive_registers(ctx);
-   COPY_4V(ctx->VertexProgram.Inputs[VERT_ATTRIB_POS], params);
-   _mesa_exec_vertex_program(ctx, vprog);
+   _mesa_exec_vertex_state_program(ctx, vprog, params);
 }
 
 
@@ -89,8 +86,9 @@ _mesa_ExecuteProgramNV(GLenum target, GLuint id, const GLfloat *params)
  * \note Not compiled into display lists.
  * \note Called from the GL API dispatcher.
  */
-GLboolean GLAPIENTRY _mesa_AreProgramsResidentNV(GLsizei n, const GLuint *ids,
-                                      GLboolean *residences)
+GLboolean GLAPIENTRY
+_mesa_AreProgramsResidentNV(GLsizei n, const GLuint *ids,
+                            GLboolean *residences)
 {
    GLint i, j;
    GLboolean allResident = GL_TRUE;

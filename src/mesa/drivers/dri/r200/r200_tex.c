@@ -115,7 +115,7 @@ static void r200SetTexWrap( r200TexObjPtr t, GLenum swrap, GLenum twrap, GLenum 
       t->pp_txfilter |= R200_CLAMP_T_CLAMP_LAST;
       break;
    case GL_CLAMP_TO_BORDER:
-      t->pp_txfilter |= R200_CLAMP_T_CLAMP_GL | R200_BORDER_MODE_D3D;
+      t->pp_txfilter |= R200_CLAMP_T_CLAMP_GL;
       is_clamp_to_border = GL_TRUE;
       break;
    case GL_MIRRORED_REPEAT:
@@ -405,7 +405,9 @@ r200ChooseTextureFormat( GLcontext *ctx, GLint internalFormat,
    case GL_ALPHA12:
    case GL_ALPHA16:
    case GL_COMPRESSED_ALPHA:
-      return _dri_texformat_a8;
+   /* can't use a8 format since interpreting hw I8 as a8 would result
+      in wrong rgb values (same as alpha value instead of 0). */
+      return _dri_texformat_al88;
 
    case 1:
    case GL_LUMINANCE:
@@ -1005,7 +1007,16 @@ static void r200TexEnv( GLcontext *ctx, GLenum target,
       }
       break;
    }
-
+   case GL_COORD_REPLACE_ARB:
+      if (ctx->Point.PointSprite) {
+	 R200_STATECHANGE( rmesa, spr );
+	 if ((GLenum)param[0]) {
+	    rmesa->hw.spr.cmd[SPR_POINT_SPRITE_CNTL] |= R200_PS_GEN_TEX_0 << unit;
+	 } else {
+	    rmesa->hw.spr.cmd[SPR_POINT_SPRITE_CNTL] &= ~(R200_PS_GEN_TEX_0 << unit);
+	 }
+      }
+      break;
    default:
       return;
    }

@@ -134,9 +134,7 @@ _swrast_Clear( GLcontext *ctx, GLbitfield mask, GLboolean all,
 	       GLint x, GLint y, GLint width, GLint height );
 
 extern void
-_swrast_Accum( GLcontext *ctx, GLenum op,
-	       GLfloat value, GLint xpos, GLint ypos,
-	       GLint width, GLint height );
+_swrast_Accum(GLcontext *ctx, GLenum op, GLfloat value);
 
 
 
@@ -253,6 +251,13 @@ _swrast_copy_texsubimage3d(GLcontext *ctx,
 
 extern void
 _swrast_eject_texture_images(GLcontext *ctx);
+
+
+#if FEATURE_MESA_program_debug
+extern void
+_swrast_get_program_register(GLcontext *, enum register_file file,
+                             GLuint index, GLfloat val[4]);
+#endif /* FEATURE_MESA_program_debug */
 
 
 /**

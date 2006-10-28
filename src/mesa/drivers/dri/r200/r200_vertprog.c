@@ -40,6 +40,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r200_ioctl.h"
 #include "r200_tcl.h"
 #include "program_instruction.h"
+#include "programopt.h"
 #include "tnl/tnl.h"
 
 #if SWIZZLE_X != VSF_IN_COMPONENT_X || \
@@ -387,16 +388,12 @@ static unsigned long op_operands(enum prog_opcode opcode)
 #define UNUSED_SRC_2 ((o_inst->src2 & ~15) | 9)
 
 
-/* DP4 version seems to trigger some hw peculiarity - fglrx does this on r200 however */
-#define PREFER_DP4
-
-
 /**
  * Generate an R200 vertex program from Mesa's internal representation.
  *
  * \return  GL_TRUE for success, GL_FALSE for failure.
  */
-static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
+static GLboolean r200_translate_vertex_program(GLcontext *ctx, struct r200_vertex_program *vp)
 {
    struct gl_vertex_program *mesa_vp = &vp->mesa_program;
    struct prog_instruction *vpi;
@@ -405,9 +402,12 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
    unsigned long operands;
    int are_srcs_scalar;
    unsigned long hw_op;
+   int dofogfix = 0;
+   int fog_temp_i = 0;
 
    vp->native = GL_FALSE;
    vp->translated = GL_TRUE;
+   vp->fogmode = ctx->Fog.Mode;
 
    if (mesa_vp->Base.NumInstructions == 0)
       return GL_FALSE;
@@ -445,96 +445,22 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
       Smart enough to realize that it doesnt need it? */
    int u_temp_i = R200_VSF_MAX_TEMPS - 1;
    struct prog_src_register src[3];
+   struct prog_dst_register dst;
 
 /* FIXME: is changing the prog safe to do here? */
-   if (mesa_vp->IsPositionInvariant) {
-      struct gl_program_parameter_list *paramList;
-      GLint tokens[6] = { STATE_MATRIX, STATE_MVP, 0, 0, 0, STATE_MATRIX };
-
-#ifdef PREFER_DP4
-      tokens[5] = STATE_MATRIX;
-#else
-      tokens[5] = STATE_MATRIX_TRANSPOSE;
-#endif
-      paramList = mesa_vp->Base.Parameters;
-
-      vpi = malloc((mesa_vp->Base.NumInstructions + 4) * sizeof(struct prog_instruction));
-      memset(vpi, 0, 4 * sizeof(struct prog_instruction));
-
-      /* emit four dot product instructions to do MVP transformation */
-      for (i=0; i < 4; i++) {
-	 GLint idx;
-	 tokens[3] = tokens[4] = i;
-	 idx = _mesa_add_state_reference(paramList, tokens);
-#ifdef PREFER_DP4
-	 vpi[i].Opcode = OPCODE_DP4;
-	 vpi[i].StringPos = 0;
-	 vpi[i].Data = 0;
-
-	 vpi[i].DstReg.File = PROGRAM_OUTPUT;
-	 vpi[i].DstReg.Index = VERT_RESULT_HPOS;
-	 vpi[i].DstReg.WriteMask = 1 << i;
-	 vpi[i].DstReg.CondMask = COND_TR;
-
-	 vpi[i].SrcReg[0].File = PROGRAM_STATE_VAR;
-	 vpi[i].SrcReg[0].Index = idx;
-	 vpi[i].SrcReg[0].Swizzle = MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_Y, SWIZZLE_Z, SWIZZLE_W);
-
-	 vpi[i].SrcReg[1].File = PROGRAM_INPUT;
-	 vpi[i].SrcReg[1].Index = VERT_ATTRIB_POS;
-	 vpi[i].SrcReg[1].Swizzle = MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_Y, SWIZZLE_Z, SWIZZLE_W);
-#else
-	 if (i == 0)
-	    vpi[i].Opcode = OPCODE_MUL;
-	 else
-	    vpi[i].Opcode = OPCODE_MAD;
-
-	 vpi[i].StringPos = 0;
-	 vpi[i].Data = 0;
-
-	 if (i == 3)
-	    vpi[i].DstReg.File = PROGRAM_OUTPUT;
-	 else
-	    vpi[i].DstReg.File = PROGRAM_TEMPORARY;
-	 vpi[i].DstReg.Index = 0;
-	 vpi[i].DstReg.WriteMask = 0xf;
-	 vpi[i].DstReg.CondMask = COND_TR;
-
-	 vpi[i].SrcReg[0].File = PROGRAM_STATE_VAR;
-	 vpi[i].SrcReg[0].Index = idx;
-	 vpi[i].SrcReg[0].Swizzle = MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_Y, SWIZZLE_Z, SWIZZLE_W);
-
-	 vpi[i].SrcReg[1].File = PROGRAM_INPUT;
-	 vpi[i].SrcReg[1].Index = VERT_ATTRIB_POS;
-	 vpi[i].SrcReg[1].Swizzle = MAKE_SWIZZLE4(i, i, i, i);
-
-	 if (i > 0) {
-	    vpi[i].SrcReg[2].File = PROGRAM_TEMPORARY;
-	    vpi[i].SrcReg[2].Index = 0;
-	    vpi[i].SrcReg[2].Swizzle = MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_Y, SWIZZLE_Z, SWIZZLE_W);
-	 }
-#endif	
+   if (mesa_vp->IsPositionInvariant &&
+      /* make sure we only do this once */
+       !(mesa_vp->Base.OutputsWritten & (1 << VERT_RESULT_HPOS))) {
+	 _mesa_insert_mvp_code(ctx, mesa_vp);
       }
 
-      /* now append original program after our new instructions */
-      memcpy(&vpi[i], mesa_vp->Base.Instructions, mesa_vp->Base.NumInstructions * sizeof(struct prog_instruction));
-
-      /* deallocate original program */
-      free(mesa_vp->Base.Instructions);
-
-      /* install new program */
-      mesa_vp->Base.Instructions = vpi;
-
-      mesa_vp->Base.NumInstructions += 4;
-      vpi = &mesa_vp->Base.Instructions[mesa_vp->Base.NumInstructions-1];
-
-      assert(vpi->Opcode == OPCODE_END);
-
-      mesa_vp->Base.InputsRead |= (1 << VERT_ATTRIB_POS);
-      mesa_vp->Base.OutputsWritten |= (1 << VERT_RESULT_HPOS);
-
-      //fprintf(stderr, "IsPositionInvariant is set!\n");
-      //_mesa_print_program(&mesa_vp->Base);
+   /* for fogc, can't change mesa_vp, as it would hose swtnl, and exp with
+      base e isn't directly available neither. */
+   if (mesa_vp->Base.OutputsWritten & VERT_RESULT_FOGC && !vp->fogpidx) {
+      struct gl_program_parameter_list *paramList;
+      GLint tokens[6] = { STATE_FOG_PARAMS, 0, 0, 0, 0, 0 };
+      paramList = mesa_vp->Base.Parameters;
+      vp->fogpidx = _mesa_add_state_reference(paramList, tokens);
    }
 
    vp->pos_end = 0;
@@ -582,7 +508,7 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
    }
 
    o_inst = vp->instr;
-   for(vpi = mesa_vp->Base.Instructions; vpi->Opcode != OPCODE_END; vpi++, o_inst++){
+   for (vpi = mesa_vp->Base.Instructions; vpi->Opcode != OPCODE_END; vpi++, o_inst++){
       operands = op_operands(vpi->Opcode);
       are_srcs_scalar = operands & SCALAR_FLAG;
       operands &= OP_MASK;
@@ -672,6 +598,17 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
 	 }
       }
 
+      dst = vpi->DstReg;
+      if (dst.File == PROGRAM_OUTPUT &&
+	  dst.Index == VERT_RESULT_FOGC &&
+	  dst.WriteMask & WRITEMASK_X) {
+	  fog_temp_i = u_temp_i;
+	  dst.File = PROGRAM_TEMPORARY;
+	  dst.Index = fog_temp_i;
+	  dofogfix = 1;
+	  u_temp_i--;
+      }
+
       /* These ops need special handling. */
       switch(vpi->Opcode){
       case OPCODE_POW:
@@ -679,8 +616,8 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
    So may need to insert additional instruction */
 	 if ((src[0].File == src[1].File) &&
 	     (src[0].Index == src[1].Index)) {
-	    o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_POW, t_dst(&vpi->DstReg),
-		   t_dst_mask(vpi->DstReg.WriteMask));
+	    o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_POW, t_dst(&dst),
+		   t_dst_mask(dst.WriteMask));
 	    o_inst->src0 = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
 		   t_swizzle(GET_SWZ(src[0].Swizzle, 0)),
 		   SWIZZLE_ZERO,
@@ -708,8 +645,8 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
 	    o_inst->src2 = UNUSED_SRC_1;
 	    o_inst++;
 
-	    o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_POW, t_dst(&vpi->DstReg),
-		   t_dst_mask(vpi->DstReg.WriteMask));
+	    o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_POW, t_dst(&dst),
+		   t_dst_mask(dst.WriteMask));
 	    o_inst->src0 = MAKE_VSF_SOURCE(u_temp_i,
 		   VSF_IN_COMPONENT_X,
 		   VSF_IN_COMPONENT_Y,
@@ -725,8 +662,8 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
 
       case OPCODE_MOV://ADD RESULT 1.X Y Z W PARAM 0{} {X Y Z W} PARAM 0{} {ZERO ZERO ZERO ZERO} 
       case OPCODE_SWZ:
-	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_ADD, t_dst(&vpi->DstReg),
-		t_dst_mask(vpi->DstReg.WriteMask));
+	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_ADD, t_dst(&dst),
+		t_dst_mask(dst.WriteMask));
 	 o_inst->src0 = t_src(vp, &src[0]);
 	 o_inst->src1 = ZERO_SRC_0;
 	 o_inst->src2 = UNUSED_SRC_1;
@@ -737,8 +674,8 @@ static GLboolean r200_translate_vertex_program(struct r200_vertex_program *vp)
 	    src[1].File == PROGRAM_TEMPORARY &&
 	    src[2].File == PROGRAM_TEMPORARY) ? R200_VPI_OUT_OP_MAD_2 : R200_VPI_OUT_OP_MAD;
 
-	 o_inst->op = MAKE_VSF_OP(hw_op, t_dst(&vpi->DstReg),
-	    t_dst_mask(vpi->DstReg.WriteMask));
+	 o_inst->op = MAKE_VSF_OP(hw_op, t_dst(&dst),
+	    t_dst_mask(dst.WriteMask));
 	 o_inst->src0 = t_src(vp, &src[0]);
 #if 0
 if ((o_inst - vp->instr) == 31) {
@@ -763,8 +700,8 @@ else {
 	 goto next;
 
       case OPCODE_DP3://DOT RESULT 1.X Y Z W PARAM 0{} {X Y Z ZERO} PARAM 0{} {X Y Z ZERO} 
-	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_DOT, t_dst(&vpi->DstReg),
-		t_dst_mask(vpi->DstReg.WriteMask));
+	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_DOT, t_dst(&dst),
+		t_dst_mask(dst.WriteMask));
 
 	 o_inst->src0 = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
 		t_swizzle(GET_SWZ(src[0].Swizzle, 0)),
@@ -786,8 +723,8 @@ else {
 	 goto next;
 
       case OPCODE_DPH://DOT RESULT 1.X Y Z W PARAM 0{} {X Y Z ONE} PARAM 0{} {X Y Z W} 
-	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_DOT, t_dst(&vpi->DstReg),
-		t_dst_mask(vpi->DstReg.WriteMask));
+	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_DOT, t_dst(&dst),
+		t_dst_mask(dst.WriteMask));
 
 	 o_inst->src0 = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
 		t_swizzle(GET_SWZ(src[0].Swizzle, 0)),
@@ -801,8 +738,8 @@ else {
 	 goto next;
 
       case OPCODE_SUB://ADD RESULT 1.X Y Z W TMP 0{} {X Y Z W} PARAM 1{X Y Z W } {X Y Z W} neg Xneg Yneg Zneg W
-	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_ADD, t_dst(&vpi->DstReg),
-		t_dst_mask(vpi->DstReg.WriteMask));
+	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_ADD, t_dst(&dst),
+		t_dst_mask(dst.WriteMask));
 
 	 o_inst->src0 = t_src(vp, &src[0]);
 	 o_inst->src1 = MAKE_VSF_SOURCE(t_src_index(vp, &src[1]),
@@ -816,8 +753,8 @@ else {
 	 goto next;
 
       case OPCODE_ABS://MAX RESULT 1.X Y Z W PARAM 0{} {X Y Z W} PARAM 0{X Y Z W } {X Y Z W} neg Xneg Yneg Zneg W
-	 o_inst->op=MAKE_VSF_OP(R200_VPI_OUT_OP_MAX, t_dst(&vpi->DstReg),
-		t_dst_mask(vpi->DstReg.WriteMask));
+	 o_inst->op=MAKE_VSF_OP(R200_VPI_OUT_OP_MAX, t_dst(&dst),
+		t_dst_mask(dst.WriteMask));
 
 	 o_inst->src0=t_src(vp, &src[0]);
 	 o_inst->src1=MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
@@ -836,15 +773,15 @@ else {
 
 	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_FRC,
 	    (u_temp_i << R200_VPI_OUT_REG_INDEX_SHIFT) | R200_VSF_OUT_CLASS_TMP,
-	    t_dst_mask(vpi->DstReg.WriteMask));
+	    t_dst_mask(dst.WriteMask));
 
 	 o_inst->src0 = t_src(vp, &src[0]);
 	 o_inst->src1 = UNUSED_SRC_0;
 	 o_inst->src2 = UNUSED_SRC_1;
 	 o_inst++;
 
-	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_ADD, t_dst(&vpi->DstReg),
-		t_dst_mask(vpi->DstReg.WriteMask));
+	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_ADD, t_dst(&dst),
+		t_dst_mask(dst.WriteMask));
 
 	 o_inst->src0 = t_src(vp, &src[0]);
 	 o_inst->src1 = MAKE_VSF_SOURCE(u_temp_i,
@@ -868,7 +805,7 @@ else {
 
 	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_MUL,
 	    (u_temp_i << R200_VPI_OUT_REG_INDEX_SHIFT) | R200_VSF_OUT_CLASS_TMP,
-	    t_dst_mask(vpi->DstReg.WriteMask));
+	    t_dst_mask(dst.WriteMask));
 
 	 o_inst->src0 = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
 		t_swizzle(GET_SWZ(src[0].Swizzle, 1)), // y
@@ -890,8 +827,8 @@ else {
 	 o_inst++;
 	 u_temp_i--;
 
-	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_MAD, t_dst(&vpi->DstReg),
-		t_dst_mask(vpi->DstReg.WriteMask));
+	 o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_MAD, t_dst(&dst),
+		t_dst_mask(dst.WriteMask));
 
 	 o_inst->src0 = MAKE_VSF_SOURCE(t_src_index(vp, &src[1]),
 		t_swizzle(GET_SWZ(src[1].Swizzle, 1)), // y
@@ -924,8 +861,8 @@ else {
 	 break;
       }
 
-      o_inst->op = MAKE_VSF_OP(t_opcode(vpi->Opcode), t_dst(&vpi->DstReg),
-	    t_dst_mask(vpi->DstReg.WriteMask));
+      o_inst->op = MAKE_VSF_OP(t_opcode(vpi->Opcode), t_dst(&dst),
+	    t_dst_mask(dst.WriteMask));
 
       if(are_srcs_scalar){
 	 switch(operands){
@@ -979,6 +916,67 @@ else {
 	 }
       }
       next:
+
+      if (dofogfix) {
+	 o_inst++;
+	 if (vp->fogmode == GL_EXP) {
+	    o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_MUL,
+		(fog_temp_i << R200_VPI_OUT_REG_INDEX_SHIFT) | R200_VSF_OUT_CLASS_TMP,
+		VSF_FLAG_X);
+	    o_inst->src0 = EASY_VSF_SOURCE(fog_temp_i, X, X, X, X, TMP, NONE);
+	    o_inst->src1 = EASY_VSF_SOURCE(vp->fogpidx, X, X, X, X, PARAM, NONE);
+	    o_inst->src2 = UNUSED_SRC_1;
+	    o_inst++;
+	    o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_EXP_E,
+		R200_VSF_OUT_CLASS_RESULT_FOGC,
+		VSF_FLAG_X);
+	    o_inst->src0 = EASY_VSF_SOURCE(fog_temp_i, X, X, X, X, TMP, ALL);
+	    o_inst->src1 = UNUSED_SRC_0;
+	    o_inst->src2 = UNUSED_SRC_1;
+	 }
+	 else if (vp->fogmode == GL_EXP2) {
+	    o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_MUL,
+		(fog_temp_i << R200_VPI_OUT_REG_INDEX_SHIFT) | R200_VSF_OUT_CLASS_TMP,
+		VSF_FLAG_X);
+	    o_inst->src0 = EASY_VSF_SOURCE(fog_temp_i, X, X, X, X, TMP, NONE);
+	    o_inst->src1 = EASY_VSF_SOURCE(vp->fogpidx, X, X, X, X, PARAM, NONE);
+	    o_inst->src2 = UNUSED_SRC_1;
+	    o_inst++;
+	    o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_MUL,
+		(fog_temp_i << R200_VPI_OUT_REG_INDEX_SHIFT) | R200_VSF_OUT_CLASS_TMP,
+		VSF_FLAG_X);
+	    o_inst->src0 = EASY_VSF_SOURCE(fog_temp_i, X, X, X, X, TMP, NONE);
+	    o_inst->src1 = EASY_VSF_SOURCE(fog_temp_i, X, X, X, X, TMP, NONE);
+	    o_inst->src2 = UNUSED_SRC_1;
+	    o_inst++;
+	    o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_EXP_E,
+		R200_VSF_OUT_CLASS_RESULT_FOGC,
+		VSF_FLAG_X);
+	    o_inst->src0 = EASY_VSF_SOURCE(fog_temp_i, X, X, X, X, TMP, ALL);
+	    o_inst->src1 = UNUSED_SRC_0;
+	    o_inst->src2 = UNUSED_SRC_1;
+	 }
+	 else { /* fogmode == GL_LINEAR */
+		/* could do that with single op (dot) if using params like
+		   with fixed function pipeline fog */
+	    o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_ADD,
+		(fog_temp_i << R200_VPI_OUT_REG_INDEX_SHIFT) | R200_VSF_OUT_CLASS_TMP,
+		VSF_FLAG_X);
+	    o_inst->src0 = EASY_VSF_SOURCE(fog_temp_i, X, X, X, X, TMP, ALL);
+	    o_inst->src1 = EASY_VSF_SOURCE(vp->fogpidx, Z, Z, Z, Z, PARAM, NONE);
+	    o_inst->src2 = UNUSED_SRC_1;
+	    o_inst++;
+	    o_inst->op = MAKE_VSF_OP(R200_VPI_OUT_OP_MUL,
+		R200_VSF_OUT_CLASS_RESULT_FOGC,
+		VSF_FLAG_X);
+	    o_inst->src0 = EASY_VSF_SOURCE(fog_temp_i, X, X, X, X, TMP, NONE);
+	    o_inst->src1 = EASY_VSF_SOURCE(vp->fogpidx, W, W, W, W, PARAM, NONE);
+	    o_inst->src2 = UNUSED_SRC_1;
+
+	 }
+         dofogfix = 0;
+      }
+
       if (mesa_vp->Base.NumNativeTemporaries <
 	 (mesa_vp->Base.NumTemporaries + (R200_VSF_MAX_TEMPS - 1 - u_temp_i))) {
 	 mesa_vp->Base.NumNativeTemporaries =
@@ -1019,9 +1017,9 @@ void r200SetupVertexProg( GLcontext *ctx ) {
    GLboolean fallback;
    GLint i;
 
-   if (!vp->translated) {
+   if (!vp->translated || (ctx->Fog.Enabled && ctx->Fog.Mode != vp->fogmode)) {
       rmesa->curr_vp_hw = NULL;
-      r200_translate_vertex_program(vp);
+      r200_translate_vertex_program(ctx, vp);
    }
    /* could optimize setting up vertex progs away for non-tcl hw */
    fallback = !(vp->native && r200VertexProgUpdateParams(ctx, vp) &&
@@ -1142,8 +1140,9 @@ r200ProgramStringNotify(GLcontext *ctx, GLenum target, struct gl_program *prog)
    switch(target) {
    case GL_VERTEX_PROGRAM_ARB:
       vp->translated = GL_FALSE;
+      vp->fogpidx = 0;
 /*      memset(&vp->translated, 0, sizeof(struct r200_vertex_program) - sizeof(struct gl_vertex_program));*/
-      r200_translate_vertex_program(vp);
+      r200_translate_vertex_program(ctx, vp);
       rmesa->curr_vp_hw = NULL;
       break;
    }
@@ -1160,7 +1159,7 @@ r200IsProgramNative(GLcontext *ctx, GLenum target, struct gl_program *prog)
    case GL_VERTEX_STATE_PROGRAM_NV:
    case GL_VERTEX_PROGRAM_ARB:
       if (!vp->translated) {
-	 r200_translate_vertex_program(vp);
+	 r200_translate_vertex_program(ctx, vp);
       }
      /* does not take parameters etc. into account */
       return vp->native;

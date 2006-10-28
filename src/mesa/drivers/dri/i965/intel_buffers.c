@@ -210,6 +210,12 @@ void intelWindowMoved( struct intel_context *intel )
 
       intel->NewGLState |= _NEW_SCISSOR;
    }
+
+   /* This works because the lock is always grabbed before emitting
+    * commands and commands are always flushed prior to releasing
+    * the lock.
+    */
+   intel->NewGLState |= _NEW_WINDOW_POS; 
 }
 
 
@@ -549,7 +555,6 @@ void intelInitBufferFuncs( struct dd_function_table *functions )
 {
    functions->Clear = intelClear;
    functions->GetBufferSize = intelBufferSize;
-   functions->ResizeBuffers = _mesa_resize_framebuffer;
    functions->DrawBuffer = intelDrawBuffer;
    functions->ReadBuffer = intelReadBuffer;
 }

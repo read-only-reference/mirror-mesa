@@ -92,7 +92,7 @@ int prevLockLine;
  * Mesa's Driver Functions
  ***************************************/
 
-#define DRIVER_DATE                     "20050225"
+#define DRIVER_DATE "20061017"
 
 const GLubyte *intelGetString( GLcontext *ctx, GLenum name )
 {
@@ -132,27 +132,6 @@ const GLubyte *intelGetString( GLcontext *ctx, GLenum name )
    default:
       return NULL;
    }
-}
-
-static void intelBufferSize(GLframebuffer *buffer,
-			   GLuint *width, GLuint *height)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   intelContextPtr intel = INTEL_CONTEXT(ctx);
-   /* Need to lock to make sure the driDrawable is uptodate.  This
-    * information is used to resize Mesa's software buffers, so it has
-    * to be correct.
-    */
-   LOCK_HARDWARE(intel);
-   if (intel->driDrawable) {
-      *width = intel->driDrawable->w;
-      *height = intel->driDrawable->h;
-   }
-   else {
-      *width = 0;
-      *height = 0;
-   }
-   UNLOCK_HARDWARE(intel);
 }
 
 
@@ -263,14 +242,9 @@ void intelInitDriverFunctions( struct dd_function_table *functions )
    functions->Clear = intelClear;
    functions->Flush = intelglFlush;
    functions->Finish = intelFinish;
-   functions->GetBufferSize = intelBufferSize;
-   functions->ResizeBuffers = _mesa_resize_framebuffer;
+   functions->GetBufferSize = NULL; /* OBSOLETE */
    functions->GetString = intelGetString;
    functions->UpdateState = intelInvalidateState;
-   functions->CopyColorTable = _swrast_CopyColorTable;
-   functions->CopyColorSubTable = _swrast_CopyColorSubTable;
-   functions->CopyConvolutionFilter1D = _swrast_CopyConvolutionFilter1D;
-   functions->CopyConvolutionFilter2D = _swrast_CopyConvolutionFilter2D;
 
    intelInitTextureFuncs( functions );
    intelInitPixelFuncs( functions );
@@ -543,14 +517,14 @@ void intelSetBackClipRects( intelContextPtr intel )
 void intelWindowMoved( intelContextPtr intel )
 {
    __DRIdrawablePrivate *dPriv = intel->driDrawable;
+   GLframebuffer *drawFb = (GLframebuffer *) dPriv->driverPrivate;
 
    if (!intel->ctx.DrawBuffer) {
       intelSetFrontClipRects( intel );
    }
    else {
-      driUpdateFramebufferSize(&intel->ctx, intel->driDrawable);
-    
-      switch (intel->ctx.DrawBuffer->_ColorDrawBufferMask[0]) {
+      driUpdateFramebufferSize(&intel->ctx, dPriv);
+      switch (drawFb->_ColorDrawBufferMask[0]) {
       case BUFFER_BIT_FRONT_LEFT:
 	 intelSetFrontClipRects( intel );
 	 break;
@@ -563,10 +537,12 @@ void intelWindowMoved( intelContextPtr intel )
       }
    }
 
-   _mesa_resize_framebuffer(&intel->ctx,
-			    (GLframebuffer*)dPriv->driverPrivate,
-			    dPriv->w, dPriv->h);
-   
+   if (drawFb->Width != dPriv->w || drawFb->Height != dPriv->h) {
+      /* update Mesa's notion of framebuffer/window size */
+      _mesa_resize_framebuffer(&intel->ctx, drawFb, dPriv->w, dPriv->h);
+      drawFb->Initialized = GL_TRUE; /* XXX remove someday */
+   }
+
    /* Set state we know depends on drawable parameters:
     */
    {
