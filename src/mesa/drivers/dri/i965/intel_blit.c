@@ -221,6 +221,29 @@ void intelEmitFillBlit( struct intel_context *intel,
    ADVANCE_BATCH();
 }
 
+static GLuint translate_raster_op(GLenum logicop)
+{
+   switch(logicop) {
+   case GL_CLEAR: return 0x00;
+   case GL_AND: return 0x88;
+   case GL_AND_REVERSE: return 0x44;
+   case GL_COPY: return 0xCC;
+   case GL_AND_INVERTED: return 0x22;
+   case GL_NOOP: return 0xAA;
+   case GL_XOR: return 0x66;
+   case GL_OR: return 0xEE;
+   case GL_NOR: return 0x11;
+   case GL_EQUIV: return 0x99;
+   case GL_INVERT: return 0x55;
+   case GL_OR_REVERSE: return 0xDD;
+   case GL_COPY_INVERTED: return 0x33;
+   case GL_OR_INVERTED: return 0xBB;
+   case GL_NAND: return 0x77;
+   case GL_SET: return 0xFF;
+   default: return 0;
+   }
+}
+
 
 /* Copy BitBlt
  */
@@ -236,7 +259,8 @@ void intelEmitCopyBlit( struct intel_context *intel,
 			GLboolean dst_tiled,
 			GLshort src_x, GLshort src_y,
 			GLshort dst_x, GLshort dst_y,
-			GLshort w, GLshort h )
+			GLshort w, GLshort h,
+			GLenum logic_op )
 {
    GLuint CMD, BR13;
    int dst_y2 = dst_y + h;
@@ -244,12 +268,15 @@ void intelEmitCopyBlit( struct intel_context *intel,
    BATCH_LOCALS;
 
 
-   DBG("%s src:buf(%d)/%d %d,%d dst:buf(%d)/%d %d,%d sz:%dx%d\n",
+   DBG("%s src:buf(%d)/%d %d,%d dst:buf(%d)/%d %d,%d sz:%dx%d op:%d\n",
        __FUNCTION__,
        src_buffer, src_pitch, src_x, src_y,
        dst_buffer, dst_pitch, dst_x, dst_y,
-       w,h);
+       w,h,logic_op);
 
+   assert( logic_op - GL_CLEAR >= 0 );
+   assert( logic_op - GL_CLEAR < 0x10 );
+      
    src_pitch *= cpp;
    dst_pitch *= cpp;
 
@@ -257,11 +284,12 @@ void intelEmitCopyBlit( struct intel_context *intel,
    case 1: 
    case 2: 
    case 3: 
-      BR13 = (0xCC << 16) | (1<<24);
+      BR13 = (translate_raster_op(logic_op) << 16) | (1<<24);
       CMD = XY_SRC_COPY_BLT_CMD;
       break;
    case 4:
-      BR13 = (0xCC << 16) | (1<<24) | (1<<25);
+      BR13 = (translate_raster_op(logic_op) << 16) | (1<<24) |
+	  (1<<25);
       CMD = (XY_SRC_COPY_BLT_CMD | XY_SRC_COPY_BLT_WRITE_ALPHA |
 	     XY_SRC_COPY_BLT_WRITE_RGB);
       break;
@@ -322,14 +350,14 @@ void intelEmitCopyBlit( struct intel_context *intel,
 
 
 
-void intelClearWithBlit(GLcontext *ctx, GLbitfield flags, GLboolean all,
-		      GLint cx1, GLint cy1, GLint cw, GLint ch)
+void intelClearWithBlit(GLcontext *ctx, GLbitfield flags)
 {
    struct intel_context *intel = intel_context( ctx );
    intelScreenPrivate *intelScreen = intel->intelScreen;
    GLuint clear_depth, clear_color;
-   GLint cx, cy;
+   GLint cx, cy, cw, ch;
    GLint cpp = intelScreen->cpp;
+   GLboolean all;
    GLint i;
    struct intel_region *front = intel->front_region;
    struct intel_region *back = intel->back_region;
@@ -376,21 +404,16 @@ void intelClearWithBlit(GLcontext *ctx, GLbitfield flags, GLboolean all,
    intelFlush( &intel->ctx );
    LOCK_HARDWARE( intel );
    {
-      /* Refresh the cx/y/w/h values as they may have been invalidated
-       * by a new window position or size picked up when we did
-       * LOCK_HARDWARE above.  The values passed by mesa are not
-       * reliable.
-       */
-      {
-	  cx = ctx->DrawBuffer->_Xmin;
-	  cy = ctx->DrawBuffer->_Ymin;
-	  ch = ctx->DrawBuffer->_Ymax - ctx->DrawBuffer->_Ymin;
-	  cw  = ctx->DrawBuffer->_Xmax - ctx->DrawBuffer->_Xmin;
-      }
+      /* get clear bounds after locking */
+      cx = ctx->DrawBuffer->_Xmin;
+      cy = ctx->DrawBuffer->_Ymin;
+      ch = ctx->DrawBuffer->_Ymax - ctx->DrawBuffer->_Ymin;
+      cw = ctx->DrawBuffer->_Xmax - ctx->DrawBuffer->_Xmin;
+      all = (cw == ctx->DrawBuffer->Width && ch == ctx->DrawBuffer->Height);
 
       /* flip top to bottom */
-      cy = intel->driDrawable->h-cy1-ch;
-      cx = cx1 + intel->drawX;
+      cy = intel->driDrawable->h - cy - ch;
+      cx = cx + intel->drawX;
       cy += intel->drawY;
 
       /* adjust for page flipping */

@@ -723,6 +723,7 @@ static const __DRIinterfaceMethods interface_methods = {
 };
 
 
+
 /**
  * Perform the required libGL-side initialization and call the client-side
  * driver's \c __driCreateNewScreen function.
@@ -773,7 +774,8 @@ CallCreateNewScreen(Display *dpy, int scrn, __DRIscreen *psc,
     framebuffer.dev_priv = NULL;
 
     if (XF86DRIOpenConnection(dpy, scrn, &hSAREA, &BusID)) {
-	fd = drmOpen(NULL,BusID);
+        int newlyopened;
+	fd = drmOpenOnce(NULL,BusID, &newlyopened);
 	Xfree(BusID); /* No longer needed */
 
 	err_msg = "open DRM";
@@ -800,7 +802,7 @@ CallCreateNewScreen(Display *dpy, int scrn, __DRIscreen *psc,
 		}
 
 		err_msg = "XF86DRIAuthConnection";
-		if (XF86DRIAuthConnection(dpy, scrn, magic)) {
+		if (!newlyopened || XF86DRIAuthConnection(dpy, scrn, magic)) {
 		    char *driverName;
 
 		    /*
@@ -904,7 +906,7 @@ CallCreateNewScreen(Display *dpy, int scrn, __DRIscreen *psc,
 	}
 
 	if ( fd >= 0 ) {
-	    (void)drmClose(fd);
+	    (void)drmCloseOnce(fd);
 	}
 
 	(void)XF86DRICloseConnection(dpy, scrn);

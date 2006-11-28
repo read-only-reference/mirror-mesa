@@ -376,6 +376,32 @@ _mesa_init_exec_table(struct _glapi_table *exec)
    SET_StencilFuncSeparate(exec, _mesa_StencilFuncSeparate);
    SET_StencilMaskSeparate(exec, _mesa_StencilMaskSeparate);
    SET_StencilOpSeparate(exec, _mesa_StencilOpSeparate);
+#if FEATURE_ARB_shader_objects
+   SET_AttachShader(exec, _mesa_AttachShader);
+   SET_CreateProgram(exec, _mesa_CreateProgram);
+   SET_CreateShader(exec, _mesa_CreateShader);
+   SET_DeleteProgram(exec, _mesa_DeleteProgram);
+   SET_DeleteShader(exec, _mesa_DeleteShader);
+   SET_DetachShader(exec, _mesa_DetachShader);
+   SET_GetAttachedShaders(exec, _mesa_GetAttachedShaders);
+   SET_GetProgramiv(exec, _mesa_GetProgramiv);
+   SET_GetProgramInfoLog(exec, _mesa_GetProgramInfoLog);
+   SET_GetShaderiv(exec, _mesa_GetShaderiv);
+   SET_GetShaderInfoLog(exec, _mesa_GetShaderInfoLog);
+   SET_IsProgram(exec, _mesa_IsProgram);
+   SET_IsShader(exec, _mesa_IsShader);
+#endif
+
+   /* OpenGL 2.1 */
+#if FEATURE_ARB_shader_objects
+   SET_UniformMatrix2x3fv(exec, _mesa_UniformMatrix2x3fv);
+   SET_UniformMatrix3x2fv(exec, _mesa_UniformMatrix3x2fv);
+   SET_UniformMatrix2x4fv(exec, _mesa_UniformMatrix2x4fv);
+   SET_UniformMatrix4x2fv(exec, _mesa_UniformMatrix4x2fv);
+   SET_UniformMatrix3x4fv(exec, _mesa_UniformMatrix3x4fv);
+   SET_UniformMatrix4x3fv(exec, _mesa_UniformMatrix4x3fv);
+#endif
+
 
    /* 2. GL_EXT_blend_color */
 #if 0
@@ -507,7 +533,7 @@ _mesa_init_exec_table(struct _glapi_table *exec)
    SET_GetVertexAttribfvNV(exec, _mesa_GetVertexAttribfvNV);
    SET_GetVertexAttribivNV(exec, _mesa_GetVertexAttribivNV);
    SET_GetVertexAttribPointervNV(exec, _mesa_GetVertexAttribPointervNV);
-   SET_IsProgramNV(exec, _mesa_IsProgram);
+   SET_IsProgramNV(exec, _mesa_IsProgramARB);
    SET_LoadProgramNV(exec, _mesa_LoadProgramNV);
    SET_ProgramParameter4dNV(exec, _mesa_ProgramParameter4dNV);
    SET_ProgramParameter4dvNV(exec, _mesa_ProgramParameter4dvNV);
@@ -983,9 +1009,7 @@ update_color(GLcontext *ctx)
    /* This is needed to support 1.1's RGB logic ops AND
     * 1.0's blending logicops.
     */
-   ctx->Color._LogicOpEnabled = (ctx->Color.ColorLogicOpEnabled ||
-                                 (ctx->Color.BlendEnabled &&
-                                  ctx->Color.BlendEquationRGB == GL_LOGIC_OP));
+   ctx->Color._LogicOpEnabled = RGBA_LOGICOP_ENABLED(ctx);
 }
 
 
@@ -1003,7 +1027,7 @@ update_color(GLcontext *ctx)
  * _mesa_update_lighting() and _mesa_update_tnl_spaces().
  */
 void
-_mesa_update_state( GLcontext *ctx )
+_mesa_update_state_locked( GLcontext *ctx )
 {
    GLbitfield new_state = ctx->NewState;
 
@@ -1083,5 +1107,18 @@ _mesa_update_state( GLcontext *ctx )
    ctx->Driver.UpdateState(ctx, new_state);
    ctx->Array.NewState = 0;
 }
+
+
+/* This is the usual entrypoint for state updates:
+ */
+void
+_mesa_update_state( GLcontext *ctx )
+{
+   _mesa_lock_context_textures(ctx);
+   _mesa_update_state_locked(ctx);
+   _mesa_unlock_context_textures(ctx);
+}
+
+
 
 /*@}*/

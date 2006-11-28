@@ -98,27 +98,10 @@ static const GLubyte *radeonGetString(GLcontext * ctx, GLenum name)
 	}
 }
 
-
-/* Return the width and height of the given buffer.
- */
-static void radeonGetBufferSize(GLframebuffer * buffer,
-				GLuint * width, GLuint * height)
-{
-	GET_CURRENT_CONTEXT(ctx);
-	radeonContextPtr radeon = RADEON_CONTEXT(ctx);
-
-	LOCK_HARDWARE(radeon);
-	*width = radeon->dri.drawable->w;
-	*height = radeon->dri.drawable->h;
-	UNLOCK_HARDWARE(radeon);
-}
-
-
 /* Initialize the driver's misc functions.
  */
 static void radeonInitDriverFuncs(struct dd_function_table *functions)
 {
-	functions->GetBufferSize = radeonGetBufferSize;
 	functions->GetString = radeonGetString;
 }
 
@@ -158,7 +141,8 @@ GLboolean radeonInitContext(radeonContextPtr radeon,
 	/* DRI fields */
 	radeon->dri.context = driContextPriv;
 	radeon->dri.screen = sPriv;
-	radeon->dri.drawable = NULL;	/* Set by XMesaMakeCurrent */
+	radeon->dri.drawable = NULL;
+	radeon->dri.readable = NULL;
 	radeon->dri.hwContext = driContextPriv->hHWContext;
 	radeon->dri.hwLock = &sPriv->pSAREA->lock;
 	radeon->dri.fd = sPriv->fd;
@@ -286,8 +270,13 @@ GLboolean radeonMakeCurrent(__DRIcontextPrivate * driContextPriv,
 			driDrawableInitVBlank(driDrawPriv,
 					      radeon->vblank_flags,
 					      &radeon->vbl_seq);
+		}
+
+		if (radeon->dri.drawable != driDrawPriv ||
+		    radeon->dri.readable != driReadPriv) {
 			radeon->dri.drawable = driDrawPriv;
-			
+			radeon->dri.readable = driReadPriv;
+
 			r300UpdateWindow(radeon->glCtx);
 			r300UpdateViewportOffset(radeon->glCtx);
 		}
