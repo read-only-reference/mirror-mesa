@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.2
+ * Version:  6.5.3
  *
- * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -33,11 +33,10 @@
 
 #include "glheader.h"
 #include "context.h"
-#include "imports.h"
-#include "mtypes.h"
-#include "program.h"
+#include "prog_parameter.h"
+#include "prog_statevars.h"
 #include "programopt.h"
-#include "program_instruction.h"
+#include "prog_instruction.h"
 
 
 /**
@@ -136,6 +135,7 @@ _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
    GLuint colorTemp, fogFactorTemp; /* temporary registerss */
    GLfloat fogVals[4];
    GLuint fogConsts;                /* constant values for EXP, EXP2 mode */
+   GLuint swizzle;
 
    if (fprog->FogOption == GL_NONE) {
       _mesa_problem(ctx, "_mesa_append_fog_code() called for fragment program"
@@ -172,7 +172,9 @@ _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
    fogVals[1] = 1.0 / SQRTF(log(2.0));
    fogVals[2] = 0.0;
    fogVals[3] = 0.0;
-   fogConsts = _mesa_add_unnamed_constant(fprog->Base.Parameters, fogVals, 4);
+   fogConsts = _mesa_add_unnamed_constant(fprog->Base.Parameters,
+                                          fogVals, 4, &swizzle);
+   ASSERT(swizzle == SWIZZLE_NOOP);
 
    /* Scan program to find where result.color is written */
    inst = newInst;
@@ -303,3 +305,85 @@ _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
    fprog->Base.InputsRead |= FRAG_BIT_FOGC;
    /* XXX do this?  fprog->FogOption = GL_NONE; */
 }
+
+
+
+static GLboolean
+is_texture_instruction(const struct prog_instruction *inst)
+{
+   switch (inst->Opcode) {
+   case OPCODE_TEX:
+   case OPCODE_TXB:
+   case OPCODE_TXD:
+   case OPCODE_TXL:
+   case OPCODE_TXP:
+   case OPCODE_TXP_NV:
+      return GL_TRUE;
+   default:
+      return GL_FALSE;
+   }
+}
+      
+
+/**
+ * Count the number of texure indirections in the given program.
+ * The program's NumTexIndirections field will be updated.
+ * See the GL_ARB_fragment_program spec (issue 24) for details.
+ * XXX we count texture indirections in texenvprogram.c (maybe use this code
+ * instead and elsewhere).
+ */
+void
+_mesa_count_texture_indirections(struct gl_program *prog)
+{
+   GLuint indirections = 1;
+   GLbitfield tempsOutput = 0x0;
+   GLbitfield aluTemps = 0x0;
+   GLuint i;
+
+   for (i = 0; i < prog->NumInstructions; i++) {
+      const struct prog_instruction *inst = prog->Instructions + i;
+
+      if (is_texture_instruction(inst)) {
+         if (((inst->SrcReg[0].File == PROGRAM_TEMPORARY) && 
+              (tempsOutput & (1 << inst->SrcReg[0].Index))) ||
+             ((inst->Opcode != OPCODE_KIL) &&
+              (inst->DstReg.File == PROGRAM_TEMPORARY) && 
+              (aluTemps & (1 << inst->DstReg.Index)))) 
+            {
+               indirections++;
+               tempsOutput = 0x0;
+               aluTemps = 0x0;
+            }
+      }
+      else {
+         GLuint j;
+         for (j = 0; j < 3; j++) {
+            if (inst->SrcReg[j].File == PROGRAM_TEMPORARY)
+               aluTemps |= (1 << inst->SrcReg[j].Index);
+         }
+         if (inst->DstReg.File == PROGRAM_TEMPORARY)
+            aluTemps |= (1 << inst->DstReg.Index);
+      }
+
+      if ((inst->Opcode != OPCODE_KIL) && (inst->DstReg.File == PROGRAM_TEMPORARY))
+         tempsOutput |= (1 << inst->DstReg.Index);
+   }
+
+   prog->NumTexIndirections = indirections;
+}
+
+
+/**
+ * Count number of texture instructions in given program and update the
+ * program's NumTexInstructions field.
+ */
+void
+_mesa_count_texture_instructions(struct gl_program *prog)
+{
+   GLuint i;
+   prog->NumTexInstructions = 0;
+   for (i = 0; i < prog->NumInstructions; i++) {
+      prog->NumTexInstructions += is_texture_instruction(prog->Instructions + i);
+   }
+}
+

@@ -939,7 +939,7 @@ main(int argc, char *argv[])
 
    dpy = XOpenDisplay(displayName);
    if (!dpy) {
-      fprintf(stderr, "Error: unable to open display %s\n", XDisplayName(displayName));
+      fprintf(stderr, "Error: unable to open display %s\n", displayName);
       return -1;
    }
 

@@ -131,7 +131,7 @@
 #include "math/m_xform.h"
 #include "math/mathmod.h"
 #endif
-#include "shaderobjects.h"
+#include "shader_api.h"
 
 #ifdef USE_SPARC_ASM
 #include "sparc/sparc.h"
@@ -705,7 +705,7 @@ alloc_shared_state( GLcontext *ctx )
    ss->ArrayObjects = _mesa_NewHashTable();
 
 #if FEATURE_ARB_shader_objects
-   ss->GL2Objects = _mesa_NewHashTable ();
+   ss->ShaderObjects = _mesa_NewHashTable();
 #endif
 
    ss->Default1D = (*ctx->Driver.NewTextureObject)(ctx, 0, GL_TEXTURE_1D);
@@ -782,8 +782,8 @@ alloc_shared_state( GLcontext *ctx )
       _mesa_DeleteHashTable (ss->ArrayObjects);
 
 #if FEATURE_ARB_shader_objects
-   if (ss->GL2Objects)
-      _mesa_DeleteHashTable (ss->GL2Objects);
+   if (ss->ShaderObjects)
+      _mesa_DeleteHashTable (ss->ShaderObjects);
 #endif
 
 #if FEATURE_EXT_framebuffer_object
@@ -877,13 +877,22 @@ delete_arrayobj_cb(GLuint id, void *data, void *userData)
 }
 
 /**
- * Callback for deleting an shader object.  Called by _mesa_HashDeleteAll().
+ * Callback for deleting shader and shader programs objects.
+ * Called by _mesa_HashDeleteAll().
  */
 static void
-delete_shaderobj_cb(GLuint id, void *data, void *userData)
+delete_shader_cb(GLuint id, void *data, void *userData)
 {
-   /* XXX probably need to fix this */
-   _mesa_free(data);
+   GLcontext *ctx = (GLcontext *) userData;
+   struct gl_shader *sh = (struct gl_shader *) data;
+   if (sh->Type == GL_FRAGMENT_SHADER || sh->Type == GL_VERTEX_SHADER) {
+      _mesa_free_shader(ctx, sh);
+   }
+   else {
+      struct gl_shader_program *shProg = (struct gl_shader_program *) data;
+      ASSERT(shProg->Type == GL_SHADER_PROGRAM);
+      _mesa_free_shader_program(ctx, shProg);
+   }
 }
 
 
@@ -948,8 +957,8 @@ free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
    _mesa_DeleteHashTable(ss->ArrayObjects);
 
 #if FEATURE_ARB_shader_objects
-   _mesa_HashDeleteAll(ss->GL2Objects, delete_shaderobj_cb, ctx);
-   _mesa_DeleteHashTable(ss->GL2Objects);
+   _mesa_HashDeleteAll(ss->ShaderObjects, delete_shader_cb, ctx);
+   _mesa_DeleteHashTable(ss->ShaderObjects);
 #endif
 
 #if FEATURE_EXT_framebuffer_object
@@ -967,7 +976,7 @@ free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
  * Initialize fields of gl_current_attrib (aka ctx->Current.*)
  */
 static void
-_mesa_init_current( GLcontext *ctx )
+_mesa_init_current(GLcontext *ctx)
 {
    GLuint i;
 
@@ -1010,7 +1019,7 @@ init_natives(struct gl_program_constants *prog)
  * some of these values (such as number of texture units).
  */
 static void 
-_mesa_init_constants( GLcontext *ctx )
+_mesa_init_constants(GLcontext *ctx)
 {
    assert(ctx);
 
@@ -1063,9 +1072,10 @@ _mesa_init_constants( GLcontext *ctx )
    ctx->Const.VertexProgram.MaxLocalParams = MAX_PROGRAM_LOCAL_PARAMS;
    ctx->Const.VertexProgram.MaxEnvParams = MAX_NV_VERTEX_PROGRAM_PARAMS;
    ctx->Const.VertexProgram.MaxAddressRegs = MAX_VERTEX_PROGRAM_ADDRESS_REGS;
-   ctx->Const.VertexProgram.MaxUniformComponents = MAX_VERTEX_UNIFORM_COMPONENTS;
+   ctx->Const.VertexProgram.MaxUniformComponents = 4 * MAX_UNIFORMS;
    init_natives(&ctx->Const.VertexProgram);
 #endif
+
 #if FEATURE_ARB_fragment_program
    ctx->Const.FragmentProgram.MaxInstructions = MAX_NV_FRAGMENT_PROGRAM_INSTRUCTIONS;
    ctx->Const.FragmentProgram.MaxAluInstructions = MAX_FRAGMENT_PROGRAM_ALU_INSTRUCTIONS;
@@ -1077,7 +1087,7 @@ _mesa_init_constants( GLcontext *ctx )
    ctx->Const.FragmentProgram.MaxLocalParams = MAX_PROGRAM_LOCAL_PARAMS;
    ctx->Const.FragmentProgram.MaxEnvParams = MAX_NV_FRAGMENT_PROGRAM_PARAMS;
    ctx->Const.FragmentProgram.MaxAddressRegs = MAX_FRAGMENT_PROGRAM_ADDRESS_REGS;
-   ctx->Const.FragmentProgram.MaxUniformComponents = MAX_FRAGMENT_UNIFORM_COMPONENTS;
+   ctx->Const.FragmentProgram.MaxUniformComponents = 4 * MAX_UNIFORMS;
    init_natives(&ctx->Const.FragmentProgram);
 #endif
    ctx->Const.MaxProgramMatrices = MAX_PROGRAM_MATRICES;
@@ -1106,7 +1116,7 @@ _mesa_init_constants( GLcontext *ctx )
 
 #if FEATURE_ARB_vertex_shader
    ctx->Const.MaxVertexTextureImageUnits = MAX_VERTEX_TEXTURE_IMAGE_UNITS;
-   ctx->Const.MaxVaryingFloats = MAX_VARYING_FLOATS;
+   ctx->Const.MaxVarying = MAX_VARYING;
 #endif
 
    /* sanity checks */
@@ -1114,6 +1124,11 @@ _mesa_init_constants( GLcontext *ctx )
                                              ctx->Const.MaxTextureCoordUnits));
    ASSERT(ctx->Const.FragmentProgram.MaxLocalParams <= MAX_PROGRAM_LOCAL_PARAMS);
    ASSERT(ctx->Const.VertexProgram.MaxLocalParams <= MAX_PROGRAM_LOCAL_PARAMS);
+
+   ASSERT(MAX_NV_FRAGMENT_PROGRAM_TEMPS <= MAX_PROGRAM_TEMPS);
+   ASSERT(MAX_NV_VERTEX_PROGRAM_TEMPS <= MAX_PROGRAM_TEMPS);
+   ASSERT(MAX_NV_VERTEX_PROGRAM_INPUTS <= VERT_ATTRIB_MAX);
+   ASSERT(MAX_NV_VERTEX_PROGRAM_OUTPUTS <= VERT_RESULT_MAX);
 }
 
 
@@ -1155,7 +1170,7 @@ check_context_limits(GLcontext *ctx)
  * functions for the more complex data structures.
  */
 static GLboolean
-init_attrib_groups( GLcontext *ctx )
+init_attrib_groups(GLcontext *ctx)
 {
    assert(ctx);
 
@@ -1191,7 +1206,7 @@ init_attrib_groups( GLcontext *ctx )
    _mesa_init_query( ctx );
    _mesa_init_rastpos( ctx );
    _mesa_init_scissor( ctx );
-   _mesa_init_shaderobjects (ctx);
+   _mesa_init_shader_state( ctx );
    _mesa_init_stencil( ctx );
    _mesa_init_transform( ctx );
    _mesa_init_varray( ctx );
@@ -1278,11 +1293,11 @@ alloc_dispatch_table(void)
  * \param driverContext pointer to driver-specific context data
  */
 GLboolean
-_mesa_initialize_context( GLcontext *ctx,
-                          const GLvisual *visual,
-                          GLcontext *share_list,
-                          const struct dd_function_table *driverFunctions,
-                          void *driverContext )
+_mesa_initialize_context(GLcontext *ctx,
+                         const GLvisual *visual,
+                         GLcontext *share_list,
+                         const struct dd_function_table *driverFunctions,
+                         void *driverContext)
 {
    ASSERT(driverContext);
    assert(driverFunctions->NewTextureObject);
@@ -1351,12 +1366,14 @@ _mesa_initialize_context( GLcontext *ctx,
    ctx->TnlModule.SwapCount = 0;
 #endif
 
-   ctx->_MaintainTexEnvProgram = (_mesa_getenv("MESA_TEX_PROG") != NULL);
-   ctx->_UseTexEnvProgram = ctx->_MaintainTexEnvProgram;
-
-   ctx->_MaintainTnlProgram = (_mesa_getenv("MESA_TNL_PROG") != NULL);
-   if (ctx->_MaintainTnlProgram)
-      ctx->_MaintainTexEnvProgram = 1; /* this is required... */
+   ctx->VertexProgram._MaintainTnlProgram
+      = (_mesa_getenv("MESA_TNL_PROG") != NULL);
+   if (ctx->VertexProgram._MaintainTnlProgram)
+      /* this is required... */
+      ctx->FragmentProgram._MaintainTexEnvProgram = GL_TRUE;
+   else
+      ctx->FragmentProgram._MaintainTexEnvProgram
+         = (_mesa_getenv("MESA_TEX_PROG") != NULL);
 
    ctx->FirstTimeCurrent = GL_TRUE;
 
@@ -1379,11 +1396,10 @@ _mesa_initialize_context( GLcontext *ctx,
  * \return pointer to a new __GLcontextRec or NULL if error.
  */
 GLcontext *
-_mesa_create_context( const GLvisual *visual,
-                      GLcontext *share_list,
-                      const struct dd_function_table *driverFunctions,
-                      void *driverContext )
-
+_mesa_create_context(const GLvisual *visual,
+                     GLcontext *share_list,
+                     const struct dd_function_table *driverFunctions,
+                     void *driverContext)
 {
    GLcontext *ctx;
 
@@ -1678,6 +1694,10 @@ void
 _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
                     GLframebuffer *readBuffer )
 {
+#if 0
+   GET_CURRENT_CONTEXT(oldCtx);
+#endif
+
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(newCtx, "_mesa_make_current()\n");
 
@@ -1697,6 +1717,30 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
          return;
       }
    }
+
+#if 0 /** XXX enable this someday */
+   if (oldCtx && oldCtx != newCtx) {
+      /* unbind old context's draw/read buffers */
+      if (oldCtx->DrawBuffer && oldCtx->DrawBuffer->Name == 0) {
+         oldCtx->DrawBuffer->RefCount--;
+         oldCtx->DrawBuffer = NULL;
+      }
+      if (oldCtx->ReadBuffer && oldCtx->ReadBuffer->Name == 0) {
+         oldCtx->ReadBuffer->RefCount--;
+         oldCtx->ReadBuffer = NULL;
+      }
+      if (oldCtx->WinSysDrawBuffer) {
+         ASSERT(oldCtx->WinSysDrawBuffer->Name == 0);
+         oldCtx->WinSysDrawBuffer->RefCount--;
+         oldCtx->WinSysDrawBuffer = NULL;
+      }
+      if (oldCtx->WinSysReadBuffer) {
+         ASSERT(oldCtx->WinSysReadBuffer->Name == 0);
+         oldCtx->WinSysReadBuffer->RefCount--;
+         oldCtx->WinSysReadBuffer = NULL;
+      }
+   }
+#endif
 
    /* We used to call _glapi_check_multithread() here.  Now do it in drivers */
    _glapi_set_context((void *) newCtx);
@@ -1810,18 +1854,18 @@ _mesa_share_state(GLcontext *ctx, GLcontext *ctxToShare)
 
 
 /**
- * Get current context for the calling thread.
- * 
- * \return pointer to the current GL context.
+ * \return pointer to the current GL context for this thread.
  * 
  * Calls _glapi_get_context(). This isn't the fastest way to get the current
- * context.  If you need speed, see the #GET_CURRENT_CONTEXT macro in context.h.
+ * context.  If you need speed, see the #GET_CURRENT_CONTEXT macro in
+ * context.h.
  */
 GLcontext *
 _mesa_get_current_context( void )
 {
    return (GLcontext *) _glapi_get_context();
 }
+
 
 /**
  * Get context's current API dispatch table.
@@ -1862,7 +1906,7 @@ _mesa_get_dispatch(GLcontext *ctx)
  * This is called via _mesa_error().
  */
 void
-_mesa_record_error( GLcontext *ctx, GLenum error )
+_mesa_record_error(GLcontext *ctx, GLenum error)
 {
    if (!ctx)
       return;
@@ -1873,9 +1917,10 @@ _mesa_record_error( GLcontext *ctx, GLenum error )
 
    /* Call device driver's error handler, if any.  This is used on the Mac. */
    if (ctx->Driver.Error) {
-      (*ctx->Driver.Error)( ctx );
+      ctx->Driver.Error(ctx);
    }
 }
+
 
 /**
  * Execute glFinish().
@@ -1884,14 +1929,15 @@ _mesa_record_error( GLcontext *ctx, GLenum error )
  * dd_function_table::Finish driver callback, if not NULL.
  */
 void GLAPIENTRY
-_mesa_Finish( void )
+_mesa_Finish(void)
 {
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
    if (ctx->Driver.Finish) {
-      (*ctx->Driver.Finish)( ctx );
+      ctx->Driver.Finish(ctx);
    }
 }
+
 
 /**
  * Execute glFlush().
@@ -1900,12 +1946,12 @@ _mesa_Finish( void )
  * dd_function_table::Flush driver callback, if not NULL.
  */
 void GLAPIENTRY
-_mesa_Flush( void )
+_mesa_Flush(void)
 {
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
    if (ctx->Driver.Flush) {
-      (*ctx->Driver.Flush)( ctx );
+      ctx->Driver.Flush(ctx);
    }
 }
 

@@ -50,6 +50,7 @@ intelTexSubimage(GLcontext * ctx,
 {
    struct intel_context *intel = intel_context(ctx);
    struct intel_texture_image *intelImage = intel_texture_image(texImage);
+   GLuint dstImageStride;
    GLuint dstRowStride;
 
    DBG("%s target %s level %d offset %d,%d %dx%d\n", __FUNCTION__,
@@ -78,7 +79,7 @@ intelTexSubimage(GLcontext * ctx,
                                                intelImage->face,
                                                intelImage->level,
                                                &dstRowStride,
-                                               texImage->ImageOffsets);
+                                               &dstImageStride);
 
    assert(dstRowStride);
 

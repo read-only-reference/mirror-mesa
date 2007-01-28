@@ -49,11 +49,8 @@
    }
 
 
-/**
- * Helper to enable/disable client-side state.
- */
 static void
-client_state(GLcontext *ctx, GLenum cap, GLboolean state)
+client_state( GLcontext *ctx, GLenum cap, GLboolean state )
 {
    GLuint flag;
    GLuint *var;
@@ -137,14 +134,17 @@ client_state(GLcontext *ctx, GLenum cap, GLboolean state)
       ctx->Array.ArrayObj->_Enabled &= ~flag;
 
    if (ctx->Driver.Enable) {
-      ctx->Driver.Enable( ctx, cap, state );
+      (*ctx->Driver.Enable)( ctx, cap, state );
    }
 }
 
 
 /**
  * Enable GL capability.
- * \param cap  state to enable/disable.
+ *
+ * \param cap capability.
+ *
+ * \sa glEnable().
  *
  * Get's the current context, assures that we're outside glBegin()/glEnd() and
  * calls client_state().
@@ -160,7 +160,10 @@ _mesa_EnableClientState( GLenum cap )
 
 /**
  * Disable GL capability.
- * \param cap  state to enable/disable.
+ *
+ * \param cap capability.
+ *
+ * \sa glDisable().
  *
  * Get's the current context, assures that we're outside glBegin()/glEnd() and
  * calls client_state().
@@ -192,10 +195,10 @@ _mesa_DisableClientState( GLenum cap )
 
 
 /**
- * Helper function to enable or disable state.
+ * Perform glEnable() and glDisable() calls.
  *
  * \param ctx GL context.
- * \param cap  the state to enable/disable
+ * \param cap capability.
  * \param state whether to enable or disable the specified capability.
  *
  * Updates the current context and flushes the vertices as needed. For
@@ -203,8 +206,7 @@ _mesa_DisableClientState( GLenum cap )
  * are effectivly present before updating. Notifies the driver via
  * dd_function_table::Enable.
  */
-void
-_mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
+void _mesa_set_enable( GLcontext *ctx, GLenum cap, GLboolean state )
 {
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "%s %s (newstate is %x)\n",
@@ -283,6 +285,7 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
          FLUSH_VERTICES(ctx, _NEW_POLYGON);
          ctx->Polygon.CullFlag = state;
          break;
+
       case GL_CULL_VERTEX_EXT:
          CHECK_EXTENSION(EXT_cull_vertex, cap);
          if (ctx->Transform.CullVertexFlag == state)
@@ -290,12 +293,13 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
          FLUSH_VERTICES(ctx, _NEW_TRANSFORM);
          ctx->Transform.CullVertexFlag = state;
          break;
+
       case GL_DEPTH_TEST:
          if (state && ctx->DrawBuffer->Visual.depthBits == 0) {
             _mesa_warning(ctx,"glEnable(GL_DEPTH_TEST) but no depth buffer");
             return;
          }
-         if (ctx->Depth.Test == state)
+         if (ctx->Depth.Test==state)
             return;
          FLUSH_VERTICES(ctx, _NEW_DEPTH);
          ctx->Depth.Test = state;
@@ -304,13 +308,13 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
          if (ctx->NoDither) {
             state = GL_FALSE; /* MESA_NO_DITHER env var */
          }
-         if (ctx->Color.DitherFlag == state)
+         if (ctx->Color.DitherFlag==state)
             return;
          FLUSH_VERTICES(ctx, _NEW_COLOR);
          ctx->Color.DitherFlag = state;
          break;
       case GL_FOG:
-         if (ctx->Fog.Enabled == state)
+         if (ctx->Fog.Enabled==state)
             return;
          FLUSH_VERTICES(ctx, _NEW_FOG);
          ctx->Fog.Enabled = state;
@@ -347,18 +351,26 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
             return;
          FLUSH_VERTICES(ctx, _NEW_LIGHT);
          ctx->Light.Enabled = state;
+
+         if (ctx->Light.Enabled && ctx->Light.Model.TwoSide)
+   	   ctx->_TriangleCaps |= DD_TRI_LIGHT_TWOSIDE;
+         else
+ 	   ctx->_TriangleCaps &= ~DD_TRI_LIGHT_TWOSIDE;
+ 
          break;
       case GL_LINE_SMOOTH:
          if (ctx->Line.SmoothFlag == state)
             return;
          FLUSH_VERTICES(ctx, _NEW_LINE);
          ctx->Line.SmoothFlag = state;
+         ctx->_TriangleCaps ^= DD_LINE_SMOOTH;
          break;
       case GL_LINE_STIPPLE:
          if (ctx->Line.StippleFlag == state)
             return;
          FLUSH_VERTICES(ctx, _NEW_LINE);
          ctx->Line.StippleFlag = state;
+         ctx->_TriangleCaps ^= DD_LINE_STIPPLE;
          break;
       case GL_INDEX_LOGIC_OP:
          if (ctx->Color.IndexLogicOpEnabled == state)
@@ -493,38 +505,41 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
          ctx->Transform.Normalize = state;
          break;
       case GL_POINT_SMOOTH:
-         if (ctx->Point.SmoothFlag == state)
+         if (ctx->Point.SmoothFlag==state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POINT);
          ctx->Point.SmoothFlag = state;
+         ctx->_TriangleCaps ^= DD_POINT_SMOOTH;
          break;
       case GL_POLYGON_SMOOTH:
-         if (ctx->Polygon.SmoothFlag == state)
+         if (ctx->Polygon.SmoothFlag==state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POLYGON);
          ctx->Polygon.SmoothFlag = state;
+         ctx->_TriangleCaps ^= DD_TRI_SMOOTH;
          break;
       case GL_POLYGON_STIPPLE:
-         if (ctx->Polygon.StippleFlag == state)
+         if (ctx->Polygon.StippleFlag==state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POLYGON);
          ctx->Polygon.StippleFlag = state;
+         ctx->_TriangleCaps ^= DD_TRI_STIPPLE;
          break;
       case GL_POLYGON_OFFSET_POINT:
-         if (ctx->Polygon.OffsetPoint == state)
+         if (ctx->Polygon.OffsetPoint==state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POLYGON);
          ctx->Polygon.OffsetPoint = state;
          break;
       case GL_POLYGON_OFFSET_LINE:
-         if (ctx->Polygon.OffsetLine == state)
+         if (ctx->Polygon.OffsetLine==state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POLYGON);
          ctx->Polygon.OffsetLine = state;
          break;
       case GL_POLYGON_OFFSET_FILL:
          /*case GL_POLYGON_OFFSET_EXT:*/
-         if (ctx->Polygon.OffsetFill == state)
+         if (ctx->Polygon.OffsetFill==state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POLYGON);
          ctx->Polygon.OffsetFill = state;
@@ -536,7 +551,7 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
          ctx->Transform.RescaleNormals = state;
          break;
       case GL_SCISSOR_TEST:
-         if (ctx->Scissor.Enabled == state)
+         if (ctx->Scissor.Enabled==state)
             return;
          FLUSH_VERTICES(ctx, _NEW_SCISSOR);
          ctx->Scissor.Enabled = state;
@@ -553,7 +568,7 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
                           "glEnable(GL_STENCIL_TEST) but no stencil buffer");
             return;
          }
-         if (ctx->Stencil.Enabled == state)
+         if (ctx->Stencil.Enabled==state)
             return;
          FLUSH_VERTICES(ctx, _NEW_STENCIL);
          ctx->Stencil.Enabled = state;
@@ -901,6 +916,11 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
             return;
          FLUSH_VERTICES(ctx, _NEW_STENCIL);
          ctx->Stencil.TestTwoSide = state;
+         if (state) {
+            ctx->_TriangleCaps |= DD_TRI_TWOSTENCIL;
+         } else {
+            ctx->_TriangleCaps &= ~DD_TRI_TWOSTENCIL;
+         }
          break;
 
 #if FEATURE_ARB_fragment_program
@@ -953,14 +973,20 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
    }
 
    if (ctx->Driver.Enable) {
-      ctx->Driver.Enable( ctx, cap, state );
+      (*ctx->Driver.Enable)( ctx, cap, state );
    }
 }
 
 
 /**
- * Enable GL capability.  Called by glEnable()
- * \param cap  state to enable.
+ * Enable GL capability.
+ *
+ * \param cap capability.
+ *
+ * \sa glEnable().
+ *
+ * Get's the current context, assures that we're outside glBegin()/glEnd() and
+ * calls _mesa_set_enable().
  */
 void GLAPIENTRY
 _mesa_Enable( GLenum cap )
@@ -973,8 +999,14 @@ _mesa_Enable( GLenum cap )
 
 
 /**
- * Disable GL capability.  Called by glDisable()
- * \param cap  state to disable.
+ * Disable GL capability.
+ *
+ * \param cap capability.
+ *
+ * \sa glDisable().
+ *
+ * Get's the current context, assures that we're outside glBegin()/glEnd() and
+ * calls _mesa_set_enable().
  */
 void GLAPIENTRY
 _mesa_Disable( GLenum cap )
@@ -1000,11 +1032,10 @@ _mesa_Disable( GLenum cap )
       return GL_FALSE;						\
    }
 
-
 /**
- * Return simple enable/disable state.
+ * Test whether a capability is enabled.
  *
- * \param cap  state variable to query.
+ * \param cap capability.
  *
  * Returns the state of the specified capability from the current GL context.
  * For the capabilities associated with extensions verifies that those

@@ -403,7 +403,7 @@ GLboolean intelInitContext( struct intel_context *intel,
 				 intelScreen->cpp,
 				 intelScreen->front.pitch / intelScreen->cpp,
 				 intelScreen->height,
-				 intelScreen->front.tiled != 0); /* 0: LINEAR */
+				 GL_FALSE);
 
 
    intel->back_region = 
@@ -414,7 +414,7 @@ GLboolean intelInitContext( struct intel_context *intel,
 				 intelScreen->cpp,
 				 intelScreen->back.pitch / intelScreen->cpp,
 				 intelScreen->height,
-                                 intelScreen->back.tiled != 0);
+				 (INTEL_DEBUG & DEBUG_TILE) ? 0 : 1);
 
    /* Still assuming front.cpp == depth.cpp
     *
@@ -430,7 +430,7 @@ GLboolean intelInitContext( struct intel_context *intel,
 				 intelScreen->cpp,
 				 intelScreen->depth.pitch / intelScreen->cpp,
 				 intelScreen->height,
-                                 intelScreen->depth.tiled != 0);
+				 (INTEL_DEBUG & DEBUG_TILE) ? 0 : 1);
    
    intel_bufferobj_init( intel );
    intel->batch = intel_batchbuffer_alloc( intel );

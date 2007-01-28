@@ -2,7 +2,7 @@
  * Mesa 3-D graphics library
  * Version:  6.5.3
  *
- * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -31,7 +31,7 @@
 #include "context.h"
 #include "colormac.h"
 #include "mtypes.h"
-#include "program.h"
+#include "prog_statevars.h"
 #include "teximage.h"
 #include "swrast.h"
 #include "s_blend.h"
@@ -98,11 +98,11 @@ _swrast_update_rasterflags( GLcontext *ctx )
       rasterMask |= MULTI_DRAW_BIT; /* all color index bits disabled */
    }
 
-   if (ctx->FragmentProgram._Enabled) {
+   if (ctx->FragmentProgram._Current) {
       rasterMask |= FRAGPROG_BIT;
    }
 
-   if (ctx->ShaderObjects._FragmentShaderPresent) {
+   if (ctx->Shader._FragmentShaderPresent) {
       rasterMask |= FRAGPROG_BIT;
    }
 
@@ -165,7 +165,7 @@ _swrast_update_fog_hint( GLcontext *ctx )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    swrast->_PreferPixelFog = (!swrast->AllowVertexFog ||
-                              ctx->FragmentProgram._Enabled || /* not _Active! */
+                              ctx->FragmentProgram._Current ||
 			      (ctx->Hint.Fog == GL_NICEST &&
 			       swrast->AllowPixelFog));
 }
@@ -198,20 +198,14 @@ static void
 _swrast_update_fog_state( GLcontext *ctx )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
+   const struct gl_fragment_program *fp = ctx->FragmentProgram._Current;
 
    /* determine if fog is needed, and if so, which fog mode */
    swrast->_FogEnabled = GL_FALSE;
-   if (ctx->ShaderObjects._FragmentShaderPresent) {
-      swrast->_FogEnabled = GL_FALSE;
-   }
-   else if (ctx->FragmentProgram._Enabled) {
-      if (ctx->FragmentProgram._Current->Base.Target==GL_FRAGMENT_PROGRAM_ARB) {
-         const struct gl_fragment_program *fp
-            = ctx->FragmentProgram._Current;
-         if (fp->FogOption != GL_NONE) {
-            swrast->_FogEnabled = GL_TRUE;
-            swrast->_FogMode = fp->FogOption;
-         }
+   if (fp && fp->Base.Target == GL_FRAGMENT_PROGRAM_ARB) {
+      if (fp->FogOption != GL_NONE) {
+         swrast->_FogEnabled = GL_TRUE;
+         swrast->_FogMode = fp->FogOption;
       }
    }
    else if (ctx->Fog.Enabled) {
@@ -228,8 +222,8 @@ _swrast_update_fog_state( GLcontext *ctx )
 static void
 _swrast_update_fragment_program(GLcontext *ctx, GLbitfield newState)
 {
-   if (ctx->FragmentProgram._Enabled) {
-      const struct gl_fragment_program *fp = ctx->FragmentProgram._Current;
+   const struct gl_fragment_program *fp = ctx->FragmentProgram._Current;
+   if (fp) {
 #if 0
       /* XXX Need a way to trigger the initial loading of parameters
        * even when there's no recent state changes.
@@ -304,7 +298,7 @@ _swrast_validate_triangle( GLcontext *ctx,
 
    if (ctx->Texture._EnabledUnits == 0
        && NEED_SECONDARY_COLOR(ctx)
-       && !ctx->FragmentProgram._Enabled) {
+       && !ctx->FragmentProgram._Current) {
       /* separate specular color, but no texture */
       swrast->SpecTriangle = swrast->Triangle;
       swrast->Triangle = _swrast_add_spec_terms_triangle;
@@ -328,7 +322,7 @@ _swrast_validate_line( GLcontext *ctx, const SWvertex *v0, const SWvertex *v1 )
 
    if (ctx->Texture._EnabledUnits == 0
        && NEED_SECONDARY_COLOR(ctx)
-       && !ctx->FragmentProgram._Enabled) {
+       && !ctx->FragmentProgram._Current) {
       swrast->SpecLine = swrast->Line;
       swrast->Line = _swrast_add_spec_terms_line;
    }
@@ -351,7 +345,7 @@ _swrast_validate_point( GLcontext *ctx, const SWvertex *v0 )
 
    if (ctx->Texture._EnabledUnits == 0
        && NEED_SECONDARY_COLOR(ctx)
-       && !ctx->FragmentProgram._Enabled) {
+       && !ctx->FragmentProgram._Current) {
       swrast->SpecPoint = swrast->Point;
       swrast->Point = _swrast_add_spec_terms_point;
    }
@@ -505,9 +499,10 @@ _swrast_update_texture_samplers(GLcontext *ctx)
 
    for (u = 0; u < ctx->Const.MaxTextureImageUnits; u++) {
       const struct gl_texture_object *tObj = ctx->Texture.Unit[u]._Current;
-      if (tObj)
-         swrast->TextureSample[u] =
-            _swrast_choose_texture_sample_func(ctx, tObj);
+      /* Note: If tObj is NULL, the sample function will be a simple
+       * function that just returns opaque black (0,0,0,1).
+       */
+      swrast->TextureSample[u] = _swrast_choose_texture_sample_func(ctx, tObj);
    }
 }
 

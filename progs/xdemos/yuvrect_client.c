@@ -296,7 +296,7 @@ main(int argc, char *argv[])
    dpy = XOpenDisplay(dpyName);
    if (!dpy) {
       printf("Error: couldn't open display %s\n",
-	     XDisplayName(dpyName));
+	     dpyName ? dpyName : getenv("DISPLAY"));
       return -1;
    }
 

@@ -41,7 +41,7 @@
  *    INTERP_TEX      - if defined, interpolate set 0 float STRQ texcoords
  *                         NOTE:  OpenGL STRQ = Mesa STUV (R was taken for red)
  *    INTERP_MULTITEX - if defined, interpolate N units of STRQ texcoords
- *    INTERP_VARYING  - if defined, interpolate M floats of GLSL varyings
+ *    INTERP_VARYING  - if defined, interpolate M GLSL varyings
  *
  * When one can directly address pixels in the color buffer the following
  * macros can be defined and used to compute pixel addresses during
@@ -144,14 +144,17 @@
 
 
 #ifdef INTERP_VARYING
-#define VARYING_LOOP(CODE)\
-   {\
-      GLuint iv, ic;\
-      for (iv = 0; iv < MAX_VARYING_VECTORS; iv++) {\
-         for (ic = 0; ic < VARYINGS_PER_VECTOR; ic++) {\
-            CODE\
-         }\
-      }\
+
+#define VARYING_LOOP(CODE)                     \
+   {                                           \
+      GLuint iv, ic;                           \
+      for (iv = 0; iv < MAX_VARYING; iv++) {   \
+         if (inputsUsed & FRAG_BIT_VAR(iv)) {  \
+            for (ic = 0; ic < 4; ic++) {       \
+               CODE                            \
+            }                                  \
+         }                                     \
+      }                                        \
    }
 #endif
 
@@ -215,6 +218,10 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
    const GLint snapMask = ~((FIXED_ONE / (1 << SUB_PIXEL_BITS)) - 1); /* for x/y coord snapping */
 #endif
    GLinterp vMin_fx, vMin_fy, vMid_fx, vMid_fy, vMax_fx, vMax_fy;
+#ifdef INTERP_VARYING
+   const GLbitfield inputsUsed = ctx->FragmentProgram._Current ?
+      ctx->FragmentProgram._Current->Base.InputsRead : 0x0;
+#endif
 
    SWspan span;
 
@@ -669,8 +676,8 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
          /* win[3] is 1/W */
          const GLfloat wMax = vMax->win[3], wMin = vMin->win[3], wMid = vMid->win[3];
          VARYING_LOOP(
-            GLfloat eMaj_dvar = vMax->attribute[iv][ic] * wMax - vMin->attribute[iv][ic] * wMin;
-            GLfloat eBot_dvar = vMid->attribute[iv][ic] * wMid - vMin->attribute[iv][ic] * wMin;
+            GLfloat eMaj_dvar = vMax->varying[iv][ic] * wMax - vMin->varying[iv][ic] * wMin;
+            GLfloat eBot_dvar = vMid->varying[iv][ic] * wMid - vMin->varying[iv][ic] * wMin;
             span.varStepX[iv][ic] = oneOverArea * (eMaj_dvar * eBot.dy - eMaj.dy * eBot_dvar);
             span.varStepY[iv][ic] = oneOverArea * (eMaj.dx * eBot_dvar - eMaj_dvar * eBot.dx);
          )
@@ -780,9 +787,9 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
          GLfloat dvOuter[MAX_TEXTURE_COORD_UNITS], dvInner[MAX_TEXTURE_COORD_UNITS];
 #endif
 #ifdef INTERP_VARYING
-         GLfloat varLeft[MAX_VARYING_VECTORS][VARYINGS_PER_VECTOR];
-         GLfloat dvarOuter[MAX_VARYING_VECTORS][VARYINGS_PER_VECTOR];
-         GLfloat dvarInner[MAX_VARYING_VECTORS][VARYINGS_PER_VECTOR];
+         GLfloat varLeft[MAX_VARYING][4];
+         GLfloat dvarOuter[MAX_VARYING][4];
+         GLfloat dvarInner[MAX_VARYING][4];
 #endif
 
          for (subTriangle=0; subTriangle<=1; subTriangle++) {
@@ -1060,7 +1067,7 @@ static void NAME(GLcontext *ctx, const SWvertex *v0,
 #ifdef INTERP_VARYING
                VARYING_LOOP(
                   const GLfloat invW = vLower->win[3];
-                  const GLfloat var0 = vLower->attribute[iv][ic] * invW;
+                  const GLfloat var0 = vLower->varying[iv][ic] * invW;
                   varLeft[iv][ic] = var0 + (span.varStepX[iv][ic] * adjx +
                      span.varStepY[iv][ic] * adjy) * (1.0f / FIXED_SCALE);
                   dvarOuter[iv][ic] = span.varStepY[iv][ic] + dxOuter * span.varStepX[iv][ic];

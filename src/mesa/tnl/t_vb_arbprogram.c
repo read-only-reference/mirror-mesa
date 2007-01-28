@@ -37,12 +37,15 @@
 #include "arbprogparse.h"
 #include "light.h"
 #include "program.h"
+#include "prog_instruction.h"
+#include "prog_parameter.h"
+#include "prog_statevars.h"
+#include "programopt.h"
 #include "math/m_matrix.h"
 #include "t_context.h"
 #include "t_pipeline.h"
 #include "t_vb_arbprogram.h"
 #include "tnl.h"
-#include "program_instruction.h"
 
 
 #define DISASSEM 0
@@ -292,7 +295,7 @@ static void do_EX2( struct arb_vp_machine *m, union instruction op )
    GLfloat *result = m->File[0][op.alu.dst];
    const GLfloat *arg0 = m->File[op.alu.file0][op.alu.idx0];
 
-   result[0] = (GLfloat)ApproxExp2(arg0[0]);
+   result[0] = ApproxExp2(arg0[0]);
    PUFF(result);
 }
 
@@ -333,6 +336,17 @@ static void do_FRC( struct arb_vp_machine *m, union instruction op )
    result[1] = arg0[1] - FLOORF(arg0[1]);
    result[2] = arg0[2] - FLOORF(arg0[2]);
    result[3] = arg0[3] - FLOORF(arg0[3]);
+}
+
+static void do_INT( struct arb_vp_machine *m, union instruction op ) 
+{
+   GLfloat *result = m->File[0][op.alu.dst];
+   const GLfloat *arg0 = m->File[op.alu.file0][op.alu.idx0];
+
+   result[0] = (GLfloat) (GLint) arg0[0];
+   result[1] = (GLfloat) (GLint) arg0[1];
+   result[2] = (GLfloat) (GLint) arg0[2];
+   result[3] = (GLfloat) (GLint) arg0[3];
 }
 
 /* High precision log base 2:
@@ -566,7 +580,7 @@ static void print_reg( GLuint file, GLuint reg )
 	 _mesa_printf("TMP%d", reg - REG_TMP0);
       else if (reg >= REG_IN0 && reg <= REG_IN31)
 	 _mesa_printf("IN%d", reg - REG_IN0);
-      else if (reg >= REG_OUT0 && reg <= REG_OUT14)
+      else if (reg >= REG_OUT0 && reg <= REG_OUT23)
 	 _mesa_printf("OUT%d", reg - REG_OUT0);
       else if (reg == REG_ADDR)
 	 _mesa_printf("ADDR");
@@ -662,6 +676,7 @@ _tnl_disassem_vba_insn( union instruction op )
    case OPCODE_EXP:
    case OPCODE_FLR:
    case OPCODE_FRC:
+   case OPCODE_INT:
    case OPCODE_LG2:
    case OPCODE_LIT:
    case OPCODE_LOG:
@@ -714,6 +729,7 @@ _tnl_disassem_vba_insn( union instruction op )
 
 static void (* const opcode_func[MAX_OPCODE+3])(struct arb_vp_machine *, union instruction) = 
 {
+   do_NOP,
    do_ABS,
    do_ADD,
    do_NOP,/*ARA*/
@@ -730,11 +746,15 @@ static void (* const opcode_func[MAX_OPCODE+3])(struct arb_vp_machine *, union i
    do_DP4,
    do_DPH,
    do_DST,
-   do_NOP,
+   do_NOP,/*ELSE*/
+   do_NOP,/*END*/
+   do_NOP,/*ENDIF*/
    do_EX2,
    do_EXP,
    do_FLR,
    do_FRC,
+   do_NOP,/*IF*/
+   do_INT,
    do_NOP,/*KIL*/
    do_NOP,/*KIL_NV*/
    do_LG2,
@@ -746,6 +766,10 @@ static void (* const opcode_func[MAX_OPCODE+3])(struct arb_vp_machine *, union i
    do_MIN,
    do_MOV,
    do_MUL,
+   do_NOP,/*NOISE1*/
+   do_NOP,/*NOISE2*/
+   do_NOP,/*NOISE3*/
+   do_NOP,/*NOISE4*/
    do_NOP,/*PK2H*/
    do_NOP,/*PK2US*/
    do_NOP,/*PK4B*/
@@ -828,6 +852,7 @@ static struct reg cvp_load_reg( struct compilation *cp,
 
    switch (file) {
    case PROGRAM_TEMPORARY:
+      assert(REG_TMP0 + index <= REG_TMP11);
       return cvp_make_reg(FILE_REG, REG_TMP0 + index);
 
    case PROGRAM_INPUT:
@@ -853,6 +878,8 @@ static struct reg cvp_load_reg( struct compilation *cp,
 	 return reg;
 
    case PROGRAM_STATE_VAR:
+   case PROGRAM_CONSTANT:
+   case PROGRAM_UNIFORM:
       reg = cvp_make_reg(FILE_STATE_PARAM, index);
       if (rel) 
 	 return cvp_emit_rel(cp, reg, tmpreg);
@@ -864,7 +891,7 @@ static struct reg cvp_load_reg( struct compilation *cp,
    case PROGRAM_WRITE_ONLY:
    case PROGRAM_ADDRESS:
    default:
-      _mesa_problem(NULL, "Invalid register file %d in cvp_load_reg()");
+      _mesa_problem(NULL, "Invalid register file %d in cvp_load_reg()", file);
       assert(0);
       return tmpreg;		/* can't happen */
    }
@@ -1020,6 +1047,13 @@ static void cvp_emit_inst( struct compilation *cp,
       }
       break;
 
+   case OPCODE_NOP:
+      break;
+
+   case OPCODE_BRA:
+      /* XXX implement */
+      break;
+
    default:
       result = cvp_choose_result( cp, &inst->DstReg, &fixup );
       nr_args = _mesa_num_inst_src_regs(inst->Opcode);
@@ -1057,6 +1091,16 @@ static void compile_vertex_program( struct gl_vertex_program *program,
    struct compilation cp;
    struct tnl_compiled_program *p = CALLOC_STRUCT(tnl_compiled_program);
    GLuint i;
+
+#if 1
+   if (!program->IsNVProgram && program->IsPositionInvariant) {
+      printf("Adding MVP code\n");
+      if (!program->Base.Parameters)
+         program->Base.Parameters = _mesa_new_parameter_list();
+      _mesa_insert_mvp_code(NULL, program);
+      program->IsPositionInvariant = 0;
+   }
+#endif
 
    if (program->TnlData) 
       free_tnl_data( program );
@@ -1182,6 +1226,7 @@ do_ndc_cliptest(GLcontext *ctx, struct arb_vp_machine *m)
 
    /* Test userclip planes.  This contributes to VB->ClipMask.
     */
+   /** XXX NEW_SLANG _Enabled ??? */
    if (ctx->Transform.ClipPlanesEnabled && (!ctx->VertexProgram._Enabled ||
       ctx->VertexProgram.Current->IsPositionInvariant)) {
       userclip( ctx,
@@ -1221,21 +1266,14 @@ static INLINE void call_func( struct tnl_compiled_program *p,
 static GLboolean
 run_arb_vertex_program(GLcontext *ctx, struct tnl_pipeline_stage *stage)
 {
-   const struct gl_vertex_program *program;
+   const struct gl_vertex_program *program = ctx->VertexProgram._Current;
    struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
    struct arb_vp_machine *m = ARB_VP_MACHINE(stage);
    struct tnl_compiled_program *p;
    GLuint i, j;
    GLbitfield outputs;
 
-   if (ctx->ShaderObjects._VertexShaderPresent)
-      return GL_TRUE;
-
-   program = ctx->VertexProgram._Enabled ? ctx->VertexProgram.Current : NULL;
-   if (!program && ctx->_MaintainTnlProgram) {
-      program = ctx->_TnlProgram;
-   }
-   if (!program || program->IsNVProgram)
+   if (!program)
       return GL_TRUE;   
 
    if (program->Base.Parameters) {
@@ -1299,12 +1337,13 @@ run_arb_vertex_program(GLcontext *ctx, struct tnl_pipeline_stage *stage)
       /* If the program is position invariant, multiply the input position
        * by the MVP matrix and store in the vertex position result register.
        */
+#if 0
       if (program->IsPositionInvariant) {
 	 TRANSFORM_POINT( m->File[0][REG_OUT0+0], 
 			  ctx->_ModelProjectMatrix.m, 
 			  m->File[0][REG_IN0+0]);
       }
-
+#endif
       for (j = 0; j < m->nr_outputs; j++) {
 	 GLuint idx = REG_OUT0 + m->output[j].idx;
 	 m->output[j].data[0] = m->File[0][idx][0];
@@ -1370,6 +1409,14 @@ run_arb_vertex_program(GLcontext *ctx, struct tnl_pipeline_stage *stage)
       }
    }
 
+   for (i = 0; i < ctx->Const.MaxVarying; i++) {
+      if (outputs & (1 << (VERT_RESULT_VAR0 + i))) {
+         /* Note: varying results get put into the generic attributes */
+	 VB->AttribPtr[VERT_ATTRIB_GENERIC0+i]
+            = &m->attribs[VERT_RESULT_VAR0 + i];
+      }
+   }
+
 #if 0
    for (i = 0; i < VB->Count; i++) {
       printf("Out %d: %f %f %f %f %f %f %f %f\n", i,
@@ -1394,15 +1441,7 @@ static void
 validate_vertex_program( GLcontext *ctx, struct tnl_pipeline_stage *stage )
 {
    struct arb_vp_machine *m = ARB_VP_MACHINE(stage);
-   struct gl_vertex_program *program;
-
-   if (ctx->ShaderObjects._VertexShaderPresent)
-      return;
-
-   program = (ctx->VertexProgram._Enabled ? ctx->VertexProgram.Current : 0);
-   if (!program && ctx->_MaintainTnlProgram) {
-      program = ctx->_TnlProgram;
-   }
+   struct gl_vertex_program *program = ctx->VertexProgram._Current;
 
    if (program) {
       if (!program->TnlData)
@@ -1439,6 +1478,10 @@ static GLboolean init_vertex_program( GLcontext *ctx,
    const GLuint size = VB->Size;
    GLuint i;
 
+   /* spot checks to be sure the opcode table is correct */
+   assert(opcode_func[OPCODE_SGE] == do_SGE);
+   assert(opcode_func[OPCODE_XPD] == do_XPD);
+
    stage->privatePtr = _mesa_calloc(sizeof(*m));
    m = ARB_VP_MACHINE(stage);
    if (!m)
@@ -1472,7 +1515,7 @@ static GLboolean init_vertex_program( GLcontext *ctx,
    _mesa_vector4f_alloc( &m->ndcCoords, 0, size, 32 );
    m->clipmask = (GLubyte *) ALIGN_MALLOC(sizeof(GLubyte)*size, 32 );
 
-   if (ctx->_MaintainTnlProgram)
+   if (ctx->VertexProgram._MaintainTnlProgram)
       _mesa_allow_light_in_model( ctx, GL_FALSE );
 
    m->fpucntl_rnd_neg = RND_NEG_FPU; /* const value */
@@ -1529,7 +1572,7 @@ const struct tnl_pipeline_stage _tnl_arb_vertex_program_stage =
 void
 _tnl_program_string(GLcontext *ctx, GLenum target, struct gl_program *program)
 {
-   if (target == GL_VERTEX_PROGRAM_ARB) {
+   if (program->Target == GL_VERTEX_PROGRAM_ARB) {
       /* free any existing tnl data hanging off the program */
       struct gl_vertex_program *vprog = (struct gl_vertex_program *) program;
       if (vprog->TnlData) {

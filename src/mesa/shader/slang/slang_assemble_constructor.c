@@ -31,7 +31,7 @@
 #include "imports.h"
 #include "slang_assemble.h"
 #include "slang_storage.h"
-
+#include "prog_instruction.h"
 
 
 /**
@@ -45,6 +45,15 @@ _slang_is_swizzle(const char *field, GLuint rows, slang_swizzle * swz)
 {
    GLuint i;
    GLboolean xyzw = GL_FALSE, rgba = GL_FALSE, stpq = GL_FALSE;
+
+   /* init to undefined.
+    * We rely on undefined/nil values to distinguish between
+    * regular swizzles and writemasks.
+    * For example, the swizzle ".xNNN" is the writemask ".x".
+    * That's different than the swizzle ".xxxx".
+    */
+   for (i = 0; i < 4; i++)
+      swz->swizzle[i] = SWIZZLE_NIL;
 
    /* the swizzle can be at most 4-component long */
    swz->num_components = slang_string_length(field);
@@ -301,6 +310,18 @@ _slang_assemble_constructor(slang_assemble_ctx * A, const slang_operation * op)
    /* check if there are too few arguments */
    if (arg_sums[1] < size) {
       /* TODO: info log: too few arguments in constructor list */
+      /* DEBUG */
+      {
+         if (!slang_storage_aggregate_construct(&agg))
+            goto end1;
+         if (!_slang_aggregate_variable(&agg, &ti.spec, 0, A->space.funcs,
+                                        A->space.structs, A->space.vars,
+                                        A->mach, A->file, A->atoms))
+            goto end2;
+         
+         /* calculate size of the constructor */
+         size = _slang_sizeof_aggregate(&agg);
+      }
       goto end;
    }
 
@@ -316,8 +337,7 @@ _slang_assemble_constructor(slang_assemble_ctx * A, const slang_operation * op)
       else
          garbage_size = 0;
 
-      if (!constructor_aggregate
-          (A, &flat, &op->children[i - 1], garbage_size))
+      if (!constructor_aggregate(A, &flat, &op->children[i - 1], garbage_size))
          goto end;
    }
 

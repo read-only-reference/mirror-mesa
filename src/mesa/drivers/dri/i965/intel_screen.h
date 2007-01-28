@@ -42,7 +42,6 @@ typedef struct {
    char *map;           /* memory map */
    int offset;          /* from start of video mem, in bytes */
    int pitch;           /* row stride, in pixels */
-   unsigned int tiled; 
 } intelRegion;
 
 typedef struct 

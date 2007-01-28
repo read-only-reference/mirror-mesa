@@ -181,9 +181,9 @@ typedef struct
 
 typedef struct
 {
-   slang_varying_binding bindings[MAX_VARYING_FLOATS];
+   slang_varying_binding bindings[MAX_VARYING * 4];
    GLuint binding_count;
-   slang_varying_slot slots[MAX_VARYING_FLOATS];
+   slang_varying_slot slots[MAX_VARYING * 4];
    GLuint slot_count;
 } slang_varying_bindings;
 /*@}*/
@@ -316,6 +316,9 @@ enum
    SLANG_COMMON_CODE_MAX
 };
 
+/**
+ * XXX promote this to mtypes.h?
+ */
 typedef struct
 {
    slang_active_variables active_uniforms;
@@ -344,6 +347,19 @@ _slang_program_rst (slang_program *);
 
 extern GLboolean
 _slang_link (slang_program *, slang_code_object **, GLuint);
+
+
+extern void
+_slang_link2(GLcontext *ctx, GLhandleARB h,
+             struct gl_shader_program *shProg);
+
+extern void
+_slang_resolve_samplers(struct gl_shader_program *shProg,
+                        struct gl_program *prog);
+
+extern void
+_slang_remap_attribute(struct gl_program *prog, GLuint oldAttrib, GLuint newAttrib);
+
 
 #ifdef __cplusplus
 }
