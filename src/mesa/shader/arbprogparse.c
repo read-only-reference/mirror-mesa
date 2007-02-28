@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.3
+ * Version:  6.5.1
  *
- * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -35,12 +35,10 @@
 #include "arbprogparse.h"
 #include "grammar_mesa.h"
 #include "program.h"
-#include "prog_parameter.h"
-#include "prog_statevars.h"
 #include "context.h"
 #include "macros.h"
 #include "mtypes.h"
-#include "prog_instruction.h"
+#include "program_instruction.h"
 
 
 /* For ARB programs, use the NV instruction limits */
@@ -1719,7 +1717,7 @@ parse_param_elements (GLcontext * ctx, const GLubyte ** inst,
 {
    GLint idx;
    GLuint err = 0;
-   GLint state_tokens[STATE_LENGTH];
+   GLint state_tokens[6];
    GLfloat const_values[4];
 
    switch (*(*inst)++) {
@@ -3705,7 +3703,7 @@ parse_instructions(GLcontext * ctx, const GLubyte * inst,
 
 
 /* XXX temporary */
-__extension__ static char core_grammar_text[] =
+LONGSTRING static char core_grammar_text[] =
 #include "grammar_syn.h"
 ;
 
@@ -4029,16 +4027,16 @@ _mesa_parse_arb_fragment_program(GLcontext* ctx, GLenum target,
    program->Base.NumNativeParameters = ap.Base.NumNativeParameters;
    program->Base.NumNativeAttributes = ap.Base.NumNativeAttributes;
    program->Base.NumNativeAddressRegs = ap.Base.NumNativeAddressRegs;
-   program->Base.NumAluInstructions   = ap.Base.NumAluInstructions;
-   program->Base.NumTexInstructions   = ap.Base.NumTexInstructions;
-   program->Base.NumTexIndirections   = ap.Base.NumTexIndirections;
-   program->Base.NumNativeAluInstructions = ap.Base.NumAluInstructions;
-   program->Base.NumNativeTexInstructions = ap.Base.NumTexInstructions;
-   program->Base.NumNativeTexIndirections = ap.Base.NumTexIndirections;
+   program->NumAluInstructions   = ap.NumAluInstructions;
+   program->NumTexInstructions   = ap.NumTexInstructions;
+   program->NumTexIndirections   = ap.NumTexIndirections;
+   program->NumNativeAluInstructions = ap.NumAluInstructions;
+   program->NumNativeTexInstructions = ap.NumTexInstructions;
+   program->NumNativeTexIndirections = ap.NumTexIndirections;
    program->Base.InputsRead      = ap.Base.InputsRead;
    program->Base.OutputsWritten  = ap.Base.OutputsWritten;
    for (i = 0; i < MAX_TEXTURE_IMAGE_UNITS; i++)
-      program->Base.TexturesUsed[i] = ap.TexturesUsed[i];
+      program->TexturesUsed[i] = ap.TexturesUsed[i];
    program->FogOption          = ap.FogOption;
 
    if (program->Base.Instructions)
@@ -4103,7 +4101,7 @@ _mesa_parse_arb_vertex_program(GLcontext *ctx, GLenum target,
    program->Base.Parameters = ap.Base.Parameters; 
 
 #if DEBUG_VP
-   _mesa_printf("____________Vertex program %u __________\n", program->Base.ID);
+   _mesa_printf("____________Vertex program %u __________\n", program->Base.Id);
    _mesa_print_program(&program->Base);
 #endif
 }

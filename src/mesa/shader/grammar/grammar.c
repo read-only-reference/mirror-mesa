@@ -260,8 +260,6 @@
     first).
 */
 
-#include <stdio.h>
-
 static void mem_free (void **);
 
 /*
@@ -2799,16 +2797,10 @@ static void grammar_load_state_destroy (grammar_load_state **gr)
     }
 }
 
-
-static void error_msg(int line, const char *msg)
-{
-   fprintf(stderr, "Error in grammar_load_from_text() at line %d: %s\n", line, msg);
-}
-
-
 /*
     the API
 */
+
 grammar grammar_load_from_text (const byte *text)
 {
     grammar_load_state *g = NULL;
@@ -2817,16 +2809,13 @@ grammar grammar_load_from_text (const byte *text)
     clear_last_error ();
 
     grammar_load_state_create (&g);
-    if (g == NULL) {
-        error_msg(__LINE__, "");
+    if (g == NULL)
         return 0;
-    }
 
     dict_create (&g->di);
     if (g->di == NULL)
     {
         grammar_load_state_destroy (&g);
-        error_msg(__LINE__, "");
         return 0;
     }
 
@@ -2840,7 +2829,6 @@ grammar grammar_load_from_text (const byte *text)
     if (get_identifier (&text, &g->syntax_symbol))
     {
         grammar_load_state_destroy (&g);
-        error_msg(__LINE__, "");
         return 0;
     }
     eat_spaces (&text);
@@ -2860,7 +2848,6 @@ grammar grammar_load_from_text (const byte *text)
         if (get_identifier (&text, &symbol))
         {
             grammar_load_state_destroy (&g);
-            error_msg(__LINE__, "");
             return 0;
         }
         eat_spaces (&text);
@@ -2875,7 +2862,6 @@ grammar grammar_load_from_text (const byte *text)
             if (get_emtcode (&text, &ma))
             {
                 grammar_load_state_destroy (&g);
-                error_msg(__LINE__, "");
                 return 0;
             }
 
@@ -2891,7 +2877,6 @@ grammar grammar_load_from_text (const byte *text)
             if (get_regbyte (&text, &ma))
             {
                 grammar_load_state_destroy (&g);
-                error_msg(__LINE__, "");
                 return 0;
             }
 
@@ -2907,7 +2892,6 @@ grammar grammar_load_from_text (const byte *text)
             if (get_errtext (&text, &ma))
             {
                 grammar_load_state_destroy (&g);
-                error_msg(__LINE__, "");
                 return 0;
             }
 
@@ -2921,14 +2905,12 @@ grammar grammar_load_from_text (const byte *text)
             if (g->di->m_string != NULL)
             {
                 grammar_load_state_destroy (&g);
-                error_msg(__LINE__, "");
                 return 0;
             }
 
             if (get_identifier (&text, &g->string_symbol))
             {
                 grammar_load_state_destroy (&g);
-                error_msg(__LINE__, "");
                 return 0;
             }
 
@@ -2945,7 +2927,6 @@ grammar grammar_load_from_text (const byte *text)
             if (get_rule (&text, &ru, g->maps, g->mapb))
             {
                 grammar_load_state_destroy (&g);
-                error_msg(__LINE__, "");
                 return 0;
             }
 
@@ -2959,7 +2940,6 @@ grammar grammar_load_from_text (const byte *text)
             if (ma == NULL)
             {
                 grammar_load_state_destroy (&g);
-                error_msg(__LINE__, "");
                 return 0;
             }
 
@@ -2973,7 +2953,6 @@ grammar grammar_load_from_text (const byte *text)
         g->di->m_regbytes))
     {
         grammar_load_state_destroy (&g);
-        error_msg(__LINE__, "update_dependencies() failed");
         return 0;
     }
 

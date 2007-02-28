@@ -57,7 +57,10 @@ static GLboolean run_cull_stage( GLcontext *ctx,
    GLuint count = VB->Count;
    GLuint i;
 
-   if (ctx->VertexProgram._Current ||
+   if (ctx->ShaderObjects._VertexShaderPresent)
+      return GL_TRUE;
+
+   if (ctx->VertexProgram._Enabled ||
        !ctx->Transform.CullVertexFlag) 
       return GL_TRUE;
 

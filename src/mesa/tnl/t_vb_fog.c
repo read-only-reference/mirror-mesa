@@ -148,7 +148,10 @@ run_fog_stage(GLcontext *ctx, struct tnl_pipeline_stage *stage)
    struct fog_stage_data *store = FOG_STAGE_DATA(stage);
    GLvector4f *input;
 
-   if (!ctx->Fog.Enabled || ctx->VertexProgram._Current)
+   if (ctx->ShaderObjects._VertexShaderPresent)
+      return GL_TRUE;
+
+   if (!ctx->Fog.Enabled || ctx->VertexProgram._Enabled)
       return GL_TRUE;
 
 

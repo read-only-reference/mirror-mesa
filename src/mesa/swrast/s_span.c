@@ -39,13 +39,14 @@
 
 #include "s_atifragshader.h"
 #include "s_alpha.h"
+#include "s_arbshader.h"
 #include "s_blend.h"
 #include "s_context.h"
 #include "s_depth.h"
 #include "s_fog.h"
 #include "s_logic.h"
 #include "s_masking.h"
-#include "s_fragprog.h"
+#include "s_nvfragprog.h"
 #include "s_span.h"
 #include "s_stencil.h"
 #include "s_texcombine.h"
@@ -129,7 +130,7 @@ _swrast_span_default_texcoords( GLcontext *ctx, SWspan *span )
    GLuint i;
    for (i = 0; i < ctx->Const.MaxTextureCoordUnits; i++) {
       const GLfloat *tc = ctx->Current.RasterTexCoords[i];
-      if (ctx->FragmentProgram._Current || ctx->ATIFragmentShader._Enabled) {
+      if (ctx->FragmentProgram._Enabled || ctx->ATIFragmentShader._Enabled) {
          COPY_4V(span->tex[i], tc);
       }
       else if (tc[3] > 0.0F) {
@@ -554,7 +555,7 @@ interpolate_texcoords(GLcontext *ctx, SWspan *span)
             if (obj) {
                const struct gl_texture_image *img = obj->Image[0][obj->BaseLevel];
                needLambda = (obj->MinFilter != obj->MagFilter)
-                  || ctx->FragmentProgram._Current;
+                  || ctx->FragmentProgram._Enabled;
                texW = img->WidthScale;
                texH = img->HeightScale;
             }
@@ -579,8 +580,8 @@ interpolate_texcoords(GLcontext *ctx, SWspan *span)
                GLfloat r = span->tex[u][2];
                GLfloat q = span->tex[u][3];
                GLuint i;
-               if (ctx->FragmentProgram._Current
-                   || ctx->ATIFragmentShader._Enabled) {
+               if (ctx->FragmentProgram._Enabled || ctx->ATIFragmentShader._Enabled ||
+                   ctx->ShaderObjects._FragmentShaderPresent) {
                   /* do perspective correction but don't divide s, t, r by q */
                   const GLfloat dwdx = span->dwdx;
                   GLfloat w = span->w;
@@ -631,8 +632,8 @@ interpolate_texcoords(GLcontext *ctx, SWspan *span)
                GLfloat r = span->tex[u][2];
                GLfloat q = span->tex[u][3];
                GLuint i;
-               if (ctx->FragmentProgram._Current ||
-                   ctx->ATIFragmentShader._Enabled) {
+               if (ctx->FragmentProgram._Enabled || ctx->ATIFragmentShader._Enabled ||
+                   ctx->ShaderObjects._FragmentShaderPresent) {
                   /* do perspective correction but don't divide s, t, r by q */
                   const GLfloat dwdx = span->dwdx;
                   GLfloat w = span->w;
@@ -690,7 +691,7 @@ interpolate_texcoords(GLcontext *ctx, SWspan *span)
       if (obj) {
          const struct gl_texture_image *img = obj->Image[0][obj->BaseLevel];
          needLambda = (obj->MinFilter != obj->MagFilter)
-            || ctx->FragmentProgram._Current;
+            || ctx->FragmentProgram._Enabled;
          texW = (GLfloat) img->WidthScale;
          texH = (GLfloat) img->HeightScale;
       }
@@ -715,8 +716,8 @@ interpolate_texcoords(GLcontext *ctx, SWspan *span)
          GLfloat r = span->tex[0][2];
          GLfloat q = span->tex[0][3];
          GLuint i;
-         if (ctx->FragmentProgram._Current
-             || ctx->ATIFragmentShader._Enabled) {
+         if (ctx->FragmentProgram._Enabled || ctx->ATIFragmentShader._Enabled ||
+             ctx->ShaderObjects._FragmentShaderPresent) {
             /* do perspective correction but don't divide s, t, r by q */
             const GLfloat dwdx = span->dwdx;
             GLfloat w = span->w;
@@ -767,8 +768,8 @@ interpolate_texcoords(GLcontext *ctx, SWspan *span)
          GLfloat r = span->tex[0][2];
          GLfloat q = span->tex[0][3];
          GLuint i;
-         if (ctx->FragmentProgram._Current
-             || ctx->ATIFragmentShader._Enabled) {
+         if (ctx->FragmentProgram._Enabled || ctx->ATIFragmentShader._Enabled ||
+             ctx->ShaderObjects._FragmentShaderPresent) {
             /* do perspective correction but don't divide s, t, r by q */
             const GLfloat dwdx = span->dwdx;
             GLfloat w = span->w;
@@ -822,29 +823,26 @@ interpolate_texcoords(GLcontext *ctx, SWspan *span)
 static INLINE void
 interpolate_varying(GLcontext *ctx, SWspan *span)
 {
-   GLuint var;
-   const GLbitfield inputsUsed = ctx->FragmentProgram._Current->Base.InputsRead;
+   GLuint i, j;
 
    ASSERT(span->interpMask & SPAN_VARYING);
    ASSERT(!(span->arrayMask & SPAN_VARYING));
 
    span->arrayMask |= SPAN_VARYING;
 
-   for (var = 0; var < MAX_VARYING; var++) {
-      if (inputsUsed & FRAG_BIT_VAR(var)) {
-         GLuint j;
-         for (j = 0; j < 4; j++) {
-            const GLfloat dvdx = span->varStepX[var][j];
-            GLfloat v = span->var[var][j];
-            const GLfloat dwdx = span->dwdx;
-            GLfloat w = span->w;
-            GLuint k;
-            for (k = 0; k < span->end; k++) {
-               GLfloat invW = 1.0f / w;
-               span->array->varying[var][k][j] = v * invW;
-               v += dvdx;
-               w += dwdx;
-            }
+   for (i = 0; i < MAX_VARYING_VECTORS; i++) {
+      for (j = 0; j < VARYINGS_PER_VECTOR; j++) {
+         const GLfloat dvdx = span->varStepX[i][j];
+         GLfloat v = span->var[i][j];
+         const GLfloat dwdx = span->dwdx;
+         GLfloat w = span->w;
+         GLuint k;
+
+         for (k = 0; k < span->end; k++) {
+            GLfloat invW = 1.0f / w;
+            span->array->varying[k][i][j] = v * invW;
+            v += dvdx;
+            w += dwdx;
          }
       }
    }
@@ -855,37 +853,25 @@ interpolate_varying(GLcontext *ctx, SWspan *span)
  * Apply the current polygon stipple pattern to a span of pixels.
  */
 static INLINE void
-stipple_polygon_span(GLcontext *ctx, SWspan *span)
+stipple_polygon_span( GLcontext *ctx, SWspan *span )
 {
+   const GLuint highbit = 0x80000000;
+   const GLuint stipple = ctx->PolygonStipple[span->y % 32];
    GLubyte *mask = span->array->mask;
+   GLuint i, m;
 
    ASSERT(ctx->Polygon.StippleFlag);
+   ASSERT((span->arrayMask & SPAN_XY) == 0);
 
-   if (span->arrayMask & SPAN_XY) {
-      /* arrays of x/y pixel coords */
-      GLuint i;
-      for (i = 0; i < span->end; i++) {
-         const GLint col = span->array->x[i] % 32;
-         const GLint row = span->array->y[i] % 32;
-         const GLuint stipple = ctx->PolygonStipple[row];
-         if (((1 << col) & stipple) == 0) {
-            mask[i] = 0;
-         }
+   m = highbit >> (GLuint) (span->x % 32);
+
+   for (i = 0; i < span->end; i++) {
+      if ((m & stipple) == 0) {
+	 mask[i] = 0;
       }
-   }
-   else {
-      /* horizontal span of pixels */
-      const GLuint highBit = 1 << 31;
-      const GLuint stipple = ctx->PolygonStipple[span->y % 32];
-      GLuint i, m = highBit >> (GLuint) (span->x % 32);
-      for (i = 0; i < span->end; i++) {
-         if ((m & stipple) == 0) {
-            mask[i] = 0;
-         }
-         m = m >> 1;
-         if (m == 0) {
-            m = highBit;
-         }
+      m = m >> 1;
+      if (m == 0) {
+         m = highbit;
       }
    }
    span->writeAll = GL_FALSE;
@@ -1310,7 +1296,7 @@ clamp_colors(SWspan *span)
  * Convert the span's color arrays to the given type.
  */
 static INLINE void
-convert_color_type(SWspan *span, GLenum newType)
+convert_color_type(GLcontext *ctx, SWspan *span, GLenum newType)
 {
    GLvoid *src, *dst;
    if (span->array->ChanType == GL_UNSIGNED_BYTE) {
@@ -1354,7 +1340,8 @@ shade_texture_span(GLcontext *ctx, SWspan *span)
    if (ctx->Texture._EnabledCoordUnits && (span->interpMask & SPAN_TEXTURE))
       interpolate_texcoords(ctx, span);
 
-   if (ctx->FragmentProgram._Current ||
+   if (ctx->ShaderObjects._FragmentShaderPresent ||
+       ctx->FragmentProgram._Enabled ||
        ctx->ATIFragmentShader._Enabled) {
 
       /* use float colors if running a fragment program or shader */
@@ -1380,11 +1367,12 @@ shade_texture_span(GLcontext *ctx, SWspan *span)
       if (span->interpMask & SPAN_Z)
          _swrast_span_interpolate_z (ctx, span);
 
-      if (ctx->Shader.CurrentProgram && span->interpMask & SPAN_VARYING)
-         interpolate_varying(ctx, span);
-
       /* Run fragment program/shader now */
-      if (ctx->FragmentProgram._Current) {
+      if (ctx->ShaderObjects._FragmentShaderPresent) {
+         interpolate_varying(ctx, span);
+         _swrast_exec_arbshader(ctx, span);
+      }
+      else if (ctx->FragmentProgram._Enabled) {
          _swrast_exec_fragment_program(ctx, span);
       }
       else {
@@ -1415,8 +1403,10 @@ _swrast_write_rgba_span( GLcontext *ctx, SWspan *span)
    const GLbitfield origInterpMask = span->interpMask;
    const GLbitfield origArrayMask = span->arrayMask;
    const GLenum chanType = span->array->ChanType;
-   const GLboolean shader = (ctx->FragmentProgram._Current
-                             || ctx->ATIFragmentShader._Enabled);
+   const GLboolean shader
+      = ctx->FragmentProgram._Enabled
+      || ctx->ShaderObjects._FragmentShaderPresent
+      || ctx->ATIFragmentShader._Enabled;
    const GLboolean shaderOrTexture = shader || ctx->Texture._EnabledUnits;
    GLboolean deferredTexture;
 
@@ -1439,15 +1429,19 @@ _swrast_write_rgba_span( GLcontext *ctx, SWspan *span)
       deferredTexture = GL_FALSE;
    }
    else if (shaderOrTexture) {
-      if (ctx->FragmentProgram._Current) {
+      if (ctx->FragmentProgram._Enabled) {
          if (ctx->FragmentProgram.Current->Base.OutputsWritten
              & (1 << FRAG_RESULT_DEPR)) {
-            /* Z comes from fragment program/shader */
+            /* Z comes from fragment program */
             deferredTexture = GL_FALSE;
          }
          else {
             deferredTexture = GL_TRUE;
          }
+      }
+      else if (ctx->ShaderObjects._FragmentShaderPresent) {
+         /* XXX how do we test if Z is written by shader? */
+         deferredTexture = GL_FALSE; /* never defer to be safe */
       }
       else {
          /* ATI frag shader or conventional texturing */
@@ -1613,7 +1607,7 @@ _swrast_write_rgba_span( GLcontext *ctx, SWspan *span)
       if (numDrawBuffers > 0) {
          if (fb->_ColorDrawBuffers[output][0]->DataType
              != span->array->ChanType) {
-            convert_color_type(span,
+            convert_color_type(ctx, span,
                                fb->_ColorDrawBuffers[output][0]->DataType);
          }
       }
@@ -1671,9 +1665,9 @@ end:
 
 
 /**
- * Read RGBA pixels from a renderbuffer.  Clipping will be done to prevent
+ * Read RGBA pixels from frame buffer.  Clipping will be done to prevent
  * reading ouside the buffer's boundaries.
- * \param dstType  datatype for returned colors
+ * \param type  datatype for returned colors
  * \param rgba  the returned colors
  */
 void
@@ -1738,7 +1732,7 @@ _swrast_read_rgba_span( GLcontext *ctx, struct gl_renderbuffer *rb,
 
 
 /**
- * Read CI pixels from a renderbuffer.  Clipping will be done to prevent
+ * Read CI pixels from frame buffer.  Clipping will be done to prevent
  * reading ouside the buffer's boundaries.
  */
 void
@@ -1821,7 +1815,8 @@ _swrast_get_values(GLcontext *ctx, struct gl_renderbuffer *rb,
 
    for (i = 0; i < count; i++) {
       if (x[i] >= 0 && y[i] >= 0 &&
-	  x[i] < (GLint) rb->Width && y[i] < (GLint) rb->Height) {
+          x[i] < (GLint) rb->Width &&
+          y[i] < (GLint) rb->Height) {
          /* inside */
          if (inCount == 0)
             inStart = i;
@@ -1855,13 +1850,13 @@ _swrast_put_row(GLcontext *ctx, struct gl_renderbuffer *rb,
 {
    GLint skip = 0;
 
-   if (y < 0 || y >= (GLint) rb->Height)
+   if (y < 0 || (GLint) y >= rb->Height)
       return; /* above or below */
 
    if (x + (GLint) count <= 0 || x >= (GLint) rb->Width)
       return; /* entirely left or right */
 
-   if ((GLint) (x + count) > (GLint) rb->Width) {
+   if (x + count > rb->Width) {
       /* right clip */
       GLint clip = x + count - rb->Width;
       count -= clip;
@@ -1890,10 +1885,10 @@ _swrast_get_row(GLcontext *ctx, struct gl_renderbuffer *rb,
 {
    GLint skip = 0;
 
-   if (y < 0 || y >= (GLint) rb->Height)
+   if (y < 0 || y >= rb->Height)
       return; /* above or below */
 
-   if (x + (GLint) count <= 0 || x >= (GLint) rb->Width)
+   if (x + (GLint) count <= 0 || x >= rb->Width)
       return; /* entirely left or right */
 
    if (x + count > rb->Width) {

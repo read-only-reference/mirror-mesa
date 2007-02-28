@@ -86,12 +86,11 @@ struct arrays2 {
 #endif
 
 
-
 /**
  * \sw_span_arrays 
  * \brief Arrays of fragment values.
  *
- * These will either be computed from the span x/xStep values or
+ * These will either be computed from the x/xStep values above or
  * filled in by glDraw/CopyPixels, etc.
  * These arrays are separated out of sw_span to conserve memory.
  */
@@ -115,25 +114,15 @@ typedef struct sw_span_arrays {
    GLchan (*rgba)[4];
    GLchan (*spec)[4];
 
-#if 0
-   /* XXX rearrange and unify these arrays to so that we can
-    * index all fragment inputs with the FRAG_ATTRIB_* values:
-    */
-   GLfloat attribs[FRAG_ATTRIB_MAX][MAX_WIDTH][4];
-   /*OR*/
-   typedef GLfloat (*array4f)[4];
-   array4f attribs[FRAG_ATTRIB_MAX];
-#endif
-
-   GLint   x[MAX_WIDTH];  /**< fragment X coords */
-   GLint   y[MAX_WIDTH];  /**< fragment Y coords */
-   GLuint  z[MAX_WIDTH];  /**< fragment Z coords */
-   GLuint  index[MAX_WIDTH];  /**< Color indexes */
+   GLuint  index[MAX_WIDTH];
+   GLint   x[MAX_WIDTH];  /**< X/Y used for point/line rendering only */
+   GLint   y[MAX_WIDTH];  /**< X/Y used for point/line rendering only */
+   GLuint  z[MAX_WIDTH];
    GLfloat fog[MAX_WIDTH];
    GLfloat texcoords[MAX_TEXTURE_COORD_UNITS][MAX_WIDTH][4];
    GLfloat lambda[MAX_TEXTURE_COORD_UNITS][MAX_WIDTH];
-   GLfloat coverage[MAX_WIDTH];  /**< Fragment coverage for AA/smoothing */
-   GLfloat varying[MAX_VARYING][MAX_WIDTH][4]; /**< For shaders */
+   GLfloat coverage[MAX_WIDTH];
+   GLfloat varying[MAX_WIDTH][MAX_VARYING_VECTORS][VARYINGS_PER_VECTOR];
 
    /** This mask indicates which fragments are alive or culled */
    GLubyte mask[MAX_WIDTH];
@@ -141,11 +130,21 @@ typedef struct sw_span_arrays {
 
 
 /**
- * The SWspan structure describes the colors, Z, fogcoord, texcoords,
+ * \SWspan
+ * \brief Contains data for either a horizontal line or a set of
+ * pixels that are passed through a pipeline of functions before being
+ * drawn.
+ *
+ * The sw_span structure describes the colors, Z, fogcoord, texcoords,
  * etc for either a horizontal run or an array of independent pixels.
  * We can either specify a base/step to indicate interpolated values, or
- * fill in explicit arrays of values.  The interpMask and arrayMask bitfields
- * indicate which attributes are active interpolants or arrays, respectively.
+ * fill in arrays of values.  The interpMask and arrayMask bitfields
+ * indicate which are active.
+ *
+ * With this structure it's easy to hand-off span rasterization to
+ * subroutines instead of doing it all inline in the triangle functions
+ * like we used to do.
+ * It also cleans up the local variable namespace a great deal.
  *
  * It would be interesting to experiment with multiprocessor rasterization
  * with this structure.  The triangle rasterizer could simply emit a
@@ -201,9 +200,9 @@ typedef struct sw_span {
    GLfloat texStepX[MAX_TEXTURE_COORD_UNITS][4];
    GLfloat texStepY[MAX_TEXTURE_COORD_UNITS][4];
    GLfixed intTex[2], intTexStep[2];  /* s, t only */
-   GLfloat var[MAX_VARYING][4];
-   GLfloat varStepX[MAX_VARYING][4];
-   GLfloat varStepY[MAX_VARYING][4];
+   GLfloat var[MAX_VARYING_VECTORS][VARYINGS_PER_VECTOR];
+   GLfloat varStepX[MAX_VARYING_VECTORS][VARYINGS_PER_VECTOR];
+   GLfloat varStepY[MAX_VARYING_VECTORS][VARYINGS_PER_VECTOR];
 
    /* partial derivatives wrt X and Y. */
    GLfloat dzdx, dzdy;
@@ -226,7 +225,7 @@ typedef struct sw_span {
    /**
     * We store the arrays of fragment values in a separate struct so
     * that we can allocate sw_span structs on the stack without using
-    * a lot of memory.  The span_arrays struct is about 1.4MB while the
+    * a lot of memory.  The span_arrays struct is about 400KB while the
     * sw_span struct is only about 512 bytes.
     */
    SWspanarrays *array;

@@ -198,7 +198,6 @@ draw_wide_line( GLcontext *ctx, SWspan *span, GLboolean xMajor )
 #define INTERP_Z
 #define INTERP_FOG
 #define INTERP_MULTITEX
-#define INTERP_VARYING
 #define RENDER_SPAN(span)					\
    if (ctx->Line.StippleFlag) {					\
       span.arrayMask |= SPAN_MASK;				\
@@ -299,12 +298,10 @@ _swrast_choose_line( GLcontext *ctx )
          _swrast_choose_aa_line_function(ctx);
          ASSERT(swrast->Line);
       }
-      else if (ctx->Texture._EnabledCoordUnits
-             || ctx->FragmentProgram._Current) {
+      else if (ctx->Texture._EnabledCoordUnits) {
          /* textured lines */
          if (ctx->Texture._EnabledCoordUnits > 0x1
-             || NEED_SECONDARY_COLOR(ctx)
-             || ctx->FragmentProgram._Current) {
+             || NEED_SECONDARY_COLOR(ctx)) {
             /* multi-texture and/or separate specular color */
             USE(multitextured_line);
          }

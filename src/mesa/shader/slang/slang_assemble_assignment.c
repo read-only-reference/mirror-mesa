@@ -31,7 +31,6 @@
 #include "imports.h"
 #include "slang_assemble.h"
 #include "slang_storage.h"
-#include "slang_error.h"
 
 /*
  * _slang_assemble_assignment()
@@ -96,9 +95,9 @@ assign_basic(slang_assemble_ctx * A, slang_storage_type type, GLuint * index,
     */
    dst_addr_loc = size - *index;
 
-   if (!slang_assembly_file_push_label2(A->file, ty, dst_addr_loc, dst_offset))
-      RETURN_NIL();
-
+   if (!slang_assembly_file_push_label2
+       (A->file, ty, dst_addr_loc, dst_offset))
+      return GL_FALSE;
    *index += _slang_sizeof_type(type);
 
    return GL_TRUE;
@@ -156,7 +155,7 @@ _slang_assemble_assignment(slang_assemble_ctx * A, const slang_operation * op)
    GLuint index, size;
 
    if (!slang_assembly_typeinfo_construct(&ti))
-      RETURN_OUT_OF_MEMORY();
+      return GL_FALSE;
    if (!_slang_typeof_operation(A, op, &ti))
       goto end1;
 
@@ -175,8 +174,6 @@ _slang_assemble_assignment(slang_assemble_ctx * A, const slang_operation * op)
    slang_storage_aggregate_destruct(&agg);
  end:
    slang_assembly_typeinfo_destruct(&ti);
-   if (!result)
-      RETURN_NIL();
    return result;
 }
 

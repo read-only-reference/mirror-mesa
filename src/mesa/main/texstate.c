@@ -41,7 +41,7 @@
 #include "texenvprogram.h"
 #include "mtypes.h"
 #include "math/m_xform.h"
-/*#include "shaderobjects.h"*/
+#include "shaderobjects.h"
 
 
 
@@ -2919,18 +2919,11 @@ static void
 update_texture_state( GLcontext *ctx )
 {
    GLuint unit;
-   struct gl_fragment_program *fprog;
 
-   if (ctx->Shader.CurrentProgram &&
-       ctx->Shader.CurrentProgram->LinkStatus) {
-      fprog = ctx->Shader.CurrentProgram->FragmentProgram;
-   }
-   else if (ctx->FragmentProgram._Enabled) {
-      fprog = ctx->FragmentProgram.Current;
-   }
-   else {
-      fprog = NULL;
-   }
+#if FEATURE_ARB_fragment_shader
+   struct gl2_program_intf **prog = ctx->ShaderObjects.CurrentProgram;
+   GLbitfield progteximageusage[MAX_TEXTURE_IMAGE_UNITS];
+#endif
 
    ctx->NewState |= _NEW_TEXTURE; /* TODO: only set this if there are 
 				   * actual changes. 
@@ -2940,6 +2933,17 @@ update_texture_state( GLcontext *ctx )
    ctx->Texture._GenFlags = 0;
    ctx->Texture._TexMatEnabled = 0;
    ctx->Texture._TexGenEnabled = 0;
+
+#if FEATURE_ARB_fragment_shader
+   /*
+    * Grab texture image usage state from shader program. It must be
+    * grabbed every time uniform sampler changes, so maybe there is a
+    * better place to perform these rather expensive computations.
+    */
+   if (ctx->ShaderObjects._FragmentShaderPresent) {
+      (**prog).GetTextureImageUsage (prog, progteximageusage);
+   }
+#endif /* FEATURE_ARB_fragment_shader */
 
    /*
     * Update texture unit state.
@@ -2952,14 +2956,15 @@ update_texture_state( GLcontext *ctx )
       texUnit->_ReallyEnabled = 0;
       texUnit->_GenFlags = 0;
 
-      /* Get the bitmask of texture enables.
-       * enableBits will be a mask of the TEXTURE_*_BIT flags indicating
-       * which texture targets are enabled (fixed function) or referenced
-       * by a fragment shader/program.  When multiple flags are set, we'll
-       * settle on the one with highest priority (see texture_override below).
-       */
-      if (fprog) {
-         enableBits = fprog->Base.TexturesUsed[unit];
+      /* Get the bitmask of texture enables */
+#if FEATURE_ARB_fragment_shader
+      if (ctx->ShaderObjects._FragmentShaderPresent) {
+         enableBits = progteximageusage[unit];
+      }
+      else
+#endif
+      if (ctx->FragmentProgram._Enabled) {
+         enableBits = ctx->FragmentProgram.Current->TexturesUsed[unit];
       }
       else {
          if (!texUnit->Enabled)
@@ -3076,25 +3081,21 @@ update_texture_state( GLcontext *ctx )
 	 ctx->Texture._TexMatEnabled |= ENABLE_TEXMAT(unit);
    }
 
-   /* XXX maybe move this below as an else-clause */
    ctx->Texture._EnabledCoordUnits = ctx->Texture._EnabledUnits;
-
    /* Fragment programs may need texture coordinates but not the
     * corresponding texture images.
     */
-   if (fprog) {
-      const GLuint coordMask = (1 << MAX_TEXTURE_UNITS) - 1;
-      ctx->Texture._EnabledCoordUnits
-         |= (fprog->Base.InputsRead >> FRAG_ATTRIB_TEX0) & coordMask;
+   if (ctx->ShaderObjects.CurrentProgram != NULL) {
+      ctx->Texture._EnabledCoordUnits |= (1 << ctx->Const.MaxTextureCoordUnits) - 1;
+   }
+   else if (ctx->FragmentProgram._Enabled) {
+      ctx->Texture._EnabledCoordUnits |=
+         (ctx->FragmentProgram.Current->Base.InputsRead >> FRAG_ATTRIB_TEX0);
    }
 }
 
 
-/**
- * Update texture-related derived state.
- */
-void
-_mesa_update_texture( GLcontext *ctx, GLuint new_state )
+void _mesa_update_texture( GLcontext *ctx, GLuint new_state )
 {
    if (new_state & _NEW_TEXTURE_MATRIX)
       update_texture_matrices( ctx );

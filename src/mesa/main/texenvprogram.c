@@ -28,11 +28,10 @@
 #include "glheader.h"
 #include "macros.h"
 #include "enums.h"
-#include "prog_parameter.h"
-#include "prog_instruction.h"
-#include "prog_print.h"
-#include "prog_statevars.h"
 #include "texenvprogram.h"
+
+#include "shader/program.h"
+#include "shader/program_instruction.h"
 
 /**
  * According to Glean's texCombine test, no more than 21 instructions
@@ -524,7 +523,7 @@ static struct ureg emit_arith( struct texenv_fragment_program *p,
    if (dest.file == PROGRAM_TEMPORARY)
       p->alu_temps |= 1 << dest.idx;
        
-   p->program->Base.NumAluInstructions++;
+   p->program->NumAluInstructions++;
    return dest;
 }
 
@@ -546,7 +545,7 @@ static struct ureg emit_texld( struct texenv_fragment_program *p,
    inst->TexSrcTarget = tex_idx;
    inst->TexSrcUnit = tex_unit;
 
-   p->program->Base.NumTexInstructions++;
+   p->program->NumTexInstructions++;
 
    /* Is this a texture indirection?
     */
@@ -554,7 +553,7 @@ static struct ureg emit_texld( struct texenv_fragment_program *p,
 	(p->temps_output & (1<<coord.idx))) ||
        (dest.file == PROGRAM_TEMPORARY &&
 	(p->alu_temps & (1<<dest.idx)))) {
-      p->program->Base.NumTexIndirections++;
+      p->program->NumTexIndirections++;
       p->temps_output = 1<<coord.idx;
       p->alu_temps = 0;
       assert(0);		/* KW: texture env crossbar */
@@ -571,14 +570,12 @@ static struct ureg register_const4f( struct texenv_fragment_program *p,
 				     GLfloat s3)
 {
    GLfloat values[4];
-   GLuint idx, swizzle;
+   GLuint idx;
    values[0] = s0;
    values[1] = s1;
    values[2] = s2;
    values[3] = s3;
-   idx = _mesa_add_unnamed_constant( p->program->Base.Parameters, values, 4,
-                                     &swizzle );
-   ASSERT(swizzle == SWIZZLE_NOOP);
+   idx = _mesa_add_unnamed_constant( p->program->Base.Parameters, values, 4 );
    return make_ureg(PROGRAM_STATE_VAR, idx);
 }
 
@@ -1013,9 +1010,9 @@ create_new_program(GLcontext *ctx, struct state_key *key,
     */
    p.program->Base.Instructions = instBuffer;
    p.program->Base.Target = GL_FRAGMENT_PROGRAM_ARB;
-   p.program->Base.NumTexIndirections = 1;	/* correct? */
-   p.program->Base.NumTexInstructions = 0;
-   p.program->Base.NumAluInstructions = 0;
+   p.program->NumTexIndirections = 1;	/* correct? */
+   p.program->NumTexInstructions = 0;
+   p.program->NumAluInstructions = 0;
    p.program->Base.String = 0;
    p.program->Base.NumInstructions =
    p.program->Base.NumTemporaries =
@@ -1086,13 +1083,13 @@ create_new_program(GLcontext *ctx, struct state_key *key,
    } else
       p.program->FogOption = GL_NONE;
 
-   if (p.program->Base.NumTexIndirections > ctx->Const.FragmentProgram.MaxTexIndirections) 
+   if (p.program->NumTexIndirections > ctx->Const.FragmentProgram.MaxTexIndirections) 
       program_error(&p, "Exceeded max nr indirect texture lookups");
 
-   if (p.program->Base.NumTexInstructions > ctx->Const.FragmentProgram.MaxTexInstructions)
+   if (p.program->NumTexInstructions > ctx->Const.FragmentProgram.MaxTexInstructions)
       program_error(&p, "Exceeded max TEX instructions");
 
-   if (p.program->Base.NumAluInstructions > ctx->Const.FragmentProgram.MaxAluInstructions)
+   if (p.program->NumAluInstructions > ctx->Const.FragmentProgram.MaxAluInstructions)
       program_error(&p, "Exceeded max ALU instructions");
 
    ASSERT(p.program->Base.NumInstructions <= MAX_INSTRUCTIONS);
@@ -1225,55 +1222,44 @@ static GLuint hash_key( const struct state_key *key )
    return hash;
 }
 
-
-/**
- * If _MaintainTexEnvProgram is set we'll generate a fragment program that
- * implements the current texture env/combine mode.
- * This function generates that program and puts it into effect.
- */
-void
-_mesa_UpdateTexEnvProgram( GLcontext *ctx )
+void _mesa_UpdateTexEnvProgram( GLcontext *ctx )
 {
    struct state_key key;
    GLuint hash;
    const struct gl_fragment_program *prev = ctx->FragmentProgram._Current;
 	
-   ASSERT(ctx->FragmentProgram._MaintainTexEnvProgram);
-
-   /* If a conventional fragment program/shader isn't in effect... */
-   if (!ctx->FragmentProgram._Current) {
+   if (!ctx->FragmentProgram._Enabled) {
       make_state_key(ctx, &key);
       hash = hash_key(&key);
       
-      ctx->FragmentProgram._TexEnvProgram =
-         search_cache(&ctx->Texture.env_fp_cache, hash, &key, sizeof(key));
+      ctx->FragmentProgram._Current =
+      ctx->_TexEnvProgram =
+	 search_cache(&ctx->Texture.env_fp_cache, hash, &key, sizeof(key));
+	
+      if (!ctx->_TexEnvProgram) {
+	 if (0) _mesa_printf("Building new texenv proggy for key %x\n", hash);
+		
+	 ctx->FragmentProgram._Current = ctx->_TexEnvProgram = 
+	    (struct gl_fragment_program *) 
+	    ctx->Driver.NewProgram(ctx, GL_FRAGMENT_PROGRAM_ARB, 0);
+		
+	 create_new_program(ctx, &key, ctx->_TexEnvProgram);
 
-      if (!ctx->FragmentProgram._TexEnvProgram) {
-         if (0)
-            _mesa_printf("Building new texenv proggy for key %x\n", hash);
-
-         /* create new tex env program */
-         ctx->FragmentProgram._TexEnvProgram = (struct gl_fragment_program *) 
-            ctx->Driver.NewProgram(ctx, GL_FRAGMENT_PROGRAM_ARB, 0);
-
-         create_new_program(ctx, &key, ctx->FragmentProgram._TexEnvProgram);
-
-         cache_item(&ctx->Texture.env_fp_cache, hash, &key,
-                    ctx->FragmentProgram._TexEnvProgram);
+	 cache_item(&ctx->Texture.env_fp_cache, hash, &key, ctx->_TexEnvProgram);
+      } else {
+	 if (0) _mesa_printf("Found existing texenv program for key %x\n", hash);
       }
-      else {
-         if (0)
-            _mesa_printf("Found existing texenv program for key %x\n", hash);
-      }
-      ctx->FragmentProgram._Current = ctx->FragmentProgram._TexEnvProgram;
    } 
+   else {
+      ctx->FragmentProgram._Current = ctx->FragmentProgram.Current;
+   }
 
    /* Tell the driver about the change.  Could define a new target for
     * this?
     */
    if (ctx->FragmentProgram._Current != prev && ctx->Driver.BindProgram) {
       ctx->Driver.BindProgram(ctx, GL_FRAGMENT_PROGRAM_ARB,
-                         (struct gl_program *) ctx->FragmentProgram._Current);
+                             (struct gl_program *) ctx->FragmentProgram._Current);
    }
 }
 

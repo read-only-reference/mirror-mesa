@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.3
+ * Version:  6.5.2
  *
- * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -33,10 +33,11 @@
 
 #include "glheader.h"
 #include "context.h"
-#include "prog_parameter.h"
-#include "prog_statevars.h"
+#include "imports.h"
+#include "mtypes.h"
+#include "program.h"
 #include "programopt.h"
-#include "prog_instruction.h"
+#include "program_instruction.h"
 
 
 /**
@@ -125,17 +126,15 @@ _mesa_insert_mvp_code(GLcontext *ctx, struct gl_vertex_program *vprog)
 void
 _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
 {
-   static const GLint fogParamsState[] = { STATE_FOG_PARAMS, 0, 0, 0, 0 };
+   static const GLint fogPStateOpt[] = { STATE_INTERNAL,
+					 STATE_FOG_PARAMS_OPTIMIZED, 0, 0, 0 };
    static const GLint fogColorState[] = { STATE_FOG_COLOR, 0, 0, 0, 0 };
    struct prog_instruction *newInst, *inst;
    const GLuint origLen = fprog->Base.NumInstructions;
-   const GLuint newLen = origLen + 6;
+   const GLuint newLen = origLen + 5;
    GLuint i;
-   GLint fogParamsRef, fogColorRef; /* state references */
+   GLint fogPRefOpt, fogColorRef; /* state references */
    GLuint colorTemp, fogFactorTemp; /* temporary registerss */
-   GLfloat fogVals[4];
-   GLuint fogConsts;                /* constant values for EXP, EXP2 mode */
-   GLuint swizzle;
 
    if (fprog->FogOption == GL_NONE) {
       _mesa_problem(ctx, "_mesa_append_fog_code() called for fragment program"
@@ -155,9 +154,9 @@ _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
    _mesa_memcpy(newInst, fprog->Base.Instructions,
                 origLen * sizeof(struct prog_instruction));
 
-   /* PARAM fogParamsRef = state.fog.params; */
-   fogParamsRef
-      = _mesa_add_state_reference(fprog->Base.Parameters, fogParamsState);
+   /* PARAM fogParamsRefOpt = internal optimized fog params; */
+   fogPRefOpt
+      = _mesa_add_state_reference(fprog->Base.Parameters, fogPStateOpt);
    /* PARAM fogColorRef = state.fog.color; */
    fogColorRef
       = _mesa_add_state_reference(fprog->Base.Parameters, fogColorState);
@@ -166,15 +165,6 @@ _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
    colorTemp = fprog->Base.NumTemporaries++;
    /* TEMP fogFactorTemp; */
    fogFactorTemp = fprog->Base.NumTemporaries++;
-
-   /* PARAM fogVals = { 1/ln(2), 1/sqrt(ln(2), 0, 0 }; */
-   fogVals[0] = 1.0 / log(2.0);
-   fogVals[1] = 1.0 / SQRTF(log(2.0));
-   fogVals[2] = 0.0;
-   fogVals[3] = 0.0;
-   fogConsts = _mesa_add_unnamed_constant(fprog->Base.Parameters,
-                                          fogVals, 4, &swizzle);
-   ASSERT(swizzle == SWIZZLE_NOOP);
 
    /* Scan program to find where result.color is written */
    inst = newInst;
@@ -193,43 +183,39 @@ _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
    }
    assert(inst->Opcode == OPCODE_END); /* we'll overwrite this inst */
 
-   _mesa_init_instructions(inst, 6);
+   _mesa_init_instructions(inst, 5);
 
    /* emit instructions to compute fog blending factor */
    if (fprog->FogOption == GL_LINEAR) {
-      /* SUB fogFactorTemp.x, fogParamsRef.z, fragment.fogcoord.x; */
-      inst->Opcode = OPCODE_SUB;
+      /* MAD fogFactorTemp.x, fragment.fogcoord.x, fogPRefOpt.x, fogPRefOpt.y; */
+      inst->Opcode = OPCODE_MAD;
       inst->DstReg.File = PROGRAM_TEMPORARY;
       inst->DstReg.Index = fogFactorTemp;
       inst->DstReg.WriteMask = WRITEMASK_X;
-      inst->SrcReg[0].File = PROGRAM_STATE_VAR;
-      inst->SrcReg[0].Index = fogParamsRef;
-      inst->SrcReg[0].Swizzle = SWIZZLE_Z;
-      inst->SrcReg[1].File = PROGRAM_INPUT;
-      inst->SrcReg[1].Index = FRAG_ATTRIB_FOGC;
-      inst++;
-      /* MUL fogFactorTemp.x, fogFactorTemp, fogParamsRef.w; */
-      inst->Opcode = OPCODE_MUL;
-      inst->DstReg.File = PROGRAM_TEMPORARY;
-      inst->DstReg.Index = fogFactorTemp;
-      inst->DstReg.WriteMask = WRITEMASK_X;
-      inst->SrcReg[0].File = PROGRAM_TEMPORARY;
-      inst->SrcReg[0].Index = fogFactorTemp;
+      inst->SrcReg[0].File = PROGRAM_INPUT;
+      inst->SrcReg[0].Index = FRAG_ATTRIB_FOGC;
+      inst->SrcReg[0].Swizzle = SWIZZLE_X;
       inst->SrcReg[1].File = PROGRAM_STATE_VAR;
-      inst->SrcReg[1].Index = fogParamsRef;
-      inst->SrcReg[1].Swizzle = SWIZZLE_W;
+      inst->SrcReg[1].Index = fogPRefOpt;
+      inst->SrcReg[1].Swizzle = SWIZZLE_X;
+      inst->SrcReg[2].File = PROGRAM_STATE_VAR;
+      inst->SrcReg[2].Index = fogPRefOpt;
+      inst->SrcReg[2].Swizzle = SWIZZLE_Y;
       inst++;
    }
    else {
       ASSERT(fprog->FogOption == GL_EXP || fprog->FogOption == GL_EXP2);
-      /* MUL fogFactorTemp.x, fogParamsRef.x, fragment.fogcoord; */
+      /* fogPRefOpt.z = d/ln(2), fogPRefOpt.w = d/sqrt(ln(2) */
+      /* EXP: MUL fogFactorTemp.x, fogPRefOpt.z, fragment.fogcoord.x; */
+      /* EXP2: MUL fogFactorTemp.x, fogPRefOpt.w, fragment.fogcoord.x; */
       inst->Opcode = OPCODE_MUL;
       inst->DstReg.File = PROGRAM_TEMPORARY;
       inst->DstReg.Index = fogFactorTemp;
       inst->DstReg.WriteMask = WRITEMASK_X;
       inst->SrcReg[0].File = PROGRAM_STATE_VAR;
-      inst->SrcReg[0].Index = fogParamsRef;
-      inst->SrcReg[0].Swizzle = SWIZZLE_X; /* X=density */
+      inst->SrcReg[0].Index = fogPRefOpt;
+      inst->SrcReg[0].Swizzle
+         = (fprog->FogOption == GL_EXP) ? SWIZZLE_Z : SWIZZLE_W;
       inst->SrcReg[1].File = PROGRAM_INPUT;
       inst->SrcReg[1].Index = FRAG_ATTRIB_FOGC;
       inst->SrcReg[1].Swizzle = SWIZZLE_X;
@@ -242,23 +228,12 @@ _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
          inst->DstReg.WriteMask = WRITEMASK_X;
          inst->SrcReg[0].File = PROGRAM_TEMPORARY;
          inst->SrcReg[0].Index = fogFactorTemp;
+         inst->SrcReg[0].Swizzle = SWIZZLE_X;
          inst->SrcReg[1].File = PROGRAM_TEMPORARY;
          inst->SrcReg[1].Index = fogFactorTemp;
+         inst->SrcReg[1].Swizzle = SWIZZLE_X;
          inst++;
       }
-      /* EXP:  MUL fogFactorTemp.x, fogFactorTemp.x, {1/ln(2)}; */
-      /* EXP2: MUL fogFactorTemp.x, fogFactorTemp.x, {1/sqrt(ln(2))}; */
-      inst->Opcode = OPCODE_MUL;
-      inst->DstReg.File = PROGRAM_TEMPORARY;
-      inst->DstReg.Index = fogFactorTemp;
-      inst->DstReg.WriteMask = WRITEMASK_X;
-      inst->SrcReg[0].File = PROGRAM_TEMPORARY;
-      inst->SrcReg[0].Index = fogFactorTemp;
-      inst->SrcReg[1].File = PROGRAM_CONSTANT;
-      inst->SrcReg[1].Index = fogConsts;
-      inst->SrcReg[1].Swizzle
-         = (fprog->FogOption == GL_EXP) ? SWIZZLE_X : SWIZZLE_Y;
-      inst++;
       /* EX2_SAT fogFactorTemp.x, -fogFactorTemp.x; */
       inst->Opcode = OPCODE_EX2;
       inst->DstReg.File = PROGRAM_TEMPORARY;
@@ -267,6 +242,7 @@ _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
       inst->SrcReg[0].File = PROGRAM_TEMPORARY;
       inst->SrcReg[0].Index = fogFactorTemp;
       inst->SrcReg[0].NegateBase = GL_TRUE;
+      inst->SrcReg[0].Swizzle = SWIZZLE_X;
       inst->SaturateMode = SATURATE_ZERO_ONE;
       inst++;
    }
@@ -281,8 +257,10 @@ _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
       = MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_X, SWIZZLE_X, SWIZZLE_X);
    inst->SrcReg[1].File = PROGRAM_TEMPORARY;
    inst->SrcReg[1].Index = colorTemp;
+   inst->SrcReg[1].Swizzle = SWIZZLE_NOOP;
    inst->SrcReg[2].File = PROGRAM_STATE_VAR;
    inst->SrcReg[2].Index = fogColorRef;
+   inst->SrcReg[2].Swizzle = SWIZZLE_NOOP;
    inst++;
    /* MOV result.color.w, colorTemp.x;  # copy alpha */
    inst->Opcode = OPCODE_MOV;
@@ -291,6 +269,7 @@ _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
    inst->DstReg.WriteMask = WRITEMASK_W;
    inst->SrcReg[0].File = PROGRAM_TEMPORARY;
    inst->SrcReg[0].Index = colorTemp;
+   inst->SrcReg[0].Swizzle = SWIZZLE_NOOP;
    inst++;
    /* END; */
    inst->Opcode = OPCODE_END;
@@ -305,85 +284,3 @@ _mesa_append_fog_code(GLcontext *ctx, struct gl_fragment_program *fprog)
    fprog->Base.InputsRead |= FRAG_BIT_FOGC;
    /* XXX do this?  fprog->FogOption = GL_NONE; */
 }
-
-
-
-static GLboolean
-is_texture_instruction(const struct prog_instruction *inst)
-{
-   switch (inst->Opcode) {
-   case OPCODE_TEX:
-   case OPCODE_TXB:
-   case OPCODE_TXD:
-   case OPCODE_TXL:
-   case OPCODE_TXP:
-   case OPCODE_TXP_NV:
-      return GL_TRUE;
-   default:
-      return GL_FALSE;
-   }
-}
-      
-
-/**
- * Count the number of texure indirections in the given program.
- * The program's NumTexIndirections field will be updated.
- * See the GL_ARB_fragment_program spec (issue 24) for details.
- * XXX we count texture indirections in texenvprogram.c (maybe use this code
- * instead and elsewhere).
- */
-void
-_mesa_count_texture_indirections(struct gl_program *prog)
-{
-   GLuint indirections = 1;
-   GLbitfield tempsOutput = 0x0;
-   GLbitfield aluTemps = 0x0;
-   GLuint i;
-
-   for (i = 0; i < prog->NumInstructions; i++) {
-      const struct prog_instruction *inst = prog->Instructions + i;
-
-      if (is_texture_instruction(inst)) {
-         if (((inst->SrcReg[0].File == PROGRAM_TEMPORARY) && 
-              (tempsOutput & (1 << inst->SrcReg[0].Index))) ||
-             ((inst->Opcode != OPCODE_KIL) &&
-              (inst->DstReg.File == PROGRAM_TEMPORARY) && 
-              (aluTemps & (1 << inst->DstReg.Index)))) 
-            {
-               indirections++;
-               tempsOutput = 0x0;
-               aluTemps = 0x0;
-            }
-      }
-      else {
-         GLuint j;
-         for (j = 0; j < 3; j++) {
-            if (inst->SrcReg[j].File == PROGRAM_TEMPORARY)
-               aluTemps |= (1 << inst->SrcReg[j].Index);
-         }
-         if (inst->DstReg.File == PROGRAM_TEMPORARY)
-            aluTemps |= (1 << inst->DstReg.Index);
-      }
-
-      if ((inst->Opcode != OPCODE_KIL) && (inst->DstReg.File == PROGRAM_TEMPORARY))
-         tempsOutput |= (1 << inst->DstReg.Index);
-   }
-
-   prog->NumTexIndirections = indirections;
-}
-
-
-/**
- * Count number of texture instructions in given program and update the
- * program's NumTexInstructions field.
- */
-void
-_mesa_count_texture_instructions(struct gl_program *prog)
-{
-   GLuint i;
-   prog->NumTexInstructions = 0;
-   for (i = 0; i < prog->NumInstructions; i++) {
-      prog->NumTexInstructions += is_texture_instruction(prog->Instructions + i);
-   }
-}
-
