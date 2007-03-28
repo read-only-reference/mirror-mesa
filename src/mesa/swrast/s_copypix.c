@@ -109,7 +109,8 @@ copy_conv_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
       _swrast_span_default_z(ctx, &span);
    if (swrast->_FogEnabled)
       _swrast_span_default_fog(ctx, &span);
-
+   if (ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR)
+      _swrast_span_default_secondary_color(ctx, &span);
 
    /* allocate space for GLfloat image */
    tmpImage = (GLfloat *) _mesa_malloc(width * height * 4 * sizeof(GLfloat));
@@ -199,7 +200,7 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
    GLint sy, dy, stepy, row;
    const GLboolean zoom = ctx->Pixel.ZoomX != 1.0F || ctx->Pixel.ZoomY != 1.0F;
    GLint overlapping;
-   const GLuint transferOps = ctx->_ImageTransferState;
+   GLuint transferOps = ctx->_ImageTransferState;
    SWspan span;
 
    if (!ctx->ReadBuffer->_ColorReadBuffer) {
@@ -210,6 +211,11 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
    if (ctx->Pixel.Convolution2DEnabled || ctx->Pixel.Separable2DEnabled) {
       copy_conv_rgba_pixels(ctx, srcx, srcy, width, height, destx, desty);
       return;
+   }
+   else if (ctx->Pixel.Convolution1DEnabled) {
+      /* make sure we don't apply 1D convolution */
+      transferOps &= ~(IMAGE_CONVOLUTION_BIT |
+                       IMAGE_POST_CONVOLUTION_SCALE_BIAS);
    }
 
    /* Determine if copy should be done bottom-to-top or top-to-bottom */
@@ -239,6 +245,8 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
       _swrast_span_default_z(ctx, &span);
    if (swrast->_FogEnabled)
       _swrast_span_default_fog(ctx, &span);
+   if (ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR)
+      _swrast_span_default_secondary_color(ctx, &span);
 
    if (overlapping) {
       tmpImage = (GLfloat *) _mesa_malloc(width * height * sizeof(GLfloat) * 4);
@@ -263,7 +271,7 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
    ASSERT(width < MAX_WIDTH);
 
    for (row = 0; row < height; row++, sy += stepy, dy += stepy) {
-      GLvoid *rgba = span.array->color.sz4.rgba;
+      GLvoid *rgba = span.array->attribs[FRAG_ATTRIB_COL0];
 
       /* Get row/span of source pixels */
       if (overlapping) {
@@ -484,6 +492,8 @@ copy_depth_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
    }
 
    _swrast_span_default_color(ctx, &span);
+   if (ctx->Light.Model.ColorControl == GL_SEPARATE_SPECULAR_COLOR)
+      _swrast_span_default_secondary_color(ctx, &span);
    if (swrast->_FogEnabled)
       _swrast_span_default_fog(ctx, &span);
 

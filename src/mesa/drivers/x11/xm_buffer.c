@@ -37,7 +37,7 @@
 #include "renderbuffer.h"
 
 
-#ifndef XFree86Server
+#if defined(USE_XSHM) && !defined(XFree86Server)
 static volatile int mesaXErrorFlag = 0;
 
 /**
@@ -51,18 +51,14 @@ mesaHandleXError(XMesaDisplay *dpy, XErrorEvent *event)
    mesaXErrorFlag = 1;
    return 0;
 }
-#endif
-
 
 /**
  * Allocate a shared memory XImage back buffer for the given XMesaBuffer.
  * Return:  GL_TRUE if success, GL_FALSE if error
  */
-#ifndef XFree86Server
 static GLboolean
 alloc_back_shm_ximage(XMesaBuffer b, GLuint width, GLuint height)
 {
-#ifdef USE_XSHM
    /*
     * We have to do a _lot_ of error checking here to be sure we can
     * really use the XSHM extension.  It seems different servers trigger
@@ -152,10 +148,13 @@ alloc_back_shm_ximage(XMesaBuffer b, GLuint width, GLuint height)
    }
 
    return GL_TRUE;
+}
 #else
+static GLboolean
+alloc_back_shm_ximage(XMesaBuffer b, GLuint width, GLuint height)
+{
    /* Can't compile XSHM support */
    return GL_FALSE;
-#endif
 }
 #endif
 
@@ -168,9 +167,6 @@ alloc_back_shm_ximage(XMesaBuffer b, GLuint width, GLuint height)
 static void
 alloc_back_buffer(XMesaBuffer b, GLuint width, GLuint height)
 {
-   if (width == 0 || height == 0)
-      return;
-
    if (b->db_mode == BACK_XIMAGE) {
       /* Deallocate the old backxrb->ximage, if any */
       if (b->backxrb->ximage) {
@@ -186,15 +182,16 @@ alloc_back_buffer(XMesaBuffer b, GLuint width, GLuint height)
 	 b->backxrb->ximage = NULL;
       }
 
+      if (width == 0 || height == 0)
+         return;
+
       /* Allocate new back buffer */
-#ifdef XFree86Server
-      /* Allocate a regular XImage for the back buffer. */
-      b->backxrb->ximage = XMesaCreateImage(b->xm_visual->BitsPerPixel,
-                                            width, height, NULL);
-      {
-#else
       if (b->shm == 0 || !alloc_back_shm_ximage(b, width, height)) {
 	 /* Allocate a regular XImage for the back buffer. */
+#ifdef XFree86Server
+	 b->backxrb->ximage = XMesaCreateImage(b->xm_visual->BitsPerPixel,
+                                               width, height, NULL);
+#else
 	 b->backxrb->ximage = XCreateImage(b->xm_visual->display,
                                       b->xm_visual->visinfo->visual,
                                       GET_VISUAL_DEPTH(b->xm_visual),
@@ -218,20 +215,20 @@ alloc_back_buffer(XMesaBuffer b, GLuint width, GLuint height)
       b->backxrb->pixmap = None;
    }
    else if (b->db_mode == BACK_PIXMAP) {
-      if (!width)
-         width = 1;
-      if (!height)
-         height = 1;
-
       /* Free the old back pixmap */
       if (b->backxrb->pixmap) {
-	 XMesaFreePixmap(b->xm_visual->display, b->backxrb->pixmap);
+         XMesaFreePixmap(b->xm_visual->display, b->backxrb->pixmap);
+         b->backxrb->pixmap = 0;
       }
-      /* Allocate new back pixmap */
-      b->backxrb->pixmap = XMesaCreatePixmap(b->xm_visual->display,
-                                             b->frontxrb->drawable,
-                                             width, height,
-                                             GET_VISUAL_DEPTH(b->xm_visual));
+
+      if (width > 0 && height > 0) {
+         /* Allocate new back pixmap */
+         b->backxrb->pixmap = XMesaCreatePixmap(b->xm_visual->display,
+                                                b->frontxrb->drawable,
+                                                width, height,
+                                                GET_VISUAL_DEPTH(b->xm_visual));
+      }
+
       b->backxrb->ximage = NULL;
    }
 }
@@ -250,6 +247,7 @@ xmesa_delete_renderbuffer(struct gl_renderbuffer *rb)
 
 /**
  * Reallocate renderbuffer storage for front color buffer.
+ * Called via gl_renderbuffer::AllocStorage()
  */
 static GLboolean
 xmesa_alloc_front_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
@@ -260,6 +258,7 @@ xmesa_alloc_front_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
    /* just clear these to be sure we don't accidentally use them */
    xrb->origin1 = NULL;
    xrb->origin2 = NULL;
+   xrb->origin3 = NULL;
    xrb->origin4 = NULL;
 
    /* for the FLIP macro: */
@@ -275,6 +274,7 @@ xmesa_alloc_front_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
 
 /**
  * Reallocate renderbuffer storage for back color buffer.
+ * Called via gl_renderbuffer::AllocStorage()
  */
 static GLboolean
 xmesa_alloc_back_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
@@ -309,8 +309,12 @@ xmesa_alloc_back_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
       xrb->origin4 = (GLuint *) xrb->ximage->data + xrb->width4 * (height - 1);
    }
    else {
-      /* this assertion will fail if we happend to run out of memory */
-      /*assert(xrb->pixmap);*/
+      /* out of memory or buffer size is 0 x 0 */
+      xrb->width1 = xrb->width2 = xrb->width3 = xrb->width4 = 0;
+      xrb->origin1 = NULL;
+      xrb->origin2 = NULL;
+      xrb->origin3 = NULL;
+      xrb->origin4 = NULL;
    }
 
    return GL_TRUE;
@@ -362,16 +366,13 @@ xmesa_delete_framebuffer(struct gl_framebuffer *fb)
 {
    XMesaBuffer b = XMESA_BUFFER(fb);
 
-#ifdef XFree86Server
-   int client = 0;
-   if (b->frontxrb->drawable)
-       client = CLIENT_ID(b->frontxrb->drawable->id);
-#endif
-
    if (b->num_alloced > 0) {
       /* If no other buffer uses this X colormap then free the colors. */
       if (!xmesa_find_buffer(b->display, b->cmap, b)) {
 #ifdef XFree86Server
+         int client = 0;
+         if (b->frontxrb->drawable)
+            client = CLIENT_ID(b->frontxrb->drawable->id);
          (void)FreeColors(b->cmap, client,
                           b->num_alloced, b->alloced_colors, 0);
 #else

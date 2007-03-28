@@ -34,9 +34,10 @@
 #include "macros.h"
 #include "enums.h"
 
-#include "program.h"
-#include "programopt.h"
-#include "program_instruction.h"
+#include "shader/prog_instruction.h"
+#include "shader/prog_parameter.h"
+#include "shader/prog_statevars.h"
+#include "shader/programopt.h"
 
 #include "nouveau_context.h"
 #include "nouveau_shader.h"
@@ -263,6 +264,23 @@ pass0_make_mask(GLuint mesa_mask)
 	return mask;
 }
 
+static GLboolean
+pass0_opcode_is_tex(enum prog_opcode op)
+{
+	switch (op) {
+	case OPCODE_TEX:
+	case OPCODE_TXB:
+	case OPCODE_TXD:
+	case OPCODE_TXL:
+	case OPCODE_TXP:
+		return GL_TRUE;
+	default:
+		break;
+	}
+
+	return GL_FALSE;
+}
+
 static nvsTexTarget
 pass0_make_tex_target(GLuint mesa)
 {
@@ -411,8 +429,10 @@ pass0_fixup_swizzle(nvsPtr nvs, nvsFragmentHeader *parent, int fpos,
 
 	if (!rec->swzconst_done) {
 		struct gl_program *prog = &nvs->mesa.vp.Base;
+                GLuint swizzle;
 		rec->swzconst_id = _mesa_add_unnamed_constant(prog->Parameters,
-							      sc, 4);
+							      sc, 4, &swizzle);
+                /* XXX what about swizzle? */
 		rec->swzconst_done = 1;
 		COPY_4V(nvs->params[rec->swzconst_id].val, sc);
 	}
@@ -721,7 +741,11 @@ pass0_translate_arith(nouveauShader *nvs, struct gl_program *prog,
 				(inst->SaturateMode != SATURATE_OFF),
 				src[0], src[1], src[2]);
 		nvsinst->tex_unit   = inst->TexSrcUnit;
-		nvsinst->tex_target = pass0_make_tex_target(inst->TexSrcTarget);
+		if (pass0_opcode_is_tex(inst->Opcode))
+			nvsinst->tex_target =
+				pass0_make_tex_target(inst->TexSrcTarget);
+		else
+			nvsinst->tex_target = NVS_TEX_TARGET_UNKNOWN;
 
 		ret = GL_TRUE;
 	} else
@@ -818,7 +842,8 @@ pass0_vp_insert_ff_clip_planes(GLcontext *ctx, nouveauShader *nvs)
 	nvsInstruction *nvsinst;
 	GLuint fpos = 0;
 	nvsRegister opos, epos, eqn, mv[4];
-	GLint tokens[6] = { STATE_MATRIX, STATE_MODELVIEW, 0, 0, 0, 0 };
+	gl_state_index tokens[STATE_LENGTH]
+           = { STATE_MODELVIEW_MATRIX, 0, 0, 0, 0 };
 	GLint id;
 	int i;
 
@@ -826,7 +851,7 @@ pass0_vp_insert_ff_clip_planes(GLcontext *ctx, nouveauShader *nvs)
 	pass0_make_reg(nvs, &opos, NVS_FILE_ATTRIB, NVS_FR_POSITION);
 	pass0_make_reg(nvs, &epos, NVS_FILE_TEMP  , -1);
 	for (i=0; i<4; i++) {
-		tokens[3] = tokens[4] = i;
+		tokens[2] = tokens[3] = i;
 		id = _mesa_add_state_reference(prog->Parameters, tokens);
 		pass0_make_reg(nvs, &mv[i], NVS_FILE_CONST, id);
 	}
@@ -903,7 +928,7 @@ pass0_rebase_mesa_consts(nouveauShader *nvs)
 	}
 }
 
-static void
+static GLboolean
 pass0_resolve_mesa_consts(nouveauShader *nvs)
 {
 	struct pass0_rec *rec = nvs->pass_rec;
@@ -924,6 +949,11 @@ pass0_resolve_mesa_consts(nouveauShader *nvs)
 	for (i=0; i<plist->NumParameters; i++) {
 		int hw = rec->mesa_const_base + i;
 
+		if (hw > NVS_MAX_CONSTS) {
+			nvsProgramError(nvs, "hw = %d > NVS_MAX_CONSTS!\n", hw);
+			return GL_FALSE;
+		}
+
 		switch (plist->Parameters[i].Type) {
 		case PROGRAM_NAMED_PARAM:
 		case PROGRAM_STATE_VAR:
@@ -937,10 +967,13 @@ pass0_resolve_mesa_consts(nouveauShader *nvs)
 			COPY_4V(nvs->params[hw].val, plist->ParameterValues[i]);
 			break;
 		default:
-			assert(0);
-			break;
+			nvsProgramError(nvs, "hit bad type=%d on param %d\n",
+					plist->Parameters[i].Type, i);
+			return GL_FALSE;
 		}
 	}
+
+	return GL_TRUE;
 }
 
 GLboolean
@@ -952,6 +985,16 @@ nouveau_shader_pass0(GLcontext *ctx, nouveauShader *nvs)
 	struct gl_fragment_program *fp    = (struct gl_fragment_program *)prog;
 	struct pass0_rec *rec;
 	int ret = GL_FALSE;
+
+	NVSDBG("start: nvs=%p\n", nvs);
+
+	/* Previously detected an error, and haven't recieved new program
+	 * string, so fail immediately.
+	 */
+	if (nvs->error) {
+		NVSDBG("failed previous compile attempt, not retrying\n");
+		return GL_FALSE;
+	}
 
 	rec = CALLOC_STRUCT(pass0_rec);
 	if (!rec)
@@ -997,7 +1040,8 @@ nouveau_shader_pass0(GLcontext *ctx, nouveauShader *nvs)
 
 	ret = pass0_translate_instructions(nvs, 0, 0, nvs->program_tree);
 	if (ret)
-		pass0_resolve_mesa_consts(nvs);
+		ret = pass0_resolve_mesa_consts(nvs);	
+	
 	/*XXX: if (!ret) DESTROY TREE!!! */
 
 	FREE(rec);

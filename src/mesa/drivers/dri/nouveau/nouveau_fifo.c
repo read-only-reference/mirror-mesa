@@ -38,6 +38,10 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "nouveau_object.h"
 #include "nouveau_sync.h"
 
+#ifdef NOUVEAU_RING_DEBUG
+int nouveau_fifo_remaining=0;
+#endif
+
 
 #define RING_SKIPS 8
 
@@ -120,6 +124,7 @@ GLboolean nouveauFifoInit(nouveauContextPtr nmesa)
 	}
 
 	/* Setup our initial FIFO tracking params */
+	nmesa->fifo.channel  = fifo_init.channel;
 	nmesa->fifo.put_base = fifo_init.put_base;
 	nmesa->fifo.current  = 0;
 	nmesa->fifo.put      = 0;

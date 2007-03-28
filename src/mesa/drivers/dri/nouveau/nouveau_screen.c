@@ -202,7 +202,7 @@ nouveauCreateBuffer(__DRIscreenPrivate *driScrnPriv,
 static void
 nouveauDestroyBuffer(__DRIdrawablePrivate *driDrawPriv)
 {
-	_mesa_destroy_framebuffer((GLframebuffer *) (driDrawPriv->driverPrivate));
+	_mesa_unreference_framebuffer((GLframebuffer **)(&(driDrawPriv->driverPrivate)));
 }
 
 static int
@@ -328,7 +328,7 @@ void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIsc
 	static const __DRIversion ddx_expected = { 1, 2, 0 };
 	static const __DRIversion dri_expected = { 4, 0, 0 };
 	static const __DRIversion drm_expected = { 0, 0, NOUVEAU_DRM_HEADER_PATCHLEVEL };
-#if NOUVEAU_DRM_HEADER_PATCHLEVEL != 4
+#if NOUVEAU_DRM_HEADER_PATCHLEVEL != 6
 #error nouveau_drm.h version doesn't match expected version
 #endif
 	dri_interface = interface;

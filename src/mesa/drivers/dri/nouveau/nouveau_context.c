@@ -201,7 +201,7 @@ GLboolean nouveauCreateContext( const __GLcontextModes *glVisual,
 	nouveauShaderInitFuncs(ctx);
 	/* Install Mesa's fixed-function texenv shader support */
 	if (nmesa->screen->card->type >= NV_40)
-		ctx->_MaintainTexEnvProgram = GL_TRUE;
+		ctx->FragmentProgram._MaintainTexEnvProgram = GL_TRUE;
 
 	/* Initialize the swrast */
 	_swrast_CreateContext( ctx );
@@ -352,6 +352,7 @@ static void nouveauDoSwapBuffers(nouveauContextPtr nmesa,
 		OUT_RING       (((box->y2 - box->y1) << 16) |
 				(box->x2 - box->x1));
 	}
+	FIRE_RING();
 
 	UNLOCK_HARDWARE(nmesa);
 #endif
