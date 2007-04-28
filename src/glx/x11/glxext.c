@@ -1246,7 +1246,7 @@ __GLXdisplayPrivate *__glXInitialize(Display* dpy)
 	__glXUnlock();
 	return 0;
     }
-    dpyPriv = (__GLXdisplayPrivate *) Xmalloc(sizeof(__GLXdisplayPrivate));
+    dpyPriv = (__GLXdisplayPrivate *) Xcalloc(1, sizeof(__GLXdisplayPrivate));
     if (!dpyPriv) {
 	__glXUnlock();
 	Xfree((char*) private);
@@ -1271,12 +1271,7 @@ __GLXdisplayPrivate *__glXInitialize(Display* dpy)
     ** Note: This _must_ be done before calling any other DRI routines
     ** (e.g., those called in AllocAndFetchScreenConfigs).
     */
-    if (getenv("LIBGL_ALWAYS_INDIRECT")) {
-        /* Assinging zero here assures we'll never go direct */
-        dpyPriv->driDisplay.private = 0;
-        dpyPriv->driDisplay.destroyDisplay = 0;
-    }
-    else {
+    if (getenv("LIBGL_ALWAYS_INDIRECT") == NULL) {
         dpyPriv->driDisplay.private =
             driCreateDisplay(dpy, &dpyPriv->driDisplay);
     }
@@ -1488,7 +1483,7 @@ void __glXSendLargeCommand(__GLXcontext *ctx,
 
 /************************************************************************/
 
-GLXContext glXGetCurrentContext(void)
+PUBLIC GLXContext glXGetCurrentContext(void)
 {
     GLXContext cx = __glXGetCurrentContext();
     
@@ -1499,7 +1494,7 @@ GLXContext glXGetCurrentContext(void)
     }
 }
 
-GLXDrawable glXGetCurrentDrawable(void)
+PUBLIC GLXDrawable glXGetCurrentDrawable(void)
 {
     GLXContext gc = __glXGetCurrentContext();
     return gc->currentDrawable;

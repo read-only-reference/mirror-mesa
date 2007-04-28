@@ -1471,6 +1471,7 @@ _mesa_init_renderbuffer(struct gl_renderbuffer *rb, GLuint name)
 {
    _glthread_INIT_MUTEX(rb->Mutex);
 
+   rb->Magic = RB_MAGIC;
    rb->ClassID = 0;
    rb->Name = name;
    rb->RefCount = 0;
@@ -2149,25 +2150,30 @@ _mesa_reference_renderbuffer(struct gl_renderbuffer **ptr,
       GLboolean deleteFlag = GL_FALSE;
       struct gl_renderbuffer *oldRb = *ptr;
 
+      assert(oldRb->Magic == RB_MAGIC);
       _glthread_LOCK_MUTEX(oldRb->Mutex);
+      assert(oldRb->Magic == RB_MAGIC);
       ASSERT(oldRb->RefCount > 0);
       oldRb->RefCount--;
-      /*printf("RB DECR %p to %d\n", (void*) oldRb, oldRb->RefCount);*/
+      /*printf("RB DECR %p (%d) to %d\n", (void*) oldRb, oldRb->Name, oldRb->RefCount);*/
       deleteFlag = (oldRb->RefCount == 0);
       _glthread_UNLOCK_MUTEX(oldRb->Mutex);
 
-      if (deleteFlag)
+      if (deleteFlag) {
+         oldRb->Magic = 0; /* now invalid memory! */
          oldRb->Delete(oldRb);
+      }
 
       *ptr = NULL;
    }
    assert(!*ptr);
 
    if (rb) {
+      assert(rb->Magic == RB_MAGIC);
       /* reference new renderbuffer */
       _glthread_LOCK_MUTEX(rb->Mutex);
       rb->RefCount++;
-      /*printf("RB REF  %p to %d\n", (void*)rb, rb->RefCount);*/
+      /*printf("RB INCR %p (%d) to %d\n", (void*) rb, rb->Name, rb->RefCount);*/
       _glthread_UNLOCK_MUTEX(rb->Mutex);
       *ptr = rb;
    }

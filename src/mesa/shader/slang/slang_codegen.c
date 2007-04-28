@@ -48,6 +48,7 @@
 #include "slang_codegen.h"
 #include "slang_compile.h"
 #include "slang_label.h"
+#include "slang_mem.h"
 #include "slang_simplify.h"
 #include "slang_emit.h"
 #include "slang_vartable.h"
@@ -107,42 +108,84 @@ _slang_field_offset(const slang_type_specifier *spec, slang_atom field)
 }
 
 
+/**
+ * Return the size (in floats) of the given type specifier.
+ * If the size is greater than 4, the size should be a multiple of 4
+ * so that the correct number of 4-float registers are allocated.
+ * For example, a mat3x2 is size 12 because we want to store the
+ * 3 columns in 3 float[4] registers.
+ */
 GLuint
 _slang_sizeof_type_specifier(const slang_type_specifier *spec)
 {
+   GLuint sz;
    switch (spec->type) {
    case SLANG_SPEC_VOID:
-      return 0;
+      sz = 0;
+      break;
    case SLANG_SPEC_BOOL:
-      return 1;
+      sz = 1;
+      break;
    case SLANG_SPEC_BVEC2:
-      return 2;
+      sz = 2;
+      break;
    case SLANG_SPEC_BVEC3:
-      return 3;
+      sz = 3;
+      break;
    case SLANG_SPEC_BVEC4:
-      return 4;
+      sz = 4;
+      break;
    case SLANG_SPEC_INT:
-      return 1;
+      sz = 1;
+      break;
    case SLANG_SPEC_IVEC2:
-      return 2;
+      sz = 2;
+      break;
    case SLANG_SPEC_IVEC3:
-      return 3;
+      sz = 3;
+      break;
    case SLANG_SPEC_IVEC4:
-      return 4;
+      sz = 4;
+      break;
    case SLANG_SPEC_FLOAT:
-      return 1;
+      sz = 1;
+      break;
    case SLANG_SPEC_VEC2:
-      return 2;
+      sz = 2;
+      break;
    case SLANG_SPEC_VEC3:
-      return 3;
+      sz = 3;
+      break;
    case SLANG_SPEC_VEC4:
-      return 4;
+      sz = 4;
+      break;
    case SLANG_SPEC_MAT2:
-      return 2 * 2;
+      sz = 2 * 4; /* 2 columns (regs) */
+      break;
    case SLANG_SPEC_MAT3:
-      return 3 * 3;
+      sz = 3 * 4;
+      break;
    case SLANG_SPEC_MAT4:
-      return 4 * 4;
+      sz = 4 * 4;
+      break;
+   case SLANG_SPEC_MAT23:
+      sz = 2 * 4; /* 2 columns (regs) */
+      break;
+   case SLANG_SPEC_MAT32:
+      sz = 3 * 4; /* 3 columns (regs) */
+      break;
+   case SLANG_SPEC_MAT24:
+      sz = 2 * 4;
+      break;
+   case SLANG_SPEC_MAT42:
+      sz = 4 * 4; /* 4 columns (regs) */
+      break;
+   case SLANG_SPEC_MAT34:
+      sz = 3 * 4;
+      break;
+   case SLANG_SPEC_MAT43:
+      sz = 4 * 4; /* 4 columns (regs) */
+      break;
    case SLANG_SPEC_SAMPLER1D:
    case SLANG_SPEC_SAMPLER2D:
    case SLANG_SPEC_SAMPLER3D:
@@ -151,16 +194,27 @@ _slang_sizeof_type_specifier(const slang_type_specifier *spec)
    case SLANG_SPEC_SAMPLER2DSHADOW:
    case SLANG_SPEC_SAMPLER2DRECT:
    case SLANG_SPEC_SAMPLER2DRECTSHADOW:
-      return 1; /* a sampler is basically just an integer index */
+      sz = 1; /* a sampler is basically just an integer index */
+      break;
    case SLANG_SPEC_STRUCT:
-      return _slang_field_offset(spec, 0); /* special use */
+      sz = _slang_field_offset(spec, 0); /* special use */
+      if (sz > 4) {
+         sz = (sz + 3) & ~0x3; /* round up to multiple of four */
+      }
+      break;
    case SLANG_SPEC_ARRAY:
-      return _slang_sizeof_type_specifier(spec->_array);
+      sz = _slang_sizeof_type_specifier(spec->_array);
+      break;
    default:
       _mesa_problem(NULL, "Unexpected type in _slang_sizeof_type_specifier()");
-      return 0;
+      sz = 0;
    }
-   return 0;
+
+   if (sz > 4) {
+      /* if size is > 4, it should be a multiple of four */
+      assert((sz & 0x3) == 0);
+   }
+   return sz;
 }
 
 
@@ -406,7 +460,7 @@ static slang_ir_node *
 new_node3(slang_ir_opcode op,
           slang_ir_node *c0, slang_ir_node *c1, slang_ir_node *c2)
 {
-   slang_ir_node *n = (slang_ir_node *) calloc(1, sizeof(slang_ir_node));
+   slang_ir_node *n = (slang_ir_node *) _slang_alloc(sizeof(slang_ir_node));
    if (n) {
       n->Opcode = op;
       n->Children[0] = c0;
@@ -870,11 +924,11 @@ slang_inline_function_call(slang_assemble_ctx * A, slang_function *fun,
 
    /* allocate temporary arrays */
    paramMode = (ParamMode *)
-      _mesa_calloc(totalArgs * sizeof(ParamMode));
+      _slang_alloc(totalArgs * sizeof(ParamMode));
    substOld = (slang_variable **)
-      _mesa_calloc(totalArgs * sizeof(slang_variable *));
+      _slang_alloc(totalArgs * sizeof(slang_variable *));
    substNew = (slang_operation **)
-      _mesa_calloc(totalArgs * sizeof(slang_operation *));
+      _slang_alloc(totalArgs * sizeof(slang_operation *));
 
 #if 0
    printf("Inline call to %s  (total vars=%d  nparams=%d)\n",
@@ -1075,9 +1129,9 @@ slang_inline_function_call(slang_assemble_ctx * A, slang_function *fun,
       }
    }
 
-   _mesa_free(paramMode);
-   _mesa_free(substOld);
-   _mesa_free(substNew);
+   _slang_free(paramMode);
+   _slang_free(substOld);
+   _slang_free(substNew);
 
 #if 0
    printf("Done Inline call to %s  (total vars=%d  nparams=%d)\n",
@@ -1135,7 +1189,7 @@ _slang_gen_function_call(slang_assemble_ctx *A, slang_function *fun,
    /* Replace the function call with the inlined block */
    slang_operation_destruct(oper);
    *oper = *inlined;
-   /* XXX slang_operation_destruct(inlined) ??? */
+   _slang_free(inlined);
 
 #if 0
    assert(inlined->locals);
@@ -1149,7 +1203,6 @@ _slang_gen_function_call(slang_assemble_ctx *A, slang_function *fun,
 
    /*_slang_label_delete(A->curFuncEndLabel);*/
    A->curFuncEndLabel = prevFuncEndLabel;
-   assert(A->curFuncEndLabel);
 
    return n;
 }
@@ -1266,7 +1319,7 @@ _slang_gen_asm(slang_assemble_ctx *A, slang_operation *oper,
       n->Store = n0->Store;
       n->Writemask = writemask;
 
-      free(n0);
+      _slang_free(n0);
    }
 
    return n;
@@ -1339,7 +1392,7 @@ _slang_gen_function_call_name(slang_assemble_ctx *A, const char *name,
        * Try adapting the parameters.
        */
       fun = _slang_first_function(A->space.funcs, name);
-      if (!_slang_adapt_call(oper, fun, &A->space, A->atoms, A->log)) {
+      if (!fun || !_slang_adapt_call(oper, fun, &A->space, A->atoms, A->log)) {
          slang_info_log_error(A->log, "Function '%s' not found (check argument types)", name);
          return NULL;
       }
@@ -1561,7 +1614,7 @@ _slang_gen_continue(slang_assemble_ctx * A, const slang_operation *oper)
  * Determine if the given operation is of a specific type.
  */
 static GLboolean
-is_operation_type(const const slang_operation *oper, slang_operation_type type)
+is_operation_type(const slang_operation *oper, slang_operation_type type)
 {
    if (oper->type == type)
       return GL_TRUE;
@@ -1699,7 +1752,7 @@ static slang_ir_node *
 _slang_gen_temporary(GLint size)
 {
    slang_ir_storage *store;
-   slang_ir_node *n;
+   slang_ir_node *n = NULL;
 
    store = _slang_new_ir_storage(PROGRAM_TEMPORARY, -1, size);
    if (store) {
@@ -1708,7 +1761,7 @@ _slang_gen_temporary(GLint size)
          n->Store = store;
       }
       else {
-         free(store);
+         _slang_free(store);
       }
    }
    return n;
@@ -1818,11 +1871,6 @@ _slang_gen_logical_and(slang_assemble_ctx *A, slang_operation *oper)
    select->children[2].literal_size = 1;
 
    n = _slang_gen_select(A, select);
-
-   /* xxx wrong */
-   free(select->children);
-   free(select);
-
    return n;
 }
 
@@ -1849,11 +1897,6 @@ _slang_gen_logical_or(slang_assemble_ctx *A, slang_operation *oper)
    slang_operation_copy(&select->children[2], &oper->children[1]);
 
    n = _slang_gen_select(A, select);
-
-   /* xxx wrong */
-   free(select->children);
-   free(select);
-
    return n;
 }
 
@@ -2267,15 +2310,16 @@ _slang_gen_field(slang_assemble_ctx * A, slang_operation *oper)
       /* oper->a_id is the field name */
       slang_ir_node *base, *n;
       slang_typeinfo field_ti;
-      GLint fieldSize, fieldOffset;
+      GLint fieldSize, fieldOffset = -1;
       /* type of field */
       slang_typeinfo_construct(&field_ti);
       _slang_typeof_operation(A, oper, &field_ti);
 
       fieldSize = _slang_sizeof_type_specifier(&field_ti.spec);
-      fieldOffset = _slang_field_offset(&ti.spec, oper->a_id);
+      if (fieldSize > 0)
+         fieldOffset = _slang_field_offset(&ti.spec, oper->a_id);
 
-      if (fieldOffset < 0) {
+      if (fieldSize == 0 || fieldOffset < 0) {
          slang_info_log_error(A->log,
                               "\"%s\" is not a member of struct \"%s\"",
                               (char *) oper->a_id,
@@ -2764,11 +2808,10 @@ _slang_codegen_global_variable(slang_assemble_ctx *A, slang_variable *var,
    struct gl_program *prog = A->program;
    const char *varName = (char *) var->a_name;
    GLboolean success = GL_TRUE;
-   GLint texIndex;
    slang_ir_storage *store = NULL;
    int dbg = 0;
-
-   texIndex = sampler_to_texture_index(var->type.specifier.type);
+   const GLenum datatype = _slang_gltype_from_specifier(&var->type.specifier);
+   const GLint texIndex = sampler_to_texture_index(var->type.specifier.type);
 
    if (texIndex != -1) {
       /* Texture sampler:
@@ -2776,7 +2819,8 @@ _slang_codegen_global_variable(slang_assemble_ctx *A, slang_variable *var,
        * store->Index = sampler uniform location
        * store->Size = texture type index (1D, 2D, 3D, cube, etc)
        */
-      GLint samplerUniform = _mesa_add_sampler(prog->Parameters, varName);
+      GLint samplerUniform
+         = _mesa_add_sampler(prog->Parameters, varName, datatype);
       store = _slang_new_ir_storage(PROGRAM_SAMPLER, samplerUniform, texIndex);
       if (dbg) printf("SAMPLER ");
    }
@@ -2786,7 +2830,8 @@ _slang_codegen_global_variable(slang_assemble_ctx *A, slang_variable *var,
                          * MAX2(var->array_len, 1);
       if (prog) {
          /* user-defined uniform */
-         GLint uniformLoc = _mesa_add_uniform(prog->Parameters, varName, size);
+         GLint uniformLoc = _mesa_add_uniform(prog->Parameters, varName,
+                                              size, datatype);
          store = _slang_new_ir_storage(PROGRAM_UNIFORM, uniformLoc, size);
       }
       else {
@@ -2851,7 +2896,7 @@ _slang_codegen_global_variable(slang_assemble_ctx *A, slang_variable *var,
       if (dbg) printf("ATTRIB ");
    }
    else if (var->type.qualifier == SLANG_QUAL_FIXEDINPUT) {
-      GLuint swizzle;
+      GLuint swizzle = SWIZZLE_XYZW; /* silence compiler warning */
       GLint index = _slang_input_index(varName, GL_FRAGMENT_PROGRAM_ARB,
                                        &swizzle);
       GLint size = 4; /* XXX? */
@@ -2866,9 +2911,9 @@ _slang_codegen_global_variable(slang_assemble_ctx *A, slang_variable *var,
          store = _slang_new_ir_storage(PROGRAM_OUTPUT, index, size);
       }
       else {
-         assert(type == SLANG_UNIT_FRAGMENT_BUILTIN);
          GLint index = _slang_output_index(varName, GL_FRAGMENT_PROGRAM_ARB);
          GLint size = 4; /* XXX? */
+         assert(type == SLANG_UNIT_FRAGMENT_BUILTIN);
          store = _slang_new_ir_storage(PROGRAM_OUTPUT, index, size);
       }
       if (dbg) printf("OUTPUT ");

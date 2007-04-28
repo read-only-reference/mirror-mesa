@@ -36,7 +36,7 @@
 
 
 #include "glheader.h"
-#include <GL/internal/glcore.h>	/* GLimports/GLexports/GLcontextModes */
+#include <GL/internal/glcore.h>	/* __GLcontextModes (GLvisual) */
 #include "config.h"		/* Hardwired parameters */
 #include "glapitable.h"
 #include "glthread.h"
@@ -47,7 +47,7 @@
 /**
  * Special, internal token
  */
-#define GL_SHADER_PROGRAM 0x9999
+#define GL_SHADER_PROGRAM_MESA 0x9999
 
 
 /**
@@ -2133,6 +2133,7 @@ struct gl_shader_state
    GLboolean EmitHighLevelInstructions; /**< IF/ELSE/ENDIF vs. BRA, etc. */
    GLboolean EmitCondCodes;             /**< Use condition codes? */
    GLboolean EmitComments;              /**< Annotated instructions */
+   void *MemPool;
 };
 
 
@@ -2222,6 +2223,8 @@ struct gl_shared_state
  */
 struct gl_renderbuffer
 {
+#define RB_MAGIC 0xaabbccdd
+   int Magic; /** XXX TEMPORARY DEBUG INFO */
    _glthread_Mutex Mutex;		   /**< for thread safety */
    GLuint ClassID;        /**< Useful for drivers */
    GLuint Name;
@@ -2882,17 +2885,6 @@ struct gl_dlist_state
  */
 struct __GLcontextRec
 {
-   /**
-    * \name OS related interfaces. 
-    *
-    * These \b must be the first members of this structure, because they are
-    * exposed to the outside world (i.e. GLX extension).
-    */
-   /*@{*/
-   __GLimports imports;
-   __GLexports exports;
-   /*@}*/
-
    /** State possibly shared with other contexts in the address space */
    struct gl_shared_state *Shared;
 

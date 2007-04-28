@@ -108,6 +108,7 @@ const struct dri_extension card_extensions[] = {
 //  {"GL_EXT_fog_coord",			GL_EXT_fog_coord_functions },
   {"GL_EXT_gpu_program_parameters",     GL_EXT_gpu_program_parameters_functions},
   {"GL_EXT_secondary_color", 		GL_EXT_secondary_color_functions},
+  {"GL_EXT_stencil_two_side",		GL_EXT_stencil_two_side_functions},
   {"GL_EXT_stencil_wrap",		NULL},
   {"GL_EXT_texture_edge_clamp",		NULL},
   {"GL_EXT_texture_env_combine", 	NULL},
@@ -127,10 +128,6 @@ const struct dri_extension card_extensions[] = {
   {NULL,				NULL}
 };
 
-const struct dri_extension stencil_two_side[] = {
-  {"GL_EXT_stencil_two_side",		GL_EXT_stencil_two_side_functions},
-};
-
 extern struct tnl_pipeline_stage _r300_render_stage;
 extern const struct tnl_pipeline_stage _r300_tcl_stage;
 
@@ -148,7 +145,6 @@ static const struct tnl_pipeline_stage *r300_pipeline[] = {
 	&_tnl_fog_coordinate_stage,
 	&_tnl_texgen_stage,
 	&_tnl_texture_transform_stage,
-	&_tnl_arb_vertex_program_stage,
 	&_tnl_vertex_program_stage,
 
 	/* Try again to go to tcl?
@@ -335,8 +331,8 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 
 	driInitExtensions(ctx, card_extensions, GL_TRUE);
 
-	if (driQueryOptionb(&r300->radeon.optionCache, "disable_stencil_two_side") == 0)
-		driInitSingleExtension(ctx, stencil_two_side);
+	if (driQueryOptionb(&r300->radeon.optionCache, "disable_stencil_two_side"))
+           _mesa_disable_extension(ctx, "GL_EXT_stencil_two_side");
 
 	if (r300->radeon.glCtx->Mesa_DXTn && !driQueryOptionb (&r300->radeon.optionCache, "disable_s3tc")) {
 	  _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );

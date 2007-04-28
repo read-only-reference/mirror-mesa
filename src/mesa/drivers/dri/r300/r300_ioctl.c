@@ -179,11 +179,17 @@ static void r300EmitClearState(GLcontext * ctx)
 	int cmd_reserved = 0;
 	int cmd_written = 0;
 	drm_radeon_cmd_header_t *cmd = NULL;
-	
-	
+	int has_tcl = 1;
+
+	if (!(r300->radeon.radeonScreen->chip_flags & RADEON_CHIPSET_TCL))
+ 	      has_tcl = 0;
+		
 	R300_STATECHANGE(r300, vir[0]);
 	reg_start(R300_VAP_INPUT_ROUTE_0_0, 0);
-	e32(0x21030003);
+	if (!has_tcl)
+	  e32(0x22030003);
+	else
+	  e32(0x21030003);
 	
 	/* disable fog */
 	R300_STATECHANGE(r300, fogs);
@@ -198,7 +204,17 @@ static void r300EmitClearState(GLcontext * ctx)
 	reg_start(R300_VAP_INPUT_CNTL_0, 1);
 	e32(0x00000001);
 	e32(0x00000405);
-	
+
+	if (!has_tcl) {
+	  /* comes from fglrx startup of clear */
+	  reg_start(R300_SE_VTE_CNTL, 1);
+	  e32(0x043f);
+	  e32(0x8);
+	  
+	  reg_start(0x21dc, 0);
+	  e32(0xaaaaaaaa);
+	}
+
 	R300_STATECHANGE(r300, vof);
 	reg_start(R300_VAP_OUTPUT_VTX_FMT_0, 1);
 	e32(R300_VAP_OUTPUT_VTX_FMT_0__POS_PRESENT | R300_VAP_OUTPUT_VTX_FMT_0__COLOR_PRESENT);
@@ -279,26 +295,28 @@ static void r300EmitClearState(GLcontext * ctx)
 	
 	reg_start(R300_PFS_INSTR3_0, 0);
 	e32(FP_SELA(0,NO,W,FP_TMP(0),0,0));
+
+	if (has_tcl) {
+	  R300_STATECHANGE(r300, pvs);
+	  reg_start(R300_VAP_PVS_CNTL_1, 2);
+	  e32((0 << R300_PVS_CNTL_1_PROGRAM_START_SHIFT) |
+	      (0 << R300_PVS_CNTL_1_POS_END_SHIFT) |
+	      (1 << R300_PVS_CNTL_1_PROGRAM_END_SHIFT));
+	  e32(0);
+	  e32(1 << R300_PVS_CNTL_3_PROGRAM_UNKNOWN_SHIFT);
+	  
+	  R300_STATECHANGE(r300, vpi);
+	  vsf_start_fragment(0x0, 8);
+	  e32(VP_OUT(ADD,OUT,0,XYZW));
+	  e32(VP_IN(IN,0));
+	  e32(VP_ZERO());
+	  e32(0);
 	
-	R300_STATECHANGE(r300, pvs);
-	reg_start(R300_VAP_PVS_CNTL_1, 2);
-	e32((0 << R300_PVS_CNTL_1_PROGRAM_START_SHIFT) |
-		(0 << R300_PVS_CNTL_1_POS_END_SHIFT) |
-		(1 << R300_PVS_CNTL_1_PROGRAM_END_SHIFT));
-	e32(0);
-	e32(1 << R300_PVS_CNTL_3_PROGRAM_UNKNOWN_SHIFT);
-	
-	R300_STATECHANGE(r300, vpi);
-	vsf_start_fragment(0x0, 8);
-	e32(VP_OUT(ADD,OUT,0,XYZW));
-	e32(VP_IN(IN,0));
-	e32(VP_ZERO());
-	e32(0);
-	
-	e32(VP_OUT(ADD,OUT,1,XYZW));
-	e32(VP_IN(IN,1));
-	e32(VP_ZERO());
-	e32(0);
+	  e32(VP_OUT(ADD,OUT,1,XYZW));
+	  e32(VP_IN(IN,1));
+	  e32(VP_ZERO());
+	  e32(0);
+	}
 	
 	/*reg_start(0x4500,0);
 	e32(2560-1);*/
@@ -352,7 +370,7 @@ static void r300Clear(GLcontext * ctx, GLbitfield mask)
 		_swrast_Clear(ctx, mask);
 	}
 
-	swapped = r300->radeon.doPageFlip && (r300->radeon.sarea->pfCurrentPage == 1);
+	swapped = r300->radeon.sarea->pfCurrentPage == 1;
 
 	/* Make sure it fits there. */
 	r300EnsureCmdBufSpace(r300, 421*3, __FUNCTION__);

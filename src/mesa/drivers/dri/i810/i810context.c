@@ -40,6 +40,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "extensions.h"
 #include "framebuffer.h"
 #include "imports.h"
+#include "points.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -277,6 +278,11 @@ i810CreateContext( const __GLcontextModes *mesaVis,
    ctx->Const.MaxPointSize = 3.0;
    ctx->Const.MaxPointSizeAA = 3.0;
    ctx->Const.PointSizeGranularity = 1.0;
+
+   /* reinitialize the context point state.
+    * It depend on constants in __GLcontextRec::Const
+    */
+   _mesa_init_point(ctx);
 
    ctx->Driver.GetBufferSize = i810BufferSize;
    ctx->Driver.GetString = i810GetString;

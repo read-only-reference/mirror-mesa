@@ -283,7 +283,6 @@ GLboolean radeonMakeCurrent(__DRIcontextPrivate * driContextPriv,
 			radeon->dri.drawable = driDrawPriv;
 
 			radeonSetCliprects(radeon);
-			r300UpdateWindow(radeon->glCtx);
 			r300UpdateViewportOffset(radeon->glCtx);
 		}
 
@@ -293,12 +292,9 @@ GLboolean radeonMakeCurrent(__DRIcontextPrivate * driContextPriv,
 				    (GLframebuffer *) driReadPriv->
 				    driverPrivate);
 
-		if (!radeon->glCtx->Viewport.Width) {
-			_mesa_set_viewport(radeon->glCtx, 0, 0,
-					   driDrawPriv->w, driDrawPriv->h);
-		}
-
 		_mesa_update_state(radeon->glCtx);		
+
+		radeonUpdatePageFlipping(radeon);
 	} else {
 		if (RADEON_DEBUG & DEBUG_DRI)
 			fprintf(stderr, "%s ctx is null\n", __FUNCTION__);

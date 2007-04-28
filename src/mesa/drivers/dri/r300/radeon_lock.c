@@ -50,16 +50,19 @@ int prevLockLine = 0;
 
 /* Turn on/off page flipping according to the flags in the sarea:
  */
-static void radeonUpdatePageFlipping(radeonContextPtr radeon)
+void radeonUpdatePageFlipping(radeonContextPtr radeon)
 {
 	int use_back;
 
 	radeon->doPageFlip = radeon->sarea->pfState;
         if (radeon->glCtx->WinSysDrawBuffer) {
            driFlipRenderbuffers(radeon->glCtx->WinSysDrawBuffer, radeon->sarea->pfCurrentPage);
+           r300UpdateDrawBuffer(radeon->glCtx);
         }
 
-	use_back = (radeon->glCtx->DrawBuffer->_ColorDrawBufferMask[0] == BUFFER_BIT_BACK_LEFT);
+	use_back = radeon->glCtx->DrawBuffer ?
+		(radeon->glCtx->DrawBuffer->_ColorDrawBufferMask[0] ==
+		 BUFFER_BIT_BACK_LEFT) : 1;
 	use_back ^= (radeon->sarea->pfCurrentPage == 1);
 
 	if (use_back) {

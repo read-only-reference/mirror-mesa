@@ -155,10 +155,10 @@ ultrix-gcc:
 
 # Rules for making release tarballs
 
-DIRECTORY = Mesa-6.5.2
-LIB_NAME = MesaLib-6.5.2
-DEMO_NAME = MesaDemos-6.5.2
-GLUT_NAME = MesaGLUT-6.5.2
+DIRECTORY = Mesa-7.0pre
+LIB_NAME = MesaLib-7.0pre
+DEMO_NAME = MesaDemos-7.0pre
+GLUT_NAME = MesaGLUT-7.0pre
 
 MAIN_FILES = \
 	$(DIRECTORY)/Makefile*						\
@@ -209,9 +209,6 @@ MAIN_FILES = \
 	$(DIRECTORY)/src/mesa/glapi/*.[chS]				\
 	$(DIRECTORY)/src/mesa/glapi/descrip.mms				\
 	$(DIRECTORY)/src/mesa/glapi/sources				\
-	$(DIRECTORY)/src/mesa/array_cache/*.[ch]			\
-	$(DIRECTORY)/src/mesa/array_cache/descrip.mms			\
-	$(DIRECTORY)/src/mesa/array_cache/sources			\
 	$(DIRECTORY)/src/mesa/math/*.[ch]				\
 	$(DIRECTORY)/src/mesa/math/descrip.mms				\
 	$(DIRECTORY)/src/mesa/math/sources				\
@@ -231,6 +228,8 @@ MAIN_FILES = \
 	$(DIRECTORY)/src/mesa/swrast_setup/*.[ch]			\
 	$(DIRECTORY)/src/mesa/swrast_setup/descrip.mms			\
 	$(DIRECTORY)/src/mesa/swrast_setup/sources			\
+	$(DIRECTORY)/src/mesa/vbo/*.[chS]				\
+	$(DIRECTORY)/src/mesa/vbo/descrip.mms				\
 	$(DIRECTORY)/src/mesa/tnl/*.[chS]				\
 	$(DIRECTORY)/src/mesa/tnl/descrip.mms				\
 	$(DIRECTORY)/src/mesa/tnl/sources				\
@@ -289,7 +288,16 @@ MAIN_FILES = \
 	$(DIRECTORY)/windows/VC7/mesa/glu/glu.vcproj			\
 	$(DIRECTORY)/windows/VC7/mesa/mesa.sln				\
 	$(DIRECTORY)/windows/VC7/mesa/mesa/mesa.vcproj			\
-	$(DIRECTORY)/windows/VC7/mesa/osmesa/osmesa.vcproj
+	$(DIRECTORY)/windows/VC7/mesa/osmesa/osmesa.vcproj		\
+	$(DIRECTORY)/windows/VC8/mesa/mesa.sln				\
+	$(DIRECTORY)/windows/VC8/mesa/gdi/gdi.vcproj			\
+	$(DIRECTORY)/windows/VC8/mesa/glu/glu.vcproj			\
+	$(DIRECTORY)/windows/VC8/mesa/mesa/mesa.vcproj			\
+	$(DIRECTORY)/windows/VC8/mesa/osmesa/osmesa.vcproj		\
+	$(DIRECTORY)/windows/VC8/progs/progs.sln			\
+	$(DIRECTORY)/windows/VC8/progs/demos/gears.vcproj		\
+	$(DIRECTORY)/windows/VC8/progs/glut/glut.vcproj
+
 
 DRI_FILES = \
 	$(DIRECTORY)/include/GL/internal/dri_interface.h		\
@@ -365,6 +373,9 @@ DEMO_FILES = \
 	$(DIRECTORY)/progs/samples/Makefile*		\
 	$(DIRECTORY)/progs/samples/README		\
 	$(DIRECTORY)/progs/samples/*.c			\
+	$(DIRECTORY)/progs/glsl/Makefile*		\
+	$(DIRECTORY)/progs/glsl/*.c			\
+	$(DIRECTORY)/progs/glsl/*.txt			\
 	$(DIRECTORY)/progs/windml/Makefile.ugl		\
 	$(DIRECTORY)/progs/windml/*.c			\
 	$(DIRECTORY)/progs/windml/*.bmp			\

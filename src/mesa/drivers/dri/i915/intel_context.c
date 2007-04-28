@@ -33,6 +33,7 @@
 #include "extensions.h"
 #include "framebuffer.h"
 #include "imports.h"
+#include "points.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -195,7 +196,6 @@ static const struct tnl_pipeline_stage *intel_pipeline[] = {
    &_tnl_texgen_stage,
    &_tnl_texture_transform_stage,
    &_tnl_point_attenuation_stage,
-   &_tnl_arb_vertex_program_stage,
    &_tnl_vertex_program_stage,
 #if 1
    &_intel_render_stage,     /* ADD: unclipped rastersetup-to-dma */
@@ -301,6 +301,11 @@ GLboolean intelInitContext( intelContextPtr intel,
    ctx->Const.MaxPointSize = 255.0;
    ctx->Const.MaxPointSizeAA = 3.0;
    ctx->Const.PointSizeGranularity = 1.0;
+
+   /* reinitialize the context point state.
+    * It depend on constants in __GLcontextRec::Const
+    */
+   _mesa_init_point(ctx);
 
    /* Initialize the software rasterizer and helper modules. */
    _swrast_CreateContext( ctx );
@@ -563,7 +568,7 @@ void intelWindowMoved( intelContextPtr intel )
 	 GLint areaB = driIntersectArea( drw_rect, pipeB_rect );
 	 GLuint flags = intel->vblank_flags;
 
-	 if (areaB > areaA || (areaA > 0 && areaB > 0)) {
+	 if (areaB > areaA || (areaA == areaB && areaB > 0)) {
 	    flags = intel->vblank_flags | VBLANK_FLAG_SECONDARY;
 	 } else {
 	    flags = intel->vblank_flags & ~VBLANK_FLAG_SECONDARY;

@@ -309,27 +309,39 @@ static GLboolean
 intel_alloc_window_storage(GLcontext * ctx, struct gl_renderbuffer *rb,
                            GLenum internalFormat, GLuint width, GLuint height)
 {
-   struct intel_context *intel = intel_context(ctx);
-   struct intel_framebuffer *intel_fb;
-
    ASSERT(rb->Name == 0);
    rb->Width = width;
    rb->Height = height;
    rb->_ActualFormat = internalFormat;
 
-   if (intel && intel->driDrawable &&
-       (intel_fb = intel->driDrawable->driverPrivate) &&
-       intel_fb->pf_num_pages == 3 &&
-       rb == &intel_fb->color_rb[intel_fb->pf_current_page]->Base &&
-       (rb = &intel_fb->color_rb[(intel_fb->pf_current_page + 2) % 3]->Base)) {
-      rb->Width = width;
-      rb->Height = height;
-      rb->_ActualFormat = internalFormat;
-   }
-
    return GL_TRUE;
 }
 
+static void
+intel_resize_buffers(GLcontext *ctx, struct gl_framebuffer *fb,
+		     GLuint width, GLuint height)
+{
+   struct intel_framebuffer *intel_fb = (struct intel_framebuffer*)fb;
+   int i;
+
+   _mesa_resize_framebuffer(ctx, fb, width, height);
+
+   fb->Initialized = GL_TRUE; /* XXX remove someday */
+
+   if (fb->Name != 0) {
+      return;
+   }
+
+   /* Make sure all window system renderbuffers are up to date */
+   for (i = 0; i < 3; i++) {
+      struct gl_renderbuffer *rb = &intel_fb->color_rb[i]->Base;
+
+      /* only resize if size is changing */
+      if (rb && (rb->Width != width || rb->Height != height)) {
+	 rb->AllocStorage(ctx, rb, rb->InternalFormat, width, height);
+      }
+   }
+}
 
 static GLboolean
 intel_nop_alloc_storage(GLcontext * ctx, struct gl_renderbuffer *rb,
@@ -508,7 +520,7 @@ intel_framebuffer_renderbuffer(GLcontext * ctx,
 
 /**
  * When glFramebufferTexture[123]D is called this function sets up the
- * gl_renderbuffer wrapp around the texture image.
+ * gl_renderbuffer wrapper around the texture image.
  * This will have the region info needed for hardware rendering.
  */
 static struct intel_renderbuffer *
@@ -594,7 +606,7 @@ intel_render_texture(GLcontext * ctx,
       irb = intel_wrap_texture(ctx, newImage);
       if (irb) {
          /* bind the wrapper to the attachment point */
-         att->Renderbuffer = &irb->Base;
+         _mesa_reference_renderbuffer(&att->Renderbuffer, &irb->Base);
       }
       else {
          /* fallback to software rendering */
@@ -671,4 +683,5 @@ intel_fbo_init(struct intel_context *intel)
    intel->ctx.Driver.FramebufferRenderbuffer = intel_framebuffer_renderbuffer;
    intel->ctx.Driver.RenderTexture = intel_render_texture;
    intel->ctx.Driver.FinishRenderTexture = intel_finish_render_texture;
+   intel->ctx.Driver.ResizeBuffers = intel_resize_buffers;
 }
