@@ -99,11 +99,6 @@ init_machine(GLcontext *ctx, struct gl_program_machine *machine,
              const struct gl_fragment_program *program,
              const SWspan *span, GLuint col)
 {
-   GLuint inputsRead = program->Base.InputsRead;
-
-   if (ctx->FragmentProgram.CallbackEnabled)
-      inputsRead = ~0;
-
    if (program->Base.Target == GL_FRAGMENT_PROGRAM_NV) {
       /* Clear temporary registers (undefined for ARB_f_p) */
       _mesa_bzero(machine->Temporaries,
@@ -112,6 +107,10 @@ init_machine(GLcontext *ctx, struct gl_program_machine *machine,
 
    /* Setup pointer to input attributes */
    machine->Attribs = span->array->attribs;
+
+   machine->DerivX = (GLfloat (*)[4]) span->attrStepX;
+   machine->DerivY = (GLfloat (*)[4]) span->attrStepY;
+   machine->NumDeriv = FRAG_ATTRIB_MAX;
 
    if (ctx->Shader.CurrentProgram) {
       /* Store front/back facing value in register FOGC.Y */

@@ -7,7 +7,9 @@ SUBDIRS = src progs
 
 default: $(TOP)/configs/current
 	@for dir in $(SUBDIRS) ; do \
-		(cd $$dir ; $(MAKE)) || exit 1 ; \
+		if [ -d $$dir ] ; then \
+			(cd $$dir && $(MAKE)) || exit 1 ; \
+		fi \
 	done
 
 
@@ -16,7 +18,9 @@ doxygen:
 
 clean:
 	@for dir in $(SUBDIRS) ; do \
-		(cd $$dir ; $(MAKE) clean) ; \
+		if [ -d $$dir ] ; then \
+			(cd $$dir && $(MAKE) clean) ; \
+		fi \
 	done
 
 
@@ -34,8 +38,11 @@ realclean:
 
 install:
 	@for dir in $(SUBDIRS) ; do \
-		(cd $$dir ; $(MAKE) install) || exit 1 ; \
+		if [ -d $$dir ] ; then \
+			(cd $$dir && $(MAKE) install) || exit 1 ; \
+		fi \
 	done
+
 
 # DirectFBGL module installation
 linux-directfb-install:
@@ -155,10 +162,10 @@ ultrix-gcc:
 
 # Rules for making release tarballs
 
-DIRECTORY = Mesa-7.0pre
-LIB_NAME = MesaLib-7.0pre
-DEMO_NAME = MesaDemos-7.0pre
-GLUT_NAME = MesaGLUT-7.0pre
+DIRECTORY = Mesa-7.1pre
+LIB_NAME = MesaLib-7.1pre
+DEMO_NAME = MesaDemos-7.1pre
+GLUT_NAME = MesaGLUT-7.1pre
 
 MAIN_FILES = \
 	$(DIRECTORY)/Makefile*						\
@@ -222,6 +229,9 @@ MAIN_FILES = \
 	$(DIRECTORY)/src/mesa/shader/slang/descrip.mms			\
 	$(DIRECTORY)/src/mesa/shader/slang/sources			\
 	$(DIRECTORY)/src/mesa/shader/slang/library/*.[ch]		\
+	$(DIRECTORY)/src/mesa/shader/slang/library/*.gc			\
+	$(DIRECTORY)/src/mesa/shader/slang/library/*.syn		\
+	$(DIRECTORY)/src/mesa/shader/slang/library/Makefile		\
 	$(DIRECTORY)/src/mesa/swrast/*.[ch]				\
 	$(DIRECTORY)/src/mesa/swrast/descrip.mms			\
 	$(DIRECTORY)/src/mesa/swrast/sources				\

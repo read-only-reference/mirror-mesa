@@ -221,11 +221,10 @@ try_pbo_upload(struct intel_context *intel,
    intelFlush(&intel->ctx);
    LOCK_HARDWARE(intel);
    {
-      struct _DriBufferObject *src_buffer =
-         intel_bufferobj_buffer(intel, pbo, INTEL_READ);
-      struct _DriBufferObject *dst_buffer =
-         intel_region_buffer(intel->intelScreen, intelImage->mt->region,
-                             INTEL_WRITE_FULL);
+      dri_bo *src_buffer = intel_bufferobj_buffer(intel, pbo, INTEL_READ);
+      dri_bo *dst_buffer = intel_region_buffer(intel->intelScreen,
+					       intelImage->mt->region,
+					       INTEL_WRITE_FULL);
 
 
       intelEmitCopyBlit(intel,
@@ -378,13 +377,15 @@ intelTexImage(GLcontext * ctx,
       assert(!intelObj->mt);
    }
 
+   if (!pixels)
+      return;
+
    if (!intelObj->mt) {
       guess_and_alloc_mipmap_tree(intel, intelObj, intelImage);
       if (!intelObj->mt) {
 	 DBG("guess_and_alloc_mipmap_tree: failed\n");
       }
    }
-
 
    assert(!intelImage->mt);
 
@@ -666,4 +667,24 @@ intelGetCompressedTexImage(GLcontext *ctx, GLenum target, GLint level,
    intel_get_tex_image(ctx, target, level, 0, 0, pixels,
 		       texObj, texImage, 1);
 
+}
+
+void
+intelSetTexOffset(__DRIcontext *pDRICtx, GLint texname,
+		  unsigned long long offset, GLint depth, GLuint pitch)
+{
+   struct intel_context *intel = (struct intel_context*)
+      ((__DRIcontextPrivate*)pDRICtx->private)->driverPrivate;
+   struct gl_texture_object *tObj = _mesa_lookup_texture(&intel->ctx, texname);
+   struct intel_texture_object *intelObj = intel_texture_object(tObj);
+
+   if (!intelObj)
+      return;
+
+   intelObj->imageOverride = GL_TRUE;
+   intelObj->depthOverride = depth;
+   intelObj->pitchOverride = pitch;
+
+   if (offset)
+      intelObj->textureOffset = offset;
 }
