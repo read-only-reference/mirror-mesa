@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.1
+ * Version:  7.1
  *
- * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -2463,7 +2463,7 @@ _mesa_TexImage1D( GLenum target, GLint level, GLint internalFormat,
 	 update_fbo_texture(ctx, texObj, face, level);
 	 
 	 /* state update */
-	 texObj->Complete = GL_FALSE;
+	 texObj->_Complete = GL_FALSE;
 	 ctx->NewState |= _NEW_TEXTURE;
       }
    out:
@@ -2566,7 +2566,7 @@ _mesa_TexImage2D( GLenum target, GLint level, GLint internalFormat,
 	 update_fbo_texture(ctx, texObj, face, level);
 
 	 /* state update */
-	 texObj->Complete = GL_FALSE;
+	 texObj->_Complete = GL_FALSE;
 	 ctx->NewState |= _NEW_TEXTURE;
       }
    out:
@@ -2667,7 +2667,7 @@ _mesa_TexImage3D( GLenum target, GLint level, GLint internalFormat,
 	 update_fbo_texture(ctx, texObj, face, level);
 
 	 /* state update */
-	 texObj->Complete = GL_FALSE;
+	 texObj->_Complete = GL_FALSE;
 	 ctx->NewState |= _NEW_TEXTURE;
       }
    out:
@@ -2938,7 +2938,7 @@ _mesa_CopyTexImage1D( GLenum target, GLint level,
       update_fbo_texture(ctx, texObj, face, level);
 
       /* state update */
-      texObj->Complete = GL_FALSE;
+      texObj->_Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
    }
  out:
@@ -3004,7 +3004,7 @@ _mesa_CopyTexImage2D( GLenum target, GLint level, GLenum internalFormat,
       update_fbo_texture(ctx, texObj, face, level);
 
       /* state update */
-      texObj->Complete = GL_FALSE;
+      texObj->_Complete = GL_FALSE;
       ctx->NewState |= _NEW_TEXTURE;
    }
  out:
@@ -3398,7 +3398,7 @@ _mesa_CompressedTexImage1DARB(GLenum target, GLint level,
 					     texObj, texImage);
 
 	 /* state update */
-	 texObj->Complete = GL_FALSE;
+	 texObj->_Complete = GL_FALSE;
 	 ctx->NewState |= _NEW_TEXTURE;
       }
    out:
@@ -3495,7 +3495,7 @@ _mesa_CompressedTexImage2DARB(GLenum target, GLint level,
 					     texObj, texImage);
 	 
 	 /* state update */
-	 texObj->Complete = GL_FALSE;
+	 texObj->_Complete = GL_FALSE;
 	 ctx->NewState |= _NEW_TEXTURE;
       }
    out:
@@ -3591,7 +3591,7 @@ _mesa_CompressedTexImage3DARB(GLenum target, GLint level,
 					     texObj, texImage);
 	 
 	 /* state update */
-	 texObj->Complete = GL_FALSE;
+	 texObj->_Complete = GL_FALSE;
 	 ctx->NewState |= _NEW_TEXTURE;
       }
    out:
@@ -3768,7 +3768,7 @@ _mesa_CompressedTexSubImage3DARB(GLenum target, GLint level, GLint xoffset,
                                              width, height, depth, /*size*/
                                              format, imageSize);
    if (error) {
-      _mesa_error(ctx, error, "glCompressedTexSubImage2D");
+      _mesa_error(ctx, error, "glCompressedTexSubImage3D");
       return;
    }
 
@@ -3819,7 +3819,6 @@ _mesa_GetCompressedTexImageARB(GLenum target, GLint level, GLvoid *img)
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-
    texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    texObj = _mesa_select_tex_object(ctx, texUnit, target);
    if (!texObj) {
@@ -3840,24 +3839,25 @@ _mesa_GetCompressedTexImageARB(GLenum target, GLint level, GLvoid *img)
       return;
    }
 
-
    _mesa_lock_texture(ctx, texObj);
    {
       texImage = _mesa_select_tex_image(ctx, texObj, target, level);
-      if (!texImage) {
-	 /* probably invalid mipmap level */
-	 _mesa_error(ctx, GL_INVALID_VALUE, "glGetCompressedTexImageARB(level)");
-	 goto out;
+      if (texImage) {
+         if (texImage->IsCompressed) {
+            /* this typically calls _mesa_get_compressed_teximage() */
+            ctx->Driver.GetCompressedTexImage(ctx, target, level, img,
+                                              texObj, texImage);
+         }
+         else {
+            _mesa_error(ctx, GL_INVALID_OPERATION,
+                        "glGetCompressedTexImageARB");
+         }
       }
-
-      if (!texImage->IsCompressed) {
-	 _mesa_error(ctx, GL_INVALID_OPERATION, "glGetCompressedTexImageARB");
-	 goto out;
+      else {
+         /* probably invalid mipmap level */
+         _mesa_error(ctx, GL_INVALID_VALUE,
+                     "glGetCompressedTexImageARB(level)");
       }
-
-      /* this typically calls _mesa_get_compressed_teximage() */
-      ctx->Driver.GetCompressedTexImage(ctx, target, level, img, texObj,texImage);
    }
- out:
    _mesa_unlock_texture(ctx, texObj);
 }

@@ -45,15 +45,18 @@
 #define FILE_DEBUG_FLAG DEBUG_IOCTL
 
 int
-intelEmitIrqLocked(intelScreenPrivate *intelScreen)
+intelEmitIrqLocked(struct intel_context *intel)
 {
    drmI830IrqEmit ie;
    int ret, seq;
 
+   assert(((*(int *) intel->driHwLock) & ~DRM_LOCK_CONT) ==
+          (DRM_LOCK_HELD | intel->hHWContext));
+
    ie.irq_seq = &seq;
 
-   ret = drmCommandWriteRead(intelScreen->driScrnPriv->fd,
-			     DRM_I830_IRQ_EMIT, &ie, sizeof(ie));
+   ret = drmCommandWriteRead(intel->driFd, DRM_I830_IRQ_EMIT,
+                             &ie, sizeof(ie));
    if (ret) {
       fprintf(stderr, "%s: drmI830IrqEmit: %d\n", __FUNCTION__, ret);
       exit(1);
@@ -65,18 +68,18 @@ intelEmitIrqLocked(intelScreenPrivate *intelScreen)
 }
 
 void
-intelWaitIrq(intelScreenPrivate *intelScreen, int seq)
+intelWaitIrq(struct intel_context *intel, int seq)
 {
-   drm_i915_irq_wait_t iw;
    int ret;
 
    DBG("%s %d\n", __FUNCTION__, seq);
 
-   iw.irq_seq = seq;
+   intel->iw.irq_seq = seq;
 
    do {
-      ret = drmCommandWrite(intelScreen->driScrnPriv->fd,
-			    DRM_I830_IRQ_WAIT, &iw, sizeof(iw));
+      ret =
+         drmCommandWrite(intel->driFd, DRM_I830_IRQ_WAIT, &intel->iw,
+                         sizeof(intel->iw));
    } while (ret == -EAGAIN || ret == -EINTR);
 
    if (ret) {

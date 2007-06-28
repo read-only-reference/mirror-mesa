@@ -221,10 +221,11 @@ try_pbo_upload(struct intel_context *intel,
    intelFlush(&intel->ctx);
    LOCK_HARDWARE(intel);
    {
-      dri_bo *src_buffer = intel_bufferobj_buffer(intel, pbo, INTEL_READ);
-      dri_bo *dst_buffer = intel_region_buffer(intel->intelScreen,
-					       intelImage->mt->region,
-					       INTEL_WRITE_FULL);
+      struct _DriBufferObject *src_buffer =
+         intel_bufferobj_buffer(intel, pbo, INTEL_READ);
+      struct _DriBufferObject *dst_buffer =
+         intel_region_buffer(intel->intelScreen, intelImage->mt->region,
+                             INTEL_WRITE_FULL);
 
 
       intelEmitCopyBlit(intel,
@@ -376,9 +377,6 @@ intelTexImage(GLcontext * ctx,
       intel_miptree_release(intel, &intelObj->mt);
       assert(!intelObj->mt);
    }
-
-   if (!pixels)
-      return;
 
    if (!intelObj->mt) {
       guess_and_alloc_mipmap_tree(intel, intelObj, intelImage);
@@ -680,6 +678,9 @@ intelSetTexOffset(__DRIcontext *pDRICtx, GLint texname,
 
    if (!intelObj)
       return;
+
+   if (intelObj->mt)
+      intel_miptree_release(intel, &intelObj->mt);
 
    intelObj->imageOverride = GL_TRUE;
    intelObj->depthOverride = depth;

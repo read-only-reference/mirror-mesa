@@ -217,7 +217,7 @@ do_blit_drawpixels(GLcontext * ctx,
    struct intel_buffer_object *src = intel_buffer_object(unpack->BufferObj);
    GLuint src_offset;
    GLuint rowLength;
-   dri_fence *fence = NULL;
+   struct _DriFenceObject *fence = NULL;
 
    if (INTEL_DEBUG & DEBUG_PIXEL)
       _mesa_printf("%s\n", __FUNCTION__);
@@ -298,7 +298,8 @@ do_blit_drawpixels(GLcontext * ctx,
       drm_clip_rect_t *box = dPriv->pClipRects;
       drm_clip_rect_t rect;
       drm_clip_rect_t dest_rect;
-      dri_bo *src_buffer = intel_bufferobj_buffer(intel, src, INTEL_READ);
+      struct _DriBufferObject *src_buffer =
+         intel_bufferobj_buffer(intel, src, INTEL_READ);
       int i;
 
       dest_rect.x1 = dPriv->x + x;
@@ -323,15 +324,14 @@ do_blit_drawpixels(GLcontext * ctx,
 			   ctx->Color.ColorLogicOpEnabled ?
 			   ctx->Color.LogicOp : GL_COPY);
       }
-      intel_batchbuffer_flush(intel->batch);
-      fence = intel->batch->last_fence;
-      dri_fence_reference(fence);
+      fence = intel_batchbuffer_flush(intel->batch);
+      driFenceReference(fence);
    }
    UNLOCK_HARDWARE(intel);
 
    if (fence) {
-      dri_fence_wait(fence);
-      dri_fence_unreference(fence);
+      driFenceFinish(fence, DRM_FENCE_TYPE_EXE | DRM_I915_FENCE_TYPE_RW, GL_FALSE);
+      driFenceUnReference(fence);
    }
 
    if (INTEL_DEBUG & DEBUG_PIXEL)
@@ -363,5 +363,20 @@ intelDrawPixels(GLcontext * ctx,
    if (INTEL_DEBUG & DEBUG_PIXEL)
       _mesa_printf("%s: fallback to swrast\n", __FUNCTION__);
 
-   _swrast_DrawPixels(ctx, x, y, width, height, format, type, unpack, pixels);
+   if (ctx->FragmentProgram._Current == ctx->FragmentProgram._TexEnvProgram) {
+      /*
+       * We don't want the i915 texenv program to be applied to DrawPixels.
+       * This is really just a performance optimization (mesa will other-
+       * wise happily run the fragment program on each pixel in the image).
+       */
+      struct gl_fragment_program *fpSave = ctx->FragmentProgram._Current;
+      ctx->FragmentProgram._Current = NULL;
+      _swrast_DrawPixels( ctx, x, y, width, height, format, type,
+                          unpack, pixels );
+      ctx->FragmentProgram._Current = fpSave;
+   }
+   else {
+      _swrast_DrawPixels( ctx, x, y, width, height, format, type,
+                          unpack, pixels );
+   }
 }

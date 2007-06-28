@@ -46,7 +46,7 @@
 #include "intel_fbo.h"
 
 #include "i830_dri.h"
-#include "dri_bufmgr.h"
+#include "dri_bufpool.h"
 #include "intel_regions.h"
 #include "intel_batchbuffer.h"
 
@@ -120,22 +120,16 @@ intelMapScreenRegions(__DRIscreenPrivate * sPriv)
       return GL_FALSE;
    }
 
-   if (0)
-      _mesa_printf("TEX 0x%08x ", intelScreen->tex.handle);
-   if (intelScreen->tex.size != 0) {
-      intelScreen->ttm = GL_FALSE;
-
-      if (drmMap(sPriv->fd,
-		 intelScreen->tex.handle,
-		 intelScreen->tex.size,
-		 (drmAddress *) & intelScreen->tex.map) != 0) {
-	 intelUnmapScreenRegions(intelScreen);
-	 return GL_FALSE;
-      }
-   } else {
-      intelScreen->ttm = GL_TRUE;
+#if 0
+   _mesa_printf("TEX 0x%08x ", intelScreen->tex.handle);
+   if (drmMap(sPriv->fd,
+              intelScreen->tex.handle,
+              intelScreen->tex.size,
+              (drmAddress *) & intelScreen->tex.map) != 0) {
+      intelUnmapScreenRegions(intelScreen);
+      return GL_FALSE;
    }
-
+#endif
    if (0)
       printf("Mappings:  front: %p  back: %p  third: %p  depth: %p  tex: %p\n",
              intelScreen->front.map,
@@ -144,32 +138,6 @@ intelMapScreenRegions(__DRIscreenPrivate * sPriv)
    return GL_TRUE;
 }
 
-/** Driver-specific fence emit implementation for the fake memory manager. */
-static unsigned int
-intel_fence_emit(void *private)
-{
-   intelScreenPrivate *intelScreen = (intelScreenPrivate *)private;
-   unsigned int fence;
-
-   /* XXX: Need to emit a flush, if we haven't already (at least with the
-    * current batchbuffer implementation, we have).
-    */
-
-   fence = intelEmitIrqLocked(intelScreen);
-
-   return fence;
-}
-
-/** Driver-specific fence wait implementation for the fake memory manager. */
-static int
-intel_fence_wait(void *private, unsigned int cookie)
-{
-   intelScreenPrivate *intelScreen = (intelScreenPrivate *)private;
-
-   intelWaitIrq(intelScreen, cookie);
-
-   return 0;
-}
 
 static struct intel_region *
 intel_recreate_static(intelScreenPrivate *intelScreen,
@@ -418,6 +386,45 @@ intelUpdateScreenFromSAREA(intelScreenPrivate * intelScreen,
       intelPrintSAREA(sarea);
 }
 
+GLboolean
+intelCreatePools(intelScreenPrivate *intelScreen)
+{
+   unsigned batchPoolSize = 1024*1024;
+   __DRIscreenPrivate * sPriv = intelScreen->driScrnPriv;
+
+   if (intelScreen->havePools)
+      return GL_TRUE;
+
+   batchPoolSize /= intelScreen->maxBatchSize;
+   intelScreen->regionPool = driDRMPoolInit(sPriv->fd);
+
+   if (!intelScreen->regionPool)
+      return GL_FALSE;
+
+   intelScreen->staticPool = driDRMStaticPoolInit(sPriv->fd);
+
+   if (!intelScreen->staticPool)
+      return GL_FALSE;
+
+   intelScreen->texPool = intelScreen->regionPool;
+
+   intelScreen->batchPool = driBatchPoolInit(sPriv->fd,
+                                             DRM_BO_FLAG_EXE |
+                                             DRM_BO_FLAG_MEM_TT |
+                                             DRM_BO_FLAG_MEM_LOCAL,
+                                             intelScreen->maxBatchSize, 
+					     batchPoolSize, 5);
+   if (!intelScreen->batchPool) {
+      fprintf(stderr, "Failed to initialize batch pool - possible incorrect agpgart installed\n");
+      return GL_FALSE;
+   }
+   
+   intel_recreate_static_regions(intelScreen);
+   intelScreen->havePools = GL_TRUE;
+
+   return GL_TRUE;
+}
+
 
 static GLboolean
 intelInitDriver(__DRIscreenPrivate * sPriv)
@@ -453,11 +460,10 @@ intelInitDriver(__DRIscreenPrivate * sPriv)
    sarea = (drmI830Sarea *)
       (((GLubyte *) sPriv->pSAREA) + intelScreen->sarea_priv_offset);
 
+   intelScreen->maxBatchSize = BATCH_SZ;
    intelScreen->deviceID = gDRIPriv->deviceID;
    if (intelScreen->deviceID == PCI_CHIP_I865_G)
       intelScreen->maxBatchSize = 4096;
-   else
-      intelScreen->maxBatchSize = BATCH_SZ;
 
    intelScreen->mem = gDRIPriv->mem;
    intelScreen->cpp = gDRIPriv->cpp;
@@ -482,6 +488,24 @@ intelInitDriver(__DRIscreenPrivate * sPriv)
       sPriv->private = NULL;
       return GL_FALSE;
    }
+
+#if 0
+
+   /*
+    * FIXME: Remove this code and its references.
+    */
+
+   intelScreen->tex.offset = gDRIPriv->textureOffset;
+   intelScreen->logTextureGranularity = gDRIPriv->logTextureGranularity;
+   intelScreen->tex.handle = gDRIPriv->textures;
+   intelScreen->tex.size = gDRIPriv->textureSize;
+
+#else
+   intelScreen->tex.offset = 0;
+   intelScreen->logTextureGranularity = 0;
+   intelScreen->tex.handle = 0;
+   intelScreen->tex.size = 0;
+#endif
 
    intelScreen->sarea_priv_offset = gDRIPriv->sarea_priv_offset;
 
@@ -530,22 +554,6 @@ intelInitDriver(__DRIscreenPrivate * sPriv)
       (*glx_enable_extension) (psc, "GLX_SGI_make_current_read");
    }
 
-   if (intelScreen->ttm) {
-      intelScreen->bufmgr = dri_bufmgr_ttm_init(sPriv->fd,
-						DRM_FENCE_TYPE_EXE,
-						DRM_FENCE_TYPE_EXE |
-						DRM_I915_FENCE_TYPE_RW);
-   } else {
-      intelScreen->bufmgr = dri_bufmgr_fake_init(intelScreen->tex.offset,
-						 intelScreen->tex.map,
-						 intelScreen->tex.size,
-						 intel_fence_emit,
-						 intel_fence_wait,
-						 intelScreen);
-   }
-
-   intel_recreate_static_regions(intelScreen);
-
    return GL_TRUE;
 }
 
@@ -557,7 +565,11 @@ intelDestroyScreen(__DRIscreenPrivate * sPriv)
 
    intelUnmapScreenRegions(intelScreen);
 
-   dri_bufmgr_destroy(intelScreen->bufmgr);
+   if (intelScreen->havePools) {
+      driPoolTakeDown(intelScreen->regionPool);
+      driPoolTakeDown(intelScreen->staticPool);
+      driPoolTakeDown(intelScreen->batchPool);
+   }
    FREE(intelScreen);
    sPriv->private = NULL;
 }
@@ -740,6 +752,10 @@ intelCreateContext(const __GLcontextModes * mesaVis,
    case PCI_CHIP_I915_GM:
    case PCI_CHIP_I945_G:
    case PCI_CHIP_I945_GM:
+   case PCI_CHIP_I945_GME:
+   case PCI_CHIP_G33_G:
+   case PCI_CHIP_Q35_G:
+   case PCI_CHIP_Q33_G:
       return i915CreateContext(mesaVis, driContextPriv, sharedContextPrivate);
 
    default:
@@ -880,7 +896,7 @@ __driCreateNewScreen_20050727(__DRInativeDisplay * dpy, int scrn,
    __DRIscreenPrivate *psp;
    static const __DRIversion ddx_expected = { 1, 5, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
-   static const __DRIversion drm_expected = { 1, 5, 0 };
+   static const __DRIversion drm_expected = { 1, 7, 0 };
 
    dri_interface = interface;
 

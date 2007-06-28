@@ -106,20 +106,23 @@ static const GLubyte *intelGetString( GLcontext *ctx, GLenum name )
    case GL_RENDERER:
       switch (intel_context(ctx)->intelScreen->deviceID) {
       case PCI_CHIP_I965_Q:
-	 chipset = "Intel(R) 965Q"; break;
+	 chipset = "Intel(R) 965Q";
          break;
       case PCI_CHIP_I965_G:
       case PCI_CHIP_I965_G_1:
-	 chipset = "Intel(R) 965G"; break;
+	 chipset = "Intel(R) 965G";
          break;
       case PCI_CHIP_I946_GZ:
-	 chipset = "Intel(R) 946GZ"; break;
+	 chipset = "Intel(R) 946GZ";
          break;
       case PCI_CHIP_I965_GM:
-	 chipset = "Intel(R) 965GM"; break;
+	 chipset = "Intel(R) 965GM";
+         break;
+      case PCI_CHIP_I965_GME:
+	 chipset = "Intel(R) 965GME/GLE";
          break;
       default:
-	 chipset = "Unknown Intel Chipset"; break;
+	 chipset = "Unknown Intel Chipset";
       }
 
       (void) driGetRendererString( buffer, chipset, DRIVER_VERSION, 0 );
@@ -656,7 +659,7 @@ void LOCK_HARDWARE( struct intel_context *intel )
    intel->locked = 1;
 
    if (intel->aub_wrap) {
-      bm_fake_NotifyContendedLockTake( intel );
+      bm_fake_NotifyContendedLockTake( intel ); 
       intel->vtbl.lost_hardware( intel );
       intel->vtbl.aub_wrap(intel);
       intel->aub_wrap = 0;
@@ -667,7 +670,7 @@ void LOCK_HARDWARE( struct intel_context *intel )
       intel->vtbl.lost_hardware( intel );
    }
 
-   /* Make sure nothing has been emitted prior to getting the lock:
+   /* Make sure nothing has been emitted prior to getting the lock: 
     */
    assert(intel->batch->map == 0);
 
@@ -699,6 +702,8 @@ void UNLOCK_HARDWARE( struct intel_context *intel )
    intel_batchbuffer_unmap(intel->batch);
    intel->vtbl.note_unlock( intel );
    intel->locked = 0;
+
+
 
    DRM_UNLOCK(intel->driFd, intel->driHwLock, intel->hHWContext);
    _glthread_UNLOCK_MUTEX(lockMutex); 

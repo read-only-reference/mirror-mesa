@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.3
+ * Version:  7.1
  *
  * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
@@ -137,8 +137,8 @@ NAME(line)(GLcontext *ctx, const SWvertex *v0, const SWvertex *v1)
    if (line.len == 0.0 || IS_INF_OR_NAN(line.len))
       return;
 
-   INIT_SPAN(line.span, GL_LINE, 0, 0, SPAN_XY | SPAN_COVERAGE);
-
+   INIT_SPAN(line.span, GL_LINE);
+   line.span.arrayMask = SPAN_XY | SPAN_COVERAGE;
    line.xAdj = line.dx / line.len * line.halfWidth;
    line.yAdj = line.dy / line.len * line.halfWidth;
 
@@ -185,10 +185,18 @@ NAME(line)(GLcontext *ctx, const SWvertex *v0, const SWvertex *v1)
       compute_plane(line.x0, line.y0, line.x1, line.y1, invW0, invW1, line.wPlane);
       ATTRIB_LOOP_BEGIN
          GLuint c;
-         for (c = 0; c < 4; c++) {
-            const GLfloat a0 = v0->attrib[attr][c] * invW0;
-            const GLfloat a1 = v1->attrib[attr][c] * invW1;
-            compute_plane(line.x0, line.y0, line.x1, line.y1, a0, a1, line.attrPlane[attr][c]);
+         if (swrast->_InterpMode[attr] == GL_FLAT) {
+            for (c = 0; c < 4; c++) {
+               constant_plane(v1->attrib[attr][c], line.attrPlane[attr][c]);
+            }
+         }
+         else {
+            for (c = 0; c < 4; c++) {
+               const GLfloat a0 = v0->attrib[attr][c] * invW0;
+               const GLfloat a1 = v1->attrib[attr][c] * invW1;
+               compute_plane(line.x0, line.y0, line.x1, line.y1, a0, a1,
+                             line.attrPlane[attr][c]);
+            }
          }
          line.span.arrayAttribs |= (1 << attr);
          if (attr >= FRAG_ATTRIB_TEX0 && attr < FRAG_ATTRIB_VAR0) {

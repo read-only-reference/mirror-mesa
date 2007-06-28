@@ -85,7 +85,6 @@ typedef struct {
         int last_enqueue;	/* last time a buffer was enqueued */
 	int last_dispatch;	/* age of the most recently dispatched buffer */
 	int ctxOwner;		/* last context to upload state */
-	/** Last context that used the buffer manager. */
 	int texAge;
         int pf_enabled;		/* is pageflipping allowed? */
         int pf_active;               

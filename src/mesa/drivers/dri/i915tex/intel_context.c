@@ -130,6 +130,18 @@ intelGetString(GLcontext * ctx, GLenum name)
       case PCI_CHIP_I945_GM:
          chipset = "Intel(R) 945GM";
          break;
+      case PCI_CHIP_I945_GME:
+         chipset = "Intel(R) 945GME";
+         break;
+      case PCI_CHIP_G33_G:
+	 chipset = "Intel(R) G33";
+	 break;
+      case PCI_CHIP_Q35_G:
+	 chipset = "Intel(R) Q35";
+	 break;
+      case PCI_CHIP_Q33_G:
+	 chipset = "Intel(R) Q33";
+	 break;
       default:
          chipset = "Unknown Intel Chipset";
          break;
@@ -302,8 +314,9 @@ intelFinish(GLcontext * ctx)
    struct intel_context *intel = intel_context(ctx);
    intelFlush(ctx);
    if (intel->batch->last_fence) {
-      dri_fence_wait(intel->batch->last_fence);
-      dri_fence_unreference(intel->batch->last_fence);
+      driFenceFinish(intel->batch->last_fence,
+                     0, GL_FALSE);
+      driFenceUnReference(intel->batch->last_fence);
       intel->batch->last_fence = NULL;
    }
    intelCheckFrontRotate(ctx);
@@ -345,7 +358,15 @@ intelInitContext(struct intel_context *intel,
    drmI830Sarea *saPriv = (drmI830Sarea *)
       (((GLubyte *) sPriv->pSAREA) + intelScreen->sarea_priv_offset);
    int fthrottle_mode;
+   GLboolean havePools;
 
+   DRM_LIGHT_LOCK(sPriv->fd, &sPriv->pSAREA->lock, driContextPriv->hHWContext);
+   havePools = intelCreatePools(intelScreen);
+   DRM_UNLOCK(sPriv->fd, &sPriv->pSAREA->lock, driContextPriv->hHWContext);
+
+   if (!havePools)
+      return GL_FALSE;
+     
    if (!_mesa_initialize_context(&intel->ctx,
                                  mesaVis, shareCtx,
                                  functions, (void *) intel))
@@ -439,6 +460,7 @@ intelInitContext(struct intel_context *intel,
    intel->RenderIndex = ~0;
 
    fthrottle_mode = driQueryOptioni(&intel->optionCache, "fthrottle_mode");
+   intel->iw.irq_seq = -1;
    intel->irqsEmitted = 0;
 
    intel->do_irqs = (intel->intelScreen->irq_active &&
@@ -511,13 +533,13 @@ intelDestroyContext(__DRIcontextPrivate * driContextPriv)
       intel_batchbuffer_free(intel->batch);
 
       if (intel->last_swap_fence) {
-	 dri_fence_wait(intel->last_swap_fence);
-	 dri_fence_unreference(intel->last_swap_fence);
+	 driFenceFinish(intel->last_swap_fence, DRM_FENCE_TYPE_EXE, GL_TRUE);
+	 driFenceUnReference(intel->last_swap_fence);
 	 intel->last_swap_fence = NULL;
       }
       if (intel->first_swap_fence) {
-	 dri_fence_wait(intel->first_swap_fence);
-	 dri_fence_unreference(intel->first_swap_fence);
+	 driFenceFinish(intel->first_swap_fence, DRM_FENCE_TYPE_EXE, GL_TRUE);
+	 driFenceUnReference(intel->first_swap_fence);
 	 intel->first_swap_fence = NULL;
       }
 
@@ -638,16 +660,6 @@ intelContendedLock(struct intel_context *intel, GLuint flags)
    if (dPriv)
       DRI_VALIDATE_DRAWABLE_INFO(sPriv, dPriv);
 
-   /* If the last consumer of the texture memory wasn't us, notify the fake
-    * bufmgr and record the new owner.  We should have the memory shared
-    * between contexts of a single fake bufmgr, but this will at least make
-    * things correct for now.
-    */
-   if (!intel->intelScreen->ttm && sarea->texAge != intel->hHWContext) {
-      sarea->texAge = intel->hHWContext;
-      dri_bufmgr_fake_contended_lock_take(intel->intelScreen->bufmgr);
-   }
-
    if (sarea->width != intelScreen->width ||
        sarea->height != intelScreen->height ||
        sarea->rotation != intelScreen->current_rotation) {
@@ -671,14 +683,14 @@ intelContendedLock(struct intel_context *intel, GLuint flags)
        */
 
       if (batchMap != NULL) {
-	 dri_bo_unmap(intel->batch->buf);
+	 driBOUnmap(intel->batch->buffer);
 	 intel->batch->map = NULL;
       }
 
       intel_batchbuffer_reset(intel->batch);
 
       if (batchMap == NULL) {
-	 dri_bo_unmap(intel->batch->buf);
+	 driBOUnmap(intel->batch->buffer);
 	 intel->batch->map = NULL;
       }
 
