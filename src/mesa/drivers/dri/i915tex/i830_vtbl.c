@@ -61,6 +61,11 @@ do {									\
 #define TEXBIND_SET(n, x) 		((x)<<((n)*4))
 
 static void
+i830_render_prevalidate(struct intel_context *intel)
+{
+}
+
+static void
 i830_render_start(struct intel_context *intel)
 {
    GLcontext *ctx = &intel->ctx;
@@ -447,13 +452,14 @@ i830_emit_state(struct intel_context *intel)
    if (dirty & I830_UPLOAD_BUFFERS) {
       DBG("I830_UPLOAD_BUFFERS:\n");
       BEGIN_BATCH(I830_DEST_SETUP_SIZE + 2, 0);
-      OUT_BATCH(state->Buffer[I830_DESTREG_CBUFADDR0]);
-      OUT_BATCH(state->Buffer[I830_DESTREG_CBUFADDR1]);
-      OUT_RELOC(state->draw_region->buffer,
-                DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_WRITE,
-                DRM_BO_MASK_MEM | DRM_BO_FLAG_WRITE,
-                state->draw_region->draw_offset);
-
+      if (state->draw_region->buffer) {
+         OUT_BATCH(state->Buffer[I830_DESTREG_CBUFADDR0]);
+         OUT_BATCH(state->Buffer[I830_DESTREG_CBUFADDR1]);
+         OUT_RELOC(state->draw_region->buffer,
+                   DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_WRITE,
+                   DRM_BO_MASK_MEM | DRM_BO_FLAG_WRITE,
+                   state->draw_region->draw_offset);
+      }
       if (state->depth_region) {
          OUT_BATCH(state->Buffer[I830_DESTREG_DBUFADDR0]);
          OUT_BATCH(state->Buffer[I830_DESTREG_DBUFADDR1]);
@@ -597,25 +603,6 @@ i830_set_draw_region(struct intel_context *intel,
    i830_state_draw_region(intel, &i830->state, color_region, depth_region);
 }
 
-#if 0
-static void
-i830_update_color_z_regions(intelContextPtr intel,
-                            const intelRegion * colorRegion,
-                            const intelRegion * depthRegion)
-{
-   i830ContextPtr i830 = I830_CONTEXT(intel);
-
-   i830->state.Buffer[I830_DESTREG_CBUFADDR1] =
-      (BUF_3D_ID_COLOR_BACK | BUF_3D_PITCH(colorRegion->pitch) |
-       BUF_3D_USE_FENCE);
-   i830->state.Buffer[I830_DESTREG_CBUFADDR2] = colorRegion->offset;
-
-   i830->state.Buffer[I830_DESTREG_DBUFADDR1] =
-      (BUF_3D_ID_DEPTH | BUF_3D_PITCH(depthRegion->pitch) | BUF_3D_USE_FENCE);
-   i830->state.Buffer[I830_DESTREG_DBUFADDR2] = depthRegion->offset;
-}
-#endif
-
 
 /* This isn't really handled at the moment.
  */
@@ -657,5 +644,6 @@ i830InitVtbl(struct i830_context *i830)
    i830->intel.vtbl.update_texture_state = i830UpdateTextureState;
    i830->intel.vtbl.flush_cmd = i830_flush_cmd;
    i830->intel.vtbl.render_start = i830_render_start;
+   i830->intel.vtbl.render_prevalidate = i830_render_prevalidate;
    i830->intel.vtbl.assert_not_dirty = i830_assert_not_dirty;
 }

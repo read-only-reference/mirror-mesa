@@ -44,11 +44,16 @@
 #include "i915_context.h"
 
 static void
-i915_render_start(struct intel_context *intel)
+i915_render_prevalidate(struct intel_context *intel)
 {
    struct i915_context *i915 = i915_context(&intel->ctx);
 
    i915ValidateFragmentProgram(i915);
+}
+
+static void
+i915_render_start(struct intel_context *intel)
+{
 }
 
 
@@ -61,6 +66,7 @@ i915_reduced_primitive_state(struct intel_context *intel, GLenum rprim)
    st1 &= ~ST1_ENABLE;
 
    switch (rprim) {
+   case GL_QUADS: /* from RASTERIZE(GL_QUADS) in t_dd_tritemp.h */
    case GL_TRIANGLES:
       if (intel->ctx.Polygon.StippleFlag && intel->hw_stipple)
          st1 |= ST1_ENABLE;
@@ -322,13 +328,14 @@ i915_emit_state(struct intel_context *intel)
       if (INTEL_DEBUG & DEBUG_STATE)
          fprintf(stderr, "I915_UPLOAD_BUFFERS:\n");
       BEGIN_BATCH(I915_DEST_SETUP_SIZE + 2, 0);
-      OUT_BATCH(state->Buffer[I915_DESTREG_CBUFADDR0]);
-      OUT_BATCH(state->Buffer[I915_DESTREG_CBUFADDR1]);
-      OUT_RELOC(state->draw_region->buffer,
-                DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_WRITE,
-                DRM_BO_MASK_MEM | DRM_BO_FLAG_WRITE,
-                state->draw_region->draw_offset);
-
+      if (state->draw_region) {
+         OUT_BATCH(state->Buffer[I915_DESTREG_CBUFADDR0]);
+         OUT_BATCH(state->Buffer[I915_DESTREG_CBUFADDR1]);
+         OUT_RELOC(state->draw_region->buffer,
+                   DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_WRITE,
+                   DRM_BO_MASK_MEM | DRM_BO_FLAG_WRITE,
+                   state->draw_region->draw_offset);
+      }
       if (state->depth_region) {
          OUT_BATCH(state->Buffer[I915_DESTREG_DBUFADDR0]);
          OUT_BATCH(state->Buffer[I915_DESTREG_DBUFADDR1]);
@@ -463,6 +470,7 @@ i915_state_draw_region(struct intel_context *intel,
     * Set stride/cpp values
     */
    if (color_region) {
+//      fprintf(stderr, "color pitch %d\n", color_region->pitch);
       state->Buffer[I915_DESTREG_CBUFADDR0] = _3DSTATE_BUF_INFO_CMD;
       state->Buffer[I915_DESTREG_CBUFADDR1] =
          (BUF_3D_ID_COLOR_BACK |
@@ -471,6 +479,7 @@ i915_state_draw_region(struct intel_context *intel,
    }
 
    if (depth_region) {
+//      fprintf(stderr, "depth pitch %d\n", depth_region->pitch);
       state->Buffer[I915_DESTREG_DBUFADDR0] = _3DSTATE_BUF_INFO_CMD;
       state->Buffer[I915_DESTREG_DBUFADDR1] =
          (BUF_3D_ID_DEPTH |
@@ -545,6 +554,7 @@ i915InitVtbl(struct i915_context *i915)
    i915->intel.vtbl.lost_hardware = i915_lost_hardware;
    i915->intel.vtbl.reduced_primitive_state = i915_reduced_primitive_state;
    i915->intel.vtbl.render_start = i915_render_start;
+   i915->intel.vtbl.render_prevalidate = i915_render_prevalidate;
    i915->intel.vtbl.set_draw_region = i915_set_draw_region;
    i915->intel.vtbl.update_texture_state = i915UpdateTextureState;
    i915->intel.vtbl.flush_cmd = i915_flush_cmd;

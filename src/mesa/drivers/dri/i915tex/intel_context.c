@@ -60,6 +60,10 @@
 #include "intel_buffer_objects.h"
 #include "intel_fbo.h"
 
+#include "pipe/softpipe/sp_context.h"
+#include "state_tracker/st_public.h"
+
+
 #include "drirenderbuffer.h"
 #include "vblank.h"
 #include "utils.h"
@@ -192,6 +196,7 @@ const struct dri_extension card_extensions[] = {
 #if 1                           /* XXX FBO temporary? */
    {"GL_EXT_packed_depth_stencil", NULL},
 #endif
+   {"GL_EXT_pixel_buffer_object", NULL},
    {"GL_EXT_secondary_color", GL_EXT_secondary_color_functions},
    {"GL_EXT_stencil_wrap", NULL},
    {"GL_EXT_texture_edge_clamp", NULL},
@@ -256,6 +261,9 @@ intelInvalidateState(GLcontext * ctx, GLuint new_state)
    _vbo_InvalidateState(ctx, new_state);
    _tnl_InvalidateState(ctx, new_state);
    _tnl_invalidate_vertex_state(ctx, new_state);
+
+   st_invalidate_state( ctx, new_state );
+
    intel_context(ctx)->NewGLState |= new_state;
 }
 
@@ -282,18 +290,20 @@ intelFlush(GLcontext * ctx)
  * Check if we need to rotate/warp the front color buffer to the
  * rotated screen.  We generally need to do this when we get a glFlush
  * or glFinish after drawing to the front color buffer.
+ * If no rotation, just copy the private fake front buffer to the real one.
  */
 static void
-intelCheckFrontRotate(GLcontext * ctx)
+intelCheckFrontUpdate(GLcontext * ctx)
 {
    struct intel_context *intel = intel_context(ctx);
+   /* rely on _ColorDrawBufferMask being kept up to date by mesa
+      even for window-fbos. */
+   /* not sure. Might need that for all masks including
+      BUFFER_BIT_FRONT_LEFT maybe? */
    if (intel->ctx.DrawBuffer->_ColorDrawBufferMask[0] ==
        BUFFER_BIT_FRONT_LEFT) {
-      intelScreenPrivate *screen = intel->intelScreen;
-      if (screen->current_rotation != 0) {
-         __DRIdrawablePrivate *dPriv = intel->driDrawable;
-         intelRotateWindow(intel, dPriv, BUFFER_BIT_FRONT_LEFT);
-      }
+      __DRIdrawablePrivate *dPriv = intel->driDrawable;
+      intelCopyBuffer(dPriv, NULL);
    }
 }
 
@@ -305,7 +315,7 @@ static void
 intelglFlush(GLcontext * ctx)
 {
    intelFlush(ctx);
-   intelCheckFrontRotate(ctx);
+   intelCheckFrontUpdate(ctx);
 }
 
 void
@@ -319,7 +329,7 @@ intelFinish(GLcontext * ctx)
       driFenceUnReference(intel->batch->last_fence);
       intel->batch->last_fence = NULL;
    }
-   intelCheckFrontRotate(ctx);
+   intelCheckFrontUpdate(ctx);
 }
 
 
@@ -366,7 +376,7 @@ intelInitContext(struct intel_context *intel,
 
    if (!havePools)
       return GL_FALSE;
-     
+
    if (!_mesa_initialize_context(&intel->ctx,
                                  mesaVis, shareCtx,
                                  functions, (void *) intel))
@@ -376,10 +386,6 @@ intelInitContext(struct intel_context *intel,
    intel->intelScreen = intelScreen;
    intel->driScreen = sPriv;
    intel->sarea = saPriv;
-
-   intel->width = intelScreen->width;
-   intel->height = intelScreen->height;
-   intel->current_rotation = intelScreen->current_rotation;
 
    if (!lockMutexInit) {
       lockMutexInit = GL_TRUE;
@@ -505,6 +511,11 @@ intelInitContext(struct intel_context *intel,
       FALLBACK(intel, INTEL_FALLBACK_USER, 1);
    }
 
+
+   st_create_context( &intel->ctx,
+		      softpipe_create() );
+   
+
    return GL_TRUE;
 }
 
@@ -560,6 +571,11 @@ intelDestroyContext(__DRIcontextPrivate * driContextPriv)
 GLboolean
 intelUnbindContext(__DRIcontextPrivate * driContextPriv)
 {
+   struct intel_context *intel = (struct intel_context *) driContextPriv->driverPrivate;
+   /* XXX UnbindContext is called AFTER the new context is made current.
+      Hopefully shouldn't be a problem ? */
+   FLUSH_VERTICES((&intel->ctx), 0);
+   intelFlush(&intel->ctx);
    return GL_TRUE;
 }
 
@@ -569,6 +585,13 @@ intelMakeCurrent(__DRIcontextPrivate * driContextPriv,
                  __DRIdrawablePrivate * driReadPriv)
 {
 
+#if 0
+   if (driDrawPriv) {
+      fprintf(stderr, "x %d, y %d, width %d, height %d\n",
+	      driDrawPriv->x, driDrawPriv->y, driDrawPriv->w, driDrawPriv->h);
+   }
+#endif
+
    if (driContextPriv) {
       struct intel_context *intel =
          (struct intel_context *) driContextPriv->driverPrivate;
@@ -576,40 +599,15 @@ intelMakeCurrent(__DRIcontextPrivate * driContextPriv,
 	 (struct intel_framebuffer *) driDrawPriv->driverPrivate;
       GLframebuffer *readFb = (GLframebuffer *) driReadPriv->driverPrivate;
 
+      /* this is a hack so we have a valid context when the region allocation
+         is done. Need a per-screen context? */
+      intel->intelScreen->dummyctxptr = intel;
 
-      /* XXX FBO temporary fix-ups! */
-      /* if the renderbuffers don't have regions, init them from the context */
-      {
-         struct intel_renderbuffer *irbDepth
-            = intel_get_renderbuffer(&intel_fb->Base, BUFFER_DEPTH);
-         struct intel_renderbuffer *irbStencil
-            = intel_get_renderbuffer(&intel_fb->Base, BUFFER_STENCIL);
-
-         if (intel_fb->color_rb[0] && !intel_fb->color_rb[0]->region) {
-            intel_region_reference(&intel_fb->color_rb[0]->region,
-				   intel->intelScreen->front_region);
-         }
-         if (intel_fb->color_rb[1] && !intel_fb->color_rb[1]->region) {
-            intel_region_reference(&intel_fb->color_rb[1]->region,
-				   intel->intelScreen->back_region);
-         }
-         if (intel_fb->color_rb[2] && !intel_fb->color_rb[2]->region) {
-            intel_region_reference(&intel_fb->color_rb[2]->region,
-				   intel->intelScreen->third_region);
-         }
-         if (irbDepth && !irbDepth->region) {
-            intel_region_reference(&irbDepth->region, intel->intelScreen->depth_region);
-         }
-         if (irbStencil && !irbStencil->region) {
-            intel_region_reference(&irbStencil->region, intel->intelScreen->depth_region);
-         }
-      }
-
-      /* set GLframebuffer size to match window, if needed */
+      /* update GLframebuffer size to match window if needed */
       driUpdateFramebufferSize(&intel->ctx, driDrawPriv);
 
       if (driReadPriv != driDrawPriv) {
-	 driUpdateFramebufferSize(&intel->ctx, driReadPriv);
+         driUpdateFramebufferSize(&intel->ctx, driReadPriv);
       }
 
       _mesa_make_current(&intel->ctx, &intel_fb->Base, readFb);
@@ -619,18 +617,33 @@ intelMakeCurrent(__DRIcontextPrivate * driContextPriv,
       if (intel->ctx.DrawBuffer == &intel_fb->Base) {
 
 	 if (intel->driDrawable != driDrawPriv) {
-	    intel_fb->vblank_flags = (intel->intelScreen->irq_active != 0)
-	       ? driGetDefaultVBlankFlags(&intel->optionCache)
-	       : VBLANK_FLAG_NO_IRQ;
-	    (*dri_interface->getUST) (&intel_fb->swap_ust);
-	    driDrawableInitVBlank(driDrawPriv, intel_fb->vblank_flags,
-				  &intel_fb->vbl_seq);
+	    if (driDrawPriv->pdraw->swap_interval == (unsigned)-1) {
+	       int i;
+
+	       intel_fb->vblank_flags = (intel->intelScreen->irq_active != 0)
+		  ? driGetDefaultVBlankFlags(&intel->optionCache)
+		 : VBLANK_FLAG_NO_IRQ;
+
+	       (*dri_interface->getUST) (&intel_fb->swap_ust);
+	       driDrawableInitVBlank(driDrawPriv, intel_fb->vblank_flags,
+				     &intel_fb->vbl_seq);
+	       intel_fb->vbl_waited = intel_fb->vbl_seq;
+
+	       for (i = 0; i < 2; i++) {
+		  if (intel_fb->color_rb[i])
+		     intel_fb->color_rb[i]->vbl_pending = intel_fb->vbl_seq;
+	       }
+	    }
+	 }
+      }
+
+      if ((intel->driDrawable != driDrawPriv) ||
+	  (intel->lastStamp != driDrawPriv->lastStamp)) {
 	    intel->driDrawable = driDrawPriv;
 	    intelWindowMoved(intel);
-	 }
-
-	 intel_draw_buffer(&intel->ctx, &intel_fb->Base);
+	    intel->lastStamp = driDrawPriv->lastStamp;
       }
+
    }
    else {
       _mesa_make_current(NULL, NULL, NULL);
@@ -661,46 +674,36 @@ intelContendedLock(struct intel_context *intel, GLuint flags)
       DRI_VALIDATE_DRAWABLE_INFO(sPriv, dPriv);
 
    if (sarea->width != intelScreen->width ||
-       sarea->height != intelScreen->height ||
-       sarea->rotation != intelScreen->current_rotation) {
+       sarea->height != intelScreen->height) {
 
       intelUpdateScreenRotation(sPriv, sarea);
    }
 
+#if 0
    if (sarea->width != intel->width ||
        sarea->height != intel->height ||
        sarea->rotation != intel->current_rotation) {
-      
-      void *batchMap = intel->batch->map;
-      
+      int numClipRects = intel->numClipRects;
+
       /*
        * FIXME: Really only need to do this when drawing to a
        * common back- or front buffer.
        */
 
       /*
-       * This will drop the outstanding batchbuffer on the floor
+       * This will essentially drop the outstanding batchbuffer on the floor.
        */
+      intel->numClipRects = 0;
 
-      if (batchMap != NULL) {
-	 driBOUnmap(intel->batch->buffer);
-	 intel->batch->map = NULL;
-      }
+      if (intel->Fallback)
+	 _swrast_flush(&intel->ctx);
 
-      intel_batchbuffer_reset(intel->batch);
+      INTEL_FIREVERTICES(intel);
 
-      if (batchMap == NULL) {
-	 driBOUnmap(intel->batch->buffer);
-	 intel->batch->map = NULL;
-      }
+      if (intel->batch->map != intel->batch->ptr)
+	 intel_batchbuffer_flush(intel->batch);
 
-      /* lose all primitives */
-      intel->prim.primitive = ~0;
-      intel->prim.start_ptr = 0;
-      intel->prim.flush = 0;
-
-      /* re-emit all state */
-      intel->vtbl.lost_hardware(intel);
+      intel->numClipRects = numClipRects;
 
       /* force window update */
       intel->lastStamp = 0;
@@ -709,18 +712,11 @@ intelContendedLock(struct intel_context *intel, GLuint flags)
       intel->height = sarea->height;
       intel->current_rotation = sarea->rotation;
    }
-
-   /* Drawable changed?
-    */
-   if (dPriv && intel->lastStamp != dPriv->lastStamp) {
-      intelWindowMoved(intel);
-      intel->lastStamp = dPriv->lastStamp;
-   }
+#endif
 }
 
 
-
-/* Lock the hardware and validate our state.  
+/* Lock the hardware and validate our state.
  */
 void LOCK_HARDWARE( struct intel_context *intel )
 {
@@ -741,7 +737,9 @@ void LOCK_HARDWARE( struct intel_context *intel )
 				    BUFFER_BACK_LEFT);
     }
 
-    if (intel_rb && (intel_fb->vbl_waited - intel_rb->vbl_pending) > (1<<23)) {
+    if (intel_rb && intel_fb->vblank_flags &&
+	!(intel_fb->vblank_flags & VBLANK_FLAG_NO_IRQ) &&
+	(intel_fb->vbl_waited - intel_rb->vbl_pending) > (1<<23)) {
 	drmVBlank vbl;
 
 	vbl.request.type = DRM_VBLANK_ABSOLUTE;
