@@ -196,8 +196,6 @@ struct xmesa_renderbuffer
    GLint bottom;	/* used for FLIP macro, equals height - 1 */
 
    ClearFunc clearFunc;
-
-   void *pSurface;      /** pipe surface */
 };
 
 
@@ -584,12 +582,5 @@ extern void xmesa_register_swrast_functions( GLcontext *ctx );
 #else
 #define ENABLE_EXT_timer_query 0 /* may not have 64-bit GLuint64EXT */
 #endif
-
-
-struct pipe_surface;
-
-struct pipe_surface *
-xmesa_new_surface(GLcontext *ctx, struct xmesa_renderbuffer *xrb);
-
 
 #endif

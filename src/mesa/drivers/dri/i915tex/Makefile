@@ -37,6 +37,7 @@ DRIVER_SOURCES = \
 	i915_texstate.c \
 	i915_context.c \
 	i915_debug.c \
+	i915_debug_fp.c \
 	i915_fragprog.c \
 	i915_metaops.c \
 	i915_program.c \
@@ -48,7 +49,6 @@ DRIVER_SOURCES = \
 	intel_screen.c \
 	intel_span.c \
 	intel_state.c \
-	intel_surface.c \
 	intel_tris.c \
 	intel_fbo.c \
 	intel_depthstencil.c \

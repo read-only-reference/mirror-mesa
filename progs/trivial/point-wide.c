@@ -33,8 +33,6 @@
 
 
 GLenum doubleBuffer;
-static GLboolean smooth = GL_FALSE;
-
 
 static void Init(void)
 {
@@ -60,9 +58,6 @@ static void Key(unsigned char key, int x, int y)
 {
 
     switch (key) {
-     case 's':
-        smooth = !smooth;
-        break;
       case 27:
 	exit(1);
       default:
@@ -77,16 +72,6 @@ static void Draw(void)
    glClear(GL_COLOR_BUFFER_BIT); 
 
    glPointSize(8.0);
-
-   if (smooth) {
-      glEnable(GL_POINT_SMOOTH);
-      glEnable(GL_BLEND);
-      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-   }
-   else {
-      glDisable(GL_POINT_SMOOTH);
-      glDisable(GL_BLEND);
-   }
 
    glBegin(GL_POINTS);
    glColor3f(1,0,0); 
@@ -137,7 +122,7 @@ int main(int argc, char **argv)
 
     glutInitWindowPosition(0, 0); glutInitWindowSize( 250, 250);
 
-    type = GLUT_RGB | GLUT_ALPHA;
+    type = GLUT_RGB;
     type |= (doubleBuffer) ? GLUT_DOUBLE : GLUT_SINGLE;
     glutInitDisplayMode(type);
 

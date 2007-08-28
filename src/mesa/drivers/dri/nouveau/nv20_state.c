@@ -636,6 +636,10 @@ static void nv20TextureMatrix(GLcontext *ctx, GLuint unit, const GLmatrix *mat)
         OUT_RING_CACHEp(mat->m, 16);
 }
 
+static void nv20UpdateModelProjMatrix(nouveauContextPtr nmesa)
+{
+}
+
 /* Update anything that depends on the window position/size */
 static void nv20WindowMoved(nouveauContextPtr nmesa)
 {
@@ -728,8 +732,8 @@ static GLboolean nv20InitCard(nouveauContextPtr nmesa)
 
 /* Update buffer offset/pitch/format */
 static GLboolean nv20BindBuffers(nouveauContextPtr nmesa, int num_color,
-				 nouveau_renderbuffer **color,
-				 nouveau_renderbuffer *depth)
+				 nouveau_renderbuffer_t **color,
+				 nouveau_renderbuffer_t *depth)
 {
 	GLuint x, y, w, h;
 	GLuint pitch, format, depth_pitch;
@@ -820,5 +824,6 @@ void nv20InitStateFuncs(GLcontext *ctx, struct dd_function_table *func)
 	nmesa->hw_func.InitCard		= nv20InitCard;
 	nmesa->hw_func.BindBuffers	= nv20BindBuffers;
 	nmesa->hw_func.WindowMoved	= nv20WindowMoved;
+	nmesa->hw_func.UpdateModelProjMatrix = nv20UpdateModelProjMatrix;
 }
 

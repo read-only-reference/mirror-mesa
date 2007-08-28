@@ -29,13 +29,8 @@
 #define INTEL_FBO_H
 
 
-#include "pipe/p_state.h"
-#include "pipe/softpipe/sp_surface.h"
-
-
 struct intel_context;
 struct intel_region;
-
 
 /**
  * Intel framebuffer, derived from gl_framebuffer.
@@ -87,11 +82,9 @@ struct intel_renderbuffer
    GLuint pf_pending;  /**< sequence number of pending flip */
 
    GLuint vbl_pending;   /**< vblank sequence number of pending flip */
-
-   struct intel_surface *surface;
 };
 
-#if 0
+
 extern struct intel_renderbuffer *intel_create_renderbuffer(GLenum intFormat,
                                                             GLsizei width,
                                                             GLsizei height,
@@ -99,9 +92,7 @@ extern struct intel_renderbuffer *intel_create_renderbuffer(GLenum intFormat,
                                                             int pitch,
                                                             int cpp,
                                                             void *map);
-#endif
 
-extern struct intel_renderbuffer *intel_new_renderbuffer_fb(GLuint intFormat);
 
 extern void intel_fbo_init(struct intel_context *intel);
 
@@ -119,9 +110,6 @@ extern struct intel_region *intel_get_rb_region(struct gl_framebuffer *fb,
                                                 GLuint attIndex);
 
 
-
-extern struct pipe_surface *
-intel_new_surface(GLuint intFormat);
 
 
 #endif /* INTEL_FBO_H */

@@ -97,9 +97,19 @@ intel_miptree_create(struct intel_context *intel,
       break;
    }
 
-   if (ok)
+   if (ok) {
+      if (!mt->compressed) {
+	 /* XXX: Align pitch to multiple of 64 bytes for now to allow
+	  * render-to-texture to work in all cases. This should probably be
+	  * replaced at some point by some scheme to only do this when really
+	  * necessary.
+	  */
+	 mt->pitch = ((mt->pitch * cpp + 63) & ~63) / cpp;
+      }
+
       mt->region = intel_region_alloc(intel->intelScreen,
                                       mt->cpp, mt->pitch, mt->total_height);
+   }
 
    if (!mt->region) {
       free(mt);
@@ -259,8 +269,7 @@ intel_miptree_image_offset(struct intel_mipmap_tree * mt,
 /**
  * Map a teximage in a mipmap tree.
  * \param row_stride  returns row stride in bytes
- * \param image_offsets  returns array [texture.depth] of image offsets
- *                       (in bytes) for 3D textures.
+ * \param image_stride  returns image stride in bytes (for 3D textures).
  * \return address of mapping
  */
 GLubyte *
@@ -268,7 +277,7 @@ intel_miptree_image_map(struct intel_context * intel,
                         struct intel_mipmap_tree * mt,
                         GLuint face,
                         GLuint level,
-                        GLuint * row_stride, GLuint image_offsets[])
+                        GLuint * row_stride, GLuint * image_offsets)
 {
    DBG("%s \n", __FUNCTION__);
 
@@ -326,6 +335,7 @@ intel_miptree_image_data(struct intel_context *intel,
    }
 }
 
+extern GLuint intel_compressed_alignment(GLenum);
 /* Copy mipmap image between trees
  */
 void
@@ -343,8 +353,12 @@ intel_miptree_image_copy(struct intel_context *intel,
    const GLuint *src_depth_offset = intel_miptree_depth_offsets(src, level);
    GLuint i;
 
-   if (dst->compressed)
-      height /= 4;
+   if (dst->compressed) {
+       GLuint alignment = intel_compressed_alignment(dst->internal_format);
+       height = (height + 3) / 4;
+       width = ((width + alignment - 1) & ~(alignment - 1));
+   }
+
    for (i = 0; i < depth; i++) {
       intel_region_copy(intel->intelScreen,
                         dst->region, dst_offset + dst_depth_offset[i],

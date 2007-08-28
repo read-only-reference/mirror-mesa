@@ -35,7 +35,6 @@
 #include "imports.h"
 #include "framebuffer.h"
 #include "renderbuffer.h"
-#include "pipe/p_state.h"
 
 
 #if defined(USE_XSHM) && !defined(XFree86Server)
@@ -269,11 +268,6 @@ xmesa_alloc_front_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
    rb->Height = height;
    rb->InternalFormat = internalFormat;
 
-   if (!xrb->Base.surface)
-      xrb->Base.surface = xmesa_new_surface(ctx, xrb);
-   xrb->Base.surface->width = width;
-   xrb->Base.surface->height = height;
-
    return GL_TRUE;
 }
 
@@ -322,11 +316,6 @@ xmesa_alloc_back_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
       xrb->origin3 = NULL;
       xrb->origin4 = NULL;
    }
-
-   if (!xrb->Base.surface)
-      xrb->Base.surface = xmesa_new_surface(ctx, xrb);
-   xrb->Base.surface->width = width;
-   xrb->Base.surface->height = height;
 
    return GL_TRUE;
 }

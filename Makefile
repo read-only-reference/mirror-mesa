@@ -66,6 +66,7 @@ aix-64 \
 aix-64-static \
 aix-gcc \
 aix-static \
+bluegene-osmesa \
 beos \
 darwin \
 darwin-static \
@@ -151,8 +152,9 @@ sunos5-v8 \
 sunos5-v8-static \
 sunos5-v9 \
 sunos5-v9-static \
+sunos5-v9-cc-g++ \
 ultrix-gcc:
-	@ if [ -e configs/current ] ; then \
+	@ if test -f configs/current || test -L configs/current ; then \
 		echo "Please run 'make realclean' before changing configs" ; \
 		exit 1 ; \
 	fi

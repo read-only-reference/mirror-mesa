@@ -126,8 +126,6 @@ struct gl_pixelstore_attrib;
 struct gl_texture_format;
 struct gl_texture_image;
 struct gl_texture_object;
-struct st_context;
-struct pipe_surface;
 typedef struct __GLcontextRec GLcontext;
 typedef struct __GLcontextModesRec GLvisual;
 typedef struct gl_framebuffer GLframebuffer;
@@ -1402,6 +1400,7 @@ struct gl_texture_image
  */
 struct gl_texture_object
 {
+   _glthread_Mutex Mutex;	/**< for thread safety */
    GLint RefCount;		/**< reference count */
    GLuint Name;			/**< the user-visible texture object ID */
    GLenum Target;               /**< GL_TEXTURE_1D, GL_TEXTURE_2D, etc. */
@@ -1537,17 +1536,6 @@ struct gl_texture_unit
 
    struct gl_texture_object *_Current; /**< Points to really enabled tex obj */
 
-   /** These are used for glPush/PopAttrib */
-   /*@{*/
-   struct gl_texture_object Saved1D;
-   struct gl_texture_object Saved2D;
-   struct gl_texture_object Saved3D;
-   struct gl_texture_object SavedCubeMap;
-   struct gl_texture_object SavedRect;
-   struct gl_texture_object Saved1DArray;
-   struct gl_texture_object Saved2DArray;
-   /*@}*/
-
    /** GL_SGI_texture_color_table */
    /*@{*/
    struct gl_color_table ColorTable;
@@ -1588,13 +1576,8 @@ struct gl_texture_attrib
 
    struct gl_texture_unit Unit[MAX_TEXTURE_UNITS];
 
-   struct gl_texture_object *Proxy1D;
-   struct gl_texture_object *Proxy2D;
-   struct gl_texture_object *Proxy3D;
-   struct gl_texture_object *ProxyCubeMap;
-   struct gl_texture_object *ProxyRect;
-   struct gl_texture_object *Proxy1DArray;
-   struct gl_texture_object *Proxy2DArray;
+   /** Proxy texture objects */
+   struct gl_texture_object *ProxyTex[NUM_TEXTURE_TARGETS];
 
    /** GL_EXT_shared_texture_palette */
    GLboolean SharedPalette;
@@ -2269,8 +2252,6 @@ struct gl_renderbuffer
    GLubyte StencilBits;
    GLvoid *Data;        /**< This may not be used by some kinds of RBs */
 
-   struct pipe_surface *surface;
-
    /* Used to wrap one renderbuffer around another: */
    struct gl_renderbuffer *Wrapped;
 
@@ -2885,7 +2866,6 @@ struct mesa_display_list
  */
 struct gl_dlist_state
 {
-   struct mesa_display_list *CallStack[MAX_LIST_NESTING];
    GLuint CallDepth;		/**< Current recursion calling depth */
 
    struct mesa_display_list *CurrentList;
@@ -3106,7 +3086,7 @@ struct __GLcontextRec
    void *swsetup_context;
    void *swtnl_context;
    void *swtnl_im;
-   struct st_context *st;
+   void *acache_context;
    void *aelt_context;
    /*@}*/
 };

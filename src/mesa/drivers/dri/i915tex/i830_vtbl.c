@@ -452,14 +452,13 @@ i830_emit_state(struct intel_context *intel)
    if (dirty & I830_UPLOAD_BUFFERS) {
       DBG("I830_UPLOAD_BUFFERS:\n");
       BEGIN_BATCH(I830_DEST_SETUP_SIZE + 2, 0);
-      if (state->draw_region->buffer) {
-         OUT_BATCH(state->Buffer[I830_DESTREG_CBUFADDR0]);
-         OUT_BATCH(state->Buffer[I830_DESTREG_CBUFADDR1]);
-         OUT_RELOC(state->draw_region->buffer,
-                   DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_WRITE,
-                   DRM_BO_MASK_MEM | DRM_BO_FLAG_WRITE,
-                   state->draw_region->draw_offset);
-      }
+      OUT_BATCH(state->Buffer[I830_DESTREG_CBUFADDR0]);
+      OUT_BATCH(state->Buffer[I830_DESTREG_CBUFADDR1]);
+      OUT_RELOC(state->draw_region->buffer,
+                DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_WRITE,
+                DRM_BO_MASK_MEM | DRM_BO_FLAG_WRITE,
+                state->draw_region->draw_offset);
+
       if (state->depth_region) {
          OUT_BATCH(state->Buffer[I830_DESTREG_DBUFADDR0]);
          OUT_BATCH(state->Buffer[I830_DESTREG_DBUFADDR1]);
@@ -525,6 +524,16 @@ i830_emit_state(struct intel_context *intel)
 static void
 i830_destroy_context(struct intel_context *intel)
 {
+   GLuint i;
+   struct i830_context *i830 = i830_context(&intel->ctx);
+
+   for (i = 0; i < I830_TEX_UNITS; i++) {
+      if (i830->state.tex_buffer[i] != NULL) {
+	 driBOUnReference(i830->state.tex_buffer[i]);
+	 i830->state.tex_buffer[i] = NULL;
+      }
+   }
+
    _tnl_free_vertices(&intel->ctx);
 }
 
@@ -602,6 +611,25 @@ i830_set_draw_region(struct intel_context *intel,
    struct i830_context *i830 = i830_context(&intel->ctx);
    i830_state_draw_region(intel, &i830->state, color_region, depth_region);
 }
+
+#if 0
+static void
+i830_update_color_z_regions(intelContextPtr intel,
+                            const intelRegion * colorRegion,
+                            const intelRegion * depthRegion)
+{
+   i830ContextPtr i830 = I830_CONTEXT(intel);
+
+   i830->state.Buffer[I830_DESTREG_CBUFADDR1] =
+      (BUF_3D_ID_COLOR_BACK | BUF_3D_PITCH(colorRegion->pitch) |
+       BUF_3D_USE_FENCE);
+   i830->state.Buffer[I830_DESTREG_CBUFADDR2] = colorRegion->offset;
+
+   i830->state.Buffer[I830_DESTREG_DBUFADDR1] =
+      (BUF_3D_ID_DEPTH | BUF_3D_PITCH(depthRegion->pitch) | BUF_3D_USE_FENCE);
+   i830->state.Buffer[I830_DESTREG_DBUFADDR2] = depthRegion->offset;
+}
+#endif
 
 
 /* This isn't really handled at the moment.

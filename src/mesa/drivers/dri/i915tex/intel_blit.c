@@ -49,7 +49,7 @@
  * Used for SwapBuffers().
  */
 void
-intelCopyBuffer(__DRIdrawablePrivate * dPriv,
+intelCopyBuffer(const __DRIdrawablePrivate * dPriv,
                 const drm_clip_rect_t * rect)
 {
 
@@ -78,27 +78,16 @@ intelCopyBuffer(__DRIdrawablePrivate * dPriv,
     * should work regardless.
     */
    LOCK_HARDWARE(intel);
-   /* if this drawable isn't currently bound the LOCK_HARDWARE done on the
-      current context (which is what intelScreenContext should return) might
-      not get a contended lock and thus cliprects not updated (tests/manywin) */
-      if ((struct intel_context *)dPriv->driContextPriv->driverPrivate != intel)
-         DRI_VALIDATE_DRAWABLE_INFO(intel->driScreen, dPriv);
-
 
    if (dPriv && dPriv->numClipRects) {
       struct intel_framebuffer *intel_fb = dPriv->driverPrivate;
       const struct intel_region *frontRegion
-	 = intelScreen->front_region;
+	 = intel_get_rb_region(&intel_fb->Base, BUFFER_FRONT_LEFT);
       const struct intel_region *backRegion
-	 = intel_fb->Base._ColorDrawBufferMask[0] == BUFFER_BIT_FRONT_LEFT ?
-	   intel_get_rb_region(&intel_fb->Base, BUFFER_FRONT_LEFT) :
-	   intel_get_rb_region(&intel_fb->Base, BUFFER_BACK_LEFT);
-      const int backWidth = intel_fb->Base.Width;
-      const int backHeight = intel_fb->Base.Height;
+	 = intel_get_rb_region(&intel_fb->Base, BUFFER_BACK_LEFT);
       const int nbox = dPriv->numClipRects;
       const drm_clip_rect_t *pbox = dPriv->pClipRects;
       const int pitch = frontRegion->pitch;
-      const int srcpitch = backRegion->pitch;
       const int cpp = frontRegion->cpp;
       int BR13, CMD;
       int i;
@@ -107,10 +96,8 @@ intelCopyBuffer(__DRIdrawablePrivate * dPriv,
       ASSERT(intel_fb->Base.Name == 0);    /* Not a user-created FBO */
       ASSERT(frontRegion);
       ASSERT(backRegion);
+      ASSERT(frontRegion->pitch == backRegion->pitch);
       ASSERT(frontRegion->cpp == backRegion->cpp);
-
-      DBG("front pitch %d back pitch %d\n",
-	 frontRegion->pitch, backRegion->pitch);
 
       if (cpp == 2) {
 	 BR13 = (pitch * cpp) | (0xCC << 16) | (1 << 24);
@@ -124,7 +111,6 @@ intelCopyBuffer(__DRIdrawablePrivate * dPriv,
 
       for (i = 0; i < nbox; i++, pbox++) {
 	 drm_clip_rect_t box;
-	 drm_clip_rect_t sbox;
 
 	 if (pbox->x1 > pbox->x2 ||
 	     pbox->y1 > pbox->y2 ||
@@ -134,47 +120,29 @@ intelCopyBuffer(__DRIdrawablePrivate * dPriv,
 	 box = *pbox;
 
 	 if (rect) {
-	    drm_clip_rect_t rrect;
-
-	    rrect.x1 = dPriv->x + rect->x1;
-	    rrect.y1 = (dPriv->h - rect->y1 - rect->y2) + dPriv->y;
-	    rrect.x2 = rect->x2 + rrect.x1;
-	    rrect.y2 = rect->y2 + rrect.y1;
-	    if (rrect.x1 > box.x1)
-	       box.x1 = rrect.x1;
-	    if (rrect.y1 > box.y1)
-	       box.y1 = rrect.y1;
-	    if (rrect.x2 < box.x2)
-	       box.x2 = rrect.x2;
-	    if (rrect.y2 < box.y2)
-	       box.y2 = rrect.y2;
+	    if (rect->x1 > box.x1)
+	       box.x1 = rect->x1;
+	    if (rect->y1 > box.y1)
+	       box.y1 = rect->y1;
+	    if (rect->x2 < box.x2)
+	       box.x2 = rect->x2;
+	    if (rect->y2 < box.y2)
+	       box.y2 = rect->y2;
 
 	    if (box.x1 > box.x2 || box.y1 > box.y2)
 	       continue;
 	 }
 
-	 /* restrict blit to size of actually rendered area */
-	 if (box.x2 - box.x1 > backWidth)
-	    box.x2 = backWidth + box.x1;
-	 if (box.y2 - box.y1 > backHeight)
-	    box.y2 = backHeight + box.y1;
-
-	 DBG("box x1 x2 y1 y2 %d %d %d %d\n",
-	      box.x1, box.x2, box.y1, box.y2);
-
-	 sbox.x1 = box.x1 - dPriv->x;
-	 sbox.y1 = box.y1 - dPriv->y;
-
 	 BEGIN_BATCH(8, INTEL_BATCH_NO_CLIPRECTS);
 	 OUT_BATCH(CMD);
 	 OUT_BATCH(BR13);
-	 OUT_BATCH((box.y1 << 16) | box.x1);
-	 OUT_BATCH((box.y2 << 16) | box.x2);
+	 OUT_BATCH((pbox->y1 << 16) | pbox->x1);
+	 OUT_BATCH((pbox->y2 << 16) | pbox->x2);
 
 	 OUT_RELOC(frontRegion->buffer, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_WRITE,
 		   DRM_BO_MASK_MEM | DRM_BO_FLAG_WRITE, 0);
-	 OUT_BATCH((sbox.y1 << 16) | sbox.x1);
-	 OUT_BATCH((srcpitch * cpp) & 0xffff);
+	 OUT_BATCH((pbox->y1 << 16) | pbox->x1);
+	 OUT_BATCH(BR13 & 0xffff);
 	 OUT_RELOC(backRegion->buffer, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ,
 		   DRM_BO_MASK_MEM | DRM_BO_FLAG_READ, 0);
 
@@ -188,17 +156,6 @@ intelCopyBuffer(__DRIdrawablePrivate * dPriv,
    }
 
    UNLOCK_HARDWARE(intel);
-
-   /* XXX this is bogus. The context here may not even be bound to this drawable! */
-   if (intel->lastStamp != dPriv->lastStamp) {
-      GET_CURRENT_CONTEXT(currctx);
-      struct intel_context *intelcurrent = intel_context(currctx);
-      if (intelcurrent == intel && intelcurrent->driDrawable == dPriv) {
-         intelWindowMoved(intel);
-         intel->lastStamp = dPriv->lastStamp;
-      }
-   }
-
 }
 
 
@@ -409,7 +366,8 @@ intelClearWithBlit(GLcontext * ctx, GLbitfield mask)
 
    if (intel->numClipRects) {
       GLint cx, cy, cw, ch;
-      drm_clip_rect_t b;
+      drm_clip_rect_t clear;
+      int i;
 
       /* Get clear bounds after locking */
       cx = fb->_Xmin;
@@ -419,28 +377,41 @@ intelClearWithBlit(GLcontext * ctx, GLbitfield mask)
 
       if (fb->Name == 0) {
          /* clearing a window */
+
          /* flip top to bottom */
-         b.x1 = cx;
-         b.y1 = fb->Height - cy - ch;
-         b.x2 = b.x1 + cw;
-         b.y2 = b.y1 + ch;
+         clear.x1 = cx + intel->drawX;
+         clear.y1 = intel->driDrawable->y + intel->driDrawable->h - cy - ch;
+         clear.x2 = clear.x1 + cw;
+         clear.y2 = clear.y1 + ch;
       }
       else {
          /* clearing FBO */
-         b.x1 = cx;
-         b.y1 = cy;
-         b.x2 = b.x1 + cw;
-         b.y2 = b.y1 + ch;
+         assert(intel->numClipRects == 1);
+         assert(intel->pClipRects == &intel->fboRect);
+         clear.x1 = cx;
+         clear.y1 = cy;
+         clear.x2 = clear.x1 + cw;
+         clear.y2 = clear.y1 + ch;
          /* no change to mask */
       }
 
-      {
+      for (i = 0; i < intel->numClipRects; i++) {
+         const drm_clip_rect_t *box = &intel->pClipRects[i];
+         drm_clip_rect_t b;
          GLuint buf;
          GLuint clearMask = mask;      /* use copy, since we modify it below */
          GLboolean all = (cw == fb->Width && ch == fb->Height);
 
-         DBG("clear %d,%d..%d,%d, mask %x\n",
-                      b.x1, b.y1, b.x2, b.y2, mask);
+         if (!all) {
+            intel_intersect_cliprects(&b, &clear, box);
+         }
+         else {
+            b = *box;
+         }
+
+         if (0)
+            _mesa_printf("clear %d,%d..%d,%d, mask %x\n",
+                         b.x1, b.y1, b.x2, b.y2, mask);
 
          /* Loop over all renderbuffers */
          for (buf = 0; buf < BUFFER_COUNT && clearMask; buf++) {

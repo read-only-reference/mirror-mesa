@@ -203,7 +203,7 @@ i915_emit_invarient_state(struct intel_context *intel)
 
    /* Need to initialize this to zero.
     */
-   OUT_BATCH(_3DSTATE_LOAD_STATE_IMMEDIATE_1 | I1_LOAD_S(3) | (1));
+   OUT_BATCH(_3DSTATE_LOAD_STATE_IMMEDIATE_1 | I1_LOAD_S(3) | (0));
    OUT_BATCH(0);
 
    /* XXX: Use this */
@@ -221,6 +221,7 @@ i915_emit_invarient_state(struct intel_context *intel)
 
    /* Don't support twosided stencil yet */
    OUT_BATCH(_3DSTATE_BACKFACE_STENCIL_OPS | BFO_ENABLE_STENCIL_TWO_SIDE | 0);
+   OUT_BATCH(0);
 
    ADVANCE_BATCH();
 }
@@ -251,6 +252,9 @@ get_state_size(struct i915_hw_state *state)
    GLuint dirty = get_dirty(state);
    GLuint i;
    GLuint sz = 0;
+
+   if (dirty & I915_UPLOAD_INVARIENT)
+      sz += 30 * 4;
 
    if (dirty & I915_UPLOAD_CTX)
       sz += sizeof(state->Ctx);
@@ -307,6 +311,7 @@ i915_emit_state(struct intel_context *intel)
     * causing more state to be dirty!
     */
    dirty = get_dirty(state);
+   state->emitted |= dirty;
 
    if (INTEL_DEBUG & DEBUG_STATE)
       fprintf(stderr, "%s dirty: %x\n", __FUNCTION__, dirty);
@@ -328,14 +333,13 @@ i915_emit_state(struct intel_context *intel)
       if (INTEL_DEBUG & DEBUG_STATE)
          fprintf(stderr, "I915_UPLOAD_BUFFERS:\n");
       BEGIN_BATCH(I915_DEST_SETUP_SIZE + 2, 0);
-      if (state->draw_region) {
-         OUT_BATCH(state->Buffer[I915_DESTREG_CBUFADDR0]);
-         OUT_BATCH(state->Buffer[I915_DESTREG_CBUFADDR1]);
-         OUT_RELOC(state->draw_region->buffer,
-                   DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_WRITE,
-                   DRM_BO_MASK_MEM | DRM_BO_FLAG_WRITE,
-                   state->draw_region->draw_offset);
-      }
+      OUT_BATCH(state->Buffer[I915_DESTREG_CBUFADDR0]);
+      OUT_BATCH(state->Buffer[I915_DESTREG_CBUFADDR1]);
+      OUT_RELOC(state->draw_region->buffer,
+                DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_WRITE,
+                DRM_BO_MASK_MEM | DRM_BO_FLAG_WRITE,
+                state->draw_region->draw_offset);
+
       if (state->depth_region) {
          OUT_BATCH(state->Buffer[I915_DESTREG_DBUFADDR0]);
          OUT_BATCH(state->Buffer[I915_DESTREG_DBUFADDR1]);
@@ -430,12 +434,22 @@ i915_emit_state(struct intel_context *intel)
          i915_disassemble_program(state->Program, state->ProgramSize);
    }
 
-   state->emitted |= dirty;
+   assert(get_dirty(state) == 0);
 }
 
 static void
 i915_destroy_context(struct intel_context *intel)
 {
+   GLuint i;
+   struct i915_context *i915 = i915_context(&intel->ctx);
+
+   for (i = 0; i < I915_TEX_UNITS; i++) {
+      if (i915->state.tex_buffer[i] != NULL) {
+	 driBOUnReference(i915->state.tex_buffer[i]);
+	 i915->state.tex_buffer[i] = NULL;
+      }
+   }
+
    _tnl_free_vertices(&intel->ctx);
 }
 
@@ -470,7 +484,6 @@ i915_state_draw_region(struct intel_context *intel,
     * Set stride/cpp values
     */
    if (color_region) {
-//      fprintf(stderr, "color pitch %d\n", color_region->pitch);
       state->Buffer[I915_DESTREG_CBUFADDR0] = _3DSTATE_BUF_INFO_CMD;
       state->Buffer[I915_DESTREG_CBUFADDR1] =
          (BUF_3D_ID_COLOR_BACK |
@@ -479,7 +492,6 @@ i915_state_draw_region(struct intel_context *intel,
    }
 
    if (depth_region) {
-//      fprintf(stderr, "depth pitch %d\n", depth_region->pitch);
       state->Buffer[I915_DESTREG_DBUFADDR0] = _3DSTATE_BUF_INFO_CMD;
       state->Buffer[I915_DESTREG_DBUFADDR1] =
          (BUF_3D_ID_DEPTH |

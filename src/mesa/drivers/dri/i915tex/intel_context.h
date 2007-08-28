@@ -235,6 +235,13 @@ struct intel_context
    GLuint vertex_size;
    GLubyte *verts;              /* points to tnl->clipspace.vertex_buf */
 
+#if 0
+   struct intel_region *front_region;   /* XXX FBO: obsolete */
+   struct intel_region *rotated_region; /* XXX FBO: obsolete */
+   struct intel_region *back_region;    /* XXX FBO: obsolete */
+   struct intel_region *draw_region;    /* XXX FBO: rename to color_region */
+   struct intel_region *depth_region;   /**< currently bound depth/Z region */
+#endif
 
    /* Fallback rasterization functions 
     */
@@ -244,9 +251,12 @@ struct intel_context
 
    /* These refer to the current drawing buffer:
     */
+   int drawX, drawY;            /**< origin of drawing area within region */
    GLuint numClipRects;         /**< cliprects for drawing */
    drm_clip_rect_t *pClipRects;
-   drm_clip_rect_t fboRect;     /**< cliprect for rendering */
+   drm_clip_rect_t fboRect;     /**< cliprect for FBO rendering */
+
+   int perf_boxes;
 
    GLuint do_usleeps;
    int do_irqs;
@@ -268,6 +278,14 @@ struct intel_context
     * Configuration cache
     */
    driOptionCache optionCache;
+
+  /* Rotation. Need to match that of the
+   * current screen.
+   */
+
+  int width;
+  int height;
+  int current_rotation;
 };
 
 /* These are functions now:

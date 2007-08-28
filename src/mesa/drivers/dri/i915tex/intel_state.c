@@ -194,7 +194,7 @@ intelClearColor(GLcontext * ctx, const GLfloat color[4])
  * Update the viewport transformation matrix.  Depends on:
  *  - viewport pos/size
  *  - depthrange
- *  - window size or FBO size
+ *  - window pos/size or FBO size
  */
 static void
 intelCalcViewport(GLcontext * ctx)
@@ -205,17 +205,25 @@ intelCalcViewport(GLcontext * ctx)
    GLfloat *m = intel->ViewportMatrix.m;
    GLfloat yScale, yBias;
 
-   struct intel_renderbuffer *irb
+   if (ctx->DrawBuffer->Name) {
+      /* User created FBO */
+      struct intel_renderbuffer *irb
          = intel_renderbuffer(ctx->DrawBuffer->_ColorDrawBuffers[0][0]);
-   if (irb && !irb->RenderToTexture) {
-      /* y=0=top */
-      yScale = -1.0;
-      yBias = irb->Base.Height;
+      if (irb && !irb->RenderToTexture) {
+         /* y=0=top */
+         yScale = -1.0;
+         yBias = irb->Base.Height;
+      }
+      else {
+         /* y=0=bottom */
+         yScale = 1.0;
+         yBias = 0.0;
+      }
    }
    else {
-      /* y=0=bottom */
-      yScale = 1.0;
-      yBias = 0.0;
+      /* window buffer, y=0=top */
+      yScale = -1.0;
+      yBias = (intel->driDrawable) ? intel->driDrawable->h : 0.0F;
    }
 
    m[MAT_SX] = v[MAT_SX];
