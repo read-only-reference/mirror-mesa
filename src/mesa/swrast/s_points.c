@@ -76,7 +76,7 @@ sprite_point(GLcontext *ctx, const SWvertex *vert)
    }
    else {
       /* use constant point size */
-      size = ctx->Point.Size;
+      size = ctx->Point._Size; /* already clamped to user range */
    }
    /* clamp to non-AA implementation limits */
    size = CLAMP(size, ctx->Const.MinPointSize, ctx->Const.MaxPointSize);
@@ -172,9 +172,9 @@ sprite_point(GLcontext *ctx, const SWvertex *vert)
       }
       else {
          /* even size */
-         xmin = (GLint) x - iRadius;
+         xmin = (GLint) x - iRadius + 1;
          xmax = xmin + iSize - 1;
-         ymin = (GLint) y - iRadius;
+         ymin = (GLint) y - iRadius + 1;
          ymax = ymin + iSize - 1;
       }
 
@@ -227,7 +227,7 @@ smooth_point(GLcontext *ctx, const SWvertex *vert)
    }
    else {
       /* use constant point size */
-      size = ctx->Point.Size;
+      size = ctx->Point._Size; /* this is already clamped */
    }
    /* clamp to AA implementation limits */
    size = CLAMP(size, ctx->Const.MinPointSizeAA, ctx->Const.MaxPointSizeAA);
@@ -361,7 +361,7 @@ large_point(GLcontext *ctx, const SWvertex *vert)
    }
    else {
       /* use constant point size */
-      size = ctx->Point.Size;
+      size = ctx->Point._Size; /* already clamped to user range */
    }
    /* clamp to non-AA implementation limits */
    size = CLAMP(size, ctx->Const.MinPointSize, ctx->Const.MaxPointSize);
@@ -418,9 +418,9 @@ large_point(GLcontext *ctx, const SWvertex *vert)
       }
       else {
          /* even size */
-         xmin = (GLint) x - iRadius;
+         xmin = (GLint) x - iRadius + 1;
          xmax = xmin + iSize - 1;
-         ymin = (GLint) y - iRadius;
+         ymin = (GLint) y - iRadius + 1;
          ymax = ymin + iSize - 1;
       }
 
@@ -550,7 +550,7 @@ _swrast_choose_point(GLcontext *ctx)
       else if (ctx->Point.SmoothFlag) {
          swrast->Point = smooth_point;
       }
-      else if (ctx->Point.Size > 1.0 ||
+      else if (ctx->Point._Size > 1.0 ||
                ctx->Point._Attenuated ||
                ctx->VertexProgram.PointSizeEnabled) {
          swrast->Point = large_point;

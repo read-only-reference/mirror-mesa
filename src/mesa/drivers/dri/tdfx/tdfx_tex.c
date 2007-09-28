@@ -1822,7 +1822,7 @@ tdfxTestProxyTexImage(GLcontext *ctx, GLenum target,
             tdfxTexInfo *ti;
             int memNeeded;
 
-            tObj = ctx->Texture.ProxyTex[TEXTURE_2D_INDEX];
+            tObj = ctx->Texture.Proxy2D;
             if (!tObj->DriverData)
                 tObj->DriverData = fxAllocTexObjData(fxMesa);
             ti = TDFX_TEXTURE_DATA(tObj);

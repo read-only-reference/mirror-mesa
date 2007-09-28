@@ -1184,11 +1184,8 @@ return;
 
 }
 
-#ifdef _WIN32
-void OpenGLSurfaceEvaluator::putCallBack(GLenum which, void (GLAPIENTRY *fn)() )
-#else
-void OpenGLSurfaceEvaluator::putCallBack(GLenum which, _GLUfuncptr fn )
-#endif
+void
+OpenGLSurfaceEvaluator::putCallBack(GLenum which, _GLUfuncptr fn )
 {
   switch(which)
     {

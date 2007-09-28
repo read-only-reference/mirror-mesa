@@ -37,7 +37,6 @@ DRIVER_SOURCES = \
 	i915_texstate.c \
 	i915_context.c \
 	i915_debug.c \
-	i915_debug_fp.c \
 	i915_fragprog.c \
 	i915_metaops.c \
 	i915_program.c \

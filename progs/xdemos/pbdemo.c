@@ -93,7 +93,7 @@ MakePbuffer( Display *dpy, int screen, int width, int height )
          None
       },
       {
-         /* Single buffered, without depth buffer */
+         /* Single bufferd, without depth buffer */
          GLX_RENDER_TYPE, GLX_RGBA_BIT,
          GLX_DRAWABLE_TYPE, GLX_PBUFFER_BIT,
          GLX_RED_SIZE, 1,
@@ -105,7 +105,7 @@ MakePbuffer( Display *dpy, int screen, int width, int height )
          None
       },
       {
-         /* Double buffered, without depth buffer */
+         /* Double bufferd, without depth buffer */
          GLX_RENDER_TYPE, GLX_RGBA_BIT,
          GLX_DRAWABLE_TYPE, GLX_PBUFFER_BIT,
          GLX_RED_SIZE, 1,
@@ -130,8 +130,9 @@ MakePbuffer( Display *dpy, int screen, int width, int height )
       /* Get list of possible frame buffer configurations */
       fbConfigs = ChooseFBConfig(dpy, screen, fbAttribs[attempt], &nConfigs);
       if (nConfigs==0 || !fbConfigs) {
-         printf("Note: glXChooseFBConfig(%s) failed\n", fbString[attempt]);
-         continue;
+         printf("Error: glXChooseFBConfig failed\n");
+         XCloseDisplay(dpy);
+         return 0;
       }
 
 #if 0 /*DEBUG*/

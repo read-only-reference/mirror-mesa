@@ -311,7 +311,7 @@ _slang_print_ir_tree(const slang_ir_node *n, int indent)
       printf("RETURN\n");
       break;
    case IR_CALL:
-      printf("CALL %s\n", n->Label->Name);
+      printf("CALL\n");
       break;
 
    case IR_LOOP:

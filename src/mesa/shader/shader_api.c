@@ -377,7 +377,7 @@ _mesa_attach_shader(GLcontext *ctx, GLuint program, GLuint shader)
    struct gl_shader_program *shProg
       = _mesa_lookup_shader_program(ctx, program);
    struct gl_shader *sh = _mesa_lookup_shader(ctx, shader);
-   GLuint n;
+   const GLuint n = shProg->NumShaders;
    GLuint i;
 
    if (!shProg || !sh) {
@@ -385,8 +385,6 @@ _mesa_attach_shader(GLcontext *ctx, GLuint program, GLuint shader)
                   "glAttachShader(bad program or shader name)");
       return;
    }
-
-   n = shProg->NumShaders;
 
    for (i = 0; i < n; i++) {
       if (shProg->Shaders[i] == sh) {
@@ -549,7 +547,7 @@ _mesa_detach_shader(GLcontext *ctx, GLuint program, GLuint shader)
 {
    struct gl_shader_program *shProg
       = _mesa_lookup_shader_program(ctx, program);
-   GLuint n;
+   const GLuint n = shProg->NumShaders;
    GLuint i, j;
 
    if (!shProg) {
@@ -557,8 +555,6 @@ _mesa_detach_shader(GLcontext *ctx, GLuint program, GLuint shader)
                   "glDetachShader(bad program or shader name)");
       return;
    }
-
-   n = shProg->NumShaders;
 
    for (i = 0; i < n; i++) {
       if (shProg->Shaders[i]->Name == shader) {

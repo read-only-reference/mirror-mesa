@@ -31,8 +31,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  * \author Aapo Tahkola <aet@rasterburn.org>
  *
  * \author Oliver McFadden <z3ro.geek@gmail.com>
- *
- * For a description of the vertex program instruction set see r300_reg.h.
  */
 
 #include "glheader.h"
@@ -368,19 +366,20 @@ static GLboolean valid_dst(struct r300_vertex_program *vp,
  * component.
  */
 
-static GLuint *t_opcode_abs(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_abs(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
 	//MAX RESULT 1.X Y Z W PARAM 0{} {X Y Z W} PARAM 0{X Y Z W } {X Y Z W} neg Xneg Yneg Zneg W
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_MAX, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] =
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] =
 	    MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
 			    t_swizzle(GET_SWZ(src[0].Swizzle, 0)),
 			    t_swizzle(GET_SWZ(src[0].Swizzle, 1)),
@@ -390,14 +389,13 @@ static GLuint *t_opcode_abs(struct r300_vertex_program *vp,
 			    (!src[0].
 			     NegateBase) ? VSF_FLAG_ALL : VSF_FLAG_NONE) |
 	    (src[0].RelAddr << 4);
-	inst[3] = 0;
-
-	return inst;
+	o_inst->src[2] = 0;
 }
 
-static GLuint *t_opcode_add(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_add(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
 	unsigned long hw_op;
 
@@ -407,55 +405,53 @@ static GLuint *t_opcode_add(struct r300_vertex_program *vp,
 		 PROGRAM_TEMPORARY) ? R300_VPI_OUT_OP_MAD_2 :
 	    R300_VPI_OUT_OP_MAD;
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(hw_op, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
-	inst[1] = ONE_SRC_0;
-	inst[2] = t_src(vp, &src[0]);
-	inst[3] = t_src(vp, &src[1]);
+	o_inst->src[0] = ONE_SRC_0;
+	o_inst->src[1] = t_src(vp, &src[0]);
+	o_inst->src[2] = t_src(vp, &src[1]);
 #else
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_ADD, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = t_src(vp, &src[1]);
-	inst[3] = ZERO_SRC_1;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = t_src(vp, &src[1]);
+	o_inst->src[2] = ZERO_SRC_1;
 
 #endif
-
-	return inst;
 }
 
-static GLuint *t_opcode_arl(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_arl(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_ARL, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = ZERO_SRC_0;
-
-	return inst;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 }
 
-static GLuint *t_opcode_dp3(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_dp3(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
 	//DOT RESULT 1.X Y Z W PARAM 0{} {X Y Z ZERO} PARAM 0{} {X Y Z ZERO}
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_DOT, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] =
+	o_inst->src[0] =
 	    MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
 			    t_swizzle(GET_SWZ(src[0].Swizzle, 0)),
 			    t_swizzle(GET_SWZ(src[0].Swizzle, 1)),
@@ -465,7 +461,7 @@ static GLuint *t_opcode_dp3(struct r300_vertex_program *vp,
 			    NegateBase ? VSF_FLAG_XYZ : VSF_FLAG_NONE) |
 	    (src[0].RelAddr << 4);
 
-	inst[2] =
+	o_inst->src[1] =
 	    MAKE_VSF_SOURCE(t_src_index(vp, &src[1]),
 			    t_swizzle(GET_SWZ(src[1].Swizzle, 0)),
 			    t_swizzle(GET_SWZ(src[1].Swizzle, 1)),
@@ -475,38 +471,36 @@ static GLuint *t_opcode_dp3(struct r300_vertex_program *vp,
 			    NegateBase ? VSF_FLAG_XYZ : VSF_FLAG_NONE) |
 	    (src[1].RelAddr << 4);
 
-	inst[3] = ZERO_SRC_1;
-
-	return inst;
+	o_inst->src[2] = ZERO_SRC_1;
 }
 
-static GLuint *t_opcode_dp4(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_dp4(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_DOT, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = t_src(vp, &src[1]);
-	inst[3] = ZERO_SRC_1;
-
-	return inst;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = t_src(vp, &src[1]);
+	o_inst->src[2] = ZERO_SRC_1;
 }
 
-static GLuint *t_opcode_dph(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_dph(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
 	//DOT RESULT 1.X Y Z W PARAM 0{} {X Y Z ONE} PARAM 0{} {X Y Z W}
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_DOT, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] =
+	o_inst->src[0] =
 	    MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
 			    t_swizzle(GET_SWZ(src[0].Swizzle, 0)),
 			    t_swizzle(GET_SWZ(src[0].Swizzle, 1)),
@@ -515,84 +509,81 @@ static GLuint *t_opcode_dph(struct r300_vertex_program *vp,
 			    src[0].
 			    NegateBase ? VSF_FLAG_XYZ : VSF_FLAG_NONE) |
 	    (src[0].RelAddr << 4);
-	inst[2] = t_src(vp, &src[1]);
-	inst[3] = ZERO_SRC_1;
-
-	return inst;
+	o_inst->src[1] = t_src(vp, &src[1]);
+	o_inst->src[2] = ZERO_SRC_1;
 }
 
-static GLuint *t_opcode_dst(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_dst(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_DST, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = t_src(vp, &src[1]);
-	inst[3] = ZERO_SRC_1;
-
-	return inst;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = t_src(vp, &src[1]);
+	o_inst->src[2] = ZERO_SRC_1;
 }
 
-static GLuint *t_opcode_ex2(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_ex2(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_EX2, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src_scalar(vp, &src[0]);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = ZERO_SRC_0;
-
-	return inst;
+	o_inst->src[0] = t_src_scalar(vp, &src[0]);
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 }
 
-static GLuint *t_opcode_exp(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_exp(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_EXP, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src_scalar(vp, &src[0]);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = ZERO_SRC_0;
-
-	return inst;
+	o_inst->src[0] = t_src_scalar(vp, &src[0]);
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 }
 
-static GLuint *t_opcode_flr(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3], int *u_temp_i)
+static struct r300_vertprog_instruction *t_opcode_flr(struct r300_vertex_program *vp,
+						      struct prog_instruction *vpi,
+						      struct r300_vertprog_instruction *o_inst,
+						      struct prog_src_register src[3],
+						      int *u_temp_i)
 {
 	/* FRC TMP 0.X Y Z W PARAM 0{} {X Y Z W}
 	   ADD RESULT 1.X Y Z W PARAM 0{} {X Y Z W} TMP 0{X Y Z W } {X Y Z W} neg Xneg Yneg Zneg W */
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_FRC, *u_temp_i,
 			t_dst_mask(vpi->DstReg.WriteMask),
 			VSF_OUT_CLASS_TMP);
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = ZERO_SRC_0;
-	inst += 4;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
+	o_inst++;
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_ADD, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] =
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] =
 	    MAKE_VSF_SOURCE(*u_temp_i, VSF_IN_COMPONENT_X,
 			    VSF_IN_COMPONENT_Y, VSF_IN_COMPONENT_Z,
 			    VSF_IN_COMPONENT_W, VSF_IN_CLASS_TMP,
@@ -601,40 +592,40 @@ static GLuint *t_opcode_flr(struct r300_vertex_program *vp,
 			     NegateBase) ? VSF_FLAG_ALL : VSF_FLAG_NONE
 			    /*VSF_FLAG_ALL */ );
 
-	inst[3] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 	(*u_temp_i)--;
 
-	return inst;
+	return o_inst;
 }
 
-static GLuint *t_opcode_frc(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_frc(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_FRC, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = ZERO_SRC_0;
-
-	return inst;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 }
 
-static GLuint *t_opcode_lg2(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_lg2(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
 	// LG2 RESULT 1.X Y Z W PARAM 0{} {X X X X}
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_LG2, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] =
+	o_inst->src[0] =
 	    MAKE_VSF_SOURCE(t_src_index(vp, &src[0]),
 			    t_swizzle(GET_SWZ(src[0].Swizzle, 0)),
 			    t_swizzle(GET_SWZ(src[0].Swizzle, 0)),
@@ -644,70 +635,70 @@ static GLuint *t_opcode_lg2(struct r300_vertex_program *vp,
 			    src[0].
 			    NegateBase ? VSF_FLAG_ALL : VSF_FLAG_NONE) |
 	    (src[0].RelAddr << 4);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = ZERO_SRC_0;
-
-	return inst;
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 }
 
-static GLuint *t_opcode_lit(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_lit(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
 	//LIT TMP 1.Y Z TMP 1{} {X W Z Y} TMP 1{} {Y W Z X} TMP 1{} {Y X Z W}
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_LIT, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 	/* NOTE: Users swizzling might not work. */
-	inst[1] = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]), t_swizzle(GET_SWZ(src[0].Swizzle, 0)),	// x
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 3)),	// w
-				  VSF_IN_COMPONENT_ZERO,	// z
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 1)),	// y
-				  t_src_class(src[0].File),
-				  src[0].
-				  NegateBase ? VSF_FLAG_ALL :
-				  VSF_FLAG_NONE) | (src[0].RelAddr << 4);
-	inst[2] = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]), t_swizzle(GET_SWZ(src[0].Swizzle, 1)),	// y
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 3)),	// w
-				  VSF_IN_COMPONENT_ZERO,	// z
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 0)),	// x
-				  t_src_class(src[0].File),
-				  src[0].
-				  NegateBase ? VSF_FLAG_ALL :
-				  VSF_FLAG_NONE) | (src[0].RelAddr << 4);
-	inst[3] = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]), t_swizzle(GET_SWZ(src[0].Swizzle, 1)),	// y
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 0)),	// x
-				  VSF_IN_COMPONENT_ZERO,	// z
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 3)),	// w
-				  t_src_class(src[0].File),
-				  src[0].
-				  NegateBase ? VSF_FLAG_ALL :
-				  VSF_FLAG_NONE) | (src[0].RelAddr << 4);
-
-	return inst;
+	o_inst->src[0] = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]), t_swizzle(GET_SWZ(src[0].Swizzle, 0)),	// x
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 3)),	// w
+					 VSF_IN_COMPONENT_ZERO,	// z
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 1)),	// y
+					 t_src_class(src[0].File),
+					 src[0].
+					 NegateBase ? VSF_FLAG_ALL :
+					 VSF_FLAG_NONE) | (src[0].
+							   RelAddr << 4);
+	o_inst->src[1] = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]), t_swizzle(GET_SWZ(src[0].Swizzle, 1)),	// y
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 3)),	// w
+					 VSF_IN_COMPONENT_ZERO,	// z
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 0)),	// x
+					 t_src_class(src[0].File),
+					 src[0].
+					 NegateBase ? VSF_FLAG_ALL :
+					 VSF_FLAG_NONE) | (src[0].
+							   RelAddr << 4);
+	o_inst->src[2] = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]), t_swizzle(GET_SWZ(src[0].Swizzle, 1)),	// y
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 0)),	// x
+					 VSF_IN_COMPONENT_ZERO,	// z
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 3)),	// w
+					 t_src_class(src[0].File),
+					 src[0].
+					 NegateBase ? VSF_FLAG_ALL :
+					 VSF_FLAG_NONE) | (src[0].
+							   RelAddr << 4);
 }
 
-static GLuint *t_opcode_log(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_log(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_LOG, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src_scalar(vp, &src[0]);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = ZERO_SRC_0;
-
-	return inst;
+	o_inst->src[0] = t_src_scalar(vp, &src[0]);
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 }
 
-static GLuint *t_opcode_mad(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_mad(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
 	unsigned long hw_op;
 
@@ -717,84 +708,80 @@ static GLuint *t_opcode_mad(struct r300_vertex_program *vp,
 		 PROGRAM_TEMPORARY) ? R300_VPI_OUT_OP_MAD_2 :
 	    R300_VPI_OUT_OP_MAD;
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(hw_op, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = t_src(vp, &src[1]);
-	inst[3] = t_src(vp, &src[2]);
-
-	return inst;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = t_src(vp, &src[1]);
+	o_inst->src[2] = t_src(vp, &src[2]);
 }
 
-static GLuint *t_opcode_max(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_max(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_MAX, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = t_src(vp, &src[1]);
-	inst[3] = ZERO_SRC_1;
-
-	return inst;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = t_src(vp, &src[1]);
+	o_inst->src[2] = ZERO_SRC_1;
 }
 
-static GLuint *t_opcode_min(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_min(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_MIN, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = t_src(vp, &src[1]);
-	inst[3] = ZERO_SRC_1;
-
-	return inst;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = t_src(vp, &src[1]);
+	o_inst->src[2] = ZERO_SRC_1;
 }
 
-static GLuint *t_opcode_mov(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_mov(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
 	//ADD RESULT 1.X Y Z W PARAM 0{} {X Y Z W} PARAM 0{} {ZERO ZERO ZERO ZERO}
 
 #if 1
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_ADD, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = ZERO_SRC_0;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 #else
 	hw_op =
 	    (src[0].File ==
 	     PROGRAM_TEMPORARY) ? R300_VPI_OUT_OP_MAD_2 :
 	    R300_VPI_OUT_OP_MAD;
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(hw_op, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = ONE_SRC_0;
-	inst[3] = ZERO_SRC_0;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = ONE_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 #endif
-
-	return inst;
 }
 
-static GLuint *t_opcode_mul(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_mul(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
 	unsigned long hw_op;
 
@@ -805,100 +792,94 @@ static GLuint *t_opcode_mul(struct r300_vertex_program *vp,
 		 PROGRAM_TEMPORARY) ? R300_VPI_OUT_OP_MAD_2 :
 	    R300_VPI_OUT_OP_MAD;
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(hw_op, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = t_src(vp, &src[1]);
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = t_src(vp, &src[1]);
 
-	inst[3] = ZERO_SRC_1;
-
-	return inst;
+	o_inst->src[2] = ZERO_SRC_1;
 }
 
-static GLuint *t_opcode_pow(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_pow(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_POW, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
-	inst[1] = t_src_scalar(vp, &src[0]);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = t_src_scalar(vp, &src[1]);
-
-	return inst;
+	o_inst->src[0] = t_src_scalar(vp, &src[0]);
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = t_src_scalar(vp, &src[1]);
 }
 
-static GLuint *t_opcode_rcp(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_rcp(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_RCP, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src_scalar(vp, &src[0]);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = ZERO_SRC_0;
-
-	return inst;
+	o_inst->src[0] = t_src_scalar(vp, &src[0]);
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 }
 
-static GLuint *t_opcode_rsq(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_rsq(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_RSQ, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src_scalar(vp, &src[0]);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = ZERO_SRC_0;
-
-	return inst;
+	o_inst->src[0] = t_src_scalar(vp, &src[0]);
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 }
 
-static GLuint *t_opcode_sge(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_sge(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_SGE, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = t_src(vp, &src[1]);
-	inst[3] = ZERO_SRC_1;
-
-	return inst;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = t_src(vp, &src[1]);
+	o_inst->src[2] = ZERO_SRC_1;
 }
 
-static GLuint *t_opcode_slt(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_slt(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_SLT, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = t_src(vp, &src[1]);
-	inst[3] = ZERO_SRC_1;
-
-	return inst;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = t_src(vp, &src[1]);
+	o_inst->src[2] = ZERO_SRC_1;
 }
 
-static GLuint *t_opcode_sub(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_sub(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
 	unsigned long hw_op;
 
@@ -910,13 +891,13 @@ static GLuint *t_opcode_sub(struct r300_vertex_program *vp,
 		 PROGRAM_TEMPORARY) ? R300_VPI_OUT_OP_MAD_2 :
 	    R300_VPI_OUT_OP_MAD;
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(hw_op, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = ONE_SRC_0;
-	inst[3] =
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = ONE_SRC_0;
+	o_inst->src[2] =
 	    MAKE_VSF_SOURCE(t_src_index(vp, &src[1]),
 			    t_swizzle(GET_SWZ(src[1].Swizzle, 0)),
 			    t_swizzle(GET_SWZ(src[1].Swizzle, 1)),
@@ -927,13 +908,13 @@ static GLuint *t_opcode_sub(struct r300_vertex_program *vp,
 			     NegateBase) ? VSF_FLAG_ALL : VSF_FLAG_NONE) |
 	    (src[1].RelAddr << 4);
 #else
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_ADD, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] =
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] =
 	    MAKE_VSF_SOURCE(t_src_index(vp, &src[1]),
 			    t_swizzle(GET_SWZ(src[1].Swizzle, 0)),
 			    t_swizzle(GET_SWZ(src[1].Swizzle, 1)),
@@ -943,110 +924,113 @@ static GLuint *t_opcode_sub(struct r300_vertex_program *vp,
 			    (!src[1].
 			     NegateBase) ? VSF_FLAG_ALL : VSF_FLAG_NONE) |
 	    (src[1].RelAddr << 4);
-	inst[3] = 0;
+	o_inst->src[2] = 0;
 #endif
-
-	return inst;
 }
 
-static GLuint *t_opcode_swz(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3])
+static void t_opcode_swz(struct r300_vertex_program *vp,
+			 struct prog_instruction *vpi,
+			 struct r300_vertprog_instruction *o_inst,
+			 struct prog_src_register src[3])
 {
 	//ADD RESULT 1.X Y Z W PARAM 0{} {X Y Z W} PARAM 0{} {ZERO ZERO ZERO ZERO}
 
 #if 1
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_ADD, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = ZERO_SRC_0;
-	inst[3] = ZERO_SRC_0;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = ZERO_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 #else
 	hw_op =
 	    (src[0].File ==
 	     PROGRAM_TEMPORARY) ? R300_VPI_OUT_OP_MAD_2 :
 	    R300_VPI_OUT_OP_MAD;
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(hw_op, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
-	inst[1] = t_src(vp, &src[0]);
-	inst[2] = ONE_SRC_0;
-	inst[3] = ZERO_SRC_0;
+	o_inst->src[0] = t_src(vp, &src[0]);
+	o_inst->src[1] = ONE_SRC_0;
+	o_inst->src[2] = ZERO_SRC_0;
 #endif
-
-	return inst;
 }
 
-static GLuint *t_opcode_xpd(struct r300_vertex_program *vp,
-			    struct prog_instruction *vpi, GLuint * inst,
-			    struct prog_src_register src[3], int *u_temp_i)
+static struct r300_vertprog_instruction *t_opcode_xpd(struct r300_vertex_program *vp,
+						      struct prog_instruction *vpi,
+						      struct r300_vertprog_instruction *o_inst,
+						      struct prog_src_register src[3],
+						      int *u_temp_i)
 {
 	/* mul r0, r1.yzxw, r2.zxyw
 	   mad r0, -r2.yzxw, r1.zxyw, r0
 	   NOTE: might need MAD_2
 	 */
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_MAD, *u_temp_i,
 			t_dst_mask(vpi->DstReg.WriteMask),
 			VSF_OUT_CLASS_TMP);
 
-	inst[1] = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]), t_swizzle(GET_SWZ(src[0].Swizzle, 1)),	// y
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 2)),	// z
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 0)),	// x
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 3)),	// w
-				  t_src_class(src[0].File),
-				  src[0].
-				  NegateBase ? VSF_FLAG_ALL :
-				  VSF_FLAG_NONE) | (src[0].RelAddr << 4);
+	o_inst->src[0] = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]), t_swizzle(GET_SWZ(src[0].Swizzle, 1)),	// y
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 2)),	// z
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 0)),	// x
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 3)),	// w
+					 t_src_class(src[0].File),
+					 src[0].
+					 NegateBase ? VSF_FLAG_ALL :
+					 VSF_FLAG_NONE) | (src[0].
+							   RelAddr << 4);
 
-	inst[2] = MAKE_VSF_SOURCE(t_src_index(vp, &src[1]), t_swizzle(GET_SWZ(src[1].Swizzle, 2)),	// z
-				  t_swizzle(GET_SWZ(src[1].Swizzle, 0)),	// x
-				  t_swizzle(GET_SWZ(src[1].Swizzle, 1)),	// y
-				  t_swizzle(GET_SWZ(src[1].Swizzle, 3)),	// w
-				  t_src_class(src[1].File),
-				  src[1].
-				  NegateBase ? VSF_FLAG_ALL :
-				  VSF_FLAG_NONE) | (src[1].RelAddr << 4);
+	o_inst->src[1] = MAKE_VSF_SOURCE(t_src_index(vp, &src[1]), t_swizzle(GET_SWZ(src[1].Swizzle, 2)),	// z
+					 t_swizzle(GET_SWZ(src[1].Swizzle, 0)),	// x
+					 t_swizzle(GET_SWZ(src[1].Swizzle, 1)),	// y
+					 t_swizzle(GET_SWZ(src[1].Swizzle, 3)),	// w
+					 t_src_class(src[1].File),
+					 src[1].
+					 NegateBase ? VSF_FLAG_ALL :
+					 VSF_FLAG_NONE) | (src[1].
+							   RelAddr << 4);
 
-	inst[3] = ZERO_SRC_1;
-	inst += 4;
+	o_inst->src[2] = ZERO_SRC_1;
+	o_inst++;
 	(*u_temp_i)--;
 
-	inst[0] =
+	o_inst->opcode =
 	    MAKE_VSF_OP(R300_VPI_OUT_OP_MAD, t_dst_index(vp, &vpi->DstReg),
 			t_dst_mask(vpi->DstReg.WriteMask),
 			t_dst_class(vpi->DstReg.File));
 
-	inst[1] = MAKE_VSF_SOURCE(t_src_index(vp, &src[1]), t_swizzle(GET_SWZ(src[1].Swizzle, 1)),	// y
-				  t_swizzle(GET_SWZ(src[1].Swizzle, 2)),	// z
-				  t_swizzle(GET_SWZ(src[1].Swizzle, 0)),	// x
-				  t_swizzle(GET_SWZ(src[1].Swizzle, 3)),	// w
-				  t_src_class(src[1].File),
-				  (!src[1].
-				   NegateBase) ? VSF_FLAG_ALL :
-				  VSF_FLAG_NONE) | (src[1].RelAddr << 4);
+	o_inst->src[0] = MAKE_VSF_SOURCE(t_src_index(vp, &src[1]), t_swizzle(GET_SWZ(src[1].Swizzle, 1)),	// y
+					 t_swizzle(GET_SWZ(src[1].Swizzle, 2)),	// z
+					 t_swizzle(GET_SWZ(src[1].Swizzle, 0)),	// x
+					 t_swizzle(GET_SWZ(src[1].Swizzle, 3)),	// w
+					 t_src_class(src[1].File),
+					 (!src[1].
+					  NegateBase) ? VSF_FLAG_ALL :
+					 VSF_FLAG_NONE) | (src[1].
+							   RelAddr << 4);
 
-	inst[2] = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]), t_swizzle(GET_SWZ(src[0].Swizzle, 2)),	// z
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 0)),	// x
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 1)),	// y
-				  t_swizzle(GET_SWZ(src[0].Swizzle, 3)),	// w
-				  t_src_class(src[0].File),
-				  src[0].
-				  NegateBase ? VSF_FLAG_ALL :
-				  VSF_FLAG_NONE) | (src[0].RelAddr << 4);
+	o_inst->src[1] = MAKE_VSF_SOURCE(t_src_index(vp, &src[0]), t_swizzle(GET_SWZ(src[0].Swizzle, 2)),	// z
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 0)),	// x
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 1)),	// y
+					 t_swizzle(GET_SWZ(src[0].Swizzle, 3)),	// w
+					 t_src_class(src[0].File),
+					 src[0].
+					 NegateBase ? VSF_FLAG_ALL :
+					 VSF_FLAG_NONE) | (src[0].
+							   RelAddr << 4);
 
-	inst[3] =
+	o_inst->src[2] =
 	    MAKE_VSF_SOURCE(*u_temp_i + 1, VSF_IN_COMPONENT_X,
 			    VSF_IN_COMPONENT_Y, VSF_IN_COMPONENT_Z,
 			    VSF_IN_COMPONENT_W, VSF_IN_CLASS_TMP,
 			    VSF_FLAG_NONE);
 
-	return inst;
+	return o_inst;
 }
 
 static void t_inputs_outputs(struct r300_vertex_program *vp)
@@ -1083,7 +1067,7 @@ static void t_inputs_outputs(struct r300_vertex_program *vp)
 	if (vp->key.OutputsWritten & (1 << VERT_RESULT_BFC0)) {
 		vp->outputs[VERT_RESULT_BFC0] =
 		    vp->outputs[VERT_RESULT_COL0] + 2;
-		cur_reg = vp->outputs[VERT_RESULT_BFC0] + 2;
+		cur_reg = vp->outputs[VERT_RESULT_BFC0] + 1;
 	}
 
 	if (vp->key.OutputsWritten & (1 << VERT_RESULT_BFC1)) {
@@ -1108,7 +1092,7 @@ static void r300TranslateVertexShader(struct r300_vertex_program *vp,
 				      struct prog_instruction *vpi)
 {
 	int i;
-	GLuint *inst;
+	struct r300_vertprog_instruction *o_inst;
 	unsigned long num_operands;
 	/* Initial value should be last tmp reg that hw supports.
 	   Strangely enough r300 doesnt mind even though these would be out of range.
@@ -1124,8 +1108,8 @@ static void r300TranslateVertexShader(struct r300_vertex_program *vp,
 
 	t_inputs_outputs(vp);
 
-	for (inst = vp->program.body.i; vpi->Opcode != OPCODE_END;
-	     vpi++, inst += 4) {
+	for (o_inst = vp->program.body.i; vpi->Opcode != OPCODE_END;
+	     vpi++, o_inst++) {
 
 		FREE_TEMPS();
 
@@ -1145,12 +1129,12 @@ static void r300TranslateVertexShader(struct r300_vertex_program *vp,
 		if (num_operands == 3) {	/* TODO: scalars */
 			if (CMP_SRCS(src[1], src[2])
 			    || CMP_SRCS(src[0], src[2])) {
-				inst[0] =
+				o_inst->opcode =
 				    MAKE_VSF_OP(R300_VPI_OUT_OP_ADD,
 						u_temp_i, VSF_FLAG_ALL,
 						VSF_OUT_CLASS_TMP);
 
-				inst[1] =
+				o_inst->src[0] =
 				    MAKE_VSF_SOURCE(t_src_index
 						    (vp, &src[2]),
 						    SWIZZLE_X, SWIZZLE_Y,
@@ -1160,9 +1144,9 @@ static void r300TranslateVertexShader(struct r300_vertex_program *vp,
 						    VSF_FLAG_NONE) |
 				    (src[2].RelAddr << 4);
 
-				inst[2] = ZERO_SRC_2;
-				inst[3] = ZERO_SRC_2;
-				inst += 4;
+				o_inst->src[1] = ZERO_SRC_2;
+				o_inst->src[2] = ZERO_SRC_2;
+				o_inst++;
 
 				src[2].File = PROGRAM_TEMPORARY;
 				src[2].Index = u_temp_i;
@@ -1173,12 +1157,12 @@ static void r300TranslateVertexShader(struct r300_vertex_program *vp,
 
 		if (num_operands >= 2) {
 			if (CMP_SRCS(src[1], src[0])) {
-				inst[0] =
+				o_inst->opcode =
 				    MAKE_VSF_OP(R300_VPI_OUT_OP_ADD,
 						u_temp_i, VSF_FLAG_ALL,
 						VSF_OUT_CLASS_TMP);
 
-				inst[1] =
+				o_inst->src[0] =
 				    MAKE_VSF_SOURCE(t_src_index
 						    (vp, &src[0]),
 						    SWIZZLE_X, SWIZZLE_Y,
@@ -1188,9 +1172,9 @@ static void r300TranslateVertexShader(struct r300_vertex_program *vp,
 						    VSF_FLAG_NONE) |
 				    (src[0].RelAddr << 4);
 
-				inst[2] = ZERO_SRC_0;
-				inst[3] = ZERO_SRC_0;
-				inst += 4;
+				o_inst->src[1] = ZERO_SRC_0;
+				o_inst->src[2] = ZERO_SRC_0;
+				o_inst++;
 
 				src[0].File = PROGRAM_TEMPORARY;
 				src[0].Index = u_temp_i;
@@ -1201,89 +1185,87 @@ static void r300TranslateVertexShader(struct r300_vertex_program *vp,
 
 		switch (vpi->Opcode) {
 		case OPCODE_ABS:
-			inst = t_opcode_abs(vp, vpi, inst, src);
+			t_opcode_abs(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_ADD:
-			inst = t_opcode_add(vp, vpi, inst, src);
+			t_opcode_add(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_ARL:
-			inst = t_opcode_arl(vp, vpi, inst, src);
+			t_opcode_arl(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_DP3:
-			inst = t_opcode_dp3(vp, vpi, inst, src);
+			t_opcode_dp3(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_DP4:
-			inst = t_opcode_dp4(vp, vpi, inst, src);
+			t_opcode_dp4(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_DPH:
-			inst = t_opcode_dph(vp, vpi, inst, src);
+			t_opcode_dph(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_DST:
-			inst = t_opcode_dst(vp, vpi, inst, src);
+			t_opcode_dst(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_EX2:
-			inst = t_opcode_ex2(vp, vpi, inst, src);
+			t_opcode_ex2(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_EXP:
-			inst = t_opcode_exp(vp, vpi, inst, src);
+			t_opcode_exp(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_FLR:
-			inst =
-			    t_opcode_flr(vp, vpi, inst, src, /* FIXME */
-					 &u_temp_i);
+			/* FIXME */
+			o_inst = t_opcode_flr(vp, vpi, o_inst, src, &u_temp_i);
 			break;
 		case OPCODE_FRC:
-			inst = t_opcode_frc(vp, vpi, inst, src);
+			t_opcode_frc(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_LG2:
-			inst = t_opcode_lg2(vp, vpi, inst, src);
+			t_opcode_lg2(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_LIT:
-			inst = t_opcode_lit(vp, vpi, inst, src);
+			t_opcode_lit(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_LOG:
-			inst = t_opcode_log(vp, vpi, inst, src);
+			t_opcode_log(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_MAD:
-			inst = t_opcode_mad(vp, vpi, inst, src);
+			t_opcode_mad(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_MAX:
-			inst = t_opcode_max(vp, vpi, inst, src);
+			t_opcode_max(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_MIN:
-			inst = t_opcode_min(vp, vpi, inst, src);
+			t_opcode_min(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_MOV:
-			inst = t_opcode_mov(vp, vpi, inst, src);
+			t_opcode_mov(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_MUL:
-			inst = t_opcode_mul(vp, vpi, inst, src);
+			t_opcode_mul(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_POW:
-			inst = t_opcode_pow(vp, vpi, inst, src);
+			t_opcode_pow(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_RCP:
-			inst = t_opcode_rcp(vp, vpi, inst, src);
+			t_opcode_rcp(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_RSQ:
-			inst = t_opcode_rsq(vp, vpi, inst, src);
+			t_opcode_rsq(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_SGE:
-			inst = t_opcode_sge(vp, vpi, inst, src);
+			t_opcode_sge(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_SLT:
-			inst = t_opcode_slt(vp, vpi, inst, src);
+			t_opcode_slt(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_SUB:
-			inst = t_opcode_sub(vp, vpi, inst, src);
+			t_opcode_sub(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_SWZ:
-			inst = t_opcode_swz(vp, vpi, inst, src);
+			t_opcode_swz(vp, vpi, o_inst, src);
 			break;
 		case OPCODE_XPD:
-			inst =
-			    t_opcode_xpd(vp, vpi, inst, src, /* FIXME */
-					 &u_temp_i);
+			/* FIXME */
+			o_inst = t_opcode_xpd(vp, vpi, o_inst, src, &u_temp_i);
 			break;
 		default:
 			assert(0);
@@ -1291,7 +1273,7 @@ static void r300TranslateVertexShader(struct r300_vertex_program *vp,
 		}
 	}
 
-	vp->program.length = (inst - vp->program.body.i);
+	vp->program.length = (o_inst - vp->program.body.i) * 4;
 	if (vp->program.length >= VSF_MAX_FRAGMENT_LENGTH) {
 		vp->program.length = 0;
 		vp->native = GL_FALSE;

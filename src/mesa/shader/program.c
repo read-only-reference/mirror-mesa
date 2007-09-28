@@ -118,49 +118,6 @@ _mesa_free_program_data(GLcontext *ctx)
 }
 
 
-/**
- * Update the default program objects in the given context to reference those
- * specified in the shared state and release those referencing the old 
- * shared state.
- */
-void
-_mesa_update_default_objects_program(GLcontext *ctx)
-{
-#if FEATURE_NV_vertex_program || FEATURE_ARB_vertex_program
-   if (ctx->VertexProgram.Current) {
-      ctx->VertexProgram.Current->Base.RefCount--;
-      if (ctx->VertexProgram.Current->Base.RefCount <= 0)
-         ctx->Driver.DeleteProgram(ctx, &(ctx->VertexProgram.Current->Base));
-   }
-   ctx->VertexProgram.Current = (struct gl_vertex_program *) ctx->Shared->DefaultVertexProgram;
-   assert(ctx->VertexProgram.Current);
-   ctx->VertexProgram.Current->Base.RefCount++;
-#endif
-
-#if FEATURE_NV_fragment_program || FEATURE_ARB_fragment_program
-   if (ctx->FragmentProgram.Current) {
-      ctx->FragmentProgram.Current->Base.RefCount--;
-      if (ctx->FragmentProgram.Current->Base.RefCount <= 0)
-         ctx->Driver.DeleteProgram(ctx, &(ctx->FragmentProgram.Current->Base));
-   }
-   ctx->FragmentProgram.Current = (struct gl_fragment_program *) ctx->Shared->DefaultFragmentProgram;
-   assert(ctx->FragmentProgram.Current);
-   ctx->FragmentProgram.Current->Base.RefCount++;
-#endif
-
-   /* XXX probably move this stuff */
-#if FEATURE_ATI_fragment_shader
-   if (ctx->ATIFragmentShader.Current) {
-      ctx->ATIFragmentShader.Current->RefCount--;
-      if (ctx->ATIFragmentShader.Current->RefCount <= 0) {
-         _mesa_free(ctx->ATIFragmentShader.Current);
-      }
-   }
-   ctx->ATIFragmentShader.Current = (struct ati_fragment_shader *) ctx->Shared->DefaultFragmentShader;
-   assert(ctx->ATIFragmentShader.Current);
-   ctx->ATIFragmentShader.Current->RefCount++;
-#endif
-}
 
 
 /**
@@ -285,6 +242,8 @@ _mesa_init_vertex_program( GLcontext *ctx, struct gl_vertex_program *prog,
 struct gl_program *
 _mesa_new_program(GLcontext *ctx, GLenum target, GLuint id)
 {
+   if (ctx->Driver.NewProgram)
+        return ctx->Driver.NewProgram(ctx, target, id);
    switch (target) {
    case GL_VERTEX_PROGRAM_ARB: /* == GL_VERTEX_PROGRAM_NV */
       return _mesa_init_vertex_program(ctx, CALLOC_STRUCT(gl_vertex_program),
@@ -376,7 +335,7 @@ _mesa_clone_program(GLcontext *ctx, const struct gl_program *prog)
 {
    struct gl_program *clone;
 
-   clone = ctx->Driver.NewProgram(ctx, prog->Target, prog->Id);
+   clone = _mesa_new_program(ctx, prog->Target, prog->Id);
    if (!clone)
       return NULL;
 

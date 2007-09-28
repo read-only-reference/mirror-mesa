@@ -234,7 +234,6 @@ struct intel_context
    int driFd;
 
    __DRIdrawablePrivate *driDrawable;
-   __DRIdrawablePrivate *driReadDrawable;
    __DRIscreenPrivate *driScreen;
    intelScreenPrivate *intelScreen; 
    volatile drmI830Sarea *sarea; 

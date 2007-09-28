@@ -176,6 +176,7 @@ static struct prog_instruction *emit_insn(struct brw_wm_compile *c,
 {
    struct prog_instruction *inst = get_fp_inst(c);
    *inst = *inst0;
+   inst->Data = (void *)inst0;
    return inst;
 }
 
@@ -201,7 +202,6 @@ static struct prog_instruction * emit_op(struct brw_wm_compile *c,
    inst->SrcReg[0] = src0;
    inst->SrcReg[1] = src1;
    inst->SrcReg[2] = src2;
-   
    return inst;
 }
    
@@ -361,6 +361,37 @@ static void emit_interp( struct brw_wm_compile *c,
    c->fp_interp_emitted |= 1<<idx;
 }
 
+static void emit_ddx( struct brw_wm_compile *c,
+        const struct prog_instruction *inst )
+{
+    GLuint idx = inst->SrcReg[0].Index;
+    struct prog_src_register interp = src_reg(PROGRAM_PAYLOAD, idx);
+
+    c->fp_deriv_emitted |= 1<<idx;
+    emit_op(c,
+            OPCODE_DDX,
+            inst->DstReg,
+            0, 0, 0,
+            interp,
+            get_pixel_w(c),
+            src_undef());
+}
+
+static void emit_ddy( struct brw_wm_compile *c,
+        const struct prog_instruction *inst )
+{
+    GLuint idx = inst->SrcReg[0].Index;
+    struct prog_src_register interp = src_reg(PROGRAM_PAYLOAD, idx);
+
+    c->fp_deriv_emitted |= 1<<idx;
+    emit_op(c,
+            OPCODE_DDY,
+            inst->DstReg,
+            0, 0, 0,
+            interp,
+            get_pixel_w(c),
+            src_undef());
+}
 
 /***********************************************************************
  * Hacks to extend the program parameter and constant lists.
@@ -660,7 +691,7 @@ static GLboolean projtex( struct brw_wm_compile *c,
       return 0;  /* ut2004 gun rendering !?! */
    else if (src.File == PROGRAM_INPUT && 
 	    GET_SWZ(src.Swizzle, W) == W &&
-           (c->key.projtex_mask & (1<<(src.Index + FRAG_ATTRIB_WPOS - FRAG_ATTRIB_TEX0))) == 0)
+	    (c->key.projtex_mask & (1<<src.Index)) == 0)
       return 0;
    else
       return 1;
@@ -907,8 +938,16 @@ void brw_wm_pass_fp( struct brw_wm_compile *c )
 	  */
 	 out->DstReg.WriteMask = 0;
 	 break;
-
+      case OPCODE_DDX:
+	 emit_ddx(c, inst);
+	 break;
+      case OPCODE_DDY:
+         emit_ddy(c, inst);
+	break;
       case OPCODE_END:
+	 emit_fog(c);
+	 emit_fb_write(c);
+	 break;
       case OPCODE_PRINT:
 	 break;
 	 
@@ -917,15 +956,11 @@ void brw_wm_pass_fp( struct brw_wm_compile *c )
 	 break;
       }
    }
-   
-   emit_fog(c);
-   emit_fb_write(c);
-
 
    if (INTEL_DEBUG & DEBUG_WM) {
-      _mesa_printf("\n\n\npass_fp:\n");
-      print_insns( c->prog_instructions, c->nr_fp_insns );
-      _mesa_printf("\n");
+	   _mesa_printf("\n\n\npass_fp:\n");
+	   print_insns( c->prog_instructions, c->nr_fp_insns );
+	   _mesa_printf("\n");
    }
 }
 

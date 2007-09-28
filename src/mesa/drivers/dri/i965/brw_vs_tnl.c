@@ -855,7 +855,7 @@ static struct ureg calculate_light_attenuation( struct tnl_program *p,
       struct ureg slt = get_temp(p);
 
       emit_op2(p, OPCODE_DP3, spot, 0, ureg_negate(VPpli), spot_dir_norm);
-      emit_op2(p, OPCODE_SLT, slt, 0, swizzle1(spot_dir_norm,W), spot);
+      emit_op2(p, OPCODE_SLT, slt, 0, spot, swizzle1(spot_dir_norm,W));
       emit_op2(p, OPCODE_POW, spot, 0, spot, swizzle1(attenuation, W));
       emit_op2(p, OPCODE_MUL, att, 0, slt, spot);
 
@@ -1003,11 +1003,6 @@ static void build_lighting( struct tnl_program *p )
 
 	    VPpli = get_temp(p); 
 	    half = get_temp(p);
-
-       /* In homogeneous object coordinates
-        */
-       emit_op1(p, OPCODE_RCP, dist, 0, swizzle1(Ppli, W));
-       emit_op2(p, OPCODE_MUL, Ppli, 0, Ppli, dist);
  
 	    /* Calulate VPpli vector
 	     */

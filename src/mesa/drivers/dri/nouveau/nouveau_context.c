@@ -210,7 +210,6 @@ GLboolean nouveauCreateContext( const __GLcontextModes *glVisual,
 	_swsetup_CreateContext( ctx );
 
 	_math_matrix_ctr(&nmesa->viewport);
-	_math_matrix_ctr(&nmesa->model_proj);
 
 	nouveauDDInitStateFuncs( ctx );
 	nouveauSpanInitFunctions( ctx );
@@ -316,24 +315,21 @@ GLboolean nouveauUnbindContext( __DRIcontextPrivate *driContextPriv )
 	return GL_TRUE;
 }
 
-void
-nouveauDoSwapBuffers(nouveauContextPtr nmesa, __DRIdrawablePrivate *dPriv)
+static void nouveauDoSwapBuffers(nouveauContextPtr nmesa,
+				 __DRIdrawablePrivate *dPriv)
 {
 	struct gl_framebuffer *fb;
-	nouveauScreenPtr screen = dPriv->driScreenPriv->private;
-	nouveau_renderbuffer_t *src;
+	nouveau_renderbuffer *src, *dst;
 	drm_clip_rect_t *box;
 	int nbox, i;
 
 	fb = (struct gl_framebuffer *)dPriv->driverPrivate;
-	if (fb->_ColorDrawBufferMask[0] == BUFFER_BIT_FRONT_LEFT) {
-		src = (nouveau_renderbuffer_t *)
-			fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer;
-	} else {
-		src = (nouveau_renderbuffer_t *)
-			fb->Attachment[BUFFER_BACK_LEFT].Renderbuffer;
-	}
+	dst = (nouveau_renderbuffer*)
+		fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer;
+	src = (nouveau_renderbuffer*)
+		fb->Attachment[BUFFER_BACK_LEFT].Renderbuffer;
 
+#ifdef ALLOW_MULTI_SUBCHANNEL
 	LOCK_HARDWARE(nmesa);
 	nbox = dPriv->numClipRects;
 	box  = dPriv->pClipRects;
@@ -345,10 +341,9 @@ nouveauDoSwapBuffers(nouveauContextPtr nmesa, __DRIdrawablePrivate *dPriv)
 			OUT_RING       (6); /* X8R8G8B8 */
 		else
 			OUT_RING       (4); /* R5G6B5 */
-		OUT_RING(((screen->frontPitch * screen->fbFormat) << 16) |
-			  src->pitch);
-		OUT_RING(src->offset);
-		OUT_RING(screen->frontOffset);
+		OUT_RING       ((dst->pitch << 16) | src->pitch);
+		OUT_RING       (src->offset);
+		OUT_RING       (dst->offset);
 	}
 
 	for (i=0; i<nbox; i++, box++) {
@@ -362,6 +357,7 @@ nouveauDoSwapBuffers(nouveauContextPtr nmesa, __DRIdrawablePrivate *dPriv)
 	FIRE_RING();
 
 	UNLOCK_HARDWARE(nmesa);
+#endif
 }
 
 void nouveauSwapBuffers(__DRIdrawablePrivate *dPriv)

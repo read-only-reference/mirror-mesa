@@ -36,24 +36,25 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "mtypes.h"
 #include "tnl/t_vertex.h"
 
-#include "nouveau_fbo.h"
 #include "nouveau_screen.h"
-#include "nouveau_shader.h"
 #include "nouveau_state_cache.h"
+#include "nouveau_buffers.h"
+#include "nouveau_shader.h"
 #include "nouveau_sync.h"
 
 #include "xmlconfig.h"
 
-typedef struct nouveau_fifo {
-	struct drm_nouveau_channel_alloc drm;
-	uint32_t *pushbuf;
-	uint32_t *mmio;
-	uint32_t *notifier_block;
-	uint32_t  current;
-	uint32_t  put;
-	uint32_t  free;
-	uint32_t  max;
-} nouveau_fifo_t;
+typedef struct nouveau_fifo_t{
+	int channel;
+	u_int32_t* buffer;
+	u_int32_t* mmio;
+	u_int32_t put_base;
+	u_int32_t current;
+	u_int32_t put;
+	u_int32_t free;
+	u_int32_t max;
+}
+nouveau_fifo;
 
 #define TAG(x) nouveau##x
 #include "tnl_dd/t_dd_vertex.h"
@@ -82,13 +83,10 @@ typedef struct nouveau_hw_func_t {
 	GLboolean (*InitCard)(struct nouveau_context *);
 	/* Update buffer offset/pitch/format */
 	GLboolean (*BindBuffers)(struct nouveau_context *, int num_color,
-				 nouveau_renderbuffer_t **color,
-				 nouveau_renderbuffer_t *depth);
+				 nouveau_renderbuffer **color,
+				 nouveau_renderbuffer *depth);
 	/* Update anything that depends on the window position/size */
 	void      (*WindowMoved)(struct nouveau_context *);
-
-	/* Update projection matrix */
-	void	(*UpdateModelProjMatrix)(struct nouveau_context *);
 } nouveau_hw_func;
 
 typedef struct nouveau_context {
@@ -96,7 +94,13 @@ typedef struct nouveau_context {
 	GLcontext *glCtx;
 
 	/* The per-context fifo */
-	nouveau_fifo_t fifo;
+	nouveau_fifo fifo;
+
+	/* The read-only regs */
+	volatile unsigned char* mmio;
+
+	/* The per-channel notifier block */
+	volatile void *notifier_block;
 
 	/* Physical addresses of AGP/VRAM apertures */
 	uint64_t vram_phys;
@@ -105,12 +109,12 @@ typedef struct nouveau_context {
 	uint64_t gart_size;
 
 	/* Channel synchronisation */
-	struct drm_nouveau_notifierobj_alloc *syncNotifier;
+	struct drm_nouveau_notifier_alloc *syncNotifier;
 
 	/* ARB_occlusion_query / EXT_timer_query */
 	GLuint		  query_object_max;
 	GLboolean *	  query_alloc;
-	struct drm_nouveau_notifierobj_alloc *queryNotifier;
+	struct drm_nouveau_notifier_alloc *queryNotifier;
 
 	/* Additional hw-specific functions */
 	nouveau_hw_func hw_func;
@@ -120,18 +124,11 @@ typedef struct nouveau_context {
 	GLuint color_offset;
 	GLuint specular_offset;
 
-	/* Projection*modelview matrix */
-	GLmatrix model_proj;
-
 	/* Vertex state */
 	GLuint vertex_size;
 	GLubyte *verts;
 	struct tnl_attr_map vertex_attrs[VERT_ATTRIB_MAX];
 	GLuint vertex_attr_count;
-
-	/* Color and depth renderbuffers */
-	nouveau_renderbuffer_t *color_buffer;
-	nouveau_renderbuffer_t *depth_buffer;
 
 	/* Color buffer clear value */
 	uint32_t clear_color_value;
@@ -225,9 +222,6 @@ extern GLboolean nouveauMakeCurrent( __DRIcontextPrivate *driContextPriv,
 		__DRIdrawablePrivate *driReadPriv );
 
 extern GLboolean nouveauUnbindContext( __DRIcontextPrivate *driContextPriv );
-
-extern void nouveauDoSwapBuffers(nouveauContextPtr nmesa,
-				 __DRIdrawablePrivate *dPriv);
 
 extern void nouveauSwapBuffers(__DRIdrawablePrivate *dPriv);
 

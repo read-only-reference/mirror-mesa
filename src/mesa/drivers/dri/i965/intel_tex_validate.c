@@ -122,29 +122,6 @@ static void intel_texture_invalidate_cb( struct intel_context *intel,
    intel_texture_invalidate( (struct intel_texture_object *) ptr );
 }
 
-#include "texformat.h"
-static GLuint intel_compressed_num_bytes(GLenum mesaFormat)
-{
-    GLuint bytes = 0;
-
-    switch (mesaFormat) {
-    case MESA_FORMAT_RGB_FXT1:
-    case MESA_FORMAT_RGBA_FXT1:
-    case MESA_FORMAT_RGB_DXT1:
-    case MESA_FORMAT_RGBA_DXT1:
-        bytes = 2;
-        break;
-
-    case MESA_FORMAT_RGBA_DXT3:
-    case MESA_FORMAT_RGBA_DXT5:
-        bytes = 4;
-    
-    default:
-        break;
-    }
-
-    return bytes;
-}
 
 /*  
  */
@@ -155,8 +132,7 @@ GLuint intel_finalize_mipmap_tree( struct intel_context *intel,
    GLuint face, i;
    GLuint nr_faces = 0;
    struct gl_texture_image *firstImage;
-   GLuint cpp = 0;
-   
+
    if( tObj == intel->frame_buffer_texobj )
       return GL_FALSE;
    
@@ -189,12 +165,6 @@ GLuint intel_finalize_mipmap_tree( struct intel_context *intel,
 
 
 
-   if (firstImage->IsCompressed) {
-       cpp = intel_compressed_num_bytes(firstImage->TexFormat->MesaFormat);
-   } else {
-       cpp = firstImage->TexFormat->TexelBytes;
-   }
-       
    /* Check tree can hold all active levels.  Check tree matches
     * target, imageFormat, etc.
     */
@@ -206,7 +176,7 @@ GLuint intel_finalize_mipmap_tree( struct intel_context *intel,
 	intelObj->mt->width0 != firstImage->Width ||
 	intelObj->mt->height0 != firstImage->Height ||
 	intelObj->mt->depth0 != firstImage->Depth ||
-	intelObj->mt->cpp != cpp ||
+	intelObj->mt->cpp != firstImage->TexFormat->TexelBytes ||
 	intelObj->mt->compressed != firstImage->IsCompressed)) 
    {
       intel_miptree_destroy(intel, intelObj->mt);
@@ -229,7 +199,7 @@ GLuint intel_finalize_mipmap_tree( struct intel_context *intel,
 					  firstImage->Width,
 					  firstImage->Height,
 					  firstImage->Depth,
-					  cpp,
+					  firstImage->TexFormat->TexelBytes,
 					  firstImage->IsCompressed);
 
       /* Tell the buffer manager that we will manage the backing

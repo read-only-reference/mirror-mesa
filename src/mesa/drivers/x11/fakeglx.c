@@ -296,11 +296,6 @@ save_glx_visual( Display *dpy, XVisualInfo *vinfo,
       }
    }
 
-   if (stereoFlag) {
-      /* stereo not supported */
-      return NULL;
-   }
-
    /* Comparing IDs uses less memory but sometimes fails. */
    /* XXX revisit this after 3.0 is finished. */
    if (_mesa_getenv("MESA_GLX_VISUAL_HACK"))
@@ -1084,7 +1079,7 @@ choose_visual( Display *dpy, int screen, const int *list, GLboolean fbConfig )
             else {
                stereo_flag = GL_TRUE;
             }
-            break;
+            return NULL; /* stereo not supported */
 	 case GLX_AUX_BUFFERS:
 	    parselist++;
             numAux = *parselist++;

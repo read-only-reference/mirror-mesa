@@ -117,9 +117,6 @@ static const GLubyte *nouveauGetString( GLcontext *ctx, GLenum name )
 static void nouveauFlush( GLcontext *ctx )
 {
 	nouveauContextPtr nmesa = NOUVEAU_CONTEXT(ctx);
-
-	if (ctx->DrawBuffer->_ColorDrawBufferMask[0] == BUFFER_BIT_FRONT_LEFT)
-		nouveauDoSwapBuffers(nmesa, nmesa->driDrawable);
 	FIRE_RING();
 }
 
@@ -127,7 +124,6 @@ static void nouveauFlush( GLcontext *ctx )
 static void nouveauFinish( GLcontext *ctx )
 {
 	nouveauContextPtr nmesa = NOUVEAU_CONTEXT(ctx);
-
 	nouveauFlush( ctx );
 	nouveauWaitForIdle( nmesa );
 }

@@ -37,30 +37,29 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 static void nv10ViewportScale(nouveauContextPtr nmesa)
 {
 	GLcontext *ctx = nmesa->glCtx;
-	GLfloat w = ((GLfloat) ctx->Viewport.Width) * 0.5;
-	GLfloat h = ((GLfloat) ctx->Viewport.Height) * 0.5;
+	GLuint w = ctx->Viewport.Width;
+	GLuint h = ctx->Viewport.Height;
+
 	GLfloat max_depth = (ctx->Viewport.Near + ctx->Viewport.Far) * 0.5;
-	GLfloat projection[16];
-	int i;
-
-	if (ctx->DrawBuffer) {
-		if (ctx->DrawBuffer->_DepthBuffer) {
-			switch (ctx->DrawBuffer->_DepthBuffer->DepthBits) {
-				case 16:
-					max_depth *= 32767.0;
-					break;
-				case 24:
-					max_depth *= 16777215.0;
-					break;
-			}
+/*	if (ctx->DrawBuffer) {
+		switch (ctx->DrawBuffer->_DepthBuffer->DepthBits) {
+			case 16:
+				max_depth *= 32767.0;
+				break;
+			case 24:
+				max_depth *= 16777215.0;
+				break;
 		}
-	}
+	} else {*/
+		/* Default to 24 bits range */	
+		max_depth *= 16777215.0;
+/*	}*/
 
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VIEWPORT_SCALE_X, 4);
-	OUT_RINGf (w - 2048.0);
-	OUT_RINGf (h - 2048.0);
-	OUT_RINGf (max_depth);
-	OUT_RINGf (0.0);
+	BEGIN_RING_CACHE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VIEWPORT_SCALE_X, 4);
+	OUT_RING_CACHEf ((((GLfloat) w) * 0.5) - 2048.0);
+	OUT_RING_CACHEf ((((GLfloat) h) * 0.5) - 2048.0);
+	OUT_RING_CACHEf (max_depth);
+	OUT_RING_CACHEf (0.0);
 }
 
 static void nv10AlphaFunc(GLcontext *ctx, GLenum func, GLfloat ref)
@@ -112,58 +111,9 @@ static void nv10BlendFuncSeparate(GLcontext *ctx, GLenum sfactorRGB, GLenum dfac
 	OUT_RING_CACHE(dfactorRGB);
 }
 
-static void nv10ClearBuffer(GLcontext *ctx, nouveau_renderbuffer_t *buffer, int fill, int mask)
-{
-	nouveauContextPtr nmesa = NOUVEAU_CONTEXT(ctx);
-	int dimensions;
-
-	if (!buffer) {
-		return;
-	}
-
-	/* Surface that we will work on */
-	nouveauObjectOnSubchannel(nmesa, NvSubCtxSurf2D, NvCtxSurf2D);
-
-	BEGIN_RING_SIZE(NvSubCtxSurf2D, NV10_CONTEXT_SURFACES_2D_FORMAT, 4);
-	OUT_RING(0x0b); /* Y32 color format */
-	OUT_RING((buffer->pitch<<16)|buffer->pitch);
-	OUT_RING(buffer->offset);
-	OUT_RING(buffer->offset);
-
-	/* Now clear a rectangle */
-	dimensions = ((buffer->mesa.Height)<<16) | (buffer->mesa.Width);
-
-	nouveauObjectOnSubchannel(nmesa, NvSubGdiRectText, NvGdiRectText);
-
-	BEGIN_RING_SIZE(NvSubGdiRectText, NV04_GDI_RECTANGLE_TEXT_OPERATION, 1);
-	OUT_RING(3);	/* SRCCOPY */
-
-	BEGIN_RING_SIZE(NvSubGdiRectText, NV04_GDI_RECTANGLE_TEXT_BLOCK_LEVEL1_TL, 5);
-	OUT_RING(0);	/* top left */
-	OUT_RING(dimensions);	/* bottom right */
-	OUT_RING(fill);
-	OUT_RING(0);	/* top left */
-	OUT_RING(dimensions);	/* bottom right */
-}
-
 static void nv10Clear(GLcontext *ctx, GLbitfield mask)
 {
-	nouveauContextPtr nmesa = NOUVEAU_CONTEXT(ctx);
-
-	if (mask & (BUFFER_BIT_FRONT_LEFT|BUFFER_BIT_BACK_LEFT)) {
-		nv10ClearBuffer(ctx, nmesa->color_buffer,
-			nmesa->clear_color_value, 0xffffffff);
-	}
-	/* FIXME: check depth bits */
-	if (mask & (BUFFER_BIT_DEPTH)) {
-		nv10ClearBuffer(ctx, nmesa->depth_buffer,
-			nmesa->clear_value, 0xffffff00);
-	}
-	/* FIXME: check about stencil? */
-	if (mask & (BUFFER_BIT_STENCIL)) {
-		nv10ClearBuffer(ctx, nmesa->depth_buffer,
-			nmesa->clear_value, 0x000000ff);
-	}
+	/* TODO */
 }
 
 static void nv10ClearColor(GLcontext *ctx, const GLfloat color[4])
@@ -624,52 +574,9 @@ void (*ReadBuffer)( GLcontext *ctx, GLenum buffer );
 /** Set rasterization mode */
 void (*RenderMode)(GLcontext *ctx, GLenum mode );
 
-/* Translate GL coords to window coords, clamping w/h to the
- * dimensions of the window.
- */
-static void nv10WindowCoords(nouveauContextPtr nmesa,
-			     GLuint x, GLuint y, GLuint w, GLuint h,
-			     GLuint *wX, GLuint *wY, GLuint *wW, GLuint *wH)
-{
-	if ((x+w) > nmesa->drawW)
-		w = nmesa->drawW - x;
-	(*wX) = x + nmesa->drawX;
-	(*wW) = w;
-
-	if ((y+h) > nmesa->drawH)
-		h = nmesa->drawH - y;
-	(*wY) = (nmesa->drawH - y) - h + nmesa->drawY;
-	(*wH) = h;
-}
-
 /** Define the scissor box */
 static void nv10Scissor(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
 {
-        nouveauContextPtr nmesa = NOUVEAU_CONTEXT(ctx);
-	GLuint wX, wY, wW, wH;
-
-	/* There's no scissor enable bit, so adjust the scissor to cover the
-	 * maximum draw buffer bounds
-	 */
-	if (!ctx->Scissor.Enabled) {
-	   wX = nmesa->drawX;
-	   wY = nmesa->drawY;
-	   wW = nmesa->drawW;
-	   wH = nmesa->drawH;
-	} else {
-	   nv10WindowCoords(nmesa, x, y, w, h, &wX, &wY, &wW, &wH);
-	}
-
-	if (!wW || !wH) {
-		return;
-	}
-
-	BEGIN_RING_SIZE(NvSub3D,
-	      NV10_TCL_PRIMITIVE_3D_VIEWPORT_CLIP_HORIZ(0), 1);
-        OUT_RING(((wW+wX-1) << 16) | wX | 0x08000800);
-	BEGIN_RING_SIZE(NvSub3D,
-	      NV10_TCL_PRIMITIVE_3D_VIEWPORT_CLIP_VERT(0), 1);
-        OUT_RING(((wH+wY-1) << 16) | wY | 0x08000800);
 }
 
 /** Select flat or smooth shading */
@@ -736,104 +643,54 @@ static void nv10TextureMatrix(GLcontext *ctx, GLuint unit, const GLmatrix *mat)
         OUT_RING_CACHEp(mat->m, 16);
 }
 
-static void nv10UpdateModelProjMatrix(nouveauContextPtr nmesa)
-{
-	GLcontext *ctx = nmesa->glCtx;
-	GLfloat w = ((GLfloat) ctx->Viewport.Width) * 0.5;
-	GLfloat h = ((GLfloat) ctx->Viewport.Height) * 0.5;
-	GLfloat max_depth = (ctx->Viewport.Near + ctx->Viewport.Far) * 0.5;
-	GLfloat projection[16];
-	int i;
-
-	if (ctx->DrawBuffer) {
-		if (ctx->DrawBuffer->_DepthBuffer) {
-			switch (ctx->DrawBuffer->_DepthBuffer->DepthBits) {
-				case 16:
-					max_depth *= 32767.0;
-					break;
-				case 24:
-					max_depth *= 16777215.0;
-					break;
-			}
-		}
-	}
-
-	/* Rescale for viewport */
-	for (i=0; i<4; i++) {
-		projection[i] = w * nmesa->model_proj.m[i];
-	}
-	for (i=0; i<4; i++) {
-		projection[i+4] = -h * nmesa->model_proj.m[i+4];
-	}
-	for (i=0; i<4; i++) {
-		projection[i+8] = max_depth * nmesa->model_proj.m[i+8];
-	}
-	for (i=0; i<4; i++) {
-		projection[i+12] = nmesa->model_proj.m[i+12];
-	}
-
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_PROJECTION_MATRIX(0), 16);
-	OUT_RINGp(projection, 16);
-}
-
 /* Update anything that depends on the window position/size */
 static void nv10WindowMoved(nouveauContextPtr nmesa)
 {
 	GLcontext *ctx = nmesa->glCtx;
 	GLfloat *v = nmesa->viewport.m;
-	GLuint wX, wY, wW, wH;
+	GLuint w = ctx->Viewport.Width;
+	GLuint h = ctx->Viewport.Height;
+	GLuint x = ctx->Viewport.X + nmesa->drawX;
+	GLuint y = ctx->Viewport.Y + nmesa->drawY;
+	int i;
 
-	nv10WindowCoords(nmesa, ctx->Viewport.X, ctx->Viewport.Y, 
-				ctx->Viewport.Width, ctx->Viewport.Height,
-				&wX, &wY, &wW, &wH);
+        BEGIN_RING_CACHE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VIEWPORT_HORIZ, 2);
+        OUT_RING_CACHE((w << 16) | x);
+        OUT_RING_CACHE((h << 16) | y);
 
-        BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VIEWPORT_HORIZ, 2);
-        OUT_RING((wW << 16) | wX);
-        OUT_RING((wH << 16) | wY);
+	/* something to do with clears, possibly doesn't belong here */
+	BEGIN_RING_SIZE(NvSub3D, 0x02b4, 1);
+	OUT_RING(0);
+
+	BEGIN_RING_CACHE(NvSub3D,
+	      NV10_TCL_PRIMITIVE_3D_VIEWPORT_CLIP_HORIZ(0), 1);
+        OUT_RING_CACHE(((w+x-1) << 16) | x | 0x08000800);
+	BEGIN_RING_CACHE(NvSub3D,
+	      NV10_TCL_PRIMITIVE_3D_VIEWPORT_CLIP_VERT(0), 1);
+        OUT_RING_CACHE(((h+y-1) << 16) | y | 0x08000800);
+	for (i=1; i<8; i++) {
+		BEGIN_RING_CACHE(NvSub3D,
+		      NV10_TCL_PRIMITIVE_3D_VIEWPORT_CLIP_HORIZ(i), 1);
+        	OUT_RING_CACHE(0);
+		BEGIN_RING_CACHE(NvSub3D,
+		      NV10_TCL_PRIMITIVE_3D_VIEWPORT_CLIP_VERT(i), 1);
+	        OUT_RING_CACHE(0);
+	}
 
 	nv10ViewportScale(nmesa);
-
-	ctx->Driver.Scissor(ctx, ctx->Scissor.X, ctx->Scissor.Y,
-	      		    ctx->Scissor.Width, ctx->Scissor.Height);
 }
 
 /* Initialise any card-specific non-GL related state */
 static GLboolean nv10InitCard(nouveauContextPtr nmesa)
 {
-	int i;
-	GLfloat projection[16];
-
 	nouveauObjectOnSubchannel(nmesa, NvSub3D, Nv3D);
 
 	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_SET_DMA_IN_MEMORY0, 2);
 	OUT_RING(NvDmaFB);	/* 184 dma_in_memory0 */
-	OUT_RING(NvDmaTT);	/* 188 dma_in_memory1 */
+	OUT_RING(NvDmaFB);	/* 188 dma_in_memory1 */
 	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_SET_DMA_IN_MEMORY2, 2);
 	OUT_RING(NvDmaFB);	/* 194 dma_in_memory2 */
 	OUT_RING(NvDmaFB);	/* 198 dma_in_memory3 */
-
-	/* 0x0 viewport size */
-        BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VIEWPORT_HORIZ, 2);
-        OUT_RING(0);
-        OUT_RING(0);
-
-	/* Clipping regions */
-	BEGIN_RING_SIZE(NvSub3D, 0x2b4, 1); /* clip_mode */
-	OUT_RING  (0);
-	BEGIN_RING_SIZE(NvSub3D,
-	      NV10_TCL_PRIMITIVE_3D_VIEWPORT_CLIP_HORIZ(0), 1);
-        OUT_RING(0x07ff0800);
-	BEGIN_RING_SIZE(NvSub3D,
-	      NV10_TCL_PRIMITIVE_3D_VIEWPORT_CLIP_VERT(0), 1);
-        OUT_RING(0x07ff0800);
-	for (i=1; i<8; i++) {
-		BEGIN_RING_SIZE(NvSub3D,
-		      NV10_TCL_PRIMITIVE_3D_VIEWPORT_CLIP_HORIZ(i), 1);
-        	OUT_RING(0);
-		BEGIN_RING_SIZE(NvSub3D,
-		      NV10_TCL_PRIMITIVE_3D_VIEWPORT_CLIP_VERT(i), 1);
-	        OUT_RING(0);
-	}
 
 	BEGIN_RING_SIZE(NvSub3D, 0x0290, 1);
 	OUT_RING(0x00100001);
@@ -845,125 +702,18 @@ static GLboolean nv10InitCard(nouveauContextPtr nmesa)
         	OUT_RING(0);
 	        OUT_RING(1);
 	        OUT_RING(2);
-
-	        BEGIN_RING_SIZE(NvSubImageBlit, 0x120, 3);
-        	OUT_RING(0);
-	        OUT_RING(1);
-	        OUT_RING(2);
 	}
-
-	/* Set state for stuff not initialized in nouveau_state.c */
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_TX_ENABLE(0), 2);
-	OUT_RING  (0);
-	OUT_RING  (0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_RC_IN_ALPHA(0), 12);
-	OUT_RING  (0x30141010);
-	OUT_RING  (0);
-	OUT_RING  (0x20040000);
-	OUT_RING  (0);
-	OUT_RING  (0);
-	OUT_RING  (0);
-	OUT_RING  (0x00000c00);
-	OUT_RING  (0);
-	OUT_RING  (0x00000c00);
-	OUT_RING  (0x18000000);
-	OUT_RING  (0x300e0300);
-	OUT_RING  (0x0c091c80);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VERTEX_WEIGHT_ENABLE, 1);
-	OUT_RING  (0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_NORMALIZE_ENABLE, 1);
-	OUT_RING  (0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_LIGHT_MODEL, 1);
-	OUT_RING  (0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_COLOR_CONTROL, 1);
-	OUT_RING  (0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_POINT_SIZE, 1);
-	OUT_RING  (8);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_POINT_PARAMETERS_ENABLE, 1);
-	OUT_RING  (0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_LINE_WIDTH, 1);
-	OUT_RING  (8);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_CLIP_PLANE_ENABLE(0), 8);
-	for (i=0;i<8;i++) {
-		OUT_RING  (0);
-	}
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_FOG_EQUATION_CONSTANT, 3);
-	OUT_RINGf (-1.50);
-	OUT_RINGf (-0.09);
-	OUT_RINGf ( 0.00);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_FOG_MODE, 2);
-	OUT_RING  (0x802);
-	OUT_RING  (2);
-
-	/* Projection and modelview matrix */
-	memset(projection, 0, sizeof(projection));
-	projection[0*4+0] = 1.0;
-	projection[1*4+1] = 1.0;
-	projection[2*4+2] = 1.0;
-	projection[3*4+3] = 1.0;
-
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VIEW_MATRIX_ENABLE, 1);
-	OUT_RING  (6);	/* enable projection and modelview0 matrix */
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_PROJECTION_MATRIX(0), 16);
-	for (i=0; i<16; i++) {
-		OUT_RINGf (projection[i]);
-	}
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_MODELVIEW0_MATRIX(0), 16);
-	for (i=0; i<16; i++) {
-		OUT_RINGf (projection[i]);
-	}
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_DEPTH_RANGE_NEAR, 2);
-	OUT_RINGf  (0.0);
-	OUT_RINGf  (1.0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VIEWPORT_SCALE_X, 4);
-	OUT_RINGf  (1.0);
-	OUT_RINGf  (1.0);
-	OUT_RINGf  (1.0);
-	OUT_RINGf  (1.0);
-
-	/* Set per-vertex component */
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VERTEX_COL_4F_R, 4);
-	OUT_RINGf (1.0);
-	OUT_RINGf (1.0);
-	OUT_RINGf (1.0);
-	OUT_RINGf (1.0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VERTEX_COL2_3F_R, 3);
-	OUT_RING  (0);
-	OUT_RING  (0);
-	OUT_RING  (0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VERTEX_NOR_3F_X, 3);
-	OUT_RINGf (0.0);
-	OUT_RINGf (0.0);
-	OUT_RINGf (1.0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VERTEX_TX0_4F_S, 4);
-	OUT_RINGf (0.0);
-	OUT_RINGf (0.0);
-	OUT_RINGf (0.0);
-	OUT_RINGf (1.0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VERTEX_TX1_4F_S, 4);
-	OUT_RINGf (0.0);
-	OUT_RINGf (0.0);
-	OUT_RINGf (0.0);
-	OUT_RINGf (1.0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VERTEX_FOG_1F, 1);
-	OUT_RINGf (0.0);
-	BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_EDGEFLAG_ENABLE, 1);
-	OUT_RING  (1);
 
 	return GL_TRUE;
 }
 
 /* Update buffer offset/pitch/format */
 static GLboolean nv10BindBuffers(nouveauContextPtr nmesa, int num_color,
-				 nouveau_renderbuffer_t **color,
-				 nouveau_renderbuffer_t *depth)
+				 nouveau_renderbuffer **color,
+				 nouveau_renderbuffer *depth)
 {
 	GLuint x, y, w, h;
 	GLuint pitch, format, depth_pitch;
-
-	/* Store buffer pointers in context */
-	nmesa->color_buffer = color[0];
-	nmesa->depth_buffer = depth;
 
 	w = color[0]->mesa.Width;
 	h = color[0]->mesa.Height;
@@ -973,19 +723,26 @@ static GLboolean nv10BindBuffers(nouveauContextPtr nmesa, int num_color,
 	if (num_color != 1)
 		return GL_FALSE;
 
-        BEGIN_RING_SIZE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VIEWPORT_HORIZ, 6);
-        OUT_RING((w << 16) | x);
-        OUT_RING((h << 16) | y);
+        BEGIN_RING_CACHE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VIEWPORT_HORIZ, 6);
+        OUT_RING_CACHE((w << 16) | x);
+        OUT_RING_CACHE((h << 16) | y);
 	depth_pitch = (depth ? depth->pitch : color[0]->pitch);
 	pitch = (depth_pitch<<16) | color[0]->pitch;
 	format = 0x108;
 	if (color[0]->mesa._ActualFormat != GL_RGBA8) {
 		format = 0x103; /* R5G6B5 color buffer */
 	}
-	OUT_RING(format);
-	OUT_RING(pitch);
-	OUT_RING(color[0]->offset);
-	OUT_RING(depth ? depth->offset : color[0]->offset);
+	OUT_RING_CACHE(format);
+	OUT_RING_CACHE(pitch);
+	OUT_RING_CACHE(color[0]->offset);
+	OUT_RING_CACHE(depth ? depth->offset : color[0]->offset);
+
+	/* Always set to bottom left of buffer */
+	/*BEGIN_RING_CACHE(NvSub3D, NV10_TCL_PRIMITIVE_3D_VIEWPORT_ORIGIN_X, 4);
+	OUT_RING_CACHEf (0.0);
+	OUT_RING_CACHEf ((GLfloat) h);
+	OUT_RING_CACHEf (0.0);
+	OUT_RING_CACHEf (0.0);*/
 
 	return GL_TRUE;
 }
@@ -1037,5 +794,4 @@ void nv10InitStateFuncs(GLcontext *ctx, struct dd_function_table *func)
 	nmesa->hw_func.InitCard		= nv10InitCard;
 	nmesa->hw_func.BindBuffers	= nv10BindBuffers;
 	nmesa->hw_func.WindowMoved	= nv10WindowMoved;
-	nmesa->hw_func.UpdateModelProjMatrix = nv10UpdateModelProjMatrix;
 }

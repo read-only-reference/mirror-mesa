@@ -767,10 +767,6 @@ static void nv30TextureMatrix(GLcontext *ctx, GLuint unit, const GLmatrix *mat)
 	}
 }
 
-static void nv30UpdateModelProjMatrix(nouveauContextPtr nmesa)
-{
-}
-
 static void nv30WindowMoved(nouveauContextPtr nmesa)
 {
 	GLcontext *ctx = nmesa->glCtx;
@@ -909,9 +905,9 @@ static GLboolean nv40InitCard(nouveauContextPtr nmesa)
 	return GL_TRUE;
 }
 
-static GLboolean
-nv30BindBuffers(nouveauContextPtr nmesa, int num_color,
-		nouveau_renderbuffer_t **color, nouveau_renderbuffer_t *depth)
+static GLboolean nv30BindBuffers(nouveauContextPtr nmesa, int num_color,
+		nouveau_renderbuffer **color,
+		nouveau_renderbuffer *depth)
 {
 	GLuint x, y, w, h;
 
@@ -1002,6 +998,5 @@ void nv30InitStateFuncs(GLcontext *ctx, struct dd_function_table *func)
 	   nmesa->hw_func.InitCard	= nv30InitCard;
 	nmesa->hw_func.BindBuffers	= nv30BindBuffers;
 	nmesa->hw_func.WindowMoved	= nv30WindowMoved;
-	nmesa->hw_func.UpdateModelProjMatrix = nv30UpdateModelProjMatrix;
 }
 

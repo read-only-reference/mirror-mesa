@@ -51,7 +51,6 @@ pool_create(struct _DriBufferPool *pool,
       return NULL;
 
    if ((alignment > pageSize) && (alignment % pageSize)) {
-      free(buf);
       return NULL;
    }
 

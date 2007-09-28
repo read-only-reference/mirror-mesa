@@ -39,4 +39,3 @@ static GLuint minify( GLuint d )
 }
 
 extern void i945_miptree_layout_2d( struct intel_mipmap_tree *mt );
-extern GLuint intel_compressed_alignment(GLenum);
