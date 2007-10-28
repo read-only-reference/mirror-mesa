@@ -28,6 +28,7 @@
 #include "imports.h"
 #include "intel_batchbuffer.h"
 #include "intel_ioctl.h"
+#include "intel_decode.h"
 #include "bufmgr.h"
 
 
@@ -36,7 +37,7 @@ static void intel_batchbuffer_reset( struct intel_batchbuffer *batch )
    assert(batch->map == NULL);
 
    batch->offset = (unsigned long)batch->ptr;
-   batch->offset = (batch->offset + 63) & ~63;
+   batch->offset = ALIGN(batch->offset, 64);
    batch->ptr = (unsigned char *) batch->offset;
 
    if (BATCH_SZ - batch->offset < BATCH_REFILL) {
@@ -168,30 +169,21 @@ GLboolean intel_batchbuffer_flush( struct intel_batchbuffer *batch )
       goto out;
    }
 
+   if (INTEL_DEBUG & DEBUG_BATCH) {
+      char *map;
 
-   if (intel->aub_file) {
-      /* Send buffered commands to aubfile as a single packet. 
-       */
-      intel_batchbuffer_map(batch);
-      ((int *)batch->ptr)[-1] = intel->vtbl.flush_cmd();
-      intel->vtbl.aub_commands(intel,
-			       offset, /* Fulsim wierdness - don't adjust */
-			       batch->map + batch->offset,
-			       used);
-      ((int *)batch->ptr)[-1] = MI_BATCH_BUFFER_END;
-      intel_batchbuffer_unmap(batch);
+      map = bmMapBuffer(batch->intel, batch->buffer,
+			BM_MEM_AGP|BM_MEM_LOCAL|BM_CLIENT);
+      intel_decode((uint32_t *)(map + batch->offset), used / 4,
+		   offset + batch->offset, intel->intelScreen->deviceID);
+      bmUnmapBuffer(batch->intel, batch->buffer);
    }
-
 
    /* Fire the batch buffer, which was uploaded above:
     */
    intel_batch_ioctl(batch->intel, 
 		     offset + batch->offset,
 		     used);
-
-   if (intel->aub_file && 
-       intel->ctx.DrawBuffer->_ColorDrawBufferMask[0] == BUFFER_BIT_FRONT_LEFT)
-      intel->vtbl.aub_dump_bmp( intel, 0 );
 
    /* Reset the buffer:
     */
@@ -216,7 +208,7 @@ void intel_batchbuffer_align( struct intel_batchbuffer *batch,
 			      GLuint sz )
 {
    unsigned long ptr = (unsigned long) batch->ptr;
-   unsigned long aptr = (ptr + align) & ~((unsigned long)align-1);
+   unsigned long aptr = ALIGN(ptr, align);
    GLuint fixup = aptr - ptr;
 
    if (intel_batchbuffer_space(batch) < fixup + sz)

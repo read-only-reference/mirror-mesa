@@ -36,7 +36,6 @@
 #include "brw_draw.h"
 #include "brw_defines.h"
 #include "brw_context.h"
-#include "brw_aub.h"
 #include "brw_state.h"
 #include "brw_fallback.h"
 
@@ -291,7 +290,7 @@ static void get_space( struct brw_context *brw,
 		       struct gl_buffer_object **vbo_return,
 		       GLuint *offset_return )
 {
-   size = (size + 63) & ~63;
+   size = ALIGN(size, 64);
    
    if (brw->vb.upload.offset + size > BRW_UPLOAD_INIT_SIZE)
       wrap_buffers(brw, size);
@@ -542,7 +541,8 @@ GLboolean brw_upload_vertices( struct brw_context *brw,
    
    for (i = 0; i < nr_enabled; i++) {
       OUT_BATCH( vbp.vb[i].vb0.dword );
-      OUT_BATCH( bmBufferOffset(&brw->intel, vbp.vb[i].buffer) + vbp.vb[i].offset);
+      OUT_RELOC( vbp.vb[i].buffer, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ,
+		 vbp.vb[i].offset);
       OUT_BATCH( vbp.vb[i].max_index );
       OUT_BATCH( vbp.vb[i].instance_data_step_rate );
    }
@@ -593,6 +593,28 @@ void brw_upload_indices( struct brw_context *brw,
 				 ib_size,
 				 index_buffer->ptr,
 				 bufferobj);
+   } else {
+       if (((1 << get_index_type(index_buffer->type)) - 1) & offset) {
+           struct gl_buffer_object *vbo;
+           GLuint voffset;
+           GLubyte *map = ctx->Driver.MapBuffer(ctx,
+                                                GL_ELEMENT_ARRAY_BUFFER_ARB,
+                                                GL_DYNAMIC_DRAW_ARB,
+                                                bufferobj);
+           map += offset;
+           get_space(brw, ib_size, &vbo, &voffset);
+           
+           ctx->Driver.BufferSubData(ctx,
+                                     GL_ELEMENT_ARRAY_BUFFER_ARB,
+                                     voffset,
+                                     ib_size,
+                                     map,
+                                     vbo);
+           ctx->Driver.UnmapBuffer(ctx, GL_ELEMENT_ARRAY_BUFFER_ARB, bufferobj);
+
+           bufferobj = vbo;
+           offset = voffset;
+       }
    }
 
    /* Emit the indexbuffer packet:
@@ -611,8 +633,9 @@ void brw_upload_indices( struct brw_context *brw,
 
       BEGIN_BATCH(4, 0);
       OUT_BATCH( ib.header.dword );
-      OUT_BATCH( bmBufferOffset(intel, buffer) + offset );
-      OUT_BATCH( bmBufferOffset(intel, buffer) + offset + ib_size );
+      OUT_RELOC( buffer, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ, offset);
+      OUT_RELOC( buffer, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ,
+		 offset + ib_size);
       OUT_BATCH( 0 );
       ADVANCE_BATCH();
    }

@@ -55,7 +55,7 @@ sprite_point(GLcontext *ctx, const SWvertex *vert)
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    SWspan span;
    GLfloat size;
-   GLuint tCoords[MAX_TEXTURE_COORD_UNITS];
+   GLuint tCoords[MAX_TEXTURE_COORD_UNITS + 1];
    GLuint numTcoords = 0;
    GLfloat t0, dtdy;
 
@@ -76,7 +76,7 @@ sprite_point(GLcontext *ctx, const SWvertex *vert)
    }
    else {
       /* use constant point size */
-      size = ctx->Point._Size; /* already clamped to user range */
+      size = ctx->Point.Size;
    }
    /* clamp to non-AA implementation limits */
    size = CLAMP(size, ctx->Const.MinPointSize, ctx->Const.MaxPointSize);
@@ -99,57 +99,71 @@ sprite_point(GLcontext *ctx, const SWvertex *vert)
    span.attrStepX[FRAG_ATTRIB_WPOS][3] = 0.0F;
    span.attrStepY[FRAG_ATTRIB_WPOS][3] = 0.0F;
 
-   ATTRIB_LOOP_BEGIN
-      if (attr >= FRAG_ATTRIB_TEX0 && attr < FRAG_ATTRIB_VAR0) {
-         const GLuint u = attr - FRAG_ATTRIB_TEX0;
-         /* a texcoord */
-         if (ctx->Point.CoordReplace[u]) {
-            GLfloat s, r, dsdx;
+   {
+      GLfloat s, r, dsdx;
 
-            s = 0.0;
-            dsdx = 1.0 / size;
+      /* texcoord / pointcoord interpolants */
+      s = 0.0;
+      dsdx = 1.0 / size;
+      if (ctx->Point.SpriteOrigin == GL_LOWER_LEFT) {
+         t0 = 0.0;
+         dtdy = 1.0 / size;
+      }
+      else {
+         /* GL_UPPER_LEFT */
+         t0 = 1.0;
+         dtdy = -1.0 / size;
+      }
 
-            if (ctx->Point.SpriteOrigin == GL_LOWER_LEFT) {
-               t0 = 0.0;
-               dtdy = 1.0 / size;
+      ATTRIB_LOOP_BEGIN
+         if (attr >= FRAG_ATTRIB_TEX0 && attr < FRAG_ATTRIB_VAR0) {
+            const GLuint u = attr - FRAG_ATTRIB_TEX0;
+            /* a texcoord */
+            if (ctx->Point.CoordReplace[u]) {
+               tCoords[numTcoords++] = attr;
+
+               if (ctx->Point.SpriteRMode == GL_ZERO)
+                  r = 0.0F;
+               else if (ctx->Point.SpriteRMode == GL_S)
+                  r = vert->attrib[attr][0];
+               else /* GL_R */
+                  r = vert->attrib[attr][2];
+
+               span.attrStart[attr][0] = s;
+               span.attrStart[attr][1] = 0.0; /* overwritten below */
+               span.attrStart[attr][2] = r;
+               span.attrStart[attr][3] = 1.0;
+
+               span.attrStepX[attr][0] = dsdx;
+               span.attrStepX[attr][1] = 0.0;
+               span.attrStepX[attr][2] = 0.0;
+               span.attrStepX[attr][3] = 0.0;
+
+               span.attrStepY[attr][0] = 0.0;
+               span.attrStepY[attr][1] = dtdy;
+               span.attrStepY[attr][2] = 0.0;
+               span.attrStepY[attr][3] = 0.0;
+
+               continue;
             }
-            else {
-               /* GL_UPPER_LEFT */
-               t0 = 1.0;
-               dtdy = -1.0 / size;
-            }
-            tCoords[numTcoords++] = attr;
-
-            if (ctx->Point.SpriteRMode == GL_ZERO)
-               r = 0.0F;
-            else if (ctx->Point.SpriteRMode == GL_S)
-               r = vert->attrib[attr][0];
-            else /* GL_R */
-               r = vert->attrib[attr][2];
-
-            span.attrStart[attr][0] = s;
-            span.attrStart[attr][1] = 0.0; /* overwritten below */
-            span.attrStart[attr][2] = r;
-            span.attrStart[attr][3] = 1.0;
-
-            span.attrStepX[attr][0] = dsdx;
-            span.attrStepX[attr][1] = 0.0;
-            span.attrStepX[attr][2] = 0.0;
-            span.attrStepX[attr][3] = 0.0;
-
-            span.attrStepY[attr][0] = 0.0;
-            span.attrStepY[attr][1] = dtdy;
-            span.attrStepY[attr][2] = 0.0;
-            span.attrStepY[attr][3] = 0.0;
-
+         }
+         else if (attr == FRAG_ATTRIB_FOGC) {
+            /* GLSL gl_PointCoord is stored in fog.zw */
+            span.attrStart[FRAG_ATTRIB_FOGC][2] = 0.0;
+            span.attrStart[FRAG_ATTRIB_FOGC][3] = 0.0; /* t0 set below */
+            span.attrStepX[FRAG_ATTRIB_FOGC][2] = dsdx;
+            span.attrStepX[FRAG_ATTRIB_FOGC][3] = 0.0;
+            span.attrStepY[FRAG_ATTRIB_FOGC][2] = 0.0;
+            span.attrStepY[FRAG_ATTRIB_FOGC][3] = dtdy;
+            tCoords[numTcoords++] = FRAG_ATTRIB_FOGC;
             continue;
          }
-      }
-      /* use vertex's texcoord/attrib */
-      COPY_4V(span.attrStart[attr], vert->attrib[attr]);
-      ASSIGN_4V(span.attrStepX[attr], 0, 0, 0, 0);
-      ASSIGN_4V(span.attrStepY[attr], 0, 0, 0, 0);
-   ATTRIB_LOOP_END
+         /* use vertex's texcoord/attrib */
+         COPY_4V(span.attrStart[attr], vert->attrib[attr]);
+         ASSIGN_4V(span.attrStepX[attr], 0, 0, 0, 0);
+         ASSIGN_4V(span.attrStepY[attr], 0, 0, 0, 0);
+      ATTRIB_LOOP_END;
+   }
 
    /* compute pos, bounds and render */
    {
@@ -172,9 +186,10 @@ sprite_point(GLcontext *ctx, const SWvertex *vert)
       }
       else {
          /* even size */
-         xmin = (GLint) x - iRadius + 1;
+         /* 0.501 factor allows conformance to pass */
+         xmin = (GLint) (x + 0.501) - iRadius;
          xmax = xmin + iSize - 1;
-         ymin = (GLint) y - iRadius + 1;
+         ymin = (GLint) (y + 0.501) - iRadius;
          ymax = ymin + iSize - 1;
       }
 
@@ -183,7 +198,10 @@ sprite_point(GLcontext *ctx, const SWvertex *vert)
          GLuint i;
          /* setup texcoord T for this row */
          for (i = 0; i < numTcoords; i++) {
-            span.attrStart[tCoords[i]][1] = tcoord;
+            if (tCoords[i] == FRAG_ATTRIB_FOGC)
+               span.attrStart[FRAG_ATTRIB_FOGC][3] = tcoord;
+            else
+               span.attrStart[tCoords[i]][1] = tcoord;
          }
 
          /* these might get changed by span clipping */
@@ -227,7 +245,7 @@ smooth_point(GLcontext *ctx, const SWvertex *vert)
    }
    else {
       /* use constant point size */
-      size = ctx->Point._Size; /* this is already clamped */
+      size = ctx->Point.Size;
    }
    /* clamp to AA implementation limits */
    size = CLAMP(size, ctx->Const.MinPointSizeAA, ctx->Const.MaxPointSizeAA);
@@ -361,7 +379,7 @@ large_point(GLcontext *ctx, const SWvertex *vert)
    }
    else {
       /* use constant point size */
-      size = ctx->Point._Size; /* already clamped to user range */
+      size = ctx->Point.Size;
    }
    /* clamp to non-AA implementation limits */
    size = CLAMP(size, ctx->Const.MinPointSize, ctx->Const.MaxPointSize);
@@ -418,9 +436,10 @@ large_point(GLcontext *ctx, const SWvertex *vert)
       }
       else {
          /* even size */
-         xmin = (GLint) x - iRadius + 1;
+         /* 0.501 factor allows conformance to pass */
+         xmin = (GLint) (x + 0.501) - iRadius;
          xmax = xmin + iSize - 1;
-         ymin = (GLint) y - iRadius + 1;
+         ymin = (GLint) (y + 0.501) - iRadius;
          ymax = ymin + iSize - 1;
       }
 
@@ -550,7 +569,7 @@ _swrast_choose_point(GLcontext *ctx)
       else if (ctx->Point.SmoothFlag) {
          swrast->Point = smooth_point;
       }
-      else if (ctx->Point._Size > 1.0 ||
+      else if (ctx->Point.Size > 1.0 ||
                ctx->Point._Attenuated ||
                ctx->VertexProgram.PointSizeEnabled) {
          swrast->Point = large_point;

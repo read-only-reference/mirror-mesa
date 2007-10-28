@@ -6,6 +6,7 @@
 #include "wmesadef.h"
 #include "colors.h"
 #include <GL/wmesa.h>
+#include <winuser.h>
 #include "context.h"
 #include "extensions.h"
 #include "framebuffer.h"
@@ -114,7 +115,7 @@ static void wmSetPixelFormat(WMesaFramebuffer pwfb, HDC hDC)
 {
     pwfb->cColorBits = GetDeviceCaps(hDC, BITSPIXEL);
 
-    // Only 16 and 32 bit targets are supported now
+    /* Only 16 and 32 bit targets are supported now */
     assert(pwfb->cColorBits == 0 ||
 	   pwfb->cColorBits == 16 || 
 	   pwfb->cColorBits == 32);
@@ -457,23 +458,84 @@ static void write_rgba_span_front(const GLcontext *ctx,
 				   const GLubyte rgba[][4], 
 				   const GLubyte mask[] )
 {
-    WMesaContext pwc = wmesa_context(ctx);
-    GLuint i;
-    
-    (void) ctx;
-    y=FLIP(y);
-    if (mask) {
-	for (i=0; i<n; i++)
-	    if (mask[i])
-		SetPixel(pwc->hDC, x+i, y, RGB(rgba[i][RCOMP], rgba[i][GCOMP], 
-					       rgba[i][BCOMP]));
-    }
-    else {
-	for (i=0; i<n; i++)
-	    SetPixel(pwc->hDC, x+i, y, RGB(rgba[i][RCOMP], rgba[i][GCOMP], 
-					   rgba[i][BCOMP]));
-    }
-    
+   WMesaContext pwc = wmesa_context(ctx);
+   WMesaFramebuffer pwfb = wmesa_lookup_framebuffer(pwc->hDC);
+   CONST BITMAPINFO bmi=
+   {
+      {
+         sizeof(BITMAPINFOHEADER),
+         n, 1, 1, 32, BI_RGB, 0, 1, 1, 0, 0
+      }
+   };
+   HBITMAP bmp=0;
+   HDC mdc=0;
+   typedef union
+   {
+      unsigned i;
+      struct {
+         unsigned b:8, g:8, r:8, a:8;
+      };
+   } BGRA;
+   BGRA *bgra, c;
+   int i;
+
+   if (n < 16) {   // the value 16 is just guessed
+      y=FLIP(y);
+      if (mask) {
+         for (i=0; i<n; i++)
+            if (mask[i])
+               SetPixel(pwc->hDC, x+i, y,
+                        RGB(rgba[i][RCOMP], rgba[i][GCOMP], rgba[i][BCOMP]));
+      }
+      else {
+         for (i=0; i<n; i++)
+            SetPixel(pwc->hDC, x+i, y,
+                     RGB(rgba[i][RCOMP], rgba[i][GCOMP], rgba[i][BCOMP]));
+      }
+   }
+   else {
+      if (!pwfb) {
+         _mesa_problem(NULL, "wmesa: write_rgba_span_front on unknown hdc");
+         return;
+      }
+      bgra=malloc(n*sizeof(BGRA));
+      if (!bgra) {
+         _mesa_problem(NULL, "wmesa: write_rgba_span_front: out of memory");
+         return;
+      }
+      c.a=0;
+      if (mask) {
+         for (i=0; i<n; i++) {
+            if (mask[i]) {
+               c.r=rgba[i][RCOMP];
+               c.g=rgba[i][GCOMP];
+               c.b=rgba[i][BCOMP];
+               c.a=rgba[i][ACOMP];
+               bgra[i]=c;
+            }
+            else
+               bgra[i].i=0;
+         }
+      }
+      else {
+         for (i=0; i<n; i++) {
+            c.r=rgba[i][RCOMP];
+            c.g=rgba[i][GCOMP];
+            c.b=rgba[i][BCOMP];
+            c.a=rgba[i][ACOMP];
+            bgra[i]=c;
+         }
+      }
+      bmp=CreateBitmap(n, 1,  1, 32, bgra);
+      mdc=CreateCompatibleDC(pwfb->hDC);
+      SelectObject(mdc, bmp);
+      y=FLIP(y);
+      BitBlt(pwfb->hDC, x, y, n, 1, mdc, 0, 0, SRCCOPY);
+      SelectObject(mdc, 0);
+      DeleteObject(bmp);
+      DeleteDC(mdc);
+      free(bgra);
+   }
 }
 
 /* Write a horizontal span of RGB color pixels with a boolean mask. */
@@ -1171,7 +1233,7 @@ WMesaContext WMesaCreateContext(HDC hDC,
     /* I do not understand this contributed code */
     /* Support memory and device contexts */
     if(WindowFromDC(hDC) != NULL) {
-	c->hDC = GetDC(WindowFromDC(hDC)); // huh ????
+	c->hDC = GetDC(WindowFromDC(hDC)); /* huh ???? */
     }
     else {
 	c->hDC = hDC;
@@ -1400,10 +1462,16 @@ void WMesaSwapBuffers( HDC hdc )
     }
 }
 
+void WMesaShareLists(WMesaContext ctx_to_share, WMesaContext ctx)
+{
+	_mesa_share_state(&ctx->gl_ctx, &ctx_to_share->gl_ctx);	
+}
+
 /* This is hopefully a temporary hack to define some needed dispatch
  * table entries.  Hopefully, I'll find a better solution.  The
  * dispatch table generation scripts ought to be making these dummy
  * stubs as well. */
+#if !defined(__MINGW32__) || !defined(GL_NO_STDCALL)
 void gl_dispatch_stub_543(void){}
 void gl_dispatch_stub_544(void){}
 void gl_dispatch_stub_545(void){}
@@ -1471,3 +1539,4 @@ void gl_dispatch_stub_769(void){}
 void gl_dispatch_stub_770(void){}
 void gl_dispatch_stub_771(void){}
 
+#endif

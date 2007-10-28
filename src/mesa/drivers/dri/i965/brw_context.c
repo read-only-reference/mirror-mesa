@@ -31,7 +31,6 @@
 
 
 #include "brw_context.h"
-#include "brw_aub.h"
 #include "brw_defines.h"
 #include "brw_draw.h"
 #include "brw_vs.h"
@@ -79,7 +78,7 @@ static void brwUseProgram(GLcontext *ctx, GLuint program)
 		brw->attribs.FragmentProgram->Current = sh_prog->FragmentProgram;
 		ctx->FragmentProgram.Enabled = GL_TRUE;
 	    } else
-		ctx->VertexProgram.Enabled = GL_FALSE;
+		ctx->FragmentProgram.Enabled = GL_FALSE;
 	}
 }
 
@@ -162,8 +161,6 @@ GLboolean brwCreateContext( const __GLcontextModes *mesaVis,
 
    driInitExtensions( ctx, brw_extensions, GL_FALSE );
 
-   brw_aub_init( brw );
-
    brw_init_attribs( brw );
    brw_init_metaops( brw );
    brw_init_state( brw );
@@ -182,14 +179,6 @@ GLboolean brwCreateContext( const __GLcontextModes *mesaVis,
    brw_ProgramCacheInit( ctx );
 
    brw_FrameBufferTexInit( brw );
-
-   {
-      const char *filename = getenv("INTEL_REPLAY");
-      if (filename) {
-	 brw_playback_aubfile(brw, filename);
-	 exit(0);
-      }
-   }
 
    return GL_TRUE;
 }

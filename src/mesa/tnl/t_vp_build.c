@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5
+ * Version:  7.1
  *
- * Copyright (C) 2006  Tungsten Graphics   All Rights Reserved.
+ * Copyright (C) 2007  Tungsten Graphics   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -457,9 +457,13 @@ static void register_matrix_param5( struct tnl_program *p,
 }
 
 
+/**
+ * Convert a ureg source register to a prog_src_register.
+ */
 static void emit_arg( struct prog_src_register *src,
 		      struct ureg reg )
 {
+   assert(reg.file != PROGRAM_OUTPUT);
    src->File = reg.file;
    src->Index = reg.idx;
    src->Swizzle = reg.swz;
@@ -469,15 +473,24 @@ static void emit_arg( struct prog_src_register *src,
    src->RelAddr = 0;
 }
 
+/**
+ * Convert a ureg dest register to a prog_dst_register.
+ */
 static void emit_dst( struct prog_dst_register *dst,
 		      struct ureg reg, GLuint mask )
 {
+   /* Check for legal output register type.  UNDEFINED will occur in
+    * instruction that don't produce a result (like END).
+    */
+   assert(reg.file == PROGRAM_TEMPORARY ||
+          reg.file == PROGRAM_OUTPUT ||
+          reg.file == PROGRAM_UNDEFINED);
    dst->File = reg.file;
    dst->Index = reg.idx;
    /* allow zero as a shorthand for xyzw */
    dst->WriteMask = mask ? mask : WRITEMASK_XYZW; 
-   dst->CondMask = COND_TR;
-   dst->CondSwizzle = 0;
+   dst->CondMask = COND_TR;  /* always pass cond test */
+   dst->CondSwizzle = SWIZZLE_NOOP;
    dst->CondSrc = 0;
    dst->pad = 0;
 }
@@ -500,7 +513,7 @@ static void debug_insn( struct prog_instruction *inst, const char *fn,
 
 
 static void emit_op3fn(struct tnl_program *p,
-		       GLuint op,
+                       enum prog_opcode op,
 		       struct ureg dest,
 		       GLuint mask,
 		       struct ureg src0,
@@ -686,7 +699,7 @@ static struct ureg get_eye_normal( struct tnl_program *p )
 	 struct ureg rescale = register_param2(p, STATE_INTERNAL,
 					       STATE_NORMAL_SCALE);
 
-	 emit_op2( p, OPCODE_MUL, p->eye_normal, 0, normal, 
+	 emit_op2( p, OPCODE_MUL, p->eye_normal, 0, p->eye_normal,
 		   swizzle1(rescale, X));
       }
    }
@@ -956,13 +969,19 @@ static void build_lighting( struct tnl_program *p )
 					       STATE_POSITION); 
 	    struct ureg V = get_eye_position(p);
 	    struct ureg dist = get_temp(p);
+	    struct ureg tmpPpli = get_temp(p);
 
 	    VPpli = get_temp(p); 
 	    half = get_temp(p);
  
-	    /* Calulate VPpli vector
+            /* In homogeneous object coordinates
+             */
+            emit_op1(p, OPCODE_RCP, dist, 0, swizzle1(Ppli, W));
+            emit_op2(p, OPCODE_MUL, tmpPpli, 0, Ppli, dist);
+
+	    /* Calculate VPpli vector
 	     */
-	    emit_op2(p, OPCODE_SUB, VPpli, 0, Ppli, V); 
+	    emit_op2(p, OPCODE_SUB, VPpli, 0, tmpPpli, V); 
 
 	    /* Normalize VPpli.  The dist value also used in
 	     * attenuation below.
@@ -994,6 +1013,7 @@ static void build_lighting( struct tnl_program *p )
 	    emit_normalize_vec3(p, half, half);
 
 	    release_temp(p, dist);
+	    release_temp(p, tmpPpli);
 	 }
 
 	 /* Calculate dot products:
@@ -1103,8 +1123,6 @@ static void build_fog( struct tnl_program *p )
 {
    struct ureg fog = register_output(p, VERT_RESULT_FOGC);
    struct ureg input;
-   GLuint useabs = p->state->fog_source_is_depth && p->state->fog_mode &&
-		   (p->state->fog_mode != FOG_EXP2);
 
    if (p->state->fog_source_is_depth) {
       input = swizzle1(get_eye_position(p), Z);
@@ -1117,6 +1135,7 @@ static void build_fog( struct tnl_program *p )
       struct ureg params = register_param2(p, STATE_INTERNAL,
 					   STATE_FOG_PARAMS_OPTIMIZED);
       struct ureg tmp = get_temp(p);
+      GLboolean useabs = (p->state->fog_mode != FOG_EXP2);
 
       if (useabs) {
 	 emit_op1(p, OPCODE_ABS, tmp, 0, input);
@@ -1149,7 +1168,10 @@ static void build_fog( struct tnl_program *p )
       /* results = incoming fog coords (compute fog per-fragment later) 
        *
        * KW:  Is it really necessary to do anything in this case?
+       * BP: Yes, we always need to compute the absolute value, unless
+       * we want to push that down into the fragment program...
        */
+      GLboolean useabs = GL_TRUE;
       emit_op1(p, useabs ? OPCODE_ABS : OPCODE_MOV, fog, WRITEMASK_X, input);
    }
 }

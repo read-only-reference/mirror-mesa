@@ -1983,6 +1983,10 @@ static const byte slang_120_core_gc[] = {
 #include "library/slang_120_core_gc.h"
 };
 
+static const byte slang_120_fragment_gc[] = {
+#include "library/slang_builtin_120_fragment_gc.h"
+};
+
 static const byte slang_common_builtin_gc[] = {
 #include "library/slang_common_builtin_gc.h"
 };
@@ -2059,6 +2063,13 @@ compile_object(grammar * id, const char *source, slang_code_object * object,
                              SLANG_UNIT_FRAGMENT_BUILTIN, infolog, NULL,
                              &object->builtin[SLANG_BUILTIN_COMMON], NULL))
             return GL_FALSE;
+#if FEATURE_ARB_shading_language_120
+         if (!compile_binary(slang_120_fragment_gc,
+                             &object->builtin[SLANG_BUILTIN_TARGET],
+                             SLANG_UNIT_FRAGMENT_BUILTIN, infolog, NULL,
+                             &object->builtin[SLANG_BUILTIN_COMMON], NULL))
+            return GL_FALSE;
+#endif
       }
       else if (type == SLANG_UNIT_VERTEX_SHADER) {
          if (!compile_binary(slang_vertex_builtin_gc,
@@ -2135,7 +2146,7 @@ _slang_compile(GLcontext *ctx, struct gl_shader *shader)
          progTarget = GL_FRAGMENT_PROGRAM_ARB;
       shader->Programs
          = (struct gl_program **) malloc(sizeof(struct gl_program*));
-      shader->Programs[0] = _mesa_new_program(ctx, progTarget, 1);
+      shader->Programs[0] = ctx->Driver.NewProgram(ctx, progTarget, 1);
       shader->NumPrograms = 1;
 
       shader->Programs[0]->Parameters = _mesa_new_parameter_list();

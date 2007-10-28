@@ -92,7 +92,7 @@
 #endif
 
 #ifdef WGLAPI
-#undef WGLAPI
+#	undef WGLAPI
 #endif
 
 #if !defined(OPENSTEP) && (defined(__WIN32__) && !defined(__CYGWIN__)) && !defined(BUILD_FOR_SNAP)
@@ -237,7 +237,7 @@
 #endif
 
 
-#if !defined __GNUC__ || __GNUC__ < 3
+#if (!defined(__GNUC__) || __GNUC__ < 3) && !defined(__IBMC__)
 #  define __builtin_expect(x, y) x
 #endif
 

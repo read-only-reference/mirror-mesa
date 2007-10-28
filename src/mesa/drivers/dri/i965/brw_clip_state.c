@@ -43,7 +43,8 @@ static void upload_clip_unit( struct brw_context *brw )
    memset(&clip, 0, sizeof(clip));
 
    /* CACHE_NEW_CLIP_PROG */
-   clip.thread0.grf_reg_count = ((brw->clip.prog_data->total_grf-1) & ~15) / 16;
+   clip.thread0.grf_reg_count =
+      ALIGN(brw->clip.prog_data->total_grf, 16) / 16 - 1;
    clip.thread0.kernel_start_pointer = brw->clip.prog_gs_offset >> 6;
    clip.thread3.urb_entry_read_length = brw->clip.prog_data->urb_read_length;
    clip.thread3.const_urb_entry_read_length = brw->clip.prog_data->curb_read_length;
@@ -55,7 +56,7 @@ static void upload_clip_unit( struct brw_context *brw )
    /* BRW_NEW_URB_FENCE */
    clip.thread4.nr_urb_entries = brw->urb.nr_clip_entries; 
    clip.thread4.urb_entry_allocation_size = brw->urb.vsize - 1;
-   clip.thread4.max_threads = 0; /* Hmm, maybe the max is 1 or 2 threads */
+   clip.thread4.max_threads = 1; /* 2 threads */
 
    if (INTEL_DEBUG & DEBUG_STATS)
       clip.thread4.stats_enable = 1; 
