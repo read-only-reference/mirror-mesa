@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.3
+ * Version:  7.0.3
  *
  * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
@@ -65,7 +65,7 @@
    GLfloat attrPlane[FRAG_ATTRIB_MAX][4][4];
    GLfloat wPlane[4];  /* win[3] */
 #endif
-   GLfloat bf = SWRAST_CONTEXT(ctx)->_BackfaceSign;
+   GLfloat bf = SWRAST_CONTEXT(ctx)->_BackfaceCullSign;
    
    (void) swrast;
 
@@ -104,6 +104,7 @@
    majDx = vMax->attrib[FRAG_ATTRIB_WPOS][0] - vMin->attrib[FRAG_ATTRIB_WPOS][0];
    majDy = vMax->attrib[FRAG_ATTRIB_WPOS][1] - vMin->attrib[FRAG_ATTRIB_WPOS][1];
 
+   /* front/back-face determination and cullling */
    {
       const GLfloat botDx = vMid->attrib[FRAG_ATTRIB_WPOS][0] - vMin->attrib[FRAG_ATTRIB_WPOS][0];
       const GLfloat botDy = vMid->attrib[FRAG_ATTRIB_WPOS][1] - vMin->attrib[FRAG_ATTRIB_WPOS][1];
@@ -112,6 +113,8 @@
       if (area * bf < 0 || area == 0 || IS_INF_OR_NAN(area))
 	 return;
       ltor = (GLboolean) (area < 0.0F);
+
+      span.facing = area * swrast->_BackfaceSign > 0.0F;
    }
 
    /* Plane equation setup:
@@ -286,7 +289,7 @@
          }
 
          /* skip fragments with zero coverage */
-         while (startX >= 0) {
+         while (startX > 0) {
             coverage = compute_coveragef(pMin, pMax, pMid, startX, iy);
             if (coverage > 0.0F)
                break;
@@ -300,6 +303,7 @@
             /* (cx,cy) = center of fragment */
             const GLfloat cx = ix + 0.5F, cy = iy + 0.5F;
             SWspanarrays *array = span.array;
+            ASSERT(ix >= 0);
 #ifdef DO_INDEX
             array->coverage[ix] = (GLfloat) compute_coveragei(pMin, pMax, pMid, ix, iy);
 #else
