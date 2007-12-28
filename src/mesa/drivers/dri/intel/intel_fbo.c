@@ -282,7 +282,7 @@ intel_alloc_renderbuffer_storage(GLcontext * ctx, struct gl_renderbuffer *rb,
       DBG("Allocating %d x %d Intel RBO (pitch %d)\n", width,
 	  height, pitch);
 
-      irb->region = intel_region_alloc(intel->intelScreen, cpp, pitch, height);
+      irb->region = intel_region_alloc(intel, cpp, pitch, height);
       if (!irb->region)
          return GL_FALSE;       /* out of memory? */
 
@@ -493,7 +493,8 @@ intel_bind_framebuffer(GLcontext * ctx, GLenum target,
    if (target == GL_FRAMEBUFFER_EXT || target == GL_DRAW_FRAMEBUFFER_EXT) {
       intel_draw_buffer(ctx, fb);
       /* Integer depth range depends on depth buffer bits */
-      ctx->Driver.DepthRange(ctx, ctx->Viewport.Near, ctx->Viewport.Far);
+      if (ctx->Driver.DepthRange != NULL)
+	 ctx->Driver.DepthRange(ctx, ctx->Viewport.Near, ctx->Viewport.Far);
    }
    else {
       /* don't need to do anything if target == GL_READ_FRAMEBUFFER_EXT */

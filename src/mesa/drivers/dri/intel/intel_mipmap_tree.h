@@ -73,6 +73,7 @@ struct intel_mipmap_level
     * are going to be so diverse that there is no unified way to
     * compute the offsets of depth/cube images within a mipmap level,
     * so have to store them as a lookup table:
+    * NOTE level_offset is a byte offset, but the image_offsets are _pixel_ offsets!!!
     */
    GLuint *image_offset;
 };
@@ -122,6 +123,10 @@ struct intel_mipmap_tree *intel_miptree_create(struct intel_context *intel,
                                                GLuint depth0,
                                                GLuint cpp,
                                                GLuint compress_byte);
+
+int intel_miptree_pitch_align (struct intel_context *intel,
+			       struct intel_mipmap_tree *mt,
+			       int pitch);
 
 void intel_miptree_reference(struct intel_mipmap_tree **dst,
                              struct intel_mipmap_tree *src);
@@ -190,9 +195,11 @@ void intel_miptree_image_copy(struct intel_context *intel,
 
 /* i915_mipmap_tree.c:
  */
-GLboolean i915_miptree_layout(struct intel_mipmap_tree *mt);
-GLboolean i945_miptree_layout(struct intel_mipmap_tree *mt);
-
-
+GLboolean i915_miptree_layout(struct intel_context *intel,
+			      struct intel_mipmap_tree *mt);
+GLboolean i945_miptree_layout(struct intel_context *intel,
+			      struct intel_mipmap_tree *mt);
+GLboolean brw_miptree_layout(struct intel_context *intel,
+			     struct intel_mipmap_tree *mt);
 
 #endif

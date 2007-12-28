@@ -34,6 +34,7 @@
 #include "drm.h"
 #include "mm.h"
 #include "texmem.h"
+#include "dri_bufmgr.h"
 
 #include "intel_screen.h"
 #include "intel_tex_obj.h"
@@ -111,6 +112,14 @@ struct intel_context
                                 struct intel_region * draw_region,
                                 struct intel_region * depth_region);
 
+      void (*meta_draw_quad)(struct intel_context *intel,
+			     GLfloat x0, GLfloat x1,
+			     GLfloat y0, GLfloat y1,
+			     GLfloat z,
+			     GLuint color, /* ARGB32 */
+			     GLfloat s0, GLfloat s1,
+			     GLfloat t0, GLfloat t1);
+
       void (*meta_color_mask) (struct intel_context * intel, GLboolean);
 
       void (*meta_stencil_replace) (struct intel_context * intel,
@@ -135,16 +144,32 @@ struct intel_context
 
       void (*assert_not_dirty) (struct intel_context *intel);
 
+      void (*debug_batch)(struct intel_context *intel);
    } vtbl;
 
    GLint refcount;
    GLuint Fallback;
    GLuint NewGLState;
 
+   dri_bufmgr *bufmgr;
+   unsigned int maxBatchSize;
+
+   struct intel_region *front_region;
+   struct intel_region *back_region;
+   struct intel_region *third_region;
+   struct intel_region *depth_region;
+
+   /**
+    * This value indicates that the kernel memory manager is being used
+    * instead of the fake client-side memory manager.
+    */
+   GLboolean ttm;
+
    dri_fence *last_swap_fence;
    dri_fence *first_swap_fence;
 
    struct intel_batchbuffer *batch;
+   unsigned batch_id;
    GLuint last_state_batch_id;
 
    struct
@@ -408,6 +433,7 @@ extern void intelInitStateFuncs(struct dd_function_table *functions);
 #define BLENDFACT_INV_CONST_ALPHA	0x0f
 #define BLENDFACT_MASK          	0x0f
 
+extern int intel_translate_shadow_compare_func(GLenum func);
 extern int intel_translate_compare_func(GLenum func);
 extern int intel_translate_stencil_op(GLenum op);
 extern int intel_translate_blend_factor(GLenum factor);

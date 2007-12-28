@@ -33,7 +33,7 @@
 
 #include "brw_context.h"
 #include "brw_state.h"
-#include "bufmgr.h"
+#include "dri_bufmgr.h"
 #include "intel_batchbuffer.h"
 
 /* This is used to initialize brw->state.atoms[].  We could use this
@@ -112,8 +112,7 @@ void brw_init_state( struct brw_context *brw )
 {
    GLuint i;
 
-   brw_init_pools(brw);
-   brw_init_caches(brw);
+   brw_init_cache(brw);
 
    brw->state.atoms = _mesa_malloc(sizeof(atoms));
    brw->state.nr_atoms = sizeof(atoms)/sizeof(*atoms);
@@ -138,9 +137,8 @@ void brw_destroy_state( struct brw_context *brw )
       brw->state.atoms = NULL;
    }
 
-   brw_destroy_caches(brw);
+   brw_destroy_cache(brw);
    brw_destroy_batch_cache(brw);
-   brw_destroy_pools(brw);   
 }
 
 /***********************************************************************
@@ -210,14 +208,6 @@ void brw_validate_state( struct brw_context *brw )
    if (brw->state.dirty.brw & BRW_NEW_CONTEXT)
       brw_clear_batch_cache_flush(brw);
 
-
-   /* Make an early reference to the state pools, as we don't cope
-    * well with them being evicted from here down.
-    */
-   (void)bmBufferOffset(&brw->intel, brw->pool[BRW_GS_POOL].buffer);
-   (void)bmBufferOffset(&brw->intel, brw->pool[BRW_SS_POOL].buffer);
-   (void)bmBufferOffset(&brw->intel, brw->intel.batch->buffer);
-
    if (INTEL_DEBUG) {
       /* Debug version which enforces various sanity checks on the
        * state flags which are generated and checked to help ensure
@@ -233,14 +223,17 @@ void brw_validate_state( struct brw_context *brw )
 
 	 assert(atom->dirty.mesa ||
 		atom->dirty.brw ||
-		atom->dirty.cache);
+		atom->dirty.cache ||
+		atom->always_update);
 	 assert(atom->update);
 
-	 if (check_state(state, &atom->dirty)) {
-	    brw->state.atoms[i]->update( brw );
+	 if (check_state(state, &atom->dirty) || atom->always_update) {
+	    atom->update( brw );
 	    
 /* 	    emit_foo(brw); */
 	 }
+	 if (atom->emit_reloc != NULL)
+	    atom->emit_reloc(brw);
 
 	 accumulate_state(&examined, &atom->dirty);
 
@@ -255,8 +248,12 @@ void brw_validate_state( struct brw_context *brw )
    }
    else {
       for (i = 0; i < Elements(atoms); i++) {	 
-	 if (check_state(state, &brw->state.atoms[i]->dirty))
-	    brw->state.atoms[i]->update( brw );
+	 const struct brw_tracked_state *atom = brw->state.atoms[i];
+
+	 if (check_state(state, &atom->dirty) || atom->always_update)
+	    atom->update( brw );
+	 if (atom->emit_reloc != NULL)
+	    atom->emit_reloc(brw);
       }
    }
 

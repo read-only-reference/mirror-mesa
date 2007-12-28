@@ -77,7 +77,6 @@ const struct brw_tracked_state brw_blend_constant_color = {
 static void upload_drawing_rect(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
-   __DRIdrawablePrivate *dPriv = intel->driDrawable;
    struct brw_drawrect bdr;
    int x1, y1;
    int x2, y2;
@@ -105,8 +104,8 @@ static void upload_drawing_rect(struct brw_context *brw)
    bdr.ymin = y1;
    bdr.xmax = x2;
    bdr.ymax = y2;
-   bdr.xorg = dPriv->x;
-   bdr.yorg = dPriv->y;
+   bdr.xorg = intel->drawX;
+   bdr.yorg = intel->drawY;
 
    /* Can't use BRW_CACHED_BATCH_STRUCT because this is also emitted
     * uncached in brw_draw.c:
@@ -123,78 +122,64 @@ const struct brw_tracked_state brw_drawing_rect = {
    .update = upload_drawing_rect
 };
 
-/***********************************************************************
- * Binding table pointers
+/**
+ * Upload the binding table pointers, which point each stage's array of surface
+ * state pointers.
+ *
+ * The binding table pointers are relative to the surface state base address,
+ * which is 0.
  */
-
 static void upload_binding_table_pointers(struct brw_context *brw)
 {
-   struct brw_binding_table_pointers btp;
-   memset(&btp, 0, sizeof(btp));
+   struct intel_context *intel = &brw->intel;
 
-   /* The binding table has been emitted to the SS pool already, so we
-    * know what its offset is.  When the batch buffer is fired, the
-    * binding table and surface structs will get fixed up to point to
-    * where the textures actually landed, but that won't change the
-    * value of the offsets here:
-    */
-   btp.header.opcode = CMD_BINDING_TABLE_PTRS;
-   btp.header.length = sizeof(btp)/4 - 2;
-   btp.vs = 0;
-   btp.gs = 0;
-   btp.clp = 0;
-   btp.sf = 0;
-   btp.wm = brw->wm.bind_ss_offset;
-
-   BRW_CACHED_BATCH_STRUCT(brw, &btp);
+   BEGIN_BATCH(6, INTEL_BATCH_NO_CLIPRECTS);
+   OUT_BATCH(CMD_BINDING_TABLE_PTRS << 16 | (6 - 2));
+   OUT_BATCH(0); /* vs */
+   OUT_BATCH(0); /* gs */
+   OUT_BATCH(0); /* clip */
+   OUT_BATCH(0); /* sf */
+   OUT_RELOC(brw->wm.bind_bo, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ, 0);
+   ADVANCE_BATCH();
 }
 
 const struct brw_tracked_state brw_binding_table_pointers = {
-   .dirty = {
-      .mesa = 0,
-      .brw = 0,
-      .cache = CACHE_NEW_SURF_BIND 
-   },
-   .update = upload_binding_table_pointers
+   .update = upload_binding_table_pointers,
+   .always_update = GL_TRUE, /* Has a relocation in the batchbuffer */
 };
 
 
-/***********************************************************************
- * Pipelined state pointers.  This is the key state packet from which
- * the hardware chases pointers to all the uploaded state in VRAM.
+/**
+ * Upload pointers to the per-stage state.
+ *
+ * The state pointers in this packet are all relative to the general state
+ * base address set by CMD_STATE_BASE_ADDRESS, which is 0.
  */
-   
 static void upload_pipelined_state_pointers(struct brw_context *brw )
 {
-   struct brw_pipelined_state_pointers psp;
-   memset(&psp, 0, sizeof(psp));
+   struct intel_context *intel = &brw->intel;
 
-   psp.header.opcode = CMD_PIPELINED_STATE_POINTERS;
-   psp.header.length = sizeof(psp)/4 - 2;
+   BEGIN_BATCH(7, INTEL_BATCH_NO_CLIPRECTS);
+   OUT_BATCH(CMD_PIPELINED_STATE_POINTERS << 16 | (7 - 2));
+   OUT_RELOC(brw->vs.state_bo, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ, 0);
+   if (brw->gs.prog_active)
+      OUT_RELOC(brw->gs.state_bo, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ, 1);
+   else
+      OUT_BATCH(0);
+   if (!brw->metaops.active)
+      OUT_RELOC(brw->clip.state_bo, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ, 1);
+   else
+      OUT_BATCH(0);
+   OUT_RELOC(brw->sf.state_bo, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ, 0);
+   OUT_RELOC(brw->wm.state_bo, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ, 0);
+   OUT_RELOC(brw->cc.state_bo, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ, 0);
+   ADVANCE_BATCH();
 
-   psp.vs.offset = brw->vs.state_gs_offset >> 5;
-   psp.sf.offset = brw->sf.state_gs_offset >> 5;
-   psp.wm.offset = brw->wm.state_gs_offset >> 5;
-   psp.cc.offset = brw->cc.state_gs_offset >> 5;
-
-   /* GS gets turned on and off regularly.  Need to re-emit URB fence
-    * after this occurs.  
-    */
-   if (brw->gs.prog_active) {
-      psp.gs.offset = brw->gs.state_gs_offset >> 5;
-      psp.gs.enable = 1;
-   }
-
-   if (!brw->metaops.active) {
-      psp.clp.offset = brw->clip.state_gs_offset >> 5;
-      psp.clp.enable = 1;
-   }
-
-
-   if (BRW_CACHED_BATCH_STRUCT(brw, &psp))
-      brw->state.dirty.brw |= BRW_NEW_PSP;
+   brw->state.dirty.brw |= BRW_NEW_PSP;
 }
 
+#if 0
+/* Combined into brw_psp_urb_cbs */
 const struct brw_tracked_state brw_pipelined_state_pointers = {
    .dirty = {
       .mesa = 0,
@@ -208,7 +193,9 @@ const struct brw_tracked_state brw_pipelined_state_pointers = {
 		CACHE_NEW_CC_UNIT)
    },
    .update = upload_pipelined_state_pointers
+   .always_update = GL_TRUE, /* Has a relocation in the batchbuffer */
 };
+#endif
 
 static void upload_psp_urb_cbs(struct brw_context *brw )
 {
@@ -230,74 +217,68 @@ const struct brw_tracked_state brw_psp_urb_cbs = {
 		CACHE_NEW_WM_UNIT | 
 		CACHE_NEW_CC_UNIT)
    },
-   .update = upload_psp_urb_cbs
+   .update = upload_psp_urb_cbs,
+   .always_update = GL_TRUE, /* psp has relocations. */
 };
 
-
-
-
-/***********************************************************************
- * Depthbuffer - currently constant, but rotation would change that.
+/**
+ * Upload the depthbuffer offset and format.
+ *
+ * We have to do this per state validation as we need to emit the relocation
+ * in the batch buffer.
  */
-
 static void upload_depthbuffer(struct brw_context *brw)
 {
-   /* 0x79050003  Depth Buffer */
    struct intel_context *intel = &brw->intel;
    struct intel_region *region = brw->state.depth_region;
-   struct brw_depthbuffer bd;
-   memset(&bd, 0, sizeof(bd));
 
-   bd.header.bits.opcode = CMD_DEPTH_BUFFER;
-   bd.header.bits.length = sizeof(bd)/4-2;
-   bd.dword1.bits.pitch = (region->pitch * region->cpp) - 1;
-   
-   switch (region->cpp) {
-   case 2:
-      bd.dword1.bits.format = BRW_DEPTHFORMAT_D16_UNORM;
-      break;
-   case 4:
-      if (intel->depth_buffer_is_float)
-	 bd.dword1.bits.format = BRW_DEPTHFORMAT_D32_FLOAT;
-      else
-	 bd.dword1.bits.format = BRW_DEPTHFORMAT_D24_UNORM_S8_UINT;
-      break;
-   default:
-      assert(0);
-      return;
+   if (region == NULL) {
+      BEGIN_BATCH(5, INTEL_BATCH_NO_CLIPRECTS);
+      OUT_BATCH(CMD_DEPTH_BUFFER << 16 | (5 - 2));
+      OUT_BATCH((BRW_DEPTHFORMAT_D32_FLOAT << 18) |
+		(BRW_SURFACE_NULL << 29));
+      OUT_BATCH(0);
+      OUT_BATCH(0);
+      OUT_BATCH(0);
+      ADVANCE_BATCH();
+   } else {
+      unsigned int format;
+
+      switch (region->cpp) {
+      case 2:
+	 format = BRW_DEPTHFORMAT_D16_UNORM;
+	 break;
+      case 4:
+	 if (intel->depth_buffer_is_float)
+	    format = BRW_DEPTHFORMAT_D32_FLOAT;
+	 else
+	    format = BRW_DEPTHFORMAT_D24_UNORM_S8_UINT;
+	 break;
+      default:
+	 assert(0);
+	 return;
+      }
+
+      BEGIN_BATCH(5, INTEL_BATCH_NO_CLIPRECTS);
+      OUT_BATCH(CMD_DEPTH_BUFFER << 16 | (5 - 2));
+      OUT_BATCH(((region->pitch * region->cpp) - 1) |
+		(format << 18) |
+		(BRW_TILEWALK_YMAJOR << 26) |
+		(region->tiled << 27) |
+		(BRW_SURFACE_2D << 29));
+      OUT_RELOC(region->buffer,
+		DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ | DRM_BO_FLAG_WRITE, 0);
+      OUT_BATCH((BRW_SURFACE_MIPMAPLAYOUT_BELOW << 1) |
+		((region->pitch - 1) << 6) |
+		((region->height - 1) << 19));
+      OUT_BATCH(0);
+      ADVANCE_BATCH();
    }
-
-   bd.dword1.bits.depth_offset_disable = 0; /* coordinate offset */
-
-   /* The depthbuffer can only use YMAJOR tiling...  This is a bit of
-    * a shame as it clashes with the 2d blitter which only supports
-    * XMAJOR tiling...  
-    */
-   bd.dword1.bits.tile_walk = BRW_TILEWALK_YMAJOR;
-   bd.dword1.bits.tiled_surface = intel->depth_region->tiled;
-   bd.dword1.bits.surface_type = BRW_SURFACE_2D;
-
-   /* BRW_NEW_LOCK */
-   bd.dword2_base_addr = bmBufferOffset(intel, region->buffer);    
-
-   bd.dword3.bits.mipmap_layout = BRW_SURFACE_MIPMAPLAYOUT_BELOW;
-   bd.dword3.bits.lod = 0;
-   bd.dword3.bits.width = region->pitch - 1; /* XXX: width ? */
-   bd.dword3.bits.height = region->height - 1;
-
-   bd.dword4.bits.min_array_element = 0;
-   bd.dword4.bits.depth = 0;
-      
-   BRW_CACHED_BATCH_STRUCT(brw, &bd);
 }
 
 const struct brw_tracked_state brw_depthbuffer = {
-   .dirty = {
-      .mesa = 0,
-      .brw = BRW_NEW_CONTEXT | BRW_NEW_LOCK,
-      .cache = 0
-   },
-   .update = upload_depthbuffer
+   .update = upload_depthbuffer,
+   .always_update = GL_TRUE,
 };
 
 
@@ -494,40 +475,36 @@ const struct brw_tracked_state brw_invarient_state = {
    .update = upload_invarient_state
 };
 
-
-/* State pool addresses:
+/**
+ * Define the base addresses which some state is referenced from.
+ *
+ * This allows us to avoid having to emit relocations in many places for
+ * cached state, and instead emit pointers inside of large, mostly-static
+ * state pools.  This comes at the expense of memory, and more expensive cache
+ * misses.
  */
 static void upload_state_base_address( struct brw_context *brw )
 {
    struct intel_context *intel = &brw->intel;
-   struct brw_state_base_address sba;
-      
-   memset(&sba, 0, sizeof(sba));
 
-   sba.header.opcode = CMD_STATE_BASE_ADDRESS;
-   sba.header.length = 0x4;
-
-   /* BRW_NEW_LOCK */
-   sba.bits0.general_state_address = bmBufferOffset(intel, brw->pool[BRW_GS_POOL].buffer) >> 5;
-   sba.bits0.modify_enable = 1;
-
-   /* BRW_NEW_LOCK */
-   sba.bits1.surface_state_address = bmBufferOffset(intel, brw->pool[BRW_SS_POOL].buffer) >> 5;
-   sba.bits1.modify_enable = 1;
-
-   sba.bits2.modify_enable = 1;
-   sba.bits3.modify_enable = 1;
-   sba.bits4.modify_enable = 1;
-
-   BRW_CACHED_BATCH_STRUCT(brw, &sba);
+   /* Output the structure (brw_state_base_address) directly to the
+    * batchbuffer, so we can emit relocations inline.
+    */
+   BEGIN_BATCH(6, INTEL_BATCH_NO_CLIPRECTS);
+   OUT_BATCH(CMD_STATE_BASE_ADDRESS << 16 | (6 - 2));
+   OUT_BATCH(1); /* General state base address */
+   OUT_BATCH(1); /* Surface state base address */
+   OUT_BATCH(1); /* Indirect object base address */
+   OUT_BATCH(1); /* General state upper bound */
+   OUT_BATCH(1); /* Indirect object upper bound */
+   ADVANCE_BATCH();
 }
-
 
 const struct brw_tracked_state brw_state_base_address = {
    .dirty = {
       .mesa = 0,
-      .brw = BRW_NEW_CONTEXT | BRW_NEW_LOCK,
-      .cache = 0
+      .brw = BRW_NEW_CONTEXT,
+      .cache = 0,
    },
    .update = upload_state_base_address
 };

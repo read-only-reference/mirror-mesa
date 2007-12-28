@@ -33,8 +33,10 @@
 #include "mtypes.h"
 #include "drm.h"
 #include "texmem.h"
+#include "dri_bufmgr.h"
 
 #include "intel_screen.h"
+#include "intel_tex_obj.h"
 #include "i830_common.h"
 #include "tnl/t_vertex.h"
 
@@ -59,32 +61,15 @@ typedef void (*intel_point_func)(struct intel_context *, intelVertex *);
 #define INTEL_FALLBACK_USER		 0x4
 #define INTEL_FALLBACK_RENDERMODE	 0x8
 #define INTEL_FALLBACK_TEXTURE   	 0x10
+#define INTEL_FALLBACK_DEPTH_BUFFER	 0x20
+#define INTEL_FALLBACK_STENCIL_BUFFER	 0x40
 
 extern void intelFallback( struct intel_context *intel, GLuint bit, GLboolean mode );
 #define FALLBACK( intel, bit, mode ) intelFallback( intel, bit, mode )
 
-
-
-struct intel_texture_object
-{
-   struct gl_texture_object base; /* The "parent" object */
-
-   /* The mipmap tree must include at least these levels once
-    * validated:
-    */
-   GLuint firstLevel;
-   GLuint lastLevel;
-
-   GLuint dirty_images[6];
-   GLuint dirty;
-
-   /* On validation any active images held in main memory or in other
-    * regions will be copied to this region and the old storage freed.
-    */
-   struct intel_mipmap_tree *mt;
-};
-
-
+#define INTEL_WRITE_PART  0x1
+#define INTEL_WRITE_FULL  0x2
+#define INTEL_READ        0x4
 
 struct intel_context
 {
@@ -142,65 +127,63 @@ struct intel_context
       void (*meta_frame_buffer_texture)( struct intel_context *intel,
 					 GLint xoff, GLint yoff );
 
-      void (*meta_draw_quad)(struct intel_context *intel, 
+      void (*meta_draw_quad)(struct intel_context *intel,
 			     GLfloat x0, GLfloat x1,
-			     GLfloat y0, GLfloat y1, 
+			     GLfloat y0, GLfloat y1,
 			     GLfloat z,
-			     GLubyte red, GLubyte green,
-			     GLubyte blue, GLubyte alpha,
+			     GLuint color, /* ARGB32 */
 			     GLfloat s0, GLfloat s1,
 			     GLfloat t0, GLfloat t1);
 
-
-
+      void (*debug_batch)(struct intel_context *intel);
    } vtbl;
 
    GLint refcount;   
    GLuint Fallback;
    GLuint NewGLState;
-   
-   GLuint last_swap_fence;
-   GLuint second_last_swap_fence;
-   
+
+   dri_bufmgr *bufmgr;
+   unsigned int maxBatchSize;
+
+   struct intel_region *front_region;
+   struct intel_region *back_region;
+   struct intel_region *third_region;
+   struct intel_region *depth_region;
+
+   /**
+    * This value indicates that the kernel memory manager is being used
+    * instead of the fake client-side memory manager.
+    */
+   GLboolean ttm;
+
+   dri_fence *first_swap_fence;
+   dri_fence *last_swap_fence;
+
    GLuint stats_wm;
 
    struct intel_batchbuffer *batch;
+   unsigned batch_id;
 
    GLubyte clear_chan[4];
-   GLuint ClearColor;
-   GLuint ClearDepth;
+   GLuint ClearColor565;
+   GLuint ClearColor8888;
 
-   GLfloat depth_scale;
    GLfloat polygon_offset_scale; /* dependent on depth_scale, bpp */
-   GLuint depth_clear_mask;
-   GLuint stencil_clear_mask;
 
    GLboolean hw_stencil;
    GLboolean hw_stipple;
    GLboolean depth_buffer_is_float;
-   GLboolean no_hw;
    GLboolean no_rast;
-   GLboolean thrashing;
    GLboolean locked;
    GLboolean strict_conformance;
    GLboolean need_flush;
-
-
-   
-   /* AGP memory buffer manager:
-    */
-   struct bufmgr *bm;
-
 
    /* State for intelvb.c and inteltris.c.
     */
    GLenum render_primitive;
    GLenum reduced_primitive;
 
-   struct intel_region *front_region;
-   struct intel_region *back_region;
    struct intel_region *draw_region;
-   struct intel_region *depth_region;
 
    /* These refer to the current draw (front vs. back) buffer:
     */
@@ -209,6 +192,7 @@ struct intel_context
    GLuint numClipRects;		/* cliprects for that buffer */
    drm_clip_rect_t *pClipRects;
    struct gl_texture_object *frame_buffer_texobj;
+   drm_clip_rect_t fboRect;     /**< cliprect for FBO rendering */
 
    GLboolean scissor;
    drm_clip_rect_t draw_rect;
@@ -225,6 +209,8 @@ struct intel_context
    volatile drmI830Sarea *sarea; 
 
    GLuint lastStamp;
+
+   GLboolean no_hw;
 
    /**
     * Configuration cache
@@ -302,32 +288,6 @@ static inline void * __memcpy(void * to, const void * from, size_t n)
 #endif
 
 
-/* The system memcpy (at least on ubuntu 5.10) has problems copying
- * to agp (writecombined) memory from a source which isn't 64-byte
- * aligned - there is a 4x performance falloff.
- *
- * The x86 __memcpy is immune to this but is slightly slower
- * (10%-ish) than the system memcpy.
- *
- * The sse_memcpy seems to have a slight cliff at 64/32 bytes, but
- * isn't much faster than x86_memcpy for agp copies.
- * 
- * TODO: switch dynamically.
- */
-static inline void *do_memcpy( void *dest, const void *src, size_t n )
-{
-   if ( (((unsigned long)src) & 63) ||
-	(((unsigned long)dest) & 63)) {
-      return  __memcpy(dest, src, n);	
-   }
-   else
-      return memcpy(dest, src, n);
-}
-
-
-
-
-
 /* ================================================================
  * Debugging:
  */
@@ -357,6 +317,7 @@ extern int INTEL_DEBUG;
 #define DEBUG_BLIT	0x200000
 #define DEBUG_REGION	0x400000
 #define DEBUG_MIPTREE	0x800000
+#define DEBUG_FBO	0x1000000
 
 #define DBG(...) do {						\
 	if (INTEL_DEBUG & FILE_DEBUG_FLAG)			\
@@ -487,16 +448,6 @@ void intelInitExtensions(GLcontext *ctx, GLboolean enable_imaging);
 static inline struct intel_context *intel_context( GLcontext *ctx )
 {
    return (struct intel_context *)ctx;
-}
-
-static inline struct intel_texture_object *intel_texture_object( struct gl_texture_object *obj )
-{
-   return (struct intel_texture_object *)obj;
-}
-
-static inline struct intel_texture_image *intel_texture_image( struct gl_texture_image *img )
-{
-   return (struct intel_texture_image *)img;
 }
 
 #endif

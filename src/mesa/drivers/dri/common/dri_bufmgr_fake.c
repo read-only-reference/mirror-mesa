@@ -42,7 +42,7 @@
 #include "imports.h"
 
 #define DBG(...) do {					\
-   if (bufmgr_fake->debug)				\
+   if (bufmgr_fake->bufmgr.debug)			\
       _mesa_printf(__VA_ARGS__);			\
 } while (0)
 
@@ -66,7 +66,7 @@ struct fake_buffer_reloc
    dri_bo *target_buf;
    GLuint offset;
    GLuint delta;
-   GLuint validate_flags;
+   uint64_t validate_flags;
    GLboolean relocated;
 };
 
@@ -94,8 +94,6 @@ struct block {
 
 typedef struct _bufmgr_fake {
    dri_bufmgr bufmgr;
-
-   _glthread_Mutex mutex;	/**< for thread safety */
 
    unsigned long low_offset;
    unsigned long size;
@@ -161,7 +159,7 @@ typedef struct _dri_bo_fake {
     * DRM_BO_NO_BACKING_STORE and BM_NO_FENCE_SUBDATA, which are the first two
     * driver private flags.
     */
-   unsigned int flags;
+   uint64_t flags;
    unsigned int alignment;
    GLboolean is_static, validated;
    unsigned int map_count;
@@ -181,7 +179,7 @@ typedef struct _dri_bo_fake {
 
    struct block *block;
    void *backing_store;
-   void (*invalidate_cb)(dri_bufmgr *bufmgr, void * );
+   void (*invalidate_cb)(dri_bo *bo, void *ptr);
    void *invalidate_ptr;
 } dri_bo_fake;
 
@@ -318,9 +316,9 @@ static void
 free_backing_store(dri_bo *bo)
 {
    dri_bo_fake *bo_fake = (dri_bo_fake *)bo;
-   assert(!(bo_fake->flags & (BM_PINNED|BM_NO_BACKING_STORE)));
 
    if (bo_fake->backing_store) {
+      assert(!(bo_fake->flags & (BM_PINNED|BM_NO_BACKING_STORE)));
       ALIGN_FREE(bo_fake->backing_store);
       bo_fake->backing_store = NULL;
    }
@@ -332,8 +330,8 @@ set_dirty(dri_bo *bo)
    dri_bufmgr_fake *bufmgr_fake = (dri_bufmgr_fake *)bo->bufmgr;
    dri_bo_fake *bo_fake = (dri_bo_fake *)bo;
 
-   if (bo_fake->flags & BM_NO_BACKING_STORE)
-      bo_fake->invalidate_cb(&bufmgr_fake->bufmgr, bo_fake->invalidate_ptr);
+   if (bo_fake->flags & BM_NO_BACKING_STORE && bo_fake->invalidate_cb != NULL)
+      bo_fake->invalidate_cb(bo, bo_fake->invalidate_ptr);
 
    assert(!(bo_fake->flags & BM_PINNED));
 
@@ -545,38 +543,33 @@ void
 dri_bufmgr_fake_contended_lock_take(dri_bufmgr *bufmgr)
 {
    dri_bufmgr_fake *bufmgr_fake = (dri_bufmgr_fake *)bufmgr;
+   struct block *block, *tmp;
 
-   _glthread_LOCK_MUTEX(bufmgr_fake->mutex);
-   {
-      struct block *block, *tmp;
+   bufmgr_fake->need_fence = 1;
+   bufmgr_fake->fail = 0;
 
-      bufmgr_fake->need_fence = 1;
-      bufmgr_fake->fail = 0;
+   /* Wait for hardware idle.  We don't know where acceleration has been
+    * happening, so we'll need to wait anyway before letting anything get
+    * put on the card again.
+    */
+   dri_bufmgr_fake_wait_idle(bufmgr_fake);
 
-      /* Wait for hardware idle.  We don't know where acceleration has been
-       * happening, so we'll need to wait anyway before letting anything get
-       * put on the card again.
-       */
-      dri_bufmgr_fake_wait_idle(bufmgr_fake);
+   /* Check that we hadn't released the lock without having fenced the last
+    * set of buffers.
+    */
+   assert(is_empty_list(&bufmgr_fake->fenced));
+   assert(is_empty_list(&bufmgr_fake->on_hardware));
 
-      /* Check that we hadn't released the lock without having fenced the last
-       * set of buffers.
-       */
-      assert(is_empty_list(&bufmgr_fake->fenced));
-      assert(is_empty_list(&bufmgr_fake->on_hardware));
-
-      foreach_s(block, tmp, &bufmgr_fake->lru) {
-	 assert(_fence_test(bufmgr_fake, block->fence));
-	 set_dirty(block->bo);
-      }
+   foreach_s(block, tmp, &bufmgr_fake->lru) {
+      assert(_fence_test(bufmgr_fake, block->fence));
+      set_dirty(block->bo);
    }
-   _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
 }
 
 static dri_bo *
 dri_fake_bo_alloc(dri_bufmgr *bufmgr, const char *name,
 		  unsigned long size, unsigned int alignment,
-		  unsigned int location_mask)
+		  uint64_t location_mask)
 {
    dri_bufmgr_fake *bufmgr_fake;
    dri_bo_fake *bo_fake;
@@ -614,7 +607,7 @@ dri_fake_bo_alloc(dri_bufmgr *bufmgr, const char *name,
 static dri_bo *
 dri_fake_bo_alloc_static(dri_bufmgr *bufmgr, const char *name,
 			 unsigned long offset, unsigned long size,
-			 void *virtual, unsigned int location_mask)
+			 void *virtual, uint64_t location_mask)
 {
    dri_bufmgr_fake *bufmgr_fake;
    dri_bo_fake *bo_fake;
@@ -646,12 +639,9 @@ dri_fake_bo_alloc_static(dri_bufmgr *bufmgr, const char *name,
 static void
 dri_fake_bo_reference(dri_bo *bo)
 {
-   dri_bufmgr_fake *bufmgr_fake = (dri_bufmgr_fake *)bo->bufmgr;
    dri_bo_fake *bo_fake = (dri_bo_fake *)bo;
 
-   _glthread_LOCK_MUTEX(bufmgr_fake->mutex);
    bo_fake->refcount++;
-   _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
 }
 
 static void
@@ -663,18 +653,46 @@ dri_fake_bo_unreference(dri_bo *bo)
    if (!bo)
       return;
 
-   _glthread_LOCK_MUTEX(bufmgr_fake->mutex);
    if (--bo_fake->refcount == 0) {
+      assert(bo_fake->map_count == 0);
       /* No remaining references, so free it */
       if (bo_fake->block)
 	 free_block(bufmgr_fake, bo_fake->block);
       free_backing_store(bo);
-      _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
       free(bo);
       DBG("drm_bo_unreference: free %s\n", bo_fake->name);
       return;
    }
-   _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
+}
+
+/**
+ * Set the buffer as not requiring backing store, and instead get the callback
+ * invoked whenever it would be set dirty.
+ */
+void dri_bo_fake_disable_backing_store(dri_bo *bo,
+				       void (*invalidate_cb)(dri_bo *bo,
+							     void *ptr),
+				       void *ptr)
+{
+   dri_bufmgr_fake *bufmgr_fake = (dri_bufmgr_fake *)bo->bufmgr;
+   dri_bo_fake *bo_fake = (dri_bo_fake *)bo;
+
+   if (bo_fake->backing_store)
+      free_backing_store(bo);
+
+   bo_fake->flags |= BM_NO_BACKING_STORE;
+
+   DBG("disable_backing_store set buf %d dirty\n", bo_fake->id);
+   bo_fake->dirty = 1;
+   bo_fake->invalidate_cb = invalidate_cb;
+   bo_fake->invalidate_ptr = ptr;
+
+   /* Note that it is invalid right from the start.  Also note
+    * invalidate_cb is called with the bufmgr locked, so cannot
+    * itself make bufmgr calls.
+    */
+   if (invalidate_cb != NULL)
+      invalidate_cb(bo, ptr);
 }
 
 /**
@@ -691,12 +709,9 @@ dri_fake_bo_map(dri_bo *bo, GLboolean write_enable)
    if (bo_fake->is_static)
       return 0;
 
-   _glthread_LOCK_MUTEX(bufmgr_fake->mutex);
    /* Allow recursive mapping, which is used internally in relocation. */
-   if (bo_fake->map_count++ != 0) {
-      _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
+   if (bo_fake->map_count++ != 0)
       return 0;
-   }
 
    /* Clear the relocation cache if unknown data is going to be written in. */
    if (!bufmgr_fake->in_relocation && write_enable) {
@@ -716,7 +731,6 @@ dri_fake_bo_map(dri_bo *bo, GLboolean write_enable)
 	 if (!bo_fake->block && !evict_and_alloc_block(bo)) {
 	    DBG("%s: alloc failed\n", __FUNCTION__);
 	    bufmgr_fake->fail = 1;
-	    _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
 	    return 1;
 	 }
 	 else {
@@ -739,7 +753,7 @@ dri_fake_bo_map(dri_bo *bo, GLboolean write_enable)
 	 bo->virtual = bo_fake->backing_store;
       }
    }
-   _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
+
    return 0;
 }
 
@@ -753,24 +767,20 @@ dri_fake_bo_unmap(dri_bo *bo)
    if (bo_fake->is_static)
       return 0;
 
-   _glthread_LOCK_MUTEX(bufmgr_fake->mutex);
-   if (--bo_fake->map_count != 0) {
-      _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
+   assert(bo_fake->map_count != 0);
+   if (--bo_fake->map_count != 0)
       return 0;
-   }
 
    DBG("drm_bo_unmap: (buf %d: %s, %d kb)\n", bo_fake->id, bo_fake->name,
        bo_fake->bo.size / 1024);
 
    bo->virtual = NULL;
 
-   _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
-
    return 0;
 }
 
 static int
-dri_fake_bo_validate(dri_bo *bo, unsigned int flags)
+dri_fake_bo_validate(dri_bo *bo, uint64_t flags)
 {
    dri_bufmgr_fake *bufmgr_fake;
    dri_bo_fake *bo_fake = (dri_bo_fake *)bo;
@@ -783,52 +793,52 @@ dri_fake_bo_validate(dri_bo *bo, unsigned int flags)
    DBG("drm_bo_validate: (buf %d: %s, %d kb)\n", bo_fake->id, bo_fake->name,
        bo_fake->bo.size / 1024);
 
-   _glthread_LOCK_MUTEX(bufmgr_fake->mutex);
-   {
-      if (bo_fake->is_static) {
-	 /* Add it to the needs-fence list */
-	 bufmgr_fake->need_fence = 1;
-	 _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
-	 return 0;
-      }
+   /* Sanity check: Buffers should be unmapped before being validated.
+    * This is not so much of a problem for bufmgr_fake, but TTM refuses,
+    * and the problem is harder to debug there.
+    */
+   assert(bo_fake->map_count == 0);
 
-      /* Allocate the card memory */
-      if (!bo_fake->block && !evict_and_alloc_block(bo)) {
-	 bufmgr_fake->fail = 1;
-	 _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
-	 DBG("Failed to validate buf %d:%s\n", bo_fake->id, bo_fake->name);
-	 return -1;
-      }
-
-      assert(bo_fake->block);
-      assert(bo_fake->block->bo == &bo_fake->bo);
-
-      bo->offset = bo_fake->block->mem->ofs;
-
-      /* Upload the buffer contents if necessary */
-      if (bo_fake->dirty) {
-	 DBG("Upload dirty buf %d:%s, sz %d offset 0x%x\n", bo_fake->id,
-	     bo_fake->name, bo->size, bo_fake->block->mem->ofs);
-
-	 assert(!(bo_fake->flags &
-		  (BM_NO_BACKING_STORE|BM_PINNED)));
-
-	 /* Actually, should be able to just wait for a fence on the memory,
-	  * which we would be tracking when we free it.  Waiting for idle is
-	  * a sufficiently large hammer for now.
-	  */
-	 dri_bufmgr_fake_wait_idle(bufmgr_fake);
-
-	 memcpy(bo_fake->block->virtual, bo_fake->backing_store, bo->size);
-	 bo_fake->dirty = 0;
-      }
-
-      bo_fake->block->on_hardware = 1;
-      move_to_tail(&bufmgr_fake->on_hardware, bo_fake->block);
-
+   if (bo_fake->is_static) {
+      /* Add it to the needs-fence list */
       bufmgr_fake->need_fence = 1;
+      return 0;
    }
-   _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
+
+   /* Allocate the card memory */
+   if (!bo_fake->block && !evict_and_alloc_block(bo)) {
+      bufmgr_fake->fail = 1;
+      DBG("Failed to validate buf %d:%s\n", bo_fake->id, bo_fake->name);
+      return -1;
+   }
+
+   assert(bo_fake->block);
+   assert(bo_fake->block->bo == &bo_fake->bo);
+
+   bo->offset = bo_fake->block->mem->ofs;
+
+   /* Upload the buffer contents if necessary */
+   if (bo_fake->dirty) {
+      DBG("Upload dirty buf %d:%s, sz %d offset 0x%x\n", bo_fake->id,
+	  bo_fake->name, bo->size, bo_fake->block->mem->ofs);
+
+      assert(!(bo_fake->flags &
+	       (BM_NO_BACKING_STORE|BM_PINNED)));
+
+      /* Actually, should be able to just wait for a fence on the memory,
+       * which we would be tracking when we free it.  Waiting for idle is
+       * a sufficiently large hammer for now.
+       */
+      dri_bufmgr_fake_wait_idle(bufmgr_fake);
+
+      memcpy(bo_fake->block->virtual, bo_fake->backing_store, bo->size);
+      bo_fake->dirty = 0;
+   }
+
+   bo_fake->block->on_hardware = 1;
+   move_to_tail(&bufmgr_fake->on_hardware, bo_fake->block);
+
+   bufmgr_fake->need_fence = 1;
 
    return 0;
 }
@@ -850,11 +860,9 @@ dri_fake_fence_validated(dri_bufmgr *bufmgr, const char *name,
    fence_fake->flushed = flushed;
    fence_fake->fence.bufmgr = bufmgr;
 
-   _glthread_LOCK_MUTEX(bufmgr_fake->mutex);
    cookie = _fence_emit_internal(bufmgr_fake);
    fence_fake->fence_cookie = cookie;
    fence_blocks(bufmgr_fake, cookie);
-   _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
 
    DBG("drm_fence_validated: 0x%08x cookie\n", fence_fake->fence_cookie);
 
@@ -865,29 +873,22 @@ static void
 dri_fake_fence_reference(dri_fence *fence)
 {
    dri_fence_fake *fence_fake = (dri_fence_fake *)fence;
-   dri_bufmgr_fake *bufmgr_fake = (dri_bufmgr_fake *)fence->bufmgr;
 
-   _glthread_LOCK_MUTEX(bufmgr_fake->mutex);
    ++fence_fake->refcount;
-   _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
 }
 
 static void
 dri_fake_fence_unreference(dri_fence *fence)
 {
    dri_fence_fake *fence_fake = (dri_fence_fake *)fence;
-   dri_bufmgr_fake *bufmgr_fake = (dri_bufmgr_fake *)fence->bufmgr;
 
    if (!fence)
       return;
 
-   _glthread_LOCK_MUTEX(bufmgr_fake->mutex);
    if (--fence_fake->refcount == 0) {
-      _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
       free(fence);
       return;
    }
-   _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
 }
 
 static void
@@ -898,9 +899,7 @@ dri_fake_fence_wait(dri_fence *fence)
 
    DBG("drm_fence_wait: 0x%08x cookie\n", fence_fake->fence_cookie);
 
-   _glthread_LOCK_MUTEX(bufmgr_fake->mutex);
    _fence_wait_internal(bufmgr_fake, fence_fake->fence_cookie);
-   _glthread_UNLOCK_MUTEX(bufmgr_fake->mutex);
 }
 
 static void
@@ -908,19 +907,19 @@ dri_fake_destroy(dri_bufmgr *bufmgr)
 {
    dri_bufmgr_fake *bufmgr_fake = (dri_bufmgr_fake *)bufmgr;
 
-   _glthread_DESTROY_MUTEX(bufmgr_fake->mutex);
    mmDestroy(bufmgr_fake->heap);
    free(bufmgr);
 }
 
 static void
-dri_fake_emit_reloc(dri_bo *reloc_buf, GLuint flags, GLuint delta,
+dri_fake_emit_reloc(dri_bo *reloc_buf, uint64_t flags, GLuint delta,
 		    GLuint offset, dri_bo *target_buf)
 {
    dri_bufmgr_fake *bufmgr_fake = (dri_bufmgr_fake *)reloc_buf->bufmgr;
    struct fake_buffer_reloc *r = &bufmgr_fake->reloc[bufmgr_fake->nr_relocs++];
    dri_bo_fake *target_fake = (dri_bo_fake *)target_buf;
    dri_bo_fake *reloc_fake = (dri_bo_fake *)reloc_buf;
+   int i;
 
    assert(bufmgr_fake->nr_relocs <= MAX_RELOCS);
 
@@ -945,6 +944,17 @@ dri_fake_emit_reloc(dri_bo *reloc_buf, GLuint flags, GLuint delta,
    r->offset = offset;
    r->delta = delta;
    r->validate_flags = flags;
+
+   /* Check that a conflicting relocation hasn't already been emitted. */
+   for (i = 0; i < bufmgr_fake->nr_relocs - 1; i++) {
+      struct fake_buffer_reloc *r2 = &bufmgr_fake->reloc[i];
+
+      assert(r->reloc_buf != r2->reloc_buf ||
+	     r->offset != r2->offset ||
+	     (r->target_buf == r2->target_buf &&
+	      r->delta == r2->delta &&
+	      r->validate_flags == r2->validate_flags));
+   }
 
    return;
 }
@@ -1097,14 +1107,6 @@ dri_fake_post_submit(dri_bo *batch_buf, dri_fence **last_fence)
    bufmgr_fake->nr_relocs = 0;
 }
 
-void
-dri_bufmgr_fake_set_debug(dri_bufmgr *bufmgr, GLboolean enable_debug)
-{
-   dri_bufmgr_fake *bufmgr_fake = (dri_bufmgr_fake *)bufmgr;
-
-   bufmgr_fake->debug = enable_debug;
-}
-
 dri_bufmgr *
 dri_bufmgr_fake_init(unsigned long low_offset, void *low_virtual,
 		     unsigned long size,
@@ -1126,8 +1128,6 @@ dri_bufmgr_fake_init(unsigned long low_offset, void *low_virtual,
    bufmgr_fake->size = size;
    bufmgr_fake->heap = mmInit(low_offset, size);
 
-   _glthread_INIT_MUTEX(bufmgr_fake->mutex);
-
    /* Hook in methods */
    bufmgr_fake->bufmgr.bo_alloc = dri_fake_bo_alloc;
    bufmgr_fake->bufmgr.bo_alloc_static = dri_fake_bo_alloc_static;
@@ -1142,6 +1142,8 @@ dri_bufmgr_fake_init(unsigned long low_offset, void *low_virtual,
    bufmgr_fake->bufmgr.emit_reloc = dri_fake_emit_reloc;
    bufmgr_fake->bufmgr.process_relocs = dri_fake_process_relocs;
    bufmgr_fake->bufmgr.post_submit = dri_fake_post_submit;
+   bufmgr_fake->bufmgr.debug = GL_FALSE;
+
    bufmgr_fake->fence_emit = fence_emit;
    bufmgr_fake->fence_wait = fence_wait;
    bufmgr_fake->driver_priv = driver_priv;

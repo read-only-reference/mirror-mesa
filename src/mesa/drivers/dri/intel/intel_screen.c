@@ -41,16 +41,14 @@
 #include "intel_buffers.h"
 #include "intel_tex.h"
 #include "intel_span.h"
-#include "intel_tris.h"
 #include "intel_ioctl.h"
 #include "intel_fbo.h"
+#include "intel_chipset.h"
 
+#include "i915_drm.h"
 #include "i830_dri.h"
-#include "dri_bufmgr.h"
 #include "intel_regions.h"
 #include "intel_batchbuffer.h"
-
-#include "intel_bufmgr_ttm.h"
 
 PUBLIC const char __driConfigOptions[] =
    DRI_CONF_BEGIN DRI_CONF_SECTION_PERFORMANCE
@@ -141,105 +139,6 @@ intelMapScreenRegions(__DRIscreenPrivate * sPriv)
              intelScreen->back.map, intelScreen->third.map,
              intelScreen->depth.map, intelScreen->tex.map);
    return GL_TRUE;
-}
-
-/** Driver-specific fence emit implementation for the fake memory manager. */
-static unsigned int
-intel_fence_emit(void *private)
-{
-   intelScreenPrivate *intelScreen = (intelScreenPrivate *)private;
-   unsigned int fence;
-
-   /* XXX: Need to emit a flush, if we haven't already (at least with the
-    * current batchbuffer implementation, we have).
-    */
-
-   fence = intelEmitIrqLocked(intelScreen);
-
-   return fence;
-}
-
-/** Driver-specific fence wait implementation for the fake memory manager. */
-static int
-intel_fence_wait(void *private, unsigned int cookie)
-{
-   intelScreenPrivate *intelScreen = (intelScreenPrivate *)private;
-
-   intelWaitIrq(intelScreen, cookie);
-
-   return 0;
-}
-
-static struct intel_region *
-intel_recreate_static(intelScreenPrivate *intelScreen,
-		      const char *name,
-		      struct intel_region *region,
-		      intelRegion *region_desc,
-		      GLuint mem_type)
-{
-  if (region) {
-    intel_region_update_static(intelScreen, region, name, mem_type,
-			       region_desc->bo_handle, region_desc->offset,
-			       region_desc->map, intelScreen->cpp,
-			       region_desc->pitch / intelScreen->cpp,
-			       intelScreen->height, region_desc->tiled);
-  } else {
-    region = intel_region_create_static(intelScreen, name, mem_type,
-					region_desc->bo_handle,
-					region_desc->offset,
-					region_desc->map, intelScreen->cpp,
-					region_desc->pitch / intelScreen->cpp,
-					intelScreen->height,
-					region_desc->tiled);
-  }
-
-  assert(region->buffer != NULL);
-
-  return region;
-}
-    
-
-/* Create intel_region structs to describe the static front,back,depth
- * buffers created by the xserver. 
- *
- * Although FBO's mean we now no longer use these as render targets in
- * all circumstances, they won't go away until the back and depth
- * buffers become private, and the front buffer will remain even then.
- *
- * Note that these don't allocate video memory, just describe
- * allocations alread made by the X server.
- */
-static void
-intel_recreate_static_regions(intelScreenPrivate *intelScreen)
-{
-   intelScreen->front_region =
-      intel_recreate_static(intelScreen, "front",
-			    intelScreen->front_region,
-			    &intelScreen->front,
-			    DRM_BO_FLAG_MEM_TT);
-
-   intelScreen->back_region =
-      intel_recreate_static(intelScreen, "back",
-			    intelScreen->back_region,
-			    &intelScreen->back,
-			    DRM_BO_FLAG_MEM_TT);
-
-   if (intelScreen->third.handle) {
-      intelScreen->third_region =
-	 intel_recreate_static(intelScreen, "third",
-			       intelScreen->third_region,
-			       &intelScreen->third,
-			       DRM_BO_FLAG_MEM_TT);
-   }
-
-   /* Still assumes front.cpp == depth.cpp.  We can kill this when we move to
-    * private buffers.
-    */
-   intelScreen->depth_region =
-      intel_recreate_static(intelScreen, "depth",
-			    intelScreen->depth_region,
-			    &intelScreen->depth,
-			    DRM_BO_FLAG_MEM_TT);
 }
 
 void
@@ -426,10 +325,6 @@ static GLboolean intelInitDriver(__DRIscreenPrivate *sPriv)
       (((GLubyte *) sPriv->pSAREA) + intelScreen->sarea_priv_offset);
 
    intelScreen->deviceID = gDRIPriv->deviceID;
-   if (intelScreen->deviceID == PCI_CHIP_I865_G)
-      intelScreen->maxBatchSize = 4096;
-   else
-      intelScreen->maxBatchSize = BATCH_SZ;
 
    intelScreen->mem = gDRIPriv->mem;
    intelScreen->cpp = gDRIPriv->cpp;
@@ -496,41 +391,6 @@ static GLboolean intelInitDriver(__DRIscreenPrivate *sPriv)
 
    sPriv->extensions = intelExtensions;
 
-   /* If we've got a new enough DDX that's initializing TTM and giving us
-    * object handles for the shared buffers, use that.
-    */
-   intelScreen->ttm = GL_FALSE;
-   if (getenv("INTEL_NO_TTM") == NULL &&
-       intelScreen->driScrnPriv->ddx_version.minor >= 9 &&
-       intelScreen->drmMinor >= 11 &&
-       intelScreen->front.bo_handle != -1) {
-      intelScreen->bufmgr = intel_bufmgr_ttm_init(sPriv->fd,
-						  DRM_FENCE_TYPE_EXE,
-						  DRM_FENCE_TYPE_EXE |
-						  DRM_I915_FENCE_TYPE_RW,
-						  BATCH_SZ);
-      if (intelScreen->bufmgr != NULL)
-	 intelScreen->ttm = GL_TRUE;
-   }
-   /* Otherwise, use the classic buffer manager. */
-   if (intelScreen->bufmgr == NULL) {
-      if (intelScreen->tex.size == 0) {
-	 fprintf(stderr, "[%s:%u] Error initializing buffer manager.\n",
-		 __func__, __LINE__);
-	 return GL_FALSE;
-      }
-      fprintf(stderr, "[%s:%u] Failed to init TTM buffer manager, falling back"
-	      " to classic.\n", __func__, __LINE__);
-      intelScreen->bufmgr = dri_bufmgr_fake_init(intelScreen->tex.offset,
-						 intelScreen->tex.map,
-						 intelScreen->tex.size,
-						 intel_fence_emit,
-						 intel_fence_wait,
-						 intelScreen);
-   }
-
-   intel_recreate_static_regions(intelScreen);
-
    return GL_TRUE;
 }
 
@@ -542,7 +402,6 @@ intelDestroyScreen(__DRIscreenPrivate * sPriv)
 
    intelUnmapScreenRegions(intelScreen);
 
-   dri_bufmgr_destroy(intelScreen->bufmgr);
    FREE(intelScreen);
    sPriv->private = NULL;
 }
@@ -713,9 +572,9 @@ extern GLboolean i830CreateContext(const __GLcontextModes * mesaVis,
 extern GLboolean i915CreateContext(const __GLcontextModes * mesaVis,
                                    __DRIcontextPrivate * driContextPriv,
                                    void *sharedContextPrivate);
-
-
-
+extern GLboolean brwCreateContext(const __GLcontextModes * mesaVis,
+				  __DRIcontextPrivate * driContextPriv,
+				  void *sharedContextPrivate);
 
 static GLboolean
 intelCreateContext(const __GLcontextModes * mesaVis,
@@ -725,29 +584,21 @@ intelCreateContext(const __GLcontextModes * mesaVis,
    __DRIscreenPrivate *sPriv = driContextPriv->driScreenPriv;
    intelScreenPrivate *intelScreen = (intelScreenPrivate *) sPriv->private;
 
-   switch (intelScreen->deviceID) {
-      /* Don't deal with i830 until texture work complete:
-       */
-   case PCI_CHIP_845_G:
-   case PCI_CHIP_I830_M:
-   case PCI_CHIP_I855_GM:
-   case PCI_CHIP_I865_G:
+#ifdef I915
+   if (IS_9XX(intelScreen->deviceID)) {
+      if (!IS_965(intelScreen->deviceID)) {
+	 return i915CreateContext(mesaVis, driContextPriv,
+				  sharedContextPrivate);
+      }
+   } else {
       return i830CreateContext(mesaVis, driContextPriv, sharedContextPrivate);
-
-   case PCI_CHIP_I915_G:
-   case PCI_CHIP_I915_GM:
-   case PCI_CHIP_I945_G:
-   case PCI_CHIP_I945_GM:
-   case PCI_CHIP_I945_GME:
-   case PCI_CHIP_G33_G:
-   case PCI_CHIP_Q35_G:
-   case PCI_CHIP_Q33_G:
-      return i915CreateContext(mesaVis, driContextPriv, sharedContextPrivate);
-
-   default:
-      fprintf(stderr, "Unrecognized deviceID %x\n", intelScreen->deviceID);
-      return GL_FALSE;
    }
+#else
+   if (IS_965(intelScreen->deviceID))
+      return brwCreateContext(mesaVis, driContextPriv, sharedContextPrivate);
+#endif
+   fprintf(stderr, "Unrecognized deviceID %x\n", intelScreen->deviceID);
+   return GL_FALSE;
 }
 
 
@@ -767,7 +618,9 @@ static const struct __DriverAPIRec intelAPI = {
    .WaitForSBC = NULL,
    .SwapBuffersMSC = NULL,
    .CopySubBuffer = intelCopySubBuffer,
+#ifdef I915
    .setTexOffset = intelSetTexOffset,
+#endif
 };
 
 
@@ -865,7 +718,11 @@ intelFillInModes(unsigned pixel_bits, unsigned depth_bits,
  */
 PUBLIC __GLcontextModes *__driDriverInitScreen(__DRIscreenPrivate *psp)
 {
+#ifdef I915
    static const __DRIversion ddx_expected = { 1, 5, 0 };
+#else
+   static const __DRIversion ddx_expected = { 1, 6, 0 };
+#endif
    static const __DRIversion dri_expected = { 4, 0, 0 };
    static const __DRIversion drm_expected = { 1, 5, 0 };
    I830DRIPtr dri_priv = (I830DRIPtr) psp->pDevPriv;
