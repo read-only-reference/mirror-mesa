@@ -63,10 +63,6 @@ DRI_CONF_BEGIN
     DRI_CONF_SECTION_END
 DRI_CONF_END;
 
-static const __DRIextension *tdfxExtensions[] = {
-    &driReadDrawableExtension,
-};
-
 static const GLuint __driNConfigOptions = 1;
 
 extern const struct dri_extension card_extensions[];
@@ -77,6 +73,9 @@ tdfxCreateScreen( __DRIscreenPrivate *sPriv )
 {
    tdfxScreenPrivate *fxScreen;
    TDFXDRIPtr fxDRIPriv = (TDFXDRIPtr) sPriv->pDevPriv;
+   PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
+     (PFNGLXSCRENABLEEXTENSIONPROC) (*dri_interface->getProcAddress("glxEnableExtension"));
+   void *const psc = sPriv->psc->screenConfigs;
 
    if (sPriv->devPrivSize != sizeof(TDFXDRIRec)) {
       fprintf(stderr,"\nERROR!  sizeof(TDFXDRIRec) does not match passed size from device driver\n");
@@ -117,7 +116,9 @@ tdfxCreateScreen( __DRIscreenPrivate *sPriv )
       return GL_FALSE;
    }
 
-   sPriv->extensions = tdfxExtensions;
+   if (glx_enable_extension != NULL) {
+      (*glx_enable_extension)(psc, "GLX_SGI_make_current_read");
+   }
 
    return GL_TRUE;
 }
@@ -345,6 +346,7 @@ tdfxSwapBuffers( __DRIdrawablePrivate *driDrawPriv )
 
 
 static const struct __DriverAPIRec tdfxAPI = {
+   .InitDriver      = tdfxInitDriver,
    .DestroyScreen   = tdfxDestroyScreen,
    .CreateContext   = tdfxCreateContext,
    .DestroyContext  = tdfxDestroyContext,
@@ -355,7 +357,6 @@ static const struct __DriverAPIRec tdfxAPI = {
    .UnbindContext   = tdfxUnbindContext,
    .GetSwapInfo     = NULL,
    .GetMSC          = NULL,
-   .GetDrawableMSC  = NULL,
    .WaitForMSC      = NULL,
    .WaitForSBC      = NULL,
    .SwapBuffersMSC  = NULL
@@ -431,50 +432,69 @@ static __GLcontextModes *tdfxFillInModes(unsigned pixel_bits,
 }
 
 /**
- * This is the driver specific part of the createNewScreen entry point.
- * 
- * \todo maybe fold this into intelInitDriver
+ * This is the bootstrap function for the driver.  libGL supplies all of the
+ * requisite information about the system, and the driver initializes itself.
+ * This routine also fills in the linked list pointed to by \c driver_modes
+ * with the \c __GLcontextModes that the driver can support for windows or
+ * pbuffers.
  *
- * \return the __GLcontextModes supported by this driver
+ * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on
+ *         failure.
  */
-__GLcontextModes *__driDriverInitScreen(__DRIscreenPrivate *psp)
+PUBLIC
+void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
+			     const __GLcontextModes * modes,
+			     const __DRIversion * ddx_version,
+			     const __DRIversion * dri_version,
+			     const __DRIversion * drm_version,
+			     const __DRIframebuffer * frame_buffer,
+			     drmAddress pSAREA, int fd,
+			     int internal_api_version,
+			     const __DRIinterfaceMethods * interface,
+			     __GLcontextModes ** driver_modes )
 {
+   __DRIscreenPrivate *psp;
    static const __DRIversion ddx_expected = { 1, 1, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
    static const __DRIversion drm_expected = { 1, 0, 0 };
 
-   /* divined from tdfx_dri.c, sketchy */
-   TDFXDRIPtr dri_priv = (TDFXDRIPtr) psp->pDevPriv;
-
-   /* XXX i wish it was like this */
-   /* bpp = dri_priv->bpp */
-   int bpp = (dri_priv->cpp > 2) ? 24 : 16;
+   dri_interface = interface;
 
    if ( ! driCheckDriDdxDrmVersions2( "tdfx",
-				      &psp->dri_version, & dri_expected,
-				      &psp->ddx_version, & ddx_expected,
-				      &psp->drm_version, & drm_expected ) )
+				      dri_version, & dri_expected,
+				      ddx_version, & ddx_expected,
+				      drm_version, & drm_expected ) ) {
       return NULL;
+   }
 
-   psp->DriverAPI = tdfxAPI;
+   psp = __driUtilCreateNewScreen(dpy, scrn, psc, NULL,
+   				  ddx_version, dri_version, drm_version,
+				  frame_buffer, pSAREA, fd,
+				  internal_api_version, &tdfxAPI);
 
-   /* Calling driInitExtensions here, with a NULL context pointer,
-    * does not actually enable the extensions.  It just makes sure
-    * that all the dispatch offsets for all the extensions that
-    * *might* be enables are known.  This is needed because the
-    * dispatch offsets need to be known when _mesa_context_create is
-    * called, but we can't enable the extensions until we have a
-    * context pointer.
-    *
-    * Hello chicken.  Hello egg.  How are you two today?
-    */
-   driInitExtensions( NULL, card_extensions, GL_FALSE );
-   driInitExtensions( NULL, napalm_extensions, GL_FALSE );
+   if (psp != NULL) {
+      /* divined from tdfx_dri.c, sketchy */
+      TDFXDRIPtr dri_priv = (TDFXDRIPtr) psp->pDevPriv;
+      int bpp = (dri_priv->cpp > 2) ? 24 : 16;
 
-   if (!tdfxInitDriver(psp))
-      return NULL;
+      /* XXX i wish it was like this */
+      /* bpp = dri_priv->bpp */
       
-   return tdfxFillInModes(bpp, (bpp == 16) ? 16 : 24,
-			  (bpp == 16) ? 0 : 8,
-			  (dri_priv->backOffset!=dri_priv->depthOffset));
+      *driver_modes = tdfxFillInModes(bpp, (bpp == 16) ? 16 : 24,
+				(bpp == 16) ? 0 : 8,
+				(dri_priv->backOffset!=dri_priv->depthOffset));
+
+      /* Calling driInitExtensions here, with a NULL context pointer, does not actually
+       * enable the extensions.  It just makes sure that all the dispatch offsets for all
+       * the extensions that *might* be enables are known.  This is needed because the
+       * dispatch offsets need to be known when _mesa_context_create is called, but we can't
+       * enable the extensions until we have a context pointer.
+       *
+       * Hello chicken.  Hello egg.  How are you two today?
+       */
+      driInitExtensions( NULL, card_extensions, GL_FALSE );
+      driInitExtensions( NULL, napalm_extensions, GL_FALSE );
+   }
+
+   return (void *)psp;
 }

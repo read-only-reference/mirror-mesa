@@ -507,7 +507,7 @@ void viaWaitIdleLocked( struct via_context *vmesa, GLboolean light )
  * except that WAIT_IDLE() will spin the CPU polling, while this is
  * IRQ driven.
  */
-static void viaWaitIdleVBlank(  __DRIdrawablePrivate *dPriv, 
+static void viaWaitIdleVBlank( const __DRIdrawablePrivate *dPriv, 
 			       struct via_context *vmesa,
 			       GLuint value )
 {
@@ -523,7 +523,8 @@ static void viaWaitIdleVBlank(  __DRIdrawablePrivate *dPriv,
 	  vmesa->thrashing)
 	 viaSwapOutWork(vmesa);
 
-      driWaitForVBlank( dPriv, & missed_target );
+      driWaitForVBlank( dPriv, & vmesa->vbl_seq, 
+			vmesa->vblank_flags, & missed_target );
       if ( missed_target ) {
 	 vmesa->swap_missed_count++;
 	 (*dri_interface->getUST)( &vmesa->swap_missed_ust );
@@ -590,7 +591,7 @@ void viaResetPageFlippingLocked(struct via_context *vmesa)
 /*
  * Copy the back buffer to the front buffer. 
  */
-void viaCopyBuffer(__DRIdrawablePrivate *dPriv)
+void viaCopyBuffer(const __DRIdrawablePrivate *dPriv)
 {
    struct via_context *vmesa = 
       (struct via_context *)dPriv->driContextPriv->driverPrivate;
@@ -606,7 +607,7 @@ void viaCopyBuffer(__DRIdrawablePrivate *dPriv)
 
    VIA_FLUSH_DMA(vmesa);
 
-   if (dPriv->vblFlags == VBLANK_FLAG_SYNC &&
+   if (vmesa->vblank_flags == VBLANK_FLAG_SYNC &&
        vmesa->lastBreadcrumbWrite > 1)
       viaWaitIdleVBlank(dPriv, vmesa, vmesa->lastBreadcrumbWrite-1);
    else
@@ -633,14 +634,14 @@ void viaCopyBuffer(__DRIdrawablePrivate *dPriv)
 }
 
 
-void viaPageFlip(__DRIdrawablePrivate *dPriv)
+void viaPageFlip(const __DRIdrawablePrivate *dPriv)
 {
     struct via_context *vmesa = 
        (struct via_context *)dPriv->driContextPriv->driverPrivate;
     struct via_renderbuffer buffer_tmp;
 
     VIA_FLUSH_DMA(vmesa);
-   if (dPriv->vblFlags == VBLANK_FLAG_SYNC &&
+   if (vmesa->vblank_flags == VBLANK_FLAG_SYNC &&
        vmesa->lastBreadcrumbWrite > 1)
       viaWaitIdleVBlank(dPriv, vmesa, vmesa->lastBreadcrumbWrite - 1);
    else

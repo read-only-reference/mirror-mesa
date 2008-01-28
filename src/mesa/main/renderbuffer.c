@@ -49,6 +49,8 @@
 
 #include "rbadaptors.h"
 
+#include "state_tracker/st_context.h"
+
 
 /* 32-bit color index format.  Not a public format. */
 #define COLOR_INDEX32 0x424243
@@ -1199,7 +1201,8 @@ _mesa_soft_renderbuffer_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
 
    if (width > 0 && height > 0) {
       /* allocate new buffer storage */
-      rb->Data = _mesa_malloc(width * height * pixelSize);
+      rb->Data = malloc(width * height * pixelSize);
+
       if (rb->Data == NULL) {
          rb->Width = 0;
          rb->Height = 0;

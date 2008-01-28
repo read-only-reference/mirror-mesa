@@ -1,15 +1,13 @@
 # Makefile for core library for VMS
-# contributed by Jouk Jansen  joukj@hrem.nano.tudelft.nl
-# Last revision : 2 October 2007
+# contributed by Jouk Jansen  joukj@hrem.stm.tudelft.nl
+# Last revision : 10 May 2005
 
 .first
 	define gl [---.include.gl]
 	define math [-.math]
 	define shader [-.shader]
-	define glapi [-.glapi]
-	define main [-.main]
 
-.include [---]mms-config.
+.include [---]mms.config
 
 ##### MACROS #####
 
@@ -60,13 +58,13 @@ SOURCES =accum.c \
 	matrix.c \
 	mipmap.c \
 	mm.c \
+	occlude.c \
 	pixel.c \
 	points.c \
 	polygon.c \
 	rastpos.c \
 	rbadaptors.c \
 	renderbuffer.c \
-	shaders.c \
 	state.c \
 	stencil.c \
 	texcompress.c \
@@ -80,9 +78,7 @@ SOURCES =accum.c \
 	texstate.c \
 	texstore.c \
 	varray.c \
-	vtxfmt.c \
-	queryobj.c \
-	rbadaptors.c
+	vtxfmt.c
 
 OBJECTS=accum.obj,\
 api_arrayelt.obj,\
@@ -125,12 +121,12 @@ lines.obj,\
 matrix.obj,\
 mipmap.obj,\
 mm.obj,\
+occlude.obj,\
 pixel.obj,\
 points.obj,\
 polygon.obj,\
 rastpos.obj,\
 renderbuffer.obj,\
-shaders.obj,\
 state.obj,\
 stencil.obj,\
 texcompress.obj,\
@@ -144,9 +140,7 @@ texrender.obj,\
 texstate.obj,\
 texstore.obj,\
 varray.obj,\
-vtxfmt.obj,\
-queryobj.obj,\
-rbadaptors.obj
+vtxfmt.obj
 
 ##### RULES #####
 
@@ -155,7 +149,8 @@ VERSION=Mesa V3.4
 ##### TARGETS #####
 # Make the library
 $(LIBDIR)$(GL_LIB) : $(OBJECTS)
-  @ $(MAKELIB) $(LIBDIR)$(GL_LIB) $(OBJECTS)
+  @ $(MAKELIB) $(GL_LIB) $(OBJECTS)
+  @ rename $(GL_LIB)* $(LIBDIR)
 
 clean :
 	purge
@@ -202,6 +197,7 @@ lines.obj : lines.c
 matrix.obj : matrix.c
 mipmap.obj : mipmap.c
 mm.obj : mm.c
+occlude.obj : occlude.c
 pixel.obj : pixel.c
 points.obj : points.c
 polygon.obj : polygon.c
@@ -223,6 +219,3 @@ texstate.obj : texstate.c
 texstore.obj : texstore.c
 varray.obj : varray.c
 vtxfmt.obj : vtxfmt.c
-shaders.obj : shaders.c
-queryobj.obj : queryobj.c
-rbadaptors.obj : rbadaptors.c

@@ -32,6 +32,7 @@
 
 
 #include "brw_state.h"
+#include "brw_aub.h"
 #include "intel_batchbuffer.h"
 #include "imports.h"
 
@@ -91,6 +92,13 @@ static void clear_batch_cache( struct brw_context *brw )
    }
 
    brw->cached_batch_items = NULL;
+
+
+   brw_clear_all_caches(brw);
+
+   bmReleaseBuffers(&brw->intel);
+   
+   brw_invalidate_pools(brw);
 }
 
 void brw_clear_batch_cache_flush( struct brw_context *brw )

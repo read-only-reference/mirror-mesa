@@ -111,6 +111,11 @@ struct dd_function_table {
 
 
    /**
+    * Execute glRasterPos, updating the ctx->Current.Raster fields
+    */
+   void (*RasterPos)( GLcontext *ctx, const GLfloat v[4] );
+
+   /**
     * \name Image-related functions
     */
    /*@{*/
@@ -493,11 +498,6 @@ struct dd_function_table {
     */
    void (*FreeTexImageData)( GLcontext *ctx, struct gl_texture_image *tImage );
 
-   /** Map texture image data into user space */
-   void (*MapTexture)( GLcontext *ctx, struct gl_texture_object *tObj );
-   /** Unmap texture images from user space */
-   void (*UnmapTexture)( GLcontext *ctx, struct gl_texture_object *tObj );
-
    /**
     * Note: no context argument.  This function doesn't initially look
     * like it belongs here, except that the driver is the only entity
@@ -811,9 +811,11 @@ struct dd_function_table {
     */
    /*@{*/
    struct gl_query_object * (*NewQueryObject)(GLcontext *ctx, GLuint id);
-   void (*BeginQuery)(GLcontext *ctx, GLenum target,
-                      struct gl_query_object *q);
-   void (*EndQuery)(GLcontext *ctx, GLenum target, struct gl_query_object *q);
+   void (*DeleteQuery)(GLcontext *ctx, struct gl_query_object *q);
+   void (*BeginQuery)(GLcontext *ctx, struct gl_query_object *q);
+   void (*EndQuery)(GLcontext *ctx, struct gl_query_object *q);
+   void (*CheckQuery)(GLcontext *ctx, struct gl_query_object *q);
+   void (*WaitQuery)(GLcontext *ctx, struct gl_query_object *q);
    /*@}*/
 
 

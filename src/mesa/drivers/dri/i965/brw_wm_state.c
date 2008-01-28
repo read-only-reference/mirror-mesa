@@ -34,20 +34,24 @@
 #include "brw_context.h"
 #include "brw_state.h"
 #include "brw_defines.h"
-#include "dri_bufmgr.h"
-#include "brw_wm.h"
+#include "bufmgr.h"
 
 /***********************************************************************
  * WM unit - fragment programs and rasterization
  */
+
+static void invalidate_scratch_cb( struct intel_context *intel,
+				   void *unused )
+{
+   /* nothing */
+}
+
 
 static void upload_wm_unit(struct brw_context *brw )
 {
    struct intel_context *intel = &brw->intel;
    struct brw_wm_unit_state wm;
    GLuint max_threads;
-   GLuint per_thread;
-   dri_bo *reloc_bufs[3];
 
    if (INTEL_DEBUG & DEBUG_SINGLE_THREAD)
       max_threads = 0; 
@@ -58,50 +62,52 @@ static void upload_wm_unit(struct brw_context *brw )
    memset(&wm, 0, sizeof(wm));
 
    /* CACHE_NEW_WM_PROG */
-   wm.thread0.grf_reg_count = ALIGN(brw->wm.prog_data->total_grf, 16) / 16 - 1;
-   wm.thread0.kernel_start_pointer = brw->wm.prog_bo->offset >> 6; /* reloc */
+   wm.thread0.grf_reg_count = ((brw->wm.prog_data->total_grf-1) & ~15) / 16;
+   wm.thread0.kernel_start_pointer = brw->wm.prog_gs_offset >> 6;
    wm.thread3.dispatch_grf_start_reg = brw->wm.prog_data->first_curbe_grf;
    wm.thread3.urb_entry_read_length = brw->wm.prog_data->urb_read_length;
    wm.thread3.const_urb_entry_read_length = brw->wm.prog_data->curb_read_length;
 
    wm.wm5.max_threads = max_threads;      
 
-   per_thread = ALIGN(brw->wm.prog_data->total_scratch, 1024);
-   assert(per_thread <= 12 * 1024);
-
    if (brw->wm.prog_data->total_scratch) {
+      GLuint per_thread = (brw->wm.prog_data->total_scratch + 1023) / 1024;
       GLuint total = per_thread * (max_threads + 1);
 
       /* Scratch space -- just have to make sure there is sufficient
        * allocated for the active program and current number of threads.
-       */
-      brw->wm.scratch_buffer_size = total;
-      if (brw->wm.scratch_buffer &&
-	  brw->wm.scratch_buffer_size > brw->wm.scratch_buffer->size) {
-	 dri_bo_unreference(brw->wm.scratch_buffer);
-	 brw->wm.scratch_buffer = NULL;
-      }
+       */      
+
       if (!brw->wm.scratch_buffer) {
-	 brw->wm.scratch_buffer = dri_bo_alloc(intel->bufmgr,
-					       "wm scratch",
-					       brw->wm.scratch_buffer_size,
-					       4096, DRM_BO_FLAG_MEM_TT);
+	 bmGenBuffers(intel, "wm scratch", 1, &brw->wm.scratch_buffer, 12);
+	 bmBufferSetInvalidateCB(intel,
+				 brw->wm.scratch_buffer,
+				 invalidate_scratch_cb,
+				 NULL,
+				 GL_FALSE);
       }
+
+      if (total > brw->wm.scratch_buffer_size) {
+	 brw->wm.scratch_buffer_size = total;
+	 bmBufferData(intel,
+		      brw->wm.scratch_buffer,
+		      brw->wm.scratch_buffer_size,
+		      NULL,
+		      0);
+      }
+		   
+      assert(per_thread <= 12 * 1024);
+      wm.thread2.per_thread_scratch_space = (per_thread / 1024) - 1;
+
+      /* XXX: could make this dynamic as this is so rarely active:
+       */
+      /* BRW_NEW_LOCK */
+      wm.thread2.scratch_space_base_pointer = 
+	 bmBufferOffset(intel, brw->wm.scratch_buffer) >> 10;
    }
 
    /* CACHE_NEW_SURFACE */
    wm.thread1.binding_table_entry_count = brw->wm.nr_surfaces;
-
-   /* CACHE_NEW_WM_PROG */
-   if (per_thread != 0) {
-   /* reloc */
-      wm.thread2.scratch_space_base_pointer =
-	 brw->wm.scratch_buffer->offset >> 10;
-      wm.thread2.per_thread_scratch_space = per_thread / 1024 - 1;
-   } else {
-      wm.thread2.scratch_space_base_pointer = 0;
-      wm.thread2.per_thread_scratch_space = 0;
-   }
 
    /* BRW_NEW_CURBE_OFFSETS */
    wm.thread3.const_urb_entry_read_offset = brw->curbe.wm_start * 2;
@@ -111,13 +117,8 @@ static void upload_wm_unit(struct brw_context *brw )
    wm.thread1.floating_point_mode = BRW_FLOATING_POINT_NON_IEEE_754;
 
    /* CACHE_NEW_SAMPLER */
-   wm.wm4.sampler_count = (brw->wm.sampler_count + 1) / 4;
-   if (brw->wm.sampler_bo != NULL) {
-      /* reloc */
-      wm.wm4.sampler_state_pointer = brw->wm.sampler_bo->offset >> 5;
-   } else {
-      wm.wm4.sampler_state_pointer = 0;
-   }
+   wm.wm4.sampler_count = brw->wm.sampler_count;
+   wm.wm4.sampler_state_pointer = brw->wm.sampler_gs_offset >> 5;
 
    /* BRW_NEW_FRAGMENT_PROGRAM */
    {
@@ -133,13 +134,9 @@ static void upload_wm_unit(struct brw_context *brw )
       if (fp->UsesKill || 
 	  brw->attribs.Color->AlphaEnabled) 
 	 wm.wm5.program_uses_killpixel = 1; 
-      
-      if (brw_wm_is_glsl(fp))
-	  wm.wm5.enable_8_pix = 1;
-      else
-	  wm.wm5.enable_16_pix = 1;
    }
 
+   wm.wm5.enable_16_pix = 1;
    wm.wm5.thread_dispatch_enable = 1;	/* AKA: color_write */
    wm.wm5.legacy_line_rast = 0;
    wm.wm5.legacy_global_depth_bias = 0;
@@ -174,45 +171,7 @@ static void upload_wm_unit(struct brw_context *brw )
    if (INTEL_DEBUG & DEBUG_STATS || intel->stats_wm)
       wm.wm4.stats_enable = 1;
 
-   reloc_bufs[0] = brw->wm.prog_bo;
-   reloc_bufs[1] = brw->wm.scratch_buffer;
-   reloc_bufs[2] = brw->wm.sampler_bo;
-
-   brw->wm.thread0_delta = wm.thread0.grf_reg_count << 1;
-   brw->wm.thread2_delta = wm.thread2.per_thread_scratch_space;
-   brw->wm.wm4_delta = wm.wm4.stats_enable | (wm.wm4.sampler_count << 2);
-
-   dri_bo_unreference(brw->wm.state_bo);
-   brw->wm.state_bo = brw_cache_data( &brw->cache, BRW_WM_UNIT, &wm,
-				      reloc_bufs, 3 );
-}
-
-static void emit_reloc_wm_unit(struct brw_context *brw)
-{
-   /* Emit WM program relocation */
-   dri_emit_reloc(brw->wm.state_bo,
-		  DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ,
-		  brw->wm.thread0_delta,
-		  offsetof(struct brw_wm_unit_state, thread0),
-		  brw->wm.prog_bo);
-
-   /* Emit scratch space relocation */
-   if (brw->wm.scratch_buffer != NULL) {
-      dri_emit_reloc(brw->wm.state_bo,
-		     DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ | DRM_BO_FLAG_WRITE,
-		     brw->wm.thread2_delta,
-		     offsetof(struct brw_wm_unit_state, thread2),
-		     brw->wm.scratch_buffer);
-   }
-
-   /* Emit sampler state relocation */
-   if (brw->wm.sampler_bo != NULL) {
-      dri_emit_reloc(brw->wm.state_bo,
-		     DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ,
-		     brw->wm.wm4_delta,
-		     offsetof(struct brw_wm_unit_state, wm4),
-		     brw->wm.sampler_bo);
-   }
+   brw->wm.state_gs_offset = brw_cache_data( &brw->cache[BRW_WM_UNIT], &wm );
 }
 
 const struct brw_tracked_state brw_wm_unit = {
@@ -230,7 +189,6 @@ const struct brw_tracked_state brw_wm_unit = {
 		CACHE_NEW_WM_PROG | 
 		CACHE_NEW_SAMPLER)
    },
-   .update = upload_wm_unit,
-   .emit_reloc = emit_reloc_wm_unit,
+   .update = upload_wm_unit
 };
 

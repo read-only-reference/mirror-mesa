@@ -46,7 +46,6 @@
 #include "drivers/common/driverfuncs.h"
 
 #include "intel_screen.h"
-#include "intel_chipset.h"
 
 #include "i830_dri.h"
 #include "i830_common.h"
@@ -57,14 +56,9 @@
 #include "intel_batchbuffer.h"
 #include "intel_blit.h"
 #include "intel_regions.h"
-#include "intel_buffers.h"
 #include "intel_buffer_objects.h"
-#include "intel_decode.h"
-#include "intel_fbo.h"
-#include "intel_bufmgr_ttm.h"
 
-#include "drirenderbuffer.h"
-#include "i915_drm.h"
+#include "bufmgr.h"
 
 #include "utils.h"
 #include "vblank.h"
@@ -72,7 +66,6 @@
 int INTEL_DEBUG = (0);
 #endif
 
-#define need_GL_NV_point_sprite
 #define need_GL_ARB_multisample
 #define need_GL_ARB_point_parameters
 #define need_GL_ARB_texture_compression
@@ -86,16 +79,8 @@ int INTEL_DEBUG = (0);
 #define need_GL_EXT_blend_minmax
 #define need_GL_EXT_cull_vertex
 #define need_GL_EXT_fog_coord
-#define need_GL_EXT_framebuffer_object
 #define need_GL_EXT_multi_draw_arrays
 #define need_GL_EXT_secondary_color
-#define need_GL_ATI_separate_stencil
-#define need_GL_EXT_point_parameters
-#define need_GL_VERSION_2_0
-#define need_GL_VERSION_2_1
-#define need_GL_ARB_shader_objects
-#define need_GL_ARB_vertex_shader
-
 #include "extension_helper.h"
 
 #ifndef VERBOSE
@@ -161,7 +146,6 @@ const struct dri_extension card_extensions[] =
     { "GL_ARB_multisample",                GL_ARB_multisample_functions },
     { "GL_ARB_multitexture",               NULL },
     { "GL_ARB_point_parameters",           GL_ARB_point_parameters_functions },
-    { "GL_NV_point_sprite",                GL_NV_point_sprite_functions },
     { "GL_ARB_texture_border_clamp",       NULL },
     { "GL_ARB_texture_compression",        GL_ARB_texture_compression_functions },
     { "GL_ARB_texture_cube_map",           NULL },
@@ -174,8 +158,6 @@ const struct dri_extension card_extensions[] =
     { "GL_NV_texture_rectangle",           NULL },
     { "GL_EXT_texture_rectangle",          NULL },
     { "GL_ARB_texture_rectangle",          NULL },
-    { "GL_ARB_point_sprite",               NULL},
-    { "GL_ARB_point_parameters",	   NULL }, 
     { "GL_ARB_vertex_buffer_object",       GL_ARB_vertex_buffer_object_functions },
     { "GL_ARB_vertex_program",             GL_ARB_vertex_program_functions },
     { "GL_ARB_window_pos",                 GL_ARB_window_pos_functions },
@@ -189,63 +171,30 @@ const struct dri_extension card_extensions[] =
     { "GL_EXT_fog_coord",                  GL_EXT_fog_coord_functions },
     { "GL_EXT_multi_draw_arrays",          GL_EXT_multi_draw_arrays_functions },
     { "GL_EXT_secondary_color",            GL_EXT_secondary_color_functions },
-    { "GL_ATI_separate_stencil",           GL_ATI_separate_stencil_functions },
     { "GL_EXT_stencil_wrap",               NULL },
-    /* Do not enable this extension.  It conflicts with GL_ATI_separate_stencil
-     * and 2.0's separate stencil, because mesa's computed _TestTwoSide will
-     * only reflect whether it's enabled through this extension, even if the
-     * application is using the other interfaces.
-     */
-/*{ "GL_EXT_stencil_two_side",           GL_EXT_stencil_two_side_functions },*/
     { "GL_EXT_texture_edge_clamp",         NULL },
     { "GL_EXT_texture_env_combine",        NULL },
     { "GL_EXT_texture_env_dot3",           NULL },
     { "GL_EXT_texture_filter_anisotropic", NULL },
     { "GL_EXT_texture_lod_bias",           NULL },
-    { "GL_EXT_texture_sRGB",               NULL },
     { "GL_3DFX_texture_compression_FXT1",  NULL },
     { "GL_APPLE_client_storage",           NULL },
     { "GL_MESA_pack_invert",               NULL },
     { "GL_MESA_ycbcr_texture",             NULL },
     { "GL_NV_blend_square",                NULL },
     { "GL_SGIS_generate_mipmap",           NULL },
-    { "GL_ARB_shading_language_100",       GL_VERSION_2_0_functions},
-    { "GL_ARB_shading_language_120",       GL_VERSION_2_1_functions},
-    { "GL_ARB_shader_objects",             GL_ARB_shader_objects_functions},
-    { "GL_ARB_vertex_shader",              GL_ARB_vertex_shader_functions},
-    { "GL_ARB_fragment_shader",            NULL },
-    { "GL_ARB_draw_buffers",               NULL },
     { NULL,                                NULL }
-};
-
-const struct dri_extension ttm_extensions[] = {
-   {"GL_EXT_framebuffer_object", GL_EXT_framebuffer_object_functions},
-   {"GL_ARB_pixel_buffer_object", NULL},
-   {NULL, NULL}
 };
 
 const struct dri_extension arb_oc_extension = 
     { "GL_ARB_occlusion_query",            GL_ARB_occlusion_query_functions};
 
-/**
- * Initializes potential list of extensions if ctx == NULL, or actually enables
- * extensions for a context.
- */
 void intelInitExtensions(GLcontext *ctx, GLboolean enable_imaging)
-{
-   struct intel_context *intel = ctx?intel_context(ctx):NULL;
-
-   /* Disable imaging extension until convolution is working in teximage paths.
-    */
-   enable_imaging = GL_FALSE;
-
-   driInitExtensions(ctx, card_extensions, enable_imaging);
-
-   if (intel == NULL || intel->ttm)
-      driInitExtensions(ctx, ttm_extensions, GL_FALSE);
-
-   if (intel == NULL || intel->intelScreen->drmMinor >= 8)
-      driInitSingleExtension(ctx, &arb_oc_extension);
+{	     
+	struct intel_context *intel = ctx?intel_context(ctx):NULL;
+	driInitExtensions(ctx, card_extensions, enable_imaging);
+	if (!ctx || intel->intelScreen->drmMinor >= 8)
+		driInitSingleExtension (ctx, &arb_oc_extension);
 }
 
 static const struct dri_debug_control debug_control[] =
@@ -270,11 +219,6 @@ static const struct dri_debug_control debug_control[] =
     { "thre",  DEBUG_SINGLE_THREAD },
     { "wm",    DEBUG_WM },
     { "vs",    DEBUG_VS },
-    { "bat",   DEBUG_BATCH },
-    { "blit",  DEBUG_BLIT},
-    { "mip",   DEBUG_MIPTREE},
-    { "reg",   DEBUG_REGION},
-    { "fbo",   DEBUG_FBO },
     { NULL,    0 }
 };
 
@@ -300,20 +244,14 @@ void intelFlush( GLcontext *ctx )
 {
    struct intel_context *intel = intel_context( ctx );
 
-   if (intel->batch->map != intel->batch->ptr)
-      intel_batchbuffer_flush(intel->batch);
+   bmLockAndFence(intel);
 }
 
 void intelFinish( GLcontext *ctx ) 
 {
    struct intel_context *intel = intel_context( ctx );
 
-   intelFlush(ctx);
-   if (intel->batch->last_fence) {
-      dri_fence_wait(intel->batch->last_fence);
-      dri_fence_unreference(intel->batch->last_fence);
-      intel->batch->last_fence = NULL;
-   }
+   bmFinishFence(intel, bmLockAndFence(intel));
 }
 
 static void
@@ -327,7 +265,7 @@ intelBeginQuery(GLcontext *ctx, GLenum target, struct gl_query_object *q)
 	};
 	intel->stats_wm++;
 	intelFinish(&intel->ctx);
-	drmCommandWrite(intel->driFd, DRM_I830_MMIO, &io, sizeof(io));
+	drmCommandRead(intel->driFd, DRM_I830_MMIO, &io, sizeof(io));
 }
 
 static void
@@ -341,86 +279,10 @@ intelEndQuery(GLcontext *ctx, GLenum target, struct gl_query_object *q)
 		.data = &tmp
 	};
 	intelFinish(&intel->ctx);
-	drmCommandWrite(intel->driFd, DRM_I830_MMIO, &io, sizeof(io));
+	drmCommandRead(intel->driFd, DRM_I830_MMIO, &io, sizeof(io));
 	q->Result = tmp - q->Result;
 	q->Ready = GL_TRUE;
 	intel->stats_wm--;
-}
-
-/** Driver-specific fence emit implementation for the fake memory manager. */
-static unsigned int
-intel_fence_emit(void *private)
-{
-   struct intel_context *intel = (struct intel_context *)private;
-   unsigned int fence;
-
-   /* XXX: Need to emit a flush, if we haven't already (at least with the
-    * current batchbuffer implementation, we have).
-    */
-
-   fence = intelEmitIrqLocked(intel);
-
-   return fence;
-}
-
-/** Driver-specific fence wait implementation for the fake memory manager. */
-static int
-intel_fence_wait(void *private, unsigned int cookie)
-{
-   struct intel_context *intel = (struct intel_context *)private;
-
-   intelWaitIrq(intel, cookie);
-
-   return 0;
-}
-
-static GLboolean
-intel_init_bufmgr(struct intel_context *intel)
-{
-   intelScreenPrivate *intelScreen = intel->intelScreen;
-   GLboolean ttm_disable = getenv("INTEL_NO_TTM") != NULL;
-
-   /* If we've got a new enough DDX that's initializing TTM and giving us
-    * object handles for the shared buffers, use that.
-    */
-   intel->ttm = GL_FALSE;
-   if (!ttm_disable &&
-       intel->intelScreen->driScrnPriv->ddx_version.minor >= 9 &&
-       intel->intelScreen->drmMinor >= 11 &&
-       intel->intelScreen->front.bo_handle != -1)
-   {
-      intel->bufmgr = intel_bufmgr_ttm_init(intel->driFd,
-					    DRM_FENCE_TYPE_EXE,
-					    DRM_FENCE_TYPE_EXE |
-					    DRM_I915_FENCE_TYPE_RW,
-					    BATCH_SZ);
-      if (intel->bufmgr != NULL)
-	 intel->ttm = GL_TRUE;
-   }
-   /* Otherwise, use the classic buffer manager. */
-   if (intel->bufmgr == NULL) {
-      if (ttm_disable) {
-	 fprintf(stderr, "TTM buffer manager disabled.  Using classic.\n");
-      } else {
-	 fprintf(stderr, "Failed to initialize TTM buffer manager.  "
-		 "Falling back to classic.\n");
-      }
-
-      if (intelScreen->tex.size == 0) {
-	 fprintf(stderr, "[%s:%u] Error initializing buffer manager.\n",
-		 __func__, __LINE__);
-	 return GL_FALSE;
-      }
-
-      intel->bufmgr = dri_bufmgr_fake_init(intelScreen->tex.offset,
-					   intelScreen->tex.map,
-					   intelScreen->tex.size,
-					   intel_fence_emit,
-					   intel_fence_wait,
-					   intel);
-   }
-
-   return GL_TRUE;
 }
 
 
@@ -448,6 +310,8 @@ void intelInitDriverFunctions( struct dd_function_table *functions )
    intelInitBufferFuncs( functions );
 }
 
+
+
 GLboolean intelInitContext( struct intel_context *intel,
 			    const __GLcontextModes *mesaVis,
 			    __DRIcontextPrivate *driContextPriv,
@@ -458,8 +322,8 @@ GLboolean intelInitContext( struct intel_context *intel,
    GLcontext *shareCtx = (GLcontext *) sharedContextPrivate;
    __DRIscreenPrivate *sPriv = driContextPriv->driScreenPriv;
    intelScreenPrivate *intelScreen = (intelScreenPrivate *)sPriv->private;
-   volatile drmI830Sarea *saPriv = (drmI830Sarea *)
-     (((GLubyte *)sPriv->pSAREA)+intelScreen->sarea_priv_offset);
+   volatile drmI830Sarea *saPriv = (volatile drmI830Sarea *)
+      (((GLubyte *)sPriv->pSAREA)+intelScreen->sarea_priv_offset);
 
    if (!_mesa_initialize_context(&intel->ctx,
 				 mesaVis, shareCtx, 
@@ -474,18 +338,11 @@ GLboolean intelInitContext( struct intel_context *intel,
    intel->driScreen = sPriv;
    intel->sarea = saPriv;
 
-   /* Dri stuff */
-   intel->hHWContext = driContextPriv->hHWContext;
-   intel->driFd = sPriv->fd;
-   intel->driHwLock = (drmLock *) &sPriv->pSAREA->lock;
-
-   intel->maxBatchSize = BATCH_SZ;
-
-   if (!intel_init_bufmgr(intel))
-      return GL_FALSE;
-
    driParseConfigFiles (&intel->optionCache, &intelScreen->optionCache,
 		   intel->driScreen->myNum, "i965");
+
+   intel->vblank_flags = (intel->intelScreen->irq_active != 0)
+	   ? driGetDefaultVBlankFlags(&intel->optionCache) : VBLANK_FLAG_NO_IRQ;
 
    ctx->Const.MaxTextureMaxAnisotropy = 2.0;
 
@@ -531,16 +388,28 @@ GLboolean intelInitContext( struct intel_context *intel,
    _swrast_allow_pixel_fog( ctx, GL_FALSE );
    _swrast_allow_vertex_fog( ctx, GL_TRUE );
 
+   /* Dri stuff */
+   intel->hHWContext = driContextPriv->hHWContext;
+   intel->driFd = sPriv->fd;
+   intel->driHwLock = (drmLock *) &sPriv->pSAREA->lock;
+
    intel->hw_stencil = mesaVis->stencilBits && mesaVis->depthBits == 24;
    intel->hw_stipple = 1;
 
    switch(mesaVis->depthBits) {
    case 0:			/* what to do in this case? */
    case 16:
+      intel->depth_scale = 1.0/0xffff;
       intel->polygon_offset_scale = 1.0/0xffff;
+      intel->depth_clear_mask = ~0;
+      intel->ClearDepth = 0xffff;
       break;
    case 24:
+      intel->depth_scale = 1.0/0xffffff;
       intel->polygon_offset_scale = 2.0/0xffffff; /* req'd to pass glean */
+      intel->depth_clear_mask = 0x00ffffff;
+      intel->stencil_clear_mask = 0xff000000;
+      intel->ClearDepth = 0x00ffffff;
       break;
    default:
       assert(0); 
@@ -550,6 +419,8 @@ GLboolean intelInitContext( struct intel_context *intel,
    /* Initialize swrast, tnl driver tables: */
    intelInitSpanFuncs( ctx );
 
+   intel->no_hw = getenv("INTEL_NO_HW") != NULL;
+
    if (!intel->intelScreen->irq_active) {
       _mesa_printf("IRQs not active.  Exiting\n");
       exit(1);
@@ -558,23 +429,68 @@ GLboolean intelInitContext( struct intel_context *intel,
 
    INTEL_DEBUG  = driParseDebugString( getenv( "INTEL_DEBUG" ),
 				       debug_control );
-   if (INTEL_DEBUG & DEBUG_BUFMGR)
-      dri_bufmgr_set_debug(intel->bufmgr, GL_TRUE);
 
-   intel_recreate_static_regions(intel);
 
+   /* Buffer manager: 
+    */
+   intel->bm = bm_fake_intel_Attach( intel );
+
+
+   bmInitPool(intel,
+	      intel->intelScreen->tex.offset, /* low offset */
+	      intel->intelScreen->tex.map, /* low virtual */
+	      intel->intelScreen->tex.size,
+	      BM_MEM_AGP);
+
+   /* These are still static, but create regions for them.  
+    */
+   intel->front_region = 
+      intel_region_create_static(intel,
+				 BM_MEM_AGP,
+				 intelScreen->front.offset,
+				 intelScreen->front.map,
+				 intelScreen->cpp,
+				 intelScreen->front.pitch / intelScreen->cpp,
+				 intelScreen->height,
+				 intelScreen->front.size,
+				 intelScreen->front.tiled != 0);
+
+   intel->back_region = 
+      intel_region_create_static(intel,
+				 BM_MEM_AGP,
+				 intelScreen->back.offset,
+				 intelScreen->back.map,
+				 intelScreen->cpp,
+				 intelScreen->back.pitch / intelScreen->cpp,
+				 intelScreen->height,
+				 intelScreen->back.size,
+                                 intelScreen->back.tiled != 0);
+
+   /* Still assuming front.cpp == depth.cpp
+    *
+    * XXX: Setting tiling to false because Depth tiling only supports
+    * YMAJOR but the blitter only supports XMAJOR tiling.  Have to
+    * resolve later.
+    */
+   intel->depth_region = 
+      intel_region_create_static(intel,
+				 BM_MEM_AGP,
+				 intelScreen->depth.offset,
+				 intelScreen->depth.map,
+				 intelScreen->cpp,
+				 intelScreen->depth.pitch / intelScreen->cpp,
+				 intelScreen->height,
+				 intelScreen->depth.size,
+                                 intelScreen->depth.tiled != 0);
+   
    intel_bufferobj_init( intel );
-   intel_fbo_init( intel );
-
    intel->batch = intel_batchbuffer_alloc( intel );
-   intel->last_swap_fence = NULL;
-   intel->first_swap_fence = NULL;
 
    if (intel->ctx.Mesa_DXTn) {
       _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
       _mesa_enable_extension( ctx, "GL_S3_s3tc" );
    }
-   else if (driQueryOptionb (&intel->optionCache, "force_s3tc_enable")) {
+   else if (driQueryOptionb (&intelScreen->optionCache, "force_s3tc_enable")) {
       _mesa_enable_extension( ctx, "GL_EXT_texture_compression_s3tc" );
    }
 
@@ -583,16 +499,12 @@ GLboolean intelInitContext( struct intel_context *intel,
 /* 			  DRI_TEXMGR_DO_TEXTURE_2D |  */
 /* 			  DRI_TEXMGR_DO_TEXTURE_RECT ); */
 
-   /* Force all software fallbacks */
+
    if (getenv("INTEL_NO_RAST")) {
       fprintf(stderr, "disabling 3D rasterization\n");
       intel->no_rast = 1;
    }
 
-   /* Disable all hardware rendering (skip emitting batches and fences/waits
-    * to the kernel)
-    */
-   intel->no_hw = getenv("INTEL_NO_HW") != NULL;
 
    return GL_TRUE;
 }
@@ -617,17 +529,7 @@ void intelDestroyContext(__DRIcontextPrivate *driContextPriv)
       intel->Fallback = 0;	/* don't call _swrast_Flush later */
       intel_batchbuffer_free(intel->batch);
       intel->batch = NULL;
-
-      if (intel->last_swap_fence) {
-	 dri_fence_wait(intel->last_swap_fence);
-	 dri_fence_unreference(intel->last_swap_fence);
-	 intel->last_swap_fence = NULL;
-      }
-      if (intel->first_swap_fence) {
-	 dri_fence_wait(intel->first_swap_fence);
-	 dri_fence_unreference(intel->first_swap_fence);
-	 intel->first_swap_fence = NULL;
-      }
+      
 
       if ( release_texture_heaps ) {
          /* This share group is about to go away, free our private
@@ -638,9 +540,17 @@ void intelDestroyContext(__DRIcontextPrivate *driContextPriv)
 	  */
       }
 
+      /* Free the regions created to describe front/back/depth
+       * buffers:
+       */
+#if 0
+      intel_region_release(intel, &intel->front_region);
+      intel_region_release(intel, &intel->back_region);
+      intel_region_release(intel, &intel->depth_region);
+      intel_region_release(intel, &intel->draw_region);
+#endif
+
       /* free the Mesa context */
-      intel->ctx.VertexProgram.Current = NULL;
-      intel->ctx.FragmentProgram.Current = NULL;
       _mesa_destroy_context(&intel->ctx);
    }
 
@@ -658,67 +568,22 @@ GLboolean intelMakeCurrent(__DRIcontextPrivate *driContextPriv,
 {
 
    if (driContextPriv) {
-      struct intel_context *intel =
-	 (struct intel_context *) driContextPriv->driverPrivate;
-      struct intel_framebuffer *intel_fb =
-	 (struct intel_framebuffer *) driDrawPriv->driverPrivate;
-      GLframebuffer *readFb = (GLframebuffer *) driReadPriv->driverPrivate;
-
-      /* XXX FBO temporary fix-ups! */
-      /* if the renderbuffers don't have regions, init them from the context.
-       * They will be unreferenced when the renderbuffer is destroyed.
-       */
-      {
-         struct intel_renderbuffer *irbDepth
-            = intel_get_renderbuffer(&intel_fb->Base, BUFFER_DEPTH);
-         struct intel_renderbuffer *irbStencil
-            = intel_get_renderbuffer(&intel_fb->Base, BUFFER_STENCIL);
-
-         if (intel_fb->color_rb[0] && !intel_fb->color_rb[0]->region) {
-            intel_region_reference(&intel_fb->color_rb[0]->region,
-				   intel->front_region);
-         }
-         if (intel_fb->color_rb[1] && !intel_fb->color_rb[1]->region) {
-            intel_region_reference(&intel_fb->color_rb[1]->region,
-				   intel->back_region);
-         }
-         if (intel_fb->color_rb[2] && !intel_fb->color_rb[2]->region) {
-            intel_region_reference(&intel_fb->color_rb[2]->region,
-				   intel->third_region);
-         }
-         if (irbDepth && !irbDepth->region) {
-            intel_region_reference(&irbDepth->region, intel->depth_region);
-         }
-         if (irbStencil && !irbStencil->region) {
-            intel_region_reference(&irbStencil->region, intel->depth_region);
-         }
-      }
-
-      /* set GLframebuffer size to match window, if needed */
-      driUpdateFramebufferSize(&intel->ctx, driDrawPriv);
-
-      if (intel->driReadDrawable != driReadPriv) {
-          intel->driReadDrawable = driReadPriv;
-      }
+      struct intel_context *intel = (struct intel_context *) driContextPriv->driverPrivate;
 
       if ( intel->driDrawable != driDrawPriv ) {
-	 if (driDrawPriv->swap_interval == (unsigned)-1) {
-	    driDrawPriv->vblFlags = (intel->intelScreen->irq_active != 0)
-	       ? driGetDefaultVBlankFlags(&intel->optionCache)
-	       : VBLANK_FLAG_NO_IRQ;
-	    driDrawableInitVBlank( driDrawPriv );
-	 }
+	 /* Shouldn't the readbuffer be stored also? */
+	 driDrawableInitVBlank( driDrawPriv, intel->vblank_flags,
+		      &intel->vbl_seq );
 
 	 intel->driDrawable = driDrawPriv;
 	 intelWindowMoved( intel );
-	 /* Shouldn't the readbuffer be stored also? */
       }
 
       _mesa_make_current(&intel->ctx,
-			 &intel_fb->Base,
-			 readFb);
+			 (GLframebuffer *) driDrawPriv->driverPrivate,
+			 (GLframebuffer *) driReadPriv->driverPrivate);
 
-      intel_draw_buffer(&intel->ctx, &intel_fb->Base);
+      intel->ctx.Driver.DrawBuffer( &intel->ctx, intel->ctx.Color.DrawBuffer[0] );
    } else {
       _mesa_make_current(NULL, NULL, NULL);
    }
@@ -733,6 +598,7 @@ static void intelContendedLock( struct intel_context *intel, GLuint flags )
    __DRIscreenPrivate *sPriv = intel->driScreen;
    volatile drmI830Sarea * sarea = intel->sarea;
    int me = intel->hHWContext;
+   int my_bufmgr = bmCtxId(intel);
 
    drmGetLock(intel->driFd, intel->hHWContext, flags);
 
@@ -751,28 +617,18 @@ static void intelContendedLock( struct intel_context *intel, GLuint flags )
    /* Lost context?
     */
    if (sarea->ctxOwner != me) {
-      if (INTEL_DEBUG & DEBUG_BUFMGR) {
-	 fprintf(stderr, "Lost Context: sarea->ctxOwner %x me %x\n",
-		 sarea->ctxOwner, me);
-      }
+      DBG("Lost Context: sarea->ctxOwner %x me %x\n", sarea->ctxOwner, me);
       sarea->ctxOwner = me;
       intel->vtbl.lost_hardware( intel );
    }
 
-   /* If the last consumer of the texture memory wasn't us, notify the fake
-    * bufmgr and record the new owner.  We should have the memory shared
-    * between contexts of a single fake bufmgr, but this will at least make
-    * things correct for now.
+   /* As above, but don't evict the texture data on transitions
+    * between contexts which all share a local buffer manager.
     */
-   if (!intel->ttm && sarea->texAge != intel->hHWContext) {
-      sarea->texAge = intel->hHWContext;
-      dri_bufmgr_fake_contended_lock_take(intel->bufmgr);
-      if (INTEL_DEBUG & DEBUG_BATCH)
-	 intel_decode_context_reset();
-      if (INTEL_DEBUG & DEBUG_BUFMGR) {
-	 fprintf(stderr, "Lost Textures: sarea->texAge %x hw context %x\n",
-		 sarea->ctxOwner, intel->hHWContext);
-      }
+   if (sarea->texAge != my_bufmgr) {
+      DBG("Lost Textures: sarea->texAge %x my_bufmgr %x\n", sarea->ctxOwner, my_bufmgr);
+      sarea->texAge = my_bufmgr;
+      bm_fake_NotifyContendedLockTake( intel ); 
    }
 
    /* Drawable changed?
@@ -802,6 +658,36 @@ void LOCK_HARDWARE( struct intel_context *intel )
 
    intel->locked = 1;
 
+   if (intel->aub_wrap) {
+      bm_fake_NotifyContendedLockTake( intel ); 
+      intel->vtbl.lost_hardware( intel );
+      intel->vtbl.aub_wrap(intel);
+      intel->aub_wrap = 0;
+   }
+
+   if (bmError(intel)) {
+      bmEvictAll(intel);
+      intel->vtbl.lost_hardware( intel );
+   }
+
+   /* Make sure nothing has been emitted prior to getting the lock: 
+    */
+   assert(intel->batch->map == 0);
+
+   /* XXX: postpone, may not be needed:
+    */
+   if (!intel_batchbuffer_map(intel->batch)) {
+      bmEvictAll(intel);
+      intel->vtbl.lost_hardware( intel );
+
+      /* This could only fail if the batchbuffer was greater in size
+       * than the available texture memory:
+       */
+      if (!intel_batchbuffer_map(intel->batch)) {
+	 _mesa_printf("double failure to map batchbuffer\n");
+	 assert(0);
+      }
+   }
 }
  
   
@@ -809,8 +695,15 @@ void LOCK_HARDWARE( struct intel_context *intel )
  */
 void UNLOCK_HARDWARE( struct intel_context *intel )
 {
+   /* Make sure everything has been released: 
+    */
+   assert(intel->batch->ptr == intel->batch->map + intel->batch->offset);
+
+   intel_batchbuffer_unmap(intel->batch);
    intel->vtbl.note_unlock( intel );
    intel->locked = 0;
+
+
 
    DRM_UNLOCK(intel->driFd, intel->driHwLock, intel->hHWContext);
    _glthread_UNLOCK_MUTEX(lockMutex); 

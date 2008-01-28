@@ -119,15 +119,27 @@ static void compile_clip_prog( struct brw_context *brw,
 
    /* Upload
     */
-   dri_bo_unreference(brw->clip.prog_bo);
-   brw->clip.prog_bo = brw_upload_cache( &brw->cache,
-					 BRW_CLIP_PROG,
-					 &c.key, sizeof(c.key),
-					 NULL, 0,
-					 program, program_size,
-					 &c.prog_data,
-					 &brw->clip.prog_data );
+   brw->clip.prog_gs_offset = brw_upload_cache( &brw->cache[BRW_CLIP_PROG],
+						&c.key,
+						sizeof(c.key),
+						program,
+						program_size,
+						&c.prog_data,
+						&brw->clip.prog_data );
 }
+
+
+static GLboolean search_cache( struct brw_context *brw, 
+			       struct brw_clip_prog_key *key )
+{
+   return brw_search_cache(&brw->cache[BRW_CLIP_PROG], 
+			   key, sizeof(*key),
+			   &brw->clip.prog_data,
+			   &brw->clip.prog_gs_offset);
+}
+
+
+
 
 /* Calculate interpolants for triangle and line rasterization.
  */
@@ -200,10 +212,6 @@ static void upload_clip_prog( struct brw_context *brw )
 	    }
 	 }
 
-    if (brw->attribs.Polygon->BackMode != GL_FILL ||
-        brw->attribs.Polygon->FrontMode != GL_FILL)
-        key.do_unfilled = 1;
-
 	 /* Most cases the fixed function units will handle.  Cases where
 	  * one or more polygon faces are unfilled will require help:
 	  */
@@ -240,12 +248,7 @@ static void upload_clip_prog( struct brw_context *brw )
       }
    }
 
-   dri_bo_unreference(brw->clip.prog_bo);
-   brw->clip.prog_bo = brw_search_cache(&brw->cache, BRW_CLIP_PROG,
-					&key, sizeof(key),
-					NULL, 0,
-					&brw->clip.prog_data);
-   if (brw->clip.prog_bo == NULL)
+   if (!search_cache(brw, &key))
       compile_clip_prog( brw, &key );
 }
 

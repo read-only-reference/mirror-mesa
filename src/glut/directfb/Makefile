@@ -61,7 +61,7 @@ default: depend $(TOP)/$(LIB_DIR)/$(GLUT_LIB_NAME)
 
 # Make the library
 $(TOP)/$(LIB_DIR)/$(GLUT_LIB_NAME): depend $(OBJECTS)
-	$(TOP)/bin/mklib -o $(GLUT_LIB) -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+	$(TOP)/bin/mklib -o $(GLUT_LIB) -linker '$(CC)' \
 		-major $(GLUT_MAJOR) -minor $(GLUT_MINOR) -patch $(GLUT_TINY) \
 		$(GLUT_LIB_DEPS) -install $(TOP)/$(LIB_DIR) \
 		$(MKLIB_OPTIONS) $(OBJECTS)
@@ -70,6 +70,7 @@ $(TOP)/$(LIB_DIR)/$(GLUT_LIB_NAME): depend $(OBJECTS)
 # Run 'make -f Makefile.solo dep' to update the dependencies if you change
 # what's included by any source file.
 depend: $(SOURCES) 
+	rm -f depend
 	touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDES) $(SOURCES) > /dev/null 
 

@@ -34,10 +34,9 @@
 #include "drm.h"
 #include "mm.h"
 #include "texmem.h"
-#include "dri_bufmgr.h"
+#include "vblank.h"
 
 #include "intel_screen.h"
-#include "intel_tex_obj.h"
 #include "i915_drm.h"
 #include "i830_common.h"
 #include "tnl/t_vertex.h"
@@ -50,157 +49,156 @@
 #define DV_PF_565  (2<<8)
 #define DV_PF_8888 (3<<8)
 
-struct intel_region;
-struct intel_context;
+#define INTEL_CONTEXT(ctx)	((intelContextPtr)(ctx))
 
-typedef void (*intel_tri_func) (struct intel_context *, intelVertex *,
-                                intelVertex *, intelVertex *);
-typedef void (*intel_line_func) (struct intel_context *, intelVertex *,
-                                 intelVertex *);
-typedef void (*intel_point_func) (struct intel_context *, intelVertex *);
+typedef struct intel_context intelContext;
+typedef struct intel_context *intelContextPtr;
+typedef struct intel_texture_object *intelTextureObjectPtr;
+
+typedef void (*intel_tri_func)(intelContextPtr, intelVertex *, intelVertex *,
+							  intelVertex *);
+typedef void (*intel_line_func)(intelContextPtr, intelVertex *, intelVertex *);
+typedef void (*intel_point_func)(intelContextPtr, intelVertex *);
 
 #define INTEL_FALLBACK_DRAW_BUFFER	 0x1
 #define INTEL_FALLBACK_READ_BUFFER	 0x2
-#define INTEL_FALLBACK_DEPTH_BUFFER      0x4
-#define INTEL_FALLBACK_STENCIL_BUFFER    0x8
-#define INTEL_FALLBACK_USER		 0x10
+#define INTEL_FALLBACK_USER		 0x4
+#define INTEL_FALLBACK_NO_BATCHBUFFER	 0x8
+#define INTEL_FALLBACK_NO_TEXMEM	 0x10
 #define INTEL_FALLBACK_RENDERMODE	 0x20
 
-extern void intelFallback(struct intel_context *intel, GLuint bit,
-                          GLboolean mode);
+extern void intelFallback( intelContextPtr intel, GLuint bit, GLboolean mode );
 #define FALLBACK( intel, bit, mode ) intelFallback( intel, bit, mode )
 
 
-#define INTEL_WRITE_PART  0x1
-#define INTEL_WRITE_FULL  0x2
-#define INTEL_READ        0x4
+#define INTEL_TEX_MAXLEVELS 10
 
-#define INTEL_MAX_FIXUP 64
+
+struct intel_texture_object
+{
+   driTextureObject    base;	/* the parent class */
+
+   GLuint texelBytes;
+   GLuint age;
+   GLuint Pitch;
+   GLuint Height;
+   GLuint TextureOffset;
+   GLubyte *BufAddr;   
+
+   GLuint min_level;
+   GLuint max_level;
+   GLuint depth_pitch;
+
+   struct {
+      const struct gl_texture_image *image;
+      GLuint offset;       /* into BufAddr */
+      GLuint height;
+      GLuint internalFormat;
+   } image[6][INTEL_TEX_MAXLEVELS];
+
+   GLuint dirty;
+   GLuint firstLevel,lastLevel;
+};
+
 
 struct intel_context
 {
-   GLcontext ctx;               /* the parent class */
+   GLcontext ctx;		/* the parent class */
 
-   struct
-   {
-      void (*destroy) (struct intel_context * intel);
-      void (*emit_state) (struct intel_context * intel);
-      void (*lost_hardware) (struct intel_context * intel);
-      void (*update_texture_state) (struct intel_context * intel);
+   struct {
+      void (*destroy)( intelContextPtr intel ); 
+      void (*emit_state)( intelContextPtr intel );
+      void (*lost_hardware)( intelContextPtr intel );
+      void (*update_texture_state)( intelContextPtr intel );
 
-      void (*render_start) (struct intel_context * intel);
-      void (*render_prevalidate) (struct intel_context * intel);
-      void (*set_draw_region) (struct intel_context * intel,
-                               struct intel_region * draw_region,
-                               struct intel_region * depth_region);
+      void (*render_start)( intelContextPtr intel );
+      void (*set_color_region)( intelContextPtr intel, const intelRegion *reg );
+      void (*set_z_region)( intelContextPtr intel, const intelRegion *reg );
+      void (*update_color_z_regions)(intelContextPtr intel,
+                                     const intelRegion *colorRegion,
+                                     const intelRegion *depthRegion);
+      void (*emit_flush)( intelContextPtr intel );
+      void (*reduced_primitive_state)( intelContextPtr intel, GLenum rprim );
 
-        GLuint(*flush_cmd) (void);
+      GLboolean (*check_vertex_size)( intelContextPtr intel, GLuint expected );
 
-      void (*reduced_primitive_state) (struct intel_context * intel,
-                                       GLenum rprim);
+      void (*clear_with_tris)( intelContextPtr intel, GLbitfield mask,
+			       GLboolean all, 
+			       GLint cx, GLint cy, GLint cw, GLint ch);
 
-        GLboolean(*check_vertex_size) (struct intel_context * intel,
-                                       GLuint expected);
+      void (*rotate_window)( intelContextPtr intel,
+                             __DRIdrawablePrivate *dPriv, GLuint srcBuf);
 
+      intelTextureObjectPtr (*alloc_tex_obj)( struct gl_texture_object *tObj );
 
-      /* Metaops: 
-       */
-      void (*install_meta_state) (struct intel_context * intel);
-      void (*leave_meta_state) (struct intel_context * intel);
-
-      void (*meta_draw_region) (struct intel_context * intel,
-                                struct intel_region * draw_region,
-                                struct intel_region * depth_region);
-
-      void (*meta_draw_quad)(struct intel_context *intel,
-			     GLfloat x0, GLfloat x1,
-			     GLfloat y0, GLfloat y1,
-			     GLfloat z,
-			     GLuint color, /* ARGB32 */
-			     GLfloat s0, GLfloat s1,
-			     GLfloat t0, GLfloat t1);
-
-      void (*meta_color_mask) (struct intel_context * intel, GLboolean);
-
-      void (*meta_stencil_replace) (struct intel_context * intel,
-                                    GLuint mask, GLuint clear);
-
-      void (*meta_depth_replace) (struct intel_context * intel);
-
-      void (*meta_texture_blend_replace) (struct intel_context * intel);
-
-      void (*meta_no_stencil_write) (struct intel_context * intel);
-      void (*meta_no_depth_write) (struct intel_context * intel);
-      void (*meta_no_texture) (struct intel_context * intel);
-
-      void (*meta_import_pixel_state) (struct intel_context * intel);
-
-      GLboolean(*meta_tex_rect_source) (struct intel_context * intel,
-					dri_bo * buffer,
-					GLuint offset,
-					GLuint pitch,
-					GLuint height,
-					GLenum format, GLenum type);
-
-      void (*assert_not_dirty) (struct intel_context *intel);
-
-      void (*debug_batch)(struct intel_context *intel);
    } vtbl;
 
-   GLint refcount;
+   GLint refcount;   
    GLuint Fallback;
    GLuint NewGLState;
+   
+   struct {
+      GLuint start_offset;
+      GLint size;
+      GLint space;
+      GLubyte *ptr;
+      GLuint counter;
+      GLuint last_emit_state;
+      GLboolean contains_geometry;
+      const char *func;
+      GLuint last_swap;
+   } batch;
+      
+   struct {
+      void *ptr;
+      GLint size;
+      GLuint offset;
+      GLuint active_buf;
+      GLuint irq_emitted;
+   } alloc;
 
-   dri_bufmgr *bufmgr;
-   unsigned int maxBatchSize;
-
-   struct intel_region *front_region;
-   struct intel_region *back_region;
-   struct intel_region *third_region;
-   struct intel_region *depth_region;
-
-   /**
-    * This value indicates that the kernel memory manager is being used
-    * instead of the fake client-side memory manager.
-    */
-   GLboolean ttm;
-
-   dri_fence *last_swap_fence;
-   dri_fence *first_swap_fence;
-
-   struct intel_batchbuffer *batch;
-   unsigned batch_id;
-   GLuint last_state_batch_id;
-
-   struct
-   {
-      GLuint id;
+   struct {
       GLuint primitive;
-      GLubyte *start_ptr;
-      void (*flush) (struct intel_context *);
+      GLubyte *start_ptr;      
+      void (*flush)( GLcontext * );
    } prim;
 
    GLboolean locked;
-   char *prevLockFile;
-   int prevLockLine;
 
-   GLuint ClearColor565;
-   GLuint ClearColor8888;
+   GLubyte clear_red;
+   GLubyte clear_green;
+   GLubyte clear_blue;
+   GLubyte clear_alpha;
+   GLuint ClearColor;
+   GLuint ClearDepth;
 
-   /* Offsets of fields within the current vertex:
-    */
    GLuint coloroffset;
    GLuint specoffset;
+
+   /* Support for duplicating XYZW as WPOS parameter (crutch for I915).
+    */
    GLuint wpos_offset;
    GLuint wpos_size;
 
    struct tnl_attr_map vertex_attrs[VERT_ATTRIB_MAX];
    GLuint vertex_attr_count;
 
-   GLfloat polygon_offset_scale;        /* dependent on depth_scale, bpp */
+   GLfloat depth_scale;
+   GLfloat polygon_offset_scale; /* dependent on depth_scale, bpp */
+   GLuint depth_clear_mask;
+   GLuint stencil_clear_mask;
 
+   GLboolean hw_stencil;
    GLboolean hw_stipple;
-   GLboolean strict_conformance;
+   
+   /* Texture object bookkeeping
+    */
+   GLuint                nr_heaps;
+   driTexHeap          * texture_heaps[1];
+   driTextureObject      swapped;
+   GLuint                lastStamp;
+
+   struct intel_texture_object *CurrentTexObj[MAX_TEXTURE_UNITS];
 
    /* State for intelvb.c and inteltris.c.
     */
@@ -209,7 +207,8 @@ struct intel_context
    GLenum render_primitive;
    GLenum reduced_primitive;
    GLuint vertex_size;
-   GLubyte *verts;              /* points to tnl->clipspace.vertex_buf */
+   unsigned char *verts;	   /* points to tnl->clipspace.vertex_buf */
+
 
    /* Fallback rasterization functions 
     */
@@ -217,18 +216,27 @@ struct intel_context
    intel_line_func draw_line;
    intel_tri_func draw_tri;
 
-   /* These refer to the current drawing buffer:
+   /* Drawing buffer state
     */
-   int drawX, drawY;            /**< origin of drawing area within region */
-   GLuint numClipRects;         /**< cliprects for drawing */
-   drm_clip_rect_t *pClipRects;
-   drm_clip_rect_t fboRect;     /**< cliprect for FBO rendering */
+   intelRegion *drawRegion;  /* current drawing buffer */
+   intelRegion *readRegion;  /* current reading buffer */
 
+   int drawX;			/* origin of drawable in draw buffer */
+   int drawY;
+   GLuint numClipRects;		/* cliprects for that buffer */
+   drm_clip_rect_t *pClipRects;
+
+   int dirtyAge;
    int perf_boxes;
 
    GLuint do_usleeps;
    int do_irqs;
    GLuint irqsEmitted;
+   drm_i915_irq_wait_t iw;
+
+   GLboolean scissor;
+   drm_clip_rect_t draw_rect;
+   drm_clip_rect_t scissor_rect;
 
    drm_context_t hHWContext;
    drmLock *driHwLock;
@@ -236,38 +244,127 @@ struct intel_context
 
    __DRIdrawablePrivate *driDrawable;
    __DRIscreenPrivate *driScreen;
-   intelScreenPrivate *intelScreen;
-   drmI830Sarea *sarea;
-
-   GLuint lastStamp;
+   intelScreenPrivate *intelScreen; 
+   drmI830Sarea *sarea; 
 
    /**
     * Configuration cache
     */
    driOptionCache optionCache;
 
-   /* Last seen width/height of the screen */
-   int width;
-   int height;
+   /* VBI
+    */
+   GLuint vbl_seq;
+   GLuint vblank_flags;
+
+   int64_t swap_ust;
+   int64_t swap_missed_ust;
+
+   GLuint swap_count;
+   GLuint swap_missed_count;
+
+   GLuint swap_scheduled;
 };
 
-/* These are functions now:
- */
-void LOCK_HARDWARE( struct intel_context *intel );
-void UNLOCK_HARDWARE( struct intel_context *intel );
 
-extern char *__progname;
+#define DEBUG_LOCKING	1
+
+#if DEBUG_LOCKING
+extern char *prevLockFile;
+extern int prevLockLine;
+
+#define DEBUG_LOCK()							\
+   do {									\
+      prevLockFile = (__FILE__);					\
+      prevLockLine = (__LINE__);					\
+   } while (0)
+
+#define DEBUG_RESET()							\
+   do {									\
+      prevLockFile = 0;							\
+      prevLockLine = 0;							\
+   } while (0)
+
+/* Slightly less broken way of detecting recursive locking in a
+ * threaded environment.  The right way to do this would be to make
+ * prevLockFile, prevLockLine thread-local.
+ *
+ * This technique instead checks to see if the same context is
+ * requesting the lock twice -- this will not catch application
+ * breakages where the same context is active in two different threads
+ * at once, but it will catch driver breakages (recursive locking) in
+ * threaded apps.
+ */
+#define DEBUG_CHECK_LOCK()						\
+   do {									\
+      if ( *((volatile int *)intel->driHwLock) == 			\
+	   (DRM_LOCK_HELD | intel->hHWContext) ) {			\
+	 fprintf( stderr,						\
+		  "LOCK SET!\n\tPrevious %s:%d\n\tCurrent: %s:%d\n",	\
+		  prevLockFile, prevLockLine, __FILE__, __LINE__ );	\
+	 abort();							\
+      }									\
+   } while (0)
+
+#else
+
+#define DEBUG_LOCK()
+#define DEBUG_RESET()
+#define DEBUG_CHECK_LOCK()
+
+#endif
+
+
+
+
+/* Lock the hardware and validate our state.  
+ */
+#define LOCK_HARDWARE( intel )				\
+do {							\
+    char __ret=0;					\
+    DEBUG_CHECK_LOCK();					\
+    assert(!(intel)->locked);				\
+    if ((intel)->swap_scheduled) {			\
+        drmVBlank vbl;					\
+        vbl.request.type = DRM_VBLANK_ABSOLUTE;		\
+        if ((intel)->vblank_flags &			\
+            VBLANK_FLAG_SECONDARY) {			\
+            vbl.request.type |= DRM_VBLANK_SECONDARY;	\
+        }						\
+        vbl.request.sequence = (intel)->vbl_seq;	\
+        drmWaitVBlank((intel)->driFd, &vbl);		\
+        (intel)->swap_scheduled = 0;			\
+    }							\
+    DRM_CAS((intel)->driHwLock, (intel)->hHWContext,	\
+        (DRM_LOCK_HELD|(intel)->hHWContext), __ret);	\
+    if (__ret)						\
+        intelGetLock( (intel), 0 );			\
+      DEBUG_LOCK();					\
+    (intel)->locked = 1;				\
+}while (0)
+ 
+  
+  /* Unlock the hardware using the global current context 
+   */
+#define UNLOCK_HARDWARE(intel)						\
+do {									\
+   intel->locked = 0;							\
+   if (0) { 								\
+      intel->perf_boxes |= intel->sarea->perf_boxes;  			\
+      intel->sarea->perf_boxes = 0;					\
+   }									\
+   DRM_UNLOCK((intel)->driFd, (intel)->driHwLock, (intel)->hHWContext);	\
+   DEBUG_RESET();							\
+} while (0)
 
 
 #define SUBPIXEL_X 0.125
 #define SUBPIXEL_Y 0.125
 
-#define ALIGN(value, alignment)  ((value + alignment - 1) & ~(alignment - 1))
-
 #define INTEL_FIREVERTICES(intel)		\
 do {						\
    if ((intel)->prim.flush)			\
-      (intel)->prim.flush(intel);		\
+      (intel)->prim.flush(&(intel)->ctx);		\
 } while (0)
 
 /* ================================================================
@@ -288,26 +385,34 @@ do {						\
   ((a<<24) | (r<<16) | (g<<8) | b)
 
 
+#define INTEL_PACKCOLOR(format, r,  g,  b, a)		\
+(format == DV_PF_555 ? INTEL_PACKCOLOR1555(r,g,b,a) :	\
+ (format == DV_PF_565 ? INTEL_PACKCOLOR565(r,g,b) :	\
+  (format == DV_PF_8888 ? INTEL_PACKCOLOR8888(r,g,b,a) :	\
+   0)))
+
+
 
 /* ================================================================
  * From linux kernel i386 header files, copes with odd sizes better
  * than COPY_DWORDS would:
- * XXX Put this in src/mesa/main/imports.h ???
  */
 #if defined(i386) || defined(__i386__)
-static INLINE void *
-__memcpy(void *to, const void *from, size_t n)
+static __inline__ void * __memcpy(void * to, const void * from, size_t n)
 {
    int d0, d1, d2;
-   __asm__ __volatile__("rep ; movsl\n\t"
-                        "testb $2,%b4\n\t"
-                        "je 1f\n\t"
-                        "movsw\n"
-                        "1:\ttestb $1,%b4\n\t"
-                        "je 2f\n\t"
-                        "movsb\n" "2:":"=&c"(d0), "=&D"(d1), "=&S"(d2)
-                        :"0"(n / 4), "q"(n), "1"((long) to), "2"((long) from)
-                        :"memory");
+   __asm__ __volatile__(
+      "rep ; movsl\n\t"
+      "testb $2,%b4\n\t"
+      "je 1f\n\t"
+      "movsw\n"
+      "1:\ttestb $1,%b4\n\t"
+      "je 2f\n\t"
+      "movsb\n"
+      "2:"
+      : "=&c" (d0), "=&D" (d1), "=&S" (d2)
+      :"0" (n/4), "q" (n),"1" ((long) to),"2" ((long) from)
+      : "memory");
    return (to);
 }
 #else
@@ -329,19 +434,16 @@ extern int INTEL_DEBUG;
 #define DEBUG_TEXTURE	0x1
 #define DEBUG_STATE	0x2
 #define DEBUG_IOCTL	0x4
-#define DEBUG_BLIT	0x8
-#define DEBUG_MIPTREE   0x10
+#define DEBUG_PRIMS	0x8
+#define DEBUG_VERTS	0x10
 #define DEBUG_FALLBACKS	0x20
 #define DEBUG_VERBOSE	0x40
-#define DEBUG_BATCH     0x80
-#define DEBUG_PIXEL     0x100
-#define DEBUG_BUFMGR    0x200
-#define DEBUG_REGION    0x400
-#define DEBUG_FBO       0x800
-#define DEBUG_LOCK      0x1000
-#define DEBUG_SYNC	0x2000
-
-#define DBG(...)  do { if (INTEL_DEBUG & FILE_DEBUG_FLAG) _mesa_printf(__VA_ARGS__); } while(0)
+#define DEBUG_DRI       0x80
+#define DEBUG_DMA       0x100
+#define DEBUG_SANITY    0x200
+#define DEBUG_SYNC      0x400
+#define DEBUG_SLEEP     0x800
+#define DEBUG_PIXEL     0x1000
 
 
 #define PCI_CHIP_845_G			0x2562
@@ -362,24 +464,26 @@ extern int INTEL_DEBUG;
  * intel_context.c:
  */
 
-extern GLboolean intelInitContext(struct intel_context *intel,
-                                  const __GLcontextModes * mesaVis,
-                                  __DRIcontextPrivate * driContextPriv,
-                                  void *sharedContextPrivate,
-                                  struct dd_function_table *functions);
+extern void intelInitDriverFunctions( struct dd_function_table *functions );
 
-extern void intelGetLock(struct intel_context *intel, GLuint flags);
+extern GLboolean intelInitContext( intelContextPtr intel, 
+				   const __GLcontextModes *mesaVis,
+				   __DRIcontextPrivate *driContextPriv,
+				   void *sharedContextPrivate,
+				   struct dd_function_table *functions );
 
-extern void intelFinish(GLcontext * ctx);
-extern void intelFlush(GLcontext * ctx);
+extern void intelGetLock(intelContextPtr intel, GLuint flags);
+extern void intelSetBackClipRects(intelContextPtr intel);
+extern void intelSetFrontClipRects(intelContextPtr intel);
+extern void intelWindowMoved( intelContextPtr intel );
 
-extern void intelInitDriverFunctions(struct dd_function_table *functions);
+extern const GLubyte *intelGetString( GLcontext *ctx, GLenum name );
 
 
 /* ================================================================
  * intel_state.c:
  */
-extern void intelInitStateFuncs(struct dd_function_table *functions);
+extern void intelInitStateFuncs( struct dd_function_table *functions );
 
 #define COMPAREFUNC_ALWAYS		0
 #define COMPAREFUNC_NEVER		0x1
@@ -433,21 +537,27 @@ extern void intelInitStateFuncs(struct dd_function_table *functions);
 #define BLENDFACT_INV_CONST_ALPHA	0x0f
 #define BLENDFACT_MASK          	0x0f
 
-extern int intel_translate_shadow_compare_func(GLenum func);
-extern int intel_translate_compare_func(GLenum func);
-extern int intel_translate_stencil_op(GLenum op);
-extern int intel_translate_blend_factor(GLenum factor);
-extern int intel_translate_logic_op(GLenum opcode);
+
+extern int intel_translate_compare_func( GLenum func );
+extern int intel_translate_stencil_op( GLenum op );
+extern int intel_translate_blend_factor( GLenum factor );
+extern int intel_translate_logic_op( GLenum opcode );
 
 
-/*======================================================================
- * Inline conversion functions.  
- * These are better-typed than the macros used previously:
+/* ================================================================
+ * intel_ioctl.c:
  */
-static INLINE struct intel_context *
-intel_context(GLcontext * ctx)
-{
-   return (struct intel_context *) ctx;
-}
+extern void intel_dump_batchbuffer( long offset,
+				    int *ptr,
+				    int count );
+
+
+/* ================================================================
+ * intel_pixel.c:
+ */	
+extern void intelInitPixelFuncs( struct dd_function_table *functions );
+
+
 
 #endif
+

@@ -47,9 +47,10 @@
 
 #include "brw_draw.h"
 #include "brw_state.h"
+#include "brw_aub.h"
 #include "brw_fallback.h"
 #include "brw_vs.h"
-#include <stdarg.h>
+
 
 
 /* called from intelDestroyContext()
@@ -58,6 +59,8 @@ static void brw_destroy_context( struct intel_context *intel )
 {
    GLcontext *ctx = &intel->ctx;
    struct brw_context *brw = brw_context(&intel->ctx);
+
+   brw_aub_destroy(brw);
 
    brw_destroy_metaops(brw);
    brw_destroy_state(brw);
@@ -75,8 +78,8 @@ static void brw_set_draw_region( struct intel_context *intel,
 {
    struct brw_context *brw = brw_context(&intel->ctx);
 
-   intel_region_release(&brw->state.draw_region);
-   intel_region_release(&brw->state.depth_region);
+   intel_region_release(intel, &brw->state.draw_region);
+   intel_region_release(intel, &brw->state.depth_region);
    intel_region_reference(&brw->state.draw_region, draw_region);
    intel_region_reference(&brw->state.depth_region, depth_region);
 }
@@ -97,7 +100,7 @@ static void brw_lost_hardware( struct intel_context *intel )
 
    /* Which means there shouldn't be any commands already queued:
     */
-   assert(intel->batch->ptr == intel->batch->map);
+   assert(intel->batch->ptr == intel->batch->map + intel->batch->offset);
 
    brw->state.dirty.mesa |= ~0;
    brw->state.dirty.brw |= ~0;
@@ -112,9 +115,10 @@ static void brw_note_fence( struct intel_context *intel,
  
 static void brw_note_unlock( struct intel_context *intel )
 {
-   struct brw_context *brw = brw_context(&intel->ctx);
+  struct brw_context *brw = brw_context(&intel->ctx);
 
-   brw_state_cache_check_size(brw);
+   brw_pool_check_wrap(brw, &brw->pool[BRW_GS_POOL]);
+   brw_pool_check_wrap(brw, &brw->pool[BRW_SS_POOL]);
 
    brw_context(&intel->ctx)->state.dirty.brw |= BRW_NEW_LOCK;
 }
@@ -152,6 +156,9 @@ static GLuint brw_flush_cmd( void )
    return *(GLuint *)&flush;
 }
 
+
+
+
 static void brw_invalidate_state( struct intel_context *intel, GLuint new_state )
 {
    /* nothing */
@@ -174,6 +181,5 @@ void brwInitVtbl( struct brw_context *brw )
    brw->intel.vtbl.set_draw_region = brw_set_draw_region;
    brw->intel.vtbl.flush_cmd = brw_flush_cmd;
    brw->intel.vtbl.emit_flush = brw_emit_flush;
-   brw->intel.vtbl.debug_batch = brw_debug_batch;
 }
 

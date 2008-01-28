@@ -61,12 +61,12 @@ default: depend $(TOP)/$(LIB_DIR)/$(LIBNAME)
 
 
 $(TOP)/$(LIB_DIR)/$(LIBNAME): $(OBJECTS) $(MESA_MODULES) $(WINOBJ) Makefile
-	CC="$(CC)" CXX="$(CXX)" $(TOP)/bin/mklib -o $(LIBNAME) -noprefix \
-		-ldflags '$(LDFLAGS)' -install $(TOP)/$(LIB_DIR) \
+	CC="$(CC)" CXX="$(CXX)" $(TOP)/bin/mklib -o $(LIBNAME) -noprefix -install $(TOP)/$(LIB_DIR) \
 		$(OBJECTS) $(WINLIB) $(LIB_DEPS) $(WINOBJ) $(MESA_MODULES)
 
 
 depend: $(C_SOURCES) $(ASM_SOURCES)
+	rm -f depend
 	touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDE_DIRS) $(C_SOURCES) $(ASM_SOURCES) \
 		> /dev/null 

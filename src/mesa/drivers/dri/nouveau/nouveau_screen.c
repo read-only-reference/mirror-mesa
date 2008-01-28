@@ -132,11 +132,10 @@ nouveauCreateBuffer(__DRIscreenPrivate *driScrnPriv,
                     GLboolean isPixmap)
 {
 	nouveauScreenPtr screen = (nouveauScreenPtr) driScrnPriv->private;
-	nouveau_renderbuffer_t *nrb;
+	nouveau_renderbuffer  *nrb;
 	struct gl_framebuffer *fb;
 	const GLboolean swAccum = mesaVis->accumRedBits > 0;
-	const GLboolean swStencil = (mesaVis->stencilBits > 0 &&
-				     mesaVis->depthBits != 24);
+	const GLboolean swStencil = mesaVis->stencilBits > 0 && mesaVis->depthBits != 24;
 	GLenum color_format = screen->fbFormat == 4 ? GL_RGBA8 : GL_RGB5;
 
 	if (isPixmap)
@@ -147,26 +146,44 @@ nouveauCreateBuffer(__DRIscreenPrivate *driScrnPriv,
 		return GL_FALSE;
 
 	/* Front buffer */
-	nrb = nouveau_renderbuffer_new(color_format);
+	nrb = nouveau_renderbuffer_new(color_format,
+				       driScrnPriv->pFB + screen->frontOffset,
+				       screen->frontOffset,
+				       screen->frontPitch * screen->fbFormat,
+				       driDrawPriv);
+	nouveauSpanSetFunctions(nrb, mesaVis);
 	_mesa_add_renderbuffer(fb, BUFFER_FRONT_LEFT, &nrb->mesa);
 
-	if (mesaVis->doubleBufferMode) {
-		nrb = nouveau_renderbuffer_new(color_format);
-		_mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &nrb->mesa);
-	}
+	if (0 /* unified buffers if we choose to support them.. */) {
+	} else {
+		if (mesaVis->doubleBufferMode) {
+			nrb = nouveau_renderbuffer_new(color_format, NULL,
+						       0, 0,
+						       NULL);
+			nouveauSpanSetFunctions(nrb, mesaVis);
+			_mesa_add_renderbuffer(fb, BUFFER_BACK_LEFT, &nrb->mesa);
+		}
 
-	if (mesaVis->depthBits == 24 && mesaVis->stencilBits == 8) {
-		nrb = nouveau_renderbuffer_new(GL_DEPTH24_STENCIL8_EXT);
-		_mesa_add_renderbuffer(fb, BUFFER_DEPTH, &nrb->mesa);
-		_mesa_add_renderbuffer(fb, BUFFER_STENCIL, &nrb->mesa);
-	} else
-	if (mesaVis->depthBits == 24) {
-		nrb = nouveau_renderbuffer_new(GL_DEPTH_COMPONENT24);
-		_mesa_add_renderbuffer(fb, BUFFER_DEPTH, &nrb->mesa);
-	} else
-	if (mesaVis->depthBits == 16) {
-		nrb = nouveau_renderbuffer_new(GL_DEPTH_COMPONENT16);
-		_mesa_add_renderbuffer(fb, BUFFER_DEPTH, &nrb->mesa);
+		if (mesaVis->depthBits == 24 && mesaVis->stencilBits == 8) {
+			nrb = nouveau_renderbuffer_new(GL_DEPTH24_STENCIL8_EXT, NULL,
+						       0, 0,
+						       NULL);
+			nouveauSpanSetFunctions(nrb, mesaVis);
+			_mesa_add_renderbuffer(fb, BUFFER_DEPTH, &nrb->mesa);
+			_mesa_add_renderbuffer(fb, BUFFER_STENCIL, &nrb->mesa);
+		} else if (mesaVis->depthBits == 24) {
+			nrb = nouveau_renderbuffer_new(GL_DEPTH_COMPONENT24, NULL,
+						       0, 0,
+						       NULL);
+			nouveauSpanSetFunctions(nrb, mesaVis);
+			_mesa_add_renderbuffer(fb, BUFFER_DEPTH, &nrb->mesa);
+		} else if (mesaVis->depthBits == 16) {
+			nrb = nouveau_renderbuffer_new(GL_DEPTH_COMPONENT16, NULL,
+						       0, 0,
+						       NULL);
+			nouveauSpanSetFunctions(nrb, mesaVis);
+			_mesa_add_renderbuffer(fb, BUFFER_DEPTH, &nrb->mesa);
+		}
 	}
 
 	_mesa_add_soft_renderbuffers(fb,
@@ -195,6 +212,7 @@ nouveauGetSwapInfo(__DRIdrawablePrivate *dpriv, __DRIswapInfo *sInfo)
 }
 
 static const struct __DriverAPIRec nouveauAPI = {
+	.InitDriver      = nouveauInitDriver,
 	.DestroyScreen   = nouveauDestroyScreen,
 	.CreateContext   = nouveauCreateContext,
 	.DestroyContext  = nouveauDestroyContext,
@@ -205,7 +223,6 @@ static const struct __DriverAPIRec nouveauAPI = {
 	.UnbindContext   = nouveauUnbindContext,
 	.GetSwapInfo     = nouveauGetSwapInfo,
 	.GetMSC          = driGetMSC32,
-	.GetDrawableMSC  = driDrawableGetMSC32,
 	.WaitForMSC      = driWaitForMSC32,
 	.WaitForSBC      = NULL,
 	.SwapBuffersMSC  = NULL,
@@ -285,62 +302,81 @@ nouveauFillInModes( unsigned pixel_bits, unsigned depth_bits,
 
 
 /**
- * This is the driver specific part of the createNewScreen entry point.
+ * This is the bootstrap function for the driver.  libGL supplies all of the
+ * requisite information about the system, and the driver initializes itself.
+ * This routine also fills in the linked list pointed to by \c driver_modes
+ * with the \c __GLcontextModes that the driver can support for windows or
+ * pbuffers.
  * 
- * \todo maybe fold this into intelInitDriver
- *
- * \return the __GLcontextModes supported by this driver
+ * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on 
+ *         failure.
  */
-__GLcontextModes *__driDriverInitScreen(__DRIscreenPrivate *psp)
+PUBLIC
+void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
+				     const __GLcontextModes * modes,
+				     const __DRIversion * ddx_version,
+				     const __DRIversion * dri_version,
+				     const __DRIversion * drm_version,
+				     const __DRIframebuffer * frame_buffer,
+				     drmAddress pSAREA, int fd, 
+				     int internal_api_version,
+				     const __DRIinterfaceMethods * interface,
+				     __GLcontextModes ** driver_modes)
+			     
 {
+	__DRIscreenPrivate *psp;
 	static const __DRIversion ddx_expected = { 1, 2, 0 };
 	static const __DRIversion dri_expected = { 4, 0, 0 };
 	static const __DRIversion drm_expected = { 0, 0, NOUVEAU_DRM_HEADER_PATCHLEVEL };
-	NOUVEAUDRIPtr dri_priv = (NOUVEAUDRIPtr)psp->pDevPriv;
-
-#if NOUVEAU_DRM_HEADER_PATCHLEVEL != 10
+#if NOUVEAU_DRM_HEADER_PATCHLEVEL != 9
 #error nouveau_drm.h version doesn't match expected version
 #endif
+	dri_interface = interface;
 
 	if (!driCheckDriDdxDrmVersions2("nouveau",
-					&psp->dri_version, & dri_expected,
-					&psp->ddx_version, & ddx_expected,
-					&psp->drm_version, & drm_expected))
-		return NULL;
-
-	// temporary lock step versioning
-	if (drm_expected.patch != psp->drm_version.patch) {
-		__driUtilMessage("%s: wrong DRM version, expected %d, got %d\n",
-				 __func__,
-				 drm_expected.patch, psp->drm_version.patch);
+					dri_version, & dri_expected,
+					ddx_version, & ddx_expected,
+					drm_version, & drm_expected)) {
 		return NULL;
 	}
 
-	psp->DriverAPI = nouveauAPI;
-
-	/* Calling driInitExtensions here, with a NULL context
-	 * pointer, does not actually enable the extensions.  It just
-	 * makes sure that all the dispatch offsets for all the
-	 * extensions that *might* be enables are known.  This is
-	 * needed because the dispatch offsets need to be known when
-	 * _mesa_context_create is called, but we can't enable the
-	 * extensions until we have a context pointer.
-	 * 
-	 * Hello chicken.  Hello egg.  How are you two today?
-	 */
-	driInitExtensions( NULL, common_extensions, GL_FALSE );
-	driInitExtensions( NULL,   nv10_extensions, GL_FALSE );
-	driInitExtensions( NULL,   nv10_extensions, GL_FALSE );
-	driInitExtensions( NULL,   nv30_extensions, GL_FALSE );
-	driInitExtensions( NULL,   nv40_extensions, GL_FALSE );
-	driInitExtensions( NULL,   nv50_extensions, GL_FALSE );
-
-	if (!nouveauInitDriver(psp))
+	// temporary lock step versioning
+	if (drm_expected.patch!=drm_version->patch) {
+		__driUtilMessage("%s: wrong DRM version, expected %d, got %d\n",
+				__func__,
+				drm_expected.patch, drm_version->patch);
 		return NULL;
+	}
 
-	return nouveauFillInModes(dri_priv->bpp,
-				  (dri_priv->bpp == 16) ? 16 : 24,
-				  (dri_priv->bpp == 16) ? 0  : 8,
-				  1);
+	psp = __driUtilCreateNewScreen(dpy, scrn, psc, NULL,
+				       ddx_version, dri_version, drm_version,
+				       frame_buffer, pSAREA, fd,
+				       internal_api_version, &nouveauAPI);
+	if ( psp != NULL ) {
+		NOUVEAUDRIPtr dri_priv = (NOUVEAUDRIPtr)psp->pDevPriv;
+
+		*driver_modes = nouveauFillInModes(dri_priv->bpp,
+						   (dri_priv->bpp == 16) ? 16 : 24,
+						   (dri_priv->bpp == 16) ? 0  : 8,
+						   1
+						   );
+
+		/* Calling driInitExtensions here, with a NULL context pointer, does not actually
+		 * enable the extensions.  It just makes sure that all the dispatch offsets for all
+		 * the extensions that *might* be enables are known.  This is needed because the
+		 * dispatch offsets need to be known when _mesa_context_create is called, but we can't
+		 * enable the extensions until we have a context pointer.
+		 * 
+		 * Hello chicken.  Hello egg.  How are you two today?
+		 */
+		driInitExtensions( NULL, common_extensions, GL_FALSE );
+		driInitExtensions( NULL,   nv10_extensions, GL_FALSE );
+		driInitExtensions( NULL,   nv10_extensions, GL_FALSE );
+		driInitExtensions( NULL,   nv30_extensions, GL_FALSE );
+		driInitExtensions( NULL,   nv40_extensions, GL_FALSE );
+		driInitExtensions( NULL,   nv50_extensions, GL_FALSE );
+	}
+
+	return (void *) psp;
 }
 

@@ -842,8 +842,7 @@ _swrast_DrawPixels( GLcontext *ctx,
                                      format, type, pixels)) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "glDrawPixels(invalid PBO access)");
-         RENDER_FINISH(swrast, ctx);
-	 return;
+         goto end;
       }
       buf = (GLubyte *) ctx->Driver.MapBuffer(ctx, GL_PIXEL_UNPACK_BUFFER_EXT,
                                               GL_READ_ONLY_ARB,
@@ -851,8 +850,7 @@ _swrast_DrawPixels( GLcontext *ctx,
       if (!buf) {
          /* buffer is already mapped - that's an error */
          _mesa_error(ctx, GL_INVALID_OPERATION, "glDrawPixels(PBO is mapped)");
-         RENDER_FINISH(swrast, ctx);
-	 return;
+         goto end;
       }
       pixels = ADD_POINTERS(buf, pixels);
    }
@@ -891,6 +889,8 @@ _swrast_DrawPixels( GLcontext *ctx,
       _mesa_problem(ctx, "unexpected format in _swrast_DrawPixels");
       /* don't return yet, clean-up */
    }
+
+end:
 
    RENDER_FINISH(swrast,ctx);
 

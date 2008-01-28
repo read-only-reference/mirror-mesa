@@ -41,7 +41,7 @@
 #include "mga_xmesa.h"
 #include "utils.h"
 
-#define DRIVER_DATE	"20071017"
+#define DRIVER_DATE	"20061030"
 
 
 /***************************************

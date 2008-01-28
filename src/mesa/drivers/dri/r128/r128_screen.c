@@ -98,7 +98,9 @@ r128CreateScreen( __DRIscreenPrivate *sPriv )
 {
    r128ScreenPtr r128Screen;
    R128DRIPtr r128DRIPriv = (R128DRIPtr)sPriv->pDevPriv;
-   int i;
+   PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
+     (PFNGLXSCRENABLEEXTENSIONPROC) (*dri_interface->getProcAddress("glxEnableExtension"));
+   void * const psc = sPriv->psc->screenConfigs;
 
    if (sPriv->devPrivSize != sizeof(R128DRIRec)) {
       fprintf(stderr,"\nERROR!  sizeof(R128DRIRec) does not match passed size from device driver\n");
@@ -119,7 +121,7 @@ r128CreateScreen( __DRIscreenPrivate *sPriv )
    r128Screen->IsPCI = r128DRIPriv->IsPCI;
    r128Screen->sarea_priv_offset = r128DRIPriv->sarea_priv_offset;
    
-   if (sPriv->drm_version.minor >= 3) {
+   if (sPriv->drmMinor >= 3) {
       drm_r128_getparam_t gp;
       int ret;
 
@@ -224,14 +226,15 @@ r128CreateScreen( __DRIscreenPrivate *sPriv )
 
    r128Screen->driScreen = sPriv;
 
-   i = 0;
-   r128Screen->extensions[i++] = &driFrameTrackingExtension.base;
-   if ( r128Screen->irq != 0 ) {
-       r128Screen->extensions[i++] = &driSwapControlExtension.base;
-       r128Screen->extensions[i++] = &driMediaStreamCounterExtension.base;
+   if ( glx_enable_extension != NULL ) {
+      if ( r128Screen->irq != 0 ) {
+	 (*glx_enable_extension)( psc, "GLX_SGI_swap_control" );
+	 (*glx_enable_extension)( psc, "GLX_SGI_video_sync" );
+	 (*glx_enable_extension)( psc, "GLX_MESA_swap_control" );
+      }
+
+      (*glx_enable_extension)( psc, "GLX_MESA_swap_frame_usage" );
    }
-   r128Screen->extensions[i++] = NULL;
-   sPriv->extensions = r128Screen->extensions;
 
    return r128Screen;
 }
@@ -401,6 +404,7 @@ r128InitDriver( __DRIscreenPrivate *sPriv )
 
 
 static struct __DriverAPIRec r128API = {
+   .InitDriver      = r128InitDriver,
    .DestroyScreen   = r128DestroyScreen,
    .CreateContext   = r128CreateContext,
    .DestroyContext  = r128DestroyContext,
@@ -411,7 +415,6 @@ static struct __DriverAPIRec r128API = {
    .UnbindContext   = r128UnbindContext,
    .GetSwapInfo     = NULL,
    .GetMSC          = driGetMSC32,
-   .GetDrawableMSC  = driDrawableGetMSC32,
    .WaitForMSC      = driWaitForMSC32,
    .WaitForSBC      = NULL,
    .SwapBuffersMSC  = NULL
@@ -501,43 +504,64 @@ r128FillInModes( unsigned pixel_bits, unsigned depth_bits,
 
 
 /**
- * This is the driver specific part of the createNewScreen entry point.
+ * This is the bootstrap function for the driver.  libGL supplies all of the
+ * requisite information about the system, and the driver initializes itself.
+ * This routine also fills in the linked list pointed to by \c driver_modes
+ * with the \c __GLcontextModes that the driver can support for windows or
+ * pbuffers.
  * 
- * \todo maybe fold this into intelInitDriver
- *
- * \return the __GLcontextModes supported by this driver
+ * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on 
+ *         failure.
  */
-__GLcontextModes *__driDriverInitScreen(__DRIscreenPrivate *psp)
+PUBLIC
+void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
+			     const __GLcontextModes * modes,
+			     const __DRIversion * ddx_version,
+			     const __DRIversion * dri_version,
+			     const __DRIversion * drm_version,
+			     const __DRIframebuffer * frame_buffer,
+			     drmAddress pSAREA, int fd, 
+			     int internal_api_version,
+			     const __DRIinterfaceMethods * interface,
+			     __GLcontextModes ** driver_modes )
+			     
 {
+   __DRIscreenPrivate *psp;
    static const __DRIversion ddx_expected = { 4, 0, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
    static const __DRIversion drm_expected = { 2, 2, 0 };
-   R128DRIPtr dri_priv = (R128DRIPtr) psp->pDevPriv;
 
-   psp->DriverAPI = r128API;
+
+   dri_interface = interface;
+
    if ( ! driCheckDriDdxDrmVersions2( "Rage128",
-				      &psp->dri_version, & dri_expected,
-				      &psp->ddx_version, & ddx_expected,
-				      &psp->drm_version, & drm_expected ) )
+				      dri_version, & dri_expected,
+				      ddx_version, & ddx_expected,
+				      drm_version, & drm_expected ) ) {
       return NULL;
+   }
+      
+   psp = __driUtilCreateNewScreen(dpy, scrn, psc, NULL,
+				  ddx_version, dri_version, drm_version,
+				  frame_buffer, pSAREA, fd,
+				  internal_api_version, &r128API);
+   if ( psp != NULL ) {
+      R128DRIPtr dri_priv = (R128DRIPtr) psp->pDevPriv;
+      *driver_modes = r128FillInModes( dri_priv->bpp,
+				       (dri_priv->bpp == 16) ? 16 : 24,
+				       (dri_priv->bpp == 16) ? 0  : 8,
+				       (dri_priv->backOffset != dri_priv->depthOffset) );
 
-   /* Calling driInitExtensions here, with a NULL context pointer,
-    * does not actually enable the extensions.  It just makes sure
-    * that all the dispatch offsets for all the extensions that
-    * *might* be enables are known.  This is needed because the
-    * dispatch offsets need to be known when _mesa_context_create is
-    * called, but we can't enable the extensions until we have a
-    * context pointer.
-    *
-    * Hello chicken.  Hello egg.  How are you two today?
-    */
-   driInitExtensions( NULL, card_extensions, GL_FALSE );
+      /* Calling driInitExtensions here, with a NULL context pointer, does not actually
+       * enable the extensions.  It just makes sure that all the dispatch offsets for all
+       * the extensions that *might* be enables are known.  This is needed because the
+       * dispatch offsets need to be known when _mesa_context_create is called, but we can't
+       * enable the extensions until we have a context pointer.
+       *
+       * Hello chicken.  Hello egg.  How are you two today?
+       */
+      driInitExtensions( NULL, card_extensions, GL_FALSE );
+   }
 
-   if (!r128InitDriver(psp))
-       return NULL;
-
-   return r128FillInModes( dri_priv->bpp,
-			   (dri_priv->bpp == 16) ? 16 : 24,
-			   (dri_priv->bpp == 16) ? 0  : 8,
-			   (dri_priv->backOffset != dri_priv->depthOffset) );
+   return (void *) psp;
 }

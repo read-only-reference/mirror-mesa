@@ -291,7 +291,6 @@ loadVisuals(int *nitems_return)
   fbmodes = (FrameBufferMode *) malloc(n * sizeof(FrameBufferMode));
   if (fbmodes == NULL) {
     *nitems_return = -1;
-    free(vlist);
     return NULL;
   }
   for (i = 0; i < n; i++) {

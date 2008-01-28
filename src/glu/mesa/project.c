@@ -346,8 +346,7 @@ gluUnProject(GLdouble winx, GLdouble winy, GLdouble winz,
 
    /* calcul transformation inverse */
    matmul(A, proj, model);
-   if (!invert_matrix(A, m))
-      return GL_FALSE;
+   invert_matrix(A, m);
 
    /* d'ou les coordonnees objets */
    transform_point(out, m, in);
@@ -387,8 +386,7 @@ gluUnProject4(GLdouble winx, GLdouble winy, GLdouble winz, GLdouble clipw,
 
    /* calcul transformation inverse */
    matmul(A, projMatrix, modelMatrix);
-   if (!invert_matrix(A, m))
-      return GL_FALSE;
+   invert_matrix(A, m);
 
    /* d'ou les coordonnees objets */
    transform_point(out, m, in);

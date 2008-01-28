@@ -139,13 +139,8 @@ struct brw_context;
 
 
 struct brw_state_flags {
-   /** State update flags signalled by mesa internals */
    GLuint mesa;
-   /** State update flags signalled by brw_state_cache.c searches */
    GLuint cache;
-   /**
-    * State update flags signalled as the result of brw_tracked_state updates
-    */
    GLuint brw;
 };
 
@@ -237,44 +232,30 @@ struct brw_vs_ouput_sizes {
 #define BRW_MAX_TEX_UNIT 8
 #define BRW_WM_MAX_SURF BRW_MAX_TEX_UNIT + 1
 
-enum brw_cache_id {
-   BRW_CC_VP,
-   BRW_CC_UNIT,
-   BRW_WM_PROG,
-   BRW_SAMPLER_DEFAULT_COLOR,
-   BRW_SAMPLER,
-   BRW_WM_UNIT,
-   BRW_SF_PROG,
-   BRW_SF_VP,
-   BRW_SF_UNIT,
-   BRW_VS_UNIT,
-   BRW_VS_PROG,
-   BRW_GS_UNIT,
-   BRW_GS_PROG,
-   BRW_CLIP_VP,
-   BRW_CLIP_UNIT,
-   BRW_CLIP_PROG,
-   BRW_SS_SURFACE,
-   BRW_SS_SURF_BIND,
+/* Create a fixed sized struct for caching binding tables:
+ */
+struct brw_surface_binding_table {
+   GLuint surf_ss_offset[BRW_WM_MAX_SURF];
+};
 
-   BRW_MAX_CACHE
+
+struct brw_cache;
+
+struct brw_mem_pool {
+   struct buffer *buffer;
+
+   GLuint size;
+   GLuint offset;		/* offset of first free byte */
+
+   struct brw_context *brw;
 };
 
 struct brw_cache_item {
-   /**
-    * Effectively part of the key, cache_id identifies what kind of state
-    * buffer is involved, and also which brw->state.dirty.cache flag should
-    * be set when this cache item is chosen.
-    */
-   enum brw_cache_id cache_id;
-   /** 32-bit hash of the key data */
    GLuint hash;
    GLuint key_size;		/* for variable-sized keys */
    const void *key;
-   dri_bo **reloc_bufs;
-   GLuint nr_reloc_bufs;
 
-   dri_bo *bo;
+   GLuint offset;		/* offset within pool's buffer */
    GLuint data_size;
 
    struct brw_cache_item *next;
@@ -283,19 +264,23 @@ struct brw_cache_item {
 
 
 struct brw_cache {
+   GLuint id;
+
+   const char *name;
+
    struct brw_context *brw;
+   struct brw_mem_pool *pool;
 
    struct brw_cache_item **items;
    GLuint size, n_items;
+   
+   GLuint key_size;		/* for fixed-size keys */
+   GLuint aux_size;
 
-   GLuint key_size[BRW_MAX_CACHE];		/* for fixed-size keys */
-   GLuint aux_size[BRW_MAX_CACHE];
-   char *name[BRW_MAX_CACHE];
-
-   /* Record of the last BOs chosen for each cache_id.  Used to set
-    * brw->state.dirty.cache when a new cache item is chosen.
-    */
-   dri_bo *last_bo[BRW_MAX_CACHE];
+   GLuint aub_type;
+   GLuint aub_sub_type;
+   
+   GLuint last_addr;			/* offset of active item */
 };
 
 
@@ -328,8 +313,33 @@ struct brw_state_pointers {
 struct brw_tracked_state {
    struct brw_state_flags dirty;
    void (*update)( struct brw_context *brw );
-   void (*emit_reloc)( struct brw_context *brw );
-   GLboolean always_update;
+};
+
+
+enum brw_cache_id {
+   BRW_CC_VP,
+   BRW_CC_UNIT,
+   BRW_WM_PROG,
+   BRW_SAMPLER_DEFAULT_COLOR,
+   BRW_SAMPLER,
+   BRW_WM_UNIT,
+   BRW_SF_PROG,
+   BRW_SF_VP,
+   BRW_SF_UNIT,
+   BRW_VS_UNIT,
+   BRW_VS_PROG,
+   BRW_GS_UNIT,
+   BRW_GS_PROG,
+   BRW_CLIP_VP,
+   BRW_CLIP_UNIT,
+   BRW_CLIP_PROG,
+
+   /* These two are in the SS pool:
+    */
+   BRW_SS_SURFACE,
+   BRW_SS_SURF_BIND,
+
+   BRW_MAX_CACHE
 };
 
 /* Flags for brw->state.cache.
@@ -352,6 +362,16 @@ struct brw_tracked_state {
 #define CACHE_NEW_CLIP_PROG              (1<<BRW_CLIP_PROG)
 #define CACHE_NEW_SURFACE                (1<<BRW_SS_SURFACE)
 #define CACHE_NEW_SURF_BIND              (1<<BRW_SS_SURF_BIND)
+
+
+
+
+enum brw_mempool_id {
+   BRW_GS_POOL,
+   BRW_SS_POOL,
+   BRW_MAX_POOL
+};
+
 
 struct brw_cached_batch_item {
    struct header *header;
@@ -423,7 +443,8 @@ struct brw_context
    } state;
 
    struct brw_state_pointers attribs;
-   struct brw_cache cache;
+   struct brw_mem_pool pool[BRW_MAX_POOL];
+   struct brw_cache cache[BRW_MAX_CACHE];
    struct brw_cached_batch_item *cached_batch_items;
 
    struct {
@@ -531,7 +552,7 @@ struct brw_context
        */
       struct brw_tracked_state tracked_state;
 
-      dri_bo *curbe_bo;
+      GLuint gs_offset;
 
       GLfloat *last_buf;
       GLuint last_bufsz;
@@ -540,38 +561,33 @@ struct brw_context
    struct {
       struct brw_vs_prog_data *prog_data;
 
-      GLuint thread0_delta;
-      dri_bo *prog_bo;
-      dri_bo *state_bo;
+      GLuint prog_gs_offset;
+      GLuint state_gs_offset;	
    } vs;
 
    struct {
       struct brw_gs_prog_data *prog_data;
 
       GLboolean prog_active;
-      GLuint thread0_delta;
-      dri_bo *prog_bo;
-      dri_bo *state_bo;
+      GLuint prog_gs_offset;
+      GLuint state_gs_offset;	
    } gs;
 
    struct {
       struct brw_clip_prog_data *prog_data;
 
-      GLuint thread0_delta;
-      dri_bo *prog_bo;
-      dri_bo *state_bo;
-      dri_bo *vp_bo;
+      GLuint prog_gs_offset;
+      GLuint vp_gs_offset;
+      GLuint state_gs_offset;	
    } clip;
 
 
    struct {
       struct brw_sf_prog_data *prog_data;
 
-      GLuint thread0_delta;
-      GLuint sf5_delta;
-      dri_bo *prog_bo;
-      dri_bo *state_bo;
-      dri_bo *vp_bo;
+      GLuint prog_gs_offset;
+      GLuint vp_gs_offset;
+      GLuint state_gs_offset;
    } sf;
 
    struct {
@@ -583,40 +599,32 @@ struct brw_context
       GLuint input_size_masks[4];
 
 
-      /**
-       * Array of sampler state uploaded at sampler_bo of BRW_SAMPLER
-       * cache
+      /* State structs
        */
+      struct brw_sampler_default_color sdc[BRW_MAX_TEX_UNIT];
       struct brw_sampler_state sampler[BRW_MAX_TEX_UNIT];
-      /** Array of surface default colors (texture border color) */
-      dri_bo *sdc_bo[BRW_MAX_TEX_UNIT];
 
       GLuint render_surf;
       GLuint nr_surfaces;      
 
       GLuint max_threads;
-      dri_bo *scratch_buffer;
+      struct buffer *scratch_buffer;
       GLuint scratch_buffer_size;
 
       GLuint sampler_count;
-      dri_bo *sampler_bo;
+      GLuint sampler_gs_offset;
 
-      /** Binding table of pointers to surf_bo entries */
-      dri_bo *bind_bo;
-      dri_bo *surf_bo[BRW_WM_MAX_SURF];
+      struct brw_surface_binding_table bind;
+      GLuint bind_ss_offset;
 
-      GLuint thread0_delta;
-      GLuint thread2_delta;
-      GLuint wm4_delta;
-      dri_bo *prog_bo;
-      dri_bo *state_bo;
+      GLuint prog_gs_offset;
+      GLuint state_gs_offset;
    } wm;
 
 
    struct {
-      dri_bo *prog_bo;
-      dri_bo *state_bo;
-      dri_bo *vp_bo;
+      GLuint vp_gs_offset;
+      GLuint state_gs_offset;
    } cc;
 
    
@@ -654,15 +662,12 @@ void brw_init_state( struct brw_context *brw );
 void brw_destroy_state( struct brw_context *brw );
 
 
-/*======================================================================
- * brw_state_dump.c
- */
-void brw_debug_batch(struct intel_context *intel);
 
 /*======================================================================
  * brw_tex.c
  */
 void brwUpdateTextureState( struct intel_context *intel );
+void brwInitTextureFuncs( struct dd_function_table *functions );
 void brw_FrameBufferTexInit( struct brw_context *brw );
 void brw_FrameBufferTexDestroy( struct brw_context *brw );
 

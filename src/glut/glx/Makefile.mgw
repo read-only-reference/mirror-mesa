@@ -74,29 +74,35 @@ TOP = ../../..
 
 LIBDIR = $(TOP)/lib
 
-LIB_NAME = glut32
+GLUT_DLL = glut32.dll
+GLUT_IMP = libglut32.a
+GLUT_DEF = glut.def
 
-DLL_EXT = .dll
-IMP_EXT = .a
-LIB_PRE = lib
-STRIP = -s
+include $(TOP)/configs/config.mgw
+GLUT_USING_STDCALL ?= 1
 
-AR = ar
-ARFLAGS = crus
-DLLTOOL = dlltool
 
-GLUT_DLL = $(LIB_NAME)$(DLL_EXT)
-GLUT_IMP = $(LIB_PRE)$(LIB_NAME)$(IMP_EXT)
-GLUT_DEF = $(LIB_NAME).def
 
 LDLIBS = -L$(LIBDIR) -lwinmm -lgdi32 -luser32 -lopengl32 -lglu32 
-LDFLAGS = $(STRIP) -shared -fPIC -Wl,--kill-at
+LDFLAGS = -Wl,--out-implib=$(LIBDIR)/$(GLUT_IMP) -Wl,--output-def=$(LIBDIR)/$(GLUT_DEF) 
 
 CFLAGS += -DBUILD_GLUT32 -DGLUT_BUILDING_LIB -DMESA -D_DLL
+
+ifeq ($(GL_USING_STDCALL),0)
+  CFLAGS += -DGL_NO_STDCALL
+endif
+
+ifeq ($(GLUT_USING_STDCALL),1)
+  CFLAGS += -D_STDCALL_SUPPORTED
+  LDFLAGS += -Wl,--add-stdcall-alias
+else
+  CFLAGS += -DGLUT_NO_STDCALL
+endif
+
 CFLAGS += -DNDEBUG -DLIBRARYBUILD -I$(TOP)/include 
 
-CC = $(TOOLS_PREFIX)gcc
-CXX = $(TOOLS_PREFIX)g++
+CC = gcc
+CXX = g++
 CXXFLAGS = $(CFLAGS)
 
 AR = ar
@@ -183,9 +189,10 @@ $(LIBDIR):
 	mkdir -p $(LIBDIR)
 
 $(LIBDIR)/$(GLUT_DLL) $(LIBDIR)/$(GLUT_IMP): $(OBJECTS)
-	$(CXX) $(LDFLAGS) -o $(LIBDIR)/$(GLUT_DLL) $^ $(LDLIBS)
-	$(DLLTOOL) --as=as --dllname $(LIB_NAME) --output-def $(LIBDIR)/$(GLUT_DEF) $^
-	$(DLLTOOL) --as=as -k --dllname $(LIB_NAME) --output-lib $(LIBDIR)/$(GLUT_IMP) --def $(LIBDIR)/$(GLUT_DEF) 
+	$(CXX) -shared -fPIC -o $(LIBDIR)/$(GLUT_DLL) $(LDFLAGS) \
+	$^ $(LDLIBS)
+
+
 
 clean:
 	-$(call UNLINK,*.o)

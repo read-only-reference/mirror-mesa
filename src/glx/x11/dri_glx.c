@@ -167,8 +167,11 @@ ExtractDir(int index, const char *paths, int dirLen, char *dir)
  * The version of the last incompatible loader/driver inteface change is
  * appended to the name of the \c __driCreateNewScreen function.  This
  * prevents loaders from trying to load drivers that are too old.
+ * 
+ * \todo
+ * Create a macro or something so that this is automatically updated.
  */
-static const char createNewScreenName[] = __DRI_CREATE_NEW_SCREEN_STRING;
+static const char createNewScreenName[] = "__driCreateNewScreen_20050727";
 
 
 /**
@@ -194,8 +197,7 @@ static __DRIdriver *OpenDriver(const char *driverName)
    /* First, search Drivers list to see if we've already opened this driver */
    for (driver = Drivers; driver; driver = driver->next) {
       if (strcmp(driver->name, driverName) == 0) {
-         /* found it, increment library refcount & return */
-         dlopen(driver->libpath, RTLD_NOW | RTLD_GLOBAL);
+         /* found it */
          return driver;
       }
    }
@@ -239,12 +241,7 @@ static __DRIdriver *OpenDriver(const char *driverName)
             break; /* out of memory! */
          /* init the struct */
          driver->name = __glXstrdup(driverName);
-         driver->libpath = __glXstrdup(realDriverName);
-         if (!driver->name || !driver->libpath) {
-            if (driver->name)
-               Xfree(driver->name);
-            if (driver->libpath)
-               Xfree(driver->libpath);
+         if (!driver->name) {
             Xfree(driver);
             driver = NULL;
             break; /* out of memory! */
@@ -407,7 +404,6 @@ static void driDestroyDisplay(Display *dpy, void *private)
 		       Drivers = driver->next;
 
 		    Xfree(driver->name);
-		    Xfree(driver->libpath);
 		    Xfree(driver);
 		    break;
 		 }

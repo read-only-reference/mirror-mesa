@@ -1,9 +1,13 @@
+
 /*
- * GL_ARB_pixel_buffer_object test
+ * GL_ARB_multitexture demo
  *
  * Command line options:
- *    -w WIDTH -h HEIGHT   sets window size
+ *    -info      print GL implementation information
  *
+ *
+ * Brian Paul  November 1998  This program is in the public domain.
+ * Modified on 12 Feb 2002 for > 2 texture units.
  */
 
 #define GL_GLEXT_PROTOTYPES
@@ -20,8 +24,6 @@
 #define ANIMATE 10
 #define PBO 11
 #define QUIT 100
-
-static GLuint DrawPBO;
 
 static GLboolean Animate = GL_TRUE;
 static GLboolean use_pbo = 1;
@@ -47,7 +49,7 @@ static void Idle( void )
    }
 }
 
-/*static int max( int a, int b ) { return a > b ? a : b; }*/
+static int max( int a, int b ) { return a > b ? a : b; }
 static int min( int a, int b ) { return a < b ? a : b; }
 
 static void DrawObject()
@@ -60,7 +62,6 @@ static void DrawObject()
        * release the old copy of the texture and allocate a new one
        * without waiting for outstanding rendering to complete.
        */
-      glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_EXT, DrawPBO);
       glBufferDataARB(GL_PIXEL_UNPACK_BUFFER_EXT, size, NULL, GL_STREAM_DRAW_ARB);
 
       {
@@ -68,7 +69,7 @@ static void DrawObject()
       
 	 printf("char %d\n", (unsigned char)(Drift * 255));
 
-	 memset(image, (unsigned char)(Drift * 255), size);
+	 memset(image, size, (unsigned char)(Drift * 255));
       
 	 glUnmapBufferARB(GL_PIXEL_UNPACK_BUFFER_EXT);
       }
@@ -85,9 +86,7 @@ static void DrawObject()
       if (image == NULL) 
 	 image = malloc(size);
 
-      glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_EXT, 0);
-
-      memset(image, (unsigned char)(Drift * 255), size);
+      memset(image, size, (unsigned char)(Drift * 255));
 
       /* BGRA should be the fast path for regular uploads as well.
        */
@@ -228,12 +227,12 @@ static void SpecialKey( int key, int x, int y )
 static void Init( int argc, char *argv[] )
 {
    const char *exten = (const char *) glGetString(GL_EXTENSIONS);
-   GLuint texObj;
+   GLuint texObj, DrawPBO;
    GLint size;
 
 
-   if (!strstr(exten, "GL_ARB_pixel_buffer_object")) {
-      printf("Sorry, GL_ARB_pixel_buffer_object not supported by this renderer.\n");
+   if (!strstr(exten, "GL_ARB_multitexture")) {
+      printf("Sorry, GL_ARB_multitexture not supported by this renderer.\n");
       exit(1);
    }
 

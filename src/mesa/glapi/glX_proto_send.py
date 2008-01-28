@@ -511,7 +511,7 @@ generic_%u_byte( GLint rop, const void * ptr )
 		return
 
 
-	def common_func_print_just_start(self, f, name):
+	def common_func_print_just_start(self, f):
 		print '    __GLXcontext * const gc = __glXGetCurrentContext();'
 
 		# The only reason that single and vendor private commands need
@@ -529,7 +529,7 @@ generic_%u_byte( GLint rop, const void * ptr )
 
 		if not f.glx_rop:
 			for p in f.parameterIterateOutputs():
-				if p.is_image() and (p.img_format != "GL_COLOR_INDEX" or p.img_type != "GL_BITMAP"):
+				if p.is_image():
 					print '    const __GLXattribute * const state = gc->client_state_private;'
 					break
 
@@ -545,11 +545,7 @@ generic_%u_byte( GLint rop, const void * ptr )
 			print '    %s retval = (%s) 0;' % (f.return_type, f.return_type)
 
 
-		if name != None and name not in f.glx_vendorpriv_names:
-			print '#ifndef USE_XCB'
 		self.emit_packet_size_calculation(f, 0)
-		if name != None and name not in f.glx_vendorpriv_names:
-			print '#endif'
 
 		condition_list = []
 		for p in f.parameterIterateCounters():
@@ -571,7 +567,7 @@ generic_%u_byte( GLint rop, const void * ptr )
 
 
 	def printSingleFunction(self, f, name):
-		self.common_func_print_just_start(f, name)
+		self.common_func_print_just_start(f)
 
 		if self.debug:
 			print '        printf( "Enter %%s...\\n", "gl%s" );' % (f.name)
@@ -743,7 +739,7 @@ generic_%u_byte( GLint rop, const void * ptr )
 			return
 
 
-		if self.common_func_print_just_start(f, None):
+		if self.common_func_print_just_start(f):
 			trailer = "    }"
 		else:
 			trailer = None
@@ -795,7 +791,7 @@ generic_%u_byte( GLint rop, const void * ptr )
 					print '    generic_%u_byte( %s, %s );' % (cmdlen, f.opcode_real_name(), p.name)
 					return
 
-		if self.common_func_print_just_start(f, None):
+		if self.common_func_print_just_start(f):
 			trailer = "    }"
 		else:
 			trailer = None

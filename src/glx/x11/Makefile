@@ -31,8 +31,7 @@ SOURCES = \
 	  glx_query.c \
 	  glx_texture_compression.c \
 	  dri_glx.c \
-	  XF86dri.c \
-	  glxhash.c
+	  XF86dri.c
 
 include $(TOP)/src/mesa/sources
 
@@ -45,6 +44,7 @@ OBJECTS = $(SOURCES:.c=.o) $(MESA_GLAPI_OBJECTS)
 INCLUDES = -I. \
 	-I$(TOP)/include \
 	-I$(TOP)/include/GL/internal \
+	-I$(TOP)/src/mesa \
 	-I$(TOP)/src/mesa/main \
 	-I$(TOP)/src/mesa/glapi \
 	$(LIBDRM_CFLAGS) \
@@ -65,12 +65,13 @@ default: depend $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME)
 
 # Make libGL
 $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME):  $(OBJECTS) Makefile
-	$(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+	$(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' \
 		-major 1 -minor 2 $(MKLIB_OPTIONS) \
 		-install $(TOP)/$(LIB_DIR) $(GL_LIB_DEPS) $(OBJECTS)
 
 
 depend: $(SOURCES) $(MESA_GLAPI_SOURCES) $(MESA_ASM_API) Makefile
+	rm -f depend
 	touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDES) $(SOURCES) \
 		$(MESA_GLAPI_SOURCES) $(MESA_ASM_API) 

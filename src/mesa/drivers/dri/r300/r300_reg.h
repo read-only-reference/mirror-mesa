@@ -293,13 +293,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_PVS_UPLOAD_CLIP_PLANE5       0x00000405
 #       define R300_PVS_UPLOAD_POINTSIZE         0x00000406
 
-#       define R500_PVS_UPLOAD_CLIP_PLANE0       0x00000600
-#       define R500_PVS_UPLOAD_CLIP_PLANE1       0x00000601
-#       define R500_PVS_UPLOAD_CLIP_PLANE2       0x00000602
-#       define R500_PVS_UPLOAD_CLIP_PLANE3       0x00000603
-#       define R500_PVS_UPLOAD_CLIP_PLANE4       0x00000604
-#       define R500_PVS_UPLOAD_CLIP_PLANE5       0x00000605
-
 /*
  * These are obsolete defines form r300_context.h, but they might give some
  * clues when investigating the addresses further...
@@ -326,16 +319,10 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 /* I do not know the purpose of this register. However, I do know that
  * it is set to 221C_CLEAR for clear operations and to 221C_NORMAL
  * for normal rendering.
- *
- * 2007-11-05: This register is the user clip plane control register, but there
- * also seems to be a rendering mode control; the NORMAL/CLEAR defines.
- *
- * See bug #9871. http://bugs.freedesktop.org/attachment.cgi?id=10672&action=view
  */
-#define R300_VAP_CLIP_CNTL                       0x221C
+#define R300_VAP_UNKNOWN_221C               0x221C
 #       define R300_221C_NORMAL                  0x00000000
 #       define R300_221C_CLEAR                   0x0001C000
-#define R300_VAP_UCP_ENABLE_0 (1 << 0)
 
 /* These seem to be per-pixel and per-vertex X and Y clipping planes. The first
  * plane is per-pixel and the second plane is per-vertex.
@@ -347,7 +334,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define R300_VAP_CLIP_X_0                   0x2220
 #define R300_VAP_CLIP_X_1                   0x2224
 #define R300_VAP_CLIP_Y_0                   0x2228
-#define R300_VAP_CLIP_Y_1                   0x222c
+#define R300_VAP_CLIP_Y_1                   0x2230
 
 /* gap */
 
@@ -899,14 +886,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_TX_FORMAT_A8R8G8B8	    	    0x13     /* no swizzle */
 #	define R300_TX_FORMAT_B8G8_B8G8	    	    0x14     /* no swizzle */
 #	define R300_TX_FORMAT_G8R8_G8B8	    	    0x15     /* no swizzle */
-
-	/* These two values are wrong, but they're the only values that
-	 * produce any even vaguely correct results.  Can r300 only do 16-bit
-	 * depth textures?
-	 */
-#	define R300_TX_FORMAT_X24_Y8	    	    0x1e
-#	define R300_TX_FORMAT_X32	    	    0x1e
-
 	/* 0x16 - some 16 bit green format.. ?? */
 #	define R300_TX_FORMAT_UNK25		   (1 << 25) /* no swizzle */
 #	define R300_TX_FORMAT_CUBIC_MAP		   (1 << 26)

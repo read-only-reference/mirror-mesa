@@ -11,6 +11,19 @@ GL_MINOR = 5
 GL_TINY = 0$(MESA_MAJOR)0$(MESA_MINOR)0$(MESA_TINY)
 
 
+PIPE_LIB = \
+	$(TOP)/src/mesa/pipe/softpipe/libsoftpipe.a \
+	$(TOP)/src/mesa/pipe/i965simple/libi965simple.a
+
+ifeq ($(CONFIG_NAME), linux-cell)
+CELL_LIB = $(TOP)/src/mesa/pipe/cell/ppu/libcell.a
+CELL_LIB_SPU = $(TOP)/src/mesa/pipe/cell/spu/g3d_spu.a
+endif
+
+ifeq ($(CONFIG_NAME), linux-llvm)
+LLVM_LIB = $(TOP)/src/mesa/pipe/llvm/libgallivm.a
+endif
+
 .SUFFIXES : .cpp
 
 .c.o:
@@ -65,7 +78,7 @@ linux-solo: depend subdirs libmesa.a
 # Stand-alone Mesa libGL, no built-in drivers (DirectFB)
 
 libgl-core: $(CORE_OBJECTS)
-	@ $(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+	@ $(TOP)/bin/mklib -o $(GL_LIB) \
 		-major $(MESA_MAJOR) -minor $(MESA_MINOR) -patch $(MESA_TINY) \
 		-install $(TOP)/$(LIB_DIR) $(MKLIB_OPTIONS) $(CORE_OBJECTS) \
 		$(GL_LIB_DEPS)
@@ -78,7 +91,7 @@ directfb: depend subdirs libgl-core
 # fbdev Mesa driver (libGL.so)
 
 fbdev: $(CORE_OBJECTS) $(FBDEV_DRIVER_OBJECTS) $(COMMON_DRIVER_OBJECTS)
-	@ $(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+	@ $(TOP)/bin/mklib -o $(GL_LIB) \
 		-major $(MESA_MAJOR) -minor $(MESA_MINOR) -patch $(MESA_TINY) \
 		-install $(TOP)/$(LIB_DIR) $(MKLIB_OPTIONS) \
 		$(CORE_OBJECTS) $(FBDEV_DRIVER_OBJECTS) \
@@ -110,23 +123,27 @@ stand-alone: depend subdirs $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME) $(TOP)/$(LIB_DIR)/$
 osmesa-only: depend subdirs $(TOP)/$(LIB_DIR)/$(OSMESA_LIB_NAME)
 
 # Make the GL library
-$(TOP)/$(LIB_DIR)/$(GL_LIB_NAME): $(STAND_ALONE_OBJECTS)
-	@ $(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+$(TOP)/$(LIB_DIR)/$(GL_LIB_NAME): $(STAND_ALONE_OBJECTS) $(PIPE_LIB) $(CELL_LIB) $(CELL_LIB_SPU) $(LLVM_LIB)
+	@ $(TOP)/bin/mklib -o $(GL_LIB) \
+		-linker $(CC) \
 		-major $(GL_MAJOR) -minor $(GL_MINOR) -patch $(GL_TINY) \
 		-install $(TOP)/$(LIB_DIR) \
-		$(MKLIB_OPTIONS) $(GL_LIB_DEPS) $(STAND_ALONE_OBJECTS)
+		$(MKLIB_OPTIONS) $(STAND_ALONE_OBJECTS) \
+		$(PIPE_LIB) $(CELL_LIB) $(CELL_LIB_SPU) $(LLVM_LIB) $(GL_LIB_DEPS)
 
 # Make the OSMesa library
 $(TOP)/$(LIB_DIR)/$(OSMESA_LIB_NAME): $(OSMESA_DRIVER_OBJECTS) $(OSMESA16_OBJECTS)
 	@ if [ "${DRIVER_DIRS}" = "osmesa" ] ; then \
-		$(TOP)/bin/mklib -o $(OSMESA_LIB) -linker '$(CC)' \
-			-ldflags '$(LDFLAGS)' -major $(MESA_MAJOR) \
+		$(TOP)/bin/mklib -o $(OSMESA_LIB) \
+			-linker $(CC) \
+			-major $(MESA_MAJOR) \
 			-minor $(MESA_MINOR) -patch $(MESA_TINY) \
 			-install $(TOP)/$(LIB_DIR) $(MKLIB_OPTIONS) \
 			$(OSMESA_LIB_DEPS) $(OSMESA16_OBJECTS) ; \
 	else \
-		$(TOP)/bin/mklib -o $(OSMESA_LIB) -linker '$(CC)' \
-			-ldflags '$(LDFLAGS)' -major $(MESA_MAJOR) \
+		$(TOP)/bin/mklib -o $(OSMESA_LIB) \
+			-linker $(CC) \
+			-major $(MESA_MAJOR) \
 			-minor $(MESA_MINOR) -patch $(GL_TINY) \
 			-install $(TOP)/$(LIB_DIR) $(MKLIB_OPTIONS) \
 			$(OSMESA_LIB_DEPS) $(OSMESA_DRIVER_OBJECTS) ; \
@@ -134,53 +151,38 @@ $(TOP)/$(LIB_DIR)/$(OSMESA_LIB_NAME): $(OSMESA_DRIVER_OBJECTS) $(OSMESA16_OBJECT
 
 
 ######################################################################
-# libGL pkg-config file
-pcedit = sed \
-	-e 's,@INSTALL_DIR@,$(INSTALL_DIR),' \
-	-e 's,@LIB_DIR@,$(LIB_DIR),' \
-	-e 's,@VERSION@,$(MESA_MAJOR).$(MESA_MINOR).$(MESA_TINY),'
-gl.pc: gl.pc.in
-	$(pcedit) $< > $@
-
-######################################################################
 # Generic stuff
 
 depend: $(ALL_SOURCES)
 	@ echo "running $(MKDEP)"
+	@ rm -f depend  # workaround oops on gutsy?!?
 	@ touch depend
-	@$(MKDEP) $(MKDEP_OPTIONS) $(DEFINES) $(INCLUDE_DIRS) $(ALL_SOURCES) \
+	@ $(MKDEP) $(MKDEP_OPTIONS) $(DEFINES) $(INCLUDE_DIRS) $(ALL_SOURCES) \
 		> /dev/null 2>/dev/null
 
 
 subdirs:
-	@ if echo "$(ASM_FLAGS)" | grep -q USE_X86_ASM ; then \
-		(cd x86 ; $(MAKE)) ; \
-	fi
-	@ if echo "$(ASM_FLAGS)" | grep -q USE_X86_64_ASM ; then \
-		(cd x86 ; $(MAKE)) ; \
-		(cd x86-64 ; $(MAKE)) ; \
-	fi
+	@ (cd x86 ; $(MAKE))
+	@ (cd x86-64 ; $(MAKE))
+	(cd pipe ; $(MAKE))
 
-
-install: default gl.pc
-	$(INSTALL) -d $(DESTDIR)$(INSTALL_DIR)/include/GL
-	$(INSTALL) -d $(DESTDIR)$(INSTALL_DIR)/$(LIB_DIR)
-	$(INSTALL) -d $(DESTDIR)$(INSTALL_DIR)/$(LIB_DIR)/pkgconfig
-	$(INSTALL) -m 644 $(TOP)/include/GL/*.h $(DESTDIR)$(INSTALL_DIR)/include/GL
+install: default
+	$(INSTALL) -d $(INSTALL_DIR)/include/GL
+	$(INSTALL) -d $(INSTALL_DIR)/$(LIB_DIR)
+	$(INSTALL) -m 644 $(TOP)/include/GL/*.h $(INSTALL_DIR)/include/GL
 	@if [ -e $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME) ]; then \
-		$(INSTALL) $(TOP)/$(LIB_DIR)/libGL* $(DESTDIR)$(INSTALL_DIR)/$(LIB_DIR); \
+		$(INSTALL) $(TOP)/$(LIB_DIR)/libGL* $(INSTALL_DIR)/$(LIB_DIR); \
 	fi
-	$(INSTALL) -m 644 gl.pc $(DESTDIR)$(INSTALL_DIR)/$(LIB_DIR)/pkgconfig
 	@if [ -e $(TOP)/$(LIB_DIR)/$(OSMESA_LIB_NAME) ]; then \
-		$(INSTALL) $(TOP)/$(LIB_DIR)/libOSMesa* $(DESTDIR)$(INSTALL_DIR)/$(LIB_DIR); \
+		$(INSTALL) $(TOP)/$(LIB_DIR)/libOSMesa* $(INSTALL_DIR)/$(LIB_DIR); \
 	fi
 	@if [ "${DRIVER_DIRS}" = "dri" ] ; then \
 		cd drivers/dri ; $(MAKE) install ; \
 	fi
 
 ## NOT INSTALLED YET:
-## $(INSTALL) -d $(DESTDIR)$(INSTALL_DIR)/include/GLES
-## $(INSTALL) -m 644 include/GLES/*.h $(DESTDIR)$(INSTALL_DIR)/include/GLES
+## $(INSTALL) -d $(INSTALL_DIR)/include/GLES
+## $(INSTALL) -m 644 include/GLES/*.h $(INSTALL_DIR)/include/GLES
 
 
 # Emacs tags
@@ -195,6 +197,7 @@ clean:
 	(cd drivers/dri && $(MAKE) clean)
 	(cd x86 && $(MAKE) clean)
 	(cd x86-64 && $(MAKE) clean)
+	(cd pipe ; $(MAKE) clean )
 
 
 include depend

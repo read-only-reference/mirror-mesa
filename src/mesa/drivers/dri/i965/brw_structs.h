@@ -239,39 +239,39 @@ struct brw_pipelined_state_pointers
    
    struct {
       GLuint pad:5;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint offset:27; 
    } vs;
    
    struct
    {
       GLuint enable:1;
       GLuint pad:4;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint offset:27; 
    } gs;
    
    struct
    {
       GLuint enable:1;
       GLuint pad:4;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint offset:27; 
    } clp;
    
    struct
    {
       GLuint pad:5;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint offset:27; 
    } sf;
 
    struct
    {
       GLuint pad:5;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint offset:27; 
    } wm;
    
    struct
    {
       GLuint pad:5;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE. KW: check me! */
+      GLuint offset:27; /* KW: check me! */
    } cc;
 };
 
@@ -473,7 +473,7 @@ struct thread0
    GLuint pad0:1;
    GLuint grf_reg_count:3; 
    GLuint pad1:2;
-   GLuint kernel_start_pointer:26; /* Offset from GENERAL_STATE_BASE */
+   GLuint kernel_start_pointer:26; 
 };
 
 struct thread1
@@ -637,7 +637,7 @@ struct brw_cc_unit_state
    struct
    {
       GLuint pad0:5; 
-      GLuint cc_viewport_state_offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint cc_viewport_state_offset:27; 
    } cc4;
    
    struct
@@ -699,7 +699,7 @@ struct brw_sf_unit_state
       GLuint front_winding:1; 
       GLuint viewport_transform:1; 
       GLuint pad0:3;
-      GLuint sf_viewport_state_offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint sf_viewport_state_offset:27; 
    } sf5;
    
    struct
@@ -924,7 +924,6 @@ struct brw_sf_viewport
       GLfloat m32;  
    } viewport;
 
-   /* scissor coordinates are inclusive */
    struct {
       GLshort xmin;
       GLshort ymin;

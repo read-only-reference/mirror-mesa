@@ -27,11 +27,10 @@
 #include <stdlib.h>
 #include <GL/glut.h>
 
-
-#define CI_OFFSET_1 16
-#define CI_OFFSET_2 32
-
+static GLenum Target = GL_TEXTURE_2D;
+static GLenum Filter = GL_NEAREST;
 GLenum doubleBuffer;
+static float Rot = 0;
 
 static void Init(void)
 {
@@ -41,7 +40,7 @@ static void Init(void)
 
    glClearColor(0.0, 0.0, 1.0, 0.0);
 
-#define SIZE 16
+#define SIZE 32
    {
       GLubyte tex2d[SIZE][SIZE][3];
       GLint s, t;
@@ -60,58 +59,74 @@ static void Init(void)
 	 }
       }
 
-      glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_REPEAT);
-      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
       glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-      glTexImage2D(GL_TEXTURE_2D, 0, 3, SIZE, SIZE, 0,
-		   GL_RGB, GL_UNSIGNED_BYTE, tex2d);
-      glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-      glEnable(GL_TEXTURE_2D);
-   }
 
+      if (Target == GL_TEXTURE_1D)
+         glTexImage1D(Target, 0, 3, SIZE, 0, GL_RGB, GL_UNSIGNED_BYTE, tex2d);
+      else
+         glTexImage2D(Target, 0, 3, SIZE, SIZE, 0,
+                      GL_RGB, GL_UNSIGNED_BYTE, tex2d);
+
+      glEnable(Target);
+      glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+      glTexParameterf(Target, GL_TEXTURE_WRAP_R, GL_REPEAT);
+      glTexParameterf(Target, GL_TEXTURE_MIN_FILTER, Filter);
+      glTexParameterf(Target, GL_TEXTURE_MAG_FILTER, Filter);
+
+      glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+   }
 }
 
 static void Reshape(int width, int height)
 {
-
-    glViewport(0, 0, (GLint)width, (GLint)height);
-
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(-1.0, 1.0, -1.0, 1.0, -0.5, 1000.0);
-    glMatrixMode(GL_MODELVIEW);
+   glViewport(0, 0, (GLint)width, (GLint)height);
+   glMatrixMode(GL_PROJECTION);
+   glLoadIdentity();
+#if 0
+   glOrtho(-1.0, 1.0, -1.0, 1.0, -0.5, 1000.0);
+#else
+   glFrustum(-1, 1, -1, 1, 10, 20);
+#endif
+   glMatrixMode(GL_MODELVIEW);
+   glTranslatef(0, 0, -15);
 }
 
 static void Key(unsigned char key, int x, int y)
 {
-
-    switch (key) {
-      case 27:
-	exit(1);
-      default:
-	return;
-    }
-
-    glutPostRedisplay();
+   switch (key) {
+   case 'r':
+      Rot += 10.0;
+      break;
+   case 'R':
+      Rot -= 10.0;
+      break;
+   case 27:
+      exit(0);
+   default:
+      return;
+   }
+   glutPostRedisplay();
 }
 
 static void Draw(void)
 {
    glClear(GL_COLOR_BUFFER_BIT); 
 
+   glPushMatrix();
+   glRotatef(Rot, 0, 1, 0);
+
    glBegin(GL_QUADS);
    glTexCoord2f(1,0); 
-   glVertex3f( 0.9, -0.9, -30.0);
+   glVertex3f( 0.9, -0.9, 0.0);
    glTexCoord2f(1,1); 
-   glVertex3f( 0.9,  0.9, -30.0);
+   glVertex3f( 0.9,  0.9, 0.0);
    glTexCoord2f(0,1); 
-   glVertex3f(-0.9,  0.9, -30.0);
+   glVertex3f(-0.9,  0.9, 0.0);
    glTexCoord2f(0,0); 
-   glVertex3f(-0.9,  -0.9, -30.0);
+   glVertex3f(-0.9,  -0.9, 0.0);
    glEnd();
+
+   glPopMatrix();
 
    glFlush();
 
@@ -165,5 +180,5 @@ int main(int argc, char **argv)
     glutKeyboardFunc(Key);
     glutDisplayFunc(Draw);
     glutMainLoop();
-	return 0;
+    return 0;
 }

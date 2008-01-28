@@ -78,8 +78,6 @@ typedef struct {
    /* Configuration cache with default values for all contexts */
    driOptionCache optionCache;
 
-   const __DRIextension *extensions[4];
-
 } r128ScreenRec, *r128ScreenPtr;
 
 

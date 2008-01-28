@@ -31,6 +31,7 @@
 
 
 #include "brw_context.h"
+#include "brw_aub.h"
 #include "brw_defines.h"
 #include "brw_draw.h"
 #include "brw_vs.h"
@@ -42,8 +43,6 @@
 #include "utils.h"
 #include "api_noop.h"
 #include "vtxfmt.h"
-
-#include "shader/shader_api.h"
 
 /***************************************
  * Mesa's Driver Functions
@@ -61,38 +60,12 @@ static const struct dri_extension brw_extensions[] =
     { NULL,                                NULL }
 };
 
-static void brwUseProgram(GLcontext *ctx, GLuint program)
-{
-        struct brw_context *brw = brw_context(ctx);
-        struct gl_shader_program *sh_prog;
-        _mesa_use_program(ctx, program);
-        sh_prog = ctx->Shader.CurrentProgram;
-        if (sh_prog) {
-	    if (sh_prog->VertexProgram) {
-		brw->attribs.VertexProgram->Current = sh_prog->VertexProgram;
-		sh_prog->VertexProgram->Base.RefCount++;
-		ctx->VertexProgram.Enabled = GL_TRUE;
-	    }else
-		ctx->VertexProgram.Enabled = GL_FALSE;
-		
-	    if (sh_prog->FragmentProgram) {
-		brw->attribs.FragmentProgram->Current = sh_prog->FragmentProgram;
-		sh_prog->FragmentProgram->Base.RefCount++;
-		ctx->FragmentProgram.Enabled = GL_TRUE;
-	    } else
-		ctx->FragmentProgram.Enabled = GL_FALSE;
-	}
-}
 
-static void brwInitProgFuncs( struct dd_function_table *functions )
-{
-   functions->UseProgram = brwUseProgram;
-}
 static void brwInitDriverFunctions( struct dd_function_table *functions )
 {
    intelInitDriverFunctions( functions );
+   brwInitTextureFuncs( functions );
    brwInitFragProgFuncs( functions );
-   brwInitProgFuncs( functions );
 }
 
 
@@ -162,12 +135,16 @@ GLboolean brwCreateContext( const __GLcontextModes *mesaVis,
 
    driInitExtensions( ctx, brw_extensions, GL_FALSE );
 
+   brw_aub_init( brw );
+
    brw_init_attribs( brw );
    brw_init_metaops( brw );
    brw_init_state( brw );
 
    brw->state.dirty.mesa = ~0;
    brw->state.dirty.brw = ~0;
+
+   memset(&brw->wm.bind, ~0, sizeof(brw->wm.bind));
 
    brw->emit_state_always = 0;
 
@@ -178,6 +155,14 @@ GLboolean brwCreateContext( const __GLcontextModes *mesaVis,
    brw_ProgramCacheInit( ctx );
 
    brw_FrameBufferTexInit( brw );
+
+   {
+      const char *filename = getenv("INTEL_REPLAY");
+      if (filename) {
+	 brw_playback_aubfile(brw, filename);
+	 exit(0);
+      }
+   }
 
    return GL_TRUE;
 }

@@ -418,6 +418,7 @@ tridentInitDriver(__DRIscreenPrivate *sPriv)
 }
 
 static struct __DriverAPIRec tridentAPI = {
+   tridentInitDriver,
    tridentDestroyScreen,
    tridentCreateContext,
    tridentDestroyContext,
@@ -429,36 +430,43 @@ static struct __DriverAPIRec tridentAPI = {
 };
 
 
-/**
- * This is the driver specific part of the createNewScreen entry point.
- * 
- * \todo maybe fold this into intelInitDriver
- *
- * \return the __GLcontextModes supported by this driver
- */
-__GLcontextModes *__driDriverInitScreen(__DRIscreenPrivate *psp)
+PUBLIC void *__driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn,
+                                   __DRIscreen *psc,
+                                   const __GLcontextModes * modes,
+                                   const __DRIversion * ddx_version,
+                                   const __DRIversion * dri_version,
+                                   const __DRIversion * drm_version,
+                                   const __DRIframebuffer * frame_buffer,
+                                   drmAddress pSAREA, int fd,
+                                   int internal_api_version,
+				   const __DRIinterfaceMethods * interface,
+                                   __GLcontextModes ** driver_modes )
 {
+    __DRIscreenPrivate *psp;
    static const __DRIversion ddx_expected = { 4, 0, 0 };
    static const __DRIversion dri_expected = { 3, 1, 0 };
    static const __DRIversion drm_expected = { 1, 0, 0 };
-   
+
+   dri_interface = interface;
+
    if ( ! driCheckDriDdxDrmVersions2( "Trident",
-				      &psp->dri_version, & dri_expected,
-				      &psp->ddx_version, & ddx_expected,
-				      &psp->drm_version, & drm_expected ) )
+				      dri_version, & dri_expected,
+				      ddx_version, & ddx_expected,
+				      drm_version, & drm_expected ) ) {
       return NULL;
+   }
 
-   psp->DriverAPI = tridentAPI;
+    psp = __driUtilCreateNewScreen(dpy, scrn, psc, NULL,
+                                   ddx_version, dri_version, drm_version,
+                                   frame_buffer, pSAREA, fd,
+                                   internal_api_version, &tridentAPI);
 
-   if (!tridentInitDriver(psp))
-	return NULL;
-
-    /* Wait... what?  This driver doesn't report any modes... */
+    if ( psp != NULL ) {
 #if 0
-   TRIDENTDRIPtr dri_priv = (TRIDENTDRIPtr) psp->pDevPriv;
-   *driver_modes = tridentFillInModes( dri_priv->bytesPerPixel * 8,
-				       GL_TRUE );
+       TRIDENTDRIPtr dri_priv = (TRIDENTDRIPtr) psp->pDevPriv;
+       *driver_modes = tridentFillInModes( dri_priv->bytesPerPixel * 8,
+					   GL_TRUE );
 #endif
-
-   return NULL;
+    }
+    return (void *) psp;
 }

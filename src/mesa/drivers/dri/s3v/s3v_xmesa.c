@@ -329,6 +329,7 @@ s3vUnbindContext( __DRIcontextPrivate *driContextPriv )
 
 
 static struct __DriverAPIRec s3vAPI = {
+   s3vInitDriver,
    s3vDestroyScreen,
    s3vCreateContext,
    s3vDestroyContext,
@@ -354,9 +355,6 @@ void *__driCreateScreen(Display *dpy, int scrn, __DRIscreen *psc,
    DEBUG(("__driCreateScreen: psp = %p\n", psp));
    psp = __driUtilCreateScreen(dpy, scrn, psc, numConfigs, config, &s3vAPI);
    DEBUG(("__driCreateScreen: psp = %p\n", psp));
-   if (!s3vInitDriver(psp))
-       return NULLL
-
    return (void *) psp;
 }
 #endif

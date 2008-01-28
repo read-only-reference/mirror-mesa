@@ -64,11 +64,8 @@ _swrast_span_default_attribs(GLcontext *ctx, SWspan *span)
       const GLfloat depthMax = ctx->DrawBuffer->_DepthMaxF;
       if (ctx->DrawBuffer->Visual.depthBits <= 16)
          span->z = FloatToFixed(ctx->Current.RasterPos[2] * depthMax + 0.5F);
-      else {
-         GLfloat tmpf = ctx->Current.RasterPos[2] * depthMax; 
-         tmpf = MIN2(tmpf, depthMax);
-         span->z = (GLint)tmpf;
-      }
+      else
+         span->z = (GLint) (ctx->Current.RasterPos[2] * depthMax + 0.5F);
       span->zStep = 0;
       span->interpMask |= SPAN_Z;
    }
@@ -876,7 +873,7 @@ _swrast_write_index_span( GLcontext *ctx, SWspan *span)
 #endif
 
    /* we have to wait until after occlusion to do this test */
-   if (ctx->Color.IndexMask == 0) {
+   if (ctx->Color.DrawBuffer == GL_NONE || ctx->Color.IndexMask == 0) {
       /* write no pixels */
       span->arrayMask = origArrayMask;
       return;

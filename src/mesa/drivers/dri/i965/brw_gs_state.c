@@ -46,10 +46,8 @@ static void upload_gs_unit( struct brw_context *brw )
 
    /* CACHE_NEW_GS_PROG */
    if (brw->gs.prog_active) {
-      gs.thread0.grf_reg_count =
-	 ALIGN(brw->gs.prog_data->total_grf, 16) / 16 - 1;
-      /* reloc */
-      gs.thread0.kernel_start_pointer = brw->gs.prog_bo->offset >> 6;
+      gs.thread0.grf_reg_count = ((brw->gs.prog_data->total_grf-1) & ~15) / 16;
+      gs.thread0.kernel_start_pointer = brw->gs.prog_gs_offset >> 6;
       gs.thread3.urb_entry_read_length = brw->gs.prog_data->urb_read_length;
    }
    else {
@@ -74,25 +72,11 @@ static void upload_gs_unit( struct brw_context *brw )
    gs.thread3.const_urb_entry_read_offset = 0;
    gs.thread3.const_urb_entry_read_length = 0;
    gs.thread3.urb_entry_read_offset = 0;
+   
 
-   brw->gs.thread0_delta = gs.thread0.grf_reg_count << 1;
-
-   dri_bo_unreference(brw->gs.state_bo);
-   brw->gs.state_bo = brw_cache_data( &brw->cache, BRW_GS_UNIT, &gs,
-				      &brw->gs.prog_bo, 1 );
+   brw->gs.state_gs_offset = brw_cache_data( &brw->cache[BRW_GS_UNIT], &gs );
 }
 
-static void emit_reloc_gs_unit(struct brw_context *brw)
-{
-   if (brw->gs.prog_active) {
-      /* Emit GS program relocation */
-      dri_emit_reloc(brw->gs.state_bo,
-		     DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ,
-		     brw->gs.thread0_delta,
-		     offsetof(struct brw_gs_unit_state, thread0),
-		     brw->gs.prog_bo);
-   }
-}
 
 const struct brw_tracked_state brw_gs_unit = {
    .dirty = {
@@ -101,6 +85,5 @@ const struct brw_tracked_state brw_gs_unit = {
 		BRW_NEW_URB_FENCE),
       .cache = CACHE_NEW_GS_PROG
    },
-   .update = upload_gs_unit,
-   .emit_reloc = emit_reloc_gs_unit,
+   .update = upload_gs_unit
 };

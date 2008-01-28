@@ -46,8 +46,7 @@ static void upload_cc_vp( struct brw_context *brw )
    ccv.min_depth = 0.0;
    ccv.max_depth = 1.0;
 
-   dri_bo_unreference(brw->cc.vp_bo);
-   brw->cc.vp_bo = brw_cache_data( &brw->cache, BRW_CC_VP, &ccv, NULL, 0 );
+   brw->cc.vp_gs_offset = brw_cache_data( &brw->cache[BRW_CC_VP], &ccv );
 }
 
 const struct brw_tracked_state brw_cc_vp = {
@@ -77,8 +76,8 @@ static void upload_cc_unit( struct brw_context *brw )
       cc.cc1.stencil_write_mask = brw->attribs.Stencil->WriteMask[0];
       cc.cc1.stencil_test_mask = brw->attribs.Stencil->ValueMask[0];
 
-      if (brw->attribs.Stencil->_TestTwoSide) {
-	 cc.cc0.bf_stencil_enable = brw->attribs.Stencil->_TestTwoSide;
+      if (brw->attribs.Stencil->TestTwoSide) {
+	 cc.cc0.bf_stencil_enable = brw->attribs.Stencil->TestTwoSide;
 	 cc.cc0.bf_stencil_func = intel_translate_compare_func(brw->attribs.Stencil->Function[1]);
 	 cc.cc0.bf_stencil_fail_op = intel_translate_stencil_op(brw->attribs.Stencil->FailFunc[1]);
 	 cc.cc0.bf_stencil_pass_depth_fail_op = intel_translate_stencil_op(brw->attribs.Stencil->ZFailFunc[1]);
@@ -91,8 +90,7 @@ static void upload_cc_unit( struct brw_context *brw )
       /* Not really sure about this:
        */
       if (brw->attribs.Stencil->WriteMask[0] ||
-	  (brw->attribs.Stencil->_TestTwoSide &&
-	   brw->attribs.Stencil->WriteMask[1]))
+	  (brw->attribs.Stencil->TestTwoSide && brw->attribs.Stencil->WriteMask[1]))
 	 cc.cc0.stencil_write_enable = 1;
    }
 
@@ -154,24 +152,12 @@ static void upload_cc_unit( struct brw_context *brw )
    }
  
    /* CACHE_NEW_CC_VP */
-   cc.cc4.cc_viewport_state_offset = brw->cc.vp_bo->offset >> 5; /* reloc */
+   cc.cc4.cc_viewport_state_offset =  brw->cc.vp_gs_offset >> 5;
  
    if (INTEL_DEBUG & DEBUG_STATS)
       cc.cc5.statistics_enable = 1; 
 
-   dri_bo_unreference(brw->cc.state_bo);
-   brw->cc.state_bo = brw_cache_data( &brw->cache, BRW_CC_UNIT, &cc,
-				      &brw->cc.vp_bo, 1);
-}
-
-static void emit_reloc_cc_unit(struct brw_context *brw)
-{
-   /* Emit CC viewport relocation */
-   dri_emit_reloc(brw->cc.state_bo,
-		  DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ,
-		  0,
-		  offsetof(struct brw_cc_unit_state, cc4),
-		  brw->cc.vp_bo);
+   brw->cc.state_gs_offset = brw_cache_data( &brw->cache[BRW_CC_UNIT], &cc );
 }
 
 const struct brw_tracked_state brw_cc_unit = {
@@ -180,8 +166,7 @@ const struct brw_tracked_state brw_cc_unit = {
       .brw = 0,
       .cache = CACHE_NEW_CC_VP
    },
-   .update = upload_cc_unit,
-   .emit_reloc = emit_reloc_cc_unit,
+   .update = upload_cc_unit
 };
 
 

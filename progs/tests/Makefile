@@ -8,7 +8,7 @@ TOP = ../..
 include $(TOP)/configs/current
 
 
-LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) $(APP_LIB_DEPS)
+LIBS = $(APP_LIB_DEPS)
 
 SOURCES = \
 	afsmultiarb.c \
@@ -35,7 +35,6 @@ SOURCES = \
 	cva.c \
 	dinoshade.c \
 	drawbuffers.c \
-	exactrast.c \
 	floattex.c \
 	fbotest1.c \
 	fbotest2.c \
@@ -60,7 +59,6 @@ SOURCES = \
 	readrate.c \
 	seccolor.c \
 	sharedtex.c \
-	stencil_twoside.c \
 	stencilwrap.c \
 	stencil_wrap.c \
 	subtexrate.c \
@@ -90,6 +88,21 @@ INCLUDES = -I. -I$(TOP)/include
 UTIL_FILES = readtex.h readtex.c
 
 
+##### RULES #####
+
+.SUFFIXES:
+.SUFFIXES: .c
+
+.c:
+	$(CC) $(INCLUDES) $(CFLAGS) $< $(LIBS) -o $@
+
+.c.o:
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
+
+.S.o:
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES)  $< -o $@
+
+
 ##### TARGETS #####
 
 default: $(UTIL_FILES) $(PROGS)
@@ -99,19 +112,6 @@ clean:
 	rm -f *.o
 	rm -f getproclist.h
 
-##### RULES #####
-
-.SUFFIXES:
-.SUFFIXES: .c
-
-.c:
-	$(CC) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $< $(LIBS) -o $@
-
-.c.o:
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
-
-.S.o:
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES)  $< -o $@
 
 # auto code generation
 getprocaddress: getprocaddress.c getproclist.h
@@ -123,40 +123,40 @@ arraytexture: arraytexture.o readtex.o
 	$(CC) $(CFLAGS) arraytexture.o readtex.o $(LIBS) -o $@
 
 arraytexture.o: arraytexture.c readtex.h
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) arraytexture.c -o $@
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 afsmultiarb: afsmultiarb.o readtex.o
-	$(CC) $(CFLAGS) $(LDFLAGS) afsmultiarb.o readtex.o $(LIBS) -o $@
+	$(CC) $(CFLAGS) afsmultiarb.o readtex.o $(LIBS) -o $@
 
 afsmultiarb.o: afsmultiarb.c readtex.h
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) afsmultiarb.c -o $@
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 drawbuffers: drawbuffers.o
-	$(CC) $(CFLAGS) $(LDFLAGS) drawbuffers.o $(LIBS) -o $@
+	$(CC) $(CFLAGS) drawbuffers.o $(LIBS) -o $@
 
 drawbuffers.o: drawbuffers.c extfuncs.h
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) drawbuffers.c -o $@
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 texrect: texrect.o readtex.o
-	$(CC) $(CFLAGS) $(LDFLAGS) texrect.o readtex.o $(LIBS) -o $@
+	$(CC) $(CFLAGS) texrect.o readtex.o $(LIBS) -o $@
 
 texrect.o: texrect.c readtex.h
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) texrect.c -o $@
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 bug_3195: bug_3195.o readtex.o
-	$(CC) $(CFLAGS) $(LDFLAGS) bug_3195.o readtex.o $(LIBS) -o $@
+	$(CC) $(CFLAGS) bug_3195.o readtex.o $(LIBS) -o $@
 
 bug_3195.o: bug_3195.c readtex.h
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) bug_3195.c -o $@
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 invert: invert.o readtex.o
-	$(CC) $(CFLAGS) $(LDFLAGS) invert.o readtex.o $(LIBS) -o $@
+	$(CC) $(CFLAGS) invert.o readtex.o $(LIBS) -o $@
 
 invert.o: invert.c readtex.h
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) invert.c -o $@
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 readtex.o: readtex.c
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) readtex.c -o $@
+	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 
 readtex.h: $(TOP)/progs/util/readtex.h

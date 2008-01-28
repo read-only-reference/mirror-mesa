@@ -8,7 +8,7 @@ TOP = ../..
 include $(TOP)/configs/current
 
 
-LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) $(APP_LIB_DEPS)
+LIBS = $(APP_LIB_DEPS)
 
 SOURCES = \
 	vp-tris.c
@@ -26,7 +26,7 @@ INCLUDES = -I. -I$(TOP)/include -I../samples
 .SUFFIXES: .c
 
 .c:
-	$(CC) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $< $(LIBS) -o $@
+	$(CC) $(INCLUDES) $(CFLAGS) $< $(LIBS) -o $@
 
 .c.o:
 	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@

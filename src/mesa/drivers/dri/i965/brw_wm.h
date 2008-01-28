@@ -34,9 +34,9 @@
 #define BRW_WM_H
 
 
-#include "shader/prog_instruction.h"
 #include "brw_context.h"
 #include "brw_eu.h"
+#include "prog_instruction.h"
 
 /* A big lookup table is used to figure out which and how many
  * additional regs will inserted before the main payload in the WM
@@ -194,7 +194,6 @@ struct brw_wm_compile {
    GLuint nr_fp_insns;
    GLuint fp_temp;
    GLuint fp_interp_emitted;
-   GLuint fp_deriv_emitted;
 
    struct prog_src_register pixel_xy;
    struct prog_src_register delta_xy;
@@ -232,15 +231,6 @@ struct brw_wm_compile {
    GLuint grf_limit;
    GLuint max_wm_grf;
    GLuint last_scratch;
-
-   struct {
-	GLboolean inited;
-	struct brw_reg reg;
-   } wm_regs[PROGRAM_PAYLOAD+1][256][4];
-   struct brw_reg stack;
-   struct brw_reg emit_mask_reg;
-   GLuint reg_index;
-   GLuint tmp_index;
 };
 
 
@@ -269,6 +259,4 @@ void brw_wm_lookup_iz( GLuint line_aa,
 		       GLuint lookup,
 		       struct brw_wm_prog_key *key );
 
-GLboolean brw_wm_is_glsl(const struct gl_fragment_program *fp);
-void brw_wm_glsl_emit(struct brw_wm_compile *c);
 #endif
