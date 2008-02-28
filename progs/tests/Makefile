@@ -30,6 +30,7 @@ SOURCES = \
 	bug_3050.c \
 	bug_3101.c \
 	bug_3195.c \
+	calibrate_rast.c \
 	copypixrate.c \
 	crossbar.c \
 	cva.c \
@@ -48,6 +49,7 @@ SOURCES = \
 	invert.c \
 	jkrahntest.c \
 	manytex.c \
+	minmag.c \
 	mipmap_limits.c \
 	multipal.c \
 	no_s3tc.c \
@@ -61,6 +63,7 @@ SOURCES = \
 	sharedtex.c \
 	stencilwrap.c \
 	stencil_wrap.c \
+	subtex \
 	subtexrate.c \
 	tex1d.c \
 	texcompress2.c \

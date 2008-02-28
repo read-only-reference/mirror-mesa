@@ -38,8 +38,8 @@
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_shader_tokens.h"
-#include "pipe/draw/draw_context.h"
-#include "pipe/tgsi/util/tgsi_dump.h"
+#include "draw/draw_context.h"
+#include "tgsi/util/tgsi_dump.h"
 
 #include "st_context.h"
 #include "st_cache.h"
@@ -311,7 +311,7 @@ st_translate_fragment_program(struct st_context *st,
 
          defaultInputMapping[attr] = slot;
 
-         fs.input_map[slot] = vslot++;
+         stfp->input_map[slot] = vslot++;
 
          fs.num_inputs++;
 
@@ -420,7 +420,7 @@ st_translate_fragment_program(struct st_context *st,
    fs.tokens = tokensOut;
 
    cso = st_cached_fs_state(st, &fs);
-   stfp->fs = cso;
+   stfp->cso = cso;
 
    if (0)
       _mesa_print_program(&stfp->Base.Base);

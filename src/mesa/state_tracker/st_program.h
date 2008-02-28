@@ -36,7 +36,6 @@
 
 #include "mtypes.h"
 #include "pipe/p_shader_tokens.h"
-#include "x86/rtasm/x86sse.h"
 
 
 #define ST_MAX_SHADER_TOKENS 1024
@@ -58,11 +57,14 @@ struct st_fragment_program
    GLuint input_to_slot[FRAG_ATTRIB_MAX];  /**< Maps FRAG_ATTRIB_x to slot */
    GLuint num_input_slots;
 
+   /** map FP input back to VP output */
+   GLuint input_map[PIPE_MAX_SHADER_INPUTS];
+
    /** The program in TGSI format */
    struct tgsi_token tokens[ST_MAX_SHADER_TOKENS];
 
    /** Pointer to the corresponding cached shader */
-   const struct cso_fragment_shader *fs;
+   const struct cso_fragment_shader *cso;
 
    GLuint param_state;
 

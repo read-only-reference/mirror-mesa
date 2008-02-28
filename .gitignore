@@ -1,5 +1,7 @@
 *.a
 *.o
+*.pyc
+*.pyo
 *.so
 *.sw[a-z]
 *~
@@ -9,3 +11,4 @@ lib
 lib64
 .sconsign*
 config.py
+build

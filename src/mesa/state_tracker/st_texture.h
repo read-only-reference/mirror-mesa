@@ -35,11 +35,74 @@ struct pipe_context;
 struct pipe_texture;
 
 
+struct st_texture_image
+{
+   struct gl_texture_image base;
+
+   /* These aren't stored in gl_texture_image 
+    */
+   GLuint level;
+   GLuint face;
+
+   /* If stImage->pt != NULL, image data is stored here.
+    * Else if stImage->base.Data != NULL, image is stored there.
+    * Else there is no image data.
+    */
+   struct pipe_texture *pt;
+
+   struct pipe_surface *surface;
+};
+
+
+
+struct st_texture_object
+{
+   struct gl_texture_object base;       /* The "parent" object */
+
+   /* The texture must include at levels [0..lastLevel] once validated:
+    */
+   GLuint lastLevel;
+
+   /* On validation any active images held in main memory or in other
+    * textures will be copied to this texture and the old storage freed.
+    */
+   struct pipe_texture *pt;
+
+   GLboolean imageOverride;
+   GLint depthOverride;
+   GLuint pitchOverride;
+
+   GLboolean dirtyData;
+};
+
+
+static INLINE struct st_texture_object *
+st_texture_object(struct gl_texture_object *obj)
+{
+   return (struct st_texture_object *) obj;
+}
+
+
+static INLINE struct pipe_texture *
+st_get_texobj_texture(struct gl_texture_object *texObj)
+{
+   struct st_texture_object *stObj = st_texture_object(texObj);
+   return stObj ? stObj->pt : NULL;
+}
+
+
+static INLINE struct pipe_texture *
+st_get_stobj_texture(struct st_texture_object *stObj)
+{
+   return stObj ? stObj->pt : NULL;
+}
+
+
+
 extern struct pipe_texture *
 st_texture_create(struct st_context *st,
                   enum pipe_texture_target target,
 		  enum pipe_format format,
-                  GLuint first_level,
                   GLuint last_level,
                   GLuint width0,
                   GLuint height0,
@@ -47,11 +110,11 @@ st_texture_create(struct st_context *st,
                   GLuint compress_byte);
 
 
-/* Check if an image fits an existing texture
+/* Check if an image fits into an existing texture object.
  */
 extern GLboolean
-st_texture_match_image(struct pipe_texture *pt,
-                       struct gl_texture_image *image,
+st_texture_match_image(const struct pipe_texture *pt,
+                       const struct gl_texture_image *image,
                        GLuint face, GLuint level);
 
 /* Return a pointer to an image within a texture.  Return image stride as
@@ -73,7 +136,7 @@ extern const GLuint *
 st_texture_depth_offsets(struct pipe_texture *pt, GLuint level);
 
 
-/* Return the linear offset of an image relative to the start of its region:
+/* Return the linear offset of an image relative to the start of its region.
  */
 extern GLuint
 st_texture_image_offset(const struct pipe_texture *pt,
@@ -98,9 +161,9 @@ st_texture_image_data(struct pipe_context *pipe,
  */
 extern void
 st_texture_image_copy(struct pipe_context *pipe,
-                      struct pipe_texture *dst,
-                      GLuint face, GLuint level,
-                      struct pipe_texture *src);
+                      struct pipe_texture *dst, GLuint dstLevel,
+                      struct pipe_texture *src,
+                      GLuint face);
 
 
 #endif

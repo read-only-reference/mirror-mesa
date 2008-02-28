@@ -33,7 +33,7 @@ CFLAGS   = $(WARN_FLAGS) $(OPT_FLAGS) $(PIC_FLAGS) $(ARCH_FLAGS) $(DEFINES) \
 CXXFLAGS = $(WARN_FLAGS) $(OPT_FLAGS) $(PIC_FLAGS) $(ARCH_FLAGS) $(DEFINES)
 
 
-ASM_SOURCES = 
+MESA_ASM_SOURCES = 
 
 # Library/program dependencies
 DRI_LIB_DEPS = -lm -lpthread -lexpat -ldl -L$(TOP)/$(LIB_DIR) $(PCIACCESS_LIB)
@@ -43,7 +43,7 @@ GLUT_LIB_DEPS = -L$(TOP)/$(LIB_DIR) -l$(GLU_LIB) -l$(GL_LIB) -lm
 APP_LIB_DEPS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) -lm -lpthread
 
 # Directories
-SRC_DIRS = glx/mini mesa glu glut/mini
+SRC_DIRS = glx/mini gallium mesa glu glut/mini
 DRIVER_DIRS = dri
 PROGRAM_DIRS = miniglx
 

@@ -59,26 +59,6 @@ struct st_tracked_state {
 
 
 
-struct st_texture_image
-{
-   struct gl_texture_image base;
-
-   /* These aren't stored in gl_texture_image 
-    */
-   GLuint level;
-   GLuint face;
-
-   /* If stImage->pt != NULL, image data is stored here.
-    * Else if stImage->base.Data != NULL, image is stored there.
-    * Else there is no image data.
-    */
-   struct pipe_texture *pt;
-
-   struct pipe_surface *surface;
-};
-
-
-
 struct st_context
 {
    GLcontext *ctx;
@@ -143,6 +123,8 @@ struct st_context
 
    GLfloat polygon_offset_scale; /* ?? */
 
+   GLfloat bitmap_texcoord_bias;
+
    /** Mapping from VERT_RESULT_x to post-transformed vertex slot */
    const GLuint *vertex_result_to_slot;
 
@@ -163,6 +145,15 @@ struct st_context
       GLuint user_prog_sn;  /**< user fragment program serial no. */
       struct st_fragment_program *combined_prog;
    } bitmap;
+
+   /** For gen/render mipmap feature */
+   struct {
+      void *blend_cso;
+      void *depthstencil_cso;
+      void *rasterizer_cso;
+      struct st_fragment_program *stfp;
+      struct st_vertex_program *stvp;
+   } gen_mipmap;
 
    struct cso_cache *cache;
 };

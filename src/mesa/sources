@@ -156,48 +156,6 @@ VF_SOURCES = \
 	vf/vf_generic.c \
 	vf/vf_sse.c
 
-
-DRAW_SOURCES = \
-	pipe/draw/draw_clip.c \
-	pipe/draw/draw_context.c\
-	pipe/draw/draw_cull.c \
-	pipe/draw/draw_debug.c \
-	pipe/draw/draw_flatshade.c \
-	pipe/draw/draw_offset.c \
-	pipe/draw/draw_prim.c \
-	pipe/draw/draw_stipple.c \
-	pipe/draw/draw_twoside.c \
-	pipe/draw/draw_unfilled.c \
-	pipe/draw/draw_validate.c \
-	pipe/draw/draw_vbuf.c \
-	pipe/draw/draw_vertex.c \
-	pipe/draw/draw_vertex_cache.c \
-	pipe/draw/draw_vertex_fetch.c \
-	pipe/draw/draw_vertex_shader.c \
-	pipe/draw/draw_vertex_shader_llvm.c \
-	pipe/draw/draw_vf.c \
-	pipe/draw/draw_vf_generic.c \
-	pipe/draw/draw_vf_sse.c \
-	pipe/draw/draw_wide_prims.c
-
-TGSIEXEC_SOURCES = \
-	pipe/tgsi/exec/tgsi_exec.c \
-	pipe/tgsi/exec/tgsi_sse2.c
-
-TGSIUTIL_SOURCES = \
-	pipe/tgsi/util/tgsi_build.c \
-	pipe/tgsi/util/tgsi_dump.c \
-	pipe/tgsi/util/tgsi_parse.c \
-	pipe/tgsi/util/tgsi_util.c
-
-STATECACHE_SOURCES = \
-	pipe/cso_cache/cso_hash.c \
-	pipe/cso_cache/cso_cache.c
-
-PIPEUTIL_SOURCES = \
-	pipe/util/p_tile.c \
-	pipe/util/p_util.c
-
 STATETRACKER_SOURCES = \
 	state_tracker/st_atom.c \
 	state_tracker/st_atom_blend.c \
@@ -226,13 +184,14 @@ STATETRACKER_SOURCES = \
 	state_tracker/st_cb_readpixels.c \
 	state_tracker/st_cb_strings.c \
 	state_tracker/st_cb_texture.c \
-        state_tracker/st_cache.c \
+	state_tracker/st_cache.c \
 	state_tracker/st_context.c \
 	state_tracker/st_debug.c \
 	state_tracker/st_draw.c \
 	state_tracker/st_extensions.c \
 	state_tracker/st_format.c \
 	state_tracker/st_framebuffer.c \
+	state_tracker/st_gen_mipmap.c \
 	state_tracker/st_mesa_to_tgsi.c \
 	state_tracker/st_program.c \
 	state_tracker/st_texture.c
@@ -328,15 +287,6 @@ SPARC_API =			\
 __COMMON_DRIVER_SOURCES =			\
 	drivers/common/driverfuncs.c
 
-X11_DRIVER_SOURCES =		\
-	pipe/xlib/glxapi.c	\
-	pipe/xlib/fakeglx.c	\
-	pipe/xlib/xfonts.c	\
-	pipe/xlib/xm_api.c	\
-	pipe/xlib/xm_winsys.c	\
-	pipe/xlib/xm_winsys_aub.c	\
-	pipe/xlib/brw_aub.c
-
 OSMESA_DRIVER_SOURCES = \
 	drivers/osmesa/osmesa.c
 
@@ -369,7 +319,7 @@ FBDEV_DRIVER_SOURCES =			\
 ALL_SOURCES = \
 	$(GLAPI_SOURCES)	\
 	$(SOLO_SOURCES)		\
-	$(ASM_SOURCES)		\
+	$(MESA_ASM_SOURCES)		\
 	$(COMMON_DRIVER_SOURCES)\
 	$(X11_DRIVER_SOURCES)	\
 	$(FBDEV_DRIVER_SOURCES) \
@@ -402,11 +352,11 @@ CORE_SOURCES = \
 
 SOLO_OBJECTS = \
 	$(SOLO_SOURCES:.c=.o) \
-	$(ASM_SOURCES:.S=.o)
+	$(MESA_ASM_SOURCES:.S=.o)
 
 GLAPI_OBJECTS = \
 	$(GLAPI_SOURCES:.c=.o) \
-	$(ASM_API:.S=.o)
+	$(GLAPI_ASM_SOURCES:.S=.o)
 
 CORE_OBJECTS = $(SOLO_OBJECTS) $(GLAPI_OBJECTS)
 
@@ -423,7 +373,10 @@ FBDEV_DRIVER_OBJECTS = $(FBDEV_DRIVER_SOURCES:.c=.o)
 INCLUDE_DIRS = \
 	-I$(TOP)/include \
 	-I$(TOP)/src/mesa \
-	-I$(TOP)/src/mesa/main
+	-I$(TOP)/src/mesa/main \
+	-I$(TOP)/src/gallium/include \
+	-I$(TOP)/src/gallium/drivers \
+	-I$(TOP)/src/gallium/auxiliary
 
 OLD_INCLUDE_DIRS = \
 	-I$(TOP)/src/mesa/tnl \
@@ -433,4 +386,4 @@ OLD_INCLUDE_DIRS = \
 	-I$(TOP)/src/mesa/shader \
 	-I$(TOP)/src/mesa/shader/grammar \
 	-I$(TOP)/src/mesa/shader/slang \
-	-I$(TOP)/src/mesa/pipe/tgsi
+	-I$(TOP)/s$(TOP)/src/gallium/auxiliary/tgsi

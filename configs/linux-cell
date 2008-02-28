@@ -5,6 +5,9 @@ include $(TOP)/configs/default
 CONFIG_NAME = linux-cell
 
 
+GALLIUM_DRIVER_DIRS += cell
+
+
 # Compiler and flags
 CC = ppu32-gcc
 CXX = ppu32-g++
@@ -21,7 +24,7 @@ CFLAGS = $(OPT_FLAGS) -Wall -Winline -fPIC -m32 -mabi=altivec -maltivec -I. -I$(
 CXXFLAGS = $(CFLAGS)
 
 # Omitting glw here:
-SRC_DIRS = mesa glu glut/glx
+SRC_DIRS = gallium mesa gallium/winsys glu glut/glx
 
 
 MKDEP_OPTIONS = -fdepend -Y
@@ -36,7 +39,9 @@ GL_LIB_DEPS = $(EXTRA_LIB_PATH) -lX11 -lXext -lm -lpthread \
 
 SPU_CC = spu-gcc
 
-SPU_CFLAGS = $(OPT_FLAGS) -W -Wall -Winline -Wmissing-prototypes -Wno-main -I. -I $(SDK)/spu/include -include spu_intrinsics.h -I $(TOP)/src/mesa/
+SPU_CFLAGS = $(OPT_FLAGS) -W -Wall -Winline -Wmissing-prototypes -Wno-main \
+	-I. -I$(SDK)/spu/include -I$(TOP)/src/mesa/ $(INCLUDE_DIRS) \
+	-include spu_intrinsics.h
 
 SPU_LFLAGS = -L$(SDK)/spu/lib -Wl,-N -lmisc
 

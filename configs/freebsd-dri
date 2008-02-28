@@ -22,7 +22,7 @@ CFLAGS = $(WARN_FLAGS) $(OPT_FLAGS) $(PIC_FLAGS) -Wmissing-prototypes -std=c99 -
 
 CXXFLAGS = $(WARN_FLAGS) $(OPT_FLAGS) $(PIC_FLAGS) $(DEFINES) -Wall -ansi -pedantic $(ASM_FLAGS) $(X11_INCLUDES) 
 
-ASM_SOURCES = 
+MESA_ASM_SOURCES = 
 
 # Library/program dependencies
 LIBDRM_CFLAGS = `pkg-config --cflags libdrm`
@@ -36,7 +36,7 @@ GLW_LIB_DEPS = -L$(TOP)/$(LIB_DIR) -L/usr/X11R6/lib -lGL -lXt -lX11
 
 
 # Directories
-SRC_DIRS = glx/x11 mesa glu glut/glx glw
+SRC_DIRS = glx/x11 gallium mesa glu glut/glx glw
 DRIVER_DIRS = dri
 PROGRAM_DIRS = 
 WINDOW_SYSTEM=dri

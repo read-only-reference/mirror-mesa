@@ -1,0 +1,11 @@
+Import('*')
+
+if dri:
+	SConscript([
+		'dri/SConscript',
+	])
+	
+if 'xlib' in env['drivers'] and not dri:
+	SConscript([
+		'xlib/SConscript',
+	])
