@@ -42,7 +42,7 @@ default: depend library Makefile
 library: $(TOP)/$(LIB_DIR)/libEGLdri.so
 
 $(TOP)/$(LIB_DIR)/libEGLdri.so: $(OBJECTS)
-	$(TOP)/bin/mklib -o EGLdri -major 1 -minor 0 \
+	$(TOP)/bin/mklib -o EGLdri -ldflags '$(LDFLAGS)' -major 1 -minor 0 \
 		-install $(TOP)/$(LIB_DIR) -ldl $(OBJECTS)
 
 
@@ -52,7 +52,6 @@ clean:
 
 depend: $(SOURCES) $(HEADERS)
 	@ echo "running $(MKDEP)"
-	@ rm -f depend
 	@ touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(DEFINES) $(INCLUDE_DIRS) \
 		$(SOURCES) $(HEADERS) > /dev/null 

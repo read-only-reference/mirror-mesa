@@ -850,7 +850,7 @@ _mesa_unpack_bitmap( GLint width, GLint height, const GLubyte *pixels,
          return NULL;
       }
 
-      if (packing->SkipPixels == 0) {
+      if ((packing->SkipPixels & 7) == 0) {
          _mesa_memcpy( dst, src, width_in_bytes );
          if (packing->LsbFirst) {
             flip_bytes( dst, width_in_bytes );
@@ -942,7 +942,7 @@ _mesa_pack_bitmap( GLint width, GLint height, const GLubyte *source,
       if (!dst)
          return;
 
-      if (packing->SkipPixels == 0) {
+      if ((packing->SkipPixels & 7) == 0) {
          _mesa_memcpy( dst, src, width_in_bytes );
          if (packing->LsbFirst) {
             flip_bytes( dst, width_in_bytes );
@@ -961,20 +961,20 @@ _mesa_pack_bitmap( GLint width, GLint height, const GLubyte *source,
                if (*s & srcMask) {
                   *d |= dstMask;
                }
-               if (srcMask == 128) {
-                  srcMask = 1;
+               if (srcMask == 1) {
+                  srcMask = 128;
                   s++;
                }
                else {
-                  srcMask = srcMask << 1;
+                  srcMask = srcMask >> 1;
                }
-               if (dstMask == 1) {
-                  dstMask = 128;
+               if (dstMask == 128) {
+                  dstMask = 1;
                   d++;
                   *d = 0;
                }
                else {
-                  dstMask = dstMask >> 1;
+                  dstMask = dstMask << 1;
                }
             }
          }
@@ -3733,7 +3733,7 @@ _mesa_pack_stencil_span( const GLcontext *ctx, GLuint n,
 
    switch (dstType) {
    case GL_UNSIGNED_BYTE:
-      if (sizeof(GLstencil) == 8) {
+      if (sizeof(GLstencil) == 1) {
          _mesa_memcpy( dest, source, n );
       }
       else {
@@ -3745,14 +3745,11 @@ _mesa_pack_stencil_span( const GLcontext *ctx, GLuint n,
       }
       break;
    case GL_BYTE:
-      if (sizeof(GLstencil) == 8) {
-         _mesa_memcpy( dest, source, n );
-      }
-      else {
+      {
          GLbyte *dst = (GLbyte *) dest;
          GLuint i;
          for (i=0;i<n;i++) {
-            dst[i] = (GLbyte) source[i];
+            dst[i] = (GLbyte) (source[i] & 0x7f);
          }
       }
       break;
@@ -3797,7 +3794,7 @@ _mesa_pack_stencil_span( const GLcontext *ctx, GLuint n,
          GLint *dst = (GLint *) dest;
          GLuint i;
          for (i=0;i<n;i++) {
-            *dst++ = (GLint) source[i];
+            dst[i] = (GLint) source[i];
          }
          if (dstPacking->SwapBytes) {
             _mesa_swap4( (GLuint *) dst, n );
@@ -4622,37 +4619,6 @@ _mesa_clip_readpixels(const GLcontext *ctx,
 
    return GL_TRUE;
 }
-
-
-/**
- * Do clipping for a glCopyTexSubImage call.
- * The framebuffer source region might extend outside the framebuffer
- * bounds.  Clip the source region against the framebuffer bounds and
- * adjust the texture/dest position and size accordingly.
- *
- * \return GL_FALSE if region is totally clipped, GL_TRUE otherwise.
- */
-GLboolean
-_mesa_clip_copytexsubimage(const GLcontext *ctx,
-                           GLint *destX, GLint *destY,
-                           GLint *srcX, GLint *srcY,
-                           GLsizei *width, GLsizei *height)
-{
-   const struct gl_framebuffer *fb = ctx->ReadBuffer;
-   const GLint srcX0 = *srcX, srcY0 = *srcY;
-
-   if (_mesa_clip_to_region(0, 0, fb->Width, fb->Height,
-                            srcX, srcY, width, height)) {
-      *destX = *destX + *srcX - srcX0;
-      *destY = *destY + *srcY - srcY0;
-
-      return GL_TRUE;
-   }
-   else {
-      return GL_FALSE;
-   }
-}
-
 
 
 /**

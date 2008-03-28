@@ -601,9 +601,6 @@ viaCreateContext(const __GLcontextModes *visual,
     _tnl_allow_pixel_fog(ctx, GL_FALSE);
     _tnl_allow_vertex_fog(ctx, GL_TRUE);
 
-/*     vmesa->display = dpy; */
-    vmesa->display = sPriv->display;
-    
     vmesa->hHWContext = driContextPriv->hHWContext;
     vmesa->driFd = sPriv->fd;
     vmesa->driHwLock = &sPriv->pSAREA->lock;
@@ -661,14 +658,10 @@ viaCreateContext(const __GLcontextModes *visual,
         driQueryOptionb(&vmesa->optionCache, "no_rast"))
        FALLBACK(vmesa, VIA_FALLBACK_USER_DISABLE, 1);
 
-    vmesa->vblank_flags =
-       vmesa->viaScreen->irqEnabled ?
-        driGetDefaultVBlankFlags(&vmesa->optionCache) : VBLANK_FLAG_NO_IRQ;
-
     if (getenv("VIA_PAGEFLIP"))
        vmesa->allowPageFlip = 1;
 
-    (*dri_interface->getUST)( &vmesa->swap_ust );
+    (*sPriv->systemTime->getUST)( &vmesa->swap_ust );
 
 
     vmesa->regMMIOBase = (GLuint *)((unsigned long)viaScreen->reg);
@@ -733,17 +726,18 @@ void viaXMesaWindowMoved(struct via_context *vmesa)
 {
    __DRIdrawablePrivate *const drawable = vmesa->driDrawable;
    __DRIdrawablePrivate *const readable = vmesa->driReadable;
-   struct via_renderbuffer *const draw_buffer = 
-     (struct via_renderbuffer *) drawable->driverPrivate;
-   struct via_renderbuffer *const read_buffer =
-     (struct via_renderbuffer *) readable->driverPrivate;
+   struct via_renderbuffer * draw_buffer;
+   struct via_renderbuffer * read_buffer;
    GLuint bytePerPixel = vmesa->viaScreen->bitsPerPixel >> 3;
 
    if (!drawable)
       return;
+
+   draw_buffer =  (struct via_renderbuffer *) drawable->driverPrivate;
+   read_buffer =  (struct via_renderbuffer *) readable->driverPrivate;
    
-   switch (vmesa->glCtx->DrawBuffer->_ColorDrawBufferMask[0]) {
-   case BUFFER_BIT_BACK_LEFT: 
+   switch (vmesa->glCtx->DrawBuffer->_ColorDrawBufferIndexes[0]) {
+   case BUFFER_BACK_LEFT: 
       if (drawable->numBackClipRects == 0) {
 	 vmesa->numClipRects = drawable->numClipRects;
 	 vmesa->pClipRects = drawable->pClipRects;
@@ -753,7 +747,7 @@ void viaXMesaWindowMoved(struct via_context *vmesa)
 	 vmesa->pClipRects = drawable->pBackClipRects;
       }
       break;
-   case BUFFER_BIT_FRONT_LEFT:
+   case BUFFER_FRONT_LEFT:
       vmesa->numClipRects = drawable->numClipRects;
       vmesa->pClipRects = drawable->pClipRects;
       break;
@@ -839,13 +833,17 @@ viaMakeCurrent(__DRIcontextPrivate *driContextPriv,
         drawBuffer = (GLframebuffer *)driDrawPriv->driverPrivate;
         readBuffer = (GLframebuffer *)driReadPriv->driverPrivate;
 
-	if (vmesa->driDrawable != driDrawPriv) {
-	   driDrawableInitVBlank(driDrawPriv, vmesa->vblank_flags,
-				 &vmesa->vbl_seq);
-	}
-
        if ((vmesa->driDrawable != driDrawPriv)
 	   || (vmesa->driReadable != driReadPriv)) {
+	  if (driDrawPriv->swap_interval == (unsigned)-1) {
+	     driDrawPriv->vblFlags =
+		vmesa->viaScreen->irqEnabled ?
+		driGetDefaultVBlankFlags(&vmesa->optionCache) :
+		VBLANK_FLAG_NO_IRQ;
+
+	     driDrawableInitVBlank(driDrawPriv);
+	  }
+
 	  vmesa->driDrawable = driDrawPriv;
 	  vmesa->driReadable = driReadPriv;
 

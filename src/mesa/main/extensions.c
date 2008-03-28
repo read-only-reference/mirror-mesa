@@ -86,7 +86,7 @@ static const struct {
    { OFF, "GL_EXT_blend_logic_op",             F(EXT_blend_logic_op) },
    { OFF, "GL_EXT_blend_minmax",               F(EXT_blend_minmax) },
    { OFF, "GL_EXT_blend_subtract",             F(EXT_blend_subtract) },
-   { OFF, "GL_EXT_clip_volume_hint",           F(EXT_clip_volume_hint) },
+   { ON,  "GL_EXT_clip_volume_hint",           F(EXT_clip_volume_hint) },
    { OFF, "GL_EXT_cull_vertex",                F(EXT_cull_vertex) },
    { ON,  "GL_EXT_compiled_vertex_array",      F(EXT_compiled_vertex_array) },
    { OFF, "GL_EXT_convolution",                F(EXT_convolution) },
@@ -309,6 +309,7 @@ _mesa_enable_imaging_extensions(GLcontext *ctx)
 {
    ctx->Extensions.ARB_imaging = GL_TRUE;
    ctx->Extensions.EXT_blend_color = GL_TRUE;
+   ctx->Extensions.EXT_blend_logic_op = GL_TRUE;
    ctx->Extensions.EXT_blend_minmax = GL_TRUE;
    ctx->Extensions.EXT_blend_subtract = GL_TRUE;
    ctx->Extensions.EXT_convolution = GL_TRUE;
@@ -353,7 +354,6 @@ _mesa_enable_1_4_extensions(GLcontext *ctx)
    ctx->Extensions.ARB_window_pos = GL_TRUE;
    ctx->Extensions.EXT_blend_color = GL_TRUE;
    ctx->Extensions.EXT_blend_func_separate = GL_TRUE;
-   ctx->Extensions.EXT_blend_logic_op = GL_TRUE;
    ctx->Extensions.EXT_blend_minmax = GL_TRUE;
    ctx->Extensions.EXT_blend_subtract = GL_TRUE;
    ctx->Extensions.EXT_fog_coord = GL_TRUE;

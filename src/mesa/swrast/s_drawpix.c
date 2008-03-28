@@ -53,14 +53,19 @@ fast_draw_rgba_pixels(GLcontext *ctx, GLint x, GLint y,
                       const GLvoid *pixels)
 {
    const GLint imgX = x, imgY = y;
-   struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0][0];
-   const GLenum rbType = rb->DataType;
+   struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0];
+   GLenum rbType;
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    SWspan span;
    GLboolean simpleZoom;
    GLint yStep;  /* +1 or -1 */
    struct gl_pixelstore_attrib unpack;
    GLint destX, destY, drawWidth, drawHeight; /* post clipping */
+
+   if (!rb)
+      return GL_TRUE; /* no-op */
+
+   rbType = rb->DataType;
 
    if ((swrast->_RasterMask & ~CLIP_BIT) ||
        ctx->Texture._EnabledCoordUnits ||
@@ -608,8 +613,8 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
                        IMAGE_POST_CONVOLUTION_SCALE_BIAS);
    }
 
-   if (ctx->DrawBuffer->_NumColorDrawBuffers[0] > 0 &&
-       ctx->DrawBuffer->_ColorDrawBuffers[0][0]->DataType != GL_FLOAT &&
+   if (ctx->DrawBuffer->_NumColorDrawBuffers > 0 &&
+       ctx->DrawBuffer->_ColorDrawBuffers[0]->DataType != GL_FLOAT &&
        ctx->Color.ClampFragmentColor != GL_FALSE) {
       /* need to clamp colors before applying fragment ops */
       transferOps |= IMAGE_CLAMP_BIT;
@@ -812,7 +817,6 @@ draw_depth_stencil_pixels(GLcontext *ctx, GLint x, GLint y,
 }
 
 
-
 /**
  * Execute software-based glDrawPixels.
  * By time we get here, all error checking will have been done.
@@ -835,25 +839,9 @@ _swrast_DrawPixels( GLcontext *ctx,
    if (swrast->NewState)
       _swrast_validate_derived( ctx );
 
-   if (unpack->BufferObj->Name) {
-      /* unpack from PBO */
-      GLubyte *buf;
-      if (!_mesa_validate_pbo_access(2, unpack, width, height, 1,
-                                     format, type, pixels)) {
-         _mesa_error(ctx, GL_INVALID_OPERATION,
-                     "glDrawPixels(invalid PBO access)");
-         goto end;
-      }
-      buf = (GLubyte *) ctx->Driver.MapBuffer(ctx, GL_PIXEL_UNPACK_BUFFER_EXT,
-                                              GL_READ_ONLY_ARB,
-                                              unpack->BufferObj);
-      if (!buf) {
-         /* buffer is already mapped - that's an error */
-         _mesa_error(ctx, GL_INVALID_OPERATION, "glDrawPixels(PBO is mapped)");
-         goto end;
-      }
-      pixels = ADD_POINTERS(buf, pixels);
-   }
+    pixels = _mesa_map_drawpix_pbo(ctx, unpack, pixels);
+    if (!pixels)
+       return;
 
    switch (format) {
    case GL_STENCIL_INDEX:
@@ -890,15 +878,9 @@ _swrast_DrawPixels( GLcontext *ctx,
       /* don't return yet, clean-up */
    }
 
-end:
-
    RENDER_FINISH(swrast,ctx);
 
-   if (unpack->BufferObj->Name) {
-      /* done with PBO so unmap it now */
-      ctx->Driver.UnmapBuffer(ctx, GL_PIXEL_UNPACK_BUFFER_EXT,
-                              unpack->BufferObj);
-   }
+   _mesa_unmap_drapix_pbo(ctx, unpack);
 }
 
 

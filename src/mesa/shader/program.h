@@ -57,6 +57,9 @@ extern void
 _mesa_free_program_data(GLcontext *ctx);
 
 extern void
+_mesa_update_default_objects_program(GLcontext *ctx);
+
+extern void
 _mesa_set_program_error(GLcontext *ctx, GLint pos, const char *string);
 
 extern const GLubyte *
@@ -86,15 +89,6 @@ _mesa_lookup_program(GLcontext *ctx, GLuint id);
 
 extern struct gl_program *
 _mesa_clone_program(GLcontext *ctx, const struct gl_program *prog);
-
-
-extern struct gl_program *
-_mesa_combine_programs(GLcontext *ctx,
-                       const struct gl_program *progA,
-                       const struct gl_program *progB);
-
-extern GLint
-_mesa_find_free_register(const struct gl_program *prog, GLuint regFile);
 
 
 /*

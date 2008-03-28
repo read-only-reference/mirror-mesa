@@ -144,14 +144,10 @@ is_uniform(GLuint file)
 }
 
 
-static GLuint shProg_NumSamplers = 0; /** XXX temporary */
-
-
 static GLboolean
 link_uniform_vars(struct gl_shader_program *shProg, struct gl_program *prog)
 {
    GLuint *map, i;
-   GLuint samplerMap[MAX_SAMPLERS];
 
 #if 0
    printf("================ pre link uniforms ===============\n");
@@ -172,13 +168,10 @@ link_uniform_vars(struct gl_shader_program *shProg, struct gl_program *prog)
       /* sanity check */
       assert(is_uniform(p->Type));
 
-      /* See if this uniform is already in the linked program's list */
       if (p->Name) {
-         /* this is a named uniform */
          j = _mesa_lookup_parameter_index(shProg->Uniforms, -1, p->Name);
       }
       else {
-         /* this is an unnamed constant */
          /*GLuint swizzle;*/
          ASSERT(p->Type == PROGRAM_CONSTANT);
          if (_mesa_lookup_parameter_constant(shProg->Uniforms, pVals,
@@ -191,8 +184,7 @@ link_uniform_vars(struct gl_shader_program *shProg, struct gl_program *prog)
       }
 
       if (j >= 0) {
-         /* already in linked program's list */
-         /* check size XXX check this */
+         /* already in list, check size XXX check this */
 #if 0
          assert(p->Size == shProg->Uniforms->Parameters[j].Size);
 #endif
@@ -213,15 +205,7 @@ link_uniform_vars(struct gl_shader_program *shProg, struct gl_program *prog)
             j = _mesa_add_uniform(shProg->Uniforms, p->Name, p->Size, p->DataType);
             break;
          case PROGRAM_SAMPLER:
-            {
-               GLuint sampNum = shProg_NumSamplers++;
-               GLuint oldSampNum;
-               j = _mesa_add_sampler(shProg->Uniforms, p->Name,
-                                     p->DataType, sampNum);
-               oldSampNum = (GLuint) prog->Parameters->ParameterValues[i][0];
-               assert(oldSampNum < MAX_SAMPLERS);
-               samplerMap[oldSampNum] = sampNum;
-            }
+            j = _mesa_add_sampler(shProg->Uniforms, p->Name, p->DataType);
             break;
          default:
             _mesa_problem(NULL, "bad parameter type in link_uniform_vars()");
@@ -259,7 +243,6 @@ link_uniform_vars(struct gl_shader_program *shProg, struct gl_program *prog)
    /* OK, now scan the program/shader instructions looking for uniform vars,
     * replacing the old index with the new index.
     */
-   prog->SamplersUsed = 0x0;
    for (i = 0; i < prog->NumInstructions; i++) {
       struct prog_instruction *inst = prog->Instructions + i;
       GLuint j;
@@ -274,15 +257,14 @@ link_uniform_vars(struct gl_shader_program *shProg, struct gl_program *prog)
          }
       }
 
-      if (_mesa_is_tex_instruction(inst->Opcode)) {
+      if (inst->Opcode == OPCODE_TEX ||
+          inst->Opcode == OPCODE_TXB ||
+          inst->Opcode == OPCODE_TXP) {
          /*
          printf("====== remap sampler from %d to %d\n",
                 inst->Sampler, map[ inst->Sampler ]);
          */
-         /* here, texUnit is really samplerUnit */
-         inst->TexSrcUnit = samplerMap[inst->TexSrcUnit];
-         prog->SamplerTargets[inst->TexSrcUnit] = inst->TexSrcTarget;
-         prog->SamplersUsed |= (1 << inst->TexSrcUnit);
+         inst->Sampler = map[ inst->Sampler ];
       }
    }
 
@@ -347,8 +329,10 @@ _slang_resolve_attributes(struct gl_shader_program *shProg,
                 * glVertex/position.
                 */
                for (attr = 1; attr < MAX_VERTEX_ATTRIBS; attr++) {
-                  if (((1 << attr) & usedAttributes) == 0)
+                  if (((1 << attr) & usedAttributes) == 0) {
+                     usedAttributes |= (1 << attr);
                      break;
+                  }
                }
                if (attr == MAX_VERTEX_ATTRIBS) {
                   /* too many!  XXX record error log */
@@ -422,6 +406,36 @@ _slang_remap_attribute(struct gl_program *prog, GLuint oldAttrib, GLuint newAttr
 
 
 
+/**
+ * Scan program for texture instructions, lookup sampler/uniform's value
+ * to determine which texture unit to use.
+ * Also, update the program's TexturesUsed[] array.
+ */
+void
+_slang_resolve_samplers(struct gl_shader_program *shProg,
+                        struct gl_program *prog)
+{
+   GLuint i;
+
+   for (i = 0; i < MAX_TEXTURE_IMAGE_UNITS; i++)
+      prog->TexturesUsed[i] = 0;
+
+   for (i = 0; i < prog->NumInstructions; i++) {
+      struct prog_instruction *inst = prog->Instructions + i;
+      if (inst->Opcode == OPCODE_TEX ||
+          inst->Opcode == OPCODE_TXB ||
+          inst->Opcode == OPCODE_TXP) {
+         GLint sampleUnit = (GLint) shProg->Uniforms->ParameterValues[inst->Sampler][0];
+         assert(sampleUnit < MAX_TEXTURE_IMAGE_UNITS);
+         inst->TexSrcUnit = sampleUnit;
+
+         prog->TexturesUsed[inst->TexSrcUnit] |= (1 << inst->TexSrcTarget);
+      }
+   }
+}
+
+
+
 /** cast wrapper */
 static struct gl_vertex_program *
 vertex_program(struct gl_program *prog)
@@ -477,8 +491,6 @@ _slang_link(GLcontext *ctx,
    const struct gl_vertex_program *vertProg;
    const struct gl_fragment_program *fragProg;
    GLuint i;
-
-   shProg_NumSamplers = 0; /** XXX temporary */
 
    _mesa_clear_shader_program_data(ctx, shProg);
 
@@ -537,6 +549,13 @@ _slang_link(GLcontext *ctx,
    if (shProg->FragmentProgram) {
       _mesa_free_parameter_list(shProg->FragmentProgram->Base.Parameters);
       shProg->FragmentProgram->Base.Parameters = shProg->Uniforms;
+   }
+
+   if (shProg->VertexProgram) {
+      _slang_resolve_samplers(shProg, &shProg->VertexProgram->Base);
+   }
+   if (shProg->FragmentProgram) {
+      _slang_resolve_samplers(shProg, &shProg->FragmentProgram->Base);
    }
 
    if (shProg->VertexProgram) {

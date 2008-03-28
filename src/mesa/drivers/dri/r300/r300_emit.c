@@ -210,22 +210,18 @@ static void r300EmitVec(GLcontext * ctx, struct r300_dma_region *rvb,
 static GLuint r300VAPInputRoute0(uint32_t * dst, GLvector4f ** attribptr,
 				 int *inputs, GLint * tab, GLuint nr)
 {
-	GLuint i, dw;
-
+	GLushort i, w;
+	uint16_t * dst16 = (uint16_t *) dst;
+	
 	/* type, inputs, stop bit, size */
-	for (i = 0; i + 1 < nr; i += 2) {
-		dw = R300_INPUT_ROUTE_FLOAT | (inputs[tab[i]] << 8) | (attribptr[tab[i]]->size - 1);
-		dw |= (R300_INPUT_ROUTE_FLOAT | (inputs[tab[i + 1]] << 8) | (attribptr[tab[i + 1]]->size - 1)) << 16;
-		if (i + 2 == nr) {
-			dw |= (R300_VAP_INPUT_ROUTE_END << 16);
+	for (i = 0; i < nr; i++) {
+		/* make sure input is valid, would lockup the gpu */
+		assert(inputs[tab[i]] != -1);
+		w = R300_INPUT_ROUTE_FLOAT | (inputs[tab[i]] << 8) | (attribptr[tab[i]]->size - 1);
+		if (i + 1 == nr) {
+			w |= R300_VAP_INPUT_ROUTE_END;
 		}
-		dst[i >> 1] = dw;
-	}
-
-	if (nr & 1) {
-		dw = R300_INPUT_ROUTE_FLOAT | (inputs[tab[nr - 1]] << 8) | (attribptr[tab[nr - 1]]->size - 1);
-		dw |= R300_VAP_INPUT_ROUTE_END;
-		dst[nr >> 1] = dw;
+		dst16[i] = w;
 	}
 
 	return (nr + 1) >> 1;
@@ -242,14 +238,10 @@ static GLuint r300VAPInputRoute1Swizzle(int swizzle[4])
 GLuint r300VAPInputRoute1(uint32_t * dst, int swizzle[][4], GLuint nr)
 {
 	GLuint i;
+	uint16_t * dst16 = (uint16_t *) dst;
 
-	for (i = 0; i + 1 < nr; i += 2) {
-		dst[i >> 1] = r300VAPInputRoute1Swizzle(swizzle[i]) | R300_INPUT_ROUTE_ENABLE;
-		dst[i >> 1] |= (r300VAPInputRoute1Swizzle(swizzle[i + 1]) | R300_INPUT_ROUTE_ENABLE) << 16;
-	}
-
-	if (nr & 1) {
-		dst[nr >> 1] = r300VAPInputRoute1Swizzle(swizzle[nr - 1]) | R300_INPUT_ROUTE_ENABLE;
+	for (i = 0; i < nr; i++) {
+		dst16[i] = r300VAPInputRoute1Swizzle(swizzle[i]) | R300_INPUT_ROUTE_ENABLE;
 	}
 
 	return (nr + 1) >> 1;
@@ -294,7 +286,7 @@ GLuint r300VAPOutputCntl0(GLcontext * ctx, GLuint OutputsWritten)
 		ret |= R300_VAP_OUTPUT_VTX_FMT_0__POS_PRESENT;
 
 	if (OutputsWritten & (1 << VERT_RESULT_COL0))
-		ret |= R300_VAP_OUTPUT_VTX_FMT_0__COLOR_PRESENT;
+		ret |= R300_VAP_OUTPUT_VTX_FMT_0__COLOR_0_PRESENT;
 
 	if (OutputsWritten & (1 << VERT_RESULT_COL1))
 		ret |= R300_VAP_OUTPUT_VTX_FMT_0__COLOR_1_PRESENT;
@@ -536,16 +528,16 @@ void r300ReleaseArrays(GLcontext * ctx)
 
 void r300EmitCacheFlush(r300ContextPtr rmesa)
 {
-        int cmd_reserved = 0;
+	int cmd_reserved = 0;
 	int cmd_written = 0;
 
 	drm_radeon_cmd_header_t *cmd = NULL;
 
 	reg_start(R300_RB3D_DSTCACHE_CTLSTAT, 0);
-	e32(R300_RB3D_DSTCACHE_UNKNOWN_0A);
+	e32(RB3D_DSTCACHE_CTLSTAT_DC_FREE_FREE_3D_TAGS |
+	    RB3D_DSTCACHE_CTLSTAT_DC_FLUSH_FLUSH_DIRTY_3D);
 
-	reg_start(R300_RB3D_ZCACHE_CTLSTAT, 0);
-	e32(R300_RB3D_ZCACHE_UNKNOWN_03);
-
-
+	reg_start(ZB_ZCACHE_CTLSTAT, 0);
+	e32(ZB_ZCACHE_CTLSTAT_ZC_FLUSH_FLUSH_AND_FREE |
+	    ZB_ZCACHE_CTLSTAT_ZC_FREE_FREE);
 }

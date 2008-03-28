@@ -16,8 +16,8 @@ ARCH_FLAGS ?=
 
 DEFINES = -D_REENTRANT -DUSE_XSHM
 
-MESA_ASM_SOURCES = $(SPARC_SOURCES)
-GLAPI_ASM_SOURCES = $(SPARC_API)
+ASM_SOURCES = $(SPARC_SOURCES)
+ASM_API = $(SPARC_API)
 ASM_FLAGS = -DUSE_SPARC_ASM
 
 CFLAGS   = $(WARN_FLAGS) $(OPT_FLAGS) $(PIC_FLAGS) $(ARCH_FLAGS) $(DEFINES) \
@@ -27,6 +27,10 @@ CXXFLAGS = $(WARN_FLAGS) $(OPT_FLAGS) $(PIC_FLAGS) $(ARCH_FLAGS) $(DEFINES) \
 	-I/usr/openwin/include
 
 GLUT_CFLAGS = -fexceptions -DSOLARIS_2_4_BUG
+
+# Work around aliasing bugs - developers should comment this out
+CFLAGS += -fno-strict-aliasing
+CXXFLAGS += -fno-strict-aliasing
 
 # Library/program dependencies
 EXTRA_LIB_PATH=-L/usr/openwin/lib

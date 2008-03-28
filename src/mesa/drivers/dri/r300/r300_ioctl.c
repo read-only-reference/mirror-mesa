@@ -51,7 +51,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r300_ioctl.h"
 #include "r300_cmdbuf.h"
 #include "r300_state.h"
-#include "r300_program.h"
+#include "r300_vertprog.h"
 #include "radeon_reg.h"
 #include "r300_emit.h"
 
@@ -106,13 +106,13 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags, int buffer)
 	e32(cbpitch);
 
 	R300_STATECHANGE(r300, cmk);
-	reg_start(R300_RB3D_COLORMASK, 0);
+	reg_start(RB3D_COLOR_CHANNEL_MASK, 0);
 
 	if (flags & CLEARBUFFER_COLOR) {
-		e32((ctx->Color.ColorMask[BCOMP] ? R300_COLORMASK0_B : 0) |
-		    (ctx->Color.ColorMask[GCOMP] ? R300_COLORMASK0_G : 0) |
-		    (ctx->Color.ColorMask[RCOMP] ? R300_COLORMASK0_R : 0) |
-		    (ctx->Color.ColorMask[ACOMP] ? R300_COLORMASK0_A : 0));
+		e32((ctx->Color.ColorMask[BCOMP] ? RB3D_COLOR_CHANNEL_MASK_BLUE_MASK0 : 0) |
+		    (ctx->Color.ColorMask[GCOMP] ? RB3D_COLOR_CHANNEL_MASK_GREEN_MASK0 : 0) |
+		    (ctx->Color.ColorMask[RCOMP] ? RB3D_COLOR_CHANNEL_MASK_RED_MASK0 : 0) |
+		    (ctx->Color.ColorMask[ACOMP] ? RB3D_COLOR_CHANNEL_MASK_ALPHA_MASK0 : 0));
 	} else {
 		e32(0x0);
 	}
@@ -207,7 +207,7 @@ static void r300EmitClearState(GLcontext * ctx)
 
 	/* disable fog */
 	R300_STATECHANGE(r300, fogs);
-	reg_start(R300_RE_FOG_STATE, 0);
+	reg_start(FG_FOG_BLEND, 0);
 	e32(0x0);
 
 	R300_STATECHANGE(r300, vir[1]);
@@ -229,13 +229,13 @@ static void r300EmitClearState(GLcontext * ctx)
 	    R300_VPORT_Z_OFFSET_ENA);
 	e32(0x8);
 
-	reg_start(0x21dc, 0);
+	reg_start(R300_VAP_PSC_SGN_NORM_CNTL, SGN_NORM_ZERO);
 	e32(0xaaaaaaaa);
 
 	R300_STATECHANGE(r300, vof);
 	reg_start(R300_VAP_OUTPUT_VTX_FMT_0, 1);
 	e32(R300_VAP_OUTPUT_VTX_FMT_0__POS_PRESENT |
-	    R300_VAP_OUTPUT_VTX_FMT_0__COLOR_PRESENT);
+	    R300_VAP_OUTPUT_VTX_FMT_0__COLOR_0_PRESENT);
 	e32(0x0);		/* no textures */
 
 	R300_STATECHANGE(r300, txe);
@@ -252,7 +252,7 @@ static void r300EmitClearState(GLcontext * ctx)
 	efloat(0.0);
 
 	R300_STATECHANGE(r300, at);
-	reg_start(R300_PP_ALPHA_TEST, 0);
+	reg_start(FG_ALPHA_FUNC, 0);
 	e32(0x0);
 
 	R300_STATECHANGE(r300, bld);
@@ -260,30 +260,32 @@ static void r300EmitClearState(GLcontext * ctx)
 	e32(0x0);
 	e32(0x0);
 
-	R300_STATECHANGE(r300, unk221C);
-	reg_start(R300_VAP_UNKNOWN_221C, 0);
-	e32(R300_221C_CLEAR);
+	if (has_tcl) {
+	    R300_STATECHANGE(r300, vap_clip_cntl);
+	    reg_start(R300_VAP_CLIP_CNTL, 0);
+	    e32(R300_221C_CLEAR);
+        }
 
 	R300_STATECHANGE(r300, ps);
-	reg_start(R300_RE_POINTSIZE, 0);
+	reg_start(R300_GA_POINT_SIZE, 0);
 	e32(((dPriv->w * 6) << R300_POINTSIZE_X_SHIFT) |
 	    ((dPriv->h * 6) << R300_POINTSIZE_Y_SHIFT));
 
 	R300_STATECHANGE(r300, ri);
-	reg_start(R300_RS_INTERP_0, 8);
+	reg_start(R300_RS_IP_0, 8);
 	for (i = 0; i < 8; ++i) {
-		e32(R300_RS_INTERP_USED);
+		e32(R300_RS_SEL_T(1) | R300_RS_SEL_R(2) | R300_RS_SEL_Q(3));
 	}
 
 	R300_STATECHANGE(r300, rc);
 	/* The second constant is needed to get glxgears display anything .. */
-	reg_start(R300_RS_CNTL_0, 1);
-	e32((1 << R300_RS_CNTL_CI_CNT_SHIFT) | R300_RS_CNTL_0_UNKNOWN_18);
+	reg_start(R300_RS_COUNT, 1);
+	e32((1 << R300_IC_COUNT_SHIFT) | R300_HIRES_EN);
 	e32(0x0);
 
 	R300_STATECHANGE(r300, rr);
-	reg_start(R300_RS_ROUTE_0, 0);
-	e32(R300_RS_ROUTE_0_COLOR);
+	reg_start(R300_RS_INST_0, 0);
+	e32(R300_RS_INST_COL_CN_WRITE);
 
 	R300_STATECHANGE(r300, fp);
 	reg_start(R300_PFS_CNTL_0, 2);
@@ -316,6 +318,7 @@ static void r300EmitClearState(GLcontext * ctx)
 	if (has_tcl) {
 		R300_STATECHANGE(r300, pvs);
 		reg_start(R300_VAP_PVS_CNTL_1, 2);
+
 		e32((0 << R300_PVS_CNTL_1_PROGRAM_START_SHIFT) |
 		    (0 << R300_PVS_CNTL_1_POS_END_SHIFT) |
 		    (1 << R300_PVS_CNTL_1_PROGRAM_END_SHIFT));
@@ -324,14 +327,15 @@ static void r300EmitClearState(GLcontext * ctx)
 
 		R300_STATECHANGE(r300, vpi);
 		vsf_start_fragment(0x0, 8);
-		e32(VP_OUT(ADD, OUT, 0, XYZW));
-		e32(VP_IN(IN, 0));
-		e32(VP_ZERO());
+
+		e32(PVS_OP_DST_OPERAND(VE_ADD, GL_FALSE, GL_FALSE, 0, 0xf, PVS_DST_REG_OUT));
+		e32(PVS_SRC_OPERAND(0, PVS_SRC_SELECT_X, PVS_SRC_SELECT_Y, PVS_SRC_SELECT_Z, PVS_SRC_SELECT_W, PVS_SRC_REG_INPUT, VSF_FLAG_NONE));
+		e32(PVS_SRC_OPERAND(0, PVS_SRC_SELECT_FORCE_0, PVS_SRC_SELECT_FORCE_0, PVS_SRC_SELECT_FORCE_0, PVS_SRC_SELECT_FORCE_0, PVS_SRC_REG_INPUT, VSF_FLAG_NONE));
 		e32(0x0);
 
-		e32(VP_OUT(ADD, OUT, 1, XYZW));
-		e32(VP_IN(IN, 1));
-		e32(VP_ZERO());
+		e32(PVS_OP_DST_OPERAND(VE_ADD, GL_FALSE, GL_FALSE, 1, 0xf, PVS_DST_REG_OUT));
+		e32(PVS_SRC_OPERAND(1, PVS_SRC_SELECT_X, PVS_SRC_SELECT_Y, PVS_SRC_SELECT_Z, PVS_SRC_SELECT_W, PVS_SRC_REG_INPUT, VSF_FLAG_NONE));
+		e32(PVS_SRC_OPERAND(1, PVS_SRC_SELECT_FORCE_0, PVS_SRC_SELECT_FORCE_0, PVS_SRC_SELECT_FORCE_0, PVS_SRC_SELECT_FORCE_0, PVS_SRC_REG_INPUT, VSF_FLAG_NONE));
 		e32(0x0);
 	}
 }

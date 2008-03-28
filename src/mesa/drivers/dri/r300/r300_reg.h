@@ -106,14 +106,13 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 	/* number of vertices */
 #	define	R300_VAP_VF_CNTL__NUM_VERTICES__SHIFT           16
 
-/* BEGIN: Wild guesses */
 #define R300_VAP_OUTPUT_VTX_FMT_0           0x2090
 #       define R300_VAP_OUTPUT_VTX_FMT_0__POS_PRESENT     (1<<0)
-#       define R300_VAP_OUTPUT_VTX_FMT_0__COLOR_PRESENT   (1<<1)
-#       define R300_VAP_OUTPUT_VTX_FMT_0__COLOR_1_PRESENT (1<<2)  /* GUESS */
-#       define R300_VAP_OUTPUT_VTX_FMT_0__COLOR_2_PRESENT (1<<3)  /* GUESS */
-#       define R300_VAP_OUTPUT_VTX_FMT_0__COLOR_3_PRESENT (1<<4)  /* GUESS */
-#       define R300_VAP_OUTPUT_VTX_FMT_0__PT_SIZE_PRESENT (1<<16) /* GUESS */
+#       define R300_VAP_OUTPUT_VTX_FMT_0__COLOR_0_PRESENT (1<<1)
+#       define R300_VAP_OUTPUT_VTX_FMT_0__COLOR_1_PRESENT (1<<2)
+#       define R300_VAP_OUTPUT_VTX_FMT_0__COLOR_2_PRESENT (1<<3)
+#       define R300_VAP_OUTPUT_VTX_FMT_0__COLOR_3_PRESENT (1<<4)
+#       define R300_VAP_OUTPUT_VTX_FMT_0__PT_SIZE_PRESENT (1<<16)
 
 #define R300_VAP_OUTPUT_VTX_FMT_1           0x2094
 	/* each of the following is 3 bits wide, specifies number
@@ -126,7 +125,11 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_VAP_OUTPUT_VTX_FMT_1__TEX_5_COMP_CNT_SHIFT 15
 #       define R300_VAP_OUTPUT_VTX_FMT_1__TEX_6_COMP_CNT_SHIFT 18
 #       define R300_VAP_OUTPUT_VTX_FMT_1__TEX_7_COMP_CNT_SHIFT 21
-/* END: Wild guesses */
+#	define R300_VAP_OUTPUT_VTX_FMT_1__NOT_PRESENT  (1<<0)
+#	define R300_VAP_OUTPUT_VTX_FMT_1__1_COMPONENT  (1<<1)
+#	define R300_VAP_OUTPUT_VTX_FMT_1__2_COMPONENTS (1<<2)
+#	define R300_VAP_OUTPUT_VTX_FMT_1__3_COMPONENTS (1<<3)
+#	define R300_VAP_OUTPUT_VTX_FMT_1__4_COMPONENTS (1<<4)
 
 #define R300_SE_VTE_CNTL                  0x20b0
 #	define     R300_VPORT_X_SCALE_ENA                0x00000001
@@ -145,11 +148,42 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /* gap */
 
+/* Maximum Vertex Indx Clamp */
+#define R300_VAP_VF_MAX_VTX_INDX         0x2134
+/* Minimum Vertex Indx Clamp */
+#define R300_VAP_VF_MIN_VTX_INDX         0x2138
+
+/** Vertex assembler/processor control status */
 #define R300_VAP_CNTL_STATUS              0x2140
+/* No swap at all (default) */
 #	define R300_VC_NO_SWAP                  (0 << 0)
+/* 16-bit swap: 0xAABBCCDD becomes 0xBBAADDCC */
 #	define R300_VC_16BIT_SWAP               (1 << 0)
+/* 32-bit swap: 0xAABBCCDD becomes 0xDDCCBBAA */
 #	define R300_VC_32BIT_SWAP               (2 << 0)
+/* Half-dword swap: 0xAABBCCDD becomes 0xCCDDAABB */
+#	define R300_VC_HALF_DWORD_SWAP          (3 << 0)
+/* The TCL engine will not be used (as it is logically or even physically removed) */
 #	define R300_VAP_TCL_BYPASS		(1 << 8)
+/* Read only flag if TCL engine is busy. */
+#	define R300_VAP_PVS_BUSY                (1 << 11)
+/* TODO: gap for MAX_MPS */
+/* Read only flag if the vertex store is busy. */
+#	define R300_VAP_VS_BUSY                 (1 << 24)
+/* Read only flag if the reciprocal engine is busy. */
+#	define R300_VAP_RCP_BUSY                (1 << 25)
+/* Read only flag if the viewport transform engine is busy. */
+#	define R300_VAP_VTE_BUSY                (1 << 26)
+/* Read only flag if the memory interface unit is busy. */
+#	define R300_VAP_MUI_BUSY                (1 << 27)
+/* Read only flag if the vertex cache is busy. */
+#	define R300_VAP_VC_BUSY                 (1 << 28)
+/* Read only flag if the vertex fetcher is busy. */
+#	define R300_VAP_VF_BUSY                 (1 << 29)
+/* Read only flag if the register pipeline is busy. */
+#	define R300_VAP_REGPIPE_BUSY            (1 << 30)
+/* Read only flag if the VAP engine is busy. */
+#	define R300_VAP_VAP_BUSY                (1 << 31)
 
 /* gap */
 
@@ -219,6 +253,12 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_INPUT_CNTL_TC5               0x00008000 /* GUESS */
 #       define R300_INPUT_CNTL_TC6               0x00010000 /* GUESS */
 #       define R300_INPUT_CNTL_TC7               0x00020000 /* GUESS */
+
+/* Programmable Stream Control Signed Normalize Control */
+#define R300_VAP_PSC_SGN_NORM_CNTL         0x21dc
+#	define SGN_NORM_ZERO                 0
+#	define SGN_NORM_ZERO_CLAMP_MINUS_ONE 1
+#	define SGN_NORM_NO_ZERO              2
 
 /* gap */
 
@@ -293,6 +333,13 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_PVS_UPLOAD_CLIP_PLANE5       0x00000405
 #       define R300_PVS_UPLOAD_POINTSIZE         0x00000406
 
+#       define R500_PVS_UPLOAD_CLIP_PLANE0       0x00000600
+#       define R500_PVS_UPLOAD_CLIP_PLANE1       0x00000601
+#       define R500_PVS_UPLOAD_CLIP_PLANE2       0x00000602
+#       define R500_PVS_UPLOAD_CLIP_PLANE3       0x00000603
+#       define R500_PVS_UPLOAD_CLIP_PLANE4       0x00000604
+#       define R500_PVS_UPLOAD_CLIP_PLANE5       0x00000605
+
 /*
  * These are obsolete defines form r300_context.h, but they might give some
  * clues when investigating the addresses further...
@@ -319,10 +366,16 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 /* I do not know the purpose of this register. However, I do know that
  * it is set to 221C_CLEAR for clear operations and to 221C_NORMAL
  * for normal rendering.
+ *
+ * 2007-11-05: This register is the user clip plane control register, but there
+ * also seems to be a rendering mode control; the NORMAL/CLEAR defines.
+ *
+ * See bug #9871. http://bugs.freedesktop.org/attachment.cgi?id=10672&action=view
  */
-#define R300_VAP_UNKNOWN_221C               0x221C
+#define R300_VAP_CLIP_CNTL                       0x221C
 #       define R300_221C_NORMAL                  0x00000000
 #       define R300_221C_CLEAR                   0x0001C000
+#define R300_VAP_UCP_ENABLE_0 (1 << 0)
 
 /* These seem to be per-pixel and per-vertex X and Y clipping planes. The first
  * plane is per-pixel and the second plane is per-vertex.
@@ -334,7 +387,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define R300_VAP_CLIP_X_0                   0x2220
 #define R300_VAP_CLIP_X_1                   0x2224
 #define R300_VAP_CLIP_Y_0                   0x2228
-#define R300_VAP_CLIP_Y_1                   0x2230
+#define R300_VAP_CLIP_Y_1                   0x222c
 
 /* gap */
 
@@ -345,8 +398,12 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #define R300_VAP_PVS_WAITIDLE               0x2284 /* GUESS */
 
-/* Absolutely no clue what this register is about. */
-#define R300_VAP_UNKNOWN_2288               0x2288
+/* This register is used to define the number of core clocks to wait for a
+ * vertex to be received by the VAP input controller (while the primitive
+ * path is backed up) before forcing any accumulated vertices to be submitted
+ * to the vertex processing path.
+ */
+#define VAP_PVS_VTX_TIMEOUT_REG             0x2288
 #       define R300_2288_R300                    0x00750000 /* -- nh */
 #       define R300_2288_RV350                   0x0000FFFF /* -- Vladimir */
 
@@ -427,17 +484,23 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  * (or something closely related to that).
  * This bit is rather fatal at the time being due to lackings at pixel
  * shader side
+ * Specifies top of Raster pipe specific enable controls.
  */
 #define R300_GB_ENABLE	0x4008
-#	define R300_GB_POINT_STUFF_ENABLE	(1<<0)
-#	define R300_GB_LINE_STUFF_ENABLE	(1<<1)
-#	define R300_GB_TRIANGLE_STUFF_ENABLE	(1<<2)
-#	define R300_GB_STENCIL_AUTO_ENABLE	(1<<4)
-#	define R300_GB_UNK31			(1<<31)
+#	define R300_GB_POINT_STUFF_DISABLE     (0 << 0)
+#	define R300_GB_POINT_STUFF_ENABLE      (1 << 0) /* Specifies if points will have stuffed texture coordinates. */
+#	define R300_GB_LINE_STUFF_DISABLE      (0 << 1)
+#	define R300_GB_LINE_STUFF_ENABLE       (1 << 1) /* Specifies if lines will have stuffed texture coordinates. */
+#	define R300_GB_TRIANGLE_STUFF_DISABLE  (0 << 2)
+#	define R300_GB_TRIANGLE_STUFF_ENABLE   (1 << 2) /* Specifies if triangles will have stuffed texture coordinates. */
+#	define R300_GB_STENCIL_AUTO_DISABLE    (0 << 4)
+#	define R300_GB_STENCIL_AUTO_ENABLE     (1 << 4) /* Enable stencil auto inc/dec based on triangle cw/ccw, force into dzy low bit. */
+#	define R300_GB_STENCIL_AUTO_FORCE      (2 << 4) /* Force 0 into dzy low bit. */
+
 	/* each of the following is 2 bits wide */
-#define R300_GB_TEX_REPLICATE	0
-#define R300_GB_TEX_ST		1
-#define R300_GB_TEX_STR		2
+#define R300_GB_TEX_REPLICATE	0 /* Replicate VAP source texture coordinates (S,T,[R,Q]). */
+#define R300_GB_TEX_ST		1 /* Stuff with source texture coordinates (S,T). */
+#define R300_GB_TEX_STR		2 /* Stuff with source texture coordinates (S,T,R). */
 #	define R300_GB_TEX0_SOURCE_SHIFT	16
 #	define R300_GB_TEX1_SOURCE_SHIFT	18
 #	define R300_GB_TEX2_SOURCE_SHIFT	20
@@ -448,7 +511,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_GB_TEX7_SOURCE_SHIFT	30
 
 /* MSPOS - positions for multisample antialiasing (?) */
-#define R300_GB_MSPOS0	0x4010
+#define R300_GB_MSPOS0                           0x4010
 	/* shifts - each of the fields is 4 bits */
 #	define R300_GB_MSPOS0__MS_X0_SHIFT	0
 #	define R300_GB_MSPOS0__MS_Y0_SHIFT	4
@@ -459,7 +522,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_GB_MSPOS0__MSBD0_Y		24
 #	define R300_GB_MSPOS0__MSBD0_X		28
 
-#define R300_GB_MSPOS1	0x4014
+#define R300_GB_MSPOS1                           0x4014
 #	define R300_GB_MSPOS1__MS_X3_SHIFT	0
 #	define R300_GB_MSPOS1__MS_Y3_SHIFT	4
 #	define R300_GB_MSPOS1__MS_X4_SHIFT	8
@@ -468,31 +531,47 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_GB_MSPOS1__MS_Y5_SHIFT	20
 #	define R300_GB_MSPOS1__MSBD1		24
 
-
-#define R300_GB_TILE_CONFIG	0x4018
-#	define R300_GB_TILE_ENABLE	(1<<0)
-#	define R300_GB_TILE_PIPE_COUNT_RV300	0
-#	define R300_GB_TILE_PIPE_COUNT_R300	(3<<1)
-#	define R300_GB_TILE_PIPE_COUNT_R420	(7<<1)
-#	define R300_GB_TILE_PIPE_COUNT_RV410	(3<<1)
-#	define R300_GB_TILE_SIZE_8		0
-#	define R300_GB_TILE_SIZE_16		(1<<4)
-#	define R300_GB_TILE_SIZE_32		(2<<4)
-#	define R300_GB_SUPER_SIZE_1		(0<<6)
-#	define R300_GB_SUPER_SIZE_2		(1<<6)
-#	define R300_GB_SUPER_SIZE_4		(2<<6)
-#	define R300_GB_SUPER_SIZE_8		(3<<6)
-#	define R300_GB_SUPER_SIZE_16		(4<<6)
-#	define R300_GB_SUPER_SIZE_32		(5<<6)
-#	define R300_GB_SUPER_SIZE_64		(6<<6)
-#	define R300_GB_SUPER_SIZE_128		(7<<6)
+/* Specifies the graphics pipeline configuration for rasterization. */
+#define R300_GB_TILE_CONFIG                      0x4018
+#	define R300_GB_TILE_DISABLE             (0 << 0)
+#	define R300_GB_TILE_ENABLE              (1 << 0)
+#	define R300_GB_TILE_PIPE_COUNT_RV300	(0 << 1) /* RV350 (1 pipe, 1 ctx) */
+#	define R300_GB_TILE_PIPE_COUNT_R300	(3 << 1) /* R300 (2 pipes, 1 ctx) */
+#	define R300_GB_TILE_PIPE_COUNT_R420_3P  (6 << 1) /* R420-3P (3 pipes, 1 ctx) */
+#	define R300_GB_TILE_PIPE_COUNT_R420	(7 << 1) /* R420 (4 pipes, 1 ctx) */
+#	define R300_GB_TILE_SIZE_8		(0 << 4)
+#	define R300_GB_TILE_SIZE_16		(1 << 4)
+#	define R300_GB_TILE_SIZE_32		(2 << 4)
+#	define R300_GB_SUPER_SIZE_1		(0 << 6)
+#	define R300_GB_SUPER_SIZE_2		(1 << 6)
+#	define R300_GB_SUPER_SIZE_4		(2 << 6)
+#	define R300_GB_SUPER_SIZE_8		(3 << 6)
+#	define R300_GB_SUPER_SIZE_16		(4 << 6)
+#	define R300_GB_SUPER_SIZE_32		(5 << 6)
+#	define R300_GB_SUPER_SIZE_64		(6 << 6)
+#	define R300_GB_SUPER_SIZE_128		(7 << 6)
 #	define R300_GB_SUPER_X_SHIFT		9	/* 3 bits wide */
 #	define R300_GB_SUPER_Y_SHIFT		12	/* 3 bits wide */
-#	define R300_GB_SUPER_TILE_A		0
-#	define R300_GB_SUPER_TILE_B		(1<<15)
-#	define R300_GB_SUBPIXEL_1_12		0
-#	define R300_GB_SUBPIXEL_1_16		(1<<16)
+#	define R300_GB_SUPER_TILE_A		(0 << 15)
+#	define R300_GB_SUPER_TILE_B		(1 << 15)
+#	define R300_GB_SUBPIXEL_1_12		(0 << 16)
+#	define R300_GB_SUBPIXEL_1_16		(1 << 16)
+#	define GB_TILE_CONFIG_QUADS_PER_RAS_4   (0 << 17)
+#	define GB_TILE_CONFIG_QUADS_PER_RAS_8   (1 << 17)
+#	define GB_TILE_CONFIG_QUADS_PER_RAS_16  (2 << 17)
+#	define GB_TILE_CONFIG_QUADS_PER_RAS_32  (3 << 17)
+#	define GB_TILE_CONFIG_BB_SCAN_INTERCEPT (0 << 19)
+#	define GB_TILE_CONFIG_BB_SCAN_BOUND_BOX (1 << 19)
+#	define GB_TILE_CONFIG_ALT_SCAN_EN_LR    (0 << 20)
+#	define GB_TILE_CONFIG_ALT_SCAN_EN_LRL   (1 << 20)
+#	define GB_TILE_CONFIG_ALT_OFFSET        (0 << 21)
+#	define GB_TILE_CONFIG_SUBPRECISION      (0 << 22)
+#	define GB_TILE_CONFIG_ALT_TILING_DEF    (0 << 23)
+#	define GB_TILE_CONFIG_ALT_TILING_3_2    (1 << 23)
+#	define GB_TILE_CONFIG_Z_EXTENDED_24_1   (0 << 24)
+#	define GB_TILE_CONFIG_Z_EXTENDED_S25_1  (1 << 24)
 
+/* Specifies the sizes of the various FIFO`s in the sc/rs/us. This register must be the first one written */
 #define R300_GB_FIFO_SIZE	0x4024
 	/* each of the following is 2 bits wide */
 #define R300_GB_FIFO_SIZE_32	0
@@ -516,25 +595,104 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_OFIFO_HIGHWATER_SHIFT	22	/* two bits only */
 #	define R300_CUBE_FIFO_HIGHWATER_COL_SHIFT	24
 
-#define R300_GB_SELECT	0x401C
-#	define R300_GB_FOG_SELECT_C0A		0
-#	define R300_GB_FOG_SELECT_C1A		1
-#	define R300_GB_FOG_SELECT_C2A		2
-#	define R300_GB_FOG_SELECT_C3A		3
-#	define R300_GB_FOG_SELECT_1_1_W	4
-#	define R300_GB_FOG_SELECT_Z		5
-#	define R300_GB_DEPTH_SELECT_Z		0
-#	define R300_GB_DEPTH_SELECT_1_1_W	(1<<3)
-#	define R300_GB_W_SELECT_1_W		0
-#	define R300_GB_W_SELECT_1		(1<<4)
+#define GB_Z_PEQ_CONFIG                          0x4028
+#	define GB_Z_PEQ_CONFIG_Z_PEQ_SIZE_4_4    (0 << 0)
+#	define GB_Z_PEQ_CONFIG_Z_PEQ_SIZE_8_8    (1 << 0)
 
-#define R300_GB_AA_CONFIG		0x4020
-#	define R300_AA_DISABLE			0x00
-#	define R300_AA_ENABLE			0x01
-#	define R300_AA_SUBSAMPLES_2		0
-#	define R300_AA_SUBSAMPLES_3		(1<<1)
-#	define R300_AA_SUBSAMPLES_4		(2<<1)
-#	define R300_AA_SUBSAMPLES_6		(3<<1)
+/* Specifies various polygon specific selects (fog, depth, perspective). */
+#define R300_GB_SELECT                           0x401c
+#	define R300_GB_FOG_SELECT_C0A		(0 << 0)
+#	define R300_GB_FOG_SELECT_C1A           (1 << 0)
+#	define R300_GB_FOG_SELECT_C2A           (2 << 0)
+#	define R300_GB_FOG_SELECT_C3A           (3 << 0)
+#	define R300_GB_FOG_SELECT_1_1_W         (4 << 0)
+#	define R300_GB_FOG_SELECT_Z		(5 << 0)
+#	define R300_GB_DEPTH_SELECT_Z		(0 << 3
+#	define R300_GB_DEPTH_SELECT_1_1_W	(1 << 3)
+#	define R300_GB_W_SELECT_1_W		(0 << 4)
+#	define R300_GB_W_SELECT_1		(1 << 4)
+#	define R300_GB_FOG_STUFF_DISABLE        (0 << 5)
+#	define R300_GB_FOG_STUFF_ENABLE         (1 << 5)
+#	define R300_GB_FOG_STUFF_TEX_SHIFT      6
+#	define R300_GB_FOG_STUFF_TEX_MASK       0x000003c0
+#	define R300_GB_FOG_STUFF_COMP_SHIFT     10
+#	define R300_GB_FOG_STUFF_COMP_MASK      0x00000c00
+
+/* Specifies the graphics pipeline configuration for antialiasing. */
+#define GB_AA_CONFIG   	                         0x4020
+#	define GB_AA_CONFIG_AA_DISABLE           (0 << 0)
+#	define GB_AA_CONFIG_AA_ENABLE            (1 << 0)
+#	define GB_AA_CONFIG_NUM_AA_SUBSAMPLES_2  (0 << 1)
+#	define GB_AA_CONFIG_NUM_AA_SUBSAMPLES_3  (1 << 1)
+#	define GB_AA_CONFIG_NUM_AA_SUBSAMPLES_4  (2 << 1)
+#	define GB_AA_CONFIG_NUM_AA_SUBSAMPLES_6  (3 << 1)
+
+/* Selects which of 4 pipes are active. */
+#define GB_PIPE_SELECT                           0x402c
+#	define GB_PIPE_SELECT_PIPE0_ID_SHIFT  0
+#	define GB_PIPE_SELECT_PIPE1_ID_SHIFT  2
+#	define GB_PIPE_SELECT_PIPE2_ID_SHIFT  4
+#	define GB_PIPE_SELECT_PIPE3_ID_SHIFT  6
+#	define GB_PIPE_SELECT_PIPE_MASK_SHIFT 8
+#	define GB_PIPE_SELECT_MAX_PIPE        12
+#	define GB_PIPE_SELECT_BAD_PIPES       14
+#	define GB_PIPE_SELECT_CONFIG_PIPES    18
+
+
+/* Specifies the sizes of the various FIFO`s in the sc/rs. */
+#define GB_FIFO_SIZE1                            0x4070
+/* High water mark for SC input fifo */
+#	define GB_FIFO_SIZE1_SC_HIGHWATER_IFIFO_SHIFT 0
+#	define GB_FIFO_SIZE1_SC_HIGHWATER_IFIFO_MASK  0x0000003f
+/* High water mark for SC input fifo (B) */
+#	define GB_FIFO_SIZE1_SC_HIGHWATER_BFIFO_SHIFT 6
+#	define GB_FIFO_SIZE1_SC_HIGHWATER_BFIFO_MASK  0x00000fc0
+/* High water mark for RS colors' fifo */
+#	define GB_FIFO_SIZE1_SC_HIGHWATER_COL_SHIFT   12
+#	define GB_FIFO_SIZE1_SC_HIGHWATER_COL_MASK    0x0003f000
+/* High water mark for RS textures' fifo */
+#	define GB_FIFO_SIZE1_SC_HIGHWATER_TEX_SHIFT   18
+#	define GB_FIFO_SIZE1_SC_HIGHWATER_TEX_MASK    0x00fc0000
+
+/* This table specifies the source location and format for up to 16 texture
+ * addresses (i[0]:i[15]) and four colors (c[0]:c[3])
+ */
+#define R500_RS_IP_0					0x4074
+#define R500_RS_IP_1					0x4078
+#define R500_RS_IP_2					0x407C
+#define R500_RS_IP_3					0x4080
+#define R500_RS_IP_4					0x4084
+#define R500_RS_IP_5					0x4088
+#define R500_RS_IP_6					0x408C
+#define R500_RS_IP_7					0x4090
+#define R500_RS_IP_8					0x4094
+#define R500_RS_IP_9					0x4098
+#define R500_RS_IP_10					0x409C
+#define R500_RS_IP_11					0x40A0
+#define R500_RS_IP_12					0x40A4
+#define R500_RS_IP_13					0x40A8
+#define R500_RS_IP_14					0x40AC
+#define R500_RS_IP_15					0x40B0
+#define R500_RS_IP_TEX_PTR_S_SHIFT 			0
+#define R500_RS_IP_TEX_PTR_T_SHIFT 			6
+#define R500_RS_IP_TEX_PTR_R_SHIFT 			12
+#define R500_RS_IP_TEX_PTR_Q_SHIFT 			18
+#define R500_RS_IP_COL_PTR_SHIFT 			24
+#define R500_RS_IP_COL_FMT_SHIFT 			27
+#define R500_RS_IP_COL_FMT_RGBA 			(0 << 27)
+#define R500_RS_IP_COL_FMT_RGB0 			(1 << 27)
+#define R500_RS_IP_COL_FMT_RGB1 			(2 << 27)
+/* gap */
+#define R500_RS_IP_COL_FMT_000A 			(4 << 27)
+#define R500_RS_IP_COL_FMT_0000 			(5 << 27)
+#define R500_RS_IP_COL_FMT_0001 			(6 << 27)
+/* gap */
+#define R500_RS_IP_COL_FMT_111A 			(8 << 27)
+#define R500_RS_IP_COL_FMT_1110 			(9 << 27)
+#define R500_RS_IP_COL_FMT_1111 			(10 << 27)
+/* gap */
+#define R500_RS_IP_OFFSET_DIS 				(0 << 31)
+#define R500_RS_IP_OFFSET_EN 				(1 << 31)
 
 /* gap */
 
@@ -561,52 +719,332 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_TX_ENABLE_14                 (1 << 14)
 #       define R300_TX_ENABLE_15                 (1 << 15)
 
-/* The pointsize is given in multiples of 6. The pointsize can be
- * enormous: Clear() renders a single point that fills the entire
- * framebuffer.
+#define R500_TX_FILTER_4		    0x4110
+#	define R500_TX_WEIGHT_1_SHIFT            (0)
+#	define R500_TX_WEIGHT_0_SHIFT            (11)
+#	define R500_TX_WEIGHT_PAIR               (1<<22)
+#	define R500_TX_PHASE_SHIFT               (23)
+#	define R500_TX_DIRECTION_HORIZONTAL	 (0<<27)
+#	define R500_TX_DIRECTION_VERITCAL	 (1<<27)
+
+/* S Texture Coordinate of Vertex 0 for Point texture stuffing (LLC) */
+#define GA_POINT_S0                              0x4200
+
+/* T Texture Coordinate of Vertex 0 for Point texture stuffing (LLC) */
+#define GA_POINT_T0                              0x4204
+
+/* S Texture Coordinate of Vertex 2 for Point texture stuffing (URC) */
+#define GA_POINT_S1                              0x4208
+
+/* T Texture Coordinate of Vertex 2 for Point texture stuffing (URC) */
+#define GA_POINT_T1                              0x420c
+
+/* Specifies amount to shift integer position of vertex (screen space) before
+ * converting to float for triangle stipple.
  */
-#define R300_RE_POINTSIZE                   0x421C
-#       define R300_POINTSIZE_Y_SHIFT            0
-#       define R300_POINTSIZE_Y_MASK             (0xFFFF << 0) /* GUESS */
-#       define R300_POINTSIZE_X_SHIFT            16
-#       define R300_POINTSIZE_X_MASK             (0xFFFF << 16) /* GUESS */
+#define GA_TRIANGLE_STIPPLE            0x4214
+#	define GA_TRIANGLE_STIPPLE_X_SHIFT_SHIFT 0
+#	define GA_TRIANGLE_STIPPLE_X_SHIFT_MASK  0x0000000f
+#	define GA_TRIANGLE_STIPPLE_Y_SHIFT_SHIFT 16
+#	define GA_TRIANGLE_STIPPLE_Y_SHIFT_MASK  0x000f0000
+
+/* The pointsize is given in multiples of 6. The pointsize can be enormous:
+ * Clear() renders a single point that fills the entire framebuffer.
+ * 1/2 Height of point; fixed (16.0), subpixel format (1/12 or 1/16, even if in
+ * 8b precision).
+ */
+#define R300_GA_POINT_SIZE                   0x421C
+#       define R300_POINTSIZE_Y_SHIFT         0
+#       define R300_POINTSIZE_Y_MASK          0x0000ffff
+#       define R300_POINTSIZE_X_SHIFT         16
+#       define R300_POINTSIZE_X_MASK          0xffff0000
 #       define R300_POINTSIZE_MAX             (R300_POINTSIZE_Y_MASK / 6)
 
-/* The line width is given in multiples of 6.
+/* Blue fill color */
+#define GA_FILL_R                                0x4220
+
+/* Blue fill color */
+#define GA_FILL_G                                0x4224
+
+/* Blue fill color */
+#define GA_FILL_B                                0x4228
+
+/* Alpha fill color */
+#define GA_FILL_A                                0x422c
+
+
+/* Specifies maximum and minimum point & sprite sizes for per vertex size
+ * specification. The lower part (15:0) is MIN and (31:16) is max.
+ */
+#define R300_GA_POINT_MINMAX                0x4230
+#       define R300_GA_POINT_MINMAX_MIN_SHIFT          0
+#       define R300_GA_POINT_MINMAX_MIN_MASK           (0xFFFF << 0)
+#       define R300_GA_POINT_MINMAX_MAX_SHIFT          16
+#       define R300_GA_POINT_MINMAX_MAX_MASK           (0xFFFF << 16)
+
+/* 1/2 width of line, in subpixels (1/12 or 1/16 only, even in 8b
+ * subprecision); (16.0) fixed format.
+ *
+ * The line width is given in multiples of 6.
  * In default mode lines are classified as vertical lines.
  * HO: horizontal
  * VE: vertical or horizontal
  * HO & VE: no classification
  */
-#define R300_RE_LINE_CNT                      0x4234
-#       define R300_LINESIZE_SHIFT            0
-#       define R300_LINESIZE_MASK             (0xFFFF << 0) /* GUESS */
-#       define R300_LINESIZE_MAX             (R300_LINESIZE_MASK / 6)
+#define GA_LINE_CNTL                             0x4234
+#       define GA_LINE_CNTL_WIDTH_SHIFT       0
+#       define GA_LINE_CNTL_WIDTH_MASK        0x0000ffff
+#	define GA_LINE_CNTL_END_TYPE_HOR      (0 << 16)
+#	define GA_LINE_CNTL_END_TYPE_VER      (1 << 16)
+#	define GA_LINE_CNTL_END_TYPE_SQR      (2 << 16) /* horizontal or vertical depending upon slope */
+#	define GA_LINE_CNTL_END_TYPE_COMP     (3 << 16) /* Computed (perpendicular to slope) */
+#	define GA_LINE_CNTL_SORT_NO           (0 << 18)
+#	define GA_LINE_CNTL_SORT_MINX_MINY    (1 << 18)
+/** TODO: looks wrong */
+#       define R300_LINESIZE_MAX              (GA_LINE_CNTL_WIDTH_MASK / 6)
+/** TODO: looks wrong */
 #       define R300_LINE_CNT_HO               (1 << 16)
+/** TODO: looks wrong */
 #       define R300_LINE_CNT_VE               (1 << 17)
 
-/* Some sort of scale or clamp value for texcoordless textures. */
-#define R300_RE_UNK4238                       0x4238
+/* Line Stipple configuration information. */
+#define GA_LINE_STIPPLE_CONFIG                   0x4238
+#	define GA_LINE_STIPPLE_CONFIG_LINE_RESET_NO     (0 << 0)
+#	define GA_LINE_STIPPLE_CONFIG_LINE_RESET_LINE   (1 << 0)
+#	define GA_LINE_STIPPLE_CONFIG_LINE_RESET_PACKET (2 << 0)
+#	define GA_LINE_STIPPLE_CONFIG_STIPPLE_SCALE_SHIFT 2
+#	define GA_LINE_STIPPLE_CONFIG_STIPPLE_SCALE_MASK  0xfffffffc
+
+/* Used to load US instructions and constants */
+#define R500_GA_US_VECTOR_INDEX               0x4250
+#	define GA_US_VECTOR_INDEX_SHIFT       0
+#	define GA_US_VECTOR_INDEX_MASK        0x000000ff
+#	define GA_US_VECTOR_INDEX_TYPE_INSTR  (0 << 16)
+#	define GA_US_VECTOR_INDEX_TYPE_CONST  (1 << 16)
+#	define GA_US_VECTOR_INDEX_CLAMP_NO    (0 << 17)
+#	define GA_US_VECTOR_INDEX_CLAMP_CONST (1 << 17)
+
+/* Data register for loading US instructions and constants */
+#define R500_GA_US_VECTOR_DATA                0x4254
+
+/* Specifies color properties and mappings of textures. */
+#define GA_COLOR_CONTROL_PS3                     0x4258
+#	define TEX0_SHADING_PS3_SOLID       (0 << 0)
+#	define TEX0_SHADING_PS3_FLAT        (1 << 0)
+#	define TEX0_SHADING_PS3_GOURAUD     (2 << 0)
+#	define TEX1_SHADING_PS3_SOLID       (0 << 2)
+#	define TEX1_SHADING_PS3_FLAT        (1 << 2)
+#	define TEX1_SHADING_PS3_GOURAUD     (2 << 2)
+#	define TEX2_SHADING_PS3_SOLID       (0 << 4)
+#	define TEX2_SHADING_PS3_FLAT        (1 << 4)
+#	define TEX2_SHADING_PS3_GOURAUD     (2 << 4)
+#	define TEX3_SHADING_PS3_SOLID       (0 << 6)
+#	define TEX3_SHADING_PS3_FLAT        (1 << 6)
+#	define TEX3_SHADING_PS3_GOURAUD     (2 << 6)
+#	define TEX4_SHADING_PS3_SOLID       (0 << 8)
+#	define TEX4_SHADING_PS3_FLAT        (1 << 8)
+#	define TEX4_SHADING_PS3_GOURAUD     (2 << 8)
+#	define TEX5_SHADING_PS3_SOLID       (0 << 10)
+#	define TEX5_SHADING_PS3_FLAT        (1 << 10)
+#	define TEX5_SHADING_PS3_GOURAUD     (2 << 10)
+#	define TEX6_SHADING_PS3_SOLID       (0 << 12)
+#	define TEX6_SHADING_PS3_FLAT        (1 << 12)
+#	define TEX6_SHADING_PS3_GOURAUD     (2 << 12)
+#	define TEX7_SHADING_PS3_SOLID       (0 << 14)
+#	define TEX7_SHADING_PS3_FLAT        (1 << 14)
+#	define TEX7_SHADING_PS3_GOURAUD     (2 << 14)
+#	define TEX8_SHADING_PS3_SOLID       (0 << 16)
+#	define TEX8_SHADING_PS3_FLAT        (1 << 16)
+#	define TEX8_SHADING_PS3_GOURAUD     (2 << 16)
+#	define TEX9_SHADING_PS3_SOLID       (0 << 18)
+#	define TEX9_SHADING_PS3_FLAT        (1 << 18)
+#	define TEX9_SHADING_PS3_GOURAUD     (2 << 18)
+#	define TEX10_SHADING_PS3_SOLID      (0 << 20)
+#	define TEX10_SHADING_PS3_FLAT       (1 << 20)
+#	define TEX10_SHADING_PS3_GOURAUD    (2 << 20)
+#	define COLOR0_TEX_OVERRIDE_NO       (0 << 22)
+#	define COLOR0_TEX_OVERRIDE_TEX_0    (1 << 22)
+#	define COLOR0_TEX_OVERRIDE_TEX_1    (2 << 22)
+#	define COLOR0_TEX_OVERRIDE_TEX_2    (3 << 22)
+#	define COLOR0_TEX_OVERRIDE_TEX_3    (4 << 22)
+#	define COLOR0_TEX_OVERRIDE_TEX_4    (5 << 22)
+#	define COLOR0_TEX_OVERRIDE_TEX_5    (6 << 22)
+#	define COLOR0_TEX_OVERRIDE_TEX_6    (7 << 22)
+#	define COLOR0_TEX_OVERRIDE_TEX_7    (8 << 22)
+#	define COLOR0_TEX_OVERRIDE_TEX_8_C2 (9 << 22)
+#	define COLOR0_TEX_OVERRIDE_TEX_9_C3 (10 << 22)
+#	define COLOR1_TEX_OVERRIDE_NO       (0 << 26)
+#	define COLOR1_TEX_OVERRIDE_TEX_0    (1 << 26)
+#	define COLOR1_TEX_OVERRIDE_TEX_1    (2 << 26)
+#	define COLOR1_TEX_OVERRIDE_TEX_2    (3 << 26)
+#	define COLOR1_TEX_OVERRIDE_TEX_3    (4 << 26)
+#	define COLOR1_TEX_OVERRIDE_TEX_4    (5 << 26)
+#	define COLOR1_TEX_OVERRIDE_TEX_5    (6 << 26)
+#	define COLOR1_TEX_OVERRIDE_TEX_6    (7 << 26)
+#	define COLOR1_TEX_OVERRIDE_TEX_7    (8 << 26)
+#	define COLOR1_TEX_OVERRIDE_TEX_8_C2 (9 << 26)
+#	define COLOR1_TEX_OVERRIDE_TEX_9_C3 (10 << 26)
+
+/* Returns idle status of various G3D block, captured when GA_IDLE written or
+ * when hard or soft reset asserted.
+ */
+#define GA_IDLE                                  0x425c
+#	define GA_IDLE_PIPE3_Z_IDLE  (0 << 0)
+#	define GA_IDLE_PIPE2_Z_IDLE  (0 << 1)
+#	define GA_IDLE_PIPE3_CD_IDLE (0 << 2)
+#	define GA_IDLE_PIPE2_CD_IDLE (0 << 3)
+#	define GA_IDLE_PIPE3_FG_IDLE (0 << 4)
+#	define GA_IDLE_PIPE2_FG_IDLE (0 << 5)
+#	define GA_IDLE_PIPE3_US_IDLE (0 << 6)
+#	define GA_IDLE_PIPE2_US_IDLE (0 << 7)
+#	define GA_IDLE_PIPE3_SC_IDLE (0 << 8)
+#	define GA_IDLE_PIPE2_SC_IDLE (0 << 9)
+#	define GA_IDLE_PIPE3_RS_IDLE (0 << 10)
+#	define GA_IDLE_PIPE2_RS_IDLE (0 << 11)
+#	define GA_IDLE_PIPE1_Z_IDLE  (0 << 12)
+#	define GA_IDLE_PIPE0_Z_IDLE  (0 << 13)
+#	define GA_IDLE_PIPE1_CD_IDLE (0 << 14)
+#	define GA_IDLE_PIPE0_CD_IDLE (0 << 15)
+#	define GA_IDLE_PIPE1_FG_IDLE (0 << 16)
+#	define GA_IDLE_PIPE0_FG_IDLE (0 << 17)
+#	define GA_IDLE_PIPE1_US_IDLE (0 << 18)
+#	define GA_IDLE_PIPE0_US_IDLE (0 << 19)
+#	define GA_IDLE_PIPE1_SC_IDLE (0 << 20)
+#	define GA_IDLE_PIPE0_SC_IDLE (0 << 21)
+#	define GA_IDLE_PIPE1_RS_IDLE (0 << 22)
+#	define GA_IDLE_PIPE0_RS_IDLE (0 << 23)
+#	define GA_IDLE_SU_IDLE       (0 << 24)
+#	define GA_IDLE_GA_IDLE       (0 << 25)
+#	define GA_IDLE_GA_UNIT2_IDLE (0 << 26)
+
+/* Current value of stipple accumulator. */
+#define R300_GA_LINE_STIPPLE_VALUE            0x4260
+
+/* S Texture Coordinate Value for Vertex 0 of Line (stuff textures -- i.e. AA) */
+#define GA_LINE_S0                               0x4264
+/* S Texture Coordinate Value for Vertex 1 of Lines (V2 of parallelogram -- stuff textures -- i.e. AA) */
+#define GA_LINE_S1                               0x4268
+
+/* GA Input fifo high water marks */
+#define GA_FIFO_CNTL                             0x4270
+#	define GA_FIFO_CNTL_VERTEX_FIFO_MASK   0x00000007
+#	define GA_FIFO_CNTL_VERTEX_FIFO_SHIFT  0
+#	define GA_FIFO_CNTL_VERTEX_INDEX_MASK  0x00000038
+#	define GA_FIFO_CNTL_VERTEX_INDEX_SHIFT 3
+#	define GA_FIFO_CNTL_VERTEX_REG_MASK    0x00003fc0
+#	define GA_FIFO_CNTL_VERTEX_REG_SHIFT   6
 
 /* Something shade related */
-#define R300_RE_SHADE                         0x4274
+#define GA_ENHANCE                               0x4274
+#	define GA_ENHANCE_DEADLOCK_CNTL_NO_EFFECT   (0 << 0)
+#	define GA_ENHANCE_DEADLOCK_CNTL_PREVENT_TCL (1 << 0) /* Prevents TCL interface from deadlocking on GA side. */
+#	define GA_ENHANCE_FASTSYNC_CNTL_NO_EFFECT   (0 << 1)
+#	define GA_ENHANCE_FASTSYNC_CNTL_ENABLE      (1 << 1) /* Enables high-performance register/primitive switching. */
+#	define GA_ENHANCE_REG_READWRITE_NO_EFFECT   (0 << 2) /* R520+ only */
+#	define GA_ENHANCE_REG_READWRITE_ENABLE      (1 << 2) /* R520+ only, Enables GA support of simultaneous register reads and writes. */
+#	define GA_ENHANCE_REG_NOSTALL_NO_EFFECT     (0 << 3)
+#	define GA_ENHANCE_REG_NOSTALL_ENABLE        (1 << 3) /* Enables GA support of no-stall reads for register read back. */
 
-#define R300_RE_SHADE_MODEL                   0x4278
-#	define R300_RE_SHADE_MODEL_SMOOTH     0x3aaaa
-#	define R300_RE_SHADE_MODEL_FLAT       0x39595
+#define R300_GA_COLOR_CONTROL                   0x4278
+#	define R300_GA_COLOR_CONTROL_RGB0_SHADING_SOLID      (0 << 0)
+#	define R300_GA_COLOR_CONTROL_RGB0_SHADING_FLAT       (1 << 0)
+#	define R300_GA_COLOR_CONTROL_RGB0_SHADING_GOURAUD    (2 << 0)
+#	define R300_GA_COLOR_CONTROL_ALPHA0_SHADING_SOLID    (0 << 2)
+#	define R300_GA_COLOR_CONTROL_ALPHA0_SHADING_FLAT     (1 << 2)
+#	define R300_GA_COLOR_CONTROL_ALPHA0_SHADING_GOURAUD  (2 << 2)
+#	define R300_GA_COLOR_CONTROL_RGB1_SHADING_SOLID      (0 << 4)
+#	define R300_GA_COLOR_CONTROL_RGB1_SHADING_FLAT       (1 << 4)
+#	define R300_GA_COLOR_CONTROL_RGB1_SHADING_GOURAUD    (2 << 4)
+#	define R300_GA_COLOR_CONTROL_ALPHA1_SHADING_SOLID    (0 << 6)
+#	define R300_GA_COLOR_CONTROL_ALPHA1_SHADING_FLAT     (1 << 6)
+#	define R300_GA_COLOR_CONTROL_ALPHA1_SHADING_GOURAUD  (2 << 6)
+#	define R300_GA_COLOR_CONTROL_RGB2_SHADING_SOLID      (0 << 8)
+#	define R300_GA_COLOR_CONTROL_RGB2_SHADING_FLAT       (1 << 8)
+#	define R300_GA_COLOR_CONTROL_RGB2_SHADING_GOURAUD    (2 << 8)
+#	define R300_GA_COLOR_CONTROL_ALPHA2_SHADING_SOLID    (0 << 10)
+#	define R300_GA_COLOR_CONTROL_ALPHA2_SHADING_FLAT     (1 << 10)
+#	define R300_GA_COLOR_CONTROL_ALPHA2_SHADING_GOURAUD  (2 << 10)
+#	define R300_GA_COLOR_CONTROL_RGB3_SHADING_SOLID      (0 << 12)
+#	define R300_GA_COLOR_CONTROL_RGB3_SHADING_FLAT       (1 << 12)
+#	define R300_GA_COLOR_CONTROL_RGB3_SHADING_GOURAUD    (2 << 12)
+#	define R300_GA_COLOR_CONTROL_ALPHA3_SHADING_SOLID    (0 << 14)
+#	define R300_GA_COLOR_CONTROL_ALPHA3_SHADING_FLAT     (1 << 14)
+#	define R300_GA_COLOR_CONTROL_ALPHA3_SHADING_GOURAUD  (2 << 14)
+#	define R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_FIRST  (0 << 16)
+#	define R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_SECOND (1 << 16)
+#	define R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_THIRD  (2 << 16)
+#	define R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_LAST   (3 << 16)
 
-/* Dangerous */
-#define R300_RE_POLYGON_MODE                  0x4288
-#	define R300_PM_ENABLED                (1 << 0)
-#	define R300_PM_FRONT_POINT            (0 << 0)
-#	define R300_PM_BACK_POINT             (0 << 0)
-#	define R300_PM_FRONT_LINE             (1 << 4)
-#	define R300_PM_FRONT_FILL             (1 << 5)
-#	define R300_PM_BACK_LINE              (1 << 7)
-#	define R300_PM_BACK_FILL              (1 << 8)
+/** TODO: might be candidate for removal */
+#	define R300_RE_SHADE_MODEL_SMOOTH     ( \
+	R300_GA_COLOR_CONTROL_RGB0_SHADING_GOURAUD | R300_GA_COLOR_CONTROL_ALPHA0_SHADING_GOURAUD | \
+	R300_GA_COLOR_CONTROL_RGB1_SHADING_GOURAUD | R300_GA_COLOR_CONTROL_ALPHA1_SHADING_GOURAUD | \
+	R300_GA_COLOR_CONTROL_RGB2_SHADING_GOURAUD | R300_GA_COLOR_CONTROL_ALPHA2_SHADING_GOURAUD | \
+	R300_GA_COLOR_CONTROL_RGB3_SHADING_GOURAUD | R300_GA_COLOR_CONTROL_ALPHA3_SHADING_GOURAUD | \
+	R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_LAST )
+/** TODO: might be candidate for removal, the GOURAUD stuff also looks buggy to me */
+#	define R300_RE_SHADE_MODEL_FLAT     ( \
+	R300_GA_COLOR_CONTROL_RGB0_SHADING_FLAT | R300_GA_COLOR_CONTROL_ALPHA0_SHADING_FLAT | \
+	R300_GA_COLOR_CONTROL_RGB1_SHADING_FLAT | R300_GA_COLOR_CONTROL_ALPHA1_SHADING_GOURAUD | \
+	R300_GA_COLOR_CONTROL_RGB2_SHADING_FLAT | R300_GA_COLOR_CONTROL_ALPHA2_SHADING_FLAT | \
+	R300_GA_COLOR_CONTROL_RGB3_SHADING_FLAT | R300_GA_COLOR_CONTROL_ALPHA3_SHADING_GOURAUD | \
+	R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_LAST )
 
-/* Fog parameters */
+/* Specifies red & green components of fill color -- S312 format -- Backwards comp. */
+#define R300_GA_SOLID_RG                         0x427c
+#	define GA_SOLID_RG_COLOR_GREEN_SHIFT 0
+#	define GA_SOLID_RG_COLOR_GREEN_MASK  0x0000ffff
+#	define GA_SOLID_RG_COLOR_RED_SHIFT   16
+#	define GA_SOLID_RG_COLOR_RED_MASK    0xffff0000
+/* Specifies blue & alpha components of fill color -- S312 format -- Backwards comp. */
+#define R300_GA_SOLID_BA                         0x4280
+#	define GA_SOLID_BA_COLOR_ALPHA_SHIFT 0
+#	define GA_SOLID_BA_COLOR_ALPHA_MASK  0x0000ffff
+#	define GA_SOLID_BA_COLOR_BLUE_SHIFT  16
+#	define GA_SOLID_BA_COLOR_BLUE_MASK   0xffff0000
+
+/* Polygon Mode
+ * Dangerous
+ */
+#define GA_POLY_MODE                             0x4288
+#	define GA_POLY_MODE_DISABLE           (0 << 0)
+#	define GA_POLY_MODE_DUAL              (1 << 0) /* send 2 sets of 3 polys with specified poly type */
+/* reserved */
+#	define GA_POLY_MODE_FRONT_PTYPE_POINT (0 << 4)
+#	define GA_POLY_MODE_FRONT_PTYPE_LINE  (1 << 4)
+#	define GA_POLY_MODE_FRONT_PTYPE_TRI   (2 << 4)
+/* reserved */
+#	define GA_POLY_MODE_BACK_PTYPE_POINT  (0 << 7)
+#	define GA_POLY_MODE_BACK_PTYPE_LINE   (1 << 7)
+#	define GA_POLY_MODE_BACK_PTYPE_TRI    (2 << 7)
+/* reserved */
+
+/* Specifies the rouding mode for geometry & color SPFP to FP conversions. */
+#define GA_ROUND_MODE                            0x428c
+#	define GA_ROUND_MODE_GEOMETRY_ROUND_TRUNC   (0 << 0)
+#	define GA_ROUND_MODE_GEOMETRY_ROUND_NEAREST (1 << 0)
+#	define GA_ROUND_MODE_COLOR_ROUND_TRUNC      (0 << 2)
+#	define GA_ROUND_MODE_COLOR_ROUND_NEAREST    (1 << 2)
+#	define GA_ROUND_MODE_RGB_CLAMP_RGB          (0 << 4)
+#	define GA_ROUND_MODE_RGB_CLAMP_FP20         (1 << 4)
+#	define GA_ROUND_MODE_ALPHA_CLAMP_RGB        (0 << 5)
+#	define GA_ROUND_MODE_ALPHA_CLAMP_FP20       (1 << 5)
+#	define GA_ROUND_MODE_GEOMETRY_MASK_SHIFT    6
+#	define GA_ROUND_MODE_GEOMETRY_MASK_MASK     0x000003c0
+
+/* Specifies x & y offsets for vertex data after conversion to FP.
+ * Offsets are in S15 format (subpixels -- 1/12 or 1/16, even in 8b
+ * subprecision).
+ */
+#define GA_OFFSET                                0x4290
+#	define GA_OFFSET_X_OFFSET_SHIFT 0
+#	define GA_OFFSET_X_OFFSET_MASK  0x0000ffff
+#	define GA_OFFSET_Y_OFFSET_SHIFT 16
+#	define GA_OFFSET_Y_OFFSET_MASK  0xffff0000
+
+/* Specifies the scale to apply to fog. */
 #define R300_RE_FOG_SCALE                     0x4294
+/* Specifies the offset to apply to fog. */
 #define R300_RE_FOG_START                     0x4298
 
 /* Not sure why there are duplicate of factor and constant values.
@@ -639,22 +1077,33 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_FRONT_FACE_CCW               (0 << 2)
 #       define R300_FRONT_FACE_CW                (1 << 2)
 
+/* SU Depth Scale value */
+#define R300_SU_DEPTH_SCALE                 0x42c0
+/* SU Depth Offset value */
+#define R300_SU_DEPTH_OFFSET                0x42c4
+
 
 /* BEGIN: Rasterization / Interpolators - many guesses */
 
-/* 0_UNKNOWN_18 has always been set except for clear operations.
+/*
  * TC_CNT is the number of incoming texture coordinate sets (i.e. it depends
  * on the vertex program, *not* the fragment program)
  */
-#define R300_RS_CNTL_0                      0x4300
-#       define R300_RS_CNTL_TC_CNT_SHIFT         2
-#       define R300_RS_CNTL_TC_CNT_MASK          (7 << 2)
-	/* number of color interpolators used */
-#	define R300_RS_CNTL_CI_CNT_SHIFT         7
-#       define R300_RS_CNTL_0_UNKNOWN_18         (1 << 18)
-	/* Guess: RS_CNTL_1 holds the index of the highest used RS_ROUTE_n
-	   register. */
-#define R300_RS_CNTL_1                      0x4304
+#define R300_RS_COUNT                      0x4300
+#       define R300_IT_COUNT_SHIFT               0
+#       define R300_IT_COUNT_MASK                0x0000007f
+#       define R300_IC_COUNT_SHIFT               7
+#       define R300_IC_COUNT_MASK                0x00000780
+#       define R300_W_ADDR_SHIFT                 12
+#       define R300_W_ADDR_MASK                  0x0003f000
+#       define R300_HIRES_DIS                    (0 << 18)
+#       define R300_HIRES_EN                     (1 << 18)
+
+#define R300_RS_INST_COUNT                       0x4304
+#       define R300_RS_INST_COUNT_SHIFT          0
+#       define R300_RS_INST_COUNT_MASK           0x0000000f
+#       define R300_RS_TX_OFFSET_SHIFT           5
+#	define R300_RS_TX_OFFSET_MASK            0x000000e0
 
 /* gap */
 
@@ -671,62 +1120,106 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  * Note: The _UNKNOWN constants are always set in their respective
  * register. I don't know if this is necessary.
  */
-#define R300_RS_INTERP_0                    0x4310
-#define R300_RS_INTERP_1                    0x4314
-#       define R300_RS_INTERP_1_UNKNOWN          0x40
-#define R300_RS_INTERP_2                    0x4318
-#       define R300_RS_INTERP_2_UNKNOWN          0x80
-#define R300_RS_INTERP_3                    0x431C
-#       define R300_RS_INTERP_3_UNKNOWN          0xC0
-#define R300_RS_INTERP_4                    0x4320
-#define R300_RS_INTERP_5                    0x4324
-#define R300_RS_INTERP_6                    0x4328
-#define R300_RS_INTERP_7                    0x432C
-#       define R300_RS_INTERP_SRC_SHIFT          2
-#       define R300_RS_INTERP_SRC_MASK           (7 << 2)
-#       define R300_RS_INTERP_USED               0x00D10000
+#define R300_RS_IP_0				        0x4310
+#define R300_RS_IP_1				        0x4314
+#define R300_RS_IP_2				        0x4318
+#define R300_RS_IP_3				        0x431C
+#       define R300_RS_INTERP_SRC_SHIFT          2 /* TODO: check for removal */
+#       define R300_RS_INTERP_SRC_MASK           (7 << 2) /* TODO: check for removal */
+#	define R300_RS_TEX_PTR(x)		        (x << 0)
+#	define R300_RS_COL_PTR(x)		        (x << 6)
+#	define R300_RS_COL_FMT(x)		        (x << 9)
+#	define R300_RS_COL_FMT_RGBA		        0
+#	define R300_RS_COL_FMT_RGB0		        2
+#	define R300_RS_COL_FMT_RGB1		        3
+#	define R300_RS_COL_FMT_000A		        4
+#	define R300_RS_COL_FMT_0000		        5
+#	define R300_RS_COL_FMT_0001		        6
+#	define R300_RS_COL_FMT_111A		        8
+#	define R300_RS_COL_FMT_1110		        9
+#	define R300_RS_COL_FMT_1111		        10
+#	define R300_RS_SEL_S(x)		                (x << 13)
+#	define R300_RS_SEL_T(x)		                (x << 16)
+#	define R300_RS_SEL_R(x)		                (x << 19)
+#	define R300_RS_SEL_Q(x)		                (x << 22)
+#	define R300_RS_SEL_C0		                0
+#	define R300_RS_SEL_C1		                1
+#	define R300_RS_SEL_C2		                2
+#	define R300_RS_SEL_C3		                3
+#	define R300_RS_SEL_K0		                4
+#	define R300_RS_SEL_K1		                5
+
+
+/*  */
+#define R500_RS_INST_0					0x4320
+#define R500_RS_INST_1					0x4324
+#define R500_RS_INST_2					0x4328
+#define R500_RS_INST_3					0x432c
+#define R500_RS_INST_4					0x4330
+#define R500_RS_INST_5					0x4334
+#define R500_RS_INST_6					0x4338
+#define R500_RS_INST_7					0x433c
+#define R500_RS_INST_8					0x4340
+#define R500_RS_INST_9					0x4344
+#define R500_RS_INST_10					0x4348
+#define R500_RS_INST_11					0x434c
+#define R500_RS_INST_12					0x4350
+#define R500_RS_INST_13					0x4354
+#define R500_RS_INST_14					0x4358
+#define R500_RS_INST_15					0x435c
+#define R500_RS_INST_TEX_ID_SHIFT			0
+#define R500_RS_INST_TEX_CN_WRITE			(1 << 4)
+#define R500_RS_INST_TEX_ADDR_SHIFT			5
+#define R500_RS_INST_COL_ID_SHIFT			12
+#define R500_RS_INST_COL_CN_NO_WRITE			(0 << 16)
+#define R500_RS_INST_COL_CN_WRITE			(1 << 16)
+#define R500_RS_INST_COL_CN_WRITE_FBUFFER		(2 << 16)
+#define R500_RS_INST_COL_CN_WRITE_BACKFACE		(3 << 16)
+#define R500_RS_INST_COL_ADDR_SHIFT			18
+#define R500_RS_INST_TEX_ADJ				(1 << 25)
+#define R500_RS_INST_W_CN				(1 << 26)
 
 /* These DWORDs control how vertex data is routed into fragment program
  * registers, after interpolators.
  */
-#define R300_RS_ROUTE_0                     0x4330
-#define R300_RS_ROUTE_1                     0x4334
-#define R300_RS_ROUTE_2                     0x4338
-#define R300_RS_ROUTE_3                     0x433C /* GUESS */
-#define R300_RS_ROUTE_4                     0x4340 /* GUESS */
-#define R300_RS_ROUTE_5                     0x4344 /* GUESS */
-#define R300_RS_ROUTE_6                     0x4348 /* GUESS */
-#define R300_RS_ROUTE_7                     0x434C /* GUESS */
-#       define R300_RS_ROUTE_SOURCE_INTERP_0     0
-#       define R300_RS_ROUTE_SOURCE_INTERP_1     1
-#       define R300_RS_ROUTE_SOURCE_INTERP_2     2
-#       define R300_RS_ROUTE_SOURCE_INTERP_3     3
-#       define R300_RS_ROUTE_SOURCE_INTERP_4     4
-#       define R300_RS_ROUTE_SOURCE_INTERP_5     5 /* GUESS */
-#       define R300_RS_ROUTE_SOURCE_INTERP_6     6 /* GUESS */
-#       define R300_RS_ROUTE_SOURCE_INTERP_7     7 /* GUESS */
-#       define R300_RS_ROUTE_ENABLE              (1 << 3) /* GUESS */
-#       define R300_RS_ROUTE_DEST_SHIFT          6
-#       define R300_RS_ROUTE_DEST_MASK           (31 << 6) /* GUESS */
+#define R300_RS_INST_0                     0x4330
+#define R300_RS_INST_1                     0x4334
+#define R300_RS_INST_2                     0x4338
+#define R300_RS_INST_3                     0x433C /* GUESS */
+#define R300_RS_INST_4                     0x4340 /* GUESS */
+#define R300_RS_INST_5                     0x4344 /* GUESS */
+#define R300_RS_INST_6                     0x4348 /* GUESS */
+#define R300_RS_INST_7                     0x434C /* GUESS */
+#	define R300_RS_INST_TEX_ID(x)  		((x) << 0)
+#	define R300_RS_INST_TEX_CN_WRITE 	(1 << 3)
+#	define R300_RS_INST_TEX_ADDR_SHIFT 	6
+#	define R300_RS_INST_COL_ID(x)		((x) << 11)
+#	define R300_RS_INST_COL_CN_WRITE	(1 << 14)
+#	define R300_RS_INST_COL_ADDR_SHIFT	17
+#	define R300_RS_INST_TEX_ADJ		(1 << 22)
+#	define R300_RS_COL_BIAS_UNUSED_SHIFT    23
 
-/* Special handling for color: When the fragment program uses color,
- * the ROUTE_0_COLOR bit is set and ROUTE_0_COLOR_DEST contains the
- * color register index.
- *
- * Apperently you may set the R300_RS_ROUTE_0_COLOR bit, but not provide any
- * R300_RS_ROUTE_0_COLOR_DEST value; this setup is used for clearing the state.
- * See r300_ioctl.c:r300EmitClearState. I'm not sure if this setup is strictly
- * correct or not. - Oliver.
- */
-#       define R300_RS_ROUTE_0_COLOR             (1 << 14)
-#       define R300_RS_ROUTE_0_COLOR_DEST_SHIFT  17
-#       define R300_RS_ROUTE_0_COLOR_DEST_MASK   (31 << 17) /* GUESS */
-/* As above, but for secondary color */
-#		define R300_RS_ROUTE_1_COLOR1            (1 << 14)
-#		define R300_RS_ROUTE_1_COLOR1_DEST_SHIFT 17
-#		define R300_RS_ROUTE_1_COLOR1_DEST_MASK  (31 << 17)
-#		define R300_RS_ROUTE_1_UNKNOWN11         (1 << 11)
 /* END: Rasterization / Interpolators - many guesses */
+
+/* Hierarchical Z Enable */
+#define R300_SC_HYPERZ                   0x43a4
+#	define R300_SC_HYPERZ_DISABLE     (0 << 0)
+#	define R300_SC_HYPERZ_ENABLE      (1 << 0)
+#	define R300_SC_HYPERZ_MIN         (0 << 1)
+#	define R300_SC_HYPERZ_MAX         (1 << 1)
+#	define R300_SC_HYPERZ_ADJ_256     (0 << 2)
+#	define R300_SC_HYPERZ_ADJ_128     (1 << 2)
+#	define R300_SC_HYPERZ_ADJ_64      (2 << 2)
+#	define R300_SC_HYPERZ_ADJ_32      (3 << 2)
+#	define R300_SC_HYPERZ_ADJ_16      (4 << 2)
+#	define R300_SC_HYPERZ_ADJ_8       (5 << 2)
+#	define R300_SC_HYPERZ_ADJ_4       (6 << 2)
+#	define R300_SC_HYPERZ_ADJ_2       (7 << 2)
+#	define R300_SC_HYPERZ_HZ_Z0MIN_NO (0 << 5)
+#	define R300_SC_HYPERZ_HZ_Z0MIN    (1 << 5)
+#	define R300_SC_HYPERZ_HZ_Z0MAX_NO (0 << 6)
+#	define R300_SC_HYPERZ_HZ_Z0MAX    (1 << 6)
+
 
 /* BEGIN: Scissors and cliprects */
 
@@ -785,6 +1278,10 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_SCISSORS_X_MASK              (0x1FFF << 0)
 #       define R300_SCISSORS_Y_SHIFT             13
 #       define R300_SCISSORS_Y_MASK              (0x1FFF << 13)
+
+/* Screen door sample mask */
+#define R300_SC_SCREENDOOR                 0x43e8
+
 /* END: Scissors and cliprects */
 
 /* BEGIN: Texture specification */
@@ -794,27 +1291,46 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  * unit. This means that e.g. the offset for texture image unit N is found in
  * register TX_OFFSET_0 + (4*N)
  */
-#define R300_TX_FILTER_0                    0x4400
+#define R300_TX_FILTER0_0                        0x4400
+#define R300_TX_FILTER0_1                        0x4404
+#define R300_TX_FILTER0_2                        0x4408
+#define R300_TX_FILTER0_3                        0x440c
+#define R300_TX_FILTER0_4                        0x4410
+#define R300_TX_FILTER0_5                        0x4414
+#define R300_TX_FILTER0_6                        0x4418
+#define R300_TX_FILTER0_7                        0x441c
+#define R300_TX_FILTER0_8                        0x4420
+#define R300_TX_FILTER0_9                        0x4424
+#define R300_TX_FILTER0_10                       0x4428
+#define R300_TX_FILTER0_11                       0x442c
+#define R300_TX_FILTER0_12                       0x4430
+#define R300_TX_FILTER0_13                       0x4434
+#define R300_TX_FILTER0_14                       0x4438
+#define R300_TX_FILTER0_15                       0x443c
 #       define R300_TX_REPEAT                    0
 #       define R300_TX_MIRRORED                  1
-#       define R300_TX_CLAMP                     4
 #       define R300_TX_CLAMP_TO_EDGE             2
+#	define R300_TX_MIRROR_ONCE_TO_EDGE       3
+#       define R300_TX_CLAMP                     4
+#	define R300_TX_MIRROR_ONCE               5
 #       define R300_TX_CLAMP_TO_BORDER           6
+#	define R300_TX_MIRROR_ONCE_TO_BORDER     7
 #       define R300_TX_WRAP_S_SHIFT              0
 #       define R300_TX_WRAP_S_MASK               (7 << 0)
 #       define R300_TX_WRAP_T_SHIFT              3
 #       define R300_TX_WRAP_T_MASK               (7 << 3)
 #       define R300_TX_WRAP_Q_SHIFT              6
 #       define R300_TX_WRAP_Q_MASK               (7 << 6)
+#	define R300_TX_MAG_FILTER_4              (0 << 9)
 #       define R300_TX_MAG_FILTER_NEAREST        (1 << 9)
 #       define R300_TX_MAG_FILTER_LINEAR         (2 << 9)
 #       define R300_TX_MAG_FILTER_MASK           (3 << 9)
 #       define R300_TX_MIN_FILTER_NEAREST        (1 << 11)
 #       define R300_TX_MIN_FILTER_LINEAR         (2 << 11)
-#	define R300_TX_MIN_FILTER_NEAREST_MIP_NEAREST       (5  <<  11)
-#	define R300_TX_MIN_FILTER_NEAREST_MIP_LINEAR        (9  <<  11)
-#	define R300_TX_MIN_FILTER_LINEAR_MIP_NEAREST        (6  <<  11)
-#	define R300_TX_MIN_FILTER_LINEAR_MIP_LINEAR         (10 <<  11)
+#	define R300_TX_MIN_FILTER_NEAREST_MIP_NEAREST       (5  <<  11) /* TODO: use spec */
+#	define R300_TX_MIN_FILTER_NEAREST_MIP_LINEAR        (9  <<  11) /* TODO: use spec */
+#	define R300_TX_MIN_FILTER_LINEAR_MIP_NEAREST        (6  <<  11) /* TODO: use spec */
+#	define R300_TX_MIN_FILTER_LINEAR_MIP_LINEAR         (10 <<  11) /* TODO: use spec */
 
 /* NOTE: NEAREST doesnt seem to exist.
  * Im not seting MAG_FILTER_MASK and (3 << 11) on for all
@@ -849,12 +1365,16 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_TX_TRI_PERF_3_8            (3<<15)
 #	define R300_ANISO_THRESHOLD_MASK       (7<<17)
 
+#	define R500_MACRO_SWITCH               (1<<22)
+#	define R500_BORDER_FIX                 (1<<31)
+
 #define R300_TX_SIZE_0                      0x4480
 #       define R300_TX_WIDTHMASK_SHIFT           0
 #       define R300_TX_WIDTHMASK_MASK            (2047 << 0)
 #       define R300_TX_HEIGHTMASK_SHIFT          11
 #       define R300_TX_HEIGHTMASK_MASK           (2047 << 11)
-#       define R300_TX_UNK23                     (1 << 23)
+#	define R300_TX_DEPTHMASK_SHIFT		 22
+#	define R300_TX_DEPTHMASK_MASK		 (0xf << 22)
 #       define R300_TX_MAX_MIP_LEVEL_SHIFT       26
 #       define R300_TX_MAX_MIP_LEVEL_MASK        (0xf << 26)
 #       define R300_TX_SIZE_PROJECTED            (1<<30)
@@ -865,7 +1385,9 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 	   They are given meanings as R, G, B and Alpha by the swizzle
 	   specification */
 #	define R300_TX_FORMAT_X8		    0x0
+#	define R500_TX_FORMAT_X1		    0x0 // bit set in format 2 
 #	define R300_TX_FORMAT_X16		    0x1
+#	define R500_TX_FORMAT_X1_REV		    0x0 // bit set in format 2 
 #	define R300_TX_FORMAT_Y4X4		    0x2
 #	define R300_TX_FORMAT_Y8X8		    0x3
 #	define R300_TX_FORMAT_Y16X16		    0x4
@@ -886,6 +1408,14 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_TX_FORMAT_A8R8G8B8	    	    0x13     /* no swizzle */
 #	define R300_TX_FORMAT_B8G8_B8G8	    	    0x14     /* no swizzle */
 #	define R300_TX_FORMAT_G8R8_G8B8	    	    0x15     /* no swizzle */
+
+	/* These two values are wrong, but they're the only values that
+	 * produce any even vaguely correct results.  Can r300 only do 16-bit
+	 * depth textures?
+	 */
+#	define R300_TX_FORMAT_X24_Y8	    	    0x1e
+#	define R300_TX_FORMAT_X32	    	    0x1e
+
 	/* 0x16 - some 16 bit green format.. ?? */
 #	define R300_TX_FORMAT_UNK25		   (1 << 25) /* no swizzle */
 #	define R300_TX_FORMAT_CUBIC_MAP		   (1 << 26)
@@ -941,7 +1471,18 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #	define R300_TX_FORMAT_YUV_MODE		0x00800000
 
-#define R300_TX_PITCH_0			    0x4500 /* obvious missing in gap */
+#define R300_TX_FORMAT2_0		    0x4500 /* obvious missing in gap */
+#       define R300_TX_PITCHMASK_SHIFT           0
+#       define R300_TX_PITCHMASK_MASK            (2047 << 0)
+#	define R500_TXFORMAT_MSB		 (1 << 14)
+#	define R500_TXWIDTH_BIT11	         (1 << 15)
+#	define R500_TXHEIGHT_BIT11	         (1 << 16)
+#	define R500_POW2FIX2FLT			 (1 << 17)
+#	define R500_SEL_FILTER4_TC0		 (0 << 18)
+#	define R500_SEL_FILTER4_TC1		 (1 << 18)
+#	define R500_SEL_FILTER4_TC2		 (2 << 18)
+#	define R500_SEL_FILTER4_TC3		 (3 << 18)
+
 #define R300_TX_OFFSET_0                    0x4540
 	/* BEGIN: Guess from R200 */
 #       define R300_TXO_ENDIAN_NO_SWAP           (0 << 0)
@@ -949,15 +1490,50 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_TXO_ENDIAN_WORD_SWAP         (2 << 0)
 #       define R300_TXO_ENDIAN_HALFDW_SWAP       (3 << 0)
 #       define R300_TXO_MACRO_TILE               (1 << 2)
+#       define R300_TXO_MICRO_TILE_LINEAR        (0 << 3)
 #       define R300_TXO_MICRO_TILE               (1 << 3)
+#       define R300_TXO_MICRO_TILE_SQUARE        (2 << 3)
 #       define R300_TXO_OFFSET_MASK              0xffffffe0
 #       define R300_TXO_OFFSET_SHIFT             5
 	/* END: Guess from R200 */
 
 /* 32 bit chroma key */
 #define R300_TX_CHROMA_KEY_0                      0x4580
+#define R300_TX_CHROMA_KEY_1                      0x4584
+#define R300_TX_CHROMA_KEY_2                      0x4588
+#define R300_TX_CHROMA_KEY_3                      0x458c
+#define R300_TX_CHROMA_KEY_4                      0x4590
+#define R300_TX_CHROMA_KEY_5                      0x4594
+#define R300_TX_CHROMA_KEY_6                      0x4598
+#define R300_TX_CHROMA_KEY_7                      0x459c
+#define R300_TX_CHROMA_KEY_8                      0x45a0
+#define R300_TX_CHROMA_KEY_9                      0x45a4
+#define R300_TX_CHROMA_KEY_10                     0x45a8
+#define R300_TX_CHROMA_KEY_11                     0x45ac
+#define R300_TX_CHROMA_KEY_12                     0x45b0
+#define R300_TX_CHROMA_KEY_13                     0x45b4
+#define R300_TX_CHROMA_KEY_14                     0x45b8
+#define R300_TX_CHROMA_KEY_15                     0x45bc
 /* ff00ff00 == { 0, 1.0, 0, 1.0 } */
-#define R300_TX_BORDER_COLOR_0              0x45C0
+
+/* Border Color */
+#define R300_TX_BORDER_COLOR_0              0x45c0
+#define R300_TX_BORDER_COLOR_1              0x45c4
+#define R300_TX_BORDER_COLOR_2              0x45c8
+#define R300_TX_BORDER_COLOR_3              0x45cc
+#define R300_TX_BORDER_COLOR_4              0x45d0
+#define R300_TX_BORDER_COLOR_5              0x45d4
+#define R300_TX_BORDER_COLOR_6              0x45d8
+#define R300_TX_BORDER_COLOR_7              0x45dc
+#define R300_TX_BORDER_COLOR_8              0x45e0
+#define R300_TX_BORDER_COLOR_9              0x45e4
+#define R300_TX_BORDER_COLOR_10             0x45e8
+#define R300_TX_BORDER_COLOR_11             0x45ec
+#define R300_TX_BORDER_COLOR_12             0x45f0
+#define R300_TX_BORDER_COLOR_13             0x45f4
+#define R300_TX_BORDER_COLOR_14             0x45f8
+#define R300_TX_BORDER_COLOR_15             0x45fc
+
 
 /* END: Texture specification */
 
@@ -1046,6 +1622,31 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #		define R300_FPITX_OP_TXP	3
 #		define R300_FPITX_OP_TXB	4
 #	define R300_FPITX_OPCODE_MASK           (7 << 15)
+
+/* Output format from the unfied shader */
+#define R500_US_OUT_FMT                     0x46A4
+#	define R500_US_OUT_FMT_C4_8         (0 << 0)
+#	define R500_US_OUT_FMT_C4_10        (1 << 0)
+#	define R500_US_OUT_FMT_C4_10_GAMMA  (2 << 0)
+#	define R500_US_OUT_FMT_C_16         (3 << 0)
+#	define R500_US_OUT_FMT_C2_16        (4 << 0)
+#	define R500_US_OUT_FMT_C4_16        (5 << 0)
+#	define R500_US_OUT_FMT_C_16_MPEG    (6 << 0)
+#	define R500_US_OUT_FMT_C2_16_MPEG   (7 << 0)
+#	define R500_US_OUT_FMT_C2_4         (8 << 0)
+#	define R500_US_OUT_FMT_C_3_3_2      (9 << 0)
+#	define R500_US_OUT_FMT_C_6_5_6      (10 << 0)
+#	define R500_US_OUT_FMT_C_11_11_10   (11 << 0)
+#	define R500_US_OUT_FMT_C_10_11_11   (12 << 0)
+#	define R500_US_OUT_FMT_C_2_10_10_10 (13 << 0)
+/* reserved */
+#	define R500_US_OUT_FMT_UNUSED       (15 << 0)
+#	define R500_US_OUT_FMT_C_16_FP      (16 << 0)
+#	define R500_US_OUT_FMT_C2_16_FP     (17 << 0)
+#	define R500_US_OUT_FMT_C4_16_FP     (18 << 0)
+#	define R500_US_OUT_FMT_C_32_FP      (19 << 0)
+#	define R500_US_OUT_FMT_C2_32_FP     (20 << 0)
+#	define R500_US_OUT_FMT_C4_32_FP     (20 << 0)
 
 /* ALU
  * The ALU instructions register blocks are enumerated according to the order
@@ -1254,29 +1855,70 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_FPI2_UNKNOWN_31              (1 << 31)
 /* END: Fragment program instruction set */
 
-/* Fog state and color */
-#define R300_RE_FOG_STATE                   0x4BC0
-#       define R300_FOG_ENABLE                   (1 << 0)
-#	define R300_FOG_MODE_LINEAR              (0 << 1)
-#	define R300_FOG_MODE_EXP                 (1 << 1)
-#	define R300_FOG_MODE_EXP2                (2 << 1)
-#	define R300_FOG_MODE_MASK                (3 << 1)
-#define R300_FOG_COLOR_R                    0x4BC8
-#define R300_FOG_COLOR_G                    0x4BCC
-#define R300_FOG_COLOR_B                    0x4BD0
+/* Fog: Fog Blending Enable */
+#define FG_FOG_BLEND                             0x4bc0
+#       define FG_FOG_BLEND_DISABLE              (0 << 0)
+#       define FG_FOG_BLEND_ENABLE               (1 << 0)
+#	define FG_FOG_BLEND_FN_LINEAR            (0 << 1)
+#	define FG_FOG_BLEND_FN_EXP               (1 << 1)
+#	define FG_FOG_BLEND_FN_EXP2              (2 << 1)
+#	define FG_FOG_BLEND_FN_CONSTANT          (3 << 1)
+#	define FG_FOG_BLEND_FN_MASK              0x00000006
 
-#define R300_PP_ALPHA_TEST                  0x4BD4
+/* Fog: Red Component of Fog Color */
+#define FG_FOG_COLOR_R                           0x4bc8
+/* Fog: Green Component of Fog Color */
+#define FG_FOG_COLOR_G                           0x4bcc
+/* Fog: Blue Component of Fog Color */
+#define FG_FOG_COLOR_B                           0x4bd0
+#	define FG_FOG_COLOR_MASK 0x000001ff
+
+/* Fog: Constant Factor for Fog Blending */
+#define FG_FOG_FACTOR                            0x4bc4
+#	define FG_FOG_FACTOR_MASK 0x000001ff
+
+/* Fog: Alpha function */
+#define FG_ALPHA_FUNC                            0x4bd4
 #       define R300_REF_ALPHA_MASK               0x000000ff
-#       define R300_ALPHA_TEST_FAIL              (0 << 8)
-#       define R300_ALPHA_TEST_LESS              (1 << 8)
-#       define R300_ALPHA_TEST_LEQUAL            (3 << 8)
-#       define R300_ALPHA_TEST_EQUAL             (2 << 8)
-#       define R300_ALPHA_TEST_GEQUAL            (6 << 8)
-#       define R300_ALPHA_TEST_GREATER           (4 << 8)
-#       define R300_ALPHA_TEST_NEQUAL            (5 << 8)
-#       define R300_ALPHA_TEST_PASS              (7 << 8)
-#       define R300_ALPHA_TEST_OP_MASK           (7 << 8)
-#       define R300_ALPHA_TEST_ENABLE            (1 << 11)
+#       define FG_ALPHA_FUNC_NEVER                     (0 << 8)
+#       define FG_ALPHA_FUNC_LESS                      (1 << 8)
+#       define FG_ALPHA_FUNC_EQUAL                     (2 << 8)
+#       define FG_ALPHA_FUNC_LE                        (3 << 8)
+#       define FG_ALPHA_FUNC_GREATER                   (4 << 8)
+#       define FG_ALPHA_FUNC_NOTEQUAL                  (5 << 8)
+#       define FG_ALPHA_FUNC_GE                        (6 << 8)
+#       define FG_ALPHA_FUNC_ALWAYS                    (7 << 8)
+#       define R300_ALPHA_TEST_OP_MASK                 (7 << 8)
+#       define FG_ALPHA_FUNC_DISABLE                   (0 << 11)
+#       define FG_ALPHA_FUNC_ENABLE                    (1 << 11)
+#       define FG_ALPHA_FUNC_10BIT                     (0 << 12)
+#       define FG_ALPHA_FUNC_8BIT                      (1 << 12)
+/* gap in AMD spec */
+#       define FG_ALPHA_FUNC_MASK_DISABLE              (0 << 16)
+#       define FG_ALPHA_FUNC_MASK_ENABLE               (1 << 16)
+#       define FG_ALPHA_FUNC_CFG_2_OF_4                (0 << 17)
+#       define FG_ALPHA_FUNC_CFG_3_OF_6                (1 << 17)
+/* gap in AMD spec */
+#       define FG_ALPHA_FUNC_DITH_DISABLE              (0 << 20)
+#       define FG_ALPHA_FUNC_DITH_ENABLE               (1 << 20)
+/* gap in AMD spec */
+#       define FG_ALPHA_FUNC_OFFSET_DISABLE            (0 << 24) /* Not supported in R520. Default R300 and RV350 behaviour. */
+#       define FG_ALPHA_FUNC_OFFSET_ENABLE             (1 << 24) /* Not supported in R520 */
+#       define FG_ALPHA_FUNC_DISC_ZERO_MASK_DISABLE    (0 << 25)
+#       define FG_ALPHA_FUNC_DISC_ZERO_MASK_ENABLE     (1 << 25)
+/* gap in AMD spec */
+#       define FG_ALPHA_FUNC_FP16_DISABLE              (0 << 28)
+#       define FG_ALPHA_FUNC_FP16_ENABLE               (1 << 28)
+/* gap in AMD spec */
+
+/* Fog: Where does the depth come from? */
+#define R300_FG_DEPTH_SRC                  0x4bd8
+#	define R300_FG_DEPTH_SRC_SCAN   (0 << 0)
+#	define R300_FG_DEPTH_SRC_SHADER (1 << 0)
+
+/* Fog: Alpha Compare Value */
+#define FG_ALPHA_VALUE                0x4be0
+#	define FG_ALPHA_VALUE_MASK 0x0000ffff
 
 /* gap */
 
@@ -1290,6 +1932,29 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define R300_PFS_PARAM_31_Y                 0x4DF4
 #define R300_PFS_PARAM_31_Z                 0x4DF8
 #define R300_PFS_PARAM_31_W                 0x4DFC
+
+/* Unpipelined. */
+#define R300_RB3D_CCTL                      0x4e00
+/* gap in AMD docs */
+#	define R300_RB3D_CCTL_NUM_MULTIWRITES_1_BUFFER                (0 << 5)
+#	define R300_RB3D_CCTL_NUM_MULTIWRITES_2_BUFFERS               (1 << 5)
+#	define R300_RB3D_CCTL_NUM_MULTIWRITES_3_BUFFERS               (2 << 5)
+#	define R300_RB3D_CCTL_NUM_MULTIWRITES_4_BUFFERS               (3 << 5)
+#	define R300_RB3D_CCTL_CLRCMP_FLIPE_DISABLE                    (0 << 7)
+#	define R300_RB3D_CCTL_CLRCMP_FLIPE_ENABLE                     (1 << 7)
+/* gap in AMD docs */
+#	define R300_RB3D_CCTL_AA_COMPRESSION_DISABLE                  (0 << 9)
+#	define R300_RB3D_CCTL_AA_COMPRESSION_ENABLE                   (1 << 9)
+#	define R300_RB3D_CCTL_CMASK_DISABLE                           (0 << 10)
+#	define R300_RB3D_CCTL_CMASK_ENABLE                            (1 << 10)
+/* reserved */
+#	define R300_RB3D_CCTL_INDEPENDENT_COLOR_CHANNEL_MASK_DISABLE  (0 << 12)
+#	define R300_RB3D_CCTL_INDEPENDENT_COLOR_CHANNEL_MASK_ENABLE   (1 << 12)
+#	define R300_RB3D_CCTL_WRITE_COMPRESSION_ENABLE                (0 << 13)
+#	define R300_RB3D_CCTL_WRITE_COMPRESSION_DISABLE               (1 << 13)
+#	define R300_RB3D_CCTL_INDEPENDENT_COLORFORMAT_ENABLE_DISABLE  (0 << 14)
+#	define R300_RB3D_CCTL_INDEPENDENT_COLORFORMAT_ENABLE_ENABLE   (1 << 14)
+
 
 /* Notes:
  * - AFAIK fglrx always sets BLEND_UNKNOWN when blending is used in
@@ -1333,48 +1998,198 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_BLEND_MASK                       (63)
 #       define R300_SRC_BLEND_SHIFT                  (16)
 #       define R300_DST_BLEND_SHIFT                  (24)
+
+/* Constant color used by the blender. Pipelined through the blender.
+ * Note: For R520, this field is ignored, use RB3D_CONSTANT_COLOR_GB__BLUE,
+ * RB3D_CONSTANT_COLOR_GB__GREEN, etc. instead.
+ */
 #define R300_RB3D_BLEND_COLOR               0x4E10
-#define R300_RB3D_COLORMASK                 0x4E0C
-#       define R300_COLORMASK0_B                 (1<<0)
-#       define R300_COLORMASK0_G                 (1<<1)
-#       define R300_COLORMASK0_R                 (1<<2)
-#       define R300_COLORMASK0_A                 (1<<3)
+
+
+/* 3D Color Channel Mask. If all the channels used in the current color format
+ * are disabled, then the cb will discard all the incoming quads. Pipelined
+ * through the blender.
+ */
+#define RB3D_COLOR_CHANNEL_MASK                  0x4E0C
+#	define RB3D_COLOR_CHANNEL_MASK_BLUE_MASK0  (1 << 0)
+#	define RB3D_COLOR_CHANNEL_MASK_GREEN_MASK0 (1 << 1)
+#	define RB3D_COLOR_CHANNEL_MASK_RED_MASK0   (1 << 2)
+#	define RB3D_COLOR_CHANNEL_MASK_ALPHA_MASK0 (1 << 3)
+#	define RB3D_COLOR_CHANNEL_MASK_BLUE_MASK1  (1 << 4)
+#	define RB3D_COLOR_CHANNEL_MASK_GREEN_MASK1 (1 << 5)
+#	define RB3D_COLOR_CHANNEL_MASK_RED_MASK1   (1 << 6)
+#	define RB3D_COLOR_CHANNEL_MASK_ALPHA_MASK1 (1 << 7)
+#	define RB3D_COLOR_CHANNEL_MASK_BLUE_MASK2  (1 << 8)
+#	define RB3D_COLOR_CHANNEL_MASK_GREEN_MASK2 (1 << 9)
+#	define RB3D_COLOR_CHANNEL_MASK_RED_MASK2   (1 << 10)
+#	define RB3D_COLOR_CHANNEL_MASK_ALPHA_MASK2 (1 << 11)
+#	define RB3D_COLOR_CHANNEL_MASK_BLUE_MASK3  (1 << 12)
+#	define RB3D_COLOR_CHANNEL_MASK_GREEN_MASK3 (1 << 13)
+#	define RB3D_COLOR_CHANNEL_MASK_RED_MASK3   (1 << 14)
+#	define RB3D_COLOR_CHANNEL_MASK_ALPHA_MASK3 (1 << 15)
+
+/* Clear color that is used when the color mask is set to 00. Unpipelined.
+ * Program this register with a 32-bit value in ARGB8888 or ARGB2101010
+ * formats, ignoring the fields.
+ */
+#define RB3D_COLOR_CLEAR_VALUE                   0x4e14
 
 /* gap */
 
+/* Color Compare Color. Stalls the 2d/3d datapath until it is idle. */
+#define RB3D_CLRCMP_CLR                     0x4e20
+
+/* Color Compare Mask. Stalls the 2d/3d datapath until it is idle. */
+#define RB3D_CLRCMP_MSK                     0x4e24
+
+/* Color Buffer Address Offset of multibuffer 0. Unpipelined. */
 #define R300_RB3D_COLOROFFSET0              0x4E28
 #       define R300_COLOROFFSET_MASK             0xFFFFFFF0 /* GUESS */
-#define R300_RB3D_COLOROFFSET1              0x4E2C /* GUESS */
-#define R300_RB3D_COLOROFFSET2              0x4E30 /* GUESS */
-#define R300_RB3D_COLOROFFSET3              0x4E34 /* GUESS */
+/* Color Buffer Address Offset of multibuffer 1. Unpipelined. */
+#define R300_RB3D_COLOROFFSET1              0x4E2C
+/* Color Buffer Address Offset of multibuffer 2. Unpipelined. */
+#define R300_RB3D_COLOROFFSET2              0x4E30
+/* Color Buffer Address Offset of multibuffer 3. Unpipelined. */
+#define R300_RB3D_COLOROFFSET3              0x4E34
 
-/* gap */
-
-/* Bit 16: Larger tiles
+/* Color buffer format and tiling control for all the multibuffers and the
+ * pitch of multibuffer 0 to 3. Unpipelined. The cache must be empty before any
+ * of the registers are changed.
+ *
+ * Bit 16: Larger tiles
  * Bit 17: 4x2 tiles
  * Bit 18: Extremely weird tile like, but some pixels duplicated?
  */
 #define R300_RB3D_COLORPITCH0               0x4E38
-#       define R300_COLORPITCH_MASK              0x00001FF8 /* GUESS */
-#       define R300_COLOR_TILE_ENABLE            (1 << 16) /* GUESS */
-#       define R300_COLOR_MICROTILE_ENABLE       (1 << 17) /* GUESS */
-#       define R300_COLOR_ENDIAN_NO_SWAP         (0 << 18) /* GUESS */
-#       define R300_COLOR_ENDIAN_WORD_SWAP       (1 << 18) /* GUESS */
-#       define R300_COLOR_ENDIAN_DWORD_SWAP      (2 << 18) /* GUESS */
-#       define R300_COLOR_FORMAT_RGB565          (2 << 22)
-#       define R300_COLOR_FORMAT_ARGB8888        (3 << 22)
-#define R300_RB3D_COLORPITCH1               0x4E3C /* GUESS */
-#define R300_RB3D_COLORPITCH2               0x4E40 /* GUESS */
-#define R300_RB3D_COLORPITCH3               0x4E44 /* GUESS */
+#       define R300_COLORPITCH_MASK              0x00001FF8 /* GUESS, should be 13:1 */
+#       define R300_COLOR_TILE_DISABLE            (0 << 16)
+#       define R300_COLOR_TILE_ENABLE             (1 << 16)
+#       define R300_COLOR_MICROTILE_DISABLE       (0 << 17)
+#       define R300_COLOR_MICROTILE_ENABLE        (1 << 17)
+#       define R300_COLOR_MICROTILE_ENABLE_SQUARE (2 << 17) /* Only available in 16-bit */
+#       define R300_COLOR_ENDIAN_NO_SWAP          (0 << 19)
+#       define R300_COLOR_ENDIAN_WORD_SWAP        (1 << 19)
+#       define R300_COLOR_ENDIAN_DWORD_SWAP       (2 << 19)
+#       define R300_COLOR_ENDIAN_HALF_DWORD_SWAP  (3 << 19)
+#	define R300_COLOR_FORMAT_ARGB10101010     (0 << 21)
+#	define R300_COLOR_FORMAT_UV1010           (1 << 21)
+#	define R300_COLOR_FORMAT_CI8              (2 << 21) /* 2D only */
+#	define R300_COLOR_FORMAT_ARGB1555         (3 << 21)
+#       define R300_COLOR_FORMAT_RGB565           (4 << 21)
+#       define R300_COLOR_FORMAT_ARGB2101010      (5 << 21)
+#       define R300_COLOR_FORMAT_ARGB8888         (6 << 21)
+#       define R300_COLOR_FORMAT_ARGB32323232     (7 << 21)
+/* reserved */
+#       define R300_COLOR_FORMAT_I8               (9 << 21)
+#       define R300_COLOR_FORMAT_ARGB16161616     (10 << 21)
+#       define R300_COLOR_FORMAT_VYUY             (11 << 21)
+#       define R300_COLOR_FORMAT_YVYU             (12 << 21)
+#       define R300_COLOR_FORMAT_UV88             (13 << 21)
+#       define R300_COLOR_FORMAT_I10              (14 << 21)
+#       define R300_COLOR_FORMAT_ARGB4444         (15 << 21)
+#define R300_RB3D_COLORPITCH1               0x4E3C
+#define R300_RB3D_COLORPITCH2               0x4E40
+#define R300_RB3D_COLORPITCH3               0x4E44
 
 /* gap */
 
-/* Guess by Vladimir.
+/* Destination Color Buffer Cache Control/Status. If the cb is in e2 mode, then
+ * a flush or free will not occur upon a write to this register, but a sync
+ * will be immediately sent if one is requested. If both DC_FLUSH and DC_FREE
+ * are zero but DC_FINISH is one, then a sync will be sent immediately -- the
+ * cb will not wait for all the previous operations to complete before sending
+ * the sync. Unpipelined except when DC_FINISH and DC_FREE are both set to
+ * zero.
+ *
  * Set to 0A before 3D operations, set to 02 afterwards.
  */
-#define R300_RB3D_DSTCACHE_CTLSTAT          0x4E4C
-#       define R300_RB3D_DSTCACHE_UNKNOWN_02             0x00000002
-#       define R300_RB3D_DSTCACHE_UNKNOWN_0A             0x0000000A
+#define R300_RB3D_DSTCACHE_CTLSTAT               0x4e4c
+#	define RB3D_DSTCACHE_CTLSTAT_DC_FLUSH_NO_EFFECT         (0 << 0)
+#	define RB3D_DSTCACHE_CTLSTAT_DC_FLUSH_NO_EFFECT_1       (1 << 0)
+#	define RB3D_DSTCACHE_CTLSTAT_DC_FLUSH_FLUSH_DIRTY_3D    (2 << 0)
+#	define RB3D_DSTCACHE_CTLSTAT_DC_FLUSH_FLUSH_DIRTY_3D_1  (3 << 0)
+#	define RB3D_DSTCACHE_CTLSTAT_DC_FREE_NO_EFFECT          (0 << 2)
+#	define RB3D_DSTCACHE_CTLSTAT_DC_FREE_NO_EFFECT_1        (1 << 2)
+#	define RB3D_DSTCACHE_CTLSTAT_DC_FREE_FREE_3D_TAGS       (2 << 2)
+#	define RB3D_DSTCACHE_CTLSTAT_DC_FREE_FREE_3D_TAGS_1     (3 << 2)
+#	define RB3D_DSTCACHE_CTLSTAT_DC_FINISH_NO_SIGNAL        (0 << 4)
+#	define RB3D_DSTCACHE_CTLSTAT_DC_FINISH_SIGNAL           (1 << 4)
+
+#define R300_RB3D_DITHER_CTL 0x4E50
+#	define R300_RB3D_DITHER_CTL_DITHER_MODE_TRUNCATE         (0 << 0)
+#	define R300_RB3D_DITHER_CTL_DITHER_MODE_ROUND            (1 << 0)
+#	define R300_RB3D_DITHER_CTL_DITHER_MODE_LUT              (2 << 0)
+/* reserved */
+#	define R300_RB3D_DITHER_CTL_ALPHA_DITHER_MODE_TRUNCATE   (0 << 2)
+#	define R300_RB3D_DITHER_CTL_ALPHA_DITHER_MODE_ROUND      (1 << 2)
+#	define R300_RB3D_DITHER_CTL_ALPHA_DITHER_MODE_LUT        (2 << 2)
+/* reserved */
+
+/* Resolve buffer destination address. The cache must be empty before changing
+ * this register if the cb is in resolve mode. Unpipelined
+ */
+#define RB3D_AARESOLVE_OFFSET        0x4e80
+#	define RB3D_AARESOLVE_OFFSET_SHIFT 5
+#	define RB3D_AARESOLVE_OFFSET_MASK 0xffffffe0 /* At least according to the calculations of Christoph Brill */
+
+/* Resolve Buffer Pitch and Tiling Control. The cache must be empty before
+ * changing this register if the cb is in resolve mode. Unpipelined
+ */
+#define RB3D_AARESOLVE_PITCH         0x4e84
+#	define RB3D_AARESOLVE_PITCH_SHIFT 1
+#	define RB3D_AARESOLVE_PITCH_MASK  0x00003ffe /* At least according to the calculations of Christoph Brill */
+
+/* Resolve Buffer Control. Unpipelined */
+#define RB3D_AARESOLVE_CTL           0x4e88
+#	define RB3D_AARESOLVE_CTL_AARESOLVE_MODE_NORMAL   (0 << 0)
+#	define RB3D_AARESOLVE_CTL_AARESOLVE_MODE_RESOLVE  (1 << 0)
+#	define RB3D_AARESOLVE_CTL_AARESOLVE_GAMMA_10      (0 << 1)
+#	define RB3D_AARESOLVE_CTL_AARESOLVE_GAMMA_22      (1 << 1)
+#	define RB3D_AARESOLVE_CTL_AARESOLVE_ALPHA_SAMPLE0 (0 << 2)
+#	define RB3D_AARESOLVE_CTL_AARESOLVE_ALPHA_AVERAGE (1 << 2)
+  
+
+/* Discard src pixels less than or equal to threshold. */
+#define RB3D_DISCARD_SRC_PIXEL_LTE_THRESHOLD 0x4ea0
+/* Discard src pixels greater than or equal to threshold. */
+#define RB3D_DISCARD_SRC_PIXEL_GTE_THRESHOLD 0x4ea4
+#	define RB3D_DISCARD_SRC_PIXEL_THRESHOLD_BLUE_SHIFT 0
+#	define RB3D_DISCARD_SRC_PIXEL_THRESHOLD_BLUE_MASK 0x000000ff
+#	define RB3D_DISCARD_SRC_PIXEL_THRESHOLD_GREEN_SHIFT 8
+#	define RB3D_DISCARD_SRC_PIXEL_THRESHOLD_GREEN_MASK 0x0000ff00
+#	define RB3D_DISCARD_SRC_PIXEL_THRESHOLD_RED_SHIFT 16
+#	define RB3D_DISCARD_SRC_PIXEL_THRESHOLD_RED_MASK 0x00ff0000
+#	define RB3D_DISCARD_SRC_PIXEL_THRESHOLD_ALPHA_SHIFT 24
+#	define RB3D_DISCARD_SRC_PIXEL_THRESHOLD_ALPHA_MASK 0xff000000
+
+/* 3D ROP Control. Stalls the 2d/3d datapath until it is idle. */
+#define RB3D_ROPCNTL                             0x4e18
+/* TODO: fill in content here */
+
+/* Color Compare Flip. Stalls the 2d/3d datapath until it is idle. */
+#define RB3D_CLRCMP_FLIPE                        0x4e1c
+
+/* Sets the fifo sizes */
+#define RB3D_FIFO_SIZE                           0x4ef4
+#	define RB3D_FIFO_SIZE_OP_FIFO_SIZE_FULL   (0 << 0)
+#	define RB3D_FIFO_SIZE_OP_FIFO_SIZE_HALF   (1 << 0)
+#	define RB3D_FIFO_SIZE_OP_FIFO_SIZE_QUATER (2 << 0)
+#	define RB3D_FIFO_SIZE_OP_FIFO_SIZE_EIGTHS (3 << 0)
+/* gap in AMD spec */
+
+/* Constant color used by the blender. Pipelined through the blender. */
+#define RB3D_CONSTANT_COLOR_AR                   0x4ef8
+#	define RB3D_CONSTANT_COLOR_AR_RED_MASK    0x0000ffff
+#	define RB3D_CONSTANT_COLOR_AR_RED_SHIFT   0
+#	define RB3D_CONSTANT_COLOR_AR_ALPHA_MASK  0xffff0000
+#	define RB3D_CONSTANT_COLOR_AR_ALPHA_SHIFT 16
+
+/* Constant color used by the blender. Pipelined through the blender. */
+#define RB3D_CONSTANT_COLOR_GB                   0x4efc
+#	define RB3D_CONSTANT_COLOR_AR_BLUE_MASK   0x0000ffff
+#	define RB3D_CONSTANT_COLOR_AR_BLUE_SHIFT  0
+#	define RB3D_CONSTANT_COLOR_AR_GREEN_MASK  0xffff0000
+#	define RB3D_CONSTANT_COLOR_AR_GREEN_SHIFT 16
 
 /* gap */
 /* There seems to be no "write only" setting, so use Z-test = ALWAYS
@@ -1393,7 +2208,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_RB3D_Z_WRITE_ONLY        	 0x00000006
 #	define R300_RB3D_STENCIL_ENABLE		 0x00000001
 
-#define R300_RB3D_ZSTENCIL_CNTL_1                   0x4F04
+#define R300_RB3D_ZSTENCIL_CNTL_1                   0x4f04
 	/* functions */
 #	define R300_ZS_NEVER			0
 #	define R300_ZS_LESS			1
@@ -1425,19 +2240,25 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_RB3D_ZS1_BACK_ZPASS_OP_SHIFT       21
 #	define R300_RB3D_ZS1_BACK_ZFAIL_OP_SHIFT       24
 
-#define R300_RB3D_ZSTENCIL_CNTL_2                   0x4F08
-#	define R300_RB3D_ZS2_STENCIL_REF_SHIFT		0
-#	define R300_RB3D_ZS2_STENCIL_MASK		0xFF
-#	define R300_RB3D_ZS2_STENCIL_MASK_SHIFT	        8
-#	define R300_RB3D_ZS2_STENCIL_WRITE_MASK_SHIFT	16
+#define ZB_STENCILREFMASK                        0x4f08
+#	define ZB_STENCILREFMASK_STENCILREF_SHIFT       0
+#	define ZB_STENCILREFMASK_STENCIL_MASK           0xff
+#	define ZB_STENCILREFMASK_STENCILREF_MASK        0x000000ff
+#	define ZB_STENCILREFMASK_STENCILMASK_SHIFT      8
+#	define ZB_STENCILREFMASK_STENCILMASK_MASK       0x0000ff00
+#	define ZB_STENCILREFMASK_STENCILWRITEMASK_SHIFT	16
+#	define ZB_STENCILREFMASK_STENCILWRITEMASK_MASK  0xffff0000
 
 /* gap */
 
-#define R300_RB3D_ZSTENCIL_FORMAT                   0x4F10
-#	define R300_DEPTH_FORMAT_16BIT_INT_Z     (0 << 0)
-#	define R300_DEPTH_FORMAT_24BIT_INT_Z     (2 << 0)
-	/* 16 bit format or some aditional bit ? */
-#	define R300_DEPTH_FORMAT_UNK32          (32 << 0)
+#define ZB_FORMAT                                   0x4f10
+#	define ZB_FORMAR_DEPTHFORMAT_16BIT_INT_Z   (0 << 0)
+#	define ZB_FORMAR_DEPTHFORMAT_16BIT_13E3    (1 << 0)
+#	define ZB_FORMAR_DEPTHFORMAT_24BIT_INT_Z   (2 << 0)
+/* reserved up to (15 << 0) */
+#	define ZB_FORMAR_INVERT_13E3_LEADING_ONES  (0 << 4)
+#	define ZB_FORMAR_INVERT_13E3_LEADING_ZEROS (1 << 4)
+#	define ZB_FORMAR_PEQ8_UNUSED               (1 << 5)
 
 #define R300_RB3D_EARLY_Z                           0x4F14
 #	define R300_EARLY_Z_DISABLE              (0 << 0)
@@ -1445,130 +2266,306 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /* gap */
 
-#define R300_RB3D_ZCACHE_CTLSTAT            0x4F18 /* GUESS */
-#       define R300_RB3D_ZCACHE_UNKNOWN_01  0x1
-#       define R300_RB3D_ZCACHE_UNKNOWN_03  0x3
+#define ZB_ZCACHE_CTLSTAT            0x4f18
+#       define ZB_ZCACHE_CTLSTAT_ZC_FLUSH_NO_EFFECT      (0 << 0)
+#       define ZB_ZCACHE_CTLSTAT_ZC_FLUSH_FLUSH_AND_FREE (1 << 0)
+#       define ZB_ZCACHE_CTLSTAT_ZC_FREE_NO_EFFECT       (0 << 1)
+#       define ZB_ZCACHE_CTLSTAT_ZC_FREE_FREE            (1 << 1)
+#       define ZB_ZCACHE_CTLSTAT_ZC_BUSY_IDLE            (0 << 31)
+#       define ZB_ZCACHE_CTLSTAT_ZC_BUSY_BUSY            (1 << 31)
+
+#define R300_ZB_BW_CNTL                     0x4f1c
+#	define R300_HIZ_DISABLE                              (0 << 0)
+#	define R300_HIZ_ENABLE                               (1 << 0)
+#	define R300_HIZ_MIN                                  (0 << 1)
+#	define R300_HIZ_MAX                                  (1 << 1)
+#	define R300_FAST_FILL_DISABLE                        (0 << 2)
+#	define R300_FAST_FILL_ENABLE                         (1 << 2)
+#	define R300_RD_COMP_DISABLE                          (0 << 3)
+#	define R300_RD_COMP_ENABLE                           (1 << 3)
+#	define R300_WR_COMP_DISABLE                          (0 << 4)
+#	define R300_WR_COMP_ENABLE                           (1 << 4)
+#	define R300_ZB_CB_CLEAR_RMW                          (0 << 5)
+#	define R300_ZB_CB_CLEAR_CACHE_LINEAR                 (1 << 5)
+#	define R300_FORCE_COMPRESSED_STENCIL_VALUE_DISABLE   (0 << 6)
+#	define R300_FORCE_COMPRESSED_STENCIL_VALUE_ENABLE    (1 << 6)
+#	define R300_ZEQUAL_OPTIMIZE_ENABLE                   (0 << 7)
+#	define R300_ZEQUAL_OPTIMIZE_DISABLE                  (1 << 7)
+#	define R300_SEQUAL_OPTIMIZE_ENABLE                   (0 << 8)
+#	define R300_SEQUAL_OPTIMIZE_DISABLE                  (1 << 8)
+/* gap in AMD docs */
+#	define R300_BMASK_ENABLE                             (0 << 10)
+#	define R300_BMASK_DISABLE                            (1 << 10)
+#	define R300_HIZ_EQUAL_REJECT_DISABLE                 (0 << 11)
+#	define R300_HIZ_EQUAL_REJECT_ENABLE                  (1 << 11)
+#	define R300_HIZ_FP_EXP_BITS_DISABLE                  (0 << 12)
+#	define R300_HIZ_FP_EXP_BITS_1                        (1 << 12)
+#	define R300_HIZ_FP_EXP_BITS_2                        (2 << 12)
+#	define R300_HIZ_FP_EXP_BITS_3                        (3 << 12)
+#	define R300_HIZ_FP_EXP_BITS_4                        (4 << 12)
+#	define R300_HIZ_FP_EXP_BITS_5                        (5 << 12)
+#	define R300_HIZ_FP_INVERT_LEADING_ONES               (0 << 15)
+#	define R300_HIZ_FP_INVERT_LEADING_ZEROS              (1 << 15)
+#	define R300_TILE_OVERWRITE_RECOMPRESSION_ENABLE      (0 << 16)
+#	define R300_TILE_OVERWRITE_RECOMPRESSION_DISABLE     (1 << 16)
+#	define R300_CONTIGUOUS_6XAA_SAMPLES_ENABLE           (0 << 17)
+#	define R300_CONTIGUOUS_6XAA_SAMPLES_DISABLE          (1 << 17)
+#	define R300_PEQ_PACKING_DISABLE                      (0 << 18)
+#	define R300_PEQ_PACKING_ENABLE                       (1 << 18)
+#	define R300_COVERED_PTR_MASKING_DISABLE              (0 << 18)
+#	define R300_COVERED_PTR_MASKING_ENABLE               (1 << 18)
+
 
 /* gap */
 
-#define R300_RB3D_DEPTHOFFSET               0x4F20
-#define R300_RB3D_DEPTHPITCH                0x4F24
-#       define R300_DEPTHPITCH_MASK              0x00001FF8 /* GUESS */
-#       define R300_DEPTH_TILE_ENABLE            (1 << 16) /* GUESS */
-#       define R300_DEPTH_MICROTILE_ENABLE       (1 << 17) /* GUESS */
-#       define R300_DEPTH_ENDIAN_NO_SWAP         (0 << 18) /* GUESS */
-#       define R300_DEPTH_ENDIAN_WORD_SWAP       (1 << 18) /* GUESS */
-#       define R300_DEPTH_ENDIAN_DWORD_SWAP      (2 << 18) /* GUESS */
-
-/* BEGIN: Vertex program instruction set */
-
-/* Every instruction is four dwords long:
- *  DWORD 0: output and opcode
- *  DWORD 1: first argument
- *  DWORD 2: second argument
- *  DWORD 3: third argument
- *
- * Notes:
- *  - ABS r, a is implemented as MAX r, a, -a
- *  - MOV is implemented as ADD to zero
- *  - XPD is implemented as MUL + MAD
- *  - FLR is implemented as FRC + ADD
- *  - apparently, fglrx tries to schedule instructions so that there is at
- *    least one instruction between the write to a temporary and the first
- *    read from said temporary; however, violations of this scheduling are
- *    allowed
- *  - register indices seem to be unrelated with OpenGL aliasing to
- *    conventional state
- *  - only one attribute and one parameter can be loaded at a time; however,
- *    the same attribute/parameter can be used for more than one argument
- *  - the second software argument for POW is the third hardware argument
- *    (no idea why)
- *  - MAD with only temporaries as input seems to use VPI_OUT_SELECT_MAD_2
- *
- * There is some magic surrounding LIT:
- *   The single argument is replicated across all three inputs, but swizzled:
- *     First argument: xyzy
- *     Second argument: xyzx
- *     Third argument: xyzw
- *   Whenever the result is used later in the fragment program, fglrx forces
- *   x and w to be 1.0 in the input selection; I don't know whether this is
- *   strictly necessary
+/* Z Buffer Address Offset.
+ * Bits 31 to 5 are used for aligned Z buffer address offset for macro tiles.
  */
-#define R300_VPI_OUT_OP_DOT                     (1 << 0)
-#define R300_VPI_OUT_OP_MUL                     (2 << 0)
-#define R300_VPI_OUT_OP_ADD                     (3 << 0)
-#define R300_VPI_OUT_OP_MAD                     (4 << 0)
-#define R300_VPI_OUT_OP_DST                     (5 << 0)
-#define R300_VPI_OUT_OP_FRC                     (6 << 0)
-#define R300_VPI_OUT_OP_MAX                     (7 << 0)
-#define R300_VPI_OUT_OP_MIN                     (8 << 0)
-#define R300_VPI_OUT_OP_SGE                     (9 << 0)
-#define R300_VPI_OUT_OP_SLT                     (10 << 0)
-	/* Used in GL_POINT_DISTANCE_ATTENUATION_ARB, vector(scalar, vector) */
-#define R300_VPI_OUT_OP_UNK12                   (12 << 0)
-#define R300_VPI_OUT_OP_ARL                     (13 << 0)
-#define R300_VPI_OUT_OP_EXP                     (65 << 0)
-#define R300_VPI_OUT_OP_LOG                     (66 << 0)
-	/* Used in fog computations, scalar(scalar) */
-#define R300_VPI_OUT_OP_UNK67                   (67 << 0)
-#define R300_VPI_OUT_OP_LIT                     (68 << 0)
-#define R300_VPI_OUT_OP_POW                     (69 << 0)
-#define R300_VPI_OUT_OP_RCP                     (70 << 0)
-#define R300_VPI_OUT_OP_RSQ                     (72 << 0)
-	/* Used in GL_POINT_DISTANCE_ATTENUATION_ARB, scalar(scalar) */
-#define R300_VPI_OUT_OP_UNK73                   (73 << 0)
-#define R300_VPI_OUT_OP_EX2                     (75 << 0)
-#define R300_VPI_OUT_OP_LG2                     (76 << 0)
-#define R300_VPI_OUT_OP_MAD_2                   (128 << 0)
-	/* all temps, vector(scalar, vector, vector) */
-#define R300_VPI_OUT_OP_UNK129                  (129 << 0)
+#define ZB_DEPTHOFFSET               0x4f20
 
-#define R300_VPI_OUT_REG_CLASS_TEMPORARY        (0 << 8)
-#define R300_VPI_OUT_REG_CLASS_ADDR             (1 << 8)
-#define R300_VPI_OUT_REG_CLASS_RESULT           (2 << 8)
-#define R300_VPI_OUT_REG_CLASS_MASK             (31 << 8)
+/* Z Buffer Pitch and Endian Control */
+#define ZB_DEPTHPITCH                0x4f24
+#       define R300_DEPTHPITCH_MASK              0x00001FF8 /* TODO: should be (13:2) */
+#       define ZB_DEPTHPITCH_DEPTHMACROTILE_DISABLE      (0 << 16)
+#       define ZB_DEPTHPITCH_DEPTHMACROTILE_ENABLE       (1 << 16)
+#       define ZB_DEPTHPITCH_DEPTHMICROTILE_LINEAR       (0 << 17)
+#       define ZB_DEPTHPITCH_DEPTHMICROTILE_TILED        (1 << 17)
+#       define ZB_DEPTHPITCH_DEPTHMICROTILE_TILED_SQUARE (2 << 17)
+#       define ZB_DEPTHPITCH_DEPTHENDIAN_NO_SWAP         (0 << 18)
+#       define ZB_DEPTHPITCH_DEPTHENDIAN_WORD_SWAP       (1 << 18)
+#       define ZB_DEPTHPITCH_DEPTHENDIAN_DWORD_SWAP      (2 << 18)
+#       define ZB_DEPTHPITCH_DEPTHENDIAN_HALF_DWORD_SWAP (3 << 18)
 
-#define R300_VPI_OUT_REG_INDEX_SHIFT            13
-	/* GUESS based on fglrx native limits */
-#define R300_VPI_OUT_REG_INDEX_MASK             (31 << 13)
+/* Z Buffer Clear Value */
+#define ZB_DEPTHCLEARVALUE                  0x4f28
 
-#define R300_VPI_OUT_WRITE_X                    (1 << 20)
-#define R300_VPI_OUT_WRITE_Y                    (1 << 21)
-#define R300_VPI_OUT_WRITE_Z                    (1 << 22)
-#define R300_VPI_OUT_WRITE_W                    (1 << 23)
+/* Hierarchical Z Memory Offset */
+#define ZB_HIZ_OFFSET                       0x4f44
 
-#define R300_VPI_IN_REG_CLASS_TEMPORARY         (0 << 0)
-#define R300_VPI_IN_REG_CLASS_ATTRIBUTE         (1 << 0)
-#define R300_VPI_IN_REG_CLASS_PARAMETER         (2 << 0)
-#define R300_VPI_IN_REG_CLASS_NONE              (9 << 0)
-#define R300_VPI_IN_REG_CLASS_MASK              (31 << 0)
+/* Hierarchical Z Read Index */
+#define ZB_HIZ_RDINDEX                      0x4f48
 
-#define R300_VPI_IN_REG_INDEX_SHIFT             5
-	/* GUESS based on fglrx native limits */
-#define R300_VPI_IN_REG_INDEX_MASK              (255 << 5)
+/* Hierarchical Z Data */
+#define ZB_HIZ_DWORD                        0x4f4c
 
-/* The R300 can select components from the input register arbitrarily.
- * Use the following constants, shifted by the component shift you
- * want to select
+/* Hierarchical Z Write Index */
+#define ZB_HIZ_WRINDEX                      0x4f50
+
+/* Hierarchical Z Pitch */
+#define ZB_HIZ_PITCH                        0x4f54
+
+/* Z Buffer Z Pass Counter Data */
+#define ZB_ZPASS_DATA                       0x4f58
+
+/* Z Buffer Z Pass Counter Address */
+#define ZB_ZPASS_ADDR                       0x4f5c
+
+/* Depth buffer X and Y coordinate offset */
+#define ZB_DEPTHXY_OFFSET                   0x4f60
+#	define ZB_DEPTHX_OFFSET_SHIFT  1
+#	define ZB_DEPTHX_OFFSET_MASK   0x000007FE
+#	define ZB_DEPTHY_OFFSET_SHIFT  17
+#	define ZB_DEPTHY_OFFSET_MASK   0x07FE0000
+
+/* Sets the fifo sizes */
+#define ZB_FIFO_SIZE                        0x4fd0
+#	define ZB_FIFO_SIZE_OP_FIFO_SIZE_FULL   (0 << 0)
+#	define ZB_FIFO_SIZE_OP_FIFO_SIZE_HALF   (1 << 0)
+#	define ZB_FIFO_SIZE_OP_FIFO_SIZE_QUATER (2 << 0)
+#	define ZB_FIFO_SIZE_OP_FIFO_SIZE_EIGTHS (4 << 0)
+
+/* Stencil Reference Value and Mask for backfacing quads */
+#define ZB_STENCILREFMASK_BF                0x4fd4
+#	define ZB_STENCILREFMASK_BF_STENCILREF_SHIFT       0
+#	define ZB_STENCILREFMASK_BF_STENCILREF_MASK        0x000000ff
+#	define ZB_STENCILREFMASK_BF_STENCILMASK_SHIFT      8
+#	define ZB_STENCILREFMASK_BF_STENCILMASK_MASK       0x0000ff00
+#	define ZB_STENCILREFMASK_BF_STENCILWRITEMASK_SHIFT 16
+#	define ZB_STENCILREFMASK_BF_STENCILWRITEMASK_MASK  0xffff0000
+
+/**
+ * \defgroup R3XX_R5XX_PROGRAMMABLE_VERTEX_SHADER_DESCRIPTION R3XX-R5XX PROGRAMMABLE VERTEX SHADER DESCRIPTION
+ *
+ * The PVS_DST_MATH_INST is used to identify whether the instruction is a Vector
+ * Engine instruction or a Math Engine instruction.
  */
-#define R300_VPI_IN_SELECT_X    0
-#define R300_VPI_IN_SELECT_Y    1
-#define R300_VPI_IN_SELECT_Z    2
-#define R300_VPI_IN_SELECT_W    3
-#define R300_VPI_IN_SELECT_ZERO 4
-#define R300_VPI_IN_SELECT_ONE  5
-#define R300_VPI_IN_SELECT_MASK 7
 
-#define R300_VPI_IN_X_SHIFT                     13
-#define R300_VPI_IN_Y_SHIFT                     16
-#define R300_VPI_IN_Z_SHIFT                     19
-#define R300_VPI_IN_W_SHIFT                     22
+/*\{*/
 
-#define R300_VPI_IN_NEG_X                       (1 << 25)
-#define R300_VPI_IN_NEG_Y                       (1 << 26)
-#define R300_VPI_IN_NEG_Z                       (1 << 27)
-#define R300_VPI_IN_NEG_W                       (1 << 28)
-/* END: Vertex program instruction set */
+enum {
+	/* R3XX */
+	VECTOR_NO_OP			= 0,
+	VE_DOT_PRODUCT			= 1,
+	VE_MULTIPLY			= 2,
+	VE_ADD				= 3,
+	VE_MULTIPLY_ADD			= 4,
+	VE_DISTANCE_VECTOR		= 5,
+	VE_FRACTION			= 6,
+	VE_MAXIMUM			= 7,
+	VE_MINIMUM			= 8,
+	VE_SET_GREATER_THAN_EQUAL	= 9,
+	VE_SET_LESS_THAN		= 10,
+	VE_MULTIPLYX2_ADD		= 11,
+	VE_MULTIPLY_CLAMP		= 12,
+	VE_FLT2FIX_DX			= 13,
+	VE_FLT2FIX_DX_RND		= 14,
+	/* R5XX */
+	VE_PRED_SET_EQ_PUSH		= 15,
+	VE_PRED_SET_GT_PUSH		= 16,
+	VE_PRED_SET_GTE_PUSH		= 17,
+	VE_PRED_SET_NEQ_PUSH		= 18,
+	VE_COND_WRITE_EQ		= 19,
+	VE_COND_WRITE_GT		= 20,
+	VE_COND_WRITE_GTE		= 21,
+	VE_COND_WRITE_NEQ		= 22,
+	VE_COND_MUX_EQ			= 23,
+	VE_COND_MUX_GT			= 24,
+	VE_COND_MUX_GTE			= 25,
+	VE_SET_GREATER_THAN		= 26,
+	VE_SET_EQUAL			= 27,
+	VE_SET_NOT_EQUAL		= 28,
+};
+
+enum {
+	/* R3XX */
+	MATH_NO_OP			= 0,
+	ME_EXP_BASE2_DX			= 1,
+	ME_LOG_BASE2_DX			= 2,
+	ME_EXP_BASEE_FF			= 3,
+	ME_LIGHT_COEFF_DX		= 4,
+	ME_POWER_FUNC_FF		= 5,
+	ME_RECIP_DX			= 6,
+	ME_RECIP_FF			= 7,
+	ME_RECIP_SQRT_DX		= 8,
+	ME_RECIP_SQRT_FF		= 9,
+	ME_MULTIPLY			= 10,
+	ME_EXP_BASE2_FULL_DX		= 11,
+	ME_LOG_BASE2_FULL_DX		= 12,
+	ME_POWER_FUNC_FF_CLAMP_B	= 13,
+	ME_POWER_FUNC_FF_CLAMP_B1	= 14,
+	ME_POWER_FUNC_FF_CLAMP_01	= 15,
+	ME_SIN				= 16,
+	ME_COS				= 17,
+	/* R5XX */
+	ME_LOG_BASE2_IEEE		= 18,
+	ME_RECIP_IEEE			= 19,
+	ME_RECIP_SQRT_IEEE		= 20,
+	ME_PRED_SET_EQ			= 21,
+	ME_PRED_SET_GT			= 22,
+	ME_PRED_SET_GTE			= 23,
+	ME_PRED_SET_NEQ			= 24,
+	ME_PRED_SET_CLR			= 25,
+	ME_PRED_SET_INV			= 26,
+	ME_PRED_SET_POP			= 27,
+	ME_PRED_SET_RESTORE		= 28,
+};
+
+enum {
+	/* R3XX */
+	PVS_MACRO_OP_2CLK_MADD		= 0,
+	PVS_MACRO_OP_2CLK_M2X_ADD	= 1,
+};
+
+enum {
+	PVS_SRC_REG_TEMPORARY		= 0,	/* Intermediate Storage */
+	PVS_SRC_REG_INPUT		= 1,	/* Input Vertex Storage */
+	PVS_SRC_REG_CONSTANT		= 2,	/* Constant State Storage */
+	PVS_SRC_REG_ALT_TEMPORARY	= 3,	/* Alternate Intermediate Storage */
+};
+
+enum {
+	PVS_DST_REG_TEMPORARY		= 0,	/* Intermediate Storage */
+	PVS_DST_REG_A0			= 1,	/* Address Register Storage */
+	PVS_DST_REG_OUT			= 2,	/* Output Memory. Used for all outputs */
+	PVS_DST_REG_OUT_REPL_X		= 3,	/* Output Memory & Replicate X to all channels */
+	PVS_DST_REG_ALT_TEMPORARY	= 4,	/* Alternate Intermediate Storage */
+	PVS_DST_REG_INPUT		= 5,	/* Output Memory & Replicate X to all channels */
+};
+
+enum {
+	PVS_SRC_SELECT_X		= 0,	/* Select X Component */
+	PVS_SRC_SELECT_Y		= 1,	/* Select Y Component */
+	PVS_SRC_SELECT_Z		= 2,	/* Select Z Component */
+	PVS_SRC_SELECT_W		= 3,	/* Select W Component */
+	PVS_SRC_SELECT_FORCE_0		= 4,	/* Force Component to 0.0 */
+	PVS_SRC_SELECT_FORCE_1		= 5,	/* Force Component to 1.0 */
+};
+
+/* PVS Opcode & Destination Operand Description */
+
+enum {
+	PVS_DST_OPCODE_MASK		= 0x3f,
+	PVS_DST_OPCODE_SHIFT		= 0,
+	PVS_DST_MATH_INST_MASK		= 0x1,
+	PVS_DST_MATH_INST_SHIFT		= 6,
+	PVS_DST_MACRO_INST_MASK		= 0x1,
+	PVS_DST_MACRO_INST_SHIFT	= 7,
+	PVS_DST_REG_TYPE_MASK		= 0xf,
+	PVS_DST_REG_TYPE_SHIFT		= 8,
+	PVS_DST_ADDR_MODE_1_MASK	= 0x1,
+	PVS_DST_ADDR_MODE_1_SHIFT	= 12,
+	PVS_DST_OFFSET_MASK		= 0x7f,
+	PVS_DST_OFFSET_SHIFT		= 13,
+	PVS_DST_WE_X_MASK		= 0x1,
+	PVS_DST_WE_X_SHIFT		= 20,
+	PVS_DST_WE_Y_MASK		= 0x1,
+	PVS_DST_WE_Y_SHIFT		= 21,
+	PVS_DST_WE_Z_MASK		= 0x1,
+	PVS_DST_WE_Z_SHIFT		= 22,
+	PVS_DST_WE_W_MASK		= 0x1,
+	PVS_DST_WE_W_SHIFT		= 23,
+	PVS_DST_VE_SAT_MASK		= 0x1,
+	PVS_DST_VE_SAT_SHIFT		= 24,
+	PVS_DST_ME_SAT_MASK		= 0x1,
+	PVS_DST_ME_SAT_SHIFT		= 25,
+	PVS_DST_PRED_ENABLE_MASK	= 0x1,
+	PVS_DST_PRED_ENABLE_SHIFT	= 26,
+	PVS_DST_PRED_SENSE_MASK		= 0x1,
+	PVS_DST_PRED_SENSE_SHIFT	= 27,
+	PVS_DST_DUAL_MATH_OP_MASK	= 0x3,
+	PVS_DST_DUAL_MATH_OP_SHIFT	= 27,
+	PVS_DST_ADDR_SEL_MASK		= 0x3,
+	PVS_DST_ADDR_SEL_SHIFT		= 29,
+	PVS_DST_ADDR_MODE_0_MASK	= 0x1,
+	PVS_DST_ADDR_MODE_0_SHIFT	= 31,
+};
+
+/* PVS Source Operand Description */
+
+enum {
+	PVS_SRC_REG_TYPE_MASK		= 0x3,
+	PVS_SRC_REG_TYPE_SHIFT		= 0,
+	SPARE_0_MASK			= 0x1,
+	SPARE_0_SHIFT			= 2,
+	PVS_SRC_ABS_XYZW_MASK		= 0x1,
+	PVS_SRC_ABS_XYZW_SHIFT		= 3,
+	PVS_SRC_ADDR_MODE_0_MASK	= 0x1,
+	PVS_SRC_ADDR_MODE_0_SHIFT	= 4,
+	PVS_SRC_OFFSET_MASK		= 0xff,
+	PVS_SRC_OFFSET_SHIFT		= 5,
+	PVS_SRC_SWIZZLE_X_MASK		= 0x7,
+	PVS_SRC_SWIZZLE_X_SHIFT		= 13,
+	PVS_SRC_SWIZZLE_Y_MASK		= 0x7,
+	PVS_SRC_SWIZZLE_Y_SHIFT		= 16,
+	PVS_SRC_SWIZZLE_Z_MASK		= 0x7,
+	PVS_SRC_SWIZZLE_Z_SHIFT		= 19,
+	PVS_SRC_SWIZZLE_W_MASK		= 0x7,
+	PVS_SRC_SWIZZLE_W_SHIFT		= 22,
+	PVS_SRC_MODIFIER_X_MASK		= 0x1,
+	PVS_SRC_MODIFIER_X_SHIFT	= 25,
+	PVS_SRC_MODIFIER_Y_MASK		= 0x1,
+	PVS_SRC_MODIFIER_Y_SHIFT	= 26,
+	PVS_SRC_MODIFIER_Z_MASK		= 0x1,
+	PVS_SRC_MODIFIER_Z_SHIFT	= 27,
+	PVS_SRC_MODIFIER_W_MASK		= 0x1,
+	PVS_SRC_MODIFIER_W_SHIFT	= 28,
+	PVS_SRC_ADDR_SEL_MASK		= 0x3,
+	PVS_SRC_ADDR_SEL_SHIFT		= 29,
+	PVS_SRC_ADDR_MODE_1_MASK	= 0x0,
+	PVS_SRC_ADDR_MODE_1_SHIFT	= 32,
+};
+
+/*\}*/
 
 /* BEGIN: Packet 3 commands */
 
@@ -1603,10 +2600,28 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /* Draw a primitive from vertex data in arrays loaded via 3D_LOAD_VBPNTR.
  * Two parameter dwords:
- * 0. The first parameter appears to be always 0
- * 1. The second parameter is a standard primitive emission dword.
+ * 0. VAP_VTX_FMT: The first parameter is not written to hardware
+ * 1. VAP_VF_CTL: The second parameter is a standard primitive emission dword.
  */
 #define R300_PACKET3_3D_DRAW_VBUF           0x00002800
+
+/* Draw a primitive from immediate vertices in this packet
+ * Up to 16382 dwords:
+ * 0. VAP_VTX_FMT: The first parameter is not written to hardware
+ * 1. VAP_VF_CTL: The second parameter is a standard primitive emission dword.
+ * 2 to end: Up to 16380 dwords of vertex data.
+ */
+#define R300_PACKET3_3D_DRAW_IMMD           0x00002900
+
+/* Draw a primitive from vertex data in arrays loaded via 3D_LOAD_VBPNTR and
+ * immediate vertices in this packet
+ * Up to 16382 dwords:
+ * 0. VAP_VTX_FMT: The first parameter is not written to hardware
+ * 1. VAP_VF_CTL: The second parameter is a standard primitive emission dword.
+ * 2 to end: Up to 16380 dwords of vertex data.
+ */
+#define R300_PACKET3_3D_DRAW_INDX           0x00002A00
+ 
 
 /* Specify the full set of vertex arrays as (address, stride).
  * The first parameter is the number of vertex arrays specified.
@@ -1628,8 +2643,28 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #    define R300_EB_UNK1_SHIFT                      24
 #    define R300_EB_UNK1                    (0x80<<24)
 #    define R300_EB_UNK2                        0x0810
+
+/* Same as R300_PACKET3_3D_DRAW_VBUF but without VAP_VTX_FMT */
 #define R300_PACKET3_3D_DRAW_VBUF_2         0x00003400
+/* Same as R300_PACKET3_3D_DRAW_IMMD but without VAP_VTX_FMT */
+#define R300_PACKET3_3D_DRAW_IMMD_2         0x00003500
+/* Same as R300_PACKET3_3D_DRAW_INDX but without VAP_VTX_FMT */
 #define R300_PACKET3_3D_DRAW_INDX_2         0x00003600
+
+/* Clears a portion of hierachical Z RAM 
+ * 3 dword parameters
+ * 0. START
+ * 1. COUNT: 13:0 (max is 0x3FFF)
+ * 2. CLEAR_VALUE: Value to write into HIZ RAM.
+ */
+#define R300_PACKET3_3D_CLEAR_HIZ           0x00003700
+
+/* Draws a set of primitives using vertex buffers pointed by the state data.
+ * At least 2 Parameters:
+ * 0. VAP_VF_CNTL: The first parameter is a standard primitive emission dword.
+ * 2 to end: Data or indices (see other 3D_DRAW_* packets for details)
+ */
+#define R300_PACKET3_3D_DRAW_128            0x00003900
 
 /* END: Packet 3 commands */
 
@@ -1652,3 +2687,5 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #endif /* _R300_REG_H */
 
 /* *INDENT-ON* */
+
+/* vim: set foldenable foldmarker=\\{,\\} foldmethod=marker : */

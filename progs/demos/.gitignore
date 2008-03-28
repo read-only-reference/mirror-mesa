@@ -1,8 +1,10 @@
+.cvsignore
 arbfplight
 arbfslight
 arbocclude
 bounce
 clearspd
+copypix
 cubemap
 drawpix
 engine
@@ -30,6 +32,7 @@ osdemo
 paltex
 pixeltex
 pointblast
+rain
 ray
 readpix
 readtex.c

@@ -35,7 +35,6 @@
 #include "brw_context.h"
 #include "brw_state.h"
 #include "brw_defines.h"
-#include "brw_hal.h"
 
 #define VS 0
 #define GS 1
@@ -69,7 +68,7 @@ static GLboolean check_urb_layout( struct brw_context *brw )
    brw->urb.sf_start = brw->urb.clip_start + brw->urb.nr_clip_entries * brw->urb.vsize;
    brw->urb.cs_start = brw->urb.sf_start + brw->urb.nr_sf_entries * brw->urb.sfsize;
 
-   return brw->urb.cs_start + brw->urb.nr_cs_entries * brw->urb.csize <= 256;
+   return brw->urb.cs_start + brw->urb.nr_cs_entries * brw->urb.csize <= URB_SIZES(brw);
 }
 
 /* Most minimal update, forces re-emit of URB fence packet after GS
@@ -81,20 +80,6 @@ static void recalculate_urb_fence( struct brw_context *brw )
    GLuint vsize = brw->vs.prog_data->urb_entry_size;
    GLuint sfsize = brw->sf.prog_data->urb_entry_size;
 
-   static GLboolean (*hal_recalculate_urb_fence) (struct brw_context *brw);
-   static GLboolean hal_tried;
-
-   if (!hal_tried)
-   {
-      hal_recalculate_urb_fence = brw_hal_find_symbol ("intel_hal_recalculate_urb_fence");
-      hal_tried = 1;
-   }
-   if (hal_recalculate_urb_fence)
-   {
-      if ((*hal_recalculate_urb_fence) (brw))
-	 return;
-   }
-   
    if (csize < limits[CS].min_entry_size)
       csize = limits[CS].min_entry_size;
 
@@ -153,7 +138,7 @@ static void recalculate_urb_fence( struct brw_context *brw )
 		      brw->urb.clip_start,
 		      brw->urb.sf_start,
 		      brw->urb.cs_start, 
-		      256);
+		      URB_SIZES(brw));
       
       brw->state.dirty.brw |= BRW_NEW_URB_FENCE;
    }
@@ -191,13 +176,13 @@ void brw_upload_urb_fence(struct brw_context *brw)
    /* The ordering below is correct, not the layout in the
     * instruction.
     *
-    * There are 256 urb reg pairs in total.
+    * There are 256/384 urb reg pairs in total.
     */
    uf.bits0.vs_fence  = brw->urb.gs_start;
    uf.bits0.gs_fence  = brw->urb.clip_start; 
    uf.bits0.clp_fence = brw->urb.sf_start; 
    uf.bits1.sf_fence  = brw->urb.cs_start; 
-   uf.bits1.cs_fence  = 256;
+   uf.bits1.cs_fence  = URB_SIZES(brw);
 
    BRW_BATCH_STRUCT(brw, &uf);
 }
