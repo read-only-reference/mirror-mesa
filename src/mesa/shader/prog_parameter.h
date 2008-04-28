@@ -78,6 +78,16 @@ _mesa_free_parameter_list(struct gl_program_parameter_list *paramList);
 extern struct gl_program_parameter_list *
 _mesa_clone_parameter_list(const struct gl_program_parameter_list *list);
 
+extern struct gl_program_parameter_list *
+_mesa_combine_parameter_lists(const struct gl_program_parameter_list *a,
+                              const struct gl_program_parameter_list *b);
+
+static INLINE GLuint
+_mesa_num_parameters(const struct gl_program_parameter_list *list)
+{
+   return list ? list->NumParameters : 0;
+}
+
 extern GLint
 _mesa_add_parameter(struct gl_program_parameter_list *paramList,
                     enum register_file type, const char *name,
@@ -104,7 +114,7 @@ _mesa_add_uniform(struct gl_program_parameter_list *paramList,
 
 extern GLint
 _mesa_add_sampler(struct gl_program_parameter_list *paramList,
-                  const char *name, GLenum datatype);
+                  const char *name, GLenum datatype, GLuint index);
 
 extern GLint
 _mesa_add_varying(struct gl_program_parameter_list *paramList,

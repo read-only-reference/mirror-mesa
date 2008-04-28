@@ -3380,9 +3380,7 @@
         <size name="GetTexParameterfv" mode="get"/>
         <size name="GetTexParameteriv" mode="get"/>
     </enum>
-    <enum name="MAX_3D_TEXTURE_SIZE"           count="1"  value="0x8073">
-        <size name="Get" mode="get"/>
-    </enum>
+    <enum name="MAX_3D_TEXTURE_SIZE"                      value="0x8073"/>
     <enum name="UNSIGNED_BYTE_2_3_3_REV"                  value="0x8362"/>
     <enum name="UNSIGNED_SHORT_5_6_5"                     value="0x8363"/>
     <enum name="UNSIGNED_SHORT_5_6_5_REV"                 value="0x8364"/>
@@ -4529,19 +4527,15 @@
     </enum>
     <enum name="POINT_SIZE_MIN"                count="1"  value="0x8126">
         <size name="PointParameterfvEXT"/>
-        <size name="Get" mode="get"/>
     </enum>
     <enum name="POINT_SIZE_MAX"                count="1"  value="0x8127">
         <size name="PointParameterfvEXT"/>
-        <size name="Get" mode="get"/>
     </enum>
     <enum name="POINT_FADE_THRESHOLD_SIZE"     count="1"  value="0x8128">
         <size name="PointParameterfvEXT"/>
-        <size name="Get" mode="get"/>
     </enum>
     <enum name="POINT_DISTANCE_ATTENUATION"    count="3"  value="0x8129">
         <size name="PointParameterfvEXT"/>
-        <size name="Get" mode="get"/>
     </enum>
     <enum name="GENERATE_MIPMAP"               count="1"  value="0x8191">
         <size name="TexParameterfv"/>
@@ -11281,7 +11275,7 @@
         <glx rop="4183"/>
     </function>
 
-    <function name="ProgramParameter4dNV" alias="ProgramEnvParameter4dARB">
+    <function name="ProgramParameter4dNV" offset="assign" vectorequiv="ProgramParameter4dvNV">
         <param name="target" type="GLenum"/>
         <param name="index" type="GLuint"/>
         <param name="x" type="GLdouble"/>
@@ -11290,13 +11284,14 @@
         <param name="w" type="GLdouble"/>
     </function>
 
-    <function name="ProgramParameter4dvNV" alias="ProgramEnvParameter4dvARB">
+    <function name="ProgramParameter4dvNV" offset="assign">
         <param name="target" type="GLenum"/>
         <param name="index" type="GLuint"/>
-        <param name="params" type="const GLdouble *"/>
+        <param name="params" type="const GLdouble *" count="4"/>
+        <glx rop="4185" doubles_in_order="true"/>
     </function>
 
-    <function name="ProgramParameter4fNV" alias="ProgramEnvParameter4fARB">
+    <function name="ProgramParameter4fNV" offset="assign" vectorequiv="ProgramParameter4fvNV">
         <param name="target" type="GLenum"/>
         <param name="index" type="GLuint"/>
         <param name="x" type="GLfloat"/>
@@ -11305,10 +11300,11 @@
         <param name="w" type="GLfloat"/>
     </function>
 
-    <function name="ProgramParameter4fvNV" alias="ProgramEnvParameter4fvARB">
+    <function name="ProgramParameter4fvNV" offset="assign">
         <param name="target" type="GLenum"/>
         <param name="index" type="GLuint"/>
-        <param name="params" type="const GLfloat *"/>
+        <param name="params" type="const GLfloat *" count="4"/>
+        <glx rop="4184"/>
     </function>
 
     <function name="ProgramParameters4dvNV" offset="assign">
@@ -12135,12 +12131,8 @@
 <category name="GL_EXT_framebuffer_blit" number="316">
     <enum name="READ_FRAMEBUFFER_EXT" value="0x8CA8"/>
     <enum name="DRAW_FRAMEBUFFER_EXT" value="0x8CA9"/>
-    <enum name="DRAW_FRAMEBUFFER_BINDING_EXT" count="1" value="0x8CA6">
-        <size name="Get" mode="get"/>
-    </enum>
-    <enum name="READ_FRAMEBUFFER_BINDING_EXT" count="1" value="0x8CAA">
-        <size name="Get" mode="get"/>
-    </enum>
+    <enum name="DRAW_FRAMEBUFFER_BINDING_EXT" value="0x8CA6"/>
+    <enum name="READ_FRAMEBUFFER_BINDING_EXT" value="0x8CAA"/>
     <function name="BlitFramebufferEXT" offset="assign" static_dispatch="false">
         <param name="srcX0" type="GLint"/>
         <param name="srcY0" type="GLint"/>

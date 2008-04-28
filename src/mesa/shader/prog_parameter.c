@@ -283,22 +283,25 @@ _mesa_add_uniform(struct gl_program_parameter_list *paramList,
  * Add a sampler to the parameter list.
  * \param name  uniform's name
  * \param datatype  GL_SAMPLER_2D, GL_SAMPLER_2D_RECT_ARB, etc.
+ * \param index  the sampler number (as seen in TEX instructions)
  */
 GLint
 _mesa_add_sampler(struct gl_program_parameter_list *paramList,
-                  const char *name, GLenum datatype)
+                  const char *name, GLenum datatype, GLuint index)
 {
    GLint i = _mesa_lookup_parameter_index(paramList, -1, name);
    if (i >= 0 && paramList->Parameters[i].Type == PROGRAM_SAMPLER) {
       ASSERT(paramList->Parameters[i].Size == 1);
       ASSERT(paramList->Parameters[i].DataType == datatype);
+      ASSERT(paramList->ParameterValues[i][0] == index);
       /* already in list */
       return i;
    }
    else {
+      GLfloat indexf = index;
       const GLint size = 1; /* a sampler is basically a texture unit number */
       i = _mesa_add_parameter(paramList, PROGRAM_SAMPLER, name,
-                              size, datatype, NULL, NULL);
+                              size, datatype, &indexf, NULL);
       return i;
    }
 }
@@ -602,6 +605,39 @@ _mesa_clone_parameter_list(const struct gl_program_parameter_list *list)
 
    return clone;
 }
+
+
+/**
+ * Return a new parameter list which is listA + listB.
+ */
+struct gl_program_parameter_list *
+_mesa_combine_parameter_lists(const struct gl_program_parameter_list *listA,
+                              const struct gl_program_parameter_list *listB)
+{
+   struct gl_program_parameter_list *list;
+
+   if (listA) {
+      list = _mesa_clone_parameter_list(listA);
+      if (list && listB) {
+         GLuint i;
+         for (i = 0; i < listB->NumParameters; i++) {
+            struct gl_program_parameter *param = listB->Parameters + i;
+            _mesa_add_parameter(list, param->Type, param->Name, param->Size,
+                                param->DataType,
+                                listB->ParameterValues[i],
+                                param->StateIndexes);
+         }
+      }
+   }
+   else if (listB) {
+      list = _mesa_clone_parameter_list(listB);
+   }
+   else {
+      list = NULL;
+   }
+   return list;
+}
+
 
 
 /**

@@ -84,7 +84,6 @@ static const char *FragProgNames[] = {
    "program with \"OPTION ARB_fragment_program_shadow\"",
 };
 
-static GLboolean HaveShadow = GL_FALSE;
 static GLboolean HaveFBO = GL_FALSE;
 static GLboolean UseFBO = GL_FALSE;
 static GLboolean HaveVP = GL_FALSE;
@@ -530,10 +529,7 @@ ShowShadowMap(void)
    DisableTexgen();
 
    /* interpret texture's depth values as luminance values */
-   if (HaveShadow) {
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE_ARB, GL_NONE);
-   }
-
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE_ARB, GL_NONE);
    glTexParameteri(GL_TEXTURE_2D, GL_DEPTH_TEXTURE_MODE_ARB, GL_LUMINANCE);
    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 
@@ -600,9 +596,7 @@ Display(void)
       }
 
       if (DisplayMode == SHOW_DEPTH_MAPPING) {
-         if (HaveShadow) {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE_ARB, GL_NONE);
-         }
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE_ARB, GL_NONE);
          glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
          glEnable(GL_TEXTURE_2D);
 
@@ -620,10 +614,8 @@ Display(void)
       }
       else {
          assert(DisplayMode == SHOW_SHADOWS);
-         if (HaveShadow) {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE_ARB,
-                            GL_COMPARE_R_TO_TEXTURE_ARB);
-         }
+         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE_ARB,
+                         GL_COMPARE_R_TO_TEXTURE_ARB);
 
          if (curr_frag > 0) {
             glEnable(GL_FRAGMENT_PROGRAM_ARB);
@@ -658,6 +650,7 @@ Display(void)
          glDisable(GL_FRAGMENT_PROGRAM_ARB);
       }
 
+      glDisable(GL_TEXTURE_1D);
       glDisable(GL_TEXTURE_2D);
    }
 
@@ -731,10 +724,6 @@ Key(unsigned char key, int x, int y)
          break;
       case 'M':
          curr_frag = (1 + curr_frag) % max_frag;
-         if (!HaveShadow && (curr_frag == 0)) {
-            curr_frag = 1;
-         }
-
          printf("Using fragment %s\n", FragProgNames[curr_frag]);
 
          if (HaveFP) {
@@ -752,10 +741,8 @@ Key(unsigned char key, int x, int y)
             if (Operator >= 8)
                Operator = 0;
             printf("Operator: %s\n", OperatorName[Operator]);
-            if (HaveShadow) {
-               glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC_ARB,
-                               OperatorFunc[Operator]);
-            }
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC_ARB,
+                            OperatorFunc[Operator]);
          }
          break;
       case 'p':
@@ -872,30 +859,16 @@ Init(void)
 {
    static const GLfloat borderColor[4] = {1.0, 0.0, 0.0, 0.0};
 
-   if (!glutExtensionSupported("GL_ARB_depth_texture")) {
-      printf("Sorry, this demo requires the GL_ARB_depth_texture extension\n");
+   if (!glutExtensionSupported("GL_ARB_depth_texture") ||
+       !glutExtensionSupported("GL_ARB_shadow")) {
+      printf("Sorry, this demo requires the GL_ARB_depth_texture and GL_ARB_shadow extensions\n");
       exit(1);
    }
+   printf("Using GL_ARB_depth_texture and GL_ARB_shadow\n");
 
-   HaveShadow = glutExtensionSupported("GL_ARB_shadow");
    HaveVP = glutExtensionSupported("GL_ARB_vertex_program");
    HaveFP = glutExtensionSupported("GL_ARB_fragment_program");
    HaveFP_Shadow = glutExtensionSupported("GL_ARB_fragment_program_shadow");
-
-   if (!HaveShadow && !HaveFP) {
-      printf("Sorry, this demo requires either the GL_ARB_shadow extension "
-	     "or the GL_ARB_fragment_program extension\n");
-      exit(1);
-   }
-
-   printf("Using GL_ARB_depth_texture\n");
-   if (HaveShadow) {
-      printf("and GL_ARB_shadow\n");
-   }
-
-   if (HaveFP) {
-      printf("and GL_ARB_fragment_program\n");
-   }
 
    HaveShadowAmbient = glutExtensionSupported("GL_ARB_shadow_ambient");
    if (HaveShadowAmbient) {
@@ -923,12 +896,9 @@ Init(void)
    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
-
-   if (HaveShadow) {
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE_ARB,
-                      GL_COMPARE_R_TO_TEXTURE_ARB);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC_ARB, GL_LEQUAL);
-   }
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE_ARB,
+                   GL_COMPARE_R_TO_TEXTURE_ARB);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC_ARB, GL_LEQUAL);
 
    if (HaveShadowAmbient) {
       glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FAIL_VALUE_ARB, 0.3);
@@ -983,11 +953,6 @@ Init(void)
       frag_progs[2] = compile_program(GL_FRAGMENT_PROGRAM_ARB, 
                                       frag_shadow_code);
       max_frag = 3;
-   }
-
-   if (!HaveShadow) {
-      curr_frag = 1;
-      glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, frag_progs[curr_frag]);
    }
 
    glEnable(GL_DEPTH_TEST);

@@ -156,7 +156,7 @@ GLboolean radeonInitContext(radeonContextPtr radeon,
 	radeon->dri.hwContext = driContextPriv->hHWContext;
 	radeon->dri.hwLock = &sPriv->pSAREA->lock;
 	radeon->dri.fd = sPriv->fd;
-	radeon->dri.drmMinor = sPriv->drm_version.minor;
+	radeon->dri.drmMinor = sPriv->drmMinor;
 
 	radeon->radeonScreen = screen;
 	radeon->sarea = (drm_radeon_sarea_t *) ((GLubyte *) sPriv->pSAREA +
@@ -177,7 +177,10 @@ GLboolean radeonInitContext(radeonContextPtr radeon,
 			radeon->do_usleeps ? "usleeps" : "busy waits",
 			fthrottle_mode, radeon->radeonScreen->irq);
 
-	(*sPriv->systemTime->getUST) (&radeon->swap_ust);
+	radeon->vblank_flags = (radeon->radeonScreen->irq != 0)
+	    ? driGetDefaultVBlankFlags(&radeon->optionCache) : VBLANK_FLAG_NO_IRQ;
+
+	(*dri_interface->getUST) (&radeon->swap_ust);
 
 	return GL_TRUE;
 }
@@ -274,15 +277,9 @@ GLboolean radeonMakeCurrent(__DRIcontextPrivate * driContextPriv,
 				radeon->glCtx);
 
 		if (radeon->dri.drawable != driDrawPriv) {
-			if (driDrawPriv->swap_interval == (unsigned)-1) {
-				driDrawPriv->vblFlags =
-					(radeon->radeonScreen->irq != 0)
-					? driGetDefaultVBlankFlags(&radeon->
-								   optionCache)
-					: VBLANK_FLAG_NO_IRQ;
-
-				driDrawableInitVBlank(driDrawPriv);
-			}
+			driDrawableInitVBlank(driDrawPriv,
+					      radeon->vblank_flags,
+					      &radeon->vbl_seq);
 		}
 
 		radeon->dri.readable = driReadPriv;

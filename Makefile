@@ -12,9 +12,14 @@ default: $(TOP)/configs/current
 		fi \
 	done
 
+all: default
+
 
 doxygen:
-	(cd doxygen ; make) ; \
+	cd doxygen && $(MAKE)
+
+.PHONY: doxygen
+
 
 clean:
 	@for dir in $(SUBDIRS) ; do \
@@ -25,17 +30,13 @@ clean:
 
 
 realclean:
-	touch $(TOP)/configs/current
-	$(MAKE) clean
-	-rm -rf lib*
-	-rm -f $(TOP)/configs/current
-	-rm -f $(TOP)/configs/autoconf
-	-rm -rf autom4te.cache
 	-rm -f `find . -name \*.o`
 	-rm -f `find . -name \*.a`
 	-rm -f `find . -name \*.so`
 	-rm -f `find . -name depend`
-
+	-rm -rf lib*
+	$(MAKE) clean
+	-rm -f $(TOP)/configs/current
 
 
 install:
@@ -68,16 +69,11 @@ aix-64 \
 aix-64-static \
 aix-gcc \
 aix-static \
-autoconf \
-bluegene-osmesa \
-bluegene-xlc-osmesa \
 beos \
-catamount-osmesa-pgi \
 darwin \
-darwin-fat-32bit \
-darwin-fat-all \
 darwin-static \
 darwin-static-x86ppc \
+darwin-x86ppc \
 freebsd \
 freebsd-dri \
 freebsd-dri-amd64 \
@@ -103,6 +99,7 @@ irix6-o32-static \
 linux \
 linux-alpha \
 linux-alpha-static \
+linux-cell \
 linux-debug \
 linux-directfb \
 linux-dri \
@@ -118,12 +115,14 @@ linux-ia64-icc \
 linux-ia64-icc-static \
 linux-icc \
 linux-icc-static \
+linux-llvm \
 linux-osmesa \
 linux-osmesa16 \
 linux-osmesa16-static \
 linux-osmesa32 \
 linux-ppc \
 linux-ppc-static \
+linux-profile \
 linux-solo \
 linux-solo-x86 \
 linux-solo-ia64 \
@@ -137,8 +136,10 @@ linux-x86-debug \
 linux-x86-32 \
 linux-x86-64 \
 linux-x86-64-debug \
+linux-x86-64-profile \
 linux-x86-64-static \
 linux-x86-glide \
+linux-x86-profile \
 linux-x86-static \
 netbsd \
 openbsd \
@@ -158,9 +159,8 @@ sunos5-v8 \
 sunos5-v8-static \
 sunos5-v9 \
 sunos5-v9-static \
-sunos5-v9-cc-g++ \
 ultrix-gcc:
-	@ if test -f configs/current || test -L configs/current ; then \
+	@ if [ -e configs/current ] ; then \
 		echo "Please run 'make realclean' before changing configs" ; \
 		exit 1 ; \
 	fi
@@ -177,14 +177,8 @@ GLUT_NAME = MesaGLUT-7.1pre
 
 MAIN_FILES = \
 	$(DIRECTORY)/Makefile*						\
-	$(DIRECTORY)/configure						\
-	$(DIRECTORY)/configure.ac					\
-	$(DIRECTORY)/aclocal.m4						\
 	$(DIRECTORY)/descrip.mms					\
 	$(DIRECTORY)/mms-config.					\
-	$(DIRECTORY)/bin/config.guess					\
-	$(DIRECTORY)/bin/config.sub					\
-	$(DIRECTORY)/bin/install-sh					\
 	$(DIRECTORY)/bin/mklib						\
 	$(DIRECTORY)/bin/minstall					\
 	$(DIRECTORY)/configs/[a-z]*					\
@@ -223,7 +217,6 @@ MAIN_FILES = \
 	$(DIRECTORY)/src/mesa/Makefile*					\
 	$(DIRECTORY)/src/mesa/sources					\
 	$(DIRECTORY)/src/mesa/descrip.mms				\
-	$(DIRECTORY)/src/mesa/gl.pc.in					\
 	$(DIRECTORY)/src/mesa/depend					\
 	$(DIRECTORY)/src/mesa/main/*.[chS]				\
 	$(DIRECTORY)/src/mesa/main/descrip.mms				\
@@ -315,7 +308,6 @@ MAIN_FILES = \
 
 DRI_FILES = \
 	$(DIRECTORY)/include/GL/internal/dri_interface.h		\
-	$(DIRECTORY)/include/GL/internal/dri_sarea.h			\
 	$(DIRECTORY)/include/GL/internal/sarea.h			\
 	$(DIRECTORY)/src/glx/Makefile					\
 	$(DIRECTORY)/src/glx/x11/Makefile				\
@@ -332,7 +324,6 @@ DRI_FILES = \
 SGI_GLU_FILES = \
 	$(DIRECTORY)/src/glu/Makefile					\
 	$(DIRECTORY)/src/glu/descrip.mms				\
-	$(DIRECTORY)/src/glu/glu.pc.in					\
 	$(DIRECTORY)/src/glu/sgi/Makefile				\
 	$(DIRECTORY)/src/glu/sgi/Makefile.mgw				\
 	$(DIRECTORY)/src/glu/sgi/Makefile.win				\
@@ -366,7 +357,6 @@ GLW_FILES = \
 	$(DIRECTORY)/src/glw/*.[ch]			\
 	$(DIRECTORY)/src/glw/Makefile*			\
 	$(DIRECTORY)/src/glw/README			\
-	$(DIRECTORY)/src/glw/glw.pc.in			\
 	$(DIRECTORY)/src/glw/depend
 
 DEMO_FILES = \
@@ -410,7 +400,6 @@ GLUT_FILES = \
 	$(DIRECTORY)/include/GL/glutf90.h		\
 	$(DIRECTORY)/src/glut/glx/Makefile*		\
 	$(DIRECTORY)/src/glut/glx/depend		\
-	$(DIRECTORY)/src/glut/glx/glut.pc.in		\
 	$(DIRECTORY)/src/glut/glx/*def			\
 	$(DIRECTORY)/src/glut/glx/descrip.mms		\
 	$(DIRECTORY)/src/glut/glx/mms_depend		\
@@ -426,10 +415,6 @@ GLUT_FILES = \
 	$(DIRECTORY)/src/glut/fbdev/Makefile		\
 	$(DIRECTORY)/src/glut/fbdev/*[ch]		\
 	$(DIRECTORY)/src/glut/mini/*[ch]		\
-	$(DIRECTORY)/src/glut/mini/glut.pc.in		\
-	$(DIRECTORY)/src/glut/directfb/Makefile		\
-	$(DIRECTORY)/src/glut/directfb/NOTES		\
-	$(DIRECTORY)/src/glut/directfb/*[ch]		\
 	$(DIRECTORY)/windows/VC6/progs/glut/glut.dsp	\
 	$(DIRECTORY)/windows/VC7/progs/glut/glut.vcproj
 
@@ -445,19 +430,8 @@ LIB_FILES = $(MAIN_FILES) $(DRI_FILES) $(SGI_GLU_FILES) $(GLW_FILES)
 
 
 # Everything for new a Mesa release:
-tarballs: rm_depend configure aclocal.m4 lib_gz demo_gz glut_gz \
-	lib_bz2 demo_bz2 glut_bz2 lib_zip demo_zip glut_zip md5
+tarballs: rm_depend lib_gz demo_gz glut_gz lib_bz2 demo_bz2 glut_bz2 lib_zip demo_zip glut_zip md5
 
-
-# Helper for autoconf builds
-ACLOCAL = aclocal
-ACLOCAL_FLAGS =
-AUTOCONF = autoconf
-AC_FLAGS =
-aclocal.m4: configure.ac
-	$(ACLOCAL) $(ACLOCAL_FLAGS)
-configure: configure.ac aclocal.m4
-	$(AUTOCONF) $(AC_FLAGS)
 
 rm_depend:
 	@for dep in $(DEPEND_FILES) ; do \
@@ -467,7 +441,6 @@ rm_depend:
 
 lib_gz:
 	rm -f configs/current ; \
-	rm -f configs/autoconf ; \
 	cd .. ; \
 	tar -cf $(LIB_NAME).tar $(LIB_FILES) ; \
 	gzip $(LIB_NAME).tar ; \
@@ -487,7 +460,6 @@ glut_gz:
 
 lib_bz2:
 	rm -f configs/current ; \
-	rm -f configs/autoconf ; \
 	cd .. ; \
 	tar -cf $(LIB_NAME).tar $(LIB_FILES) ; \
 	bzip2 $(LIB_NAME).tar ; \
@@ -507,7 +479,6 @@ glut_bz2:
 
 lib_zip:
 	rm -f configs/current ; \
-	rm -f configs/autoconf ; \
 	rm -f $(LIB_NAME).zip ; \
 	cd .. ; \
 	zip -qr $(LIB_NAME).zip $(LIB_FILES) ; \

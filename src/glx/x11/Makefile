@@ -31,14 +31,11 @@ SOURCES = \
 	  glx_query.c \
 	  glx_texture_compression.c \
 	  dri_glx.c \
-	  XF86dri.c \
-	  glxhash.c \
-	  dri2_glx.c \
-	  dri2.c
+	  XF86dri.c
 
 include $(TOP)/src/mesa/sources
 
-MESA_ASM_API = $(addprefix $(TOP)/src/mesa/, $(ASM_API))
+MESA_GLAPI_ASM_SOURCES = $(addprefix $(TOP)/src/mesa/, $(GLAPI_ASM_SOURCES))
 MESA_GLAPI_SOURCES = $(addprefix $(TOP)/src/mesa/, $(GLAPI_SOURCES))
 MESA_GLAPI_OBJECTS = $(addprefix $(TOP)/src/mesa/, $(GLAPI_OBJECTS))
 
@@ -47,10 +44,10 @@ OBJECTS = $(SOURCES:.c=.o) $(MESA_GLAPI_OBJECTS)
 INCLUDES = -I. \
 	-I$(TOP)/include \
 	-I$(TOP)/include/GL/internal \
+	-I$(TOP)/src/mesa \
 	-I$(TOP)/src/mesa/main \
 	-I$(TOP)/src/mesa/glapi \
 	$(LIBDRM_CFLAGS) \
-	$(DRI2PROTO_CFLAGS) \
 	$(X11_INCLUDES)
 
 
@@ -68,23 +65,24 @@ default: depend $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME)
 
 # Make libGL
 $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME):  $(OBJECTS) Makefile
-	$(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+	$(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' \
 		-major 1 -minor 2 $(MKLIB_OPTIONS) \
 		-install $(TOP)/$(LIB_DIR) $(GL_LIB_DEPS) $(OBJECTS)
 
 
-depend: $(SOURCES) $(MESA_GLAPI_SOURCES) $(MESA_ASM_API) Makefile
+depend: $(SOURCES) $(MESA_GLAPI_SOURCES) $(MESA_GLAPI_ASM_SOURCES) Makefile
+	rm -f depend
 	touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDES) $(SOURCES) \
-		$(MESA_GLAPI_SOURCES) $(MESA_ASM_API) 
+		$(MESA_GLAPI_SOURCES) $(MESA_GLAPI_ASM_SOURCES) 
 
 
 # Emacs tags
 tags:
 	etags `find . -name \*.[ch]` `find $(TOP)/include`
 
-install: $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME)
-	make -C $(TOP)/src/mesa install-libgl
+# Dummy install target
+install:
 
 # Remove .o and backup files
 clean:
@@ -92,4 +90,4 @@ clean:
 	-rm -f *.o *~
 	-rm -f depend
 
--include depend
+include depend

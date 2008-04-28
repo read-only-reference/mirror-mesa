@@ -61,8 +61,8 @@
 #include <inttypes.h>
 #include <sys/mman.h>
 #include "xf86dri.h"
-#include "xf86drm.h"
 #include "sarea.h"
+#include "dri_glx.h"
 #endif
 
 #ifdef USE_XCB
@@ -71,6 +71,7 @@
 #include <xcb/glx.h>
 #endif
 
+#include <assert.h>
 
 #ifdef DEBUG
 void __glXDumpDrawBuffer(__GLXcontext *ctx);
@@ -106,6 +107,13 @@ static int _mesa_sparc_needs_init = 1;
 #else
 #define INIT_MESA_SPARC
 #endif
+
+#ifdef GLX_DIRECT_RENDERING
+static __DRIscreen *__glXFindDRIScreen(__DRInativeDisplay *dpy, int scrn);
+#endif /* GLX_DIRECT_RENDERING */
+
+static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
+    GLXDrawable read, GLXContext gc);
 
 /*
 ** We setup some dummy structures here so that the API can be used
@@ -145,7 +153,7 @@ static __GLapi *IndirectAPI = NULL;
 static GLboolean TSDinitialized = GL_FALSE;
 static xthread_key_t ContextTSD;
 
-_X_HIDDEN __GLXcontext *__glXGetCurrentContext(void)
+__GLXcontext *__glXGetCurrentContext(void)
 {
    if (!TSDinitialized) {
       xthread_key_create(&ContextTSD, NULL);
@@ -162,7 +170,7 @@ _X_HIDDEN __GLXcontext *__glXGetCurrentContext(void)
    }
 }
 
-_X_HIDDEN void __glXSetCurrentContext(__GLXcontext *c)
+void __glXSetCurrentContext(__GLXcontext *c)
 {
    if (!TSDinitialized) {
       xthread_key_create(&ContextTSD, NULL);
@@ -173,11 +181,11 @@ _X_HIDDEN void __glXSetCurrentContext(__GLXcontext *c)
 
 
 /* Used by the __glXLock() and __glXUnlock() macros */
-_X_HIDDEN xmutex_rec __glXmutex;
+xmutex_rec __glXmutex;
 
 #elif defined( PTHREADS )
 
-_X_HIDDEN pthread_mutex_t __glXmutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t __glXmutex = PTHREAD_MUTEX_INITIALIZER;
 
 # if defined( GLX_USE_TLS )
 
@@ -191,7 +199,7 @@ _X_HIDDEN pthread_mutex_t __glXmutex = PTHREAD_MUTEX_INITIALIZER;
 __thread void * __glX_tls_Context __attribute__((tls_model("initial-exec")))
     = &dummyContext;
 
-_X_HIDDEN void __glXSetCurrentContext( __GLXcontext * c )
+void __glXSetCurrentContext( __GLXcontext * c )
 {
     __glX_tls_Context = (c != NULL) ? c : &dummyContext;
 }
@@ -224,13 +232,13 @@ static void init_thread_data( void )
     }
 }
 
-_X_HIDDEN void __glXSetCurrentContext( __GLXcontext * c )
+void __glXSetCurrentContext( __GLXcontext * c )
 {
     pthread_once( & once_control, init_thread_data );
     pthread_setspecific( ContextTSD, c );
 }
 
-_X_HIDDEN __GLXcontext * __glXGetCurrentContext( void )
+__GLXcontext * __glXGetCurrentContext( void )
 {
     void * v;
 
@@ -249,7 +257,7 @@ _X_HIDDEN __GLXcontext * __glXGetCurrentContext( void )
 #else
 
 /* not thread safe */
-_X_HIDDEN __GLXcontext *__glXcurrentContext = &dummyContext;
+__GLXcontext *__glXcurrentContext = &dummyContext;
 
 #endif
 
@@ -258,7 +266,15 @@ _X_HIDDEN __GLXcontext *__glXcurrentContext = &dummyContext;
 ** You can set this cell to 1 to force the gl drawing stuff to be
 ** one command per packet
 */
-_X_HIDDEN int __glXDebug = 0;
+int __glXDebug = 0;
+
+/*
+** forward prototype declarations
+*/
+int __glXCloseDisplay(Display *dpy, XExtCodes *codes);
+
+
+/************************************************************************/
 
 /* Extension required boiler plate */
 
@@ -281,7 +297,7 @@ static /* const */ char *error_list[] = {
     "GLXBadWindow",
 };
 
-static int __glXCloseDisplay(Display *dpy, XExtCodes *codes)
+int __glXCloseDisplay(Display *dpy, XExtCodes *codes)
 {
   GLXContext gc;
 
@@ -345,10 +361,11 @@ static void FreeScreenConfigs(__GLXdisplayPrivate *priv)
 	Xfree((char*) psc->serverGLXexts);
 
 #ifdef GLX_DIRECT_RENDERING
-	if (psc->driScreen) {
-	    psc->driScreen->destroyScreen(psc);
-	    __glxHashDestroy(psc->drawHash);
-	}
+	/* Free the direct rendering per screen data */
+	if (psc->driScreen.private)
+	    (*psc->driScreen.destroyScreen)(priv->dpy, i,
+					    psc->driScreen.private);
+	psc->driScreen.private = NULL;
 #endif
     }
     XFree((char*) priv->screenConfigs);
@@ -375,12 +392,14 @@ static int __glXFreeDisplayPrivate(XExtData *extension)
 
 #ifdef GLX_DIRECT_RENDERING
     /* Free the direct rendering per display data */
-    if (priv->driDisplay)
-	(*priv->driDisplay->destroyDisplay)(priv->driDisplay);
-    priv->driDisplay = NULL;
-    if (priv->dri2Display)
-	(*priv->dri2Display->destroyDisplay)(priv->dri2Display);
-    priv->dri2Display = NULL;
+    if (priv->driDisplay.private)
+	(*priv->driDisplay.destroyDisplay)(priv->dpy,
+					   priv->driDisplay.private);
+    priv->driDisplay.private = NULL;
+    if (priv->driDisplay.createNewScreen) {
+        Xfree(priv->driDisplay.createNewScreen); /* free array of ptrs */
+        priv->driDisplay.createNewScreen = NULL;
+    }
 #endif
 
     Xfree((char*) priv);
@@ -422,7 +441,7 @@ static Bool QueryVersion(Display *dpy, int opcode, int *major, int *minor)
 }
 
 
-_X_HIDDEN void 
+void 
 __glXInitializeVisualConfigFromTags( __GLcontextModes *config, int count, 
 				     const INT32 *bp, Bool tagged_only,
 				     Bool fbconfig_style_tags )
@@ -616,128 +635,369 @@ __glXInitializeVisualConfigFromTags( __GLcontextModes *config, int count,
     config->haveStencilBuffer = (config->stencilBits > 0);
 }
 
-static __GLcontextModes *
-createConfigsFromProperties(Display *dpy, int nvisuals, int nprops,
-			    int screen, GLboolean tagged_only)
+
+#ifdef GLX_DIRECT_RENDERING
+static unsigned
+filter_modes( __GLcontextModes ** server_modes,
+	      const __GLcontextModes * driver_modes )
 {
-    INT32 buf[__GLX_TOTAL_CONFIG], *props;
-    unsigned prop_size;
-    __GLcontextModes *modes, *m;
-    int i;
+    __GLcontextModes * m;
+    __GLcontextModes ** prev_next;
+    const __GLcontextModes * check;
+    unsigned modes_count = 0;
 
-    if (nprops == 0)
-	return NULL;
-
-    /* FIXME: Is the __GLX_MIN_CONFIG_PROPS test correct for FBconfigs? */
-
-    /* Check number of properties */
-    if (nprops < __GLX_MIN_CONFIG_PROPS || nprops > __GLX_MAX_CONFIG_PROPS)
-	return NULL;
-
-    /* Allocate memory for our config structure */
-    modes = _gl_context_modes_create(nvisuals, sizeof(__GLcontextModes));
-    if (!modes)
-	return NULL;
-
-    prop_size = nprops * __GLX_SIZE_INT32;
-    if (prop_size <= sizeof(buf))
-	props = buf;
-    else
-	props = Xmalloc(prop_size);
-
-    /* Read each config structure and convert it into our format */
-    m = modes;
-    for (i = 0; i < nvisuals; i++) {
-	_XRead(dpy, (char *)props, prop_size);
-	/* Older X servers don't send this so we default it here. */
-	m->drawableType = GLX_WINDOW_BIT;
-	__glXInitializeVisualConfigFromTags(m, nprops, props,
-					    tagged_only, GL_TRUE);
-	m->screen = screen;
-	m = m->next;
+    if ( driver_modes == NULL ) {
+	fprintf(stderr, "libGL warning: 3D driver returned no fbconfigs.\n");
+	return 0;
     }
 
-    if (props != buf)
-	Xfree(props);
+    /* For each mode in server_modes, check to see if a matching mode exists
+     * in driver_modes.  If not, then the mode is not available.
+     */
 
-    return modes;
+    prev_next = server_modes;
+    for ( m = *prev_next ; m != NULL ; m = *prev_next ) {
+	GLboolean do_delete = GL_TRUE;
+
+	for ( check = driver_modes ; check != NULL ; check = check->next ) {
+	    if ( _gl_context_modes_are_same( m, check ) ) {
+		do_delete = GL_FALSE;
+		break;
+	    }
+	}
+
+	/* The 3D has to support all the modes that match the GLX visuals
+	 * sent from the X server.
+	 */
+	if ( do_delete && (m->visualID != 0) ) {
+	    do_delete = GL_FALSE;
+
+	    fprintf(stderr, "libGL warning: 3D driver claims to not support "
+		    "visual 0x%02x\n", m->visualID);
+	}
+
+	if ( do_delete ) {
+	    *prev_next = m->next;
+
+	    m->next = NULL;
+	    _gl_context_modes_destroy( m );
+	}
+	else {
+	    modes_count++;
+	    prev_next = & m->next;
+	}
+    }
+
+    return modes_count;
 }
 
-static GLboolean
-getVisualConfigs(Display *dpy, __GLXdisplayPrivate *priv, int screen)
+
+/**
+ * Implement \c __DRIinterfaceMethods::getProcAddress.
+ */
+static __DRIfuncPtr get_proc_address( const char * proc_name )
 {
-    xGLXGetVisualConfigsReq *req;
-    __GLXscreenConfigs *psc;
-    xGLXGetVisualConfigsReply reply;
+    if (strcmp( proc_name, "glxEnableExtension" ) == 0) {
+	return (__DRIfuncPtr) __glXScrEnableExtension;
+    }
     
-    LockDisplay(dpy);
-
-    psc = priv->screenConfigs + screen;
-    psc->visuals = NULL;
-    GetReq(GLXGetVisualConfigs, req);
-    req->reqType = priv->majorOpcode;
-    req->glxCode = X_GLXGetVisualConfigs;
-    req->screen = screen;
-
-    if (!_XReply(dpy, (xReply*) &reply, 0, False))
-	goto out;
-
-    psc->visuals = createConfigsFromProperties(dpy,
-					       reply.numVisuals,
-					       reply.numProps,
-					       screen, GL_FALSE);
-
- out:
-    UnlockDisplay(dpy);
-    return psc->visuals != NULL;
+    return NULL;
 }
 
-static GLboolean
-getFBConfigs(Display *dpy, __GLXdisplayPrivate *priv, int screen)
+#ifdef XDAMAGE_1_1_INTERFACE
+static GLboolean has_damage_post(__DRInativeDisplay *dpy)
 {
-    xGLXGetFBConfigsReq *fb_req;
-    xGLXGetFBConfigsSGIXReq *sgi_req;
-    xGLXVendorPrivateWithReplyReq *vpreq;
-    xGLXGetFBConfigsReply reply;
-    __GLXscreenConfigs *psc;
+    static GLboolean inited = GL_FALSE;
+    static GLboolean has_damage;
 
-    psc = priv->screenConfigs + screen;
-    psc->serverGLXexts = __glXGetStringFromServer(dpy, priv->majorOpcode,
-						  X_GLXQueryServerString,
-						  screen, GLX_EXTENSIONS);
+    if (!inited) {
+	int major, minor;
 
-    LockDisplay(dpy);
+	if (XDamageQueryVersion(dpy, &major, &minor) &&
+	    major == 1 && minor >= 1)
+	{
+	    has_damage = GL_TRUE;
+	} else {
+	    has_damage = GL_FALSE;
+	}
+	inited = GL_TRUE;
+    }
 
-    psc->configs = NULL;
-    if (atof(priv->serverGLXversion) >= 1.3) {
-	GetReq(GLXGetFBConfigs, fb_req);
-	fb_req->reqType = priv->majorOpcode;
-	fb_req->glxCode = X_GLXGetFBConfigs;
-	fb_req->screen = screen;
-    } else if (strstr(psc->serverGLXexts, "GLX_SGIX_fbconfig") != NULL) {
-	GetReqExtra(GLXVendorPrivateWithReply,
-		    sz_xGLXGetFBConfigsSGIXReq +
-		    sz_xGLXVendorPrivateWithReplyReq, vpreq);
-	sgi_req = (xGLXGetFBConfigsSGIXReq *) vpreq;
-	sgi_req->reqType = priv->majorOpcode;
-	sgi_req->glxCode = X_GLXVendorPrivateWithReply;
-	sgi_req->vendorCode = X_GLXvop_GetFBConfigsSGIX;
-	sgi_req->screen = screen;
-    } else
-	goto out;
-
-    if (!_XReply(dpy, (xReply*) &reply, 0, False))
-	goto out;
-
-    psc->configs = createConfigsFromProperties(dpy,
-					       reply.numFBConfigs,
-					       reply.numAttribs * 2,
-					       screen, GL_TRUE);
-
- out:
-    UnlockDisplay(dpy);
-    return psc->configs != NULL;
+    return has_damage;
 }
+#endif /* XDAMAGE_1_1_INTERFACE */
+
+static void __glXReportDamage(__DRInativeDisplay *dpy, int screen,
+			      __DRIid drawable,
+			      int x, int y,
+			      drm_clip_rect_t *rects, int num_rects,
+			      GLboolean front_buffer)
+{
+#ifdef XDAMAGE_1_1_INTERFACE
+    XRectangle *xrects;
+    XserverRegion region;
+    int i;
+    int x_off, y_off;
+
+    if (!has_damage_post(dpy))
+	return;
+
+    if (front_buffer) {
+	x_off = x;
+	y_off = y;
+	drawable = RootWindow(dpy, screen);
+    } else{
+	x_off = 0;
+	y_off = 0;
+    }
+
+    xrects = malloc(sizeof(XRectangle) * num_rects);
+    if (xrects == NULL)
+	return;
+
+    for (i = 0; i < num_rects; i++) {
+	xrects[i].x = rects[i].x1 + x_off;
+	xrects[i].y = rects[i].y1 + y_off;
+	xrects[i].width = rects[i].x2 - rects[i].x1;
+	xrects[i].height = rects[i].y2 - rects[i].y1;
+    }
+    region = XFixesCreateRegion(dpy, xrects, num_rects);
+    free(xrects);
+    XDamageAdd(dpy, drawable, region);
+    XFixesDestroyRegion(dpy, region);
+#endif
+}
+
+/**
+ * Table of functions exported by the loader to the driver.
+ */
+static const __DRIinterfaceMethods interface_methods = {
+    get_proc_address,
+
+    _gl_context_modes_create,
+    _gl_context_modes_destroy,
+      
+    __glXFindDRIScreen,
+    __glXWindowExists,
+      
+    XF86DRICreateContextWithConfig,
+    XF86DRIDestroyContext,
+
+    XF86DRICreateDrawable,
+    XF86DRIDestroyDrawable,
+    XF86DRIGetDrawableInfo,
+
+    __glXGetUST,
+    __glXGetMscRateOML,
+
+    __glXReportDamage,
+};
+
+
+
+/**
+ * Perform the required libGL-side initialization and call the client-side
+ * driver's \c __driCreateNewScreen function.
+ * 
+ * \param dpy    Display pointer.
+ * \param scrn   Screen number on the display.
+ * \param psc    DRI screen information.
+ * \param driDpy DRI display information.
+ * \param createNewScreen  Pointer to the client-side driver's
+ *               \c __driCreateNewScreen function.
+ * \returns A pointer to the \c __DRIscreenPrivate structure returned by
+ *          the client-side driver on success, or \c NULL on failure.
+ * 
+ * \todo This function needs to be modified to remove context-modes from the
+ *       list stored in the \c __GLXscreenConfigsRec to match the list
+ *       returned by the client-side driver.
+ */
+static void *
+CallCreateNewScreen(Display *dpy, int scrn, __DRIscreen *psc,
+		    __DRIdisplay * driDpy,
+		    PFNCREATENEWSCREENFUNC createNewScreen)
+{
+    __DRIscreenPrivate *psp = NULL;
+#ifndef GLX_USE_APPLEGL
+    drm_handle_t hSAREA;
+    drmAddress pSAREA = MAP_FAILED;
+    char *BusID;
+    __DRIversion   ddx_version;
+    __DRIversion   dri_version;
+    __DRIversion   drm_version;
+    __DRIframebuffer  framebuffer;
+    int   fd = -1;
+    int   status;
+    const char * err_msg;
+    const char * err_extra;
+    int api_ver = __glXGetInternalVersion();
+
+
+    dri_version.major = driDpy->private->driMajor;
+    dri_version.minor = driDpy->private->driMinor;
+    dri_version.patch = driDpy->private->driPatch;
+
+
+    err_msg = "XF86DRIOpenConnection";
+    err_extra = NULL;
+
+    framebuffer.base = MAP_FAILED;
+    framebuffer.dev_priv = NULL;
+
+    if (XF86DRIOpenConnection(dpy, scrn, &hSAREA, &BusID)) {
+        int newlyopened;
+	fd = drmOpenOnce(NULL,BusID, &newlyopened);
+	Xfree(BusID); /* No longer needed */
+
+	err_msg = "open DRM";
+	err_extra = strerror( -fd );
+
+	if (fd >= 0) {
+	    drm_magic_t magic;
+
+	    err_msg = "drmGetMagic";
+	    err_extra = NULL;
+
+	    if (!drmGetMagic(fd, &magic)) {
+		drmVersionPtr version = drmGetVersion(fd);
+		if (version) {
+		    drm_version.major = version->version_major;
+		    drm_version.minor = version->version_minor;
+		    drm_version.patch = version->version_patchlevel;
+		    drmFreeVersion(version);
+		}
+		else {
+		    drm_version.major = -1;
+		    drm_version.minor = -1;
+		    drm_version.patch = -1;
+		}
+
+		err_msg = "XF86DRIAuthConnection";
+		if (!newlyopened || XF86DRIAuthConnection(dpy, scrn, magic)) {
+		    char *driverName;
+
+		    /*
+		     * Get device name (like "tdfx") and the ddx version
+		     * numbers.  We'll check the version in each DRI driver's
+		     * "createNewScreen" function.
+		     */
+		    err_msg = "XF86DRIGetClientDriverName";
+		    if (XF86DRIGetClientDriverName(dpy, scrn,
+						   &ddx_version.major,
+						   &ddx_version.minor,
+						   &ddx_version.patch,
+						   &driverName)) {
+			drm_handle_t  hFB;
+			int        junk;
+
+			/* No longer needed. */
+			Xfree( driverName );
+
+
+			/*
+			 * Get device-specific info.  pDevPriv will point to a struct
+			 * (such as DRIRADEONRec in xfree86/driver/ati/radeon_dri.h)
+			 * that has information about the screen size, depth, pitch,
+			 * ancilliary buffers, DRM mmap handles, etc.
+			 */
+			err_msg = "XF86DRIGetDeviceInfo";
+			if (XF86DRIGetDeviceInfo(dpy, scrn,
+						 &hFB,
+						 &junk,
+						 &framebuffer.size,
+						 &framebuffer.stride,
+						 &framebuffer.dev_priv_size,
+						 &framebuffer.dev_priv)) {
+			    framebuffer.width = DisplayWidth(dpy, scrn);
+			    framebuffer.height = DisplayHeight(dpy, scrn);
+
+			    /*
+			     * Map the framebuffer region.
+			     */
+			    status = drmMap(fd, hFB, framebuffer.size, 
+					    (drmAddressPtr)&framebuffer.base);
+
+			    err_msg = "drmMap of framebuffer";
+			    err_extra = strerror( -status );
+
+			    if ( status == 0 ) {
+				/*
+				 * Map the SAREA region.  Further mmap regions
+				 * may be setup in each DRI driver's
+				 * "createNewScreen" function.
+				 */
+				status = drmMap(fd, hSAREA, SAREA_MAX, 
+						&pSAREA);
+
+				err_msg = "drmMap of sarea";
+				err_extra = strerror( -status );
+
+				if ( status == 0 ) {
+				    __GLcontextModes * driver_modes = NULL;
+				    __GLXscreenConfigs *configs = psc->screenConfigs;
+
+				    err_msg = "InitDriver";
+				    err_extra = NULL;
+				    psp = (*createNewScreen)(dpy, scrn,
+							     psc,
+							     configs->configs,
+							     & ddx_version,
+							     & dri_version,
+							     & drm_version,
+							     & framebuffer,
+							     pSAREA,
+							     fd,
+							     api_ver,
+							     & interface_methods,
+							     & driver_modes );
+
+				    filter_modes( & configs->configs,
+						  driver_modes );
+				    _gl_context_modes_destroy( driver_modes );
+				}
+			    }
+			}
+		    }
+		}
+	    }
+	}
+    }
+
+    if ( psp == NULL ) {
+	if ( pSAREA != MAP_FAILED ) {
+	    (void)drmUnmap(pSAREA, SAREA_MAX);
+	}
+
+	if ( framebuffer.base != MAP_FAILED ) {
+	    (void)drmUnmap((drmAddress)framebuffer.base, framebuffer.size);
+	}
+
+	if ( framebuffer.dev_priv != NULL ) {
+	    Xfree(framebuffer.dev_priv);
+	}
+
+	if ( fd >= 0 ) {
+	    (void)drmCloseOnce(fd);
+	}
+
+	(void)XF86DRICloseConnection(dpy, scrn);
+
+	if ( err_extra != NULL ) {
+	    fprintf(stderr, "libGL error: %s failed (%s)\n", err_msg,
+		    err_extra);
+	}
+	else {
+	    fprintf(stderr, "libGL error: %s failed\n", err_msg );
+	}
+
+        fprintf(stderr, "libGL error: reverting to (slow) indirect rendering\n");
+    }
+#endif /* !GLX_USE_APPLEGL */
+
+    return psp;
+}
+#endif /* GLX_DIRECT_RENDERING */
+
 
 /*
 ** Allocate the memory for the per screen configs for each screen.
@@ -745,8 +1005,17 @@ getFBConfigs(Display *dpy, __GLXdisplayPrivate *priv, int screen)
 */
 static Bool AllocAndFetchScreenConfigs(Display *dpy, __GLXdisplayPrivate *priv)
 {
+    xGLXGetVisualConfigsReq *req;
+    xGLXGetFBConfigsReq *fb_req;
+    xGLXVendorPrivateWithReplyReq *vpreq;
+    xGLXGetFBConfigsSGIXReq *sgi_req;
+    xGLXGetVisualConfigsReply reply;
     __GLXscreenConfigs *psc;
-    GLint i, screens;
+    __GLcontextModes *config;
+    GLint i, j, nprops, screens;
+    INT32 buf[__GLX_TOTAL_CONFIG], *props;
+    unsigned supported_request = 0;
+    unsigned prop_size;
 
     /*
     ** First allocate memory for the array of per screen configs.
@@ -760,30 +1029,159 @@ static Bool AllocAndFetchScreenConfigs(Display *dpy, __GLXdisplayPrivate *priv)
     priv->screenConfigs = psc;
     
     priv->serverGLXversion = __glXGetStringFromServer(dpy, priv->majorOpcode,
-						      X_GLXQueryServerString,
-						      0, GLX_VERSION);
+					 X_GLXQueryServerString,
+					 0, GLX_VERSION);
     if ( priv->serverGLXversion == NULL ) {
 	FreeScreenConfigs(priv);
 	return GL_FALSE;
     }
 
-    for (i = 0; i < screens; i++, psc++) {
-	getVisualConfigs(dpy, priv, i);
-	getFBConfigs(dpy, priv, i);
+    if ( atof( priv->serverGLXversion ) >= 1.3 ) {
+	supported_request = 1;
+    }
 
-	psc->scr = i;
-	psc->dpy = dpy;
-#ifdef GLX_DIRECT_RENDERING
-	psc->drawHash = __glxHashCreate();
-	if (psc->drawHash == NULL)
+    /*
+    ** Now fetch each screens configs structures.  If a screen supports
+    ** GL (by returning a numVisuals > 0) then allocate memory for our
+    ** config structure and then fill it in.
+    */
+    for (i = 0; i < screens; i++, psc++) {
+	if ( supported_request != 1 ) {
+	    psc->serverGLXexts = __glXGetStringFromServer(dpy, priv->majorOpcode,
+							  X_GLXQueryServerString,
+							  i, GLX_EXTENSIONS);
+	    if ( strstr( psc->serverGLXexts, "GLX_SGIX_fbconfig" ) != NULL ) {
+		supported_request = 2;
+	    }
+	    else {
+		supported_request = 3;
+	    }
+	}
+
+
+	LockDisplay(dpy);
+	switch( supported_request ) {
+	    case 1:
+	    GetReq(GLXGetFBConfigs,fb_req);
+	    fb_req->reqType = priv->majorOpcode;
+	    fb_req->glxCode = X_GLXGetFBConfigs;
+	    fb_req->screen = i;
+	    break;
+	   
+	    case 2:
+	    GetReqExtra(GLXVendorPrivateWithReply,
+			sz_xGLXGetFBConfigsSGIXReq-sz_xGLXVendorPrivateWithReplyReq,vpreq);
+	    sgi_req = (xGLXGetFBConfigsSGIXReq *) vpreq;
+	    sgi_req->reqType = priv->majorOpcode;
+	    sgi_req->glxCode = X_GLXVendorPrivateWithReply;
+	    sgi_req->vendorCode = X_GLXvop_GetFBConfigsSGIX;
+	    sgi_req->screen = i;
+	    break;
+
+	    case 3:
+	    GetReq(GLXGetVisualConfigs,req);
+	    req->reqType = priv->majorOpcode;
+	    req->glxCode = X_GLXGetVisualConfigs;
+	    req->screen = i;
+	    break;
+ 	}
+
+	if (!_XReply(dpy, (xReply*) &reply, 0, False)) {
+	    /* Something is busted. Punt. */
+	    UnlockDisplay(dpy);
+	    SyncHandle();
+	    FreeScreenConfigs(priv);
+	    return GL_FALSE;
+	}
+
+	if (!reply.numVisuals) {
+	    /* This screen does not support GL rendering */
+	    UnlockDisplay(dpy);
 	    continue;
-	if (priv->dri2Display)
-	    psc->driScreen = (*priv->dri2Display->createScreen)(psc, i, priv);
-	if (psc->driScreen == NULL && priv->driDisplay)
-	    psc->driScreen = (*priv->driDisplay->createScreen)(psc, i, priv);
-	if (psc->driScreen == NULL) {
-	    __glxHashDestroy(psc->drawHash);
-	    psc->drawHash = NULL;
+	}
+
+	/* FIXME: Is the __GLX_MIN_CONFIG_PROPS test correct for
+	 * FIXME: FBconfigs? 
+	 */
+	/* Check number of properties */
+	nprops = reply.numProps;
+	if ((nprops < __GLX_MIN_CONFIG_PROPS) ||
+	    (nprops > __GLX_MAX_CONFIG_PROPS)) {
+	    /* Huh?  Not in protocol defined limits.  Punt */
+	    UnlockDisplay(dpy);
+	    SyncHandle();
+	    FreeScreenConfigs(priv);
+	    return GL_FALSE;
+	}
+
+	/* Allocate memory for our config structure */
+	psc->configs = _gl_context_modes_create(reply.numVisuals,
+						sizeof(__GLcontextModes));
+	if (!psc->configs) {
+	    UnlockDisplay(dpy);
+	    SyncHandle();
+	    FreeScreenConfigs(priv);
+	    return GL_FALSE;
+	}
+
+	/* Allocate memory for the properties, if needed */
+	if ( supported_request != 3 ) {
+	    nprops *= 2;
+	}
+
+	prop_size = nprops * __GLX_SIZE_INT32;
+
+	if (prop_size <= sizeof(buf)) {
+ 	    props = buf;
+ 	} else {
+	    props = (INT32 *) Xmalloc(prop_size);
+ 	} 
+
+	/* Read each config structure and convert it into our format */
+        config = psc->configs;
+	for (j = 0; j < reply.numVisuals; j++) {
+	    assert( config != NULL );
+	    _XRead(dpy, (char *)props, prop_size);
+
+	    if ( supported_request != 3 ) {
+		config->rgbMode = GL_TRUE;
+		config->drawableType = GLX_WINDOW_BIT;
+	    }
+	    else {
+		config->drawableType = GLX_WINDOW_BIT | GLX_PIXMAP_BIT;
+	    }
+
+	    __glXInitializeVisualConfigFromTags( config, nprops, props,
+						 (supported_request != 3),
+						 GL_TRUE );
+	    if ( config->fbconfigID == GLX_DONT_CARE ) {
+		config->fbconfigID = config->visualID;
+	    }
+	    config->screen = i;
+	    config = config->next;
+	}
+	if (props != buf) {
+	    Xfree((char *)props);
+	}
+	UnlockDisplay(dpy);
+
+#ifdef GLX_DIRECT_RENDERING
+        /* Initialize per screen dynamic client GLX extensions */
+	psc->ext_list_first_time = GL_TRUE;
+	/* Initialize the direct rendering per screen data and functions */
+	if (priv->driDisplay.private != NULL) {
+	    /* FIXME: Should it be some sort of an error if createNewScreen[i]
+	     * FIXME: is NULL?
+	     */
+	    if (priv->driDisplay.createNewScreen &&
+		priv->driDisplay.createNewScreen[i]) {
+
+		psc->driScreen.screenConfigs = (void *)psc;
+		psc->driScreen.private =
+		    CallCreateNewScreen(dpy, i, & psc->driScreen,
+					& priv->driDisplay,
+					priv->driDisplay.createNewScreen[i] );
+	    }
 	}
 #endif
     }
@@ -794,7 +1192,7 @@ static Bool AllocAndFetchScreenConfigs(Display *dpy, __GLXdisplayPrivate *priv)
 /*
 ** Initialize the client side extension code.
 */
-_X_HIDDEN __GLXdisplayPrivate *__glXInitialize(Display* dpy)
+__GLXdisplayPrivate *__glXInitialize(Display* dpy)
 {
     XExtDisplayInfo *info = __glXFindDisplay(dpy);
     XExtData **privList, *private, *found;
@@ -874,8 +1272,8 @@ _X_HIDDEN __GLXdisplayPrivate *__glXInitialize(Display* dpy)
     ** (e.g., those called in AllocAndFetchScreenConfigs).
     */
     if (getenv("LIBGL_ALWAYS_INDIRECT") == NULL) {
-        dpyPriv->dri2Display = dri2CreateDisplay(dpy);
-	dpyPriv->driDisplay = driCreateDisplay(dpy);
+        dpyPriv->driDisplay.private =
+            driCreateDisplay(dpy, &dpyPriv->driDisplay);
     }
 #endif
 
@@ -909,7 +1307,7 @@ _X_HIDDEN __GLXdisplayPrivate *__glXInitialize(Display* dpy)
 ** Setup for sending a GLX command on dpy.  Make sure the extension is
 ** initialized.  Try to avoid calling __glXInitialize as its kinda slow.
 */
-_X_HIDDEN CARD8 __glXSetupForCommand(Display *dpy)
+CARD8 __glXSetupForCommand(Display *dpy)
 {
     GLXContext gc;
     __GLXdisplayPrivate *priv;
@@ -950,7 +1348,7 @@ _X_HIDDEN CARD8 __glXSetupForCommand(Display *dpy)
  * Modify this function to use \c ctx->pc instead of the explicit
  * \c pc parameter.
  */
-_X_HIDDEN GLubyte *__glXFlushRenderBuffer(__GLXcontext *ctx, GLubyte *pc)
+GLubyte *__glXFlushRenderBuffer(__GLXcontext *ctx, GLubyte *pc)
 {
     Display * const dpy = ctx->currentDpy;
 #ifdef USE_XCB
@@ -962,8 +1360,7 @@ _X_HIDDEN GLubyte *__glXFlushRenderBuffer(__GLXcontext *ctx, GLubyte *pc)
 
     if ( (dpy != NULL) && (size > 0) ) {
 #ifdef USE_XCB
-	xcb_glx_render(c, ctx->currentContextTag, size,
-		       (const uint8_t *)ctx->buf);
+	xcb_glx_render(c, ctx->currentContextTag, size, (char *)ctx->buf);
 #else
 	/* Send the entire buffer as an X request */
 	LockDisplay(dpy);
@@ -1000,9 +1397,9 @@ _X_HIDDEN GLubyte *__glXFlushRenderBuffer(__GLXcontext *ctx, GLubyte *pc)
  * \param data           Command data.
  * \param dataLen        Size, in bytes, of the command data.
  */
-_X_HIDDEN void __glXSendLargeChunk(__GLXcontext *gc, GLint requestNumber, 
-				   GLint totalRequests,
-				   const GLvoid * data, GLint dataLen)
+void __glXSendLargeChunk(__GLXcontext *gc, GLint requestNumber, 
+			 GLint totalRequests,
+			 const GLvoid * data, GLint dataLen)
 {
     Display *dpy = gc->currentDpy;
 #ifdef USE_XCB
@@ -1048,9 +1445,9 @@ _X_HIDDEN void __glXSendLargeChunk(__GLXcontext *gc, GLint requestNumber,
  * \param data       Command data.
  * \param dataLen    Size, in bytes, of the command data.
  */
-_X_HIDDEN void __glXSendLargeCommand(__GLXcontext *ctx,
-				     const GLvoid *header, GLint headerLen,
-				     const GLvoid *data, GLint dataLen)
+void __glXSendLargeCommand(__GLXcontext *ctx,
+			   const GLvoid *header, GLint headerLen,
+			   const GLvoid *data, GLint dataLen)
 {
     GLint maxSize;
     GLint totalRequests, requestNumber;
@@ -1103,6 +1500,33 @@ PUBLIC GLXDrawable glXGetCurrentDrawable(void)
     return gc->currentDrawable;
 }
 
+
+/************************************************************************/
+
+#ifdef GLX_DIRECT_RENDERING
+/* Return the DRI per screen structure */
+__DRIscreen *__glXFindDRIScreen(__DRInativeDisplay *dpy, int scrn)
+{
+    __DRIscreen *pDRIScreen = NULL;
+    XExtDisplayInfo *info = __glXFindDisplay(dpy);
+    XExtData **privList, *found;
+    __GLXdisplayPrivate *dpyPriv;
+    XEDataObject dataObj;
+
+    __glXLock();
+    dataObj.display = dpy;
+    privList = XEHeadOfExtensionList(dataObj);
+    found = XFindOnExtensionList(privList, info->codes->extension);
+    __glXUnlock();
+
+    if (found) {
+	dpyPriv = (__GLXdisplayPrivate *)found->private_data;
+	pDRIScreen = &dpyPriv->screenConfigs[scrn].driScreen;
+    }
+
+    return pDRIScreen;
+}
+#endif
 
 /************************************************************************/
 
@@ -1190,41 +1614,20 @@ static Bool SendMakeCurrentRequest(Display *dpy, CARD8 opcode,
 
 
 #ifdef GLX_DIRECT_RENDERING
-static __GLXDRIdrawable *
-FetchDRIDrawable(Display *dpy,
-		 GLXDrawable glxDrawable, GLXContext gc, Bool pre13)
+static Bool BindContextWrapper( Display *dpy, GLXContext gc,
+				GLXDrawable draw, GLXDrawable read )
 {
-    __GLXdisplayPrivate * const priv = __glXInitialize(dpy);
-    __GLXDRIdrawable *pdraw;
-    __GLXscreenConfigs *psc;
-    XID drawable;
+    return (*gc->driContext.bindContext)(dpy, gc->screen, draw, read,
+					 & gc->driContext);
+}
 
-    if (priv == NULL)
-	return NULL;
-    
-    psc = &priv->screenConfigs[gc->screen];
-    if (psc->drawHash == NULL)
-	return NULL;
 
-    if (__glxHashLookup(psc->drawHash, glxDrawable, (void *) &pdraw) == 0)
-	return pdraw;
-
-    /* If this is glXMakeCurrent (pre GLX 1.3) we allow creating the
-     * GLX drawable on the fly.  Otherwise we pass None as the X
-     * drawable */
-    if (pre13)
-	drawable = glxDrawable;
-    else
-	drawable = None;
-
-    pdraw = psc->driScreen->createDrawable(psc, drawable,
-					   glxDrawable, gc->mode);
-    if (__glxHashInsert(psc->drawHash, glxDrawable, pdraw)) {
-	(*pdraw->destroyDrawable)(pdraw);
-	return NULL;
-    }
-
-    return pdraw;
+static Bool UnbindContextWrapper( GLXContext gc )
+{
+    return (*gc->driContext.unbindContext)(gc->currentDpy, gc->screen, 
+					   gc->currentDrawable,
+					   gc->currentReadable,
+					   & gc->driContext );
 }
 #endif /* GLX_DIRECT_RENDERING */
 
@@ -1234,9 +1637,8 @@ FetchDRIDrawable(Display *dpy,
  * 
  * \note This is in this file so that it can access dummyContext.
  */
-static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
-			       GLXDrawable read, GLXContext gc,
-			       Bool pre13)
+USED static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
+                                    GLXDrawable read, GLXContext gc)
 {
     xGLXMakeCurrentReply reply;
     const GLXContext oldGC = __glXGetCurrentContext();
@@ -1258,16 +1660,20 @@ static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
 	return GL_FALSE;
     }
 
+#ifndef GLX_DIRECT_RENDERING
+    if (gc && gc->isDirect) {
+	return GL_FALSE;
+    }
+#endif
+
     _glapi_check_multithread();
 
 #ifdef GLX_DIRECT_RENDERING
     /* Bind the direct rendering context to the drawable */
-    if (gc && gc->driContext) {
-	__GLXDRIdrawable *pdraw = FetchDRIDrawable(dpy, draw, gc, pre13);
-	__GLXDRIdrawable *pread = FetchDRIDrawable(dpy, read, gc, pre13);
-
-	bindReturnValue =
-	    (gc->driContext->bindContext) (gc->driContext, pdraw, pread);
+    if (gc && gc->isDirect) {
+	bindReturnValue = (gc->driContext.private) 
+	  ? BindContextWrapper(dpy, gc, draw, read)
+	  : False;
     } else
 #endif
     {
@@ -1284,7 +1690,7 @@ static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
 	return False;
     }
 
-    if ((dpy != oldGC->currentDpy || (gc && gc->driContext)) &&
+    if ((dpy != oldGC->currentDpy || (gc && gc->isDirect)) &&
 	!oldGC->isDirect && oldGC != &dummyContext) {
 	xGLXMakeCurrentReply dummy_reply;
 
@@ -1299,8 +1705,8 @@ static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
 				      & dummy_reply);
     }
 #ifdef GLX_DIRECT_RENDERING
-    else if (oldGC->driContext) {
-	oldGC->driContext->unbindContext(oldGC->driContext);
+    else if (oldGC->isDirect && oldGC->driContext.private) {
+	(void) UnbindContextWrapper(oldGC);
     }
 #endif
 
@@ -1330,11 +1736,12 @@ static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
 		 */
 #ifdef GLX_DIRECT_RENDERING
 		/* Destroy the old direct rendering context */
-		if (oldGC->driContext) {
-		    oldGC->driContext->destroyContext(oldGC->driContext,
-						      oldGC->psc,
-						      oldGC->createDpy);
-		    oldGC->driContext = NULL;
+		if (oldGC->isDirect) {
+		    if (oldGC->driContext.private) {
+			(*oldGC->driContext.destroyContext)
+			    (dpy, oldGC->screen, oldGC->driContext.private);
+			oldGC->driContext.private = NULL;
+		    }
 		}
 #endif
 		__glXFreeContext(oldGC);
@@ -1347,7 +1754,7 @@ static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
 	    gc->currentDrawable = draw;
 	    gc->currentReadable = read;
 
-            if (!gc->driContext) {
+            if (!gc->isDirect) {
                if (!IndirectAPI)
                   IndirectAPI = __glXNewIndirectAPI();
                _glapi_set_dispatch(IndirectAPI);
@@ -1386,20 +1793,20 @@ static Bool MakeContextCurrent(Display *dpy, GLXDrawable draw,
 
 PUBLIC Bool glXMakeCurrent(Display *dpy, GLXDrawable draw, GLXContext gc)
 {
-    return MakeContextCurrent(dpy, draw, draw, gc, True);
+    return MakeContextCurrent( dpy, draw, draw, gc );
 }
 
 PUBLIC GLX_ALIAS(Bool, glXMakeCurrentReadSGI,
 	  (Display *dpy, GLXDrawable d, GLXDrawable r, GLXContext ctx),
-	  (dpy, d, r, ctx, False), MakeContextCurrent)
+	  (dpy, d, r, ctx), MakeContextCurrent)
 
 PUBLIC GLX_ALIAS(Bool, glXMakeContextCurrent,
 	  (Display *dpy, GLXDrawable d, GLXDrawable r, GLXContext ctx),
-	  (dpy, d, r, ctx, False), MakeContextCurrent)
+	  (dpy, d, r, ctx), MakeContextCurrent)
 
 
 #ifdef DEBUG
-_X_HIDDEN void __glXDumpDrawBuffer(__GLXcontext *ctx)
+void __glXDumpDrawBuffer(__GLXcontext *ctx)
 {
     GLubyte *p = ctx->buf;
     GLubyte *end = ctx->pc;

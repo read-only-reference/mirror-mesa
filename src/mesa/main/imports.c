@@ -104,8 +104,6 @@ _mesa_align_malloc(size_t bytes, unsigned long alignment)
 
    (void) posix_memalign(& mem, alignment, bytes);
    return mem;
-#elif defined(_WIN32) && defined(_MSC_VER)
-   return _aligned_malloc(bytes, alignment);
 #else
    uintptr_t ptr, buf;
 
@@ -141,15 +139,6 @@ _mesa_align_calloc(size_t bytes, unsigned long alignment)
    void *mem;
    
    mem = _mesa_align_malloc(bytes, alignment);
-   if (mem != NULL) {
-      (void) memset(mem, 0, bytes);
-   }
-
-   return mem;
-#elif defined(_WIN32) && defined(_MSC_VER)
-   void *mem;
-
-   mem = _aligned_malloc(bytes, alignment);
    if (mem != NULL) {
       (void) memset(mem, 0, bytes);
    }
@@ -191,8 +180,6 @@ _mesa_align_free(void *ptr)
 {
 #if defined(HAVE_POSIX_MEMALIGN)
    free(ptr);
-#elif defined(_WIN32) && defined(_MSC_VER)
-   _aligned_free(ptr);
 #else
    void **cubbyHole = (void **) ((char *) ptr - sizeof(void *));
    void *realAddr = *cubbyHole;
@@ -207,10 +194,6 @@ void *
 _mesa_align_realloc(void *oldBuffer, size_t oldSize, size_t newSize,
                     unsigned long alignment)
 {
-#if defined(_WIN32) && defined(_MSC_VER)
-   (void) oldSize;
-   return _aligned_realloc(oldBuffer, newSize, alignment);
-#else
    const size_t copySize = (oldSize < newSize) ? oldSize : newSize;
    void *newBuf = _mesa_align_malloc(newSize, alignment);
    if (newBuf && oldBuffer && copySize > 0) {
@@ -219,7 +202,6 @@ _mesa_align_realloc(void *oldBuffer, size_t oldSize, size_t newSize,
    if (oldBuffer)
       _mesa_align_free(oldBuffer);
    return newBuf;
-#endif
 }
 
 
@@ -578,7 +560,6 @@ _mesa_ffs(int i)
          bit++;
          i >>= 1;
       }
-      bit++;
    }
    return bit;
 #else
@@ -921,12 +902,10 @@ _mesa_sprintf( char *str, const char *fmt, ... )
 void
 _mesa_printf( const char *fmtString, ... )
 {
-   char s[MAXSTRING];
    va_list args;
    va_start( args, fmtString );  
-   vsnprintf(s, MAXSTRING, fmtString, args);
+   vfprintf(stderr, fmtString, args);
    va_end( args );
-   fprintf(stderr,"%s", s);
 }
 
 /** Wrapper around vsprintf() */

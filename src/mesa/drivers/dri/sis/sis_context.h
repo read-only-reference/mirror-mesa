@@ -403,8 +403,6 @@ struct sis_context
 
 #if defined(__i386__) || defined(__amd64__)
 #define MMIO_WMB()	__asm __volatile("" : : : "memory")
-#elif defined(__ia64__)
-#define MMIO_WMB()	__asm __volatile("mf" : : : "memory")
 #else
 #error platform needs WMB
 #endif

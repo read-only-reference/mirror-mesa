@@ -106,7 +106,8 @@ error_check_format_type(GLcontext *ctx, GLenum format, GLenum type,
       }
       break;
    case GL_DEPTH_COMPONENT:
-      if (!drawing && !_mesa_source_buffer_exists(ctx, format)) {
+      if ((drawing && !_mesa_dest_buffer_exists(ctx, format)) ||
+          (!drawing && !_mesa_source_buffer_exists(ctx, format))) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "gl%sPixels(no depth buffer)", readDraw);
          return GL_TRUE;
@@ -256,7 +257,7 @@ _mesa_CopyPixels( GLint srcx, GLint srcy, GLsizei width, GLsizei height,
       return;
    }
 
-   if (!ctx->Current.RasterPosValid) {
+   if (!ctx->Current.RasterPosValid || width ==0 || height == 0) {
       return;
    }
 
@@ -292,6 +293,8 @@ _mesa_ReadPixels( GLint x, GLint y, GLsizei width, GLsizei height,
 {
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
+
+   FLUSH_CURRENT(ctx, 0);
 
    if (width < 0 || height < 0) {
       _mesa_error( ctx, GL_INVALID_VALUE,
@@ -374,8 +377,9 @@ _mesa_Bitmap( GLsizei width, GLsizei height,
 
    if (ctx->RenderMode == GL_RENDER) {
       /* Truncate, to satisfy conformance tests (matches SGI's OpenGL). */
-      GLint x = IFLOOR(ctx->Current.RasterPos[0] - xorig);
-      GLint y = IFLOOR(ctx->Current.RasterPos[1] - yorig);
+      const GLfloat epsilon = 0.0001;
+      GLint x = IFLOOR(ctx->Current.RasterPos[0] + epsilon - xorig);
+      GLint y = IFLOOR(ctx->Current.RasterPos[1] + epsilon - yorig);
 
       if (ctx->Unpack.BufferObj->Name) {
          /* unpack from PBO */

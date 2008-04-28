@@ -20,8 +20,6 @@ INCLUDES = \
 	-I. \
 	-I$(TOP)/include
 
-LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) $(APP_LIB_DEPS)
-
 
 ##### RULES #####
 
@@ -29,7 +27,7 @@ LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) $(APP_LIB_DEPS
 .SUFFIXES: .c
 
 .c:
-	$(CC) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $< $(LIBS) -o $@
+	$(CC) $(INCLUDES) $(CFLAGS) $< $(APP_LIB_DEPS) -o $@
 
 .c.o:
 	$(CC) -c $(INCLUDES) $(CFLAGS) $< -o $@
@@ -48,6 +46,7 @@ clean:
 
 
 depend: $(SOURCES)
+	rm -f depend
 	touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDES) $(SOURCES) > /dev/null 
 

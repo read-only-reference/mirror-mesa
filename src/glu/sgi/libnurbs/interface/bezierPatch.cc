@@ -111,11 +111,8 @@ void bezierPatchDelete(bezierPatch *b)
 void bezierPatchDeleteList(bezierPatch *b)
 {
   bezierPatch *temp;
-  while (b != NULL) {
-    temp = b;
-    b = b->next;
-    bezierPatchDelete(temp);    
-  }
+  for(temp = b; temp != NULL; temp = temp->next)
+    bezierPatchDelete(temp);
 }
 
 bezierPatch* bezierPatchInsert(bezierPatch *list, bezierPatch *b)

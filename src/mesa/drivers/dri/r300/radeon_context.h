@@ -182,7 +182,10 @@ struct radeon_context {
 	GLuint irqsEmitted;
 	drm_radeon_irq_wait_t iw;
 
-	/* buffer swap */
+	/* VBI / buffer swap */
+	GLuint vbl_seq;
+	GLuint vblank_flags;
+
 	int64_t swap_ust;
 	int64_t swap_missed_ust;
 

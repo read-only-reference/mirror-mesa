@@ -43,6 +43,8 @@
 #include "brw_sf.h"
 #include "brw_state.h"
 
+#define DO_SETUP_BITS ((1<<FRAG_ATTRIB_MAX)-1)
+
 static void compile_sf_prog( struct brw_context *brw,
 			     struct brw_sf_prog_key *key )
 {
@@ -55,7 +57,7 @@ static void compile_sf_prog( struct brw_context *brw,
 
    /* Begin the compilation:
     */
-   brw_init_compile(brw, &c.func);
+   brw_init_compile(&c.func);
 
    c.key = *key;
    c.nr_attrs = brw_count_bits(c.key.attrs);
@@ -72,11 +74,6 @@ static void compile_sf_prog( struct brw_context *brw,
       if (c.key.attrs & (1<<i)) {
 	 c.attr_to_idx[i] = idx;
 	 c.idx_to_attr[idx] = i;
-	 if (i >= VERT_RESULT_TEX0 && i <= VERT_RESULT_TEX7) {
-		 c.point_attrs[i].CoordReplace = 
-			brw->attribs.Point->CoordReplace[i - VERT_RESULT_TEX0];
-	 } else
-		 c.point_attrs[i].CoordReplace = GL_FALSE;
 	 idx++;
       }
    
@@ -85,18 +82,15 @@ static void compile_sf_prog( struct brw_context *brw,
    switch (key->primitive) {
    case SF_TRIANGLES:
       c.nr_verts = 3;
-      brw_emit_tri_setup( &c, GL_TRUE );
+      brw_emit_tri_setup( &c );
       break;
    case SF_LINES:
       c.nr_verts = 2;
-      brw_emit_line_setup( &c, GL_TRUE );
+      brw_emit_line_setup( &c );
       break;
    case SF_POINTS:
       c.nr_verts = 1;
-      if (key->do_point_sprite)
-	  brw_emit_point_sprite_setup( &c, GL_TRUE );
-      else
-	  brw_emit_point_setup( &c, GL_TRUE );
+      brw_emit_point_setup( &c );
       break;
    case SF_UNFILLED_TRIS:
       c.nr_verts = 3;
@@ -114,14 +108,25 @@ static void compile_sf_prog( struct brw_context *brw,
 
    /* Upload
     */
-   dri_bo_unreference(brw->sf.prog_bo);
-   brw->sf.prog_bo = brw_upload_cache( &brw->cache, BRW_SF_PROG,
-				       &c.key, sizeof(c.key),
-				       NULL, 0,
-				       program, program_size,
-				       &c.prog_data,
-				       &brw->sf.prog_data );
+   brw->sf.prog_gs_offset = brw_upload_cache( &brw->cache[BRW_SF_PROG],
+					      &c.key,
+					      sizeof(c.key),
+					      program,
+					      program_size,
+					      &c.prog_data,
+					      &brw->sf.prog_data );
 }
+
+
+static GLboolean search_cache( struct brw_context *brw, 
+			       struct brw_sf_prog_key *key )
+{
+   return brw_search_cache(&brw->cache[BRW_SF_PROG], 
+			   key, sizeof(*key),
+			   &brw->sf.prog_data,
+			   &brw->sf.prog_gs_offset);
+}
+
 
 /* Calculate interpolants for triangle and line rasterization.
  */
@@ -157,8 +162,7 @@ static void upload_sf_prog( struct brw_context *brw )
       break;
    }
 
-   key.do_point_sprite = brw->attribs.Point->PointSprite;
-   key.SpriteOrigin = brw->attribs.Point->SpriteOrigin;
+
    /* _NEW_LIGHT */
    key.do_flat_shading = (brw->attribs.Light->ShadeModel == GL_FLAT);
    key.do_twoside_color = (brw->attribs.Light->Enabled && brw->attribs.Light->Model.TwoSide);
@@ -167,19 +171,15 @@ static void upload_sf_prog( struct brw_context *brw )
    if (key.do_twoside_color)
       key.frontface_ccw = (brw->attribs.Polygon->FrontFace == GL_CCW);
 
-   dri_bo_unreference(brw->sf.prog_bo);
-   brw->sf.prog_bo = brw_search_cache(&brw->cache, BRW_SF_PROG,
-				      &key, sizeof(key),
-				      NULL, 0,
-				      &brw->sf.prog_data);
-   if (brw->sf.prog_bo == NULL)
+
+   if (!search_cache(brw, &key))
       compile_sf_prog( brw, &key );
 }
 
 
 const struct brw_tracked_state brw_sf_prog = {
    .dirty = {
-      .mesa  = (_NEW_LIGHT|_NEW_POLYGON|_NEW_POINT),
+      .mesa  = (_NEW_LIGHT|_NEW_POLYGON),
       .brw   = (BRW_NEW_REDUCED_PRIMITIVE),
       .cache = CACHE_NEW_VS_PROG
    },

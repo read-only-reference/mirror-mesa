@@ -33,6 +33,7 @@
 #include "context.h"
 #include "hash.h"
 #include "program.h"
+#include "prog_cache.h"
 #include "prog_parameter.h"
 #include "prog_instruction.h"
 
@@ -66,6 +67,7 @@ _mesa_init_program(GLcontext *ctx)
       ctx->VertexProgram.TrackMatrix[i] = GL_NONE;
       ctx->VertexProgram.TrackMatrixTransform[i] = GL_IDENTITY_NV;
    }
+   ctx->VertexProgram.Cache = _mesa_new_program_cache();
 #endif
 
 #if FEATURE_NV_fragment_program || FEATURE_ARB_fragment_program
@@ -73,7 +75,9 @@ _mesa_init_program(GLcontext *ctx)
    ctx->FragmentProgram.Current = (struct gl_fragment_program *) ctx->Shared->DefaultFragmentProgram;
    assert(ctx->FragmentProgram.Current);
    ctx->FragmentProgram.Current->Base.RefCount++;
+   ctx->FragmentProgram.Cache = _mesa_new_program_cache();
 #endif
+
 
    /* XXX probably move this stuff */
 #if FEATURE_ATI_fragment_shader
@@ -97,6 +101,7 @@ _mesa_free_program_data(GLcontext *ctx)
       if (ctx->VertexProgram.Current->Base.RefCount <= 0)
          ctx->Driver.DeleteProgram(ctx, &(ctx->VertexProgram.Current->Base));
    }
+   _mesa_delete_program_cache(ctx, ctx->VertexProgram.Cache);
 #endif
 #if FEATURE_NV_fragment_program || FEATURE_ARB_fragment_program
    if (ctx->FragmentProgram.Current) {
@@ -104,6 +109,7 @@ _mesa_free_program_data(GLcontext *ctx)
       if (ctx->FragmentProgram.Current->Base.RefCount <= 0)
          ctx->Driver.DeleteProgram(ctx, &(ctx->FragmentProgram.Current->Base));
    }
+   _mesa_delete_program_cache(ctx, ctx->FragmentProgram.Cache);
 #endif
    /* XXX probably move this stuff */
 #if FEATURE_ATI_fragment_shader
@@ -118,49 +124,6 @@ _mesa_free_program_data(GLcontext *ctx)
 }
 
 
-/**
- * Update the default program objects in the given context to reference those
- * specified in the shared state and release those referencing the old 
- * shared state.
- */
-void
-_mesa_update_default_objects_program(GLcontext *ctx)
-{
-#if FEATURE_NV_vertex_program || FEATURE_ARB_vertex_program
-   if (ctx->VertexProgram.Current) {
-      ctx->VertexProgram.Current->Base.RefCount--;
-      if (ctx->VertexProgram.Current->Base.RefCount <= 0)
-         ctx->Driver.DeleteProgram(ctx, &(ctx->VertexProgram.Current->Base));
-   }
-   ctx->VertexProgram.Current = (struct gl_vertex_program *) ctx->Shared->DefaultVertexProgram;
-   assert(ctx->VertexProgram.Current);
-   ctx->VertexProgram.Current->Base.RefCount++;
-#endif
-
-#if FEATURE_NV_fragment_program || FEATURE_ARB_fragment_program
-   if (ctx->FragmentProgram.Current) {
-      ctx->FragmentProgram.Current->Base.RefCount--;
-      if (ctx->FragmentProgram.Current->Base.RefCount <= 0)
-         ctx->Driver.DeleteProgram(ctx, &(ctx->FragmentProgram.Current->Base));
-   }
-   ctx->FragmentProgram.Current = (struct gl_fragment_program *) ctx->Shared->DefaultFragmentProgram;
-   assert(ctx->FragmentProgram.Current);
-   ctx->FragmentProgram.Current->Base.RefCount++;
-#endif
-
-   /* XXX probably move this stuff */
-#if FEATURE_ATI_fragment_shader
-   if (ctx->ATIFragmentShader.Current) {
-      ctx->ATIFragmentShader.Current->RefCount--;
-      if (ctx->ATIFragmentShader.Current->RefCount <= 0) {
-         _mesa_free(ctx->ATIFragmentShader.Current);
-      }
-   }
-   ctx->ATIFragmentShader.Current = (struct ati_fragment_shader *) ctx->Shared->DefaultFragmentShader;
-   assert(ctx->ATIFragmentShader.Current);
-   ctx->ATIFragmentShader.Current->RefCount++;
-#endif
-}
 
 
 /**
@@ -230,12 +193,17 @@ _mesa_init_program_struct( GLcontext *ctx, struct gl_program *prog,
 {
    (void) ctx;
    if (prog) {
+      GLuint i;
       _mesa_bzero(prog, sizeof(*prog));
       prog->Id = id;
       prog->Target = target;
       prog->Resident = GL_TRUE;
       prog->RefCount = 1;
       prog->Format = GL_PROGRAM_FORMAT_ASCII_ARB;
+
+      /* default mapping from samplers to texture units */
+      for (i = 0; i < MAX_SAMPLERS; i++)
+         prog->SamplerUnits[i] = i;
    }
 
    return prog;
@@ -319,16 +287,7 @@ _mesa_delete_program(GLcontext *ctx, struct gl_program *prog)
    if (prog->String)
       _mesa_free(prog->String);
 
-   if (prog->Instructions) {
-      GLuint i;
-      for (i = 0; i < prog->NumInstructions; i++) {
-         if (prog->Instructions[i].Data)
-            _mesa_free(prog->Instructions[i].Data);
-         if (prog->Instructions[i].Comment)
-            _mesa_free((char *) prog->Instructions[i].Comment);
-      }
-      _mesa_free(prog->Instructions);
-   }
+   _mesa_free_instructions(prog->Instructions, prog->NumInstructions);
 
    if (prog->Parameters) {
       _mesa_free_parameter_list(prog->Parameters);
@@ -393,6 +352,7 @@ _mesa_clone_program(GLcontext *ctx, const struct gl_program *prog)
                            prog->NumInstructions);
    clone->InputsRead = prog->InputsRead;
    clone->OutputsWritten = prog->OutputsWritten;
+   clone->SamplersUsed = prog->SamplersUsed;
    memcpy(clone->TexturesUsed, prog->TexturesUsed, sizeof(prog->TexturesUsed));
 
    if (prog->Parameters)
@@ -443,6 +403,236 @@ _mesa_clone_program(GLcontext *ctx, const struct gl_program *prog)
    }
 
    return clone;
+}
+
+
+/**
+ * Insert 'count' NOP instructions at 'start' in the given program.
+ * Adjust branch targets accordingly.
+ */
+GLboolean
+_mesa_insert_instructions(struct gl_program *prog, GLuint start, GLuint count)
+{
+   const GLuint origLen = prog->NumInstructions;
+   const GLuint newLen = origLen + count;
+   struct prog_instruction *newInst;
+   GLuint i;
+
+   /* adjust branches */
+   for (i = 0; i < prog->NumInstructions; i++) {
+      struct prog_instruction *inst = prog->Instructions + i;
+      if (inst->BranchTarget > 0) {
+         if (inst->BranchTarget >= start) {
+            inst->BranchTarget += count;
+         }
+      }
+   }
+
+   /* Alloc storage for new instructions */
+   newInst = _mesa_alloc_instructions(newLen);
+   if (!newInst) {
+      return GL_FALSE;
+   }
+
+   /* Copy 'start' instructions into new instruction buffer */
+   _mesa_copy_instructions(newInst, prog->Instructions, start);
+
+   /* init the new instructions */
+   _mesa_init_instructions(newInst + start, count);
+
+   /* Copy the remaining/tail instructions to new inst buffer */
+   _mesa_copy_instructions(newInst + start + count,
+                           prog->Instructions + start,
+                           origLen - start);
+
+   /* free old instructions */
+   _mesa_free_instructions(prog->Instructions, origLen);
+
+   /* install new instructions */
+   prog->Instructions = newInst;
+   prog->NumInstructions = newLen;
+
+   return GL_TRUE;
+}
+
+
+/**
+ * Search instructions for registers that match (oldFile, oldIndex),
+ * replacing them with (newFile, newIndex).
+ */
+static void
+replace_registers(struct prog_instruction *inst, GLuint numInst,
+                  GLuint oldFile, GLuint oldIndex,
+                  GLuint newFile, GLuint newIndex)
+{
+   GLuint i, j;
+   for (i = 0; i < numInst; i++) {
+      /* src regs */
+      for (j = 0; j < _mesa_num_inst_src_regs(inst->Opcode); j++) {
+         if (inst[i].SrcReg[j].File == oldFile &&
+             inst[i].SrcReg[j].Index == oldIndex) {
+            inst[i].SrcReg[j].File = newFile;
+            inst[i].SrcReg[j].Index = newIndex;
+         }
+      }
+      /* dst reg */
+      if (inst[i].DstReg.File == oldFile && inst[i].DstReg.Index == oldIndex) {
+         inst[i].DstReg.File = newFile;
+         inst[i].DstReg.Index = newIndex;
+      }
+   }
+}
+
+
+/**
+ * Search instructions for references to program parameters.  When found,
+ * increment the parameter index by 'offset'.
+ * Used when combining programs.
+ */
+static void
+adjust_param_indexes(struct prog_instruction *inst, GLuint numInst,
+                     GLuint offset)
+{
+   GLuint i, j;
+   for (i = 0; i < numInst; i++) {
+      for (j = 0; j < _mesa_num_inst_src_regs(inst->Opcode); j++) {
+         GLuint f = inst[i].SrcReg[j].File;
+         if (f == PROGRAM_CONSTANT ||
+             f == PROGRAM_UNIFORM ||
+             f == PROGRAM_STATE_VAR) {
+            inst[i].SrcReg[j].Index += offset;
+         }
+      }
+   }
+}
+
+
+/**
+ * Combine two programs into one.  Fix instructions so the outputs of
+ * the first program go to the inputs of the second program.
+ */
+struct gl_program *
+_mesa_combine_programs(GLcontext *ctx,
+                       const struct gl_program *progA,
+                       const struct gl_program *progB)
+{
+   struct prog_instruction *newInst;
+   struct gl_program *newProg;
+   const GLuint lenA = progA->NumInstructions - 1; /* omit END instr */
+   const GLuint lenB = progB->NumInstructions;
+   const GLuint numParamsA = _mesa_num_parameters(progA->Parameters);
+   const GLuint newLength = lenA + lenB;
+   GLbitfield inputsB;
+   GLuint i;
+
+   ASSERT(progA->Target == progB->Target);
+
+   newInst = _mesa_alloc_instructions(newLength);
+   if (!newInst)
+      return GL_FALSE;
+
+   _mesa_copy_instructions(newInst, progA->Instructions, lenA);
+   _mesa_copy_instructions(newInst + lenA, progB->Instructions, lenB);
+
+   /* adjust branch / instruction addresses for B's instructions */
+   for (i = 0; i < lenB; i++) {
+      newInst[lenA + i].BranchTarget += lenA;
+   }
+
+   newProg = ctx->Driver.NewProgram(ctx, progA->Target, 0);
+   newProg->Instructions = newInst;
+   newProg->NumInstructions = newLength;
+
+   if (newProg->Target == GL_FRAGMENT_PROGRAM_ARB) {
+      struct gl_fragment_program *fprogA, *fprogB, *newFprog;
+      fprogA = (struct gl_fragment_program *) progA;
+      fprogB = (struct gl_fragment_program *) progB;
+      newFprog = (struct gl_fragment_program *) newProg;
+
+      newFprog->UsesKill = fprogA->UsesKill || fprogB->UsesKill;
+
+      /* Connect color outputs of fprogA to color inputs of fprogB, via a
+       * new temporary register.
+       */
+      if ((progA->OutputsWritten & (1 << FRAG_RESULT_COLR)) &&
+          (progB->InputsRead & (1 << FRAG_ATTRIB_COL0))) {
+         GLint tempReg = _mesa_find_free_register(newProg, PROGRAM_TEMPORARY);
+         if (!tempReg) {
+            _mesa_problem(ctx, "No free temp regs found in "
+                          "_mesa_combine_programs(), using 31");
+            tempReg = 31;
+         }
+         /* replace writes to result.color[0] with tempReg */
+         replace_registers(newInst, lenA,
+                           PROGRAM_OUTPUT, FRAG_RESULT_COLR,
+                           PROGRAM_TEMPORARY, tempReg);
+         /* replace reads from input.color[0] with tempReg */
+         replace_registers(newInst + lenA, lenB,
+                           PROGRAM_INPUT, FRAG_ATTRIB_COL0,
+                           PROGRAM_TEMPORARY, tempReg);
+      }
+
+      inputsB = progB->InputsRead;
+      if (progA->OutputsWritten & (1 << FRAG_RESULT_COLR)) {
+         inputsB &= ~(1 << FRAG_ATTRIB_COL0);
+      }
+      newProg->InputsRead = progA->InputsRead | inputsB;
+      newProg->OutputsWritten = progB->OutputsWritten;
+      newProg->SamplersUsed = progA->SamplersUsed | progB->SamplersUsed;
+   }
+   else {
+      /* vertex program */
+      assert(0);      /* XXX todo */
+   }
+
+   /*
+    * Merge parameters (uniforms, constants, etc)
+    */
+   newProg->Parameters = _mesa_combine_parameter_lists(progA->Parameters,
+                                                       progB->Parameters);
+
+   adjust_param_indexes(newInst + lenA, lenB, numParamsA);
+
+
+   return newProg;
+}
+
+
+
+
+/**
+ * Scan the given program to find a free register of the given type.
+ * \param regFile - PROGRAM_INPUT, PROGRAM_OUTPUT or PROGRAM_TEMPORARY
+ */
+GLint
+_mesa_find_free_register(const struct gl_program *prog, GLuint regFile)
+{
+   GLboolean used[MAX_PROGRAM_TEMPS];
+   GLuint i, k;
+
+   assert(regFile == PROGRAM_INPUT ||
+          regFile == PROGRAM_OUTPUT ||
+          regFile == PROGRAM_TEMPORARY);
+
+   _mesa_memset(used, 0, sizeof(used));
+
+   for (i = 0; i < prog->NumInstructions; i++) {
+      const struct prog_instruction *inst = prog->Instructions + i;
+      const GLuint n = _mesa_num_inst_src_regs(inst->Opcode);
+
+      for (k = 0; k < n; k++) {
+         if (inst->SrcReg[k].File == regFile) {
+            used[inst->SrcReg[k].Index] = GL_TRUE;
+         }
+      }
+   }
+
+   for (i = 0; i < MAX_PROGRAM_TEMPS; i++) {
+      if (!used[i])
+         return i;
+   }
+
+   return -1;
 }
 
 

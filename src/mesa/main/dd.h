@@ -111,6 +111,11 @@ struct dd_function_table {
 
 
    /**
+    * Execute glRasterPos, updating the ctx->Current.Raster fields
+    */
+   void (*RasterPos)( GLcontext *ctx, const GLfloat v[4] );
+
+   /**
     * \name Image-related functions
     */
    /*@{*/
@@ -328,6 +333,12 @@ struct dd_function_table {
                               GLsizei width, GLsizei height );
 
    /**
+    * Called by glGenerateMipmap() or when GL_GENERATE_MIPMAP_SGIS is enabled.
+    */
+   void (*GenerateMipmap)(GLcontext *ctx, GLenum target,
+                          struct gl_texture_object *texObj);
+
+   /**
     * Called by glTexImage[123]D when user specifies a proxy texture
     * target.  
     *
@@ -445,8 +456,8 @@ struct dd_function_table {
     */
    void (*GetCompressedTexImage)(GLcontext *ctx, GLenum target, GLint level,
                                  GLvoid *img,
-                                 struct gl_texture_object *texObj,
-                                 struct gl_texture_image *texImage);
+                                 const struct gl_texture_object *texObj,
+                                 const struct gl_texture_image *texImage);
 
    /**
     * Called to query number of bytes of storage needed to store the
@@ -492,11 +503,6 @@ struct dd_function_table {
     * Called to free tImage->Data.
     */
    void (*FreeTexImageData)( GLcontext *ctx, struct gl_texture_image *tImage );
-
-   /** Map texture image data into user space */
-   void (*MapTexture)( GLcontext *ctx, struct gl_texture_object *tObj );
-   /** Unmap texture images from user space */
-   void (*UnmapTexture)( GLcontext *ctx, struct gl_texture_object *tObj );
 
    /**
     * Note: no context argument.  This function doesn't initially look
@@ -811,9 +817,11 @@ struct dd_function_table {
     */
    /*@{*/
    struct gl_query_object * (*NewQueryObject)(GLcontext *ctx, GLuint id);
-   void (*BeginQuery)(GLcontext *ctx, GLenum target,
-                      struct gl_query_object *q);
-   void (*EndQuery)(GLcontext *ctx, GLenum target, struct gl_query_object *q);
+   void (*DeleteQuery)(GLcontext *ctx, struct gl_query_object *q);
+   void (*BeginQuery)(GLcontext *ctx, struct gl_query_object *q);
+   void (*EndQuery)(GLcontext *ctx, struct gl_query_object *q);
+   void (*CheckQuery)(GLcontext *ctx, struct gl_query_object *q);
+   void (*WaitQuery)(GLcontext *ctx, struct gl_query_object *q);
    /*@}*/
 
 

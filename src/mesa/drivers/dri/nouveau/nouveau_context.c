@@ -216,6 +216,9 @@ GLboolean nouveauCreateContext( const __GLcontextModes *glVisual,
 	nouveauDDInitState( nmesa );
 	switch(nmesa->screen->card->type)
 	{
+		case NV_03:
+			//nv03TriInitFunctions( ctx );
+			break;
 		case NV_04:
 		case NV_05:
 			nv04TriInitFunctions( ctx );
@@ -283,13 +286,7 @@ GLboolean nouveauMakeCurrent( __DRIcontextPrivate *driContextPriv,
 		struct gl_framebuffer *read_fb =
 			(struct gl_framebuffer*)driReadPriv->driverPrivate;
 
-		if (driDrawPriv->swap_interval == (unsigned)-1) {
-			driDrawPriv->vblFlags =
-				driGetDefaultVBlankFlags(&nmesa->optionCache);
-
-			driDrawableInitVBlank(driDrawPriv);
-		}
-
+		driDrawableInitVBlank(driDrawPriv, nmesa->vblank_flags, &nmesa->vblank_seq );
 		nmesa->driDrawable = driDrawPriv;
 
 		_mesa_resize_framebuffer(nmesa->glCtx, draw_fb,
@@ -318,24 +315,21 @@ GLboolean nouveauUnbindContext( __DRIcontextPrivate *driContextPriv )
 	return GL_TRUE;
 }
 
-void
-nouveauDoSwapBuffers(nouveauContextPtr nmesa, __DRIdrawablePrivate *dPriv)
+static void nouveauDoSwapBuffers(nouveauContextPtr nmesa,
+				 __DRIdrawablePrivate *dPriv)
 {
 	struct gl_framebuffer *fb;
-	nouveauScreenPtr screen = dPriv->driScreenPriv->private;
-	nouveau_renderbuffer_t *src;
+	nouveau_renderbuffer *src, *dst;
 	drm_clip_rect_t *box;
 	int nbox, i;
 
 	fb = (struct gl_framebuffer *)dPriv->driverPrivate;
-	if (fb->_ColorDrawBufferIndexes[0] == BUFFER_FRONT_LEFT) {
-		src = (nouveau_renderbuffer_t *)
-			fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer;
-	} else {
-		src = (nouveau_renderbuffer_t *)
-			fb->Attachment[BUFFER_BACK_LEFT].Renderbuffer;
-	}
+	dst = (nouveau_renderbuffer*)
+		fb->Attachment[BUFFER_FRONT_LEFT].Renderbuffer;
+	src = (nouveau_renderbuffer*)
+		fb->Attachment[BUFFER_BACK_LEFT].Renderbuffer;
 
+#ifdef ALLOW_MULTI_SUBCHANNEL
 	LOCK_HARDWARE(nmesa);
 	nbox = dPriv->numClipRects;
 	box  = dPriv->pClipRects;
@@ -347,14 +341,13 @@ nouveauDoSwapBuffers(nouveauContextPtr nmesa, __DRIdrawablePrivate *dPriv)
 			OUT_RING       (6); /* X8R8G8B8 */
 		else
 			OUT_RING       (4); /* R5G6B5 */
-		OUT_RING(((screen->frontPitch * screen->fbFormat) << 16) |
-			  src->pitch);
-		OUT_RING(src->offset);
-		OUT_RING(screen->frontOffset);
+		OUT_RING       ((dst->pitch << 16) | src->pitch);
+		OUT_RING       (src->offset);
+		OUT_RING       (dst->offset);
 	}
 
 	for (i=0; i<nbox; i++, box++) {
-		BEGIN_RING_SIZE(NvSubImageBlit, NV_IMAGE_BLIT_POINT_IN, 3);
+		BEGIN_RING_SIZE(NvSubImageBlit, NV10_IMAGE_BLIT_SET_POINT, 3);
 		OUT_RING       (((box->y1 - dPriv->y) << 16) |
 				(box->x1 - dPriv->x));
 		OUT_RING       ((box->y1 << 16) | box->x1);
@@ -364,6 +357,7 @@ nouveauDoSwapBuffers(nouveauContextPtr nmesa, __DRIdrawablePrivate *dPriv)
 	FIRE_RING();
 
 	UNLOCK_HARDWARE(nmesa);
+#endif
 }
 
 void nouveauSwapBuffers(__DRIdrawablePrivate *dPriv)
@@ -384,39 +378,3 @@ void nouveauCopySubBuffer(__DRIdrawablePrivate *dPriv,
 {
 }
 
-void nouveauClearBuffer(GLcontext *ctx, nouveau_renderbuffer_t *buffer,
-	int fill, int mask)
-{
-	nouveauContextPtr nmesa = NOUVEAU_CONTEXT(ctx);
-	int dimensions;
-
-	if (!buffer) {
-		return;
-	}
-
-	/* FIXME: only support 32 bits atm */
-
-	/* Surface that we will work on */
-	nouveauObjectOnSubchannel(nmesa, NvSubCtxSurf2D, NvCtxSurf2D);
-
-	BEGIN_RING_SIZE(NvSubCtxSurf2D, NV10_CONTEXT_SURFACES_2D_FORMAT, 4);
-	OUT_RING(0x0b); /* Y32 color format */
-	OUT_RING((buffer->pitch<<16)|buffer->pitch);
-	OUT_RING(buffer->offset);
-	OUT_RING(buffer->offset);
-
-	/* Now clear a rectangle */
-	dimensions = ((buffer->mesa.Height)<<16) | (buffer->mesa.Width);
-
-	nouveauObjectOnSubchannel(nmesa, NvSubGdiRectText, NvGdiRectText);
-
-	BEGIN_RING_SIZE(NvSubGdiRectText, NV04_GDI_RECTANGLE_TEXT_OPERATION, 1);
-	OUT_RING(3);	/* SRCCOPY */
-
-	BEGIN_RING_SIZE(NvSubGdiRectText, NV04_GDI_RECTANGLE_TEXT_BLOCK_LEVEL1_TL, 5);
-	OUT_RING(0);	/* top left */
-	OUT_RING(dimensions);	/* bottom right */
-	OUT_RING(fill);
-	OUT_RING(0);	/* top left */
-	OUT_RING(dimensions);	/* bottom right */
-}

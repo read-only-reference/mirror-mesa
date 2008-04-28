@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.1
+ * Version:  6.5.2
  *
- * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -67,6 +67,7 @@ typedef enum gl_state_index_ {
    STATE_MVP_MATRIX,
    STATE_TEXTURE_MATRIX,
    STATE_PROGRAM_MATRIX,
+   STATE_COLOR_MATRIX,
    STATE_MATRIX_INVERSE,
    STATE_MATRIX_TRANSPOSE,
    STATE_MATRIX_INVTRANS,
@@ -108,6 +109,10 @@ typedef enum gl_state_index_ {
    STATE_POSITION_NORMALIZED,   /* normalized light position */
    STATE_FOG_PARAMS_OPTIMIZED,  /* for faster fog calc */
    STATE_SPOT_DIR_NORMALIZED,   /* pre-normalized spot dir */
+   STATE_PT_SCALE,              /**< Pixel transfer RGBA scale */
+   STATE_PT_BIAS,               /**< Pixel transfer RGBA bias */
+   STATE_PCM_SCALE,             /**< Post color matrix RGBA scale */
+   STATE_PCM_BIAS,              /**< Post color matrix RGBA bias */
    STATE_INTERNAL_DRIVER	/* first available state index for drivers (must be last) */
 } gl_state_index;
 
@@ -124,10 +129,6 @@ _mesa_program_state_flags(const gl_state_index state[STATE_LENGTH]);
 
 extern const char *
 _mesa_program_state_string(const gl_state_index state[STATE_LENGTH]);
-
-
-extern void
-_mesa_load_tracked_matrices(GLcontext *ctx);
 
 
 #endif /* PROG_STATEVARS_H */

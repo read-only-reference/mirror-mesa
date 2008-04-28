@@ -30,10 +30,10 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  *   Aapo Tahkola <aet@rasterburn.org>
  *   Roland Scheidegger <rscheidegger_lists@hispeed.ch>
  */
-#include "main/glheader.h"
-#include "main/macros.h"
-#include "main/enums.h"
-#include "shader/program.h"
+#include "glheader.h"
+#include "macros.h"
+#include "enums.h"
+#include "program.h"
 #include "shader/prog_instruction.h"
 #include "shader/prog_parameter.h"
 #include "shader/prog_statevars.h"
@@ -408,7 +408,6 @@ static GLboolean r200_translate_vertex_program(GLcontext *ctx, struct r200_verte
    int fog_temp_i = 0;
    int free_inputs;
    int array_count = 0;
-   int u_temp_used;
 
    vp->native = GL_FALSE;
    vp->translated = GL_TRUE;
@@ -1052,15 +1051,14 @@ else {
          dofogfix = 0;
       }
 
-      u_temp_used = (R200_VSF_MAX_TEMPS - 1) - u_temp_i;
       if (mesa_vp->Base.NumNativeTemporaries <
-	 (mesa_vp->Base.NumTemporaries + u_temp_used)) {
+	 (mesa_vp->Base.NumTemporaries + (R200_VSF_MAX_TEMPS - 1 - u_temp_i))) {
 	 mesa_vp->Base.NumNativeTemporaries =
-	    mesa_vp->Base.NumTemporaries + u_temp_used;
+	    mesa_vp->Base.NumTemporaries + (R200_VSF_MAX_TEMPS - 1 - u_temp_i);
       }
-      if ((mesa_vp->Base.NumTemporaries + u_temp_used) > R200_VSF_MAX_TEMPS) {
+      if (u_temp_i < mesa_vp->Base.NumTemporaries) {
 	 if (R200_DEBUG & DEBUG_FALLBACKS) {
-	    fprintf(stderr, "Ran out of temps, num temps %d, us %d\n", mesa_vp->Base.NumTemporaries, u_temp_used);
+	    fprintf(stderr, "Ran out of temps, num temps %d, us %d\n", mesa_vp->Base.NumTemporaries, u_temp_i);
 	 }
 	 return GL_FALSE;
       }

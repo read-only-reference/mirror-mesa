@@ -1,0 +1,11 @@
+Import('*')
+
+if 'intel' in env['winsys'] and dri:
+	SConscript([
+		'dri/SConscript',
+	])
+	
+if 'xlib' in env['winsys'] and not dri:
+	SConscript([
+		'xlib/SConscript',
+	])

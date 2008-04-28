@@ -49,7 +49,7 @@ default: depend $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME) $(TOP)/$(LIB_DIR)/miniglx.conf
 
 # Make libGL
 $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME):  $(OBJECTS) Makefile
-	@ $(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+	@ $(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' \
 		-major 1 -minor 2 $(MKLIB_OPTIONS) \
 		-install $(TOP)/$(LIB_DIR) $(GL_LIB_DEPS) $(OBJECTS) \
 		$(LIBDRM_LIB) $(PCIACCESS_LIB)
@@ -65,6 +65,7 @@ drmtest: xf86drm.o drmtest.o
 
 
 depend: $(C_SOURCES) $(ASM_SOURCES)
+	rm -f depend
 	touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(INCLUDES) $(C_SOURCES) $(ASM_SOURCES) \
 		> /dev/null 
@@ -73,10 +74,6 @@ depend: $(C_SOURCES) $(ASM_SOURCES)
 # Emacs tags
 tags:
 	etags `find . -name \*.[ch]` `find ../include`
-
-
-# Dummy install target
-install:
 
 
 # Remove .o and backup files

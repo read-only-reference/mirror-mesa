@@ -97,7 +97,6 @@ enum _format {
    MESA_FORMAT_SRGBA8,
    MESA_FORMAT_SL8,
    MESA_FORMAT_SLA8,
-   MESA_FORMAT_SRGB_DXT1,
    /*@}*/
 #endif
 
@@ -169,7 +168,6 @@ extern const struct gl_texture_format _mesa_texformat_srgb8;
 extern const struct gl_texture_format _mesa_texformat_srgba8;
 extern const struct gl_texture_format _mesa_texformat_sl8;
 extern const struct gl_texture_format _mesa_texformat_sla8;
-extern const struct gl_texture_format _mesa_texformat_srgb_dxt1;
 /*@}*/
 #endif
 
@@ -240,5 +238,11 @@ extern const struct gl_texture_format _mesa_null_texformat;
 extern const struct gl_texture_format *
 _mesa_choose_tex_format( GLcontext *ctx, GLint internalFormat,
                          GLenum format, GLenum type );
+
+
+extern void
+_mesa_format_to_type_and_comps(const struct gl_texture_format *format,
+                               GLenum *datatype, GLuint *comps);
+
 
 #endif

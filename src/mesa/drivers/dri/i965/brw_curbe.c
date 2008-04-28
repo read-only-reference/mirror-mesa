@@ -42,6 +42,7 @@
 #include "brw_defines.h"
 #include "brw_state.h"
 #include "brw_util.h"
+#include "brw_aub.h"
 
 
 /* Partition the CURBE between the various users of constant values:
@@ -89,7 +90,7 @@ static void calculate_curbe_offsets( struct brw_context *brw )
     */
    if (nr_fp_regs > brw->curbe.wm_size ||
        nr_vp_regs > brw->curbe.vs_size ||
-       nr_clip_regs != brw->curbe.clip_size ||
+       nr_clip_regs > brw->curbe.clip_size ||
        (total_regs < brw->curbe.total_size / 4 &&
 	brw->curbe.total_size > 16)) {
 
@@ -184,10 +185,10 @@ static GLfloat fixed_plane[6][4] = {
  */
 static void upload_constant_buffer(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
    GLcontext *ctx = &brw->intel.ctx;
    struct brw_vertex_program *vp = (struct brw_vertex_program *)brw->vertex_program;
    struct brw_fragment_program *fp = (struct brw_fragment_program *)brw->fragment_program;
+   struct brw_mem_pool *pool = &brw->pool[BRW_GS_POOL];
    GLuint sz = brw->curbe.total_size;
    GLuint bufsz = sz * 16 * sizeof(GLfloat);
    GLfloat *buf;
@@ -201,10 +202,13 @@ static void upload_constant_buffer(struct brw_context *brw)
    brw->curbe.tracked_state.dirty.mesa |= fp->param_state;
 
    if (sz == 0) {
-      BEGIN_BATCH(2, IGNORE_CLIPRECTS);
-      OUT_BATCH((CMD_CONST_BUFFER << 16) | (2 - 2));
-      OUT_BATCH(0);
-      ADVANCE_BATCH();
+      struct brw_constant_buffer cb;
+      cb.header.opcode = CMD_CONST_BUFFER;
+      cb.header.length = sizeof(cb)/4 - 2;
+      cb.header.valid = 0;
+      cb.bits0.buffer_length = 0;
+      cb.bits0.buffer_address = 0;
+      BRW_BATCH_STRUCT(brw, &cb);
 
       if (brw->curbe.last_buf) {
 	 free(brw->curbe.last_buf);
@@ -286,11 +290,11 @@ static void upload_constant_buffer(struct brw_context *brw)
 		   brw->curbe.last_buf ? memcmp(buf, brw->curbe.last_buf, bufsz) : -1);
    }
 
-   if (brw->curbe.curbe_bo != NULL &&
-       brw->curbe.last_buf &&
+   if (brw->curbe.last_buf &&
        bufsz == brw->curbe.last_bufsz &&
        memcmp(buf, brw->curbe.last_buf, bufsz) == 0) {
       free(buf);
+/*       return; */
    } 
    else {
       if (brw->curbe.last_buf)
@@ -298,52 +302,61 @@ static void upload_constant_buffer(struct brw_context *brw)
       brw->curbe.last_buf = buf;
       brw->curbe.last_bufsz = bufsz;
 
-      if (brw->curbe.curbe_bo != NULL &&
-	  brw->curbe.curbe_next_offset + bufsz > brw->curbe.curbe_bo->size)
-      {
-	 dri_bo_unreference(brw->curbe.curbe_bo);
-	 brw->curbe.curbe_bo = NULL;
+      
+      if (!brw_pool_alloc(pool, 
+			  bufsz,
+			  6,
+			  &brw->curbe.gs_offset)) {
+	 _mesa_printf("out of GS memory for curbe\n");
+	 assert(0);
+	 return;
       }
-
-      if (brw->curbe.curbe_bo == NULL) {
-	 /* Allocate a single page for CURBE entries for this batchbuffer.
-	  * They're generally around 64b.
-	  */
-	 brw->curbe.curbe_bo = dri_bo_alloc(brw->intel.bufmgr, "CURBE",
-					    4096, 1 << 6,
-					    DRM_BO_FLAG_MEM_LOCAL |
-					    DRM_BO_FLAG_CACHED |
-					    DRM_BO_FLAG_CACHED_MAPPED);
-	 brw->curbe.curbe_next_offset = 0;
-      }
-
-      brw->curbe.curbe_offset = brw->curbe.curbe_next_offset;
-      brw->curbe.curbe_next_offset += bufsz;
-      brw->curbe.curbe_next_offset = ALIGN(brw->curbe.curbe_next_offset, 64);
+            
 
       /* Copy data to the buffer:
        */
-      dri_bo_subdata(brw->curbe.curbe_bo, brw->curbe.curbe_offset, bufsz, buf);
+      bmBufferSubDataAUB(&brw->intel,
+			 pool->buffer,
+			 brw->curbe.gs_offset, 
+			 bufsz, 
+			 buf,
+			 DW_CONSTANT_BUFFER,
+			 0);
    }
 
-   /* Because this provokes an action (ie copy the constants into the
-    * URB), it shouldn't be shortcircuited if identical to the
-    * previous time - because eg. the urb destination may have
-    * changed, or the urb contents different to last time.
-    *
-    * Note that the data referred to is actually copied internally,
-    * not just used in place according to passed pointer.
-    *
-    * It appears that the CS unit takes care of using each available
-    * URB entry (Const URB Entry == CURBE) in turn, and issuing
-    * flushes as necessary when doublebuffering of CURBEs isn't
-    * possible.
-    */
-   BEGIN_BATCH(2, IGNORE_CLIPRECTS);
-   OUT_BATCH((CMD_CONST_BUFFER << 16) | (1 << 8) | (2 - 2));
-   OUT_RELOC(brw->curbe.curbe_bo, DRM_BO_FLAG_MEM_TT | DRM_BO_FLAG_READ,
-	     (sz - 1) + brw->curbe.curbe_offset);
-   ADVANCE_BATCH();
+   /* TODO: only emit the constant_buffer packet when necessary, ie:
+      - contents have changed
+      - offset has changed
+      - hw requirements due to other packets emitted.
+   */
+   {
+      struct brw_constant_buffer cb;
+      
+      memset(&cb, 0, sizeof(cb));
+
+      cb.header.opcode = CMD_CONST_BUFFER;
+      cb.header.length = sizeof(cb)/4 - 2;
+      cb.header.valid = 1;
+      cb.bits0.buffer_length = sz - 1;
+      cb.bits0.buffer_address = brw->curbe.gs_offset >> 6;
+      
+      /* Because this provokes an action (ie copy the constants into the
+       * URB), it shouldn't be shortcircuited if identical to the
+       * previous time - because eg. the urb destination may have
+       * changed, or the urb contents different to last time.  
+       *
+       * Note that the data referred to is actually copied internally,
+       * not just used in place according to passed pointer.
+       *
+       * It appears that the CS unit takes care of using each available
+       * URB entry (Const URB Entry == CURBE) in turn, and issuing
+       * flushes as necessary when doublebuffering of CURBEs isn't
+       * possible.
+       */
+/*       intel_batchbuffer_align(brw->intel.batch, 64, sizeof(cb)); */
+      BRW_BATCH_STRUCT(brw, &cb);
+/*       intel_batchbuffer_align(brw->intel.batch, 64, 0); */
+   }
 }
 
 /* This tracked state is unique in that the state it monitors varies
@@ -359,10 +372,9 @@ const struct brw_tracked_state brw_constant_buffer = {
 	       BRW_NEW_VERTEX_PROGRAM |
 	       BRW_NEW_URB_FENCE | /* Implicit - hardware requires this, not used above */
 	       BRW_NEW_PSP | /* Implicit - hardware requires this, not used above */
-	       BRW_NEW_CURBE_OFFSETS |
-	       BRW_NEW_BATCH),
+	       BRW_NEW_CURBE_OFFSETS),
       .cache = (CACHE_NEW_WM_PROG) 
    },
-   .update = upload_constant_buffer,
+   .update = upload_constant_buffer
 };
 

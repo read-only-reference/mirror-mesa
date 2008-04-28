@@ -39,33 +39,38 @@
 #include "macros.h"
 #include "mtypes.h"
 
-#define FILE_DEBUG_FLAG DEBUG_FALLBACKS
+
+
+
+
+
 
 static GLboolean do_check_fallback(struct brw_context *brw)
 {
    GLcontext *ctx = &brw->intel.ctx;
    GLuint i;
-   struct gl_framebuffer *fb = ctx->DrawBuffer;
-
+   
    /* BRW_NEW_METAOPS
     */
    if (brw->metaops.active)
       return GL_FALSE;
 
-   if (brw->intel.no_rast) {
-      DBG("FALLBACK: rasterization disabled\n");
+   if (brw->intel.no_rast)
       return GL_TRUE;
-   }
+   
+   /* _NEW_BUFFERS
+    */
+   if (ctx->DrawBuffer->_ColorDrawBufferMask[0] != BUFFER_BIT_FRONT_LEFT &&
+       ctx->DrawBuffer->_ColorDrawBufferMask[0] != BUFFER_BIT_BACK_LEFT)
+      return GL_TRUE;
 
    /* _NEW_RENDERMODE
     *
     * XXX: need to save/restore RenderMode in metaops state, or
     * somehow move to a new attribs pointer:
     */
-   if (ctx->RenderMode != GL_RENDER) {
-      DBG("FALLBACK: render mode\n");
+   if (ctx->RenderMode != GL_RENDER)
       return GL_TRUE;
-   }
 
    /* _NEW_TEXTURE:
     */
@@ -74,10 +79,8 @@ static GLboolean do_check_fallback(struct brw_context *brw)
       if (texUnit->_ReallyEnabled) {
 	 struct intel_texture_object *intelObj = intel_texture_object(texUnit->_Current);
 	 struct gl_texture_image *texImage = intelObj->base.Image[0][intelObj->firstLevel];
-	 if (texImage->Border) {
-	    DBG("FALLBACK: texture border\n");
+	 if (texImage->Border)
 	    return GL_TRUE;
-	 }
       }
    }
    
@@ -85,7 +88,6 @@ static GLboolean do_check_fallback(struct brw_context *brw)
     */
    if (brw->attribs.Stencil->Enabled && 
        !brw->intel.hw_stencil) {
-      DBG("FALLBACK: stencil\n");
       return GL_TRUE;
    }
 

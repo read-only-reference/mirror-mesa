@@ -88,6 +88,7 @@ static void Draw(void)
 {
    glClear(GL_COLOR_BUFFER_BIT); 
 
+   glPushMatrix();
    glColor3f(0,.9,0); 
    glEdgeFlag(0);
    glCallList(list);
@@ -95,6 +96,7 @@ static void Draw(void)
    glRotatef(45,0,0,1);
    glColor3f(1,0,1); 
    glCallList(list);
+   glPopMatrix();
 
    glFlush();
 
@@ -134,7 +136,7 @@ int main(int argc, char **argv)
 
     glutInitWindowPosition(0, 0); glutInitWindowSize( 250, 250);
 
-    type = GLUT_RGB;
+    type = GLUT_RGB | GLUT_ALPHA;
     type |= (doubleBuffer) ? GLUT_DOUBLE : GLUT_SINGLE;
     glutInitDisplayMode(type);
 

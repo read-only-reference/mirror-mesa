@@ -123,9 +123,12 @@ typedef int GLfixed;
 /*@{*/
 struct _mesa_HashTable;
 struct gl_pixelstore_attrib;
+struct gl_program_cache;
 struct gl_texture_format;
 struct gl_texture_image;
 struct gl_texture_object;
+struct st_context;
+struct pipe_surface;
 typedef struct __GLcontextRec GLcontext;
 typedef struct __GLcontextModesRec GLvisual;
 typedef struct gl_framebuffer GLframebuffer;
@@ -1365,7 +1368,7 @@ struct gl_texture_image
    GLboolean IsCompressed;	/**< GL_ARB_texture_compression */
    GLuint CompressedSize;	/**< GL_ARB_texture_compression */
 
-   GLuint RowStride;		/**< Padded width in units of texels */
+   GLuint RowStride;		/**< == Width unless IsClientData and padded */
    GLuint *ImageOffsets;        /**< if 3D texture: array [Depth] of offsets to
                                      each 2D slice in 'Data', in texels */
    GLvoid *Data;		/**< Image data, accessed via FetchTexel() */
@@ -1400,7 +1403,6 @@ struct gl_texture_image
  */
 struct gl_texture_object
 {
-   _glthread_Mutex Mutex;	/**< for thread safety */
    GLint RefCount;		/**< reference count */
    GLuint Name;			/**< the user-visible texture object ID */
    GLenum Target;               /**< GL_TEXTURE_1D, GL_TEXTURE_2D, etc. */
@@ -1536,6 +1538,17 @@ struct gl_texture_unit
 
    struct gl_texture_object *_Current; /**< Points to really enabled tex obj */
 
+   /** These are used for glPush/PopAttrib */
+   /*@{*/
+   struct gl_texture_object Saved1D;
+   struct gl_texture_object Saved2D;
+   struct gl_texture_object Saved3D;
+   struct gl_texture_object SavedCubeMap;
+   struct gl_texture_object SavedRect;
+   struct gl_texture_object Saved1DArray;
+   struct gl_texture_object Saved2DArray;
+   /*@}*/
+
    /** GL_SGI_texture_color_table */
    /*@{*/
    struct gl_color_table ColorTable;
@@ -1544,18 +1557,6 @@ struct gl_texture_unit
    /*@}*/
 };
 
-struct texenvprog_cache_item {
-   GLuint hash;
-   void *key;
-   struct gl_fragment_program *data;
-   struct texenvprog_cache_item *next;
-};
-
-struct texenvprog_cache {
-   struct texenvprog_cache_item **items;
-   GLuint size, n_items;
-   GLcontext *ctx;
-};
 
 /**
  * Texture attribute group (GL_TEXTURE_BIT).
@@ -1576,15 +1577,17 @@ struct gl_texture_attrib
 
    struct gl_texture_unit Unit[MAX_TEXTURE_UNITS];
 
-   /** Proxy texture objects */
-   struct gl_texture_object *ProxyTex[NUM_TEXTURE_TARGETS];
+   struct gl_texture_object *Proxy1D;
+   struct gl_texture_object *Proxy2D;
+   struct gl_texture_object *Proxy3D;
+   struct gl_texture_object *ProxyCubeMap;
+   struct gl_texture_object *ProxyRect;
+   struct gl_texture_object *Proxy1DArray;
+   struct gl_texture_object *Proxy2DArray;
 
    /** GL_EXT_shared_texture_palette */
    GLboolean SharedPalette;
    struct gl_color_table Palette;
-   
-   /** Cached texenv fragment programs */
-   struct texenvprog_cache env_fp_cache;
 };
 
 
@@ -1865,6 +1868,7 @@ enum register_file
 /** Vertex and fragment instructions */
 struct prog_instruction;
 struct gl_program_parameter_list;
+struct gl_uniform_list;
 
 
 /**
@@ -1884,6 +1888,7 @@ struct gl_program
    GLbitfield InputsRead;     /**< Bitmask of which input regs are read */
    GLbitfield OutputsWritten; /**< Bitmask of which output regs are written to */
    GLbitfield TexturesUsed[MAX_TEXTURE_IMAGE_UNITS];  /**< TEXTURE_x_BIT bitmask */
+   GLbitfield SamplersUsed;   /**< Bitfield of which samplers are used */
    GLbitfield ShadowSamplers; /**< Texture units used for shadow sampling. */
 
    /** Named parameters, constants, etc. from program text */
@@ -1895,6 +1900,11 @@ struct gl_program
    struct gl_program_parameter_list *Varying;
    /** Vertex program user-defined attributes */
    struct gl_program_parameter_list *Attributes;
+
+   /** Map from sampler unit to texture unit (set by glUniform1i()) */
+   GLubyte SamplerUnits[MAX_SAMPLERS];
+   /** Which texture target is being sampled (TEXTURE_1D/2D/3D/etc_INDEX) */
+   GLubyte SamplerTargets[MAX_SAMPLERS];
 
    /** Logical counts */
    /*@{*/
@@ -1978,6 +1988,9 @@ struct gl_vertex_program_state
    /** Program to emulate fixed-function T&L (see above) */
    struct gl_vertex_program *_TnlProgram;
 
+   /** Cache of fixed-function programs */
+   struct gl_program_cache *Cache;
+
 #if FEATURE_MESA_program_debug
    GLprogramcallbackMESA Callback;
    GLvoid *CallbackData;
@@ -2010,6 +2023,9 @@ struct gl_fragment_program_state
 
    /** Program to emulate fixed-function texture env/combine (see above) */
    struct gl_fragment_program *_TexEnvProgram;
+
+   /** Cache of fixed-function programs */
+   struct gl_program_cache *Cache;
 
 #if FEATURE_MESA_program_debug
    GLprogramcallbackMESA Callback;
@@ -2068,10 +2084,11 @@ struct gl_ati_fragment_shader_state
  */
 struct gl_query_object
 {
-   GLuint Id;
-   GLuint64EXT Result; /* the counter */
-   GLboolean Active;   /* inside Begin/EndQuery */
-   GLboolean Ready;    /* result is ready */
+   GLenum Target;      /**< The query target, when active */
+   GLuint Id;          /**< hash table ID/name */
+   GLuint64EXT Result; /**< the counter */
+   GLboolean Active;   /**< inside Begin/EndQuery */
+   GLboolean Ready;    /**< result is ready? */
 };
 
 
@@ -2088,7 +2105,7 @@ struct gl_query_state
 
 
 /**
- * A GLSL shader object.
+ * A GLSL vertex or fragment shader object.
  */
 struct gl_shader
 {
@@ -2106,7 +2123,8 @@ struct gl_shader
 
 
 /**
- * A GLSL program object.  Basically a linked collection of "shaders".
+ * A GLSL program object.
+ * Basically a linked collection of vertex and fragment shaders.
  */
 struct gl_shader_program
 {
@@ -2121,7 +2139,7 @@ struct gl_shader_program
    /* post-link info: */
    struct gl_vertex_program *VertexProgram;     /**< Linked vertex program */
    struct gl_fragment_program *FragmentProgram; /**< Linked fragment prog */
-   struct gl_program_parameter_list *Uniforms; /**< Plus constants, etc */
+   struct gl_uniform_list *Uniforms;
    struct gl_program_parameter_list *Varying;
    struct gl_program_parameter_list *Attributes; /**< Vertex attributes */
    GLboolean LinkStatus;   /**< GL_LINK_STATUS */
@@ -2395,11 +2413,13 @@ struct gl_framebuffer
    GLenum ColorDrawBuffer[MAX_DRAW_BUFFERS];
    GLenum ColorReadBuffer;
 
-   /** Computed from ColorDraw/ReadBuffer above */
-   GLuint _NumColorDrawBuffers;
-   GLint _ColorDrawBufferIndexes[MAX_DRAW_BUFFERS]; /**< BUFFER_x or -1 */
+   /* These are computed from ColorDrawBuffer and ColorReadBuffer */
+   GLbitfield _ColorDrawBufferMask[MAX_DRAW_BUFFERS]; /* Mask of BUFFER_BIT_* flags */
    GLint _ColorReadBufferIndex; /* -1 = None */
-   struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS];
+
+   /* These are computed from _ColorDrawBufferMask and _ColorReadBufferIndex */
+   GLuint _NumColorDrawBuffers[MAX_DRAW_BUFFERS];
+   struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS][4];
    struct gl_renderbuffer *_ColorReadBuffer;
 
    /** The Actual depth/stencil buffers to use.  May be wrappers around the
@@ -2864,6 +2884,7 @@ struct mesa_display_list
  */
 struct gl_dlist_state
 {
+   struct mesa_display_list *CallStack[MAX_LIST_NESTING];
    GLuint CallDepth;		/**< Current recursion calling depth */
 
    struct mesa_display_list *CurrentList;
@@ -3038,10 +3059,7 @@ struct __GLcontextRec
 
    /** \name Derived state */
    /*@{*/
-   /** Bitwise-or of DD_* flags.  Note that this bitfield may be used before
-    * state validation so they need to always be current.
-    */
-   GLbitfield _TriangleCaps;
+   GLbitfield _TriangleCaps;      /**< bitwise-or of DD_* flags */
    GLbitfield _ImageTransferState;/**< bitwise-or of IMAGE_*_BIT flags */
    GLfloat _EyeZDir[3];
    GLfloat _ModelViewInvScale;
@@ -3056,6 +3074,12 @@ struct __GLcontextRec
    /**@}*/
 
    struct gl_list_extensions ListExt; /**< driver dlist extensions */
+
+
+   GLuint _Facing; /**< This is a hack for 2-sided stencil test.
+		    *
+		    * We don't have a better way to communicate this value from
+		    * swrast_setup to swrast. */
 
    /** \name For debugging/development only */
    /*@{*/
@@ -3081,7 +3105,7 @@ struct __GLcontextRec
    void *swsetup_context;
    void *swtnl_context;
    void *swtnl_im;
-   void *acache_context;
+   struct st_context *st;
    void *aelt_context;
    /*@}*/
 };

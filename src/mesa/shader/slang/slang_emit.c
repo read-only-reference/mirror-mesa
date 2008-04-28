@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.0.3
+ * Version:  6.5.3
  *
  * Copyright (C) 2005-2007  Brian Paul   All Rights Reserved.
  *
@@ -869,18 +869,12 @@ emit_return(slang_emit_info *emitInfo, slang_ir_node *n)
 static struct prog_instruction *
 emit_kill(slang_emit_info *emitInfo)
 {
-   struct gl_fragment_program *fp;
    struct prog_instruction *inst;
    /* NV-KILL - discard fragment depending on condition code.
     * Note that ARB-KILL depends on sign of vector operand.
     */
    inst = new_instruction(emitInfo, OPCODE_KIL_NV);
    inst->DstReg.CondMask = COND_TR;  /* always branch */
-
-   assert(emitInfo->prog->Target == GL_FRAGMENT_PROGRAM_ARB);
-   fp = (struct gl_fragment_program *) emitInfo->prog;
-   fp->UsesKill = GL_TRUE;
-
    return inst;
 }
 
@@ -922,11 +916,15 @@ emit_tex(slang_emit_info *emitInfo, slang_ir_node *n)
    assert(n->Children[0]->Store->Size >= TEXTURE_1D_INDEX);
    assert(n->Children[0]->Store->Size <= TEXTURE_RECT_INDEX);
 
-   inst->Sampler = n->Children[0]->Store->Index; /* i.e. uniform's index */
    inst->TexSrcTarget = n->Children[0]->Store->Size;
+#if 0
    inst->TexSrcUnit = 27; /* Dummy value; the TexSrcUnit will be computed at
                            * link time, using the sampler uniform's value.
                            */
+   inst->Sampler = n->Children[0]->Store->Index; /* i.e. uniform's index */
+#else
+   inst->TexSrcUnit = n->Children[0]->Store->Index; /* i.e. uniform's index */
+#endif
    return inst;
 }
 
@@ -1502,10 +1500,6 @@ emit_struct_field(slang_emit_info *emitInfo, slang_ir_node *n)
 {
    if (n->Store->File == PROGRAM_STATE_VAR) {
       n->Store->Index = _slang_alloc_statevar(n, emitInfo->prog->Parameters);
-      if (n->Store->Index < 0) {
-         slang_info_log_error(emitInfo->log, "Error parsing state variable");
-         return NULL;
-      }
    }
    else {
       GLint offset = n->FieldOffset / 4;

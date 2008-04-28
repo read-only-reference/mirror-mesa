@@ -183,6 +183,7 @@
     </function>
 </category>
 
+<!--
 <category name="GLX_SGIX_pbuffer" number="50" window_system="glX">
     <function name="CreateGLXPbufferSGIX">
         <glx vendorpriv="65543"/>
@@ -200,6 +201,7 @@
         <glx vendorpriv="65546"/>
     </function>
 </category>
+-->
 
 <category name="GLX_MESA_copy_sub_buffer" number="215">
     <function name="CopySubBufferMESA">

@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.1
+ * Version:  7.1
  *
- * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -809,7 +809,6 @@ _mesa_swizzle_ubyte_image(GLcontext *ctx,
 /*    _mesa_printf("map %d %d %d %d\n", map[0], map[1], map[2], map[3]);  */
 
    if (srcRowStride == dstRowStride &&
-       srcComponents == dstComponents &&
        srcRowStride == srcWidth * srcComponents &&
        dimensions < 3) {
       /* 1 and 2D images only */
@@ -2918,9 +2917,7 @@ _mesa_store_teximage1d(GLcontext *ctx, GLenum target, GLint level,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      _mesa_generate_mipmap(ctx, target,
-                            &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
-                            texObj);
+      ctx->Driver.GenerateMipmap(ctx, target, texObj);
    }
 
    _mesa_unmap_teximage_pbo(ctx, packing);
@@ -3004,9 +3001,7 @@ _mesa_store_teximage2d(GLcontext *ctx, GLenum target, GLint level,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      _mesa_generate_mipmap(ctx, target,
-                            &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
-                            texObj);
+      ctx->Driver.GenerateMipmap(ctx, target, texObj);
    }
 
    _mesa_unmap_teximage_pbo(ctx, packing);
@@ -3080,9 +3075,7 @@ _mesa_store_teximage3d(GLcontext *ctx, GLenum target, GLint level,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      _mesa_generate_mipmap(ctx, target,
-                            &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
-                            texObj);
+      ctx->Driver.GenerateMipmap(ctx, target, texObj);
    }
 
    _mesa_unmap_teximage_pbo(ctx, packing);
@@ -3128,9 +3121,7 @@ _mesa_store_texsubimage1d(GLcontext *ctx, GLenum target, GLint level,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      _mesa_generate_mipmap(ctx, target,
-                            &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
-                            texObj);
+      ctx->Driver.GenerateMipmap(ctx, target, texObj);
    }
 
    _mesa_unmap_teximage_pbo(ctx, packing);
@@ -3183,9 +3174,7 @@ _mesa_store_texsubimage2d(GLcontext *ctx, GLenum target, GLint level,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      _mesa_generate_mipmap(ctx, target,
-                            &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
-                            texObj);
+      ctx->Driver.GenerateMipmap(ctx, target, texObj);
    }
 
    _mesa_unmap_teximage_pbo(ctx, packing);
@@ -3238,9 +3227,7 @@ _mesa_store_texsubimage3d(GLcontext *ctx, GLenum target, GLint level,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      _mesa_generate_mipmap(ctx, target,
-                            &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
-                            texObj);
+      ctx->Driver.GenerateMipmap(ctx, target, texObj);
    }
 
    _mesa_unmap_teximage_pbo(ctx, packing);
@@ -3314,9 +3301,7 @@ _mesa_store_compressed_teximage2d(GLcontext *ctx, GLenum target, GLint level,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      _mesa_generate_mipmap(ctx, target,
-                            &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
-                            texObj);
+      ctx->Driver.GenerateMipmap(ctx, target, texObj);
    }
 
    _mesa_unmap_teximage_pbo(ctx, &ctx->Unpack);
@@ -3426,9 +3411,7 @@ _mesa_store_compressed_texsubimage2d(GLcontext *ctx, GLenum target,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      _mesa_generate_mipmap(ctx, target,
-                            &ctx->Texture.Unit[ctx->Texture.CurrentUnit],
-                            texObj);
+      ctx->Driver.GenerateMipmap(ctx, target, texObj);
    }
 
    _mesa_unmap_teximage_pbo(ctx, &ctx->Unpack);
@@ -3656,8 +3639,8 @@ _mesa_get_teximage(GLcontext *ctx, GLenum target, GLint level,
 void
 _mesa_get_compressed_teximage(GLcontext *ctx, GLenum target, GLint level,
                               GLvoid *img,
-                              struct gl_texture_object *texObj,
-                              struct gl_texture_image *texImage)
+                              const struct gl_texture_object *texObj,
+                              const struct gl_texture_image *texImage)
 {
    GLuint size;
 
