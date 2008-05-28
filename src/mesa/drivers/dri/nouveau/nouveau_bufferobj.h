@@ -2,7 +2,7 @@
 #define __NOUVEAU_BUFFEROBJ_H__
 
 #include "mtypes.h"
-#include "nouveau_buffers.h"
+#include "nouveau_mem.h"
 
 #define NOUVEAU_BO_VRAM_OK (NOUVEAU_MEM_FB | NOUVEAU_MEM_FB_ACCEPTABLE)
 #define NOUVEAU_BO_GART_OK  (NOUVEAU_MEM_AGP | NOUVEAU_MEM_AGP_ACCEPTABLE)
@@ -39,7 +39,7 @@ typedef struct nouveau_buffer_object_t {
 extern void
 nouveau_bo_init_storage(GLcontext *ctx, GLuint valid_gpu_access,
 			GLsizeiptrARB size, const GLvoid *data, GLenum usage,
-			struct gl_buffer_object *bo);
+			struct gl_buffer_object *bo, int flags);
 
 extern GLboolean
 nouveau_bo_move_in(GLcontext *ctx, struct gl_buffer_object *bo);

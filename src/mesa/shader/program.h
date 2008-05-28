@@ -57,6 +57,9 @@ extern void
 _mesa_free_program_data(GLcontext *ctx);
 
 extern void
+_mesa_update_default_objects_program(GLcontext *ctx);
+
+extern void
 _mesa_set_program_error(GLcontext *ctx, GLint pos, const char *string);
 
 extern const GLubyte *
@@ -83,6 +86,28 @@ _mesa_delete_program(GLcontext *ctx, struct gl_program *prog);
 extern struct gl_program *
 _mesa_lookup_program(GLcontext *ctx, GLuint id);
 
+extern void
+_mesa_reference_program(GLcontext *ctx,
+                        struct gl_program **ptr,
+                        struct gl_program *prog);
+
+static INLINE void
+_mesa_reference_vertprog(GLcontext *ctx,
+                         struct gl_vertex_program **ptr,
+                         struct gl_vertex_program *prog)
+{
+   _mesa_reference_program(ctx, (struct gl_program **) ptr,
+                           (struct gl_program *) prog);
+}
+
+static INLINE void
+_mesa_reference_fragprog(GLcontext *ctx,
+                         struct gl_fragment_program **ptr,
+                         struct gl_fragment_program *prog)
+{
+   _mesa_reference_program(ctx, (struct gl_program **) ptr,
+                           (struct gl_program *) prog);
+}
 
 extern struct gl_program *
 _mesa_clone_program(GLcontext *ctx, const struct gl_program *prog);

@@ -31,7 +31,6 @@
 #include "vbo.h"
 #include "vbo_context.h"
 
-#if 0
 /* Reach out and grab this to use as the default:
  */
 extern void _tnl_draw_prims( GLcontext *ctx,
@@ -41,7 +40,6 @@ extern void _tnl_draw_prims( GLcontext *ctx,
 			     const struct _mesa_index_buffer *ib,
 			     GLuint min_index,
 			     GLuint max_index );
-#endif
 
 
 
@@ -114,6 +112,8 @@ static void init_mat_currval(GLcontext *ctx)
    struct gl_client_array *arrays = vbo->mat_currval;
    GLuint i;
 
+   ASSERT(NR_MAT_ATTRIBS == MAT_ATTRIB_MAX);
+
    memset(arrays, 0, sizeof(*arrays) * NR_MAT_ATTRIBS);
 
    /* Set up a constant (StrideB == 0) array for each current
@@ -139,11 +139,7 @@ static void init_mat_currval(GLcontext *ctx)
 	 break;
       }
 
-      if (i < MAT_ATTRIB_MAX)
-	 cl->Ptr = (const void *)ctx->Light.Material.Attrib[i];
-      else 
-	 cl->Ptr = (const void *)ctx->Current.Attrib[VERT_ATTRIB_GENERIC0 + i];
-
+      cl->Ptr = (const void *)ctx->Light.Material.Attrib[i];
       cl->Type = GL_FLOAT;
       cl->Stride = 0;
       cl->StrideB = 0;
@@ -216,9 +212,7 @@ GLboolean _vbo_CreateContext( GLcontext *ctx )
 
    /* By default: 
     */
-#if 0 /* dead - see vbo_set_draw_func() */
    vbo->draw_prims = _tnl_draw_prims;
-#endif
 
    /* Hook our functions into exec and compile dispatch tables.  These
     * will pretty much be permanently installed, which means that the
@@ -250,11 +244,3 @@ void _vbo_DestroyContext( GLcontext *ctx )
    FREE(vbo_context(ctx));
    ctx->swtnl_im = NULL;
 }
-
-
-void vbo_set_draw_func(GLcontext *ctx, vbo_draw_func func)
-{
-   struct vbo_context *vbo = vbo_context(ctx);
-   vbo->draw_prims = func;
-}
-

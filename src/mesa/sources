@@ -27,7 +27,6 @@ MAIN_SOURCES = \
 	main/extensions.c \
 	main/fbobject.c \
 	main/feedback.c \
-	main/ffvertex_prog.c \
 	main/fog.c \
 	main/framebuffer.c \
 	main/get.c \
@@ -80,7 +79,7 @@ MATH_SOURCES = \
 	math/m_vector.c \
 	math/m_xform.c
 
-__SWRAST_SOURCES = \
+SWRAST_SOURCES = \
 	swrast/s_aaline.c \
 	swrast/s_aatriangle.c \
 	swrast/s_accum.c \
@@ -111,15 +110,14 @@ __SWRAST_SOURCES = \
 	swrast/s_triangle.c \
 	swrast/s_zoom.c
 
-__SWRAST_SETUP_SOURCES = \
+SWRAST_SETUP_SOURCES = \
 	swrast_setup/ss_context.c \
 	swrast_setup/ss_triangle.c 
 
-__TNL_SOURCES = \
+TNL_SOURCES = \
 	tnl/t_context.c \
 	tnl/t_pipeline.c \
 	tnl/t_draw.c \
-	tnl/t_rasterpos.c \
 	tnl/t_vb_program.c \
 	tnl/t_vb_render.c \
 	tnl/t_vb_texgen.c \
@@ -151,51 +149,6 @@ VBO_SOURCES = \
 	vbo/vbo_save_draw.c \
 	vbo/vbo_save_loopback.c 
 
-VF_SOURCES = \
-	vf/vf.c \
-	vf/vf_generic.c \
-	vf/vf_sse.c
-
-STATETRACKER_SOURCES = \
-	state_tracker/st_atom.c \
-	state_tracker/st_atom_blend.c \
-	state_tracker/st_atom_clip.c \
-	state_tracker/st_atom_constbuf.c \
-	state_tracker/st_atom_depth.c \
-	state_tracker/st_atom_framebuffer.c \
-	state_tracker/st_atom_pixeltransfer.c \
-	state_tracker/st_atom_sampler.c \
-	state_tracker/st_atom_scissor.c \
-	state_tracker/st_atom_shader.c \
-	state_tracker/st_atom_rasterizer.c \
-	state_tracker/st_atom_stipple.c \
-	state_tracker/st_atom_texture.c \
-	state_tracker/st_atom_viewport.c \
-	state_tracker/st_cb_accum.c \
-	state_tracker/st_cb_bitmap.c \
-	state_tracker/st_cb_blit.c \
-	state_tracker/st_cb_bufferobjects.c \
-	state_tracker/st_cb_clear.c \
-	state_tracker/st_cb_flush.c \
-	state_tracker/st_cb_drawpixels.c \
-	state_tracker/st_cb_fbo.c \
-	state_tracker/st_cb_feedback.c \
-	state_tracker/st_cb_program.c \
-	state_tracker/st_cb_queryobj.c \
-	state_tracker/st_cb_rasterpos.c \
-	state_tracker/st_cb_readpixels.c \
-	state_tracker/st_cb_strings.c \
-	state_tracker/st_cb_texture.c \
-	state_tracker/st_context.c \
-	state_tracker/st_debug.c \
-	state_tracker/st_draw.c \
-	state_tracker/st_extensions.c \
-	state_tracker/st_format.c \
-	state_tracker/st_framebuffer.c \
-	state_tracker/st_gen_mipmap.c \
-	state_tracker/st_mesa_to_tgsi.c \
-	state_tracker/st_program.c \
-	state_tracker/st_texture.c
 
 SHADER_SOURCES = \
 	shader/arbprogparse.c \
@@ -206,7 +159,6 @@ SHADER_SOURCES = \
 	shader/nvprogram.c \
 	shader/nvvertparse.c \
 	shader/program.c \
-	shader/prog_cache.c \
 	shader/prog_debug.c \
 	shader/prog_execute.c \
 	shader/prog_instruction.c \
@@ -245,6 +197,7 @@ ASM_C_SOURCES =	\
 	x86/x86.c \
 	x86/3dnow.c \
 	x86/sse.c \
+	x86/rtasm/x86sse.c \
 	sparc/sparc.c \
 	ppc/common_ppc.c \
 	x86-64/x86-64.c
@@ -285,8 +238,20 @@ SPARC_SOURCES =			\
 SPARC_API =			\
 	sparc/glapi_sparc.S
 
-__COMMON_DRIVER_SOURCES =			\
+COMMON_DRIVER_SOURCES =			\
 	drivers/common/driverfuncs.c
+
+X11_DRIVER_SOURCES =		\
+	drivers/x11/glxapi.c	\
+	drivers/x11/fakeglx.c	\
+	drivers/x11/xfonts.c	\
+	drivers/x11/xm_api.c	\
+	drivers/x11/xm_buffer.c	\
+	drivers/x11/xm_dd.c	\
+	drivers/x11/xm_glide.c	\
+	drivers/x11/xm_line.c	\
+	drivers/x11/xm_span.c	\
+	drivers/x11/xm_tri.c
 
 OSMESA_DRIVER_SOURCES = \
 	drivers/osmesa/osmesa.c
@@ -320,7 +285,7 @@ FBDEV_DRIVER_SOURCES =			\
 ALL_SOURCES = \
 	$(GLAPI_SOURCES)	\
 	$(SOLO_SOURCES)		\
-	$(MESA_ASM_SOURCES)		\
+	$(ASM_SOURCES)		\
 	$(COMMON_DRIVER_SOURCES)\
 	$(X11_DRIVER_SOURCES)	\
 	$(FBDEV_DRIVER_SOURCES) \
@@ -330,13 +295,6 @@ SOLO_SOURCES = \
 	$(MAIN_SOURCES)		\
 	$(MATH_SOURCES)		\
 	$(VBO_SOURCES)		\
-	$(VF_SOURCES)		\
-	$(DRAW_SOURCES)		\
-	$(TGSIEXEC_SOURCES)	\
-	$(TGSIUTIL_SOURCES)	\
-	$(PIPEUTIL_SOURCES)	\
-	$(STATECACHE_SOURCES)   \
-	$(STATETRACKER_SOURCES)	\
 	$(TNL_SOURCES)		\
 	$(SHADER_SOURCES)	\
 	$(SWRAST_SOURCES)	\
@@ -353,11 +311,11 @@ CORE_SOURCES = \
 
 SOLO_OBJECTS = \
 	$(SOLO_SOURCES:.c=.o) \
-	$(MESA_ASM_SOURCES:.S=.o)
+	$(ASM_SOURCES:.S=.o)
 
 GLAPI_OBJECTS = \
 	$(GLAPI_SOURCES:.c=.o) \
-	$(GLAPI_ASM_SOURCES:.S=.o)
+	$(ASM_API:.S=.o)
 
 CORE_OBJECTS = $(SOLO_OBJECTS) $(GLAPI_OBJECTS)
 
@@ -375,16 +333,11 @@ INCLUDE_DIRS = \
 	-I$(TOP)/include \
 	-I$(TOP)/src/mesa \
 	-I$(TOP)/src/mesa/main \
-	-I$(TOP)/src/gallium/include \
-	-I$(TOP)/src/gallium/drivers \
-	-I$(TOP)/src/gallium/auxiliary
-
-OLD_INCLUDE_DIRS = \
-	-I$(TOP)/src/mesa/tnl \
+	-I$(TOP)/src/mesa/glapi \
 	-I$(TOP)/src/mesa/math \
-	-I$(TOP)/src/mesa/swrast \
-	-I$(TOP)/src/mesa/swrast_setup \
+	-I$(TOP)/src/mesa/tnl \
 	-I$(TOP)/src/mesa/shader \
 	-I$(TOP)/src/mesa/shader/grammar \
 	-I$(TOP)/src/mesa/shader/slang \
-	-I$(TOP)/s$(TOP)/src/gallium/auxiliary/tgsi
+	-I$(TOP)/src/mesa/swrast \
+	-I$(TOP)/src/mesa/swrast_setup

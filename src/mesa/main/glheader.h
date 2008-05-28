@@ -46,11 +46,6 @@
 #ifndef GLHEADER_H
 #define GLHEADER_H
 
-/* This allows Mesa to be integrated into XFree86 */
-#ifdef HAVE_DIX_CONFIG_H
-#include "dix-config.h"
-#endif
-
 #include <assert.h>
 #include <ctype.h>
 #if defined(__alpha__) && defined(CCPML)
@@ -237,7 +232,7 @@
 #endif
 
 
-#if !defined __GNUC__ || __GNUC__ < 3
+#if (!defined(__GNUC__) || __GNUC__ < 3) && (!defined(__IBMC__) || __IBMC__ < 900)
 #  define __builtin_expect(x, y) x
 #endif
 

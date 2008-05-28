@@ -1,6 +1,6 @@
 /**************************************************************************
  * 
- * Copyright 2007 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2003 Tungsten Graphics, Inc., Cedar Park, Texas.
  * All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -28,13 +28,22 @@
 #include "glheader.h"
 #include "macros.h"
 #include "enums.h"
+#include "shader/program.h"
 #include "shader/prog_parameter.h"
-#include "shader/prog_cache.h"
 #include "shader/prog_instruction.h"
 #include "shader/prog_print.h"
 #include "shader/prog_statevars.h"
-#include "shader/programopt.h"
 #include "texenvprogram.h"
+
+
+struct texenvprog_cache_item
+{
+   GLuint hash;
+   void *key;
+   struct gl_fragment_program *data;
+   struct texenvprog_cache_item *next;
+};
+
 
 /**
  * This MAX is probably a bit generous, but that's OK.  There can be
@@ -201,8 +210,8 @@ static void make_state_key( GLcontext *ctx,  struct state_key *key )
 
    for (i=0;i<MAX_TEXTURE_UNITS;i++) {
       const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[i];
-		
-      if (!texUnit->_ReallyEnabled)
+
+      if (!texUnit->_ReallyEnabled || !texUnit->Enabled)
          continue;
 
       key->unit[i].enabled = 1;
@@ -400,9 +409,9 @@ static struct ureg get_tex_temp( struct texenv_fragment_program *p )
 }
 
 
-static void release_temps(GLcontext *ctx, struct texenv_fragment_program *p )
+static void release_temps( struct texenv_fragment_program *p )
 {
-   GLuint max_temp = ctx->Const.FragmentProgram.MaxTemps;
+   GLuint max_temp = p->ctx->Const.FragmentProgram.MaxTemps;
 
    /* KW: To support tex_env_crossbar, don't release the registers in
     * temps_output.
@@ -479,7 +488,7 @@ emit_op(struct texenv_fragment_program *p,
 {
    GLuint nr = p->program->Base.NumInstructions++;
    struct prog_instruction *inst = &p->program->Base.Instructions[nr];
-      
+
    assert(nr < MAX_INSTRUCTIONS);
 
    _mesa_init_instructions(inst, 1);
@@ -582,7 +591,7 @@ static struct ureg register_const4f( struct texenv_fragment_program *p,
    idx = _mesa_add_unnamed_constant( p->program->Base.Parameters, values, 4,
                                      &swizzle );
    ASSERT(swizzle == SWIZZLE_NOOP);
-   return make_ureg(PROGRAM_CONSTANT, idx);
+   return make_ureg(PROGRAM_STATE_VAR, idx);
 }
 
 #define register_scalar_const(p, s0)    register_const4f(p, s0, s0, s0, s0)
@@ -936,16 +945,10 @@ static void load_texture( struct texenv_fragment_program *p, GLuint unit )
 			  
       /* TODO: Use D0_MASK_XY where possible.
        */
-      if (p->state->unit[unit].enabled) {
+      if (p->state->unit[unit].enabled) 
 	 p->src_texture[unit] = emit_texld( p, OPCODE_TXP,
 					    tmp, WRITEMASK_XYZW, 
 					    unit, dim, texcoord );
-         p->program->Base.SamplersUsed |= (1 << unit);
-         /* This identity mapping should already be in place
-          * (see _mesa_init_program_struct()) but let's be safe.
-          */
-         p->program->Base.SamplerUnits[unit] = unit;
-      }
       else
 	 p->src_texture[unit] = get_zero(p);
    }
@@ -1044,7 +1047,7 @@ create_new_program(GLcontext *ctx, struct state_key *key,
    p.one = undef;
 
    p.last_tex_stage = 0;
-   release_temps(ctx, &p);
+   release_temps(&p);
 
    if (key->enabled_units) {
       /* First pass - to support texture_env_crossbar, first identify
@@ -1062,7 +1065,7 @@ create_new_program(GLcontext *ctx, struct state_key *key,
       for (unit = 0 ; unit < ctx->Const.MaxTextureUnits; unit++)
 	 if (key->enabled_units & (1<<unit)) {
 	    p.src_previous = emit_texenv( &p, unit );
-	    release_temps(ctx, &p);	/* release all temps */
+	    release_temps(&p);	/* release all temps */
 	 }
    }
 
@@ -1092,7 +1095,6 @@ create_new_program(GLcontext *ctx, struct state_key *key,
        * a reduced value and not what is expected in FogOption
        */
       p.program->FogOption = ctx->Fog.Mode;
-      p.program->Base.InputsRead |= FRAG_BIT_FOGC; /* XXX new */
    } else
       p.program->FogOption = GL_NONE;
 
@@ -1108,21 +1110,15 @@ create_new_program(GLcontext *ctx, struct state_key *key,
    ASSERT(p.program->Base.NumInstructions <= MAX_INSTRUCTIONS);
 
    /* Allocate final instruction array */
-   p.program->Base.Instructions
-      = _mesa_alloc_instructions(p.program->Base.NumInstructions);
-   if (!p.program->Base.Instructions) {
+   program->Base.Instructions
+      = _mesa_alloc_instructions(program->Base.NumInstructions);
+   if (!program->Base.Instructions) {
       _mesa_error(ctx, GL_OUT_OF_MEMORY,
                   "generating tex env program");
       return;
    }
-   _mesa_copy_instructions(p.program->Base.Instructions, instBuffer,
-                           p.program->Base.NumInstructions);
-
-   if (p.program->FogOption) {
-      _mesa_append_fog_code(ctx, p.program);
-      p.program->FogOption = GL_NONE;
-   }
-
+   _mesa_copy_instructions(program->Base.Instructions, instBuffer,
+                           program->Base.NumInstructions);
 
    /* Notify driver the fragment program has (actually) changed.
     */
@@ -1138,35 +1134,106 @@ create_new_program(GLcontext *ctx, struct state_key *key,
 }
 
 
-/**
- * Return a fragment program which implements the current
- * fixed-function texture, fog and color-sum operations.
- */
-struct gl_fragment_program *
-_mesa_get_fixed_func_fragment_program(GLcontext *ctx)
+static struct gl_fragment_program *
+search_cache(const struct texenvprog_cache *cache,
+             GLuint hash,
+             const void *key,
+             GLuint keysize)
 {
-   struct gl_fragment_program *prog;
-   struct state_key key;
-	
-   make_state_key(ctx, &key);
-      
-   prog = (struct gl_fragment_program *)
-      _mesa_search_program_cache(ctx->FragmentProgram.Cache,
-                                 &key, sizeof(key));
+   struct texenvprog_cache_item *c;
 
-   if (!prog) {
-      prog = (struct gl_fragment_program *) 
-         ctx->Driver.NewProgram(ctx, GL_FRAGMENT_PROGRAM_ARB, 0);
-
-      create_new_program(ctx, &key, prog);
-
-      _mesa_program_cache_insert(ctx, ctx->FragmentProgram.Cache,
-                                 &key, sizeof(key), &prog->Base);
+   for (c = cache->items[hash % cache->size]; c; c = c->next) {
+      if (c->hash == hash && memcmp(c->key, key, keysize) == 0)
+	 return c->data;
    }
 
-   return prog;
+   return NULL;
 }
 
+static void rehash( struct texenvprog_cache *cache )
+{
+   struct texenvprog_cache_item **items;
+   struct texenvprog_cache_item *c, *next;
+   GLuint size, i;
+
+   size = cache->size * 3;
+   items = (struct texenvprog_cache_item**) _mesa_malloc(size * sizeof(*items));
+   _mesa_memset(items, 0, size * sizeof(*items));
+
+   for (i = 0; i < cache->size; i++)
+      for (c = cache->items[i]; c; c = next) {
+	 next = c->next;
+	 c->next = items[c->hash % size];
+	 items[c->hash % size] = c;
+      }
+
+   _mesa_free(cache->items);
+   cache->items = items;
+   cache->size = size;
+}
+
+static void clear_cache(GLcontext *ctx, struct texenvprog_cache *cache)
+{
+   struct texenvprog_cache_item *c, *next;
+   GLuint i;
+
+   for (i = 0; i < cache->size; i++) {
+      for (c = cache->items[i]; c; c = next) {
+	 next = c->next;
+	 _mesa_free(c->key);
+         _mesa_reference_fragprog(ctx, &c->data, NULL);
+	 _mesa_free(c);
+      }
+      cache->items[i] = NULL;
+   }
+
+
+   cache->n_items = 0;
+}
+
+
+static void cache_item( GLcontext *ctx,
+                        struct texenvprog_cache *cache,
+			GLuint hash,
+			const struct state_key *key,
+                        struct gl_fragment_program *prog)
+{
+   struct texenvprog_cache_item *c = CALLOC_STRUCT(texenvprog_cache_item);
+   c->hash = hash;
+
+   c->key = _mesa_malloc(sizeof(*key));
+   memcpy(c->key, key, sizeof(*key));
+
+   _mesa_reference_fragprog(ctx, &c->data, prog);
+
+   if (cache->n_items > cache->size * 1.5) {
+      if (cache->size < 1000)
+	 rehash(cache);
+      else 
+	 clear_cache(ctx, cache);
+   }
+
+   cache->n_items++;
+   c->next = cache->items[hash % cache->size];
+   cache->items[hash % cache->size] = c;
+}
+
+static GLuint hash_key( const struct state_key *key )
+{
+   GLuint *ikey = (GLuint *)key;
+   GLuint hash = 0, i;
+
+   /* Make a slightly better attempt at a hash function:
+    */
+   for (i = 0; i < sizeof(*key)/sizeof(*ikey); i++)
+   {
+      hash += ikey[i];
+      hash += (hash << 10);
+      hash ^= (hash >> 6);
+   }
+
+   return hash;
+}
 
 
 /**
@@ -1177,19 +1244,43 @@ _mesa_get_fixed_func_fragment_program(GLcontext *ctx)
 void
 _mesa_UpdateTexEnvProgram( GLcontext *ctx )
 {
+   struct state_key key;
+   GLuint hash;
    const struct gl_fragment_program *prev = ctx->FragmentProgram._Current;
 	
    ASSERT(ctx->FragmentProgram._MaintainTexEnvProgram);
 
    /* If a conventional fragment program/shader isn't in effect... */
    if (!ctx->FragmentProgram._Enabled &&
-       (!ctx->Shader.CurrentProgram ||
-        !ctx->Shader.CurrentProgram->FragmentProgram) ) {
+       (!ctx->Shader.CurrentProgram || !ctx->Shader.CurrentProgram->FragmentProgram)) {
+      struct gl_fragment_program *newProg;
 
-      ctx->FragmentProgram._Current
-         = ctx->FragmentProgram._TexEnvProgram
-         = _mesa_get_fixed_func_fragment_program(ctx);
+      make_state_key(ctx, &key);
+      hash = hash_key(&key);
+      
+      newProg = search_cache(&ctx->Texture.env_fp_cache, hash, &key, sizeof(key));
+
+      if (!newProg) {
+         /* create new tex env program */
+
+         if (0)
+            _mesa_printf("Building new texenv proggy for key %x\n", hash);
+
+         newProg = (struct gl_fragment_program *) 
+            ctx->Driver.NewProgram(ctx, GL_FRAGMENT_PROGRAM_ARB, 0);
+
+         create_new_program(ctx, &key, newProg);
+
+         cache_item(ctx, &ctx->Texture.env_fp_cache, hash, &key, newProg);
+      }
+
+      _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current, newProg);
+      _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._TexEnvProgram, newProg);
    } 
+   else {
+      /* _Current pointer has been updated in update_program */
+      /* ctx->FragmentProgram._Current = ctx->FragmentProgram.Current; */
+   }
 
    /* Tell the driver about the change.  Could define a new target for
     * this?
@@ -1198,4 +1289,22 @@ _mesa_UpdateTexEnvProgram( GLcontext *ctx )
       ctx->Driver.BindProgram(ctx, GL_FRAGMENT_PROGRAM_ARB,
                          (struct gl_program *) ctx->FragmentProgram._Current);
    }
+}
+
+
+void _mesa_TexEnvProgramCacheInit( GLcontext *ctx )
+{
+   ctx->Texture.env_fp_cache.ctx = ctx;
+   ctx->Texture.env_fp_cache.size = 17;
+   ctx->Texture.env_fp_cache.n_items = 0;
+   ctx->Texture.env_fp_cache.items = (struct texenvprog_cache_item **)
+      _mesa_calloc(ctx->Texture.env_fp_cache.size * 
+		   sizeof(struct texenvprog_cache_item));
+}
+
+
+void _mesa_TexEnvProgramCacheDestroy( GLcontext *ctx )
+{
+   clear_cache(ctx, &ctx->Texture.env_fp_cache);
+   _mesa_free(ctx->Texture.env_fp_cache.items);
 }

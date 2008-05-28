@@ -115,10 +115,79 @@ static const struct tx_table {
 	_ASSIGN(LUMINANCE_ALPHA_FLOAT16, R300_EASY_TX_FORMAT(X, X, X, Y, FL_I16A16)),
 	_ASSIGN(INTENSITY_FLOAT32, R300_EASY_TX_FORMAT(X, X, X, X, FL_I32)),
 	_ASSIGN(INTENSITY_FLOAT16, R300_EASY_TX_FORMAT(X, X, X, X, FL_I16)),
+	_ASSIGN(Z16, R300_EASY_TX_FORMAT(X, X, X, X, X16)),
+	_ASSIGN(Z24_S8, R300_EASY_TX_FORMAT(X, X, X, X, X24_Y8)),
+	_ASSIGN(Z32, R300_EASY_TX_FORMAT(X, X, X, X, X32)),
 	/* *INDENT-ON* */
 };
 
 #undef _ASSIGN
+
+void r300SetDepthTexMode(struct gl_texture_object *tObj)
+{
+	static const GLuint formats[3][3] = {
+		{
+			R300_EASY_TX_FORMAT(X, X, X, X, X16),
+			R300_EASY_TX_FORMAT(X, X, X, ONE, X16),
+			R300_EASY_TX_FORMAT(ZERO, ZERO, ZERO, X, X16),
+		},
+		{
+			R300_EASY_TX_FORMAT(X, X, X, X, X24_Y8),
+			R300_EASY_TX_FORMAT(X, X, X, ONE, X24_Y8),
+			R300_EASY_TX_FORMAT(ZERO, ZERO, ZERO, X, X24_Y8),
+		},
+		{
+			R300_EASY_TX_FORMAT(X, X, X, X, X32),
+			R300_EASY_TX_FORMAT(X, X, X, ONE, X32),
+			R300_EASY_TX_FORMAT(ZERO, ZERO, ZERO, X, X32),
+		},
+	};
+	const GLuint *format;
+	r300TexObjPtr t;
+
+	if (!tObj)
+		return;
+
+	t = (r300TexObjPtr) tObj->DriverData;
+
+
+	switch (tObj->Image[0][tObj->BaseLevel]->TexFormat->MesaFormat) {
+	case MESA_FORMAT_Z16:
+		format = formats[0];
+		break;
+	case MESA_FORMAT_Z24_S8:
+		format = formats[1];
+		break;
+	case MESA_FORMAT_Z32:
+		format = formats[2];
+		break;
+	default:
+		/* Error...which should have already been caught by higher
+		 * levels of Mesa.
+		 */
+		ASSERT(0);
+		return;
+	}
+
+	switch (tObj->DepthMode) {
+	case GL_LUMINANCE:
+		t->format = format[0];
+		break;
+	case GL_INTENSITY:
+		t->format = format[1];
+		break;
+	case GL_ALPHA:
+		t->format = format[2];
+		break;
+	default:
+		/* Error...which should have already been caught by higher
+		 * levels of Mesa.
+		 */
+		ASSERT(0);
+		return;
+	}
+}
+
 
 /**
  * This function computes the number of bytes of storage needed for
@@ -146,7 +215,12 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	 */
 	if (!t->image_override
 	    && VALID_FORMAT(baseImage->TexFormat->MesaFormat)) {
-		t->format = tx_table[baseImage->TexFormat->MesaFormat].format;
+		if (baseImage->TexFormat->BaseFormat == GL_DEPTH_COMPONENT) {
+			r300SetDepthTexMode(tObj);
+		} else {
+			t->format = tx_table[baseImage->TexFormat->MesaFormat].format;
+		}
+
 		t->filter |= tx_table[baseImage->TexFormat->MesaFormat].filter;
 	} else if (!t->image_override) {
 		_mesa_problem(NULL, "unexpected texture format in %s",
@@ -324,16 +398,18 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 		R300_TX_HEIGHTMASK_SHIFT))
 	    | ((numLevels - 1) << R300_TX_MAX_MIP_LEVEL_SHIFT);
 
+	t->pitch = 0;
+
 	/* Only need to round to nearest 32 for textures, but the blitter
 	 * requires 64-byte aligned pitches, and we may/may not need the
 	 * blitter.   NPOT only!
 	 */
 	if (baseImage->IsCompressed) {
-		t->pitch =
+		t->pitch |=
 		    (tObj->Image[0][t->base.firstLevel]->Width + 63) & ~(63);
 	} else if (tObj->Target == GL_TEXTURE_RECTANGLE_NV) {
 		unsigned int align = blitWidth - 1;
-		t->pitch = ((tObj->Image[0][t->base.firstLevel]->Width *
+		t->pitch |= ((tObj->Image[0][t->base.firstLevel]->Width *
 			     texelBytes) + 63) & ~(63);
 		t->size |= R300_TX_SIZE_TXPITCH_EN;
 		if (!t->image_override)
@@ -341,9 +417,16 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 			    (((tObj->Image[0][t->base.firstLevel]->Width) +
 			      align) & ~align) - 1;
 	} else {
-		t->pitch =
+		t->pitch |=
 		    ((tObj->Image[0][t->base.firstLevel]->Width *
 		      texelBytes) + 63) & ~(63);
+	}
+
+	if (rmesa->radeon.radeonScreen->chip_family >= CHIP_FAMILY_RV515) {
+	    if (tObj->Image[0][t->base.firstLevel]->Width > 2048)
+		t->pitch_reg |= R500_TXWIDTH_BIT11;
+	    if (tObj->Image[0][t->base.firstLevel]->Height > 2048)
+		t->pitch_reg |= R500_TXHEIGHT_BIT11;
 	}
 
 	t->dirty_state = TEX_ALL;
@@ -495,12 +578,11 @@ static GLboolean r300UpdateTexture(GLcontext * ctx, int unit)
 void r300SetTexOffset(__DRIcontext * pDRICtx, GLint texname,
 		      unsigned long long offset, GLint depth, GLuint pitch)
 {
-	r300ContextPtr rmesa =
-	    (r300ContextPtr) ((__DRIcontextPrivate *) pDRICtx->private)->
-	    driverPrivate;
+	r300ContextPtr rmesa = pDRICtx->driverPrivate;
 	struct gl_texture_object *tObj =
 	    _mesa_lookup_texture(rmesa->radeon.glCtx, texname);
 	r300TexObjPtr t;
+	uint32_t pitch_val;
 
 	if (!tObj)
 		return;
@@ -513,28 +595,30 @@ void r300SetTexOffset(__DRIcontext * pDRICtx, GLint texname,
 		return;
 
 	t->offset = offset;
-	t->pitch_reg = pitch;
+	t->pitch_reg &= (1 << 13) -1;
+	pitch_val = pitch;
 
 	switch (depth) {
 	case 32:
 		t->format = R300_EASY_TX_FORMAT(X, Y, Z, W, W8Z8Y8X8);
 		t->filter |= tx_table[2].filter;
-		t->pitch_reg /= 4;
+		pitch_val /= 4;
 		break;
 	case 24:
 	default:
 		t->format = R300_EASY_TX_FORMAT(X, Y, Z, ONE, W8Z8Y8X8);
 		t->filter |= tx_table[4].filter;
-		t->pitch_reg /= 4;
+		pitch_val /= 4;
 		break;
 	case 16:
 		t->format = R300_EASY_TX_FORMAT(X, Y, Z, ONE, Z5Y6X5);
 		t->filter |= tx_table[5].filter;
-		t->pitch_reg /= 2;
+		pitch_val /= 2;
 		break;
 	}
+	pitch_val--;
 
-	t->pitch_reg--;
+	t->pitch_reg |= pitch_val;
 }
 
 static GLboolean r300UpdateTextureUnit(GLcontext * ctx, int unit)

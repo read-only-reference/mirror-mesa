@@ -17,11 +17,11 @@ INCLUDE_DIRS = \
 default: gen_matypes matypes.h
 
 clean:
-	rm -f matypes.h gen_matypes
+	-rm -f matypes.h gen_matypes
 
 
 gen_matypes: gen_matypes.c
-	$(HOST_CC) $(INCLUDE_DIRS) $(HOST_CFLAGS) gen_matypes.c -o gen_matypes
+	$(CC) $(INCLUDE_DIRS) $(CFLAGS) gen_matypes.c -o gen_matypes
 
 # need some special rules here, unfortunately
 matypes.h: ../main/mtypes.h ../tnl/t_context.h gen_matypes

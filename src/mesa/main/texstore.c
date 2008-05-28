@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.1
+ * Version:  6.5.1
  *
- * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -809,6 +809,7 @@ _mesa_swizzle_ubyte_image(GLcontext *ctx,
 /*    _mesa_printf("map %d %d %d %d\n", map[0], map[1], map[2], map[3]);  */
 
    if (srcRowStride == dstRowStride &&
+       srcComponents == dstComponents &&
        srcRowStride == srcWidth * srcComponents &&
        dimensions < 3) {
       /* 1 and 2D images only */
@@ -3639,8 +3640,8 @@ _mesa_get_teximage(GLcontext *ctx, GLenum target, GLint level,
 void
 _mesa_get_compressed_teximage(GLcontext *ctx, GLenum target, GLint level,
                               GLvoid *img,
-                              const struct gl_texture_object *texObj,
-                              const struct gl_texture_image *texImage)
+                              struct gl_texture_object *texObj,
+                              struct gl_texture_image *texImage)
 {
    GLuint size;
 

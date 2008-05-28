@@ -116,9 +116,6 @@ extern void
 _mesa_scale_and_bias_depth(const GLcontext *ctx, GLuint n,
                            GLfloat depthValues[]);
 
-extern void
-_mesa_scale_and_bias_depth_uint(const GLcontext *ctx, GLuint n,
-                                GLuint depthValues[]);
 
 extern void 
 _mesa_update_pixel( GLcontext *ctx, GLuint newstate );

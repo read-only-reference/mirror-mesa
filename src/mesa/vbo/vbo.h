@@ -114,10 +114,4 @@ void vbo_rebase_prims( GLcontext *ctx,
 		       vbo_draw_func draw );
 
 
-void vbo_use_buffer_objects(GLcontext *ctx);
-
-
-void vbo_set_draw_func(GLcontext *ctx, vbo_draw_func func);
-
-
 #endif

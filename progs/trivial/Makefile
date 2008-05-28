@@ -8,112 +8,72 @@ TOP = ../..
 include $(TOP)/configs/current
 
 
-LIBS = $(APP_LIB_DEPS)
+LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) $(APP_LIB_DEPS)
 
 SOURCES = \
-	clear-fbo-tex.c \
-	clear-fbo.c \
-	clear-scissor.c \
 	clear.c \
-	dlist-dangling.c \
-	dlist-edgeflag-dangling.c \
-	dlist-edgeflag.c \
-	drawarrays.c \
-	drawelements.c \
-	drawrange.c \
-	flat-clip.c \
-	fs-tri.c \
 	line-clip.c \
 	line-cull.c \
-	line-smooth.c \
-	line-stipple-wide.c \
 	line-userclip-clip.c \
 	line-userclip-nop-clip.c \
 	line-userclip-nop.c \
 	line-userclip.c \
-	line-wide.c \
 	line.c \
 	lineloop-clip.c \
-	lineloop-elts.c \
 	lineloop.c \
-	linestrip-flat-stipple.c \
-	linestrip-stipple-wide.c \
-	linestrip-stipple.c \
-	linestrip.c \
-	pgon-mode.c \
+	point.c \
 	point-clip.c \
 	point-param.c \
-	point-sprite.c \
 	point-wide.c \
-	point-wide-smooth.c \
-	point.c \
 	poly-flat.c \
 	poly-unfilled.c \
 	poly.c \
+	quad-clip.c \
 	quad-clip-all-vertices.c \
 	quad-clip-nearplane.c \
-	quad-clip.c \
 	quad-degenerate.c \
 	quad-flat.c \
 	quad-offset-factor.c \
-	quad-offset-unfilled.c \
 	quad-offset-units.c \
-	quad-tex-2d.c \
-	quad-tex-3d.c \
-	quad-tex-alpha.c \
-	quad-tex-pbo.c \
-	quad-unfilled-clip.c \
-	quad-unfilled-stipple.c \
+	quad-offset-unfilled.c \
 	quad-unfilled.c \
+	quad-tex-2d.c \
+	quad-tex-pbo.c \
+	quad-tex-3d.c \
 	quad.c \
 	quads.c \
-	quadstrip-cont.c \
-	quadstrip-flat.c \
 	quadstrip.c \
-	tri-orig.c \
-	tri-alpha.c \
-	tri-blend-color.c \
-	tri-blend-max.c \
-	tri-blend-min.c \
-	tri-blend-revsub.c \
-	tri-blend-sub.c \
+	quadstrip-flat.c \
+	dlist-edgeflag.c \
+	dlist-dangling.c \
+	dlist-edgeflag-dangling.c \
+	drawrange.c \
+	drawelements.c \
+	drawarrays.c \
 	tri-blend.c \
+	tri-tex-3d.c \
 	tri-clip.c \
-	tri-cull-both.c \
 	tri-cull.c \
-	tri-dlist.c \
 	tri-edgeflag.c \
-	tri-fbo-tex.c \
-	tri-fbo.c \
 	tri-flat-clip.c \
 	tri-flat.c \
-	tri-fog.c \
-	tri-mask-tri.c \
-	tri-query.c \
-	tri-scissor-tri.c \
-	tri-stencil.c \
-	tri-tex-3d.c \
-	tri-tri.c \
-	tri-unfilled-edgeflag.c \
 	tri-unfilled-clip.c \
 	tri-unfilled-smooth.c \
-	tri-unfilled-userclip-stip.c \
 	tri-unfilled-userclip.c \
 	tri-unfilled.c \
 	tri-userclip.c \
-	tri-z-eq.c \
-	tri-z.c \
+	tri-dlist.c \
 	tri.c \
 	tristrip-clip.c \
 	tristrip.c \
-	vbo-drawarrays.c \
-	vbo-drawelements.c \
 	vbo-drawrange.c \
-	vp-array.c \
+	vbo-drawelements.c \
+	vbo-drawarrays.c \
 	vp-clip.c \
-	vp-line-clip.c \
 	vp-tri.c \
-	vp-unfilled.c 
+	vp-line-clip.c \
+	vp-unfilled.c \
+	vp-array.c 
 
 PROGS = $(SOURCES:%.c=%)
 
@@ -128,7 +88,7 @@ UTIL_FILES = readtex.h readtex.c
 .SUFFIXES: .c
 
 .c:
-	$(CC) $(INCLUDES) $(CFLAGS) $< $(LIBS) -o $@
+	$(CC) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $< $(LIBS) -o $@
 
 .c.o:
 	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
@@ -142,9 +102,9 @@ UTIL_FILES = readtex.h readtex.c
 default: $(UTIL_FILES) $(PROGS)
 
 clean:
-	rm -f $(PROGS)
-	rm -f *.o
-	rm -f getproclist.h
+	-rm -f $(PROGS)
+	-rm -f *.o
+	-rm -f getproclist.h
 
 
 # auto code generation
@@ -155,13 +115,13 @@ getproclist.h: $(TOP)/src/mesa/glapi/gl_API.xml getprocaddress.c getprocaddress.
 
 
 texrect: texrect.o readtex.o
-	$(CC) texrect.o readtex.o $(LIBS) -o $@
+	$(CC) $(LDFLAGS) texrect.o readtex.o $(LIBS) -o $@
 
 texrect.o: texrect.c readtex.h
 	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 invert: invert.o readtex.o
-	$(CC) invert.o readtex.o $(LIBS) -o $@
+	$(CC) $(LDFLAGS) invert.o readtex.o $(LIBS) -o $@
 
 invert.o: invert.c readtex.h
 	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
@@ -177,11 +137,6 @@ readtex.c: $(TOP)/progs/util/readtex.c
 	ln -s $(TOP)/progs/util/readtex.c .
 
 
-fs-tri: fs-tri.c extfuncs.h
-
-
-extfuncs.h:  $(TOP)/progs/util/extfuncs.h
-	cp $< .
 
 
 # Emacs tags
