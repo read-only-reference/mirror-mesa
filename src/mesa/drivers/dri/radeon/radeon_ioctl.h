@@ -1,4 +1,3 @@
-/* $XFree86: xc/lib/GL/mesa/src/drv/radeon/radeon_ioctl.h,v 1.6 2002/12/16 16:18:58 dawes Exp $ */
 /**************************************************************************
 
 Copyright 2000, 2001 ATI Technologies Inc., Ontario, Canada, and
@@ -87,9 +86,9 @@ extern void radeonReleaseDmaRegion( radeonContextPtr rmesa,
 				    struct radeon_dma_region *region,
 				    const char *caller );
 
-extern void radeonCopyBuffer( __DRIdrawablePrivate *drawable,
+extern void radeonCopyBuffer( const __DRIdrawablePrivate *drawable,
 			      const drm_clip_rect_t	 *rect);
-extern void radeonPageFlip( __DRIdrawablePrivate *drawable );
+extern void radeonPageFlip( const __DRIdrawablePrivate *drawable );
 extern void radeonFlush( GLcontext *ctx );
 extern void radeonFinish( GLcontext *ctx );
 extern void radeonWaitForIdleLocked( radeonContextPtr rmesa );

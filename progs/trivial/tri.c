@@ -32,8 +32,7 @@
 #define CI_OFFSET_2 32
 
 
-GLenum doubleBuffer;
-int win;
+GLenum doubleBuffer = 1;
 
 static void Init(void)
 {
@@ -41,7 +40,7 @@ static void Init(void)
    fprintf(stderr, "GL_VERSION    = %s\n", (char *) glGetString(GL_VERSION));
    fprintf(stderr, "GL_VENDOR     = %s\n", (char *) glGetString(GL_VENDOR));
 
-    glClearColor(0.0, 0.0, 1.0, 0.0);
+    glClearColor(0.3, 0.1, 0.3, 0.0);
 }
 
 static void Reshape(int width, int height)
@@ -60,7 +59,6 @@ static void Key(unsigned char key, int x, int y)
 
     switch (key) {
       case 27:
-         glutDestroyWindow(win);
 	exit(0);
       default:
 	return;
@@ -74,12 +72,12 @@ static void Draw(void)
    glClear(GL_COLOR_BUFFER_BIT); 
 
    glBegin(GL_TRIANGLES);
-   glColor3f(0,0,.7); 
-   glVertex3f( 0.9, -0.9, -30.0);
    glColor3f(.8,0,0); 
-   glVertex3f( 0.9,  0.9, -30.0);
+   glVertex3f(-0.9, -0.9, -30.0);
    glColor3f(0,.9,0); 
-   glVertex3f(-0.9,  0.0, -30.0);
+   glVertex3f( 0.9, -0.9, -30.0);
+   glColor3f(0,0,.7); 
+   glVertex3f( 0.0,  0.9, -30.0);
    glEnd();
 
    glFlush();
@@ -92,8 +90,6 @@ static void Draw(void)
 static GLenum Args(int argc, char **argv)
 {
     GLint i;
-
-    doubleBuffer = GL_FALSE;
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-sb") == 0) {
@@ -120,12 +116,11 @@ int main(int argc, char **argv)
 
     glutInitWindowPosition(0, 0); glutInitWindowSize( 250, 250);
 
-    type = GLUT_RGB;
+    type = GLUT_RGB | GLUT_ALPHA;
     type |= (doubleBuffer) ? GLUT_DOUBLE : GLUT_SINGLE;
     glutInitDisplayMode(type);
 
-    win = glutCreateWindow("First Tri");
-    if (!win) {
+    if (glutCreateWindow("First Tri") == GL_FALSE) {
 	exit(1);
     }
 
@@ -135,5 +130,5 @@ int main(int argc, char **argv)
     glutKeyboardFunc(Key);
     glutDisplayFunc(Draw);
     glutMainLoop();
-	return 0;
+    return 0;
 }

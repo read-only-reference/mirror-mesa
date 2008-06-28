@@ -983,11 +983,6 @@ StateVars = [
 	  ["ctx->Const.MaxRenderbufferSize"], "",
 	  ["EXT_framebuffer_object"] ),
 
-	# GL_EXT_framebuffer_blit
-	# NOTE: GL_DRAW_FRAMEBUFFER_BINDING_EXT == GL_FRAMEBUFFER_BINDING_EXT
-	( "GL_READ_FRAMEBUFFER_BINDING_EXT", GLint, ["ctx->ReadBuffer->Name"], "",
-	  ["EXT_framebuffer_blit"] ),
-
 	# GL_ARB_fragment_shader
 	( "GL_MAX_FRAGMENT_UNIFORM_COMPONENTS_ARB", GLint,
 	  ["ctx->Const.FragmentProgram.MaxUniformComponents"], "",
@@ -1131,10 +1126,6 @@ def EmitHeader():
 #define FLOAT_TO_BOOLEAN(X)   ( (X) ? GL_TRUE : GL_FALSE )
 
 #define INT_TO_BOOLEAN(I)     ( (I) ? GL_TRUE : GL_FALSE )
-
-#define ENUM_TO_BOOLEAN(E)    ( (E) ? GL_TRUE : GL_FALSE )
-#define ENUM_TO_INT(E)        ( (GLint) (E) )
-#define ENUM_TO_FLOAT(E)      ( (GLfloat) (E) )
 
 #define BOOLEAN_TO_INT(B)     ( (GLint) (B) )
 #define BOOLEAN_TO_FLOAT(B)   ( (B) ? 1.0F : 0.0F )

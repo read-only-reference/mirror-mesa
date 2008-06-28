@@ -31,6 +31,7 @@
 
 
 #include "brw_context.h"
+#include "brw_aub.h"
 #include "brw_defines.h"
 #include "brw_draw.h"
 #include "brw_vs.h"
@@ -38,43 +39,33 @@
 #include "intel_tex.h"
 #include "intel_blit.h"
 #include "intel_batchbuffer.h"
-#include "intel_pixel.h"
-#include "intel_span.h"
-#include "tnl/t_pipeline.h"
 
 #include "utils.h"
 #include "api_noop.h"
 #include "vtxfmt.h"
 
-#include "shader/shader_api.h"
-
 /***************************************
  * Mesa's Driver Functions
  ***************************************/
 
-static void brwUseProgram(GLcontext *ctx, GLuint program)
+static const struct dri_extension brw_extensions[] =
 {
-   _mesa_use_program(ctx, program);
-}
+    { "GL_ARB_depth_texture",              NULL },
+    { "GL_ARB_fragment_program",           NULL },
+    { "GL_ARB_shadow",                     NULL },
+    { "GL_EXT_shadow_funcs",               NULL },
+    /* ARB extn won't work if not enabled */
+    { "GL_SGIX_depth_texture",             NULL },
+    { "GL_ARB_texture_env_crossbar",       NULL },
+    { NULL,                                NULL }
+};
 
-static void brwInitProgFuncs( struct dd_function_table *functions )
-{
-   functions->UseProgram = brwUseProgram;
-}
+
 static void brwInitDriverFunctions( struct dd_function_table *functions )
 {
    intelInitDriverFunctions( functions );
-
-   /* CopyPixels can be accelerated even with the current memory
-    * manager:
-    */
-   if (!getenv("INTEL_NO_BLIT")) {
-      functions->CopyPixels = intelCopyPixels;
-      functions->Bitmap = intelBitmap;
-   }
-
+   brwInitTextureFuncs( functions );
    brwInitFragProgFuncs( functions );
-   brwInitProgFuncs( functions );
 }
 
 
@@ -125,11 +116,6 @@ GLboolean brwCreateContext( const __GLcontextModes *mesaVis,
       return GL_FALSE;
    }
 
-   /* Initialize swrast, tnl driver tables: */
-   intelInitSpanFuncs(ctx);
-
-   TNL_CONTEXT(ctx)->Driver.RunPipeline = _tnl_run_pipeline;
-
    ctx->Const.MaxTextureUnits = BRW_MAX_TEX_UNIT;
    ctx->Const.MaxTextureImageUnits = BRW_MAX_TEX_UNIT;
    ctx->Const.MaxTextureCoordUnits = BRW_MAX_TEX_UNIT;
@@ -146,12 +132,19 @@ GLboolean brwCreateContext( const __GLcontextModes *mesaVis,
    
 /*    ctx->Const.MaxNativeVertexProgramTemps = 32; */
 
+
+   driInitExtensions( ctx, brw_extensions, GL_FALSE );
+
+   brw_aub_init( brw );
+
    brw_init_attribs( brw );
    brw_init_metaops( brw );
    brw_init_state( brw );
 
    brw->state.dirty.mesa = ~0;
    brw->state.dirty.brw = ~0;
+
+   memset(&brw->wm.bind, ~0, sizeof(brw->wm.bind));
 
    brw->emit_state_always = 0;
 
@@ -160,6 +153,16 @@ GLboolean brwCreateContext( const __GLcontextModes *mesaVis,
    brw_draw_init( brw );
 
    brw_ProgramCacheInit( ctx );
+
+   brw_FrameBufferTexInit( brw );
+
+   {
+      const char *filename = getenv("INTEL_REPLAY");
+      if (filename) {
+	 brw_playback_aubfile(brw, filename);
+	 exit(0);
+      }
+   }
 
    return GL_TRUE;
 }

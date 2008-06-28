@@ -39,7 +39,6 @@ DRIVER_SOURCES = \
 		 r300_texstate.c \
 		 r300_vertprog.c \
 		 r300_fragprog.c \
-		 r500_fragprog.c \
 		 r300_shader.c \
 		 r300_emit.c \
 		 r300_swtcl.c \

@@ -18,12 +18,12 @@
  * Test if we pixel buffers are available for a particular X screen.
  * Input:  dpy - the X display
  *         screen - screen number
- * Return:  0 = fbconfigs not available.
- *          1 = fbconfigs are available via GLX 1.3.
- *          2 = fbconfigs and pbuffers are available via GLX_SGIX_fbconfig
+ * Return:  0 = pixel buffers not available.
+ *          1 = pixel buffers are available via GLX 1.3.
+ *          2 = pixel buffers are available via GLX_SGIX_fbconfig/pbuffer.
  */
 int
-QueryFBConfig(Display *dpy, int screen)
+QueryPbuffers(Display *dpy, int screen)
 {
 #if defined(GLX_VERSION_1_3)
    {
@@ -40,55 +40,36 @@ QueryFBConfig(Display *dpy, int screen)
    }
 #endif
 
+#if defined(GLX_SGIX_fbconfig) && defined(GLX_SGIX_pbuffer)
    /* Try the SGIX extensions */
    {
       char *extensions;
       extensions = (char *) glXQueryServerString(dpy, screen, GLX_EXTENSIONS);
-      if (extensions && strstr(extensions,"GLX_SGIX_fbconfig")) {
-	 return 2;
+      if (!extensions ||
+          !strstr(extensions,"GLX_SGIX_fbconfig") ||
+          !strstr(extensions,"GLX_SGIX_pbuffer")) {
+         return 0;
       }
+      return 2;
    }
+#endif
 
    return 0;
 }
 
-/**
- * Test if we pixel buffers are available for a particular X screen.
- * Input:  dpy - the X display
- *         screen - screen number
- * Return:  0 = pixel buffers not available.
- *          1 = pixel buffers are available via GLX 1.3.
- *          2 = pixel buffers are available via GLX_SGIX_fbconfig/pbuffer.
- */
-int
-QueryPbuffers(Display *dpy, int screen)
-{
-   int ret;
 
-   ret = QueryFBConfig(dpy, screen);
-   if (ret == 2) {
-      char *extensions;
-      extensions = (char *) glXQueryServerString(dpy, screen, GLX_EXTENSIONS);
-      if (extensions && strstr(extensions, "GLX_SGIX_pbuffer"))
-	 return 2;
-      else
-	 return 0;
-   }
-   else
-      return ret;
-}
 
 FBCONFIG *
 ChooseFBConfig(Display *dpy, int screen, const int attribs[], int *nConfigs)
 {
-   int fbcSupport = QueryPbuffers(dpy, screen);
+   int pbSupport = QueryPbuffers(dpy, screen);
 #if defined(GLX_VERSION_1_3)
-   if (fbcSupport == 1) {
+   if (pbSupport == 1) {
       return glXChooseFBConfig(dpy, screen, attribs, nConfigs);
    }
 #endif
 #if defined(GLX_SGIX_fbconfig) && defined(GLX_SGIX_pbuffer)
-   if (fbcSupport == 2) {
+   if (pbSupport == 2) {
       return glXChooseFBConfigSGIX(dpy, screen, (int *) attribs, nConfigs);
    }
 #endif
@@ -99,14 +80,14 @@ ChooseFBConfig(Display *dpy, int screen, const int attribs[], int *nConfigs)
 FBCONFIG *
 GetAllFBConfigs(Display *dpy, int screen, int *nConfigs)
 {
-   int fbcSupport = QueryFBConfig(dpy, screen);
+   int pbSupport = QueryPbuffers(dpy, screen);
 #if defined(GLX_VERSION_1_3)
-   if (fbcSupport == 1) {
+   if (pbSupport == 1) {
       return glXGetFBConfigs(dpy, screen, nConfigs);
    }
 #endif
 #if defined(GLX_SGIX_fbconfig) && defined(GLX_SGIX_pbuffer)
-   if (fbcSupport == 2) {
+   if (pbSupport == 2) {
       /* The GLX_SGIX_fbconfig extensions says to pass NULL to get list
        * of all available configurations.
        */
@@ -120,14 +101,14 @@ GetAllFBConfigs(Display *dpy, int screen, int *nConfigs)
 XVisualInfo *
 GetVisualFromFBConfig(Display *dpy, int screen, FBCONFIG config)
 {
-   int fbcSupport = QueryFBConfig(dpy, screen);
+   int pbSupport = QueryPbuffers(dpy, screen);
 #if defined(GLX_VERSION_1_3)
-   if (fbcSupport == 1) {
+   if (pbSupport == 1) {
       return glXGetVisualFromFBConfig(dpy, config);
    }
 #endif
 #if defined(GLX_SGIX_fbconfig) && defined(GLX_SGIX_pbuffer)
-   if (fbcSupport == 2) {
+   if (pbSupport == 2) {
       return glXGetVisualFromFBConfigSGIX(dpy, config);
    }
 #endif
@@ -149,11 +130,11 @@ GetFBConfigAttrib(Display *dpy, int screen,
                   int attrib
                   )
 {
-   int fbcSupport = QueryFBConfig(dpy, screen);
+   int pbSupport = QueryPbuffers(dpy, screen);
    int value = 0;
 
 #if defined(GLX_VERSION_1_3)
-   if (fbcSupport == 1) {
+   if (pbSupport == 1) {
       /* ok */
       if (glXGetFBConfigAttrib(dpy, config, attrib, &value) != 0) {
          value = 0;
@@ -164,7 +145,7 @@ GetFBConfigAttrib(Display *dpy, int screen,
 #endif
 
 #if defined(GLX_SGIX_fbconfig) && defined(GLX_SGIX_pbuffer)
-   if (fbcSupport == 2) {
+   if (pbSupport == 2) {
       if (glXGetFBConfigAttribSGIX(dpy, config, attrib, &value) != 0) {
          value = 0;
       }
@@ -314,9 +295,9 @@ PrintFBConfigInfo(Display *dpy, int screen, FBCONFIG config, Bool horizFormat)
 GLXContext
 CreateContext(Display *dpy, int screen, FBCONFIG config)
 {
-   int fbcSupport = QueryFBConfig(dpy, screen);
+   int pbSupport = QueryPbuffers(dpy, screen);
 #if defined(GLX_VERSION_1_3)
-   if (fbcSupport == 1) {
+   if (pbSupport == 1) {
       /* GLX 1.3 */
       GLXContext c;
       c = glXCreateNewContext(dpy, config, GLX_RGBA_TYPE, NULL, True);
@@ -328,7 +309,7 @@ CreateContext(Display *dpy, int screen, FBCONFIG config)
    }
 #endif
 #if defined(GLX_SGIX_fbconfig) && defined(GLX_SGIX_pbuffer)
-   if (fbcSupport == 2) {
+   if (pbSupport == 2) {
       GLXContext c;
       c = glXCreateContextWithConfigSGIX(dpy, config, GLX_RGBA_TYPE_SGIX, NULL, True);
       if (!c) {
@@ -412,7 +393,6 @@ CreatePbuffer(Display *dpy, int screen, FBCONFIG config,
       pBuffer = None;
    }
 
-   XSync(dpy, False);
    /* Restore original X error handler */
    (void) XSetErrorHandler(oldHandler);
 

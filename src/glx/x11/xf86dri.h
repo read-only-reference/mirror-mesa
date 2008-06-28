@@ -1,4 +1,3 @@
-/* $XFree86: xc/lib/GL/dri/xf86dri.h,v 1.8 2002/10/30 12:51:25 alanh Exp $ */
 /**************************************************************************
 
 Copyright 1998-1999 Precision Insight, Inc., Cedar Park, Texas.
@@ -65,6 +64,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #ifndef _XF86DRI_SERVER_
 
+#include <GL/internal/dri_interface.h>
+
 _XFUNCPROTOBEGIN
 
 Bool XF86DRIQueryExtension( Display *dpy, int *event_base, int *error_base );
@@ -92,14 +93,14 @@ Bool XF86DRICreateContext( Display *dpy, int screen, Visual *visual,
 Bool XF86DRICreateContextWithConfig( Display *dpy, int screen, int configID,
     XID *ptr_to_returned_context_id, drm_context_t *hHWContext );
 
-extern GLboolean XF86DRIDestroyContext( Display *dpy, int screen,
-    XID context_id );
+extern GLboolean XF86DRIDestroyContext( __DRInativeDisplay *dpy, int screen,
+    __DRIid context_id );
 
-extern GLboolean XF86DRICreateDrawable( Display *dpy, int screen,
-    XID drawable, drm_drawable_t *hHWDrawable );
+extern GLboolean XF86DRICreateDrawable( __DRInativeDisplay *dpy, int screen,
+    __DRIid drawable, drm_drawable_t *hHWDrawable );
 
-extern GLboolean XF86DRIDestroyDrawable( Display *dpy, int screen, 
-    XID drawable);
+extern GLboolean XF86DRIDestroyDrawable( __DRInativeDisplay *dpy, int screen, 
+    __DRIid drawable);
 
 Bool XF86DRIGetDrawableInfo( Display *dpy, int screen, Drawable drawable,
     unsigned int *index, unsigned int *stamp, 

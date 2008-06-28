@@ -34,7 +34,6 @@
 
 #ifdef XFree86Server
 
-# include "xorg-server.h"
 # include "resource.h"
 # include "windowstr.h"
 

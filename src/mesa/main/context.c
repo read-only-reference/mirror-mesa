@@ -6,9 +6,9 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  7.1
+ * Version:  6.5
  *
- * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -78,37 +78,61 @@
 
 #include "glheader.h"
 #include "imports.h"
+#if FEATURE_accum
 #include "accum.h"
+#endif
+#include "api_exec.h"
 #include "arrayobj.h"
+#if FEATURE_attrib_stack
 #include "attrib.h"
+#endif
 #include "blend.h"
 #include "buffers.h"
 #include "bufferobj.h"
+#if FEATURE_colortable
 #include "colortab.h"
+#endif
 #include "context.h"
 #include "debug.h"
 #include "depth.h"
+#if FEATURE_dlist
 #include "dlist.h"
+#endif
+#if FEATURE_evaluators
 #include "eval.h"
+#endif
 #include "enums.h"
 #include "extensions.h"
 #include "fbobject.h"
+#if FEATURE_feedback
 #include "feedback.h"
+#endif
 #include "fog.h"
 #include "framebuffer.h"
 #include "get.h"
+#if FEATURE_histogram
 #include "histogram.h"
+#endif
 #include "hint.h"
 #include "hash.h"
 #include "light.h"
 #include "lines.h"
 #include "macros.h"
 #include "matrix.h"
+#include "multisample.h"
+#if FEATURE_pixel_transfer
 #include "pixel.h"
+#endif
+#include "pixelstore.h"
 #include "points.h"
 #include "polygon.h"
+#if FEATURE_ARB_occlusion_query
 #include "queryobj.h"
+#endif
+#if FEATURE_drawpix
 #include "rastpos.h"
+#endif
+#include "scissor.h"
 #include "simple_list.h"
 #include "state.h"
 #include "stencil.h"
@@ -121,11 +145,13 @@
 #include "version.h"
 #include "vtxfmt.h"
 #include "glapi/glthread.h"
-#if FEATURE_NV_vertex_program || FEATURE_NV_fragment_program
+#include "glapi/glapioffsets.h"
+#include "glapi/glapitable.h"
 #include "shader/program.h"
-#endif
 #include "shader/shader_api.h"
+#if FEATURE_ATI_fragment_shader
 #include "shader/atifragshader.h"
+#endif
 #if _HAVE_FULL_GL
 #include "math/m_translate.h"
 #include "math/m_matrix.h"
@@ -160,9 +186,11 @@ GLfloat _mesa_ubyte_to_float_color_tab[256];
  * We have to finish any pending rendering.
  */
 void
-_mesa_notifySwapBuffers(__GLcontext *gc)
+_mesa_notifySwapBuffers(__GLcontext *ctx)
 {
-   FLUSH_VERTICES( gc, 0 );
+   if (ctx->Driver.Flush) {
+      ctx->Driver.Flush(ctx);
+   }
 }
 
 
@@ -413,9 +441,7 @@ alloc_shared_state( GLcontext *ctx )
 
    ss->DisplayList = _mesa_NewHashTable();
    ss->TexObjects = _mesa_NewHashTable();
-#if FEATURE_NV_vertex_program || FEATURE_NV_fragment_program
    ss->Programs = _mesa_NewHashTable();
-#endif
 
 #if FEATURE_ARB_vertex_program
    ss->DefaultVertexProgram = (struct gl_vertex_program *)
@@ -474,11 +500,18 @@ alloc_shared_state( GLcontext *ctx )
    if (!ss->Default2DArray)
       goto cleanup;
 
-   /* sanity check */
-   assert(ss->Default1D->RefCount == 1);
+   /* Effectively bind the default textures to all texture units */
+   ss->Default1D->RefCount += MAX_TEXTURE_IMAGE_UNITS;
+   ss->Default2D->RefCount += MAX_TEXTURE_IMAGE_UNITS;
+   ss->Default3D->RefCount += MAX_TEXTURE_IMAGE_UNITS;
+   ss->DefaultCubeMap->RefCount += MAX_TEXTURE_IMAGE_UNITS;
+   ss->DefaultRect->RefCount += MAX_TEXTURE_IMAGE_UNITS;
+   ss->Default1DArray->RefCount += MAX_TEXTURE_IMAGE_UNITS;
+   ss->Default2DArray->RefCount += MAX_TEXTURE_IMAGE_UNITS;
 
    _glthread_INIT_MUTEX(ss->TexMutex);
    ss->TextureStateStamp = 0;
+
 
 #if FEATURE_EXT_framebuffer_object
    ss->FrameBuffers = _mesa_NewHashTable();
@@ -489,18 +522,17 @@ alloc_shared_state( GLcontext *ctx )
       goto cleanup;
 #endif
 
+
    return GL_TRUE;
 
-cleanup:
+ cleanup:
    /* Ran out of memory at some point.  Free everything and return NULL */
    if (ss->DisplayList)
       _mesa_DeleteHashTable(ss->DisplayList);
    if (ss->TexObjects)
       _mesa_DeleteHashTable(ss->TexObjects);
-#if FEATURE_NV_vertex_program
    if (ss->Programs)
       _mesa_DeleteHashTable(ss->Programs);
-#endif
 #if FEATURE_ARB_vertex_program
    _mesa_reference_vertprog(ctx, &ss->DefaultVertexProgram, NULL);
 #endif
@@ -558,9 +590,11 @@ cleanup:
 static void
 delete_displaylist_cb(GLuint id, void *data, void *userData)
 {
+#if FEATURE_dlist
    struct mesa_display_list *list = (struct mesa_display_list *) data;
    GLcontext *ctx = (GLcontext *) userData;
    _mesa_delete_list(ctx, list);
+#endif
 }
 
 /**
@@ -587,6 +621,7 @@ delete_program_cb(GLuint id, void *data, void *userData)
    ctx->Driver.DeleteProgram(ctx, prog);
 }
 
+#if FEATURE_ATI_fragment_shader
 /**
  * Callback for deleting an ATI fragment shader object.
  * Called by _mesa_HashDeleteAll().
@@ -598,6 +633,7 @@ delete_fragshader_cb(GLuint id, void *data, void *userData)
    GLcontext *ctx = (GLcontext *) userData;
    _mesa_delete_ati_fragment_shader(ctx, shader);
 }
+#endif
 
 /**
  * Callback for deleting a buffer object.  Called by _mesa_HashDeleteAll().
@@ -655,38 +691,6 @@ delete_shader_cb(GLuint id, void *data, void *userData)
    }
 }
 
-/**
- * Callback for deleting a framebuffer object.  Called by _mesa_HashDeleteAll()
- */
-static void
-delete_framebuffer_cb(GLuint id, void *data, void *userData)
-{
-   struct gl_framebuffer *fb = (struct gl_framebuffer *) data;
-   /* The fact that the framebuffer is in the hashtable means its refcount
-    * is one, but we're removing from the hashtable now.  So clear refcount.
-    */
-   /*assert(fb->RefCount == 1);*/
-   fb->RefCount = 0;
-
-   /* NOTE: Delete should always be defined but there are two reports
-    * of it being NULL (bugs 13507, 14293).  Work-around for now.
-    */
-   if (fb->Delete)
-      fb->Delete(fb);
-}
-
-/**
- * Callback for deleting a renderbuffer object. Called by _mesa_HashDeleteAll()
- */
-static void
-delete_renderbuffer_cb(GLuint id, void *data, void *userData)
-{
-   struct gl_renderbuffer *rb = (struct gl_renderbuffer *) data;
-   rb->RefCount = 0;  /* see comment for FBOs above */
-   rb->Delete(rb);
-}
-
-
 
 /**
  * Deallocate a shared state object and all children structures.
@@ -715,10 +719,9 @@ free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
    _mesa_DeleteHashTable(ss->ShaderObjects);
 #endif
 
-#if defined(FEATURE_NV_vertex_program) || defined(FEATURE_NV_fragment_program)
    _mesa_HashDeleteAll(ss->Programs, delete_program_cb, ctx);
    _mesa_DeleteHashTable(ss->Programs);
-#endif
+
 #if FEATURE_ARB_vertex_program
    _mesa_reference_vertprog(ctx, &ss->DefaultVertexProgram, NULL);
 #endif
@@ -741,9 +744,7 @@ free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
    _mesa_DeleteHashTable(ss->ArrayObjects);
 
 #if FEATURE_EXT_framebuffer_object
-   _mesa_HashDeleteAll(ss->FrameBuffers, delete_framebuffer_cb, ctx);
    _mesa_DeleteHashTable(ss->FrameBuffers);
-   _mesa_HashDeleteAll(ss->RenderBuffers, delete_renderbuffer_cb, ctx);
    _mesa_DeleteHashTable(ss->RenderBuffers);
 #endif
 
@@ -784,7 +785,7 @@ _mesa_init_current(GLcontext *ctx)
    }
 
    /* redo special cases: */
-   ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_WEIGHT], 1.0, 0.0, 0.0, 0.0 );
+   ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_WEIGHT], 1.0, 0.0, 0.0, 1.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_NORMAL], 0.0, 0.0, 1.0, 1.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_COLOR0], 1.0, 1.0, 1.0, 1.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_COLOR1], 0.0, 0.0, 0.0, 1.0 );
@@ -973,30 +974,55 @@ init_attrib_groups(GLcontext *ctx)
    _mesa_init_extensions( ctx );
 
    /* Attribute Groups */
+#if FEATURE_accum
    _mesa_init_accum( ctx );
+#endif
+#if FEATURE_attrib_stack
    _mesa_init_attrib( ctx );
+#endif
    _mesa_init_buffer_objects( ctx );
    _mesa_init_color( ctx );
+#if FEATURE_colortable
    _mesa_init_colortables( ctx );
+#endif
    _mesa_init_current( ctx );
    _mesa_init_depth( ctx );
    _mesa_init_debug( ctx );
+#if FEATURE_dlist
    _mesa_init_display_list( ctx );
+#endif
+#if FEATURE_evaluators
    _mesa_init_eval( ctx );
+#endif
+#if FEATURE_feedback
    _mesa_init_feedback( ctx );
+#else
+   ctx->RenderMode = GL_RENDER;
+#endif
    _mesa_init_fog( ctx );
+#if FEATURE_histogram
    _mesa_init_histogram( ctx );
+#endif
    _mesa_init_hint( ctx );
    _mesa_init_line( ctx );
    _mesa_init_lighting( ctx );
    _mesa_init_matrix( ctx );
    _mesa_init_multisample( ctx );
+#if FEATURE_pixel_transfer
    _mesa_init_pixel( ctx );
+#else
+   ctx->Pixel.ReadBuffer = ctx->Visual.doubleBufferMode ? GL_BACK : GL_FRONT;
+#endif
+   _mesa_init_pixelstore( ctx );
    _mesa_init_point( ctx );
    _mesa_init_polygon( ctx );
    _mesa_init_program( ctx );
+#if FEATURE_ARB_occlusion_query
    _mesa_init_query( ctx );
+#endif
+#if FEATURE_drawpix
    _mesa_init_rastpos( ctx );
+#endif
    _mesa_init_scissor( ctx );
    _mesa_init_shader_state( ctx );
    _mesa_init_stencil( ctx );
@@ -1007,34 +1033,17 @@ init_attrib_groups(GLcontext *ctx)
    if (!_mesa_init_texture( ctx ))
       return GL_FALSE;
 
+#if FEATURE_texture_s3tc
    _mesa_init_texture_s3tc( ctx );
+#endif
+#if FEATURE_texture_fxt1
    _mesa_init_texture_fxt1( ctx );
+#endif
 
    /* Miscellaneous */
    ctx->NewState = _NEW_ALL;
    ctx->ErrorValue = (GLenum) GL_NO_ERROR;
-
-   return GL_TRUE;
-}
-
-
-/**
- * Update default objects in a GL context with respect to shared state.
- *
- * \param ctx GL context.
- *
- * Removes references to old default objects, (texture objects, program
- * objects, etc.) and changes to reference those from the current shared
- * state.
- */
-static GLboolean
-update_default_objects(GLcontext *ctx)
-{
-   assert(ctx);
-
-   _mesa_update_default_objects_program(ctx);
-   _mesa_update_default_objects_texture(ctx);
-   _mesa_update_default_objects_buffer_objects(ctx);
+   ctx->_Facing = 0;
 
    return GL_TRUE;
 }
@@ -1112,7 +1121,7 @@ _mesa_initialize_context(GLcontext *ctx,
                          const struct dd_function_table *driverFunctions,
                          void *driverContext)
 {
-   ASSERT(driverContext);
+   /*ASSERT(driverContext);*/
    assert(driverFunctions->NewTextureObject);
    assert(driverFunctions->FreeTexImageData);
 
@@ -1160,16 +1169,18 @@ _mesa_initialize_context(GLcontext *ctx,
       if (ctx->Exec)
          _mesa_free(ctx->Exec);
    }
+#if FEATURE_dispatch
    _mesa_init_exec_table(ctx->Exec);
+#endif
    ctx->CurrentDispatch = ctx->Exec;
-#if _HAVE_FULL_GL
+#if FEATURE_dlist
    _mesa_init_dlist_table(ctx->Save);
    _mesa_install_save_vtxfmt( ctx, &ctx->ListState.ListVtxfmt );
+#endif
    /* Neutral tnl module stuff */
    _mesa_init_exec_vtxfmt( ctx ); 
    ctx->TnlModule.Current = NULL;
    ctx->TnlModule.SwapCount = 0;
-#endif
 
    ctx->FragmentProgram._MaintainTexEnvProgram
       = (_mesa_getenv("MESA_TEX_PROG") != NULL);
@@ -1211,7 +1222,7 @@ _mesa_create_context(const GLvisual *visual,
    GLcontext *ctx;
 
    ASSERT(visual);
-   ASSERT(driverContext);
+   /*ASSERT(driverContext);*/
 
    ctx = (GLcontext *) _mesa_calloc(sizeof(GLcontext));
    if (!ctx)
@@ -1238,18 +1249,17 @@ _mesa_create_context(const GLvisual *visual,
 void
 _mesa_free_context_data( GLcontext *ctx )
 {
-   if (!_mesa_get_current_context()){
-      /* No current context, but we may need one in order to delete
-       * texture objs, etc.  So temporarily bind the context now.
-       */
-      _mesa_make_current(ctx, NULL, NULL);
+   /* if we're destroying the current context, unbind it first */
+   if (ctx == _mesa_get_current_context()) {
+      _mesa_make_current(NULL, NULL, NULL);
    }
-
-   /* unreference WinSysDraw/Read buffers */
-   _mesa_unreference_framebuffer(&ctx->WinSysDrawBuffer);
-   _mesa_unreference_framebuffer(&ctx->WinSysReadBuffer);
-   _mesa_unreference_framebuffer(&ctx->DrawBuffer);
-   _mesa_unreference_framebuffer(&ctx->ReadBuffer);
+   else {
+      /* unreference WinSysDraw/Read buffers */
+      _mesa_unreference_framebuffer(&ctx->WinSysDrawBuffer);
+      _mesa_unreference_framebuffer(&ctx->WinSysReadBuffer);
+      _mesa_unreference_framebuffer(&ctx->DrawBuffer);
+      _mesa_unreference_framebuffer(&ctx->ReadBuffer);
+   }
 
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram.Current, NULL);
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current, NULL);
@@ -1259,16 +1269,21 @@ _mesa_free_context_data( GLcontext *ctx )
    _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current, NULL);
    _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._TexEnvProgram, NULL);
 
-   _mesa_free_attrib_data(ctx);
    _mesa_free_lighting_data( ctx );
+#if FEATURE_evaluators
    _mesa_free_eval_data( ctx );
+#endif
    _mesa_free_texture_data( ctx );
    _mesa_free_matrix_data( ctx );
    _mesa_free_viewport_data( ctx );
+#if FEATURE_colortable
    _mesa_free_colortables_data( ctx );
+#endif
    _mesa_free_program_data(ctx);
    _mesa_free_shader_state(ctx);
+#if FEATURE_ARB_occlusion_query
    _mesa_free_query_data(ctx);
+#endif
 
 #if FEATURE_ARB_vertex_buffer_object
    _mesa_delete_buffer_object(ctx, ctx->Array.NullBufferObj);
@@ -1291,11 +1306,6 @@ _mesa_free_context_data( GLcontext *ctx )
 
    if (ctx->Extensions.String)
       _mesa_free((void *) ctx->Extensions.String);
-
-   /* unbind the context if it's currently bound */
-   if (ctx == _mesa_get_current_context()) {
-      _mesa_make_current(NULL, NULL, NULL);
-   }
 }
 
 
@@ -1527,6 +1537,8 @@ void
 _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
                     GLframebuffer *readBuffer )
 {
+   GET_CURRENT_CONTEXT(oldCtx);
+
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(newCtx, "_mesa_make_current()\n");
 
@@ -1551,6 +1563,13 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
    _glapi_set_context((void *) newCtx);
    ASSERT(_mesa_get_current_context() == newCtx);
 
+   if (oldCtx) {
+      _mesa_unreference_framebuffer(&oldCtx->WinSysDrawBuffer);
+      _mesa_unreference_framebuffer(&oldCtx->WinSysReadBuffer);
+      _mesa_unreference_framebuffer(&oldCtx->DrawBuffer);
+      _mesa_unreference_framebuffer(&oldCtx->ReadBuffer);
+   }
+         
    if (!newCtx) {
       _glapi_set_dispatch(NULL);  /* none current */
    }
@@ -1570,15 +1589,26 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
           * or not bound to a user-created FBO.
           */
          if (!newCtx->DrawBuffer || newCtx->DrawBuffer->Name == 0) {
+         /* fix up the fb fields - these will end up wrong otherwise
+          * if the DRIdrawable changes, and everything relies on them.
+          * This is a bit messy (same as needed in _mesa_BindFramebufferEXT)
+	  */
+            unsigned int i;
+            GLenum buffers[MAX_DRAW_BUFFERS];
+
             _mesa_reference_framebuffer(&newCtx->DrawBuffer, drawBuffer);
+
+            for(i = 0; i < newCtx->Const.MaxDrawBuffers; i++) {
+               buffers[i] = newCtx->Color.DrawBuffer[i];
+            }
+
+            _mesa_drawbuffers(newCtx, newCtx->Const.MaxDrawBuffers, buffers, NULL);
          }
          if (!newCtx->ReadBuffer || newCtx->ReadBuffer->Name == 0) {
             _mesa_reference_framebuffer(&newCtx->ReadBuffer, readBuffer);
+            _mesa_readbuffer_update_fields(newCtx, newCtx->Pixel.ReadBuffer);
          }
 
-         /* XXX only set this flag if we're really changing the draw/read
-          * framebuffer bindings.
-          */
 	 newCtx->NewState |= _NEW_BUFFERS;
 
 #if 1
@@ -1646,18 +1676,12 @@ GLboolean
 _mesa_share_state(GLcontext *ctx, GLcontext *ctxToShare)
 {
    if (ctx && ctxToShare && ctx->Shared && ctxToShare->Shared) {
-      struct gl_shared_state *oldSharedState = ctx->Shared;
-
+      ctx->Shared->RefCount--;
+      if (ctx->Shared->RefCount == 0) {
+         free_shared_state(ctx, ctx->Shared);
+      }
       ctx->Shared = ctxToShare->Shared;
       ctx->Shared->RefCount++;
-
-      update_default_objects(ctx);
-
-      oldSharedState->RefCount--;
-      if (oldSharedState->RefCount == 0) {
-         free_shared_state(ctx, oldSharedState);
-      }
-
       return GL_TRUE;
    }
    else {

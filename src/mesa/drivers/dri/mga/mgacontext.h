@@ -1,4 +1,3 @@
-/* $XFree86: xc/lib/GL/mesa/src/drv/mga/mgacontext.h,v 1.7 2002/12/16 16:18:52 dawes Exp $*/
 /*
  * Copyright 2000-2001 VA Linux Systems, Inc.
  * All Rights Reserved.
@@ -257,6 +256,11 @@ struct mga_context_t {
     */
    drmBufPtr  vertex_dma_buffer;
    drmBufPtr  iload_buffer;
+
+   /* VBI
+    */
+   GLuint vbl_seq;
+   GLuint vblank_flags;
 
    int64_t swap_ust;
    int64_t swap_missed_ust;

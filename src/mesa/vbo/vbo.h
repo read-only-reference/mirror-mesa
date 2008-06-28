@@ -114,4 +114,23 @@ void vbo_rebase_prims( GLcontext *ctx,
 		       vbo_draw_func draw );
 
 
+void vbo_use_buffer_objects(GLcontext *ctx);
+
+
+void vbo_set_draw_func(GLcontext *ctx, vbo_draw_func func);
+
+
+void
+_vbo_Color4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a);
+
+void
+_vbo_Normal3f(GLfloat x, GLfloat y, GLfloat z);
+
+void
+_vbo_MultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q);
+
+void
+_vbo_Materialfv(GLenum face, GLenum pname, const GLfloat *params);
+
+
 #endif

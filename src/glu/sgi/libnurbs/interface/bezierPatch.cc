@@ -31,10 +31,8 @@
 ** published by SGI, but has not been independently verified as being
 ** compliant with the OpenGL(R) version 1.2.1 Specification.
 **
-** $Date: 2001/03/17 00:25:40 $ $Revision: 1.1 $
 */
 /*
-** $Header: /home/krh/git/sync/mesa-cvs-repo/Mesa/src/glu/sgi/libnurbs/interface/bezierPatch.cc,v 1.1 2001/03/17 00:25:40 brianp Exp $
 */
 
 #include "gluos.h"
@@ -111,11 +109,8 @@ void bezierPatchDelete(bezierPatch *b)
 void bezierPatchDeleteList(bezierPatch *b)
 {
   bezierPatch *temp;
-  while (b != NULL) {
-    temp = b;
-    b = b->next;
-    bezierPatchDelete(temp);    
-  }
+  for(temp = b; temp != NULL; temp = temp->next)
+    bezierPatchDelete(temp);
 }
 
 bezierPatch* bezierPatchInsert(bezierPatch *list, bezierPatch *b)

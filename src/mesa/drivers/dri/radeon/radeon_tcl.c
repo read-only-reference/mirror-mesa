@@ -1,4 +1,3 @@
-/* $XFree86$ */
 /**************************************************************************
 
 Copyright 2000, 2001 ATI Technologies Inc., Ontario, Canada, and
@@ -418,7 +417,7 @@ static GLboolean radeon_run_tcl_render( GLcontext *ctx,
 
    for (i = 0 ; i < VB->PrimitiveCount ; i++)
    {
-      GLuint prim = _tnl_translate_prim(&VB->Primitive[i]);
+      GLuint prim = VB->Primitive[i].mode;
       GLuint start = VB->Primitive[i].start;
       GLuint length = VB->Primitive[i].count;
 

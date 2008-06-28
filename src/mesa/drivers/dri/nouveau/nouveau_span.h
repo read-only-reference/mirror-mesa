@@ -30,10 +30,10 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define __NOUVEAU_SPAN_H__
 
 #include "drirenderbuffer.h"
-#include "nouveau_fbo.h"
+#include "nouveau_buffers.h"
 
-extern void nouveauSpanInitFunctions(GLcontext *ctx);
-extern void nouveauSpanSetFunctions(nouveau_renderbuffer_t *nrb);
+extern void nouveauSpanInitFunctions( GLcontext *ctx );
+extern void nouveauSpanSetFunctions(nouveau_renderbuffer *nrb, const GLvisual *vis);
 
 #endif /* __NOUVEAU_SPAN_H__ */
 

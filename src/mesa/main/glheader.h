@@ -46,6 +46,11 @@
 #ifndef GLHEADER_H
 #define GLHEADER_H
 
+/* This allows Mesa to be integrated into XFree86 */
+#ifdef HAVE_DIX_CONFIG_H
+#include "dix-config.h"
+#endif
+
 #include <assert.h>
 #include <ctype.h>
 #if defined(__alpha__) && defined(CCPML)
@@ -64,16 +69,33 @@
 #include <stdarg.h>
 
 
-/* Get typedefs for uintptr_t and friends */
-#if defined(__MINGW32__) || defined(__NetBSD__)
-#  include <stdint.h>
-#elif defined(_WIN32)
-#  include <BaseTsd.h>
-#  if _MSC_VER == 1200
-     typedef UINT_PTR uintptr_t;
-#  endif 
+/* Get standard integer types */
+#if defined(_MSC_VER)
+
+   typedef __int8             int8_t;
+   typedef unsigned __int8    uint8_t;
+   typedef __int16            int16_t;
+   typedef unsigned __int16   uint16_t;
+#  ifndef __eglplatform_h_
+     typedef __int32            int32_t;
+#  endif
+   typedef unsigned __int32   uint32_t;
+   typedef __int64            int64_t;
+   typedef unsigned __int64   uint64_t;
+
+#  if defined(_WIN64)
+     typedef __int64            intptr_t;
+     typedef unsigned __int64   uintptr_t;
+#  else
+     typedef __int32            intptr_t;
+     typedef unsigned __int32   uintptr_t;
+#  endif
+
+#  define INT64_C(__val) __val##i64
+#  define UINT64_C(__val) __val##ui64
+
 #else
-#  include <inttypes.h>
+#  include <stdint.h>
 #endif
 
 #if defined(_WIN32) && !defined(__WIN32__) && !defined(__CYGWIN__) && !defined(BUILD_FOR_SNAP)
@@ -138,6 +160,21 @@
 #define GL_GLEXT_PROTOTYPES
 #include "GL/gl.h"
 #include "GL/glext.h"
+
+
+#ifndef GL_FIXED
+#define GL_FIXED 0x140C
+#endif
+
+
+#ifndef GL_OES_point_size_array
+#define GL_POINT_SIZE_ARRAY_OES                                 0x8B9C
+#define GL_POINT_SIZE_ARRAY_TYPE_OES                            0x898A
+#define GL_POINT_SIZE_ARRAY_STRIDE_OES                          0x898B
+#define GL_POINT_SIZE_ARRAY_POINTER_OES                         0x898C
+#define GL_POINT_SIZE_ARRAY_BUFFER_BINDING_OES                  0x8B9F
+#endif
+
 
 
 #if !defined(CAPI) && defined(WIN32) && !defined(BUILD_FOR_SNAP)
@@ -223,6 +260,7 @@
 #endif
 
 
+#if !defined(_WIN32_WCE)
 #if defined(BUILD_FOR_SNAP) && defined(CHECKED)
 #  define ASSERT(X)   _CHECK(X) 
 #elif defined(DEBUG)
@@ -230,9 +268,10 @@
 #else
 #  define ASSERT(X)
 #endif
+#endif
 
 
-#if (!defined(__GNUC__) || __GNUC__ < 3) && (!defined(__IBMC__) || __IBMC__ < 900)
+#if !defined __GNUC__ || __GNUC__ < 3
 #  define __builtin_expect(x, y) x
 #endif
 

@@ -39,12 +39,6 @@
 #include "x86/common_x86_asm.h"
 
 
-/**
- * Number of bytes to allocate for generated SSE functions
- */
-#define MAX_SSE_CODE_SIZE 1024
-
-
 #define X    0
 #define Y    1
 #define Z    2
@@ -625,10 +619,7 @@ static GLboolean build_vertex_emit( struct x86_program *p )
    x86_pop(&p->func, countEBP);
    x86_ret(&p->func);
 
-   assert(!vtx->emit);
    vtx->emit = (tnl_emit_func)x86_get_func(&p->func);
-
-   assert( (char *) p->func.csr - (char *) p->func.store <= MAX_SSE_CODE_SIZE );
    return GL_TRUE;
 }
 
@@ -653,10 +644,7 @@ void _tnl_generate_sse_emit( GLcontext *ctx )
    p.identity = x86_make_reg(file_XMM, 6);
    p.chan0 = x86_make_reg(file_XMM, 7);
 
-   if (!x86_init_func_size(&p.func, MAX_SSE_CODE_SIZE)) {
-      vtx->emit = NULL;
-      return;
-   }
+   x86_init_func(&p.func);
 
    if (build_vertex_emit(&p)) {
       _tnl_register_fastpath( vtx, GL_TRUE );

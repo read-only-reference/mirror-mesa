@@ -39,10 +39,7 @@
 #include "intel_batchbuffer.h"
 #include "intel_blit.h"
 #include "intel_regions.h"
-#include "intel_buffers.h"
-#include "intel_pixel.h"
 
-#define FILE_DEBUG_FLAG DEBUG_PIXEL
 
 static struct intel_region *
 copypix_src_region(struct intel_context *intel, GLenum type)
@@ -192,7 +189,7 @@ do_texture_copypixels(GLcontext * ctx,
 				  dstx, dstx + width,
 				  dsty, dsty + height,
 				  ctx->Current.RasterPos[ 2 ],
-				  0, 0.0, 0.0, 0.0, 0.0 );
+				  0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0 );
    
    intel->vtbl.leave_meta_state( intel );
    
@@ -234,7 +231,6 @@ do_blit_copypixels(GLcontext * ctx,
 
    if (intel->driDrawable->numClipRects) {
       __DRIdrawablePrivate *dPriv = intel->driDrawable;
-      __DRIdrawablePrivate *dReadPriv = intel->driReadDrawable;
       drm_clip_rect_t *box = dPriv->pClipRects;
       drm_clip_rect_t dest_rect;
       GLint nbox = dPriv->numClipRects;
@@ -266,8 +262,8 @@ do_blit_copypixels(GLcontext * ctx,
       srcy = dPriv->h - srcy - height;  
       dstx += dPriv->x;
       dsty += dPriv->y;
-      srcx += dReadPriv->x;
-      srcy += dReadPriv->y;
+      srcx += dPriv->x;
+      srcy += dPriv->y;
 
       /* Clip against the source region.  This is the only source
        * clipping we do.  Dst is clipped with cliprects below.
@@ -317,6 +313,7 @@ do_blit_copypixels(GLcontext * ctx,
 			   ctx->Color.LogicOp : GL_COPY);
       }
 
+      intel->need_flush = GL_TRUE;
    out:
       intel_batchbuffer_flush(intel->batch);
    }
