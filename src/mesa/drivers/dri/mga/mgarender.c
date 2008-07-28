@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/mga/mgarender.c,v 1.4 2002/10/30 12:51:36 alanh Exp $ */
 /**************************************************************************
 
 Copyright 2000, 2001 ATI Technologies Inc., Ontario, Canada, and
@@ -143,7 +144,7 @@ static GLboolean mga_run_render( GLcontext *ctx,
 
    for (i = 0 ; i < VB->PrimitiveCount ; i++)
    {
-      GLuint prim = VB->Primitive[i].mode;
+      GLuint prim = _tnl_translate_prim(&VB->Primitive[i]);
       GLuint start = VB->Primitive[i].start;
       GLuint length = VB->Primitive[i].count;
 

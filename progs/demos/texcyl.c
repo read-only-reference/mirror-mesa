@@ -27,8 +27,6 @@
 #define LINEAR_FILTER 21
 #define QUIT 100
 
-static GLint Win = -1;
-
 static GLuint CylinderObj = 0;
 static GLboolean Animate = GL_TRUE;
 
@@ -161,7 +159,6 @@ static void Key( unsigned char key, int x, int y )
          glutIdleFunc(NULL);
       break;
       case 27:
-         glutDestroyWindow(Win);
          exit(0);
          break;
    }
@@ -266,7 +263,7 @@ int main( int argc, char *argv[] )
 
    glutInitDisplayMode( GLUT_RGB | GLUT_DOUBLE );
 
-   Win = glutCreateWindow(argv[0] );
+   glutCreateWindow(argv[0] );
 
    Init(argc, argv);
 

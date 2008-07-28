@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/r128/r128_lock.c,v 1.5 2002/10/30 12:51:38 alanh Exp $ */
 /**************************************************************************
 
 Copyright 1999, 2000 ATI Technologies Inc. and Precision Insight, Inc.,

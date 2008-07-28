@@ -7,8 +7,6 @@
 #include <math.h>
 #define GL_GLEXT_PROTOTYPES
 #include <GL/glut.h>
-#include <unistd.h>
-#include <signal.h>
 
 static const char *filename = NULL;
 static GLuint nr_steps = 4;
@@ -20,24 +18,8 @@ static void usage( char *name )
    fprintf( stderr, "options:\n" );
    fprintf( stderr, "    -f     flat shaded\n" );
    fprintf( stderr, "    -nNr  subdivision steps\n" );
-   fprintf( stderr, "    -fps  show frames per second\n" );
 }
 
-unsigned show_fps = 0;
-unsigned int frame_cnt = 0;
-void alarmhandler(int);
-
-void alarmhandler (int sig)
-{
-   if (sig == SIGALRM) {
-      printf("%d frames in 5.0 seconds = %.3f FPS\n", frame_cnt,
-             frame_cnt / 5.0);
-
-      frame_cnt = 0;
-   }
-   signal(SIGALRM, alarmhandler);
-   alarm(5);
-}
 
 static void args(int argc, char *argv[])
 {
@@ -49,9 +31,6 @@ static void args(int argc, char *argv[])
       }
       else if (strcmp(argv[i], "-f") == 0) {
 	 glShadeModel(GL_FLAT);
-      }
-      else if (strcmp(argv[i], "-fps") == 0) {
-         show_fps = 1;
       }
       else if (i == argc - 1) {
 	 filename = argv[i];
@@ -90,9 +69,7 @@ static void Init( void )
    }
 
    fprintf(stderr, "%.*s\n", sz, buf);
-
-   glEnable(GL_VERTEX_PROGRAM_NV);
-
+      
    glGenProgramsARB(1, &prognum);
 
    glBindProgramARB(GL_VERTEX_PROGRAM_ARB, prognum);
@@ -170,6 +147,8 @@ static void Display( void )
    glClearColor(0.3, 0.3, 0.3, 1);
    glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
 
+   glEnable(GL_VERTEX_PROGRAM_NV);
+
    glBegin(GL_TRIANGLES);
 
 
@@ -189,11 +168,7 @@ static void Display( void )
    glEnd();
 
 
-   glFlush();
-   if (show_fps) {
-      ++frame_cnt;
-      glutPostRedisplay();
-   }
+   glFlush(); 
 }
 
 
@@ -230,16 +205,12 @@ int main( int argc, char *argv[] )
    glutInitWindowPosition( 0, 0 );
    glutInitWindowSize( 250, 250 );
    glutInitDisplayMode( GLUT_RGB | GLUT_SINGLE | GLUT_DEPTH );
-   glutCreateWindow(argv[argc-1]);
+   glutCreateWindow(argv[0]);
    glutReshapeFunc( Reshape );
    glutKeyboardFunc( Key );
    glutDisplayFunc( Display );
    args( argc, argv );
    Init();
-   if (show_fps) {
-      signal(SIGALRM, alarmhandler);
-      alarm(5);
-   }
    glutMainLoop();
    return 0;
 }

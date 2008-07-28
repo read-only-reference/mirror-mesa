@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/i810/i810tris.c,v 1.7 2002/10/30 12:51:33 alanh Exp $ */
 /**************************************************************************
 
 Copyright 2001 VA Linux Systems Inc., Fremont, California.
@@ -74,7 +75,7 @@ do {									\
 } while (0)
 #endif
 
-static __inline__ void i810_draw_triangle( i810ContextPtr imesa,
+static INLINE void i810_draw_triangle( i810ContextPtr imesa,
 					   i810VertexPtr v0,
 					   i810VertexPtr v1,
 					   i810VertexPtr v2 )
@@ -89,7 +90,7 @@ static __inline__ void i810_draw_triangle( i810ContextPtr imesa,
 }
 
 
-static __inline__ void i810_draw_quad( i810ContextPtr imesa,
+static INLINE void i810_draw_quad( i810ContextPtr imesa,
 				       i810VertexPtr v0,
 				       i810VertexPtr v1,
 				       i810VertexPtr v2,
@@ -108,7 +109,7 @@ static __inline__ void i810_draw_quad( i810ContextPtr imesa,
 }
 
 
-static __inline__ void i810_draw_point( i810ContextPtr imesa,
+static INLINE void i810_draw_point( i810ContextPtr imesa,
 					i810VertexPtr tmp )
 {
    GLfloat sz = 0.5 * CLAMP(imesa->glCtx->Point.Size,
@@ -132,7 +133,7 @@ static __inline__ void i810_draw_point( i810ContextPtr imesa,
 }
 
 
-static __inline__ void i810_draw_line( i810ContextPtr imesa,
+static INLINE void i810_draw_line( i810ContextPtr imesa,
 				       i810VertexPtr v0,
 				       i810VertexPtr v1 )
 {

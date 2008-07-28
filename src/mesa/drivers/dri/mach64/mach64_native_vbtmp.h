@@ -1,4 +1,4 @@
-/* -*- mode: c; c-basic-offset: 3 -*- */
+/* $XFree86$ */ /* -*- mode: c; c-basic-offset: 3 -*- */
 /*
  * Mesa 3-D graphics library
  * Version:  3.5

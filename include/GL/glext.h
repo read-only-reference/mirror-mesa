@@ -46,9 +46,9 @@ extern "C" {
 /*************************************************************/
 
 /* Header file version number, required by OpenGL ABI for Linux */
-/* glext.h last updated 2007/02/12 */
+/* glext.h last updated 2008/03/24 */
 /* Current version at http://www.opengl.org/registry/ */
-#define GL_GLEXT_VERSION 39
+#define GL_GLEXT_VERSION 40
 
 #ifndef GL_VERSION_1_2
 #define GL_UNSIGNED_BYTE_3_3_2            0x8032
@@ -3091,8 +3091,8 @@ extern "C" {
 #ifndef GL_EXT_framebuffer_blit
 #define GL_READ_FRAMEBUFFER_EXT           0x8CA8
 #define GL_DRAW_FRAMEBUFFER_EXT           0x8CA9
-#define GL_READ_FRAMEBUFFER_BINDING_EXT   GL_FRAMEBUFFER_BINDING_EXT
-#define GL_DRAW_FRAMEBUFFER_BINDING_EXT   0x8CAA
+#define GL_DRAW_FRAMEBUFFER_BINDING_EXT   GL_FRAMEBUFFER_BINDING_EXT
+#define GL_READ_FRAMEBUFFER_BINDING_EXT   0x8CAA
 #endif
 
 #ifndef GL_EXT_framebuffer_multisample
@@ -3379,6 +3379,9 @@ extern "C" {
 #define GL_RGBA_INTEGER_MODE_EXT          0x8D9E
 #endif
 
+#ifndef GL_GREMEDY_frame_terminator
+#endif
+
 
 /*************************************************************/
 
@@ -3416,16 +3419,16 @@ typedef unsigned short GLhalfNV;
 #endif
 
 #ifndef GLEXT_64_TYPES_DEFINED
-/* This code block is duplicated in glext.h, so must be protected */
+/* This code block is duplicated in glxext.h, so must be protected */
 #define GLEXT_64_TYPES_DEFINED
 /* Define int32_t, int64_t, and uint64_t types for UST/MSC */
 /* (as used in the GL_EXT_timer_query extension). */
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
 #include <inttypes.h>
-#elif defined(__sun__)
+#elif defined(__sun__) || defined(__digital__)
 #include <inttypes.h>
 #if defined(__STDC__)
-#if defined(__arch64__)
+#if defined(__arch64__) || defined(_LP64)
 typedef long int int64_t;
 typedef unsigned long int uint64_t;
 #else
@@ -3433,7 +3436,7 @@ typedef long long int int64_t;
 typedef unsigned long long int uint64_t;
 #endif /* __arch64__ */
 #endif /* __STDC__ */
-#elif defined( __VMS )
+#elif defined( __VMS ) || defined(__sgi)
 #include <inttypes.h>
 #elif defined(__SCO__) || defined(__USLC__)
 #include <stdint.h>
@@ -7250,6 +7253,14 @@ typedef void (APIENTRYP PFNGLGETTEXPARAMETERIIVEXTPROC) (GLenum target, GLenum p
 typedef void (APIENTRYP PFNGLGETTEXPARAMETERIUIVEXTPROC) (GLenum target, GLenum pname, GLuint *params);
 typedef void (APIENTRYP PFNGLCLEARCOLORIIEXTPROC) (GLint red, GLint green, GLint blue, GLint alpha);
 typedef void (APIENTRYP PFNGLCLEARCOLORIUIEXTPROC) (GLuint red, GLuint green, GLuint blue, GLuint alpha);
+#endif
+
+#ifndef GL_GREMEDY_frame_terminator
+#define GL_GREMEDY_frame_terminator 1
+#ifdef GL_GLEXT_PROTOTYPES
+GLAPI void APIENTRY glFrameTerminatorGREMEDY (void);
+#endif /* GL_GLEXT_PROTOTYPES */
+typedef void (APIENTRYP PFNGLFRAMETERMINATORGREMEDYPROC) (void);
 #endif
 
 

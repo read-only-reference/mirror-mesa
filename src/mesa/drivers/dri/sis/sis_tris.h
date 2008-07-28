@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/r128/r128_tris.h,v 1.8 2002/10/30 12:51:43 alanh Exp $ */
 /**************************************************************************
 
 Copyright 2003 Eric Anholt
@@ -47,7 +48,7 @@ do {							\
       sisFlushPrims(smesa);				\
 } while (0)
 
-static __inline GLuint *sisAllocDmaLow(sisContextPtr smesa, int bytes)
+static INLINE GLuint *sisAllocDmaLow(sisContextPtr smesa, int bytes)
 {
    GLuint *start;
 

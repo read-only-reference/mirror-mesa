@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/radeon/radeon_tex.h,v 1.3 2002/02/22 21:45:01 dawes Exp $ */
 /**************************************************************************
 
 Copyright 2000, 2001 ATI Technologies Inc., Ontario, Canada, and
@@ -36,6 +37,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #ifndef __RADEON_TEX_H__
 #define __RADEON_TEX_H__
+
+extern void radeonSetTexOffset(__DRIcontext *pDRICtx, GLint texname,
+                               unsigned long long offset, GLint depth,
+                               GLuint pitch);
 
 extern void radeonUpdateTextureState( GLcontext *ctx );
 

@@ -1,3 +1,4 @@
+/* $Id: manytex.c,v 1.5 2005/09/15 01:58:39 brianp Exp $ */
 
 /*
  * test handling of many texture maps
@@ -29,7 +30,6 @@ static GLboolean LinearFilter = GL_FALSE;
 static GLboolean RandomSize = GL_FALSE;
 static GLint Rows, Columns;
 static GLint LowPriorityCount = 0;
-static GLint Win;
 
 
 static void Idle( void )
@@ -125,14 +125,6 @@ static int RandomInt(int min, int max)
    int i = rand();
    int j = i % (max - min + 1);
    return min + j;
-}
-
-
-static void DeleteTextures(void)
-{
-   glDeleteTextures(NumTextures, TextureID);
-   free(TextureID);
-   TextureID = NULL;
 }
 
 
@@ -314,12 +306,9 @@ static void Key( unsigned char key, int x, int y )
          Zrot += step;
          break;
       case ' ':
-         DeleteTextures();
          Init();
          break;
       case 27:
-         DeleteTextures();
-         glutDestroyWindow(Win);
          exit(0);
          break;
    }
@@ -335,7 +324,7 @@ int main( int argc, char *argv[] )
    glutInitWindowPosition( 0, 0 );
    glutInitWindowSize( WinWidth, WinHeight );
    glutInitDisplayMode( GLUT_RGB | GLUT_DOUBLE );
-   Win = glutCreateWindow(argv[0]);
+   glutCreateWindow(argv[0]);
    glutReshapeFunc( Reshape );
    glutKeyboardFunc( Key );
    glutDisplayFunc( Display );

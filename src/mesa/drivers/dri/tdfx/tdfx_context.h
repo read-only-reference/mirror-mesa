@@ -23,6 +23,7 @@
  * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+/* $XFree86: xc/lib/GL/mesa/src/drv/tdfx/tdfx_context.h,v 1.5 2002/02/24 21:51:10 dawes Exp $ */
 
 /*
  * New fixes:
@@ -983,9 +984,9 @@ FX_grColorMaskv_NoLock(GLcontext *ctx, const GLboolean rgba[4]);
 #define TDFXPACKCOLOR4444( r, g, b, a )					   \
    ((((a) & 0xf0) << 8) | (((b) & 0xf0) << 4) | ((g) & 0xf0) | ((r) >> 4))
 
-static __inline__ GrColor_t tdfxPackColor( GLuint cpp,
-					   GLubyte r, GLubyte g,
-					   GLubyte b, GLubyte a )
+static INLINE GrColor_t tdfxPackColor( GLuint cpp,
+                                       GLubyte r, GLubyte g,
+                                       GLubyte b, GLubyte a )
 {
    switch ( cpp ) {
    case 2:

@@ -11,6 +11,8 @@
  */
 struct _egl_context
 {
+   EGLContext Handle;  /* The public/opaque handle which names this object */
+
    _EGLDisplay *Display; /* who do I belong to? */
 
    _EGLConfig *Config;
@@ -20,9 +22,9 @@ struct _egl_context
 
    EGLBoolean IsBound;
    EGLBoolean DeletePending;
-
-   EGLint ClientAPI; /**< EGL_OPENGL_ES_API, EGL_OPENGL_API, EGL_OPENVG_API */
-   EGLint ClientVersion; /**< 1 = OpenGLES 1.x, 2 = OpenGLES 2.x */
+#ifdef EGL_VERSION_1_2
+   EGLint ClientAPI;  /* Either EGL_OPENGL_ES_API or EGL_OPENVG_API */
+#endif /* EGL_VERSION_1_2 */
 };
 
 
@@ -37,10 +39,6 @@ _eglSaveContext(_EGLContext *ctx);
 
 extern void
 _eglRemoveContext(_EGLContext *ctx);
-
-
-extern EGLContext
-_eglGetContextHandle(_EGLContext *ctx);
 
 
 extern _EGLContext *

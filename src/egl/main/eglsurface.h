@@ -51,10 +51,6 @@ extern void
 _eglRemoveSurface(_EGLSurface *surf);
 
 
-extern EGLSurface
-_eglGetSurfaceHandle(_EGLSurface *surface);
-
-
 extern _EGLSurface *
 _eglLookupSurface(EGLSurface surf);
  

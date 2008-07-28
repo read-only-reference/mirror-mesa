@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/r128/r128_tex.c,v 1.14 2002/11/05 17:46:08 tsi Exp $ */
 /**************************************************************************
 
 Copyright 1999, 2000 ATI Technologies Inc. and Precision Insight, Inc.,
@@ -461,9 +462,9 @@ static void r128TexEnv( GLcontext *ctx, GLenum target,
 
    case GL_TEXTURE_LOD_BIAS:
       {
-	 uint32_t t = rmesa->setup.tex_cntl_c;
+	 u_int32_t t = rmesa->setup.tex_cntl_c;
 	 GLint bias;
-	 uint32_t b;
+	 u_int32_t b;
 
 	 /* GTH: This isn't exactly correct, but gives good results up to a
 	  * certain point.  It is better than completely ignoring the LOD
@@ -483,7 +484,7 @@ static void r128TexEnv( GLcontext *ctx, GLenum target,
 	    bias = 127;
 	 }
 
-	 b = (uint32_t)bias & 0xff;
+	 b = (u_int32_t)bias & 0xff;
 	 t &= ~R128_LOD_BIAS_MASK;
 	 t |= (b << R128_LOD_BIAS_SHIFT);
 

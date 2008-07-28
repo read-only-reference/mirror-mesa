@@ -1,4 +1,4 @@
-/* -*- mode: c; c-basic-offset: 3 -*- */
+/* $XFree86$ */ /* -*- mode: c; c-basic-offset: 3 -*- */
 /*
  * Copyright 2000 Gareth Hughes
  * All Rights Reserved.
@@ -263,8 +263,6 @@ struct mach64_context {
 
    /* VBI
     */
-   GLuint vbl_seq;
-   GLuint vblank_flags;
    GLuint do_irqs;
 
    /* Configuration cache

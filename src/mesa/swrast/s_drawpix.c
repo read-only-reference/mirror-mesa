@@ -53,14 +53,19 @@ fast_draw_rgba_pixels(GLcontext *ctx, GLint x, GLint y,
                       const GLvoid *pixels)
 {
    const GLint imgX = x, imgY = y;
-   struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0][0];
-   const GLenum rbType = rb->DataType;
+   struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0];
+   GLenum rbType;
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    SWspan span;
    GLboolean simpleZoom;
    GLint yStep;  /* +1 or -1 */
    struct gl_pixelstore_attrib unpack;
    GLint destX, destY, drawWidth, drawHeight; /* post clipping */
+
+   if (!rb)
+      return GL_TRUE; /* no-op */
+
+   rbType = rb->DataType;
 
    if ((swrast->_RasterMask & ~CLIP_BIT) ||
        ctx->Texture._EnabledCoordUnits ||
@@ -608,8 +613,8 @@ draw_rgba_pixels( GLcontext *ctx, GLint x, GLint y,
                        IMAGE_POST_CONVOLUTION_SCALE_BIAS);
    }
 
-   if (ctx->DrawBuffer->_NumColorDrawBuffers[0] > 0 &&
-       ctx->DrawBuffer->_ColorDrawBuffers[0][0]->DataType != GL_FLOAT &&
+   if (ctx->DrawBuffer->_NumColorDrawBuffers > 0 &&
+       ctx->DrawBuffer->_ColorDrawBuffers[0]->DataType != GL_FLOAT &&
        ctx->Color.ClampFragmentColor != GL_FALSE) {
       /* need to clamp colors before applying fragment ops */
       transferOps |= IMAGE_CLAMP_BIT;
@@ -834,9 +839,11 @@ _swrast_DrawPixels( GLcontext *ctx,
    if (swrast->NewState)
       _swrast_validate_derived( ctx );
 
-   pixels = _mesa_map_drawpix_pbo(ctx, unpack, pixels);
-   if (!pixels)
-      return;
+    pixels = _mesa_map_drawpix_pbo(ctx, unpack, pixels);
+    if (!pixels) {
+       RENDER_FINISH(swrast,ctx);
+       return;
+    }
 
    switch (format) {
    case GL_STENCIL_INDEX:
@@ -873,11 +880,9 @@ _swrast_DrawPixels( GLcontext *ctx,
       /* don't return yet, clean-up */
    }
 
-end:
-
    RENDER_FINISH(swrast,ctx);
 
-   _mesa_unmap_drawpix_pbo(ctx, unpack);
+   _mesa_unmap_drapix_pbo(ctx, unpack);
 }
 
 

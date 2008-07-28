@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/gamma/gamma_span.c,v 1.4 2002/11/05 17:46:07 tsi Exp $ */
 
 #include "gamma_context.h"
 #include "gamma_lock.h"
@@ -171,10 +172,10 @@ static void gammaReadRGBASpan8888( const GLcontext *ctx,
 {
    gammaContextPtr gmesa = GAMMA_CONTEXT(ctx);
    gammaScreenPtr gammascrn = gmesa->gammaScreen;
-   uint32_t dwords1, dwords2, i = 0;
+   u_int32_t dwords1, dwords2, i = 0;
    char *src = (char *)rgba[0];
    GLuint read = n * gammascrn->cpp; /* Number of bytes we are expecting */
-   uint32_t data;
+   u_int32_t data;
 
    FLUSH_DMA_BUFFER(gmesa);
    CHECK_DMA_BUFFER(gmesa, 16);
@@ -196,8 +197,8 @@ static void gammaReadRGBASpan8888( const GLcontext *ctx,
 
 moredata:
 
-   dwords1 = *(volatile uint32_t*)(void *)(((uint8_t*)gammascrn->regions[0].map) + (GlintOutFIFOWords));
-   dwords2 = *(volatile uint32_t*)(void *)(((uint8_t*)gammascrn->regions[2].map) + (GlintOutFIFOWords));
+   dwords1 = *(volatile u_int32_t*)(void *)(((u_int8_t*)gammascrn->regions[0].map) + (GlintOutFIFOWords));
+   dwords2 = *(volatile u_int32_t*)(void *)(((u_int8_t*)gammascrn->regions[2].map) + (GlintOutFIFOWords));
 
    if (dwords1) {
 	memcpy(src, (char*)gammascrn->regions[1].map + 0x1000, dwords1 << 2);

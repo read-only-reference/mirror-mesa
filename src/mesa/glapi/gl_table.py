@@ -56,6 +56,7 @@ class PrintGlTable(gl_XML.gl_print_base):
 		print '# define GLAPIENTRYP GLAPIENTRY *'
 		print '#endif'
 		print ''
+		print 'typedef void (*_glapi_proc)(void); /* generic function pointer */'
 		print ''
 		print 'struct _glapi_table'
 		print '{'

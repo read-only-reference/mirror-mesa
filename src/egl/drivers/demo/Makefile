@@ -21,11 +21,12 @@ default: $(TOP)/$(LIB_DIR)/demodriver.so
 
 
 $(TOP)/$(LIB_DIR)/demodriver.so: $(OBJECTS)
-	$(TOP)/bin/mklib -o demodriver.so -noprefix \
-		-install $(TOP)/$(LIB_DIR) $(OBJECTS)
+	$(MKLIB) -o demodriver.so -noprefix -linker '$(CC)' \
+		-ldflags '$(LDFLAGS)' -install $(TOP)/$(LIB_DIR) \
+		$(OBJECTS)
 
 
 
 clean:
-	rm -f *.o
-	rm -f *.so
+	-rm -f *.o
+	-rm -f *.so

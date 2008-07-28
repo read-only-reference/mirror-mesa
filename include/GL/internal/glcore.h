@@ -36,13 +36,12 @@
 **
 */
 
-#if !defined(_WIN32_WCE)
 #include <sys/types.h>
-#endif
 
 #define GL_CORE_SGI  1
 #define GL_CORE_MESA 2
 #define GL_CORE_APPLE 4
+#define GL_CORE_WINDOWS 8
 
 typedef struct __GLcontextRec __GLcontext;
 

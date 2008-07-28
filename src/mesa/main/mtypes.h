@@ -38,7 +38,8 @@
 #include "glheader.h"
 #include <GL/internal/glcore.h>	/* __GLcontextModes (GLvisual) */
 #include "config.h"		/* Hardwired parameters */
-#include "glapi/glapi.h"
+#include "glapi/glapitable.h"
+#include "glapi/glthread.h"
 #include "math/m_matrix.h"	/* GLmatrix */
 #include "bitset.h"
 
@@ -122,12 +123,9 @@ typedef int GLfixed;
 /*@{*/
 struct _mesa_HashTable;
 struct gl_pixelstore_attrib;
-struct gl_program_cache;
 struct gl_texture_format;
 struct gl_texture_image;
 struct gl_texture_object;
-struct st_context;
-struct pipe_surface;
 typedef struct __GLcontextRec GLcontext;
 typedef struct __GLcontextModesRec GLvisual;
 typedef struct gl_framebuffer GLframebuffer;
@@ -151,7 +149,6 @@ enum
    VERT_ATTRIB_COLOR1 = 4,
    VERT_ATTRIB_FOG = 5,
    VERT_ATTRIB_COLOR_INDEX = 6,
-   VERT_ATTRIB_POINT_SIZE = 6,  /*alias*/
    VERT_ATTRIB_EDGEFLAG = 7,
    VERT_ATTRIB_TEX0 = 8,
    VERT_ATTRIB_TEX1 = 9,
@@ -961,6 +958,7 @@ struct gl_list_extensions
 struct gl_multisample_attrib
 {
    GLboolean Enabled;
+   GLboolean _Enabled;   /**< true if Enabled and multisample buffer */
    GLboolean SampleAlphaToCoverage;
    GLboolean SampleAlphaToOne;
    GLboolean SampleCoverage;
@@ -1368,7 +1366,7 @@ struct gl_texture_image
    GLboolean IsCompressed;	/**< GL_ARB_texture_compression */
    GLuint CompressedSize;	/**< GL_ARB_texture_compression */
 
-   GLuint RowStride;		/**< == Width unless IsClientData and padded */
+   GLuint RowStride;		/**< Padded width in units of texels */
    GLuint *ImageOffsets;        /**< if 3D texture: array [Depth] of offsets to
                                      each 2D slice in 'Data', in texels */
    GLvoid *Data;		/**< Image data, accessed via FetchTexel() */
@@ -1403,6 +1401,7 @@ struct gl_texture_image
  */
 struct gl_texture_object
 {
+   _glthread_Mutex Mutex;	/**< for thread safety */
    GLint RefCount;		/**< reference count */
    GLuint Name;			/**< the user-visible texture object ID */
    GLenum Target;               /**< GL_TEXTURE_1D, GL_TEXTURE_2D, etc. */
@@ -1538,23 +1537,22 @@ struct gl_texture_unit
 
    struct gl_texture_object *_Current; /**< Points to really enabled tex obj */
 
-   /** These are used for glPush/PopAttrib */
-   /*@{*/
-   struct gl_texture_object Saved1D;
-   struct gl_texture_object Saved2D;
-   struct gl_texture_object Saved3D;
-   struct gl_texture_object SavedCubeMap;
-   struct gl_texture_object SavedRect;
-   struct gl_texture_object Saved1DArray;
-   struct gl_texture_object Saved2DArray;
-   /*@}*/
-
    /** GL_SGI_texture_color_table */
    /*@{*/
    struct gl_color_table ColorTable;
    struct gl_color_table ProxyColorTable;
    GLboolean ColorTableEnabled;
    /*@}*/
+};
+
+
+struct texenvprog_cache_item;
+
+struct texenvprog_cache
+{
+   struct texenvprog_cache_item **items;
+   GLuint size, n_items;
+   GLcontext *ctx;
 };
 
 
@@ -1577,17 +1575,15 @@ struct gl_texture_attrib
 
    struct gl_texture_unit Unit[MAX_TEXTURE_UNITS];
 
-   struct gl_texture_object *Proxy1D;
-   struct gl_texture_object *Proxy2D;
-   struct gl_texture_object *Proxy3D;
-   struct gl_texture_object *ProxyCubeMap;
-   struct gl_texture_object *ProxyRect;
-   struct gl_texture_object *Proxy1DArray;
-   struct gl_texture_object *Proxy2DArray;
+   /** Proxy texture objects */
+   struct gl_texture_object *ProxyTex[NUM_TEXTURE_TARGETS];
 
    /** GL_EXT_shared_texture_palette */
    GLboolean SharedPalette;
    struct gl_color_table Palette;
+   
+   /** Cached texenv fragment programs */
+   struct texenvprog_cache env_fp_cache;
 };
 
 
@@ -1708,7 +1704,6 @@ struct gl_array_object
    struct gl_client_array Index;
    struct gl_client_array EdgeFlag;
    struct gl_client_array TexCoord[MAX_TEXTURE_COORD_UNITS];
-   struct gl_client_array PointSize;
    /*@}*/
 
    /** Generic arrays for vertex programs/shaders */
@@ -1989,9 +1984,6 @@ struct gl_vertex_program_state
    /** Program to emulate fixed-function T&L (see above) */
    struct gl_vertex_program *_TnlProgram;
 
-   /** Cache of fixed-function programs */
-   struct gl_program_cache *Cache;
-
 #if FEATURE_MESA_program_debug
    GLprogramcallbackMESA Callback;
    GLvoid *CallbackData;
@@ -2024,9 +2016,6 @@ struct gl_fragment_program_state
 
    /** Program to emulate fixed-function texture env/combine (see above) */
    struct gl_fragment_program *_TexEnvProgram;
-
-   /** Cache of fixed-function programs */
-   struct gl_program_cache *Cache;
 
 #if FEATURE_MESA_program_debug
    GLprogramcallbackMESA Callback;
@@ -2085,11 +2074,10 @@ struct gl_ati_fragment_shader_state
  */
 struct gl_query_object
 {
-   GLenum Target;      /**< The query target, when active */
-   GLuint Id;          /**< hash table ID/name */
-   GLuint64EXT Result; /**< the counter */
-   GLboolean Active;   /**< inside Begin/EndQuery */
-   GLboolean Ready;    /**< result is ready? */
+   GLuint Id;
+   GLuint64EXT Result; /* the counter */
+   GLboolean Active;   /* inside Begin/EndQuery */
+   GLboolean Ready;    /* result is ready */
 };
 
 
@@ -2269,7 +2257,6 @@ struct gl_renderbuffer
    GLubyte IndexBits;
    GLubyte DepthBits;
    GLubyte StencilBits;
-   GLubyte Samples;     /**< Number of samples - 0 if not multisampled */
    GLvoid *Data;        /**< This may not be used by some kinds of RBs */
 
    /* Used to wrap one renderbuffer around another: */
@@ -2415,13 +2402,11 @@ struct gl_framebuffer
    GLenum ColorDrawBuffer[MAX_DRAW_BUFFERS];
    GLenum ColorReadBuffer;
 
-   /* These are computed from ColorDrawBuffer and ColorReadBuffer */
-   GLbitfield _ColorDrawBufferMask[MAX_DRAW_BUFFERS]; /* Mask of BUFFER_BIT_* flags */
+   /** Computed from ColorDraw/ReadBuffer above */
+   GLuint _NumColorDrawBuffers;
+   GLint _ColorDrawBufferIndexes[MAX_DRAW_BUFFERS]; /**< BUFFER_x or -1 */
    GLint _ColorReadBufferIndex; /* -1 = None */
-
-   /* These are computed from _ColorDrawBufferMask and _ColorReadBufferIndex */
-   GLuint _NumColorDrawBuffers[MAX_DRAW_BUFFERS];
-   struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS][4];
+   struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS];
    struct gl_renderbuffer *_ColorReadBuffer;
 
    /** The Actual depth/stencil buffers to use.  May be wrappers around the
@@ -2751,7 +2736,6 @@ struct gl_matrix_stack
 #define _NEW_ARRAY_FOGCOORD         VERT_BIT_FOG
 #define _NEW_ARRAY_INDEX            VERT_BIT_COLOR_INDEX
 #define _NEW_ARRAY_EDGEFLAG         VERT_BIT_EDGEFLAG
-#define _NEW_ARRAY_POINT_SIZE       VERT_BIT_COLOR_INDEX  /* aliased */
 #define _NEW_ARRAY_TEXCOORD_0       VERT_BIT_TEX0
 #define _NEW_ARRAY_TEXCOORD_1       VERT_BIT_TEX1
 #define _NEW_ARRAY_TEXCOORD_2       VERT_BIT_TEX2
@@ -2767,7 +2751,6 @@ struct gl_matrix_stack
 #define _NEW_ARRAY_TEXCOORD(i) (_NEW_ARRAY_TEXCOORD_0 << (i))
 #define _NEW_ARRAY_ATTRIB(i) (_NEW_ARRAY_ATTRIB_0 << (i))
 /*@}*/
-
 
 
 /**
@@ -2888,7 +2871,6 @@ struct mesa_display_list
  */
 struct gl_dlist_state
 {
-   struct mesa_display_list *CallStack[MAX_LIST_NESTING];
    GLuint CallDepth;		/**< Current recursion calling depth */
 
    struct mesa_display_list *CurrentList;
@@ -3063,7 +3045,10 @@ struct __GLcontextRec
 
    /** \name Derived state */
    /*@{*/
-   GLbitfield _TriangleCaps;      /**< bitwise-or of DD_* flags */
+   /** Bitwise-or of DD_* flags.  Note that this bitfield may be used before
+    * state validation so they need to always be current.
+    */
+   GLbitfield _TriangleCaps;
    GLbitfield _ImageTransferState;/**< bitwise-or of IMAGE_*_BIT flags */
    GLfloat _EyeZDir[3];
    GLfloat _ModelViewInvScale;
@@ -3078,12 +3063,6 @@ struct __GLcontextRec
    /**@}*/
 
    struct gl_list_extensions ListExt; /**< driver dlist extensions */
-
-
-   GLuint _Facing; /**< This is a hack for 2-sided stencil test.
-		    *
-		    * We don't have a better way to communicate this value from
-		    * swrast_setup to swrast. */
 
    /** \name For debugging/development only */
    /*@{*/
@@ -3109,7 +3088,7 @@ struct __GLcontextRec
    void *swsetup_context;
    void *swtnl_context;
    void *swtnl_im;
-   struct st_context *st;
+   void *acache_context;
    void *aelt_context;
    /*@}*/
 };

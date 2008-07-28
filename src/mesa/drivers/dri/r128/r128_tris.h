@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/r128/r128_tris.h,v 1.8 2002/10/30 12:51:43 alanh Exp $ */
 /**************************************************************************
 
 Copyright 2000, 2001 ATI Technologies Inc., Ontario, Canada, and

@@ -179,6 +179,7 @@ struct r200_tex_obj {
 
    drm_radeon_tex_image_t image[6][RADEON_MAX_TEXTURE_LEVELS];
 					/* Six, for the cube faces */
+   GLboolean image_override;		/* Image overridden by GLX_EXT_tfp */
 
    GLuint pp_txfilter;		        /* hardware register values */
    GLuint pp_txformat;
@@ -892,11 +893,8 @@ struct r200_context {
    GLuint TexGenCompSel;
    GLmatrix tmpmat;
 
-   /* VBI / buffer swap
+   /* buffer swap
     */
-   GLuint vbl_seq;
-   GLuint vblank_flags;
-
    int64_t swap_ust;
    int64_t swap_missed_ust;
 
@@ -929,7 +927,7 @@ struct r200_context {
 #define R200_CONTEXT(ctx)		((r200ContextPtr)(ctx->DriverCtx))
 
 
-static __inline GLuint r200PackColor( GLuint cpp,
+static INLINE GLuint r200PackColor( GLuint cpp,
 					GLubyte r, GLubyte g,
 					GLubyte b, GLubyte a )
 {

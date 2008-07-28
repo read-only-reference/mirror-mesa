@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/ffb/ffb_context.h,v 1.2 2002/02/22 21:32:58 dawes Exp $ */
 
 #ifndef _FFB_CONTEXT_H
 #define _FFB_CONTEXT_H

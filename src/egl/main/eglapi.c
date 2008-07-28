@@ -43,54 +43,36 @@
 
 
 /**
- * This is typically the first EGL function that an application calls.
- * We initialize our global vars and create a private _EGLDisplay object.
+ * NOTE: displayName is treated as a string in _eglChooseDriver()!!!
+ * This will probably change!
+ * See _eglChooseDriver() for details!
  */
-EGLDisplay EGLAPIENTRY
-eglGetDisplay(NativeDisplayType nativeDisplay)
+EGLDisplay APIENTRY
+eglGetDisplay(NativeDisplayType displayName)
 {
    _EGLDisplay *dpy;
    _eglInitGlobals();
-   dpy = _eglNewDisplay(nativeDisplay);
-   return _eglGetDisplayHandle(dpy);
+   dpy = _eglNewDisplay(displayName);
+   if (dpy)
+      return dpy->Handle;
+   else
+      return EGL_NO_DISPLAY;
 }
 
 
-/**
- * This is typically the second EGL function that an application calls.
- * Here we load/initialize the actual hardware driver.
- */
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
 {
    if (dpy) {
-      EGLBoolean retVal;
-      _EGLDisplay *dpyPriv = _eglLookupDisplay(dpy);
-      if (!dpyPriv) {
-         return EGL_FALSE;
-      }
-      dpyPriv->Driver = _eglOpenDriver(dpyPriv,
-                                       dpyPriv->DriverName,
-                                       dpyPriv->DriverArgs);
-      if (!dpyPriv->Driver) {
-         return EGL_FALSE;
-      }
-      /* Initialize the particular driver now */
-      retVal = dpyPriv->Driver->API.Initialize(dpyPriv->Driver, dpy,
-                                               major, minor);
-
-      dpyPriv->Driver->APImajor = *major;
-      dpyPriv->Driver->APIminor = *minor;
-      snprintf(dpyPriv->Driver->Version, sizeof(dpyPriv->Driver->Version),
-               "%d.%d (%s)", *major, *minor, dpyPriv->Driver->Name);
-
-      return retVal;
+      _EGLDriver *drv = _eglChooseDriver(dpy);
+      if (drv)
+         return drv->API.Initialize(drv, dpy, major, minor);
    }
    return EGL_FALSE;
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglTerminate(EGLDisplay dpy)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -101,7 +83,7 @@ eglTerminate(EGLDisplay dpy)
 }
 
 
-const char * EGLAPIENTRY
+const char * APIENTRY
 eglQueryString(EGLDisplay dpy, EGLint name)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -112,7 +94,7 @@ eglQueryString(EGLDisplay dpy, EGLint name)
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglGetConfigs(EGLDisplay dpy, EGLConfig *configs, EGLint config_size, EGLint *num_config)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -121,7 +103,7 @@ eglGetConfigs(EGLDisplay dpy, EGLConfig *configs, EGLint config_size, EGLint *nu
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglChooseConfig(EGLDisplay dpy, const EGLint *attrib_list, EGLConfig *configs, EGLint config_size, EGLint *num_config)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -129,7 +111,7 @@ eglChooseConfig(EGLDisplay dpy, const EGLint *attrib_list, EGLConfig *configs, E
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglGetConfigAttrib(EGLDisplay dpy, EGLConfig config, EGLint attribute, EGLint *value)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -137,7 +119,7 @@ eglGetConfigAttrib(EGLDisplay dpy, EGLConfig config, EGLint attribute, EGLint *v
 }
 
 
-EGLContext EGLAPIENTRY
+EGLContext APIENTRY
 eglCreateContext(EGLDisplay dpy, EGLConfig config, EGLContext share_list, const EGLint *attrib_list)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -145,7 +127,7 @@ eglCreateContext(EGLDisplay dpy, EGLConfig config, EGLContext share_list, const 
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglDestroyContext(EGLDisplay dpy, EGLContext ctx)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -153,7 +135,7 @@ eglDestroyContext(EGLDisplay dpy, EGLContext ctx)
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -161,7 +143,7 @@ eglMakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx)
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglQueryContext(EGLDisplay dpy, EGLContext ctx, EGLint attribute, EGLint *value)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -169,7 +151,7 @@ eglQueryContext(EGLDisplay dpy, EGLContext ctx, EGLint attribute, EGLint *value)
 }
 
 
-EGLSurface EGLAPIENTRY
+EGLSurface APIENTRY
 eglCreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window, const EGLint *attrib_list)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -177,7 +159,7 @@ eglCreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window
 }
 
 
-EGLSurface EGLAPIENTRY
+EGLSurface APIENTRY
 eglCreatePixmapSurface(EGLDisplay dpy, EGLConfig config, NativePixmapType pixmap, const EGLint *attrib_list)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -185,7 +167,7 @@ eglCreatePixmapSurface(EGLDisplay dpy, EGLConfig config, NativePixmapType pixmap
 }
 
 
-EGLSurface EGLAPIENTRY
+EGLSurface APIENTRY
 eglCreatePbufferSurface(EGLDisplay dpy, EGLConfig config, const EGLint *attrib_list)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -193,7 +175,7 @@ eglCreatePbufferSurface(EGLDisplay dpy, EGLConfig config, const EGLint *attrib_l
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglDestroySurface(EGLDisplay dpy, EGLSurface surface)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -201,7 +183,7 @@ eglDestroySurface(EGLDisplay dpy, EGLSurface surface)
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglQuerySurface(EGLDisplay dpy, EGLSurface surface, EGLint attribute, EGLint *value)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -209,7 +191,7 @@ eglQuerySurface(EGLDisplay dpy, EGLSurface surface, EGLint attribute, EGLint *va
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglSurfaceAttrib(EGLDisplay dpy, EGLSurface surface, EGLint attribute, EGLint value)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -217,7 +199,7 @@ eglSurfaceAttrib(EGLDisplay dpy, EGLSurface surface, EGLint attribute, EGLint va
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglBindTexImage(EGLDisplay dpy, EGLSurface surface, EGLint buffer)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -225,7 +207,7 @@ eglBindTexImage(EGLDisplay dpy, EGLSurface surface, EGLint buffer)
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglReleaseTexImage(EGLDisplay dpy, EGLSurface surface, EGLint buffer)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -233,7 +215,7 @@ eglReleaseTexImage(EGLDisplay dpy, EGLSurface surface, EGLint buffer)
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglSwapInterval(EGLDisplay dpy, EGLint interval)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -241,7 +223,7 @@ eglSwapInterval(EGLDisplay dpy, EGLint interval)
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglSwapBuffers(EGLDisplay dpy, EGLSurface draw)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -249,7 +231,7 @@ eglSwapBuffers(EGLDisplay dpy, EGLSurface draw)
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglCopyBuffers(EGLDisplay dpy, EGLSurface surface, NativePixmapType target)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -257,7 +239,7 @@ eglCopyBuffers(EGLDisplay dpy, EGLSurface surface, NativePixmapType target)
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglWaitGL(void)
 {
    EGLDisplay dpy = eglGetCurrentDisplay();
@@ -270,7 +252,7 @@ eglWaitGL(void)
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglWaitNative(EGLint engine)
 {
    EGLDisplay dpy = eglGetCurrentDisplay();
@@ -283,31 +265,40 @@ eglWaitNative(EGLint engine)
 }
 
 
-EGLDisplay EGLAPIENTRY
+EGLDisplay APIENTRY
 eglGetCurrentDisplay(void)
 {
    _EGLDisplay *dpy = _eglGetCurrentDisplay();
-   return _eglGetDisplayHandle(dpy);
+   if (dpy)
+      return dpy->Handle;
+   else
+      return EGL_NO_DISPLAY;
 }
 
 
-EGLContext EGLAPIENTRY
+EGLContext APIENTRY
 eglGetCurrentContext(void)
 {
    _EGLContext *ctx = _eglGetCurrentContext();
-   return _eglGetContextHandle(ctx);
+   if (ctx)
+      return ctx->Handle;
+   else
+      return EGL_NO_CONTEXT;
 }
 
 
-EGLSurface EGLAPIENTRY
+EGLSurface APIENTRY
 eglGetCurrentSurface(EGLint readdraw)
 {
    _EGLSurface *s = _eglGetCurrentSurface(readdraw);
-   return _eglGetSurfaceHandle(s);
+   if (s)
+      return s->Handle;
+   else
+      return EGL_NO_SURFACE;
 }
 
 
-EGLint EGLAPIENTRY
+EGLint APIENTRY
 eglGetError(void)
 {
    _EGLThreadInfo *t = _eglGetCurrentThread();
@@ -317,7 +308,7 @@ eglGetError(void)
 }
 
 
-void (* EGLAPIENTRY eglGetProcAddress(const char *procname))()
+void (* APIENTRY eglGetProcAddress(const char *procname))()
 {
    typedef void (*genericFunc)();
    struct name_function {
@@ -385,15 +376,12 @@ void (* EGLAPIENTRY eglGetProcAddress(const char *procname))()
          return (genericFunc) egl_functions[i].function;
       }
    }
-
-   /* now loop over drivers to query their procs */
-   for (i = 0; i < _eglGlobal.NumDrivers; i++) {
-      _EGLProc p = _eglGlobal.Drivers[i]->API.GetProcAddress(procname);
-      if (p)
-         return p;
-   }
-
+#if 0
+   /* XXX enable this code someday */
+   return (genericFunc) _glapi_get_proc_address(procname);
+#else
    return NULL;
+#endif
 }
 
 
@@ -401,7 +389,7 @@ void (* EGLAPIENTRY eglGetProcAddress(const char *procname))()
  * EGL_MESA_screen extension
  */
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglChooseModeMESA(EGLDisplay dpy, EGLScreenMESA screen,
                   const EGLint *attrib_list, EGLModeMESA *modes,
                   EGLint modes_size, EGLint *num_modes)
@@ -414,7 +402,7 @@ eglChooseModeMESA(EGLDisplay dpy, EGLScreenMESA screen,
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglGetModesMESA(EGLDisplay dpy, EGLScreenMESA screen, EGLModeMESA *modes, EGLint mode_size, EGLint *num_mode)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -425,7 +413,7 @@ eglGetModesMESA(EGLDisplay dpy, EGLScreenMESA screen, EGLModeMESA *modes, EGLint
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglGetModeAttribMESA(EGLDisplay dpy, EGLModeMESA mode, EGLint attribute, EGLint *value)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -436,7 +424,7 @@ eglGetModeAttribMESA(EGLDisplay dpy, EGLModeMESA mode, EGLint attribute, EGLint 
 }
 
 
-EGLBoolean EGLAPIENTRY
+EGLBoolean APIENTRY
 eglCopyContextMESA(EGLDisplay dpy, EGLContext source, EGLContext dest, EGLint mask)
 {
    _EGLDriver *drv = _eglLookupDriver(dpy);
@@ -520,42 +508,21 @@ eglQueryModeStringMESA(EGLDisplay dpy, EGLModeMESA mode)
 
 #ifdef EGL_VERSION_1_2
 
-
-/**
- * Specify the client API to use for subsequent calls including:
- *  eglCreateContext()
- *  eglGetCurrentContext()
- *  eglGetCurrentDisplay()
- *  eglGetCurrentSurface()
- *  eglMakeCurrent(when the ctx parameter is EGL NO CONTEXT)
- *  eglWaitClient()
- *  eglWaitNative()
- * See section 3.7 "Rendering Context" in the EGL specification for details.
- */
 EGLBoolean
 eglBindAPI(EGLenum api)
 {
    _EGLThreadInfo *t = _eglGetCurrentThread();
 
    switch (api) {
-#ifdef EGL_VERSION_1_4
-   case EGL_OPENGL_API:
-      if (_eglGlobal.ClientAPIsMask & EGL_OPENGL_BIT) {
-         t->CurrentAPI = api;
-         return EGL_TRUE;
-      }
-      _eglError(EGL_BAD_PARAMETER, "eglBindAPI");
-      return EGL_FALSE;
-#endif
    case EGL_OPENGL_ES_API:
-      if (_eglGlobal.ClientAPIsMask & (EGL_OPENGL_ES_BIT | EGL_OPENGL_ES2_BIT)) {
+      if (_eglGlobal.OpenGLESAPISupported) {
          t->CurrentAPI = api;
          return EGL_TRUE;
       }
       _eglError(EGL_BAD_PARAMETER, "eglBindAPI");
       return EGL_FALSE;
    case EGL_OPENVG_API:
-      if (_eglGlobal.ClientAPIsMask & EGL_OPENVG_BIT) {
+      if (_eglGlobal.OpenVGAPISupported) {
          t->CurrentAPI = api;
          return EGL_TRUE;
       }
@@ -568,18 +535,6 @@ eglBindAPI(EGLenum api)
 }
 
 
-/**
- * Return the last value set with eglBindAPI().
- */
-EGLenum
-eglQueryAPI(void)
-{
-   /* returns one of EGL_OPENGL_API, EGL_OPENGL_ES_API or EGL_OPENVG_API */
-   _EGLThreadInfo *t = _eglGetCurrentThread();
-   return t->CurrentAPI;
-}
-
-
 EGLSurface
 eglCreatePbufferFromClientBuffer(EGLDisplay dpy, EGLenum buftype,
                                  EGLClientBuffer buffer, EGLConfig config,
@@ -588,6 +543,15 @@ eglCreatePbufferFromClientBuffer(EGLDisplay dpy, EGLenum buftype,
    _EGLDriver *drv = _eglLookupDriver(dpy);
    return drv->API.CreatePbufferFromClientBuffer(drv, dpy, buftype, buffer,
                                                  config, attrib_list);
+}
+
+
+EGLenum
+eglQueryAPI(void)
+{
+   /* returns one of EGL_OPENGL_ES_API or EGL_OPENVG_API */
+   _EGLThreadInfo *t = _eglGetCurrentThread();
+   return t->CurrentAPI;
 }
 
 

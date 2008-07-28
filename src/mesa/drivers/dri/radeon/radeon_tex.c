@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/radeon/radeon_tex.c,v 1.6 2002/09/16 18:05:20 eich Exp $ */
 /*
 Copyright 2000, 2001 ATI Technologies Inc., Ontario, Canada, and
                      VA Linux Systems Inc., Fremont, California.

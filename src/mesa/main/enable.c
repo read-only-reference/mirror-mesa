@@ -5,9 +5,9 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.1
+ * Version:  7.0.3
  *
- * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -91,13 +91,6 @@ client_state(GLcontext *ctx, GLenum cap, GLboolean state)
          var = &ctx->Array.ArrayObj->SecondaryColor.Enabled;
          flag = _NEW_ARRAY_COLOR1;
          break;
-
-#if FEATURE_point_size_array
-      case GL_POINT_SIZE_ARRAY_OES:
-         var = &ctx->Array.ArrayObj->PointSize.Enabled;
-         flag = _NEW_ARRAY_POINT_SIZE;
-         break;
-#endif
 
 #if FEATURE_NV_vertex_program
       case GL_VERTEX_ATTRIB_ARRAY0_NV:
@@ -373,18 +366,24 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
             return;
          FLUSH_VERTICES(ctx, _NEW_LIGHT);
          ctx->Light.Enabled = state;
+         if (ctx->Light.Enabled && ctx->Light.Model.TwoSide)
+            ctx->_TriangleCaps |= DD_TRI_LIGHT_TWOSIDE;
+         else
+            ctx->_TriangleCaps &= ~DD_TRI_LIGHT_TWOSIDE;
          break;
       case GL_LINE_SMOOTH:
          if (ctx->Line.SmoothFlag == state)
             return;
          FLUSH_VERTICES(ctx, _NEW_LINE);
          ctx->Line.SmoothFlag = state;
+         ctx->_TriangleCaps ^= DD_LINE_SMOOTH;
          break;
       case GL_LINE_STIPPLE:
          if (ctx->Line.StippleFlag == state)
             return;
          FLUSH_VERTICES(ctx, _NEW_LINE);
          ctx->Line.StippleFlag = state;
+         ctx->_TriangleCaps ^= DD_LINE_STIPPLE;
          break;
       case GL_INDEX_LOGIC_OP:
          if (ctx->Color.IndexLogicOpEnabled == state)
@@ -523,18 +522,21 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POINT);
          ctx->Point.SmoothFlag = state;
+         ctx->_TriangleCaps ^= DD_POINT_SMOOTH;
          break;
       case GL_POLYGON_SMOOTH:
          if (ctx->Polygon.SmoothFlag == state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POLYGON);
          ctx->Polygon.SmoothFlag = state;
+         ctx->_TriangleCaps ^= DD_TRI_SMOOTH;
          break;
       case GL_POLYGON_STIPPLE:
          if (ctx->Polygon.StippleFlag == state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POLYGON);
          ctx->Polygon.StippleFlag = state;
+         ctx->_TriangleCaps ^= DD_TRI_STIPPLE;
          break;
       case GL_POLYGON_OFFSET_POINT:
          if (ctx->Polygon.OffsetPoint == state)
@@ -659,7 +661,6 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
       case GL_EDGE_FLAG_ARRAY:
       case GL_FOG_COORDINATE_ARRAY_EXT:
       case GL_SECONDARY_COLOR_ARRAY_EXT:
-      case GL_POINT_SIZE_ARRAY_OES:
          client_state( ctx, cap, state );
          return;
 
@@ -885,6 +886,10 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
             return;
          FLUSH_VERTICES(ctx, _NEW_STENCIL);
          ctx->Stencil.TestTwoSide = state;
+         if (state)
+            ctx->_TriangleCaps |= DD_TRI_TWOSTENCIL;
+         else
+            ctx->_TriangleCaps &= ~DD_TRI_TWOSTENCIL;
          break;
 
 #if FEATURE_ARB_fragment_program
@@ -912,7 +917,6 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
          break;
 
       /* GL_MESA_program_debug */
-#if FEATURE_MESA_program_debug
       case GL_FRAGMENT_PROGRAM_CALLBACK_MESA:
          CHECK_EXTENSION(MESA_program_debug, cap);
          ctx->FragmentProgram.CallbackEnabled = state;
@@ -921,7 +925,6 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
          CHECK_EXTENSION(MESA_program_debug, cap);
          ctx->VertexProgram.CallbackEnabled = state;
          break;
-#endif
 
 #if FEATURE_ATI_fragment_shader
       case GL_FRAGMENT_SHADER_ATI:
@@ -1182,10 +1185,6 @@ _mesa_IsEnabled( GLenum cap )
       case GL_SECONDARY_COLOR_ARRAY_EXT:
          CHECK_EXTENSION(EXT_secondary_color);
          return (ctx->Array.ArrayObj->SecondaryColor.Enabled != 0);
-#if FEATURE_point_size_array
-      case GL_POINT_SIZE_ARRAY_OES:
-         return (ctx->Array.ArrayObj->PointSize.Enabled != 0);
-#endif
 
       /* GL_EXT_histogram */
       case GL_HISTOGRAM:
@@ -1363,15 +1362,12 @@ _mesa_IsEnabled( GLenum cap )
          return ctx->Depth.BoundsTest;
 
       /* GL_MESA_program_debug */
-#if FEATURE_MESA_program_debug
       case GL_FRAGMENT_PROGRAM_CALLBACK_MESA:
          CHECK_EXTENSION(MESA_program_debug);
          return ctx->FragmentProgram.CallbackEnabled;
       case GL_VERTEX_PROGRAM_CALLBACK_MESA:
          CHECK_EXTENSION(MESA_program_debug);
          return ctx->VertexProgram.CallbackEnabled;
-#endif
-
 #if FEATURE_ATI_fragment_shader
       case GL_FRAGMENT_SHADER_ATI:
 	 CHECK_EXTENSION(ATI_fragment_shader);

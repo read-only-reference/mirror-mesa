@@ -104,6 +104,8 @@ _mesa_align_malloc(size_t bytes, unsigned long alignment)
 
    (void) posix_memalign(& mem, alignment, bytes);
    return mem;
+#elif defined(_WIN32) && defined(_MSC_VER)
+   return _aligned_malloc(bytes, alignment);
 #else
    uintptr_t ptr, buf;
 
@@ -139,6 +141,15 @@ _mesa_align_calloc(size_t bytes, unsigned long alignment)
    void *mem;
    
    mem = _mesa_align_malloc(bytes, alignment);
+   if (mem != NULL) {
+      (void) memset(mem, 0, bytes);
+   }
+
+   return mem;
+#elif defined(_WIN32) && defined(_MSC_VER)
+   void *mem;
+
+   mem = _aligned_malloc(bytes, alignment);
    if (mem != NULL) {
       (void) memset(mem, 0, bytes);
    }
@@ -180,6 +191,8 @@ _mesa_align_free(void *ptr)
 {
 #if defined(HAVE_POSIX_MEMALIGN)
    free(ptr);
+#elif defined(_WIN32) && defined(_MSC_VER)
+   _aligned_free(ptr);
 #else
    void **cubbyHole = (void **) ((char *) ptr - sizeof(void *));
    void *realAddr = *cubbyHole;
@@ -194,6 +207,10 @@ void *
 _mesa_align_realloc(void *oldBuffer, size_t oldSize, size_t newSize,
                     unsigned long alignment)
 {
+#if defined(_WIN32) && defined(_MSC_VER)
+   (void) oldSize;
+   return _aligned_realloc(oldBuffer, newSize, alignment);
+#else
    const size_t copySize = (oldSize < newSize) ? oldSize : newSize;
    void *newBuf = _mesa_align_malloc(newSize, alignment);
    if (newBuf && oldBuffer && copySize > 0) {
@@ -202,6 +219,7 @@ _mesa_align_realloc(void *oldBuffer, size_t oldSize, size_t newSize,
    if (oldBuffer)
       _mesa_align_free(oldBuffer);
    return newBuf;
+#endif
 }
 
 
@@ -539,27 +557,30 @@ _mesa_pow(double x, double y)
  * Find the first bit set in a word.
  */
 int
-_mesa_ffs(int32_t i)
+_mesa_ffs(int i)
 {
 #if (defined(_WIN32) && !defined(__MINGW32__) ) || defined(__IBMC__) || defined(__IBMCPP__)
-   register int32_t bit = 1;
-   if ((i & 0xffff) == 0) {
-      bit += 16;
-      i >>= 16;
+   register int bit = 0;
+   if (i != 0) {
+      if ((i & 0xffff) == 0) {
+         bit += 16;
+         i >>= 16;
+      }
+      if ((i & 0xff) == 0) {
+         bit += 8;
+         i >>= 8;
+      }
+      if ((i & 0xf) == 0) {
+         bit += 4;
+         i >>= 4;
+      }
+      while ((i & 1) == 0) {
+         bit++;
+         i >>= 1;
+      }
+      bit++;
    }
-   if ((i & 0xff) == 0) {
-      bit += 8;
-      i >>= 8;
-   }
-   if ((i & 0xf) == 0) {
-      bit += 4;
-      i >>= 4;
-   }
-   if ((i & 0x3) == 0) {
-      bit += 2;
-      i >>= 2;
-   }
-   return (i) ? (bit + ((i + 1) & 0x01)) : 0;
+   return bit;
 #else
    return ffs(i);
 #endif
@@ -573,7 +594,11 @@ _mesa_ffs(int32_t i)
  *          if no bits set.
  */
 int
-_mesa_ffsll(int64_t val)
+#ifdef __MINGW32__
+_mesa_ffsll(long val)
+#else
+_mesa_ffsll(long long val)
+#endif
 {
 #ifdef ffsll
    return ffsll(val);
@@ -582,11 +607,11 @@ _mesa_ffsll(int64_t val)
 
    assert(sizeof(val) == 8);
 
-   bit = _mesa_ffs((int32_t)val);
+   bit = _mesa_ffs(val);
    if (bit != 0)
       return bit;
 
-   bit = _mesa_ffs((int32_t)(val >> 32));
+   bit = _mesa_ffs(val >> 32);
    if (bit != 0)
       return 32 + bit;
 
@@ -761,24 +786,7 @@ void *
 _mesa_bsearch( const void *key, const void *base, size_t nmemb, size_t size, 
                int (*compar)(const void *, const void *) )
 {
-#if defined(_WIN32_WCE)
-   void *mid;
-   int cmp;
-   while (nmemb) {
-      nmemb >>= 1;
-      mid = (char *)base + nmemb * size;
-      cmp = (*compar)(key, mid);
-      if (cmp == 0)
-	 return mid;
-      if (cmp > 0) {
-	 base = (char *)mid + size;
-	 --nmemb;
-      }
-   }
-   return NULL;
-#else
    return bsearch(key, base, nmemb, size, compar);
-#endif
 }
 
 /*@}*/
@@ -794,7 +802,7 @@ _mesa_bsearch( const void *key, const void *base, size_t nmemb, size_t size,
 char *
 _mesa_getenv( const char *var )
 {
-#if defined(_XBOX) || defined(_WIN32_WCE)
+#if defined(_XBOX)
    return NULL;
 #else
    return getenv(var);
@@ -913,10 +921,12 @@ _mesa_sprintf( char *str, const char *fmt, ... )
 void
 _mesa_printf( const char *fmtString, ... )
 {
+   char s[MAXSTRING];
    va_list args;
    va_start( args, fmtString );  
-   vfprintf(stderr, fmtString, args);
+   vsnprintf(s, MAXSTRING, fmtString, args);
    va_end( args );
+   fprintf(stderr,"%s", s);
 }
 
 /** Wrapper around vsprintf() */

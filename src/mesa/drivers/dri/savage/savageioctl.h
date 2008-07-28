@@ -64,23 +64,23 @@ void savageSwapBuffers( __DRIdrawablePrivate *dPriv );
 
 extern void savageGetDMABuffer( savageContextPtr imesa );
 
-static __inline
+static INLINE
 void savageReleaseIndexedVerts( savageContextPtr imesa )
 {
     imesa->firstElt = -1;
 }
 
-static __inline
+static INLINE
 GLboolean savageHaveIndexedVerts( savageContextPtr imesa )
 {
     return (imesa->firstElt != -1);
 }
 
-static __inline
-uint32_t *savageAllocVtxBuf( savageContextPtr imesa, GLuint words )
+static INLINE
+u_int32_t *savageAllocVtxBuf( savageContextPtr imesa, GLuint words )
 {
    struct savage_vtxbuf_t *buffer = imesa->vtxBuf;
-   uint32_t *head;
+   u_int32_t *head;
 
    if (buffer == &imesa->dmaVtxBuf) {
        if (!buffer->total) {
@@ -115,10 +115,10 @@ uint32_t *savageAllocVtxBuf( savageContextPtr imesa, GLuint words )
    return head;
 }
 
-static __inline
-uint32_t *savageAllocIndexedVerts( savageContextPtr imesa, GLuint n )
+static INLINE
+u_int32_t *savageAllocIndexedVerts( savageContextPtr imesa, GLuint n )
 {
-    uint32_t *ret;
+    u_int32_t *ret;
     savageFlushVertices(imesa);
     ret = savageAllocVtxBuf(imesa, n*imesa->HwVertexSize);
     imesa->firstElt = imesa->vtxBuf->flushed / imesa->HwVertexSize;
@@ -131,7 +131,7 @@ uint32_t *savageAllocIndexedVerts( savageContextPtr imesa, GLuint n )
  * - Actually allocate entries for the indices in the command buffer.
  *   (This allocation must succeed without wrapping the cmd buffer!)
  */
-static __inline
+static INLINE
 void savageFlushElts( savageContextPtr imesa )
 {
     if (imesa->elts.cmd) {
@@ -148,7 +148,7 @@ void savageFlushElts( savageContextPtr imesa )
 /* Allocate a command buffer entry with <bytes> bytes of arguments:
  * - implies savageFlushElts
  */
-static __inline
+static INLINE
 drm_savage_cmd_header_t *savageAllocCmdBuf( savageContextPtr imesa, GLuint bytes )
 {
     drm_savage_cmd_header_t *ret;
@@ -171,10 +171,10 @@ drm_savage_cmd_header_t *savageAllocCmdBuf( savageContextPtr imesa, GLuint bytes
  *   incomplete indexed drawing command yet
  * - increments the number of elts. Final allocation is done in savageFlushElts
  */
-static __inline
-uint16_t *savageAllocElts( savageContextPtr imesa, GLuint n )
+static INLINE
+u_int16_t *savageAllocElts( savageContextPtr imesa, GLuint n )
 {
-    uint16_t *ret;
+    u_int16_t *ret;
     GLuint qwords;
     assert (savageHaveIndexedVerts(imesa));
 
@@ -195,7 +195,7 @@ uint16_t *savageAllocElts( savageContextPtr imesa, GLuint n )
 	imesa->elts.n = 0;
     }
 
-    ret = (uint16_t *)(imesa->elts.cmd+1) + imesa->elts.n;
+    ret = (u_int16_t *)(imesa->elts.cmd+1) + imesa->elts.n;
     imesa->elts.n += n;
     return ret;
 }

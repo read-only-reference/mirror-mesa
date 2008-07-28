@@ -35,6 +35,8 @@
 /* 
  * tobezier.c++
  *
+ * $Date: 2006/03/14 15:08:52 $ $Revision: 1.2 $
+ * $Header: /home/krh/git/sync/mesa-cvs-repo/Mesa/src/glu/sgi/libnurbs/internals/tobezier.cc,v 1.2 2006/03/14 15:08:52 brianp Exp $
  */
 
 #include "glimports.h"

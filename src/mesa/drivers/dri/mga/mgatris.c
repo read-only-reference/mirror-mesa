@@ -24,6 +24,7 @@
  * Authors:
  *    Keith Whitwell <keith@tungstengraphics.com>
  */
+/* $XFree86: xc/lib/GL/mesa/src/drv/mga/mgatris.c,v 1.10 2002/10/30 12:51:36 alanh Exp $ */
 
 #include "mtypes.h"
 #include "macros.h"
@@ -66,7 +67,7 @@ do {						\
 } while (0)
 #endif
 
-static void __inline__ mga_draw_triangle( mgaContextPtr mmesa,
+static void INLINE mga_draw_triangle( mgaContextPtr mmesa,
 					   mgaVertexPtr v0,
 					   mgaVertexPtr v1,
 					   mgaVertexPtr v2 )
@@ -81,7 +82,7 @@ static void __inline__ mga_draw_triangle( mgaContextPtr mmesa,
 }
 
 
-static void __inline__ mga_draw_quad( mgaContextPtr mmesa,
+static void INLINE mga_draw_quad( mgaContextPtr mmesa,
 				       mgaVertexPtr v0,
 				       mgaVertexPtr v1,
 				       mgaVertexPtr v2,
@@ -100,7 +101,7 @@ static void __inline__ mga_draw_quad( mgaContextPtr mmesa,
 }
 
 
-static __inline__ void mga_draw_point( mgaContextPtr mmesa,
+static INLINE void mga_draw_point( mgaContextPtr mmesa,
 					mgaVertexPtr tmp )
 {
    const GLfloat sz = 0.5 * CLAMP(mmesa->glCtx->Point.Size,
@@ -159,7 +160,7 @@ static __inline__ void mga_draw_point( mgaContextPtr mmesa,
 }
 
 
-static __inline__ void mga_draw_line( mgaContextPtr mmesa,
+static INLINE void mga_draw_line( mgaContextPtr mmesa,
 				      mgaVertexPtr v0,
 				      mgaVertexPtr v1 )
 {

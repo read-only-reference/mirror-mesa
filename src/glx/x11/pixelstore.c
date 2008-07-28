@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/glx/pixelstore.c,v 1.4 2004/01/28 18:11:43 alanh Exp $ */
 /*
 ** License Applicability. Except to the extent portions of this file are
 ** made subject to an alternative license as permitted in the SGI Free
@@ -33,6 +34,7 @@
 **
 */
 
+#include "glheader.h"
 #include "glxclient.h"
 #include "indirect.h"
 

@@ -1,3 +1,4 @@
+/* $Id: multipal.c,v 1.6 2003/12/08 09:03:36 joukj Exp $ */
 
 /*
  * Test multitexture and paletted textures.
@@ -8,11 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef __VMS
-# include <stddef.h>	/* for ptrdiff_t, referenced by GL.h when GL_GLEXT_LEGACY defined */
-#else
-# include <malloc.h>	/* for ptrdiff_t, referenced by GL.h when GL_GLEXT_LEGACY defined */
-#endif
+#include <stddef.h>	/* for ptrdiff_t, referenced by GL.h when GL_GLEXT_LEGACY defined */
 #ifdef _WIN32
 #include <windows.h>
 #endif

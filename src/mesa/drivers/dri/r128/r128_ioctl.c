@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/r128/r128_ioctl.c,v 1.10 2002/12/16 16:18:53 dawes Exp $ */
 /**************************************************************************
 
 Copyright 1999, 2000 ATI Technologies Inc. and Precision Insight, Inc.,
@@ -230,7 +231,7 @@ static int r128WaitForFrameCompletion( r128ContextPtr rmesa )
    int wait = 0;
 
    while ( 1 ) {
-      uint32_t frame = read_MMIO_LE32( R128MMIO, R128_LAST_FRAME_REG );
+      u_int32_t frame = read_MMIO_LE32( R128MMIO, R128_LAST_FRAME_REG );
 
       if ( rmesa->sarea->last_frame - frame <= R128_MAX_OUTSTANDING ) {
 	 break;
@@ -248,7 +249,7 @@ static int r128WaitForFrameCompletion( r128ContextPtr rmesa )
 
 /* Copy the back color buffer to the front color buffer.
  */
-void r128CopyBuffer( const __DRIdrawablePrivate *dPriv )
+void r128CopyBuffer( __DRIdrawablePrivate *dPriv )
 {
    r128ContextPtr rmesa;
    GLint nbox, i, ret;
@@ -281,7 +282,7 @@ void r128CopyBuffer( const __DRIdrawablePrivate *dPriv )
    }
 
    UNLOCK_HARDWARE( rmesa );
-   driWaitForVBlank( dPriv, &rmesa->vbl_seq, rmesa->vblank_flags, &missed_target );
+   driWaitForVBlank( dPriv, &missed_target );
    LOCK_HARDWARE( rmesa );
 
    nbox = dPriv->numClipRects;	/* must be in locked region */
@@ -327,7 +328,7 @@ void r128CopyBuffer( const __DRIdrawablePrivate *dPriv )
 #endif
 }
 
-void r128PageFlip( const __DRIdrawablePrivate *dPriv )
+void r128PageFlip( __DRIdrawablePrivate *dPriv )
 {
    r128ContextPtr rmesa;
    GLint ret;
@@ -358,7 +359,7 @@ void r128PageFlip( const __DRIdrawablePrivate *dPriv )
    }
 
    UNLOCK_HARDWARE( rmesa );
-   driWaitForVBlank( dPriv, &rmesa->vbl_seq, rmesa->vblank_flags, &missed_target );
+   driWaitForVBlank( dPriv, &missed_target );
    LOCK_HARDWARE( rmesa );
 
    /* The kernel will have been initialized to perform page flipping

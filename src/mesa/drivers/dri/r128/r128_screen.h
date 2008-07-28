@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/mesa/src/drv/r128/r128_screen.h,v 1.7 2002/12/16 16:18:53 dawes Exp $ */
 /**************************************************************************
 
 Copyright 1999, 2000 ATI Technologies Inc. and Precision Insight, Inc.,
@@ -76,6 +77,8 @@ typedef struct {
 
    /* Configuration cache with default values for all contexts */
    driOptionCache optionCache;
+
+   const __DRIextension *extensions[4];
 
 } r128ScreenRec, *r128ScreenPtr;
 

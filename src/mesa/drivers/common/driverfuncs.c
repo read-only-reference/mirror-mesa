@@ -25,12 +25,11 @@
 
 #include "glheader.h"
 #include "imports.h"
+#include "arrayobj.h"
 #include "buffers.h"
 #include "context.h"
 #include "framebuffer.h"
 #include "mipmap.h"
-#include "program.h"
-#include "prog_execute.h"
 #include "queryobj.h"
 #include "renderbuffer.h"
 #include "texcompress.h"
@@ -45,9 +44,10 @@
 #include "fbobject.h"
 #include "texrender.h"
 #endif
-#include "shader_api.h"
-#include "arrayobj.h"
 
+#include "shader/program.h"
+#include "shader/prog_execute.h"
+#include "shader/shader_api.h"
 #include "driverfuncs.h"
 #include "tnl/tnl.h"
 #include "swrast/swrast.h"
@@ -80,7 +80,6 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    /* framebuffer/image functions */
    driver->Clear = _swrast_Clear;
    driver->Accum = _swrast_Accum;
-   driver->RasterPos = _tnl_RasterPos;
    driver->DrawPixels = _swrast_DrawPixels;
    driver->ReadPixels = _swrast_ReadPixels;
    driver->CopyPixels = _swrast_CopyPixels;
@@ -115,6 +114,8 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->DeleteTexture = _mesa_delete_texture_object;
    driver->NewTextureImage = _mesa_new_texture_image;
    driver->FreeTexImageData = _mesa_free_texture_image_data; 
+   driver->MapTexture = NULL;
+   driver->UnmapTexture = NULL;
    driver->TextureMemCpy = _mesa_memcpy; 
    driver->IsTextureResident = NULL;
    driver->PrioritizeTexture = NULL;
@@ -226,10 +227,8 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
 
    /* query objects */
    driver->NewQueryObject = _mesa_new_query_object;
-   driver->DeleteQuery = _mesa_delete_query;
-   driver->BeginQuery = _mesa_begin_query;
-   driver->EndQuery = _mesa_end_query;
-   driver->WaitQuery = _mesa_wait_query;
+   driver->BeginQuery = NULL;
+   driver->EndQuery = NULL;
 
    /* APPLE_vertex_array_object */
    driver->NewArrayObject = _mesa_new_array_object;

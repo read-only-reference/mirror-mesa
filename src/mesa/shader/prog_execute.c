@@ -90,9 +90,10 @@ get_register_pointer(const struct prog_src_register *source,
          const struct gl_program_parameter_list *params;
          ASSERT(source->File == PROGRAM_LOCAL_PARAM ||
                 source->File == PROGRAM_CONSTANT ||
-                source->File == PROGRAM_STATE_VAR);
+                source->File == PROGRAM_STATE_VAR ||
+                source->File == PROGRAM_UNIFORM);
          params = machine->CurProgram->Parameters;
-         if (reg < 0 || reg >= (GLint)params->NumParameters)
+         if (reg < 0 || reg >= params->NumParameters)
             return ZeroVec;
          else
             return params->ParameterValues[reg];
@@ -227,7 +228,7 @@ fetch_vector4_deriv(GLcontext * ctx,
                     const struct gl_program_machine *machine,
                     char xOrY, GLfloat result[4])
 {
-   if (source->File == PROGRAM_INPUT && source->Index < (GLint)machine->NumDeriv) {
+   if (source->File == PROGRAM_INPUT && source->Index < machine->NumDeriv) {
       const GLint col = machine->CurElement;
       const GLfloat w = machine->Attribs[FRAG_ATTRIB_WPOS][col][3];
       const GLfloat invQ = 1.0f / w;
@@ -506,7 +507,7 @@ _mesa_execute_program(GLcontext * ctx,
 {
    const GLuint numInst = program->NumInstructions;
    const GLuint maxExec = 10000;
-   GLuint pc, numExec = 0;
+   GLint pc, numExec = 0;
 
    machine->CurProgram = program;
 

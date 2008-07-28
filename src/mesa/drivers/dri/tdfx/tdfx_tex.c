@@ -23,6 +23,7 @@
  * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+/* $XFree86: xc/lib/GL/mesa/src/drv/tdfx/tdfx_tex.c,v 1.7 2002/11/05 17:46:10 tsi Exp $ */
 
 /*
  * New fixes:
@@ -1821,7 +1822,7 @@ tdfxTestProxyTexImage(GLcontext *ctx, GLenum target,
             tdfxTexInfo *ti;
             int memNeeded;
 
-            tObj = ctx->Texture.Proxy2D;
+            tObj = ctx->Texture.ProxyTex[TEXTURE_2D_INDEX];
             if (!tObj->DriverData)
                 tObj->DriverData = fxAllocTexObjData(fxMesa);
             ti = TDFX_TEXTURE_DATA(tObj);

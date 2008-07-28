@@ -1,3 +1,4 @@
+/* $Id: glstate.c,v 1.1 1999/08/19 00:55:42 jtg Exp $ */
 
 /*
  * Print GL state information (for debugging)
@@ -20,6 +21,7 @@
 
 
 /*
+ * $Log: glstate.c,v $
  * Revision 1.1  1999/08/19 00:55:42  jtg
  * Initial revision
  *

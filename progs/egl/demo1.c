@@ -2,10 +2,7 @@
  * Exercise EGL API functions
  */
 
-#define EGL_EGLEXT_PROTOTYPES
-
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
+#include <GLES/egl.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -105,7 +102,7 @@ main(int argc, char *argv[])
    /*
    EGLDisplay d = eglGetDisplay(EGL_DEFAULT_DISPLAY);
    */
-   EGLDisplay d = eglGetDisplay((EGLNativeDisplayType) "!EGL_i915");
+   EGLDisplay d = eglGetDisplay("!fb_dri");
    assert(d);
 
    if (!eglInitialize(d, &maj, &min)) {

@@ -1,3 +1,4 @@
+/* $XFree86: xc/lib/GL/glx/indirect_init.h,v 1.2 2000/02/08 17:18:33 dawes Exp $ */
 /**************************************************************************
 
 Copyright 1998-1999 Precision Insight, Inc., Cedar Park, Texas.

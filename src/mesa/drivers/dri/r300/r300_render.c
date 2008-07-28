@@ -74,6 +74,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r300_reg.h"
 #include "r300_tex.h"
 #include "r300_emit.h"
+#include "r300_fragprog.h"
 extern int future_hw_tcl_on;
 
 /**
@@ -334,13 +335,26 @@ static GLboolean r300RunRender(GLcontext * ctx,
 static int r300Fallback(GLcontext * ctx)
 {
 	r300ContextPtr r300 = R300_CONTEXT(ctx);
-	struct r300_fragment_program *fp = (struct r300_fragment_program *)
+	/* Do we need to use new-style shaders?
+	 * Also is there a better way to do this? */
+	if (r300->radeon.radeonScreen->chip_family >= CHIP_FAMILY_RV515) {
+		struct r500_fragment_program *fp = (struct r500_fragment_program *)
 	    (char *)ctx->FragmentProgram._Current;
-
-	if (fp) {
-		if (!fp->translated)
-			r300TranslateFragmentShader(r300, fp);
-		FALLBACK_IF(!fp->translated);
+		if (fp) {
+			if (!fp->translated) {
+				r500TranslateFragmentShader(r300, fp);
+				FALLBACK_IF(!fp->translated);
+			}
+		}
+	} else {
+		struct r300_fragment_program *fp = (struct r300_fragment_program *)
+	    (char *)ctx->FragmentProgram._Current;
+		if (fp) {
+			if (!fp->translated) {
+				r300TranslateFragmentShader(r300, fp);
+				FALLBACK_IF(!fp->translated);
+			}
+		}
 	}
 
 	FALLBACK_IF(ctx->RenderMode != GL_RENDER);
@@ -359,7 +373,7 @@ static int r300Fallback(GLcontext * ctx)
 
 	if (!r300->disable_lowimpact_fallback) {
 		FALLBACK_IF(ctx->Polygon.StippleFlag);
-		FALLBACK_IF(ctx->Multisample.Enabled);
+		FALLBACK_IF(ctx->Multisample._Enabled);
 		FALLBACK_IF(ctx->Line.StippleFlag);
 		FALLBACK_IF(ctx->Line.SmoothFlag);
 		FALLBACK_IF(ctx->Point.SmoothFlag);

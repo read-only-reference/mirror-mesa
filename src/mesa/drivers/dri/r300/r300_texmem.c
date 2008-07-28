@@ -349,7 +349,7 @@ static void r300UploadSubImage(r300ContextPtr rmesa, r300TexObjPtr t,
 	imageWidth = texImage->Width;
 	imageHeight = texImage->Height;
 
-	offset = t->bufAddr + t->base.totalSize / 6 * face;
+	offset = t->bufAddr;
 
 	if (RADEON_DEBUG & (DEBUG_TEXTURE | DEBUG_IOCTL)) {
 		GLint imageX = 0;
@@ -505,7 +505,7 @@ int r300UploadTexImages(r300ContextPtr rmesa, r300TexObjPtr t, GLuint face)
 			t->base.lastLevel);
 	}
 
-	if (!t || t->base.totalSize == 0)
+	if (t->base.totalSize == 0)
 		return 0;
 
 	if (RADEON_DEBUG & DEBUG_SYNC) {
@@ -534,10 +534,6 @@ int r300UploadTexImages(r300ContextPtr rmesa, r300TexObjPtr t, GLuint face)
 			/* hope it's safe to add that here... */
 			t->offset |= t->tile_bits;
 		}
-
-		/* Mark this texobj as dirty on all units:
-		 */
-		t->dirty_state = TEX_ALL;
 	}
 
 	/* Let the world know we've used this memory recently.
