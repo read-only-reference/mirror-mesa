@@ -19,7 +19,6 @@
 #include <stdio.h>
 #endif
 
-#undef DEBUG
 #if GENERIC_DEBUG
 #define DEBUG(str) printf str
 #else

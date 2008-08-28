@@ -10,26 +10,24 @@ include $(TOP)/configs/current
 #
 # Modified by Philippe Houdoin
 
-LDFLAGS += -soname=_APP_
-
-LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) $(APP_LIB_DEPS)
+LDFLAGS += -soname=_APP_ $(APP_LIB_DEPS)
 
 INCLUDES = -I. -I- -I../../include
 
 default: demo sample GLInfo
 
 clean:
-	-rm -f demo sample GLInfo
-	-rm -f *.o
+	rm -f demo sample GLInfo
+	rm -f *.o
 
 demo: demo.o
-	$(LD) demo.o $(LDFLAGS) $(LIBS) -o $@
+	$(LD) demo.o $(LDFLAGS) -o $@
 
 sample: sample.o
-	$(LD) sample.o $(LDFLAGS) $(LIBS) -o $@
+	$(LD) sample.o $(LDFLAGS) -o $@
 
 GTLInfo: GLInfo.o
-	$(LD) GLInfo.o $(INCLUDES) $(LDFLAGS) $(LIBS) -o $@
+	$(LD) GLInfo.o $(INCLUDES) $(LDFLAGS) -o $@
 
 .cpp.o:
 	$(CC) -c $< $(INCLUDES) $(CFLAGS) -o $@

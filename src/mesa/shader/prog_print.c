@@ -28,9 +28,9 @@
  * \author Brian Paul
  */
 
-#include "glheader.h"
-#include "context.h"
-#include "imports.h"
+#include "main/glheader.h"
+#include "main/context.h"
+#include "main/imports.h"
 #include "prog_instruction.h"
 #include "prog_parameter.h"
 #include "prog_print.h"
@@ -313,7 +313,7 @@ reg_string(enum register_file f, GLint index, gl_prog_print_mode mode,
 const char *
 _mesa_swizzle_string(GLuint swizzle, GLuint negateBase, GLboolean extended)
 {
-   static const char swz[] = "xyzw01?!";
+   static const char swz[] = "xyzw01!?";  /* See SWIZZLE_x definitions */
    static char s[20];
    GLuint i = 0;
 
@@ -353,6 +353,19 @@ _mesa_swizzle_string(GLuint swizzle, GLuint negateBase, GLboolean extended)
 
    s[i] = 0;
    return s;
+}
+
+
+void
+_mesa_print_swizzle(GLuint swizzle)
+{
+   if (swizzle == SWIZZLE_XYZW) {
+      _mesa_printf(".xyzw\n");
+   }
+   else {
+      const char *s = _mesa_swizzle_string(swizzle, 0, 0);
+      _mesa_printf("%s\n", s);
+   }
 }
 
 

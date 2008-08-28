@@ -1,4 +1,3 @@
-/* $XFree86: xc/lib/GL/mesa/src/drv/r128/r128_context.c,v 1.8 2002/10/30 12:51:38 alanh Exp $ */
 /**************************************************************************
 
 Copyright 1999, 2000 ATI Technologies Inc. and Precision Insight, Inc.,
@@ -254,13 +253,16 @@ GLboolean r128CreateContext( const __GLcontextModes *glVisual,
    _tnl_allow_vertex_fog( ctx, GL_TRUE );
 
    driInitExtensions( ctx, card_extensions, GL_TRUE );
-   if (sPriv->drm_version.minor >= 4)
+   if (sPriv->drmMinor >= 4)
       _mesa_enable_extension( ctx, "GL_MESA_ycbcr_texture" );
 
    r128InitTriFuncs( ctx );
    r128DDInitStateFuncs( ctx );
    r128DDInitSpanFuncs( ctx );
    r128DDInitState( rmesa );
+
+   rmesa->vblank_flags = (rmesa->r128Screen->irq != 0)
+       ? driGetDefaultVBlankFlags(&rmesa->optionCache) : VBLANK_FLAG_NO_IRQ;
 
    driContextPriv->driverPrivate = (void *)rmesa;
 
@@ -344,13 +346,8 @@ r128MakeCurrent( __DRIcontextPrivate *driContextPriv,
 	 newR128Ctx->dirty = R128_UPLOAD_ALL;
       }
 
-      if (driDrawPriv->swap_interval == (unsigned)-1) {
-	 driDrawPriv->vblFlags = (newR128Ctx->r128Screen->irq != 0)
-	    ? driGetDefaultVBlankFlags(&newR128Ctx->optionCache)
-	    : VBLANK_FLAG_NO_IRQ;
-
-	 driDrawableInitVBlank( driDrawPriv );
-      }
+      driDrawableInitVBlank( driDrawPriv, newR128Ctx->vblank_flags,
+			     &newR128Ctx->vbl_seq );
       newR128Ctx->driDrawable = driDrawPriv;
 
       _mesa_make_current( newR128Ctx->glCtx,

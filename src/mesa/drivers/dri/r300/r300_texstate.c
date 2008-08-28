@@ -115,185 +115,10 @@ static const struct tx_table {
 	_ASSIGN(LUMINANCE_ALPHA_FLOAT16, R300_EASY_TX_FORMAT(X, X, X, Y, FL_I16A16)),
 	_ASSIGN(INTENSITY_FLOAT32, R300_EASY_TX_FORMAT(X, X, X, X, FL_I32)),
 	_ASSIGN(INTENSITY_FLOAT16, R300_EASY_TX_FORMAT(X, X, X, X, FL_I16)),
-	_ASSIGN(Z16, R300_EASY_TX_FORMAT(X, X, X, X, X16)),
-	_ASSIGN(Z24_S8, R300_EASY_TX_FORMAT(X, X, X, X, X24_Y8)),
-	_ASSIGN(Z32, R300_EASY_TX_FORMAT(X, X, X, X, X32)),
 	/* *INDENT-ON* */
 };
 
 #undef _ASSIGN
-
-void r300SetDepthTexMode(struct gl_texture_object *tObj)
-{
-	static const GLuint formats[3][3] = {
-		{
-			R300_EASY_TX_FORMAT(X, X, X, ONE, X16),
-			R300_EASY_TX_FORMAT(X, X, X, X, X16),
-			R300_EASY_TX_FORMAT(ZERO, ZERO, ZERO, X, X16),
-		},
-		{
-			R300_EASY_TX_FORMAT(X, X, X, ONE, X24_Y8),
-			R300_EASY_TX_FORMAT(X, X, X, X, X24_Y8),
-			R300_EASY_TX_FORMAT(ZERO, ZERO, ZERO, X, X24_Y8),
-		},
-		{
-			R300_EASY_TX_FORMAT(X, X, X, ONE, X32),
-			R300_EASY_TX_FORMAT(X, X, X, X, X32),
-			R300_EASY_TX_FORMAT(ZERO, ZERO, ZERO, X, X32),
-		},
-	};
-	const GLuint *format;
-	r300TexObjPtr t;
-
-	if (!tObj)
-		return;
-
-	t = (r300TexObjPtr) tObj->DriverData;
-
-
-	switch (tObj->Image[0][tObj->BaseLevel]->TexFormat->MesaFormat) {
-	case MESA_FORMAT_Z16:
-		format = formats[0];
-		break;
-	case MESA_FORMAT_Z24_S8:
-		format = formats[1];
-		break;
-	case MESA_FORMAT_Z32:
-		format = formats[2];
-		break;
-	default:
-		/* Error...which should have already been caught by higher
-		 * levels of Mesa.
-		 */
-		ASSERT(0);
-		return;
-	}
-
-	switch (tObj->DepthMode) {
-	case GL_LUMINANCE:
-		t->format = format[0];
-		break;
-	case GL_INTENSITY:
-		t->format = format[1];
-		break;
-	case GL_ALPHA:
-		t->format = format[2];
-		break;
-	default:
-		/* Error...which should have already been caught by higher
-		 * levels of Mesa.
-		 */
-		ASSERT(0);
-		return;
-	}
-}
-
-
-/**
- * Compute sizes and fill in offset and blit information for the given
- * image (determined by \p face and \p level).
- *
- * \param curOffset points to the offset at which the image is to be stored
- * and is updated by this function according to the size of the image.
- */
-static void compute_tex_image_offset(
-	struct gl_texture_object *tObj,
-	GLuint face,
-	GLint level,
-	GLint* curOffset)
-{
-	r300TexObjPtr t = (r300TexObjPtr) tObj->DriverData;
-	const struct gl_texture_image* texImage;
-	GLuint blitWidth = R300_BLIT_WIDTH_BYTES;
-	GLuint texelBytes;
-	GLuint size;
-
-	texImage = tObj->Image[0][level + t->base.firstLevel];
-	if (!texImage)
-		return;
-
-	texelBytes = texImage->TexFormat->TexelBytes;
-
-	/* find image size in bytes */
-	if (texImage->IsCompressed) {
-		if ((t->format & R300_TX_FORMAT_DXT1) ==
-			R300_TX_FORMAT_DXT1) {
-			// fprintf(stderr,"DXT 1 %d %08X\n", texImage->Width, t->format);
-			if ((texImage->Width + 3) < 8)	/* width one block */
-				size = texImage->CompressedSize * 4;
-			else if ((texImage->Width + 3) < 16)
-				size = texImage->CompressedSize * 2;
-			else
-				size = texImage->CompressedSize;
-		} else {
-			/* DXT3/5, 16 bytes per block */
-			WARN_ONCE
-				("DXT 3/5 suffers from multitexturing problems!\n");
-			// fprintf(stderr,"DXT 3/5 %d\n", texImage->Width);
-			if ((texImage->Width + 3) < 8)
-				size = texImage->CompressedSize * 2;
-			else
-				size = texImage->CompressedSize;
-		}
-	} else if (tObj->Target == GL_TEXTURE_RECTANGLE_NV) {
-		size =
-			((texImage->Width * texelBytes +
-			63) & ~63) * texImage->Height;
-		blitWidth = 64 / texelBytes;
-	} else if (t->tile_bits & R300_TXO_MICRO_TILE) {
-		/* tile pattern is 16 bytes x2. mipmaps stay 32 byte aligned,
-			though the actual offset may be different (if texture is less than
-			32 bytes width) to the untiled case */
-		int w = (texImage->Width * texelBytes * 2 + 31) & ~31;
-		size =
-			(w * ((texImage->Height + 1) / 2)) *
-			texImage->Depth;
-		blitWidth = MAX2(texImage->Width, 64 / texelBytes);
-	} else {
-		int w = (texImage->Width * texelBytes + 31) & ~31;
-		size = w * texImage->Height * texImage->Depth;
-		blitWidth = MAX2(texImage->Width, 64 / texelBytes);
-	}
-	assert(size > 0);
-
-	if (RADEON_DEBUG & DEBUG_TEXTURE)
-		fprintf(stderr, "w=%d h=%d d=%d tb=%d intFormat=%d\n",
-			texImage->Width, texImage->Height,
-			texImage->Depth,
-			texImage->TexFormat->TexelBytes,
-			texImage->InternalFormat);
-
-	/* All images are aligned to a 32-byte offset */
-	*curOffset = (*curOffset + 0x1f) & ~0x1f;
-
-	if (texelBytes) {
-		/* fix x and y coords up later together with offset */
-		t->image[face][level].x = *curOffset;
-		t->image[face][level].y = 0;
-		t->image[face][level].width =
-			MIN2(size / texelBytes, blitWidth);
-		t->image[face][level].height =
-			(size / texelBytes) / t->image[face][level].width;
-	} else {
-		t->image[face][level].x = *curOffset % R300_BLIT_WIDTH_BYTES;
-		t->image[face][level].y = *curOffset / R300_BLIT_WIDTH_BYTES;
-		t->image[face][level].width =
-			MIN2(size, R300_BLIT_WIDTH_BYTES);
-		t->image[face][level].height = size / t->image[face][level].width;
-	}
-
-	if (RADEON_DEBUG & DEBUG_TEXTURE)
-		fprintf(stderr,
-			"level %d, face %d: %dx%d x=%d y=%d w=%d h=%d size=%d at %d\n",
-			level, face, texImage->Width, texImage->Height,
-			t->image[face][level].x, t->image[face][level].y,
-			t->image[face][level].width, t->image[face][level].height,
-			size, *curOffset);
-
-	*curOffset += size;
-}
-
-
 
 /**
  * This function computes the number of bytes of storage needed for
@@ -312,7 +137,7 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	r300TexObjPtr t = (r300TexObjPtr) tObj->DriverData;
 	const struct gl_texture_image *baseImage =
 	    tObj->Image[0][tObj->BaseLevel];
-	GLint curOffset;
+	GLint curOffset, blitWidth;
 	GLint i, texelBytes;
 	GLint numLevels;
 	GLint log2Width, log2Height, log2Depth;
@@ -321,12 +146,7 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	 */
 	if (!t->image_override
 	    && VALID_FORMAT(baseImage->TexFormat->MesaFormat)) {
-		if (baseImage->TexFormat->BaseFormat == GL_DEPTH_COMPONENT) {
-			r300SetDepthTexMode(tObj);
-		} else {
-			t->format = tx_table[baseImage->TexFormat->MesaFormat].format;
-		}
-
+		t->format = tx_table[baseImage->TexFormat->MesaFormat].format;
 		t->filter |= tx_table[baseImage->TexFormat->MesaFormat].filter;
 	} else if (!t->image_override) {
 		_mesa_problem(NULL, "unexpected texture format in %s",
@@ -351,6 +171,8 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	 * The idea is that we lay out the mipmap levels within a block of
 	 * memory organized as a rectangle of width BLIT_WIDTH_BYTES.
 	 */
+	curOffset = 0;
+	blitWidth = R300_BLIT_WIDTH_BYTES;
 	t->tile_bits = 0;
 
 	/* figure out if this texture is suitable for tiling. */
@@ -380,26 +202,120 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 	}
 #endif
 
-	curOffset = 0;
+	for (i = 0; i < numLevels; i++) {
+		const struct gl_texture_image *texImage;
+		GLuint size;
 
-	if (tObj->Target == GL_TEXTURE_CUBE_MAP) {
-		ASSERT(log2Width == log2Height);
-		t->format |= R300_TX_FORMAT_CUBIC_MAP;
+		texImage = tObj->Image[0][i + t->base.firstLevel];
+		if (!texImage)
+			break;
 
-		for(i = 0; i < numLevels; i++) {
-			GLuint face;
-			for(face = 0; face < 6; face++)
-				compute_tex_image_offset(tObj, face, i, &curOffset);
+		/* find image size in bytes */
+		if (texImage->IsCompressed) {
+			if ((t->format & R300_TX_FORMAT_DXT1) ==
+			    R300_TX_FORMAT_DXT1) {
+				// fprintf(stderr,"DXT 1 %d %08X\n", texImage->Width, t->format);
+				if ((texImage->Width + 3) < 8)	/* width one block */
+					size = texImage->CompressedSize * 4;
+				else if ((texImage->Width + 3) < 16)
+					size = texImage->CompressedSize * 2;
+				else
+					size = texImage->CompressedSize;
+			} else {
+				/* DXT3/5, 16 bytes per block */
+				WARN_ONCE
+				    ("DXT 3/5 suffers from multitexturing problems!\n");
+				// fprintf(stderr,"DXT 3/5 %d\n", texImage->Width);
+				if ((texImage->Width + 3) < 8)
+					size = texImage->CompressedSize * 2;
+				else
+					size = texImage->CompressedSize;
+			}
+		} else if (tObj->Target == GL_TEXTURE_RECTANGLE_NV) {
+			size =
+			    ((texImage->Width * texelBytes +
+			      63) & ~63) * texImage->Height;
+			blitWidth = 64 / texelBytes;
+		} else if (t->tile_bits & R300_TXO_MICRO_TILE) {
+			/* tile pattern is 16 bytes x2. mipmaps stay 32 byte aligned,
+			   though the actual offset may be different (if texture is less than
+			   32 bytes width) to the untiled case */
+			int w = (texImage->Width * texelBytes * 2 + 31) & ~31;
+			size =
+			    (w * ((texImage->Height + 1) / 2)) *
+			    texImage->Depth;
+			blitWidth = MAX2(texImage->Width, 64 / texelBytes);
+		} else {
+			int w = (texImage->Width * texelBytes + 31) & ~31;
+			size = w * texImage->Height * texImage->Depth;
+			blitWidth = MAX2(texImage->Width, 64 / texelBytes);
 		}
-	} else {
-		for (i = 0; i < numLevels; i++)
-			compute_tex_image_offset(tObj, 0, i, &curOffset);
+		assert(size > 0);
+
+		if (RADEON_DEBUG & DEBUG_TEXTURE)
+			fprintf(stderr, "w=%d h=%d d=%d tb=%d intFormat=%d\n",
+				texImage->Width, texImage->Height,
+				texImage->Depth,
+				texImage->TexFormat->TexelBytes,
+				texImage->InternalFormat);
+
+		/* Align to 32-byte offset.  It is faster to do this unconditionally
+		 * (no branch penalty).
+		 */
+
+		curOffset = (curOffset + 0x1f) & ~0x1f;
+
+		if (texelBytes) {
+			/* fix x and y coords up later together with offset */
+			t->image[0][i].x = curOffset;
+			t->image[0][i].y = 0;
+			t->image[0][i].width =
+			    MIN2(size / texelBytes, blitWidth);
+			t->image[0][i].height =
+			    (size / texelBytes) / t->image[0][i].width;
+		} else {
+			t->image[0][i].x = curOffset % R300_BLIT_WIDTH_BYTES;
+			t->image[0][i].y = curOffset / R300_BLIT_WIDTH_BYTES;
+			t->image[0][i].width =
+			    MIN2(size, R300_BLIT_WIDTH_BYTES);
+			t->image[0][i].height = size / t->image[0][i].width;
+		}
+
+		if (RADEON_DEBUG & DEBUG_TEXTURE)
+			fprintf(stderr,
+				"level %d: %dx%d x=%d y=%d w=%d h=%d size=%d at %d\n",
+				i, texImage->Width, texImage->Height,
+				t->image[0][i].x, t->image[0][i].y,
+				t->image[0][i].width, t->image[0][i].height,
+				size, curOffset);
+
+		curOffset += size;
 	}
 
 	/* Align the total size of texture memory block.
 	 */
 	t->base.totalSize =
 	    (curOffset + RADEON_OFFSET_MASK) & ~RADEON_OFFSET_MASK;
+
+	/* Setup remaining cube face blits, if needed */
+	if (tObj->Target == GL_TEXTURE_CUBE_MAP) {
+		GLuint face;
+		for (face = 1; face < 6; face++) {
+			for (i = 0; i < numLevels; i++) {
+				t->image[face][i].x = t->image[0][i].x;
+				t->image[face][i].y = t->image[0][i].y;
+				t->image[face][i].width = t->image[0][i].width;
+				t->image[face][i].height =
+				    t->image[0][i].height;
+			}
+		}
+		t->base.totalSize *= 6;	/* total texmem needed */
+	}
+
+	if (tObj->Target == GL_TEXTURE_CUBE_MAP) {
+		ASSERT(log2Width == log2Height);
+		t->format |= R300_TX_FORMAT_CUBIC_MAP;
+	}
 
 	t->size =
 	    (((tObj->Image[0][t->base.firstLevel]->Width -
@@ -408,18 +324,16 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 		R300_TX_HEIGHTMASK_SHIFT))
 	    | ((numLevels - 1) << R300_TX_MAX_MIP_LEVEL_SHIFT);
 
-	t->pitch = 0;
-
 	/* Only need to round to nearest 32 for textures, but the blitter
 	 * requires 64-byte aligned pitches, and we may/may not need the
 	 * blitter.   NPOT only!
 	 */
 	if (baseImage->IsCompressed) {
-		t->pitch |=
+		t->pitch =
 		    (tObj->Image[0][t->base.firstLevel]->Width + 63) & ~(63);
 	} else if (tObj->Target == GL_TEXTURE_RECTANGLE_NV) {
-		unsigned int align = (64 / texelBytes) - 1;
-		t->pitch |= ((tObj->Image[0][t->base.firstLevel]->Width *
+		unsigned int align = blitWidth - 1;
+		t->pitch = ((tObj->Image[0][t->base.firstLevel]->Width *
 			     texelBytes) + 63) & ~(63);
 		t->size |= R300_TX_SIZE_TXPITCH_EN;
 		if (!t->image_override)
@@ -427,17 +341,14 @@ static void r300SetTexImages(r300ContextPtr rmesa,
 			    (((tObj->Image[0][t->base.firstLevel]->Width) +
 			      align) & ~align) - 1;
 	} else {
-		t->pitch |=
+		t->pitch =
 		    ((tObj->Image[0][t->base.firstLevel]->Width *
 		      texelBytes) + 63) & ~(63);
 	}
 
-	if (rmesa->radeon.radeonScreen->chip_family >= CHIP_FAMILY_RV515) {
-	    if (tObj->Image[0][t->base.firstLevel]->Width > 2048)
-		t->pitch_reg |= R500_TXWIDTH_BIT11;
-	    if (tObj->Image[0][t->base.firstLevel]->Height > 2048)
-		t->pitch_reg |= R500_TXHEIGHT_BIT11;
-	}
+	t->dirty_state = TEX_ALL;
+
+	/* FYI: r300UploadTexImages( rmesa, t ) used to be called here */
 }
 
 /* ================================================================
@@ -574,6 +485,7 @@ static GLboolean r300UpdateTexture(GLcontext * ctx, int unit)
 
 		rmesa->state.texture.unit[unit].texobj = t;
 		t->base.bound |= (1 << unit);
+		t->dirty_state |= 1 << unit;
 		driUpdateTextureLRU((driTextureObject *) t);	/* XXX: should be locked! */
 	}
 
@@ -583,11 +495,12 @@ static GLboolean r300UpdateTexture(GLcontext * ctx, int unit)
 void r300SetTexOffset(__DRIcontext * pDRICtx, GLint texname,
 		      unsigned long long offset, GLint depth, GLuint pitch)
 {
-	r300ContextPtr rmesa = pDRICtx->driverPrivate;
+	r300ContextPtr rmesa =
+	    (r300ContextPtr) ((__DRIcontextPrivate *) pDRICtx->private)->
+	    driverPrivate;
 	struct gl_texture_object *tObj =
 	    _mesa_lookup_texture(rmesa->radeon.glCtx, texname);
 	r300TexObjPtr t;
-	uint32_t pitch_val;
 
 	if (!tObj)
 		return;
@@ -600,30 +513,28 @@ void r300SetTexOffset(__DRIcontext * pDRICtx, GLint texname,
 		return;
 
 	t->offset = offset;
-	t->pitch_reg &= (1 << 13) -1;
-	pitch_val = pitch;
+	t->pitch_reg = pitch;
 
 	switch (depth) {
 	case 32:
 		t->format = R300_EASY_TX_FORMAT(X, Y, Z, W, W8Z8Y8X8);
 		t->filter |= tx_table[2].filter;
-		pitch_val /= 4;
+		t->pitch_reg /= 4;
 		break;
 	case 24:
 	default:
 		t->format = R300_EASY_TX_FORMAT(X, Y, Z, ONE, W8Z8Y8X8);
 		t->filter |= tx_table[4].filter;
-		pitch_val /= 4;
+		t->pitch_reg /= 4;
 		break;
 	case 16:
 		t->format = R300_EASY_TX_FORMAT(X, Y, Z, ONE, Z5Y6X5);
 		t->filter |= tx_table[5].filter;
-		pitch_val /= 2;
+		t->pitch_reg /= 2;
 		break;
 	}
-	pitch_val--;
 
-	t->pitch_reg |= pitch_val;
+	t->pitch_reg--;
 }
 
 static GLboolean r300UpdateTextureUnit(GLcontext * ctx, int unit)

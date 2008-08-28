@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.1
+ * Version:  6.5.2
  *
- * Copyright (C) 1999-2008  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -24,11 +24,11 @@
 
 /** XXX This file should be named s_clear.c */
 
-#include "glheader.h"
-#include "colormac.h"
-#include "macros.h"
-#include "imports.h"
-#include "mtypes.h"
+#include "main/glheader.h"
+#include "main/colormac.h"
+#include "main/macros.h"
+#include "main/imports.h"
+#include "main/mtypes.h"
 
 #include "s_accum.h"
 #include "s_context.h"
@@ -251,7 +251,7 @@ static void
 clear_color_buffers(GLcontext *ctx)
 {
    GLboolean masking;
-   GLuint buf;
+   GLuint i;
 
    if (ctx->Visual.rgbMode) {
       if (ctx->Color.ColorMask[0] && 
@@ -265,7 +265,7 @@ clear_color_buffers(GLcontext *ctx)
       }
    }
    else {
-      struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0];
+      struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0][0];
       const GLuint indexBits = (1 << rb->IndexBits) - 1;
       if ((ctx->Color.IndexMask & indexBits) == indexBits) {
          masking = GL_FALSE;
@@ -275,8 +275,8 @@ clear_color_buffers(GLcontext *ctx)
       }
    }
 
-   for (buf = 0; buf < ctx->DrawBuffer->_NumColorDrawBuffers; buf++) {
-      struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[buf];
+   for (i = 0; i < ctx->DrawBuffer->_NumColorDrawBuffers[0]; i++) {
+      struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0][i];
       if (ctx->Visual.rgbMode) {
          if (masking) {
             clear_rgba_buffer_with_masking(ctx, rb);
@@ -331,8 +331,7 @@ _swrast_Clear(GLcontext *ctx, GLbitfield buffers)
 
    /* do software clearing here */
    if (buffers) {
-      if ((buffers & BUFFER_BITS_COLOR)
-          && (ctx->DrawBuffer->_NumColorDrawBuffers > 0)) {
+      if (buffers & ctx->DrawBuffer->_ColorDrawBufferMask[0]) {
          clear_color_buffers(ctx);
       }
       if (buffers & BUFFER_BIT_DEPTH) {

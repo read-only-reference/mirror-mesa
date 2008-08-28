@@ -40,24 +40,17 @@
 #ifndef PROGRAM_H
 #define PROGRAM_H
 
-#include "mtypes.h"
+#include "main/mtypes.h"
 
 
 extern struct gl_program _mesa_DummyProgram;
 
-
-/*
- * Internal functions
- */
 
 extern void
 _mesa_init_program(GLcontext *ctx);
 
 extern void
 _mesa_free_program_data(GLcontext *ctx);
-
-extern void
-_mesa_update_default_objects_program(GLcontext *ctx);
 
 extern void
 _mesa_set_program_error(GLcontext *ctx, GLint pos, const char *string);
@@ -67,13 +60,13 @@ _mesa_find_line_column(const GLubyte *string, const GLubyte *pos,
                        GLint *line, GLint *col);
 
 
-extern struct gl_program *
-_mesa_init_vertex_program(GLcontext *ctx,
-                          struct gl_vertex_program *prog,
+extern struct gl_program * 
+_mesa_init_vertex_program(GLcontext *ctx, 
+                          struct gl_vertex_program *prog, 
                           GLenum target, GLuint id);
 
-extern struct gl_program *
-_mesa_init_fragment_program(GLcontext *ctx,
+extern struct gl_program * 
+_mesa_init_fragment_program(GLcontext *ctx, 
                             struct gl_fragment_program *prog,
                             GLenum target, GLuint id);
 
@@ -115,9 +108,6 @@ _mesa_clone_program(GLcontext *ctx, const struct gl_program *prog);
 extern  GLboolean
 _mesa_insert_instructions(struct gl_program *prog, GLuint start, GLuint count);
 
-extern  GLboolean
-_mesa_delete_instructions(struct gl_program *prog, GLuint start, GLuint count);
-
 extern struct gl_program *
 _mesa_combine_programs(GLcontext *ctx,
                        const struct gl_program *progA,
@@ -125,20 +115,6 @@ _mesa_combine_programs(GLcontext *ctx,
 
 extern GLint
 _mesa_find_free_register(const struct gl_program *prog, GLuint regFile);
-
-
-/*
- * API functions common to ARB/NV_vertex/fragment_program
- */
-
-extern void GLAPIENTRY
-_mesa_BindProgram(GLenum target, GLuint id);
-
-extern void GLAPIENTRY
-_mesa_DeletePrograms(GLsizei n, const GLuint *ids);
-
-extern void GLAPIENTRY
-_mesa_GenPrograms(GLsizei n, GLuint *ids);
 
 
 

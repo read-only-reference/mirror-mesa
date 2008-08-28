@@ -1,4 +1,4 @@
-/* $XFree86$ */ /* -*- c-basic-offset: 3 -*- */
+/* -*- c-basic-offset: 3 -*- */
 /**************************************************************************
 
 Copyright 2000, 2001 ATI Technologies Inc., Ontario, Canada, and
@@ -95,12 +95,12 @@ do {						\
 } while (0)
 #endif
 
-static void INLINE savage_draw_triangle (savageContextPtr imesa,
+static void __inline__ savage_draw_triangle (savageContextPtr imesa,
 					     savageVertexPtr v0,
 					     savageVertexPtr v1,
 					     savageVertexPtr v2) {
    GLuint vertsize = imesa->HwVertexSize;
-   u_int32_t *vb = savageAllocVtxBuf (imesa, 3*vertsize);
+   uint32_t *vb = savageAllocVtxBuf (imesa, 3*vertsize);
    GLuint j;
 
    EMIT_VERT (j, vb, vertsize, 0, v0);
@@ -108,13 +108,13 @@ static void INLINE savage_draw_triangle (savageContextPtr imesa,
    EMIT_VERT (j, vb, vertsize, 0, v2);
 }
 
-static void INLINE savage_draw_quad (savageContextPtr imesa,
+static void __inline__ savage_draw_quad (savageContextPtr imesa,
 					 savageVertexPtr v0,
 					 savageVertexPtr v1,
 					 savageVertexPtr v2,
 					 savageVertexPtr v3) {
    GLuint vertsize = imesa->HwVertexSize;
-   u_int32_t *vb = savageAllocVtxBuf (imesa, 6*vertsize);
+   uint32_t *vb = savageAllocVtxBuf (imesa, 6*vertsize);
    GLuint j;
 
    EMIT_VERT (j, vb, vertsize, 0, v0);
@@ -125,10 +125,10 @@ static void INLINE savage_draw_quad (savageContextPtr imesa,
    EMIT_VERT (j, vb, vertsize, 0, v3);
 }
 
-static INLINE void savage_draw_point (savageContextPtr imesa,
+static __inline__ void savage_draw_point (savageContextPtr imesa,
 					  savageVertexPtr tmp) {
    GLuint vertsize = imesa->HwVertexSize;
-   u_int32_t *vb = savageAllocVtxBuf (imesa, 6*vertsize);
+   uint32_t *vb = savageAllocVtxBuf (imesa, 6*vertsize);
    const GLfloat x = tmp->v.x;
    const GLfloat y = tmp->v.y;
    const GLfloat sz = 0.5 * CLAMP(imesa->glCtx->Point.Size,
@@ -161,11 +161,11 @@ static INLINE void savage_draw_point (savageContextPtr imesa,
    EMIT_VERT (j, vb, vertsize, 2, tmp);
 }
 
-static INLINE void savage_draw_line (savageContextPtr imesa,
+static __inline__ void savage_draw_line (savageContextPtr imesa,
 					 savageVertexPtr v0,
 					 savageVertexPtr v1 ) {
    GLuint vertsize = imesa->HwVertexSize;
-   u_int32_t *vb = savageAllocVtxBuf (imesa, 6*vertsize);
+   uint32_t *vb = savageAllocVtxBuf (imesa, 6*vertsize);
    const GLfloat width = CLAMP(imesa->glCtx->Line.Width,
                                imesa->glCtx->Const.MinLineWidth,
                                imesa->glCtx->Const.MaxLineWidth);
@@ -219,12 +219,12 @@ do {							\
    tmp.f[vertex_size-1] *= rhw;				\
 } while (0)
 
-static void INLINE savage_ptex_tri (savageContextPtr imesa,
+static void __inline__ savage_ptex_tri (savageContextPtr imesa,
 					savageVertexPtr v0,
 					savageVertexPtr v1,
 					savageVertexPtr v2) {
    GLuint vertsize = imesa->HwVertexSize;
-   u_int32_t *vb = savageAllocVtxBuf (imesa, 3*vertsize);
+   uint32_t *vb = savageAllocVtxBuf (imesa, 3*vertsize);
    savageVertex tmp;
    GLuint j;
 
@@ -233,11 +233,11 @@ static void INLINE savage_ptex_tri (savageContextPtr imesa,
    PTEX_VERTEX (j, tmp, vertsize, 0, v2); EMIT_VERT (j, vb, vertsize, 0, &tmp);
 }
 
-static INLINE void savage_ptex_line (savageContextPtr imesa,
+static __inline__ void savage_ptex_line (savageContextPtr imesa,
 					 savageVertexPtr v0,
 					 savageVertexPtr v1 ) {
    GLuint vertsize = imesa->HwVertexSize;
-   u_int32_t *vb = savageAllocVtxBuf (imesa, 6*vertsize);
+   uint32_t *vb = savageAllocVtxBuf (imesa, 6*vertsize);
    const GLfloat width = CLAMP(imesa->glCtx->Line.Width,
                                imesa->glCtx->Const.MinLineWidth,
                                imesa->glCtx->Const.MaxLineWidth);
@@ -281,10 +281,10 @@ static INLINE void savage_ptex_line (savageContextPtr imesa,
    EMIT_VERT (j, vb, vertsize, 2, &tmp1);
 } 
 
-static INLINE void savage_ptex_point (savageContextPtr imesa,
+static __inline__ void savage_ptex_point (savageContextPtr imesa,
 					  savageVertexPtr v0) {
    GLuint vertsize = imesa->HwVertexSize;
-   u_int32_t *vb = savageAllocVtxBuf (imesa, 6*vertsize);
+   uint32_t *vb = savageAllocVtxBuf (imesa, 6*vertsize);
    const GLfloat x = v0->v.x;
    const GLfloat y = v0->v.y;
    const GLfloat sz = 0.5 * CLAMP(imesa->glCtx->Point.Size,
@@ -934,7 +934,7 @@ do {									\
 #define SAVAGE_EMIT_ST1  0x0300
 
 
-static INLINE GLuint savageChooseVertexFormat_s3d( GLcontext *ctx )
+static __inline__ GLuint savageChooseVertexFormat_s3d( GLcontext *ctx )
 {
    savageContextPtr imesa = SAVAGE_CONTEXT(ctx);
    TNLcontext *tnl = TNL_CONTEXT(ctx);
@@ -997,7 +997,7 @@ static INLINE GLuint savageChooseVertexFormat_s3d( GLcontext *ctx )
 }
 
 
-static INLINE GLuint savageChooseVertexFormat_s4( GLcontext *ctx )
+static __inline__ GLuint savageChooseVertexFormat_s4( GLcontext *ctx )
 {
    savageContextPtr imesa = SAVAGE_CONTEXT(ctx);
    TNLcontext *tnl = TNL_CONTEXT(ctx);

@@ -8,8 +8,6 @@ INCDIR = $(TOP)/include
 
 LIB_DEP = $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME)
 
-LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) $(APP_LIB_DEPS)
-
 #
 # targets
 #
@@ -24,20 +22,20 @@ tests: default
 	! ./cltest 2> /dev/null | (grep -e ^[*][*][*])
 
 clean:
-	-rm -f cltest.o sotest.o vstest.o framework.o cltest sotest vstest
+	rm -f cltest.o sotest.o vstest.o framework.o cltest sotest vstest
 
 #
 # executables
 #
 
 cltest: cltest.o framework.o $(LIB_DEP)
-	$(CC) $(LDFLAGS) cltest.o framework.o $(LIBS) -o cltest
+	$(CC) cltest.o framework.o $(APP_LIB_DEPS) -o cltest
 
 sotest: sotest.o framework.o $(LIB_DEP)
-	$(CC) $(LDFLAGS) sotest.o framework.o $(LIBS) -o sotest
+	$(CC) sotest.o framework.o $(APP_LIB_DEPS) -o sotest
 
 vstest: vstest.o framework.o $(LIB_DEP)
-	$(CC) $(LDFLAGS) vstest.o framework.o $(LIBS) -o vstest
+	$(CC) vstest.o framework.o $(APP_LIB_DEPS) -o vstest
 
 #
 # objects

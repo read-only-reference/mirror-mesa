@@ -211,7 +211,6 @@ _slang_resolve_attributes(struct gl_shader_program *shProg,
 {
    GLuint i, j;
    GLbitfield usedAttributes;
-   GLint size = 4; /* XXX fix */
 
    assert(prog->Target == GL_VERTEX_PROGRAM_ARB);
 
@@ -253,6 +252,8 @@ _slang_resolve_attributes(struct gl_shader_program *shProg,
                 * Start at 1 since generic attribute 0 always aliases
                 * glVertex/position.
                 */
+               GLint size = prog->Attributes->Parameters[k].Size;
+               GLenum datatype = prog->Attributes->Parameters[k].DataType;
                for (attr = 1; attr < MAX_VERTEX_ATTRIBS; attr++) {
                   if (((1 << attr) & usedAttributes) == 0)
                      break;
@@ -261,7 +262,7 @@ _slang_resolve_attributes(struct gl_shader_program *shProg,
                   /* too many!  XXX record error log */
                   return GL_FALSE;
                }
-               _mesa_add_attribute(shProg->Attributes, name, size, attr);
+               _mesa_add_attribute(shProg->Attributes, name, size, datatype,attr);
 
 	       /* set the attribute as used */
 	       usedAttributes |= 1<<attr;
@@ -272,6 +273,36 @@ _slang_resolve_attributes(struct gl_shader_program *shProg,
       }
    }
    return GL_TRUE;
+}
+
+
+/**
+ * Scan program instructions to update the program's NumTemporaries field.
+ * Note: this implemenation relies on the code generator allocating
+ * temps in increasing order (0, 1, 2, ... ).
+ */
+static void
+_slang_count_temporaries(struct gl_program *prog)
+{
+   GLuint i, j;
+   GLint maxIndex = -1;
+
+   for (i = 0; i < prog->NumInstructions; i++) {
+      const struct prog_instruction *inst = prog->Instructions + i;
+      const GLuint numSrc = _mesa_num_inst_src_regs(inst->Opcode);
+      for (j = 0; j < numSrc; j++) {
+         if (inst->SrcReg[j].File == PROGRAM_TEMPORARY) {
+            if (maxIndex < inst->SrcReg[j].Index)
+               maxIndex = inst->SrcReg[j].Index;
+         }
+         if (inst->DstReg.File == PROGRAM_TEMPORARY) {
+            if (maxIndex < (GLint) inst->DstReg.Index)
+               maxIndex = inst->DstReg.Index;
+         }
+      }
+   }
+
+   prog->NumTemporaries = (GLuint) (maxIndex + 1);
 }
 
 
@@ -400,18 +431,31 @@ _slang_link(GLcontext *ctx,
    shProg->Varying = _mesa_new_parameter_list();
 
    /**
-    * Find attached vertex shader, fragment shader
+    * Find attached vertex, fragment shaders defining main()
     */
    vertProg = NULL;
    fragProg = NULL;
    for (i = 0; i < shProg->NumShaders; i++) {
-      if (shProg->Shaders[i]->Type == GL_VERTEX_SHADER)
-         vertProg = vertex_program(shProg->Shaders[i]->Programs[0]);
-      else if (shProg->Shaders[i]->Type == GL_FRAGMENT_SHADER)
-         fragProg = fragment_program(shProg->Shaders[i]->Programs[0]);
+      struct gl_shader *shader = shProg->Shaders[i];
+      if (shader->Type == GL_VERTEX_SHADER && shader->Main)
+         vertProg = vertex_program(shader->Program);
+      else if (shader->Type == GL_FRAGMENT_SHADER && shader->Main)
+         fragProg = fragment_program(shader->Program);
       else
          _mesa_problem(ctx, "unexpected shader target in slang_link()");
    }
+
+#if FEATURE_es2_glsl
+   /* must have both a vertex and fragment program for ES2 */
+   if (!vertProg) {
+      link_error(shProg, "missing vertex shader\n");
+      return;
+   }
+   if (!fragProg) {
+      link_error(shProg, "missing fragment shader\n");
+      return;
+   }
+#endif
 
    /*
     * Make copies of the vertex/fragment programs now since we'll be
@@ -457,6 +501,7 @@ _slang_link(GLcontext *ctx,
 
    if (shProg->VertexProgram) {
       _slang_update_inputs_outputs(&shProg->VertexProgram->Base);
+      _slang_count_temporaries(&shProg->VertexProgram->Base);
       if (!(shProg->VertexProgram->Base.OutputsWritten & (1 << VERT_RESULT_HPOS))) {
          /* the vertex program did not compute a vertex position */
          link_error(shProg,
@@ -464,8 +509,10 @@ _slang_link(GLcontext *ctx,
          return;
       }
    }
-   if (shProg->FragmentProgram)
+   if (shProg->FragmentProgram) {
+      _slang_count_temporaries(&shProg->FragmentProgram->Base);
       _slang_update_inputs_outputs(&shProg->FragmentProgram->Base);
+   }
 
    /* Check that all the varying vars needed by the fragment shader are
     * actually produced by the vertex shader.
@@ -482,12 +529,6 @@ _slang_link(GLcontext *ctx,
       }         
    }
 
-   /* Check that the vertex program doesn't use too many sampler units */
-   if (shProg->VertexProgram &&
-       _mesa_bitcount(shProg->VertexProgram->Base.SamplersUsed) > ctx->Const.MaxVertexTextureImageUnits) {
-      link_error(shProg, "Vertex program uses too many samplers.\n");
-      return;
-   }
 
    if (fragProg && shProg->FragmentProgram) {
       /* notify driver that a new fragment program has been compiled/linked */

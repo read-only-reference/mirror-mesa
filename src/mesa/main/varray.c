@@ -121,6 +121,16 @@ _mesa_VertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr)
       case GL_DOUBLE:
          elementSize = size * sizeof(GLdouble);
          break;
+#if FEATURE_fixedpt
+      case GL_FIXED:
+         elementSize = size * sizeof(GLfixed);
+         break;
+#endif
+#if FEATURE_vertex_array_byte
+      case GL_BYTE:
+         elementSize = size * sizeof(GLbyte);
+         break;
+#endif
       default:
          _mesa_error( ctx, GL_INVALID_ENUM, "glVertexPointer(type)" );
          return;
@@ -166,6 +176,11 @@ _mesa_NormalPointer(GLenum type, GLsizei stride, const GLvoid *ptr )
       case GL_DOUBLE:
          elementSize = 3 * sizeof(GLdouble);
          break;
+#if FEATURE_fixedpt
+      case GL_FIXED:
+         elementSize = 3 * sizeof(GLfixed);
+         break;
+#endif
       default:
          _mesa_error( ctx, GL_INVALID_ENUM, "glNormalPointer(type)" );
          return;
@@ -224,6 +239,11 @@ _mesa_ColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr)
       case GL_DOUBLE:
          elementSize = size * sizeof(GLdouble);
          break;
+#if FEATURE_fixedpt
+      case GL_FIXED:
+         elementSize = size * sizeof(GLfixed);
+         break;
+#endif
       default:
          _mesa_error( ctx, GL_INVALID_ENUM, "glColorPointer(type)" );
          return;
@@ -405,6 +425,16 @@ _mesa_TexCoordPointer(GLint size, GLenum type, GLsizei stride,
       case GL_DOUBLE:
          elementSize = size * sizeof(GLdouble);
          break;
+#if FEATURE_fixedpt
+      case GL_FIXED:
+         elementSize = size * sizeof(GLfixed);
+         break;
+#endif
+#if FEATURE_vertex_array_byte
+      case GL_BYTE:
+         elementSize = size * sizeof(GLbyte);
+         break;
+#endif
       default:
          _mesa_error( ctx, GL_INVALID_ENUM, "glTexCoordPointer(type)" );
          return;
@@ -438,12 +468,43 @@ _mesa_EdgeFlagPointer(GLsizei stride, const GLvoid *ptr)
 }
 
 
+void GLAPIENTRY
+_mesa_PointSizePointer(GLenum type, GLsizei stride, const GLvoid *ptr)
+{
+   GLsizei elementSize;
+   GET_CURRENT_CONTEXT(ctx);
+   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
+
+   if (stride < 0) {
+      _mesa_error( ctx, GL_INVALID_VALUE, "glPointSizePointer(stride)" );
+      return;
+   }
+
+   switch (type) {
+      case GL_FLOAT:
+         elementSize = sizeof(GLfloat);
+         break;
+#if FEATURE_fixedpt
+      case GL_FIXED:
+         elementSize = sizeof(GLfixed);
+         break;
+#endif
+      default:
+         _mesa_error( ctx, GL_INVALID_ENUM, "glPointSizePointer(type)" );
+         return;
+   }
+
+   update_array(ctx, &ctx->Array.ArrayObj->PointSize, _NEW_ARRAY_POINT_SIZE,
+                elementSize, 1, type, stride, GL_FALSE, ptr);
+}
+
+
 #if FEATURE_NV_vertex_program
 void GLAPIENTRY
 _mesa_VertexAttribPointerNV(GLuint index, GLint size, GLenum type,
                             GLsizei stride, const GLvoid *ptr)
 {
-   GLboolean normalized = GL_FALSE;
+   const GLboolean normalized = GL_FALSE;
    GLsizei elementSize;
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END(ctx);
@@ -471,7 +532,6 @@ _mesa_VertexAttribPointerNV(GLuint index, GLint size, GLenum type,
    /* check for valid 'type' and compute StrideB right away */
    switch (type) {
       case GL_UNSIGNED_BYTE:
-         normalized = GL_TRUE;
          elementSize = size * sizeof(GLubyte);
          break;
       case GL_SHORT:
@@ -523,11 +583,6 @@ _mesa_VertexAttribPointerARB(GLuint index, GLint size, GLenum type,
       return;
    }
 
-   if (type == GL_UNSIGNED_BYTE && size != 4) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glVertexAttribPointerARB(size!=4)");
-      return;
-   }
-
    /* check for valid 'type' and compute StrideB right away */
    /* NOTE: more types are supported here than in the NV extension */
    switch (type) {
@@ -555,6 +610,11 @@ _mesa_VertexAttribPointerARB(GLuint index, GLint size, GLenum type,
       case GL_DOUBLE:
          elementSize = size * sizeof(GLdouble);
          break;
+#if FEATURE_fixedpt
+      case GL_FIXED:
+         elementSize = size * sizeof(GLfixed);
+         break;
+#endif
       default:
          _mesa_error( ctx, GL_INVALID_ENUM, "glVertexAttribPointerARB(type)" );
          return;
@@ -810,21 +870,15 @@ _mesa_LockArraysEXT(GLint first, GLsizei count)
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glLockArrays %d %d\n", first, count);
 
-   if (first < 0) {
-      _mesa_error( ctx, GL_INVALID_VALUE, "glLockArraysEXT(first)" );
-      return;
+   if (first == 0 && count > 0 &&
+       count <= (GLint) ctx->Const.MaxArrayLockSize) {
+      ctx->Array.LockFirst = first;
+      ctx->Array.LockCount = count;
    }
-   if (count <= 0) {
-      _mesa_error( ctx, GL_INVALID_VALUE, "glLockArraysEXT(count)" );
-      return;
+   else {
+      ctx->Array.LockFirst = 0;
+      ctx->Array.LockCount = 0;
    }
-   if (ctx->Array.LockCount != 0) {
-      _mesa_error( ctx, GL_INVALID_OPERATION, "glLockArraysEXT(reentry)" );
-      return;
-   }
-
-   ctx->Array.LockFirst = first;
-   ctx->Array.LockCount = count;
 
    ctx->NewState |= _NEW_ARRAY;
    ctx->Array.NewState |= _NEW_ARRAY_ALL;
@@ -842,11 +896,6 @@ _mesa_UnlockArraysEXT( void )
 
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glUnlockArrays\n");
-
-   if (ctx->Array.LockCount == 0) {
-      _mesa_error( ctx, GL_INVALID_OPERATION, "glUnlockArraysEXT(reexit)" );
-      return;
-   }
 
    ctx->Array.LockFirst = 0;
    ctx->Array.LockCount = 0;

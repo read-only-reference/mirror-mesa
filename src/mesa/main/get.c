@@ -19,10 +19,6 @@
 
 #define INT_TO_BOOLEAN(I)     ( (I) ? GL_TRUE : GL_FALSE )
 
-#define ENUM_TO_BOOLEAN(E)    ( (E) ? GL_TRUE : GL_FALSE )
-#define ENUM_TO_INT(E)        ( (GLint) (E) )
-#define ENUM_TO_FLOAT(E)      ( (GLfloat) (E) )
-
 #define BOOLEAN_TO_INT(B)     ( (GLint) (B) )
 #define BOOLEAN_TO_FLOAT(B)   ( (B) ? 1.0F : 0.0F )
 
@@ -1877,10 +1873,6 @@ _mesa_GetBooleanv( GLenum pname, GLboolean *params )
          CHECK_EXT1(EXT_framebuffer_object, "GetBooleanv");
          params[0] = INT_TO_BOOLEAN(ctx->Const.MaxRenderbufferSize);
          break;
-      case GL_READ_FRAMEBUFFER_BINDING_EXT:
-         CHECK_EXT1(EXT_framebuffer_blit, "GetBooleanv");
-         params[0] = INT_TO_BOOLEAN(ctx->ReadBuffer->Name);
-         break;
       case GL_MAX_FRAGMENT_UNIFORM_COMPONENTS_ARB:
          CHECK_EXT1(ARB_fragment_shader, "GetBooleanv");
          params[0] = INT_TO_BOOLEAN(ctx->Const.FragmentProgram.MaxUniformComponents);
@@ -3725,10 +3717,6 @@ _mesa_GetFloatv( GLenum pname, GLfloat *params )
          CHECK_EXT1(EXT_framebuffer_object, "GetFloatv");
          params[0] = (GLfloat)(ctx->Const.MaxRenderbufferSize);
          break;
-      case GL_READ_FRAMEBUFFER_BINDING_EXT:
-         CHECK_EXT1(EXT_framebuffer_blit, "GetFloatv");
-         params[0] = (GLfloat)(ctx->ReadBuffer->Name);
-         break;
       case GL_MAX_FRAGMENT_UNIFORM_COMPONENTS_ARB:
          CHECK_EXT1(ARB_fragment_shader, "GetFloatv");
          params[0] = (GLfloat)(ctx->Const.FragmentProgram.MaxUniformComponents);
@@ -5572,10 +5560,6 @@ _mesa_GetIntegerv( GLenum pname, GLint *params )
       case GL_MAX_RENDERBUFFER_SIZE_EXT:
          CHECK_EXT1(EXT_framebuffer_object, "GetIntegerv");
          params[0] = ctx->Const.MaxRenderbufferSize;
-         break;
-      case GL_READ_FRAMEBUFFER_BINDING_EXT:
-         CHECK_EXT1(EXT_framebuffer_blit, "GetIntegerv");
-         params[0] = ctx->ReadBuffer->Name;
          break;
       case GL_MAX_FRAGMENT_UNIFORM_COMPONENTS_ARB:
          CHECK_EXT1(ARB_fragment_shader, "GetIntegerv");

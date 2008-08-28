@@ -25,9 +25,9 @@
  *    Keith Whitwell <keith@tungstengraphics.com>
  */
 
-#include "glheader.h"
-#include "imports.h"
-#include "colormac.h"
+#include "main/glheader.h"
+#include "main/imports.h"
+#include "main/colormac.h"
 #include "ss_context.h"
 #include "ss_triangle.h"
 #include "swrast_setup.h"
@@ -200,9 +200,6 @@ _swsetup_RenderStart( GLcontext *ctx )
    }
 
    swsetup->NewState = 0;
-
-   /* This will change if drawing unfilled tris */
-   _swrast_SetFacing(ctx, 0);
 
    _swrast_render_start(ctx);
 

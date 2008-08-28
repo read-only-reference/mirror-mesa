@@ -23,10 +23,10 @@
  */
 
 
-#include "glheader.h"
-#include "context.h"
-#include "macros.h"
-#include "imports.h"
+#include "main/glheader.h"
+#include "main/context.h"
+#include "main/macros.h"
+#include "main/imports.h"
 #include "fbobject.h"
 
 #include "s_accum.h"
@@ -525,8 +525,8 @@ accum_return(GLcontext *ctx, GLfloat value,
          }
 
          /* store colors */
-         for (buffer = 0; buffer < fb->_NumColorDrawBuffers; buffer++) {
-            struct gl_renderbuffer *rb = fb->_ColorDrawBuffers[buffer];
+         for (buffer = 0; buffer < fb->_NumColorDrawBuffers[0]; buffer++) {
+            struct gl_renderbuffer *rb = fb->_ColorDrawBuffers[0][buffer];
             if (masking) {
                _swrast_mask_rgba_span(ctx, rb, &span);
             }

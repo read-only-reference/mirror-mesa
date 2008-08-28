@@ -31,7 +31,7 @@
 #ifndef PROG_PARAMETER_H
 #define PROG_PARAMETER_H
 
-#include "mtypes.h"
+#include "main/mtypes.h"
 #include "prog_statevars.h"
 
 
@@ -122,7 +122,7 @@ _mesa_add_varying(struct gl_program_parameter_list *paramList,
 
 extern GLint
 _mesa_add_attribute(struct gl_program_parameter_list *paramList,
-                    const char *name, GLint size, GLint attrib);
+                    const char *name, GLint size, GLenum datatype, GLint attrib);
 
 extern GLint
 _mesa_add_state_reference(struct gl_program_parameter_list *paramList,

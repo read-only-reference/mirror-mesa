@@ -29,6 +29,8 @@ SOURCES = egldri.c
 
 OBJECTS = $(SOURCES:.c=.o)
 
+DRM_LIB = `pkg-config --libs libdrm`
+
 
 .c.o:
 	$(CC) -c $(INCLUDE_DIRS) $(CFLAGS) $< -o $@
@@ -42,20 +44,20 @@ default: depend library Makefile
 library: $(TOP)/$(LIB_DIR)/libEGLdri.so
 
 $(TOP)/$(LIB_DIR)/libEGLdri.so: $(OBJECTS)
-	$(MKLIB) -o EGLdri -linker '$(CC)' -ldflags '$(LDFLAGS)' \
-		-major 1 -minor 0 \
-		-install $(TOP)/$(LIB_DIR) -ldl $(OBJECTS)
+	$(TOP)/bin/mklib -o EGLdri -major 1 -minor 0 \
+		-install $(TOP)/$(LIB_DIR) -ldl $(OBJECTS) $(DRM_LIB)
 
 
 clean:
-	-rm -f *.o
-	-rm -f *.so
+	rm -f *.o
+	rm -f *.so
 
 depend: $(SOURCES) $(HEADERS)
 	@ echo "running $(MKDEP)"
+	@ rm -f depend
 	@ touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(DEFINES) $(INCLUDE_DIRS) \
-		$(SOURCES) $(HEADERS) > /dev/null 
+		$(SOURCES) $(HEADERS) >/dev/null 2>/dev/null
 
 include depend
 # DO NOT DELETE

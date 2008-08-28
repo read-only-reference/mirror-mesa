@@ -1,4 +1,4 @@
-/* $XFree86: xc/lib/GL/mesa/src/drv/ffb/ffb_clear.c,v 1.2 2002/02/22 21:32:58 dawes Exp $
+/* 
  *
  * GLX Hardware Device Driver for Sun Creator/Creator3D
  * Copyright (C) 2000 David S. Miller
@@ -79,7 +79,7 @@ struct ff_fixups {
 /* Compute fixups of non-page aligned areas after a page fill.
  * Return the number of fixups needed.
  */
-static INLINE int
+static __inline__ int
 CreatorComputePageFillFixups(struct ff_fixups *fixups,
 			     int x, int y, int w, int h,
 			     int paligned_x, int paligned_y,

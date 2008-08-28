@@ -29,7 +29,9 @@
 
 
 #include "glheader.h"
+#if FEATURE_colortable
 #include "colortab.h"
+#endif
 #include "context.h"
 #include "enums.h"
 #include "fbobject.h"
@@ -159,7 +161,9 @@ _mesa_delete_texture_object( GLcontext *ctx, struct gl_texture_object *texObj )
     */
    texObj->Target = 0x99;
 
+#if FEATURE_colortable
    _mesa_free_colortable_data(&texObj->Palette);
+#endif
 
    /* free the texture images */
    for (face = 0; face < 6; face++) {
@@ -871,9 +875,9 @@ _mesa_BindTexture( GLenum target, GLuint texName )
       if (newTexObj) {
          /* error checking */
          if (newTexObj->Target != 0 && newTexObj->Target != target) {
-            /* the named texture object's dimensions don't match the target */
+            /* the named texture object's target doesn't match the given target */
             _mesa_error( ctx, GL_INVALID_OPERATION,
-                         "glBindTexture(wrong dimensionality)" );
+                         "glBindTexture(target mismatch)" );
             return;
          }
          if (newTexObj->Target == 0 && target == GL_TEXTURE_RECTANGLE_NV) {

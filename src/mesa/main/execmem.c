@@ -65,17 +65,9 @@ static struct mem_block *exec_heap = NULL;
 static unsigned char *exec_mem = NULL;
 
 
-static int
+static void
 init_heap(void)
 {
-#ifdef MESA_SELINUX
-   if (is_selinux_enabled()) {
-      if (!security_get_boolean_active("allow_execmem") ||
-	  !security_get_boolean_pending("allow_execmem"))
-         return 0;
-   }
-#endif
-
    if (!exec_heap)
       exec_heap = mmInit( 0, EXEC_HEAP_SIZE );
    
@@ -83,8 +75,6 @@ init_heap(void)
       exec_mem = (unsigned char *) mmap(0, EXEC_HEAP_SIZE, 
 					PROT_EXEC | PROT_READ | PROT_WRITE, 
 					MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-
-   return (exec_mem != NULL);
 }
 
 
@@ -96,8 +86,7 @@ _mesa_exec_malloc(GLuint size)
 
    _glthread_LOCK_MUTEX(exec_mutex);
 
-   if (!init_heap())
-      goto bail;
+   init_heap();
 
    if (exec_heap) {
       size = (size + 31) & ~31;
@@ -108,8 +97,7 @@ _mesa_exec_malloc(GLuint size)
       addr = exec_mem + block->ofs;
    else 
       _mesa_printf("_mesa_exec_malloc failed\n");
-
-bail:
+   
    _glthread_UNLOCK_MUTEX(exec_mutex);
    
    return addr;

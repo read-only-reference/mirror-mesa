@@ -61,7 +61,6 @@ _tnl_CreateContext( GLcontext *ctx )
    /* Initialize tnl state.
     */
    if (ctx->VertexProgram._MaintainTnlProgram) {
-      _tnl_ProgramCacheInit( ctx );
       _tnl_install_pipeline( ctx, _tnl_vp_pipeline );
    } else {
       _tnl_install_pipeline( ctx, _tnl_default_pipeline );
@@ -79,6 +78,9 @@ _tnl_CreateContext( GLcontext *ctx )
 
    tnl->nr_blocks = 0;
 
+   /* plug in the VBO drawing function */
+   vbo_set_draw_func(ctx, _tnl_draw_prims);
+
    return GL_TRUE;
 }
 
@@ -89,9 +91,6 @@ _tnl_DestroyContext( GLcontext *ctx )
    TNLcontext *tnl = TNL_CONTEXT(ctx);
 
    _tnl_destroy_pipeline( ctx );
-
-   if (ctx->VertexProgram._MaintainTnlProgram)
-      _tnl_ProgramCacheDestroy( ctx );
 
    FREE(tnl);
    ctx->swtnl_context = NULL;
@@ -105,10 +104,10 @@ _tnl_InvalidateState( GLcontext *ctx, GLuint new_state )
    const struct gl_vertex_program *vp = ctx->VertexProgram._Current;
    const struct gl_fragment_program *fp = ctx->FragmentProgram._Current;
 
-   if (new_state & (_NEW_HINT | _NEW_PROGRAM)) {
+   if (new_state & (_NEW_HINT)) {
       ASSERT(tnl->AllowVertexFog || tnl->AllowPixelFog);
-      tnl->_DoVertexFog = ((tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
-         || !tnl->AllowPixelFog) && !fp;
+      tnl->_DoVertexFog = (tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
+         || !tnl->AllowPixelFog;
    }
 
    tnl->pipeline.new_state |= new_state;
@@ -202,8 +201,8 @@ _tnl_allow_vertex_fog( GLcontext *ctx, GLboolean value )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    tnl->AllowVertexFog = value;
-   tnl->_DoVertexFog = ((tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
-      || !tnl->AllowPixelFog) && !ctx->FragmentProgram._Current;
+   tnl->_DoVertexFog = (tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
+      || !tnl->AllowPixelFog;
 
 }
 
@@ -212,7 +211,7 @@ _tnl_allow_pixel_fog( GLcontext *ctx, GLboolean value )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    tnl->AllowPixelFog = value;
-   tnl->_DoVertexFog = ((tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
-      || !tnl->AllowPixelFog) && !ctx->FragmentProgram._Current;
+   tnl->_DoVertexFog = (tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
+      || !tnl->AllowPixelFog;
 }
 

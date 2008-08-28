@@ -32,7 +32,7 @@ default: $(TOP)/$(LIB_DIR)/$(GLUT_LIB_NAME)
 
 # Make the library
 $(TOP)/$(LIB_DIR)/$(GLUT_LIB_NAME): depend $(OBJECTS)
-	$(MKLIB) -o $(GLUT_LIB) -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+	$(TOP)/bin/mklib -o $(GLUT_LIB) -linker '$(CC)' \
 		-major $(GLUT_MAJOR) -minor $(GLUT_MINOR) \
 		-patch $(GLUT_TINY) $(MKLIB_OPTIONS) -install $(TOP)/$(LIB_DIR) \
 		$(GLUT_LIB_DEPS) $(OBJECTS)
@@ -46,6 +46,7 @@ clean:
 
 
 depend: $(SOURCES)
+	rm -f depend
 	touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) -I$(TOP)/include $(SOURCES)
 

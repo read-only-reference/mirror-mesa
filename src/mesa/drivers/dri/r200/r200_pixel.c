@@ -294,7 +294,7 @@ static void do_draw_pix( GLcontext *ctx,
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
    __DRIdrawablePrivate *dPriv = rmesa->dri.drawable;
    drm_clip_rect_t *box = dPriv->pClipRects;
-   struct gl_renderbuffer *rb = ctx->ReadBuffer->_ColorDrawBuffers[0];
+   struct gl_renderbuffer *rb = ctx->ReadBuffer->_ColorDrawBuffers[0][0];
    driRenderbuffer *drb = (driRenderbuffer *) rb;
    int nbox = dPriv->numClipRects;
    int i;
@@ -382,13 +382,13 @@ r200TryDrawPixels( GLcontext *ctx,
    GLint pitch = unpack->RowLength ? unpack->RowLength : width;
    GLuint planemask;
    GLuint cpp = rmesa->r200Screen->cpp;
-   GLint size = height * pitch * cpp;
+   GLint size = width * pitch * cpp;
 
    if (R200_DEBUG & DEBUG_PIXEL)
       fprintf(stderr, "%s\n", __FUNCTION__);
 
    /* check that we're drawing to exactly one color buffer */
-   if (ctx->DrawBuffer->_NumColorDrawBuffers != 1)
+   if (ctx->DrawBuffer->_NumColorDrawBuffers[0] != 1)
      return GL_FALSE;
 
    switch (format) {

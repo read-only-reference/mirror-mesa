@@ -511,9 +511,9 @@ void viaEmitState(struct via_context *vmesa)
 }
 
 
-static INLINE GLuint viaPackColor(GLuint bpp,
-                                  GLubyte r, GLubyte g,
-                                  GLubyte b, GLubyte a)
+static __inline__ GLuint viaPackColor(GLuint bpp,
+                                      GLubyte r, GLubyte g,
+                                      GLubyte b, GLubyte a)
 {
     switch (bpp) {
     case 16:
@@ -656,18 +656,13 @@ static void viaDrawBuffer(GLcontext *ctx, GLenum mode)
    if (!ctx->DrawBuffer)
       return;
 
-   if (ctx->DrawBuffer->_NumColorDrawBuffers != 1) {
-      FALLBACK(vmesa, VIA_FALLBACK_DRAW_BUFFER, GL_TRUE);
-      return;
-   }
-
-   switch ( ctx->DrawBuffer->_ColorDrawBufferIndexes[0] ) {
-   case BUFFER_FRONT_LEFT:
+   switch ( ctx->DrawBuffer->_ColorDrawBufferMask[0] ) {
+   case BUFFER_BIT_FRONT_LEFT:
       VIA_FLUSH_DMA(vmesa);
       vmesa->drawBuffer = &vmesa->front;
       FALLBACK(vmesa, VIA_FALLBACK_DRAW_BUFFER, GL_FALSE);
       break;
-   case BUFFER_BACK_LEFT:
+   case BUFFER_BIT_BACK_LEFT:
       VIA_FLUSH_DMA(vmesa);
       vmesa->drawBuffer = &vmesa->back;
       FALLBACK(vmesa, VIA_FALLBACK_DRAW_BUFFER, GL_FALSE);
@@ -778,10 +773,10 @@ void viaInitState(GLcontext *ctx)
 /**
  * Convert S and T texture coordinate wrap modes to hardware bits.
  */
-static u_int32_t
+static uint32_t
 get_wrap_mode( GLenum sWrap, GLenum tWrap )
 {
-    u_int32_t v = 0;
+    uint32_t v = 0;
 
 
     switch( sWrap ) {
@@ -813,10 +808,10 @@ get_wrap_mode( GLenum sWrap, GLenum tWrap )
     return v;
 }
 
-static u_int32_t
+static uint32_t
 get_minmag_filter( GLenum min, GLenum mag )
 {
-    u_int32_t v = 0;
+    uint32_t v = 0;
 
     switch (min) {
     case GL_NEAREST:

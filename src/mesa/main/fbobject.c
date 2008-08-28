@@ -173,7 +173,7 @@ _mesa_remove_attachment(GLcontext *ctx, struct gl_renderbuffer_attachment *att)
    if (att->Type == GL_TEXTURE) {
       ASSERT(att->Texture);
       if (ctx->Driver.FinishRenderTexture) {
-         /* tell driver we're done rendering to this texobj */
+         /* tell driver that we're done rendering to this texture. */
          ctx->Driver.FinishRenderTexture(ctx, att);
       }
       _mesa_reference_texobj(&att->Texture, NULL); /* unbind */
@@ -508,6 +508,7 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
       }
    }
 
+#ifndef FEATURE_OES_framebuffer_object
    /* Check that all DrawBuffers are present */
    for (j = 0; j < ctx->Const.MaxDrawBuffers; j++) {
       if (fb->ColorDrawBuffer[j] != GL_NONE) {
@@ -533,6 +534,7 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
          return;
       }
    }
+#endif
 
    if (numImages == 0) {
       fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT_EXT;
@@ -981,11 +983,9 @@ _mesa_BindFramebufferEXT(GLenum target, GLuint framebuffer)
    }
 
    FLUSH_VERTICES(ctx, _NEW_BUFFERS);
-
    if (ctx->Driver.Flush) {  
       ctx->Driver.Flush(ctx);
    }
-
    if (framebuffer) {
       /* Binding a user-created framebuffer object */
       newFb = _mesa_lookup_framebuffer(ctx, framebuffer);
@@ -1019,18 +1019,32 @@ _mesa_BindFramebufferEXT(GLenum target, GLuint framebuffer)
     * XXX check if re-binding same buffer and skip some of this code.
     */
 
+   /* for window-framebuffers, re-initialize the fbo values, as they
+      could be wrong (makecurrent with a new drawable while still a fbo
+      was bound will lead to default init fbo values).
+      note that therefore the context ReadBuffer/DrawBuffer values are not
+      valid while fbo's are bound!!! */
    if (bindReadBuf) {
       _mesa_reference_framebuffer(&ctx->ReadBuffer, newFbread);
+      if (!newFbread->Name) {
+         _mesa_readbuffer_update_fields(ctx, ctx->Pixel.ReadBuffer);
+      }
    }
 
    if (bindDrawBuf) {
       /* check if old FB had any texture attachments */
       check_end_texture_render(ctx, ctx->DrawBuffer);
-
       /* check if time to delete this framebuffer */
       _mesa_reference_framebuffer(&ctx->DrawBuffer, newFb);
-
-      if (newFb->Name != 0) {
+      if (!newFb->Name) {
+         GLuint i;
+         GLenum buffers[MAX_DRAW_BUFFERS];
+         for(i = 0; i < ctx->Const.MaxDrawBuffers; i++) {
+            buffers[i] = ctx->Color.DrawBuffer[i];
+         }
+         _mesa_drawbuffers(ctx, ctx->Const.MaxDrawBuffers, buffers, NULL);
+      }
+      else {
          /* check if newly bound framebuffer has any texture attachments */
          check_begin_texture_render(ctx, newFb);
       }
@@ -1513,10 +1527,12 @@ _mesa_GetFramebufferAttachmentParameterivEXT(GLenum target, GLenum attachment,
       return;
    case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE_EXT:
       if (att->Type == GL_TEXTURE) {
-	 if (att->Texture->Target == GL_TEXTURE_CUBE_MAP)
-	    *params = GL_TEXTURE_CUBE_MAP_POSITIVE_X + att->CubeMapFace;
-	 else
-	    *params = 0;
+         if (att->Texture && att->Texture->Target == GL_TEXTURE_CUBE_MAP) {
+            *params = GL_TEXTURE_CUBE_MAP_POSITIVE_X + att->CubeMapFace;
+         }
+         else {
+            *params = 0;
+         }
       }
       else {
 	 _mesa_error(ctx, GL_INVALID_ENUM,
@@ -1525,7 +1541,12 @@ _mesa_GetFramebufferAttachmentParameterivEXT(GLenum target, GLenum attachment,
       return;
    case GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_3D_ZOFFSET_EXT:
       if (att->Type == GL_TEXTURE) {
-	 *params = att->Zoffset;
+         if (att->Texture && att->Texture->Target == GL_TEXTURE_3D) {
+            *params = att->Zoffset;
+         }
+         else {
+            *params = 0;
+         }
       }
       else {
 	 _mesa_error(ctx, GL_INVALID_ENUM,

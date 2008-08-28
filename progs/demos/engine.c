@@ -16,10 +16,6 @@
 #include "trackball.h"
 
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
 #define DEG_TO_RAD(DEG)  ((DEG) * M_PI / 180.0)
 
 #define TEXTURE_FILE "../images/reflect.rgb"
@@ -445,8 +441,8 @@ DrawConnector(float length, float thickness,
    for (i = 0; i <= 36; i++) {
       const int j = i % 36;
       glNormal3f(normals[j][0], normals[j][1], 0);
-      glVertex3f(points[j][0], points[j][1], z1);
       glVertex3f(points[j][0], points[j][1], z0);
+      glVertex3f(points[j][0], points[j][1], z1);
    }
    glEnd();
 }
@@ -745,7 +741,7 @@ DrawEngine(const Engine *eng, float crankAngle)
    glTranslatef(0, 0, -0.5 * crankLen);
 
    /* crankshaft */
-   glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, CrankshaftColor);
+   glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, CrankshaftColor);
    glColor4fv(CrankshaftColor);
    DrawPositionedCrankshaft(eng, crankAngle);
 
@@ -764,12 +760,12 @@ DrawEngine(const Engine *eng, float crankAngle)
          rot += k * eng->V_Angle;
 
          /* piston */
-         glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, PistonColor);
+         glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, PistonColor);
          glColor4fv(PistonColor);
          DrawPositionedPiston(eng, rot);
 
          /* connecting rod */
-         glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, ConnRodColor);
+         glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, ConnRodColor);
          glColor4fv(ConnRodColor);
          DrawPositionedConnectingRod(eng, rot);
       glPopMatrix();
@@ -784,7 +780,7 @@ DrawEngine(const Engine *eng, float crankAngle)
       }
       glEnable(GL_CULL_FACE);
 
-      glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, BlockColor);
+      glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, BlockColor);
       glColor4fv(BlockColor);
       if (eng->CrankList)
          glCallList(eng->BlockList);
@@ -1254,7 +1250,6 @@ Init(void)
 {
    const GLfloat lightColor[4] = { 0.7, 0.7, 0.7, 1.0 };
    const GLfloat specular[4] = { 0.8, 0.8, 0.8, 1.0 };
-   const GLfloat backColor[4] = { 1, 1, 0, 0 };
 
    Q = gluNewQuadric();
    gluQuadricNormals(Q, GLU_SMOOTH);
@@ -1266,14 +1261,10 @@ Init(void)
    glEnable(GL_LIGHTING);
    glEnable(GL_LIGHT0);
    glLightfv(GL_LIGHT0, GL_DIFFUSE, lightColor);
-   glMaterialf(GL_FRONT, GL_SHININESS, 40);
-   glMaterialfv(GL_FRONT, GL_SPECULAR, specular);
+   glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 40);
+   glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, specular);
    glEnable(GL_NORMALIZE);
 
-   glMaterialfv(GL_BACK, GL_DIFFUSE, backColor);
-#if 0
-   glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, 1);
-#endif
    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
    InitViewInfo(&View);

@@ -1,4 +1,3 @@
-/* $XFree86: xc/lib/GL/glx/xfont.c,v 1.6 2001/05/02 15:06:02 dawes Exp $ */
 /*
  * Mesa 3-D graphics library
  * Version:  3.1
@@ -34,7 +33,6 @@
   called by that routine when direct rendering is enabled.
 */
 
-#ifdef GLX_DIRECT_RENDERING
 
 #include "glxclient.h"
 
@@ -210,7 +208,8 @@ static XCharStruct *isvalid(XFontStruct *fs, int which)
   return(NULL);
 }
 
-_X_HIDDEN void DRI_glXUseXFont( Font font, int first, int count, int listbase )
+
+void DRI_glXUseXFont( Font font, int first, int count, int listbase )
 {
   GLXContext CC;
   Display *dpy;
@@ -374,4 +373,4 @@ bm_height);
   glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
 }
 
-#endif
+/* The End. */

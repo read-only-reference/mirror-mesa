@@ -30,6 +30,8 @@
 #include "main/state.h"
 #include "main/api_validate.h"
 #include "main/api_noop.h"
+#include "main/varray.h"
+#include "glapi/dispatch.h"
 
 #include "vbo_context.h"
 
@@ -40,7 +42,7 @@ static void get_minmax_index( GLuint count, GLuint type,
 			      GLuint *min_index,
 			      GLuint *max_index)
 {
-   GLint i;
+   GLuint i;
 
    switch(type) {
    case GL_UNSIGNED_INT: {
@@ -105,6 +107,10 @@ static void bind_array_obj( GLcontext *ctx )
    exec->array.legacy_array[VERT_ATTRIB_COLOR1] = &ctx->Array.ArrayObj->SecondaryColor;
    exec->array.legacy_array[VERT_ATTRIB_FOG] = &ctx->Array.ArrayObj->FogCoord;
    exec->array.legacy_array[VERT_ATTRIB_COLOR_INDEX] = &ctx->Array.ArrayObj->Index;
+   if (ctx->Array.ArrayObj->PointSize.Enabled) {
+      /* this aliases COLOR_INDEX */
+      exec->array.legacy_array[VERT_ATTRIB_POINT_SIZE] = &ctx->Array.ArrayObj->PointSize;
+   }
    exec->array.legacy_array[VERT_ATTRIB_EDGEFLAG] = &ctx->Array.ArrayObj->EdgeFlag;
 
    for (i = 0; i < 8; i++)
@@ -398,4 +404,30 @@ void vbo_exec_array_init( struct vbo_exec_context *exec )
 void vbo_exec_array_destroy( struct vbo_exec_context *exec )
 {
    /* nothing to do */
+}
+
+
+/* This API entrypoint is not ordinarily used */
+void GLAPIENTRY
+_mesa_DrawArrays(GLenum mode, GLint first, GLsizei count)
+{
+   vbo_exec_DrawArrays(mode, first, count);
+}
+
+
+/* This API entrypoint is not ordinarily used */
+void GLAPIENTRY
+_mesa_DrawElements(GLenum mode, GLsizei count, GLenum type,
+                   const GLvoid *indices)
+{
+   vbo_exec_DrawElements(mode, count, type, indices);
+}
+
+
+/* This API entrypoint is not ordinarily used */
+void GLAPIENTRY
+_mesa_DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count,
+                        GLenum type, const GLvoid *indices)
+{
+   vbo_exec_DrawRangeElements(mode, start, end, count, type, indices);
 }
