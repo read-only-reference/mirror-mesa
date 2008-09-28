@@ -49,6 +49,7 @@
 #include "st_cb_drawtex.h"
 #endif
 #include "st_cb_fbo.h"
+#include "st_cb_get.h"
 #if FEATURE_feedback
 #include "st_cb_feedback.h"
 #endif
@@ -84,6 +85,19 @@ void st_invalidate_state(GLcontext * ctx, GLuint new_state)
     * No longer use swrast, swsetup, tnl.
     */
    _vbo_InvalidateState(ctx, new_state);
+}
+
+
+/**
+ * Check for multisample env var override.
+ */
+int
+st_get_msaa(void)
+{
+   const char *msaa = _mesa_getenv("__GL_FSAA_MODE");
+   if (msaa)
+      return atoi(msaa);
+   return 0;
 }
 
 
@@ -140,6 +154,8 @@ st_create_context_priv( GLcontext *ctx, struct pipe_context *pipe )
 
    st->pixel_xfer.cache = _mesa_new_program_cache();
 
+   st->force_msaa = st_get_msaa();
+
    /* GL limits and extensions */
    st_init_limits(st);
    st_init_extensions(st);
@@ -187,16 +203,19 @@ static void st_destroy_context_priv( struct st_context *st )
    st_destroy_drawtex(st);
 #endif
 
-   _vbo_DestroyContext(st->ctx);
-
    for (i = 0; i < Elements(st->state.sampler_texture); i++) {
       pipe_texture_reference(&st->state.sampler_texture[i], NULL);
    }
 
    for (i = 0; i < Elements(st->state.constants); i++) {
       if (st->state.constants[i].buffer) {
-         pipe_reference_buffer(st->pipe, &st->state.constants[i].buffer, NULL);
+         pipe_buffer_reference(st->pipe->screen, &st->state.constants[i].buffer, NULL);
       }
+   }
+
+   if (st->default_texture) {
+      st->ctx->Driver.DeleteTexture(st->ctx, st->default_texture);
+      st->default_texture = NULL;
    }
 
    free( st );
@@ -217,16 +236,15 @@ void st_destroy_context( struct st_context *st )
 
    _mesa_delete_program_cache(st->ctx, st->pixel_xfer.cache);
 
+   _vbo_DestroyContext(st->ctx);
+
    _mesa_free_context_data(ctx);
 
    st_destroy_context_priv(st);
 
    cso_destroy_context(cso);
 
-   /* Temporary workaround for mismatched pipe create and pipe destroy */
-#if !defined(PIPE_SUBSYSTEM_WINDOWS_USER) && !defined(PIPE_SUBSYSTEM_WINDOWS_CE)
    pipe->destroy( pipe );
-#endif
 
    free(ctx);
 }
@@ -291,6 +309,7 @@ void st_init_driver_functions(struct dd_function_table *functions)
    st_init_rasterpos_functions(functions);
 #endif
    st_init_fbo_functions(functions);
+   st_init_get_functions(functions);
 #if FEATURE_feedback
    st_init_feedback_functions(functions);
 #endif

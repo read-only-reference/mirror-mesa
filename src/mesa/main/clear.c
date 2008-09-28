@@ -138,7 +138,9 @@ _mesa_Clear( GLbitfield mask )
       return;
    }
 
-   if (ctx->DrawBuffer->Width == 0 || ctx->DrawBuffer->Height == 0)
+   if (ctx->DrawBuffer->Width == 0 || ctx->DrawBuffer->Height == 0 ||
+       ctx->DrawBuffer->_Xmin >= ctx->DrawBuffer->_Xmax ||
+       ctx->DrawBuffer->_Ymin >= ctx->DrawBuffer->_Ymax)
       return;
 
    if (ctx->RenderMode == GL_RENDER) {
@@ -155,7 +157,10 @@ _mesa_Clear( GLbitfield mask )
        */
       bufferMask = 0;
       if (mask & GL_COLOR_BUFFER_BIT) {
-         bufferMask |= ctx->DrawBuffer->_ColorDrawBufferMask[0];
+         GLuint i;
+         for (i = 0; i < ctx->DrawBuffer->_NumColorDrawBuffers; i++) {
+            bufferMask |= (1 << ctx->DrawBuffer->_ColorDrawBufferIndexes[i]);
+         }
       }
 
       if ((mask & GL_DEPTH_BUFFER_BIT)

@@ -260,6 +260,7 @@ emit_fetch(struct spe_function *p,
 
 void cell_update_vertex_fetch(struct draw_context *draw)
 {
+#if 0
    struct cell_context *const cell =
        (struct cell_context *) draw->driver_private;
    struct spe_function *p = &cell->attrib_fetch;
@@ -296,10 +297,9 @@ void cell_update_vertex_fetch(struct draw_context *draw)
 
 
    /* Each fetch function can be a maximum of 34 instructions (note: this is
-    * actually a slight over-estimate).  That means (34 * 4) = 136 bytes
-    * each maximum.
+    * actually a slight over-estimate).
     */
-   spe_init_func(p, 136 * unique_attr_formats);
+   spe_init_func(p, 34 * SPE_INST_SIZE * unique_attr_formats);
 
 
    /* Allocate registers for the function's input parameters.
@@ -337,4 +337,7 @@ void cell_update_vertex_fetch(struct draw_context *draw)
 	     cell->attrib_fetch_offsets[function_index[i]];
       }
    }
+#else
+   assert(0);
+#endif
 }

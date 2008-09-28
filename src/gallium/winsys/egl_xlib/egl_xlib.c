@@ -38,8 +38,8 @@
 #include "pipe/p_compiler.h"
 #include "pipe/p_format.h"
 #include "pipe/p_state.h"
-#include "pipe/p_util.h"
 #include "pipe/p_winsys.h"
+#include "util/u_memory.h"
 #include "softpipe/sp_winsys.h"
 
 #include "eglconfig.h"
@@ -537,7 +537,7 @@ xlib_eglDestroySurface(_EGLDriver *drv, EGLDisplay dpy, EGLSurface surface)
       }
       else {
          XFreeGC(surf->Dpy, surf->Gc);
-         st_unreference_framebuffer(&surf->Framebuffer);
+         st_unreference_framebuffer(surf->Framebuffer);
          free(surf);
       }
       return EGL_TRUE;

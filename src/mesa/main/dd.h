@@ -456,8 +456,8 @@ struct dd_function_table {
     */
    void (*GetCompressedTexImage)(GLcontext *ctx, GLenum target, GLint level,
                                  GLvoid *img,
-                                 const struct gl_texture_object *texObj,
-                                 const struct gl_texture_image *texImage);
+                                 struct gl_texture_object *texObj,
+                                 struct gl_texture_image *texImage);
 
    /**
     * Called to query number of bytes of storage needed to store the
@@ -503,6 +503,11 @@ struct dd_function_table {
     * Called to free tImage->Data.
     */
    void (*FreeTexImageData)( GLcontext *ctx, struct gl_texture_image *tImage );
+
+   /** Map texture image data into user space */
+   void (*MapTexture)( GLcontext *ctx, struct gl_texture_object *tObj );
+   /** Unmap texture images from user space */
+   void (*UnmapTexture)( GLcontext *ctx, struct gl_texture_object *tObj );
 
    /**
     * Note: no context argument.  This function doesn't initially look

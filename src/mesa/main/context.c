@@ -6,9 +6,9 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  6.5
+ * Version:  7.1
  *
- * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -809,7 +809,7 @@ _mesa_init_current(GLcontext *ctx)
    }
 
    /* redo special cases: */
-   ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_WEIGHT], 1.0, 0.0, 0.0, 1.0 );
+   ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_WEIGHT], 1.0, 0.0, 0.0, 0.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_NORMAL], 0.0, 0.0, 1.0, 1.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_COLOR0], 1.0, 1.0, 1.0, 1.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_COLOR1], 0.0, 0.0, 0.0, 1.0 );
@@ -819,11 +819,33 @@ _mesa_init_current(GLcontext *ctx)
 
 
 /**
- * Init vertex/fragment program native limits from logical limits.
+ * Init vertex/fragment program limits.
+ * Important: drivers should override these with actual limits.
  */
 static void
-init_natives(struct gl_program_constants *prog)
+init_program_limits(GLenum type, struct gl_program_constants *prog)
 {
+   prog->MaxInstructions = MAX_PROGRAM_INSTRUCTIONS;
+   prog->MaxAluInstructions = MAX_PROGRAM_INSTRUCTIONS;
+   prog->MaxTexInstructions = MAX_PROGRAM_INSTRUCTIONS;
+   prog->MaxTexIndirections = MAX_PROGRAM_INSTRUCTIONS;
+   prog->MaxTemps = MAX_PROGRAM_TEMPS;
+   prog->MaxEnvParams = MAX_PROGRAM_ENV_PARAMS;
+   prog->MaxLocalParams = MAX_PROGRAM_LOCAL_PARAMS;
+   prog->MaxUniformComponents = 4 * MAX_UNIFORMS;
+
+   if (type == GL_VERTEX_PROGRAM_ARB) {
+      prog->MaxParameters = MAX_NV_VERTEX_PROGRAM_PARAMS;
+      prog->MaxAttribs = MAX_NV_VERTEX_PROGRAM_INPUTS;
+      prog->MaxAddressRegs = MAX_VERTEX_PROGRAM_ADDRESS_REGS;
+   }
+   else {
+      prog->MaxParameters = MAX_NV_FRAGMENT_PROGRAM_PARAMS;
+      prog->MaxAttribs = MAX_NV_FRAGMENT_PROGRAM_INPUTS;
+      prog->MaxAddressRegs = MAX_FRAGMENT_PROGRAM_ADDRESS_REGS;
+   }
+
+   /* copy the above limits to init native limits */
    prog->MaxNativeInstructions = prog->MaxInstructions;
    prog->MaxNativeAluInstructions = prog->MaxAluInstructions;
    prog->MaxNativeTexInstructions = prog->MaxTexInstructions;
@@ -885,33 +907,10 @@ _mesa_init_constants(GLcontext *ctx)
    ctx->Const.MaxViewportWidth = MAX_WIDTH;
    ctx->Const.MaxViewportHeight = MAX_HEIGHT;
 #if FEATURE_ARB_vertex_program
-   ctx->Const.VertexProgram.MaxInstructions = MAX_NV_VERTEX_PROGRAM_INSTRUCTIONS;
-   ctx->Const.VertexProgram.MaxAluInstructions = 0;
-   ctx->Const.VertexProgram.MaxTexInstructions = 0;
-   ctx->Const.VertexProgram.MaxTexIndirections = 0;
-   ctx->Const.VertexProgram.MaxAttribs = MAX_NV_VERTEX_PROGRAM_INPUTS;
-   ctx->Const.VertexProgram.MaxTemps = MAX_PROGRAM_TEMPS;
-   ctx->Const.VertexProgram.MaxParameters = MAX_NV_VERTEX_PROGRAM_PARAMS;
-   ctx->Const.VertexProgram.MaxLocalParams = MAX_PROGRAM_LOCAL_PARAMS;
-   ctx->Const.VertexProgram.MaxEnvParams = MAX_PROGRAM_ENV_PARAMS;
-   ctx->Const.VertexProgram.MaxAddressRegs = MAX_VERTEX_PROGRAM_ADDRESS_REGS;
-   ctx->Const.VertexProgram.MaxUniformComponents = 4 * MAX_UNIFORMS;
-   init_natives(&ctx->Const.VertexProgram);
+   init_program_limits(GL_VERTEX_PROGRAM_ARB, &ctx->Const.VertexProgram);
 #endif
-
 #if FEATURE_ARB_fragment_program
-   ctx->Const.FragmentProgram.MaxInstructions = MAX_NV_FRAGMENT_PROGRAM_INSTRUCTIONS;
-   ctx->Const.FragmentProgram.MaxAluInstructions = MAX_FRAGMENT_PROGRAM_ALU_INSTRUCTIONS;
-   ctx->Const.FragmentProgram.MaxTexInstructions = MAX_FRAGMENT_PROGRAM_TEX_INSTRUCTIONS;
-   ctx->Const.FragmentProgram.MaxTexIndirections = MAX_FRAGMENT_PROGRAM_TEX_INDIRECTIONS;
-   ctx->Const.FragmentProgram.MaxAttribs = MAX_NV_FRAGMENT_PROGRAM_INPUTS;
-   ctx->Const.FragmentProgram.MaxTemps = MAX_PROGRAM_TEMPS;
-   ctx->Const.FragmentProgram.MaxParameters = MAX_NV_FRAGMENT_PROGRAM_PARAMS;
-   ctx->Const.FragmentProgram.MaxLocalParams = MAX_PROGRAM_LOCAL_PARAMS;
-   ctx->Const.FragmentProgram.MaxEnvParams = MAX_PROGRAM_ENV_PARAMS;
-   ctx->Const.FragmentProgram.MaxAddressRegs = MAX_FRAGMENT_PROGRAM_ADDRESS_REGS;
-   ctx->Const.FragmentProgram.MaxUniformComponents = 4 * MAX_UNIFORMS;
-   init_natives(&ctx->Const.FragmentProgram);
+   init_program_limits(GL_FRAGMENT_PROGRAM_ARB, &ctx->Const.FragmentProgram);
 #endif
    ctx->Const.MaxProgramMatrices = MAX_PROGRAM_MATRICES;
    ctx->Const.MaxProgramMatrixStackDepth = MAX_PROGRAM_MATRIX_STACK_DEPTH;
@@ -1064,7 +1063,28 @@ init_attrib_groups(GLcontext *ctx)
    /* Miscellaneous */
    ctx->NewState = _NEW_ALL;
    ctx->ErrorValue = (GLenum) GL_NO_ERROR;
-   ctx->_Facing = 0;
+
+   return GL_TRUE;
+}
+
+
+/**
+ * Update default objects in a GL context with respect to shared state.
+ *
+ * \param ctx GL context.
+ *
+ * Removes references to old default objects, (texture objects, program
+ * objects, etc.) and changes to reference those from the current shared
+ * state.
+ */
+static GLboolean
+update_default_objects(GLcontext *ctx)
+{
+   assert(ctx);
+
+   _mesa_update_default_objects_program(ctx);
+   _mesa_update_default_objects_texture(ctx);
+   _mesa_update_default_objects_buffer_objects(ctx);
 
    return GL_TRUE;
 }
@@ -1214,6 +1234,10 @@ _mesa_initialize_context(GLcontext *ctx,
       ctx->FragmentProgram._MaintainTexEnvProgram = GL_TRUE;
    }
 
+#ifdef FEATURE_extra_context_init
+   _mesa_initialize_context_extra(ctx);
+#endif
+
    ctx->FirstTimeCurrent = GL_TRUE;
 
    return GL_TRUE;
@@ -1270,17 +1294,18 @@ _mesa_create_context(const GLvisual *visual,
 void
 _mesa_free_context_data( GLcontext *ctx )
 {
-   /* if we're destroying the current context, unbind it first */
-   if (ctx == _mesa_get_current_context()) {
-      _mesa_make_current(NULL, NULL, NULL);
+   if (!_mesa_get_current_context()){
+      /* No current context, but we may need one in order to delete
+       * texture objs, etc.  So temporarily bind the context now.
+       */
+      _mesa_make_current(ctx, NULL, NULL);
    }
-   else {
-      /* unreference WinSysDraw/Read buffers */
-      _mesa_unreference_framebuffer(&ctx->WinSysDrawBuffer);
-      _mesa_unreference_framebuffer(&ctx->WinSysReadBuffer);
-      _mesa_unreference_framebuffer(&ctx->DrawBuffer);
-      _mesa_unreference_framebuffer(&ctx->ReadBuffer);
-   }
+
+   /* unreference WinSysDraw/Read buffers */
+   _mesa_unreference_framebuffer(&ctx->WinSysDrawBuffer);
+   _mesa_unreference_framebuffer(&ctx->WinSysReadBuffer);
+   _mesa_unreference_framebuffer(&ctx->DrawBuffer);
+   _mesa_unreference_framebuffer(&ctx->ReadBuffer);
 
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram.Current, NULL);
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current, NULL);
@@ -1290,6 +1315,9 @@ _mesa_free_context_data( GLcontext *ctx )
    _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current, NULL);
    _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._TexEnvProgram, NULL);
 
+#if FEATURE_attrib_stack
+   _mesa_free_attrib_data(ctx);
+#endif
    _mesa_free_lighting_data( ctx );
 #if FEATURE_evaluators
    _mesa_free_eval_data( ctx );
@@ -1327,6 +1355,11 @@ _mesa_free_context_data( GLcontext *ctx )
 
    if (ctx->Extensions.String)
       _mesa_free((void *) ctx->Extensions.String);
+
+   /* unbind the context if it's currently bound */
+   if (ctx == _mesa_get_current_context()) {
+      _mesa_make_current(NULL, NULL, NULL);
+   }
 }
 
 
@@ -1558,8 +1591,6 @@ void
 _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
                     GLframebuffer *readBuffer )
 {
-   GET_CURRENT_CONTEXT(oldCtx);
-
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(newCtx, "_mesa_make_current()\n");
 
@@ -1584,13 +1615,6 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
    _glapi_set_context((void *) newCtx);
    ASSERT(_mesa_get_current_context() == newCtx);
 
-   if (oldCtx) {
-      _mesa_unreference_framebuffer(&oldCtx->WinSysDrawBuffer);
-      _mesa_unreference_framebuffer(&oldCtx->WinSysReadBuffer);
-      _mesa_unreference_framebuffer(&oldCtx->DrawBuffer);
-      _mesa_unreference_framebuffer(&oldCtx->ReadBuffer);
-   }
-         
    if (!newCtx) {
       _glapi_set_dispatch(NULL);  /* none current */
    }
@@ -1610,10 +1634,12 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
           * or not bound to a user-created FBO.
           */
          if (!newCtx->DrawBuffer || newCtx->DrawBuffer->Name == 0) {
-         /* fix up the fb fields - these will end up wrong otherwise
-          * if the DRIdrawable changes, and everything relies on them.
-          * This is a bit messy (same as needed in _mesa_BindFramebufferEXT)
-	  */
+            /* KW: merge conflict here, revisit. 
+             */
+            /* fix up the fb fields - these will end up wrong otherwise
+             * if the DRIdrawable changes, and everything relies on them.
+             * This is a bit messy (same as needed in _mesa_BindFramebufferEXT)
+             */
             unsigned int i;
             GLenum buffers[MAX_DRAW_BUFFERS];
 
@@ -1627,9 +1653,11 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
          }
          if (!newCtx->ReadBuffer || newCtx->ReadBuffer->Name == 0) {
             _mesa_reference_framebuffer(&newCtx->ReadBuffer, readBuffer);
-            _mesa_readbuffer_update_fields(newCtx, newCtx->Pixel.ReadBuffer);
          }
 
+         /* XXX only set this flag if we're really changing the draw/read
+          * framebuffer bindings.
+          */
 	 newCtx->NewState |= _NEW_BUFFERS;
 
 #if 1
@@ -1697,12 +1725,18 @@ GLboolean
 _mesa_share_state(GLcontext *ctx, GLcontext *ctxToShare)
 {
    if (ctx && ctxToShare && ctx->Shared && ctxToShare->Shared) {
-      ctx->Shared->RefCount--;
-      if (ctx->Shared->RefCount == 0) {
-         free_shared_state(ctx, ctx->Shared);
-      }
+      struct gl_shared_state *oldSharedState = ctx->Shared;
+
       ctx->Shared = ctxToShare->Shared;
       ctx->Shared->RefCount++;
+
+      update_default_objects(ctx);
+
+      oldSharedState->RefCount--;
+      if (oldSharedState->RefCount == 0) {
+         free_shared_state(ctx, oldSharedState);
+      }
+
       return GL_TRUE;
    }
    else {

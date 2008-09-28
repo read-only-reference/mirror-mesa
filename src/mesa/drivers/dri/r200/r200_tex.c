@@ -31,18 +31,19 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *   Keith Whitwell <keith@tungstengraphics.com>
  */
 
-#include "glheader.h"
-#include "imports.h"
-#include "colormac.h"
-#include "context.h"
-#include "enums.h"
-#include "image.h"
-#include "simple_list.h"
-#include "texformat.h"
-#include "texstore.h"
+#include "main/glheader.h"
+#include "main/imports.h"
+#include "main/colormac.h"
+#include "main/context.h"
+#include "main/enums.h"
+#include "main/image.h"
+#include "main/simple_list.h"
+#include "main/texformat.h"
+#include "main/texstore.h"
+#include "main/teximage.h"
+#include "main/texobj.h"
+
 #include "texmem.h"
-#include "teximage.h"
-#include "texobj.h"
 
 #include "r200_context.h"
 #include "r200_state.h"
@@ -102,37 +103,39 @@ static void r200SetTexWrap( r200TexObjPtr t, GLenum swrap, GLenum twrap, GLenum 
       _mesa_problem(NULL, "bad S wrap mode in %s", __FUNCTION__);
    }
 
-   switch ( twrap ) {
-   case GL_REPEAT:
-      t->pp_txfilter |= R200_CLAMP_T_WRAP;
-      break;
-   case GL_CLAMP:
-      t->pp_txfilter |= R200_CLAMP_T_CLAMP_GL;
-      is_clamp = GL_TRUE;
-      break;
-   case GL_CLAMP_TO_EDGE:
-      t->pp_txfilter |= R200_CLAMP_T_CLAMP_LAST;
-      break;
-   case GL_CLAMP_TO_BORDER:
-      t->pp_txfilter |= R200_CLAMP_T_CLAMP_GL;
-      is_clamp_to_border = GL_TRUE;
-      break;
-   case GL_MIRRORED_REPEAT:
-      t->pp_txfilter |= R200_CLAMP_T_MIRROR;
-      break;
-   case GL_MIRROR_CLAMP_EXT:
-      t->pp_txfilter |= R200_CLAMP_T_MIRROR_CLAMP_GL;
-      is_clamp = GL_TRUE;
-      break;
-   case GL_MIRROR_CLAMP_TO_EDGE_EXT:
-      t->pp_txfilter |= R200_CLAMP_T_MIRROR_CLAMP_LAST;
-      break;
-   case GL_MIRROR_CLAMP_TO_BORDER_EXT:
-      t->pp_txfilter |= R200_CLAMP_T_MIRROR_CLAMP_GL;
-      is_clamp_to_border = GL_TRUE;
-      break;
-   default:
-      _mesa_problem(NULL, "bad T wrap mode in %s", __FUNCTION__);
+   if (t->base.tObj->Target != GL_TEXTURE_1D) {
+      switch ( twrap ) {
+      case GL_REPEAT:
+         t->pp_txfilter |= R200_CLAMP_T_WRAP;
+         break;
+      case GL_CLAMP:
+         t->pp_txfilter |= R200_CLAMP_T_CLAMP_GL;
+         is_clamp = GL_TRUE;
+         break;
+      case GL_CLAMP_TO_EDGE:
+         t->pp_txfilter |= R200_CLAMP_T_CLAMP_LAST;
+         break;
+      case GL_CLAMP_TO_BORDER:
+         t->pp_txfilter |= R200_CLAMP_T_CLAMP_GL;
+         is_clamp_to_border = GL_TRUE;
+         break;
+      case GL_MIRRORED_REPEAT:
+         t->pp_txfilter |= R200_CLAMP_T_MIRROR;
+         break;
+      case GL_MIRROR_CLAMP_EXT:
+         t->pp_txfilter |= R200_CLAMP_T_MIRROR_CLAMP_GL;
+         is_clamp = GL_TRUE;
+         break;
+      case GL_MIRROR_CLAMP_TO_EDGE_EXT:
+         t->pp_txfilter |= R200_CLAMP_T_MIRROR_CLAMP_LAST;
+         break;
+      case GL_MIRROR_CLAMP_TO_BORDER_EXT:
+         t->pp_txfilter |= R200_CLAMP_T_MIRROR_CLAMP_GL;
+         is_clamp_to_border = GL_TRUE;
+         break;
+      default:
+         _mesa_problem(NULL, "bad T wrap mode in %s", __FUNCTION__);
+      }
    }
 
    t->pp_txformat_x &= ~R200_CLAMP_Q_MASK;

@@ -2522,7 +2522,7 @@ _mesa_texstore_s8_z24(TEXSTORE_PARAMS)
          for (row = 0; row < srcHeight; row++) {
             GLubyte stencil[MAX_WIDTH];
             GLint i;
-            /* the 24 depth bits will be in the high position: */
+            /* the 24 depth bits will be in the low position: */
             _mesa_unpack_depth_span(ctx, srcWidth,
                                     GL_UNSIGNED_INT, /* dst type */
                                     dstRow, /* dst addr */
@@ -2536,7 +2536,7 @@ _mesa_texstore_s8_z24(TEXSTORE_PARAMS)
                                       ctx->_ImageTransferState);
             /* merge stencil values into depth values */
             for (i = 0; i < srcWidth; i++)
-               dstRow[i] = stencil[i] << 24;
+               dstRow[i] |= stencil[i] << 24;
 
             src += srcRowStride;
             dstRow += dstRowStride / sizeof(GLuint);
@@ -3802,8 +3802,8 @@ _mesa_get_teximage(GLcontext *ctx, GLenum target, GLint level,
 void
 _mesa_get_compressed_teximage(GLcontext *ctx, GLenum target, GLint level,
                               GLvoid *img,
-                              const struct gl_texture_object *texObj,
-                              const struct gl_texture_image *texImage)
+                              struct gl_texture_object *texObj,
+                              struct gl_texture_image *texImage)
 {
    GLuint size;
 

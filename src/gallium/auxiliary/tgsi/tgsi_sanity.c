@@ -27,6 +27,7 @@
 
 #include "pipe/p_debug.h"
 #include "tgsi_sanity.h"
+#include "tgsi_info.h"
 #include "tgsi_iterate.h"
 
 #define MAX_REGISTERS 256
@@ -151,6 +152,12 @@ check_register_usage(
 {
    if (!check_file_name( ctx, file ))
       return FALSE;
+
+   if (index < 0 || index > MAX_REGISTERS) {
+      report_error( ctx, "%s[%i]: Invalid index %s", file_names[file], index, name );
+      return FALSE;
+   }
+
    if (indirect_access) {
       if (!is_any_register_declared( ctx, file ))
          report_error( ctx, "%s: Undeclared %s register", file_names[file], name );
@@ -170,15 +177,27 @@ iter_instruction(
    struct tgsi_full_instruction *inst )
 {
    struct sanity_check_ctx *ctx = (struct sanity_check_ctx *) iter;
+   const struct tgsi_opcode_info *info;
    uint i;
 
-   /* There must be no other instructions after END.
-    */
-   if (ctx->index_of_END != ~0) {
-      report_error( ctx, "Unexpected instruction after END" );
-   }
-   else if (inst->Instruction.Opcode == TGSI_OPCODE_END) {
+   if (inst->Instruction.Opcode == TGSI_OPCODE_END) {
+      if (ctx->index_of_END != ~0) {
+         report_error( ctx, "Too many END instructions" );
+      }
       ctx->index_of_END = ctx->num_instructions;
+   }
+
+   info = tgsi_get_opcode_info( inst->Instruction.Opcode );
+   if (info == NULL) {
+      report_error( ctx, "Invalid instruction opcode" );
+      return TRUE;
+   }
+
+   if (info->num_dst != inst->Instruction.NumDstRegs) {
+      report_error( ctx, "Invalid number of destination operands" );
+   }
+   if (info->num_src != inst->Instruction.NumSrcRegs) {
+      report_error( ctx, "Invalid number of source operands" );
    }
 
    /* Check destination and source registers' validity.
@@ -286,10 +305,10 @@ epilog(
    struct sanity_check_ctx *ctx = (struct sanity_check_ctx *) iter;
    uint file;
 
-   /* There must be an END instruction at the end.
+   /* There must be an END instruction somewhere.
     */
-   if (ctx->index_of_END == ~0 || ctx->index_of_END != ctx->num_instructions - 1) {
-      report_error( ctx, "Expected END at end of instruction sequence" );
+   if (ctx->index_of_END == ~0) {
+      report_error( ctx, "Missing END instruction" );
    }
 
    /* Check if all declared registers were used.
@@ -307,7 +326,7 @@ epilog(
    /* Print totals, if any.
     */
    if (ctx->errors || ctx->warnings)
-      debug_printf( "\n%u errors, %u warnings", ctx->errors, ctx->warnings );
+      debug_printf( "%u errors, %u warnings\n", ctx->errors, ctx->warnings );
 
    return TRUE;
 }

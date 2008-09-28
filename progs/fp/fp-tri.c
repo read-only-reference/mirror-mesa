@@ -130,6 +130,8 @@ static void Display(void)
 {
    glClear(GL_COLOR_BUFFER_BIT);
 
+   glProgramLocalParameter4fARB(GL_FRAGMENT_PROGRAM_ARB, 0, 1.0, 1.0, 0.0, 0.0);
+   glProgramLocalParameter4fARB(GL_FRAGMENT_PROGRAM_ARB, 1, 0.0, 0.0, 1.0, 1.0);
    glBegin(GL_TRIANGLES);
    glColor3f(0,0,1);
    glVertex3f( 0.9, -0.9, -30.0);
@@ -154,11 +156,11 @@ int main(int argc, char **argv)
    glutInitWindowPosition(0, 0);
    glutInitWindowSize(250, 250);
    glutInitDisplayMode(GLUT_RGB | GLUT_SINGLE | GLUT_DEPTH);
-   glutCreateWindow(argv[0]);
+   args(argc, argv);
+   glutCreateWindow(filename);
    glutReshapeFunc(Reshape);
    glutKeyboardFunc(Key);
    glutDisplayFunc(Display);
-   args(argc, argv);
    Init();
    if (show_fps) {
       signal(SIGALRM, alarmhandler);

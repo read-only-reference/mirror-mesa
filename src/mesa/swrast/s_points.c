@@ -27,7 +27,7 @@
 #include "main/colormac.h"
 #include "main/context.h"
 #include "main/macros.h"
-#include "texstate.h"
+#include "main/texstate.h"
 #include "s_context.h"
 #include "s_feedback.h"
 #include "s_points.h"
@@ -44,6 +44,38 @@
       if (IS_INF_OR_NAN(tmp))                        \
 	 return;                                     \
    } while(0)
+
+
+
+/**
+ * Get/compute the point size.
+ * The size may come from a vertex shader, or computed with attentuation
+ * or just the glPointSize value.
+ * Must also clamp to user-defined range and implmentation limits.
+ */
+static INLINE GLfloat
+get_size(const GLcontext *ctx, const SWvertex *vert, GLboolean smoothed)
+{
+   GLfloat size;
+
+   if (ctx->Point._Attenuated || ctx->VertexProgram.PointSizeEnabled) {
+      /* use vertex's point size */
+      size = vert->pointSize;
+   }
+   else {
+      /* use constant point size */
+      size = ctx->Point.Size;
+   }
+   /* always clamp to user-specified limits */
+   size = CLAMP(size, ctx->Point.MinSize, ctx->Point.MaxSize);
+   /* clamp to implementation limits */
+   if (smoothed)
+      size = CLAMP(size, ctx->Const.MinPointSizeAA, ctx->Const.MaxPointSizeAA);
+   else
+      size = CLAMP(size, ctx->Const.MinPointSize, ctx->Const.MaxPointSize);
+
+   return size;
+}
 
 
 /**
@@ -68,22 +100,13 @@ sprite_point(GLcontext *ctx, const SWvertex *vert)
       span.z = (GLuint) (vert->attrib[FRAG_ATTRIB_WPOS][2] + 0.5F);
    span.zStep = 0;
 
-   /* compute size */
-   if (ctx->Point._Attenuated || ctx->VertexProgram.PointSizeEnabled) {
-      /* use vertex's point size */
-      /* first, clamp attenuated size to the user-specifed range */
-      size = CLAMP(vert->pointSize, ctx->Point.MinSize, ctx->Point.MaxSize);
-   }
-   else {
-      /* use constant point size */
-      size = ctx->Point.Size;
-   }
-   /* clamp to non-AA implementation limits */
-   size = CLAMP(size, ctx->Const.MinPointSize, ctx->Const.MaxPointSize);
+   size = get_size(ctx, vert, GL_FALSE);
 
    /* span init */
    INIT_SPAN(span, GL_POINT);
    span.interpMask = SPAN_Z | SPAN_RGBA;
+
+   span.facing = swrast->PointLineFacing;
 
    span.red   = ChanToFixed(vert->color[0]);
    span.green = ChanToFixed(vert->color[1]);
@@ -186,9 +209,10 @@ sprite_point(GLcontext *ctx, const SWvertex *vert)
       }
       else {
          /* even size */
-         xmin = (GLint) x - iRadius + 1;
+         /* 0.501 factor allows conformance to pass */
+         xmin = (GLint) (x + 0.501) - iRadius;
          xmax = xmin + iSize - 1;
-         ymin = (GLint) y - iRadius + 1;
+         ymin = (GLint) (y + 0.501) - iRadius;
          ymax = ymin + iSize - 1;
       }
 
@@ -236,18 +260,7 @@ smooth_point(GLcontext *ctx, const SWvertex *vert)
       span.z = (GLuint) (vert->attrib[FRAG_ATTRIB_WPOS][2] + 0.5F);
    span.zStep = 0;
 
-   /* compute size */
-   if (ctx->Point._Attenuated || ctx->VertexProgram.PointSizeEnabled) {
-      /* use vertex's point size */
-      /* first, clamp attenuated size to the user-specifed range */
-      size = CLAMP(vert->pointSize, ctx->Point.MinSize, ctx->Point.MaxSize);
-   }
-   else {
-      /* use constant point size */
-      size = ctx->Point.Size;
-   }
-   /* clamp to AA implementation limits */
-   size = CLAMP(size, ctx->Const.MinPointSizeAA, ctx->Const.MaxPointSizeAA);
+   size = get_size(ctx, vert, GL_TRUE);
 
    /* alpha attenuation / fade factor */
    if (ctx->Multisample._Enabled) {
@@ -268,6 +281,8 @@ smooth_point(GLcontext *ctx, const SWvertex *vert)
    INIT_SPAN(span, GL_POINT);
    span.interpMask = SPAN_Z | SPAN_RGBA;
    span.arrayMask = SPAN_COVERAGE | SPAN_MASK;
+
+   span.facing = swrast->PointLineFacing;
 
    span.red   = ChanToFixed(vert->color[0]);
    span.green = ChanToFixed(vert->color[1]);
@@ -370,22 +385,12 @@ large_point(GLcontext *ctx, const SWvertex *vert)
       span.z = (GLuint) (vert->attrib[FRAG_ATTRIB_WPOS][2] + 0.5F);
    span.zStep = 0;
 
-   /* compute size */
-   if (ctx->Point._Attenuated || ctx->VertexProgram.PointSizeEnabled) {
-      /* use vertex's point size */
-      /* first, clamp attenuated size to the user-specifed range */
-      size = CLAMP(vert->pointSize, ctx->Point.MinSize, ctx->Point.MaxSize);
-   }
-   else {
-      /* use constant point size */
-      size = ctx->Point.Size;
-   }
-   /* clamp to non-AA implementation limits */
-   size = CLAMP(size, ctx->Const.MinPointSize, ctx->Const.MaxPointSize);
+   size = get_size(ctx, vert, GL_FALSE);
 
    /* span init */
    INIT_SPAN(span, GL_POINT);
    span.arrayMask = SPAN_XY;
+   span.facing = swrast->PointLineFacing;
 
    if (ciMode) {
       span.interpMask = SPAN_Z | SPAN_INDEX;
@@ -435,9 +440,10 @@ large_point(GLcontext *ctx, const SWvertex *vert)
       }
       else {
          /* even size */
-         xmin = (GLint) x - iRadius + 1;
+         /* 0.501 factor allows conformance to pass */
+         xmin = (GLint) (x + 0.501) - iRadius;
          xmax = xmin + iSize - 1;
-         ymin = (GLint) y - iRadius + 1;
+         ymin = (GLint) (y + 0.501) - iRadius;
          ymax = ymin + iSize - 1;
       }
 
@@ -491,15 +497,20 @@ pixel_point(GLcontext *ctx, const SWvertex *vert)
 
    /* check if we need to flush */
    if (span->end >= MAX_WIDTH ||
-       (swrast->_RasterMask & (BLEND_BIT | LOGIC_OP_BIT | MASKING_BIT))) {
-      if (ciMode)
-         _swrast_write_index_span(ctx, span);
-      else
-         _swrast_write_rgba_span(ctx, span);
-      span->end = 0;
+       (swrast->_RasterMask & (BLEND_BIT | LOGIC_OP_BIT | MASKING_BIT)) ||
+       span->facing != swrast->PointLineFacing) {
+      if (span->end > 0) {
+         if (ciMode)
+            _swrast_write_index_span(ctx, span);
+         else
+            _swrast_write_rgba_span(ctx, span);
+         span->end = 0;
+      }
    }
 
    count = span->end;
+
+   span->facing = swrast->PointLineFacing;
 
    /* fragment attributes */
    if (ciMode) {

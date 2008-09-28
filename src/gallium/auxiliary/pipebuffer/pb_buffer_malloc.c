@@ -35,7 +35,7 @@
 
 
 #include "pipe/p_debug.h"
-#include "pipe/p_util.h"
+#include "util/u_memory.h"
 #include "pb_buffer.h"
 #include "pb_bufmgr.h"
 
@@ -129,11 +129,18 @@ pb_malloc_buffer_create(size_t size,
 
 
 static struct pb_buffer *
-pb_malloc_buffer_create_buffer(struct pb_manager *mgr, 
+pb_malloc_bufmgr_create_buffer(struct pb_manager *mgr, 
                                size_t size,
                                const struct pb_desc *desc) 
 {
    return pb_malloc_buffer_create(size, desc);
+}
+
+
+static void
+pb_malloc_bufmgr_flush(struct pb_manager *mgr) 
+{
+   /* No-op */
 }
 
 
@@ -146,8 +153,9 @@ pb_malloc_bufmgr_destroy(struct pb_manager *mgr)
 
 static struct pb_manager 
 pb_malloc_bufmgr = {
-   pb_malloc_buffer_create_buffer,
-   pb_malloc_bufmgr_destroy
+   pb_malloc_bufmgr_destroy,
+   pb_malloc_bufmgr_create_buffer,
+   pb_malloc_bufmgr_flush
 };
 
 

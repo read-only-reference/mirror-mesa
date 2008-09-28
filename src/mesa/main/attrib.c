@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.1
+ * Version:  7.2
  *
- * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2008  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -53,8 +53,26 @@
 #include "texobj.h"
 #include "texparam.h"
 #include "texstate.h"
+#include "varray.h"
 #include "mtypes.h"
 #include "math/m_xform.h"
+
+/**
+ * Special struct for saving/restoring texture state (GL_TEXTURE_BIT)
+ */
+struct texture_state
+{
+   struct gl_texture_attrib Texture;  /**< The usual context state */
+
+   /** to save per texture object state (wrap modes, filters, etc): */
+   struct gl_texture_object SavedObj[MAX_TEXTURE_UNITS][NUM_TEXTURE_TARGETS];
+
+   /**
+    * To save references to texture objects (so they don't get accidentally
+    * deleted while saved in the attribute stack).
+    */
+   struct gl_texture_object *SavedTexRef[MAX_TEXTURE_UNITS][NUM_TEXTURE_TARGETS];
+};
 
 
 /**
@@ -345,47 +363,61 @@ _mesa_PushAttrib(GLbitfield mask)
    }
 
    if (mask & GL_TEXTURE_BIT) {
-      struct gl_texture_attrib *attr;
+      struct texture_state *texstate = CALLOC_STRUCT(texture_state);
       GLuint u;
 
-      _mesa_lock_context_textures(ctx);
-      /* Bump the texture object reference counts so that they don't
-       * inadvertantly get deleted.
-       */
-      for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-	 ctx->Texture.Unit[u].Current1D->RefCount++;
-	 ctx->Texture.Unit[u].Current2D->RefCount++;
-	 ctx->Texture.Unit[u].Current3D->RefCount++;
-	 ctx->Texture.Unit[u].CurrentCubeMap->RefCount++;
-	 ctx->Texture.Unit[u].CurrentRect->RefCount++;
-	 ctx->Texture.Unit[u].Current1DArray->RefCount++;
-	 ctx->Texture.Unit[u].Current2DArray->RefCount++;
+      if (!texstate) {
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glPushAttrib(GL_TEXTURE_BIT)");
+         goto end;
       }
 
-      attr = MALLOC_STRUCT( gl_texture_attrib );
-      MEMCPY( attr, &ctx->Texture, sizeof(struct gl_texture_attrib) );
-      /* copy state of the currently bound texture objects */
+      _mesa_lock_context_textures(ctx);
+
+      /* copy/save the bulk of texture state here */
+      _mesa_memcpy(&texstate->Texture, &ctx->Texture, sizeof(ctx->Texture));
+
+      /* Save references to the currently bound texture objects so they don't
+       * accidentally get deleted while referenced in the attribute stack.
+       */
       for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-         _mesa_copy_texture_object(&attr->Unit[u].Saved1D,
-                                   attr->Unit[u].Current1D);
-         _mesa_copy_texture_object(&attr->Unit[u].Saved2D,
-                                   attr->Unit[u].Current2D);
-         _mesa_copy_texture_object(&attr->Unit[u].Saved3D,
-                                   attr->Unit[u].Current3D);
-         _mesa_copy_texture_object(&attr->Unit[u].SavedCubeMap,
-                                   attr->Unit[u].CurrentCubeMap);
-         _mesa_copy_texture_object(&attr->Unit[u].SavedRect,
-                                   attr->Unit[u].CurrentRect);
-         _mesa_copy_texture_object(&attr->Unit[u].Saved1DArray,
-                                   attr->Unit[u].Current1DArray);
-         _mesa_copy_texture_object(&attr->Unit[u].Saved2DArray,
-                                   attr->Unit[u].Current2DArray);
+         _mesa_reference_texobj(&texstate->SavedTexRef[u][TEXTURE_1D_INDEX],
+                                ctx->Texture.Unit[u].Current1D);
+         _mesa_reference_texobj(&texstate->SavedTexRef[u][TEXTURE_2D_INDEX],
+                                ctx->Texture.Unit[u].Current2D);
+         _mesa_reference_texobj(&texstate->SavedTexRef[u][TEXTURE_3D_INDEX],
+                                ctx->Texture.Unit[u].Current3D);
+         _mesa_reference_texobj(&texstate->SavedTexRef[u][TEXTURE_CUBE_INDEX],
+                                ctx->Texture.Unit[u].CurrentCubeMap);
+         _mesa_reference_texobj(&texstate->SavedTexRef[u][TEXTURE_RECT_INDEX],
+                                ctx->Texture.Unit[u].CurrentRect);
+         _mesa_reference_texobj(&texstate->SavedTexRef[u][TEXTURE_1D_ARRAY_INDEX],
+                                ctx->Texture.Unit[u].Current1DArray);
+         _mesa_reference_texobj(&texstate->SavedTexRef[u][TEXTURE_2D_ARRAY_INDEX],
+                                ctx->Texture.Unit[u].Current2DArray);
+      }
+
+      /* copy state/contents of the currently bound texture objects */
+      for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
+         _mesa_copy_texture_object(&texstate->SavedObj[u][TEXTURE_1D_INDEX],
+                                   ctx->Texture.Unit[u].Current1D);
+         _mesa_copy_texture_object(&texstate->SavedObj[u][TEXTURE_2D_INDEX],
+                                   ctx->Texture.Unit[u].Current2D);
+         _mesa_copy_texture_object(&texstate->SavedObj[u][TEXTURE_3D_INDEX],
+                                   ctx->Texture.Unit[u].Current3D);
+         _mesa_copy_texture_object(&texstate->SavedObj[u][TEXTURE_CUBE_INDEX],
+                                   ctx->Texture.Unit[u].CurrentCubeMap);
+         _mesa_copy_texture_object(&texstate->SavedObj[u][TEXTURE_RECT_INDEX],
+                                   ctx->Texture.Unit[u].CurrentRect);
+         _mesa_copy_texture_object(&texstate->SavedObj[u][TEXTURE_1D_ARRAY_INDEX],
+                                   ctx->Texture.Unit[u].Current1DArray);
+         _mesa_copy_texture_object(&texstate->SavedObj[u][TEXTURE_2D_ARRAY_INDEX],
+                                   ctx->Texture.Unit[u].Current2DArray);
       }
 
       _mesa_unlock_context_textures(ctx);
 
       newnode = new_attrib_node( GL_TEXTURE_BIT );
-      newnode->data = attr;
+      newnode->data = texstate;
       newnode->next = head;
       head = newnode;
    }
@@ -421,6 +453,7 @@ _mesa_PushAttrib(GLbitfield mask)
       head = newnode;
    }
 
+end:
    ctx->AttribStack[ctx->AttribStackDepth] = head;
    ctx->AttribStackDepth++;
 }
@@ -630,14 +663,19 @@ pop_enable_group(GLcontext *ctx, const struct gl_enable_attrib *enable)
 }
 
 
+/**
+ * Pop/restore texture attribute/group state.
+ */
 static void
-pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
+pop_texture_group(GLcontext *ctx, struct texture_state *texstate)
 {
    GLuint u;
 
+   _mesa_lock_context_textures(ctx);
+
    for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-      const struct gl_texture_unit *unit = &texAttrib->Unit[u];
-      GLuint i;
+      const struct gl_texture_unit *unit = &texstate->Texture.Unit[u];
+      GLuint tgt;
 
       _mesa_ActiveTextureARB(GL_TEXTURE0_ARB + u);
       _mesa_set_enable(ctx, GL_TEXTURE_1D,
@@ -730,52 +768,32 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
                        1 << unit->Combine.ScaleShiftA);
       }
 
-      /* Restore texture object state */
-      for (i = 0; i < NUM_TEXTURE_TARGETS; i++) {
-         GLenum target = 0;
+      /* Restore texture object state for each target */
+      for (tgt = 0; tgt < NUM_TEXTURE_TARGETS; tgt++) {
          const struct gl_texture_object *obj = NULL;
          GLfloat bordColor[4];
+         GLenum target;
 
-         switch (i) {
-         case 0:
-            target = GL_TEXTURE_1D;
-            obj = &unit->Saved1D;
-            break;
-         case 1:
-            target = GL_TEXTURE_2D;
-            obj = &unit->Saved2D;
-            break;
-         case 2:
-            target = GL_TEXTURE_3D;
-            obj = &unit->Saved3D;
-            break;
-         case 3:
-            if (!ctx->Extensions.ARB_texture_cube_map)
-               continue;
-            target = GL_TEXTURE_CUBE_MAP_ARB;
-            obj = &unit->SavedCubeMap;
-            break;
-         case 4:
-            if (!ctx->Extensions.NV_texture_rectangle)
-               continue;
-            target = GL_TEXTURE_RECTANGLE_NV;
-            obj = &unit->SavedRect;
-            break;
-         case 5:
-            if (!ctx->Extensions.MESA_texture_array)
-               continue;
-            target = GL_TEXTURE_1D_ARRAY_EXT;
-            obj = &unit->Saved1DArray;
-            break;
-         case 6:
-            if (!ctx->Extensions.MESA_texture_array)
-               continue;
-            target = GL_TEXTURE_2D_ARRAY_EXT;
-            obj = &unit->Saved2DArray;
-            break;
-         default:
-            ; /* silence warnings */
+         obj = &texstate->SavedObj[u][tgt];
+
+         /* don't restore state for unsupported targets to prevent
+          * raising GL errors.
+          */
+         if (obj->Target == GL_TEXTURE_CUBE_MAP_ARB &&
+             !ctx->Extensions.ARB_texture_cube_map) {
+            continue;
          }
+         else if (obj->Target == GL_TEXTURE_RECTANGLE_NV &&
+                  !ctx->Extensions.NV_texture_rectangle) {
+            continue;
+         }
+         else if ((obj->Target == GL_TEXTURE_1D_ARRAY_EXT ||
+                   obj->Target == GL_TEXTURE_2D_ARRAY_EXT) &&
+                  !ctx->Extensions.MESA_texture_array) {
+            continue;
+         }
+
+         target = obj->Target;
 
          _mesa_BindTexture(target, obj->Name);
 
@@ -784,8 +802,8 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
          bordColor[2] = CHAN_TO_FLOAT(obj->BorderColor[2]);
          bordColor[3] = CHAN_TO_FLOAT(obj->BorderColor[3]);
 
-         _mesa_TexParameterf(target, GL_TEXTURE_PRIORITY, obj->Priority);
          _mesa_TexParameterfv(target, GL_TEXTURE_BORDER_COLOR, bordColor);
+         _mesa_TexParameterf(target, GL_TEXTURE_PRIORITY, obj->Priority);
          _mesa_TexParameteri(target, GL_TEXTURE_WRAP_S, obj->WrapS);
          _mesa_TexParameteri(target, GL_TEXTURE_WRAP_T, obj->WrapT);
          _mesa_TexParameteri(target, GL_TEXTURE_WRAP_R, obj->WrapR);
@@ -811,25 +829,17 @@ pop_texture_group(GLcontext *ctx, const struct gl_texture_attrib *texAttrib)
             _mesa_TexParameterf(target, GL_SHADOW_AMBIENT_SGIX,
                                 obj->ShadowAmbient);
          }
+      }
 
+      /* remove saved references to the texture objects */
+      for (tgt = 0; tgt < NUM_TEXTURE_TARGETS; tgt++) {
+         _mesa_reference_texobj(&texstate->SavedTexRef[u][tgt], NULL);
       }
    }
-   _mesa_ActiveTextureARB(GL_TEXTURE0_ARB
-                          + texAttrib->CurrentUnit);
 
-   /* "un-bump" the texture object reference counts.  We did that so they
-    * wouldn't inadvertantly get deleted while they were still referenced
-    * inside the attribute state stack.
-    */
-   for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
-      ctx->Texture.Unit[u].Current1D->RefCount--;
-      ctx->Texture.Unit[u].Current2D->RefCount--;
-      ctx->Texture.Unit[u].Current3D->RefCount--;
-      ctx->Texture.Unit[u].CurrentCubeMap->RefCount--;
-      ctx->Texture.Unit[u].CurrentRect->RefCount--;
-      ctx->Texture.Unit[u].Current1DArray->RefCount--;
-      ctx->Texture.Unit[u].Current2DArray->RefCount--;
-   }
+   _mesa_ActiveTextureARB(GL_TEXTURE0_ARB + texstate->Texture.CurrentUnit);
+
+   _mesa_unlock_context_textures(ctx);
 }
 
 
@@ -1098,8 +1108,9 @@ _mesa_PopAttrib(void)
                                    (GLint) point->CoordReplace[u]);
                   }
                   _mesa_set_enable(ctx, GL_POINT_SPRITE_NV,point->PointSprite);
-                  _mesa_PointParameteri(GL_POINT_SPRITE_R_MODE_NV,
-                                        ctx->Point.SpriteRMode);
+                  if (ctx->Extensions.NV_point_sprite)
+                     _mesa_PointParameteri(GL_POINT_SPRITE_R_MODE_NV,
+                                           ctx->Point.SpriteRMode);
                   _mesa_PointParameterf(GL_POINT_SPRITE_COORD_ORIGIN,
                                         (GLfloat)ctx->Point.SpriteOrigin);
                }
@@ -1208,9 +1219,9 @@ _mesa_PopAttrib(void)
          case GL_TEXTURE_BIT:
             /* Take care of texture object reference counters */
             {
-               const struct gl_texture_attrib *texture;
-               texture = (const struct gl_texture_attrib *) attr->data;
-               pop_texture_group(ctx, texture);
+               struct texture_state *texstate
+                  = (struct texture_state *) attr->data;
+               pop_texture_group(ctx, texstate);
 	       ctx->NewState |= _NEW_TEXTURE;
             }
             break;
@@ -1269,6 +1280,29 @@ adjust_buffer_object_ref_counts(struct gl_array_attrib *array, GLint step)
 }
 
 
+/**
+ * Copy gl_pixelstore_attrib from src to dst, updating buffer
+ * object refcounts.
+ */
+static void
+copy_pixelstore(GLcontext *ctx,
+                struct gl_pixelstore_attrib *dst,
+                const struct gl_pixelstore_attrib *src)
+{
+   dst->Alignment = src->Alignment;
+   dst->RowLength = src->RowLength;
+   dst->SkipPixels = src->SkipPixels;
+   dst->SkipRows = src->SkipRows;
+   dst->ImageHeight = src->ImageHeight;
+   dst->SkipImages = src->SkipImages;
+   dst->SwapBytes = src->SwapBytes;
+   dst->LsbFirst = src->LsbFirst;
+   dst->ClientStorage = src->ClientStorage;
+   dst->Invert = src->Invert;
+   _mesa_reference_buffer_object(ctx, &dst->BufferObj, src->BufferObj);
+}
+
+
 #define GL_CLIENT_PACK_BIT (1<<20)
 #define GL_CLIENT_UNPACK_BIT (1<<21)
 
@@ -1287,31 +1321,29 @@ _mesa_PushClientAttrib(GLbitfield mask)
       return;
    }
 
-   /* Build linked list of attribute nodes which save all attribute */
-   /* groups specified by the mask. */
+   /* Build linked list of attribute nodes which save all attribute
+    * groups specified by the mask.
+    */
    head = NULL;
 
    if (mask & GL_CLIENT_PIXEL_STORE_BIT) {
       struct gl_pixelstore_attrib *attr;
-#if FEATURE_EXT_pixel_buffer_object
-      ctx->Pack.BufferObj->RefCount++;
-      ctx->Unpack.BufferObj->RefCount++;
-#endif
       /* packing attribs */
-      attr = MALLOC_STRUCT( gl_pixelstore_attrib );
-      MEMCPY( attr, &ctx->Pack, sizeof(struct gl_pixelstore_attrib) );
+      attr = CALLOC_STRUCT( gl_pixelstore_attrib );
+      copy_pixelstore(ctx, attr, &ctx->Pack);
       newnode = new_attrib_node( GL_CLIENT_PACK_BIT );
       newnode->data = attr;
       newnode->next = head;
       head = newnode;
       /* unpacking attribs */
-      attr = MALLOC_STRUCT( gl_pixelstore_attrib );
-      MEMCPY( attr, &ctx->Unpack, sizeof(struct gl_pixelstore_attrib) );
+      attr = CALLOC_STRUCT( gl_pixelstore_attrib );
+      copy_pixelstore(ctx, attr, &ctx->Unpack);
       newnode = new_attrib_node( GL_CLIENT_UNPACK_BIT );
       newnode->data = attr;
       newnode->next = head;
       head = newnode;
    }
+
    if (mask & GL_CLIENT_VERTEX_ARRAY_BIT) {
       struct gl_array_attrib *attr;
       struct gl_array_object *obj;
@@ -1348,7 +1380,7 @@ _mesa_PushClientAttrib(GLbitfield mask)
 void GLAPIENTRY
 _mesa_PopClientAttrib(void)
 {
-   struct gl_attrib_node *attr, *next;
+   struct gl_attrib_node *node, *next;
 
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
@@ -1359,43 +1391,39 @@ _mesa_PopClientAttrib(void)
    }
 
    ctx->ClientAttribStackDepth--;
-   attr = ctx->ClientAttribStack[ctx->ClientAttribStackDepth];
+   node = ctx->ClientAttribStack[ctx->ClientAttribStackDepth];
 
-   while (attr) {
-      switch (attr->kind) {
+   while (node) {
+      switch (node->kind) {
          case GL_CLIENT_PACK_BIT:
-#if FEATURE_EXT_pixel_buffer_object
-            ctx->Pack.BufferObj->RefCount--;
-            if (ctx->Pack.BufferObj->RefCount <= 0) {
-               _mesa_remove_buffer_object( ctx, ctx->Pack.BufferObj );
-               (*ctx->Driver.DeleteBuffer)( ctx, ctx->Pack.BufferObj );
+            {
+               struct gl_pixelstore_attrib *store =
+                  (struct gl_pixelstore_attrib *) node->data;
+               copy_pixelstore(ctx, &ctx->Pack, store);
+               _mesa_reference_buffer_object(ctx, &store->BufferObj, NULL);
             }
-#endif
-            MEMCPY( &ctx->Pack, attr->data,
-                    sizeof(struct gl_pixelstore_attrib) );
 	    ctx->NewState |= _NEW_PACKUNPACK;
             break;
          case GL_CLIENT_UNPACK_BIT:
-#if FEATURE_EXT_pixel_buffer_object
-            ctx->Unpack.BufferObj->RefCount--;
-            if (ctx->Unpack.BufferObj->RefCount <= 0) {
-               _mesa_remove_buffer_object( ctx, ctx->Unpack.BufferObj );
-               (*ctx->Driver.DeleteBuffer)( ctx, ctx->Unpack.BufferObj );
+            {
+               struct gl_pixelstore_attrib *store =
+                  (struct gl_pixelstore_attrib *) node->data;
+               copy_pixelstore(ctx, &ctx->Unpack, store);
+               _mesa_reference_buffer_object(ctx, &store->BufferObj, NULL);
             }
-#endif
-            MEMCPY( &ctx->Unpack, attr->data,
-                    sizeof(struct gl_pixelstore_attrib) );
 	    ctx->NewState |= _NEW_PACKUNPACK;
             break;
          case GL_CLIENT_VERTEX_ARRAY_BIT: {
 	    struct gl_array_attrib * data =
-	      (struct gl_array_attrib *) attr->data;
+	      (struct gl_array_attrib *) node->data;
 
             adjust_buffer_object_ref_counts(&ctx->Array, -1);
 	 
             ctx->Array.ActiveTexture = data->ActiveTexture;
-	    ctx->Array.LockFirst = data->LockFirst;
-	    ctx->Array.LockCount = data->LockCount;
+	    if (data->LockCount != 0)
+	       _mesa_LockArraysEXT(data->LockFirst, data->LockCount);
+	    else if (ctx->Array.LockCount)
+	       _mesa_UnlockArraysEXT();
 
 	    _mesa_BindVertexArrayAPPLE( data->ArrayObj->Name );
 	    
@@ -1424,10 +1452,46 @@ _mesa_PopClientAttrib(void)
             break;
       }
 
-      next = attr->next;
-      FREE( attr->data );
-      FREE( attr );
-      attr = next;
+      next = node->next;
+      FREE( node->data );
+      FREE( node );
+      node = next;
+   }
+}
+
+
+/**
+ * Free any attribute state data that might be attached to the context.
+ */
+void
+_mesa_free_attrib_data(GLcontext *ctx)
+{
+   while (ctx->AttribStackDepth > 0) {
+      struct gl_attrib_node *attr, *next;
+
+      ctx->AttribStackDepth--;
+      attr = ctx->AttribStack[ctx->AttribStackDepth];
+
+      while (attr) {
+         if (attr->kind == GL_TEXTURE_BIT) {
+            struct texture_state *texstate = (struct texture_state*)attr->data;
+            GLuint u, tgt;
+            /* clear references to the saved texture objects */
+            for (u = 0; u < ctx->Const.MaxTextureUnits; u++) {
+               for (tgt = 0; tgt < NUM_TEXTURE_TARGETS; tgt++) {
+                  _mesa_reference_texobj(&texstate->SavedTexRef[u][tgt], NULL);
+               }
+            }
+         }
+         else {
+            /* any other chunks of state that requires special handling? */
+         }
+
+         next = attr->next;
+         _mesa_free(attr->data);
+         _mesa_free(attr);
+         attr = next;
+      }
    }
 }
 

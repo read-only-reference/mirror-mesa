@@ -121,6 +121,43 @@ _mesa_free_program_data(GLcontext *ctx)
 
 
 /**
+ * Update the default program objects in the given context to reference those
+ * specified in the shared state and release those referencing the old
+ * shared state.
+ */
+void
+_mesa_update_default_objects_program(GLcontext *ctx)
+{
+#if FEATURE_NV_vertex_program || FEATURE_ARB_vertex_program
+   _mesa_reference_vertprog(ctx, &ctx->VertexProgram.Current,
+                            (struct gl_vertex_program *)
+                            ctx->Shared->DefaultVertexProgram);
+   assert(ctx->VertexProgram.Current);
+#endif
+
+#if FEATURE_NV_fragment_program || FEATURE_ARB_fragment_program
+   _mesa_reference_fragprog(ctx, &ctx->FragmentProgram.Current,
+                            (struct gl_fragment_program *)
+                            ctx->Shared->DefaultFragmentProgram);
+   assert(ctx->FragmentProgram.Current);
+#endif
+
+   /* XXX probably move this stuff */
+#if FEATURE_ATI_fragment_shader
+   if (ctx->ATIFragmentShader.Current) {
+      ctx->ATIFragmentShader.Current->RefCount--;
+      if (ctx->ATIFragmentShader.Current->RefCount <= 0) {
+         _mesa_free(ctx->ATIFragmentShader.Current);
+      }
+   }
+   ctx->ATIFragmentShader.Current = (struct ati_fragment_shader *) ctx->Shared->DefaultFragmentShader;
+   assert(ctx->ATIFragmentShader.Current);
+   ctx->ATIFragmentShader.Current->RefCount++;
+#endif
+}
+
+
+/**
  * Set the vertex/fragment program error state (position and error string).
  * This is generally called from within the parsers.
  */
@@ -211,7 +248,7 @@ struct gl_program *
 _mesa_init_fragment_program( GLcontext *ctx, struct gl_fragment_program *prog,
                              GLenum target, GLuint id)
 {
-   if (prog) 
+   if (prog)
       return _mesa_init_program_struct( ctx, &prog->Base, target, id );
    else
       return NULL;
@@ -225,7 +262,7 @@ struct gl_program *
 _mesa_init_vertex_program( GLcontext *ctx, struct gl_vertex_program *prog,
                            GLenum target, GLuint id)
 {
-   if (prog) 
+   if (prog)
       return _mesa_init_program_struct( ctx, &prog->Base, target, id );
    else
       return NULL;
@@ -238,7 +275,7 @@ _mesa_init_vertex_program( GLcontext *ctx, struct gl_vertex_program *prog,
  * ctx->Driver.NewProgram.  May be overridden (ie. replaced) by a
  * device driver function to implement OO deriviation with additional
  * types not understood by this function.
- * 
+ *
  * \param ctx  context
  * \param id   program id/number
  * \param target  program target/type
@@ -247,19 +284,23 @@ _mesa_init_vertex_program( GLcontext *ctx, struct gl_vertex_program *prog,
 struct gl_program *
 _mesa_new_program(GLcontext *ctx, GLenum target, GLuint id)
 {
+   struct gl_program *prog;
    switch (target) {
    case GL_VERTEX_PROGRAM_ARB: /* == GL_VERTEX_PROGRAM_NV */
-      return _mesa_init_vertex_program(ctx, CALLOC_STRUCT(gl_vertex_program),
+      prog = _mesa_init_vertex_program(ctx, CALLOC_STRUCT(gl_vertex_program),
                                        target, id );
+      break;
    case GL_FRAGMENT_PROGRAM_NV:
    case GL_FRAGMENT_PROGRAM_ARB:
-      return _mesa_init_fragment_program(ctx,
+      prog =_mesa_init_fragment_program(ctx,
                                          CALLOC_STRUCT(gl_fragment_program),
                                          target, id );
+      break;
    default:
       _mesa_problem(ctx, "bad target in _mesa_new_program");
-      return NULL;
+      prog = NULL;
    }
+   return prog;
 }
 
 
@@ -278,7 +319,7 @@ _mesa_delete_program(GLcontext *ctx, struct gl_program *prog)
 
    if (prog == &_mesa_DummyProgram)
       return;
-                 
+
    if (prog->String)
       _mesa_free(prog->String);
 
@@ -341,15 +382,17 @@ _mesa_reference_program(GLcontext *ctx,
 
       /*_glthread_LOCK_MUTEX((*ptr)->Mutex);*/
 #if 0
-      printf("Program %p %u 0x%x  Refcount-- to %d\n",
-             *ptr, (*ptr)->Id, (*ptr)->Target, (*ptr)->RefCount - 1);
+      printf("Program %p ID=%u Target=%s  Refcount-- to %d\n",
+             *ptr, (*ptr)->Id,
+             ((*ptr)->Target == GL_VERTEX_PROGRAM_ARB ? "VP" : "FP"),
+             (*ptr)->RefCount - 1);
 #endif
       ASSERT((*ptr)->RefCount > 0);
       (*ptr)->RefCount--;
 
       deleteFlag = ((*ptr)->RefCount == 0);
       /*_glthread_UNLOCK_MUTEX((*ptr)->Mutex);*/
-      
+
       if (deleteFlag) {
          ASSERT(ctx);
          ctx->Driver.DeleteProgram(ctx, *ptr);
@@ -363,8 +406,10 @@ _mesa_reference_program(GLcontext *ctx,
       /*_glthread_LOCK_MUTEX(prog->Mutex);*/
       prog->RefCount++;
 #if 0
-      printf("Program %p %u 0x%x  Refcount++ to %d\n",
-             prog, prog->Id, prog->Target, prog->RefCount);
+      printf("Program %p ID=%u Target=%s  Refcount++ to %d\n",
+             prog, prog->Id,
+             (prog->Target == GL_VERTEX_PROGRAM_ARB ? "VP" : "FP"),
+             prog->RefCount);
 #endif
       /*_glthread_UNLOCK_MUTEX(prog->Mutex);*/
    }
@@ -402,6 +447,7 @@ _mesa_clone_program(GLcontext *ctx, const struct gl_program *prog)
    clone->InputsRead = prog->InputsRead;
    clone->OutputsWritten = prog->OutputsWritten;
    clone->SamplersUsed = prog->SamplersUsed;
+   clone->ShadowSamplers = prog->ShadowSamplers;
    memcpy(clone->TexturesUsed, prog->TexturesUsed, sizeof(prog->TexturesUsed));
 
    if (prog->Parameters)
@@ -493,6 +539,52 @@ _mesa_insert_instructions(struct gl_program *prog, GLuint start, GLuint count)
    _mesa_copy_instructions(newInst + start + count,
                            prog->Instructions + start,
                            origLen - start);
+
+   /* free old instructions */
+   _mesa_free_instructions(prog->Instructions, origLen);
+
+   /* install new instructions */
+   prog->Instructions = newInst;
+   prog->NumInstructions = newLen;
+
+   return GL_TRUE;
+}
+
+/**
+ * Delete 'count' instructions at 'start' in the given program.
+ * Adjust branch targets accordingly.
+ */
+GLboolean
+_mesa_delete_instructions(struct gl_program *prog, GLuint start, GLuint count)
+{
+   const GLuint origLen = prog->NumInstructions;
+   const GLuint newLen = origLen - count;
+   struct prog_instruction *newInst;
+   GLuint i;
+
+   /* adjust branches */
+   for (i = 0; i < prog->NumInstructions; i++) {
+      struct prog_instruction *inst = prog->Instructions + i;
+      if (inst->BranchTarget > 0) {
+         if (inst->BranchTarget >= start) {
+            inst->BranchTarget -= count;
+         }
+      }
+   }
+
+   /* Alloc storage for new instructions */
+   newInst = _mesa_alloc_instructions(newLen);
+   if (!newInst) {
+      return GL_FALSE;
+   }
+
+   /* Copy 'start' instructions into new instruction buffer */
+   _mesa_copy_instructions(newInst, prog->Instructions, start);
+
+   /* Copy the remaining/tail instructions to new inst buffer */
+   _mesa_copy_instructions(newInst + start,
+                           prog->Instructions + start + count,
+                           newLen - start);
 
    /* free old instructions */
    _mesa_free_instructions(prog->Instructions, origLen);

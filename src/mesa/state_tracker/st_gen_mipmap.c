@@ -128,24 +128,24 @@ fallback_generate_mipmap(GLcontext *ctx, GLenum target,
       dstSurf = screen->get_tex_surface(screen, pt, face, dstLevel, zslice,
                                         PIPE_BUFFER_USAGE_CPU_WRITE);
 
-      srcData = (ubyte *) pipe_buffer_map(pipe, srcSurf->buffer,
+      srcData = (ubyte *) pipe_buffer_map(pipe->screen, srcSurf->buffer,
                                           PIPE_BUFFER_USAGE_CPU_READ)
               + srcSurf->offset;
-      dstData = (ubyte *) pipe_buffer_map(pipe, dstSurf->buffer,
+      dstData = (ubyte *) pipe_buffer_map(pipe->screen, dstSurf->buffer,
                                           PIPE_BUFFER_USAGE_CPU_WRITE)
               + dstSurf->offset;
 
       _mesa_generate_mipmap_level(target, datatype, comps,
                    0 /*border*/,
                    pt->width[srcLevel], pt->height[srcLevel], pt->depth[srcLevel],
-                   srcSurf->stride, /* stride in bytes */
                    srcData,
+                   srcSurf->stride, /* stride in bytes */
                    pt->width[dstLevel], pt->height[dstLevel], pt->depth[dstLevel],
-                   dstSurf->stride, /* stride in bytes */
-                   dstData);
+                   dstData,
+                   dstSurf->stride); /* stride in bytes */
 
-      pipe_buffer_unmap(pipe, srcSurf->buffer);
-      pipe_buffer_unmap(pipe, dstSurf->buffer);
+      pipe_buffer_unmap(pipe->screen, srcSurf->buffer);
+      pipe_buffer_unmap(pipe->screen, dstSurf->buffer);
 
       pipe_surface_reference(&srcSurf, NULL);
       pipe_surface_reference(&dstSurf, NULL);

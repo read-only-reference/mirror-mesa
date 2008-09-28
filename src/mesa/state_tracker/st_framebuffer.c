@@ -51,13 +51,12 @@ st_create_framebuffer( const __GLcontextModes *visual,
 {
    struct st_framebuffer *stfb = CALLOC_STRUCT(st_framebuffer);
    if (stfb) {
-      int samples = 0;
-      const char *msaa_override = _mesa_getenv("__GL_FSAA_MODE");
+      int samples = st_get_msaa();
+
+      if (visual->sampleBuffers)
+         samples = visual->samples;
+
       _mesa_initialize_framebuffer(&stfb->Base, visual);
-      if (visual->sampleBuffers) samples = visual->samples;
-      if (msaa_override) {
-         samples = _mesa_atoi(msaa_override);
-      }
 
       {
          /* fake frontbuffer */
@@ -74,7 +73,7 @@ st_create_framebuffer( const __GLcontextModes *visual,
          _mesa_add_renderbuffer(&stfb->Base, BUFFER_BACK_LEFT, rb);
       }
 
-      if (visual->depthBits == 24 && visual->stencilBits == 8) {
+      if (depthFormat == stencilFormat && depthFormat != PIPE_FORMAT_NONE) {
          /* combined depth/stencil buffer */
          struct gl_renderbuffer *depthStencilRb
             = st_new_renderbuffer_fb(depthFormat, samples);
@@ -154,9 +153,9 @@ void st_resize_framebuffer( struct st_framebuffer *stfb,
 }
 
 
-void st_unreference_framebuffer( struct st_framebuffer **stfb )
+void st_unreference_framebuffer( struct st_framebuffer *stfb )
 {
-   _mesa_unreference_framebuffer((struct gl_framebuffer **) stfb);
+   _mesa_unreference_framebuffer((struct gl_framebuffer **) &stfb);
 }
 
 
@@ -265,7 +264,9 @@ st_notify_swapbuffers(struct st_framebuffer *stfb)
 
    if (ctx && ctx->DrawBuffer == &stfb->Base) {
       st_flush( ctx->st, 
-		PIPE_FLUSH_RENDER_CACHE | PIPE_FLUSH_SWAPBUFFERS,
+		PIPE_FLUSH_RENDER_CACHE | 
+		PIPE_FLUSH_SWAPBUFFERS |
+		PIPE_FLUSH_FRAME,
                 NULL );
       ctx->st->frontbuffer_status = FRONT_STATUS_COPY_OF_BACK;
    }
@@ -300,3 +301,10 @@ void *st_framebuffer_private( struct st_framebuffer *stfb )
    return stfb->Private;
 }
 
+void st_get_framebuffer_dimensions( struct st_framebuffer *stfb,
+				    uint *width,
+				    uint *height)
+{
+   *width = stfb->Base.Width;
+   *height = stfb->Base.Height;
+}

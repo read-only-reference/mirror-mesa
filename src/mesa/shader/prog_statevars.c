@@ -131,7 +131,7 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
 	       ADD_3V(value, p, eye_z);
 	       NORMALIZE_3FV(value);
 	       value[3] = 1.0;
-            }						  
+            }
             return;
          default:
             _mesa_problem(ctx, "Invalid light state in fetch_state");
@@ -235,11 +235,11 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
          }
       }
    case STATE_TEXENV_COLOR:
-      {		
+      {
          /* state[1] is the texture unit */
          const GLuint unit = (GLuint) state[1];
          COPY_4V(value, ctx->Texture.Unit[unit].EnvColor);
-      }			
+      }
       return;
    case STATE_FOG_COLOR:
       COPY_4V(value, ctx->Fog.Color);
@@ -369,7 +369,7 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
          }
       }
       return;
-		
+
    case STATE_VERTEX_PROGRAM:
       {
          /* state[1] = {STATE_ENV, STATE_LOCAL} */
@@ -469,7 +469,6 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
       }						  
 
 
-
       case STATE_PT_SCALE:
          value[0] = ctx->Pixel.RedScale;
          value[1] = ctx->Pixel.GreenScale;
@@ -488,6 +487,20 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
       case STATE_PCM_BIAS:
          COPY_4V(value, ctx->Pixel.PostColorMatrixBias);
          break;
+      case STATE_SHADOW_AMBIENT:
+         {
+            const int unit = (int) state[2];
+            const struct gl_texture_object *texObj
+               = ctx->Texture.Unit[unit]._Current;
+            if (texObj) {
+               value[0] = texObj->ShadowAmbient;
+               value[1] = texObj->ShadowAmbient;
+               value[2] = texObj->ShadowAmbient;
+               value[3] = texObj->ShadowAmbient;
+            }
+         }
+         return;
+
       default:
          /* unknown state indexes are silently ignored
           *  should be handled by the driver.
@@ -562,6 +575,7 @@ _mesa_program_state_flags(const gl_state_index state[STATE_LENGTH])
    case STATE_INTERNAL:
       switch (state[1]) {
       case STATE_TEXRECT_SCALE:
+      case STATE_SHADOW_AMBIENT:
 	 return _NEW_TEXTURE;
       case STATE_FOG_PARAMS_OPTIMIZED:
 	 return _NEW_FOG;
@@ -740,6 +754,9 @@ append_token(char *dst, gl_state_index k)
    case STATE_PCM_BIAS:
       append(dst, "PCMbias");
       break;
+   case STATE_SHADOW_AMBIENT:
+      append(dst, "ShadowAmbient");
+      break;
    default:
       ;
    }
@@ -767,7 +784,7 @@ append_index(char *dst, GLint index)
  * For example, return "state.matrix.texture[2].inverse".
  * Use _mesa_free() to deallocate the string.
  */
-const char *
+char *
 _mesa_program_state_string(const gl_state_index state[STATE_LENGTH])
 {
    char str[1000] = "";
@@ -890,10 +907,101 @@ _mesa_load_state_parameters(GLcontext *ctx,
 
    for (i = 0; i < paramList->NumParameters; i++) {
       if (paramList->Parameters[i].Type == PROGRAM_STATE_VAR) {
-         _mesa_fetch_state(ctx, 
+         _mesa_fetch_state(ctx,
 			   (gl_state_index *) paramList->Parameters[i].StateIndexes,
                            paramList->ParameterValues[i]);
       }
    }
 }
 
+
+/**
+ * Copy the 16 elements of a matrix into four consecutive program
+ * registers starting at 'pos'.
+ */
+static void
+load_matrix(GLfloat registers[][4], GLuint pos, const GLfloat mat[16])
+{
+   GLuint i;
+   for (i = 0; i < 4; i++) {
+      registers[pos + i][0] = mat[0 + i];
+      registers[pos + i][1] = mat[4 + i];
+      registers[pos + i][2] = mat[8 + i];
+      registers[pos + i][3] = mat[12 + i];
+   }
+}
+
+
+/**
+ * As above, but transpose the matrix.
+ */
+static void
+load_transpose_matrix(GLfloat registers[][4], GLuint pos,
+                      const GLfloat mat[16])
+{
+   MEMCPY(registers[pos], mat, 16 * sizeof(GLfloat));
+}
+
+
+/**
+ * Load current vertex program's parameter registers with tracked
+ * matrices (if NV program).  This only needs to be done per
+ * glBegin/glEnd, not per-vertex.
+ */
+void
+_mesa_load_tracked_matrices(GLcontext *ctx)
+{
+   GLuint i;
+
+   for (i = 0; i < MAX_NV_VERTEX_PROGRAM_PARAMS / 4; i++) {
+      /* point 'mat' at source matrix */
+      GLmatrix *mat;
+      if (ctx->VertexProgram.TrackMatrix[i] == GL_MODELVIEW) {
+         mat = ctx->ModelviewMatrixStack.Top;
+      }
+      else if (ctx->VertexProgram.TrackMatrix[i] == GL_PROJECTION) {
+         mat = ctx->ProjectionMatrixStack.Top;
+      }
+      else if (ctx->VertexProgram.TrackMatrix[i] == GL_TEXTURE) {
+         mat = ctx->TextureMatrixStack[ctx->Texture.CurrentUnit].Top;
+      }
+      else if (ctx->VertexProgram.TrackMatrix[i] == GL_COLOR) {
+         mat = ctx->ColorMatrixStack.Top;
+      }
+      else if (ctx->VertexProgram.TrackMatrix[i]==GL_MODELVIEW_PROJECTION_NV) {
+         /* XXX verify the combined matrix is up to date */
+         mat = &ctx->_ModelProjectMatrix;
+      }
+      else if (ctx->VertexProgram.TrackMatrix[i] >= GL_MATRIX0_NV &&
+               ctx->VertexProgram.TrackMatrix[i] <= GL_MATRIX7_NV) {
+         GLuint n = ctx->VertexProgram.TrackMatrix[i] - GL_MATRIX0_NV;
+         ASSERT(n < MAX_PROGRAM_MATRICES);
+         mat = ctx->ProgramMatrixStack[n].Top;
+      }
+      else {
+         /* no matrix is tracked, but we leave the register values as-is */
+         assert(ctx->VertexProgram.TrackMatrix[i] == GL_NONE);
+         continue;
+      }
+
+      /* load the matrix values into sequential registers */
+      if (ctx->VertexProgram.TrackMatrixTransform[i] == GL_IDENTITY_NV) {
+         load_matrix(ctx->VertexProgram.Parameters, i*4, mat->m);
+      }
+      else if (ctx->VertexProgram.TrackMatrixTransform[i] == GL_INVERSE_NV) {
+         _math_matrix_analyse(mat); /* update the inverse */
+         ASSERT(!_math_matrix_is_dirty(mat));
+         load_matrix(ctx->VertexProgram.Parameters, i*4, mat->inv);
+      }
+      else if (ctx->VertexProgram.TrackMatrixTransform[i] == GL_TRANSPOSE_NV) {
+         load_transpose_matrix(ctx->VertexProgram.Parameters, i*4, mat->m);
+      }
+      else {
+         assert(ctx->VertexProgram.TrackMatrixTransform[i]
+                == GL_INVERSE_TRANSPOSE_NV);
+         _math_matrix_analyse(mat); /* update the inverse */
+         ASSERT(!_math_matrix_is_dirty(mat));
+         load_transpose_matrix(ctx->VertexProgram.Parameters, i*4, mat->inv);
+      }
+   }
+}

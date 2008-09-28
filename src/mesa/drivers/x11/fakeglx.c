@@ -43,12 +43,12 @@
 #include "glxheader.h"
 #include "glxapi.h"
 #include "GL/xmesa.h"
-#include "context.h"
-#include "config.h"
-#include "macros.h"
-#include "imports.h"
-#include "mtypes.h"
-#include "version.h"
+#include "main/context.h"
+#include "main/config.h"
+#include "main/macros.h"
+#include "main/imports.h"
+#include "main/mtypes.h"
+#include "main/version.h"
 #include "xfonts.h"
 #include "xmesaP.h"
 
@@ -1183,11 +1183,12 @@ choose_visual( Display *dpy, int screen, const int *list, GLboolean fbConfig )
           * GLX_ARB_multisample
           */
          case GLX_SAMPLE_BUFFERS_ARB:
-            /* ms not supported */
-            return NULL;
          case GLX_SAMPLES_ARB:
-            /* ms not supported */
-            return NULL;
+	    parselist++;
+	    if (*parselist++ != 0)
+	       /* ms not supported */
+	       return NULL;
+	    break;
 
          /*
           * FBConfig attribs.

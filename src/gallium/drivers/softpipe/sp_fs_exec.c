@@ -34,15 +34,24 @@
 
 #include "pipe/p_state.h"
 #include "pipe/p_defines.h"
-#include "pipe/p_util.h"
+#include "util/u_memory.h"
 #include "pipe/p_inlines.h"
 #include "tgsi/tgsi_exec.h"
 #include "tgsi/tgsi_parse.h"
 
-struct sp_exec_fragment_shader {
+struct sp_exec_fragment_shader
+{
    struct sp_fragment_shader base;
+   const struct tgsi_token *machine_tokens;
 };
 
+
+/** cast wrapper */
+static INLINE struct sp_exec_fragment_shader *
+sp_exec_fragment_shader(const struct sp_fragment_shader *base)
+{
+   return (struct sp_exec_fragment_shader *) base;
+}
 
 
 /**
@@ -86,10 +95,20 @@ exec_prepare( const struct sp_fragment_shader *base,
 	      struct tgsi_exec_machine *machine,
 	      struct tgsi_sampler *samplers )
 {
-   tgsi_exec_machine_bind_shader( machine,
-				  base->shader.tokens,
-				  PIPE_MAX_SAMPLERS,
-				  samplers );
+   struct sp_exec_fragment_shader *spefs =
+      sp_exec_fragment_shader(base);
+
+   /*
+    * Bind tokens/shader to the interpreter's machine state.
+    * Avoid redundant binding.
+    */
+   if (spefs->machine_tokens != base->shader.tokens) {
+      tgsi_exec_machine_bind_shader( machine,
+                                     base->shader.tokens,
+                                     PIPE_MAX_SAMPLERS,
+                                     samplers );
+      spefs->machine_tokens = base->shader.tokens;
+   }
 }
 
 
@@ -106,7 +125,7 @@ exec_run( const struct sp_fragment_shader *base,
 
    /* Compute X, Y, Z, W vals for this quad */
    sp_setup_pos_vector(quad->posCoef, 
-		       (float)quad->x0, (float)quad->y0, 
+		       (float)quad->input.x0, (float)quad->input.y0, 
 		       &machine->QuadPos);
    
    return tgsi_exec_machine_run( machine );

@@ -30,13 +30,13 @@
  *  Brian Paul
  */
 
-#include "pipe/p_util.h"
+#include "util/u_memory.h"
 #include "pipe/p_inlines.h"
 #include "draw/draw_context.h"
 #include "cell_context.h"
+#include "cell_flush.h"
 #include "cell_state.h"
 #include "cell_texture.h"
-#include "cell_state_per_fragment.h"
 
 
 
@@ -44,23 +44,18 @@ static void *
 cell_create_blend_state(struct pipe_context *pipe,
                         const struct pipe_blend_state *blend)
 {
-   struct cell_blend_state *cb = MALLOC(sizeof(struct cell_blend_state));
-
-   (void) memcpy(cb, blend, sizeof(*blend));
-   cell_generate_alpha_blend(cb);
-
-   return cb;
+   return mem_dup(blend, sizeof(*blend));
 }
 
 
 static void
-cell_bind_blend_state(struct pipe_context *pipe, void *state)
+cell_bind_blend_state(struct pipe_context *pipe, void *blend)
 {
    struct cell_context *cell = cell_context(pipe);
 
    draw_flush(cell->draw);
 
-   cell->blend = (struct cell_blend_state *) state;
+   cell->blend = (struct pipe_blend_state *) blend;
    cell->dirty |= CELL_NEW_BLEND;
 }
 
@@ -68,10 +63,7 @@ cell_bind_blend_state(struct pipe_context *pipe, void *state)
 static void
 cell_delete_blend_state(struct pipe_context *pipe, void *blend)
 {
-   struct cell_blend_state *cb = (struct cell_blend_state *) blend;
-
-   spe_release_func(& cb->code);
-   FREE(cb);
+   FREE(blend);
 }
 
 
@@ -93,45 +85,35 @@ cell_set_blend_color(struct pipe_context *pipe,
 
 static void *
 cell_create_depth_stencil_alpha_state(struct pipe_context *pipe,
-                 const struct pipe_depth_stencil_alpha_state *depth_stencil)
+                 const struct pipe_depth_stencil_alpha_state *dsa)
 {
-   struct cell_depth_stencil_alpha_state *cdsa =
-       MALLOC(sizeof(struct cell_depth_stencil_alpha_state));
-
-   (void) memcpy(cdsa, depth_stencil, sizeof(*depth_stencil));
-   cell_generate_depth_stencil_test(cdsa);
-
-   return cdsa;
+   return mem_dup(dsa, sizeof(*dsa));
 }
 
 
 static void
 cell_bind_depth_stencil_alpha_state(struct pipe_context *pipe,
-                                    void *depth_stencil)
+                                    void *dsa)
 {
    struct cell_context *cell = cell_context(pipe);
 
    draw_flush(cell->draw);
 
-   cell->depth_stencil =
-       (struct cell_depth_stencil_alpha_state *) depth_stencil;
+   cell->depth_stencil = (struct pipe_depth_stencil_alpha_state *) dsa;
    cell->dirty |= CELL_NEW_DEPTH_STENCIL;
 }
 
 
 static void
-cell_delete_depth_stencil_alpha_state(struct pipe_context *pipe, void *depth)
+cell_delete_depth_stencil_alpha_state(struct pipe_context *pipe, void *dsa)
 {
-   struct cell_depth_stencil_alpha_state *cdsa =
-       (struct cell_depth_stencil_alpha_state *) depth;
-
-   spe_release_func(& cdsa->code);
-   FREE(cdsa);
+   FREE(dsa);
 }
 
 
-static void cell_set_clip_state( struct pipe_context *pipe,
-			     const struct pipe_clip_state *clip )
+static void
+cell_set_clip_state(struct pipe_context *pipe,
+                    const struct pipe_clip_state *clip)
 {
    struct cell_context *cell = cell_context(pipe);
 
@@ -187,24 +169,23 @@ cell_set_polygon_stipple( struct pipe_context *pipe,
 
 static void *
 cell_create_rasterizer_state(struct pipe_context *pipe,
-                             const struct pipe_rasterizer_state *setup)
+                             const struct pipe_rasterizer_state *rasterizer)
 {
-   struct pipe_rasterizer_state *state
-      = MALLOC(sizeof(struct pipe_rasterizer_state));
-   memcpy(state, setup, sizeof(struct pipe_rasterizer_state));
-   return state;
+   return mem_dup(rasterizer, sizeof(*rasterizer));
 }
 
 
 static void
-cell_bind_rasterizer_state(struct pipe_context *pipe, void *setup)
+cell_bind_rasterizer_state(struct pipe_context *pipe, void *rast)
 {
+   struct pipe_rasterizer_state *rasterizer =
+      (struct pipe_rasterizer_state *) rast;
    struct cell_context *cell = cell_context(pipe);
 
    /* pass-through to draw module */
-   draw_set_rasterizer_state(cell->draw, setup);
+   draw_set_rasterizer_state(cell->draw, rasterizer);
 
-   cell->rasterizer = (struct pipe_rasterizer_state *)setup;
+   cell->rasterizer = rasterizer;
 
    cell->dirty |= CELL_NEW_RASTERIZER;
 }
@@ -294,6 +275,8 @@ cell_set_framebuffer_state(struct pipe_context *pipe,
       struct pipe_surface *csurf = fb->cbufs[0];
       struct pipe_surface *zsurf = fb->zsbuf;
       uint i;
+      uint flags = (PIPE_BUFFER_USAGE_GPU_WRITE |
+                    PIPE_BUFFER_USAGE_GPU_READ);
 
       /* unmap old surfaces */
       for (i = 0; i < PIPE_MAX_COLOR_BUFS; i++) {
@@ -308,15 +291,28 @@ cell_set_framebuffer_state(struct pipe_context *pipe,
          cell->zsbuf_map = NULL;
       }
 
-      /* update my state */
-      cell->framebuffer = *fb;
+      /* Finish any pending rendering to the current surface before
+       * installing a new surface!
+       */
+      cell_flush_int(cell, CELL_FLUSH_WAIT);
+
+      /* update my state
+       * (this is also where old surfaces will finally get freed)
+       */
+      cell->framebuffer.width = fb->width;
+      cell->framebuffer.height = fb->height;
+      cell->framebuffer.num_cbufs = fb->num_cbufs;
+      for (i = 0; i < PIPE_MAX_COLOR_BUFS; i++) {
+         pipe_surface_reference(&cell->framebuffer.cbufs[i], fb->cbufs[i]);
+      }
+      pipe_surface_reference(&cell->framebuffer.zsbuf, fb->zsbuf);
 
       /* map new surfaces */
       if (csurf)
-         cell->cbuf_map[0] = pipe_surface_map(csurf);
+         cell->cbuf_map[0] = pipe_surface_map(csurf, flags);
 
       if (zsurf)
-         cell->zsbuf_map = pipe_surface_map(zsurf);
+         cell->zsbuf_map = pipe_surface_map(zsurf, flags);
 
       cell->dirty |= CELL_NEW_FRAMEBUFFER;
    }

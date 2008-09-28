@@ -43,10 +43,10 @@
  */
 
 #include "texmem.h"
-#include "simple_list.h"
-#include "imports.h"
-#include "macros.h"
-#include "texformat.h"
+#include "main/simple_list.h"
+#include "main/imports.h"
+#include "main/macros.h"
+#include "main/texformat.h"
 
 #include <assert.h>
 
@@ -1277,6 +1277,7 @@ driCalculateTextureFirstLastLevel( driTextureObject * t )
       else {
 	 firstLevel = tObj->BaseLevel + (GLint)(tObj->MinLod + 0.5);
 	 firstLevel = MAX2(firstLevel, tObj->BaseLevel);
+	 firstLevel = MIN2(firstLevel, tObj->BaseLevel + baseImage->MaxLog2);
 	 lastLevel = tObj->BaseLevel + (GLint)(tObj->MaxLod + 0.5);
 	 lastLevel = MAX2(lastLevel, t->tObj->BaseLevel);
 	 lastLevel = MIN2(lastLevel, t->tObj->BaseLevel + baseImage->MaxLog2);

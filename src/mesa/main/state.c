@@ -51,6 +51,16 @@
 #include "texstate.h"
 
 
+static void
+update_separate_specular(GLcontext *ctx)
+{
+   if (NEED_SECONDARY_COLOR(ctx))
+      ctx->_TriangleCaps |= DD_SEPARATE_SPECULAR;
+   else
+      ctx->_TriangleCaps &= ~DD_SEPARATE_SPECULAR;
+}
+
+
 /**
  * Update state dependent on vertex arrays.
  */
@@ -176,7 +186,7 @@ update_program(GLcontext *ctx)
    ctx->FragmentProgram._Enabled = ctx->FragmentProgram.Enabled
       && ctx->FragmentProgram.Current->Base.Instructions;
    ctx->ATIFragmentShader._Enabled = ctx->ATIFragmentShader.Enabled
-      && ctx->ATIFragmentShader.Current->Instructions;
+      && ctx->ATIFragmentShader.Current->Instructions[0];
 
    /*
     * Set the ctx->VertexProgram._Current and ctx->FragmentProgram._Current
@@ -194,77 +204,87 @@ update_program(GLcontext *ctx)
     * come up, or matter.
     */
 
-   /**
-    ** Fragment program
-    **/
-#if 1
-   /* XXX get rid of this someday? */
-   ctx->FragmentProgram._Active = GL_FALSE;
-#endif
-   if (shProg && shProg->LinkStatus && shProg->FragmentProgram) {
-      /* user-defined fragment shader */
+   _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current, NULL);
+
+   if (shProg && shProg->LinkStatus) {
+      /* Use shader programs */
+      /* XXX this isn't quite right, since we may have either a vertex
+       * _or_ fragment shader (not always both).
+       */
+      _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current,
+                               shProg->VertexProgram);
       _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current,
                                shProg->FragmentProgram);
    }
-   else if (ctx->FragmentProgram._Enabled) {
-      /* use user-defined fragment program */
-      _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current,
-                               ctx->FragmentProgram.Current);
-   }
-   else if (ctx->FragmentProgram._MaintainTexEnvProgram) {
-      /* fragment program generated from fixed-function state */
-      _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current,
-                               _mesa_get_fixed_func_fragment_program(ctx));
-      _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._TexEnvProgram,
-                               ctx->FragmentProgram._Current);
-
-      /* XXX get rid of this confusing stuff someday? */
-      ctx->FragmentProgram._Active = ctx->FragmentProgram._Enabled;
-      if (ctx->FragmentProgram._UseTexEnvProgram)
-         ctx->FragmentProgram._Active = GL_TRUE;
-   }
    else {
-      /* no fragment program */
-      _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current, NULL);
+      if (ctx->FragmentProgram._Enabled) {
+         /* use user-defined vertex program */
+         _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current,
+                                  ctx->FragmentProgram.Current);
+      }
+      else if (ctx->FragmentProgram._MaintainTexEnvProgram) {
+         /* Use fragment program generated from fixed-function state.
+          */
+         _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current,
+                                  _mesa_get_fixed_func_fragment_program(ctx));
+         _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._TexEnvProgram,
+                                  ctx->FragmentProgram._Current);
+      }
+      else {
+         /* no fragment program */
+         _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current, NULL);
+      }
+
+      /* Examine vertex program after fragment program as
+       * _mesa_get_fixed_func_vertex_program() needs to know active
+       * fragprog inputs.
+       */
+      if (ctx->VertexProgram._Enabled) {
+         /* use user-defined vertex program */
+         _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current,
+                                  ctx->VertexProgram.Current);
+      }
+      else if (ctx->VertexProgram._MaintainTnlProgram) {
+         /* Use vertex program generated from fixed-function state.
+          */
+         _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current,
+                                  _mesa_get_fixed_func_vertex_program(ctx));
+         _mesa_reference_vertprog(ctx, &ctx->VertexProgram._TnlProgram,
+                                  ctx->VertexProgram._Current);
+      }
+      else {
+         /* no vertex program */
+         _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current, NULL);
+      }
    }
 
+   if (ctx->VertexProgram._Current)
+      assert(ctx->VertexProgram._Current->Base.Parameters);
+   if (ctx->FragmentProgram._Current)
+      assert(ctx->FragmentProgram._Current->Base.Parameters);
+
+
+   /* XXX: get rid of _Active flag.
+    */
+#if 1
+   ctx->FragmentProgram._Active = ctx->FragmentProgram._Enabled;
+   if (ctx->FragmentProgram._MaintainTexEnvProgram &&
+       !ctx->FragmentProgram._Enabled) {
+      if (ctx->FragmentProgram._UseTexEnvProgram)
+	 ctx->FragmentProgram._Active = GL_TRUE;
+   }
+#endif
+
+   /* Let the driver know what's happening:
+    */
    if (ctx->FragmentProgram._Current != prevFP && ctx->Driver.BindProgram) {
       ctx->Driver.BindProgram(ctx, GL_FRAGMENT_PROGRAM_ARB,
-                         (struct gl_program *) ctx->FragmentProgram._Current);
+                              (struct gl_program *) ctx->FragmentProgram._Current);
    }
-
-   /**
-    ** Vertex program
-    **/
-#if 1
-   /* XXX get rid of this someday? */
-   _mesa_reference_vertprog(ctx, &ctx->VertexProgram._TnlProgram, NULL);
-#endif
-   if (shProg && shProg->LinkStatus && shProg->VertexProgram) {
-      /* user-defined vertex shader */
-      _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current,
-                               shProg->VertexProgram);
-   }
-   else if (ctx->VertexProgram._Enabled) {
-      /* use user-defined vertex program */
-      _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current,
-                               ctx->VertexProgram.Current);
-   }
-   else if (ctx->VertexProgram._MaintainTnlProgram) {
-      /* vertex program generated from fixed-function state */
-      _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current,
-                               _mesa_get_fixed_func_vertex_program(ctx));
-      _mesa_reference_vertprog(ctx, &ctx->VertexProgram._TnlProgram,
-                               ctx->VertexProgram._Current);
-   }
-   else {
-      /* no vertex program / used fixed-function code */
-      _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current, NULL);
-   }
-
+   
    if (ctx->VertexProgram._Current != prevVP && ctx->Driver.BindProgram) {
       ctx->Driver.BindProgram(ctx, GL_VERTEX_PROGRAM_ARB,
-                           (struct gl_program *) ctx->VertexProgram._Current);
+                              (struct gl_program *) ctx->VertexProgram._Current);
    }
 }
 
@@ -295,10 +315,10 @@ static void
 update_multisample(GLcontext *ctx)
 {
    ctx->Multisample._Enabled = GL_FALSE;
-   if (ctx->DrawBuffer) {
-      if (ctx->DrawBuffer->Visual.sampleBuffers)
-         ctx->Multisample._Enabled = GL_TRUE;
-   }
+   if (ctx->Multisample.Enabled &&
+       ctx->DrawBuffer &&
+       ctx->DrawBuffer->Visual.sampleBuffers)
+      ctx->Multisample._Enabled = GL_TRUE;
 }
 
 
@@ -315,6 +335,24 @@ update_color(GLcontext *ctx)
 }
 
 
+/*
+ * Check polygon state and set DD_TRI_CULL_FRONT_BACK and/or DD_TRI_OFFSET
+ * in ctx->_TriangleCaps if needed.
+ */
+static void
+update_polygon(GLcontext *ctx)
+{
+   ctx->_TriangleCaps &= ~(DD_TRI_CULL_FRONT_BACK | DD_TRI_OFFSET);
+
+   if (ctx->Polygon.CullFlag && ctx->Polygon.CullFaceMode == GL_FRONT_AND_BACK)
+      ctx->_TriangleCaps |= DD_TRI_CULL_FRONT_BACK;
+
+   if (   ctx->Polygon.OffsetPoint
+       || ctx->Polygon.OffsetLine
+       || ctx->Polygon.OffsetFill)
+      ctx->_TriangleCaps |= DD_TRI_OFFSET;
+}
+
 
 /**
  * Update the ctx->_TriangleCaps bitfield.
@@ -322,6 +360,7 @@ update_color(GLcontext *ctx)
  * This function must be called after other update_*() functions since
  * there are dependencies on some other derived values.
  */
+#if 0
 static void
 update_tricaps(GLcontext *ctx, GLbitfield new_state)
 {
@@ -387,6 +426,7 @@ update_tricaps(GLcontext *ctx, GLbitfield new_state)
    if (ctx->Stencil._TestTwoSide)
       ctx->_TriangleCaps |= DD_TRI_TWOSTENCIL;
 }
+#endif
 
 
 /**
@@ -422,6 +462,9 @@ _mesa_update_state_locked( GLcontext *ctx )
    if (new_state & (_NEW_SCISSOR | _NEW_BUFFERS | _NEW_VIEWPORT))
       _mesa_update_draw_buffer_bounds( ctx );
 
+   if (new_state & _NEW_POLYGON)
+      update_polygon( ctx );
+
    if (new_state & _NEW_LIGHT)
       _mesa_update_lighting( ctx );
 
@@ -432,6 +475,9 @@ _mesa_update_state_locked( GLcontext *ctx )
    if (new_state & _IMAGE_NEW_TRANSFER_STATE)
       _mesa_update_pixel( ctx, new_state );
 #endif
+
+   if (new_state & _DD_NEW_SEPARATE_SPECULAR)
+      update_separate_specular( ctx );
 
    if (new_state & (_NEW_ARRAY | _NEW_PROGRAM))
       update_arrays( ctx );
@@ -445,9 +491,11 @@ _mesa_update_state_locked( GLcontext *ctx )
    if (new_state & _NEW_COLOR)
       update_color( ctx );
 
+#if 0
    if (new_state & (_NEW_POINT | _NEW_LINE | _NEW_POLYGON | _NEW_LIGHT
                     | _NEW_STENCIL | _DD_NEW_SEPARATE_SPECULAR))
       update_tricaps( ctx, new_state );
+#endif
 
    /* ctx->_NeedEyeCoords is now up to date.
     *

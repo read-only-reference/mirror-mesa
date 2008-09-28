@@ -31,7 +31,7 @@
   */
 
 #include "pipe/p_debug.h"
-#include "pipe/p_util.h"
+#include "util/u_memory.h"
 
 #include "cso_hash.h"
 
@@ -430,4 +430,10 @@ struct cso_hash_iter cso_hash_erase(struct cso_hash *hash, struct cso_hash_iter 
    cso_free_node(node);
    --hash->data.d->size;
    return ret;
+}
+
+boolean cso_hash_contains(struct cso_hash *hash, unsigned key)
+{
+   struct cso_node **node = cso_hash_find_node(hash, key);
+   return (*node != hash->data.e);
 }

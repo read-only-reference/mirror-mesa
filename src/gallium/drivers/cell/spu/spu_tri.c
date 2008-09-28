@@ -32,13 +32,12 @@
 #include <transpose_matrix4x4.h>
 #include "pipe/p_compiler.h"
 #include "pipe/p_format.h"
-#include "pipe/p_util.h"
+#include "util/u_math.h"
 #include "spu_colorpack.h"
 #include "spu_main.h"
 #include "spu_texture.h"
 #include "spu_tile.h"
 #include "spu_tri.h"
-#include "spu_per_fragment_op.h"
 
 
 /** Masks are uint[4] vectors with each element being 0 or 0xffffffff */
@@ -209,7 +208,7 @@ clip_emit_quad(struct setup_stage *setup)
 /**
  * Evaluate attribute coefficients (plane equations) to compute
  * attribute values for the four fragments in a quad.
- * Eg: four colors will be compute.
+ * Eg: four colors will be computed (in AoS format).
  */
 static INLINE void
 eval_coeff(uint slot, float x, float y, vector float result[4])
@@ -242,6 +241,19 @@ eval_coeff(uint slot, float x, float y, vector float result[4])
 }
 
 
+/**
+ * As above, but return 4 vectors in SOA format.
+ * XXX this will all be re-written someday.
+ */
+static INLINE void
+eval_coeff_soa(uint slot, float x, float y, vector float result[4])
+{
+   eval_coeff(slot, x, y, result);
+   _transpose_matrix4x4(result, result);
+}
+
+
+
 static INLINE vector float
 eval_z(float x, float y)
 {
@@ -255,31 +267,6 @@ eval_z(float x, float y)
 }
 
 
-static INLINE mask_t
-do_depth_test(int x, int y, mask_t quadmask)
-{
-   float4 zvals;
-   mask_t mask;
-
-   if (spu.fb.depth_format == PIPE_FORMAT_NONE)
-      return quadmask;
-
-   zvals.v = eval_z((float) x, (float) y);
-
-   mask = (mask_t) spu_do_depth_stencil(x - setup.cliprect_minx,
-					y - setup.cliprect_miny,
-					(qword) quadmask, 
-					(qword) zvals.v,
-					(qword) spu_splats((unsigned char) 0x0ffu),
-					(qword) spu_splats((unsigned int) 0x01u));
-
-   if (spu_extract(spu_orx(mask), 0))
-      spu.cur_ztile_status = TILE_STATUS_DIRTY;
-
-   return mask;
-}
-
-
 /**
  * Emit a quad (pass to next stage).  No clipping is done.
  * Note: about 1/5 to 1/7 of the time, mask is zero and this function
@@ -289,29 +276,21 @@ do_depth_test(int x, int y, mask_t quadmask)
 static INLINE void
 emit_quad( int x, int y, mask_t mask )
 {
-#if 0
-   struct softpipe_context *sp = setup.softpipe;
-   setup.quad.x0 = x;
-   setup.quad.y0 = y;
-   setup.quad.mask = mask;
-   sp->quad.first->run(sp->quad.first, &setup.quad);
-#else
-
-   if (spu.read_depth) {
-      mask = do_depth_test(x, y, mask);
-   }
-
    /* If any bits in mask are set... */
    if (spu_extract(spu_orx(mask), 0)) {
       const int ix = x - setup.cliprect_minx;
       const int iy = y - setup.cliprect_miny;
-      vector float colors[4];
 
       spu.cur_ctile_status = TILE_STATUS_DIRTY;
+      spu.cur_ztile_status = TILE_STATUS_DIRTY;
 
       if (spu.texture[0].start) {
-         /* texture mapping */
+         /*
+          * Temporary texture mapping path
+          * This will go away when fragment programs support TEX inst.
+          */
          const uint unit = 0;
+         vector float colors[4];
          vector float texcoords[4];
          eval_coeff(2, (float) x, (float) y, texcoords);
 
@@ -348,62 +327,61 @@ emit_quad( int x, int y, mask_t mask )
             colors[3] = spu_mul(colors[3], colors1[3]);
          }
 
+         {
+            /* Convert fragment data from AoS to SoA format.
+             * I.e. (RGBA,RGBA,RGBA,RGBA) -> (RRRR,GGGG,BBBB,AAAA)
+             * This is temporary!
+             */
+            vector float soa_frag[4];
+            _transpose_matrix4x4(soa_frag, colors);
+
+            vector float fragZ = eval_z((float) x, (float) y);
+
+            /* Do all per-fragment/quad operations here, including:
+             * alpha test, z test, stencil test, blend and framebuffer writing.
+             */
+            spu.fragment_ops(ix, iy, &spu.ctile, &spu.ztile,
+                             fragZ,
+                             soa_frag[0], soa_frag[1],
+                             soa_frag[2], soa_frag[3],
+                             mask);
+         }
+
       }
       else {
-         /* simple shading */
-         eval_coeff(1, (float) x, (float) y, colors);
-      }
-
-
-      /* Convert fragment data from AoS to SoA format.
-       */
-      qword soa_frag[4];
-      _transpose_matrix4x4((vec_float4 *) soa_frag, colors);
-
-      /* Read the current framebuffer values.
-       */
-      const qword pix[4] = {
-         (qword) spu_splats(spu.ctile.ui[iy+0][ix+0]),
-         (qword) spu_splats(spu.ctile.ui[iy+0][ix+1]),
-         (qword) spu_splats(spu.ctile.ui[iy+1][ix+0]),
-         (qword) spu_splats(spu.ctile.ui[iy+1][ix+1]),
-      };
-
-      qword soa_pix[4];
-
-      if (spu.read_fb) {
-         /* Convert pixel data from AoS to SoA format.
+         /*
+          * Run fragment shader, execute per-fragment ops, update fb/tile.
           */
-         vec_float4 aos_pix[4] = {
-            spu_unpack_A8R8G8B8(spu.ctile.ui[iy+0][ix+0]),
-            spu_unpack_A8R8G8B8(spu.ctile.ui[iy+0][ix+1]),
-            spu_unpack_A8R8G8B8(spu.ctile.ui[iy+1][ix+0]),
-            spu_unpack_A8R8G8B8(spu.ctile.ui[iy+1][ix+1]),
-         };
+         vector float inputs[4*4], outputs[2*4];
+         vector float fragZ = eval_z((float) x, (float) y);
 
-         _transpose_matrix4x4((vec_float4 *) soa_pix, aos_pix);
-      }
-
-
-      struct spu_blend_results result =
-          (*spu.blend)(soa_frag[0], soa_frag[1], soa_frag[2], soa_frag[3],
-                       soa_pix[0], soa_pix[1], soa_pix[2], soa_pix[3],
-                       spu.const_blend_color[0], spu.const_blend_color[1],
-                       spu.const_blend_color[2], spu.const_blend_color[3]);
-
-
-      /* Convert final pixel data from SoA to AoS format.
-       */
-      result = (*spu.logicop)(pix[0], pix[1], pix[2], pix[3],
-                              result.r, result.g, result.b, result.a,
-                              (qword) mask);
-
-      spu.ctile.ui[iy+0][ix+0] = spu_extract((vec_uint4) result.r, 0);
-      spu.ctile.ui[iy+0][ix+1] = spu_extract((vec_uint4) result.g, 0);
-      spu.ctile.ui[iy+1][ix+0] = spu_extract((vec_uint4) result.b, 0);
-      spu.ctile.ui[iy+1][ix+1] = spu_extract((vec_uint4) result.a, 0);
-   }
+         /* setup inputs */
+#if 0
+         eval_coeff_soa(1, (float) x, (float) y, inputs);
+#else
+         uint i;
+         for (i = 0; i < spu.vertex_info.num_attribs; i++) {
+            eval_coeff_soa(i+1, (float) x, (float) y, inputs + i * 4);
+         }
 #endif
+         ASSERT(spu.fragment_program);
+         ASSERT(spu.fragment_ops);
+
+         /* Execute the current fragment program */
+         spu.fragment_program(inputs, outputs, spu.constants);
+
+         /* Execute per-fragment/quad operations, including:
+          * alpha test, z test, stencil test, blend and framebuffer writing.
+          */
+         spu.fragment_ops(ix, iy, &spu.ctile, &spu.ztile,
+                          fragZ,
+                          outputs[0*4+0],
+                          outputs[0*4+1],
+                          outputs[0*4+2],
+                          outputs[0*4+3],
+                          mask);
+      }
+   }
 }
 
 

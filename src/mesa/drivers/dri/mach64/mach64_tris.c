@@ -29,10 +29,10 @@
  *	José Fonseca <j_r_fonseca@yahoo.co.uk>
  */
 
-#include "glheader.h"
-#include "mtypes.h"
-#include "colormac.h"
-#include "macros.h"
+#include "main/glheader.h"
+#include "main/mtypes.h"
+#include "main/colormac.h"
+#include "main/macros.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -113,7 +113,7 @@ do {									\
 #define COPY_VERTEX_OOA( vb, vertsize, v, n )	DO_COPY_VERTEX( vb, vertsize, v, n, 1 )
 
 
-static __inline void mach64_draw_quad( mach64ContextPtr mmesa,
+static INLINE void mach64_draw_quad( mach64ContextPtr mmesa,
 				       mach64VertexPtr v0,
 				       mach64VertexPtr v1,
 				       mach64VertexPtr v2,
@@ -419,7 +419,7 @@ static __inline void mach64_draw_quad( mach64ContextPtr mmesa,
 #endif
 }
 
-static __inline void mach64_draw_triangle( mach64ContextPtr mmesa,
+static INLINE void mach64_draw_triangle( mach64ContextPtr mmesa,
 					   mach64VertexPtr v0,
 					   mach64VertexPtr v1,
 					   mach64VertexPtr v2 )
@@ -666,7 +666,7 @@ static __inline void mach64_draw_triangle( mach64ContextPtr mmesa,
 #endif
 }
 
-static __inline void mach64_draw_line( mach64ContextPtr mmesa,
+static INLINE void mach64_draw_line( mach64ContextPtr mmesa,
 				     mach64VertexPtr v0,
 				     mach64VertexPtr v1 )
 {
@@ -955,7 +955,7 @@ static __inline void mach64_draw_line( mach64ContextPtr mmesa,
 #endif
 }
 
-static __inline void mach64_draw_point( mach64ContextPtr mmesa,
+static INLINE void mach64_draw_point( mach64ContextPtr mmesa,
 				      mach64VertexPtr v0 )
 {
 #if MACH64_NATIVE_VTXFMT

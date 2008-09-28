@@ -114,6 +114,8 @@ static void init_mat_currval(GLcontext *ctx)
    struct gl_client_array *arrays = vbo->mat_currval;
    GLuint i;
 
+   ASSERT(NR_MAT_ATTRIBS == MAT_ATTRIB_MAX);
+
    memset(arrays, 0, sizeof(*arrays) * NR_MAT_ATTRIBS);
 
    /* Set up a constant (StrideB == 0) array for each current
@@ -139,11 +141,7 @@ static void init_mat_currval(GLcontext *ctx)
 	 break;
       }
 
-      if (i < MAT_ATTRIB_MAX)
-	 cl->Ptr = (const void *)ctx->Light.Material.Attrib[i];
-      else 
-	 cl->Ptr = (const void *)ctx->Current.Attrib[VERT_ATTRIB_GENERIC0 + i];
-
+      cl->Ptr = (const void *)ctx->Light.Material.Attrib[i];
       cl->Type = GL_FLOAT;
       cl->Stride = 0;
       cl->StrideB = 0;
@@ -246,12 +244,14 @@ void _vbo_DestroyContext( GLcontext *ctx )
       ctx->aelt_context = NULL;
    }
 
-   vbo_exec_destroy(ctx);
+   if (vbo_context(ctx)) {
+      vbo_exec_destroy(ctx);
 #if FEATURE_dlist
-   vbo_save_destroy(ctx);
+      vbo_save_destroy(ctx);
 #endif
-   FREE(vbo_context(ctx));
-   ctx->swtnl_im = NULL;
+      FREE(vbo_context(ctx));
+      ctx->swtnl_im = NULL;
+   }
 }
 
 

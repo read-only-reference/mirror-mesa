@@ -128,16 +128,13 @@ typedef struct
     * _swrast_validate_derived():
     */
    GLbitfield _RasterMask;
-   GLfloat _BackfaceSign;
+   GLfloat _BackfaceSign;      /** +1 or -1 */
+   GLfloat _BackfaceCullSign;  /** +1, 0, or -1 */
    GLboolean _PreferPixelFog;    /* Compute fog blend factor per fragment? */
    GLboolean _AnyTextureCombine;
    GLboolean _FogEnabled;
    GLboolean _DeferredTexture;
    GLenum _FogMode;  /* either GL_FOG_MODE or fragment program's fog mode */
-
-   /** Multiple render targets */
-   GLbitfield _ColorOutputsMask;
-   GLuint _NumColorOutputs;
 
    /** List/array of the fragment attributes to interpolate */
    GLuint _ActiveAttribs[FRAG_ATTRIB_MAX];
@@ -156,6 +153,7 @@ typedef struct
    /* Working values:
     */
    GLuint StippleCounter;    /**< Line stipple counter */
+   GLuint PointLineFacing;
    GLbitfield NewState;
    GLuint StateChanges;
    GLenum Primitive;    /* current primitive being drawn (ala glBegin) */
@@ -208,6 +206,7 @@ typedef struct
     * on some systems.
     */
    SWspanarrays *SpanArrays;
+   SWspanarrays *ZoomedArrays;  /**< For pixel zooming */
 
    /**
     * Used to buffer N GL_POINTS, instead of rendering one by one.

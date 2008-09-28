@@ -1369,7 +1369,7 @@ struct gl_texture_image
    GLboolean IsCompressed;	/**< GL_ARB_texture_compression */
    GLuint CompressedSize;	/**< GL_ARB_texture_compression */
 
-   GLuint RowStride;		/**< == Width unless IsClientData and padded */
+   GLuint RowStride;		/**< Padded width in units of texels */
    GLuint *ImageOffsets;        /**< if 3D texture: array [Depth] of offsets to
                                      each 2D slice in 'Data', in texels */
    GLvoid *Data;		/**< Image data, accessed via FetchTexel() */
@@ -1540,17 +1540,6 @@ struct gl_texture_unit
 
    struct gl_texture_object *_Current; /**< Points to really enabled tex obj */
 
-   /** These are used for glPush/PopAttrib */
-   /*@{*/
-   struct gl_texture_object Saved1D;
-   struct gl_texture_object Saved2D;
-   struct gl_texture_object Saved3D;
-   struct gl_texture_object SavedCubeMap;
-   struct gl_texture_object SavedRect;
-   struct gl_texture_object Saved1DArray;
-   struct gl_texture_object Saved2DArray;
-   /*@}*/
-
    /** GL_SGI_texture_color_table */
    /*@{*/
    struct gl_color_table ColorTable;
@@ -1558,6 +1547,7 @@ struct gl_texture_unit
    GLboolean ColorTableEnabled;
    /*@}*/
 };
+
 
 
 /**
@@ -1579,17 +1569,7 @@ struct gl_texture_attrib
 
    struct gl_texture_unit Unit[MAX_TEXTURE_UNITS];
 
-#if 0
-   struct gl_texture_object *Proxy1D;
-   struct gl_texture_object *Proxy2D;
-   struct gl_texture_object *Proxy3D;
-   struct gl_texture_object *ProxyCubeMap;
-   struct gl_texture_object *ProxyRect;
-   struct gl_texture_object *Proxy1DArray;
-   struct gl_texture_object *Proxy2DArray;
-#else
    struct gl_texture_object *ProxyTex[NUM_TEXTURE_TARGETS];
-#endif
 
    /** GL_EXT_shared_texture_palette */
    GLboolean SharedPalette;
@@ -1953,7 +1933,10 @@ struct gl_fragment_program
 {
    struct gl_program Base;   /**< base class */
    GLenum FogOption;
-   GLboolean UsesKill;
+   GLboolean UsesKill;          /**< shader uses KIL instruction */
+   GLboolean UsesPointCoord;    /**< shader uses gl_PointCoord */
+   GLboolean UsesFrontFacing;   /**< shader used gl_FrontFacing */
+   GLboolean UsesFogFragCoord;  /**< shader used gl_FogFragCoord */
 };
 
 
@@ -2143,12 +2126,14 @@ struct gl_shader_program
    GLuint NumShaders;          /**< number of attached shaders */
    struct gl_shader **Shaders; /**< List of attached the shaders */
 
+   /** User-defined attribute bindings (glBindAttribLocation) */
+   struct gl_program_parameter_list *Attributes;
+
    /* post-link info: */
    struct gl_vertex_program *VertexProgram;     /**< Linked vertex program */
    struct gl_fragment_program *FragmentProgram; /**< Linked fragment prog */
    struct gl_uniform_list *Uniforms;
    struct gl_program_parameter_list *Varying;
-   struct gl_program_parameter_list *Attributes; /**< Vertex attributes */
    GLboolean LinkStatus;   /**< GL_LINK_STATUS */
    GLboolean Validated;
    GLchar *InfoLog;
@@ -2421,13 +2406,11 @@ struct gl_framebuffer
    GLenum ColorDrawBuffer[MAX_DRAW_BUFFERS];
    GLenum ColorReadBuffer;
 
-   /* These are computed from ColorDrawBuffer and ColorReadBuffer */
-   GLbitfield _ColorDrawBufferMask[MAX_DRAW_BUFFERS]; /* Mask of BUFFER_BIT_* flags */
+   /** Computed from ColorDraw/ReadBuffer above */
+   GLuint _NumColorDrawBuffers;
+   GLint _ColorDrawBufferIndexes[MAX_DRAW_BUFFERS]; /**< BUFFER_x or -1 */
    GLint _ColorReadBufferIndex; /* -1 = None */
-
-   /* These are computed from _ColorDrawBufferMask and _ColorReadBufferIndex */
-   GLuint _NumColorDrawBuffers[MAX_DRAW_BUFFERS];
-   struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS][4];
+   struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS];
    struct gl_renderbuffer *_ColorReadBuffer;
 
    /** The Actual depth/stencil buffers to use.  May be wrappers around the
@@ -2894,7 +2877,6 @@ struct mesa_display_list
  */
 struct gl_dlist_state
 {
-   struct mesa_display_list *CallStack[MAX_LIST_NESTING];
    GLuint CallDepth;		/**< Current recursion calling depth */
 
    struct mesa_display_list *CurrentList;
@@ -3069,7 +3051,10 @@ struct __GLcontextRec
 
    /** \name Derived state */
    /*@{*/
-   GLbitfield _TriangleCaps;      /**< bitwise-or of DD_* flags */
+   /** Bitwise-or of DD_* flags.  Note that this bitfield may be used before
+    * state validation so they need to always be current.
+    */
+   GLbitfield _TriangleCaps;
    GLbitfield _ImageTransferState;/**< bitwise-or of IMAGE_*_BIT flags */
    GLfloat _EyeZDir[3];
    GLfloat _ModelViewInvScale;
@@ -3084,12 +3069,6 @@ struct __GLcontextRec
    /**@}*/
 
    struct gl_list_extensions ListExt; /**< driver dlist extensions */
-
-
-   GLuint _Facing; /**< This is a hack for 2-sided stencil test.
-		    *
-		    * We don't have a better way to communicate this value from
-		    * swrast_setup to swrast. */
 
    /** \name For debugging/development only */
    /*@{*/

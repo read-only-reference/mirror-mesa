@@ -1,5 +1,5 @@
 
-static __inline void TAG(ffb_line)(GLcontext *ctx, ffb_vertex *v0, 
+static INLINE void TAG(ffb_line)(GLcontext *ctx, ffb_vertex *v0, 
 				   ffb_vertex *v1 )
 {
 	ffbContextPtr fmesa = FFB_CONTEXT(ctx);

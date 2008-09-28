@@ -33,11 +33,11 @@
 #ifndef MMIO_H
 #define MMIO_H
 
-#include "glheader.h"
+#include "main/glheader.h"
 
 #if defined( __powerpc__ )
 
-static __inline__ uint32_t
+static INLINE uint32_t
 read_MMIO_LE32( volatile void * base, unsigned long offset )
 {
    uint32_t val;
@@ -50,7 +50,7 @@ read_MMIO_LE32( volatile void * base, unsigned long offset )
 
 #else
 
-static __inline__ uint32_t
+static INLINE uint32_t
 read_MMIO_LE32( volatile void * base, unsigned long offset )
 {
    volatile uint32_t * p = (volatile uint32_t *) (((volatile char *) base) + offset);

@@ -1,3 +1,10 @@
+/**
+ * Convolution with GLSL.
+ * Note: uses GL_ARB_shader_objects, GL_ARB_vertex_shader, GL_ARB_fragment_shader,
+ * not the OpenGL 2.0 shader API.
+ * Author: Zack Rusin
+ */
+
 #define GL_GLEXT_PROTOTYPES
 #include "readtex.h"
 
@@ -227,9 +234,11 @@ static void createProgram(const char *vertProgFile,
 
    glUseProgram(program);
 
+   /*
    assert(glIsProgram(program));
    assert(glIsShader(fragShader));
    assert(glIsShader(vertShader));
+   */
 
    checkError(__LINE__);
    {/*texture*/
@@ -316,6 +325,13 @@ static void menuInit()
 
 static void init()
 {
+   if (!glutExtensionSupported("GL_ARB_shader_objects") ||
+       !glutExtensionSupported("GL_ARB_vertex_shader") ||
+       !glutExtensionSupported("GL_ARB_fragment_shader")) {
+      fprintf(stderr, "Sorry, this program requires GL_ARB_shader_objects, GL_ARB_vertex_shader, and GL_ARB_fragment_shader\n");
+      exit(1);
+   }
+
    fprintf(stderr, "GL_RENDERER   = %s\n", (char *) glGetString(GL_RENDERER));
    fprintf(stderr, "GL_VERSION    = %s\n", (char *) glGetString(GL_VERSION));
    fprintf(stderr, "GL_VENDOR     = %s\n", (char *) glGetString(GL_VENDOR));

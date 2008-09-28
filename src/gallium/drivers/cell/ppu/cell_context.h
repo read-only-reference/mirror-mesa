@@ -39,8 +39,13 @@
 #include "rtasm/rtasm_ppc_spe.h"
 #include "tgsi/tgsi_scan.h"
 
+
 struct cell_vbuf_render;
 
+
+/**
+ * Cell vertex shader state, subclass of pipe_shader_state.
+ */
 struct cell_vertex_shader_state
 {
    struct pipe_shader_state shader;
@@ -49,45 +54,31 @@ struct cell_vertex_shader_state
 };
 
 
+/**
+ * Cell fragment shader state, subclass of pipe_shader_state.
+ */
 struct cell_fragment_shader_state
 {
    struct pipe_shader_state shader;
    struct tgsi_shader_info info;
+   struct spe_function code;
    void *data;
 };
 
 
-struct cell_blend_state {
-   struct pipe_blend_state base;
-
-   /**
-    * Generated code to perform alpha blending
-    */
-   struct spe_function code;
-};
-
-
-struct cell_depth_stencil_alpha_state {
-   struct pipe_depth_stencil_alpha_state   base;
-
-   /**
-    * Generated code to perform alpha, stencil, and depth testing on the SPE
-    */
-   struct spe_function code;
-
-};
-
-
+/**
+ * Per-context state, subclass of pipe_context.
+ */
 struct cell_context
 {
    struct pipe_context pipe;
 
    struct cell_winsys *winsys;
 
-   const struct cell_blend_state *blend;
+   const struct pipe_blend_state *blend;
    const struct pipe_sampler_state *sampler[PIPE_MAX_SAMPLERS];
    uint num_samplers;
-   const struct cell_depth_stencil_alpha_state   *depth_stencil;
+   const struct pipe_depth_stencil_alpha_state *depth_stencil;
    const struct pipe_rasterizer_state *rasterizer;
    const struct cell_vertex_shader_state *vs;
    const struct cell_fragment_shader_state *fs;
@@ -129,6 +120,7 @@ struct cell_context
    /** Mapped constant buffers */
    void *mapped_constants[PIPE_SHADER_TYPES];
 
+   struct cell_spu_function_info spu_functions ALIGN16_ATTRIB;
 
    uint num_spus;
 
@@ -144,6 +136,8 @@ struct cell_context
 
    struct spe_function attrib_fetch;
    unsigned attrib_fetch_offsets[PIPE_MAX_ATTRIBS];
+
+   unsigned debug_flags;
 };
 
 

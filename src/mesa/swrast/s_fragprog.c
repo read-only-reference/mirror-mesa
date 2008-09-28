@@ -44,7 +44,8 @@ fetch_texel_lod( GLcontext *ctx, const GLfloat texcoord[4], GLfloat lambda,
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const struct gl_texture_object *texObj = ctx->Texture.Unit[unit]._Current;
 
-   lambda = CLAMP(lambda, texObj->MinLod, texObj->MaxLod);
+   if (texObj)
+      lambda = CLAMP(lambda, texObj->MinLod, texObj->MaxLod);
 
    /* XXX use a float-valued TextureSample routine here!!! */
    swrast->TextureSample[unit](ctx, texObj, 1, (const GLfloat (*)[4]) texcoord,
@@ -68,20 +69,23 @@ fetch_texel_deriv( GLcontext *ctx, const GLfloat texcoord[4],
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    const struct gl_texture_object *texObj = ctx->Texture.Unit[unit]._Current;
-   const struct gl_texture_image *texImg = texObj->Image[0][texObj->BaseLevel];
-   const GLfloat texW = (GLfloat) texImg->WidthScale;
-   const GLfloat texH = (GLfloat) texImg->HeightScale;
+   GLfloat lambda;
    GLchan rgba[4];
 
-   GLfloat lambda
-      = _swrast_compute_lambda(texdx[0], texdy[0], /* ds/dx, ds/dy */
-                               texdx[1], texdy[1], /* dt/dx, dt/dy */
-                               texdx[3], texdy[2], /* dq/dx, dq/dy */
-                               texW, texH,
-                               texcoord[0], texcoord[1], texcoord[3],
-                               1.0F / texcoord[3]) + lodBias;
+   if (texObj) {
+      const struct gl_texture_image *texImg = texObj->Image[0][texObj->BaseLevel];
+      const GLfloat texW = (GLfloat) texImg->WidthScale;
+      const GLfloat texH = (GLfloat) texImg->HeightScale;
 
-   lambda = CLAMP(lambda, texObj->MinLod, texObj->MaxLod);
+      lambda = _swrast_compute_lambda(texdx[0], texdy[0], /* ds/dx, ds/dy */
+                                      texdx[1], texdy[1], /* dt/dx, dt/dy */
+                                      texdx[3], texdy[2], /* dq/dx, dq/dy */
+                                      texW, texH,
+                                      texcoord[0], texcoord[1], texcoord[3],
+                                      1.0F / texcoord[3]) + lodBias;
+
+      lambda = CLAMP(lambda, texObj->MinLod, texObj->MaxLod);
+   }
 
    swrast->TextureSample[unit](ctx, texObj, 1, (const GLfloat (*)[4]) texcoord,
                                &lambda, &rgba);
@@ -124,7 +128,8 @@ init_machine(GLcontext *ctx, struct gl_program_machine *machine,
    /* if running a GLSL program (not ARB_fragment_program) */
    if (ctx->Shader.CurrentProgram) {
       /* Store front/back facing value in register FOGC.Y */
-      machine->Attribs[FRAG_ATTRIB_FOGC][col][1] = (GLfloat) ctx->_Facing;
+      machine->Attribs[FRAG_ATTRIB_FOGC][col][1] = 1.0 - span->facing;
+      /* Note FOGC.ZW is gl_PointCoord if drawing a sprite */
    }
 
    machine->CurElement = col;
@@ -171,11 +176,11 @@ run_program(GLcontext *ctx, SWspan *span, GLuint start, GLuint end)
                 * Note that colors beyond 0 and 1 will overwrite other
                 * attributes, such as FOGC, TEX0, TEX1, etc.  That's OK.
                 */
-               GLuint output;
-               for (output = 0; output < swrast->_NumColorOutputs; output++) {
-                  if (outputsWritten & (1 << (FRAG_RESULT_DATA0 + output))) {
-                     COPY_4V(span->array->attribs[FRAG_ATTRIB_COL0+output][i],
-                             machine->Outputs[FRAG_RESULT_DATA0 + output]);
+               GLuint buf;
+               for (buf = 0; buf < ctx->DrawBuffer->_NumColorDrawBuffers; buf++) {
+                  if (outputsWritten & (1 << (FRAG_RESULT_DATA0 + buf))) {
+                     COPY_4V(span->array->attribs[FRAG_ATTRIB_COL0 + buf][i],
+                             machine->Outputs[FRAG_RESULT_DATA0 + buf]);
                   }
                }
             }

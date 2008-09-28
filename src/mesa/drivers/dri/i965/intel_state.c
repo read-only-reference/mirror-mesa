@@ -26,17 +26,42 @@
  **************************************************************************/
 
 
-#include "glheader.h"
-#include "context.h"
-#include "macros.h"
-#include "enums.h"
-#include "colormac.h"
-#include "dd.h"
+#include "main/glheader.h"
+#include "main/context.h"
+#include "main/macros.h"
+#include "main/enums.h"
+#include "main/colormac.h"
+#include "main/dd.h"
 
 #include "intel_screen.h"
 #include "intel_context.h"
 #include "intel_regions.h"
 #include "swrast/swrast.h"
+
+int intel_translate_shadow_compare_func( GLenum func )
+{
+   switch(func) {
+   case GL_NEVER: 
+       return COMPAREFUNC_ALWAYS; 
+   case GL_LESS: 
+       return COMPAREFUNC_LEQUAL; 
+   case GL_LEQUAL: 
+       return COMPAREFUNC_LESS;
+   case GL_GREATER: 
+       return COMPAREFUNC_GEQUAL; 
+   case GL_GEQUAL: 
+      return COMPAREFUNC_GREATER; 
+   case GL_NOTEQUAL: 
+      return COMPAREFUNC_EQUAL; 
+   case GL_EQUAL: 
+      return COMPAREFUNC_NOTEQUAL; 
+   case GL_ALWAYS: 
+       return COMPAREFUNC_NEVER; 
+   }
+
+   fprintf(stderr, "Unknown value in %s: %x\n", __FUNCTION__, func);
+   return COMPAREFUNC_NEVER; 
+}
 
 int intel_translate_compare_func( GLenum func )
 {
@@ -170,15 +195,16 @@ int intel_translate_logic_op( GLenum opcode )
 static void intelClearColor(GLcontext *ctx, const GLfloat color[4])
 {
    struct intel_context *intel = intel_context(ctx);
-   intelScreenPrivate *screen = intel->intelScreen;
 
    UNCLAMPED_FLOAT_TO_RGBA_CHAN(intel->clear_chan, color);
 
-   intel->ClearColor = INTEL_PACKCOLOR(screen->fbFormat,
-				       intel->clear_chan[0], 
-				       intel->clear_chan[1], 
-				       intel->clear_chan[2], 
-				       intel->clear_chan[3]);
+   intel->ClearColor8888 = INTEL_PACKCOLOR8888(intel->clear_chan[0],
+					       intel->clear_chan[1],
+					       intel->clear_chan[2],
+					       intel->clear_chan[3]);
+   intel->ClearColor565 = INTEL_PACKCOLOR565(intel->clear_chan[0],
+					     intel->clear_chan[1],
+					     intel->clear_chan[2]);
 }
 
 

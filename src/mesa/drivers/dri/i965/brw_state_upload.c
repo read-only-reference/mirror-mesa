@@ -33,7 +33,6 @@
 
 #include "brw_context.h"
 #include "brw_state.h"
-#include "bufmgr.h"
 #include "intel_batchbuffer.h"
 
 /* This is used to initialize brw->state.atoms[].  We could use this
@@ -80,19 +79,17 @@ const struct brw_tracked_state *atoms[] =
     */
    &brw_invarient_state,
    &brw_state_base_address,
-   &brw_pipe_control,
 
    &brw_binding_table_pointers,
    &brw_blend_constant_color,
 
-   &brw_drawing_rect,
    &brw_depthbuffer,
 
    &brw_polygon_stipple,
    &brw_polygon_stipple_offset,
 
    &brw_line_stipple,
-
+   &brw_aa_line_parameters,
    /* Ordering of the commands below is documented as fixed.  
     */
 #if 0
@@ -103,6 +100,8 @@ const struct brw_tracked_state *atoms[] =
    &brw_psp_urb_cbs,
 #endif
 
+   &brw_indices,
+   &brw_vertices,
 
    NULL,			/* brw_constant_buffer */
 };
@@ -112,8 +111,7 @@ void brw_init_state( struct brw_context *brw )
 {
    GLuint i;
 
-   brw_init_pools(brw);
-   brw_init_caches(brw);
+   brw_init_cache(brw);
 
    brw->state.atoms = _mesa_malloc(sizeof(atoms));
    brw->state.nr_atoms = sizeof(atoms)/sizeof(*atoms);
@@ -138,9 +136,8 @@ void brw_destroy_state( struct brw_context *brw )
       brw->state.atoms = NULL;
    }
 
-   brw_destroy_caches(brw);
+   brw_destroy_cache(brw);
    brw_destroy_batch_cache(brw);
-   brw_destroy_pools(brw);   
 }
 
 /***********************************************************************
@@ -178,8 +175,10 @@ static void xor_states( struct brw_state_flags *result,
  */
 void brw_validate_state( struct brw_context *brw )
 {
+   struct intel_context *intel = &brw->intel;
    struct brw_state_flags *state = &brw->state.dirty;
-   GLuint i;
+   GLuint i, count, pass = 0;
+   dri_bo *last_batch_bo = NULL;
 
    state->mesa |= brw->intel.NewGLState;
    brw->intel.NewGLState = 0;
@@ -210,13 +209,36 @@ void brw_validate_state( struct brw_context *brw )
    if (brw->state.dirty.brw & BRW_NEW_CONTEXT)
       brw_clear_batch_cache_flush(brw);
 
+   brw->intel.Fallback = 0;
 
-   /* Make an early reference to the state pools, as we don't cope
-    * well with them being evicted from here down.
+   count = 0;
+
+   /* do prepare stage for all atoms */
+   for (i = 0; i < Elements(atoms); i++) {
+      const struct brw_tracked_state *atom = brw->state.atoms[i];
+
+      if (brw->intel.Fallback)
+         break;
+
+      if (check_state(state, &atom->dirty)) {
+         if (atom->prepare) {
+            atom->prepare(brw);
+        }
+      }
+   }
+
+   if (brw->intel.Fallback)
+      return;
+
+   /* We're about to try to set up a coherent state in the batchbuffer for
+    * the emission of primitives.  If we exceed the aperture size in any of the
+    * emit() calls, we need to go back to square 1 and try setting up again.
     */
-   (void)bmBufferOffset(&brw->intel, brw->pool[BRW_GS_POOL].buffer);
-   (void)bmBufferOffset(&brw->intel, brw->pool[BRW_SS_POOL].buffer);
-   (void)bmBufferOffset(&brw->intel, brw->intel.batch->buffer);
+got_flushed:
+   dri_bo_unreference(last_batch_bo);
+   last_batch_bo = intel->batch->buf;
+   dri_bo_reference(last_batch_bo);
+   assert(pass++ <= 2);
 
    if (INTEL_DEBUG) {
       /* Debug version which enforces various sanity checks on the
@@ -234,12 +256,16 @@ void brw_validate_state( struct brw_context *brw )
 	 assert(atom->dirty.mesa ||
 		atom->dirty.brw ||
 		atom->dirty.cache);
-	 assert(atom->update);
+
+	 if (brw->intel.Fallback)
+	    break;
 
 	 if (check_state(state, &atom->dirty)) {
-	    brw->state.atoms[i]->update( brw );
-	    
-/* 	    emit_foo(brw); */
+	    if (atom->emit) {
+	       atom->emit( brw );
+	       if (intel->batch->buf != last_batch_bo)
+		  goto got_flushed;
+	    }
 	 }
 
 	 accumulate_state(&examined, &atom->dirty);
@@ -255,10 +281,23 @@ void brw_validate_state( struct brw_context *brw )
    }
    else {
       for (i = 0; i < Elements(atoms); i++) {	 
-	 if (check_state(state, &brw->state.atoms[i]->dirty))
-	    brw->state.atoms[i]->update( brw );
+	 const struct brw_tracked_state *atom = brw->state.atoms[i];
+
+	 if (brw->intel.Fallback)
+	    break;
+
+	 if (check_state(state, &atom->dirty)) {
+	    if (atom->emit) {
+	       atom->emit( brw );
+	       if (intel->batch->buf != last_batch_bo)
+		  goto got_flushed;
+	    }
+	 }
       }
    }
 
-   memset(state, 0, sizeof(*state));
+   dri_bo_unreference(last_batch_bo);
+
+   if (!brw->intel.Fallback)
+      memset(state, 0, sizeof(*state));
 }

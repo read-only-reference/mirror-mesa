@@ -39,7 +39,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "drm.h"
 #include "r128_drm.h"
 
-#include "mtypes.h"
+#include "main/mtypes.h"
 #include "tnl/t_vertex.h"
 
 #include "r128_reg.h"
@@ -208,11 +208,6 @@ struct r128_context {
    GLuint c_textureSwaps;
    GLuint c_textureBytes;
    GLuint c_vertexBuffers;
-
-   /* VBI
-    */
-   GLuint vbl_seq;
-   GLuint vblank_flags;
 
    /* Configuration cache
     */

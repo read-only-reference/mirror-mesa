@@ -8,7 +8,7 @@ TOP = ../..
 include $(TOP)/configs/current
 
 
-LIBS = $(APP_LIB_DEPS)
+LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) $(APP_LIB_DEPS)
 
 SOURCES = \
 	clear-fbo-tex.c \
@@ -19,6 +19,7 @@ SOURCES = \
 	dlist-dangling.c \
 	dlist-edgeflag-dangling.c \
 	dlist-edgeflag.c \
+	dlist-degenerate.c \
 	drawarrays.c \
 	drawelements.c \
 	drawrange.c \
@@ -41,6 +42,7 @@ SOURCES = \
 	linestrip-stipple-wide.c \
 	linestrip-stipple.c \
 	linestrip.c \
+	long-fixed-func.c \
 	pgon-mode.c \
 	point-clip.c \
 	point-param.c \
@@ -73,7 +75,6 @@ SOURCES = \
 	quadstrip-cont.c \
 	quadstrip-flat.c \
 	quadstrip.c \
-	tri-orig.c \
 	tri-alpha.c \
 	tri-blend-color.c \
 	tri-blend-max.c \
@@ -92,6 +93,7 @@ SOURCES = \
 	tri-flat.c \
 	tri-fog.c \
 	tri-mask-tri.c \
+	tri-orig.c \
 	tri-query.c \
 	tri-scissor-tri.c \
 	tri-stencil.c \
@@ -138,13 +140,13 @@ UTIL_FILES = readtex.h readtex.c
 .SUFFIXES: .c
 
 .c:
-	$(CC) $(INCLUDES) $(CFLAGS) $< $(LIBS) -o $@
+	$(APP_CC) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $< $(LIBS) -o $@
 
 .c.o:
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
+	$(APP_CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 .S.o:
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES)  $< -o $@
+	$(APP_CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES)  $< -o $@
 
 
 ##### TARGETS #####
@@ -152,9 +154,9 @@ UTIL_FILES = readtex.h readtex.c
 default: $(UTIL_FILES) $(PROGS)
 
 clean:
-	rm -f $(PROGS)
-	rm -f *.o
-	rm -f getproclist.h
+	-rm -f $(PROGS)
+	-rm -f *.o
+	-rm -f getproclist.h
 
 
 # auto code generation
@@ -165,19 +167,19 @@ getproclist.h: $(TOP)/src/mesa/glapi/gl_API.xml getprocaddress.c getprocaddress.
 
 
 texrect: texrect.o readtex.o
-	$(CC) texrect.o readtex.o $(LIBS) -o $@
+	$(APP_CC) $(CFLAGS) $(LDFLAGS) texrect.o readtex.o $(LIBS) -o $@
 
 texrect.o: texrect.c readtex.h
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
+	$(APP_CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 invert: invert.o readtex.o
-	$(CC) invert.o readtex.o $(LIBS) -o $@
+	$(APP_CC) $(CFLAGS) $(LDFLAGS) invert.o readtex.o $(LIBS) -o $@
 
 invert.o: invert.c readtex.h
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
+	$(APP_CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 readtex.o: readtex.c
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
+	$(APP_CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 
 readtex.h: $(TOP)/progs/util/readtex.h
