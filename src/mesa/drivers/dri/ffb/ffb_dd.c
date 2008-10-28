@@ -25,9 +25,8 @@
  *    David S. Miller <davem@redhat.com>
  */
 
-#include "main/mtypes.h"
-#include "main/mm.h"
-#include "main/extensions.h"
+#include "mtypes.h"
+#include "mm.h"
 #include "ffb_dd.h"
 #include "ffb_span.h"
 #include "ffb_depth.h"
@@ -36,6 +35,7 @@
 #include "ffb_tris.h"
 #include "ffb_clear.h"
 #include "ffb_lock.h"
+#include "extensions.h"
 
 #define FFB_DATE	"20021125"
 

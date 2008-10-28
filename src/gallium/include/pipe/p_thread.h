@@ -25,8 +25,6 @@
 
 
 /**
- * @file
- * 
  * Thread, mutex, condition var and thread-specific data functions.
  */
 

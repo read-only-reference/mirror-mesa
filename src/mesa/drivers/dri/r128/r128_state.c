@@ -39,9 +39,9 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r128_tris.h"
 #include "r128_tex.h"
 
-#include "main/context.h"
-#include "main/enums.h"
-#include "main/colormac.h"
+#include "context.h"
+#include "enums.h"
+#include "colormac.h"
 #include "swrast/swrast.h"
 #include "vbo/vbo.h"
 #include "tnl/tnl.h"
@@ -812,7 +812,7 @@ static void r128UpdateWindow( GLcontext *ctx )
    r128ContextPtr rmesa = R128_CONTEXT(ctx);
    int x = rmesa->driDrawable->x;
    int y = rmesa->driDrawable->y;
-   struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0];
+   struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0][0];
    driRenderbuffer *drb = (driRenderbuffer *) rb;
 
    rmesa->setup.window_xy_offset = (((y & 0xFFF) << R128_WINDOW_Y_SHIFT) |
@@ -896,22 +896,18 @@ static void r128DDDrawBuffer( GLcontext *ctx, GLenum mode )
 
    FLUSH_BATCH( rmesa );
 
-   if (ctx->DrawBuffer->_NumColorDrawBuffers != 1) {
+   /*
+    * _ColorDrawBufferMask is easier to cope with than <mode>.
+    */
+   switch ( ctx->DrawBuffer->_ColorDrawBufferMask[0] ) {
+   case BUFFER_BIT_FRONT_LEFT:
+   case BUFFER_BIT_BACK_LEFT:
+      FALLBACK( rmesa, R128_FALLBACK_DRAW_BUFFER, GL_FALSE );
+      break;
+   default:
       /* GL_NONE or GL_FRONT_AND_BACK or stereo left&right, etc */
       FALLBACK( rmesa, R128_FALLBACK_DRAW_BUFFER, GL_TRUE );
-      return;
-   }
-   else {
-      switch ( ctx->DrawBuffer->_ColorDrawBufferIndexes[0] ) {
-      case BUFFER_FRONT_LEFT:
-      case BUFFER_BACK_LEFT:
-         FALLBACK( rmesa, R128_FALLBACK_DRAW_BUFFER, GL_FALSE );
-         break;
-      default:
-         /* GL_NONE or GL_FRONT_AND_BACK or stereo left&right, etc */
-         FALLBACK( rmesa, R128_FALLBACK_DRAW_BUFFER, GL_TRUE );
-         break;
-      }
+      break;
    }
 
    rmesa->new_state |= R128_NEW_WINDOW;

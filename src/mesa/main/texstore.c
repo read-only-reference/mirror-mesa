@@ -3802,8 +3802,8 @@ _mesa_get_teximage(GLcontext *ctx, GLenum target, GLint level,
 void
 _mesa_get_compressed_teximage(GLcontext *ctx, GLenum target, GLint level,
                               GLvoid *img,
-                              struct gl_texture_object *texObj,
-                              struct gl_texture_image *texImage)
+                              const struct gl_texture_object *texObj,
+                              const struct gl_texture_image *texImage)
 {
    GLuint size;
 

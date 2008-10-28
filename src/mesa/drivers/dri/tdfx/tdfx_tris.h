@@ -33,7 +33,7 @@
 #ifndef TDFX_TRIS_INC
 #define TDFX_TRIS_INC
 
-#include "main/mtypes.h"
+#include "mtypes.h"
 
 extern void tdfxDDInitTriFuncs( GLcontext *ctx );
 

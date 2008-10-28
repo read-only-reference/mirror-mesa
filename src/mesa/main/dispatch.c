@@ -39,7 +39,7 @@
 
 #ifndef GLX_USE_APPLEGL
 
-#include "main/glheader.h"
+#include "glheader.h"
 #include "glapi/glapi.h"
 #include "glapi/glapitable.h"
 #include "glapi/glthread.h"

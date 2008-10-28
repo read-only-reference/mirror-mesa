@@ -23,14 +23,14 @@
  *
  */
 
-#include "gammacontext.h"
+#include "gamma_context.h"
 #include "gamma_vb.h"
 #include "gamma_lock.h"
 #if defined(USE_X86_ASM)
 #include "x86/common_x86_asm.h"
 #endif
 
-#include "main/context.h"
+#include "context.h"
 #include "swrast/swrast.h"
 
 #define GAMMA_DATE	"20021125"

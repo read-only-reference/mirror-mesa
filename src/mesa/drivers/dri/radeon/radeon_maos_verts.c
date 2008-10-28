@@ -32,9 +32,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *   Keith Whitwell <keith@tungstengraphics.com>
  */
 
-#include "main/glheader.h"
-#include "main/imports.h"
-#include "main/mtypes.h"
+#include "glheader.h"
+#include "imports.h"
+#include "mtypes.h"
 
 #include "vbo/vbo.h"
 #include "math/m_translate.h"

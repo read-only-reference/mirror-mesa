@@ -23,35 +23,34 @@
  */
 
 
-#include "main/glheader.h"
-#include "main/imports.h"
-#include "main/arrayobj.h"
-#include "main/buffers.h"
-#include "main/context.h"
-#include "main/framebuffer.h"
-#include "main/mipmap.h"
-#include "main/queryobj.h"
-#include "main/renderbuffer.h"
-#include "main/texcompress.h"
-#include "main/texformat.h"
-#include "main/teximage.h"
-#include "main/texobj.h"
-#include "main/texstore.h"
+#include "glheader.h"
+#include "imports.h"
+#include "buffers.h"
+#include "context.h"
+#include "framebuffer.h"
+#include "mipmap.h"
+#include "program.h"
+#include "prog_execute.h"
+#include "queryobj.h"
+#include "renderbuffer.h"
+#include "texcompress.h"
+#include "texformat.h"
+#include "teximage.h"
+#include "texobj.h"
+#include "texstore.h"
 #if FEATURE_ARB_vertex_buffer_object
-#include "main/bufferobj.h"
+#include "bufferobj.h"
 #endif
 #if FEATURE_EXT_framebuffer_object
-#include "main/fbobject.h"
-#include "main/texrender.h"
+#include "fbobject.h"
+#include "texrender.h"
 #endif
-
-#include "shader/program.h"
-#include "shader/prog_execute.h"
-#include "shader/shader_api.h"
-#include "tnl/tnl.h"
-#include "swrast/swrast.h"
+#include "shader_api.h"
+#include "arrayobj.h"
 
 #include "driverfuncs.h"
+#include "tnl/tnl.h"
+#include "swrast/swrast.h"
 
 
 
@@ -116,8 +115,6 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->DeleteTexture = _mesa_delete_texture_object;
    driver->NewTextureImage = _mesa_new_texture_image;
    driver->FreeTexImageData = _mesa_free_texture_image_data; 
-   driver->MapTexture = NULL;
-   driver->UnmapTexture = NULL;
    driver->TextureMemCpy = _mesa_memcpy; 
    driver->IsTextureResident = NULL;
    driver->PrioritizeTexture = NULL;

@@ -104,8 +104,6 @@ _mesa_align_malloc(size_t bytes, unsigned long alignment)
 
    (void) posix_memalign(& mem, alignment, bytes);
    return mem;
-#elif defined(_WIN32) && defined(_MSC_VER)
-   return _aligned_malloc(bytes, alignment);
 #else
    uintptr_t ptr, buf;
 
@@ -141,15 +139,6 @@ _mesa_align_calloc(size_t bytes, unsigned long alignment)
    void *mem;
    
    mem = _mesa_align_malloc(bytes, alignment);
-   if (mem != NULL) {
-      (void) memset(mem, 0, bytes);
-   }
-
-   return mem;
-#elif defined(_WIN32) && defined(_MSC_VER)
-   void *mem;
-
-   mem = _aligned_malloc(bytes, alignment);
    if (mem != NULL) {
       (void) memset(mem, 0, bytes);
    }
@@ -191,8 +180,6 @@ _mesa_align_free(void *ptr)
 {
 #if defined(HAVE_POSIX_MEMALIGN)
    free(ptr);
-#elif defined(_WIN32) && defined(_MSC_VER)
-   _aligned_free(ptr);
 #else
    void **cubbyHole = (void **) ((char *) ptr - sizeof(void *));
    void *realAddr = *cubbyHole;
@@ -207,10 +194,6 @@ void *
 _mesa_align_realloc(void *oldBuffer, size_t oldSize, size_t newSize,
                     unsigned long alignment)
 {
-#if defined(_WIN32) && defined(_MSC_VER)
-   (void) oldSize;
-   return _aligned_realloc(oldBuffer, newSize, alignment);
-#else
    const size_t copySize = (oldSize < newSize) ? oldSize : newSize;
    void *newBuf = _mesa_align_malloc(newSize, alignment);
    if (newBuf && oldBuffer && copySize > 0) {
@@ -219,7 +202,6 @@ _mesa_align_realloc(void *oldBuffer, size_t oldSize, size_t newSize,
    if (oldBuffer)
       _mesa_align_free(oldBuffer);
    return newBuf;
-#endif
 }
 
 
@@ -559,28 +541,25 @@ _mesa_pow(double x, double y)
 int
 _mesa_ffs(int32_t i)
 {
-#if (defined(_WIN32) ) || defined(__IBMC__) || defined(__IBMCPP__)
-   register int bit = 0;
-   if (i != 0) {
-      if ((i & 0xffff) == 0) {
-         bit += 16;
-         i >>= 16;
-      }
-      if ((i & 0xff) == 0) {
-         bit += 8;
-         i >>= 8;
-      }
-      if ((i & 0xf) == 0) {
-         bit += 4;
-         i >>= 4;
-      }
-      while ((i & 1) == 0) {
-         bit++;
-         i >>= 1;
-      }
-      bit++;
+#if (defined(_WIN32) && !defined(__MINGW32__) ) || defined(__IBMC__) || defined(__IBMCPP__)
+   register int32_t bit = 1;
+   if ((i & 0xffff) == 0) {
+      bit += 16;
+      i >>= 16;
    }
-   return bit;
+   if ((i & 0xff) == 0) {
+      bit += 8;
+      i >>= 8;
+   }
+   if ((i & 0xf) == 0) {
+      bit += 4;
+      i >>= 4;
+   }
+   if ((i & 0x3) == 0) {
+      bit += 2;
+      i >>= 2;
+   }
+   return (i) ? (bit + ((i + 1) & 0x01)) : 0;
 #else
    return ffs(i);
 #endif

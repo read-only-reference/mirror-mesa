@@ -20,8 +20,6 @@
  */
 
 #include "gltrace_support.h"
-#include <cstdlib>
-#include <cstring>
 #include <assert.h>
 #include <sstream>
 #include <fstream>
@@ -138,7 +136,7 @@ namespace gltrace {
 
     struct timeval now;
     struct tm t;
-    static char const *months[12] = 
+    static char *months[12] = 
       { 
 	"Jan", "Feb", "Mar", "Apr", "May", "Jun", 
 	"Jul", "Aug", "Sep", "Oct", "Nov", "Dec" 

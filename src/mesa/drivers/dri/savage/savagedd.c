@@ -23,12 +23,12 @@
  */
 
 
-#include "main/mtypes.h"
-#include "main/framebuffer.h"
+#include "mtypes.h"
+#include "framebuffer.h"
 
 #include <stdio.h>
 
-#include "main/mm.h"
+#include "mm.h"
 #include "swrast/swrast.h"
 
 #include "savagedd.h"
@@ -37,7 +37,7 @@
 #include "savagetex.h"
 #include "savagetris.h"
 #include "savagecontext.h"
-#include "main/extensions.h"
+#include "extensions.h"
 
 #include "utils.h"
 

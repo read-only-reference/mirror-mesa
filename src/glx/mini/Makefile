@@ -49,7 +49,7 @@ default: depend $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME) $(TOP)/$(LIB_DIR)/miniglx.conf
 
 # Make libGL
 $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME):  $(OBJECTS) Makefile
-	@ $(MKLIB) -o $(GL_LIB) -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+	@ $(TOP)/bin/mklib -o $(GL_LIB) -linker '$(CC)' \
 		-major 1 -minor 2 $(MKLIB_OPTIONS) \
 		-install $(TOP)/$(LIB_DIR) $(GL_LIB_DEPS) $(OBJECTS) \
 		$(LIBDRM_LIB) $(PCIACCESS_LIB)
@@ -76,14 +76,10 @@ tags:
 	etags `find . -name \*.[ch]` `find ../include`
 
 
-# Dummy install target
-install:
-
-
 # Remove .o and backup files
 clean:
 	-rm -f drmtest $(TOP)/$(LIB_DIR)/libGL.so*
 	-rm -f *.o *~
-	-rm -f depend depend.bak
+	-rm -f depend
 
 include depend

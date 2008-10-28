@@ -37,7 +37,7 @@
 #ifndef __TDFX_STATE_H__
 #define __TDFX_STATE_H__
 
-#include "main/context.h"
+#include "context.h"
 #include "tdfx_context.h"
 
 extern void tdfxDDInitStateFuncs( GLcontext *ctx );

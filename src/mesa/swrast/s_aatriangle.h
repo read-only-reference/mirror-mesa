@@ -28,6 +28,7 @@
 #define S_AATRIANGLE_H
 
 
+#include "main/mtypes.h"
 #include "swrast.h"
 
 

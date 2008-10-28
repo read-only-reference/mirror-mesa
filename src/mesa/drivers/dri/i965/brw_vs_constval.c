@@ -30,7 +30,7 @@
   */
             
 
-#include "main/macros.h"
+#include "macros.h"
 #include "brw_context.h"
 #include "brw_vs.h"
 
@@ -218,6 +218,6 @@ const struct brw_tracked_state brw_wm_input_sizes = {
       .brw   = BRW_NEW_VERTEX_PROGRAM | BRW_NEW_INPUT_DIMENSIONS,
       .cache = 0
    },
-   .prepare = calc_wm_input_sizes
+   .update = calc_wm_input_sizes
 };
 

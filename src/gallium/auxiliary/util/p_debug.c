@@ -306,13 +306,6 @@ debug_get_flags_option(const char *name,
    str = _debug_get_option(name);
    if(!str)
       result = dfault;
-   else if (!util_strcmp(str, "help")) {
-      result = dfault;
-      while (flags->name) {
-         debug_printf("%s: help for %s: %s [0x%lx]\n", __FUNCTION__, name, flags->name, flags->value);
-         flags++;
-      }
-   }
    else {
       result = 0;
       while( flags->name ) {
@@ -322,12 +315,7 @@ debug_get_flags_option(const char *name,
       }
    }
 
-   if (str) {
-      debug_printf("%s: %s = 0x%lx (%s)\n", __FUNCTION__, name, result, str);
-   }
-   else {
-      debug_printf("%s: %s = 0x%lx\n", __FUNCTION__, name, result);
-   }
+   debug_printf("%s: %s = 0x%lx\n", __FUNCTION__, name, result);
 
    return result;
 }

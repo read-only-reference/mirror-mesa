@@ -2,19 +2,19 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#include "main/glheader.h"
-#include "main/mtypes.h"
-#include "main/imports.h"
-#include "main/simple_list.h"
-#include "main/enums.h"
-#include "main/texstore.h"
+#include "glheader.h"
+#include "mtypes.h"
+#include "imports.h"
+#include "simple_list.h"
+#include "enums.h"
+#include "texstore.h"
 #include "teximage.h"
-#include "main/texformat.h"
+#include "texformat.h"
 #include "texobj.h"
 #include "swrast/swrast.h"
 
-#include "main/mm.h"
-#include "gammacontext.h"
+#include "mm.h"
+#include "gamma_context.h"
 #include "colormac.h"
 
 

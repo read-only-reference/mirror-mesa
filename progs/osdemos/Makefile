@@ -5,19 +5,13 @@ include $(TOP)/configs/current
 
 INCDIR = $(TOP)/include
 
-OSMESA_LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLU_LIB) -l$(OSMESA_LIB) $(APP_LIB_DEPS)
+OSMESA_LIBS = -L$(TOP)/$(LIB_DIR) -lOSMesa $(APP_LIB_DEPS)
 
-OSMESA16_LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -lOSMesa16 -l$(GLU_LIB) \
-	-l$(GL_LIB) $(APP_LIB_DEPS)
+OSMESA16_LIBS = -L$(TOP)/$(LIB_DIR) -lglut -lOSMesa16 -lGLU -lGL $(APP_LIB_DEPS)
 
-OSMESA32_LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -lOSMesa32 -l$(GLU_LIB) \
-	-l$(GL_LIB) $(APP_LIB_DEPS)
+OSMESA32_LIBS = -L$(TOP)/$(LIB_DIR) -lglut -lOSMesa32 -lGLU -lGL $(APP_LIB_DEPS)
 
-LIB_DEP = $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME) $(TOP)/$(LIB_DIR)/$(GLU_LIB_NAME) \
-	$(TOP)/$(LIB_DIR)/$(GLUT_LIB_NAME)
-
-LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) \
-	$(APP_LIB_DEPS)
+LIB_DEP = $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME) $(TOP)/$(LIB_DIR)/$(GLU_LIB_NAME) $(TOP)/$(LIB_DIR)/$(GLUT_LIB_NAME)
 
 PROGS = \
 	osdemo \
@@ -32,7 +26,7 @@ PROGS = \
 
 # make executable from .c file:
 .c: $(LIB_DEP) readtex.o
-	$(CC) -I$(INCDIR) $(CFLAGS) $(LDFLAGS) $< readtex.o $(LIBS) -o $@
+	$(CC) -I$(INCDIR) $(CFLAGS) $< readtex.o $(APP_LIB_DEPS) -o $@
 
 
 ##### TARGETS #####
@@ -62,19 +56,19 @@ showbuffer.o: showbuffer.c showbuffer.h
 
 # special case: need the -lOSMesa library:
 osdemo: osdemo.c
-	$(CC) -I$(INCDIR) $(CFLAGS) $(LDFLAGS) osdemo.c $(OSMESA_LIBS) -o $@
+	$(CC) -I$(INCDIR) $(CFLAGS) osdemo.c $(OSMESA_LIBS) -o $@
 
 # special case: need the -lOSMesa library:
 ostest1: ostest1.c
-	$(CC) -I$(INCDIR) $(CFLAGS) $(LDFLAGS) ostest1.c $(OSMESA_LIBS) -o $@
+	$(CC) -I$(INCDIR) $(CFLAGS) ostest1.c $(OSMESA_LIBS) -o $@
 
 # another special case: need the -lOSMesa16 library:
 osdemo16: osdemo16.c
-	$(CC) -I$(INCDIR) $(CFLAGS) $(LDFLAGS) osdemo16.c $(OSMESA16_LIBS) -o $@
+	$(CC) -I$(INCDIR) $(CFLAGS) osdemo16.c $(OSMESA16_LIBS) -o $@
 
 # another special case: need the -lOSMesa32 library:
 osdemo32: osdemo32.c
-	$(CC) -I$(INCDIR) $(CFLAGS) $(LDFLAGS) osdemo32.c $(OSMESA32_LIBS) -o $@
+	$(CC) -I$(INCDIR) $(CFLAGS) osdemo32.c $(OSMESA32_LIBS) -o $@
 
 
 

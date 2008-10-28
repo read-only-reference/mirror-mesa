@@ -50,15 +50,15 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  * no bugs...
  */
 
-#include "main/glheader.h"
-#include "main/state.h"
-#include "main/imports.h"
-#include "main/enums.h"
-#include "main/macros.h"
-#include "main/context.h"
-#include "main/dd.h"
-#include "main/simple_list.h"
-#include "main/api_arrayelt.h"
+#include "glheader.h"
+#include "state.h"
+#include "imports.h"
+#include "enums.h"
+#include "macros.h"
+#include "context.h"
+#include "dd.h"
+#include "simple_list.h"
+#include "api_arrayelt.h"
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
 #include "vbo/vbo.h"
@@ -74,7 +74,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r300_reg.h"
 #include "r300_tex.h"
 #include "r300_emit.h"
-#include "r300_fragprog.h"
 extern int future_hw_tcl_on;
 
 /**
@@ -269,24 +268,13 @@ static void r300RunRenderPrimitive(r300ContextPtr rmesa, GLcontext * ctx,
 		return;
 
 	if (vb->Elts) {
+		r300EmitAOS(rmesa, rmesa->state.aos_count, start);
 		if (num_verts > 65535) {
 			/* not implemented yet */
 			WARN_ONCE("Too many elts\n");
 			return;
 		}
-		/* Note: The following is incorrect, but it's the best I can do
-		 * without a major refactoring of how DMA memory is handled.
-		 * The problem: Ensuring that both vertex arrays *and* index
-		 * arrays are at the right position, and then ensuring that
-		 * the LOAD_VBPNTR, DRAW_INDX and INDX_BUFFER packets are emitted
-		 * at once.
-		 *
-		 * So why is the following incorrect? Well, it seems like
-		 * allocating the index array might actually evict the vertex
-		 * arrays. *sigh*
-		 */
 		r300EmitElts(ctx, vb->Elts, num_verts);
-		r300EmitAOS(rmesa, rmesa->state.aos_count, start);
 		r300FireEB(rmesa, rmesa->state.elt_dma.aos_offset, num_verts, type);
 	} else {
 		r300EmitAOS(rmesa, rmesa->state.aos_count, start);
@@ -346,26 +334,13 @@ static GLboolean r300RunRender(GLcontext * ctx,
 static int r300Fallback(GLcontext * ctx)
 {
 	r300ContextPtr r300 = R300_CONTEXT(ctx);
-	/* Do we need to use new-style shaders?
-	 * Also is there a better way to do this? */
-	if (r300->radeon.radeonScreen->chip_family >= CHIP_FAMILY_RV515) {
-		struct r500_fragment_program *fp = (struct r500_fragment_program *)
+	struct r300_fragment_program *fp = (struct r300_fragment_program *)
 	    (char *)ctx->FragmentProgram._Current;
-		if (fp) {
-			if (!fp->translated) {
-				r500TranslateFragmentShader(r300, fp);
-				FALLBACK_IF(!fp->translated);
-			}
-		}
-	} else {
-		struct r300_fragment_program *fp = (struct r300_fragment_program *)
-	    (char *)ctx->FragmentProgram._Current;
-		if (fp) {
-			if (!fp->translated) {
-				r300TranslateFragmentShader(r300, fp);
-				FALLBACK_IF(!fp->translated);
-			}
-		}
+
+	if (fp) {
+		if (!fp->translated)
+			r300TranslateFragmentShader(r300, fp);
+		FALLBACK_IF(!fp->translated);
 	}
 
 	FALLBACK_IF(ctx->RenderMode != GL_RENDER);
@@ -376,6 +351,8 @@ static int r300Fallback(GLcontext * ctx)
 			ctx->Stencil.ValueMask[1]
 			|| ctx->Stencil.WriteMask[0] !=
 			ctx->Stencil.WriteMask[1]));
+
+	FALLBACK_IF(ctx->Color.ColorLogicOpEnabled);
 
 	if (ctx->Extensions.NV_point_sprite || ctx->Extensions.ARB_point_sprite)
 		FALLBACK_IF(ctx->Point.PointSprite);

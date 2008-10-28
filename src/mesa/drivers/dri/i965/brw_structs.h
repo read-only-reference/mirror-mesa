@@ -141,8 +141,7 @@ struct brw_depthbuffer
       struct {
 	 GLuint pitch:18; 
 	 GLuint format:3; 
-	 GLuint pad:2;
-	 GLuint software_tiled_rendering_mode:2;
+	 GLuint pad:4;
 	 GLuint depth_offset_disable:1; 
 	 GLuint tile_walk:1; 
 	 GLuint tiled_surface:1; 
@@ -167,62 +166,12 @@ struct brw_depthbuffer
 
    union {
       struct {
-	 GLuint pad:10;
-	 GLuint min_array_element:11; 
+	 GLuint pad:12;
+	 GLuint min_array_element:9; 
 	 GLuint depth:11; 
       } bits;
       GLuint dword;
    } dword4;
-};
-
-struct brw_depthbuffer_gm45_g4x
-{
-   union header_union header;
-   
-   union {
-      struct {
-	 GLuint pitch:18; 
-	 GLuint format:3; 
-	 GLuint pad:2;
-	 GLuint software_tiled_rendering_mode:2;
-	 GLuint depth_offset_disable:1; 
-	 GLuint tile_walk:1; 
-	 GLuint tiled_surface:1; 
-	 GLuint pad2:1;
-	 GLuint surface_type:3; 
-      } bits;
-      GLuint dword;
-   } dword1;
-   
-   GLuint dword2_base_addr; 
- 
-   union {
-      struct {
-	 GLuint pad:1;
-	 GLuint mipmap_layout:1; 
-	 GLuint lod:4; 
-	 GLuint width:13; 
-	 GLuint height:13; 
-      } bits;
-      GLuint dword;
-   } dword3;
-
-   union {
-      struct {
-	 GLuint pad:10;
-	 GLuint min_array_element:11; 
-	 GLuint depth:11; 
-      } bits;
-      GLuint dword;
-   } dword4;
-
-   union {
-      struct {
-         GLuint xoffset:16;
-         GLuint yoffset:16;
-      } bits;
-      GLuint dword;
-   } dword5;   /* NEW in Integrated Graphics Device */
 };
 
 struct brw_drawrect
@@ -264,25 +213,6 @@ struct brw_indexbuffer
    GLuint buffer_end; 
 };
 
-/* NEW in Integrated Graphics Device */
-struct brw_aa_line_parameters
-{
-   struct header header;
-
-   struct {
-      GLuint aa_coverage_scope:8;
-      GLuint pad0:8;
-      GLuint aa_coverage_bias:8;
-      GLuint pad1:8;
-   } bits0;
-
-   struct {
-      GLuint aa_coverage_endcap_slope:8;
-      GLuint pad0:8;
-      GLuint aa_coverage_endcap_bias:8;
-      GLuint pad1:8;
-   } bits1;
-};
 
 struct brw_line_stipple
 {   
@@ -309,39 +239,39 @@ struct brw_pipelined_state_pointers
    
    struct {
       GLuint pad:5;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint offset:27; 
    } vs;
    
    struct
    {
       GLuint enable:1;
       GLuint pad:4;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint offset:27; 
    } gs;
    
    struct
    {
       GLuint enable:1;
       GLuint pad:4;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint offset:27; 
    } clp;
    
    struct
    {
       GLuint pad:5;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint offset:27; 
    } sf;
 
    struct
    {
       GLuint pad:5;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint offset:27; 
    } wm;
    
    struct
    {
       GLuint pad:5;
-      GLuint offset:27; /* Offset from GENERAL_STATE_BASE. KW: check me! */
+      GLuint offset:27; /* KW: check me! */
    } cc;
 };
 
@@ -385,8 +315,7 @@ struct brw_pipe_control
    {
       GLuint length:8;
       GLuint notify_enable:1;
-      GLuint texture_cache_flush_enable:1;
-      GLuint indirect_state_pointers_disable:1;
+      GLuint pad:2;
       GLuint instruction_state_cache_flush_enable:1;
       GLuint write_cache_flush_enable:1;
       GLuint depth_stall_enable:1;
@@ -544,7 +473,7 @@ struct thread0
    GLuint pad0:1;
    GLuint grf_reg_count:3; 
    GLuint pad1:2;
-   GLuint kernel_start_pointer:26; /* Offset from GENERAL_STATE_BASE */
+   GLuint kernel_start_pointer:26; 
 };
 
 struct thread1
@@ -618,8 +547,8 @@ struct brw_clip_unit_state
       GLuint pad1:1;
       GLuint urb_entry_allocation_size:5; 
       GLuint pad2:1;
-      GLuint max_threads:5; 	/* may be less */
-      GLuint pad3:2;
+      GLuint max_threads:1; 	/* may be less */
+      GLuint pad3:6;
    } thread4;   
       
    struct
@@ -628,7 +557,7 @@ struct brw_clip_unit_state
       GLuint clip_mode:3; 
       GLuint userclip_enable_flags:8; 
       GLuint userclip_must_clip:1; 
-      GLuint negative_w_clip_test:1;
+      GLuint pad1:1;
       GLuint guard_band_enable:1; 
       GLuint viewport_z_clip_enable:1; 
       GLuint viewport_xy_clip_enable:1; 
@@ -708,7 +637,7 @@ struct brw_cc_unit_state
    struct
    {
       GLuint pad0:5; 
-      GLuint cc_viewport_state_offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint cc_viewport_state_offset:27; 
    } cc4;
    
    struct
@@ -770,7 +699,7 @@ struct brw_sf_unit_state
       GLuint front_winding:1; 
       GLuint viewport_transform:1; 
       GLuint pad0:3;
-      GLuint sf_viewport_state_offset:27; /* Offset from GENERAL_STATE_BASE */
+      GLuint sf_viewport_state_offset:27; 
    } sf5;
    
    struct
@@ -795,8 +724,7 @@ struct brw_sf_unit_state
       GLuint use_point_size_state:1; 
       GLuint subpixel_precision:1; 
       GLuint sprite_point:1; 
-      GLuint pad0:10;
-      GLuint aa_line_distance_mode:1;
+      GLuint pad0:11;
       GLuint trifan_pv:2; 
       GLuint linestrip_pv:2; 
       GLuint tristrip_pv:2; 
@@ -821,8 +749,8 @@ struct brw_gs_unit_state
       GLuint pad1:1;
       GLuint urb_entry_allocation_size:5; 
       GLuint pad2:1;
-      GLuint max_threads:5; 
-      GLuint pad3:2;
+      GLuint max_threads:1; 
+      GLuint pad3:6;
    } thread4;   
       
    struct
@@ -836,14 +764,9 @@ struct brw_gs_unit_state
    struct
    {
       GLuint max_vp_index:4; 
-      GLuint pad0:12;
-      GLuint svbi_post_inc_value:10;
-      GLuint pad1:1;
-      GLuint svbi_post_inc_enable:1;
-      GLuint svbi_payload:1;
-      GLuint discard_adjaceny:1;
+      GLuint pad0:26;
       GLuint reorder_enable:1; 
-      GLuint pad2:1;
+      GLuint pad1:1;
    } gs6;
 };
 
@@ -863,8 +786,8 @@ struct brw_vs_unit_state
       GLuint pad1:1;
       GLuint urb_entry_allocation_size:5; 
       GLuint pad2:1;
-      GLuint max_threads:6; 
-      GLuint pad3:1;
+      GLuint max_threads:4; 
+      GLuint pad3:3;
    } thread4;   
 
    struct
@@ -892,7 +815,7 @@ struct brw_wm_unit_state
    
    struct {
       GLuint stats_enable:1; 
-      GLuint depth_buffer_clear:1;
+      GLuint pad0:1;
       GLuint sampler_count:3; 
       GLuint sampler_state_pointer:27; 
    } wm4;
@@ -902,9 +825,7 @@ struct brw_wm_unit_state
       GLuint enable_8_pix:1; 
       GLuint enable_16_pix:1; 
       GLuint enable_32_pix:1; 
-      GLuint enable_con_32_pix:1;
-      GLuint enable_con_64_pix:1;
-      GLuint pad0:5;
+      GLuint pad0:7;
       GLuint legacy_global_depth_bias:1; 
       GLuint line_stipple:1; 
       GLuint depth_offset:1; 
@@ -917,8 +838,9 @@ struct brw_wm_unit_state
       GLuint program_computes_depth:1; 
       GLuint program_uses_killpixel:1; 
       GLuint legacy_line_rast: 1; 
-      GLuint transposed_urb_read_enable:1; 
-      GLuint max_threads:7; 
+      GLuint pad1:1; 
+      GLuint max_threads:6; 
+      GLuint pad2:1;
    } wm5;
    
    GLfloat global_depth_offset_constant;  
@@ -1002,7 +924,6 @@ struct brw_sf_viewport
       GLfloat m32;  
    } viewport;
 
-   /* scissor coordinates are inclusive */
    struct {
       GLshort xmin;
       GLshort ymin;
@@ -1057,26 +978,10 @@ struct brw_surface_state
    } ss3;
    
    struct {
-      GLuint multisample_position_palette_index:3;
-      GLuint pad1:1;
-      GLuint num_multisamples:3;
-      GLuint pad0:1;
-      GLuint render_target_view_extent:9;
-      GLuint min_array_elt:11;
+      GLuint pad:19;
+      GLuint min_array_elt:9; 
       GLuint min_lod:4; 
    } ss4;
-
-   struct {
-      GLuint pad1:16;
-      GLuint llc_mapping:1;
-      GLuint mlc_mapping:1;
-      GLuint gfdt:1;
-      GLuint gfdt_src:1;
-      GLuint y_offset:4;
-      GLuint pad0:1;
-      GLuint x_offset:7;
-   } ss5;   /* NEW in Integrated Graphics Device */
-
 };
 
 
@@ -1395,17 +1300,6 @@ struct brw_instruction
 	 GLuint pad1:3;
 	 GLuint end_of_thread:1;
       } sampler;
-
-      struct {
-         GLuint binding_table_index:8;
-         GLuint sampler:4;
-         GLuint msg_type:4;
-         GLuint response_length:4;
-         GLuint msg_length:4;
-         GLuint msg_target:4;
-         GLuint pad1:3;
-         GLuint end_of_thread:1;
-      } sampler_gm45_g4x; 
 
       struct brw_urb_immediate urb;
 

@@ -24,10 +24,10 @@
  * 3DLabs Gamma driver
  */
 
-#include "gammacontext.h"
+#include "gamma_context.h"
 #include "gamma_vb.h"
-#include "main/context.h"
-#include "main/matrix.h"
+#include "context.h"
+#include "matrix.h"
 #include "glint_dri.h"
 
 #include "swrast/swrast.h"
@@ -237,7 +237,7 @@ gammaUnbindContext( __DRIcontextPrivate *driContextPriv )
    return GL_TRUE;
 }
 
-const struct __DriverAPIRec driDriverAPI = {
+static struct __DriverAPIRec gammaAPI = {
    gammaInitDriver,
    gammaDestroyScreen,
    gammaCreateContext,

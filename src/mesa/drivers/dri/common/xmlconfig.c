@@ -27,7 +27,7 @@
  * \author Felix Kuehling
  */
 
-#include "main/glheader.h"
+#include "glheader.h"
 
 #include <string.h>
 #include <assert.h>
@@ -35,7 +35,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
-#include "main/imports.h"
+#include "imports.h"
 #include "dri_util.h"
 #include "xmlconfig.h"
 
@@ -63,12 +63,6 @@ extern char *program_invocation_name, *program_invocation_short_name;
 #elif defined(__NetBSD__) && defined(__NetBSD_Version) && (__NetBSD_Version >= 106000100)
 #    include <stdlib.h>
 #    define GET_PROGRAM_NAME() getprogname()
-#elif defined(__sun)
-/* Solaris has getexecname() which returns the full path - return just
-   the basename to match BSD getprogname() */
-#    include <stdlib.h>
-#    include <libgen.h>
-#    define GET_PROGRAM_NAME() basename(getexecname())
 #endif
 
 #if !defined(GET_PROGRAM_NAME)
@@ -285,7 +279,7 @@ static GLfloat strToF (const XML_Char *string, const XML_Char **tail) {
 /** \brief Parse a value of a given type. */
 static GLboolean parseValue (driOptionValue *v, driOptionType type,
 			     const XML_Char *string) {
-    const XML_Char *tail = NULL;
+    const XML_Char *tail;
   /* skip leading white-space */
     string += strspn (string, " \f\n\r\t\v");
     switch (type) {
@@ -409,40 +403,40 @@ static GLboolean checkValue (const driOptionValue *v, const driOptionInfo *info)
 /** \brief Output a warning message. */
 #define XML_WARNING1(msg) do {\
     __driUtilMessage ("Warning in %s line %d, column %d: "msg, data->name, \
-                      (int) XML_GetCurrentLineNumber(data->parser), \
-                      (int) XML_GetCurrentColumnNumber(data->parser)); \
+                      XML_GetCurrentLineNumber(data->parser), \
+                      XML_GetCurrentColumnNumber(data->parser)); \
 } while (0)
 #define XML_WARNING(msg,args...) do { \
     __driUtilMessage ("Warning in %s line %d, column %d: "msg, data->name, \
-                      (int) XML_GetCurrentLineNumber(data->parser), \
-                      (int) XML_GetCurrentColumnNumber(data->parser), \
+                      XML_GetCurrentLineNumber(data->parser), \
+                      XML_GetCurrentColumnNumber(data->parser), \
                       args); \
 } while (0)
 /** \brief Output an error message. */
 #define XML_ERROR1(msg) do { \
     __driUtilMessage ("Error in %s line %d, column %d: "msg, data->name, \
-                      (int) XML_GetCurrentLineNumber(data->parser), \
-                      (int) XML_GetCurrentColumnNumber(data->parser)); \
+                      XML_GetCurrentLineNumber(data->parser), \
+                      XML_GetCurrentColumnNumber(data->parser)); \
 } while (0)
 #define XML_ERROR(msg,args...) do { \
     __driUtilMessage ("Error in %s line %d, column %d: "msg, data->name, \
-                      (int) XML_GetCurrentLineNumber(data->parser), \
-                      (int) XML_GetCurrentColumnNumber(data->parser), \
+                      XML_GetCurrentLineNumber(data->parser), \
+                      XML_GetCurrentColumnNumber(data->parser), \
                       args); \
 } while (0)
 /** \brief Output a fatal error message and abort. */
 #define XML_FATAL1(msg) do { \
     fprintf (stderr, "Fatal error in %s line %d, column %d: "msg"\n", \
              data->name, \
-             (int) XML_GetCurrentLineNumber(data->parser),	\
-             (int) XML_GetCurrentColumnNumber(data->parser)); \
+             XML_GetCurrentLineNumber(data->parser), \
+             XML_GetCurrentColumnNumber(data->parser)); \
     abort();\
 } while (0)
 #define XML_FATAL(msg,args...) do { \
     fprintf (stderr, "Fatal error in %s line %d, column %d: "msg"\n", \
              data->name, \
-             (int) XML_GetCurrentLineNumber(data->parser),	\
-             (int) XML_GetCurrentColumnNumber(data->parser),		\
+             XML_GetCurrentLineNumber(data->parser), \
+             XML_GetCurrentColumnNumber(data->parser), \
              args); \
     abort();\
 } while (0)

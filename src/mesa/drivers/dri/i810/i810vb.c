@@ -24,17 +24,18 @@
  */
  
 
-#include "main/glheader.h"
-#include "main/mtypes.h"
-#include "main/imports.h"
-#include "main/macros.h"
-#include "main/colormac.h"
+#include "glheader.h"
+#include "mtypes.h"
+#include "imports.h"
+#include "macros.h"
+#include "colormac.h"
 
 #include "swrast_setup/swrast_setup.h"
 #include "tnl/t_context.h"
 
 #include "i810screen.h"
 #include "i810_dri.h"
+
 #include "i810context.h"
 #include "i810vb.h"
 #include "i810ioctl.h"

@@ -32,12 +32,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *   Keith Whitwell <keith@tungstengraphics.com>
  */
 
-#include "main/glheader.h"
-#include "main/imports.h"
-#include "main/mtypes.h"
-#include "main/enums.h"
-#include "main/colormac.h"
-#include "main/light.h"
+#include "glheader.h"
+#include "imports.h"
+#include "mtypes.h"
+#include "enums.h"
+#include "colormac.h"
+#include "light.h"
 
 #include "vbo/vbo.h"
 #include "tnl/tnl.h"
@@ -488,7 +488,7 @@ static GLboolean r200_run_tcl_render( GLcontext *ctx,
 
    for (i = 0 ; i < VB->PrimitiveCount ; i++)
    {
-      GLuint prim = _tnl_translate_prim(&VB->Primitive[i]);
+      GLuint prim = VB->Primitive[i].mode;
       GLuint start = VB->Primitive[i].start;
       GLuint length = VB->Primitive[i].count;
 

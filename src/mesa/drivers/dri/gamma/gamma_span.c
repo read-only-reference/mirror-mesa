@@ -1,5 +1,5 @@
 
-#include "gammacontext.h"
+#include "gamma_context.h"
 #include "gamma_lock.h"
 #include "colormac.h"
 
@@ -111,8 +111,6 @@ do {									\
 
 /* 16 bit depthbuffer functions.
  */
-#define VALUE_TYPE GLushort
-
 #define WRITE_DEPTH( _x, _y, d )	\
    *(GLushort *)(buf + (_x)*2 + (_y)*pitch) = d;
 
@@ -126,8 +124,6 @@ do {									\
 #if 0 /* Unused */
 /* 32 bit depthbuffer functions.
  */
-#define VALUE_TYPE GLuint
-
 #define WRITE_DEPTH( _x, _y, d )	\
    *(GLuint *)(buf + (_x)*4 + (_y)*pitch) = d;
 
@@ -141,8 +137,6 @@ do {									\
 
 /* 24/8 bit interleaved depth/stencil functions
  */
-#define VALUE_TYPE GLuint
-
 #define WRITE_DEPTH( _x, _y, d ) {			\
    GLuint tmp = *(GLuint *)(buf + (_x)*4 + (_y)*pitch);	\
    tmp &= 0xff;						\

@@ -143,29 +143,37 @@ static void vbo_exec_copy_to_current( struct vbo_exec_context *exec )
 
    for (i = VBO_ATTRIB_POS+1 ; i < VBO_ATTRIB_MAX ; i++) {
       if (exec->vtx.attrsz[i]) {
-	 GLfloat *current = (GLfloat *)vbo->currval[i].Ptr;
-
          /* Note: the exec->vtx.current[i] pointers point into the
           * ctx->Current.Attrib and ctx->Light.Material.Attrib arrays.
           */
-	 COPY_CLEAN_4V(current, 
-		       exec->vtx.attrsz[i], 
-		       exec->vtx.attrptr[i]);
+	 GLfloat *current = (GLfloat *)vbo->currval[i].Ptr;
+         GLfloat tmp[4];
+
+         COPY_CLEAN_4V(tmp, 
+                       exec->vtx.attrsz[i], 
+                       exec->vtx.attrptr[i]);
+         
+         if (memcmp(current, tmp, sizeof(tmp)) != 0)
+         { 
+            memcpy(current, tmp, sizeof(tmp));
 
 	 
-	 /* Given that we explicitly state size here, there is no need
-	  * for the COPY_CLEAN above, could just copy 16 bytes and be
-	  * done.  The only problem is when Mesa accesses ctx->Current
-	  * directly.
-	  */
-	 vbo->currval[i].Size = exec->vtx.attrsz[i];
+            /* Given that we explicitly state size here, there is no need
+             * for the COPY_CLEAN above, could just copy 16 bytes and be
+             * done.  The only problem is when Mesa accesses ctx->Current
+             * directly.
+             */
+            vbo->currval[i].Size = exec->vtx.attrsz[i];
 
-	 /* This triggers rather too much recalculation of Mesa state
-	  * that doesn't get used (eg light positions).
-	  */
-	 if (i >= VBO_ATTRIB_MAT_FRONT_AMBIENT &&
-	     i <= VBO_ATTRIB_MAT_BACK_INDEXES)
-	    ctx->NewState |= _NEW_LIGHT;
+            /* This triggers rather too much recalculation of Mesa state
+             * that doesn't get used (eg light positions).
+             */
+            if (i >= VBO_ATTRIB_MAT_FRONT_AMBIENT &&
+                i <= VBO_ATTRIB_MAT_BACK_INDEXES)
+               ctx->NewState |= _NEW_LIGHT;
+            
+            ctx->NewState |= _NEW_CURRENT_ATTRIB;
+         }
       }
    }
 
@@ -700,8 +708,8 @@ void vbo_exec_vtx_init( struct vbo_exec_context *exec )
                                  &exec->vtx.bufferobj,
                                  ctx->Array.NullBufferObj);
 
-   ASSERT(!exec->vtx.buffer_map);
    exec->vtx.buffer_map = ALIGN_MALLOC(VBO_VERT_BUFFER_SIZE * sizeof(GLfloat), 64);
+
    vbo_exec_vtxfmt_init( exec );
 
    /* Hook our functions into the dispatch table.
@@ -726,13 +734,13 @@ void vbo_exec_vtx_init( struct vbo_exec_context *exec )
 
 void vbo_exec_vtx_destroy( struct vbo_exec_context *exec )
 {
+   GLcontext *ctx = exec->ctx;
    if (exec->vtx.bufferobj->Name) {
-      /* using a real VBO for vertex data */
-      GLcontext *ctx = exec->ctx;
-      _mesa_reference_buffer_object(ctx, &exec->vtx.bufferobj, NULL);
+      ctx->Driver.UnmapBuffer(ctx, GL_ARRAY_BUFFER_ARB, exec->vtx.bufferobj);
+      ctx->Driver.DeleteBuffer(ctx, exec->vtx.bufferobj);
+      exec->vtx.bufferobj = NULL;
    }
    else {
-      /* just using malloc'd space for vertex data */
       if (exec->vtx.buffer_map) {
          ALIGN_FREE(exec->vtx.buffer_map);
          exec->vtx.buffer_map = NULL;

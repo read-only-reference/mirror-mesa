@@ -35,7 +35,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef _R128_TEXOBJ_H_
 #define _R128_TEXOBJ_H_
 
-#include "main/mm.h"
+#include "mm.h"
 
 /* Individual texture image information.
  */

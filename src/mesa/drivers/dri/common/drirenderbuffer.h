@@ -10,7 +10,7 @@
 #ifndef DRIRENDERBUFFER_H
 #define DRIRENDERBUFFER_H
 
-#include "main/mtypes.h"
+#include "mtypes.h"
 #include "dri_util.h"
 
 

@@ -240,8 +240,7 @@ static void emit_modrm( struct x86_function *p,
    /* Oh-oh we've stumbled into the SIB thing.
     */
    if (regmem.file == file_REG32 &&
-       regmem.idx == reg_SP &&
-       regmem.mod != mod_REG) {
+       regmem.idx == reg_SP) {
       emit_1ub(p, 0x24);		/* simplistic! */
    }
 
@@ -371,7 +370,11 @@ void x86_jcc( struct x86_function *p,
    DUMP_I(cc);
    
    if (offset < 0) {
-      assert(p->csr - p->store > -offset);
+      /*assert(p->csr - p->store > -offset);*/
+      if (p->csr - p->store <= -offset) {
+         /* probably out of memory (using the error_overflow buffer) */
+         return;
+      }
    }
 
    if (offset <= 127 && offset >= -128) {
@@ -436,70 +439,25 @@ void x86_call( struct x86_function *p, struct x86_reg reg)
 }
 
 
+/* michal:
+ * Temporary. As I need immediate operands, and dont want to mess with the codegen,
+ * I load the immediate into general purpose register and use it.
+ */
 void x86_mov_reg_imm( struct x86_function *p, struct x86_reg dst, int imm )
 {
    DUMP_RI( dst, imm );
-   assert(dst.file == file_REG32);
    assert(dst.mod == mod_REG);
    emit_1ub(p, 0xb8 + dst.idx);
    emit_1i(p, imm);
 }
 
-/**
- * Immediate group 1 instructions.
- */
-static INLINE void 
-x86_group1_imm( struct x86_function *p, 
-                unsigned op, struct x86_reg dst, int imm )
+void x86_add_reg_imm8( struct x86_function *p, struct x86_reg dst, ubyte imm )
 {
-   assert(dst.file == file_REG32);
+   DUMP_RI( dst, imm );
    assert(dst.mod == mod_REG);
-   if(-0x80 <= imm && imm < 0x80) {
-      emit_1ub(p, 0x83);
-      emit_modrm_noreg(p, op, dst);
-      emit_1b(p, (char)imm);
-   }
-   else {
-      emit_1ub(p, 0x81);
-      emit_modrm_noreg(p, op, dst);
-      emit_1i(p, imm);
-   }
-}
-
-void x86_add_imm( struct x86_function *p, struct x86_reg dst, int imm )
-{
-   DUMP_RI( dst, imm );
-   x86_group1_imm(p, 0, dst, imm);
-}
-
-void x86_or_imm( struct x86_function *p, struct x86_reg dst, int imm )
-{
-   DUMP_RI( dst, imm );
-   x86_group1_imm(p, 1, dst, imm);
-}
-
-void x86_and_imm( struct x86_function *p, struct x86_reg dst, int imm )
-{
-   DUMP_RI( dst, imm );
-   x86_group1_imm(p, 4, dst, imm);
-}
-
-void x86_sub_imm( struct x86_function *p, struct x86_reg dst, int imm )
-{
-   DUMP_RI( dst, imm );
-   x86_group1_imm(p, 5, dst, imm);
-}
-
-void x86_xor_imm( struct x86_function *p, struct x86_reg dst, int imm )
-{
-   DUMP_RI( dst, imm );
-   x86_group1_imm(p, 6, dst, imm);
-}
-
-void x86_cmp_imm( struct x86_function *p, struct x86_reg dst, int imm )
-{
-   DUMP_RI( dst, imm );
-   x86_group1_imm(p, 7, dst, imm);
+   emit_1ub(p, 0x80);
+   emit_modrm_noreg(p, 0, dst);
+   emit_1ub(p, imm);
 }
 
 
@@ -674,6 +632,44 @@ void x86_and( struct x86_function *p,
 /***********************************************************************
  * SSE instructions
  */
+
+void sse_prefetchnta( struct x86_function *p, struct x86_reg ptr)
+{
+   DUMP_R( ptr );
+   assert(ptr.mod != mod_REG);
+   emit_2ub(p, 0x0f, 0x18);
+   emit_modrm_noreg(p, 0, ptr);
+}
+
+void sse_prefetch0( struct x86_function *p, struct x86_reg ptr)
+{
+   DUMP_R( ptr );
+   assert(ptr.mod != mod_REG);
+   emit_2ub(p, 0x0f, 0x18);
+   emit_modrm_noreg(p, 1, ptr);
+}
+
+void sse_prefetch1( struct x86_function *p, struct x86_reg ptr)
+{
+   DUMP_R( ptr );
+   assert(ptr.mod != mod_REG);
+   emit_2ub(p, 0x0f, 0x18);
+   emit_modrm_noreg(p, 2, ptr);
+}
+
+void sse_movntps( struct x86_function *p, 
+                  struct x86_reg dst,
+                  struct x86_reg src)
+{
+   DUMP_RR( dst, src );
+
+   assert(dst.mod != mod_REG);
+   assert(src.mod == mod_REG);
+   emit_2ub(p, 0x0f, 0x2b);
+   emit_modrm(p, src, dst);
+}
+
+
 
 
 void sse_movss( struct x86_function *p,

@@ -28,9 +28,6 @@
  * truly reusable outside of Mesa.  First, the glheader.h include must go.
  */
 
-#ifdef HAVE_DIX_CONFIG_H
-#include <dix-config.h>
-#endif
 
 #include "main/glheader.h"
 #include "glthread.h"

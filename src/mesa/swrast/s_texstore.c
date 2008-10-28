@@ -40,13 +40,13 @@
 #include "main/imports.h"
 #include "main/colormac.h"
 #include "main/context.h"
-#include "main/convolve.h"
-#include "main/image.h"
+#include "convolve.h"
+#include "image.h"
 #include "main/macros.h"
-#include "main/mipmap.h"
-#include "main/texformat.h"
-#include "main/teximage.h"
-#include "main/texstore.h"
+#include "mipmap.h"
+#include "texformat.h"
+#include "teximage.h"
+#include "texstore.h"
 
 #include "s_context.h"
 #include "s_depth.h"
@@ -305,7 +305,7 @@ _swrast_copy_teximage1d( GLcontext *ctx, GLenum target, GLint level,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      ctx->Driver.GenerateMipmap(ctx, target, texObj);
+      _mesa_generate_mipmap(ctx, target, texUnit, texObj);
    }
 }
 
@@ -381,7 +381,7 @@ _swrast_copy_teximage2d( GLcontext *ctx, GLenum target, GLint level,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      ctx->Driver.GenerateMipmap(ctx, target, texObj);
+      _mesa_generate_mipmap(ctx, target, texUnit, texObj);
    }
 }
 
@@ -450,7 +450,7 @@ _swrast_copy_texsubimage1d( GLcontext *ctx, GLenum target, GLint level,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      ctx->Driver.GenerateMipmap(ctx, target, texObj);
+      _mesa_generate_mipmap(ctx, target, texUnit, texObj);
    }
 }
 
@@ -526,7 +526,7 @@ _swrast_copy_texsubimage2d( GLcontext *ctx,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      ctx->Driver.GenerateMipmap(ctx, target, texObj);
+      _mesa_generate_mipmap(ctx, target, texUnit, texObj);
    }
 }
 
@@ -599,6 +599,6 @@ _swrast_copy_texsubimage3d( GLcontext *ctx,
 
    /* GL_SGIS_generate_mipmap */
    if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      ctx->Driver.GenerateMipmap(ctx, target, texObj);
+      _mesa_generate_mipmap(ctx, target, texUnit, texObj);
    }
 }

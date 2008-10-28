@@ -2309,7 +2309,7 @@ _slang_gen_if(slang_assemble_ctx * A, const slang_operation *oper)
 
    /* type-check expression */
    if (!_slang_is_boolean(A, &oper->children[0])) {
-      slang_info_log_error(A->log, "boolean expression expected for 'while'");
+      slang_info_log_error(A->log, "boolean expression expected for 'if'");
       return NULL;
    }
 
@@ -2439,11 +2439,7 @@ _slang_gen_var_decl(slang_assemble_ctx *A, slang_variable *var)
    /*assert(!var->declared);*/
    var->declared = GL_TRUE;
 
-   if(is_sampler_type(&var->type)) {
-      slang_info_log_error(A->log, "redeclaration of sampler '%s'",
-			   (char*) var->a_name);
-      return NULL;
-   }
+   assert(!is_sampler_type(&var->type));
 
    n = new_node0(IR_VAR_DECL);
    if (n) {

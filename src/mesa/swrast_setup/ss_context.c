@@ -28,14 +28,13 @@
 #include "main/glheader.h"
 #include "main/imports.h"
 #include "main/colormac.h"
+#include "ss_context.h"
+#include "ss_triangle.h"
+#include "swrast_setup.h"
 #include "tnl/tnl.h"
 #include "tnl/t_context.h"
 #include "tnl/t_pipeline.h"
 #include "tnl/t_vertex.h"
-#include "swrast_setup.h"
-#include "ss_context.h"
-#include "ss_triangle.h"
-
 
 /* Need to check lighting state and vertex program state to know
  * if two-sided lighting is in effect.
@@ -201,9 +200,6 @@ _swsetup_RenderStart( GLcontext *ctx )
    }
 
    swsetup->NewState = 0;
-
-   /* This will change if drawing unfilled tris */
-   _swrast_SetFacing(ctx, 0);
 
    _swrast_render_start(ctx);
 

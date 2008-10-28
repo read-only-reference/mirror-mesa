@@ -2,10 +2,10 @@
  * Author: Max Lingua <sunmax@libero.it>
  */
 
-#include "main/glheader.h"
-#include "main/context.h"
-#include "main/macros.h"
-#include "main/mtypes.h"
+#include "glheader.h"
+#include "context.h"
+#include "macros.h"
+#include "mtypes.h"
 
 #include "tnl/t_context.h"
 
@@ -66,7 +66,7 @@ static const GLuint hw_prim[GL_POLYGON+1] = {
 	PrimType_Polygon
 };
 
-static INLINE void s3vStartPrimitive( s3vContextPtr vmesa, GLenum prim )
+static __inline void s3vStartPrimitive( s3vContextPtr vmesa, GLenum prim )
 {
 	__DRIdrawablePrivate *dPriv = vmesa->driDrawable;
 
@@ -110,7 +110,7 @@ static INLINE void s3vStartPrimitive( s3vContextPtr vmesa, GLenum prim )
 	vmesa->restore_primitive = _hw_prim;
 }
 
-static INLINE void s3vEndPrimitive( s3vContextPtr vmesa )
+static __inline void s3vEndPrimitive( s3vContextPtr vmesa )
 {
 /*	GLcontext *ctx = vmesa->glCtx; */
 	DEBUG(("s3vEndPrimitive\n"));
@@ -170,7 +170,7 @@ static GLboolean s3v_run_render( GLcontext *ctx,
 
 	for (i = 0 ; i < VB->PrimitiveCount ; i++ )
 	{
-		GLuint prim = _tnl_translate_prim(&VB->Primitive[i]);
+                GLuint prim = VB->Primitive[i].mode;
 		GLuint start = VB->Primitive[i].start;
 		GLuint length = VB->Primitive[i].count;
 

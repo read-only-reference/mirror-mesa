@@ -10,13 +10,17 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <stddef.h>	/* for ptrdiff_t, referenced by GL.h when GL_GLEXT_LEGACY defined */
+#ifdef __VMS
+# include <stddef.h>	/* for ptrdiff_t, referenced by GL.h when GL_GLEXT_LEGACY defined */
+#else
+# include <malloc.h>	/* for ptrdiff_t, referenced by GL.h when GL_GLEXT_LEGACY defined */
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #endif
 #define GL_GLEXT_LEGACY
 #include <GL/glut.h>
-#include <GL/glext.h>
+
 
 GLfloat verts[][4] = {
    { -0.5, -0.5, -2.0, 0.0 },

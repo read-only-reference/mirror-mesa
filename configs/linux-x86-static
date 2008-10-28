@@ -5,7 +5,6 @@ include $(TOP)/configs/linux-x86
 CONFIG_NAME = linux-x86-static
 
 MKLIB_OPTIONS = -static
-PIC_FLAGS =
 
 # Library names (actual file names)
 GL_LIB_NAME = libGL.a
@@ -24,4 +23,4 @@ GLW_LIB_DEPS =
 # Need to specify all libraries we may need
 APP_LIB_DEPS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -Wl,--start-group \
                -l$(GL_LIB) $(TOP)/src/mesa/pipe/softpipe/libsoftpipe.a -Wl,--end-group \
-               $(EXTRA_LIB_PATH) -lX11 -lXext -lXmu -lXt -lXi -lpthread -lstdc++ -lm
+               $(EXTRA_LIB_PATH) -lX11 -lXmu -lXt -lXi -lpthread -lstdc++ -lm

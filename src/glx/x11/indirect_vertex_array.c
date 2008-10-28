@@ -32,7 +32,7 @@
 #include <GL/glxproto.h>
 #include "glxextensions.h"
 #include "indirect_vertex_array.h"
-#include "indirect_vertex_array_priv.h"
+#include "indirect_va_private.h"
 
 #define __GLX_PAD(n) (((n)+3) & ~3)
 
@@ -62,7 +62,7 @@
  * "vbo", to support multiple texture coordinate arrays, generic attributes,
  * and vertex buffer objects.
  *
- * \author Ian Romanick <ian.d.romanick@intel.com>
+ * \author Ian Romanick <idr@us.ibm.com>
  */
 
 static void emit_DrawArrays_none( GLenum mode, GLint first, GLsizei count );
@@ -100,31 +100,6 @@ const GLuint __glXTypeSize_table[16] = {
     1, 1, 2, 2, 4, 4, 4, 0, 0, 0, 8, 0, 0, 0, 0, 0
 };
 
-
-/**
- * Free the per-context array state that was allocated with
- * __glXInitVertexArrayState().
- */
-void
-__glXFreeVertexArrayState( __GLXcontext * gc )
-{
-    __GLXattribute * state = (__GLXattribute *)(gc->client_state_private);
-    struct array_state_vector* arrays = state->array_state;
-
-    if (arrays) {
-        if (arrays->stack) {
-            free(arrays->stack);
-            arrays->stack = NULL;
-        }
-        if (arrays->arrays) {
-            free(arrays->arrays);
-            arrays->arrays = NULL;
-        }
-        free(arrays);
-        arrays = NULL;
-        state->array_state = NULL;
-    }
-}
 
 
 /**
@@ -510,14 +485,14 @@ emit_DrawArrays_none( GLenum mode, GLint first, GLsizei count )
 
     for ( i = 0 ; i < count ; i++ ) {
 	if ( (pc + single_vertex_size) >= gc->bufEnd ) {
-	    pc = __glXFlushRenderBuffer(gc, pc);
+	    pc = __glXFlushRenderBuffer(gc, gc->pc);
 	}
 
 	pc = emit_element_none( pc, arrays, first + i );
     }
 
     if ( (pc + 4) >= gc->bufEnd ) {
-	pc = __glXFlushRenderBuffer(gc, pc);
+	pc = __glXFlushRenderBuffer(gc, gc->pc);
     }
 
     (void) memcpy( pc, end_cmd, 4 );
@@ -552,7 +527,7 @@ static GLubyte *
 emit_DrawArrays_header_old( __GLXcontext * gc,
 			    struct array_state_vector * arrays,
 			    size_t * elements_per_request,
-			    unsigned int * total_requests,
+			    size_t * total_requests,
 			    GLenum mode, GLsizei count )
 {
     size_t command_size;
@@ -665,7 +640,7 @@ emit_DrawArrays_old( GLenum mode, GLint first, GLsizei count )
 
     GLubyte * pc;
     size_t elements_per_request;
-    unsigned total_requests = 0;
+    size_t total_requests = 0;
     unsigned i;
     size_t total_sent = 0;
 
@@ -751,7 +726,7 @@ emit_DrawElements_none( GLenum mode, GLsizei count, GLenum type,
 	unsigned  index = 0;
 
 	if ( (pc + single_vertex_size) >= gc->bufEnd ) {
-	    pc = __glXFlushRenderBuffer(gc, pc);
+	    pc = __glXFlushRenderBuffer(gc, gc->pc);
 	}
 
 	switch( type ) {
@@ -769,7 +744,7 @@ emit_DrawElements_none( GLenum mode, GLsizei count, GLenum type,
     }
 
     if ( (pc + 4) >= gc->bufEnd ) {
-	pc = __glXFlushRenderBuffer(gc, pc);
+	pc = __glXFlushRenderBuffer(gc, gc->pc);
     }
 
     (void) memcpy( pc, end_cmd, 4 );
@@ -795,10 +770,9 @@ emit_DrawElements_old( GLenum mode, GLsizei count, GLenum type,
 
     GLubyte * pc;
     size_t elements_per_request;
-    unsigned total_requests = 0;
+    size_t total_requests = 0;
     unsigned i;
     unsigned req;
-    unsigned req_element=0;
 
 
     pc = emit_DrawArrays_header_old( gc, arrays, & elements_per_request,
@@ -816,7 +790,7 @@ emit_DrawElements_old( GLenum mode, GLsizei count, GLenum type,
 
 	switch( type ) {
 	case GL_UNSIGNED_INT: {
-	    const GLuint   * ui_ptr = (const GLuint   *) indices + req_element;
+	    const GLuint   * ui_ptr = (const GLuint   *) indices;
 
 	    for ( i = 0 ; i < elements_per_request ; i++ ) {
 		const GLint index = (GLint) *(ui_ptr++);
@@ -825,7 +799,7 @@ emit_DrawElements_old( GLenum mode, GLsizei count, GLenum type,
 	    break;
 	}
 	case GL_UNSIGNED_SHORT: {
-	    const GLushort * us_ptr = (const GLushort *) indices + req_element;
+	    const GLushort * us_ptr = (const GLushort *) indices;
 
 	    for ( i = 0 ; i < elements_per_request ; i++ ) {
 		const GLint index = (GLint) *(us_ptr++);
@@ -834,7 +808,7 @@ emit_DrawElements_old( GLenum mode, GLsizei count, GLenum type,
 	    break;
 	}
 	case GL_UNSIGNED_BYTE: {
-	    const GLubyte  * ub_ptr = (const GLubyte  *) indices + req_element;
+	    const GLubyte  * ub_ptr = (const GLubyte  *) indices;
 
 	    for ( i = 0 ; i < elements_per_request ; i++ ) {
 		const GLint index = (GLint) *(ub_ptr++);
@@ -852,7 +826,6 @@ emit_DrawElements_old( GLenum mode, GLsizei count, GLenum type,
 	}
 
 	count -= elements_per_request;
-	req_element += elements_per_request;
     }
 
 
@@ -1626,21 +1599,17 @@ void __indirect_glClientActiveTextureARB(GLenum texture)
 
 
 /**
- * Modify the enable state for the selected array
  */
 GLboolean
-__glXSetArrayEnable(__GLXattribute *state, GLenum key, unsigned index,
-                    GLboolean enable)
+__glXSetArrayEnable( __GLXattribute * state,
+		     GLenum key, unsigned index, GLboolean enable )
 {
     struct array_state_vector * arrays = state->array_state;
     struct array_state * a;
     
 
-    /* Texture coordinate arrays have an implict index set when the
-     * application calls glClientActiveTexture.
-     */
-    if (key == GL_TEXTURE_COORD_ARRAY) {
-        index = arrays->active_texture_unit;
+    if ( key == GL_TEXTURE_COORD_ARRAY ) {
+	index = arrays->active_texture_unit;
     }
 
     a = get_array_entry( arrays, key, index );

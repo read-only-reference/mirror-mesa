@@ -35,15 +35,15 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  * \author Nicolai Haehnle <prefect_@gmx.net>
  */
 
-#include "main/glheader.h"
-#include "main/api_arrayelt.h"
-#include "main/context.h"
-#include "main/simple_list.h"
-#include "main/imports.h"
-#include "main/matrix.h"
-#include "main/extensions.h"
-#include "main/state.h"
-#include "main/bufferobj.h"
+#include "glheader.h"
+#include "api_arrayelt.h"
+#include "context.h"
+#include "simple_list.h"
+#include "imports.h"
+#include "matrix.h"
+#include "extensions.h"
+#include "state.h"
+#include "bufferobj.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -79,13 +79,11 @@ int hw_tcl_on = 1;
 
 #define need_GL_EXT_stencil_two_side
 #define need_GL_ARB_multisample
-#define need_GL_ARB_point_parameters
 #define need_GL_ARB_texture_compression
 #define need_GL_ARB_vertex_buffer_object
 #define need_GL_ARB_vertex_program
 #define need_GL_EXT_blend_minmax
 //#define need_GL_EXT_fog_coord
-#define need_GL_EXT_multi_draw_arrays
 #define need_GL_EXT_secondary_color
 #define need_GL_EXT_blend_equation_separate
 #define need_GL_EXT_blend_func_separate
@@ -95,13 +93,8 @@ int hw_tcl_on = 1;
 
 const struct dri_extension card_extensions[] = {
   /* *INDENT-OFF* */
-  {"GL_ARB_depth_texture",		NULL},
-  {"GL_ARB_fragment_program",		NULL},
   {"GL_ARB_multisample",		GL_ARB_multisample_functions},
   {"GL_ARB_multitexture",		NULL},
-  {"GL_ARB_point_parameters",		GL_ARB_point_parameters_functions},
-  {"GL_ARB_shadow",			NULL},
-  {"GL_ARB_shadow_ambient",		NULL},
   {"GL_ARB_texture_border_clamp",	NULL},
   {"GL_ARB_texture_compression",	GL_ARB_texture_compression_functions},
   {"GL_ARB_texture_cube_map",		NULL},
@@ -112,15 +105,14 @@ const struct dri_extension card_extensions[] = {
   {"GL_ARB_texture_mirrored_repeat",	NULL},
   {"GL_ARB_vertex_buffer_object",	GL_ARB_vertex_buffer_object_functions},
   {"GL_ARB_vertex_program",		GL_ARB_vertex_program_functions},
+  {"GL_ARB_fragment_program",		NULL},
   {"GL_EXT_blend_equation_separate",	GL_EXT_blend_equation_separate_functions},
   {"GL_EXT_blend_func_separate",	GL_EXT_blend_func_separate_functions},
   {"GL_EXT_blend_minmax",		GL_EXT_blend_minmax_functions},
   {"GL_EXT_blend_subtract",		NULL},
 //  {"GL_EXT_fog_coord",			GL_EXT_fog_coord_functions },
-  {"GL_EXT_multi_draw_arrays",		GL_EXT_multi_draw_arrays_functions},
   {"GL_EXT_gpu_program_parameters",     GL_EXT_gpu_program_parameters_functions},
   {"GL_EXT_secondary_color", 		GL_EXT_secondary_color_functions},
-  {"GL_EXT_shadow_funcs",		NULL},
   {"GL_EXT_stencil_two_side",		GL_EXT_stencil_two_side_functions},
   {"GL_EXT_stencil_wrap",		NULL},
   {"GL_EXT_texture_edge_clamp",		NULL},
@@ -138,7 +130,6 @@ const struct dri_extension card_extensions[] = {
   {"GL_NV_blend_square",		NULL},
   {"GL_NV_vertex_program",		GL_NV_vertex_program_functions},
   {"GL_SGIS_generate_mipmap",		NULL},
-  {"GL_SGIX_depth_texture",		NULL},
   {NULL,				NULL}
   /* *INDENT-ON* */
 };
@@ -282,12 +273,6 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	    MIN2(ctx->Const.MaxTextureImageUnits,
 		 ctx->Const.MaxTextureCoordUnits);
 	ctx->Const.MaxTextureMaxAnisotropy = 16.0;
-	ctx->Const.MaxTextureLodBias = 16.0;
-
-	if (screen->chip_family >= CHIP_FAMILY_RV515) {
-	    ctx->Const.MaxTextureLevels = 13;
-	    ctx->Const.MaxTextureRectSize = 4096;
-	}
 
 	ctx->Const.MinPointSize = 1.0;
 	ctx->Const.MinPointSizeAA = 1.0;
@@ -355,7 +340,7 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	ctx->Const.FragmentProgram.MaxNativeTexIndirections =
 	    PFS_MAX_TEX_INDIRECT;
 	ctx->Const.FragmentProgram.MaxNativeAddressRegs = 0;	/* and these are?? */
-	ctx->VertexProgram._MaintainTnlProgram = GL_TRUE;
+	_tnl_ProgramCacheInit(ctx);
 	ctx->FragmentProgram._MaintainTexEnvProgram = GL_TRUE;
 
 	driInitExtensions(ctx, card_extensions, GL_TRUE);
@@ -501,6 +486,7 @@ void r300DestroyContext(__DRIcontextPrivate * driContextPriv)
 		release_texture_heaps =
 		    (r300->radeon.glCtx->Shared->RefCount == 1);
 		_swsetup_DestroyContext(r300->radeon.glCtx);
+		_tnl_ProgramCacheDestroy(r300->radeon.glCtx);
 		_tnl_DestroyContext(r300->radeon.glCtx);
 		_vbo_DestroyContext(r300->radeon.glCtx);
 		_swrast_DestroyContext(r300->radeon.glCtx);

@@ -36,10 +36,10 @@ SOFTWARE.
  */
 #include <errno.h> 
 
-#include "main/glheader.h"
-#include "main/imports.h"
-#include "main/context.h"
-#include "main/macros.h"
+#include "glheader.h"
+#include "imports.h"
+#include "context.h"
+#include "macros.h"
 
 #include "radeon_context.h"
 #include "radeon_ioctl.h"
@@ -333,7 +333,7 @@ int radeonUploadTexImages( radeonContextPtr rmesa, radeonTexObjPtr t, GLuint fac
 {
    int numLevels;
 
-   if ( !t || t->base.totalSize == 0 || t->image_override )
+   if ( !t || t->base.totalSize == 0 )
       return 0;
 
    if ( RADEON_DEBUG & (DEBUG_TEXTURE|DEBUG_IOCTL) ) {

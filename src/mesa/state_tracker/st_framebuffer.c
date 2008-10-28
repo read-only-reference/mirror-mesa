@@ -153,9 +153,9 @@ void st_resize_framebuffer( struct st_framebuffer *stfb,
 }
 
 
-void st_unreference_framebuffer( struct st_framebuffer *stfb )
+void st_unreference_framebuffer( struct st_framebuffer **stfb )
 {
-   _mesa_unreference_framebuffer((struct gl_framebuffer **) &stfb);
+   _mesa_unreference_framebuffer((struct gl_framebuffer **) stfb);
 }
 
 
@@ -289,7 +289,8 @@ st_notify_swapbuffers_complete(struct st_framebuffer *stfb)
       for (i = 0; i < BUFFER_COUNT; i++) {
 	 if (stfb->Base.Attachment[i].Renderbuffer) {
 	    strb = st_renderbuffer(stfb->Base.Attachment[i].Renderbuffer);
-	    strb->surface->status = PIPE_SURFACE_STATUS_UNDEFINED;
+            if (strb->surface)
+               strb->surface->status = PIPE_SURFACE_STATUS_UNDEFINED;
 	 }
       }
    }
@@ -301,10 +302,3 @@ void *st_framebuffer_private( struct st_framebuffer *stfb )
    return stfb->Private;
 }
 
-void st_get_framebuffer_dimensions( struct st_framebuffer *stfb,
-				    uint *width,
-				    uint *height)
-{
-   *width = stfb->Base.Width;
-   *height = stfb->Base.Height;
-}

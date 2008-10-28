@@ -28,7 +28,7 @@
 #ifndef MGADD_INC
 #define MGADD_INC
 
-#include "main/context.h"
+#include "context.h"
 
 extern void mgaInitDriverFuncs( struct dd_function_table *functions );
 

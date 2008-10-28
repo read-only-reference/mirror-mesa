@@ -6,23 +6,17 @@ include $(TOP)/configs/current
 
 INCDIR = $(TOP)/include
 
-LIB_DEP = $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME)
+LIB_DEP = $(TOP)/$(LIB_DIR)/$(GL_LIB_NAME) $(TOP)/$(LIB_DIR)/$(GLU_LIB_NAME)
 
-LIBS = -L$(TOP)/$(LIB_DIR) -l$(GL_LIB) $(APP_LIB_DEPS)
-
-PROGS = \
-	corender \
-	glthreads \
+PROGS = glthreads \
 	glxdemo \
 	glxgears \
 	glxgears_fbconfig \
-	glxgears_pixmap \
 	glxcontexts \
 	glxheads \
 	glxinfo \
 	glxpixmap \
 	glxpbdemo \
-	glxsnoop \
 	glxswapcontrol \
 	manywin \
 	offset \
@@ -33,14 +27,10 @@ PROGS = \
 	texture_from_pixmap \
 	wincopy \
 	xfont \
-	xrotfontdemo
+	xrotfontdemo \
+	yuvrect_client
 
-# Don't build these by default because of extra library dependencies
-EXTRA_PROGS = \
-	shape \
-	yuvrect_client \
-	xdemo
-
+# omit this XMesa API demo:	xdemo
 
 
 ##### RULES #####
@@ -49,7 +39,7 @@ EXTRA_PROGS = \
 .SUFFIXES: .c
 
 .c: $(LIB_DEP)
-	$(APP_CC) -I$(INCDIR) $(X11_INCLUDES) $(CFLAGS) $(LDFLAGS) $< $(LIBS) -o $@
+	$(APP_CC) -I$(INCDIR) $(CFLAGS) $< $(APP_LIB_DEPS) -o $@
 
 
 ##### TARGETS #####
@@ -57,54 +47,39 @@ EXTRA_PROGS = \
 default: $(PROGS)
 
 
-extra: $(EXTRA_PROGS)
-
-
 clean:
-	-rm -f $(PROGS) $(EXTRA_PROGS)
+	-rm -f $(PROGS)
 	-rm -f *.o *~
 
 
 # special cases
 pbinfo: pbinfo.o pbutil.o
-	$(APP_CC) $(CFLAGS) $(LDFLAGS) pbinfo.o pbutil.o $(LIBS) -o $@
+	$(APP_CC) -I$(INCDIR) $(CFLAGS) pbinfo.o pbutil.o $(APP_LIB_DEPS) -o $@
 
 pbdemo: pbdemo.o pbutil.o
-	$(APP_CC) $(CFLAGS) $(LDFLAGS) pbdemo.o pbutil.o $(LIBS) -o $@
+	$(APP_CC) -I$(INCDIR) $(CFLAGS) pbdemo.o pbutil.o $(APP_LIB_DEPS) -o $@
 
 pbinfo.o: pbinfo.c pbutil.h
-	$(APP_CC) -c -I. -I$(INCDIR) $(X11_INCLUDES) $(CFLAGS) pbinfo.c
+	$(APP_CC) -c -I. -I$(INCDIR) $(CFLAGS) pbinfo.c
 
 pbdemo.o: pbdemo.c pbutil.h
-	$(APP_CC) -c -I. -I$(INCDIR) $(X11_INCLUDES) $(CFLAGS) pbdemo.c
+	$(APP_CC) -c -I. -I$(INCDIR) $(CFLAGS) pbdemo.c
 
 pbutil.o: pbutil.c pbutil.h
-	$(APP_CC) -c -I. -I$(INCDIR) $(X11_INCLUDES) $(CFLAGS) pbutil.c
+	$(APP_CC) -c -I. -I$(INCDIR) $(CFLAGS) pbutil.c
 
 glxgears_fbconfig: glxgears_fbconfig.o pbutil.o
-	$(APP_CC) $(CFLAGS) $(LDFLAGS) glxgears_fbconfig.o pbutil.o $(LIBS) -o $@
+	$(APP_CC) -I$(INCDIR) $(CFLAGS) glxgears_fbconfig.o pbutil.o $(APP_LIB_DEPS) -o $@
 
 glxgears_fbconfig.o: glxgears_fbconfig.c pbutil.h
-	$(APP_CC) -I$(INCDIR) $(X11_INCLUDES) $(CFLAGS) -c -I. $(CFLAGS) glxgears_fbconfig.c
+	$(APP_CC) -I$(INCDIR) $(CFLAGS) -c -I. $(CFLAGS) glxgears_fbconfig.c
 
 xrotfontdemo: xrotfontdemo.o xuserotfont.o
-	$(APP_CC) $(CFLAGS) $(LDFLAGS) xrotfontdemo.o xuserotfont.o $(LIBS) -o $@
+	$(APP_CC) -I$(INCDIR) $(CFLAGS) xrotfontdemo.o xuserotfont.o $(APP_LIB_DEPS) -o $@
 
 xuserotfont.o: xuserotfont.c xuserotfont.h
-	$(APP_CC) -c -I. -I$(INCDIR) $(X11_INCLUDES) $(CFLAGS) xuserotfont.c
+	$(APP_CC) -c -I. -I$(INCDIR) $(CFLAGS) xuserotfont.c
 
 xrotfontdemo.o: xrotfontdemo.c xuserotfont.h
-	$(APP_CC) -c -I. -I$(INCDIR) $(X11_INCLUDES) $(CFLAGS) xrotfontdemo.c
-
-corender: corender.o ipc.o
-	$(APP_CC) $(CFLAGS) corender.o ipc.o $(LIBS) -o $@
-
-corender.o: corender.c ipc.h
-	$(APP_CC) -c -I. -I$(INCDIR) $(X11_INCLUDES) $(CFLAGS) corender.c
-
-ipc.o: ipc.c ipc.h
-	$(APP_CC) -c -I. -I$(INCDIR) $(X11_INCLUDES) $(CFLAGS) ipc.c
-
-yuvrect_client: yuvrect_client.c
-	$(APP_CC) -I$(INCDIR) $(X11_INCLUDES) $(CFLAGS) $< $(LDFLAGS) $(LIBS) -l$(GLU_LIB) -o $@
+	$(APP_CC) -c -I. -I$(INCDIR) $(CFLAGS) xrotfontdemo.c
 

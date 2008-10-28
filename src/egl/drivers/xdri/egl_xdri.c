@@ -654,7 +654,10 @@ xdri_eglInitialize(_EGLDriver *drv, EGLDisplay dpy,
 
    xdri_drv->Base.Initialized = EGL_TRUE;
 
-   snprintf(name, sizeof(name), "X/DRI:%s", xdri_drv->dri_driver_name);
+   if (xdri_drv->dri_driver_name)
+      snprintf(name, sizeof(name), "X/DRI:%s", xdri_drv->dri_driver_name);
+   else
+      snprintf(name, sizeof(name), "X/DRI");
    xdri_drv->Base.Name = name;
 
    /* we're supporting EGL 1.4 */
@@ -959,7 +962,7 @@ xdri_eglDestroySurface(_EGLDriver *drv, EGLDisplay dpy, EGLSurface surface)
       }
       else {
          /*
-         st_unreference_framebuffer(surf->Framebuffer);
+         st_unreference_framebuffer(&surf->Framebuffer);
          */
          free(xdri_surf);
       }

@@ -26,7 +26,7 @@
 #include "main/colormac.h"
 #include "main/context.h"
 #include "main/enums.h"
-#include "main/feedback.h"
+#include "feedback.h"
 #include "main/macros.h"
 
 #include "s_context.h"

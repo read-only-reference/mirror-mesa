@@ -192,13 +192,7 @@ void __indirect_glGetVertexAttribivARB( GLuint index, GLenum pname,
     get_vertex_attrib( gc, 1303, index, pname, (xReply *) & reply );
 
     if ( reply.size != 0 ) {
-	GLintptr data;
-
-
-	if ( get_attrib_array_data( state, index, pname, & data ) ) {
-	    *params = (GLint) data;
-	}
-	else {
+	if ( ! get_attrib_array_data( state, index, pname, params ) ) {
 	    if (reply.size == 1) {
 		*params = (GLint) reply.pad3;
 	    } 

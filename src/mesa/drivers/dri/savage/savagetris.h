@@ -36,7 +36,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef __R128_TRIS_H__
 #define __R128_TRIS_H__
 
-#include "main/mtypes.h"
+#include "mtypes.h"
 
 extern void savageInitTriFuncs( GLcontext *ctx );
 

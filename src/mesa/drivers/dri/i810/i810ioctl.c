@@ -1,17 +1,17 @@
 
 #include <unistd.h> /* for usleep() */
 
-#include "main/glheader.h"
-#include "main/mtypes.h"
-#include "main/macros.h"
-#include "main/dd.h"
+#include "glheader.h"
+#include "mtypes.h"
+#include "macros.h"
+#include "dd.h"
 #include "swrast/swrast.h"
-#include "main/mm.h"
+#include "mm.h"
 
 #include "i810screen.h"
 #include "i810_dri.h"
 
-#include "main/context.h"
+#include "i810context.h"
 #include "i810ioctl.h"
 #include "i810state.h"
 

@@ -28,21 +28,22 @@
 
 #include <GL/gl.h>
 
-#include "main/mm.h"
+#include "mm.h"
 #include "savagecontext.h"
 #include "savagetex.h"
 #include "savagetris.h"
 #include "savageioctl.h"
-#include "main/simple_list.h"
-#include "main/enums.h"
+#include "simple_list.h"
+#include "enums.h"
 #include "savage_bci.h"
 
-#include "main/macros.h"
-#include "main/texformat.h"
-#include "main/texstore.h"
-#include "main/texobj.h"
-#include "main/convolve.h"
-#include "main/colormac.h"
+#include "macros.h"
+#include "texformat.h"
+#include "texstore.h"
+#include "texobj.h"
+
+#include "convolve.h"
+#include "colormac.h"
 
 #include "swrast/swrast.h"
 
@@ -100,7 +101,7 @@ static const savageTileInfo tileInfo_s3d_s4[5] = {
  * \param w   width in bytes
  */
 #define SUBTILE_FUNC(w,h)					\
-static INLINE GLubyte *savageUploadSubtile_##w##x##h		\
+static __inline GLubyte *savageUploadSubtile_##w##x##h		\
 (GLubyte *dest, GLubyte *src, GLuint srcStride)			\
 {								\
     GLuint y;							\
@@ -1015,7 +1016,7 @@ static void savageUploadTexImages( savageContextPtr imesa, savageTexObjPtr t )
       /* Heap timestamps are only reliable with Savage DRM 2.3.x or
        * later. Earlier versions had only 16 bit time stamps which
        * would wrap too frequently. */
-      if (imesa->savageScreen->driScrnPriv->drm_version.minor >= 3) {
+      if (imesa->savageScreen->driScrnPriv->drmMinor >= 3) {
 	  unsigned int heap = t->base.heap->heapId;
 	  LOCK_HARDWARE(imesa);
 	  savageWaitEvent (imesa, imesa->textureHeaps[heap]->timestamp);
@@ -1712,7 +1713,7 @@ static void savageTimestampTextures( savageContextPtr imesa )
     * Only useful with long-lived 32-bit event tags available
     * with Savage DRM 2.3.x or later. */
    if ((imesa->CurrentTexObj[0] || imesa->CurrentTexObj[1]) &&
-       imesa->savageScreen->driScrnPriv->drm_version.minor >= 3) {
+       imesa->savageScreen->driScrnPriv->drmMinor >= 3) {
        unsigned int e;
        FLUSH_BATCH(imesa);
        e = savageEmitEvent(imesa, SAVAGE_WAIT_3D);

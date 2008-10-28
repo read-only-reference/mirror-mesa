@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.1
+ * Version:  6.5.1
  *
- * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -612,9 +612,9 @@ destroy_list(GLcontext *ctx, GLuint list)
 
 
 /*
- * Translate the nth element of list from <type> to GLint.
+ * Translate the nth element of list from type to GLuint.
  */
-static GLint
+static GLuint
 translate_id(GLsizei n, GLenum type, const GLvoid * list)
 {
    GLbyte *bptr;
@@ -628,40 +628,37 @@ translate_id(GLsizei n, GLenum type, const GLvoid * list)
    switch (type) {
    case GL_BYTE:
       bptr = (GLbyte *) list;
-      return (GLint) bptr[n];
+      return (GLuint) *(bptr + n);
    case GL_UNSIGNED_BYTE:
       ubptr = (GLubyte *) list;
-      return (GLint) ubptr[n];
+      return (GLuint) *(ubptr + n);
    case GL_SHORT:
       sptr = (GLshort *) list;
-      return (GLint) sptr[n];
+      return (GLuint) *(sptr + n);
    case GL_UNSIGNED_SHORT:
       usptr = (GLushort *) list;
-      return (GLint) usptr[n];
+      return (GLuint) *(usptr + n);
    case GL_INT:
       iptr = (GLint *) list;
-      return iptr[n];
+      return (GLuint) *(iptr + n);
    case GL_UNSIGNED_INT:
       uiptr = (GLuint *) list;
-      return (GLint) uiptr[n];
+      return (GLuint) *(uiptr + n);
    case GL_FLOAT:
       fptr = (GLfloat *) list;
-      return (GLint) FLOORF(fptr[n]);
+      return (GLuint) *(fptr + n);
    case GL_2_BYTES:
       ubptr = ((GLubyte *) list) + 2 * n;
-      return (GLint) ubptr[0] * 256
-           + (GLint) ubptr[1];
+      return (GLuint) *ubptr * 256 + (GLuint) * (ubptr + 1);
    case GL_3_BYTES:
       ubptr = ((GLubyte *) list) + 3 * n;
-      return (GLint) ubptr[0] * 65536
-           + (GLint) ubptr[1] * 256
-           + (GLint) ubptr[2];
+      return (GLuint) * ubptr * 65536
+           + (GLuint) *(ubptr + 1) * 256 + (GLuint) * (ubptr + 2);
    case GL_4_BYTES:
       ubptr = ((GLubyte *) list) + 4 * n;
-      return (GLint) ubptr[0] * 16777216
-           + (GLint) ubptr[1] * 65536
-           + (GLint) ubptr[2] * 256
-           + (GLint) ubptr[3];
+      return (GLuint) *ubptr * 16777216
+           + (GLuint) *(ubptr + 1) * 65536
+           + (GLuint) *(ubptr + 2) * 256 + (GLuint) * (ubptr + 3);
    default:
       return 0;
    }
@@ -1003,10 +1000,10 @@ _mesa_save_CallLists(GLsizei n, GLenum type, const GLvoid * lists)
    }
 
    for (i = 0; i < n; i++) {
-      GLint list = translate_id(i, type, lists);
+      GLuint list = translate_id(i, type, lists);
       Node *n = ALLOC_INSTRUCTION(ctx, OPCODE_CALL_LIST_OFFSET, 2);
       if (n) {
-         n[1].i = list;
+         n[1].ui = list;
          n[2].b = typeErrorFlag;
       }
    }
@@ -2726,20 +2723,21 @@ save_PolygonMode(GLenum face, GLenum mode)
 }
 
 
+/*
+ * Polygon stipple must have been upacked already!
+ */
 static void GLAPIENTRY
 save_PolygonStipple(const GLubyte * pattern)
 {
    GET_CURRENT_CONTEXT(ctx);
-   GLvoid *image = unpack_image(2, 32, 32, 1, GL_COLOR_INDEX, GL_BITMAP,
-                                pattern, &ctx->Unpack);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
    n = ALLOC_INSTRUCTION(ctx, OPCODE_POLYGON_STIPPLE, 1);
    if (n) {
-      n[1].data = image; 
-   }
-   else if (image) {
-      _mesa_free(image);
+      void *data;
+      n[1].data = _mesa_malloc(32 * 4);
+      data = n[1].data;         /* This needed for Acorn compiler */
+      MEMCPY(data, pattern, 32 * 4);
    }
    if (ctx->ExecuteFlag) {
       CALL_PolygonStipple(ctx->Exec, ((GLubyte *) pattern));
@@ -3251,36 +3249,6 @@ save_StencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask)
    }
    if (ctx->ExecuteFlag) {
       CALL_StencilFuncSeparate(ctx->Exec, (face, func, ref, mask));
-   }
-}
-
-
-static void GLAPIENTRY
-save_StencilFuncSeparateATI(GLenum frontfunc, GLenum backfunc, GLint ref,
-                            GLuint mask)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   Node *n;
-   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   /* GL_FRONT */
-   n = ALLOC_INSTRUCTION(ctx, OPCODE_STENCIL_FUNC_SEPARATE, 4);
-   if (n) {
-      n[1].e = GL_FRONT;
-      n[2].e = frontfunc;
-      n[3].i = ref;
-      n[4].ui = mask;
-   }
-   /* GL_BACK */
-   n = ALLOC_INSTRUCTION(ctx, OPCODE_STENCIL_FUNC_SEPARATE, 4);
-   if (n) {
-      n[1].e = GL_BACK;
-      n[2].e = backfunc;
-      n[3].i = ref;
-      n[4].ui = mask;
-   }
-   if (ctx->ExecuteFlag) {
-      CALL_StencilFuncSeparate(ctx->Exec, (GL_FRONT, frontfunc, ref, mask));
-      CALL_StencilFuncSeparate(ctx->Exec, (GL_BACK, backfunc, ref, mask));
    }
 }
 
@@ -5619,27 +5587,6 @@ save_VertexAttrib4fvARB(GLuint index, const GLfloat * v)
 }
 
 
-/* GL_ARB_shader_objects, GL_ARB_vertex/fragment_shader */
-
-static void GLAPIENTRY
-exec_BindAttribLocationARB(GLuint program, GLuint index, const GLchar *name)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   FLUSH_VERTICES(ctx, 0);
-   CALL_BindAttribLocationARB(ctx->Exec, (program, index, name));
-}
-
-static GLint GLAPIENTRY
-exec_GetAttribLocationARB(GLuint program, const GLchar *name)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   FLUSH_VERTICES(ctx, 0);
-   return CALL_GetAttribLocationARB(ctx->Exec, (program, name));
-}
-/* XXX more shader functions needed here */
-
-
-
 #if FEATURE_EXT_framebuffer_blit
 static void GLAPIENTRY
 save_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
@@ -5748,7 +5695,7 @@ execute_list(GLcontext *ctx, GLuint list)
    if (!dlist)
       return;
 
-   ctx->ListState.CallDepth++;
+   ctx->ListState.CallStack[ctx->ListState.CallDepth++] = dlist;
 
    if (ctx->Driver.BeginCallList)
       ctx->Driver.BeginCallList(ctx, dlist);
@@ -5815,8 +5762,7 @@ execute_list(GLcontext *ctx, GLuint list)
                _mesa_error(ctx, GL_INVALID_ENUM, "glCallLists(type)");
             }
             else if (ctx->ListState.CallDepth < MAX_LIST_NESTING) {
-               GLuint list = (GLuint) (ctx->List.ListBase + n[1].i);
-               execute_list(ctx, list);
+               execute_list(ctx, ctx->List.ListBase + n[1].ui);
             }
             break;
          case OPCODE_CLEAR:
@@ -6180,12 +6126,7 @@ execute_list(GLcontext *ctx, GLuint list)
             CALL_PolygonMode(ctx->Exec, (n[1].e, n[2].e));
             break;
          case OPCODE_POLYGON_STIPPLE:
-            {
-               const struct gl_pixelstore_attrib save = ctx->Unpack;
-               ctx->Unpack = ctx->DefaultPacking;
-               CALL_PolygonStipple(ctx->Exec, ((GLubyte *) n[1].data));
-               ctx->Unpack = save;      /* restore */
-            }
+            CALL_PolygonStipple(ctx->Exec, ((GLubyte *) n[1].data));
             break;
          case OPCODE_POLYGON_OFFSET:
             CALL_PolygonOffset(ctx->Exec, (n[1].f, n[2].f));
@@ -6636,7 +6577,7 @@ execute_list(GLcontext *ctx, GLuint list)
    if (ctx->Driver.EndCallList)
       ctx->Driver.EndCallList(ctx);
 
-   ctx->ListState.CallDepth--;
+   ctx->ListState.CallStack[ctx->ListState.CallDepth--] = NULL;
 }
 
 
@@ -6867,6 +6808,7 @@ void GLAPIENTRY
 _mesa_CallLists(GLsizei n, GLenum type, const GLvoid * lists)
 {
    GET_CURRENT_CONTEXT(ctx);
+   GLuint list;
    GLint i;
    GLboolean save_compile_flag;
 
@@ -6898,8 +6840,8 @@ _mesa_CallLists(GLsizei n, GLenum type, const GLvoid * lists)
    ctx->CompileFlag = GL_FALSE;
 
    for (i = 0; i < n; i++) {
-      GLuint list = (GLuint) (ctx->List.ListBase + translate_id(i, type, lists));
-      execute_list(ctx, list);
+      list = translate_id(i, type, lists);
+      execute_list(ctx, ctx->List.ListBase + list);
    }
 
    ctx->CompileFlag = save_compile_flag;
@@ -7879,9 +7821,6 @@ _mesa_init_dlist_table(struct _glapi_table *table)
    SET_StencilMaskSeparate(table, save_StencilMaskSeparate);
    SET_StencilOpSeparate(table, save_StencilOpSeparate);
 
-   /* ATI_separate_stencil */ 
-   SET_StencilFuncSeparateATI(table, save_StencilFuncSeparateATI);
-
    /* GL_ARB_imaging */
    /* Not all are supported */
    SET_BlendColor(table, save_BlendColor);
@@ -8178,11 +8117,6 @@ _mesa_init_dlist_table(struct _glapi_table *table)
 #if FEATURE_EXT_framebuffer_blit
    SET_BlitFramebufferEXT(table, save_BlitFramebufferEXT);
 #endif
-
-   /* ARB 30/31/32. GL_ARB_shader_objects, GL_ARB_vertex/fragment_shader */
-   SET_BindAttribLocationARB(table, exec_BindAttribLocationARB);
-   SET_GetAttribLocationARB(table, exec_GetAttribLocationARB);
-   /* XXX additional functions need to be implemented here! */
 
    /* 299. GL_EXT_blend_equation_separate */
    SET_BlendEquationSeparateEXT(table, save_BlendEquationSeparateEXT);

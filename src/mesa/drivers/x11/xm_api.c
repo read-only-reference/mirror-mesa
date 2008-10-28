@@ -65,21 +65,28 @@
 #include "glxheader.h"
 #include "GL/xmesa.h"
 #include "xmesaP.h"
-#include "main/context.h"
-#include "main/extensions.h"
-#include "main/framebuffer.h"
-#include "main/imports.h"
-#include "main/macros.h"
-#include "main/renderbuffer.h"
-#include "main/teximage.h"
-#include "glapi/glthread.h"
+#include "context.h"
+#include "extensions.h"
+#include "framebuffer.h"
+#include "glthread.h"
+#include "imports.h"
+#include "macros.h"
+#include "renderbuffer.h"
+#include "teximage.h"
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
 #include "vbo/vbo.h"
+#if 0
 #include "tnl/tnl.h"
 #include "tnl/t_context.h"
 #include "tnl/t_pipeline.h"
+#endif
 #include "drivers/common/driverfuncs.h"
+
+#include "state_tracker/st_public.h"
+#include "state_tracker/st_context.h"
+#include "softpipe/sp_context.h"
+#include "pipe/p_defines.h"
 
 /**
  * Global X driver lock
@@ -381,7 +388,7 @@ create_xmesa_buffer(XMesaDrawable d, BufferType type,
    /*
     * Front renderbuffer
     */
-   b->frontxrb = xmesa_new_renderbuffer(NULL, 0, &vis->mesa_visual, GL_FALSE);
+   b->frontxrb = xmesa_create_renderbuffer(NULL, 0, &vis->mesa_visual, GL_FALSE);
    if (!b->frontxrb) {
       _mesa_free(b);
       return NULL;
@@ -390,13 +397,13 @@ create_xmesa_buffer(XMesaDrawable d, BufferType type,
    b->frontxrb->drawable = d;
    b->frontxrb->pixmap = (XMesaPixmap) d;
    _mesa_add_renderbuffer(&b->mesa_buffer, BUFFER_FRONT_LEFT,
-                          &b->frontxrb->Base);
+                          &b->frontxrb->St.Base);
 
    /*
     * Back renderbuffer
     */
    if (vis->mesa_visual.doubleBufferMode) {
-      b->backxrb = xmesa_new_renderbuffer(NULL, 0, &vis->mesa_visual, GL_TRUE);
+      b->backxrb = xmesa_create_renderbuffer(NULL, 0, &vis->mesa_visual, GL_TRUE);
       if (!b->backxrb) {
          /* XXX free front xrb too */
          _mesa_free(b);
@@ -407,7 +414,7 @@ create_xmesa_buffer(XMesaDrawable d, BufferType type,
       b->db_mode = vis->ximage_flag ? BACK_XIMAGE : BACK_PIXMAP;
       
       _mesa_add_renderbuffer(&b->mesa_buffer, BUFFER_BACK_LEFT,
-                             &b->backxrb->Base);
+                             &b->backxrb->St.Base);
    }
 
    /*
@@ -425,14 +432,43 @@ create_xmesa_buffer(XMesaDrawable d, BufferType type,
       b->swAlpha = GL_FALSE;
    }
 
+   if (vis->mesa_visual.depthBits > 0 &&
+       vis->mesa_visual.stencilBits > 0) {
+      /* combined depth/stencil */
+      struct gl_renderbuffer *rb
+         = st_new_renderbuffer_fb(GL_DEPTH24_STENCIL8_EXT);
+      _mesa_add_renderbuffer(&b->mesa_buffer, BUFFER_DEPTH, rb);
+      _mesa_add_renderbuffer(&b->mesa_buffer, BUFFER_STENCIL, rb);
+   }
+   else {
+      if (vis->mesa_visual.depthBits > 0) {
+         struct gl_renderbuffer *rb
+         = st_new_renderbuffer_fb(GL_DEPTH_COMPONENT32);
+         _mesa_add_renderbuffer(&b->mesa_buffer, BUFFER_DEPTH, rb);
+      }
+
+      if (vis->mesa_visual.stencilBits > 0) {
+         struct gl_renderbuffer *rb
+            = st_new_renderbuffer_fb(GL_STENCIL_INDEX8_EXT);
+         _mesa_add_renderbuffer(&b->mesa_buffer, BUFFER_STENCIL, rb);
+      }
+   }
+
+   if (vis->mesa_visual.accumRedBits > 0) {
+      struct gl_renderbuffer *rb
+         = st_new_renderbuffer_fb(GL_RGBA16);
+      _mesa_add_renderbuffer(&b->mesa_buffer, BUFFER_ACCUM, rb);
+   }
+
+
    /*
     * Other renderbuffer (depth, stencil, etc)
     */
    _mesa_add_soft_renderbuffers(&b->mesa_buffer,
-                                GL_FALSE,  /* color */
-                                vis->mesa_visual.haveDepthBuffer,
-                                vis->mesa_visual.haveStencilBuffer,
-                                vis->mesa_visual.haveAccumBuffer,
+                                GL_FALSE, /* color */
+                                GL_FALSE, /*vis->mesa_visual.haveDepthBuffer,*/
+                                GL_FALSE, /* stencil */
+                                GL_FALSE, /* accum */
                                 b->swAlpha,
                                 vis->mesa_visual.numAuxBuffers > 0 );
 
@@ -1303,67 +1339,6 @@ xmesa_convert_from_x_visual_type( int visualType )
 /**********************************************************************/
 
 
-#ifdef IN_DRI_DRIVER
-#define need_GL_VERSION_1_3
-#define need_GL_VERSION_1_4
-#define need_GL_VERSION_1_5
-#define need_GL_VERSION_2_0
-
-/* sw extensions for imaging */
-#define need_GL_EXT_blend_color
-#define need_GL_EXT_blend_minmax
-#define need_GL_EXT_convolution
-#define need_GL_EXT_histogram
-#define need_GL_SGI_color_table
-
-/* sw extensions not associated with some GL version */
-#define need_GL_ARB_shader_objects
-#define need_GL_ARB_vertex_program
-#define need_GL_APPLE_vertex_array_object
-#define need_GL_ATI_fragment_shader
-#define need_GL_EXT_depth_bounds_test
-#define need_GL_EXT_framebuffer_object
-#define need_GL_EXT_framebuffer_blit
-#define need_GL_EXT_gpu_program_parameters
-#define need_GL_EXT_paletted_texture
-#define need_GL_IBM_multimode_draw_arrays
-#define need_GL_MESA_resize_buffers
-#define need_GL_NV_vertex_program
-#define need_GL_NV_fragment_program
-
-#include "extension_helper.h"
-#include "utils.h"
-
-const struct dri_extension card_extensions[] =
-{
-   { "GL_VERSION_1_3",			GL_VERSION_1_3_functions },
-   { "GL_VERSION_1_4",			GL_VERSION_1_4_functions },
-   { "GL_VERSION_1_5",			GL_VERSION_1_5_functions },
-   { "GL_VERSION_2_0",			GL_VERSION_2_0_functions },
-
-   { "GL_EXT_blend_color",		GL_EXT_blend_color_functions },
-   { "GL_EXT_blend_minmax",		GL_EXT_blend_minmax_functions },
-   { "GL_EXT_convolution",		GL_EXT_convolution_functions },
-   { "GL_EXT_histogram",		GL_EXT_histogram_functions },
-   { "GL_SGI_color_table",		GL_SGI_color_table_functions },
-
-   { "GL_ARB_shader_objects",		GL_ARB_shader_objects_functions },
-   { "GL_ARB_vertex_program",		GL_ARB_vertex_program_functions },
-   { "GL_APPLE_vertex_array_object",	GL_APPLE_vertex_array_object_functions },
-   { "GL_ATI_fragment_shader",		GL_ATI_fragment_shader_functions },
-   { "GL_EXT_depth_bounds_test",	GL_EXT_depth_bounds_test_functions },
-   { "GL_EXT_framebuffer_object",	GL_EXT_framebuffer_object_functions },
-   { "GL_EXT_framebuffer_blit",		GL_EXT_framebuffer_blit_functions },
-   { "GL_EXT_gpu_program_parameters",	GL_EXT_gpu_program_parameters_functions },
-   { "GL_EXT_paletted_texture",		GL_EXT_paletted_texture_functions },
-   { "GL_IBM_multimode_draw_arrays",	GL_IBM_multimode_draw_arrays_functions },
-   { "GL_MESA_resize_buffers",		GL_MESA_resize_buffers_functions },
-   { "GL_NV_vertex_program",		GL_NV_vertex_program_functions },
-   { "GL_NV_fragment_program",		GL_NV_fragment_program_functions },
-   { NULL,				NULL }
-};
-#endif
-
 /*
  * Create a new X/Mesa visual.
  * Input:  display - X11 display
@@ -1408,14 +1383,6 @@ XMesaVisual XMesaCreateVisual( XMesaDisplay *display,
    char *gamma;
    XMesaVisual v;
    GLint red_bits, green_bits, blue_bits, alpha_bits;
-
-#ifdef IN_DRI_DRIVER
-   /* driInitExtensions() should be called once per screen to setup extension
-    * indices.  There is no need to call it when the context is created since
-    * XMesa enables mesa sw extensions on its own.
-    */
-   driInitExtensions( NULL, card_extensions, GL_FALSE );
-#endif
 
 #ifndef XFree86Server
    /* For debugging only */
@@ -1563,7 +1530,9 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
    XMesaContext c;
    GLcontext *mesaCtx;
    struct dd_function_table functions;
+#if 0
    TNLcontext *tnl;
+#endif
 
    if (firstTime) {
       _glthread_INIT_MUTEX(_xmesa_lock);
@@ -1580,6 +1549,15 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
    /* initialize with default driver functions, then plug in XMesa funcs */
    _mesa_init_driver_functions(&functions);
    xmesa_init_driver_functions(v, &functions);
+   st_init_driver_functions(&functions);
+
+   /* override st's function */
+   functions.UpdateState = xmesa_update_state;
+
+   /*
+   functions.NewRenderbuffer = xmesa_new_renderbuffer;
+   */
+
    if (!_mesa_initialize_context(mesaCtx, &v->mesa_visual,
                       share_list ? &(share_list->mesa) : (GLcontext *) NULL,
                       &functions, (void *) c)) {
@@ -1592,9 +1570,8 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
    _mesa_enable_1_4_extensions(mesaCtx);
    _mesa_enable_1_5_extensions(mesaCtx);
    _mesa_enable_2_0_extensions(mesaCtx);
-   _mesa_enable_2_1_extensions(mesaCtx);
 #if ENABLE_EXT_texure_compression_s3tc
-    if (mesaCtx->Mesa_DXTn) {
+    if (c->Mesa_DXTn) {
        _mesa_enable_extension(mesaCtx, "GL_EXT_texture_compression_s3tc");
        _mesa_enable_extension(mesaCtx, "GL_S3_s3tc");
     }
@@ -1620,21 +1597,48 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
 
    /* Initialize the software rasterizer and helper modules.
     */
-   if (!_swrast_CreateContext( mesaCtx ) ||
-       !_vbo_CreateContext( mesaCtx ) ||
+   if (!_swrast_CreateContext( mesaCtx )
+#if 0
+       || !_vbo_CreateContext( mesaCtx ) ||
        !_tnl_CreateContext( mesaCtx ) ||
-       !_swsetup_CreateContext( mesaCtx )) {
+       !_swsetup_CreateContext( mesaCtx )
+#endif
+       ) {
       _mesa_free_context_data(&c->mesa);
       _mesa_free(c);
       return NULL;
    }
 
+#if 0
    /* tnl setup */
    tnl = TNL_CONTEXT(mesaCtx);
    tnl->Driver.RunPipeline = _tnl_run_pipeline;
+#endif
+
    /* swrast setup */
    xmesa_register_swrast_functions( mesaCtx );
+
+
+   st_create_context( mesaCtx,
+                      xmesa_create_softpipe( c ) );
+
+   _swsetup_CreateContext( mesaCtx );
    _swsetup_Wakeup(mesaCtx);
+
+   /* override these functions, as if the xlib driver were derived from
+    * the softpipe driver.
+    */
+#if 0
+   mesaCtx->st->pipe->surface_alloc = xmesa_surface_alloc;
+#endif
+   mesaCtx->st->pipe->is_format_supported = xmesa_is_format_supported;
+   mesaCtx->st->pipe->get_tile_rgba = xmesa_get_tile_rgba;
+   mesaCtx->st->pipe->put_tile_rgba = xmesa_put_tile_rgba;
+
+   mesaCtx->st->haveFramebufferRegions = GL_FALSE;
+
+   /* special pipe->clear function */
+   mesaCtx->st->pipe->clear = xmesa_clear;
 
    return c;
 }
@@ -1652,8 +1656,10 @@ void XMesaDestroyContext( XMesaContext c )
 
    _swsetup_DestroyContext( mesaCtx );
    _swrast_DestroyContext( mesaCtx );
+#if 0
    _tnl_DestroyContext( mesaCtx );
    _vbo_DestroyContext( mesaCtx );
+#endif
    _mesa_free_context_data( mesaCtx );
    _mesa_free( c );
 }

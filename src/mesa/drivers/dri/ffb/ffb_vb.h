@@ -2,8 +2,8 @@
 #ifndef _FFB_VB_H
 #define _FFB_VB_H
 
-#include "main/mtypes.h"
-#include "main/macros.h"
+#include "mtypes.h"
+#include "macros.h"
 #include "tnl/t_context.h"
 #include "swrast/swrast.h"
 

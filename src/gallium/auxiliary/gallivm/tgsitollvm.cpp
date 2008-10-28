@@ -286,9 +286,13 @@ translate_instruction(llvm::Module *module,
       out = instr->rsq(inputs[0]);
    }
       break;
-   case TGSI_OPCODE_EXP:
+   case TGSI_OPCODE_EXP: {
+      out = instr->exp(inputs[0]);
+   }
       break;
-   case TGSI_OPCODE_LOG:
+   case TGSI_OPCODE_LOG: {
+      out = instr->log(inputs[0]);
+   }
       break;
    case TGSI_OPCODE_MUL: {
       out = instr->mul(inputs[0], inputs[1]);
@@ -338,21 +342,31 @@ translate_instruction(llvm::Module *module,
       out = instr->lerp(inputs[0], inputs[1], inputs[2]);
    }
       break;
-   case TGSI_OPCODE_CND:
+   case TGSI_OPCODE_CND: {
+      out = instr->cnd(inputs[0], inputs[1], inputs[2]);
+   }
       break;
-   case TGSI_OPCODE_CND0:
+   case TGSI_OPCODE_CND0: {
+      out = instr->cnd0(inputs[0], inputs[1], inputs[2]);
+   }
       break;
-   case TGSI_OPCODE_DOT2ADD:
+   case TGSI_OPCODE_DOT2ADD: {
+      out = instr->dot2add(inputs[0], inputs[1], inputs[2]);
+   }
       break;
    case TGSI_OPCODE_INDEX:
       break;
-   case TGSI_OPCODE_NEGATE:
+   case TGSI_OPCODE_NEGATE: {
+      out = instr->neg(inputs[0]);
+   }
       break;
    case TGSI_OPCODE_FRAC: {
       out = instr->frc(inputs[0]);
    }
       break;
-   case TGSI_OPCODE_CLAMP:
+   case TGSI_OPCODE_CLAMP: {
+      out = instr->clamp(inputs[0]);
+   }
       break;
    case TGSI_OPCODE_FLOOR: {
       out = instr->floor(inputs[0]);
@@ -392,9 +406,13 @@ translate_instruction(llvm::Module *module,
       out = instr->cos(inputs[0]);
    }
       break;
-   case TGSI_OPCODE_DDX:
+   case TGSI_OPCODE_DDX: {
+      out = instr->ddx(inputs[0]);
+   }
       break;
-   case TGSI_OPCODE_DDY:
+   case TGSI_OPCODE_DDY: {
+      out = instr->ddy(inputs[0]);
+   }
       break;
    case TGSI_OPCODE_KILP:
       break;
@@ -408,9 +426,13 @@ translate_instruction(llvm::Module *module,
       break;
    case TGSI_OPCODE_RFL:
       break;
-   case TGSI_OPCODE_SEQ:
+   case TGSI_OPCODE_SEQ: {
+      out = instr->seq(inputs[0], inputs[1]);
+   }
       break;
-   case TGSI_OPCODE_SFL:
+   case TGSI_OPCODE_SFL: {
+      out = instr->sfl(inputs[0], inputs[1]);
+   }
       break;
    case TGSI_OPCODE_SGT: {
       out = instr->sgt(inputs[0], inputs[1]);
@@ -420,11 +442,17 @@ translate_instruction(llvm::Module *module,
       out = instr->sin(inputs[0]);
    }
       break;
-   case TGSI_OPCODE_SLE:
+   case TGSI_OPCODE_SLE: {
+      out = instr->sle(inputs[0], inputs[1]);
+   }
       break;
-   case TGSI_OPCODE_SNE:
+   case TGSI_OPCODE_SNE: {
+      out = instr->sne(inputs[0], inputs[1]);
+   }
       break;
-   case TGSI_OPCODE_STR:
+   case TGSI_OPCODE_STR: {
+      out = instr->str(inputs[0], inputs[1]);
+   }
       break;
    case TGSI_OPCODE_TEX:
       break;
@@ -438,7 +466,9 @@ translate_instruction(llvm::Module *module,
       break;
    case TGSI_OPCODE_UP4UB:
       break;
-   case TGSI_OPCODE_X2D:
+   case TGSI_OPCODE_X2D: {
+      out = instr->x2d(inputs[0], inputs[1], inputs[2]);
+   }
       break;
    case TGSI_OPCODE_ARA:
       break;
@@ -468,11 +498,18 @@ translate_instruction(llvm::Module *module,
       break;
    case TGSI_OPCODE_TXB:
       break;
-   case TGSI_OPCODE_NRM:
+   case TGSI_OPCODE_NRM4:
+   case TGSI_OPCODE_NRM: {
+      out = instr->nrm(inputs[0]);
+   }
       break;
-   case TGSI_OPCODE_DIV:
+   case TGSI_OPCODE_DIV: {
+      out = instr->div(inputs[0], inputs[1]);
+   }
       break;
-   case TGSI_OPCODE_DP2:
+   case TGSI_OPCODE_DP2: {
+      out = instr->dp2(inputs[0], inputs[1]);
+   }
       break;
    case TGSI_OPCODE_TXL:
       break;
@@ -589,8 +626,6 @@ translate_instruction(llvm::Module *module,
    case TGSI_OPCODE_M3X3:
       break;
    case TGSI_OPCODE_M3X2:
-      break;
-   case TGSI_OPCODE_NRM4:
       break;
    case TGSI_OPCODE_CALLNZ:
       break;
@@ -732,6 +767,7 @@ translate_instructionir(llvm::Module *module,
    }
       break;
    case TGSI_OPCODE_SLT: {
+      out = instr->slt(inputs[0], inputs[1]);
    }
       break;
    case TGSI_OPCODE_SGE: {

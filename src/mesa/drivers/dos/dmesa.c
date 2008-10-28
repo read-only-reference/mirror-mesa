@@ -31,9 +31,9 @@
  */
 
 
-#include "main/context.h"
-#include "main/imports.h"
-#include "main/mtypes.h"
+#include "context.h"
+#include "imports.h"
+#include "mtypes.h"
 
 #include "video.h"
 

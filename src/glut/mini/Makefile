@@ -55,7 +55,7 @@ default: depend $(TOP)/$(LIB_DIR)/$(GLUT_LIB_NAME)
 
 # Make the library
 $(TOP)/$(LIB_DIR)/$(GLUT_LIB_NAME): depend $(OBJECTS)
-	$(MKLIB) -o $(GLUT_LIB) -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+	$(TOP)/bin/mklib -o $(GLUT_LIB) -linker '$(CC)' \
 		-major $(GLUT_MAJOR) -minor $(GLUT_MINOR) -patch $(GLUT_TINY) \
 		$(GLUT_LIB_DEPS) -install $(TOP)/$(LIB_DIR) \
 		$(MKLIB_OPTIONS) $(OBJECTS)
@@ -73,27 +73,9 @@ tags:
 	etags `find . -name \*.[ch]` `find ../include`
 
 
-# glut pkgconfig file
-pcedit = sed \
-	-e 's,@INSTALL_DIR@,$(INSTALL_DIR),' \
-	-e 's,@INSTALL_LIB_DIR@,$(INSTALL_LIB_DIR),' \
-	-e 's,@INSTALL_INC_DIR@,$(INSTALL_INC_DIR),' \
-	-e 's,@VERSION@,$(GLUT_MAJOR).$(GLUT_MINOR).$(GLUT_TINY),'
-glut.pc: glut.pc.in
-	$(pcedit) $< > $@
-
-install: glut.pc
-	$(INSTALL) -d $(DESTDIR)$(INSTALL_INC_DIR)/GL
-	$(INSTALL) -d $(DESTDIR)$(INSTALL_LIB_DIR)
-	$(INSTALL) -d $(DESTDIR)$(INSTALL_LIB_DIR)/pkgconfig
-	$(INSTALL) -m 644 $(TOP)/include/GL/glut.h $(DESTDIR)$(INSTALL_INC_DIR)/GL
-	$(INSTALL) $(TOP)/$(LIB_DIR)/libglut* $(DESTDIR)$(INSTALL_LIB_DIR)
-	$(INSTALL) -m 644 glut.pc $(DESTDIR)$(INSTALL_LIB_DIR)/pkgconfig
-
-
 # Remove .o and backup files
 clean: depend
-	-rm -f depend depend.bak
-	-rm -f *.o *~ *.o *~ *.so *.pc libglut.so.3.7
+	-rm -f depend
+	-rm -f *.o *~ *.o *~ *.so libglut.so.3.7
 
 include depend

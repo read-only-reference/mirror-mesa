@@ -32,8 +32,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  */
 
-#include "main/glheader.h"
-#include "main/imports.h"
+#include "glheader.h"
+#include "imports.h"
 
 #include "radeon_context.h"
 #include "radeon_state.h"

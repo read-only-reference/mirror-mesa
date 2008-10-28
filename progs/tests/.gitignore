@@ -26,7 +26,6 @@ cva
 dinoshade
 drawbuffers
 extfuncs.h
-exactrast
 fbotest1
 fbotest2
 fbotexture
@@ -41,7 +40,6 @@ getproclist.h
 interleave
 invert
 jkrahntest
-lineclip
 manytex
 minmag
 mipmap_limits
@@ -58,9 +56,6 @@ readtex.c
 readtex.h
 seccolor
 sharedtex
-shader_api
-stencil_twoside
-stencil_wrap
 stencilwrap
 stencil_wrap
 subtex
@@ -74,7 +69,6 @@ texline
 texobjshare
 texrect
 texwrap
-unfilledclip
 vao-01
 vao-02
 vparray

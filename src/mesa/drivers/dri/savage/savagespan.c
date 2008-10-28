@@ -22,7 +22,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#include "main/mtypes.h"
+#include "mtypes.h"
 #include "savagedd.h"
 #include "savagespan.h"
 #include "savageioctl.h"
@@ -93,8 +93,6 @@
 /* 16 bit integer depthbuffer functions
  * Depth range is reversed. See also savageCalcViewport.
  */
-#define VALUE_TYPE GLushort
-
 #define WRITE_DEPTH( _x, _y, d ) \
     *(GLushort *)(buf + ((_x)<<1) + (_y)*pitch) = 0xFFFF - d
 
@@ -109,8 +107,6 @@
 
 /* 16 bit float depthbuffer functions
  */
-#define VALUE_TYPE GLushort
-
 #define WRITE_DEPTH( _x, _y, d ) \
     *(GLushort *)(buf + ((_x)<<1) + (_y)*pitch) = \
         savageEncodeFloat16( 1.0 - (GLfloat)d/65535.0 )
@@ -129,8 +125,6 @@
 /* 8-bit stencil /24-bit integer depth depthbuffer functions.
  * Depth range is reversed. See also savageCalcViewport.
  */
-#define VALUE_TYPE GLuint
-
 #define WRITE_DEPTH( _x, _y, d ) do {				\
    GLuint tmp = *(GLuint *)(buf + ((_x)<<2) + (_y)*pitch);	\
    tmp &= 0xFF000000;						\
@@ -149,8 +143,6 @@
 
 /* 24 bit float depthbuffer functions
  */
-#define VALUE_TYPE GLuint
-
 #define WRITE_DEPTH( _x, _y, d ) do {				\
     GLuint tmp = *(GLuint *)(buf + ((_x)<<2) + (_y)*pitch);	\
     tmp &= 0xFF000000;						\

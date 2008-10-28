@@ -33,7 +33,6 @@
 
 
 GLenum doubleBuffer;
-float Z = -6;
 
 static void Init(void)
 {
@@ -41,36 +40,30 @@ static void Init(void)
    fprintf(stderr, "GL_VERSION    = %s\n", (char *) glGetString(GL_VERSION));
    fprintf(stderr, "GL_VENDOR     = %s\n", (char *) glGetString(GL_VENDOR));
 
-   fprintf(stderr, "Press z/Z to translate quad\n");
-
-   glClearColor(0.0, 0.0, 1.0, 0.0);
+    glClearColor(0.0, 0.0, 1.0, 0.0);
 }
 
 static void Reshape(int width, int height)
 {
+
     glViewport(0, 0, (GLint)width, (GLint)height);
 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    glFrustum(-1.0, 1.0, -1.0, 1.0, 5, 100.0);
+    glOrtho(-1.0, 1.0, -1.0, 1.0, -0.5, 1000.0);
     glMatrixMode(GL_MODELVIEW);
 }
 
 static void Key(unsigned char key, int x, int y)
 {
+
     switch (key) {
-    case 'z':
-       Z += 0.5;
-       break;
-    case 'Z':
-       Z -= 0.5;
-       break;
-    case 27:
-       exit(1);
-    default:
-       return;
+      case 27:
+	exit(1);
+      default:
+	return;
     }
-    printf("Z = %f\n", Z);
+
     glutPostRedisplay();
 }
 
@@ -78,21 +71,16 @@ static void Draw(void)
 {
    glClear(GL_COLOR_BUFFER_BIT); 
 
-   glPushMatrix();
-   glTranslatef(0, -0.5, Z);
-
    glBegin(GL_QUADS);
    glColor3f(1,0,0); 
-   glVertex3f( -0.8, 0, -4.0);
+   glVertex3f( 0.9, -0.9, 30.0);
    glColor3f(1,1,0); 
-   glVertex3f(  0.8, 0, -4.0);
+   glVertex3f( 0.9,  0.9, 30.0);
    glColor3f(1,0,1); 
-   glVertex3f(  0.8, 0,  4.0);
+   glVertex3f(-1.9,  0.9, 30.0);
    glColor3f(0,1,1); 
-   glVertex3f( -0.8, 0,  4.0);
+   glVertex3f(-1.9,  -0.9, -30.0);
    glEnd();
-
-   glPopMatrix();
 
    glFlush();
 
@@ -130,8 +118,7 @@ int main(int argc, char **argv)
 	exit(1);
     }
 
-    glutInitWindowPosition(0, 0);
-    glutInitWindowSize( 250, 250);
+    glutInitWindowPosition(0, 0); glutInitWindowSize( 250, 250);
 
     type = GLUT_RGB | GLUT_ALPHA;
     type |= (doubleBuffer) ? GLUT_DOUBLE : GLUT_SINGLE;
@@ -147,5 +134,5 @@ int main(int argc, char **argv)
     glutKeyboardFunc(Key);
     glutDisplayFunc(Draw);
     glutMainLoop();
-    return 0;
+	return 0;
 }

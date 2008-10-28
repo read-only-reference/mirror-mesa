@@ -29,9 +29,9 @@
   *   Keith Whitwell <keith@tungstengraphics.com>
   */
 
-#include "main/glheader.h"
-#include "main/macros.h"
-#include "main/enums.h"
+#include "glheader.h"
+#include "macros.h"
+#include "enums.h"
 
 #include "intel_batchbuffer.h"
 
@@ -60,7 +60,7 @@ static void compile_clip_prog( struct brw_context *brw,
    
    /* Begin the compilation:
     */
-   brw_init_compile(brw, &c.func);
+   brw_init_compile(&c.func);
 
    c.func.single_program_flow = 1;
 
@@ -119,19 +119,31 @@ static void compile_clip_prog( struct brw_context *brw,
 
    /* Upload
     */
-   dri_bo_unreference(brw->clip.prog_bo);
-   brw->clip.prog_bo = brw_upload_cache( &brw->cache,
-					 BRW_CLIP_PROG,
-					 &c.key, sizeof(c.key),
-					 NULL, 0,
-					 program, program_size,
-					 &c.prog_data,
-					 &brw->clip.prog_data );
+   brw->clip.prog_gs_offset = brw_upload_cache( &brw->cache[BRW_CLIP_PROG],
+						&c.key,
+						sizeof(c.key),
+						program,
+						program_size,
+						&c.prog_data,
+						&brw->clip.prog_data );
 }
+
+
+static GLboolean search_cache( struct brw_context *brw, 
+			       struct brw_clip_prog_key *key )
+{
+   return brw_search_cache(&brw->cache[BRW_CLIP_PROG], 
+			   key, sizeof(*key),
+			   &brw->clip.prog_data,
+			   &brw->clip.prog_gs_offset);
+}
+
+
+
 
 /* Calculate interpolants for triangle and line rasterization.
  */
-static void upload_clip_prog(struct brw_context *brw)
+static void upload_clip_prog( struct brw_context *brw )
 {
    GLcontext *ctx = &brw->intel.ctx;
    struct brw_clip_prog_key key;
@@ -168,10 +180,12 @@ static void upload_clip_prog(struct brw_context *brw)
 	       offset_front = 0;
 	       break;
 	    case GL_LINE:
+	       key.do_unfilled = 1;
 	       fill_front = CLIP_LINE;
 	       offset_front = brw->attribs.Polygon->OffsetLine;
 	       break;
 	    case GL_POINT:
+	       key.do_unfilled = 1;
 	       fill_front = CLIP_POINT;
 	       offset_front = brw->attribs.Polygon->OffsetPoint;
 	       break;
@@ -186,23 +200,22 @@ static void upload_clip_prog(struct brw_context *brw)
 	       offset_back = 0;
 	       break;
 	    case GL_LINE:
+	       key.do_unfilled = 1;
 	       fill_back = CLIP_LINE;
 	       offset_back = brw->attribs.Polygon->OffsetLine;
 	       break;
 	    case GL_POINT:
+	       key.do_unfilled = 1;
 	       fill_back = CLIP_POINT;
 	       offset_back = brw->attribs.Polygon->OffsetPoint;
 	       break;
 	    }
 	 }
 
-	 if (brw->attribs.Polygon->BackMode != GL_FILL ||
-	     brw->attribs.Polygon->FrontMode != GL_FILL) {
-	    key.do_unfilled = 1;
-
-	    /* Most cases the fixed function units will handle.  Cases where
-	     * one or more polygon faces are unfilled will require help:
-	     */
+	 /* Most cases the fixed function units will handle.  Cases where
+	  * one or more polygon faces are unfilled will require help:
+	  */
+	 if (key.do_unfilled) {
 	    key.clip_mode = BRW_CLIPMODE_CLIP_NON_REJECTED;
 
 	    if (offset_back || offset_front) {
@@ -235,12 +248,7 @@ static void upload_clip_prog(struct brw_context *brw)
       }
    }
 
-   dri_bo_unreference(brw->clip.prog_bo);
-   brw->clip.prog_bo = brw_search_cache(&brw->cache, BRW_CLIP_PROG,
-					&key, sizeof(key),
-					NULL, 0,
-					&brw->clip.prog_data);
-   if (brw->clip.prog_bo == NULL)
+   if (!search_cache(brw, &key))
       compile_clip_prog( brw, &key );
 }
 
@@ -254,5 +262,5 @@ const struct brw_tracked_state brw_clip_prog = {
       .brw   = (BRW_NEW_REDUCED_PRIMITIVE),
       .cache = CACHE_NEW_VS_PROG
    },
-   .prepare = upload_clip_prog
+   .update = upload_clip_prog
 };

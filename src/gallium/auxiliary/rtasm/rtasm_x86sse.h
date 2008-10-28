@@ -152,13 +152,12 @@ void x86_jmp( struct x86_function *p, int label );
 /* void x86_call( struct x86_function *p, void (*label)() ); */
 void x86_call( struct x86_function *p, struct x86_reg reg);
 
+/* michal:
+ * Temporary. As I need immediate operands, and dont want to mess with the codegen,
+ * I load the immediate into general purpose register and use it.
+ */
 void x86_mov_reg_imm( struct x86_function *p, struct x86_reg dst, int imm );
-void x86_add_imm( struct x86_function *p, struct x86_reg dst, int imm );
-void x86_or_imm( struct x86_function *p, struct x86_reg dst, int imm );
-void x86_and_imm( struct x86_function *p, struct x86_reg dst, int imm );
-void x86_sub_imm( struct x86_function *p, struct x86_reg dst, int imm );
-void x86_xor_imm( struct x86_function *p, struct x86_reg dst, int imm );
-void x86_cmp_imm( struct x86_function *p, struct x86_reg dst, int imm );
+void x86_add_reg_imm8( struct x86_function *p, struct x86_reg dst, ubyte imm );
 
 
 /* Macro for sse_shufps() and sse2_pshufd():
@@ -184,6 +183,13 @@ void sse2_pshufd( struct x86_function *p, struct x86_reg dest, struct x86_reg ar
                   unsigned char shuf );
 void sse2_rcpps( struct x86_function *p, struct x86_reg dst, struct x86_reg src );
 void sse2_rcpss( struct x86_function *p, struct x86_reg dst, struct x86_reg src );
+
+
+void sse_prefetchnta( struct x86_function *p, struct x86_reg ptr);
+void sse_prefetch0( struct x86_function *p, struct x86_reg ptr);
+void sse_prefetch1( struct x86_function *p, struct x86_reg ptr);
+
+void sse_movntps( struct x86_function *p, struct x86_reg dst, struct x86_reg src);
 
 void sse_addps( struct x86_function *p, struct x86_reg dst, struct x86_reg src );
 void sse_addss( struct x86_function *p, struct x86_reg dst, struct x86_reg src );

@@ -39,19 +39,10 @@
 #include "tgsi/tgsi_exec.h"
 #include "tgsi/tgsi_parse.h"
 
-struct sp_exec_fragment_shader
-{
+struct sp_exec_fragment_shader {
    struct sp_fragment_shader base;
-   const struct tgsi_token *machine_tokens;
 };
 
-
-/** cast wrapper */
-static INLINE struct sp_exec_fragment_shader *
-sp_exec_fragment_shader(const struct sp_fragment_shader *base)
-{
-   return (struct sp_exec_fragment_shader *) base;
-}
 
 
 /**
@@ -95,20 +86,10 @@ exec_prepare( const struct sp_fragment_shader *base,
 	      struct tgsi_exec_machine *machine,
 	      struct tgsi_sampler *samplers )
 {
-   struct sp_exec_fragment_shader *spefs =
-      sp_exec_fragment_shader(base);
-
-   /*
-    * Bind tokens/shader to the interpreter's machine state.
-    * Avoid redundant binding.
-    */
-   if (spefs->machine_tokens != base->shader.tokens) {
-      tgsi_exec_machine_bind_shader( machine,
-                                     base->shader.tokens,
-                                     PIPE_MAX_SAMPLERS,
-                                     samplers );
-      spefs->machine_tokens = base->shader.tokens;
-   }
+   tgsi_exec_machine_bind_shader( machine,
+				  base->shader.tokens,
+				  PIPE_MAX_SAMPLERS,
+				  samplers );
 }
 
 

@@ -43,7 +43,7 @@
 #include "fxdrv.h"
 
 #include "drivers/common/driverfuncs.h"
-#include "main/framebuffer.h"
+#include "framebuffer.h"
 
 #ifndef TDFX_DEBUG
 int TDFX_DEBUG = (0

@@ -28,7 +28,7 @@
 
 #include <sys/time.h>
 #include "dri_util.h"
-#include "main/mtypes.h"
+#include "mtypes.h"
 
 #include "xmlconfig.h"
 

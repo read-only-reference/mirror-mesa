@@ -34,12 +34,12 @@
 #include "drm.h"
 #include "mga_drm.h"
 #include "mga_xmesa.h"
-#include "main/context.h"
-#include "main/matrix.h"
-#include "main/simple_list.h"
-#include "main/imports.h"
-#include "main/framebuffer.h"
-#include "main/renderbuffer.h"
+#include "context.h"
+#include "matrix.h"
+#include "simple_list.h"
+#include "imports.h"
+#include "framebuffer.h"
+#include "renderbuffer.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -64,7 +64,7 @@
 #include "utils.h"
 #include "vblank.h"
 
-#include "main/extensions.h"
+#include "extensions.h"
 #include "drirenderbuffer.h"
 
 #include "GL/internal/dri_interface.h"
@@ -74,13 +74,11 @@
 #define need_GL_ARB_vertex_buffer_object
 #define need_GL_ARB_vertex_program
 #define need_GL_EXT_fog_coord
-#define need_GL_EXT_gpu_program_parameters
 #define need_GL_EXT_multi_draw_arrays
 #define need_GL_EXT_secondary_color
 #if 0
 #define need_GL_EXT_paletted_texture
 #endif
-#define need_GL_APPLE_vertex_array_object
 #define need_GL_NV_vertex_program
 #include "extension_helper.h"
 
@@ -111,18 +109,19 @@ static const GLuint __driNConfigOptions = 6;
 int MGA_DEBUG = 0;
 #endif
 
-static const __DRIconfig **
-mgaFillInModes( __DRIscreenPrivate *psp,
-		unsigned pixel_bits, unsigned depth_bits,
+static int getSwapInfo( __DRIdrawablePrivate *dPriv, __DRIswapInfo * sInfo );
+
+static __GLcontextModes *
+mgaFillInModes( unsigned pixel_bits, unsigned depth_bits,
 		unsigned stencil_bits, GLboolean have_back_buffer )
 {
-    __DRIconfig **configs;
+    __GLcontextModes * modes;
     __GLcontextModes * m;
+    unsigned num_modes;
     unsigned depth_buffer_factor;
     unsigned back_buffer_factor;
     GLenum fb_format;
     GLenum fb_type;
-    int i;
 
     /* GLX_SWAP_COPY_OML is only supported because the MGA driver doesn't
      * support pageflipping at all.
@@ -150,6 +149,8 @@ mgaFillInModes( __DRIscreenPrivate *psp,
     depth_buffer_factor = ((depth_bits != 0) || (stencil_bits != 0)) ? 3 : 1;
     back_buffer_factor  = (have_back_buffer) ? 2 : 1;
 
+    num_modes = depth_buffer_factor * back_buffer_factor * 4;
+
     if ( pixel_bits == 16 ) {
         fb_format = GL_RGB;
         fb_type = GL_UNSIGNED_SHORT_5_6_5;
@@ -159,41 +160,46 @@ mgaFillInModes( __DRIscreenPrivate *psp,
         fb_type = GL_UNSIGNED_INT_8_8_8_8_REV;
     }
 
-    configs = driCreateConfigs(fb_format, fb_type,
-			       depth_bits_array, stencil_bits_array,
-			       depth_buffer_factor,
-			       back_buffer_modes, back_buffer_factor);
-    if (configs == NULL) {
+    modes = (*dri_interface->createContextModes)( num_modes, sizeof( __GLcontextModes ) );
+    m = modes;
+    if ( ! driFillInModes( & m, fb_format, fb_type,
+			   depth_bits_array, stencil_bits_array, depth_buffer_factor,
+			   back_buffer_modes, back_buffer_factor,
+			   GLX_TRUE_COLOR ) ) {
 	fprintf( stderr, "[%s:%u] Error creating FBConfig!\n",
 		 __func__, __LINE__ );
 	return NULL;
     }
 
-   /* Mark the visual as slow if there are "fake" stencil bits.
-    */
-   for (i = 0; configs[i]; i++) {
-      m = &configs[i]->modes;
-      if ((m->stencilBits != 0) && (m->stencilBits != stencil_bits)) {
-         m->visualRating = GLX_SLOW_CONFIG;
-      }
-   }
+    if ( ! driFillInModes( & m, fb_format, fb_type,
+			   depth_bits_array, stencil_bits_array, depth_buffer_factor,
+			   back_buffer_modes, back_buffer_factor,
+			   GLX_DIRECT_COLOR ) ) {
+	fprintf( stderr, "[%s:%u] Error creating FBConfig!\n",
+		 __func__, __LINE__ );
+	return NULL;
+    }
 
-   return (const __DRIconfig **) configs;
+    /* Mark the visual as slow if there are "fake" stencil bits.
+     */
+    for ( m = modes ; m != NULL ; m = m->next ) {
+	if ( (m->stencilBits != 0) && (m->stencilBits != stencil_bits) ) {
+	    m->visualRating = GLX_SLOW_CONFIG;
+	}
+    }
+
+    return modes;
 }
 
-const __DRIextension *mgaScreenExtensions[] = {
-    &driReadDrawableExtension,
-    &driSwapControlExtension.base,
-    &driFrameTrackingExtension.base,
-    &driMediaStreamCounterExtension.base,
-    NULL
-};
 
 static GLboolean
 mgaInitDriver(__DRIscreenPrivate *sPriv)
 {
    mgaScreenPrivate *mgaScreen;
    MGADRIPtr         serverInfo = (MGADRIPtr)sPriv->pDevPriv;
+   PFNGLXSCRENABLEEXTENSIONPROC glx_enable_extension =
+       (PFNGLXSCRENABLEEXTENSIONPROC) (*dri_interface->getProcAddress("glxEnableExtension"));
+   void * const psc = sPriv->psc->screenConfigs;
 
    if (sPriv->devPrivSize != sizeof(MGADRIRec)) {
       fprintf(stderr,"\nERROR!  sizeof(MGADRIRec) does not match passed size from device driver\n");
@@ -210,7 +216,7 @@ mgaInitDriver(__DRIscreenPrivate *sPriv)
    mgaScreen->sPriv = sPriv;
    sPriv->private = (void *)mgaScreen;
 
-   if (sPriv->drm_version.minor >= 1) {
+   if (sPriv->drmMinor >= 1) {
       int ret;
       drm_mga_getparam_t gp;
 
@@ -228,7 +234,13 @@ mgaInitDriver(__DRIscreenPrivate *sPriv)
       }
    }
 
-   sPriv->extensions = mgaScreenExtensions;
+   if ( glx_enable_extension != NULL ) {
+      (*glx_enable_extension)( psc, "GLX_MESA_swap_control" );
+      (*glx_enable_extension)( psc, "GLX_MESA_swap_frame_usage" );
+      (*glx_enable_extension)( psc, "GLX_SGI_make_current_read" );
+      (*glx_enable_extension)( psc, "GLX_SGI_swap_control" );
+      (*glx_enable_extension)( psc, "GLX_SGI_video_sync" );
+   }
 
    if (serverInfo->chipset != MGA_CARD_TYPE_G200 &&
        serverInfo->chipset != MGA_CARD_TYPE_G400) {
@@ -261,7 +273,7 @@ mgaInitDriver(__DRIscreenPrivate *sPriv)
     * there is a new, in-kernel mechanism for handling the wait.
     */
 
-   if (mgaScreen->sPriv->drm_version.minor < 2) {
+   if (mgaScreen->sPriv->drmMinor < 2) {
       mgaScreen->mmio.handle = serverInfo->registers.handle;
       mgaScreen->mmio.size = serverInfo->registers.size;
       if ( drmMap( sPriv->fd,
@@ -399,15 +411,13 @@ static const struct dri_extension card_extensions[] =
 #endif
    { "GL_EXT_secondary_color",        GL_EXT_secondary_color_functions },
    { "GL_EXT_stencil_wrap",           NULL },
-   { "GL_APPLE_vertex_array_object",  GL_APPLE_vertex_array_object_functions },
    { "GL_MESA_ycbcr_texture",         NULL },
    { "GL_SGIS_generate_mipmap",       NULL },
    { NULL,                            NULL }
 };
 
-static const struct dri_extension ARB_vp_extensions[] = {
+static const struct dri_extension ARB_vp_extension[] = {
    { "GL_ARB_vertex_program",         GL_ARB_vertex_program_functions },
-   { "GL_EXT_gpu_program_parameters", GL_EXT_gpu_program_parameters_functions },
    { NULL,                            NULL }
 };
 
@@ -612,7 +622,7 @@ mgaCreateContext( const __GLcontextModes *mesaVis,
    }
 
    if ( driQueryOptionb( &mmesa->optionCache, "arb_vertex_program" ) ) {
-      driInitExtensions(ctx, ARB_vp_extensions, GL_FALSE);
+      driInitSingleExtension( ctx, ARB_vp_extension );
    }
    
    if ( driQueryOptionb( &mmesa->optionCache, "nv_vertex_program" ) ) {
@@ -636,7 +646,10 @@ mgaCreateContext( const __GLcontextModes *mesaVis,
 				    debug_control );
 #endif
 
-   (*sPriv->systemTime->getUST)( & mmesa->swap_ust );
+   mmesa->vblank_flags = (mmesa->mgaScreen->irq == 0)
+       ? VBLANK_FLAG_NO_IRQ : driGetDefaultVBlankFlags(&mmesa->optionCache);
+
+   (*dri_interface->getUST)( & mmesa->swap_ust );
 
    if (driQueryOptionb(&mmesa->optionCache, "no_rast")) {
       fprintf(stderr, "disabling 3D acceleration\n");
@@ -865,14 +878,8 @@ mgaMakeCurrent(__DRIcontextPrivate *driContextPriv,
       mgaContextPtr mmesa = (mgaContextPtr) driContextPriv->driverPrivate;
 
       if (mmesa->driDrawable != driDrawPriv) {
-	 if (driDrawPriv->swap_interval == (unsigned)-1) {
-	    driDrawPriv->vblFlags = (mmesa->mgaScreen->irq == 0)
-	       ? VBLANK_FLAG_NO_IRQ
-	       : driGetDefaultVBlankFlags(&mmesa->optionCache);
-
-	    driDrawableInitVBlank( driDrawPriv );
-	 }
-
+	 driDrawableInitVBlank( driDrawPriv, mmesa->vblank_flags,
+				&mmesa->vbl_seq );
 	 mmesa->driDrawable = driDrawPriv;
 	 mmesa->dirty = ~0; 
 	 mmesa->dirty_cliprects = (MGA_FRONT|MGA_BACK); 
@@ -926,51 +933,88 @@ void mgaGetLock( mgaContextPtr mmesa, GLuint flags )
 }
 
 
+static const struct __DriverAPIRec mgaAPI = {
+   .InitDriver      = mgaInitDriver,
+   .DestroyScreen   = mgaDestroyScreen,
+   .CreateContext   = mgaCreateContext,
+   .DestroyContext  = mgaDestroyContext,
+   .CreateBuffer    = mgaCreateBuffer,
+   .DestroyBuffer   = mgaDestroyBuffer,
+   .SwapBuffers     = mgaSwapBuffers,
+   .MakeCurrent     = mgaMakeCurrent,
+   .UnbindContext   = mgaUnbindContext,
+   .GetSwapInfo     = getSwapInfo,
+   .GetMSC          = driGetMSC32,
+   .WaitForMSC      = driWaitForMSC32,
+   .WaitForSBC      = NULL,
+   .SwapBuffersMSC  = NULL
+};
+
+
 /**
- * This is the driver specific part of the createNewScreen entry point.
+ * This is the bootstrap function for the driver.  libGL supplies all of the
+ * requisite information about the system, and the driver initializes itself.
+ * This routine also fills in the linked list pointed to by \c driver_modes
+ * with the \c __GLcontextModes that the driver can support for windows or
+ * pbuffers.
  * 
- * \todo maybe fold this into intelInitDriver
- *
- * \return the __GLcontextModes supported by this driver
+ * \return A pointer to a \c __DRIscreenPrivate on success, or \c NULL on 
+ *         failure.
  */
-static const __DRIconfig **mgaInitScreen(__DRIscreen *psp)
+PUBLIC
+void * __driCreateNewScreen_20050727( __DRInativeDisplay *dpy, int scrn, __DRIscreen *psc,
+			     const __GLcontextModes * modes,
+			     const __DRIversion * ddx_version,
+			     const __DRIversion * dri_version,
+			     const __DRIversion * drm_version,
+			     const __DRIframebuffer * frame_buffer,
+			     drmAddress pSAREA, int fd, 
+			     int internal_api_version,
+			     const __DRIinterfaceMethods * interface,
+			     __GLcontextModes ** driver_modes )
+			     
 {
+   __DRIscreenPrivate *psp;
    static const __DRIversion ddx_expected = { 1, 2, 0 };
    static const __DRIversion dri_expected = { 4, 0, 0 };
    static const __DRIversion drm_expected = { 3, 0, 0 };
-   MGADRIPtr dri_priv = (MGADRIPtr) psp->pDevPriv;
+
+   dri_interface = interface;
 
    if ( ! driCheckDriDdxDrmVersions2( "MGA",
-				      &psp->dri_version, & dri_expected,
-				      &psp->ddx_version, & ddx_expected,
-				      &psp->drm_version, & drm_expected ) )
+				      dri_version, & dri_expected,
+				      ddx_version, & ddx_expected,
+				      drm_version, & drm_expected ) ) {
       return NULL;
+   }
 
+   psp = __driUtilCreateNewScreen(dpy, scrn, psc, NULL,
+				  ddx_version, dri_version, drm_version,
+				  frame_buffer, pSAREA, fd,
+				  internal_api_version, &mgaAPI);
+   if ( psp != NULL ) {
+      MGADRIPtr dri_priv = (MGADRIPtr) psp->pDevPriv;
+      *driver_modes = mgaFillInModes( dri_priv->cpp * 8,
+				      (dri_priv->cpp == 2) ? 16 : 24,
+				      (dri_priv->cpp == 2) ? 0  : 8,
+				      (dri_priv->backOffset != dri_priv->depthOffset) );
 
-   /* Calling driInitExtensions here, with a NULL context pointer,
-    * does not actually enable the extensions.  It just makes sure
-    * that all the dispatch offsets for all the extensions that
-    * *might* be enables are known.  This is needed because the
-    * dispatch offsets need to be known when _mesa_context_create is
-    * called, but we can't enable the extensions until we have a
-    * context pointer.
-    *
-    * Hello chicken.  Hello egg.  How are you two today?
-    */
+      /* Calling driInitExtensions here, with a NULL context pointer, does not actually
+       * enable the extensions.  It just makes sure that all the dispatch offsets for all
+       * the extensions that *might* be enables are known.  This is needed because the
+       * dispatch offsets need to be known when _mesa_context_create is called, but we can't
+       * enable the extensions until we have a context pointer.
+       *
+       * Hello chicken.  Hello egg.  How are you two today?
+       */
+      driInitExtensions( NULL, card_extensions, GL_FALSE );
+      driInitExtensions( NULL, g400_extensions, GL_FALSE );
+      driInitSingleExtension( NULL, ARB_vp_extension );
+      driInitExtensions( NULL, NV_vp_extensions, GL_FALSE );
 
-   driInitExtensions( NULL, card_extensions, GL_FALSE );
-   driInitExtensions( NULL, g400_extensions, GL_FALSE );
-   driInitExtensions(NULL, ARB_vp_extensions, GL_FALSE);
-   driInitExtensions( NULL, NV_vp_extensions, GL_FALSE );
+   }
 
-   if (!mgaInitDriver(psp))
-       return NULL;
-
-   return mgaFillInModes( psp,
-			  dri_priv->cpp * 8,
-			  (dri_priv->cpp == 2) ? 16 : 24,
-			  (dri_priv->cpp == 2) ? 0  : 8,
-			  (dri_priv->backOffset != dri_priv->depthOffset) );
+   return (void *) psp;
 }
 
 
@@ -999,20 +1043,3 @@ getSwapInfo( __DRIdrawablePrivate *dPriv, __DRIswapInfo * sInfo )
 
    return 0;
 }
-
-const struct __DriverAPIRec driDriverAPI = {
-   .InitScreen      = mgaInitScreen,
-   .DestroyScreen   = mgaDestroyScreen,
-   .CreateContext   = mgaCreateContext,
-   .DestroyContext  = mgaDestroyContext,
-   .CreateBuffer    = mgaCreateBuffer,
-   .DestroyBuffer   = mgaDestroyBuffer,
-   .SwapBuffers     = mgaSwapBuffers,
-   .MakeCurrent     = mgaMakeCurrent,
-   .UnbindContext   = mgaUnbindContext,
-   .GetSwapInfo     = getSwapInfo,
-   .GetDrawableMSC  = driDrawableGetMSC32,
-   .WaitForMSC      = driWaitForMSC32,
-   .WaitForSBC      = NULL,
-   .SwapBuffersMSC  = NULL
-};

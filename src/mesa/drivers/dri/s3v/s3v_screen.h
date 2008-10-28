@@ -2,7 +2,7 @@
  * Author: Max Lingua <sunmax@libero.it>
  */
 
-#include "main/mtypes.h"
+#include "mtypes.h"
 
 typedef struct _s3vRegion {
     drm_handle_t  handle;

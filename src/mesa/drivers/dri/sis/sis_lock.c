@@ -28,7 +28,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *   Eric Anholt <anholt@FreeBSD.org>
  */
 
-#include "main/context.h"
+#include "context.h"
 #include "sis_context.h"
 #include "sis_lock.h"
 #include "sis_dd.h"

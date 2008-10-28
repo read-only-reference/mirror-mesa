@@ -32,12 +32,12 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  */
 
-#include "main/glheader.h"
-#include "main/context.h"
-#include "main/simple_list.h"
-#include "main/imports.h"
-#include "main/matrix.h"
-#include "main/extensions.h"
+#include "glheader.h"
+#include "context.h"
+#include "simple_list.h"
+#include "imports.h"
+#include "matrix.h"
+#include "extensions.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -253,13 +253,16 @@ GLboolean r128CreateContext( const __GLcontextModes *glVisual,
    _tnl_allow_vertex_fog( ctx, GL_TRUE );
 
    driInitExtensions( ctx, card_extensions, GL_TRUE );
-   if (sPriv->drm_version.minor >= 4)
+   if (sPriv->drmMinor >= 4)
       _mesa_enable_extension( ctx, "GL_MESA_ycbcr_texture" );
 
    r128InitTriFuncs( ctx );
    r128DDInitStateFuncs( ctx );
    r128DDInitSpanFuncs( ctx );
    r128DDInitState( rmesa );
+
+   rmesa->vblank_flags = (rmesa->r128Screen->irq != 0)
+       ? driGetDefaultVBlankFlags(&rmesa->optionCache) : VBLANK_FLAG_NO_IRQ;
 
    driContextPriv->driverPrivate = (void *)rmesa;
 
@@ -343,13 +346,8 @@ r128MakeCurrent( __DRIcontextPrivate *driContextPriv,
 	 newR128Ctx->dirty = R128_UPLOAD_ALL;
       }
 
-      if (driDrawPriv->swap_interval == (unsigned)-1) {
-	 driDrawPriv->vblFlags = (newR128Ctx->r128Screen->irq != 0)
-	    ? driGetDefaultVBlankFlags(&newR128Ctx->optionCache)
-	    : VBLANK_FLAG_NO_IRQ;
-
-	 driDrawableInitVBlank( driDrawPriv );
-      }
+      driDrawableInitVBlank( driDrawPriv, newR128Ctx->vblank_flags,
+			     &newR128Ctx->vbl_seq );
       newR128Ctx->driDrawable = driDrawPriv;
 
       _mesa_make_current( newR128Ctx->glCtx,

@@ -118,20 +118,20 @@ _mesa_copy_texture_state( const GLcontext *src, GLcontext *dst )
       /* copy texture object bindings, not contents of texture objects */
       _mesa_lock_context_textures(dst);
 
-      _mesa_reference_texobj(&dst->Texture.Unit[i].Current1D,
-                             src->Texture.Unit[i].Current1D);
-      _mesa_reference_texobj(&dst->Texture.Unit[i].Current2D,
-                             src->Texture.Unit[i].Current2D);
-      _mesa_reference_texobj(&dst->Texture.Unit[i].Current3D,
-                             src->Texture.Unit[i].Current3D);
-      _mesa_reference_texobj(&dst->Texture.Unit[i].CurrentCubeMap,
-                             src->Texture.Unit[i].CurrentCubeMap);
-      _mesa_reference_texobj(&dst->Texture.Unit[i].CurrentRect,
-                             src->Texture.Unit[i].CurrentRect);
-      _mesa_reference_texobj(&dst->Texture.Unit[i].Current1DArray,
-                             src->Texture.Unit[i].Current1DArray);
-      _mesa_reference_texobj(&dst->Texture.Unit[i].Current2DArray,
-                             src->Texture.Unit[i].Current2DArray);
+       _mesa_reference_texobj(&dst->Texture.Unit[i].Current1D,
+                              src->Texture.Unit[i].Current1D);
+       _mesa_reference_texobj(&dst->Texture.Unit[i].Current2D,
+                              src->Texture.Unit[i].Current2D);
+       _mesa_reference_texobj(&dst->Texture.Unit[i].Current3D,
+                              src->Texture.Unit[i].Current3D);
+       _mesa_reference_texobj(&dst->Texture.Unit[i].CurrentCubeMap,
+                              src->Texture.Unit[i].CurrentCubeMap);
+       _mesa_reference_texobj(&dst->Texture.Unit[i].CurrentRect,
+                              src->Texture.Unit[i].CurrentRect);
+       _mesa_reference_texobj(&dst->Texture.Unit[i].Current1DArray,
+                              src->Texture.Unit[i].Current1DArray);
+       _mesa_reference_texobj(&dst->Texture.Unit[i].Current2DArray,
+                              src->Texture.Unit[i].Current2DArray);
 
       _mesa_unlock_context_textures(dst);
    }
@@ -608,24 +608,6 @@ update_texture_state( GLcontext *ctx )
          _mesa_problem(ctx, "invalid Alpha combine mode in update_texture_state");
 	 break;
       }
-   }
-
-   /* Determine which texture coordinate sets are actually needed */
-   if (fprog) {
-      const GLuint coordMask = (1 << MAX_TEXTURE_COORD_UNITS) - 1;
-      ctx->Texture._EnabledCoordUnits
-         = (fprog->Base.InputsRead >> FRAG_ATTRIB_TEX0) & coordMask;
-   }
-   else {
-      ctx->Texture._EnabledCoordUnits = ctx->Texture._EnabledUnits;
-   }
-
-   /* Setup texgen for those texture coordinate sets that are in use */
-   for (unit = 0; unit < ctx->Const.MaxTextureUnits; unit++) {
-      struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
-
-      if (!(ctx->Texture._EnabledCoordUnits & (1 << unit)))
-	 continue;
 
       if (texUnit->TexGenEnabled) {
 	 if (texUnit->TexGenEnabled & S_BIT) {
@@ -647,6 +629,16 @@ update_texture_state( GLcontext *ctx )
 
       if (ctx->TextureMatrixStack[unit].Top->type != MATRIX_IDENTITY)
 	 ctx->Texture._TexMatEnabled |= ENABLE_TEXMAT(unit);
+   }
+
+   /* Determine which texture coordinate sets are actually needed */
+   if (fprog) {
+      const GLuint coordMask = (1 << MAX_TEXTURE_COORD_UNITS) - 1;
+      ctx->Texture._EnabledCoordUnits
+         = (fprog->Base.InputsRead >> FRAG_ATTRIB_TEX0) & coordMask;
+   }
+   else {
+      ctx->Texture._EnabledCoordUnits = ctx->Texture._EnabledUnits;
    }
 }
 
@@ -819,6 +811,7 @@ _mesa_free_texture_data(GLcontext *ctx)
    for (tgt = 0; tgt < NUM_TEXTURE_TARGETS; tgt++)
       ctx->Driver.DeleteTexture(ctx, ctx->Texture.ProxyTex[tgt]);
 
+
 #if FEATURE_colortable
    {
       GLuint i;
@@ -826,28 +819,4 @@ _mesa_free_texture_data(GLcontext *ctx)
          _mesa_free_colortable_data( &ctx->Texture.Unit[i].ColorTable );
    }
 #endif
-}
-
-
-/**
- * Update the default texture objects in the given context to reference those
- * specified in the shared state and release those referencing the old 
- * shared state.
- */
-void
-_mesa_update_default_objects_texture(GLcontext *ctx)
-{
-   GLuint i;
-
-   for (i = 0; i < MAX_TEXTURE_UNITS; i++) {
-      struct gl_texture_unit *texUnit = &ctx->Texture.Unit[i];
-
-      _mesa_reference_texobj(&texUnit->Current1D, ctx->Shared->Default1D);
-      _mesa_reference_texobj(&texUnit->Current2D, ctx->Shared->Default2D);
-      _mesa_reference_texobj(&texUnit->Current3D, ctx->Shared->Default3D);
-      _mesa_reference_texobj(&texUnit->CurrentCubeMap, ctx->Shared->DefaultCubeMap);
-      _mesa_reference_texobj(&texUnit->CurrentRect, ctx->Shared->DefaultRect);
-      _mesa_reference_texobj(&texUnit->Current1DArray, ctx->Shared->Default1DArray);
-      _mesa_reference_texobj(&texUnit->Current2DArray, ctx->Shared->Default2DArray);
-   }
 }

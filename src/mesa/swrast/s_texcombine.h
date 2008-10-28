@@ -27,6 +27,7 @@
 #define S_TEXCOMBINE_H
 
 
+#include "main/mtypes.h"
 #include "swrast.h"
 
 extern void

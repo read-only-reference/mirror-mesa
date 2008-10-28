@@ -29,9 +29,9 @@
   *   Keith Whitwell <keith@tungstengraphics.com>
   */
       
-#include "main/glheader.h"
-#include "main/macros.h"
-#include "main/enums.h"
+#include "glheader.h"
+#include "macros.h"
+#include "enums.h"
 
 #include "intel_batchbuffer.h"
 
@@ -65,7 +65,7 @@ static void compile_gs_prog( struct brw_context *brw,
    
    /* Begin the compilation:
     */
-   brw_init_compile(brw, &c.func);
+   brw_init_compile(&c.func);
 
    c.func.single_program_flow = 1;
 
@@ -119,14 +119,25 @@ static void compile_gs_prog( struct brw_context *brw,
 
    /* Upload
     */
-   dri_bo_unreference(brw->gs.prog_bo);
-   brw->gs.prog_bo = brw_upload_cache( &brw->cache, BRW_GS_PROG,
-				       &c.key, sizeof(c.key),
-				       NULL, 0,
-				       program, program_size,
-				       &c.prog_data,
-				       &brw->gs.prog_data );
+   brw->gs.prog_gs_offset = brw_upload_cache( &brw->cache[BRW_GS_PROG],
+					      &c.key,
+					      sizeof(c.key),
+					      program,
+					      program_size,
+					      &c.prog_data,
+					      &brw->gs.prog_data );
 }
+
+
+static GLboolean search_cache( struct brw_context *brw, 
+			       struct brw_gs_prog_key *key )
+{
+   return brw_search_cache(&brw->cache[BRW_GS_PROG], 
+			   key, sizeof(*key),
+			   &brw->gs.prog_data,
+			   &brw->gs.prog_gs_offset);
+}
+
 
 static const GLenum gs_prim[GL_POLYGON+1] = {  
    GL_POINTS,
@@ -162,9 +173,10 @@ static void populate_key( struct brw_context *brw,
 
 /* Calculate interpolants for triangle and line rasterization.
  */
-static void prepare_gs_prog(struct brw_context *brw)
+static void upload_gs_prog( struct brw_context *brw )
 {
    struct brw_gs_prog_key key;
+
    /* Populate the key:
     */
    populate_key(brw, &key);
@@ -175,12 +187,7 @@ static void prepare_gs_prog(struct brw_context *brw)
    }
 
    if (brw->gs.prog_active) {
-      dri_bo_unreference(brw->gs.prog_bo);
-      brw->gs.prog_bo = brw_search_cache(&brw->cache, BRW_GS_PROG,
-					 &key, sizeof(key),
-					 NULL, 0,
-					 &brw->gs.prog_data);
-      if (brw->gs.prog_bo == NULL)
+      if (!search_cache(brw, &key))
 	 compile_gs_prog( brw, &key );
    }
 }
@@ -192,5 +199,5 @@ const struct brw_tracked_state brw_gs_prog = {
       .brw   = BRW_NEW_PRIMITIVE,
       .cache = CACHE_NEW_VS_PROG
    },
-   .prepare = prepare_gs_prog
+   .update = upload_gs_prog
 };

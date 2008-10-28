@@ -34,7 +34,7 @@
 #include "main/colormac.h"
 #include "main/imports.h"
 #include "main/macros.h"
-#include "main/texformat.h"
+#include "texformat.h"
 
 #include "s_aatriangle.h"
 #include "s_context.h"
@@ -58,7 +58,7 @@ _swrast_culltriangle( GLcontext *ctx,
    GLfloat fy = v2->attrib[FRAG_ATTRIB_WPOS][1] - v0->attrib[FRAG_ATTRIB_WPOS][1];
    GLfloat c = ex*fy-ey*fx;
 
-   if (c * SWRAST_CONTEXT(ctx)->_BackfaceCullSign > 0)
+   if (c * SWRAST_CONTEXT(ctx)->_BackfaceSign > 0)
       return 0;
 
    return 1;
@@ -130,7 +130,7 @@ _swrast_culltriangle( GLcontext *ctx,
 #define T_SCALE theight
 
 #define SETUP_CODE							\
-   struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0];	\
+   struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0][0];\
    struct gl_texture_object *obj = ctx->Texture.Unit[0].Current2D;	\
    const GLint b = obj->BaseLevel;					\
    const GLfloat twidth = (GLfloat) obj->Image[0][b]->Width;		\
@@ -139,7 +139,8 @@ _swrast_culltriangle( GLcontext *ctx,
    const GLchan *texture = (const GLchan *) obj->Image[0][b]->Data;	\
    const GLint smask = obj->Image[0][b]->Width - 1;			\
    const GLint tmask = obj->Image[0][b]->Height - 1;			\
-   if (!rb || !texture) {						\
+   if (!texture) {							\
+      /* this shouldn't happen */					\
       return;								\
    }
 
@@ -181,7 +182,7 @@ _swrast_culltriangle( GLcontext *ctx,
 #define T_SCALE theight
 
 #define SETUP_CODE							\
-   struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0];	\
+   struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0][0];\
    struct gl_texture_object *obj = ctx->Texture.Unit[0].Current2D;	\
    const GLint b = obj->BaseLevel;					\
    const GLfloat twidth = (GLfloat) obj->Image[0][b]->Width;		\
@@ -190,7 +191,8 @@ _swrast_culltriangle( GLcontext *ctx,
    const GLchan *texture = (const GLchan *) obj->Image[0][b]->Data;	\
    const GLint smask = obj->Image[0][b]->Width - 1;			\
    const GLint tmask = obj->Image[0][b]->Height - 1;			\
-   if (!rb || !texture) {						\
+   if (!texture) {							\
+      /* this shouldn't happen */					\
       return;								\
    }
 

@@ -28,7 +28,7 @@
 #include "main/colormac.h"
 #include "main/imports.h"
 #include "main/macros.h"
-#include "main/pixel.h"
+#include "image.h"
 
 #include "s_context.h"
 #include "s_texcombine.h"

@@ -25,22 +25,26 @@
  *    David S. Miller <davem@redhat.com>
  */
 
-#include "main/glheader.h"
+#include "glheader.h"
 #include "api_noop.h"
-#include "main/context.h"
+#include "context.h"
 #include "light.h"
-#include "main/macros.h"
-#include "main/imports.h"
-#include "main/mtypes.h"
-#include "main/simple_list.h"
+#include "macros.h"
+#include "imports.h"
+#include "mtypes.h"
+#include "simple_list.h"
 #include "vtxfmt.h"
 #include "ffb_xmesa.h"
 #include "ffb_context.h"
 #include "ffb_vb.h"
 #include "tnl/tnl.h"
-#include "tnl/tcontext.h"
+#include "tnl/t_context.h"
 
 #include "ffb_vtxfmt.h"
+
+#ifndef __GNUC__
+#define __inline  /**/
+#endif
 
 #define TNL_VERTEX			ffbTnlVertex
 
@@ -56,7 +60,7 @@ do {						\
 
 /* Color functions: */
 
-static INLINE void ffb_recalc_base_color(GLcontext *ctx)
+static __inline void ffb_recalc_base_color(GLcontext *ctx)
 {
 	ffbContextPtr fmesa = FFB_CONTEXT(ctx);
 	struct gl_light *light;

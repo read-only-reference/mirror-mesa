@@ -1117,7 +1117,6 @@ static void FETCH(ci8)( const struct gl_texture_image *texImage,
          break;;
       default:
          _mesa_problem(ctx, "Bad palette format in fetch_texel_ci8");
-         return;
       }
 #if CHAN_TYPE == GL_UNSIGNED_BYTE
       COPY_4UBV(texel, texelUB);

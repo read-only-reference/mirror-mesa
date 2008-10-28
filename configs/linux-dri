@@ -32,11 +32,6 @@ CFLAGS = -Wall -Wmissing-prototypes -std=c99 -ffast-math \
 
 CXXFLAGS = -Wall $(OPT_FLAGS) $(PIC_FLAGS) $(ARCH_FLAGS) $(DEFINES)
 
-GLUT_CFLAGS = -fexceptions
-
-# Work around aliasing bugs - developers should comment this out
-CFLAGS += -fno-strict-aliasing
-CXXFLAGS += -fno-strict-aliasing
 
 MESA_ASM_SOURCES = 
 
@@ -47,21 +42,13 @@ LIBDRM_CFLAGS = $(shell pkg-config --cflags libdrm)
 LIBDRM_LIB = $(shell pkg-config --libs libdrm)
 DRI_LIB_DEPS  = $(EXTRA_LIB_PATH) -lm -lpthread -lexpat -ldl $(LIBDRM_LIB)
 GL_LIB_DEPS   = $(EXTRA_LIB_PATH) -lX11 -lXext -lXxf86vm -lXdamage -lXfixes \
-		-lm -lpthread -ldl $(LIBDRM_LIB)
+		-lm -lpthread -ldl \
+                $(LIBDRM_LIB)
 
 
 # Directories
 SRC_DIRS := glx/x11 egl $(SRC_DIRS)
 
-
-# Directories
-ifeq ($(USING_EGL), 1)
-SRC_DIRS = egl glx/x11 gallium mesa glu glut/glx glw
-PROGRAM_DIRS = egl xdemos
-else
-SRC_DIRS = glx/x11 gallium mesa glu glut/glx glw
-PROGRAM_DIRS = xdemos
-endif
 
 # EGL directories
 EGL_DRIVERS_DIRS = demo dri xdri
@@ -72,11 +59,4 @@ GALLIUM_WINSYS_DIRS = drm egl_xlib
 
 # gamma are missing because they have not been converted to use the new
 # interface.
-
-# XXX: need to figure out a way for gallium and non-gallium builds to
-# coexist:
-#
-
-#DRI_DIRS = i810 i915 i965 mach64 mga r128 r200 r300 radeon s3v \
-#	savage sis tdfx trident unichrome ffb
 DRI_DIRS = intel 

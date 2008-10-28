@@ -42,18 +42,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <X11/Xlibint.h>
 #include <X11/extensions/Xext.h>
 #include <X11/extensions/extutil.h>
+#include "glheader.h"
 #include "xf86dristr.h"
-
-
-#if defined(__GNUC__) && (__GNUC__ * 100 + __GNUC_MINOR__) >= 303
-#  define PUBLIC __attribute__((visibility("default")))
-#  define USED __attribute__((used))
-#else
-#  define PUBLIC
-#  define USED
-#endif
-
-
 
 static XExtensionInfo _xf86dri_info_data;
 static XExtensionInfo *xf86dri_info = &_xf86dri_info_data;
@@ -384,9 +374,10 @@ PUBLIC Bool XF86DRICreateContext(dpy, screen, visual, context, hHWContext)
 					   context, hHWContext );
 }
 
-PUBLIC Bool XF86DRIDestroyContext(Display *dpy, int screen, 
-    XID context )
+PUBLIC GLboolean XF86DRIDestroyContext( __DRInativeDisplay * ndpy, int screen, 
+    __DRIid context )
 {
+    Display * const dpy = (Display *) ndpy;
     XExtDisplayInfo *info = find_display (dpy);
     xXF86DRIDestroyContextReq *req;
 
@@ -405,9 +396,10 @@ PUBLIC Bool XF86DRIDestroyContext(Display *dpy, int screen,
     return True;
 }
 
-PUBLIC Bool XF86DRICreateDrawable(Display *dpy, int screen, 
-    XID drawable, drm_drawable_t * hHWDrawable )
+PUBLIC GLboolean XF86DRICreateDrawable( __DRInativeDisplay * ndpy, int screen, 
+    __DRIid drawable, drm_drawable_t * hHWDrawable )
 {
+    Display * const dpy = (Display *) ndpy;
     XExtDisplayInfo *info = find_display (dpy);
     xXF86DRICreateDrawableReply rep;
     xXF86DRICreateDrawableReq *req;
@@ -434,35 +426,15 @@ PUBLIC Bool XF86DRICreateDrawable(Display *dpy, int screen,
     return True;
 }
 
-static int noopErrorHandler(Display *dpy, XErrorEvent *xerr)
+PUBLIC GLboolean XF86DRIDestroyDrawable( __DRInativeDisplay * ndpy, int screen,
+    __DRIid drawable )
 {
-    return 0;
-}
-
-PUBLIC Bool XF86DRIDestroyDrawable(Display *dpy, int screen,
-    XID drawable )
-{
+    Display * const dpy = (Display *) ndpy;
     XExtDisplayInfo *info = find_display (dpy);
     xXF86DRIDestroyDrawableReq *req;
-    int (*oldXErrorHandler)(Display *, XErrorEvent *);
 
     TRACE("DestroyDrawable...");
     XF86DRICheckExtension (dpy, info, False);
-
-    /* This is called from the DRI driver, which used call it like this
-     *
-     *   if (windowExists(drawable))
-     *     destroyDrawable(drawable);
-     *
-     * which is a textbook race condition - the window may disappear
-     * from the server between checking for its existance and
-     * destroying it.  Instead we change the semantics of
-     * __DRIinterfaceMethodsRec::destroyDrawable() to succeed even if
-     * the windows is gone, by wrapping the destroy call in an error
-     * handler. */
-
-    XSync(dpy, False);
-    oldXErrorHandler = XSetErrorHandler(noopErrorHandler);
 
     LockDisplay(dpy);
     GetReq(XF86DRIDestroyDrawable, req);
@@ -472,9 +444,6 @@ PUBLIC Bool XF86DRIDestroyDrawable(Display *dpy, int screen,
     req->drawable = drawable;
     UnlockDisplay(dpy);
     SyncHandle();
-
-    XSetErrorHandler(oldXErrorHandler);
-
     TRACE("DestroyDrawable... return True");
     return True;
 }

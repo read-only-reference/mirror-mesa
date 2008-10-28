@@ -31,8 +31,8 @@
 #endif
 
 #include "swrast/swrast.h"
-#include "main/context.h"
-#include "main/framebuffer.h"
+#include "context.h"
+#include "framebuffer.h"
 
 #define TRIDENT_DATE	"20041223"
 

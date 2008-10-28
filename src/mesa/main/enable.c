@@ -5,9 +5,9 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  7.0.3
+ * Version:  6.5.1
  *
- * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -38,7 +38,6 @@
 #include "enums.h"
 #include "math/m_matrix.h"
 #include "math/m_xform.h"
-#include "api_arrayelt.h"
 
 
 
@@ -137,9 +136,6 @@ client_state(GLcontext *ctx, GLenum cap, GLboolean state)
 
    FLUSH_VERTICES(ctx, _NEW_ARRAY);
    ctx->Array.NewState |= flag;
-
-   _ae_invalidate_state(ctx, _NEW_ARRAY);
-
    *var = state;
 
    if (state)
@@ -377,24 +373,18 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
             return;
          FLUSH_VERTICES(ctx, _NEW_LIGHT);
          ctx->Light.Enabled = state;
-         if (ctx->Light.Enabled && ctx->Light.Model.TwoSide)
-            ctx->_TriangleCaps |= DD_TRI_LIGHT_TWOSIDE;
-         else
-            ctx->_TriangleCaps &= ~DD_TRI_LIGHT_TWOSIDE;
          break;
       case GL_LINE_SMOOTH:
          if (ctx->Line.SmoothFlag == state)
             return;
          FLUSH_VERTICES(ctx, _NEW_LINE);
          ctx->Line.SmoothFlag = state;
-         ctx->_TriangleCaps ^= DD_LINE_SMOOTH;
          break;
       case GL_LINE_STIPPLE:
          if (ctx->Line.StippleFlag == state)
             return;
          FLUSH_VERTICES(ctx, _NEW_LINE);
          ctx->Line.StippleFlag = state;
-         ctx->_TriangleCaps ^= DD_LINE_STIPPLE;
          break;
       case GL_INDEX_LOGIC_OP:
          if (ctx->Color.IndexLogicOpEnabled == state)
@@ -533,21 +523,18 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POINT);
          ctx->Point.SmoothFlag = state;
-         ctx->_TriangleCaps ^= DD_POINT_SMOOTH;
          break;
       case GL_POLYGON_SMOOTH:
          if (ctx->Polygon.SmoothFlag == state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POLYGON);
          ctx->Polygon.SmoothFlag = state;
-         ctx->_TriangleCaps ^= DD_TRI_SMOOTH;
          break;
       case GL_POLYGON_STIPPLE:
          if (ctx->Polygon.StippleFlag == state)
             return;
          FLUSH_VERTICES(ctx, _NEW_POLYGON);
          ctx->Polygon.StippleFlag = state;
-         ctx->_TriangleCaps ^= DD_TRI_STIPPLE;
          break;
       case GL_POLYGON_OFFSET_POINT:
          if (ctx->Polygon.OffsetPoint == state)
@@ -898,10 +885,6 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
             return;
          FLUSH_VERTICES(ctx, _NEW_STENCIL);
          ctx->Stencil.TestTwoSide = state;
-         if (state)
-            ctx->_TriangleCaps |= DD_TRI_TWOSTENCIL;
-         else
-            ctx->_TriangleCaps &= ~DD_TRI_TWOSTENCIL;
          break;
 
 #if FEATURE_ARB_fragment_program

@@ -39,11 +39,11 @@
 #include "main/context.h"
 #include "main/hash.h"
 #include "main/macros.h"
-#include "shader/program.h"
-#include "shader/prog_parameter.h"
-#include "shader/prog_print.h"
-#include "shader/prog_statevars.h"
-#include "shader/prog_uniform.h"
+#include "program.h"
+#include "prog_parameter.h"
+#include "prog_print.h"
+#include "prog_statevars.h"
+#include "prog_uniform.h"
 #include "shader/shader_api.h"
 #include "shader/slang/slang_compile.h"
 #include "shader/slang/slang_link.h"
@@ -517,7 +517,7 @@ _mesa_bind_attrib_location(GLcontext *ctx, GLuint program, GLuint index,
 {
    struct gl_shader_program *shProg;
    const GLint size = -1; /* unknown size */
-   GLint i, oldIndex;
+   GLint i;
    GLenum datatype = GL_FLOAT_VEC4;
 
    shProg = _mesa_lookup_shader_program_err(ctx, program,
@@ -538,14 +538,6 @@ _mesa_bind_attrib_location(GLcontext *ctx, GLuint program, GLuint index,
    if (index >= ctx->Const.VertexProgram.MaxAttribs) {
       _mesa_error(ctx, GL_INVALID_VALUE, "glBindAttribLocation(index)");
       return;
-   }
-
-   if (shProg->LinkStatus) {
-      /* get current index/location for the attribute */
-      oldIndex = _mesa_get_attrib_location(ctx, program, name);
-   }
-   else {
-      oldIndex = -1;
    }
 
    /* this will replace the current value if it's already in the list */

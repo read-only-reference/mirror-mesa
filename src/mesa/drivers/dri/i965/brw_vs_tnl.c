@@ -30,12 +30,11 @@
  */
 
 
-#include "main/glheader.h"
-#include "main/macros.h"
-#include "main/enums.h"
+#include "glheader.h"
+#include "macros.h"
+#include "enums.h"
 #include "shader/prog_parameter.h"
 #include "shader/prog_print.h"
-#include "shader/prog_statevars.h"
 #include "brw_vs.h"
 #include "brw_state.h"
 
@@ -405,7 +404,7 @@ static struct ureg register_const4f( struct tnl_program *p,
    values[3] = s3;
    idx = _mesa_add_unnamed_constant( p->program->Base.Parameters, values, 4,
                                      &swizzle);
-   assert(swizzle == SWIZZLE_NOOP); /* Need to handle swizzle in reg setup */
+   /* XXX what about swizzle? */
    return make_ureg(PROGRAM_STATE_VAR, idx);
 }
 
@@ -525,13 +524,10 @@ static void emit_op3fn(struct tnl_program *p,
    GLuint nr = p->program->Base.NumInstructions++;
       
    if (nr >= p->nr_instructions) {
-      int new_nr_instructions = p->nr_instructions * 2;
-
       p->program->Base.Instructions = 
 	 _mesa_realloc(p->program->Base.Instructions,
 		       sizeof(struct prog_instruction) * p->nr_instructions,
-		       sizeof(struct prog_instruction) * new_nr_instructions);
-      p->nr_instructions = new_nr_instructions;
+		       sizeof(struct prog_instruction) * (p->nr_instructions *= 2));
    }
 
    {      
@@ -854,7 +850,7 @@ static struct ureg calculate_light_attenuation( struct tnl_program *p,
     */
    if (!p->state->unit[i].light_spotcutoff_is_180) {
       struct ureg spot_dir_norm = register_param3(p, STATE_INTERNAL,
-						  STATE_LIGHT_SPOT_DIR_NORMALIZED, i);
+						  STATE_SPOT_DIR_NORMALIZED, i);
       struct ureg spot = get_temp(p);
       struct ureg slt = get_temp(p);
 
@@ -989,7 +985,7 @@ static void build_lighting( struct tnl_program *p )
 	     * Attenuation never applies to infinite lights.
 	     */
 	    VPpli = register_param3(p, STATE_LIGHT, i, 
-				    STATE_LIGHT_POSITION_NORMALIZED);
+				    STATE_POSITION_NORMALIZED); 
             if (p->state->light_local_viewer) {
                 struct ureg eye_hat = get_eye_position_normalized(p);
                 half = get_temp(p);
@@ -1004,19 +1000,13 @@ static void build_lighting( struct tnl_program *p )
 					       STATE_POSITION); 
 	    struct ureg V = get_eye_position(p);
 	    struct ureg dist = get_temp(p);
-	    struct ureg tmpPpli = get_temp(p);
 
 	    VPpli = get_temp(p); 
 	    half = get_temp(p);
-
-	    /* In homogeneous object coordinates
-	     */
-	    emit_op1(p, OPCODE_RCP, dist, 0, swizzle1(Ppli, W));
-	    emit_op2(p, OPCODE_MUL, tmpPpli, 0, Ppli, dist);
  
 	    /* Calulate VPpli vector
 	     */
-	    emit_op2(p, OPCODE_SUB, VPpli, 0, tmpPpli, V); 
+	    emit_op2(p, OPCODE_SUB, VPpli, 0, Ppli, V); 
 
 	    /* Normalize VPpli.  The dist value also used in
 	     * attenuation below.
@@ -1048,7 +1038,6 @@ static void build_lighting( struct tnl_program *p )
 	    emit_normalize_vec3(p, half, half);
 
 	    release_temp(p, dist);
-	    release_temp(p, tmpPpli);
 	 }
 
 	 /* Calculate dot products:
@@ -1173,11 +1162,6 @@ static void build_fog( struct tnl_program *p )
    }
    else {
       input = swizzle1(register_input(p, VERT_ATTRIB_FOG), X);
-      if (p->state->fog_option &&
-	  p->state->tnl_do_vertex_fog)
-	  input = swizzle1(register_input(p, VERT_ATTRIB_FOG), X);
-      else
-	  input = register_input(p, VERT_ATTRIB_FOG);
    }
 
    if (p->state->fog_option &&
@@ -1582,7 +1566,7 @@ static GLuint hash_key( struct state_key *key )
    return hash;
 }
 
-static void prepare_tnl_program( struct brw_context *brw )
+static void update_tnl_program( struct brw_context *brw )
 {
    GLcontext *ctx = &brw->intel.ctx;
    struct state_key key;
@@ -1590,7 +1574,7 @@ static void prepare_tnl_program( struct brw_context *brw )
    struct gl_vertex_program *old = brw->tnl_program;
 
    /* _NEW_PROGRAM */
-   if (brw->attribs.VertexProgram->_Current) 
+   if (brw->attribs.VertexProgram->_Enabled) 
       return;
       
    /* Grab all the relevent state and put it in a single structure:
@@ -1624,7 +1608,6 @@ static void prepare_tnl_program( struct brw_context *brw )
 
    if (old != brw->tnl_program)
       brw->state.dirty.brw |= BRW_NEW_TNL_PROGRAM;
-   return;
 }
 
 /* Note: See brw_draw.c - the vertex program must not rely on
@@ -1638,25 +1621,24 @@ const struct brw_tracked_state brw_tnl_vertprog = {
 	       _NEW_FOG | 
 	       _NEW_HINT | 
 	       _NEW_POINT | 
-	       _NEW_TEXTURE |
-          _NEW_TEXTURE_MATRIX),
+	       _NEW_TEXTURE),
       .brw = (BRW_NEW_FRAGMENT_PROGRAM | 
 	      BRW_NEW_INPUT_VARYING),
       .cache = 0
    },
-   .prepare = prepare_tnl_program
+   .update = update_tnl_program
 };
 
 
 
 
-static void prepare_active_vertprog( struct brw_context *brw )
+static void update_active_vertprog( struct brw_context *brw )
 {
    const struct gl_vertex_program *prev = brw->vertex_program;
 
    /* NEW_PROGRAM */
-   if (brw->attribs.VertexProgram->_Current) {
-      brw->vertex_program = brw->attribs.VertexProgram->_Current;
+   if (brw->attribs.VertexProgram->_Enabled) {
+      brw->vertex_program = brw->attribs.VertexProgram->Current;
    }
    else {
       /* BRW_NEW_TNL_PROGRAM */
@@ -1675,7 +1657,7 @@ const struct brw_tracked_state brw_active_vertprog = {
       .brw = BRW_NEW_TNL_PROGRAM,
       .cache = 0
    },
-   .prepare = prepare_active_vertprog
+   .update = update_active_vertprog
 };
 
 

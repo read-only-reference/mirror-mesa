@@ -25,7 +25,7 @@
  *    David S. Miller <davem@redhat.com>
  */
 
-#include "main/mtypes.h"
+#include "mtypes.h"
 #include "swrast/swrast.h"
 #include "ffb_dd.h"
 #include "ffb_span.h"
@@ -33,6 +33,7 @@
 #include "ffb_depth.h"
 #include "ffb_lock.h"
 
+#include "swrast/swrast.h"
 
 #undef DEPTH_TRACE
 

@@ -29,7 +29,7 @@ static void TAG(WriteDepthSpan)( GLcontext *ctx,
 {
    HW_WRITE_LOCK()
       {
-         const VALUE_TYPE *depth = (const VALUE_TYPE *) values;
+         const GLuint *depth = (const GLuint *) values;
 	 GLint x1;
 	 GLint n1;
 	 LOCAL_DEPTH_VARS;
@@ -134,7 +134,7 @@ static void TAG(WriteDepthPixels)( GLcontext *ctx,
 {
    HW_WRITE_LOCK()
       {
-         const VALUE_TYPE *depth = (const VALUE_TYPE *) values;
+         const GLuint *depth = (const GLuint *) values;
 	 GLuint i;
 	 LOCAL_DEPTH_VARS;
 
@@ -180,7 +180,7 @@ static void TAG(ReadDepthSpan)( GLcontext *ctx,
 {
    HW_READ_LOCK()
       {
-         VALUE_TYPE *depth = (VALUE_TYPE *) values;
+         GLuint *depth = (GLuint *) values;
 	 GLint x1, n1;
 	 LOCAL_DEPTH_VARS;
 
@@ -215,7 +215,7 @@ static void TAG(ReadDepthPixels)( GLcontext *ctx,
 {
    HW_READ_LOCK()
       {
-         VALUE_TYPE *depth = (VALUE_TYPE *) values;
+         GLuint *depth = (GLuint *) values;
 	 GLuint i;
 	 LOCAL_DEPTH_VARS;
 
@@ -267,4 +267,3 @@ static void TAG(InitDepthPointers)(struct gl_renderbuffer *rb)
 #undef READ_DEPTH
 #endif
 #undef TAG
-#undef VALUE_TYPE

@@ -30,9 +30,9 @@
   */
  
 
-#include "main/glheader.h"
-#include "main/macros.h"
-#include "main/enums.h"
+#include "glheader.h"
+#include "macros.h"
+#include "enums.h"
 
 #include "shader/program.h"
 #include "intel_batchbuffer.h"

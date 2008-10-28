@@ -42,8 +42,6 @@ if [ $# -ge 2 ] ; then
 			exit 0
 		fi
 
-		PWDSAVE=`pwd`
-
 		# determine file's type
 		if [ -h "$FILE" ] ; then
 			#echo $FILE is a symlink
@@ -59,6 +57,7 @@ if [ $# -ge 2 ] ; then
 
 			FILE=`basename "$FILE"`
 			# Go to $DEST and make the link
+			PWDSAVE="$PWD"
 			cd "$DEST"        # pushd
 				$RM "$FILE"
 				$SYMLINK "$TARGET" "$FILE"

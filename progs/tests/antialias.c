@@ -15,7 +15,6 @@
 static GLfloat Zrot = 0;
 static GLboolean Anim = GL_TRUE;
 static GLboolean HaveMultisample = GL_TRUE;
-static GLboolean DoMultisample = GL_TRUE;
 
 
 static void
@@ -86,10 +85,7 @@ Display( void )
    glColor3f(1, 1, 1);
    if (HaveMultisample) {
       glRasterPos2f(-3.1, -1.6);
-      if (DoMultisample)
-         PrintString("MULTISAMPLE");
-      else
-         PrintString("MULTISAMPLE (off)");
+      PrintString("MULTISAMPLE");
    }
    glRasterPos2f(-0.8, -1.6);
    PrintString("No antialiasing");
@@ -99,8 +95,7 @@ Display( void )
    /* multisample */
    if (HaveMultisample) {
       glEnable(GL_DEPTH_TEST);
-      if (DoMultisample)
-         glEnable(GL_MULTISAMPLE_ARB);
+      glEnable(GL_MULTISAMPLE_ARB);
       glPushMatrix();
       glTranslatef(-2.5, 0, 0);
       glPushMatrix();
@@ -176,9 +171,6 @@ Key( unsigned char key, int x, int y )
             glutIdleFunc(Idle);
          else
             glutIdleFunc(NULL);
-         break;
-      case 'm':
-         DoMultisample = !DoMultisample;
          break;
       case 'z':
          Zrot = (int) (Zrot - step);

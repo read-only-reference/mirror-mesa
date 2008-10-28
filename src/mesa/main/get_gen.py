@@ -50,8 +50,7 @@ TypeStrings = {
 #  - the GL state name, such as GL_CURRENT_COLOR
 #  - the state datatype, one of GLint, GLfloat, GLboolean or GLenum
 #  - list of code fragments to get the state, such as ["ctx->Foo.Bar"]
-#  - optional extra code or empty string.  If present, "CONVERSION" will be
-#    replaced by ENUM_TO_FLOAT, INT_TO_FLOAT, etc.
+#  - optional extra code or empty string
 #  - optional extensions to check, or None
 #
 StateVars = [
@@ -180,7 +179,7 @@ StateVars = [
 	( "GL_DEPTH_BIAS", GLfloat, ["ctx->Pixel.DepthBias"], "", None ),
 	( "GL_DEPTH_BITS", GLint, ["ctx->DrawBuffer->Visual.depthBits"],
 	  "", None ),
-	( "GL_DEPTH_CLEAR_VALUE", GLfloatN, ["ctx->Depth.Clear"], "", None ),
+	( "GL_DEPTH_CLEAR_VALUE", GLfloat, ["ctx->Depth.Clear"], "", None ),
 	( "GL_DEPTH_FUNC", GLenum, ["ctx->Depth.Func"], "", None ),
 	( "GL_DEPTH_RANGE", GLfloatN,
 	  [ "ctx->Viewport.Near", "ctx->Viewport.Far" ], "", None ),
@@ -533,7 +532,7 @@ StateVars = [
          GLuint i, n = _mesa_get_compressed_formats(ctx, formats, GL_FALSE);
          ASSERT(n <= 100);
          for (i = 0; i < n; i++)
-            params[i] = CONVERSION(formats[i]);""",
+            params[i] = ENUM_TO_INT(formats[i]);""",
 	  ["ARB_texture_compression"] ),
 
 	# GL_EXT_compiled_vertex_array
@@ -981,11 +980,6 @@ StateVars = [
 	  ["ctx->Const.MaxRenderbufferSize"], "",
 	  ["EXT_framebuffer_object"] ),
 
-	# GL_EXT_framebuffer_blit
-	# NOTE: GL_DRAW_FRAMEBUFFER_BINDING_EXT == GL_FRAMEBUFFER_BINDING_EXT
-	( "GL_READ_FRAMEBUFFER_BINDING_EXT", GLint, ["ctx->ReadBuffer->Name"], "",
-	  ["EXT_framebuffer_blit"] ),
-
 	# GL_ARB_fragment_shader
 	( "GL_MAX_FRAGMENT_UNIFORM_COMPONENTS_ARB", GLint,
 	  ["ctx->Const.FragmentProgram.MaxUniformComponents"], "",
@@ -1084,11 +1078,10 @@ def EmitGetFunction(stateVars, returnType):
 				assert len(extensions) == 4
 				print ('         CHECK_EXT4(%s, %s, %s, %s, "%s");' %
 					   (extensions[0], extensions[1], extensions[2], extensions[3], function))
-		conversion = ConversionFunc(varType, returnType)
 		if optionalCode:
-			optionalCode = string.replace(optionalCode, "CONVERSION", conversion);	
 			print "         {"
 			print "         " + optionalCode
+		conversion = ConversionFunc(varType, returnType)
 		n = len(state)
 		for i in range(n):
 			if conversion:

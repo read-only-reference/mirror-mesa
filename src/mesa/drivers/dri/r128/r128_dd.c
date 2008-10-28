@@ -38,8 +38,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r128_dd.h"
 #include "swrast/swrast.h"
 
-#include "main/context.h"
-#include "main/framebuffer.h"
+#include "context.h"
+#include "framebuffer.h"
 
 #include "utils.h"
 

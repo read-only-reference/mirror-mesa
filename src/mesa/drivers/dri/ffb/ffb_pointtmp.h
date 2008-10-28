@@ -1,5 +1,5 @@
 
-static INLINE void TAG(ffb_draw_point)(GLcontext *ctx, ffb_vertex *tmp )
+static __inline void TAG(ffb_draw_point)(GLcontext *ctx, ffb_vertex *tmp )
 {
 	ffbContextPtr fmesa = FFB_CONTEXT(ctx);
 	ffb_fbcPtr ffb = fmesa->regs;

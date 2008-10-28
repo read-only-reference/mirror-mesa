@@ -8,7 +8,7 @@ TOP = ../..
 include $(TOP)/configs/current
 
 
-LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) $(APP_LIB_DEPS)
+LIBS = $(APP_LIB_DEPS)
 
 SOURCES = \
 	tri-tex.c \
@@ -40,7 +40,7 @@ UTIL_FILES = readtex.h readtex.c
 .SUFFIXES: .c
 
 .c:
-	$(APP_CC) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $< $(LIBS) -o $@
+	$(APP_CC) $(INCLUDES) $(CFLAGS) $< $(LIBS) -o $@
 
 .c.o:
 	$(APP_CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
@@ -54,9 +54,9 @@ UTIL_FILES = readtex.h readtex.c
 default: $(UTIL_FILES) $(PROGS)
 
 clean:
-	-rm -f $(PROGS)
-	-rm -f *.o
-	-rm -f getproclist.h
+	rm -f $(PROGS)
+	rm -f *.o
+	rm -f getproclist.h
 
 
 # auto code generation
@@ -67,15 +67,13 @@ getproclist.h: $(TOP)/src/mesa/glapi/gl_API.xml getprocaddress.c getprocaddress.
 
 
 texrect: texrect.o readtex.o
-	$(CC) $(CFLAGS) $(LDFLAGS) texrect.o readtex.o $(LIBS) -o $@
-#	$(APP_CC) texrect.o readtex.o $(LIBS) -o $@
+	$(APP_CC) texrect.o readtex.o $(LIBS) -o $@
 
 texrect.o: texrect.c readtex.h
 	$(APP_CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 invert: invert.o readtex.o
-	$(CC) $(CFLAGS) $(LDFLAGS) invert.o readtex.o $(LIBS) -o $@
-#	$(APP_CC) invert.o readtex.o $(LIBS) -o $@
+	$(APP_CC) invert.o readtex.o $(LIBS) -o $@
 
 invert.o: invert.c readtex.h
 	$(APP_CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@

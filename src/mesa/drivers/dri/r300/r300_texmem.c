@@ -38,12 +38,12 @@ SOFTWARE.
 
 #include <errno.h>
 
-#include "main/glheader.h"
-#include "main/imports.h"
-#include "main/context.h"
-#include "main/colormac.h"
-#include "main/macros.h"
-#include "main/simple_list.h"
+#include "glheader.h"
+#include "imports.h"
+#include "context.h"
+#include "colormac.h"
+#include "macros.h"
+#include "simple_list.h"
 #include "radeon_reg.h"		/* gets definition for usleep */
 #include "r300_context.h"
 #include "r300_state.h"
@@ -349,7 +349,7 @@ static void r300UploadSubImage(r300ContextPtr rmesa, r300TexObjPtr t,
 	imageWidth = texImage->Width;
 	imageHeight = texImage->Height;
 
-	offset = t->bufAddr;
+	offset = t->bufAddr + t->base.totalSize / 6 * face;
 
 	if (RADEON_DEBUG & (DEBUG_TEXTURE | DEBUG_IOCTL)) {
 		GLint imageX = 0;
@@ -505,7 +505,7 @@ int r300UploadTexImages(r300ContextPtr rmesa, r300TexObjPtr t, GLuint face)
 			t->base.lastLevel);
 	}
 
-	if (t->base.totalSize == 0)
+	if (!t || t->base.totalSize == 0)
 		return 0;
 
 	if (RADEON_DEBUG & DEBUG_SYNC) {
@@ -534,6 +534,10 @@ int r300UploadTexImages(r300ContextPtr rmesa, r300TexObjPtr t, GLuint face)
 			/* hope it's safe to add that here... */
 			t->offset |= t->tile_bits;
 		}
+
+		/* Mark this texobj as dirty on all units:
+		 */
+		t->dirty_state = TEX_ALL;
 	}
 
 	/* Let the world know we've used this memory recently.

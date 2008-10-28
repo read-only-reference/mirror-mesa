@@ -3,12 +3,10 @@ arbfslight
 arbocclude
 bounce
 clearspd
-copypix
 cubemap
 drawpix
 engine
 extfuncs.h
-fbo_firecube
 fire
 fogcoord
 fplight
@@ -32,7 +30,6 @@ osdemo
 paltex
 pixeltex
 pointblast
-rain
 ray
 readpix
 readtex.c

@@ -26,7 +26,7 @@
  **************************************************************************/
 
 #include "main/imports.h"
-#if FEATURE_convolution
+#if FEATURE_convolve
 #include "main/convolve.h"
 #endif
 #include "main/enums.h"
@@ -156,7 +156,7 @@ st_FreeTextureImageData(GLcontext * ctx, struct gl_texture_image *texImage)
    }
 
    if (texImage->Data) {
-      free(texImage->Data);
+      _mesa_align_free(texImage->Data);
       texImage->Data = NULL;
    }
 }
@@ -409,7 +409,7 @@ st_TexImage(GLcontext * ctx,
    stImage->face = _mesa_tex_target_to_face(target);
    stImage->level = level;
 
-#if FEATURE_convolution
+#if FEATURE_convolve
    if (ctx->_ImageTransferState & IMAGE_CONVOLUTION_BIT) {
       _mesa_adjust_image_for_convolution(ctx, dims, &postConvWidth,
                                          &postConvHeight);
@@ -541,7 +541,7 @@ st_TexImage(GLcontext * ctx,
          sizeInBytes = depth * dstRowStride * postConvHeight;
       }
 
-      texImage->Data = malloc(sizeInBytes);
+      texImage->Data = _mesa_align_malloc(sizeInBytes, 16);
    }
 
    if (!texImage->Data) {
@@ -749,8 +749,8 @@ st_GetTexImage(GLcontext * ctx, GLenum target, GLint level,
 static void
 st_GetCompressedTexImage(GLcontext *ctx, GLenum target, GLint level,
                          GLvoid *pixels,
-                         struct gl_texture_object *texObj,
-                         struct gl_texture_image *texImage)
+                         const struct gl_texture_object *texObj,
+                         const struct gl_texture_image *texImage)
 {
    st_get_tex_image(ctx, target, level, 0, 0, pixels,
                     (struct gl_texture_object *) texObj,

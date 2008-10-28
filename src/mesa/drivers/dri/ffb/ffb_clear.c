@@ -25,10 +25,10 @@
  *    David S. Miller <davem@redhat.com>
  */
 
-#include "main/mtypes.h"
-#include "main/extensions.h"
+#include "mtypes.h"
+#include "extensions.h"
 
-#include "main/mm.h"
+#include "mm.h"
 #include "ffb_dd.h"
 #include "ffb_span.h"
 #include "ffb_depth.h"
@@ -79,7 +79,7 @@ struct ff_fixups {
 /* Compute fixups of non-page aligned areas after a page fill.
  * Return the number of fixups needed.
  */
-static INLINE int
+static __inline__ int
 CreatorComputePageFillFixups(struct ff_fixups *fixups,
 			     int x, int y, int w, int h,
 			     int paligned_x, int paligned_y,

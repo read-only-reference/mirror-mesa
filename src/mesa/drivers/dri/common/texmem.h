@@ -38,8 +38,8 @@
 #ifndef DRI_TEXMEM_H
 #define DRI_TEXMEM_H
 
-#include "main/mtypes.h"
-#include "main/mm.h"
+#include "mtypes.h"
+#include "mm.h"
 #include "xf86drm.h"
 
 struct dri_tex_heap;

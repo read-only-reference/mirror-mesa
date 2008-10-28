@@ -33,7 +33,7 @@ do {								\
    }								\
 } while (0)
 
-static INLINE GLuint *i810AllocDmaLow( i810ContextPtr imesa, int bytes )
+static __inline GLuint *i810AllocDmaLow( i810ContextPtr imesa, int bytes )
 {
    if (imesa->vertex_low + bytes > imesa->vertex_high) 
       i810FlushPrimsGetBuffer( imesa );

@@ -30,11 +30,11 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
  *   Keith Whitwell <keith@tungstengraphics.com>
  */
 
-#include "main/glheader.h"
-#include "main/mtypes.h"
-#include "main/macros.h"
-#include "main/enums.h"
-#include "main/colormac.h"
+#include "glheader.h"
+#include "mtypes.h"
+#include "macros.h"
+#include "enums.h"
+#include "colormac.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -74,7 +74,7 @@ do {									\
 } while (0)
 #endif
 
-static INLINE void i810_draw_triangle( i810ContextPtr imesa,
+static __inline__ void i810_draw_triangle( i810ContextPtr imesa,
 					   i810VertexPtr v0,
 					   i810VertexPtr v1,
 					   i810VertexPtr v2 )
@@ -89,7 +89,7 @@ static INLINE void i810_draw_triangle( i810ContextPtr imesa,
 }
 
 
-static INLINE void i810_draw_quad( i810ContextPtr imesa,
+static __inline__ void i810_draw_quad( i810ContextPtr imesa,
 				       i810VertexPtr v0,
 				       i810VertexPtr v1,
 				       i810VertexPtr v2,
@@ -108,7 +108,7 @@ static INLINE void i810_draw_quad( i810ContextPtr imesa,
 }
 
 
-static INLINE void i810_draw_point( i810ContextPtr imesa,
+static __inline__ void i810_draw_point( i810ContextPtr imesa,
 					i810VertexPtr tmp )
 {
    GLfloat sz = 0.5 * CLAMP(imesa->glCtx->Point.Size,
@@ -132,7 +132,7 @@ static INLINE void i810_draw_point( i810ContextPtr imesa,
 }
 
 
-static INLINE void i810_draw_line( i810ContextPtr imesa,
+static __inline__ void i810_draw_line( i810ContextPtr imesa,
 				       i810VertexPtr v0,
 				       i810VertexPtr v1 )
 {

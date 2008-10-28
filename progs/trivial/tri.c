@@ -33,7 +33,6 @@
 
 
 GLenum doubleBuffer = 1;
-int win;
 
 static void Init(void)
 {
@@ -57,16 +56,13 @@ static void Reshape(int width, int height)
 
 static void Key(unsigned char key, int x, int y)
 {
-
-    switch (key) {
-      case 27:
-         glutDestroyWindow(win);
-	exit(0);
-      default:
-	return;
-    }
-
-    glutPostRedisplay();
+   switch (key) {
+   case 27:
+      exit(0);
+   default:
+      glutPostRedisplay();
+      return;
+   }
 }
 
 static void Draw(void)
@@ -122,8 +118,7 @@ int main(int argc, char **argv)
     type |= (doubleBuffer) ? GLUT_DOUBLE : GLUT_SINGLE;
     glutInitDisplayMode(type);
 
-    win = glutCreateWindow("First Tri");
-    if (!win) {
+    if (glutCreateWindow("First Tri") == GL_FALSE) {
 	exit(1);
     }
 

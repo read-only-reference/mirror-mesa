@@ -95,7 +95,7 @@ update_framebuffer_state( struct st_context *st )
    struct pipe_framebuffer_state *framebuffer = &st->state.framebuffer;
    struct gl_framebuffer *fb = st->ctx->DrawBuffer;
    struct st_renderbuffer *strb;
-   GLuint i;
+   GLuint i, j;
 
    memset(framebuffer, 0, sizeof(*framebuffer));
 
@@ -108,18 +108,21 @@ update_framebuffer_state( struct st_context *st )
     * to determine which surfaces to draw to
     */
    framebuffer->num_cbufs = 0;
-   for (i = 0; i < fb->_NumColorDrawBuffers; i++) {
-      strb = st_renderbuffer(fb->_ColorDrawBuffers[i]);
+   for (j = 0; j < MAX_DRAW_BUFFERS; j++) {
+      for (i = 0; i < fb->_NumColorDrawBuffers[j]; i++) {
+         strb = st_renderbuffer(fb->_ColorDrawBuffers[j][i]);
 
-      /*printf("--------- framebuffer surface rtt %p\n", strb->rtt);*/
-      if (strb->rtt) {
-         /* rendering to a GL texture, may have to update surface */
-         update_renderbuffer_surface(st, strb);
+         /*printf("--------- framebuffer surface rtt %p\n", strb->rtt);*/
+         if (strb->rtt) {
+            /* rendering to a GL texture, may have to update surface */
+            update_renderbuffer_surface(st, strb);
+         }
+
+         if (strb->surface) {
+            framebuffer->cbufs[framebuffer->num_cbufs] = strb->surface;
+            framebuffer->num_cbufs++;
+         }
       }
-      
-      assert(strb->surface);
-      framebuffer->cbufs[framebuffer->num_cbufs] = strb->surface;
-      framebuffer->num_cbufs++;
    }
 
    strb = st_renderbuffer(fb->Attachment[BUFFER_DEPTH].Renderbuffer);
@@ -130,7 +133,6 @@ update_framebuffer_state( struct st_context *st )
          update_renderbuffer_surface(st, strb);
       }
 
-      assert(strb->surface);
       framebuffer->zsbuf = strb->surface;
    }
    else {
@@ -144,7 +146,7 @@ update_framebuffer_state( struct st_context *st )
 
    cso_set_framebuffer(st->cso_context, framebuffer);
 
-   if (fb->_ColorDrawBufferIndexes[0] == BUFFER_FRONT_LEFT) {
+   if (fb->_ColorDrawBufferMask[0] & BUFFER_BIT_FRONT_LEFT) {
       if (st->frontbuffer_status == FRONT_STATUS_COPY_OF_BACK) {
          /* XXX copy back buf to front? */
       }

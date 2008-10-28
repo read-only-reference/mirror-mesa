@@ -150,6 +150,7 @@ static void vbo_exec_bind_arrays( GLcontext *ctx )
    GLubyte *data = exec->vtx.buffer_map;
    const GLuint *map;
    GLuint attr;
+   GLbitfield varying_inputs = 0x0;
 
    /* Install the default (ie Current) attributes first, then overlay
     * all active ones.
@@ -211,8 +212,11 @@ static void vbo_exec_bind_arrays( GLcontext *ctx )
 	 arrays[attr]._MaxElement = count; /* ??? */
 
 	 data += exec->vtx.attrsz[src] * sizeof(GLfloat);
+         varying_inputs |= 1<<attr;
       }
    }
+
+   _mesa_set_varying_vp_inputs( ctx, varying_inputs );
 }
 
 
@@ -242,11 +246,12 @@ void vbo_exec_vtx_flush( struct vbo_exec_context *exec )
 	  */
 	 vbo_exec_bind_arrays( ctx );
 
-         /* if using a real VBO, unmap it before drawing */
-         if (exec->vtx.bufferobj->Name) {
-            ctx->Driver.UnmapBuffer(ctx, target, exec->vtx.bufferobj);
-            exec->vtx.buffer_map = NULL;
-         }
+         if (ctx->NewState)
+            _mesa_update_state( ctx );
+
+
+	 ctx->Driver.UnmapBuffer(ctx, target, exec->vtx.bufferobj);
+	 exec->vtx.buffer_map = NULL;
 
 	 vbo_context(ctx)->draw_prims( ctx, 
 				       exec->vtx.inputs, 
@@ -256,12 +261,11 @@ void vbo_exec_vtx_flush( struct vbo_exec_context *exec )
 				       0,
 				       exec->vtx.vert_count - 1);
 
-	 /* If using a real VBO, get new storage */
-         if (exec->vtx.bufferobj->Name) {
-            ctx->Driver.BufferData(ctx, target, size, NULL, usage, exec->vtx.bufferobj);
-            exec->vtx.buffer_map = 
-               ctx->Driver.MapBuffer(ctx, target, access, exec->vtx.bufferobj);
-         }
+	 /* Get new data:
+	  */
+	 ctx->Driver.BufferData(ctx, target, size, NULL, usage, exec->vtx.bufferobj);
+	 exec->vtx.buffer_map
+	    = ctx->Driver.MapBuffer(ctx, target, access, exec->vtx.bufferobj);
       }
    }
 

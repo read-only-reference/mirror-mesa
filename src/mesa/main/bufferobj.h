@@ -38,9 +38,6 @@
 extern void
 _mesa_init_buffer_objects( GLcontext *ctx );
 
-extern void
-_mesa_update_default_objects_buffer_objects(GLcontext *ctx);
-
 extern struct gl_buffer_object *
 _mesa_new_buffer_object( GLcontext *ctx, GLuint name, GLenum target );
 
@@ -105,6 +102,7 @@ _mesa_map_drawpix_pbo(GLcontext *ctx,
 extern void
 _mesa_unmap_drawpix_pbo(GLcontext *ctx,
                         const struct gl_pixelstore_attrib *unpack);
+
 
 extern void *
 _mesa_map_readpix_pbo(GLcontext *ctx,

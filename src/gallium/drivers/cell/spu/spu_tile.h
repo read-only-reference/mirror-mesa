@@ -36,14 +36,12 @@
 
 
 
-extern void
+void
 get_tile(uint tx, uint ty, tile_t *tile, int tag, int zBuf);
 
-extern void
+void
 put_tile(uint tx, uint ty, const tile_t *tile, int tag, int zBuf);
 
-extern void
-really_clear_tiles(uint surfaceIndex);
 
 
 static INLINE void
