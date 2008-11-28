@@ -36,8 +36,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r128_context.h"
 #include "r128_state.h"
 #include "r128_ioctl.h"
-#include "imports.h"
-#include "macros.h"
+#include "main/imports.h"
+#include "main/macros.h"
 
 #include "swrast/swrast.h"
 
@@ -248,7 +248,7 @@ static int r128WaitForFrameCompletion( r128ContextPtr rmesa )
 
 /* Copy the back color buffer to the front color buffer.
  */
-void r128CopyBuffer( const __DRIdrawablePrivate *dPriv )
+void r128CopyBuffer( __DRIdrawablePrivate *dPriv )
 {
    r128ContextPtr rmesa;
    GLint nbox, i, ret;
@@ -281,7 +281,7 @@ void r128CopyBuffer( const __DRIdrawablePrivate *dPriv )
    }
 
    UNLOCK_HARDWARE( rmesa );
-   driWaitForVBlank( dPriv, &rmesa->vbl_seq, rmesa->vblank_flags, &missed_target );
+   driWaitForVBlank( dPriv, &missed_target );
    LOCK_HARDWARE( rmesa );
 
    nbox = dPriv->numClipRects;	/* must be in locked region */
@@ -327,7 +327,7 @@ void r128CopyBuffer( const __DRIdrawablePrivate *dPriv )
 #endif
 }
 
-void r128PageFlip( const __DRIdrawablePrivate *dPriv )
+void r128PageFlip( __DRIdrawablePrivate *dPriv )
 {
    r128ContextPtr rmesa;
    GLint ret;
@@ -358,7 +358,7 @@ void r128PageFlip( const __DRIdrawablePrivate *dPriv )
    }
 
    UNLOCK_HARDWARE( rmesa );
-   driWaitForVBlank( dPriv, &rmesa->vbl_seq, rmesa->vblank_flags, &missed_target );
+   driWaitForVBlank( dPriv, &missed_target );
    LOCK_HARDWARE( rmesa );
 
    /* The kernel will have been initialized to perform page flipping

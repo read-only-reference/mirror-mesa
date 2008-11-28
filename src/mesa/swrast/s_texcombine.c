@@ -26,9 +26,10 @@
 #include "main/glheader.h"
 #include "main/context.h"
 #include "main/colormac.h"
+#include "main/image.h"
 #include "main/imports.h"
 #include "main/macros.h"
-#include "image.h"
+#include "main/pixel.h"
 
 #include "s_context.h"
 #include "s_texcombine.h"

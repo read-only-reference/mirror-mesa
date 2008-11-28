@@ -33,6 +33,7 @@
 
 
 GLenum doubleBuffer = 1;
+int win;
 
 static void Init(void)
 {
@@ -118,7 +119,8 @@ int main(int argc, char **argv)
     type |= (doubleBuffer) ? GLUT_DOUBLE : GLUT_SINGLE;
     glutInitDisplayMode(type);
 
-    if (glutCreateWindow("First Tri") == GL_FALSE) {
+    win = glutCreateWindow("First Tri");
+    if (!win) {
 	exit(1);
     }
 

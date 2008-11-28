@@ -30,7 +30,7 @@
  * \file
  * A buffer manager that wraps buffers in fenced buffers.
  * 
- * \author José Fonseca <jrfonseca@tungstengraphics.dot.com>
+ * \author Jose Fonseca <jrfonseca@tungstengraphics.dot.com>
  */
 
 
@@ -86,8 +86,7 @@ fenced_bufmgr_create_buffer(struct pb_manager *mgr,
    
    fenced_buf = fenced_buffer_create(fenced_mgr->fenced_list, buf);
    if(!fenced_buf) {
-      assert(buf->base.refcount == 1);
-      pb_destroy(buf);
+      pb_reference(&buf, NULL);
    }
    
    return fenced_buf;

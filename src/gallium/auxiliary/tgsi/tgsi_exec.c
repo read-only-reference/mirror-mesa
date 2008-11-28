@@ -133,7 +133,7 @@ tgsi_exec_machine_bind_shader(
    struct tgsi_exec_machine *mach,
    const struct tgsi_token *tokens,
    uint numSamplers,
-   struct tgsi_sampler *samplers)
+   struct tgsi_sampler **samplers)
 {
    uint k;
    struct tgsi_parse_context parse;
@@ -464,17 +464,6 @@ micro_exp2(
    dst->f[2] = powf( 2.0f, src->f[2] );
    dst->f[3] = powf( 2.0f, src->f[3] );
 #endif
-}
-
-static void
-micro_f2it(
-   union tgsi_exec_channel *dst,
-   const union tgsi_exec_channel *src )
-{
-   dst->i[0] = (int) src->f[0];
-   dst->i[1] = (int) src->f[1];
-   dst->i[2] = (int) src->f[2];
-   dst->i[3] = (int) src->f[3];
 }
 
 static void
@@ -840,6 +829,17 @@ micro_rnd(
 }
 
 static void
+micro_sgn(
+   union tgsi_exec_channel *dst,
+   const union tgsi_exec_channel *src )
+{
+   dst->f[0] = src->f[0] < 0.0f ? -1.0f : src->f[0] > 0.0f ? 1.0f : 0.0f;
+   dst->f[1] = src->f[1] < 0.0f ? -1.0f : src->f[1] > 0.0f ? 1.0f : 0.0f;
+   dst->f[2] = src->f[2] < 0.0f ? -1.0f : src->f[2] > 0.0f ? 1.0f : 0.0f;
+   dst->f[3] = src->f[3] < 0.0f ? -1.0f : src->f[3] > 0.0f ? 1.0f : 0.0f;
+}
+
+static void
 micro_shl(
    union tgsi_exec_channel *dst,
    const union tgsi_exec_channel *src0,
@@ -958,10 +958,22 @@ fetch_src_file_channel(
       switch( file ) {
       case TGSI_FILE_CONSTANT:
          assert(mach->Consts);
-         chan->f[0] = mach->Consts[index->i[0]][swizzle];
-         chan->f[1] = mach->Consts[index->i[1]][swizzle];
-         chan->f[2] = mach->Consts[index->i[2]][swizzle];
-         chan->f[3] = mach->Consts[index->i[3]][swizzle];
+         if (index->i[0] < 0)
+            chan->f[0] = 0.0f;
+         else
+            chan->f[0] = mach->Consts[index->i[0]][swizzle];
+         if (index->i[1] < 0)
+            chan->f[1] = 0.0f;
+         else
+            chan->f[1] = mach->Consts[index->i[1]][swizzle];
+         if (index->i[2] < 0)
+            chan->f[2] = 0.0f;
+         else
+            chan->f[2] = mach->Consts[index->i[2]][swizzle];
+         if (index->i[3] < 0)
+            chan->f[3] = 0.0f;
+         else
+            chan->f[3] = mach->Consts[index->i[3]][swizzle];
          break;
 
       case TGSI_FILE_INPUT:
@@ -1033,20 +1045,41 @@ fetch_source(
    union tgsi_exec_channel index;
    uint swizzle;
 
+   /* We start with a direct index into a register file.
+    *
+    *    file[1],
+    *    where:
+    *       file = SrcRegister.File
+    *       [1] = SrcRegister.Index
+    */
    index.i[0] =
    index.i[1] =
    index.i[2] =
    index.i[3] = reg->SrcRegister.Index;
 
+   /* There is an extra source register that indirectly subscripts
+    * a register file. The direct index now becomes an offset
+    * that is being added to the indirect register.
+    *
+    *    file[ind[2].x+1],
+    *    where:
+    *       ind = SrcRegisterInd.File
+    *       [2] = SrcRegisterInd.Index
+    *       .x = SrcRegisterInd.SwizzleX
+    */
    if (reg->SrcRegister.Indirect) {
       union tgsi_exec_channel index2;
       union tgsi_exec_channel indir_index;
+      const uint execmask = mach->ExecMask;
+      uint i;
 
+      /* which address register (always zero now) */
       index2.i[0] =
       index2.i[1] =
       index2.i[2] =
       index2.i[3] = reg->SrcRegisterInd.Index;
 
+      /* get current value of address register[swizzle] */
       swizzle = tgsi_util_get_src_register_swizzle( &reg->SrcRegisterInd, CHAN_X );
       fetch_src_file_channel(
          mach,
@@ -1055,25 +1088,46 @@ fetch_source(
          &index2,
          &indir_index );
 
-      index.i[0] += indir_index.i[0];
-      index.i[1] += indir_index.i[1];
-      index.i[2] += indir_index.i[2];
-      index.i[3] += indir_index.i[3];
+      /* add value of address register to the offset */
+      index.i[0] += (int) indir_index.f[0];
+      index.i[1] += (int) indir_index.f[1];
+      index.i[2] += (int) indir_index.f[2];
+      index.i[3] += (int) indir_index.f[3];
+
+      /* for disabled execution channels, zero-out the index to
+       * avoid using a potential garbage value.
+       */
+      for (i = 0; i < QUAD_SIZE; i++) {
+         if ((execmask & (1 << i)) == 0)
+            index.i[i] = 0;
+      }
    }
 
-   if( reg->SrcRegister.Dimension ) {
-      switch( reg->SrcRegister.File ) {
+   /* There is an extra source register that is a second
+    * subscript to a register file. Effectively it means that
+    * the register file is actually a 2D array of registers.
+    *
+    *    file[1][3] == file[1*sizeof(file[1])+3],
+    *    where:
+    *       [3] = SrcRegisterDim.Index
+    */
+   if (reg->SrcRegister.Dimension) {
+      /* The size of the first-order array depends on the register file type.
+       * We need to multiply the index to the first array to get an effective,
+       * "flat" index that points to the beginning of the second-order array.
+       */
+      switch (reg->SrcRegister.File) {
       case TGSI_FILE_INPUT:
-         index.i[0] *= 17;
-         index.i[1] *= 17;
-         index.i[2] *= 17;
-         index.i[3] *= 17;
+         index.i[0] *= TGSI_EXEC_MAX_INPUT_ATTRIBS;
+         index.i[1] *= TGSI_EXEC_MAX_INPUT_ATTRIBS;
+         index.i[2] *= TGSI_EXEC_MAX_INPUT_ATTRIBS;
+         index.i[3] *= TGSI_EXEC_MAX_INPUT_ATTRIBS;
          break;
       case TGSI_FILE_CONSTANT:
-         index.i[0] *= 4096;
-         index.i[1] *= 4096;
-         index.i[2] *= 4096;
-         index.i[3] *= 4096;
+         index.i[0] *= TGSI_EXEC_MAX_CONST_BUFFER;
+         index.i[1] *= TGSI_EXEC_MAX_CONST_BUFFER;
+         index.i[2] *= TGSI_EXEC_MAX_CONST_BUFFER;
+         index.i[3] *= TGSI_EXEC_MAX_CONST_BUFFER;
          break;
       default:
          assert( 0 );
@@ -1084,9 +1138,22 @@ fetch_source(
       index.i[2] += reg->SrcRegisterDim.Index;
       index.i[3] += reg->SrcRegisterDim.Index;
 
+      /* Again, the second subscript index can be addressed indirectly
+       * identically to the first one.
+       * Nothing stops us from indirectly addressing the indirect register,
+       * but there is no need for that, so we won't exercise it.
+       *
+       *    file[1][ind[4].y+3],
+       *    where:
+       *       ind = SrcRegisterDimInd.File
+       *       [4] = SrcRegisterDimInd.Index
+       *       .y = SrcRegisterDimInd.SwizzleX
+       */
       if (reg->SrcRegisterDim.Indirect) {
          union tgsi_exec_channel index2;
          union tgsi_exec_channel indir_index;
+         const uint execmask = mach->ExecMask;
+         uint i;
 
          index2.i[0] =
          index2.i[1] =
@@ -1101,11 +1168,24 @@ fetch_source(
             &index2,
             &indir_index );
 
-         index.i[0] += indir_index.i[0];
-         index.i[1] += indir_index.i[1];
-         index.i[2] += indir_index.i[2];
-         index.i[3] += indir_index.i[3];
+         index.i[0] += (int) indir_index.f[0];
+         index.i[1] += (int) indir_index.f[1];
+         index.i[2] += (int) indir_index.f[2];
+         index.i[3] += (int) indir_index.f[3];
+
+         /* for disabled execution channels, zero-out the index to
+          * avoid using a potential garbage value.
+          */
+         for (i = 0; i < QUAD_SIZE; i++) {
+            if ((execmask & (1 << i)) == 0)
+               index.i[i] = 0;
+         }
       }
+
+      /* If by any chance there was a need for a 3D array of register
+       * files, we would have to check whether SrcRegisterDim is followed
+       * by a dimension register and continue the saga.
+       */
    }
 
    swizzle = tgsi_util_get_full_src_register_extswizzle( reg, chan_index );
@@ -1512,7 +1592,7 @@ exec_tex(struct tgsi_exec_machine *mach,
       else
          lodBias = 0.0;
 
-      fetch_texel(&mach->Samplers[unit],
+      fetch_texel(mach->Samplers[unit],
                   &r[0], NULL, NULL, lodBias,  /* S, T, P, BIAS */
                   &r[0], &r[1], &r[2], &r[3]); /* R, G, B, A */
       break;
@@ -1538,7 +1618,7 @@ exec_tex(struct tgsi_exec_machine *mach,
       else
          lodBias = 0.0;
 
-      fetch_texel(&mach->Samplers[unit],
+      fetch_texel(mach->Samplers[unit],
                   &r[0], &r[1], &r[2], lodBias,  /* inputs */
                   &r[0], &r[1], &r[2], &r[3]);  /* outputs */
       break;
@@ -1564,7 +1644,7 @@ exec_tex(struct tgsi_exec_machine *mach,
       else
          lodBias = 0.0;
 
-      fetch_texel(&mach->Samplers[unit],
+      fetch_texel(mach->Samplers[unit],
                   &r[0], &r[1], &r[2], lodBias,
                   &r[0], &r[1], &r[2], &r[3]);
       break;
@@ -1674,6 +1754,7 @@ exec_declaration(
             break;
 
          default:
+            eval = NULL;
             assert( 0 );
          }
 
@@ -1716,7 +1797,7 @@ exec_instruction(
    case TGSI_OPCODE_ARL:
       FOR_EACH_ENABLED_CHANNEL( *inst, chan_index ) {
          FETCH( &r[0], 0, chan_index );
-         micro_f2it( &r[0], &r[0] );
+         micro_trunc( &r[0], &r[0] );
          STORE( &r[0], 0, chan_index );
       }
       break;
@@ -2006,7 +2087,21 @@ exec_instruction(
 
    case TGSI_OPCODE_DOT2ADD:
       /* TGSI_OPCODE_DP2A */
-      assert (0);
+      FETCH( &r[0], 0, CHAN_X );
+      FETCH( &r[1], 1, CHAN_X );
+      micro_mul( &r[0], &r[0], &r[1] );
+
+      FETCH( &r[1], 0, CHAN_Y );
+      FETCH( &r[2], 1, CHAN_Y );
+      micro_mul( &r[1], &r[1], &r[2] );
+      micro_add( &r[0], &r[0], &r[1] );
+
+      FETCH( &r[2], 2, CHAN_X );
+      micro_add( &r[0], &r[0], &r[2] );
+
+      FOR_EACH_ENABLED_CHANNEL( *inst, chan_index ) {
+         STORE( &r[0], 0, chan_index );
+      }
       break;
 
    case TGSI_OPCODE_INDEX:
@@ -2040,6 +2135,7 @@ exec_instruction(
       break;
 
    case TGSI_OPCODE_ROUND:
+   case TGSI_OPCODE_ARR:
       FOR_EACH_ENABLED_CHANNEL( *inst, chan_index ) {
          FETCH( &r[0], 0, chan_index );
          micro_rnd( &r[0], &r[0] );
@@ -2340,10 +2436,6 @@ exec_instruction(
       assert (0);
       break;
 
-   case TGSI_OPCODE_ARR:
-      assert (0);
-      break;
-
    case TGSI_OPCODE_BRA:
       assert (0);
       break;
@@ -2399,7 +2491,12 @@ exec_instruction(
       break;
 
    case TGSI_OPCODE_SSG:
-      assert (0);
+   /* TGSI_OPCODE_SGN */
+      FOR_EACH_ENABLED_CHANNEL( *inst, chan_index ) {
+         FETCH( &r[0], 0, chan_index );
+         micro_sgn( &r[0], &r[0] );
+         STORE( &r[0], 0, chan_index );
+      }
       break;
 
    case TGSI_OPCODE_CMP:
@@ -2435,7 +2532,66 @@ exec_instruction(
       break;
 
    case TGSI_OPCODE_NRM:
-      assert (0);
+      /* 3-component vector normalize */
+      {
+         union tgsi_exec_channel tmp, dot;
+
+         /* tmp = dp3(src0, src0): */
+         FETCH( &r[0], 0, CHAN_X );
+         micro_mul( &tmp, &r[0], &r[0] );
+
+         FETCH( &r[1], 0, CHAN_Y );
+         micro_mul( &dot, &r[1], &r[1] );
+         micro_add( &tmp, &tmp, &dot );
+
+         FETCH( &r[2], 0, CHAN_Z );
+         micro_mul( &dot, &r[2], &r[2] );
+         micro_add( &tmp, &tmp, &dot );
+
+         /* tmp = 1 / sqrt(tmp) */
+         micro_sqrt( &tmp, &tmp );
+         micro_div( &tmp, &mach->Temps[TEMP_1_I].xyzw[TEMP_1_C], &tmp );
+
+         /* note: w channel is undefined */
+         FOR_EACH_ENABLED_CHANNEL( *inst, chan_index ) {
+            /* chan = chan * tmp */
+            micro_mul( &r[chan_index], &tmp, &r[chan_index] );
+            STORE( &r[chan_index], 0, chan_index );
+         }
+      }
+      break;
+
+   case TGSI_OPCODE_NRM4:
+      /* 4-component vector normalize */
+      {
+         union tgsi_exec_channel tmp, dot;
+
+         /* tmp = dp4(src0, src0): */
+         FETCH( &r[0], 0, CHAN_X );
+         micro_mul( &tmp, &r[0], &r[0] );
+
+         FETCH( &r[1], 0, CHAN_Y );
+         micro_mul( &dot, &r[1], &r[1] );
+         micro_add( &tmp, &tmp, &dot );
+
+         FETCH( &r[2], 0, CHAN_Z );
+         micro_mul( &dot, &r[2], &r[2] );
+         micro_add( &tmp, &tmp, &dot );
+
+         FETCH( &r[3], 0, CHAN_W );
+         micro_mul( &dot, &r[3], &r[3] );
+         micro_add( &tmp, &tmp, &dot );
+
+         /* tmp = 1 / sqrt(tmp) */
+         micro_sqrt( &tmp, &tmp );
+         micro_div( &tmp, &mach->Temps[TEMP_1_I].xyzw[TEMP_1_C], &tmp );
+
+         FOR_EACH_ENABLED_CHANNEL( *inst, chan_index ) {
+            /* chan = chan * tmp */
+            micro_mul( &r[chan_index], &tmp, &r[chan_index] );
+            STORE( &r[chan_index], 0, chan_index );
+         }
+      }
       break;
 
    case TGSI_OPCODE_DIV:

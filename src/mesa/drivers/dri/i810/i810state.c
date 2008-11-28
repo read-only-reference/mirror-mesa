@@ -1,11 +1,16 @@
 
 #include <stdio.h>
 
-#include "glheader.h"
-#include "context.h"
-#include "macros.h"
-#include "dd.h"
-#include "colormac.h"
+#include "main/glheader.h"
+#include "main/context.h"
+#include "main/macros.h"
+#include "main/dd.h"
+#include "main/colormac.h"
+#include "swrast/swrast.h"
+#include "tnl/tnl.h"
+#include "tnl/t_pipeline.h"
+#include "vbo/vbo.h"
+#include "swrast_setup/swrast_setup.h"
 
 #include "texmem.h"
 
@@ -19,14 +24,8 @@
 #include "i810tris.h"
 #include "i810ioctl.h"
 
-#include "swrast/swrast.h"
-#include "tnl/tnl.h"
-#include "vbo/vbo.h"
-#include "swrast_setup/swrast_setup.h"
 
-#include "tnl/t_pipeline.h"
-
-static __inline__ GLuint i810PackColor(GLuint format,
+static INLINE GLuint i810PackColor(GLuint format,
 				       GLubyte r, GLubyte g,
 				       GLubyte b, GLubyte a)
 {
@@ -291,18 +290,20 @@ void i810DrawBuffer(GLcontext *ctx, GLenum mode )
    i810ContextPtr imesa = I810_CONTEXT(ctx);
    int front = 0;
   
-   /*
-    * _DrawDestMask is easier to cope with than <mode>.
-    */
-   switch ( ctx->DrawBuffer->_ColorDrawBufferMask[0]) {
-   case BUFFER_BIT_FRONT_LEFT:
+   if (ctx->DrawBuffer->_NumColorDrawBuffers != 1) {
+      /* GL_NONE or GL_FRONT_AND_BACK or stereo left&right, etc */
+      FALLBACK( imesa, I810_FALLBACK_DRAW_BUFFER, GL_TRUE );
+      return;
+   }
+
+   switch ( ctx->DrawBuffer->_ColorDrawBufferIndexes[0]) {
+   case BUFFER_FRONT_LEFT:
      front = 1;
      break;
-   case BUFFER_BIT_BACK_LEFT:
+   case BUFFER_BACK_LEFT:
      front = 0;
      break;
    default:
-      /* GL_NONE or GL_FRONT_AND_BACK or stereo left&right, etc */
       FALLBACK( imesa, I810_FALLBACK_DRAW_BUFFER, GL_TRUE );
       return;
    }

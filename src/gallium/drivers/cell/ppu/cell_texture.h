@@ -40,15 +40,19 @@ struct cell_texture
 {
    struct pipe_texture base;
 
-   unsigned long level_offset[PIPE_MAX_TEXTURE_LEVELS];
-   unsigned long stride[PIPE_MAX_TEXTURE_LEVELS];
+   unsigned long level_offset[CELL_MAX_TEXTURE_LEVELS];
+   unsigned long stride[CELL_MAX_TEXTURE_LEVELS];
 
    /* The data is held here:
     */
    struct pipe_buffer *buffer;
    unsigned long buffer_size;
 
-   void *tiled_data;  /* XXX this may be temporary */ /*ALIGN16*/
+   /** Texture data in tiled layout is held here */
+   struct pipe_buffer *tiled_buffer[CELL_MAX_TEXTURE_LEVELS];
+   /** Mapped, tiled texture data */
+   void *tiled_mapped[CELL_MAX_TEXTURE_LEVELS];
+   void *untiled_data[CELL_MAX_TEXTURE_LEVELS];
 };
 
 
@@ -59,14 +63,6 @@ cell_texture(struct pipe_texture *pt)
    return (struct cell_texture *) pt;
 }
 
-
-
-extern void
-cell_update_texture_mapping(struct cell_context *cell);
-
-
-extern void
-cell_init_texture_functions(struct cell_context *cell);
 
 
 extern void

@@ -191,13 +191,18 @@ cell_set_constant_buffer(struct pipe_context *pipe,
    assert(shader < PIPE_SHADER_TYPES);
    assert(index == 0);
 
+   draw_flush(cell->draw);
+
    /* note: reference counting */
    winsys_buffer_reference(ws,
                         &cell->constants[shader].buffer,
                         buf->buffer);
    cell->constants[shader].size = buf->size;
 
-   cell->dirty |= CELL_NEW_CONSTANTS;
+   if (shader == PIPE_SHADER_VERTEX)
+      cell->dirty |= CELL_NEW_VS_CONSTANTS;
+   else if (shader == PIPE_SHADER_FRAGMENT)
+      cell->dirty |= CELL_NEW_FS_CONSTANTS;
 }
 
 

@@ -196,7 +196,7 @@ struct draw_context
 
       const float (*aligned_constants)[4];
 
-      float (*aligned_constant_storage)[4];
+      const float (*aligned_constant_storage)[4];
       unsigned const_storage_size;
 
 

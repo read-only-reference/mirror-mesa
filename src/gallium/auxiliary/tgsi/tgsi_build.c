@@ -119,6 +119,8 @@ tgsi_default_declaration( void )
    declaration.UsageMask = TGSI_WRITEMASK_XYZW;
    declaration.Interpolate = TGSI_INTERPOLATE_CONSTANT;
    declaration.Semantic = 0;
+   declaration.Centroid = 0;
+   declaration.Invariant = 0;
    declaration.Padding = 0;
    declaration.Extended = 0;
 
@@ -131,6 +133,8 @@ tgsi_build_declaration(
    unsigned usage_mask,
    unsigned interpolate,
    unsigned semantic,
+   unsigned centroid,
+   unsigned invariant,
    struct tgsi_header *header )
 {
    struct tgsi_declaration declaration;
@@ -143,6 +147,8 @@ tgsi_build_declaration(
    declaration.UsageMask = usage_mask;
    declaration.Interpolate = interpolate;
    declaration.Semantic = semantic;
+   declaration.Centroid = centroid;
+   declaration.Invariant = invariant;
 
    header_bodysize_grow( header );
 
@@ -194,6 +200,8 @@ tgsi_build_full_declaration(
       full_decl->Declaration.UsageMask,
       full_decl->Declaration.Interpolate,
       full_decl->Declaration.Semantic,
+      full_decl->Declaration.Centroid,
+      full_decl->Declaration.Invariant,
       header );
 
    if (maxsize <= size)
@@ -793,10 +801,14 @@ tgsi_default_instruction_ext_nv( void )
    return instruction_ext_nv;
 }
 
-union token_u32
+
+/** test for inequality of 32-bit values pointed to by a and b */
+static INLINE boolean
+compare32(const void *a, const void *b)
 {
-   unsigned u32;
-};
+   return *((uint32_t *) a) != *((uint32_t *) b);
+}
+
 
 unsigned
 tgsi_compare_instruction_ext_nv(
@@ -805,7 +817,7 @@ tgsi_compare_instruction_ext_nv(
 {
    a.Padding = b.Padding = 0;
    a.Extended = b.Extended = 0;
-   return ((union token_u32 *) &a)->u32 != ((union token_u32 *) &b)->u32;
+   return compare32(&a, &b);
 }
 
 struct tgsi_instruction_ext_nv
@@ -864,7 +876,7 @@ tgsi_compare_instruction_ext_label(
 {
    a.Padding = b.Padding = 0;
    a.Extended = b.Extended = 0;
-   return ((union token_u32 *) &a)->u32 != ((union token_u32 *) &b)->u32;
+   return compare32(&a, &b);
 }
 
 struct tgsi_instruction_ext_label
@@ -905,7 +917,7 @@ tgsi_compare_instruction_ext_texture(
 {
    a.Padding = b.Padding = 0;
    a.Extended = b.Extended = 0;
-   return ((union token_u32 *) &a)->u32 != ((union token_u32 *) &b)->u32;
+   return compare32(&a, &b);
 }
 
 struct tgsi_instruction_ext_texture
@@ -1027,7 +1039,7 @@ tgsi_compare_src_register_ext_swz(
 {
    a.Padding = b.Padding = 0;
    a.Extended = b.Extended = 0;
-   return ((union token_u32 *) &a)->u32 != ((union token_u32 *) &b)->u32;
+   return compare32(&a, &b);
 }
 
 struct tgsi_src_register_ext_swz
@@ -1095,7 +1107,7 @@ tgsi_compare_src_register_ext_mod(
 {
    a.Padding = b.Padding = 0;
    a.Extended = b.Extended = 0;
-   return ((union token_u32 *) &a)->u32 != ((union token_u32 *) &b)->u32;
+   return compare32(&a, &b);
 }
 
 struct tgsi_src_register_ext_mod
@@ -1241,7 +1253,7 @@ tgsi_compare_dst_register_ext_concode(
 {
    a.Padding = b.Padding = 0;
    a.Extended = b.Extended = 0;
-   return ((union token_u32 *) &a)->u32 != ((union token_u32 *) &b)->u32;
+   return compare32(&a, &b);
 }
 
 struct tgsi_dst_register_ext_concode
@@ -1299,7 +1311,7 @@ tgsi_compare_dst_register_ext_modulate(
 {
    a.Padding = b.Padding = 0;
    a.Extended = b.Extended = 0;
-   return ((union token_u32 *) &a)->u32 != ((union token_u32 *) &b)->u32;
+   return compare32(&a, &b);
 }
 
 struct tgsi_dst_register_ext_modulate

@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.1
+ * Version:  7.1
  *
- * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2008  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -165,7 +165,7 @@ static const struct {
    { OFF, "GL_SGIS_texture_border_clamp",      F(ARB_texture_border_clamp) },
    { ON,  "GL_SGIS_texture_edge_clamp",        F(SGIS_texture_edge_clamp) },
    { ON,  "GL_SGIS_texture_lod",               F(SGIS_texture_lod) },
-   { OFF, "GL_SGIX_depth_texture",             F(SGIX_depth_texture) },
+   { OFF, "GL_SGIX_depth_texture",             F(ARB_depth_texture) },
    { OFF, "GL_SGIX_shadow",                    F(SGIX_shadow) },
    { OFF, "GL_SGIX_shadow_ambient",            F(SGIX_shadow_ambient) },
    { OFF, "GL_SUN_multi_draw_arrays",          F(EXT_multi_draw_arrays) },
@@ -204,7 +204,7 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
    ctx->Extensions.ARB_shading_language_100 = GL_TRUE;
 #endif
 #if FEATURE_ARB_shading_language_120
-   ctx->Extensions.ARB_shading_language_120 = GL_TRUE;
+   ctx->Extensions.ARB_shading_language_120 = GL_FALSE; /* not quite done */
 #endif
    ctx->Extensions.ARB_shadow = GL_TRUE;
    ctx->Extensions.ARB_texture_border_clamp = GL_TRUE;
@@ -292,7 +292,6 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
    ctx->Extensions.SGI_texture_color_table = GL_TRUE;
    ctx->Extensions.SGIS_generate_mipmap = GL_TRUE;
    ctx->Extensions.SGIS_texture_edge_clamp = GL_TRUE;
-   ctx->Extensions.SGIX_depth_texture = GL_TRUE;
    ctx->Extensions.SGIX_shadow = GL_TRUE;
    ctx->Extensions.SGIX_shadow_ambient = GL_TRUE;
 #if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
@@ -309,6 +308,7 @@ _mesa_enable_imaging_extensions(GLcontext *ctx)
 {
    ctx->Extensions.ARB_imaging = GL_TRUE;
    ctx->Extensions.EXT_blend_color = GL_TRUE;
+   ctx->Extensions.EXT_blend_logic_op = GL_TRUE;
    ctx->Extensions.EXT_blend_minmax = GL_TRUE;
    ctx->Extensions.EXT_blend_subtract = GL_TRUE;
    ctx->Extensions.EXT_convolution = GL_TRUE;
@@ -353,7 +353,6 @@ _mesa_enable_1_4_extensions(GLcontext *ctx)
    ctx->Extensions.ARB_window_pos = GL_TRUE;
    ctx->Extensions.EXT_blend_color = GL_TRUE;
    ctx->Extensions.EXT_blend_func_separate = GL_TRUE;
-   ctx->Extensions.EXT_blend_logic_op = GL_TRUE;
    ctx->Extensions.EXT_blend_minmax = GL_TRUE;
    ctx->Extensions.EXT_blend_subtract = GL_TRUE;
    ctx->Extensions.EXT_fog_coord = GL_TRUE;
@@ -419,7 +418,7 @@ _mesa_enable_2_1_extensions(GLcontext *ctx)
    ctx->Extensions.EXT_texture_sRGB = GL_TRUE;
 #endif
 #ifdef FEATURE_ARB_shading_language_120
-   ctx->Extensions.ARB_shading_language_120 = GL_TRUE;
+   ctx->Extensions.ARB_shading_language_120 = GL_FALSE; /* not quite done */
 #endif
 }
 

@@ -42,6 +42,8 @@
 #define ST_SURFACE_DEPTH        8
 
 #define ST_TEXTURE_2D    0x2
+#define ST_TEXTURE_RECT  0x4
+
 #define ST_TEXTURE_RGB   0x1
 #define ST_TEXTURE_RGBA  0x2
 
@@ -75,6 +77,9 @@ void st_resize_framebuffer( struct st_framebuffer *stfb,
 void st_set_framebuffer_surface(struct st_framebuffer *stfb,
                                 uint surfIndex, struct pipe_surface *surf);
 
+void st_get_framebuffer_dimensions( struct st_framebuffer *stfb,
+				    uint *width, uint *height);
+
 struct pipe_surface *st_get_framebuffer_surface(struct st_framebuffer *stfb,
                                                 uint surfIndex);
 
@@ -83,7 +88,7 @@ struct pipe_texture *st_get_framebuffer_texture(struct st_framebuffer *stfb,
 
 void *st_framebuffer_private( struct st_framebuffer *stfb );
 
-void st_unreference_framebuffer( struct st_framebuffer **stfb );
+void st_unreference_framebuffer( struct st_framebuffer *stfb );
 
 void st_make_current(struct st_context *st,
                      struct st_framebuffer *draw,
@@ -96,6 +101,7 @@ void st_finish( struct st_context *st );
 void st_notify_swapbuffers(struct st_framebuffer *stfb);
 void st_notify_swapbuffers_complete(struct st_framebuffer *stfb);
 
+int st_set_teximage(struct pipe_texture *pt, int target);
 
 /** Redirect rendering into stfb's surface to a texture image */
 int st_bind_teximage(struct st_framebuffer *stfb, uint surfIndex,

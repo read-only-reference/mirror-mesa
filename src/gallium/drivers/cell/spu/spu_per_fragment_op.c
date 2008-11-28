@@ -40,6 +40,24 @@
 #define LINEAR_QUAD_LAYOUT 1
 
 
+static INLINE vector float
+spu_min(vector float a, vector float b)
+{
+   vector unsigned int m;
+   m = spu_cmpgt(a, b);    /* m = a > b ? ~0 : 0 */
+   return spu_sel(a, b, m);
+}
+
+
+static INLINE vector float
+spu_max(vector float a, vector float b)
+{
+   vector unsigned int m;
+   m = spu_cmpgt(a, b);    /* m = a > b ? ~0 : 0 */
+   return spu_sel(b, a, m);
+}
+
+
 /**
  * Called by rasterizer for each quad after the shader has run.  Do
  * all the per-fragment operations including alpha test, z test,
@@ -60,9 +78,12 @@ spu_fallback_fragment_ops(uint x, uint y,
                           vector unsigned int mask)
 {
    vector float frag_aos[4];
-   unsigned int c0, c1, c2, c3;
+   unsigned int fbc0, fbc1, fbc2, fbc3 ; /* framebuffer/tile colors */
+   unsigned int fragc0, fragc1, fragc2, fragc3;  /* fragment colors */
 
-   /* do alpha test */
+   /*
+    * Do alpha test
+    */
    if (spu.depth_stencil_alpha.alpha.enabled) {
       vector float ref = spu_splats(spu.depth_stencil_alpha.alpha.ref);
       vector unsigned int amask;
@@ -102,7 +123,10 @@ spu_fallback_fragment_ops(uint x, uint y,
       mask = spu_and(mask, amask);
    }
 
-   /* Z and/or stencil testing... */
+
+   /*
+    * Z and/or stencil testing...
+    */
    if (spu.depth_stencil_alpha.depth.enabled ||
        spu.depth_stencil_alpha.stencil[0].enabled) {
 
@@ -178,6 +202,32 @@ spu_fallback_fragment_ops(uint x, uint y,
       }
    }
 
+
+   /*
+    * If we'll need the current framebuffer/tile colors for blending
+    * or logicop or colormask, fetch them now.
+    */
+   if (spu.blend.blend_enable ||
+       spu.blend.logicop_enable ||
+       spu.blend.colormask != 0xf) {
+
+#if LINEAR_QUAD_LAYOUT /* See comments/diagram below */
+      fbc0 = colorTile->ui[y][x*2+0];
+      fbc1 = colorTile->ui[y][x*2+1];
+      fbc2 = colorTile->ui[y][x*2+2];
+      fbc3 = colorTile->ui[y][x*2+3];
+#else
+      fbc0 = colorTile->ui[y+0][x+0];
+      fbc1 = colorTile->ui[y+0][x+1];
+      fbc2 = colorTile->ui[y+1][x+0];
+      fbc3 = colorTile->ui[y+1][x+1];
+#endif
+   }
+
+
+   /*
+    * Do blending
+    */
    if (spu.blend.blend_enable) {
       /* blending terms, misc regs */
       vector float term1r, term1g, term1b, term1a;
@@ -186,43 +236,30 @@ spu_fallback_fragment_ops(uint x, uint y,
 
       vector float fbRGBA[4];  /* current framebuffer colors */
 
-      /* get colors from framebuffer/tile */
+      /* convert framebuffer colors from packed int to vector float */
       {
-         vector float fc[4];
-         uint c0, c1, c2, c3;
-
-#if LINEAR_QUAD_LAYOUT /* See comments/diagram below */
-         c0 = colorTile->ui[y][x*2+0];
-         c1 = colorTile->ui[y][x*2+1];
-         c2 = colorTile->ui[y][x*2+2];
-         c3 = colorTile->ui[y][x*2+3];
-#else
-         c0 = colorTile->ui[y+0][x+0];
-         c1 = colorTile->ui[y+0][x+1];
-         c2 = colorTile->ui[y+1][x+0];
-         c3 = colorTile->ui[y+1][x+1];
-#endif
+         vector float temp[4]; /* float colors in AOS form */
          switch (spu.fb.color_format) {
          case PIPE_FORMAT_B8G8R8A8_UNORM:
-            fc[0] = spu_unpack_B8G8R8A8(c0);
-            fc[1] = spu_unpack_B8G8R8A8(c1);
-            fc[2] = spu_unpack_B8G8R8A8(c2);
-            fc[3] = spu_unpack_B8G8R8A8(c3);
+            temp[0] = spu_unpack_B8G8R8A8(fbc0);
+            temp[1] = spu_unpack_B8G8R8A8(fbc1);
+            temp[2] = spu_unpack_B8G8R8A8(fbc2);
+            temp[3] = spu_unpack_B8G8R8A8(fbc3);
             break;
          case PIPE_FORMAT_A8R8G8B8_UNORM:
-            fc[0] = spu_unpack_A8R8G8B8(c0);
-            fc[1] = spu_unpack_A8R8G8B8(c1);
-            fc[2] = spu_unpack_A8R8G8B8(c2);
-            fc[3] = spu_unpack_A8R8G8B8(c3);
+            temp[0] = spu_unpack_A8R8G8B8(fbc0);
+            temp[1] = spu_unpack_A8R8G8B8(fbc1);
+            temp[2] = spu_unpack_A8R8G8B8(fbc2);
+            temp[3] = spu_unpack_A8R8G8B8(fbc3);
             break;
          default:
             ASSERT(0);
          }
-         _transpose_matrix4x4(fbRGBA, fc);
+         _transpose_matrix4x4(fbRGBA, temp); /* fbRGBA = transpose(temp) */
       }
 
       /*
-       * Compute Src RGB terms
+       * Compute Src RGB terms (fragment color * factor)
        */
       switch (spu.blend.rgb_src_factor) {
       case PIPE_BLENDFACTOR_ONE:
@@ -245,13 +282,33 @@ spu_fallback_fragment_ops(uint x, uint y,
          term1g = spu_mul(fragG, fragA);
          term1b = spu_mul(fragB, fragA);
          break;
+      case PIPE_BLENDFACTOR_DST_COLOR:
+         term1r = spu_mul(fragR, fbRGBA[0]);
+         term1g = spu_mul(fragG, fbRGBA[1]);
+         term1b = spu_mul(fragB, fbRGBA[1]);
+         break;
+      case PIPE_BLENDFACTOR_DST_ALPHA:
+         term1r = spu_mul(fragR, fbRGBA[3]);
+         term1g = spu_mul(fragG, fbRGBA[3]);
+         term1b = spu_mul(fragB, fbRGBA[3]);
+         break;
+      case PIPE_BLENDFACTOR_CONST_COLOR:
+         term1r = spu_mul(fragR, spu_splats(spu.blend_color.color[0]));
+         term1g = spu_mul(fragG, spu_splats(spu.blend_color.color[1]));
+         term1b = spu_mul(fragB, spu_splats(spu.blend_color.color[2]));
+         break;
+      case PIPE_BLENDFACTOR_CONST_ALPHA:
+         term1r = spu_mul(fragR, spu_splats(spu.blend_color.color[3]));
+         term1g = spu_mul(fragG, spu_splats(spu.blend_color.color[3]));
+         term1b = spu_mul(fragB, spu_splats(spu.blend_color.color[3]));
+         break;
       /* XXX more cases */
       default:
          ASSERT(0);
       }
 
       /*
-       * Compute Src Alpha term
+       * Compute Src Alpha term (fragment alpha * factor)
        */
       switch (spu.blend.alpha_src_factor) {
       case PIPE_BLENDFACTOR_ONE:
@@ -263,19 +320,29 @@ spu_fallback_fragment_ops(uint x, uint y,
       case PIPE_BLENDFACTOR_SRC_ALPHA:
          term1a = spu_mul(fragA, fragA);
          break;
+      case PIPE_BLENDFACTOR_DST_COLOR:
+         /* fall-through */
+      case PIPE_BLENDFACTOR_DST_ALPHA:
+         term1a = spu_mul(fragA, fbRGBA[3]);
+         break;
+      case PIPE_BLENDFACTOR_CONST_COLOR:
+         /* fall-through */
+      case PIPE_BLENDFACTOR_CONST_ALPHA:
+         term1a = spu_mul(fragR, spu_splats(spu.blend_color.color[3]));
+         break;
       /* XXX more cases */
       default:
          ASSERT(0);
       }
 
       /*
-       * Compute Dest RGB terms
+       * Compute Dest RGB terms (framebuffer color * factor)
        */
       switch (spu.blend.rgb_dst_factor) {
       case PIPE_BLENDFACTOR_ONE:
-         term2r = fragR;
-         term2g = fragG;
-         term2b = fragB;
+         term2r = fbRGBA[0];
+         term2g = fbRGBA[1];
+         term2b = fbRGBA[2];
          break;
       case PIPE_BLENDFACTOR_ZERO:
          term2r =
@@ -299,17 +366,37 @@ spu_fallback_fragment_ops(uint x, uint y,
          term2g = spu_mul(fbRGBA[1], tmp);
          term2b = spu_mul(fbRGBA[2], tmp);
          break;
-      /* XXX more cases */
+      case PIPE_BLENDFACTOR_DST_COLOR:
+         term2r = spu_mul(fbRGBA[0], fbRGBA[0]);
+         term2g = spu_mul(fbRGBA[1], fbRGBA[1]);
+         term2b = spu_mul(fbRGBA[2], fbRGBA[2]);
+         break;
+      case PIPE_BLENDFACTOR_DST_ALPHA:
+         term2r = spu_mul(fbRGBA[0], fbRGBA[3]);
+         term2g = spu_mul(fbRGBA[1], fbRGBA[3]);
+         term2b = spu_mul(fbRGBA[2], fbRGBA[3]);
+         break;
+      case PIPE_BLENDFACTOR_CONST_COLOR:
+         term2r = spu_mul(fbRGBA[0], spu_splats(spu.blend_color.color[0]));
+         term2g = spu_mul(fbRGBA[1], spu_splats(spu.blend_color.color[1]));
+         term2b = spu_mul(fbRGBA[2], spu_splats(spu.blend_color.color[2]));
+         break;
+      case PIPE_BLENDFACTOR_CONST_ALPHA:
+         term2r = spu_mul(fbRGBA[0], spu_splats(spu.blend_color.color[3]));
+         term2g = spu_mul(fbRGBA[1], spu_splats(spu.blend_color.color[3]));
+         term2b = spu_mul(fbRGBA[2], spu_splats(spu.blend_color.color[3]));
+         break;
+       /* XXX more cases */
       default:
          ASSERT(0);
       }
 
       /*
-       * Compute Dest Alpha term
+       * Compute Dest Alpha term (framebuffer alpha * factor)
        */
       switch (spu.blend.alpha_dst_factor) {
       case PIPE_BLENDFACTOR_ONE:
-         term2a = fragA;
+         term2a = fbRGBA[3];
          break;
       case PIPE_BLENDFACTOR_SRC_COLOR:
          term2a = spu_splats(0.0f);
@@ -321,6 +408,16 @@ spu_fallback_fragment_ops(uint x, uint y,
          one = spu_splats(1.0f);
          tmp = spu_sub(one, fragA);
          term2a = spu_mul(fbRGBA[3], tmp);
+         break;
+      case PIPE_BLENDFACTOR_DST_COLOR:
+         /* fall-through */
+      case PIPE_BLENDFACTOR_DST_ALPHA:
+         term2a = spu_mul(fbRGBA[3], fbRGBA[3]);
+         break;
+      case PIPE_BLENDFACTOR_CONST_COLOR:
+         /* fall-through */
+      case PIPE_BLENDFACTOR_CONST_ALPHA:
+         term2a = spu_mul(fbRGBA[3], spu_splats(spu.blend_color.color[3]));
          break;
       /* XXX more cases */
       default:
@@ -341,7 +438,21 @@ spu_fallback_fragment_ops(uint x, uint y,
          fragG = spu_sub(term1g, term2g);
          fragB = spu_sub(term1b, term2b);
          break;
-      /* XXX more cases */
+      case PIPE_BLEND_REVERSE_SUBTRACT:
+         fragR = spu_sub(term2r, term1r);
+         fragG = spu_sub(term2g, term1g);
+         fragB = spu_sub(term2b, term1b);
+         break;
+      case PIPE_BLEND_MIN:
+         fragR = spu_min(term1r, term2r);
+         fragG = spu_min(term1g, term2g);
+         fragB = spu_min(term1b, term2b);
+         break;
+      case PIPE_BLEND_MAX:
+         fragR = spu_max(term1r, term2r);
+         fragG = spu_max(term1g, term2g);
+         fragB = spu_max(term1b, term2b);
+         break;
       default:
          ASSERT(0);
       }
@@ -356,7 +467,15 @@ spu_fallback_fragment_ops(uint x, uint y,
       case PIPE_BLEND_SUBTRACT:
          fragA = spu_sub(term1a, term2a);
          break;
-      /* XXX more cases */
+      case PIPE_BLEND_REVERSE_SUBTRACT:
+         fragA = spu_sub(term2a, term1a);
+         break;
+      case PIPE_BLEND_MIN:
+         fragA = spu_min(term1a, term2a);
+         break;
+      case PIPE_BLEND_MAX:
+         fragA = spu_max(term1a, term2a);
+         break;
       default:
          ASSERT(0);
       }
@@ -384,21 +503,20 @@ spu_fallback_fragment_ops(uint x, uint y,
 #endif
 
    /*
-    * Pack float colors into 32-bit RGBA words.
+    * Pack fragment float colors into 32-bit RGBA words.
     */
    switch (spu.fb.color_format) {
    case PIPE_FORMAT_A8R8G8B8_UNORM:
-      c0 = spu_pack_A8R8G8B8(frag_aos[0]);
-      c1 = spu_pack_A8R8G8B8(frag_aos[1]);
-      c2 = spu_pack_A8R8G8B8(frag_aos[2]);
-      c3 = spu_pack_A8R8G8B8(frag_aos[3]);
+      fragc0 = spu_pack_A8R8G8B8(frag_aos[0]);
+      fragc1 = spu_pack_A8R8G8B8(frag_aos[1]);
+      fragc2 = spu_pack_A8R8G8B8(frag_aos[2]);
+      fragc3 = spu_pack_A8R8G8B8(frag_aos[3]);
       break;
-
    case PIPE_FORMAT_B8G8R8A8_UNORM:
-      c0 = spu_pack_B8G8R8A8(frag_aos[0]);
-      c1 = spu_pack_B8G8R8A8(frag_aos[1]);
-      c2 = spu_pack_B8G8R8A8(frag_aos[2]);
-      c3 = spu_pack_B8G8R8A8(frag_aos[3]);
+      fragc0 = spu_pack_B8G8R8A8(frag_aos[0]);
+      fragc1 = spu_pack_B8G8R8A8(frag_aos[1]);
+      fragc2 = spu_pack_B8G8R8A8(frag_aos[2]);
+      fragc3 = spu_pack_B8G8R8A8(frag_aos[3]);
       break;
    default:
       fprintf(stderr, "SPU: Bad pixel format in spu_default_fragment_ops\n");
@@ -407,20 +525,57 @@ spu_fallback_fragment_ops(uint x, uint y,
 
 
    /*
-    * Color masking
+    * Do color masking
     */
    if (spu.blend.colormask != 0xf) {
-      /* XXX to do */
-      /* apply color mask to 32-bit packed colors */
+      uint cmask = 0x0; /* each byte corresponds to a color channel */
+
+      /* Form bitmask depending on color buffer format and colormask bits */
+      switch (spu.fb.color_format) {
+      case PIPE_FORMAT_A8R8G8B8_UNORM:
+         if (spu.blend.colormask & PIPE_MASK_R)
+            cmask |= 0x00ff0000; /* red */
+         if (spu.blend.colormask & PIPE_MASK_G)
+            cmask |= 0x0000ff00; /* green */
+         if (spu.blend.colormask & PIPE_MASK_B)
+            cmask |= 0x000000ff; /* blue */
+         if (spu.blend.colormask & PIPE_MASK_A)
+            cmask |= 0xff000000; /* alpha */
+         break;
+      case PIPE_FORMAT_B8G8R8A8_UNORM:
+         if (spu.blend.colormask & PIPE_MASK_R)
+            cmask |= 0x0000ff00; /* red */
+         if (spu.blend.colormask & PIPE_MASK_G)
+            cmask |= 0x00ff0000; /* green */
+         if (spu.blend.colormask & PIPE_MASK_B)
+            cmask |= 0xff000000; /* blue */
+         if (spu.blend.colormask & PIPE_MASK_A)
+            cmask |= 0x000000ff; /* alpha */
+         break;
+      default:
+         ASSERT(0);
+      }
+
+      /*
+       * Apply color mask to the 32-bit packed colors.
+       * if (cmask[i])
+       *    frag color[i] = frag color[i];
+       * else
+       *    frag color[i] = framebuffer color[i];
+       */
+      fragc0 = (fragc0 & cmask) | (fbc0 & ~cmask);
+      fragc1 = (fragc1 & cmask) | (fbc1 & ~cmask);
+      fragc2 = (fragc2 & cmask) | (fbc2 & ~cmask);
+      fragc3 = (fragc3 & cmask) | (fbc3 & ~cmask);
    }
 
 
    /*
-    * Logic Ops
+    * Do logic ops
     */
    if (spu.blend.logicop_enable) {
       /* XXX to do */
-      /* apply logicop to 32-bit packed colors */
+      /* apply logicop to 32-bit packed colors (fragcx and fbcx) */
    }
 
 
@@ -431,45 +586,46 @@ spu_fallback_fragment_ops(uint x, uint y,
       spu.cur_ctile_status = TILE_STATUS_DIRTY;
    }
    else {
+      /* write no fragments */
       return;
    }
 
 
    /*
-    * Write new quad colors to the framebuffer/tile.
+    * Write new fragment/quad colors to the framebuffer/tile.
     * Only write pixels where the corresponding mask word is set.
     */
 #if LINEAR_QUAD_LAYOUT
    /*
     * Quad layout:
     *  +--+--+--+--+
-    *  |p0|p1|p2|p3|
+    *  |p0|p1|p2|p3|...
     *  +--+--+--+--+
     */
    if (spu_extract(mask, 0))
-      colorTile->ui[y][x*2] = c0;
+      colorTile->ui[y][x*2] = fragc0;
    if (spu_extract(mask, 1))
-      colorTile->ui[y][x*2+1] = c1;
+      colorTile->ui[y][x*2+1] = fragc1;
    if (spu_extract(mask, 2))
-      colorTile->ui[y][x*2+2] = c2;
+      colorTile->ui[y][x*2+2] = fragc2;
    if (spu_extract(mask, 3))
-      colorTile->ui[y][x*2+3] = c3;
+      colorTile->ui[y][x*2+3] = fragc3;
 #else
    /*
     * Quad layout:
     *  +--+--+
-    *  |p0|p1|
+    *  |p0|p1|...
     *  +--+--+
-    *  |p2|p3|
+    *  |p2|p3|...
     *  +--+--+
     */
    if (spu_extract(mask, 0))
-      colorTile->ui[y+0][x+0] = c0;
+      colorTile->ui[y+0][x+0] = fragc0;
    if (spu_extract(mask, 1))
-      colorTile->ui[y+0][x+1] = c1;
+      colorTile->ui[y+0][x+1] = fragc1;
    if (spu_extract(mask, 2))
-      colorTile->ui[y+1][x+0] = c2;
+      colorTile->ui[y+1][x+0] = fragc2;
    if (spu_extract(mask, 3))
-      colorTile->ui[y+1][x+1] = c3;
+      colorTile->ui[y+1][x+1] = fragc3;
 #endif
 }

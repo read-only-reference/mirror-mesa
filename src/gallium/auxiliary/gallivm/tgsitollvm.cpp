@@ -52,8 +52,7 @@ static inline FunctionType *vertexShaderFunctionType()
    // pass are castable to the following:
    // [4 x <4 x float>] inputs,
    // [4 x <4 x float>] output,
-   // [4 x [4 x float]] consts,
-   // [4 x <4 x float>] temps
+   // [4 x [1 x float]] consts,
 
    std::vector<const Type*> funcArgs;
    VectorType *vectorType = VectorType::get(Type::FloatTy, 4);
@@ -61,13 +60,12 @@ static inline FunctionType *vertexShaderFunctionType()
    PointerType *vectorArrayPtr = PointerType::get(vectorArray, 0);
 
    ArrayType   *floatArray     = ArrayType::get(Type::FloatTy, 4);
-   ArrayType   *constsArray    = ArrayType::get(floatArray, 4);
+   ArrayType   *constsArray    = ArrayType::get(floatArray, 1);
    PointerType *constsArrayPtr = PointerType::get(constsArray, 0);
 
    funcArgs.push_back(vectorArrayPtr);//inputs
    funcArgs.push_back(vectorArrayPtr);//output
    funcArgs.push_back(constsArrayPtr);//consts
-   funcArgs.push_back(vectorArrayPtr);//temps
 
    FunctionType *functionType = FunctionType::get(
       /*Result=*/Type::VoidTy,
@@ -707,9 +705,8 @@ translate_instructionir(llvm::Module *module,
       if (src->SrcRegister.Indirect) {
          indIdx = storage->addrElement(src->SrcRegisterInd.Index);
       }
-
       val = storage->load((enum tgsi_file_type)src->SrcRegister.File,
-                          src->SrcRegister.Index, swizzle, indIdx);
+                          src->SrcRegister.Index, swizzle, instr->getIRBuilder(), indIdx);
 
       inputs[i] = val;
    }
@@ -1025,9 +1022,9 @@ translate_instructionir(llvm::Module *module,
    /* store results  */
    for (int i = 0; i < inst->Instruction.NumDstRegs; ++i) {
       struct tgsi_full_dst_register *dst = &inst->FullDstRegisters[i];
-
       storage->store((enum tgsi_file_type)dst->DstRegister.File,
-                     dst->DstRegister.Index, out, dst->DstRegister.WriteMask);
+                     dst->DstRegister.Index, out, dst->DstRegister.WriteMask,
+		     instr->getIRBuilder() );
    }
 }
 
@@ -1122,8 +1119,6 @@ llvm::Module * tgsi_to_llvmir(struct gallivm_ir *ir,
    output->setName("outputs");
    Value *consts = args++;
    consts->setName("consts");
-   Value *temps = args++;
-   temps->setName("temps");
 
    BasicBlock *label_entry = BasicBlock::Create("entry", shader, 0);
 
@@ -1132,7 +1127,7 @@ llvm::Module * tgsi_to_llvmir(struct gallivm_ir *ir,
    fi = tgsi_default_full_instruction();
    fd = tgsi_default_full_declaration();
 
-   StorageSoa storage(label_entry, input, output, consts, temps);
+   StorageSoa storage(label_entry, input, output, consts);
    InstructionsSoa instr(mod, shader, label_entry, &storage);
 
    while(!tgsi_parse_end_of_tokens(&parse)) {

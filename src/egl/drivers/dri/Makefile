@@ -44,13 +44,14 @@ default: depend library Makefile
 library: $(TOP)/$(LIB_DIR)/libEGLdri.so
 
 $(TOP)/$(LIB_DIR)/libEGLdri.so: $(OBJECTS)
-	$(TOP)/bin/mklib -o EGLdri -major 1 -minor 0 \
-		-install $(TOP)/$(LIB_DIR) -ldl $(OBJECTS) $(DRM_LIB)
+	$(MKLIB) -o EGLdri -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+		-major 1 -minor 0 \
+		-install $(TOP)/$(LIB_DIR) -ldl $(OBJECTS) $(LIBS)
 
 
 clean:
-	rm -f *.o
-	rm -f *.so
+	-rm -f *.o
+	-rm -f *.so
 
 depend: $(SOURCES) $(HEADERS)
 	@ echo "running $(MKDEP)"

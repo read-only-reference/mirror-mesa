@@ -6,9 +6,9 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  6.5
+ * Version:  7.1
  *
- * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -809,7 +809,7 @@ _mesa_init_current(GLcontext *ctx)
    }
 
    /* redo special cases: */
-   ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_WEIGHT], 1.0, 0.0, 0.0, 1.0 );
+   ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_WEIGHT], 1.0, 0.0, 0.0, 0.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_NORMAL], 0.0, 0.0, 1.0, 1.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_COLOR0], 1.0, 1.0, 1.0, 1.0 );
    ASSIGN_4V( ctx->Current.Attrib[VERT_ATTRIB_COLOR1], 0.0, 0.0, 0.0, 1.0 );
@@ -1063,8 +1063,29 @@ init_attrib_groups(GLcontext *ctx)
    /* Miscellaneous */
    ctx->NewState = _NEW_ALL;
    ctx->ErrorValue = (GLenum) GL_NO_ERROR;
-   ctx->_Facing = 0;
    ctx->varying_vp_inputs = ~0;
+
+   return GL_TRUE;
+}
+
+
+/**
+ * Update default objects in a GL context with respect to shared state.
+ *
+ * \param ctx GL context.
+ *
+ * Removes references to old default objects, (texture objects, program
+ * objects, etc.) and changes to reference those from the current shared
+ * state.
+ */
+static GLboolean
+update_default_objects(GLcontext *ctx)
+{
+   assert(ctx);
+
+   _mesa_update_default_objects_program(ctx);
+   _mesa_update_default_objects_texture(ctx);
+   _mesa_update_default_objects_buffer_objects(ctx);
 
    return GL_TRUE;
 }
@@ -1274,17 +1295,18 @@ _mesa_create_context(const GLvisual *visual,
 void
 _mesa_free_context_data( GLcontext *ctx )
 {
-   /* if we're destroying the current context, unbind it first */
-   if (ctx == _mesa_get_current_context()) {
-      _mesa_make_current(NULL, NULL, NULL);
+   if (!_mesa_get_current_context()){
+      /* No current context, but we may need one in order to delete
+       * texture objs, etc.  So temporarily bind the context now.
+       */
+      _mesa_make_current(ctx, NULL, NULL);
    }
-   else {
-      /* unreference WinSysDraw/Read buffers */
-      _mesa_unreference_framebuffer(&ctx->WinSysDrawBuffer);
-      _mesa_unreference_framebuffer(&ctx->WinSysReadBuffer);
-      _mesa_unreference_framebuffer(&ctx->DrawBuffer);
-      _mesa_unreference_framebuffer(&ctx->ReadBuffer);
-   }
+
+   /* unreference WinSysDraw/Read buffers */
+   _mesa_unreference_framebuffer(&ctx->WinSysDrawBuffer);
+   _mesa_unreference_framebuffer(&ctx->WinSysReadBuffer);
+   _mesa_unreference_framebuffer(&ctx->DrawBuffer);
+   _mesa_unreference_framebuffer(&ctx->ReadBuffer);
 
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram.Current, NULL);
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current, NULL);
@@ -1294,6 +1316,9 @@ _mesa_free_context_data( GLcontext *ctx )
    _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current, NULL);
    _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._TexEnvProgram, NULL);
 
+#if FEATURE_attrib_stack
+   _mesa_free_attrib_data(ctx);
+#endif
    _mesa_free_lighting_data( ctx );
 #if FEATURE_evaluators
    _mesa_free_eval_data( ctx );
@@ -1331,6 +1356,11 @@ _mesa_free_context_data( GLcontext *ctx )
 
    if (ctx->Extensions.String)
       _mesa_free((void *) ctx->Extensions.String);
+
+   /* unbind the context if it's currently bound */
+   if (ctx == _mesa_get_current_context()) {
+      _mesa_make_current(NULL, NULL, NULL);
+   }
 }
 
 
@@ -1562,8 +1592,6 @@ void
 _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
                     GLframebuffer *readBuffer )
 {
-   GET_CURRENT_CONTEXT(oldCtx);
-
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(newCtx, "_mesa_make_current()\n");
 
@@ -1588,13 +1616,6 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
    _glapi_set_context((void *) newCtx);
    ASSERT(_mesa_get_current_context() == newCtx);
 
-   if (oldCtx) {
-      _mesa_unreference_framebuffer(&oldCtx->WinSysDrawBuffer);
-      _mesa_unreference_framebuffer(&oldCtx->WinSysReadBuffer);
-      _mesa_unreference_framebuffer(&oldCtx->DrawBuffer);
-      _mesa_unreference_framebuffer(&oldCtx->ReadBuffer);
-   }
-         
    if (!newCtx) {
       _glapi_set_dispatch(NULL);  /* none current */
    }
@@ -1614,10 +1635,12 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
           * or not bound to a user-created FBO.
           */
          if (!newCtx->DrawBuffer || newCtx->DrawBuffer->Name == 0) {
-         /* fix up the fb fields - these will end up wrong otherwise
-          * if the DRIdrawable changes, and everything relies on them.
-          * This is a bit messy (same as needed in _mesa_BindFramebufferEXT)
-	  */
+            /* KW: merge conflict here, revisit. 
+             */
+            /* fix up the fb fields - these will end up wrong otherwise
+             * if the DRIdrawable changes, and everything relies on them.
+             * This is a bit messy (same as needed in _mesa_BindFramebufferEXT)
+             */
             unsigned int i;
             GLenum buffers[MAX_DRAW_BUFFERS];
 
@@ -1631,9 +1654,11 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
          }
          if (!newCtx->ReadBuffer || newCtx->ReadBuffer->Name == 0) {
             _mesa_reference_framebuffer(&newCtx->ReadBuffer, readBuffer);
-            _mesa_readbuffer_update_fields(newCtx, newCtx->Pixel.ReadBuffer);
          }
 
+         /* XXX only set this flag if we're really changing the draw/read
+          * framebuffer bindings.
+          */
 	 newCtx->NewState |= _NEW_BUFFERS;
 
 #if 1
@@ -1701,12 +1726,18 @@ GLboolean
 _mesa_share_state(GLcontext *ctx, GLcontext *ctxToShare)
 {
    if (ctx && ctxToShare && ctx->Shared && ctxToShare->Shared) {
-      ctx->Shared->RefCount--;
-      if (ctx->Shared->RefCount == 0) {
-         free_shared_state(ctx, ctx->Shared);
-      }
+      struct gl_shared_state *oldSharedState = ctx->Shared;
+
       ctx->Shared = ctxToShare->Shared;
       ctx->Shared->RefCount++;
+
+      update_default_objects(ctx);
+
+      oldSharedState->RefCount--;
+      if (oldSharedState->RefCount == 0) {
+         free_shared_state(ctx, oldSharedState);
+      }
+
       return GL_TRUE;
    }
    else {

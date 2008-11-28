@@ -48,13 +48,11 @@ using namespace llvm;
 StorageSoa::StorageSoa(llvm::BasicBlock *block,
                        llvm::Value *input,
                        llvm::Value *output,
-                       llvm::Value *consts,
-                       llvm::Value *temps)
+                       llvm::Value *consts)
    : m_block(block),
      m_input(input),
      m_output(output),
      m_consts(consts),
-     m_temps(temps),
      m_immediates(0),
      m_idx(0)
 {
@@ -93,7 +91,7 @@ void StorageSoa::declareImmediates()
       std::vector<float> vals(4);
       std::vector<Constant*> channelArray;
 
-      vals[0] = vec[0]; vals[1] = vec[0]; vals[2] = vec[0]; vals[3] = vec[0];
+      vals[0] = vec[0]; vals[1] = vec[1]; vals[2] = vec[2]; vals[3] = vec[3];
       llvm::Constant *xChannel = createConstGlobalVector(vals);
 
       vals[0] = vec[1]; vals[1] = vec[1]; vals[2] = vec[1]; vals[3] = vec[1];
@@ -144,22 +142,43 @@ std::vector<llvm::Value*> StorageSoa::inputElement(llvm::Value *idx)
    return res;
 }
 
-std::vector<llvm::Value*> StorageSoa::constElement(llvm::Value *idx)
+llvm::Value* StorageSoa::unpackConstElement(llvm::IRBuilder<>* m_builder, llvm::Value* vector, int cc)
 {
-   std::vector<llvm::Value*> res(4);
-   llvm::Value *xChannel, *yChannel, *zChannel, *wChannel;
+   std::vector<llvm::Value*> x(4);
+   x[0] = m_builder->CreateExtractElement(vector,
+                                           constantInt(cc),
+                                           name("x"));
+
+   VectorType  *vectorType = VectorType::get(Type::FloatTy, 4);
+   Constant *constVector = Constant::getNullValue(vectorType);
+   Value *res = m_builder->CreateInsertElement(constVector, x[0],
+                                              constantInt(0),
+                                              name("vecx"));
+   res = m_builder->CreateInsertElement(res, x[0], constantInt(1),
+                               name("vecxx"));
+   res = m_builder->CreateInsertElement(res, x[0], constantInt(2),
+                               name("vecxxx"));
+   res = m_builder->CreateInsertElement(res, x[0], constantInt(3),
+                               name("vecxxxx"));
+   return res;
+}
+
+std::vector<llvm::Value*> StorageSoa::constElement(llvm::IRBuilder<>* m_builder, llvm::Value *idx)
+{
+   llvm::Value* res;
+   std::vector<llvm::Value*> res2(4);
+   llvm::Value *xChannel;
 
    xChannel = elementPointer(m_consts, idx, 0);
-   yChannel = elementPointer(m_consts, idx, 1);
-   zChannel = elementPointer(m_consts, idx, 2);
-   wChannel = elementPointer(m_consts, idx, 3);
 
-   res[0] = alignedArrayLoad(xChannel);
-   res[1] = alignedArrayLoad(yChannel);
-   res[2] = alignedArrayLoad(zChannel);
-   res[3] = alignedArrayLoad(wChannel);
+   res = alignedArrayLoad(xChannel);
 
-   return res;
+   res2[0]=unpackConstElement(m_builder, res,0);
+   res2[1]=unpackConstElement(m_builder, res,1);
+   res2[2]=unpackConstElement(m_builder, res,2);
+   res2[3]=unpackConstElement(m_builder, res,3);
+
+   return res2;
 }
 
 std::vector<llvm::Value*> StorageSoa::outputElement(llvm::Value *idx)
@@ -174,14 +193,15 @@ std::vector<llvm::Value*> StorageSoa::outputElement(llvm::Value *idx)
    return res;
 }
 
-std::vector<llvm::Value*> StorageSoa::tempElement(llvm::Value *idx)
+std::vector<llvm::Value*> StorageSoa::tempElement(llvm::IRBuilder<>* m_builder, int idx)
 {
    std::vector<llvm::Value*> res(4);
+   llvm::Value *temp = m_temps[idx];
 
-   res[0] = element(m_temps, idx, 0);
-   res[1] = element(m_temps, idx, 1);
-   res[2] = element(m_temps, idx, 2);
-   res[3] = element(m_temps, idx, 3);
+   res[0] = element(temp, constantInt(0), 0);
+   res[1] = element(temp, constantInt(0), 1);
+   res[2] = element(temp, constantInt(0), 2);
+   res[3] = element(temp, constantInt(0), 3);
 
    return res;
 }
@@ -260,6 +280,12 @@ llvm::Module * StorageSoa::currentModule() const
     return m_block->getParent()->getParent();
 }
 
+llvm::Constant * StorageSoa::createConstGlobalFloat(const float val)
+{
+   Constant*c = ConstantFP::get(APFloat(val));
+   return c;
+}
+
 llvm::Constant * StorageSoa::createConstGlobalVector(const std::vector<float> &vec)
 {
    VectorType *vectorType = VectorType::get(Type::FloatTy, 4);
@@ -278,7 +304,7 @@ llvm::Constant * StorageSoa::createConstGlobalVector(const std::vector<float> &v
 }
 
 std::vector<llvm::Value*> StorageSoa::load(enum tgsi_file_type type, int idx, int swizzle,
-                                           llvm::Value *indIdx)
+                                           llvm::IRBuilder<>* m_builder,llvm::Value *indIdx)
 {
    std::vector<llvm::Value*> val(4);
 
@@ -299,10 +325,10 @@ std::vector<llvm::Value*> StorageSoa::load(enum tgsi_file_type type, int idx, in
       val = outputElement(realIndex);
       break;
    case TGSI_FILE_TEMPORARY:
-      val = tempElement(realIndex);
+      val = tempElement(m_builder, idx);
       break;
    case TGSI_FILE_CONSTANT:
-      val = constElement(realIndex);
+      val = constElement(m_builder, realIndex);
       break;
    case TGSI_FILE_IMMEDIATE:
       val = immediateElement(realIndex);
@@ -328,19 +354,39 @@ std::vector<llvm::Value*> StorageSoa::load(enum tgsi_file_type type, int idx, in
    return res;
 }
 
+llvm::Value * StorageSoa::allocaTemp(llvm::IRBuilder<>* m_builder)
+{
+   VectorType *vector   = VectorType::get(Type::FloatTy, 4);
+   ArrayType  *vecArray = ArrayType::get(vector, 4);
+   AllocaInst *alloca = new AllocaInst(vecArray, "temp",
+                                       m_builder->GetInsertBlock());
+
+   return alloca;
+}
+
+
 void StorageSoa::store(enum tgsi_file_type type, int idx, const std::vector<llvm::Value*> &val,
-                       int mask)
+                       int mask, llvm::IRBuilder<>* m_builder)
 {
    llvm::Value *out = 0;
+   llvm::Value *realIndex = 0;
    switch(type) {
    case TGSI_FILE_OUTPUT:
       out = m_output;
+      realIndex = constantInt(idx);
       break;
    case TGSI_FILE_TEMPORARY:
-      out = m_temps;
+      // if that temp doesn't already exist, alloca it
+      if (m_temps.find(idx) == m_temps.end())
+         m_temps[idx] = allocaTemp(m_builder);
+
+      out = m_temps[idx];
+
+      realIndex = constantInt(0);
       break;
    case TGSI_FILE_INPUT:
       out = m_input;
+      realIndex = constantInt(idx);
       break;
    case TGSI_FILE_ADDRESS: {
       llvm::Value *addr = m_addresses[idx];
@@ -358,7 +404,6 @@ void StorageSoa::store(enum tgsi_file_type type, int idx, const std::vector<llvm
       assert(0);
       break;
    }
-   llvm::Value *realIndex = constantInt(idx);
    if ((mask & TGSI_WRITEMASK_X)) {
       llvm::Value *xChannel = elementPointer(out, realIndex, 0);
       new StoreInst(val[0], xChannel, false, m_block);

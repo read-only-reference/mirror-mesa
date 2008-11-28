@@ -8,7 +8,7 @@ TOP = ../..
 include $(TOP)/configs/current
 
 
-LIBS = $(APP_LIB_DEPS)
+LIBS = -L$(TOP)/$(LIB_DIR) -l$(GLUT_LIB) -l$(GLU_LIB) -l$(GL_LIB) $(APP_LIB_DEPS)
 
 SOURCES = \
 	vp-tris.c
@@ -26,13 +26,13 @@ INCLUDES = -I. -I$(TOP)/include -I../samples
 .SUFFIXES: .c
 
 .c:
-	$(CC) $(INCLUDES) $(CFLAGS) $< $(LIBS) -o $@
+	$(APP_CC) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $< $(LIBS) -o $@
 
 .c.o:
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
+	$(APP_CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES) $< -o $@
 
 .S.o:
-	$(CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES)  $< -o $@
+	$(APP_CC) -c $(INCLUDES) $(CFLAGS) $(DEFINES)  $< -o $@
 
 
 ##### TARGETS #####
@@ -40,9 +40,9 @@ INCLUDES = -I. -I$(TOP)/include -I../samples
 default: $(PROGS)
 
 clean:
-	rm -f $(PROGS)
-	rm -f *.o
-	rm -f getproclist.h
+	-rm -f $(PROGS)
+	-rm -f *.o
+	-rm -f getproclist.h
 
 
 

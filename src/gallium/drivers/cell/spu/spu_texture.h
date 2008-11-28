@@ -36,12 +36,32 @@ extern void
 invalidate_tex_cache(void);
 
 
-extern vector float
-sample_texture_nearest(uint unit, vector float texcoord);
+extern void
+sample_texture_2d_nearest(vector float s, vector float t,
+                          uint unit, uint level, uint face,
+                          vector float colors[4]);
 
 
-extern vector float
-sample_texture_bilinear(uint unit, vector float texcoord);
+extern void
+sample_texture_2d_bilinear(vector float s, vector float t,
+                           uint unit, uint level, uint face,
+                           vector float colors[4]);
+
+extern void
+sample_texture_2d_bilinear_int(vector float s, vector float t,
+                               uint unit, uint level, uint face,
+                               vector float colors[4]);
+
+
+extern void
+sample_texture_2d_lod(vector float s, vector float t,
+                      uint unit, uint level, uint face,
+                      vector float colors[4]);
+
+
+extern void
+sample_texture_cube(vector float s, vector float t, vector float r,
+                    uint unit, vector float colors[4]);
 
 
 #endif /* SPU_TEXTURE_H */

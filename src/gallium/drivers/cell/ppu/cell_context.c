@@ -47,6 +47,7 @@
 #include "cell_clear.h"
 #include "cell_context.h"
 #include "cell_draw_arrays.h"
+#include "cell_fence.h"
 #include "cell_flush.h"
 #include "cell_state.h"
 #include "cell_surface.h"
@@ -61,6 +62,8 @@ static void
 cell_destroy_context( struct pipe_context *pipe )
 {
    struct cell_context *cell = cell_context(pipe);
+
+   util_delete_keymap(cell->fragment_ops_cache, NULL);
 
    cell_spu_exit(cell);
 
@@ -85,13 +88,16 @@ cell_draw_create(struct cell_context *cell)
 }
 
 
-#ifdef DEBUG
 static const struct debug_named_value cell_debug_flags[] = {
    {"checker", CELL_DEBUG_CHECKER},/**< modulate tile clear color by SPU ID */
+   {"asm", CELL_DEBUG_ASM},        /**< dump SPU asm code */
    {"sync", CELL_DEBUG_SYNC},      /**< SPUs do synchronous DMA */
+   {"fragops", CELL_DEBUG_FRAGMENT_OPS}, /**< SPUs emit fragment ops debug messages*/
+   {"fragopfallback", CELL_DEBUG_FRAGMENT_OP_FALLBACK}, /**< SPUs use reference implementation for fragment ops*/
+   {"cmd", CELL_DEBUG_CMD},       /**< SPUs dump command buffer info */
+   {"cache", CELL_DEBUG_CACHE},   /**< report texture cache stats on exit */
    {NULL, 0}
 };
-#endif
 
 
 struct pipe_context *
@@ -99,6 +105,7 @@ cell_create_context(struct pipe_screen *screen,
                     struct cell_winsys *cws)
 {
    struct cell_context *cell;
+   uint i;
 
    /* some fields need to be 16-byte aligned, so align the whole object */
    cell = (struct cell_context*) align_malloc(sizeof(struct cell_context), 16);
@@ -125,10 +132,13 @@ cell_create_context(struct pipe_screen *screen,
    cell_init_state_functions(cell);
    cell_init_shader_functions(cell);
    cell_init_surface_functions(cell);
-   cell_init_texture_functions(cell);
    cell_init_vertex_functions(cell);
 
    cell->draw = cell_draw_create(cell);
+
+   /* Create cache of fragment ops generated code */
+   cell->fragment_ops_cache =
+      util_new_keymap(sizeof(struct cell_fragment_ops_key), ~0, NULL);
 
    cell_init_vbuf(cell);
 
@@ -143,17 +153,31 @@ cell_create_context(struct pipe_screen *screen,
                                               cell_debug_flags, 
                                               0 );
 
+   for (i = 0; i < CELL_NUM_BUFFERS; i++)
+      cell_fence_init(&cell->fenced_buffers[i].fence);
+
+
    /*
     * SPU stuff
     */
-   cell->num_spus = 6;
-   /* XXX is this in SDK 3.0 only?
-   cell->num_spus = spe_cpu_info_get(SPE_COUNT_PHYSICAL_SPES, -1);
-   */
+   /* This call only works with SDK 3.0.  Anyone still using 2.1??? */
+   cell->num_cells = spe_cpu_info_get(SPE_COUNT_PHYSICAL_CPU_NODES, -1);
+   cell->num_spus = spe_cpu_info_get(SPE_COUNT_USABLE_SPES, 0);
+   if (cell->debug_flags) {
+      printf("Cell: found %d Cell(s) with %u SPUs\n",
+             cell->num_cells, cell->num_spus);
+   }
+   if (getenv("CELL_NUM_SPUS")) {
+      cell->num_spus = atoi(getenv("CELL_NUM_SPUS"));
+      assert(cell->num_spus > 0);
+   }
 
    cell_start_spus(cell);
 
    cell_init_batch_buffers(cell);
+
+   /* make sure SPU initializations are done before proceeding */
+   cell_flush_int(cell, CELL_FLUSH_WAIT);
 
    return &cell->pipe;
 }

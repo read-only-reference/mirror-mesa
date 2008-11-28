@@ -180,12 +180,12 @@ static GLboolean check_active_shininess( GLcontext *ctx,
 
 
 
-static struct state_key *make_state_key( GLcontext *ctx )
+static void make_state_key( GLcontext *ctx, struct state_key *key )
 {
    const struct gl_fragment_program *fp;
-   struct state_key *key = CALLOC_STRUCT(state_key);
    GLuint i;
 
+   memset(key, 0, sizeof(struct state_key));
    fp = ctx->FragmentProgram._Current;
 
    /* This now relies on texenvprogram.c being active:
@@ -304,8 +304,6 @@ static struct state_key *make_state_key( GLcontext *ctx )
 			      texUnit->GenModeQ );
       }
    }
-   
-   return key;
 }
 
 
@@ -738,11 +736,16 @@ static void emit_normalize_vec3( struct tnl_program *p,
 				 struct ureg dest,
 				 struct ureg src )
 {
+#if 0
+   /* XXX use this when drivers are ready for NRM3 */
+   emit_op1(p, OPCODE_NRM3, dest, WRITEMASK_XYZ, src);
+#else
    struct ureg tmp = get_temp(p);
    emit_op2(p, OPCODE_DP3, tmp, WRITEMASK_X, src, src);
    emit_op1(p, OPCODE_RSQ, tmp, WRITEMASK_X, tmp);
    emit_op2(p, OPCODE_MUL, dest, 0, src, swizzle1(tmp, X));
    release_temp(p, tmp);
+#endif
 }
 
 static void emit_passthrough( struct tnl_program *p, 
@@ -1308,16 +1311,18 @@ static void build_lighting( struct tnl_program *p )
             }
             else if (!p->state->material_shininess_is_zero) {
                emit_op1(p, OPCODE_LIT, lit, 0, dots);
-               emit_op2(p, OPCODE_ADD, _col0, 0, ambient, _col0);
+               emit_op2(p, OPCODE_ADD, _bfc0, 0, ambient, _bfc0);
             } 
             else {
                emit_degenerate_lit(p, lit, dots);
-               emit_op2(p, OPCODE_ADD, _col0, 0, ambient, _col0);
+               emit_op2(p, OPCODE_ADD, _bfc0, 0, ambient, _bfc0);
             }
 
-	    emit_op2(p, OPCODE_ADD, _bfc0, 0, ambient, _bfc0);
 	    emit_op3(p, OPCODE_MAD, res0, mask0, swizzle1(lit,Y), diffuse, _bfc0);
 	    emit_op3(p, OPCODE_MAD, res1, mask1, swizzle1(lit,Z), specular, _bfc1);
+
+            /* restore negate flag for next lighting */
+            dots = negate(dots);
 
 	    release_temp(p, ambient);
 	    release_temp(p, diffuse);
@@ -1724,16 +1729,16 @@ struct gl_vertex_program *
 _mesa_get_fixed_func_vertex_program(GLcontext *ctx)
 {
    struct gl_vertex_program *prog;
-   struct state_key *key;
+   struct state_key key;
 
    /* Grab all the relevent state and put it in a single structure:
     */
-   key = make_state_key(ctx);
+   make_state_key(ctx, &key);
 
    /* Look for an already-prepared program for this state:
     */
    prog = (struct gl_vertex_program *)
-      _mesa_search_program_cache(ctx->VertexProgram.Cache, key, sizeof(*key));
+      _mesa_search_program_cache(ctx->VertexProgram.Cache, &key, sizeof(key));
    
    if (!prog) {
       /* OK, we'll have to build a new one */
@@ -1745,7 +1750,7 @@ _mesa_get_fixed_func_vertex_program(GLcontext *ctx)
       if (!prog)
          return NULL;
 
-      create_new_program( key, prog,
+      create_new_program( &key, prog,
                           ctx->Const.VertexProgram.MaxTemps );
 
 #if 0
@@ -1754,10 +1759,8 @@ _mesa_get_fixed_func_vertex_program(GLcontext *ctx)
                                           &prog->Base );
 #endif
       _mesa_program_cache_insert(ctx, ctx->VertexProgram.Cache,
-                                 key, sizeof(*key), &prog->Base);
+                                 &key, sizeof(key), &prog->Base);
    }
-
-   _mesa_free(key);
 
    return prog;
 }

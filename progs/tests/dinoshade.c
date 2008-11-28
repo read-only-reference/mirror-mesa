@@ -38,11 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>       /* for cos(), sin(), and sqrt() */
-#ifdef __VMS
-# include <stddef.h>	/* for ptrdiff_t, referenced by GL.h when GL_GLEXT_LEGACY defined */
-#else
-# include <malloc.h>	/* for ptrdiff_t, referenced by GL.h when GL_GLEXT_LEGACY defined */
-#endif
+#include <stddef.h>	/* for ptrdiff_t, referenced by GL.h when GL_GLEXT_LEGACY defined */
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -797,7 +793,7 @@ supportsOneDotOne(void)
 
   version = (char *) glGetString(GL_VERSION);
   if (sscanf(version, "%d.%d", &major, &minor) == 2)
-    return major >= 1 && minor >= 1;
+    return major * 10 + minor >= 11;
   return 0;            /* OpenGL version string malformed! */
 }
 

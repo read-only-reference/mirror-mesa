@@ -62,12 +62,15 @@ vs_exec_prepare( struct draw_vertex_shader *shader,
 {
    struct exec_vertex_shader *evs = exec_vertex_shader(shader);
 
-   /* specify the vertex program to interpret/execute */
-   tgsi_exec_machine_bind_shader(evs->machine,
-				 shader->state.tokens,
-				 PIPE_MAX_SAMPLERS,
-				 NULL /*samplers*/ );
-
+   /* Specify the vertex program to interpret/execute.
+    * Avoid rebinding when possible.
+    */
+   if (evs->machine->Tokens != shader->state.tokens) {
+      tgsi_exec_machine_bind_shader(evs->machine,
+                                    shader->state.tokens,
+                                    PIPE_MAX_SAMPLERS,
+                                    NULL /*samplers*/ );
+   }
 }
 
 
@@ -119,6 +122,12 @@ vs_exec_run_linear( struct draw_vertex_shader *shader,
 
 	 input = (const float (*)[4])((const char *)input + input_stride);
       } 
+
+      tgsi_set_exec_mask(machine,
+                         1,
+                         max_vertices > 1,
+                         max_vertices > 2,
+                         max_vertices > 3);
 
       /* run interpreter */
       tgsi_exec_machine_run( machine );

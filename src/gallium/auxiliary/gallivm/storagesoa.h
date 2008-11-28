@@ -29,6 +29,7 @@
 #define STORAGESOA_H
 
 #include <pipe/p_shader_tokens.h>
+#include <llvm/Support/IRBuilder.h>
 
 #include <vector>
 #include <list>
@@ -51,14 +52,13 @@ public:
    StorageSoa(llvm::BasicBlock *block,
               llvm::Value *input,
               llvm::Value *output,
-              llvm::Value *consts,
-              llvm::Value *temps);
+              llvm::Value *consts);
 
 
    std::vector<llvm::Value*> load(enum tgsi_file_type type, int idx, int swizzle, 
-                                  llvm::Value *indIdx =0);
+                                  llvm::IRBuilder<>* m_builder, llvm::Value *indIdx =0);
    void store(enum tgsi_file_type type, int idx, const std::vector<llvm::Value*> &val,
-              int mask);
+              int mask, llvm::IRBuilder<>* m_builder);
 
    void addImmediate(float *vec);
    void declareImmediates();
@@ -76,12 +76,14 @@ private:
    const char *name(const char *prefix) const;
    llvm::Value  *alignedArrayLoad(llvm::Value *val);
    llvm::Module *currentModule() const;
+   llvm::Constant  *createConstGlobalFloat(const float val);
    llvm::Constant  *createConstGlobalVector(const std::vector<float> &vec);
 
    std::vector<llvm::Value*> inputElement(llvm::Value *indIdx);
-   std::vector<llvm::Value*> constElement(llvm::Value *indIdx);
+   llvm::Value* unpackConstElement(llvm::IRBuilder<>* m_builder, llvm::Value *indIdx, int cc);
+   std::vector<llvm::Value*> constElement(llvm::IRBuilder<>* m_builder, llvm::Value *indIdx);
    std::vector<llvm::Value*> outputElement(llvm::Value *indIdx);
-   std::vector<llvm::Value*> tempElement(llvm::Value *indIdx);
+   std::vector<llvm::Value*> tempElement(llvm::IRBuilder<>* m_builder, int idx);
    std::vector<llvm::Value*> immediateElement(llvm::Value *indIdx);
 private:
    llvm::BasicBlock *m_block;
@@ -89,12 +91,13 @@ private:
    llvm::Value *m_input;
    llvm::Value *m_output;
    llvm::Value *m_consts;
-   llvm::Value *m_temps;
+   std::map<int, llvm::Value*> m_temps;
    llvm::GlobalVariable *m_immediates;
 
    std::map<int, llvm::Value*> m_addresses;
 
    std::vector<std::vector<float> > m_immediatesToFlush;
+   llvm::Value * allocaTemp(llvm::IRBuilder<>* m_builder);
 
    mutable std::map<int, llvm::ConstantInt*> m_constInts;
    mutable char        m_name[32];

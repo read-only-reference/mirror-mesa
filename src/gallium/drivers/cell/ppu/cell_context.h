@@ -38,6 +38,7 @@
 #include "cell/common.h"
 #include "rtasm/rtasm_ppc_spe.h"
 #include "tgsi/tgsi_scan.h"
+#include "util/u_keymap.h"
 
 
 struct cell_vbuf_render;
@@ -67,31 +68,29 @@ struct cell_fragment_shader_state
 
 
 /**
- * Cell blend state atom, subclass of pipe_blend_state.
+ * Key for mapping per-fragment state to cached SPU machine code.
+ *  keymap(cell_fragment_ops_key) => cell_command_fragment_ops
  */
-struct cell_blend_state
+struct cell_fragment_ops_key
 {
-   struct pipe_blend_state base;
-
-   /**
-    * Generated code to perform alpha blending
-    */
-   struct spe_function code;
+   struct pipe_blend_state blend;
+   struct pipe_blend_color blend_color;
+   struct pipe_depth_stencil_alpha_state dsa;
+   enum pipe_format color_format;
+   enum pipe_format zs_format;
 };
 
 
-/**
- * Cell depth/stencil/alpha state atom, subclass of
- * pipe_depth_stencil_alpha_state.
- */
-struct cell_depth_stencil_alpha_state
-{
-   struct pipe_depth_stencil_alpha_state base;
+struct cell_buffer_node;
 
-   /**
-    * Generated code to perform alpha, stencil, and depth testing on the SPE
-    */
-   struct spe_function code;
+/**
+ * Fenced buffer list.  List of buffers which can be unreferenced after
+ * the fence has been executed/signalled.
+ */
+struct cell_buffer_list
+{
+   struct cell_fence fence ALIGN16_ATTRIB;
+   struct cell_buffer_node *head;
 };
 
 
@@ -104,10 +103,10 @@ struct cell_context
 
    struct cell_winsys *winsys;
 
-   const struct cell_blend_state *blend;
+   const struct pipe_blend_state *blend;
    const struct pipe_sampler_state *sampler[PIPE_MAX_SAMPLERS];
    uint num_samplers;
-   const struct cell_depth_stencil_alpha_state   *depth_stencil;
+   const struct pipe_depth_stencil_alpha_state *depth_stencil;
    const struct pipe_rasterizer_state *rasterizer;
    const struct cell_vertex_shader_state *vs;
    const struct cell_fragment_shader_state *fs;
@@ -135,6 +134,11 @@ struct cell_context
    uint *tex_map;
 
    uint dirty;
+   uint dirty_textures;  /* bitmask of texture units */
+   uint dirty_samplers;  /* bitmask of sampler units */
+
+   /** Cache of code generated for per-fragment ops */
+   struct keymap *fragment_ops_cache;
 
    /** The primitive drawing context */
    struct draw_context *draw;
@@ -149,8 +153,9 @@ struct cell_context
    /** Mapped constant buffers */
    void *mapped_constants[PIPE_SHADER_TYPES];
 
+   struct cell_spu_function_info spu_functions ALIGN16_ATTRIB;
 
-   uint num_spus;
+   uint num_cells, num_spus;
 
    /** Buffers for command batches, vertex/index data */
    uint buffer_size[CELL_NUM_BUFFERS];
@@ -160,6 +165,14 @@ struct cell_context
 
    /** [4] to ensure 16-byte alignment for each status word */
    uint buffer_status[CELL_MAX_SPUS][CELL_NUM_BUFFERS][4] ALIGN16_ATTRIB;
+
+
+   /** Associated with each command/batch buffer is a list of pipe_buffers
+    * that are fenced.  When the last command in a buffer is executed, the
+    * fence will be signalled, indicating that any pipe_buffers preceeding
+    * that fence can be unreferenced (and probably freed).
+    */
+   struct cell_buffer_list fenced_buffers[CELL_NUM_BUFFERS];
 
 
    struct spe_function attrib_fetch;

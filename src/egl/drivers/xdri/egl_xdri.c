@@ -962,7 +962,7 @@ xdri_eglDestroySurface(_EGLDriver *drv, EGLDisplay dpy, EGLSurface surface)
       }
       else {
          /*
-         st_unreference_framebuffer(&surf->Framebuffer);
+         st_unreference_framebuffer(surf->Framebuffer);
          */
          free(xdri_surf);
       }

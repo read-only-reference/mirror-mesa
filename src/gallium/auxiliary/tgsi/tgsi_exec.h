@@ -68,17 +68,12 @@ struct tgsi_interp_coef
    float dady[NUM_CHANNELS];
 };
 
-
-struct softpipe_tile_cache;  /**< Opaque to TGSI */
-
 /**
  * Information for sampling textures, which must be implemented
  * by code outside the TGSI executor.
  */
 struct tgsi_sampler
 {
-   const struct pipe_sampler_state *state;
-   struct pipe_texture *texture;
    /** Get samples for four fragments in a quad */
    void (*get_samples)(struct tgsi_sampler *sampler,
                        const float s[QUAD_SIZE],
@@ -86,8 +81,6 @@ struct tgsi_sampler
                        const float p[QUAD_SIZE],
                        float lodbias,
                        float rgba[NUM_CHANNELS][QUAD_SIZE]);
-   void *pipe; /*XXX temporary*/
-   struct softpipe_tile_cache *cache;
 };
 
 /**
@@ -165,6 +158,10 @@ struct tgsi_exec_labels
 #define TGSI_EXEC_TEMP_HALF_I       (TGSI_EXEC_NUM_TEMPS + 3)
 #define TGSI_EXEC_TEMP_HALF_C       1
 
+/* execution mask, each value is either 0 or ~0 */
+#define TGSI_EXEC_MASK_I            (TGSI_EXEC_NUM_TEMPS + 3)
+#define TGSI_EXEC_MASK_C            2
+
 #define TGSI_EXEC_TEMP_R0           (TGSI_EXEC_NUM_TEMPS + 4)
 
 #define TGSI_EXEC_TEMP_ADDR         (TGSI_EXEC_NUM_TEMPS + 5)
@@ -173,6 +170,16 @@ struct tgsi_exec_labels
 #define TGSI_EXEC_MAX_COND_NESTING  20
 #define TGSI_EXEC_MAX_LOOP_NESTING  20
 #define TGSI_EXEC_MAX_CALL_NESTING  20
+
+/* The maximum number of input attributes per vertex. For 2D
+ * input register files, this is the stride between two 1D
+ * arrays.
+ */
+#define TGSI_EXEC_MAX_INPUT_ATTRIBS 17
+
+/* The maximum number of constant vectors per constant buffer.
+ */
+#define TGSI_EXEC_MAX_CONST_BUFFER  4096
 
 /**
  * Run-time virtual machine state for executing TGSI shader.
@@ -191,7 +198,7 @@ struct tgsi_exec_machine
    struct tgsi_exec_vector       *Temps;
    struct tgsi_exec_vector       *Addrs;
 
-   struct tgsi_sampler           *Samplers;
+   struct tgsi_sampler           **Samplers;
 
    float                         Imms[TGSI_EXEC_NUM_IMMEDIATES][4];
    unsigned                      ImmLimit;
@@ -254,7 +261,7 @@ tgsi_exec_machine_bind_shader(
    struct tgsi_exec_machine *mach,
    const struct tgsi_token *tokens,
    uint numSamplers,
-   struct tgsi_sampler *samplers);
+   struct tgsi_sampler **samplers);
 
 uint
 tgsi_exec_machine_run(
@@ -263,6 +270,27 @@ tgsi_exec_machine_run(
 
 void
 tgsi_exec_machine_free_data(struct tgsi_exec_machine *mach);
+
+
+static INLINE void
+tgsi_set_kill_mask(struct tgsi_exec_machine *mach, unsigned mask)
+{
+   mach->Temps[TGSI_EXEC_TEMP_KILMASK_I].xyzw[TGSI_EXEC_TEMP_KILMASK_C].u[0] =
+      mask;
+}
+
+
+/** Set execution mask values prior to executing the shader */
+static INLINE void
+tgsi_set_exec_mask(struct tgsi_exec_machine *mach,
+                   boolean ch0, boolean ch1, boolean ch2, boolean ch3)
+{
+   int *mask = mach->Temps[TGSI_EXEC_MASK_I].xyzw[TGSI_EXEC_MASK_C].i;
+   mask[0] = ch0 ? ~0 : 0;
+   mask[1] = ch1 ? ~0 : 0;
+   mask[2] = ch2 ? ~0 : 0;
+   mask[3] = ch3 ? ~0 : 0;
+}
 
 
 #if defined __cplusplus

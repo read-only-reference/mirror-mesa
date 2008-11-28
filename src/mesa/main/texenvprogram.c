@@ -28,6 +28,7 @@
 #include "glheader.h"
 #include "macros.h"
 #include "enums.h"
+#include "shader/program.h"
 #include "shader/prog_parameter.h"
 #include "shader/prog_cache.h"
 #include "shader/prog_instruction.h"
@@ -35,6 +36,16 @@
 #include "shader/prog_statevars.h"
 #include "shader/programopt.h"
 #include "texenvprogram.h"
+
+
+struct texenvprog_cache_item
+{
+   GLuint hash;
+   void *key;
+   struct gl_fragment_program *data;
+   struct texenvprog_cache_item *next;
+};
+
 
 /**
  * Up to nine instructions per tex unit, plus fog, specular color.
@@ -59,6 +70,7 @@ struct state_key {
    struct {
       GLuint enabled:1;
       GLuint source_index:3;   /* one of TEXTURE_1D/2D/3D/CUBE/RECT_INDEX */
+      GLuint shadow:1;
       GLuint ScaleShiftRGB:2;
       GLuint ScaleShiftA:2;
 
@@ -285,9 +297,12 @@ static void make_state_key( GLcontext *ctx,  struct state_key *key )
 
    for (i=0;i<MAX_TEXTURE_UNITS;i++) {
       const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[i];
-		
-      if (!texUnit->_ReallyEnabled) 
+      GLenum format;
+
+      if (!texUnit->_ReallyEnabled || !texUnit->Enabled)
          continue;
+
+      format = texUnit->_Current->Image[0][texUnit->_Current->BaseLevel]->_BaseFormat;
 
       key->unit[i].enabled = 1;
       key->enabled_units |= (1<<i);
@@ -296,6 +311,9 @@ static void make_state_key( GLcontext *ctx,  struct state_key *key )
 
       key->unit[i].source_index = 
 	 translate_tex_src_bit(texUnit->_ReallyEnabled);		
+      key->unit[i].shadow = ((texUnit->_Current->CompareMode == GL_COMPARE_R_TO_TEXTURE) && 
+                             ((format == GL_DEPTH_COMPONENT) || 
+                              (format == GL_DEPTH_STENCIL_EXT)));
 
       key->unit[i].NumArgsRGB = texUnit->_CurrentCombine->_NumArgsRGB;
       key->unit[i].NumArgsA = texUnit->_CurrentCombine->_NumArgsA;
@@ -597,7 +615,7 @@ emit_op(struct texenv_fragment_program *p,
 {
    GLuint nr = p->program->Base.NumInstructions++;
    struct prog_instruction *inst = &p->program->Base.Instructions[nr];
-      
+
    assert(nr < MAX_INSTRUCTIONS);
 
    _mesa_init_instructions(inst, 1);
@@ -1066,6 +1084,10 @@ static void load_texture( struct texenv_fragment_program *p, GLuint unit )
 	 p->src_texture[unit] = emit_texld( p, OPCODE_TXP,
 					    tmp, WRITEMASK_XYZW, 
 					    unit, dim, texcoord );
+
+	 if (p->state->unit[unit].shadow)
+	    p->program->Base.ShadowSamplers |= 1 << unit;
+
          p->program->Base.SamplersUsed |= (1 << unit);
          /* This identity mapping should already be in place
           * (see _mesa_init_program_struct()) but let's be safe.
@@ -1300,6 +1322,9 @@ _mesa_get_fixed_func_fragment_program(GLcontext *ctx)
  * If _MaintainTexEnvProgram is set we'll generate a fragment program that
  * implements the current texture env/combine mode.
  * This function generates that program and puts it into effect.
+ *
+ * XXX: remove this function.  currently only called by some drivers,
+ * not by mesa core.  We now handle this properly from inside mesa.
  */
 void
 _mesa_UpdateTexEnvProgram( GLcontext *ctx )
@@ -1311,11 +1336,14 @@ _mesa_UpdateTexEnvProgram( GLcontext *ctx )
    /* If a conventional fragment program/shader isn't in effect... */
    if (!ctx->FragmentProgram._Enabled &&
        (!ctx->Shader.CurrentProgram ||
-        !ctx->Shader.CurrentProgram->FragmentProgram) ) {
+        !ctx->Shader.CurrentProgram->FragmentProgram) ) 
+   {
+      struct gl_fragment_program *newProg;
 
-      ctx->FragmentProgram._Current
-         = ctx->FragmentProgram._TexEnvProgram
-         = _mesa_get_fixed_func_fragment_program(ctx);
+      newProg = _mesa_get_fixed_func_fragment_program(ctx);
+
+      _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._Current, newProg);
+      _mesa_reference_fragprog(ctx, &ctx->FragmentProgram._TexEnvProgram, newProg);
    } 
 
    /* Tell the driver about the change.  Could define a new target for

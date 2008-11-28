@@ -191,6 +191,8 @@
 #define MAX_UNIFORMS 128   /**< number of float components */
 #define MAX_VARYING 8      /**< number of float[4] vectors */
 #define MAX_SAMPLERS 8
+#define MAX_PROGRAM_INPUTS 32
+#define MAX_PROGRAM_OUTPUTS 32
 /*@}*/
 
 /** For GL_NV_vertex_program */
@@ -216,7 +218,7 @@
 /** For GL_ARB_vertex_shader */
 /*@{*/
 #define MAX_VERTEX_ATTRIBS 16
-#define MAX_VERTEX_TEXTURE_IMAGE_UNITS 0
+#define MAX_VERTEX_TEXTURE_IMAGE_UNITS MAX_TEXTURE_UNITS
 #define MAX_COMBINED_TEXTURE_IMAGE_UNITS (MAX_TEXTURE_IMAGE_UNITS + MAX_VERTEX_TEXTURE_IMAGE_UNITS)
 /*@}*/
 

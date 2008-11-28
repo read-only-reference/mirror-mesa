@@ -1,37 +1,32 @@
 /*
-** License Applicability. Except to the extent portions of this file are
-** made subject to an alternative license as permitted in the SGI Free
-** Software License B, Version 1.1 (the "License"), the contents of this
-** file are subject only to the provisions of the License. You may not use
-** this file except in compliance with the License. You may obtain a copy
-** of the License at Silicon Graphics, Inc., attn: Legal Services, 1600
-** Amphitheatre Parkway, Mountain View, CA 94043-1351, or at:
-** 
-** http://oss.sgi.com/projects/FreeB
-** 
-** Note that, as provided in the License, the Software is distributed on an
-** "AS IS" basis, with ALL EXPRESS AND IMPLIED WARRANTIES AND CONDITIONS
-** DISCLAIMED, INCLUDING, WITHOUT LIMITATION, ANY IMPLIED WARRANTIES AND
-** CONDITIONS OF MERCHANTABILITY, SATISFACTORY QUALITY, FITNESS FOR A
-** PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
-** 
-** Original Code. The Original Code is: OpenGL Sample Implementation,
-** Version 1.2.1, released January 26, 2000, developed by Silicon Graphics,
-** Inc. The Original Code is Copyright (c) 1991-2000 Silicon Graphics, Inc.
-** Copyright in any portions created by third parties is as indicated
-** elsewhere herein. All Rights Reserved.
-** 
-** Additional Notice Provisions: The application programming interfaces
-** established by SGI in conjunction with the Original Code are The
-** OpenGL(R) Graphics System: A Specification (Version 1.2.1), released
-** April 1, 1999; The OpenGL(R) Graphics System Utility Library (Version
-** 1.3), released November 4, 1998; and OpenGL(R) Graphics with the X
-** Window System(R) (Version 1.3), released October 19, 1998. This software
-** was created using the OpenGL(R) version 1.2.1 Sample Implementation
-** published by SGI, but has not been independently verified as being
-** compliant with the OpenGL(R) version 1.2.1 Specification.
-**
-*/
+ * SGI FREE SOFTWARE LICENSE B (Version 2.0, Sept. 18, 2008)
+ * Copyright (C) 1991-2000 Silicon Graphics, Inc. All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice including the dates of first publication and
+ * either this permission notice or a reference to
+ * http://oss.sgi.com/projects/FreeB/
+ * shall be included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * SILICON GRAPHICS, INC. BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
+ * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ * Except as contained in this notice, the name of Silicon Graphics, Inc.
+ * shall not be used in advertising or otherwise to promote the sale, use or
+ * other dealings in this Software without prior written authorization from
+ * Silicon Graphics, Inc.
+ */
 
 #include "gluos.h"
 #include <math.h>
@@ -166,74 +161,57 @@ static void __gluMultMatrixVecd(const GLdouble matrix[16], const GLdouble in[4],
 }
 
 /*
-** inverse = invert(src)
-** New, faster implementation by Shan Hao Bo, April 2006.
+** Invert 4x4 matrix.
+** Contributed by David Moore (See Mesa bug #6748)
 */
-static int __gluInvertMatrixd(const GLdouble src[16], GLdouble inverse[16])
+static int __gluInvertMatrixd(const GLdouble m[16], GLdouble invOut[16])
 {
-	int i, j, k;
-	double t;
-	GLdouble temp[4][4];
-	 
-	for (i=0; i<4; i++) {
-		for (j=0; j<4; j++) {
-		    temp[i][j] = src[i*4+j];
-		}
-	}
-	__gluMakeIdentityd(inverse);
-	
-	for (i = 0; i < 4; i++) {
-		if (temp[i][i] == 0.0f) {
-		    /*
-		    ** Look for non-zero element in column
-		    */
-		    for (j = i + 1; j < 4; j++) {
-				if (temp[j][i] != 0.0f) {
-				    break;
-				}
-		    }
-		
-		    if (j != 4) {
-				/*
-				 ** Swap rows.
-				 */
-				for (k = 0; k < 4; k++) {
-				    t = temp[i][k];
-				    temp[i][k] = temp[j][k];
-				    temp[j][k] = t;
-			
-				    t = inverse[i*4+k];
-				    inverse[i*4+k] = inverse[j*4+k];
-				    inverse[j*4+k] = t;
-				}
-		    }
-		    else {
-				/*
-				** No non-zero pivot.  The matrix is singular, 
-which shouldn't
-				** happen.  This means the user gave us a bad 
-matrix.
-				*/
-				return GL_FALSE;
-		    }
-		}
-		
-		t = 1.0f / temp[i][i];
-		for (k = 0; k < 4; k++) {
-		    temp[i][k] *= t;
-		    inverse[i*4+k] *= t;
-		}
-		for (j = 0; j < 4; j++) {
-		    if (j != i) {
-				t = temp[j][i];
-				for (k = 0; k < 4; k++) {
-					    temp[j][k] -= temp[i][k]*t;
-					    inverse[j*4+k] -= inverse[i*4+k]*t;
-				}
-		    }
-		}
-	}
-	return GL_TRUE;
+    double inv[16], det;
+    int i;
+
+    inv[0] =   m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15]
+             + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
+    inv[4] =  -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15]
+             - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
+    inv[8] =   m[4]*m[9]*m[15] - m[4]*m[11]*m[13] - m[8]*m[5]*m[15]
+             + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9];
+    inv[12] = -m[4]*m[9]*m[14] + m[4]*m[10]*m[13] + m[8]*m[5]*m[14]
+             - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9];
+    inv[1] =  -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15]
+             - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
+    inv[5] =   m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15]
+             + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
+    inv[9] =  -m[0]*m[9]*m[15] + m[0]*m[11]*m[13] + m[8]*m[1]*m[15]
+             - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9];
+    inv[13] =  m[0]*m[9]*m[14] - m[0]*m[10]*m[13] - m[8]*m[1]*m[14]
+             + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9];
+    inv[2] =   m[1]*m[6]*m[15] - m[1]*m[7]*m[14] - m[5]*m[2]*m[15]
+             + m[5]*m[3]*m[14] + m[13]*m[2]*m[7] - m[13]*m[3]*m[6];
+    inv[6] =  -m[0]*m[6]*m[15] + m[0]*m[7]*m[14] + m[4]*m[2]*m[15]
+             - m[4]*m[3]*m[14] - m[12]*m[2]*m[7] + m[12]*m[3]*m[6];
+    inv[10] =  m[0]*m[5]*m[15] - m[0]*m[7]*m[13] - m[4]*m[1]*m[15]
+             + m[4]*m[3]*m[13] + m[12]*m[1]*m[7] - m[12]*m[3]*m[5];
+    inv[14] = -m[0]*m[5]*m[14] + m[0]*m[6]*m[13] + m[4]*m[1]*m[14]
+             - m[4]*m[2]*m[13] - m[12]*m[1]*m[6] + m[12]*m[2]*m[5];
+    inv[3] =  -m[1]*m[6]*m[11] + m[1]*m[7]*m[10] + m[5]*m[2]*m[11]
+             - m[5]*m[3]*m[10] - m[9]*m[2]*m[7] + m[9]*m[3]*m[6];
+    inv[7] =   m[0]*m[6]*m[11] - m[0]*m[7]*m[10] - m[4]*m[2]*m[11]
+             + m[4]*m[3]*m[10] + m[8]*m[2]*m[7] - m[8]*m[3]*m[6];
+    inv[11] = -m[0]*m[5]*m[11] + m[0]*m[7]*m[9] + m[4]*m[1]*m[11]
+             - m[4]*m[3]*m[9] - m[8]*m[1]*m[7] + m[8]*m[3]*m[5];
+    inv[15] =  m[0]*m[5]*m[10] - m[0]*m[6]*m[9] - m[4]*m[1]*m[10]
+             + m[4]*m[2]*m[9] + m[8]*m[1]*m[6] - m[8]*m[2]*m[5];
+
+    det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12];
+    if (det == 0)
+        return GL_FALSE;
+
+    det = 1.0 / det;
+
+    for (i = 0; i < 16; i++)
+        invOut[i] = inv[i] * det;
+
+    return GL_TRUE;
 }
 
 static void __gluMultMatricesd(const GLdouble a[16], const GLdouble b[16],

@@ -36,9 +36,18 @@
 #include "pipe/p_state.h"
 
 
-
-#define MAX_WIDTH 1024
-#define MAX_HEIGHT 1024
+#if DEBUG
+/* These debug macros use the unusual construction ", ##__VA_ARGS__"
+ * which expands to the expected comma + args if variadic arguments
+ * are supplied, but swallows the comma if there are no variadic
+ * arguments (which avoids syntax errors that would otherwise occur).
+ */
+#define D_PRINTF(flag, format,...) \
+   if (spu.init.debug_flags & (flag)) \
+      printf("SPU %u: " format, spu.init.id, ##__VA_ARGS__)
+#else
+#define D_PRINTF(...)
+#endif
 
 
 /**
@@ -61,8 +70,11 @@ typedef union {
 
 
 /** Function for sampling textures */
-typedef vector float (*spu_sample_texture_func)(uint unit,
-                                                vector float texcoord);
+typedef void (*spu_sample_texture_2d_func)(vector float s,
+                                           vector float t,
+                                           uint unit, uint level, uint face,
+                                           vector float colors[4]);
+
 
 /** Function for performing per-fragment ops */
 typedef void (*spu_fragment_ops_func)(uint x, uint y,
@@ -76,9 +88,9 @@ typedef void (*spu_fragment_ops_func)(uint x, uint y,
                                       vector unsigned int mask);
 
 /** Function for running fragment program */
-typedef void (*spu_fragment_program_func)(vector float *inputs,
-                                          vector float *outputs,
-                                          vector float *constants);
+typedef vector unsigned int (*spu_fragment_program_func)(vector float *inputs,
+                                                         vector float *outputs,
+                                                         vector float *constants);
 
 
 struct spu_framebuffer
@@ -98,15 +110,27 @@ struct spu_framebuffer
 } ALIGN16_ATTRIB;
 
 
-struct spu_texture
+/** per-texture level info */
+struct spu_texture_level
 {
    void *start;
-   ushort width, height;
+   ushort width, height, depth;
    ushort tiles_per_row;
-   vector float tex_size;
-   vector unsigned int tex_size_mask; /**< == int(size - 1) */
-   vector unsigned int tex_size_x_mask; /**< == int(size - 1) */
-   vector unsigned int tex_size_y_mask; /**< == int(size - 1) */
+   uint bytes_per_image;
+   /** texcoord scale factors */
+   vector float scale_s, scale_t, scale_r;
+   /** texcoord masks (if REPEAT then size-1, else ~0) */
+   vector signed int mask_s, mask_t, mask_r;
+   /** texcoord clamp limits */
+   vector signed int max_s, max_t, max_r;
+} ALIGN16_ATTRIB;
+
+
+struct spu_texture
+{
+   struct spu_texture_level level[CELL_MAX_TEXTURE_LEVELS];
+   uint max_level;
+   uint target;  /**< PIPE_TEXTURE_x */
 } ALIGN16_ATTRIB;
 
 
@@ -124,7 +148,9 @@ struct spu_global
    struct spu_framebuffer fb;
    struct pipe_depth_stencil_alpha_state depth_stencil_alpha;
    struct pipe_blend_state blend;
+   struct pipe_blend_color blend_color;
    struct pipe_sampler_state sampler[PIPE_MAX_SAMPLERS];
+   struct pipe_rasterizer_state rasterizer;
    struct spu_texture texture[PIPE_MAX_SAMPLERS];
    struct vertex_info vertex_info;
 
@@ -133,39 +159,38 @@ struct spu_global
    tile_t ztile ALIGN16_ATTRIB;
 
    /** Read depth/stencil tiles? */
-   boolean read_depth;
-   boolean read_stencil;
+   boolean read_depth_stencil;
 
    /** Current tiles' status */
    ubyte cur_ctile_status, cur_ztile_status;
 
    /** Status of all tiles in framebuffer */
-   ubyte ctile_status[MAX_HEIGHT/TILE_SIZE][MAX_WIDTH/TILE_SIZE] ALIGN16_ATTRIB;
-   ubyte ztile_status[MAX_HEIGHT/TILE_SIZE][MAX_WIDTH/TILE_SIZE] ALIGN16_ATTRIB;
+   ubyte ctile_status[CELL_MAX_HEIGHT/TILE_SIZE][CELL_MAX_WIDTH/TILE_SIZE] ALIGN16_ATTRIB;
+   ubyte ztile_status[CELL_MAX_HEIGHT/TILE_SIZE][CELL_MAX_WIDTH/TILE_SIZE] ALIGN16_ATTRIB;
 
-   /** Current fragment ops machine code */
-   uint fragment_ops_code[SPU_MAX_FRAGMENT_OPS_INSTS];
-   /** Current fragment ops function */
-   spu_fragment_ops_func fragment_ops;
+   /** Current fragment ops machine code, at 8-byte boundary */
+   uint *fragment_ops_code;
+   uint fragment_ops_code_size;
+   /** Current fragment ops functions, 0 = frontfacing, 1 = backfacing */
+   spu_fragment_ops_func fragment_ops[2];
 
-   /** Current fragment program machine code */
-   uint fragment_program_code[SPU_MAX_FRAGMENT_PROGRAM_INSTS];
+   /** Current fragment program machine code, at 8-byte boundary */
+   uint fragment_program_code[SPU_MAX_FRAGMENT_PROGRAM_INSTS] ALIGN8_ATTRIB;
    /** Current fragment ops function */
    spu_fragment_program_func fragment_program;
 
    /** Current texture sampler function */
-   spu_sample_texture_func sample_texture[CELL_MAX_SAMPLERS];
+   spu_sample_texture_2d_func sample_texture_2d[CELL_MAX_SAMPLERS];
+   spu_sample_texture_2d_func min_sample_texture_2d[CELL_MAX_SAMPLERS];
+   spu_sample_texture_2d_func mag_sample_texture_2d[CELL_MAX_SAMPLERS];
 
-   /** Fragment program constants (XXX preliminary/used) */
-#define MAX_CONSTANTS 32
-   vector float constants[MAX_CONSTANTS];
+   /** Fragment program constants */
+   vector float constants[4 * CELL_MAX_CONSTANTS];
 
 } ALIGN16_ATTRIB;
 
 
 extern struct spu_global spu;
-extern boolean Debug;
-
 
 
 
@@ -184,7 +209,7 @@ extern boolean Debug;
 #define TAG_DCACHE1           21
 #define TAG_DCACHE2           22
 #define TAG_DCACHE3           23
-
+#define TAG_FENCE             24
 
 
 static INLINE void

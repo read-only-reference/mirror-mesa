@@ -33,7 +33,6 @@
 
 #include "brw_context.h"
 #include "brw_state.h"
-#include "bufmgr.h"
 #include "intel_batchbuffer.h"
 
 /* This is used to initialize brw->state.atoms[].  We could use this
@@ -46,8 +45,6 @@ const struct brw_tracked_state *atoms[] =
 {
    &brw_check_fallback,
 
-   &brw_tnl_vertprog,
-   &brw_active_vertprog,
    &brw_wm_input_sizes,
    &brw_vs_prog,
    &brw_gs_prog, 
@@ -80,19 +77,17 @@ const struct brw_tracked_state *atoms[] =
     */
    &brw_invarient_state,
    &brw_state_base_address,
-   &brw_pipe_control,
 
    &brw_binding_table_pointers,
    &brw_blend_constant_color,
 
-   &brw_drawing_rect,
    &brw_depthbuffer,
 
    &brw_polygon_stipple,
    &brw_polygon_stipple_offset,
 
    &brw_line_stipple,
-
+   &brw_aa_line_parameters,
    /* Ordering of the commands below is documented as fixed.  
     */
 #if 0
@@ -103,6 +98,9 @@ const struct brw_tracked_state *atoms[] =
    &brw_psp_urb_cbs,
 #endif
 
+   &brw_drawing_rect,
+   &brw_indices,
+   &brw_vertices,
 
    NULL,			/* brw_constant_buffer */
 };
@@ -112,8 +110,7 @@ void brw_init_state( struct brw_context *brw )
 {
    GLuint i;
 
-   brw_init_pools(brw);
-   brw_init_caches(brw);
+   brw_init_cache(brw);
 
    brw->state.atoms = _mesa_malloc(sizeof(atoms));
    brw->state.nr_atoms = sizeof(atoms)/sizeof(*atoms);
@@ -138,9 +135,8 @@ void brw_destroy_state( struct brw_context *brw )
       brw->state.atoms = NULL;
    }
 
-   brw_destroy_caches(brw);
+   brw_destroy_cache(brw);
    brw_destroy_batch_cache(brw);
-   brw_destroy_pools(brw);   
 }
 
 /***********************************************************************
@@ -172,20 +168,34 @@ static void xor_states( struct brw_state_flags *result,
    result->cache = a->cache ^ b->cache;
 }
 
+static void
+brw_clear_validated_bos(struct brw_context *brw)
+{
+   int i;
+
+   /* Clear the last round of validated bos */
+   for (i = 0; i < brw->state.validated_bo_count; i++) {
+      dri_bo_unreference(brw->state.validated_bos[i]);
+      brw->state.validated_bos[i] = NULL;
+   }
+   brw->state.validated_bo_count = 0;
+}
 
 /***********************************************************************
  * Emit all state:
  */
 void brw_validate_state( struct brw_context *brw )
 {
+   struct intel_context *intel = &brw->intel;
    struct brw_state_flags *state = &brw->state.dirty;
    GLuint i;
+
+   brw_clear_validated_bos(brw);
 
    state->mesa |= brw->intel.NewGLState;
    brw->intel.NewGLState = 0;
 
-   if (brw->wrap)
-      state->brw |= BRW_NEW_CONTEXT;
+   brw_add_validated_bo(brw, intel->batch->buf);
 
    if (brw->emit_state_always) {
       state->mesa |= ~0;
@@ -201,6 +211,10 @@ void brw_validate_state( struct brw_context *brw )
       brw->state.dirty.brw |= BRW_NEW_FRAGMENT_PROGRAM;
    }
 
+   if (brw->vertex_program != brw->attribs.VertexProgram->_Current) {
+      brw->vertex_program = brw->attribs.VertexProgram->_Current;
+      brw->state.dirty.brw |= BRW_NEW_VERTEX_PROGRAM;
+   }
 
    if (state->mesa == 0 &&
        state->cache == 0 &&
@@ -210,13 +224,30 @@ void brw_validate_state( struct brw_context *brw )
    if (brw->state.dirty.brw & BRW_NEW_CONTEXT)
       brw_clear_batch_cache_flush(brw);
 
+   brw->intel.Fallback = 0;
 
-   /* Make an early reference to the state pools, as we don't cope
-    * well with them being evicted from here down.
-    */
-   (void)bmBufferOffset(&brw->intel, brw->pool[BRW_GS_POOL].buffer);
-   (void)bmBufferOffset(&brw->intel, brw->pool[BRW_SS_POOL].buffer);
-   (void)bmBufferOffset(&brw->intel, brw->intel.batch->buffer);
+   /* do prepare stage for all atoms */
+   for (i = 0; i < Elements(atoms); i++) {
+      const struct brw_tracked_state *atom = brw->state.atoms[i];
+
+      if (brw->intel.Fallback)
+         break;
+
+      if (check_state(state, &atom->dirty)) {
+         if (atom->prepare) {
+            atom->prepare(brw);
+        }
+      }
+   }
+}
+
+
+void brw_upload_state(struct brw_context *brw)
+{
+   struct brw_state_flags *state = &brw->state.dirty;
+   int i;
+
+   brw_clear_validated_bos(brw);
 
    if (INTEL_DEBUG) {
       /* Debug version which enforces various sanity checks on the
@@ -234,12 +265,14 @@ void brw_validate_state( struct brw_context *brw )
 	 assert(atom->dirty.mesa ||
 		atom->dirty.brw ||
 		atom->dirty.cache);
-	 assert(atom->update);
+
+	 if (brw->intel.Fallback)
+	    break;
 
 	 if (check_state(state, &atom->dirty)) {
-	    brw->state.atoms[i]->update( brw );
-	    
-/* 	    emit_foo(brw); */
+	    if (atom->emit) {
+	       atom->emit( brw );
+	    }
 	 }
 
 	 accumulate_state(&examined, &atom->dirty);
@@ -255,10 +288,19 @@ void brw_validate_state( struct brw_context *brw )
    }
    else {
       for (i = 0; i < Elements(atoms); i++) {	 
-	 if (check_state(state, &brw->state.atoms[i]->dirty))
-	    brw->state.atoms[i]->update( brw );
+	 const struct brw_tracked_state *atom = brw->state.atoms[i];
+
+	 if (brw->intel.Fallback)
+	    break;
+
+	 if (check_state(state, &atom->dirty)) {
+	    if (atom->emit) {
+	       atom->emit( brw );
+	    }
+	 }
       }
    }
 
-   memset(state, 0, sizeof(*state));
+   if (!brw->intel.Fallback)
+      memset(state, 0, sizeof(*state));
 }

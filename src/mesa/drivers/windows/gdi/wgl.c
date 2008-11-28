@@ -54,7 +54,7 @@
 #include <windows.h>
 
 #endif
-
+#include "config.h"
 #include "glapi.h"
 #include "GL/wmesa.h"   /* protos for wmesa* functions */
 
@@ -69,10 +69,12 @@ struct __pixelformat__
     GLboolean doubleBuffered;
 };
 
+
+
 /* These are the PFD's supported by this driver. */
 struct __pixelformat__	pfd[] =
 {
-#if 0
+#if 0 
     /* Double Buffer, alpha */
     {	
 	{	
@@ -86,7 +88,7 @@ struct __pixelformat__	pfd[] =
 	    8, 16,	
 	    8, 24,
 	    0, 0, 0, 0, 0,	
-	    16,	8,	
+	    DEFAULT_SOFTWARE_DEPTH_BITS,	8,	
 	    0, 0, 0,	
 	    0, 0, 0 
 	},
@@ -105,13 +107,13 @@ struct __pixelformat__	pfd[] =
 	    8, 16,	
 	    8, 24,
 	    0, 0, 0, 0,	0,	
-	    16,	8,
+	    DEFAULT_SOFTWARE_DEPTH_BITS,	8,	
 	    0, 0, 0,	
 	    0, 0, 0
 	},
         GL_FALSE
     },
-#endif
+#endif 
     /* Double Buffer, no alpha */
     {	
 	{	
@@ -125,7 +127,7 @@ struct __pixelformat__	pfd[] =
 	    8, 16,
 	    0, 0,
 	    0, 0, 0, 0,	0,
-	    16,	8,
+	    DEFAULT_SOFTWARE_DEPTH_BITS,	8,	
 	    0, 0, 0, 
 	    0, 0, 0 
 	},
@@ -144,7 +146,7 @@ struct __pixelformat__	pfd[] =
 	    8, 16,
 	    0, 0,
 	    0, 0, 0, 0,	0,
-	    16,	8,
+	    DEFAULT_SOFTWARE_DEPTH_BITS,	8,	
 	    0, 0, 0,
 	    0, 0, 0 
 	},
@@ -578,6 +580,13 @@ WINGDIAPI BOOL GLAPIENTRY wglUseFontBitmapsA(HDC hdc, DWORD first,
     return success;
 }
 
+WINGDIAPI BOOL GLAPIENTRY wglShareLists(HGLRC hglrc1,
+					HGLRC hglrc2)
+{
+    WMesaShareLists((WMesaContext)hglrc1, (WMesaContext)hglrc2);
+    return(TRUE);
+}
+
 
 
 /* NOT IMPLEMENTED YET */
@@ -595,13 +604,6 @@ WINGDIAPI HGLRC GLAPIENTRY wglCreateLayerContext(HDC hdc,
     (void) hdc; (void) iLayerPlane;
     SetLastError(0);
     return(NULL);
-}
-
-WINGDIAPI BOOL GLAPIENTRY wglShareLists(HGLRC hglrc1,
-					HGLRC hglrc2)
-{
-    (void) hglrc1; (void) hglrc2;
-    return(TRUE);
 }
 
 

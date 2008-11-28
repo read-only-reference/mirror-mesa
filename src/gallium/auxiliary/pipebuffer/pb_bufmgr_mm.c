@@ -29,7 +29,7 @@
  * \file
  * Buffer manager using the old texture memory manager.
  * 
- * \author José Fonseca <jrfonseca@tungstengraphics.com>
+ * \author Jose Fonseca <jrfonseca@tungstengraphics.com>
  */
 
 
@@ -100,7 +100,7 @@ mm_buffer_destroy(struct pb_buffer *buf)
    assert(buf->base.refcount == 0);
    
    pipe_mutex_lock(mm->mutex);
-   mmFreeMem(mm_buf->block);
+   u_mmFreeMem(mm_buf->block);
    FREE(buf);
    pipe_mutex_unlock(mm->mutex);
 }
@@ -124,6 +124,27 @@ mm_buffer_unmap(struct pb_buffer *buf)
 }
 
 
+static enum pipe_error 
+mm_buffer_validate(struct pb_buffer *buf, 
+                   struct pb_validate *vl,
+                   unsigned flags)
+{
+   struct mm_buffer *mm_buf = mm_buffer(buf);
+   struct mm_pb_manager *mm = mm_buf->mgr;
+   return pb_validate(mm->buffer, vl, flags);
+}
+
+
+static void
+mm_buffer_fence(struct pb_buffer *buf, 
+                struct pipe_fence_handle *fence)
+{
+   struct mm_buffer *mm_buf = mm_buffer(buf);
+   struct mm_pb_manager *mm = mm_buf->mgr;
+   pb_fence(mm->buffer, fence);
+}
+
+
 static void
 mm_buffer_get_base_buffer(struct pb_buffer *buf,
                           struct pb_buffer **base_buf,
@@ -141,6 +162,8 @@ mm_buffer_vtbl = {
       mm_buffer_destroy,
       mm_buffer_map,
       mm_buffer_unmap,
+      mm_buffer_validate,
+      mm_buffer_fence,
       mm_buffer_get_base_buffer
 };
 
@@ -175,14 +198,14 @@ mm_bufmgr_create_buffer(struct pb_manager *mgr,
    
    mm_buf->mgr = mm;
    
-   mm_buf->block = mmAllocMem(mm->heap, size, mm->align2, 0);
+   mm_buf->block = u_mmAllocMem(mm->heap, size, mm->align2, 0);
    if(!mm_buf->block) {
       debug_printf("warning: heap full\n");
 #if 0
       mmDumpMemInfo(mm->heap);
 #endif
       
-      mm_buf->block = mmAllocMem(mm->heap, size, mm->align2, 0);
+      mm_buf->block = u_mmAllocMem(mm->heap, size, mm->align2, 0);
       if(!mm_buf->block) {
          FREE(mm_buf);
          pipe_mutex_unlock(mm->mutex);
@@ -213,7 +236,7 @@ mm_bufmgr_destroy(struct pb_manager *mgr)
    
    pipe_mutex_lock(mm->mutex);
 
-   mmDestroy(mm->heap);
+   u_mmDestroy(mm->heap);
    
    pb_unmap(mm->buffer);
    pb_reference(&mm->buffer, NULL);
@@ -254,7 +277,7 @@ mm_bufmgr_create_from_buffer(struct pb_buffer *buffer,
    if(!mm->map)
       goto failure;
 
-   mm->heap = mmInit(0, size); 
+   mm->heap = u_mmInit(0, size); 
    if (!mm->heap)
       goto failure;
 
@@ -262,7 +285,7 @@ mm_bufmgr_create_from_buffer(struct pb_buffer *buffer,
    
 failure:
 if(mm->heap)
-   mmDestroy(mm->heap);
+   u_mmDestroy(mm->heap);
    if(mm->map)
       pb_unmap(mm->buffer);
    if(mm)

@@ -131,7 +131,7 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
 	       ADD_3V(value, p, eye_z);
 	       NORMALIZE_3FV(value);
 	       value[3] = 1.0;
-            }						  
+            }
             return;
          default:
             _mesa_problem(ctx, "Invalid light state in fetch_state");
@@ -235,11 +235,11 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
          }
       }
    case STATE_TEXENV_COLOR:
-      {		
+      {
          /* state[1] is the texture unit */
          const GLuint unit = (GLuint) state[1];
          COPY_4V(value, ctx->Texture.Unit[unit].EnvColor);
-      }			
+      }
       return;
    case STATE_FOG_COLOR:
       COPY_4V(value, ctx->Fog.Color);
@@ -369,7 +369,7 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
          }
       }
       return;
-		
+
    case STATE_VERTEX_PROGRAM:
       {
          /* state[1] = {STATE_ENV, STATE_LOCAL} */
@@ -475,7 +475,6 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
       }						  
 
 
-
       case STATE_PT_SCALE:
          value[0] = ctx->Pixel.RedScale;
          value[1] = ctx->Pixel.GreenScale;
@@ -494,6 +493,19 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
       case STATE_PCM_BIAS:
          COPY_4V(value, ctx->Pixel.PostColorMatrixBias);
          break;
+      case STATE_SHADOW_AMBIENT:
+         {
+            const int unit = (int) state[2];
+            const struct gl_texture_object *texObj
+               = ctx->Texture.Unit[unit]._Current;
+            if (texObj) {
+               value[0] = texObj->ShadowAmbient;
+               value[1] = texObj->ShadowAmbient;
+               value[2] = texObj->ShadowAmbient;
+               value[3] = texObj->ShadowAmbient;
+            }
+         }
+         return;
 
          /* XXX: make sure new tokens added here are also handled in the 
           * _mesa_program_state_flags() switch, below.
@@ -578,6 +590,7 @@ _mesa_program_state_flags(const gl_state_index state[STATE_LENGTH])
          return _NEW_MODELVIEW;
 
       case STATE_TEXRECT_SCALE:
+      case STATE_SHADOW_AMBIENT:
 	 return _NEW_TEXTURE;
       case STATE_FOG_PARAMS_OPTIMIZED:
 	 return _NEW_FOG;
@@ -618,6 +631,9 @@ append(char *dst, const char *src)
 }
 
 
+/**
+ * Convert token 'k' to a string, append it only 'dst' string.
+ */
 static void
 append_token(char *dst, gl_state_index k)
 {
@@ -750,11 +766,30 @@ append_token(char *dst, gl_state_index k)
    case STATE_LOCAL:
       append(dst, "local");
       break;
+   /* BEGIN internal state vars */
+   case STATE_INTERNAL:
+      append(dst, "(internal)");
+      break;
    case STATE_NORMAL_SCALE:
       append(dst, "normalScale");
       break;
-   case STATE_INTERNAL:
-      append(dst, "(internal)");
+   case STATE_TEXRECT_SCALE:
+      append(dst, "texrectScale");
+      break;
+   case STATE_FOG_PARAMS_OPTIMIZED:
+      append(dst, "fogParamsOptimized");
+      break;
+   case STATE_LIGHT_SPOT_DIR_NORMALIZED:
+      append(dst, "lightSpotDirNormalized");
+      break;
+   case STATE_LIGHT_POSITION:
+      append(dst, "lightPosition");
+      break;
+   case STATE_LIGHT_POSITION_NORMALIZED:
+      append(dst, "light.position.normalized");
+      break;
+   case STATE_LIGHT_HALF_VECTOR:
+      append(dst, "lightHalfVector");
       break;
    case STATE_PT_SCALE:
       append(dst, "PTscale");
@@ -767,6 +802,9 @@ append_token(char *dst, gl_state_index k)
       break;
    case STATE_PCM_BIAS:
       append(dst, "PCMbias");
+      break;
+   case STATE_SHADOW_AMBIENT:
+      append(dst, "ShadowAmbient");
       break;
    default:
       ;
@@ -802,16 +840,16 @@ _mesa_program_state_string(const gl_state_index state[STATE_LENGTH])
    char tmp[30];
 
    append(str, "state.");
-   append_token(str, (gl_state_index) state[0]);
+   append_token(str, state[0]);
 
    switch (state[0]) {
    case STATE_MATERIAL:
       append_face(str, state[1]);
-      append_token(str, (gl_state_index) state[2]);
+      append_token(str, state[2]);
       break;
    case STATE_LIGHT:
       append_index(str, state[1]); /* light number [i]. */
-      append_token(str, (gl_state_index) state[2]); /* coefficients */
+      append_token(str, state[2]); /* coefficients */
       break;
    case STATE_LIGHTMODEL_AMBIENT:
       append(str, "lightmodel.ambient");
@@ -827,11 +865,11 @@ _mesa_program_state_string(const gl_state_index state[STATE_LENGTH])
    case STATE_LIGHTPROD:
       append_index(str, state[1]); /* light number [i]. */
       append_face(str, state[2]);
-      append_token(str, (gl_state_index) state[3]);
+      append_token(str, state[3]);
       break;
    case STATE_TEXGEN:
       append_index(str, state[1]); /* tex unit [i] */
-      append_token(str, (gl_state_index) state[2]); /* plane coef */
+      append_token(str, state[2]); /* plane coef */
       break;
    case STATE_TEXENV_COLOR:
       append_index(str, state[1]); /* tex unit [i] */
@@ -853,11 +891,11 @@ _mesa_program_state_string(const gl_state_index state[STATE_LENGTH])
          /* state[2] = first row to fetch */
          /* state[3] = last row to fetch */
          /* state[4] = transpose, inverse or invtrans */
-         const gl_state_index mat = (gl_state_index) state[0];
+         const gl_state_index mat = state[0];
          const GLuint index = (GLuint) state[1];
          const GLuint firstRow = (GLuint) state[2];
          const GLuint lastRow = (GLuint) state[3];
-         const gl_state_index modifier = (gl_state_index) state[4];
+         const gl_state_index modifier = state[4];
          if (index ||
              mat == STATE_TEXTURE_MATRIX ||
              mat == STATE_PROGRAM_MATRIX)
@@ -885,10 +923,11 @@ _mesa_program_state_string(const gl_state_index state[STATE_LENGTH])
    case STATE_VERTEX_PROGRAM:
       /* state[1] = {STATE_ENV, STATE_LOCAL} */
       /* state[2] = parameter index          */
-      append_token(str, (gl_state_index) state[1]);
+      append_token(str, state[1]);
       append_index(str, state[2]);
       break;
    case STATE_INTERNAL:
+      append_token(str, state[1]);
       break;
    default:
       _mesa_problem(NULL, "Invalid state in _mesa_program_state_string");
@@ -918,10 +957,101 @@ _mesa_load_state_parameters(GLcontext *ctx,
 
    for (i = 0; i < paramList->NumParameters; i++) {
       if (paramList->Parameters[i].Type == PROGRAM_STATE_VAR) {
-         _mesa_fetch_state(ctx, 
+         _mesa_fetch_state(ctx,
 			   (gl_state_index *) paramList->Parameters[i].StateIndexes,
                            paramList->ParameterValues[i]);
       }
    }
 }
 
+
+/**
+ * Copy the 16 elements of a matrix into four consecutive program
+ * registers starting at 'pos'.
+ */
+static void
+load_matrix(GLfloat registers[][4], GLuint pos, const GLfloat mat[16])
+{
+   GLuint i;
+   for (i = 0; i < 4; i++) {
+      registers[pos + i][0] = mat[0 + i];
+      registers[pos + i][1] = mat[4 + i];
+      registers[pos + i][2] = mat[8 + i];
+      registers[pos + i][3] = mat[12 + i];
+   }
+}
+
+
+/**
+ * As above, but transpose the matrix.
+ */
+static void
+load_transpose_matrix(GLfloat registers[][4], GLuint pos,
+                      const GLfloat mat[16])
+{
+   MEMCPY(registers[pos], mat, 16 * sizeof(GLfloat));
+}
+
+
+/**
+ * Load current vertex program's parameter registers with tracked
+ * matrices (if NV program).  This only needs to be done per
+ * glBegin/glEnd, not per-vertex.
+ */
+void
+_mesa_load_tracked_matrices(GLcontext *ctx)
+{
+   GLuint i;
+
+   for (i = 0; i < MAX_NV_VERTEX_PROGRAM_PARAMS / 4; i++) {
+      /* point 'mat' at source matrix */
+      GLmatrix *mat;
+      if (ctx->VertexProgram.TrackMatrix[i] == GL_MODELVIEW) {
+         mat = ctx->ModelviewMatrixStack.Top;
+      }
+      else if (ctx->VertexProgram.TrackMatrix[i] == GL_PROJECTION) {
+         mat = ctx->ProjectionMatrixStack.Top;
+      }
+      else if (ctx->VertexProgram.TrackMatrix[i] == GL_TEXTURE) {
+         mat = ctx->TextureMatrixStack[ctx->Texture.CurrentUnit].Top;
+      }
+      else if (ctx->VertexProgram.TrackMatrix[i] == GL_COLOR) {
+         mat = ctx->ColorMatrixStack.Top;
+      }
+      else if (ctx->VertexProgram.TrackMatrix[i]==GL_MODELVIEW_PROJECTION_NV) {
+         /* XXX verify the combined matrix is up to date */
+         mat = &ctx->_ModelProjectMatrix;
+      }
+      else if (ctx->VertexProgram.TrackMatrix[i] >= GL_MATRIX0_NV &&
+               ctx->VertexProgram.TrackMatrix[i] <= GL_MATRIX7_NV) {
+         GLuint n = ctx->VertexProgram.TrackMatrix[i] - GL_MATRIX0_NV;
+         ASSERT(n < MAX_PROGRAM_MATRICES);
+         mat = ctx->ProgramMatrixStack[n].Top;
+      }
+      else {
+         /* no matrix is tracked, but we leave the register values as-is */
+         assert(ctx->VertexProgram.TrackMatrix[i] == GL_NONE);
+         continue;
+      }
+
+      /* load the matrix values into sequential registers */
+      if (ctx->VertexProgram.TrackMatrixTransform[i] == GL_IDENTITY_NV) {
+         load_matrix(ctx->VertexProgram.Parameters, i*4, mat->m);
+      }
+      else if (ctx->VertexProgram.TrackMatrixTransform[i] == GL_INVERSE_NV) {
+         _math_matrix_analyse(mat); /* update the inverse */
+         ASSERT(!_math_matrix_is_dirty(mat));
+         load_matrix(ctx->VertexProgram.Parameters, i*4, mat->inv);
+      }
+      else if (ctx->VertexProgram.TrackMatrixTransform[i] == GL_TRANSPOSE_NV) {
+         load_transpose_matrix(ctx->VertexProgram.Parameters, i*4, mat->m);
+      }
+      else {
+         assert(ctx->VertexProgram.TrackMatrixTransform[i]
+                == GL_INVERSE_TRANSPOSE_NV);
+         _math_matrix_analyse(mat); /* update the inverse */
+         ASSERT(!_math_matrix_is_dirty(mat));
+         load_transpose_matrix(ctx->VertexProgram.Parameters, i*4, mat->inv);
+      }
+   }
+}

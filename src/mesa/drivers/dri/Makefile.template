@@ -13,11 +13,6 @@ COMMON_SOURCES = $(COMMON_GALLIUM_SOURCES) \
         ../common/texmem.c \
         ../common/drirenderbuffer.c
 
-COMMON_BM_SOURCES = \
-	../common/dri_bufmgr.c \
-	../common/dri_drmpool.c
-
-
 ifeq ($(WINDOW_SYSTEM),dri)
 WINOBJ=
 WINLIB=
@@ -47,15 +42,7 @@ SHARED_INCLUDES = \
 	-I$(TOP)/src/mesa/drivers/dri/common \
 	-Iserver \
 	-I$(TOP)/include \
-	-I$(TOP)/include/GL/internal \
 	-I$(TOP)/src/mesa \
-	-I$(TOP)/src/mesa/main \
-	-I$(TOP)/src/mesa/glapi \
-	-I$(TOP)/src/mesa/math \
-	-I$(TOP)/src/mesa/transform \
-	-I$(TOP)/src/mesa/shader \
-	-I$(TOP)/src/mesa/swrast \
-	-I$(TOP)/src/mesa/swrast_setup \
 	-I$(TOP)/src/egl/main \
 	-I$(TOP)/src/egl/drivers/dri \
 	$(LIBDRM_CFLAGS)
@@ -72,12 +59,12 @@ SHARED_INCLUDES = \
 
 ##### TARGETS #####
 
-default: depend symlinks $(LIBNAME) $(TOP)/$(LIB_DIR)/$(LIBNAME)
+default: symlinks depend $(LIBNAME) $(TOP)/$(LIB_DIR)/$(LIBNAME)
 
 
 $(LIBNAME): $(OBJECTS) $(MESA_MODULES) $(PIPE_DRIVERS) $(WINOBJ) Makefile $(TOP)/src/mesa/drivers/dri/Makefile.template
-	$(TOP)/bin/mklib -noprefix -o $@ \
-		$(OBJECTS) $(PIPE_DRIVERS) $(MESA_MODULES)  $(WINOBJ) $(DRI_LIB_DEPS)
+	$(MKLIB) -o $@ -noprefix -linker '$(CC)' -ldflags '$(LDFLAGS)' \
+		$(OBJECTS) $(PIPE_DRIVERS) $(MESA_MODULES) $(WINOBJ) $(DRI_LIB_DEPS)
 
 
 $(TOP)/$(LIB_DIR)/$(LIBNAME): $(LIBNAME)
@@ -88,7 +75,7 @@ depend: $(C_SOURCES) $(ASM_SOURCES) $(SYMLINKS)
 	rm -f depend
 	touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(DRIVER_DEFINES) $(INCLUDES) $(C_SOURCES) \
-		$(ASM_SOURCES) 2> /dev/null
+		$(ASM_SOURCES)
 
 
 # Emacs tags
@@ -103,8 +90,8 @@ clean:
 
 
 install: $(LIBNAME)
-	$(INSTALL) -d $(DRI_DRIVER_INSTALL_DIR)
-	$(INSTALL) -m 755 $(LIBNAME) $(DRI_DRIVER_INSTALL_DIR)
+	$(INSTALL) -d $(DESTDIR)$(DRI_DRIVER_INSTALL_DIR)
+	$(INSTALL) -m 755 $(LIBNAME) $(DESTDIR)$(DRI_DRIVER_INSTALL_DIR)
 
 
-include depend
+-include depend

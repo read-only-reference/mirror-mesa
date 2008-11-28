@@ -36,7 +36,7 @@
 #include "drm.h"
 #include "mach64_drm.h"
 
-#include "mtypes.h"
+#include "main/mtypes.h"
 
 #include "mach64_reg.h"
 
@@ -263,8 +263,6 @@ struct mach64_context {
 
    /* VBI
     */
-   GLuint vbl_seq;
-   GLuint vblank_flags;
    GLuint do_irqs;
 
    /* Configuration cache

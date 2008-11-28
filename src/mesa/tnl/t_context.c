@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.2
+ * Version:  7.2
  *
- * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2008  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -104,10 +104,10 @@ _tnl_InvalidateState( GLcontext *ctx, GLuint new_state )
    const struct gl_vertex_program *vp = ctx->VertexProgram._Current;
    const struct gl_fragment_program *fp = ctx->FragmentProgram._Current;
 
-   if (new_state & (_NEW_HINT)) {
+   if (new_state & (_NEW_HINT | _NEW_PROGRAM)) {
       ASSERT(tnl->AllowVertexFog || tnl->AllowPixelFog);
-      tnl->_DoVertexFog = (tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
-         || !tnl->AllowPixelFog;
+      tnl->_DoVertexFog = ((tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
+         || !tnl->AllowPixelFog) && !fp;
    }
 
    tnl->pipeline.new_state |= new_state;
@@ -136,11 +136,19 @@ _tnl_InvalidateState( GLcontext *ctx, GLuint new_state )
       RENDERINPUTS_SET( tnl->render_inputs_bitset, _TNL_ATTRIB_COLOR_INDEX );
    }
 
-   if (ctx->Fog.Enabled ||
-       ((ctx->FragmentProgram._Active || ctx->FragmentProgram._Current) &&
-        (ctx->FragmentProgram._Current->FogOption != GL_NONE ||
-         (ctx->FragmentProgram._Current->Base.InputsRead & FRAG_BIT_FOGC))))
+   if (ctx->Fog.Enabled) {
+      /* fixed-function fog */
       RENDERINPUTS_SET( tnl->render_inputs_bitset, _TNL_ATTRIB_FOG );
+   }
+   else if (ctx->FragmentProgram._Active || ctx->FragmentProgram._Current) {
+      struct gl_fragment_program *fp = ctx->FragmentProgram._Current;
+      if (fp) {
+         if (fp->FogOption != GL_NONE || (fp->Base.InputsRead & FRAG_BIT_FOGC)) {
+            /* fragment program needs fog coord */
+            RENDERINPUTS_SET( tnl->render_inputs_bitset, _TNL_ATTRIB_FOG );
+         }
+      }
+   }
 
    if (ctx->Polygon.FrontMode != GL_FILL || 
        ctx->Polygon.BackMode != GL_FILL)
@@ -201,8 +209,8 @@ _tnl_allow_vertex_fog( GLcontext *ctx, GLboolean value )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    tnl->AllowVertexFog = value;
-   tnl->_DoVertexFog = (tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
-      || !tnl->AllowPixelFog;
+   tnl->_DoVertexFog = ((tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
+      || !tnl->AllowPixelFog) && !ctx->FragmentProgram._Current;
 
 }
 
@@ -211,7 +219,7 @@ _tnl_allow_pixel_fog( GLcontext *ctx, GLboolean value )
 {
    TNLcontext *tnl = TNL_CONTEXT(ctx);
    tnl->AllowPixelFog = value;
-   tnl->_DoVertexFog = (tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
-      || !tnl->AllowPixelFog;
+   tnl->_DoVertexFog = ((tnl->AllowVertexFog && (ctx->Hint.Fog != GL_NICEST))
+      || !tnl->AllowPixelFog) && !ctx->FragmentProgram._Current;
 }
 

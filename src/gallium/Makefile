@@ -3,6 +3,7 @@ include $(TOP)/configs/current
 
 
 SUBDIRS = auxiliary drivers
+# Note winsys/ needs to be built after src/mesa
 
 
 default: subdirs

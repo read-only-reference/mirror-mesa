@@ -49,7 +49,6 @@ static void TAG(triangle)(GLcontext *ctx, GLuint e0, GLuint e1, GLuint e2 )
    v[1] = &verts[e1];
    v[2] = &verts[e2];
 
-
    if (IND & (SS_TWOSIDE_BIT | SS_OFFSET_BIT | SS_UNFILLED_BIT))
    {
       GLfloat ex = v[0]->attrib[FRAG_ATTRIB_WPOS][0] - v[2]->attrib[FRAG_ATTRIB_WPOS][0];
@@ -61,7 +60,6 @@ static void TAG(triangle)(GLcontext *ctx, GLuint e0, GLuint e1, GLuint e2 )
       if (IND & (SS_TWOSIDE_BIT | SS_UNFILLED_BIT))
       {
 	 facing = (cc < 0.0) ^ ctx->Polygon._FrontBit;
-         ctx->_Facing = facing;
 
 	 if (IND & SS_UNFILLED_BIT)
 	    mode = facing ? ctx->Polygon.BackMode : ctx->Polygon.FrontMode;
@@ -238,14 +236,16 @@ static void TAG(quadfunc)( GLcontext *ctx, GLuint v0,
 {
    if (IND & SS_UNFILLED_BIT) {
       struct vertex_buffer *VB = &TNL_CONTEXT(ctx)->vb;
-      GLubyte ef1 = VB->EdgeFlag[v1];
-      GLubyte ef3 = VB->EdgeFlag[v3];
-      VB->EdgeFlag[v1] = 0;
-      TAG(triangle)( ctx, v0, v1, v3 );
-      VB->EdgeFlag[v1] = ef1;
-      VB->EdgeFlag[v3] = 0;
-      TAG(triangle)( ctx, v1, v2, v3 );
-      VB->EdgeFlag[v3] = ef3;
+      if (VB->EdgeFlag) { /* XXX this test shouldn't be needed (bug 12614) */
+         GLubyte ef1 = VB->EdgeFlag[v1];
+         GLubyte ef3 = VB->EdgeFlag[v3];
+         VB->EdgeFlag[v1] = 0;
+         TAG(triangle)( ctx, v0, v1, v3 );
+         VB->EdgeFlag[v1] = ef1;
+         VB->EdgeFlag[v3] = 0;
+         TAG(triangle)( ctx, v1, v2, v3 );
+         VB->EdgeFlag[v3] = ef3;
+      }
    } else {
       TAG(triangle)( ctx, v0, v1, v3 );
       TAG(triangle)( ctx, v1, v2, v3 );

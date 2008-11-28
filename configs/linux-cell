@@ -5,7 +5,8 @@ include $(TOP)/configs/default
 CONFIG_NAME = linux-cell
 
 
-GALLIUM_DRIVER_DIRS += cell
+# Omiting other gallium drivers:
+GALLIUM_DRIVER_DIRS = cell softpipe
 
 
 # Compiler and flags
@@ -24,9 +25,10 @@ OPT_FLAGS = -O3
 SDK = /opt/cell/sdk/usr
 
 
-CFLAGS = $(OPT_FLAGS) -Wall -Winline -fPIC -m32 -mabi=altivec -maltivec \
+CFLAGS = $(OPT_FLAGS) -Wall -Winline -Wmissing-prototypes \
+	-fPIC -m32 -std=c99 -mabi=altivec -maltivec \
 	-I. -I$(SDK)/include \
-	-DGALLIUM_CELL -DUSE_XSHM
+	-DGALLIUM_CELL -DUSE_XSHM -D_BSD_SOURCE
 
 CXXFLAGS = $(CFLAGS)
 
@@ -53,7 +55,7 @@ SPU_CFLAGS = $(OPT_FLAGS) -W -Wall -Winline -Wmissing-prototypes -Wno-main \
 	-DSPU_MAIN_PARAM_LONG_LONG \
 	-include spu_intrinsics.h
 
-SPU_LFLAGS = -L$(SDK)/spu/lib -Wl,-N -lmisc
+SPU_LFLAGS = -L$(SDK)/spu/lib -Wl,-N -lmisc -lm
 
 SPU_AR = ppu-ar
 SPU_AR_FLAGS = -qcs
