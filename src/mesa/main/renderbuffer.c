@@ -1199,8 +1199,7 @@ _mesa_soft_renderbuffer_storage(GLcontext *ctx, struct gl_renderbuffer *rb,
 
    if (width > 0 && height > 0) {
       /* allocate new buffer storage */
-      rb->Data = malloc(width * height * pixelSize);
-
+      rb->Data = _mesa_malloc(width * height * pixelSize);
       if (rb->Data == NULL) {
          rb->Width = 0;
          rb->Height = 0;

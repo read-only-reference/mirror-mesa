@@ -56,7 +56,6 @@ typedef struct
 {
    intelRegion front;
    intelRegion back;
-   intelRegion third;
    intelRegion depth;
    intelRegion tex;
 
@@ -77,6 +76,7 @@ typedef struct
 
    GLboolean no_hw;
 
+   GLboolean no_vbo;
    int ttm;
    dri_bufmgr *bufmgr;
 

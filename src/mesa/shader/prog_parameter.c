@@ -187,7 +187,6 @@ _mesa_add_named_constant(struct gl_program_parameter_list *paramList,
       return pos;
    }
 #endif
-   size = 4; /** XXX fix */
    return _mesa_add_parameter(paramList, PROGRAM_CONSTANT, name,
                               size, GL_NONE, values, NULL, 0x0);
 }
@@ -424,7 +423,7 @@ _mesa_add_state_reference(struct gl_program_parameter_list *paramList,
                           const gl_state_index stateTokens[STATE_LENGTH])
 {
    const GLuint size = 4; /* XXX fix */
-   char *name;
+   const char *name;
    GLint index;
 
    /* Check if the state reference is already in the list */
@@ -451,7 +450,7 @@ _mesa_add_state_reference(struct gl_program_parameter_list *paramList,
    paramList->StateFlags |= _mesa_program_state_flags(stateTokens);
 
    /* free name string here since we duplicated it in add_parameter() */
-   _mesa_free(name);
+   _mesa_free((void *) name);
 
    return index;
 }

@@ -2,10 +2,9 @@
 #include <stdlib.h>
 #include "eglglobals.h"
 
-struct _egl_global _eglGlobal = 
-{
-   EGL_FALSE
-};
+
+struct _egl_global _eglGlobal = { .Initialized = EGL_FALSE };
+
 
 /**
  * Init the fields in the _eglGlobal struct
@@ -16,11 +15,13 @@ _eglInitGlobals(void)
 {
    if (!_eglGlobal.Initialized) {
       _eglGlobal.Displays = _eglNewHashTable();
+      _eglGlobal.Contexts = _eglNewHashTable();
       _eglGlobal.Surfaces = _eglNewHashTable();
       _eglGlobal.FreeScreenHandle = 1;
       _eglGlobal.Initialized = EGL_TRUE;
 
-      _eglGlobal.ClientAPIsMask = 0x0;
+      _eglGlobal.OpenGLESAPISupported = EGL_TRUE;
+      _eglGlobal.OpenVGAPISupported = EGL_FALSE;
 
       /* XXX temporary */
       _eglGlobal.ThreadInfo = _eglNewThreadInfo();
@@ -36,6 +37,7 @@ _eglDestroyGlobals(void)
 {
    /* XXX TODO walk over table entries, deleting each */
    _eglDeleteHashTable(_eglGlobal.Displays);
+   _eglDeleteHashTable(_eglGlobal.Contexts);
    _eglDeleteHashTable(_eglGlobal.Surfaces);
 }
 
@@ -50,7 +52,7 @@ _eglNewThreadInfo(void)
    if (t) {
       t->CurrentContext = EGL_NO_CONTEXT;
       t->LastError = EGL_SUCCESS;
-      t->CurrentAPI = EGL_OPENGL_ES_API;  /* default, per EGL spec */
+      t->CurrentAPI = EGL_NONE;
    }
    return t;
 }

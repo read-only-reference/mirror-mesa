@@ -98,7 +98,6 @@ _glapi_set_warning_func( _glapi_warning_func func )
 static GLboolean
 warn(void)
 {
-#if !defined(_WIN32_WCE)
    if ((WarnFlag || getenv("MESA_DEBUG") || getenv("LIBGL_DEBUG"))
        && warning_func) {
       return GL_TRUE;
@@ -106,9 +105,6 @@ warn(void)
    else {
       return GL_FALSE;
    }
-#else
-   return GL_FALSE;
-#endif
 }
 
 

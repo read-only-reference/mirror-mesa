@@ -1,4 +1,3 @@
-#ifdef USE_X86_ASM
 #if defined(__i386__) || defined(__386__)
 
 #include "main/imports.h"
@@ -291,7 +290,7 @@ void x86_call( struct x86_function *p, void (*label)())
 void x86_call( struct x86_function *p, struct x86_reg reg)
 {
    emit_1ub(p, 0xff);
-   emit_modrm_noreg(p, 2, reg);
+   emit_modrm(p, reg, reg);
 }
 #endif
 
@@ -1193,9 +1192,3 @@ void x86sse_dummy( void )
 }
 
 #endif
-
-#else  /* USE_X86_ASM */
-
-int x86sse_c_dummy_var; /* silence warning */
-
-#endif /* USE_X86_ASM */

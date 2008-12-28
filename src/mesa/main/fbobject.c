@@ -173,7 +173,7 @@ _mesa_remove_attachment(GLcontext *ctx, struct gl_renderbuffer_attachment *att)
    if (att->Type == GL_TEXTURE) {
       ASSERT(att->Texture);
       if (ctx->Driver.FinishRenderTexture) {
-         /* tell driver that we're done rendering to this texture. */
+         /* tell driver we're done rendering to this texobj */
          ctx->Driver.FinishRenderTexture(ctx, att);
       }
       _mesa_reference_texobj(&att->Texture, NULL); /* unbind */
@@ -1574,9 +1574,17 @@ _mesa_GenerateMipmapEXT(GLenum target)
    texUnit = &ctx->Texture.Unit[ctx->Texture.CurrentUnit];
    texObj = _mesa_select_tex_object(ctx, texUnit, target);
 
-   /* XXX this might not handle cube maps correctly */
    _mesa_lock_texture(ctx, texObj);
-   ctx->Driver.GenerateMipmap(ctx, target, texObj);
+   if (target == GL_TEXTURE_CUBE_MAP) {
+      int face;
+
+      for (face = 0; face < 6; face++)
+	 ctx->Driver.GenerateMipmap(ctx,
+				    GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB + face,
+				    texObj);
+   } else {
+      ctx->Driver.GenerateMipmap(ctx, target, texObj);
+   }
    _mesa_unlock_texture(ctx, texObj);
 }
 

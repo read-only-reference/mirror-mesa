@@ -1,15 +1,8 @@
 *.a
-*.dll
-*.exe
-*.ilk
 *.o
-*.obj
-*.pc
-*.pdb
-*.pyc
-*.pyo
 *.so
 *.sw[a-z]
+*.pc
 *~
 depend
 depend.bak
@@ -21,6 +14,3 @@ aclocal.m4
 config.log
 config.status
 cscope*
-.scon*
-config.py
-build

@@ -604,8 +604,6 @@ extern void __glXSendLargeCommand(__GLXcontext *, const GLvoid *, GLint,
 /* Initialize the GLX extension for dpy */
 extern __GLXdisplayPrivate *__glXInitialize(Display*);
 
-extern void __glXPreferEGL(int state);
-
 /************************************************************************/
 
 extern int __glXDebug;

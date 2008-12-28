@@ -1217,30 +1217,19 @@ _mesa_init_teximage_fields(GLcontext *ctx, GLenum target,
    img->Width = width;
    img->Height = height;
    img->Depth = depth;
-
    img->Width2 = width - 2 * border;   /* == 1 << img->WidthLog2; */
+   img->Height2 = height - 2 * border; /* == 1 << img->HeightLog2; */
+   img->Depth2 = depth - 2 * border;   /* == 1 << img->DepthLog2; */
    img->WidthLog2 = logbase2(img->Width2);
-
-   if (height == 1) { /* 1-D texture */
-      img->Height2 = 1;
+   if (height == 1)  /* 1-D texture */
       img->HeightLog2 = 0;
-   }
-   else {
-      img->Height2 = height - 2 * border; /* == 1 << img->HeightLog2; */
+   else
       img->HeightLog2 = logbase2(img->Height2);
-   }
-
-   if (depth == 1) {  /* 2-D texture */
-      img->Depth2 = 1;
+   if (depth == 1)   /* 2-D texture */
       img->DepthLog2 = 0;
-   }
-   else {
-      img->Depth2 = depth - 2 * border;   /* == 1 << img->DepthLog2; */
+   else
       img->DepthLog2 = logbase2(img->Depth2);
-   }
-
    img->MaxLog2 = MAX2(img->WidthLog2, img->HeightLog2);
-
    img->IsCompressed = GL_FALSE;
    img->CompressedSize = 0;
 

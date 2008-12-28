@@ -20,6 +20,7 @@ debug.c \
 depth.c \
 depthstencil.c \
 dlist.c \
+dlopen.c \
 drawpix.c \
 enable.c \
 enums.c \
@@ -78,6 +79,7 @@ vsnprintf.c
 MESA_MAIN_HEADERS = \
 accum.h \
 api_arrayelt.h \
+api_eval.h \
 api_exec.h \
 api_loopback.h \
 api_noop.h \
@@ -100,6 +102,7 @@ debug.h \
 depth.h \
 depthstencil.h \
 dlist.h \
+dlopen.h \
 drawpix.h \
 enable.h \
 enums.h \

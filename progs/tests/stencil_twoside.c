@@ -115,6 +115,7 @@ static void Display( void )
    glVertex2f(-1,  1);
    glEnd();
 
+
    if (use20syntax) {
       stencil_func_separate(GL_FRONT, GL_ALWAYS, 0, ~0);
       stencil_func_separate(GL_BACK, GL_ALWAYS, 0, ~0);
@@ -278,6 +279,7 @@ static void Init( void )
    stencil_op_separate = glutGetProcAddress( "glStencilOpSeparate" );
 
    printf("\nAll 5 squares should be the same color.\n");
+   glEnable( GL_BLEND );
 }
 
 

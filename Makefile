@@ -12,8 +12,6 @@ default: $(TOP)/configs/current
 		fi \
 	done
 
-all: default
-
 
 doxygen:
 	cd doxygen && $(MAKE)
@@ -35,6 +33,7 @@ realclean: clean
 	-rm -rf autom4te.cache
 	-find . '(' -name '*.o' -o -name '*.a' -o -name '*.so' -o \
 	  -name depend -o -name depend.bak ')' -exec rm -f '{}' ';'
+
 
 
 install:
@@ -108,8 +107,6 @@ irix6-o32-static \
 linux \
 linux-alpha \
 linux-alpha-static \
-linux-cell \
-linux-cell-debug \
 linux-debug \
 linux-directfb \
 linux-dri \
@@ -118,7 +115,6 @@ linux-dri-x86 \
 linux-dri-x86-64 \
 linux-dri-ppc \
 linux-dri-xcb \
-linux-egl \
 linux-indirect \
 linux-fbdev \
 linux-glide \
@@ -126,14 +122,12 @@ linux-ia64-icc \
 linux-ia64-icc-static \
 linux-icc \
 linux-icc-static \
-linux-llvm \
 linux-osmesa \
 linux-osmesa16 \
 linux-osmesa16-static \
 linux-osmesa32 \
 linux-ppc \
 linux-ppc-static \
-linux-profile \
 linux-solo \
 linux-solo-x86 \
 linux-solo-ia64 \
@@ -147,10 +141,8 @@ linux-x86-debug \
 linux-x86-32 \
 linux-x86-64 \
 linux-x86-64-debug \
-linux-x86-64-profile \
 linux-x86-64-static \
 linux-x86-glide \
-linux-x86-profile \
 linux-x86-static \
 netbsd \
 openbsd \

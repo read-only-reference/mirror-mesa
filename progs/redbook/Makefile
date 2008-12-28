@@ -26,7 +26,7 @@ PROGS = aaindex aapoly aargb accanti accpersp alpha alpha3D anti \
 .SUFFIXES: .c
 
 .c: $(LIB_DEP)
-	$(APP_CC) -I$(INCDIR) $(CFLAGS) $(LDFLAGS) $< $(LIBS) -o $@
+	$(CC) -I$(INCDIR) $(CFLAGS) $(LDFLAGS) $< $(LIBS) -o $@
 
 
 

@@ -207,8 +207,9 @@ link_varying_vars(struct gl_shader_program *shProg, struct gl_program *prog)
  * This is basically a list/index of all uniforms found in either/both of
  * the vertex and fragment shaders.
  */
-static void
-link_uniform_vars(struct gl_shader_program *shProg,
+static GLboolean
+link_uniform_vars(GLcontext *ctx,
+                  struct gl_shader_program *shProg,
                   struct gl_program *prog,
                   GLuint *numSamplers)
 {
@@ -239,7 +240,13 @@ link_uniform_vars(struct gl_shader_program *shProg,
          /* Allocate a new sampler index */
          GLuint sampNum = *numSamplers;
          GLuint oldSampNum = (GLuint) prog->Parameters->ParameterValues[i][0];
-         assert(oldSampNum < MAX_SAMPLERS);
+         if (oldSampNum >= ctx->Const.MaxTextureImageUnits) {
+            char s[100];
+            sprintf(s, "Too many texture samplers (%u, max is %u)",
+                    oldSampNum + 1, ctx->Const.MaxTextureImageUnits);
+            link_error(shProg, s);
+            return GL_FALSE;
+         }
          samplerMap[oldSampNum] = sampNum;
          (*numSamplers)++;
       }
@@ -265,6 +272,7 @@ link_uniform_vars(struct gl_shader_program *shProg,
       }
    }
 
+   return GL_TRUE;
 }
 
 
@@ -458,6 +466,7 @@ _slang_update_inputs_outputs(struct gl_program *prog)
          maxAddrReg = MAX2(maxAddrReg, inst->DstReg.Index + 1);
       }
    }
+
    prog->NumAddressRegs = maxAddrReg;
 }
 
@@ -559,10 +568,18 @@ _slang_link(GLcontext *ctx,
    }
 
    /* link uniform vars */
-   if (shProg->VertexProgram)
-      link_uniform_vars(shProg, &shProg->VertexProgram->Base, &numSamplers);
-   if (shProg->FragmentProgram)
-      link_uniform_vars(shProg, &shProg->FragmentProgram->Base, &numSamplers);
+   if (shProg->VertexProgram) {
+      if (!link_uniform_vars(ctx, shProg, &shProg->VertexProgram->Base,
+                             &numSamplers)) {
+         return;
+      }
+   }
+   if (shProg->FragmentProgram) {
+      if (!link_uniform_vars(ctx, shProg, &shProg->FragmentProgram->Base,
+                             &numSamplers)) {
+         return;
+      }
+   }
 
    /*_mesa_print_uniforms(shProg->Uniforms);*/
 

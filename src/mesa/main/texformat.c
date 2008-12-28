@@ -1673,11 +1673,6 @@ _mesa_format_to_type_and_comps(const struct gl_texture_format *format,
       *comps = 1; /* XXX OK? */
       return;
 
-   case MESA_FORMAT_S8_Z24:
-      *datatype = GL_UNSIGNED_INT;
-      *comps = 1; /* XXX OK? */
-      return;
-
    case MESA_FORMAT_Z16:
       *datatype = GL_UNSIGNED_SHORT;
       *comps = 1;
@@ -1688,7 +1683,6 @@ _mesa_format_to_type_and_comps(const struct gl_texture_format *format,
       *comps = 1;
       return;
 
-#if FEATURE_EXT_texture_sRGB
    case MESA_FORMAT_SRGB8:
       *datatype = GL_UNSIGNED_BYTE;
       *comps = 3;
@@ -1705,13 +1699,9 @@ _mesa_format_to_type_and_comps(const struct gl_texture_format *format,
       *datatype = GL_UNSIGNED_BYTE;
       *comps = 2;
       return;
-#endif
 
-#if FEATURE_texture_fxt1
    case MESA_FORMAT_RGB_FXT1:
    case MESA_FORMAT_RGBA_FXT1:
-#endif
-#if FEATURE_texture_s3tc
    case MESA_FORMAT_RGB_DXT1:
    case MESA_FORMAT_RGBA_DXT1:
    case MESA_FORMAT_RGBA_DXT3:
@@ -1720,7 +1710,6 @@ _mesa_format_to_type_and_comps(const struct gl_texture_format *format,
       *datatype = GL_UNSIGNED_BYTE;
       *comps = 0;
       return;
-#endif
 
    case MESA_FORMAT_RGBA:
       *datatype = CHAN_TYPE;

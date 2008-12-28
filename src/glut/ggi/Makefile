@@ -46,7 +46,6 @@ clean:
 
 
 depend: $(SOURCES)
-	rm -f depend
 	touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) -I$(TOP)/include $(SOURCES)
 

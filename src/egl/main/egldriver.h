@@ -4,7 +4,9 @@
 
 #include "egltypedefs.h"
 #include "eglapi.h"
-#include "egldefines.h"
+
+/* should probably use a dynamic-length string, but this will do */
+#define MAX_EXTENSIONS_LEN 1000
 
 
 /**
@@ -15,7 +17,7 @@ struct _egl_extensions
    EGLBoolean MESA_screen_surface;
    EGLBoolean MESA_copy_context;
 
-   char String[_EGL_MAX_EXTENSIONS_LEN];
+   char String[MAX_EXTENSIONS_LEN];
 };
 
 
@@ -24,46 +26,35 @@ struct _egl_extensions
  */
 struct _egl_driver
 {
-   EGLBoolean Initialized; /**< set by driver after initialized */
+   EGLBoolean Initialized; /* set by driver after initialized */
 
-   void *LibHandle; /**< dlopen handle */
+   void *LibHandle; /* dlopen handle */
 
-   const char *Name;  /**< name of this driver */
+   _EGLDisplay *Display;
 
-   int APImajor, APIminor; /**< as returned by eglInitialize() */
-   char Version[1000];       /**< initialized from APImajor/minor, Name */
+   int ABIversion;
+   int APImajor, APIminor; /* returned through eglInitialize */
+   const char *ClientAPIs;
 
-   /** Bitmask of supported APIs (EGL_xx_BIT) set by the driver during init */
-   EGLint ClientAPIsMask;
-
-   _EGLAPI API;  /**< EGL API dispatch table */
+   _EGLAPI API;
 
    _EGLExtensions Extensions;
-
-   int LargestPbuffer;
 };
 
 
-extern _EGLDriver *_eglMain(_EGLDisplay *dpy, const char *args);
-
-
-extern const char *
-_eglChooseDRMDriver(int card);
-
-extern const char *
-_eglChooseDriver(_EGLDisplay *dpy);
+extern _EGLDriver *_eglMain(_EGLDisplay *dpy);
 
 
 extern _EGLDriver *
-_eglOpenDriver(_EGLDisplay *dpy, const char *driverName, const char *args);
+_eglChooseDriver(EGLDisplay dpy);
+
+
+extern _EGLDriver *
+_eglOpenDriver(_EGLDisplay *dpy, const char *driverName);
 
 
 extern EGLBoolean
 _eglCloseDriver(_EGLDriver *drv, EGLDisplay dpy);
-
-
-extern void
-_eglSaveDriver(_EGLDriver *drv);
 
 
 extern _EGLDriver *
@@ -74,8 +65,17 @@ extern void
 _eglInitDriverFallbacks(_EGLDriver *drv);
 
 
-extern EGLint
-_eglFindAPIs(void);
+extern const char *
+_eglQueryString(_EGLDriver *drv, EGLDisplay dpy, EGLint name);
+
+
+extern EGLBoolean
+_eglWaitGL(_EGLDriver *drv, EGLDisplay dpy);
+
+
+extern EGLBoolean
+_eglWaitNative(_EGLDriver *drv, EGLDisplay dpy, EGLint engine);
+
 
 
 #endif /* EGLDRIVER_INCLUDED */

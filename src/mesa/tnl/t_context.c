@@ -78,9 +78,6 @@ _tnl_CreateContext( GLcontext *ctx )
 
    tnl->nr_blocks = 0;
 
-   /* plug in the VBO drawing function */
-   vbo_set_draw_func(ctx, _tnl_draw_prims);
-
    return GL_TRUE;
 }
 

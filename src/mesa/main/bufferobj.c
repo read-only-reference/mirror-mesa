@@ -38,13 +38,6 @@
 #include "bufferobj.h"
 
 
-#ifdef FEATURE_OES_mapbuffer
-#define DEFAULT_ACCESS GL_WRITE_ONLY;
-#else
-#define DEFAULT_ACCESS GL_READ_WRITE;
-#endif
-
-
 /**
  * Get the buffer object bound to the specified target in a GL context.
  *
@@ -262,7 +255,7 @@ _mesa_initialize_buffer_object( struct gl_buffer_object *obj,
    obj->RefCount = 1;
    obj->Name = name;
    obj->Usage = GL_STATIC_DRAW_ARB;
-   obj->Access = DEFAULT_ACCESS;
+   obj->Access = GL_READ_WRITE_ARB;
 }
 
 
@@ -671,8 +664,8 @@ _mesa_map_drawpix_pbo(GLcontext *ctx,
  * \sa _mesa_unmap_bitmap_pbo
  */
 void
-_mesa_unmap_drawpix_pbo(GLcontext *ctx,
-                        const struct gl_pixelstore_attrib *unpack)
+_mesa_unmap_drapix_pbo(GLcontext *ctx,
+                       const struct gl_pixelstore_attrib *unpack)
 {
    if (unpack->BufferObj->Name) {
       ctx->Driver.UnmapBuffer(ctx, GL_PIXEL_UNPACK_BUFFER_EXT,
@@ -808,7 +801,7 @@ _mesa_DeleteBuffersARB(GLsizei n, const GLuint *ids)
          unbind(ctx, &ctx->Array.ArrayObj->FogCoord.BufferObj, bufObj);
          unbind(ctx, &ctx->Array.ArrayObj->Index.BufferObj, bufObj);
          unbind(ctx, &ctx->Array.ArrayObj->EdgeFlag.BufferObj, bufObj);
-         for (j = 0; j < MAX_TEXTURE_UNITS; j++) {
+         for (j = 0; j < MAX_TEXTURE_COORD_UNITS; j++) {
             unbind(ctx, &ctx->Array.ArrayObj->TexCoord[j].BufferObj, bufObj);
          }
          for (j = 0; j < VERT_ATTRIB_MAX; j++) {
@@ -1072,7 +1065,7 @@ _mesa_UnmapBufferARB(GLenum target)
       status = ctx->Driver.UnmapBuffer( ctx, target, bufObj );
    }
 
-   bufObj->Access = DEFAULT_ACCESS;
+   bufObj->Access = GL_READ_WRITE_ARB; /* initial value, OK? */
    bufObj->Pointer = NULL;
 
    return status;

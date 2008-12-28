@@ -3,7 +3,8 @@
 TOP = ../..
 include $(TOP)/configs/current
 
-include sources.mak
+include sources
+
 
 .SUFFIXES : .cpp
 
@@ -23,9 +24,6 @@ include sources.mak
 default: depend asm_subdirs libmesa.a libglapi.a driver_subdirs
 
 
-# Default: build dependencies, then asm_subdirs, then convenience
-# libs (.a) and finally the device drivers:
-default: depend asm_subdirs libmesa.a $(GLAPI_LIB) driver_subdirs
 
 ######################################################################
 # Helper libraries used by many drivers:
@@ -38,13 +36,6 @@ libmesa.a: $(MESA_OBJECTS)
 libglapi.a: $(GLAPI_OBJECTS)
 	@ $(MKLIB) -o glapi -static $(GLAPI_OBJECTS)
 
-# Make archive of gl* API dispatcher functions only
-$(GLAPI_LIB): $(GLAPI_OBJECTS)
-	@if [ "${WINDOW_SYSTEM}" = "dri" ] ; then \
-		touch libglapi.a ; \
-	else \
-		$(TOP)/bin/mklib -o glapi -static $(GLAPI_OBJECTS) ; \
-	fi
 
 ######################################################################
 # Device drivers
@@ -97,14 +88,29 @@ install: default
 	done
 
 
-pcedit = sed \
+gl_pcedit = sed \
 	-e 's,@INSTALL_DIR@,$(INSTALL_DIR),' \
 	-e 's,@INSTALL_LIB_DIR@,$(INSTALL_LIB_DIR),' \
 	-e 's,@INSTALL_INC_DIR@,$(INSTALL_INC_DIR),' \
-	-e 's,@VERSION@,$(MESA_MAJOR).$(MESA_MINOR).$(MESA_TINY),'
+	-e 's,@VERSION@,$(MESA_MAJOR).$(MESA_MINOR).$(MESA_TINY),' \
+	-e 's,@GL_PC_REQ_PRIV@,$(GL_PC_REQ_PRIV),' \
+	-e 's,@GL_PC_LIB_PRIV@,$(GL_PC_LIB_PRIV),' \
+	-e 's,@GL_PC_CFLAGS@,$(GL_PC_CFLAGS),'
 
 gl.pc: gl.pc.in
-	$(pcedit) $< > $@
+	$(gl_pcedit) $< > $@
+
+osmesa_pcedit = sed \
+	-e 's,@INSTALL_DIR@,$(INSTALL_DIR),' \
+	-e 's,@INSTALL_LIB_DIR@,$(INSTALL_LIB_DIR),' \
+	-e 's,@INSTALL_INC_DIR@,$(INSTALL_INC_DIR),' \
+	-e 's,@VERSION@,$(MESA_MAJOR).$(MESA_MINOR).$(MESA_TINY),' \
+	-e 's,@OSMESA_LIB@,$(OSMESA_LIB),' \
+	-e 's,@OSMESA_PC_REQ@,$(OSMESA_PC_REQ),' \
+	-e 's,@OSMESA_PC_LIB_PRIV@,$(OSMESA_PC_LIB_PRIV),'
+
+osmesa.pc: osmesa.pc.in
+	$(osmesa_pcedit) $< > $@
 
 install-headers:
 	$(INSTALL) -d $(DESTDIR)$(INSTALL_INC_DIR)/GL
@@ -118,10 +124,12 @@ install-libgl: default gl.pc install-headers
 		$(DESTDIR)$(INSTALL_LIB_DIR)
 	$(INSTALL) -m 644 gl.pc $(DESTDIR)$(INSTALL_LIB_DIR)/pkgconfig
 
-install-osmesa: default
+install-osmesa: default osmesa.pc
 	$(INSTALL) -d $(DESTDIR)$(INSTALL_LIB_DIR)
+	$(INSTALL) -d $(DESTDIR)$(INSTALL_LIB_DIR)/pkgconfig
 	$(INSTALL) $(TOP)/$(LIB_DIR)/$(OSMESA_LIB_GLOB) \
 		$(DESTDIR)$(INSTALL_LIB_DIR)
+	$(INSTALL) -m 644 osmesa.pc $(DESTDIR)$(INSTALL_LIB_DIR)/pkgconfig
 
 install-dri: default
 	cd drivers/dri && $(MAKE) install

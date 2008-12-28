@@ -250,9 +250,7 @@ reg_string(enum register_file f, GLint index, gl_prog_print_mode mode,
          {
             struct gl_program_parameter *param
                = prog->Parameters->Parameters + index;
-            char *state = _mesa_program_state_string(param->StateIndexes);
-            sprintf(str, state);
-            _mesa_free(state);
+            sprintf(str, _mesa_program_state_string(param->StateIndexes));
          }
          break;
       case PROGRAM_ADDRESS:
@@ -355,19 +353,6 @@ _mesa_swizzle_string(GLuint swizzle, GLuint negateBase, GLboolean extended)
 
    s[i] = 0;
    return s;
-}
-
-
-void
-_mesa_print_swizzle(GLuint swizzle)
-{
-   if (swizzle == SWIZZLE_XYZW) {
-      _mesa_printf(".xyzw\n");
-   }
-   else {
-      const char *s = _mesa_swizzle_string(swizzle, 0, 0);
-      _mesa_printf("%s\n", s);
-   }
 }
 
 

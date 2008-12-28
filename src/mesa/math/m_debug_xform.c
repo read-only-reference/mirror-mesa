@@ -206,8 +206,7 @@ static int test_transform_function( transform_func func, int psize,
          case VAR:
             break;
          default:
-            ASSERT(0);
-            return 0;
+            abort();
          }
       }
    }

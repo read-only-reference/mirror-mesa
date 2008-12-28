@@ -47,9 +47,6 @@ const char *
 _mesa_writemask_string(GLuint writeMask);
 
 extern void
-_mesa_print_swizzle(GLuint swizzle);
-
-extern void
 _mesa_print_alu_instruction(const struct prog_instruction *inst,
                             const char *opcode_string, GLuint numRegs);
 

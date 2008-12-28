@@ -24,7 +24,7 @@ void main()
 
     float d, f;
     d = p.x * p.x + p.y * p.y;
-    f = inversesqrt(d + 1.0);
+    f = 1.0 / sqrt(d + 1.0);
 
     if (d >= BumpSize)
         { p = vec2(0.0); f = 1.0; }

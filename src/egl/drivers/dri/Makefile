@@ -8,7 +8,7 @@ include $(TOP)/configs/current
 INCLUDE_DIRS = \
 	-I. \
 	-I/usr/include \
-	$(shell pkg-config --cflags-only-I libdrm) \
+	-I/usr/include/drm \
 	-I$(TOP)/include \
 	-I$(TOP)/include/GL/internal \
 	-I$(TOP)/src/mesa \
@@ -29,8 +29,6 @@ SOURCES = egldri.c
 
 OBJECTS = $(SOURCES:.c=.o)
 
-DRM_LIB = `pkg-config --libs libdrm`
-
 
 .c.o:
 	$(CC) -c $(INCLUDE_DIRS) $(CFLAGS) $< -o $@
@@ -46,7 +44,7 @@ library: $(TOP)/$(LIB_DIR)/libEGLdri.so
 $(TOP)/$(LIB_DIR)/libEGLdri.so: $(OBJECTS)
 	$(MKLIB) -o EGLdri -linker '$(CC)' -ldflags '$(LDFLAGS)' \
 		-major 1 -minor 0 \
-		-install $(TOP)/$(LIB_DIR) -ldl $(OBJECTS) $(LIBS)
+		-install $(TOP)/$(LIB_DIR) -ldl $(OBJECTS)
 
 
 clean:
@@ -55,10 +53,9 @@ clean:
 
 depend: $(SOURCES) $(HEADERS)
 	@ echo "running $(MKDEP)"
-	@ rm -f depend
 	@ touch depend
 	$(MKDEP) $(MKDEP_OPTIONS) $(DEFINES) $(INCLUDE_DIRS) \
-		$(SOURCES) $(HEADERS) >/dev/null 2>/dev/null
+		$(SOURCES) $(HEADERS) > /dev/null 
 
 include depend
 # DO NOT DELETE

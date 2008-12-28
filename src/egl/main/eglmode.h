@@ -4,9 +4,6 @@
 #include "egltypedefs.h"
 
 
-#define EGL_NO_MODE_MESA 0
-
-
 /**
  * Data structure which corresponds to an EGLModeMESA.
  */
