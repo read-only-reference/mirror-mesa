@@ -267,7 +267,7 @@ static void emit_trunc( struct brw_wm_compile *c,
 	    struct brw_reg src, dst;
 	    dst = get_dst_reg(c, inst, i, 1) ;
 	    src = get_src_reg(c, &inst->SrcReg[0], i, 1);
-	    brw_RNDD(p, dst, src);
+	    brw_RNDZ(p, dst, src);
 	}
     }
     brw_set_saturate(p, 0);
@@ -623,7 +623,7 @@ static void emit_dph(struct brw_wm_compile *c,
     brw_MAC(p, brw_null_reg(), src0[1], src1[1]);
     brw_MAC(p, dst, src0[2], src1[2]);
     brw_set_saturate(p, (inst->SaturateMode != SATURATE_OFF) ? 1 : 0);
-    brw_ADD(p, dst, src0[3], src1[3]);
+    brw_ADD(p, dst, dst, src1[3]);
     brw_set_saturate(p, 0);
 }
 
@@ -892,15 +892,19 @@ static void emit_lrp(struct brw_wm_compile *c,
     }
 }
 
+/**
+ * For GLSL shaders, this KIL will be unconditional.
+ * It may be contained inside an IF/ENDIF structure of course.
+ */
 static void emit_kil(struct brw_wm_compile *c)
 {
-	struct brw_compile *p = &c->func;
-	struct brw_reg depth = retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UW);
-	brw_push_insn_state(p);
-	brw_set_mask_control(p, BRW_MASK_DISABLE);
-	brw_NOT(p, c->emit_mask_reg, brw_mask_reg(1)); //IMASK
-	brw_AND(p, depth, c->emit_mask_reg, depth);
-	brw_pop_insn_state(p);
+    struct brw_compile *p = &c->func;
+    struct brw_reg depth = retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UW);
+    brw_push_insn_state(p);
+    brw_set_mask_control(p, BRW_MASK_DISABLE);
+    brw_NOT(p, c->emit_mask_reg, brw_mask_reg(1)); //IMASK
+    brw_AND(p, depth, c->emit_mask_reg, depth);
+    brw_pop_insn_state(p);
 }
 
 static void emit_mad(struct brw_wm_compile *c,

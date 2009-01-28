@@ -78,6 +78,9 @@ _tnl_CreateContext( GLcontext *ctx )
 
    tnl->nr_blocks = 0;
 
+   /* plug in the VBO drawing function */
+   vbo_set_draw_func(ctx, _tnl_draw_prims);
+
    return GL_TRUE;
 }
 
@@ -137,7 +140,7 @@ _tnl_InvalidateState( GLcontext *ctx, GLuint new_state )
       /* fixed-function fog */
       RENDERINPUTS_SET( tnl->render_inputs_bitset, _TNL_ATTRIB_FOG );
    }
-   else if (ctx->FragmentProgram._Active || ctx->FragmentProgram._Current) {
+   else if (ctx->FragmentProgram._Current) {
       struct gl_fragment_program *fp = ctx->FragmentProgram._Current;
       if (fp) {
          if (fp->FogOption != GL_NONE || (fp->Base.InputsRead & FRAG_BIT_FOGC)) {

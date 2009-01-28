@@ -290,7 +290,8 @@ _mesa_use_uniform(struct gl_program_parameter_list *paramList,
    GLuint i;
    for (i = 0; i < paramList->NumParameters; i++) {
       struct gl_program_parameter *p = paramList->Parameters + i;
-      if (p->Type == PROGRAM_UNIFORM && _mesa_strcmp(p->Name, name) == 0) {
+      if ((p->Type == PROGRAM_UNIFORM || p->Type == PROGRAM_SAMPLER) &&
+          _mesa_strcmp(p->Name, name) == 0) {
          p->Used = GL_TRUE;
          /* Note that large uniforms may occupy several slots so we're
           * not done searching yet.
@@ -423,7 +424,7 @@ _mesa_add_state_reference(struct gl_program_parameter_list *paramList,
                           const gl_state_index stateTokens[STATE_LENGTH])
 {
    const GLuint size = 4; /* XXX fix */
-   const char *name;
+   char *name;
    GLint index;
 
    /* Check if the state reference is already in the list */
@@ -450,7 +451,7 @@ _mesa_add_state_reference(struct gl_program_parameter_list *paramList,
    paramList->StateFlags |= _mesa_program_state_flags(stateTokens);
 
    /* free name string here since we duplicated it in add_parameter() */
-   _mesa_free((void *) name);
+   _mesa_free(name);
 
    return index;
 }

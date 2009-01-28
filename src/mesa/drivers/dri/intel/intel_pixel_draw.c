@@ -71,6 +71,7 @@ intel_texture_drawpixels(GLcontext * ctx,
    GLuint texname;
    GLfloat vertices[4][4];
    GLfloat texcoords[4][2];
+   GLfloat z;
 
    /* We're going to mess with texturing with no regard to existing texture
     * state, so if there is some set up we have to bail.
@@ -91,7 +92,7 @@ intel_texture_drawpixels(GLcontext * ctx,
       return GL_FALSE;
    }
 
-   /* We don't have a way to generate fragments with stencil values which *
+   /* We don't have a way to generate fragments with stencil values which
     * will set the resulting stencil value.
     */
    if (format == GL_STENCIL_INDEX)
@@ -140,6 +141,9 @@ intel_texture_drawpixels(GLcontext * ctx,
 
    intel_meta_set_passthrough_transform(intel);
 
+   /* convert rasterpos Z from [0,1] to NDC coord in [-1,1] */
+   z = -1.0 + 2.0 * ctx->Current.RasterPos[2];
+
    /* Create the vertex buffer based on the current raster pos.  The x and y
     * we're handed are ctx->Current.RasterPos[0,1] rounded to integers.
     * We also apply the depth.  However, the W component is already multiplied
@@ -147,19 +151,19 @@ intel_texture_drawpixels(GLcontext * ctx,
     */
    vertices[0][0] = x;
    vertices[0][1] = y;
-   vertices[0][2] = ctx->Current.RasterPos[2];
+   vertices[0][2] = z;
    vertices[0][3] = 1.0;
    vertices[1][0] = x + width * ctx->Pixel.ZoomX;
    vertices[1][1] = y;
-   vertices[1][2] = ctx->Current.RasterPos[2];
+   vertices[1][2] = z;
    vertices[1][3] = 1.0;
    vertices[2][0] = x + width * ctx->Pixel.ZoomX;
    vertices[2][1] = y + height * ctx->Pixel.ZoomY;
-   vertices[2][2] = ctx->Current.RasterPos[2];
+   vertices[2][2] = z;
    vertices[2][3] = 1.0;
    vertices[3][0] = x;
    vertices[3][1] = y + height * ctx->Pixel.ZoomY;
-   vertices[3][2] = ctx->Current.RasterPos[2];
+   vertices[3][2] = z;
    vertices[3][3] = 1.0;
 
    texcoords[0][0] = 0.0;
@@ -220,6 +224,10 @@ intel_stencil_drawpixels(GLcontext * ctx,
 		 "stencil mask enabled\n");
       return GL_FALSE;
    }
+
+   /* We don't support stencil testing/ops here */
+   if (ctx->Stencil.Enabled)
+      return GL_FALSE;
 
    /* We use FBOs for our wrapping of the depthbuffer into a color
     * destination.
@@ -386,27 +394,6 @@ intelDrawPixels(GLcontext * ctx,
    if (INTEL_DEBUG & DEBUG_PIXEL)
       _mesa_printf("%s: fallback to swrast\n", __FUNCTION__);
 
-   if (ctx->FragmentProgram._Current == ctx->FragmentProgram._TexEnvProgram) {
-      /*
-       * We don't want the i915 texenv program to be applied to DrawPixels.
-       * This is really just a performance optimization (mesa will other-
-       * wise happily run the fragment program on each pixel in the image).
-       */
-      struct gl_fragment_program *fpSave = ctx->FragmentProgram._Current;
-   /* can't just set current frag prog to 0 here as on buffer resize
-      we'll get new state checks which will segfault. Remains a hack. */
-      ctx->FragmentProgram._Current = NULL;
-      ctx->FragmentProgram._UseTexEnvProgram = GL_FALSE;
-      ctx->FragmentProgram._Active = GL_FALSE;
-      _swrast_DrawPixels( ctx, x, y, width, height, format, type,
-                          unpack, pixels );
-      ctx->FragmentProgram._Current = fpSave;
-      ctx->FragmentProgram._UseTexEnvProgram = GL_TRUE;
-      ctx->FragmentProgram._Active = GL_TRUE;
-      _swrast_InvalidateState(ctx, _NEW_PROGRAM);
-   }
-   else {
-      _swrast_DrawPixels( ctx, x, y, width, height, format, type,
-                          unpack, pixels );
-   }
+   _swrast_DrawPixels(ctx, x, y, width, height, format, type,
+		      unpack, pixels);
 }

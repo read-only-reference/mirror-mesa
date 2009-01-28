@@ -77,43 +77,6 @@ intel_get_renderbuffer(struct gl_framebuffer *fb, int attIndex)
       return NULL;
 }
 
-
-void
-intel_flip_renderbuffers(struct intel_framebuffer *intel_fb)
-{
-   int current_page = intel_fb->pf_current_page;
-   int next_page = (current_page + 1) % intel_fb->pf_num_pages;
-   struct gl_renderbuffer *tmp_rb;
-
-   /* Exchange renderbuffers if necessary but make sure their reference counts
-    * are preserved.
-    */
-   if (intel_fb->color_rb[current_page] &&
-       intel_fb->Base.Attachment[BUFFER_FRONT_LEFT].Renderbuffer !=
-       &intel_fb->color_rb[current_page]->Base) {
-      tmp_rb = NULL;
-      _mesa_reference_renderbuffer(&tmp_rb,
-	 intel_fb->Base.Attachment[BUFFER_FRONT_LEFT].Renderbuffer);
-      tmp_rb = &intel_fb->color_rb[current_page]->Base;
-      _mesa_reference_renderbuffer(
-	 &intel_fb->Base.Attachment[BUFFER_FRONT_LEFT].Renderbuffer, tmp_rb);
-      _mesa_reference_renderbuffer(&tmp_rb, NULL);
-   }
-
-   if (intel_fb->color_rb[next_page] &&
-       intel_fb->Base.Attachment[BUFFER_BACK_LEFT].Renderbuffer !=
-       &intel_fb->color_rb[next_page]->Base) {
-      tmp_rb = NULL;
-      _mesa_reference_renderbuffer(&tmp_rb,
-	 intel_fb->Base.Attachment[BUFFER_BACK_LEFT].Renderbuffer);
-      tmp_rb = &intel_fb->color_rb[next_page]->Base;
-      _mesa_reference_renderbuffer(
-	 &intel_fb->Base.Attachment[BUFFER_BACK_LEFT].Renderbuffer, tmp_rb);
-      _mesa_reference_renderbuffer(&tmp_rb, NULL);
-   }
-}
-
-
 struct intel_region *
 intel_get_rb_region(struct gl_framebuffer *fb, GLuint attIndex)
 {
@@ -248,11 +211,18 @@ intel_alloc_renderbuffer_storage(GLcontext * ctx, struct gl_renderbuffer *rb,
       cpp = 4;
       break;
    case GL_DEPTH_COMPONENT16:
+#if 0
       rb->_ActualFormat = GL_DEPTH_COMPONENT16;
       rb->DataType = GL_UNSIGNED_SHORT;
       rb->DepthBits = 16;
       cpp = 2;
       break;
+#else
+      /* fall-through.
+       * 16bpp depth renderbuffer can't be paired with a stencil buffer so
+       * always used combined depth/stencil format.
+       */
+#endif
    case GL_DEPTH_COMPONENT:
    case GL_DEPTH_COMPONENT24:
    case GL_DEPTH_COMPONENT32:
@@ -344,7 +314,7 @@ intel_resize_buffers(GLcontext *ctx, struct gl_framebuffer *fb,
    }
 
    /* Make sure all window system renderbuffers are up to date */
-   for (i = 0; i < 3; i++) {
+   for (i = 0; i < 2; i++) {
       struct gl_renderbuffer *rb = &intel_fb->color_rb[i]->Base;
 
       /* only resize if size is changing */
@@ -529,20 +499,25 @@ intel_update_wrapper(GLcontext *ctx, struct intel_renderbuffer *irb,
    if (texImage->TexFormat == &_mesa_texformat_argb8888) {
       irb->Base._ActualFormat = GL_RGBA8;
       irb->Base._BaseFormat = GL_RGBA;
+      irb->Base.DataType = GL_UNSIGNED_BYTE;
       DBG("Render to RGBA8 texture OK\n");
    }
    else if (texImage->TexFormat == &_mesa_texformat_rgb565) {
       irb->Base._ActualFormat = GL_RGB5;
       irb->Base._BaseFormat = GL_RGB;
+      irb->Base.DataType = GL_UNSIGNED_SHORT;
       DBG("Render to RGB5 texture OK\n");
    }
    else if (texImage->TexFormat == &_mesa_texformat_z16) {
       irb->Base._ActualFormat = GL_DEPTH_COMPONENT16;
       irb->Base._BaseFormat = GL_DEPTH_COMPONENT;
+      irb->Base.DataType = GL_UNSIGNED_SHORT;
       DBG("Render to DEPTH16 texture OK\n");
-   } else if (texImage->TexFormat == &_mesa_texformat_s8_z24) {
+   }
+   else if (texImage->TexFormat == &_mesa_texformat_s8_z24) {
       irb->Base._ActualFormat = GL_DEPTH24_STENCIL8_EXT;
       irb->Base._BaseFormat = GL_DEPTH_STENCIL_EXT;
+      irb->Base.DataType = GL_UNSIGNED_INT_24_8_EXT;
       DBG("Render to DEPTH_STENCIL texture OK\n");
    }
    else {
@@ -554,7 +529,6 @@ intel_update_wrapper(GLcontext *ctx, struct intel_renderbuffer *irb,
    irb->Base.InternalFormat = irb->Base._ActualFormat;
    irb->Base.Width = texImage->Width;
    irb->Base.Height = texImage->Height;
-   irb->Base.DataType = GL_UNSIGNED_BYTE;       /* FBO XXX fix */
    irb->Base.RedBits = texImage->TexFormat->RedBits;
    irb->Base.GreenBits = texImage->TexFormat->GreenBits;
    irb->Base.BlueBits = texImage->TexFormat->BlueBits;

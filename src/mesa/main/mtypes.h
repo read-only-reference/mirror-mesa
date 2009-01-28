@@ -125,6 +125,8 @@ struct gl_program_cache;
 struct gl_texture_format;
 struct gl_texture_image;
 struct gl_texture_object;
+struct st_context;
+struct pipe_surface;
 typedef struct __GLcontextRec GLcontext;
 typedef struct __GLcontextModesRec GLvisual;
 typedef struct gl_framebuffer GLframebuffer;
@@ -1566,7 +1568,6 @@ struct gl_texture_attrib
 
    struct gl_texture_unit Unit[MAX_TEXTURE_UNITS];
 
-   /** Proxy texture objects */
    struct gl_texture_object *ProxyTex[NUM_TEXTURE_TARGETS];
 
    /** GL_EXT_shared_texture_palette */
@@ -1989,6 +1990,8 @@ struct gl_vertex_program_state
    GLboolean CallbackEnabled;
    GLuint CurrentPosition;
 #endif
+
+   GLboolean _Overriden;
 };
 
 
@@ -2011,8 +2014,6 @@ struct gl_fragment_program_state
 
    /** Should fixed-function texturing be implemented with a fragment prog? */
    GLboolean _MaintainTexEnvProgram;
-   GLboolean _UseTexEnvProgram;
-   GLboolean _Active;     /**< Use internal texenv program? */
 
    /** Program to emulate fixed-function texture env/combine (see above) */
    struct gl_fragment_program *_TexEnvProgram;
@@ -2096,6 +2097,13 @@ struct gl_query_state
 };
 
 
+/** Set by #pragma directives */
+struct gl_sl_pragmas
+{
+   GLboolean Optimize;  /**< defaults on */
+   GLboolean Debug;     /**< defaults off */
+};
+
 
 /**
  * A GLSL vertex or fragment shader object.
@@ -2106,12 +2114,12 @@ struct gl_shader
    GLuint Name;  /**< AKA the handle */
    GLint RefCount;  /**< Reference count */
    GLboolean DeletePending;
-
-   const GLchar *Source;  /**< Source code string */
    GLboolean CompileStatus;
+   GLboolean Main;  /**< shader defines main() */
+   const GLchar *Source;  /**< Source code string */
    struct gl_program *Program;  /**< Post-compile assembly code */
    GLchar *InfoLog;
-   GLboolean Main;  /**< shader defines main() */
+   struct gl_sl_pragmas Pragmas;
 };
 
 
@@ -2263,6 +2271,7 @@ struct gl_renderbuffer
    GLubyte IndexBits;
    GLubyte DepthBits;
    GLubyte StencilBits;
+   GLubyte Samples;     /**< Number of samples - 0 if not multisampled */
    GLvoid *Data;        /**< This may not be used by some kinds of RBs */
 
    /* Used to wrap one renderbuffer around another: */
@@ -2723,6 +2732,7 @@ struct gl_matrix_stack
 #define _NEW_MULTISAMPLE        0x2000000  /**< __GLcontextRec::Multisample */
 #define _NEW_TRACK_MATRIX       0x4000000  /**< __GLcontextRec::VertexProgram */
 #define _NEW_PROGRAM            0x8000000  /**< __GLcontextRec::VertexProgram */
+#define _NEW_CURRENT_ATTRIB     0x10000000  /**< __GLcontextRec::Current */
 #define _NEW_ALL ~0
 /*@}*/
 
@@ -3050,6 +3060,8 @@ struct __GLcontextRec
    GLenum RenderMode;        /**< either GL_RENDER, GL_SELECT, GL_FEEDBACK */
    GLbitfield NewState;      /**< bitwise-or of _NEW_* flags */
 
+   GLbitfield varying_vp_inputs;  /**< mask of VERT_BIT_* flags */
+
    /** \name Derived state */
    /*@{*/
    /** Bitwise-or of DD_* flags.  Note that this bitfield may be used before
@@ -3095,7 +3107,7 @@ struct __GLcontextRec
    void *swsetup_context;
    void *swtnl_context;
    void *swtnl_im;
-   void *acache_context;
+   struct st_context *st;
    void *aelt_context;
    /*@}*/
 };
