@@ -1688,7 +1688,7 @@ parse_result_binding(GLcontext *ctx, const GLubyte **inst,
              */
             parse_output_color_num(ctx, inst, Program, &out_color);
             ASSERT(out_color < MAX_DRAW_BUFFERS);
-            *outputReg = FRAG_RESULT_COLR;
+            *outputReg = FRAG_RESULT_COLOR;
          }
          else {
             /* for vtx programs, this is VERTEX_RESULT_POSITION */
@@ -1699,7 +1699,7 @@ parse_result_binding(GLcontext *ctx, const GLubyte **inst,
       case FRAGMENT_RESULT_DEPTH:
          if (Program->Base.Target == GL_FRAGMENT_PROGRAM_ARB) {
             /* for frag programs, this is FRAGMENT_RESULT_DEPTH */
-            *outputReg = FRAG_RESULT_DEPR;
+            *outputReg = FRAG_RESULT_DEPTH;
          }
          else {
             /* for vtx programs, this is VERTEX_RESULT_COLOR */
@@ -3104,6 +3104,9 @@ parse_fp_instruction (GLcontext * ctx, const GLubyte ** inst,
                break;
          }
 
+         if (shadow_tex)
+            fp->TexShadow = 1;
+
          /* Don't test the first time a particular sampler is seen.  Each time
           * after that, make sure the shadow state is the same.
           */
@@ -3648,8 +3651,7 @@ enable_parser_extensions(GLcontext *ctx, grammar id)
    if (ctx->Extensions.NV_texture_rectangle
        && !enable_ext(ctx, id, "texture_rectangle"))
       return GL_FALSE;
-   if (ctx->Extensions.ARB_draw_buffers
-       && !enable_ext(ctx, id, "draw_buffers"))
+   if (!enable_ext(ctx, id, "draw_buffers"))
       return GL_FALSE;
    if (ctx->Extensions.MESA_texture_array
        && !enable_ext(ctx, id, "texture_array"))

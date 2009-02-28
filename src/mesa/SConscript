@@ -16,6 +16,7 @@ if env['platform'] != 'winddk':
 		env.Append(CPPDEFINES = [
 			'_GDI32_', # prevent gl* being declared __declspec(dllimport) in MS headers
 			'BUILD_GL32', # declare gl* as __declspec(dllexport) in Mesa headers 
+			'WIN32_THREADS', # use Win32 thread API
 		])	 
 
 	#
@@ -163,6 +164,7 @@ if env['platform'] != 'winddk':
 		'state_tracker/st_cb_readpixels.c',
 		'state_tracker/st_cb_strings.c',
 		'state_tracker/st_cb_texture.c',
+		'state_tracker/st_cb_viewport.c',
 		'state_tracker/st_context.c',
 		'state_tracker/st_debug.c',
 		'state_tracker/st_draw.c',
@@ -341,5 +343,3 @@ if env['platform'] != 'winddk':
 		)
 		Export('glapi')
 
-	if platform == 'windows':
-		SConscript('state_tracker/wgl/SConscript')

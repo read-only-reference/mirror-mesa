@@ -36,18 +36,25 @@
 //#include "state_trackers/xlib/glxheader.h"
 //#include "state_trackers/xlib/xmesaP.h"
 
-#include "pipe/p_winsys.h"
+#include "pipe/internal/p_winsys_screen.h"
 #include "pipe/p_inlines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "i965simple/brw_winsys.h"
 #include "i965simple/brw_screen.h"
+#include "i965simple/brw_context.h"
+
 
 #include "xlib_brw_aub.h"
 #include "xlib_brw.h"
 #include "xlib.h"
 
-
+static struct pipe_buffer *
+buffer_from_surface(struct pipe_surface *surface)
+{
+   struct brw_texture *texture = (struct brw_texture *)surface;
+   return texture->buffer;
+}
 
 struct aub_buffer {
    char *data;
@@ -226,7 +233,7 @@ aub_flush_frontbuffer( struct pipe_winsys *winsys,
 //   struct aub_pipe_winsys *iws = aub_pipe_winsys(winsys);
    brw_aub_dump_bmp( global_winsys->aubfile, 
 		     surface,
-		     aub_bo(surface->buffer)->offset );
+		     aub_bo(buffer_from_surface(surface))->offset );
 }
 
 
@@ -318,6 +325,7 @@ xlib_create_brw_winsys( void )
 static struct pipe_screen *
 xlib_create_brw_screen( void )
 {
+#ifndef GALLIUM_CELL
    struct pipe_winsys *winsys;
    struct pipe_screen *screen;
 
@@ -335,6 +343,7 @@ fail:
    if (winsys)
       winsys->destroy( winsys );
 
+#endif
    return NULL;
 }
 
@@ -449,7 +458,7 @@ xlib_brw_display_surface(struct xmesa_buffer *b,
 {
    brw_aub_dump_bmp( global_winsys->aubfile, 
 		     surf,
-		     aub_bo(surf->buffer)->offset );
+		     aub_bo(buffer_from_surface(surf))->offset );
 }
 
 

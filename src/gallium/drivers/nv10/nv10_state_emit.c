@@ -103,14 +103,15 @@ static void nv10_state_emit_scissor(struct nv10_context* nv10)
 static void nv10_state_emit_framebuffer(struct nv10_context* nv10)
 {
 	struct pipe_framebuffer_state* fb = nv10->framebuffer;
-	struct pipe_surface *rt, *zeta = NULL;
+	struct nv04_surface *rt, *zeta = NULL;
 	uint32_t rt_format, w, h;
 	int colour_format = 0, zeta_format = 0;
+        struct nv10_miptree *nv10mt = 0;
 
 	w = fb->cbufs[0]->width;
 	h = fb->cbufs[0]->height;
 	colour_format = fb->cbufs[0]->format;
-	rt = fb->cbufs[0];
+	rt = (struct nv04_surface *)fb->cbufs[0];
 
 	if (fb->zsbuf) {
 		if (colour_format) {
@@ -122,7 +123,7 @@ static void nv10_state_emit_framebuffer(struct nv10_context* nv10)
 		}
 
 		zeta_format = fb->zsbuf->format;
-		zeta = fb->zsbuf;
+		zeta = (struct nv04_surface *)fb->zsbuf;
 	}
 
 	rt_format = NV10TCL_RT_FORMAT_TYPE_LINEAR;
@@ -141,17 +142,19 @@ static void nv10_state_emit_framebuffer(struct nv10_context* nv10)
 
 	if (zeta) {
 		BEGIN_RING(celsius, NV10TCL_RT_PITCH, 1);
-		OUT_RING  (rt->stride | (zeta->stride << 16));
+		OUT_RING  (rt->pitch | (zeta->pitch << 16));
 	} else {
 		BEGIN_RING(celsius, NV10TCL_RT_PITCH, 1);
-		OUT_RING  (rt->stride | (rt->stride << 16));
+		OUT_RING  (rt->pitch | (rt->pitch << 16));
 	}
 
-	nv10->rt[0] = rt->buffer;
+	nv10mt = (struct nv10_miptree *)rt->base.texture;
+	nv10->rt[0] = nv10mt->buffer;
 
 	if (zeta_format)
 	{
-		nv10->zeta = zeta->buffer;
+		nv10mt = (struct nv10_miptree *)zeta->base.texture;
+		nv10->zeta = nv10mt->buffer;
 	}
 
 	BEGIN_RING(celsius, NV10TCL_RT_HORIZ, 3);

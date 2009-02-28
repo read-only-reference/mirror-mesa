@@ -41,7 +41,7 @@
 #undef ASSERT
 #undef Elements
 
-#include "pipe/p_winsys.h"
+#include "pipe/internal/p_winsys_screen.h"
 #include "pipe/p_format.h"
 #include "pipe/p_context.h"
 #include "pipe/p_inlines.h"
@@ -51,6 +51,7 @@
 #include "cell/ppu/cell_context.h"
 #include "cell/ppu/cell_screen.h"
 #include "cell/ppu/cell_winsys.h"
+#include "cell/ppu/cell_texture.h"
 
 
 /**
@@ -164,7 +165,8 @@ static void
 xlib_cell_display_surface(struct xmesa_buffer *b, struct pipe_surface *surf)
 {
    XImage *ximage;
-   struct xm_buffer *xm_buf = xm_buffer(surf->buffer);
+   struct xm_buffer *xm_buf = xm_buffer(
+      cell_texture(surf->texture)->buffer);
    const uint tilesPerRow = (surf->width + TILE_SIZE - 1) / TILE_SIZE;
    uint x, y;
 
@@ -220,7 +222,8 @@ xm_flush_frontbuffer(struct pipe_winsys *pws,
     * This function copies that XImage to the actual X Window.
     */
    XMesaContext xmctx = (XMesaContext) context_private;
-   xlib_cell_display_surface(xmctx->xm_buffer, surf);
+   if (xmctx)
+      xlib_cell_display_surface(xmctx->xm_buffer, surf);
 }
 
 

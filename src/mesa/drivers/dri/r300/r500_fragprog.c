@@ -31,6 +31,12 @@
 #include "radeon_program_alu.h"
 
 
+static void reset_srcreg(struct prog_src_register* reg)
+{
+	_mesa_bzero(reg, sizeof(*reg));
+	reg->Swizzle = SWIZZLE_NOOP;
+}
+
 static struct prog_src_register shadow_ambient(struct gl_program *program, int tmu)
 {
 	gl_state_index fail_value_tokens[STATE_LENGTH] = {
@@ -97,6 +103,19 @@ static GLboolean transform_TEX(
 		inst.DstReg.Index = tempreg;
 		inst.DstReg.WriteMask = WRITEMASK_XYZW;
 		destredirect = GL_TRUE;
+	}
+
+	if (inst.SrcReg[0].File != PROGRAM_TEMPORARY && inst.SrcReg[0].File != PROGRAM_INPUT) {
+		int tmpreg = radeonFindFreeTemporary(t);
+		tgt = radeonAppendInstructions(t->Program, 1);
+		tgt->Opcode = OPCODE_MOV;
+		tgt->DstReg.File = PROGRAM_TEMPORARY;
+		tgt->DstReg.Index = tmpreg;
+		tgt->SrcReg[0] = inst.SrcReg[0];
+
+		reset_srcreg(&inst.SrcReg[0]);
+		inst.SrcReg[0].File = PROGRAM_TEMPORARY;
+		inst.SrcReg[0].Index = tmpreg;
 	}
 
 	tgt = radeonAppendInstructions(t->Program, 1);
@@ -279,8 +298,8 @@ static void insert_WPOS_trailer(struct r500_fragment_program_compiler *compiler)
 
 static void nqssadce_init(struct nqssadce_state* s)
 {
-	s->Outputs[FRAG_RESULT_COLR].Sourced = WRITEMASK_XYZW;
-	s->Outputs[FRAG_RESULT_DEPR].Sourced = WRITEMASK_W;
+	s->Outputs[FRAG_RESULT_COLOR].Sourced = WRITEMASK_XYZW;
+	s->Outputs[FRAG_RESULT_DEPTH].Sourced = WRITEMASK_W;
 }
 
 static GLboolean is_native_swizzle(GLuint opcode, struct prog_src_register reg)

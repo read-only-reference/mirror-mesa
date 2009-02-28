@@ -2,7 +2,6 @@
 #include "vl_r16snorm_mc_buf.h"
 #include <assert.h>
 #include <pipe/p_context.h>
-#include <pipe/p_winsys.h>
 #include <pipe/p_screen.h>
 #include <pipe/p_state.h>
 #include <pipe/p_inlines.h>
@@ -67,7 +66,7 @@ struct vlR16SnormBufferedMC
 	struct vlVertex2f			zero_block[3];
 	unsigned int				num_macroblocks;
 	struct vlMpeg2MacroBlock		*macroblocks;
-	struct pipe_surface			*tex_surface[3];
+	struct pipe_transfer			*tex_transfer[3];
 	short					*texels[3];
 
 	struct pipe_context			*pipe;
@@ -188,7 +187,7 @@ static inline int vlGrabBlocks
 	assert(mc);
 	assert(blocks);
 
-	tex_pitch = mc->tex_surface[0]->stride / mc->tex_surface[0]->block.size;
+	tex_pitch = mc->tex_transfer[0]->stride / mc->tex_transfer[0]->block.size;
 	texels = mc->texels[0] + mbpy * tex_pitch + mbpx;
 
 	for (y = 0; y < 2; ++y)
@@ -236,7 +235,7 @@ static inline int vlGrabBlocks
 
 	for (tb = 0; tb < 2; ++tb)
 	{
-		tex_pitch = mc->tex_surface[tb + 1]->stride / mc->tex_surface[tb + 1]->block.size;
+		tex_pitch = mc->tex_transfer[tb + 1]->stride / mc->tex_transfer[tb + 1]->block.size;
 		texels = mc->texels[tb + 1] + mbpy * tex_pitch + mbpx;
 
 		if ((coded_block_pattern >> (1 - tb)) & 1)
@@ -636,8 +635,8 @@ static int vlFlush
 
 	for (i = 0; i < 3; ++i)
 	{
-		pipe_surface_unmap(mc->tex_surface[i]);
-		pipe_surface_reference(&mc->tex_surface[i], NULL);
+		pipe->screen->transfer_unmap(pipe->screen, mc->tex_transfer[i]);
+		pipe->screen->tex_transfer_release(pipe->screen, &mc->tex_transfer[i]);
 	}
 
 	mc->render_target.cbufs[0] = pipe->screen->get_tex_surface
@@ -649,9 +648,9 @@ static int vlFlush
 
 	pipe->set_framebuffer_state(pipe, &mc->render_target);
 	pipe->set_viewport_state(pipe, &mc->viewport);
-	vs_consts = pipe->winsys->buffer_map
+	vs_consts = pipe_buffer_map
 	(
-		pipe->winsys,
+		pipe->screen,
 		mc->vs_const_buf.buffer,
 		PIPE_BUFFER_USAGE_CPU_WRITE | PIPE_BUFFER_USAGE_DISCARD
 	);
@@ -810,14 +809,16 @@ static int vlRenderMacroBlocksMpeg2R16SnormBuffered
 
 		for (i = 0; i < 3; ++i)
 		{
-			mc->tex_surface[i] = mc->pipe->screen->get_tex_surface
+			mc->tex_transfer[i] = mc->pipe->screen->get_tex_transfer
 			(
 				mc->pipe->screen,
 				mc->textures.all[i],
-				0, 0, 0, PIPE_BUFFER_USAGE_CPU_WRITE | PIPE_BUFFER_USAGE_DISCARD
+				0, 0, 0, PIPE_TRANSFER_WRITE, 0, 0,
+				surface->texture->width[0],
+				surface->texture->height[0]
 			);
 
-			mc->texels[i] = pipe_surface_map(mc->tex_surface[i], PIPE_BUFFER_USAGE_CPU_WRITE | PIPE_BUFFER_USAGE_DISCARD);
+			mc->texels[i] = mc->pipe->screen->transfer_map(mc->pipe->screen, mc->tex_transfer[i]);
 		}
 	}
 
@@ -912,7 +913,7 @@ static int vlCreateDataBufs
 	mc->macroblocks_per_picture = mbw * mbh;
 
 	/* Create our vertex buffers */
-	mc->vertex_bufs.ycbcr.pitch = sizeof(struct vlVertex2f) * 4;
+	mc->vertex_bufs.ycbcr.stride = sizeof(struct vlVertex2f) * 4;
 	mc->vertex_bufs.ycbcr.max_index = 24 * mc->macroblocks_per_picture - 1;
 	mc->vertex_bufs.ycbcr.buffer_offset = 0;
 	mc->vertex_bufs.ycbcr.buffer = pipe_buffer_create
@@ -925,7 +926,7 @@ static int vlCreateDataBufs
 
 	for (i = 1; i < 3; ++i)
 	{
-		mc->vertex_bufs.all[i].pitch = sizeof(struct vlVertex2f) * 2;
+		mc->vertex_bufs.all[i].stride = sizeof(struct vlVertex2f) * 2;
 		mc->vertex_bufs.all[i].max_index = 24 * mc->macroblocks_per_picture - 1;
 		mc->vertex_bufs.all[i].buffer_offset = 0;
 		mc->vertex_bufs.all[i].buffer = pipe_buffer_create
@@ -986,22 +987,20 @@ static int vlCreateDataBufs
 	mc->vertex_elems[7].src_format = PIPE_FORMAT_R32G32_FLOAT;
 
 	/* Create our constant buffer */
-	mc->vs_const_buf.size = sizeof(struct vlVertexShaderConsts);
 	mc->vs_const_buf.buffer = pipe_buffer_create
 	(
 		pipe->screen,
 		DEFAULT_BUF_ALIGNMENT,
 		PIPE_BUFFER_USAGE_CONSTANT | PIPE_BUFFER_USAGE_DISCARD,
-		mc->vs_const_buf.size
+		sizeof(struct vlVertexShaderConsts)
 	);
 
-	mc->fs_const_buf.size = sizeof(struct vlFragmentShaderConsts);
 	mc->fs_const_buf.buffer = pipe_buffer_create
 	(
 		pipe->screen,
 		DEFAULT_BUF_ALIGNMENT,
 		PIPE_BUFFER_USAGE_CONSTANT,
-		mc->fs_const_buf.size
+		sizeof(struct vlFragmentShaderConsts)
 	);
 
 	memcpy

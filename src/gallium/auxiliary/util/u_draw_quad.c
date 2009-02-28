@@ -29,7 +29,6 @@
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_inlines.h"
-#include "pipe/p_winsys.h"
 #include "util/u_draw_quad.h"
 
 
@@ -52,9 +51,11 @@ util_draw_vertex_buffer(struct pipe_context *pipe,
    assert(num_attribs <= PIPE_MAX_ATTRIBS);
 
    /* tell pipe about the vertex buffer */
+   memset(&vbuffer, 0, sizeof(vbuffer));
    vbuffer.buffer = vbuf;
    vbuffer.stride = num_attribs * 4 * sizeof(float);  /* vertex size */
    vbuffer.buffer_offset = offset;
+   vbuffer.max_index = num_verts - 1;
    pipe->set_vertex_buffers(pipe, 1, &vbuffer);
 
    /* tell pipe about the vertex attributes */

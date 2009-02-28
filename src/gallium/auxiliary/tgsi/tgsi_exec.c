@@ -202,7 +202,7 @@ tgsi_exec_machine_bind_shader(
 
       case TGSI_TOKEN_TYPE_IMMEDIATE:
          {
-            uint size = parse.FullToken.FullImmediate.Immediate.Size - 1;
+            uint size = parse.FullToken.FullImmediate.Immediate.NrTokens - 1;
             assert( size % 4 == 0 );
             assert( mach->ImmLimit + size / 4 <= TGSI_EXEC_NUM_IMMEDIATES );
 
@@ -1614,6 +1614,7 @@ exec_tex(struct tgsi_exec_machine *mach,
 
    switch (inst->InstructionExtTexture.Texture) {
    case TGSI_TEXTURE_1D:
+   case TGSI_TEXTURE_SHADOW1D:
 
       FETCH(&r[0], 0, CHAN_X);
 
@@ -1636,6 +1637,8 @@ exec_tex(struct tgsi_exec_machine *mach,
 
    case TGSI_TEXTURE_2D:
    case TGSI_TEXTURE_RECT:
+   case TGSI_TEXTURE_SHADOW2D:
+   case TGSI_TEXTURE_SHADOWRECT:
 
       FETCH(&r[0], 0, CHAN_X);
       FETCH(&r[1], 0, CHAN_Y);
@@ -1889,6 +1892,7 @@ exec_instruction(
    case TGSI_OPCODE_RSQ:
    /* TGSI_OPCODE_RECIPSQRT */
       FETCH( &r[0], 0, CHAN_X );
+      micro_abs( &r[0], &r[0] );
       micro_sqrt( &r[0], &r[0] );
       micro_div( &r[0], &mach->Temps[TEMP_1_I].xyzw[TEMP_1_C], &r[0] );
       FOR_EACH_ENABLED_CHANNEL( *inst, chan_index ) {

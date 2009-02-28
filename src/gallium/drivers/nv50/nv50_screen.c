@@ -22,6 +22,8 @@
 
 #include "pipe/p_screen.h"
 
+#include "util/u_simple_screen.h"
+
 #include "nv50_context.h"
 #include "nv50_screen.h"
 
@@ -171,6 +173,22 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_winsys *nvws)
 		return NULL;
 	screen->nvws = nvws;
 
+	/* DMA engine object */
+	ret = nvws->grobj_alloc(nvws, 0x5039, &screen->m2mf);
+	if (ret) {
+		NOUVEAU_ERR("Error creating M2MF object: %d\n", ret);
+		nv50_screen_destroy(&screen->pipe);
+		return NULL;
+	}
+
+	/* 2D object */
+	ret = nvws->grobj_alloc(nvws, NV50_2D, &screen->eng2d);
+	if (ret) {
+		NOUVEAU_ERR("Error creating 2D object: %d\n", ret);
+		nv50_screen_destroy(&screen->pipe);
+		return NULL;
+	}
+
 	/* 3D object */
 	if ((chipset & 0xf0) != 0x50 && (chipset & 0xf0) != 0x80) {
 		NOUVEAU_ERR("Not a G8x chipset\n");
@@ -215,6 +233,31 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_winsys *nvws)
 		nv50_screen_destroy(&screen->pipe);
 		return NULL;
 	}
+
+	/* Static M2MF init */
+	so = so_new(32, 0);
+	so_method(so, screen->m2mf, 0x0180, 3);
+	so_data  (so, screen->sync->handle);
+	so_data  (so, screen->nvws->channel->vram->handle);
+	so_data  (so, screen->nvws->channel->vram->handle);
+	so_emit(nvws, so);
+	so_ref (NULL, &so);
+
+	/* Static 2D init */
+	so = so_new(64, 0);
+	so_method(so, screen->eng2d, NV50_2D_DMA_NOTIFY, 4);
+	so_data  (so, screen->sync->handle);
+	so_data  (so, screen->nvws->channel->vram->handle);
+	so_data  (so, screen->nvws->channel->vram->handle);
+	so_data  (so, screen->nvws->channel->vram->handle);
+	so_method(so, screen->eng2d, NV50_2D_OPERATION, 1);
+	so_data  (so, NV50_2D_OPERATION_SRCCOPY);
+	so_method(so, screen->eng2d, 0x0290, 1);
+	so_data  (so, 0);
+	so_method(so, screen->eng2d, 0x0888, 1);
+	so_data  (so, 1);
+	so_emit(nvws, so);
+	so_ref(NULL, &so);
 
 	/* Static tesla init */
 	so = so_new(256, 20);
@@ -322,7 +365,8 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_winsys *nvws)
 	screen->pipe.is_format_supported = nv50_screen_is_format_supported;
 
 	nv50_screen_init_miptree_functions(&screen->pipe);
-	nv50_surface_init_screen_functions(&screen->pipe);
+	nv50_transfer_init_screen_functions(&screen->pipe);
+	u_simple_screen_init(&screen->pipe);
 
 	return &screen->pipe;
 }

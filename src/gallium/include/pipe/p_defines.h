@@ -194,6 +194,16 @@ enum pipe_texture_target {
 
 
 /**
+ * Transfer object usage flags
+ */
+enum pipe_transfer_usage {
+   PIPE_TRANSFER_READ,
+   PIPE_TRANSFER_WRITE,
+   PIPE_TRANSFER_READ_WRITE //< Read/modify/write
+};
+
+
+/**
  * Buffer usage flags
  */
 #define PIPE_BUFFER_USAGE_CPU_READ  (1 << 0)
@@ -247,6 +257,7 @@ enum pipe_texture_target {
 #define PIPE_PRIM_QUADS           7
 #define PIPE_PRIM_QUAD_STRIP      8
 #define PIPE_PRIM_POLYGON         9
+#define PIPE_PRIM_MAX             10
 
 
 /**

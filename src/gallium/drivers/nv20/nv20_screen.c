@@ -1,4 +1,5 @@
 #include "pipe/p_screen.h"
+#include "util/u_simple_screen.h"
 
 #include "nv20_context.h"
 #include "nv20_screen.h"
@@ -115,28 +116,6 @@ nv20_screen_is_format_supported(struct pipe_screen *screen,
 	return FALSE;
 }
 
-static void *
-nv20_surface_map(struct pipe_screen *screen, struct pipe_surface *surface,
-		 unsigned flags )
-{
-	struct pipe_winsys *ws = screen->winsys;
-	void *map;
-
-	map = ws->buffer_map(ws, surface->buffer, flags);
-	if (!map)
-		return NULL;
-
-	return map + surface->offset;
-}
-
-static void
-nv20_surface_unmap(struct pipe_screen *screen, struct pipe_surface *surface)
-{
-	struct pipe_winsys *ws = screen->winsys;
-
-	ws->buffer_unmap(ws, surface->buffer);
-}
-
 static void
 nv20_screen_destroy(struct pipe_screen *pscreen)
 {
@@ -147,6 +126,14 @@ nv20_screen_destroy(struct pipe_screen *pscreen)
 	nvws->grobj_free(&screen->kelvin);
 
 	FREE(pscreen);
+}
+
+static struct pipe_buffer *
+nv20_surface_buffer(struct pipe_surface *surf)
+{
+	struct nv20_miptree *mt = (struct nv20_miptree *)surf->texture;
+
+	return mt->buffer;
 }
 
 struct pipe_screen *
@@ -160,6 +147,10 @@ nv20_screen_create(struct pipe_winsys *ws, struct nouveau_winsys *nvws)
 	if (!screen)
 		return NULL;
 	screen->nvws = nvws;
+
+	/* 2D engine setup */
+	screen->eng2d = nv04_surface_2d_init(nvws);
+	screen->eng2d->buf = nv20_surface_buffer;
 
 	/* 3D object */
 	if (chipset >= 0x25)
@@ -196,10 +187,9 @@ nv20_screen_create(struct pipe_winsys *ws, struct nouveau_winsys *nvws)
 
 	screen->pipe.is_format_supported = nv20_screen_is_format_supported;
 
-	screen->pipe.surface_map = nv20_surface_map;
-	screen->pipe.surface_unmap = nv20_surface_unmap;
-
 	nv20_screen_init_miptree_functions(&screen->pipe);
+	nv20_screen_init_transfer_functions(&screen->pipe);
+	u_simple_screen_init(&screen->pipe);
 
 	return &screen->pipe;
 }

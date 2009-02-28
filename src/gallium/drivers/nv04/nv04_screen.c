@@ -1,4 +1,6 @@
 #include "pipe/p_screen.h"
+#include "pipe/p_inlines.h"
+#include "util/u_simple_screen.h"
 
 #include "nv04_context.h"
 #include "nv04_screen.h"
@@ -51,6 +53,13 @@ nv04_screen_get_param(struct pipe_screen *screen, int param)
 	case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
 		return 0;
 	case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
+		return 0;
+	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
+		return 0;
+	case PIPE_CAP_TEXTURE_MIRROR_REPEAT:
+		return 1;
+	case NOUVEAU_CAP_HW_VTXBUF:
+	case NOUVEAU_CAP_HW_IDXBUF:
 		return 0;
 	default:
 		NOUVEAU_ERR("Unknown PIPE_CAP %d\n", param);
@@ -110,28 +119,6 @@ nv04_screen_is_format_supported(struct pipe_screen *screen,
 	return FALSE;
 }
 
-static void *
-nv04_surface_map(struct pipe_screen *screen, struct pipe_surface *surface,
-		 unsigned flags )
-{
-	struct pipe_winsys *ws = screen->winsys;
-	void *map;
-
-	map = ws->buffer_map(ws, surface->buffer, flags);
-	if (!map)
-		return NULL;
-
-	return map + surface->offset;
-}
-
-static void
-nv04_surface_unmap(struct pipe_screen *screen, struct pipe_surface *surface)
-{
-	struct pipe_winsys *ws = screen->winsys;
-
-	ws->buffer_unmap(ws, surface->buffer);
-}
-
 static void
 nv04_screen_destroy(struct pipe_screen *pscreen)
 {
@@ -140,8 +127,17 @@ nv04_screen_destroy(struct pipe_screen *pscreen)
 
 	nvws->notifier_free(&screen->sync);
 	nvws->grobj_free(&screen->fahrenheit);
+	nv04_surface_2d_takedown(&screen->eng2d);
 
 	FREE(pscreen);
+}
+
+static struct pipe_buffer *
+nv04_surface_buffer(struct pipe_surface *surf)
+{
+	struct nv04_miptree *mt = (struct nv04_miptree *)surf->texture;
+
+	return mt->buffer;
 }
 
 struct pipe_screen *
@@ -171,6 +167,10 @@ nv04_screen_create(struct pipe_winsys *ws, struct nouveau_winsys *nvws)
 		NOUVEAU_ERR("Unknown nv04 chipset: nv%02x\n", chipset);
 		return NULL;
 	}
+
+	/* 2D engine setup */
+	screen->eng2d = nv04_surface_2d_init(nvws);
+	screen->eng2d->buf = nv04_surface_buffer;
 
 	/* 3D object */
 	ret = nvws->grobj_alloc(nvws, fahrenheit_class, &screen->fahrenheit);
@@ -204,10 +204,9 @@ nv04_screen_create(struct pipe_winsys *ws, struct nouveau_winsys *nvws)
 
 	screen->pipe.is_format_supported = nv04_screen_is_format_supported;
 
-	screen->pipe.surface_map = nv04_surface_map;
-	screen->pipe.surface_unmap = nv04_surface_unmap;
-
 	nv04_screen_init_miptree_functions(&screen->pipe);
+	nv04_screen_init_transfer_functions(&screen->pipe);
+	u_simple_screen_init(&screen->pipe);
 
 	return &screen->pipe;
 }

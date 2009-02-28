@@ -34,7 +34,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_inlines.h"
-#include "pipe/p_winsys.h"
+#include "pipe/internal/p_winsys_screen.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 
@@ -42,6 +42,7 @@
 #include "i915_texture.h"
 #include "i915_debug.h"
 #include "i915_screen.h"
+#include "i915_winsys.h"
 
 /*
  * Helper function and arrays
@@ -606,8 +607,8 @@ i915_texture_create(struct pipe_screen *screen,
    tex_size = tex->stride * tex->total_nblocksy;
 
    tex->buffer = ws->buffer_create(ws, 64,
-				   PIPE_BUFFER_USAGE_PIXEL,
-				   tex_size);
+                                    PIPE_BUFFER_USAGE_PIXEL,
+                                    tex_size);
 
    if (!tex->buffer)
       goto fail;
@@ -683,14 +684,9 @@ i915_get_tex_surface(struct pipe_screen *screen,
    if (ps) {
       ps->refcount = 1;
       pipe_texture_reference(&ps->texture, pt);
-      pipe_buffer_reference(screen, &ps->buffer, tex->buffer);
       ps->format = pt->format;
       ps->width = pt->width[level];
       ps->height = pt->height[level];
-      ps->block = pt->block;
-      ps->nblocksx = pt->nblocksx[level];
-      ps->nblocksy = pt->nblocksy[level];
-      ps->stride = tex->stride;
       ps->offset = offset;
       ps->usage = flags;
       ps->status = PIPE_SURFACE_STATUS_DEFINED;
@@ -755,7 +751,6 @@ i915_tex_surface_release(struct pipe_screen *screen,
       }
 
       pipe_texture_reference(&surf->texture, NULL);
-      pipe_buffer_reference(screen, &surf->buffer, NULL);
       FREE(surf);
    }
 
@@ -770,4 +765,21 @@ i915_init_screen_texture_functions(struct pipe_screen *screen)
    screen->get_tex_surface = i915_get_tex_surface;
    screen->texture_blanket = i915_texture_blanket;
    screen->tex_surface_release = i915_tex_surface_release;
+}
+
+boolean i915_get_texture_buffer( struct pipe_texture *texture,
+                                 struct pipe_buffer **buf,
+                                 unsigned *stride )
+{
+   struct i915_texture *tex = (struct i915_texture *)texture;
+
+   if (!tex)
+      return FALSE;
+
+   pipe_buffer_reference(texture->screen, buf, tex->buffer);
+
+   if (stride)
+      *stride = tex->stride;
+
+   return TRUE;
 }

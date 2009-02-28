@@ -492,7 +492,7 @@ xmesa_free_buffer(XMesaBuffer buffer)
          b->frontxrb->drawable = 0;
 
          /* Unreference.  If count = zero we'll really delete the buffer */
-         _mesa_unreference_framebuffer(&fb);
+         _mesa_reference_framebuffer(&fb, NULL);
 
          return;
       }
@@ -1325,7 +1325,6 @@ xmesa_convert_from_x_visual_type( int visualType )
 #define need_GL_EXT_framebuffer_blit
 #define need_GL_EXT_gpu_program_parameters
 #define need_GL_EXT_paletted_texture
-#define need_GL_IBM_multimode_draw_arrays
 #define need_GL_MESA_resize_buffers
 #define need_GL_NV_vertex_program
 #define need_GL_NV_fragment_program
@@ -1355,7 +1354,6 @@ const struct dri_extension card_extensions[] =
    { "GL_EXT_framebuffer_blit",		GL_EXT_framebuffer_blit_functions },
    { "GL_EXT_gpu_program_parameters",	GL_EXT_gpu_program_parameters_functions },
    { "GL_EXT_paletted_texture",		GL_EXT_paletted_texture_functions },
-   { "GL_IBM_multimode_draw_arrays",	GL_IBM_multimode_draw_arrays_functions },
    { "GL_MESA_resize_buffers",		GL_MESA_resize_buffers_functions },
    { "GL_NV_vertex_program",		GL_NV_vertex_program_functions },
    { "GL_NV_fragment_program",		GL_NV_fragment_program_functions },
@@ -2463,13 +2461,13 @@ XMesaBindTexImage(XMesaDisplay *dpy, XMesaBuffer drawable, int buffer,
 #if 0
    switch (drawable->TextureTarget) {
    case GLX_TEXTURE_1D_EXT:
-      texObj = texUnit->Current1D;
+      texObj = texUnit->CurrentTex[TEXTURE_1D_INDEX];
       break;
    case GLX_TEXTURE_2D_EXT:
-      texObj = texUnit->Current2D;
+      texObj = texUnit->CurrentTex[TEXTURE_2D_INDEX];
       break;
    case GLX_TEXTURE_RECTANGLE_EXT:
-      texObj = texUnit->CurrentRect;
+      texObj = texUnit->CurrentTex[TEXTURE_RECT_INDEX];
       break;
    default:
       return; /* BadMatch error */

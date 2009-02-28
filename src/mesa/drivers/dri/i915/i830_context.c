@@ -73,6 +73,8 @@ i830CreateContext(const __GLcontextModes * mesaVis,
       return GL_FALSE;
    }
 
+   _math_matrix_ctr(&intel->ViewportMatrix);
+
    /* Initialize swrast, tnl driver tables: */
    intelInitSpanFuncs(ctx);
    intelInitTriFuncs(ctx);
@@ -96,6 +98,8 @@ i830CreateContext(const __GLcontextModes * mesaVis,
    ctx->Const.MaxCubeTextureLevels = 11;
    ctx->Const.MaxTextureRectSize = (1 << 11);
    ctx->Const.MaxTextureUnits = I830_TEX_UNITS;
+
+   ctx->Const.MaxDrawBuffers = 1;
 
    _tnl_init_vertices(ctx, ctx->Const.MaxArrayLockSize + 12,
                       18 * sizeof(GLfloat));

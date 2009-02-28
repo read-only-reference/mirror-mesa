@@ -25,7 +25,7 @@
  * 
  **************************************************************************/
 
-#include "pipe/p_debug.h"
+#include "util/u_debug.h"
 #include "util/u_string.h"
 #include "tgsi_dump.h"
 #include "tgsi_info.h"
@@ -245,8 +245,12 @@ iter_declaration(
       }
    }
 
-   TXT( ", " );
-   ENM( decl->Declaration.Interpolate, interpolate_names );
+   if (iter->processor.Processor == TGSI_PROCESSOR_FRAGMENT &&
+       decl->Declaration.File == TGSI_FILE_INPUT)
+   {
+      TXT( ", " );
+      ENM( decl->Declaration.Interpolate, interpolate_names );
+   }
 
    if (decl->Declaration.Centroid) {
       TXT( ", CENTROID" );
@@ -285,7 +289,7 @@ iter_immediate(
    ENM( imm->Immediate.DataType, immediate_type_names );
 
    TXT( " { " );
-   for (i = 0; i < imm->Immediate.Size - 1; i++) {
+   for (i = 0; i < imm->Immediate.NrTokens - 1; i++) {
       switch (imm->Immediate.DataType) {
       case TGSI_IMM_FLOAT32:
          FLT( imm->u.ImmediateFloat32[i].Float );
@@ -294,7 +298,7 @@ iter_immediate(
          assert( 0 );
       }
 
-      if (i < imm->Immediate.Size - 2)
+      if (i < imm->Immediate.NrTokens - 2)
          TXT( ", " );
    }
    TXT( " }" );

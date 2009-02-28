@@ -117,13 +117,15 @@ nv50_tex_construct(struct nouveau_stateobj *so, struct nv50_miptree *mt)
 		return 1;
 	}
 
-	so_reloc(so, mt->buffer, 0, NOUVEAU_BO_VRAM | NOUVEAU_BO_LOW, 0, 0);
+	so_reloc(so, mt->buffer, 0, NOUVEAU_BO_VRAM | NOUVEAU_BO_LOW |
+		     NOUVEAU_BO_RD, 0, 0);
 	so_data (so, 0xd0005000);
 	so_data (so, 0x00300000);
 	so_data (so, mt->base.width[0]);
 	so_data (so, (mt->base.depth[0] << 16) | mt->base.height[0]);
 	so_data (so, 0x03000000);
-	so_reloc(so, mt->buffer, 0, NOUVEAU_BO_VRAM | NOUVEAU_BO_HIGH, 0, 0);
+	so_reloc(so, mt->buffer, 0, NOUVEAU_BO_VRAM | NOUVEAU_BO_HIGH |
+		     NOUVEAU_BO_RD, 0, 0);
 
 	return 0;
 }
@@ -133,7 +135,7 @@ nv50_tex_validate(struct nv50_context *nv50)
 {
 	struct nouveau_grobj *tesla = nv50->screen->tesla;
 	struct nouveau_stateobj *so;
-	int unit, level, image;
+	int unit;
 
 	so = so_new(nv50->miptree_nr * 8 + 3, nv50->miptree_nr * 2);
 	so_method(so, tesla, 0x0f00, 1);
@@ -141,13 +143,6 @@ nv50_tex_validate(struct nv50_context *nv50)
 	so_method(so, tesla, 0x40000f04, nv50->miptree_nr * 8);
 	for (unit = 0; unit < nv50->miptree_nr; unit++) {
 		struct nv50_miptree *mt = nv50->miptree[unit];
-
-		for (level = 0; level <= mt->base.last_level; level++) {
-			for (image = 0; image < mt->image_nr; image++) {
-				nv50_miptree_sync(&nv50->screen->pipe, mt,
-						  level, image);
-			}
-		}
 
 		if (nv50_tex_construct(so, mt)) {
 			NOUVEAU_ERR("failed tex validate\n");

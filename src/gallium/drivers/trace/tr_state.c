@@ -397,10 +397,36 @@ void trace_dump_surface(const struct pipe_surface *state)
 
    trace_dump_struct_begin("pipe_surface");
 
-   trace_dump_member(ptr, state, buffer);
    trace_dump_member(format, state, format);
    trace_dump_member(uint, state, status);
    trace_dump_member(uint, state, clear_value);
+   trace_dump_member(uint, state, width);
+   trace_dump_member(uint, state, height);
+
+   trace_dump_member(uint, state, layout);
+   trace_dump_member(uint, state, offset);
+   trace_dump_member(uint, state, refcount);
+   trace_dump_member(uint, state, usage);
+
+   trace_dump_member(ptr, state, texture);
+   trace_dump_member(uint, state, face);
+   trace_dump_member(uint, state, level);
+   trace_dump_member(uint, state, zslice);
+
+   trace_dump_struct_end();
+}
+
+
+void trace_dump_transfer(const struct pipe_transfer *state)
+{
+   if(!state) {
+      trace_dump_null();
+      return;
+   }
+
+   trace_dump_struct_begin("pipe_transfer");
+
+   trace_dump_member(format, state, format);
    trace_dump_member(uint, state, width);
    trace_dump_member(uint, state, height);
 
@@ -411,8 +437,6 @@ void trace_dump_surface(const struct pipe_surface *state)
    trace_dump_member(uint, state, nblocksx);
    trace_dump_member(uint, state, nblocksy);
    trace_dump_member(uint, state, stride);
-   trace_dump_member(uint, state, layout);
-   trace_dump_member(uint, state, offset);
    trace_dump_member(uint, state, refcount);
    trace_dump_member(uint, state, usage);
 

@@ -15,10 +15,6 @@
 #include "nouveau/nouveau_gldefs.h"
 #include "nouveau/nouveau_stateobj.h"
 
-#define NOUVEAU_PUSH_CONTEXT(ctx)                                              \
-	struct nv50_screen *ctx = nv50->screen
-#include "nouveau/nouveau_push.h"
-
 #include "nv50_screen.h"
 #include "nv50_program.h"
 
@@ -68,10 +64,8 @@ struct nv50_rasterizer_stateobj {
 };
 
 struct nv50_miptree_level {
-	struct pipe_buffer **image;
 	int *image_offset;
-	unsigned image_dirty_cpu[512/32];
-	unsigned image_dirty_gpu[512/32];
+	unsigned pitch;
 };
 
 struct nv50_miptree {
@@ -97,6 +91,13 @@ static INLINE struct nv50_surface *
 nv50_surface(struct pipe_surface *pt)
 {
 	return (struct nv50_surface *)pt;
+}
+
+static INLINE struct pipe_buffer *
+nv50_surface_buffer(struct pipe_surface *surface)
+{
+	struct nv50_miptree *mt = (struct nv50_miptree *)surface->texture;
+	return mt->buffer;
 }
 
 struct nv50_state {
@@ -164,6 +165,11 @@ extern void nv50_init_query_functions(struct nv50_context *nv50);
 
 extern void nv50_screen_init_miptree_functions(struct pipe_screen *pscreen);
 
+extern int
+nv50_surface_do_copy(struct nv50_screen *screen, struct pipe_surface *dst,
+		     int dx, int dy, struct pipe_surface *src, int sx, int sy,
+		     int w, int h);
+
 /* nv50_draw.c */
 extern struct draw_stage *nv50_draw_render_stage(struct nv50_context *nv50);
 
@@ -191,9 +197,5 @@ extern boolean nv50_state_validate(struct nv50_context *nv50);
 
 /* nv50_tex.c */
 extern void nv50_tex_validate(struct nv50_context *);
-
-/* nv50_miptree.c */
-extern void nv50_miptree_sync(struct pipe_screen *, struct nv50_miptree *,
-			      unsigned level, unsigned image);
 
 #endif

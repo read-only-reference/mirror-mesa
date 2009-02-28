@@ -35,10 +35,9 @@
 
 
 #include "pipe/p_context.h"
-#include "pipe/p_debug.h"
+#include "util/u_debug.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_inlines.h"
-#include "pipe/p_winsys.h"
 #include "pipe/p_shader_tokens.h"
 
 #include "util/u_memory.h"
@@ -1117,31 +1116,30 @@ make_1d_mipmap(struct gen_mipmap_state *ctx,
 
    for (dstLevel = baseLevel + 1; dstLevel <= lastLevel; dstLevel++) {
       const uint srcLevel = dstLevel - 1;
-      struct pipe_surface *srcSurf, *dstSurf;
+      struct pipe_transfer *srcTrans, *dstTrans;
       void *srcMap, *dstMap;
       
-      srcSurf = screen->get_tex_surface(screen, pt, face, srcLevel, zslice,
-                                        PIPE_BUFFER_USAGE_CPU_READ);
+      srcTrans = screen->get_tex_transfer(screen, pt, face, srcLevel, zslice,
+                                          PIPE_TRANSFER_READ, 0, 0,
+                                          pt->width[srcLevel],
+                                          pt->height[srcLevel]);
+      dstTrans = screen->get_tex_transfer(screen, pt, face, dstLevel, zslice,
+                                          PIPE_TRANSFER_WRITE, 0, 0,
+                                          pt->width[dstLevel],
+                                          pt->height[dstLevel]);
 
-      dstSurf = screen->get_tex_surface(screen, pt, face, dstLevel, zslice,
-                                        PIPE_BUFFER_USAGE_CPU_WRITE);
-
-      srcMap = ((ubyte *) pipe_buffer_map(screen, srcSurf->buffer,
-                                          PIPE_BUFFER_USAGE_CPU_READ)
-                + srcSurf->offset);
-      dstMap = ((ubyte *) pipe_buffer_map(screen, dstSurf->buffer,
-                                          PIPE_BUFFER_USAGE_CPU_WRITE)
-                + dstSurf->offset);
+      srcMap = (ubyte *) screen->transfer_map(screen, srcTrans);
+      dstMap = (ubyte *) screen->transfer_map(screen, dstTrans);
 
       reduce_1d(pt->format,
-                srcSurf->width, srcMap,
-                dstSurf->width, dstMap);
+                srcTrans->width, srcMap,
+                dstTrans->width, dstMap);
 
-      pipe_buffer_unmap(screen, srcSurf->buffer);
-      pipe_buffer_unmap(screen, dstSurf->buffer);
+      screen->transfer_unmap(screen, srcTrans);
+      screen->transfer_unmap(screen, dstTrans);
 
-      pipe_surface_reference(&srcSurf, NULL);
-      pipe_surface_reference(&dstSurf, NULL);
+      screen->tex_transfer_release(screen, &srcTrans);
+      screen->tex_transfer_release(screen, &dstTrans);
    }
 }
 
@@ -1161,32 +1159,32 @@ make_2d_mipmap(struct gen_mipmap_state *ctx,
 
    for (dstLevel = baseLevel + 1; dstLevel <= lastLevel; dstLevel++) {
       const uint srcLevel = dstLevel - 1;
-      struct pipe_surface *srcSurf, *dstSurf;
+      struct pipe_transfer *srcTrans, *dstTrans;
       ubyte *srcMap, *dstMap;
       
-      srcSurf = screen->get_tex_surface(screen, pt, face, srcLevel, zslice,
-                                        PIPE_BUFFER_USAGE_CPU_READ);
-      dstSurf = screen->get_tex_surface(screen, pt, face, dstLevel, zslice,
-                                        PIPE_BUFFER_USAGE_CPU_WRITE);
+      srcTrans = screen->get_tex_transfer(screen, pt, face, srcLevel, zslice,
+                                          PIPE_TRANSFER_READ, 0, 0,
+                                          pt->width[srcLevel],
+                                          pt->height[srcLevel]);
+      dstTrans = screen->get_tex_transfer(screen, pt, face, dstLevel, zslice,
+                                          PIPE_TRANSFER_WRITE, 0, 0,
+                                          pt->width[dstLevel],
+                                          pt->height[dstLevel]);
 
-      srcMap = ((ubyte *) pipe_buffer_map(screen, srcSurf->buffer,
-                                          PIPE_BUFFER_USAGE_CPU_READ)
-                + srcSurf->offset);
-      dstMap = ((ubyte *) pipe_buffer_map(screen, dstSurf->buffer,
-                                          PIPE_BUFFER_USAGE_CPU_WRITE)
-                + dstSurf->offset);
+      srcMap = (ubyte *) screen->transfer_map(screen, srcTrans);
+      dstMap = (ubyte *) screen->transfer_map(screen, dstTrans);
 
       reduce_2d(pt->format,
-                srcSurf->width, srcSurf->height,
-                srcSurf->stride, srcMap,
-                dstSurf->width, dstSurf->height,
-                dstSurf->stride, dstMap);
+                srcTrans->width, srcTrans->height,
+                srcTrans->stride, srcMap,
+                dstTrans->width, dstTrans->height,
+                dstTrans->stride, dstMap);
 
-      pipe_buffer_unmap(screen, srcSurf->buffer);
-      pipe_buffer_unmap(screen, dstSurf->buffer);
+      screen->transfer_unmap(screen, srcTrans);
+      screen->transfer_unmap(screen, dstTrans);
 
-      pipe_surface_reference(&srcSurf, NULL);
-      pipe_surface_reference(&dstSurf, NULL);
+      screen->tex_transfer_release(screen, &srcTrans);
+      screen->tex_transfer_release(screen, &dstTrans);
    }
 }
 
@@ -1196,6 +1194,7 @@ make_3d_mipmap(struct gen_mipmap_state *ctx,
                struct pipe_texture *pt,
                uint face, uint baseLevel, uint lastLevel)
 {
+#if 0
    struct pipe_context *pipe = ctx->pipe;
    struct pipe_screen *screen = pipe->screen;
    uint dstLevel, zslice = 0;
@@ -1205,37 +1204,36 @@ make_3d_mipmap(struct gen_mipmap_state *ctx,
 
    for (dstLevel = baseLevel + 1; dstLevel <= lastLevel; dstLevel++) {
       const uint srcLevel = dstLevel - 1;
-      struct pipe_surface *srcSurf, *dstSurf;
+      struct pipe_transfer *srcTrans, *dstTrans;
       ubyte *srcMap, *dstMap;
       
-      srcSurf = screen->get_tex_surface(screen, pt, face, srcLevel, zslice,
-                                        PIPE_BUFFER_USAGE_CPU_READ);
-      dstSurf = screen->get_tex_surface(screen, pt, face, dstLevel, zslice,
-                                        PIPE_BUFFER_USAGE_CPU_WRITE);
+      srcTrans = screen->get_tex_transfer(screen, pt, face, srcLevel, zslice,
+                                          PIPE_TRANSFER_READ, 0, 0,
+                                          pt->width[srcLevel],
+                                          pt->height[srcLevel]);
+      dstTrans = screen->get_tex_transfer(screen, pt, face, dstLevel, zslice,
+                                          PIPE_TRANSFER_WRITE, 0, 0,
+                                          pt->width[dstLevel],
+                                          pt->height[dstLevel]);
 
-      srcMap = ((ubyte *) pipe_buffer_map(screen, srcSurf->buffer,
-                                          PIPE_BUFFER_USAGE_CPU_READ)
-                + srcSurf->offset);
-      dstMap = ((ubyte *) pipe_buffer_map(screen, dstSurf->buffer,
-                                          PIPE_BUFFER_USAGE_CPU_WRITE)
-                + dstSurf->offset);
+      srcMap = (ubyte *) screen->transfer_map(screen, srcTrans);
+      dstMap = (ubyte *) screen->transfer_map(screen, dstTrans);
 
-#if 0
       reduce_3d(pt->format,
-                srcSurf->width, srcSurf->height,
-                srcSurf->stride, srcMap,
-                dstSurf->width, dstSurf->height,
-                dstSurf->stride, dstMap);
-#else
-      (void) reduce_3d;
-#endif
+                srcTrans->width, srcTrans->height,
+                srcTrans->stride, srcMap,
+                dstTrans->width, dstTrans->height,
+                dstTrans->stride, dstMap);
 
-      pipe_buffer_unmap(screen, srcSurf->buffer);
-      pipe_buffer_unmap(screen, dstSurf->buffer);
+      screen->transfer_unmap(screen, srcTrans);
+      screen->transfer_unmap(screen, dstTrans);
 
-      pipe_surface_reference(&srcSurf, NULL);
-      pipe_surface_reference(&dstSurf, NULL);
+      screen->tex_transfer_release(screen, &srcTrans);
+      screen->tex_transfer_release(screen, &dstTrans);
    }
+#else
+   (void) reduce_3d;
+#endif
 }
 
 
@@ -1370,7 +1368,6 @@ get_next_slot(struct gen_mipmap_state *ctx)
 static unsigned
 set_vertex_data(struct gen_mipmap_state *ctx, float width, float height)
 {
-   void *buf;
    unsigned offset;
 
    ctx->vertices[0][0][0] = 0.0f; /*x*/
@@ -1395,12 +1392,8 @@ set_vertex_data(struct gen_mipmap_state *ctx, float width, float height)
 
    offset = get_next_slot( ctx );
 
-   buf = pipe_buffer_map(ctx->pipe->screen, ctx->vbuf,
-                         PIPE_BUFFER_USAGE_CPU_WRITE);
-
-   memcpy((char *)buf + offset, ctx->vertices, sizeof(ctx->vertices));
-
-   pipe_buffer_unmap(ctx->pipe->screen, ctx->vbuf);
+   pipe_buffer_write(ctx->pipe->screen, ctx->vbuf,
+                     offset, sizeof(ctx->vertices), ctx->vertices);
 
    return offset;
 }

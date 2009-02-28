@@ -32,7 +32,7 @@
 #include "util/u_memory.h"
 #include "util/u_math.h"
 #include "pipe/p_shader_tokens.h"
-#include "pipe/p_debug.h"
+#include "util/u_debug.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_util.h"
 #include "tgsi/tgsi_exec.h"
@@ -283,6 +283,15 @@ void aos_release_xmm_reg( struct aos_compilation *cp,
    cp->xmm[idx].last_used = 0;
 }
 
+
+static void aos_soft_release_xmm( struct aos_compilation *cp,
+                                  struct x86_reg reg )
+{
+   if (reg.file == file_XMM) {
+      assert(cp->xmm[reg.idx].last_used == cp->insn_counter);
+      cp->xmm[reg.idx].last_used = cp->insn_counter - 1;
+   }
+}
 
 
      
@@ -584,10 +593,12 @@ static struct x86_reg fetch_src( struct aos_compilation *cp,
          sse_mulps(cp->func, dst, tmp);
 
          aos_release_xmm_reg(cp, tmp.idx);
+         aos_soft_release_xmm(cp, imm_swz);
       }
       else if (negs) {
          struct x86_reg imm_negs = aos_get_internal_xmm(cp, IMM_NEGS);
          sse_mulps(cp->func, dst, imm_negs);
+         aos_soft_release_xmm(cp, imm_negs);
       }
 
 
@@ -603,8 +614,10 @@ static struct x86_reg fetch_src( struct aos_compilation *cp,
          sse_maxps(cp->func, dst, tmp);
 
          aos_release_xmm_reg(cp, tmp.idx);
+         aos_soft_release_xmm(cp, neg);
       }
 
+      aos_soft_release_xmm(cp, arg0);
       return dst;
    }
       
@@ -1559,7 +1572,6 @@ static boolean emit_RCP( struct aos_compilation *cp, const struct tgsi_full_inst
  */
 static boolean emit_RSQ( struct aos_compilation *cp, const struct tgsi_full_instruction *op )
 {
-
    if (0) {
       struct x86_reg arg0 = fetch_src(cp, &op->FullSrcRegisters[0]);
       struct x86_reg r = aos_get_xmm_reg(cp);
@@ -1568,21 +1580,30 @@ static boolean emit_RSQ( struct aos_compilation *cp, const struct tgsi_full_inst
       return TRUE;
    }
    else {
-      struct x86_reg arg0 = fetch_src(cp, &op->FullSrcRegisters[0]);
-      struct x86_reg r = aos_get_xmm_reg(cp);
+      struct x86_reg arg0           = fetch_src(cp, &op->FullSrcRegisters[0]);
+      struct x86_reg r              = aos_get_xmm_reg(cp);
 
       struct x86_reg neg_half       = get_reg_ptr( cp, AOS_FILE_INTERNAL, IMM_RSQ );
       struct x86_reg one_point_five = x86_make_disp( neg_half, 4 );
       struct x86_reg src            = get_xmm_writable( cp, arg0 );
-      
-      sse_rsqrtss( cp->func, r, src  );             /* rsqrtss(a) */
-      sse_mulss(   cp->func, src, neg_half  );      /* -.5 * a */
-      sse_mulss(   cp->func, src,  r );             /* -.5 * a * r */
-      sse_mulss(   cp->func, src,  r );             /* -.5 * a * r * r */
-      sse_addss(   cp->func, src, one_point_five ); /* 1.5 - .5 * a * r * r */
-      sse_mulss(   cp->func, r,  src );             /* r * (1.5 - .5 * a * r * r) */
+      struct x86_reg neg            = aos_get_internal(cp, IMM_NEGS);
+      struct x86_reg tmp            = aos_get_xmm_reg(cp);
+
+      sse_movaps(cp->func, tmp, src);
+      sse_mulps(cp->func, tmp, neg);
+      sse_maxps(cp->func, tmp, src);
+   
+      sse_rsqrtss( cp->func, r, tmp  );             /* rsqrtss(a) */
+      sse_mulss(   cp->func, tmp, neg_half  );      /* -.5 * a */
+      sse_mulss(   cp->func, tmp,  r );             /* -.5 * a * r */
+      sse_mulss(   cp->func, tmp,  r );             /* -.5 * a * r * r */
+      sse_addss(   cp->func, tmp, one_point_five ); /* 1.5 - .5 * a * r * r */
+      sse_mulss(   cp->func, r,  tmp );             /* r * (1.5 - .5 * a * r * r) */
 
       store_scalar_dest(cp, &op->FullDstRegisters[0], r);
+
+      aos_release_xmm_reg(cp, tmp.idx);
+
       return TRUE;
    }
 }
@@ -1870,7 +1891,7 @@ static boolean note_immediate( struct aos_compilation *cp,
    unsigned pos = cp->num_immediates++;
    unsigned j;
 
-   for (j = 0; j < imm->Immediate.Size; j++) {
+   for (j = 0; j < imm->Immediate.NrTokens - 1; j++) {
       cp->vaos->machine->immediate[pos][j] = imm->u.ImmediateFloat32[j].Float;
    }
 

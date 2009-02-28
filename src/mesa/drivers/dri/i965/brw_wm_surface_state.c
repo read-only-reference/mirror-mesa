@@ -139,7 +139,15 @@ static GLuint translate_tex_format( GLuint mesa_format, GLenum depth_mode )
       return BRW_SURFACEFORMAT_BC1_UNORM_SRGB;
 
    case MESA_FORMAT_S8_Z24:
-      return BRW_SURFACEFORMAT_I24X8_UNORM;
+      /* XXX: these different surface formats don't seem to
+       * make any difference for shadow sampler/compares.
+       */
+      if (depth_mode == GL_INTENSITY) 
+         return BRW_SURFACEFORMAT_I24X8_UNORM;
+      else if (depth_mode == GL_ALPHA)
+         return BRW_SURFACEFORMAT_A24X8_UNORM;
+      else
+         return BRW_SURFACEFORMAT_L24X8_UNORM;
 
    default:
       assert(0);
@@ -253,7 +261,7 @@ static void
 brw_update_texture_surface( GLcontext *ctx, GLuint unit )
 {
    struct brw_context *brw = brw_context(ctx);
-   struct gl_texture_object *tObj = brw->attribs.Texture->Unit[unit]._Current;
+   struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
    struct intel_texture_object *intelObj = intel_texture_object(tObj);
    struct gl_texture_image *firstImage = tObj->Image[0][intelObj->firstLevel];
    struct brw_wm_surface_key key;
@@ -301,6 +309,7 @@ static void
 brw_update_region_surface(struct brw_context *brw, struct intel_region *region,
 			  unsigned int unit, GLboolean cached)
 {
+   GLcontext *ctx = &brw->intel.ctx;
    dri_bo *region_bo = NULL;
    struct {
       unsigned int surface_type;
@@ -333,10 +342,10 @@ brw_update_region_surface(struct brw_context *brw, struct intel_region *region,
       key.height = 1;
       key.cpp = 4;
    }
-   memcpy(key.color_mask, brw->attribs.Color->ColorMask,
+   memcpy(key.color_mask, ctx->Color.ColorMask,
 	  sizeof(key.color_mask));
-   key.color_blend = (!brw->attribs.Color->_LogicOpEnabled &&
-		      brw->attribs.Color->BlendEnabled);
+   key.color_blend = (!ctx->Color._LogicOpEnabled &&
+		      ctx->Color.BlendEnabled);
 
    dri_bo_unreference(brw->wm.surf_bo[unit]);
    brw->wm.surf_bo[unit] = NULL;
@@ -380,8 +389,7 @@ brw_update_region_surface(struct brw_context *brw, struct intel_region *region,
 	  * a more restrictive relocation to emit.
 	  */
 	 dri_bo_emit_reloc(brw->wm.surf_bo[unit],
-			   I915_GEM_DOMAIN_RENDER |
-			   I915_GEM_DOMAIN_SAMPLER,
+			   I915_GEM_DOMAIN_RENDER,
 			   I915_GEM_DOMAIN_RENDER,
 			   0,
 			   offsetof(struct brw_surface_state, ss1),
@@ -446,20 +454,20 @@ static void prepare_wm_surfaces(struct brw_context *brw )
    GLuint i;
    int old_nr_surfaces;
 
-   if (brw->state.nr_draw_regions  > 1) {
-      for (i = 0; i < brw->state.nr_draw_regions; i++) {
-         brw_update_region_surface(brw, brw->state.draw_regions[i], i,
+   if (brw->state.nr_color_regions  > 1) {
+      for (i = 0; i < brw->state.nr_color_regions; i++) {
+         brw_update_region_surface(brw, brw->state.color_regions[i], i,
 				   GL_FALSE);
       }
-   }else {
-      brw_update_region_surface(brw, brw->state.draw_regions[0], 0, GL_TRUE);
+   } else {
+      brw_update_region_surface(brw, brw->state.color_regions[0], 0, GL_TRUE);
    }
 
    old_nr_surfaces = brw->wm.nr_surfaces;
    brw->wm.nr_surfaces = MAX_DRAW_BUFFERS;
 
    for (i = 0; i < BRW_MAX_TEX_UNIT; i++) {
-      struct gl_texture_unit *texUnit = &brw->attribs.Texture->Unit[i];
+      struct gl_texture_unit *texUnit = &ctx->Texture.Unit[i];
 
       /* _NEW_TEXTURE, BRW_NEW_TEXDATA */
       if(texUnit->_ReallyEnabled) {

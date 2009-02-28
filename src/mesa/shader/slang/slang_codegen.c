@@ -450,8 +450,8 @@ _slang_output_index(const char *name, GLenum target)
       { NULL, 0 }
    };
    static const struct output_info fragOutputs[] = {
-      { "gl_FragColor", FRAG_RESULT_COLR },
-      { "gl_FragDepth", FRAG_RESULT_DEPR },
+      { "gl_FragColor", FRAG_RESULT_COLOR },
+      { "gl_FragDepth", FRAG_RESULT_DEPTH },
       { "gl_FragData", FRAG_RESULT_DATA0 },
       { NULL, 0 }
    };
@@ -516,18 +516,28 @@ static slang_asm_info AsmInfo[] = {
    /* float binary op */
    { "float_power", IR_POW, 1, 2 },
    /* texture / sampler */
-   { "vec4_tex1d", IR_TEX, 1, 2 },
-   { "vec4_texb1d", IR_TEXB, 1, 2 },  /* 1d w/ bias */
-   { "vec4_texp1d", IR_TEXP, 1, 2 },  /* 1d w/ projection */
-   { "vec4_tex2d", IR_TEX, 1, 2 },
-   { "vec4_texb2d", IR_TEXB, 1, 2 },  /* 2d w/ bias */
-   { "vec4_texp2d", IR_TEXP, 1, 2 },  /* 2d w/ projection */
-   { "vec4_tex3d", IR_TEX, 1, 2 },
-   { "vec4_texb3d", IR_TEXB, 1, 2 },  /* 3d w/ bias */
-   { "vec4_texp3d", IR_TEXP, 1, 2 },  /* 3d w/ projection */
-   { "vec4_texcube", IR_TEX, 1, 2 },  /* cubemap */
-   { "vec4_tex_rect", IR_TEX, 1, 2 }, /* rectangle */
-   { "vec4_texp_rect", IR_TEX, 1, 2 },/* rectangle w/ projection */
+   { "vec4_tex_1d", IR_TEX, 1, 2 },
+   { "vec4_tex_1d_bias", IR_TEXB, 1, 2 },  /* 1d w/ bias */
+   { "vec4_tex_1d_proj", IR_TEXP, 1, 2 },  /* 1d w/ projection */
+   { "vec4_tex_2d", IR_TEX, 1, 2 },
+   { "vec4_tex_2d_bias", IR_TEXB, 1, 2 },  /* 2d w/ bias */
+   { "vec4_tex_2d_proj", IR_TEXP, 1, 2 },  /* 2d w/ projection */
+   { "vec4_tex_3d", IR_TEX, 1, 2 },
+   { "vec4_tex_3d_bias", IR_TEXB, 1, 2 },  /* 3d w/ bias */
+   { "vec4_tex_3d_proj", IR_TEXP, 1, 2 },  /* 3d w/ projection */
+   { "vec4_tex_cube", IR_TEX, 1, 2 },      /* cubemap */
+   { "vec4_tex_rect", IR_TEX, 1, 2 },      /* rectangle */
+   { "vec4_tex_rect_bias", IR_TEX, 1, 2 }, /* rectangle w/ projection */
+
+   /* texture / sampler but with shadow comparison */
+   { "vec4_tex_1d_shadow", IR_TEX_SH, 1, 2 },
+   { "vec4_tex_1d_bias_shadow", IR_TEXB_SH, 1, 2 },
+   { "vec4_tex_1d_proj_shadow", IR_TEXP_SH, 1, 2 },
+   { "vec4_tex_2d_shadow", IR_TEX_SH, 1, 2 },
+   { "vec4_tex_2d_bias_shadow", IR_TEXB_SH, 1, 2 },
+   { "vec4_tex_2d_proj_shadow", IR_TEXP_SH, 1, 2 },
+   { "vec4_tex_rect_shadow", IR_TEX_SH, 1, 2 },
+   { "vec4_tex_rect_proj_shadow", IR_TEXP_SH, 1, 2 },
 
    /* unary op */
    { "ivec4_to_vec4", IR_I_TO_F, 1, 1 }, /* int[4] to float[4] */
@@ -3662,7 +3672,7 @@ _slang_gen_assignment(slang_assemble_ctx * A, slang_operation *oper)
       if (lhs && rhs) {
          /* convert lhs swizzle into writemask */
          const GLuint swizzle = root_swizzle(lhs->Store);
-         GLuint writemask, newSwizzle;
+         GLuint writemask, newSwizzle = 0x0;
          if (!swizzle_to_writemask(A, swizzle, &writemask, &newSwizzle)) {
             /* Non-simple writemask, need to swizzle right hand side in
              * order to put components into the right place.

@@ -34,7 +34,7 @@
  */
 
 
-#include "pipe/p_debug.h"
+#include "util/u_debug.h"
 #include "util/u_memory.h"
 
 #include "pb_buffer.h"
@@ -79,6 +79,10 @@ fenced_bufmgr_create_buffer(struct pb_manager *mgr,
       
       buf = fenced_mgr->provider->create_buffer(fenced_mgr->provider, size, desc);
       if(!buf) {
+#if 0
+         fenced_buffer_list_dump(fenced_mgr->fenced_list);
+#endif
+         
          /* give up */
          return NULL;
       }
@@ -122,7 +126,7 @@ fenced_bufmgr_destroy(struct pb_manager *mgr)
 
 struct pb_manager *
 fenced_bufmgr_create(struct pb_manager *provider, 
-                     struct pipe_winsys *winsys) 
+                     struct pb_fence_ops *ops) 
 {
    struct fenced_pb_manager *fenced_mgr;
 
@@ -138,7 +142,7 @@ fenced_bufmgr_create(struct pb_manager *provider,
    fenced_mgr->base.flush = fenced_bufmgr_flush;
 
    fenced_mgr->provider = provider;
-   fenced_mgr->fenced_list = fenced_buffer_list_create(winsys);
+   fenced_mgr->fenced_list = fenced_buffer_list_create(ops);
    if(!fenced_mgr->fenced_list) {
       FREE(fenced_mgr);
       return NULL;

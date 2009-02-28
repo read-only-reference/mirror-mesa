@@ -109,12 +109,18 @@ intel_region_alloc_internal(struct intel_context *intel,
 
 struct intel_region *
 intel_region_alloc(struct intel_context *intel,
-                   GLuint cpp, GLuint width, GLuint height, GLuint pitch)
+                   GLuint cpp, GLuint width, GLuint height, GLuint pitch,
+		   GLboolean expect_accelerated_upload)
 {
    dri_bo *buffer;
 
-   buffer = dri_bo_alloc(intel->bufmgr, "region",
-			 pitch * cpp * height, 64);
+   if (expect_accelerated_upload) {
+      buffer = drm_intel_bo_alloc_for_render(intel->bufmgr, "region",
+					     pitch * cpp * height, 64);
+   } else {
+      buffer = drm_intel_bo_alloc(intel->bufmgr, "region",
+				  pitch * cpp * height, 64);
+   }
 
    return intel_region_alloc_internal(intel, cpp, width, height, pitch, buffer);
 }
@@ -152,7 +158,7 @@ void
 intel_region_reference(struct intel_region **dst, struct intel_region *src)
 {
    if (src)
-      DBG("%s %d\n", __FUNCTION__, src->refcount);
+      DBG("%s %p %d\n", __FUNCTION__, src, src->refcount);
 
    assert(*dst == NULL);
    if (src) {
@@ -169,7 +175,7 @@ intel_region_release(struct intel_region **region_handle)
    if (region == NULL)
       return;
 
-   DBG("%s %d\n", __FUNCTION__, region->refcount - 1);
+   DBG("%s %p %d\n", __FUNCTION__, region, region->refcount - 1);
 
    ASSERT(region->refcount > 0);
    region->refcount--;
@@ -460,7 +466,8 @@ intel_recreate_static(struct intel_context *intel,
    else
       region->cpp = intel->ctx.Visual.rgbBits / 8;
    region->pitch = intelScreen->pitch;
-   region->height = intelScreen->height;     /* needed? */
+   region->width = intelScreen->width;
+   region->height = intelScreen->height;
 
    if (region->buffer != NULL) {
       dri_bo_unreference(region->buffer);

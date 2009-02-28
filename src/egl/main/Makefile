@@ -46,8 +46,6 @@ OBJECTS = $(SOURCES:.c=.o)
 # Undefined for now
 LOCAL_CFLAGS = -D_EGL_PLATFORM_X=1
 
-LIBS = -lX11
-
 
 .c.o:
 	$(CC) -c $(INCLUDE_DIRS) $(CFLAGS) $(LOCAL_CFLAGS) $< -o $@
@@ -63,9 +61,12 @@ library: $(TOP)/$(LIB_DIR)/libEGL.so
 $(TOP)/$(LIB_DIR)/libEGL.so: $(OBJECTS)
 	$(MKLIB) -o EGL -linker '$(CC)' -ldflags '$(LDFLAGS)' \
 		-major 1 -minor 0 \
-		-install $(TOP)/$(LIB_DIR) -ldl $(OBJECTS) $(LIBS)
+		-install $(TOP)/$(LIB_DIR) \
+		$(EGL_LIB_DEPS) $(OBJECTS)
 
-
+install:
+	$(INSTALL) -d $(DESTDIR)$(INSTALL_LIB_DIR)
+	$(INSTALL) $(TOP)/$(LIB_DIR)/libEGL.so* $(DESTDIR)$(INSTALL_LIB_DIR)
 
 clean:
 	-rm -f *.o *.so*

@@ -38,14 +38,15 @@
 
 #include <windows.h>
 
-#include "pipe/p_winsys.h"
+#include "pipe/internal/p_winsys_screen.h"
 #include "pipe/p_format.h"
 #include "pipe/p_context.h"
 #include "pipe/p_inlines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "softpipe/sp_winsys.h"
-#include "stw_winsys.h"
+#include "softpipe/sp_texture.h"
+#include "shared/stw_winsys.h"
 
 
 struct gdi_softpipe_buffer
@@ -268,18 +269,21 @@ gdi_softpipe_context_create(struct pipe_screen *screen)
 
 
 static void
-gdi_softpipe_flush_frontbuffer(struct pipe_winsys *winsys,
+gdi_softpipe_flush_frontbuffer(struct pipe_screen *screen,
                                struct pipe_surface *surface,
                                HDC hDC)
 {
+    struct softpipe_texture *texture;
     struct gdi_softpipe_buffer *buffer;
     BITMAPINFO bmi;
 
-    buffer = gdi_softpipe_buffer(surface->buffer);
+    texture = softpipe_texture(surface->texture);
+                                               
+    buffer = gdi_softpipe_buffer(texture->buffer);
 
     memset(&bmi, 0, sizeof(BITMAPINFO));
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = surface->stride / pf_get_size(surface->format);
+    bmi.bmiHeader.biWidth = texture->stride[surface->level] / pf_get_size(surface->format);
     bmi.bmiHeader.biHeight= -(long)surface->height;
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = pf_get_bits(surface->format);

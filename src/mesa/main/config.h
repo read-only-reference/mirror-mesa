@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.3
+ * Version:  7.5
  *
  * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  * Copyright (C) 2008  VMware, Inc.  All Rights Reserved.
@@ -30,9 +30,6 @@
 
 #ifndef MESA_CONFIG_H_INCLUDED
 #define MESA_CONFIG_H_INCLUDED
-
-
-#include "main/mfeatures.h"
 
 
 /**
@@ -101,16 +98,16 @@
 #define MAX_COLOR_TABLE_SIZE 256
 
 /** Number of 1D/2D texture mipmap levels */
-#define MAX_TEXTURE_LEVELS 12
+#define MAX_TEXTURE_LEVELS 13
 
 /** Number of 3D texture mipmap levels */
 #define MAX_3D_TEXTURE_LEVELS 9
 
 /** Number of cube texture mipmap levels - GL_ARB_texture_cube_map */
-#define MAX_CUBE_TEXTURE_LEVELS 12
+#define MAX_CUBE_TEXTURE_LEVELS 13
 
 /** Maximum rectangular texture size - GL_NV_texture_rectangle */
-#define MAX_TEXTURE_RECT_SIZE 2048
+#define MAX_TEXTURE_RECT_SIZE 4096
 
 /** Maximum number of layers in a 1D or 2D array texture - GL_MESA_texture_array */
 #define MAX_ARRAY_TEXTURE_LAYERS 64
@@ -166,7 +163,7 @@
 #define MAX_TEXTURE_MAX_ANISOTROPY 16.0
 
 /** For GL_EXT_texture_lod_bias (typically MAX_TEXTURE_LEVELS - 1) */
-#define MAX_TEXTURE_LOD_BIAS 11.0
+#define MAX_TEXTURE_LOD_BIAS 12.0
 
 /** For GL_ARB_vertex_program */
 /*@{*/
@@ -189,7 +186,7 @@
 #define MAX_PROGRAM_CALL_DEPTH 8
 #define MAX_PROGRAM_TEMPS 128
 #define MAX_PROGRAM_ADDRESS_REGS 2
-#define MAX_UNIFORMS 256   /**< number of vec4 uniforms */
+#define MAX_UNIFORMS 1024  /**< number of vec4 uniforms */
 #define MAX_VARYING 8      /**< number of float[4] vectors */
 #define MAX_SAMPLERS MAX_TEXTURE_IMAGE_UNITS
 #define MAX_PROGRAM_INPUTS 32

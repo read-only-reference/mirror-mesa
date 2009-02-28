@@ -295,6 +295,9 @@ link_uniform_vars(GLcontext *ctx,
             inst->TexSrcUnit = newSampNum;
             prog->SamplerTargets[newSampNum] = inst->TexSrcTarget;
             prog->SamplersUsed |= (1 << newSampNum);
+            if (inst->TexShadow) {
+               prog->ShadowSamplers |= (1 << newSampNum);
+            }
          }
       }
    }
@@ -318,7 +321,7 @@ _slang_resolve_attributes(struct gl_shader_program *shProg,
 {
    GLint attribMap[MAX_VERTEX_ATTRIBS];
    GLuint i, j;
-   GLbitfield usedAttributes;
+   GLbitfield usedAttributes; /* generics only, not legacy attributes */
 
    assert(origProg != linkedProg);
    assert(origProg->Target == GL_VERTEX_PROGRAM_ARB);
@@ -340,6 +343,15 @@ _slang_resolve_attributes(struct gl_shader_program *shProg,
    for (i = 0; i < shProg->Attributes->NumParameters; i++) {
       GLint attr = shProg->Attributes->Parameters[i].StateIndexes[0];
       usedAttributes |= (1 << attr);
+   }
+
+   /* If gl_Vertex is used, that actually counts against the limit
+    * on generic vertex attributes.  This avoids the ambiguity of
+    * whether glVertexAttrib4fv(0, v) sets legacy attribute 0 (vert pos)
+    * or generic attribute[0].  If gl_Vertex is used, we want the former.
+    */
+   if (origProg->InputsRead & VERT_BIT_POS) {
+      usedAttributes |= 0x1;
    }
 
    /* initialize the generic attribute map entries to -1 */
@@ -384,7 +396,7 @@ _slang_resolve_attributes(struct gl_shader_program *shProg,
                    * Start at 1 since generic attribute 0 always aliases
                    * glVertex/position.
                    */
-                  for (attr = 1; attr < MAX_VERTEX_ATTRIBS; attr++) {
+                  for (attr = 0; attr < MAX_VERTEX_ATTRIBS; attr++) {
                      if (((1 << attr) & usedAttributes) == 0)
                         break;
                   }
@@ -486,8 +498,33 @@ _slang_update_inputs_outputs(struct gl_program *prog)
             maxAddrReg = MAX2(maxAddrReg, (GLuint) (inst->SrcReg[j].Index + 1));
          }
       }
+
       if (inst->DstReg.File == PROGRAM_OUTPUT) {
          prog->OutputsWritten |= 1 << inst->DstReg.Index;
+         if (inst->DstReg.RelAddr) {
+            /* If the output attribute is indexed with relative addressing
+             * we know that it must be a varying or texcoord such as
+             * gl_TexCoord[i] = v;  In this case, mark all the texcoords
+             * or varying outputs as being written.  It's not an error if
+             * a vertex shader writes varying vars that aren't used by the
+             * fragment shader.  But it is an error for a fragment shader
+             * to use varyings that are not written by the vertex shader.
+             */
+            if (prog->Target == GL_VERTEX_PROGRAM_ARB) {
+               if (inst->DstReg.Index == VERT_RESULT_TEX0) {
+                  /* mark all texcoord outputs as written */
+                  const GLbitfield mask =
+                     ((1 << MAX_TEXTURE_COORD_UNITS) - 1) << VERT_RESULT_TEX0;
+                  prog->OutputsWritten |= mask;
+               }
+               else if (inst->DstReg.Index == VERT_RESULT_VAR0) {
+                  /* mark all generic varying outputs as written */
+                  const GLbitfield mask =
+                     ((1 << MAX_VARYING) - 1) << VERT_RESULT_VAR0;
+                  prog->OutputsWritten |= mask;
+               }
+            }
+         }
       }
       else if (inst->DstReg.File == PROGRAM_ADDRESS) {
          maxAddrReg = MAX2(maxAddrReg, inst->DstReg.Index + 1);
@@ -649,7 +686,7 @@ _slang_link(GLcontext *ctx,
    /* check that gl_FragColor and gl_FragData are not both written to */
    if (shProg->FragmentProgram) {
       GLbitfield outputsWritten = shProg->FragmentProgram->Base.OutputsWritten;
-      if ((outputsWritten & ((1 << FRAG_RESULT_COLR))) &&
+      if ((outputsWritten & ((1 << FRAG_RESULT_COLOR))) &&
           (outputsWritten >= (1 << FRAG_RESULT_DATA0))) {
          link_error(shProg, "Fragment program cannot write both gl_FragColor"
                     " and gl_FragData[].\n");
@@ -665,12 +702,12 @@ _slang_link(GLcontext *ctx,
       /* notify driver that a new fragment program has been compiled/linked */
       ctx->Driver.ProgramStringNotify(ctx, GL_FRAGMENT_PROGRAM_ARB,
                                       &shProg->FragmentProgram->Base);
-      if (MESA_VERBOSE & VERBOSE_GLSL_DUMP) {
-         printf("Mesa original fragment program:\n");
+      if (ctx->Shader.Flags & GLSL_DUMP) {
+         _mesa_printf("Mesa pre-link fragment program:\n");
          _mesa_print_program(&fragProg->Base);
          _mesa_print_program_parameters(ctx, &fragProg->Base);
 
-         printf("Mesa post-link fragment program:\n");
+         _mesa_printf("Mesa post-link fragment program:\n");
          _mesa_print_program(&shProg->FragmentProgram->Base);
          _mesa_print_program_parameters(ctx, &shProg->FragmentProgram->Base);
       }
@@ -683,20 +720,23 @@ _slang_link(GLcontext *ctx,
       /* notify driver that a new vertex program has been compiled/linked */
       ctx->Driver.ProgramStringNotify(ctx, GL_VERTEX_PROGRAM_ARB,
                                       &shProg->VertexProgram->Base);
-      if (MESA_VERBOSE & VERBOSE_GLSL_DUMP) {
-         printf("Mesa original vertex program:\n");
+      if (ctx->Shader.Flags & GLSL_DUMP) {
+         _mesa_printf("Mesa pre-link vertex program:\n");
          _mesa_print_program(&vertProg->Base);
          _mesa_print_program_parameters(ctx, &vertProg->Base);
 
-         printf("Mesa post-link vertex program:\n");
+         _mesa_printf("Mesa post-link vertex program:\n");
          _mesa_print_program(&shProg->VertexProgram->Base);
          _mesa_print_program_parameters(ctx, &shProg->VertexProgram->Base);
       }
    }
 
-   if (MESA_VERBOSE & VERBOSE_GLSL_DUMP) {
-      printf("Varying vars:\n");
+   if (ctx->Shader.Flags & GLSL_DUMP) {
+      _mesa_printf("Varying vars:\n");
       _mesa_print_parameter_list(shProg->Varying);
+      if (shProg->InfoLog) {
+         _mesa_printf("Info Log: %s\n", shProg->InfoLog);
+      }
    }
 
    shProg->LinkStatus = (shProg->VertexProgram || shProg->FragmentProgram);

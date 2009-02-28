@@ -10,7 +10,7 @@
 #include "state_tracker/drm_api.h"
 
 #include "pipe/p_screen.h"
-#include "pipe/p_winsys.h"
+#include "pipe/internal/p_winsys_screen.h"
 
 /** HACK */
 void* driDriverAPI;
@@ -92,7 +92,7 @@ drm_update_res(struct drm_device *dev)
 static void
 drm_add_modes_from_connector(_EGLScreen *screen, drmModeConnectorPtr connector)
 {
-	struct drm_mode_modeinfo *m;
+	drmModeModeInfoPtr m = NULL;
 	int i;
 
 	for (i = 0; i < connector->count_modes; i++) {

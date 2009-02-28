@@ -36,15 +36,14 @@
 
 #include "pipe/p_config.h"
 
-#if defined(PIPE_OS_LINUX)
+#if defined(PIPE_OS_LINUX) || defined(PIPE_OS_BSD)
 #include <unistd.h>
 #include <sched.h>
 #endif
 
 #include "pipe/p_compiler.h"
 #include "pipe/p_error.h"
-#include "pipe/p_debug.h"
-#include "pipe/p_winsys.h"
+#include "util/u_debug.h"
 #include "pipe/p_thread.h"
 #include "util/u_memory.h"
 #include "util/u_double_list.h"
@@ -64,11 +63,15 @@ struct fenced_buffer_list
 {
    pipe_mutex mutex;
    
-   struct pipe_winsys *winsys;
+   struct pb_fence_ops *ops;
    
    size_t numDelayed;
-   
    struct list_head delayed;
+   
+#ifdef DEBUG
+   size_t numUnfenced;
+   struct list_head unfenced;
+#endif
 };
 
 
@@ -116,8 +119,11 @@ _fenced_buffer_add(struct fenced_buffer *fenced_buf)
    assert(fenced_buf->flags & PIPE_BUFFER_USAGE_GPU_READ_WRITE);
    assert(fenced_buf->fence);
 
-   assert(!fenced_buf->head.prev);
-   assert(!fenced_buf->head.next);
+#ifdef DEBUG
+   LIST_DEL(&fenced_buf->head);
+   assert(fenced_list->numUnfenced);
+   --fenced_list->numUnfenced;
+#endif
    LIST_ADDTAIL(&fenced_buf->head, &fenced_list->delayed);
    ++fenced_list->numDelayed;
 }
@@ -129,8 +135,19 @@ _fenced_buffer_add(struct fenced_buffer *fenced_buf)
 static INLINE void
 _fenced_buffer_destroy(struct fenced_buffer *fenced_buf)
 {
+   struct fenced_buffer_list *fenced_list = fenced_buf->list;
+   
    assert(!fenced_buf->base.base.refcount);
    assert(!fenced_buf->fence);
+#ifdef DEBUG
+   assert(fenced_buf->head.prev);
+   assert(fenced_buf->head.next);
+   LIST_DEL(&fenced_buf->head);
+   assert(fenced_list->numUnfenced);
+   --fenced_list->numUnfenced;
+#else
+   (void)fenced_list;
+#endif
    pb_reference(&fenced_buf->buffer, NULL);
    FREE(fenced_buf);
 }
@@ -140,24 +157,25 @@ static INLINE void
 _fenced_buffer_remove(struct fenced_buffer_list *fenced_list,
                       struct fenced_buffer *fenced_buf)
 {
-   struct pipe_winsys *winsys = fenced_list->winsys;
+   struct pb_fence_ops *ops = fenced_list->ops;
 
    assert(fenced_buf->fence);
    assert(fenced_buf->list == fenced_list);
    
-   winsys->fence_reference(winsys, &fenced_buf->fence, NULL);
+   ops->fence_reference(ops, &fenced_buf->fence, NULL);
    fenced_buf->flags &= ~PIPE_BUFFER_USAGE_GPU_READ_WRITE;
    
    assert(fenced_buf->head.prev);
    assert(fenced_buf->head.next);
-   LIST_DEL(&fenced_buf->head);
-#ifdef DEBUG
-   fenced_buf->head.prev = NULL;
-   fenced_buf->head.next = NULL;
-#endif
    
+   LIST_DEL(&fenced_buf->head);
    assert(fenced_list->numDelayed);
    --fenced_list->numDelayed;
+   
+#ifdef DEBUG
+   LIST_ADDTAIL(&fenced_buf->head, &fenced_list->unfenced);
+   ++fenced_list->numUnfenced;
+#endif
    
    if(!fenced_buf->base.base.refcount)
       _fenced_buffer_destroy(fenced_buf);
@@ -168,7 +186,7 @@ static INLINE enum pipe_error
 _fenced_buffer_finish(struct fenced_buffer *fenced_buf)
 {
    struct fenced_buffer_list *fenced_list = fenced_buf->list;
-   struct pipe_winsys *winsys = fenced_list->winsys;
+   struct pb_fence_ops *ops = fenced_list->ops;
 
 #if 0
    debug_warning("waiting for GPU");
@@ -176,7 +194,7 @@ _fenced_buffer_finish(struct fenced_buffer *fenced_buf)
 
    assert(fenced_buf->fence);
    if(fenced_buf->fence) {
-      if(winsys->fence_finish(winsys, fenced_buf->fence, 0) != 0) {
+      if(ops->fence_finish(ops, fenced_buf->fence, 0) != 0) {
 	 return PIPE_ERROR;
       }
       /* Remove from the fenced list */
@@ -196,7 +214,7 @@ static void
 _fenced_buffer_list_check_free(struct fenced_buffer_list *fenced_list, 
                                int wait)
 {
-   struct pipe_winsys *winsys = fenced_list->winsys;
+   struct pb_fence_ops *ops = fenced_list->ops;
    struct list_head *curr, *next;
    struct fenced_buffer *fenced_buf;
    struct pipe_fence_handle *prev_fence = NULL;
@@ -209,15 +227,15 @@ _fenced_buffer_list_check_free(struct fenced_buffer_list *fenced_list,
       if(fenced_buf->fence != prev_fence) {
 	 int signaled;
 	 if (wait)
-	    signaled = winsys->fence_finish(winsys, fenced_buf->fence, 0);
+	    signaled = ops->fence_finish(ops, fenced_buf->fence, 0);
 	 else
-	    signaled = winsys->fence_signalled(winsys, fenced_buf->fence, 0);
+	    signaled = ops->fence_signalled(ops, fenced_buf->fence, 0);
 	 if (signaled != 0)
 	    break;
 	 prev_fence = fenced_buf->fence;
       }
       else {
-	 assert(winsys->fence_signalled(winsys, fenced_buf->fence, 0) == 0);
+	 assert(ops->fence_signalled(ops, fenced_buf->fence, 0) == 0);
       }
 
       _fenced_buffer_remove(fenced_list, fenced_buf);
@@ -237,14 +255,14 @@ fenced_buffer_destroy(struct pb_buffer *buf)
    pipe_mutex_lock(fenced_list->mutex);
    assert(fenced_buf->base.base.refcount == 0);
    if (fenced_buf->fence) {
-      struct pipe_winsys *winsys = fenced_list->winsys;
-      if(winsys->fence_signalled(winsys, fenced_buf->fence, 0) == 0) {
+      struct pb_fence_ops *ops = fenced_list->ops;
+      if(ops->fence_signalled(ops, fenced_buf->fence, 0) == 0) {
 	 struct list_head *curr, *prev;
 	 curr = &fenced_buf->head;
 	 prev = curr->prev;
 	 do {
 	    fenced_buf = LIST_ENTRY(struct fenced_buffer, curr, head);
-	    assert(winsys->fence_signalled(winsys, fenced_buf->fence, 0) == 0);
+	    assert(ops->fence_signalled(ops, fenced_buf->fence, 0) == 0);
 	    _fenced_buffer_remove(fenced_list, fenced_buf);
 	    curr = prev;
 	    prev = curr->prev;
@@ -366,11 +384,11 @@ fenced_buffer_fence(struct pb_buffer *buf,
 {
    struct fenced_buffer *fenced_buf;
    struct fenced_buffer_list *fenced_list;
-   struct pipe_winsys *winsys;
+   struct pb_fence_ops *ops;
 
    fenced_buf = fenced_buffer(buf);
    fenced_list = fenced_buf->list;
-   winsys = fenced_list->winsys;
+   ops = fenced_list->ops;
    
    if(fence == fenced_buf->fence) {
       /* Nothing to do */
@@ -384,7 +402,7 @@ fenced_buffer_fence(struct pb_buffer *buf,
    if (fenced_buf->fence)
       _fenced_buffer_remove(fenced_list, fenced_buf);
    if (fence) {
-      winsys->fence_reference(winsys, &fenced_buf->fence, fence);
+      ops->fence_reference(ops, &fenced_buf->fence, fence);
       fenced_buf->flags |= fenced_buf->validation_flags;
       _fenced_buffer_add(fenced_buf);
    }
@@ -442,12 +460,19 @@ fenced_buffer_create(struct fenced_buffer_list *fenced_list,
    buf->buffer = buffer;
    buf->list = fenced_list;
    
+#ifdef DEBUG
+   pipe_mutex_lock(fenced_list->mutex);
+   LIST_ADDTAIL(&buf->head, &fenced_list->unfenced);
+   ++fenced_list->numUnfenced;
+   pipe_mutex_unlock(fenced_list->mutex);
+#endif
+
    return &buf->base;
 }
 
 
 struct fenced_buffer_list *
-fenced_buffer_list_create(struct pipe_winsys *winsys) 
+fenced_buffer_list_create(struct pb_fence_ops *ops) 
 {
    struct fenced_buffer_list *fenced_list;
 
@@ -455,12 +480,16 @@ fenced_buffer_list_create(struct pipe_winsys *winsys)
    if (!fenced_list)
       return NULL;
 
-   fenced_list->winsys = winsys;
+   fenced_list->ops = ops;
 
    LIST_INITHEAD(&fenced_list->delayed);
-
    fenced_list->numDelayed = 0;
    
+#ifdef DEBUG
+   LIST_INITHEAD(&fenced_list->unfenced);
+   fenced_list->numUnfenced = 0;
+#endif
+
    pipe_mutex_init(fenced_list->mutex);
 
    return fenced_list;
@@ -477,6 +506,51 @@ fenced_buffer_list_check_free(struct fenced_buffer_list *fenced_list,
 }
 
 
+#ifdef DEBUG
+void
+fenced_buffer_list_dump(struct fenced_buffer_list *fenced_list)
+{
+   struct pb_fence_ops *ops = fenced_list->ops;
+   struct list_head *curr, *next;
+   struct fenced_buffer *fenced_buf;
+
+   pipe_mutex_lock(fenced_list->mutex);
+
+   debug_printf("%10s %7s %10s %s\n",
+                "buffer", "refcount", "fence", "signalled");
+   
+   curr = fenced_list->unfenced.next;
+   next = curr->next;
+   while(curr != &fenced_list->unfenced) {
+      fenced_buf = LIST_ENTRY(struct fenced_buffer, curr, head);
+      assert(!fenced_buf->fence);
+      debug_printf("%10p %7u\n",
+                   fenced_buf,
+                   fenced_buf->base.base.refcount);
+      curr = next; 
+      next = curr->next;
+   }
+   
+   curr = fenced_list->delayed.next;
+   next = curr->next;
+   while(curr != &fenced_list->delayed) {
+      int signaled;
+      fenced_buf = LIST_ENTRY(struct fenced_buffer, curr, head);
+      signaled = ops->fence_signalled(ops, fenced_buf->fence, 0);
+      debug_printf("%10p %7u %10p %s\n",
+                   fenced_buf,
+                   fenced_buf->base.base.refcount,
+                   fenced_buf->fence,
+                   signaled == 0 ? "y" : "n");
+      curr = next; 
+      next = curr->next;
+   }
+   
+   pipe_mutex_unlock(fenced_list->mutex);
+}
+#endif
+
+
 void
 fenced_buffer_list_destroy(struct fenced_buffer_list *fenced_list)
 {
@@ -485,14 +559,20 @@ fenced_buffer_list_destroy(struct fenced_buffer_list *fenced_list)
    /* Wait on outstanding fences */
    while (fenced_list->numDelayed) {
       pipe_mutex_unlock(fenced_list->mutex);
-#if defined(PIPE_OS_LINUX)
+#if defined(PIPE_OS_LINUX) || defined(PIPE_OS_BSD)
       sched_yield();
 #endif
       _fenced_buffer_list_check_free(fenced_list, 1);
       pipe_mutex_lock(fenced_list->mutex);
    }
 
+#ifdef DEBUG
+   //assert(!fenced_list->numUnfenced);
+#endif
+      
    pipe_mutex_unlock(fenced_list->mutex);
+   
+   fenced_list->ops->destroy(fenced_list->ops);
    
    FREE(fenced_list);
 }

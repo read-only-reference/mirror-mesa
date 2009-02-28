@@ -59,6 +59,7 @@
 #include "st_cb_texture.h"
 #include "st_cb_flush.h"
 #include "st_cb_strings.h"
+#include "st_cb_viewport.h"
 #include "st_atom.h"
 #include "st_draw.h"
 #include "st_extensions.h"
@@ -105,7 +106,7 @@ static struct st_context *
 st_create_context_priv( GLcontext *ctx, struct pipe_context *pipe )
 {
    uint i;
-   struct st_context *st = CALLOC_STRUCT( st_context );
+   struct st_context *st = ST_CALLOC_STRUCT( st_context );
    
    ctx->st = st;
 
@@ -217,7 +218,7 @@ static void st_destroy_context_priv( struct st_context *st )
       st->default_texture = NULL;
    }
 
-   free( st );
+   _mesa_free( st );
 }
 
  
@@ -245,7 +246,7 @@ void st_destroy_context( struct st_context *st )
 
    pipe->destroy( pipe );
 
-   free(ctx);
+   _mesa_free(ctx);
 }
 
 
@@ -320,6 +321,7 @@ void st_init_driver_functions(struct dd_function_table *functions)
    st_init_texture_functions(functions);
    st_init_flush_functions(functions);
    st_init_string_functions(functions);
+   st_init_viewport_functions(functions);
 
    functions->UpdateState = st_invalidate_state;
 }

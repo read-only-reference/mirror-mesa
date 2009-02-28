@@ -1,6 +1,6 @@
 #include "draw/draw_context.h"
 #include "pipe/p_defines.h"
-#include "pipe/p_winsys.h"
+#include "pipe/internal/p_winsys_screen.h"
 
 #include "nv04_context.h"
 #include "nv04_screen.h"
@@ -35,8 +35,9 @@ nv04_set_edgeflags(struct pipe_context *pipe, const unsigned *bitfield)
 static boolean
 nv04_init_hwctx(struct nv04_context *nv04)
 {
-	BEGIN_RING(fahrenheit, NV04_DX5_TEXTURED_TRIANGLE_NOTIFY, 1);
-	OUT_RING(0);
+	// requires a valid handle
+//	BEGIN_RING(fahrenheit, NV04_DX5_TEXTURED_TRIANGLE_NOTIFY, 1);
+//	OUT_RING(0);
 	BEGIN_RING(fahrenheit, NV04_DX5_TEXTURED_TRIANGLE_NOP, 1);
 	OUT_RING(0);
 

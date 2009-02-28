@@ -30,8 +30,8 @@
 #include "i915_winsys.h"
 #include "i915_debug.h"
 #include "i915_batch.h"
-#include "pipe/p_winsys.h"
-#include "pipe/p_debug.h"
+#include "pipe/internal/p_winsys_screen.h"
+#include "util/u_debug.h"
 
 
 static void

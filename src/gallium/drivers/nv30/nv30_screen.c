@@ -1,4 +1,5 @@
 #include "pipe/p_screen.h"
+#include "util/u_simple_screen.h"
 
 #include "nv30_context.h"
 #include "nv30_screen.h"
@@ -126,79 +127,12 @@ nv30_screen_surface_format_supported(struct pipe_screen *pscreen,
 	return FALSE;
 }
 
-static void *
-nv30_surface_map(struct pipe_screen *screen, struct pipe_surface *surface,
-		 unsigned flags )
+static struct pipe_buffer *
+nv30_surface_buffer(struct pipe_surface *surf)
 {
-	struct pipe_winsys	*ws = screen->winsys;
-	struct pipe_surface	*surface_to_map;
-	void			*map;
+	struct nv30_miptree *mt = (struct nv30_miptree *)surf->texture;
 
-	if (!(surface->texture->tex_usage & NOUVEAU_TEXTURE_USAGE_LINEAR)) {
-		struct nv30_miptree *mt = (struct nv30_miptree *)surface->texture;
-
-		if (!mt->shadow_tex) {
-			unsigned old_tex_usage = surface->texture->tex_usage;
-			surface->texture->tex_usage = NOUVEAU_TEXTURE_USAGE_LINEAR |
-			                              PIPE_TEXTURE_USAGE_DYNAMIC;
-			mt->shadow_tex = screen->texture_create(screen, surface->texture);
-			surface->texture->tex_usage = old_tex_usage;
-
-			assert(mt->shadow_tex->tex_usage & NOUVEAU_TEXTURE_USAGE_LINEAR);
-		}
-
-		mt->shadow_surface = screen->get_tex_surface
-		(
-			screen, mt->shadow_tex,
-			surface->face, surface->level, surface->zslice,
-			surface->usage
-		);
-
-		surface_to_map = mt->shadow_surface;
-	}
-	else
-		surface_to_map = surface;
-
-	assert(surface_to_map);
-
-	map = ws->buffer_map(ws, surface_to_map->buffer, flags);
-	if (!map)
-		return NULL;
-
-	return map + surface_to_map->offset;
-}
-
-static void
-nv30_surface_unmap(struct pipe_screen *screen, struct pipe_surface *surface)
-{
-	struct pipe_winsys	*ws = screen->winsys;
-	struct pipe_surface	*surface_to_unmap;
-
-	/* TODO: Copy from shadow just before push buffer is flushed instead.
-	         There are probably some programs that map/unmap excessively
-	         before rendering. */
-	if (!(surface->texture->tex_usage & NOUVEAU_TEXTURE_USAGE_LINEAR)) {
-		struct nv30_miptree *mt = (struct nv30_miptree *)surface->texture;
-
-		assert(mt->shadow_tex);
-
-		surface_to_unmap = mt->shadow_surface;
-	}
-	else
-		surface_to_unmap = surface;
-
-	assert(surface_to_unmap);
-
-	ws->buffer_unmap(ws, surface_to_unmap->buffer);
-
-	if (surface_to_unmap != surface) {
-		struct nv30_screen *nvscreen = nv30_screen(screen);
-
-		nvscreen->nvws->surface_copy(nvscreen->nvws,
-		                             surface, 0, 0,
-		                             surface_to_unmap, 0, 0,
-		                             surface->width, surface->height);
-	}
+	return mt->buffer;
 }
 
 static void
@@ -229,6 +163,10 @@ nv30_screen_create(struct pipe_winsys *ws, struct nouveau_winsys *nvws)
 	if (!screen)
 		return NULL;
 	screen->nvws = nvws;
+
+	/* 2D engine setup */
+	screen->eng2d = nv04_surface_2d_init(nvws);
+	screen->eng2d->buf = nv30_surface_buffer;
 
 	/* 3D object */
 	switch (chipset & 0xf0) {
@@ -377,10 +315,9 @@ nv30_screen_create(struct pipe_winsys *ws, struct nouveau_winsys *nvws)
 
 	screen->pipe.is_format_supported = nv30_screen_surface_format_supported;
 
-	screen->pipe.surface_map = nv30_surface_map;
-	screen->pipe.surface_unmap = nv30_surface_unmap;
-
 	nv30_screen_init_miptree_functions(&screen->pipe);
+	nv30_screen_init_transfer_functions(&screen->pipe);
+	u_simple_screen_init(&screen->pipe);
 
 	return &screen->pipe;
 }

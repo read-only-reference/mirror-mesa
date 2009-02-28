@@ -72,7 +72,7 @@ nv50_miptree_create(struct pipe_screen *pscreen, const struct pipe_texture *tmp)
 		pt->nblocksy[l] = pf_get_nblocksy(&pt->block, height);
 
 		lvl->image_offset = CALLOC(mt->image_nr, sizeof(int));
-		lvl->image = CALLOC(mt->image_nr, sizeof(struct pipe_buffer *));
+		lvl->pitch = align(pt->width[l] * pt->block.size, 64);
 
 		width = MAX2(1, width >> 1);
 		height = MAX2(1, height >> 1);
@@ -88,7 +88,6 @@ nv50_miptree_create(struct pipe_screen *pscreen, const struct pipe_texture *tmp)
 			size  = align(size, 64);
 			size *= align(pt->height[l], 8) * pt->block.size;
 
-			lvl->image[i] = ws->buffer_create(ws, 256, 0, size);
 			lvl->image_offset[i] = mt->total_size;
 
 			mt->total_size += size;
@@ -104,22 +103,30 @@ nv50_miptree_create(struct pipe_screen *pscreen, const struct pipe_texture *tmp)
 	return &mt->base;
 }
 
-static INLINE void
-mark_dirty(uint32_t *flags, unsigned image)
+static struct pipe_texture *
+nv50_miptree_blanket(struct pipe_screen *pscreen, const struct pipe_texture *pt,
+		     const unsigned *stride, struct pipe_buffer *pb)
 {
-	flags[image / 32] |= (1 << (image % 32));
-}
+	struct nv50_miptree *mt;
 
-static INLINE void
-mark_clean(uint32_t *flags, unsigned image)
-{
-	flags[image / 32] &= ~(1 << (image % 32));
-}
+	/* Only supports 2D, non-mipmapped textures for the moment */
+	if (pt->target != PIPE_TEXTURE_2D || pt->last_level != 0 ||
+	    pt->depth[0] != 1)
+		return NULL;
 
-static INLINE int
-is_dirty(uint32_t *flags, unsigned image)
-{
-	return !!(flags[image / 32] & (1 << (image % 32)));
+	mt = CALLOC_STRUCT(nv50_miptree);
+	if (!mt)
+		return NULL;
+
+	mt->base = *pt;
+	mt->base.refcount = 1;
+	mt->base.screen = pscreen;
+	mt->image_nr = 1;
+	mt->level[0].pitch = *stride;
+	mt->level[0].image_offset = CALLOC(1, sizeof(unsigned));
+
+	pipe_buffer_reference(pscreen, &mt->buffer, pb);
+	return &mt->base;
 }
 
 static void
@@ -135,79 +142,6 @@ nv50_miptree_release(struct pipe_screen *pscreen, struct pipe_texture **ppt)
 		pipe_buffer_reference(pscreen, &mt->buffer, NULL);
 		FREE(mt);
 	}
-}
-
-void
-nv50_miptree_sync(struct pipe_screen *pscreen, struct nv50_miptree *mt,
-		  unsigned level, unsigned image)
-{
-	struct nouveau_winsys *nvws = nv50_screen(pscreen)->nvws;
-	struct nv50_miptree_level *lvl = &mt->level[level];
-	struct pipe_surface *dst, *src;
-	unsigned face = 0, zslice = 0;
-
-	if (!is_dirty(lvl->image_dirty_cpu, image))
-		return;
-
-	if (mt->base.target == PIPE_TEXTURE_CUBE)
-		face = image;
-	else
-	if (mt->base.target == PIPE_TEXTURE_3D)
-		zslice = image;
-
-	/* Mark as clean already - so we don't continually call this function
-	 * trying to get a GPU_WRITE pipe_surface!
-	 */
-	mark_clean(lvl->image_dirty_cpu, image);
-
-	/* Pretend we're doing CPU access so we get the backing pipe_surface
-	 * and not a view into the larger miptree.
-	 */
-	src = pscreen->get_tex_surface(pscreen, &mt->base, face, level, zslice,
-				       PIPE_BUFFER_USAGE_CPU_READ);
-
-	/* Pretend we're only reading with the GPU so surface doesn't get marked
-	 * as dirtied by the GPU.
-	 */
-	dst = pscreen->get_tex_surface(pscreen, &mt->base, face, level, zslice,
-				       PIPE_BUFFER_USAGE_GPU_READ);
-
-	nvws->surface_copy(nvws, dst, 0, 0, src, 0, 0, dst->width, dst->height);
-
-	pscreen->tex_surface_release(pscreen, &dst);
-	pscreen->tex_surface_release(pscreen, &src);
-}
-
-/* The reverse of the above */
-void
-nv50_miptree_sync_cpu(struct pipe_screen *pscreen, struct nv50_miptree *mt,
-		      unsigned level, unsigned image)
-{
-	struct nouveau_winsys *nvws = nv50_screen(pscreen)->nvws;
-	struct nv50_miptree_level *lvl = &mt->level[level];
-	struct pipe_surface *dst, *src;
-	unsigned face = 0, zslice = 0;
-
-	if (!is_dirty(lvl->image_dirty_gpu, image))
-		return;
-
-	if (mt->base.target == PIPE_TEXTURE_CUBE)
-		face = image;
-	else
-	if (mt->base.target == PIPE_TEXTURE_3D)
-		zslice = image;
-
-	mark_clean(lvl->image_dirty_gpu, image);
-
-	src = pscreen->get_tex_surface(pscreen, &mt->base, face, level, zslice,
-				       PIPE_BUFFER_USAGE_GPU_READ);
-	dst = pscreen->get_tex_surface(pscreen, &mt->base, face, level, zslice,
-				       PIPE_BUFFER_USAGE_CPU_READ);
-
-	nvws->surface_copy(nvws, dst, 0, 0, src, 0, 0, dst->width, dst->height);
-
-	pscreen->tex_surface_release(pscreen, &dst);
-	pscreen->tex_surface_release(pscreen, &src);
 }
 
 static struct pipe_surface *
@@ -232,41 +166,16 @@ nv50_miptree_surface_new(struct pipe_screen *pscreen, struct pipe_texture *pt,
 	if (!ps)
 		return NULL;
 	pipe_texture_reference(&ps->texture, pt);
-	pipe_buffer_reference(pscreen, &ps->buffer, mt->buffer);
 	ps->format = pt->format;
 	ps->width = pt->width[level];
 	ps->height = pt->height[level];
-	ps->block = pt->block;
-	ps->nblocksx = pt->nblocksx[level];
-	ps->nblocksy = pt->nblocksy[level];
-	ps->stride = ps->width * ps->block.size;
 	ps->usage = flags;
 	ps->status = PIPE_SURFACE_STATUS_DEFINED;
 	ps->refcount = 1;
 	ps->face = face;
 	ps->level = level;
 	ps->zslice = zslice;
-
-	if (flags & PIPE_BUFFER_USAGE_CPU_READ_WRITE) {
-		assert(!(flags & PIPE_BUFFER_USAGE_GPU_READ_WRITE));
-		nv50_miptree_sync_cpu(pscreen, mt, level, img);
-
-		ps->offset = 0;
-		pipe_texture_reference(&ps->texture, pt);
-		pipe_buffer_reference(pscreen, &ps->buffer, lvl->image[img]);
-
-		if (flags & PIPE_BUFFER_USAGE_CPU_WRITE)
-			mark_dirty(lvl->image_dirty_cpu, img);
-	} else {
-		nv50_miptree_sync(pscreen, mt, level, img);
-
-		ps->offset = lvl->image_offset[img];
-		pipe_texture_reference(&ps->texture, pt);
-		pipe_buffer_reference(pscreen, &ps->buffer, mt->buffer);
-
-		if (flags & PIPE_BUFFER_USAGE_GPU_WRITE)
-			mark_dirty(lvl->image_dirty_gpu, img);
-	}
+	ps->offset = lvl->image_offset[img];
 
 	return ps;
 }
@@ -282,7 +191,6 @@ nv50_miptree_surface_del(struct pipe_screen *pscreen,
 
 	if (--ps->refcount <= 0) {
 		pipe_texture_reference(&ps->texture, NULL);
-		pipe_buffer_reference(pscreen, &ps->buffer, NULL);
 		FREE(s);
 	}
 }
@@ -291,6 +199,7 @@ void
 nv50_screen_init_miptree_functions(struct pipe_screen *pscreen)
 {
 	pscreen->texture_create = nv50_miptree_create;
+	pscreen->texture_blanket = nv50_miptree_blanket;
 	pscreen->texture_release = nv50_miptree_release;
 	pscreen->get_tex_surface = nv50_miptree_surface_new;
 	pscreen->tex_surface_release = nv50_miptree_surface_del;

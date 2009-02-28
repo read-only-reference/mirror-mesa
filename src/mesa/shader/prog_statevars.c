@@ -206,28 +206,28 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
          /* state[2] is the texgen attribute */
          switch (state[2]) {
          case STATE_TEXGEN_EYE_S:
-            COPY_4V(value, ctx->Texture.Unit[unit].EyePlaneS);
+            COPY_4V(value, ctx->Texture.Unit[unit].GenS.EyePlane);
             return;
          case STATE_TEXGEN_EYE_T:
-            COPY_4V(value, ctx->Texture.Unit[unit].EyePlaneT);
+            COPY_4V(value, ctx->Texture.Unit[unit].GenT.EyePlane);
             return;
          case STATE_TEXGEN_EYE_R:
-            COPY_4V(value, ctx->Texture.Unit[unit].EyePlaneR);
+            COPY_4V(value, ctx->Texture.Unit[unit].GenR.EyePlane);
             return;
          case STATE_TEXGEN_EYE_Q:
-            COPY_4V(value, ctx->Texture.Unit[unit].EyePlaneQ);
+            COPY_4V(value, ctx->Texture.Unit[unit].GenQ.EyePlane);
             return;
          case STATE_TEXGEN_OBJECT_S:
-            COPY_4V(value, ctx->Texture.Unit[unit].ObjectPlaneS);
+            COPY_4V(value, ctx->Texture.Unit[unit].GenS.ObjectPlane);
             return;
          case STATE_TEXGEN_OBJECT_T:
-            COPY_4V(value, ctx->Texture.Unit[unit].ObjectPlaneT);
+            COPY_4V(value, ctx->Texture.Unit[unit].GenT.ObjectPlane);
             return;
          case STATE_TEXGEN_OBJECT_R:
-            COPY_4V(value, ctx->Texture.Unit[unit].ObjectPlaneR);
+            COPY_4V(value, ctx->Texture.Unit[unit].GenR.ObjectPlane);
             return;
          case STATE_TEXGEN_OBJECT_Q:
-            COPY_4V(value, ctx->Texture.Unit[unit].ObjectPlaneQ);
+            COPY_4V(value, ctx->Texture.Unit[unit].GenQ.ObjectPlane);
             return;
          default:
             _mesa_problem(ctx, "Invalid texgen state in fetch_state");
@@ -499,10 +499,10 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
             const struct gl_texture_object *texObj
                = ctx->Texture.Unit[unit]._Current;
             if (texObj) {
-               value[0] = texObj->ShadowAmbient;
-               value[1] = texObj->ShadowAmbient;
-               value[2] = texObj->ShadowAmbient;
-               value[3] = texObj->ShadowAmbient;
+               value[0] =
+               value[1] =
+               value[2] =
+               value[3] = texObj->CompareFailValue;
             }
          }
          return;
@@ -804,7 +804,7 @@ append_token(char *dst, gl_state_index k)
       append(dst, "PCMbias");
       break;
    case STATE_SHADOW_AMBIENT:
-      append(dst, "ShadowAmbient");
+      append(dst, "CompareFailValue");
       break;
    default:
       /* probably STATE_INTERNAL_DRIVER+i (driver private state) */

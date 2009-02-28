@@ -62,7 +62,8 @@ logbase2(int n)
 static void
 guess_and_alloc_mipmap_tree(struct intel_context *intel,
                             struct intel_texture_object *intelObj,
-                            struct intel_texture_image *intelImage)
+                            struct intel_texture_image *intelImage,
+			    GLboolean expect_accelerated_upload)
 {
    GLuint firstLevel;
    GLuint lastLevel;
@@ -136,7 +137,8 @@ guess_and_alloc_mipmap_tree(struct intel_context *intel,
                                        height,
                                        depth,
                                        intelImage->base.TexFormat->TexelBytes,
-                                       comp_byte);
+                                       comp_byte,
+				       expect_accelerated_upload);
 
    DBG("%s - success\n", __FUNCTION__);
 }
@@ -209,7 +211,8 @@ try_pbo_upload(struct intel_context *intel,
       return GL_FALSE;
    }
 
-   src_offset = (GLuint) pixels;
+   /* note: potential 64-bit ptr to 32-bit int cast */
+   src_offset = (GLuint) (unsigned long) pixels;
 
    if (unpack->RowLength > 0)
       src_stride = unpack->RowLength;
@@ -264,7 +267,8 @@ try_pbo_zcopy(struct intel_context *intel,
       return GL_FALSE;
    }
 
-   src_offset = (GLuint) pixels;
+   /* note: potential 64-bit ptr to 32-bit int cast */
+   src_offset = (GLuint) (unsigned long) pixels;
 
    if (unpack->RowLength > 0)
       src_stride = unpack->RowLength;
@@ -383,7 +387,7 @@ intelTexImage(GLcontext * ctx,
    }
 
    if (!intelObj->mt) {
-      guess_and_alloc_mipmap_tree(intel, intelObj, intelImage);
+      guess_and_alloc_mipmap_tree(intel, intelObj, intelImage, pixels == NULL);
       if (!intelObj->mt) {
 	 DBG("guess_and_alloc_mipmap_tree: failed\n");
       }
@@ -413,7 +417,7 @@ intelTexImage(GLcontext * ctx,
 					    level, level,
 					    width, height, depth,
 					    intelImage->base.TexFormat->TexelBytes,
-					    comp_byte);
+					    comp_byte, pixels == NULL);
 
    }
 
@@ -751,16 +755,21 @@ intelSetTexBuffer(__DRIcontext *pDRICtx, GLint target, __DRIdrawable *dPriv)
 
    _mesa_lock_texture(&intel->ctx, texObj);
 
+   texImage = _mesa_get_tex_image(&intel->ctx, texObj, target, level);
+   intelImage = intel_texture_image(texImage);
+
+   if (intelImage->mt) {
+      intel_miptree_release(intel, &intelImage->mt);
+      assert(!texImage->Data);
+   }
    if (intelObj->mt)
       intel_miptree_release(intel, &intelObj->mt);
 
    intelObj->mt = mt;
-   texImage = _mesa_get_tex_image(&intel->ctx, texObj, target, level);
    _mesa_init_teximage_fields(&intel->ctx, target, texImage,
 			      rb->region->width, rb->region->height, 1,
 			      0, internalFormat);
 
-   intelImage = intel_texture_image(texImage);
    intelImage->face = target_to_face(target);
    intelImage->level = level;
    texImage->TexFormat = intelChooseTextureFormat(&intel->ctx, internalFormat,

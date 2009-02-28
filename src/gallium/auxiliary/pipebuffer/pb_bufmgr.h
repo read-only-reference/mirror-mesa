@@ -61,7 +61,6 @@ extern "C" {
 
 struct pb_desc;
 struct pipe_buffer;
-struct pipe_winsys;
 
 
 /** 
@@ -163,6 +162,8 @@ pb_cache_manager_create(struct pb_manager *provider,
                      	unsigned usecs); 
 
 
+struct pb_fence_ops;
+
 /** 
  * Fenced buffer manager.
  *
@@ -174,7 +175,7 @@ pb_cache_manager_create(struct pb_manager *provider,
  */
 struct pb_manager *
 fenced_bufmgr_create(struct pb_manager *provider,
-                     struct pipe_winsys *winsys);
+                     struct pb_fence_ops *ops);
 
 
 struct pb_manager *
@@ -199,10 +200,11 @@ pb_ondemand_manager_create(struct pb_manager *provider);
 /** 
  * Debug buffer manager to detect buffer under- and overflows.
  *
- * Band size should be a multiple of the largest alignment
+ * Under/overflow sizes should be a multiple of the largest alignment
  */
 struct pb_manager *
-pb_debug_manager_create(struct pb_manager *provider, size_t band_size); 
+pb_debug_manager_create(struct pb_manager *provider,
+                        size_t underflow_size, size_t overflow_size); 
 
 
 #ifdef __cplusplus

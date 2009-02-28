@@ -74,6 +74,7 @@ SOURCES = \
 	quad-unfilled.c \
 	quad.c \
 	quads.c \
+	quadstrip-clip.c \
 	quadstrip-cont.c \
 	quadstrip-flat.c \
 	quadstrip.c \
@@ -108,6 +109,7 @@ SOURCES = \
 	tri-tex.c \
 	tri-tex-3d.c \
 	tri-tri.c \
+	tri-unfilled-fog.c \
 	tri-unfilled-edgeflag.c \
 	tri-unfilled-clip.c \
 	tri-unfilled-smooth.c \
@@ -117,6 +119,7 @@ SOURCES = \
 	tri-unfilled-userclip.c \
 	tri-unfilled.c \
 	tri-userclip.c \
+	tri-viewport.c \
 	tri-z-eq.c \
 	tri-z.c \
 	tri.c \

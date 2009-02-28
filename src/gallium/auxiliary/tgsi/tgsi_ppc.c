@@ -33,7 +33,7 @@
 
 #if defined(PIPE_ARCH_PPC)
 
-#include "pipe/p_debug.h"
+#include "util/u_debug.h"
 #include "pipe/p_shader_tokens.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
@@ -1327,7 +1327,7 @@ tgsi_emit_ppc(const struct tgsi_token *tokens,
       case TGSI_TOKEN_TYPE_IMMEDIATE:
          /* splat each immediate component into a float[4] vector for SoA */
          {
-            const uint size = parse.FullToken.FullImmediate.Immediate.Size - 1;
+            const uint size = parse.FullToken.FullImmediate.Immediate.NrTokens - 1;
             uint i;
             assert(size <= 4);
             assert(num_immediates < TGSI_EXEC_NUM_IMMEDIATES);

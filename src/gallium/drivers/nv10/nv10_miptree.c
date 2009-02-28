@@ -51,6 +51,31 @@ nv10_miptree_layout(struct nv10_miptree *nv10mt)
 }
 
 static struct pipe_texture *
+nv10_miptree_blanket(struct pipe_screen *pscreen, const struct pipe_texture *pt,
+		     const unsigned *stride, struct pipe_buffer *pb)
+{
+	struct nv10_miptree *mt;
+
+	/* Only supports 2D, non-mipmapped textures for the moment */
+	if (pt->target != PIPE_TEXTURE_2D || pt->last_level != 0 ||
+	    pt->depth[0] != 1)
+		return NULL;
+
+	mt = CALLOC_STRUCT(nv10_miptree);
+	if (!mt)
+		return NULL;
+
+	mt->base = *pt;
+	mt->base.refcount = 1;
+	mt->base.screen = pscreen;
+	mt->level[0].pitch = stride[0];
+	mt->level[0].image_offset = CALLOC(1, sizeof(unsigned));
+
+	pipe_buffer_reference(pscreen, &mt->buffer, pb);
+	return &mt->base;
+}
+
+static struct pipe_texture *
 nv10_miptree_create(struct pipe_screen *screen, const struct pipe_texture *pt)
 {
 	struct pipe_winsys *ws = screen->winsys;
@@ -106,31 +131,31 @@ nv10_miptree_surface_get(struct pipe_screen *screen, struct pipe_texture *pt,
 			 unsigned face, unsigned level, unsigned zslice,
 			 unsigned flags)
 {
-	struct pipe_winsys *ws = screen->winsys;
 	struct nv10_miptree *nv10mt = (struct nv10_miptree *)pt;
-	struct pipe_surface *ps;
+	struct nv04_surface *ns;
 
-	ps = CALLOC_STRUCT(pipe_surface);
-	if (!ps)
+	ns = CALLOC_STRUCT(nv04_surface);
+	if (!ns)
 		return NULL;
-	pipe_texture_reference(&ps->texture, pt);
-	pipe_buffer_reference(screen, &ps->buffer, nv10mt->buffer);
-	ps->format = pt->format;
-	ps->width = pt->width[level];
-	ps->height = pt->height[level];
-	ps->block = pt->block;
-	ps->nblocksx = pt->nblocksx[level];
-	ps->nblocksy = pt->nblocksy[level];
-	ps->stride = nv10mt->level[level].pitch;
-	ps->refcount = 1;
+	pipe_texture_reference(&ns->base.texture, pt);
+	ns->base.format = pt->format;
+	ns->base.width = pt->width[level];
+	ns->base.height = pt->height[level];
+	ns->base.usage = flags;
+	ns->base.status = PIPE_SURFACE_STATUS_DEFINED;
+	ns->base.refcount = 1;
+	ns->base.face = face;
+	ns->base.level = level;
+	ns->base.zslice = zslice;
+	ns->pitch = nv10mt->level[level].pitch;
 
 	if (pt->target == PIPE_TEXTURE_CUBE) {
-		ps->offset = nv10mt->level[level].image_offset[face];
+		ns->base.offset = nv10mt->level[level].image_offset[face];
 	} else {
-		ps->offset = nv10mt->level[level].image_offset[0];
+		ns->base.offset = nv10mt->level[level].image_offset[0];
 	}
 
-	return ps;
+	return &ns->base;
 }
 
 static void
@@ -142,6 +167,7 @@ nv10_miptree_surface_release(struct pipe_screen *screen,
 void nv10_screen_init_miptree_functions(struct pipe_screen *pscreen)
 {
 	pscreen->texture_create = nv10_miptree_create;
+	pscreen->texture_blanket = nv10_miptree_blanket;
 	pscreen->texture_release = nv10_miptree_release;
 	pscreen->get_tex_surface = nv10_miptree_surface_get;
 	pscreen->tex_surface_release = nv10_miptree_surface_release;

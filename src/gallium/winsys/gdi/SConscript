@@ -8,13 +8,7 @@ if env['platform'] == 'windows':
 	env = env.Clone()
 
 	env.Append(CPPPATH = [
-		'#src/mesa/state_tracker/wgl',
-	])
-
-	env.Append(CPPDEFINES = [
-		'__GL_EXPORTS',
-		'BUILD_GL32',
-		'_GNU_H_WINDOWS32_DEFINES',
+		'#src/gallium/state_trackers/wgl',
 	])
 
 	env.Append(LIBS = [
@@ -24,9 +18,13 @@ if env['platform'] == 'windows':
 	])
 
 	sources = [
-		'#src/mesa/state_tracker/wgl/opengl32.def',
 		'gdi_softpipe_winsys.c',
 	]
+	
+	if env['toolchain'] == 'crossmingw':
+		sources += ['#src/gallium/state_trackers/wgl/opengl32.mingw.def']
+	else:
+		sources += ['#src/gallium/state_trackers/wgl/opengl32.def']
 		
 	drivers = [
 		softpipe,

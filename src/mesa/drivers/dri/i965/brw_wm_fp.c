@@ -111,6 +111,12 @@ static struct prog_src_register src_swizzle1( struct prog_src_register reg, int 
    return src_swizzle(reg, x, x, x, x);
 }
 
+static struct prog_src_register src_swizzle4( struct prog_src_register reg, uint swizzle )
+{
+   reg.Swizzle = swizzle;
+   return reg;
+}
+
 
 /***********************************************************************
  * Dest regs
@@ -177,16 +183,16 @@ static struct prog_instruction *emit_insn(struct brw_wm_compile *c,
 {
    struct prog_instruction *inst = get_fp_inst(c);
    *inst = *inst0;
-   inst->Data = (void *)inst0;
    return inst;
 }
 
-static struct prog_instruction * emit_op(struct brw_wm_compile *c,
+static struct prog_instruction * emit_tex_op(struct brw_wm_compile *c,
 				       GLuint op,
 				       struct prog_dst_register dest,
 				       GLuint saturate,
 				       GLuint tex_src_unit,
 				       GLuint tex_src_target,
+				       GLuint tex_shadow,
 				       struct prog_src_register src0,
 				       struct prog_src_register src1,
 				       struct prog_src_register src2 )
@@ -200,10 +206,25 @@ static struct prog_instruction * emit_op(struct brw_wm_compile *c,
    inst->SaturateMode = saturate;   
    inst->TexSrcUnit = tex_src_unit;
    inst->TexSrcTarget = tex_src_target;
+   inst->TexShadow = tex_shadow;
    inst->SrcReg[0] = src0;
    inst->SrcReg[1] = src1;
    inst->SrcReg[2] = src2;
    return inst;
+}
+   
+
+static struct prog_instruction * emit_op(struct brw_wm_compile *c,
+				       GLuint op,
+				       struct prog_dst_register dest,
+				       GLuint saturate,
+				       struct prog_src_register src0,
+				       struct prog_src_register src1,
+				       struct prog_src_register src2 )
+{
+   return emit_tex_op(c, op, dest, saturate,
+                      0, 0, 0,  /* tex unit, target, shadow */
+                      src0, src1, src2);
 }
    
 
@@ -228,7 +249,7 @@ static struct prog_src_register get_pixel_xy( struct brw_wm_compile *c )
       emit_op(c,
 	      WM_PIXELXY,
 	      dst_mask(pixel_xy, WRITEMASK_XY),
-	      0, 0, 0,
+	      0,
 	      payload_r0_depth,
 	      src_undef(),
 	      src_undef());
@@ -251,7 +272,7 @@ static struct prog_src_register get_delta_xy( struct brw_wm_compile *c )
       emit_op(c,
 	      WM_DELTAXY,
 	      dst_mask(delta_xy, WRITEMASK_XY),
-	      0, 0, 0,
+	      0,
 	      pixel_xy, 
 	      payload_r0_depth,
 	      src_undef());
@@ -268,14 +289,13 @@ static struct prog_src_register get_pixel_w( struct brw_wm_compile *c )
       struct prog_dst_register pixel_w = get_temp(c);
       struct prog_src_register deltas = get_delta_xy(c);
       struct prog_src_register interp_wpos = src_reg(PROGRAM_PAYLOAD, FRAG_ATTRIB_WPOS);
-      
-      
+
       /* deltas.xyw = DELTAS2 deltas.xy, payload.interp_wpos.x
        */
       emit_op(c,
 	      WM_PIXELW,
 	      dst_mask(pixel_w, WRITEMASK_W),
-	      0, 0, 0,
+	      0,
 	      interp_wpos,
 	      deltas, 
 	      src_undef());
@@ -310,7 +330,7 @@ static void emit_interp( struct brw_wm_compile *c,
       emit_op(c,
 	      WM_WPOSXY,
 	      dst_mask(dst, WRITEMASK_XY),
-	      0, 0, 0,
+	      0,
 	      get_pixel_xy(c),
 	      src_undef(),
 	      src_undef());
@@ -322,7 +342,7 @@ static void emit_interp( struct brw_wm_compile *c,
       emit_op(c,
 	      WM_LINTERP,
 	      dst,
-	      0, 0, 0,
+	      0,
 	      interp,
 	      deltas,
 	      arg2);
@@ -333,7 +353,7 @@ static void emit_interp( struct brw_wm_compile *c,
 	 emit_op(c,
 		 WM_CINTERP,
 		 dst,
-		 0, 0, 0,
+		 0,
 		 interp,
 		 src_undef(),
 		 src_undef());
@@ -342,7 +362,7 @@ static void emit_interp( struct brw_wm_compile *c,
 	 emit_op(c,
 		 WM_LINTERP,
 		 dst,
-		 0, 0, 0,
+		 0,
 		 interp,
 		 deltas,
 		 src_undef());
@@ -352,7 +372,7 @@ static void emit_interp( struct brw_wm_compile *c,
       emit_op(c,
 	      WM_PINTERP,
 	      dst,
-	      0, 0, 0,
+	      0,
 	      interp,
 	      deltas,
 	      get_pixel_w(c));
@@ -372,7 +392,7 @@ static void emit_ddx( struct brw_wm_compile *c,
     emit_op(c,
             OPCODE_DDX,
             inst->DstReg,
-            0, 0, 0,
+            0,
             interp,
             get_pixel_w(c),
             src_undef());
@@ -388,7 +408,7 @@ static void emit_ddy( struct brw_wm_compile *c,
     emit_op(c,
             OPCODE_DDY,
             inst->DstReg,
-            0, 0, 0,
+            0,
             interp,
             get_pixel_w(c),
             src_undef());
@@ -483,12 +503,11 @@ static void precalc_dst( struct brw_wm_compile *c,
       emit_op(c,
 	      OPCODE_MUL,
 	      dst_mask(dst, WRITEMASK_Y),
-	      inst->SaturateMode, 0, 0,
+	      inst->SaturateMode,
 	      src0,
 	      src1,
 	      src_undef());
    }
-
 
    if (dst.WriteMask & WRITEMASK_XZ) {
       struct prog_instruction *swz;
@@ -499,7 +518,7 @@ static void precalc_dst( struct brw_wm_compile *c,
       swz = emit_op(c,
 		    OPCODE_SWZ,
 		    dst_mask(dst, WRITEMASK_XZ),
-		    inst->SaturateMode, 0, 0,
+		    inst->SaturateMode,
 		    src_swizzle(src0, SWIZZLE_ONE, z, z, z),
 		    src_undef(),
 		    src_undef());
@@ -512,7 +531,7 @@ static void precalc_dst( struct brw_wm_compile *c,
       emit_op(c,
 	      OPCODE_MOV,
 	      dst_mask(dst, WRITEMASK_W),
-	      inst->SaturateMode, 0, 0,
+	      inst->SaturateMode,
 	      src1,
 	      src_undef(),
 	      src_undef());
@@ -534,7 +553,7 @@ static void precalc_lit( struct brw_wm_compile *c,
       swz = emit_op(c,
 		    OPCODE_SWZ,
 		    dst_mask(dst, WRITEMASK_XW),
-		    0, 0, 0,
+		    0,
 		    src_swizzle1(src0, SWIZZLE_ONE),
 		    src_undef(),
 		    src_undef());
@@ -542,24 +561,30 @@ static void precalc_lit( struct brw_wm_compile *c,
       swz->SrcReg[0].NegateBase = 0;
    }
 
-
    if (dst.WriteMask & WRITEMASK_YZ) {
       emit_op(c,
 	      OPCODE_LIT,
 	      dst_mask(dst, WRITEMASK_YZ),
-	      inst->SaturateMode, 0, 0,
+	      inst->SaturateMode,
 	      src0,
 	      src_undef(),
 	      src_undef());
    }
 }
 
+
+/**
+ * Some TEX instructions require extra code, cube map coordinate
+ * normalization, or coordinate scaling for RECT textures, etc.
+ * This function emits those extra instructions and the TEX
+ * instruction itself.
+ */
 static void precalc_tex( struct brw_wm_compile *c,
 			 const struct prog_instruction *inst )
 {
    struct prog_src_register coord;
    struct prog_dst_register tmpcoord;
-   GLuint unit = c->fp->program.Base.SamplerUnits[inst->TexSrcUnit];
+   const GLuint unit = c->fp->program.Base.SamplerUnits[inst->TexSrcUnit];
 
    if (inst->TexSrcTarget == TEXTURE_CUBE_INDEX) {
        struct prog_instruction *out;
@@ -569,49 +594,56 @@ static void precalc_tex( struct brw_wm_compile *c,
        struct prog_src_register tmp1src = src_reg_from_dst(tmp1);
        struct prog_src_register src0 = inst->SrcReg[0];
 
+       /* find longest component of coord vector and normalize it */
        tmpcoord = get_temp(c);
        coord = src_reg_from_dst(tmpcoord);
 
+       /* tmpcoord = src0 (i.e.: coord = src0) */
        out = emit_op(c, OPCODE_MOV,
                      tmpcoord,
-                     0, 0, 0,
+                     0,
                      src0,
                      src_undef(),
                      src_undef());
        out->SrcReg[0].NegateBase = 0;
        out->SrcReg[0].Abs = 1;
 
+       /* tmp0 = MAX(coord.X, coord.Y) */
        emit_op(c, OPCODE_MAX,
                tmp0,
-               0, 0, 0,
+               0,
                src_swizzle1(coord, X),
                src_swizzle1(coord, Y),
                src_undef());
 
+       /* tmp1 = MAX(tmp0, coord.Z) */
        emit_op(c, OPCODE_MAX,
                tmp1,
-               0, 0, 0,
+               0,
                tmp0src,
                src_swizzle1(coord, Z),
                src_undef());
 
+       /* tmp0 = 1 / tmp1 */
        emit_op(c, OPCODE_RCP,
                tmp0,
-               0, 0, 0,
+               0,
                tmp1src,
                src_undef(),
                src_undef());
 
+       /* tmpCoord = src0 * tmp0 */
        emit_op(c, OPCODE_MUL,
                tmpcoord,
-               0, 0, 0,
+               0,
                src0,
                tmp0src,
                src_undef());
 
        release_temp(c, tmp0);
        release_temp(c, tmp1);
-   } else if (inst->TexSrcTarget == TEXTURE_RECT_INDEX) {
+   }
+   else if (inst->TexSrcTarget == TEXTURE_RECT_INDEX) {
       struct prog_src_register scale = 
 	 search_or_add_param5( c, 
 			       STATE_INTERNAL, 
@@ -626,7 +658,7 @@ static void precalc_tex( struct brw_wm_compile *c,
       emit_op(c,
 	      OPCODE_MUL,
 	      tmpcoord,
-	      0, 0, 0,
+	      0,
 	      inst->SrcReg[0],
 	      scale,
 	      src_undef());
@@ -642,19 +674,9 @@ static void precalc_tex( struct brw_wm_compile *c,
     * conversion requires allocating a temporary variable which we
     * don't have the facility to do that late in the compilation.
     */
-   if (!(c->key.yuvtex_mask & (1<<unit))) {
-      emit_op(c, 
-	      OPCODE_TEX,
-	      inst->DstReg,
-	      inst->SaturateMode,
-	      unit,
-	      inst->TexSrcTarget,
-	      coord,
-	      src_undef(),
-	      src_undef());
-   }
-   else {
-       GLboolean  swap_uv = c->key.yuvtex_swap_mask & (1<<unit);
+   if (c->key.yuvtex_mask & (1 << unit)) {
+      /* convert ycbcr to RGBA */
+      GLboolean  swap_uv = c->key.yuvtex_swap_mask & (1<<unit);
 
       /* 
 	 CONST C0 = { -.5, -.0625,  -.5, 1.164 }
@@ -676,22 +698,23 @@ static void precalc_tex( struct brw_wm_compile *c,
      
       /* tmp     = TEX ...
        */
-      emit_op(c, 
-	      OPCODE_TEX,
-	      tmp,
-	      inst->SaturateMode,
-	      unit,
-	      inst->TexSrcTarget,
-	      coord,
-	      src_undef(),
-	      src_undef());
+      emit_tex_op(c, 
+                  OPCODE_TEX,
+                  tmp,
+                  inst->SaturateMode,
+                  unit,
+                  inst->TexSrcTarget,
+                  inst->TexShadow,
+                  coord,
+                  src_undef(),
+                  src_undef());
 
       /* tmp.xyz =  ADD TMP, C0
        */
       emit_op(c,
 	      OPCODE_ADD,
 	      dst_mask(tmp, WRITEMASK_XYZ),
-	      0, 0, 0,
+	      0,
 	      tmpsrc,
 	      C0,
 	      src_undef());
@@ -702,7 +725,7 @@ static void precalc_tex( struct brw_wm_compile *c,
       emit_op(c,
 	      OPCODE_MUL,
 	      dst_mask(tmp, WRITEMASK_Y),
-	      0, 0, 0,
+	      0,
 	      tmpsrc,
 	      src_swizzle1(C0, W),
 	      src_undef());
@@ -717,7 +740,7 @@ static void precalc_tex( struct brw_wm_compile *c,
       emit_op(c,
 	      OPCODE_MAD,
 	      dst_mask(dst, WRITEMASK_XYZ),
-	      0, 0, 0,
+	      0,
 	      swap_uv?src_swizzle(tmpsrc, Z,Z,X,X):src_swizzle(tmpsrc, X,X,Z,Z),
 	      C1,
 	      src_swizzle1(tmpsrc, Y));
@@ -727,12 +750,37 @@ static void precalc_tex( struct brw_wm_compile *c,
       emit_op(c,
 	      OPCODE_MAD,
 	      dst_mask(dst, WRITEMASK_Y),
-	      0, 0, 0,
+	      0,
 	      src_swizzle1(tmpsrc, Z),
 	      src_swizzle1(C1, W),
 	      src_swizzle1(src_reg_from_dst(dst), Y));
 
       release_temp(c, tmp);
+   }
+   else {
+      /* ordinary RGBA tex instruction */
+      emit_tex_op(c, 
+                  OPCODE_TEX,
+                  inst->DstReg,
+                  inst->SaturateMode,
+                  unit,
+                  inst->TexSrcTarget,
+                  inst->TexShadow,
+                  coord,
+                  src_undef(),
+                  src_undef());
+   }
+
+   /* For GL_EXT_texture_swizzle: */
+   if (c->key.tex_swizzles[unit] != SWIZZLE_NOOP) {
+      /* swizzle the result of the TEX instruction */
+      struct prog_src_register tmpsrc = src_reg_from_dst(inst->DstReg);
+      emit_op(c, OPCODE_SWZ,
+              inst->DstReg,
+              SATURATE_OFF, /* saturate already done above */
+              src_swizzle4(tmpsrc, c->key.tex_swizzles[unit]),
+              src_undef(),
+              src_undef());
    }
 
    if ((inst->TexSrcTarget == TEXTURE_RECT_INDEX) ||
@@ -778,7 +826,7 @@ static void precalc_txp( struct brw_wm_compile *c,
       emit_op(c,
 	      OPCODE_RCP,
 	      dst_mask(tmp, WRITEMASK_W),
-	      0, 0, 0,
+	      0,
 	      src_swizzle1(src0, GET_SWZ(src0.Swizzle, W)),
 	      src_undef(),
 	      src_undef());
@@ -788,7 +836,7 @@ static void precalc_txp( struct brw_wm_compile *c,
       emit_op(c,
 	      OPCODE_MUL,
 	      dst_mask(tmp, WRITEMASK_XYZ),
-	      0, 0, 0,
+	      0,
 	      src0,
 	      src_swizzle1(src_reg_from_dst(tmp), W),
 	      src_undef());
@@ -814,42 +862,41 @@ static void precalc_txp( struct brw_wm_compile *c,
 static void emit_fb_write( struct brw_wm_compile *c )
 {
    struct prog_src_register payload_r0_depth = src_reg(PROGRAM_PAYLOAD, PAYLOAD_DEPTH);
-   struct prog_src_register outdepth = src_reg(PROGRAM_OUTPUT, FRAG_RESULT_DEPR);
+   struct prog_src_register outdepth = src_reg(PROGRAM_OUTPUT, FRAG_RESULT_DEPTH);
    struct prog_src_register outcolor;
    GLuint i;
 
    struct prog_instruction *inst, *last_inst;
    struct brw_context *brw = c->func.brw;
 
-   /* inst->Sampler is not used by backend, 
-      use it for fb write target and eot */
+   /* The inst->Aux field is used for FB write target and the EOT marker */
 
-   if (brw->state.nr_draw_regions > 1) {
-       for (i = 0 ; i < brw->state.nr_draw_regions; i++) {
-	   outcolor = src_reg(PROGRAM_OUTPUT, FRAG_RESULT_DATA0 + i);
-	   last_inst = inst = emit_op(c,
-		   WM_FB_WRITE, dst_mask(dst_undef(),0), 0, 0, 0,
-		   outcolor, payload_r0_depth, outdepth);
-	   inst->Sampler = (i<<1);
-	   if (c->fp_fragcolor_emitted) {
-	       outcolor = src_reg(PROGRAM_OUTPUT, FRAG_RESULT_COLR);
-	       last_inst = inst = emit_op(c, WM_FB_WRITE, dst_mask(dst_undef(),0),
-		       0, 0, 0, outcolor, payload_r0_depth, outdepth);
-	       inst->Sampler = (i<<1);
-	   }
-       }
-       last_inst->Sampler |= 1; //eot
+   if (brw->state.nr_color_regions > 1) {
+      for (i = 0 ; i < brw->state.nr_color_regions; i++) {
+         outcolor = src_reg(PROGRAM_OUTPUT, FRAG_RESULT_DATA0 + i);
+         last_inst = inst = emit_op(c,
+                                    WM_FB_WRITE, dst_mask(dst_undef(),0), 0,
+                                    outcolor, payload_r0_depth, outdepth);
+         inst->Aux = (i<<1);
+         if (c->fp_fragcolor_emitted) {
+            outcolor = src_reg(PROGRAM_OUTPUT, FRAG_RESULT_COLOR);
+            last_inst = inst = emit_op(c, WM_FB_WRITE, dst_mask(dst_undef(),0),
+                                       0, outcolor, payload_r0_depth, outdepth);
+            inst->Aux = (i<<1);
+         }
+      }
+      last_inst->Aux |= 1; //eot
    }
    else {
       /* if gl_FragData[0] is written, use it, else use gl_FragColor */
       if (c->fp->program.Base.OutputsWritten & (1 << FRAG_RESULT_DATA0))
          outcolor = src_reg(PROGRAM_OUTPUT, FRAG_RESULT_DATA0);
       else 
-         outcolor = src_reg(PROGRAM_OUTPUT, FRAG_RESULT_COLR);
+         outcolor = src_reg(PROGRAM_OUTPUT, FRAG_RESULT_COLOR);
 
-       inst = emit_op(c, WM_FB_WRITE, dst_mask(dst_undef(),0),
-	       0, 0, 0, outcolor, payload_r0_depth, outdepth);
-       inst->Sampler = 1|(0<<1);
+      inst = emit_op(c, WM_FB_WRITE, dst_mask(dst_undef(),0),
+                     0, outcolor, payload_r0_depth, outdepth);
+      inst->Aux = 1|(0<<1);
    }
 }
 
@@ -880,9 +927,9 @@ static void validate_dst_regs( struct brw_wm_compile *c,
 			       const struct prog_instruction *inst )
 {
    if (inst->DstReg.File == PROGRAM_OUTPUT) {
-       GLuint idx = inst->DstReg.Index;
-       if (idx == FRAG_RESULT_COLR)
-	   c->fp_fragcolor_emitted = 1;
+      GLuint idx = inst->DstReg.Index;
+      if (idx == FRAG_RESULT_COLOR)
+         c->fp_fragcolor_emitted = 1;
    }
 }
 
@@ -903,10 +950,14 @@ static void print_insns( const struct prog_instruction *insn,
       }
       else 
 	 _mesa_printf("UNKNOWN\n");
-	   
    }
 }
 
+
+/**
+ * Initial pass for fragment program code generation.
+ * This function is used by both the GLSL and non-GLSL paths.
+ */
 void brw_wm_pass_fp( struct brw_wm_compile *c )
 {
    struct brw_fragment_program *fp = c->fp;
@@ -923,15 +974,19 @@ void brw_wm_pass_fp( struct brw_wm_compile *c )
    c->pixel_w = src_undef();
    c->nr_fp_insns = 0;
 
-   /* Emit preamble instructions:
+   /* Emit preamble instructions.  This is where special instructions such as
+    * WM_CINTERP, WM_LINTERP, WM_PINTERP and WM_WPOSXY are emitted to
+    * compute shader inputs from varying vars.
     */
-
-
    for (insn = 0; insn < fp->program.Base.NumInstructions; insn++) {
       const struct prog_instruction *inst = &fp->program.Base.Instructions[insn];
       validate_src_regs(c, inst);
       validate_dst_regs(c, inst);
    }
+
+   /* Loop over all instructions doing assorted simplifications and
+    * transformations.
+    */
    for (insn = 0; insn < fp->program.Base.NumInstructions; insn++) {
       const struct prog_instruction *inst = &fp->program.Base.Instructions[insn];
       struct prog_instruction *out;
@@ -939,7 +994,6 @@ void brw_wm_pass_fp( struct brw_wm_compile *c )
       /* Check for INPUT values, emit INTERP instructions where
        * necessary:
        */
-
 
       switch (inst->Opcode) {
       case OPCODE_SWZ: 
@@ -1020,9 +1074,9 @@ void brw_wm_pass_fp( struct brw_wm_compile *c )
    }
 
    if (INTEL_DEBUG & DEBUG_WM) {
-	   _mesa_printf("pass_fp:\n");
-	   print_insns( c->prog_instructions, c->nr_fp_insns );
-	   _mesa_printf("\n");
+      _mesa_printf("pass_fp:\n");
+      print_insns( c->prog_instructions, c->nr_fp_insns );
+      _mesa_printf("\n");
    }
 }
 

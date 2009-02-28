@@ -11,6 +11,8 @@ struct nv50_screen {
 	unsigned cur_pctx;
 
 	struct nouveau_grobj *tesla;
+	struct nouveau_grobj *eng2d;
+	struct nouveau_grobj *m2mf;
 	struct nouveau_notifier *sync;
 
 	struct pipe_buffer *constbuf;
@@ -28,6 +30,6 @@ nv50_screen(struct pipe_screen *screen)
 	return (struct nv50_screen *)screen;
 }
 
-void nv50_surface_init_screen_functions(struct pipe_screen *);
+void nv50_transfer_init_screen_functions(struct pipe_screen *);
 
 #endif

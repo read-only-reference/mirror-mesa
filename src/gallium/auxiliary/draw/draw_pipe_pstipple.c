@@ -256,7 +256,7 @@ pstip_transform_inst(struct tgsi_transform_context *ctx,
          struct tgsi_full_immediate immed;
          uint size = 4;
          immed = tgsi_default_full_immediate();
-         immed.Immediate.Size = 1 + size; /* one for the token itself */
+         immed.Immediate.NrTokens = 1 + size; /* one for the token itself */
          immed.u.Pointer = (void *) value;
          ctx->emit_immediate(ctx, &immed);
       }
@@ -372,7 +372,7 @@ pstip_update_texture(struct pstip_stage *pstip)
    static const uint bit31 = 1 << 31;
    struct pipe_context *pipe = pstip->pipe;
    struct pipe_screen *screen = pipe->screen;
-   struct pipe_surface *surface;
+   struct pipe_transfer *transfer;
    const uint *stipple = pstip->state.stipple->stipple;
    uint i, j;
    ubyte *data;
@@ -381,10 +381,9 @@ pstip_update_texture(struct pstip_stage *pstip)
     */
    pipe->flush( pipe, PIPE_FLUSH_TEXTURE_CACHE, NULL );
 
-   surface = screen->get_tex_surface(screen, pstip->texture, 0, 0, 0,
-                                     PIPE_BUFFER_USAGE_CPU_WRITE);
-   data = screen->surface_map(screen, surface,
-                              PIPE_BUFFER_USAGE_CPU_WRITE);
+   transfer = screen->get_tex_transfer(screen, pstip->texture, 0, 0, 0,
+                                       PIPE_TRANSFER_WRITE, 0, 0, 32, 32);
+   data = screen->transfer_map(screen, transfer);
 
    /*
     * Load alpha texture.
@@ -396,18 +395,18 @@ pstip_update_texture(struct pstip_stage *pstip)
       for (j = 0; j < 32; j++) {
          if (stipple[i] & (bit31 >> j)) {
             /* fragment "on" */
-            data[i * surface->stride + j] = 0;
+            data[i * transfer->stride + j] = 0;
          }
          else {
             /* fragment "off" */
-            data[i * surface->stride + j] = 255;
+            data[i * transfer->stride + j] = 255;
          }
       }
    }
 
    /* unmap */
-   screen->surface_unmap(screen, surface);
-   screen->tex_surface_release(screen, &surface);
+   screen->transfer_unmap(screen, transfer);
+   screen->tex_transfer_release(screen, &transfer);
 }
 
 

@@ -22,7 +22,7 @@
 
 #include "draw/draw_context.h"
 #include "pipe/p_defines.h"
-#include "pipe/p_winsys.h"
+#include "pipe/internal/p_winsys_screen.h"
 
 #include "nv50_context.h"
 #include "nv50_screen.h"
@@ -33,7 +33,7 @@ nv50_flush(struct pipe_context *pipe, unsigned flags,
 {
 	struct nv50_context *nv50 = (struct nv50_context *)pipe;
 	
-	FIRE_RING(fence);
+	FIRE_RING(nv50->screen->nvws->channel);
 }
 
 static void

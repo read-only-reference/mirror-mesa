@@ -36,7 +36,7 @@
 
 
 #include "util/u_pointer.h"
-#include "pipe/p_debug.h"
+#include "util/u_debug.h"
 
 
 #ifdef __cplusplus
@@ -52,11 +52,11 @@ extern "C" {
 #endif
 
 
-#if defined(PIPE_SUBSYSTEM_WINDOWS_DISPLAY) && defined(DEBUG) 
+#if defined(PIPE_OS_WINDOWS) && defined(DEBUG) 
 
 /* memory debugging */
 
-#include "pipe/p_debug.h"
+#include "util/u_debug.h"
 
 #define MALLOC( _size ) \
    debug_malloc( __FILE__, __LINE__, __FUNCTION__, _size )

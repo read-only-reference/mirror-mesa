@@ -77,6 +77,7 @@
 
 
 #include "glheader.h"
+#include "mfeatures.h"
 #include "imports.h"
 #if FEATURE_accum
 #include "accum.h"
@@ -151,10 +152,7 @@
 #include "shader/atifragshader.h"
 #endif
 #if _HAVE_FULL_GL
-#include "math/m_translate.h"
 #include "math/m_matrix.h"
-#include "math/m_xform.h"
-#include "math/mathmod.h"
 #endif
 
 #ifdef USE_SPARC_ASM
@@ -186,6 +184,7 @@ GLfloat _mesa_ubyte_to_float_color_tab[256];
 void
 _mesa_notifySwapBuffers(__GLcontext *ctx)
 {
+   FLUSH_VERTICES( ctx, 0 );
    if (ctx->Driver.Flush) {
       ctx->Driver.Flush(ctx);
    }
@@ -352,6 +351,36 @@ _mesa_destroy_visual( GLvisual *vis )
 /**********************************************************************/
 /*@{*/
 
+
+/**
+ * This is lame.  gdb only seems to recognize enum types that are
+ * actually used somewhere.  We want to be able to print/use enum
+ * values such as TEXTURE_2D_INDEX in gdb.  But we don't actually use
+ * the gl_texture_index type anywhere.  Thus, this lame function.
+ */
+static void
+dummy_enum_func(void)
+{
+   gl_buffer_index bi;
+   gl_colortable_index ci;
+   gl_face_index fi;
+   gl_frag_attrib fa;
+   gl_frag_result fr;
+   gl_texture_index ti;
+   gl_vert_attrib va;
+   gl_vert_result vr;
+
+   (void) bi;
+   (void) ci;
+   (void) fi;
+   (void) fa;
+   (void) fr;
+   (void) ti;
+   (void) va;
+   (void) vr;
+}
+
+
 /**
  * One-time initialization mutex lock.
  *
@@ -387,17 +416,10 @@ one_time_init( GLcontext *ctx )
 
       _mesa_init_sqrt_table();
 
-#if _HAVE_FULL_GL
-      _math_init();
-
       for (i = 0; i < 256; i++) {
          _mesa_ubyte_to_float_color_tab[i] = (float) i / 255.0F;
       }
-#endif
 
-#ifdef USE_SPARC_ASM
-      _mesa_init_sparc_glapi_relocs();
-#endif
       if (_mesa_getenv("MESA_DEBUG")) {
          _glapi_noop_enable_warnings(GL_TRUE);
          _glapi_set_warning_func( (_glapi_warning_func) _mesa_warning );
@@ -414,6 +436,8 @@ one_time_init( GLcontext *ctx )
       alreadyCalled = GL_TRUE;
    }
    _glthread_UNLOCK_MUTEX(OneTimeLock);
+
+   dummy_enum_func();
 }
 
 
@@ -429,6 +453,7 @@ one_time_init( GLcontext *ctx )
 static GLboolean
 alloc_shared_state( GLcontext *ctx )
 {
+   GLuint i;
    struct gl_shared_state *ss = CALLOC_STRUCT(gl_shared_state);
    if (!ss)
       return GL_FALSE;
@@ -470,36 +495,25 @@ alloc_shared_state( GLcontext *ctx )
    ss->ShaderObjects = _mesa_NewHashTable();
 #endif
 
-   ss->Default1D = (*ctx->Driver.NewTextureObject)(ctx, 0, GL_TEXTURE_1D);
-   if (!ss->Default1D)
-      goto cleanup;
-
-   ss->Default2D = (*ctx->Driver.NewTextureObject)(ctx, 0, GL_TEXTURE_2D);
-   if (!ss->Default2D)
-      goto cleanup;
-
-   ss->Default3D = (*ctx->Driver.NewTextureObject)(ctx, 0, GL_TEXTURE_3D);
-   if (!ss->Default3D)
-      goto cleanup;
-
-   ss->DefaultCubeMap = (*ctx->Driver.NewTextureObject)(ctx, 0, GL_TEXTURE_CUBE_MAP_ARB);
-   if (!ss->DefaultCubeMap)
-      goto cleanup;
-
-   ss->DefaultRect = (*ctx->Driver.NewTextureObject)(ctx, 0, GL_TEXTURE_RECTANGLE_NV);
-   if (!ss->DefaultRect)
-      goto cleanup;
-
-   ss->Default1DArray = (*ctx->Driver.NewTextureObject)(ctx, 0, GL_TEXTURE_1D_ARRAY_EXT);
-   if (!ss->Default1DArray)
-      goto cleanup;
-
-   ss->Default2DArray = (*ctx->Driver.NewTextureObject)(ctx, 0, GL_TEXTURE_2D_ARRAY_EXT);
-   if (!ss->Default2DArray)
-      goto cleanup;
+   /* Create default texture objects */
+   for (i = 0; i < NUM_TEXTURE_TARGETS; i++) {
+      /* NOTE: the order of these enums matches the TEXTURE_x_INDEX values */
+      static const GLenum targets[NUM_TEXTURE_TARGETS] = {
+         GL_TEXTURE_2D_ARRAY_EXT,
+         GL_TEXTURE_1D_ARRAY_EXT,
+         GL_TEXTURE_CUBE_MAP,
+         GL_TEXTURE_3D,
+         GL_TEXTURE_RECTANGLE_NV,
+         GL_TEXTURE_2D,
+         GL_TEXTURE_1D
+      };
+      ss->DefaultTex[i] = ctx->Driver.NewTextureObject(ctx, 0, targets[i]);
+      if (!ss->DefaultTex[i])
+         goto cleanup;
+   }
 
    /* sanity check */
-   assert(ss->Default1D->RefCount == 1);
+   assert(ss->DefaultTex[TEXTURE_1D_INDEX]->RefCount == 1);
 
    _glthread_INIT_MUTEX(ss->TexMutex);
    ss->TextureStateStamp = 0;
@@ -553,20 +567,10 @@ cleanup:
       _mesa_DeleteHashTable(ss->RenderBuffers);
 #endif
 
-   if (ss->Default1D)
-      (*ctx->Driver.DeleteTexture)(ctx, ss->Default1D);
-   if (ss->Default2D)
-      (*ctx->Driver.DeleteTexture)(ctx, ss->Default2D);
-   if (ss->Default3D)
-      (*ctx->Driver.DeleteTexture)(ctx, ss->Default3D);
-   if (ss->DefaultCubeMap)
-      (*ctx->Driver.DeleteTexture)(ctx, ss->DefaultCubeMap);
-   if (ss->DefaultRect)
-      (*ctx->Driver.DeleteTexture)(ctx, ss->DefaultRect);
-   if (ss->Default1DArray)
-      (*ctx->Driver.DeleteTexture)(ctx, ss->Default1DArray);
-   if (ss->Default2DArray)
-      (*ctx->Driver.DeleteTexture)(ctx, ss->Default2DArray);
+   for (i = 0; i < NUM_TEXTURE_TARGETS; i++) {
+      if (ss->DefaultTex[i])
+         ctx->Driver.DeleteTexture(ctx, ss->DefaultTex[i]);
+   }
 
    _mesa_free(ss);
 
@@ -581,7 +585,7 @@ static void
 delete_displaylist_cb(GLuint id, void *data, void *userData)
 {
 #if FEATURE_dlist
-   struct mesa_display_list *list = (struct mesa_display_list *) data;
+   struct gl_display_list *list = (struct gl_display_list *) data;
    GLcontext *ctx = (GLcontext *) userData;
    _mesa_delete_list(ctx, list);
 #endif
@@ -729,6 +733,8 @@ delete_renderbuffer_cb(GLuint id, void *data, void *userData)
 static void
 free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
 {
+   GLuint i;
+
    /*
     * Free display lists
     */
@@ -778,13 +784,9 @@ free_shared_state( GLcontext *ctx, struct gl_shared_state *ss )
     */
    ASSERT(ctx->Driver.DeleteTexture);
    /* the default textures */
-   ctx->Driver.DeleteTexture(ctx, ss->Default1D);
-   ctx->Driver.DeleteTexture(ctx, ss->Default2D);
-   ctx->Driver.DeleteTexture(ctx, ss->Default3D);
-   ctx->Driver.DeleteTexture(ctx, ss->DefaultCubeMap);
-   ctx->Driver.DeleteTexture(ctx, ss->DefaultRect);
-   ctx->Driver.DeleteTexture(ctx, ss->Default1DArray);
-   ctx->Driver.DeleteTexture(ctx, ss->Default2DArray);
+   for (i = 0; i < NUM_TEXTURE_TARGETS; i++) {
+      ctx->Driver.DeleteTexture(ctx, ss->DefaultTex[i]);
+   }
    /* all other textures */
    _mesa_HashDeleteAll(ss->TexObjects, delete_texture_cb, ctx);
    _mesa_DeleteHashTable(ss->TexObjects);
@@ -870,6 +872,9 @@ _mesa_init_constants(GLcontext *ctx)
    assert(MAX_TEXTURE_LEVELS >= MAX_3D_TEXTURE_LEVELS);
    assert(MAX_TEXTURE_LEVELS >= MAX_CUBE_TEXTURE_LEVELS);
 
+   /* Max texture size should be <= max viewport size (render to texture) */
+   assert((1 << (MAX_TEXTURE_LEVELS - 1)) <= MAX_WIDTH);
+
    /* Constants, may be overriden (usually only reduced) by device drivers */
    ctx->Const.MaxTextureLevels = MAX_TEXTURE_LEVELS;
    ctx->Const.Max3DTextureLevels = MAX_3D_TEXTURE_LEVELS;
@@ -932,6 +937,9 @@ _mesa_init_constants(GLcontext *ctx)
    ctx->Const.MaxVarying = MAX_VARYING;
 #endif
 
+   /* GL_ARB_framebuffer_object */
+   ctx->Const.MaxSamples = 0;
+
    /* sanity checks */
    ASSERT(ctx->Const.MaxTextureUnits == MIN2(ctx->Const.MaxTextureImageUnits,
                                              ctx->Const.MaxTextureCoordUnits));
@@ -963,13 +971,18 @@ check_context_limits(GLcontext *ctx)
    /* number of coord units cannot be greater than number of image units */
    assert(ctx->Const.MaxTextureCoordUnits <= ctx->Const.MaxTextureImageUnits);
 
-   assert(ctx->Const.MaxViewportWidth <= MAX_WIDTH);
-   assert(ctx->Const.MaxViewportHeight <= MAX_WIDTH);
+   assert(ctx->Const.MaxTextureLevels <= MAX_TEXTURE_LEVELS);
+   assert(ctx->Const.Max3DTextureLevels <= MAX_3D_TEXTURE_LEVELS);
+   assert(ctx->Const.MaxCubeTextureLevels <= MAX_CUBE_TEXTURE_LEVELS);
+   assert(ctx->Const.MaxTextureRectSize <= MAX_TEXTURE_RECT_SIZE);
 
    /* make sure largest texture image is <= MAX_WIDTH in size */
-   assert((1 << (ctx->Const.MaxTextureLevels -1 )) <= MAX_WIDTH);
-   assert((1 << (ctx->Const.MaxCubeTextureLevels -1 )) <= MAX_WIDTH);
-   assert((1 << (ctx->Const.Max3DTextureLevels -1 )) <= MAX_WIDTH);
+   assert((1 << (ctx->Const.MaxTextureLevels - 1)) <= MAX_WIDTH);
+   assert((1 << (ctx->Const.MaxCubeTextureLevels - 1)) <= MAX_WIDTH);
+   assert((1 << (ctx->Const.Max3DTextureLevels - 1)) <= MAX_WIDTH);
+
+   assert(ctx->Const.MaxViewportWidth <= MAX_WIDTH);
+   assert(ctx->Const.MaxViewportHeight <= MAX_WIDTH);
 
    assert(ctx->Const.MaxDrawBuffers <= MAX_DRAW_BUFFERS);
 
@@ -1302,10 +1315,10 @@ _mesa_free_context_data( GLcontext *ctx )
    }
 
    /* unreference WinSysDraw/Read buffers */
-   _mesa_unreference_framebuffer(&ctx->WinSysDrawBuffer);
-   _mesa_unreference_framebuffer(&ctx->WinSysReadBuffer);
-   _mesa_unreference_framebuffer(&ctx->DrawBuffer);
-   _mesa_unreference_framebuffer(&ctx->ReadBuffer);
+   _mesa_reference_framebuffer(&ctx->WinSysDrawBuffer, NULL);
+   _mesa_reference_framebuffer(&ctx->WinSysReadBuffer, NULL);
+   _mesa_reference_framebuffer(&ctx->DrawBuffer, NULL);
+   _mesa_reference_framebuffer(&ctx->ReadBuffer, NULL);
 
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram.Current, NULL);
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current, NULL);

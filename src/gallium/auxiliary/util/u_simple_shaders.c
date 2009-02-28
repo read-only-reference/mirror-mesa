@@ -34,10 +34,10 @@
 
 
 #include "pipe/p_context.h"
-#include "pipe/p_debug.h"
+#include "util/u_debug.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_inlines.h"
-#include "pipe/p_winsys.h"
+#include "pipe/p_screen.h"
 #include "pipe/p_shader_tokens.h"
 
 #include "util/u_memory.h"
@@ -359,3 +359,10 @@ util_make_fragment_passthrough_shader(struct pipe_context *pipe,
    return pipe->create_fs_state(pipe, shader);
 }
 
+
+void
+util_free_shader(struct pipe_shader_state *shader)
+{
+   FREE((struct tgsi_token *)shader->tokens);
+   shader->tokens = NULL;
+}

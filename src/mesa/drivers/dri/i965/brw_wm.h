@@ -69,7 +69,8 @@ struct brw_wm_prog_key {
    GLuint shadowtex_mask:16;
    GLuint yuvtex_mask:16;
    GLuint yuvtex_swap_mask:16;	/* UV swaped */
-   //   GLuint pad1:16;
+
+   GLuint tex_swizzles[BRW_MAX_TEX_UNIT];
 
    GLuint program_string_id:32;
    GLuint origin_x, origin_y;
@@ -142,6 +143,7 @@ struct brw_wm_instruction {
    GLuint writemask:4;
    GLuint tex_unit:4;   /* texture unit for TEX, TXD, TXP instructions */
    GLuint tex_idx:3;    /* TEXTURE_1D,2D,3D,CUBE,RECT_INDEX source target */
+   GLuint tex_shadow:1; /* do shadow comparison? */
    GLuint eot:1;    	/* End of thread indicator for FB_WRITE*/
    GLuint target:10;    /* target binding table index for FB_WRITE*/
 };
@@ -280,4 +282,6 @@ void brw_wm_lookup_iz( GLuint line_aa,
 
 GLboolean brw_wm_is_glsl(const struct gl_fragment_program *fp);
 void brw_wm_glsl_emit(struct brw_context *brw, struct brw_wm_compile *c);
+
+
 #endif
