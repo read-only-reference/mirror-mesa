@@ -93,12 +93,13 @@ struct st_context
       struct pipe_constant_buffer constants[2];
       struct pipe_framebuffer_state framebuffer;
       struct pipe_texture *sampler_texture[PIPE_MAX_SAMPLERS];
-      struct pipe_poly_stipple poly_stipple;
       struct pipe_scissor_state scissor;
       struct pipe_viewport_state viewport;
 
       GLuint num_samplers;
       GLuint num_textures;
+
+      GLuint poly_stipple[32];  /**< In OpenGL's bottom-to-top order */
    } state;
 
    struct {
@@ -149,7 +150,6 @@ struct st_context
    struct {
       struct pipe_rasterizer_state rasterizer;
       struct pipe_sampler_state sampler;
-      struct pipe_shader_state vert_shader;
       enum pipe_format tex_format;
       void *vs;
       float vertices[4][3][4];  /**< vertex pos + color + texcoord */
@@ -166,8 +166,6 @@ struct st_context
 
    /** for glClear */
    struct {
-      struct pipe_shader_state vert_shader;
-      struct pipe_shader_state frag_shader;
       struct pipe_rasterizer_state raster;
       struct pipe_viewport_state viewport;
       void *vs;

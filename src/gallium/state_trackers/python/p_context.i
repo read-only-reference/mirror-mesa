@@ -116,16 +116,17 @@ struct st_context {
    }
 
    void set_constant_buffer(unsigned shader, unsigned index,
-                            struct st_buffer *buffer ) 
+                            struct pipe_buffer *buffer ) 
    {
       struct pipe_constant_buffer state;
       memset(&state, 0, sizeof(state));
-      state.buffer = buffer ? buffer->buffer : NULL;
-      state.size = buffer->buffer->size;
+      state.buffer = buffer;
       $self->pipe->set_constant_buffer($self->pipe, shader, index, &state);
    }
 
-   void set_framebuffer(const struct pipe_framebuffer_state *state ) {
+   void set_framebuffer(const struct pipe_framebuffer_state *state ) 
+   {
+      memcpy(&$self->framebuffer, state, sizeof *state);
       cso_set_framebuffer($self->cso, state);
    }
 
@@ -152,19 +153,19 @@ struct st_context {
    }
 
    void set_vertex_buffer(unsigned index,
-                          unsigned pitch, 
+                          unsigned stride, 
                           unsigned max_index,
                           unsigned buffer_offset,
-                          struct st_buffer *buffer)
+                          struct pipe_buffer *buffer)
    {
       unsigned i;
       struct pipe_vertex_buffer state;
       
       memset(&state, 0, sizeof(state));
-      state.pitch = pitch;
+      state.stride = stride;
       state.max_index = max_index;
       state.buffer_offset = buffer_offset;
-      state.buffer = buffer ? buffer->buffer : NULL;
+      state.buffer = buffer;
 
       memcpy(&$self->vertex_buffers[index], &state, sizeof(state));
       
@@ -199,22 +200,22 @@ struct st_context {
       $self->pipe->draw_arrays($self->pipe, mode, start, count);
    }
 
-   void draw_elements( struct st_buffer *indexBuffer,
+   void draw_elements( struct pipe_buffer *indexBuffer,
                        unsigned indexSize,
                        unsigned mode, unsigned start, unsigned count) 
    {
       $self->pipe->draw_elements($self->pipe, 
-                                 indexBuffer->buffer, 
+                                 indexBuffer, 
                                  indexSize, 
                                  mode, start, count);
    }
 
-   void draw_range_elements( struct st_buffer *indexBuffer,
+   void draw_range_elements( struct pipe_buffer *indexBuffer,
                              unsigned indexSize, unsigned minIndex, unsigned maxIndex,
                              unsigned mode, unsigned start, unsigned count)
    {
       $self->pipe->draw_range_elements($self->pipe, 
-                                       indexBuffer->buffer, 
+                                       indexBuffer, 
                                        indexSize, minIndex, maxIndex,
                                        mode, start, count);
    }
@@ -248,7 +249,7 @@ struct st_context {
       util_draw_vertex_buffer(pipe, vbuf, 0, prim, num_verts, num_attribs);
       
 error2:
-      pipe_buffer_reference(screen, &vbuf, NULL);
+      pipe_buffer_reference(&vbuf, NULL);
 error1:
       ;
    }
@@ -258,32 +259,94 @@ error1:
       struct pipe_fence_handle *fence = NULL; 
       $self->pipe->flush($self->pipe, flags | PIPE_FLUSH_RENDER_CACHE, &fence);
       /* TODO: allow asynchronous operation */ 
-      $self->pipe->winsys->fence_finish( $self->pipe->winsys, fence, 0 );
-      $self->pipe->winsys->fence_reference( $self->pipe->winsys, &fence, NULL );
+      $self->pipe->screen->fence_finish( $self->pipe->screen, fence, 0 );
+      $self->pipe->screen->fence_reference( $self->pipe->screen, &fence, NULL );
    }
 
    /*
     * Surface functions
     */
    
-   void surface_copy(int do_flip,
-                     struct pipe_surface *dest,
+   void surface_copy(struct st_surface *dst,
                      unsigned destx, unsigned desty,
-                     struct pipe_surface *src,
+                     struct st_surface *src,
                      unsigned srcx, unsigned srcy,
-                     unsigned width, unsigned height) {
-      $self->pipe->surface_copy($self->pipe, do_flip, dest, destx, desty, src, srcx, srcy, width, height);
+                     unsigned width, unsigned height) 
+   {
+      struct pipe_surface *_dst = NULL;
+      struct pipe_surface *_src = NULL;
+      
+      _dst = st_pipe_surface(dst, PIPE_BUFFER_USAGE_GPU_WRITE);
+      if(!_dst)
+         SWIG_exception(SWIG_ValueError, "couldn't acquire destination surface for writing");
+
+      _src = st_pipe_surface(src, PIPE_BUFFER_USAGE_GPU_READ);
+      if(!_src)
+         SWIG_exception(SWIG_ValueError, "couldn't acquire source surface for reading");
+      
+      $self->pipe->surface_copy($self->pipe, _dst, destx, desty, _src, srcx, srcy, width, height);
+      
+   fail:
+      pipe_surface_reference(&_src, NULL);
+      pipe_surface_reference(&_dst, NULL);
    }
 
-   void surface_fill(struct pipe_surface *dst,
+   void surface_fill(struct st_surface *dst,
                      unsigned x, unsigned y,
                      unsigned width, unsigned height,
-                     unsigned value) {
-      $self->pipe->surface_fill($self->pipe, dst, x, y, width, height, value);
+                     unsigned value) 
+   {
+      struct pipe_surface *_dst = NULL;
+      
+      _dst = st_pipe_surface(dst, PIPE_BUFFER_USAGE_GPU_WRITE);
+      if(!_dst)
+         SWIG_exception(SWIG_ValueError, "couldn't acquire destination surface for writing");
+
+      $self->pipe->surface_fill($self->pipe, _dst, x, y, width, height, value);
+      
+   fail:
+      pipe_surface_reference(&_dst, NULL);
    }
 
-   void surface_clear(struct pipe_surface *surface, unsigned value = 0) {
-      $self->pipe->clear($self->pipe, surface, value);
+   void surface_clear(struct st_surface *surface, unsigned value = 0) 
+   {
+      unsigned i;
+      struct pipe_surface *_surface = NULL;
+ 
+      if(!surface)
+          SWIG_exception(SWIG_TypeError, "surface must not be null");
+  
+      for(i = 0; i < $self->framebuffer.nr_cbufs; ++i) {
+         struct pipe_surface *cbuf = $self->framebuffer.cbufs[i];
+         if(cbuf) {
+            if(cbuf->texture == surface->texture &&
+               cbuf->face == surface->face &&
+               cbuf->level == surface->level &&
+               cbuf->zslice == surface->zslice) {                  
+               _surface = cbuf;
+               break;
+            }
+         }
+      }
+
+      if(!_surface) {
+         struct pipe_surface *zsbuf = $self->framebuffer.zsbuf;
+         if(zsbuf) {
+            if(zsbuf->texture == surface->texture &&
+               zsbuf->face == surface->face &&
+               zsbuf->level == surface->level &&
+               zsbuf->zslice == surface->zslice) {                  
+               _surface = zsbuf;
+            }
+         }
+      }
+
+      if(!_surface)
+         SWIG_exception(SWIG_ValueError, "surface not bound");
+      
+      $self->pipe->clear($self->pipe, _surface, value);
+   fail:
+      return;
    }
 
 };

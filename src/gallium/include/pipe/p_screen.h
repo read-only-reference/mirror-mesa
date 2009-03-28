@@ -113,8 +113,7 @@ struct pipe_screen {
                                             const unsigned *stride,
                                             struct pipe_buffer *buffer);
 
-   void (*texture_release)(struct pipe_screen *,
-                           struct pipe_texture **pt);
+   void (*texture_destroy)(struct pipe_texture *pt);
 
    /** Get a surface which is a "view" into a texture */
    struct pipe_surface *(*get_tex_surface)(struct pipe_screen *,
@@ -123,10 +122,7 @@ struct pipe_screen {
                                            unsigned zslice,
                                            unsigned usage );
 
-   /* Surfaces allocated by the above must be released here:
-    */
-   void (*tex_surface_release)( struct pipe_screen *,
-                                struct pipe_surface ** );
+   void (*tex_surface_destroy)(struct pipe_surface *);
    
 
    /** Get a transfer object for transferring data to/from a texture */
@@ -138,10 +134,7 @@ struct pipe_screen {
                                              unsigned x, unsigned y,
                                              unsigned w, unsigned h);
 
-   /* Transfer objects allocated by the above must be released here:
-    */
-   void (*tex_transfer_release)( struct pipe_screen *,
-                                 struct pipe_transfer ** );
+   void (*tex_transfer_destroy)(struct pipe_transfer *);
    
    void *(*transfer_map)( struct pipe_screen *,
                           struct pipe_transfer *transfer );
@@ -209,12 +202,44 @@ struct pipe_screen {
    void *(*buffer_map)( struct pipe_screen *screen,
 			struct pipe_buffer *buf,
 			unsigned usage );
+   /**
+    * Map a subrange of the buffer data store into the client's address space.
+    *
+    * The returned pointer is always relative to buffer start, regardless of 
+    * the specified range. This is different from the ARB_map_buffer_range
+    * semantics because we don't forbid multiple mappings of the same buffer
+    * (yet).
+    */
+   void *(*buffer_map_range)( struct pipe_screen *screen,
+                              struct pipe_buffer *buf,
+                              unsigned offset,
+                              unsigned length,
+                              unsigned usage);
+
+   /**
+    * Notify a range that was actually written into.
+    * 
+    * The range is relative to the buffer start, regardless of the range 
+    * specified to buffer_map_range. This is different from the 
+    * ARB_map_buffer_range semantics because we don't forbid multiple mappings 
+    * of the same buffer (yet).
+    * 
+    * If the buffer was mapped for writing and no buffer_flush_mapped_range 
+    * call was done until the buffer_unmap is called then the pipe driver will
+    * assumed that the whole buffer was written. This is for backward 
+    * compatibility purposes and may affect performance -- the state tracker 
+    * should always specify exactly what got written while the buffer was 
+    * mapped.  
+    */
+   void (*buffer_flush_mapped_range)( struct pipe_screen *screen,
+                                      struct pipe_buffer *buf,
+                                      unsigned offset,
+                                      unsigned length);
 
    void (*buffer_unmap)( struct pipe_screen *screen,
-			 struct pipe_buffer *buf );
+                         struct pipe_buffer *buf );
 
-   void (*buffer_destroy)( struct pipe_screen *screen,
-			   struct pipe_buffer *buf );
+   void (*buffer_destroy)( struct pipe_buffer *buf );
 
 
    /**

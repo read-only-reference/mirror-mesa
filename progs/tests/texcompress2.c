@@ -3,11 +3,10 @@
  */
 
 
-#define GL_GLEXT_PROTOTYPES
 #include <assert.h>
 #include <stdio.h>
+#include <GL/glew.h>
 #include <GL/glut.h>
-#include <GL/glx.h>
 #include "readtex.c"
 
 #define IMAGE_FILE "../images/arch.rgb"
@@ -258,6 +257,7 @@ main( int argc, char *argv[] )
    glutInitDisplayMode( GLUT_RGB | GLUT_DOUBLE);
 
    glutCreateWindow(argv[0]);
+   glewInit();
 
    glutReshapeFunc( Reshape );
    glutKeyboardFunc( Key );

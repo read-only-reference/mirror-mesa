@@ -139,17 +139,25 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_VAP_OUTPUT_VTX_FMT_1__3_COMPONENTS 3
 #	define R300_VAP_OUTPUT_VTX_FMT_1__4_COMPONENTS 4
 
-#define R300_SE_VTE_CNTL                  0x20b0
-#	define     R300_VPORT_X_SCALE_ENA                (1 << 0)
-#	define     R300_VPORT_X_OFFSET_ENA               (1 << 1)
-#	define     R300_VPORT_Y_SCALE_ENA                (1 << 2)
-#	define     R300_VPORT_Y_OFFSET_ENA               (1 << 3)
-#	define     R300_VPORT_Z_SCALE_ENA                (1 << 4)
-#	define     R300_VPORT_Z_OFFSET_ENA               (1 << 5)
-#	define     R300_VTX_XY_FMT                       (1 << 8)
-#	define     R300_VTX_Z_FMT                        (1 << 9)
-#	define     R300_VTX_W0_FMT                       (1 << 10)
-#	define     R300_SERIAL_PROC_ENA                  (1 << 11)
+#define R300_VAP_VPORT_XSCALE                     0x2098
+#define R300_VAP_VPORT_XOFFSET                    0x209c
+#define R300_VAP_VPORT_YSCALE                     0x20a0
+#define R300_VAP_VPORT_YOFFSET                    0x20a4
+#define R300_VAP_VPORT_ZSCALE                     0x20a8
+#define R300_VAP_VPORT_ZOFFSET                    0x20ac
+
+#define R300_VAP_VTE_CNTL                         0x20b0
+#define R300_SE_VTE_CNTL R300_VAP_VTE_CNTL
+#   define R300_VPORT_X_SCALE_ENA                           (1 << 0)
+#   define R300_VPORT_X_OFFSET_ENA                          (1 << 1)
+#   define R300_VPORT_Y_SCALE_ENA                           (1 << 2)
+#   define R300_VPORT_Y_OFFSET_ENA                          (1 << 3)
+#   define R300_VPORT_Z_SCALE_ENA                           (1 << 4)
+#   define R300_VPORT_Z_OFFSET_ENA                          (1 << 5)
+#   define R300_VTX_XY_FMT                                  (1 << 8)
+#   define R300_VTX_Z_FMT                                   (1 << 9)
+#   define R300_VTX_W0_FMT                                  (1 << 10)
+#   define R300_SERIAL_PROC_ENA                             (1 << 11)
 
 #define R300_VAP_VTX_SIZE               0x20b4
 
@@ -285,10 +293,19 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_INPUT_CNTL_TC7               0x00020000 /* GUESS */
 
 /* Programmable Stream Control Signed Normalize Control */
-#define R300_VAP_PSC_SGN_NORM_CNTL         0x21dc
-#	define SGN_NORM_ZERO                 0
-#	define SGN_NORM_ZERO_CLAMP_MINUS_ONE 1
-#	define SGN_NORM_NO_ZERO              2
+#define R300_VAP_PSC_SGN_NORM_CNTL                0x21dc
+#   define SGN_NORM_ZERO                                    0
+#   define SGN_NORM_ZERO_CLAMP_MINUS_ONE                    1
+#   define SGN_NORM_NO_ZERO                                 2
+#   define R300_SGN_NORM_NO_ZERO (SGN_NORM_NO_ZERO | \
+        (SGN_NORM_NO_ZERO << 2) | (SGN_NORM_NO_ZERO << 4) | \
+        (SGN_NORM_NO_ZERO << 6) | (SGN_NORM_NO_ZERO << 8) | \
+        (SGN_NORM_NO_ZERO << 10) | (SGN_NORM_NO_ZERO << 12) | \
+        (SGN_NORM_NO_ZERO << 14) | (SGN_NORM_NO_ZERO << 16) | \
+        (SGN_NORM_NO_ZERO << 18) | (SGN_NORM_NO_ZERO << 20) | \
+        (SGN_NORM_NO_ZERO << 22) | (SGN_NORM_NO_ZERO << 24) | \
+        (SGN_NORM_NO_ZERO << 26) | (SGN_NORM_NO_ZERO << 28) | \
+        (SGN_NORM_NO_ZERO << 30))
 
 /* gap */
 
@@ -326,6 +343,14 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_WRITE_ENA_Z                         4
 #       define R300_WRITE_ENA_W                         8
 #       define R300_SWIZZLE1_SHIFT                      16
+
+#       define R300_VAP_SWIZZLE_XYZW \
+        ((R300_SWIZZLE_SELECT_X << R300_SWIZZLE_SELECT_X_SHIFT) | \
+         (R300_SWIZZLE_SELECT_Y << R300_SWIZZLE_SELECT_Y_SHIFT) | \
+         (R300_SWIZZLE_SELECT_Z << R300_SWIZZLE_SELECT_Z_SHIFT) | \
+         (R300_SWIZZLE_SELECT_W << R300_SWIZZLE_SELECT_W_SHIFT) | \
+         (0xf << R300_WRITE_ENA_SHIFT))
+
 #define R300_VAP_PROG_STREAM_CNTL_EXT_1                 0x21e4
 #define R300_VAP_PROG_STREAM_CNTL_EXT_2                 0x21e8
 #define R300_VAP_PROG_STREAM_CNTL_EXT_3                 0x21ec
@@ -1023,20 +1048,27 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_THIRD  (2 << 16)
 #	define R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_LAST   (3 << 16)
 
-/** TODO: might be candidate for removal */
-#	define R300_RE_SHADE_MODEL_SMOOTH     ( \
-	R300_GA_COLOR_CONTROL_RGB0_SHADING_GOURAUD | R300_GA_COLOR_CONTROL_ALPHA0_SHADING_GOURAUD | \
-	R300_GA_COLOR_CONTROL_RGB1_SHADING_GOURAUD | R300_GA_COLOR_CONTROL_ALPHA1_SHADING_GOURAUD | \
-	R300_GA_COLOR_CONTROL_RGB2_SHADING_GOURAUD | R300_GA_COLOR_CONTROL_ALPHA2_SHADING_GOURAUD | \
-	R300_GA_COLOR_CONTROL_RGB3_SHADING_GOURAUD | R300_GA_COLOR_CONTROL_ALPHA3_SHADING_GOURAUD | \
-	R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_LAST )
-/** TODO: might be candidate for removal, the GOURAUD stuff also looks buggy to me */
-#	define R300_RE_SHADE_MODEL_FLAT     ( \
-	R300_GA_COLOR_CONTROL_RGB0_SHADING_FLAT | R300_GA_COLOR_CONTROL_ALPHA0_SHADING_FLAT | \
-	R300_GA_COLOR_CONTROL_RGB1_SHADING_FLAT | R300_GA_COLOR_CONTROL_ALPHA1_SHADING_GOURAUD | \
-	R300_GA_COLOR_CONTROL_RGB2_SHADING_FLAT | R300_GA_COLOR_CONTROL_ALPHA2_SHADING_FLAT | \
-	R300_GA_COLOR_CONTROL_RGB3_SHADING_FLAT | R300_GA_COLOR_CONTROL_ALPHA3_SHADING_GOURAUD | \
-	R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_LAST )
+#       define R300_SHADE_MODEL_FLAT ( \
+        R300_GA_COLOR_CONTROL_RGB0_SHADING_FLAT | \
+        R300_GA_COLOR_CONTROL_ALPHA0_SHADING_FLAT | \
+        R300_GA_COLOR_CONTROL_RGB1_SHADING_FLAT | \
+        R300_GA_COLOR_CONTROL_ALPHA1_SHADING_FLAT | \
+        R300_GA_COLOR_CONTROL_RGB2_SHADING_FLAT | \
+        R300_GA_COLOR_CONTROL_ALPHA2_SHADING_FLAT | \
+        R300_GA_COLOR_CONTROL_RGB3_SHADING_FLAT | \
+        R300_GA_COLOR_CONTROL_ALPHA3_SHADING_FLAT | \
+        R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_LAST )
+
+#       define R300_SHADE_MODEL_SMOOTH ( \
+        R300_GA_COLOR_CONTROL_RGB0_SHADING_GOURAUD | \
+        R300_GA_COLOR_CONTROL_ALPHA0_SHADING_GOURAUD | \
+        R300_GA_COLOR_CONTROL_RGB1_SHADING_GOURAUD | \
+        R300_GA_COLOR_CONTROL_ALPHA1_SHADING_GOURAUD | \
+        R300_GA_COLOR_CONTROL_RGB2_SHADING_GOURAUD | \
+        R300_GA_COLOR_CONTROL_ALPHA2_SHADING_GOURAUD | \
+        R300_GA_COLOR_CONTROL_RGB3_SHADING_GOURAUD | \
+        R300_GA_COLOR_CONTROL_ALPHA3_SHADING_GOURAUD | \
+        R300_GA_COLOR_CONTROL_PROVOKING_VERTEX_LAST )
 
 /* Specifies red & green components of fill color -- S312 format -- Backwards comp. */
 #define R300_GA_SOLID_RG                         0x427c
@@ -1150,12 +1182,16 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_W_ADDR_MASK                  0x0003f000
 #       define R300_HIRES_DIS                    (0 << 18)
 #       define R300_HIRES_EN                     (1 << 18)
+#       define R300_IT_COUNT(x)                  ((x) << 0)
+#       define R300_IC_COUNT(x)                  ((x) << 7)
+#       define R300_W_COUNT(x)                   ((x) << 12)
 
 #define R300_RS_INST_COUNT                       0x4304
 #       define R300_RS_INST_COUNT_SHIFT          0
 #       define R300_RS_INST_COUNT_MASK           0x0000000f
 #       define R300_RS_TX_OFFSET_SHIFT           5
 #	define R300_RS_TX_OFFSET_MASK            0x000000e0
+#       define R300_RS_TX_OFFSET(x)              ((x) << 5)
 
 /* gap */
 
@@ -1399,6 +1435,8 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R300_TX_MAX_ANISO_8_TO_1          (3 << 21)
 #	define R300_TX_MAX_ANISO_16_TO_1         (4 << 21)
 #	define R300_TX_MAX_ANISO_MASK            (7 << 21)
+#       define R300_TX_WRAP_S(x)                 ((x) << 0)
+#       define R300_TX_WRAP_T(x)                 ((x) << 3)
 
 #define R300_TX_FILTER1_0                      0x4440
 #	define R300_CHROMA_KEY_MODE_DISABLE    0
@@ -1421,18 +1459,21 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #	define R500_MACRO_SWITCH               (1<<22)
 #	define R500_BORDER_FIX                 (1<<31)
 
-#define R300_TX_SIZE_0                      0x4480
+#define R300_TX_FORMAT0_0                   0x4480
 #       define R300_TX_WIDTHMASK_SHIFT           0
 #       define R300_TX_WIDTHMASK_MASK            (2047 << 0)
 #       define R300_TX_HEIGHTMASK_SHIFT          11
 #       define R300_TX_HEIGHTMASK_MASK           (2047 << 11)
-#	define R300_TX_DEPTHMASK_SHIFT		 22
-#	define R300_TX_DEPTHMASK_MASK		 (0xf << 22)
+#	define R300_TX_DEPTHMASK_SHIFT           22
+#	define R300_TX_DEPTHMASK_MASK            (0xf << 22)
 #       define R300_TX_MAX_MIP_LEVEL_SHIFT       26
 #       define R300_TX_MAX_MIP_LEVEL_MASK        (0xf << 26)
-#       define R300_TX_SIZE_PROJECTED            (1<<30)
-#       define R300_TX_SIZE_TXPITCH_EN           (1<<31)
-#define R300_TX_FORMAT_0                    0x44C0
+#       define R300_TX_SIZE_PROJECTED            (1 << 30)
+#       define R300_TX_PITCH_EN                  (1 << 31)
+#       define R300_TX_WIDTH(x)                  ((x) << 0)
+#       define R300_TX_HEIGHT(x)                 ((x) << 11)
+
+#define R300_TX_FORMAT1_0                   0x44C0
 	/* The interpretation of the format word by Wladimir van der Laan */
 	/* The X, Y, Z and W refer to the layout of the components.
 	   They are given meanings as R, G, B and Alpha by the swizzle

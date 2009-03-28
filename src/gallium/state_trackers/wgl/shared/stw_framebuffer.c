@@ -44,16 +44,6 @@ framebuffer_resize(
    GLuint width,
    GLuint height )
 {
-   if (fb->hbmDIB == NULL || fb->stfb->Base.Width != width || fb->stfb->Base.Height != height) {
-      if (fb->hbmDIB)
-         DeleteObject( fb->hbmDIB );
-
-      fb->hbmDIB = CreateCompatibleBitmap(
-         fb->hDC,
-         width,
-         height );
-   }
-
    st_resize_framebuffer( fb->stfb, width, height );
 }
 
@@ -79,6 +69,14 @@ window_proc(
    return CallWindowProc( fb->WndProc, hWnd, uMsg, wParam, lParam );
 }
 
+static INLINE boolean
+stw_is_supported_depth_stencil(enum pipe_format format)
+{
+   struct pipe_screen *screen = stw_dev->screen;
+   return screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 
+                                      PIPE_TEXTURE_USAGE_DEPTH_STENCIL, 0);
+}
+
 /* Create a new framebuffer object which will correspond to the given HDC.
  */
 struct stw_framebuffer *
@@ -101,18 +99,43 @@ framebuffer_create(
 
    if (visual->depthBits == 0)
       depthFormat = PIPE_FORMAT_NONE;
-   else if (visual->depthBits <= 16)
+   else if (visual->depthBits <= 16 &&
+            stw_is_supported_depth_stencil(PIPE_FORMAT_Z16_UNORM))
       depthFormat = PIPE_FORMAT_Z16_UNORM;
-   else if (visual->depthBits <= 24)
+   else if (visual->depthBits <= 24 && visual->stencilBits != 8 &&
+            stw_is_supported_depth_stencil(PIPE_FORMAT_X8Z24_UNORM)) {
+      depthFormat = PIPE_FORMAT_X8Z24_UNORM;
+   }
+   else if (visual->depthBits <= 24 && visual->stencilBits != 8 && 
+            stw_is_supported_depth_stencil(PIPE_FORMAT_Z24X8_UNORM)) {
+      depthFormat = PIPE_FORMAT_Z24X8_UNORM;
+   }
+   else if (visual->depthBits <= 24 && visual->stencilBits == 8 && 
+            stw_is_supported_depth_stencil(PIPE_FORMAT_S8Z24_UNORM)) {
       depthFormat = PIPE_FORMAT_S8Z24_UNORM;
-   else
+   }
+   else if (visual->depthBits <= 24 && visual->stencilBits == 8 && 
+            stw_is_supported_depth_stencil(PIPE_FORMAT_Z24S8_UNORM)) {
+      depthFormat = PIPE_FORMAT_Z24S8_UNORM;
+   }
+   else if(stw_is_supported_depth_stencil(PIPE_FORMAT_Z32_UNORM)) {
       depthFormat = PIPE_FORMAT_Z32_UNORM;
+   }
+   else if(stw_is_supported_depth_stencil(PIPE_FORMAT_Z32_FLOAT)) {
+      depthFormat = PIPE_FORMAT_Z32_FLOAT;
+   }
+   else {
+      assert(0);
+      depthFormat = PIPE_FORMAT_NONE;
+   }
 
-   if (visual->stencilBits == 8) {
-      if (depthFormat == PIPE_FORMAT_S8Z24_UNORM)
-         stencilFormat = depthFormat;
-      else
-         stencilFormat = PIPE_FORMAT_S8_UNORM;
+   if (depthFormat == PIPE_FORMAT_S8Z24_UNORM || 
+       depthFormat == PIPE_FORMAT_Z24S8_UNORM) {
+      stencilFormat = depthFormat;
+   }
+   else if (visual->stencilBits == 8 && 
+            stw_is_supported_depth_stencil(PIPE_FORMAT_S8_UNORM)) {
+      stencilFormat = PIPE_FORMAT_S8_UNORM;
    }
    else {
       stencilFormat = PIPE_FORMAT_NONE;
@@ -134,10 +157,10 @@ framebuffer_create(
     */
    fb->hWnd = WindowFromDC( hdc );
    if (fb->hWnd != NULL) {
-      fb->WndProc = (WNDPROC) SetWindowLong(
+      fb->WndProc = (WNDPROC) SetWindowLongPtr(
          fb->hWnd,
-         GWL_WNDPROC,
-         (LONG) window_proc );
+         GWLP_WNDPROC,
+         (LONG_PTR) window_proc );
    }
 
    fb->next = fb_head;
@@ -155,10 +178,10 @@ framebuffer_destroy(
    while (pfb != NULL) {
       if (pfb == fb) {
          if (fb->hWnd != NULL) {
-            SetWindowLong(
+            SetWindowLongPtr(
                fb->hWnd,
-               GWL_WNDPROC,
-               (LONG) fb->WndProc );
+               GWLP_WNDPROC,
+               (LONG_PTR) fb->WndProc );
          }
 
          *link = fb->next;
@@ -202,11 +225,14 @@ stw_swap_buffers(
     */
    st_notify_swapbuffers( fb->stfb );
 
-   st_get_framebuffer_surface( fb->stfb, ST_SURFACE_BACK_LEFT, &surf );
-
-   stw_dev->stw_winsys->flush_frontbuffer(stw_dev->screen,
-                                          surf,
-                                          hdc );
+   if(st_get_framebuffer_surface( fb->stfb, ST_SURFACE_BACK_LEFT, &surf )) {
+      stw_dev->stw_winsys->flush_frontbuffer(stw_dev->screen,
+                                             surf,
+                                             hdc );
+   }
+   else {
+       /* FIXME: this shouldn't happen, but does on glean */
+   }
 
    return TRUE;
 }

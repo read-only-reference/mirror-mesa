@@ -351,7 +351,7 @@ make_bitmap_texture(GLcontext *ctx, GLsizei width, GLsizei height,
 
    /* Release transfer */
    screen->transfer_unmap(screen, transfer);
-   screen->tex_transfer_release(screen, &transfer);
+   screen->tex_transfer_destroy(transfer);
 
    return pt;
 }
@@ -379,7 +379,7 @@ setup_bitmap_vertex_data(struct st_context *st,
    GLuint i;
 
    if (st->bitmap.vbuf_slot >= max_slots) {
-      pipe_buffer_reference(pipe->screen, &st->bitmap.vbuf, NULL);
+      pipe_buffer_reference(&st->bitmap.vbuf, NULL);
       st->bitmap.vbuf_slot = 0;
    }
 
@@ -571,7 +571,7 @@ reset_cache(struct st_context *st)
    cache->ymax = -1000000;
 
    if (cache->trans)
-      screen->tex_transfer_release(screen, &cache->trans);
+      screen->tex_transfer_destroy(cache->trans);
 
    assert(!cache->texture);
 
@@ -623,7 +623,8 @@ st_flush_bitmap_cache(struct st_context *st)
          screen->transfer_unmap(screen, cache->trans);
          cache->buffer = NULL;
 
-         screen->tex_transfer_release(screen, &cache->trans);
+         screen->tex_transfer_destroy(cache->trans);
+         cache->trans = NULL;
 
          draw_bitmap_quad(st->ctx,
                           cache->xpos,
@@ -651,7 +652,7 @@ st_flush_bitmap( struct st_context *st )
    /* Release vertex buffer to avoid synchronous rendering if we were
     * to map it in the next frame.
     */
-   pipe_buffer_reference(st->pipe->screen, &st->bitmap.vbuf, NULL);
+   pipe_buffer_reference(&st->bitmap.vbuf, NULL);
    st->bitmap.vbuf_slot = 0;
 }
 
@@ -739,8 +740,7 @@ st_Bitmap(GLcontext *ctx, GLint x, GLint y, GLsizei width, GLsizei height,
       const uint semantic_indexes[] = { 0, 0, 0 };
       st->bitmap.vs = util_make_vertex_passthrough_shader(st->pipe, 3,
                                                           semantic_names,
-                                                          semantic_indexes,
-                                                          &st->bitmap.vert_shader);
+                                                          semantic_indexes);
    }
 
    if (UseBitmapCache && accum_bitmap(st, x, y, width, height, unpack, bitmap))
@@ -787,12 +787,15 @@ st_init_bitmap(struct st_context *st)
    /* init baseline rasterizer state once */
    memset(&st->bitmap.rasterizer, 0, sizeof(st->bitmap.rasterizer));
    st->bitmap.rasterizer.gl_rasterization_rules = 1;
-   st->bitmap.rasterizer.bypass_vs = 1;
 
    /* find a usable texture format */
    if (screen->is_format_supported(screen, PIPE_FORMAT_I8_UNORM, PIPE_TEXTURE_2D, 
                                    PIPE_TEXTURE_USAGE_SAMPLER, 0)) {
       st->bitmap.tex_format = PIPE_FORMAT_I8_UNORM;
+   }
+   else if (screen->is_format_supported(screen, PIPE_FORMAT_A8_UNORM, PIPE_TEXTURE_2D, 
+                                        PIPE_TEXTURE_USAGE_SAMPLER, 0)) {
+      st->bitmap.tex_format = PIPE_FORMAT_A8_UNORM;
    }
    else if (screen->is_format_supported(screen, PIPE_FORMAT_L8_UNORM, PIPE_TEXTURE_2D, 
                                         PIPE_TEXTURE_USAGE_SAMPLER, 0)) {
@@ -819,21 +822,20 @@ st_destroy_bitmap(struct st_context *st)
    struct bitmap_cache *cache = st->bitmap.cache;
 
    screen->transfer_unmap(screen, cache->trans);
-   screen->tex_transfer_release(screen, &cache->trans);
+   screen->tex_transfer_destroy(cache->trans);
 
    if (st->bitmap.vs) {
       cso_delete_vertex_shader(st->cso_context, st->bitmap.vs);
       st->bitmap.vs = NULL;
    }
-   util_free_shader(&st->bitmap.vert_shader);
 
    if (st->bitmap.vbuf) {
-      pipe_buffer_reference(pipe->screen, &st->bitmap.vbuf, NULL);
+      pipe_buffer_reference(&st->bitmap.vbuf, NULL);
       st->bitmap.vbuf = NULL;
    }
 
    if (st->bitmap.cache) {
-      pipe_texture_release(&st->bitmap.cache->texture);
+      pipe_texture_reference(&st->bitmap.cache->texture, NULL);
       _mesa_free(st->bitmap.cache);
       st->bitmap.cache = NULL;
    }

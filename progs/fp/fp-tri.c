@@ -11,6 +11,11 @@
 #include <GL/glew.h>
 #include <GL/glut.h>
 
+#include "readtex.c"
+
+
+#define TEXTURE_FILE "../images/bw.rgb"
+
 unsigned show_fps = 0;
 unsigned int frame_cnt = 0;
 void alarmhandler(int);
@@ -65,6 +70,7 @@ static void args(int argc, char *argv[])
 
 static void Init( void )
 {
+   GLuint Texture;
    GLint errno;
    GLuint prognum;
    char buf[4096];
@@ -107,7 +113,70 @@ static void Init( void )
    }
    glEnable(GL_FRAGMENT_PROGRAM_ARB);
 
-   glClearColor(.3, .3, .3, 0);
+
+   /* Load texture */
+   glGenTextures(1, &Texture);
+   glBindTexture(GL_TEXTURE_2D, Texture);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+   if (!LoadRGBMipmaps(TEXTURE_FILE, GL_RGB)) {
+      printf("Error: couldn't load texture image file %s\n", TEXTURE_FILE);
+      exit(1);
+   }
+
+
+   glGenTextures(1, &Texture);
+   glActiveTextureARB(GL_TEXTURE0_ARB + 1);
+   glBindTexture(GL_TEXTURE_2D, Texture);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+   {
+      GLubyte data[32][32];
+      int width = 32;
+      int height = 32;
+      int i;
+      int j;
+
+      for (i = 0; i < 32; i++)
+         for (j = 0; j < 32; j++)
+	 {
+	    /**
+	     ** +-----------+
+	     ** |     W     |
+	     ** |  +-----+  |
+	     ** |  |     |  |
+	     ** |  |  B  |  |
+	     ** |  |     |  |
+	     ** |  +-----+  |
+	     ** |           |
+	     ** +-----------+
+	     **/
+	    int i2 = i - height / 2;
+	    int j2 = j - width / 2;
+	    int h8 = height / 8;
+	    int w8 = width / 8;
+	    if ( -h8 <= i2 && i2 <= h8 && -w8 <= j2 && j2 <= w8 ) {
+	       data[i][j] = 0x00;
+	    } else if ( -2 * h8 <= i2 && i2 <= 2 * h8 && -2 * w8 <= j2 && j2 <= 2 * w8 ) {
+	       data[i][j] = 0x55;
+	    } else if ( -3 * h8 <= i2 && i2 <= 3 * h8 && -3 * w8 <= j2 && j2 <= 3 * w8 ) {
+	       data[i][j] = 0xaa;
+	    } else {
+	       data[i][j] = 0xff;
+	    }
+	 }
+
+      glTexImage2D( GL_TEXTURE_2D, 0,
+                    GL_ALPHA8,
+                    32, 32, 0,
+                    GL_ALPHA, GL_UNSIGNED_BYTE, data );
+   }
+
+
+   glClearColor(.1, .3, .5, 0);
 }
 
 static void Reshape(int width, int height)
@@ -141,11 +210,17 @@ static void Display(void)
    glProgramLocalParameter4fARB(GL_FRAGMENT_PROGRAM_ARB, 0, 1.0, 1.0, 0.0, 0.0);
    glProgramLocalParameter4fARB(GL_FRAGMENT_PROGRAM_ARB, 1, 0.0, 0.0, 1.0, 1.0);
    glBegin(GL_TRIANGLES);
+
    glColor3f(0,0,1);
+   glTexCoord3f(1,1,0);
    glVertex3f( 0.9, -0.9, -30.0);
+
    glColor3f(1,0,0);
+   glTexCoord3f(1,-1,0);
    glVertex3f( 0.9,  0.9, -30.0);
+
    glColor3f(0,1,0);
+   glTexCoord3f(-1,0,0);
    glVertex3f(-0.9,  0.0, -30.0);
    glEnd();
 

@@ -382,6 +382,7 @@ const struct gl_texture_format _mesa_texformat_sl8 = {
    store_texel_sl8			/* StoreTexel */
 };
 
+/* Note: this format name looks like a misnomer, make it sal8? */
 const struct gl_texture_format _mesa_texformat_sla8 = {
    MESA_FORMAT_SLA8,			/* MesaFormat */
    GL_LUMINANCE_ALPHA,			/* BaseFormat */
@@ -696,6 +697,79 @@ const struct gl_texture_format _mesa_texformat_intensity_float16 = {
    store_texel_intensity_f16		/* StoreTexel */
 };
 
+const struct gl_texture_format _mesa_texformat_dudv8 = {
+   MESA_FORMAT_DUDV8,			/* MesaFormat */
+   GL_DUDV_ATI,				/* BaseFormat */
+   GL_SIGNED_NORMALIZED,		/* DataType */
+   /* maybe should add dudvBits field, but spec seems to be
+      lacking the ability to query with GetTexLevelParameter anyway */
+   0,					/* RedBits */
+   0,					/* GreenBits */
+   0,					/* BlueBits */
+   0,					/* AlphaBits */
+   0,					/* LuminanceBits */
+   0,					/* IntensityBits */
+   0,					/* IndexBits */
+   0,					/* DepthBits */
+   0,					/* StencilBits */
+   2,					/* TexelBytes */
+   _mesa_texstore_dudv8,		/* StoreTexImageFunc */
+   NULL,				/* FetchTexel1D */
+   NULL,				/* FetchTexel2D */
+   NULL,				/* FetchTexel3D */
+   fetch_texel_1d_dudv8,		/* FetchTexel1Df */
+   fetch_texel_2d_dudv8,		/* FetchTexel2Df */
+   fetch_texel_3d_dudv8,		/* FetchTexel3Df */
+   NULL					/* StoreTexel */
+};
+
+const struct gl_texture_format _mesa_texformat_signed_rgba8888 = {
+   MESA_FORMAT_SIGNED_RGBA8888,		/* MesaFormat */
+   GL_RGBA,				/* BaseFormat */
+   GL_SIGNED_NORMALIZED,		/* DataType */
+   8,					/* RedBits */
+   8,					/* GreenBits */
+   8,					/* BlueBits */
+   8,					/* AlphaBits */
+   0,					/* LuminanceBits */
+   0,					/* IntensityBits */
+   0,					/* IndexBits */
+   0,					/* DepthBits */
+   0,					/* StencilBits */
+   4,					/* TexelBytes */
+   _mesa_texstore_signed_rgba8888,	/* StoreTexImageFunc */
+   NULL,				/* FetchTexel1D */
+   NULL,				/* FetchTexel2D */
+   NULL,				/* FetchTexel3D */
+   fetch_texel_1d_signed_rgba8888,	/* FetchTexel1Df */
+   fetch_texel_2d_signed_rgba8888,	/* FetchTexel2Df */
+   fetch_texel_3d_signed_rgba8888,	/* FetchTexel3Df */
+   store_texel_signed_rgba8888		/* StoreTexel */
+};
+
+const struct gl_texture_format _mesa_texformat_signed_rgba8888_rev = {
+   MESA_FORMAT_SIGNED_RGBA8888_REV,	/* MesaFormat */
+   GL_RGBA,				/* BaseFormat */
+   GL_SIGNED_NORMALIZED,		/* DataType */
+   8,					/* RedBits */
+   8,					/* GreenBits */
+   8,					/* BlueBits */
+   8,					/* AlphaBits */
+   0,					/* LuminanceBits */
+   0,					/* IntensityBits */
+   0,					/* IndexBits */
+   0,					/* DepthBits */
+   0,					/* StencilBits */
+   4,					/* TexelBytes */
+   _mesa_texstore_signed_rgba8888,	/* StoreTexImageFunc */
+   NULL,				/* FetchTexel1D */
+   NULL,				/* FetchTexel2D */
+   NULL,				/* FetchTexel3D */
+   fetch_texel_1d_signed_rgba8888_rev,	/* FetchTexel1Df */
+   fetch_texel_2d_signed_rgba8888_rev,	/* FetchTexel2Df */
+   fetch_texel_3d_signed_rgba8888_rev,	/* FetchTexel3Df */
+   store_texel_signed_rgba8888_rev		/* StoreTexel */
+};
 
 /*@}*/
 
@@ -1634,6 +1708,27 @@ _mesa_choose_tex_format( GLcontext *ctx, GLint internalFormat,
       }
    }
 
+   if (ctx->Extensions.ATI_envmap_bumpmap) {
+      switch (internalFormat) {
+         case GL_DUDV_ATI:
+         case GL_DU8DV8_ATI:
+            return &_mesa_texformat_dudv8;
+         default:
+            ; /* fallthrough */
+      }
+   }
+
+   if (ctx->Extensions.MESA_texture_signed_rgba) {
+      switch (internalFormat) {
+         case GL_RGBA_SNORM:
+         case GL_RGBA8_SNORM:
+            return &_mesa_texformat_signed_rgba8888;
+         default:
+            ; /* fallthrough */
+      }
+   }
+
+
 #if FEATURE_EXT_texture_sRGB
    if (ctx->Extensions.EXT_texture_sRGB) {
       switch (internalFormat) {
@@ -1776,6 +1871,17 @@ _mesa_format_to_type_and_comps(const struct gl_texture_format *format,
    case MESA_FORMAT_Z32:
       *datatype = GL_UNSIGNED_INT;
       *comps = 1;
+      return;
+
+   case MESA_FORMAT_DUDV8:
+      *datatype = GL_BYTE;
+      *comps = 2;
+      return;
+
+   case MESA_FORMAT_SIGNED_RGBA8888:
+   case MESA_FORMAT_SIGNED_RGBA8888_REV:
+      *datatype = GL_BYTE;
+      *comps = 4;
       return;
 
 #if FEATURE_EXT_texture_sRGB

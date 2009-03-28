@@ -66,9 +66,12 @@ drm_get_device_id(struct drm_device *device)
 {
 	char path[512];
 	FILE *file;
+	char *ret;
 
 	/* TODO get the real minor */
 	int minor = 0;
+
+	device->deviceID = 0;
 
 	snprintf(path, sizeof(path), "/sys/class/drm/card%d/device/device", minor);
 	file = fopen(path, "r");
@@ -77,7 +80,10 @@ drm_get_device_id(struct drm_device *device)
 		return;
 	}
 
-	fgets(path, sizeof( path ), file);
+	ret = fgets(path, sizeof( path ), file);
+	if (!ret)
+		return;
+
 	sscanf(path, "%x", &device->deviceID);
 	fclose(file);
 }
@@ -101,6 +107,25 @@ drm_add_modes_from_connector(_EGLScreen *screen, drmModeConnectorPtr connector)
 	}
 }
 
+static void
+drm_find_dpms(struct drm_device *dev, struct drm_screen *screen)
+{
+	drmModeConnectorPtr c = screen->connector;
+	drmModePropertyPtr p;
+	int i;
+
+	for (i = 0; i < c->count_props; i++) {
+		p = drmModeGetProperty(dev->drmFD, c->props[i]);
+		if (!strcmp(p->name, "DPMS"))
+			break;
+
+		drmModeFreeProperty(p);
+		p = NULL;
+	}
+
+	screen->dpms = p;
+}
+
 EGLBoolean
 drm_initialize(_EGLDriver *drv, EGLDisplay dpy, EGLint *major, EGLint *minor)
 {
@@ -121,7 +146,7 @@ drm_initialize(_EGLDriver *drv, EGLDisplay dpy, EGLint *major, EGLint *minor)
 	dev->drmFD = fd;
 	drm_get_device_id(dev);
 
-	dev->screen = drm_api_hocks.create_screen(dev->drmFD, dev->deviceID);
+	dev->screen = drm_api_hooks.create_screen(dev->drmFD, dev->deviceID);
 	if (!dev->screen)
 		goto err_screen;
 	dev->winsys = dev->screen->winsys;
@@ -154,6 +179,7 @@ drm_initialize(_EGLDriver *drv, EGLDisplay dpy, EGLint *major, EGLint *minor)
 		_eglInitScreen(&screen->base);
 		_eglAddScreen(disp, &screen->base);
 		drm_add_modes_from_connector(&screen->base, connector);
+		drm_find_dpms(dev, screen);
 		dev->screens[num_screens++] = screen;
 	}
 	dev->count_screens = num_screens;
@@ -200,6 +226,7 @@ drm_terminate(_EGLDriver *drv, EGLDisplay dpy)
 		if (screen->shown)
 			drm_takedown_shown_screen(drv, screen);
 
+		drmModeFreeProperty(screen->dpms);
 		drmModeFreeConnector(screen->connector);
 		_eglDestroyScreen(&screen->base);
 		dev->screens[i] = NULL;

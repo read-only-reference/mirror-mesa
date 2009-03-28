@@ -506,6 +506,33 @@ _mesa_fetch_state(GLcontext *ctx, const gl_state_index state[],
             }
          }
          return;
+      case STATE_FB_SIZE:
+         value[0] = (GLfloat) (ctx->DrawBuffer->Width - 1);
+         value[1] = (GLfloat) (ctx->DrawBuffer->Height - 1);
+         value[2] = 0.0F;
+         value[3] = 0.0F;
+         return;
+
+      case STATE_ROT_MATRIX_0:
+         {
+            const int unit = (int) state[2];
+            GLfloat *rotMat22 = ctx->Texture.Unit[unit].RotMatrix;
+            value[0] = rotMat22[0]; 
+            value[1] = rotMat22[2];
+            value[2] = 0.0;
+            value[3] = 0.0;
+         }
+         break;
+      case STATE_ROT_MATRIX_1:
+         {
+            const int unit = (int) state[2];
+            GLfloat *rotMat22 = ctx->Texture.Unit[unit].RotMatrix;
+            value[0] = rotMat22[1];
+            value[1] = rotMat22[3];
+            value[2] = 0.0;
+            value[3] = 0.0;
+         }
+         break;
 
          /* XXX: make sure new tokens added here are also handled in the 
           * _mesa_program_state_flags() switch, below.
@@ -591,6 +618,8 @@ _mesa_program_state_flags(const gl_state_index state[STATE_LENGTH])
 
       case STATE_TEXRECT_SCALE:
       case STATE_SHADOW_AMBIENT:
+      case STATE_ROT_MATRIX_0:
+      case STATE_ROT_MATRIX_1:
 	 return _NEW_TEXTURE;
       case STATE_FOG_PARAMS_OPTIMIZED:
 	 return _NEW_FOG;
@@ -605,6 +634,9 @@ _mesa_program_state_flags(const gl_state_index state[STATE_LENGTH])
       case STATE_PCM_SCALE:
       case STATE_PCM_BIAS:
          return _NEW_PIXEL;
+
+      case STATE_FB_SIZE:
+         return _NEW_BUFFERS;
 
       default:
          /* unknown state indexes are silently ignored and
@@ -805,6 +837,15 @@ append_token(char *dst, gl_state_index k)
       break;
    case STATE_SHADOW_AMBIENT:
       append(dst, "CompareFailValue");
+      break;
+   case STATE_FB_SIZE:
+      append(dst, "FbSize");
+      break;
+   case STATE_ROT_MATRIX_0:
+      append(dst, "rotMatrixRow0");
+      break;
+   case STATE_ROT_MATRIX_1:
+      append(dst, "rotMatrixRow1");
       break;
    default:
       /* probably STATE_INTERNAL_DRIVER+i (driver private state) */

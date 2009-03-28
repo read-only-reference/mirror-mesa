@@ -285,14 +285,11 @@ typedef enum
    BUFFER_BACK_LEFT,
    BUFFER_FRONT_RIGHT,
    BUFFER_BACK_RIGHT,
-   /* optional aux buffers */
-   BUFFER_AUX0,
-   BUFFER_AUX1,
-   BUFFER_AUX2,
-   BUFFER_AUX3,
    BUFFER_DEPTH,
    BUFFER_STENCIL,
    BUFFER_ACCUM,
+   /* optional aux buffer */
+   BUFFER_AUX0,
    /* generic renderbuffers */
    BUFFER_COLOR0,
    BUFFER_COLOR1,
@@ -336,9 +333,6 @@ typedef enum
                             BUFFER_BIT_FRONT_RIGHT | \
                             BUFFER_BIT_BACK_RIGHT | \
                             BUFFER_BIT_AUX0 | \
-                            BUFFER_BIT_AUX1 | \
-                            BUFFER_BIT_AUX2 | \
-                            BUFFER_BIT_AUX3 | \
                             BUFFER_BIT_COLOR0 | \
                             BUFFER_BIT_COLOR1 | \
                             BUFFER_BIT_COLOR2 | \
@@ -938,12 +932,12 @@ struct gl_pixel_attrib
 
    /*--- End Pixel Transfer State ---*/
 
-   /* Pixel Zoom */
+   /** glPixelZoom */
    GLfloat ZoomX, ZoomY;
 
    /** GL_SGI_texture_color_table */
-   GLfloat TextureColorTableScale[4];
-   GLfloat TextureColorTableBias[4];
+   GLfloat TextureColorTableScale[4]; /**< RGBA */
+   GLfloat TextureColorTableBias[4];  /**< RGBA */
 };
 
 
@@ -1018,6 +1012,7 @@ struct gl_stencil_attrib
    GLboolean Enabled;		/**< Enabled flag */
    GLboolean TestTwoSide;	/**< GL_EXT_stencil_two_side */
    GLubyte ActiveFace;		/**< GL_EXT_stencil_two_side (0 or 2) */
+   GLboolean _Enabled;          /**< Enabled and stencil buffer present */
    GLboolean _TestTwoSide;
    GLubyte _BackFace;           /**< Current back stencil state (1 or 2) */
    GLenum Function[3];		/**< Stencil function */
@@ -1316,10 +1311,6 @@ struct gl_texture_object
    GLenum CompareMode;		/**< GL_ARB_shadow */
    GLenum CompareFunc;		/**< GL_ARB_shadow */
    GLfloat CompareFailValue;    /**< GL_ARB_shadow_ambient */
-   GLenum _Function;		/**< Comparison function derived from 
-				 * \c CompareOperator, \c CompareMode, and
-				 * \c CompareFunc.
-				 */
    GLenum DepthMode;		/**< GL_ARB_depth_texture */
    GLint _MaxLevel;		/**< actual max mipmap level (q in the spec) */
    GLfloat _MaxLambda;		/**< = _MaxLevel - BaseLevel (q - b in spec) */
@@ -1399,6 +1390,8 @@ struct gl_texture_unit
    GLbitfield _GenFlags;	/**< Bitwise-OR of Gen[STRQ]._ModeBit */
 
    GLfloat LodBias;		/**< for biasing mipmap levels */
+   GLenum BumpTarget;
+   GLfloat RotMatrix[4]; /* 2x2 matrix */
 
    /** 
     * \name GL_EXT_texture_env_combine 
@@ -1446,14 +1439,20 @@ struct gl_texture_attrib
    GLboolean SharedPalette;
    struct gl_color_table Palette;
 
-   /** Per-unit flags */
-   /*@{*/
-   GLbitfield _EnabledUnits;  /**< one bit set for each really-enabled unit */
-   GLbitfield _EnabledCoordUnits;   /**< one bit per enabled coordinate unit */
-   GLbitfield _GenFlags;            /**< for texgen */
-   GLbitfield _TexGenEnabled;  /**< Mask of ENABLE_TEXGEN flags */
-   GLbitfield _TexMatEnabled;  /**< Mask of ENABLE_TEXMAT flags */
-   /*@}*/
+   /** Texture units/samplers used by vertex or fragment texturing */
+   GLbitfield _EnabledUnits;
+
+   /** Texture coord units/sets used for fragment texturing */
+   GLbitfield _EnabledCoordUnits;
+
+   /** Texture coord units that have texgen enabled */
+   GLbitfield _TexGenEnabled;
+
+   /** Texture coord units that have non-identity matrices */
+   GLbitfield _TexMatEnabled;
+
+   /** Bitwise-OR of all Texture.Unit[i]._GenFlags */
+   GLbitfield _GenFlags;
 };
 
 
@@ -1498,6 +1497,8 @@ struct gl_buffer_object
    GLenum Usage;
    GLenum Access;
    GLvoid *Pointer;          /**< Only valid while buffer is mapped */
+   GLintptr Offset;          /**< mapped offset */
+   GLsizeiptr Length;        /**< mapped length */
    GLsizeiptrARB Size;       /**< Size of storage in bytes */
    GLubyte *Data;            /**< Location of storage either in RAM or VRAM. */
    GLboolean OnCard;         /**< Is buffer in VRAM? (hardware drivers) */
@@ -1700,24 +1701,24 @@ struct gl_evaluators
  * be "uniform" variables since they can only be set outside glBegin/End.
  * They're also all stored in the same Parameters array.
  */
-enum register_file
+typedef enum
 {
-   PROGRAM_TEMPORARY = 0,   /**< machine->Temporary[] */
-   PROGRAM_LOCAL_PARAM = 1, /**< gl_program->LocalParams[] */
-   PROGRAM_ENV_PARAM = 2,   /**< gl_program->Parameters[] */
-   PROGRAM_STATE_VAR = 3,   /**< gl_program->Parameters[] */
-   PROGRAM_INPUT = 4,       /**< machine->Inputs[] */
-   PROGRAM_OUTPUT = 5,      /**< machine->Outputs[] */
-   PROGRAM_NAMED_PARAM = 6, /**< gl_program->Parameters[] */
-   PROGRAM_CONSTANT = 7,    /**< gl_program->Parameters[] */
-   PROGRAM_UNIFORM = 8,     /**< gl_program->Parameters[] */
-   PROGRAM_VARYING = 9,     /**< machine->Inputs[]/Outputs[] */
-   PROGRAM_WRITE_ONLY = 10, /**< A dummy, write-only register */
-   PROGRAM_ADDRESS = 11,    /**< machine->AddressReg */
-   PROGRAM_SAMPLER = 12,    /**< for shader samplers, compile-time only */
-   PROGRAM_UNDEFINED = 13,  /**< Invalid value */
+   PROGRAM_TEMPORARY,   /**< machine->Temporary[] */
+   PROGRAM_INPUT,       /**< machine->Inputs[] */
+   PROGRAM_OUTPUT,      /**< machine->Outputs[] */
+   PROGRAM_VARYING,     /**< machine->Inputs[]/Outputs[] */
+   PROGRAM_LOCAL_PARAM, /**< gl_program->LocalParams[] */
+   PROGRAM_ENV_PARAM,   /**< gl_program->Parameters[] */
+   PROGRAM_STATE_VAR,   /**< gl_program->Parameters[] */
+   PROGRAM_NAMED_PARAM, /**< gl_program->Parameters[] */
+   PROGRAM_CONSTANT,    /**< gl_program->Parameters[] */
+   PROGRAM_UNIFORM,     /**< gl_program->Parameters[] */
+   PROGRAM_WRITE_ONLY,  /**< A dummy, write-only register */
+   PROGRAM_ADDRESS,     /**< machine->AddressReg */
+   PROGRAM_SAMPLER,     /**< for shader samplers, compile-time only */
+   PROGRAM_UNDEFINED,   /**< Invalid/TBD value */
    PROGRAM_FILE_MAX
-};
+} gl_register_file;
 
 
 /** Vertex and fragment instructions */
@@ -1853,13 +1854,6 @@ struct gl_vertex_program_state
    /** Cache of fixed-function programs */
    struct gl_program_cache *Cache;
 
-#if FEATURE_MESA_program_debug
-   GLprogramcallbackMESA Callback;
-   GLvoid *CallbackData;
-   GLboolean CallbackEnabled;
-   GLuint CurrentPosition;
-#endif
-
    GLboolean _Overriden;
 };
 
@@ -1889,13 +1883,6 @@ struct gl_fragment_program_state
 
    /** Cache of fixed-function programs */
    struct gl_program_cache *Cache;
-
-#if FEATURE_MESA_program_debug
-   GLprogramcallbackMESA Callback;
-   GLvoid *CallbackData;
-   GLboolean CallbackEnabled;
-   GLuint CurrentPosition;
-#endif
 };
 
 
@@ -1969,6 +1956,8 @@ struct gl_query_state
 /** Set by #pragma directives */
 struct gl_sl_pragmas
 {
+   GLboolean IgnoreOptimize;  /**< ignore #pragma optimize(on/off) ? */
+   GLboolean IgnoreDebug;     /**< ignore #pragma debug(on/off) ? */
    GLboolean Optimize;  /**< defaults on */
    GLboolean Debug;     /**< defaults off */
 };
@@ -2039,6 +2028,7 @@ struct gl_shader_state
    GLboolean EmitComments;              /**< Annotated instructions */
    void *MemPool;
    GLbitfield Flags;                    /**< Mask of GLSL_x flags */
+   struct gl_sl_pragmas DefaultPragmas; /**< Default #pragma settings */
 };
 
 
@@ -2251,7 +2241,15 @@ struct gl_renderbuffer_attachment
 struct gl_framebuffer
 {
    _glthread_Mutex Mutex;  /**< for thread safety */
-   GLuint Name;            /**< if zero, this is a window system framebuffer */
+   /**
+    * If zero, this is a window system framebuffer.  If non-zero, this
+    * is a FBO framebuffer; note that for some devices (i.e. those with
+    * a natural pixel coordinate system for FBOs that differs from the
+    * OpenGL/Mesa coordinate system), this means that the viewport,
+    * polygon face orientation, and polygon stipple will have to be inverted.
+    */
+   GLuint Name;
+
    GLint RefCount;
    GLboolean DeletePending;
 
@@ -2395,6 +2393,8 @@ struct gl_constants
    GLuint MaxSamples;            /**< GL_ARB_framebuffer_object */
 
    GLuint MaxVarying;  /**< Number of float[4] varying parameters */
+
+   GLbitfield SupportedBumpUnits; /**> units supporting GL_ATI_envmap_bumpmap as targets */
 };
 
 
@@ -2491,6 +2491,7 @@ struct gl_extensions
    GLboolean APPLE_client_storage;
    GLboolean APPLE_packed_pixels;
    GLboolean APPLE_vertex_array_object;
+   GLboolean ATI_envmap_bumpmap;
    GLboolean ATI_texture_mirror_once;
    GLboolean ATI_texture_env_combine3;
    GLboolean ATI_fragment_shader;
@@ -2499,10 +2500,10 @@ struct gl_extensions
    GLboolean IBM_multimode_draw_arrays;
    GLboolean MESA_pack_invert;
    GLboolean MESA_packed_depth_stencil;
-   GLboolean MESA_program_debug;
    GLboolean MESA_resize_buffers;
    GLboolean MESA_ycbcr_texture;
    GLboolean MESA_texture_array;
+   GLboolean MESA_texture_signed_rgba;
    GLboolean NV_blend_square;
    GLboolean NV_fragment_program;
    GLboolean NV_light_max_exponent;
@@ -2950,7 +2951,6 @@ struct __GLcontextRec
    GLfloat _ModelViewInvScale;
    GLboolean _NeedEyeCoords;
    GLboolean _ForceEyeCoords; 
-   GLenum _CurrentProgram;    /**< currently executing program */
 
    GLuint TextureStateTimestamp; /**< detect changes to shared state */
 

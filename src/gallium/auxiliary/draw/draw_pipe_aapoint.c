@@ -38,7 +38,6 @@
  */
 
 
-#include "pipe/p_inlines.h"
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_shader_tokens.h"
@@ -287,7 +286,7 @@ aa_transform_inst(struct tgsi_transform_context *ctx,
       ctx->emit_instruction(ctx, &newInst);
 #endif
 
-      /* SGT t0.y, t0.xxxx, t0.wwww;  # bool b = d > 1 (NOTE t0.w == 1) */
+      /* SGT t0.y, t0.xxxx, tex.wwww;  # bool b = d > 1 (NOTE tex.w == 1) */
       newInst = tgsi_default_full_instruction();
       newInst.Instruction.Opcode = TGSI_OPCODE_SGT;
       newInst.Instruction.NumDstRegs = 1;

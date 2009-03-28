@@ -69,7 +69,8 @@ static GLuint translate_tex_target( GLenum target )
 }
 
 
-static GLuint translate_tex_format( GLuint mesa_format, GLenum depth_mode )
+static GLuint translate_tex_format( GLuint mesa_format, GLenum internal_format,
+				    GLenum depth_mode )
 {
    switch( mesa_format ) {
    case MESA_FORMAT_L8:
@@ -89,10 +90,16 @@ static GLuint translate_tex_format( GLuint mesa_format, GLenum depth_mode )
       return BRW_SURFACEFORMAT_R8G8B8_UNORM;      
 
    case MESA_FORMAT_ARGB8888:
-      return BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
+      if (internal_format == GL_RGB)
+	 return BRW_SURFACEFORMAT_B8G8R8X8_UNORM;
+      else
+	 return BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
 
    case MESA_FORMAT_RGBA8888_REV:
-      return BRW_SURFACEFORMAT_R8G8B8A8_UNORM;
+      if (internal_format == GL_RGB)
+	 return BRW_SURFACEFORMAT_R8G8B8X8_UNORM;
+      else
+	 return BRW_SURFACEFORMAT_R8G8B8A8_UNORM;
 
    case MESA_FORMAT_RGB565:
       return BRW_SURFACEFORMAT_B5G6R5_UNORM;
@@ -133,8 +140,15 @@ static GLuint translate_tex_format( GLuint mesa_format, GLenum depth_mode )
    case MESA_FORMAT_RGBA_DXT5:
        return BRW_SURFACEFORMAT_BC3_UNORM;
 
-   case MESA_FORMAT_SRGBA8:
-      return BRW_SURFACEFORMAT_R8G8B8A8_UNORM_SRGB;
+   case MESA_FORMAT_SARGB8:
+      return BRW_SURFACEFORMAT_B8G8R8A8_UNORM_SRGB;
+
+   case MESA_FORMAT_SLA8:
+      return BRW_SURFACEFORMAT_L8A8_UNORM_SRGB;
+
+   case MESA_FORMAT_SL8:
+      return BRW_SURFACEFORMAT_L8_UNORM_SRGB;
+
    case MESA_FORMAT_SRGB_DXT1:
       return BRW_SURFACEFORMAT_BC1_UNORM_SRGB;
 
@@ -149,6 +163,12 @@ static GLuint translate_tex_format( GLuint mesa_format, GLenum depth_mode )
       else
          return BRW_SURFACEFORMAT_L24X8_UNORM;
 
+   case MESA_FORMAT_DUDV8:
+      return BRW_SURFACEFORMAT_R8G8_SNORM;
+
+   case MESA_FORMAT_SIGNED_RGBA8888_REV:
+      return BRW_SURFACEFORMAT_R8G8B8A8_SNORM;
+
    default:
       assert(0);
       return 0;
@@ -158,7 +178,7 @@ static GLuint translate_tex_format( GLuint mesa_format, GLenum depth_mode )
 struct brw_wm_surface_key {
    GLenum target, depthmode;
    dri_bo *bo;
-   GLint format;
+   GLint format, internal_format;
    GLint first_level, last_level;
    GLint width, height, depth;
    GLint pitch, cpp;
@@ -196,9 +216,11 @@ brw_create_texture_surface( struct brw_context *brw,
 
    surf.ss0.mipmap_layout_mode = BRW_SURFACE_MIPMAPLAYOUT_BELOW;
    surf.ss0.surface_type = translate_tex_target(key->target);
-
-   if (key->bo) 
-      surf.ss0.surface_format = translate_tex_format(key->format, key->depthmode);
+   if (key->bo) {
+      surf.ss0.surface_format = translate_tex_format(key->format,
+						     key->internal_format,
+						     key->depthmode);
+   }
    else {
       switch (key->depth) {
       case 32:
@@ -275,6 +297,7 @@ brw_update_texture_surface( GLcontext *ctx, GLuint unit )
       key.offset = intelObj->textureOffset;
    } else {
       key.format = firstImage->TexFormat->MesaFormat;
+      key.internal_format = firstImage->InternalFormat;
       key.pitch = intelObj->mt->pitch;
       key.depth = firstImage->Depth;
       key.bo = intelObj->mt->region->buffer;

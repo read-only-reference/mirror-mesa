@@ -38,6 +38,9 @@
 #define PROG_INSTRUCTION_H
 
 
+#include "main/mfeatures.h"
+
+
 /**
  * Swizzle indexes.
  * Do not change!
@@ -418,11 +421,6 @@ struct prog_instruction
 
    /** for driver use (try to remove someday) */
    GLint Aux;
-
-   /* XXX obsolete - remove someday */
-#if FEATURE_MESA_program_debug
-   GLshort StringPos;
-#endif
 };
 
 

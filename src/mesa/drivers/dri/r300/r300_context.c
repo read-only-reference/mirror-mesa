@@ -83,7 +83,7 @@ int hw_tcl_on = 1;
 #define need_GL_EXT_blend_equation_separate
 #define need_GL_EXT_blend_func_separate
 #define need_GL_EXT_blend_minmax
-//#define need_GL_EXT_fog_coord
+#define need_GL_EXT_fog_coord
 #define need_GL_EXT_gpu_program_parameters
 #define need_GL_EXT_secondary_color
 #define need_GL_EXT_stencil_two_side
@@ -111,7 +111,7 @@ const struct dri_extension card_extensions[] = {
   {"GL_EXT_blend_func_separate",	GL_EXT_blend_func_separate_functions},
   {"GL_EXT_blend_minmax",		GL_EXT_blend_minmax_functions},
   {"GL_EXT_blend_subtract",		NULL},
-//  {"GL_EXT_fog_coord",			GL_EXT_fog_coord_functions },
+  {"GL_EXT_fog_coord",			GL_EXT_fog_coord_functions },
   {"GL_EXT_gpu_program_parameters",     GL_EXT_gpu_program_parameters_functions},
   {"GL_EXT_secondary_color", 		GL_EXT_secondary_color_functions},
   {"GL_EXT_shadow_funcs",		NULL},
@@ -288,10 +288,23 @@ GLboolean r300CreateContext(const __GLcontextModes * glVisual,
 	ctx->Const.MaxTextureMaxAnisotropy = 16.0;
 	ctx->Const.MaxTextureLodBias = 16.0;
 
-	if (screen->chip_family >= CHIP_FAMILY_RV515) {
+	if (screen->chip_family >= CHIP_FAMILY_RV515)
 	    ctx->Const.MaxTextureLevels = 13;
-	    ctx->Const.MaxTextureRectSize = 4096;
-	}
+	else
+	    ctx->Const.MaxTextureLevels = 12;
+
+        driCalculateMaxTextureLevels( r300->texture_heaps,
+                                      r300->nr_heaps,
+                                      & ctx->Const,
+                                      4,
+                                      ctx->Const.MaxTextureLevels - 1,
+                                      MIN2(ctx->Const.MaxTextureLevels,
+                                           MAX_3D_TEXTURE_LEVELS) - 1,
+                                      ctx->Const.MaxTextureLevels - 1,
+                                      ctx->Const.MaxTextureLevels - 1,
+                                      ctx->Const.MaxTextureLevels - 1,
+                                      GL_FALSE,
+                                      2 );
 
 	ctx->Const.MinPointSize = 1.0;
 	ctx->Const.MinPointSizeAA = 1.0;

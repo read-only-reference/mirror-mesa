@@ -9,7 +9,7 @@
  */
 
 
-#define GL_GLEXT_PROTOTYPES
+#include <GL/glew.h>
 #include <GL/glut.h>
 #include <assert.h>
 #include <stdio.h>
@@ -587,7 +587,7 @@ Usage(void)
    printf("Usage:\n");
    printf("  -ds  Use combined depth/stencil renderbuffer\n");
    printf("  -arb Try GL_ARB_framebuffer_object's mismatched buffer sizes\n");
-   printf("  -ds2 Tye GL_ARB_framebuffer_object's GL_DEPTH_STENCIL_ATTACHMENT\n");
+   printf("  -ds2 Try GL_ARB_framebuffer_object's GL_DEPTH_STENCIL_ATTACHMENT\n");
    printf("Keys:\n");
    printf("  a    Toggle animation\n");
    printf("  s/s  Step/rotate\n");
@@ -605,6 +605,7 @@ main(int argc, char *argv[])
    glutInitWindowSize(Width, Height);
    glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);
    Win = glutCreateWindow(argv[0]);
+   glewInit();
    glutReshapeFunc(Reshape);
    glutKeyboardFunc(Key);
    glutDisplayFunc(Display);

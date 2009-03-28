@@ -149,8 +149,6 @@ struct brw_wm_instruction {
 };
 
 
-#define PROGRAM_INTERNAL_PARAM 
-
 #define BRW_WM_MAX_INSN  (MAX_NV_FRAGMENT_PROGRAM_INSTRUCTIONS*3 + FRAG_ATTRIB_MAX + 3)
 #define BRW_WM_MAX_GRF   128		/* hardware limit */
 #define BRW_WM_MAX_VREG  (BRW_WM_MAX_INSN * 4)
@@ -174,7 +172,8 @@ struct brw_wm_instruction {
 #define WM_CINTERP        (MAX_OPCODE + 5)
 #define WM_WPOSXY         (MAX_OPCODE + 6)
 #define WM_FB_WRITE       (MAX_OPCODE + 7)
-#define MAX_WM_OPCODE     (MAX_OPCODE + 8)
+#define WM_FRONTFACING    (MAX_OPCODE + 8)
+#define MAX_WM_OPCODE     (MAX_OPCODE + 9)
 
 #define PROGRAM_PAYLOAD   (PROGRAM_FILE_MAX)
 #define PAYLOAD_DEPTH     (FRAG_ATTRIB_MAX)
@@ -241,13 +240,15 @@ struct brw_wm_compile {
    GLuint max_wm_grf;
    GLuint last_scratch;
 
+   /** Mapping from Mesa registers to hardware registers */
    struct {
 	GLboolean inited;
 	struct brw_reg reg;
    } wm_regs[PROGRAM_PAYLOAD+1][256][4];
+
    struct brw_reg stack;
    struct brw_reg emit_mask_reg;
-   GLuint reg_index;
+   GLuint reg_index;  /**< Index of next free GRF register */
    GLuint tmp_regs[BRW_WM_MAX_GRF];
    GLuint tmp_index;
    GLuint tmp_max;

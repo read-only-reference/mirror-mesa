@@ -34,6 +34,7 @@
 #include "util/u_math.h"
 #include "util/u_memory.h"
 
+#include "st_device.h"
 #include "st_sample.h"
 
 
@@ -451,6 +452,7 @@ st_sample_dxt_pixel_block(enum pipe_format format,
       break;
    default:
       assert(0);
+      return;
    }
    
    i = st_random() % n;
@@ -522,28 +524,47 @@ st_sample_pixel_block(enum pipe_format format,
 
 
 void
-st_sample_surface(struct pipe_surface *surface, float *rgba) 
+st_sample_surface(struct st_surface *surface, float *rgba) 
 {
-   const struct pipe_format_block *block = &surface->block;
-   unsigned rgba_stride = surface->width*4;
+   struct pipe_texture *texture = surface->texture;
+   struct pipe_screen *screen = texture->screen;
+   unsigned width = texture->width[surface->level];
+   unsigned height = texture->height[surface->level];
+   uint rgba_stride = width * 4;
+   struct pipe_transfer *transfer;
    void *raw;
-   unsigned x, y;
 
-   raw = pipe_surface_map(surface, PIPE_BUFFER_USAGE_CPU_READ);
-   if(!raw)
+   transfer = screen->get_tex_transfer(screen,
+                                       surface->texture,
+                                       surface->face,
+                                       surface->level,
+                                       surface->zslice,
+                                       PIPE_TRANSFER_WRITE,
+                                       0, 0,
+                                       width,
+                                       height);
+   if (!transfer)
       return;
 
-   for (y = 0; y < surface->nblocksy; ++y) {
-      for(x = 0; x < surface->nblocksx; ++x) {
-         st_sample_pixel_block(surface->format,
-                               block,
-                               (uint8_t*)raw + y*surface->stride + x*block->size, 
-                               rgba + y*block->height*rgba_stride + x*block->width*4,
-                               rgba_stride,
-                               MIN2(block->width, surface->width - x*block->width), 
-                               MIN2(block->height, surface->height - y*block->height));
-       }
+   raw = screen->transfer_map(screen, transfer);
+   if (raw) {
+      const struct pipe_format_block *block = &texture->block;
+      uint x, y;
+
+      for (y = 0; y < transfer->nblocksy; ++y) {
+         for (x = 0; x < transfer->nblocksx; ++x) {
+            st_sample_pixel_block(texture->format,
+                                  block,
+                                  (uint8_t *) raw + y * transfer->stride + x * block->size,
+                                  rgba + y * block->height * rgba_stride + x * block->width * 4,
+                                  rgba_stride,
+                                  MIN2(block->width, width - x*block->width),
+                                  MIN2(block->height, height - y*block->height));
+         }
+      }
+
+      screen->transfer_unmap(screen, transfer);
    }
    
-   pipe_surface_unmap(surface);
+   screen->tex_transfer_destroy(transfer);
 }

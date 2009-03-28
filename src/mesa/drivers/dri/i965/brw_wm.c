@@ -40,6 +40,8 @@
 GLuint brw_wm_nr_args( GLuint opcode )
 {
    switch (opcode) {
+   case WM_FRONTFACING:
+      return 0;
    case WM_PIXELXY:
    case WM_CINTERP:
    case WM_WPOSXY:
@@ -149,11 +151,14 @@ static void do_wm_prog( struct brw_context *brw,
 
    brw_init_compile(brw, &c->func);
 
+   /* temporary sanity check assertion */
+   ASSERT(fp->isGLSL == brw_wm_is_glsl(&c->fp->program));
+
    /*
     * Shader which use GLSL features such as flow control are handled
     * differently from "simple" shaders.
     */
-   if (brw_wm_is_glsl(&c->fp->program)) {
+   if (fp->isGLSL) {
       brw_wm_glsl_emit(brw, c);
    }
    else {
@@ -210,7 +215,7 @@ static void brw_wm_populate_key( struct brw_context *brw,
       lookup |= IZ_DEPTH_WRITE_ENABLE_BIT;
 
    /* _NEW_STENCIL */
-   if (ctx->Stencil.Enabled) {
+   if (ctx->Stencil._Enabled) {
       lookup |= IZ_STENCIL_TEST_ENABLE_BIT;
 
       if (ctx->Stencil.WriteMask[0] ||

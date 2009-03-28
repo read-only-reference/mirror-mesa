@@ -36,7 +36,7 @@
 
 #include "pipe/p_config.h"
 
-#if defined(PIPE_OS_LINUX) || defined(PIPE_OS_BSD)
+#if defined(PIPE_OS_LINUX) || defined(PIPE_OS_BSD) || defined(PIPE_OS_SOLARIS)
 #include <unistd.h>
 #include <sched.h>
 #endif
@@ -115,7 +115,7 @@ _fenced_buffer_add(struct fenced_buffer *fenced_buf)
 {
    struct fenced_buffer_list *fenced_list = fenced_buf->list;
 
-   assert(fenced_buf->base.base.refcount);
+   assert(pipe_is_referenced(&fenced_buf->base.base.reference));
    assert(fenced_buf->flags & PIPE_BUFFER_USAGE_GPU_READ_WRITE);
    assert(fenced_buf->fence);
 
@@ -137,7 +137,7 @@ _fenced_buffer_destroy(struct fenced_buffer *fenced_buf)
 {
    struct fenced_buffer_list *fenced_list = fenced_buf->list;
    
-   assert(!fenced_buf->base.base.refcount);
+   assert(!pipe_is_referenced(&fenced_buf->base.base.reference));
    assert(!fenced_buf->fence);
 #ifdef DEBUG
    assert(fenced_buf->head.prev);
@@ -177,7 +177,11 @@ _fenced_buffer_remove(struct fenced_buffer_list *fenced_list,
    ++fenced_list->numUnfenced;
 #endif
    
-   if(!fenced_buf->base.base.refcount)
+   /**
+    * FIXME!!!
+    */
+
+   if(!pipe_is_referenced(&fenced_buf->base.base.reference))
       _fenced_buffer_destroy(fenced_buf);
 }
 
@@ -253,7 +257,7 @@ fenced_buffer_destroy(struct pb_buffer *buf)
    struct fenced_buffer_list *fenced_list = fenced_buf->list;
 
    pipe_mutex_lock(fenced_list->mutex);
-   assert(fenced_buf->base.base.refcount == 0);
+   assert(!pipe_is_referenced(&fenced_buf->base.base.reference));
    if (fenced_buf->fence) {
       struct pb_fence_ops *ops = fenced_list->ops;
       if(ops->fence_signalled(ops, fenced_buf->fence, 0) == 0) {
@@ -284,16 +288,26 @@ fenced_buffer_map(struct pb_buffer *buf,
                   unsigned flags)
 {
    struct fenced_buffer *fenced_buf = fenced_buffer(buf);
+   struct fenced_buffer_list *fenced_list = fenced_buf->list;
+   struct pb_fence_ops *ops = fenced_list->ops;
    void *map;
 
-   assert(flags & PIPE_BUFFER_USAGE_CPU_READ_WRITE);
-   assert(!(flags & ~PIPE_BUFFER_USAGE_CPU_READ_WRITE));
-   flags &= PIPE_BUFFER_USAGE_CPU_READ_WRITE;
+   assert(!(flags & PIPE_BUFFER_USAGE_GPU_READ_WRITE));
    
-   /* Check for GPU read/write access */
-   if(fenced_buf->flags & PIPE_BUFFER_USAGE_GPU_WRITE) {
-      /* Wait for the GPU to finish writing */
-      _fenced_buffer_finish(fenced_buf);
+   /* Serialize writes */
+   if((fenced_buf->flags & PIPE_BUFFER_USAGE_GPU_WRITE) ||
+      ((fenced_buf->flags & PIPE_BUFFER_USAGE_GPU_READ) && (flags & PIPE_BUFFER_USAGE_CPU_WRITE))) {
+      if(flags & PIPE_BUFFER_USAGE_DONTBLOCK) {
+         /* Don't wait for the GPU to finish writing */
+         if(ops->fence_signalled(ops, fenced_buf->fence, 0) == 0)
+            _fenced_buffer_remove(fenced_list, fenced_buf);
+         else
+            return NULL;
+      }
+      else {
+         /* Wait for the GPU to finish writing */
+         _fenced_buffer_finish(fenced_buf);
+      }
    }
 
 #if 0
@@ -307,7 +321,7 @@ fenced_buffer_map(struct pb_buffer *buf,
    map = pb_map(fenced_buf->buffer, flags);
    if(map) {
       ++fenced_buf->mapcount;
-      fenced_buf->flags |= flags;
+      fenced_buf->flags |= flags & PIPE_BUFFER_USAGE_CPU_READ_WRITE;
    }
 
    return map;
@@ -451,7 +465,7 @@ fenced_buffer_create(struct fenced_buffer_list *fenced_list,
       return NULL;
    }
    
-   buf->base.base.refcount = 1;
+   pipe_reference_init(&buf->base.base.reference, 1);
    buf->base.base.alignment = buffer->base.alignment;
    buf->base.base.usage = buffer->base.usage;
    buf->base.base.size = buffer->base.size;
@@ -517,7 +531,7 @@ fenced_buffer_list_dump(struct fenced_buffer_list *fenced_list)
    pipe_mutex_lock(fenced_list->mutex);
 
    debug_printf("%10s %7s %10s %s\n",
-                "buffer", "refcount", "fence", "signalled");
+                "buffer", "reference.count", "fence", "signalled");
    
    curr = fenced_list->unfenced.next;
    next = curr->next;
@@ -526,7 +540,7 @@ fenced_buffer_list_dump(struct fenced_buffer_list *fenced_list)
       assert(!fenced_buf->fence);
       debug_printf("%10p %7u\n",
                    fenced_buf,
-                   fenced_buf->base.base.refcount);
+                   fenced_buf->base.base.reference.count);
       curr = next; 
       next = curr->next;
    }
@@ -539,7 +553,7 @@ fenced_buffer_list_dump(struct fenced_buffer_list *fenced_list)
       signaled = ops->fence_signalled(ops, fenced_buf->fence, 0);
       debug_printf("%10p %7u %10p %s\n",
                    fenced_buf,
-                   fenced_buf->base.base.refcount,
+                   fenced_buf->base.base.reference.count,
                    fenced_buf->fence,
                    signaled == 0 ? "y" : "n");
       curr = next; 
@@ -559,7 +573,7 @@ fenced_buffer_list_destroy(struct fenced_buffer_list *fenced_list)
    /* Wait on outstanding fences */
    while (fenced_list->numDelayed) {
       pipe_mutex_unlock(fenced_list->mutex);
-#if defined(PIPE_OS_LINUX) || defined(PIPE_OS_BSD)
+#if defined(PIPE_OS_LINUX) || defined(PIPE_OS_BSD) || defined(PIPE_OS_SOLARIS)
       sched_yield();
 #endif
       _fenced_buffer_list_check_free(fenced_list, 1);

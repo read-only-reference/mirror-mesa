@@ -71,10 +71,12 @@ PUBLIC const char __driConfigOptions[] =
    DRI_CONF_SECTION_END
    DRI_CONF_SECTION_DEBUG
      DRI_CONF_NO_RAST(false)
+     DRI_CONF_ALWAYS_FLUSH_BATCH(false)
+     DRI_CONF_ALWAYS_FLUSH_CACHE(false)
    DRI_CONF_SECTION_END
 DRI_CONF_END;
 
-const GLuint __driNConfigOptions = 6;
+const GLuint __driNConfigOptions = 8;
 
 #ifdef USE_NEW_INTERFACE
 static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
@@ -209,6 +211,7 @@ static const __DRItexOffsetExtension intelTexOffsetExtension = {
 static const __DRItexBufferExtension intelTexBufferExtension = {
     { __DRI_TEX_BUFFER, __DRI_TEX_BUFFER_VERSION },
    intelSetTexBuffer,
+   intelSetTexBuffer2,
 };
 
 static const __DRIextension *intelScreenExtensions[] = {
@@ -392,7 +395,7 @@ intelCreateBuffer(__DRIscreenPrivate * driScrnPriv,
 static void
 intelDestroyBuffer(__DRIdrawablePrivate * driDrawPriv)
 {
-   _mesa_unreference_framebuffer((GLframebuffer **)(&(driDrawPriv->driverPrivate)));
+   _mesa_reference_framebuffer((GLframebuffer **)(&(driDrawPriv->driverPrivate)), NULL);
 }
 
 

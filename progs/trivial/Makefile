@@ -23,6 +23,7 @@ SOURCES = \
 	dlist-edgeflag.c \
 	dlist-degenerate.c \
 	drawarrays.c \
+	draw2arrays.c \
 	drawelements.c \
 	drawrange.c \
 	flat-clip.c \
@@ -69,6 +70,7 @@ SOURCES = \
 	quad-tex-3d.c \
 	quad-tex-alpha.c \
 	quad-tex-pbo.c \
+	quad-tex-sub.c \
 	quad-unfilled-clip.c \
 	quad-unfilled-stipple.c \
 	quad-unfilled.c \
@@ -89,8 +91,11 @@ SOURCES = \
 	tri-clip.c \
 	tri-cull-both.c \
 	tri-cull.c \
+	tri-logicop-none.c \
+	tri-logicop-xor.c \
 	tri-dlist.c \
 	tri-edgeflag.c \
+	tri-fbo-tex-mip.c \
 	tri-fbo-tex.c \
 	tri-fbo.c \
 	tri-flat-clip.c \
@@ -106,6 +111,7 @@ SOURCES = \
 	tri-scissor-tri.c \
 	tri-stencil.c \
 	tri-stipple.c \
+	tri-multitex-vbo.c \
 	tri-tex.c \
 	tri-tex-3d.c \
 	tri-tri.c \

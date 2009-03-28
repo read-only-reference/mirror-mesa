@@ -40,7 +40,6 @@
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_inlines.h"
-#include "pipe/p_inlines.h"
 #include "util/u_rect.h"
 
 
@@ -108,17 +107,14 @@ st_texture_create(struct st_context *st,
 
    newtex = screen->texture_create(screen, &pt);
 
-   assert(!newtex || newtex->refcount == 1);
+   assert(!newtex || pipe_is_referenced(&newtex->reference));
 
    return newtex;
 }
 
 
 /**
- * Check if a texture image be pulled into a unified mipmap texture.
- * This mirrors the completeness test in a lot of ways.
- *
- * Not sure whether I want to pass gl_texture_image here.
+ * Check if a texture image can be pulled into a unified mipmap texture.
  */
 GLboolean
 st_texture_match_image(const struct pipe_texture *pt,
@@ -130,13 +126,14 @@ st_texture_match_image(const struct pipe_texture *pt,
    if (image->Border) 
       return GL_FALSE;
 
+   /* Check if this image's format matches the established texture's format.
+    */
    if (st_mesa_format_to_pipe_format(image->TexFormat->MesaFormat) != pt->format ||
        image->IsCompressed != pt->compressed)
       return GL_FALSE;
 
-   /* Test image dimensions against the base level image adjusted for
-    * minification.  This will also catch images not present in the
-    * texture, changed targets, etc.
+   /* Test if this image's size matches what's expected in the
+    * established texture.
     */
    if (image->Width != pt->width[level] ||
        image->Height != pt->height[level] ||
@@ -219,7 +216,7 @@ st_texture_image_unmap(struct st_context *st,
 
    screen->transfer_unmap(screen, stImage->transfer);
 
-   screen->tex_transfer_release(screen, &stImage->transfer);
+   screen->tex_transfer_destroy(stImage->transfer);
 }
 
 
@@ -284,7 +281,7 @@ st_texture_image_data(struct pipe_context *pipe,
 		      0, 0,                             /* source x, y */
 		      dst->width[level], dst->height[level]);       /* width, height */
 
-      screen->tex_transfer_release(screen, &dst_transfer);
+      screen->tex_transfer_destroy(dst_transfer);
 
       srcUB += src_image_stride;
    }
@@ -343,15 +340,14 @@ st_texture_image_copy(struct pipe_context *pipe,
                                             PIPE_BUFFER_USAGE_GPU_READ);
 
       pipe->surface_copy(pipe,
-                         FALSE,
 			 dst_surface,
 			 0, 0, /* destX, Y */
 			 src_surface,
 			 0, 0, /* srcX, Y */
 			 width, height);
 
-      screen->tex_surface_release(screen, &src_surface);
-      screen->tex_surface_release(screen, &dst_surface);
+      pipe_surface_reference(&src_surface, NULL);
+      pipe_surface_reference(&dst_surface, NULL);
    }
 }
 

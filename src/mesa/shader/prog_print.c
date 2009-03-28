@@ -43,7 +43,7 @@
  * Return string name for given program/register file.
  */
 static const char *
-file_string(enum register_file f, gl_prog_print_mode mode)
+file_string(gl_register_file f, gl_prog_print_mode mode)
 {
    switch (f) {
    case PROGRAM_TEMPORARY:
@@ -213,13 +213,13 @@ arb_output_attrib_string(GLint index, GLenum progType)
  * Return string representation of the given register.
  * Note that some types of registers (like PROGRAM_UNIFORM) aren't defined
  * by the ARB/NV program languages so we've taken some liberties here.
- * \param file  the register file (PROGRAM_INPUT, PROGRAM_TEMPORARY, etc)
+ * \param f  the register file (PROGRAM_INPUT, PROGRAM_TEMPORARY, etc)
  * \param index  number of the register in the register file
  * \param mode  the output format/mode/style
  * \param prog  pointer to containing program
  */
 static const char *
-reg_string(enum register_file f, GLint index, gl_prog_print_mode mode,
+reg_string(gl_register_file f, GLint index, gl_prog_print_mode mode,
            GLboolean relAddr, const struct gl_program *prog)
 {
    static char str[100];
@@ -432,7 +432,7 @@ fprint_dst_reg(FILE * f,
                const struct gl_program *prog)
 {
    _mesa_fprintf(f, "%s%s",
-                 reg_string((enum register_file) dstReg->File,
+                 reg_string((gl_register_file) dstReg->File,
                             dstReg->Index, mode, dstReg->RelAddr, prog),
                  _mesa_writemask_string(dstReg->WriteMask));
 
@@ -445,7 +445,7 @@ fprint_dst_reg(FILE * f,
 
 #if 0
    _mesa_fprintf(f, "%s[%d]%s",
-                file_string((enum register_file) dstReg->File, mode),
+                file_string((gl_register_file) dstReg->File, mode),
                 dstReg->Index,
                 _mesa_writemask_string(dstReg->WriteMask));
 #endif
@@ -458,14 +458,18 @@ fprint_src_reg(FILE *f,
                gl_prog_print_mode mode,
                const struct gl_program *prog)
 {
-   _mesa_fprintf(f, "%s%s",
-                 reg_string((enum register_file) srcReg->File,
+   const char *abs = srcReg->Abs ? "|" : "";
+
+   _mesa_fprintf(f, "%s%s%s%s",
+                 abs,
+                 reg_string((gl_register_file) srcReg->File,
                             srcReg->Index, mode, srcReg->RelAddr, prog),
                  _mesa_swizzle_string(srcReg->Swizzle,
-                                      srcReg->NegateBase, GL_FALSE));
+                                      srcReg->NegateBase, GL_FALSE),
+                 abs);
 #if 0
    _mesa_fprintf(f, "%s[%d]%s",
-                 file_string((enum register_file) srcReg->File, mode),
+                 file_string((gl_register_file) srcReg->File, mode),
                  srcReg->Index,
                  _mesa_swizzle_string(srcReg->Swizzle,
                                       srcReg->NegateBase, GL_FALSE));
@@ -558,7 +562,7 @@ _mesa_fprint_instruction_opt(FILE *f,
       if (inst->SrcReg[0].File != PROGRAM_UNDEFINED) {
          _mesa_fprintf(f, ", ");
          _mesa_fprintf(f, "%s[%d]%s",
-                      file_string((enum register_file) inst->SrcReg[0].File,
+                      file_string((gl_register_file) inst->SrcReg[0].File,
                                   mode),
                       inst->SrcReg[0].Index,
                       _mesa_swizzle_string(inst->SrcReg[0].Swizzle,
@@ -575,7 +579,7 @@ _mesa_fprint_instruction_opt(FILE *f,
       _mesa_fprintf(f, " ");
       fprint_dst_reg(f, &inst->DstReg, mode, prog);
       _mesa_fprintf(f, ", %s[%d], %s",
-                   file_string((enum register_file) inst->SrcReg[0].File,
+                   file_string((gl_register_file) inst->SrcReg[0].File,
                                mode),
                    inst->SrcReg[0].Index,
                    _mesa_swizzle_string(inst->SrcReg[0].Swizzle,
@@ -724,11 +728,16 @@ _mesa_fprint_instruction_opt(FILE *f,
       break;
    /* XXX may need other special-case instructions */
    default:
-      /* typical alu instruction */
-      fprint_alu_instruction(f, inst,
-                             _mesa_opcode_string(inst->Opcode),
-                             _mesa_num_inst_src_regs(inst->Opcode),
-                             mode, prog);
+      if (inst->Opcode < MAX_OPCODE) {
+         /* typical alu instruction */
+         fprint_alu_instruction(f, inst,
+                                _mesa_opcode_string(inst->Opcode),
+                                _mesa_num_inst_src_regs(inst->Opcode),
+                                mode, prog);
+      }
+      else {
+         _mesa_fprintf(f, "Other opcode %d\n", inst->Opcode);
+      }
       break;
    }
    return indent;
@@ -909,7 +918,7 @@ _mesa_write_shader_to_file(const struct gl_shader *shader)
    else
       type = "vert";
 
-   _mesa_snprintf(filename, strlen(filename), "shader_%u.%s", shader->Name, type);
+   _mesa_snprintf(filename, sizeof(filename), "shader_%u.%s", shader->Name, type);
    f = fopen(filename, "w");
    if (!f) {
       fprintf(stderr, "Unable to open %s for writing\n", filename);

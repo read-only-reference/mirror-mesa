@@ -25,23 +25,29 @@
  * 
  **************************************************************************/
 
+/**
+ * Execute fragment shader using the TGSI interpreter.
+ */
 
 #include "sp_context.h"
 #include "sp_state.h"
 #include "sp_fs.h"
 #include "sp_quad.h"
 
-
 #include "pipe/p_state.h"
 #include "pipe/p_defines.h"
 #include "util/u_memory.h"
-#include "pipe/p_inlines.h"
 #include "tgsi/tgsi_exec.h"
 #include "tgsi/tgsi_parse.h"
 
+
+/**
+ * Subclass of sp_fragment_shader
+ */
 struct sp_exec_fragment_shader
 {
    struct sp_fragment_shader base;
+   /* No other members for now */
 };
 
 
@@ -107,8 +113,6 @@ exec_prepare( const struct sp_fragment_shader *base,
 }
 
 
-
-
 /* TODO: hide the machine struct in here somewhere, remove from this
  * interface:
  */
@@ -117,7 +121,6 @@ exec_run( const struct sp_fragment_shader *base,
 	  struct tgsi_exec_machine *machine,
 	  struct quad_header *quad )
 {
-
    /* Compute X, Y, Z, W vals for this quad */
    sp_setup_pos_vector(quad->posCoef, 
 		       (float)quad->input.x0, (float)quad->input.y0, 
@@ -127,16 +130,12 @@ exec_run( const struct sp_fragment_shader *base,
 }
 
 
-
 static void 
 exec_delete( struct sp_fragment_shader *base )
 {
    FREE((void *) base->shader.tokens);
    FREE(base);
 }
-
-
-
 
 
 struct sp_fragment_shader *
@@ -161,4 +160,3 @@ softpipe_create_fs_exec(struct softpipe_context *softpipe,
 
    return &shader->base;
 }
-

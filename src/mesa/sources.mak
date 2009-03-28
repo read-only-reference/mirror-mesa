@@ -17,6 +17,7 @@ MAIN_SOURCES = \
 	main/colortab.c \
 	main/context.c \
 	main/convolve.c \
+	main/cpuinfo.c \
 	main/debug.c \
 	main/depth.c \
 	main/depthstencil.c \
@@ -57,6 +58,7 @@ MAIN_SOURCES = \
 	main/renderbuffer.c \
 	main/scissor.c \
 	main/shaders.c \
+	main/shared.c \
 	main/state.c \
 	main/stencil.c \
 	main/texcompress.c \
@@ -73,6 +75,7 @@ MAIN_SOURCES = \
 	main/texstate.c \
 	main/texstore.c \
 	main/varray.c \
+	main/viewport.c \
 	main/vtxfmt.c
 
 GLAPI_SOURCES = \
@@ -91,7 +94,6 @@ MATH_SOURCES = \
 	math/m_vector.c
 
 MATH_XFORM_SOURCES = \
-	$(MATH_SOURCES) \
 	math/m_xform.c
 
 SWRAST_SOURCES = \
@@ -103,7 +105,7 @@ SWRAST_SOURCES = \
 	swrast/s_bitmap.c \
 	swrast/s_blend.c \
 	swrast/s_blit.c \
-	swrast/s_buffers.c \
+	swrast/s_clear.c \
 	swrast/s_copypix.c \
 	swrast/s_context.c \
 	swrast/s_depth.c \
@@ -165,11 +167,6 @@ VBO_SOURCES = \
 	vbo/vbo_save_draw.c \
 	vbo/vbo_save_loopback.c 
 
-VF_SOURCES = \
-	vf/vf.c \
-	vf/vf_generic.c \
-	vf/vf_sse.c
-
 STATETRACKER_SOURCES = \
 	state_tracker/st_atom.c \
 	state_tracker/st_atom_blend.c \
@@ -225,10 +222,10 @@ SHADER_SOURCES = \
 	shader/nvvertparse.c \
 	shader/program.c \
 	shader/prog_cache.c \
-	shader/prog_debug.c \
 	shader/prog_execute.c \
 	shader/prog_instruction.c \
 	shader/prog_noise.c \
+	shader/prog_optimize.c \
 	shader/prog_parameter.c \
 	shader/prog_print.c \
 	shader/prog_statevars.c \
@@ -260,7 +257,7 @@ SLANG_SOURCES =	\
 
 ASM_C_SOURCES =	\
 	x86/common_x86.c \
-	x86/x86.c \
+	x86/x86_xform.c \
 	x86/3dnow.c \
 	x86/sse.c \
 	x86/rtasm/x86sse.c \
@@ -311,6 +308,7 @@ COMMON_DRIVER_SOURCES =			\
 # Sources for building non-Gallium drivers
 MESA_SOURCES = \
 	$(MAIN_SOURCES)		\
+	$(MATH_SOURCES)		\
 	$(MATH_XFORM_SOURCES)	\
 	$(VBO_SOURCES)		\
 	$(TNL_SOURCES)		\
@@ -328,6 +326,7 @@ MESA_GALLIUM_SOURCES = \
 	$(VBO_SOURCES)		\
 	$(STATETRACKER_SOURCES)	\
 	$(SHADER_SOURCES)	\
+	x86/common_x86.c	\
 	$(SLANG_SOURCES)
 
 # All the core C sources, for dependency checking

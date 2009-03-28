@@ -25,17 +25,18 @@
  * 
  **************************************************************************/
 
+/**
+ * Execute fragment shader using runtime SSE code generation.
+ */
 
 #include "sp_context.h"
 #include "sp_state.h"
 #include "sp_fs.h"
 #include "sp_quad.h"
 
-
 #include "pipe/p_state.h"
 #include "pipe/p_defines.h"
 #include "util/u_memory.h"
-#include "pipe/p_inlines.h"
 #include "tgsi/tgsi_exec.h"
 #include "tgsi/tgsi_sse2.h"
 
@@ -57,13 +58,24 @@ typedef void (PIPE_CDECL *codegen_function)(
  );
 
 
-struct sp_sse_fragment_shader {
+/**
+ * Subclass of sp_fragment_shader
+ */
+struct sp_sse_fragment_shader
+{
    struct sp_fragment_shader base;
-   struct x86_function             sse2_program;
+   struct x86_function sse2_program;
    codegen_function func;
    float immediates[TGSI_EXEC_NUM_IMMEDIATES][4];
 };
 
+
+/** cast wrapper */
+static INLINE struct sp_sse_fragment_shader *
+sp_sse_fragment_shader(const struct sp_fragment_shader *base)
+{
+   return (struct sp_sse_fragment_shader *) base;
+}
 
 
 static void
@@ -84,7 +96,7 @@ fs_sse_run( const struct sp_fragment_shader *base,
 	    struct tgsi_exec_machine *machine,
 	    struct quad_header *quad )
 {
-   struct sp_sse_fragment_shader *shader = (struct sp_sse_fragment_shader *) base;
+   struct sp_sse_fragment_shader *shader = sp_sse_fragment_shader(base);
 
    /* Compute X, Y, Z, W vals for this quad -- place in temp[0] for now */
    sp_setup_pos_vector(quad->posCoef, 
@@ -111,7 +123,7 @@ fs_sse_run( const struct sp_fragment_shader *base,
 static void 
 fs_sse_delete( struct sp_fragment_shader *base )
 {
-   struct sp_sse_fragment_shader *shader = (struct sp_sse_fragment_shader *) base;
+   struct sp_sse_fragment_shader *shader = sp_sse_fragment_shader(base);
 
    x86_release_func( &shader->sse2_program );
    FREE(shader);
@@ -146,7 +158,7 @@ softpipe_create_fs_sse(struct softpipe_context *softpipe,
       return NULL;
    }
 
-   shader->base.shader = *templ;
+   shader->base.shader.tokens = NULL; /* don't hold reference to templ->tokens */
    shader->base.prepare = fs_sse_prepare;
    shader->base.run = fs_sse_run;
    shader->base.delete = fs_sse_delete;
@@ -157,7 +169,7 @@ softpipe_create_fs_sse(struct softpipe_context *softpipe,
 
 #else
 
-/* Maybe put this varient in the header file.
+/* Maybe put this variant in the header file.
  */
 struct sp_fragment_shader *
 softpipe_create_fs_sse(struct softpipe_context *softpipe,

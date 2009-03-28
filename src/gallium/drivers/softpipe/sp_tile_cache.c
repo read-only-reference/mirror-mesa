@@ -140,11 +140,11 @@ sp_destroy_tile_cache(struct softpipe_tile_cache *tc)
    }
    if (tc->transfer) {
       screen = tc->transfer->texture->screen;
-      screen->tex_transfer_release(screen, &tc->transfer);
+      screen->tex_transfer_destroy(tc->transfer);
    }
    if (tc->tex_trans) {
       screen = tc->tex_trans->texture->screen;
-      screen->tex_transfer_release(screen, &tc->tex_trans);
+      screen->tex_transfer_destroy(tc->tex_trans);
    }
 
    FREE( tc );
@@ -167,11 +167,12 @@ sp_tile_cache_set_surface(struct softpipe_tile_cache *tc,
          return;
 
       if (tc->transfer_map) {
-         tc->screen->transfer_unmap(tc->screen, tc->transfer);
+         screen->transfer_unmap(screen, tc->transfer);
          tc->transfer_map = NULL;
       }
 
-      screen->tex_transfer_release(screen, &tc->transfer);
+      screen->tex_transfer_destroy(tc->transfer);
+      tc->transfer = NULL;
    }
 
    tc->surface = ps;
@@ -245,15 +246,16 @@ sp_tile_cache_set_texture(struct pipe_context *pipe,
 
    pipe_texture_reference(&tc->texture, texture);
 
-   if (tc->transfer) {
-      struct pipe_screen *screen = tc->transfer->texture->screen;
+   if (tc->tex_trans) {
+      struct pipe_screen *screen = tc->tex_trans->texture->screen;
 
       if (tc->tex_trans_map) {
-         tc->screen->transfer_unmap(tc->screen, tc->tex_trans);
+         screen->transfer_unmap(screen, tc->tex_trans);
          tc->tex_trans_map = NULL;
       }
 
-      screen->tex_transfer_release(screen, &tc->tex_trans);
+      screen->tex_transfer_destroy(tc->tex_trans);
+      tc->tex_trans = NULL;
    }
 
    /* mark as entries as invalid/empty */
@@ -555,11 +557,14 @@ sp_get_cached_tile_tex(struct softpipe_context *sp,
           tc->tex_z != z) {
          /* get new transfer (view into texture) */
 
-         if (tc->transfer) {
-            if (tc->tex_trans_map)
+         if (tc->tex_trans) {
+            if (tc->tex_trans_map) {
                tc->screen->transfer_unmap(tc->screen, tc->tex_trans);
+               tc->tex_trans_map = NULL;
+            }
 
-            screen->tex_transfer_release(screen, &tc->tex_trans);
+            screen->tex_transfer_destroy(tc->tex_trans);
+            tc->tex_trans = NULL;
          }
 
          tc->tex_trans = screen->get_tex_transfer(screen, tc->texture, face, level, z, 

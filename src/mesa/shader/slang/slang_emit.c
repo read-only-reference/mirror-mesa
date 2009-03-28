@@ -446,7 +446,7 @@ new_instruction(slang_emit_info *emitInfo, gl_inst_opcode opcode)
 
 static struct prog_instruction *
 emit_arl_load(slang_emit_info *emitInfo,
-              enum register_file file, GLint index, GLuint swizzle)
+              gl_register_file file, GLint index, GLuint swizzle)
 {
    struct prog_instruction *inst = new_instruction(emitInfo, OPCODE_ARL);
    inst->SrcReg[0].File = file;
@@ -2192,6 +2192,12 @@ emit(slang_emit_info *emitInfo, slang_ir_node *n)
 
    if (emitInfo->log->error_flag) {
       return NULL;
+   }
+
+   if (n->Comment) {
+      inst = new_instruction(emitInfo, OPCODE_NOP);
+      inst->Comment = _mesa_strdup(n->Comment);
+      inst = NULL;
    }
 
    switch (n->Opcode) {

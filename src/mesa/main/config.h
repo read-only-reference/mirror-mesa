@@ -68,7 +68,7 @@
 #define MAX_PIXEL_MAP_TABLE 256
 
 /** Maximum number of auxillary color buffers */
-#define MAX_AUX_BUFFERS 4
+#define MAX_AUX_BUFFERS 1
 
 /** Maximum order (degree) of curves */
 #ifdef AMIGA
@@ -184,7 +184,7 @@
 #define MAX_PROGRAM_MATRICES 8
 #define MAX_PROGRAM_MATRIX_STACK_DEPTH 4
 #define MAX_PROGRAM_CALL_DEPTH 8
-#define MAX_PROGRAM_TEMPS 128
+#define MAX_PROGRAM_TEMPS 256
 #define MAX_PROGRAM_ADDRESS_REGS 2
 #define MAX_UNIFORMS 1024  /**< number of vec4 uniforms */
 #define MAX_VARYING 8      /**< number of float[4] vectors */
@@ -232,7 +232,8 @@
 #define MAX_COLOR_ATTACHMENTS 8
 /*@}*/
 
-
+/** For GL_ATI_envmap_bump - support bump mapping on first 8 units */
+#define SUPPORTED_ATI_BUMP_UNITS 0xff
 
 /**
  * \name Mesa-specific parameters

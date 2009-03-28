@@ -410,6 +410,12 @@ _mesa_init_shader_state(GLcontext * ctx)
    ctx->Shader.EmitCondCodes = GL_FALSE;
    ctx->Shader.EmitComments = GL_FALSE;
    ctx->Shader.Flags = get_shader_flags();
+
+   /* Default pragma settings */
+   ctx->Shader.DefaultPragmas.IgnoreOptimize = GL_FALSE;
+   ctx->Shader.DefaultPragmas.IgnoreDebug = GL_FALSE;
+   ctx->Shader.DefaultPragmas.Optimize = GL_TRUE;
+   ctx->Shader.DefaultPragmas.Debug = GL_FALSE;
 }
 
 
@@ -1444,6 +1450,9 @@ _mesa_compile_shader(GLcontext *ctx, GLuint shaderObj)
    if (!sh)
       return;
 
+   /* set default pragma state for shader */
+   sh->Pragmas = ctx->Shader.DefaultPragmas;
+
    /* this call will set the sh->CompileStatus field to indicate if
     * compilation was successful.
     */
@@ -1494,6 +1503,17 @@ _mesa_use_program(GLcontext *ctx, GLuint program)
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "glUseProgram(program %u not linked)", program);
          return;
+      }
+
+      /* debug code */
+      if (0) {
+         GLuint i;
+         _mesa_printf("Use Shader %u\n", shProg->Name);
+         for (i = 0; i < shProg->NumShaders; i++) {
+            _mesa_printf(" shader %u, type 0x%x\n",
+                         shProg->Shaders[i]->Name,
+                         shProg->Shaders[i]->Type);
+         }
       }
    }
    else {

@@ -25,30 +25,6 @@
 /* r300_state_derived: Various bits of state which are dependent upon
  * currently bound CSO data. */
 
-static uint32_t translate_vertex_data_type(int type) {
-    switch (type) {
-        case EMIT_1F:
-        case EMIT_1F_PSIZE:
-            return R300_DATA_TYPE_FLOAT_1;
-            break;
-        case EMIT_2F:
-            return R300_DATA_TYPE_FLOAT_2;
-            break;
-        case EMIT_3F:
-            return R300_DATA_TYPE_FLOAT_3;
-            break;
-        case EMIT_4F:
-            return R300_DATA_TYPE_FLOAT_4;
-            break;
-        default:
-            debug_printf("r300: Implementation error: "
-                    "Bad vertex data type!\n");
-            break;
-    }
-
-    return 0;
-}
-
 /* Update the vertex_info struct in our r300_context.
  *
  * The vertex_info struct describes the post-TCL format of vertices. It is
@@ -81,14 +57,13 @@ static void r300_update_vertex_layout(struct r300_context* r300)
             case TGSI_SEMANTIC_COLOR:
                 tab[i] = 2 + cols++;
                 break;
-            case TGSI_SEMANTIC_FOG:
-                fog = TRUE;
-                tab[i] = 6 + texs++;
-                break;
             case TGSI_SEMANTIC_PSIZE:
                 psize = TRUE;
                 tab[i] = 1;
                 break;
+            case TGSI_SEMANTIC_FOG:
+                fog = TRUE;
+                /* Fall through... */
             case TGSI_SEMANTIC_GENERIC:
                 tab[i] = 6 + texs++;
                 break;
@@ -113,19 +88,22 @@ static void r300_update_vertex_layout(struct r300_context* r300)
         debug_printf("r300: Forcing vertex position attribute emit...\n");
         /* Make room for the position attribute
          * at the beginning of the tab. */
-        for (i = 1; i < 16; i++) {
+        for (i = 15; i > 0; i--) {
             tab[i] = tab[i-1];
         }
         tab[0] = 0;
-    }
 
-    draw_emit_vertex_attr(&vinfo, EMIT_4F, INTERP_POS,
-        draw_find_vs_output(r300->draw, TGSI_SEMANTIC_POSITION, 0));
+        draw_emit_vertex_attr(&vinfo, EMIT_4F, INTERP_POS,
+            draw_find_vs_output(r300->draw, TGSI_SEMANTIC_POSITION, 0));
+    } else {
+        draw_emit_vertex_attr(&vinfo, EMIT_4F, INTERP_PERSPECTIVE,
+            draw_find_vs_output(r300->draw, TGSI_SEMANTIC_POSITION, 0));
+    }
     vinfo.hwfmt[1] |= R300_INPUT_CNTL_POS;
     vinfo.hwfmt[2] |= R300_VAP_OUTPUT_VTX_FMT_0__POS_PRESENT;
 
     if (psize) {
-        draw_emit_vertex_attr(&vinfo, EMIT_1F_PSIZE, INTERP_LINEAR,
+        draw_emit_vertex_attr(&vinfo, EMIT_1F_PSIZE, INTERP_POS,
             draw_find_vs_output(r300->draw, TGSI_SEMANTIC_PSIZE, 0));
         vinfo.hwfmt[2] |= R300_VAP_OUTPUT_VTX_FMT_0__PT_SIZE_PRESENT;
     }
@@ -156,46 +134,38 @@ static void r300_update_vertex_layout(struct r300_context* r300)
 
     if (memcmp(&r300->vertex_info, &vinfo, sizeof(struct vertex_info))) {
         uint32_t temp;
-
-#define BORING_SWIZZLE \
-        ((R300_SWIZZLE_SELECT_X << R300_SWIZZLE_SELECT_X_SHIFT) | \
-         (R300_SWIZZLE_SELECT_Y << R300_SWIZZLE_SELECT_Y_SHIFT) | \
-         (R300_SWIZZLE_SELECT_Z << R300_SWIZZLE_SELECT_Z_SHIFT) | \
-         (R300_SWIZZLE_SELECT_W << R300_SWIZZLE_SELECT_W_SHIFT) | \
-         (0xf << R300_WRITE_ENA_SHIFT))
+        debug_printf("attrib count: %d, fp input count: %d\n",
+                vinfo.num_attribs, info->num_inputs);
+        for (i = 0; i < vinfo.num_attribs; i++) {
+            debug_printf("attrib: offset %d, interp %d, size %d,"
+                   " tab %d\n", vinfo.attrib[i].src_index,
+                   vinfo.attrib[i].interp_mode, vinfo.attrib[i].emit,
+                   tab[i]);
+        }
 
         for (i = 0; i < vinfo.num_attribs; i++) {
             /* Make sure we have a proper destination for our attribute */
-            if (tab[i] == -1) {
-                debug_printf("attrib count: %d, fp input count: %d\n",
-                        vinfo.num_attribs, info->num_inputs);
-                for (i = 0; i < vinfo.num_attribs; i++) {
-                    debug_printf("attrib: offset %d, interp %d, size %d,"
-                           " tab %d\n", vinfo.attrib[i].src_index,
-                           vinfo.attrib[i].interp_mode, vinfo.attrib[i].emit,
-                           tab[i]);
-                }
-                assert(0);
-            }
+            assert(tab[i] != -1);
 
             temp = translate_vertex_data_type(vinfo.attrib[i].emit) |
-                (tab[i] << R300_DST_VEC_LOC_SHIFT) | R300_SIGNED;
+                (tab[i] << R300_DST_VEC_LOC_SHIFT);
             if (i & 1) {
-                r300->vertex_info.vap_prog_stream_cntl[i >> 1] &= 0xffff0000;
-                r300->vertex_info.vap_prog_stream_cntl[i >> 1] |=
-                        temp << 16;
+                r300->vertex_info.vap_prog_stream_cntl[i >> 1] &= 0x0000ffff;
+                r300->vertex_info.vap_prog_stream_cntl[i >> 1] |= temp << 16;
             } else {
-                r300->vertex_info.vap_prog_stream_cntl[i >> 1] &= 0xffff;
-                r300->vertex_info.vap_prog_stream_cntl[i >> 1] |=
-                    temp;
+                r300->vertex_info.vap_prog_stream_cntl[i >> 1] &= 0xffff0000;
+                r300->vertex_info.vap_prog_stream_cntl[i >> 1] |= temp;
             }
 
             r300->vertex_info.vap_prog_stream_cntl_ext[i >> 1] |=
-                (BORING_SWIZZLE << (i & 1 ? 16 : 0));
+                (R300_VAP_SWIZZLE_XYZW << (i & 1 ? 16 : 0));
         }
+        /* Set the last vector. */
+        i--;
         r300->vertex_info.vap_prog_stream_cntl[i >> 1] |= (R300_LAST_VEC <<
                 (i & 1 ? 16 : 0));
 
+        memcpy(r300->vertex_info.tab, tab, sizeof(tab));
         memcpy(&r300->vertex_info, &vinfo, sizeof(struct vertex_info));
         r300->dirty_state |= R300_NEW_VERTEX_FORMAT;
     }
@@ -208,73 +178,114 @@ static void r300_update_rs_block(struct r300_context* r300)
 {
     struct r300_rs_block* rs = r300->rs_block;
     struct vertex_info* vinfo = &r300->vertex_info.vinfo;
-    int col_count = 0, fp_offset = 0, i, tex_count = 0;
+    int* tab = r300->vertex_info.tab;
+    int col_count = 0, fp_offset = 0, i, memory_pos, tex_count = 0;
 
     memset(rs, 0, sizeof(struct r300_rs_block));
 
     if (r300_screen(r300->context.screen)->caps->is_r500) {
         for (i = 0; i < vinfo->num_attribs; i++) {
+            assert(tab[vinfo->attrib[i].src_index] != -1);
+            memory_pos = tab[vinfo->attrib[i].src_index] * 4;
             switch (vinfo->attrib[i].interp_mode) {
                 case INTERP_LINEAR:
                     rs->ip[col_count] |=
-                        R500_RS_COL_PTR(vinfo->attrib[i].src_index) |
+                        R500_RS_COL_PTR(memory_pos) |
                         R500_RS_COL_FMT(R300_RS_COL_FMT_RGBA);
                     col_count++;
                     break;
                 case INTERP_PERSPECTIVE:
                     rs->ip[tex_count] |=
-                        R500_RS_SEL_S(vinfo->attrib[i].src_index) |
-                        R500_RS_SEL_T(vinfo->attrib[i].src_index + 1) |
-                        R500_RS_SEL_R(vinfo->attrib[i].src_index + 2) |
-                        R500_RS_SEL_Q(vinfo->attrib[i].src_index + 3);
+                        R500_RS_SEL_S(memory_pos) |
+                        R500_RS_SEL_T(memory_pos + 1) |
+                        R500_RS_SEL_R(memory_pos + 2) |
+                        R500_RS_SEL_Q(memory_pos + 3);
                     tex_count++;
+                    break;
+                default:
                     break;
             }
         }
 
+        if (col_count == 0) {
+            rs->ip[0] |= R500_RS_COL_FMT(R300_RS_COL_FMT_0001);
+        }
+
+        if (tex_count == 0) {
+            rs->ip[0] |=
+                R500_RS_SEL_S(R500_RS_IP_PTR_K0) |
+                R500_RS_SEL_T(R500_RS_IP_PTR_K0) |
+                R500_RS_SEL_R(R500_RS_IP_PTR_K0) |
+                R500_RS_SEL_Q(R500_RS_IP_PTR_K1);
+        }
+
+        /* Rasterize at least one color, or bad things happen. */
+        if ((col_count == 0) && (tex_count == 0)) {
+            col_count++;
+        }
+
         for (i = 0; i < tex_count; i++) {
-            rs->inst[i] |= R500_RS_INST_TEX_ID(i) | R500_RS_INST_TEX_CN_WRITE |
-                R500_RS_INST_TEX_ADDR(fp_offset);
+            rs->inst[i] |= R500_RS_INST_TEX_ID(i) |
+                R500_RS_INST_TEX_CN_WRITE | R500_RS_INST_TEX_ADDR(fp_offset);
             fp_offset++;
         }
 
         for (i = 0; i < col_count; i++) {
-            rs->inst[i] |= R500_RS_INST_COL_ID(i) | R500_RS_INST_COL_CN_WRITE |
-                R500_RS_INST_COL_ADDR(fp_offset);
+            rs->inst[i] |= R500_RS_INST_COL_ID(i) |
+                R500_RS_INST_COL_CN_WRITE | R500_RS_INST_COL_ADDR(fp_offset);
             fp_offset++;
         }
-
-        rs->inst_count = MAX2(col_count, tex_count);
     } else {
         for (i = 0; i < vinfo->num_attribs; i++) {
+            memory_pos = tab[vinfo->attrib[i].src_index] * 4;
+            assert(tab[vinfo->attrib[i].src_index] != -1);
             switch (vinfo->attrib[i].interp_mode) {
                 case INTERP_LINEAR:
                     rs->ip[col_count] |=
-                        R300_RS_COL_PTR(vinfo->attrib[i].src_index) |
+                        R300_RS_COL_PTR(memory_pos) |
                         R300_RS_COL_FMT(R300_RS_COL_FMT_RGBA);
                     col_count++;
                     break;
                 case INTERP_PERSPECTIVE:
                     rs->ip[tex_count] |=
-                        R300_RS_TEX_PTR(vinfo->attrib[i].src_index) |
+                        R300_RS_TEX_PTR(memory_pos) |
                         R300_RS_SEL_S(R300_RS_SEL_C0) |
                         R300_RS_SEL_T(R300_RS_SEL_C1) |
                         R300_RS_SEL_R(R300_RS_SEL_C2) |
                         R300_RS_SEL_Q(R300_RS_SEL_C3);
-                    tex_count += 4;
+                    tex_count++;
+                    break;
+                default:
                     break;
             }
         }
 
+        if (col_count == 0) {
+            rs->ip[0] |= R300_RS_COL_FMT(R300_RS_COL_FMT_0001);
+        }
+
+        if (tex_count == 0) {
+            rs->ip[0] |=
+                R300_RS_SEL_S(R300_RS_SEL_K0) |
+                R300_RS_SEL_T(R300_RS_SEL_K0) |
+                R300_RS_SEL_R(R300_RS_SEL_K0) |
+                R300_RS_SEL_Q(R300_RS_SEL_K1);
+        }
+
+        /* Rasterize at least one color, or bad things happen. */
+        if ((col_count == 0) && (tex_count == 0)) {
+            col_count++;
+        }
+
         for (i = 0; i < tex_count; i++) {
-            rs->inst[i] |= R300_RS_INST_TEX_ID(i) | R300_RS_INST_TEX_CN_WRITE |
-                R300_RS_INST_TEX_ADDR(fp_offset);
+            rs->inst[i] |= R300_RS_INST_TEX_ID(i) |
+                R300_RS_INST_TEX_CN_WRITE | R300_RS_INST_TEX_ADDR(fp_offset);
             fp_offset++;
         }
 
         for (i = 0; i < col_count; i++) {
-            rs->inst[i] |= R300_RS_INST_COL_ID(i) | R300_RS_INST_COL_CN_WRITE |
-                R300_RS_INST_COL_ADDR(fp_offset);
+            rs->inst[i] |= R300_RS_INST_COL_ID(i) |
+                R300_RS_INST_COL_CN_WRITE | R300_RS_INST_COL_ADDR(fp_offset);
             fp_offset++;
         }
     }
@@ -282,7 +293,7 @@ static void r300_update_rs_block(struct r300_context* r300)
     rs->count = (tex_count * 4) | (col_count << R300_IC_COUNT_SHIFT) |
         R300_HIRES_EN;
 
-    rs->inst_count = MAX2(col_count, tex_count);
+    rs->inst_count = MAX2(MAX2(col_count - 1, tex_count - 1), 0);
 }
 
 void r300_update_derived_state(struct r300_context* r300)

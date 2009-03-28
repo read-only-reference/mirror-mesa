@@ -16,7 +16,7 @@ struct nouveau_stateobj_reloc {
 };
 
 struct nouveau_stateobj {
-	int refcount;
+	struct pipe_reference reference;
 
 	unsigned *push;
 	struct nouveau_stateobj_reloc *reloc;
@@ -32,7 +32,7 @@ so_new(unsigned push, unsigned reloc)
 	struct nouveau_stateobj *so;
 
 	so = MALLOC(sizeof(struct nouveau_stateobj));
-	so->refcount = 0;
+	pipe_reference_init(&so->reference, 1);
 	so->push = MALLOC(sizeof(unsigned) * push);
 	so->reloc = MALLOC(sizeof(struct nouveau_stateobj_reloc) * reloc);
 
@@ -46,18 +46,15 @@ static INLINE void
 so_ref(struct nouveau_stateobj *ref, struct nouveau_stateobj **pso)
 {
 	struct nouveau_stateobj *so = *pso;
+	int i;
 
-	if (ref) {
-		ref->refcount++;
-	}
-
-	if (so && --so->refcount <= 0) {
+        if (pipe_reference((struct pipe_reference**)pso, &ref->reference)) {
 		free(so->push);
+		for (i = 0; i < so->cur_reloc; i++)
+			pipe_buffer_reference(&so->reloc[i].bo, NULL);
 		free(so->reloc);
 		free(so);
 	}
-
-	*pso = ref;
 }
 
 static INLINE void
@@ -89,7 +86,8 @@ so_reloc(struct nouveau_stateobj *so, struct pipe_buffer *bo,
 {
 	struct nouveau_stateobj_reloc *r = &so->reloc[so->cur_reloc++];
 	
-	r->bo = bo;
+	r->bo = NULL;
+	pipe_buffer_reference(&r->bo, bo);
 	r->offset = so->cur - so->push;
 	r->packet = so->cur_packet;
 	r->data = data;

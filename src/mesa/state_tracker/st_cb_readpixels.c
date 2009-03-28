@@ -134,7 +134,7 @@ st_read_stencil_pixels(GLcontext *ctx, GLint x, GLint y,
 
    /* unmap the stencil buffer */
    screen->transfer_unmap(screen, pt);
-   screen->tex_transfer_release(screen, &pt);
+   screen->tex_transfer_destroy(pt);
 }
 
 
@@ -224,7 +224,7 @@ st_fast_readpixels(GLcontext *ctx, struct st_renderbuffer *strb,
 
       map = screen->transfer_map(screen, trans);
       if (!map) {
-         screen->tex_transfer_release(screen, &trans);
+         screen->tex_transfer_destroy(trans);
          return GL_FALSE;
       }
 
@@ -282,7 +282,7 @@ st_fast_readpixels(GLcontext *ctx, struct st_renderbuffer *strb,
       }
 
       screen->transfer_unmap(screen, trans);
-      screen->tex_transfer_release(screen, &trans);
+      screen->tex_transfer_destroy(trans);
    }
 
    return GL_TRUE;
@@ -420,6 +420,33 @@ st_readpixels(GLcontext *ctx, GLint x, GLint y, GLsizei width, GLsizei height,
             }
          }
       }
+      else if (trans->format == PIPE_FORMAT_Z24S8_UNORM ||
+               trans->format == PIPE_FORMAT_Z24X8_UNORM) {
+         if (format == GL_DEPTH_COMPONENT) {
+            for (i = 0; i < height; i++) {
+               GLuint ztemp[MAX_WIDTH];
+               GLfloat zfloat[MAX_WIDTH];
+               const double scale = 1.0 / ((1 << 24) - 1);
+               pipe_get_tile_raw(trans, 0, y, width, 1, ztemp, 0);
+               y += yStep;
+               for (j = 0; j < width; j++) {
+                  zfloat[j] = (float) (scale * ((ztemp[j] >> 8) & 0xffffff));
+               }
+               _mesa_pack_depth_span(ctx, width, dst, type,
+                                     zfloat, &clippedPacking);
+               dst += dstStride;
+            }
+         }
+         else {
+            /* untested, but simple: */
+            assert(format == GL_DEPTH_STENCIL_EXT);
+            for (i = 0; i < height; i++) {
+               pipe_get_tile_raw(trans, 0, y, width, 1, dst, 0);
+               y += yStep;
+               dst += dstStride;
+            }
+         }
+      }
       else if (trans->format == PIPE_FORMAT_Z16_UNORM) {
          for (i = 0; i < height; i++) {
             GLushort ztemp[MAX_WIDTH];
@@ -459,14 +486,14 @@ st_readpixels(GLcontext *ctx, GLint x, GLint y, GLsizei width, GLsizei height,
             df += dfStride;
             if (!dfStride) {
                _mesa_pack_rgba_span_float(ctx, width, temp, format, type, dst,
-                                          &clippedPacking, transferOps);
+                                          &clippedPacking, transferOps, GL_FALSE);
                dst += dstStride;
             }
          }
       }
    }
 
-   screen->tex_transfer_release(screen, &trans);
+   screen->tex_transfer_destroy(trans);
 
    _mesa_unmap_readpix_pbo(ctx, &clippedPacking);
 }

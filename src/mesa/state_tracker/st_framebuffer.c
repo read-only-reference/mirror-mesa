@@ -33,12 +33,12 @@
 #include "main/matrix.h"
 #include "main/renderbuffer.h"
 #include "main/scissor.h"
+#include "main/viewport.h"
 #include "st_context.h"
 #include "st_cb_fbo.h"
 #include "st_public.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_context.h"
-#include "pipe/p_inlines.h"
 
 
 struct st_framebuffer *
@@ -155,7 +155,7 @@ void st_resize_framebuffer( struct st_framebuffer *stfb,
 
 void st_unreference_framebuffer( struct st_framebuffer *stfb )
 {
-   _mesa_unreference_framebuffer((struct gl_framebuffer **) &stfb);
+   _mesa_reference_framebuffer((struct gl_framebuffer **) &stfb, NULL);
 }
 
 
@@ -289,32 +289,6 @@ st_notify_swapbuffers(struct st_framebuffer *stfb)
 		PIPE_FLUSH_FRAME,
                 NULL );
       ctx->st->frontbuffer_status = FRONT_STATUS_COPY_OF_BACK;
-   }
-}
-
-
-/** 
- * Quick hack - allows the winsys to inform the driver that surface
- * states are now undefined after a glXSwapBuffers or similar.
- */
-void
-st_notify_swapbuffers_complete(struct st_framebuffer *stfb)
-{
-   GET_CURRENT_CONTEXT(ctx);
-
-   if (ctx && ctx->DrawBuffer == &stfb->Base) {
-      struct st_renderbuffer *strb;
-
-      /* Mark back color buffers as undefined */
-      strb = st_renderbuffer(stfb->Base.Attachment[BUFFER_BACK_LEFT].
-                             Renderbuffer);
-      if (strb && strb->surface)
-         strb->surface->status = PIPE_SURFACE_STATUS_UNDEFINED;
-
-      strb = st_renderbuffer(stfb->Base.Attachment[BUFFER_BACK_RIGHT].
-                             Renderbuffer);
-      if (strb && strb->surface)
-         strb->surface->status = PIPE_SURFACE_STATUS_UNDEFINED;
    }
 }
 
