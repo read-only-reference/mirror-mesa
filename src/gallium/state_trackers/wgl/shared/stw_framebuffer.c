@@ -32,114 +32,103 @@
 #include "pipe/p_screen.h"
 #include "state_tracker/st_context.h"
 #include "state_tracker/st_public.h"
+
+#ifdef DEBUG
+#include "trace/tr_screen.h"
+#include "trace/tr_texture.h"
+#endif
+
 #include "stw_framebuffer.h"
 #include "stw_device.h"
 #include "stw_public.h"
 #include "stw_winsys.h"
+#include "stw_tls.h"
 
 
-void
-framebuffer_resize(
-   struct stw_framebuffer *fb,
-   GLuint width,
-   GLuint height )
-{
-   st_resize_framebuffer( fb->stfb, width, height );
-}
-
-static struct stw_framebuffer *fb_head = NULL;
-
+/**
+ * @sa http://msdn.microsoft.com/en-us/library/ms644975(VS.85).aspx
+ * @sa http://msdn.microsoft.com/en-us/library/ms644960(VS.85).aspx
+ */
 static LRESULT CALLBACK
-window_proc(
-   HWND hWnd,
-   UINT uMsg,
+stw_call_window_proc(
+   int nCode,
    WPARAM wParam,
    LPARAM lParam )
 {
-   struct stw_framebuffer *fb;
+   struct stw_tls_data *tls_data;
+   PCWPSTRUCT pParams = (PCWPSTRUCT)lParam;
+   
+   tls_data = stw_tls_get_data();
+   if(!tls_data)
+      return 0;
+   
+   if (nCode < 0)
+       return CallNextHookEx(tls_data->hCallWndProcHook, nCode, wParam, lParam);
 
-   for (fb = fb_head; fb != NULL; fb = fb->next)
-      if (fb->hWnd == hWnd)
-         break;
-   assert( fb != NULL );
+   if (pParams->message == WM_SIZE && pParams->wParam != SIZE_MINIMIZED) {
+      struct stw_framebuffer *fb;
 
-   if (uMsg == WM_SIZE && wParam != SIZE_MINIMIZED)
-      framebuffer_resize( fb, LOWORD( lParam ), HIWORD( lParam ) );
+      pipe_mutex_lock( stw_dev->mutex );
+      for (fb = stw_dev->fb_head; fb != NULL; fb = fb->next)
+         if (fb->hWnd == pParams->hwnd)
+            break;
+      pipe_mutex_unlock( stw_dev->mutex );
+      
+      if(fb) {
+         unsigned width = LOWORD( pParams->lParam );
+         unsigned height = HIWORD( pParams->lParam );
+         
+         /* FIXME: The mesa statetracker makes the assumptions that only
+          * one context is using the framebuffer, and that that context is the 
+          * current one. However neither holds true, as WGL allows more than
+          * one context to be bound to the same drawable, and this function can 
+          * be called from any thread.
+          */
+         pipe_mutex_lock( fb->mutex );
+         st_resize_framebuffer( fb->stfb, width, height );
+         pipe_mutex_unlock( fb->mutex );
+      }
+   }
 
-   return CallWindowProc( fb->WndProc, hWnd, uMsg, wParam, lParam );
+   return CallNextHookEx(tls_data->hCallWndProcHook, nCode, wParam, lParam);
 }
 
-static INLINE boolean
-stw_is_supported_depth_stencil(enum pipe_format format)
-{
-   struct pipe_screen *screen = stw_dev->screen;
-   return screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 
-                                      PIPE_TEXTURE_USAGE_DEPTH_STENCIL, 0);
-}
 
 /* Create a new framebuffer object which will correspond to the given HDC.
  */
 struct stw_framebuffer *
-framebuffer_create(
+stw_framebuffer_create(
    HDC hdc,
    GLvisual *visual,
+   const struct stw_pixelformat_info *pfi,
    GLuint width,
    GLuint height )
 {
-   struct stw_framebuffer *fb;
    enum pipe_format colorFormat, depthFormat, stencilFormat;
+   struct stw_framebuffer *fb;
+
+   colorFormat = pfi->color_format;
+   
+   assert(pf_layout( pfi->depth_stencil_format ) == PIPE_FORMAT_LAYOUT_RGBAZS );
+
+   if(pf_get_component_bits( pfi->depth_stencil_format, PIPE_FORMAT_COMP_Z ))
+      depthFormat = pfi->depth_stencil_format;
+   else
+      depthFormat = PIPE_FORMAT_NONE;
+
+   if(pf_get_component_bits( pfi->depth_stencil_format, PIPE_FORMAT_COMP_S ))
+      stencilFormat = pfi->depth_stencil_format;
+   else
+      stencilFormat = PIPE_FORMAT_NONE;
 
    fb = CALLOC_STRUCT( stw_framebuffer );
    if (fb == NULL)
       return NULL;
 
-   /* Determine PIPE_FORMATs for buffers.
-    */
-   colorFormat = PIPE_FORMAT_A8R8G8B8_UNORM;
+   fb->hDC = hdc;
+   fb->hWnd = WindowFromDC( hdc );
 
-   if (visual->depthBits == 0)
-      depthFormat = PIPE_FORMAT_NONE;
-   else if (visual->depthBits <= 16 &&
-            stw_is_supported_depth_stencil(PIPE_FORMAT_Z16_UNORM))
-      depthFormat = PIPE_FORMAT_Z16_UNORM;
-   else if (visual->depthBits <= 24 && visual->stencilBits != 8 &&
-            stw_is_supported_depth_stencil(PIPE_FORMAT_X8Z24_UNORM)) {
-      depthFormat = PIPE_FORMAT_X8Z24_UNORM;
-   }
-   else if (visual->depthBits <= 24 && visual->stencilBits != 8 && 
-            stw_is_supported_depth_stencil(PIPE_FORMAT_Z24X8_UNORM)) {
-      depthFormat = PIPE_FORMAT_Z24X8_UNORM;
-   }
-   else if (visual->depthBits <= 24 && visual->stencilBits == 8 && 
-            stw_is_supported_depth_stencil(PIPE_FORMAT_S8Z24_UNORM)) {
-      depthFormat = PIPE_FORMAT_S8Z24_UNORM;
-   }
-   else if (visual->depthBits <= 24 && visual->stencilBits == 8 && 
-            stw_is_supported_depth_stencil(PIPE_FORMAT_Z24S8_UNORM)) {
-      depthFormat = PIPE_FORMAT_Z24S8_UNORM;
-   }
-   else if(stw_is_supported_depth_stencil(PIPE_FORMAT_Z32_UNORM)) {
-      depthFormat = PIPE_FORMAT_Z32_UNORM;
-   }
-   else if(stw_is_supported_depth_stencil(PIPE_FORMAT_Z32_FLOAT)) {
-      depthFormat = PIPE_FORMAT_Z32_FLOAT;
-   }
-   else {
-      assert(0);
-      depthFormat = PIPE_FORMAT_NONE;
-   }
-
-   if (depthFormat == PIPE_FORMAT_S8Z24_UNORM || 
-       depthFormat == PIPE_FORMAT_Z24S8_UNORM) {
-      stencilFormat = depthFormat;
-   }
-   else if (visual->stencilBits == 8 && 
-            stw_is_supported_depth_stencil(PIPE_FORMAT_S8_UNORM)) {
-      stencilFormat = PIPE_FORMAT_S8_UNORM;
-   }
-   else {
-      stencilFormat = PIPE_FORMAT_NONE;
-   }
+   pipe_mutex_init( fb->mutex );
 
    fb->stfb = st_create_framebuffer(
       visual,
@@ -149,63 +138,60 @@ framebuffer_create(
       width,
       height,
       (void *) fb );
-
-   fb->cColorBits = GetDeviceCaps( hdc, BITSPIXEL );
-   fb->hDC = hdc;
-
-   /* Subclass a window associated with the device context.
-    */
-   fb->hWnd = WindowFromDC( hdc );
-   if (fb->hWnd != NULL) {
-      fb->WndProc = (WNDPROC) SetWindowLongPtr(
-         fb->hWnd,
-         GWLP_WNDPROC,
-         (LONG_PTR) window_proc );
+   if(!fb->stfb) {
+      FREE(fb);
+      return NULL;
    }
 
-   fb->next = fb_head;
-   fb_head = fb;
+   pipe_mutex_lock( stw_dev->mutex );
+   fb->next = stw_dev->fb_head;
+   stw_dev->fb_head = fb;
+   pipe_mutex_unlock( stw_dev->mutex );
+
    return fb;
 }
 
 void
-framebuffer_destroy(
+stw_framebuffer_destroy(
    struct stw_framebuffer *fb )
 {
-   struct stw_framebuffer **link = &fb_head;
-   struct stw_framebuffer *pfb = fb_head;
+   struct stw_framebuffer **link;
 
-   while (pfb != NULL) {
-      if (pfb == fb) {
-         if (fb->hWnd != NULL) {
-            SetWindowLongPtr(
-               fb->hWnd,
-               GWLP_WNDPROC,
-               (LONG_PTR) fb->WndProc );
-         }
+   pipe_mutex_lock( stw_dev->mutex );
 
-         *link = fb->next;
-         FREE( fb );
-         return;
-      }
+   link = &stw_dev->fb_head;
+   while (link && *link != fb)
+      link = &(*link)->next;
+   assert(*link);
+   if (link)
+      *link = fb->next;
+   fb->next = NULL;
 
-      link = &pfb->next;
-      pfb = pfb->next;
-   }
+   pipe_mutex_unlock( stw_dev->mutex );
+
+   st_unreference_framebuffer(fb->stfb);
+   
+   pipe_mutex_destroy( fb->mutex );
+   
+   FREE( fb );
 }
 
-/* Given an hdc, return the corresponding stw_framebuffer.
+/**
+ * Given an hdc, return the corresponding stw_framebuffer.
  */
 struct stw_framebuffer *
-framebuffer_from_hdc(
+stw_framebuffer_from_hdc(
    HDC hdc )
 {
    struct stw_framebuffer *fb;
 
-   for (fb = fb_head; fb != NULL; fb = fb->next)
+   pipe_mutex_lock( stw_dev->mutex );
+   for (fb = stw_dev->fb_head; fb != NULL; fb = fb->next)
       if (fb->hDC == hdc)
-         return fb;
-   return NULL;
+         break;
+   pipe_mutex_unlock( stw_dev->mutex );
+
+   return fb;
 }
 
 
@@ -214,25 +200,73 @@ stw_swap_buffers(
    HDC hdc )
 {
    struct stw_framebuffer *fb;
-   struct pipe_surface *surf;
+   struct pipe_screen *screen;
+   struct pipe_surface *surface;
 
-   fb = framebuffer_from_hdc( hdc );
+   fb = stw_framebuffer_from_hdc( hdc );
    if (fb == NULL)
       return FALSE;
+
+   pipe_mutex_lock( fb->mutex );
 
    /* If we're swapping the buffer associated with the current context
     * we have to flush any pending rendering commands first.
     */
    st_notify_swapbuffers( fb->stfb );
 
-   if(st_get_framebuffer_surface( fb->stfb, ST_SURFACE_BACK_LEFT, &surf )) {
-      stw_dev->stw_winsys->flush_frontbuffer(stw_dev->screen,
-                                             surf,
-                                             hdc );
-   }
-   else {
-       /* FIXME: this shouldn't happen, but does on glean */
+   screen = stw_dev->screen;
+   
+   if(!st_get_framebuffer_surface( fb->stfb, ST_SURFACE_BACK_LEFT, &surface )) {
+      /* FIXME: this shouldn't happen, but does on glean */
+      pipe_mutex_unlock( fb->mutex );
+      return FALSE;
    }
 
+#ifdef DEBUG
+   if(stw_dev->trace_running) {
+      screen = trace_screen(screen)->screen;
+      surface = trace_surface(surface)->surface;
+   }
+#endif
+
+   stw_dev->stw_winsys->flush_frontbuffer( screen, surface, hdc );
+   
+   pipe_mutex_unlock( fb->mutex );
+   
    return TRUE;
+}
+
+
+boolean
+stw_framebuffer_init_thread(void)
+{
+   struct stw_tls_data *tls_data;
+   
+   tls_data = stw_tls_get_data();
+   if(!tls_data)
+      return FALSE;
+   
+   tls_data->hCallWndProcHook = SetWindowsHookEx(WH_CALLWNDPROC,
+                                                 stw_call_window_proc,
+                                                 NULL,
+                                                 GetCurrentThreadId());
+   if(tls_data->hCallWndProcHook == NULL)
+      return FALSE;
+   
+   return TRUE;
+}
+
+void
+stw_framebuffer_cleanup_thread(void)
+{
+   struct stw_tls_data *tls_data;
+   
+   tls_data = stw_tls_get_data();
+   if(!tls_data)
+      return;
+   
+   if(tls_data->hCallWndProcHook) {
+      UnhookWindowsHookEx(tls_data->hCallWndProcHook);
+      tls_data->hCallWndProcHook = NULL;
+   }
 }

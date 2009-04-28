@@ -59,7 +59,7 @@ def test(dev, name):
 
     # depth/stencil/alpha
     depth_stencil_alpha = DepthStencilAlpha()
-    depth_stencil_alpha.depth.enabled = 1
+    depth_stencil_alpha.depth.enabled = 0
     depth_stencil_alpha.depth.writemask = 1
     depth_stencil_alpha.depth.func = PIPE_FUNC_LESS
     ctx.set_depth_stencil_alpha(depth_stencil_alpha)
@@ -112,27 +112,25 @@ def test(dev, name):
 
     # framebuffer
     cbuf = dev.texture_create(
-        PIPE_FORMAT_X8R8G8B8_UNORM, 
+        PIPE_FORMAT_X8R8G8B8_UNORM,
         width, height,
         tex_usage=PIPE_TEXTURE_USAGE_DISPLAY_TARGET,
-    ).get_surface()
-    zbuf = dev.texture_create(
-        PIPE_FORMAT_Z32_UNORM, 
-        width, height,
-        tex_usage=PIPE_TEXTURE_USAGE_DEPTH_STENCIL,
     ).get_surface()
     fb = Framebuffer()
     fb.width = width
     fb.height = height
     fb.nr_cbufs = 1
     fb.set_cbuf(0, cbuf)
-    fb.set_zsbuf(zbuf)
     ctx.set_framebuffer(fb)
-    ctx.surface_clear(cbuf, 0x80808080)
-    ctx.surface_clear(zbuf, 0xffffffff)
+    rgba = FloatArray(4);
+    rgba[0] = 0.5
+    rgba[1] = 0.5
+    rgba[2] = 0.5
+    rgba[3] = 0.5
+    ctx.clear(PIPE_CLEAR_COLOR, rgba, 0.0, 0)
 
     # vertex shader
-    vs = Shader(file('vert-' + name + '.txt', 'rt').read())
+    vs = Shader(file('vert-' + name + '.sh', 'rt').read())
     ctx.set_vertex_shader(vs)
 
     # fragment shader
@@ -213,28 +211,37 @@ def main():
     tests = [
         'abs',
         'add',
+        'arl',
+        'arr',
         'dp3',
+        'dp4',
+        'dst',
+        'ex2',
+        'flr',
+        'frc',
+        'lg2',
+        'lit',
+        'lrp',
+        'mad',
+        'max',
+        'min',
         'mov',
+        'mul',
+        'rcp',
+        'rsq',
+        'sge',
+        'slt',
+        'srcmod-abs',
+        'srcmod-absneg',
+        'srcmod-neg',
+        'srcmod-swz',
+        'sub',
+        'xpd',
     ]
-    
-    html = '''<html>
-<head>
-<link rel=\"stylesheet\" type=\"text/css\" media=\"screen\" href=\"screen.css\">
-</head>
-<body>
-<div class=\"main\">
-<h2>regression tests for <span style=\"color: #FF8000\">vertex</span> shader</h2>
-<table><tbody>
-'''
 
     dev = Device()
     for t in tests:
         test(dev, t)
-        html += '<tr><td width=\"300px\">' + t + '</td>'
-        html += '<td><img src=\"vert-' + t + '.png\"></img></td></tr>\n'
-
-    html += '</tbody></table>\n</body>\n</html>\n'
-    file('vertex-shader.htm', 'wt').write(html)
 
 if __name__ == '__main__':
     main()

@@ -60,7 +60,7 @@ struct r300_dsa_state {
 };
 
 struct r300_rs_state {
-    /* XXX icky as fucking hell */
+    /* Draw-specific rasterizer state */
     struct pipe_rasterizer_state rs;
 
     uint32_t vap_control_status;    /* R300_VAP_CNTL_STATUS: 0x2140 */
@@ -225,10 +225,34 @@ struct r300_vertex_format {
     uint32_t vap_prog_stream_cntl[8];
     /* R300_VAP_PROG_STREAK_CNTL_EXT_[0-7] */
     uint32_t vap_prog_stream_cntl_ext[8];
-    /* This is a map of VAP/SW TCL outputs into the GA/RS.
-     * tab[i] is the location of input i in GA/RS input memory.
-     * Named tab for historical reasons. */
-    int tab[16];
+    /* Map of vertex attributes into PVS memory for HW TCL,
+     * or GA memory for SW TCL. */
+    int vs_tab[16];
+    /* Map of rasterizer attributes from GB through RS to US. */
+    int fs_tab[16];
+};
+
+struct r300_vertex_shader {
+    /* Parent class */
+    struct pipe_shader_state state;
+    struct tgsi_shader_info info;
+
+    /* Fallback shader, because Draw has issues */
+    struct draw_vertex_shader* draw;
+
+    /* Has this shader been translated yet? */
+    boolean translated;
+
+    /* Number of used instructions */
+    int instruction_count;
+
+    /* Machine instructions */
+    struct {
+        uint32_t inst0;
+        uint32_t inst1;
+        uint32_t inst2;
+        uint32_t inst3;
+    } instructions[128]; /*< XXX magic number */
 };
 
 struct r300_context {
@@ -270,6 +294,8 @@ struct r300_context {
     int vertex_buffer_count;
     /* Vertex information. */
     struct r300_vertex_format vertex_info;
+    /* Vertex shader. */
+    struct r300_vertex_shader* vs;
     /* Viewport state. */
     struct r300_viewport_state* viewport_state;
     /* Bitmask of dirty state objects. */
@@ -284,7 +310,7 @@ static struct r300_context* r300_context(struct pipe_context* context) {
 }
 
 /* Context initialization. */
-struct draw_stage* r300_draw_swtcl_stage(struct r300_context* r300);
+struct draw_stage* r300_draw_stage(struct r300_context* r300);
 void r300_init_state_functions(struct r300_context* r300);
 void r300_init_surface_functions(struct r300_context* r300);
 

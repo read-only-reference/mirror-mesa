@@ -186,12 +186,21 @@ enum pipe_texture_target {
 
 
 /**
+ * Clear buffer bits
+ */
+/** All color buffers currently bound */
+#define PIPE_CLEAR_COLOR        (1 << 0)
+/** Depth/stencil combined */
+#define PIPE_CLEAR_DEPTHSTENCIL (1 << 1)
+
+
+/**
  * Transfer object usage flags
  */
 enum pipe_transfer_usage {
    PIPE_TRANSFER_READ,
    PIPE_TRANSFER_WRITE,
-   PIPE_TRANSFER_READ_WRITE //< Read/modify/write
+   PIPE_TRANSFER_READ_WRITE  /**< Read/modify/write */
 };
 
 
@@ -303,6 +312,13 @@ enum pipe_transfer_usage {
 #define PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS 26
 
 
+/**
+ * Referenced query flags.
+ */
+
+#define PIPE_UNREFERENCED         0
+#define PIPE_REFERENCED_FOR_READ  (1 << 0)
+#define PIPE_REFERENCED_FOR_WRITE (1 << 1)
 
 #ifdef __cplusplus
 }

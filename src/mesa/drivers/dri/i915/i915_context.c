@@ -83,7 +83,6 @@ i915InitDriverFunctions(struct dd_function_table *functions)
 {
    intelInitDriverFunctions(functions);
    i915InitStateFunctions(functions);
-   i915InitTextureFuncs(functions);
    i915InitFragProgFuncs(functions);
    functions->UpdateState = i915InvalidateState;
 }
@@ -145,6 +144,8 @@ i915CreateContext(const __GLcontextModes * mesaVis,
    ctx->Const.MaxCubeTextureLevels = 12;
    ctx->Const.MaxTextureRectSize = (1 << 11);
    ctx->Const.MaxTextureUnits = I915_TEX_UNITS;
+
+   ctx->Const.MaxTextureMaxAnisotropy = 4.0;
 
    /* GL_ARB_fragment_program limits - don't think Mesa actually
     * validates programs against these, and in any case one ARB

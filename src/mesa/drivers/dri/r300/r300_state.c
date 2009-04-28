@@ -472,7 +472,9 @@ static void r300SetEarlyZState(GLcontext * ctx)
 
 	if (ctx->Color.AlphaEnabled && ctx->Color.AlphaFunc != GL_ALWAYS)
 		topZ = R300_ZTOP_DISABLE;
-	if (current_fragment_program_writes_depth(ctx))
+	else if (current_fragment_program_writes_depth(ctx))
+		topZ = R300_ZTOP_DISABLE;
+	else if (ctx->FragmentProgram._Current && ctx->FragmentProgram._Current->UsesKill)
 		topZ = R300_ZTOP_DISABLE;
 
 	if (topZ != r300->hw.zstencil_format.cmd[2]) {
@@ -1360,7 +1362,7 @@ static void r300SetupTextures(GLcontext * ctx)
 #endif
 			tmu_mappings[i] = hw_tmu;
 
-			t = r300->state.texture.unit[i].texobj;
+			t = (r300TexObjPtr) r300->state.texture.unit[i].texobj->DriverData;
 			/* XXX questionable fix for bug 9170: */
 			if (!t)
 				continue;

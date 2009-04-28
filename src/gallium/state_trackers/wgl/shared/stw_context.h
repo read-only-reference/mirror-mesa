@@ -31,12 +31,15 @@
 #include <windows.h>
 
 struct st_context;
+struct stw_pixelformat_info;
 
 struct stw_context
 {
    struct st_context *st;
+   UINT_PTR hglrc;
    HDC hdc;
    DWORD color_bits;
+   const struct stw_pixelformat_info *pfi;
 };
 
 #endif /* STW_CONTEXT_H */

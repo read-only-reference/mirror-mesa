@@ -39,7 +39,13 @@ static void radeon_r300_write_cs_reloc(struct radeon_cs* cs,
 
 static void radeon_r300_flush_cs(struct radeon_cs* cs)
 {
-    radeon_cs_emit(cs);
+    int retval = 0;
+
+    retval = radeon_cs_emit(cs);
+    if (retval) {
+        debug_printf("radeon: Bad CS, dumping...\n");
+        radeon_cs_print(cs, stderr);
+    }
     radeon_cs_erase(cs);
 }
 
@@ -47,42 +53,46 @@ static void radeon_r300_flush_cs(struct radeon_cs* cs)
 static void do_ioctls(struct r300_winsys* winsys, int fd)
 {
     drm_radeon_getparam_t gp;
-    uint32_t target;
+    int target;
     int retval;
 
     /* XXX is this cast safe? */
     gp.value = (int*)&target;
 
-    /* First, get PCI ID */
-    gp.param = RADEON_PARAM_DEVICE_ID;
-    retval = drmCommandWriteRead(fd, DRM_RADEON_GETPARAM, &gp, sizeof(gp));
-    if (retval) {
-        fprintf(stderr, "%s: Failed to get PCI ID, error number %d",
-                __FUNCTION__, retval);
-        exit(1);
-    }
-    winsys->pci_id = target;
-
-    /* Then, get the number of pixel pipes */
+    /* First, get the number of pixel pipes */
     gp.param = RADEON_PARAM_NUM_GB_PIPES;
     retval = drmCommandWriteRead(fd, DRM_RADEON_GETPARAM, &gp, sizeof(gp));
     if (retval) {
-        fprintf(stderr, "%s: Failed to get GB pipe count, error number %d",
+        fprintf(stderr, "%s: Failed to get GB pipe count, error number %d\n",
                 __FUNCTION__, retval);
         exit(1);
     }
     winsys->gb_pipes = target;
 
+    /* Then, get PCI ID */
+    gp.param = RADEON_PARAM_DEVICE_ID;
+    retval = drmCommandWriteRead(fd, DRM_RADEON_GETPARAM, &gp, sizeof(gp));
+    if (retval) {
+        fprintf(stderr, "%s: Failed to get PCI ID, error number %d\n",
+                __FUNCTION__, retval);
+        exit(1);
+    }
+    winsys->pci_id = target;
 }
 
 struct r300_winsys*
 radeon_create_r300_winsys(int fd, struct radeon_winsys* old_winsys)
 {
     struct r300_winsys* winsys = CALLOC_STRUCT(r300_winsys);
+    struct radeon_cs_manager* csm;
+
+    if (winsys == NULL) {
+        return NULL;
+    }
 
     do_ioctls(winsys, fd);
 
-    struct radeon_cs_manager* csm = radeon_cs_manager_gem_ctor(fd);
+    csm = radeon_cs_manager_gem_ctor(fd);
 
     winsys->cs = radeon_cs_create(csm, 1024 * 64 / 4);
 

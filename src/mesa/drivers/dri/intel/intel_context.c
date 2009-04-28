@@ -173,6 +173,24 @@ intelGetString(GLcontext * ctx, GLenum name)
    }
 }
 
+static unsigned
+intel_bits_per_pixel(const struct intel_renderbuffer *rb)
+{
+   switch (rb->Base._ActualFormat) {
+   case GL_RGB5:
+   case GL_DEPTH_COMPONENT16:
+      return 16;
+   case GL_RGB8:
+   case GL_RGBA8:
+   case GL_DEPTH_COMPONENT24:
+   case GL_DEPTH24_STENCIL8_EXT:
+   case GL_STENCIL_INDEX8_EXT:
+      return 32;
+   default:
+      return 0;
+   }
+}
+
 void
 intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
 {
@@ -180,7 +198,7 @@ intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
    struct intel_renderbuffer *rb;
    struct intel_region *region, *depth_region;
    struct intel_context *intel = context->driverPrivate;
-   __DRIbuffer *buffers;
+   __DRIbuffer *buffers = NULL;
    __DRIscreen *screen;
    int i, count;
    unsigned int attachments[10];
@@ -192,22 +210,63 @@ intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
 
    screen = intel->intelScreen->driScrnPriv;
 
-   i = 0;
-   if (intel_fb->color_rb[0])
-      attachments[i++] = __DRI_BUFFER_FRONT_LEFT;
-   if (intel_fb->color_rb[1])
-      attachments[i++] = __DRI_BUFFER_BACK_LEFT;
-   if (intel_get_renderbuffer(&intel_fb->Base, BUFFER_DEPTH))
-      attachments[i++] = __DRI_BUFFER_DEPTH;
-   if (intel_get_renderbuffer(&intel_fb->Base, BUFFER_STENCIL))
-      attachments[i++] = __DRI_BUFFER_STENCIL;
+   if (screen->dri2.loader
+       && (screen->dri2.loader->base.version > 2)
+       && (screen->dri2.loader->getBuffersWithFormat != NULL)) {
+      struct intel_renderbuffer *depth_rb;
+      struct intel_renderbuffer *stencil_rb;
 
-   buffers = (*screen->dri2.loader->getBuffers)(drawable,
-						&drawable->w,
-						&drawable->h,
-						attachments, i,
-						&count,
-						drawable->loaderPrivate);
+      i = 0;
+      if ((intel->is_front_buffer_rendering || !intel_fb->color_rb[1])
+	   && intel_fb->color_rb[0]) {
+	 attachments[i++] = __DRI_BUFFER_FRONT_LEFT;
+	 attachments[i++] = intel_bits_per_pixel(intel_fb->color_rb[0]);
+      }
+
+      if (intel_fb->color_rb[1]) {
+	 attachments[i++] = __DRI_BUFFER_BACK_LEFT;
+	 attachments[i++] = intel_bits_per_pixel(intel_fb->color_rb[1]);
+      }
+
+      depth_rb = intel_get_renderbuffer(&intel_fb->Base, BUFFER_DEPTH);
+      stencil_rb = intel_get_renderbuffer(&intel_fb->Base, BUFFER_STENCIL);
+
+      if ((depth_rb != NULL) && (stencil_rb != NULL)) {
+	 attachments[i++] = __DRI_BUFFER_DEPTH_STENCIL;
+	 attachments[i++] = intel_bits_per_pixel(depth_rb);
+      } else if (depth_rb != NULL) {
+	 attachments[i++] = __DRI_BUFFER_DEPTH;
+	 attachments[i++] = intel_bits_per_pixel(depth_rb);
+      } else if (stencil_rb != NULL) {
+	 attachments[i++] = __DRI_BUFFER_STENCIL;
+	 attachments[i++] = intel_bits_per_pixel(stencil_rb);
+      }
+
+      buffers =
+	 (*screen->dri2.loader->getBuffersWithFormat)(drawable,
+						      &drawable->w,
+						      &drawable->h,
+						      attachments, i / 2,
+						      &count,
+						      drawable->loaderPrivate);
+   } else if (screen->dri2.loader) {
+      i = 0;
+      if (intel_fb->color_rb[0])
+	 attachments[i++] = __DRI_BUFFER_FRONT_LEFT;
+      if (intel_fb->color_rb[1])
+	 attachments[i++] = __DRI_BUFFER_BACK_LEFT;
+      if (intel_get_renderbuffer(&intel_fb->Base, BUFFER_DEPTH))
+	 attachments[i++] = __DRI_BUFFER_DEPTH;
+      if (intel_get_renderbuffer(&intel_fb->Base, BUFFER_STENCIL))
+	 attachments[i++] = __DRI_BUFFER_STENCIL;
+
+      buffers = (*screen->dri2.loader->getBuffers)(drawable,
+						   &drawable->w,
+						   &drawable->h,
+						   attachments, i,
+						   &count,
+						   drawable->loaderPrivate);
+   }
 
    if (buffers == NULL)
       return;
@@ -235,6 +294,11 @@ intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
 	   region_name = "dri2 front buffer";
 	   break;
 
+       case __DRI_BUFFER_FAKE_FRONT_LEFT:
+	   rb = intel_fb->color_rb[0];
+	   region_name = "dri2 fake front buffer";
+	   break;
+
        case __DRI_BUFFER_BACK_LEFT:
 	   rb = intel_fb->color_rb[1];
 	   region_name = "dri2 back buffer";
@@ -243,6 +307,11 @@ intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
        case __DRI_BUFFER_DEPTH:
 	   rb = intel_get_renderbuffer(&intel_fb->Base, BUFFER_DEPTH);
 	   region_name = "dri2 depth buffer";
+	   break;
+
+       case __DRI_BUFFER_DEPTH_STENCIL:
+	   rb = intel_get_renderbuffer(&intel_fb->Base, BUFFER_DEPTH);
+	   region_name = "dri2 depth / stencil buffer";
 	   break;
 
        case __DRI_BUFFER_STENCIL:
@@ -291,6 +360,23 @@ intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
 
        intel_renderbuffer_set_region(rb, region);
        intel_region_release(&region);
+
+       if (buffers[i].attachment == __DRI_BUFFER_DEPTH_STENCIL) {
+	  rb = intel_get_renderbuffer(&intel_fb->Base, BUFFER_STENCIL);
+	  if (rb != NULL) {
+	     struct intel_region *stencil_region = NULL;
+
+	     if (rb->region) {
+		dri_bo_flink(rb->region->buffer, &name);
+		if (name == buffers[i].name)
+		   continue;
+	     }
+
+	     intel_region_reference(&stencil_region, region);
+	     intel_renderbuffer_set_region(rb, stencil_region);
+	     intel_region_release(&stencil_region);
+	  }
+       }
    }
 
    driUpdateFramebufferSize(&intel->ctx, drawable);
@@ -307,9 +393,11 @@ intel_viewport(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
     if (!driContext->driScreenPriv->dri2.enabled)
 	return;
 
-    intel_update_renderbuffers(driContext, driContext->driDrawablePriv);
-    if (driContext->driDrawablePriv != driContext->driReadablePriv)
-	intel_update_renderbuffers(driContext, driContext->driReadablePriv);
+    if (!intel->internal_viewport_call) {
+       intel_update_renderbuffers(driContext, driContext->driDrawablePriv);
+       if (driContext->driDrawablePriv != driContext->driReadablePriv)
+	  intel_update_renderbuffers(driContext, driContext->driReadablePriv);
+    }
 
     old_viewport = ctx->Driver.Viewport;
     ctx->Driver.Viewport = NULL;
@@ -389,6 +477,27 @@ intel_flush(GLcontext *ctx, GLboolean needs_mi_flush)
 
    if (intel->batch->map != intel->batch->ptr)
       intel_batchbuffer_flush(intel->batch);
+
+   if ((ctx->DrawBuffer->Name == 0) && intel->front_buffer_dirty) {
+      __DRIscreen *const screen = intel->intelScreen->driScrnPriv;
+
+      if (screen->dri2.loader &&
+          (screen->dri2.loader->base.version >= 2)
+	  && (screen->dri2.loader->flushFrontBuffer != NULL)) {
+	 (*screen->dri2.loader->flushFrontBuffer)(intel->driDrawable,
+						  intel->driDrawable->loaderPrivate);
+
+	 /* Only clear the dirty bit if front-buffer rendering is no longer
+	  * enabled.  This is done so that the dirty bit can only be set in
+	  * glDrawBuffer.  Otherwise the dirty bit would have to be set at
+	  * each of N places that do rendering.  This has worse performances,
+	  * but it is much easier to get correct.
+	  */
+	 if (intel->is_front_buffer_rendering) {
+	    intel->front_buffer_dirty = GL_FALSE;
+	 }
+      }
+   }
 }
 
 void
@@ -499,8 +608,6 @@ intelInitContext(struct intel_context *intel,
 	 break;
       }
    }
-
-   ctx->Const.MaxTextureMaxAnisotropy = 2.0;
 
    /* This doesn't yet catch all non-conformant rendering, but it's a
     * start.

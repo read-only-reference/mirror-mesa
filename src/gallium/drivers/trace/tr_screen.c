@@ -26,6 +26,7 @@
  **************************************************************************/
 
 #include "util/u_memory.h"
+#include "util/u_simple_list.h"
 
 #include "tr_buffer.h"
 #include "tr_dump.h"
@@ -159,8 +160,7 @@ trace_screen_flush_frontbuffer(struct pipe_screen *_screen,
                                void *context_private)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
-   struct trace_texture *tr_tex = trace_texture(tr_scr, _surface->texture);
-   struct trace_surface *tr_surf = trace_surface(tr_tex, _surface);
+   struct trace_surface *tr_surf = trace_surface(_surface);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_surface *surface = tr_surf->surface;
 
@@ -242,7 +242,7 @@ static void
 trace_screen_texture_destroy(struct pipe_texture *_texture)
 {
    struct trace_screen *tr_scr = trace_screen(_texture->screen);
-   struct trace_texture *tr_tex = trace_texture(tr_scr, _texture);
+   struct trace_texture *tr_tex = trace_texture(_texture);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_texture *texture = tr_tex->texture;
 
@@ -255,7 +255,7 @@ trace_screen_texture_destroy(struct pipe_texture *_texture)
 
    trace_dump_call_end();
 
-   trace_texture_destroy(tr_scr, _texture);
+   trace_texture_destroy(tr_tex);
 }
 
 
@@ -272,7 +272,7 @@ trace_screen_get_tex_surface(struct pipe_screen *_screen,
                              unsigned usage)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
-   struct trace_texture *tr_tex = trace_texture(tr_scr, _texture);
+   struct trace_texture *tr_tex = trace_texture(_texture);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_texture *texture = tr_tex->texture;
    struct pipe_surface *result = NULL;
@@ -304,8 +304,7 @@ static void
 trace_screen_tex_surface_destroy(struct pipe_surface *_surface)
 {
    struct trace_screen *tr_scr = trace_screen(_surface->texture->screen);
-   struct trace_texture *tr_tex = trace_texture(tr_scr, _surface->texture);
-   struct trace_surface *tr_surf = trace_surface(tr_tex, _surface);
+   struct trace_surface *tr_surf = trace_surface(_surface);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_surface *surface = tr_surf->surface;
 
@@ -316,7 +315,7 @@ trace_screen_tex_surface_destroy(struct pipe_surface *_surface)
 
    trace_dump_call_end();
 
-   trace_surface_destroy(tr_tex, _surface);
+   trace_surface_destroy(tr_surf);
 }
 
 
@@ -334,7 +333,7 @@ trace_screen_get_tex_transfer(struct pipe_screen *_screen,
                               unsigned x, unsigned y, unsigned w, unsigned h)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
-   struct trace_texture *tr_tex = trace_texture(tr_scr, _texture);
+   struct trace_texture *tr_tex = trace_texture(_texture);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_texture *texture = tr_tex->texture;
    struct pipe_transfer *result = NULL;
@@ -372,10 +371,9 @@ static void
 trace_screen_tex_transfer_destroy(struct pipe_transfer *_transfer)
 {
    struct trace_screen *tr_scr = trace_screen(_transfer->texture->screen);
-   struct trace_texture *tr_tex = trace_texture(tr_scr, _transfer->texture);
-   struct trace_transfer *tr_tran = trace_transfer(tr_tex, _transfer);
+   struct trace_transfer *tr_trans = trace_transfer(_transfer);
    struct pipe_screen *screen = tr_scr->screen;
-   struct pipe_transfer *transfer = tr_tran->transfer;
+   struct pipe_transfer *transfer = tr_trans->transfer;
 
    trace_dump_call_begin("pipe_screen", "tex_transfer_destroy");
 
@@ -384,7 +382,7 @@ trace_screen_tex_transfer_destroy(struct pipe_transfer *_transfer)
 
    trace_dump_call_end();
 
-   trace_transfer_destroy(tr_tex, _transfer);
+   trace_transfer_destroy(tr_trans);
 }
 
 
@@ -393,8 +391,7 @@ trace_screen_transfer_map(struct pipe_screen *_screen,
                           struct pipe_transfer *_transfer)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
-   struct trace_texture *tr_tex = trace_texture(tr_scr, _transfer->texture);
-   struct trace_transfer *tr_trans = trace_transfer(tr_tex, _transfer);
+   struct trace_transfer *tr_trans = trace_transfer(_transfer);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_transfer *transfer = tr_trans->transfer;
    void *map;
@@ -416,8 +413,7 @@ trace_screen_transfer_unmap(struct pipe_screen *_screen,
                            struct pipe_transfer *_transfer)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
-   struct trace_texture *tr_tex = trace_texture(tr_scr, _transfer->texture);
-   struct trace_transfer *tr_trans = trace_transfer(tr_tex, _transfer);
+   struct trace_transfer *tr_trans = trace_transfer(_transfer);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_transfer *transfer = tr_trans->transfer;
 
@@ -608,7 +604,7 @@ trace_screen_buffer_map(struct pipe_screen *_screen,
                         unsigned usage)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
-   struct trace_buffer *tr_buf = trace_buffer(tr_scr, _buffer);
+   struct trace_buffer *tr_buf = trace_buffer(_buffer);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_buffer *buffer = tr_buf->buffer;
    void *map;
@@ -633,7 +629,7 @@ trace_screen_buffer_map_range(struct pipe_screen *_screen,
                               unsigned usage)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
-   struct trace_buffer *tr_buf = trace_buffer(tr_scr, _buffer);
+   struct trace_buffer *tr_buf = trace_buffer(_buffer);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_buffer *buffer = tr_buf->buffer;
    void *map;
@@ -685,7 +681,7 @@ trace_screen_buffer_flush_mapped_range(struct pipe_screen *_screen,
                                        unsigned length)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
-   struct trace_buffer *tr_buf = trace_buffer(tr_scr, _buffer);
+   struct trace_buffer *tr_buf = trace_buffer(_buffer);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_buffer *buffer = tr_buf->buffer;
 
@@ -701,7 +697,7 @@ trace_screen_buffer_unmap(struct pipe_screen *_screen,
                           struct pipe_buffer *_buffer)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
-   struct trace_buffer *tr_buf = trace_buffer(tr_scr, _buffer);
+   struct trace_buffer *tr_buf = trace_buffer(_buffer);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_buffer *buffer = tr_buf->buffer;
 
@@ -717,7 +713,7 @@ static void
 trace_screen_buffer_destroy(struct pipe_buffer *_buffer)
 {
    struct trace_screen *tr_scr = trace_screen(_buffer->screen);
-   struct trace_buffer *tr_buf = trace_buffer(tr_scr, _buffer);
+   struct trace_buffer *tr_buf = trace_buffer(_buffer);
    struct pipe_screen *screen = tr_scr->screen;
    struct pipe_buffer *buffer = tr_buf->buffer;
 
@@ -739,19 +735,23 @@ trace_screen_buffer_destroy(struct pipe_buffer *_buffer)
 
 static void
 trace_screen_fence_reference(struct pipe_screen *_screen,
-                             struct pipe_fence_handle **dst,
+                             struct pipe_fence_handle **pdst,
                              struct pipe_fence_handle *src)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
    struct pipe_screen *screen = tr_scr->screen;
+   struct pipe_fence_handle *dst;
 
+   assert(pdst);
+   dst = *pdst;
+   
    trace_dump_call_begin("pipe_screen", "fence_reference");
 
    trace_dump_arg(ptr, screen);
    trace_dump_arg(ptr, dst);
    trace_dump_arg(ptr, src);
 
-   screen->fence_reference(screen, dst, src);
+   screen->fence_reference(screen, pdst, src);
 
    trace_dump_call_end();
 }
@@ -760,7 +760,7 @@ trace_screen_fence_reference(struct pipe_screen *_screen,
 static int
 trace_screen_fence_signalled(struct pipe_screen *_screen,
                              struct pipe_fence_handle *fence,
-                             unsigned flag)
+                             unsigned flags)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
    struct pipe_screen *screen = tr_scr->screen;
@@ -770,9 +770,9 @@ trace_screen_fence_signalled(struct pipe_screen *_screen,
 
    trace_dump_arg(ptr, screen);
    trace_dump_arg(ptr, fence);
-   trace_dump_arg(uint, flag);
+   trace_dump_arg(uint, flags);
 
-   result = screen->fence_signalled(screen, fence, flag);
+   result = screen->fence_signalled(screen, fence, flags);
 
    trace_dump_ret(int, result);
 
@@ -785,7 +785,7 @@ trace_screen_fence_signalled(struct pipe_screen *_screen,
 static int
 trace_screen_fence_finish(struct pipe_screen *_screen,
                           struct pipe_fence_handle *fence,
-                          unsigned flag)
+                          unsigned flags)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
    struct pipe_screen *screen = tr_scr->screen;
@@ -795,9 +795,9 @@ trace_screen_fence_finish(struct pipe_screen *_screen,
 
    trace_dump_arg(ptr, screen);
    trace_dump_arg(ptr, fence);
-   trace_dump_arg(uint, flag);
+   trace_dump_arg(uint, flags);
 
-   result = screen->fence_finish(screen, fence, flag);
+   result = screen->fence_finish(screen, fence, flags);
 
    trace_dump_ret(int, result);
 
@@ -840,8 +840,12 @@ trace_screen_create(struct pipe_screen *screen)
    if(!screen)
       goto error1;
 
+   trace_dump_init();
+
    if(!trace_dump_trace_begin())
       goto error1;
+
+   trace_dumping_start();
 
    trace_dump_call_begin("", "pipe_screen_create");
 
@@ -856,6 +860,12 @@ trace_screen_create(struct pipe_screen *screen)
 #else
    winsys = screen->winsys;
 #endif
+   pipe_mutex_init(tr_scr->list_mutex);
+   make_empty_list(&tr_scr->buffers);
+   make_empty_list(&tr_scr->contexts);
+   make_empty_list(&tr_scr->textures);
+   make_empty_list(&tr_scr->surfaces);
+   make_empty_list(&tr_scr->transfers);
 
    tr_scr->base.winsys = winsys;
    tr_scr->base.destroy = trace_screen_destroy;

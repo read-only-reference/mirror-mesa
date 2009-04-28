@@ -242,8 +242,8 @@ struct brw_wm_compile {
 
    /** Mapping from Mesa registers to hardware registers */
    struct {
-	GLboolean inited;
-	struct brw_reg reg;
+      GLboolean inited;
+      struct brw_reg reg;
    } wm_regs[PROGRAM_PAYLOAD+1][256][4];
 
    struct brw_reg stack;
@@ -253,6 +253,12 @@ struct brw_wm_compile {
    GLuint tmp_index;
    GLuint tmp_max;
    GLuint subroutines[BRW_WM_MAX_SUBROUTINE];
+
+   /** we may need up to 3 constants per instruction (if use_const_buffer) */
+   struct {
+      GLint index;
+      struct brw_reg reg;
+   } current_const[3];
 };
 
 

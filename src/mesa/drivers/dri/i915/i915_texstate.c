@@ -132,7 +132,8 @@ i915_update_tex_unit(struct intel_context *intel, GLuint unit, GLuint ss3)
    struct intel_texture_object *intelObj = intel_texture_object(tObj);
    struct gl_texture_image *firstImage;
    GLuint *state = i915->state.Tex[unit], format, pitch;
-   GLint lodbias;
+   GLint lodbias, aniso = 0;
+   GLubyte border[4];
 
    memset(state, 0, sizeof(state));
 
@@ -229,6 +230,10 @@ i915_update_tex_unit(struct intel_context *intel, GLuint unit, GLuint ss3)
       if (tObj->MaxAnisotropy > 1.0) {
          minFilt = FILTER_ANISOTROPIC;
          magFilt = FILTER_ANISOTROPIC;
+         if (tObj->MaxAnisotropy > 2.0)
+            aniso = SS2_MAX_ANISO_4;
+         else
+            aniso = SS2_MAX_ANISO_2;
       }
       else {
          switch (tObj->MagFilter) {
@@ -274,7 +279,8 @@ i915_update_tex_unit(struct intel_context *intel, GLuint unit, GLuint ss3)
 
       state[I915_TEXREG_SS2] |= ((minFilt << SS2_MIN_FILTER_SHIFT) |
                                  (mipFilt << SS2_MIP_FILTER_SHIFT) |
-                                 (magFilt << SS2_MAG_FILTER_SHIFT));
+                                 (magFilt << SS2_MAG_FILTER_SHIFT) |
+                                 aniso);
    }
 
    {
@@ -318,21 +324,26 @@ i915_update_tex_unit(struct intel_context *intel, GLuint unit, GLuint ss3)
       state[I915_TEXREG_SS3] |= (unit << SS3_TEXTUREMAP_INDEX_SHIFT);
    }
 
+   /* convert border color from float to ubyte */
+   CLAMPED_FLOAT_TO_UBYTE(border[0], tObj->BorderColor[0]);
+   CLAMPED_FLOAT_TO_UBYTE(border[1], tObj->BorderColor[1]);
+   CLAMPED_FLOAT_TO_UBYTE(border[2], tObj->BorderColor[2]);
+   CLAMPED_FLOAT_TO_UBYTE(border[3], tObj->BorderColor[3]);
 
    if (firstImage->_BaseFormat == GL_DEPTH_COMPONENT) {
       /* GL specs that border color for depth textures is taken from the
        * R channel, while the hardware uses A.  Spam R into all the channels
        * for safety.
        */
-      state[I915_TEXREG_SS4] = INTEL_PACKCOLOR8888(tObj->_BorderChan[0],
-						   tObj->_BorderChan[0],
-						   tObj->_BorderChan[0],
-						   tObj->_BorderChan[0]);
+      state[I915_TEXREG_SS4] = INTEL_PACKCOLOR8888(border[0],
+						   border[0],
+						   border[0],
+						   border[0]);
    } else {
-      state[I915_TEXREG_SS4] = INTEL_PACKCOLOR8888(tObj->_BorderChan[0],
-						   tObj->_BorderChan[1],
-						   tObj->_BorderChan[2],
-						   tObj->_BorderChan[3]);
+      state[I915_TEXREG_SS4] = INTEL_PACKCOLOR8888(border[0],
+						   border[1],
+						   border[2],
+						   border[3]);
    }
 
 
