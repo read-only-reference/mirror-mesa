@@ -1557,6 +1557,9 @@ struct gl_array_object
    /** Name of the array object as received from glGenVertexArrayAPPLE. */
    GLuint Name;
 
+   GLint RefCount;
+   _glthread_Mutex Mutex;
+
    /** Conventional vertex arrays */
    /*@{*/
    struct gl_client_array Vertex;
@@ -2976,6 +2979,12 @@ struct __GLcontextRec
 
    /** software compression/decompression supported or not */
    GLboolean Mesa_DXTn;
+
+   /** 
+    * Use dp4 (rather than mul/mad) instructions for position
+    * transformation?
+    */
+   GLboolean mvp_with_dp4;
 
    /** Core tnl module support */
    struct gl_tnl_module TnlModule;

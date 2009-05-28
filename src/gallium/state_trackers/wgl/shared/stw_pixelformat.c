@@ -25,12 +25,14 @@
  * 
  **************************************************************************/
 
+#include "main/mtypes.h"
+#include "main/context.h"
+
 #include "pipe/p_format.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_screen.h"
 
 #include "util/u_debug.h"
-#include "util/u_memory.h"
 
 #include "stw_device.h"
 #include "stw_pixelformat.h"
@@ -119,6 +121,7 @@ stw_pixelformat_add(
    struct stw_device *stw_dev,
    const struct stw_pf_color_info *color,
    const struct stw_pf_depth_info *depth,
+   unsigned accum,
    boolean doublebuffer,
    unsigned samples )
 {
@@ -158,7 +161,7 @@ stw_pixelformat_add(
    
    pfi->pfd.iPixelType = PFD_TYPE_RGBA;
 
-   pfi->pfd.cColorBits = color->bits.red + color->bits.green + color->bits.blue;
+   pfi->pfd.cColorBits = color->bits.red + color->bits.green + color->bits.blue + color->bits.alpha;
    pfi->pfd.cRedBits = color->bits.red;
    pfi->pfd.cRedShift = color->shift.red;
    pfi->pfd.cGreenBits = color->bits.green;
@@ -167,11 +170,11 @@ stw_pixelformat_add(
    pfi->pfd.cBlueShift = color->shift.blue;
    pfi->pfd.cAlphaBits = color->bits.alpha;
    pfi->pfd.cAlphaShift = color->shift.alpha;
-   pfi->pfd.cAccumBits = 0;
-   pfi->pfd.cAccumRedBits = 0;
-   pfi->pfd.cAccumGreenBits = 0;
-   pfi->pfd.cAccumBlueBits = 0;
-   pfi->pfd.cAccumAlphaBits = 0;
+   pfi->pfd.cAccumBits = 4*accum;
+   pfi->pfd.cAccumRedBits = accum;
+   pfi->pfd.cAccumGreenBits = accum;
+   pfi->pfd.cAccumBlueBits = accum;
+   pfi->pfd.cAccumAlphaBits = accum;
    pfi->pfd.cDepthBits = depth->bits.depth;
    pfi->pfd.cStencilBits = depth->bits.stencil;
    pfi->pfd.cAuxBuffers = 0;
@@ -228,7 +231,8 @@ stw_pixelformat_init( void )
                                                PIPE_TEXTURE_USAGE_DEPTH_STENCIL, 0))
                   continue;
 
-               stw_pixelformat_add( stw_dev, color, depth, doublebuffer, samples );
+               stw_pixelformat_add( stw_dev, color, depth,  0, doublebuffer, samples );
+               stw_pixelformat_add( stw_dev, color, depth, 16, doublebuffer, samples );
             }
          }
       }
@@ -256,6 +260,31 @@ stw_pixelformat_get_info( uint index )
    assert( index < stw_dev->pixelformat_extended_count );
 
    return &stw_dev->pixelformats[index];
+}
+
+
+void
+stw_pixelformat_visual(GLvisual *visual, 
+                       const struct stw_pixelformat_info *pfi )
+{
+   memset(visual, 0, sizeof *visual);
+   _mesa_initialize_visual(
+      visual,
+      (pfi->pfd.iPixelType == PFD_TYPE_RGBA) ? GL_TRUE : GL_FALSE,
+      (pfi->pfd.dwFlags & PFD_DOUBLEBUFFER) ? GL_TRUE : GL_FALSE,
+      (pfi->pfd.dwFlags & PFD_STEREO) ? GL_TRUE : GL_FALSE,
+      pfi->pfd.cRedBits,
+      pfi->pfd.cGreenBits,
+      pfi->pfd.cBlueBits,
+      pfi->pfd.cAlphaBits,
+      (pfi->pfd.iPixelType == PFD_TYPE_COLORINDEX) ? pfi->pfd.cColorBits : 0,
+      pfi->pfd.cDepthBits,
+      pfi->pfd.cStencilBits,
+      pfi->pfd.cAccumRedBits,
+      pfi->pfd.cAccumGreenBits,
+      pfi->pfd.cAccumBlueBits,
+      pfi->pfd.cAccumAlphaBits,
+      pfi->numSamples );
 }
 
 
@@ -338,40 +367,4 @@ int stw_pixelformat_choose( HDC hdc,
       return 0;
 
    return bestindex + 1;
-}
-
-
-int
-stw_pixelformat_get(
-   HDC hdc )
-{
-   return stw_tls_get_data()->currentPixelFormat;
-}
-
-
-BOOL
-stw_pixelformat_set(
-   HDC hdc,
-   int iPixelFormat )
-{
-   uint count;
-   uint index;
-
-   (void) hdc;
-
-   index = (uint) iPixelFormat - 1;
-   count = stw_pixelformat_get_extended_count();
-   if (index >= count)
-      return FALSE;
-
-   stw_tls_get_data()->currentPixelFormat = iPixelFormat;
-
-   /* Some applications mistakenly use the undocumented wglSetPixelFormat 
-    * function instead of SetPixelFormat, so we call SetPixelFormat here to 
-    * avoid opengl32.dll's wglCreateContext to fail */
-   if (GetPixelFormat(hdc) == 0) {
-        SetPixelFormat(hdc, iPixelFormat, NULL);
-   }
-   
-   return TRUE;
 }

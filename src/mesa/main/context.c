@@ -1005,10 +1005,11 @@ _mesa_free_context_data( GLcontext *ctx )
    _mesa_free_query_data(ctx);
 #endif
 
+   _mesa_delete_array_object(ctx, ctx->Array.DefaultArrayObj);
+
 #if FEATURE_ARB_vertex_buffer_object
    _mesa_delete_buffer_object(ctx, ctx->Array.NullBufferObj);
 #endif
-   _mesa_delete_array_object(ctx, ctx->Array.DefaultArrayObj);
 
    /* free dispatch tables */
    _mesa_free(ctx->Exec);
@@ -1258,7 +1259,7 @@ initialize_framebuffer_size(GLcontext *ctx, GLframebuffer *fb)
  * \param drawBuffer  the drawing framebuffer
  * \param readBuffer  the reading framebuffer
  */
-void
+GLboolean
 _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
                     GLframebuffer *readBuffer )
 {
@@ -1271,14 +1272,14 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
       if (!check_compatible(newCtx, drawBuffer)) {
          _mesa_warning(newCtx,
               "MakeCurrent: incompatible visuals for context and drawbuffer");
-         return;
+         return GL_FALSE;
       }
    }
    if (newCtx && readBuffer && newCtx->WinSysReadBuffer != readBuffer) {
       if (!check_compatible(newCtx, readBuffer)) {
          _mesa_warning(newCtx,
               "MakeCurrent: incompatible visuals for context and readbuffer");
-         return;
+         return GL_FALSE;
       }
    }
 
@@ -1383,6 +1384,8 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
 	 newCtx->FirstTimeCurrent = GL_FALSE;
       }
    }
+   
+   return GL_TRUE;
 }
 
 
@@ -1397,14 +1400,21 @@ _mesa_share_state(GLcontext *ctx, GLcontext *ctxToShare)
 {
    if (ctx && ctxToShare && ctx->Shared && ctxToShare->Shared) {
       struct gl_shared_state *oldSharedState = ctx->Shared;
+      GLint RefCount;
 
       ctx->Shared = ctxToShare->Shared;
+      
+      _glthread_LOCK_MUTEX(ctx->Shared->Mutex);
       ctx->Shared->RefCount++;
+      _glthread_UNLOCK_MUTEX(ctx->Shared->Mutex);
 
       update_default_objects(ctx);
 
-      oldSharedState->RefCount--;
-      if (oldSharedState->RefCount == 0) {
+      _glthread_LOCK_MUTEX(oldSharedState->Mutex);
+      RefCount = --oldSharedState->RefCount;
+      _glthread_UNLOCK_MUTEX(oldSharedState->Mutex);
+
+      if (RefCount == 0) {
          _mesa_free_shared_state(ctx, oldSharedState);
       }
 
@@ -1519,6 +1529,19 @@ _mesa_Flush(void)
    if (ctx->Driver.Flush) {
       ctx->Driver.Flush(ctx);
    }
+}
+
+
+/**
+ * Set mvp_with_dp4 flag.  If a driver has a preference for DP4 over
+ * MUL/MAD, or vice versa, call this function to register that.
+ * Otherwise we default to MUL/MAD.
+ */
+void
+_mesa_set_mvp_with_dp4( GLcontext *ctx,
+                        GLboolean flag )
+{
+   ctx->mvp_with_dp4 = flag;
 }
 
 
