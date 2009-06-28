@@ -75,7 +75,11 @@ file_string(gl_register_file f, gl_prog_print_mode mode)
    case PROGRAM_UNDEFINED:
       return "UNDEFINED";
    default:
-      return "Unknown program file!";
+      {
+         static char s[20];
+         _mesa_snprintf(s, sizeof(s), "FILE%u", f);
+         return s;
+      }
    }
 }
 
@@ -736,7 +740,10 @@ _mesa_fprint_instruction_opt(FILE *f,
                                 mode, prog);
       }
       else {
-         _mesa_fprintf(f, "Other opcode %d\n", inst->Opcode);
+         fprint_alu_instruction(f, inst,
+                                _mesa_opcode_string(inst->Opcode),
+                                3/*_mesa_num_inst_src_regs(inst->Opcode)*/,
+                                mode, prog);
       }
       break;
    }
@@ -940,6 +947,10 @@ _mesa_write_shader_to_file(const struct gl_shader *shader)
       fprintf(f, "/* GPU code */\n");
       fprintf(f, "/*\n");
       _mesa_fprint_program_opt(f, shader->Program, PROG_PRINT_DEBUG, GL_TRUE);
+      fprintf(f, "*/\n");
+      fprintf(f, "/* Parameters / constants */\n");
+      fprintf(f, "/*\n");
+      _mesa_fprint_parameter_list(f, shader->Program->Parameters);
       fprintf(f, "*/\n");
    }
 

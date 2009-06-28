@@ -63,6 +63,11 @@ struct r300_rs_state {
     /* Draw-specific rasterizer state */
     struct pipe_rasterizer_state rs;
 
+    /* Whether or not to enable the VTE. This is referenced at the very
+     * last moment during emission of VTE state, to decide whether or not
+     * the VTE should be used for transformation. */
+    boolean enable_vte;
+
     uint32_t vap_control_status;    /* R300_VAP_CNTL_STATUS: 0x2140 */
     uint32_t point_size;            /* R300_GA_POINT_SIZE: 0x421c */
     uint32_t point_minmax;          /* R300_GA_POINT_MINMAX: 0x4230 */
@@ -112,23 +117,24 @@ struct r300_viewport_state {
     uint32_t vte_control; /* R300_VAP_VTE_CNTL:      0x20b0 */
 };
 
-#define R300_NEW_BLEND           0x0000001
-#define R300_NEW_BLEND_COLOR     0x0000002
-#define R300_NEW_CONSTANTS       0x0000004
-#define R300_NEW_DSA             0x0000008
-#define R300_NEW_FRAMEBUFFERS    0x0000010
-#define R300_NEW_FRAGMENT_SHADER 0x0000020
-#define R300_NEW_RASTERIZER      0x0000040
-#define R300_NEW_RS_BLOCK        0x0000080
-#define R300_NEW_SAMPLER         0x0000100
-#define R300_ANY_NEW_SAMPLERS    0x000ff00
-#define R300_NEW_SCISSOR         0x0010000
-#define R300_NEW_TEXTURE         0x0020000
-#define R300_ANY_NEW_TEXTURES    0x1fe0000
-#define R300_NEW_VERTEX_FORMAT   0x2000000
-#define R300_NEW_VERTEX_SHADER   0x4000000
-#define R300_NEW_VIEWPORT        0x8000000
-#define R300_NEW_KITCHEN_SINK    0xfffffff
+#define R300_NEW_BLEND           0x00000001
+#define R300_NEW_BLEND_COLOR     0x00000002
+#define R300_NEW_CLIP            0x00000004
+#define R300_NEW_CONSTANTS       0x00000008
+#define R300_NEW_DSA             0x00000010
+#define R300_NEW_FRAMEBUFFERS    0x00000020
+#define R300_NEW_FRAGMENT_SHADER 0x00000040
+#define R300_NEW_RASTERIZER      0x00000080
+#define R300_NEW_RS_BLOCK        0x00000100
+#define R300_NEW_SAMPLER         0x00000200
+#define R300_ANY_NEW_SAMPLERS    0x0001fe00
+#define R300_NEW_SCISSOR         0x00020000
+#define R300_NEW_TEXTURE         0x00040000
+#define R300_ANY_NEW_TEXTURES    0x03fc0000
+#define R300_NEW_VERTEX_FORMAT   0x04000000
+#define R300_NEW_VERTEX_SHADER   0x08000000
+#define R300_NEW_VIEWPORT        0x10000000
+#define R300_NEW_KITCHEN_SINK    0x1fffffff
 
 /* The next several objects are not pure Radeon state; they inherit from
  * various Gallium classes. */
@@ -136,14 +142,14 @@ struct r300_viewport_state {
 struct r300_constant_buffer {
     /* Buffer of constants */
     /* XXX first number should be raised */
-    float constants[8][4];
+    float constants[32][4];
     /* Number of user-defined constants */
-    int user_count;
+    unsigned user_count;
     /* Total number of constants */
-    int count;
+    unsigned count;
 };
 
-struct r3xx_fragment_shader {
+struct r300_fragment_shader {
     /* Parent class */
     struct pipe_shader_state state;
     struct tgsi_shader_info info;
@@ -153,11 +159,15 @@ struct r3xx_fragment_shader {
 
     /* Pixel stack size */
     int stack_size;
+
+    /* Are there immediates in this shader?
+     * If not, we can heavily optimize recompilation. */
+    boolean uses_imms;
 };
 
-struct r300_fragment_shader {
+struct r3xx_fragment_shader {
     /* Parent class */
-    struct r3xx_fragment_shader shader;
+    struct r300_fragment_shader shader;
 
     /* Number of ALU instructions */
     int alu_instruction_count;
@@ -180,9 +190,9 @@ struct r300_fragment_shader {
     } instructions[64]; /* XXX magic num */
 };
 
-struct r500_fragment_shader {
+struct r5xx_fragment_shader {
     /* Parent class */
-    struct r3xx_fragment_shader shader;
+    struct r300_fragment_shader shader;
 
     /* Number of used instructions */
     int instruction_count;
@@ -243,6 +253,10 @@ struct r300_vertex_shader {
     /* Has this shader been translated yet? */
     boolean translated;
 
+    /* Are there immediates in this shader?
+     * If not, we can heavily optimize recompilation. */
+    boolean uses_imms;
+
     /* Number of used instructions */
     int instruction_count;
 
@@ -255,6 +269,11 @@ struct r300_vertex_shader {
     } instructions[128]; /*< XXX magic number */
 };
 
+static struct pipe_viewport_state r300_viewport_identity = {
+    .scale = {1.0, 1.0, 1.0, 1.0},
+    .translate = {0.0, 0.0, 0.0, 0.0},
+};
+
 struct r300_context {
     /* Parent class */
     struct pipe_context context;
@@ -264,17 +283,24 @@ struct r300_context {
     /* Draw module. Used mostly for SW TCL. */
     struct draw_context* draw;
 
+    /* Vertex buffer for rendering. */
+    struct pipe_buffer* vbo;
+    /* Offset into the VBO. */
+    size_t vbo_offset;
+
     /* Various CSO state objects. */
     /* Blend state. */
     struct r300_blend_state* blend_state;
     /* Blend color state. */
     struct r300_blend_color_state* blend_color_state;
+    /* User clip planes. */
+    struct pipe_clip_state clip_state;
     /* Shader constants. */
     struct r300_constant_buffer shader_constants[PIPE_SHADER_TYPES];
     /* Depth, stencil, and alpha state. */
     struct r300_dsa_state* dsa_state;
     /* Fragment shader. */
-    struct r3xx_fragment_shader* fs;
+    struct r300_fragment_shader* fs;
     /* Framebuffer state. We currently don't need our own version of this. */
     struct pipe_framebuffer_state framebuffer_state;
     /* Rasterizer state. */
@@ -289,7 +315,7 @@ struct r300_context {
     /* Texture states. */
     struct r300_texture* textures[8];
     int texture_count;
-    /* Vertex buffers. */
+    /* Vertex buffers for Gallium. */
     struct pipe_vertex_buffer vertex_buffers[PIPE_MAX_ATTRIBS];
     int vertex_buffer_count;
     /* Vertex information. */

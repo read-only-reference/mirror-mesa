@@ -182,6 +182,8 @@ _mesa_sizeof_type( GLenum type )
 	 return sizeof(GLint);
       case GL_FLOAT:
 	 return sizeof(GLfloat);
+      case GL_DOUBLE:
+	 return sizeof(GLdouble);
       case GL_HALF_FLOAT_ARB:
 	 return sizeof(GLhalfARB);
       default:
@@ -2872,7 +2874,7 @@ extract_uint_indexes(GLuint n, GLuint indexes[],
             }
             else {
                for (i = 0; i < n; i++)
-                  indexes[i] = s[i] & 0xfff;  /* lower 8 bits */
+                  indexes[i] = s[i] & 0xff;  /* lower 8 bits */
             }
          }
          break;

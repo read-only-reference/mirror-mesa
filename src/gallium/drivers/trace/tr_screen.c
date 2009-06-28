@@ -30,12 +30,14 @@
 
 #include "tr_buffer.h"
 #include "tr_dump.h"
-#include "tr_state.h"
+#include "tr_dump_state.h"
 #include "tr_texture.h"
 #include "tr_screen.h"
 
 #include "pipe/p_inlines.h"
 
+
+static boolean trace = FALSE;
 
 static const char *
 trace_screen_get_name(struct pipe_screen *_screen)
@@ -212,10 +214,12 @@ static struct pipe_texture *
 trace_screen_texture_blanket(struct pipe_screen *_screen,
                              const struct pipe_texture *templat,
                              const unsigned *ppitch,
-                             struct pipe_buffer *buffer)
+                             struct pipe_buffer *_buffer)
 {
    struct trace_screen *tr_scr = trace_screen(_screen);
+   struct trace_buffer *tr_buf = trace_buffer(_buffer);
    struct pipe_screen *screen = tr_scr->screen;
+   struct pipe_buffer *buffer = tr_buf->buffer;
    unsigned pitch = *ppitch;
    struct pipe_texture *result;
 
@@ -818,34 +822,48 @@ trace_screen_destroy(struct pipe_screen *_screen)
    struct pipe_screen *screen = tr_scr->screen;
 
    trace_dump_call_begin("pipe_screen", "destroy");
-
    trace_dump_arg(ptr, screen);
+   trace_dump_call_end();
+   trace_dump_trace_end();
+
+   if (tr_scr->rbug)
+      trace_rbug_stop(tr_scr->rbug);
 
    screen->destroy(screen);
-
-   trace_dump_call_end();
-
-   trace_dump_trace_end();
 
    FREE(tr_scr);
 }
 
+boolean
+trace_enabled(void)
+{
+   return trace;
+}
 
 struct pipe_screen *
 trace_screen_create(struct pipe_screen *screen)
 {
    struct trace_screen *tr_scr;
    struct pipe_winsys *winsys;
+   boolean rbug = FALSE;
 
    if(!screen)
       goto error1;
 
    trace_dump_init();
 
-   if(!trace_dump_trace_begin())
-      goto error1;
+   if(trace_dump_trace_begin()) {
+      trace_dumping_start();
+      trace = TRUE;
+   }
 
-   trace_dumping_start();
+   if (debug_get_bool_option("GALLIUM_RBUG", FALSE)) {
+      trace = TRUE;
+      rbug = TRUE;
+   }
+
+   if (!trace)
+      goto error1;
 
    trace_dump_call_begin("", "pipe_screen_create");
 
@@ -903,6 +921,9 @@ trace_screen_create(struct pipe_screen *screen)
 
    trace_dump_ret(ptr, screen);
    trace_dump_call_end();
+
+   if (rbug)
+      tr_scr->rbug = trace_rbug_start(tr_scr);
 
    return &tr_scr->base;
 

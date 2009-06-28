@@ -146,6 +146,13 @@ static void do_wm_prog( struct brw_context *brw,
    if (c == NULL) {
       brw->wm.compile_data = calloc(1, sizeof(*brw->wm.compile_data));
       c = brw->wm.compile_data;
+      if (c == NULL) {
+         /* Ouch - big out of memory problem.  Can't continue
+          * without triggering a segfault, no way to signal,
+          * so just return.
+          */
+         return;
+      }
    } else {
       memset(c, 0, sizeof(*brw->wm.compile_data));
    }
@@ -260,10 +267,13 @@ static void brw_wm_populate_key( struct brw_context *brw,
 
 
    /* BRW_NEW_WM_INPUT_DIMENSIONS */
-   key->projtex_mask = brw->wm.input_size_masks[4-1] >> (FRAG_ATTRIB_TEX0 - FRAG_ATTRIB_WPOS); 
+   key->proj_attrib_mask = brw->wm.input_size_masks[4-1];
 
    /* _NEW_LIGHT */
    key->flat_shade = (ctx->Light.ShadeModel == GL_FLAT);
+
+   /* _NEW_HINT */
+   key->linear_color = (ctx->Hint.PerspectiveCorrection == GL_FASTEST);
 
    /* _NEW_TEXTURE */
    for (i = 0; i < BRW_MAX_TEX_UNIT; i++) {
@@ -312,6 +322,9 @@ static void brw_wm_populate_key( struct brw_context *brw,
       key->drawable_height = brw->intel.driDrawable->h;
    }
 
+   /* CACHE_NEW_VS_PROG */
+   key->vp_outputs_written = brw->vs.prog_data->outputs_written & DO_SETUP_BITS;
+
    /* The unique fragment program ID */
    key->program_string_id = fp->id;
 }
@@ -341,6 +354,7 @@ const struct brw_tracked_state brw_wm_prog = {
    .dirty = {
       .mesa  = (_NEW_COLOR |
 		_NEW_DEPTH |
+                _NEW_HINT |
 		_NEW_STENCIL |
 		_NEW_POLYGON |
 		_NEW_LINE |
@@ -350,7 +364,7 @@ const struct brw_tracked_state brw_wm_prog = {
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
 		BRW_NEW_WM_INPUT_DIMENSIONS |
 		BRW_NEW_REDUCED_PRIMITIVE),
-      .cache = 0
+      .cache = CACHE_NEW_VS_PROG,
    },
    .prepare = brw_prepare_wm_prog
 };

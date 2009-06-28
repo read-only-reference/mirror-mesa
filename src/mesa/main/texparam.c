@@ -469,8 +469,10 @@ set_tex_parameterf(GLcontext *ctx,
          return GL_TRUE;
       }
       else {
-         _mesa_error(ctx, GL_INVALID_ENUM,
-                     "glTexParameter(pname=GL_TEXTURE_MAX_ANISOTROPY_EXT)");
+         static GLuint count = 0;
+         if (count++ < 10)
+            _mesa_error(ctx, GL_INVALID_ENUM,
+                        "glTexParameter(pname=GL_TEXTURE_MAX_ANISOTROPY_EXT)");
       }
       return GL_FALSE;
 
@@ -880,7 +882,8 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
                         "glGetTexLevelParameter[if]v(pname)");
          break;
       case GL_TEXTURE_STENCIL_SIZE_EXT:
-         if (ctx->Extensions.EXT_packed_depth_stencil) {
+         if (ctx->Extensions.EXT_packed_depth_stencil ||
+             ctx->Extensions.ARB_framebuffer_object) {
             *params = img->TexFormat->StencilBits;
          }
          else {

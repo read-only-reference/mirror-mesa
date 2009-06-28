@@ -131,6 +131,7 @@ struct brw_context;
 #define BRW_NEW_WM_INPUT_DIMENSIONS     0x100
 #define BRW_NEW_INPUT_VARYING           0x200
 #define BRW_NEW_PSP                     0x800
+#define BRW_NEW_WM_SURFACES		0x1000
 #define BRW_NEW_FENCE                   0x2000
 #define BRW_NEW_INDICES			0x4000
 #define BRW_NEW_VERTICES		0x8000
@@ -450,8 +451,6 @@ struct brw_context
 
    struct {
       struct brw_state_flags dirty;
-      struct brw_tracked_state **atoms;
-      GLuint nr_atoms;
 
       GLuint nr_color_regions;
       struct intel_region *color_regions[MAX_DRAW_BUFFERS];
@@ -471,7 +470,8 @@ struct brw_context
       int validated_bo_count;
    } state;
 
-   struct brw_cache cache;
+   struct brw_cache cache;  /** non-surface items */
+   struct brw_cache surface_cache;  /* surface items */
    struct brw_cached_batch_item *cached_batch_items;
 
    struct {
@@ -555,11 +555,6 @@ struct brw_context
       GLuint vs_size;
       GLuint total_size;
 
-      /* Dynamic tracker which changes to reflect the state referenced
-       * by active fp and vp program parameters:
-       */
-      struct brw_tracked_state tracked_state;
-
       dri_bo *curbe_bo;
       /** Offset within curbe_bo of space for current curbe entry */
       GLuint curbe_offset;
@@ -616,9 +611,10 @@ struct brw_context
       struct brw_wm_prog_data *prog_data;
       struct brw_wm_compile *compile_data;
 
-      /* Input sizes, calculated from active vertex program:
+      /** Input sizes, calculated from active vertex program.
+       * One bit per fragment program input attribute.
        */
-      GLuint input_size_masks[4];
+      GLbitfield input_size_masks[4];
 
       /** Array of surface default colors (texture border color) */
       dri_bo *sdc_bo[BRW_MAX_TEX_UNIT];

@@ -45,9 +45,6 @@ struct r300_winsys {
     /* PCI ID */
     uint32_t pci_id;
 
-    /* GB pipe count */
-    uint32_t gb_pipes;
-
     /* GART size. */
     uint32_t gart_size;
 
@@ -55,10 +52,10 @@ struct r300_winsys {
     uint32_t vram_size;
 
     /* Add a pipe_buffer to the list of buffer objects to validate. */
-    void (*add_buffer)(struct r300_winsys* winsys,
-                       struct pipe_buffer* pbuffer,
-                       uint32_t rd,
-                       uint32_t wd);
+    boolean (*add_buffer)(struct r300_winsys* winsys,
+                          struct pipe_buffer* pbuffer,
+                          uint32_t rd,
+                          uint32_t wd);
 
     /* Revalidate all currently setup pipe_buffers.
      * Returns TRUE if a flush is required. */

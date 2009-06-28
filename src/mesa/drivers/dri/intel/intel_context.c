@@ -71,6 +71,8 @@ int INTEL_DEBUG = (0);
 #define DRIVER_DATE_GEM                 "GEM " DRIVER_DATE
 
 
+static void intel_flush(GLcontext *ctx, GLboolean needs_mi_flush);
+
 static const GLubyte *
 intelGetString(GLcontext * ctx, GLenum name)
 {
@@ -218,7 +220,9 @@ intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
       struct intel_renderbuffer *stencil_rb;
 
       i = 0;
-      if ((intel->is_front_buffer_rendering || !intel_fb->color_rb[1])
+      if ((intel->is_front_buffer_rendering ||
+	   intel->is_front_buffer_reading ||
+	   !intel_fb->color_rb[1])
 	   && intel_fb->color_rb[0]) {
 	 attachments[i++] = __DRI_BUFFER_FRONT_LEFT;
 	 attachments[i++] = intel_bits_per_pixel(intel_fb->color_rb[0]);
@@ -394,7 +398,16 @@ intel_viewport(GLcontext *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
     if (!driContext->driScreenPriv->dri2.enabled)
 	return;
 
-    if (!intel->internal_viewport_call) {
+    if (!intel->internal_viewport_call && ctx->DrawBuffer->Name == 0) {
+       /* If we're rendering to the fake front buffer, make sure all the pending
+	* drawing has landed on the real front buffer.  Otherwise when we
+	* eventually get to DRI2GetBuffersWithFormat the stale real front
+	* buffer contents will get copied to the new fake front buffer.
+	*/
+       if (intel->is_front_buffer_rendering) {
+	  intel_flush(ctx, GL_FALSE);
+       }
+
        intel_update_renderbuffers(driContext, driContext->driDrawablePriv);
        if (driContext->driDrawablePriv != driContext->driReadablePriv)
 	  intel_update_renderbuffers(driContext, driContext->driReadablePriv);
@@ -526,7 +539,7 @@ intelFinish(GLcontext * ctx)
 
        irb = intel_renderbuffer(fb->_ColorDrawBuffers[i]);
 
-       if (irb->region)
+       if (irb && irb->region)
 	  dri_bo_wait_rendering(irb->region->buffer);
    }
    if (fb->_DepthBuffer) {
@@ -550,10 +563,14 @@ intelInitDriverFunctions(struct dd_function_table *functions)
    functions->CopyConvolutionFilter2D = _swrast_CopyConvolutionFilter2D;
 
    intelInitTextureFuncs(functions);
+   intelInitTextureImageFuncs(functions);
+   intelInitTextureSubImageFuncs(functions);
+   intelInitTextureCopyImageFuncs(functions);
    intelInitStateFuncs(functions);
    intelInitClearFuncs(functions);
    intelInitBufferFuncs(functions);
    intelInitPixelFuncs(functions);
+   intelInitBufferObjectFuncs(functions);
 }
 
 
@@ -650,6 +667,13 @@ intelInitContext(struct intel_context *intel,
    _mesa_init_point(ctx);
 
    ctx->Const.MaxColorAttachments = 4;  /* XXX FBO: review this */
+   if (IS_965(intelScreen->deviceID)) {
+      if (MAX_WIDTH > 8192)
+	 ctx->Const.MaxRenderbufferSize = 8192;
+   } else {
+      if (MAX_WIDTH > 2048)
+	 ctx->Const.MaxRenderbufferSize = 2048;
+   }
 
    /* Initialize the software rasterizer and helper modules. */
    _swrast_CreateContext(ctx);
@@ -707,7 +731,6 @@ intelInitContext(struct intel_context *intel,
 
    intel->batch = intel_batchbuffer_alloc(intel);
 
-   intel_bufferobj_init(intel);
    intel_fbo_init(intel);
 
    if (intel->ctx.Mesa_DXTn) {
@@ -717,6 +740,15 @@ intelInitContext(struct intel_context *intel,
    else if (driQueryOptionb(&intel->optionCache, "force_s3tc_enable")) {
       _mesa_enable_extension(ctx, "GL_EXT_texture_compression_s3tc");
    }
+   intel->use_texture_tiling = driQueryOptionb(&intel->optionCache,
+					       "texture_tiling");
+   if (intel->use_texture_tiling &&
+       !intel->intelScreen->kernel_exec_fencing) {
+      fprintf(stderr, "No kernel support for execution fencing, "
+	      "disabling texture tiling");
+      intel->use_texture_tiling = GL_FALSE;
+   }
+   intel->use_early_z = driQueryOptionb(&intel->optionCache, "early_z");
 
    intel->prim.primitive = ~0;
 
@@ -778,12 +810,63 @@ intelDestroyContext(__DRIcontextPrivate * driContextPriv)
       intel->prim.vb_bo = NULL;
 
       if (release_texture_heaps) {
-         /* This share group is about to go away, free our private
-          * texture object data.
+         /* Nothing is currently done here to free texture heaps;
+          * but we're not using the texture heap utilities, so I
+          * rather think we shouldn't.  I've taken a look, and can't
+          * find any private texture data hanging around anywhere, but
+          * I'm not yet certain there isn't any at all...
           */
-         if (INTEL_DEBUG & DEBUG_TEXTURE)
+         /* if (INTEL_DEBUG & DEBUG_TEXTURE)
             fprintf(stderr, "do something to free texture heaps\n");
+          */
       }
+
+      /* XXX In intelMakeCurrent() below, the context's static regions are 
+       * referenced inside the frame buffer; it's listed as a hack,
+       * with a comment of "XXX FBO temporary fix-ups!", but
+       * as long as it's there, we should release the regions here.
+       * The do/while loop around the block is used to allow the
+       * "continue" statements inside the block to exit the block,
+       * to avoid many layers of "if" constructs.
+       */
+      do {
+         __DRIdrawablePrivate * driDrawPriv = intel->driDrawable;
+         struct intel_framebuffer *intel_fb;
+         struct intel_renderbuffer *irbDepth, *irbStencil;
+         if (!driDrawPriv) {
+            /* We're already detached from the drawable; exit this block. */
+            continue;
+         }
+         intel_fb = (struct intel_framebuffer *) driDrawPriv->driverPrivate;
+         if (!intel_fb) {
+            /* The frame buffer is already gone; exit this block. */
+            continue;
+         }
+         irbDepth = intel_get_renderbuffer(&intel_fb->Base, BUFFER_DEPTH);
+         irbStencil = intel_get_renderbuffer(&intel_fb->Base, BUFFER_STENCIL);
+
+         /* If the regions of the frame buffer still match the regions
+          * of the context, release them.  If they've changed somehow,
+          * leave them alone.
+          */
+         if (intel_fb->color_rb[0] && intel_fb->color_rb[0]->region == intel->front_region) {
+	    intel_renderbuffer_set_region(intel_fb->color_rb[0], NULL);
+         }
+         if (intel_fb->color_rb[1] && intel_fb->color_rb[1]->region == intel->back_region) {
+	    intel_renderbuffer_set_region(intel_fb->color_rb[1], NULL);
+         }
+
+         if (irbDepth && irbDepth->region == intel->depth_region) {
+	    intel_renderbuffer_set_region(irbDepth, NULL);
+         }
+         /* Usually, the stencil buffer is the same as the depth buffer;
+          * but they're handled separately in MakeCurrent, so we'll
+          * handle them separately here.
+          */
+         if (irbStencil && irbStencil->region == intel->depth_region) {
+	    intel_renderbuffer_set_region(irbStencil, NULL);
+         }
+      } while (0);
 
       intel_region_release(&intel->front_region);
       intel_region_release(&intel->back_region);
@@ -793,6 +876,8 @@ intelDestroyContext(__DRIcontextPrivate * driContextPriv)
 
       /* free the Mesa context */
       _mesa_free_context_data(&intel->ctx);
+
+      
    }
 }
 
@@ -821,7 +906,10 @@ intelMakeCurrent(__DRIcontextPrivate * driContextPriv,
           if (driDrawPriv != driReadPriv)
               intel_update_renderbuffers(driContextPriv, driReadPriv);
       } else {
-          /* XXX FBO temporary fix-ups! */
+          /* XXX FBO temporary fix-ups!  These are released in 
+           * intelDextroyContext(), above.  Changes here should be
+           * reflected there.
+           */
           /* if the renderbuffers don't have regions, init them from the context */
          struct intel_renderbuffer *irbDepth
             = intel_get_renderbuffer(&intel_fb->Base, BUFFER_DEPTH);
@@ -906,7 +994,6 @@ intelContendedLock(struct intel_context *intel, GLuint flags)
    int me = intel->hHWContext;
 
    drmGetLock(intel->driFd, intel->hHWContext, flags);
-   intel->locked = 1;
 
    if (INTEL_DEBUG & DEBUG_LOCK)
       _mesa_printf("%s - got contended lock\n", __progname);
@@ -963,9 +1050,12 @@ void LOCK_HARDWARE( struct intel_context *intel )
     struct intel_framebuffer *intel_fb = NULL;
     struct intel_renderbuffer *intel_rb = NULL;
 
-    _glthread_LOCK_MUTEX(lockMutex);
-    assert(!intel->locked);
-    intel->locked = 1;
+    intel->locked++;
+    if (intel->locked >= 2)
+       return;
+
+    if (!sPriv->dri2.enabled)
+       _glthread_LOCK_MUTEX(lockMutex);
 
     if (intel->driDrawable) {
        intel_fb = intel->driDrawable->driverPrivate;
@@ -1012,13 +1102,16 @@ void UNLOCK_HARDWARE( struct intel_context *intel )
 {
     __DRIscreen *sPriv = intel->driScreen;
 
-   intel->vtbl.note_unlock( intel );
-   intel->locked = 0;
+   intel->locked--;
+   if (intel->locked > 0)
+      return;
 
-   if (!sPriv->dri2.enabled)
+   assert(intel->locked == 0);
+
+   if (!sPriv->dri2.enabled) {
       DRM_UNLOCK(intel->driFd, intel->driHwLock, intel->hHWContext);
-
-   _glthread_UNLOCK_MUTEX(lockMutex);
+      _glthread_UNLOCK_MUTEX(lockMutex);
+   }
 
    if (INTEL_DEBUG & DEBUG_LOCK)
       _mesa_printf("%s - unlocked\n", __progname);

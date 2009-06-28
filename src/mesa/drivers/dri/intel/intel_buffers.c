@@ -157,7 +157,7 @@ intel_draw_buffer(GLcontext * ctx, struct gl_framebuffer *fb)
    /* Do this here, not core Mesa, since this function is called from
     * many places within the driver.
     */
-   if (ctx->NewState & (_NEW_BUFFERS | _NEW_COLOR | _NEW_PIXEL)) {
+   if (ctx->NewState & _NEW_BUFFERS) {
       /* this updates the DrawBuffer->_NumColorDrawBuffers fields, etc */
       _mesa_update_framebuffer(ctx);
       /* this updates the DrawBuffer's Width/Height if it's a FBO */
@@ -276,7 +276,7 @@ intel_draw_buffer(GLcontext * ctx, struct gl_framebuffer *fb)
       ctx->Driver.Enable(ctx, GL_DEPTH_TEST,
                          (ctx->Depth.Test && fb->Visual.depthBits > 0));
       ctx->Driver.Enable(ctx, GL_STENCIL_TEST,
-                         (ctx->Stencil._Enabled && fb->Visual.stencilBits > 0));
+                         (ctx->Stencil.Enabled && fb->Visual.stencilBits > 0));
    }
    else {
       /* Mesa's Stencil._Enabled field is updated when
@@ -345,6 +345,23 @@ intelDrawBuffer(GLcontext * ctx, GLenum mode)
 static void
 intelReadBuffer(GLcontext * ctx, GLenum mode)
 {
+   if ((ctx->DrawBuffer != NULL) && (ctx->DrawBuffer->Name == 0)) {
+      struct intel_context *const intel = intel_context(ctx);
+      const GLboolean was_front_buffer_reading =
+	intel->is_front_buffer_reading;
+
+      intel->is_front_buffer_reading = (mode == GL_FRONT_LEFT)
+	|| (mode == GL_FRONT);
+
+      /* If we weren't front-buffer reading before but we are now, make sure
+       * that the front-buffer has actually been allocated.
+       */
+      if (!was_front_buffer_reading && intel->is_front_buffer_reading) {
+	 intel_update_renderbuffers(intel->driContext,
+				    intel->driContext->driDrawablePriv);
+      }
+   }
+
    if (ctx->ReadBuffer == ctx->DrawBuffer) {
       /* This will update FBO completeness status.
        * A framebuffer will be incomplete if the GL_READ_BUFFER setting
