@@ -44,9 +44,10 @@ nv50_screen_is_format_supported(struct pipe_screen *pscreen,
 	} else
 	if (tex_usage & PIPE_TEXTURE_USAGE_DEPTH_STENCIL) {
 		switch (format) {
+		case PIPE_FORMAT_Z32_FLOAT:
 		case PIPE_FORMAT_Z24S8_UNORM:
-		case PIPE_FORMAT_Z24X8_UNORM:
-		case PIPE_FORMAT_Z16_UNORM:
+		case PIPE_FORMAT_X8Z24_UNORM:
+		case PIPE_FORMAT_S8Z24_UNORM:
 			return TRUE;
 		default:
 			break;
@@ -111,6 +112,8 @@ nv50_screen_get_param(struct pipe_screen *pscreen, int param)
 		return 0;
 	case PIPE_CAP_TGSI_CONT_SUPPORTED:
 		return 0;
+	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
+		return 1;
 	case NOUVEAU_CAP_HW_VTXBUF:
 		return 1;
 	case NOUVEAU_CAP_HW_IDXBUF:
@@ -413,6 +416,10 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 	so_data  (so, fui(1.0));
 
 	so_method(so, screen->tesla, 0x1234, 1);
+	so_data  (so, 1);
+
+	/* activate first scissor rectangle */
+	so_method(so, screen->tesla, NV50TCL_SCISSOR_ENABLE, 1);
 	so_data  (so, 1);
 
 	so_emit(chan, so);

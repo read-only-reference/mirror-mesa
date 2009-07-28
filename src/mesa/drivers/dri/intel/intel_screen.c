@@ -316,7 +316,7 @@ intelDestroyScreen(__DRIscreenPrivate * sPriv)
 
    dri_bufmgr_destroy(intelScreen->bufmgr);
    intelUnmapScreenRegions(intelScreen);
-   driDestroyOptionCache(&intelScreen->optionCache);
+   driDestroyOptionInfo(&intelScreen->optionCache);
 
    FREE(intelScreen);
    sPriv->private = NULL;
@@ -598,7 +598,7 @@ intel_init_bufmgr(intelScreenPrivate *intelScreen)
    GLboolean gem_supported;
    struct drm_i915_getparam gp;
    __DRIscreenPrivate *spriv = intelScreen->driScrnPriv;
-   int num_fences;
+   int num_fences = 0;
 
    intelScreen->no_hw = getenv("INTEL_NO_HW") != NULL;
 
@@ -628,10 +628,10 @@ intel_init_bufmgr(intelScreenPrivate *intelScreen)
    /* Otherwise, use the classic buffer manager. */
    if (intelScreen->bufmgr == NULL) {
       if (gem_disable) {
-	 fprintf(stderr, "GEM disabled.  Using classic.\n");
+	 _mesa_warning(NULL, "GEM disabled.  Using classic.");
       } else {
-	 fprintf(stderr, "Failed to initialize GEM.  "
-		 "Falling back to classic.\n");
+	 _mesa_warning(NULL,
+                       "Failed to initialize GEM.  Falling back to classic.");
       }
 
       if (intelScreen->tex.size == 0) {

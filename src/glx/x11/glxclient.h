@@ -55,9 +55,7 @@
 #include "GL/internal/glcore.h"
 #include "glapi/glapitable.h"
 #include "glxhash.h"
-#if defined( USE_XTHREADS )
-# include <X11/Xthreads.h>
-#elif defined( PTHREADS )
+#if defined( PTHREADS )
 # include <pthread.h>
 #endif
 
@@ -501,6 +499,8 @@ struct __GLXscreenConfigsRec {
 
     __GLXDRIscreen *driScreen;
 
+    const __DRIconfig** driver_configs;
+
 #ifdef __DRI_COPY_SUB_BUFFER
     const __DRIcopySubBufferExtension *driCopySubBuffer;
 #endif
@@ -623,7 +623,7 @@ extern void __glXPreferEGL(int state);
 extern int __glXDebug;
 
 /* This is per-thread storage in an MT environment */
-#if defined( USE_XTHREADS ) || defined( PTHREADS )
+#if defined( PTHREADS )
 
 extern void __glXSetCurrentContext(__GLXcontext *c);
 
@@ -646,7 +646,7 @@ extern __GLXcontext *__glXcurrentContext;
 #define __glXGetCurrentContext()	__glXcurrentContext
 #define __glXSetCurrentContext(gc)	__glXcurrentContext = gc
 
-#endif /* defined( USE_XTHREADS ) || defined( PTHREADS ) */
+#endif /* defined( PTHREADS ) */
 
 extern void __glXSetCurrentContextNull(void);
 
@@ -657,11 +657,7 @@ extern void __glXFreeContext(__GLXcontext*);
 ** Global lock for all threads in this address space using the GLX
 ** extension
 */
-#if defined( USE_XTHREADS )
-extern xmutex_rec __glXmutex;
-#define __glXLock()    xmutex_lock(&__glXmutex)
-#define __glXUnlock()  xmutex_unlock(&__glXmutex)
-#elif defined( PTHREADS )
+#if defined( PTHREADS )
 extern pthread_mutex_t __glXmutex;
 #define __glXLock()    pthread_mutex_lock(&__glXmutex)
 #define __glXUnlock()  pthread_mutex_unlock(&__glXmutex)

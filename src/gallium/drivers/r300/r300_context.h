@@ -217,7 +217,7 @@ struct r300_texture {
 
     /* Stride (pitch?) of this texture in bytes */
     unsigned stride;
-    
+
     /* Total size of this texture, in bytes. */
     unsigned size;
 
@@ -331,7 +331,8 @@ struct r300_context {
 };
 
 /* Convenience cast wrapper. */
-static struct r300_context* r300_context(struct pipe_context* context) {
+static INLINE struct r300_context* r300_context(struct pipe_context* context)
+{
     return (struct r300_context*)context;
 }
 

@@ -4,12 +4,14 @@ TOP = ../../..
 include $(TOP)/configs/current
 
 
-INCLUDE_DIRS = -I$(TOP)/include -I$(TOP)/src/mesa/glapi
+INCLUDE_DIRS = -I$(TOP)/include -I$(TOP)/src/mesa/glapi $(X11_INCLUDES)
 
 HEADERS = \
+	eglcompiler.h \
 	eglconfig.h \
 	eglconfigutil.h \
 	eglcontext.h \
+	eglcurrent.h \
 	egldefines.h \
 	egldisplay.h \
 	egldriver.h \
@@ -28,6 +30,7 @@ SOURCES = \
 	eglconfig.c \
 	eglconfigutil.c \
 	eglcontext.c \
+	eglcurrent.c \
 	egldisplay.c \
 	egldriver.c \
 	eglglobals.c \

@@ -51,7 +51,7 @@ vbo_exec_debug_verts( struct vbo_exec_context *exec )
       struct _mesa_prim *prim = &exec->vtx.prim[i];
       _mesa_printf("   prim %d: %s%s %d..%d %s %s\n",
 		   i, 
-		   _mesa_lookup_enum_by_nr(prim->mode),
+		   _mesa_lookup_prim_by_nr(prim->mode),
 		   prim->weak ? " (weak)" : "",
 		   prim->start, 
 		   prim->start + prim->count,
@@ -327,9 +327,10 @@ vbo_exec_vtx_map( struct vbo_exec_context *exec )
                                                   0, VBO_VERT_BUFFER_SIZE,
                                                   accessRange,
                                                   exec->vtx.bufferobj);
-      else
+      if (!exec->vtx.buffer_map)
          exec->vtx.buffer_map =
             (GLfloat *)ctx->Driver.MapBuffer(ctx, target, access, exec->vtx.bufferobj);
+      assert(exec->vtx.buffer_map);
       exec->vtx.buffer_ptr = exec->vtx.buffer_map;
    }
 

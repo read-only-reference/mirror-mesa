@@ -101,8 +101,10 @@ map_register_file(
  */
 static GLuint
 map_register_file_index(
+   GLuint procType,
    GLuint file,
    GLuint index,
+   GLuint *swizzle,
    const GLuint inputMapping[],
    const GLuint outputMapping[],
    const GLuint immediateMapping[],
@@ -110,6 +112,27 @@ map_register_file_index(
 {
    switch( file ) {
    case TGSI_FILE_INPUT:
+      if (procType == TGSI_PROCESSOR_FRAGMENT &&
+          index == FRAG_ATTRIB_FOGC) {
+         if (GET_SWZ(*swizzle, 0) == SWIZZLE_X) {
+            /* do nothing we're, ok */
+         } else if (GET_SWZ(*swizzle, 0) == SWIZZLE_Y) {
+            /* replace the swizzle with xxxx */
+            *swizzle = MAKE_SWIZZLE4(SWIZZLE_X,
+                                     SWIZZLE_X,
+                                     SWIZZLE_X,
+                                     SWIZZLE_X);
+            /* register after fog */
+            return inputMapping[index] + 1;
+         } else {
+            *swizzle = MAKE_SWIZZLE4(SWIZZLE_Z,
+                                     SWIZZLE_W,
+                                     SWIZZLE_Z,
+                                     SWIZZLE_W);
+            /* register after frontface */
+            return inputMapping[index] + 2;
+         }
+      }
       /* inputs are mapped according to the user-defined map */
       return inputMapping[index];
 
@@ -135,12 +158,6 @@ map_texture_target(
     GLuint textarget,
     GLboolean shadow )
 {
-#if 1
-   /* XXX remove this line after we've checked that the rest of gallium
-    * can handle the TGSI_TEXTURE_SHADOWx tokens.
-    */
-   shadow = GL_FALSE;
-#endif
    switch( textarget ) {
    case TEXTURE_1D_INDEX:
       if (shadow)
@@ -202,11 +219,15 @@ static struct tgsi_full_immediate
 make_immediate(const float *value, uint size)
 {
    struct tgsi_full_immediate imm;
+   unsigned i;
 
    imm = tgsi_default_full_immediate();
    imm.Immediate.NrTokens += size;
    imm.Immediate.DataType = TGSI_IMM_FLOAT32;
-   imm.u.Pointer = value;
+
+   for (i = 0; i < size; i++)
+      imm.u[i].Float = value[i];
+
    return imm;
 }
 
@@ -236,16 +257,24 @@ compile_instruction(
    fulldst = &fullinst->FullDstRegisters[0];
    fulldst->DstRegister.File = map_register_file( inst->DstReg.File, 0, NULL, GL_FALSE );
    fulldst->DstRegister.Index = map_register_file_index(
+      procType,
       fulldst->DstRegister.File,
       inst->DstReg.Index,
+      NULL,
       inputMapping,
       outputMapping,
       NULL,
       GL_FALSE );
    fulldst->DstRegister.WriteMask = convert_writemask( inst->DstReg.WriteMask );
+   if (inst->DstReg.RelAddr) {
+      fulldst->DstRegister.Indirect = 1;
+      fulldst->DstRegisterInd.File = TGSI_FILE_ADDRESS;
+      fulldst->DstRegisterInd.Index = 0;
+   }
 
    for (i = 0; i < fullinst->Instruction.NumSrcRegs; i++) {
       GLuint j;
+      GLuint swizzle = inst->SrcReg[i].Swizzle;
 
       fullsrc = &fullinst->FullSrcRegisters[i];
 
@@ -264,8 +293,10 @@ compile_instruction(
             immediateMapping,
             indirectAccess );
          fullsrc->SrcRegister.Index = map_register_file_index(
+            procType,
             fullsrc->SrcRegister.File,
             inst->SrcReg[i].Index,
+            &swizzle,
             inputMapping,
             outputMapping,
             immediateMapping,
@@ -278,7 +309,7 @@ compile_instruction(
          GLboolean extended = (inst->SrcReg[i].Negate != NEGATE_NONE &&
                                inst->SrcReg[i].Negate != NEGATE_XYZW);
          for( j = 0; j < 4; j++ ) {
-            swz[j] = GET_SWZ( inst->SrcReg[i].Swizzle, j );
+            swz[j] = GET_SWZ( swizzle, j );
             if (swz[j] > SWIZZLE_W)
                extended = GL_TRUE;
          }
@@ -337,7 +368,7 @@ compile_instruction(
       fullinst->Instruction.Opcode = TGSI_OPCODE_ADD;
       break;
    case OPCODE_BGNLOOP:
-      fullinst->Instruction.Opcode = TGSI_OPCODE_BGNLOOP2;
+      fullinst->Instruction.Opcode = TGSI_OPCODE_BGNLOOP;
       fullinst->InstructionExtLabel.Label = inst->BranchTarget + preamble_size;
       break;
    case OPCODE_BGNSUB:
@@ -395,7 +426,7 @@ compile_instruction(
       fullinst->Instruction.Opcode = TGSI_OPCODE_ENDIF;
       break;
    case OPCODE_ENDLOOP:
-      fullinst->Instruction.Opcode = TGSI_OPCODE_ENDLOOP2;
+      fullinst->Instruction.Opcode = TGSI_OPCODE_ENDLOOP;
       fullinst->InstructionExtLabel.Label = inst->BranchTarget + preamble_size;
       break;
    case OPCODE_ENDSUB:

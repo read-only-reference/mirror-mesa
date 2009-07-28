@@ -13,6 +13,7 @@
 #include "dri_util.h"
 #include "tnl/t_vertex.h"
 
+#include "dri_metaops.h"
 struct radeon_context;
 
 #include "radeon_bocs_wrapper.h"
@@ -83,8 +84,6 @@ struct radeon_renderbuffer
 	unsigned int cpp;
 	/* unsigned int offset; */
 	unsigned int pitch;
-	unsigned int width;
-	unsigned int height;
 
 	uint32_t draw_offset; /* FBO */
 	/* boo Xorg 6.8.2 compat */
@@ -226,6 +225,24 @@ struct radeon_tex_obj {
 	GLuint pp_cubic_faces;	/* cube face 1,2,3,4 log2 sizes */
 
         GLuint pp_txfilter_1;	/*  r300 */
+
+	/* r700 texture states */
+	GLuint SQ_TEX_RESOURCE0;
+	GLuint SQ_TEX_RESOURCE1;
+	GLuint SQ_TEX_RESOURCE2;
+	GLuint SQ_TEX_RESOURCE3;
+	GLuint SQ_TEX_RESOURCE4;
+	GLuint SQ_TEX_RESOURCE5;
+	GLuint SQ_TEX_RESOURCE6;
+
+	GLuint SQ_TEX_SAMPLER0;
+	GLuint SQ_TEX_SAMPLER1;
+	GLuint SQ_TEX_SAMPLER2;
+
+	GLuint TD_PS_SAMPLER0_BORDER_RED;
+	GLuint TD_PS_SAMPLER0_BORDER_GREEN;
+	GLuint TD_PS_SAMPLER0_BORDER_BLUE;
+	GLuint TD_PS_SAMPLER0_BORDER_ALPHA;
 
 	GLboolean border_fallback;
 
@@ -412,6 +429,8 @@ struct radeon_context {
    int                   texture_depth;
    float                 initialMaxAnisotropy;
    uint32_t              texture_row_align;
+   uint32_t              texture_rect_row_align;
+   uint32_t              texture_compressed_row_align;
 
   struct radeon_dma dma;
   struct radeon_hw_state hw;
@@ -426,7 +445,6 @@ struct radeon_context {
    GLuint numClipRects;	/* Cliprects for the draw buffer */
    drm_clip_rect_t *pClipRects;
    unsigned int lastStamp;
-   GLboolean lost_context;
    drm_radeon_sarea_t *sarea;	/* Private SAREA data */
 
    /* Mirrors of some DRI state */
@@ -469,19 +487,16 @@ struct radeon_context {
     */
    GLboolean is_front_buffer_rendering;
 
-  struct {
-      struct gl_fragment_program *bitmap_fp;
-      struct gl_vertex_program *passthrough_vp;
+   /**
+    * Track whether front-buffer is the current read target.
+    *
+    * This is closely associated with is_front_buffer_rendering, but may
+    * be set separately.  The DRI2 fake front buffer must be referenced
+    * either way.
+    */
+   GLboolean is_front_buffer_reading;
 
-      struct gl_fragment_program *saved_fp;
-      GLboolean saved_fp_enable;
-      struct gl_vertex_program *saved_vp;
-      GLboolean saved_vp_enable;
-
-      GLint saved_vp_x, saved_vp_y;
-      GLsizei saved_vp_width, saved_vp_height;
-      GLenum saved_matrix_mode;
-   } meta;
+   struct dri_metaops meta;
 
    struct {
 	   void (*get_lock)(radeonContextPtr radeon);
@@ -576,6 +591,12 @@ extern void radeonDestroyContext(__DRIcontextPrivate * driContextPriv);
 extern int RADEON_DEBUG;
 #else
 #define RADEON_DEBUG		0
+#endif
+
+#ifndef HAVE_LIBDRM_RADEON
+#ifndef RADEON_DEBUG_BO
+#define RADEON_DEBUG_BO 1
+#endif
 #endif
 
 #endif

@@ -2027,6 +2027,7 @@ parse_param (GLcontext * ctx, const GLubyte ** inst, struct var_cache **vc_head,
       if (specified_length != (int)param_var->param_binding_length) {
          program_error(ctx, Program->Position,
               "Declared parameter array length does not match parameter list");
+         return 1;
       }
    }
 
@@ -3973,6 +3974,13 @@ _mesa_parse_arb_fragment_program(GLcontext* ctx, GLenum target,
 
    if (program->FogOption)
       program->Base.InputsRead |= FRAG_BIT_FOGC;
+
+   /* XXX: assume that ARB fragment programs don't have access to the
+    * FrontFacing and PointCoord values stuffed into the fog
+    * coordinate in GLSL shaders.
+    */
+   if (program->Base.InputsRead & FRAG_BIT_FOGC)
+      program->UsesFogFragCoord = GL_TRUE;
       
    if (program->Base.Instructions)
       _mesa_free(program->Base.Instructions);

@@ -42,117 +42,10 @@
 #include "shader/prog_parameter.h"
 #include "shader/prog_print.h"
 
+#include "compiler/radeon_compiler.h"
+
 #include "r300_state.h"
-#include "r300_fragprog.h"
-#include "r300_fragprog_swizzle.h"
-#include "r500_fragprog.h"
 
-#include "radeon_program.h"
-#include "radeon_program_alu.h"
-
-static void update_params(GLcontext *ctx, struct gl_fragment_program *fp)
-{
-	/* Ask Mesa nicely to fill in ParameterValues for us */
-	if (fp->Base.Parameters)
-		_mesa_load_state_parameters(ctx, fp->Base.Parameters);
-}
-
-static void nqssadce_init(struct nqssadce_state* s)
-{
-	s->Outputs[FRAG_RESULT_COLOR].Sourced = WRITEMASK_XYZW;
-	s->Outputs[FRAG_RESULT_DEPTH].Sourced = WRITEMASK_W;
-}
-
-/**
- * Transform the program to support fragment.position.
- *
- * Introduce a small fragment at the start of the program that will be
- * the only code that directly reads the FRAG_ATTRIB_WPOS input.
- * All other code pieces that reference that input will be rewritten
- * to read from a newly allocated temporary.
- *
- */
-static void insert_WPOS_trailer(struct r300_fragment_program_compiler *compiler)
-{
-	GLuint InputsRead = compiler->fp->Base.Base.InputsRead;
-
-	if (!(InputsRead & FRAG_BIT_WPOS))
-		return;
-
-	static gl_state_index tokens[STATE_LENGTH] = {
-		STATE_INTERNAL, STATE_R300_WINDOW_DIMENSION, 0, 0, 0
-	};
-	struct prog_instruction *fpi;
-	GLuint window_index;
-	int i = 0;
-	GLuint tempregi = _mesa_find_free_register(compiler->program, PROGRAM_TEMPORARY);
-
-	_mesa_insert_instructions(compiler->program, 0, 3);
-	fpi = compiler->program->Instructions;
-
-	/* perspective divide */
-	fpi[i].Opcode = OPCODE_RCP;
-
-	fpi[i].DstReg.File = PROGRAM_TEMPORARY;
-	fpi[i].DstReg.Index = tempregi;
-	fpi[i].DstReg.WriteMask = WRITEMASK_W;
-	fpi[i].DstReg.CondMask = COND_TR;
-
-	fpi[i].SrcReg[0].File = PROGRAM_INPUT;
-	fpi[i].SrcReg[0].Index = FRAG_ATTRIB_WPOS;
-	fpi[i].SrcReg[0].Swizzle = SWIZZLE_WWWW;
-	i++;
-
-	fpi[i].Opcode = OPCODE_MUL;
-
-	fpi[i].DstReg.File = PROGRAM_TEMPORARY;
-	fpi[i].DstReg.Index = tempregi;
-	fpi[i].DstReg.WriteMask = WRITEMASK_XYZ;
-	fpi[i].DstReg.CondMask = COND_TR;
-
-	fpi[i].SrcReg[0].File = PROGRAM_INPUT;
-	fpi[i].SrcReg[0].Index = FRAG_ATTRIB_WPOS;
-	fpi[i].SrcReg[0].Swizzle = SWIZZLE_XYZW;
-
-	fpi[i].SrcReg[1].File = PROGRAM_TEMPORARY;
-	fpi[i].SrcReg[1].Index = tempregi;
-	fpi[i].SrcReg[1].Swizzle = SWIZZLE_WWWW;
-	i++;
-
-	/* viewport transformation */
-	window_index = _mesa_add_state_reference(compiler->program->Parameters, tokens);
-
-	fpi[i].Opcode = OPCODE_MAD;
-
-	fpi[i].DstReg.File = PROGRAM_TEMPORARY;
-	fpi[i].DstReg.Index = tempregi;
-	fpi[i].DstReg.WriteMask = WRITEMASK_XYZ;
-	fpi[i].DstReg.CondMask = COND_TR;
-
-	fpi[i].SrcReg[0].File = PROGRAM_TEMPORARY;
-	fpi[i].SrcReg[0].Index = tempregi;
-	fpi[i].SrcReg[0].Swizzle = MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_Y, SWIZZLE_Z, SWIZZLE_ZERO);
-
-	fpi[i].SrcReg[1].File = PROGRAM_STATE_VAR;
-	fpi[i].SrcReg[1].Index = window_index;
-	fpi[i].SrcReg[1].Swizzle = MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_Y, SWIZZLE_Z, SWIZZLE_ZERO);
-
-	fpi[i].SrcReg[2].File = PROGRAM_STATE_VAR;
-	fpi[i].SrcReg[2].Index = window_index;
-	fpi[i].SrcReg[2].Swizzle = MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_Y, SWIZZLE_Z, SWIZZLE_ZERO);
-	i++;
-
-	for (; i < compiler->program->NumInstructions; ++i) {
-		int reg;
-		for (reg = 0; reg < 3; reg++) {
-			if (fpi[i].SrcReg[reg].File == PROGRAM_INPUT &&
-			    fpi[i].SrcReg[reg].Index == FRAG_ATTRIB_WPOS) {
-				fpi[i].SrcReg[reg].File = PROGRAM_TEMPORARY;
-				fpi[i].SrcReg[reg].Index = tempregi;
-			}
-		}
-	}
-}
 
 static GLuint build_dtm(GLuint depthmode)
 {
@@ -175,7 +68,7 @@ static GLuint build_func(GLuint comparefunc)
  */
 static void build_state(
 	r300ContextPtr r300,
-	struct r300_fragment_program *fp,
+	struct gl_fragment_program *fp,
 	struct r300_fragment_program_external_state *state)
 {
 	int unit;
@@ -183,7 +76,7 @@ static void build_state(
 	_mesa_bzero(state, sizeof(*state));
 
 	for(unit = 0; unit < 16; ++unit) {
-		if (fp->Base.Base.ShadowSamplers & (1 << unit)) {
+		if (fp->Base.ShadowSamplers & (1 << unit)) {
 			struct gl_texture_object* tex = r300->radeon.glCtx->Texture.Unit[unit]._Current;
 
 			state->unit[unit].depth_texture_mode = build_dtm(tex->DepthMode);
@@ -192,100 +85,179 @@ static void build_state(
 	}
 }
 
-void r300TranslateFragmentShader(GLcontext *ctx, struct gl_fragment_program *fp)
+
+/**
+ * Transform the program to support fragment.position.
+ *
+ * Introduce a small fragment at the start of the program that will be
+ * the only code that directly reads the FRAG_ATTRIB_WPOS input.
+ * All other code pieces that reference that input will be rewritten
+ * to read from a newly allocated temporary.
+ *
+ */
+static void insert_WPOS_trailer(struct r300_fragment_program_compiler *compiler, struct r300_fragment_program * fp)
+{
+	int i;
+
+	if (!(compiler->Base.Program.InputsRead & FRAG_BIT_WPOS)) {
+		fp->wpos_attr = FRAG_ATTRIB_MAX;
+		return;
+	}
+
+	for (i = FRAG_ATTRIB_TEX0; i <= FRAG_ATTRIB_TEX7; ++i)
+	{
+		if (!(compiler->Base.Program.InputsRead & (1 << i))) {
+			fp->wpos_attr = i;
+			break;
+		}
+	}
+
+	rc_transform_fragment_wpos(&compiler->Base, FRAG_ATTRIB_WPOS, fp->wpos_attr);
+}
+
+/**
+ * Rewrite fragment.fogcoord to use a texture coordinate slot.
+ * Note that fogcoord is forced into an X001 pattern, and this enforcement
+ * is done here.
+ *
+ * See also the counterpart rewriting for vertex programs.
+ */
+static void rewriteFog(struct r300_fragment_program_compiler *compiler, struct r300_fragment_program * fp)
+{
+	struct prog_src_register src;
+	int i;
+
+	if (!(compiler->Base.Program.InputsRead & FRAG_BIT_FOGC)) {
+		fp->fog_attr = FRAG_ATTRIB_MAX;
+		return;
+	}
+
+	for (i = FRAG_ATTRIB_TEX0; i <= FRAG_ATTRIB_TEX7; ++i)
+	{
+		if (!(compiler->Base.Program.InputsRead & (1 << i))) {
+			fp->fog_attr = i;
+			break;
+		}
+	}
+
+	memset(&src, 0, sizeof(src));
+	src.File = PROGRAM_INPUT;
+	src.Index = fp->fog_attr;
+	src.Swizzle = MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_ZERO, SWIZZLE_ZERO, SWIZZLE_ONE);
+	rc_move_input(&compiler->Base, FRAG_ATTRIB_FOGC, src);
+}
+
+
+/**
+ * Reserve hardware temporary registers for the program inputs.
+ *
+ * @note This allocation is performed explicitly, because the order of inputs
+ * is determined by the RS hardware.
+ */
+static void allocate_hw_inputs(
+	struct r300_fragment_program_compiler * c,
+	void (*allocate)(void * data, unsigned input, unsigned hwreg),
+	void * mydata)
+{
+	GLuint InputsRead = c->Base.Program.InputsRead;
+	int i;
+	GLuint hwindex = 0;
+
+	/* Primary colour */
+	if (InputsRead & FRAG_BIT_COL0)
+		allocate(mydata, FRAG_ATTRIB_COL0, hwindex++);
+	InputsRead &= ~FRAG_BIT_COL0;
+
+	/* Secondary color */
+	if (InputsRead & FRAG_BIT_COL1)
+		allocate(mydata, FRAG_ATTRIB_COL1, hwindex++);
+	InputsRead &= ~FRAG_BIT_COL1;
+
+	/* Texcoords */
+	for (i = 0; i < 8; i++) {
+		if (InputsRead & (FRAG_BIT_TEX0 << i))
+			allocate(mydata, FRAG_ATTRIB_TEX0+i, hwindex++);
+	}
+	InputsRead &= ~FRAG_BITS_TEX_ANY;
+
+	/* Fogcoords treated as a texcoord */
+	if (InputsRead & FRAG_BIT_FOGC)
+		allocate(mydata, FRAG_ATTRIB_FOGC, hwindex++);
+	InputsRead &= ~FRAG_BIT_FOGC;
+
+	/* fragment position treated as a texcoord */
+	if (InputsRead & FRAG_BIT_WPOS)
+		allocate(mydata, FRAG_ATTRIB_WPOS, hwindex++);
+	InputsRead &= ~FRAG_BIT_WPOS;
+
+	/* Anything else */
+	if (InputsRead)
+		rc_error(&c->Base, "Don't know how to handle inputs 0x%x\n", InputsRead);
+}
+
+
+static void translate_fragment_program(GLcontext *ctx, struct r300_fragment_program_cont *cont, struct r300_fragment_program *fp)
 {
 	r300ContextPtr r300 = R300_CONTEXT(ctx);
-	struct r300_fragment_program *r300_fp = (struct r300_fragment_program *)fp;
+	struct r300_fragment_program_compiler compiler;
+
+	rc_init(&compiler.Base);
+	compiler.Base.Debug = (RADEON_DEBUG & DEBUG_PIXEL) ? GL_TRUE : GL_FALSE;
+
+	compiler.code = &fp->code;
+	compiler.state = fp->state;
+	compiler.is_r500 = (r300->radeon.radeonScreen->chip_family >= CHIP_FAMILY_RV515) ? GL_TRUE : GL_FALSE;
+	compiler.OutputDepth = FRAG_RESULT_DEPTH;
+	compiler.OutputColor = FRAG_RESULT_COLOR;
+	compiler.AllocateHwInputs = &allocate_hw_inputs;
+
+	if (compiler.Base.Debug) {
+		fflush(stdout);
+		_mesa_printf("Fragment Program: Initial program:\n");
+		_mesa_print_program(&cont->Base.Base);
+		fflush(stdout);
+	}
+
+	rc_mesa_to_rc_program(&compiler.Base, &cont->Base.Base);
+
+	insert_WPOS_trailer(&compiler, fp);
+
+	rewriteFog(&compiler, fp);
+
+	r3xx_compile_fragment_program(&compiler);
+	fp->error = compiler.Base.Error;
+
+	fp->InputsRead = compiler.Base.Program.InputsRead;
+
+	rc_destroy(&compiler.Base);
+}
+
+struct r300_fragment_program *r300SelectAndTranslateFragmentShader(GLcontext *ctx)
+{
+	r300ContextPtr r300 = R300_CONTEXT(ctx);
+	struct r300_fragment_program_cont *fp_list;
+	struct r300_fragment_program *fp;
 	struct r300_fragment_program_external_state state;
 
-	build_state(r300, r300_fp, &state);
-	if (_mesa_memcmp(&r300_fp->state, &state, sizeof(state))) {
-		/* TODO: cache compiled programs */
-		r300_fp->translated = GL_FALSE;
-		_mesa_memcpy(&r300_fp->state, &state, sizeof(state));
+	fp_list = (struct r300_fragment_program_cont *)ctx->FragmentProgram._Current;
+	build_state(r300, ctx->FragmentProgram._Current, &state);
+
+	fp = fp_list->progs;
+	while (fp) {
+		if (_mesa_memcmp(&fp->state, &state, sizeof(state)) == 0) {
+			return r300->selected_fp = fp;
+		}
+		fp = fp->next;
 	}
 
-	if (!r300_fp->translated) {
-		struct r300_fragment_program_compiler compiler;
+	fp = _mesa_calloc(sizeof(struct r300_fragment_program));
 
-		compiler.r300 = r300;
-		compiler.fp = r300_fp;
-		compiler.code = &r300_fp->code;
-		compiler.program = _mesa_clone_program(ctx, &fp->Base);
+	fp->state = state;
 
-		if (RADEON_DEBUG & DEBUG_PIXEL) {
-			fflush(stdout);
-			_mesa_printf("Fragment Program: Initial program:\n");
-			_mesa_print_program(compiler.program);
-			fflush(stdout);
-		}
+	fp->next = fp_list->progs;
+	fp_list->progs = fp;
 
-		insert_WPOS_trailer(&compiler);
+	translate_fragment_program(ctx, fp_list, fp);
 
-		if (r300->radeon.radeonScreen->chip_family >= CHIP_FAMILY_RV515) {
-			struct radeon_program_transformation transformations[] = {
-				{ &r500_transform_TEX, &compiler },
-				{ &radeonTransformALU, 0 },
-				{ &radeonTransformDeriv, 0 },
-				{ &radeonTransformTrigScale, 0 }
-			};
-			radeonLocalTransform(ctx, compiler.program, 4, transformations);
-		} else {
-			struct radeon_program_transformation transformations[] = {
-				{ &r300_transform_TEX, &compiler },
-				{ &radeonTransformALU, 0 },
-				{ &radeonTransformTrigSimple, 0 }
-			};
-			radeonLocalTransform(ctx, compiler.program, 3, transformations);
-		}
-
-		if (RADEON_DEBUG & DEBUG_PIXEL) {
-			_mesa_printf("Fragment Program: After native rewrite:\n");
-			_mesa_print_program(compiler.program);
-			fflush(stdout);
-		}
-
-		if (r300->radeon.radeonScreen->chip_family >= CHIP_FAMILY_RV515) {
-			struct radeon_nqssadce_descr nqssadce = {
-				.Init = &nqssadce_init,
-				.IsNativeSwizzle = &r500FPIsNativeSwizzle,
-				.BuildSwizzle = &r500FPBuildSwizzle,
-				.RewriteDepthOut = GL_TRUE
-			};
-			radeonNqssaDce(ctx, compiler.program, &nqssadce);
-		} else {
-			struct radeon_nqssadce_descr nqssadce = {
-				.Init = &nqssadce_init,
-				.IsNativeSwizzle = &r300FPIsNativeSwizzle,
-				.BuildSwizzle = &r300FPBuildSwizzle,
-				.RewriteDepthOut = GL_TRUE
-			};
-			radeonNqssaDce(ctx, compiler.program, &nqssadce);
-		}
-
-		if (RADEON_DEBUG & DEBUG_PIXEL) {
-			_mesa_printf("Compiler: after NqSSA-DCE:\n");
-			_mesa_print_program(compiler.program);
-			fflush(stdout);
-		}
-
-		if (!r300->vtbl.BuildFragmentProgramHwCode(&compiler))
-			r300_fp->error = GL_TRUE;
-
-		/* Subtle: Rescue any parameters that have been added during transformations */
-		_mesa_free_parameter_list(fp->Base.Parameters);
-		fp->Base.Parameters = compiler.program->Parameters;
-		compiler.program->Parameters = 0;
-
-		_mesa_reference_program(ctx, &compiler.program, NULL);
-
-		r300_fp->translated = GL_TRUE;
-
-		r300UpdateStateParameters(ctx, _NEW_PROGRAM | _NEW_PROGRAM_CONSTANTS);
-
-		if (r300_fp->error || (RADEON_DEBUG & DEBUG_PIXEL))
-			r300->vtbl.FragmentProgramDump(&r300_fp->code);
-	}
-
-	update_params(ctx, fp);
+	return r300->selected_fp = fp;
 }

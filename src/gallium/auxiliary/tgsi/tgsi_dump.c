@@ -28,6 +28,7 @@
 #include "util/u_debug.h"
 #include "util/u_string.h"
 #include "util/u_math.h"
+#include "util/u_memory.h"
 #include "tgsi_dump.h"
 #include "tgsi_info.h"
 #include "tgsi_iterate.h"
@@ -81,7 +82,7 @@ static const char *processor_type_names[] =
    "GEOM"
 };
 
-static const char *file_names[] =
+static const char *file_names[TGSI_FILE_COUNT] =
 {
    "NULL",
    "CONST",
@@ -90,7 +91,8 @@ static const char *file_names[] =
    "TEMP",
    "SAMP",
    "ADDR",
-   "IMM"
+   "IMM",
+   "LOOP"
 };
 
 static const char *interpolate_names[] =
@@ -108,7 +110,8 @@ static const char *semantic_names[] =
    "FOG",
    "PSIZE",
    "GENERIC",
-   "NORMAL"
+   "NORMAL",
+   "FACE"
 };
 
 static const char *immediate_type_names[] =
@@ -224,6 +227,9 @@ iter_declaration(
 {
    struct dump_ctx *ctx = (struct dump_ctx *)iter;
 
+   assert(Elements(semantic_names) == TGSI_SEMANTIC_COUNT);
+   assert(Elements(interpolate_names) == TGSI_INTERPOLATE_COUNT);
+
    TXT( "DCL " );
 
    _dump_register(
@@ -290,10 +296,12 @@ iter_immediate(
    ENM( imm->Immediate.DataType, immediate_type_names );
 
    TXT( " { " );
+
+   assert( imm->Immediate.NrTokens <= 4 + 1 );
    for (i = 0; i < imm->Immediate.NrTokens - 1; i++) {
       switch (imm->Immediate.DataType) {
       case TGSI_IMM_FLOAT32:
-         FLT( imm->u.ImmediateFloat32[i].Float );
+         FLT( imm->u[i].Float );
          break;
       default:
          assert( 0 );
@@ -355,11 +363,22 @@ iter_instruction(
          CHR( ',' );
       CHR( ' ' );
 
-      _dump_register(
-         ctx,
-         dst->DstRegister.File,
-         dst->DstRegister.Index,
-         dst->DstRegister.Index );
+      if (dst->DstRegister.Indirect) {
+         _dump_register_ind(
+            ctx,
+            dst->DstRegister.File,
+            dst->DstRegister.Index,
+            dst->DstRegisterInd.File,
+            dst->DstRegisterInd.Index,
+            dst->DstRegisterInd.SwizzleX );
+      }
+      else {
+         _dump_register(
+            ctx,
+            dst->DstRegister.File,
+            dst->DstRegister.Index,
+            dst->DstRegister.Index );
+      }
       ENM( dst->DstRegisterExtModulate.Modulate, modulate_names );
       _dump_writemask( ctx, dst->DstRegister.WriteMask );
 
@@ -454,8 +473,8 @@ iter_instruction(
    switch (inst->Instruction.Opcode) {
    case TGSI_OPCODE_IF:
    case TGSI_OPCODE_ELSE:
-   case TGSI_OPCODE_BGNLOOP2:
-   case TGSI_OPCODE_ENDLOOP2:
+   case TGSI_OPCODE_BGNLOOP:
+   case TGSI_OPCODE_ENDLOOP:
    case TGSI_OPCODE_CAL:
       TXT( " :" );
       UID( inst->InstructionExtLabel.Label );

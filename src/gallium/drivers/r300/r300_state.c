@@ -24,6 +24,8 @@
 #include "util/u_pack_color.h"
 
 #include "util/u_debug.h"
+
+#include "pipe/p_config.h"
 #include "pipe/internal/p_winsys_screen.h"
 
 #include "r300_context.h"
@@ -153,7 +155,7 @@ static void
     }
 
     r300->dirty_state |= R300_NEW_CONSTANTS;
-
+#if 0
     /* If the number of constants have changed, invalidate the shader. */
     if (r300->shader_constants[shader].user_count != i) {
         if (shader == PIPE_SHADER_FRAGMENT && r300->fs &&
@@ -166,6 +168,7 @@ static void
             r300_translate_vertex_shader(r300, r300->vs);
         }
     }
+#endif
 }
 
 /* Create a new depth, stencil, and alpha state based on the CSO dsa state.
@@ -313,7 +316,6 @@ static void r300_bind_fs_state(struct pipe_context* pipe, void* shader)
         r300_translate_fragment_shader(r300, fs);
     }
 
-    fs->translated = TRUE;
     r300->fs = fs;
 
     r300->dirty_state |= R300_NEW_FRAGMENT_SHADER;
@@ -350,14 +352,19 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
 
     rs->enable_vte = !state->bypass_vs_clip_and_viewport;
 
+#ifdef PIPE_ARCH_LITTLE_ENDIAN
+    rs->vap_control_status = R300_VC_NO_SWAP;
+#else
+    rs->vap_control_status = R300_VC_32BIT_SWAP;
+#endif
+
     /* If bypassing TCL, or if no TCL engine is present, turn off the HW TCL.
      * Else, enable HW TCL and force Draw's TCL off. */
     if (state->bypass_vs_clip_and_viewport ||
             !r300_screen(pipe->screen)->caps->has_tcl) {
-        rs->vap_control_status = R300_VAP_TCL_BYPASS;
+        rs->vap_control_status |= R300_VAP_TCL_BYPASS;
     } else {
         rs->rs.bypass_vs_clip_and_viewport = TRUE;
-        rs->vap_control_status = 0;
     }
 
     rs->point_size = pack_float_16_6x(state->point_size) |

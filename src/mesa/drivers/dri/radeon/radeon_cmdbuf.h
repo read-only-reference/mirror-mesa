@@ -16,33 +16,12 @@ void rcommonBeginBatch(radeonContextPtr rmesa,
 		       const char *function,
 		       int line);
 
-#define RADEON_CP_PACKET3_NOP                       0xC0001000
-#define RADEON_CP_PACKET3_NEXT_CHAR                 0xC0001900
-#define RADEON_CP_PACKET3_PLY_NEXTSCAN              0xC0001D00
-#define RADEON_CP_PACKET3_SET_SCISSORS              0xC0001E00
-#define RADEON_CP_PACKET3_3D_RNDR_GEN_INDX_PRIM     0xC0002300
-#define RADEON_CP_PACKET3_LOAD_MICROCODE            0xC0002400
-#define RADEON_CP_PACKET3_WAIT_FOR_IDLE             0xC0002600
-#define RADEON_CP_PACKET3_3D_DRAW_VBUF              0xC0002800
-#define RADEON_CP_PACKET3_3D_DRAW_IMMD              0xC0002900
-#define RADEON_CP_PACKET3_3D_DRAW_INDX              0xC0002A00
-#define RADEON_CP_PACKET3_LOAD_PALETTE              0xC0002C00
-#define RADEON_CP_PACKET3_3D_LOAD_VBPNTR            0xC0002F00
-#define RADEON_CP_PACKET3_CNTL_PAINT                0xC0009100
-#define RADEON_CP_PACKET3_CNTL_BITBLT               0xC0009200
-#define RADEON_CP_PACKET3_CNTL_SMALLTEXT            0xC0009300
-#define RADEON_CP_PACKET3_CNTL_HOSTDATA_BLT         0xC0009400
-#define RADEON_CP_PACKET3_CNTL_POLYLINE             0xC0009500
-#define RADEON_CP_PACKET3_CNTL_POLYSCANLINES        0xC0009800
-#define RADEON_CP_PACKET3_CNTL_PAINT_MULTI          0xC0009A00
-#define RADEON_CP_PACKET3_CNTL_BITBLT_MULTI         0xC0009B00
-#define RADEON_CP_PACKET3_CNTL_TRANS_BITBLT         0xC0009C00
+/* +r6/r7 : code here moved */
 
 #define CP_PACKET2  (2 << 30)
 #define CP_PACKET0(reg, n)	(RADEON_CP_PACKET0 | ((n)<<16) | ((reg)>>2))
 #define CP_PACKET0_ONE(reg, n)	(RADEON_CP_PACKET0 | RADEON_CP_PACKET0_ONE_REG_WR | ((n)<<16) | ((reg)>>2))
-#define CP_PACKET3( pkt, n )						\
-	(RADEON_CP_PACKET3 | (pkt) | ((n) << 16))
+#define CP_PACKET3(pkt, n)	(RADEON_CP_PACKET3 | (pkt) | ((n) << 16))
 
 /**
  * Every function writing to the command buffer needs to declare this
@@ -125,19 +104,20 @@ void rcommonBeginBatch(radeonContextPtr rmesa,
 /** Continuous register range write to command buffer; requires 1 dword,
  * expects count dwords afterwards for register contents. */
 #define OUT_BATCH_REGSEQ(reg, count) \
-	OUT_BATCH(cmdpacket0(b_l_rmesa->radeonScreen, (reg), (count)));
+	OUT_BATCH(cmdpacket0(b_l_rmesa->radeonScreen, (reg), (count)))
 
 /** Write a 32 bit float to the ring; requires 1 dword. */
 #define OUT_BATCH_FLOAT32(f) \
-	OUT_BATCH(radeonPackFloat32((f)));
+	OUT_BATCH(radeonPackFloat32((f)))
 
+/* +r6/r7 : code here moved */
 
 /* Fire the buffered vertices no matter what.
  */
 static INLINE void radeon_firevertices(radeonContextPtr radeon)
 {
    if (radeon->cmdbuf.cs->cdw || radeon->dma.flush )
-      radeonFlush(radeon->glCtx);
+      radeon->glCtx->Driver.Flush(radeon->glCtx); /* +r6/r7 */
 }
 
 #endif

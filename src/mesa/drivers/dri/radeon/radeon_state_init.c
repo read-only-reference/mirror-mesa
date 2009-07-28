@@ -390,8 +390,17 @@ static void ctx_emit_cs(GLcontext *ctx, struct radeon_state_atom *atom)
    atom->cmd[CTX_RB3D_CNTL] &= ~(0xf << 10);
    if (rrb->cpp == 4)
 	atom->cmd[CTX_RB3D_CNTL] |= RADEON_COLOR_FORMAT_ARGB8888;
-   else
+   else switch (rrb->base._ActualFormat) {
+   case GL_RGB5:
 	atom->cmd[CTX_RB3D_CNTL] |= RADEON_COLOR_FORMAT_RGB565;
+	break;
+   case GL_RGBA4:
+	atom->cmd[CTX_RB3D_CNTL] |= RADEON_COLOR_FORMAT_ARGB4444;
+	break;
+   case GL_RGB5_A1:
+	atom->cmd[CTX_RB3D_CNTL] |= RADEON_COLOR_FORMAT_ARGB1555;
+	break;
+   }
 
    cbpitch = (rrb->pitch / rrb->cpp);
    if (rrb->bo->flags & RADEON_BO_FLAGS_MACRO_TILE)
@@ -414,7 +423,7 @@ static void ctx_emit_cs(GLcontext *ctx, struct radeon_state_atom *atom)
    if (drb)
      dwords += 6;
    if (rrb)
-     dwords += 6;
+     dwords += 8;
    BEGIN_BATCH_NO_AUTOSTATE(dwords);
 
    /* In the CS case we need to split this up */
@@ -440,7 +449,7 @@ static void ctx_emit_cs(GLcontext *ctx, struct radeon_state_atom *atom)
      OUT_BATCH_RELOC(0, rrb->bo, 0, 0, RADEON_GEM_DOMAIN_VRAM, 0);
 
      OUT_BATCH(CP_PACKET0(RADEON_RB3D_COLORPITCH, 0));
-     OUT_BATCH(cbpitch);
+     OUT_BATCH_RELOC(cbpitch, rrb->bo, cbpitch, 0, RADEON_GEM_DOMAIN_VRAM, 0);
    }
 
    // if (atom->cmd_size == CTX_STATE_SIZE_NEWDRM) {
@@ -453,8 +462,8 @@ static void ctx_emit_cs(GLcontext *ctx, struct radeon_state_atom *atom)
    OUT_BATCH(0);
    OUT_BATCH(CP_PACKET0(RADEON_RE_WIDTH_HEIGHT, 0));
    if (rrb) {
-       OUT_BATCH(((rrb->width - 1) << RADEON_RE_WIDTH_SHIFT) |
-                 ((rrb->height - 1) << RADEON_RE_HEIGHT_SHIFT));
+       OUT_BATCH(((rrb->base.Width - 1) << RADEON_RE_WIDTH_SHIFT) |
+                 ((rrb->base.Height - 1) << RADEON_RE_HEIGHT_SHIFT));
    } else {
        OUT_BATCH(0);
    }

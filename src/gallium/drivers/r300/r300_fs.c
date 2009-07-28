@@ -67,8 +67,7 @@ void r300_translate_fragment_shader(struct r300_context* r300,
                 for (i = 0; i < 4; i++) {
                     consts->constants[assembler->imm_offset +
                         assembler->imm_count][i] =
-                        parser.FullToken.FullImmediate.u.ImmediateFloat32[i]
-                        .Float;
+                        parser.FullToken.FullImmediate.u[i].Float;
                 }
                 assembler->imm_count++;
                 break;
@@ -106,4 +105,7 @@ void r300_translate_fragment_shader(struct r300_context* r300,
 
     tgsi_parse_free(&parser);
     FREE(assembler);
+
+    /* And, finally... */
+    fs->translated = TRUE;
 }

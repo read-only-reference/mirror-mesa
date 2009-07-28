@@ -30,6 +30,8 @@
 
 #include "main/mtypes.h"
 
-extern void r300TranslateFragmentShader(GLcontext *ctx, struct gl_fragment_program *fp);
+#include "r300_context.h"
+
+struct r300_fragment_program *r300SelectAndTranslateFragmentShader(GLcontext *ctx);
 
 #endif

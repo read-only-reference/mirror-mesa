@@ -149,6 +149,12 @@ FreeScreenConfigs(__GLXdisplayPrivate * priv)
       Xfree((char *) psc->serverGLXexts);
 
 #ifdef GLX_DIRECT_RENDERING
+      if (psc->driver_configs) {
+         for(unsigned int i = 0; psc->driver_configs[i]; i++)
+            free((__DRIconfig*)psc->driver_configs[i]);
+         free(psc->driver_configs);
+         psc->driver_configs = NULL;
+      }
       if (psc->driScreen) {
          psc->driScreen->destroyScreen(psc);
          __glxHashDestroy(psc->drawHash);
@@ -644,17 +650,6 @@ __glXInitialize(Display * dpy)
    int major, minor;
 #ifdef GLX_DIRECT_RENDERING
    Bool glx_direct, glx_accel;
-#endif
-
-#if defined(USE_XTHREADS)
-   {
-      static int firstCall = 1;
-      if (firstCall) {
-         /* initialize the GLX mutexes */
-         xmutex_init(&__glXmutex);
-         firstCall = 0;
-      }
-   }
 #endif
 
    /* The one and only long long lock */
