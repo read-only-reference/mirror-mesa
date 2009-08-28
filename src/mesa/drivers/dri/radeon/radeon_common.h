@@ -10,6 +10,8 @@ void radeonRecalcScissorRects(radeonContextPtr radeon);
 void radeonSetCliprects(radeonContextPtr radeon);
 void radeonUpdateScissor( GLcontext *ctx );
 void radeonScissor(GLcontext* ctx, GLint x, GLint y, GLsizei w, GLsizei h);
+void radeonPolygonStipple( GLcontext *ctx, const GLubyte *mask );
+void radeonPolygonStipplePreKMS( GLcontext *ctx, const GLubyte *mask );
 
 void radeonWaitForIdleLocked(radeonContextPtr radeon);
 extern uint32_t radeonGetAge(radeonContextPtr radeon);
@@ -24,6 +26,7 @@ void radeonUpdatePageFlipping(radeonContextPtr rmesa);
 void radeonFlush(GLcontext *ctx);
 void radeonFinish(GLcontext * ctx);
 void radeonEmitState(radeonContextPtr radeon);
+GLuint radeonCountStateEmitSize(radeonContextPtr radeon);
 
 void radeon_clear_tris(GLcontext *ctx, GLbitfield mask);
 

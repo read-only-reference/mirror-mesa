@@ -216,7 +216,7 @@ static struct r300_vertex_program *build_program(GLcontext *ctx,
 	_mesa_memcpy(&vp->key, wanted_key, sizeof(vp->key));
 
 	rc_init(&compiler.Base);
-	compiler.Base.Debug = (RADEON_DEBUG & DEBUG_VERTS) ? GL_TRUE : GL_FALSE;
+	compiler.Base.Debug = (RADEON_DEBUG & RADEON_VERTS) ? GL_TRUE : GL_FALSE;
 
 	compiler.code = &vp->code;
 	compiler.RequiredOutputs = compute_required_outputs(vp->Base, vp->key.FpReads);
@@ -225,7 +225,7 @@ static struct r300_vertex_program *build_program(GLcontext *ctx,
 	if (compiler.Base.Debug) {
 		fprintf(stderr, "Initial vertex program:\n");
 		_mesa_print_program(&vp->Base->Base);
-		fflush(stdout);
+		fflush(stderr);
 	}
 
 	if (mesa_vp->IsPositionInvariant) {
@@ -298,6 +298,8 @@ static void r300EmitVertexProgram(r300ContextPtr r300, int dest, struct r300_ver
 
 	assert((code->length > 0) && (code->length % 4 == 0));
 
+	R300_STATECHANGE( r300, vap_flush );
+
 	switch ((dest >> 8) & 0xf) {
 		case 0:
 			R300_STATECHANGE(r300, vpi);
@@ -335,6 +337,7 @@ void r300SetupVertexProgram(r300ContextPtr rmesa)
 	((drm_r300_cmd_header_t *) rmesa->hw.vpi.cmd)->vpu.count = 0;
 	((drm_r300_cmd_header_t *) rmesa->hw.vps.cmd)->vpu.count = 0;
 
+	R300_STATECHANGE(rmesa, vap_flush);
 	R300_STATECHANGE(rmesa, vpp);
 	param_count = r300VertexProgUpdateParams(ctx, prog, (float *)&rmesa->hw.vpp.cmd[R300_VPP_PARAM_0]);
 	bump_vpu_count(rmesa->hw.vpp.cmd, param_count);

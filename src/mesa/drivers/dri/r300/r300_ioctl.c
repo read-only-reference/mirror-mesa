@@ -44,6 +44,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/imports.h"
 #include "main/macros.h"
 #include "main/context.h"
+#include "main/simple_list.h"
 #include "swrast/swrast.h"
 
 #include "radeon_common.h"
@@ -137,7 +138,7 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags,
 	GLuint cbpitch = 0;
 	r300ContextPtr rmesa = r300;
 
-	if (RADEON_DEBUG & DEBUG_IOCTL)
+	if (RADEON_DEBUG & RADEON_IOCTL)
 		fprintf(stderr, "%s: buffer %p (%i,%i %ix%i)\n",
 			__FUNCTION__, rrb, dPriv->x, dPriv->y,
 			dPriv->w, dPriv->h);
@@ -168,18 +169,21 @@ static void r300ClearBuffer(r300ContextPtr r300, int flags,
 	}
 #if 1
 	if (flags & (CLEARBUFFER_DEPTH | CLEARBUFFER_STENCIL)) {
-		assert(rrbd != 0);
-		cbpitch = (rrbd->pitch / rrbd->cpp);
+		uint32_t zbpitch = (rrbd->pitch / rrbd->cpp);
 		if (rrbd->bo->flags & RADEON_BO_FLAGS_MACRO_TILE){
-			cbpitch |= R300_DEPTHMACROTILE_ENABLE;
+			zbpitch |= R300_DEPTHMACROTILE_ENABLE;
         }
 		if (rrbd->bo->flags & RADEON_BO_FLAGS_MICRO_TILE){
-            cbpitch |= R300_DEPTHMICROTILE_TILED;
+            zbpitch |= R300_DEPTHMICROTILE_TILED;
         }
 		BEGIN_BATCH_NO_AUTOSTATE(6);
 		OUT_BATCH_REGSEQ(R300_ZB_DEPTHOFFSET, 1);
 		OUT_BATCH_RELOC(0, rrbd->bo, 0, 0, RADEON_GEM_DOMAIN_VRAM, 0);
-		OUT_BATCH_REGVAL(R300_ZB_DEPTHPITCH, cbpitch);
+		OUT_BATCH_REGSEQ(R300_ZB_DEPTHPITCH, 1);
+		if (!r300->radeon.radeonScreen->kernel_mm)
+			OUT_BATCH(zbpitch);
+		else
+			OUT_BATCH_RELOC(zbpitch, rrbd->bo, zbpitch, 0, RADEON_GEM_DOMAIN_VRAM, 0);
 		END_BATCH();
 	}
 #endif
@@ -503,7 +507,15 @@ static void r300EmitClearState(GLcontext * ctx)
 			R500_ALU_RGBA_A_SWIZ_0;
 
 		r500fp.cmd[7] = 0;
-		emit_r500fp(ctx, &r500fp);
+		if (r300->radeon.radeonScreen->kernel_mm) {
+			emit_r500fp(ctx, &r500fp);
+		} else {
+			int dwords = r500fp.check(ctx,&r500fp);
+			BEGIN_BATCH_NO_AUTOSTATE(dwords);
+			OUT_BATCH_TABLE(r500fp.cmd, dwords);
+			END_BATCH();
+		}
+
 	}
 
 	BEGIN_BATCH(2);
@@ -547,6 +559,7 @@ static void r300EmitClearState(GLcontext * ctx)
         struct radeon_state_atom vpu;
         uint32_t _cmd[10];
 		R300_STATECHANGE(r300, pvs);
+		R300_STATECHANGE(r300, vap_flush);
 		R300_STATECHANGE(r300, vpi);
 
 		BEGIN_BATCH(4);
@@ -588,8 +601,19 @@ static void r300EmitClearState(GLcontext * ctx)
                                       PVS_SRC_REG_INPUT, NEGATE_NONE);
 		vpu.cmd[8] = 0x0;
 
-		r300->vap_flush_needed = GL_TRUE;
-		emit_vpu(ctx, &vpu);
+		if (r300->radeon.radeonScreen->kernel_mm) {
+			int dwords = r300->hw.vap_flush.check(ctx,&r300->hw.vap_flush);
+			BEGIN_BATCH_NO_AUTOSTATE(dwords);
+			OUT_BATCH_TABLE(r300->hw.vap_flush.cmd, dwords);
+			END_BATCH();
+			emit_vpu(ctx, &vpu);
+		} else {
+			int dwords = vpu.check(ctx,&vpu);
+			BEGIN_BATCH_NO_AUTOSTATE(dwords);
+			OUT_BATCH_TABLE(vpu.cmd, dwords);
+			END_BATCH();
+		}
+
 	}
 }
 
@@ -681,7 +705,7 @@ static void r300Clear(GLcontext * ctx, GLbitfield mask)
 	int i, ret;
 	struct gl_framebuffer *fb = ctx->DrawBuffer;
 
-	if (RADEON_DEBUG & DEBUG_IOCTL)
+	if (RADEON_DEBUG & RADEON_IOCTL)
 		fprintf(stderr, "r300Clear\n");
 
 	if (!r300->radeon.radeonScreen->driScreen->dri2.enabled) {
@@ -743,13 +767,12 @@ static void r300Clear(GLcontext * ctx, GLbitfield mask)
 	}
 
 	if (swrast_mask) {
-		if (RADEON_DEBUG & DEBUG_FALLBACKS)
+		if (RADEON_DEBUG & RADEON_FALLBACKS)
 			fprintf(stderr, "%s: swrast clear, mask: %x\n",
 				__FUNCTION__, swrast_mask);
 		_swrast_Clear(ctx, swrast_mask);
 	}
 }
-
 
 void r300InitIoctlFuncs(struct dd_function_table *functions)
 {

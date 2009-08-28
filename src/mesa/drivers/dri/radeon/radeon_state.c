@@ -40,6 +40,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/state.h"
 #include "main/context.h"
 #include "main/framebuffer.h"
+#include "main/simple_list.h"
 
 #include "vbo/vbo.h"
 #include "tnl/tnl.h"
@@ -549,31 +550,6 @@ static void radeonPolygonOffset( GLcontext *ctx,
    rmesa->hw.zbs.cmd[ZBS_SE_ZBIAS_CONSTANT] = constant.ui32;
 }
 
-static void radeonPolygonStipple( GLcontext *ctx, const GLubyte *mask )
-{
-   r100ContextPtr rmesa = R100_CONTEXT(ctx);
-   GLuint i;
-   drm_radeon_stipple_t stipple;
-
-   /* Must flip pattern upside down.
-    */
-   for ( i = 0 ; i < 32 ; i++ ) {
-      rmesa->state.stipple.mask[31 - i] = ((GLuint *) mask)[i];
-   }
-
-   /* TODO: push this into cmd mechanism
-    */
-   radeon_firevertices(&rmesa->radeon);
-   LOCK_HARDWARE( &rmesa->radeon );
-
-   /* FIXME: Use window x,y offsets into stipple RAM.
-    */
-   stipple.mask = rmesa->state.stipple.mask;
-   drmCommandWrite( rmesa->radeon.dri.fd, DRM_RADEON_STIPPLE,
-                    &stipple, sizeof(drm_radeon_stipple_t) );
-   UNLOCK_HARDWARE( &rmesa->radeon );
-}
-
 static void radeonPolygonMode( GLcontext *ctx, GLenum face, GLenum mode )
 {
    r100ContextPtr rmesa = R100_CONTEXT(ctx);
@@ -838,7 +814,7 @@ void radeonUpdateMaterial( GLcontext *ctx )
    if (ctx->Light.ColorMaterialEnabled)
       mask &= ~ctx->Light.ColorMaterialBitmask;
 
-   if (RADEON_DEBUG & DEBUG_STATE)
+   if (RADEON_DEBUG & RADEON_STATE)
       fprintf(stderr, "%s\n", __FUNCTION__);
 
 
@@ -1572,7 +1548,7 @@ static void radeonEnable( GLcontext *ctx, GLenum cap, GLboolean state )
    r100ContextPtr rmesa = R100_CONTEXT(ctx);
    GLuint p, flag;
 
-   if ( RADEON_DEBUG & DEBUG_STATE )
+   if ( RADEON_DEBUG & RADEON_STATE )
       fprintf( stderr, "%s( %s = %s )\n", __FUNCTION__,
 	       _mesa_lookup_enum_by_nr( cap ),
 	       state ? "GL_TRUE" : "GL_FALSE" );
@@ -1866,7 +1842,7 @@ static void radeonLightingSpaceChange( GLcontext *ctx )
    GLboolean tmp;
    RADEON_STATECHANGE( rmesa, tcl );
 
-   if (RADEON_DEBUG & DEBUG_STATE)
+   if (RADEON_DEBUG & RADEON_STATE)
       fprintf(stderr, "%s %d BEFORE %x\n", __FUNCTION__, ctx->_NeedEyeCoords,
 	      rmesa->hw.tcl.cmd[TCL_LIGHT_MODEL_CTL]);
 
@@ -1881,7 +1857,7 @@ static void radeonLightingSpaceChange( GLcontext *ctx )
       rmesa->hw.tcl.cmd[TCL_LIGHT_MODEL_CTL] &= ~RADEON_RESCALE_NORMALS;
    }
 
-   if (RADEON_DEBUG & DEBUG_STATE)
+   if (RADEON_DEBUG & RADEON_STATE)
       fprintf(stderr, "%s %d AFTER %x\n", __FUNCTION__, ctx->_NeedEyeCoords,
 	      rmesa->hw.tcl.cmd[TCL_LIGHT_MODEL_CTL]);
 }
@@ -2099,7 +2075,7 @@ static GLboolean r100ValidateBuffers(GLcontext *ctx)
 			   RADEON_GEM_DOMAIN_GTT | RADEON_GEM_DOMAIN_VRAM, 0);
    }
 
-   ret = radeon_cs_space_check_with_bo(rmesa->radeon.cmdbuf.cs, rmesa->radeon.dma.current, RADEON_GEM_DOMAIN_GTT, 0);
+   ret = radeon_cs_space_check_with_bo(rmesa->radeon.cmdbuf.cs, first_elem(&rmesa->radeon.dma.reserved)->bo, RADEON_GEM_DOMAIN_GTT, 0);
    if (ret)
        return GL_FALSE;
    return GL_TRUE;
@@ -2226,7 +2202,7 @@ static void radeonWrapRunPipeline( GLcontext *ctx )
  * Many of the ctx->Driver functions might have been initialized to
  * software defaults in the earlier _mesa_init_driver_functions() call.
  */
-void radeonInitStateFuncs( GLcontext *ctx )
+void radeonInitStateFuncs( GLcontext *ctx , GLboolean dri2 )
 {
    ctx->Driver.UpdateState		= radeonInvalidateState;
    ctx->Driver.LightingSpaceChange      = radeonLightingSpaceChange;
@@ -2259,7 +2235,10 @@ void radeonInitStateFuncs( GLcontext *ctx )
    ctx->Driver.LogicOpcode		= radeonLogicOpCode;
    ctx->Driver.PolygonMode		= radeonPolygonMode;
    ctx->Driver.PolygonOffset		= radeonPolygonOffset;
-   ctx->Driver.PolygonStipple		= radeonPolygonStipple;
+   if (dri2)
+      ctx->Driver.PolygonStipple		= radeonPolygonStipple;
+   else
+      ctx->Driver.PolygonStipple		= radeonPolygonStipplePreKMS;
    ctx->Driver.RenderMode		= radeonRenderMode;
    ctx->Driver.Scissor			= radeonScissor;
    ctx->Driver.ShadeModel		= radeonShadeModel;

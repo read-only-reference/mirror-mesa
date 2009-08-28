@@ -17,13 +17,12 @@ HEADERS = \
 	egldriver.h \
 	eglglobals.h \
 	egllog.h \
-	eglhash.h \
 	eglmisc.h \
 	eglmode.h \
+	eglmutex.h \
 	eglscreen.h \
 	eglstring.h \
-	eglsurface.h \
-	eglx.h
+	eglsurface.h
 
 SOURCES = \
 	eglapi.c \
@@ -35,13 +34,11 @@ SOURCES = \
 	egldriver.c \
 	eglglobals.c \
 	egllog.c \
-	eglhash.c \
 	eglmisc.c \
 	eglmode.c \
 	eglscreen.c \
 	eglstring.c \
-	eglsurface.c \
-	eglx.c
+	eglsurface.c
 
 OBJECTS = $(SOURCES:.c=.o)
 
@@ -74,6 +71,7 @@ install: default
 clean:
 	-rm -f *.o *.so*
 	-rm -f core.*
+	-rm -f depend depend.bak
 
 
 depend: $(SOURCES) $(HEADERS)

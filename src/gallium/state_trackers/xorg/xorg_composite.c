@@ -1,20 +1,419 @@
 #include "xorg_composite.h"
 
+#include "xorg_exa_tgsi.h"
+
+#include "cso_cache/cso_context.h"
+#include "util/u_draw_quad.h"
+
+#include "pipe/p_inlines.h"
+
+struct xorg_composite_blend {
+   int op:8;
+
+   unsigned rgb_src_factor:5;    /**< PIPE_BLENDFACTOR_x */
+   unsigned rgb_dst_factor:5;    /**< PIPE_BLENDFACTOR_x */
+
+   unsigned alpha_src_factor:5;  /**< PIPE_BLENDFACTOR_x */
+   unsigned alpha_dst_factor:5;  /**< PIPE_BLENDFACTOR_x */
+};
+
+#define BLEND_OP_OVER 3
+static const struct xorg_composite_blend xorg_blends[] = {
+   { PictOpClear,
+     PIPE_BLENDFACTOR_CONST_COLOR, PIPE_BLENDFACTOR_CONST_ALPHA,
+     PIPE_BLENDFACTOR_ZERO, PIPE_BLENDFACTOR_ZERO },
+
+   { PictOpSrc,
+     PIPE_BLENDFACTOR_ONE, PIPE_BLENDFACTOR_ONE,
+     PIPE_BLENDFACTOR_ZERO, PIPE_BLENDFACTOR_ZERO },
+
+   { PictOpDst,
+     PIPE_BLENDFACTOR_ZERO, PIPE_BLENDFACTOR_ZERO,
+     PIPE_BLENDFACTOR_ONE, PIPE_BLENDFACTOR_ONE },
+
+   { PictOpOver,
+     PIPE_BLENDFACTOR_SRC_ALPHA, PIPE_BLENDFACTOR_ONE,
+     PIPE_BLENDFACTOR_INV_SRC_ALPHA, PIPE_BLENDFACTOR_INV_SRC_ALPHA },
+
+   { PictOpOverReverse,
+     PIPE_BLENDFACTOR_SRC_ALPHA, PIPE_BLENDFACTOR_ONE,
+     PIPE_BLENDFACTOR_INV_SRC_ALPHA, PIPE_BLENDFACTOR_INV_SRC_ALPHA },
+};
+
+struct acceleration_info {
+   int op : 16;
+   int with_mask : 1;
+   int component_alpha : 1;
+};
+static const struct acceleration_info accelerated_ops[] = {
+   {PictOpClear,       1, 0},
+   {PictOpSrc,         1, 0},
+   {PictOpDst,         1, 0},
+   {PictOpOver,        1, 0},
+   {PictOpOverReverse, 1, 0},
+   {PictOpIn,          1, 0},
+   {PictOpInReverse,   1, 0},
+   {PictOpOut,         1, 0},
+   {PictOpOutReverse,  1, 0},
+   {PictOpAtop,        1, 0},
+   {PictOpAtopReverse, 1, 0},
+   {PictOpXor,         1, 0},
+   {PictOpAdd,         1, 0},
+   {PictOpSaturate,    1, 0},
+};
+
+static struct xorg_composite_blend
+blend_for_op(int op)
+{
+   const int num_blends =
+      sizeof(xorg_blends)/sizeof(struct xorg_composite_blend);
+   int i;
+
+   for (i = 0; i < num_blends; ++i) {
+      if (xorg_blends[i].op == op)
+         return xorg_blends[i];
+   }
+   return xorg_blends[BLEND_OP_OVER];
+}
+
+
+static struct pipe_buffer *
+setup_vertex_data_tex(struct exa_context *ctx,
+                      float x0, float y0, float x1, float y1,
+                      float x2, float y2, float x3, float y3,
+                      float s0, float t0, float s1, float t1,
+                      float z)
+{
+   ctx->vertices[0][0][0] = x0;
+   ctx->vertices[0][0][1] = y0;
+   ctx->vertices[0][0][2] = z;
+   ctx->vertices[0][1][0] = s0; /*s*/
+   ctx->vertices[0][1][1] = t0; /*t*/
+
+   ctx->vertices[1][0][0] = x1;
+   ctx->vertices[1][0][1] = y1;
+   ctx->vertices[1][0][2] = z;
+   ctx->vertices[1][1][0] = s1; /*s*/
+   ctx->vertices[1][1][1] = t0; /*t*/
+
+   ctx->vertices[2][0][0] = x2;
+   ctx->vertices[2][0][1] = y2;
+   ctx->vertices[2][0][2] = z;
+   ctx->vertices[2][1][0] = s1;
+   ctx->vertices[2][1][1] = t1;
+
+   ctx->vertices[3][0][0] = x3;
+   ctx->vertices[3][0][1] = y3;
+   ctx->vertices[3][0][2] = z;
+   ctx->vertices[3][1][0] = s0;
+   ctx->vertices[3][1][1] = t1;
+
+   return pipe_user_buffer_create(ctx->ctx->screen,
+                                  ctx->vertices,
+                                  sizeof(ctx->vertices));
+}
+
+static void
+draw_texture(struct exa_context *exa,
+             struct pipe_texture *tex,
+             float x1offset, float y1offset,
+             float x2offset, float y2offset,
+             float x1, float y1,
+             float x2, float y2,
+             float x3, float y3,
+             float x4, float y4)
+{
+   struct pipe_context *pipe = exa->ctx;
+   struct pipe_buffer *buf;
+   float s0, t0, s1, t1;
+
+   assert(tex->width[0] != 0);
+   assert(tex->height[0] != 0);
+
+   s0 = x1offset / tex->width[0];
+   s1 = x2offset / tex->width[0];
+   t0 = y1offset / tex->height[0];
+   t1 = y2offset / tex->height[0];
+
+   /* draw quad */
+   buf = setup_vertex_data_tex(exa, x1, y1, x2, y2, x3, y3, x4, y4,
+                               s0, t0, s1, t1, 0.0f);
+
+   if (buf) {
+      util_draw_vertex_buffer(pipe, buf, 0,
+                              PIPE_PRIM_TRIANGLE_FAN,
+                              4,  /* verts */
+                              2); /* attribs/vert */
+
+      pipe_buffer_reference(&buf,
+                            NULL);
+   }
+
+   cso_restore_vertex_shader(exa->cso);
+}
 
 boolean xorg_composite_accelerated(int op,
                                    PicturePtr pSrcPicture,
                                    PicturePtr pMaskPicture,
                                    PicturePtr pDstPicture)
 {
+   unsigned i;
+   unsigned accel_ops_count =
+      sizeof(accelerated_ops)/sizeof(struct acceleration_info);
+
+
+   /*FIXME: currently accel is disabled */
    return FALSE;
+
+   if (pSrcPicture) {
+      /* component alpha not supported */
+      if (pSrcPicture->componentAlpha)
+         return FALSE;
+      /* fills not supported */
+      if (pSrcPicture->pSourcePict)
+         return FALSE;
+   }
+
+   for (i = 0; i < accel_ops_count; ++i) {
+      if (op == accelerated_ops[i].op) {
+         if (pMaskPicture && !accelerated_ops[i].with_mask)
+            return FALSE;
+         return TRUE;
+      }
+   }
+   return FALSE;
+}
+
+static void
+bind_framebuffer_state(struct exa_context *exa, PicturePtr pDstPicture,
+                       struct exa_pixmap_priv *pDst)
+{
+   unsigned i;
+   struct pipe_framebuffer_state state;
+   struct pipe_surface *surface = exa_gpu_surface(exa, pDst);
+   memset(&state, 0, sizeof(struct pipe_framebuffer_state));
+
+   state.width  = pDstPicture->pDrawable->width;
+   state.height = pDstPicture->pDrawable->height;
+
+   state.nr_cbufs = 1;
+   state.cbufs[0] = surface;
+   for (i = 1; i < PIPE_MAX_COLOR_BUFS; ++i)
+      state.cbufs[i] = 0;
+
+   /* currently we don't use depth/stencil */
+   state.zsbuf = 0;
+
+   cso_set_framebuffer(exa->cso, &state);
+}
+
+enum AxisOrientation {
+   Y0_BOTTOM,
+   Y0_TOP
+};
+
+static void
+set_viewport(struct exa_context *exa, int width, int height,
+             enum AxisOrientation orientation)
+{
+   struct pipe_viewport_state viewport;
+   float y_scale = (orientation == Y0_BOTTOM) ? -2.f : 2.f;
+
+   viewport.scale[0] =  width / 2.f;
+   viewport.scale[1] =  height / y_scale;
+   viewport.scale[2] =  1.0;
+   viewport.scale[3] =  1.0;
+   viewport.translate[0] = width / 2.f;
+   viewport.translate[1] = height / 2.f;
+   viewport.translate[2] = 0.0;
+   viewport.translate[3] = 0.0;
+
+   cso_set_viewport(exa->cso, &viewport);
+}
+
+static void
+bind_viewport_state(struct exa_context *exa, PicturePtr pDstPicture)
+{
+   int width = pDstPicture->pDrawable->width;
+   int height = pDstPicture->pDrawable->height;
+
+   set_viewport(exa, width, height, Y0_BOTTOM);
+}
+
+static void
+bind_blend_state(struct exa_context *exa, int op,
+                 PicturePtr pSrcPicture, PicturePtr pMaskPicture)
+{
+   boolean component_alpha = pSrcPicture->componentAlpha;
+   struct xorg_composite_blend blend_opt;
+   struct pipe_blend_state blend;
+
+   if (component_alpha) {
+      op = PictOpOver;
+   }
+   blend_opt = blend_for_op(op);
+
+   memset(&blend, 0, sizeof(struct pipe_blend_state));
+   blend.blend_enable = 1;
+   blend.colormask |= PIPE_MASK_R;
+   blend.colormask |= PIPE_MASK_G;
+   blend.colormask |= PIPE_MASK_B;
+   blend.colormask |= PIPE_MASK_A;
+
+   blend.rgb_src_factor   = blend_opt.rgb_src_factor;
+   blend.alpha_src_factor = blend_opt.alpha_src_factor;
+   blend.rgb_dst_factor   = blend_opt.rgb_dst_factor;
+   blend.alpha_dst_factor = blend_opt.alpha_dst_factor;
+
+   cso_set_blend(exa->cso, &blend);
+}
+
+static void
+bind_rasterizer_state(struct exa_context *exa)
+{
+   struct pipe_rasterizer_state raster;
+   memset(&raster, 0, sizeof(struct pipe_rasterizer_state));
+   raster.gl_rasterization_rules = 1;
+   cso_set_rasterizer(exa->cso, &raster);
+}
+
+static void
+bind_shaders(struct exa_context *exa, int op,
+             PicturePtr pSrcPicture, PicturePtr pMaskPicture)
+{
+   unsigned vs_traits = 0, fs_traits = 0;
+   struct xorg_shader shader;
+
+   if (pSrcPicture) {
+      vs_traits |= VS_COMPOSITE;
+      fs_traits |= FS_COMPOSITE;
+   }
+
+   if (pMaskPicture) {
+      vs_traits |= VS_MASK;
+      fs_traits |= FS_MASK;
+   }
+
+   shader = xorg_shaders_get(exa->shaders, vs_traits, fs_traits);
+   cso_set_vertex_shader_handle(exa->cso, shader.vs);
+   cso_set_fragment_shader_handle(exa->cso, shader.fs);
+}
+
+
+static void
+bind_samplers(struct exa_context *exa, int op,
+              PicturePtr pSrcPicture, PicturePtr pMaskPicture,
+              PicturePtr pDstPicture,
+              struct exa_pixmap_priv *pSrc,
+              struct exa_pixmap_priv *pMask,
+              struct exa_pixmap_priv *pDst)
+{
+   struct pipe_sampler_state *samplers[PIPE_MAX_SAMPLERS];
+   struct pipe_texture *textures[PIPE_MAX_SAMPLERS];
+   struct pipe_sampler_state src_sampler, mask_sampler;
+
+   memset(&src_sampler, 0, sizeof(struct pipe_sampler_state));
+   memset(&mask_sampler, 0, sizeof(struct pipe_sampler_state));
+
+   if (pSrcPicture && pSrc) {
+      src_sampler.wrap_s = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
+      src_sampler.wrap_t = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
+      src_sampler.min_img_filter = PIPE_TEX_MIPFILTER_NEAREST;
+      src_sampler.mag_img_filter = PIPE_TEX_MIPFILTER_NEAREST;
+      src_sampler.normalized_coords = 1;
+      samplers[0] = &src_sampler;
+      textures[0] = pSrc->tex;
+   }
+
+   if (pMaskPicture && pMask) {
+      mask_sampler.wrap_s = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
+      mask_sampler.wrap_t = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
+      mask_sampler.min_img_filter = PIPE_TEX_MIPFILTER_NEAREST;
+      mask_sampler.mag_img_filter = PIPE_TEX_MIPFILTER_NEAREST;
+      mask_sampler.normalized_coords = 1;
+      samplers[1] = &mask_sampler;
+      textures[1] = pMask->tex;
+   }
+
+   cso_set_samplers(exa->cso, 3,
+                    (const struct pipe_sampler_state **)samplers);
+   cso_set_sampler_textures(exa->cso, 3, textures);
+}
+
+static void
+setup_vs_constant_buffer(struct exa_context *exa,
+                         int width, int height)
+{
+   const int param_bytes = 8 * sizeof(float);
+   float vs_consts[8] = {
+      2.f/width, 2.f/height, 1, 1,
+      -1, -1, 0, 0
+   };
+   struct pipe_constant_buffer *cbuf = &exa->vs_const_buffer;
+
+   pipe_buffer_reference(&cbuf->buffer, NULL);
+   cbuf->buffer = pipe_buffer_create(exa->ctx->screen, 16,
+                                     PIPE_BUFFER_USAGE_CONSTANT,
+                                     param_bytes);
+
+   if (cbuf->buffer) {
+      pipe_buffer_write(exa->ctx->screen, cbuf->buffer,
+                        0, param_bytes, vs_consts);
+   }
+   exa->ctx->set_constant_buffer(exa->ctx, PIPE_SHADER_VERTEX, 0, cbuf);
+}
+
+
+static void
+setup_fs_constant_buffer(struct exa_context *exa)
+{
+   const int param_bytes = 4 * sizeof(float);
+   float fs_consts[8] = {
+      0, 0, 0, 1,
+   };
+   struct pipe_constant_buffer *cbuf = &exa->fs_const_buffer;
+
+   pipe_buffer_reference(&cbuf->buffer, NULL);
+   cbuf->buffer = pipe_buffer_create(exa->ctx->screen, 16,
+                                     PIPE_BUFFER_USAGE_CONSTANT,
+                                     param_bytes);
+
+   if (cbuf->buffer) {
+      pipe_buffer_write(exa->ctx->screen, cbuf->buffer,
+                        0, param_bytes, fs_consts);
+   }
+   exa->ctx->set_constant_buffer(exa->ctx, PIPE_SHADER_FRAGMENT, 0, cbuf);
+}
+
+static void
+setup_constant_buffers(struct exa_context *exa, PicturePtr pDstPicture)
+{
+   int width = pDstPicture->pDrawable->width;
+   int height = pDstPicture->pDrawable->height;
+
+   setup_vs_constant_buffer(exa, width, height);
+   setup_fs_constant_buffer(exa);
 }
 
 boolean xorg_composite_bind_state(struct exa_context *exa,
                                   int op,
                                   PicturePtr pSrcPicture,
                                   PicturePtr pMaskPicture,
-                                  PicturePtr pDstPicture)
+                                  PicturePtr pDstPicture,
+                                  struct exa_pixmap_priv *pSrc,
+                                  struct exa_pixmap_priv *pMask,
+                                  struct exa_pixmap_priv *pDst)
 {
+   bind_framebuffer_state(exa, pDstPicture, pDst);
+   bind_viewport_state(exa, pDstPicture);
+   bind_blend_state(exa, op, pSrcPicture, pMaskPicture);
+   bind_rasterizer_state(exa);
+   bind_shaders(exa, op, pSrcPicture, pMaskPicture);
+   bind_samplers(exa, op, pSrcPicture, pMaskPicture, pDstPicture,
+                 pSrc, pMask, pDst);
+
+   setup_constant_buffers(exa, pDstPicture);
+
    return FALSE;
 }
 

@@ -27,6 +27,7 @@
 
 #include "i915_context.h"
 #include "main/imports.h"
+#include "main/macros.h"
 #include "intel_tex.h"
 #include "intel_tris.h"
 #include "tnl/t_context.h"
@@ -77,6 +78,8 @@ i915InvalidateState(GLcontext * ctx, GLuint new_state)
       i915_update_fog(ctx);
    if (new_state & (_NEW_STENCIL | _NEW_BUFFERS | _NEW_POLYGON))
       i915_update_stencil(ctx);
+   if (new_state & (_NEW_LIGHT))
+       i915_update_provoking_vertex(ctx);
 }
 
 
@@ -164,6 +167,9 @@ i915CreateContext(const __GLcontextModes * mesaVis,
    ctx->Const.FragmentProgram.MaxNativeTexIndirections =
       I915_MAX_TEX_INDIRECT;
    ctx->Const.FragmentProgram.MaxNativeAddressRegs = 0; /* I don't think we have one */
+   ctx->Const.FragmentProgram.MaxEnvParams =
+      MIN2(ctx->Const.FragmentProgram.MaxNativeParameters,
+	   ctx->Const.FragmentProgram.MaxEnvParams);
 
    ctx->FragmentProgram._MaintainTexEnvProgram = GL_TRUE;
 

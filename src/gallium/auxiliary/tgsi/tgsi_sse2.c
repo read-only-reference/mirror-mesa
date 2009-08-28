@@ -36,6 +36,7 @@
 #if defined(PIPE_ARCH_SSE)
 #include "util/u_sse.h"
 #endif
+#include "tgsi/tgsi_info.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_util.h"
 #include "tgsi_exec.h"
@@ -1746,6 +1747,14 @@ emit_instruction(
    if (indirect_temp_reference(inst))
       return FALSE;
 
+   /* we don't handle saturation/clamping yet */
+   if (inst->Instruction.Saturate != TGSI_SAT_NONE)
+      return FALSE;
+
+   /* need to use extra temps to fix SOA dependencies : */
+   if (tgsi_check_soa_dependencies(inst))
+      return FALSE;
+
    switch (inst->Instruction.Opcode) {
    case TGSI_OPCODE_ARL:
       FOR_EACH_DST0_ENABLED_CHANNEL( *inst, chan_index ) {
@@ -2917,8 +2926,10 @@ tgsi_emit_sse2(
             &parse.FullToken.FullInstruction );
 
 	 if (!ok) {
-	    debug_printf("failed to translate tgsi opcode %d to SSE (%s)\n", 
-			 parse.FullToken.FullInstruction.Instruction.Opcode,
+            uint opcode = parse.FullToken.FullInstruction.Instruction.Opcode;
+	    debug_printf("failed to translate tgsi opcode %d (%s) to SSE (%s)\n", 
+			 opcode,
+                         tgsi_get_opcode_name(opcode),
                          parse.FullHeader.Processor.Processor == TGSI_PROCESSOR_VERTEX ?
                          "vertex shader" : "fragment shader");
 	 }

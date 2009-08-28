@@ -237,7 +237,8 @@ MAIN_FILES = \
 	$(DIRECTORY)/src/mesa/glapi/*.[chS]				\
 	$(DIRECTORY)/src/mesa/math/*.[ch]				\
 	$(DIRECTORY)/src/mesa/math/descrip.mms				\
-	$(DIRECTORY)/src/mesa/shader/*.[ch]				\
+	$(DIRECTORY)/src/mesa/shader/*.[chly]				\
+	$(DIRECTORY)/src/mesa/shader/Makefile				\
 	$(DIRECTORY)/src/mesa/shader/descrip.mms			\
 	$(DIRECTORY)/src/mesa/shader/grammar/*.[ch]			\
 	$(DIRECTORY)/src/mesa/shader/slang/*.[ch]			\
@@ -345,7 +346,9 @@ DRI_FILES = \
 	$(DIRECTORY)/src/mesa/drivers/dri/common/xmlpool/*.[ch]		\
 	$(DIRECTORY)/src/mesa/drivers/dri/common/xmlpool/*.po		\
 	$(DIRECTORY)/src/mesa/drivers/dri/*/*.[chS]			\
+	$(DIRECTORY)/src/mesa/drivers/dri/*/*/*.[chS]			\
 	$(DIRECTORY)/src/mesa/drivers/dri/*/Makefile			\
+	$(DIRECTORY)/src/mesa/drivers/dri/*/*/Makefile			\
 	$(DIRECTORY)/src/mesa/drivers/dri/*/Doxyfile			\
 	$(DIRECTORY)/src/mesa/drivers/dri/*/server/*.[ch]
 
@@ -425,6 +428,7 @@ DEMO_FILES = \
 	$(DIRECTORY)/progs/glsl/*.c			\
 	$(DIRECTORY)/progs/glsl/*.frag			\
 	$(DIRECTORY)/progs/glsl/*.vert			\
+	$(DIRECTORY)/progs/glsl/*.shtest		\
 	$(DIRECTORY)/progs/windml/Makefile.ugl		\
 	$(DIRECTORY)/progs/windml/*.c			\
 	$(DIRECTORY)/progs/windml/*.bmp			\

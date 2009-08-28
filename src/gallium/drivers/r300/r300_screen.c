@@ -322,13 +322,14 @@ r300_get_tex_transfer(struct pipe_screen *screen,
     trans = CALLOC_STRUCT(r300_transfer);
     if (trans) {
         pipe_texture_reference(&trans->transfer.texture, texture);
-        trans->transfer.format = trans->transfer.format;
+        trans->transfer.format = texture->format;
         trans->transfer.width = w;
         trans->transfer.height = h;
         trans->transfer.block = texture->block;
         trans->transfer.nblocksx = texture->nblocksx[level];
         trans->transfer.nblocksy = texture->nblocksy[level];
-        trans->transfer.stride = tex->stride;
+        trans->transfer.stride = align(pf_get_stride(&trans->transfer.block,
+                                                     texture->width[level]), 32);
         trans->transfer.usage = usage;
         trans->offset = offset;
     }
@@ -391,6 +392,7 @@ struct pipe_screen* r300_create_screen(struct r300_winsys* r300_winsys)
         return NULL;
 
     caps->pci_id = r300_winsys->pci_id;
+    caps->num_frag_pipes = r300_winsys->gb_pipes;
 
     r300_parse_chipset(caps);
 

@@ -33,6 +33,7 @@
 #include "tnl/tnl.h"
 
 #include "r600_context.h"
+#include "r600_emit.h"
 
 #include "r700_oglprog.h"
 #include "r700_fragprog.h"
@@ -47,6 +48,9 @@ static struct gl_program *r700NewProgram(GLcontext * ctx,
 
     struct r700_vertex_program *vp;
 	struct r700_fragment_program *fp;
+
+	radeon_print(RADEON_SHADER, RADEON_VERBOSE,
+			"%s %u, %u\n", __func__, target, id);
 
     switch (target) 
     {
@@ -87,7 +91,9 @@ static void r700DeleteProgram(GLcontext * ctx, struct gl_program *prog)
 {
     struct r700_vertex_program   * vp;
     struct r700_fragment_program * fp;
-    context_t *context = R700_CONTEXT(ctx);
+
+	radeon_print(RADEON_SHADER, RADEON_VERBOSE,
+			"%s %p\n", __func__, prog);
 
     switch (prog->Target) 
     {

@@ -284,12 +284,52 @@ static void ei_mad(struct r300_vertex_program_code *vp,
 				      struct prog_instruction *vpi,
 				      GLuint * inst)
 {
-	inst[0] = PVS_OP_DST_OPERAND(PVS_MACRO_OP_2CLK_MADD,
-				     GL_FALSE,
-				     GL_TRUE,
-				     t_dst_index(vp, &vpi->DstReg),
-				     t_dst_mask(vpi->DstReg.WriteMask),
-				     t_dst_class(vpi->DstReg.File));
+	/* Remarks about hardware limitations of MAD
+	 * (please preserve this comment, as this information is _NOT_
+	 * in the documentation provided by AMD).
+	 *
+	 * As described in the documentation, MAD with three unique temporary
+	 * source registers requires the use of the macro version.
+	 *
+	 * However (and this is not mentioned in the documentation), apparently
+	 * the macro version is _NOT_ a full superset of the normal version.
+	 * In particular, the macro version does not always work when relative
+	 * addressing is used in the source operands.
+	 *
+	 * This limitation caused incorrect rendering in Sauerbraten's OpenGL
+	 * assembly shader path when using medium quality animations
+	 * (i.e. animations with matrix blending instead of quaternion blending).
+	 *
+	 * Unfortunately, I (nha) have been unable to extract a Piglit regression
+	 * test for this issue - for some reason, it is possible to have vertex
+	 * programs whose prefix is *exactly* the same as the prefix of the
+	 * offending program in Sauerbraten up to the offending instruction
+	 * without causing any trouble.
+	 *
+	 * Bottom line: Only use the macro version only when really necessary;
+	 * according to AMD docs, this should improve performance by one clock
+	 * as a nice side bonus.
+	 */
+	if (vpi->SrcReg[0].File == PROGRAM_TEMPORARY &&
+	    vpi->SrcReg[1].File == PROGRAM_TEMPORARY &&
+	    vpi->SrcReg[2].File == PROGRAM_TEMPORARY &&
+	    vpi->SrcReg[0].Index != vpi->SrcReg[1].Index &&
+	    vpi->SrcReg[0].Index != vpi->SrcReg[2].Index &&
+	    vpi->SrcReg[1].Index != vpi->SrcReg[2].Index) {
+		inst[0] = PVS_OP_DST_OPERAND(PVS_MACRO_OP_2CLK_MADD,
+				GL_FALSE,
+				GL_TRUE,
+				t_dst_index(vp, &vpi->DstReg),
+				t_dst_mask(vpi->DstReg.WriteMask),
+				t_dst_class(vpi->DstReg.File));
+	} else {
+		inst[0] = PVS_OP_DST_OPERAND(VE_MULTIPLY_ADD,
+				GL_FALSE,
+				GL_FALSE,
+				t_dst_index(vp, &vpi->DstReg),
+				t_dst_mask(vpi->DstReg.WriteMask),
+				t_dst_class(vpi->DstReg.File));
+	}
 	inst[1] = t_src(vp, &vpi->SrcReg[0]);
 	inst[2] = t_src(vp, &vpi->SrcReg[1]);
 	inst[3] = t_src(vp, &vpi->SrcReg[2]);
@@ -563,7 +603,7 @@ void r3xx_compile_vertex_program(struct r300_vertex_program_compiler* compiler)
 	if (compiler->Base.Debug) {
 		fprintf(stderr, "Vertex program after native rewrite:\n");
 		rc_print_program(&compiler->Base.Program);
-		fflush(stdout);
+		fflush(stderr);
 	}
 
 	{
@@ -580,7 +620,7 @@ void r3xx_compile_vertex_program(struct r300_vertex_program_compiler* compiler)
 	if (compiler->Base.Debug) {
 		fprintf(stderr, "Vertex program after source conflict resolve:\n");
 		rc_print_program(&compiler->Base.Program);
-		fflush(stdout);
+		fflush(stderr);
 	}
 
 	{
@@ -597,7 +637,7 @@ void r3xx_compile_vertex_program(struct r300_vertex_program_compiler* compiler)
 		if (compiler->Base.Debug) {
 			fprintf(stderr, "Vertex program after NQSSADCE:\n");
 			rc_print_program(&compiler->Base.Program);
-			fflush(stdout);
+			fflush(stderr);
 		}
 	}
 
@@ -609,7 +649,7 @@ void r3xx_compile_vertex_program(struct r300_vertex_program_compiler* compiler)
 	compiler->code->OutputsWritten = compiler->Base.Program.OutputsWritten;
 
 	if (compiler->Base.Debug) {
-		printf("Final vertex program code:\n");
+		fprintf(stderr, "Final vertex program code:\n");
 		r300_vertex_program_dump(compiler->code);
 	}
 }

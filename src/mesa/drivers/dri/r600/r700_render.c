@@ -53,9 +53,10 @@
 #include "r700_fragprog.h"
 #include "r700_state.h"
 
+#include "radeon_common_context.h"
+
 void r700WaitForIdle(context_t *context);
 void r700WaitForIdleClean(context_t *context);
-void r700Start3D(context_t *context);
 GLboolean r700SendTextureState(context_t *context);
 static unsigned int r700PrimitiveType(int prim);
 void r600UpdateTextureState(GLcontext * ctx);
@@ -68,6 +69,7 @@ GLboolean r700SyncSurf(context_t *context,
 void r700WaitForIdle(context_t *context)
 {
     BATCH_LOCALS(&context->radeon);
+    radeon_print(RADEON_RENDER | RADEON_STATE, RADEON_TRACE, "%s\n", __func__);
     BEGIN_BATCH_NO_AUTOSTATE(3);
 
     R600_OUT_BATCH(CP_PACKET3(R600_IT_SET_CONFIG_REG, 1));
@@ -81,6 +83,7 @@ void r700WaitForIdle(context_t *context)
 void r700WaitForIdleClean(context_t *context)
 {
     BATCH_LOCALS(&context->radeon);
+    radeon_print(RADEON_RENDER | RADEON_STATE, RADEON_TRACE, "%s\n", __func__);
     BEGIN_BATCH_NO_AUTOSTATE(5);
 
     R600_OUT_BATCH(CP_PACKET3(R600_IT_EVENT_WRITE, 0));
@@ -97,6 +100,7 @@ void r700WaitForIdleClean(context_t *context)
 void r700Start3D(context_t *context)
 {
     BATCH_LOCALS(&context->radeon);
+    radeon_print(RADEON_RENDER | RADEON_STATE, RADEON_TRACE, "%s\n", __func__);
     if (context->radeon.radeonScreen->chip_family < CHIP_FAMILY_RV770)
     {
         BEGIN_BATCH_NO_AUTOSTATE(2);
@@ -116,32 +120,6 @@ void r700Start3D(context_t *context)
     r700WaitForIdleClean(context);
 }
 
-static GLboolean r700SetupShaders(GLcontext * ctx)
-{
-    context_t *context = R700_CONTEXT(ctx);
-
-    R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
-
-    GLuint exportCount;
-
-    r700->ps.SQ_PGM_RESOURCES_PS.u32All = 0;
-    r700->vs.SQ_PGM_RESOURCES_VS.u32All = 0;
-
-    SETbit(r700->ps.SQ_PGM_RESOURCES_PS.u32All, PGM_RESOURCES__PRIME_CACHE_ON_DRAW_bit);
-    SETbit(r700->vs.SQ_PGM_RESOURCES_VS.u32All, PGM_RESOURCES__PRIME_CACHE_ON_DRAW_bit);
-
-    r700SetupVertexProgram(ctx);
-
-    r700SetupFragmentProgram(ctx);
-
-    exportCount = (r700->ps.SQ_PGM_EXPORTS_PS.u32All & EXPORT_MODE_mask) / (1 << EXPORT_MODE_shift);
-    r700->CB_SHADER_CONTROL.u32All = (1 << exportCount) - 1;
-
-    r600UpdateTextureState(ctx);
-
-    return GL_TRUE;
-}
-
 GLboolean r700SyncSurf(context_t *context,
 		       struct radeon_bo *pbo,
 		       uint32_t read_domain,
@@ -149,6 +127,7 @@ GLboolean r700SyncSurf(context_t *context,
 		       uint32_t sync_type)
 {
     BATCH_LOCALS(&context->radeon);
+    radeon_print(RADEON_RENDER | RADEON_STATE, RADEON_TRACE, "%s\n", __func__);
     uint32_t cp_coher_size;
 
     if (!pbo)
@@ -159,16 +138,16 @@ GLboolean r700SyncSurf(context_t *context,
     else
 	    cp_coher_size = ((pbo->size + 255) >> 8);
 
-    BEGIN_BATCH_NO_AUTOSTATE(5);
+    BEGIN_BATCH_NO_AUTOSTATE(5 + 2);
     R600_OUT_BATCH(CP_PACKET3(R600_IT_SURFACE_SYNC, 3));
     R600_OUT_BATCH(sync_type);
     R600_OUT_BATCH(cp_coher_size);
+    R600_OUT_BATCH(0);
+    R600_OUT_BATCH(10);
     R600_OUT_BATCH_RELOC(0,
 			 pbo,
 			 0,
-			 read_domain, write_domain, 0); // ???
-    R600_OUT_BATCH(10);
-
+			 read_domain, write_domain, 0);
     END_BATCH();
     COMMIT_BATCH();
 
@@ -216,18 +195,75 @@ static unsigned int r700PrimitiveType(int prim)
     }
 }
 
+static int r700NumVerts(int num_verts, int prim)
+{
+	int verts_off = 0;
+
+	switch (prim & PRIM_MODE_MASK) {
+	case GL_POINTS:
+		verts_off = 0;
+		break;
+	case GL_LINES:
+		verts_off = num_verts % 2;
+		break;
+	case GL_LINE_STRIP:
+		if (num_verts < 2)
+			verts_off = num_verts;
+		break;
+	case GL_LINE_LOOP:
+		if (num_verts < 2)
+			verts_off = num_verts;
+		break;
+	case GL_TRIANGLES:
+		verts_off = num_verts % 3;
+		break;
+	case GL_TRIANGLE_STRIP:
+		if (num_verts < 3)
+			verts_off = num_verts;
+		break;
+	case GL_TRIANGLE_FAN:
+		if (num_verts < 3)
+			verts_off = num_verts;
+		break;
+	case GL_QUADS:
+		verts_off = num_verts % 4;
+		break;
+	case GL_QUAD_STRIP:
+		if (num_verts < 4)
+			verts_off = num_verts;
+		else
+			verts_off = num_verts % 2;
+		break;
+	case GL_POLYGON:
+		if (num_verts < 3)
+			verts_off = num_verts;
+		break;
+	default:
+		assert(0);
+		return -1;
+		break;
+	}
+
+	return num_verts - verts_off;
+}
+
 static void r700RunRenderPrimitive(GLcontext * ctx, int start, int end, int prim)
 {
 	context_t *context = R700_CONTEXT(ctx);
 	BATCH_LOCALS(&context->radeon);
 	int type, i, total_emit;
-	int num_indices = end - start;
+	int num_indices;
 	uint32_t vgt_draw_initiator = 0;
 	uint32_t vgt_index_type     = 0;
 	uint32_t vgt_primitive_type = 0;
 	uint32_t vgt_num_indices    = 0;
 
 	type = r700PrimitiveType(prim);
+	num_indices = r700NumVerts(end - start, prim);
+
+	radeon_print(RADEON_RENDER, RADEON_TRACE,
+		"%s type %x num_indices %d\n",
+		__func__, type, num_indices);
 
 	if (type < 0 || num_indices <= 0)
 		return;
@@ -263,7 +299,7 @@ static void r700RunRenderPrimitive(GLcontext * ctx, int start, int end, int prim
         R600_OUT_BATCH(vgt_num_indices);
         R600_OUT_BATCH(vgt_draw_initiator);
 
-        for (i = start; i < end; i++) {
+        for (i = start; i < (start + num_indices); i++) {
             R600_OUT_BATCH(i);
         }
         END_BATCH();
@@ -271,63 +307,102 @@ static void r700RunRenderPrimitive(GLcontext * ctx, int start, int end, int prim
 
 }
 
-void r700EmitState(GLcontext * ctx)
+/* start 3d, idle, cb/db flush */
+#define PRE_EMIT_STATE_BUFSZ 10 + 5 + 14
+
+static GLuint r700PredictRenderSize(GLcontext* ctx)
 {
-	context_t *context = R700_CONTEXT(ctx);
+    context_t *context = R700_CONTEXT(ctx);
+    TNLcontext *tnl = TNL_CONTEXT(ctx);
+    struct r700_vertex_program *vpc
+        = (struct r700_vertex_program *)ctx->VertexProgram._Current;
+    struct vertex_buffer *vb = &tnl->vb;
+    GLboolean flushed;
+    GLuint dwords, i;
+    GLuint state_size;
+    /* pre calculate aos count so state prediction works */
+    context->radeon.tcl.aos_count = _mesa_bitcount(vpc->mesa_program.Base.InputsRead);
 
-	rcommonEnsureCmdBufSpace(&context->radeon,
-				 context->radeon.hw.max_state_size, __FUNCTION__);
+    dwords = PRE_EMIT_STATE_BUFSZ;
+    for (i = 0; i < vb->PrimitiveCount; i++)
+        dwords += vb->Primitive[i].count + 10;
+    state_size = radeonCountStateEmitSize(&context->radeon);
+    flushed = rcommonEnsureCmdBufSpace(&context->radeon,
+            dwords + state_size, __FUNCTION__);
 
-	r700Start3D(context);
-	r700SendSQConfig(context);
-	r700SendFSState(context); // FIXME just a place holder for now
-	r700SendPSState(context);
-	r700SendVSState(context);
-	r700SendVSConstants(ctx);
-	r700SendPSConstants(ctx);
+    if (flushed)
+        dwords += radeonCountStateEmitSize(&context->radeon);
+    else
+        dwords += state_size;
 
-	r700SendTextureState(context);
-	r700SetupStreams(ctx);
-
-	r700SendUCPState(context);
-	r700SendContextStates(context);
-	r700SendViewportState(context, 0);
-	r700SendRenderTargetState(context, 0);
-	r700SendDepthTargetState(context);
-
+    radeon_print(RADEON_RENDER, RADEON_VERBOSE,
+	"%s: total prediction size is %d.\n", __FUNCTION__, dwords);
+    return dwords;
 }
 
 static GLboolean r700RunRender(GLcontext * ctx,
-			                   struct tnl_pipeline_stage *stage)
+			       struct tnl_pipeline_stage *stage)
 {
     context_t *context = R700_CONTEXT(ctx);
-    unsigned int i;
+    radeonContextPtr radeon = &context->radeon;
+    unsigned int i, id = 0;
     TNLcontext *tnl = TNL_CONTEXT(ctx);
     struct vertex_buffer *vb = &tnl->vb;
+    struct radeon_renderbuffer *rrb;
+
+    radeon_print(RADEON_RENDER, RADEON_NORMAL, "%s: cs begin at %d\n",
+                __func__, context->radeon.cmdbuf.cs->cdw);
+
+    /* always emit CB base to prevent
+     * lock ups on some chips.
+     */
+    R600_STATECHANGE(context, cb_target);
+    /* mark vtx as dirty since it changes per-draw */
+    R600_STATECHANGE(context, vtx);
 
     r700UpdateShaders(ctx);
     r700SetScissor(context);
-    r700SetupShaders(ctx);
+    r700SetupVertexProgram(ctx);
+    r700SetupFragmentProgram(ctx);
+    r600UpdateTextureState(ctx);
 
-    r700SetRenderTarget(context, 0);
-    r700SetDepthTarget(context);
+    GLuint emit_end = r700PredictRenderSize(ctx) 
+        + context->radeon.cmdbuf.cs->cdw;
+    r700SetupStreams(ctx);
 
-    r700EmitState(ctx);
+    radeonEmitState(radeon);
 
+    radeon_debug_add_indent();
     /* richard test code */
     for (i = 0; i < vb->PrimitiveCount; i++) {
         GLuint prim = _tnl_translate_prim(&vb->Primitive[i]);
         GLuint start = vb->Primitive[i].start;
         GLuint end = vb->Primitive[i].start + vb->Primitive[i].count;
-	r700RunRenderPrimitive(ctx, start, end, prim);
+        r700RunRenderPrimitive(ctx, start, end, prim);
     }
+    radeon_debug_remove_indent();
 
     /* Flush render op cached for last several quads. */
     r700WaitForIdleClean(context);
 
+    rrb = radeon_get_colorbuffer(&context->radeon);
+    if (rrb && rrb->bo)
+	    r700SyncSurf(context, rrb->bo, 0, RADEON_GEM_DOMAIN_VRAM,
+			 CB_ACTION_ENA_bit | (1 << (id + 6)));
+
+    rrb = radeon_get_depthbuffer(&context->radeon);
+    if (rrb && rrb->bo)
+	    r700SyncSurf(context, rrb->bo, 0, RADEON_GEM_DOMAIN_VRAM,
+			 DB_ACTION_ENA_bit | DB_DEST_BASE_ENA_bit);
+
     radeonReleaseArrays(ctx, ~0);
 
-    rcommonFlushCmdBuf( &context->radeon, __FUNCTION__ );
+    radeon_print(RADEON_RENDER, RADEON_TRACE, "%s: cs end at %d\n",
+                __func__, context->radeon.cmdbuf.cs->cdw);
+
+    if ( emit_end < context->radeon.cmdbuf.cs->cdw )
+       WARN_ONCE("Rendering was %d commands larger than predicted size."
+	       " We might overflow  command buffer.\n", context->radeon.cmdbuf.cs->cdw - emit_end);
 
     return GL_FALSE;
 }

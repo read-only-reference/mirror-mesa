@@ -55,27 +55,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 struct r600_context;
 typedef struct r600_context context_t;
 
-GLboolean r700SendPSState(context_t *context);
-GLboolean r700SendVSState(context_t *context);
-GLboolean r700SendSQConfig(context_t *context);
-
 #include "main/mm.h"
-
-/* From http://gcc. gnu.org/onlinedocs/gcc-3.2.3/gcc/Variadic-Macros.html .
-   I suppose we could inline this and use macro to fetch out __LINE__ and stuff in case we run into trouble
-   with other compilers ... GLUE!
-*/
-#define WARN_ONCE(a, ...)	{ \
-	static int warn##__LINE__=1; \
-	if(warn##__LINE__){ \
-		fprintf(stderr, "*********************************WARN_ONCE*********************************\n"); \
-		fprintf(stderr, "File %s function %s line %d\n", \
-			__FILE__, __FUNCTION__, __LINE__); \
-		fprintf(stderr,  a, ## __VA_ARGS__);\
-		fprintf(stderr, "***************************************************************************\n"); \
-		warn##__LINE__=0;\
-		} \
-	}
 
 /************ DMA BUFFERS **************/
 
@@ -128,6 +108,42 @@ enum
     RIGHT_SHIFT = 2,
 };
 
+struct r600_hw_state {
+	struct radeon_state_atom sq;
+	struct radeon_state_atom db;
+	struct radeon_state_atom stencil;
+	struct radeon_state_atom db_target;
+	struct radeon_state_atom sc;
+	struct radeon_state_atom scissor;
+	struct radeon_state_atom aa;
+	struct radeon_state_atom cl;
+	struct radeon_state_atom gb;
+	struct radeon_state_atom ucp;
+	struct radeon_state_atom su;
+	struct radeon_state_atom poly;
+	struct radeon_state_atom cb;
+	struct radeon_state_atom clrcmp;
+	struct radeon_state_atom blnd;
+	struct radeon_state_atom blnd_clr;
+	struct radeon_state_atom cb_target;
+	struct radeon_state_atom sx;
+	struct radeon_state_atom vgt;
+	struct radeon_state_atom spi;
+	struct radeon_state_atom vpt;
+
+	struct radeon_state_atom fs;
+	struct radeon_state_atom vs;
+	struct radeon_state_atom ps;
+
+	struct radeon_state_atom vs_consts;
+	struct radeon_state_atom ps_consts;
+
+	struct radeon_state_atom vtx;
+	struct radeon_state_atom tx;
+	struct radeon_state_atom tx_smplr;
+	struct radeon_state_atom tx_brdr_clr;
+};
+
 /**
  * \brief R600 context structure.
  */
@@ -136,6 +152,8 @@ struct r600_context {
 
 	/* ------ */
 	R700_CHIP_CONTEXT hw;
+
+	struct r600_hw_state atoms;
 
 	/* Vertex buffers
 	 */
@@ -147,25 +165,34 @@ struct r600_context {
 #define R700_CONTEXT(ctx)		((context_t *)(ctx->DriverCtx))
 #define GL_CONTEXT(context)     ((GLcontext *)(context->radeon.glCtx))
 
-extern void r600DestroyContext(__DRIcontextPrivate * driContextPriv);
 extern GLboolean r600CreateContext(const __GLcontextModes * glVisual,
 				   __DRIcontextPrivate * driContextPriv,
 				   void *sharedContextPrivate);
 
 #define R700_CONTEXT_STATES(context) ((R700_CHIP_CONTEXT *)(&context->hw))
 
-extern GLboolean r700InitChipObject(context_t *context);
-extern GLboolean r700SendContextStates(context_t *context);
-extern GLboolean r700SendViewportState(context_t *context, int id);
-extern GLboolean r700SendRenderTargetState(context_t *context, int id);
+#define R600_NEWPRIM( rmesa )			\
+do {						\
+	if ( rmesa->radeon.dma.flush )			\
+		rmesa->radeon.dma.flush( rmesa->radeon.glCtx );	\
+} while (0)
 
-extern int       r700SetupStreams(GLcontext * ctx);
-extern void      r700SetupVTXConstants(GLcontext  * ctx, 
-				       unsigned int nStreamID,
-				       void *       pAos,
-				       unsigned int size,      /* number of elements in vector */
-				       unsigned int stride,
-				       unsigned int Count);    /* number of vectors in stream */
+#define R600_STATECHANGE(r600, ATOM)			\
+do {							\
+	R600_NEWPRIM(r600);					\
+	r600->atoms.ATOM.dirty = GL_TRUE;					\
+	r600->radeon.hw.is_dirty = GL_TRUE;			\
+} while(0)
+
+extern GLboolean r700SyncSurf(context_t *context,
+			      struct radeon_bo *pbo,
+			      uint32_t read_domain,
+			      uint32_t write_domain,
+			      uint32_t sync_type);
+
+extern void r700SetupStreams(GLcontext * ctx);
+extern void r700Start3D(context_t *context);
+extern void r600InitAtoms(context_t *context);
 
 #define RADEON_D_CAPTURE 0
 #define RADEON_D_PLAYBACK 1

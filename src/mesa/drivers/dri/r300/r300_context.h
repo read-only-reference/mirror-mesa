@@ -51,22 +51,6 @@ typedef struct r300_context r300ContextRec;
 typedef struct r300_context *r300ContextPtr;
 
 
-/* From http://gcc. gnu.org/onlinedocs/gcc-3.2.3/gcc/Variadic-Macros.html .
-   I suppose we could inline this and use macro to fetch out __LINE__ and stuff in case we run into trouble
-   with other compilers ... GLUE!
-*/
-#define WARN_ONCE(a, ...)	{ \
-	static int warn##__LINE__=1; \
-	if(warn##__LINE__){ \
-		fprintf(stderr, "*********************************WARN_ONCE*********************************\n"); \
-		fprintf(stderr, "File %s function %s line %d\n", \
-			__FILE__, __FUNCTION__, __LINE__); \
-		fprintf(stderr,  a, ## __VA_ARGS__);\
-		fprintf(stderr, "***************************************************************************\n"); \
-		warn##__LINE__=0;\
-		} \
-	}
-
 #include "r300_vertprog.h"
 
 
@@ -290,6 +274,12 @@ typedef struct r300_context *r300ContextPtr;
 #define R300_TEX_CMDSIZE	(MAX_TEXTURE_UNITS+1)
 */
 
+#define R300_QUERYOBJ_CMD_0  0
+#define R300_QUERYOBJ_DATA_0 1
+#define R300_QUERYOBJ_CMD_1  2
+#define R300_QUERYOBJ_DATA_1  3
+#define R300_QUERYOBJ_CMDSIZE  4
+
 /**
  * Cache for hardware register state.
  */
@@ -360,6 +350,7 @@ struct r300_hw_state {
 	struct radeon_state_atom zb_hiz_offset;	/* (4F44) */
 	struct radeon_state_atom zb_hiz_pitch;	/* (4F54) */
 
+	struct radeon_state_atom vap_flush;
 	struct radeon_state_atom vpi;	/* vp instructions */
 	struct radeon_state_atom vpp;	/* vp parameters */
 	struct radeon_state_atom vps;	/* vertex point size (?) */
@@ -380,7 +371,6 @@ struct r300_hw_state {
 		struct radeon_state_atom border_color;
 	} tex;
 	struct radeon_state_atom txe;	/* tex enable (4104) */
-
 	radeonTexObj *textures[R300_MAX_TEXTURE_UNITS];
 };
 
@@ -478,11 +468,12 @@ struct r300_vertex_buffer {
 	struct vertex_attribute {
 		/* generic */
 		GLubyte element;
-		GLvoid *data;
-		GLboolean free_needed;
 		GLuint stride;
 		GLuint dwords;
 		GLubyte size; /* number of components */
+		GLboolean is_named_bo;
+		struct radeon_bo *bo;
+		GLint bo_offset;
 
 		/* hw specific */
 		uint32_t data_type:4;
@@ -497,11 +488,13 @@ struct r300_vertex_buffer {
 };
 
 struct r300_index_buffer {
-	GLvoid *ptr;
+	struct radeon_bo *bo;
+	int bo_offset;
+
 	GLboolean is_32bit;
-	GLboolean free_needed;
 	GLuint count;
 };
+
 
 /**
  * \brief R300 context structure.
@@ -532,7 +525,6 @@ struct r300_context {
 	struct r300_swtcl_info swtcl;
 	struct r300_vertex_buffer vbuf;
 	struct r300_index_buffer ind_buf;
-	GLboolean vap_flush_needed;
 
 	uint32_t fallback;
 

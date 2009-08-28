@@ -74,11 +74,11 @@ static struct radeon_cs * r600_cs_create(struct radeon_cs_manager *csm,
     return cs;
 }
 
-int r600_cs_write_reloc(struct radeon_cs *cs,
-                        struct radeon_bo *bo,
-                        uint32_t read_domain,
-                        uint32_t write_domain,
-                        uint32_t flags)
+static int r600_cs_write_reloc(struct radeon_cs *cs,
+			       struct radeon_bo *bo,
+			       uint32_t read_domain,
+			       uint32_t write_domain,
+			       uint32_t flags)
 {
     struct r600_cs_reloc_legacy *relocs;
     int i;
@@ -129,10 +129,10 @@ int r600_cs_write_reloc(struct radeon_cs *cs,
             }
             relocs[i].indices = indices;
             relocs[i].reloc_indices = reloc_indices;
-            relocs[i].indices[relocs[i].cindices - 1] = cs->cdw - 1;
-            relocs[i].reloc_indices[relocs[i].cindices - 1] = cs->section_cdw;
-            cs->section_ndw += 2;
+            relocs[i].indices[relocs[i].cindices - 1] = cs->cdw;
+            relocs[i].reloc_indices[relocs[i].cindices - 1] = cs->cdw;
             cs->section_cdw += 2;
+	    cs->cdw += 2;
 
             return 0;
         }
@@ -156,10 +156,10 @@ int r600_cs_write_reloc(struct radeon_cs *cs,
         return -ENOMEM;
     }
 
-    relocs[cs->crelocs].indices[0] = cs->cdw - 1;
-    relocs[cs->crelocs].reloc_indices[0] = cs->section_cdw;
-    cs->section_ndw += 2;
+    relocs[cs->crelocs].indices[0] = cs->cdw;
+    relocs[cs->crelocs].reloc_indices[0] = cs->cdw;
     cs->section_cdw += 2;
+    cs->cdw += 2;
     relocs[cs->crelocs].cindices = 1;
     cs->relocs_total_size += radeon_bo_legacy_relocs_size(bo);
     cs->crelocs++;
@@ -183,7 +183,14 @@ static int r600_cs_begin(struct radeon_cs *cs,
         return -EPIPE;
     }
 
-    if (cs->cdw + ndw + 32 > cs->ndw) { /* Left 32 DWORD (8 offset+pitch) spare room for reloc indices */
+    cs->section = 1;
+    cs->section_ndw = ndw;
+    cs->section_cdw = 0;
+    cs->section_file = file;
+    cs->section_func = func;
+    cs->section_line = line;
+
+    if (cs->cdw + ndw > cs->ndw) {
         uint32_t tmp, *ptr;
 	int num = (ndw > 0x3FF) ? ndw : 0x3FF;
 
@@ -195,13 +202,6 @@ static int r600_cs_begin(struct radeon_cs *cs,
         cs->packets = ptr;
         cs->ndw = tmp;
     }
-
-    cs->section = 1;
-    cs->section_ndw = 0; 
-    cs->section_cdw = cs->cdw + ndw; /* start of reloc indices. */
-    cs->section_file = file;
-    cs->section_func = func;
-    cs->section_line = line;
 
     return 0;
 }
@@ -219,8 +219,7 @@ static int r600_cs_end(struct radeon_cs *cs,
     }
     cs->section = 0;
 
-    if ( (cs->section_ndw + cs->cdw) != cs->section_cdw ) 
-    {
+    if ( cs->section_ndw != cs->section_cdw ) {
         fprintf(stderr, "CS section size missmatch start at (%s,%s,%d) %d vs %d\n",
                 cs->section_file, cs->section_func, cs->section_line, cs->section_ndw, cs->section_cdw);
         fprintf(stderr, "cs->section_ndw = %d, cs->cdw = %d, cs->section_cdw = %d \n",
@@ -230,7 +229,6 @@ static int r600_cs_end(struct radeon_cs *cs,
         return -EPIPE;
     }
 
-    cs->cdw = cs->section_cdw;
     return 0;
 }
 
@@ -306,6 +304,7 @@ static int r600_cs_set_age(struct radeon_cs *cs) /* -------------- */
     return 0;
 }
 
+#if 0
 static void dump_cmdbuf(struct radeon_cs *cs)
 {
 	int i;
@@ -316,6 +315,7 @@ static void dump_cmdbuf(struct radeon_cs *cs)
 	fprintf(stderr,"--end--\n");
 
 }
+#endif
 
 static int r600_cs_emit(struct radeon_cs *cs)
 {
@@ -324,7 +324,7 @@ static int r600_cs_emit(struct radeon_cs *cs)
     struct drm_radeon_cs_chunk cs_chunk[2];
     uint32_t length_dw_reloc_chunk;
     uint64_t chunk_ptrs[2];
-    uint32_t reloc_chunk[128]; 
+    uint32_t *reloc_chunk;
     int r;
     int retry = 0;
 
@@ -333,8 +333,11 @@ static int r600_cs_emit(struct radeon_cs *cs)
 
     csm->pending_count = 1;
 
-    r = r600_cs_process_relocs(cs, &(reloc_chunk[0]), &length_dw_reloc_chunk);
+    reloc_chunk = (uint32_t*)calloc(1, cs->crelocs * 4 * 4);
+
+    r = r600_cs_process_relocs(cs, reloc_chunk, &length_dw_reloc_chunk);
     if (r) {
+	free(reloc_chunk);
         return 0;
     }
 
@@ -346,7 +349,7 @@ static int r600_cs_emit(struct radeon_cs *cs)
     /* reloc chaunk */
     cs_chunk[1].chunk_id   = RADEON_CHUNK_ID_RELOCS;
     cs_chunk[1].length_dw  = length_dw_reloc_chunk;
-    cs_chunk[1].chunk_data = (unsigned long)&(reloc_chunk[0]);
+    cs_chunk[1].chunk_data = (unsigned long)reloc_chunk;
 
     chunk_ptrs[0] = (uint64_t)(unsigned long)&(cs_chunk[0]);
     chunk_ptrs[1] = (uint64_t)(unsigned long)&(cs_chunk[1]);
@@ -364,6 +367,7 @@ static int r600_cs_emit(struct radeon_cs *cs)
     } while (r == -EAGAIN && retry < 1000);
 
     if (r) {
+	free(reloc_chunk);
         return r;
     }
 
@@ -374,6 +378,8 @@ static int r600_cs_emit(struct radeon_cs *cs)
     cs->csm->read_used = 0;
     cs->csm->vram_write_used = 0;
     cs->csm->gart_write_used = 0;
+
+    free(reloc_chunk);
 
     return 0;
 }
@@ -453,9 +459,10 @@ struct radeon_cs_manager * r600_radeon_cs_manager_legacy_ctor(struct radeon_cont
 
 void r600InitCmdBuf(context_t *r600) /* from rcommonInitCmdBuf */
 {
-    radeonContextPtr rmesa = &r600->radeon;
-    GLuint size;
-    rmesa->hw.max_state_size = 4000; /* rough estimate */
+	radeonContextPtr rmesa = &r600->radeon;
+	GLuint size;
+
+	r600InitAtoms(r600);
 
 	/* Initialize command buffer */
 	size = 256 * driQueryOptioni(&rmesa->optionCache,
@@ -479,7 +486,10 @@ void r600InitCmdBuf(context_t *r600) /* from rcommonInitCmdBuf */
 	rmesa->cmdbuf.cs = radeon_cs_create(rmesa->cmdbuf.csm, size);
 	assert(rmesa->cmdbuf.cs != NULL);
 	rmesa->cmdbuf.size = size;
-	
+
+	radeon_cs_space_set_flush(rmesa->cmdbuf.cs,
+				  (void (*)(void *))rmesa->glCtx->Driver.Flush, rmesa->glCtx);
+
 	if (!rmesa->radeonScreen->kernel_mm) {
 		radeon_cs_set_limit(rmesa->cmdbuf.cs, RADEON_GEM_DOMAIN_VRAM, rmesa->radeonScreen->texSize[0]);
 		radeon_cs_set_limit(rmesa->cmdbuf.cs, RADEON_GEM_DOMAIN_GTT, rmesa->radeonScreen->gartTextures.size);

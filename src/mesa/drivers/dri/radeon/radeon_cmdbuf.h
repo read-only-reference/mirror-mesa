@@ -3,7 +3,7 @@
 
 #include "radeon_bocs_wrapper.h"
 
-void rcommonEnsureCmdBufSpace(radeonContextPtr rmesa, int dwords, const char *caller);
+GLboolean rcommonEnsureCmdBufSpace(radeonContextPtr rmesa, int dwords, const char *caller);
 int rcommonFlushCmdBuf(radeonContextPtr rmesa, const char *caller);
 int rcommonFlushCmdBufLocked(radeonContextPtr rmesa, const char *caller);
 void rcommonInitCmdBuf(radeonContextPtr rmesa);
@@ -54,11 +54,12 @@ void rcommonBeginBatch(radeonContextPtr rmesa,
  */
 #define OUT_BATCH_RELOC(data, bo, offset, rd, wd, flags) 	\
 	do { 							\
-        if (0 && offset) {					\
+	int  __offset = (offset);				\
+        if (0 && __offset) {					\
             fprintf(stderr, "(%s:%s:%d) offset : %d\n",		\
-            __FILE__, __FUNCTION__, __LINE__, offset);		\
+            __FILE__, __FUNCTION__, __LINE__, __offset);	\
         }							\
-        radeon_cs_write_dword(b_l_rmesa->cmdbuf.cs, offset);	\
+        radeon_cs_write_dword(b_l_rmesa->cmdbuf.cs, __offset);	\
         radeon_cs_write_reloc(b_l_rmesa->cmdbuf.cs, 		\
                               bo, rd, wd, flags);		\
 	if (!b_l_rmesa->radeonScreen->kernel_mm) 		\
@@ -71,10 +72,7 @@ void rcommonBeginBatch(radeonContextPtr rmesa,
  */
 #define OUT_BATCH_TABLE(ptr,n) \
 	do { \
-		int _i; \
-        for (_i=0; _i < n; _i++) {\
-            radeon_cs_write_dword(b_l_rmesa->cmdbuf.cs, ptr[_i]);\
-        }\
+		radeon_cs_write_table(b_l_rmesa->cmdbuf.cs, (ptr), (n));\
 	} while(0)
 
 /**

@@ -60,6 +60,8 @@ static void r700SetClipPlaneState(GLcontext * ctx, GLenum cap, GLboolean state);
 static void r700UpdatePolygonMode(GLcontext * ctx);
 static void r700SetPolygonOffsetState(GLcontext * ctx, GLboolean state);
 static void r700SetStencilState(GLcontext * ctx, GLboolean state);
+static void r700SetRenderTarget(context_t *context, int id);
+static void r700SetDepthTarget(context_t *context);
 
 void r700SetDefaultStates(context_t *context) //--------------------
 {
@@ -69,65 +71,37 @@ void r700SetDefaultStates(context_t *context) //--------------------
 void r700UpdateShaders (GLcontext * ctx)  //----------------------------------
 {
     context_t *context = R700_CONTEXT(ctx);
-
     GLvector4f dummy_attrib[_TNL_ATTRIB_MAX];
     GLvector4f *temp_attrib[_TNL_ATTRIB_MAX];
     int i;
 
-    if (ctx->FragmentProgram._Current) {
-	    struct r700_fragment_program *fp = (struct r700_fragment_program *)
-		    (ctx->FragmentProgram._Current);
-	    if (context->radeon.radeonScreen->chip_family < CHIP_FAMILY_RV770)
-	    {
-		    fp->r700AsmCode.bR6xx = 1;
+    /* should only happenen once, just after context is created */
+    /* TODO: shouldn't we fallback to sw here? */
+    if (!ctx->FragmentProgram._Current) {
+	    _mesa_fprintf(stderr, "No ctx->FragmentProgram._Current!!\n");
+	    return;
+    }
+
+    r700SelectFragmentShader(ctx);
+
+    if (context->radeon.NewGLState) {
+	    for (i = _TNL_FIRST_MAT; i <= _TNL_LAST_MAT; i++) {
+		    /* mat states from state var not array for sw */
+		    dummy_attrib[i].stride = 0;
+	            temp_attrib[i] = TNL_CONTEXT(ctx)->vb.AttribPtr[i];
+		    TNL_CONTEXT(ctx)->vb.AttribPtr[i] = &(dummy_attrib[i]);
 	    }
 
-	    if(GL_FALSE == fp->translated)
-	    {
-		    if( GL_FALSE == r700TranslateFragmentShader(fp, &(fp->mesa_program)) )
-		    {
-			    //return GL_TRUE;
-		    }
+	    _tnl_UpdateFixedFunctionProgram(ctx);
+
+	    for (i = _TNL_FIRST_MAT; i <= _TNL_LAST_MAT; i++) {
+		    TNL_CONTEXT(ctx)->vb.AttribPtr[i] = temp_attrib[i];
 	    }
     }
 
-    if (context->radeon.NewGLState) 
-    {
-	struct r700_vertex_program *vp;
-        context->radeon.NewGLState = 0;
-
-        for (i = _TNL_FIRST_MAT; i <= _TNL_LAST_MAT; i++) 
-        {
-            /* mat states from state var not array for sw */
-            dummy_attrib[i].stride = 0;
-
-            temp_attrib[i] = TNL_CONTEXT(ctx)->vb.AttribPtr[i];
-            TNL_CONTEXT(ctx)->vb.AttribPtr[i] = &(dummy_attrib[i]);
-        }
-
-        _tnl_UpdateFixedFunctionProgram(ctx);
-
-        for (i = _TNL_FIRST_MAT; i <= _TNL_LAST_MAT; i++) 
-        {
-            TNL_CONTEXT(ctx)->vb.AttribPtr[i] = temp_attrib[i];
-        }
-
-        r700SelectVertexShader(ctx);
-        vp = (struct r700_vertex_program *)ctx->VertexProgram._Current;
-
-        if (vp->translated == GL_FALSE) 
-        {
-            // TODO
-            //fprintf(stderr, "Failing back to sw-tcl\n");
-            //hw_tcl_on = future_hw_tcl_on = 0;
-            //r300ResetHwState(rmesa);
-            //
-            r700UpdateStateParameters(ctx, _NEW_PROGRAM);
-            return;
-        }
-    }
-
-    r700UpdateStateParameters(ctx, _NEW_PROGRAM);
+    r700SelectVertexShader(ctx);
+    r700UpdateStateParameters(ctx, _NEW_PROGRAM | _NEW_PROGRAM_CONSTANTS);
+    context->radeon.NewGLState = 0;
 }
 
 /*
@@ -146,8 +120,15 @@ void r700UpdateViewportOffset(GLcontext * ctx) //------------------
 	GLfloat tx = v[MAT_TX] + xoffset;
 	GLfloat ty = (-v[MAT_TY]) + yoffset;
 
-	r700->viewport[id].PA_CL_VPORT_XOFFSET.f32All = tx;
-	r700->viewport[id].PA_CL_VPORT_YOFFSET.f32All = ty;
+	if (r700->viewport[id].PA_CL_VPORT_XOFFSET.f32All != tx ||
+	    r700->viewport[id].PA_CL_VPORT_YOFFSET.f32All != ty) {
+		/* Note: this should also modify whatever data the context reset
+		 * code uses...
+		 */
+		R600_STATECHANGE(context, vpt);
+		r700->viewport[id].PA_CL_VPORT_XOFFSET.f32All = tx;
+		r700->viewport[id].PA_CL_VPORT_YOFFSET.f32All = ty;
+	}
 
 	radeonUpdateScissor(ctx);
 }
@@ -158,64 +139,34 @@ void r700UpdateViewportOffset(GLcontext * ctx) //------------------
  */
 void r700UpdateDrawBuffer(GLcontext * ctx) /* TODO */ //---------------------
 {
-#if 0 /* to be enabled */
-    context_t *context = R700_CONTEXT(ctx);
-
-    switch (ctx->DrawBuffer->_ColorDrawBufferIndexes[0]) 
-    {
-	case BUFFER_FRONT_LEFT:
-	    context->target.rt = context->screen->frontBuffer;
-	    break;
-	case BUFFER_BACK_LEFT:
-	    context->target.rt = context->screen->backBuffer;
-	    break;
-	default:
-	    memset (&context->target.rt, sizeof(context->target.rt), 0);
-	}
-#endif /* to be enabled */
-}
-
-static void r700FetchStateParameter(GLcontext * ctx,
-			                        const gl_state_index state[STATE_LENGTH],
-			                        GLfloat * value)
-{
 	context_t *context = R700_CONTEXT(ctx);
 
-    /* TODO */
+	R600_STATECHANGE(context, cb_target);
+	R600_STATECHANGE(context, db_target);
+
+	r700SetRenderTarget(context, 0);
+	r700SetDepthTarget(context);
 }
 
 void r700UpdateStateParameters(GLcontext * ctx, GLuint new_state) //--------------------
 {
-	struct r700_fragment_program *fp;
+	struct r700_fragment_program *fp =
+		(struct r700_fragment_program *)ctx->FragmentProgram._Current;
 	struct gl_program_parameter_list *paramList;
-	GLuint i;
 
-	if (!(new_state & (_NEW_BUFFERS | _NEW_PROGRAM)))
+	if (!(new_state & (_NEW_BUFFERS | _NEW_PROGRAM | _NEW_PROGRAM_CONSTANTS)))
 		return;
 
-	fp = (struct r700_fragment_program *)ctx->FragmentProgram._Current;
-	if (!fp)
-    {
+	if (!ctx->FragmentProgram._Current || !fp)
 		return;
-    }
 
-	paramList = fp->mesa_program.Base.Parameters;
+	paramList = ctx->FragmentProgram._Current->Base.Parameters;
 
 	if (!paramList)
-    {
 		return;
-    }
 
-	for (i = 0; i < paramList->NumParameters; i++) 
-    {
-		if (paramList->Parameters[i].Type == PROGRAM_STATE_VAR) 
-        {
-			r700FetchStateParameter(ctx,
-						paramList->Parameters[i].
-						StateIndexes,
-						paramList->ParameterValues[i]);
-		}
-	}
+	_mesa_load_state_parameters(ctx, paramList);
+
 }
 
 /**
@@ -244,6 +195,9 @@ static void r700InvalidateState(GLcontext * ctx, GLuint new_state) //-----------
 
 	r700UpdateStateParameters(ctx, new_state);
 
+    R600_STATECHANGE(context, cl);
+    R600_STATECHANGE(context, spi);
+
     if(GL_TRUE == r700->bEnablePerspective)
     {
         /* Do scale XY and Z by 1/W0 for perspective correction on pos. For orthogonal case, set both to one. */
@@ -267,14 +221,15 @@ static void r700InvalidateState(GLcontext * ctx, GLuint new_state) //-----------
         SETbit(r700->SPI_PS_IN_CONTROL_0.u32All, LINEAR_GRADIENT_ENA_bit);
     }
 
-	context->radeon.NewGLState |= new_state;
+    context->radeon.NewGLState |= new_state;
 }
 
 static void r700SetDepthState(GLcontext * ctx)
 {
 	context_t *context = R700_CONTEXT(ctx);
+	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
 
-    R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
+	R600_STATECHANGE(context, db);
 
     if (ctx->Depth.Test)
     {
@@ -342,6 +297,8 @@ static void r700SetAlphaState(GLcontext * ctx)
 	uint32_t alpha_func = REF_ALWAYS;
 	GLboolean really_enabled = ctx->Color.AlphaEnabled;
 
+	R600_STATECHANGE(context, sx);
+
 	switch (ctx->Color.AlphaFunc) {
 	case GL_NEVER:
 		alpha_func = REF_NEVER;
@@ -393,6 +350,8 @@ static void r700BlendColor(GLcontext * ctx, const GLfloat cf[4]) //-------------
 {
 	context_t *context = R700_CONTEXT(ctx);
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
+
+	R600_STATECHANGE(context, blnd_clr);
 
 	r700->CB_BLEND_RED.f32All = cf[0];
 	r700->CB_BLEND_GREEN.f32All = cf[1];
@@ -461,6 +420,8 @@ static void r700SetBlendState(GLcontext * ctx)
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
 	int id = 0;
 	uint32_t blend_reg = 0, eqn, eqnA;
+
+	R600_STATECHANGE(context, blnd);
 
 	if (RGBA_LOGICOP_ENABLED(ctx) || !ctx->Color.BlendEnabled) {
 		SETfield(blend_reg,
@@ -600,14 +561,46 @@ static void r700BlendFuncSeparate(GLcontext * ctx,
 
 /**
  * Translate LogicOp enums into hardware representation.
- * Both use a very logical bit-wise layout, but unfortunately the order
- * of bits is reversed.
  */
 static GLuint translate_logicop(GLenum logicop)
 {
-	GLuint bits = logicop - GL_CLEAR;
-	bits = ((bits & 1) << 3) | ((bits & 2) << 1) | ((bits & 4) >> 1) | ((bits & 8) >> 3);
-	return bits;
+	switch (logicop) {
+	case GL_CLEAR:
+		return 0x00;
+	case GL_SET:
+		return 0xff;
+	case GL_COPY:
+		return 0xcc;
+	case GL_COPY_INVERTED:
+		return 0x33;
+	case GL_NOOP:
+		return 0xaa;
+	case GL_INVERT:
+		return 0x55;
+	case GL_AND:
+		return 0x88;
+	case GL_NAND:
+		return 0x77;
+	case GL_OR:
+		return 0xee;
+	case GL_NOR:
+		return 0x11;
+	case GL_XOR:
+		return 0x66;
+	case GL_EQUIV:
+		return 0xaa;
+	case GL_AND_REVERSE:
+		return 0x44;
+	case GL_AND_INVERTED:
+		return 0x22;
+	case GL_OR_REVERSE:
+		return 0xdd;
+	case GL_OR_INVERTED:
+		return 0xbb;
+	default:
+		fprintf(stderr, "unknown blend logic operation %x\n", logicop);
+		return 0xcc;
+	}
 }
 
 /**
@@ -616,7 +609,10 @@ static GLuint translate_logicop(GLenum logicop)
  */
 static void r700SetLogicOpState(GLcontext *ctx)
 {
+	context_t *context = R700_CONTEXT(ctx);
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&R700_CONTEXT(ctx)->hw);
+
+	R600_STATECHANGE(context, blnd);
 
 	if (RGBA_LOGICOP_ENABLED(ctx))
 		SETfield(r700->CB_COLOR_CONTROL.u32All,
@@ -637,7 +633,10 @@ static void r700LogicOpcode(GLcontext *ctx, GLenum logicop)
 
 static void r700UpdateCulling(GLcontext * ctx)
 {
-    R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&R700_CONTEXT(ctx)->hw);
+	context_t *context = R700_CONTEXT(ctx);
+	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&R700_CONTEXT(ctx)->hw);
+
+    R600_STATECHANGE(context, su);
 
     CLEARbit(r700->PA_SU_SC_MODE_CNTL.u32All, FACE_bit);
     CLEARbit(r700->PA_SU_SC_MODE_CNTL.u32All, CULL_FRONT_bit);
@@ -682,7 +681,11 @@ static void r700UpdateCulling(GLcontext * ctx)
 
 static void r700UpdateLineStipple(GLcontext * ctx)
 {
-    R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&R700_CONTEXT(ctx)->hw);
+	context_t *context = R700_CONTEXT(ctx);
+	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&R700_CONTEXT(ctx)->hw);
+
+    R600_STATECHANGE(context, sc);
+
     if (ctx->Line.StippleFlag)
     {
 	SETbit(r700->PA_SC_MODE_CNTL.u32All, LINE_STIPPLE_ENABLE_bit);
@@ -757,14 +760,17 @@ static void r700Enable(GLcontext * ctx, GLenum cap, GLboolean state) //---------
 static void r700ColorMask(GLcontext * ctx,
 			  GLboolean r, GLboolean g, GLboolean b, GLboolean a) //------------------
 {
+	context_t *context = R700_CONTEXT(ctx);
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&R700_CONTEXT(ctx)->hw);
 	unsigned int mask = ((r ? 1 : 0) |
 			     (g ? 2 : 0) |
 			     (b ? 4 : 0) |
 			     (a ? 8 : 0));
 
-	if (mask != r700->CB_SHADER_MASK.u32All)
+	if (mask != r700->CB_SHADER_MASK.u32All) {
+		R600_STATECHANGE(context, cb);
 		SETfield(r700->CB_SHADER_MASK.u32All, mask, OUTPUT0_ENABLE_shift, OUTPUT0_ENABLE_mask);
+	}
 }
 
 /**
@@ -820,6 +826,8 @@ static void r700ShadeModel(GLcontext * ctx, GLenum mode) //--------------------
 	context_t *context = R700_CONTEXT(ctx);
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
 
+	R600_STATECHANGE(context, spi);
+
 	/* also need to set/clear FLAT_SHADE bit per param in SPI_PS_INPUT_CNTL_[0-31] */
 	switch (mode) {
 	case GL_FLAT:
@@ -841,6 +849,8 @@ static void r700PointSize(GLcontext * ctx, GLfloat size)
 	context_t *context = R700_CONTEXT(ctx);
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
 
+	R600_STATECHANGE(context, su);
+
 	/* We need to clamp to user defined range here, because
 	 * the HW clamping happens only for per vertex point size. */
 	size = CLAMP(size, ctx->Point.MinSize, ctx->Point.MaxSize);
@@ -860,6 +870,8 @@ static void r700PointParameter(GLcontext * ctx, GLenum pname, const GLfloat * pa
 {
 	context_t *context = R700_CONTEXT(ctx);
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
+
+	R600_STATECHANGE(context, su);
 
 	/* format is 12.4 fixed point */
 	switch (pname) {
@@ -935,9 +947,6 @@ static void r700SetStencilState(GLcontext * ctx, GLboolean state)
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
 	GLboolean hw_stencil = GL_FALSE;
 
-	//fixme
-	//r300CatchStencilFallback(ctx);
-
 	if (ctx->DrawBuffer) {
 		struct radeon_renderbuffer *rrbStencil
 			= radeon_get_renderbuffer(ctx->DrawBuffer, BUFFER_STENCIL);
@@ -945,9 +954,11 @@ static void r700SetStencilState(GLcontext * ctx, GLboolean state)
 	}
 
 	if (hw_stencil) {
-		if (state)
+		R600_STATECHANGE(context, db);
+		if (state) {
 			SETbit(r700->DB_DEPTH_CONTROL.u32All, STENCIL_ENABLE_bit);
-		else
+			SETbit(r700->DB_DEPTH_CONTROL.u32All, BACKFACE_ENABLE_bit);
+		} else
 			CLEARbit(r700->DB_DEPTH_CONTROL.u32All, STENCIL_ENABLE_bit);
 	}
 }
@@ -959,8 +970,8 @@ static void r700StencilFuncSeparate(GLcontext * ctx, GLenum face,
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
 	const unsigned back = ctx->Stencil._BackFace;
 
-	//fixme
-	//r300CatchStencilFallback(ctx);
+	R600_STATECHANGE(context, stencil);
+	R600_STATECHANGE(context, db);
 
 	//front
 	SETfield(r700->DB_STENCILREFMASK.u32All, ctx->Stencil.Ref[0],
@@ -988,8 +999,7 @@ static void r700StencilMaskSeparate(GLcontext * ctx, GLenum face, GLuint mask) /
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
 	const unsigned back = ctx->Stencil._BackFace;
 
-	//fixme
-	//r300CatchStencilFallback(ctx);
+	R600_STATECHANGE(context, stencil);
 
 	// front
 	SETfield(r700->DB_STENCILREFMASK.u32All, ctx->Stencil.WriteMask[0],
@@ -1008,8 +1018,7 @@ static void r700StencilOpSeparate(GLcontext * ctx, GLenum face,
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
 	const unsigned back = ctx->Stencil._BackFace;
 
-	//fixme
-	//r300CatchStencilFallback(ctx);
+	R600_STATECHANGE(context, db);
 
 	SETfield(r700->DB_DEPTH_CONTROL.u32All, translate_stencil_op(ctx->Stencil.FailFunc[0]),
 		 STENCILFAIL_shift, STENCILFAIL_mask);
@@ -1053,7 +1062,7 @@ static void r700UpdateWindow(GLcontext * ctx, int id) //--------------------
 	GLfloat sz = v[MAT_SZ] * depthScale;
 	GLfloat tz = v[MAT_TZ] * depthScale;
 
-	/* TODO : Need DMA flush as well. */
+	R600_STATECHANGE(context, vpt);
 
 	r700->viewport[id].PA_CL_VPORT_XSCALE.f32All  = sx;
 	r700->viewport[id].PA_CL_VPORT_XOFFSET.f32All = tx;
@@ -1091,16 +1100,21 @@ static void r700LineWidth(GLcontext * ctx, GLfloat widthf) //---------------
     context_t *context = R700_CONTEXT(ctx);
     R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
     uint32_t lineWidth = (uint32_t)((widthf * 0.5) * (1 << 4));
+
+    R600_STATECHANGE(context, su);
+
     if (lineWidth > 0xFFFF)
-	lineWidth = 0xFFFF;
+	    lineWidth = 0xFFFF;
     SETfield(r700->PA_SU_LINE_CNTL.u32All,(uint16_t)lineWidth,
-	PA_SU_LINE_CNTL__WIDTH_shift, PA_SU_LINE_CNTL__WIDTH_mask);
+	     PA_SU_LINE_CNTL__WIDTH_shift, PA_SU_LINE_CNTL__WIDTH_mask);
 }
 
 static void r700LineStipple(GLcontext *ctx, GLint factor, GLushort pattern)
 {
     context_t *context = R700_CONTEXT(ctx);
     R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
+
+    R600_STATECHANGE(context, sc);
 
     SETfield(r700->PA_SC_LINE_STIPPLE.u32All, pattern, LINE_PATTERN_shift, LINE_PATTERN_mask);
     SETfield(r700->PA_SC_LINE_STIPPLE.u32All, (factor-1), REPEAT_COUNT_shift, REPEAT_COUNT_mask);
@@ -1111,6 +1125,8 @@ static void r700SetPolygonOffsetState(GLcontext * ctx, GLboolean state)
 {
 	context_t *context = R700_CONTEXT(ctx);
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
+
+	R600_STATECHANGE(context, su);
 
 	if (state) {
 		SETbit(r700->PA_SU_SC_MODE_CNTL.u32All, POLY_OFFSET_FRONT_ENABLE_bit);
@@ -1140,6 +1156,8 @@ static void r700PolygonOffset(GLcontext * ctx, GLfloat factor, GLfloat units) //
 
 	factor *= 12.0;
 
+	R600_STATECHANGE(context, poly);
+
 	r700->PA_SU_POLY_OFFSET_FRONT_SCALE.f32All = factor;
 	r700->PA_SU_POLY_OFFSET_FRONT_OFFSET.f32All = constant;
 	r700->PA_SU_POLY_OFFSET_BACK_SCALE.f32All = factor;
@@ -1150,6 +1168,8 @@ static void r700UpdatePolygonMode(GLcontext * ctx)
 {
 	context_t *context = R700_CONTEXT(ctx);
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
+
+	R600_STATECHANGE(context, su);
 
 	SETfield(r700->PA_SU_SC_MODE_CNTL.u32All, X_DISABLE_POLY_MODE, POLY_MODE_shift, POLY_MODE_mask);
 
@@ -1226,6 +1246,8 @@ static void r700ClipPlane( GLcontext *ctx, GLenum plane, const GLfloat *eq )
 	p = (GLint) plane - (GLint) GL_CLIP_PLANE0;
 	ip = (GLint *)ctx->Transform._ClipUserPlane[p];
 
+	R600_STATECHANGE(context, ucp);
+
 	r700->ucp[p].PA_CL_UCP_0_X.u32All = ip[0];
 	r700->ucp[p].PA_CL_UCP_0_Y.u32All = ip[1];
 	r700->ucp[p].PA_CL_UCP_0_Z.u32All = ip[2];
@@ -1239,6 +1261,9 @@ static void r700SetClipPlaneState(GLcontext * ctx, GLenum cap, GLboolean state)
 	GLuint p;
 
 	p = cap - GL_CLIP_PLANE0;
+
+	R600_STATECHANGE(context, cl);
+
 	if (state) {
 		r700->PA_CL_CLIP_CNTL.u32All |= (UCP_ENA_0_bit << p);
 		r700->ucp[p].enabled = GL_TRUE;
@@ -1263,14 +1288,35 @@ void r700SetScissor(context_t *context) //---------------
 	if (context->radeon.state.scissor.enabled) {
 		x1 = context->radeon.state.scissor.rect.x1;
 		y1 = context->radeon.state.scissor.rect.y1;
-		x2 = context->radeon.state.scissor.rect.x2 - 1;
-		y2 = context->radeon.state.scissor.rect.y2 - 1;
+		x2 = context->radeon.state.scissor.rect.x2;
+		y2 = context->radeon.state.scissor.rect.y2;
 	} else {
-		x1 = rrb->dPriv->x;
-		y1 = rrb->dPriv->y;
-		x2 = rrb->dPriv->x + rrb->dPriv->w;
-		y2 = rrb->dPriv->y + rrb->dPriv->h;
+		if (context->radeon.radeonScreen->driScreen->dri2.enabled) {
+			x1 = 0;
+			y1 = 0;
+			x2 = rrb->base.Width - 1;
+			y2 = rrb->base.Height - 1;
+		} else {
+			x1 = rrb->dPriv->x;
+			y1 = rrb->dPriv->y;
+			x2 = rrb->dPriv->x + rrb->dPriv->w;
+			y2 = rrb->dPriv->y + rrb->dPriv->h;
+		}
 	}
+
+	R600_STATECHANGE(context, scissor);
+
+	/* screen */
+	SETbit(r700->PA_SC_SCREEN_SCISSOR_TL.u32All, WINDOW_OFFSET_DISABLE_bit);
+	SETfield(r700->PA_SC_SCREEN_SCISSOR_TL.u32All, x1,
+		 PA_SC_SCREEN_SCISSOR_TL__TL_X_shift, PA_SC_SCREEN_SCISSOR_TL__TL_X_mask);
+	SETfield(r700->PA_SC_SCREEN_SCISSOR_TL.u32All, y1,
+		 PA_SC_SCREEN_SCISSOR_TL__TL_Y_shift, PA_SC_SCREEN_SCISSOR_TL__TL_Y_mask);
+
+	SETfield(r700->PA_SC_SCREEN_SCISSOR_BR.u32All, x2,
+		 PA_SC_SCREEN_SCISSOR_BR__BR_X_shift, PA_SC_SCREEN_SCISSOR_BR__BR_X_mask);
+	SETfield(r700->PA_SC_SCREEN_SCISSOR_BR.u32All, y2,
+		 PA_SC_SCREEN_SCISSOR_BR__BR_Y_shift, PA_SC_SCREEN_SCISSOR_BR__BR_Y_mask);
 
 	/* window */
 	SETbit(r700->PA_SC_WINDOW_SCISSOR_TL.u32All, WINDOW_OFFSET_DISABLE_bit);
@@ -1327,21 +1373,23 @@ void r700SetScissor(context_t *context) //---------------
 	r700->viewport[id].enabled = GL_TRUE;
 }
 
-void r700SetRenderTarget(context_t *context, int id)
+static void r700SetRenderTarget(context_t *context, int id)
 {
     R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
 
     struct radeon_renderbuffer *rrb;
     unsigned int nPitchInPixel;
 
+    rrb = radeon_get_colorbuffer(&context->radeon);
+    if (!rrb || !rrb->bo) {
+	    return;
+    }
+
+    R600_STATECHANGE(context, cb_target);
+    R600_STATECHANGE(context, cb);
+
     /* screen/window/view */
     SETfield(r700->CB_TARGET_MASK.u32All, 0xF, (4 * id), TARGET0_ENABLE_mask);
-
-    rrb = radeon_get_colorbuffer(&context->radeon);
-	if (!rrb || !rrb->bo) {
-		fprintf(stderr, "no rrb\n");
-		return;
-	}
 
     /* color buffer */
     r700->render_target[id].CB_COLOR0_BASE.u32All = context->radeon.state.color.draw_offset;
@@ -1375,39 +1423,24 @@ void r700SetRenderTarget(context_t *context, int id)
     r700->render_target[id].enabled = GL_TRUE;
 }
 
-void r700SetDepthTarget(context_t *context)
+static void r700SetDepthTarget(context_t *context)
 {
     R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
 
     struct radeon_renderbuffer *rrb;
     unsigned int nPitchInPixel;
 
+    rrb = radeon_get_depthbuffer(&context->radeon);
+    if (!rrb)
+	    return;
+
+    R600_STATECHANGE(context, db_target);
+
     /* depth buf */
     r700->DB_DEPTH_SIZE.u32All = 0;
     r700->DB_DEPTH_BASE.u32All = 0;
     r700->DB_DEPTH_INFO.u32All = 0;
-
-    r700->DB_DEPTH_CLEAR.u32All     = 0x3F800000;
-    r700->DB_DEPTH_VIEW.u32All      = 0;
-    r700->DB_RENDER_CONTROL.u32All  = 0;
-    SETbit(r700->DB_RENDER_CONTROL.u32All, STENCIL_COMPRESS_DISABLE_bit);
-    SETbit(r700->DB_RENDER_CONTROL.u32All, DEPTH_COMPRESS_DISABLE_bit);
-    r700->DB_RENDER_OVERRIDE.u32All = 0;
-    if (context->radeon.radeonScreen->chip_family < CHIP_FAMILY_RV770)
-	    SETbit(r700->DB_RENDER_OVERRIDE.u32All, FORCE_SHADER_Z_ORDER_bit);
-    SETfield(r700->DB_RENDER_OVERRIDE.u32All, FORCE_DISABLE, FORCE_HIZ_ENABLE_shift, FORCE_HIZ_ENABLE_mask);
-    SETfield(r700->DB_RENDER_OVERRIDE.u32All, FORCE_DISABLE, FORCE_HIS_ENABLE0_shift, FORCE_HIS_ENABLE0_mask);
-    SETfield(r700->DB_RENDER_OVERRIDE.u32All, FORCE_DISABLE, FORCE_HIS_ENABLE1_shift, FORCE_HIS_ENABLE1_mask);
-
-    r700->DB_ALPHA_TO_MASK.u32All = 0;
-    SETfield(r700->DB_ALPHA_TO_MASK.u32All, 2, ALPHA_TO_MASK_OFFSET0_shift, ALPHA_TO_MASK_OFFSET0_mask);
-    SETfield(r700->DB_ALPHA_TO_MASK.u32All, 2, ALPHA_TO_MASK_OFFSET1_shift, ALPHA_TO_MASK_OFFSET1_mask);
-    SETfield(r700->DB_ALPHA_TO_MASK.u32All, 2, ALPHA_TO_MASK_OFFSET2_shift, ALPHA_TO_MASK_OFFSET2_mask);
-    SETfield(r700->DB_ALPHA_TO_MASK.u32All, 2, ALPHA_TO_MASK_OFFSET3_shift, ALPHA_TO_MASK_OFFSET3_mask);
-
-    rrb = radeon_get_depthbuffer(&context->radeon);
-	if (!rrb)
-		return;
+    r700->DB_DEPTH_VIEW.u32All = 0;
 
     nPitchInPixel = rrb->pitch/rrb->cpp;
 
@@ -1463,6 +1496,8 @@ static void r700InitSQConfig(GLcontext * ctx)
     int num_gs_stack_entries;
     int num_es_stack_entries;
 
+    R600_STATECHANGE(context, sq);
+
     // SQ
     ps_prio = 0;
     vs_prio = 1;
@@ -1503,6 +1538,7 @@ static void r700InitSQConfig(GLcontext * ctx)
     case CHIP_FAMILY_RV610:
     case CHIP_FAMILY_RV620:
     case CHIP_FAMILY_RS780:
+    case CHIP_FAMILY_RS880:
     default:
 	    num_ps_gprs = 84;
 	    num_vs_gprs = 36;
@@ -1585,6 +1621,7 @@ static void r700InitSQConfig(GLcontext * ctx)
     if ((context->radeon.radeonScreen->chip_family == CHIP_FAMILY_RV610) ||
         (context->radeon.radeonScreen->chip_family == CHIP_FAMILY_RV620) ||
 	(context->radeon.radeonScreen->chip_family == CHIP_FAMILY_RS780) ||
+	(context->radeon.radeonScreen->chip_family == CHIP_FAMILY_RS880) ||
         (context->radeon.radeonScreen->chip_family == CHIP_FAMILY_RV710))
 	    CLEARbit(r700->sq_config.SQ_CONFIG.u32All, VC_ENABLE_bit);
     else
@@ -1673,20 +1710,12 @@ void r700InitState(GLcontext * ctx) //-------------------
     /* default shader connections. */
     r700->SPI_VS_OUT_ID_0.u32All  = 0x03020100;
     r700->SPI_VS_OUT_ID_1.u32All  = 0x07060504;
+    r700->SPI_VS_OUT_ID_2.u32All  = 0x0b0a0908;
+    r700->SPI_VS_OUT_ID_3.u32All  = 0x0f0e0d0c;
 
     r700->SPI_THREAD_GROUPING.u32All = 0;
     if (context->radeon.radeonScreen->chip_family >= CHIP_FAMILY_RV770)
 	    SETfield(r700->SPI_THREAD_GROUPING.u32All, 1, PS_GROUPING_shift, PS_GROUPING_mask);
-
-    /* screen */
-    r700->PA_SC_SCREEN_SCISSOR_TL.u32All = 0x0;
-
-    SETfield(r700->PA_SC_SCREEN_SCISSOR_BR.u32All,
-	     ((RADEONDRIPtr)(context->radeon.radeonScreen->driScreen->pDevPriv))->width,
-	     PA_SC_SCREEN_SCISSOR_BR__BR_X_shift, PA_SC_SCREEN_SCISSOR_BR__BR_X_mask);
-    SETfield(r700->PA_SC_SCREEN_SCISSOR_BR.u32All,
-	     ((RADEONDRIPtr)(context->radeon.radeonScreen->driScreen->pDevPriv))->height,
-	     PA_SC_SCREEN_SCISSOR_BR__BR_Y_shift, PA_SC_SCREEN_SCISSOR_BR__BR_Y_mask);
 
     /* 4 clip rectangles */ /* TODO : set these clip rects according to context->currentDraw->numClipRects */
     r700->PA_SC_CLIPRECT_RULE.u32All = 0;
@@ -1757,6 +1786,24 @@ void r700InitState(GLcontext * ctx) //-------------------
     r700DepthFunc(ctx, ctx->Depth.Func);
     SETbit(r700->DB_SHADER_CONTROL.u32All, DUAL_EXPORT_ENABLE_bit);
 
+    r700->DB_DEPTH_CLEAR.u32All     = 0x3F800000;
+
+    r700->DB_RENDER_CONTROL.u32All  = 0;
+    SETbit(r700->DB_RENDER_CONTROL.u32All, STENCIL_COMPRESS_DISABLE_bit);
+    SETbit(r700->DB_RENDER_CONTROL.u32All, DEPTH_COMPRESS_DISABLE_bit);
+    r700->DB_RENDER_OVERRIDE.u32All = 0;
+    if (context->radeon.radeonScreen->chip_family < CHIP_FAMILY_RV770)
+	    SETbit(r700->DB_RENDER_OVERRIDE.u32All, FORCE_SHADER_Z_ORDER_bit);
+    SETfield(r700->DB_RENDER_OVERRIDE.u32All, FORCE_DISABLE, FORCE_HIZ_ENABLE_shift, FORCE_HIZ_ENABLE_mask);
+    SETfield(r700->DB_RENDER_OVERRIDE.u32All, FORCE_DISABLE, FORCE_HIS_ENABLE0_shift, FORCE_HIS_ENABLE0_mask);
+    SETfield(r700->DB_RENDER_OVERRIDE.u32All, FORCE_DISABLE, FORCE_HIS_ENABLE1_shift, FORCE_HIS_ENABLE1_mask);
+
+    r700->DB_ALPHA_TO_MASK.u32All = 0;
+    SETfield(r700->DB_ALPHA_TO_MASK.u32All, 2, ALPHA_TO_MASK_OFFSET0_shift, ALPHA_TO_MASK_OFFSET0_mask);
+    SETfield(r700->DB_ALPHA_TO_MASK.u32All, 2, ALPHA_TO_MASK_OFFSET1_shift, ALPHA_TO_MASK_OFFSET1_mask);
+    SETfield(r700->DB_ALPHA_TO_MASK.u32All, 2, ALPHA_TO_MASK_OFFSET2_shift, ALPHA_TO_MASK_OFFSET2_mask);
+    SETfield(r700->DB_ALPHA_TO_MASK.u32All, 2, ALPHA_TO_MASK_OFFSET3_shift, ALPHA_TO_MASK_OFFSET3_mask);
+
     /* stencil */
     r700Enable(ctx, GL_STENCIL_TEST, ctx->Stencil._Enabled);
     r700StencilMaskSeparate(ctx, 0, ctx->Stencil.WriteMask[0]);
@@ -1821,6 +1868,8 @@ void r700InitState(GLcontext * ctx) //-------------------
 
     /* Set up color compare mask */
     r700->CB_CLRCMP_MSK.u32All = 0xFFFFFFFF;
+
+    context->radeon.hw.all_dirty = GL_TRUE;
 
 }
 

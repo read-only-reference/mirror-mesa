@@ -275,6 +275,7 @@ static GLbitfield get_fp_input_mask( GLcontext *ctx )
 {
    /* _NEW_PROGRAM */
    const GLboolean vertexShader = (ctx->Shader.CurrentProgram &&
+				   ctx->Shader.CurrentProgram->LinkStatus &&
                                    ctx->Shader.CurrentProgram->VertexProgram);
    const GLboolean vertexProgram = ctx->VertexProgram._Enabled;
    GLbitfield fp_inputs = 0x0;
@@ -321,8 +322,10 @@ static GLbitfield get_fp_input_mask( GLcontext *ctx )
       /* Then look at what might be varying as a result of enabled
        * arrays, etc:
        */
-      if (varying_inputs & VERT_BIT_COLOR0) fp_inputs |= FRAG_BIT_COL0;
-      if (varying_inputs & VERT_BIT_COLOR1) fp_inputs |= FRAG_BIT_COL1;
+      if (varying_inputs & VERT_BIT_COLOR0)
+         fp_inputs |= FRAG_BIT_COL0;
+      if (varying_inputs & VERT_BIT_COLOR1)
+         fp_inputs |= FRAG_BIT_COL1;
 
       fp_inputs |= (((varying_inputs & VERT_BIT_TEX_ANY) >> VERT_ATTRIB_TEX0) 
                     << FRAG_ATTRIB_TEX0);
@@ -340,7 +343,7 @@ static GLbitfield get_fp_input_mask( GLcontext *ctx )
       if (vertexShader)
          vprog = ctx->Shader.CurrentProgram->VertexProgram;
       else
-         vprog = ctx->VertexProgram._Current;
+         vprog = ctx->VertexProgram.Current;
 
       vp_outputs = vprog->Base.OutputsWritten;
 
@@ -351,8 +354,10 @@ static GLbitfield get_fp_input_mask( GLcontext *ctx )
       if (ctx->Point.PointSprite)
          vp_outputs |= FRAG_BITS_TEX_ANY;
 
-      if (vp_outputs & (1 << VERT_RESULT_COL0)) fp_inputs |= FRAG_BIT_COL0;
-      if (vp_outputs & (1 << VERT_RESULT_COL1)) fp_inputs |= FRAG_BIT_COL1;
+      if (vp_outputs & (1 << VERT_RESULT_COL0))
+         fp_inputs |= FRAG_BIT_COL0;
+      if (vp_outputs & (1 << VERT_RESULT_COL1))
+         fp_inputs |= FRAG_BIT_COL1;
 
       fp_inputs |= (((vp_outputs & VERT_RESULT_TEX_ANY) >> VERT_RESULT_TEX0) 
                     << FRAG_ATTRIB_TEX0);
@@ -947,7 +952,7 @@ static struct ureg emit_combine_source( struct texenv_fragment_program *p,
    }
 }
 
-static GLboolean args_match( struct state_key *key, GLuint unit )
+static GLboolean args_match( const struct state_key *key, GLuint unit )
 {
    GLuint i, nr = key->unit[unit].NumArgsRGB;
 
@@ -1107,11 +1112,10 @@ static struct ureg emit_combine( struct texenv_fragment_program *p,
 static struct ureg
 emit_texenv(struct texenv_fragment_program *p, GLuint unit)
 {
-   struct state_key *key = p->state;
-   GLboolean saturate = (unit < p->last_tex_stage);
+   const struct state_key *key = p->state;
+   GLboolean saturate;
    GLuint rgb_shift, alpha_shift;
-   struct ureg out, shift;
-   struct ureg dest;
+   struct ureg out, dest;
 
    if (!key->unit[unit].enabled) {
       return get_source(p, SRC_PREVIOUS, 0);
@@ -1136,6 +1140,11 @@ emit_texenv(struct texenv_fragment_program *p, GLuint unit)
       break;
    }
    
+   /* If we'll do rgb/alpha shifting don't saturate in emit_combine().
+    * We don't want to clamp twice.
+    */
+   saturate = !(rgb_shift || alpha_shift);
+
    /* If this is the very last calculation, emit direct to output reg:
     */
    if (key->separate_specular ||
@@ -1158,7 +1167,6 @@ emit_texenv(struct texenv_fragment_program *p, GLuint unit)
    }
    else if (key->unit[unit].ModeRGB == MODE_DOT3_RGBA_EXT ||
 	    key->unit[unit].ModeRGB == MODE_DOT3_RGBA) {
-
       out = emit_combine( p, dest, WRITEMASK_XYZW, saturate,
 			  unit,
 			  key->unit[unit].NumArgsRGB,
@@ -1184,6 +1192,10 @@ emit_texenv(struct texenv_fragment_program *p, GLuint unit)
    /* Deal with the final shift:
     */
    if (alpha_shift || rgb_shift) {
+      struct ureg shift;
+
+      saturate = GL_TRUE;  /* always saturate at this point */
+
       if (rgb_shift == alpha_shift) {
 	 shift = register_scalar_const(p, (GLfloat)(1<<rgb_shift));
       }
@@ -1283,7 +1295,7 @@ static GLboolean load_texenv_source( struct texenv_fragment_program *p,
 static GLboolean
 load_texunit_sources( struct texenv_fragment_program *p, int unit )
 {
-   struct state_key *key = p->state;
+   const struct state_key *key = p->state;
    GLuint i;
 
    for (i = 0; i < key->unit[unit].NumArgsRGB; i++) {
@@ -1303,7 +1315,7 @@ load_texunit_sources( struct texenv_fragment_program *p, int unit )
 static GLboolean
 load_texunit_bumpmap( struct texenv_fragment_program *p, int unit )
 {
-   struct state_key *key = p->state;
+   const struct state_key *key = p->state;
    GLuint bumpedUnitNr = key->unit[unit].OptRGB[1].Source - SRC_TEXTURE0;
    struct ureg texcDst, bumpMapRes;
    struct ureg constdudvcolor = register_const4f(p, 0.0, 0.0, 0.0, 1.0);

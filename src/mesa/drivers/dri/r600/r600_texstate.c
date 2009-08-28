@@ -43,6 +43,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/teximage.h"
 #include "main/texobj.h"
 #include "main/enums.h"
+#include "main/simple_list.h"
 
 #include "r600_context.h"
 #include "r700_state.h"
@@ -58,6 +59,10 @@ void r600UpdateTextureState(GLcontext * ctx)
 	struct gl_texture_unit *texUnit;
 	struct radeon_tex_obj *t;
 	GLuint    unit;
+
+	R600_STATECHANGE(context, tx);
+	R600_STATECHANGE(context, tx_smplr);
+	R600_STATECHANGE(context, tx_brdr_clr);
 
 	for (unit = 0; unit < R700_MAX_TEXTURE_UNITS; unit++) {
 		texUnit = &ctx->Texture.Unit[unit];
@@ -562,14 +567,11 @@ static void setup_hardware_state(context_t *rmesa, struct gl_texture_object *tex
 
 	if (!t->image_override) {
 		if (!r600GetTexFormat(texObj, firstImage->TexFormat->MesaFormat)) {
-			_mesa_problem(NULL, "unexpected texture format in %s",
+			radeon_error("unexpected texture format in %s\n",
 				      __FUNCTION__);
 			return;
 		}
 	}
-
-	if (t->image_override && t->bo)
-		return;
 
 	switch (texObj->Target) {
         case GL_TEXTURE_1D:
@@ -591,7 +593,7 @@ static void setup_hardware_state(context_t *rmesa, struct gl_texture_object *tex
 		SETfield(t->SQ_TEX_RESOURCE1, 0, TEX_DEPTH_shift, TEX_DEPTH_mask);
 		break;
         default:
-		_mesa_problem(NULL, "unexpected texture target type in %s", __FUNCTION__);
+		radeon_error("unexpected texture target type in %s\n", __FUNCTION__);
 		return;
 	}
 
@@ -673,9 +675,7 @@ GLboolean r600ValidateBuffers(GLcontext * ctx)
 			continue;
 
 		if (!r600_validate_texture(ctx, ctx->Texture.Unit[i]._Current)) {
-			_mesa_warning(ctx,
-				      "failed to validate texture for unit %d.\n",
-				      i);
+			radeon_warning("failed to validate texture for unit %d.\n", i);
 		}
 		t = radeon_tex_obj(ctx->Texture.Unit[i]._Current);
 		if (t->image_override && t->bo)
@@ -688,7 +688,7 @@ GLboolean r600ValidateBuffers(GLcontext * ctx)
 							  RADEON_GEM_DOMAIN_GTT | RADEON_GEM_DOMAIN_VRAM, 0);
 	}
 
-	ret = radeon_cs_space_check_with_bo(rmesa->radeon.cmdbuf.cs, rmesa->radeon.dma.current, RADEON_GEM_DOMAIN_GTT, 0);
+	ret = radeon_cs_space_check_with_bo(rmesa->radeon.cmdbuf.cs, first_elem(&rmesa->radeon.dma.reserved)->bo, RADEON_GEM_DOMAIN_GTT, 0);
 	if (ret)
 		return GL_FALSE;
 	return GL_TRUE;
@@ -701,7 +701,7 @@ void r600SetTexOffset(__DRIcontext * pDRICtx, GLint texname,
 	struct gl_texture_object *tObj =
 	    _mesa_lookup_texture(rmesa->radeon.glCtx, texname);
 	radeonTexObjPtr t = radeon_tex_obj(tObj);
-	uint32_t pitch_val;
+	uint32_t pitch_val, size;
 
 	if (!tObj)
 		return;
@@ -711,7 +711,12 @@ void r600SetTexOffset(__DRIcontext * pDRICtx, GLint texname,
 	if (!offset)
 		return;
 
-	t->bo = NULL;
+	size = pitch;//h * w * (depth / 8);
+	if (t->bo) {
+		radeon_bo_unref(t->bo);
+		t->bo = NULL;
+	}
+	t->bo = radeon_legacy_bo_alloc_fake(rmesa->radeon.radeonScreen->bom, size, offset);
 	t->override_offset = offset;
 	pitch_val = pitch;
 	switch (depth) {

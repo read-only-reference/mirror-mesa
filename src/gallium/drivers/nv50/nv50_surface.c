@@ -53,7 +53,7 @@ nv50_surface_set(struct nv50_screen *screen, struct pipe_surface *ps, int dst)
 	struct nv50_miptree *mt = nv50_miptree(ps->texture);
 	struct nouveau_channel *chan = screen->eng2d->channel;
 	struct nouveau_grobj *eng2d = screen->eng2d;
-	struct nouveau_bo *bo = nv50_miptree(ps->texture)->bo;
+	struct nouveau_bo *bo = nv50_miptree(ps->texture)->base.bo;
  	int format, mthd = dst ? NV50_2D_DST_FORMAT : NV50_2D_SRC_FORMAT;
  	int flags = NOUVEAU_BO_VRAM | (dst ? NOUVEAU_BO_WR : NOUVEAU_BO_RD);
 
@@ -144,7 +144,7 @@ nv50_surface_copy(struct pipe_context *pipe,
 		  struct pipe_surface *src, unsigned srcx, unsigned srcy,
 		  unsigned width, unsigned height)
 {
-	struct nv50_context *nv50 = (struct nv50_context *)pipe;
+	struct nv50_context *nv50 = nv50_context(pipe);
 	struct nv50_screen *screen = nv50->screen;
 
 	assert(src->format == dest->format);
@@ -158,7 +158,7 @@ nv50_surface_fill(struct pipe_context *pipe, struct pipe_surface *dest,
 		  unsigned destx, unsigned desty, unsigned width,
 		  unsigned height, unsigned value)
 {
-	struct nv50_context *nv50 = (struct nv50_context *)pipe;
+	struct nv50_context *nv50 = nv50_context(pipe);
 	struct nv50_screen *screen = nv50->screen;
 	struct nouveau_channel *chan = screen->eng2d->channel;
 	struct nouveau_grobj *eng2d = screen->eng2d;

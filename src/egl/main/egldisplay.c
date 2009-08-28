@@ -1,4 +1,3 @@
-
 /**
  * Functions related to EGLDisplay.
  */
@@ -11,8 +10,63 @@
 #include "egldisplay.h"
 #include "egldriver.h"
 #include "eglglobals.h"
-#include "eglhash.h"
 #include "eglstring.h"
+#include "eglmutex.h"
+#include "egllog.h"
+
+
+/**
+ * Finish display management.
+ */
+void
+_eglFiniDisplay(void)
+{
+   _EGLDisplay *dpyList, *dpy;
+
+   /* atexit function is called with global mutex locked */
+   dpyList = _eglGlobal.DisplayList;
+   while (dpyList) {
+      /* pop list head */
+      dpy = dpyList;
+      dpyList = dpyList->Next;
+
+      if (dpy->ContextList || dpy->SurfaceList)
+         _eglLog(_EGL_DEBUG, "Display %p is destroyed with resources", dpy);
+
+      free(dpy);
+   }
+   _eglGlobal.DisplayList = NULL;
+}
+
+
+/**
+ * If the first character is '!' we interpret it as specific driver name
+ * (i.e. "!r200" or "!i830").  Whatever follows ':' is interpreted as
+ * arguments.
+ *
+ * The caller may free() the returned driver name.
+ */
+char *
+_eglSplitDisplayString(const char *dpyString, const char **args)
+{
+   char *drv, *p;
+
+   if (!dpyString || dpyString[0] != '!')
+      return NULL;
+   drv = _eglstrdup(dpyString + 1);
+   if (!drv)
+      return NULL;
+
+   p = strchr(dpyString, ':');
+   if (p) {
+      drv[p - dpyString] = '\0';
+      p++;
+   }
+   if (args)
+      *args = p;
+
+   return drv;
+}
 
 
 /**
@@ -27,11 +81,8 @@ _eglNewDisplay(NativeDisplayType nativeDisplay)
    _EGLDisplay *dpy = (_EGLDisplay *) calloc(1, sizeof(_EGLDisplay));
    if (dpy) {
       dpy->NativeDisplay = nativeDisplay;
-#if defined(_EGL_PLATFORM_X)
-      dpy->Xdpy = (Display *) nativeDisplay;
-#endif
 
-      dpy->DriverName = _eglChooseDriver(dpy);
+      dpy->DriverName = _eglPreloadDriver(dpy);
       if (!dpy->DriverName) {
          free(dpy);
          return NULL;
@@ -48,14 +99,14 @@ _eglNewDisplay(NativeDisplayType nativeDisplay)
 EGLDisplay
 _eglLinkDisplay(_EGLDisplay *dpy)
 {
-   EGLuint key;
-   key = _eglHashGenKey(_eglGlobal.Displays);
-   assert(key);
-   /* "link" the display to the hash table */
-   _eglHashInsert(_eglGlobal.Displays, key, dpy);
-   dpy->Handle = (EGLDisplay) _eglUIntToPointer(key);
+   _eglLockMutex(_eglGlobal.Mutex);
 
-   return dpy->Handle;
+   dpy->Next = _eglGlobal.DisplayList;
+   _eglGlobal.DisplayList = dpy;
+
+   _eglUnlockMutex(_eglGlobal.Mutex);
+
+   return (EGLDisplay) dpy;
 }
 
 
@@ -66,34 +117,25 @@ _eglLinkDisplay(_EGLDisplay *dpy)
 void
 _eglUnlinkDisplay(_EGLDisplay *dpy)
 {
-   EGLuint key = _eglPointerToUInt((void *) dpy->Handle);
-   _eglHashRemove(_eglGlobal.Displays, key);
-   dpy->Handle = EGL_NO_DISPLAY;
-}
+   _EGLDisplay *prev;
 
+   _eglLockMutex(_eglGlobal.Mutex);
 
-/**
- * Return the handle of a linked display, or EGL_NO_DISPLAY.
- */
-EGLDisplay
-_eglGetDisplayHandle(_EGLDisplay *display)
-{
-   if (display)
-      return display->Handle;
-   else
-      return EGL_NO_DISPLAY;
-}
+   prev = _eglGlobal.DisplayList;
+   if (prev != dpy) {
+      while (prev) {
+         if (prev->Next == dpy)
+            break;
+         prev = prev->Next;
+      }
+      assert(prev);
+      prev->Next = dpy->Next;
+   }
+   else {
+      _eglGlobal.DisplayList = dpy->Next;
+   }
 
- 
-/**
- * Lookup a handle to find the linked display.
- * Return NULL if the handle has no corresponding linked display.
- */
-_EGLDisplay *
-_eglLookupDisplay(EGLDisplay dpy)
-{
-   EGLuint key = _eglPointerToUInt((void *) dpy);
-   return (_EGLDisplay *) _eglHashLookup(_eglGlobal.Displays, key);
+   _eglUnlockMutex(_eglGlobal.Mutex);
 }
 
 
@@ -104,18 +146,20 @@ _eglLookupDisplay(EGLDisplay dpy)
 _EGLDisplay *
 _eglFindDisplay(NativeDisplayType nativeDisplay)
 {
-   EGLuint key = _eglHashFirstEntry(_eglGlobal.Displays);
+   _EGLDisplay *dpy;
 
-   /* Walk the hash table.  Should switch to list if it is a problem. */
-   while (key) {
-      _EGLDisplay *dpy = (_EGLDisplay *)
-            _eglHashLookup(_eglGlobal.Displays, key);
-      assert(dpy);
+   _eglLockMutex(_eglGlobal.Mutex);
 
-      if (dpy->NativeDisplay == nativeDisplay)
+   dpy = _eglGlobal.DisplayList;
+   while (dpy) {
+      if (dpy->NativeDisplay == nativeDisplay) {
+         _eglUnlockMutex(_eglGlobal.Mutex);
          return dpy;
-      key = _eglHashNextEntry(_eglGlobal.Displays, key);
+      }
+      dpy = dpy->Next;
    }
+
+   _eglUnlockMutex(_eglGlobal.Mutex);
 
    return NULL;
 }
@@ -125,29 +169,29 @@ _eglFindDisplay(NativeDisplayType nativeDisplay)
  * Destroy the contexts and surfaces that are linked to the display.
  */
 void
-_eglReleaseDisplayResources(_EGLDriver *drv, EGLDisplay dpy)
+_eglReleaseDisplayResources(_EGLDriver *drv, _EGLDisplay *display)
 {
-   _EGLDisplay *display;
    _EGLContext *contexts;
    _EGLSurface *surfaces;
 
-   display = _eglLookupDisplay(dpy);
-   if (!display)
-      return;
    contexts = display->ContextList;
    surfaces = display->SurfaceList;
 
    while (contexts) {
-      EGLContext handle = _eglGetContextHandle(contexts);
+      _EGLContext *ctx = contexts;
       contexts = contexts->Next;
-      drv->API.DestroyContext(drv, dpy, handle);
+
+      _eglUnlinkContext(ctx);
+      drv->API.DestroyContext(drv, display, ctx);
    }
    assert(!display->ContextList);
 
    while (surfaces) {
-      EGLSurface handle = _eglGetSurfaceHandle(surfaces);
+      _EGLSurface *surf = surfaces;
       surfaces = surfaces->Next;
-      drv->API.DestroySurface(drv, dpy, handle);
+
+      _eglUnlinkSurface(surf);
+      drv->API.DestroySurface(drv, display, surf);
    }
    assert(!display->SurfaceList);
 }
@@ -162,18 +206,15 @@ _eglCleanupDisplay(_EGLDisplay *disp)
 {
    EGLint i;
 
-   for (i = 0; i < disp->NumConfigs; i++) {
-      free(disp->Configs[i]);
+   if (disp->Configs) {
+      for (i = 0; i < disp->NumConfigs; i++)
+         free(disp->Configs[i]);
+      free(disp->Configs);
+      disp->Configs = NULL;
+      disp->NumConfigs = 0;
    }
-   free(disp->Configs);
-   disp->Configs = NULL;
 
    /* XXX incomplete */
-
-   free((void *) disp->DriverName);
-   disp->DriverName = NULL;
-
-   /* driver deletes the _EGLDisplay object */
 }
 
 
@@ -220,46 +261,16 @@ _eglUnlinkContext(_EGLContext *ctx)
 
 
 /**
- * Return the handle of a linked context, or EGL_NO_CONTEXT.
- */
-EGLContext
-_eglGetContextHandle(_EGLContext *ctx)
-{
-   return (EGLContext) ((ctx && ctx->Display) ? ctx : EGL_NO_CONTEXT);
-}
-
-
-/**
- * Lookup a handle to find the linked context.
- * Return NULL if the handle has no corresponding linked context.
- */
-_EGLContext *
-_eglLookupContext(EGLContext ctx)
-{
-   _EGLContext *context = (_EGLContext *) ctx;
-   return (context && context->Display) ? context : NULL;
-}
-
-
-/**
  * Link a surface to a display and return the handle of the link.
  * The handle can be passed to client directly.
  */
 EGLSurface
 _eglLinkSurface(_EGLSurface *surf, _EGLDisplay *dpy)
 {
-   EGLuint key;
-
    surf->Display = dpy;
    surf->Next = dpy->SurfaceList;
    dpy->SurfaceList = surf;
-
-   key = _eglHashGenKey(_eglGlobal.Surfaces);
-   assert(key);
-   _eglHashInsert(_eglGlobal.Surfaces, key, surf);
-
-   surf->Handle = (EGLSurface) _eglUIntToPointer(key);
-   return surf->Handle;
+   return (EGLSurface) surf;
 }
 
 
@@ -271,10 +282,6 @@ void
 _eglUnlinkSurface(_EGLSurface *surf)
 {
    _EGLSurface *prev;
-   EGLuint key = _eglPointerToUInt((void *) surf->Handle);
-
-   _eglHashRemove(_eglGlobal.Surfaces, key);
-   surf->Handle = EGL_NO_SURFACE;
 
    prev = surf->Display->SurfaceList;
    if (prev != surf) {
@@ -296,26 +303,69 @@ _eglUnlinkSurface(_EGLSurface *surf)
 }
 
 
+#ifndef _EGL_SKIP_HANDLE_CHECK
+
+
 /**
- * Return the handle of a linked surface, or EGL_NO_SURFACE.
+ * Return EGL_TRUE if the given handle is a valid handle to a display.
  */
-EGLSurface
-_eglGetSurfaceHandle(_EGLSurface *surface)
+EGLBoolean
+_eglCheckDisplayHandle(EGLDisplay dpy)
 {
-   if (surface)
-      return surface->Handle;
-   else
-      return EGL_NO_SURFACE;
+   _EGLDisplay *cur;
+
+   _eglLockMutex(_eglGlobal.Mutex);
+   cur = _eglGlobal.DisplayList;
+   while (cur) {
+      if (cur == (_EGLDisplay *) dpy)
+         break;
+      cur = cur->Next;
+   }
+   _eglUnlockMutex(_eglGlobal.Mutex);
+   return (cur != NULL);
 }
 
 
 /**
- * Lookup a handle to find the linked surface.
- * Return NULL if the handle has no corresponding linked surface.
+ * Return EGL_TRUE if the given handle is a valid handle to a context.
  */
-_EGLSurface *
-_eglLookupSurface(EGLSurface surf)
+EGLBoolean
+_eglCheckContextHandle(EGLContext ctx, _EGLDisplay *dpy)
 {
-   EGLuint key = _eglPointerToUInt((void *) surf);
-   return (_EGLSurface *) _eglHashLookup(_eglGlobal.Surfaces, key);
+   _EGLContext *cur = NULL;
+
+   if (dpy)
+      cur = dpy->ContextList;
+   while (cur) {
+      if (cur == (_EGLContext *) ctx) {
+         assert(cur->Display == dpy);
+         break;
+      }
+      cur = cur->Next;
+   }
+   return (cur != NULL);
 }
+
+
+/**
+ * Return EGL_TRUE if the given handle is a valid handle to a surface.
+ */
+EGLBoolean
+_eglCheckSurfaceHandle(EGLSurface surf, _EGLDisplay *dpy)
+{
+   _EGLSurface *cur = NULL;
+
+   if (dpy)
+      cur = dpy->SurfaceList;
+   while (cur) {
+      if (cur == (_EGLSurface *) surf) {
+         assert(cur->Display == dpy);
+         break;
+      }
+      cur = cur->Next;
+   }
+   return (cur != NULL);
+}
+
+
+#endif /* !_EGL_SKIP_HANDLE_CHECK */

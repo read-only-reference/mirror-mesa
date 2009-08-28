@@ -31,6 +31,7 @@
 #include "main/imports.h"
 #include "main/mtypes.h"
 #include "main/enums.h"
+#include "swrast/swrast.h"
 
 #include "radeon_lock.h"
 #include "r600_context.h"
@@ -45,12 +46,6 @@ static GLboolean r700ClearFast(context_t *context, GLbitfield mask)
     return GL_FALSE;
 }
 
-#define R600_NEWPRIM( rmesa )			\
-  do {						\
-  if ( rmesa->radeon.dma.flush )			\
-    rmesa->radeon.dma.flush( rmesa->radeon.glCtx );	\
-  } while (0)
-
 void r700Clear(GLcontext * ctx, GLbitfield mask)
 {
     context_t *context = R700_CONTEXT(ctx);
@@ -59,6 +54,8 @@ void r700Clear(GLcontext * ctx, GLbitfield mask)
     GLbitfield swrast_mask = 0, tri_mask = 0;
     int i;
     struct gl_framebuffer *fb = ctx->DrawBuffer;
+
+    radeon_print(RADEON_RENDER, RADEON_VERBOSE, "%s %x\n", __func__, mask);
 
     if( GL_TRUE == r700ClearFast(context, mask) )
     {
@@ -111,8 +108,7 @@ void r700Clear(GLcontext * ctx, GLbitfield mask)
 	}
 
 	if (swrast_mask) {
-		if (RADEON_DEBUG & DEBUG_FALLBACKS)
-			fprintf(stderr, "%s: swrast clear, mask: %x\n",
+		radeon_print(RADEON_FALLBACKS, RADEON_IMPORTANT, "%s: swrast clear, mask: %x\n",
 				__FUNCTION__, swrast_mask);
 		_swrast_Clear(ctx, swrast_mask);
 	}

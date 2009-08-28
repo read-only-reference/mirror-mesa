@@ -220,30 +220,6 @@ static const GLuint __driNConfigOptions = 17;
 
 extern const struct dri_extension gl_20_extension[];
 
-#ifndef RADEON_DEBUG
-
-static const struct dri_debug_control debug_control[] = {
-	{"fall", DEBUG_FALLBACKS},
-	{"tex", DEBUG_TEXTURE},
-	{"ioctl", DEBUG_IOCTL},
-	{"prim", DEBUG_PRIMS},
-	{"vert", DEBUG_VERTS},
-	{"state", DEBUG_STATE},
-	{"code", DEBUG_CODEGEN},
-	{"vfmt", DEBUG_VFMT},
-	{"vtxf", DEBUG_VFMT},
-	{"verb", DEBUG_VERBOSE},
-	{"dri", DEBUG_DRI},
-	{"dma", DEBUG_DMA},
-	{"san", DEBUG_SANITY},
-	{"sync", DEBUG_SYNC},
-	{"pix", DEBUG_PIXEL},
-	{"mem", DEBUG_MEMORY},
-	{"allmsg", ~DEBUG_SYNC}, /* avoid the term "sync" because the parser uses strstr */
-	{NULL, 0}
-};
-#endif /* RADEON_DEBUG */
-
 #endif /* RADEON_COMMON && defined(RADEON_COMMON_FOR_R300) */
 
 extern const struct dri_extension card_extensions[];
@@ -259,13 +235,16 @@ radeonGetParam(__DRIscreenPrivate *sPriv, int param, void *value)
   struct drm_radeon_info info = { 0 };
 
   if (sPriv->drm_version.major >= 2) {
-      info.value = (uint64_t)value;
+      info.value = (uint64_t)(uintptr_t)value;
       switch (param) {
       case RADEON_PARAM_DEVICE_ID:
           info.request = RADEON_INFO_DEVICE_ID;
           break;
       case RADEON_PARAM_NUM_GB_PIPES:
           info.request = RADEON_INFO_NUM_GB_PIPES;
+          break;
+      case RADEON_PARAM_NUM_Z_PIPES:
+          info.request = RADEON_INFO_NUM_Z_PIPES;
           break;
       default:
           return -EINVAL;
@@ -853,10 +832,19 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
       screen->chip_family = CHIP_FAMILY_RS780;
       screen->chip_flags = RADEON_CHIPSET_TCL;
       break;
+   case PCI_CHIP_RS880_9710:
+   case PCI_CHIP_RS880_9711:
+   case PCI_CHIP_RS880_9712:
+   case PCI_CHIP_RS880_9713:
+   case PCI_CHIP_RS880_9714:
+      screen->chip_family = CHIP_FAMILY_RS880;
+      screen->chip_flags = RADEON_CHIPSET_TCL;
+      break;
 
    case PCI_CHIP_RV770_9440:
    case PCI_CHIP_RV770_9441:
    case PCI_CHIP_RV770_9442:
+   case PCI_CHIP_RV770_9443:
    case PCI_CHIP_RV770_9444:
    case PCI_CHIP_RV770_9446:
    case PCI_CHIP_RV770_944A:
@@ -878,11 +866,14 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
       screen->chip_flags = RADEON_CHIPSET_TCL;
       break;
 
+   case PCI_CHIP_RV730_9480:
    case PCI_CHIP_RV730_9487:
+   case PCI_CHIP_RV730_9488:
    case PCI_CHIP_RV730_9489:
    case PCI_CHIP_RV730_948F:
    case PCI_CHIP_RV730_9490:
    case PCI_CHIP_RV730_9491:
+   case PCI_CHIP_RV730_9495:
    case PCI_CHIP_RV730_9498:
    case PCI_CHIP_RV730_949C:
    case PCI_CHIP_RV730_949E:
@@ -899,15 +890,19 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
    case PCI_CHIP_RV710_9552:
    case PCI_CHIP_RV710_9553:
    case PCI_CHIP_RV710_9555:
+   case PCI_CHIP_RV710_9557:
       screen->chip_family = CHIP_FAMILY_RV710;
       screen->chip_flags = RADEON_CHIPSET_TCL;
       break;
 
    case PCI_CHIP_RV740_94A0:
    case PCI_CHIP_RV740_94A1:
+   case PCI_CHIP_RV740_94A3:
    case PCI_CHIP_RV740_94B1:
    case PCI_CHIP_RV740_94B3:
+   case PCI_CHIP_RV740_94B4:
    case PCI_CHIP_RV740_94B5:
+   case PCI_CHIP_RV740_94B9:
       screen->chip_family = CHIP_FAMILY_RV740;
       screen->chip_flags = RADEON_CHIPSET_TCL;
       break;
@@ -947,9 +942,8 @@ radeonCreateScreen( __DRIscreenPrivate *sPriv )
       return NULL;
    }
 
-#if DO_DEBUG && RADEON_COMMON && defined(RADEON_COMMON_FOR_R300)
-	RADEON_DEBUG = driParseDebugString(getenv("RADEON_DEBUG"), debug_control);
-#endif
+   radeon_init_debug();
+
    /* parse information in __driConfigOptions */
    driParseOptionInfo (&screen->optionCache,
 		       __driConfigOptions, __driNConfigOptions);
@@ -992,6 +986,7 @@ radeonCreateScreen( __DRIscreenPrivate *sPriv )
       screen->drmSupportsPointSprites = (sPriv->drm_version.minor >= 13);
       screen->drmSupportsCubeMapsR100 = (sPriv->drm_version.minor >= 15);
       screen->drmSupportsVertexProgram = (sPriv->drm_version.minor >= 25);
+      screen->drmSupportsOcclusionQueries = (sPriv->drm_version.minor >= 30);
    }
 
    ret = radeon_set_screen_flags(screen, dri_priv->deviceID);
@@ -1087,7 +1082,7 @@ radeonCreateScreen( __DRIscreenPrivate *sPriv )
    /* +r6/r7 */
    if(screen->chip_family >= CHIP_FAMILY_R600)
    {
-       if (ret) 
+       if (ret)
        {
             FREE( screen );
             fprintf(stderr, "Unable to get fb location need newer drm\n");
@@ -1100,18 +1095,18 @@ radeonCreateScreen( __DRIscreenPrivate *sPriv )
    }
    else
    {
-        if (ret) 
+        if (ret)
         {
             if (screen->chip_family < CHIP_FAMILY_RS600 && !screen->kernel_mm)
 	            screen->fbLocation      = ( INREG( RADEON_MC_FB_LOCATION ) & 0xffff) << 16;
-            else 
+            else
             {
                 FREE( screen );
                 fprintf(stderr, "Unable to get fb location need newer drm\n");
                 return NULL;
             }
-        } 
-        else 
+        }
+        else
         {
             screen->fbLocation = (temp & 0xffff) << 16;
         }
@@ -1155,6 +1150,15 @@ radeonCreateScreen( __DRIscreenPrivate *sPriv )
        default:
 	   break;
        }
+
+       if ( sPriv->drm_version.minor >= 31 ) {
+	       ret = radeonGetParam(sPriv, RADEON_PARAM_NUM_Z_PIPES, &temp);
+	       if (ret)
+		       screen->num_z_pipes = 2;
+	       else
+		       screen->num_z_pipes = temp;
+       } else
+	       screen->num_z_pipes = 2;
    }
 
    if ( sPriv->drm_version.minor >= 10 ) {
@@ -1272,9 +1276,7 @@ radeonCreateScreen2(__DRIscreenPrivate *sPriv)
       return NULL;
    }
 
-#if DO_DEBUG && RADEON_COMMON && defined(RADEON_COMMON_FOR_R300)
-	RADEON_DEBUG = driParseDebugString(getenv("RADEON_DEBUG"), debug_control);
-#endif
+   radeon_init_debug();
 
    /* parse information in __driConfigOptions */
    driParseOptionInfo (&screen->optionCache,
@@ -1291,6 +1293,7 @@ radeonCreateScreen2(__DRIscreenPrivate *sPriv)
    screen->drmSupportsPointSprites = 1;
    screen->drmSupportsCubeMapsR100 = 1;
    screen->drmSupportsVertexProgram = 1;
+   screen->drmSupportsOcclusionQueries = 1;
    screen->irq = 1;
 
    ret = radeonGetParam(sPriv, RADEON_PARAM_DEVICE_ID, &device_id);
@@ -1354,6 +1357,12 @@ radeonCreateScreen2(__DRIscreenPrivate *sPriv)
        default:
 	   break;
        }
+
+       ret = radeonGetParam(sPriv, RADEON_PARAM_NUM_Z_PIPES, &temp);
+       if (ret)
+	       screen->num_z_pipes = 2;
+       else
+	       screen->num_z_pipes = temp;
 
    }
 
@@ -1569,38 +1578,6 @@ radeonDestroyBuffer(__DRIdrawablePrivate *driDrawPriv)
     _mesa_reference_framebuffer((GLframebuffer **)(&(driDrawPriv->driverPrivate)), NULL);
 }
 
-/**
- * Choose the appropriate CreateContext function based on the chipset.
- * Eventually, all drivers will go through this process.
- */
-static GLboolean radeonCreateContext(const __GLcontextModes * glVisual,
-				     __DRIcontextPrivate * driContextPriv,
-				     void *sharedContextPriv)
-{
-	__DRIscreenPrivate *sPriv = driContextPriv->driScreenPriv;
-	radeonScreenPtr screen = (radeonScreenPtr) (sPriv->private);
-#if RADEON_COMMON && defined(RADEON_COMMON_FOR_R600)
-	if (IS_R600_CLASS(screen))
-		return r600CreateContext(glVisual, driContextPriv, sharedContextPriv);
-#endif
-
-#if RADEON_COMMON && defined(RADEON_COMMON_FOR_R300)
-	if (IS_R300_CLASS(screen))
-		return r300CreateContext(glVisual, driContextPriv, sharedContextPriv);
-#endif
-
-#if RADEON_COMMON && defined(RADEON_COMMON_FOR_R200)
-	if (IS_R200_CLASS(screen))
-		return r200CreateContext(glVisual, driContextPriv, sharedContextPriv);
-#endif
-
-#if !RADEON_COMMON
-	(void)screen;
-	return r100CreateContext(glVisual, driContextPriv, sharedContextPriv);
-#endif
-	return GL_FALSE;
-}
-
 
 /**
  * This is the driver specific part of the createNewScreen entry point.
@@ -1793,8 +1770,19 @@ getSwapInfo( __DRIdrawablePrivate *dPriv, __DRIswapInfo * sInfo )
 const struct __DriverAPIRec driDriverAPI = {
    .InitScreen      = radeonInitScreen,
    .DestroyScreen   = radeonDestroyScreen,
-   .CreateContext   = radeonCreateContext,
+#if RADEON_COMMON && defined(RADEON_COMMON_FOR_R200)
+   .CreateContext   = r200CreateContext,
+   .DestroyContext  = r200DestroyContext,
+#elif RADEON_COMMON && defined(RADEON_COMMON_FOR_R600)
+   .CreateContext   = r600CreateContext,
    .DestroyContext  = radeonDestroyContext,
+#elif RADEON_COMMON && defined(RADEON_COMMON_FOR_R300)
+   .CreateContext   = r300CreateContext,
+   .DestroyContext  = radeonDestroyContext,
+#else
+   .CreateContext   = r100CreateContext,
+   .DestroyContext  = radeonDestroyContext,
+#endif
    .CreateBuffer    = radeonCreateBuffer,
    .DestroyBuffer   = radeonDestroyBuffer,
    .SwapBuffers     = radeonSwapBuffers,

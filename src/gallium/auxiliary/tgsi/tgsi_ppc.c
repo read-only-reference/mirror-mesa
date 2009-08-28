@@ -38,6 +38,7 @@
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "util/u_sse.h"
+#include "tgsi/tgsi_info.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_util.h"
 #include "tgsi_dump.h"
@@ -1107,6 +1108,15 @@ static int
 emit_instruction(struct gen_context *gen,
                  struct tgsi_full_instruction *inst)
 {
+
+   /* we don't handle saturation/clamping yet */
+   if (inst->Instruction.Saturate != TGSI_SAT_NONE)
+      return 0;
+
+   /* need to use extra temps to fix SOA dependencies : */
+   if (tgsi_check_soa_dependencies(inst))
+      return FALSE;
+
    switch (inst->Instruction.Opcode) {
    case TGSI_OPCODE_MOV:
    case TGSI_OPCODE_SWZ:
@@ -1317,8 +1327,10 @@ tgsi_emit_ppc(const struct tgsi_token *tokens,
          ok = emit_instruction(&gen, &parse.FullToken.FullInstruction);
 
 	 if (!ok) {
-	    debug_printf("failed to translate tgsi opcode %d to PPC (%s)\n", 
-			 parse.FullToken.FullInstruction.Instruction.Opcode,
+            uint opcode = parse.FullToken.FullInstruction.Instruction.Opcode;
+	    debug_printf("failed to translate tgsi opcode %d (%s) to PPC (%s)\n", 
+			 opcode,
+                         tgsi_get_opcode_name(opcode),
                          parse.FullHeader.Processor.Processor == TGSI_PROCESSOR_VERTEX ?
                          "vertex shader" : "fragment shader");
 	 }

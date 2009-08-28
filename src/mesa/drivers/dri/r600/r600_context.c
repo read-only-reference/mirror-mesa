@@ -56,6 +56,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "drivers/common/driverfuncs.h"
 
+#include "radeon_debug.h"
 #include "r600_context.h"
 #include "radeon_common_context.h"
 #include "radeon_span.h"
@@ -185,7 +186,7 @@ static void r600_vtbl_emit_cs_header(struct radeon_cs *cs, radeonContextPtr rmes
 
 static void r600_vtbl_pre_emit_atoms(radeonContextPtr radeon)
 {
-	/* to be enabled */
+	r700Start3D((context_t *)radeon);
 }
 
 static void r600_fallback(GLcontext *ctx, GLuint bit, GLboolean mode)
@@ -225,8 +226,10 @@ GLboolean r600CreateContext(const __GLcontextModes * glVisual,
 
 	/* Allocate the R600 context */
 	r600 = (context_t*) CALLOC(sizeof(*r600));
-	if (!r600)
+	if (!r600) {
+		radeon_error("Failed to allocate memory for context.\n");
 		return GL_FALSE;
+	}
 
 	if (!(screen->chip_flags & RADEON_CHIPSET_TCL))
 		hw_tcl_on = future_hw_tcl_on = 0;
@@ -247,8 +250,6 @@ GLboolean r600CreateContext(const __GLcontextModes * glVisual,
 	 */
 	_mesa_init_driver_functions(&functions);
 
-	r700InitChipObject(r600);  /* let the eag... */
-
 	r700InitStateFuncs(&functions);
 	r600InitTextureFuncs(&functions);
 	r700InitShaderFuncs(&functions);
@@ -257,6 +258,7 @@ GLboolean r600CreateContext(const __GLcontextModes * glVisual,
 	if (!radeonInitContext(&r600->radeon, &functions,
 			       glVisual, driContextPriv,
 			       sharedContextPrivate)) {
+		radeon_error("Initializing context failed.\n");
 		FREE(r600);
 		return GL_FALSE;
 	}
@@ -349,6 +351,8 @@ GLboolean r600CreateContext(const __GLcontextModes * glVisual,
 	ctx->VertexProgram._MaintainTnlProgram = GL_TRUE;
 	ctx->FragmentProgram._MaintainTexEnvProgram = GL_TRUE;
 
+	radeon_init_debug();
+
 	driInitExtensions(ctx, card_extensions, GL_TRUE);
 	if (r600->radeon.radeonScreen->kernel_mm)
 	  driInitExtensions(ctx, mm_extensions, GL_FALSE);
@@ -377,7 +381,7 @@ GLboolean r600CreateContext(const __GLcontextModes * glVisual,
 	TNL_CONTEXT(ctx)->Driver.RunPipeline = r600RunPipeline;
 
 	if (driQueryOptionb(&r600->radeon.optionCache, "no_rast")) {
-		fprintf(stderr, "disabling 3D acceleration\n");
+		radeon_warning("disabling 3D acceleration\n");
 #if R200_MERGED
 		FALLBACK(&r600->radeon, RADEON_FALLBACK_DISABLE, 1);
 #endif
@@ -385,17 +389,5 @@ GLboolean r600CreateContext(const __GLcontextModes * glVisual,
 
 	return GL_TRUE;
 }
-
-/* Clean our own things only, radeonDestroyContext will do every thing else. */
-void
-r600DestroyContext (__DRIcontextPrivate * driContextPriv)
-{
-    GET_CURRENT_CONTEXT (ctx);
-    context_t *context = ctx ? R700_CONTEXT(ctx) : NULL;
-
-    if (context)
-	    FREE(context->hw.pStateList);
-}
-
 
 

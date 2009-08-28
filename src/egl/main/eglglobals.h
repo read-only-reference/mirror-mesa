@@ -2,8 +2,9 @@
 #define EGLGLOBALS_INCLUDED
 
 #include "egltypedefs.h"
-#include "eglhash.h"
+#include "egldisplay.h"
 #include "eglcurrent.h"
+#include "eglmutex.h"
 
 
 /**
@@ -11,21 +12,21 @@
  */
 struct _egl_global
 {
-   EGLBoolean Initialized;
+   _EGLMutex *Mutex;
 
-   /* these are private to egldisplay.c */
-   _EGLHashtable *Displays;
-   _EGLHashtable *Surfaces;
+   /* the list of all displays */
+   _EGLDisplay *DisplayList;
 
    EGLScreenMESA FreeScreenHandle;
 
    /* bitmaks of supported APIs (supported by _some_ driver) */
    EGLint ClientAPIsMask;
 
-   char ClientAPIs[1000];   /**< updated by eglQueryString */
-
    EGLint NumDrivers;
    _EGLDriver *Drivers[10];
+
+   EGLint NumAtExitCalls;
+   void (*AtExitCalls[10])(void);
 };
 
 
@@ -33,11 +34,7 @@ extern struct _egl_global _eglGlobal;
 
 
 extern void
-_eglInitGlobals(void);
-
-
-extern void
-_eglDestroyGlobals(void);
+_eglAddAtExitCall(void (*func)(void));
 
 
 #endif /* EGLGLOBALS_INCLUDED */

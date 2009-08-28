@@ -49,72 +49,67 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 void r600EmitCacheFlush(context_t *rmesa)
 {
-	BATCH_LOCALS(&rmesa->radeon);
 }
 
-GLboolean r600EmitShader(GLcontext * ctx, 
+GLboolean r600EmitShader(GLcontext * ctx,
                          void ** shaderbo,
-			             GLvoid * data, 
+			 GLvoid * data,
                          int sizeinDWORD,
-                         char * szShaderUsage) 
+                         char * szShaderUsage)
 {
-    radeonContextPtr radeonctx = RADEON_CONTEXT(ctx);
-
-    struct radeon_bo * pbo;
-    uint32_t *out;
-
-shader_again_alloc:	
-#ifdef RADEON_DEBUG_BO
+	radeonContextPtr radeonctx = RADEON_CONTEXT(ctx);
+	struct radeon_bo * pbo;
+	uint32_t *out;
+shader_again_alloc:
 	pbo = radeon_bo_open(radeonctx->radeonScreen->bom,
-					     0, 
-                         sizeinDWORD * 4, 
-                         256, 
-                         RADEON_GEM_DOMAIN_GTT,
-					     0,
-                         szShaderUsage);
-#else
-    pbo = radeon_bo_open(radeonctx->radeonScreen->bom,
-					     0, 
-                         sizeinDWORD * 4, 
-                         256, 
-                         RADEON_GEM_DOMAIN_GTT,
-					     0);
-#endif /* RADEON_DEBUG_BO */
+			0,
+			sizeinDWORD * 4,
+			256,
+			RADEON_GEM_DOMAIN_GTT,
+			0);
 
-	if (!pbo) 
-    {
+	radeon_print(RADEON_SHADER, RADEON_NORMAL, "%s %p size %d: %s\n", __func__, pbo, sizeinDWORD, szShaderUsage);
+
+	if (!pbo) {
+		radeon_print(RADEON_MEMORY | RADEON_CS, RADEON_IMPORTANT, "No memory for buffer object. Flushing command buffer.\n");
 		rcommonFlushCmdBuf(radeonctx, __FUNCTION__);
 		goto shader_again_alloc;
 	}
 
-        if (radeon_cs_space_check_with_bo(radeonctx->cmdbuf.cs,
-                                          pbo,
-                                          RADEON_GEM_DOMAIN_GTT, 0))
-                fprintf(stderr,"failure to revalidate BOs - badness\n");
+	radeon_cs_space_add_persistent_bo(radeonctx->cmdbuf.cs,
+			pbo,
+			RADEON_GEM_DOMAIN_GTT, 0);
 
+	if (radeon_cs_space_check_with_bo(radeonctx->cmdbuf.cs,
+				pbo,
+				RADEON_GEM_DOMAIN_GTT, 0)) {
+		radeon_error("failure to revalidate BOs - badness\n");
+		return GL_FALSE;
+	}
 
 	radeon_bo_map(pbo, 1);
 
-    radeon_bo_ref(pbo);
+	out = (uint32_t*)(pbo->ptr);
 
-    out = (uint32_t*)(pbo->ptr);
+	memcpy(out, data, sizeinDWORD * 4);
 
-    memcpy(out, data, sizeinDWORD * 4);
+	radeon_bo_unmap(pbo);
 
-    radeon_bo_unmap(pbo); 
+	*shaderbo = (void*)pbo;
 
-    *shaderbo = (void*)pbo;
-
-    return GL_TRUE;
+	return GL_TRUE;
 }
 
-GLboolean r600DeleteShader(GLcontext * ctx, 
-                           void * shaderbo) 
+GLboolean r600DeleteShader(GLcontext * ctx,
+                           void * shaderbo)
 {
     struct radeon_bo * pbo = (struct radeon_bo *)shaderbo;
 
+    radeon_print(RADEON_SHADER, RADEON_NORMAL, "%s: %p\n", __func__, pbo);
+
     if (pbo) {
-	    radeon_bo_unmap(pbo);
+	    if (pbo->ptr)
+		radeon_bo_unmap(pbo);
 	    radeon_bo_unref(pbo); /* when bo->cref <= 0, bo will be bo_free */
     }
 

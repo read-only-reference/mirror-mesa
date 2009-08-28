@@ -371,6 +371,7 @@ static void r300ClipPlane( GLcontext *ctx, GLenum plane, const GLfloat *eq )
 	p = (GLint) plane - (GLint) GL_CLIP_PLANE0;
 	ip = (GLint *)ctx->Transform._ClipUserPlane[p];
 
+	R300_STATECHANGE( rmesa, vap_flush );
 	R300_STATECHANGE( rmesa, vpucp[p] );
 	rmesa->hw.vpucp[p].cmd[R300_VPUCP_X] = ip[0];
 	rmesa->hw.vpucp[p].cmd[R300_VPUCP_Y] = ip[1];
@@ -470,6 +471,8 @@ static void r300SetEarlyZState(GLcontext * ctx)
 	else if (current_fragment_program_writes_depth(ctx))
 		topZ = R300_ZTOP_DISABLE;
 	else if (ctx->FragmentProgram._Current && ctx->FragmentProgram._Current->UsesKill)
+		topZ = R300_ZTOP_DISABLE;
+	else if (r300->radeon.query.current)
 		topZ = R300_ZTOP_DISABLE;
 
 	if (topZ != r300->hw.zstencil_format.cmd[2]) {
@@ -1253,6 +1256,7 @@ static GLuint translate_lod_bias(GLfloat bias)
 	return (((GLuint)b) << R300_LOD_BIAS_SHIFT) & R300_LOD_BIAS_MASK;
 }
 
+
 static void r300SetupTextures(GLcontext * ctx)
 {
 	int i, mtu;
@@ -1275,7 +1279,7 @@ static void r300SetupTextures(GLcontext * ctx)
 	r300->hw.txe.cmd[R300_TXE_ENABLE] = 0x0;
 
 	mtu = r300->radeon.glCtx->Const.MaxTextureUnits;
-	if (RADEON_DEBUG & DEBUG_STATE)
+	if (RADEON_DEBUG & RADEON_STATE)
 		fprintf(stderr, "mtu=%d\n", mtu);
 
 	if (mtu > R300_MAX_TEXTURE_UNITS) {
@@ -1300,7 +1304,7 @@ static void r300SetupTextures(GLcontext * ctx)
 				     t->pp_txformat & 0xff);
 			}
 
-			if (RADEON_DEBUG & DEBUG_STATE)
+			if (RADEON_DEBUG & RADEON_STATE)
 				fprintf(stderr,
 					"Activating texture unit %d\n", i);
 
@@ -1345,6 +1349,28 @@ static void r300SetupTextures(GLcontext * ctx)
 		}
 	}
 
+	/* R3xx and R4xx chips require that the texture unit corresponding to
+	 * KIL instructions is really enabled.
+	 *
+	 * We do some fakery here and in the state atom emit logic to enable
+	 * the texture without tripping up the CS checker in the kernel.
+	 */
+	if (r300->radeon.radeonScreen->chip_family < CHIP_FAMILY_RV515) {
+		if (ctx->FragmentProgram._Current->UsesKill && last_hw_tmu < 0) {
+			last_hw_tmu++;
+
+			r300->hw.txe.cmd[R300_TXE_ENABLE] |= 1;
+
+			r300->hw.tex.border_color.cmd[R300_TEX_VALUE_0] = 0;
+			r300->hw.tex.chroma_key.cmd[R300_TEX_VALUE_0] = 0;
+			r300->hw.tex.filter.cmd[R300_TEX_VALUE_0] = 0;
+			r300->hw.tex.filter_1.cmd[R300_TEX_VALUE_0] = 0;
+			r300->hw.tex.size.cmd[R300_TEX_VALUE_0] = 0; /* 1x1 texture */
+			r300->hw.tex.format.cmd[R300_TEX_VALUE_0] = 0; /* A8 format */
+			r300->hw.tex.pitch.cmd[R300_TEX_VALUE_0] = 0;
+		}
+	}
+
 	r300->hw.tex.filter.cmd[R300_TEX_CMD_0] =
 	    cmdpacket0(r300->radeon.radeonScreen, R300_TX_FILTER0_0, last_hw_tmu + 1);
 	r300->hw.tex.filter_1.cmd[R300_TEX_CMD_0] =
@@ -1362,19 +1388,9 @@ static void r300SetupTextures(GLcontext * ctx)
 	r300->hw.tex.border_color.cmd[R300_TEX_CMD_0] =
 	    cmdpacket0(r300->radeon.radeonScreen, R300_TX_BORDER_COLOR_0, last_hw_tmu + 1);
 
-	if (r300->radeon.radeonScreen->chip_family < CHIP_FAMILY_RV515) {
-		if (ctx->FragmentProgram._Current->UsesKill && last_hw_tmu < 0) {
-			// The KILL operation requires the first texture unit
-			// to be enabled.
-			r300->hw.txe.cmd[R300_TXE_ENABLE] |= 1;
-			r300->hw.tex.filter.cmd[R300_TEX_VALUE_0] = 0;
-			r300->hw.tex.filter.cmd[R300_TEX_CMD_0] =
-				cmdpacket0(r300->radeon.radeonScreen, R300_TX_FILTER0_0, 1);
-		}
-	}
 	r300->vtbl.SetupFragmentShaderTextures(ctx, tmu_mappings);
 
-	if (RADEON_DEBUG & DEBUG_STATE)
+	if (RADEON_DEBUG & RADEON_STATE)
 		fprintf(stderr, "TX_ENABLE: %08x  last_hw_tmu=%d\n",
 			r300->hw.txe.cmd[R300_TXE_ENABLE], last_hw_tmu);
 }
@@ -1644,7 +1660,7 @@ void r300VapCntl(r300ContextPtr rmesa, GLuint input_count,
 static void r300Enable(GLcontext * ctx, GLenum cap, GLboolean state)
 {
 	r300ContextPtr rmesa = R300_CONTEXT(ctx);
-	if (RADEON_DEBUG & DEBUG_STATE)
+	if (RADEON_DEBUG & RADEON_STATE)
 		fprintf(stderr, "%s( %s = %s )\n", __FUNCTION__,
 			_mesa_lookup_enum_by_nr(cap),
 			state ? "GL_TRUE" : "GL_FALSE");
@@ -1721,7 +1737,7 @@ static void r300ResetHwState(r300ContextPtr r300)
 
 	has_tcl = r300->options.hw_tcl_enabled;
 
-	if (RADEON_DEBUG & DEBUG_STATE)
+	if (RADEON_DEBUG & RADEON_STATE)
 		fprintf(stderr, "%s\n", __FUNCTION__);
 
 	radeon_firevertices(&r300->radeon);
@@ -2234,6 +2250,7 @@ static void r300InvalidateState(GLcontext * ctx, GLuint new_state)
 		_mesa_update_draw_buffer_bounds(ctx);
 
 		R300_STATECHANGE(r300, cb);
+		R300_STATECHANGE(r300, zb);
 	}
 
 	r300->radeon.NewGLState |= new_state;

@@ -121,7 +121,7 @@ static void compute_tex_image_offset(radeonContextPtr rmesa, radeon_mipmap_tree 
 	lvl->faces[face].offset = *curOffset;
 	*curOffset += lvl->size;
 
-	if (RADEON_DEBUG & DEBUG_TEXTURE)
+	if (RADEON_DEBUG & RADEON_TEXTURE)
 	  fprintf(stderr,
 		  "level %d, face %d: rs:%d %dx%d at %d\n",
 		  level, face, lvl->rowstride, lvl->width, lvl->height, lvl->faces[face].offset);
@@ -215,18 +215,10 @@ radeon_mipmap_tree* radeon_miptree_create(radeonContextPtr rmesa, radeonTexObj *
 	else
 		calculate_miptree_layout_r100(rmesa, mt);
 
-#ifdef RADEON_DEBUG_BO
-    mt->bo = radeon_bo_open(rmesa->radeonScreen->bom,
-                            0, mt->totalsize, 1024,
-                            RADEON_GEM_DOMAIN_VRAM,
-                            0,
-                            "MIPMAP TREE");
-#else
 	mt->bo = radeon_bo_open(rmesa->radeonScreen->bom,
                             0, mt->totalsize, 1024,
                             RADEON_GEM_DOMAIN_VRAM,
                             0);
-#endif /* RADEON_DEBUG_BO */
 
 	return mt;
 }
@@ -326,7 +318,8 @@ GLboolean radeon_miptree_matches_image(radeon_mipmap_tree *mt,
 	if (face >= mt->faces || level < mt->firstLevel || level > mt->lastLevel)
 		return GL_FALSE;
 
-	if (texImage->IsCompressed != mt->compressed)
+	if ((!texImage->IsCompressed && mt->compressed) ||
+	    (texImage->IsCompressed && !mt->compressed))
 		return GL_FALSE;
 
 	if (!texImage->IsCompressed &&
@@ -366,8 +359,8 @@ GLboolean radeon_miptree_matches_texture(radeon_mipmap_tree *mt, struct gl_textu
 	        mt->width0 == firstImage->Width &&
 	        mt->height0 == firstImage->Height &&
 	        mt->depth0 == firstImage->Depth &&
-	        mt->bpp == firstImage->TexFormat->TexelBytes &&
-	        mt->compressed == compressed);
+	        mt->compressed == compressed &&
+	        (!mt->compressed ? (mt->bpp == firstImage->TexFormat->TexelBytes) : 1));
 }
 
 

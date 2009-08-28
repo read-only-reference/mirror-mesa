@@ -45,40 +45,39 @@ struct r700_vertex_program
 {
     struct gl_vertex_program mesa_program; /* Must be first */
 
-	struct r700_vertex_program *next;
+    struct r700_vertex_program *next;
 
     r700_AssemblerBase r700AsmCode;
     R700_Shader        r700Shader;
 
-	GLboolean translated;
+    GLboolean translated;
     GLboolean loaded;
+    GLboolean needUpdateVF;
 	
-	/* ... */
-
     void * shaderbo;
 
-	ArrayDesc              aos_desc[VERT_ATTRIB_MAX];
+    ArrayDesc              aos_desc[VERT_ATTRIB_MAX];
 };
 
 //Internal
 unsigned int Map_Vertex_Output(r700_AssemblerBase       *pAsm, 
-					           struct gl_vertex_program *mesa_vp,
-					           unsigned int unStart);
+			       struct gl_vertex_program *mesa_vp,
+			       unsigned int unStart);
 unsigned int Map_Vertex_Input(r700_AssemblerBase       *pAsm, 
-					          struct gl_vertex_program *mesa_vp,
-					          unsigned int unStart);
+			      struct gl_vertex_program *mesa_vp,
+			      unsigned int unStart);
 GLboolean Process_Vertex_Program_Vfetch_Instructions(
-						struct r700_vertex_program *vp,
-						struct gl_vertex_program   *mesa_vp);
+	struct r700_vertex_program *vp,
+	struct gl_vertex_program   *mesa_vp);
 void Map_Vertex_Program(struct r700_vertex_program *vp,
-						struct gl_vertex_program   *mesa_vp);
+			struct gl_vertex_program   *mesa_vp);
 GLboolean Find_Instruction_Dependencies_vp(struct r700_vertex_program *vp,
-					                	   struct gl_vertex_program   *mesa_vp);
+					   struct gl_vertex_program   *mesa_vp);
+
+GLboolean r700TranslateVertexShader(struct r700_vertex_program *vp,
+				    struct gl_vertex_program   *mesa_vp);
 
 /* Interface */
-extern GLboolean r700TranslateVertexShader(struct r700_vertex_program *vp,
-							   struct gl_vertex_program   *mesa_vp);
-
 extern void r700SelectVertexShader(GLcontext *ctx);
 
 extern GLboolean r700SetupVertexProgram(GLcontext * ctx);
