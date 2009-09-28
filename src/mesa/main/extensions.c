@@ -67,6 +67,7 @@ static const struct {
    { OFF, "GL_ARB_shading_language_120",       F(ARB_shading_language_120) },
    { OFF, "GL_ARB_shadow",                     F(ARB_shadow) },
    { OFF, "GL_ARB_shadow_ambient",             F(ARB_shadow_ambient) },
+   { OFF, "GL_ARB_sync",                       F(ARB_sync) },
    { OFF, "GL_ARB_texture_border_clamp",       F(ARB_texture_border_clamp) },
    { ON,  "GL_ARB_texture_compression",        F(ARB_texture_compression) },
    { OFF, "GL_ARB_texture_cube_map",           F(ARB_texture_cube_map) },
@@ -162,7 +163,6 @@ static const struct {
    { ON,  "GL_MESA_window_pos",                F(ARB_window_pos) },
    { OFF, "GL_NV_blend_square",                F(NV_blend_square) },
    { OFF, "GL_NV_fragment_program",            F(NV_fragment_program) },
-   { OFF, "GL_NV_fragment_program_option",     F(NV_fragment_program_option) },
    { ON,  "GL_NV_light_max_exponent",          F(NV_light_max_exponent) },
    { OFF, "GL_NV_point_sprite",                F(NV_point_sprite) },
    { OFF, "GL_NV_texture_env_combine4",        F(NV_texture_env_combine4) },
@@ -240,6 +240,9 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
 #endif
 #if FEATURE_ARB_vertex_buffer_object
    /*ctx->Extensions.ARB_vertex_buffer_object = GL_TRUE;*/
+#endif
+#if FEATURE_ARB_sync
+   ctx->Extensions.ARB_sync = GL_TRUE;
 #endif
    ctx->Extensions.APPLE_vertex_array_object = GL_TRUE;
    ctx->Extensions.ATI_envmap_bumpmap = GL_TRUE;

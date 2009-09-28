@@ -922,6 +922,11 @@ _mesa_execute_program(GLcontext * ctx,
          {
             GLfloat a[4];
             fetch_vector4(&inst->SrcReg[0], machine, a);
+            if (DEBUG_PROG) {
+               printf("KIL if (%g %g %g %g) <= 0.0\n",
+                      a[0], a[1], a[2], a[3]);
+            }
+
             if (a[0] < 0.0F || a[1] < 0.0F || a[2] < 0.0F || a[3] < 0.0F) {
                return GL_FALSE;
             }
@@ -1550,17 +1555,12 @@ _mesa_execute_program(GLcontext * ctx,
       case OPCODE_TXB:         /* GL_ARB_fragment_program only */
          /* Texel lookup with LOD bias */
          {
-            const GLuint unit = machine->Samplers[inst->TexSrcUnit];
-            const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
             GLfloat texcoord[4], color[4], lodBias;
 
             fetch_vector4(&inst->SrcReg[0], machine, texcoord);
 
             /* texcoord[3] is the bias to add to lambda */
-            lodBias = texUnit->LodBias + texcoord[3];
-            if (texUnit->_Current) {
-               lodBias += texUnit->_Current->LodBias;
-            }
+            lodBias = texcoord[3];
 
             fetch_texel(ctx, machine, inst, texcoord, lodBias, color);
 

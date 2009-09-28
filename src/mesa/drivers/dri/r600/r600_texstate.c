@@ -49,6 +49,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r700_state.h"
 #include "radeon_mipmap_tree.h"
 #include "r600_tex.h"
+#include "r700_fragprog.h"
+#include "r700_vertprog.h"
 
 void r600UpdateTextureState(GLcontext * ctx);
 
@@ -67,7 +69,7 @@ void r600UpdateTextureState(GLcontext * ctx)
 	for (unit = 0; unit < R700_MAX_TEXTURE_UNITS; unit++) {
 		texUnit = &ctx->Texture.Unit[unit];
 		t = radeon_tex_obj(ctx->Texture.Unit[unit]._Current);
-
+		r700->textures[unit] = NULL;
 		if (texUnit->_ReallyEnabled) {
 			if (!t)
 				continue;
@@ -563,6 +565,11 @@ static void setup_hardware_state(context_t *rmesa, struct gl_texture_object *tex
 	int firstlevel = t->mt ? t->mt->firstLevel : 0;
 	GLuint uTexelPitch, row_align;
 
+	if (rmesa->radeon.radeonScreen->driScreen->dri2.enabled &&
+	    t->image_override &&
+	    t->bo)
+		return;
+
 	firstImage = t->base.Image[0][firstlevel];
 
 	if (!t->image_override) {
@@ -647,6 +654,7 @@ GLboolean r600ValidateBuffers(GLcontext * ctx)
 {
 	context_t *rmesa = R700_CONTEXT(ctx);
 	struct radeon_renderbuffer *rrb;
+	struct radeon_bo *pbo;
 	int i;
 	int ret;
 
@@ -686,6 +694,18 @@ GLboolean r600ValidateBuffers(GLcontext * ctx)
 			radeon_cs_space_add_persistent_bo(rmesa->radeon.cmdbuf.cs,
 							  t->mt->bo,
 							  RADEON_GEM_DOMAIN_GTT | RADEON_GEM_DOMAIN_VRAM, 0);
+	}
+
+	pbo = (struct radeon_bo *)r700GetActiveFpShaderBo(ctx);
+	if (pbo) {
+		radeon_cs_space_add_persistent_bo(rmesa->radeon.cmdbuf.cs, pbo,
+						  RADEON_GEM_DOMAIN_GTT, 0);
+	}
+
+	pbo = (struct radeon_bo *)r700GetActiveVpShaderBo(ctx);
+	if (pbo) {
+		radeon_cs_space_add_persistent_bo(rmesa->radeon.cmdbuf.cs, pbo,
+						  RADEON_GEM_DOMAIN_GTT, 0);
 	}
 
 	ret = radeon_cs_space_check_with_bo(rmesa->radeon.cmdbuf.cs, first_elem(&rmesa->radeon.dma.reserved)->bo, RADEON_GEM_DOMAIN_GTT, 0);

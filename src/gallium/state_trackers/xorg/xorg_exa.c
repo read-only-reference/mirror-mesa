@@ -98,6 +98,68 @@ ExaMarkSync(ScreenPtr pScreen)
 }
 
 static Bool
+ExaDownloadFromScreen(PixmapPtr pPix, int x,  int y, int w,  int h, char *dst,
+		      int dst_pitch)
+{
+    ScreenPtr pScreen = pPix->drawable.pScreen;
+    ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
+    modesettingPtr ms = modesettingPTR(pScrn);
+    struct exa_context *exa = ms->exa;
+    struct exa_pixmap_priv *priv = exaGetPixmapDriverPrivate(pPix);
+    struct pipe_transfer *transfer;
+
+    if (!priv || !priv->tex)
+	return FALSE;
+
+    if (exa->ctx->is_texture_referenced(exa->ctx, priv->tex, 0, 0) &
+	PIPE_REFERENCED_FOR_WRITE)
+	exa->ctx->flush(exa->ctx, 0, NULL);
+
+    transfer = exa->scrn->get_tex_transfer(exa->scrn, priv->tex, 0, 0, 0,
+					   PIPE_TRANSFER_READ, x, y, w, h);
+    if (!transfer)
+	return FALSE;
+
+    util_copy_rect((unsigned char*)dst, &priv->tex->block, dst_pitch, 0, 0,
+		   w, h, exa->scrn->transfer_map(exa->scrn, transfer),
+		   transfer->stride, 0, 0);
+
+    exa->scrn->transfer_unmap(exa->scrn, transfer);
+    exa->scrn->tex_transfer_destroy(transfer);
+
+    return TRUE;
+}
+
+static Bool
+ExaUploadToScreen(PixmapPtr pPix, int x, int y, int w, int h, char *src,
+		  int src_pitch)
+{
+    ScreenPtr pScreen = pPix->drawable.pScreen;
+    ScrnInfoPtr pScrn = xf86Screens[pScreen->myNum];
+    modesettingPtr ms = modesettingPTR(pScrn);
+    struct exa_context *exa = ms->exa;
+    struct exa_pixmap_priv *priv = exaGetPixmapDriverPrivate(pPix);
+    struct pipe_transfer *transfer;
+
+    if (!priv || !priv->tex)
+	return FALSE;
+
+    transfer = exa->scrn->get_tex_transfer(exa->scrn, priv->tex, 0, 0, 0,
+					   PIPE_TRANSFER_WRITE, x, y, w, h);
+    if (!transfer)
+	return FALSE;
+
+    util_copy_rect(exa->scrn->transfer_map(exa->scrn, transfer),
+		   &priv->tex->block, transfer->stride, 0, 0, w, h,
+		   (unsigned char*)src, src_pitch, 0, 0);
+
+    exa->scrn->transfer_unmap(exa->scrn, transfer);
+    exa->scrn->tex_transfer_destroy(transfer);
+
+    return TRUE;
+}
+
+static Bool
 ExaPrepareAccess(PixmapPtr pPix, int index)
 {
     ScreenPtr pScreen = pPix->drawable.pScreen;
@@ -563,7 +625,6 @@ xorg_exa_init(ScrnInfoPtr pScrn)
    modesettingPtr ms = modesettingPTR(pScrn);
    struct exa_context *exa;
    ExaDriverPtr pExa;
-   int i;
 
    exa = xcalloc(1, sizeof(struct exa_context));
    if (!exa)
@@ -600,6 +661,8 @@ xorg_exa_init(ScrnInfoPtr pScrn)
    pExa->Composite          = ExaComposite;
    pExa->DoneComposite      = ExaDoneComposite;
    pExa->PixmapIsOffscreen  = ExaPixmapIsOffscreen;
+   pExa->DownloadFromScreen = ExaDownloadFromScreen;
+   pExa->UploadToScreen     = ExaUploadToScreen;
    pExa->PrepareAccess      = ExaPrepareAccess;
    pExa->FinishAccess       = ExaFinishAccess;
    pExa->CreatePixmap       = ExaCreatePixmap;
@@ -614,13 +677,6 @@ xorg_exa_init(ScrnInfoPtr pScrn)
    exa->ctx = ms->api->create_context(ms->api, exa->scrn);
    /* Share context with DRI */
    ms->ctx = exa->ctx;
-
-   /* common vertex data setup */
-   for (i = 0; i < 4; ++i) {
-      exa->vertices[i][0][3] = 1.0f; /* w */
-      exa->vertices[i][1][2] = 0.0f; /* r */
-      exa->vertices[i][1][3] = 1.0f; /* q */
-   }
 
    exa->cso = cso_create_context(exa->ctx);
    exa->shaders = xorg_shaders_create(exa);

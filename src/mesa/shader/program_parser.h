@@ -202,7 +202,6 @@ struct asm_parser_state {
       unsigned Shadow:1;
       unsigned TexRect:1;
       unsigned TexArray:1;
-      unsigned NV_fragment:1;
    } option;
 
    struct {

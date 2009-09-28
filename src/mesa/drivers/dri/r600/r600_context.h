@@ -51,6 +51,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r700_chip.h"
 #include "r600_tex.h"
 #include "r700_oglprog.h"
+#include "r700_vertprog.h"
 
 struct r600_context;
 typedef struct r600_context context_t;
@@ -85,28 +86,9 @@ extern int hw_tcl_on;
 #include "tnl_dd/t_dd_vertex.h"
 #undef TAG
 
-#define PFS_MAX_ALU_INST	64
-#define PFS_MAX_TEX_INST	64
-#define PFS_MAX_TEX_INDIRECT 4
-#define PFS_NUM_TEMP_REGS	32
-#define PFS_NUM_CONST_REGS	16
-
-#define R600_MAX_AOS_ARRAYS		16
-
-#define REG_COORDS	0
-#define REG_COLOR0	1
-#define REG_TEX0	2
-
 #define R600_FALLBACK_NONE 0
 #define R600_FALLBACK_TCL 1
 #define R600_FALLBACK_RAST 2
-
-enum 
-{
-    NO_SHIFT    = 0,
-    LEFT_SHIFT  = 1,
-    RIGHT_SHIFT = 2,
-};
 
 struct r600_hw_state {
 	struct radeon_state_atom sq;
@@ -154,6 +136,8 @@ struct r600_context {
 	R700_CHIP_CONTEXT hw;
 
 	struct r600_hw_state atoms;
+
+	struct r700_vertex_program *selected_vp;
 
 	/* Vertex buffers
 	 */

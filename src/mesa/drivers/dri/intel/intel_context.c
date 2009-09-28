@@ -162,6 +162,9 @@ intelGetString(GLcontext * ctx, GLenum name)
       case PCI_CHIP_G41_G:
          chipset = "Intel(R) G41";
          break;
+      case PCI_CHIP_B43_G:
+         chipset = "Intel(R) B43";
+         break;
       case PCI_CHIP_ILD_G:
          chipset = "Intel(R) IGDNG_D";
          break;
@@ -504,7 +507,8 @@ intel_flush(GLcontext *ctx, GLboolean needs_mi_flush)
 
       if (screen->dri2.loader &&
           (screen->dri2.loader->base.version >= 2)
-	  && (screen->dri2.loader->flushFrontBuffer != NULL)) {
+	  && (screen->dri2.loader->flushFrontBuffer != NULL) &&
+          intel->driDrawable && intel->driDrawable->loaderPrivate) {
 	 (*screen->dri2.loader->flushFrontBuffer)(intel->driDrawable,
 						  intel->driDrawable->loaderPrivate);
 
@@ -598,6 +602,7 @@ intelInitDriverFunctions(struct dd_function_table *functions)
    intelInitBufferFuncs(functions);
    intelInitPixelFuncs(functions);
    intelInitBufferObjectFuncs(functions);
+   intel_init_syncobj_functions(functions);
 }
 
 
@@ -640,6 +645,10 @@ intelInitContext(struct intel_context *intel,
       intel->maxBatchSize = BATCH_SZ;
 
    intel->bufmgr = intelScreen->bufmgr;
+
+   if (0) /* for debug */
+      drm_intel_bufmgr_set_debug(intel->bufmgr, 1);
+
    intel->ttm = intelScreen->ttm;
    if (intel->ttm) {
       int bo_reuse_mode;
@@ -918,6 +927,14 @@ intelDestroyContext(__DRIcontextPrivate * driContextPriv)
 GLboolean
 intelUnbindContext(__DRIcontextPrivate * driContextPriv)
 {
+   struct intel_context *intel =
+      (struct intel_context *) driContextPriv->driverPrivate;
+
+   /* Deassociate the context with the drawables.
+    */
+   intel->driDrawable = NULL;
+   intel->driReadDrawable = NULL;
+
    return GL_TRUE;
 }
 
