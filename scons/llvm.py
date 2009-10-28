@@ -29,6 +29,7 @@ Tool-specific initialization for LLVM
 
 import os
 import os.path
+import sys
 
 import SCons.Errors
 import SCons.Util
@@ -39,7 +40,7 @@ def generate(env):
         llvm_dir = os.environ['LLVM']
     except KeyError:
         # Do nothing -- use the system headers/libs
-        pass
+        llvm_dir = None
     else:
         if not os.path.isdir(llvm_dir):
             raise SCons.Errors.InternalError, "Specified LLVM directory not found"
@@ -51,20 +52,66 @@ def generate(env):
 
         llvm_bin_dir = os.path.join(llvm_dir, llvm_subdir, 'bin')
         if not os.path.isdir(llvm_bin_dir):
-            raise SCons.Errors.InternalError, "LLVM build directory not found"
+            llvm_bin_dir = os.path.join(llvm_dir, 'bin')
+            if not os.path.isdir(llvm_bin_dir):
+                raise SCons.Errors.InternalError, "LLVM binary directory not found"
 
         env.PrependENVPath('PATH', llvm_bin_dir)
 
-    if env.Detect('llvm-config'):
-        try:
-            env['LLVM_VERSION'] = env.backtick('llvm-config --version')
-        except AttributeError:
-            env['LLVM_VERSION'] = 'X.X'
+    if env['msvc']:
+        # XXX: There is no llvm-config on Windows, so assume a standard layout
+        if llvm_dir is not None:
+            env.Prepend(CPPPATH = [os.path.join(llvm_dir, 'include')])
+            env.Prepend(LIBPATH = [os.path.join(llvm_dir, 'lib')])
+            env.Prepend(LIBS = [
+                'LLVMBitWriter',
+                'LLVMCore',
+                'LLVMSupport',
+                'LLVMSystem',
+                'LLVMSupport',
+                'LLVMSystem',
+                'LLVMCore',
+                'LLVMCodeGen',
+                'LLVMSelectionDAG',
+                'LLVMAsmPrinter',
+                'LLVMBitReader',
+                'LLVMBitWriter',
+                'LLVMTransformUtils',
+                'LLVMInstrumentation',
+                'LLVMScalarOpts',
+                'LLVMipo',
+                'LLVMHello',
+                'LLVMLinker',
+                'LLVMAnalysis',
+                'LLVMipa',
+                'LLVMX86CodeGen',
+                'LLVMX86AsmPrinter',
+                'LLVMExecutionEngine',
+                'LLVMInterpreter',
+                'LLVMJIT',
+                'LLVMTarget',
+                'LLVMAsmParser',
+                'LLVMDebugger',
+                'LLVMArchive',
+                'imagehlp',
+                'psapi',
+            ])
+            env['LLVM_VERSION'] = '2.5'
+        return
+    elif env.Detect('llvm-config'):
+        version = env.backtick('llvm-config --version').rstrip()
 
-        env.ParseConfig('llvm-config --cppflags')
-        env.ParseConfig('llvm-config --libs jit interpreter nativecodegen bitwriter')
-        env.ParseConfig('llvm-config --ldflags')
-        env['LINK'] = env['CXX']
+        try:
+            env.ParseConfig('llvm-config --cppflags')
+            env.ParseConfig('llvm-config --libs jit interpreter nativecodegen bitwriter')
+            env.ParseConfig('llvm-config --ldflags')
+        except OSError:
+            print 'llvm-config version %s failed' % version
+        else:
+            if env['platform'] == 'windows':
+                env.Append(LIBS = ['imagehlp', 'psapi'])
+            env['LINK'] = env['CXX']
+            env['LLVM_VERSION'] = version
 
 def exists(env):
     return True

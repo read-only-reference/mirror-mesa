@@ -57,6 +57,9 @@ nv50_state_validate_fb(struct nv50_context *nv50)
 		case PIPE_FORMAT_A8R8G8B8_UNORM:
 			so_data(so, NV50TCL_RT_FORMAT_A8R8G8B8_UNORM);
 			break;
+		case PIPE_FORMAT_X8R8G8B8_UNORM:
+			so_data(so, NV50TCL_RT_FORMAT_X8R8G8B8_UNORM);
+			break;
 		case PIPE_FORMAT_R5G6B5_UNORM:
 			so_data(so, NV50TCL_RT_FORMAT_R5G6B5_UNORM);
 			break;
@@ -66,7 +69,8 @@ nv50_state_validate_fb(struct nv50_context *nv50)
 			so_data(so, NV50TCL_RT_FORMAT_X8R8G8B8_UNORM);
 			break;
 		}
-		so_data(so, bo->tile_mode << 4);
+		so_data(so, nv50_miptree(pt)->
+				level[fb->cbufs[i]->level].tile_mode << 4);
 		so_data(so, 0x00000000);
 
 		so_method(so, tesla, 0x1224, 1);
@@ -110,7 +114,8 @@ nv50_state_validate_fb(struct nv50_context *nv50)
 			so_data(so, NV50TCL_ZETA_FORMAT_S8Z24_UNORM);
 			break;
 		}
-		so_data(so, bo->tile_mode << 4);
+		so_data(so, nv50_miptree(pt)->
+				level[fb->zsbuf->level].tile_mode << 4);
 		so_data(so, 0x00000000);
 
 		so_method(so, tesla, 0x1538, 1);
@@ -187,6 +192,8 @@ nv50_state_emit(struct nv50_context *nv50)
 		so_emit(chan, nv50->state.vertprog);
 	if (nv50->state.dirty & NV50_NEW_FRAGPROG)
 		so_emit(chan, nv50->state.fragprog);
+	if (nv50->state.dirty & (NV50_NEW_FRAGPROG | NV50_NEW_VERTPROG))
+		so_emit(chan, nv50->state.programs);
 	if (nv50->state.dirty & NV50_NEW_RASTERIZER)
 		so_emit(chan, nv50->state.rast);
 	if (nv50->state.dirty & NV50_NEW_BLEND_COLOUR)
@@ -208,6 +215,15 @@ nv50_state_emit(struct nv50_context *nv50)
 			so_emit(chan, nv50->state.vtxattr);
 	}
 	nv50->state.dirty = 0;
+}
+
+void
+nv50_state_flush_notify(struct nouveau_channel *chan)
+{
+	struct nv50_context *nv50 = chan->user_private;
+
+	if (nv50->state.tic_upload && !(nv50->dirty & NV50_NEW_TEXTURE))
+		so_emit(chan, nv50->state.tic_upload);
 
 	so_emit_reloc_markers(chan, nv50->state.fb);
 	so_emit_reloc_markers(chan, nv50->state.vertprog);
@@ -220,6 +236,7 @@ boolean
 nv50_state_validate(struct nv50_context *nv50)
 {
 	struct nouveau_grobj *tesla = nv50->screen->tesla;
+	struct nouveau_grobj *eng2d = nv50->screen->eng2d;
 	struct nouveau_stateobj *so;
 	unsigned i;
 
@@ -237,6 +254,9 @@ nv50_state_validate(struct nv50_context *nv50)
 
 	if (nv50->dirty & (NV50_NEW_FRAGPROG | NV50_NEW_FRAGPROG_CB))
 		nv50_fragprog_validate(nv50);
+
+	if (nv50->dirty & (NV50_NEW_FRAGPROG | NV50_NEW_VERTPROG))
+		nv50_linkage_validate(nv50);
 
 	if (nv50->dirty & NV50_NEW_RASTERIZER)
 		so_ref(nv50->rasterizer->so, &nv50->state.rast);
@@ -299,7 +319,7 @@ scissor_uptodate:
 			goto viewport_uptodate;
 		nv50->state.viewport_bypass = bypass;
 
-		so = so_new(12, 0);
+		so = so_new(14, 0);
 		if (!bypass) {
 			so_method(so, tesla, NV50TCL_VIEWPORT_TRANSLATE(0), 3);
 			so_data  (so, fui(nv50->viewport.translate[0]));
@@ -312,12 +332,21 @@ scissor_uptodate:
 
 			so_method(so, tesla, NV50TCL_VIEWPORT_TRANSFORM_EN, 1);
 			so_data  (so, 1);
+			/* 0x0000 = remove whole primitive only (xyz)
+			 * 0x1018 = remove whole primitive only (xy), clamp z
+			 * 0x1080 = clip primitive (xyz)
+			 * 0x1098 = clip primitive (xy), clamp z
+			 */
+			so_method(so, tesla, NV50TCL_VIEW_VOLUME_CLIP_CTRL, 1);
+			so_data  (so, 0x1080);
 			/* no idea what 0f90 does */
 			so_method(so, tesla, 0x0f90, 1);
 			so_data  (so, 0);
 		} else {
 			so_method(so, tesla, NV50TCL_VIEWPORT_TRANSFORM_EN, 1);
 			so_data  (so, 0);
+			so_method(so, tesla, NV50TCL_VIEW_VOLUME_CLIP_CTRL, 1);
+			so_data  (so, 0x0000);
 			so_method(so, tesla, 0x0f90, 1);
 			so_data  (so, 1);
 		}
@@ -329,15 +358,25 @@ scissor_uptodate:
 viewport_uptodate:
 
 	if (nv50->dirty & NV50_NEW_SAMPLER) {
-		int i;
+		unsigned i;
 
-		so = so_new(nv50->sampler_nr * 8 + 3, 0);
-		so_method(so, tesla, NV50TCL_CB_ADDR, 1);
-		so_data  (so, NV50_CB_TSC);
-		so_method(so, tesla, NV50TCL_CB_DATA(0) | 0x40000000,
-			nv50->sampler_nr * 8);
-		for (i = 0; i < nv50->sampler_nr; i++)
+		so = so_new(nv50->sampler_nr * 9 + 23 + 4, 2);
+
+		nv50_so_init_sifc(nv50, so, nv50->screen->tsc, NOUVEAU_BO_VRAM,
+				  nv50->sampler_nr * 8 * 4);
+
+		for (i = 0; i < nv50->sampler_nr; i++) {
+			if (!nv50->sampler[i])
+				continue;
+			so_method(so, eng2d, NV50_2D_SIFC_DATA | (2 << 29), 8);
 			so_datap (so, nv50->sampler[i]->tsc, 8);
+		}
+
+		so_method(so, tesla, 0x1440, 1); /* sync SIFC */
+		so_data  (so, 0);
+		so_method(so, tesla, 0x1334, 1); /* flush TSC */
+		so_data  (so, 0);
+
 		so_ref(so, &nv50->state.tsc_upload);
 		so_ref(NULL, &so);
 	}
@@ -355,3 +394,33 @@ viewport_uptodate:
 	return TRUE;
 }
 
+void nv50_so_init_sifc(struct nv50_context *nv50,
+		       struct nouveau_stateobj *so,
+		       struct nouveau_bo *bo, unsigned reloc, unsigned size)
+{
+	struct nouveau_grobj *eng2d = nv50->screen->eng2d;
+
+	so_method(so, eng2d, NV50_2D_DST_FORMAT, 2);
+	so_data  (so, NV50_2D_DST_FORMAT_R8_UNORM);
+	so_data  (so, 1);
+	so_method(so, eng2d, NV50_2D_DST_PITCH, 5);
+	so_data  (so, 262144);
+	so_data  (so, 65536);
+	so_data  (so, 1);
+	so_reloc (so, bo, 0, reloc | NOUVEAU_BO_WR | NOUVEAU_BO_HIGH, 0, 0);
+	so_reloc (so, bo, 0, reloc | NOUVEAU_BO_WR | NOUVEAU_BO_LOW, 0, 0);
+	so_method(so, eng2d, NV50_2D_SIFC_UNK0800, 2);
+	so_data  (so, 0);
+	so_data  (so, NV50_2D_SIFC_FORMAT_R8_UNORM);
+	so_method(so, eng2d, NV50_2D_SIFC_WIDTH, 10);
+	so_data  (so, size);
+	so_data  (so, 1);
+	so_data  (so, 0);
+	so_data  (so, 1);
+	so_data  (so, 0);
+	so_data  (so, 1);
+	so_data  (so, 0);
+	so_data  (so, 0);
+	so_data  (so, 0);
+	so_data  (so, 0);
+}

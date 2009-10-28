@@ -336,7 +336,8 @@ unsigned int r700GetNumOperands(r700_AssemblerBase* pAsm)
 
     switch (pAsm->D.dst.opcode)
     {
-    case SQ_OP2_INST_ADD:                          
+    case SQ_OP2_INST_ADD:
+    case SQ_OP2_INST_KILLGT:
     case SQ_OP2_INST_MUL: 
     case SQ_OP2_INST_MAX:
     case SQ_OP2_INST_MIN:
@@ -354,9 +355,9 @@ unsigned int r700GetNumOperands(r700_AssemblerBase* pAsm)
         return 2;  
 
     case SQ_OP2_INST_MOV: 
+    case SQ_OP2_INST_MOVA_FLOOR:
     case SQ_OP2_INST_FRACT:
     case SQ_OP2_INST_FLOOR:
-    case SQ_OP2_INST_KILLGT:
     case SQ_OP2_INST_EXP_IEEE:
     case SQ_OP2_INST_LOG_CLAMPED:
     case SQ_OP2_INST_LOG_IEEE:
@@ -790,6 +791,133 @@ GLboolean assemble_vfetch_instruction(r700_AssemblerBase* pAsm,
 	return GL_TRUE;
 }
 
+GLboolean assemble_vfetch_instruction2(r700_AssemblerBase* pAsm,
+                                       GLuint              destination_register,								       
+                                       GLenum              type,
+                                       GLint               size,
+                                       GLubyte             element,
+                                       GLuint              _signed,
+                                       GLboolean           normalize,
+                                       VTX_FETCH_METHOD  * pFetchMethod)
+{
+    GLuint client_size_inbyte;
+	GLuint data_format;
+    GLuint mega_fetch_count;
+	GLuint is_mega_fetch_flag;
+
+	R700VertexGenericFetch*   vfetch_instruction_ptr;
+	R700VertexGenericFetch*   assembled_vfetch_instruction_ptr 
+                                     = pAsm->vfetch_instruction_ptr_array[element];
+
+	if (assembled_vfetch_instruction_ptr == NULL) 
+	{
+		vfetch_instruction_ptr = (R700VertexGenericFetch*) CALLOC_STRUCT(R700VertexGenericFetch);
+		if (vfetch_instruction_ptr == NULL) 
+		{
+			return GL_FALSE;
+		}
+        Init_R700VertexGenericFetch(vfetch_instruction_ptr);
+    }
+	else 
+	{
+		vfetch_instruction_ptr = assembled_vfetch_instruction_ptr;
+	}
+
+    data_format = GetSurfaceFormat(type, size, &client_size_inbyte);	
+
+	if(GL_TRUE == pFetchMethod->bEnableMini) //More conditions here
+	{
+		//TODO : mini fetch
+	}
+	else
+	{
+		mega_fetch_count = MEGA_FETCH_BYTES - 1;
+		is_mega_fetch_flag       = 0x1;
+		pFetchMethod->mega_fetch_remainder = MEGA_FETCH_BYTES - client_size_inbyte;
+	}
+
+	vfetch_instruction_ptr->m_Word0.f.vtx_inst         = SQ_VTX_INST_FETCH;
+	vfetch_instruction_ptr->m_Word0.f.fetch_type       = SQ_VTX_FETCH_VERTEX_DATA;
+	vfetch_instruction_ptr->m_Word0.f.fetch_whole_quad = 0x0;
+
+	vfetch_instruction_ptr->m_Word0.f.buffer_id        = element;
+	vfetch_instruction_ptr->m_Word0.f.src_gpr          = 0x0; 
+	vfetch_instruction_ptr->m_Word0.f.src_rel          = SQ_ABSOLUTE;
+	vfetch_instruction_ptr->m_Word0.f.src_sel_x        = SQ_SEL_X;
+	vfetch_instruction_ptr->m_Word0.f.mega_fetch_count = mega_fetch_count;
+
+	vfetch_instruction_ptr->m_Word1.f.dst_sel_x        = (size < 1) ? SQ_SEL_0 : SQ_SEL_X;
+	vfetch_instruction_ptr->m_Word1.f.dst_sel_y        = (size < 2) ? SQ_SEL_0 : SQ_SEL_Y;
+	vfetch_instruction_ptr->m_Word1.f.dst_sel_z        = (size < 3) ? SQ_SEL_0 : SQ_SEL_Z;
+	vfetch_instruction_ptr->m_Word1.f.dst_sel_w        = (size < 4) ? SQ_SEL_1 : SQ_SEL_W;
+
+	vfetch_instruction_ptr->m_Word1.f.use_const_fields = 1;
+    vfetch_instruction_ptr->m_Word1.f.data_format      = data_format;
+    vfetch_instruction_ptr->m_Word2.f.endian_swap      = SQ_ENDIAN_NONE;
+
+    if(1 == _signed)
+    {
+        vfetch_instruction_ptr->m_Word1.f.format_comp_all  = SQ_FORMAT_COMP_SIGNED;
+    }
+    else
+    {
+        vfetch_instruction_ptr->m_Word1.f.format_comp_all  = SQ_FORMAT_COMP_UNSIGNED;
+    }
+
+    if(GL_TRUE == normalize)
+    {
+        vfetch_instruction_ptr->m_Word1.f.num_format_all   = SQ_NUM_FORMAT_NORM;
+    }
+    else
+    {
+        vfetch_instruction_ptr->m_Word1.f.num_format_all   = SQ_NUM_FORMAT_INT;
+    }
+
+	// Destination register
+	vfetch_instruction_ptr->m_Word1_GPR.f.dst_gpr = destination_register; 
+	vfetch_instruction_ptr->m_Word1_GPR.f.dst_rel = SQ_ABSOLUTE;
+
+	vfetch_instruction_ptr->m_Word2.f.offset              = 0;
+	vfetch_instruction_ptr->m_Word2.f.const_buf_no_stride = 0x0;
+
+	vfetch_instruction_ptr->m_Word2.f.mega_fetch          = is_mega_fetch_flag;
+
+	if (assembled_vfetch_instruction_ptr == NULL) 
+	{
+		if ( GL_FALSE == add_vfetch_instruction(pAsm, (R700VertexInstruction *)vfetch_instruction_ptr) ) 
+        {   
+			return GL_FALSE;
+		}
+
+		if (pAsm->vfetch_instruction_ptr_array[element] != NULL) 
+		{
+			return GL_FALSE;
+		}
+		else 
+		{
+			pAsm->vfetch_instruction_ptr_array[element] = vfetch_instruction_ptr;
+		}
+	}
+
+	return GL_TRUE;
+}
+
+GLboolean cleanup_vfetch_instructions(r700_AssemblerBase* pAsm)
+{
+    GLint i;
+    pAsm->cf_current_clause_type    = CF_EMPTY_CLAUSE;
+    pAsm->cf_current_vtx_clause_ptr = NULL;
+
+    for (i=0; i<VERT_ATTRIB_MAX; i++) 
+	{
+		pAsm->vfetch_instruction_ptr_array[ i ] = NULL;
+	}
+
+    cleanup_vfetch_shaderinst(pAsm->pR700Shader);
+    
+    return GL_TRUE;
+}
+
 GLuint gethelpr(r700_AssemblerBase* pAsm) 
 {
     GLuint r = pAsm->uHelpReg;
@@ -1180,8 +1308,10 @@ GLboolean tex_src(r700_AssemblerBase *pAsm)
         case PROGRAM_INPUT:
             switch (pILInst->SrcReg[0].Index)
             {
+                case FRAG_ATTRIB_WPOS:
                 case FRAG_ATTRIB_COL0:
                 case FRAG_ATTRIB_COL1:
+                case FRAG_ATTRIB_FOGC:
                 case FRAG_ATTRIB_TEX0:
                 case FRAG_ATTRIB_TEX1:
                 case FRAG_ATTRIB_TEX2:
@@ -1194,7 +1324,16 @@ GLboolean tex_src(r700_AssemblerBase *pAsm)
                     pAsm->S[0].src.reg   =
                         pAsm->uiFP_AttributeMap[pILInst->SrcReg[0].Index];
                     pAsm->S[0].src.rtype = SRC_REG_INPUT;
-                break;
+                    break;
+                case FRAG_ATTRIB_FACE:
+                    fprintf(stderr, "FRAG_ATTRIB_FACE unsupported\n");
+                    break;
+                case FRAG_ATTRIB_PNTC:
+                    fprintf(stderr, "FRAG_ATTRIB_PNTC unsupported\n");
+                    break;
+                case FRAG_ATTRIB_VAR0:
+                    fprintf(stderr, "FRAG_ATTRIB_VAR0 unsupported\n");
+                    break;
             }
         break;
         }
@@ -1951,9 +2090,9 @@ GLboolean assemble_alu_instruction(r700_AssemblerBase *pAsm)
     GLuint contiguous_slots_needed;
 
     GLuint    uNumSrc = r700GetNumOperands(pAsm);
-    GLuint    channel_swizzle, j;
-    GLuint    chan_counter[4] = {0, 0, 0, 0};
-    PVSSRC *  pSource[3];
+    //GLuint    channel_swizzle, j;
+    //GLuint    chan_counter[4] = {0, 0, 0, 0};
+    //PVSSRC *  pSource[3];
     GLboolean bSplitInst = GL_FALSE;
 
     if (1 == pAsm->D.dst.math) 
@@ -2053,7 +2192,7 @@ GLboolean assemble_alu_instruction(r700_AssemblerBase *pAsm)
         }
 
         //other bits
-        alu_instruction_ptr->m_Word0.f.index_mode = SQ_INDEX_LOOP;
+        alu_instruction_ptr->m_Word0.f.index_mode = SQ_INDEX_AR_X;
 
         if(   (is_single_scalar_operation == GL_TRUE) 
            || (GL_TRUE == bSplitInst) )
@@ -2387,6 +2526,35 @@ GLboolean assemble_ADD(r700_AssemblerBase *pAsm)
     return GL_TRUE;
 }
 
+GLboolean assemble_ARL(r700_AssemblerBase *pAsm)
+{ /* TODO: ar values dont' persist between clauses */
+    if( GL_FALSE == checkop1(pAsm) )
+    {
+        return GL_FALSE;
+    }
+
+    pAsm->D.dst.opcode = SQ_OP2_INST_MOVA_FLOOR;
+    setaddrmode_PVSDST(&(pAsm->D.dst), ADDR_ABSOLUTE);
+    pAsm->D.dst.rtype = DST_REG_TEMPORARY;
+    pAsm->D.dst.reg = 0;
+    pAsm->D.dst.writex = 0;
+    pAsm->D.dst.writey = 0;
+    pAsm->D.dst.writez = 0;
+    pAsm->D.dst.writew = 0;
+
+    if( GL_FALSE == assemble_src(pAsm, 0, -1) )
+    {
+        return GL_FALSE;
+    }
+
+    if( GL_FALSE == next_ins(pAsm) )
+    {
+        return GL_FALSE;
+    }
+
+    return GL_TRUE;
+}
+
 GLboolean assemble_BAD(char *opcode_str) 
 {
     radeon_error("Not yet implemented instruction (%s)\n", opcode_str);
@@ -2508,7 +2676,7 @@ GLboolean assemble_DOT(r700_AssemblerBase *pAsm)
     }
     else if(pAsm->pILInst[pAsm->uiCurInst].Opcode == OPCODE_DPH) 
     {
-        onecomp_PVSSRC(&(pAsm->S[1].src), 3);
+        onecomp_PVSSRC(&(pAsm->S[0].src), 3);
     } 
 
     if ( GL_FALSE == next_ins(pAsm) ) 
@@ -2617,15 +2785,15 @@ GLboolean assemble_FRC(r700_AssemblerBase *pAsm)
  
 GLboolean assemble_KIL(r700_AssemblerBase *pAsm)
 {
+    /* TODO: doc says KILL has to be last(end) ALU clause */
+    
     checkop1(pAsm);
 
     pAsm->D.dst.opcode = SQ_OP2_INST_KILLGT;  
-  
-    if ( GL_FALSE == assemble_dst(pAsm) )
-    {
-        return GL_FALSE;
-    }
 
+    setaddrmode_PVSDST(&(pAsm->D.dst), ADDR_ABSOLUTE);
+    pAsm->D.dst.rtype = DST_REG_TEMPORARY;
+    pAsm->D.dst.reg   = 0;
     pAsm->D.dst.writex = 0;
     pAsm->D.dst.writey = 0;
     pAsm->D.dst.writez = 0;
@@ -2638,19 +2806,10 @@ GLboolean assemble_KIL(r700_AssemblerBase *pAsm)
     setswizzle_PVSSRC(&(pAsm->S[0].src), SQ_SEL_0);
     noneg_PVSSRC(&(pAsm->S[0].src));
 
-    pAsm->S[1].src.rtype = SRC_REG_TEMPORARY;
-
-    if(PROGRAM_TEMPORARY == pAsm->pILInst[pAsm->uiCurInst].DstReg.File)
+    if ( GL_FALSE == assemble_src(pAsm, 0, 1) )
     {
-        pAsm->S[1].src.reg = pAsm->pILInst[pAsm->uiCurInst].DstReg.Index + pAsm->starting_temp_register_number;
+        return GL_FALSE;
     }
-    else
-    {   //PROGRAM_OUTPUT
-        pAsm->S[1].src.reg = pAsm->uiFP_OutputMap[pAsm->pILInst[pAsm->uiCurInst].DstReg.Index];
-    }
-  
-    setaddrmode_PVSSRC(&(pAsm->S[1].src), ADDR_ABSOLUTE);
-    noswizzle_PVSSRC(&(pAsm->S[1].src));
   
     if ( GL_FALSE == next_ins(pAsm) )
     {
@@ -2908,6 +3067,7 @@ GLboolean assemble_LIT(r700_AssemblerBase *pAsm)
     pAsm->S[0].src.rtype = srcType;
     pAsm->S[0].src.reg   = srcReg;
     setaddrmode_PVSSRC(&(pAsm->S[0].src), ADDR_ABSOLUTE);
+    swizzleagain_PVSSRC(&(pAsm->S[0].src), SQ_SEL_X, SQ_SEL_X, SQ_SEL_X, SQ_SEL_X);
     pAsm->S[1].src.rtype = SRC_REG_TEMPORARY;
     pAsm->S[1].src.reg   = tmp;
     setaddrmode_PVSSRC(&(pAsm->S[1].src), ADDR_ABSOLUTE);
@@ -3809,8 +3969,7 @@ GLboolean AssembleInstr(GLuint uiNumberInsts,
             break;  
 
         case OPCODE_ARL: 
-            radeon_error("Not yet implemented instruction OPCODE_ARL \n");
-            //if ( GL_FALSE == assemble_BAD("ARL") ) 
+            if ( GL_FALSE == assemble_ARL(pR700AsmCode) ) 
                 return GL_FALSE;
             break;
         case OPCODE_ARR: 
@@ -4155,6 +4314,7 @@ GLboolean Process_Fragment_Exports(r700_AssemblerBase *pR700AsmCode,
                                    GLbitfield          OutputsWritten)  
 { 
     unsigned int unBit;
+    GLuint export_count = 0;
 
     if(pR700AsmCode->depth_export_register_number >= 0) 
     {
@@ -4176,6 +4336,7 @@ GLboolean Process_Fragment_Exports(r700_AssemblerBase *pR700AsmCode,
         {
             return GL_FALSE;
         }
+        export_count++;
 	}
 	unBit = 1 << FRAG_RESULT_DEPTH;
 	if(OutputsWritten & unBit)
@@ -4189,8 +4350,15 @@ GLboolean Process_Fragment_Exports(r700_AssemblerBase *pR700AsmCode,
         {
             return GL_FALSE;
         }
+        export_count++;
 	}
-
+    /* Need to export something, otherwise we'll hang
+     * results are undefined anyway */
+    if(export_count == 0)
+    {
+        Process_Export(pR700AsmCode, SQ_EXPORT_PIXEL, 0, 1, 0, GL_FALSE);
+    }
+    
     if(pR700AsmCode->cf_last_export_ptr != NULL) 
     {
         pR700AsmCode->cf_last_export_ptr->m_Word1.f.cf_inst        = SQ_CF_INST_EXPORT_DONE;

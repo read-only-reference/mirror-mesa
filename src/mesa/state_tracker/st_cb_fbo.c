@@ -49,6 +49,7 @@
 #include "st_public.h"
 #include "st_texture.h"
 
+#include "util/u_rect.h"
 
 
 /**
@@ -93,7 +94,7 @@ st_renderbuffer_alloc_storage(GLcontext * ctx, struct gl_renderbuffer *rb,
    if (strb->format != PIPE_FORMAT_NONE)
       format = strb->format;
    else
-      format = st_choose_renderbuffer_format(pipe, internalFormat);
+      format = st_choose_renderbuffer_format(pipe->screen, internalFormat);
       
    /* init renderbuffer fields */
    strb->Base.Width  = width;
@@ -165,12 +166,12 @@ st_renderbuffer_alloc_storage(GLcontext * ctx, struct gl_renderbuffer *rb,
                                                      strb->texture,
                                                      0, 0, 0,
                                                      surface_usage );
-
-      assert(strb->surface->texture);
-      assert(strb->surface->format);
-      assert(strb->surface->width == width);
-      assert(strb->surface->height == height);
-
+      if (strb->surface) {
+         assert(strb->surface->texture);
+         assert(strb->surface->format);
+         assert(strb->surface->width == width);
+         assert(strb->surface->height == height);
+      }
 
       return strb->surface != NULL;
    }
@@ -298,6 +299,7 @@ st_new_renderbuffer_fb(enum pipe_format format, int samples, boolean sw)
    default:
       _mesa_problem(NULL,
 		    "Unexpected format in st_new_renderbuffer_fb");
+      _mesa_free(strb);
       return NULL;
    }
 
@@ -383,6 +385,7 @@ st_render_texture(GLcontext *ctx,
 
    rb->Width = texImage->Width2;
    rb->Height = texImage->Height2;
+   rb->_BaseFormat = texImage->_BaseFormat;
    /*printf("***** render to texture level %d: %d x %d\n", att->TextureLevel, rb->Width, rb->Height);*/
 
    /*printf("***** pipe texture %d x %d\n", pt->width[0], pt->height[0]);*/
@@ -536,10 +539,17 @@ copy_back_to_front(struct st_context *st,
    (void) st_get_framebuffer_surface(stfb, backIndex, &surf_back);
 
    if (surf_front && surf_back) {
-      st->pipe->surface_copy(st->pipe,
-                             surf_front, 0, 0,  /* dest */
-                             surf_back, 0, 0,   /* src */
-                             fb->Width, fb->Height);
+      if (st->pipe->surface_copy) {
+         st->pipe->surface_copy(st->pipe,
+                                surf_front, 0, 0,  /* dest */
+                                surf_back, 0, 0,   /* src */
+                                fb->Width, fb->Height);
+      } else {
+         util_surface_copy(st->pipe, FALSE,
+                           surf_front, 0, 0,
+                           surf_back, 0, 0,
+                           fb->Width, fb->Height);
+      }
    }
 }
 

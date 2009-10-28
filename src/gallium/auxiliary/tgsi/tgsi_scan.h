@@ -45,6 +45,7 @@ struct tgsi_shader_info
    ubyte num_outputs;
    ubyte input_semantic_name[PIPE_MAX_SHADER_INPUTS]; /**< TGSI_SEMANTIC_x */
    ubyte input_semantic_index[PIPE_MAX_SHADER_INPUTS];
+   ubyte input_interpolate[PIPE_MAX_SHADER_INPUTS];
    ubyte output_semantic_name[PIPE_MAX_SHADER_OUTPUTS]; /**< TGSI_SEMANTIC_x */
    ubyte output_semantic_index[PIPE_MAX_SHADER_OUTPUTS];
 
@@ -60,6 +61,9 @@ struct tgsi_shader_info
    boolean uses_kill;  /**< KIL or KILP instruction used? */
    boolean uses_fogcoord; /**< fragment shader uses fog coord? */
    boolean uses_frontfacing; /**< fragment shader uses front/back-face flag? */
+
+   uint texture_max;
+   uint texture_mask;
 };
 
 

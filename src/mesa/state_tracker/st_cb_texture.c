@@ -43,6 +43,7 @@
 #include "main/texobj.h"
 #include "main/texstore.h"
 
+#include "state_tracker/st_debug.h"
 #include "state_tracker/st_context.h"
 #include "state_tracker/st_cb_fbo.h"
 #include "state_tracker/st_cb_texture.h"
@@ -328,10 +329,13 @@ guess_and_alloc_texture(struct st_context *st,
         stObj->base.MinFilter == GL_LINEAR ||
         stImage->base._BaseFormat == GL_DEPTH_COMPONENT ||
         stImage->base._BaseFormat == GL_DEPTH_STENCIL_EXT) &&
+       !stObj->base.GenerateMipmap &&
        stImage->level == firstLevel) {
+      /* only alloc space for a single mipmap level */
       lastLevel = firstLevel;
    }
    else {
+      /* alloc space for a full mipmap */
       GLuint l2width = util_logbase2(width);
       GLuint l2height = util_logbase2(height);
       GLuint l2depth = util_logbase2(depth);
@@ -768,10 +772,6 @@ done:
       st_texture_image_unmap(ctx->st, stImage);
       texImage->Data = NULL;
    }
-
-   if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      ctx->Driver.GenerateMipmap(ctx, target, texObj);
-   }
 }
 
 
@@ -903,6 +903,9 @@ decompress_with_blit(GLcontext * ctx, GLenum target, GLint level,
          GLfloat rgba[4 * MAX_WIDTH];
          GLvoid *dest = _mesa_image_address2d(&ctx->Pack, pixels, width,
                                               height, format, type, row, 0);
+
+         if (ST_DEBUG & DEBUG_FALLBACK)
+            debug_printf("%s: fallback format translation\n", __FUNCTION__);
 
          /* get float[4] rgba row from surface */
          pipe_get_tile_rgba(tex_xfer, 0, row, width, 1, rgba);
@@ -1142,10 +1145,6 @@ done:
       st_texture_image_unmap(ctx->st, stImage);
       texImage->Data = NULL;
    }
-
-   if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      ctx->Driver.GenerateMipmap(ctx, target, texObj);
-   }
 }
 
 
@@ -1299,6 +1298,9 @@ fallback_copy_texsubimage(GLcontext *ctx, GLenum target, GLint level,
    struct pipe_transfer *src_trans;
    GLvoid *texDest;
    enum pipe_transfer_usage transfer_usage;
+   
+   if (ST_DEBUG & DEBUG_FALLBACK)
+      debug_printf("%s: fallback processing\n", __FUNCTION__);
 
    assert(width <= MAX_WIDTH);
 
@@ -1424,6 +1426,12 @@ compatible_src_dst_formats(const struct gl_renderbuffer *src,
       return TGSI_WRITEMASK_XYZ; /* A ==> 1.0 */
    }
    else {
+      if (ST_DEBUG & DEBUG_FALLBACK)
+         debug_printf("%s failed for src %s, dst %s\n",
+                      __FUNCTION__, 
+                      _mesa_lookup_enum_by_nr(srcFormat),
+                      _mesa_lookup_enum_by_nr(dstLogicalFormat));
+
       /* Otherwise fail.
        */
       return 0;
@@ -1538,7 +1546,8 @@ st_copy_texsubimage(GLcontext *ctx,
 
    if (ctx->_ImageTransferState == 0x0) {
 
-      if (matching_base_formats && 
+      if (pipe->surface_copy &&
+          matching_base_formats &&
           src_format == dest_format &&
           !do_flip) 
       {
@@ -1608,10 +1617,6 @@ st_copy_texsubimage(GLcontext *ctx,
                                 strb, stImage, texBaseFormat,
                                 destX, destY, destZ,
                                 srcX, srcY, width, height);
-   }
-
-   if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-      ctx->Driver.GenerateMipmap(ctx, target, texObj);
    }
 }
 
@@ -1775,7 +1780,11 @@ st_finalize_texture(GLcontext *ctx,
        * incomplete.  In that case, we'll have set stObj->lastLevel before
        * we get here.
        */
-      stObj->lastLevel = stObj->base._MaxLevel - stObj->base.BaseLevel;
+      if (stObj->base.MinFilter == GL_LINEAR ||
+          stObj->base.MinFilter == GL_NEAREST)
+         stObj->lastLevel = stObj->base.BaseLevel;
+      else
+         stObj->lastLevel = stObj->base._MaxLevel - stObj->base.BaseLevel;
    }
 
    firstImage = st_texture_image(stObj->base.Image[0][stObj->base.BaseLevel]);

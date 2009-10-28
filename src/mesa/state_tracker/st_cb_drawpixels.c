@@ -40,6 +40,7 @@
 #include "shader/prog_parameter.h"
 #include "shader/prog_print.h"
 
+#include "st_debug.h"
 #include "st_context.h"
 #include "st_atom.h"
 #include "st_atom_constbuf.h"
@@ -61,6 +62,7 @@
 #include "util/u_tile.h"
 #include "util/u_draw_quad.h"
 #include "util/u_math.h"
+#include "util/u_rect.h"
 #include "shader/prog_instruction.h"
 #include "cso_cache/cso_context.h"
 
@@ -98,7 +100,7 @@ is_passthrough_program(const struct gl_fragment_program *prog)
 static struct st_fragment_program *
 combined_drawpix_fragment_program(GLcontext *ctx)
 {
-   struct st_context *st = ctx->st;
+   struct st_context *st = st_context(ctx);
    struct st_fragment_program *stfp;
 
    if (st->pixel_xfer.program->serialNo == st->pixel_xfer.xfer_prog_sn
@@ -445,8 +447,8 @@ draw_quad(GLcontext *ctx, GLfloat x0, GLfloat y0, GLfloat z,
           GLfloat x1, GLfloat y1, const GLfloat *color,
           GLboolean invertTex, GLfloat maxXcoord, GLfloat maxYcoord)
 {
-   struct st_context *st = ctx->st;
-   struct pipe_context *pipe = ctx->st->pipe;
+   struct st_context *st = st_context(ctx);
+   struct pipe_context *pipe = st->pipe;
    GLfloat verts[4][3][4]; /* four verts, three attribs, XYZW */
 
    /* setup vertex data */
@@ -540,9 +542,9 @@ draw_textured_quad(GLcontext *ctx, GLint x, GLint y, GLfloat z,
                    const GLfloat *color,
                    GLboolean invertTex)
 {
-   struct st_context *st = ctx->st;
-   struct pipe_context *pipe = ctx->st->pipe;
-   struct cso_context *cso = ctx->st->cso_context;
+   struct st_context *st = st_context(ctx);
+   struct pipe_context *pipe = st->pipe;
+   struct cso_context *cso = st->cso_context;
    GLfloat x0, y0, x1, y1;
    GLsizei maxSize;
 
@@ -598,15 +600,15 @@ draw_textured_quad(GLcontext *ctx, GLint x, GLint y, GLfloat z,
 
    /* viewport state: viewport matching window dims */
    {
-      const float width = (float) ctx->DrawBuffer->Width;
-      const float height = (float) ctx->DrawBuffer->Height;
+      const float w = (float) ctx->DrawBuffer->Width;
+      const float h = (float) ctx->DrawBuffer->Height;
       struct pipe_viewport_state vp;
-      vp.scale[0] =  0.5f * width;
-      vp.scale[1] = -0.5f * height;
+      vp.scale[0] =  0.5f * w;
+      vp.scale[1] = -0.5f * h;
       vp.scale[2] = 1.0f;
       vp.scale[3] = 1.0f;
-      vp.translate[0] = 0.5f * width;
-      vp.translate[1] = 0.5f * height;
+      vp.translate[0] = 0.5f * w;
+      vp.translate[1] = 0.5f * h;
       vp.translate[2] = 0.0f;
       vp.translate[3] = 0.0f;
       cso_set_viewport(cso, &vp);
@@ -652,7 +654,7 @@ draw_stencil_pixels(GLcontext *ctx, GLint x, GLint y,
                     const struct gl_pixelstore_attrib *unpack,
                     const GLvoid *pixels)
 {
-   struct st_context *st = ctx->st;
+   struct st_context *st = st_context(ctx);
    struct pipe_context *pipe = st->pipe;
    struct pipe_screen *screen = pipe->screen;
    struct st_renderbuffer *strb;
@@ -793,7 +795,7 @@ st_DrawPixels(GLcontext *ctx, GLint x, GLint y, GLsizei width, GLsizei height,
 {
    struct st_fragment_program *stfp;
    struct st_vertex_program *stvp;
-   struct st_context *st = ctx->st;
+   struct st_context *st = st_context(ctx);
    struct pipe_surface *ps;
    const GLfloat *color;
 
@@ -811,21 +813,21 @@ st_DrawPixels(GLcontext *ctx, GLint x, GLint y, GLsizei width, GLsizei height,
 
    if (format == GL_DEPTH_COMPONENT) {
       ps = st->state.framebuffer.zsbuf;
-      stfp = make_fragment_shader_z(ctx->st);
-      stvp = st_make_passthrough_vertex_shader(ctx->st, GL_TRUE);
+      stfp = make_fragment_shader_z(st);
+      stvp = st_make_passthrough_vertex_shader(st, GL_TRUE);
       color = ctx->Current.RasterColor;
    }
    else {
       ps = st->state.framebuffer.cbufs[0];
       stfp = combined_drawpix_fragment_program(ctx);
-      stvp = st_make_passthrough_vertex_shader(ctx->st, GL_FALSE);
+      stvp = st_make_passthrough_vertex_shader(st, GL_FALSE);
       color = NULL;
    }
 
    /* draw with textured quad */
    {
       struct pipe_texture *pt
-         = make_texture(ctx->st, width, height, format, type, unpack, pixels);
+         = make_texture(st, width, height, format, type, unpack, pixels);
       if (pt) {
          draw_textured_quad(ctx, x, y, ctx->Current.RasterPos[2],
                             width, height, ctx->Pixel.ZoomX, ctx->Pixel.ZoomY,
@@ -942,7 +944,7 @@ st_CopyPixels(GLcontext *ctx, GLint srcx, GLint srcy,
               GLsizei width, GLsizei height,
               GLint dstx, GLint dsty, GLenum type)
 {
-   struct st_context *st = ctx->st;
+   struct st_context *st = st_context(ctx);
    struct pipe_context *pipe = st->pipe;
    struct pipe_screen *screen = pipe->screen;
    struct st_renderbuffer *rbRead;
@@ -995,14 +997,14 @@ st_CopyPixels(GLcontext *ctx, GLint srcx, GLint srcy,
       rbRead = st_get_color_read_renderbuffer(ctx);
       color = NULL;
       stfp = combined_drawpix_fragment_program(ctx);
-      stvp = st_make_passthrough_vertex_shader(ctx->st, GL_FALSE);
+      stvp = st_make_passthrough_vertex_shader(st, GL_FALSE);
    }
    else {
       assert(type == GL_DEPTH);
       rbRead = st_renderbuffer(ctx->ReadBuffer->_DepthBuffer);
       color = ctx->Current.Attrib[VERT_ATTRIB_COLOR0];
-      stfp = make_fragment_shader_z(ctx->st);
-      stvp = st_make_passthrough_vertex_shader(ctx->st, GL_TRUE);
+      stfp = make_fragment_shader_z(st);
+      stvp = st_make_passthrough_vertex_shader(st, GL_TRUE);
    }
 
    srcFormat = rbRead->texture->format;
@@ -1014,13 +1016,14 @@ st_CopyPixels(GLcontext *ctx, GLint srcx, GLint srcy,
    else {
       /* srcFormat can't be used as a texture format */
       if (type == GL_DEPTH) {
-         texFormat = st_choose_format(pipe, GL_DEPTH_COMPONENT, PIPE_TEXTURE_2D, 
+         texFormat = st_choose_format(screen, GL_DEPTH_COMPONENT,
+                                      PIPE_TEXTURE_2D, 
                                       PIPE_TEXTURE_USAGE_DEPTH_STENCIL);
          assert(texFormat != PIPE_FORMAT_NONE); /* XXX no depth texture formats??? */
       }
       else {
          /* default color format */
-         texFormat = st_choose_format(pipe, GL_RGBA, PIPE_TEXTURE_2D, 
+         texFormat = st_choose_format(screen, GL_RGBA, PIPE_TEXTURE_2D, 
                                       PIPE_TEXTURE_USAGE_SAMPLER);
          assert(texFormat != PIPE_FORMAT_NONE);
       }
@@ -1059,7 +1062,7 @@ st_CopyPixels(GLcontext *ctx, GLint srcx, GLint srcy,
       assert(pth <= maxSize);
    }
 
-   pt = st_texture_create(ctx->st, PIPE_TEXTURE_2D, texFormat, 0,
+   pt = st_texture_create(st, PIPE_TEXTURE_2D, texFormat, 0,
                           ptw, pth, 1,
                           PIPE_TEXTURE_USAGE_SAMPLER);
    if (!pt)
@@ -1073,11 +1076,19 @@ st_CopyPixels(GLcontext *ctx, GLint srcx, GLint srcy,
                                        PIPE_BUFFER_USAGE_GPU_READ);
       struct pipe_surface *psTex = screen->get_tex_surface(screen, pt, 0, 0, 0, 
                                       PIPE_BUFFER_USAGE_GPU_WRITE );
-      pipe->surface_copy(pipe,
-			 psTex, /* dest */
-			 0, 0, /* destx/y */
-			 psRead,
-			 srcx, srcy, width, height);
+      if (pipe->surface_copy) {
+         pipe->surface_copy(pipe,
+                            psTex, /* dest */
+                            0, 0, /* destx/y */
+                            psRead,
+                            srcx, srcy, width, height);
+      } else {
+         util_surface_copy(pipe, FALSE,
+                           psTex,
+                           0, 0,
+                           psRead,
+                           srcx, srcy, width, height);
+      }
       pipe_surface_reference(&psRead, NULL); 
       pipe_surface_reference(&psTex, NULL);
    }
@@ -1089,6 +1100,9 @@ st_CopyPixels(GLcontext *ctx, GLint srcx, GLint srcy,
 					height);
       struct pipe_transfer *ptTex;
       enum pipe_transfer_usage transfer_usage;
+
+      if (ST_DEBUG & DEBUG_FALLBACK)
+         debug_printf("%s: fallback processing\n", __FUNCTION__);
 
       if (type == GL_DEPTH && pf_is_depth_and_stencil(pt->format))
          transfer_usage = PIPE_TRANSFER_READ_WRITE;

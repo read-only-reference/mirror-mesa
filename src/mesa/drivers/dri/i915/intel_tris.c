@@ -1076,7 +1076,9 @@ intelRunPipeline(GLcontext * ctx)
       intel->NewGLState = 0;
    }
 
+   intel_map_vertex_shader_textures(ctx);
    _tnl_run_pipeline(ctx);
+   intel_unmap_vertex_shader_textures(ctx);
 
    _mesa_unlock_context_textures(ctx);
 }
@@ -1194,12 +1196,16 @@ getFallbackString(GLuint bit)
 
 
 
+/**
+ * Enable/disable a fallback flag.
+ * \param bit  one of INTEL_FALLBACK_x flags.
+ */
 void
-intelFallback(struct intel_context *intel, GLuint bit, GLboolean mode)
+intelFallback(struct intel_context *intel, GLbitfield bit, GLboolean mode)
 {
    GLcontext *ctx = &intel->ctx;
    TNLcontext *tnl = TNL_CONTEXT(ctx);
-   GLuint oldfallback = intel->Fallback;
+   const GLbitfield oldfallback = intel->Fallback;
 
    if (mode) {
       intel->Fallback |= bit;

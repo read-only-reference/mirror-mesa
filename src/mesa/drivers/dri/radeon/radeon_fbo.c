@@ -445,7 +445,6 @@ restart:
 		goto restart;
 	}
 	
-	rrb->pitch = texImage->Width * rrb->cpp;
 	rrb->base.InternalFormat = rrb->base._ActualFormat;
 	rrb->base.Width = texImage->Width;
 	rrb->base.Height = texImage->Height;
@@ -555,8 +554,10 @@ radeon_render_texture(GLcontext * ctx,
       imageOffset += offsets[att->Zoffset];
    }
 
-   /* store that offset in the region */
+   /* store that offset in the region, along with the correct pitch for
+    * the image we are rendering to */
    rrb->draw_offset = imageOffset;
+   rrb->pitch = radeon_image->mt->levels[att->TextureLevel].rowstride;
 
    /* update drawing region, etc */
    radeon_draw_buffer(ctx, fb);
@@ -583,7 +584,7 @@ void radeon_fbo_init(struct radeon_context *radeon)
   radeon->glCtx->Driver.FinishRenderTexture = radeon_finish_render_texture;
   radeon->glCtx->Driver.ResizeBuffers = radeon_resize_buffers;
   radeon->glCtx->Driver.ValidateFramebuffer = radeon_validate_framebuffer;
-  radeon->glCtx->Driver.BlitFramebuffer = _mesa_meta_blit_framebuffer;
+  radeon->glCtx->Driver.BlitFramebuffer = _mesa_meta_BlitFramebuffer;
 }
 
   

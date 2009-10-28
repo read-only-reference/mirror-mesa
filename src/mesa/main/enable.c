@@ -36,8 +36,8 @@
 #include "simple_list.h"
 #include "mtypes.h"
 #include "enums.h"
-#include "math/m_matrix.h"
 #include "api_arrayelt.h"
+#include "texstate.h"
 
 
 
@@ -229,8 +229,7 @@ get_texcoord_unit(GLcontext *ctx)
 static GLboolean
 enable_texture(GLcontext *ctx, GLboolean state, GLbitfield texBit)
 {
-   const GLuint curr = ctx->Texture.CurrentUnit;
-   struct gl_texture_unit *texUnit = &ctx->Texture.Unit[curr];
+   struct gl_texture_unit *texUnit = _mesa_get_current_tex_unit(ctx);
    const GLbitfield newenabled = state
       ? (texUnit->Enabled | texBit) : (texUnit->Enabled & ~texBit);
 
@@ -942,6 +941,14 @@ _mesa_set_enable(GLcontext *ctx, GLenum cap, GLboolean state)
          ctx->Depth.BoundsTest = state;
          break;
 
+      case GL_DEPTH_CLAMP:
+         if (ctx->Transform.DepthClamp == state)
+            return;
+	 CHECK_EXTENSION(ARB_depth_clamp, cap);
+         FLUSH_VERTICES(ctx, _NEW_TRANSFORM);
+	 ctx->Transform.DepthClamp = state;
+	 break;
+
 #if FEATURE_ATI_fragment_shader
       case GL_FRAGMENT_SHADER_ATI:
         CHECK_EXTENSION(ATI_fragment_shader, cap);
@@ -1389,6 +1396,11 @@ _mesa_IsEnabled( GLenum cap )
       case GL_DEPTH_BOUNDS_TEST_EXT:
          CHECK_EXTENSION(EXT_depth_bounds_test);
          return ctx->Depth.BoundsTest;
+
+      /* GL_ARB_depth_clamp */
+      case GL_DEPTH_CLAMP:
+         CHECK_EXTENSION(ARB_depth_clamp);
+         return ctx->Transform.DepthClamp;
 
 #if FEATURE_ATI_fragment_shader
       case GL_FRAGMENT_SHADER_ATI:

@@ -101,7 +101,12 @@ void radeonFreeTexImageData(GLcontext *ctx, struct gl_texture_image *timage)
 /* Set Data pointer and additional data for mapped texture image */
 static void teximage_set_map_data(radeon_texture_image *image)
 {
-	radeon_mipmap_level *lvl = &image->mt->levels[image->mtlevel];
+	radeon_mipmap_level *lvl;
+
+	if (!image->mt)
+		return;
+
+	lvl = &image->mt->levels[image->mtlevel];
 
 	image->base.Data = image->mt->bo->ptr + lvl->faces[image->mtface].offset;
 	image->base.RowStride = lvl->rowstride / image->mt->bpp;
@@ -659,11 +664,6 @@ static void radeon_teximage(
 			if (dims == 3)
 				_mesa_free(dstImageOffsets);
 		}
-
-		/* SGIS_generate_mipmap */
-		if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-			radeon_generate_mipmap(ctx, target, texObj);
-		}
 	}
 
 	_mesa_unmap_teximage_pbo(ctx, packing);
@@ -791,11 +791,6 @@ static void radeon_texsubimage(GLcontext* ctx, int dims, GLenum target, int leve
 							     width, height, depth,
 							     format, type, pixels, packing))
 				_mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexSubImage");
-		}
-
-		/* GL_SGIS_generate_mipmap */
-		if (level == texObj->BaseLevel && texObj->GenerateMipmap) {
-			radeon_generate_mipmap(ctx, target, texObj);
 		}
 	}
 
@@ -979,7 +974,7 @@ int radeon_validate_texture_miptree(GLcontext * ctx, struct gl_texture_object *t
 			radeon_texture_image *image = get_radeon_texture_image(texObj->Image[face][level]);
 			if (RADEON_DEBUG & RADEON_TEXTURE)
 				fprintf(stderr, " face %i, level %i... %p vs %p ", face, level, t->mt, image->mt);
-			if (t->mt == image->mt) {
+			if (t->mt == image->mt || (!image->mt && !image->base.Data)) {
 				if (RADEON_DEBUG & RADEON_TEXTURE)
 					fprintf(stderr, "OK\n");
 

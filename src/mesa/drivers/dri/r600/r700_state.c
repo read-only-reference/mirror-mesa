@@ -61,12 +61,9 @@ static void r700UpdatePolygonMode(GLcontext * ctx);
 static void r700SetPolygonOffsetState(GLcontext * ctx, GLboolean state);
 static void r700SetStencilState(GLcontext * ctx, GLboolean state);
 
-void r700UpdateShaders (GLcontext * ctx)  //----------------------------------
+void r700UpdateShaders(GLcontext * ctx)
 {
     context_t *context = R700_CONTEXT(ctx);
-    GLvector4f dummy_attrib[_TNL_ATTRIB_MAX];
-    GLvector4f *temp_attrib[_TNL_ATTRIB_MAX];
-    int i;
 
     /* should only happenen once, just after context is created */
     /* TODO: shouldn't we fallback to sw here? */
@@ -76,21 +73,6 @@ void r700UpdateShaders (GLcontext * ctx)  //----------------------------------
     }
 
     r700SelectFragmentShader(ctx);
-
-    if (context->radeon.NewGLState) {
-	    for (i = _TNL_FIRST_MAT; i <= _TNL_LAST_MAT; i++) {
-		    /* mat states from state var not array for sw */
-		    dummy_attrib[i].stride = 0;
-	            temp_attrib[i] = TNL_CONTEXT(ctx)->vb.AttribPtr[i];
-		    TNL_CONTEXT(ctx)->vb.AttribPtr[i] = &(dummy_attrib[i]);
-	    }
-
-	    _tnl_UpdateFixedFunctionProgram(ctx);
-
-	    for (i = _TNL_FIRST_MAT; i <= _TNL_LAST_MAT; i++) {
-		    TNL_CONTEXT(ctx)->vb.AttribPtr[i] = temp_attrib[i];
-	    }
-    }
 
     r700SelectVertexShader(ctx);
     r700UpdateStateParameters(ctx, _NEW_PROGRAM | _NEW_PROGRAM_CONSTANTS);
@@ -169,6 +151,14 @@ static void r700InvalidateState(GLcontext * ctx, GLuint new_state) //-----------
 
 	    R600_STATECHANGE(context, cb_target);
 	    R600_STATECHANGE(context, db_target);
+    }
+
+    if (new_state & (_NEW_LIGHT)) {
+	    R600_STATECHANGE(context, su);
+	    if (ctx->Light.ProvokingVertex == GL_LAST_VERTEX_CONVENTION)
+		    SETbit(r700->PA_SU_SC_MODE_CNTL.u32All, PROVOKING_VTX_LAST_bit);
+	    else
+		    CLEARbit(r700->PA_SU_SC_MODE_CNTL.u32All, PROVOKING_VTX_LAST_bit);
     }
 
     r700UpdateStateParameters(ctx, new_state);
@@ -467,10 +457,10 @@ static void r700SetBlendState(GLcontext * ctx)
 		 eqn, COLOR_COMB_FCN_shift, COLOR_COMB_FCN_mask);
 
 	SETfield(blend_reg,
-		 blend_factor(ctx->Color.BlendSrcRGB, GL_TRUE),
+		 blend_factor(ctx->Color.BlendSrcA, GL_TRUE),
 		 ALPHA_SRCBLEND_shift, ALPHA_SRCBLEND_mask);
 	SETfield(blend_reg,
-		 blend_factor(ctx->Color.BlendDstRGB, GL_FALSE),
+		 blend_factor(ctx->Color.BlendDstA, GL_FALSE),
 		 ALPHA_DESTBLEND_shift, ALPHA_DESTBLEND_mask);
 
 	switch (ctx->Color.BlendEquationA) {
@@ -745,9 +735,9 @@ static void r700ColorMask(GLcontext * ctx,
 			     (b ? 4 : 0) |
 			     (a ? 8 : 0));
 
-	if (mask != r700->CB_SHADER_MASK.u32All) {
+	if (mask != r700->CB_TARGET_MASK.u32All) {
 		R600_STATECHANGE(context, cb);
-		SETfield(r700->CB_SHADER_MASK.u32All, mask, OUTPUT0_ENABLE_shift, OUTPUT0_ENABLE_mask);
+		SETfield(r700->CB_TARGET_MASK.u32All, mask, TARGET0_ENABLE_shift, TARGET0_ENABLE_mask);
 	}
 }
 
@@ -1269,11 +1259,15 @@ void r700SetScissor(context_t *context) //---------------
 		return;
 	}
 	if (context->radeon.state.scissor.enabled) {
-		/* r600 has exclusive scissors */
 		x1 = context->radeon.state.scissor.rect.x1;
 		y1 = context->radeon.state.scissor.rect.y1;
-		x2 = context->radeon.state.scissor.rect.x2 + 1;
-		y2 = context->radeon.state.scissor.rect.y2 + 1;
+		x2 = context->radeon.state.scissor.rect.x2;
+		y2 = context->radeon.state.scissor.rect.y2;
+		/* r600 has exclusive BR scissors */
+		if (context->radeon.radeonScreen->kernel_mm) {
+			x2++;
+			y2++;
+		}
 	} else {
 		if (context->radeon.radeonScreen->driScreen->dri2.enabled) {
 			x1 = 0;
@@ -1754,7 +1748,7 @@ void r700InitState(GLcontext * ctx) //-------------------
     r700->CB_CLRCMP_MSK.u32All = 0xFFFFFFFF;
 
     /* screen/window/view */
-    SETfield(r700->CB_TARGET_MASK.u32All, 0xF, (4 * id), TARGET0_ENABLE_mask);
+    SETfield(r700->CB_SHADER_MASK.u32All, 0xF, (4 * id), OUTPUT0_ENABLE_mask);
 
     context->radeon.hw.all_dirty = GL_TRUE;
 

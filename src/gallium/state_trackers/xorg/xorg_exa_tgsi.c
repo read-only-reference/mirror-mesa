@@ -44,33 +44,26 @@
  */
 
 struct xorg_shaders {
-   struct exa_context *exa;
+   struct xorg_renderer *r;
 
    struct cso_hash *vs_hash;
    struct cso_hash *fs_hash;
 };
 
-static const char over_op[] =
-   "SUB TEMP[3], CONST[0].wwww, TEMP[1].wwww\n"
-   "MUL TEMP[3], TEMP[0], TEMP[3]\n"
-   "ADD TEMP[0], TEMP[3], TEMP[0]\n";
-
-
-static INLINE void
-create_preamble(struct ureg_program *ureg)
-{
-}
-
-
 static INLINE void
 src_in_mask(struct ureg_program *ureg,
             struct ureg_dst dst,
             struct ureg_src src,
-            struct ureg_src mask)
+            struct ureg_src mask,
+            boolean component_alpha)
 {
-   /* MUL dst, src, mask.wwww */
-   ureg_MUL(ureg, dst, src,
-            ureg_scalar(mask, TGSI_SWIZZLE_W));
+   if (component_alpha) {
+      ureg_MUL(ureg, dst, src, mask);
+   }
+   else {
+      ureg_MUL(ureg, dst, src,
+               ureg_scalar(mask, TGSI_SWIZZLE_W));
+   }
 }
 
 static struct ureg_src
@@ -79,8 +72,7 @@ vs_normalize_coords(struct ureg_program *ureg, struct ureg_src coords,
 {
    struct ureg_dst tmp = ureg_DECL_temporary(ureg);
    struct ureg_src ret;
-   ureg_MUL(ureg, tmp, coords, const0);
-   ureg_ADD(ureg, tmp, ureg_src(tmp), const1);
+   ureg_MAD(ureg, tmp, coords, const0, const1);
    ret = ureg_src(tmp);
    ureg_release_temporary(ureg, tmp);
    return ret;
@@ -241,42 +233,39 @@ create_vs(struct pipe_context *pipe,
    boolean is_fill = vs_traits & VS_FILL;
    boolean is_composite = vs_traits & VS_COMPOSITE;
    boolean has_mask = vs_traits & VS_MASK;
+   unsigned input_slot = 0;
 
    ureg = ureg_create(TGSI_PROCESSOR_VERTEX);
    if (ureg == NULL)
       return 0;
 
-   const0 = ureg_DECL_constant(ureg);
-   const1 = ureg_DECL_constant(ureg);
+   const0 = ureg_DECL_constant(ureg, 0);
+   const1 = ureg_DECL_constant(ureg, 1);
 
    /* it has to be either a fill or a composite op */
    debug_assert(is_fill ^ is_composite);
 
-   src = ureg_DECL_vs_input(ureg,
-                            TGSI_SEMANTIC_POSITION, 0);
+   src = ureg_DECL_vs_input(ureg, input_slot++);
    dst = ureg_DECL_output(ureg, TGSI_SEMANTIC_POSITION, 0);
    src = vs_normalize_coords(ureg, src,
                              const0, const1);
    ureg_MOV(ureg, dst, src);
 
-
    if (is_composite) {
-      src = ureg_DECL_vs_input(ureg,
-                               TGSI_SEMANTIC_GENERIC, 1);
-      dst = ureg_DECL_output(ureg, TGSI_SEMANTIC_GENERIC, 1);
+      src = ureg_DECL_vs_input(ureg, input_slot++);
+      dst = ureg_DECL_output(ureg, TGSI_SEMANTIC_GENERIC, 0);
       ureg_MOV(ureg, dst, src);
    }
+
    if (is_fill) {
-      src = ureg_DECL_vs_input(ureg,
-                               TGSI_SEMANTIC_COLOR, 1);
-      dst = ureg_DECL_output(ureg, TGSI_SEMANTIC_COLOR, 1);
+      src = ureg_DECL_vs_input(ureg, input_slot++);
+      dst = ureg_DECL_output(ureg, TGSI_SEMANTIC_COLOR, 0);
       ureg_MOV(ureg, dst, src);
    }
 
    if (has_mask) {
-      src = ureg_DECL_vs_input(ureg,
-                               TGSI_SEMANTIC_GENERIC, 2);
-      dst = ureg_DECL_output(ureg, TGSI_SEMANTIC_POSITION, 2);
+      src = ureg_DECL_vs_input(ureg, input_slot++);
+      dst = ureg_DECL_output(ureg, TGSI_SEMANTIC_GENERIC, 1);
       ureg_MOV(ureg, dst, src);
    }
 
@@ -300,6 +289,7 @@ create_fs(struct pipe_context *pipe,
    boolean is_solid   = fs_traits & FS_SOLID_FILL;
    boolean is_lingrad = fs_traits & FS_LINGRAD_FILL;
    boolean is_radgrad = fs_traits & FS_RADGRAD_FILL;
+   boolean is_comp_alpha = fs_traits & FS_COMPONENT_ALPHA;
 
    ureg = ureg_create(TGSI_PROCESSOR_FRAGMENT);
    if (ureg == NULL)
@@ -315,11 +305,11 @@ create_fs(struct pipe_context *pipe,
    if (is_composite) {
       src_sampler = ureg_DECL_sampler(ureg, 0);
       src_input = ureg_DECL_fs_input(ureg,
-                                     TGSI_SEMANTIC_POSITION,
+                                     TGSI_SEMANTIC_GENERIC,
                                      0,
                                      TGSI_INTERPOLATE_PERSPECTIVE);
-   }
-   if (is_fill) {
+   } else {
+      debug_assert(is_fill);
       if (is_solid)
          src_input = ureg_DECL_fs_input(ureg,
                                         TGSI_SEMANTIC_COLOR,
@@ -335,7 +325,7 @@ create_fs(struct pipe_context *pipe,
    if (has_mask) {
       mask_sampler = ureg_DECL_sampler(ureg, 1);
       mask_pos = ureg_DECL_fs_input(ureg,
-                                    TGSI_SEMANTIC_POSITION,
+                                    TGSI_SEMANTIC_GENERIC,
                                     1,
                                     TGSI_INTERPOLATE_PERSPECTIVE);
    }
@@ -370,11 +360,11 @@ create_fs(struct pipe_context *pipe,
          else
             src = out;
 
-         coords = ureg_DECL_constant(ureg);
-         const0124 = ureg_DECL_constant(ureg);
-         matrow0 = ureg_DECL_constant(ureg);
-         matrow1 = ureg_DECL_constant(ureg);
-         matrow2 = ureg_DECL_constant(ureg);
+         coords = ureg_DECL_constant(ureg, 0);
+         const0124 = ureg_DECL_constant(ureg, 1);
+         matrow0 = ureg_DECL_constant(ureg, 2);
+         matrow1 = ureg_DECL_constant(ureg, 3);
+         matrow2 = ureg_DECL_constant(ureg, 4);
 
          if (is_lingrad) {
             linear_gradient(ureg, src,
@@ -396,7 +386,7 @@ create_fs(struct pipe_context *pipe,
       ureg_TEX(ureg, mask,
                TGSI_TEXTURE_2D, mask_pos, mask_sampler);
       /* src IN mask */
-      src_in_mask(ureg, out, ureg_src(src), ureg_src(mask));
+      src_in_mask(ureg, out, ureg_src(src), ureg_src(mask), is_comp_alpha);
       ureg_release_temporary(ureg, mask);
    }
 
@@ -405,11 +395,11 @@ create_fs(struct pipe_context *pipe,
    return ureg_create_shader_and_destroy(ureg, pipe);
 }
 
-struct xorg_shaders * xorg_shaders_create(struct exa_context *exa)
+struct xorg_shaders * xorg_shaders_create(struct xorg_renderer *r)
 {
    struct xorg_shaders *sc = CALLOC_STRUCT(xorg_shaders);
 
-   sc->exa = exa;
+   sc->r = r;
    sc->vs_hash = cso_hash_create();
    sc->fs_hash = cso_hash_create();
 
@@ -436,9 +426,9 @@ cache_destroy(struct cso_context *cso,
 
 void xorg_shaders_destroy(struct xorg_shaders *sc)
 {
-   cache_destroy(sc->exa->cso, sc->vs_hash,
+   cache_destroy(sc->r->cso, sc->vs_hash,
                  PIPE_SHADER_VERTEX);
-   cache_destroy(sc->exa->cso, sc->fs_hash,
+   cache_destroy(sc->r->cso, sc->fs_hash,
                  PIPE_SHADER_FRAGMENT);
 
    free(sc);
@@ -470,12 +460,12 @@ struct xorg_shader xorg_shaders_get(struct xorg_shaders *sc,
                                     unsigned vs_traits,
                                     unsigned fs_traits)
 {
-   struct xorg_shader shader = {0};
+   struct xorg_shader shader = { NULL, NULL };
    void *vs, *fs;
 
-   vs = shader_from_cache(sc->exa->ctx, PIPE_SHADER_VERTEX,
+   vs = shader_from_cache(sc->r->pipe, PIPE_SHADER_VERTEX,
                           sc->vs_hash, vs_traits);
-   fs = shader_from_cache(sc->exa->ctx, PIPE_SHADER_FRAGMENT,
+   fs = shader_from_cache(sc->r->pipe, PIPE_SHADER_FRAGMENT,
                           sc->fs_hash, fs_traits);
 
    debug_assert(vs && fs);

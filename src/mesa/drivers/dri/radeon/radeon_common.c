@@ -229,16 +229,15 @@ void radeonUpdateScissor( GLcontext *ctx )
 	}
 	if (!rmesa->radeonScreen->kernel_mm) {
 	   /* Fix scissors for dri 1 */
-
 	   __DRIdrawablePrivate *dPriv = radeon_get_drawable(rmesa);
 	   x1 += dPriv->x;
-	   x2 += dPriv->x;
+	   x2 += dPriv->x + 1;
 	   min_x += dPriv->x;
-	   max_x += dPriv->x;
+	   max_x += dPriv->x + 1;
 	   y1 += dPriv->y;
-	   y2 += dPriv->y;
+	   y2 += dPriv->y + 1;
 	   min_y += dPriv->y;
-	   max_y += dPriv->y;
+	   max_y += dPriv->y + 1;
 	}
 
 	rmesa->state.scissor.rect.x1 = CLAMP(x1,  min_x, max_x);
@@ -1345,5 +1344,5 @@ void rcommonBeginBatch(radeonContextPtr rmesa, int n,
 
 void radeonUserClear(GLcontext *ctx, GLuint mask)
 {
-   _mesa_meta_clear(ctx, mask);
+   _mesa_meta_Clear(ctx, mask);
 }

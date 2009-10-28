@@ -31,9 +31,7 @@
 #include "glheader.h"
 #include "mfeatures.h"
 #include "colormac.h"
-#if FEATURE_colortable
 #include "colortab.h"
-#endif
 #include "context.h"
 #include "enums.h"
 #include "macros.h"
@@ -309,10 +307,6 @@ _mesa_ActiveTextureARB(GLenum texture)
       /* update current stack pointer */
       ctx->CurrentStack = &ctx->TextureMatrixStack[texUnit];
    }
-
-   if (ctx->Driver.ActiveTexture) {
-      (*ctx->Driver.ActiveTexture)( ctx, (GLuint) texUnit );
-   }
 }
 
 
@@ -362,9 +356,6 @@ update_texture_matrices( GLcontext *ctx )
 	 if (ctx->Texture.Unit[u]._ReallyEnabled &&
 	     ctx->TextureMatrixStack[u].Top->type != MATRIX_IDENTITY)
 	    ctx->Texture._TexMatEnabled |= ENABLE_TEXMAT(u);
-
-	 if (ctx->Driver.TextureMatrix)
-	    ctx->Driver.TextureMatrix( ctx, u, ctx->TextureMatrixStack[u].Top);
       }
    }
 }
@@ -759,9 +750,7 @@ _mesa_init_texture(GLcontext *ctx)
    ctx->Texture.CurrentUnit = 0;      /* multitexture */
    ctx->Texture._EnabledUnits = 0x0;
    ctx->Texture.SharedPalette = GL_FALSE;
-#if FEATURE_colortable
    _mesa_init_colortable(&ctx->Texture.Palette);
-#endif
 
    for (u = 0; u < MAX_TEXTURE_UNITS; u++)
       init_texture_unit(ctx, u);
@@ -802,10 +791,8 @@ _mesa_free_texture_data(GLcontext *ctx)
    for (tgt = 0; tgt < NUM_TEXTURE_TARGETS; tgt++)
       ctx->Driver.DeleteTexture(ctx, ctx->Texture.ProxyTex[tgt]);
 
-#if FEATURE_colortable
    for (u = 0; u < MAX_TEXTURE_IMAGE_UNITS; u++)
       _mesa_free_colortable_data(&ctx->Texture.Unit[u].ColorTable);
-#endif
 }
 
 

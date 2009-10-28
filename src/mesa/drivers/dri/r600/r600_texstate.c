@@ -531,6 +531,49 @@ static GLboolean r600GetTexFormat(struct gl_texture_object *tObj, GLuint mesa_fo
 			return GL_FALSE;
 		}
 		break;
+	/* EXT_texture_sRGB */
+	case MESA_FORMAT_SRGBA8:
+		SETfield(t->SQ_TEX_RESOURCE1, FMT_8_8_8_8,
+			 SQ_TEX_RESOURCE_WORD1_0__DATA_FORMAT_shift, SQ_TEX_RESOURCE_WORD1_0__DATA_FORMAT_mask);
+
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_W,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_X_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_X_mask);
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_Z,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Y_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Y_mask);
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_Y,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Z_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Z_mask);
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_X,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_W_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_W_mask);
+		SETbit(t->SQ_TEX_RESOURCE4, SQ_TEX_RESOURCE_WORD4_0__FORCE_DEGAMMA_bit);
+		break;
+	case MESA_FORMAT_SLA8:
+		SETfield(t->SQ_TEX_RESOURCE1, FMT_8_8,
+			 SQ_TEX_RESOURCE_WORD1_0__DATA_FORMAT_shift, SQ_TEX_RESOURCE_WORD1_0__DATA_FORMAT_mask);
+
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_X,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_X_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_X_mask);
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_X,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Y_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Y_mask);
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_X,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Z_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Z_mask);
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_Y,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_W_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_W_mask);
+		SETbit(t->SQ_TEX_RESOURCE4, SQ_TEX_RESOURCE_WORD4_0__FORCE_DEGAMMA_bit);
+		break;
+	case MESA_FORMAT_SL8: /* X, X, X, ONE */
+		SETfield(t->SQ_TEX_RESOURCE1, FMT_8,
+			 SQ_TEX_RESOURCE_WORD1_0__DATA_FORMAT_shift, SQ_TEX_RESOURCE_WORD1_0__DATA_FORMAT_mask);
+
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_X,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_X_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_X_mask);
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_X,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Y_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Y_mask);
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_X,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Z_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_Z_mask);
+		SETfield(t->SQ_TEX_RESOURCE4, SQ_SEL_1,
+			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_W_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_W_mask);
+		SETbit(t->SQ_TEX_RESOURCE4, SQ_TEX_RESOURCE_WORD4_0__FORCE_DEGAMMA_bit);
+		break;
 	default:
 		/* Not supported format */
 		return GL_FALSE;
@@ -721,7 +764,9 @@ void r600SetTexOffset(__DRIcontext * pDRICtx, GLint texname,
 	struct gl_texture_object *tObj =
 	    _mesa_lookup_texture(rmesa->radeon.glCtx, texname);
 	radeonTexObjPtr t = radeon_tex_obj(tObj);
-	uint32_t pitch_val, size;
+	int firstlevel = t->mt ? t->mt->firstLevel : 0;
+	const struct gl_texture_image *firstImage;
+	uint32_t pitch_val, size, row_align, bpp;
 
 	if (!tObj)
 		return;
@@ -731,7 +776,13 @@ void r600SetTexOffset(__DRIcontext * pDRICtx, GLint texname,
 	if (!offset)
 		return;
 
-	size = pitch;//h * w * (depth / 8);
+	bpp = depth / 8;
+	if (bpp == 3) 
+		bpp = 4;
+
+	firstImage = t->base.Image[0][firstlevel];
+	row_align = rmesa->radeon.texture_row_align - 1;
+	size = ((firstImage->Width * bpp + row_align) & ~row_align) * firstImage->Height;
 	if (t->bo) {
 		radeon_bo_unref(t->bo);
 		t->bo = NULL;
