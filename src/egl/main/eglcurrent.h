@@ -4,16 +4,8 @@
 #include "egltypedefs.h"
 
 
-#define _EGL_API_ALL_BITS \
-   (EGL_OPENGL_ES_BIT   | \
-    EGL_OPENVG_BIT      | \
-    EGL_OPENGL_ES2_BIT  | \
-    EGL_OPENGL_BIT)
-
-
-#define _EGL_API_FIRST_API EGL_OPENGL_ES_API
-#define _EGL_API_LAST_API EGL_OPENGL_API
-#define _EGL_API_NUM_APIS (_EGL_API_LAST_API - _EGL_API_FIRST_API + 1)
+#define _EGL_API_NUM_INDICES \
+   (EGL_OPENGL_API - EGL_OPENGL_ES_API + 2) /* idx 0 is for EGL_NONE */
 
 
 /**
@@ -22,19 +14,20 @@
 struct _egl_thread_info
 {
    EGLint LastError;
-   _EGLContext *CurrentContexts[_EGL_API_NUM_APIS];
+   _EGLContext *CurrentContexts[_EGL_API_NUM_INDICES];
    /* use index for fast access to current context */
    EGLint CurrentAPIIndex;
 };
 
 
 /**
- * Return true if a client API enum is recognized.
+ * Return true if a client API enum can be converted to an index.
  */
 static INLINE EGLBoolean
 _eglIsApiValid(EGLenum api)
 {
-   return (api >= _EGL_API_FIRST_API && api <= _EGL_API_LAST_API);
+   return ((api >= EGL_OPENGL_ES_API && api <= EGL_OPENGL_API) ||
+           api == EGL_NONE);
 }
 
 
@@ -45,7 +38,7 @@ _eglIsApiValid(EGLenum api)
 static INLINE EGLint
 _eglConvertApiToIndex(EGLenum api)
 {
-   return api - _EGL_API_FIRST_API;
+   return (api != EGL_NONE) ? api - EGL_OPENGL_ES_API + 1 : 0;
 }
 
 
@@ -56,7 +49,7 @@ _eglConvertApiToIndex(EGLenum api)
 static INLINE EGLenum
 _eglConvertApiFromIndex(EGLint idx)
 {
-   return _EGL_API_FIRST_API + idx;
+   return (idx) ? EGL_OPENGL_ES_API + idx - 1 : EGL_NONE;
 }
 
 

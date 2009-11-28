@@ -19,6 +19,9 @@ struct _egl_global
 
    EGLScreenMESA FreeScreenHandle;
 
+   /* bitmaks of supported APIs (supported by _some_ driver) */
+   EGLint ClientAPIsMask;
+
    EGLint NumDrivers;
    _EGLDriver *Drivers[10];
 

@@ -300,8 +300,7 @@ vl_screen_create(Display *display, int screen)
 }
 
 struct pipe_video_context*
-vl_video_create(Display *display, int screen,
-                struct pipe_screen *p_screen,
+vl_video_create(struct pipe_screen *screen,
                 enum pipe_video_profile profile,
                 enum pipe_video_chroma_format chroma_format,
                 unsigned width, unsigned height)
@@ -309,10 +308,10 @@ vl_video_create(Display *display, int screen,
    struct pipe_video_context *vpipe;
    struct xsp_context *xsp_context;
 
-   assert(p_screen);
+   assert(screen);
    assert(width && height);
 
-   vpipe = sp_video_create(p_screen, profile, chroma_format, width, height);
+   vpipe = sp_video_create(screen, profile, chroma_format, width, height);
    if (!vpipe)
       return NULL;
 

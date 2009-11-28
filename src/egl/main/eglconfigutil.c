@@ -102,12 +102,7 @@ _eglConfigFromContextModesRec(_EGLConfig *conf, const __GLcontextModes *m,
 
    SET_CONFIG_ATTRIB(conf, EGL_NATIVE_RENDERABLE, m->xRenderable);
    SET_CONFIG_ATTRIB(conf, EGL_NATIVE_VISUAL_ID, m->visualID);
-
-   if (m->visualType != GLX_NONE)
-      SET_CONFIG_ATTRIB(conf, EGL_NATIVE_VISUAL_TYPE, m->visualType);
-   else
-      SET_CONFIG_ATTRIB(conf, EGL_NATIVE_VISUAL_TYPE, EGL_NONE);
-
+   SET_CONFIG_ATTRIB(conf, EGL_NATIVE_VISUAL_TYPE, m->visualType);
    SET_CONFIG_ATTRIB(conf, EGL_RENDERABLE_TYPE, renderable_type);
    SET_CONFIG_ATTRIB(conf, EGL_SAMPLE_BUFFERS, m->sampleBuffers);
    SET_CONFIG_ATTRIB(conf, EGL_SAMPLES, m->samples);

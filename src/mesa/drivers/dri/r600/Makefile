@@ -76,3 +76,4 @@ DRI_LIB_DEPS += $(RADEON_LDFLAGS)
 
 include ../Makefile.template
 
+symlinks:

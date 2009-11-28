@@ -23,8 +23,11 @@
 #ifndef R300_TEXTURE_H
 #define R300_TEXTURE_H
 
-#include "pipe/p_video_state.h"
+#include "pipe/p_screen.h"
 
+#include "util/u_math.h"
+
+#include "r300_context.h"
 #include "r300_reg.h"
 
 struct r300_texture;
@@ -40,14 +43,6 @@ static INLINE uint32_t r300_translate_texformat(enum pipe_format format)
         /* X8 */
         case PIPE_FORMAT_I8_UNORM:
             return R300_EASY_TX_FORMAT(X, X, X, X, X8);
-        /* X16 */
-        case PIPE_FORMAT_R16_UNORM:
-            return R300_EASY_TX_FORMAT(X, X, X, X, X16);
-        case PIPE_FORMAT_R16_SNORM:
-            return R300_EASY_TX_FORMAT(X, X, X, X, X16) |
-                R300_TX_FORMAT_SIGNED;
-        case PIPE_FORMAT_Z16_UNORM:
-            return R300_EASY_TX_FORMAT(X, X, X, X, X16);
         /* W8Z8Y8X8 */
         case PIPE_FORMAT_A8R8G8B8_UNORM:
             return R300_EASY_TX_FORMAT(X, Y, Z, W, W8Z8Y8X8);
@@ -80,8 +75,12 @@ static INLINE uint32_t r300_translate_texformat(enum pipe_format format)
                 R300_TX_FORMAT_YUV_TO_RGB;
         /* W24_FP */
         case PIPE_FORMAT_Z24S8_UNORM:
-        case PIPE_FORMAT_Z24X8_UNORM:
             return R300_EASY_TX_FORMAT(X, X, X, X, W24_FP);
+	/* Z5_Y6_X5 */
+        case PIPE_FORMAT_R16_SNORM:
+            return R300_EASY_TX_FORMAT(X, X, X, X, Z5Y6X5);
+        case PIPE_FORMAT_Z16_UNORM:
+	    return R300_EASY_TX_FORMAT(X, X, X, X, X16);
         default:
             debug_printf("r300: Implementation error: "
                 "Got unsupported texture format %s in %s\n",
@@ -90,18 +89,6 @@ static INLINE uint32_t r300_translate_texformat(enum pipe_format format)
             break;
     }
     return 0;
-}
-
-struct r300_video_surface
-{
-    struct pipe_video_surface   base;
-    struct pipe_texture         *tex;
-};
-
-static INLINE struct r300_video_surface *
-r300_video_surface(struct pipe_video_surface *pvs)
-{
-    return (struct r300_video_surface *)pvs;
 }
 
 #ifndef R300_WINSYS_H

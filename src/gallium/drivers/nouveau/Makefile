@@ -3,7 +3,6 @@ include $(TOP)/configs/current
 
 LIBNAME = nouveau
 
-C_SOURCES = nouveau_screen.c \
-	    nouveau_context.c
+C_SOURCES = nouveau_screen.c
 
 include ../../Makefile.template

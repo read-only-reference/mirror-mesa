@@ -173,8 +173,9 @@ i915_update_tex_unit(struct intel_context *intel, GLuint unit, GLuint ss3)
    } else {
       dri_bo_reference(intelObj->mt->region->buffer);
       i915->state.tex_buffer[unit] = intelObj->mt->region->buffer;
-      i915->state.tex_offset[unit] =
-         intel_miptree_image_offset(intelObj->mt, 0, intelObj->firstLevel, 0);
+      i915->state.tex_offset[unit] =  intel_miptree_image_offset(intelObj->mt,
+								 0, intelObj->
+								 firstLevel);
 
       format = translate_texture_format(firstImage->TexFormat->MesaFormat, 
 					firstImage->InternalFormat,

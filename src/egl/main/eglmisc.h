@@ -37,7 +37,7 @@ _eglQueryString(_EGLDriver *drv, _EGLDisplay *dpy, EGLint name);
 
 
 extern EGLBoolean
-_eglWaitClient(_EGLDriver *drv, _EGLDisplay *dpy, _EGLContext *ctx);
+_eglWaitGL(_EGLDriver *drv, _EGLDisplay *dpy);
 
 
 extern EGLBoolean

@@ -150,9 +150,7 @@ trace_drm_destroy(struct drm_api *_api)
 {
    struct trace_drm_api *tr_api = trace_drm_api(_api);
    struct drm_api *api = tr_api->api;
-
-   if (api->destroy)
-      api->destroy(api);
+   api->destroy(api);
 
    free(tr_api);
 }

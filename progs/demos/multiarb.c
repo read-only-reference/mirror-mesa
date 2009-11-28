@@ -27,8 +27,6 @@
 #define ANIMATE 10
 #define QUIT 100
 
-static GLint T0 = 0;
-static GLint Frames = 0;
 static GLboolean Animate = GL_TRUE;
 static GLint NumUnits = 1;
 static GLboolean TexEnabled[8];
@@ -107,20 +105,6 @@ static void Display( void )
    glPopMatrix();
 
    glutSwapBuffers();
-
-   Frames++;
-
-   {
-      GLint t = glutGet(GLUT_ELAPSED_TIME);
-      if (t - T0 >= 5000) {
-	 GLfloat seconds = (t - T0) / 1000.0;
-	 GLfloat fps = Frames / seconds;
-	 printf("%d frames in %6.3f seconds = %6.3f FPS\n", Frames, seconds, fps);
-	 fflush(stdout);
-	 T0 = t;
-	 Frames = 0;
-      }
-   }
 }
 
 

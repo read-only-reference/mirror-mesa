@@ -505,11 +505,9 @@ rm_depend:
 		touch $$dep ; \
 	done
 
-rm_config:
-	rm -f configs/current
-	rm -f configs/autoconf
-
-lib_gz: rm_config
+lib_gz:
+	rm -f configs/current ; \
+	rm -f configs/autoconf ; \
 	cd .. ; \
 	tar -cf $(LIB_NAME).tar $(LIB_FILES) ; \
 	gzip $(LIB_NAME).tar ; \
@@ -527,7 +525,9 @@ glut_gz:
 	gzip $(GLUT_NAME).tar ; \
 	mv $(GLUT_NAME).tar.gz $(DIRECTORY)
 
-lib_bz2: rm_config
+lib_bz2:
+	rm -f configs/current ; \
+	rm -f configs/autoconf ; \
 	cd .. ; \
 	tar -cf $(LIB_NAME).tar $(LIB_FILES) ; \
 	bzip2 $(LIB_NAME).tar ; \
@@ -545,7 +545,9 @@ glut_bz2:
 	bzip2 $(GLUT_NAME).tar ; \
 	mv $(GLUT_NAME).tar.bz2 $(DIRECTORY)
 
-lib_zip: rm_config
+lib_zip:
+	rm -f configs/current ; \
+	rm -f configs/autoconf ; \
 	rm -f $(LIB_NAME).zip ; \
 	cd .. ; \
 	zip -qr $(LIB_NAME).zip $(LIB_FILES) ; \
@@ -574,7 +576,5 @@ md5:
 	@-md5sum $(GLUT_NAME).tar.bz2
 	@-md5sum $(GLUT_NAME).zip
 
-.PHONY: tarballs rm_depend rm_config md5 \
-	lib_gz demo_gz glut_gz \
-	lib_bz2 demo_bz2 glut_bz2 \
-	lib_zip demo_zip glut_zip
+.PHONY: tarballs rm_depend lib_gz demo_gz glut_gz lib_bz2 demo_bz2 \
+	glut_bz2 lib_zip demo_zip glut_zip md5

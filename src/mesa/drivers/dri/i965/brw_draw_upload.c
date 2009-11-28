@@ -375,10 +375,9 @@ static void brw_prepare_vertices(struct brw_context *brw)
     * isn't an issue at this point.
     */
    if (brw->vb.nr_enabled >= BRW_VEP_MAX) {
-      FALLBACK(intel, BRW_FALLBACK_DRAW, GL_TRUE);
+      intel->Fallback = 1;
       return;
    }
-   FALLBACK(intel, BRW_FALLBACK_DRAW, GL_FALSE);
 
    for (i = 0; i < brw->vb.nr_enabled; i++) {
       struct brw_vertex_element *input = brw->vb.enabled[i];
@@ -428,10 +427,9 @@ static void brw_prepare_vertices(struct brw_context *brw)
 	    /* Position array not properly enabled:
 	     */
             if (input->glarray->StrideB == 0) {
-               FALLBACK(intel, BRW_FALLBACK_DRAW, GL_TRUE);
+               intel->Fallback = 1;
                return;
             }
-            FALLBACK(intel, BRW_FALLBACK_DRAW, GL_FALSE);
 
 	    interleave = input->glarray->StrideB;
 	    ptr = input->glarray->Ptr;
@@ -541,12 +539,12 @@ static void brw_emit_vertices(struct brw_context *brw)
           if (input->stride) {
               OUT_RELOC(input->bo,
                         I915_GEM_DOMAIN_VERTEX, 0,
-                        input->offset + input->stride * input->count - 1);
+                        input->offset + input->stride * input->count);
           } else {
               assert(input->count == 1);
               OUT_RELOC(input->bo,
                         I915_GEM_DOMAIN_VERTEX, 0,
-                        input->offset + input->element_size - 1);
+                        input->offset + input->element_size);
           }
       } else
           OUT_BATCH(input->stride ? input->count : 0);
@@ -728,7 +726,7 @@ static void brw_emit_index_buffer(struct brw_context *brw)
 		brw->ib.offset);
       OUT_RELOC(brw->ib.bo,
 		I915_GEM_DOMAIN_VERTEX, 0,
-		brw->ib.offset + brw->ib.size - 1);
+		brw->ib.offset + brw->ib.size);
       OUT_BATCH( 0 );
       ADVANCE_BATCH();
    }

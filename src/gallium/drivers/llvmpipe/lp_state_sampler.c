@@ -37,7 +37,6 @@
 #include "lp_context.h"
 #include "lp_state.h"
 #include "lp_texture.h"
-#include "lp_tex_cache.h"
 #include "draw/draw_context.h"
 
 
@@ -97,17 +96,6 @@ llvmpipe_set_sampler_textures(struct pipe_context *pipe,
       struct pipe_texture *tex = i < num ? texture[i] : NULL;
 
       pipe_texture_reference(&llvmpipe->texture[i], tex);
-      lp_tex_tile_cache_set_texture(llvmpipe->tex_cache[i], tex);
-
-      if(tex) {
-         struct llvmpipe_texture *lp_tex = llvmpipe_texture(tex);
-         struct lp_jit_texture *jit_tex = &llvmpipe->jit_context.textures[i];
-         jit_tex->width = tex->width[0];
-         jit_tex->height = tex->height[0];
-         jit_tex->stride = lp_tex->stride[0];
-         if(!lp_tex->dt)
-            jit_tex->data = lp_tex->data;
-      }
    }
 
    llvmpipe->num_textures = num;

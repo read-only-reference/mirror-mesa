@@ -91,7 +91,7 @@ lp_jit_init_globals(struct llvmpipe_screen *screen)
 
       LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, constants,
                              screen->target, context_type, 0);
-      LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, samplers,
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, dummy,
                              screen->target, context_type, 1);
       LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, alpha_ref_value,
                              screen->target, context_type, 2);
@@ -106,24 +106,6 @@ lp_jit_init_globals(struct llvmpipe_screen *screen)
       LLVMAddTypeName(screen->module, "context", context_type);
 
       screen->context_ptr_type = LLVMPointerType(context_type, 0);
-   }
-
-   /* fetch_texel
-    */
-   {
-      LLVMTypeRef ret_type;
-      LLVMTypeRef arg_types[3];
-      LLVMValueRef fetch_texel;
-
-      ret_type = LLVMVoidType();
-      arg_types[0] = LLVMPointerType(LLVMInt8Type(), 0);  /* samplers */
-      arg_types[1] = LLVMInt32Type();                     /* unit */
-      arg_types[2] = LLVMPointerType(LLVMVectorType(LLVMFloatType(), 4), 0); /* store */
-
-      fetch_texel = lp_declare_intrinsic(screen->module, "fetch_texel",
-                                         ret_type, arg_types, Elements(arg_types));
-
-      LLVMAddGlobalMapping(screen->engine, fetch_texel, lp_fetch_texel_soa);
    }
 
 #ifdef DEBUG

@@ -177,9 +177,17 @@ void intel_miptree_image_unmap(struct intel_context *intel,
                                struct intel_mipmap_tree *mt);
 
 
-GLuint
-intel_miptree_image_offset(const struct intel_mipmap_tree *mt,
-                           GLuint face, GLuint level, GLuint zslice);
+/* Return the linear offset of an image relative to the start of the
+ * tree:
+ */
+GLuint intel_miptree_image_offset(struct intel_mipmap_tree *mt,
+                                  GLuint face, GLuint level);
+
+/* Return pointers to each 2d slice within an image.  Indexed by depth
+ * value.
+ */
+const GLuint *intel_miptree_depth_offsets(struct intel_mipmap_tree *mt,
+                                          GLuint level);
 
 
 void intel_miptree_set_level_info(struct intel_mipmap_tree *mt,

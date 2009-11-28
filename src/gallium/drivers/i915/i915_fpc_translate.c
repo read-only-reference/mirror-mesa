@@ -127,7 +127,7 @@ i915_program_error(struct i915_fp_compile *p, const char *msg, ...)
    va_start( args, msg );  
    util_vsnprintf( buffer, sizeof(buffer), msg, args );
    va_end( args );
-   debug_printf("%s", buffer);
+   debug_printf(buffer);
    debug_printf("\n");
 
    p->error = 1;
@@ -214,19 +214,37 @@ src_vector(struct i915_fp_compile *p,
       return 0;
    }
 
-   src = swizzle(src,
-		 source->SrcRegister.SwizzleX,
-		 source->SrcRegister.SwizzleY,
-		 source->SrcRegister.SwizzleZ,
-		 source->SrcRegister.SwizzleW);
+   if (source->SrcRegister.Extended) {
+      src = swizzle(src,
+                    source->SrcRegisterExtSwz.ExtSwizzleX,
+                    source->SrcRegisterExtSwz.ExtSwizzleY,
+                    source->SrcRegisterExtSwz.ExtSwizzleZ,
+                    source->SrcRegisterExtSwz.ExtSwizzleW);
+   }
+   else {
+      src = swizzle(src,
+                    source->SrcRegister.SwizzleX,
+                    source->SrcRegister.SwizzleY,
+                    source->SrcRegister.SwizzleZ,
+                    source->SrcRegister.SwizzleW);
+   }
 
 
    /* There's both negate-all-components and per-component negation.
     * Try to handle both here.
     */
    {
-      int n = source->SrcRegister.Negate;
-      src = negate(src, n, n, n, n);
+      int nx = source->SrcRegisterExtSwz.NegateX;
+      int ny = source->SrcRegisterExtSwz.NegateY;
+      int nz = source->SrcRegisterExtSwz.NegateZ;
+      int nw = source->SrcRegisterExtSwz.NegateW;
+      if (source->SrcRegister.Negate) {
+         nx = !nx;
+         ny = !ny;
+         nz = !nz;
+         nw = !nw;
+      }
+      src = negate(src, nx, ny, nz, nw);
    }
 
    /* no abs() or post-abs negation */
@@ -663,6 +681,7 @@ i915_translate_instruction(struct i915_fp_compile *p,
       break;
 
    case TGSI_OPCODE_MOV:
+   case TGSI_OPCODE_SWZ:
       emit_simple_arith(p, inst, A0_MOV, 1);
       break;
 

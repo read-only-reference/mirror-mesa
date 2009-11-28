@@ -33,11 +33,9 @@ struct r300_capabilities {
     /* Chipset family */
     int family;
     /* The number of vertex floating-point units */
-    unsigned num_vert_fpus;
+    int num_vert_fpus;
     /* The number of fragment pipes */
-    unsigned num_frag_pipes;
-    /* The number of z pipes */
-    unsigned num_z_pipes;
+    int num_frag_pipes;
     /* Whether or not TCL is physically present */
     boolean has_tcl;
     /* Whether or not this is an RV515 or newer; R500s have many differences

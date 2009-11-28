@@ -46,7 +46,7 @@ extern "C" {
 /**
  * Generic purpose hash table.
  */
-struct util_hash_table;
+struct hash_table;
 
 
 /**
@@ -55,38 +55,37 @@ struct util_hash_table;
  * @param hash hash function
  * @param compare should return 0 for two equal keys.
  */
-struct util_hash_table *
-util_hash_table_create(unsigned (*hash)(void *key),
-                       int (*compare)(void *key1, void *key2));
+struct hash_table *
+hash_table_create(unsigned (*hash)(void *key),
+                  int (*compare)(void *key1, void *key2));
 
 
 enum pipe_error
-util_hash_table_set(struct util_hash_table *ht,
-                    void *key,
-                    void *value);
+hash_table_set(struct hash_table *ht,
+               void *key,
+               void *value);
 
 void *
-util_hash_table_get(struct util_hash_table *ht,
-                    void *key);
+hash_table_get(struct hash_table *ht, 
+               void *key);
 
 
 void
-util_hash_table_remove(struct util_hash_table *ht,
-                       void *key);
+hash_table_remove(struct hash_table *ht, 
+                  void *key);
 
 
 void
-util_hash_table_clear(struct util_hash_table *ht);
+hash_table_clear(struct hash_table *ht);
 
 
 enum pipe_error
-util_hash_table_foreach(struct util_hash_table *ht,
-                        enum pipe_error (*callback)
-                        (void *key, void *value, void *data),
-                        void *data);
+hash_table_foreach(struct hash_table *ht,
+                   enum pipe_error (*callback)(void *key, void *value, void *data),
+                   void *data);
 
 void
-util_hash_table_destroy(struct util_hash_table *ht);
+hash_table_destroy(struct hash_table *ht);
 
 
 #ifdef __cplusplus

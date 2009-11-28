@@ -16,7 +16,11 @@ struct exa_context
    ExaDriverPtr pExa;
    struct pipe_context *pipe;
    struct pipe_screen *scrn;
-   struct xorg_renderer *renderer;
+   struct cso_context *cso;
+   struct xorg_shaders *shaders;
+
+   struct pipe_constant_buffer vs_const_buffer;
+   struct pipe_constant_buffer fs_const_buffer;
 
    struct pipe_texture *bound_textures[MAX_EXA_SAMPLERS];
    int num_bound_samplers;
@@ -24,18 +28,14 @@ struct exa_context
    float solid_color[4];
    boolean has_solid_color;
 
-   /* float[9] projective matrix bound to pictures */
-   struct {
-      float    src[9];
-      float   mask[9];
-      boolean has_src;
-      boolean has_mask;
-   } transform;
-
    struct {
       struct exa_pixmap_priv *src;
       struct exa_pixmap_priv *dst;
    } copy;
+
+   /* we should combine these two */
+   float vertices2[4][2][4];
+   float vertices3[4][3][4];
 };
 
 struct exa_pixmap_priv
@@ -50,17 +50,17 @@ struct exa_pixmap_priv
    unsigned map_count;
 };
 
-#define XORG_FALLBACK(s, arg...)                              \
-do {                                                          \
-   if (ms->debug_fallback) {                                  \
-      xf86DrvMsg(pScrn->scrnIndex, X_INFO,                    \
-                 "%s fallback " s "\n", __FUNCTION__, ##arg); \
-   }                                                          \
-   return FALSE;                                              \
+#define XORG_FALLBACK(s, arg...)              \
+do {                                          \
+   if (ms->debug_fallback) {                  \
+      xf86DrvMsg(pScrn->scrnIndex, X_INFO,    \
+                 "fallback: " s "\n", ##arg); \
+   }                                          \
+   return FALSE;                              \
 } while(0)
 
 struct pipe_surface *
-xorg_gpu_surface(struct pipe_screen *scrn, struct exa_pixmap_priv *priv);
+exa_gpu_surface(struct exa_context *exa, struct exa_pixmap_priv *priv);
 
 void xorg_exa_flush(struct exa_context *exa, uint pipeFlushFlags,
                     struct pipe_fence_handle **fence);

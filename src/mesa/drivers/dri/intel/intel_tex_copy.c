@@ -117,7 +117,7 @@ do_copy_texsubimage(struct intel_context *intel,
 						 INTEL_WRITE_PART);
       GLuint image_offset = intel_miptree_image_offset(intelImage->mt,
                                                        intelImage->face,
-                                                       intelImage->level, 0);
+                                                       intelImage->level);
       const GLint orig_x = x;
       const GLint orig_y = y;
       GLshort src_pitch;

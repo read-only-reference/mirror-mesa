@@ -1,6 +1,6 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.7
+ * Version:  7.5
  *
  * Copyright (C) 1999-2008  Brian Paul   All Rights Reserved.
  * Copyright (C) 2009  VMware, Inc.  All Rights Reserved.
@@ -84,7 +84,6 @@
 /*@{*/
 struct _mesa_HashTable;
 struct gl_attrib_node;
-struct gl_list_extensions;
 struct gl_meta_state;
 struct gl_pixelstore_attrib;
 struct gl_program_cache;
@@ -208,7 +207,7 @@ typedef enum
    VERT_RESULT_BFC0 = 13,
    VERT_RESULT_BFC1 = 14,
    VERT_RESULT_EDGE = 15,
-   VERT_RESULT_VAR0 = 16,  /**< shader varying */
+   VERT_RESULT_VAR0 = 16  /**< shader varying */,
    VERT_RESULT_MAX = (VERT_RESULT_VAR0 + MAX_VARYING)
 } gl_vert_result;
 
@@ -817,6 +816,29 @@ struct gl_line_attrib
 struct gl_list_attrib
 {
    GLuint ListBase;
+};
+
+
+/**
+ * Used by device drivers to hook new commands into display lists.
+ */
+struct gl_list_instruction
+{
+   GLuint Size;
+   void (*Execute)( GLcontext *ctx, void *data );
+   void (*Destroy)( GLcontext *ctx, void *data );
+   void (*Print)( GLcontext *ctx, void *data );
+};
+
+#define MAX_DLIST_EXT_OPCODES 16
+
+/**
+ * Used by device drivers to hook new commands into display lists.
+ */
+struct gl_list_extensions
+{
+   struct gl_list_instruction Opcode[MAX_DLIST_EXT_OPCODES];
+   GLuint NumOpcodes;
 };
 
 
@@ -1917,10 +1939,10 @@ struct ati_fragment_shader
    struct atifs_instruction *Instructions[2];
    struct atifs_setupinst *SetupInst[2];
    GLfloat Constants[8][4];
-   GLbitfield LocalConstDef;  /**< Indicates which constants have been set */
+   GLbitfield LocalConstDef;  /** Indicates which constants have been set */
    GLubyte numArithInstr[2];
    GLubyte regsAssigned[2];
-   GLubyte NumPasses;         /**< 1 or 2 */
+   GLubyte NumPasses;         /** 1 or 2 */
    GLubyte cur_pass;
    GLubyte last_optype;
    GLboolean interpinp1;
@@ -1934,7 +1956,7 @@ struct ati_fragment_shader
 struct gl_ati_fragment_shader_state
 {
    GLboolean Enabled;
-   GLboolean _Enabled;                  /**< enabled and valid shader? */
+   GLboolean _Enabled;                      /** enabled and valid shader? */
    GLboolean Compiling;
    GLfloat GlobalConstants[8][4];
    struct ati_fragment_shader *Current;
@@ -2046,7 +2068,6 @@ struct gl_shader_program
 #define GLSL_UNIFORMS 0x10  /**< Print glUniform calls */
 #define GLSL_NOP_VERT 0x20  /**< Force no-op vertex shaders */
 #define GLSL_NOP_FRAG 0x40  /**< Force no-op fragment shaders */
-#define GLSL_USE_PROG 0x80  /**< Log glUseProgram calls */
 
 
 /**
@@ -3040,7 +3061,7 @@ struct __GLcontextRec
    struct gl_shine_tab *_ShineTabList;  /**< MRU list of inactive shine tables */
    /**@}*/
 
-   struct gl_list_extensions *ListExt; /**< driver dlist extensions */
+   struct gl_list_extensions ListExt; /**< driver dlist extensions */
 
    /** \name For debugging/development only */
    /*@{*/
@@ -3096,12 +3117,11 @@ extern int MESA_DEBUG_FLAGS;
 #endif
 
 
-/** The MESA_VERBOSE var is a bitmask of these flags */
 enum _verbose
 {
    VERBOSE_VARRAY		= 0x0001,
    VERBOSE_TEXTURE		= 0x0002,
-   VERBOSE_MATERIAL		= 0x0004,
+   VERBOSE_IMMEDIATE		= 0x0004,
    VERBOSE_PIPELINE		= 0x0008,
    VERBOSE_DRIVER		= 0x0010,
    VERBOSE_STATE		= 0x0020,
@@ -3111,12 +3131,9 @@ enum _verbose
    VERBOSE_PRIMS		= 0x0400,
    VERBOSE_VERTS		= 0x0800,
    VERBOSE_DISASSEM		= 0x1000,
-   VERBOSE_DRAW                 = 0x2000,
-   VERBOSE_SWAPBUFFERS          = 0x4000
 };
 
 
-/** The MESA_DEBUG_FLAGS var is a bitmask of these flags */
 enum _debug
 {
    DEBUG_ALWAYS_FLUSH		= 0x1

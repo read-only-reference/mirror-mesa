@@ -72,3 +72,4 @@ intel_decode.o: ../intel/intel_decode.c
 
 intel_tex_layout.o: ../intel/intel_tex_layout.c
 
+symlinks:

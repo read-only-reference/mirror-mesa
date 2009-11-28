@@ -390,8 +390,6 @@ get_shader_flags(void)
          flags |= GLSL_OPT;
       if (_mesa_strstr(env, "uniform"))
          flags |= GLSL_UNIFORMS;
-      if (_mesa_strstr(env, "useprog"))
-         flags |= GLSL_USE_PROG;
    }
 
    return flags;
@@ -1526,32 +1524,19 @@ _mesa_use_program(GLcontext *ctx, GLuint program)
       }
 
       /* debug code */
-      if (ctx->Shader.Flags & GLSL_USE_PROG) {
+      if (0) {
          GLuint i;
-         _mesa_printf("Mesa: glUseProgram(%u)\n", shProg->Name);
+         _mesa_printf("Use Shader %u\n", shProg->Name);
          for (i = 0; i < shProg->NumShaders; i++) {
-            const char *s;
-            switch (shProg->Shaders[i]->Type) {
-            case GL_VERTEX_SHADER:
-               s = "vertex";
-               break;
-            case GL_FRAGMENT_SHADER:
-               s = "fragment";
-               break;
-            case GL_GEOMETRY_SHADER:
-               s = "geometry";
-               break;
-            default:
-               s = "";
-            }
-            _mesa_printf("  %s shader %u, checksum %u\n", s, 
+            _mesa_printf(" shader %u, type 0x%x, checksum %u\n",
                          shProg->Shaders[i]->Name,
+                         shProg->Shaders[i]->Type,
                          shProg->Shaders[i]->SourceChecksum);
          }
          if (shProg->VertexProgram)
-            _mesa_printf("  vert prog %u\n", shProg->VertexProgram->Base.Id);
+            printf(" vert prog %u\n", shProg->VertexProgram->Base.Id);
          if (shProg->FragmentProgram)
-            _mesa_printf("  frag prog %u\n", shProg->FragmentProgram->Base.Id);
+            printf(" frag prog %u\n", shProg->FragmentProgram->Base.Id);
       }
    }
    else {

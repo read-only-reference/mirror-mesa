@@ -22,70 +22,59 @@
 
 #if defined(_EGL_PLATFORM_X)
 #include <dlfcn.h>
+#elif defined(_EGL_PLATFORM_WINDOWS)
+/* Use static linking on Windows for now */
+#define WINDOWS_STATIC_LINK
 #endif
-
 
 /**
  * Wrappers for dlopen/dlclose()
  */
 #if defined(_EGL_PLATFORM_WINDOWS)
+#ifdef WINDOWS_STATIC_LINK
+   static const char *DefaultDriverName = "Windows EGL Static Library";
+#else
+   /* XXX Need to decide how to do dynamic name lookup on Windows */
+   static const char *DefaultDriverName = "TBD";
+#endif
+   typedef HMODULE lib_handle;
 
+   static HMODULE
+   open_library(const char *filename)
+   {
+#ifdef WINDOWS_STATIC_LINK
+      return 0;
+#else
+      return LoadLibrary(filename);
+#endif
+   }
 
-/* XXX Need to decide how to do dynamic name lookup on Windows */
-static const char DefaultDriverName[] = "TBD";
-
-typedef HMODULE lib_handle;
-
-static HMODULE
-open_library(const char *filename)
-{
-   return LoadLibrary(filename);
-}
-
-static void
-close_library(HMODULE lib)
-{
-   FreeLibrary(lib);
-}
-
+   static void
+   close_library(HMODULE lib)
+   {
+#ifdef WINDOWS_STATIC_LINK
+#else
+      FreeLibrary(lib);
+#endif
+   }
 
 #elif defined(_EGL_PLATFORM_X)
+   static const char *DefaultDriverName = "egl_softpipe";
 
+   typedef void * lib_handle;
 
-static const char DefaultDriverName[] = "egl_softpipe";
+   static void *
+   open_library(const char *filename)
+   {
+      return dlopen(filename, RTLD_LAZY);
+   }
 
-typedef void * lib_handle;
-
-static void *
-open_library(const char *filename)
-{
-   return dlopen(filename, RTLD_LAZY);
-}
-
-static void
-close_library(void *lib)
-{
-   dlclose(lib);
-}
-
-#else /* _EGL_PLATFORM_NO_OS */
-
-static const char DefaultDriverName[] = "builtin";
-
-typedef void *lib_handle;
-
-static INLINE void *
-open_library(const char *filename)
-{
-   return (void *) filename;
-}
-
-static INLINE void
-close_library(void *lib)
-{
-}
-
-
+   static void
+   close_library(void *lib)
+   {
+      dlclose(lib);
+   }
+   
 #endif
 
 
@@ -106,22 +95,14 @@ _eglChooseDriver(_EGLDisplay *dpy, char **argsRet)
       path = _eglstrdup(path);
 
 #if defined(_EGL_PLATFORM_X)
-   if (!path && dpy && dpy->NativeDisplay) {
+   if (!path && dpy->NativeDisplay) {
       /* assume (wrongly!) that the native display is a display string */
       path = _eglSplitDisplayString((const char *) dpy->NativeDisplay, &args);
    }
    suffix = "so";
 #elif defined(_EGL_PLATFORM_WINDOWS)
    suffix = "dll";
-#else /* _EGL_PLATFORM_NO_OS */
-   if (path) {
-      /* force the use of the default driver */
-      _eglLog(_EGL_DEBUG, "ignore EGL_DRIVER");
-      free(path);
-      path = NULL;
-   }
-   suffix = NULL;
-#endif
+#endif /* _EGL_PLATFORM_X */
 
    if (!path)
       path = _eglstrdup(DefaultDriverName);
@@ -155,48 +136,43 @@ _eglChooseDriver(_EGLDisplay *dpy, char **argsRet)
 static _EGLMain_t
 _eglOpenLibrary(const char *driverPath, lib_handle *handle)
 {
+   _EGLMain_t mainFunc;
    lib_handle lib;
-   _EGLMain_t mainFunc = NULL;
-   const char *error = "unknown error";
 
    assert(driverPath);
 
+#if defined(_EGL_PLATFORM_WINDOWS)
+/* Use static linking on Windows for now */
+#ifdef WINDOWS_STATIC_LINK
+   lib = 0;
+   mainFunc = (_EGLMain_t)_eglMain;
+#else
+   /* XXX untested */
    _eglLog(_EGL_DEBUG, "dlopen(%s)", driverPath);
    lib = open_library(driverPath);
-
-#if defined(_EGL_PLATFORM_WINDOWS)
-   /* XXX untested */
-   if (lib)
-      mainFunc = (_EGLMain_t) GetProcAddress(lib, "_eglMain");
-#elif defined(_EGL_PLATFORM_X)
-   if (lib) {
-      mainFunc = (_EGLMain_t) dlsym(lib, "_eglMain");
-      if (!mainFunc)
-         error = dlerror();
-   }
-   else {
-      error = dlerror();
-   }
-#else /* _EGL_PLATFORM_NO_OS */
-   /* must be the default driver name */
-   if (strcmp(driverPath, DefaultDriverName) == 0)
-      mainFunc = (_EGLMain_t) _eglMain;
-   else
-      error = "not builtin driver";
-#endif
-
    if (!lib) {
-      _eglLog(_EGL_WARNING, "Could not open driver %s (%s)",
-              driverPath, error);
+      _eglLog(_EGL_WARNING, "Could not open %s",
+              driverPath);
+      return NULL;
+   }
+   mainFunc = (_EGLMain_t) GetProcAddress(lib, "_eglMain");
+#endif
+#elif defined(_EGL_PLATFORM_X)
+   _eglLog(_EGL_DEBUG, "dlopen(%s)", driverPath);
+   lib = open_library(driverPath);
+   if (!lib) {
+      _eglLog(_EGL_WARNING, "Could not open %s (%s)",
+              driverPath, dlerror());
       if (!getenv("EGL_DRIVER"))
          _eglLog(_EGL_WARNING,
                  "The driver can be overridden by setting EGL_DRIVER");
       return NULL;
    }
+   mainFunc = (_EGLMain_t) dlsym(lib, "_eglMain");
+#endif
 
    if (!mainFunc) {
-      _eglLog(_EGL_WARNING, "_eglMain not found in %s (%s)",
-              driverPath, error);
+      _eglLog(_EGL_WARNING, "_eglMain not found in %s", driverPath);
       if (lib)
          close_library(lib);
       return NULL;
@@ -408,7 +384,7 @@ _eglInitDriverFallbacks(_EGLDriver *drv)
    drv->API.CopyBuffers = _eglCopyBuffers;
 
    drv->API.QueryString = _eglQueryString;
-   drv->API.WaitClient = _eglWaitClient;
+   drv->API.WaitGL = _eglWaitGL;
    drv->API.WaitNative = _eglWaitNative;
 
 #ifdef EGL_MESA_screen_surface
@@ -452,11 +428,6 @@ _eglFindAPIs(void)
    const char *es2_libname = "libGLESv2.so";
    const char *gl_libname = "libGL.so";
    const char *vg_libname = "libOpenVG.so";
-#else /* _EGL_PLATFORM_NO_OS */
-   const char *es1_libname = NULL;
-   const char *es2_libname = NULL;
-   const char *gl_libname = NULL;
-   const char *vg_libname = NULL;
 #endif
 
    if ((lib = open_library(es1_libname))) {

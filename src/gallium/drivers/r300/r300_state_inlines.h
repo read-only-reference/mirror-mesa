@@ -24,8 +24,6 @@
 #ifndef R300_STATE_INLINES_H
 #define R300_STATE_INLINES_H
 
-#include "draw/draw_vertex.h"
-
 #include "pipe/p_format.h"
 
 #include "r300_reg.h"
@@ -53,7 +51,6 @@ static INLINE uint32_t r300_translate_blend_function(int blend_func)
             return R300_COMB_FCN_MAX;
         default:
             debug_printf("r300: Unknown blend function %d\n", blend_func);
-            assert(0);
             break;
     }
     return 0;
@@ -101,7 +98,6 @@ static INLINE uint32_t r300_translate_blend_factor(int blend_fact)
         case PIPE_BLENDFACTOR_INV_SRC1_ALPHA: */
         default:
             debug_printf("r300: Unknown blend factor %d\n", blend_fact);
-            assert(0);
             break;
     }
     return 0;
@@ -131,7 +127,6 @@ static INLINE uint32_t r300_translate_depth_stencil_function(int zs_func)
         default:
             debug_printf("r300: Unknown depth/stencil function %d\n",
                 zs_func);
-            assert(0);
             break;
     }
     return 0;
@@ -158,7 +153,6 @@ static INLINE uint32_t r300_translate_stencil_op(int s_op)
             return R300_ZS_INVERT;
         default:
             debug_printf("r300: Unknown stencil op %d", s_op);
-            assert(0);
             break;
     }
     return 0;
@@ -185,7 +179,6 @@ static INLINE uint32_t r300_translate_alpha_function(int alpha_func)
             return R300_FG_ALPHA_FUNC_ALWAYS;
         default:
             debug_printf("r300: Unknown alpha function %d", alpha_func);
-            assert(0);
             break;
     }
     return 0;
@@ -214,7 +207,6 @@ static INLINE uint32_t r300_translate_wrap(int wrap)
             return R300_TX_CLAMP_TO_EDGE | R300_TX_MIRRORED;
         default:
             debug_printf("r300: Unknown texture wrap %d", wrap);
-            assert(0);
             return 0;
     }
 }
@@ -234,7 +226,6 @@ static INLINE uint32_t r300_translate_tex_filters(int min, int mag, int mip)
             break;
         default:
             debug_printf("r300: Unknown texture filter %d\n", min);
-            assert(0);
             break;
     }
     switch (mag) {
@@ -249,7 +240,6 @@ static INLINE uint32_t r300_translate_tex_filters(int min, int mag, int mip)
             break;
         default:
             debug_printf("r300: Unknown texture filter %d\n", mag);
-            assert(0);
             break;
     }
     switch (mip) {
@@ -264,7 +254,6 @@ static INLINE uint32_t r300_translate_tex_filters(int min, int mag, int mip)
             break;
         default:
             debug_printf("r300: Unknown texture filter %d\n", mip);
-            assert(0);
             break;
     }
 
@@ -288,8 +277,6 @@ static INLINE uint32_t r300_anisotropy(float max_aniso)
 
 /* Buffer formats. */
 
-/* Colorbuffer formats. This is the unswizzled format of the RB3D block's
- * output. For the swizzling of the targets, check the shader's format. */
 static INLINE uint32_t r300_translate_colorformat(enum pipe_format format)
 {
     switch (format) {
@@ -308,6 +295,7 @@ static INLINE uint32_t r300_translate_colorformat(enum pipe_format format)
         case PIPE_FORMAT_X8R8G8B8_UNORM:
         case PIPE_FORMAT_R8G8B8A8_UNORM:
         case PIPE_FORMAT_R8G8B8X8_UNORM:
+        case PIPE_FORMAT_Z24S8_UNORM:
             return R300_COLOR_FORMAT_ARGB8888;
         /* XXX Not in pipe_format
         case PIPE_FORMAT_A32R32G32B32:
@@ -324,21 +312,17 @@ static INLINE uint32_t r300_translate_colorformat(enum pipe_format format)
             debug_printf("r300: Implementation error: "
                 "Got unsupported color format %s in %s\n",
                 pf_name(format), __FUNCTION__);
-            assert(0);
             break;
     }
     return 0;
 }
 
-/* Depthbuffer and stencilbuffer. Thankfully, we only support two flavors. */
 static INLINE uint32_t r300_translate_zsformat(enum pipe_format format)
 {
     switch (format) {
         /* 16-bit depth, no stencil */
         case PIPE_FORMAT_Z16_UNORM:
             return R300_DEPTHFORMAT_16BIT_INT_Z;
-        /* 24-bit depth, ignored stencil */
-        case PIPE_FORMAT_Z24X8_UNORM:
         /* 24-bit depth, 8-bit stencil */
         case PIPE_FORMAT_Z24S8_UNORM:
             return R300_DEPTHFORMAT_24BIT_INT_Z_8BIT_STENCIL;
@@ -346,22 +330,18 @@ static INLINE uint32_t r300_translate_zsformat(enum pipe_format format)
             debug_printf("r300: Implementation error: "
                 "Got unsupported ZS format %s in %s\n",
                 pf_name(format), __FUNCTION__);
-            assert(0);
             break;
     }
     return 0;
 }
 
-/* Shader output formats. This is essentially the swizzle from the shader
- * to the RB3D block.
- *
+/* Translate pipe_format into US_OUT_FMT.
  * Note that formats are stored from C3 to C0. */
 static INLINE uint32_t r300_translate_out_fmt(enum pipe_format format)
 {
     switch (format) {
         case PIPE_FORMAT_A8R8G8B8_UNORM:
         case PIPE_FORMAT_X8R8G8B8_UNORM:
-        /* XXX */
         case PIPE_FORMAT_Z24S8_UNORM:
             return R300_US_OUT_FMT_C4_8 |
                 R300_C0_SEL_B | R300_C1_SEL_G |
@@ -375,7 +355,6 @@ static INLINE uint32_t r300_translate_out_fmt(enum pipe_format format)
             debug_printf("r300: Implementation error: "
                 "Got unsupported output format %s in %s\n",
                 pf_name(format), __FUNCTION__);
-            assert(0);
             return R300_US_OUT_FMT_UNUSED;
     }
     return 0;
@@ -402,57 +381,31 @@ static INLINE uint32_t r300_translate_gb_pipes(int pipe_count)
     return 0;
 }
 
-/* Translate pipe_formats into PSC vertex types. */
-static INLINE uint16_t
-r300_translate_vertex_data_type(enum pipe_format format) {
-    switch (format) {
-        case PIPE_FORMAT_R32_FLOAT:
+static INLINE uint32_t translate_vertex_data_type(int type) {
+    switch (type) {
+        case EMIT_1F:
+        case EMIT_1F_PSIZE:
             return R300_DATA_TYPE_FLOAT_1;
             break;
-        case PIPE_FORMAT_R32G32_FLOAT:
+        case EMIT_2F:
             return R300_DATA_TYPE_FLOAT_2;
             break;
-        case PIPE_FORMAT_R32G32B32_FLOAT:
+        case EMIT_3F:
             return R300_DATA_TYPE_FLOAT_3;
             break;
-        case PIPE_FORMAT_R32G32B32A32_FLOAT:
+        case EMIT_4F:
             return R300_DATA_TYPE_FLOAT_4;
             break;
-        case PIPE_FORMAT_R8G8B8A8_UNORM:
-            return R300_DATA_TYPE_BYTE |
-                R300_NORMALIZE;
+        case EMIT_4UB:
+            return R300_DATA_TYPE_BYTE;
             break;
         default:
             debug_printf("r300: Implementation error: "
-                    "Bad vertex data format %s!\n", pf_name(format));
+                    "Bad vertex data type!\n");
             assert(0);
             break;
     }
-    return 0;
-}
 
-static INLINE uint16_t
-r300_translate_vertex_data_swizzle(enum pipe_format format) {
-    switch (format) {
-        case PIPE_FORMAT_R32_FLOAT:
-            return R300_VAP_SWIZZLE_X001;
-            break;
-        case PIPE_FORMAT_R32G32_FLOAT:
-            return R300_VAP_SWIZZLE_XY01;
-            break;
-        case PIPE_FORMAT_R32G32B32_FLOAT:
-            return R300_VAP_SWIZZLE_XYZ1;
-            break;
-        case PIPE_FORMAT_R32G32B32A32_FLOAT:
-        case PIPE_FORMAT_R8G8B8A8_UNORM:
-            return R300_VAP_SWIZZLE_XYZW;
-            break;
-        default:
-            debug_printf("r300: Implementation error: "
-                    "Bad vertex data format %s!\n", pf_name(format));
-            assert(0);
-            break;
-    }
     return 0;
 }
 

@@ -135,19 +135,15 @@ GLboolean Find_Instruction_Dependencies_fp(struct r700_fragment_program *fp,
 {
     GLuint i, j;
     GLint * puiTEMPwrites;
-    GLint * puiTEMPreads;
     struct prog_instruction * pILInst;
     InstDeps         *pInstDeps;
     struct prog_instruction * texcoord_DepInst;
     GLint              nDepInstID;
 
     puiTEMPwrites = (GLint*) MALLOC(sizeof(GLuint)*mesa_fp->Base.NumTemporaries);
-    puiTEMPreads = (GLint*) MALLOC(sizeof(GLuint)*mesa_fp->Base.NumTemporaries);
-
     for(i=0; i<mesa_fp->Base.NumTemporaries; i++)
     {
         puiTEMPwrites[i] = -1;
-        puiTEMPreads[i] = -1;
     }
 
     pInstDeps = (InstDeps*)MALLOC(sizeof(InstDeps)*mesa_fp->Base.NumInstructions);
@@ -171,11 +167,6 @@ GLboolean Find_Instruction_Dependencies_fp(struct r700_fragment_program *fp,
             {
                 //Set dep.
                 pInstDeps[i].nSrcDeps[j] = puiTEMPwrites[pILInst->SrcReg[j].Index];
-                //Set first read
-                if(puiTEMPreads[pILInst->SrcReg[j].Index] < 0 )
-                {
-                    puiTEMPreads[pILInst->SrcReg[j].Index] = i;
-                }
             }
             else
             {
@@ -185,6 +176,8 @@ GLboolean Find_Instruction_Dependencies_fp(struct r700_fragment_program *fp,
     }
 
     fp->r700AsmCode.pInstDeps = pInstDeps;
+
+    FREE(puiTEMPwrites);
 
     //Find dep for tex inst    
     for(i=0; i<mesa_fp->Base.NumInstructions; i++)
@@ -210,24 +203,8 @@ GLboolean Find_Instruction_Dependencies_fp(struct r700_fragment_program *fp,
                 {   //... other deps?
                 }
             }
-            // make sure that we dont overwrite src used earlier
-            nDepInstID = puiTEMPreads[pILInst->DstReg.Index];
-            if(nDepInstID < i)
-            {
-                pInstDeps[i].nDstDep = puiTEMPreads[pILInst->DstReg.Index];
-                texcoord_DepInst = &(mesa_fp->Base.Instructions[nDepInstID]);
-                if(GL_TRUE == IsAlu(texcoord_DepInst->Opcode) )
-                {
-                    pInstDeps[nDepInstID].nDstDep = i;
-                }
- 
-            }
-
         }
 	}
-
-    FREE(puiTEMPwrites);
-    FREE(puiTEMPreads);
 
     return GL_TRUE;
 }
@@ -274,15 +251,7 @@ GLboolean r700TranslateFragmentShader(struct r700_fragment_program *fp,
 		number_of_colors_exported--;
 	}
 
-	/* illegal to set this to 0 */
-	if(number_of_colors_exported || z_enabled)
-	{
-	    fp->r700Shader.exportMode = number_of_colors_exported << 1 | z_enabled;
-	}
-	else
-	{
-	    fp->r700Shader.exportMode = (1 << 1);
-	}
+	fp->r700Shader.exportMode = number_of_colors_exported << 1 | z_enabled;
 
     fp->translated = GL_TRUE;
 

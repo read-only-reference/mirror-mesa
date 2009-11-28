@@ -40,7 +40,6 @@
 #include "lp_context.h"
 #include "lp_state.h"
 #include "lp_texture.h"
-#include "lp_tex_cache.h"
 #include "lp_screen.h"
 #include "lp_winsys.h"
 
@@ -66,24 +65,16 @@ llvmpipe_texture_layout(struct llvmpipe_screen *screen,
    pf_get_block(lpt->base.format, &lpt->base.block);
 
    for (level = 0; level <= pt->last_level; level++) {
-      unsigned nblocksx, nblocksy;
-
       pt->width[level] = width;
       pt->height[level] = height;
       pt->depth[level] = depth;
       pt->nblocksx[level] = pf_get_nblocksx(&pt->block, width);  
-      pt->nblocksy[level] = pf_get_nblocksy(&pt->block, height);
-
-      /* Allocate storage for whole quads. This is particularly important
-       * for depth surfaces, which are currently stored in a swizzled format. */
-      nblocksx = pf_get_nblocksx(&pt->block, align(width, 2));
-      nblocksy = pf_get_nblocksy(&pt->block, align(height, 2));
-
-      lpt->stride[level] = align(nblocksx*pt->block.size, 16);
+      pt->nblocksy[level] = pf_get_nblocksy(&pt->block, height);  
+      lpt->stride[level] = align(pt->nblocksx[level]*pt->block.size, 16);
 
       lpt->level_offset[level] = buffer_size;
 
-      buffer_size += (nblocksy *
+      buffer_size += (pt->nblocksy[level] *
                       ((pt->target == PIPE_TEXTURE_CUBE) ? 6 : depth) *
                       lpt->stride[level]);
 
@@ -249,7 +240,7 @@ llvmpipe_get_tex_surface(struct pipe_screen *screen,
 
       if (ps->usage & (PIPE_BUFFER_USAGE_CPU_WRITE |
                        PIPE_BUFFER_USAGE_GPU_WRITE)) {
-         /* Mark the surface as dirty.  The tile cache will look for this. */
+         /* Mark the surface as dirty. */
          lpt->timestamp++;
          llvmpipe_screen(screen)->timestamp++;
       }
@@ -376,7 +367,6 @@ llvmpipe_transfer_map( struct pipe_screen *_screen,
    if (transfer->texture && (transfer->usage & PIPE_TRANSFER_WRITE))
    {
       /* Do something to notify sharing contexts of a texture change.
-       * In llvmpipe, that would mean flushing the texture cache.
        */
       screen->timestamp++;
    }

@@ -128,7 +128,6 @@ typedef struct R700_Shader
 
 //Internal
 void AddInstToList(TypedShaderList * plstCFInstructions, R700ShaderInstruction * pInst);
-void TakeInstOutFromList(TypedShaderList * plstCFInstructions, R700ShaderInstruction * pInst);
 void ResolveLinks(R700_Shader *pShader);
 void Assemble(R700_Shader *pShader);
 

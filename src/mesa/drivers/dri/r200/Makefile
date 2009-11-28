@@ -66,3 +66,4 @@ include ../Makefile.template
 
 #INCLUDES += -I../radeon/server
 
+symlinks:

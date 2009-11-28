@@ -47,7 +47,7 @@
 #include "util/u_hash_table.h"
 
 
-struct util_hash_table
+struct hash_table
 {
    struct cso_hash *cso;   
    
@@ -61,27 +61,27 @@ struct util_hash_table
 };
 
 
-struct util_hash_table_item
+struct hash_table_item
 {
    void *key;
    void *value;
 };
 
 
-static INLINE struct util_hash_table_item *
-util_hash_table_item(struct cso_hash_iter iter)
+static INLINE struct hash_table_item *
+hash_table_item(struct cso_hash_iter iter)
 {
-   return (struct util_hash_table_item *)cso_hash_iter_data(iter);
+   return (struct hash_table_item *)cso_hash_iter_data(iter);
 }
 
 
-struct util_hash_table *
-util_hash_table_create(unsigned (*hash)(void *key),
-                       int (*compare)(void *key1, void *key2))
+struct hash_table *
+hash_table_create(unsigned (*hash)(void *key),
+                  int (*compare)(void *key1, void *key2))
 {
-   struct util_hash_table *ht;
+   struct hash_table *ht;
    
-   ht = MALLOC_STRUCT(util_hash_table);
+   ht = MALLOC_STRUCT(hash_table);
    if(!ht)
       return NULL;
    
@@ -99,16 +99,16 @@ util_hash_table_create(unsigned (*hash)(void *key),
 
 
 static INLINE struct cso_hash_iter
-util_hash_table_find_iter(struct util_hash_table *ht,
-                          void *key,
-                          unsigned key_hash)
+hash_table_find_iter(struct hash_table *ht,
+                     void *key, 
+                     unsigned key_hash)
 {
    struct cso_hash_iter iter;
-   struct util_hash_table_item *item;
+   struct hash_table_item *item;
    
    iter = cso_hash_find(ht->cso, key_hash);
    while (!cso_hash_iter_is_null(iter)) {
-      item = (struct util_hash_table_item *)cso_hash_iter_data(iter);
+      item = (struct hash_table_item *)cso_hash_iter_data(iter);
       if (!ht->compare(item->key, key))
          break;
       iter = cso_hash_iter_next(iter);
@@ -118,17 +118,17 @@ util_hash_table_find_iter(struct util_hash_table *ht,
 }
 
 
-static INLINE struct util_hash_table_item *
-util_hash_table_find_item(struct util_hash_table *ht,
-                          void *key,
-                          unsigned key_hash)
+static INLINE struct hash_table_item *
+hash_table_find_item(struct hash_table *ht,
+                     void *key, 
+                     unsigned key_hash)
 {
    struct cso_hash_iter iter;
-   struct util_hash_table_item *item;
+   struct hash_table_item *item;
    
    iter = cso_hash_find(ht->cso, key_hash);
    while (!cso_hash_iter_is_null(iter)) {
-      item = (struct util_hash_table_item *)cso_hash_iter_data(iter);
+      item = (struct hash_table_item *)cso_hash_iter_data(iter);
       if (!ht->compare(item->key, key))
          return item;
       iter = cso_hash_iter_next(iter);
@@ -139,12 +139,12 @@ util_hash_table_find_item(struct util_hash_table *ht,
 
 
 enum pipe_error
-util_hash_table_set(struct util_hash_table *ht,
-                    void *key,
-                    void *value)
+hash_table_set(struct hash_table *ht,
+               void *key,
+               void *value)
 {
    unsigned key_hash;
-   struct util_hash_table_item *item;
+   struct hash_table_item *item;
    struct cso_hash_iter iter;
 
    assert(ht);
@@ -153,14 +153,14 @@ util_hash_table_set(struct util_hash_table *ht,
 
    key_hash = ht->hash(key);
 
-   item = util_hash_table_find_item(ht, key, key_hash);
+   item = hash_table_find_item(ht, key, key_hash);
    if(item) {
       /* TODO: key/value destruction? */
       item->value = value;
       return PIPE_OK;
    }
    
-   item = MALLOC_STRUCT(util_hash_table_item);
+   item = MALLOC_STRUCT(hash_table_item);
    if(!item)
       return PIPE_ERROR_OUT_OF_MEMORY;
    
@@ -178,11 +178,11 @@ util_hash_table_set(struct util_hash_table *ht,
 
 
 void *
-util_hash_table_get(struct util_hash_table *ht,
-                    void *key)
+hash_table_get(struct hash_table *ht, 
+               void *key)
 {
    unsigned key_hash;
-   struct util_hash_table_item *item;
+   struct hash_table_item *item;
 
    assert(ht);
    if (!ht)
@@ -190,7 +190,7 @@ util_hash_table_get(struct util_hash_table *ht,
 
    key_hash = ht->hash(key);
 
-   item = util_hash_table_find_item(ht, key, key_hash);
+   item = hash_table_find_item(ht, key, key_hash);
    if(!item)
       return NULL;
    
@@ -199,12 +199,12 @@ util_hash_table_get(struct util_hash_table *ht,
 
 
 void
-util_hash_table_remove(struct util_hash_table *ht,
-                       void *key)
+hash_table_remove(struct hash_table *ht, 
+                  void *key)
 {
    unsigned key_hash;
    struct cso_hash_iter iter;
-   struct util_hash_table_item *item;
+   struct hash_table_item *item;
 
    assert(ht);
    if (!ht)
@@ -212,11 +212,11 @@ util_hash_table_remove(struct util_hash_table *ht,
 
    key_hash = ht->hash(key);
 
-   iter = util_hash_table_find_iter(ht, key, key_hash);
+   iter = hash_table_find_iter(ht, key, key_hash);
    if(cso_hash_iter_is_null(iter))
       return;
    
-   item = util_hash_table_item(iter);
+   item = hash_table_item(iter);
    assert(item);
    FREE(item);
    
@@ -225,10 +225,10 @@ util_hash_table_remove(struct util_hash_table *ht,
 
 
 void 
-util_hash_table_clear(struct util_hash_table *ht)
+hash_table_clear(struct hash_table *ht)
 {
    struct cso_hash_iter iter;
-   struct util_hash_table_item *item;
+   struct hash_table_item *item;
 
    assert(ht);
    if (!ht)
@@ -236,7 +236,7 @@ util_hash_table_clear(struct util_hash_table *ht)
 
    iter = cso_hash_first_node(ht->cso);
    while (!cso_hash_iter_is_null(iter)) {
-      item = (struct util_hash_table_item *)cso_hash_take(ht->cso, cso_hash_iter_key(iter));
+      item = (struct hash_table_item *)cso_hash_take(ht->cso, cso_hash_iter_key(iter));
       FREE(item);
       iter = cso_hash_first_node(ht->cso);
    }
@@ -244,13 +244,12 @@ util_hash_table_clear(struct util_hash_table *ht)
 
 
 enum pipe_error
-util_hash_table_foreach(struct util_hash_table *ht,
-                     enum pipe_error (*callback)
-                        (void *key, void *value, void *data),
-                     void *data)
+hash_table_foreach(struct hash_table *ht,
+                   enum pipe_error (*callback)(void *key, void *value, void *data),
+                   void *data)
 {
    struct cso_hash_iter iter;
-   struct util_hash_table_item *item;
+   struct hash_table_item *item;
    enum pipe_error result;
 
    assert(ht);
@@ -259,7 +258,7 @@ util_hash_table_foreach(struct util_hash_table *ht,
 
    iter = cso_hash_first_node(ht->cso);
    while (!cso_hash_iter_is_null(iter)) {
-      item = (struct util_hash_table_item *)cso_hash_iter_data(iter);
+      item = (struct hash_table_item *)cso_hash_iter_data(iter);
       result = callback(item->key, item->value, data);
       if(result != PIPE_OK)
 	 return result;
@@ -271,10 +270,10 @@ util_hash_table_foreach(struct util_hash_table *ht,
 
 
 void
-util_hash_table_destroy(struct util_hash_table *ht)
+hash_table_destroy(struct hash_table *ht)
 {
    struct cso_hash_iter iter;
-   struct util_hash_table_item *item;
+   struct hash_table_item *item;
 
    assert(ht);
    if (!ht)
@@ -282,7 +281,7 @@ util_hash_table_destroy(struct util_hash_table *ht)
 
    iter = cso_hash_first_node(ht->cso);
    while (!cso_hash_iter_is_null(iter)) {
-      item = (struct util_hash_table_item *)cso_hash_iter_data(iter);
+      item = (struct hash_table_item *)cso_hash_iter_data(iter);
       FREE(item);
       iter = cso_hash_iter_next(iter);
    }

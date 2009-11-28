@@ -51,8 +51,6 @@
 
 #define DRV_ERROR(msg)	xf86DrvMsg(pScrn->scrnIndex, X_ERROR, msg);
 
-struct exa_context;
-
 typedef struct
 {
     int lastInstance;
@@ -92,10 +90,9 @@ typedef struct _modesettingRec
     struct pipe_context *ctx;
     boolean d_depth_bits_last;
     boolean ds_depth_bits_last;
-    struct pipe_texture *root_texture;
 
     /* exa */
-    struct exa_context *exa;
+    void *exa;
     Bool noEvict;
     Bool debug_fallback;
 
@@ -121,14 +118,6 @@ xorg_exa_set_displayed_usage(PixmapPtr pPixmap);
 
 int
 xorg_exa_set_shared_usage(PixmapPtr pPixmap);
-
-Bool
-xorg_exa_set_texture(PixmapPtr pPixmap, struct  pipe_texture *tex);
-
-struct pipe_texture *
-xorg_exa_create_root_texture(ScrnInfoPtr pScrn,
-			     int width, int height,
-			     int depth, int bpp);
 
 void *
 xorg_exa_init(ScrnInfoPtr pScrn);

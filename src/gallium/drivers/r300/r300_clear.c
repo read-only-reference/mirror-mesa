@@ -21,9 +21,6 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE. */
 
 #include "r300_clear.h"
-#include "r300_context.h"
-
-#include "util/u_clear.h"
 
 /* Clears currently bound buffers. */
 void r300_clear(struct pipe_context* pipe,

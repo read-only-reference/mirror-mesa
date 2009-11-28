@@ -1,7 +1,7 @@
 #ifndef XORG_EXA_TGSI_H
 #define XORG_EXA_TGSI_H
 
-#include "xorg_renderer.h"
+#include "xorg_exa.h"
 
 enum xorg_vs_traits {
    VS_COMPOSITE        = 1 << 0,
@@ -23,8 +23,7 @@ enum xorg_fs_traits {
    FS_RADGRAD_FILL     = 1 << 4,
    FS_FILL             = (FS_SOLID_FILL |
                           FS_LINGRAD_FILL |
-                          FS_RADGRAD_FILL),
-   FS_COMPONENT_ALPHA  = 1 << 5
+                          FS_RADGRAD_FILL)
 };
 
 struct xorg_shader {
@@ -34,7 +33,7 @@ struct xorg_shader {
 
 struct xorg_shaders;
 
-struct xorg_shaders *xorg_shaders_create(struct xorg_renderer *renderer);
+struct xorg_shaders *xorg_shaders_create(struct exa_context *exa);
 void xorg_shaders_destroy(struct xorg_shaders *shaders);
 
 struct xorg_shader xorg_shaders_get(struct xorg_shaders *shaders,

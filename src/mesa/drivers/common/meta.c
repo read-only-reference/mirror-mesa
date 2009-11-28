@@ -303,10 +303,40 @@ _mesa_meta_init(GLcontext *ctx)
 void
 _mesa_meta_free(GLcontext *ctx)
 {
-   /* Note: Any textures, VBOs, etc, that we allocate should get
-    * freed by the normal context destruction code.  But this would be
-    * the place to free other meta data someday.
-    */
+   struct gl_meta_state *meta = ctx->Meta;
+
+   if (_mesa_get_current_context()) {
+      /* if there's no current context, these textures, buffers, etc should
+       * still get freed by _mesa_free_context_data().
+       */
+
+      /* the temporary texture */
+      _mesa_DeleteTextures(1, &meta->TempTex.TexObj);
+
+      /* glBlitFramebuffer */
+      _mesa_DeleteBuffersARB(1, & meta->Blit.VBO);
+      _mesa_DeleteVertexArraysAPPLE(1, &meta->Blit.ArrayObj);
+      _mesa_DeletePrograms(1, &meta->Blit.DepthFP);
+
+      /* glClear */
+      _mesa_DeleteBuffersARB(1, & meta->Clear.VBO);
+      _mesa_DeleteVertexArraysAPPLE(1, &meta->Clear.ArrayObj);
+
+      /* glCopyPixels */
+      _mesa_DeleteBuffersARB(1, & meta->CopyPix.VBO);
+      _mesa_DeleteVertexArraysAPPLE(1, &meta->CopyPix.ArrayObj);
+
+      /* glDrawPixels */
+      _mesa_DeleteVertexArraysAPPLE(1, &meta->DrawPix.ArrayObj);
+      _mesa_DeletePrograms(1, &meta->DrawPix.DepthFP);
+      _mesa_DeletePrograms(1, &meta->DrawPix.StencilFP);
+
+      /* glBitmap */
+      _mesa_DeleteBuffersARB(1, & meta->Bitmap.VBO);
+      _mesa_DeleteVertexArraysAPPLE(1, &meta->Bitmap.ArrayObj);
+      _mesa_DeleteTextures(1, &meta->Bitmap.Tex.TexObj);
+   }
+
    _mesa_free(ctx->Meta);
    ctx->Meta = NULL;
 }
@@ -1048,13 +1078,8 @@ blitframebuffer_texture(GLcontext *ctx,
 
       if (readAtt && readAtt->Texture) {
          const struct gl_texture_object *texObj = readAtt->Texture;
-         const GLuint srcLevel = readAtt->TextureLevel;
          const GLenum minFilterSave = texObj->MinFilter;
          const GLenum magFilterSave = texObj->MagFilter;
-         const GLint baseLevelSave = texObj->BaseLevel;
-         const GLint maxLevelSave = texObj->MaxLevel;
-         const GLenum wrapSSave = texObj->WrapS;
-         const GLenum wrapTSave = texObj->WrapT;
          const GLenum target = texObj->Target;
 
          if (drawAtt->Texture == readAtt->Texture) {
@@ -1080,11 +1105,8 @@ blitframebuffer_texture(GLcontext *ctx,
          _mesa_BindTexture(target, texObj->Name);
          _mesa_TexParameteri(target, GL_TEXTURE_MIN_FILTER, filter);
          _mesa_TexParameteri(target, GL_TEXTURE_MAG_FILTER, filter);
-         _mesa_TexParameteri(target, GL_TEXTURE_BASE_LEVEL, srcLevel);
-         _mesa_TexParameteri(target, GL_TEXTURE_MAX_LEVEL, srcLevel);
-         _mesa_TexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-         _mesa_TexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
          _mesa_TexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+         /*_mesa_set_enable(ctx, GL_TEXTURE_RECTANGLE, GL_FALSE);*/
          _mesa_set_enable(ctx, target, GL_TRUE);
 
          /* Prepare vertex data (the VBO was previously created and bound) */
@@ -1097,7 +1119,8 @@ blitframebuffer_texture(GLcontext *ctx,
 
             if (target == GL_TEXTURE_2D) {
                const struct gl_texture_image *texImage
-                   = _mesa_select_tex_image(ctx, texObj, target, srcLevel);
+                   = _mesa_select_tex_image(ctx, texObj, target,
+                                            readAtt->TextureLevel);
                s0 = srcX0 / (float) texImage->Width;
                s1 = srcX1 / (float) texImage->Width;
                t0 = srcY0 / (float) texImage->Height;
@@ -1134,15 +1157,11 @@ blitframebuffer_texture(GLcontext *ctx,
 
          _mesa_DrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
-         /* Restore texture object state, the texture binding will
+         /* Restore texture's filter state, the texture binding will
           * be restored by _mesa_meta_end().
           */
          _mesa_TexParameteri(target, GL_TEXTURE_MIN_FILTER, minFilterSave);
          _mesa_TexParameteri(target, GL_TEXTURE_MAG_FILTER, magFilterSave);
-         _mesa_TexParameteri(target, GL_TEXTURE_BASE_LEVEL, baseLevelSave);
-         _mesa_TexParameteri(target, GL_TEXTURE_MAX_LEVEL, maxLevelSave);
-         _mesa_TexParameteri(target, GL_TEXTURE_WRAP_S, wrapSSave);
-         _mesa_TexParameteri(target, GL_TEXTURE_WRAP_T, wrapTSave);
 
          /* Done with color buffer */
          mask &= ~GL_COLOR_BUFFER_BIT;
@@ -1346,6 +1365,8 @@ _mesa_meta_Clear(GLcontext *ctx, GLbitfield buffers)
       /* create vertex array buffer */
       _mesa_GenBuffersARB(1, &clear->VBO);
       _mesa_BindBufferARB(GL_ARRAY_BUFFER_ARB, clear->VBO);
+      _mesa_BufferDataARB(GL_ARRAY_BUFFER_ARB, sizeof(verts),
+                          NULL, GL_DYNAMIC_DRAW_ARB);
 
       /* setup vertex arrays */
       _mesa_VertexPointer(3, GL_FLOAT, sizeof(struct vertex), OFFSET(x));
@@ -1421,8 +1442,7 @@ _mesa_meta_Clear(GLcontext *ctx, GLbitfield buffers)
       }
 
       /* upload new vertex data */
-      _mesa_BufferDataARB(GL_ARRAY_BUFFER_ARB, sizeof(verts), verts,
-			  GL_DYNAMIC_DRAW_ARB);
+      _mesa_BufferSubDataARB(GL_ARRAY_BUFFER_ARB, 0, sizeof(verts), verts);
    }
 
    /* draw quad */
@@ -2063,63 +2083,21 @@ _mesa_meta_Bitmap(GLcontext *ctx,
  * Check if the call to _mesa_meta_GenerateMipmap() will require a
  * software fallback.  The fallback path will require that the texture
  * images are mapped.
- * \return GL_TRUE if a fallback is needed, GL_FALSE otherwise
  */
 GLboolean
 _mesa_meta_check_generate_mipmap_fallback(GLcontext *ctx, GLenum target,
                                           struct gl_texture_object *texObj)
 {
-   const GLuint fboSave = ctx->DrawBuffer->Name;
-   struct gen_mipmap_state *mipmap = &ctx->Meta->Mipmap;
-   struct gl_texture_image *baseImage;
-   GLuint srcLevel;
-   GLenum status;
+   struct gl_texture_image *baseImage =
+      _mesa_select_tex_image(ctx, texObj, target, texObj->BaseLevel);
 
    /* check for fallbacks */
    if (!ctx->Extensions.EXT_framebuffer_object ||
-       target == GL_TEXTURE_3D) {
+       target == GL_TEXTURE_3D ||
+       !baseImage ||
+       baseImage->IsCompressed) {
       return GL_TRUE;
    }
-
-   srcLevel = texObj->BaseLevel;
-   baseImage = _mesa_select_tex_image(ctx, texObj, target, srcLevel);
-   if (!baseImage || baseImage->IsCompressed) {
-      return GL_TRUE;
-   }
-
-   /*
-    * Test that we can actually render in the texture's format.
-    */
-   if (!mipmap->FBO)
-      _mesa_GenFramebuffersEXT(1, &mipmap->FBO);
-   _mesa_BindFramebufferEXT(GL_FRAMEBUFFER_EXT, mipmap->FBO);
-
-   if (target == GL_TEXTURE_1D) {
-      _mesa_FramebufferTexture1DEXT(GL_FRAMEBUFFER_EXT,
-                                    GL_COLOR_ATTACHMENT0_EXT,
-                                    target, texObj->Name, srcLevel);
-   }
-   else if (target == GL_TEXTURE_3D) {
-      GLint zoffset = 0;
-      _mesa_FramebufferTexture3DEXT(GL_FRAMEBUFFER_EXT,
-                                    GL_COLOR_ATTACHMENT0_EXT,
-                                    target, texObj->Name, srcLevel, zoffset);
-   }
-   else {
-      /* 2D / cube */
-      _mesa_FramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT,
-                                    GL_COLOR_ATTACHMENT0_EXT,
-                                    target, texObj->Name, srcLevel);
-   }
-
-   status = _mesa_CheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
-
-   _mesa_BindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboSave);
-
-   if (status != GL_FRAMEBUFFER_COMPLETE_EXT) {
-      return GL_TRUE;
-   }
-
    return GL_FALSE;
 }
 
@@ -2193,8 +2171,10 @@ _mesa_meta_GenerateMipmap(GLcontext *ctx, GLenum target,
    }
 
    if (!mipmap->FBO) {
+      /* Bind the new renderbuffer to the color attachment point. */
       _mesa_GenFramebuffersEXT(1, &mipmap->FBO);
    }
+
    _mesa_BindFramebufferEXT(GL_FRAMEBUFFER_EXT, mipmap->FBO);
 
    _mesa_TexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -2397,7 +2377,7 @@ _mesa_meta_GenerateMipmap(GLcontext *ctx, GLenum target,
       _mesa_DrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
 
       /* sanity check */
-      status = _mesa_CheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+      status = _mesa_CheckFramebufferStatusEXT (GL_FRAMEBUFFER_EXT);
       if (status != GL_FRAMEBUFFER_COMPLETE_EXT) {
          abort();
          break;

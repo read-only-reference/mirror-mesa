@@ -55,3 +55,4 @@ X86_SOURCES =
 
 include ../Makefile.template
 
+symlinks:

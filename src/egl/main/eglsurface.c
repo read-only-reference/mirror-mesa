@@ -15,22 +15,6 @@
 #include "eglsurface.h"
 
 
-static void
-_eglClampSwapInterval(_EGLSurface *surf, EGLint interval)
-{
-   EGLint bound = GET_CONFIG_ATTRIB(surf->Config, EGL_MAX_SWAP_INTERVAL);
-   if (interval >= bound) {
-      interval = bound;
-   }
-   else {
-      bound = GET_CONFIG_ATTRIB(surf->Config, EGL_MIN_SWAP_INTERVAL);
-      if (interval < bound)
-         interval = bound;
-   }
-   surf->SwapInterval = interval;
-}
-
-
 /**
  * Do error check on parameters and initialize the given _EGLSurface object.
  * \return EGL_TRUE if no errors, EGL_FALSE otherwise.
@@ -210,9 +194,7 @@ _eglInitSurface(_EGLDriver *drv, _EGLSurface *surf, EGLint type,
    surf->TextureTarget = texTarget;
    surf->MipmapTexture = mipmapTex;
    surf->MipmapLevel = 0;
-   /* the default swap interval is 1 */
-   _eglClampSwapInterval(surf, 1);
-
+   surf->SwapInterval = 0;
 #ifdef EGL_VERSION_1_2
    surf->SwapBehavior = EGL_BUFFER_DESTROYED; /* XXX ok? */
    surf->HorizontalResolution = EGL_UNKNOWN; /* set by caller */
@@ -484,10 +466,11 @@ _eglReleaseTexImage(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surface,
 
 
 EGLBoolean
-_eglSwapInterval(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf,
-                 EGLint interval)
+_eglSwapInterval(_EGLDriver *drv, _EGLDisplay *dpy, EGLint interval)
 {
-   _eglClampSwapInterval(surf, interval);
+   _EGLSurface *surf = _eglGetCurrentSurface(EGL_DRAW);
+   if (surf)
+      surf->SwapInterval = interval;
    return EGL_TRUE;
 }
 

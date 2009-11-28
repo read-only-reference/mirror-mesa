@@ -1196,16 +1196,12 @@ getFallbackString(GLuint bit)
 
 
 
-/**
- * Enable/disable a fallback flag.
- * \param bit  one of INTEL_FALLBACK_x flags.
- */
 void
-intelFallback(struct intel_context *intel, GLbitfield bit, GLboolean mode)
+intelFallback(struct intel_context *intel, GLuint bit, GLboolean mode)
 {
    GLcontext *ctx = &intel->ctx;
    TNLcontext *tnl = TNL_CONTEXT(ctx);
-   const GLbitfield oldfallback = intel->Fallback;
+   GLuint oldfallback = intel->Fallback;
 
    if (mode) {
       intel->Fallback |= bit;

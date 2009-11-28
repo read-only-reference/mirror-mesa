@@ -61,7 +61,43 @@ static void r700UpdatePolygonMode(GLcontext * ctx);
 static void r700SetPolygonOffsetState(GLcontext * ctx, GLboolean state);
 static void r700SetStencilState(GLcontext * ctx, GLboolean state);
 
-void r700UpdateShaders(GLcontext * ctx)
+void r700UpdateShaders (GLcontext * ctx)  //----------------------------------
+{
+    context_t *context = R700_CONTEXT(ctx);
+    GLvector4f dummy_attrib[_TNL_ATTRIB_MAX];
+    GLvector4f *temp_attrib[_TNL_ATTRIB_MAX];
+    int i;
+
+    /* should only happenen once, just after context is created */
+    /* TODO: shouldn't we fallback to sw here? */
+    if (!ctx->FragmentProgram._Current) {
+	    _mesa_fprintf(stderr, "No ctx->FragmentProgram._Current!!\n");
+	    return;
+    }
+
+    r700SelectFragmentShader(ctx);
+
+    if (context->radeon.NewGLState) {
+	    for (i = _TNL_FIRST_MAT; i <= _TNL_LAST_MAT; i++) {
+		    /* mat states from state var not array for sw */
+		    dummy_attrib[i].stride = 0;
+	            temp_attrib[i] = TNL_CONTEXT(ctx)->vb.AttribPtr[i];
+		    TNL_CONTEXT(ctx)->vb.AttribPtr[i] = &(dummy_attrib[i]);
+	    }
+
+	    _tnl_UpdateFixedFunctionProgram(ctx);
+
+	    for (i = _TNL_FIRST_MAT; i <= _TNL_LAST_MAT; i++) {
+		    TNL_CONTEXT(ctx)->vb.AttribPtr[i] = temp_attrib[i];
+	    }
+    }
+
+    r700SelectVertexShader(ctx, 1);
+    r700UpdateStateParameters(ctx, _NEW_PROGRAM | _NEW_PROGRAM_CONSTANTS);
+    context->radeon.NewGLState = 0;
+}
+
+void r700UpdateShaders2(GLcontext * ctx)  
 {
     context_t *context = R700_CONTEXT(ctx);
 
@@ -74,7 +110,7 @@ void r700UpdateShaders(GLcontext * ctx)
 
     r700SelectFragmentShader(ctx);
 
-    r700SelectVertexShader(ctx);
+    r700SelectVertexShader(ctx, 2);
     r700UpdateStateParameters(ctx, _NEW_PROGRAM | _NEW_PROGRAM_CONSTANTS);
     context->radeon.NewGLState = 0;
 }
@@ -1259,15 +1295,11 @@ void r700SetScissor(context_t *context) //---------------
 		return;
 	}
 	if (context->radeon.state.scissor.enabled) {
+		/* r600 has exclusive scissors */
 		x1 = context->radeon.state.scissor.rect.x1;
 		y1 = context->radeon.state.scissor.rect.y1;
-		x2 = context->radeon.state.scissor.rect.x2;
-		y2 = context->radeon.state.scissor.rect.y2;
-		/* r600 has exclusive BR scissors */
-		if (context->radeon.radeonScreen->kernel_mm) {
-			x2++;
-			y2++;
-		}
+		x2 = context->radeon.state.scissor.rect.x2 + 1;
+		y2 = context->radeon.state.scissor.rect.y2 + 1;
 	} else {
 		if (context->radeon.radeonScreen->driScreen->dri2.enabled) {
 			x1 = 0;

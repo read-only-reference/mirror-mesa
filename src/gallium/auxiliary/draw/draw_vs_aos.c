@@ -537,10 +537,19 @@ static struct x86_reg fetch_src( struct aos_compilation *cp,
    unsigned abs = 0;
 
    for (i = 0; i < 4; i++) {
-      unsigned swizzle = tgsi_util_get_full_src_register_swizzle( src, i );
+      unsigned swizzle = tgsi_util_get_full_src_register_extswizzle( src, i );
       unsigned neg = tgsi_util_get_full_src_register_sign_mode( src, i );
 
-      swz |= (swizzle & 0x3) << (i * 2);
+      switch (swizzle) {
+      case TGSI_EXTSWIZZLE_ZERO:
+      case TGSI_EXTSWIZZLE_ONE:
+         AOS_ERROR(cp, "not supporting full swizzles yet in tgsi_aos_sse2");
+         break;
+
+      default:
+         swz |= (swizzle & 0x3) << (i * 2);
+         break;
+      }
 
       switch (neg) {
       case TGSI_UTIL_SIGN_TOGGLE:
@@ -623,10 +632,23 @@ static void x87_fld_src( struct aos_compilation *cp,
                                                 src->SrcRegister.File, 
                                                 src->SrcRegister.Index);
 
-   unsigned swizzle = tgsi_util_get_full_src_register_swizzle( src, channel );
+   unsigned swizzle = tgsi_util_get_full_src_register_extswizzle( src, channel );
    unsigned neg = tgsi_util_get_full_src_register_sign_mode( src, channel );
 
-   x87_fld( cp->func, x86_make_disp(arg0, (swizzle & 3) * sizeof(float)) );
+   switch (swizzle) {
+   case TGSI_EXTSWIZZLE_ZERO:
+      x87_fldz( cp->func );
+      break;
+
+   case TGSI_EXTSWIZZLE_ONE:
+      x87_fld1( cp->func );
+      break;
+
+   default:
+      x87_fld( cp->func, x86_make_disp(arg0, (swizzle & 3) * sizeof(float)) );
+      break;
+   }
+   
 
    switch (neg) {
    case TGSI_UTIL_SIGN_TOGGLE:

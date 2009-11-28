@@ -75,8 +75,6 @@ llvmpipe_draw_range_elements(struct pipe_context *pipe,
    if (lp->dirty)
       llvmpipe_update_derived( lp );
 
-   llvmpipe_map_transfers(lp);
-
    /*
     * Map vertex buffers
     */
@@ -112,11 +110,6 @@ llvmpipe_draw_range_elements(struct pipe_context *pipe,
       draw_set_mapped_element_buffer(draw, 0, NULL);
    }
 
-
-   /* Note: leave drawing surfaces mapped */
-
-   lp->dirty_render_cache = TRUE;
-   
    return TRUE;
 }
 

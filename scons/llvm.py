@@ -29,7 +29,6 @@ Tool-specific initialization for LLVM
 
 import os
 import os.path
-import sys
 
 import SCons.Errors
 import SCons.Util
@@ -40,7 +39,7 @@ def generate(env):
         llvm_dir = os.environ['LLVM']
     except KeyError:
         # Do nothing -- use the system headers/libs
-        llvm_dir = None
+        pass
     else:
         if not os.path.isdir(llvm_dir):
             raise SCons.Errors.InternalError, "Specified LLVM directory not found"
@@ -58,47 +57,7 @@ def generate(env):
 
         env.PrependENVPath('PATH', llvm_bin_dir)
 
-    if env['msvc']:
-        # XXX: There is no llvm-config on Windows, so assume a standard layout
-        if llvm_dir is not None:
-            env.Prepend(CPPPATH = [os.path.join(llvm_dir, 'include')])
-            env.Prepend(LIBPATH = [os.path.join(llvm_dir, 'lib')])
-            env.Prepend(LIBS = [
-                'LLVMBitWriter',
-                'LLVMCore',
-                'LLVMSupport',
-                'LLVMSystem',
-                'LLVMSupport',
-                'LLVMSystem',
-                'LLVMCore',
-                'LLVMCodeGen',
-                'LLVMSelectionDAG',
-                'LLVMAsmPrinter',
-                'LLVMBitReader',
-                'LLVMBitWriter',
-                'LLVMTransformUtils',
-                'LLVMInstrumentation',
-                'LLVMScalarOpts',
-                'LLVMipo',
-                'LLVMHello',
-                'LLVMLinker',
-                'LLVMAnalysis',
-                'LLVMipa',
-                'LLVMX86CodeGen',
-                'LLVMX86AsmPrinter',
-                'LLVMExecutionEngine',
-                'LLVMInterpreter',
-                'LLVMJIT',
-                'LLVMTarget',
-                'LLVMAsmParser',
-                'LLVMDebugger',
-                'LLVMArchive',
-                'imagehlp',
-                'psapi',
-            ])
-            env['LLVM_VERSION'] = '2.5'
-        return
-    elif env.Detect('llvm-config'):
+    if env.Detect('llvm-config'):
         version = env.backtick('llvm-config --version').rstrip()
 
         try:

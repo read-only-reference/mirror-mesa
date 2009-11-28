@@ -95,7 +95,7 @@ enum sync_type {
 static void usage(char *name)
 {
 	printf("usage: %s [-w <width>] [-h <height>] [-s<sync method>] "
-	       "[-v]\n", name);
+	       "[-vc]\n", name);
 	printf("\t-s<sync method>:\n");
 	printf("\t\tn: none\n");
 	printf("\t\ts: SGI video sync extension\n");

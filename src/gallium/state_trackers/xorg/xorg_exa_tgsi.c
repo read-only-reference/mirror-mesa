@@ -44,26 +44,32 @@
  */
 
 struct xorg_shaders {
-   struct xorg_renderer *r;
+   struct exa_context *exa;
 
    struct cso_hash *vs_hash;
    struct cso_hash *fs_hash;
 };
 
+static const char over_op[] =
+   "SUB TEMP[3], CONST[0].wwww, TEMP[1].wwww\n"
+   "MAD TEMP[3], TEMP[0], TEMP[3], TEMP[0]\n";
+
+
+static INLINE void
+create_preamble(struct ureg_program *ureg)
+{
+}
+
+
 static INLINE void
 src_in_mask(struct ureg_program *ureg,
             struct ureg_dst dst,
             struct ureg_src src,
-            struct ureg_src mask,
-            boolean component_alpha)
+            struct ureg_src mask)
 {
-   if (component_alpha) {
-      ureg_MUL(ureg, dst, src, mask);
-   }
-   else {
-      ureg_MUL(ureg, dst, src,
-               ureg_scalar(mask, TGSI_SWIZZLE_W));
-   }
+   /* MUL dst, src, mask.wwww */
+   ureg_MUL(ureg, dst, src,
+            ureg_scalar(mask, TGSI_SWIZZLE_W));
 }
 
 static struct ureg_src
@@ -265,7 +271,7 @@ create_vs(struct pipe_context *pipe,
 
    if (has_mask) {
       src = ureg_DECL_vs_input(ureg, input_slot++);
-      dst = ureg_DECL_output(ureg, TGSI_SEMANTIC_GENERIC, 1);
+      dst = ureg_DECL_output(ureg, TGSI_SEMANTIC_GENERIC, 2);
       ureg_MOV(ureg, dst, src);
    }
 
@@ -289,7 +295,6 @@ create_fs(struct pipe_context *pipe,
    boolean is_solid   = fs_traits & FS_SOLID_FILL;
    boolean is_lingrad = fs_traits & FS_LINGRAD_FILL;
    boolean is_radgrad = fs_traits & FS_RADGRAD_FILL;
-   boolean is_comp_alpha = fs_traits & FS_COMPONENT_ALPHA;
 
    ureg = ureg_create(TGSI_PROCESSOR_FRAGMENT);
    if (ureg == NULL)
@@ -386,7 +391,7 @@ create_fs(struct pipe_context *pipe,
       ureg_TEX(ureg, mask,
                TGSI_TEXTURE_2D, mask_pos, mask_sampler);
       /* src IN mask */
-      src_in_mask(ureg, out, ureg_src(src), ureg_src(mask), is_comp_alpha);
+      src_in_mask(ureg, out, ureg_src(src), ureg_src(mask));
       ureg_release_temporary(ureg, mask);
    }
 
@@ -395,11 +400,11 @@ create_fs(struct pipe_context *pipe,
    return ureg_create_shader_and_destroy(ureg, pipe);
 }
 
-struct xorg_shaders * xorg_shaders_create(struct xorg_renderer *r)
+struct xorg_shaders * xorg_shaders_create(struct exa_context *exa)
 {
    struct xorg_shaders *sc = CALLOC_STRUCT(xorg_shaders);
 
-   sc->r = r;
+   sc->exa = exa;
    sc->vs_hash = cso_hash_create();
    sc->fs_hash = cso_hash_create();
 
@@ -426,9 +431,9 @@ cache_destroy(struct cso_context *cso,
 
 void xorg_shaders_destroy(struct xorg_shaders *sc)
 {
-   cache_destroy(sc->r->cso, sc->vs_hash,
+   cache_destroy(sc->exa->cso, sc->vs_hash,
                  PIPE_SHADER_VERTEX);
-   cache_destroy(sc->r->cso, sc->fs_hash,
+   cache_destroy(sc->exa->cso, sc->fs_hash,
                  PIPE_SHADER_FRAGMENT);
 
    free(sc);
@@ -463,9 +468,9 @@ struct xorg_shader xorg_shaders_get(struct xorg_shaders *sc,
    struct xorg_shader shader = { NULL, NULL };
    void *vs, *fs;
 
-   vs = shader_from_cache(sc->r->pipe, PIPE_SHADER_VERTEX,
+   vs = shader_from_cache(sc->exa->pipe, PIPE_SHADER_VERTEX,
                           sc->vs_hash, vs_traits);
-   fs = shader_from_cache(sc->r->pipe, PIPE_SHADER_FRAGMENT,
+   fs = shader_from_cache(sc->exa->pipe, PIPE_SHADER_FRAGMENT,
                           sc->fs_hash, fs_traits);
 
    debug_assert(vs && fs);

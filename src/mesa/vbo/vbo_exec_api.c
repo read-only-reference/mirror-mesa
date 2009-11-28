@@ -57,8 +57,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 static void reset_attrfv( struct vbo_exec_context *exec );
 
 
-/**
- * Close off the last primitive, execute the buffer, restart the
+/* Close off the last primitive, execute the buffer, restart the
  * primitive.  
  */
 static void vbo_exec_wrap_buffers( struct vbo_exec_context *exec )
@@ -107,8 +106,7 @@ static void vbo_exec_wrap_buffers( struct vbo_exec_context *exec )
 }
 
 
-/**
- * Deal with buffer wrapping where provoked by the vertex buffer
+/* Deal with buffer wrapping where provoked by the vertex buffer
  * filling up, as opposed to upgrade_vertex().
  */
 void vbo_exec_vtx_wrap( struct vbo_exec_context *exec )
@@ -137,7 +135,7 @@ void vbo_exec_vtx_wrap( struct vbo_exec_context *exec )
 }
 
 
-/**
+/*
  * Copy the active vertex's values to the ctx->Current fields.
  */
 static void vbo_exec_copy_to_current( struct vbo_exec_context *exec )
@@ -210,8 +208,7 @@ static void vbo_exec_copy_from_current( struct vbo_exec_context *exec )
 }
 
 
-/**
- * Flush existing data, set new attrib size, replay copied vertices.
+/* Flush existing data, set new attrib size, replay copied vertices.
  */ 
 static void vbo_exec_wrap_upgrade_vertex( struct vbo_exec_context *exec,
 					  GLuint attr,
@@ -395,7 +392,8 @@ do {								\
 
 
 #if FEATURE_evaluators
-
+/* Eval
+ */
 static void GLAPIENTRY vbo_exec_EvalCoord1f( GLfloat u )
 {
    GET_CURRENT_CONTEXT( ctx );
@@ -494,8 +492,8 @@ static void GLAPIENTRY vbo_exec_EvalPoint2( GLint i, GLint j )
 #endif /* FEATURE_evaluators */
 
 
-/**
- * Called via glBegin.
+/* Build a list of primitives on the fly.  Keep
+ * ctx->Driver.CurrentExecPrimitive uptodate as well.
  */
 static void GLAPIENTRY vbo_exec_Begin( GLenum mode )
 {
@@ -539,10 +537,6 @@ static void GLAPIENTRY vbo_exec_Begin( GLenum mode )
       
 }
 
-
-/**
- * Called via glEnd.
- */
 static void GLAPIENTRY vbo_exec_End( void )
 {
    GET_CURRENT_CONTEXT( ctx ); 

@@ -54,6 +54,7 @@
 #define LP_NEW_VERTEX        0x1000
 #define LP_NEW_VS            0x2000
 #define LP_NEW_QUERY         0x4000
+#define LP_NEW_BLEND_COLOR   0x8000
 
 
 struct tgsi_sampler;
@@ -206,12 +207,6 @@ llvmpipe_draw_range_elements(struct pipe_context *pipe,
 void
 llvmpipe_set_edgeflags(struct pipe_context *pipe, const unsigned *edgeflags);
 
-
-void
-llvmpipe_map_transfers(struct llvmpipe_context *lp);
-
-void
-llvmpipe_unmap_transfers(struct llvmpipe_context *lp);
 
 void
 llvmpipe_map_texture_surfaces(struct llvmpipe_context *lp);

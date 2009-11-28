@@ -388,6 +388,7 @@ _mesa_read_shader(const char *fname)
    int len;
 
    if (!f) {
+      _mesa_fprintf(stderr, "Unable to open shader file %s\n", fname);
       return NULL;
    }
 
@@ -399,6 +400,11 @@ _mesa_read_shader(const char *fname)
 
    shader = _mesa_strdup(buffer);
    free(buffer);
+
+   if (0) {
+      _mesa_fprintf(stderr, "Read shader %s:\n", fname);
+      _mesa_fprintf(stderr, "%s\n", shader);
+   }
 
    return shader;
 }
@@ -469,25 +475,19 @@ _mesa_ShaderSourceARB(GLhandleARB shaderObj, GLsizei count,
    source[totalLength - 1] = '\0';
    source[totalLength - 2] = '\0';
 
+#if 0
    if (0) {
-      /* Compute the shader's source code checksum then try to open a file
-       * named newshader_<CHECKSUM>.  If it exists, use it in place of the
-       * original shader source code.  For debugging.
-       */
-      const GLuint checksum = _mesa_str_checksum(source);
-      char filename[100];
       GLcharARB *newSource;
 
-      sprintf(filename, "newshader_%d", checksum);
-
-      newSource = _mesa_read_shader(filename);
+      newSource = _mesa_read_shader("newshader.frag");
       if (newSource) {
-         _mesa_fprintf(stderr, "Mesa: Replacing shader %u chksum=%d with %s\n",
-                       shaderObj, checksum, filename);
          _mesa_free(source);
          source = newSource;
       }
-   }      
+   }
+#else
+   (void) _mesa_read_shader;
+#endif
 
    ctx->Driver.ShaderSource(ctx, shaderObj, source);
 

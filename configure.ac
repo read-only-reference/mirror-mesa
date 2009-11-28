@@ -18,7 +18,7 @@ AC_CONFIG_AUX_DIR([bin])
 AC_CANONICAL_HOST
 
 dnl Versions for external dependencies
-LIBDRM_REQUIRED=2.4.15
+LIBDRM_REQUIRED=2.4.3
 DRI2PROTO_REQUIRED=1.99.3
 
 dnl Check for progs
@@ -230,8 +230,6 @@ else
         LIB_EXTENSION='dylib' ;;
     cygwin* )
         LIB_EXTENSION='dll' ;;
-    aix* )
-        LIB_EXTENSION='a' ;;
     * )
         LIB_EXTENSION='so' ;;
     esac
@@ -768,8 +766,8 @@ if test "$mesa_driver" = dri; then
 
     # default drivers
     if test "x$DRI_DIRS" = "xyes"; then
-        DRI_DIRS="i810 i915 i965 mach64 mga r128 r200 r300 r600 radeon \
-            savage sis tdfx unichrome ffb swrast"
+        DRI_DIRS="i810 i915 i965 mach64 mga r128 r200 r300 r600 radeon s3v \
+            savage sis tdfx trident unichrome ffb swrast"
     fi
 
     DRI_DIRS=`echo "$DRI_DIRS" | $SED 's/  */ /g'`
@@ -1152,9 +1150,9 @@ yes)
         fi
         if test "$tracker" = xorg; then
 	    PKG_CHECK_MODULES(XEXT, [xextproto >= 7.0.99.1],
-                  HAVE_XEXTPROTO_71="yes"; DEFINES="$DEFINES -DHAVE_XEXTPROTO_71",
+                  HAVE_XEXTPROTO_71="yes"; DEFINES="$DEFINES -DHAVE_XEXTPROTO_71"
                   HAVE_XEXTPROTO_71="no")
-        fi
+	fi
     done
     GALLIUM_STATE_TRACKERS_DIRS="$state_trackers"
     ;;

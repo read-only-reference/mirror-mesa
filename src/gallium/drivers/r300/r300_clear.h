@@ -23,7 +23,9 @@
 #ifndef R300_CLEAR_H
 #define R300_CLEAR_H
 
-struct pipe_context;
+#include "util/u_clear.h"
+
+#include "r300_context.h"
 
 void r300_clear(struct pipe_context* pipe,
                 unsigned buffers,

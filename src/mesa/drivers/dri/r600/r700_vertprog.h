@@ -52,7 +52,8 @@ struct r700_vertex_program
 
     GLboolean translated;
     GLboolean loaded;
-
+    GLint     uiVersion;
+	
     void * shaderbo;
 
     ArrayDesc              aos_desc[VERT_ATTRIB_MAX];
@@ -86,10 +87,11 @@ GLboolean Find_Instruction_Dependencies_vp(struct r700_vertex_program *vp,
 					   struct gl_vertex_program   *mesa_vp);
 
 struct r700_vertex_program* r700TranslateVertexShader(GLcontext *ctx,
-						      struct gl_vertex_program   *mesa_vp);
+				    struct gl_vertex_program   *mesa_vp,
+                    GLint nVer);
 
 /* Interface */
-extern void r700SelectVertexShader(GLcontext *ctx);
+extern void r700SelectVertexShader(GLcontext *ctx, GLint nVersion);
 extern void r700SetVertexFormat(GLcontext *ctx, const struct gl_client_array *arrays[], int count);
 
 extern GLboolean r700SetupVertexProgram(GLcontext * ctx);

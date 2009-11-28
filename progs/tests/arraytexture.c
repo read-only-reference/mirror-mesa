@@ -77,6 +77,10 @@ static GLfloat texZ = 0.0;
 static GLfloat texZ_dir = 0.01;
 static GLint num_layers;
 
+static PFNGLBINDPROGRAMARBPROC bind_program;
+static PFNGLPROGRAMSTRINGARBPROC program_string;
+static PFNGLGENPROGRAMSARBPROC gen_programs;
+
 
 static void
 PrintString(const char *s)
@@ -121,13 +125,13 @@ static void Display(void)
    glMatrixMode(GL_MODELVIEW);
    glLoadIdentity();
 
-   glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, 0);
+   (*bind_program)(GL_FRAGMENT_PROGRAM_ARB, 0);
    glColor3f(1,1,1);
    glRasterPos3f(-0.9, -0.9, 0.0);
    sprintf(str, "Texture Z coordinate = %4.1f", texZ);
    PrintString(str);
 
-   glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, 1);
+   (*bind_program)(GL_FRAGMENT_PROGRAM_ARB, 1);
    GL_CHECK_ERROR();
    glEnable(GL_TEXTURE_2D_ARRAY_EXT);
    GL_CHECK_ERROR();
@@ -155,7 +159,7 @@ static void Display(void)
 
    glDisable(GL_TEXTURE_2D_ARRAY_EXT);
    GL_CHECK_ERROR();
-   glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, 0);
+   (*bind_program)(GL_FRAGMENT_PROGRAM_ARB, 0);
    GL_CHECK_ERROR();
 
    glutSwapBuffers();
@@ -222,8 +226,8 @@ compile_fragment_program(GLuint id, const char *prog)
    int err;
 
    err = glGetError();
-   glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, id);
-   glProgramStringARB(GL_FRAGMENT_PROGRAM_ARB, GL_PROGRAM_FORMAT_ASCII_ARB,
+   (*bind_program)(GL_FRAGMENT_PROGRAM_ARB, id);
+   (*program_string)(GL_FRAGMENT_PROGRAM_ARB, GL_PROGRAM_FORMAT_ASCII_ARB,
                      strlen(prog), (const GLubyte *) prog);
 
    glGetIntegerv(GL_PROGRAM_ERROR_POSITION_ARB, &errorPos);
@@ -259,6 +263,11 @@ static void Init(void)
    require_extension("GL_ARB_fragment_program");
    require_extension("GL_MESA_texture_array");
    require_extension("GL_SGIS_generate_mipmap");
+
+   bind_program = glutGetProcAddress("glBindProgramARB");
+   program_string = glutGetProcAddress("glProgramStringARB");
+   gen_programs = glutGetProcAddress("glGenProgramsARB");
+
 
    for (num_layers = 0; textures[num_layers] != NULL; num_layers++)
       /* empty */ ;
