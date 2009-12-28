@@ -59,7 +59,7 @@ cell_map_constant_buffers(struct cell_context *sp)
       }
    }
 
-   draw_set_mapped_constant_buffer(sp->draw,
+   draw_set_mapped_constant_buffer(sp->draw, PIPE_SHADER_VERTEX,
                                    sp->mapped_constants[PIPE_SHADER_VERTEX],
                                    sp->constants[PIPE_SHADER_VERTEX].buffer->size);
 }
@@ -171,21 +171,11 @@ cell_draw_arrays(struct pipe_context *pipe, unsigned mode,
 }
 
 
-static void
-cell_set_edgeflags(struct pipe_context *pipe, const unsigned *edgeflags)
-{
-   struct cell_context *cell = cell_context(pipe);
-   draw_set_edgeflags(cell->draw, edgeflags);
-}
-
-
-
 void
 cell_init_draw_functions(struct cell_context *cell)
 {
    cell->pipe.draw_arrays = cell_draw_arrays;
    cell->pipe.draw_elements = cell_draw_elements;
    cell->pipe.draw_range_elements = cell_draw_range_elements;
-   cell->pipe.set_edgeflags = cell_set_edgeflags;
 }
 

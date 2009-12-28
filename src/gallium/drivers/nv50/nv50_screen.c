@@ -38,6 +38,11 @@ nv50_screen_is_format_supported(struct pipe_screen *pscreen,
 		case PIPE_FORMAT_X8R8G8B8_UNORM:
 		case PIPE_FORMAT_A8R8G8B8_UNORM:
 		case PIPE_FORMAT_R5G6B5_UNORM:
+		case PIPE_FORMAT_R16G16B16A16_SNORM:
+		case PIPE_FORMAT_R16G16B16A16_UNORM:
+		case PIPE_FORMAT_R32G32B32A32_FLOAT:
+		case PIPE_FORMAT_R16G16_SNORM:
+		case PIPE_FORMAT_R16G16_UNORM:
 			return TRUE;
 		default:
 			break;
@@ -57,6 +62,8 @@ nv50_screen_is_format_supported(struct pipe_screen *pscreen,
 		switch (format) {
 		case PIPE_FORMAT_A8R8G8B8_UNORM:
 		case PIPE_FORMAT_X8R8G8B8_UNORM:
+		case PIPE_FORMAT_A8R8G8B8_SRGB:
+		case PIPE_FORMAT_X8R8G8B8_SRGB:
 		case PIPE_FORMAT_A1R5G5B5_UNORM:
 		case PIPE_FORMAT_A4R4G4B4_UNORM:
 		case PIPE_FORMAT_R5G6B5_UNORM:
@@ -68,6 +75,14 @@ nv50_screen_is_format_supported(struct pipe_screen *pscreen,
 		case PIPE_FORMAT_DXT1_RGBA:
 		case PIPE_FORMAT_DXT3_RGBA:
 		case PIPE_FORMAT_DXT5_RGBA:
+		case PIPE_FORMAT_Z24S8_UNORM:
+		case PIPE_FORMAT_S8Z24_UNORM:
+		case PIPE_FORMAT_Z32_FLOAT:
+		case PIPE_FORMAT_R16G16B16A16_SNORM:
+		case PIPE_FORMAT_R16G16B16A16_UNORM:
+		case PIPE_FORMAT_R32G32B32A32_FLOAT:
+		case PIPE_FORMAT_R16G16_SNORM:
+		case PIPE_FORMAT_R16G16_UNORM:
 			return TRUE;
 		default:
 			break;
@@ -83,6 +98,10 @@ nv50_screen_get_param(struct pipe_screen *pscreen, int param)
 	switch (param) {
 	case PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS:
 		return 32;
+	case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
+		return 32;
+	case PIPE_CAP_MAX_COMBINED_SAMPLERS:
+		return 64;
 	case PIPE_CAP_NPOT_TEXTURES:
 		return 1;
 	case PIPE_CAP_TWO_SIDED_STENCIL:
@@ -108,10 +127,8 @@ nv50_screen_get_param(struct pipe_screen *pscreen, int param)
 	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
 	case PIPE_CAP_TEXTURE_MIRROR_REPEAT:
 		return 1;
-	case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
-		return 0;
 	case PIPE_CAP_TGSI_CONT_SUPPORTED:
-		return 0;
+		return 1;
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 		return 1;
 	case NOUVEAU_CAP_HW_VTXBUF:
@@ -148,6 +165,21 @@ static void
 nv50_screen_destroy(struct pipe_screen *pscreen)
 {
 	struct nv50_screen *screen = nv50_screen(pscreen);
+	unsigned i;
+
+	for (i = 0; i < 2; i++) {
+		if (screen->constbuf_parm[i])
+			nouveau_bo_ref(NULL, &screen->constbuf_parm[i]);
+	}
+
+	if (screen->constbuf_misc[0])
+		nouveau_bo_ref(NULL, &screen->constbuf_misc[0]);
+	if (screen->tic)
+		nouveau_bo_ref(NULL, &screen->tic);
+	if (screen->tsc)
+		nouveau_bo_ref(NULL, &screen->tsc);
+	if (screen->static_init)
+		so_ref(NULL, &screen->static_init);
 
 	nouveau_notifier_free(&screen->sync);
 	nouveau_grobj_free(&screen->tesla);
@@ -214,20 +246,22 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 		break;
 	case 0x80:
 	case 0x90:
-		/* this stupid name should be corrected. */
-		tesla_class = NV54TCL;
+		tesla_class = NV84TCL;
 		break;
 	case 0xa0:
-		tesla_class = NVA0TCL;
+		switch (chipset) {
+		case 0xa0:
+		case 0xaa:
+		case 0xac:
+			tesla_class = NVA0TCL;
+			break;
+		default:
+			tesla_class = NVA8TCL;
+			break;
+		}
 		break;
 	default:
 		NOUVEAU_ERR("Not a known NV50 chipset: NV%02x\n", chipset);
-		nv50_screen_destroy(pscreen);
-		return NULL;
-	}
-
-	if (tesla_class == 0) {
-		NOUVEAU_ERR("Unknown G8x chipset: NV%02x\n", chipset);
 		nv50_screen_destroy(pscreen);
 		return NULL;
 	}
@@ -267,7 +301,7 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 	so_data  (so, chan->vram->handle);
 	so_method(so, screen->eng2d, NV50_2D_OPERATION, 1);
 	so_data  (so, NV50_2D_OPERATION_SRCCOPY);
-	so_method(so, screen->eng2d, 0x0290, 1);
+	so_method(so, screen->eng2d, NV50_2D_CLIP_ENABLE, 1);
 	so_data  (so, 0);
 	so_method(so, screen->eng2d, 0x0888, 1);
 	so_data  (so, 1);
@@ -277,31 +311,39 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 	/* Static tesla init */
 	so = so_new(256, 20);
 
-	so_method(so, screen->tesla, 0x1558, 1);
-	so_data  (so, 1);
+	so_method(so, screen->tesla, NV50TCL_COND_MODE, 1);
+	so_data  (so, NV50TCL_COND_MODE_ALWAYS);
 	so_method(so, screen->tesla, NV50TCL_DMA_NOTIFY, 1);
 	so_data  (so, screen->sync->handle);
-	so_method(so, screen->tesla, NV50TCL_DMA_UNK0(0),
-				     NV50TCL_DMA_UNK0__SIZE);
-	for (i = 0; i < NV50TCL_DMA_UNK0__SIZE; i++)
+	so_method(so, screen->tesla, NV50TCL_DMA_ZETA, 11);
+	for (i = 0; i < 11; i++)
 		so_data(so, chan->vram->handle);
-	so_method(so, screen->tesla, NV50TCL_DMA_UNK1(0),
-				     NV50TCL_DMA_UNK1__SIZE);
-	for (i = 0; i < NV50TCL_DMA_UNK1__SIZE; i++)
+	so_method(so, screen->tesla, NV50TCL_DMA_COLOR(0),
+				     NV50TCL_DMA_COLOR__SIZE);
+	for (i = 0; i < NV50TCL_DMA_COLOR__SIZE; i++)
 		so_data(so, chan->vram->handle);
-	so_method(so, screen->tesla, 0x121c, 1);
+	so_method(so, screen->tesla, NV50TCL_RT_CONTROL, 1);
 	so_data  (so, 1);
 
-	so_method(so, screen->tesla, 0x13bc, 1);
+	/* activate all 32 lanes (threads) in a warp */
+	so_method(so, screen->tesla, NV50TCL_WARP_HALVES, 1);
+	so_data  (so, 0x2);
+	so_method(so, screen->tesla, 0x1400, 1);
+	so_data  (so, 0xf);
+
+	/* max TIC (bits 4:8) & TSC (ignored) bindings, per program type */
+	so_method(so, screen->tesla, NV50TCL_TEX_LIMITS(0), 1);
+	so_data  (so, 0x54);
+	so_method(so, screen->tesla, NV50TCL_TEX_LIMITS(2), 1);
 	so_data  (so, 0x54);
 	/* origin is top left (set to 1 for bottom left) */
-	so_method(so, screen->tesla, 0x13ac, 1);
+	so_method(so, screen->tesla, NV50TCL_Y_ORIGIN_BOTTOM, 1);
 	so_data  (so, 0);
 	so_method(so, screen->tesla, NV50TCL_VP_REG_ALLOC_RESULT, 1);
 	so_data  (so, 8);
 
 	/* constant buffers for immediates and VP/FP parameters */
-	ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 0, 128*4*4,
+	ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 0, (32 * 4) * 4,
 			     &screen->constbuf_misc[0]);
 	if (ret) {
 		nv50_screen_destroy(pscreen);
@@ -309,7 +351,7 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 	}
 
 	for (i = 0; i < 2; i++) {
-		ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 0, 128*4*4,
+		ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 0, (128 * 4) * 4,
 				     &screen->constbuf_parm[i]);
 		if (ret) {
 			nv50_screen_destroy(pscreen);
@@ -318,8 +360,8 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 	}
 
 	if (nouveau_resource_init(&screen->immd_heap[0], 0, 128) ||
-		nouveau_resource_init(&screen->parm_heap[0], 0, 128) ||
-		nouveau_resource_init(&screen->parm_heap[1], 0, 128))
+	    nouveau_resource_init(&screen->parm_heap[0], 0, 512) ||
+	    nouveau_resource_init(&screen->parm_heap[1], 0, 512))
 	{
 		NOUVEAU_ERR("Error initialising constant buffers.\n");
 		nv50_screen_destroy(pscreen);
@@ -331,7 +373,7 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 	//  B = buffer ID (maybe more than 1 byte)
 	//  N = CB index used in shader instruction
 	//  P = program type (0 = VP, 2 = GP, 3 = FP)
-	so_method(so, screen->tesla, 0x1694, 1);
+	so_method(so, screen->tesla, NV50TCL_SET_PROGRAM_CB, 1);
 	so_data  (so, 0x000BBNP1);
 	*/
 
@@ -340,7 +382,7 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 		  NOUVEAU_BO_RD | NOUVEAU_BO_HIGH, 0, 0);
 	so_reloc (so, screen->constbuf_misc[0], 0, NOUVEAU_BO_VRAM |
 		  NOUVEAU_BO_RD | NOUVEAU_BO_LOW, 0, 0);
-	so_data  (so, (NV50_CB_PMISC << 16) | 0x00000800);
+	so_data  (so, (NV50_CB_PMISC << 16) | 0x00000200);
 	so_method(so, screen->tesla, NV50TCL_SET_PROGRAM_CB, 1);
 	so_data  (so, 0x00000001 | (NV50_CB_PMISC << 12));
 	so_method(so, screen->tesla, NV50TCL_SET_PROGRAM_CB, 1);
@@ -364,67 +406,56 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 	so_method(so, screen->tesla, NV50TCL_SET_PROGRAM_CB, 1);
 	so_data  (so, 0x00000131 | (NV50_CB_PFP << 12));
 
-	/* Texture sampler/image unit setup - we abuse the constant buffer
-	 * upload mechanism for the moment to upload data to the tex config
-	 * blocks.  At some point we *may* want to go the NVIDIA way of doing
-	 * things?
-	 */
-	ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 0, 32*8*4, &screen->tic);
+	ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 0, PIPE_SHADER_TYPES*32*32,
+			     &screen->tic);
 	if (ret) {
 		nv50_screen_destroy(pscreen);
 		return NULL;
 	}
 
-	so_method(so, screen->tesla, NV50TCL_CB_DEF_ADDRESS_HIGH, 3);
-	so_reloc (so, screen->tic, 0, NOUVEAU_BO_VRAM |
-		  NOUVEAU_BO_RD | NOUVEAU_BO_HIGH, 0, 0);
-	so_reloc (so, screen->tic, 0, NOUVEAU_BO_VRAM |
-		  NOUVEAU_BO_RD | NOUVEAU_BO_LOW, 0, 0);
-	so_data  (so, (NV50_CB_TIC << 16) | 0x0800);
 	so_method(so, screen->tesla, NV50TCL_TIC_ADDRESS_HIGH, 3);
 	so_reloc (so, screen->tic, 0, NOUVEAU_BO_VRAM |
 		  NOUVEAU_BO_RD | NOUVEAU_BO_HIGH, 0, 0);
 	so_reloc (so, screen->tic, 0, NOUVEAU_BO_VRAM |
 		  NOUVEAU_BO_RD | NOUVEAU_BO_LOW, 0, 0);
-	so_data  (so, 0x00000800);
+	so_data  (so, PIPE_SHADER_TYPES * 32 - 1);
 
-	ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 0, 32*8*4, &screen->tsc);
+	ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 0, PIPE_SHADER_TYPES*32*32,
+			     &screen->tsc);
 	if (ret) {
 		nv50_screen_destroy(pscreen);
 		return NULL;
 	}
 
-	so_method(so, screen->tesla, NV50TCL_CB_DEF_ADDRESS_HIGH, 3);
-	so_reloc (so, screen->tsc, 0, NOUVEAU_BO_VRAM |
-		  NOUVEAU_BO_RD | NOUVEAU_BO_HIGH, 0, 0);
-	so_reloc (so, screen->tsc, 0, NOUVEAU_BO_VRAM |
-		  NOUVEAU_BO_RD | NOUVEAU_BO_LOW, 0, 0);
-	so_data  (so, (NV50_CB_TSC << 16) | 0x0800);
 	so_method(so, screen->tesla, NV50TCL_TSC_ADDRESS_HIGH, 3);
 	so_reloc (so, screen->tsc, 0, NOUVEAU_BO_VRAM |
 		  NOUVEAU_BO_RD | NOUVEAU_BO_HIGH, 0, 0);
 	so_reloc (so, screen->tsc, 0, NOUVEAU_BO_VRAM |
 		  NOUVEAU_BO_RD | NOUVEAU_BO_LOW, 0, 0);
-	so_data  (so, 0x00000800);
+	so_data  (so, 0x00000000); /* ignored if TSC_LINKED (0x1234) = 1 */
 
 
 	/* Vertex array limits - max them out */
 	for (i = 0; i < 16; i++) {
-		so_method(so, screen->tesla, NV50TCL_UNK1080_OFFSET_HIGH(i), 2);
+		so_method(so, screen->tesla, NV50TCL_VERTEX_ARRAY_LIMIT_HIGH(i), 2);
 		so_data  (so, 0x000000ff);
 		so_data  (so, 0xffffffff);
 	}
 
-	so_method(so, screen->tesla, NV50TCL_DEPTH_RANGE_NEAR, 2);
+	so_method(so, screen->tesla, NV50TCL_DEPTH_RANGE_NEAR(0), 2);
 	so_data  (so, fui(0.0));
 	so_data  (so, fui(1.0));
 
-	so_method(so, screen->tesla, 0x1234, 1);
+	/* no dynamic combination of TIC & TSC entries => only BIND_TIC used */
+	so_method(so, screen->tesla, NV50TCL_LINKED_TSC, 1);
 	so_data  (so, 1);
 
 	/* activate first scissor rectangle */
-	so_method(so, screen->tesla, NV50TCL_SCISSOR_ENABLE, 1);
+	so_method(so, screen->tesla, NV50TCL_SCISSOR_ENABLE(0), 1);
 	so_data  (so, 1);
+
+	so_method(so, screen->tesla, NV50TCL_EDGEFLAG_ENABLE, 1);
+	so_data  (so, 1); /* default edgeflag to TRUE */
 
 	so_emit(chan, so);
 	so_ref (so, &screen->static_init);

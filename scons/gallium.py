@@ -156,6 +156,12 @@ def symlink(target, source, env):
         os.remove(target)
     os.symlink(os.path.basename(source), target)
 
+def install_program(env, source):
+    source = str(source[0])
+    target_dir =  os.path.join(env.Dir('#.').srcnode().abspath, env['build'], 'bin')
+    target_name = str(source)
+    env.InstallAs(os.path.join(target_dir, target_name), source)
+
 def install_shared_library(env, source, version = ()):
     source = str(source[0])
     version = tuple(map(str, version))
@@ -169,6 +175,7 @@ def install_shared_library(env, source, version = ()):
         last = env.Command(os.path.join(target_dir, target_name), last, action) 
 
 def createInstallMethods(env):
+    env.AddMethod(install_program, 'InstallProgram')
     env.AddMethod(install_shared_library, 'InstallSharedLibrary')
 
 
@@ -236,6 +243,8 @@ def generate(env):
     env['build'] = build_dir
     env.SConsignFile(os.path.join(build_dir, '.sconsign'))
     env.CacheDir('build/cache')
+    env['CONFIGUREDIR'] = os.path.join(build_dir, 'conf')
+    env['CONFIGURELOG'] = os.path.join(os.path.abspath(build_dir), 'config.log')
 
     # Parallel build
     if env.GetOption('num_jobs') <= 1:
@@ -263,7 +272,11 @@ def generate(env):
         if msvc and env['toolchain'] != 'winddk':
             cppdefines += [
                 'VC_EXTRALEAN',
+                '_USE_MATH_DEFINES',
+                '_CRT_SECURE_NO_WARNINGS',
                 '_CRT_SECURE_NO_DEPRECATE',
+                '_SCL_SECURE_NO_WARNINGS',
+                '_SCL_SECURE_NO_DEPRECATE',
             ]
         if debug:
             cppdefines += ['_DEBUG']
@@ -343,10 +356,18 @@ def generate(env):
             ccflags += [
                 '-m32',
                 #'-march=pentium4',
-                '-mmmx', '-msse', '-msse2', # enable SIMD intrinsics
-                '-mstackrealign', # ensure stack is aligned -- do not enabled -msse without it!
                 #'-mfpmath=sse',
             ]
+            if platform != 'windows':
+                # XXX: -mstackrealign causes stack corruption on MinGW. Ditto
+                # for -mincoming-stack-boundary=2.  Still enable it on other
+                # platforms for now, but we can't rely on it for cross platform
+                # code. We have to use __attribute__((force_align_arg_pointer))
+                # instead.
+                ccflags += [
+                    '-mmmx', '-msse', '-msse2', # enable SIMD intrinsics
+                    '-mstackrealign', # ensure stack is aligned
+                ]
         if env['machine'] == 'x86_64':
             ccflags += ['-m64']
         # See also:
@@ -354,7 +375,7 @@ def generate(env):
         ccflags += [
             '-Wall',
             '-Wmissing-field-initializers',
-            '-Wpointer-arith',
+            '-Werror=pointer-arith',
             '-Wno-long-long',
             '-ffast-math',
             '-fmessage-length=0', # be nice to Eclipse
@@ -378,20 +399,15 @@ def generate(env):
         else:
             ccflags += [
                 '/O2', # optimize for speed
-                #'/fp:fast', # fast floating point 
-            ]
-        if env['profile']:
-            ccflags += [
-                '/Gh', # enable _penter hook function
-                '/GH', # enable _pexit hook function
+                '/GL', # enable whole program optimization
             ]
         ccflags += [
+            '/fp:fast', # fast floating point 
             '/W3', # warning level
             #'/Wp64', # enable 64 bit porting warnings
         ]
         if env['machine'] == 'x86':
             ccflags += [
-                #'/QIfist', # Suppress _ftol
                 #'/arch:SSE2', # use the SSE2 instructions
             ]
         if platform == 'windows':
@@ -469,6 +485,11 @@ def generate(env):
         ]
         # Handle circular dependencies in the libraries
         env['_LIBFLAGS'] = '-Wl,--start-group ' + env['_LIBFLAGS'] + ' -Wl,--end-group'
+    if msvc:
+        if not env['debug']:
+            # enable Link-time Code Generation
+            linkflags += ['/LTCG']
+            env.Append(ARFLAGS = ['/LTCG'])
     if platform == 'windows' and msvc:
         # See also:
         # - http://msdn2.microsoft.com/en-us/library/y0zzbyt4.aspx

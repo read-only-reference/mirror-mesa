@@ -39,6 +39,7 @@
 #include "util/u_cpu_detect.h"
 #include "lp_screen.h"
 #include "lp_bld_intr.h"
+#include "lp_bld_misc.h"
 #include "lp_jit.h"
 
 
@@ -91,7 +92,7 @@ lp_jit_init_globals(struct llvmpipe_screen *screen)
 
       LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, constants,
                              screen->target, context_type, 0);
-      LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, dummy,
+      LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, samplers,
                              screen->target, context_type, 1);
       LP_CHECK_MEMBER_OFFSET(struct lp_jit_context, alpha_ref_value,
                              screen->target, context_type, 2);
@@ -106,6 +107,24 @@ lp_jit_init_globals(struct llvmpipe_screen *screen)
       LLVMAddTypeName(screen->module, "context", context_type);
 
       screen->context_ptr_type = LLVMPointerType(context_type, 0);
+   }
+
+   /* fetch_texel
+    */
+   {
+      LLVMTypeRef ret_type;
+      LLVMTypeRef arg_types[3];
+      LLVMValueRef fetch_texel;
+
+      ret_type = LLVMVoidType();
+      arg_types[0] = LLVMPointerType(LLVMInt8Type(), 0);  /* samplers */
+      arg_types[1] = LLVMInt32Type();                     /* unit */
+      arg_types[2] = LLVMPointerType(LLVMVectorType(LLVMFloatType(), 4), 0); /* store */
+
+      fetch_texel = lp_declare_intrinsic(screen->module, "fetch_texel",
+                                         ret_type, arg_types, Elements(arg_types));
+
+      LLVMAddGlobalMapping(screen->engine, fetch_texel, lp_fetch_texel_soa);
    }
 
 #ifdef DEBUG
@@ -135,13 +154,12 @@ lp_jit_screen_init(struct llvmpipe_screen *screen)
 #if 0
    /* For simulating less capable machines */
    util_cpu_caps.has_sse3 = 0;
+   util_cpu_caps.has_ssse3 = 0;
    util_cpu_caps.has_sse4_1 = 0;
 #endif
 
-#ifdef LLVM_NATIVE_ARCH
    LLVMLinkInJIT();
    LLVMInitializeNativeTarget();
-#endif
 
    screen->module = LLVMModuleCreateWithName("llvmpipe");
 
@@ -150,7 +168,7 @@ lp_jit_screen_init(struct llvmpipe_screen *screen)
    if (LLVMCreateJITCompiler(&screen->engine, screen->provider, 1, &error)) {
       _debug_printf("%s\n", error);
       LLVMDisposeMessage(error);
-      abort();
+      assert(0);
    }
 
    screen->target = LLVMGetExecutionEngineTargetData(screen->engine);

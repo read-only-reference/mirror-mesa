@@ -33,7 +33,7 @@
 #include "draw/draw_private.h"
 #include "lp_context.h"
 #include "lp_screen.h"
-#include "lp_setup.h"
+#include "lp_tex_cache.h"
 #include "lp_state.h"
 
 
@@ -65,10 +65,8 @@ llvmpipe_get_vertex_info(struct llvmpipe_context *llvmpipe)
    if (vinfo->num_attribs == 0) {
       /* compute vertex layout now */
       const struct lp_fragment_shader *lpfs = llvmpipe->fs;
-      const enum interp_mode colorInterp
-         = llvmpipe->rasterizer->flatshade ? INTERP_CONSTANT : INTERP_LINEAR;
       struct vertex_info *vinfo_vbuf = &llvmpipe->vertex_info_vbuf;
-      const uint num = draw_num_vs_outputs(llvmpipe->draw);
+      const uint num = draw_current_shader_outputs(llvmpipe->draw);
       uint i;
 
       /* Tell draw_vbuf to simply emit the whole post-xform vertex
@@ -107,36 +105,24 @@ llvmpipe_get_vertex_info(struct llvmpipe_context *llvmpipe)
 
          switch (lpfs->info.input_semantic_name[i]) {
          case TGSI_SEMANTIC_POSITION:
-            src = draw_find_vs_output(llvmpipe->draw,
-                                      TGSI_SEMANTIC_POSITION, 0);
-            draw_emit_vertex_attr(vinfo, EMIT_4F, INTERP_POS, src);
+            interp = INTERP_POS;
             break;
 
          case TGSI_SEMANTIC_COLOR:
-            src = draw_find_vs_output(llvmpipe->draw, TGSI_SEMANTIC_COLOR, 
-                                 lpfs->info.input_semantic_index[i]);
-            draw_emit_vertex_attr(vinfo, EMIT_4F, colorInterp, src);
+            if (llvmpipe->rasterizer->flatshade) {
+               interp = INTERP_CONSTANT;
+            }
             break;
-
-         case TGSI_SEMANTIC_FOG:
-            src = draw_find_vs_output(llvmpipe->draw, TGSI_SEMANTIC_FOG, 0);
-            draw_emit_vertex_attr(vinfo, EMIT_4F, interp, src);
-            break;
-
-         case TGSI_SEMANTIC_GENERIC:
-         case TGSI_SEMANTIC_FACE:
-            /* this includes texcoords and varying vars */
-            src = draw_find_vs_output(llvmpipe->draw, TGSI_SEMANTIC_GENERIC,
-                                      lpfs->info.input_semantic_index[i]);
-            draw_emit_vertex_attr(vinfo, EMIT_4F, interp, src);
-            break;
-
-         default:
-            assert(0);
          }
+
+         /* this includes texcoords and varying vars */
+         src = draw_find_shader_output(llvmpipe->draw,
+                                   lpfs->info.input_semantic_name[i],
+                                   lpfs->info.input_semantic_index[i]);
+         draw_emit_vertex_attr(vinfo, EMIT_4F, interp, src);
       }
 
-      llvmpipe->psize_slot = draw_find_vs_output(llvmpipe->draw,
+      llvmpipe->psize_slot = draw_find_shader_output(llvmpipe->draw,
                                                  TGSI_SEMANTIC_PSIZE, 0);
       if (llvmpipe->psize_slot > 0) {
          draw_emit_vertex_attr(vinfo, EMIT_4F, INTERP_CONSTANT,
@@ -144,36 +130,6 @@ llvmpipe_get_vertex_info(struct llvmpipe_context *llvmpipe)
       }
 
       draw_compute_vertex_size(vinfo);
-
-      {
-         struct lp_shader_input inputs[PIPE_MAX_SHADER_INPUTS];
-
-         for (i = 0; i < lpfs->info.num_inputs; i++) {
-            switch (vinfo->attrib[i].interp_mode) {
-            case INTERP_CONSTANT:
-               inputs[i].interp = LP_INTERP_CONSTANT;
-               break;
-            case INTERP_LINEAR:
-               inputs[i].interp = LP_INTERP_LINEAR;
-               break;
-            case INTERP_PERSPECTIVE:
-               inputs[i].interp = LP_INTERP_PERSPECTIVE;
-               break;
-            case INTERP_POS:
-               inputs[i].interp = LP_INTERP_POSITION;
-               break;
-            default:
-               assert(0);
-            }
-
-            if (lpfs->info.input_semantic_name[i] == TGSI_SEMANTIC_FACE)
-               inputs[i].interp = LP_INTERP_FACING;
-
-            inputs[i].src_index = vinfo->attrib[i].src_index;
-         }
-
-         lp_setup_set_fs_inputs(llvmpipe->setup, inputs, lpfs->info.num_inputs);
-      }
    }
 
    return vinfo;
@@ -236,25 +192,35 @@ compute_cliprect(struct llvmpipe_context *lp)
 }
 
 
-#if 0
-static void 
-update_culling(struct llvmpipe_context *lp)
+static void
+update_tgsi_samplers( struct llvmpipe_context *llvmpipe )
 {
-   struct lp_setup_context *setup = lp->setup;
+   unsigned i;
 
-   if (lp->reduced_api_prim == PIPE_PRIM_TRIANGLES &&
-       lp->rasterizer->fill_cw == PIPE_POLYGON_MODE_FILL &&
-       lp->rasterizer->fill_ccw == PIPE_POLYGON_MODE_FILL) {
-      /* we'll do culling */
-      setup->winding = lp->rasterizer->cull_mode;
+   /* vertex shader samplers */
+   for (i = 0; i < PIPE_MAX_VERTEX_SAMPLERS; i++) {
+      llvmpipe->tgsi.vert_samplers[i].sampler = llvmpipe->vertex_samplers[i];
+      llvmpipe->tgsi.vert_samplers[i].texture = llvmpipe->vertex_textures[i];
+      llvmpipe->tgsi.vert_samplers[i].base.get_samples = lp_get_samples;
    }
-   else {
-      /* 'draw' will do culling */
-      setup->winding = PIPE_WINDING_NONE;
+
+   for (i = 0; i < PIPE_MAX_VERTEX_SAMPLERS; i++) {
+      lp_tex_tile_cache_validate_texture( llvmpipe->vertex_tex_cache[i] );
    }
+
+   /* fragment shader samplers */
+   for (i = 0; i < PIPE_MAX_SAMPLERS; i++) {
+      llvmpipe->tgsi.frag_samplers[i].sampler = llvmpipe->sampler[i];
+      llvmpipe->tgsi.frag_samplers[i].texture = llvmpipe->texture[i];
+      llvmpipe->tgsi.frag_samplers[i].base.get_samples = lp_get_samples;
+   }
+
+   for (i = 0; i < PIPE_MAX_SAMPLERS; i++) {
+      lp_tex_tile_cache_validate_texture( llvmpipe->tex_cache[i] );
+   }
+
+   llvmpipe->jit_context.samplers = (struct tgsi_sampler **)llvmpipe->tgsi.frag_samplers_list;
 }
-#endif
-
 
 /* Hopefully this will remain quite simple, otherwise need to pull in
  * something like the state tracker mechanism.
@@ -270,6 +236,10 @@ void llvmpipe_update_derived( struct llvmpipe_context *llvmpipe )
       llvmpipe->dirty |= LP_NEW_TEXTURE;
    }
       
+   if (llvmpipe->dirty & (LP_NEW_SAMPLER |
+                          LP_NEW_TEXTURE))
+      update_tgsi_samplers( llvmpipe );
+
    if (llvmpipe->dirty & (LP_NEW_RASTERIZER |
                           LP_NEW_FS |
                           LP_NEW_VS))
@@ -287,36 +257,6 @@ void llvmpipe_update_derived( struct llvmpipe_context *llvmpipe )
                           LP_NEW_TEXTURE))
       llvmpipe_update_fs( llvmpipe );
 
-   if (llvmpipe->dirty & (LP_NEW_BLEND |
-                          LP_NEW_DEPTH_STENCIL_ALPHA |
-                          LP_NEW_SAMPLER |
-                          LP_NEW_TEXTURE))
-      llvmpipe_update_fs( llvmpipe );
-
-   if (llvmpipe->dirty & LP_NEW_BLEND_COLOR)
-      lp_setup_set_blend_color(llvmpipe->setup, &llvmpipe->blend_color);
-
-   if (llvmpipe->dirty & LP_NEW_DEPTH_STENCIL_ALPHA)
-      lp_setup_set_alpha_ref_value(llvmpipe->setup, llvmpipe->depth_stencil->alpha.ref_value);
-
-   if (llvmpipe->dirty & LP_NEW_CONSTANTS)
-      lp_setup_set_fs_constants(llvmpipe->setup, llvmpipe->constants[PIPE_SHADER_FRAGMENT].buffer);
-
-   if (llvmpipe->dirty & LP_NEW_TEXTURE)
-      lp_setup_set_sampler_textures(llvmpipe->setup, llvmpipe->num_textures, llvmpipe->texture);
 
    llvmpipe->dirty = 0;
 }
-
-
-#if 0
-void llvmpipe_prepare(struct lp_setup_context *setup)
-{
-   struct llvmpipe_context *lp = setup->llvmpipe;
-
-   if (lp->dirty) {
-      llvmpipe_update_derived(lp);
-   }
-
-}
-#endif

@@ -50,7 +50,7 @@
 #include <xcb/glx.h>
 #endif
 
-static const char __glXGLXClientVendorName[] = "SGI";
+static const char __glXGLXClientVendorName[] = "Mesa Project and SGI";
 static const char __glXGLXClientVersion[] = "1.4";
 
 
@@ -539,6 +539,16 @@ DestroyContext(Display * dpy, GLXContext gc)
    xid = gc->xid;
    imported = gc->imported;
    gc->xid = None;
+
+   if (gc->currentDpy) {
+      /* This context is bound to some thread.  According to the man page,
+       * we should not actually delete the context until it's unbound.
+       * Note that we set gc->xid = None above.  In MakeContextCurrent()
+       * we check for that and delete the context there.
+       */
+      __glXUnlock();
+      return;
+   }
 
 #ifdef GLX_DIRECT_RENDERING
    /* Destroy the direct rendering context */

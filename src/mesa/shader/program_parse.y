@@ -66,7 +66,16 @@ static int validate_inputs(struct YYLTYPE *locp,
 
 static void init_dst_reg(struct prog_dst_register *r);
 
+static void set_dst_reg(struct prog_dst_register *r,
+                        gl_register_file file, GLint index);
+
 static void init_src_reg(struct asm_src_register *r);
+
+static void set_src_reg(struct asm_src_register *r,
+                        gl_register_file file, GLint index);
+
+static void set_src_reg_swz(struct asm_src_register *r,
+                            gl_register_file file, GLint index, GLuint swizzle);
 
 static void asm_instruction_set_operands(struct asm_instruction *inst,
     const struct prog_dst_register *dst, const struct asm_src_register *src0,
@@ -302,6 +311,8 @@ option: OPTION string ';'
 	      valid = _mesa_ARBfp_parse_option(state, $2);
 	   }
 
+
+	   free($2);
 
 	   if (!valid) {
 	      const char *const err_str = (state->mode == ARB_vertex)
@@ -580,9 +591,9 @@ scalarUse:  srcReg scalarSuffix
 	   temp_sym.param_binding_begin = ~0;
 	   initialize_symbol_from_const(state->prog, & temp_sym, & $1);
 
-	   init_src_reg(& $$);
-	   $$.Base.File = PROGRAM_CONSTANT;
-	   $$.Base.Index = temp_sym.param_binding_begin;
+	   set_src_reg_swz(& $$, PROGRAM_CONSTANT,
+                           temp_sym.param_binding_begin,
+                           temp_sym.param_binding_swizzle);
 	}
 	;
 
@@ -637,16 +648,14 @@ maskedDstReg: dstReg optionalMask optionalCcMask
 		 YYERROR;
 	      }
 
-	      state->prog->OutputsWritten |= (1U << $$.Index);
+	      state->prog->OutputsWritten |= BITFIELD64_BIT($$.Index);
 	   }
 	}
 	;
 
 maskedAddrReg: addrReg addrWriteMask
 	{
-	   init_dst_reg(& $$);
-	   $$.File = PROGRAM_ADDRESS;
-	   $$.Index = 0;
+	   set_dst_reg(& $$, PROGRAM_ADDRESS, 0);
 	   $$.WriteMask = $2.mask;
 	}
 	;
@@ -708,12 +717,17 @@ extSwizSel: INTEGER
 	}
 	| string
 	{
+	   char s;
+
 	   if (strlen($1) > 1) {
 	      yyerror(& @1, state, "invalid extended swizzle selector");
 	      YYERROR;
 	   }
 
-	   switch ($1[0]) {
+	   s = $1[0];
+	   free($1);
+
+	   switch (s) {
 	   case 'x':
 	      $$.swz = SWIZZLE_X;
 	      $$.xyzw_valid = 1;
@@ -761,6 +775,8 @@ srcReg: USED_IDENTIFIER /* temporaryReg | progParamSingle */
 	   struct asm_symbol *const s = (struct asm_symbol *)
 	      _mesa_symbol_table_find_symbol(state->st, 0, $1);
 
+	   free($1);
+
 	   if (s == NULL) {
 	      yyerror(& @1, state, "invalid operand variable");
 	      YYERROR;
@@ -776,16 +792,15 @@ srcReg: USED_IDENTIFIER /* temporaryReg | progParamSingle */
 	   init_src_reg(& $$);
 	   switch (s->type) {
 	   case at_temp:
-	      $$.Base.File = PROGRAM_TEMPORARY;
-	      $$.Base.Index = s->temp_binding;
+	      set_src_reg(& $$, PROGRAM_TEMPORARY, s->temp_binding);
 	      break;
 	   case at_param:
-	      $$.Base.File = s->param_binding_type;
-	      $$.Base.Index = s->param_binding_begin;
+              set_src_reg_swz(& $$, s->param_binding_type,
+                              s->param_binding_begin,
+                              s->param_binding_swizzle);
 	      break;
 	   case at_attrib:
-	      $$.Base.File = PROGRAM_INPUT;
-	      $$.Base.Index = s->attrib_binding;
+	      set_src_reg(& $$, PROGRAM_INPUT, s->attrib_binding);
 	      state->prog->InputsRead |= (1U << $$.Base.Index);
 
 	      if (!validate_inputs(& @1, state)) {
@@ -800,9 +815,7 @@ srcReg: USED_IDENTIFIER /* temporaryReg | progParamSingle */
 	}
 	| attribBinding
 	{
-	   init_src_reg(& $$);
-	   $$.Base.File = PROGRAM_INPUT;
-	   $$.Base.Index = $1;
+	   set_src_reg(& $$, PROGRAM_INPUT, $1);
 	   state->prog->InputsRead |= (1U << $$.Base.Index);
 
 	   if (!validate_inputs(& @1, state)) {
@@ -832,24 +845,24 @@ srcReg: USED_IDENTIFIER /* temporaryReg | progParamSingle */
 	}
 	| paramSingleItemUse
 	{
-	   init_src_reg(& $$);
-	   $$.Base.File = ($1.name != NULL) 
+           gl_register_file file = ($1.name != NULL) 
 	      ? $1.param_binding_type
 	      : PROGRAM_CONSTANT;
-	   $$.Base.Index = $1.param_binding_begin;
+           set_src_reg_swz(& $$, file, $1.param_binding_begin,
+                           $1.param_binding_swizzle);
 	}
 	;
 
 dstReg: resultBinding
 	{
-	   init_dst_reg(& $$);
-	   $$.File = PROGRAM_OUTPUT;
-	   $$.Index = $1;
+	   set_dst_reg(& $$, PROGRAM_OUTPUT, $1);
 	}
 	| USED_IDENTIFIER /* temporaryReg | vertexResultReg */
 	{
 	   struct asm_symbol *const s = (struct asm_symbol *)
 	      _mesa_symbol_table_find_symbol(state->st, 0, $1);
+
+	   free($1);
 
 	   if (s == NULL) {
 	      yyerror(& @1, state, "invalid operand variable");
@@ -859,19 +872,15 @@ dstReg: resultBinding
 	      YYERROR;
 	   }
 
-	   init_dst_reg(& $$);
 	   switch (s->type) {
 	   case at_temp:
-	      $$.File = PROGRAM_TEMPORARY;
-	      $$.Index = s->temp_binding;
+	      set_dst_reg(& $$, PROGRAM_TEMPORARY, s->temp_binding);
 	      break;
 	   case at_output:
-	      $$.File = PROGRAM_OUTPUT;
-	      $$.Index = s->output_binding;
+	      set_dst_reg(& $$, PROGRAM_OUTPUT, s->output_binding);
 	      break;
 	   default:
-	      $$.File = s->param_binding_type;
-	      $$.Index = s->param_binding_begin;
+	      set_dst_reg(& $$, s->param_binding_type, s->param_binding_begin);
 	      break;
 	   }
 	}
@@ -881,6 +890,8 @@ progParamArray: USED_IDENTIFIER
 	{
 	   struct asm_symbol *const s = (struct asm_symbol *)
 	      _mesa_symbol_table_find_symbol(state->st, 0, $1);
+
+	   free($1);
 
 	   if (s == NULL) {
 	      yyerror(& @1, state, "invalid operand variable");
@@ -952,6 +963,8 @@ addrReg: USED_IDENTIFIER
 	{
 	   struct asm_symbol *const s = (struct asm_symbol *)
 	      _mesa_symbol_table_find_symbol(state->st, 0, $1);
+
+	   free($1);
 
 	   if (s == NULL) {
 	      yyerror(& @1, state, "invalid array member");
@@ -1091,6 +1104,7 @@ ATTRIB_statement: ATTRIB IDENTIFIER '=' attribBinding
 	      declare_variable(state, $2, at_attrib, & @2);
 
 	   if (s == NULL) {
+	      free($2);
 	      YYERROR;
 	   } else {
 	      s->attrib_binding = $4;
@@ -1198,11 +1212,13 @@ PARAM_singleStmt: PARAM IDENTIFIER paramSingleInit
 	      declare_variable(state, $2, at_param, & @2);
 
 	   if (s == NULL) {
+	      free($2);
 	      YYERROR;
 	   } else {
 	      s->param_binding_type = $3.param_binding_type;
 	      s->param_binding_begin = $3.param_binding_begin;
 	      s->param_binding_length = $3.param_binding_length;
+              s->param_binding_swizzle = SWIZZLE_XYZW;
 	      s->param_is_array = 0;
 	   }
 	}
@@ -1211,6 +1227,7 @@ PARAM_singleStmt: PARAM IDENTIFIER paramSingleInit
 PARAM_multipleStmt: PARAM IDENTIFIER '[' optArraySize ']' paramMultipleInit
 	{
 	   if (($4 != 0) && ((unsigned) $4 != $6.param_binding_length)) {
+	      free($2);
 	      yyerror(& @4, state, 
 		      "parameter array size and number of bindings must match");
 	      YYERROR;
@@ -1219,11 +1236,13 @@ PARAM_multipleStmt: PARAM IDENTIFIER '[' optArraySize ']' paramMultipleInit
 		 declare_variable(state, $2, $6.type, & @2);
 
 	      if (s == NULL) {
+		 free($2);
 		 YYERROR;
 	      } else {
 		 s->param_binding_type = $6.param_binding_type;
 		 s->param_binding_begin = $6.param_binding_begin;
 		 s->param_binding_length = $6.param_binding_length;
+                 s->param_binding_swizzle = SWIZZLE_XYZW;
 		 s->param_is_array = 1;
 	      }
 	   }
@@ -1236,7 +1255,7 @@ optArraySize:
 	}
 	| INTEGER
         {
-	   if (($1 < 1) || ((unsigned) $1 >= state->limits->MaxParameters)) {
+	   if (($1 < 1) || ((unsigned) $1 > state->limits->MaxParameters)) {
 	      yyerror(& @1, state, "invalid parameter array size");
 	      YYERROR;
 	   } else {
@@ -1953,12 +1972,14 @@ ADDRESS_statement: ADDRESS { $<integer>$ = $1; } varNameList
 varNameList: varNameList ',' IDENTIFIER
 	{
 	   if (!declare_variable(state, $3, $<integer>0, & @3)) {
+	      free($3);
 	      YYERROR;
 	   }
 	}
 	| IDENTIFIER
 	{
 	   if (!declare_variable(state, $1, $<integer>0, & @1)) {
+	      free($1);
 	      YYERROR;
 	   }
 	}
@@ -1970,6 +1991,7 @@ OUTPUT_statement: optVarSize OUTPUT IDENTIFIER '=' resultBinding
 	      declare_variable(state, $3, at_output, & @3);
 
 	   if (s == NULL) {
+	      free($3);
 	      YYERROR;
 	   } else {
 	      s->output_binding = $5;
@@ -2146,11 +2168,16 @@ ALIAS_statement: ALIAS IDENTIFIER '=' USED_IDENTIFIER
 	   struct asm_symbol *target = (struct asm_symbol *)
 	      _mesa_symbol_table_find_symbol(state->st, 0, $4);
 
+	   free($4);
 
 	   if (exist != NULL) {
-	      yyerror(& @2, state, "redeclared identifier");
+	      char m[1000];
+	      _mesa_snprintf(m, sizeof(m), "redeclared identifier: %s", $2);
+	      free($2);
+	      yyerror(& @2, state, m);
 	      YYERROR;
 	   } else if (target == NULL) {
+	      free($2);
 	      yyerror(& @4, state,
 		      "undefined variable binding in ALIAS statement");
 	      YYERROR;
@@ -2263,12 +2290,59 @@ init_dst_reg(struct prog_dst_register *r)
 }
 
 
+/** Like init_dst_reg() but set the File and Index fields. */
+void
+set_dst_reg(struct prog_dst_register *r, gl_register_file file, GLint index)
+{
+   const GLint maxIndex = 1 << INST_INDEX_BITS;
+   const GLint minIndex = 0;
+   ASSERT(index >= minIndex);
+   ASSERT(index <= maxIndex);
+   ASSERT(file == PROGRAM_TEMPORARY ||
+	  file == PROGRAM_ADDRESS ||
+	  file == PROGRAM_OUTPUT);
+   memset(r, 0, sizeof(*r));
+   r->File = file;
+   r->Index = index;
+   r->WriteMask = WRITEMASK_XYZW;
+   r->CondMask = COND_TR;
+   r->CondSwizzle = SWIZZLE_NOOP;
+}
+
+
 void
 init_src_reg(struct asm_src_register *r)
 {
    memset(r, 0, sizeof(*r));
    r->Base.File = PROGRAM_UNDEFINED;
    r->Base.Swizzle = SWIZZLE_NOOP;
+   r->Symbol = NULL;
+}
+
+
+/** Like init_src_reg() but set the File and Index fields.
+ * \return GL_TRUE if a valid src register, GL_FALSE otherwise
+ */
+void
+set_src_reg(struct asm_src_register *r, gl_register_file file, GLint index)
+{
+   set_src_reg_swz(r, file, index, SWIZZLE_XYZW);
+}
+
+
+void
+set_src_reg_swz(struct asm_src_register *r, gl_register_file file, GLint index,
+                GLuint swizzle)
+{
+   const GLint maxIndex = (1 << INST_INDEX_BITS) - 1;
+   const GLint minIndex = -(1 << INST_INDEX_BITS);
+   ASSERT(file < PROGRAM_FILE_MAX);
+   ASSERT(index >= minIndex);
+   ASSERT(index <= maxIndex);
+   memset(r, 0, sizeof(*r));
+   r->Base.File = file;
+   r->Base.Index = index;
+   r->Base.Swizzle = swizzle;
    r->Symbol = NULL;
 }
 
@@ -2400,15 +2474,20 @@ initialize_symbol_from_state(struct gl_program *prog,
 	 state_tokens[2] = state_tokens[3] = row;
 
 	 idx = add_state_reference(prog->Parameters, state_tokens);
-	 if (param_var->param_binding_begin == ~0U)
+	 if (param_var->param_binding_begin == ~0U) {
 	    param_var->param_binding_begin = idx;
+            param_var->param_binding_swizzle = SWIZZLE_XYZW;
+         }
+
 	 param_var->param_binding_length++;
       }
    }
    else {
       idx = add_state_reference(prog->Parameters, state_tokens);
-      if (param_var->param_binding_begin == ~0U)
+      if (param_var->param_binding_begin == ~0U) {
 	 param_var->param_binding_begin = idx;
+         param_var->param_binding_swizzle = SWIZZLE_XYZW;
+      }
       param_var->param_binding_length++;
    }
 
@@ -2448,15 +2527,19 @@ initialize_symbol_from_param(struct gl_program *prog,
 	 state_tokens[2] = state_tokens[3] = row;
 
 	 idx = add_state_reference(prog->Parameters, state_tokens);
-	 if (param_var->param_binding_begin == ~0U)
+	 if (param_var->param_binding_begin == ~0U) {
 	    param_var->param_binding_begin = idx;
+            param_var->param_binding_swizzle = SWIZZLE_XYZW;
+         }
 	 param_var->param_binding_length++;
       }
    }
    else {
       idx = add_state_reference(prog->Parameters, state_tokens);
-      if (param_var->param_binding_begin == ~0U)
+      if (param_var->param_binding_begin == ~0U) {
 	 param_var->param_binding_begin = idx;
+         param_var->param_binding_swizzle = SWIZZLE_XYZW;
+      }
       param_var->param_binding_length++;
    }
 
@@ -2464,20 +2547,29 @@ initialize_symbol_from_param(struct gl_program *prog,
 }
 
 
+/**
+ * Put a float/vector constant/literal into the parameter list.
+ * \param param_var  returns info about the parameter/constant's location,
+ *                   binding, type, etc.
+ * \param vec  the vector/constant to add
+ * \return index of the constant in the parameter list.
+ */
 int
 initialize_symbol_from_const(struct gl_program *prog,
 			     struct asm_symbol *param_var, 
 			     const struct asm_vector *vec)
 {
-   const int idx = _mesa_add_parameter(prog->Parameters, PROGRAM_CONSTANT,
-				       NULL, vec->count, GL_NONE, vec->data,
-				       NULL, 0x0);
+   unsigned swizzle;
+   const int idx = _mesa_add_unnamed_constant(prog->Parameters,
+                                              vec->data, vec->count, &swizzle);
 
    param_var->type = at_param;
    param_var->param_binding_type = PROGRAM_CONSTANT;
 
-   if (param_var->param_binding_begin == ~0U)
+   if (param_var->param_binding_begin == ~0U) {
       param_var->param_binding_begin = idx;
+      param_var->param_binding_swizzle = swizzle;
+   }
    param_var->param_binding_length++;
 
    return idx;

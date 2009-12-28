@@ -66,7 +66,7 @@ static void upload_blend_constant_color(struct brw_context *brw)
 const struct brw_tracked_state brw_blend_constant_color = {
    .dirty = {
       .mesa = _NEW_COLOR,
-      .brw = 0,
+      .brw = BRW_NEW_CONTEXT,
       .cache = 0
    },
    .emit = upload_blend_constant_color
@@ -93,7 +93,7 @@ static void upload_drawing_rect(struct brw_context *brw)
 const struct brw_tracked_state brw_drawing_rect = {
    .dirty = {
       .mesa = _NEW_BUFFERS,
-      .brw = 0,
+      .brw = BRW_NEW_CONTEXT,
       .cache = 0
    },
    .emit = upload_drawing_rect
@@ -212,7 +212,7 @@ static void emit_depthbuffer(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
    struct intel_region *region = brw->state.depth_region;
-   unsigned int len = (BRW_IS_G4X(brw) || BRW_IS_IGDNG(brw)) ? 6 : 5;
+   unsigned int len = (intel->is_g4x || intel->is_ironlake) ? 6 : 5;
 
    if (region == NULL) {
       BEGIN_BATCH(len, IGNORE_CLIPRECTS);
@@ -223,7 +223,7 @@ static void emit_depthbuffer(struct brw_context *brw)
       OUT_BATCH(0);
       OUT_BATCH(0);
 
-      if (BRW_IS_G4X(brw) || BRW_IS_IGDNG(brw))
+      if (intel->is_g4x || intel->is_ironlake)
          OUT_BATCH(0);
 
       ADVANCE_BATCH();
@@ -262,7 +262,7 @@ static void emit_depthbuffer(struct brw_context *brw)
 		((region->height - 1) << 19));
       OUT_BATCH(0);
 
-      if (BRW_IS_G4X(brw) || BRW_IS_IGDNG(brw))
+      if (intel->is_g4x || intel->is_ironlake)
          OUT_BATCH(0);
 
       ADVANCE_BATCH();
@@ -317,7 +317,7 @@ static void upload_polygon_stipple(struct brw_context *brw)
 const struct brw_tracked_state brw_polygon_stipple = {
    .dirty = {
       .mesa = _NEW_POLYGONSTIPPLE,
-      .brw = 0,
+      .brw = BRW_NEW_CONTEXT,
       .cache = 0
    },
    .emit = upload_polygon_stipple
@@ -362,7 +362,7 @@ static void upload_polygon_stipple_offset(struct brw_context *brw)
 const struct brw_tracked_state brw_polygon_stipple_offset = {
    .dirty = {
       .mesa = _NEW_WINDOW_POS,
-      .brw = 0,
+      .brw = BRW_NEW_CONTEXT,
       .cache = 0
    },
    .emit = upload_polygon_stipple_offset
@@ -374,8 +374,8 @@ const struct brw_tracked_state brw_polygon_stipple_offset = {
 static void upload_aa_line_parameters(struct brw_context *brw)
 {
    struct brw_aa_line_parameters balp;
-   
-   if (BRW_IS_965(brw))
+
+   if (!brw->has_aa_line_parameters)
       return;
 
    /* use legacy aa line coverage computation */
@@ -425,7 +425,7 @@ static void upload_line_stipple(struct brw_context *brw)
 const struct brw_tracked_state brw_line_stipple = {
    .dirty = {
       .mesa = _NEW_LINE,
-      .brw = 0,
+      .brw = BRW_NEW_CONTEXT,
       .cache = 0
    },
    .emit = upload_line_stipple
@@ -444,7 +444,7 @@ static void upload_invarient_state( struct brw_context *brw )
       struct brw_pipeline_select ps;
 
       memset(&ps, 0, sizeof(ps));
-      ps.header.opcode = CMD_PIPELINE_SELECT(brw);
+      ps.header.opcode = brw->CMD_PIPELINE_SELECT;
       ps.header.pipeline_select = 0;
       BRW_BATCH_STRUCT(brw, &ps);
    }
@@ -480,7 +480,7 @@ static void upload_invarient_state( struct brw_context *brw )
       struct brw_vf_statistics vfs;
       memset(&vfs, 0, sizeof(vfs));
 
-      vfs.opcode = CMD_VF_STATISTICS(brw);
+      vfs.opcode = brw->CMD_VF_STATISTICS;
       if (INTEL_DEBUG & DEBUG_STATS)
 	 vfs.statistics_enable = 1; 
 
@@ -512,7 +512,7 @@ static void upload_state_base_address( struct brw_context *brw )
    /* Output the structure (brw_state_base_address) directly to the
     * batchbuffer, so we can emit relocations inline.
     */
-   if (BRW_IS_IGDNG(brw)) {
+   if (intel->is_ironlake) {
        BEGIN_BATCH(8, IGNORE_CLIPRECTS);
        OUT_BATCH(CMD_STATE_BASE_ADDRESS << 16 | (8 - 2));
        OUT_BATCH(1); /* General state base address */

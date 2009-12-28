@@ -721,10 +721,10 @@ static void r200ColorMask( GLcontext *ctx,
    if (!rrb)
      return;
    mask = radeonPackColor( rrb->cpp,
-			   ctx->Color.ColorMask[RCOMP],
-			   ctx->Color.ColorMask[GCOMP],
-			   ctx->Color.ColorMask[BCOMP],
-			   ctx->Color.ColorMask[ACOMP] );
+			   ctx->Color.ColorMask[0][RCOMP],
+			   ctx->Color.ColorMask[0][GCOMP],
+			   ctx->Color.ColorMask[0][BCOMP],
+			   ctx->Color.ColorMask[0][ACOMP] );
 
 
    if (!(r && g && b && a))
@@ -2476,7 +2476,7 @@ static void r200PolygonStipple( GLcontext *ctx, const GLubyte *mask )
 }
 /* Initialize the driver's state functions.
  */
-void r200InitStateFuncs( struct dd_function_table *functions, GLboolean dri2 )
+void r200InitStateFuncs( struct dd_function_table *functions )
 {
    functions->UpdateState		= r200InvalidateState;
    functions->LightingSpaceChange	= r200LightingSpaceChange;
@@ -2510,10 +2510,7 @@ void r200InitStateFuncs( struct dd_function_table *functions, GLboolean dri2 )
    functions->LogicOpcode		= r200LogicOpCode;
    functions->PolygonMode		= r200PolygonMode;
    functions->PolygonOffset		= r200PolygonOffset;
-   if (dri2)
-      functions->PolygonStipple		= r200PolygonStipple;
-   else
-      functions->PolygonStipple		= radeonPolygonStipplePreKMS;
+   functions->PolygonStipple		= r200PolygonStipple;
    functions->PointParameterfv		= r200PointParameter;
    functions->PointSize			= r200PointSize;
    functions->RenderMode		= r200RenderMode;

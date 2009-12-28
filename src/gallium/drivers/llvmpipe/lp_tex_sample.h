@@ -34,7 +34,38 @@
 #include "tgsi/tgsi_exec.h"
 
 
+struct llvmpipe_tex_tile_cache;
 struct lp_sampler_static_state;
+
+
+/**
+ * Subclass of tgsi_sampler
+ */
+struct lp_shader_sampler
+{
+   struct tgsi_sampler base;  /**< base class */
+
+   unsigned processor;
+
+   /* For lp_get_samples_2d_linear_POT:
+    */
+   unsigned xpot;
+   unsigned ypot;
+   unsigned level;
+
+   const struct pipe_texture *texture;
+   const struct pipe_sampler_state *sampler;
+
+   struct llvmpipe_tex_tile_cache *cache;
+};
+
+
+
+static INLINE struct lp_shader_sampler *
+lp_shader_sampler(const struct tgsi_sampler *sampler)
+{
+   return (struct lp_shader_sampler *) sampler;
+}
 
 
 

@@ -687,16 +687,6 @@ nv40_set_vertex_elements(struct pipe_context *pipe, unsigned count,
 	nv40->draw_dirty |= NV40_NEW_ARRAYS;
 }
 
-static void
-nv40_set_edgeflags(struct pipe_context *pipe, const unsigned *bitfield)
-{
-	struct nv40_context *nv40 = nv40_context(pipe);
-
-	nv40->edgeflags = bitfield;
-	nv40->dirty |= NV40_NEW_ARRAYS;
-	nv40->draw_dirty |= NV40_NEW_ARRAYS;
-}
-
 void
 nv40_init_state_functions(struct nv40_context *nv40)
 {
@@ -705,9 +695,9 @@ nv40_init_state_functions(struct nv40_context *nv40)
 	nv40->pipe.delete_blend_state = nv40_blend_state_delete;
 
 	nv40->pipe.create_sampler_state = nv40_sampler_state_create;
-	nv40->pipe.bind_sampler_states = nv40_sampler_state_bind;
+	nv40->pipe.bind_fragment_sampler_states = nv40_sampler_state_bind;
 	nv40->pipe.delete_sampler_state = nv40_sampler_state_delete;
-	nv40->pipe.set_sampler_textures = nv40_set_sampler_texture;
+	nv40->pipe.set_fragment_sampler_textures = nv40_set_sampler_texture;
 
 	nv40->pipe.create_rasterizer_state = nv40_rasterizer_state_create;
 	nv40->pipe.bind_rasterizer_state = nv40_rasterizer_state_bind;
@@ -736,7 +726,6 @@ nv40_init_state_functions(struct nv40_context *nv40)
 	nv40->pipe.set_scissor_state = nv40_set_scissor_state;
 	nv40->pipe.set_viewport_state = nv40_set_viewport_state;
 
-	nv40->pipe.set_edgeflags = nv40_set_edgeflags;
 	nv40->pipe.set_vertex_buffers = nv40_set_vertex_buffers;
 	nv40->pipe.set_vertex_elements = nv40_set_vertex_elements;
 }

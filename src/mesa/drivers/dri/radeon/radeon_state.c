@@ -521,10 +521,10 @@ static void radeonColorMask( GLcontext *ctx,
      return;
 
    mask = radeonPackColor( rrb->cpp,
-			   ctx->Color.ColorMask[RCOMP],
-			   ctx->Color.ColorMask[GCOMP],
-			   ctx->Color.ColorMask[BCOMP],
-			   ctx->Color.ColorMask[ACOMP] );
+			   ctx->Color.ColorMask[0][RCOMP],
+			   ctx->Color.ColorMask[0][GCOMP],
+			   ctx->Color.ColorMask[0][BCOMP],
+			   ctx->Color.ColorMask[0][ACOMP] );
 
    if ( rmesa->hw.msk.cmd[MSK_RB3D_PLANEMASK] != mask ) {
       RADEON_STATECHANGE( rmesa, msk );
@@ -548,6 +548,31 @@ static void radeonPolygonOffset( GLcontext *ctx,
    RADEON_STATECHANGE( rmesa, zbs );
    rmesa->hw.zbs.cmd[ZBS_SE_ZBIAS_FACTOR]   = factoru.ui32;
    rmesa->hw.zbs.cmd[ZBS_SE_ZBIAS_CONSTANT] = constant.ui32;
+}
+
+static void radeonPolygonStipplePreKMS( GLcontext *ctx, const GLubyte *mask )
+{
+   r100ContextPtr rmesa = R100_CONTEXT(ctx);
+   GLuint i;
+   drm_radeon_stipple_t stipple;
+
+   /* Must flip pattern upside down.
+    */
+   for ( i = 0 ; i < 32 ; i++ ) {
+      rmesa->state.stipple.mask[31 - i] = ((GLuint *) mask)[i];
+   }
+
+   /* TODO: push this into cmd mechanism
+    */
+   radeon_firevertices(&rmesa->radeon);
+   LOCK_HARDWARE( &rmesa->radeon );
+
+   /* FIXME: Use window x,y offsets into stipple RAM.
+    */
+   stipple.mask = rmesa->state.stipple.mask;
+   drmCommandWrite( rmesa->radeon.dri.fd, DRM_RADEON_STIPPLE,
+		    &stipple, sizeof(drm_radeon_stipple_t) );
+   UNLOCK_HARDWARE( &rmesa->radeon );
 }
 
 static void radeonPolygonMode( GLcontext *ctx, GLenum face, GLenum mode )

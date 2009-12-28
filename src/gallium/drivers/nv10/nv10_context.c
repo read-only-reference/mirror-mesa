@@ -243,41 +243,13 @@ static void nv10_init_hwctx(struct nv10_context *nv10)
 	OUT_RING  (0.0);
 	OUT_RINGf  (16777216.0);
 
-	BEGIN_RING(celsius, NV10TCL_VIEWPORT_SCALE_X, 4);
+	BEGIN_RING(celsius, NV10TCL_VIEWPORT_TRANSLATE_X, 4);
 	OUT_RINGf  (-2048.0);
 	OUT_RINGf  (-2048.0);
 	OUT_RINGf  (16777215.0 * 0.5);
 	OUT_RING  (0);
 
 	FIRE_RING (NULL);
-}
-
-static void
-nv10_set_edgeflags(struct pipe_context *pipe, const unsigned *bitfield)
-{
-}
-
-static unsigned int
-nv10_is_texture_referenced( struct pipe_context *pipe,
-			    struct pipe_texture *texture,
-			    unsigned face, unsigned level)
-{
-   /**
-    * FIXME: Optimize.
-    */
-
-   return PIPE_REFERENCED_FOR_READ | PIPE_REFERENCED_FOR_WRITE;
-}
-
-static unsigned int
-nv10_is_buffer_referenced( struct pipe_context *pipe,
-			   struct pipe_buffer *buf)
-{
-   /**
-    * FIXME: Optimize.
-    */
-
-   return PIPE_REFERENCED_FOR_READ | PIPE_REFERENCED_FOR_WRITE;
 }
 
 struct pipe_context *
@@ -299,14 +271,13 @@ nv10_create(struct pipe_screen *pscreen, unsigned pctx_id)
 	nv10->pipe.winsys = ws;
 	nv10->pipe.screen = pscreen;
 	nv10->pipe.destroy = nv10_destroy;
-	nv10->pipe.set_edgeflags = nv10_set_edgeflags;
 	nv10->pipe.draw_arrays = nv10_draw_arrays;
 	nv10->pipe.draw_elements = nv10_draw_elements;
 	nv10->pipe.clear = nv10_clear;
 	nv10->pipe.flush = nv10_flush;
 
-	nv10->pipe.is_texture_referenced = nv10_is_texture_referenced;
-	nv10->pipe.is_buffer_referenced = nv10_is_buffer_referenced;
+	nv10->pipe.is_texture_referenced = nouveau_is_texture_referenced;
+	nv10->pipe.is_buffer_referenced = nouveau_is_buffer_referenced;
 
 	nv10_init_surface_functions(nv10);
 	nv10_init_state_functions(nv10);

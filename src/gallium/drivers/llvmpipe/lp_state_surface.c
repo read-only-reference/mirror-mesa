@@ -31,13 +31,18 @@
 #include "lp_context.h"
 #include "lp_state.h"
 #include "lp_surface.h"
-#include "lp_setup.h"
+#include "lp_tile_cache.h"
 
 #include "draw/draw_context.h"
 
+#include "util/u_format.h"
+
 
 /**
+ * XXX this might get moved someday
  * Set the framebuffer surface info: color buffers, zbuffer, stencil buffer.
+ * Here, we flush the old surfaces and update the tile cache to point to the new
+ * surfaces.
  */
 void
 llvmpipe_set_framebuffer_state(struct pipe_context *pipe,
@@ -45,23 +50,40 @@ llvmpipe_set_framebuffer_state(struct pipe_context *pipe,
 {
    struct llvmpipe_context *lp = llvmpipe_context(pipe);
    uint i;
-   boolean dirty = FALSE;
+
+   draw_flush(lp->draw);
 
    for (i = 0; i < PIPE_MAX_COLOR_BUFS; i++) {
+      /* check if changing cbuf */
       if (lp->framebuffer.cbufs[i] != fb->cbufs[i]) {
+         /* flush old */
+         lp_tile_cache_map_transfers(lp->cbuf_cache[i]);
+         lp_flush_tile_cache(lp->cbuf_cache[i]);
+
+         /* assign new */
          pipe_surface_reference(&lp->framebuffer.cbufs[i], fb->cbufs[i]);
-         dirty = TRUE;
+
+         /* update cache */
+         lp_tile_cache_set_surface(lp->cbuf_cache[i], fb->cbufs[i]);
       }
    }
 
-   if (lp->framebuffer.nr_cbufs != fb->nr_cbufs) {
-      dirty = TRUE;
-      lp->framebuffer.nr_cbufs = fb->nr_cbufs;
-   }
+   lp->framebuffer.nr_cbufs = fb->nr_cbufs;
 
    /* zbuf changing? */
    if (lp->framebuffer.zsbuf != fb->zsbuf) {
-      dirty = TRUE;
+
+      if(lp->zsbuf_transfer) {
+         struct pipe_screen *screen = pipe->screen;
+
+         if(lp->zsbuf_map) {
+            screen->transfer_unmap(screen, lp->zsbuf_transfer);
+            lp->zsbuf_map = NULL;
+         }
+
+         screen->tex_transfer_destroy(lp->zsbuf_transfer);
+         lp->zsbuf_transfer = NULL;
+      }
 
       /* assign new */
       pipe_surface_reference(&lp->framebuffer.zsbuf, fb->zsbuf);
@@ -70,8 +92,9 @@ llvmpipe_set_framebuffer_state(struct pipe_context *pipe,
       if (lp->framebuffer.zsbuf) {
          int depth_bits;
          double mrd;
-         depth_bits = pf_get_component_bits(lp->framebuffer.zsbuf->format,
-                                            PIPE_FORMAT_COMP_Z);
+         depth_bits = util_format_get_component_bits(lp->framebuffer.zsbuf->format,
+                                                     UTIL_FORMAT_COLORSPACE_ZS,
+                                                     0);
          if (depth_bits > 16) {
             mrd = 0.0000001;
          }
@@ -82,11 +105,8 @@ llvmpipe_set_framebuffer_state(struct pipe_context *pipe,
       }
    }
 
-   if (dirty) {
-      lp_setup_bind_framebuffer( lp->setup,
-                                 fb->cbufs[0],
-                                 fb->zsbuf );
+   lp->framebuffer.width = fb->width;
+   lp->framebuffer.height = fb->height;
 
-      lp->dirty |= LP_NEW_FRAMEBUFFER;
-   }
+   lp->dirty |= LP_NEW_FRAMEBUFFER;
 }

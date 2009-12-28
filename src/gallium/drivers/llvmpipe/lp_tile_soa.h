@@ -29,7 +29,7 @@
 #define LP_TILE_SOA_H
 
 #include "pipe/p_compiler.h"
-#include "tgsi/tgsi_exec.h" // for NUM_CHANNELS
+#include "tgsi/tgsi_exec.h" /* for NUM_CHANNELS */
 
 
 #ifdef __cplusplus
@@ -43,12 +43,11 @@ struct pipe_transfer;
 /**
  * Cache tile size (width and height). This needs to be a power of two.
  */
-#define TILE_ORDER 6
-#define TILE_SIZE (1<<TILE_ORDER)
+#define TILE_SIZE 64
 
 
-#define TILE_VECTOR_HEIGHT 4
-#define TILE_VECTOR_WIDTH 4
+#define TILE_VECTOR_HEIGHT 2
+#define TILE_VECTOR_WIDTH 8
 
 extern const unsigned char
 tile_offset[TILE_VECTOR_HEIGHT][TILE_VECTOR_WIDTH];

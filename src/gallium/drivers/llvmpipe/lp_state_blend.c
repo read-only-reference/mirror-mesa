@@ -34,6 +34,7 @@
 #include "util/u_memory.h"
 #include "util/u_math.h"
 #include "util/u_debug_dump.h"
+#include "draw/draw_context.h"
 #include "lp_screen.h"
 #include "lp_context.h"
 #include "lp_state.h"
@@ -51,6 +52,11 @@ void llvmpipe_bind_blend_state( struct pipe_context *pipe,
 {
    struct llvmpipe_context *llvmpipe = llvmpipe_context(pipe);
 
+   if (llvmpipe->blend == blend)
+      return;
+
+   draw_flush(llvmpipe->draw);
+
    llvmpipe->blend = blend;
 
    llvmpipe->dirty |= LP_NEW_BLEND;
@@ -67,16 +73,22 @@ void llvmpipe_set_blend_color( struct pipe_context *pipe,
 			     const struct pipe_blend_color *blend_color )
 {
    struct llvmpipe_context *llvmpipe = llvmpipe_context(pipe);
-
-   if(!blend_color)
-      return;
+   unsigned i, j;
 
    if(memcmp(&llvmpipe->blend_color, blend_color, sizeof *blend_color) == 0)
       return;
 
+   draw_flush(llvmpipe->draw);
+
    memcpy(&llvmpipe->blend_color, blend_color, sizeof *blend_color);
 
-   llvmpipe->dirty |= LP_NEW_BLEND_COLOR;
+   if(!llvmpipe->jit_context.blend_color)
+      llvmpipe->jit_context.blend_color = align_malloc(4 * 16, 16);
+   for (i = 0; i < 4; ++i) {
+      uint8_t c = float_to_ubyte(blend_color->color[i]);
+      for (j = 0; j < 16; ++j)
+         llvmpipe->jit_context.blend_color[i*16 + j] = c;
+   }
 }
 
 
@@ -98,7 +110,15 @@ llvmpipe_bind_depth_stencil_state(struct pipe_context *pipe,
 {
    struct llvmpipe_context *llvmpipe = llvmpipe_context(pipe);
 
-   llvmpipe->depth_stencil = (const struct pipe_depth_stencil_alpha_state *)depth_stencil;
+   if (llvmpipe->depth_stencil == depth_stencil)
+      return;
+
+   draw_flush(llvmpipe->draw);
+
+   llvmpipe->depth_stencil = depth_stencil;
+
+   if(llvmpipe->depth_stencil)
+      llvmpipe->jit_context.alpha_ref_value = llvmpipe->depth_stencil->alpha.ref_value;
 
    llvmpipe->dirty |= LP_NEW_DEPTH_STENCIL_ALPHA;
 }

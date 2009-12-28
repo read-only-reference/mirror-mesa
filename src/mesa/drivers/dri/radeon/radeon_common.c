@@ -229,16 +229,15 @@ void radeonUpdateScissor( GLcontext *ctx )
 	}
 	if (!rmesa->radeonScreen->kernel_mm) {
 	   /* Fix scissors for dri 1 */
-
 	   __DRIdrawablePrivate *dPriv = radeon_get_drawable(rmesa);
 	   x1 += dPriv->x;
-	   x2 += dPriv->x;
+	   x2 += dPriv->x + 1;
 	   min_x += dPriv->x;
-	   max_x += dPriv->x;
+	   max_x += dPriv->x + 1;
 	   y1 += dPriv->y;
-	   y2 += dPriv->y;
+	   y2 += dPriv->y + 1;
 	   min_y += dPriv->y;
-	   max_y += dPriv->y;
+	   max_y += dPriv->y + 1;
 	}
 
 	rmesa->state.scissor.rect.x1 = CLAMP(x1,  min_x, max_x);
@@ -262,29 +261,6 @@ void radeonScissor(GLcontext* ctx, GLint x, GLint y, GLsizei w, GLsizei h)
 		radeonUpdateScissor(ctx);
 	}
 }
-
-void radeonPolygonStipplePreKMS( GLcontext *ctx, const GLubyte *mask )
-{
-   radeonContextPtr radeon = RADEON_CONTEXT(ctx);
-   GLuint i;
-   drm_radeon_stipple_t stipple;
-
-   /* Must flip pattern upside down.
-   */
-   for ( i = 0 ; i < 32 ; i++ ) {
-      stipple.mask[31 - i] = ((GLuint *) mask)[i];
-   }
-
-   /* TODO: push this into cmd mechanism
-   */
-   radeon_firevertices(radeon);
-   LOCK_HARDWARE( radeon );
-
-   drmCommandWrite( radeon->dri.fd, DRM_RADEON_STIPPLE,
-	 &stipple, sizeof(stipple) );
-   UNLOCK_HARDWARE( radeon );
-}
-
 
 /* ================================================================
  * SwapBuffers with client-side throttling
@@ -665,6 +641,27 @@ void radeonCopySubBuffer(__DRIdrawablePrivate * dPriv,
 	}
 }
 
+/**
+ * Check if we're about to draw into the front color buffer.
+ * If so, set the intel->front_buffer_dirty field to true.
+ */
+void
+radeon_check_front_buffer_rendering(GLcontext *ctx)
+{
+	radeonContextPtr radeon = RADEON_CONTEXT(ctx);
+	const struct gl_framebuffer *fb = ctx->DrawBuffer;
+
+	if (fb->Name == 0) {
+		/* drawing to window system buffer */
+		if (fb->_NumColorDrawBuffers > 0) {
+			if (fb->_ColorDrawBufferIndexes[0] == BUFFER_FRONT_LEFT) {
+				radeon->front_buffer_dirty = GL_TRUE;
+			}
+		}
+	}
+}
+
+
 void radeon_draw_buffer(GLcontext *ctx, struct gl_framebuffer *fb)
 {
 	radeonContextPtr radeon = RADEON_CONTEXT(ctx);
@@ -841,7 +838,7 @@ void radeonDrawBuffer( GLcontext *ctx, GLenum mode )
        */
 		if (!was_front_buffer_rendering && radeon->is_front_buffer_rendering) {
 			radeon_update_renderbuffers(radeon->dri.context,
-				radeon->dri.context->driDrawablePriv);
+				radeon->dri.context->driDrawablePriv, GL_FALSE);
       }
 	}
 
@@ -858,7 +855,7 @@ void radeonReadBuffer( GLcontext *ctx, GLenum mode )
 
 		if (!was_front_buffer_reading && rmesa->is_front_buffer_reading) {
 			radeon_update_renderbuffers(rmesa->dri.context,
-						    rmesa->dri.context->driReadablePriv);
+						    rmesa->dri.context->driReadablePriv, GL_FALSE);
 	 	}
 	}
 	/* nothing, until we implement h/w glRead/CopyPixels or CopyTexImage */
@@ -909,9 +906,9 @@ void radeon_viewport(GLcontext *ctx, GLint x, GLint y, GLsizei width, GLsizei he
 		if (radeon->is_front_buffer_rendering) {
 			ctx->Driver.Flush(ctx);
 		}
-		radeon_update_renderbuffers(driContext, driContext->driDrawablePriv);
+		radeon_update_renderbuffers(driContext, driContext->driDrawablePriv, GL_FALSE);
 		if (driContext->driDrawablePriv != driContext->driReadablePriv)
-			radeon_update_renderbuffers(driContext, driContext->driReadablePriv);
+			radeon_update_renderbuffers(driContext, driContext->driReadablePriv, GL_FALSE);
 	}
 
 	old_viewport = ctx->Driver.Viewport;
@@ -1119,16 +1116,15 @@ void radeonFlush(GLcontext *ctx)
 	   then no point flushing anything at all.
 	*/
 	if (!radeon->dma.flush && !radeon->cmdbuf.cs->cdw && is_empty_list(&radeon->dma.reserved))
-		return;
+		goto flush_front;
 
 	if (radeon->dma.flush)
 		radeon->dma.flush( ctx );
 
-	radeonEmitState(radeon);
-
 	if (radeon->cmdbuf.cs->cdw)
 		rcommonFlushCmdBuf(radeon, __FUNCTION__);
 
+flush_front:
 	if ((ctx->DrawBuffer->Name == 0) && radeon->front_buffer_dirty) {
 		__DRIscreen *const screen = radeon->radeonScreen->driScreen;
 
@@ -1148,9 +1144,6 @@ void radeonFlush(GLcontext *ctx)
 			}
 		}
 	}
-
-	make_empty_list(&radeon->query.not_flushed_head);
-
 }
 
 /* Make sure all commands have been sent to the hardware and have
@@ -1237,7 +1230,7 @@ int rcommonFlushCmdBuf(radeonContextPtr rmesa, const char *caller)
 		fprintf(stderr, "drmRadeonCmdBuffer: %d. Kernel failed to "
 				"parse or rejected command stream. See dmesg "
 				"for more info.\n", ret);
-		_mesa_exit(ret);
+		exit(ret);
 	}
 
 	return ret;

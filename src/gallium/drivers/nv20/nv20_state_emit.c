@@ -135,6 +135,9 @@ static void nv20_state_emit_framebuffer(struct nv20_context* nv20)
 	rt_format = NV20TCL_RT_FORMAT_TYPE_LINEAR | 0x20;
 
 	switch (colour_format) {
+	case PIPE_FORMAT_X8R8G8B8_UNORM:
+		rt_format |= NV20TCL_RT_FORMAT_COLOR_X8R8G8B8;
+		break;
 	case PIPE_FORMAT_A8R8G8B8_UNORM:
 	case 0:
 		rt_format |= NV20TCL_RT_FORMAT_COLOR_A8R8G8B8;
@@ -225,7 +228,7 @@ static void nv20_vertex_layout(struct nv20_context *nv20)
 	}
 
 	/* always do position */ {
-		src = draw_find_vs_output(dc, TGSI_SEMANTIC_POSITION, 0);
+		src = draw_find_shader_output(dc, TGSI_SEMANTIC_POSITION, 0);
 		draw_emit_vertex_attr(vinfo, EMIT_4F, INTERP_LINEAR, src);
 		vinfo->hwfmt[0] |= (1 << 0);
 	}
@@ -234,19 +237,19 @@ static void nv20_vertex_layout(struct nv20_context *nv20)
 	for (i = 4; i < 6; i++) {
 		if (!generics[i])
 			continue;
-		src = draw_find_vs_output(dc, TGSI_SEMANTIC_GENERIC, i);
+		src = draw_find_shader_output(dc, TGSI_SEMANTIC_GENERIC, i);
 		draw_emit_vertex_attr(vinfo, EMIT_4F, INTERP_PERSPECTIVE, src);
 		vinfo->hwfmt[0] |= (1 << (i - 3));
 	}
 
 	if (colors[0]) {
-		src = draw_find_vs_output(dc, TGSI_SEMANTIC_COLOR, 0);
+		src = draw_find_shader_output(dc, TGSI_SEMANTIC_COLOR, 0);
 		draw_emit_vertex_attr(vinfo, EMIT_4F, colorInterp, src);
 		vinfo->hwfmt[0] |= (1 << 3);
 	}
 
 	if (colors[1]) {
-		src = draw_find_vs_output(dc, TGSI_SEMANTIC_COLOR, 1);
+		src = draw_find_shader_output(dc, TGSI_SEMANTIC_COLOR, 1);
 		draw_emit_vertex_attr(vinfo, EMIT_4F, colorInterp, src);
 		vinfo->hwfmt[0] |= (1 << 4);
 	}
@@ -255,7 +258,7 @@ static void nv20_vertex_layout(struct nv20_context *nv20)
 	for (i = 6; i < 10; i++) {
 		if (!generics[i])
 			continue;
-		src = draw_find_vs_output(dc, TGSI_SEMANTIC_GENERIC, i);
+		src = draw_find_shader_output(dc, TGSI_SEMANTIC_GENERIC, i);
 		draw_emit_vertex_attr(vinfo, EMIT_4F, INTERP_PERSPECTIVE, src);
 		vinfo->hwfmt[0] |= (1 << (i - 1));
 	}
@@ -264,7 +267,7 @@ static void nv20_vertex_layout(struct nv20_context *nv20)
 	for (i = 0; i < 4; i++) {
 		if (!generics[i])
 			continue;
-		src = draw_find_vs_output(dc, TGSI_SEMANTIC_GENERIC, i);
+		src = draw_find_shader_output(dc, TGSI_SEMANTIC_GENERIC, i);
 		draw_emit_vertex_attr(vinfo, EMIT_4F, INTERP_PERSPECTIVE, src);
 		vinfo->hwfmt[0] |= (1 << (i + 9));
 	}
@@ -273,13 +276,13 @@ static void nv20_vertex_layout(struct nv20_context *nv20)
 	for (i = 10; i < 12; i++) {
 		if (!generics[i])
 			continue;
-		src = draw_find_vs_output(dc, TGSI_SEMANTIC_GENERIC, i);
+		src = draw_find_shader_output(dc, TGSI_SEMANTIC_GENERIC, i);
 		draw_emit_vertex_attr(vinfo, EMIT_4F, INTERP_PERSPECTIVE, src);
 		vinfo->hwfmt[0] |= (1 << (i + 3));
 	}
 
 	if (fog) {
-		src = draw_find_vs_output(dc, TGSI_SEMANTIC_FOG, 0);
+		src = draw_find_shader_output(dc, TGSI_SEMANTIC_FOG, 0);
 		draw_emit_vertex_attr(vinfo, EMIT_1F, INTERP_PERSPECTIVE, src);
 		vinfo->hwfmt[0] |= (1 << 15);
 	}

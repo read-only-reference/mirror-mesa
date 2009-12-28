@@ -13,6 +13,7 @@
 
 #include "nouveau/nouveau_winsys.h"
 #include "nouveau/nouveau_gldefs.h"
+#include "nouveau/nouveau_context.h"
 
 #define NOUVEAU_PUSH_CONTEXT(ctx)                                              \
 	struct nv40_screen *ctx = nv40->screen
@@ -158,7 +159,6 @@ struct nv40_context {
 	unsigned vtxbuf_nr;
 	struct pipe_vertex_element vtxelt[PIPE_MAX_ATTRIBS];
 	unsigned vtxelt_nr;
-	const unsigned *edgeflags;
 };
 
 static INLINE struct nv40_context *
@@ -203,6 +203,7 @@ extern void nv40_fragtex_bind(struct nv40_context *);
 extern boolean nv40_state_validate(struct nv40_context *nv40);
 extern boolean nv40_state_validate_swtnl(struct nv40_context *nv40);
 extern void nv40_state_emit(struct nv40_context *nv40);
+extern void nv40_state_flush_notify(struct nouveau_channel *chan);
 extern struct nv40_state_entry nv40_state_rasterizer;
 extern struct nv40_state_entry nv40_state_scissor;
 extern struct nv40_state_entry nv40_state_stipple;

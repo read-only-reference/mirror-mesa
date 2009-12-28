@@ -78,7 +78,7 @@ struct lp_jit_context
 {
    const float *constants;
 
-   void *dummy;                 /* remove me */
+   struct tgsi_sampler **samplers;
 
    float alpha_ref_value;
 
@@ -108,16 +108,20 @@ struct lp_jit_context
 
 
 typedef void
-(*lp_jit_frag_func)(const struct lp_jit_context *context,
+(*lp_jit_frag_func)(struct lp_jit_context *context,
                     uint32_t x,
                     uint32_t y,
                     const void *a0,
                     const void *dadx,
                     const void *dady,
-                    const uint32_t *mask,
+                    uint32_t *mask,
                     void *color,
                     void *depth);
 
+void PIPE_CDECL
+lp_fetch_texel_soa( struct tgsi_sampler **samplers,
+                    uint32_t unit,
+                    float *store );
 
 
 void
