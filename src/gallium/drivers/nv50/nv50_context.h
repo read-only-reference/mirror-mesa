@@ -29,9 +29,7 @@
 #define NV50_CB_PVP		1
 #define NV50_CB_PFP		2
 #define NV50_CB_PGP		3
-#define NV50_CB_TIC		4
-#define NV50_CB_TSC		5
-#define NV50_CB_PUPLOAD         6
+#define NV50_CB_AUX		4
 
 #define NV50_NEW_BLEND		(1 << 0)
 #define NV50_NEW_ZSA		(1 << 1)
@@ -45,9 +43,11 @@
 #define NV50_NEW_VERTPROG_CB	(1 << 9)
 #define NV50_NEW_FRAGPROG	(1 << 10)
 #define NV50_NEW_FRAGPROG_CB	(1 << 11)
-#define NV50_NEW_ARRAYS		(1 << 12)
-#define NV50_NEW_SAMPLER	(1 << 13)
-#define NV50_NEW_TEXTURE	(1 << 14)
+#define NV50_NEW_GEOMPROG	(1 << 12)
+#define NV50_NEW_GEOMPROG_CB	(1 << 13)
+#define NV50_NEW_ARRAYS		(1 << 14)
+#define NV50_NEW_SAMPLER	(1 << 15)
+#define NV50_NEW_TEXTURE	(1 << 16)
 
 struct nv50_blend_stateobj {
 	struct pipe_blend_state pipe;
@@ -129,10 +129,13 @@ struct nv50_state {
 	unsigned miptree_nr[PIPE_SHADER_TYPES];
 	struct nouveau_stateobj *vertprog;
 	struct nouveau_stateobj *fragprog;
-	struct nouveau_stateobj *programs;
+	struct nouveau_stateobj *geomprog;
+	struct nouveau_stateobj *fp_linkage;
+	struct nouveau_stateobj *gp_linkage;
 	struct nouveau_stateobj *vtxfmt;
 	struct nouveau_stateobj *vtxbuf;
 	struct nouveau_stateobj *vtxattr;
+	struct nouveau_stateobj *instbuf;
 	unsigned vtxelt_nr;
 };
 
@@ -157,6 +160,7 @@ struct nv50_context {
 	struct pipe_framebuffer_state framebuffer;
 	struct nv50_program *vertprog;
 	struct nv50_program *fragprog;
+	struct nv50_program *geomprog;
 	struct pipe_buffer *constbuf[PIPE_SHADER_TYPES];
 	struct pipe_vertex_buffer vtxbuf[PIPE_MAX_ATTRIBS];
 	unsigned vtxbuf_nr;
@@ -191,13 +195,24 @@ nv50_surface_do_copy(struct nv50_screen *screen, struct pipe_surface *dst,
 extern struct draw_stage *nv50_draw_render_stage(struct nv50_context *nv50);
 
 /* nv50_vbo.c */
-extern boolean nv50_draw_arrays(struct pipe_context *, unsigned mode,
+extern void nv50_draw_arrays(struct pipe_context *, unsigned mode,
 				unsigned start, unsigned count);
-extern boolean nv50_draw_elements(struct pipe_context *pipe,
+extern void nv50_draw_arrays_instanced(struct pipe_context *, unsigned mode,
+					unsigned start, unsigned count,
+					unsigned startInstance,
+					unsigned instanceCount);
+extern void nv50_draw_elements(struct pipe_context *pipe,
 				  struct pipe_buffer *indexBuffer,
 				  unsigned indexSize,
 				  unsigned mode, unsigned start,
 				  unsigned count);
+extern void nv50_draw_elements_instanced(struct pipe_context *pipe,
+					 struct pipe_buffer *indexBuffer,
+					 unsigned indexSize,
+					 unsigned mode, unsigned start,
+					 unsigned count,
+					 unsigned startInstance,
+					 unsigned instanceCount);
 extern void nv50_vbo_validate(struct nv50_context *nv50);
 
 /* nv50_clear.c */
@@ -207,7 +222,9 @@ extern void nv50_clear(struct pipe_context *pipe, unsigned buffers,
 /* nv50_program.c */
 extern void nv50_vertprog_validate(struct nv50_context *nv50);
 extern void nv50_fragprog_validate(struct nv50_context *nv50);
-extern void nv50_linkage_validate(struct nv50_context *nv50);
+extern void nv50_geomprog_validate(struct nv50_context *nv50);
+extern void nv50_fp_linkage_validate(struct nv50_context *nv50);
+extern void nv50_gp_linkage_validate(struct nv50_context *nv50);
 extern void nv50_program_destroy(struct nv50_context *nv50,
 				 struct nv50_program *p);
 

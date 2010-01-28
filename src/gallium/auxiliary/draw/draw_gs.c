@@ -59,10 +59,21 @@ draw_gs_init( struct draw_context *draw )
    return TRUE;
 }
 
+void draw_gs_destroy( struct draw_context *draw )
+{
+   if (!draw->gs.machine)
+      return;
 
-void draw_gs_set_constants( struct draw_context *draw,
-                            const float (*constants)[4],
-                            unsigned size )
+   align_free(draw->gs.machine->Primitives);
+
+   tgsi_exec_machine_destroy(draw->gs.machine);
+}
+
+void
+draw_gs_set_constants(struct draw_context *draw,
+                      unsigned slot,
+                      const void *constants,
+                      unsigned size)
 {
 }
 
@@ -282,7 +293,7 @@ draw_geometry_fetch_outputs(struct draw_geometry_shader *shader,
 void draw_geometry_shader_run(struct draw_geometry_shader *shader,
                               const float (*input)[4],
                               float (*output)[4],
-                              const float (*constants)[4],
+                              const void *constants[PIPE_MAX_CONSTANT_BUFFERS],
                               unsigned count,
                               unsigned input_stride,
                               unsigned vertex_size)
@@ -293,7 +304,9 @@ void draw_geometry_shader_run(struct draw_geometry_shader *shader,
    unsigned num_primitives = count/num_vertices;
    unsigned inputs_from_vs = 0;
 
-   machine->Consts = constants;
+   for (i = 0; i < PIPE_MAX_CONSTANT_BUFFERS; i++) {
+      machine->Consts[i] = constants[i];
+   }
 
    for (i = 0; i < shader->info.num_inputs; ++i) {
       if (shader->info.input_semantic_name[i] != TGSI_SEMANTIC_PRIMID)

@@ -7,7 +7,6 @@
 #include "main/convolve.h"
 #include "main/context.h"
 #include "main/formats.h"
-#include "main/image.h"
 #include "main/texcompress.h"
 #include "main/texstore.h"
 #include "main/texgetimage.h"
@@ -235,21 +234,19 @@ try_pbo_upload(struct intel_context *intel,
 
    if (drm_intel_bo_references(intel->batch->buf, dst_buffer))
       intelFlush(&intel->ctx);
-   LOCK_HARDWARE(intel);
    {
       dri_bo *src_buffer = intel_bufferobj_buffer(intel, pbo, INTEL_READ);
 
       if (!intelEmitCopyBlit(intel,
 			     intelImage->mt->cpp,
 			     src_stride, src_buffer, src_offset, GL_FALSE,
-			     dst_stride, dst_buffer, 0, GL_FALSE,
+			     dst_stride, dst_buffer, 0,
+			     intelImage->mt->region->tiling,
 			     0, 0, dst_x, dst_y, width, height,
 			     GL_COPY)) {
-	 UNLOCK_HARDWARE(intel);
 	 return GL_FALSE;
       }
    }
-   UNLOCK_HARDWARE(intel);
 
    return GL_TRUE;
 }
@@ -469,8 +466,6 @@ intelTexImage(GLcontext * ctx,
 					   pixels, unpack, "glTexImage");
    }
 
-   LOCK_HARDWARE(intel);
-
    if (intelImage->mt) {
       if (pixels != NULL) {
 	 /* Flush any queued rendering with the texture before mapping. */
@@ -551,8 +546,6 @@ intelTexImage(GLcontext * ctx,
          intel_miptree_image_unmap(intel, intelImage->mt);
       texImage->Data = NULL;
    }
-
-   UNLOCK_HARDWARE(intel);
 }
 
 
@@ -732,7 +725,7 @@ intelSetTexBuffer2(__DRIcontext *pDRICtx, GLint target,
 		   GLint glx_texture_format,
 		   __DRIdrawable *dPriv)
 {
-   struct intel_framebuffer *intel_fb = dPriv->driverPrivate;
+   struct gl_framebuffer *fb = dPriv->driverPrivate;
    struct intel_context *intel = pDRICtx->driverPrivate;
    GLcontext *ctx = &intel->ctx;
    struct intel_texture_object *intelObj;
@@ -749,9 +742,10 @@ intelSetTexBuffer2(__DRIcontext *pDRICtx, GLint target,
    if (!intelObj)
       return;
 
-   intel_update_renderbuffers(pDRICtx, dPriv);
+   if (!dPriv->validBuffers)
+      intel_update_renderbuffers(pDRICtx, dPriv);
 
-   rb = intel_fb->color_rb[0];
+   rb = intel_get_renderbuffer(fb, BUFFER_FRONT_LEFT);
    /* If the region isn't set, then intel_update_renderbuffers was unable
     * to get the buffers for the drawable.
     */

@@ -36,15 +36,12 @@
 #include "mach64_vb.h"
 #include "mach64_tex.h"
 
-#include "main/context.h"
 #include "main/enums.h"
 #include "main/colormac.h"
 #include "swrast/swrast.h"
 #include "vbo/vbo.h"
 #include "tnl/tnl.h"
 #include "swrast_setup/swrast_setup.h"
-
-#include "tnl/t_pipeline.h"
 
 
 /* =============================================================
@@ -388,7 +385,7 @@ static void mach64UpdateClipping( GLcontext *ctx )
    mach64ScreenPtr mach64Screen = mmesa->mach64Screen;
 
    if ( mmesa->driDrawable ) {
-      __DRIdrawablePrivate *drawable = mmesa->driDrawable;
+      __DRIdrawable *drawable = mmesa->driDrawable;
       int x1 = 0;
       int y1 = 0;
       int x2 = drawable->w - 1;
@@ -689,7 +686,7 @@ static void mach64DDLogicOpCode( GLcontext *ctx, GLenum opcode )
 void mach64SetCliprects( GLcontext *ctx, GLenum mode )
 {
    mach64ContextPtr mmesa = MACH64_CONTEXT(ctx);
-   __DRIdrawablePrivate *dPriv = mmesa->driDrawable;
+   __DRIdrawable *dPriv = mmesa->driDrawable;
 
    switch ( mode ) {
    case GL_FRONT_LEFT:

@@ -37,8 +37,6 @@
  * \author Brian Paul <brian@precisioninsight.com>
  */
 
-#ifndef GLX_USE_APPLEGL
-
 #include "main/glheader.h"
 #include "main/compiler.h"
 #include "glapi/glapi.h"
@@ -89,8 +87,10 @@
 #define GLAPIENTRY
 #endif
 
+#ifdef GLX_INDIRECT_RENDERING
+/* those link to libglapi.a should provide the entry points */
+#define _GLAPI_SKIP_PROTO_ENTRY_POINTS
+#endif
 #include "glapi/glapitemp.h"
 
 #endif /* USE_X86_ASM */
-
-#endif /* !GLX_USE_APPLEGL */

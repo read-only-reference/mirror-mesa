@@ -1,5 +1,6 @@
 /*
  * Copyright 2008 Corbin Simpson <MostAwesomeDude@gmail.com>
+ * Copyright 2009 Marek Olšák <maraeo@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -29,7 +30,6 @@
 #include "tgsi/tgsi_parse.h"
 
 #include "pipe/p_config.h"
-#include "pipe/internal/p_winsys_screen.h"
 
 #include "r300_context.h"
 #include "r300_reg.h"
@@ -41,23 +41,138 @@
 /* r300_state: Functions used to intialize state context by translating
  * Gallium state objects into semi-native r300 state objects. */
 
+static boolean blend_discard_if_src_alpha_0(unsigned srcRGB, unsigned srcA,
+                                            unsigned dstRGB, unsigned dstA)
+{
+    /* If the blend equation is ADD or REVERSE_SUBTRACT,
+     * SRC_ALPHA == 0, and the following state is set, the colorbuffer
+     * will not be changed.
+     * Notice that the dst factors are the src factors inverted. */
+    return (srcRGB == PIPE_BLENDFACTOR_SRC_ALPHA ||
+            srcRGB == PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE ||
+            srcRGB == PIPE_BLENDFACTOR_ZERO) &&
+           (srcA == PIPE_BLENDFACTOR_SRC_COLOR ||
+            srcA == PIPE_BLENDFACTOR_SRC_ALPHA ||
+            srcA == PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE ||
+            srcA == PIPE_BLENDFACTOR_ZERO) &&
+           (dstRGB == PIPE_BLENDFACTOR_INV_SRC_ALPHA ||
+            dstRGB == PIPE_BLENDFACTOR_ONE) &&
+           (dstA == PIPE_BLENDFACTOR_INV_SRC_COLOR ||
+            dstA == PIPE_BLENDFACTOR_INV_SRC_ALPHA ||
+            dstA == PIPE_BLENDFACTOR_ONE);
+}
+
+static boolean blend_discard_if_src_alpha_1(unsigned srcRGB, unsigned srcA,
+                                            unsigned dstRGB, unsigned dstA)
+{
+    /* If the blend equation is ADD or REVERSE_SUBTRACT,
+     * SRC_ALPHA == 1, and the following state is set, the colorbuffer
+     * will not be changed.
+     * Notice that the dst factors are the src factors inverted. */
+    return (srcRGB == PIPE_BLENDFACTOR_INV_SRC_ALPHA ||
+            srcRGB == PIPE_BLENDFACTOR_ZERO) &&
+           (srcA == PIPE_BLENDFACTOR_INV_SRC_COLOR ||
+            srcA == PIPE_BLENDFACTOR_INV_SRC_ALPHA ||
+            srcA == PIPE_BLENDFACTOR_ZERO) &&
+           (dstRGB == PIPE_BLENDFACTOR_SRC_ALPHA ||
+            dstRGB == PIPE_BLENDFACTOR_ONE) &&
+           (dstA == PIPE_BLENDFACTOR_SRC_COLOR ||
+            dstA == PIPE_BLENDFACTOR_SRC_ALPHA ||
+            dstA == PIPE_BLENDFACTOR_ONE);
+}
+
+static boolean blend_discard_if_src_color_0(unsigned srcRGB, unsigned srcA,
+                                            unsigned dstRGB, unsigned dstA)
+{
+    /* If the blend equation is ADD or REVERSE_SUBTRACT,
+     * SRC_COLOR == (0,0,0), and the following state is set, the colorbuffer
+     * will not be changed.
+     * Notice that the dst factors are the src factors inverted. */
+    return (srcRGB == PIPE_BLENDFACTOR_SRC_COLOR ||
+            srcRGB == PIPE_BLENDFACTOR_ZERO) &&
+           (srcA == PIPE_BLENDFACTOR_ZERO) &&
+           (dstRGB == PIPE_BLENDFACTOR_INV_SRC_COLOR ||
+            dstRGB == PIPE_BLENDFACTOR_ONE) &&
+           (dstA == PIPE_BLENDFACTOR_ONE);
+}
+
+static boolean blend_discard_if_src_color_1(unsigned srcRGB, unsigned srcA,
+                                            unsigned dstRGB, unsigned dstA)
+{
+    /* If the blend equation is ADD or REVERSE_SUBTRACT,
+     * SRC_COLOR == (1,1,1), and the following state is set, the colorbuffer
+     * will not be changed.
+     * Notice that the dst factors are the src factors inverted. */
+    return (srcRGB == PIPE_BLENDFACTOR_INV_SRC_COLOR ||
+            srcRGB == PIPE_BLENDFACTOR_ZERO) &&
+           (srcA == PIPE_BLENDFACTOR_ZERO) &&
+           (dstRGB == PIPE_BLENDFACTOR_SRC_COLOR ||
+            dstRGB == PIPE_BLENDFACTOR_ONE) &&
+           (dstA == PIPE_BLENDFACTOR_ONE);
+}
+
+static boolean blend_discard_if_src_alpha_color_0(unsigned srcRGB, unsigned srcA,
+                                                  unsigned dstRGB, unsigned dstA)
+{
+    /* If the blend equation is ADD or REVERSE_SUBTRACT,
+     * SRC_ALPHA_COLOR == (0,0,0,0), and the following state is set,
+     * the colorbuffer will not be changed.
+     * Notice that the dst factors are the src factors inverted. */
+    return (srcRGB == PIPE_BLENDFACTOR_SRC_COLOR ||
+            srcRGB == PIPE_BLENDFACTOR_SRC_ALPHA ||
+            srcRGB == PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE ||
+            srcRGB == PIPE_BLENDFACTOR_ZERO) &&
+           (srcA == PIPE_BLENDFACTOR_SRC_COLOR ||
+            srcA == PIPE_BLENDFACTOR_SRC_ALPHA ||
+            srcA == PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE ||
+            srcA == PIPE_BLENDFACTOR_ZERO) &&
+           (dstRGB == PIPE_BLENDFACTOR_INV_SRC_COLOR ||
+            dstRGB == PIPE_BLENDFACTOR_INV_SRC_ALPHA ||
+            dstRGB == PIPE_BLENDFACTOR_ONE) &&
+           (dstA == PIPE_BLENDFACTOR_INV_SRC_COLOR ||
+            dstA == PIPE_BLENDFACTOR_INV_SRC_ALPHA ||
+            dstA == PIPE_BLENDFACTOR_ONE);
+}
+
+static boolean blend_discard_if_src_alpha_color_1(unsigned srcRGB, unsigned srcA,
+                                                  unsigned dstRGB, unsigned dstA)
+{
+    /* If the blend equation is ADD or REVERSE_SUBTRACT,
+     * SRC_ALPHA_COLOR == (1,1,1,1), and the following state is set,
+     * the colorbuffer will not be changed.
+     * Notice that the dst factors are the src factors inverted. */
+    return (srcRGB == PIPE_BLENDFACTOR_INV_SRC_COLOR ||
+            srcRGB == PIPE_BLENDFACTOR_INV_SRC_ALPHA ||
+            srcRGB == PIPE_BLENDFACTOR_ZERO) &&
+           (srcA == PIPE_BLENDFACTOR_INV_SRC_COLOR ||
+            srcA == PIPE_BLENDFACTOR_INV_SRC_ALPHA ||
+            srcA == PIPE_BLENDFACTOR_ZERO) &&
+           (dstRGB == PIPE_BLENDFACTOR_SRC_COLOR ||
+            dstRGB == PIPE_BLENDFACTOR_SRC_ALPHA ||
+            dstRGB == PIPE_BLENDFACTOR_ONE) &&
+           (dstA == PIPE_BLENDFACTOR_SRC_COLOR ||
+            dstA == PIPE_BLENDFACTOR_SRC_ALPHA ||
+            dstA == PIPE_BLENDFACTOR_ONE);
+}
+
 /* Create a new blend state based on the CSO blend state.
  *
  * This encompasses alpha blending, logic/raster ops, and blend dithering. */
 static void* r300_create_blend_state(struct pipe_context* pipe,
                                      const struct pipe_blend_state* state)
 {
+    struct r300_screen* r300screen = r300_screen(pipe->screen);
     struct r300_blend_state* blend = CALLOC_STRUCT(r300_blend_state);
 
-    if (state->blend_enable)
+    if (state->rt[0].blend_enable)
     {
-        unsigned eqRGB = state->rgb_func;
-        unsigned srcRGB = state->rgb_src_factor;
-        unsigned dstRGB = state->rgb_dst_factor;
+        unsigned eqRGB = state->rt[0].rgb_func;
+        unsigned srcRGB = state->rt[0].rgb_src_factor;
+        unsigned dstRGB = state->rt[0].rgb_dst_factor;
 
-        unsigned eqA = state->alpha_func;
-        unsigned srcA = state->alpha_src_factor;
-        unsigned dstA = state->alpha_dst_factor;
+        unsigned eqA = state->rt[0].alpha_func;
+        unsigned srcA = state->rt[0].alpha_src_factor;
+        unsigned dstA = state->rt[0].alpha_dst_factor;
 
         /* despite the name, ALPHA_BLEND_ENABLE has nothing to do with alpha,
          * this is just the crappy D3D naming */
@@ -66,7 +181,11 @@ static void* r300_create_blend_state(struct pipe_context* pipe,
             ( r300_translate_blend_factor(srcRGB) << R300_SRC_BLEND_SHIFT) |
             ( r300_translate_blend_factor(dstRGB) << R300_DST_BLEND_SHIFT);
 
-        /* optimization: some operations do not require the destination color */
+        /* Optimization: some operations do not require the destination color.
+         *
+         * When SRC_ALPHA_SATURATE is used, colorbuffer reads must be enabled,
+         * otherwise blending gives incorrect results. It seems to be
+         * a hardware bug. */
         if (eqRGB == PIPE_BLEND_MIN || eqA == PIPE_BLEND_MIN ||
             eqRGB == PIPE_BLEND_MAX || eqA == PIPE_BLEND_MAX ||
             dstRGB != PIPE_BLENDFACTOR_ZERO ||
@@ -78,11 +197,81 @@ static void* r300_create_blend_state(struct pipe_context* pipe,
             srcA == PIPE_BLENDFACTOR_DST_COLOR ||
             srcA == PIPE_BLENDFACTOR_DST_ALPHA ||
             srcA == PIPE_BLENDFACTOR_INV_DST_COLOR ||
-            srcA == PIPE_BLENDFACTOR_INV_DST_ALPHA)
+            srcA == PIPE_BLENDFACTOR_INV_DST_ALPHA ||
+            srcRGB == PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE) {
+            /* Enable reading from the colorbuffer. */
             blend->blend_control |= R300_READ_ENABLE;
 
-        /* XXX implement the optimization with DISCARD_SRC_PIXELS*/
-        /* XXX implement the optimization with SRC_ALPHA_?_NO_READ */
+            if (r300_screen(r300_context(pipe)->context.screen)->caps->is_r500) {
+                /* Optimization: Depending on incoming pixels, we can
+                 * conditionally disable the reading in hardware... */
+                if (eqRGB != PIPE_BLEND_MIN && eqA != PIPE_BLEND_MIN &&
+                    eqRGB != PIPE_BLEND_MAX && eqA != PIPE_BLEND_MAX) {
+                    /* Disable reading if SRC_ALPHA == 0. */
+                    if ((dstRGB == PIPE_BLENDFACTOR_SRC_ALPHA ||
+                         dstRGB == PIPE_BLENDFACTOR_ZERO) &&
+                        (dstA == PIPE_BLENDFACTOR_SRC_COLOR ||
+                         dstA == PIPE_BLENDFACTOR_SRC_ALPHA ||
+                         dstA == PIPE_BLENDFACTOR_ZERO)) {
+                         blend->blend_control |= R500_SRC_ALPHA_0_NO_READ;
+                    }
+
+                    /* Disable reading if SRC_ALPHA == 1. */
+                    if ((dstRGB == PIPE_BLENDFACTOR_INV_SRC_ALPHA ||
+                         dstRGB == PIPE_BLENDFACTOR_ZERO) &&
+                        (dstA == PIPE_BLENDFACTOR_INV_SRC_COLOR ||
+                         dstA == PIPE_BLENDFACTOR_INV_SRC_ALPHA ||
+                         dstA == PIPE_BLENDFACTOR_ZERO)) {
+                         blend->blend_control |= R500_SRC_ALPHA_1_NO_READ;
+                    }
+                }
+            }
+        }
+
+        /* Optimization: discard pixels which don't change the colorbuffer.
+         *
+         * The code below is non-trivial and some math is involved.
+         *
+         * Discarding pixels must be disabled when FP16 AA is enabled.
+         * This is a hardware bug. Also, this implementation wouldn't work
+         * with FP blending enabled and equation clamping disabled.
+         *
+         * Equations other than ADD are rarely used and therefore won't be
+         * optimized. */
+        if ((eqRGB == PIPE_BLEND_ADD || eqRGB == PIPE_BLEND_REVERSE_SUBTRACT) &&
+            (eqA == PIPE_BLEND_ADD || eqA == PIPE_BLEND_REVERSE_SUBTRACT)) {
+            /* ADD: X+Y
+             * REVERSE_SUBTRACT: Y-X
+             *
+             * The idea is:
+             * If X = src*srcFactor = 0 and Y = dst*dstFactor = 1,
+             * then CB will not be changed.
+             *
+             * Given the srcFactor and dstFactor variables, we can derive
+             * what src and dst should be equal to and discard appropriate
+             * pixels.
+             */
+            if (blend_discard_if_src_alpha_0(srcRGB, srcA, dstRGB, dstA)) {
+                blend->blend_control |= R300_DISCARD_SRC_PIXELS_SRC_ALPHA_0;
+            } else if (blend_discard_if_src_alpha_1(srcRGB, srcA,
+                                                    dstRGB, dstA)) {
+                blend->blend_control |= R300_DISCARD_SRC_PIXELS_SRC_ALPHA_1;
+            } else if (blend_discard_if_src_color_0(srcRGB, srcA,
+                                                    dstRGB, dstA)) {
+                blend->blend_control |= R300_DISCARD_SRC_PIXELS_SRC_COLOR_0;
+            } else if (blend_discard_if_src_color_1(srcRGB, srcA,
+                                                    dstRGB, dstA)) {
+                blend->blend_control |= R300_DISCARD_SRC_PIXELS_SRC_COLOR_1;
+            } else if (blend_discard_if_src_alpha_color_0(srcRGB, srcA,
+                                                          dstRGB, dstA)) {
+                blend->blend_control |=
+                    R300_DISCARD_SRC_PIXELS_SRC_ALPHA_COLOR_0;
+            } else if (blend_discard_if_src_alpha_color_1(srcRGB, srcA,
+                                                          dstRGB, dstA)) {
+                blend->blend_control |=
+                    R300_DISCARD_SRC_PIXELS_SRC_ALPHA_COLOR_1;
+            }
+        }
 
         /* separate alpha */
         if (srcA != srcRGB || dstA != dstRGB || eqA != eqRGB) {
@@ -100,18 +289,18 @@ static void* r300_create_blend_state(struct pipe_context* pipe,
                 (state->logicop_func) << R300_RB3D_ROPCNTL_ROP_SHIFT;
     }
 
-    /* Color Channel Mask */
-    if (state->colormask & PIPE_MASK_R) {
-        blend->color_channel_mask |= RB3D_COLOR_CHANNEL_MASK_RED_MASK0;
-    }
-    if (state->colormask & PIPE_MASK_G) {
-        blend->color_channel_mask |= RB3D_COLOR_CHANNEL_MASK_GREEN_MASK0;
-    }
-    if (state->colormask & PIPE_MASK_B) {
-        blend->color_channel_mask |= RB3D_COLOR_CHANNEL_MASK_BLUE_MASK0;
-    }
-    if (state->colormask & PIPE_MASK_A) {
-        blend->color_channel_mask |= RB3D_COLOR_CHANNEL_MASK_ALPHA_MASK0;
+    /* Color channel masks for all MRTs. */
+    blend->color_channel_mask = state->rt[0].colormask;
+    if (r300screen->caps->is_r500 && state->independent_blend_enable) {
+        if (state->rt[1].blend_enable) {
+            blend->color_channel_mask |= (state->rt[1].colormask << 4);
+        }
+        if (state->rt[2].blend_enable) {
+            blend->color_channel_mask |= (state->rt[2].colormask << 8);
+        }
+        if (state->rt[3].blend_enable) {
+            blend->color_channel_mask |= (state->rt[3].colormask << 12);
+        }
     }
 
     if (state->dither) {
@@ -128,8 +317,8 @@ static void r300_bind_blend_state(struct pipe_context* pipe,
 {
     struct r300_context* r300 = r300_context(pipe);
 
-    r300->blend_state = (struct r300_blend_state*)state;
-    r300->dirty_state |= R300_NEW_BLEND;
+    r300->blend_state.state = state;
+    r300->blend_state.dirty = TRUE;
 }
 
 /* Free blend state. */
@@ -151,20 +340,24 @@ static void r300_set_blend_color(struct pipe_context* pipe,
                                  const struct pipe_blend_color* color)
 {
     struct r300_context* r300 = r300_context(pipe);
+    struct r300_screen* r300screen = r300_screen(pipe->screen);
+    struct r300_blend_color_state* state =
+        (struct r300_blend_color_state*)r300->blend_color_state.state;
     union util_color uc;
 
     util_pack_color(color->color, PIPE_FORMAT_A8R8G8B8_UNORM, &uc);
-    r300->blend_color_state->blend_color = uc.ui;
+    state->blend_color = uc.ui;
 
     /* XXX if FP16 blending is enabled, we should use the FP16 format */
-    r300->blend_color_state->blend_color_red_alpha =
+    state->blend_color_red_alpha =
         float_to_fixed10(color->color[0]) |
         (float_to_fixed10(color->color[3]) << 16);
-    r300->blend_color_state->blend_color_green_blue =
+    state->blend_color_green_blue =
         float_to_fixed10(color->color[2]) |
         (float_to_fixed10(color->color[1]) << 16);
 
-    r300->dirty_state |= R300_NEW_BLEND_COLOR;
+    r300->blend_color_state.size = r300screen->caps->is_r500 ? 3 : 2;
+    r300->blend_color_state.dirty = TRUE;
 }
 
 static void r300_set_clip_state(struct pipe_context* pipe,
@@ -173,12 +366,15 @@ static void r300_set_clip_state(struct pipe_context* pipe,
     struct r300_context* r300 = r300_context(pipe);
 
     if (r300_screen(pipe->screen)->caps->has_tcl) {
-        r300->clip_state = *state;
-        r300->dirty_state |= R300_NEW_CLIP;
+        memcpy(r300->clip_state.state, state, sizeof(struct pipe_clip_state));
+        r300->clip_state.size = 29;
     } else {
         draw_flush(r300->draw);
         draw_set_clip_state(r300->draw, state);
+        r300->clip_state.size = 2;
     }
+
+    r300->clip_state.dirty = TRUE;
 }
 
 /* Create a new depth, stencil, and alpha state based on the CSO dsa state.
@@ -271,9 +467,11 @@ static void r300_bind_dsa_state(struct pipe_context* pipe,
                                 void* state)
 {
     struct r300_context* r300 = r300_context(pipe);
+    struct r300_screen* r300screen = r300_screen(pipe->screen);
 
-    r300->dsa_state = (struct r300_dsa_state*)state;
-    r300->dirty_state |= R300_NEW_DSA;
+    r300->dsa_state.state = state;
+    r300->dsa_state.size = r300screen->caps->is_r500 ? 8 : 6;
+    r300->dsa_state.dirty = TRUE;
 }
 
 /* Free DSA state. */
@@ -283,56 +481,52 @@ static void r300_delete_dsa_state(struct pipe_context* pipe,
     FREE(state);
 }
 
-static void r300_set_scissor_regs(const struct pipe_scissor_state* state,
-                                  struct r300_scissor_regs *scissor,
-                                  boolean is_r500)
-{
-    if (is_r500) {
-        scissor->top_left =
-            (state->minx << R300_SCISSORS_X_SHIFT) |
-            (state->miny << R300_SCISSORS_Y_SHIFT);
-        scissor->bottom_right =
-            ((state->maxx - 1) << R300_SCISSORS_X_SHIFT) |
-            ((state->maxy - 1) << R300_SCISSORS_Y_SHIFT);
-    } else {
-        /* Offset of 1440 in non-R500 chipsets. */
-        scissor->top_left =
-            ((state->minx + 1440) << R300_SCISSORS_X_SHIFT) |
-            ((state->miny + 1440) << R300_SCISSORS_Y_SHIFT);
-        scissor->bottom_right =
-            (((state->maxx - 1) + 1440) << R300_SCISSORS_X_SHIFT) |
-            (((state->maxy - 1) + 1440) << R300_SCISSORS_Y_SHIFT);
-    }
-
-    scissor->empty_area = state->minx >= state->maxx ||
-                          state->miny >= state->maxy;
-}
-
 static void
     r300_set_framebuffer_state(struct pipe_context* pipe,
                                const struct pipe_framebuffer_state* state)
 {
     struct r300_context* r300 = r300_context(pipe);
-    struct pipe_scissor_state scissor;
+    uint32_t zbuffer_bpp = 0;
+
+    r300->fb_state.size = (10 * state->nr_cbufs) +
+        (2 * (4 - state->nr_cbufs)) +
+        (state->zsbuf ? 10 : 0) + 6;
+
+    if (state->nr_cbufs > 4) {
+        debug_printf("r300: Implementation error: Too many MRTs in %s, "
+            "refusing to bind framebuffer state!\n", __FUNCTION__);
+        return;
+    }
 
     if (r300->draw) {
         draw_flush(r300->draw);
     }
 
-    r300->framebuffer_state = *state;
-
-    scissor.minx = scissor.miny = 0;
-    scissor.maxx = state->width;
-    scissor.maxy = state->height;
-    r300_set_scissor_regs(&scissor, &r300->scissor_state->framebuffer,
-                          r300_screen(r300->context.screen)->caps->is_r500);
+    r300->fb_state.state = state;
 
     /* Don't rely on the order of states being set for the first time. */
-    if (!r300->rs_state || !r300->rs_state->rs.scissor) {
-        r300->dirty_state |= R300_NEW_SCISSOR;
+    /* XXX wait what */
+    r300->blend_state.dirty = TRUE;
+    r300->dsa_state.dirty = TRUE;
+    r300->fb_state.dirty = TRUE;
+    r300->scissor_state.dirty = TRUE;
+
+    /* Polygon offset depends on the zbuffer bit depth. */
+    if (state->zsbuf && r300->polygon_offset_enabled) {
+        switch (util_format_get_blocksize(state->zsbuf->texture->format)) {
+            case 2:
+                zbuffer_bpp = 16;
+                break;
+            case 4:
+                zbuffer_bpp = 24;
+                break;
+        }
+
+        if (r300->zbuffer_bpp != zbuffer_bpp) {
+            r300->zbuffer_bpp = zbuffer_bpp;
+            r300->rs_state.dirty = TRUE;
+        }
     }
-    r300->dirty_state |= R300_NEW_FRAMEBUFFERS;
-    r300->dirty_state |= R300_NEW_BLEND;
 }
 
 /* Create fragment shader state. */
@@ -366,6 +560,10 @@ static void r300_bind_fs_state(struct pipe_context* pipe, void* shader)
 
     r300->fs = fs;
     r300_pick_fragment_shader(r300);
+
+    if (r300->vs && r300_vertex_shader_setup_wpos(r300)) {
+        r300->vertex_format_state.dirty = TRUE;
+    }
 
     r300->dirty_state |= R300_NEW_FRAGMENT_SHADER | R300_NEW_FRAGMENT_SHADER_CONSTANTS;
 }
@@ -407,8 +605,6 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
     /* Copy rasterizer state for Draw. */
     rs->rs = *state;
 
-    rs->enable_vte = !state->bypass_vs_clip_and_viewport;
-
 #ifdef PIPE_ARCH_LITTLE_ENDIAN
     rs->vap_control_status = R300_VC_NO_SWAP;
 #else
@@ -433,9 +629,6 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
 
     rs->line_control = pack_float_16_6x(state->line_width) |
         R300_GA_LINE_CNTL_END_TYPE_COMP;
-
-    /* XXX I think there is something wrong with the polygon mode,
-     * XXX re-test when r300g is in a better shape */
 
     /* Enable polygon mode */
     if (state->fill_cw != PIPE_POLYGON_MODE_FILL ||
@@ -489,10 +682,8 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
     }
 
     if (rs->polygon_offset_enable) {
-        rs->depth_offset_front = rs->depth_offset_back =
-            fui(state->offset_units);
-        rs->depth_scale_front = rs->depth_scale_back =
-            fui(state->offset_scale);
+        rs->depth_offset = state->offset_units;
+        rs->depth_scale = state->offset_scale;
     }
 
     if (state->line_stipple_enable) {
@@ -524,12 +715,24 @@ static void r300_bind_rs_state(struct pipe_context* pipe, void* state)
         draw_set_rasterizer_state(r300->draw, &rs->rs);
     }
 
-    r300->rs_state = rs;
+    if (rs) {
+        r300->tcl_bypass = rs->rs.bypass_vs_clip_and_viewport;
+        r300->polygon_offset_enabled = rs->rs.offset_cw || rs->rs.offset_ccw;
+    } else {
+        r300->tcl_bypass = FALSE;
+        r300->polygon_offset_enabled = FALSE;
+    }
+
+    r300->rs_state.state = rs;
+    r300->rs_state.dirty = TRUE;
+    /* XXX Why is this still needed, dammit!? */
+    r300->scissor_state.dirty = TRUE;
+    r300->viewport_state.dirty = TRUE;
+
     /* XXX Clean these up when we move to atom emits */
-    r300->dirty_state |= R300_NEW_RASTERIZER;
-    r300->dirty_state |= R300_NEW_RS_BLOCK;
-    r300->dirty_state |= R300_NEW_SCISSOR;
-    r300->dirty_state |= R300_NEW_VIEWPORT;
+    if (r300->fs && r300->fs->inputs.wpos != ATTR_UNUSED) {
+        r300->dirty_state |= R300_NEW_FRAGMENT_SHADER_CONSTANTS;
+    }
 }
 
 /* Free rasterizer state. */
@@ -556,7 +759,8 @@ static void*
 
     sampler->filter0 |= r300_translate_tex_filters(state->min_img_filter,
                                                    state->mag_img_filter,
-                                                   state->min_mip_filter);
+                                                   state->min_mip_filter,
+                                                   state->max_anisotropy > 1.0);
 
     /* Unfortunately, r300-r500 don't support floating-point mipmap lods. */
     /* We must pass these to the emit function to clamp them properly. */
@@ -664,49 +868,51 @@ static void r300_set_scissor_state(struct pipe_context* pipe,
 {
     struct r300_context* r300 = r300_context(pipe);
 
-    r300_set_scissor_regs(state, &r300->scissor_state->scissor,
-                          r300_screen(r300->context.screen)->caps->is_r500);
+    memcpy(r300->scissor_state.state, state,
+        sizeof(struct pipe_scissor_state));
 
-    /* Don't rely on the order of states being set for the first time. */
-    if (!r300->rs_state || r300->rs_state->rs.scissor) {
-        r300->dirty_state |= R300_NEW_SCISSOR;
-    }
+    r300->scissor_state.dirty = TRUE;
 }
 
 static void r300_set_viewport_state(struct pipe_context* pipe,
                                     const struct pipe_viewport_state* state)
 {
     struct r300_context* r300 = r300_context(pipe);
+    struct r300_viewport_state* viewport =
+        (struct r300_viewport_state*)r300->viewport_state.state;
 
     /* Do the transform in HW. */
-    r300->viewport_state->vte_control = R300_VTX_W0_FMT;
+    viewport->vte_control = R300_VTX_W0_FMT;
 
     if (state->scale[0] != 1.0f) {
-        r300->viewport_state->xscale = state->scale[0];
-        r300->viewport_state->vte_control |= R300_VPORT_X_SCALE_ENA;
+        viewport->xscale = state->scale[0];
+        viewport->vte_control |= R300_VPORT_X_SCALE_ENA;
     }
     if (state->scale[1] != 1.0f) {
-        r300->viewport_state->yscale = state->scale[1];
-        r300->viewport_state->vte_control |= R300_VPORT_Y_SCALE_ENA;
+        viewport->yscale = state->scale[1];
+        viewport->vte_control |= R300_VPORT_Y_SCALE_ENA;
     }
     if (state->scale[2] != 1.0f) {
-        r300->viewport_state->zscale = state->scale[2];
-        r300->viewport_state->vte_control |= R300_VPORT_Z_SCALE_ENA;
+        viewport->zscale = state->scale[2];
+        viewport->vte_control |= R300_VPORT_Z_SCALE_ENA;
     }
     if (state->translate[0] != 0.0f) {
-        r300->viewport_state->xoffset = state->translate[0];
-        r300->viewport_state->vte_control |= R300_VPORT_X_OFFSET_ENA;
+        viewport->xoffset = state->translate[0];
+        viewport->vte_control |= R300_VPORT_X_OFFSET_ENA;
     }
     if (state->translate[1] != 0.0f) {
-        r300->viewport_state->yoffset = state->translate[1];
-        r300->viewport_state->vte_control |= R300_VPORT_Y_OFFSET_ENA;
+        viewport->yoffset = state->translate[1];
+        viewport->vte_control |= R300_VPORT_Y_OFFSET_ENA;
     }
     if (state->translate[2] != 0.0f) {
-        r300->viewport_state->zoffset = state->translate[2];
-        r300->viewport_state->vte_control |= R300_VPORT_Z_OFFSET_ENA;
+        viewport->zoffset = state->translate[2];
+        viewport->vte_control |= R300_VPORT_Z_OFFSET_ENA;
     }
 
-    r300->dirty_state |= R300_NEW_VIEWPORT;
+    r300->viewport_state.dirty = TRUE;
+    if (r300->fs && r300->fs->inputs.wpos != ATTR_UNUSED) {
+        r300->dirty_state |= R300_NEW_FRAGMENT_SHADER_CONSTANTS;
+    }
 }
 
 static void r300_set_vertex_buffers(struct pipe_context* pipe,
@@ -724,7 +930,23 @@ static void r300_set_vertex_buffers(struct pipe_context* pipe,
         draw_set_vertex_buffers(r300->draw, count, buffers);
     }
 
-    r300->dirty_state |= R300_NEW_VERTEX_FORMAT;
+    r300->vertex_format_state.dirty = TRUE;
+}
+
+static boolean r300_validate_aos(struct r300_context *r300)
+{
+    struct pipe_vertex_buffer *vbuf = r300->vertex_buffer;
+    struct pipe_vertex_element *velem = r300->vertex_element;
+    int i;
+
+    /* Check if formats and strides are aligned to the size of DWORD. */
+    for (i = 0; i < r300->vertex_element_count; i++) {
+        if (vbuf[velem[i].vertex_buffer_index].stride % 4 != 0 ||
+            util_format_get_blocksize(velem[i].src_format) % 4 != 0) {
+            return FALSE;
+        }
+    }
+    return TRUE;
 }
 
 static void r300_set_vertex_elements(struct pipe_context* pipe,
@@ -741,6 +963,12 @@ static void r300_set_vertex_elements(struct pipe_context* pipe,
     if (r300->draw) {
         draw_flush(r300->draw);
         draw_set_vertex_elements(r300->draw, count, elements);
+    }
+
+    if (!r300_validate_aos(r300)) {
+        /* XXX We should fallback using draw. */
+        assert(0);
+        abort();
     }
 }
 
@@ -778,7 +1006,14 @@ static void r300_bind_vs_state(struct pipe_context* pipe, void* shader)
         }
 
         r300->vs = vs;
-        r300->dirty_state |= R300_NEW_VERTEX_SHADER | R300_NEW_VERTEX_SHADER_CONSTANTS;
+        if (r300->fs) {
+            r300_vertex_shader_setup_wpos(r300);
+        }
+
+        r300->vertex_format_state.dirty = TRUE;
+
+        r300->dirty_state |=
+            R300_NEW_VERTEX_SHADER | R300_NEW_VERTEX_SHADER_CONSTANTS;
     } else {
         draw_flush(r300->draw);
         draw_bind_vertex_shader(r300->draw,
@@ -804,22 +1039,22 @@ static void r300_delete_vs_state(struct pipe_context* pipe, void* shader)
 
 static void r300_set_constant_buffer(struct pipe_context *pipe,
                                      uint shader, uint index,
-                                     const struct pipe_constant_buffer *buf)
+                                     struct pipe_buffer *buf)
 {
     struct r300_context* r300 = r300_context(pipe);
     void *mapped;
 
-    if (buf == NULL || buf->buffer->size == 0 ||
-        (mapped = pipe_buffer_map(pipe->screen, buf->buffer, PIPE_BUFFER_USAGE_CPU_READ)) == NULL)
+    if (buf == NULL || buf->size == 0 ||
+        (mapped = pipe_buffer_map(pipe->screen, buf, PIPE_BUFFER_USAGE_CPU_READ)) == NULL)
     {
         r300->shader_constants[shader].count = 0;
         return;
     }
 
-    assert((buf->buffer->size % 4 * sizeof(float)) == 0);
-    memcpy(r300->shader_constants[shader].constants, mapped, buf->buffer->size);
-    r300->shader_constants[shader].count = buf->buffer->size / (4 * sizeof(float));
-    pipe_buffer_unmap(pipe->screen, buf->buffer);
+    assert((buf->size % 4 * sizeof(float)) == 0);
+    memcpy(r300->shader_constants[shader].constants, mapped, buf->size);
+    r300->shader_constants[shader].count = buf->size / (4 * sizeof(float));
+    pipe_buffer_unmap(pipe->screen, buf);
 
     if (shader == PIPE_SHADER_VERTEX)
         r300->dirty_state |= R300_NEW_VERTEX_SHADER_CONSTANTS;

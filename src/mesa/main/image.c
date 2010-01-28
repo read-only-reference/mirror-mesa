@@ -33,10 +33,10 @@
 #include "glheader.h"
 #include "colormac.h"
 #include "context.h"
+#include "enums.h"
 #include "image.h"
 #include "imports.h"
 #include "macros.h"
-#include "pixel.h"
 
 
 /**
@@ -3228,6 +3228,7 @@ extract_float_rgba(GLuint n, GLfloat rgba[][4],
           srcFormat == GL_RGBA ||
           srcFormat == GL_BGRA ||
           srcFormat == GL_ABGR_EXT ||
+          srcFormat == GL_DU8DV8_ATI ||
           srcFormat == GL_DUDV_ATI);
 
    ASSERT(srcType == GL_UNSIGNED_BYTE ||
@@ -3343,6 +3344,7 @@ extract_float_rgba(GLuint n, GLfloat rgba[][4],
          aComp = 0;
          stride = 4;
          break;
+      case GL_DU8DV8_ATI:
       case GL_DUDV_ATI:
          redIndex = 0;
          greenIndex = 1;
@@ -3351,7 +3353,8 @@ extract_float_rgba(GLuint n, GLfloat rgba[][4],
          stride = 2;
          break;
       default:
-         _mesa_problem(NULL, "bad srcFormat in extract float data");
+         _mesa_problem(NULL, "bad srcFormat %s in extract float data",
+                       _mesa_lookup_enum_by_nr(srcFormat));
          return;
    }
 

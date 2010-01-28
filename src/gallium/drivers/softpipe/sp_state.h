@@ -68,6 +68,9 @@ struct sp_fragment_shader {
 
    struct tgsi_shader_info info;
 
+   boolean origin_lower_left; /**< fragment shader uses lower left position origin? */
+   boolean pixel_center_integer; /**< fragment shader uses integer pixel center? */
+
    void (*prepare)( const struct sp_fragment_shader *shader,
 		    struct tgsi_exec_machine *machine,
 		    struct tgsi_sampler **samplers);
@@ -139,7 +142,7 @@ void softpipe_set_clip_state( struct pipe_context *,
 
 void softpipe_set_constant_buffer(struct pipe_context *,
                                   uint shader, uint index,
-                                  const struct pipe_constant_buffer *buf);
+                                  struct pipe_buffer *buf);
 
 void *softpipe_create_fs_state(struct pipe_context *,
                                const struct pipe_shader_state *);
@@ -184,20 +187,38 @@ void softpipe_set_vertex_buffers(struct pipe_context *,
 void softpipe_update_derived( struct softpipe_context *softpipe );
 
 
-boolean softpipe_draw_arrays(struct pipe_context *pipe, unsigned mode,
-			     unsigned start, unsigned count);
+void softpipe_draw_arrays(struct pipe_context *pipe, unsigned mode,
+                          unsigned start, unsigned count);
 
-boolean softpipe_draw_elements(struct pipe_context *pipe,
-			       struct pipe_buffer *indexBuffer,
-			       unsigned indexSize,
-			       unsigned mode, unsigned start, unsigned count);
-boolean
+void softpipe_draw_elements(struct pipe_context *pipe,
+                            struct pipe_buffer *indexBuffer,
+                            unsigned indexSize,
+                            unsigned mode, unsigned start, unsigned count);
+void
 softpipe_draw_range_elements(struct pipe_context *pipe,
                              struct pipe_buffer *indexBuffer,
                              unsigned indexSize,
                              unsigned min_index,
                              unsigned max_index,
                              unsigned mode, unsigned start, unsigned count);
+
+void
+softpipe_draw_arrays_instanced(struct pipe_context *pipe,
+                               unsigned mode,
+                               unsigned start,
+                               unsigned count,
+                               unsigned startInstance,
+                               unsigned instanceCount);
+
+void
+softpipe_draw_elements_instanced(struct pipe_context *pipe,
+                                 struct pipe_buffer *indexBuffer,
+                                 unsigned indexSize,
+                                 unsigned mode,
+                                 unsigned start,
+                                 unsigned count,
+                                 unsigned startInstance,
+                                 unsigned instanceCount);
 
 void
 softpipe_map_transfers(struct softpipe_context *sp);

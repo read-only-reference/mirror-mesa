@@ -23,6 +23,7 @@
 import os
 import os.path
 import sys
+import SCons.Util
 
 import common
 
@@ -37,6 +38,9 @@ if common.default_platform in ('linux', 'freebsd', 'darwin'):
 elif common.default_platform in ('winddk',):
 	default_drivers = 'softpipe,svga,i915,i965,trace,identity'
 	default_winsys = 'all'
+elif common.default_platform in ('embedded',):
+	default_drivers = 'softpipe,llvmpipe'
+	default_winsys = 'xlib'
 else:
 	default_drivers = 'all'
 	default_winsys = 'all'
@@ -46,7 +50,7 @@ common.AddOptions(opts)
 opts.Add(ListVariable('statetrackers', 'state trackers to build', default_statetrackers,
                      ['mesa', 'python', 'xorg']))
 opts.Add(ListVariable('drivers', 'pipe drivers to build', default_drivers,
-                     ['softpipe', 'failover', 'svga', 'i915', 'i965', 'cell', 'trace', 'r300', 'identity', 'llvmpipe']))
+                     ['softpipe', 'failover', 'svga', 'i915', 'i965', 'trace', 'r300', 'identity', 'llvmpipe']))
 opts.Add(ListVariable('winsys', 'winsys drivers to build', default_winsys,
                      ['xlib', 'vmware', 'intel', 'i965', 'gdi', 'radeon']))
 
@@ -58,6 +62,17 @@ env = Environment(
 	toolpath = ['#scons'],	
 	ENV = os.environ,
 )
+
+if os.environ.has_key('CC'):
+	env['CC'] = os.environ['CC']
+if os.environ.has_key('CFLAGS'):
+	env['CCFLAGS'] += SCons.Util.CLVar(os.environ['CFLAGS'])
+if os.environ.has_key('CXX'):
+	env['CXX'] = os.environ['CXX']
+if os.environ.has_key('CXXFLAGS'):
+	env['CXXFLAGS'] += SCons.Util.CLVar(os.environ['CXXFLAGS'])
+if os.environ.has_key('LDFLAGS'):
+	env['LINKFLAGS'] += SCons.Util.CLVar(os.environ['LDFLAGS'])
 
 Help(opts.GenerateHelpText(env))
 
@@ -71,7 +86,7 @@ platform = env['platform']
 # derived options
 x86 = machine == 'x86'
 ppc = machine == 'ppc'
-gcc = platform in ('linux', 'freebsd', 'darwin')
+gcc = platform in ('linux', 'freebsd', 'darwin', 'embedded')
 msvc = platform in ('windows', 'winddk')
 
 Export([
@@ -97,6 +112,25 @@ env.Append(CPPPATH = [
 	'#/src/gallium/drivers',
 ])
 
+if env['msvc']:
+    env.Append(CPPPATH = ['#include/c99'])
+
+# Embedded
+if platform == 'embedded':
+	env.Append(CPPDEFINES = [
+		'_POSIX_SOURCE',
+		('_POSIX_C_SOURCE', '199309L'), 
+		'_SVID_SOURCE',
+		'_BSD_SOURCE', 
+		'_GNU_SOURCE',
+		
+		'PTHREADS',
+	])
+	env.Append(LIBS = [
+		'm',
+		'pthread',
+		'dl',
+	])
 
 # Posix
 if platform in ('posix', 'linux', 'freebsd', 'darwin'):
@@ -110,6 +144,8 @@ if platform in ('posix', 'linux', 'freebsd', 'darwin'):
 		'PTHREADS',
 		'HAVE_POSIX_MEMALIGN',
 	])
+	if platform == 'darwin':
+		env.Append(CPPDEFINES = ['_DARWIN_C_SOURCE'])
 	env.Append(CPPPATH = ['/usr/X11R6/include'])
 	env.Append(LIBPATH = ['/usr/X11R6/lib'])
 	env.Append(LIBS = [
@@ -118,7 +154,6 @@ if platform in ('posix', 'linux', 'freebsd', 'darwin'):
 		'expat',
 		'dl',
 	])
-
 
 # DRI
 if dri:
@@ -166,15 +201,18 @@ if env['platform'] != common.default_platform:
     host_env = Environment(
         # options are ignored
         # default tool is used
+        tools = ['default', 'custom'],
         toolpath = ['#scons'],	
         ENV = os.environ,
     )
 
     host_env['platform'] = common.default_platform
+    host_env['machine'] = common.default_machine
+    host_env['debug'] = env['debug']
 
     SConscript(
         'src/glsl/SConscript',
-        variant_dir = env['build'] + '/host',
+        variant_dir = os.path.join(env['build'], 'host'),
         duplicate = 0, # http://www.scons.org/doc/0.97/HTML/scons-user/x2261.html
         exports={'env':host_env},
     )
@@ -182,5 +220,11 @@ if env['platform'] != common.default_platform:
 SConscript(
 	'src/SConscript',
 	variant_dir = env['build'],
+	duplicate = 0 # http://www.scons.org/doc/0.97/HTML/scons-user/x2261.html
+)
+
+SConscript(
+	'progs/SConscript',
+	variant_dir = os.path.join('progs', env['build']),
 	duplicate = 0 # http://www.scons.org/doc/0.97/HTML/scons-user/x2261.html
 )

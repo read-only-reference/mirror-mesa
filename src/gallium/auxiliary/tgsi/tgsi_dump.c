@@ -123,12 +123,15 @@ static const char *semantic_names[] =
    "NORMAL",
    "FACE",
    "EDGEFLAG",
-   "PRIM_ID"
+   "PRIM_ID",
+   "INSTANCEID"
 };
 
 static const char *immediate_type_names[] =
 {
-   "FLT32"
+   "FLT32",
+   "UINT32",
+   "INT32"
 };
 
 static const char *swizzle_names[] =
@@ -156,7 +159,9 @@ static const char *property_names[] =
 {
    "GS_INPUT_PRIMITIVE",
    "GS_OUTPUT_PRIMITIVE",
-   "GS_MAX_OUTPUT_VERTICES"
+   "GS_MAX_OUTPUT_VERTICES",
+   "FS_COORD_ORIGIN",
+   "FS_COORD_PIXEL_CENTER"
 };
 
 static const char *primitive_names[] =
@@ -173,29 +178,18 @@ static const char *primitive_names[] =
    "POLYGON"
 };
 
-
-static void
-_dump_register_decl(
-   struct dump_ctx *ctx,
-   uint file,
-   int first,
-   int last )
+static const char *fs_coord_origin_names[] =
 {
-   ENM( file, file_names );
+   "UPPER_LEFT",
+   "LOWER_LEFT"
+};
 
-   /* all geometry shader inputs are two dimensional */
-   if (file == TGSI_FILE_INPUT &&
-       ctx->iter.processor.Processor == TGSI_PROCESSOR_GEOMETRY)
-      TXT("[]");
+static const char *fs_coord_pixel_center_names[] =
+{
+   "HALF_INTEGER",
+   "INTEGER"
+};
 
-   CHR( '[' );
-   SID( first );
-   if (first != last) {
-      TXT( ".." );
-      SID( last );
-   }
-   CHR( ']' );
-}
 
 static void
 _dump_register_dst(
@@ -216,8 +210,13 @@ _dump_register_src(
    struct dump_ctx *ctx,
    const struct tgsi_full_src_register *src )
 {
+   ENM(src->Register.File, file_names);
+   if (src->Register.Dimension) {
+      CHR('[');
+      SID(src->Dimension.Index);
+      CHR(']');
+   }
    if (src->Register.Indirect) {
-      ENM( src->Register.File, file_names );
       CHR( '[' );
       ENM( src->Indirect.File, file_names );
       CHR( '[' );
@@ -231,14 +230,8 @@ _dump_register_src(
       }
       CHR( ']' );
    } else {
-      ENM( src->Register.File, file_names );
       CHR( '[' );
       SID( src->Register.Index );
-      CHR( ']' );
-   }
-   if (src->Register.Dimension) {
-      CHR( '[' );
-      SID( src->Dimension.Index );
       CHR( ']' );
    }
 }
@@ -297,11 +290,28 @@ iter_declaration(
 
    TXT( "DCL " );
 
-   _dump_register_decl(
-      ctx,
-      decl->Declaration.File,
-      decl->Range.First,
-      decl->Range.Last );
+   ENM(decl->Declaration.File, file_names);
+
+   /* all geometry shader inputs are two dimensional */
+   if (decl->Declaration.File == TGSI_FILE_INPUT &&
+       iter->processor.Processor == TGSI_PROCESSOR_GEOMETRY) {
+      TXT("[]");
+   }
+
+   if (decl->Declaration.Dimension) {
+      CHR('[');
+      SID(decl->Dim.Index2D);
+      CHR(']');
+   }
+
+   CHR('[');
+   SID(decl->Range.First);
+   if (decl->Range.First != decl->Range.Last) {
+      TXT("..");
+      SID(decl->Range.Last);
+   }
+   CHR(']');
+
    _dump_writemask(
       ctx,
       decl->Declaration.UsageMask );
@@ -370,6 +380,12 @@ iter_property(
       case TGSI_PROPERTY_GS_OUTPUT_PRIM:
          ENM(prop->u[i].Data, primitive_names);
          break;
+      case TGSI_PROPERTY_FS_COORD_ORIGIN:
+         ENM(prop->u[i].Data, fs_coord_origin_names);
+         break;
+      case TGSI_PROPERTY_FS_COORD_PIXEL_CENTER:
+         ENM(prop->u[i].Data, fs_coord_pixel_center_names);
+         break;
       default:
          SID( prop->u[i].Data );
          break;
@@ -411,6 +427,12 @@ iter_immediate(
       switch (imm->Immediate.DataType) {
       case TGSI_IMM_FLOAT32:
          FLT( imm->u[i].Float );
+         break;
+      case TGSI_IMM_UINT32:
+         UID(imm->u[i].Uint);
+         break;
+      case TGSI_IMM_INT32:
+         SID(imm->u[i].Int);
          break;
       default:
          assert( 0 );

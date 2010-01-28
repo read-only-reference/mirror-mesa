@@ -44,9 +44,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "radeon_mipmap_tree.h"
 #include "r200_context.h"
-#include "r200_state.h"
 #include "r200_ioctl.h"
-#include "r200_swtcl.h"
 #include "r200_tex.h"
 
 #include "xmlpool.h"
@@ -378,7 +376,7 @@ static void r200TexParameter( GLcontext *ctx, GLenum target,
       break;
 
    case GL_TEXTURE_BORDER_COLOR:
-      r200SetTexBorderColor( t, texObj->BorderColor );
+      r200SetTexBorderColor( t, texObj->BorderColor.f );
       break;
 
    case GL_TEXTURE_BASE_LEVEL:
@@ -470,14 +468,14 @@ static struct gl_texture_object *r200NewTextureObject(GLcontext * ctx,
    r200SetTexWrap( t, t->base.WrapS, t->base.WrapT, t->base.WrapR );
    r200SetTexMaxAnisotropy( t, t->base.MaxAnisotropy );
    r200SetTexFilter(t, t->base.MinFilter, t->base.MagFilter);
-   r200SetTexBorderColor(t, t->base.BorderColor);
+   r200SetTexBorderColor(t, t->base.BorderColor.f);
 
    return &t->base;
 }
 
 
 
-void r200InitTextureFuncs( struct dd_function_table *functions )
+void r200InitTextureFuncs( radeonContextPtr radeon, struct dd_function_table *functions )
 {
    /* Note: we only plug in the functions we implement in the driver
     * since _mesa_init_driver_functions() was already called.
@@ -510,6 +508,11 @@ void r200InitTextureFuncs( struct dd_function_table *functions )
 
    functions->CompressedTexImage2D	= radeonCompressedTexImage2D;
    functions->CompressedTexSubImage2D	= radeonCompressedTexSubImage2D;
+
+   if (radeon->radeonScreen->kernel_mm) {
+      functions->CopyTexImage2D = radeonCopyTexImage2D;
+      functions->CopyTexSubImage2D = radeonCopyTexSubImage2D;
+   }
 
    functions->GenerateMipmap = radeonGenerateMipmap;
 

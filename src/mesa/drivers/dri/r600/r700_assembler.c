@@ -891,6 +891,7 @@ GLboolean assemble_vfetch_instruction2(r700_AssemblerBase* pAsm,
                                        GLubyte             element,
                                        GLuint              _signed,
                                        GLboolean           normalize,
+                                       GLenum              format,
                                        VTX_FETCH_METHOD  * pFetchMethod)
 {
     GLuint client_size_inbyte;
@@ -939,10 +940,21 @@ GLboolean assemble_vfetch_instruction2(r700_AssemblerBase* pAsm,
 	vfetch_instruction_ptr->m_Word0.f.src_sel_x        = SQ_SEL_X;
 	vfetch_instruction_ptr->m_Word0.f.mega_fetch_count = mega_fetch_count;
 
-	vfetch_instruction_ptr->m_Word1.f.dst_sel_x        = (size < 1) ? SQ_SEL_0 : SQ_SEL_X;
-	vfetch_instruction_ptr->m_Word1.f.dst_sel_y        = (size < 2) ? SQ_SEL_0 : SQ_SEL_Y;
-	vfetch_instruction_ptr->m_Word1.f.dst_sel_z        = (size < 3) ? SQ_SEL_0 : SQ_SEL_Z;
-	vfetch_instruction_ptr->m_Word1.f.dst_sel_w        = (size < 4) ? SQ_SEL_1 : SQ_SEL_W;
+	if(format == GL_BGRA)
+	{
+		vfetch_instruction_ptr->m_Word1.f.dst_sel_x        = (size < 1) ? SQ_SEL_0 : SQ_SEL_Z;
+		vfetch_instruction_ptr->m_Word1.f.dst_sel_y        = (size < 2) ? SQ_SEL_0 : SQ_SEL_Y;
+		vfetch_instruction_ptr->m_Word1.f.dst_sel_z        = (size < 3) ? SQ_SEL_0 : SQ_SEL_X;
+		vfetch_instruction_ptr->m_Word1.f.dst_sel_w        = (size < 4) ? SQ_SEL_1 : SQ_SEL_W;
+	}
+	else
+	{
+		vfetch_instruction_ptr->m_Word1.f.dst_sel_x        = (size < 1) ? SQ_SEL_0 : SQ_SEL_X;
+		vfetch_instruction_ptr->m_Word1.f.dst_sel_y        = (size < 2) ? SQ_SEL_0 : SQ_SEL_Y;
+		vfetch_instruction_ptr->m_Word1.f.dst_sel_z        = (size < 3) ? SQ_SEL_0 : SQ_SEL_Z;
+		vfetch_instruction_ptr->m_Word1.f.dst_sel_w        = (size < 4) ? SQ_SEL_1 : SQ_SEL_W;
+
+	}
 
 	vfetch_instruction_ptr->m_Word1.f.use_const_fields = 1;
     vfetch_instruction_ptr->m_Word1.f.data_format      = data_format;
@@ -4385,7 +4397,10 @@ GLboolean assemble_TEX(r700_AssemblerBase *pAsm)
             pAsm->D.dst.opcode = SQ_TEX_INST_SAMPLE_L;
             break;
         default:
-            pAsm->D.dst.opcode = SQ_TEX_INST_SAMPLE;
+            if(pAsm->pILInst[pAsm->uiCurInst].TexShadow == 1)
+                pAsm->D.dst.opcode = SQ_TEX_INST_SAMPLE_C;
+            else
+                pAsm->D.dst.opcode = SQ_TEX_INST_SAMPLE;
     }
 
     pAsm->is_tex = GL_TRUE;
@@ -4431,30 +4446,66 @@ GLboolean assemble_TEX(r700_AssemblerBase *pAsm)
         pAsm->S[0].src.swizzlew = SQ_SEL_Y;
     }
  
+    if(pAsm->pILInst[pAsm->uiCurInst].TexShadow == 1)
+    {
+        /* compare value goes to w chan ? */
+        pAsm->S[0].src.swizzlew = SQ_SEL_Z;
+    }
+
     if ( GL_FALSE == next_ins(pAsm) )
         {
             return GL_FALSE;
         }
+
+    /* add ARB shadow ambient but clamp to 0..1 */
+    if(pAsm->pILInst[pAsm->uiCurInst].TexShadow == 1)
+    {
+	/* ADD_SAT dst,  dst,  ambient[texunit] */
+	pAsm->D.dst.opcode = SQ_OP2_INST_ADD;
+
+	if( GL_FALSE == assemble_dst(pAsm) )
+	{
+	    return GL_FALSE;
+	}
+	pAsm->D2.dst2.SaturateMode = 1;
+
+	pAsm->S[0].src.rtype = SRC_REG_TEMPORARY;
+	pAsm->S[0].src.reg = pAsm->D.dst.reg;
+	noswizzle_PVSSRC(&(pAsm->S[0].src));
+	noneg_PVSSRC(&(pAsm->S[0].src));
+
+	pAsm->S[1].src.rtype = SRC_REG_CONSTANT;
+	pAsm->S[1].src.reg = pAsm->shadow_regs[pAsm->pILInst[pAsm->uiCurInst].TexSrcUnit];
+	noswizzle_PVSSRC(&(pAsm->S[1].src));
+	noneg_PVSSRC(&(pAsm->S[1].src));
+
+	if( GL_FALSE == next_ins(pAsm) )
+	{
+	    return GL_FALSE;
+	}
+
+    }
 
     return GL_TRUE;
 }
 
 GLboolean assemble_XPD(r700_AssemblerBase *pAsm) 
 {
-    BITS tmp;
+    BITS tmp1;
+    BITS tmp2 = 0;
 
     if( GL_FALSE == checkop2(pAsm) )
     {
 	    return GL_FALSE;
     }
 
-    tmp = gethelpr(pAsm);
+    tmp1 = gethelpr(pAsm);
 
     pAsm->D.dst.opcode = SQ_OP2_INST_MUL;
 
     setaddrmode_PVSDST(&(pAsm->D.dst), ADDR_ABSOLUTE);
     pAsm->D.dst.rtype = DST_REG_TEMPORARY;
-    pAsm->D.dst.reg   = tmp;
+    pAsm->D.dst.reg   = tmp1;
     nomask_PVSDST(&(pAsm->D.dst));
   
     if( GL_FALSE == assemble_src(pAsm, 0, -1) )
@@ -4480,11 +4531,11 @@ GLboolean assemble_XPD(r700_AssemblerBase *pAsm)
 
     if(0xF != pAsm->pILInst[pAsm->uiCurInst].DstReg.WriteMask)
     {
-        tmp = gethelpr(pAsm);
+        tmp2 = gethelpr(pAsm);
 
         setaddrmode_PVSDST(&(pAsm->D.dst), ADDR_ABSOLUTE);
         pAsm->D.dst.rtype = DST_REG_TEMPORARY;
-        pAsm->D.dst.reg   = tmp;
+        pAsm->D.dst.reg   = tmp2;
 
         nomask_PVSDST(&(pAsm->D.dst));
     }
@@ -4512,7 +4563,7 @@ GLboolean assemble_XPD(r700_AssemblerBase *pAsm)
     // result1 + (neg) result0
     setaddrmode_PVSSRC(&(pAsm->S[2].src),ADDR_ABSOLUTE);
     pAsm->S[2].src.rtype = SRC_REG_TEMPORARY;
-    pAsm->S[2].src.reg   = tmp;
+    pAsm->S[2].src.reg   = tmp1;
 
     neg_PVSSRC(&(pAsm->S[2].src));
     noswizzle_PVSSRC(&(pAsm->S[2].src));
@@ -4535,7 +4586,7 @@ GLboolean assemble_XPD(r700_AssemblerBase *pAsm)
         // Use tmp as source
         setaddrmode_PVSSRC(&(pAsm->S[0].src), ADDR_ABSOLUTE);
         pAsm->S[0].src.rtype = SRC_REG_TEMPORARY;
-        pAsm->S[0].src.reg   = tmp;
+        pAsm->S[0].src.reg   = tmp2;
 
         noneg_PVSSRC(&(pAsm->S[0].src));
         noswizzle_PVSSRC(&(pAsm->S[0].src));
@@ -5040,15 +5091,15 @@ void add_return_inst(r700_AssemblerBase *pAsm)
 {
     if(GL_FALSE == add_cf_instruction(pAsm) )
     {
-        return GL_FALSE;
+        return;
     }
     //pAsm->cf_current_cf_clause_ptr->m_Word1.f.pop_count        = 1;
     pAsm->cf_current_cf_clause_ptr->m_Word1.f.pop_count        = 0;
-    pAsm->cf_current_cf_clause_ptr->m_Word1.f.cf_const         = 0x0; 
+    pAsm->cf_current_cf_clause_ptr->m_Word1.f.cf_const         = 0x0;
     pAsm->cf_current_cf_clause_ptr->m_Word1.f.cond             = SQ_CF_COND_ACTIVE;
 
     pAsm->cf_current_cf_clause_ptr->m_Word1.f.end_of_program   = 0x0;
-    pAsm->cf_current_cf_clause_ptr->m_Word1.f.valid_pixel_mode = 0x0; 
+    pAsm->cf_current_cf_clause_ptr->m_Word1.f.valid_pixel_mode = 0x0;
     pAsm->cf_current_cf_clause_ptr->m_Word1.f.cf_inst          = SQ_CF_INST_RETURN;
     pAsm->cf_current_cf_clause_ptr->m_Word1.f.whole_quad_mode  = 0x0;
 
@@ -5252,7 +5303,7 @@ GLboolean assemble_CAL(r700_AssemblerBase *pAsm,
 
 GLboolean setRetInLoopFlag(r700_AssemblerBase *pAsm, GLuint flagValue)
 {
-    GLfloat fLiteral[2] = {0.1, 0.0};
+    /*GLfloat fLiteral[2] = {0.1, 0.0};*/
 
     pAsm->D.dst.opcode   = SQ_OP2_INST_MOV;
     pAsm->D.dst.op3      = 0;
@@ -5303,7 +5354,7 @@ GLboolean setRetInLoopFlag(r700_AssemblerBase *pAsm, GLuint flagValue)
 
 GLboolean testFlag(r700_AssemblerBase *pAsm)
 {
-    GLfloat fLiteral[2] = {0.1, 0.0};
+    /*GLfloat fLiteral[2] = {0.1, 0.0};*/
 
     //Test flag
     GLuint tmp = gethelpr(pAsm);
@@ -6073,7 +6124,7 @@ GLboolean callPreSub(r700_AssemblerBase* pAsm,
 
     R700ControlFlowGenericClause* prelude_cf_ptr = NULL;
 
-    /* copy srcs to presub inputs */  
+    /* copy srcs to presub inputs */
     pAsm->alu_x_opcode = SQ_CF_INST_ALU;
     for(i=0; i<uNumValidSrc; i++)
     {

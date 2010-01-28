@@ -62,7 +62,6 @@
 #include "util/u_memory.h"
 #include "util/u_format.h"
 #include "util/u_debug_dump.h"
-#include "pipe/internal/p_winsys_screen.h"
 #include "pipe/p_shader_tokens.h"
 #include "draw/draw_context.h"
 #include "tgsi/tgsi_dump.h"
@@ -85,7 +84,6 @@
 #include "lp_context.h"
 #include "lp_buffer.h"
 #include "lp_state.h"
-#include "lp_quad.h"
 #include "lp_tex_sample.h"
 #include "lp_debug.h"
 
@@ -354,7 +352,7 @@ generate_blend(const struct pipe_blend_state *blend,
    lp_build_blend_soa(builder, blend, type, src, dst, con, res);
 
    for(chan = 0; chan < 4; ++chan) {
-      if(blend->colormask & (1 << chan)) {
+      if(blend->rt[0].colormask & (1 << chan)) {
          LLVMValueRef index = LLVMConstInt(LLVMInt32Type(), chan, 0);
          lp_build_name(res[chan], "res.%c", "rgba"[chan]);
          res[chan] = lp_build_select(&bld, mask, res[chan], dst[chan]);
@@ -423,15 +421,15 @@ generate_fragment(struct llvmpipe_context *lp,
       if(key->blend.logicop_enable) {
          debug_printf("blend.logicop_func = %u\n", key->blend.logicop_func);
       }
-      else if(key->blend.blend_enable) {
-         debug_printf("blend.rgb_func = %s\n",   debug_dump_blend_func  (key->blend.rgb_func, TRUE));
-         debug_printf("rgb_src_factor = %s\n",   debug_dump_blend_factor(key->blend.rgb_src_factor, TRUE));
-         debug_printf("rgb_dst_factor = %s\n",   debug_dump_blend_factor(key->blend.rgb_dst_factor, TRUE));
-         debug_printf("alpha_func = %s\n",       debug_dump_blend_func  (key->blend.alpha_func, TRUE));
-         debug_printf("alpha_src_factor = %s\n", debug_dump_blend_factor(key->blend.alpha_src_factor, TRUE));
-         debug_printf("alpha_dst_factor = %s\n", debug_dump_blend_factor(key->blend.alpha_dst_factor, TRUE));
+      else if(key->blend.rt[0].blend_enable) {
+         debug_printf("blend.rgb_func = %s\n",   debug_dump_blend_func  (key->blend.rt[0].rgb_func, TRUE));
+         debug_printf("rgb_src_factor = %s\n",   debug_dump_blend_factor(key->blend.rt[0].rgb_src_factor, TRUE));
+         debug_printf("rgb_dst_factor = %s\n",   debug_dump_blend_factor(key->blend.rt[0].rgb_dst_factor, TRUE));
+         debug_printf("alpha_func = %s\n",       debug_dump_blend_func  (key->blend.rt[0].alpha_func, TRUE));
+         debug_printf("alpha_src_factor = %s\n", debug_dump_blend_factor(key->blend.rt[0].alpha_src_factor, TRUE));
+         debug_printf("alpha_dst_factor = %s\n", debug_dump_blend_factor(key->blend.rt[0].alpha_dst_factor, TRUE));
       }
-      debug_printf("blend.colormask = 0x%x\n", key->blend.colormask);
+      debug_printf("blend.colormask = 0x%x\n", key->blend.rt[0].colormask);
       for(i = 0; i < PIPE_MAX_SAMPLERS; ++i) {
          if(key->sampler[i].format) {
             debug_printf("sampler[%u] = \n", i);
@@ -453,8 +451,8 @@ generate_fragment(struct llvmpipe_context *lp,
                          debug_dump_tex_mipfilter(key->sampler[i].min_mip_filter, TRUE));
             debug_printf("  .mag_img_filter = %s\n",
                          debug_dump_tex_filter(key->sampler[i].mag_img_filter, TRUE));
-            if(key->sampler[i].compare_mode)
-               debug_printf("  .compare_mode = %s\n", debug_dump_func(key->sampler[i].compare_func, TRUE));
+            if(key->sampler[i].compare_mode != PIPE_TEX_COMPARE_NONE)
+               debug_printf("  .compare_func = %s\n", debug_dump_func(key->sampler[i].compare_func, TRUE));
             debug_printf("  .normalized_coords = %u\n", key->sampler[i].normalized_coords);
             debug_printf("  .prefilter = %u\n", key->sampler[i].prefilter);
          }
@@ -550,13 +548,8 @@ generate_fragment(struct llvmpipe_context *lp,
                             a0_ptr, dadx_ptr, dady_ptr,
                             x0, y0, 2, 0);
 
-#if 0
-   /* C texture sampling */
-   sampler = lp_c_sampler_soa_create(context_ptr);
-#else
    /* code generated texture sampling */
    sampler = lp_llvm_sampler_soa_create(key->sampler, context_ptr);
-#endif
 
    for(i = 0; i < num_fs; ++i) {
       LLVMValueRef index = LLVMConstInt(LLVMInt32Type(), i, 0);
@@ -719,12 +712,11 @@ llvmpipe_delete_fs_state(struct pipe_context *pipe, void *fs)
 void
 llvmpipe_set_constant_buffer(struct pipe_context *pipe,
                              uint shader, uint index,
-                             const struct pipe_constant_buffer *constants)
+                             struct pipe_buffer *constants)
 {
    struct llvmpipe_context *llvmpipe = llvmpipe_context(pipe);
-   struct pipe_buffer *buffer = constants ? constants->buffer : NULL;
-   unsigned size = buffer ? buffer->size : 0;
-   const void *data = buffer ? llvmpipe_buffer(buffer)->data : NULL;
+   unsigned size = constants ? constants->size : 0;
+   const void *data = constants ? llvmpipe_buffer(constants)->data : NULL;
 
    assert(shader < PIPE_SHADER_TYPES);
    assert(index == 0);
@@ -732,14 +724,14 @@ llvmpipe_set_constant_buffer(struct pipe_context *pipe,
    draw_flush(llvmpipe->draw);
 
    /* note: reference counting */
-   pipe_buffer_reference(&llvmpipe->constants[shader].buffer, buffer);
+   pipe_buffer_reference(&llvmpipe->constants[shader], constants);
 
    if(shader == PIPE_SHADER_FRAGMENT) {
       llvmpipe->jit_context.constants = data;
    }
 
    if(shader == PIPE_SHADER_VERTEX) {
-      draw_set_mapped_constant_buffer(llvmpipe->draw, PIPE_SHADER_VERTEX,
+      draw_set_mapped_constant_buffer(llvmpipe->draw, PIPE_SHADER_VERTEX, 0,
                                       data, size);
    }
 
@@ -788,7 +780,7 @@ make_variant_key(struct llvmpipe_context *lp,
       for(chan = 0; chan < 4; ++chan) {
          enum util_format_swizzle swizzle = format_desc->swizzle[chan];
          if(swizzle > 4)
-            key->blend.colormask &= ~(1 << chan);
+            key->blend.rt[0].colormask &= ~(1 << chan);
       }
    }
 

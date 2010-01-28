@@ -37,10 +37,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/context.h"
 #include "main/simple_list.h"
 #include "main/imports.h"
-#include "main/matrix.h"
 #include "main/extensions.h"
-#include "main/framebuffer.h"
-#include "main/state.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -58,9 +55,9 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r200_tex.h"
 #include "r200_swtcl.h"
 #include "r200_tcl.h"
-#include "r200_maos.h"
 #include "r200_vertprog.h"
 #include "radeon_queryobj.h"
+#include "r200_blit.h"
 
 #include "radeon_span.h"
 
@@ -79,7 +76,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #define DRIVER_DATE	"20060602"
 
-#include "vblank.h"
 #include "utils.h"
 #include "xmlpool.h" /* for symbolic values of enum-type options */
 
@@ -268,16 +264,17 @@ static void r200_init_vtbl(radeonContextPtr radeon)
    radeon->vtbl.fallback = r200Fallback;
    radeon->vtbl.update_scissor = r200_vtbl_update_scissor;
    radeon->vtbl.emit_query_finish = r200_emit_query_finish;
+   radeon->vtbl.blit = r200_blit;
 }
 
 
 /* Create the device specific rendering context.
  */
 GLboolean r200CreateContext( const __GLcontextModes *glVisual,
-			     __DRIcontextPrivate *driContextPriv,
+			     __DRIcontext *driContextPriv,
 			     void *sharedContextPrivate)
 {
-   __DRIscreenPrivate *sPriv = driContextPriv->driScreenPriv;
+   __DRIscreen *sPriv = driContextPriv->driScreenPriv;
    radeonScreenPtr screen = (radeonScreenPtr)(sPriv->private);
    struct dd_function_table functions;
    r200ContextPtr rmesa;
@@ -294,6 +291,7 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    if ( !rmesa )
       return GL_FALSE;
 
+   rmesa->radeon.radeonScreen = screen;
    r200_init_vtbl(&rmesa->radeon);
    /* init exp fog table data */
    r200InitStaticFogData();
@@ -326,7 +324,7 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
    r200InitDriverFuncs(&functions);
    r200InitIoctlFuncs(&functions);
    r200InitStateFuncs(&functions);
-   r200InitTextureFuncs(&functions);
+   r200InitTextureFuncs(&rmesa->radeon, &functions);
    r200InitShaderFuncs(&functions);
    radeonInitQueryObjFunctions(&functions);
 
@@ -496,7 +494,7 @@ GLboolean r200CreateContext( const __GLcontextModes *glVisual,
 }
 
 
-void r200DestroyContext( __DRIcontextPrivate *driContextPriv )
+void r200DestroyContext( __DRIcontext *driContextPriv )
 {
 	int i;
 	r200ContextPtr rmesa = (r200ContextPtr)driContextPriv->driverPrivate;

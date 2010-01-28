@@ -50,7 +50,6 @@
 #endif
 
 #include "pipe/p_inlines.h"
-#include "util/u_format.h"
 #include "util/u_rect.h"
 
 #ifdef HAVE_LIBKMS
@@ -123,7 +122,8 @@ crtc_set_mode_major(xf86CrtcPtr crtc, DisplayModePtr mode,
     drm_mode.vrefresh = mode->VRefresh;
     if (!mode->name)
 	xf86SetModeDefaultName(mode);
-    strncpy(drm_mode.name, mode->name, DRM_DISPLAY_MODE_LEN);
+    strncpy(drm_mode.name, mode->name, DRM_DISPLAY_MODE_LEN - 1);
+    drm_mode.name[DRM_DISPLAY_MODE_LEN - 1] = '\0';
 
     ret = drmModeSetCrtc(ms->fd, drm_crtc->crtc_id, ms->fb_id, x, y,
 			 &drm_connector->connector_id, 1, &drm_mode);
@@ -242,7 +242,11 @@ crtc_load_cursor_argb_kms(xf86CrtcPtr crtc, CARD32 * image)
 	unsigned attr[8];
 
 	attr[0] = KMS_BO_TYPE;
+#ifdef KMS_BO_TYPE_CURSOR_64X64_A8R8G8B8
+	attr[1] = KMS_BO_TYPE_CURSOR_64X64_A8R8G8B8;
+#else
 	attr[1] = KMS_BO_TYPE_CURSOR;
+#endif
 	attr[2] = KMS_WIDTH;
 	attr[3] = 64;
 	attr[4] = KMS_HEIGHT;

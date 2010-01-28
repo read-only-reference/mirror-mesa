@@ -47,8 +47,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "tnl/tnl.h"
 #include "swrast_setup/swrast_setup.h"
 
-#include "tnl/t_pipeline.h"
-
 #include "drirenderbuffer.h"
 
 
@@ -572,7 +570,7 @@ static void r128UpdateClipping( GLcontext *ctx )
    r128ContextPtr rmesa = R128_CONTEXT(ctx);
 
    if ( rmesa->driDrawable ) {
-      __DRIdrawablePrivate *drawable = rmesa->driDrawable;
+      __DRIdrawable *drawable = rmesa->driDrawable;
       int x1 = 0;
       int y1 = 0;
       int x2 = drawable->w - 1;

@@ -33,7 +33,7 @@ static void
 nv50_state_validate_fb(struct nv50_context *nv50)
 {
 	struct nouveau_grobj *tesla = nv50->screen->tesla;
-	struct nouveau_stateobj *so = so_new(128, 18);
+	struct nouveau_stateobj *so = so_new(32, 79, 18);
 	struct pipe_framebuffer_state *fb = &nv50->framebuffer;
 	unsigned i, w, h, gw = 0;
 
@@ -185,6 +185,9 @@ nv50_state_emit(struct nv50_context *nv50)
 	struct nv50_screen *screen = nv50->screen;
 	struct nouveau_channel *chan = screen->base.channel;
 
+	/* I don't want to copy headers from the winsys. */
+	screen->cur_ctx = nv50;
+
 	if (nv50->pctx_id != screen->cur_pctx) {
 		if (nv50->state.fb)
 			nv50->state.dirty |= NV50_NEW_FRAMEBUFFER;
@@ -196,6 +199,8 @@ nv50_state_emit(struct nv50_context *nv50)
 			nv50->state.dirty |= NV50_NEW_VERTPROG;
 		if (nv50->state.fragprog)
 			nv50->state.dirty |= NV50_NEW_FRAGPROG;
+		if (nv50->state.geomprog)
+			nv50->state.dirty |= NV50_NEW_GEOMPROG;
 		if (nv50->state.rast)
 			nv50->state.dirty |= NV50_NEW_RASTERIZER;
 		if (nv50->state.blend_colour)
@@ -225,9 +230,14 @@ nv50_state_emit(struct nv50_context *nv50)
 		so_emit(chan, nv50->state.vertprog);
 	if (nv50->state.dirty & NV50_NEW_FRAGPROG)
 		so_emit(chan, nv50->state.fragprog);
+	if (nv50->state.dirty & NV50_NEW_GEOMPROG && nv50->state.geomprog)
+		so_emit(chan, nv50->state.geomprog);
 	if (nv50->state.dirty & (NV50_NEW_FRAGPROG | NV50_NEW_VERTPROG |
-				 NV50_NEW_RASTERIZER))
-		so_emit(chan, nv50->state.programs);
+				 NV50_NEW_GEOMPROG | NV50_NEW_RASTERIZER))
+		so_emit(chan, nv50->state.fp_linkage);
+	if ((nv50->state.dirty & (NV50_NEW_VERTPROG | NV50_NEW_GEOMPROG))
+	    && nv50->state.gp_linkage)
+		so_emit(chan, nv50->state.gp_linkage);
 	if (nv50->state.dirty & NV50_NEW_RASTERIZER)
 		so_emit(chan, nv50->state.rast);
 	if (nv50->state.dirty & NV50_NEW_BLEND_COLOUR)
@@ -264,6 +274,9 @@ nv50_state_flush_notify(struct nouveau_channel *chan)
 	so_emit_reloc_markers(chan, nv50->state.fragprog);
 	so_emit_reloc_markers(chan, nv50->state.vtxbuf);
 	so_emit_reloc_markers(chan, nv50->screen->static_init);
+
+	if (nv50->state.instbuf)
+		so_emit_reloc_markers(chan, nv50->state.instbuf);
 }
 
 boolean
@@ -288,15 +301,21 @@ nv50_state_validate(struct nv50_context *nv50)
 	if (nv50->dirty & (NV50_NEW_FRAGPROG | NV50_NEW_FRAGPROG_CB))
 		nv50_fragprog_validate(nv50);
 
+	if (nv50->dirty & (NV50_NEW_GEOMPROG | NV50_NEW_GEOMPROG_CB))
+		nv50_geomprog_validate(nv50);
+
 	if (nv50->dirty & (NV50_NEW_FRAGPROG | NV50_NEW_VERTPROG |
-			   NV50_NEW_RASTERIZER))
-		nv50_linkage_validate(nv50);
+			   NV50_NEW_GEOMPROG | NV50_NEW_RASTERIZER))
+		nv50_fp_linkage_validate(nv50);
+
+	if (nv50->dirty & (NV50_NEW_GEOMPROG | NV50_NEW_VERTPROG))
+		nv50_gp_linkage_validate(nv50);
 
 	if (nv50->dirty & NV50_NEW_RASTERIZER)
 		so_ref(nv50->rasterizer->so, &nv50->state.rast);
 
 	if (nv50->dirty & NV50_NEW_BLEND_COLOUR) {
-		so = so_new(5, 0);
+		so = so_new(1, 4, 0);
 		so_method(so, tesla, NV50TCL_BLEND_COLOR(0), 4);
 		so_data  (so, fui(nv50->blend_colour.color[0]));
 		so_data  (so, fui(nv50->blend_colour.color[1]));
@@ -307,7 +326,7 @@ nv50_state_validate(struct nv50_context *nv50)
 	}
 
 	if (nv50->dirty & NV50_NEW_STIPPLE) {
-		so = so_new(33, 0);
+		so = so_new(1, 32, 0);
 		so_method(so, tesla, NV50TCL_POLYGON_STIPPLE_PATTERN(0), 32);
 		for (i = 0; i < 32; i++)
 			so_data(so, util_bswap32(nv50->stipple.stipple[i]));
@@ -324,7 +343,7 @@ nv50_state_validate(struct nv50_context *nv50)
 			goto scissor_uptodate;
 		nv50->state.scissor_enabled = rast->scissor;
 
-		so = so_new(3, 0);
+		so = so_new(1, 2, 0);
 		so_method(so, tesla, NV50TCL_SCISSOR_HORIZ(0), 2);
 		if (nv50->state.scissor_enabled) {
 			so_data(so, (s->maxx << 16) | s->minx);
@@ -353,7 +372,7 @@ scissor_uptodate:
 			goto viewport_uptodate;
 		nv50->state.viewport_bypass = bypass;
 
-		so = so_new(14, 0);
+		so = so_new(5, 9, 0);
 		if (!bypass) {
 			so_method(so, tesla, NV50TCL_VIEWPORT_TRANSLATE_X(0), 3);
 			so_data  (so, fui(nv50->viewport.translate[0]));
@@ -397,7 +416,9 @@ viewport_uptodate:
 		for (i = 0; i < PIPE_SHADER_TYPES; ++i)
 			nr += nv50->sampler_nr[i];
 
-		so = so_new(nr * 8 + 24 * PIPE_SHADER_TYPES + 2, 4);
+		so = so_new(1 + 5 * PIPE_SHADER_TYPES,
+			    1 + 19 * PIPE_SHADER_TYPES + nr * 8,
+			    PIPE_SHADER_TYPES * 2);
 
 		nv50_validate_samplers(nv50, so, PIPE_SHADER_VERTEX);
 		nv50_validate_samplers(nv50, so, PIPE_SHADER_FRAGMENT);

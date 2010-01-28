@@ -32,7 +32,6 @@
 #include <unistd.h>
 
 #include "main/simple_list.h"
-#include "main/texcompress.h"
 #include "main/teximage.h"
 #include "main/texobj.h"
 #include "radeon_texture.h"
@@ -177,6 +176,12 @@ static void calculate_miptree_layout_r300(radeonContextPtr rmesa, radeon_mipmap_
 
 		for(face = 0; face < mt->faces; face++)
 			compute_tex_image_offset(rmesa, mt, face, level, &curOffset);
+		/* r600 cube levels seems to be aligned to 8 faces but
+		 * we have separate register for 1'st level offset so add
+		 * 2 image alignment after 1'st mip level */
+		if(rmesa->radeonScreen->chip_family >= CHIP_FAMILY_R600 &&
+		   mt->target == GL_TEXTURE_CUBE_MAP && level >= 1)
+			curOffset += 2 * mt->levels[level].size;
 	}
 
 	/* Note the required size in memory */
@@ -378,25 +383,6 @@ void radeon_try_alloc_miptree(radeonContextPtr rmesa, radeonTexObj *t)
 		texImg->TexFormat, texObj->BaseLevel,
 		numLevels, texImg->Width, texImg->Height,
 		texImg->Depth, t->tile_bits);
-}
-
-/* Although we use the image_offset[] array to store relative offsets
- * to cube faces, Mesa doesn't know anything about this and expects
- * each cube face to be treated as a separate image.
- *
- * These functions present that view to mesa:
- */
-void
-radeon_miptree_depth_offsets(radeon_mipmap_tree *mt, GLuint level, GLuint *offsets)
-{
-	if (mt->target != GL_TEXTURE_3D || mt->faces == 1) {
-		offsets[0] = 0;
-	} else {
-		int i;
-		for (i = 0; i < 6; i++) {
-			offsets[i] = mt->levels[level].faces[i].offset;
-		}
-	}
 }
 
 GLuint

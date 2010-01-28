@@ -67,7 +67,8 @@
 #elif defined(__CYGWIN__) && defined(USE_OPENGL32) /* use native windows opengl32 */
 #  define GLAPI extern
 #  define GLAPIENTRY __stdcall
-#elif defined(__GNUC__) && (__GNUC__ * 100 + __GNUC_MINOR__) >= 303
+#elif (defined(__GNUC__) && (__GNUC__ * 100 + __GNUC_MINOR__) >= 303) \
+	|| (defined(__SUNPRO_C) && (__SUNPRO_C >= 0x590))
 #  define GLAPI __attribute__((visibility("default")))
 #  define GLAPIENTRY
 #endif /* WIN32 && !CYGWIN */
@@ -85,7 +86,9 @@
  * glut.h or gl.h.
  */
 #if defined(_WIN32) && !defined(APIENTRY) && !defined(__CYGWIN__)
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN 1
+#endif
 #include <windows.h>
 #endif
 

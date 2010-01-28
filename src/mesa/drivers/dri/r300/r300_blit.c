@@ -150,8 +150,8 @@ static void r300_emit_tx_setup(struct r300_context *r300,
                      (R300_TX_CLAMP_TO_EDGE  << R300_TX_WRAP_T_SHIFT) |
                      (R300_TX_CLAMP_TO_EDGE  << R300_TX_WRAP_R_SHIFT) |
                      R300_TX_MIN_FILTER_MIP_NONE |
-                     R300_TX_MIN_FILTER_LINEAR |
-                     R300_TX_MAG_FILTER_LINEAR |
+                     R300_TX_MIN_FILTER_NEAREST |
+                     R300_TX_MAG_FILTER_NEAREST |
                      (0 << 28));
     OUT_BATCH_REGVAL(R300_TX_FILTER1_0, 0);
     OUT_BATCH_REGVAL(R300_TX_SIZE_0,
@@ -181,8 +181,6 @@ static uint32_t mesa_format_to_us_format(gl_format mesa_format)
 {
     switch(mesa_format)
     {
-        case MESA_FORMAT_S8_Z24:
-        case MESA_FORMAT_X8_Z24:
         case MESA_FORMAT_RGBA8888: // x
             return EASY_US_FORMAT(R500_OUT_FMT_C4_8, A, B, G, R, 0);
         case MESA_FORMAT_RGB565: // x
@@ -216,7 +214,8 @@ static uint32_t mesa_format_to_us_format(gl_format mesa_format)
             return EASY_US_FORMAT(R500_OUT_FMT_C4_16, R, G, B, A, 0xf);
 
         default:
-            assert(!"Invalid format for US output\n");
+            fprintf(stderr, "Unsupported format %s for US output\n", _mesa_get_format_name(mesa_format));
+            assert(0);
             return 0;
     }
 }
@@ -404,9 +403,8 @@ static void calc_tex_coords(float img_width, float img_height,
     buf[3] = buf[2] + reg_height / img_height;
     if (flip_y)
     {
-        float tmp = buf[2];
-        buf[2] = 1.0 - buf[3];
-        buf[3] = 1.0 - tmp;
+        buf[2] = 1.0 - buf[2];
+        buf[3] = 1.0 - buf[3];
     }
 }
 
@@ -425,13 +423,13 @@ static void emit_draw_packet(struct r300_context *r300,
                     flip_y, texcoords);
 
     float verts[] = { dst_x_offset, dst_y_offset,
-                      texcoords[0], texcoords[3],
-                      dst_x_offset, dst_y_offset + reg_height,
                       texcoords[0], texcoords[2],
+                      dst_x_offset, dst_y_offset + reg_height,
+                      texcoords[0], texcoords[3],
                       dst_x_offset + reg_width, dst_y_offset + reg_height,
-                      texcoords[1], texcoords[2],
+                      texcoords[1], texcoords[3],
                       dst_x_offset + reg_width, dst_y_offset,
-                      texcoords[1], texcoords[3] };
+                      texcoords[1], texcoords[2] };
 
     BATCH_LOCALS(&r300->radeon);
 
@@ -496,6 +494,27 @@ static void emit_cb_setup(struct r300_context *r300,
     END_BATCH();
 }
 
+static unsigned is_blit_supported(gl_format dst_format)
+{
+    switch (dst_format) {
+        case MESA_FORMAT_RGB565:
+        case MESA_FORMAT_ARGB1555:
+        case MESA_FORMAT_RGBA8888:
+        case MESA_FORMAT_RGBA8888_REV:
+        case MESA_FORMAT_ARGB8888:
+        case MESA_FORMAT_ARGB8888_REV:
+        case MESA_FORMAT_XRGB8888:
+            break;
+        default:
+            return 0;
+    }
+
+    if (_mesa_get_format_bits(dst_format, GL_DEPTH_BITS) > 0)
+        return 0;
+
+    return 1;
+}
+
 /**
  * Copy a region of [@a width x @a height] pixels from source buffer
  * to destination buffer.
@@ -520,27 +539,42 @@ static void emit_cb_setup(struct r300_context *r300,
  * @param[in] height region height
  * @param[in] flip_y set if y coords of the source image need to be flipped
  */
-GLboolean r300_blit(struct r300_context *r300,
-                    struct radeon_bo *src_bo,
-                    intptr_t src_offset,
-                    gl_format src_mesaformat,
-                    unsigned src_pitch,
-                    unsigned src_width,
-                    unsigned src_height,
-                    unsigned src_x_offset,
-                    unsigned src_y_offset,
-                    struct radeon_bo *dst_bo,
-                    intptr_t dst_offset,
-                    gl_format dst_mesaformat,
-                    unsigned dst_pitch,
-                    unsigned dst_width,
-                    unsigned dst_height,
-                    unsigned dst_x_offset,
-                    unsigned dst_y_offset,
-                    unsigned reg_width,
-                    unsigned reg_height,
-                    unsigned flip_y)
+unsigned r300_blit(GLcontext *ctx,
+                   struct radeon_bo *src_bo,
+                   intptr_t src_offset,
+                   gl_format src_mesaformat,
+                   unsigned src_pitch,
+                   unsigned src_width,
+                   unsigned src_height,
+                   unsigned src_x_offset,
+                   unsigned src_y_offset,
+                   struct radeon_bo *dst_bo,
+                   intptr_t dst_offset,
+                   gl_format dst_mesaformat,
+                   unsigned dst_pitch,
+                   unsigned dst_width,
+                   unsigned dst_height,
+                   unsigned dst_x_offset,
+                   unsigned dst_y_offset,
+                   unsigned reg_width,
+                   unsigned reg_height,
+                   unsigned flip_y)
 {
+    r300ContextPtr r300 = R300_CONTEXT(ctx);
+
+    if (!is_blit_supported(dst_mesaformat))
+        return 0;
+
+    /* Make sure that colorbuffer has even width - hw limitation */
+    if (dst_pitch % 2 > 0)
+        ++dst_pitch;
+
+    /* Rendering to small buffer doesn't work.
+     * Looks like a hw limitation.
+     */
+    if (dst_pitch < 32)
+        return 0;
+
     /* Need to clamp the region size to make sure
      * we don't read outside of the source buffer
      * or write outside of the destination buffer.
@@ -555,6 +589,10 @@ GLboolean r300_blit(struct r300_context *r300,
         reg_height = dst_height - dst_y_offset;
 
     if (src_bo == dst_bo) {
+        return 0;
+    }
+
+    if (src_offset % 32 || dst_offset % 32) {
         return GL_FALSE;
     }
 
@@ -562,7 +600,7 @@ GLboolean r300_blit(struct r300_context *r300,
         fprintf(stderr, "src: size [%d x %d], pitch %d, "
                 "offset [%d x %d], format %s, bo %p\n",
                 src_width, src_height, src_pitch,
-                src_offset, src_y_offset,
+                src_x_offset, src_y_offset,
                 _mesa_get_format_name(src_mesaformat),
                 src_bo);
         fprintf(stderr, "dst: pitch %d, offset[%d x %d], format %s, bo %p\n",
@@ -571,8 +609,11 @@ GLboolean r300_blit(struct r300_context *r300,
         fprintf(stderr, "region: %d x %d\n", reg_width, reg_height);
     }
 
+    /* Flush is needed to make sure that source buffer has correct data */
+    radeonFlush(r300->radeon.glCtx);
+
     if (!validate_buffers(r300, src_bo, dst_bo))
-        return GL_FALSE;
+        return 0;
 
     rcommonEnsureCmdBufSpace(&r300->radeon, 200, __FUNCTION__);
 
@@ -603,5 +644,5 @@ GLboolean r300_blit(struct r300_context *r300,
 
     radeonFlush(r300->radeon.glCtx);
 
-    return GL_TRUE;
+    return 1;
 }

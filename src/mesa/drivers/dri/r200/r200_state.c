@@ -57,8 +57,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r200_swtcl.h"
 #include "r200_vertprog.h"
 
-#include "drirenderbuffer.h"
-
 
 /* =============================================================
  * Alpha blending
@@ -1585,7 +1583,7 @@ static void r200ClearStencil( GLcontext *ctx, GLint s )
 void r200UpdateWindow( GLcontext *ctx )
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
-   __DRIdrawablePrivate *dPriv = radeon_get_drawable(&rmesa->radeon);
+   __DRIdrawable *dPriv = radeon_get_drawable(&rmesa->radeon);
    GLfloat xoffset = dPriv ? (GLfloat) dPriv->x : 0;
    GLfloat yoffset = dPriv ? (GLfloat) dPriv->y + dPriv->h : 0;
    const GLfloat *v = ctx->Viewport._WindowMap.m;
@@ -1665,7 +1663,7 @@ static void r200DepthRange( GLcontext *ctx, GLclampd nearval,
 void r200UpdateViewportOffset( GLcontext *ctx )
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
-   __DRIdrawablePrivate *dPriv = radeon_get_drawable(&rmesa->radeon);
+   __DRIdrawable *dPriv = radeon_get_drawable(&rmesa->radeon);
    GLfloat xoffset = (GLfloat)dPriv->x;
    GLfloat yoffset = (GLfloat)dPriv->y + dPriv->h;
    const GLfloat *v = ctx->Viewport._WindowMap.m;

@@ -47,13 +47,11 @@
 #include "tgsi/tgsi_exec.h"
 #include "lp_bld_type.h"
 #include "lp_bld_const.h"
-#include "lp_bld_intr.h"
 #include "lp_bld_arit.h"
 #include "lp_bld_logic.h"
 #include "lp_bld_swizzle.h"
 #include "lp_bld_flow.h"
 #include "lp_bld_tgsi.h"
-#include "lp_bld_debug.h"
 
 
 #define LP_MAX_TEMPS 256
@@ -360,6 +358,9 @@ emit_tex( struct lp_build_tgsi_soa_context *bld,
       coords[i] = emit_fetch( bld, inst, 0, i );
       if (projected)
          coords[i] = lp_build_mul(&bld->base, coords[i], oow);
+   }
+   for (i = num_coords; i < 3; i++) {
+      coords[i] = bld->base.undef;
    }
 
    bld->sampler->emit_fetch_texel(bld->sampler,
@@ -1315,7 +1316,7 @@ emit_instruction(
       return 0;
       break;
 
-   case TGSI_OPCODE_SHR:
+   case TGSI_OPCODE_ISHR:
       /* deprecated? */
       assert(0);
       return 0;

@@ -37,32 +37,6 @@
 /* r300_state_derived: Various bits of state which are dependent upon
  * currently bound CSO data. */
 
-struct r300_shader_key {
-    struct r300_vertex_shader* vs;
-    struct r300_fragment_shader* fs;
-};
-
-struct r300_shader_derived_value {
-    struct r300_vertex_format* vformat;
-    struct r300_rs_block* rs_block;
-};
-
-unsigned r300_shader_key_hash(void* key) {
-    struct r300_shader_key* shader_key = (struct r300_shader_key*)key;
-    unsigned vs = (intptr_t)shader_key->vs;
-    unsigned fs = (intptr_t)shader_key->fs;
-
-    return (vs << 16) | (fs & 0xffff);
-}
-
-int r300_shader_key_compare(void* key1, void* key2) {
-    struct r300_shader_key* shader_key1 = (struct r300_shader_key*)key1;
-    struct r300_shader_key* shader_key2 = (struct r300_shader_key*)key2;
-
-    return (shader_key1->vs == shader_key2->vs) &&
-        (shader_key1->fs == shader_key2->fs);
-}
-
 static void r300_draw_emit_attrib(struct r300_context* r300,
                                   enum attrib_emit emit,
                                   enum interp_mode interp,
@@ -74,7 +48,9 @@ static void r300_draw_emit_attrib(struct r300_context* r300,
     output = draw_find_shader_output(r300->draw,
                                      info->output_semantic_name[index],
                                      info->output_semantic_index[index]);
-    draw_emit_vertex_attr(&r300->vertex_info->vinfo, emit, interp, output);
+    draw_emit_vertex_attr(
+        (struct vertex_info*)r300->vertex_format_state.state,
+        emit, interp, output);
 }
 
 static void r300_draw_emit_all_attribs(struct r300_context* r300)
@@ -130,7 +106,8 @@ static void r300_draw_emit_all_attribs(struct r300_context* r300)
 /* Update the PSC tables. */
 static void r300_vertex_psc(struct r300_context* r300)
 {
-    struct r300_vertex_info *vformat = r300->vertex_info;
+    struct r300_vertex_info *vformat =
+        (struct r300_vertex_info*)r300->vertex_format_state.state;
     uint16_t type, swizzle;
     enum pipe_format format;
     unsigned i;
@@ -139,10 +116,10 @@ static void r300_vertex_psc(struct r300_context* r300)
 
     /* If TCL is bypassed, map vertex streams to equivalent VS output
      * locations. */
-    if (r300->rs_state->enable_vte) {
-        stream_tab = identity;
-    } else {
+    if (r300->tcl_bypass) {
         stream_tab = r300->vs->stream_loc_notcl;
+    } else {
+        stream_tab = identity;
     }
 
     /* Vertex shaders have no semantics on their inputs,
@@ -182,7 +159,8 @@ static void r300_vertex_psc(struct r300_context* r300)
 /* Update the PSC tables for SW TCL, using Draw. */
 static void r300_swtcl_vertex_psc(struct r300_context* r300)
 {
-    struct r300_vertex_info *vformat = r300->vertex_info;
+    struct r300_vertex_info *vformat =
+        (struct r300_vertex_info*)r300->vertex_format_state.state;
     struct vertex_info* vinfo = &vformat->vinfo;
     uint16_t type, swizzle;
     enum pipe_format format;
@@ -327,12 +305,14 @@ static void r300_update_rs_block(struct r300_context* r300,
                                  struct r300_shader_semantics* vs_outputs,
                                  struct r300_shader_semantics* fs_inputs)
 {
-    struct r300_rs_block* rs = r300->rs_block;
+    struct r300_rs_block rs = { { 0 } };
     int i, col_count = 0, tex_count = 0, fp_offset = 0;
     void (*rX00_rs_col)(struct r300_rs_block*, int, int, boolean);
     void (*rX00_rs_col_write)(struct r300_rs_block*, int, int);
     void (*rX00_rs_tex)(struct r300_rs_block*, int, int, boolean);
     void (*rX00_rs_tex_write)(struct r300_rs_block*, int, int);
+    boolean any_bcolor_used = vs_outputs->bcolor[0] != ATTR_UNUSED ||
+                              vs_outputs->bcolor[1] != ATTR_UNUSED;
 
     if (r300_screen(r300->context.screen)->caps->is_r500) {
         rX00_rs_col       = r500_rs_col;
@@ -348,14 +328,15 @@ static void r300_update_rs_block(struct r300_context* r300,
 
     /* Rasterize colors. */
     for (i = 0; i < ATTR_COLOR_COUNT; i++) {
-        if (vs_outputs->color[i] != ATTR_UNUSED) {
+        if (vs_outputs->color[i] != ATTR_UNUSED || any_bcolor_used ||
+            vs_outputs->color[1] != ATTR_UNUSED) {
             /* Always rasterize if it's written by the VS,
              * otherwise it locks up. */
-            rX00_rs_col(rs, col_count, i, FALSE);
+            rX00_rs_col(&rs, col_count, i, FALSE);
 
             /* Write it to the FS input register if it's used by the FS. */
             if (fs_inputs->color[i] != ATTR_UNUSED) {
-                rX00_rs_col_write(rs, col_count, fp_offset);
+                rX00_rs_col_write(&rs, col_count, fp_offset);
                 fp_offset++;
             }
             col_count++;
@@ -373,11 +354,11 @@ static void r300_update_rs_block(struct r300_context* r300,
         if (vs_outputs->generic[i] != ATTR_UNUSED) {
             /* Always rasterize if it's written by the VS,
              * otherwise it locks up. */
-            rX00_rs_tex(rs, tex_count, tex_count, FALSE);
+            rX00_rs_tex(&rs, tex_count, tex_count, FALSE);
 
             /* Write it to the FS input register if it's used by the FS. */
             if (fs_inputs->generic[i] != ATTR_UNUSED) {
-                rX00_rs_tex_write(rs, tex_count, fp_offset);
+                rX00_rs_tex_write(&rs, tex_count, fp_offset);
                 fp_offset++;
             }
             tex_count++;
@@ -394,11 +375,11 @@ static void r300_update_rs_block(struct r300_context* r300,
     if (vs_outputs->fog != ATTR_UNUSED) {
         /* Always rasterize if it's written by the VS,
          * otherwise it locks up. */
-        rX00_rs_tex(rs, tex_count, tex_count, TRUE);
+        rX00_rs_tex(&rs, tex_count, tex_count, TRUE);
 
         /* Write it to the FS input register if it's used by the FS. */
         if (fs_inputs->fog != ATTR_UNUSED) {
-            rX00_rs_tex_write(rs, tex_count, fp_offset);
+            rX00_rs_tex_write(&rs, tex_count, fp_offset);
             fp_offset++;
         }
         tex_count++;
@@ -410,53 +391,45 @@ static void r300_update_rs_block(struct r300_context* r300,
         }
     }
 
+    /* Rasterize WPOS. */
+    /* If the FS doesn't need it, it's not written by the VS. */
+    if (fs_inputs->wpos != ATTR_UNUSED) {
+        rX00_rs_tex(&rs, tex_count, tex_count, FALSE);
+        rX00_rs_tex_write(&rs, tex_count, fp_offset);
+
+        fp_offset++;
+        tex_count++;
+    }
+
     /* Rasterize at least one color, or bad things happen. */
     if (col_count == 0 && tex_count == 0) {
-        rX00_rs_col(rs, 0, 0, TRUE);
+        rX00_rs_col(&rs, 0, 0, TRUE);
         col_count++;
     }
 
-    rs->count = (tex_count*4) | (col_count << R300_IC_COUNT_SHIFT) |
+    rs.count = (tex_count*4) | (col_count << R300_IC_COUNT_SHIFT) |
         R300_HIRES_EN;
 
-    rs->inst_count = MAX3(col_count - 1, tex_count - 1, 0);
+    rs.inst_count = MAX3(col_count - 1, tex_count - 1, 0);
+
+    /* Now, after all that, see if we actually need to update the state. */
+    if (memcmp(r300->rs_block_state.state, &rs, sizeof(struct r300_rs_block))) {
+        memcpy(r300->rs_block_state.state, &rs, sizeof(struct r300_rs_block));
+        r300->rs_block_state.dirty = TRUE;
+    }
 }
 
-/* Update the vertex format. */
+/* Update the shader-dependant states. */
 static void r300_update_derived_shader_state(struct r300_context* r300)
 {
     struct r300_screen* r300screen = r300_screen(r300->context.screen);
+    struct r300_vertex_info *vformat =
+        (struct r300_vertex_info*)r300->vertex_format_state.state;
+    struct vertex_info* vinfo = &vformat->vinfo;
 
-    /*
-    struct r300_shader_key* key;
-    struct r300_shader_derived_value* value;
-    key = CALLOC_STRUCT(r300_shader_key);
-    key->vs = r300->vs;
-    key->fs = r300->fs;
-
-    value = (struct r300_shader_derived_value*)
-        util_hash_table_get(r300->shader_hash_table, (void*)key);
-    if (value) {
-        //vformat = value->vformat;
-        rs_block = value->rs_block;
-
-        FREE(key);
-    } else {
-        rs_block = CALLOC_STRUCT(r300_rs_block);
-        value = CALLOC_STRUCT(r300_shader_derived_value);
-
-        r300_update_rs_block(r300, rs_block);
-
-        //value->vformat = vformat;
-        value->rs_block = rs_block;
-        util_hash_table_set(r300->shader_hash_table,
-            (void*)key, (void*)value);
-    } */
-
-    /* Reset structures */
-    memset(r300->rs_block, 0, sizeof(struct r300_rs_block));
-    memset(r300->vertex_info, 0, sizeof(struct r300_vertex_info));
-    memcpy(r300->vertex_info->vinfo.hwfmt, r300->vs->hwfmt, sizeof(uint)*4);
+    /* Mmm, delicious hax */
+    memset(r300->vertex_format_state.state, 0, sizeof(struct r300_vertex_info));
+    memcpy(vinfo->hwfmt, r300->vs->hwfmt, sizeof(uint)*4);
 
     r300_update_rs_block(r300, &r300->vs->outputs, &r300->fs->inputs);
 
@@ -464,11 +437,10 @@ static void r300_update_derived_shader_state(struct r300_context* r300)
         r300_vertex_psc(r300);
     } else {
         r300_draw_emit_all_attribs(r300);
-        draw_compute_vertex_size(&r300->vertex_info->vinfo);
+        draw_compute_vertex_size(
+            (struct vertex_info*)r300->vertex_format_state.state);
         r300_swtcl_vertex_psc(r300);
     }
-
-    r300->dirty_state |= R300_NEW_RS_BLOCK;
 }
 
 static boolean r300_dsa_writes_depth_stencil(struct r300_dsa_state* dsa)
@@ -496,7 +468,8 @@ static boolean r300_dsa_alpha_test_enabled(struct r300_dsa_state* dsa)
 
 static void r300_update_ztop(struct r300_context* r300)
 {
-    r300->ztop_state.z_buffer_top = R300_ZTOP_ENABLE;
+    struct r300_ztop_state* ztop_state =
+        (struct r300_ztop_state*)r300->ztop_state.state;
 
     /* This is important enough that I felt it warranted a comment.
      *
@@ -518,31 +491,37 @@ static void r300_update_ztop(struct r300_context* r300)
      * 5) Depth writes in fragment shader
      * 6) Outstanding occlusion queries
      *
+     * This register causes stalls all the way from SC to CB when changed,
+     * but it is buffered on-chip so it does not hurt to write it if it has
+     * not changed.
+     *
      * ~C.
      */
 
     /* ZS writes */
-    if (r300_dsa_writes_depth_stencil(r300->dsa_state) &&
-           (r300_dsa_alpha_test_enabled(r300->dsa_state) ||   /* (1) */
-            r300->fs->info.uses_kill)) {                      /* (2) */
-        r300->ztop_state.z_buffer_top = R300_ZTOP_DISABLE;
-    } else if (r300_fragment_shader_writes_depth(r300->fs)) { /* (5) */
-        r300->ztop_state.z_buffer_top = R300_ZTOP_DISABLE;
-    } else if (r300->query_current) {                         /* (6) */
-        r300->ztop_state.z_buffer_top = R300_ZTOP_DISABLE;
+    if (r300_dsa_writes_depth_stencil(r300->dsa_state.state) &&
+           (r300_dsa_alpha_test_enabled(r300->dsa_state.state) ||/* (1) */
+            r300->fs->info.uses_kill)) {                         /* (2) */
+        ztop_state->z_buffer_top = R300_ZTOP_DISABLE;
+    } else if (r300_fragment_shader_writes_depth(r300->fs)) {    /* (5) */
+        ztop_state->z_buffer_top = R300_ZTOP_DISABLE;
+    } else if (r300->query_current) {                            /* (6) */
+        ztop_state->z_buffer_top = R300_ZTOP_DISABLE;
+    } else {
+        ztop_state->z_buffer_top = R300_ZTOP_ENABLE;
     }
+
+    r300->ztop_state.dirty = TRUE;
 }
 
 void r300_update_derived_state(struct r300_context* r300)
 {
+    /* XXX */
     if (r300->dirty_state &
-        (R300_NEW_FRAGMENT_SHADER | R300_NEW_VERTEX_SHADER |
-         R300_NEW_VERTEX_FORMAT)) {
+        (R300_NEW_FRAGMENT_SHADER | R300_NEW_VERTEX_SHADER) ||
+        r300->vertex_format_state.dirty || r300->rs_state.dirty) {
         r300_update_derived_shader_state(r300);
     }
 
-    if (r300->dirty_state &
-            (R300_NEW_DSA | R300_NEW_FRAGMENT_SHADER | R300_NEW_QUERY)) {
-        r300_update_ztop(r300);
-    }
+    r300_update_ztop(r300);
 }

@@ -42,7 +42,6 @@
 #include "tnl/t_vp_build.h"
 #include "tnl/t_context.h"
 #include "tnl/t_vertex.h"
-#include "tnl/t_pipeline.h"
 #include "vbo/vbo_context.h"
 
 #include "r600_context.h"
@@ -422,7 +421,7 @@ static void r700RunRenderPrimitiveImmediate(GLcontext * ctx, int start, int end,
 }
 
 /* start 3d, idle, cb/db flush */
-#define PRE_EMIT_STATE_BUFSZ 10 + 5 + 14
+#define PRE_EMIT_STATE_BUFSZ 10 + 5 + 18
 
 static GLuint r700PredictRenderSize(GLcontext* ctx,
 				    const struct _mesa_prim *prim,

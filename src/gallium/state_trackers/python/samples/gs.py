@@ -72,11 +72,11 @@ def test(dev):
 
     # disabled blending/masking
     blend = Blend()
-    blend.rgb_src_factor = PIPE_BLENDFACTOR_ONE
-    blend.alpha_src_factor = PIPE_BLENDFACTOR_ONE
-    blend.rgb_dst_factor = PIPE_BLENDFACTOR_ZERO
-    blend.alpha_dst_factor = PIPE_BLENDFACTOR_ZERO
-    blend.colormask = PIPE_MASK_RGBA
+    blend.rt[0].rgb_src_factor = PIPE_BLENDFACTOR_ONE
+    blend.rt[0].alpha_src_factor = PIPE_BLENDFACTOR_ONE
+    blend.rt[0].rgb_dst_factor = PIPE_BLENDFACTOR_ZERO
+    blend.rt[0].alpha_dst_factor = PIPE_BLENDFACTOR_ZERO
+    blend.rt[0].colormask = PIPE_MASK_RGBA
     ctx.set_blend(blend)
 
     # depth/stencil/alpha
@@ -136,10 +136,10 @@ def test(dev):
     cbuf = dev.texture_create(
         PIPE_FORMAT_X8R8G8B8_UNORM,
         width, height,
-        tex_usage=PIPE_TEXTURE_USAGE_DISPLAY_TARGET,
+        tex_usage=PIPE_TEXTURE_USAGE_RENDER_TARGET,
     ).get_surface()
     zbuf = dev.texture_create(
-        PIPE_FORMAT_Z16_UNORM,
+        PIPE_FORMAT_Z32_UNORM,
         width, height,
         tex_usage=PIPE_TEXTURE_USAGE_DEPTH_STENCIL,
     ).get_surface()

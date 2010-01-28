@@ -31,8 +31,6 @@
 #include "ffb_context.h"
 #include "ffb_lock.h"
 
-#include "swrast/swrast.h"
-
 #define DBG 0
 
 #define HW_LOCK()						\
@@ -45,7 +43,7 @@
 		UNLOCK_HARDWARE(fmesa); \
 
 #define LOCAL_VARS						\
-	__DRIdrawablePrivate *dPriv = fmesa->driDrawable;	\
+	__DRIdrawable *dPriv = fmesa->driDrawable;	\
 	GLuint height = dPriv->h;				\
         GLuint p;						\
 	char *buf; 						\

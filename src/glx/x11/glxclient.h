@@ -41,6 +41,7 @@
 #define NEED_EVENTS
 #include <X11/Xproto.h>
 #include <X11/Xlibint.h>
+#include <X11/extensions/extutil.h>
 #define GLX_GLXEXT_PROTOTYPES
 #include <GL/glx.h>
 #include <GL/glxext.h>
@@ -121,26 +122,35 @@ struct __GLXDRIdisplayRec
                                     __GLXdisplayPrivate * priv);
 };
 
-struct __GLXDRIscreenRec
-{
+struct __GLXDRIscreenRec {
 
-   void (*destroyScreen) (__GLXscreenConfigs * psc);
+   void (*destroyScreen)(__GLXscreenConfigs *psc);
 
-   __GLXDRIcontext *(*createContext) (__GLXscreenConfigs * psc,
-                                      const __GLcontextModes * mode,
-                                      GLXContext gc,
-                                      GLXContext shareList, int renderType);
+   __GLXDRIcontext *(*createContext)(__GLXscreenConfigs *psc,
+				     const __GLcontextModes *mode,
+				     GLXContext gc,
+				     GLXContext shareList, int renderType);
 
-   __GLXDRIdrawable *(*createDrawable) (__GLXscreenConfigs * psc,
-                                        XID drawable,
-                                        GLXDrawable glxDrawable,
-                                        const __GLcontextModes * modes);
+   __GLXDRIdrawable *(*createDrawable)(__GLXscreenConfigs *psc,
+				       XID drawable,
+				       GLXDrawable glxDrawable,
+				       const __GLcontextModes *modes);
 
-   void (*swapBuffers) (__GLXDRIdrawable * pdraw);
-   void (*copySubBuffer) (__GLXDRIdrawable * pdraw,
-                          int x, int y, int width, int height);
-   void (*waitX) (__GLXDRIdrawable * pdraw);
-   void (*waitGL) (__GLXDRIdrawable * pdraw);
+   int64_t (*swapBuffers)(__GLXDRIdrawable *pdraw, int64_t target_msc,
+			  int64_t divisor, int64_t remainder);
+   void (*copySubBuffer)(__GLXDRIdrawable *pdraw,
+			 int x, int y, int width, int height);
+   void (*waitX)(__GLXDRIdrawable *pdraw);
+   void (*waitGL)(__GLXDRIdrawable *pdraw);
+   int (*getDrawableMSC)(__GLXscreenConfigs *psc, __GLXDRIdrawable *pdraw,
+			 int64_t *ust, int64_t *msc, int64_t *sbc);
+   int (*waitForMSC)(__GLXDRIdrawable *pdraw, int64_t target_msc,
+		     int64_t divisor, int64_t remainder, int64_t *ust,
+		     int64_t *msc, int64_t *sbc);
+   int (*waitForSBC)(__GLXDRIdrawable *pdraw, int64_t target_sbc, int64_t *ust,
+		     int64_t *msc, int64_t *sbc);
+   void (*setSwapInterval)(__GLXDRIdrawable *pdraw, int interval);
+   int (*getSwapInterval)(__GLXDRIdrawable *pdraw);
 };
 
 struct __GLXDRIcontextRec
@@ -784,6 +794,10 @@ extern GLboolean __glXGetMscRateOML(Display * dpy, GLXDrawable drawable,
 GLboolean
 __driGetMscRateOML(__DRIdrawable * draw,
                    int32_t * numerator, int32_t * denominator, void *private);
+
+/* So that dri2.c:DRI2WireToEvent() can access
+ * glx_info->codes->first_event */
+XExtDisplayInfo *__glXFindDisplay (Display *dpy);
 #endif
 
 #endif /* !__GLX_client_h__ */

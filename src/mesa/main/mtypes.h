@@ -1217,7 +1217,11 @@ struct gl_texture_object
    GLuint Name;			/**< the user-visible texture object ID */
    GLenum Target;               /**< GL_TEXTURE_1D, GL_TEXTURE_2D, etc. */
    GLfloat Priority;		/**< in [0,1] */
-   GLfloat BorderColor[4];	/**< unclamped */
+   union {
+      GLfloat f[4];
+      GLuint ui[4];
+      GLint i[4];
+   } BorderColor;               /**< Interpreted according to texture format */
    GLenum WrapS;		/**< S-axis texture image wrap mode */
    GLenum WrapT;		/**< T-axis texture image wrap mode */
    GLenum WrapR;		/**< R-axis texture image wrap mode */
@@ -1758,6 +1762,8 @@ struct gl_fragment_program
    struct gl_program Base;   /**< base class */
    GLenum FogOption;
    GLboolean UsesKill;          /**< shader uses KIL instruction */
+   GLboolean OriginUpperLeft;
+   GLboolean PixelCenterInteger;
 };
 
 
@@ -2391,11 +2397,13 @@ struct gl_extensions
    GLboolean ARB_depth_clamp;
    GLboolean ARB_draw_buffers;
    GLboolean ARB_draw_elements_base_vertex;
+   GLboolean ARB_fragment_coord_conventions;
    GLboolean ARB_fragment_program;
    GLboolean ARB_fragment_program_shadow;
    GLboolean ARB_fragment_shader;
    GLboolean ARB_framebuffer_object;
    GLboolean ARB_half_float_pixel;
+   GLboolean ARB_half_float_vertex;
    GLboolean ARB_imaging;
    GLboolean ARB_map_buffer_range;
    GLboolean ARB_multisample;
@@ -2515,6 +2523,9 @@ struct gl_extensions
    GLboolean SGIS_texture_lod;
    GLboolean TDFX_texture_compression_FXT1;
    GLboolean S3_s3tc;
+#if FEATURE_OES_draw_texture
+   GLboolean OES_draw_texture;
+#endif /* FEATURE_OES_draw_texture */
    /** The extension string */
    const GLubyte *String;
    /** Number of supported extensions */
@@ -2859,6 +2870,10 @@ struct __GLcontextRec
 
    /** Extension information */
    struct gl_extensions Extensions;
+
+   /** Version info */
+   GLuint VersionMajor, VersionMinor;
+   char *VersionString;
 
    /** \name State attribute stack (for glPush/PopAttrib) */
    /*@{*/

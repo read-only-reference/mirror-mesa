@@ -40,6 +40,16 @@ nv10_screen_get_param(struct pipe_screen *screen, int param)
 	case NOUVEAU_CAP_HW_VTXBUF:
 	case NOUVEAU_CAP_HW_IDXBUF:
 		return 0;
+	case PIPE_CAP_INDEP_BLEND_ENABLE:
+		return 0;
+	case PIPE_CAP_INDEP_BLEND_FUNC:
+		return 0;
+	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
+	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
+		return 1;
+	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
+	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
+		return 0;
 	default:
 		NOUVEAU_ERR("Unknown PIPE_CAP %d\n", param);
 		return 0;
@@ -180,7 +190,6 @@ nv10_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 		NOUVEAU_ERR("Error creating 3D object: %d\n", ret);
 		return FALSE;
 	}
-	BIND_RING(chan, screen->celsius, 7);
 
 	/* 2D engine setup */
 	screen->eng2d = nv04_surface_2d_init(&screen->base);

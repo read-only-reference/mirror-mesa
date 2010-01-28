@@ -27,14 +27,14 @@
 
 #include "main/mtypes.h"
 #include "main/imports.h"
-#include "program.h"
-#include "prog_parameter.h"
-#include "prog_parameter_layout.h"
-#include "prog_statevars.h"
-#include "prog_instruction.h"
+#include "shader/program.h"
+#include "shader/prog_parameter.h"
+#include "shader/prog_parameter_layout.h"
+#include "shader/prog_statevars.h"
+#include "shader/prog_instruction.h"
 
-#include "symbol_table.h"
-#include "program_parser.h"
+#include "shader/symbol_table.h"
+#include "shader/program_parser.h"
 
 extern void *yy_scan_string(char *);
 extern void yy_delete_buffer(void *);
@@ -52,7 +52,8 @@ static int initialize_symbol_from_param(struct gl_program *prog,
     struct asm_symbol *param_var, const gl_state_index tokens[STATE_LENGTH]);
 
 static int initialize_symbol_from_const(struct gl_program *prog,
-    struct asm_symbol *param_var, const struct asm_vector *vec);
+    struct asm_symbol *param_var, const struct asm_vector *vec,
+    GLboolean allowSwizzle);
 
 static int yyparse(struct asm_parser_state *state);
 
@@ -589,7 +590,7 @@ scalarUse:  srcReg scalarSuffix
 
 	   memset(& temp_sym, 0, sizeof(temp_sym));
 	   temp_sym.param_binding_begin = ~0;
-	   initialize_symbol_from_const(state->prog, & temp_sym, & $1);
+	   initialize_symbol_from_const(state->prog, & temp_sym, & $1, GL_TRUE);
 
 	   set_src_reg_swz(& $$, PROGRAM_CONSTANT,
                            temp_sym.param_binding_begin,
@@ -1300,7 +1301,7 @@ paramSingleItemDecl: stateSingleItem
 	{
 	   memset(& $$, 0, sizeof($$));
 	   $$.param_binding_begin = ~0;
-	   initialize_symbol_from_const(state->prog, & $$, & $1);
+	   initialize_symbol_from_const(state->prog, & $$, & $1, GL_TRUE);
 	}
 	;
 
@@ -1320,7 +1321,7 @@ paramSingleItemUse: stateSingleItem
 	{
 	   memset(& $$, 0, sizeof($$));
 	   $$.param_binding_begin = ~0;
-	   initialize_symbol_from_const(state->prog, & $$, & $1);
+	   initialize_symbol_from_const(state->prog, & $$, & $1, GL_TRUE);
 	}
 	;
 
@@ -1340,7 +1341,7 @@ paramMultipleItem: stateMultipleItem
 	{
 	   memset(& $$, 0, sizeof($$));
 	   $$.param_binding_begin = ~0;
-	   initialize_symbol_from_const(state->prog, & $$, & $1);
+	   initialize_symbol_from_const(state->prog, & $$, & $1, GL_FALSE);
 	}
 	;
 
@@ -2297,7 +2298,9 @@ set_dst_reg(struct prog_dst_register *r, gl_register_file file, GLint index)
    const GLint maxIndex = 1 << INST_INDEX_BITS;
    const GLint minIndex = 0;
    ASSERT(index >= minIndex);
+   (void) minIndex;
    ASSERT(index <= maxIndex);
+   (void) maxIndex;
    ASSERT(file == PROGRAM_TEMPORARY ||
 	  file == PROGRAM_ADDRESS ||
 	  file == PROGRAM_OUTPUT);
@@ -2338,7 +2341,9 @@ set_src_reg_swz(struct asm_src_register *r, gl_register_file file, GLint index,
    const GLint minIndex = -(1 << INST_INDEX_BITS);
    ASSERT(file < PROGRAM_FILE_MAX);
    ASSERT(index >= minIndex);
+   (void) minIndex;
    ASSERT(index <= maxIndex);
+   (void) maxIndex;
    memset(r, 0, sizeof(*r));
    r->Base.File = file;
    r->Base.Index = index;
@@ -2511,9 +2516,12 @@ initialize_symbol_from_param(struct gl_program *prog,
    assert((state_tokens[1] == STATE_ENV)
 	  || (state_tokens[1] == STATE_LOCAL));
 
+   /*
+    * The param type is STATE_VAR.  The program parameter entry will
+    * effectively be a pointer into the LOCAL or ENV parameter array.
+    */
    param_var->type = at_param;
-   param_var->param_binding_type = (state_tokens[1] == STATE_ENV)
-     ? PROGRAM_ENV_PARAM : PROGRAM_LOCAL_PARAM;
+   param_var->param_binding_type = PROGRAM_STATE_VAR;
 
    /* If we are adding a STATE_ENV or STATE_LOCAL that has multiple elements,
     * we need to unroll it and call add_state_reference() for each row
@@ -2552,23 +2560,28 @@ initialize_symbol_from_param(struct gl_program *prog,
  * \param param_var  returns info about the parameter/constant's location,
  *                   binding, type, etc.
  * \param vec  the vector/constant to add
+ * \param allowSwizzle  if true, try to consolidate constants which only differ
+ *                      by a swizzle.  We don't want to do this when building
+ *                      arrays of constants that may be indexed indirectly.
  * \return index of the constant in the parameter list.
  */
 int
 initialize_symbol_from_const(struct gl_program *prog,
 			     struct asm_symbol *param_var, 
-			     const struct asm_vector *vec)
+			     const struct asm_vector *vec,
+                             GLboolean allowSwizzle)
 {
    unsigned swizzle;
    const int idx = _mesa_add_unnamed_constant(prog->Parameters,
-                                              vec->data, vec->count, &swizzle);
+                                              vec->data, vec->count,
+                                              allowSwizzle ? &swizzle : NULL);
 
    param_var->type = at_param;
    param_var->param_binding_type = PROGRAM_CONSTANT;
 
    if (param_var->param_binding_begin == ~0U) {
       param_var->param_binding_begin = idx;
-      param_var->param_binding_swizzle = swizzle;
+      param_var->param_binding_swizzle = allowSwizzle ? swizzle : SWIZZLE_XYZW;
    }
    param_var->param_binding_length++;
 

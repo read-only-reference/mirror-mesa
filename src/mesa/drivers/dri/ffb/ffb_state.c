@@ -27,8 +27,6 @@
 
 #include "main/mtypes.h"
 #include "main/colormac.h"
-#include "main/mm.h"
-#include "main/extensions.h"
 #include "main/enums.h"
 
 #include "vbo/vbo.h"
@@ -39,12 +37,9 @@
 
 #include "ffb_dd.h"
 #include "ffb_span.h"
-#include "ffb_depth.h"
 #include "ffb_context.h"
-#include "ffb_vb.h"
 #include "ffb_tris.h"
 #include "ffb_state.h"
-#include "ffb_lock.h"
 
 #undef STATE_TRACE
 
@@ -384,7 +379,7 @@ ffbDDStencilOpSeparate(GLcontext *ctx, GLenum face, GLenum fail,
 static void ffbCalcViewportRegs(GLcontext *ctx)
 {
 	ffbContextPtr fmesa = FFB_CONTEXT(ctx);
-	__DRIdrawablePrivate *dPriv = fmesa->driDrawable;
+	__DRIdrawable *dPriv = fmesa->driDrawable;
 	GLuint xmin, xmax, ymin, ymax, zmin, zmax;
 	unsigned int vcmin, vcmax;
 
@@ -430,7 +425,7 @@ void ffbCalcViewport(GLcontext *ctx)
 	ffbContextPtr fmesa = FFB_CONTEXT(ctx);
 	const GLfloat *v = ctx->Viewport._WindowMap.m;
 	GLfloat *m = fmesa->hw_viewport;
-	__DRIdrawablePrivate *dPriv = fmesa->driDrawable;
+	__DRIdrawable *dPriv = fmesa->driDrawable;
 
 	m[MAT_SX] =   v[MAT_SX];
 	m[MAT_TX] =   v[MAT_TX] + dPriv->x + SUBPIXEL_X;
@@ -762,7 +757,7 @@ static void ffbDDLineStipple(GLcontext *ctx, GLint factor, GLushort pattern)
 
 void ffbXformAreaPattern(ffbContextPtr fmesa, const GLubyte *mask)
 {
-	__DRIdrawablePrivate *dPriv = fmesa->driDrawable;
+	__DRIdrawable *dPriv = fmesa->driDrawable;
 	int i, lines, xoff;
 
 	lines = 0;

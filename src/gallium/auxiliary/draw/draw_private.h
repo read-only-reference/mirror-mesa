@@ -153,8 +153,8 @@ struct draw_context
          const void *vbuffer[PIPE_MAX_ATTRIBS];
          
          /** constant buffer (for vertex/geometry shader) */
-         const void *vs_constants;
-         const void *gs_constants;
+         const void *vs_constants[PIPE_MAX_CONSTANT_BUFFERS];
+         const void *gs_constants[PIPE_MAX_CONSTANT_BUFFERS];
       } user;
 
       boolean test_fse;         /* enable FSE even though its not correct (eg for softpipe) */
@@ -171,6 +171,8 @@ struct draw_context
    boolean bypass_clipping;  /**< set if either api or driver bypass_clipping true */
 
    boolean force_passthrough; /**< never clip or shade */
+
+   boolean dump_vs;
 
    double mrd;  /**< minimum resolvable depth value, for polygon offset */
 
@@ -200,10 +202,10 @@ struct draw_context
       struct aos_machine *aos_machine; 
 
 
-      const float (*aligned_constants)[4];
+      const void *aligned_constants[PIPE_MAX_CONSTANT_BUFFERS];
 
-      const float (*aligned_constant_storage)[4];
-      unsigned const_storage_size;
+      const void *aligned_constant_storage[PIPE_MAX_CONSTANT_BUFFERS];
+      unsigned const_storage_size[PIPE_MAX_CONSTANT_BUFFERS];
 
 
       struct translate *fetch;
@@ -239,6 +241,8 @@ struct draw_context
 
    unsigned reduced_prim;
 
+   unsigned instance_id;
+
    void *driver_private;
 };
 
@@ -252,9 +256,11 @@ void draw_vs_destroy( struct draw_context *draw );
 void draw_vs_set_viewport( struct draw_context *, 
                            const struct pipe_viewport_state * );
 
-void draw_vs_set_constants( struct draw_context *,
-                            const float (*constants)[4],
-                            unsigned size );
+void
+draw_vs_set_constants(struct draw_context *,
+                      unsigned slot,
+                      const void *constants,
+                      unsigned size);
 
 
 
@@ -262,9 +268,14 @@ void draw_vs_set_constants( struct draw_context *,
  * Geometry shading code:
  */
 boolean draw_gs_init( struct draw_context *draw );
-void draw_gs_set_constants( struct draw_context *,
-                            const float (*constants)[4],
-                            unsigned size );
+
+void
+draw_gs_set_constants(struct draw_context *,
+                      unsigned slot,
+                      const void *constants,
+                      unsigned size);
+
+void draw_gs_destroy( struct draw_context *draw );
 
 /*******************************************************************************
  * Common shading code:

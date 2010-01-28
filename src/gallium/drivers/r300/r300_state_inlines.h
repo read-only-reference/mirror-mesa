@@ -81,9 +81,6 @@ static INLINE uint32_t r300_translate_blend_factor(int blend_fact)
             return R300_BLEND_GL_CONST_COLOR;
         case PIPE_BLENDFACTOR_CONST_ALPHA:
             return R300_BLEND_GL_CONST_ALPHA;
-        /* XXX WTF are these?
-        case PIPE_BLENDFACTOR_SRC1_COLOR:
-        case PIPE_BLENDFACTOR_SRC1_ALPHA: */
         case PIPE_BLENDFACTOR_ZERO:
             return R300_BLEND_GL_ZERO;
         case PIPE_BLENDFACTOR_INV_SRC_COLOR:
@@ -98,9 +95,16 @@ static INLINE uint32_t r300_translate_blend_factor(int blend_fact)
             return R300_BLEND_GL_ONE_MINUS_CONST_COLOR;
         case PIPE_BLENDFACTOR_INV_CONST_ALPHA:
             return R300_BLEND_GL_ONE_MINUS_CONST_ALPHA;
-        /* XXX see above
+
+        case PIPE_BLENDFACTOR_SRC1_COLOR:
+        case PIPE_BLENDFACTOR_SRC1_ALPHA:
         case PIPE_BLENDFACTOR_INV_SRC1_COLOR:
-        case PIPE_BLENDFACTOR_INV_SRC1_ALPHA: */
+        case PIPE_BLENDFACTOR_INV_SRC1_ALPHA:
+            debug_printf("r300: Implementation error: "
+                "Bad blend factor %d not supported!\n", blend_fact);
+            assert(0);
+            break;
+
         default:
             debug_printf("r300: Unknown blend factor %d\n", blend_fact);
             assert(0);
@@ -257,38 +261,37 @@ static INLINE uint32_t r300_translate_wrap(int wrap)
     }
 }
 
-static INLINE uint32_t r300_translate_tex_filters(int min, int mag, int mip)
+static INLINE uint32_t r300_translate_tex_filters(int min, int mag, int mip,
+                                                  int is_anisotropic)
 {
     uint32_t retval = 0;
-    switch (min) {
+    if (is_anisotropic)
+        retval |= R300_TX_MIN_FILTER_ANISO | R300_TX_MAG_FILTER_ANISO;
+    else {
+        switch (min) {
         case PIPE_TEX_FILTER_NEAREST:
             retval |= R300_TX_MIN_FILTER_NEAREST;
             break;
         case PIPE_TEX_FILTER_LINEAR:
             retval |= R300_TX_MIN_FILTER_LINEAR;
             break;
-        case PIPE_TEX_FILTER_ANISO:
-            retval |= R300_TX_MIN_FILTER_ANISO;
-            break;
         default:
             debug_printf("r300: Unknown texture filter %d\n", min);
             assert(0);
             break;
-    }
-    switch (mag) {
+        }
+        switch (mag) {
         case PIPE_TEX_FILTER_NEAREST:
             retval |= R300_TX_MAG_FILTER_NEAREST;
             break;
         case PIPE_TEX_FILTER_LINEAR:
             retval |= R300_TX_MAG_FILTER_LINEAR;
             break;
-        case PIPE_TEX_FILTER_ANISO:
-            retval |= R300_TX_MAG_FILTER_ANISO;
-            break;
         default:
             debug_printf("r300: Unknown texture filter %d\n", mag);
             assert(0);
             break;
+        }
     }
     switch (mip) {
         case PIPE_TEX_MIPFILTER_NONE:
@@ -332,7 +335,10 @@ static INLINE uint32_t r300_translate_colorformat(enum pipe_format format)
 {
     switch (format) {
         /* 8-bit buffers */
+        case PIPE_FORMAT_A8_UNORM:
         case PIPE_FORMAT_I8_UNORM:
+        case PIPE_FORMAT_L8_UNORM:
+        /* case PIPE_FORMAT_S8_UNORM: ??? */
             return R300_COLOR_FORMAT_I8;
         /* 16-bit buffers */
         case PIPE_FORMAT_R5G6B5_UNORM:
@@ -409,6 +415,16 @@ static INLINE uint32_t r300_translate_out_fmt(enum pipe_format format)
             return R300_US_OUT_FMT_C4_8 |
                 R300_C0_SEL_A | R300_C1_SEL_B |
                 R300_C2_SEL_G | R300_C3_SEL_R;
+
+        /* 8-bit outputs */
+        case PIPE_FORMAT_A8_UNORM:
+            return R300_US_OUT_FMT_C4_8 |
+                R300_C0_SEL_A;
+        case PIPE_FORMAT_I8_UNORM:
+        case PIPE_FORMAT_L8_UNORM:
+            return R300_US_OUT_FMT_C4_8 |
+                R300_C0_SEL_R;
+ /* R300_OUT_SIGN(x) */
         default:
             debug_printf("r300: Implementation error: "
                 "Got unsupported output format %s in %s\n",
@@ -538,6 +554,7 @@ r300_translate_vertex_data_type(enum pipe_format format) {
 static INLINE uint16_t
 r300_translate_vertex_data_swizzle(enum pipe_format format) {
     const struct util_format_description *desc = util_format_description(format);
+    unsigned swizzle[4], i;
 
     assert(format);
 
@@ -548,11 +565,26 @@ r300_translate_vertex_data_swizzle(enum pipe_format format) {
         return 0;
     }
 
-    return ((desc->swizzle[0] << R300_SWIZZLE_SELECT_X_SHIFT) |
-        (desc->swizzle[1] << R300_SWIZZLE_SELECT_Y_SHIFT) |
-        (desc->swizzle[2] << R300_SWIZZLE_SELECT_Z_SHIFT) |
-        (desc->swizzle[3] << R300_SWIZZLE_SELECT_W_SHIFT) |
-        (0xf << R300_WRITE_ENA_SHIFT));
+    /* Swizzles for 8bits formats are in the reversed order, not sure why. */
+    if (desc->channel[0].size == 8) {
+        for (i = 0; i < 4; i++) {
+            if (desc->swizzle[i] <= 3) {
+                swizzle[i] = 3 - desc->swizzle[i];
+            } else {
+                swizzle[i] = desc->swizzle[i];
+            }
+        }
+    } else {
+        for (i = 0; i < 4; i++) {
+            swizzle[i] = desc->swizzle[i];
+        }
+    }
+
+    return ((swizzle[0] << R300_SWIZZLE_SELECT_X_SHIFT) |
+            (swizzle[1] << R300_SWIZZLE_SELECT_Y_SHIFT) |
+            (swizzle[2] << R300_SWIZZLE_SELECT_Z_SHIFT) |
+            (swizzle[3] << R300_SWIZZLE_SELECT_W_SHIFT) |
+            (0xf << R300_WRITE_ENA_SHIFT));
 }
 
 #endif /* R300_STATE_INLINES_H */

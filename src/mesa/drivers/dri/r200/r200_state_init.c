@@ -39,7 +39,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "swrast/swrast.h"
 #include "vbo/vbo.h"
-#include "tnl/tnl.h"
 #include "tnl/t_pipeline.h"
 #include "swrast_setup/swrast_setup.h"
 
@@ -48,9 +47,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r200_context.h"
 #include "r200_ioctl.h"
 #include "r200_state.h"
-#include "r200_tcl.h"
-#include "r200_tex.h"
-#include "r200_swtcl.h"
 #include "radeon_queryobj.h"
 
 #include "xmlpool.h"
@@ -698,7 +694,8 @@ static void tex_emit_mm(GLcontext *ctx, struct radeon_state_atom *atom)
    uint32_t dwords = atom->check(ctx, atom);
    int i = atom->idx;
    radeonTexObj *t = r200->state.texture.unit[i].texobj;
-   if (!r200->state.texture.unit[i].unitneeded)
+
+   if (!r200->state.texture.unit[i].unitneeded && !(dwords <= atom->cmd_size))
         dwords -= 4;
    BEGIN_BATCH_NO_AUTOSTATE(dwords);
 

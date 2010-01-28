@@ -14,29 +14,29 @@ nv30_blend_state_create(struct pipe_context *pipe,
 	struct nv30_context *nv30 = nv30_context(pipe);
 	struct nouveau_grobj *rankine = nv30->screen->rankine;
 	struct nv30_blend_state *bso = CALLOC(1, sizeof(*bso));
-	struct nouveau_stateobj *so = so_new(16, 0);
+	struct nouveau_stateobj *so = so_new(5, 8, 0);
 
-	if (cso->blend_enable) {
+	if (cso->rt[0].blend_enable) {
 		so_method(so, rankine, NV34TCL_BLEND_FUNC_ENABLE, 3);
 		so_data  (so, 1);
-		so_data  (so, (nvgl_blend_func(cso->alpha_src_factor) << 16) |
-			       nvgl_blend_func(cso->rgb_src_factor));
-		so_data  (so, nvgl_blend_func(cso->alpha_dst_factor) << 16 |
-			      nvgl_blend_func(cso->rgb_dst_factor));
+		so_data  (so, (nvgl_blend_func(cso->rt[0].alpha_src_factor) << 16) |
+			       nvgl_blend_func(cso->rt[0].rgb_src_factor));
+		so_data  (so, nvgl_blend_func(cso->rt[0].alpha_dst_factor) << 16 |
+			      nvgl_blend_func(cso->rt[0].rgb_dst_factor));
 		/* FIXME: Gallium assumes GL_EXT_blend_func_separate.
 		   It is not the case for NV30 */
 		so_method(so, rankine, NV34TCL_BLEND_EQUATION, 1);
-		so_data  (so, nvgl_blend_eqn(cso->rgb_func));
+		so_data  (so, nvgl_blend_eqn(cso->rt[0].rgb_func));
 	} else {
 		so_method(so, rankine, NV34TCL_BLEND_FUNC_ENABLE, 1);
 		so_data  (so, 0);
 	}
 
 	so_method(so, rankine, NV34TCL_COLOR_MASK, 1);
-	so_data  (so, (((cso->colormask & PIPE_MASK_A) ? (0x01 << 24) : 0) |
-		       ((cso->colormask & PIPE_MASK_R) ? (0x01 << 16) : 0) |
-		       ((cso->colormask & PIPE_MASK_G) ? (0x01 <<  8) : 0) |
-		       ((cso->colormask & PIPE_MASK_B) ? (0x01 <<  0) : 0)));
+	so_data  (so, (((cso->rt[0].colormask & PIPE_MASK_A) ? (0x01 << 24) : 0) |
+		       ((cso->rt[0].colormask & PIPE_MASK_R) ? (0x01 << 16) : 0) |
+		       ((cso->rt[0].colormask & PIPE_MASK_G) ? (0x01 <<  8) : 0) |
+		       ((cso->rt[0].colormask & PIPE_MASK_B) ? (0x01 <<  0) : 0)));
 
 	if (cso->logicop_enable) {
 		so_method(so, rankine, NV34TCL_COLOR_LOGIC_OP_ENABLE, 2);
@@ -300,7 +300,7 @@ nv30_rasterizer_state_create(struct pipe_context *pipe,
 {
 	struct nv30_context *nv30 = nv30_context(pipe);
 	struct nv30_rasterizer_state *rsso = CALLOC(1, sizeof(*rsso));
-	struct nouveau_stateobj *so = so_new(32, 0);
+	struct nouveau_stateobj *so = so_new(9, 19, 0);
 	struct nouveau_grobj *rankine = nv30->screen->rankine;
 
 	/*XXX: ignored:
@@ -435,7 +435,7 @@ nv30_depth_stencil_alpha_state_create(struct pipe_context *pipe,
 {
 	struct nv30_context *nv30 = nv30_context(pipe);
 	struct nv30_zsa_state *zsaso = CALLOC(1, sizeof(*zsaso));
-	struct nouveau_stateobj *so = so_new(32, 0);
+	struct nouveau_stateobj *so = so_new(5, 21, 0);
 	struct nouveau_grobj *rankine = nv30->screen->rankine;
 
 	so_method(so, rankine, NV34TCL_DEPTH_FUNC, 3);
@@ -590,12 +590,12 @@ nv30_set_clip_state(struct pipe_context *pipe,
 
 static void
 nv30_set_constant_buffer(struct pipe_context *pipe, uint shader, uint index,
-			 const struct pipe_constant_buffer *buf )
+			 struct pipe_buffer *buf )
 {
 	struct nv30_context *nv30 = nv30_context(pipe);
 
-	nv30->constbuf[shader] = buf->buffer;
-	nv30->constbuf_nr[shader] = buf->buffer->size / (4 * sizeof(float));
+	nv30->constbuf[shader] = buf;
+	nv30->constbuf_nr[shader] = buf->size / (4 * sizeof(float));
 
 	if (shader == PIPE_SHADER_VERTEX) {
 		nv30->dirty |= NV30_NEW_VERTPROG;

@@ -43,29 +43,32 @@
 #include "translate/translate.h"
 #include "translate/translate_cache.h"
 
+#include "tgsi/tgsi_dump.h"
 #include "tgsi/tgsi_exec.h"
 
 
 
-
-void draw_vs_set_constants( struct draw_context *draw,
-                            const float (*constants)[4],
-                            unsigned size )
+void
+draw_vs_set_constants(struct draw_context *draw,
+                      unsigned slot,
+                      const void *constants,
+                      unsigned size)
 {
    if (((uintptr_t)constants) & 0xf) {
-      if (size > draw->vs.const_storage_size) {
-         if (draw->vs.aligned_constant_storage)
-            align_free((void *)draw->vs.aligned_constant_storage);
-         draw->vs.aligned_constant_storage = align_malloc( size, 16 );
+      if (size > draw->vs.const_storage_size[slot]) {
+         if (draw->vs.aligned_constant_storage[slot]) {
+            align_free((void *)draw->vs.aligned_constant_storage[slot]);
+         }
+         draw->vs.aligned_constant_storage[slot] = align_malloc(size, 16);
       }
-      memcpy( (void*)draw->vs.aligned_constant_storage,
-              constants, 
-              size );
-      constants = draw->vs.aligned_constant_storage;
+      memcpy((void *)draw->vs.aligned_constant_storage[slot],
+             constants,
+             size);
+      constants = draw->vs.aligned_constant_storage[slot];
    }
-      
-   draw->vs.aligned_constants = constants;
-   draw_vs_aos_machine_constants( draw->vs.aos_machine, constants );
+
+   draw->vs.aligned_constants[slot] = constants;
+   draw_vs_aos_machine_constants(draw->vs.aos_machine, slot, constants);
 }
 
 
@@ -82,6 +85,10 @@ draw_create_vertex_shader(struct draw_context *draw,
                           const struct pipe_shader_state *shader)
 {
    struct draw_vertex_shader *vs;
+
+   if (draw->dump_vs) {
+      tgsi_dump(shader->tokens, 0);
+   }
 
    vs = draw_create_vs_llvm( draw, shader );
    if (!vs) {
@@ -152,6 +159,8 @@ draw_delete_vertex_shader(struct draw_context *draw,
 boolean 
 draw_vs_init( struct draw_context *draw )
 {
+   draw->dump_vs = debug_get_bool_option("GALLIUM_DUMP_VS", FALSE);
+
    draw->vs.machine = tgsi_exec_machine_create();
    if (!draw->vs.machine)
       return FALSE;
@@ -176,6 +185,8 @@ draw_vs_init( struct draw_context *draw )
 void
 draw_vs_destroy( struct draw_context *draw )
 {
+   uint i;
+
    if (draw->vs.fetch_cache)
       translate_cache_destroy(draw->vs.fetch_cache);
 
@@ -185,8 +196,11 @@ draw_vs_destroy( struct draw_context *draw )
    if (draw->vs.aos_machine)
       draw_vs_aos_machine_destroy(draw->vs.aos_machine);
 
-   if (draw->vs.aligned_constant_storage)
-      align_free((void*)draw->vs.aligned_constant_storage);
+   for (i = 0; i < PIPE_MAX_CONSTANT_BUFFERS; i++) {
+      if (draw->vs.aligned_constant_storage[i]) {
+         align_free((void *)draw->vs.aligned_constant_storage[i]);
+      }
+   }
 
    tgsi_exec_machine_destroy(draw->vs.machine);
 }

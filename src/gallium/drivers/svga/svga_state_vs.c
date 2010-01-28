@@ -27,6 +27,7 @@
 #include "pipe/p_defines.h"
 #include "util/u_format.h"
 #include "util/u_math.h"
+#include "util/u_bitmask.h"
 #include "translate/translate.h"
 
 #include "svga_context.h"
@@ -70,7 +71,7 @@ static enum pipe_error compile_vs( struct svga_context *svga,
                                    struct svga_shader_result **out_result )
 {
    struct svga_shader_result *result;
-   enum pipe_error ret = PIPE_OK;
+   enum pipe_error ret = PIPE_ERROR;
 
    result = svga_translate_vertex_program( vs, key );
    if (result == NULL) {
@@ -78,8 +79,14 @@ static enum pipe_error compile_vs( struct svga_context *svga,
       goto fail;
    }
 
+   result->id = util_bitmask_add(svga->vs_bm);
+   if(result->id == UTIL_BITMASK_INVALID_INDEX) {
+      ret = PIPE_ERROR_OUT_OF_MEMORY;
+      goto fail;
+   }
+
    ret = SVGA3D_DefineShader(svga->swc, 
-                             svga->state.next_vs_id,
+                             result->id,
                              SVGA3D_SHADERTYPE_VS,
                              result->tokens, 
                              result->nr_tokens * sizeof result->tokens[0]);
@@ -87,14 +94,16 @@ static enum pipe_error compile_vs( struct svga_context *svga,
       goto fail;
 
    *out_result = result;
-   result->id = svga->state.next_vs_id++;
    result->next = vs->base.results;
    vs->base.results = result;
    return PIPE_OK;
 
 fail:
-   if (result)
+   if (result) {
+      if (result->id != UTIL_BITMASK_INVALID_INDEX)
+         util_bitmask_clear( svga->vs_bm, result->id );
       svga_destroy_shader_result( result );
+   }
    return ret;
 }
 
@@ -142,15 +151,14 @@ static int emit_hw_vs( struct svga_context *svga,
       id = result->id;
    }
 
-   if (id != svga->state.hw_draw.shader_id[PIPE_SHADER_VERTEX]) {
-      ret = SVGA3D_SetShader(svga->swc, 
-                             SVGA3D_SHADERTYPE_VS, 
+   if (result != svga->state.hw_draw.vs) {
+      ret = SVGA3D_SetShader(svga->swc,
+                             SVGA3D_SHADERTYPE_VS,
                              id );
       if (ret)
          return ret;
 
       svga->dirty |= SVGA_NEW_VS_RESULT;
-      svga->state.hw_draw.shader_id[PIPE_SHADER_VERTEX] = id;
       svga->state.hw_draw.vs = result;      
    }
 
@@ -194,10 +202,12 @@ static int update_zero_stride( struct svga_context *svga,
 
          key.output_stride = 4 * sizeof(float);
          key.nr_elements = 1;
+         key.element[0].type = TRANSLATE_ELEMENT_NORMAL;
          key.element[0].input_format = vel->src_format;
          key.element[0].output_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
          key.element[0].input_buffer = vel->vertex_buffer_index;
          key.element[0].input_offset = vel->src_offset;
+         key.element[0].instance_divisor = vel->instance_divisor;
          key.element[0].output_offset = const_idx * 4 * sizeof(float);
 
          translate_key_sanitize(&key);
@@ -216,7 +226,7 @@ static int update_zero_stride( struct svga_context *svga,
          translate->set_buffer(translate, vel->vertex_buffer_index,
                                mapped_buffer,
                                vbuffer->stride);
-         translate->run(translate, 0, 1,
+         translate->run(translate, 0, 1, 0,
                         svga->curr.zero_stride_constants);
 
          pipe_buffer_unmap(svga->pipe.screen,

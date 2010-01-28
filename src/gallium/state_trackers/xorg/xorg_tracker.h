@@ -112,6 +112,7 @@ typedef struct _modesettingRec
     /* exa */
     struct exa_context *exa;
     Bool noEvict;
+    Bool accelerate_2d;
     Bool debug_fallback;
 
     /* winsys hocks */
@@ -134,9 +135,6 @@ typedef struct _modesettingRec
  */
 struct pipe_texture *
 xorg_exa_get_texture(PixmapPtr pPixmap);
-
-unsigned
-xorg_exa_get_pixmap_handle(PixmapPtr pPixmap, unsigned *stride);
 
 int
 xorg_exa_set_displayed_usage(PixmapPtr pPixmap);

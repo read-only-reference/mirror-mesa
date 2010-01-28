@@ -41,7 +41,7 @@
 /**
  * Copy 2D rect from one place to another.
  * Position and sizes are in pixels.
- * src_pitch may be negative to do vertical flip of pixels from source.
+ * src_stride may be negative to do vertical flip of pixels from source.
  */
 void
 util_copy_rect(ubyte * dst,
@@ -54,7 +54,7 @@ util_copy_rect(ubyte * dst,
                const ubyte * src,
                int src_stride,
                unsigned src_x, 
-               int src_y)
+               unsigned src_y)
 {
    unsigned i;
    int src_stride_pos = src_stride < 0 ? -src_stride : src_stride;
@@ -65,10 +65,6 @@ util_copy_rect(ubyte * dst,
    assert(blocksize > 0);
    assert(blockwidth > 0);
    assert(blockheight > 0);
-   assert(src_x >= 0);
-   assert(src_y >= 0);
-   assert(dst_x >= 0);
-   assert(dst_y >= 0);
 
    dst_x /= blockwidth;
    dst_y /= blockheight;
@@ -113,8 +109,6 @@ util_fill_rect(ubyte * dst,
    assert(blocksize > 0);
    assert(blockwidth > 0);
    assert(blockheight > 0);
-   assert(dst_x >= 0);
-   assert(dst_y >= 0);
 
    dst_x /= blockwidth;
    dst_y /= blockheight;

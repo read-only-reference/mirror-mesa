@@ -26,7 +26,6 @@
 
 #include "main/glheader.h"
 #include "main/mtypes.h"
-#include "main/state.h"
 #include "main/imports.h"
 #include "main/enums.h"
 #include "main/macros.h"
@@ -36,11 +35,9 @@
 
 #include "tnl/tnl.h"
 #include "tnl/t_pipeline.h"
-#include "tnl/t_vp_build.h"
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
 #include "main/api_arrayelt.h"
-#include "main/state.h"
 #include "main/framebuffer.h"
 
 #include "shader/prog_parameter.h"
@@ -59,6 +56,7 @@ static void r700SetClipPlaneState(GLcontext * ctx, GLenum cap, GLboolean state);
 static void r700UpdatePolygonMode(GLcontext * ctx);
 static void r700SetPolygonOffsetState(GLcontext * ctx, GLboolean state);
 static void r700SetStencilState(GLcontext * ctx, GLboolean state);
+static void r700UpdateWindow(GLcontext * ctx, int id);
 
 void r700UpdateShaders(GLcontext * ctx)
 {
@@ -85,7 +83,7 @@ void r700UpdateViewportOffset(GLcontext * ctx) //------------------
 {
 	context_t *context = R700_CONTEXT(ctx);
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
-	__DRIdrawablePrivate *dPriv = radeon_get_drawable(&context->radeon);
+	__DRIdrawable *dPriv = radeon_get_drawable(&context->radeon);
 	GLfloat xoffset = (GLfloat) dPriv->x;
 	GLfloat yoffset = (GLfloat) dPriv->y + dPriv->h;
 	const GLfloat *v = ctx->Viewport._WindowMap.m;
@@ -780,6 +778,9 @@ static void r700Enable(GLcontext * ctx, GLenum cap, GLboolean state) //---------
 	case GL_LINE_STIPPLE:
 		r700UpdateLineStipple(ctx);
 		break;
+	case GL_DEPTH_CLAMP:
+		r700UpdateWindow(ctx, 0);
+		break;
 	default:
 		break;
 	}
@@ -1071,7 +1072,7 @@ static void r700UpdateWindow(GLcontext * ctx, int id) //--------------------
 {
 	context_t *context = R700_CONTEXT(ctx);
 	R700_CHIP_CONTEXT *r700 = (R700_CHIP_CONTEXT*)(&context->hw);
-	__DRIdrawablePrivate *dPriv = radeon_get_drawable(&context->radeon);
+	__DRIdrawable *dPriv = radeon_get_drawable(&context->radeon);
 	GLfloat xoffset = dPriv ? (GLfloat) dPriv->x : 0;
 	GLfloat yoffset = dPriv ? (GLfloat) dPriv->y + dPriv->h : 0;
 	const GLfloat *v = ctx->Viewport._WindowMap.m;
@@ -1576,9 +1577,9 @@ static void r700InitSQConfig(GLcontext * ctx)
     SETbit(r700->sq_config.SQ_CONFIG.u32All, DX9_CONSTS_bit);
     SETbit(r700->sq_config.SQ_CONFIG.u32All, ALU_INST_PREFER_VECTOR_bit);
     SETfield(r700->sq_config.SQ_CONFIG.u32All, ps_prio, PS_PRIO_shift, PS_PRIO_mask);
-    SETfield(r700->sq_config.SQ_CONFIG.u32All, ps_prio, VS_PRIO_shift, VS_PRIO_mask);
-    SETfield(r700->sq_config.SQ_CONFIG.u32All, ps_prio, GS_PRIO_shift, GS_PRIO_mask);
-    SETfield(r700->sq_config.SQ_CONFIG.u32All, ps_prio, ES_PRIO_shift, ES_PRIO_mask);
+    SETfield(r700->sq_config.SQ_CONFIG.u32All, vs_prio, VS_PRIO_shift, VS_PRIO_mask);
+    SETfield(r700->sq_config.SQ_CONFIG.u32All, gs_prio, GS_PRIO_shift, GS_PRIO_mask);
+    SETfield(r700->sq_config.SQ_CONFIG.u32All, es_prio, ES_PRIO_shift, ES_PRIO_mask);
 
     r700->sq_config.SQ_GPR_RESOURCE_MGMT_1.u32All = 0;
     SETfield(r700->sq_config.SQ_GPR_RESOURCE_MGMT_1.u32All, num_ps_gprs, NUM_PS_GPRS_shift, NUM_PS_GPRS_mask);

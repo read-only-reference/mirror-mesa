@@ -33,7 +33,6 @@
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_inlines.h"
-#include "pipe/internal/p_winsys_screen.h"
 
 #include "util/u_format.h"
 #include "util/u_math.h"
@@ -42,7 +41,6 @@
 #include "lp_context.h"
 #include "lp_state.h"
 #include "lp_texture.h"
-#include "lp_tex_cache.h"
 #include "lp_screen.h"
 #include "lp_winsys.h"
 

@@ -93,13 +93,11 @@
 #include "depth.h"
 #include "dlist.h"
 #include "eval.h"
-#include "enums.h"
 #include "extensions.h"
 #include "fbobject.h"
 #include "feedback.h"
 #include "fog.h"
 #include "framebuffer.h"
-#include "get.h"
 #include "histogram.h"
 #include "hint.h"
 #include "hash.h"
@@ -124,8 +122,6 @@
 #include "state.h"
 #include "stencil.h"
 #include "texcompress_s3tc.h"
-#include "teximage.h"
-#include "texobj.h"
 #include "texstate.h"
 #include "mtypes.h"
 #include "varray.h"
@@ -413,14 +409,6 @@ one_time_init( GLcontext *ctx )
 
       for (i = 0; i < 256; i++) {
          _mesa_ubyte_to_float_color_tab[i] = (float) i / 255.0F;
-      }
-
-      if (_mesa_getenv("MESA_DEBUG")) {
-         _glapi_noop_enable_warnings(GL_TRUE);
-         _glapi_set_warning_func( (_glapi_warning_func) _mesa_warning );
-      }
-      else {
-         _glapi_noop_enable_warnings(GL_FALSE);
       }
 
 #if defined(DEBUG) && defined(__DATE__) && defined(__TIME__)
@@ -1015,6 +1003,9 @@ _mesa_free_context_data( GLcontext *ctx )
    if (ctx->Extensions.String)
       _mesa_free((void *) ctx->Extensions.String);
 
+   if (ctx->VersionString)
+      _mesa_free(ctx->VersionString);
+
    /* unbind the context if it's currently bound */
    if (ctx == _mesa_get_current_context()) {
       _mesa_make_current(NULL, NULL, NULL);
@@ -1374,6 +1365,8 @@ _mesa_make_current( GLcontext *newCtx, GLframebuffer *drawBuffer,
       }
 
       if (newCtx->FirstTimeCurrent) {
+         _mesa_compute_version(newCtx);
+
          check_context_limits(newCtx);
 
          /* We can use this to help debug user's problems.  Tell them to set
@@ -1581,6 +1574,10 @@ _mesa_set_mvp_with_dp4( GLcontext *ctx,
 GLboolean
 _mesa_valid_to_render(GLcontext *ctx, const char *where)
 {
+   /* This depends on having up to date derived state (shaders) */
+   if (ctx->NewState)
+      _mesa_update_state(ctx);
+
    if (ctx->Shader.CurrentProgram) {
       /* using shaders */
       if (!ctx->Shader.CurrentProgram->LinkStatus) {

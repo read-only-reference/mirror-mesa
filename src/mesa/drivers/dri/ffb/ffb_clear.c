@@ -26,15 +26,12 @@
  */
 
 #include "main/mtypes.h"
-#include "main/extensions.h"
 
 #include "main/mm.h"
 #include "ffb_dd.h"
 #include "ffb_span.h"
-#include "ffb_depth.h"
 #include "ffb_context.h"
 #include "ffb_vb.h"
-#include "ffb_tris.h"
 #include "ffb_clear.h"
 #include "ffb_lock.h"
 
@@ -123,7 +120,7 @@ CreatorComputePageFillFixups(struct ff_fixups *fixups,
 }
 
 static void
-ffb_do_clear(GLcontext *ctx, __DRIdrawablePrivate *dPriv)
+ffb_do_clear(GLcontext *ctx, __DRIdrawable *dPriv)
 {
 	ffbContextPtr fmesa = FFB_CONTEXT(ctx);
 	FFBDRIPtr gDRIPriv = (FFBDRIPtr) fmesa->driScreen->pDevPriv;
@@ -252,7 +249,7 @@ ffb_do_clear(GLcontext *ctx, __DRIdrawablePrivate *dPriv)
 void ffbDDClear(GLcontext *ctx, GLbitfield mask)
 {
 	ffbContextPtr fmesa = FFB_CONTEXT(ctx);
-	__DRIdrawablePrivate *dPriv = fmesa->driDrawable;
+	__DRIdrawable *dPriv = fmesa->driDrawable;
 	unsigned int stcmask = BUFFER_BIT_STENCIL;
 
 #ifdef CLEAR_TRACE

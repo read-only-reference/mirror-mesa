@@ -38,12 +38,12 @@ struct pipe_viewport_state r300_viewport_identity = {
  *
  * Note that eventually this should be empty, but it's useful for development
  * and general unduplication of code. */
-void r300_emit_invariant_state(struct r300_context* r300)
+void r300_emit_invariant_state(struct r300_context* r300, void* state)
 {
     struct r300_capabilities* caps = r300_screen(r300->context.screen)->caps;
     CS_LOCALS(r300);
 
-    BEGIN_CS(20 + (caps->has_tcl ? 2: 0));
+    BEGIN_CS(14 + (caps->has_tcl ? 2: 0));
 
     /*** Graphics Backend (GB) ***/
     /* Various GB enables */
@@ -58,16 +58,12 @@ void r300_emit_invariant_state(struct r300_context* r300)
      */
     /* Source of fog depth */
     OUT_CS_REG(R300_GB_SELECT, R300_GB_FOG_SELECT_1_1_W);
-    /* AA enable */
-    OUT_CS_REG(R300_GB_AA_CONFIG, 0x0);
 
     /*** Fog (FG) ***/
     OUT_CS_REG(R300_FG_FOG_BLEND, 0x0);
     OUT_CS_REG(R300_FG_FOG_COLOR_R, 0x0);
     OUT_CS_REG(R300_FG_FOG_COLOR_G, 0x0);
     OUT_CS_REG(R300_FG_FOG_COLOR_B, 0x0);
-    OUT_CS_REG(R300_FG_DEPTH_SRC, 0x0);
-    OUT_CS_REG(R300_US_W_FMT, 0x0);
 
     /*** VAP ***/
     /* Sign/normalize control */
@@ -81,7 +77,8 @@ void r300_emit_invariant_state(struct r300_context* r300)
     END_CS;
 
     /* XXX unsorted stuff from surface_fill */
-    BEGIN_CS(44 + (caps->has_tcl ? 7 : 0) + (caps->is_r500 ? 4 : 0));
+    BEGIN_CS(44 + (caps->has_tcl ? 7 : 0) +
+             (caps->family >= CHIP_FAMILY_RV350 ? 4 : 0));
 
     if (caps->has_tcl) {
         /*Flushing PVS is required before the VAP_GB registers can be changed*/
@@ -117,10 +114,12 @@ void r300_emit_invariant_state(struct r300_context* r300)
     OUT_CS_REG(R300_SC_HYPERZ, 0x0000001C);
     OUT_CS_REG(R300_SC_EDGERULE, 0x2DA49525);
     OUT_CS_REG(R300_RB3D_AARESOLVE_CTL, 0x00000000);
-    if (caps->is_r500) {
-        OUT_CS_REG(R500_RB3D_DISCARD_SRC_PIXEL_LTE_THRESHOLD, 0x00000000);
-        OUT_CS_REG(R500_RB3D_DISCARD_SRC_PIXEL_GTE_THRESHOLD, 0xFFFFFFFF);
+
+    if (caps->family >= CHIP_FAMILY_RV350) {
+        OUT_CS_REG(R500_RB3D_DISCARD_SRC_PIXEL_LTE_THRESHOLD, 0x01010101);
+        OUT_CS_REG(R500_RB3D_DISCARD_SRC_PIXEL_GTE_THRESHOLD, 0xFEFEFEFE);
     }
+
     OUT_CS_REG(R300_ZB_BW_CNTL, 0x00000000);
     OUT_CS_REG(R300_ZB_DEPTHCLEARVALUE, 0x00000000);
     OUT_CS_REG(R300_ZB_HIZ_OFFSET, 0x00000000);

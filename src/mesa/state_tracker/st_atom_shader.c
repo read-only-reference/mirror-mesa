@@ -35,8 +35,6 @@
  *   Brian Paul
  */
 
-
-
 #include "main/imports.h"
 #include "main/mtypes.h"
 #include "main/macros.h"
@@ -52,14 +50,10 @@
 #include "st_context.h"
 #include "st_atom.h"
 #include "st_program.h"
-#include "st_atom_shader.h"
-#include "st_mesa_to_tgsi.h"
 
 
 
-
-
-/*
+/**
  * Translate fragment program if needed.
  */
 static void
@@ -83,7 +77,7 @@ translate_fp(struct st_context *st,
 
       stfp->num_input_slots = numIn;
 
-      assert(stfp->Base.Base.NumInstructions > 1);
+      assert(stfp->Base.Base.NumInstructions > 0);
 
       st_translate_fragment_program(st, stfp, stfp->input_to_slot);
    }
@@ -155,8 +149,10 @@ find_translated_vp(struct st_context *st,
 }
 
 
-
-
+/**
+ * Return pointer to a pass-through fragment shader.
+ * This shader is used when a texture is missing/incomplete.
+ */
 static void *
 get_passthrough_fs(struct st_context *st)
 {
@@ -168,6 +164,11 @@ get_passthrough_fs(struct st_context *st)
    return st->passthrough_fs;
 }
 
+
+/**
+ * Update fragment program state/atom.  This involves translating the
+ * Mesa fragment program into a gallium fragment program and binding it.
+ */
 static void
 update_fp( struct st_context *st )
 {
@@ -191,6 +192,7 @@ update_fp( struct st_context *st )
    }
 }
 
+
 const struct st_tracked_state st_update_fp = {
    "st_update_fp",					/* name */
    {							/* dirty */
@@ -202,7 +204,10 @@ const struct st_tracked_state st_update_fp = {
 
 
 
-
+/**
+ * Update vertex program state/atom.  This involves translating the
+ * Mesa vertex program into a gallium fragment program and binding it.
+ */
 static void
 update_vp( struct st_context *st )
 {

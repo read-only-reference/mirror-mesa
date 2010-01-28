@@ -247,7 +247,7 @@ radeon_nop_alloc_storage(GLcontext * ctx, struct gl_renderbuffer *rb,
  * Not used for user-created renderbuffers.
  */
 struct radeon_renderbuffer *
-radeon_create_renderbuffer(gl_format format, __DRIdrawablePrivate *driDrawPriv)
+radeon_create_renderbuffer(gl_format format, __DRIdrawable *driDrawPriv)
 {
     struct radeon_renderbuffer *rrb;
 
@@ -531,10 +531,9 @@ radeon_render_texture(GLcontext * ctx,
                                             att->TextureLevel);
 
    if (att->Texture->Target == GL_TEXTURE_3D) {
-      GLuint offsets[6];
-      radeon_miptree_depth_offsets(radeon_image->mt, att->TextureLevel,
-				   offsets);
-      imageOffset += offsets[att->Zoffset];
+      imageOffset += radeon_image->mt->levels[att->TextureLevel].rowstride *
+                     radeon_image->mt->levels[att->TextureLevel].height *
+                     att->Zoffset;
    }
 
    /* store that offset in the region, along with the correct pitch for

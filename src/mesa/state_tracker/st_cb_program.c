@@ -36,7 +36,6 @@
 #include "shader/prog_instruction.h"
 #include "shader/prog_parameter.h"
 #include "shader/program.h"
-#include "shader/programopt.h"
 #include "shader/shader_api.h"
 
 #include "cso_cache/cso_context.h"
@@ -44,7 +43,6 @@
 
 #include "st_context.h"
 #include "st_program.h"
-#include "st_atom_shader.h"
 #include "st_mesa_to_tgsi.h"
 #include "st_cb_program.h"
 

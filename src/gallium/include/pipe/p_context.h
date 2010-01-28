@@ -61,33 +61,49 @@ struct pipe_context {
     * VBO drawing (return false on fallbacks (temporary??))
     */
    /*@{*/
-   boolean (*draw_arrays)( struct pipe_context *pipe,
-			   unsigned mode, unsigned start, unsigned count);
+   void (*draw_arrays)( struct pipe_context *pipe,
+                        unsigned mode, unsigned start, unsigned count);
 
-   boolean (*draw_elements)( struct pipe_context *pipe,
-			     struct pipe_buffer *indexBuffer,
-			     unsigned indexSize,
-			     unsigned mode, unsigned start, unsigned count);
+   void (*draw_elements)( struct pipe_context *pipe,
+                          struct pipe_buffer *indexBuffer,
+                          unsigned indexSize,
+                          unsigned mode, unsigned start, unsigned count);
+
+   void (*draw_arrays_instanced)(struct pipe_context *pipe,
+                                 unsigned mode,
+                                 unsigned start,
+                                 unsigned count,
+                                 unsigned startInstance,
+                                 unsigned instanceCount);
+
+   void (*draw_elements_instanced)(struct pipe_context *pipe,
+                                   struct pipe_buffer *indexBuffer,
+                                   unsigned indexSize,
+                                   unsigned mode,
+                                   unsigned start,
+                                   unsigned count,
+                                   unsigned startInstance,
+                                   unsigned instanceCount);
 
    /* XXX: this is (probably) a temporary entrypoint, as the range
     * information should be available from the vertex_buffer state.
     * Using this to quickly evaluate a specialized path in the draw
     * module.
     */
-   boolean (*draw_range_elements)( struct pipe_context *pipe,
-                                   struct pipe_buffer *indexBuffer,
-                                   unsigned indexSize,
-                                   unsigned minIndex,
-                                   unsigned maxIndex,
-                                   unsigned mode, 
-                                   unsigned start, 
-                                   unsigned count);
+   void (*draw_range_elements)( struct pipe_context *pipe,
+                                struct pipe_buffer *indexBuffer,
+                                unsigned indexSize,
+                                unsigned minIndex,
+                                unsigned maxIndex,
+                                unsigned mode, 
+                                unsigned start, 
+                                unsigned count);
    /*@}*/
 
    /**
     * Predicate subsequent rendering on occlusion query result
     * \param query  the query predicate, or NULL if no predicate
-    * \param mode  one of PIPE_COND_RENDER_x
+    * \param mode  one of PIPE_RENDER_COND_x
     */
    void (*render_condition)( struct pipe_context *pipe,
                              struct pipe_query *query,
@@ -106,6 +122,11 @@ struct pipe_context {
    void (*begin_query)(struct pipe_context *pipe, struct pipe_query *q);
    void (*end_query)(struct pipe_context *pipe, struct pipe_query *q);
 
+   /**
+    * Get results of a query.
+    * \param wait  if true, this query will block until the result is ready
+    * \return TRUE if results are ready, FALSE otherwise
+    */
    boolean (*get_query_result)(struct pipe_context *pipe, 
                                struct pipe_query *q,
                                boolean wait,
@@ -170,7 +191,7 @@ struct pipe_context {
 
    void (*set_constant_buffer)( struct pipe_context *,
                                 uint shader, uint index,
-                                const struct pipe_constant_buffer *buf );
+                                struct pipe_buffer *buf );
 
    void (*set_framebuffer_state)( struct pipe_context *,
                                   const struct pipe_framebuffer_state * );
@@ -255,30 +276,30 @@ struct pipe_context {
 
    /**
     * Check whether a texture is referenced by an unflushed hw command.
-    * The state-tracker uses this function to optimize away unnecessary
-    * flushes. It is safe (but wasteful) to always return.
+    * The state-tracker uses this function to avoid unnecessary flushes.
+    * It is safe (but wasteful) to always return
     * PIPE_REFERENCED_FOR_READ | PIPE_REFERENCED_FOR_WRITE.
-    * \param pipe  The pipe context whose unflushed hw commands will be
-    *              checked.
-    * \param level  mipmap level.
+    * \param pipe  context whose unflushed hw commands will be checked.
     * \param texture  texture to check.
     * \param face  cubemap face. Use 0 for non-cubemap texture.
+    * \param level  mipmap level.
+    * \return mask of PIPE_REFERENCED_FOR_READ/WRITE or PIPE_UNREFERENCED
     */
-   unsigned int (*is_texture_referenced) (struct pipe_context *pipe,
-					  struct pipe_texture *texture,
-					  unsigned face, unsigned level);
+   unsigned int (*is_texture_referenced)(struct pipe_context *pipe,
+					 struct pipe_texture *texture,
+					 unsigned face, unsigned level);
 
    /**
     * Check whether a buffer is referenced by an unflushed hw command.
-    * The state-tracker uses this function to optimize away unnecessary
-    * flushes. It is safe (but wasteful) to always return
+    * The state-tracker uses this function to avoid unnecessary flushes.
+    * It is safe (but wasteful) to always return
     * PIPE_REFERENCED_FOR_READ | PIPE_REFERENCED_FOR_WRITE.
-    * \param pipe  The pipe context whose unflushed hw commands will be
-    *              checked.
-    * \param buf  Buffer to check.
+    * \param pipe  context whose unflushed hw commands will be checked.
+    * \param buf  buffer to check.
+    * \return mask of PIPE_REFERENCED_FOR_READ/WRITE or PIPE_UNREFERENCED
     */
-   unsigned int (*is_buffer_referenced) (struct pipe_context *pipe,
-					 struct pipe_buffer *buf);
+   unsigned int (*is_buffer_referenced)(struct pipe_context *pipe,
+					struct pipe_buffer *buf);
 };
 
 

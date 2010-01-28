@@ -11,9 +11,6 @@
 #include "cso_cache/cso_context.h"
 
 #include "pipe/p_screen.h"
-#include "pipe/p_inlines.h"
-
-#include "util/u_format.h"
 
 /*XXX get these from pipe's texture limits */
 #define IMAGE_MAX_WIDTH		2048
@@ -403,14 +400,14 @@ bind_blend_state(struct xorg_xv_port_priv *port)
    struct pipe_blend_state blend;
 
    memset(&blend, 0, sizeof(struct pipe_blend_state));
-   blend.blend_enable = 1;
-   blend.colormask |= PIPE_MASK_RGBA;
+   blend.rt[0].blend_enable = 0;
+   blend.rt[0].colormask = PIPE_MASK_RGBA;
 
    /* porter&duff src */
-   blend.rgb_src_factor   = PIPE_BLENDFACTOR_ONE;
-   blend.alpha_src_factor = PIPE_BLENDFACTOR_ONE;
-   blend.rgb_dst_factor   = PIPE_BLENDFACTOR_ZERO;
-   blend.alpha_dst_factor = PIPE_BLENDFACTOR_ZERO;
+   blend.rt[0].rgb_src_factor   = PIPE_BLENDFACTOR_ONE;
+   blend.rt[0].alpha_src_factor = PIPE_BLENDFACTOR_ONE;
+   blend.rt[0].rgb_dst_factor   = PIPE_BLENDFACTOR_ZERO;
+   blend.rt[0].alpha_dst_factor = PIPE_BLENDFACTOR_ZERO;
 
    cso_set_blend(port->r->cso, &blend);
 }
@@ -486,8 +483,11 @@ display_video(ScrnInfoPtr pScrn, struct xorg_xv_port_priv *pPriv, int id,
    int dxo, dyo;
    Bool hdtv;
    int x, y, w, h;
-   struct exa_pixmap_priv *dst = exaGetPixmapDriverPrivate(pPixmap);
-   struct pipe_surface *dst_surf = xorg_gpu_surface(pPriv->r->pipe->screen, dst);
+   struct exa_pixmap_priv *dst;
+   struct pipe_surface *dst_surf = NULL;
+
+   exaMoveInPixmap(pPixmap);
+   dst = exaGetPixmapDriverPrivate(pPixmap);
 
    if (dst && !dst->tex) {
 	xorg_exa_set_shared_usage(pPixmap);
@@ -497,6 +497,7 @@ display_video(ScrnInfoPtr pScrn, struct xorg_xv_port_priv *pPriv, int id,
    if (!dst || !dst->tex)
       XORG_FALLBACK("Xv destination %s", !dst ? "!dst" : "!dst->tex");
 
+   dst_surf = xorg_gpu_surface(pPriv->r->pipe->screen, dst);
    hdtv = ((src_w >= RES_720P_X) && (src_h >= RES_720P_Y));
 
    REGION_TRANSLATE(pScrn->pScreen, dstRegion, -pPixmap->screen_x,
@@ -516,7 +517,6 @@ display_video(ScrnInfoPtr pScrn, struct xorg_xv_port_priv *pPriv, int id,
    bind_samplers(pPriv);
    setup_fs_video_constants(pPriv->r, hdtv);
 
-   exaMoveInPixmap(pPixmap);
    DamageDamageRegion(&pPixmap->drawable, dstRegion);
 
    while (nbox--) {

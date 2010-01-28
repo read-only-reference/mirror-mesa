@@ -69,86 +69,11 @@
 #include <assert.h>
 #endif
 
-#include "glapi.h"
-#include "glapioffsets.h"
-#include "glapitable.h"
+#include "glapi/glapi.h"
+#include "glapi/glapioffsets.h"
+#include "glapi/glapitable.h"
 
-
-/***** BEGIN NO-OP DISPATCH *****/
-
-static GLboolean WarnFlag = GL_FALSE;
-static _glapi_warning_func warning_func;
-
-/*
- * Enable/disable printing of warning messages.
- */
-PUBLIC void
-_glapi_noop_enable_warnings(GLboolean enable)
-{
-   WarnFlag = enable;
-}
-
-/*
- * Register a callback function for reporting errors.
- */
-PUBLIC void
-_glapi_set_warning_func( _glapi_warning_func func )
-{
-   warning_func = func;
-}
-
-static GLboolean
-warn(void)
-{
-#if !defined(_WIN32_WCE)
-   if ((WarnFlag || getenv("MESA_DEBUG") || getenv("LIBGL_DEBUG"))
-       && warning_func) {
-      return GL_TRUE;
-   }
-   else {
-      return GL_FALSE;
-   }
-#else
-   return GL_FALSE;
-#endif
-}
-
-
-#define KEYWORD1 static
-#define KEYWORD1_ALT static
-#define KEYWORD2 GLAPIENTRY
-#define NAME(func)  NoOp##func
-
-#define F NULL
-
-#define DISPATCH(func, args, msg)					      \
-   if (warn()) {							      \
-      warning_func(NULL, "GL User Error: called without context: %s", #func); \
-   }
-
-#define RETURN_DISPATCH(func, args, msg)				      \
-   if (warn()) {							      \
-      warning_func(NULL, "GL User Error: called without context: %s", #func); \
-   }									      \
-   return 0
-
-#define DISPATCH_TABLE_NAME __glapi_noop_table
-#define UNUSED_TABLE_NAME __unused_noop_functions
-
-#define TABLE_ENTRY(name) (_glapi_proc) NoOp##name
-
-static GLint NoOpUnused(void)
-{
-   if (warn()) {
-      warning_func(NULL, "GL User Error: calling extension function without a current context\n");
-   }
-   return 0;
-}
-
-#include "glapitemp.h"
-
-/***** END NO-OP DISPATCH *****/
-
+extern _glapi_proc __glapi_noop_table[];
 
 
 /**
@@ -237,7 +162,7 @@ PUBLIC void *_glapi_Context = NULL;
  * We should call this periodically from a function such as glXMakeCurrent
  * in order to test if multiple threads are being used.
  */
-void
+PUBLIC void
 _glapi_check_multithread(void)
 {
 #if defined(THREADS) && !defined(GLX_USE_TLS)
@@ -275,7 +200,6 @@ _glapi_check_multithread(void)
 PUBLIC void
 _glapi_set_context(void *context)
 {
-   (void) __unused_noop_functions; /* silence a warning */
 #if defined(GLX_USE_TLS)
    _glapi_tls_Context = context;
 #elif defined(THREADS)

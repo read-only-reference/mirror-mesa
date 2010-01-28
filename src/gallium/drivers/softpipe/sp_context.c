@@ -43,7 +43,6 @@
 #include "sp_surface.h"
 #include "sp_tile_cache.h"
 #include "sp_tex_tile_cache.h"
-#include "sp_texture.h"
 #include "sp_winsys.h"
 #include "sp_query.h"
 
@@ -112,9 +111,13 @@ softpipe_destroy( struct pipe_context *pipe )
       pipe_texture_reference(&softpipe->vertex_textures[i], NULL);
    }
 
-   for (i = 0; i < Elements(softpipe->constants); i++) {
-      if (softpipe->constants[i].buffer) {
-         pipe_buffer_reference(&softpipe->constants[i].buffer, NULL);
+   for (i = 0; i < PIPE_SHADER_TYPES; i++) {
+      uint j;
+
+      for (j = 0; j < PIPE_MAX_CONSTANT_BUFFERS; j++) {
+         if (softpipe->constants[i][j]) {
+            pipe_buffer_reference(&softpipe->constants[i][j], NULL);
+         }
       }
    }
 
@@ -256,6 +259,8 @@ softpipe_create( struct pipe_screen *screen )
    softpipe->pipe.draw_arrays = softpipe_draw_arrays;
    softpipe->pipe.draw_elements = softpipe_draw_elements;
    softpipe->pipe.draw_range_elements = softpipe_draw_range_elements;
+   softpipe->pipe.draw_arrays_instanced = softpipe_draw_arrays_instanced;
+   softpipe->pipe.draw_elements_instanced = softpipe_draw_elements_instanced;
 
    softpipe->pipe.clear = softpipe_clear;
    softpipe->pipe.flush = softpipe_flush;

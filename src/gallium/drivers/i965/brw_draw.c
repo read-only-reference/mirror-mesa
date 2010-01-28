@@ -34,7 +34,6 @@
 #include "brw_context.h"
 #include "brw_state.h"
 #include "brw_debug.h"
-#include "brw_screen.h"
 
 #include "brw_batchbuffer.h"
 
@@ -176,7 +175,7 @@ try_draw_range_elements(struct brw_context *brw,
 }
 
 
-static boolean
+static void
 brw_draw_range_elements(struct pipe_context *pipe,
 			struct pipe_buffer *index_buffer,
 			unsigned index_size,
@@ -228,29 +227,27 @@ brw_draw_range_elements(struct pipe_context *pipe,
       ret = try_draw_range_elements(brw, index_buffer, hw_prim, start, count );
       assert(ret == 0);
    }
-
-   return TRUE;
 }
 
-static boolean
+static void
 brw_draw_elements(struct pipe_context *pipe,
 		  struct pipe_buffer *index_buffer,
 		  unsigned index_size,
 		  unsigned mode, 
 		  unsigned start, unsigned count)
 {
-   return brw_draw_range_elements( pipe, index_buffer,
-				   index_size,
-				   0, 0xffffffff,
-				   mode, 
-				   start, count );
+   brw_draw_range_elements( pipe, index_buffer,
+                            index_size,
+                            0, 0xffffffff,
+                            mode, 
+                            start, count );
 }
 
-static boolean
+static void
 brw_draw_arrays(struct pipe_context *pipe, unsigned mode,
                      unsigned start, unsigned count)
 {
-   return brw_draw_elements(pipe, NULL, 0, mode, start, count);
+   brw_draw_elements(pipe, NULL, 0, mode, start, count);
 }
 
 

@@ -51,17 +51,17 @@ cell_map_constant_buffers(struct cell_context *sp)
    struct pipe_winsys *ws = sp->pipe.winsys;
    uint i;
    for (i = 0; i < 2; i++) {
-      if (sp->constants[i].buffer && sp->constants[i].buffer->size) {
-         sp->mapped_constants[i] = ws->buffer_map(ws, sp->constants[i].buffer,
+      if (sp->constants[i] && sp->constants[i]->size) {
+         sp->mapped_constants[i] = ws->buffer_map(ws, sp->constants[i],
                                                    PIPE_BUFFER_USAGE_CPU_READ);
          cell_flush_buffer_range(sp, sp->mapped_constants[i], 
-                                 sp->constants[i].buffer->size);
+                                 sp->constants[i]->size);
       }
    }
 
-   draw_set_mapped_constant_buffer(sp->draw, PIPE_SHADER_VERTEX,
+   draw_set_mapped_constant_buffer(sp->draw, PIPE_SHADER_VERTEX, 0,
                                    sp->mapped_constants[PIPE_SHADER_VERTEX],
-                                   sp->constants[PIPE_SHADER_VERTEX].buffer->size);
+                                   sp->constants[PIPE_SHADER_VERTEX]->size);
 }
 
 static void
@@ -70,8 +70,8 @@ cell_unmap_constant_buffers(struct cell_context *sp)
    struct pipe_winsys *ws = sp->pipe.winsys;
    uint i;
    for (i = 0; i < 2; i++) {
-      if (sp->constants[i].buffer && sp->constants[i].buffer->size)
-         ws->buffer_unmap(ws, sp->constants[i].buffer);
+      if (sp->constants[i] && sp->constants[i]->size)
+         ws->buffer_unmap(ws, sp->constants[i]);
       sp->mapped_constants[i] = NULL;
    }
 }
@@ -85,7 +85,7 @@ cell_unmap_constant_buffers(struct cell_context *sp)
  *
  * XXX should the element buffer be specified/bound with a separate function?
  */
-static boolean
+static void
 cell_draw_range_elements(struct pipe_context *pipe,
                          struct pipe_buffer *indexBuffer,
                          unsigned indexSize,
@@ -145,29 +145,27 @@ cell_draw_range_elements(struct pipe_context *pipe,
 
    /* Note: leave drawing surfaces mapped */
    cell_unmap_constant_buffers(sp);
-
-   return TRUE;
 }
 
 
-static boolean
+static void
 cell_draw_elements(struct pipe_context *pipe,
                    struct pipe_buffer *indexBuffer,
                    unsigned indexSize,
                    unsigned mode, unsigned start, unsigned count)
 {
-   return cell_draw_range_elements( pipe, indexBuffer,
-                                    indexSize,
-                                    0, 0xffffffff,
-                                    mode, start, count );
+   cell_draw_range_elements( pipe, indexBuffer,
+                             indexSize,
+                             0, 0xffffffff,
+                             mode, start, count );
 }
 
 
-static boolean
+static void
 cell_draw_arrays(struct pipe_context *pipe, unsigned mode,
                      unsigned start, unsigned count)
 {
-   return cell_draw_elements(pipe, NULL, 0, mode, start, count);
+   cell_draw_elements(pipe, NULL, 0, mode, start, count);
 }
 
 

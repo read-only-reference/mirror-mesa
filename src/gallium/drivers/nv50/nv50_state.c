@@ -31,35 +31,61 @@
 
 #include "nouveau/nouveau_stateobj.h"
 
+static INLINE uint32_t
+nv50_colormask(unsigned mask)
+{
+	uint32_t cmask = 0;
+
+	if (mask & PIPE_MASK_R)
+		cmask |= 0x0001;
+	if (mask & PIPE_MASK_G)
+		cmask |= 0x0010;
+	if (mask & PIPE_MASK_B)
+		cmask |= 0x0100;
+	if (mask & PIPE_MASK_A)
+		cmask |= 0x1000;
+
+	return cmask;
+}
+
 static void *
 nv50_blend_state_create(struct pipe_context *pipe,
 			const struct pipe_blend_state *cso)
 {
-	struct nouveau_stateobj *so = so_new(64, 0);
+	struct nouveau_stateobj *so = so_new(5, 24, 0);
 	struct nouveau_grobj *tesla = nv50_context(pipe)->screen->tesla;
 	struct nv50_blend_stateobj *bso = CALLOC_STRUCT(nv50_blend_stateobj);
-	unsigned cmask = 0, i;
+	unsigned i, blend_enabled = 0;
 
 	/*XXX ignored:
 	 * 	- dither
 	 */
 
-	if (cso->blend_enable == 0) {
-		so_method(so, tesla, NV50TCL_BLEND_ENABLE(0), 8);
-		for (i = 0; i < 8; i++)
-			so_data(so, 0);
-	} else {
-		so_method(so, tesla, NV50TCL_BLEND_ENABLE(0), 8);
+	so_method(so, tesla, NV50TCL_BLEND_ENABLE(0), 8);
+	if (cso->independent_blend_enable) {
+		for (i = 0; i < 8; ++i) {
+			so_data(so, cso->rt[i].blend_enable);
+			if (cso->rt[i].blend_enable)
+				blend_enabled = 1;
+		}
+	} else
+	if (cso->rt[0].blend_enable) {
+		blend_enabled = 1;
 		for (i = 0; i < 8; i++)
 			so_data(so, 1);
+	} else {
+		for (i = 0; i < 8; i++)
+			so_data(so, 0);
+	}
+	if (blend_enabled) {
 		so_method(so, tesla, NV50TCL_BLEND_EQUATION_RGB, 5);
-		so_data  (so, nvgl_blend_eqn(cso->rgb_func));
-		so_data  (so, 0x4000 | nvgl_blend_func(cso->rgb_src_factor));
-		so_data  (so, 0x4000 | nvgl_blend_func(cso->rgb_dst_factor));
-		so_data  (so, nvgl_blend_eqn(cso->alpha_func));
-		so_data  (so, 0x4000 | nvgl_blend_func(cso->alpha_src_factor));
+		so_data  (so, nvgl_blend_eqn(cso->rt[0].rgb_func));
+		so_data  (so, 0x4000 | nvgl_blend_func(cso->rt[0].rgb_src_factor));
+		so_data  (so, 0x4000 | nvgl_blend_func(cso->rt[0].rgb_dst_factor));
+		so_data  (so, nvgl_blend_eqn(cso->rt[0].alpha_func));
+		so_data  (so, 0x4000 | nvgl_blend_func(cso->rt[0].alpha_src_factor));
 		so_method(so, tesla, NV50TCL_BLEND_FUNC_DST_ALPHA, 1);
-		so_data  (so, 0x4000 | nvgl_blend_func(cso->alpha_dst_factor));
+		so_data  (so, 0x4000 | nvgl_blend_func(cso->rt[0].alpha_dst_factor));
 	}
 
 	if (cso->logicop_enable == 0 ) {
@@ -71,17 +97,15 @@ nv50_blend_state_create(struct pipe_context *pipe,
 		so_data  (so, nvgl_logicop_func(cso->logicop_func));
 	}
 
-	if (cso->colormask & PIPE_MASK_R)
-		cmask |= (1 << 0);
-	if (cso->colormask & PIPE_MASK_G)
-		cmask |= (1 << 4);
-	if (cso->colormask & PIPE_MASK_B)
-		cmask |= (1 << 8);
-	if (cso->colormask & PIPE_MASK_A)
-		cmask |= (1 << 12);
 	so_method(so, tesla, NV50TCL_COLOR_MASK(0), 8);
-	for (i = 0; i < 8; i++)
-		so_data(so, cmask);
+	if (cso->independent_blend_enable)
+		for (i = 0; i < 8; ++i)
+			so_data(so, nv50_colormask(cso->rt[i].colormask));
+	else {
+		uint32_t cmask = nv50_colormask(cso->rt[0].colormask);
+		for (i = 0; i < 8; i++)
+			so_data(so, cmask);
+	}
 
 	bso->pipe = *cso;
 	so_ref(so, &bso->so);
@@ -146,7 +170,6 @@ nv50_sampler_state_create(struct pipe_context *pipe,
 		  (wrap_mode(cso->wrap_r) << 6));
 
 	switch (cso->mag_img_filter) {
-	case PIPE_TEX_FILTER_ANISO:
 	case PIPE_TEX_FILTER_LINEAR:
 		tsc[1] |= NV50TSC_1_1_MAGF_LINEAR;
 		break;
@@ -157,7 +180,6 @@ nv50_sampler_state_create(struct pipe_context *pipe,
 	}
 
 	switch (cso->min_img_filter) {
-	case PIPE_TEX_FILTER_ANISO:
 	case PIPE_TEX_FILTER_LINEAR:
 		tsc[1] |= NV50TSC_1_1_MINF_LINEAR;
 		break;
@@ -280,7 +302,7 @@ static void *
 nv50_rasterizer_state_create(struct pipe_context *pipe,
 			     const struct pipe_rasterizer_state *cso)
 {
-	struct nouveau_stateobj *so = so_new(64, 0);
+	struct nouveau_stateobj *so = so_new(15, 21, 0);
 	struct nouveau_grobj *tesla = nv50_context(pipe)->screen->tesla;
 	struct nv50_rasterizer_stateobj *rso =
 		CALLOC_STRUCT(nv50_rasterizer_stateobj);
@@ -425,7 +447,7 @@ nv50_depth_stencil_alpha_state_create(struct pipe_context *pipe,
 {
 	struct nouveau_grobj *tesla = nv50_context(pipe)->screen->tesla;
 	struct nv50_zsa_stateobj *zsa = CALLOC_STRUCT(nv50_zsa_stateobj);
-	struct nouveau_stateobj *so = so_new(64, 0);
+	struct nouveau_stateobj *so = so_new(8, 22, 0);
 
 	so_method(so, tesla, NV50TCL_DEPTH_WRITE_ENABLE, 1);
 	so_data  (so, cso->depth.writemask ? 1 : 0);
@@ -533,7 +555,7 @@ nv50_vp_state_delete(struct pipe_context *pipe, void *hwcso)
 	struct nv50_program *p = hwcso;
 
 	nv50_program_destroy(nv50, p);
-	FREE((void*)p->pipe.tokens);
+	FREE((void *)p->pipe.tokens);
 	FREE(p);
 }
 
@@ -565,7 +587,39 @@ nv50_fp_state_delete(struct pipe_context *pipe, void *hwcso)
 	struct nv50_program *p = hwcso;
 
 	nv50_program_destroy(nv50, p);
-	FREE((void*)p->pipe.tokens);
+	FREE((void *)p->pipe.tokens);
+	FREE(p);
+}
+
+static void *
+nv50_gp_state_create(struct pipe_context *pipe,
+		     const struct pipe_shader_state *cso)
+{
+	struct nv50_program *p = CALLOC_STRUCT(nv50_program);
+
+	p->pipe.tokens = tgsi_dup_tokens(cso->tokens);
+	p->type = PIPE_SHADER_GEOMETRY;
+	tgsi_scan_shader(p->pipe.tokens, &p->info);
+	return (void *)p;
+}
+
+static void
+nv50_gp_state_bind(struct pipe_context *pipe, void *hwcso)
+{
+	struct nv50_context *nv50 = nv50_context(pipe);
+
+	nv50->fragprog = hwcso;
+	nv50->dirty |= NV50_NEW_GEOMPROG;
+}
+
+static void
+nv50_gp_state_delete(struct pipe_context *pipe, void *hwcso)
+{
+	struct nv50_context *nv50 = nv50_context(pipe);
+	struct nv50_program *p = hwcso;
+
+	nv50_program_destroy(nv50, p);
+	FREE((void *)p->pipe.tokens);
 	FREE(p);
 }
 
@@ -587,17 +641,21 @@ nv50_set_clip_state(struct pipe_context *pipe,
 
 static void
 nv50_set_constant_buffer(struct pipe_context *pipe, uint shader, uint index,
-			 const struct pipe_constant_buffer *buf )
+			 struct pipe_buffer *buf )
 {
 	struct nv50_context *nv50 = nv50_context(pipe);
 
 	if (shader == PIPE_SHADER_VERTEX) {
-		nv50->constbuf[PIPE_SHADER_VERTEX] = buf->buffer;
+		nv50->constbuf[PIPE_SHADER_VERTEX] = buf;
 		nv50->dirty |= NV50_NEW_VERTPROG_CB;
 	} else
 	if (shader == PIPE_SHADER_FRAGMENT) {
-		nv50->constbuf[PIPE_SHADER_FRAGMENT] = buf->buffer;
+		nv50->constbuf[PIPE_SHADER_FRAGMENT] = buf;
 		nv50->dirty |= NV50_NEW_FRAGPROG_CB;
+	} else
+	if (shader == PIPE_SHADER_GEOMETRY) {
+		nv50->constbuf[PIPE_SHADER_GEOMETRY] = buf;
+		nv50->dirty |= NV50_NEW_GEOMPROG_CB;
 	}
 }
 
@@ -697,6 +755,10 @@ nv50_init_state_functions(struct nv50_context *nv50)
 	nv50->pipe.create_fs_state = nv50_fp_state_create;
 	nv50->pipe.bind_fs_state = nv50_fp_state_bind;
 	nv50->pipe.delete_fs_state = nv50_fp_state_delete;
+
+	nv50->pipe.create_gs_state = nv50_gp_state_create;
+	nv50->pipe.bind_gs_state = nv50_gp_state_bind;
+	nv50->pipe.delete_gs_state = nv50_gp_state_delete;
 
 	nv50->pipe.set_blend_color = nv50_set_blend_color;
 	nv50->pipe.set_clip_state = nv50_set_clip_state;

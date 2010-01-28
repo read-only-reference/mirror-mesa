@@ -37,12 +37,10 @@
 
 #include "savagecontext.h"
 #include "savageioctl.h"
-#include "savage_bci.h"
 #include "savagestate.h"
 #include "savagespan.h"
 
 #include "drm.h"
-#include <sys/ioctl.h>
 #include <sys/timeb.h>
 
 #define DEPTH_SCALE_16 ((1<<16)-1)
@@ -433,7 +431,7 @@ static void savageDDClear( GLcontext *ctx, GLbitfield mask )
 /*
  * Copy the back buffer to the front buffer. 
  */
-void savageSwapBuffers( __DRIdrawablePrivate *dPriv )
+void savageSwapBuffers( __DRIdrawable *dPriv )
 {
    savageContextPtr imesa;
 
@@ -537,7 +535,7 @@ void savageFlushVertices( savageContextPtr imesa )
 
 void savageFlushCmdBufLocked( savageContextPtr imesa, GLboolean discard )
 {
-    __DRIdrawablePrivate *dPriv = imesa->driDrawable;
+    __DRIdrawable *dPriv = imesa->driDrawable;
 
     if (!imesa->dmaVtxBuf.total)
 	discard = GL_FALSE;

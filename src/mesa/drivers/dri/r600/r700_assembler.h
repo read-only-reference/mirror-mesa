@@ -487,6 +487,8 @@ typedef struct r700_AssemblerBase
 
     GLuint    unVetTexBits;
 
+    GLuint    shadow_regs[R700_MAX_TEXTURE_UNITS];
+
 } r700_AssemblerBase;
 
 //Internal use
@@ -531,6 +533,7 @@ GLboolean assemble_vfetch_instruction2(r700_AssemblerBase* pAsm,
                                        GLubyte             element,
                                        GLuint              _signed,
                                        GLboolean           normalize,
+                                       GLenum              format,
                                        VTX_FETCH_METHOD  * pFetchMethod);
 GLboolean cleanup_vfetch_instructions(r700_AssemblerBase* pAsm);
 GLuint gethelpr(r700_AssemblerBase* pAsm);
@@ -616,6 +619,7 @@ GLboolean assemble_RCP(r700_AssemblerBase *pAsm);
 GLboolean assemble_RSQ(r700_AssemblerBase *pAsm);
 GLboolean assemble_SCS(r700_AssemblerBase *pAsm);
 GLboolean assemble_SGE(r700_AssemblerBase *pAsm);
+GLboolean assemble_CONT(r700_AssemblerBase *pAsm);
 
 GLboolean assemble_LOGIC(r700_AssemblerBase *pAsm, BITS opcode);
 GLboolean assemble_LOGIC_PRED(r700_AssemblerBase *pAsm, BITS opcode); 

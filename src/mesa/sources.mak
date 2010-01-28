@@ -81,6 +81,7 @@ MAIN_SOURCES = \
 	main/texstate.c \
 	main/texstore.c \
 	main/varray.c \
+	main/version.c \
 	main/viewport.c \
 	main/vtxfmt.c
 
@@ -88,6 +89,7 @@ GLAPI_SOURCES = \
 	main/dispatch.c \
 	glapi/glapi.c \
 	glapi/glapi_getproc.c \
+	glapi/glapi_nop.c \
 	glapi/glthread.c
 
 MATH_SOURCES = \
@@ -203,7 +205,6 @@ STATETRACKER_SOURCES = \
 	state_tracker/st_cb_strings.c \
 	state_tracker/st_cb_texture.c \
 	state_tracker/st_cb_viewport.c \
-	state_tracker/st_api.c \
 	state_tracker/st_context.c \
 	state_tracker/st_debug.c \
 	state_tracker/st_draw.c \

@@ -56,7 +56,6 @@
 #define LP_NEW_QUERY         0x4000
 
 
-struct tgsi_sampler;
 struct vertex_info;
 struct pipe_context;
 struct llvmpipe_context;
@@ -155,7 +154,7 @@ void llvmpipe_set_clip_state( struct pipe_context *,
 
 void llvmpipe_set_constant_buffer(struct pipe_context *,
                                   uint shader, uint index,
-                                  const struct pipe_constant_buffer *buf);
+                                  struct pipe_buffer *buf);
 
 void *llvmpipe_create_fs_state(struct pipe_context *,
                                const struct pipe_shader_state *);
@@ -197,14 +196,14 @@ void llvmpipe_update_fs(struct llvmpipe_context *lp);
 void llvmpipe_update_derived( struct llvmpipe_context *llvmpipe );
 
 
-boolean llvmpipe_draw_arrays(struct pipe_context *pipe, unsigned mode,
+void llvmpipe_draw_arrays(struct pipe_context *pipe, unsigned mode,
 			     unsigned start, unsigned count);
 
-boolean llvmpipe_draw_elements(struct pipe_context *pipe,
+void llvmpipe_draw_elements(struct pipe_context *pipe,
 			       struct pipe_buffer *indexBuffer,
 			       unsigned indexSize,
 			       unsigned mode, unsigned start, unsigned count);
-boolean
+void
 llvmpipe_draw_range_elements(struct pipe_context *pipe,
                              struct pipe_buffer *indexBuffer,
                              unsigned indexSize,

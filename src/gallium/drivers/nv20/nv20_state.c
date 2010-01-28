@@ -17,16 +17,16 @@ nv20_blend_state_create(struct pipe_context *pipe,
 
 	cb = MALLOC(sizeof(struct nv20_blend_state));
 
-	cb->b_enable = cso->blend_enable ? 1 : 0;
-	cb->b_srcfunc = ((nvgl_blend_func(cso->alpha_src_factor)<<16) |
-			 (nvgl_blend_func(cso->rgb_src_factor)));
-	cb->b_dstfunc = ((nvgl_blend_func(cso->alpha_dst_factor)<<16) |
-			 (nvgl_blend_func(cso->rgb_dst_factor)));
+	cb->b_enable = cso->rt[0].blend_enable ? 1 : 0;
+	cb->b_srcfunc = ((nvgl_blend_func(cso->rt[0].alpha_src_factor)<<16) |
+			 (nvgl_blend_func(cso->rt[0].rgb_src_factor)));
+	cb->b_dstfunc = ((nvgl_blend_func(cso->rt[0].alpha_dst_factor)<<16) |
+			 (nvgl_blend_func(cso->rt[0].rgb_dst_factor)));
 
-	cb->c_mask = (((cso->colormask & PIPE_MASK_A) ? (0x01<<24) : 0) |
-		      ((cso->colormask & PIPE_MASK_R) ? (0x01<<16) : 0) |
-		      ((cso->colormask & PIPE_MASK_G) ? (0x01<< 8) : 0) |
-		      ((cso->colormask & PIPE_MASK_B) ? (0x01<< 0) : 0));
+	cb->c_mask = (((cso->rt[0].colormask & PIPE_MASK_A) ? (0x01<<24) : 0) |
+		      ((cso->rt[0].colormask & PIPE_MASK_R) ? (0x01<<16) : 0) |
+		      ((cso->rt[0].colormask & PIPE_MASK_G) ? (0x01<< 8) : 0) |
+		      ((cso->rt[0].colormask & PIPE_MASK_B) ? (0x01<< 0) : 0));
 
 	cb->d_enable = cso->dither ? 1 : 0;
 
@@ -451,7 +451,7 @@ nv20_set_clip_state(struct pipe_context *pipe,
 
 static void
 nv20_set_constant_buffer(struct pipe_context *pipe, uint shader, uint index,
-			 const struct pipe_constant_buffer *buf )
+			 struct pipe_buffer *buf )
 {
 	struct nv20_context *nv20 = nv20_context(pipe);
 	struct pipe_screen *pscreen = pipe->screen;
@@ -461,13 +461,13 @@ nv20_set_constant_buffer(struct pipe_context *pipe, uint shader, uint index,
 
 	if (buf) {
 		void *mapped;
-		if (buf->buffer && buf->buffer->size &&
-                    (mapped = pipe_buffer_map(pscreen, buf->buffer, PIPE_BUFFER_USAGE_CPU_READ)))
+		if (buf->size &&
+                    (mapped = pipe_buffer_map(pscreen, buf, PIPE_BUFFER_USAGE_CPU_READ)))
 		{
-			memcpy(nv20->constbuf[shader], mapped, buf->buffer->size);
+			memcpy(nv20->constbuf[shader], mapped, buf->size);
 			nv20->constbuf_nr[shader] =
-				buf->buffer->size / (4 * sizeof(float));
-			pipe_buffer_unmap(pscreen, buf->buffer);
+				buf->size / (4 * sizeof(float));
+			pipe_buffer_unmap(pscreen, buf);
 		}
 	}
 }

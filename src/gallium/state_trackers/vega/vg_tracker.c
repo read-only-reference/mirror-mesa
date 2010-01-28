@@ -36,6 +36,9 @@
 #include "util/u_math.h"
 #include "util/u_rect.h"
 
+/* advertise OpenVG support */
+PUBLIC const int st_api_OpenVG = 1;
+
 static struct pipe_texture *
 create_texture(struct pipe_context *pipe, enum pipe_format format,
                VGint width, VGint height)
@@ -190,8 +193,8 @@ struct st_framebuffer * st_create_framebuffer(const void *visual,
       */
       stfb->alpha_mask = 0;
 
-      stfb->init_width = width;
-      stfb->init_height = height;
+      stfb->width = width;
+      stfb->height = height;
       stfb->privateData = privateData;
    }
 
@@ -279,10 +282,13 @@ void st_resize_framebuffer(struct st_framebuffer *stfb,
 
    /* If this is a noop, exit early and don't do the clear, etc below.
     */
-   if (strb->width == width &&
-       strb->height == height &&
+   if (stfb->width == width &&
+       stfb->height == height &&
        state->zsbuf)
       return;
+
+   stfb->width = width;
+   stfb->height = height;
 
    if (strb->width != width || strb->height != height)
       st_renderbuffer_alloc_storage(ctx, strb,
@@ -368,14 +374,15 @@ void st_unreference_framebuffer(struct st_framebuffer *stfb)
    /* FIXME */
 }
 
-void st_make_current(struct vg_context *st,
-                     struct st_framebuffer *draw,
-                     struct st_framebuffer *read)
+boolean st_make_current(struct vg_context *st,
+                        struct st_framebuffer *draw,
+                        struct st_framebuffer *read)
 {
    vg_set_current_context(st);
    if (st) {
       st->draw_buffer = draw;
    }
+   return VG_TRUE;
 }
 
 struct vg_context *st_get_current(void)
@@ -424,4 +431,9 @@ int st_bind_texture_surface(struct pipe_surface *ps, int target, int level,
 int st_unbind_texture_surface(struct pipe_surface *ps, int target, int level)
 {
    return 0;
+}
+
+st_proc st_get_proc_address(const char *procname)
+{
+   return NULL;
 }

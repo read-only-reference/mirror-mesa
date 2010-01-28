@@ -37,10 +37,8 @@
 #include "lp_setup.h"
 #include "lp_state.h"
 #include "draw/draw_context.h"
-#include "draw/draw_private.h"
 #include "draw/draw_vertex.h"
 #include "pipe/p_shader_tokens.h"
-#include "pipe/p_thread.h"
 #include "util/u_format.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
@@ -117,7 +115,7 @@ struct setup_context {
 /**
  * Execute fragment shader for the four fragments in the quad.
  */
-ALIGN_STACK
+PIPE_ALIGN_STACK
 static void
 shade_quads(struct llvmpipe_context *llvmpipe,
             struct quad_header *quads[],
@@ -130,7 +128,7 @@ shade_quads(struct llvmpipe_context *llvmpipe,
    uint8_t *tile;
    uint8_t *color;
    void *depth;
-   uint32_t ALIGN16_ATTRIB mask[4][NUM_CHANNELS];
+   PIPE_ALIGN_VAR(16) uint32_t mask[4][NUM_CHANNELS];
    unsigned chan_index;
    unsigned q;
 

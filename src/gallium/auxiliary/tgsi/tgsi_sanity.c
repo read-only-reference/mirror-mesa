@@ -195,7 +195,7 @@ is_any_register_declared(
    struct cso_hash_iter iter =
       cso_hash_first_node(ctx->regs_decl);
 
-   while (cso_hash_iter_is_null(iter)) {
+   while (!cso_hash_iter_is_null(iter)) {
       scan_register *reg = (scan_register *)cso_hash_iter_data(iter);
       if (reg->file == file)
          return TRUE;
@@ -247,7 +247,7 @@ check_register_usage(
    boolean indirect_access )
 {
    if (!check_file_name( ctx, reg->file )) {
-      free(reg);
+      FREE(reg);
       return FALSE;
    }
 
@@ -261,21 +261,23 @@ check_register_usage(
       if (!is_ind_register_used(ctx, reg))
          cso_hash_insert(ctx->regs_ind_used, reg->file, reg);
       else
-         free(reg);
+         FREE(reg);
    }
    else {
       if (!is_register_declared( ctx, reg )) {
-         if (reg->dimensions == 2)
+         if (reg->dimensions == 2) {
             report_error( ctx, "%s[%d][%d]: Undeclared %s register", file_names[reg->file],
                           reg->indices[0], reg->indices[1], name );
-         else
+         }
+         else {
             report_error( ctx, "%s[%d]: Undeclared %s register", file_names[reg->file],
                           reg->indices[0], name );
          }
+      }
       if (!is_register_used( ctx, reg ))
          cso_hash_insert(ctx->regs_used, scan_register_key(reg), reg);
       else
-         free(reg);
+         FREE(reg);
    }
    return TRUE;
 }
@@ -335,13 +337,9 @@ iter_instruction(
                               inst->Src[i].Indirect.Index);
          check_register_usage(
             ctx,
-            reg,
+            ind_reg,
             "indirect",
             FALSE );
-         if (!(reg->file == TGSI_FILE_ADDRESS || reg->file == TGSI_FILE_LOOP) ||
-             reg->indices[0] != 0) {
-            report_warning(ctx, "Indirect register neither ADDR[0] nor LOOP[0]");
-         }
       }
    }
 
@@ -410,12 +408,16 @@ iter_declaration(
          uint vert;
          for (vert = 0; vert < ctx->implied_array_size; ++vert) {
             scan_register *reg = MALLOC(sizeof(scan_register));
-            fill_scan_register2d(reg, file, vert, i);
+            fill_scan_register2d(reg, file, i, vert);
             check_and_declare(ctx, reg);
          }
       } else {
          scan_register *reg = MALLOC(sizeof(scan_register));
-         fill_scan_register1d(reg, file, i);
+         if (decl->Declaration.Dimension) {
+            fill_scan_register2d(reg, file, i, decl->Dim.Index2D);
+         } else {
+            fill_scan_register1d(reg, file, i);
+         }
          check_and_declare(ctx, reg);
       }
    }
@@ -445,7 +447,9 @@ iter_immediate(
 
    /* Check data type validity.
     */
-   if (imm->Immediate.DataType != TGSI_IMM_FLOAT32) {
+   if (imm->Immediate.DataType != TGSI_IMM_FLOAT32 &&
+       imm->Immediate.DataType != TGSI_IMM_UINT32 &&
+       imm->Immediate.DataType != TGSI_IMM_INT32) {
       report_error( ctx, "(%u): Invalid immediate data type", imm->Immediate.DataType );
       return TRUE;
    }
@@ -486,7 +490,7 @@ epilog(
       struct cso_hash_iter iter =
          cso_hash_first_node(ctx->regs_decl);
 
-      while (cso_hash_iter_is_null(iter)) {
+      while (!cso_hash_iter_is_null(iter)) {
          scan_register *reg = (scan_register *)cso_hash_iter_data(iter);
          if (!is_register_used(ctx, reg) && !is_ind_register_used(ctx, reg)) {
             report_warning( ctx, "%s[%u]: Register never used",
@@ -511,7 +515,8 @@ regs_hash_destroy(struct cso_hash *hash)
    while (!cso_hash_iter_is_null(iter)) {
       scan_register *reg = (scan_register *)cso_hash_iter_data(iter);
       iter = cso_hash_erase(hash, iter);
-      free(reg);
+      assert(reg->file < TGSI_FILE_COUNT);
+      FREE(reg);
    }
    cso_hash_delete(hash);
 }

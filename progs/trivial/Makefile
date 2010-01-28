@@ -119,6 +119,7 @@ SOURCES = \
 	tri-lit-material.c \
 	tri-mask-tri.c \
 	tri-orig.c \
+	tri-point-line-clipped.c \
 	tri-query.c \
 	tri-repeat.c \
 	tri-scissor-tri.c \
@@ -159,6 +160,7 @@ SOURCES = \
 	vbo-drawelements.c \
 	vbo-drawrange.c \
 	vp-array.c \
+	vp-array-hf.c \
 	vp-array-int.c \
 	vp-clip.c \
 	vp-line-clip.c \

@@ -124,16 +124,26 @@ dri_bo *brw_cache_data(struct brw_cache *cache,
 		       dri_bo **reloc_bufs,
 		       GLuint nr_reloc_bufs);
 
-dri_bo *brw_upload_cache( struct brw_cache *cache,
-			  enum brw_cache_id cache_id,
-			  const void *key,
-			  GLuint key_sz,
-			  dri_bo **reloc_bufs,
-			  GLuint nr_reloc_bufs,
-			  const void *data,
-			  GLuint data_sz,
-			  const void *aux,
-			  void *aux_return );
+drm_intel_bo *brw_upload_cache(struct brw_cache *cache,
+			       enum brw_cache_id cache_id,
+			       const void *key,
+			       GLuint key_sz,
+			       dri_bo **reloc_bufs,
+			       GLuint nr_reloc_bufs,
+			       const void *data,
+			       GLuint data_sz);
+
+drm_intel_bo *brw_upload_cache_with_auxdata(struct brw_cache *cache,
+					    enum brw_cache_id cache_id,
+					    const void *key,
+					    GLuint key_sz,
+					    dri_bo **reloc_bufs,
+					    GLuint nr_reloc_bufs,
+					    const void *data,
+					    GLuint data_sz,
+					    const void *aux,
+					    GLuint aux_sz,
+					    void *aux_return);
 
 dri_bo *brw_search_cache( struct brw_cache *cache,
 			  enum brw_cache_id cache_id,
@@ -151,7 +161,7 @@ void brw_state_cache_bo_delete(struct brw_cache *cache, dri_bo *bo);
 /***********************************************************************
  * brw_state_batch.c
  */
-#define BRW_BATCH_STRUCT(brw, s) intel_batchbuffer_data( brw->intel.batch, (s), sizeof(*(s)), IGNORE_CLIPRECTS)
+#define BRW_BATCH_STRUCT(brw, s) intel_batchbuffer_data( brw->intel.batch, (s), sizeof(*(s)))
 #define BRW_CACHED_BATCH_STRUCT(brw, s) brw_cached_batch_struct( brw, (s), sizeof(*(s)) )
 
 GLboolean brw_cached_batch_struct( struct brw_context *brw,

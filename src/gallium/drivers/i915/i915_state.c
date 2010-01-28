@@ -30,7 +30,6 @@
 
 
 #include "draw/draw_context.h"
-#include "pipe/internal/p_winsys_screen.h"
 #include "pipe/p_inlines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
@@ -38,7 +37,6 @@
 
 #include "i915_context.h"
 #include "i915_reg.h"
-#include "i915_state.h"
 #include "i915_state_inlines.h"
 #include "i915_fpc.h"
 
@@ -74,8 +72,6 @@ static unsigned translate_img_filter( unsigned filter )
       return FILTER_NEAREST;
    case PIPE_TEX_FILTER_LINEAR:
       return FILTER_LINEAR;
-   case PIPE_TEX_FILTER_ANISO:
-      return FILTER_ANISOTROPIC;
    default:
       assert(0);
       return FILTER_NEAREST;
@@ -107,13 +103,13 @@ i915_create_blend_state(struct pipe_context *pipe,
    struct i915_blend_state *cso_data = CALLOC_STRUCT( i915_blend_state );
 
    {
-      unsigned eqRGB  = blend->rgb_func;
-      unsigned srcRGB = blend->rgb_src_factor;
-      unsigned dstRGB = blend->rgb_dst_factor;
+      unsigned eqRGB  = blend->rt[0].rgb_func;
+      unsigned srcRGB = blend->rt[0].rgb_src_factor;
+      unsigned dstRGB = blend->rt[0].rgb_dst_factor;
 
-      unsigned eqA    = blend->alpha_func;
-      unsigned srcA   = blend->alpha_src_factor;
-      unsigned dstA   = blend->alpha_dst_factor;
+      unsigned eqA    = blend->rt[0].alpha_func;
+      unsigned srcA   = blend->rt[0].alpha_src_factor;
+      unsigned dstA   = blend->rt[0].alpha_dst_factor;
 
       /* Special handling for MIN/MAX filter modes handled at
        * state_tracker level.
@@ -150,22 +146,22 @@ i915_create_blend_state(struct pipe_context *pipe,
    if (blend->dither)
       cso_data->LIS5 |= S5_COLOR_DITHER_ENABLE;
 
-   if ((blend->colormask & PIPE_MASK_R) == 0)
+   if ((blend->rt[0].colormask & PIPE_MASK_R) == 0)
       cso_data->LIS5 |= S5_WRITEDISABLE_RED;
 
-   if ((blend->colormask & PIPE_MASK_G) == 0)
+   if ((blend->rt[0].colormask & PIPE_MASK_G) == 0)
       cso_data->LIS5 |= S5_WRITEDISABLE_GREEN;
 
-   if ((blend->colormask & PIPE_MASK_B) == 0)
+   if ((blend->rt[0].colormask & PIPE_MASK_B) == 0)
       cso_data->LIS5 |= S5_WRITEDISABLE_BLUE;
 
-   if ((blend->colormask & PIPE_MASK_A) == 0)
+   if ((blend->rt[0].colormask & PIPE_MASK_A) == 0)
       cso_data->LIS5 |= S5_WRITEDISABLE_ALPHA;
 
-   if (blend->blend_enable) {
-      unsigned funcRGB = blend->rgb_func;
-      unsigned srcRGB  = blend->rgb_src_factor;
-      unsigned dstRGB  = blend->rgb_dst_factor;
+   if (blend->rt[0].blend_enable) {
+      unsigned funcRGB = blend->rt[0].rgb_func;
+      unsigned srcRGB  = blend->rt[0].rgb_src_factor;
+      unsigned dstRGB  = blend->rt[0].rgb_dst_factor;
 
       cso_data->LIS6 |= (S6_CBUF_BLEND_ENABLE |
                          SRC_BLND_FACT(i915_translate_blend_factor(srcRGB)) |
@@ -221,6 +217,9 @@ i915_create_sampler_state(struct pipe_context *pipe,
    minFilt = translate_img_filter( sampler->min_img_filter );
    magFilt = translate_img_filter( sampler->mag_img_filter );
    
+   if (sampler->max_anisotropy > 1.0)
+      minFilt = magFilt = FILTER_ANISOTROPIC;
+
    if (sampler->max_anisotropy > 2.0) {
       cso->state[0] |= SS2_MAX_ANISO_4;
    }
@@ -517,7 +516,7 @@ static void i915_delete_vs_state(struct pipe_context *pipe, void *shader)
 
 static void i915_set_constant_buffer(struct pipe_context *pipe,
                                      uint shader, uint index,
-                                     const struct pipe_constant_buffer *buf)
+                                     struct pipe_buffer *buf)
 {
    struct i915_context *i915 = i915_context(pipe);
    struct pipe_screen *screen = pipe->screen;
@@ -537,13 +536,13 @@ static void i915_set_constant_buffer(struct pipe_context *pipe,
     */
    if (buf) {
       void *mapped;
-      if (buf->buffer && buf->buffer->size &&
-          (mapped = pipe_buffer_map(screen, buf->buffer,
+      if (buf->size &&
+          (mapped = pipe_buffer_map(screen, buf,
                                     PIPE_BUFFER_USAGE_CPU_READ))) {
-         memcpy(i915->current.constants[shader], mapped, buf->buffer->size);
-         pipe_buffer_unmap(screen, buf->buffer);
+         memcpy(i915->current.constants[shader], mapped, buf->size);
+         pipe_buffer_unmap(screen, buf);
          i915->current.num_user_constants[shader]
-            = buf->buffer->size / (4 * sizeof(float));
+            = buf->size / (4 * sizeof(float));
       }
       else {
          i915->current.num_user_constants[shader] = 0;
