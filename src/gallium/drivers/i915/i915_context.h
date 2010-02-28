@@ -232,6 +232,7 @@ struct i915_context
    struct i915_fragment_shader *fs;
 
    struct pipe_blend_color blend_color;
+   struct pipe_stencil_ref stencil_ref;
    struct pipe_clip_state clip;
    /* XXX unneded */
    struct pipe_buffer *constants[PIPE_SHADER_TYPES];
@@ -334,6 +335,11 @@ void i915_init_flush_functions( struct i915_context *i915 );
 void i915_init_string_functions( struct i915_context *i915 );
 
 
+/************************************************************************
+ * i915_context.c
+ */
+struct pipe_context *i915_create_context(struct pipe_screen *screen,
+					 void *priv);
 
 
 /***********************************************************************

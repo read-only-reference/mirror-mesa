@@ -114,6 +114,7 @@ struct cell_context
    struct spe_function logic_op;
 
    struct pipe_blend_color blend_color;
+   struct pipe_stencil_ref stencil_ref;
    struct pipe_clip_state clip;
    struct pipe_buffer *constants[2];
    struct pipe_framebuffer_state framebuffer;
@@ -188,8 +189,9 @@ cell_context(struct pipe_context *pipe)
 }
 
 
-extern struct pipe_context *
-cell_create_context(struct pipe_screen *screen, struct cell_winsys *cws);
+struct pipe_context *
+cell_create_context(struct pipe_screen *screen,
+                    void *priv );
 
 extern void
 cell_vertex_shader_queue_flush(struct draw_context *draw);

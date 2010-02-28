@@ -62,6 +62,8 @@ nv40_screen_get_param(struct pipe_screen *pscreen, int param)
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
 		return 0;
+	case PIPE_CAP_MAX_COMBINED_SAMPLERS:
+		return 16;
 	default:
 		NOUVEAU_ERR("Unknown PIPE_CAP %d\n", param);
 		return 0;
@@ -157,9 +159,9 @@ nv40_screen_destroy(struct pipe_screen *pscreen)
 			so_ref(NULL, &screen->state[i]);
 	}
 
-	nouveau_resource_free(&screen->vp_exec_heap);
-	nouveau_resource_free(&screen->vp_data_heap);
-	nouveau_resource_free(&screen->query_heap);
+	nouveau_resource_destroy(&screen->vp_exec_heap);
+	nouveau_resource_destroy(&screen->vp_data_heap);
+	nouveau_resource_destroy(&screen->query_heap);
 	nouveau_notifier_free(&screen->query);
 	nouveau_notifier_free(&screen->sync);
 	nouveau_grobj_free(&screen->curie);
@@ -196,6 +198,7 @@ nv40_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 	pscreen->get_param = nv40_screen_get_param;
 	pscreen->get_paramf = nv40_screen_get_paramf;
 	pscreen->is_format_supported = nv40_screen_surface_format_supported;
+	pscreen->context_create = nv40_create;
 
 	nv40_screen_init_miptree_functions(pscreen);
 	nv40_screen_init_transfer_functions(pscreen);

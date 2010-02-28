@@ -66,7 +66,7 @@ intel_flush_inline_primitive(struct intel_context *intel)
 
    assert(intel->prim.primitive != ~0);
 
-/*    _mesa_printf("/\n"); */
+/*    printf("/\n"); */
 
    if (used < 8)
       goto do_discard;
@@ -93,13 +93,12 @@ static void intel_start_inline(struct intel_context *intel, uint32_t prim)
 
    intel->no_batch_wrap = GL_TRUE;
 
-   /*_mesa_printf("%s *", __progname);*/
+   /*printf("%s *", __progname);*/
 
    /* Emit a slot which will be filled with the inline primitive
     * command later.
     */
-   BEGIN_BATCH(2);
-   OUT_BATCH(0);
+   BEGIN_BATCH(1);
 
    assert((intel->batch->dirty_state & (1<<1)) == 0);
 
@@ -111,7 +110,7 @@ static void intel_start_inline(struct intel_context *intel, uint32_t prim)
    ADVANCE_BATCH();
 
    intel->no_batch_wrap = GL_FALSE;
-/*    _mesa_printf(">"); */
+/*    printf(">"); */
 }
 
 static void intel_wrap_inline(struct intel_context *intel)
@@ -133,7 +132,7 @@ static GLuint *intel_extend_inline(struct intel_context *intel, GLuint dwords)
    if (intel_batchbuffer_space(intel->batch) < sz)
       intel_wrap_inline(intel);
 
-/*    _mesa_printf("."); */
+/*    printf("."); */
 
    intel->vtbl.assert_not_dirty(intel);
 
@@ -218,7 +217,7 @@ void intel_flush_prim(struct intel_context *intel)
    intel->prim.count = 0;
    offset = intel->prim.start_offset;
    intel->prim.start_offset = intel->prim.current_offset;
-   if (!intel->gen >= 3)
+   if (intel->gen < 3)
       intel->prim.start_offset = ALIGN(intel->prim.start_offset, 128);
    intel->prim.flush = NULL;
 

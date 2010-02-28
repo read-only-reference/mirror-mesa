@@ -51,22 +51,11 @@
 
 
 #ifdef HAVE_DIX_CONFIG_H
-
 #include <dix-config.h>
-#define PUBLIC
-
+#include "glapi/mesa.h"
 #else
-
 #include "main/glheader.h"
-
-#endif
-
 #include "main/compiler.h"
-
-#include <stdlib.h>
-#include <string.h>
-#ifdef DEBUG
-#include <assert.h>
 #endif
 
 #include "glapi/glapi.h"
@@ -501,7 +490,7 @@ _glapi_get_dispatch_table_size(void)
 void
 _glapi_check_table(const struct _glapi_table *table)
 {
-#ifdef EXTRA_DEBUG
+#if 0 /* Enable this for extra DEBUG */
    const GLuint entries = _glapi_get_dispatch_table_size();
    const void **tab = (const void **) table;
    GLuint i;

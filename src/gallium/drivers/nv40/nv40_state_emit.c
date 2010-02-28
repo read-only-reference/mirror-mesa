@@ -13,6 +13,7 @@ static struct nv40_state_entry *render_states[] = {
 	&nv40_state_blend,
 	&nv40_state_blend_colour,
 	&nv40_state_zsa,
+	&nv40_state_sr,
 	&nv40_state_viewport,
 	&nv40_state_vbo,
 	NULL
@@ -29,6 +30,7 @@ static struct nv40_state_entry *swtnl_states[] = {
 	&nv40_state_blend,
 	&nv40_state_blend_colour,
 	&nv40_state_zsa,
+	&nv40_state_sr,
 	&nv40_state_viewport,
 	&nv40_state_vtxfmt,
 	NULL
@@ -61,13 +63,15 @@ nv40_state_emit(struct nv40_context *nv40)
 	unsigned i;
 	uint64_t states;
 
-	if (nv40->pctx_id != screen->cur_pctx) {
+	/* XXX: race conditions
+	 */
+	if (nv40 != screen->cur_ctx) {
 		for (i = 0; i < NV40_STATE_MAX; i++) {
 			if (state->hw[i] && screen->state[i] != state->hw[i])
 				state->dirty |= (1ULL << i);
 		}
 
-		screen->cur_pctx = nv40->pctx_id;
+		screen->cur_ctx = nv40;
 	}
 
 	for (i = 0, states = state->dirty; states; i++) {

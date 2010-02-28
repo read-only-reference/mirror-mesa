@@ -35,8 +35,6 @@ normalized_coords
     Whether the texture coordinates are normalized. If normalized, they will
     always be in [0, 1]. If not, they will be in the range of each dimension
     of the loaded texture.
-prefilter
-    Cylindrical texcoord wrap enable per coord. Not exposed by most APIs.
 lod_bias
     The bias to apply to the level of detail.
 min_lod
@@ -47,4 +45,6 @@ border_color
     RGBA color used for out-of-bounds coordinates.
 max_anisotropy
     Maximum filtering to apply anisotropically to textures. Setting this to
-    1.0 effectively disables anisotropic filtering.
+    0 disables anisotropic filtering. Any other setting enables anisotropic
+    filtering, however it's not unexpected some drivers only will change their
+    filtering with a setting of 2 and higher.

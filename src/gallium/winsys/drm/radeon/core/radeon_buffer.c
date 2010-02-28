@@ -31,12 +31,13 @@
  */
 
 #include "radeon_buffer.h"
+#include "radeon_drm.h"
 
-#include "radeon_bo_gem.h"
-#include "softpipe/sp_texture.h"
-#include "r300_context.h"
 #include "util/u_format.h"
 #include "util/u_math.h"
+#include "util/u_memory.h"
+
+#include "radeon_bo_gem.h"
 #include <X11/Xutil.h>
 
 struct radeon_vl_context
@@ -218,9 +219,10 @@ static void radeon_buffer_set_tiling(struct radeon_winsys *ws,
                                      boolean microtiled,
                                      boolean macrotiled)
 {
+    struct radeon_winsys_priv *priv = ((struct radeon_winsys *)ws)->priv;
     struct radeon_pipe_buffer *radeon_buffer =
         (struct radeon_pipe_buffer*)buffer;
-    uint32_t flags = 0;
+    uint32_t flags = 0, old_flags, old_pitch;
 
     if (microtiled) {
         flags |= RADEON_BO_FLAGS_MICRO_TILE;
@@ -229,7 +231,17 @@ static void radeon_buffer_set_tiling(struct radeon_winsys *ws,
         flags |= RADEON_BO_FLAGS_MACRO_TILE;
     }
 
-    radeon_bo_set_tiling(radeon_buffer->bo, flags, pitch);
+    radeon_bo_get_tiling(radeon_buffer->bo, &old_flags, &old_pitch);
+
+    if (flags != old_flags || pitch != old_pitch) {
+        /* Tiling determines how DRM treats the buffer data.
+         * We must flush CS when changing it if the buffer is referenced. */
+        if (radeon_bo_is_referenced_by_cs(radeon_buffer->bo, priv->cs)) {
+            priv->flush_cb(priv->flush_data);
+        }
+
+        radeon_bo_set_tiling(radeon_buffer->bo, flags, pitch);
+    }
 }
 
 static void radeon_fence_reference(struct pipe_winsys *ws,
@@ -252,55 +264,6 @@ static int radeon_fence_finish(struct pipe_winsys *ws,
     return 0;
 }
 
-static void radeon_display_surface(struct pipe_winsys *pws,
-                                   struct pipe_surface *psurf,
-                                   struct radeon_vl_context *rvl_ctx)
-{
-    struct r300_texture *r300tex = (struct r300_texture *)(psurf->texture);
-    XImage *ximage;
-    void *data;
-
-    ximage = XCreateImage(rvl_ctx->display,
-                          XDefaultVisual(rvl_ctx->display, rvl_ctx->screen),
-                          XDefaultDepth(rvl_ctx->display, rvl_ctx->screen),
-                          ZPixmap, 0,   /* format, offset */
-                          NULL,         /* data */
-                          0, 0,         /* size */
-                          32,           /* bitmap_pad */
-                          0);           /* bytes_per_line */
-
-    assert(ximage->format);
-    assert(ximage->bitmap_unit);
-
-    data = pws->buffer_map(pws, r300tex->buffer, 0);
-
-    /* update XImage's fields */
-    ximage->data = data;
-    ximage->width = psurf->width;
-    ximage->height = psurf->height;
-    ximage->bytes_per_line = psurf->width * (ximage->bits_per_pixel >> 3);
-
-    XPutImage(rvl_ctx->display, rvl_ctx->drawable,
-              XDefaultGC(rvl_ctx->display, rvl_ctx->screen),
-              ximage, 0, 0, 0, 0, psurf->width, psurf->height);
-
-    XSync(rvl_ctx->display, 0);
-
-    ximage->data = NULL;
-    XDestroyImage(ximage);
-
-    pws->buffer_unmap(pws, r300tex->buffer);
-}
-
-static void radeon_flush_frontbuffer(struct pipe_winsys *pipe_winsys,
-                                     struct pipe_surface *pipe_surface,
-                                     void *context_private)
-{
-    struct radeon_vl_context *rvl_ctx;
-    rvl_ctx = (struct radeon_vl_context *) context_private;
-    radeon_display_surface(pipe_winsys, pipe_surface, rvl_ctx);
-}
-
 struct radeon_winsys* radeon_pipe_winsys(int fd)
 {
     struct radeon_winsys* radeon_ws;
@@ -319,7 +282,7 @@ struct radeon_winsys* radeon_pipe_winsys(int fd)
     radeon_ws->priv->fd = fd;
     radeon_ws->priv->bom = radeon_bo_manager_gem_ctor(fd);
 
-    radeon_ws->base.flush_frontbuffer = radeon_flush_frontbuffer;
+    radeon_ws->base.flush_frontbuffer = NULL; /* overriden by co-state tracker */
 
     radeon_ws->base.buffer_create = radeon_buffer_create;
     radeon_ws->base.user_buffer_create = radeon_buffer_user_create;

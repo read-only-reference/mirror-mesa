@@ -26,7 +26,7 @@
 #include "svga_cmd.h"
 
 #include "pipe/p_defines.h"
-#include "pipe/p_inlines.h"
+#include "util/u_inlines.h"
 #include "pipe/p_screen.h"
 #include "util/u_memory.h"
 #include "util/u_bitmask.h"
@@ -126,7 +126,8 @@ svga_is_buffer_referenced( struct pipe_context *pipe,
 }
 
 
-struct pipe_context *svga_context_create( struct pipe_screen *screen )
+struct pipe_context *svga_context_create( struct pipe_screen *screen,
+					  void *priv )
 {
    struct svga_screen *svgascreen = svga_screen(screen);
    struct svga_context *svga = NULL;
@@ -138,6 +139,7 @@ struct pipe_context *svga_context_create( struct pipe_screen *screen )
 
    svga->pipe.winsys = screen->winsys;
    svga->pipe.screen = screen;
+   svga->pipe.priv = priv;
    svga->pipe.destroy = svga_destroy;
    svga->pipe.clear = svga_clear;
 
@@ -215,7 +217,6 @@ struct pipe_context *svga_context_create( struct pipe_screen *screen )
    svga->state.hw_draw.num_views = 0;
 
    svga->dirty = ~0;
-   svga->state.white_fs_id = SVGA3D_INVALID_ID;
 
    LIST_INITHEAD(&svga->dirty_buffers);
 

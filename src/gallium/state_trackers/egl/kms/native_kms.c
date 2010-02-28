@@ -22,12 +22,14 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "pipe/p_screen.h"
 #include "pipe/p_context.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
+#include "util/u_inlines.h"
 #include "egllog.h"
 
 #include "native_kms.h"
@@ -497,7 +499,10 @@ kms_display_get_modes(struct native_display *ndpy,
       kmode->base.desc = kmode->mode.name;
       kmode->base.width = kmode->mode.hdisplay;
       kmode->base.height = kmode->mode.vdisplay;
-      kmode->base.refresh_rate = kmode->mode.vrefresh / 1000;
+      kmode->base.refresh_rate = kmode->mode.vrefresh;
+      /* not all kernels have vrefresh = refresh_rate * 1000 */
+      if (kmode->base.refresh_rate > 1000)
+         kmode->base.refresh_rate = (kmode->base.refresh_rate + 500) / 1000;
    }
 
    nmodes_return = malloc(count * sizeof(*nmodes_return));
@@ -573,17 +578,6 @@ kms_display_create_pbuffer_surface(struct native_display *ndpy,
    return &ksurf->base;
 }
 
-static struct pipe_context *
-kms_display_create_context(struct native_display *ndpy, void *context_private)
-{
-   struct kms_display *kdpy = kms_display(ndpy);
-   struct pipe_context *pctx;
-
-   pctx = kdpy->api->create_context(kdpy->api, kdpy->base.screen);
-   if (pctx)
-      pctx->priv = context_private;
-   return pctx;
-}
 
 static boolean
 kms_display_is_format_supported(struct native_display *ndpy,
@@ -812,7 +806,6 @@ kms_create_display(EGLNativeDisplayType dpy, struct drm_api *api)
 
    kdpy->base.destroy = kms_display_destroy;
    kdpy->base.get_configs = kms_display_get_configs;
-   kdpy->base.create_context = kms_display_create_context;
    kdpy->base.create_pbuffer_surface = kms_display_create_pbuffer_surface;
 
    kdpy->base.modeset = &kms_display_modeset;

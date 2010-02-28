@@ -26,7 +26,7 @@
  **************************************************************************/
 
 
-#include "pipe/p_inlines.h"
+#include "util/u_inlines.h"
 #include "util/u_memory.h"
 #include "util/u_string.h"
 
@@ -94,6 +94,10 @@ i915_get_param(struct pipe_screen *screen, int param)
 {
    switch (param) {
    case PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS:
+      return 8;
+   case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
+      return 0;
+   case PIPE_CAP_MAX_COMBINED_SAMPLERS:
       return 8;
    case PIPE_CAP_NPOT_TEXTURES:
       return 1;
@@ -293,6 +297,8 @@ i915_create_screen(struct intel_winsys *iws, uint pci_id)
    is->base.get_param = i915_get_param;
    is->base.get_paramf = i915_get_paramf;
    is->base.is_format_supported = i915_is_format_supported;
+
+   is->base.context_create = i915_create_context;
 
    is->base.fence_reference = i915_fence_reference;
    is->base.fence_signalled = i915_fence_signalled;

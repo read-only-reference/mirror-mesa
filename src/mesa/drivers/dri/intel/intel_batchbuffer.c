@@ -104,7 +104,8 @@ do_flush_locked(struct intel_batchbuffer *batch, GLuint used)
    batch->map = NULL;
    batch->ptr = NULL;
 
-   dri_bo_exec(batch->buf, used, NULL, 0, (x_off & 0xffff) | (y_off << 16));
+   if (!intel->no_hw)
+      dri_bo_exec(batch->buf, used, NULL, 0, (x_off & 0xffff) | (y_off << 16));
 
    if (INTEL_DEBUG & DEBUG_BATCH) {
       dri_bo_map(batch->buf, GL_FALSE);
@@ -158,9 +159,10 @@ _intel_batchbuffer_flush(struct intel_batchbuffer *batch, const char *file,
    }
 
    /* Mark the end of the buffer. */
-   *(GLuint *) (batch->ptr) = MI_BATCH_BUFFER_END; /* noop */
+   *(GLuint *) (batch->ptr) = MI_BATCH_BUFFER_END;
    batch->ptr += 4;
    used = batch->ptr - batch->map;
+   assert (used <= batch->buf->size);
 
    /* Workaround for recursive batchbuffer flushing: If the window is
     * moved, we can get into a case where we try to flush during a
@@ -209,8 +211,8 @@ intel_batchbuffer_emit_reloc(struct intel_batchbuffer *batch,
    int ret;
 
    if (batch->ptr - batch->map > batch->buf->size)
-    _mesa_printf ("bad relocation ptr %p map %p offset %d size %d\n",
-		  batch->ptr, batch->map, batch->ptr - batch->map, batch->buf->size);
+    printf ("bad relocation ptr %p map %p offset %d size %lu\n",
+	    batch->ptr, batch->map, batch->ptr - batch->map, batch->buf->size);
    ret = dri_bo_emit_reloc(batch->buf, read_domains, write_domain,
 			   delta, batch->ptr - batch->map, buffer);
 

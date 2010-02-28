@@ -1,11 +1,11 @@
 #include "pipe/p_state.h"
 #include "pipe/p_defines.h"
-#include "pipe/p_inlines.h"
+#include "util/u_inlines.h"
 #include "util/u_format.h"
 #include "util/u_math.h"
 
 #include "nv30_context.h"
-#include "../nv04/nv04_surface_2d.h"
+#include "../nouveau/nv04_surface_2d.h"
 
 static void
 nv30_miptree_layout(struct nv30_miptree *nv30mt)

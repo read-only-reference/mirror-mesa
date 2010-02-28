@@ -37,6 +37,7 @@
 #include "main/context.h"
 #include "main/fbobject.h"
 #include "main/framebuffer.h"
+#include "main/macros.h"
 #include "main/renderbuffer.h"
 
 #include "pipe/p_context.h"
@@ -50,26 +51,8 @@
 
 #include "util/u_format.h"
 #include "util/u_rect.h"
+#include "util/u_inlines.h"
 
-
-/**
- * Compute the renderbuffer's Red/Green/EtcBit fields from the pipe format.
- */
-static int
-init_renderbuffer_bits(struct st_renderbuffer *strb,
-                       enum pipe_format pipeFormat)
-{
-   struct pipe_format_info info;
-
-   if (!st_get_format_info( pipeFormat, &info )) {
-      assert( 0 );
-   }
-
-   strb->Base.Format = info.mesa_format;
-   strb->Base.DataType = st_format_datatype(pipeFormat);
-
-   return info.size;
-}
 
 /**
  * gl_renderbuffer::AllocStorage()
@@ -81,33 +64,34 @@ st_renderbuffer_alloc_storage(GLcontext * ctx, struct gl_renderbuffer *rb,
                               GLenum internalFormat,
                               GLuint width, GLuint height)
 {
-   struct pipe_context *pipe = ctx->st->pipe;
+   struct pipe_screen *screen = ctx->st->pipe->screen;
    struct st_renderbuffer *strb = st_renderbuffer(rb);
    enum pipe_format format;
 
    if (strb->format != PIPE_FORMAT_NONE)
       format = strb->format;
    else
-      format = st_choose_renderbuffer_format(pipe->screen, internalFormat);
+      format = st_choose_renderbuffer_format(screen, internalFormat);
       
    /* init renderbuffer fields */
    strb->Base.Width  = width;
    strb->Base.Height = height;
-   init_renderbuffer_bits(strb, format);
+   strb->Base.Format = st_pipe_format_to_mesa_format(format);
+   strb->Base.DataType = st_format_datatype(format);
 
    strb->defined = GL_FALSE;  /* undefined contents now */
 
-   if(strb->software) {
+   if (strb->software) {
       size_t size;
       
-      _mesa_free(strb->data);
+      free(strb->data);
 
       assert(strb->format != PIPE_FORMAT_NONE);
       
       strb->stride = util_format_get_stride(strb->format, width);
       size = util_format_get_2d_size(strb->format, strb->stride, height);
       
-      strb->data = _mesa_malloc(size);
+      strb->data = malloc(size);
       
       return strb->data != NULL;
    }
@@ -147,16 +131,15 @@ st_renderbuffer_alloc_storage(GLcontext * ctx, struct gl_renderbuffer *rb,
                        PIPE_BUFFER_USAGE_CPU_WRITE);
 #endif
 
-      strb->texture = pipe->screen->texture_create( pipe->screen,
-                                                    &template );
+      strb->texture = screen->texture_create(screen, &template);
 
       if (!strb->texture) 
          return FALSE;
 
-      strb->surface = pipe->screen->get_tex_surface( pipe->screen,
-                                                     strb->texture,
-                                                     0, 0, 0,
-                                                     surface_usage );
+      strb->surface = screen->get_tex_surface(screen,
+                                              strb->texture,
+                                              0, 0, 0,
+                                              surface_usage);
       if (strb->surface) {
          assert(strb->surface->texture);
          assert(strb->surface->format);
@@ -179,8 +162,8 @@ st_renderbuffer_delete(struct gl_renderbuffer *rb)
    ASSERT(strb);
    pipe_surface_reference(&strb->surface, NULL);
    pipe_texture_reference(&strb->texture, NULL);
-   _mesa_free(strb->data);
-   _mesa_free(strb);
+   free(strb->data);
+   free(strb);
 }
 
 
@@ -249,8 +232,9 @@ st_new_renderbuffer_fb(enum pipe_format format, int samples, boolean sw)
    _mesa_init_renderbuffer(&strb->Base, 0);
    strb->Base.ClassID = 0x4242; /* just a unique value */
    strb->Base.NumSamples = samples;
+   strb->Base.Format = st_pipe_format_to_mesa_format(format);
+   strb->Base.DataType = st_format_datatype(format);
    strb->format = format;
-   init_renderbuffer_bits(strb, format);
    strb->software = sw;
    
    switch (format) {
@@ -284,7 +268,7 @@ st_new_renderbuffer_fb(enum pipe_format format, int samples, boolean sw)
    default:
       _mesa_problem(NULL,
 		    "Unexpected format in st_new_renderbuffer_fb");
-      _mesa_free(strb);
+      free(strb);
       return NULL;
    }
 
@@ -339,11 +323,16 @@ st_render_texture(GLcontext *ctx,
    struct gl_renderbuffer *rb;
    struct pipe_texture *pt = st_get_texobj_texture(att->Texture);
    struct st_texture_object *stObj;
-   const struct gl_texture_image *texImage =
-      att->Texture->Image[att->CubeMapFace][att->TextureLevel];
+   const struct gl_texture_image *texImage;
+   GLint pt_level;
 
+   /* When would this fail?  Perhaps assert? */
    if (!pt) 
       return;
+
+   /* The first gallium texture level = Mesa BaseLevel */
+   pt_level = MAX2(0, (GLint) att->TextureLevel - att->Texture->BaseLevel);
+   texImage = att->Texture->Image[att->CubeMapFace][pt_level];
 
    /* create new renderbuffer which wraps the texture image */
    rb = st_new_renderbuffer(ctx, 0);
@@ -364,7 +353,7 @@ st_render_texture(GLcontext *ctx,
 
    /* point renderbuffer at texobject */
    strb->rtt = stObj;
-   strb->rtt_level = att->TextureLevel;
+   strb->rtt_level = pt_level;
    strb->rtt_face = att->CubeMapFace;
    strb->rtt_slice = att->Zoffset;
 
@@ -379,6 +368,8 @@ st_render_texture(GLcontext *ctx,
 
    pipe_surface_reference(&strb->surface, NULL);
 
+   assert(strb->rtt_level <= strb->texture->last_level);
+
    /* new surface for rendering into the texture */
    strb->surface = screen->get_tex_surface(screen,
                                            strb->texture,
@@ -388,7 +379,8 @@ st_render_texture(GLcontext *ctx,
                                            PIPE_BUFFER_USAGE_GPU_READ |
                                            PIPE_BUFFER_USAGE_GPU_WRITE);
 
-   init_renderbuffer_bits(strb, pt->format);
+   strb->Base.Format = st_pipe_format_to_mesa_format(pt->format);
+   strb->Base.DataType = st_format_datatype(pt->format);
 
    /*
    printf("RENDER TO TEXTURE obj=%p pt=%p surf=%p  %d x %d\n",

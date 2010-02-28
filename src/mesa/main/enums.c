@@ -5181,7 +5181,7 @@ typedef int (*cfunc)(const void *, const void *);
  */
 static int compar_name( const char *a, const enum_elt *b )
 {
-   return _mesa_strcmp( a, & enum_string_table[ b->offset ] );
+   return strcmp( a, & enum_string_table[ b->offset ] );
 }
 
 /**
@@ -5216,7 +5216,7 @@ const char *_mesa_lookup_enum_by_nr( int nr )
    }
    else {
       /* this is not re-entrant safe, no big deal here */
-      _mesa_sprintf(token_tmp, "0x%x", nr);
+      sprintf(token_tmp, "0x%x", nr);
       return token_tmp;
    }
 }

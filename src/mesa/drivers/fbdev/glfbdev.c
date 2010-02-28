@@ -330,7 +330,7 @@ glFBDevGetProcAddress( const char *procName )
    };
    const struct name_address *entry;
    for (entry = functions; entry->name; entry++) {
-      if (_mesa_strcmp(entry->name, procName) == 0) {
+      if (strcmp(entry->name, procName) == 0) {
          return entry->func;
       }
    }
@@ -392,7 +392,7 @@ glFBDevCreateVisual( const struct fb_fix_screeninfo *fixInfo,
          break;
       default:
          /* unexpected token */
-         _mesa_free(vis);
+         free(vis);
          return NULL;
       }
    }
@@ -431,7 +431,7 @@ glFBDevCreateVisual( const struct fb_fix_screeninfo *fixInfo,
          }
          else {
             _mesa_problem(NULL, "Unsupported fbdev RGB visual/bitdepth!\n");
-            _mesa_free(vis);
+            free(vis);
             return NULL;
          }
       }
@@ -445,7 +445,7 @@ glFBDevCreateVisual( const struct fb_fix_screeninfo *fixInfo,
       }
       else {
          _mesa_problem(NULL, "Unsupported fbdev CI visual/bitdepth!\n");
-         _mesa_free(vis);
+         free(vis);
          return NULL;
       }
    }
@@ -457,7 +457,7 @@ glFBDevCreateVisual( const struct fb_fix_screeninfo *fixInfo,
                                 accumBlueBits, accumAlphaBits,
                                 numSamples)) {
       /* something was invalid */
-      _mesa_free(vis);
+      free(vis);
       return NULL;
    }
 
@@ -469,7 +469,7 @@ void
 glFBDevDestroyVisual( GLFBDevVisualPtr visual )
 {
    if (visual)
-      _mesa_free(visual);
+      free(visual);
 }
 
 
@@ -488,9 +488,9 @@ delete_renderbuffer(struct gl_renderbuffer *rb)
 {
    struct GLFBDevRenderbufferRec *frb = (struct GLFBDevRenderbufferRec *) rb;
    if (frb->mallocedBuffer) {
-      _mesa_free(frb->Base.Data);
+      free(frb->Base.Data);
    }
-   _mesa_free(frb);
+   free(frb);
 }
 
 
@@ -626,7 +626,7 @@ glFBDevCreateBuffer( const struct fb_fix_screeninfo *fixInfo,
       return NULL;
 
    /* basic framebuffer setup */
-   _mesa_initialize_framebuffer(&buf->glframebuffer, &visual->glvisual);
+   _mesa_initialize_window_framebuffer(&buf->glframebuffer, &visual->glvisual);
    /* add front renderbuffer */
    frontrb = new_glfbdev_renderbuffer(frontBuffer, visual);
    _mesa_add_renderbuffer(&buf->glframebuffer, BUFFER_FRONT_LEFT,
@@ -636,10 +636,10 @@ glFBDevCreateBuffer( const struct fb_fix_screeninfo *fixInfo,
       const int malloced = !backBuffer;
       if (malloced) {
          /* malloc a back buffer */
-         backBuffer = _mesa_malloc(size);
+         backBuffer = malloc(size);
          if (!backBuffer) {
             _mesa_free_framebuffer_data(&buf->glframebuffer);
-            _mesa_free(buf);
+            free(buf);
             return NULL;
          }
       }
@@ -742,7 +742,7 @@ glFBDevSwapBuffers( GLFBDevBufferPtr buffer )
 
    ASSERT(frontrb->Base.Data);
    ASSERT(backrb->Base.Data);
-   _mesa_memcpy(frontrb->Base.Data, backrb->Base.Data, buffer->size);
+   memcpy(frontrb->Base.Data, backrb->Base.Data, buffer->size);
 }
 
 
@@ -769,7 +769,7 @@ glFBDevCreateContext( const GLFBDevVisualPtr visual, GLFBDevContextPtr share )
    if (!_mesa_initialize_context(&ctx->glcontext, &visual->glvisual,
                                  share ? &share->glcontext : NULL,
                                  &functions, (void *) ctx)) {
-      _mesa_free(ctx);
+      free(ctx);
       return NULL;
    }
 
@@ -818,7 +818,7 @@ glFBDevDestroyContext( GLFBDevContextPtr context )
          _mesa_make_current(NULL, NULL, NULL);
       }
       _mesa_free_context_data(&context->glcontext);
-      _mesa_free(context);
+      free(context);
    }
 }
 

@@ -29,7 +29,6 @@
 #include "pipe/p_context.h"
 #include "util/u_memory.h"
 
-#include "id_public.h"
 #include "id_context.h"
 #include "id_objects.h"
 
@@ -390,6 +389,17 @@ identity_set_blend_color(struct pipe_context *_pipe,
 }
 
 static void
+identity_set_stencil_ref(struct pipe_context *_pipe,
+                         const struct pipe_stencil_ref *stencil_ref)
+{
+   struct identity_context *id_pipe = identity_context(_pipe);
+   struct pipe_context *pipe = id_pipe->pipe;
+
+   pipe->set_stencil_ref(pipe,
+                         stencil_ref);
+}
+
+static void
 identity_set_clip_state(struct pipe_context *_pipe,
                         const struct pipe_clip_state *clip)
 {
@@ -692,7 +702,7 @@ identity_context_create(struct pipe_screen *_screen, struct pipe_context *pipe)
 
    id_pipe->base.winsys = NULL;
    id_pipe->base.screen = _screen;
-   id_pipe->base.priv = pipe->priv;
+   id_pipe->base.priv = pipe->priv; /* expose wrapped data */
    id_pipe->base.draw = NULL;
 
    id_pipe->base.destroy = identity_destroy;
@@ -724,6 +734,7 @@ identity_context_create(struct pipe_screen *_screen, struct pipe_context *pipe)
    id_pipe->base.bind_vs_state = identity_bind_vs_state;
    id_pipe->base.delete_vs_state = identity_delete_vs_state;
    id_pipe->base.set_blend_color = identity_set_blend_color;
+   id_pipe->base.set_stencil_ref = identity_set_stencil_ref;
    id_pipe->base.set_clip_state = identity_set_clip_state;
    id_pipe->base.set_constant_buffer = identity_set_constant_buffer;
    id_pipe->base.set_framebuffer_state = identity_set_framebuffer_state;

@@ -1,6 +1,8 @@
 #ifndef __NV30_CONTEXT_H__
 #define __NV30_CONTEXT_H__
 
+#include <stdio.h>
+
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_state.h"
@@ -8,6 +10,7 @@
 
 #include "util/u_memory.h"
 #include "util/u_math.h"
+#include "util/u_inlines.h"
 
 #include "draw/draw_vertex.h"
 
@@ -58,7 +61,8 @@ enum nv30_state_index {
 	NV30_STATE_VTXBUF = 31,
 	NV30_STATE_VTXFMT = 32,
 	NV30_STATE_VTXATTR = 33,
-	NV30_STATE_MAX = 34
+	NV30_STATE_SR = 34,
+	NV30_STATE_MAX = 35
 };
 
 #include "nv30_screen.h"
@@ -76,6 +80,7 @@ enum nv30_state_index {
 #define NV30_NEW_FRAGPROG	(1 << 10)
 #define NV30_NEW_ARRAYS		(1 << 11)
 #define NV30_NEW_UCP		(1 << 12)
+#define NV30_NEW_SR		(1 << 13)
 
 struct nv30_rasterizer_state {
 	struct pipe_rasterizer_state pipe;
@@ -108,7 +113,6 @@ struct nv30_context {
 
 	struct nouveau_winsys *nvws;
 	struct nv30_screen *screen;
-	unsigned pctx_id;
 
 	struct draw_context *draw;
 
@@ -127,6 +131,7 @@ struct nv30_context {
 	struct nv30_zsa_state *zsa;
 	struct nv30_blend_state *blend;
 	struct pipe_blend_color blend_colour;
+	struct pipe_stencil_ref stencil_ref;
 	struct pipe_viewport_state viewport;
 	struct pipe_framebuffer_state framebuffer;
 	struct pipe_buffer *idxbuf;
@@ -192,6 +197,7 @@ extern struct nv30_state_entry nv30_state_viewport;
 extern struct nv30_state_entry nv30_state_framebuffer;
 extern struct nv30_state_entry nv30_state_fragtex;
 extern struct nv30_state_entry nv30_state_vbo;
+extern struct nv30_state_entry nv30_state_sr;
 
 /* nv30_vbo.c */
 extern void nv30_draw_arrays(struct pipe_context *, unsigned mode,
@@ -205,5 +211,9 @@ extern void nv30_draw_elements(struct pipe_context *pipe,
 /* nv30_clear.c */
 extern void nv30_clear(struct pipe_context *pipe, unsigned buffers,
 		       const float *rgba, double depth, unsigned stencil);
+
+/* nv30_context.c */
+struct pipe_context *
+nv30_create(struct pipe_screen *pscreen, void *priv);
 
 #endif

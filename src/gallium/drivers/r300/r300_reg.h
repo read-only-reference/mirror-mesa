@@ -113,10 +113,13 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 	/* index size - when not set the indices are assumed to be 16 bit */
 #	define	R300_VAP_VF_CNTL__INDEX_SIZE_32bit              (1<<11)
+#       define R500_VAP_VF_CNTL__USE_ALT_NUM_VERTS          (1<<14)
 	/* number of vertices */
 #	define	R300_VAP_VF_CNTL__NUM_VERTICES__SHIFT           16
 
 #define R500_VAP_INDEX_OFFSET		    0x208c
+
+#define R500_VAP_ALT_NUM_VERTICES                           0x2088
 
 #define R300_VAP_OUTPUT_VTX_FMT_0           0x2090
 #       define R300_VAP_OUTPUT_VTX_FMT_0__POS_PRESENT     (1<<0)
@@ -244,6 +247,9 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R300_DATA_TYPE_SHORT_4                   7
 #       define R300_DATA_TYPE_VECTOR_3_TTT              8
 #       define R300_DATA_TYPE_VECTOR_3_EET              9
+#       define R300_DATA_TYPE_FLOAT_8                   10
+#       define R300_DATA_TYPE_FLT16_2                   11
+#       define R300_DATA_TYPE_FLT16_4                   12
 #       define R300_SKIP_DWORDS_SHIFT                   4
 #       define R300_DST_VEC_LOC_SHIFT                   8
 #       define R300_LAST_VEC                            (1 << 13)

@@ -113,6 +113,15 @@ void st_init_limits(struct st_context *st)
       = _maxf(1.0f, screen->get_paramf(screen, PIPE_CAP_MAX_POINT_WIDTH));
    c->MaxPointSizeAA
       = _maxf(1.0f, screen->get_paramf(screen, PIPE_CAP_MAX_POINT_WIDTH_AA));
+   /* called after _mesa_create_context/_mesa_init_point, fix default user
+    * settable max point size up
+    */
+   st->ctx->Point.MaxSize = MAX2(c->MaxPointSize, c->MaxPointSizeAA);
+   /* these are not queryable. Note that GL basically mandates a 1.0 minimum
+    * for non-aa sizes, but we can go down to 0.0 for aa points.
+    */
+   c->MinPointSize = 1.0f;
+   c->MinPointSizeAA = 0.0f;
 
    c->MaxTextureMaxAnisotropy
       = _maxf(2.0f, screen->get_paramf(screen, PIPE_CAP_MAX_TEXTURE_ANISOTROPY));
@@ -290,8 +299,12 @@ void st_init_extensions(struct st_context *st)
 
    /* s3tc support */
    if (screen->is_format_supported(screen, PIPE_FORMAT_DXT5_RGBA,
-                                   PIPE_TEXTURE_2D, 
-                                   PIPE_TEXTURE_USAGE_SAMPLER, 0)) {
+                                   PIPE_TEXTURE_2D,
+                                   PIPE_TEXTURE_USAGE_SAMPLER, 0) &&
+       (ctx->Mesa_DXTn ||
+        screen->is_format_supported(screen, PIPE_FORMAT_DXT5_RGBA,
+                                    PIPE_TEXTURE_2D,
+                                    PIPE_TEXTURE_USAGE_RENDER_TARGET, 0))) {
       ctx->Extensions.EXT_texture_compression_s3tc = GL_TRUE;
       ctx->Extensions.S3_s3tc = GL_TRUE;
    }

@@ -1,7 +1,6 @@
 
 #include "context.h"
 #include "colormac.h"
-#include "fbobject.h"
 #include "texfetch.h"
 #include "texrender.h"
 #include "renderbuffer.h"
@@ -414,7 +413,7 @@ static void
 delete_texture_wrapper(struct gl_renderbuffer *rb)
 {
    ASSERT(rb->RefCount == 0);
-   _mesa_free(rb);
+   free(rb);
 }
 
 
@@ -496,21 +495,24 @@ update_wrapper(GLcontext *ctx, const struct gl_renderbuffer_attachment *att)
    if (trb->TexImage->TexFormat == MESA_FORMAT_Z24_S8) {
       trb->Base.Format = MESA_FORMAT_Z24_S8;
       trb->Base.DataType = GL_UNSIGNED_INT_24_8_EXT;
+      trb->Base._BaseFormat = GL_DEPTH_STENCIL;
    }
    else if (trb->TexImage->TexFormat == MESA_FORMAT_Z16) {
       trb->Base.Format = MESA_FORMAT_Z16;
       trb->Base.DataType = GL_UNSIGNED_SHORT;
+      trb->Base._BaseFormat = GL_DEPTH_STENCIL;
    }
    else if (trb->TexImage->TexFormat == MESA_FORMAT_Z32) {
       trb->Base.Format = MESA_FORMAT_Z32;
       trb->Base.DataType = GL_UNSIGNED_INT;
+      trb->Base._BaseFormat = GL_DEPTH_COMPONENT;
    }
    else {
       trb->Base.Format = trb->TexImage->TexFormat;
       trb->Base.DataType = CHAN_TYPE;
+      trb->Base._BaseFormat = GL_RGBA;
    }
    trb->Base.Data = trb->TexImage->Data;
-   trb->Base._BaseFormat = _mesa_base_fbo_format(ctx, trb->Base.InternalFormat);
 }
 
 

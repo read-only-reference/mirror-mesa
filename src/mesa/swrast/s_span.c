@@ -784,13 +784,46 @@ clip_span( GLcontext *ctx, SWspan *span )
           * For arrays of values, shift them left.
           */
          for (i = 0; i < FRAG_ATTRIB_MAX; i++) {
-            if (span->arrayAttribs & (1 << i)) {
-               /* shift array elements left by 'leftClip' */
-               _mesa_memcpy(span->array->attribs[i],
-                            span->array->attribs[i] + leftClip,
-                            (n - leftClip) * 4 * sizeof(GLfloat));
+            if (span->interpMask & (1 << i)) {
+               GLuint j;
+               for (j = 0; j < 4; j++) {
+                  span->attrStart[i][j] += leftClip * span->attrStepX[i][j];
+               }
             }
          }
+
+         span->red += leftClip * span->redStep;
+         span->green += leftClip * span->greenStep;
+         span->blue += leftClip * span->blueStep;
+         span->alpha += leftClip * span->alphaStep;
+         span->index += leftClip * span->indexStep;
+         span->z += leftClip * span->zStep;
+         span->intTex[0] += leftClip * span->intTexStep[0];
+         span->intTex[1] += leftClip * span->intTexStep[1];
+
+#define SHIFT_ARRAY(ARRAY, SHIFT, LEN) \
+         memcpy(ARRAY, ARRAY + (SHIFT), (LEN) * sizeof(ARRAY[0]))
+
+         for (i = 0; i < FRAG_ATTRIB_MAX; i++) {
+            if (span->arrayAttribs & (1 << i)) {
+               /* shift array elements left by 'leftClip' */
+               SHIFT_ARRAY(span->array->attribs[i], leftClip, n - leftClip);
+            }
+         }
+
+         SHIFT_ARRAY(span->array->mask, leftClip, n - leftClip);
+         SHIFT_ARRAY(span->array->rgba8, leftClip, n - leftClip);
+         SHIFT_ARRAY(span->array->rgba16, leftClip, n - leftClip);
+         SHIFT_ARRAY(span->array->x, leftClip, n - leftClip);
+         SHIFT_ARRAY(span->array->y, leftClip, n - leftClip);
+         SHIFT_ARRAY(span->array->z, leftClip, n - leftClip);
+         SHIFT_ARRAY(span->array->index, leftClip, n - leftClip);
+         for (i = 0; i < MAX_TEXTURE_COORD_UNITS; i++) {
+            SHIFT_ARRAY(span->array->lambda[i], leftClip, n - leftClip);
+         }
+         SHIFT_ARRAY(span->array->coverage, leftClip, n - leftClip);
+
+#undef SHIFT_ARRAY
 
          span->leftClip = leftClip;
          span->x = xmin;
@@ -836,7 +869,7 @@ _swrast_write_index_span( GLcontext *ctx, SWspan *span)
       span->writeAll = GL_FALSE;
    }
    else {
-      _mesa_memset(span->array->mask, 1, span->end);
+      memset(span->array->mask, 1, span->end);
       span->writeAll = GL_TRUE;
    }
 
@@ -960,8 +993,8 @@ _swrast_write_index_span( GLcontext *ctx, SWspan *span)
 
          if (numBuffers > 1) {
             /* save indexes for second, third renderbuffer writes */
-            _mesa_memcpy(indexSave, span->array->index,
-                         span->end * sizeof(indexSave[0]));
+            memcpy(indexSave, span->array->index,
+                   span->end * sizeof(indexSave[0]));
          }
 
          if (ctx->Color.IndexLogicOpEnabled) {
@@ -1040,8 +1073,8 @@ _swrast_write_index_span( GLcontext *ctx, SWspan *span)
 
          if (buf + 1 < numBuffers) {
             /* restore original span values */
-            _mesa_memcpy(span->array->index, indexSave,
-                         span->end * sizeof(indexSave[0]));
+            memcpy(span->array->index, indexSave,
+                   span->end * sizeof(indexSave[0]));
          }
       } /* for buf */
    }
@@ -1305,7 +1338,7 @@ _swrast_write_rgba_span( GLcontext *ctx, SWspan *span)
       span->writeAll = GL_FALSE;
    }
    else {
-      _mesa_memset(span->array->mask, 1, span->end);
+      memset(span->array->mask, 1, span->end);
       span->writeAll = GL_TRUE;
    }
 
@@ -1477,8 +1510,8 @@ _swrast_write_rgba_span( GLcontext *ctx, SWspan *span)
 
             if (!multiFragOutputs && numBuffers > 1) {
                /* save colors for second, third renderbuffer writes */
-               _mesa_memcpy(rgbaSave, span->array->rgba,
-                            4 * span->end * sizeof(GLchan));
+               memcpy(rgbaSave, span->array->rgba,
+                      4 * span->end * sizeof(GLchan));
             }
 
             ASSERT(rb->_BaseFormat == GL_RGBA || rb->_BaseFormat == GL_RGB);
@@ -1511,8 +1544,8 @@ _swrast_write_rgba_span( GLcontext *ctx, SWspan *span)
 
             if (!multiFragOutputs && numBuffers > 1) {
                /* restore original span values */
-               _mesa_memcpy(span->array->rgba, rgbaSave,
-                            4 * span->end * sizeof(GLchan));
+               memcpy(span->array->rgba, rgbaSave,
+                      4 * span->end * sizeof(GLchan));
             }
 
          } /* if rb */
@@ -1546,7 +1579,7 @@ _swrast_read_rgba_span( GLcontext *ctx, struct gl_renderbuffer *rb,
    if (y < 0 || y >= bufHeight || x + (GLint) n < 0 || x >= bufWidth) {
       /* completely above, below, or right */
       /* XXX maybe leave rgba values undefined? */
-      _mesa_bzero(rgba, 4 * n * sizeof(GLchan));
+      memset(rgba, 0, 4 * n * sizeof(GLchan));
    }
    else {
       GLint skip, length;
@@ -1609,7 +1642,7 @@ _swrast_read_index_span( GLcontext *ctx, struct gl_renderbuffer *rb,
 
    if (y < 0 || y >= bufHeight || x + (GLint) n < 0 || x >= bufWidth) {
       /* completely above, below, or right */
-      _mesa_bzero(index, n * sizeof(GLuint));
+      memset(index, 0, n * sizeof(GLuint));
    }
    else {
       GLint skip, length;

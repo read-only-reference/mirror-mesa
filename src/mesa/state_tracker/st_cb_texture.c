@@ -57,7 +57,7 @@
 
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
-#include "pipe/p_inlines.h"
+#include "util/u_inlines.h"
 #include "pipe/p_shader_tokens.h"
 #include "util/u_tile.h"
 #include "util/u_blit.h"
@@ -543,27 +543,25 @@ st_TexImage(GLcontext * ctx,
       _mesa_align_free(texImage->Data);
    }
 
-   if (width == 0 || height == 0 || depth == 0) {
-      /* stop after freeing old image */
-      return;
-   }
-
-   /* If this is the only mipmap level in the texture, could call
-    * bmBufferData with NULL data to free the old block and avoid
-    * waiting on any outstanding fences.
+   /*
+    * See if the new image is somehow incompatible with the existing
+    * mipmap.  If so, free the old mipmap.
     */
    if (stObj->pt) {
       if (stObj->teximage_realloc ||
           level > (GLint) stObj->pt->last_level ||
-          (stObj->pt->last_level == level &&
-           stObj->pt->target != PIPE_TEXTURE_CUBE &&
-           !st_texture_match_image(stObj->pt, &stImage->base,
-                                   stImage->face, stImage->level))) {
+          !st_texture_match_image(stObj->pt, &stImage->base,
+                                  stImage->face, stImage->level)) {
          DBG("release it\n");
          pipe_texture_reference(&stObj->pt, NULL);
          assert(!stObj->pt);
          stObj->teximage_realloc = FALSE;
       }
+   }
+
+   if (width == 0 || height == 0 || depth == 0) {
+      /* stop after freeing old image */
+      return;
    }
 
    if (!stObj->pt) {
@@ -1321,7 +1319,7 @@ fallback_copy_texsubimage(GLcontext *ctx, GLenum target, GLint level,
    else {
       /* RGBA format */
       GLfloat *tempSrc =
-         (GLfloat *) _mesa_malloc(width * height * 4 * sizeof(GLfloat));
+         (GLfloat *) malloc(width * height * 4 * sizeof(GLfloat));
 
       if (tempSrc && texDest) {
          const GLint dims = 2;
@@ -1361,7 +1359,7 @@ fallback_copy_texsubimage(GLcontext *ctx, GLenum target, GLint level,
       }
 
       if (tempSrc)
-         _mesa_free(tempSrc);
+         free(tempSrc);
    }
 
    st_texture_image_unmap(ctx->st, stImage);
@@ -1719,18 +1717,15 @@ copy_image_data_to_texture(struct st_context *st,
       st_texture_image_copy(st->pipe,
                             stObj->pt, dstLevel,  /* dest texture, level */
                             stImage->pt, /* src texture */
-                            stImage->face
-                            );
+                            stImage->face);
 
       pipe_texture_reference(&stImage->pt, NULL);
    }
    else if (stImage->base.Data) {
       /* More straightforward upload.  
        */
-
       st_teximage_flush_before_map(st, stObj->pt, stImage->face, dstLevel,
 				   PIPE_TRANSFER_WRITE);
-
 
       st_texture_image_data(st,
                             stObj->pt,

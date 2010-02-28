@@ -37,7 +37,7 @@
 #include "pipe/p_context.h"
 #include "util/u_debug.h"
 #include "pipe/p_defines.h"
-#include "pipe/p_inlines.h"
+#include "util/u_inlines.h"
 #include "pipe/p_shader_tokens.h"
 #include "pipe/p_state.h"
 
@@ -1069,7 +1069,7 @@ reduce_3d(enum pipe_format pformat,
     */
 
    /*
-   _mesa_printf("mip3d %d x %d x %d  ->  %d x %d x %d\n",
+   printf("mip3d %d x %d x %d  ->  %d x %d x %d\n",
           srcWidth, srcHeight, srcDepth, dstWidth, dstHeight, dstDepth);
    */
 

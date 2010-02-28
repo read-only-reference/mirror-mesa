@@ -35,6 +35,7 @@
 #include "pipe/p_defines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
+#include "util/u_inlines.h"
 #include "sp_clear.h"
 #include "sp_context.h"
 #include "sp_flush.h"
@@ -43,7 +44,6 @@
 #include "sp_surface.h"
 #include "sp_tile_cache.h"
 #include "sp_tex_tile_cache.h"
-#include "sp_winsys.h"
 #include "sp_query.h"
 
 
@@ -193,7 +193,8 @@ softpipe_render_condition( struct pipe_context *pipe,
 
 
 struct pipe_context *
-softpipe_create( struct pipe_screen *screen )
+softpipe_create_context( struct pipe_screen *screen,
+			 void *priv )
 {
    struct softpipe_context *softpipe = CALLOC_STRUCT(softpipe_context);
    uint i;
@@ -212,6 +213,7 @@ softpipe_create( struct pipe_screen *screen )
    softpipe->pipe.winsys = screen->winsys;
    softpipe->pipe.screen = screen;
    softpipe->pipe.destroy = softpipe_destroy;
+   softpipe->pipe.priv = priv;
 
    /* state setters */
    softpipe->pipe.create_blend_state = softpipe_create_blend_state;
@@ -244,6 +246,7 @@ softpipe_create( struct pipe_screen *screen )
    softpipe->pipe.delete_gs_state = softpipe_delete_gs_state;
 
    softpipe->pipe.set_blend_color = softpipe_set_blend_color;
+   softpipe->pipe.set_stencil_ref = softpipe_set_stencil_ref;
    softpipe->pipe.set_clip_state = softpipe_set_clip_state;
    softpipe->pipe.set_constant_buffer = softpipe_set_constant_buffer;
    softpipe->pipe.set_framebuffer_state = softpipe_set_framebuffer_state;

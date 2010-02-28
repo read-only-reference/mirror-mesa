@@ -20,9 +20,6 @@ struct nouveau_winsys {
 
 	struct pipe_screen *pscreen;
 
-	unsigned nr_pctx;
-	struct pipe_context **pctx;
-
 	struct pipe_surface *front;
 };
 
@@ -31,7 +28,7 @@ nv30_screen_get_param(struct pipe_screen *pscreen, int param)
 {
 	switch (param) {
 	case PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS:
-		return 16;
+		return 8;
 	case PIPE_CAP_NPOT_TEXTURES:
 		return 0;
 	case PIPE_CAP_TWO_SIDED_STENCIL:
@@ -67,6 +64,8 @@ nv30_screen_get_param(struct pipe_screen *pscreen, int param)
 	case NOUVEAU_CAP_HW_VTXBUF:
 	case NOUVEAU_CAP_HW_IDXBUF:
 		return 1;
+	case PIPE_CAP_MAX_COMBINED_SAMPLERS:
+		return 16;
 	case PIPE_CAP_INDEP_BLEND_ENABLE:
 		return 0;
 	case PIPE_CAP_INDEP_BLEND_FUNC:
@@ -173,9 +172,9 @@ nv30_screen_destroy(struct pipe_screen *pscreen)
 			so_ref(NULL, &screen->state[i]);
 	}
 
-	nouveau_resource_free(&screen->vp_exec_heap);
-	nouveau_resource_free(&screen->vp_data_heap);
-	nouveau_resource_free(&screen->query_heap);
+	nouveau_resource_destroy(&screen->vp_exec_heap);
+	nouveau_resource_destroy(&screen->vp_data_heap);
+	nouveau_resource_destroy(&screen->query_heap);
 	nouveau_notifier_free(&screen->query);
 	nouveau_notifier_free(&screen->sync);
 	nouveau_grobj_free(&screen->rankine);
@@ -212,6 +211,7 @@ nv30_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 	pscreen->get_param = nv30_screen_get_param;
 	pscreen->get_paramf = nv30_screen_get_paramf;
 	pscreen->is_format_supported = nv30_screen_surface_format_supported;
+	pscreen->context_create = nv30_create;
 
 	nv30_screen_init_miptree_functions(pscreen);
 	nv30_screen_init_transfer_functions(pscreen);

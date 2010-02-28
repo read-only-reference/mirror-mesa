@@ -115,8 +115,6 @@ void r700Start3D(context_t *context)
     END_BATCH();
 
     COMMIT_BATCH();
-
-    r700WaitForIdleClean(context);
 }
 
 GLboolean r700SyncSurf(context_t *context,
@@ -421,7 +419,7 @@ static void r700RunRenderPrimitiveImmediate(GLcontext * ctx, int start, int end,
 }
 
 /* start 3d, idle, cb/db flush */
-#define PRE_EMIT_STATE_BUFSZ 10 + 5 + 18
+#define PRE_EMIT_STATE_BUFSZ 5 + 5 + 14
 
 static GLuint r700PredictRenderSize(GLcontext* ctx,
 				    const struct _mesa_prim *prim,
@@ -596,7 +594,7 @@ static void r700AlignDataToDword(GLcontext *ctx,
 
         for (i = 0; i < count; ++i) 
         {
-            _mesa_memcpy(dst_ptr, src_ptr, input->StrideB);
+            memcpy(dst_ptr, src_ptr, input->StrideB);
             src_ptr += input->StrideB;
             dst_ptr += dst_stride;
         }
@@ -857,7 +855,7 @@ static void r700SetupIndexBuffer(GLcontext *ctx, const struct _mesa_index_buffer
 	assert(context->ind_buf.bo->ptr != NULL);
 	dst_ptr = ADD_POINTERS(context->ind_buf.bo->ptr, context->ind_buf.bo_offset);
 
-        _mesa_memcpy(dst_ptr, src_ptr, size);
+        memcpy(dst_ptr, src_ptr, size);
 
 	radeon_bo_unmap(context->ind_buf.bo);
         context->ind_buf.is_32bit = (mesa_ind_buf->type == GL_UNSIGNED_INT);
@@ -934,6 +932,7 @@ static GLboolean r700TryDrawPrims(GLcontext *ctx,
     radeon_debug_remove_indent();
 
     /* Flush render op cached for last several quads. */
+    /* XXX drm should handle this in fence submit */
     r700WaitForIdleClean(context);
 
     rrb = radeon_get_colorbuffer(&context->radeon);

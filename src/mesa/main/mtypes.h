@@ -631,7 +631,7 @@ struct gl_current_attrib
    GLfloat RasterColor[4];
    GLfloat RasterSecondaryColor[4];
    GLfloat RasterIndex;
-   GLfloat RasterTexCoords[MAX_TEXTURE_UNITS][4];
+   GLfloat RasterTexCoords[MAX_TEXTURE_COORD_UNITS][4];
    GLboolean RasterPosValid;
    /*@}*/
 };
@@ -963,7 +963,7 @@ struct gl_point_attrib
    GLfloat Threshold;		/**< GL_EXT_point_parameters */
    GLboolean _Attenuated;	/**< True if Params != [1, 0, 0] */
    GLboolean PointSprite;	/**< GL_NV/ARB_point_sprite */
-   GLboolean CoordReplace[MAX_TEXTURE_UNITS]; /**< GL_ARB_point_sprite */
+   GLboolean CoordReplace[MAX_TEXTURE_COORD_UNITS]; /**< GL_ARB_point_sprite*/
    GLenum SpriteRMode;		/**< GL_NV_point_sprite (only!) */
    GLenum SpriteOrigin;		/**< GL_ARB_point_sprite */
 };
@@ -1361,7 +1361,7 @@ struct gl_texture_unit
 struct gl_texture_attrib
 {
    GLuint CurrentUnit;   /**< GL_ACTIVE_TEXTURE */
-   struct gl_texture_unit Unit[MAX_TEXTURE_UNITS];
+   struct gl_texture_unit Unit[MAX_COMBINED_TEXTURE_IMAGE_UNITS];
 
    struct gl_texture_object *ProxyTex[NUM_TEXTURE_TARGETS];
 
@@ -1426,6 +1426,7 @@ struct gl_viewport_attrib
  */
 struct gl_buffer_object
 {
+   _glthread_Mutex Mutex;
    GLint RefCount;
    GLuint Name;
    GLenum Usage;        /**< GL_STREAM_DRAW_ARB, GL_STREAM_READ_ARB, etc. */
@@ -2473,6 +2474,7 @@ struct gl_extensions
    GLboolean EXT_texture;
    GLboolean EXT_texture_object;
    GLboolean EXT_texture3D;
+   GLboolean EXT_texture_array;
    GLboolean EXT_texture_compression_s3tc;
    GLboolean EXT_texture_env_add;
    GLboolean EXT_texture_env_combine;

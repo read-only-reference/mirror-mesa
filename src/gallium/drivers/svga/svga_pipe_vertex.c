@@ -23,7 +23,7 @@
  *
  **********************************************************/
 
-#include "pipe/p_inlines.h"
+#include "util/u_inlines.h"
 #include "pipe/p_defines.h"
 #include "util/u_math.h"
 #include "tgsi/tgsi_parse.h"
@@ -49,7 +49,7 @@ static void svga_set_vertex_buffers(struct pipe_context *pipe,
    /* Adjust refcounts */
    for (i = 0; i < count; i++) {
       pipe_buffer_reference(&svga->curr.vb[i].buffer, buffers[i].buffer);
-      if (svga_buffer(buffers[i].buffer)->user)
+      if (svga_buffer_is_user_buffer(buffers[i].buffer))
          any_user_buffer = TRUE;
    }
 

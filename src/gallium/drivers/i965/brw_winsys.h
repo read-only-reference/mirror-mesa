@@ -28,7 +28,7 @@
 
 #include "pipe/p_compiler.h"
 #include "pipe/p_defines.h"
-#include "pipe/p_refcnt.h"
+#include "util/u_inlines.h"
 
 struct brw_winsys;
 struct pipe_fence_handle;
@@ -256,10 +256,6 @@ bo_reference(struct brw_winsys_buffer **ptr, struct brw_winsys_buffer *buf)
  */
 struct pipe_screen *brw_create_screen(struct brw_winsys_screen *iws, unsigned pci_id);
 
-/**
- * Create a brw pipe_context.
- */
-struct pipe_context *brw_create_context(struct pipe_screen *screen);
 
 /**
  * Get the brw_winsys buffer backing the texture.

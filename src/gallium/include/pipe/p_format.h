@@ -31,10 +31,6 @@
 
 #include "p_compiler.h"
 
-/* FIXME: remove these header dependencies */
-#include "util/u_debug.h"
-#include "util/u_string.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -168,11 +164,6 @@ enum pipe_format {
 
    PIPE_FORMAT_COUNT
 };
-
-/**
- * Builds pipe format name from format token.
- */
-extern const char *pf_name( enum pipe_format format );
 
 
 enum pipe_video_chroma_format

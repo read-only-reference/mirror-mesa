@@ -43,7 +43,6 @@
 #include "p_compiler.h"
 #include "p_defines.h"
 #include "p_format.h"
-#include "p_refcnt.h"
 #include "p_screen.h"
 
 
@@ -64,6 +63,12 @@ extern "C" {
 #define PIPE_MAX_SHADER_INPUTS    16
 #define PIPE_MAX_SHADER_OUTPUTS   16
 #define PIPE_MAX_TEXTURE_LEVELS   16
+
+
+struct pipe_reference
+{
+   int32_t count; /* atomic */
+};
 
 
 /**
@@ -97,7 +102,9 @@ struct pipe_rasterizer_state
    unsigned poly_smooth:1;
    unsigned poly_stipple_enable:1;
    unsigned point_smooth:1;
-   unsigned point_sprite:1;
+   unsigned sprite_coord_enable:PIPE_MAX_SHADER_OUTPUTS;
+   unsigned sprite_coord_mode:1;     /**< PIPE_SPRITE_COORD_ */
+   unsigned point_quad_rasterization:1; /** points rasterized as quads or points */
    unsigned point_size_per_vertex:1; /**< size computed in vertex shader */
    unsigned multisample:1;         /* XXX maybe more ms state in future */
    unsigned line_smooth:1;
@@ -137,11 +144,8 @@ struct pipe_rasterizer_state
 
    float line_width;
    float point_size;           /**< used when no per-vertex size */
-   float point_size_min;        /* XXX - temporary, will go away */
-   float point_size_max;        /* XXX - temporary, will go away */
    float offset_units;
    float offset_scale;
-   ubyte sprite_coord_mode[PIPE_MAX_SHADER_OUTPUTS]; /**< PIPE_SPRITE_COORD_ */
 };
 
 
@@ -195,9 +199,8 @@ struct pipe_stencil_state
    unsigned fail_op:3;  /**< PIPE_STENCIL_OP_x */
    unsigned zpass_op:3; /**< PIPE_STENCIL_OP_x */
    unsigned zfail_op:3; /**< PIPE_STENCIL_OP_x */
-   ubyte ref_value;
-   ubyte valuemask;
-   ubyte writemask;
+   unsigned valuemask:8;
+   unsigned writemask:8;
 };
 
 
@@ -247,6 +250,10 @@ struct pipe_blend_color
    float color[4];
 };
 
+struct pipe_stencil_ref
+{
+   ubyte ref_value[2];
+};
 
 struct pipe_framebuffer_state
 {
@@ -274,11 +281,10 @@ struct pipe_sampler_state
    unsigned compare_mode:1;      /**< PIPE_TEX_COMPARE_x */
    unsigned compare_func:3;      /**< PIPE_FUNC_x */
    unsigned normalized_coords:1; /**< Are coords normalized to [0,1]? */
-   unsigned prefilter:4;         /**< Cylindrical texcoord wrap, per coord, exposed by some api's */
+   unsigned max_anisotropy:6;
    float lod_bias;               /**< LOD/lambda bias */
    float min_lod, max_lod;       /**< LOD clamp range, after bias */
    float border_color[4];
-   float max_anisotropy;
 };
 
 
@@ -381,38 +387,6 @@ struct pipe_vertex_element
  
    enum pipe_format src_format; 	   /**< PIPE_FORMAT_* */
 };
-
-
-/* Reference counting helper functions */
-static INLINE void
-pipe_buffer_reference(struct pipe_buffer **ptr, struct pipe_buffer *buf)
-{
-   struct pipe_buffer *old_buf = *ptr;
-
-   if (pipe_reference(&(*ptr)->reference, &buf->reference))
-      old_buf->screen->buffer_destroy(old_buf);
-   *ptr = buf;
-}
-
-static INLINE void
-pipe_surface_reference(struct pipe_surface **ptr, struct pipe_surface *surf)
-{
-   struct pipe_surface *old_surf = *ptr;
-
-   if (pipe_reference(&(*ptr)->reference, &surf->reference))
-      old_surf->texture->screen->tex_surface_destroy(old_surf);
-   *ptr = surf;
-}
-
-static INLINE void
-pipe_texture_reference(struct pipe_texture **ptr, struct pipe_texture *tex)
-{
-   struct pipe_texture *old_tex = *ptr;
-
-   if (pipe_reference(&(*ptr)->reference, &tex->reference))
-      old_tex->screen->texture_destroy(old_tex);
-   *ptr = tex;
-}
 
 
 #ifdef __cplusplus

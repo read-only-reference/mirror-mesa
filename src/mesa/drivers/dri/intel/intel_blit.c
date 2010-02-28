@@ -89,6 +89,10 @@ intelEmitCopyBlit(struct intel_context *intel,
    dri_bo *aper_array[3];
    BATCH_LOCALS;
 
+   /* Blits are in a different ringbuffer so we don't use them. */
+   if (intel->gen >= 6)
+      return GL_FALSE;
+
    if (dst_tiling != I915_TILING_NONE) {
       if (dst_offset & 4095)
 	 return GL_FALSE;
@@ -114,6 +118,8 @@ intelEmitCopyBlit(struct intel_context *intel,
        } else
            break;
    } while (pass < 2);
+
+   intel_prepare_render(intel);
 
    if (pass >= 2) {
        dri_bo_map(dst_buffer, GL_TRUE);
@@ -216,6 +222,9 @@ intelClearWithBlit(GLcontext *ctx, GLbitfield mask)
    GLint cx, cy, cw, ch;
    BATCH_LOCALS;
 
+   /* Blits are in a different ringbuffer so we don't use them. */
+   assert(intel->gen < 6);
+
    /*
     * Compute values for clearing the buffers.
     */
@@ -241,6 +250,8 @@ intelClearWithBlit(GLcontext *ctx, GLbitfield mask)
    GLuint buf;
    all = (cw == fb->Width && ch == fb->Height);
 
+   intel_prepare_render(intel);
+
    /* Loop over all renderbuffers */
    for (buf = 0; buf < BUFFER_COUNT && mask; buf++) {
       const GLbitfield bufBit = 1 << buf;
@@ -250,6 +261,7 @@ intelClearWithBlit(GLcontext *ctx, GLbitfield mask)
       uint32_t clear_val;
       uint32_t BR13, CMD;
       int pitch, cpp;
+      drm_intel_bo *aper_array[2];
 
       if (!(mask & bufBit))
 	 continue;
@@ -340,6 +352,15 @@ intelClearWithBlit(GLcontext *ctx, GLbitfield mask)
       assert(x1 < x2);
       assert(y1 < y2);
 
+      /* do space check before going any further */
+      aper_array[0] = intel->batch->buf;
+      aper_array[1] = write_buffer;
+
+      if (drm_intel_bufmgr_check_aperture_space(aper_array,
+						ARRAY_SIZE(aper_array)) != 0) {
+	 intel_batchbuffer_flush(intel->batch);
+      }
+
       BEGIN_BATCH(6);
       OUT_BATCH(CMD);
       OUT_BATCH(BR13);
@@ -373,6 +394,10 @@ intelEmitImmediateColorExpandBlit(struct intel_context *intel,
 {
    int dwords = ALIGN(src_size, 8) / 4;
    uint32_t opcode, br13, blit_cmd;
+
+   /* Blits are in a different ringbuffer so we don't use them. */
+   if (intel->gen >= 6)
+      return GL_FALSE;
 
    if (dst_tiling != I915_TILING_NONE) {
       if (dst_offset & 4095)
@@ -458,6 +483,9 @@ intel_emit_linear_blit(struct intel_context *intel,
 		       unsigned int size)
 {
    GLuint pitch, height;
+
+   /* Blits are in a different ringbuffer so we don't use them. */
+   assert(intel->gen < 6);
 
    /* The pitch is a signed value. */
    pitch = MIN2(size, (1 << 15) - 1);

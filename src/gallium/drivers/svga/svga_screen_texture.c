@@ -27,8 +27,8 @@
 
 #include "pipe/p_state.h"
 #include "pipe/p_defines.h"
-#include "pipe/p_inlines.h"
-#include "pipe/p_thread.h"
+#include "util/u_inlines.h"
+#include "os/os_thread.h"
 #include "util/u_format.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
@@ -205,7 +205,7 @@ svga_transfer_dma(struct svga_transfer *st,
       if(transfer == SVGA3D_READ_HOST_VRAM) {
          svga_screen_flush(screen, &fence);
          sws->fence_finish(sws, fence, 0);
-         //sws->fence_reference(sws, &fence, NULL);
+         sws->fence_reference(sws, &fence, NULL);
       }
    }
    else {
@@ -235,7 +235,7 @@ svga_transfer_dma(struct svga_transfer *st,
             if(y) {
                svga_screen_flush(screen, &fence);
                sws->fence_finish(sws, fence, 0);
-               //sws->fence_reference(sws, &fence, NULL);
+               sws->fence_reference(sws, &fence, NULL);
             }
 
             hw = sws->buffer_map(sws, st->hwbuf, PIPE_BUFFER_USAGE_CPU_WRITE);

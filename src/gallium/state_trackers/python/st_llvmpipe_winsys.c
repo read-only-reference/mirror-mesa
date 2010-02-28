@@ -36,7 +36,7 @@
 
 #include "pipe/p_format.h"
 #include "pipe/p_context.h"
-#include "pipe/p_inlines.h"
+#include "util/u_inlines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "llvmpipe/lp_winsys.h"
@@ -135,14 +135,7 @@ no_winsys:
 }
 
 
-static struct pipe_context *
-st_llvmpipe_context_create(struct pipe_screen *screen)
-{
-   return llvmpipe_create(screen);
-}
-
 
 const struct st_winsys st_softpipe_winsys = {
-   &st_llvmpipe_screen_create,
-   &st_llvmpipe_context_create,
+   &st_llvmpipe_screen_create
 };

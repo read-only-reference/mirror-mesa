@@ -62,6 +62,7 @@ struct softpipe_context {
 
    /** Other rendering state */
    struct pipe_blend_color blend_color;
+   struct pipe_stencil_ref stencil_ref;
    struct pipe_clip_state clip;
    struct pipe_buffer *constants[PIPE_SHADER_TYPES][PIPE_MAX_CONSTANT_BUFFERS];
    struct pipe_framebuffer_state framebuffer;
@@ -165,6 +166,9 @@ softpipe_context( struct pipe_context *pipe )
 
 void
 softpipe_reset_sampler_varients(struct softpipe_context *softpipe);
+
+struct pipe_context *
+softpipe_create_context( struct pipe_screen *, void *priv );
 
 
 #endif /* SP_CONTEXT_H */

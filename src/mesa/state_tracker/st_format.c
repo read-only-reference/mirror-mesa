@@ -1,7 +1,7 @@
 /**************************************************************************
  * 
  * Copyright 2007 Tungsten Graphics, Inc., Cedar Park, Texas.
- * Copyright (c) 2008 VMware, Inc.
+ * Copyright (c) 2008-2010 VMware, Inc.
  * All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -28,7 +28,7 @@
 
 
 /**
- * Texture Image-related functions.
+ * Mesa / Gallium format conversion and format selection code.
  * \author Brian Paul
  */
 
@@ -59,151 +59,69 @@ format_max_bits(enum pipe_format format)
    return size;
 }
 
-static GLuint
-format_size(enum pipe_format format)
-{
-   return
-      util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 0) +
-      util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 1) +
-      util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 2) +
-      util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 3) +
-      util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_ZS, 0) +
-      util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_ZS, 1);
-}
 
-/*
- * XXX temporary here
+/**
+ * Return basic GL datatype for the given gallium format.
  */
-GLboolean
-st_get_format_info(enum pipe_format format, struct pipe_format_info *pinfo)
+GLenum
+st_format_datatype(enum pipe_format format)
 {
    const struct util_format_description *desc;
 
    desc = util_format_description(format);
    assert(desc);
 
-   if (desc->layout == UTIL_FORMAT_LAYOUT_ARITH ||
-       desc->layout == UTIL_FORMAT_LAYOUT_ARRAY) {
-#if 0
-      printf("%s\n", pf_name( format ) );
-#endif
-
-      /* Data type */
-      if (format == PIPE_FORMAT_A1R5G5B5_UNORM || format == PIPE_FORMAT_R5G6B5_UNORM) {
-         pinfo->datatype = GL_UNSIGNED_SHORT;
+   if (desc->layout == UTIL_FORMAT_LAYOUT_PLAIN) {
+      if (format == PIPE_FORMAT_A1R5G5B5_UNORM ||
+          format == PIPE_FORMAT_R5G6B5_UNORM) {
+         return GL_UNSIGNED_SHORT;
       }
       else if (format == PIPE_FORMAT_S8Z24_UNORM ||
                format == PIPE_FORMAT_Z24S8_UNORM) {
-         pinfo->datatype = GL_UNSIGNED_INT_24_8;
+         return GL_UNSIGNED_INT_24_8;
       }
       else {
          const GLuint size = format_max_bits(format);
          if (size == 8) {
             if (desc->channel[0].type == UTIL_FORMAT_TYPE_UNSIGNED)
-               pinfo->datatype = GL_UNSIGNED_BYTE;
+               return GL_UNSIGNED_BYTE;
             else
-               pinfo->datatype = GL_BYTE;
+               return GL_BYTE;
          }
          else if (size == 16) {
             if (desc->channel[0].type == UTIL_FORMAT_TYPE_UNSIGNED)
-               pinfo->datatype = GL_UNSIGNED_SHORT;
+               return GL_UNSIGNED_SHORT;
             else
-               pinfo->datatype = GL_SHORT;
+               return GL_SHORT;
          }
          else {
             assert( size <= 32 );
             if (desc->channel[0].type == UTIL_FORMAT_TYPE_UNSIGNED)
-               pinfo->datatype = GL_UNSIGNED_INT;
+               return GL_UNSIGNED_INT;
             else
-               pinfo->datatype = GL_INT;
+               return GL_INT;
          }
       }
-
-      /* Component bits */
-      pinfo->red_bits = util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 0);
-      pinfo->green_bits = util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 1);
-      pinfo->blue_bits = util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 2);
-      pinfo->alpha_bits = util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 3);
-      pinfo->depth_bits = util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_ZS, 0);
-      pinfo->stencil_bits = util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_ZS, 1);
-      pinfo->luminance_bits = 0;
-      pinfo->intensity_bits = 0;
-
-      /* Format size */
-      pinfo->size = format_size(format) / 8;
-
-      /* Luminance & Intensity bits */
-      if (desc->swizzle[0] == UTIL_FORMAT_SWIZZLE_X &&
-          desc->swizzle[1] == UTIL_FORMAT_SWIZZLE_X &&
-          desc->swizzle[2] == UTIL_FORMAT_SWIZZLE_X) {
-         if (desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_X) {
-            pinfo->intensity_bits = pinfo->red_bits;
-         }
-         else {
-            pinfo->luminance_bits = pinfo->red_bits;
-         }
-         pinfo->red_bits = 0;
-      }
-
-      pinfo->mesa_format = st_pipe_format_to_mesa_format(format);
    }
-   else if (desc->layout == UTIL_FORMAT_LAYOUT_YUV) {
-      pinfo->mesa_format = MESA_FORMAT_YCBCR;
-      pinfo->datatype = GL_UNSIGNED_SHORT;
-      pinfo->size = 2; /* two bytes per "texel" */
+   else if (format == PIPE_FORMAT_YCBCR) {
+      return GL_UNSIGNED_SHORT;
+   }
+   else if (format == PIPE_FORMAT_YCBCR_REV) {
+      return GL_UNSIGNED_SHORT;
    }
    else {
       /* compressed format? */
       assert(0);
    }
 
-#if 0
-   printf(
-      "ST_FORMAT: R(%u), G(%u), B(%u), A(%u), Z(%u), S(%u)\n",
-      pinfo->red_bits,
-      pinfo->green_bits,
-      pinfo->blue_bits,
-      pinfo->alpha_bits,
-      pinfo->depth_bits,
-      pinfo->stencil_bits );
-#endif
-
-   pinfo->format = format;
-
-   return GL_TRUE;
+   assert(0);
+   return GL_NONE;
 }
 
 
 /**
- * Return bytes per pixel for the given format.
+ * Translate Mesa format to Gallium format.
  */
-GLuint
-st_sizeof_format(enum pipe_format format)
-{
-   struct pipe_format_info info;
-   if (!st_get_format_info( format, &info )) {
-      assert( 0 );
-      return 0;
-   }
-   return info.size;
-}
-
-
-/**
- * Return bytes per pixel for the given format.
- */
-GLenum
-st_format_datatype(enum pipe_format format)
-{
-   struct pipe_format_info info;
-   if (!st_get_format_info( format, &info )) {
-      assert( 0 );
-      return 0;
-   }
-   return info.datatype;
-}
-
-
 enum pipe_format
 st_mesa_format_to_pipe_format(gl_format mesaFormat)
 {
@@ -277,10 +195,13 @@ st_mesa_format_to_pipe_format(gl_format mesaFormat)
 }
 
 
+/**
+ * Translate Gallium format to Mesa format.
+ */
 gl_format
-st_pipe_format_to_mesa_format(enum pipe_format pipeFormat)
+st_pipe_format_to_mesa_format(enum pipe_format format)
 {
-   switch (pipeFormat) {
+   switch (format) {
    case PIPE_FORMAT_A8R8G8B8_UNORM:
       return MESA_FORMAT_ARGB8888;
    case PIPE_FORMAT_X8R8G8B8_UNORM:
@@ -303,25 +224,29 @@ st_pipe_format_to_mesa_format(enum pipe_format pipeFormat)
       return MESA_FORMAT_L8;
    case PIPE_FORMAT_I8_UNORM:
       return MESA_FORMAT_I8;
+   case PIPE_FORMAT_S8_UNORM:
+      return MESA_FORMAT_S8;
+
+   case PIPE_FORMAT_R16G16B16A16_SNORM:
+      return MESA_FORMAT_SIGNED_RGBA_16;
+
    case PIPE_FORMAT_Z16_UNORM:
       return MESA_FORMAT_Z16;
    case PIPE_FORMAT_Z32_UNORM:
       return MESA_FORMAT_Z32;
-   case PIPE_FORMAT_Z24X8_UNORM:
-      return MESA_FORMAT_Z24_X8;
    case PIPE_FORMAT_Z24S8_UNORM:
       return MESA_FORMAT_Z24_S8;
+   case PIPE_FORMAT_Z24X8_UNORM:
+      return MESA_FORMAT_Z24_X8;
    case PIPE_FORMAT_X8Z24_UNORM:
       return MESA_FORMAT_X8_Z24;
    case PIPE_FORMAT_S8Z24_UNORM:
       return MESA_FORMAT_S8_Z24;
-   case PIPE_FORMAT_S8_UNORM:
-      return MESA_FORMAT_S8;
 
    case PIPE_FORMAT_YCBCR:
       return MESA_FORMAT_YCBCR;
-   case PIPE_FORMAT_R16G16B16A16_SNORM:
-      return MESA_FORMAT_SIGNED_RGBA_16;
+   case PIPE_FORMAT_YCBCR_REV:
+      return MESA_FORMAT_YCBCR_REV;
 
 #if FEATURE_texture_s3tc
    case PIPE_FORMAT_DXT1_RGB:
@@ -343,6 +268,7 @@ st_pipe_format_to_mesa_format(enum pipe_format pipeFormat)
       return MESA_FORMAT_SRGBA_DXT5;
 #endif
 #endif
+
 #if FEATURE_EXT_texture_sRGB
    case PIPE_FORMAT_A8L8_SRGB:
       return MESA_FORMAT_SLA8;
@@ -357,7 +283,7 @@ st_pipe_format_to_mesa_format(enum pipe_format pipeFormat)
 #endif
    default:
       assert(0);
-      return 0;
+      return MESA_FORMAT_NONE;
    }
 }
 
@@ -726,82 +652,6 @@ st_choose_renderbuffer_format(struct pipe_screen *screen,
 }
 
 
-static gl_format
-translate_gallium_format_to_mesa_format(enum pipe_format format)
-{
-   switch (format) {
-   case PIPE_FORMAT_A8R8G8B8_UNORM:
-      return MESA_FORMAT_ARGB8888;
-   case PIPE_FORMAT_X8R8G8B8_UNORM:
-      return MESA_FORMAT_XRGB8888;
-   case PIPE_FORMAT_A1R5G5B5_UNORM:
-      return MESA_FORMAT_ARGB1555;
-   case PIPE_FORMAT_A4R4G4B4_UNORM:
-      return MESA_FORMAT_ARGB4444;
-   case PIPE_FORMAT_R5G6B5_UNORM:
-      return MESA_FORMAT_RGB565;
-   case PIPE_FORMAT_A8L8_UNORM:
-      return MESA_FORMAT_AL88;
-   case PIPE_FORMAT_A8_UNORM:
-      return MESA_FORMAT_A8;
-   case PIPE_FORMAT_L8_UNORM:
-      return MESA_FORMAT_L8;
-   case PIPE_FORMAT_I8_UNORM:
-      return MESA_FORMAT_I8;
-   case PIPE_FORMAT_Z16_UNORM:
-      return MESA_FORMAT_Z16;
-   case PIPE_FORMAT_Z32_UNORM:
-      return MESA_FORMAT_Z32;
-   case PIPE_FORMAT_Z24S8_UNORM:
-      return MESA_FORMAT_Z24_S8;
-   case PIPE_FORMAT_X8Z24_UNORM:
-      return MESA_FORMAT_X8_Z24;
-   case PIPE_FORMAT_S8Z24_UNORM:
-      return MESA_FORMAT_S8_Z24;
-   case PIPE_FORMAT_YCBCR:
-      return MESA_FORMAT_YCBCR;
-   case PIPE_FORMAT_YCBCR_REV:
-      return MESA_FORMAT_YCBCR_REV;
-#if FEATURE_texture_s3tc
-   case PIPE_FORMAT_DXT1_RGB:
-      return MESA_FORMAT_RGB_DXT1;
-   case PIPE_FORMAT_DXT1_RGBA:
-      return MESA_FORMAT_RGBA_DXT1;
-   case PIPE_FORMAT_DXT3_RGBA:
-      return MESA_FORMAT_RGBA_DXT3;
-   case PIPE_FORMAT_DXT5_RGBA:
-      return MESA_FORMAT_RGBA_DXT5;
-#if FEATURE_EXT_texture_sRGB
-   case PIPE_FORMAT_DXT1_SRGB:
-      return MESA_FORMAT_SRGB_DXT1;
-   case PIPE_FORMAT_DXT1_SRGBA:
-      return MESA_FORMAT_SRGBA_DXT1;
-   case PIPE_FORMAT_DXT3_SRGBA:
-      return MESA_FORMAT_SRGBA_DXT3;
-   case PIPE_FORMAT_DXT5_SRGBA:
-      return MESA_FORMAT_SRGBA_DXT5;
-#endif
-#endif
-#if FEATURE_EXT_texture_sRGB
-   case PIPE_FORMAT_A8L8_SRGB:
-      return MESA_FORMAT_SLA8;
-   case PIPE_FORMAT_L8_SRGB:
-      return MESA_FORMAT_SL8;
-   case PIPE_FORMAT_R8G8B8_SRGB:
-      return MESA_FORMAT_SRGB8;
-   case PIPE_FORMAT_R8G8B8A8_SRGB:
-      return MESA_FORMAT_SRGBA8;
-   case PIPE_FORMAT_A8R8G8B8_SRGB:
-      return MESA_FORMAT_SARGB8;
-#endif
-   /* XXX add additional cases */
-   default:
-      assert(0);
-      return MESA_FORMAT_NONE;
-   }
-}
-
-
 /**
  * Called via ctx->Driver.chooseTextureFormat().
  */
@@ -819,7 +669,7 @@ st_ChooseTextureFormat(GLcontext *ctx, GLint internalFormat,
    if (pFormat == PIPE_FORMAT_NONE)
       return MESA_FORMAT_NONE;
 
-   return translate_gallium_format_to_mesa_format(pFormat);
+   return st_pipe_format_to_mesa_format(pFormat);
 }
 
 

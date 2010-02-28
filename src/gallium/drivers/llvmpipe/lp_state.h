@@ -36,7 +36,7 @@
 #include "pipe/p_state.h"
 #include "tgsi/tgsi_scan.h"
 #include "lp_jit.h"
-#include "lp_bld_sample.h" /* for struct lp_sampler_static_state */
+#include "gallivm/lp_bld_sample.h" /* for struct lp_sampler_static_state */
 
 
 #define LP_NEW_VIEWPORT      0x1
@@ -54,6 +54,7 @@
 #define LP_NEW_VERTEX        0x1000
 #define LP_NEW_VS            0x2000
 #define LP_NEW_QUERY         0x4000
+#define LP_NEW_BLEND_COLOR   0x8000
 
 
 struct vertex_info;
@@ -65,11 +66,18 @@ struct lp_fragment_shader;
 
 struct lp_fragment_shader_variant_key
 {
-   enum pipe_format zsbuf_format;
    struct pipe_depth_state depth;
    struct pipe_alpha_state alpha;
    struct pipe_blend_state blend;
+   enum pipe_format zsbuf_format;
+   unsigned nr_cbufs:8;
+   unsigned flatshade:1;
+   unsigned scissor:1;
 
+   struct {
+      ubyte colormask;
+   } cbuf_blend[PIPE_MAX_COLOR_BUFS];
+   
    struct lp_sampler_static_state sampler[PIPE_MAX_SAMPLERS];
 };
 
@@ -80,9 +88,9 @@ struct lp_fragment_shader_variant
 
    struct lp_fragment_shader_variant_key key;
 
-   LLVMValueRef function;
+   LLVMValueRef function[2];
 
-   lp_jit_frag_func jit_function;
+   lp_jit_frag_func jit_function[2];
 
    struct lp_fragment_shader_variant *next;
 };
@@ -144,13 +152,16 @@ void llvmpipe_bind_rasterizer_state(struct pipe_context *, void *);
 void llvmpipe_delete_rasterizer_state(struct pipe_context *, void *);
 
 void llvmpipe_set_framebuffer_state( struct pipe_context *,
-			     const struct pipe_framebuffer_state * );
+                                     const struct pipe_framebuffer_state * );
 
 void llvmpipe_set_blend_color( struct pipe_context *pipe,
                                const struct pipe_blend_color *blend_color );
 
+void llvmpipe_set_stencil_ref( struct pipe_context *pipe,
+                               const struct pipe_stencil_ref *stencil_ref );
+
 void llvmpipe_set_clip_state( struct pipe_context *,
-			     const struct pipe_clip_state * );
+                              const struct pipe_clip_state * );
 
 void llvmpipe_set_constant_buffer(struct pipe_context *,
                                   uint shader, uint index,
@@ -212,23 +223,10 @@ llvmpipe_draw_range_elements(struct pipe_context *pipe,
                              unsigned mode, unsigned start, unsigned count);
 
 void
-llvmpipe_map_transfers(struct llvmpipe_context *lp);
-
-void
-llvmpipe_unmap_transfers(struct llvmpipe_context *lp);
-
-void
 llvmpipe_map_texture_surfaces(struct llvmpipe_context *lp);
 
 void
 llvmpipe_unmap_texture_surfaces(struct llvmpipe_context *lp);
-
-
-struct vertex_info *
-llvmpipe_get_vertex_info(struct llvmpipe_context *llvmpipe);
-
-struct vertex_info *
-llvmpipe_get_vbuf_vertex_info(struct llvmpipe_context *llvmpipe);
 
 
 #endif

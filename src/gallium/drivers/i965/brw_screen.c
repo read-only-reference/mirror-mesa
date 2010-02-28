@@ -26,7 +26,7 @@
  **************************************************************************/
 
 
-#include "pipe/p_inlines.h"
+#include "util/u_inlines.h"
 #include "util/u_memory.h"
 #include "util/u_string.h"
 
@@ -153,6 +153,10 @@ brw_get_param(struct pipe_screen *screen, int param)
    switch (param) {
    case PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS:
       return 8;
+   case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
+      return 8;
+   case PIPE_CAP_MAX_COMBINED_SAMPLERS:
+      return 16; /* XXX correct? */
    case PIPE_CAP_NPOT_TEXTURES:
       return 1;
    case PIPE_CAP_TWO_SIDED_STENCIL:
@@ -397,6 +401,7 @@ brw_create_screen(struct brw_winsys_screen *sws, uint pci_id)
    bscreen->base.get_param = brw_get_param;
    bscreen->base.get_paramf = brw_get_paramf;
    bscreen->base.is_format_supported = brw_is_format_supported;
+   bscreen->base.context_create = brw_create_context;
    bscreen->base.fence_reference = brw_fence_reference;
    bscreen->base.fence_signalled = brw_fence_signalled;
    bscreen->base.fence_finish = brw_fence_finish;

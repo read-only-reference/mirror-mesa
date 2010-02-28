@@ -28,7 +28,7 @@
 #include "vl_compositor.h"
 #include <assert.h>
 #include <pipe/p_context.h>
-#include <pipe/p_inlines.h>
+#include <util/u_inlines.h>
 #include <tgsi/tgsi_parse.h>
 #include <tgsi/tgsi_build.h>
 #include <util/u_memory.h>
@@ -245,7 +245,6 @@ init_pipe_state(struct vl_compositor *c)
    sampler.compare_mode = PIPE_TEX_COMPARE_NONE;
    sampler.compare_func = PIPE_FUNC_ALWAYS;
    sampler.normalized_coords = 1;
-   /*sampler.prefilter = ;*/
    /*sampler.lod_bias = ;*/
    /*sampler.min_lod = ;*/
    /*sampler.max_lod = ;*/

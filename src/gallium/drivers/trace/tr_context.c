@@ -792,6 +792,24 @@ trace_context_set_blend_color(struct pipe_context *_pipe,
 
 
 static INLINE void
+trace_context_set_stencil_ref(struct pipe_context *_pipe,
+                              const struct pipe_stencil_ref *state)
+{
+   struct trace_context *tr_ctx = trace_context(_pipe);
+   struct pipe_context *pipe = tr_ctx->pipe;
+
+   trace_dump_call_begin("pipe_context", "set_stencil_ref");
+
+   trace_dump_arg(ptr, pipe);
+   trace_dump_arg(stencil_ref, state);
+
+   pipe->set_stencil_ref(pipe, state);
+
+   trace_dump_call_end();
+}
+
+
+static INLINE void
 trace_context_set_clip_state(struct pipe_context *_pipe,
                              const struct pipe_clip_state *state)
 {
@@ -817,24 +835,19 @@ trace_context_set_constant_buffer(struct pipe_context *_pipe,
    struct trace_context *tr_ctx = trace_context(_pipe);
    struct pipe_context *pipe = tr_ctx->pipe;
 
-   if (buffer)
+   if (buffer) {
       trace_screen_user_buffer_update(_pipe->screen, buffer);
+      buffer = trace_buffer_unwrap(tr_ctx, buffer);
+   }
 
    trace_dump_call_begin("pipe_context", "set_constant_buffer");
 
    trace_dump_arg(ptr, pipe);
    trace_dump_arg(uint, shader);
    trace_dump_arg(uint, index);
-   trace_dump_arg(constant_buffer, buffer);
+   trace_dump_arg(ptr, buffer);
 
-   /* XXX hmm? */
-   if (buffer) {
-      struct pipe_buffer *_buffer;
-      _buffer = trace_buffer_unwrap(tr_ctx, buffer);
-      pipe->set_constant_buffer(pipe, shader, index, _buffer);
-   } else {
-      pipe->set_constant_buffer(pipe, shader, index, buffer);
-   }
+   pipe->set_constant_buffer(pipe, shader, index, buffer);
 
    trace_dump_call_end();
 }
@@ -1236,12 +1249,10 @@ static const struct debug_named_value rbug_blocker_flags[] = {
 };
 
 struct pipe_context *
-trace_context_create(struct pipe_screen *_screen,
+trace_context_create(struct trace_screen *tr_scr,
                      struct pipe_context *pipe)
 {
-   struct trace_screen *tr_scr;
    struct trace_context *tr_ctx;
-   struct pipe_screen *screen;
 
    if(!pipe)
       goto error1;
@@ -1249,13 +1260,13 @@ trace_context_create(struct pipe_screen *_screen,
    if(!trace_enabled())
       goto error1;
 
-   tr_scr = trace_screen(_screen);
-   screen = tr_scr->screen;
-
    tr_ctx = CALLOC_STRUCT(trace_context);
    if(!tr_ctx)
       goto error1;
 
+   tr_ctx->base.winsys = NULL;
+   tr_ctx->base.priv = pipe->priv; /* expose wrapped priv data */
+   tr_ctx->base.screen = &tr_scr->base;
    tr_ctx->draw_blocker = debug_get_flags_option("RBUG_BLOCK",
                                                  rbug_blocker_flags,
                                                  0);
@@ -1264,8 +1275,6 @@ trace_context_create(struct pipe_screen *_screen,
    pipe_mutex_init(tr_ctx->list_mutex);
    make_empty_list(&tr_ctx->shaders);
 
-   tr_ctx->base.winsys = _screen->winsys;
-   tr_ctx->base.screen = _screen;
    tr_ctx->base.destroy = trace_context_destroy;
    tr_ctx->base.draw_arrays = trace_context_draw_arrays;
    tr_ctx->base.draw_elements = trace_context_draw_elements;
@@ -1295,6 +1304,7 @@ trace_context_create(struct pipe_screen *_screen,
    tr_ctx->base.bind_vs_state = trace_context_bind_vs_state;
    tr_ctx->base.delete_vs_state = trace_context_delete_vs_state;
    tr_ctx->base.set_blend_color = trace_context_set_blend_color;
+   tr_ctx->base.set_stencil_ref = trace_context_set_stencil_ref;
    tr_ctx->base.set_clip_state = trace_context_set_clip_state;
    tr_ctx->base.set_constant_buffer = trace_context_set_constant_buffer;
    tr_ctx->base.set_framebuffer_state = trace_context_set_framebuffer_state;
@@ -1315,11 +1325,6 @@ trace_context_create(struct pipe_screen *_screen,
    tr_ctx->base.is_buffer_referenced = trace_is_buffer_referenced;
 
    tr_ctx->pipe = pipe;
-
-   trace_dump_call_begin("", "pipe_context_create");
-   trace_dump_arg(ptr, screen);
-   trace_dump_ret(ptr, pipe);
-   trace_dump_call_end();
 
    trace_screen_add_to_list(tr_scr, contexts, tr_ctx);
 

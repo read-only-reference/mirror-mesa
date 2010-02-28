@@ -249,6 +249,10 @@ static void r600InitConstValues(GLcontext *ctx, radeonScreenPtr screen)
 	ctx->Const.MaxTextureUnits =
 	    MIN2(ctx->Const.MaxTextureImageUnits,
 		 ctx->Const.MaxTextureCoordUnits);
+	ctx->Const.MaxCombinedTextureImageUnits =
+		ctx->Const.MaxVertexTextureImageUnits +
+		ctx->Const.MaxTextureImageUnits;
+
 	ctx->Const.MaxTextureMaxAnisotropy = 16.0;
 	ctx->Const.MaxTextureLodBias = 16.0;
 
@@ -266,6 +270,8 @@ static void r600InitConstValues(GLcontext *ctx, radeonScreenPtr screen)
 	ctx->Const.MaxLineWidthAA = 0xffff / 8.0;
 
 	ctx->Const.MaxDrawBuffers = 1; /* hw supports 8 */
+	ctx->Const.MaxColorAttachments = 1;
+	ctx->Const.MaxRenderbufferSize = 4096;
 
 	/* 256 for reg-based consts, inline consts also supported */
 	ctx->Const.VertexProgram.MaxInstructions = 8192; /* in theory no limit */
@@ -334,9 +340,12 @@ static void r600InitGLExtensions(GLcontext *ctx)
 		_mesa_enable_extension(ctx, "GL_EXT_texture_compression_s3tc");
 	}
 
-	/* XXX: RV740 only seems to report results from half of its DBs */
-	if (r600->radeon.radeonScreen->chip_family == CHIP_FAMILY_RV740)
-		_mesa_disable_extension(ctx, "GL_ARB_occlusion_query");
+	/* RV740 had a broken pipe config prior to drm 1.32 */
+	if (!r600->radeon.radeonScreen->kernel_mm) {
+		if ((r600->radeon.dri.drmMinor < 32) &&
+		    (r600->radeon.radeonScreen->chip_family == CHIP_FAMILY_RV740))
+			_mesa_disable_extension(ctx, "GL_ARB_occlusion_query");
+	}
 }
 
 /* Create the device specific rendering context.

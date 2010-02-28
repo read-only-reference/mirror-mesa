@@ -46,6 +46,7 @@
 #include "util/u_format.h"
 #include "util/u_memory.h"
 #include "util/u_rect.h"
+#include "util/u_inlines.h"
  
 static struct pipe_surface *
 dri_surface_from_handle(struct drm_api *api,
@@ -131,14 +132,24 @@ dri_get_buffers(__DRIdrawable * dPriv)
    boolean have_depth = FALSE;
    int i, count;
 
-   buffers = (*dri_screen->dri2.loader->getBuffers) (dri_drawable,
-						     &dri_drawable->w,
-						     &dri_drawable->h,
-						     drawable->attachments,
-						     drawable->
-						     num_attachments, &count,
-						     dri_drawable->
-						     loaderPrivate);
+   if ((dri_screen->dri2.loader
+        && (dri_screen->dri2.loader->base.version > 2)
+        && (dri_screen->dri2.loader->getBuffersWithFormat != NULL))) {
+      buffers = (*dri_screen->dri2.loader->getBuffersWithFormat)
+                (dri_drawable, &dri_drawable->w, &dri_drawable->h,
+                 drawable->attachments, drawable->num_attachments,
+                 &count, dri_drawable->loaderPrivate);
+   } else {
+      assert(dri_screen->dri2.loader);
+      buffers = (*dri_screen->dri2.loader->getBuffers) (dri_drawable,
+                                                        &dri_drawable->w,
+                                                        &dri_drawable->h,
+                                                        drawable->attachments,
+                                                        drawable->
+                                                        num_attachments, &count,
+                                                        dri_drawable->
+                                                        loaderPrivate);
+   }
 
    if (buffers == NULL) {
       return;
@@ -267,7 +278,7 @@ void dri2_set_tex_buffer2(__DRIcontext *pDRICtx, GLint target,
 void dri2_set_tex_buffer(__DRIcontext *pDRICtx, GLint target,
                          __DRIdrawable *dPriv)
 {
-   dri2_set_tex_buffer2(pDRICtx, target, GLX_TEXTURE_FORMAT_RGBA_EXT, dPriv);
+   dri2_set_tex_buffer2(pDRICtx, target, __DRI_TEXTURE_FORMAT_RGBA, dPriv);
 }
 
 void
@@ -275,7 +286,18 @@ dri_update_buffer(struct pipe_screen *screen, void *context_private)
 {
    struct dri_context *ctx = (struct dri_context *)context_private;
 
+   if (ctx->d_stamp == *ctx->dPriv->pStamp &&
+       ctx->r_stamp == *ctx->rPriv->pStamp)
+      return;
+
+   ctx->d_stamp = *ctx->dPriv->pStamp;
+   ctx->r_stamp = *ctx->rPriv->pStamp;
+
+   /* Ask the X server for new renderbuffers. */
    dri_get_buffers(ctx->dPriv);
+   if (ctx->dPriv != ctx->rPriv)
+      dri_get_buffers(ctx->rPriv);
+
 }
 
 void
@@ -345,12 +367,12 @@ dri_create_buffer(__DRIscreen * sPriv,
    case 24:
       if (visual->stencilBits == 0) {
 	 drawable->depth_stencil_format = (screen->d_depth_bits_last) ?
-	    PIPE_FORMAT_X8Z24_UNORM:
-	    PIPE_FORMAT_Z24X8_UNORM;
+                                          PIPE_FORMAT_X8Z24_UNORM:
+                                          PIPE_FORMAT_Z24X8_UNORM;
       } else {
 	 drawable->depth_stencil_format = (screen->sd_depth_bits_last) ?
-	    PIPE_FORMAT_S8Z24_UNORM:
-	    PIPE_FORMAT_Z24S8_UNORM;
+                                          PIPE_FORMAT_S8Z24_UNORM:
+                                          PIPE_FORMAT_Z24S8_UNORM;
       }
       break;
    case 32:
@@ -374,23 +396,49 @@ dri_create_buffer(__DRIscreen * sPriv,
    /* setup dri2 buffers information */
    /* TODO incase of double buffer visual, delay fake creation */
    i = 0;
-   drawable->attachments[i++] = __DRI_BUFFER_FRONT_LEFT;
-   if (!screen->auto_fake_front)
-      drawable->attachments[i++] = __DRI_BUFFER_FAKE_FRONT_LEFT;
-   if (visual->doubleBufferMode)
-      drawable->attachments[i++] = __DRI_BUFFER_BACK_LEFT;
-   if (visual->depthBits && visual->stencilBits)
-      drawable->attachments[i++] = __DRI_BUFFER_DEPTH_STENCIL;
-   else if (visual->depthBits)
-      drawable->attachments[i++] = __DRI_BUFFER_DEPTH;
-   else if (visual->stencilBits)
-      drawable->attachments[i++] = __DRI_BUFFER_STENCIL;
-   drawable->num_attachments = i;
+   if (sPriv->dri2.loader
+       && (sPriv->dri2.loader->base.version > 2)
+       && (sPriv->dri2.loader->getBuffersWithFormat != NULL)) {
+      drawable->attachments[i++] = __DRI_BUFFER_FRONT_LEFT;
+      drawable->attachments[i++] = visual->rgbBits;
+      if (!screen->auto_fake_front)  {
+         drawable->attachments[i++] = __DRI_BUFFER_FAKE_FRONT_LEFT;
+         drawable->attachments[i++] = visual->rgbBits;
+      }
+      if (visual->doubleBufferMode) {
+         drawable->attachments[i++] = __DRI_BUFFER_BACK_LEFT;
+         drawable->attachments[i++] = visual->rgbBits;
+      }
+      if (visual->depthBits && visual->stencilBits) {
+         drawable->attachments[i++] = __DRI_BUFFER_DEPTH_STENCIL;
+         drawable->attachments[i++] = visual->depthBits + visual->stencilBits;
+      } else if (visual->depthBits) {
+         drawable->attachments[i++] = __DRI_BUFFER_DEPTH;
+         drawable->attachments[i++] = visual->depthBits;
+      } else if (visual->stencilBits) {
+         drawable->attachments[i++] = __DRI_BUFFER_STENCIL;
+         drawable->attachments[i++] = visual->stencilBits;
+      }
+      drawable->num_attachments = i / 2;
+   } else {
+      drawable->attachments[i++] = __DRI_BUFFER_FRONT_LEFT;
+      if (!screen->auto_fake_front)
+         drawable->attachments[i++] = __DRI_BUFFER_FAKE_FRONT_LEFT;
+      if (visual->doubleBufferMode)
+         drawable->attachments[i++] = __DRI_BUFFER_BACK_LEFT;
+      if (visual->depthBits && visual->stencilBits)
+         drawable->attachments[i++] = __DRI_BUFFER_DEPTH_STENCIL;
+      else if (visual->depthBits)
+         drawable->attachments[i++] = __DRI_BUFFER_DEPTH;
+      else if (visual->stencilBits)
+         drawable->attachments[i++] = __DRI_BUFFER_STENCIL;
+      drawable->num_attachments = i;
+   }
 
    drawable->desired_fences = 2;
 
    return GL_TRUE;
- fail:
+fail:
    FREE(drawable);
    return GL_FALSE;
 }

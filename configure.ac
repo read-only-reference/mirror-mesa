@@ -20,7 +20,7 @@ AC_CANONICAL_HOST
 dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.15
 LIBDRM_RADEON_REQUIRED=2.4.17
-DRI2PROTO_REQUIRED=2.2
+DRI2PROTO_REQUIRED=2.1
 GLPROTO_REQUIRED=1.4.11
 
 dnl Check for progs
@@ -91,6 +91,9 @@ linux*|*-gnu*|gnu*)
     ;;
 solaris*)
     DEFINES="$DEFINES -DPTHREADS -DSVR4"
+    ;;
+cygwin*)
+    DEFINES="$DEFINES -DPTHREADS"
     ;;
 esac
 
@@ -392,7 +395,7 @@ fi
 
 dnl
 dnl Driver configuration. Options are xlib, dri and osmesa right now.
-dnl More later: directfb, fbdev, ...
+dnl More later: fbdev, ...
 dnl
 default_driver="xlib"
 
@@ -445,7 +448,7 @@ xlib)
     GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS xlib"
     ;;
 dri)
-    SRC_DIRS="$SRC_DIRS glx/x11"
+    SRC_DIRS="$SRC_DIRS glx"
     DRIVER_DIRS="dri"
     WINDOW_SYSTEM="dri"
     GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS drm"
@@ -717,10 +720,9 @@ if test "$mesa_driver" = dri; then
 
         case "$host_cpu" in
         x86_64)
-            # ffb, gamma, and sis are missing because they have not be
-            # converted to use the new interface.  i810 are missing
-            # because there is no x86-64 system where they could *ever*
-            # be used.
+            # sis is missing because they have not be converted to use
+            # the new interface.  i810 are missing because there is no
+            # x86-64 system where they could *ever* be used.
             if test "x$DRI_DIRS" = "xyes"; then
                 DRI_DIRS="i915 i965 mach64 mga r128 r200 r300 r600 radeon \
                     savage tdfx unichrome swrast"
@@ -736,7 +738,7 @@ if test "$mesa_driver" = dri; then
         sparc*)
             # Build only the drivers for cards that exist on sparc`
             if test "x$DRI_DIRS" = "xyes"; then
-                DRI_DIRS="mach64 r128 r200 r300 r600 radeon ffb swrast"
+                DRI_DIRS="mach64 r128 r200 r300 r600 radeon swrast"
             fi
             ;;
         esac
@@ -752,8 +754,6 @@ if test "$mesa_driver" = dri; then
             CXXFLAGS="$CXXFLAGS -ansi -pedantic"
         fi
 
-        # ffb and gamma are missing because they have not been converted
-        # to use the new interface.
         if test "x$DRI_DIRS" = "xyes"; then
             DRI_DIRS="i810 i915 i965 mach64 mga r128 r200 r300 r600 radeon tdfx \
                 unichrome savage sis swrast"
@@ -775,7 +775,7 @@ if test "$mesa_driver" = dri; then
     # default drivers
     if test "x$DRI_DIRS" = "xyes"; then
         DRI_DIRS="i810 i915 i965 mach64 mga r128 r200 r300 r600 radeon \
-            savage sis tdfx unichrome ffb swrast"
+            savage sis tdfx unichrome swrast"
     fi
 
     DRI_DIRS=`echo "$DRI_DIRS" | $SED 's/  */ /g'`
@@ -911,9 +911,22 @@ if test "x$enable_egl" = xyes; then
     SRC_DIRS="$SRC_DIRS egl"
     EGL_LIB_DEPS="$DLOPEN_LIBS -lpthread"
     EGL_DRIVERS_DIRS=""
-    if test "$enable_static" != yes && test "$mesa_driver" != osmesa; then
+    if test "$enable_static" != yes; then
         # build egl_glx when libGL is built
-        EGL_DRIVERS_DIRS="glx"
+        if test "$mesa_driver" != osmesa; then
+            EGL_DRIVERS_DIRS="glx"
+        fi
+
+        # build egl_dri2 when xcb-dri2 is available
+        PKG_CHECK_MODULES([EGL_DRI2], [x11-xcb xcb-dri2 xcb-xfixes libdrm],
+			  [have_xcb_dri2=yes],[have_xcb_dri2=no])
+        if test "$have_xcb_dri2" = yes; then
+            EGL_DRIVERS_DIRS="$EGL_DRIVERS_DIRS dri2"
+        fi
+    fi
+
+    if test "$with_demos" = yes; then
+        PROGRAM_DIRS="$PROGRAM_DIRS egl"
     fi
 fi
 AC_SUBST([EGL_LIB_DEPS])
@@ -1315,7 +1328,7 @@ AC_ARG_ENABLE([gallium-nouveau],
     [enable_gallium_nouveau=no])
 if test "x$enable_gallium_nouveau" = xyes; then
     GALLIUM_WINSYS_DRM_DIRS="$GALLIUM_WINSYS_DRM_DIRS nouveau"
-    GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS nouveau nv04 nv10 nv20 nv30 nv40 nv50"
+    GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS nouveau nv30 nv40 nv50"
 fi
 
 dnl
@@ -1395,7 +1408,11 @@ dnl Libraries
 echo ""
 echo "        Shared libs:     $enable_shared"
 echo "        Static libs:     $enable_static"
-echo "        EGL:             $enable_egl"
+if test "$enable_egl" = yes; then
+    echo "        EGL:             $EGL_DRIVERS_DIRS"
+else
+    echo "        EGL:             no"
+fi
 echo "        GLU:             $enable_glu"
 echo "        GLw:             $enable_glw (Motif: $enable_motif)"
 echo "        glut:            $enable_glut"

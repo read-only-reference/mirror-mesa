@@ -49,7 +49,7 @@ static void
 get_span_cache(struct intel_renderbuffer *irb, uint32_t offset)
 {
    if (irb->span_cache == NULL) {
-      irb->span_cache = _mesa_malloc(SPAN_CACHE_SIZE);
+      irb->span_cache = malloc(SPAN_CACHE_SIZE);
       irb->span_cache_offset = -1;
    }
 
@@ -498,6 +498,7 @@ intelSpanRenderStart(GLcontext * ctx)
    GLuint i;
 
    intelFlush(&intel->ctx);
+   intel_prepare_render(intel);
 
    for (i = 0; i < ctx->Const.MaxTextureImageUnits; i++) {
       if (ctx->Texture.Unit[i]._ReallyEnabled) {

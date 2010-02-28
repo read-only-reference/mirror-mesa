@@ -26,6 +26,7 @@
  **************************************************************************/
 
 #include "pipe/p_context.h"
+#include "util/u_inlines.h"
 
 #include "util/u_upload_mgr.h"
 #include "util/u_math.h"
@@ -358,9 +359,9 @@ static int brw_emit_vertex_elements(struct brw_context *brw)
       uint32_t comp3 = BRW_VE1_COMPONENT_STORE_SRC;
 
       switch (input->nr_components) {
-      case 0: comp0 = BRW_VE1_COMPONENT_STORE_0;
-      case 1: comp1 = BRW_VE1_COMPONENT_STORE_0;
-      case 2: comp2 = BRW_VE1_COMPONENT_STORE_0;
+      case 0: comp0 = BRW_VE1_COMPONENT_STORE_0; /* fallthrough */
+      case 1: comp1 = BRW_VE1_COMPONENT_STORE_0; /* fallthrough */
+      case 2: comp2 = BRW_VE1_COMPONENT_STORE_0; /* fallthrough */
       case 3: comp3 = BRW_VE1_COMPONENT_STORE_1_FLT;
 	 break;
       }

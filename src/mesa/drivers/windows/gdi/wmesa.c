@@ -35,7 +35,7 @@ wmesa_new_framebuffer(HDC hdc, GLvisual *visual)
     WMesaFramebuffer pwfb
         = (WMesaFramebuffer) malloc(sizeof(struct wmesa_framebuffer));
     if (pwfb) {
-        _mesa_initialize_framebuffer(&pwfb->Base, visual);
+        _mesa_initialize_window_framebuffer(&pwfb->Base, visual);
         pwfb->hDC = hdc;
         /* insert at head of list */
         pwfb->next = FirstFramebuffer;
@@ -1245,7 +1245,7 @@ static void read_rgba_pixels_16(const GLcontext *ctx,
 static void
 wmesa_delete_renderbuffer(struct gl_renderbuffer *rb)
 {
-    _mesa_free(rb);
+    free(rb);
 }
 
 
@@ -1474,7 +1474,7 @@ WMesaContext WMesaCreateContext(HDC hDC,
                                  1);         /* num samples */
     
     if (!visual) {
-	_mesa_free(c);
+	free(c);
 	return NULL;
     }
 
@@ -1512,7 +1512,7 @@ WMesaContext WMesaCreateContext(HDC hDC,
         !_tnl_CreateContext(ctx) ||
 	!_swsetup_CreateContext(ctx)) {
 	_mesa_free_context_data(ctx);
-	_mesa_free(c);
+	free(c);
 	return NULL;
     }
     _swsetup_Wakeup(ctx);
@@ -1557,7 +1557,7 @@ void WMesaDestroyContext( WMesaContext pwc )
     _swrast_DestroyContext(ctx);
     
     _mesa_free_context_data(ctx);
-    _mesa_free(pwc);
+    free(pwc);
 }
 
 

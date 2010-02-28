@@ -595,6 +595,13 @@ static void r200PointSize( GLcontext *ctx, GLfloat size )
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
    GLfloat *fcmd = (GLfloat *)rmesa->hw.ptp.cmd;
 
+   radeon_print(RADEON_STATE, RADEON_TRACE,
+       "%s(%p) size: %f, fixed point result: %d.%d (%d/16)\n",
+       __func__, ctx, size,
+       ((GLuint)(ctx->Point.Size * 16.0))/16,
+       (((GLuint)(ctx->Point.Size * 16.0))&15)*100/16,
+       ((GLuint)(ctx->Point.Size * 16.0))&15);
+
    R200_STATECHANGE( rmesa, cst );
    R200_STATECHANGE( rmesa, ptp );
    rmesa->hw.cst.cmd[CST_RE_POINTSIZE] &= ~0xffff;
@@ -2463,6 +2470,12 @@ static void r200PolygonStipple( GLcontext *ctx, const GLubyte *mask )
    GLint i;
 
    radeon_firevertices(&r200->radeon);
+
+   radeon_print(RADEON_STATE, RADEON_TRACE,
+		   "%s(%p) first 32 bits are %x.\n",
+		   __func__,
+		   ctx,
+		   *(uint32_t*)mask);
 
    R200_STATECHANGE(r200, stp);
 

@@ -175,7 +175,7 @@ bits_per_pixel( XMesaVisual xmv )
    /* grab the bits/pixel value */
    bitsPerPixel = img->bits_per_pixel;
    /* free the XImage */
-   _mesa_free( img->data );
+   free( img->data );
    img->data = NULL;
    XDestroyImage( img );
    return bitsPerPixel;
@@ -319,6 +319,51 @@ choose_pixel_format(XMesaVisual v)
 
 
 
+/**
+ * Query the default gallium screen for a Z/Stencil format that
+ * at least matches the given depthBits and stencilBits.
+ */
+static void
+xmesa_choose_z_stencil_format(int depthBits, int stencilBits,
+                              enum pipe_format *depthFormat,
+                              enum pipe_format *stencilFormat)
+{
+   const enum pipe_texture_target target = PIPE_TEXTURE_2D;
+   const unsigned tex_usage = PIPE_TEXTURE_USAGE_DEPTH_STENCIL;
+   const unsigned geom_flags = (PIPE_TEXTURE_GEOM_NON_SQUARE |
+                                PIPE_TEXTURE_GEOM_NON_POWER_OF_TWO);
+   static enum pipe_format formats[] = {
+      PIPE_FORMAT_Z24S8_UNORM,
+      PIPE_FORMAT_S8Z24_UNORM,
+      PIPE_FORMAT_Z16_UNORM,
+      PIPE_FORMAT_Z32_UNORM
+   };
+   int i;
+
+   assert(screen);
+
+   *depthFormat = *stencilFormat = PIPE_FORMAT_NONE;
+
+   /* search for supported format */
+   for (i = 0; i < Elements(formats); i++) {
+      if (screen->is_format_supported(screen, formats[i],
+                                      target, tex_usage, geom_flags)) {
+         *depthFormat = formats[i];
+         break;
+      }
+   }
+
+   if (stencilBits) {
+      *stencilFormat = *depthFormat;
+   }
+
+   /* XXX we should check that he chosen format has at least as many bits
+    * as what was requested.
+    */
+}
+
+
+
 /**********************************************************************/
 /*****                Linked list of XMesaBuffers                 *****/
 /**********************************************************************/
@@ -361,34 +406,9 @@ create_xmesa_buffer(Drawable d, BufferType type,
    /* determine PIPE_FORMATs for buffers */
    colorFormat = choose_pixel_format(vis);
 
-   if (vis->mesa_visual.depthBits == 0)
-      depthFormat = PIPE_FORMAT_NONE;
-#ifdef GALLIUM_CELL /* XXX temporary for Cell! */
-   else
-      depthFormat = PIPE_FORMAT_S8Z24_UNORM;
-#else
-   else if (vis->mesa_visual.depthBits <= 16)
-      depthFormat = PIPE_FORMAT_Z16_UNORM;
-   else if (vis->mesa_visual.depthBits <= 24)
-      depthFormat = PIPE_FORMAT_S8Z24_UNORM;
-   else
-      depthFormat = PIPE_FORMAT_Z32_UNORM;
-#endif
-
-   if (vis->mesa_visual.stencilBits == 8) {
-      if (depthFormat == PIPE_FORMAT_S8Z24_UNORM)
-         stencilFormat = depthFormat;
-      else
-         stencilFormat = PIPE_FORMAT_S8_UNORM;
-   }
-   else {
-      /* no stencil */
-      stencilFormat = PIPE_FORMAT_NONE;
-      if (depthFormat == PIPE_FORMAT_S8Z24_UNORM) {
-         /* use 24-bit Z, undefined stencil channel */
-         depthFormat = PIPE_FORMAT_X8Z24_UNORM;
-      }
-   }
+   xmesa_choose_z_stencil_format(vis->mesa_visual.depthBits,
+                                 vis->mesa_visual.stencilBits,
+                                 &depthFormat, &stencilFormat);
 
 
    get_drawable_size(vis->display, d, &width, &height);
@@ -550,10 +570,10 @@ initialize_visual_and_buffer(XMesaVisual v, XMesaBuffer b,
     * reports bugs.
     */
    if (_mesa_getenv("MESA_INFO")) {
-      _mesa_printf("X/Mesa visual = %p\n", (void *) v);
-      _mesa_printf("X/Mesa level = %d\n", v->mesa_visual.level);
-      _mesa_printf("X/Mesa depth = %d\n", v->visinfo->depth);
-      _mesa_printf("X/Mesa bits per pixel = %d\n", v->BitsPerPixel);
+      printf("X/Mesa visual = %p\n", (void *) v);
+      printf("X/Mesa level = %d\n", v->mesa_visual.level);
+      printf("X/Mesa depth = %d\n", v->visinfo->depth);
+      printf("X/Mesa bits per pixel = %d\n", v->BitsPerPixel);
    }
 
    if (b && window) {
@@ -653,6 +673,8 @@ XMesaVisual XMesaCreateVisual( Display *display,
    XMesaVisual v;
    GLint red_bits, green_bits, blue_bits, alpha_bits;
 
+   xmesa_init();
+
    /* For debugging only */
    if (_mesa_getenv("MESA_XSYNC")) {
       /* This makes debugging X easier.
@@ -669,16 +691,16 @@ XMesaVisual XMesaCreateVisual( Display *display,
 
    v->display = display;
 
-   /* Save a copy of the XVisualInfo struct because the user may X_mesa_free()
+   /* Save a copy of the XVisualInfo struct because the user may Xfree()
     * the struct but we may need some of the information contained in it
     * at a later time.
     */
    v->visinfo = (XVisualInfo *) MALLOC(sizeof(*visinfo));
    if (!v->visinfo) {
-      _mesa_free(v);
+      free(v);
       return NULL;
    }
-   MEMCPY(v->visinfo, visinfo, sizeof(*visinfo));
+   memcpy(v->visinfo, visinfo, sizeof(*visinfo));
 
    v->ximage_flag = ximage_flag;
 
@@ -743,10 +765,25 @@ XMesaVisual XMesaCreateVisual( Display *display,
 PUBLIC
 void XMesaDestroyVisual( XMesaVisual v )
 {
-   _mesa_free(v->visinfo);
-   _mesa_free(v);
+   free(v->visinfo);
+   free(v);
 }
 
+
+/**
+ * Do one-time initializations.
+ */
+void
+xmesa_init(void)
+{
+   static GLboolean firstTime = GL_TRUE;
+   if (firstTime) {
+      pipe_mutex_init(_xmesa_lock);
+      _screen = driver.create_pipe_screen();
+      screen = trace_screen_create( _screen );
+      firstTime = GL_FALSE;
+   }
+}
 
 
 /**
@@ -759,19 +796,12 @@ void XMesaDestroyVisual( XMesaVisual v )
 PUBLIC
 XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
 {
-   static GLboolean firstTime = GL_TRUE;
-   struct pipe_context *_pipe = NULL;
    struct pipe_context *pipe = NULL;
    XMesaContext c;
    GLcontext *mesaCtx;
    uint pf;
 
-   if (firstTime) {
-      pipe_mutex_init(_xmesa_lock);
-      _screen = driver.create_pipe_screen();
-      screen = trace_screen_create( _screen );
-      firstTime = GL_FALSE;
-   }
+   xmesa_init();
 
    /* Note: the XMesaContext contains a Mesa GLcontext struct (inheritance) */
    c = (XMesaContext) CALLOC_STRUCT(xmesa_context);
@@ -788,11 +818,12 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
    if (screen == NULL)
       goto fail;
 
-   _pipe = driver.create_pipe_context(_screen, (void *) c);
-   if (_pipe == NULL)
+   /* Trace screen knows how to properly wrap context creation in the
+    * wrapped screen, so nothing special to do here:
+    */
+   pipe = screen->context_create(screen, (void *) c);
+   if (pipe == NULL)
       goto fail;
-   pipe = trace_context_create(screen, _pipe);
-   pipe->priv = c;
 
    c->st = st_create_context(pipe, 
                              &v->mesa_visual,
@@ -811,7 +842,7 @@ fail:
    else if (pipe)
       pipe->destroy(pipe);
 
-   _mesa_free(c);
+   free(c);
    return NULL;
 }
 
@@ -828,7 +859,7 @@ void XMesaDestroyContext( XMesaContext c )
    screen->destroy(screen);
    */
 
-   _mesa_free(c);
+   free(c);
 }
 
 
@@ -1148,6 +1179,7 @@ void XMesaCopySubBuffer( XMesaBuffer b, int x, int y, int width, int height )
    if (!surf_front || !surf_back)
       return;
 
+   assert(pipe);
    pipe->surface_copy(pipe,
                       surf_front, x, y,  /* dest */
                       surf_back, x, y,   /* src */

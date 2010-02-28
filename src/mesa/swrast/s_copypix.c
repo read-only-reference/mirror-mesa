@@ -114,14 +114,14 @@ copy_conv_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
    span.arrayAttribs = FRAG_BIT_COL0;
 
    /* allocate space for GLfloat image */
-   tmpImage = (GLfloat *) _mesa_malloc(width * height * 4 * sizeof(GLfloat));
+   tmpImage = (GLfloat *) malloc(width * height * 4 * sizeof(GLfloat));
    if (!tmpImage) {
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyPixels");
       return;
    }
-   convImage = (GLfloat *) _mesa_malloc(width * height * 4 * sizeof(GLfloat));
+   convImage = (GLfloat *) malloc(width * height * 4 * sizeof(GLfloat));
    if (!convImage) {
-      _mesa_free(tmpImage);
+      free(tmpImage);
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyPixels");
       return;
    }
@@ -150,7 +150,7 @@ copy_conv_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
       ASSERT(ctx->Pixel.Separable2DEnabled);
       _mesa_convolve_sep_image(ctx, &width, &height, tmpImage, convImage);
    }
-   _mesa_free(tmpImage);
+   free(tmpImage);
 
    /* do remaining post-convolution image transfer ops */
    for (row = 0; row < height; row++) {
@@ -167,7 +167,7 @@ copy_conv_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
          GLfloat *rgba = (GLfloat *) span.array->attribs[FRAG_ATTRIB_COL0];
 
          /* copy convolved colors into span array */
-         _mesa_memcpy(rgba, src, width * 4 * sizeof(GLfloat));
+         memcpy(rgba, src, width * 4 * sizeof(GLfloat));
 
          /* write span */
          span.x = destx;
@@ -185,7 +185,7 @@ copy_conv_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
       span.array->ChanType = CHAN_TYPE;
    }
 
-   _mesa_free(convImage);
+   free(convImage);
 }
 
 
@@ -246,7 +246,7 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
    span.arrayAttribs = FRAG_BIT_COL0; /* we'll fill in COL0 attrib values */
 
    if (overlapping) {
-      tmpImage = (GLfloat *) _mesa_malloc(width * height * sizeof(GLfloat) * 4);
+      tmpImage = (GLfloat *) malloc(width * height * sizeof(GLfloat) * 4);
       if (!tmpImage) {
          _mesa_error( ctx, GL_OUT_OF_MEMORY, "glCopyPixels" );
          return;
@@ -273,7 +273,7 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
       /* Get row/span of source pixels */
       if (overlapping) {
          /* get from buffered image */
-         _mesa_memcpy(rgba, p, width * sizeof(GLfloat) * 4);
+         memcpy(rgba, p, width * sizeof(GLfloat) * 4);
          p += width * 4;
       }
       else {
@@ -303,7 +303,7 @@ copy_rgba_pixels(GLcontext *ctx, GLint srcx, GLint srcy,
    span.array->ChanType = CHAN_TYPE; /* restore */
 
    if (overlapping)
-      _mesa_free(tmpImage);
+      free(tmpImage);
 }
 
 
@@ -352,7 +352,7 @@ copy_ci_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
 
    if (overlapping) {
       GLint ssy = sy;
-      tmpImage = (GLuint *) _mesa_malloc(width * height * sizeof(GLuint));
+      tmpImage = (GLuint *) malloc(width * height * sizeof(GLuint));
       if (!tmpImage) {
          _mesa_error( ctx, GL_OUT_OF_MEMORY, "glCopyPixels" );
          return;
@@ -374,7 +374,7 @@ copy_ci_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
    for (j = 0; j < height; j++, sy += stepy, dy += stepy) {
       /* Get color indexes */
       if (overlapping) {
-         _mesa_memcpy(span.array->index, p, width * sizeof(GLuint));
+         memcpy(span.array->index, p, width * sizeof(GLuint));
          p += width;
       }
       else {
@@ -397,7 +397,7 @@ copy_ci_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
    }
 
    if (overlapping)
-      _mesa_free(tmpImage);
+      free(tmpImage);
 }
 
 
@@ -487,7 +487,7 @@ copy_depth_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
 
    if (overlapping) {
       GLint ssy = sy;
-      tmpImage = (GLfloat *) _mesa_malloc(width * height * sizeof(GLfloat));
+      tmpImage = (GLfloat *) malloc(width * height * sizeof(GLfloat));
       if (!tmpImage) {
          _mesa_error( ctx, GL_OUT_OF_MEMORY, "glCopyPixels" );
          return;
@@ -508,7 +508,7 @@ copy_depth_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
       GLfloat depth[MAX_WIDTH];
       /* get depth values */
       if (overlapping) {
-         _mesa_memcpy(depth, p, width * sizeof(GLfloat));
+         memcpy(depth, p, width * sizeof(GLfloat));
          p += width;
       }
       else {
@@ -537,7 +537,7 @@ copy_depth_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
    }
 
    if (overlapping)
-      _mesa_free(tmpImage);
+      free(tmpImage);
 }
 
 
@@ -584,7 +584,7 @@ copy_stencil_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
 
    if (overlapping) {
       GLint ssy = sy;
-      tmpImage = (GLstencil *) _mesa_malloc(width * height * sizeof(GLstencil));
+      tmpImage = (GLstencil *) malloc(width * height * sizeof(GLstencil));
       if (!tmpImage) {
          _mesa_error( ctx, GL_OUT_OF_MEMORY, "glCopyPixels" );
          return;
@@ -606,7 +606,7 @@ copy_stencil_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
 
       /* Get stencil values */
       if (overlapping) {
-         _mesa_memcpy(stencil, p, width * sizeof(GLstencil));
+         memcpy(stencil, p, width * sizeof(GLstencil));
          p += width;
       }
       else {
@@ -626,7 +626,7 @@ copy_stencil_pixels( GLcontext *ctx, GLint srcx, GLint srcy,
    }
 
    if (overlapping)
-      _mesa_free(tmpImage);
+      free(tmpImage);
 }
 
 
@@ -688,7 +688,7 @@ copy_depth_stencil_pixels(GLcontext *ctx,
 
       if (stencilMask != 0x0) {
          tempStencilImage
-            = (GLstencil *) _mesa_malloc(width * height * sizeof(GLstencil));
+            = (GLstencil *) malloc(width * height * sizeof(GLstencil));
          if (!tempStencilImage) {
             _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyPixels");
             return;
@@ -706,10 +706,10 @@ copy_depth_stencil_pixels(GLcontext *ctx,
 
       if (ctx->Depth.Mask) {
          tempDepthImage
-            = (GLfloat *) _mesa_malloc(width * height * sizeof(GLfloat));
+            = (GLfloat *) malloc(width * height * sizeof(GLfloat));
          if (!tempDepthImage) {
             _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyPixels");
-            _mesa_free(tempStencilImage);
+            free(tempStencilImage);
             return;
          }
 
@@ -730,7 +730,7 @@ copy_depth_stencil_pixels(GLcontext *ctx,
 
          /* Get stencil values */
          if (overlapping) {
-            _mesa_memcpy(stencil, stencilPtr, width * sizeof(GLstencil));
+            memcpy(stencil, stencilPtr, width * sizeof(GLstencil));
             stencilPtr += width;
          }
          else {
@@ -759,7 +759,7 @@ copy_depth_stencil_pixels(GLcontext *ctx,
 
          /* get depth values */
          if (overlapping) {
-            _mesa_memcpy(depth, depthPtr, width * sizeof(GLfloat));
+            memcpy(depth, depthPtr, width * sizeof(GLfloat));
             depthPtr += width;
          }
          else {
@@ -799,10 +799,10 @@ copy_depth_stencil_pixels(GLcontext *ctx,
    }
 
    if (tempStencilImage)
-      _mesa_free(tempStencilImage);
+      free(tempStencilImage);
 
    if (tempDepthImage)
-      _mesa_free(tempDepthImage);
+      free(tempDepthImage);
 }
 
 

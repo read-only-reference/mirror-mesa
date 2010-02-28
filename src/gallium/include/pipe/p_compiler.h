@@ -38,6 +38,8 @@
 #include "xf86_ansic.h"
 #include "xf86_libc.h"
 #endif
+#include <stddef.h>
+#include <stdarg.h>
 
 
 #if defined(_WIN32) && !defined(__WIN32__)
@@ -125,6 +127,9 @@ typedef unsigned char boolean;
 #   define __FUNCTION__ "<unknown>"
 #  endif
 # endif
+# if defined(_MSC_VER) && _MSC_VER < 1300
+#  define __FUNCTION__ "<unknown>"
+# endif
 #endif
 
 
@@ -136,6 +141,14 @@ typedef unsigned char boolean;
 #define PIPE_CDECL __cdecl
 #else
 #define PIPE_CDECL
+#endif
+
+
+
+#if (__GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 1))
+#define PIPE_DEPRECATED  __attribute__((__deprecated__))
+#else
+#define PIPE_DEPRECATED
 #endif
 
 

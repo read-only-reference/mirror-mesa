@@ -581,9 +581,13 @@ struct dd_function_table {
    struct gl_program * (*NewProgram)(GLcontext *ctx, GLenum target, GLuint id);
    /** Delete a program */
    void (*DeleteProgram)(GLcontext *ctx, struct gl_program *prog);   
-   /** Notify driver that a program string has been specified. */
-   void (*ProgramStringNotify)(GLcontext *ctx, GLenum target, 
-			       struct gl_program *prog);
+   /**
+    * Notify driver that a program string (and GPU code) has been specified
+    * or modified.  Return GL_TRUE or GL_FALSE to indicate if the program is
+    * supported by the driver.
+    */
+   GLboolean (*ProgramStringNotify)(GLcontext *ctx, GLenum target, 
+                                    struct gl_program *prog);
 
    /** Query if program can be loaded onto hardware */
    GLboolean (*IsProgramNative)(GLcontext *ctx, GLenum target, 
@@ -1031,6 +1035,17 @@ struct dd_function_table {
                    GLfloat width, GLfloat height);
    /*@}*/
 #endif
+
+#if FEATURE_OES_EGL_image
+   void (*EGLImageTargetTexture2D)(GLcontext *ctx, GLenum target,
+				   struct gl_texture_object *texObj,
+				   struct gl_texture_image *texImage,
+				   GLeglImageOES image_handle);
+   void (*EGLImageTargetRenderbufferStorage)(GLcontext *ctx,
+					     struct gl_renderbuffer *rb,
+					     void *image_handle);
+#endif
+
 };
 
 

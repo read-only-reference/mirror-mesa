@@ -134,7 +134,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, int param)
 	case NOUVEAU_CAP_HW_VTXBUF:
 		return 1;
 	case NOUVEAU_CAP_HW_IDXBUF:
-		return 0;
+		return 1;
 	case PIPE_CAP_INDEP_BLEND_ENABLE:
 		return 1;
 	case PIPE_CAP_INDEP_BLEND_FUNC:
@@ -195,6 +195,9 @@ nv50_screen_destroy(struct pipe_screen *pscreen)
 	nouveau_grobj_free(&screen->tesla);
 	nouveau_grobj_free(&screen->eng2d);
 	nouveau_grobj_free(&screen->m2mf);
+	nouveau_resource_destroy(&screen->immd_heap[0]);
+	nouveau_resource_destroy(&screen->parm_heap[0]);
+	nouveau_resource_destroy(&screen->parm_heap[1]);
 	nouveau_screen_fini(&screen->base);
 	FREE(screen);
 }
@@ -248,6 +251,7 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 	pscreen->get_param = nv50_screen_get_param;
 	pscreen->get_paramf = nv50_screen_get_paramf;
 	pscreen->is_format_supported = nv50_screen_is_format_supported;
+	pscreen->context_create = nv50_create;
 	screen->base.pre_pipebuffer_map_callback = nv50_pre_pipebuffer_map;
 
 	nv50_screen_init_miptree_functions(pscreen);

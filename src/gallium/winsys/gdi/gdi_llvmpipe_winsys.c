@@ -38,7 +38,7 @@
 
 #include "pipe/p_format.h"
 #include "pipe/p_context.h"
-#include "pipe/p_inlines.h"
+#include "util/u_inlines.h"
 #include "util/u_format.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
@@ -216,11 +216,6 @@ no_winsys:
 }
 
 
-static struct pipe_context *
-gdi_llvmpipe_context_create(struct pipe_screen *screen)
-{
-   return llvmpipe_create(screen);
-}
 
 
 static void
@@ -243,7 +238,6 @@ gdi_llvmpipe_present(struct pipe_screen *screen,
 
 static const struct stw_winsys stw_winsys = {
    &gdi_llvmpipe_screen_create,
-   &gdi_llvmpipe_context_create,
    &gdi_llvmpipe_present,
    NULL, /* get_adapter_luid */
    NULL, /* shared_surface_open */
@@ -257,13 +251,13 @@ DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
 {
    switch (fdwReason) {
    case DLL_PROCESS_ATTACH:
-      if (!stw_init(&stw_winsys)) {
-         return FALSE;
-      }
-      return stw_init_thread();
+      stw_init(&stw_winsys);
+      stw_init_thread();
+      break;
 
    case DLL_THREAD_ATTACH:
-      return stw_init_thread();
+      stw_init_thread();
+      break;
 
    case DLL_THREAD_DETACH:
       stw_cleanup_thread();

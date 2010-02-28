@@ -20,6 +20,8 @@
  * SOFTWARE.
  */
 
+#include "util/u_format.h"
+
 #include "nv50_context.h"
 #include "nouveau/nouveau_stateobj.h"
 
@@ -79,7 +81,7 @@ nv50_state_validate_fb(struct nv50_context *nv50)
 		NV50_CBUF_FORMAT_CASE(R16G16_UNORM);
 		default:
 			NOUVEAU_ERR("AIIII unknown format %s\n",
-				    pf_name(fb->cbufs[i]->format));
+			            util_format_name(fb->cbufs[i]->format));
 			so_data(so, NV50TCL_RT_FORMAT_X8R8G8B8_UNORM);
 			break;
 		}
@@ -116,7 +118,7 @@ nv50_state_validate_fb(struct nv50_context *nv50)
 		NV50_ZETA_FORMAT_CASE(Z32_FLOAT);
 		default:
 			NOUVEAU_ERR("AIIII unknown format %s\n",
-				    pf_name(fb->zsbuf->format));
+			            util_format_name(fb->zsbuf->format));
 			so_data(so, NV50TCL_ZETA_FORMAT_S8Z24_UNORM);
 			break;
 		}
@@ -185,10 +187,10 @@ nv50_state_emit(struct nv50_context *nv50)
 	struct nv50_screen *screen = nv50->screen;
 	struct nouveau_channel *chan = screen->base.channel;
 
-	/* I don't want to copy headers from the winsys. */
-	screen->cur_ctx = nv50;
-
-	if (nv50->pctx_id != screen->cur_pctx) {
+	/* XXX: this is racy for multiple contexts active on separate
+	 * threads.
+	 */
+	if (screen->cur_ctx != nv50) {
 		if (nv50->state.fb)
 			nv50->state.dirty |= NV50_NEW_FRAMEBUFFER;
 		if (nv50->state.blend)
@@ -205,6 +207,8 @@ nv50_state_emit(struct nv50_context *nv50)
 			nv50->state.dirty |= NV50_NEW_RASTERIZER;
 		if (nv50->state.blend_colour)
 			nv50->state.dirty |= NV50_NEW_BLEND_COLOUR;
+		if (nv50->state.stencil_ref)
+			nv50->state.dirty |= NV50_NEW_STENCIL_REF;
 		if (nv50->state.stipple)
 			nv50->state.dirty |= NV50_NEW_STIPPLE;
 		if (nv50->state.scissor)
@@ -217,7 +221,7 @@ nv50_state_emit(struct nv50_context *nv50)
 			nv50->state.dirty |= NV50_NEW_TEXTURE;
 		if (nv50->state.vtxfmt && nv50->state.vtxbuf)
 			nv50->state.dirty |= NV50_NEW_ARRAYS;
-		screen->cur_pctx = nv50->pctx_id;
+		screen->cur_ctx = nv50;
 	}
 
 	if (nv50->state.dirty & NV50_NEW_FRAMEBUFFER)
@@ -242,6 +246,8 @@ nv50_state_emit(struct nv50_context *nv50)
 		so_emit(chan, nv50->state.rast);
 	if (nv50->state.dirty & NV50_NEW_BLEND_COLOUR)
 		so_emit(chan, nv50->state.blend_colour);
+	if (nv50->state.dirty & NV50_NEW_STENCIL_REF)
+		so_emit(chan, nv50->state.stencil_ref);
 	if (nv50->state.dirty & NV50_NEW_STIPPLE)
 		so_emit(chan, nv50->state.stipple);
 	if (nv50->state.dirty & NV50_NEW_SCISSOR)
@@ -322,6 +328,16 @@ nv50_state_validate(struct nv50_context *nv50)
 		so_data  (so, fui(nv50->blend_colour.color[2]));
 		so_data  (so, fui(nv50->blend_colour.color[3]));
 		so_ref(so, &nv50->state.blend_colour);
+		so_ref(NULL, &so);
+	}
+
+	if (nv50->dirty & NV50_NEW_STENCIL_REF) {
+		so = so_new(2, 2, 0);
+		so_method(so, tesla, NV50TCL_STENCIL_FRONT_FUNC_REF, 1);
+		so_data  (so, nv50->stencil_ref.ref_value[0]);
+		so_method(so, tesla, NV50TCL_STENCIL_BACK_FUNC_REF, 1);
+		so_data  (so, nv50->stencil_ref.ref_value[1]);
+		so_ref(so, &nv50->state.stencil_ref);
 		so_ref(NULL, &so);
 	}
 

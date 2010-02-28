@@ -307,8 +307,8 @@ struct r700_vertex_program* r700TranslateVertexShader(GLcontext *ctx,
 	struct r700_vertex_program *vp;
 	unsigned int i;
 
-	vp = _mesa_calloc(sizeof(*vp));
-	vp->mesa_program = (struct gl_vertex_program *)_mesa_clone_program(ctx, &mesa_vp->Base);
+	vp = calloc(1, sizeof(*vp));
+	vp->mesa_program = _mesa_clone_vertex_program(ctx, mesa_vp);
 
 	if (mesa_vp->IsPositionInvariant)
 	{
@@ -647,7 +647,7 @@ GLboolean r700SetupVertexProgram(GLcontext * ctx)
         /* _mesa_reference_program has already checked glsl shProg is ok and set ctx->VertexProgem._Current */
         /* so, use ctx->VertexProgem._Current */       
         struct gl_program_parameter_list *paramListOrginal = 
-                         paramListOrginal = ctx->VertexProgram._Current->Base.Parameters;
+                         ctx->VertexProgram._Current->Base.Parameters;
          
 	    _mesa_load_state_parameters(ctx, paramList);
 
