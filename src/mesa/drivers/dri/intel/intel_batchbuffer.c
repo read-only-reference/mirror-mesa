@@ -55,6 +55,7 @@ intel_batchbuffer_reset(struct intel_batchbuffer *batch)
    }
    batch->size = intel->maxBatchSize;
    batch->ptr = batch->map;
+   batch->reserved_space = BATCH_RESERVED;
    batch->dirty_state = ~0;
 }
 
@@ -180,8 +181,6 @@ _intel_batchbuffer_flush(struct intel_batchbuffer *batch, const char *file,
    /* Check that we didn't just wrap our batchbuffer at a bad time. */
    assert(!intel->no_batch_wrap);
 
-   batch->reserved_space = BATCH_RESERVED;
-
    /* TODO: Just pass the relocation list and dma buffer up to the
     * kernel.
     */
@@ -275,10 +274,18 @@ intel_batchbuffer_emit_mi_flush(struct intel_batchbuffer *batch)
 {
    struct intel_context *intel = batch->intel;
 
-   if (intel->gen >= 4) {
+   if (intel->gen >= 6) {
+      BEGIN_BATCH(4);
+      OUT_BATCH(_3DSTATE_PIPE_CONTROL);
+      OUT_BATCH(PIPE_CONTROL_INSTRUCTION_FLUSH |
+		PIPE_CONTROL_WRITE_FLUSH |
+		PIPE_CONTROL_NO_WRITE);
+      OUT_BATCH(0); /* write address */
+      OUT_BATCH(0); /* write data */
+      ADVANCE_BATCH();
+   } else if (intel->gen >= 4) {
       BEGIN_BATCH(4);
       OUT_BATCH(_3DSTATE_PIPE_CONTROL |
-		PIPE_CONTROL_INSTRUCTION_FLUSH |
 		PIPE_CONTROL_WRITE_FLUSH |
 		PIPE_CONTROL_NO_WRITE);
       OUT_BATCH(0); /* write address */

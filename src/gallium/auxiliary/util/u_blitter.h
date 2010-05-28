@@ -112,13 +112,15 @@ void util_blitter_clear(struct blitter_context *blitter,
  * - fragment sampler states
  * - fragment sampler textures
  */
-void util_blitter_copy(struct blitter_context *blitter,
-                       struct pipe_surface *dst,
-                       unsigned dstx, unsigned dsty,
-                       struct pipe_surface *src,
-                       unsigned srcx, unsigned srcy,
-                       unsigned width, unsigned height,
-                       boolean ignore_stencil);
+void util_blitter_copy_region(struct blitter_context *blitter,
+                              struct pipe_resource *dst,
+                              struct pipe_subresource subdst,
+                              unsigned dstx, unsigned dsty, unsigned dstz,
+                              struct pipe_resource *src,
+                              struct pipe_subresource subsrc,
+                              unsigned srcx, unsigned srcy, unsigned srcz,
+                              unsigned width, unsigned height,
+                              boolean ignore_stencil);
 
 /**
  * Fill a region of a surface with a constant value.
@@ -130,34 +132,17 @@ void util_blitter_copy(struct blitter_context *blitter,
  * already required to be saved:
  * - framebuffer state
  */
-void util_blitter_fill(struct blitter_context *blitter,
-                       struct pipe_surface *dst,
-                       unsigned dstx, unsigned dsty,
-                       unsigned width, unsigned height,
-                       unsigned value);
-
-/**
- * Copy all pixels from one surface to another.
- *
- * The rules are the same as in util_blitter_copy with the addition that
- * surfaces must have the same size.
- */
-static INLINE
-void util_blitter_copy_surface(struct blitter_context *blitter,
-                               struct pipe_surface *dst,
-                               struct pipe_surface *src,
-                               boolean ignore_stencil)
-{
-   assert(dst->width == src->width && dst->height == src->height);
-
-   util_blitter_copy(blitter, dst, 0, 0, src, 0, 0, src->width, src->height,
-                     ignore_stencil);
-}
+void util_blitter_fill_region(struct blitter_context *blitter,
+                              struct pipe_resource *dst,
+                              struct pipe_subresource subdst,
+                              unsigned dstx, unsigned dsty, unsigned dstz,
+                              unsigned width, unsigned height,
+                              unsigned value);
 
 
 /* The functions below should be used to save currently bound constant state
  * objects inside a driver. The objects are automatically restored at the end
- * of the util_blitter_{clear, fill, copy, copy_surface} functions and then
+ * of the util_blitter_{clear, copy_region, fill_region} functions and then
  * forgotten.
  *
  * CSOs not listed here are not affected by util_blitter. */

@@ -37,6 +37,7 @@
 #include <llvm-c/Transforms/Scalar.h>
 
 #include "util/u_memory.h"
+#include "util/u_pointer.h"
 #include "util/u_format.h"
 #include "util/u_format_tests.h"
 #include "util/u_format_s3tc.h"
@@ -72,19 +73,6 @@ write_tsv_row(FILE *fp,
 typedef void
 (*fetch_ptr_t)(float *, const void *packed,
                unsigned i, unsigned j);
-
-/** cast wrapper to avoid warnings */
-static fetch_ptr_t
-void_to_fetch_ptr_t(void *p)
-{
-   union {
-      void *v;
-      fetch_ptr_t f;
-   } u;
-   u.v = p;
-   return u.f;
-}
-
 
 
 static LLVMValueRef
@@ -136,7 +124,7 @@ test_format(unsigned verbose, FILE *fp,
    LLVMValueRef fetch = NULL;
    LLVMPassManagerRef pass = NULL;
    fetch_ptr_t fetch_ptr;
-   float unpacked[4];
+   PIPE_ALIGN_VAR(16) float unpacked[4];
    boolean success;
    unsigned i, j, k;
 
@@ -162,7 +150,7 @@ test_format(unsigned verbose, FILE *fp,
    (void)pass;
 #endif
 
-   fetch_ptr = void_to_fetch_ptr_t(LLVMGetPointerToGlobal(lp_build_engine, fetch));
+   fetch_ptr = (fetch_ptr_t)pointer_to_func(LLVMGetPointerToGlobal(lp_build_engine, fetch));
 
    for (i = 0; i < desc->block.height; ++i) {
       for (j = 0; j < desc->block.width; ++j) {
@@ -243,6 +231,8 @@ test_all(unsigned verbose, FILE *fp)
 {
    enum pipe_format format;
    boolean success = TRUE;
+
+   util_format_s3tc_init();
 
    for (format = 1; format < PIPE_FORMAT_COUNT; ++format) {
       const struct util_format_description *format_desc;

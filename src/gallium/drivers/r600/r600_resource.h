@@ -1,5 +1,5 @@
 /*
- * Copyright 2008 Corbin Simpson <MostAwesomeDude@gmail.com>
+ * Copyright 2010 Marek Olšák <maraeo@gmail.com
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -18,11 +18,16 @@
  * THE AUTHOR(S) AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
- * USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
 
-#ifndef R300_FLUSH_H
-#define R300_FLUSH_H
+#ifndef R600_RESOURCE_H
+#define R600_RESOURCE_H
 
-void r300_init_flush_functions(struct r300_context* r300);
+struct r600_context;
+struct r600_screen;
 
-#endif /* R300_FLUSH_H */
+void r600_init_context_resource_functions(struct r600_context *r600);
+void r600_init_screen_resource_functions(struct r600_screen *r600screen);
+
+#endif

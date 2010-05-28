@@ -28,6 +28,7 @@
 #include "r300_context.h"
 #include "r300_texture.h"
 #include "r300_screen_buffer.h"
+#include "r300_state_inlines.h"
 #include "r300_winsys.h"
 
 /* Return the identifier behind whom the brave coders responsible for this
@@ -248,6 +249,7 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
     uint32_t retval = 0;
     boolean is_r500 = r300_screen(screen)->caps.is_r500;
     boolean is_r400 = r300_screen(screen)->caps.is_r400;
+    boolean is_rv350 = r300_screen(screen)->caps.is_rv350;
     boolean is_z24 = format == PIPE_FORMAT_X8Z24_UNORM ||
                      format == PIPE_FORMAT_S8_USCALED_Z24_UNORM;
     boolean is_color2101010 = format == PIPE_FORMAT_R10G10B10A2_UNORM ||
@@ -258,6 +260,10 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
                        format == PIPE_FORMAT_RGTC1_SNORM;
     boolean is_ati2n = format == PIPE_FORMAT_RGTC2_UNORM ||
                        format == PIPE_FORMAT_RGTC2_SNORM;
+    boolean is_half_float = format == PIPE_FORMAT_R16_FLOAT ||
+                            format == PIPE_FORMAT_R16G16_FLOAT ||
+                            format == PIPE_FORMAT_R16G16B16_FLOAT ||
+                            format == PIPE_FORMAT_R16G16B16A16_FLOAT;
 
     if (target >= PIPE_MAX_TEXTURE_TYPES) {
         fprintf(stderr, "r300: Implementation error: Received bogus texture "
@@ -301,6 +307,14 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
         retval |= PIPE_BIND_DEPTH_STENCIL;
     }
 
+    /* Check vertex buffer format support. */
+    if (usage & PIPE_BIND_VERTEX_BUFFER &&
+        /* Half float is supported on >= RV350. */
+        (is_rv350 || !is_half_float) &&
+        r300_translate_vertex_data_type(format) != R300_INVALID_FORMAT) {
+        retval |= PIPE_BIND_VERTEX_BUFFER;
+    }
+
     return retval == usage;
 }
 
@@ -319,20 +333,33 @@ static void r300_fence_reference(struct pipe_screen *screen,
                                  struct pipe_fence_handle **ptr,
                                  struct pipe_fence_handle *fence)
 {
+    struct r300_fence **oldf = (struct r300_fence**)ptr;
+    struct r300_fence *newf = (struct r300_fence*)fence;
+
+    if (pipe_reference(&(*oldf)->reference, &newf->reference))
+        FREE(*oldf);
+
+    *ptr = fence;
 }
 
 static int r300_fence_signalled(struct pipe_screen *screen,
                                 struct pipe_fence_handle *fence,
                                 unsigned flags)
 {
-    return 0;
+    struct r300_fence *rfence = (struct r300_fence*)fence;
+
+    return rfence->signalled ? 0 : 1; /* 0 == success */
 }
 
 static int r300_fence_finish(struct pipe_screen *screen,
                              struct pipe_fence_handle *fence,
                              unsigned flags)
 {
-    return 0;
+    struct r300_fence *rfence = (struct r300_fence*)fence;
+
+    r300_finish(rfence->ctx);
+    rfence->signalled = TRUE;
+    return 0; /* 0 == success */
 }
 
 struct pipe_screen* r300_create_screen(struct r300_winsys_screen *rws)

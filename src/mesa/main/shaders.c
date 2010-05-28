@@ -27,6 +27,7 @@
 #include "context.h"
 #include "shaders.h"
 #include "shader/shader_api.h"
+#include "main/dispatch.h"
 
 
 /** Define this to enable shader substitution (see below) */
@@ -646,6 +647,77 @@ _mesa_Uniform4ivARB(GLint location, GLsizei count, const GLint * value)
 }
 
 
+/** OpenGL 3.0 GLuint-valued functions **/
+void GLAPIENTRY
+_mesa_Uniform1ui(GLint location, GLuint v0)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ctx->Driver.Uniform(ctx, location, 1, &v0, GL_UNSIGNED_INT);
+}
+
+void GLAPIENTRY
+_mesa_Uniform2ui(GLint location, GLuint v0, GLuint v1)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint v[2];
+   v[0] = v0;
+   v[1] = v1;
+   ctx->Driver.Uniform(ctx, location, 1, v, GL_UNSIGNED_INT_VEC2);
+}
+
+void GLAPIENTRY
+_mesa_Uniform3ui(GLint location, GLuint v0, GLuint v1, GLuint v2)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint v[3];
+   v[0] = v0;
+   v[1] = v1;
+   v[2] = v2;
+   ctx->Driver.Uniform(ctx, location, 1, v, GL_UNSIGNED_INT_VEC3);
+}
+
+void GLAPIENTRY
+_mesa_Uniform4ui(GLint location, GLuint v0, GLuint v1, GLuint v2, GLuint v3)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   GLuint v[4];
+   v[0] = v0;
+   v[1] = v1;
+   v[2] = v2;
+   v[3] = v3;
+   ctx->Driver.Uniform(ctx, location, 1, v, GL_UNSIGNED_INT_VEC4);
+}
+
+void GLAPIENTRY
+_mesa_Uniform1uiv(GLint location, GLsizei count, const GLuint *value)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ctx->Driver.Uniform(ctx, location, count, value, GL_UNSIGNED_INT);
+}
+
+void GLAPIENTRY
+_mesa_Uniform2uiv(GLint location, GLsizei count, const GLuint *value)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ctx->Driver.Uniform(ctx, location, count, value, GL_UNSIGNED_INT_VEC2);
+}
+
+void GLAPIENTRY
+_mesa_Uniform3uiv(GLint location, GLsizei count, const GLuint *value)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ctx->Driver.Uniform(ctx, location, count, value, GL_UNSIGNED_INT_VEC3);
+}
+
+void GLAPIENTRY
+_mesa_Uniform4uiv(GLint location, GLsizei count, const GLuint *value)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ctx->Driver.Uniform(ctx, location, count, value, GL_UNSIGNED_INT_VEC4);
+}
+
+
+
 void GLAPIENTRY
 _mesa_UniformMatrix2fvARB(GLint location, GLsizei count, GLboolean transpose,
                           const GLfloat * value)
@@ -739,7 +811,7 @@ _mesa_ValidateProgramARB(GLhandleARB program)
    ctx->Driver.ValidateProgram(ctx, program);
 }
 
-#ifdef FEATURE_ES2
+#if FEATURE_ES2
 
 void GLAPIENTRY
 _mesa_GetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype,
@@ -767,3 +839,94 @@ _mesa_ShaderBinary(GLint n, const GLuint* shaders, GLenum binaryformat,
 }
 
 #endif
+
+
+/**
+ * Plug in shader-related functions into API dispatch table.
+ */
+void
+_mesa_init_shader_dispatch(struct _glapi_table *exec)
+{
+#if FEATURE_GL
+   /* GL_ARB_vertex/fragment_shader */
+   SET_DeleteObjectARB(exec, _mesa_DeleteObjectARB);
+   SET_GetHandleARB(exec, _mesa_GetHandleARB);
+   SET_DetachObjectARB(exec, _mesa_DetachObjectARB);
+   SET_CreateShaderObjectARB(exec, _mesa_CreateShaderObjectARB);
+   SET_ShaderSourceARB(exec, _mesa_ShaderSourceARB);
+   SET_CompileShaderARB(exec, _mesa_CompileShaderARB);
+   SET_CreateProgramObjectARB(exec, _mesa_CreateProgramObjectARB);
+   SET_AttachObjectARB(exec, _mesa_AttachObjectARB);
+   SET_LinkProgramARB(exec, _mesa_LinkProgramARB);
+   SET_UseProgramObjectARB(exec, _mesa_UseProgramObjectARB);
+   SET_ValidateProgramARB(exec, _mesa_ValidateProgramARB);
+   SET_Uniform1fARB(exec, _mesa_Uniform1fARB);
+   SET_Uniform2fARB(exec, _mesa_Uniform2fARB);
+   SET_Uniform3fARB(exec, _mesa_Uniform3fARB);
+   SET_Uniform4fARB(exec, _mesa_Uniform4fARB);
+   SET_Uniform1iARB(exec, _mesa_Uniform1iARB);
+   SET_Uniform2iARB(exec, _mesa_Uniform2iARB);
+   SET_Uniform3iARB(exec, _mesa_Uniform3iARB);
+   SET_Uniform4iARB(exec, _mesa_Uniform4iARB);
+   SET_Uniform1fvARB(exec, _mesa_Uniform1fvARB);
+   SET_Uniform2fvARB(exec, _mesa_Uniform2fvARB);
+   SET_Uniform3fvARB(exec, _mesa_Uniform3fvARB);
+   SET_Uniform4fvARB(exec, _mesa_Uniform4fvARB);
+   SET_Uniform1ivARB(exec, _mesa_Uniform1ivARB);
+   SET_Uniform2ivARB(exec, _mesa_Uniform2ivARB);
+   SET_Uniform3ivARB(exec, _mesa_Uniform3ivARB);
+   SET_Uniform4ivARB(exec, _mesa_Uniform4ivARB);
+   SET_UniformMatrix2fvARB(exec, _mesa_UniformMatrix2fvARB);
+   SET_UniformMatrix3fvARB(exec, _mesa_UniformMatrix3fvARB);
+   SET_UniformMatrix4fvARB(exec, _mesa_UniformMatrix4fvARB);
+   SET_GetObjectParameterfvARB(exec, _mesa_GetObjectParameterfvARB);
+   SET_GetObjectParameterivARB(exec, _mesa_GetObjectParameterivARB);
+   SET_GetInfoLogARB(exec, _mesa_GetInfoLogARB);
+   SET_GetAttachedObjectsARB(exec, _mesa_GetAttachedObjectsARB);
+   SET_GetUniformLocationARB(exec, _mesa_GetUniformLocationARB);
+   SET_GetActiveUniformARB(exec, _mesa_GetActiveUniformARB);
+   SET_GetUniformfvARB(exec, _mesa_GetUniformfvARB);
+   SET_GetUniformivARB(exec, _mesa_GetUniformivARB);
+   SET_GetShaderSourceARB(exec, _mesa_GetShaderSourceARB);
+
+   /* OpenGL 2.0 */
+   SET_AttachShader(exec, _mesa_AttachShader);
+   SET_CreateProgram(exec, _mesa_CreateProgram);
+   SET_CreateShader(exec, _mesa_CreateShader);
+   SET_DeleteProgram(exec, _mesa_DeleteProgram);
+   SET_DeleteShader(exec, _mesa_DeleteShader);
+   SET_DetachShader(exec, _mesa_DetachShader);
+   SET_GetAttachedShaders(exec, _mesa_GetAttachedShaders);
+   SET_GetProgramiv(exec, _mesa_GetProgramiv);
+   SET_GetProgramInfoLog(exec, _mesa_GetProgramInfoLog);
+   SET_GetShaderiv(exec, _mesa_GetShaderiv);
+   SET_GetShaderInfoLog(exec, _mesa_GetShaderInfoLog);
+   SET_IsProgram(exec, _mesa_IsProgram);
+   SET_IsShader(exec, _mesa_IsShader);
+
+   /* OpenGL 2.1 */
+   SET_UniformMatrix2x3fv(exec, _mesa_UniformMatrix2x3fv);
+   SET_UniformMatrix3x2fv(exec, _mesa_UniformMatrix3x2fv);
+   SET_UniformMatrix2x4fv(exec, _mesa_UniformMatrix2x4fv);
+   SET_UniformMatrix4x2fv(exec, _mesa_UniformMatrix4x2fv);
+   SET_UniformMatrix3x4fv(exec, _mesa_UniformMatrix3x4fv);
+   SET_UniformMatrix4x3fv(exec, _mesa_UniformMatrix4x3fv);
+
+#if FEATURE_ARB_vertex_shader
+   SET_BindAttribLocationARB(exec, _mesa_BindAttribLocationARB);
+   SET_GetActiveAttribARB(exec, _mesa_GetActiveAttribARB);
+   SET_GetAttribLocationARB(exec, _mesa_GetAttribLocationARB);
+#endif
+
+   /* OpenGL 3.0 */
+   /* XXX finish dispatch */
+   (void) _mesa_Uniform1ui;
+   (void) _mesa_Uniform2ui;
+   (void) _mesa_Uniform3ui;
+   (void) _mesa_Uniform4ui;
+   (void) _mesa_Uniform1uiv;
+   (void) _mesa_Uniform2uiv;
+   (void) _mesa_Uniform3uiv;
+   (void) _mesa_Uniform4uiv;
+#endif /* FEATURE_GL */
+}

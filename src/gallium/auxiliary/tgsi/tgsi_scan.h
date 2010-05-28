@@ -45,6 +45,7 @@ struct tgsi_shader_info
    ubyte input_semantic_name[PIPE_MAX_SHADER_INPUTS]; /**< TGSI_SEMANTIC_x */
    ubyte input_semantic_index[PIPE_MAX_SHADER_INPUTS];
    ubyte input_interpolate[PIPE_MAX_SHADER_INPUTS];
+   ubyte input_usage_mask[PIPE_MAX_SHADER_INPUTS];
    ubyte input_cylindrical_wrap[PIPE_MAX_SHADER_INPUTS];
    ubyte output_semantic_name[PIPE_MAX_SHADER_OUTPUTS]; /**< TGSI_SEMANTIC_x */
    ubyte output_semantic_index[PIPE_MAX_SHADER_OUTPUTS];
@@ -61,8 +62,6 @@ struct tgsi_shader_info
    boolean writes_z;  /**< does fragment shader write Z value? */
    boolean writes_edgeflag; /**< vertex shader outputs edgeflag */
    boolean uses_kill;  /**< KIL or KILP instruction used? */
-   boolean uses_fogcoord; /**< fragment shader uses fog coord? */
-   boolean uses_frontfacing; /**< fragment shader uses front/back-face flag? */
 
    struct {
       unsigned name;

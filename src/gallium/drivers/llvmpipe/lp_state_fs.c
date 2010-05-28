@@ -64,6 +64,7 @@
 #include "pipe/p_defines.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
+#include "util/u_pointer.h"
 #include "util/u_format.h"
 #include "util/u_dump.h"
 #include "os/os_time.h"
@@ -87,6 +88,7 @@
 #include "lp_bld_depth.h"
 #include "lp_bld_interp.h"
 #include "lp_context.h"
+#include "lp_debug.h"
 #include "lp_perf.h"
 #include "lp_screen.h"
 #include "lp_setup.h"
@@ -758,7 +760,7 @@ generate_fragment(struct llvmpipe_context *lp,
    generate_pos0(builder, x, y, &x0, &y0);
 
    lp_build_interp_soa_init(&interp, 
-                            shader->base.tokens,
+                            &shader->info,
                             key->flatshade,
                             builder, fs_type,
                             a0_ptr, dadx_ptr, dady_ptr,
@@ -873,7 +875,7 @@ generate_fragment(struct llvmpipe_context *lp,
    {
       void *f = LLVMGetPointerToGlobal(screen->engine, function);
 
-      variant->jit_function[do_tri_test] = cast_voidptr_to_lp_jit_frag_func(f);
+      variant->jit_function[do_tri_test] = (lp_jit_frag_func)pointer_to_func(f);
 
       if (gallivm_debug & GALLIVM_DEBUG_ASM) {
          lp_disassemble(f);
@@ -1010,9 +1012,21 @@ llvmpipe_create_fs_state(struct pipe_context *pipe,
    /* we need to keep a local copy of the tokens */
    shader->base.tokens = tgsi_dup_tokens(templ->tokens);
 
-   if (gallivm_debug & GALLIVM_DEBUG_TGSI) {
+   if (LP_DEBUG & DEBUG_TGSI) {
+      unsigned attrib;
       debug_printf("llvmpipe: Create fragment shader %p:\n", (void *) shader);
       tgsi_dump(templ->tokens, 0);
+      debug_printf("usage masks:\n");
+      for (attrib = 0; attrib < shader->info.num_inputs; ++attrib) {
+         unsigned usage_mask = shader->info.input_usage_mask[attrib];
+         debug_printf("  IN[%u].%s%s%s%s\n",
+                      attrib,
+                      usage_mask & TGSI_WRITEMASK_X ? "x" : "",
+                      usage_mask & TGSI_WRITEMASK_Y ? "y" : "",
+                      usage_mask & TGSI_WRITEMASK_Z ? "z" : "",
+                      usage_mask & TGSI_WRITEMASK_W ? "w" : "");
+      }
+      debug_printf("\n");
    }
 
    return shader;
@@ -1260,10 +1274,7 @@ llvmpipe_update_fs(struct llvmpipe_context *lp)
       LP_COUNT_ADD(nr_llvm_compiles, 2);  /* emit vs. omit in/out test */
    }
 
-   lp_setup_set_fs_functions(lp->setup, 
-                             variant->jit_function[RAST_WHOLE],
-                             variant->jit_function[RAST_EDGE_TEST],
-                             variant->opaque);
+   lp_setup_set_fs_variant(lp->setup, variant);
 }
 
 

@@ -29,6 +29,8 @@
 #include "util/u_memory.h"
 #include "util/u_string.h"
 #include "util/u_inlines.h"
+#include "util/u_pointer.h"
+#include "util/u_format.h"
 #include "util/u_dl.h"
 #include "egldriver.h"
 #include "eglimage.h"
@@ -61,6 +63,11 @@ egl_g3d_search_path_callback(const char *dir, size_t len, void *callback_data)
       (struct egl_g3d_st_module *) callback_data;
    char path[1024];
    int ret;
+
+   if (!len) {
+      stmod->lib = util_dl_open(stmod->filename);
+      return !(stmod->lib);
+   }
 
    ret = util_snprintf(path, sizeof(path),
          "%.*s/%s", len, dir, stmod->filename);
@@ -103,6 +110,12 @@ egl_g3d_load_st_module(struct egl_g3d_st_module *stmod,
    }
 }
 
+#ifdef PIPE_OS_WINDOWS
+#define ST_MODULE_SUFFIX ".dll"
+#else
+#define ST_MODULE_SUFFIX ".so"
+#endif
+
 void
 egl_g3d_init_st_apis(struct st_api *stapis[ST_API_COUNT])
 {
@@ -121,24 +134,24 @@ egl_g3d_init_st_apis(struct st_api *stapis[ST_API_COUNT])
       case ST_API_OPENGL:
          skip_checks[api] = "glColor4d";
          symbols[api] = ST_CREATE_OPENGL_SYMBOL;
-         filenames[api][count++] = "api_GL.so";
+         filenames[api][count++] = "api_GL" ST_MODULE_SUFFIX;
          break;
       case ST_API_OPENGL_ES1:
          skip_checks[api] = "glColor4x";
          symbols[api] = ST_CREATE_OPENGL_ES1_SYMBOL;
-         filenames[api][count++] = "api_GLESv1_CM.so";
-         filenames[api][count++] = "api_GL.so";
+         filenames[api][count++] = "api_GLESv1_CM" ST_MODULE_SUFFIX;
+         filenames[api][count++] = "api_GL" ST_MODULE_SUFFIX;
          break;
       case ST_API_OPENGL_ES2:
          skip_checks[api] = "glShaderBinary";
          symbols[api] = ST_CREATE_OPENGL_ES2_SYMBOL;
-         filenames[api][count++] = "api_GLESv2.so";
-         filenames[api][count++] = "api_GL.so";
+         filenames[api][count++] = "api_GLESv2" ST_MODULE_SUFFIX;
+         filenames[api][count++] = "api_GL" ST_MODULE_SUFFIX;
          break;
       case ST_API_OPENVG:
          skip_checks[api] = "vgClear";
          symbols[api] = ST_CREATE_OPENVG_SYMBOL;
-         filenames[api][count++]= "api_OpenVG.so";
+         filenames[api][count++]= "api_OpenVG" ST_MODULE_SUFFIX;
          break;
       default:
          assert(!"Unknown API Type\n");
@@ -206,6 +219,7 @@ egl_g3d_destroy_st_apis(void)
 
 static boolean
 egl_g3d_st_manager_get_egl_image(struct st_manager *smapi,
+                                 struct st_context_iface *stctx,
                                  void *egl_image,
                                  struct st_egl_image *out)
 {
@@ -275,7 +289,34 @@ egl_g3d_st_framebuffer_flush_front_pbuffer(struct st_framebuffer_iface *stfbi,
    return TRUE;
 }
 
-static boolean 
+static void
+pbuffer_reference_openvg_image(struct egl_g3d_surface *gsurf)
+{
+   /* TODO */
+}
+
+static void
+pbuffer_allocate_render_texture(struct egl_g3d_surface *gsurf)
+{
+   struct egl_g3d_display *gdpy =
+      egl_g3d_display(gsurf->base.Resource.Display);
+   struct pipe_screen *screen = gdpy->native->screen;
+   struct pipe_resource templ, *ptex;
+
+   memset(&templ, 0, sizeof(templ));
+   templ.target = PIPE_TEXTURE_2D;
+   templ.last_level = 0;
+   templ.width0 = gsurf->base.Width;
+   templ.height0 = gsurf->base.Height;
+   templ.depth0 = 1;
+   templ.format = gsurf->stvis.color_format;
+   templ.bind = PIPE_BIND_RENDER_TARGET;
+
+   ptex = screen->resource_create(screen, &templ);
+   gsurf->render_texture = ptex;
+}
+
+static boolean
 egl_g3d_st_framebuffer_validate_pbuffer(struct st_framebuffer_iface *stfbi,
                                         const enum st_attachment_type *statts,
                                         unsigned count,
@@ -283,7 +324,6 @@ egl_g3d_st_framebuffer_validate_pbuffer(struct st_framebuffer_iface *stfbi,
 {
    _EGLSurface *surf = (_EGLSurface *) stfbi->st_manager_private;
    struct egl_g3d_surface *gsurf = egl_g3d_surface(surf);
-   struct pipe_resource templ;
    unsigned i;
 
    for (i = 0; i < count; i++) {
@@ -293,20 +333,19 @@ egl_g3d_st_framebuffer_validate_pbuffer(struct st_framebuffer_iface *stfbi,
          continue;
 
       if (!gsurf->render_texture) {
-         struct egl_g3d_display *gdpy =
-            egl_g3d_display(gsurf->base.Resource.Display);
-         struct pipe_screen *screen = gdpy->native->screen;
+         switch (gsurf->client_buffer_type) {
+         case EGL_NONE:
+            pbuffer_allocate_render_texture(gsurf);
+            break;
+         case EGL_OPENVG_IMAGE:
+            pbuffer_reference_openvg_image(gsurf);
+            break;
+         default:
+            break;
+         }
 
-         memset(&templ, 0, sizeof(templ));
-         templ.target = PIPE_TEXTURE_2D;
-         templ.last_level = 0;
-         templ.width0 = gsurf->base.Width;
-         templ.height0 = gsurf->base.Height;
-         templ.depth0 = 1;
-         templ.format = gsurf->stvis.color_format;
-         templ.bind = PIPE_BIND_RENDER_TARGET;
-
-         gsurf->render_texture = screen->resource_create(screen, &templ);
+         if (!gsurf->render_texture)
+            return FALSE;
       }
 
       pipe_resource_reference(&out[i], gsurf->render_texture);

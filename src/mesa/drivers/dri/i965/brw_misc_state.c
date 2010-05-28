@@ -182,6 +182,13 @@ static void upload_pipelined_state_pointers(struct brw_context *brw )
 {
    struct intel_context *intel = &brw->intel;
 
+   if (intel->gen == 5) {
+      /* Need to flush before changing clip max threads for errata. */
+      BEGIN_BATCH(1);
+      OUT_BATCH(MI_FLUSH);
+      ADVANCE_BATCH();
+   }
+
    BEGIN_BATCH(7);
    OUT_BATCH(CMD_PIPELINED_STATE_POINTERS << 16 | (7 - 2));
    OUT_RELOC(brw->vs.state_bo, I915_GEM_DOMAIN_INSTRUCTION, 0, 0);
@@ -519,10 +526,10 @@ static void upload_invarient_state( struct brw_context *brw )
       BRW_BATCH_STRUCT(brw, &gdo);
    }
 
-   intel_batchbuffer_emit_mi_flush(intel->batch);
-
    if (intel->gen >= 6) {
       int i;
+
+      intel_batchbuffer_emit_mi_flush(intel->batch);
 
       BEGIN_BATCH(3);
       OUT_BATCH(CMD_3D_MULTISAMPLE << 16 | (3 - 2));

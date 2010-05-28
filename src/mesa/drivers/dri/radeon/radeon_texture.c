@@ -39,6 +39,7 @@
 #include "main/texstore.h"
 #include "main/teximage.h"
 #include "main/texobj.h"
+#include "drivers/common/meta.h"
 
 #include "xmlpool.h"		/* for symbolic values of enum-type options */
 
@@ -294,9 +295,13 @@ void radeonGenerateMipmap(GLcontext* ctx, GLenum target, struct gl_texture_objec
 		radeon_firevertices(rmesa);
 	}
 
-	radeon_teximage_map(baseimage, GL_FALSE);
-	radeon_generate_mipmap(ctx, target, texObj);
-	radeon_teximage_unmap(baseimage);
+	if (_mesa_meta_check_generate_mipmap_fallback(ctx, target, texObj)) {
+		radeon_teximage_map(baseimage, GL_FALSE);
+		radeon_generate_mipmap(ctx, target, texObj);
+		radeon_teximage_unmap(baseimage);
+	} else {
+		_mesa_meta_GenerateMipmap(ctx, target, texObj);
+	}
 }
 
 
@@ -588,7 +593,12 @@ static int image_matches_texture_obj(struct gl_texture_object *texObj,
 	if (!baseImage)
 		return 0;
 
-	if (level < texObj->BaseLevel || level > texObj->MaxLevel)
+	/* Check image level against object BaseLevel, but not MaxLevel. MaxLevel is not
+	 * the highest level that can be assigned to the miptree.
+	 */
+	const unsigned maxLevel = texObj->BaseLevel + baseImage->MaxLog2;
+	if (level < texObj->BaseLevel || level > maxLevel
+			|| level > RADEON_MIPTREE_MAX_TEXTURE_LEVELS)
 		return 0;
 
 	const unsigned levelDiff = level - texObj->BaseLevel;
@@ -610,9 +620,7 @@ static void teximage_assign_miptree(radeonContextPtr rmesa,
 	radeonTexObj *t = radeon_tex_obj(texObj);
 	radeon_texture_image* image = get_radeon_texture_image(texImage);
 
-	/* Since miptree holds only images for levels <BaseLevel..MaxLevel>
-	 * don't allocate the miptree if the teximage won't fit.
-	 */
+	/* check image for dimension and level compatibility with texture */
 	if (!image_matches_texture_obj(texObj, texImage, level))
 		return;
 

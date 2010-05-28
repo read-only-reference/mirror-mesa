@@ -26,12 +26,8 @@
 #include "util/u_simple_list.h"
 #include "util/u_upload_mgr.h"
 
-#include "r300_blit.h"
 #include "r300_context.h"
 #include "r300_emit.h"
-#include "r300_flush.h"
-#include "r300_query.h"
-#include "r300_render.h"
 #include "r300_screen.h"
 #include "r300_screen_buffer.h"
 #include "r300_state_invariant.h"
@@ -185,29 +181,7 @@ struct pipe_context* r300_create_context(struct pipe_screen* screen,
 
     r300->context.destroy = r300_destroy_context;
 
-    r300->context.clear = r300_clear;
-    r300->context.resource_copy_region = r300_surface_copy;
-    r300->context.resource_fill_region = r300_surface_fill;
-
-    if (r300screen->caps.has_tcl) {
-        r300->context.draw_arrays = r300_draw_arrays;
-        r300->context.draw_elements = r300_draw_elements;
-        r300->context.draw_range_elements = r300_draw_range_elements;
-
-        if (r300screen->caps.is_r500) {
-            r300->emit_draw_arrays_immediate = r500_emit_draw_arrays_immediate;
-            r300->emit_draw_arrays = r500_emit_draw_arrays;
-            r300->emit_draw_elements = r500_emit_draw_elements;
-        } else {
-            r300->emit_draw_arrays_immediate = r300_emit_draw_arrays_immediate;
-            r300->emit_draw_arrays = r300_emit_draw_arrays;
-            r300->emit_draw_elements = r300_emit_draw_elements;
-        }
-    } else {
-        r300->context.draw_arrays = r300_swtcl_draw_arrays;
-        r300->context.draw_elements = r300_draw_elements;
-        r300->context.draw_range_elements = r300_swtcl_draw_range_elements;
-
+    if (!r300screen->caps.has_tcl) {
         /* Create a Draw. This is used for SW TCL. */
         r300->draw = draw_create(&r300->context);
         /* Enable our renderer. */
@@ -226,8 +200,10 @@ struct pipe_context* r300_create_context(struct pipe_screen* screen,
 				    R300_BIND_OQBO, 4096);
     make_empty_list(&r300->query_list);
 
+    r300_init_blit_functions(r300);
     r300_init_flush_functions(r300);
     r300_init_query_functions(r300);
+    r300_init_render_functions(r300);
     r300_init_state_functions(r300);
     r300_init_resource_functions(r300);
 
@@ -258,4 +234,39 @@ struct pipe_context* r300_create_context(struct pipe_screen* screen,
  no_upload_vb:
     FREE(r300);
     return NULL;
+}
+
+boolean r300_check_cs(struct r300_context *r300, unsigned size)
+{
+    struct r300_cs_info cs_info;
+
+    r300->rws->get_cs_info(r300->rws, &cs_info);
+    return size <= cs_info.free;
+}
+
+void r300_finish(struct r300_context *r300)
+{
+    struct pipe_framebuffer_state *fb;
+    unsigned i;
+
+    /* This is a preliminary implementation of glFinish.
+     *
+     * The ideal implementation should use something like EmitIrqLocked and
+     * WaitIrq, or better, real fences.
+     */
+    if (r300->fb_state.state) {
+        fb = r300->fb_state.state;
+
+        for (i = 0; i < fb->nr_cbufs; i++) {
+            if (fb->cbufs[i]->texture) {
+                r300->rws->buffer_wait(r300->rws,
+                    r300_texture(fb->cbufs[i]->texture)->buffer);
+                return;
+            }
+        }
+        if (fb->zsbuf && fb->zsbuf->texture) {
+            r300->rws->buffer_wait(r300->rws,
+                r300_texture(fb->zsbuf->texture)->buffer);
+        }
+    }
 }

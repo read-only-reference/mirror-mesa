@@ -49,20 +49,10 @@ i915_drm_winsys_destroy(struct i915_winsys *iws)
 }
 
 static struct pipe_screen *
-i915_drm_create_screen(struct drm_api *api, int drmFD,
-                       struct drm_create_screen_arg *arg)
+i915_drm_create_screen(struct drm_api *api, int drmFD)
 {
    struct i915_drm_winsys *idws;
    unsigned int deviceID;
-
-   if (arg != NULL) {
-      switch(arg->mode) {
-      case DRM_CREATE_NORMAL:
-         break;
-      default:
-         return NULL;
-      }
-   }
 
    idws = CALLOC_STRUCT(i915_drm_winsys);
    if (!idws)
@@ -75,7 +65,7 @@ i915_drm_create_screen(struct drm_api *api, int drmFD,
    i915_drm_winsys_init_fence_functions(idws);
 
    idws->fd = drmFD;
-   idws->id = deviceID;
+   idws->base.pci_id = deviceID;
    idws->max_batch_size = 16 * 4096;
 
    idws->base.destroy = i915_drm_winsys_destroy;
@@ -85,7 +75,7 @@ i915_drm_create_screen(struct drm_api *api, int drmFD,
 
    idws->dump_cmd = debug_get_bool_option("INTEL_DUMP_CMD", FALSE);
 
-   return i915_create_screen(&idws->base, deviceID);
+   return i915_screen_create(&idws->base);
 }
 
 static struct drm_api i915_drm_api =

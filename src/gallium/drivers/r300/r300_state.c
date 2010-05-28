@@ -474,7 +474,7 @@ static void*
             if (caps->is_r500) {
                 dsa->z_buffer_control |= R500_STENCIL_REFMASK_FRONT_BACK;
             } else {
-                dsa->stencil_ref_bf_fallback =
+                dsa->two_sided_stencil_ref =
                   (state->stencil[0].valuemask != state->stencil[1].valuemask ||
                    state->stencil[0].writemask != state->stencil[1].writemask);
             }
@@ -497,20 +497,6 @@ static void*
     return (void*)dsa;
 }
 
-static void r300_update_stencil_ref_fallback_status(struct r300_context *r300)
-{
-    struct r300_dsa_state *dsa = (struct r300_dsa_state*)r300->dsa_state.state;
-
-    if (r300->screen->caps.is_r500) {
-        return;
-    }
-
-    r300->stencil_ref_bf_fallback =
-        dsa->stencil_ref_bf_fallback ||
-        (dsa->two_sided &&
-         r300->stencil_ref.ref_value[0] != r300->stencil_ref.ref_value[1]);
-}
-
 /* Bind DSA state. */
 static void r300_bind_dsa_state(struct pipe_context* pipe,
                                 void* state)
@@ -522,8 +508,6 @@ static void r300_bind_dsa_state(struct pipe_context* pipe,
     }
 
     UPDATE_STATE(state, r300->dsa_state);
-
-    r300_update_stencil_ref_fallback_status(r300);
 }
 
 /* Free DSA state. */
@@ -540,8 +524,6 @@ static void r300_set_stencil_ref(struct pipe_context* pipe,
 
     r300->stencil_ref = *sr;
     r300->dsa_state.dirty = TRUE;
-
-    r300_update_stencil_ref_fallback_status(r300);
 }
 
 /* This switcheroo is needed just because of goddamned MACRO_SWITCH. */
@@ -558,18 +540,18 @@ static void r300_fb_set_tiling_flags(struct r300_context *r300,
         level = new_state->cbufs[i]->level;
 
         r300->rws->buffer_set_tiling(r300->rws, tex->buffer,
-                                        tex->pitch[0],
-                                        tex->microtile,
-                                        tex->mip_macrotile[level]);
+                tex->pitch[0] * util_format_get_blocksize(tex->b.b.format),
+                tex->microtile,
+                tex->mip_macrotile[level]);
     }
     if (new_state->zsbuf) {
         tex = r300_texture(new_state->zsbuf->texture);
         level = new_state->zsbuf->level;
 
         r300->rws->buffer_set_tiling(r300->rws, tex->buffer,
-                                        tex->pitch[0],
-                                        tex->microtile,
-                                        tex->mip_macrotile[level]);
+                tex->pitch[0] * util_format_get_blocksize(tex->b.b.format),
+                tex->microtile,
+                tex->mip_macrotile[level]);
     }
 }
 
@@ -1183,48 +1165,61 @@ static void r300_set_vertex_buffers(struct pipe_context* pipe,
         return;
     }
 
-    /* Check if the stride is aligned to the size of DWORD. */
-    for (i = 0; i < count; i++) {
-        if (buffers[i].buffer) {
-            if (buffers[i].stride % 4 != 0) {
-                // XXX Shouldn't we align the buffer?
-                fprintf(stderr, "r300: set_vertex_buffers: "
-                        "Unaligned buffer stride %i isn't supported.\n",
-                        buffers[i].stride);
-                abort();
+    if (r300->screen->caps.has_tcl) {
+        /* HW TCL. */
+        /* Check if the stride is aligned to the size of DWORD. */
+        for (i = 0; i < count; i++) {
+            if (buffers[i].buffer) {
+                if (buffers[i].stride % 4 != 0) {
+                    // XXX Shouldn't we align the buffer?
+                    fprintf(stderr, "r300: set_vertex_buffers: "
+                            "Unaligned buffer stride %i isn't supported.\n",
+                            buffers[i].stride);
+                    abort();
+                }
             }
         }
+
+        for (i = 0; i < count; i++) {
+            /* Why, yes, I AM casting away constness. How did you know? */
+            vbo = (struct pipe_vertex_buffer*)&buffers[i];
+
+            /* Skip NULL buffers */
+            if (!buffers[i].buffer) {
+                continue;
+            }
+
+            if (r300_buffer_is_user_buffer(vbo->buffer)) {
+                any_user_buffer = TRUE;
+            }
+
+            if (vbo->max_index == ~0) {
+                /* if no VBO stride then only one vertex value so max index is 1 */
+                /* should think about converting to VS constants like svga does */
+                if (!vbo->stride)
+                    vbo->max_index = 1;
+                else
+                    vbo->max_index =
+                             (vbo->buffer->width0 - vbo->buffer_offset) / vbo->stride;
+            }
+
+            max_index = MIN2(vbo->max_index, max_index);
+        }
+
+        r300->any_user_vbs = any_user_buffer;
+        r300->vertex_buffer_max_index = max_index;
+
+    } else {
+        /* SW TCL. */
+        draw_flush(r300->draw);
+        draw_set_vertex_buffers(r300->draw, count, buffers);
     }
 
+    /* Common code. */
     for (i = 0; i < count; i++) {
-        /* Why, yes, I AM casting away constness. How did you know? */
-        vbo = (struct pipe_vertex_buffer*)&buffers[i];
-
         /* Reference our buffer. */
-        pipe_resource_reference(&r300->vertex_buffer[i].buffer, vbo->buffer);
-
-        /* Skip NULL buffers */
-        if (!buffers[i].buffer) {
-            continue;
-        }
-
-        if (r300_buffer_is_user_buffer(vbo->buffer)) {
-            any_user_buffer = TRUE;
-        }
-
-        if (vbo->max_index == ~0) {
-	    /* if no VBO stride then only one vertex value so max index is 1 */
-	    /* should think about converting to VS constants like svga does */
-	    if (!vbo->stride)
-		vbo->max_index = 1;
- 	    else
-            	vbo->max_index =
-               		 (vbo->buffer->width0 - vbo->buffer_offset) / vbo->stride;
-        }
-
-        max_index = MIN2(vbo->max_index, max_index);
+        pipe_resource_reference(&r300->vertex_buffer[i].buffer, buffers[i].buffer);
     }
-
     for (; i < r300->vertex_buffer_count; i++) {
         /* Dereference any old buffers. */
         pipe_resource_reference(&r300->vertex_buffer[i].buffer, NULL);
@@ -1232,15 +1227,7 @@ static void r300_set_vertex_buffers(struct pipe_context* pipe,
 
     memcpy(r300->vertex_buffer, buffers,
         sizeof(struct pipe_vertex_buffer) * count);
-
     r300->vertex_buffer_count = count;
-    r300->vertex_buffer_max_index = max_index;
-    r300->any_user_vbs = any_user_buffer;
-
-    if (r300->draw) {
-        draw_flush(r300->draw);
-        draw_set_vertex_buffers(r300->draw, count, buffers);
-    }
 }
 
 /* Initialize the PSC tables. */
@@ -1263,8 +1250,15 @@ static void r300_vertex_psc(struct r300_vertex_element_state *velems)
     for (i = 0; i < velems->count; i++) {
         format = velems->velem[i].src_format;
 
-        type = r300_translate_vertex_data_type(format) |
-            (i << R300_DST_VEC_LOC_SHIFT);
+        type = r300_translate_vertex_data_type(format);
+        if (type == R300_INVALID_FORMAT) {
+            fprintf(stderr, "r300: Bad vertex format %s.\n",
+                    util_format_short_name(format));
+            assert(0);
+            abort();
+        }
+
+        type |= i << R300_DST_VEC_LOC_SHIFT;
         swizzle = r300_translate_vertex_data_swizzle(format);
 
         if (i & 1) {
@@ -1425,12 +1419,11 @@ static void* r300_create_vs_state(struct pipe_context* pipe,
     vs->state = *shader;
     vs->state.tokens = tgsi_dup_tokens(shader->tokens);
 
-    r300_init_vs_outputs(vs);
-
     if (r300->screen->caps.has_tcl) {
+        r300_init_vs_outputs(vs);
         r300_translate_vertex_shader(r300, vs);
     } else {
-        vs->draw_vs = draw_create_vertex_shader(r300->draw, shader);
+        r300_draw_init_vertex_shader(r300->draw, vs);
     }
 
     return vs;

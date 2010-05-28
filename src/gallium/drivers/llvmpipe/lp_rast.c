@@ -61,16 +61,12 @@ lp_rast_begin( struct lp_rasterizer *rast,
    
    for (i = 0; i < rast->state.nr_cbufs; i++) {
       struct pipe_surface *cbuf = scene->fb.cbufs[i];
-      rast->cbuf[i].format = cbuf->texture->format;
-      rast->cbuf[i].tiles_per_row = align(cbuf->width, TILE_SIZE) / TILE_SIZE;
-      rast->cbuf[i].blocksize = 
-         util_format_get_blocksize(cbuf->texture->format);
-      rast->cbuf[i].map = llvmpipe_resource_map(cbuf->texture,
-                                               cbuf->face,
-                                               cbuf->level,
-                                               cbuf->zslice,
-                                               LP_TEX_USAGE_READ_WRITE,
-                                               LP_TEX_LAYOUT_NONE);
+      llvmpipe_resource_map(cbuf->texture,
+                            cbuf->face,
+                            cbuf->level,
+                            cbuf->zslice,
+                            LP_TEX_USAGE_READ_WRITE,
+                            LP_TEX_LAYOUT_NONE);
    }
 
    if (fb->zsbuf) {
@@ -105,7 +101,6 @@ lp_rast_end( struct lp_rasterizer *rast )
                              cbuf->face,
                              cbuf->level,
                              cbuf->zslice);
-      rast->cbuf[i].map = NULL;
    }
 
    /* Unmap z/stencil buffer */
@@ -413,6 +408,7 @@ lp_rast_shade_tile(struct lp_rasterizer_task *task,
    struct lp_rasterizer *rast = task->rast;
    const struct lp_rast_state *state = task->current_state;
    const struct lp_rast_shader_inputs *inputs = arg.shade_tile;
+   struct lp_fragment_shader_variant *variant = state->variant;
    const unsigned tile_x = task->x, tile_y = task->y;
    unsigned x, y;
 
@@ -434,7 +430,7 @@ lp_rast_shade_tile(struct lp_rasterizer_task *task,
          depth = lp_rast_get_depth_block_pointer(rast, tile_x + x, tile_y + y);
 
          /* run shader on 4x4 block */
-         state->jit_function[RAST_WHOLE]( &state->jit_context,
+         variant->jit_function[RAST_WHOLE]( &state->jit_context,
                                           tile_x + x, tile_y + y,
                                           inputs->facing,
                                           inputs->a0,
@@ -461,6 +457,7 @@ void lp_rast_shade_quads( struct lp_rasterizer_task *task,
                           int32_t c1, int32_t c2, int32_t c3)
 {
    const struct lp_rast_state *state = task->current_state;
+   struct lp_fragment_shader_variant *variant = state->variant;
    struct lp_rasterizer *rast = task->rast;
    uint8_t *color[PIPE_MAX_COLOR_BUFS];
    void *depth;
@@ -492,7 +489,7 @@ void lp_rast_shade_quads( struct lp_rasterizer_task *task,
    assert(lp_check_alignment(inputs->step[2], 16));
 
    /* run shader on 4x4 block */
-   state->jit_function[RAST_EDGE_TEST]( &state->jit_context,
+   variant->jit_function[RAST_EDGE_TEST]( &state->jit_context,
                                         x, y,
                                         inputs->facing,
                                         inputs->a0,
@@ -567,18 +564,20 @@ outline_subtiles(uint8_t *tile)
 static void
 lp_rast_tile_end(struct lp_rasterizer_task *task)
 {
-#if DEBUG
-   struct lp_rasterizer *rast = task->rast;
-   unsigned buf;
+#ifdef DEBUG
+   if (LP_DEBUG & (DEBUG_SHOW_SUBTILES | DEBUG_SHOW_TILES)) {
+      struct lp_rasterizer *rast = task->rast;
+      unsigned buf;
 
-   for (buf = 0; buf < rast->state.nr_cbufs; buf++) {
-      uint8_t *color = lp_rast_get_color_block_pointer(task, buf,
-                                                       task->x, task->y);
+      for (buf = 0; buf < rast->state.nr_cbufs; buf++) {
+         uint8_t *color = lp_rast_get_color_block_pointer(task, buf,
+                                                          task->x, task->y);
 
-      if (LP_DEBUG & DEBUG_SHOW_SUBTILES)
-         outline_subtiles(color);
-      else if (LP_DEBUG & DEBUG_SHOW_TILES)
-         outline_tile(color);
+         if (LP_DEBUG & DEBUG_SHOW_SUBTILES)
+            outline_subtiles(color);
+         else if (LP_DEBUG & DEBUG_SHOW_TILES)
+            outline_tile(color);
+      }
    }
 #else
    (void) outline_subtiles;

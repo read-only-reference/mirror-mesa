@@ -20,7 +20,6 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE. */
 
-#include "r300_blit.h"
 #include "r300_context.h"
 #include "r300_texture.h"
 
@@ -43,11 +42,11 @@ static void r300_blitter_save_states(struct r300_context* r300)
 }
 
 /* Clear currently bound buffers. */
-void r300_clear(struct pipe_context* pipe,
-                unsigned buffers,
-                const float* rgba,
-                double depth,
-                unsigned stencil)
+static void r300_clear(struct pipe_context* pipe,
+                       unsigned buffers,
+                       const float* rgba,
+                       double depth,
+                       unsigned stencil)
 {
     /* XXX Implement fastfill.
      *
@@ -85,12 +84,14 @@ void r300_clear(struct pipe_context* pipe,
 }
 
 /* Copy a block of pixels from one surface to another using HW. */
-static void r300_hw_copy(struct pipe_context* pipe,
-                         struct pipe_surface* dst,
-                         unsigned dstx, unsigned dsty,
-                         struct pipe_surface* src,
-                         unsigned srcx, unsigned srcy,
-                         unsigned width, unsigned height)
+static void r300_hw_copy_region(struct pipe_context* pipe,
+                                struct pipe_resource *dst,
+                                struct pipe_subresource subdst,
+                                unsigned dstx, unsigned dsty, unsigned dstz,
+                                struct pipe_resource *src,
+                                struct pipe_subresource subsrc,
+                                unsigned srcx, unsigned srcy, unsigned srcz,
+                                unsigned width, unsigned height)
 {
     struct r300_context* r300 = r300_context(pipe);
     struct r300_textures_state* state =
@@ -111,30 +112,23 @@ static void r300_hw_copy(struct pipe_context* pipe,
         (struct pipe_sampler_view**)state->sampler_views);
 
     /* Do a copy */
-    util_blitter_copy(r300->blitter,
-                      dst, dstx, dsty, src, srcx, srcy, width, height, TRUE);
+    util_blitter_copy_region(r300->blitter, dst, subdst, dstx, dsty, dstz,
+                             src, subsrc, srcx, srcy, srcz, width, height,
+                             TRUE);
 }
 
 /* Copy a block of pixels from one surface to another. */
-void r300_surface_copy(struct pipe_context* pipe,
-                       struct pipe_resource* dst,
-                       struct pipe_subresource subdst,
-                       unsigned dstx, unsigned dsty, unsigned dstz,
-                       struct pipe_resource* src,
-                       struct pipe_subresource subsrc,
-                       unsigned srcx, unsigned srcy, unsigned srcz,
-                       unsigned width, unsigned height)
+static void r300_resource_copy_region(struct pipe_context *pipe,
+                                      struct pipe_resource *dst,
+                                      struct pipe_subresource subdst,
+                                      unsigned dstx, unsigned dsty, unsigned dstz,
+                                      struct pipe_resource *src,
+                                      struct pipe_subresource subsrc,
+                                      unsigned srcx, unsigned srcy, unsigned srcz,
+                                      unsigned width, unsigned height)
 {
-    struct pipe_screen *screen = pipe->screen;
     enum pipe_format old_format = dst->format;
     enum pipe_format new_format = old_format;
-    struct pipe_surface *srcsurf, *dstsurf;
-    unsigned bind;
-
-    if (util_format_is_depth_or_stencil(dst->format))
-       bind = PIPE_BIND_DEPTH_STENCIL;
-    else
-       bind = PIPE_BIND_RENDER_TARGET;
 
     if (dst->format != src->format) {
         debug_printf("r300: Implementation error: Format mismatch in %s\n"
@@ -180,18 +174,8 @@ void r300_surface_copy(struct pipe_context* pipe,
                                         src, new_format);
     }
 
-    srcsurf = screen->get_tex_surface(screen, src,
-                                      subsrc.face, subsrc.level, srcz,
-                                      PIPE_BIND_SAMPLER_VIEW);
-
-    dstsurf = screen->get_tex_surface(screen, dst,
-                                      subdst.face, subdst.level, dstz,
-                                      bind);
-
-    r300_hw_copy(pipe, dstsurf, dstx, dsty, srcsurf, srcx, srcy, width, height);
-
-    pipe_surface_reference(&srcsurf, NULL);
-    pipe_surface_reference(&dstsurf, NULL);
+    r300_hw_copy_region(pipe, dst, subdst, dstx, dsty, dstz,
+                        src, subsrc, srcx, srcy, srcz, width, height);
 
     if (old_format != new_format) {
         dst->format = old_format;
@@ -205,34 +189,25 @@ void r300_surface_copy(struct pipe_context* pipe,
 }
 
 /* Fill a region of a surface with a constant value. */
-void r300_surface_fill(struct pipe_context* pipe,
-                       struct pipe_resource* dst,
-                       struct pipe_subresource subdst,
-                       unsigned dstx, unsigned dsty, unsigned dstz,
-                       unsigned width, unsigned height,
-                       unsigned value)
+static void r300_resource_fill_region(struct pipe_context *pipe,
+                                      struct pipe_resource *dst,
+                                      struct pipe_subresource subdst,
+                                      unsigned dstx, unsigned dsty, unsigned dstz,
+                                      unsigned width, unsigned height,
+                                      unsigned value)
 {
-    struct pipe_screen *screen = pipe->screen;
-    struct r300_context* r300 = r300_context(pipe);
-    struct pipe_surface *dstsurf;
-    unsigned bind;
-
-    if (util_format_is_depth_or_stencil(dst->format))
-       bind = PIPE_BIND_DEPTH_STENCIL;
-    else
-       bind = PIPE_BIND_RENDER_TARGET;
-
-    dstsurf = screen->get_tex_surface(screen, dst,
-                                      subdst.face,
-                                      subdst.level,
-                                      dstz,
-                                      bind);
+    struct r300_context *r300 = r300_context(pipe);
 
     r300_blitter_save_states(r300);
     util_blitter_save_framebuffer(r300->blitter, r300->fb_state.state);
 
-    util_blitter_fill(r300->blitter,
-                      dstsurf, dstx, dsty, width, height, value);
+    util_blitter_fill_region(r300->blitter, dst, subdst,
+                             dstx, dsty, dstz, width, height, value);
+}
 
-    pipe_surface_reference(&dstsurf, NULL);
+void r300_init_blit_functions(struct r300_context *r300)
+{
+    r300->context.clear = r300_clear;
+    r300->context.resource_copy_region = r300_resource_copy_region;
+    r300->context.resource_fill_region = r300_resource_fill_region;
 }

@@ -36,9 +36,9 @@
 
 struct u_upload_mgr;
 struct r300_context;
-
 struct r300_fragment_shader;
 struct r300_vertex_shader;
+struct r300_stencilref_context;
 
 struct r300_atom {
     /* List pointers. */
@@ -86,7 +86,7 @@ struct r300_dsa_state {
     /* Whether a two-sided stencil is enabled. */
     boolean two_sided;
     /* Whether a fallback should be used for a two-sided stencil ref value. */
-    boolean stencil_ref_bf_fallback;
+    boolean two_sided_stencil_ref;
 };
 
 struct r300_rs_state {
@@ -252,6 +252,22 @@ struct r300_query {
     struct r300_query* next;
 };
 
+/* Fence object.
+ *
+ * This is a fake fence. Instead of syncing with the fence, we sync
+ * with the context, which is inefficient but compliant.
+ *
+ * This is not a subclass of pipe_fence_handle because pipe_fence_handle is
+ * never actually fully defined. So, rather than have it as a member, and do
+ * subclass-style casting, we treat pipe_fence_handle as an opaque, and just
+ * trust that our state tracker does not ever mess up fence objects.
+ */
+struct r300_fence {
+    struct pipe_reference reference;
+    struct r300_context *ctx;
+    boolean signalled;
+};
+
 struct r300_texture {
     /* Parent class */
     struct u_resource b;
@@ -315,21 +331,6 @@ struct r300_context {
     /* Parent class */
     struct pipe_context context;
 
-    /* Emission of drawing packets. */
-    void (*emit_draw_arrays_immediate)(
-            struct r300_context *r300,
-            unsigned mode, unsigned start, unsigned count);
-
-    void (*emit_draw_arrays)(
-            struct r300_context *r300,
-            unsigned mode, unsigned count);
-
-    void (*emit_draw_elements)(
-            struct r300_context *r300, struct pipe_resource* indexBuffer,
-            unsigned indexSize, unsigned minIndex, unsigned maxIndex,
-            unsigned mode, unsigned start, unsigned count);
-
-
     /* The interface to the windowing system, etc. */
     struct r300_winsys_screen *rws;
     /* Screen. */
@@ -338,6 +339,8 @@ struct r300_context {
     struct draw_context* draw;
     /* Accelerated blit support. */
     struct blitter_context* blitter;
+    /* Stencil two-sided reference value fallback. */
+    struct r300_stencilref_context *stencilref_fallback;
 
     /* Vertex buffer for rendering. */
     struct pipe_resource* vbo;
@@ -425,9 +428,6 @@ struct r300_context {
     uint32_t zbuffer_bpp;
     /* Whether rendering is conditional and should be skipped. */
     boolean skip_rendering;
-    /* Whether the two-sided stencil ref value is different for front and
-     * back faces, and fallback should be used for r3xx-r4xx. */
-    boolean stencil_ref_bf_fallback;
     /* Point sprites texcoord index,  1 bit per texcoord */
     int sprite_coord_enable;
     /* Whether two-sided color selection is enabled (AKA light_twoside). */
@@ -441,7 +441,12 @@ struct r300_context {
     uint64_t flush_counter;
 };
 
-/* Convenience cast wrapper. */
+/* Convenience cast wrappers. */
+static INLINE struct r300_query* r300_query(struct pipe_query* q)
+{
+    return (struct r300_query*)q;
+}
+
 static INLINE struct r300_texture* r300_texture(struct pipe_resource* tex)
 {
     return (struct r300_texture*)tex;
@@ -462,9 +467,15 @@ struct pipe_context* r300_create_context(struct pipe_screen* screen,
 
 /* Context initialization. */
 struct draw_stage* r300_draw_stage(struct r300_context* r300);
+void r300_init_blit_functions(struct r300_context *r300);
+void r300_init_flush_functions(struct r300_context* r300);
+void r300_init_query_functions(struct r300_context* r300);
+void r300_init_render_functions(struct r300_context *r300);
 void r300_init_state_functions(struct r300_context* r300);
 void r300_init_resource_functions(struct r300_context* r300);
 
+boolean r300_check_cs(struct r300_context *r300, unsigned size);
+void r300_finish(struct r300_context *r300);
 void r500_dump_rs_block(struct r300_rs_block *rs);
 
 static INLINE boolean CTX_DBG_ON(struct r300_context * ctx, unsigned flags)

@@ -629,30 +629,32 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
       }
    }
 
-#if !FEATURE_OES_framebuffer_object
-   /* Check that all DrawBuffers are present */
-   for (j = 0; j < ctx->Const.MaxDrawBuffers; j++) {
-      if (fb->ColorDrawBuffer[j] != GL_NONE) {
-         const struct gl_renderbuffer_attachment *att
-            = _mesa_get_attachment(ctx, fb, fb->ColorDrawBuffer[j]);
-         assert(att);
-         if (att->Type == GL_NONE) {
-            fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER_EXT;
-            fbo_incomplete("missing drawbuffer", j);
-            return;
-         }
+#if FEATURE_GL
+   if (ctx->API == API_OPENGL) {
+      /* Check that all DrawBuffers are present */
+      for (j = 0; j < ctx->Const.MaxDrawBuffers; j++) {
+	 if (fb->ColorDrawBuffer[j] != GL_NONE) {
+	    const struct gl_renderbuffer_attachment *att
+	       = _mesa_get_attachment(ctx, fb, fb->ColorDrawBuffer[j]);
+	    assert(att);
+	    if (att->Type == GL_NONE) {
+	       fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER_EXT;
+	       fbo_incomplete("missing drawbuffer", j);
+	       return;
+	    }
+	 }
       }
-   }
 
-   /* Check that the ReadBuffer is present */
-   if (fb->ColorReadBuffer != GL_NONE) {
-      const struct gl_renderbuffer_attachment *att
-         = _mesa_get_attachment(ctx, fb, fb->ColorReadBuffer);
-      assert(att);
-      if (att->Type == GL_NONE) {
-         fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER_EXT;
+      /* Check that the ReadBuffer is present */
+      if (fb->ColorReadBuffer != GL_NONE) {
+	 const struct gl_renderbuffer_attachment *att
+	    = _mesa_get_attachment(ctx, fb, fb->ColorReadBuffer);
+	 assert(att);
+	 if (att->Type == GL_NONE) {
+	    fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER_EXT;
             fbo_incomplete("missing readbuffer", -1);
-         return;
+	    return;
+	 }
       }
    }
 #else
@@ -1800,10 +1802,10 @@ _mesa_FramebufferRenderbufferEXT(GLenum target, GLenum attachment,
       rb = NULL;
    }
 
-   if (attachment == GL_DEPTH_STENCIL_ATTACHMENT) {
+   if (attachment == GL_DEPTH_STENCIL_ATTACHMENT &&
+       rb && rb->Format != MESA_FORMAT_NONE) {
       /* make sure the renderbuffer is a depth/stencil format */
-      const GLenum baseFormat =
-         _mesa_get_format_base_format(att->Renderbuffer->Format);
+      const GLenum baseFormat = _mesa_get_format_base_format(rb->Format);
       if (baseFormat != GL_DEPTH_STENCIL) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "glFramebufferRenderbufferEXT(renderbuffer"

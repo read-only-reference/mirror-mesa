@@ -134,7 +134,6 @@ static const float * get_rc_constant_state(
     struct r300_context * r300,
     struct rc_constant * constant)
 {
-    struct r300_viewport_state* viewport = r300->viewport_state.state;
     struct r300_textures_state* texstate = r300->textures_state.state;
     static float vec[4] = { 0.0, 0.0, 0.0, 1.0 };
     struct pipe_resource *tex;
@@ -151,15 +150,15 @@ static const float * get_rc_constant_state(
             break;
 
         case RC_STATE_R300_VIEWPORT_SCALE:
-            vec[0] = viewport->xscale;
-            vec[1] = viewport->yscale;
-            vec[2] = viewport->zscale;
+            vec[0] = r300->viewport.scale[0];
+            vec[1] = r300->viewport.scale[1];
+            vec[2] = r300->viewport.scale[2];
             break;
 
         case RC_STATE_R300_VIEWPORT_OFFSET:
-            vec[0] = viewport->xoffset;
-            vec[1] = viewport->yoffset;
-            vec[2] = viewport->zoffset;
+            vec[0] = r300->viewport.translate[0];
+            vec[1] = r300->viewport.translate[1];
+            vec[2] = r300->viewport.translate[2];
             break;
 
         default:
@@ -864,7 +863,7 @@ void r300_emit_aos(struct r300_context* r300, unsigned offset, boolean indexed)
     END_CS;
 }
 
-void r300_emit_vertex_buffer(struct r300_context* r300)
+void r300_emit_aos_swtcl(struct r300_context *r300, boolean indexed)
 {
     CS_LOCALS(r300);
 
@@ -880,7 +879,7 @@ void r300_emit_vertex_buffer(struct r300_context* r300)
      */
     BEGIN_CS(7);
     OUT_CS_PKT3(R300_PACKET3_3D_LOAD_VBPNTR, 3);
-    OUT_CS(1);
+    OUT_CS(1 | (!indexed ? R300_VC_FORCE_PREFETCH : 0));
     OUT_CS(r300->vertex_info.size |
             (r300->vertex_info.size << 8));
     OUT_CS(r300->vbo_offset);
@@ -1057,7 +1056,7 @@ void r300_emit_buffer_validate(struct r300_context *r300,
     boolean invalid = FALSE;
 
     /* upload buffers first */
-    if (r300->any_user_vbs) {
+    if (r300->screen->caps.has_tcl && r300->any_user_vbs) {
         r300_upload_user_buffers(r300);
         r300->any_user_vbs = false;
     }
@@ -1168,7 +1167,6 @@ unsigned r300_get_num_dirty_dwords(struct r300_context *r300)
 /* Emit all dirty state. */
 void r300_emit_dirty_state(struct r300_context* r300)
 {
-    struct r300_screen* r300screen = r300->screen;
     struct r300_atom* atom;
 
     foreach(atom, &r300->atom_list) {
@@ -1179,11 +1177,6 @@ void r300_emit_dirty_state(struct r300_context* r300)
             }
             atom->dirty = FALSE;
         }
-    }
-
-    /* Emit the VBO for SWTCL. */
-    if (!r300screen->caps.has_tcl) {
-        r300_emit_vertex_buffer(r300);
     }
 
     r300->dirty_hw++;

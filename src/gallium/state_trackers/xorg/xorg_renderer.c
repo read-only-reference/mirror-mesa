@@ -8,7 +8,6 @@
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "util/u_sampler.h"
-#include "util/u_surface.h"
 
 #include "util/u_inlines.h"
 
@@ -602,7 +601,7 @@ void renderer_copy_pixmap(struct xorg_renderer *r,
 
 
 void renderer_draw_yuv(struct xorg_renderer *r,
-                       int src_x, int src_y, int src_w, int src_h,
+                       float src_x, float src_y, float src_w, float src_h,
                        int dst_x, int dst_y, int dst_w, int dst_h,
                        struct pipe_resource **textures)
 {

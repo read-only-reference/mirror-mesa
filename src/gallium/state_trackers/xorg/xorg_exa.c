@@ -46,7 +46,6 @@
 #include "util/u_math.h"
 #include "util/u_debug.h"
 #include "util/u_format.h"
-#include "util/u_surface.h"
 
 #define DEBUG_PRINT 0
 #define ROUND_UP_TEXTURES 1
@@ -987,6 +986,7 @@ xorg_exa_init(ScrnInfoPtr pScrn, Bool accel)
    modesettingPtr ms = modesettingPTR(pScrn);
    struct exa_context *exa;
    ExaDriverPtr pExa;
+   CustomizerPtr cust = ms->cust;
 
    exa = xcalloc(1, sizeof(struct exa_context));
    if (!exa)
@@ -1048,6 +1048,8 @@ xorg_exa_init(ScrnInfoPtr pScrn, Bool accel)
 
    /* Share context with DRI */
    ms->ctx = exa->pipe;
+   if (cust && cust->winsys_context_throttle)
+       cust->winsys_context_throttle(cust, ms->ctx, THROTTLE_RENDER);
 
    exa->renderer = renderer_create(exa->pipe);
    exa->accel = accel;

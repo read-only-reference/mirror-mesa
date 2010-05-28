@@ -168,6 +168,9 @@ static INLINE float logf( float f )
 #undef logf
 #define logf(x) ((float)log((double)(x)))
 #endif /* logf */
+
+#define isfinite(x) _finite((double)(x))
+#define isnan(x) _isnan((double)(x))
 #endif
 
 static INLINE double log2( double x )
@@ -334,6 +337,15 @@ util_iround(float f)
 #endif
 }
 
+
+/**
+ * Approximate floating point comparison
+ */
+static INLINE boolean
+util_is_approx(float a, float b, float tol)
+{
+   return fabs(b - a) <= tol;
+}
 
 
 /**

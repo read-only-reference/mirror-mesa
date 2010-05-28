@@ -751,21 +751,17 @@ AC_ARG_ENABLE([gles-overlay],
     [enable_gles_overlay=no])
 
 API_DEFINES=""
-APIS=""
 GLES_OVERLAY=0
 if test "x$enable_opengl" = xno; then
     API_DEFINES="$API_DEFINES -DFEATURE_GL=0"
 else
     API_DEFINES="$API_DEFINES -DFEATURE_GL=1"
-    APIS="$APIS gl"
 fi
 if test "x$enable_gles1" = xyes; then
     API_DEFINES="$API_DEFINES -DFEATURE_ES1=1"
-    APIS="$APIS es1"
 fi
 if test "x$enable_gles2" = xyes; then
     API_DEFINES="$API_DEFINES -DFEATURE_ES2=1"
-    APIS="$APIS es2"
 fi
 if test "x$enable_gles_overlay" = xyes -o \
     "x$enable_gles1" = xyes -o "x$enable_gles2" = xyes; then
@@ -775,7 +771,6 @@ if test "x$enable_gles_overlay" = xyes -o \
     fi
 fi
 AC_SUBST([API_DEFINES])
-AC_SUBST([APIS])
 AC_SUBST([GLES_OVERLAY])
 
 dnl If $with_dri_drivers is yes, directories will be added through
@@ -1507,6 +1502,19 @@ if test "x$enable_gallium_radeon" = xyes; then
     gallium_check_st "radeon/drm" "dri-radeong" "egl-radeon" "xorg-radeon"
 elif test "x$enable_gallium_radeon" = xauto; then
     GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS r300"
+fi
+
+dnl
+dnl Gallium Radeon r600g configuration
+dnl
+AC_ARG_ENABLE([gallium-r600],
+    [AS_HELP_STRING([--enable-gallium-r600],
+        [build gallium radeon @<:@default=disabled@:>@])],
+    [enable_gallium_r600="$enableval"],
+    [enable_gallium_r600=auto])
+if test "x$enable_gallium_r600" = xyes; then
+    GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS r600"
+    gallium_check_st "r600/drm" "dri-r600"
 fi
 
 dnl
