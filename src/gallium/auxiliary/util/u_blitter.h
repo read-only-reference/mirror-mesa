@@ -27,6 +27,7 @@
 #ifndef U_BLITTER_H
 #define U_BLITTER_H
 
+#include "util/u_inlines.h"
 #include "util/u_memory.h"
 
 #include "pipe/p_state.h"
@@ -123,22 +124,33 @@ void util_blitter_copy_region(struct blitter_context *blitter,
                               boolean ignore_stencil);
 
 /**
- * Fill a region of a surface with a constant value.
- *
- * If the surface cannot be rendered to or it's a depth-stencil format,
- * a software fallback path is taken.
+ * Clear a region of a (color) surface to a constant value.
  *
  * These states must be saved in the blitter in addition to the state objects
  * already required to be saved:
  * - framebuffer state
  */
-void util_blitter_fill_region(struct blitter_context *blitter,
-                              struct pipe_resource *dst,
-                              struct pipe_subresource subdst,
-                              unsigned dstx, unsigned dsty, unsigned dstz,
-                              unsigned width, unsigned height,
-                              unsigned value);
+void util_blitter_clear_render_target(struct blitter_context *blitter,
+                                      struct pipe_surface *dst,
+                                      const float *rgba,
+                                      unsigned dstx, unsigned dsty,
+                                      unsigned width, unsigned height);
 
+/**
+ * Clear a region of a depth-stencil surface, both stencil and depth
+ * or only one of them if this is a combined depth-stencil surface.
+ *
+ * These states must be saved in the blitter in addition to the state objects
+ * already required to be saved:
+ * - framebuffer state
+ */
+void util_blitter_clear_depth_stencil(struct blitter_context *blitter,
+                                      struct pipe_surface *dst,
+                                      unsigned clear_flags,
+                                      double depth,
+                                      unsigned stencil,
+                                      unsigned dstx, unsigned dsty,
+                                      unsigned width, unsigned height);
 
 /* The functions below should be used to save currently bound constant state
  * objects inside a driver. The objects are automatically restored at the end
@@ -248,9 +260,18 @@ util_blitter_save_vertex_buffers(struct blitter_context *blitter,
                                          int num_vertex_buffers,
                                          struct pipe_vertex_buffer *vertex_buffers)
 {
+   unsigned i;
    assert(num_vertex_buffers <= Elements(blitter->saved_vertex_buffers));
 
    blitter->saved_num_vertex_buffers = num_vertex_buffers;
+
+   for (i = 0; i < num_vertex_buffers; i++) {
+      if (vertex_buffers[i].buffer) {
+         pipe_resource_reference(&blitter->saved_vertex_buffers[i].buffer,
+                                 vertex_buffers[i].buffer);
+      }
+   }
+
    memcpy(blitter->saved_vertex_buffers,
           vertex_buffers,
           num_vertex_buffers * sizeof(struct pipe_vertex_buffer));

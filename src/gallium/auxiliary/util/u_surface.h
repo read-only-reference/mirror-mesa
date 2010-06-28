@@ -57,12 +57,20 @@ util_resource_copy_region(struct pipe_context *pipe,
                           unsigned w, unsigned h);
 
 extern void
-util_resource_fill_region(struct pipe_context *pipe,
-                          struct pipe_resource *dst,
-                          struct pipe_subresource subdst,
-                          unsigned dstx, unsigned dsty, unsigned dstz,
-                          unsigned width, unsigned height, unsigned value);
+util_clear_render_target(struct pipe_context *pipe,
+                         struct pipe_surface *dst,
+                         const float *rgba,
+                         unsigned dstx, unsigned dsty,
+                         unsigned width, unsigned height);
 
+extern void
+util_clear_depth_stencil(struct pipe_context *pipe,
+                         struct pipe_surface *dst,
+                         unsigned clear_flags,
+                         double depth,
+                         unsigned stencil,
+                         unsigned dstx, unsigned dsty,
+                         unsigned width, unsigned height);
 
 
 #endif /* U_SURFACE_H */

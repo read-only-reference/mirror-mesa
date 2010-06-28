@@ -93,40 +93,30 @@ int r300_upload_user_buffers(struct r300_context *r300)
     enum pipe_error ret = PIPE_OK;
     int i, nr;
 
-    nr = r300->vertex_buffer_count;
+    nr = r300->velems->count;
 
     for (i = 0; i < nr; i++) {
-	if (r300_buffer_is_user_buffer(r300->vertex_buffer[i].buffer)) {
-	    struct pipe_resource *upload_buffer = NULL;
-	    unsigned offset = 0; /*r300->vertex_buffer[i].buffer_offset * 4;*/
-	    unsigned size = r300->vertex_buffer[i].buffer->width0;
-	    unsigned upload_offset;
-	    ret = u_upload_buffer(r300->upload_vb,
-				  offset, size,
-				  r300->vertex_buffer[i].buffer,
-				  &upload_offset, &upload_buffer);
-	    if (ret)
-		return ret;
+        struct pipe_vertex_buffer *vb =
+            &r300->vertex_buffer[r300->velems->velem[i].vertex_buffer_index];
 
-	    pipe_resource_reference(&r300->vertex_buffer[i].buffer, NULL);
-	    r300->vertex_buffer[i].buffer = upload_buffer;
-	    r300->vertex_buffer[i].buffer_offset = upload_offset;
-	}
+        if (r300_buffer_is_user_buffer(vb->buffer)) {
+            struct pipe_resource *upload_buffer = NULL;
+            unsigned offset = 0; /*vb->buffer_offset * 4;*/
+            unsigned size = vb->buffer->width0;
+            unsigned upload_offset;
+            ret = u_upload_buffer(r300->upload_vb,
+                                  offset, size,
+                                  vb->buffer,
+                                  &upload_offset, &upload_buffer);
+            if (ret)
+                return ret;
+
+            pipe_resource_reference(&vb->buffer, NULL);
+            vb->buffer = upload_buffer;
+            vb->buffer_offset = upload_offset;
+        }
     }
     return ret;
-}
-
-static struct r300_winsys_buffer *
-r300_winsys_buffer_create(struct r300_screen *r300screen,
-			  unsigned alignment,
-			  unsigned usage,
-			  unsigned size)
-{
-    struct r300_winsys_screen *rws = r300screen->rws;
-    struct r300_winsys_buffer *buf;
-
-    buf = rws->buffer_create(rws, alignment, usage, size);
-    return buf;
 }
 
 static void r300_winsys_buffer_destroy(struct r300_screen *r300screen,
@@ -180,9 +170,9 @@ r300_buffer_transfer_map( struct pipe_context *pipe,
 		rws->buffer_reference(rws, &rbuf->buf, NULL);
 
 		rbuf->num_ranges = 0;
-		rbuf->buf = r300_winsys_buffer_create(r300screen,
-						      16,
-						      rbuf->b.b.bind, /* XXX */
+		rbuf->buf = r300screen->rws->buffer_create(r300screen->rws, 16,
+						      rbuf->b.b.bind,
+                                                      rbuf->domain,
 						      rbuf->b.b.width0);
 		break;
 	    }
@@ -274,13 +264,12 @@ struct pipe_resource *r300_buffer_create(struct pipe_screen *screen,
     rbuf->b.vtbl = &r300_buffer_vtbl;
     pipe_reference_init(&rbuf->b.b.reference, 1);
     rbuf->b.b.screen = screen;
+    rbuf->domain = R300_DOMAIN_GTT;
 
-    if (rbuf->b.b.bind & R300_BIND_OQBO)
-        alignment = 4096;
-
-    rbuf->buf = r300_winsys_buffer_create(r300screen,
+    rbuf->buf = r300screen->rws->buffer_create(r300screen->rws,
 					  alignment,
 					  rbuf->b.b.bind,
+                                          rbuf->domain,
 					  rbuf->b.b.width0);
 
     if (!rbuf->buf)
@@ -315,6 +304,7 @@ struct pipe_resource *r300_user_buffer_create(struct pipe_screen *screen,
     rbuf->b.b.width0 = bytes;
     rbuf->b.b.height0 = 1;
     rbuf->b.b.depth0 = 1;
+    rbuf->domain = R300_DOMAIN_GTT;
 
     rbuf->user_buffer = ptr;
     return &rbuf->b.b;

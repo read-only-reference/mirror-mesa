@@ -570,7 +570,7 @@ intelFinish(GLcontext * ctx)
        irb = intel_renderbuffer(fb->_ColorDrawBuffers[i]);
 
        if (irb && irb->region)
-	  dri_bo_wait_rendering(irb->region->buffer);
+	  drm_intel_bo_wait_rendering(irb->region->buffer);
    }
    if (fb->_DepthBuffer) {
       /* XXX: Wait on buffer idle */
@@ -635,6 +635,7 @@ intelInitContext(struct intel_context *intel,
    intel->driContext = driContextPriv;
    intel->driFd = sPriv->fd;
 
+   intel->has_xrgb_textures = GL_TRUE;
    if (IS_GEN6(intel->intelScreen->deviceID)) {
       intel->gen = 6;
       intel->needs_ff_sync = GL_TRUE;
@@ -656,6 +657,10 @@ intelInitContext(struct intel_context *intel,
       }
    } else {
       intel->gen = 2;
+      if (intel->intelScreen->deviceID == PCI_CHIP_I830_M ||
+	  intel->intelScreen->deviceID == PCI_CHIP_845_G) {
+	 intel->has_xrgb_textures = GL_FALSE;
+      }
    }
 
    driParseConfigFiles(&intel->optionCache, &intelScreen->optionCache,
@@ -822,8 +827,6 @@ intelDestroyContext(__DRIcontext * driContextPriv)
 
    assert(intel);               /* should never be null */
    if (intel) {
-      GLboolean release_texture_heaps;
-
       INTEL_FIREVERTICES(intel);
 
       _mesa_meta_free(&intel->ctx);
@@ -832,7 +835,6 @@ intelDestroyContext(__DRIcontext * driContextPriv)
 
       intel->vtbl.destroy(intel);
 
-      release_texture_heaps = (intel->ctx.Shared->RefCount == 1);
       _swsetup_DestroyContext(&intel->ctx);
       _tnl_DestroyContext(&intel->ctx);
       _vbo_DestroyContext(&intel->ctx);
@@ -845,22 +847,10 @@ intelDestroyContext(__DRIcontext * driContextPriv)
 
       free(intel->prim.vb);
       intel->prim.vb = NULL;
-      dri_bo_unreference(intel->prim.vb_bo);
+      drm_intel_bo_unreference(intel->prim.vb_bo);
       intel->prim.vb_bo = NULL;
-      dri_bo_unreference(intel->first_post_swapbuffers_batch);
+      drm_intel_bo_unreference(intel->first_post_swapbuffers_batch);
       intel->first_post_swapbuffers_batch = NULL;
-
-      if (release_texture_heaps) {
-         /* Nothing is currently done here to free texture heaps;
-          * but we're not using the texture heap utilities, so I
-          * rather think we shouldn't.  I've taken a look, and can't
-          * find any private texture data hanging around anywhere, but
-          * I'm not yet certain there isn't any at all...
-          */
-         /* if (INTEL_DEBUG & DEBUG_TEXTURE)
-            fprintf(stderr, "do something to free texture heaps\n");
-          */
-      }
 
       driDestroyOptionCache(&intel->optionCache);
 

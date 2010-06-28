@@ -65,7 +65,7 @@ static INLINE struct r300_screen* r300_screen(struct pipe_screen* screen) {
 /* Logging. */
 #define DBG_FP          (1 << 1)
 #define DBG_VP          (1 << 2)
-#define DBG_CS          (1 << 3)
+/* The bit (1 << 3) is unused. */
 #define DBG_DRAW        (1 << 4)
 #define DBG_TEX         (1 << 5)
 #define DBG_TEXALLOC    (1 << 6)
@@ -76,6 +76,7 @@ static INLINE struct r300_screen* r300_screen(struct pipe_screen* screen) {
 #define DBG_ANISOHQ     (1 << 16)
 #define DBG_NO_TILING   (1 << 17)
 #define DBG_NO_IMMD     (1 << 18)
+#define DBG_FAKE_OCC    (1 << 19)
 /* Statistics. */
 #define DBG_STATS       (1 << 24)
 /*@}*/

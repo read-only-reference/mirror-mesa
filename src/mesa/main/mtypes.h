@@ -1966,6 +1966,9 @@ struct gl_shader
    struct gl_program *Program;  /**< Post-compile assembly code */
    GLchar *InfoLog;
    struct gl_sl_pragmas Pragmas;
+
+   struct exec_list *ir;
+   struct glsl_symbol_table *symbols;
 };
 
 
@@ -2002,6 +2005,14 @@ struct gl_shader_program
    GLboolean Validated;
    GLboolean _Used;        /**< Ever used for drawing? */
    GLchar *InfoLog;
+
+   /**
+    * Per-stage shaders resulting from the first stage of linking.
+    */
+   /*@{*/
+   GLuint _NumLinkedShaders;
+   struct gl_shader *_LinkedShaders[2];
+   /*@}*/
 };   
 
 

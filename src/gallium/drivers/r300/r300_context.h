@@ -31,6 +31,8 @@
 #include "util/u_inlines.h"
 #include "util/u_transfer.h"
 
+#include "translate/translate_cache.h"
+
 #include "r300_defines.h"
 #include "r300_screen.h"
 
@@ -60,28 +62,35 @@ struct r300_atom {
 };
 
 struct r300_blend_state {
-    uint32_t blend_control;       /* R300_RB3D_CBLEND: 0x4e04 */
-    uint32_t alpha_blend_control; /* R300_RB3D_ABLEND: 0x4e08 */
-    uint32_t color_channel_mask;  /* R300_RB3D_COLOR_CHANNEL_MASK: 0x4e0c */
-    uint32_t rop;                 /* R300_RB3D_ROPCNTL: 0x4e18 */
-    uint32_t dither;              /* R300_RB3D_DITHER_CTL: 0x4e50 */
+    uint32_t cb[8];
+    uint32_t cb_no_readwrite[8];
 };
 
 struct r300_blend_color_state {
-    /* RV515 and earlier */
-    uint32_t blend_color;            /* R300_RB3D_BLEND_COLOR: 0x4e10 */
-    /* R520 and newer */
-    uint32_t blend_color_red_alpha;  /* R500_RB3D_CONSTANT_COLOR_AR: 0x4ef8 */
-    uint32_t blend_color_green_blue; /* R500_RB3D_CONSTANT_COLOR_GB: 0x4efc */
+    uint32_t cb[3];
+};
+
+struct r300_clip_state {
+    struct pipe_clip_state clip;
+
+    uint32_t cb[29];
 };
 
 struct r300_dsa_state {
+    struct pipe_depth_stencil_alpha_state dsa;
+
+    /* This is actually a command buffer with named dwords. */
+    uint32_t cb_begin;
     uint32_t alpha_function;    /* R300_FG_ALPHA_FUNC: 0x4bd4 */
-    uint32_t alpha_reference;   /* R500_FG_ALPHA_VALUE: 0x4be0 */
+    uint32_t cb_reg_seq;
     uint32_t z_buffer_control;  /* R300_ZB_CNTL: 0x4f00 */
     uint32_t z_stencil_control; /* R300_ZB_ZSTENCILCNTL: 0x4f04 */
     uint32_t stencil_ref_mask;  /* R300_ZB_STENCILREFMASK: 0x4f08 */
+    uint32_t cb_reg;
     uint32_t stencil_ref_bf;    /* R500_ZB_STENCILREFMASK_BF: 0x4fd4 */
+
+    /* The second command buffer disables zbuffer reads and writes. */
+    uint32_t cb_no_readwrite[8];
 
     /* Whether a two-sided stencil is enabled. */
     boolean two_sided;
@@ -96,6 +105,8 @@ struct r300_rs_state {
     struct pipe_rasterizer_state rs_draw;
 
     uint32_t vap_control_status;    /* R300_VAP_CNTL_STATUS: 0x2140 */
+    uint32_t multisample_position_0;/* R300_GB_MSPOS0: 0x4010 */
+    uint32_t multisample_position_1;/* R300_GB_MSPOS1: 0x4014 */
     uint32_t antialiasing_config;   /* R300_GB_AA_CONFIG: 0x4020 */
     uint32_t point_size;            /* R300_GA_POINT_SIZE: 0x421c */
     uint32_t point_minmax;          /* R300_GA_POINT_MINMAX: 0x4230 */
@@ -163,16 +174,14 @@ struct r300_sampler_view {
     /* Copy of r300_texture::texture_format_state with format-specific bits
      * added. */
     struct r300_texture_format_state format;
+
+    /* The texture cache region for this texture. */
+    uint32_t texcache_region;
 };
 
 struct r300_texture_fb_state {
-    /* Colorbuffer. */
-    uint32_t colorpitch[R300_MAX_TEXTURE_LEVELS]; /* R300_RB3D_COLORPITCH[0-3]*/
-    uint32_t us_out_fmt; /* R300_US_OUT_FMT[0-3] */
-
-    /* Zbuffer. */
-    uint32_t depthpitch[R300_MAX_TEXTURE_LEVELS]; /* R300_RB3D_DEPTHPITCH */
-    uint32_t zb_format; /* R300_ZB_FORMAT */
+    uint32_t pitch[R300_MAX_TEXTURE_LEVELS]; /* COLORPITCH or DEPTHPITCH. */
+    uint32_t format; /* US_OUT_FMT or R300_ZB_FORMAT */
 };
 
 struct r300_texture_sampler_state {
@@ -224,7 +233,7 @@ struct r300_ztop_state {
 
 struct r300_constant_buffer {
     /* Buffer of constants */
-    float constants[256][4];
+    uint32_t constants[256][4];
     /* Total number of constants */
     unsigned count;
 };
@@ -239,14 +248,23 @@ struct r300_constant_buffer {
 struct r300_query {
     /* The kind of query. Currently only OQ is supported. */
     unsigned type;
-    /* The current count of this query. Required to be at least 32 bits. */
-    unsigned int count;
-    /* The offset of this query into the query buffer, in bytes. */
-    unsigned offset;
+    /* The number of pipes where query results are stored. */
+    unsigned num_pipes;
+    /* How many results have been written, in dwords. It's incremented
+     * after end_query and flush. */
+    unsigned num_results;
     /* if we've flushed the query */
     boolean flushed;
     /* if begin has been emitted */
     boolean begin_emitted;
+
+    /* The buffer where query results are stored. */
+    struct r300_winsys_buffer *buffer;
+    /* The size of the buffer. */
+    unsigned buffer_size;
+    /* The domain of the buffer. */
+    enum r300_buffer_domain domain;
+
     /* Linked list members. */
     struct r300_query* prev;
     struct r300_query* next;
@@ -268,9 +286,24 @@ struct r300_fence {
     boolean signalled;
 };
 
+struct r300_surface {
+    struct pipe_surface base;
+
+    /* Winsys buffer backing the texture. */
+    struct r300_winsys_buffer *buffer;
+
+    enum r300_buffer_domain domain;
+
+    uint32_t offset;
+    uint32_t pitch;     /* COLORPITCH or DEPTHPITCH. */
+    uint32_t format;    /* US_OUT_FMT or R300_ZB_FORMAT. */
+};
+
 struct r300_texture {
     /* Parent class */
     struct u_resource b;
+
+    enum r300_buffer_domain domain;
 
     /* Offsets into the buffer. */
     unsigned offset[R300_MAX_TEXTURE_LEVELS];
@@ -324,7 +357,32 @@ struct r300_vertex_element_state {
     unsigned count;
     struct pipe_vertex_element velem[PIPE_MAX_ATTRIBS];
 
+    /* If (velem[i].src_format != hw_format[i]), the vertex buffer
+     * referenced by this vertex element cannot be used for rendering and
+     * its vertex data must be translated to hw_format[i]. */
+    enum pipe_format hw_format[PIPE_MAX_ATTRIBS];
+    unsigned hw_format_size[PIPE_MAX_ATTRIBS];
+
+    /* The size of the vertex, in dwords. */
+    unsigned vertex_size_dwords;
+
+    /* This might mean two things:
+     * - src_format != hw_format, as discussed above.
+     * - src_offset % 4 != 0. */
+    boolean incompatible_layout;
+
     struct r300_vertex_stream_state vertex_stream;
+};
+
+struct r300_translate_context {
+    /* Translate cache for incompatible vertex offset/stride/format fallback. */
+    struct translate_cache *translate_cache;
+
+    /* The vertex buffer slot containing the translated buffer. */
+    unsigned vb_slot;
+
+    /* Saved and new vertex element state. */
+    void *saved_velems, *new_velems;
 };
 
 struct r300_context {
@@ -341,16 +399,23 @@ struct r300_context {
     struct blitter_context* blitter;
     /* Stencil two-sided reference value fallback. */
     struct r300_stencilref_context *stencilref_fallback;
+    /* For translating vertex buffers having incompatible vertex layout. */
+    struct r300_translate_context tran;
 
     /* Vertex buffer for rendering. */
     struct pipe_resource* vbo;
+    /* The KIL opcode needs the first texture unit to be enabled
+     * on r3xx-r4xx. In order to calm down the CS checker, we bind this
+     * dummy texture there. */
+    struct r300_sampler_view *texkill_sampler;
     /* Offset into the VBO. */
     size_t vbo_offset;
 
-    /* Occlusion query buffer. */
-    struct pipe_resource* oqbo;
-    /* Query list. */
+    /* The currently active query. */
     struct r300_query *query_current;
+    /* The saved query for blitter operations. */
+    struct r300_query *blitter_saved_query;
+    /* Query list. */
     struct r300_query query_list;
 
     /* Various CSO state objects. */
@@ -412,9 +477,6 @@ struct r300_context {
     struct vertex_info vertex_info;
 
     struct pipe_stencil_ref stencil_ref;
-
-    struct pipe_clip_state clip;
-
     struct pipe_viewport_state viewport;
 
     /* Stream locations for SWTCL. */
@@ -432,6 +494,8 @@ struct r300_context {
     int sprite_coord_enable;
     /* Whether two-sided color selection is enabled (AKA light_twoside). */
     boolean two_sided_color;
+    /* Incompatible vertex buffer layout? (misaligned stride or buffer_offset) */
+    boolean incompatible_vb_layout;
 
     /* upload managers */
     struct u_upload_mgr *upload_vb;
@@ -445,6 +509,11 @@ struct r300_context {
 static INLINE struct r300_query* r300_query(struct pipe_query* q)
 {
     return (struct r300_query*)q;
+}
+
+static INLINE struct r300_surface* r300_surface(struct pipe_surface* surf)
+{
+    return (struct r300_surface*)surf;
 }
 
 static INLINE struct r300_texture* r300_texture(struct pipe_resource* tex)
@@ -465,6 +534,9 @@ static INLINE struct r300_fragment_shader *r300_fs(struct r300_context *r300)
 struct pipe_context* r300_create_context(struct pipe_screen* screen,
                                          void *priv);
 
+boolean r300_check_cs(struct r300_context *r300, unsigned size);
+void r300_finish(struct r300_context *r300);
+
 /* Context initialization. */
 struct draw_stage* r300_draw_stage(struct r300_context* r300);
 void r300_init_blit_functions(struct r300_context *r300);
@@ -474,9 +546,28 @@ void r300_init_render_functions(struct r300_context *r300);
 void r300_init_state_functions(struct r300_context* r300);
 void r300_init_resource_functions(struct r300_context* r300);
 
-boolean r300_check_cs(struct r300_context *r300, unsigned size);
-void r300_finish(struct r300_context *r300);
+/* r300_query.c */
+void r300_resume_query(struct r300_context *r300,
+                       struct r300_query *query);
+void r300_stop_query(struct r300_context *r300);
+
+/* r300_render_translate.c */
+void r300_begin_vertex_translate(struct r300_context *r300);
+void r300_end_vertex_translate(struct r300_context *r300);
+void r300_translate_index_buffer(struct r300_context *r300,
+                                 struct pipe_resource **index_buffer,
+                                 unsigned *index_size, unsigned index_offset,
+                                 unsigned *start, unsigned count);
+
+/* r300_render_stencilref.c */
+void r300_plug_in_stencil_ref_fallback(struct r300_context *r300);
+
+/* r300_state.c */
+void r300_mark_fs_code_dirty(struct r300_context *r300);
+
+/* r300_debug.c */
 void r500_dump_rs_block(struct r300_rs_block *rs);
+
 
 static INLINE boolean CTX_DBG_ON(struct r300_context * ctx, unsigned flags)
 {

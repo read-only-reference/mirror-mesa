@@ -34,7 +34,11 @@
 #define __STDC_CONSTANT_MACROS
 #endif
 
-#include "llvm-c/Core.h"
+#include <llvm-c/Core.h>
+#include <llvm-c/ExecutionEngine.h>
+#include <llvm/Target/TargetOptions.h>
+#include <llvm/ExecutionEngine/ExecutionEngine.h>
+#include <llvm/ExecutionEngine/JITEventListener.h>
 
 #include "pipe/p_config.h"
 #include "util/u_debug.h"
@@ -98,3 +102,43 @@ lp_debug_dump_value(LLVMValueRef value)
 
 
 #endif
+
+
+/**
+ * Register the engine with oprofile.
+ *
+ * This allows to see the LLVM IR function names in oprofile output.
+ *
+ * To actually work LLVM needs to be built with the --with-oprofile configure
+ * option.
+ *
+ * Also a oprofile:oprofile user:group is necessary. Which is not created by
+ * default on some distributions.
+ */
+extern "C" void
+lp_register_oprofile_jit_event_listener(LLVMExecutionEngineRef EE)
+{
+   llvm::unwrap(EE)->RegisterJITEventListener(llvm::createOProfileJITEventListener());
+}
+
+
+extern "C" void
+lp_set_target_options(void)
+{
+#if defined(DEBUG)
+#if HAVE_LLVM >= 0x0207
+   llvm::JITEmitDebugInfo = true;
+#endif
+#endif
+
+#if defined(DEBUG) || defined(PROFILE)
+   llvm::NoFramePointerElim = true;
+#endif
+
+   llvm::NoExcessFPPrecision = false;
+
+   /* XXX: Investigate this */
+#if 0
+   llvm::UnsafeFPMath = true;
+#endif
+}

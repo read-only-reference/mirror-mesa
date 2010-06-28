@@ -31,8 +31,6 @@
 #include "radeon.h"
 #include "util/u_transfer.h"
 
-#define r600_screen(s) ((struct r600_screen*)s)
-
 /* Texture transfer. */
 struct r600_transfer {
 	/* Base class. */
@@ -54,6 +52,11 @@ struct r600_screen {
 	struct pipe_screen		screen;
 	struct radeon			*rw;
 };
+
+static INLINE struct r600_screen *r600_screen(struct pipe_screen *screen)
+{
+	return (struct r600_screen*)screen;
+}
 
 /* Buffer functions. */
 struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
@@ -80,24 +83,6 @@ void* r600_texture_transfer_map(struct pipe_context *ctx,
 void r600_texture_transfer_unmap(struct pipe_context *ctx,
 				 struct pipe_transfer* transfer);
 
-
-/* Blit functions. */
-void r600_clear(struct pipe_context *ctx,
-		unsigned buffers,
-		const float *rgba,
-		double depth,
-		unsigned stencil);
-void r600_surface_copy(struct pipe_context *ctx,
-			struct pipe_surface *dst,
-			unsigned dstx, unsigned dsty,
-			struct pipe_surface *src,
-			unsigned srcx, unsigned srcy,
-			unsigned width, unsigned height);
-void r600_surface_fill(struct pipe_context *ctx,
-			struct pipe_surface *dst,
-			unsigned dstx, unsigned dsty,
-			unsigned width, unsigned height,
-			unsigned value);
 
 /* helpers */
 int r600_conv_pipe_format(unsigned pformat, unsigned *format);

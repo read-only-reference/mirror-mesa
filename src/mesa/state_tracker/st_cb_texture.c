@@ -1242,8 +1242,6 @@ st_CompressedTexSubImage2D(GLcontext *ctx, GLenum target, GLint level,
 
    assert(xoffset % util_format_get_blockwidth(pformat) == 0);
    assert(yoffset % util_format_get_blockheight(pformat) == 0);
-   assert(width % util_format_get_blockwidth(pformat) == 0);
-   assert(height % util_format_get_blockheight(pformat) == 0);
 
    for (y = 0; y < height; y += util_format_get_blockheight(pformat)) {
       /* don't need to adjust for xoffset and yoffset as st_texture_image_map does that */
@@ -1850,7 +1848,7 @@ st_finalize_texture(GLcontext *ctx,
     */
    if (stObj->pt) {
       if (stObj->pt->target != gl_target_to_pipe(stObj->base.Target) ||
-          stObj->pt->format != firstImageFormat ||
+          !st_sampler_compat_formats(stObj->pt->format, firstImageFormat) ||
           stObj->pt->last_level < stObj->lastLevel ||
           stObj->pt->width0 != stObj->width0 ||
           stObj->pt->height0 != stObj->height0 ||

@@ -23,9 +23,13 @@
 #ifndef R300_TEXTURE_H
 #define R300_TEXTURE_H
 
-#include "util/u_format.h"
+#include "pipe/p_format.h"
 
+struct pipe_screen;
+struct pipe_resource;
+struct winsys_handle;
 struct r300_texture;
+struct r300_screen;
 
 unsigned r300_get_swizzle_combined(const unsigned char *swizzle_format,
                                    const unsigned char *swizzle_view);

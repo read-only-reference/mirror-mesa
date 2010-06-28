@@ -31,7 +31,6 @@
 #include "r300_hyperz.h"
 #include "r300_screen.h"
 #include "r300_shader_semantics.h"
-#include "r300_state.h"
 #include "r300_state_derived.h"
 #include "r300_state_inlines.h"
 #include "r300_texture.h"
@@ -537,6 +536,10 @@ static void r300_merge_textures_and_samplers(struct r300_context* r300)
         UTIL_FORMAT_SWIZZLE_X
     };
 
+    /* The KIL opcode fix, see below. */
+    if (!count && !r300->screen->caps.is_r500)
+        count = 1;
+
     state->tx_enable = 0;
     state->count = 0;
     size = 2;
@@ -554,6 +557,9 @@ static void r300_merge_textures_and_samplers(struct r300_context* r300)
             texstate->filter0 = sampler->filter0;
             texstate->filter1 = sampler->filter1;
             texstate->border_color = sampler->border_color;
+
+            /* Assign a texture cache region. */
+            texstate->format.format1 |= view->texcache_region;
 
             /* If compare mode is disabled, the sampler view swizzles
              * are stored in the format.
@@ -613,6 +619,36 @@ static void r300_merge_textures_and_samplers(struct r300_context* r300)
 
             size += 16;
             state->count = i+1;
+        } else {
+            /* For the KIL opcode to work on r3xx-r4xx, the texture unit
+             * assigned to this opcode (it's always the first one) must be
+             * enabled. Otherwise the opcode doesn't work.
+             *
+             * In order to not depend on the fragment shader, we just make
+             * the first unit enabled all the time. */
+            if (i == 0 && !r300->screen->caps.is_r500) {
+                pipe_sampler_view_reference(
+                        (struct pipe_sampler_view**)&state->sampler_views[i],
+                        &r300->texkill_sampler->base);
+
+                state->tx_enable |= 1 << i;
+
+                texstate = &state->regs[i];
+
+                /* Just set some valid state. */
+                texstate->format = r300->texkill_sampler->format;
+                texstate->filter0 =
+                        r300_translate_tex_filters(PIPE_TEX_FILTER_NEAREST,
+                                                   PIPE_TEX_FILTER_NEAREST,
+                                                   PIPE_TEX_FILTER_NEAREST,
+                                                   FALSE);
+                texstate->filter1 = 0;
+                texstate->border_color = 0;
+
+                texstate->filter0 |= i << 28;
+                size += 16;
+                state->count = i+1;
+            }
         }
     }
 

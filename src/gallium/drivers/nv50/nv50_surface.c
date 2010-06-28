@@ -27,8 +27,8 @@
 #include "nv50_resource.h"
 #include "pipe/p_defines.h"
 #include "util/u_inlines.h"
+#include "util/u_pack_color.h"
 
-#include "util/u_tile.h"
 #include "util/u_format.h"
 
 /* return TRUE for formats that can be converted among each other by NV50_2D */
@@ -115,7 +115,6 @@ nv50_surface_set(struct nv50_screen *screen, struct pipe_surface *ps, int dst)
 	}
 
  	if (!bo->tile_flags) {
-		MARK_RING (chan, 9, 2); /* flush on lack of space or relocs */
  		BEGIN_RING(chan, eng2d, mthd, 2);
  		OUT_RING  (chan, format);
  		OUT_RING  (chan, 1);
@@ -126,7 +125,6 @@ nv50_surface_set(struct nv50_screen *screen, struct pipe_surface *ps, int dst)
  		OUT_RELOCh(chan, bo, ps->offset, flags);
  		OUT_RELOCl(chan, bo, ps->offset, flags);
  	} else {
-		MARK_RING (chan, 11, 2); /* flush on lack of space or relocs */
  		BEGIN_RING(chan, eng2d, mthd, 5);
  		OUT_RING  (chan, format);
  		OUT_RING  (chan, 0);
@@ -162,7 +160,9 @@ nv50_surface_do_copy(struct nv50_screen *screen, struct pipe_surface *dst,
 	struct nouveau_grobj *eng2d = screen->eng2d;
 	int ret;
 
-	WAIT_RING (chan, 32);
+	ret = MARK_RING(chan, 2*16 + 32, 4);
+	if (ret)
+		return ret;
 
 	ret = nv50_surface_set(screen, dst, 1);
 	if (ret)
@@ -209,7 +209,7 @@ nv50_surface_copy(struct pipe_context *pipe,
 	       (nv50_2d_format_faithful(src->format) &&
 		nv50_2d_format_faithful(dest->format)));
 
-	ps_src = nv50_miptree_surface_new(pipe->screen, dest, subsrc.face,
+	ps_src = nv50_miptree_surface_new(pipe->screen, src, subsrc.face,
 					  subsrc.level, srcz, 0 /* bind flags */);
 	ps_dst = nv50_miptree_surface_new(pipe->screen, dest, subdst.face,
 					  subdst.level, destz, 0 /* bindflags */);
@@ -221,50 +221,51 @@ nv50_surface_copy(struct pipe_context *pipe,
 	nv50_miptree_surface_del(ps_dst);
 }
 
+/* XXX this should probably look more along the lines of nv50_clear */
 static void
-nv50_surface_fill(struct pipe_context *pipe, struct pipe_resource *dest,
-		  struct pipe_subresource subdst,
-		  unsigned destx, unsigned desty, unsigned destz,
-		  unsigned width, unsigned height, unsigned value)
+nv50_clear_render_target(struct pipe_context *pipe,
+			 struct pipe_surface *dst,
+			 const float *rgba,
+			 unsigned dstx, unsigned dsty,
+			 unsigned width, unsigned height)
 {
 	struct nv50_context *nv50 = nv50_context(pipe);
-	struct pipe_surface *ps;
 	struct nv50_screen *screen = nv50->screen;
 	struct nouveau_channel *chan = screen->eng2d->channel;
 	struct nouveau_grobj *eng2d = screen->eng2d;
 	int format, ret;
+	union util_color uc;
+	util_pack_color(rgba, dst->format, &uc);
 
-	format = nv50_format(dest->format);
+	format = nv50_format(dst->format);
 	if (format < 0)
 		return;
 
-	ps = nv50_miptree_surface_new(pipe->screen, dest, subdst.face,
-				      subdst.level, destz, 0 /* bind flags */);
-	
-	WAIT_RING (chan, 32);
+	ret = MARK_RING (chan, 16 + 32, 2);
+	if (ret)
+		return;
 
-	ret = nv50_surface_set(screen, ps, 1);
+	ret = nv50_surface_set(screen, dst, 1);
 	if (ret)
 		return;
 
 	BEGIN_RING(chan, eng2d, NV50_2D_DRAW_SHAPE, 3);
 	OUT_RING  (chan, NV50_2D_DRAW_SHAPE_RECTANGLES);
 	OUT_RING  (chan, format);
-	OUT_RING  (chan, value);
+	OUT_RING  (chan, uc.ui);
 	BEGIN_RING(chan, eng2d, NV50_2D_DRAW_POINT32_X(0), 4);
-	OUT_RING  (chan, destx);
-	OUT_RING  (chan, desty);
+	OUT_RING  (chan, dstx);
+	OUT_RING  (chan, dsty);
 	OUT_RING  (chan, width);
 	OUT_RING  (chan, height);
 
-	nv50_miptree_surface_del(ps);
 }
 
 void
 nv50_init_surface_functions(struct nv50_context *nv50)
 {
 	nv50->pipe.resource_copy_region = nv50_surface_copy;
-	nv50->pipe.resource_fill_region = nv50_surface_fill;
+	nv50->pipe.clear_render_target = nv50_clear_render_target;
 }
 
 

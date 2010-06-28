@@ -33,6 +33,7 @@ C_SOURCES = \
 	draw/draw_pt_fetch_shade_emit.c \
 	draw/draw_pt_fetch_shade_pipeline.c \
 	draw/draw_pt_post_vs.c \
+	draw/draw_pt_so_emit.c \
 	draw/draw_pt_util.c \
 	draw/draw_pt_varray.c \
 	draw/draw_pt_vcache.c \
@@ -158,6 +159,7 @@ GALLIVM_SOURCES = \
         gallivm/lp_bld_logic.c \
         gallivm/lp_bld_pack.c \
         gallivm/lp_bld_printf.c \
+        gallivm/lp_bld_quad.c \
         gallivm/lp_bld_sample.c \
         gallivm/lp_bld_sample_soa.c \
         gallivm/lp_bld_struct.c \

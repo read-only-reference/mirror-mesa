@@ -37,6 +37,8 @@
 
 #include "lp_tex_sample.h"
 #include "lp_jit.h"
+#include "lp_setup.h"
+#include "lp_state_fs.h"
 
 
 struct llvmpipe_vbuf_render;
@@ -59,13 +61,15 @@ struct llvmpipe_context {
    const struct pipe_rasterizer_state *rasterizer;
    struct lp_fragment_shader *fs;
    const struct lp_vertex_shader *vs;
+   const struct lp_geometry_shader *gs;
    const struct lp_velems_state *velems;
+   const struct lp_so_state *so;
 
    /** Other rendering state */
    struct pipe_blend_color blend_color;
    struct pipe_stencil_ref stencil_ref;
    struct pipe_clip_state clip;
-   struct pipe_resource *constants[PIPE_SHADER_TYPES];
+   struct pipe_resource *constants[PIPE_SHADER_TYPES][PIPE_MAX_CONSTANT_BUFFERS];
    struct pipe_framebuffer_state framebuffer;
    struct pipe_poly_stipple poly_stipple;
    struct pipe_scissor_state scissor;
@@ -73,6 +77,12 @@ struct llvmpipe_context {
    struct pipe_sampler_view *vertex_sampler_views[PIPE_MAX_VERTEX_SAMPLERS];
    struct pipe_viewport_state viewport;
    struct pipe_vertex_buffer vertex_buffer[PIPE_MAX_ATTRIBS];
+   struct {
+      struct llvmpipe_resource *buffer[PIPE_MAX_SO_BUFFERS];
+      int offset[PIPE_MAX_SO_BUFFERS];
+      int so_count[PIPE_MAX_SO_BUFFERS];
+      int num_buffers;
+   } so_target;
 
    unsigned num_samplers;
    unsigned num_fragment_sampler_views;
@@ -90,6 +100,10 @@ struct llvmpipe_context {
    /** Vertex format */
    struct vertex_info vertex_info;
 
+   /** Fragment shader input interpolation info */
+   unsigned num_inputs;
+   struct lp_shader_input inputs[PIPE_MAX_SHADER_INPUTS];
+
    /** The tiling engine */
    struct lp_setup_context *setup;
 
@@ -99,6 +113,8 @@ struct llvmpipe_context {
    unsigned tex_timestamp;
    boolean no_rast;
 
+   struct lp_fs_variant_list_item fs_variants_list;
+   unsigned nr_fs_variants;
 };
 
 

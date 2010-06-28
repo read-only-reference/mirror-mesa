@@ -5,6 +5,7 @@ common_INCLUDES = \
 	-I. \
 	-I$(TOP)/src/gallium/include \
 	-I$(TOP)/src/gallium/auxiliary \
+	-I$(TOP)/src/gallium/drivers \
 	-I$(TOP)/src/egl/main \
 	-I$(TOP)/include
 
@@ -30,15 +31,20 @@ kms_SOURCES = $(wildcard kms/*.c)
 kms_OBJECTS = $(kms_SOURCES:.c=.o)
 
 
-ALL_INCLUDES = $(common_INCLUDES) $(x11_INCLUDES) $(kms_INCLUDES)
-ALL_SOURCES = $(common_SOURCES) $(x11_SOURCES) $(kms_SOURCES)
-ALL_OBJECTS = $(common_OBJECTS) $(x11_OBJECTS) $(kms_OBJECTS)
+fbdev_INCLUDES = -I$(TOP)/src/gallium/winsys/sw -I$(TOP)/src/gallium/drivers
+fbdev_SOURCES = $(wildcard fbdev/*.c)
+fbdev_OBJECTS = $(fbdev_SOURCES:.c=.o)
+
+
+ALL_INCLUDES = $(common_INCLUDES) $(x11_INCLUDES) $(kms_INCLUDES) $(fbdev_INCLUDES)
+ALL_SOURCES = $(common_SOURCES) $(x11_SOURCES) $(kms_SOURCES) $(fbdev_SOURCES)
+ALL_OBJECTS = $(common_OBJECTS) $(x11_OBJECTS) $(kms_OBJECTS) $(fbdev_OBJECTS)
 
 ##### TARGETS #####
 
-EGL_DISPLAYS_MODS = $(foreach dpy, $(EGL_DISPLAYS), libegl$(dpy).a)
+EGL_PLATFORMS_MODS = $(foreach plat, $(EGL_PLATFORMS), libegl$(plat).a)
 
-default: depend $(EGL_DISPLAYS_MODS)
+default: depend $(EGL_PLATFORMS_MODS)
 
 
 libeglx11.a: $(x11_OBJECTS) $(common_OBJECTS) Makefile
@@ -47,6 +53,9 @@ libeglx11.a: $(x11_OBJECTS) $(common_OBJECTS) Makefile
 libeglkms.a: $(kms_OBJECTS) $(common_OBJECTS) Makefile
 	$(MKLIB) -o eglkms -static $(kms_OBJECTS) $(common_OBJECTS)
 
+libeglfbdev.a: $(fbdev_OBJECTS) $(common_OBJECTS) Makefile
+	$(MKLIB) -o eglfbdev -static $(fbdev_OBJECTS) $(common_OBJECTS)
+
 depend: 
 	rm -f depend
 	touch depend
@@ -54,7 +63,7 @@ depend:
 
 clean:
 	rm -f $(ALL_OBJECTS)
-	rm -f $(EGL_DISPLAYS_MODS)
+	rm -f $(EGL_PLATFORMS_MODS)
 	rm -f depend depend.bak
 
 # Dummy target
@@ -71,5 +80,8 @@ $(x11_OBJECTS): %.o: %.c
 
 $(kms_OBJECTS): %.o: %.c
 	$(CC) -c $(common_INCLUDES) $(kms_INCLUDES) $(DEFINES) $(CFLAGS) $< -o $@
+
+$(fbdev_OBJECTS): %.o: %.c
+	$(CC) -c $(common_INCLUDES) $(fbdev_INCLUDES) $(DEFINES) $(CFLAGS) $< -o $@
 
 sinclude depend

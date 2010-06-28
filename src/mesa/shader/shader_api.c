@@ -44,9 +44,7 @@
 #include "shader/prog_uniform.h"
 #include "shader/shader_api.h"
 #include "shader/uniforms.h"
-#include "shader/slang/slang_compile.h"
-#include "shader/slang/slang_link.h"
-
+#include "talloc.h"
 
 /**
  * Allocate a new gl_shader_program object, initialize it.
@@ -55,7 +53,7 @@ static struct gl_shader_program *
 _mesa_new_shader_program(GLcontext *ctx, GLuint name)
 {
    struct gl_shader_program *shProg;
-   shProg = CALLOC_STRUCT(gl_shader_program);
+   shProg = talloc_zero(NULL, struct gl_shader_program);
    if (shProg) {
       shProg->Type = GL_SHADER_PROGRAM_MESA;
       shProg->Name = name;
@@ -119,7 +117,7 @@ _mesa_free_shader_program_data(GLcontext *ctx,
    }
 
    if (shProg->InfoLog) {
-      free(shProg->InfoLog);
+      talloc_free(shProg->InfoLog);
       shProg->InfoLog = NULL;
    }
 
@@ -141,7 +139,7 @@ _mesa_free_shader_program(GLcontext *ctx, struct gl_shader_program *shProg)
 {
    _mesa_free_shader_program_data(ctx, shProg);
 
-   free(shProg);
+   talloc_free(shProg);
 }
 
 
@@ -255,7 +253,7 @@ _mesa_new_shader(GLcontext *ctx, GLuint name, GLenum type)
 {
    struct gl_shader *shader;
    assert(type == GL_FRAGMENT_SHADER || type == GL_VERTEX_SHADER);
-   shader = CALLOC_STRUCT(gl_shader);
+   shader = talloc_zero(NULL, struct gl_shader);
    if (shader) {
       shader->Type = type;
       shader->Name = name;
@@ -270,10 +268,8 @@ _mesa_free_shader(GLcontext *ctx, struct gl_shader *sh)
 {
    if (sh->Source)
       free((void *) sh->Source);
-   if (sh->InfoLog)
-      free(sh->InfoLog);
    _mesa_reference_program(ctx, &sh->Program, NULL);
-   free(sh);
+   talloc_free(sh);
 }
 
 
@@ -1100,7 +1096,7 @@ _mesa_compile_shader(GLcontext *ctx, GLuint shaderObj)
    /* this call will set the sh->CompileStatus field to indicate if
     * compilation was successful.
     */
-   (void) _slang_compile(ctx, sh);
+   _mesa_glsl_compile_shader(ctx, sh);
 }
 
 
@@ -1126,7 +1122,7 @@ _mesa_link_program(GLcontext *ctx, GLuint program)
 
    FLUSH_VERTICES(ctx, _NEW_PROGRAM);
 
-   _slang_link(ctx, program, shProg);
+   _mesa_glsl_link_shader(ctx, shProg);
 
    /* debug code */
    if (0) {

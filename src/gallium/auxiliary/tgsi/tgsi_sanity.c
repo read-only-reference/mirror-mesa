@@ -90,9 +90,18 @@ static void
 scan_register_dst(scan_register *reg,
                   struct tgsi_full_dst_register *dst)
 {
-   fill_scan_register1d(reg,
-                        dst->Register.File,
-                        dst->Register.Index);
+   if (dst->Register.Dimension) {
+      /*FIXME: right now we don't support indirect
+       * multidimensional addressing */
+      fill_scan_register2d(reg,
+                           dst->Register.File,
+                           dst->Register.Index,
+                           dst->Dimension.Index);
+   } else {
+      fill_scan_register1d(reg,
+                           dst->Register.File,
+                           dst->Register.Index);
+   }
 }
 
 static void
@@ -102,7 +111,6 @@ scan_register_src(scan_register *reg,
    if (src->Register.Dimension) {
       /*FIXME: right now we don't support indirect
        * multidimensional addressing */
-      debug_assert(!src->Dimension.Indirect);
       fill_scan_register2d(reg,
                            src->Register.File,
                            src->Register.Index,
@@ -236,7 +244,9 @@ static const char *file_names[TGSI_FILE_COUNT] =
    "ADDR",
    "IMM",
    "PRED",
-   "SV"
+   "SV",
+   "IMMX",
+   "TEMPX"
 };
 
 static boolean

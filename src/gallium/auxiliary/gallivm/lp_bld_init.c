@@ -37,11 +37,11 @@
 unsigned gallivm_debug = 0;
 
 static const struct debug_named_value lp_bld_debug_flags[] = {
-   { "tgsi",   GALLIVM_DEBUG_TGSI },
-   { "ir",     GALLIVM_DEBUG_IR },
-   { "asm",    GALLIVM_DEBUG_ASM },
-   { "nopt",   GALLIVM_DEBUG_NO_OPT },
-   {NULL, 0}
+   { "tgsi",   GALLIVM_DEBUG_TGSI, NULL },
+   { "ir",     GALLIVM_DEBUG_IR, NULL },
+   { "asm",    GALLIVM_DEBUG_ASM, NULL },
+   { "nopt",   GALLIVM_DEBUG_NO_OPT, NULL },
+   DEBUG_NAMED_VALUE_END
 };
 #endif
 
@@ -75,12 +75,21 @@ enum LLVM_CodeGenOpt_Level {
 };
 
 
+extern void
+lp_register_oprofile_jit_event_listener(LLVMExecutionEngineRef EE);
+
+extern void
+lp_set_target_options(void);
+
+
 void
 lp_build_init(void)
 {
 #ifdef DEBUG
    gallivm_debug = debug_get_flags_option("GALLIVM_DEBUG", lp_bld_debug_flags, 0 );
 #endif
+
+   lp_set_target_options();
 
    LLVMInitializeNativeTarget();
 
@@ -109,6 +118,10 @@ lp_build_init(void)
          LLVMDisposeMessage(error);
          assert(0);
       }
+
+#if defined(DEBUG) || defined(PROFILE)
+      lp_register_oprofile_jit_event_listener(lp_build_engine);
+#endif
    }
 
    if (!lp_build_target)

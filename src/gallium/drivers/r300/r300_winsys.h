@@ -47,13 +47,6 @@ enum r300_reference_domain { /* bitfield */
     R300_REF_HW = 2
 };
 
-struct r300_cs_info {
-    /* In DWORDs. */
-    unsigned used;
-    unsigned free;
-    unsigned capacity;
-};
-
 struct r300_winsys_screen {
     void (*destroy)(struct r300_winsys_screen *ws);
     
@@ -74,8 +67,9 @@ struct r300_winsys_screen {
     struct r300_winsys_buffer *(*buffer_create)(struct r300_winsys_screen *ws,
 						unsigned alignment,
 						unsigned usage,
+                                                enum r300_buffer_domain domain,
 						unsigned size);
-    
+
     /**
      * Map the entire data store of a buffer object into the client's address.
      * flags is bitmask of R300_WINSYS_BUFFER_USAGE_CPU_READ/WRITE flags.
@@ -100,24 +94,21 @@ struct r300_winsys_screen {
     /* Add a pipe_resource to the list of buffer objects to validate. */
     boolean (*add_buffer)(struct r300_winsys_screen *winsys,
                           struct r300_winsys_buffer *buf,
-                          uint32_t rd,
-                          uint32_t wd);
+                          enum r300_buffer_domain rd,
+                          enum r300_buffer_domain wd);
 
 
     /* Revalidate all currently setup pipe_buffers.
      * Returns TRUE if a flush is required. */
     boolean (*validate)(struct r300_winsys_screen* winsys);
 
-    /* Return current CS info. */
-    void (*get_cs_info)(struct r300_winsys_screen *winsys,
-                        struct r300_cs_info *info);
+    /* Return the number of free dwords in CS. */
+    unsigned (*get_cs_free_dwords)(struct r300_winsys_screen *winsys);
 
-    /* Start a command emit. */
-    void (*begin_cs)(struct r300_winsys_screen* winsys,
-                     int size,
-                     const char* file,
-                     const char* function,
-                     int line);
+    /* Return the pointer to the first free dword in CS and assume a pipe
+     * driver wants to fill "count" dwords. */
+    uint32_t *(*get_cs_pointer)(struct r300_winsys_screen *winsys,
+                                unsigned count);
 
     /* Write a dword to the command buffer. */
     void (*write_cs_dword)(struct r300_winsys_screen* winsys, uint32_t dword);
@@ -129,15 +120,9 @@ struct r300_winsys_screen {
     /* Write a relocated dword to the command buffer. */
     void (*write_cs_reloc)(struct r300_winsys_screen *winsys,
                            struct r300_winsys_buffer *buf,
-                           uint32_t rd,
-                           uint32_t wd,
+                           enum r300_buffer_domain rd,
+                           enum r300_buffer_domain wd,
                            uint32_t flags);
-
-    /* Finish a command emit. */
-    void (*end_cs)(struct r300_winsys_screen* winsys,
-                   const char* file,
-                   const char* function,
-                   int line);
 
     /* Flush the CS. */
     void (*flush_cs)(struct r300_winsys_screen* winsys);
@@ -163,12 +148,10 @@ struct r300_winsys_screen {
 			  enum r300_value_id vid);
 
     struct r300_winsys_buffer *(*buffer_from_handle)(struct r300_winsys_screen *winsys,
-						     struct pipe_screen *screen,
-						     struct winsys_handle *whandle,
-						     unsigned *stride);
+                                                     unsigned handle);
+
     boolean (*buffer_get_handle)(struct r300_winsys_screen *winsys,
 				 struct r300_winsys_buffer *buffer,
-				 unsigned stride,
 				 struct winsys_handle *whandle);
 
     boolean (*is_buffer_referenced)(struct r300_winsys_screen *winsys,

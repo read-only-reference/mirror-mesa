@@ -226,22 +226,23 @@ void Map_Fragment_Program(r700_AssemblerBase         *pAsm,
 	pAsm->number_of_exports = 0;
 	pAsm->number_of_colorandz_exports = 0; /* don't include stencil and mask out. */
 	pAsm->starting_export_register_number = pAsm->number_used_registers;
-	unBit = 1 << FRAG_RESULT_COLOR;
-	if(mesa_fp->Base.OutputsWritten & unBit)
-	{
-		pAsm->uiFP_OutputMap[FRAG_RESULT_COLOR] = pAsm->number_used_registers++;
-		pAsm->number_of_exports++;
-		pAsm->number_of_colorandz_exports++;
-	}
-	unBit = 1 << FRAG_RESULT_DEPTH;
-	if(mesa_fp->Base.OutputsWritten & unBit)
-	{
-        pAsm->depth_export_register_number = pAsm->number_used_registers;
-		pAsm->uiFP_OutputMap[FRAG_RESULT_DEPTH] = pAsm->number_used_registers++;
-		pAsm->number_of_exports++;
-		pAsm->number_of_colorandz_exports++;
-		pAsm->pR700Shader->depthIsExported = 1;
-	}
+
+    for (i = 0; i < FRAG_RESULT_MAX; ++i)
+    {
+        unBit = 1 << i;
+        if (mesa_fp->Base.OutputsWritten & unBit)
+        {
+            if (i == FRAG_RESULT_DEPTH)
+            {
+                pAsm->depth_export_register_number = pAsm->number_used_registers;
+                pAsm->pR700Shader->depthIsExported = 1;
+            }
+
+            pAsm->uiFP_OutputMap[i] = pAsm->number_used_registers++;
+            ++pAsm->number_of_exports;
+            ++pAsm->number_of_colorandz_exports;
+        }
+    }
 
     pAsm->pucOutMask = (unsigned char*) MALLOC(pAsm->number_of_exports);
     for(ui=0; ui<pAsm->number_of_exports; ui++)
@@ -562,11 +563,15 @@ GLboolean r700SetupFragmentProgram(GLcontext * ctx)
 
     /* see if we need any point_sprite replacements, also increase num_interp
      * as there's no vp output for them */
-    for (i = FRAG_ATTRIB_TEX0; i<= FRAG_ATTRIB_TEX7; i++)
+    if (ctx->Point.PointSprite)
     {
-        if(ctx->Point.CoordReplace[i - FRAG_ATTRIB_TEX0] == GL_TRUE) {
-            ui++;
-            point_sprite = GL_TRUE;
+        for (i = FRAG_ATTRIB_TEX0; i<= FRAG_ATTRIB_TEX7; i++)
+        {
+            if (ctx->Point.CoordReplace[i - FRAG_ATTRIB_TEX0] == GL_TRUE)
+            {
+                ui++;
+                point_sprite = GL_TRUE;
+            }
         }
     }
 
@@ -669,8 +674,9 @@ GLboolean r700SetupFragmentProgram(GLcontext * ctx)
 
     for(i=0; i<8; i++)
     {
+	    GLboolean coord_replace = ctx->Point.PointSprite && ctx->Point.CoordReplace[i];
 	    unBit = 1 << (VERT_RESULT_TEX0 + i);
-	    if((OutputsWritten & unBit) || (ctx->Point.CoordReplace[i] == GL_TRUE))
+	    if ((OutputsWritten & unBit) || coord_replace)
 	    {
 		    ui = pAsm->uiFP_AttributeMap[FRAG_ATTRIB_TEX0 + i];
 		    SETbit(r700->SPI_PS_INPUT_CNTL[ui].u32All, SEL_CENTROID_bit);
@@ -678,7 +684,7 @@ GLboolean r700SetupFragmentProgram(GLcontext * ctx)
 			     SEMANTIC_shift, SEMANTIC_mask);
 		    CLEARbit(r700->SPI_PS_INPUT_CNTL[ui].u32All, FLAT_SHADE_bit);
 		    /* ARB_point_sprite */
-		    if(ctx->Point.CoordReplace[i] == GL_TRUE)
+		    if (coord_replace)
 		    {
 			     SETbit(r700->SPI_PS_INPUT_CNTL[ui].u32All, PT_SPRITE_TEX_bit);
 		    }

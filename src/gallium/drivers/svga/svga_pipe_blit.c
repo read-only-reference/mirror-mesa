@@ -28,7 +28,6 @@
 #include "svga_debug.h"
 #include "svga_cmd.h"
 #include "svga_surface.h"
-#include "util/u_surface.h"
 
 #define FILE_DEBUG_FLAG DEBUG_BLIT
 
@@ -108,5 +107,4 @@ void
 svga_init_blit_functions(struct svga_context *svga)
 {
    svga->pipe.resource_copy_region = svga_surface_copy;
-   svga->pipe.resource_fill_region = util_resource_fill_region;
 }

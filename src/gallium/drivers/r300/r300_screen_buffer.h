@@ -52,6 +52,8 @@ struct r300_buffer
 
     struct r300_winsys_buffer *buf;
 
+    enum r300_buffer_domain domain;
+
     void *user_buffer;
     struct r300_buffer_range ranges[R300_BUFFER_MAX_RANGES];
     unsigned num_ranges;
@@ -112,23 +114,6 @@ static INLINE boolean r300_add_texture(struct r300_winsys_screen *rws,
 				       int rd, int wr)
 {
     return rws->add_buffer(rws, tex->buffer, rd, wr);
-}
-
-static INLINE void r300_buffer_write_reloc(struct r300_winsys_screen *rws,
-				      struct r300_buffer *buf,
-				      uint32_t rd, uint32_t wd, uint32_t flags)
-{
-    if (!buf->buf)
-	return;
-
-    rws->write_cs_reloc(rws, buf->buf, rd, wd, flags);
-}
-
-static INLINE void r300_texture_write_reloc(struct r300_winsys_screen *rws,
-					    struct r300_texture *texture,
-					    uint32_t rd, uint32_t wd, uint32_t flags)
-{
-    rws->write_cs_reloc(rws, texture->buffer, rd, wd, flags);
 }
 
 #endif

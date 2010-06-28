@@ -21,12 +21,9 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE. */
 
-#include "r300_context.h"
 #include "r300_transfer.h"
 #include "r300_texture.h"
-#include "r300_screen.h"
-
-#include "r300_winsys.h"
+#include "r300_screen_buffer.h"
 
 #include "util/u_memory.h"
 #include "util/u_format.h"
@@ -78,19 +75,11 @@ static void r300_copy_into_tiled_texture(struct pipe_context *ctx,
     subsrc.face = 0;
     subsrc.level = 0;
 
-    /* XXX this flush prevents the following DRM error from occuring:
-     * [drm:radeon_cs_ioctl] *ERROR* Failed to parse relocation !
-     * Reproducible with perf/copytex. */
-    ctx->flush(ctx, 0, NULL);
-
     ctx->resource_copy_region(ctx, tex, transfer->sr,
 			      transfer->box.x, transfer->box.y, transfer->box.z,
 			      &r300transfer->detiled_texture->b.b, subsrc,
 			      0, 0, 0,
 			      transfer->box.width, transfer->box.height);
-
-    /* XXX this flush fixes a few piglit tests (e.g. glean/pixelFormats). */
-    ctx->flush(ctx, 0, NULL);
 }
 
 struct pipe_transfer*
@@ -104,12 +93,20 @@ r300_texture_get_transfer(struct pipe_context *ctx,
     struct r300_screen *r300screen = r300_screen(ctx->screen);
     struct r300_transfer *trans;
     struct pipe_resource base;
+    boolean referenced_cs, referenced_hw, blittable;
 
-    /* XXX Why aren't flushes taken care of by winsys automatically?
-     * Winsys seems to sometimes return a cached buffer instead of
-     * a mapped hardware buffer if this flush is commented out. */
-    if (ctx->is_resource_referenced(ctx, texture, sr.face, sr.level))
-        ctx->flush(ctx, PIPE_FLUSH_RENDER_CACHE, NULL);
+    referenced_cs = r300screen->rws->is_buffer_referenced(
+                                r300screen->rws, tex->buffer, R300_REF_CS);
+    if (referenced_cs) {
+        referenced_hw = TRUE;
+    } else {
+        referenced_hw = r300screen->rws->is_buffer_referenced(
+                                r300screen->rws, tex->buffer, R300_REF_HW);
+    }
+
+    blittable = ctx->screen->is_format_supported(
+            ctx->screen, texture->format, texture->target, 0,
+            PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET, 0);
 
     trans = CALLOC_STRUCT(r300_transfer);
     if (trans) {
@@ -120,8 +117,10 @@ r300_texture_get_transfer(struct pipe_context *ctx,
         trans->transfer.box = *box;
 
         /* If the texture is tiled, we must create a temporary detiled texture
-         * for this transfer. */
-        if (tex->microtile || tex->macrotile) {
+         * for this transfer.
+         * Also make write transfers pipelined. */
+        if (tex->microtile || tex->macrotile ||
+            ((referenced_hw & !(usage & PIPE_TRANSFER_READ)) && blittable)) {
             base.target = PIPE_TEXTURE_2D;
             base.format = texture->format;
             base.width0 = box->width;
@@ -149,6 +148,30 @@ r300_texture_get_transfer(struct pipe_context *ctx,
                ctx->screen->resource_create(ctx->screen,
                                             &base));
 
+            if (!trans->detiled_texture) {
+                /* Oh crap, the thing can't create the texture.
+                 * Let's flush and try again. */
+                ctx->flush(ctx, 0, NULL);
+
+                trans->detiled_texture = r300_texture(
+                   ctx->screen->resource_create(ctx->screen,
+                                                &base));
+
+                if (!trans->detiled_texture) {
+                    /* For linear textures, it's safe to fallback to
+                     * an unpipelined transfer. */
+                    if (!tex->microtile && !tex->macrotile) {
+                        goto unpipelined;
+                    }
+
+                    /* Otherwise, go to hell. */
+                    fprintf(stderr,
+                        "r300: Failed to create a transfer object, praise.\n");
+                    FREE(trans);
+                    return NULL;
+                }
+            }
+
             assert(!trans->detiled_texture->microtile &&
                    !trans->detiled_texture->macrotile);
 
@@ -166,14 +189,24 @@ r300_texture_get_transfer(struct pipe_context *ctx,
                 /* We cannot map a tiled texture directly because the data is
                  * in a different order, therefore we do detiling using a blit. */
                 r300_copy_from_tiled_texture(ctx, trans);
+
+                /* Always referenced in the blit. */
+                ctx->flush(ctx, 0, NULL);
             }
-        } else {
-            trans->transfer.stride =
-                r300_texture_get_stride(r300screen, tex, sr.level);
-            trans->offset = r300_texture_get_offset(tex, sr.level, box->z, sr.face);
+            return &trans->transfer;
         }
+
+    unpipelined:
+        /* Unpipelined transfer. */
+        trans->transfer.stride =
+                r300_texture_get_stride(r300screen, tex, sr.level);
+        trans->offset = r300_texture_get_offset(tex, sr.level, box->z, sr.face);
+
+        if (referenced_cs && (usage & PIPE_TRANSFER_READ))
+            ctx->flush(ctx, PIPE_FLUSH_RENDER_CACHE, NULL);
+        return &trans->transfer;
     }
-    return &trans->transfer;
+    return NULL;
 }
 
 void r300_texture_transfer_destroy(struct pipe_context *ctx,

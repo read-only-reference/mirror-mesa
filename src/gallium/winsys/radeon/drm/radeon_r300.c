@@ -31,12 +31,21 @@ static struct r300_winsys_buffer *
 radeon_r300_winsys_buffer_create(struct r300_winsys_screen *rws,
 				 unsigned alignment,
 				 unsigned usage,
+                                 enum r300_buffer_domain domain,
 				 unsigned size)
 {
     struct radeon_libdrm_winsys *ws = radeon_winsys_screen(rws);
     struct pb_desc desc;
     struct pb_manager *provider;
     struct pb_buffer *buffer;
+
+    /* XXX this is hackish, but it's the only way to pass these flags
+     * to the real create function. */
+    usage &= ~(RADEON_USAGE_DOMAIN_GTT | RADEON_USAGE_DOMAIN_VRAM);
+    if (domain & R300_DOMAIN_GTT)
+        usage |= RADEON_USAGE_DOMAIN_GTT;
+    if (domain & R300_DOMAIN_VRAM)
+        usage |= RADEON_USAGE_DOMAIN_VRAM;
 
     memset(&desc, 0, sizeof(desc));
     desc.alignment = alignment;
@@ -127,29 +136,21 @@ static boolean radeon_r300_winsys_is_buffer_referenced(struct r300_winsys_screen
 }
 
 static struct r300_winsys_buffer *radeon_r300_winsys_buffer_from_handle(struct r300_winsys_screen *rws,
-									struct pipe_screen *screen,
-									struct winsys_handle *whandle,
-									unsigned *stride)
+                                                                        unsigned handle)
 {
     struct radeon_libdrm_winsys *ws = radeon_winsys_screen(rws);
     struct pb_buffer *_buf;
 
-    _buf = radeon_drm_bufmgr_create_buffer_from_handle(ws->kman, whandle->handle);
-    *stride = whandle->stride;
+    _buf = radeon_drm_bufmgr_create_buffer_from_handle(ws->kman, handle);
     return radeon_libdrm_winsys_buffer(_buf);
 }
 
 static boolean radeon_r300_winsys_buffer_get_handle(struct r300_winsys_screen *rws,
 						    struct r300_winsys_buffer *buffer,
-						    unsigned stride,
-						    struct winsys_handle *whandle)
+                                                    struct winsys_handle *whandle)
 {
     struct pb_buffer *_buf = radeon_pb_buffer(buffer);
-    boolean ret;
-    ret = radeon_drm_bufmgr_get_handle(_buf, whandle);
-    if (ret)
-	whandle->stride = stride;
-    return ret;
+    return radeon_drm_bufmgr_get_handle(_buf, whandle);
 }
 
 static void radeon_set_flush_cb(struct r300_winsys_screen *rws,
@@ -164,8 +165,8 @@ static void radeon_set_flush_cb(struct r300_winsys_screen *rws,
 
 static boolean radeon_add_buffer(struct r300_winsys_screen *rws,
                                  struct r300_winsys_buffer *buf,
-                                 uint32_t rd,
-                                 uint32_t wd)
+                                 enum r300_buffer_domain rd,
+                                 enum r300_buffer_domain wd)
 {
     struct pb_buffer *_buf = radeon_pb_buffer(buf);
 
@@ -183,25 +184,23 @@ static boolean radeon_validate(struct r300_winsys_screen *rws)
     return TRUE;
 }
 
-static void radeon_get_cs_info(struct r300_winsys_screen *rws,
-                               struct r300_cs_info *info)
+static unsigned radeon_get_cs_free_dwords(struct r300_winsys_screen *rws)
 {
     struct radeon_libdrm_winsys *ws = radeon_winsys_screen(rws);
     struct radeon_cs *cs = ws->cs;
 
-    info->capacity = cs->ndw;
-    info->used = cs->cdw;
-    info->free = cs->ndw - cs->cdw;
+    return cs->ndw - cs->cdw;
 }
 
-static void radeon_begin_cs(struct r300_winsys_screen *rws,
-                            int size,
-                            const char* file,
-                            const char* function,
-                            int line)
+static uint32_t *radeon_get_cs_pointer(struct r300_winsys_screen *rws,
+                                       unsigned count)
 {
     struct radeon_libdrm_winsys *ws = radeon_winsys_screen(rws);
-    radeon_cs_begin(ws->cs, size, file, function, line);
+    struct radeon_cs *cs = ws->cs;
+    uint32_t *ptr = cs->packets + cs->cdw;
+
+    cs->cdw += count;
+    return ptr;
 }
 
 static void radeon_write_cs_dword(struct r300_winsys_screen *rws,
@@ -220,8 +219,8 @@ static void radeon_write_cs_table(struct r300_winsys_screen *rws,
 
 static void radeon_write_cs_reloc(struct r300_winsys_screen *rws,
                                   struct r300_winsys_buffer *buf,
-                                  uint32_t rd,
-                                  uint32_t wd,
+                                  enum r300_buffer_domain rd,
+                                  enum r300_buffer_domain wd,
                                   uint32_t flags)
 {
     struct pb_buffer *_buf = radeon_pb_buffer(buf);
@@ -232,15 +231,6 @@ static void radeon_reset_bos(struct r300_winsys_screen *rws)
 {
     struct radeon_libdrm_winsys *ws = radeon_winsys_screen(rws);
     radeon_cs_space_reset_bos(ws->cs);
-}
-
-static void radeon_end_cs(struct r300_winsys_screen *rws,
-                          const char* file,
-                          const char* function,
-                          int line)
-{
-    struct radeon_libdrm_winsys *ws = radeon_winsys_screen(rws);
-    radeon_cs_end(ws->cs, file, function, line);
 }
 
 static void radeon_flush_cs(struct r300_winsys_screen *rws)
@@ -336,12 +326,11 @@ radeon_setup_winsys(int fd, struct radeon_libdrm_winsys* ws)
     ws->base.add_buffer = radeon_add_buffer;
     ws->base.validate = radeon_validate;
     ws->base.destroy = radeon_winsys_destroy;
-    ws->base.get_cs_info = radeon_get_cs_info;
-    ws->base.begin_cs = radeon_begin_cs;
+    ws->base.get_cs_free_dwords = radeon_get_cs_free_dwords;
+    ws->base.get_cs_pointer = radeon_get_cs_pointer;
     ws->base.write_cs_dword = radeon_write_cs_dword;
     ws->base.write_cs_table = radeon_write_cs_table;
     ws->base.write_cs_reloc = radeon_write_cs_reloc;
-    ws->base.end_cs = radeon_end_cs;
     ws->base.flush_cs = radeon_flush_cs;
     ws->base.reset_bos = radeon_reset_bos;
     ws->base.set_flush_cb = radeon_set_flush_cb;

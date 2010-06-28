@@ -153,5 +153,6 @@ void
 llvmpipe_init_surface_functions(struct llvmpipe_context *lp)
 {
    lp->pipe.resource_copy_region = lp_resource_copy;
-   lp->pipe.resource_fill_region = util_resource_fill_region;
+   lp->pipe.clear_render_target = util_clear_render_target;
+   lp->pipe.clear_depth_stencil = util_clear_depth_stencil;
 }

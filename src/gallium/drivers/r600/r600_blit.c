@@ -28,13 +28,12 @@
 #include <util/u_blitter.h>
 #include <util/u_inlines.h>
 #include <util/u_memory.h>
+#include "util/u_surface.h"
 #include "r600_screen.h"
 #include "r600_context.h"
 
-static void r600_blitter_save_states(struct pipe_context *ctx)
+static void r600_blitter_save_states(struct r600_context *rctx)
 {
-	struct r600_context *rctx = (struct r600_context*)ctx;
-
 	util_blitter_save_blend(rctx->blitter,
 					rctx->draw->state[R600_BLEND]);
 	util_blitter_save_depth_stencil_alpha(rctx->blitter,
@@ -50,33 +49,72 @@ static void r600_blitter_save_states(struct pipe_context *ctx)
 					rctx->vertex_elements);
 	util_blitter_save_viewport(rctx->blitter,
 					&rctx->viewport);
+	/* XXX util_blitter_save_clip(rctx->blitter, &rctx->clip); */
+	util_blitter_save_vertex_buffers(rctx->blitter, rctx->nvertex_buffer,
+					 rctx->vertex_buffer);
 }
 
-void r600_clear(struct pipe_context *ctx, unsigned buffers,
-		const float *rgba, double depth, unsigned stencil)
+static void r600_clear(struct pipe_context *ctx, unsigned buffers,
+		       const float *rgba, double depth, unsigned stencil)
 {
-	struct r600_context *rctx = (struct r600_context*)ctx;
+	struct r600_context *rctx = r600_context(ctx);
 	struct pipe_framebuffer_state *fb = &rctx->fb_state;
 
-	r600_blitter_save_states(ctx);
+	r600_blitter_save_states(rctx);
 	util_blitter_clear(rctx->blitter, fb->width, fb->height,
 				fb->nr_cbufs, buffers, rgba, depth,
 				stencil);
 }
 
-void r600_surface_copy(struct pipe_context *ctx,
-			struct pipe_surface *dst,
-			unsigned dstx, unsigned dsty,
-			struct pipe_surface *src,
-			unsigned srcx, unsigned srcy,
-			unsigned width, unsigned height)
+static void r600_clear_render_target(struct pipe_context *pipe,
+				     struct pipe_surface *dst,
+				     const float *rgba,
+				     unsigned dstx, unsigned dsty,
+				     unsigned width, unsigned height)
 {
+	struct r600_context *rctx = r600_context(pipe);
+
+	r600_blitter_save_states(rctx);
+	util_blitter_save_framebuffer(rctx->blitter, &rctx->fb_state);
+
+	util_blitter_clear_render_target(rctx->blitter, dst, rgba,
+					 dstx, dsty, width, height);
 }
 
-void r600_surface_fill(struct pipe_context *ctx,
-			struct pipe_surface *dst,
-			unsigned dstx, unsigned dsty,
-			unsigned width, unsigned height,
-			unsigned value)
+static void r600_clear_depth_stencil(struct pipe_context *pipe,
+				     struct pipe_surface *dst,
+				     unsigned clear_flags,
+				     double depth,
+				     unsigned stencil,
+				     unsigned dstx, unsigned dsty,
+				     unsigned width, unsigned height)
 {
+	struct r600_context *rctx = r600_context(pipe);
+
+	r600_blitter_save_states(rctx);
+	util_blitter_save_framebuffer(rctx->blitter, &rctx->fb_state);
+
+	util_blitter_clear_depth_stencil(rctx->blitter, dst, clear_flags, depth, stencil,
+					 dstx, dsty, width, height);
+}
+
+static void r600_resource_copy_region(struct pipe_context *pipe,
+				      struct pipe_resource *dst,
+				      struct pipe_subresource subdst,
+				      unsigned dstx, unsigned dsty, unsigned dstz,
+				      struct pipe_resource *src,
+				      struct pipe_subresource subsrc,
+				      unsigned srcx, unsigned srcy, unsigned srcz,
+				      unsigned width, unsigned height)
+{
+	util_resource_copy_region(pipe, dst, subdst, dstx, dsty, dstz,
+				  src, subsrc, srcx, srcy, srcz, width, height);
+}
+
+void r600_init_blit_functions(struct r600_context *rctx)
+{
+	rctx->context.clear = r600_clear;
+	rctx->context.clear_render_target = r600_clear_render_target;
+	rctx->context.clear_depth_stencil = r600_clear_depth_stencil;
+	rctx->context.resource_copy_region = r600_resource_copy_region;
 }

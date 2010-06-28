@@ -113,6 +113,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
         case PIPE_CAP_TEXTURE_MIRROR_REPEAT:
         case PIPE_CAP_BLEND_EQUATION_SEPARATE:
+        case PIPE_CAP_TEXTURE_SWIZZLE:
             return 1;
 
         /* Unsupported features (boolean caps). */
@@ -146,6 +147,9 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
             return 1;
         case PIPE_CAP_MAX_CONST_BUFFER_SIZE:
             return 256;
+
+        case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
+            return 1;
 
         /* Fragment coordinate conventions. */
         case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
@@ -271,8 +275,23 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
         return FALSE;
     }
 
-   if (sample_count > 1)
-      return FALSE;
+    switch (sample_count) {
+        case 0:
+        case 1:
+            break;
+        case 2:
+        case 3:
+        case 4:
+        case 6:
+            if (usage != PIPE_BIND_RENDER_TARGET ||
+                !util_format_is_rgba8_variant(
+                    util_format_description(format))) {
+                return FALSE;
+            }
+            break;
+        default:
+            return FALSE;
+    }
 
     /* Check sampler format support. */
     if ((usage & PIPE_BIND_SAMPLER_VIEW) &&
@@ -314,6 +333,12 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
         r300_translate_vertex_data_type(format) != R300_INVALID_FORMAT) {
         retval |= PIPE_BIND_VERTEX_BUFFER;
     }
+
+    /* Transfers are always supported. */
+    if (usage & PIPE_BIND_TRANSFER_READ)
+        retval |= PIPE_BIND_TRANSFER_READ;
+    if (usage & PIPE_BIND_TRANSFER_WRITE)
+        retval |= PIPE_BIND_TRANSFER_WRITE;
 
     return retval == usage;
 }

@@ -23,9 +23,11 @@
 #include "draw/draw_context.h"
 
 #include "util/u_memory.h"
+#include "util/u_sampler.h"
 #include "util/u_simple_list.h"
 #include "util/u_upload_mgr.h"
 
+#include "r300_cb.h"
 #include "r300_context.h"
 #include "r300_emit.h"
 #include "r300_screen.h"
@@ -38,8 +40,14 @@
 static void r300_destroy_context(struct pipe_context* context)
 {
     struct r300_context* r300 = r300_context(context);
-    struct r300_query* query, * temp;
+    struct r300_query *query, *temp;
     struct r300_atom *atom;
+
+    if (r300->texkill_sampler) {
+        pipe_sampler_view_reference(
+                (struct pipe_sampler_view**)&r300->texkill_sampler,
+                NULL);
+    }
 
     util_blitter_destroy(r300->blitter);
     draw_destroy(r300->draw);
@@ -54,9 +62,6 @@ static void r300_destroy_context(struct pipe_context* context)
         }
     }
 
-    /* Free the OQ BO. */
-    context->screen->resource_destroy(context->screen, r300->oqbo);
-
     /* If there are any queries pending or not destroyed, remove them now. */
     foreach_s(query, temp, &r300->query_list) {
         remove_from_list(query);
@@ -65,6 +70,8 @@ static void r300_destroy_context(struct pipe_context* context)
 
     u_upload_destroy(r300->upload_vb);
     u_upload_destroy(r300->upload_ib);
+
+    translate_cache_destroy(r300->tran.translate_cache);
 
     FREE(r300->blend_color_state.state);
     FREE(r300->clip_state.state);
@@ -111,8 +118,8 @@ static void r300_setup_atoms(struct r300_context* r300)
      * the size of 0 here. */
     make_empty_list(&r300->atom_list);
     R300_INIT_ATOM(invariant_state, 71);
-    R300_INIT_ATOM(query_start, 4);
     R300_INIT_ATOM(ztop_state, 2);
+    R300_INIT_ATOM(query_start, 4);
     R300_INIT_ATOM(blend_state, 8);
     R300_INIT_ATOM(blend_color_state, is_r500 ? 3 : 2);
     R300_INIT_ATOM(clip_state, has_tcl ? 5 + (6 * 4) : 2);
@@ -141,7 +148,7 @@ static void r300_setup_atoms(struct r300_context* r300)
 
     /* Some non-CSO atoms need explicit space to store the state locally. */
     r300->blend_color_state.state = CALLOC_STRUCT(r300_blend_color_state);
-    r300->clip_state.state = CALLOC_STRUCT(pipe_clip_state);
+    r300->clip_state.state = CALLOC_STRUCT(r300_clip_state);
     r300->fb_state.state = CALLOC_STRUCT(pipe_framebuffer_state);
     r300->rs_block_state.state = CALLOC_STRUCT(r300_rs_block);
     r300->scissor_state.state = CALLOC_STRUCT(pipe_scissor_state);
@@ -160,6 +167,29 @@ static void r300_setup_atoms(struct r300_context* r300)
     r300->pvs_flush.allow_null_state = TRUE;
     r300->query_start.allow_null_state = TRUE;
     r300->texture_cache_inval.allow_null_state = TRUE;
+}
+
+/* Not every state tracker calls every driver function before the first draw
+ * call and we must initialize the command buffers somehow. */
+static void r300_init_states(struct pipe_context *pipe)
+{
+    struct pipe_blend_color bc = {{0}};
+    struct pipe_clip_state cs = {{{0}}};
+    struct pipe_scissor_state ss = {0};
+    struct r300_clip_state *clip =
+            (struct r300_clip_state*)r300_context(pipe)->clip_state.state;
+    CB_LOCALS;
+
+    pipe->set_blend_color(pipe, &bc);
+    pipe->set_scissor_state(pipe, &ss);
+
+    if (r300_context(pipe)->screen->caps.has_tcl) {
+        pipe->set_clip_state(pipe, &cs);
+    } else {
+        BEGIN_CB(clip->cb, 2);
+        OUT_CB_REG(R300_VAP_CLIP_CNTL, R300_CLIP_DISABLE);
+        END_CB;
+    }
 }
 
 struct pipe_context* r300_create_context(struct pipe_screen* screen,
@@ -195,9 +225,6 @@ struct pipe_context* r300_create_context(struct pipe_screen* screen,
 
     r300_setup_atoms(r300);
 
-    /* Open up the OQ BO. */
-    r300->oqbo = pipe_buffer_create(screen,
-				    R300_BIND_OQBO, 4096);
     make_empty_list(&r300->query_list);
 
     r300_init_blit_functions(r300);
@@ -227,6 +254,39 @@ struct pipe_context* r300_create_context(struct pipe_screen* screen,
     if (r300->upload_vb == NULL)
         goto no_upload_vb;
 
+    r300->tran.translate_cache = translate_cache_create();
+
+    r300_init_states(&r300->context);
+
+    /* The KIL opcode needs the first texture unit to be enabled
+     * on r3xx-r4xx. In order to calm down the CS checker, we bind this
+     * dummy texture there. */
+    if (!r300->screen->caps.is_r500) {
+        struct pipe_resource *tex;
+        struct pipe_resource rtempl = {{0}};
+        struct pipe_sampler_view vtempl = {{0}};
+
+        rtempl.target = PIPE_TEXTURE_2D;
+        rtempl.format = PIPE_FORMAT_I8_UNORM;
+        rtempl.bind = PIPE_BIND_SAMPLER_VIEW;
+        rtempl.width0 = 1;
+        rtempl.height0 = 1;
+        rtempl.depth0 = 1;
+        tex = screen->resource_create(screen, &rtempl);
+
+        u_sampler_view_default_template(&vtempl, tex, tex->format);
+
+        r300->texkill_sampler = (struct r300_sampler_view*)
+            r300->context.create_sampler_view(&r300->context, tex, &vtempl);
+
+        pipe_resource_reference(&tex, NULL);
+
+        /* This will make sure that the dummy texture is set up
+         * from the beginning even if an application does not use
+         * textures. */
+        r300->textures_state.dirty = TRUE;
+    }
+
     return &r300->context;
 
  no_upload_ib:
@@ -238,10 +298,7 @@ struct pipe_context* r300_create_context(struct pipe_screen* screen,
 
 boolean r300_check_cs(struct r300_context *r300, unsigned size)
 {
-    struct r300_cs_info cs_info;
-
-    r300->rws->get_cs_info(r300->rws, &cs_info);
-    return size <= cs_info.free;
+    return size <= r300->rws->get_cs_free_dwords(r300->rws);
 }
 
 void r300_finish(struct r300_context *r300)

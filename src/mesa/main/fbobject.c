@@ -188,6 +188,14 @@ _mesa_get_attachment(GLcontext *ctx, struct gl_framebuffer *fb,
       /* fall-through / new in GL 3.0 */
    case GL_STENCIL_ATTACHMENT_EXT:
       return &fb->Attachment[BUFFER_STENCIL];
+   case GL_FRONT_LEFT:
+      return &fb->Attachment[BUFFER_FRONT_LEFT];
+   case GL_FRONT_RIGHT:
+      return &fb->Attachment[BUFFER_FRONT_RIGHT];
+   case GL_BACK_LEFT:
+      return &fb->Attachment[BUFFER_BACK_LEFT];
+   case GL_BACK_RIGHT:
+      return &fb->Attachment[BUFFER_BACK_RIGHT];
    default:
       return NULL;
    }
@@ -393,7 +401,9 @@ test_attachment_completeness(const GLcontext *ctx, GLenum format,
 
       if (format == GL_COLOR) {
          if (baseFormat != GL_RGB &&
-             baseFormat != GL_RGBA) {
+             baseFormat != GL_RGBA &&
+	     (!ctx->Extensions.ARB_framebuffer_object ||
+	      baseFormat != GL_ALPHA)) {
             att_incomplete("bad format");
             att->Complete = GL_FALSE;
             return;
@@ -572,7 +582,8 @@ _mesa_test_framebuffer_completeness(GLcontext *ctx, struct gl_framebuffer *fb)
          f = texImg->_BaseFormat;
          numImages++;
          if (f != GL_RGB && f != GL_RGBA && f != GL_DEPTH_COMPONENT
-             && f != GL_DEPTH_STENCIL_EXT) {
+             && f != GL_DEPTH_STENCIL_EXT
+	     && (!ctx->Extensions.ARB_framebuffer_object || f != GL_ALPHA)) {
             fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_FORMATS_EXT;
             fbo_incomplete("texture attachment incomplete", -1);
             return;
@@ -1015,9 +1026,10 @@ renderbuffer_storage(GLenum target, GLenum internalFormat,
     */
 }
 
+
 #if FEATURE_OES_EGL_image
 void GLAPIENTRY
-_mesa_EGLImageTargetRenderbufferStorageOES (GLenum target, GLeglImageOES image)
+_mesa_EGLImageTargetRenderbufferStorageOES(GLenum target, GLeglImageOES image)
 {
    struct gl_renderbuffer *rb;
    GET_CURRENT_CONTEXT(ctx);
@@ -1030,13 +1042,15 @@ _mesa_EGLImageTargetRenderbufferStorageOES (GLenum target, GLeglImageOES image)
    }
 
    if (target != GL_RENDERBUFFER) {
-      _mesa_error(ctx, GL_INVALID_ENUM, "EGLImageTargetRenderbufferStorageOES");
+      _mesa_error(ctx, GL_INVALID_ENUM,
+                  "EGLImageTargetRenderbufferStorageOES");
       return;
    }
 
    rb = ctx->CurrentRenderbuffer;
    if (!rb) {
-      _mesa_error(ctx, GL_INVALID_OPERATION, "EGLImageTargetRenderbufferStorageOES");
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "EGLImageTargetRenderbufferStorageOES");
       return;
    }
 
@@ -1045,6 +1059,7 @@ _mesa_EGLImageTargetRenderbufferStorageOES (GLenum target, GLeglImageOES image)
    ctx->Driver.EGLImageTargetRenderbufferStorage(ctx, rb, image);
 }
 #endif
+
 
 /**
  * Helper function for _mesa_GetRenderbufferParameterivEXT() and
@@ -1113,6 +1128,10 @@ _mesa_RenderbufferStorageMultisample(GLenum target, GLsizei samples,
    renderbuffer_storage(target, internalFormat, width, height, samples);
 }
 
+
+/**
+ * OpenGL ES version of glRenderBufferStorage.
+ */
 void GLAPIENTRY
 _es_RenderbufferStorageEXT(GLenum target, GLenum internalFormat,
 			   GLsizei width, GLsizei height)
@@ -1129,6 +1148,7 @@ _es_RenderbufferStorageEXT(GLenum target, GLenum internalFormat,
 
    renderbuffer_storage(target, internalFormat, width, height, 0);
 }
+
 
 void GLAPIENTRY
 _mesa_GetRenderbufferParameterivEXT(GLenum target, GLenum pname, GLint *params)
@@ -1862,12 +1882,6 @@ _mesa_GetFramebufferAttachmentParameterivEXT(GLenum target, GLenum attachment,
    default:
       _mesa_error(ctx, GL_INVALID_ENUM,
                   "glGetFramebufferAttachmentParameterivEXT(target)");
-      return;
-   }
-
-   if (buffer->Name == 0) {
-      _mesa_error(ctx, GL_INVALID_OPERATION,
-                  "glGetFramebufferAttachmentParameterivEXT");
       return;
    }
 

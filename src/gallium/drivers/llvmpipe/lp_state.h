@@ -53,6 +53,10 @@
 #define LP_NEW_VS            0x2000
 #define LP_NEW_QUERY         0x4000
 #define LP_NEW_BLEND_COLOR   0x8000
+#define LP_NEW_GS            0x10000
+#define LP_NEW_SO            0x20000
+#define LP_NEW_SO_BUFFERS    0x40000
+
 
 
 struct vertex_info;
@@ -68,12 +72,21 @@ struct lp_vertex_shader
    struct draw_vertex_shader *draw_data;
 };
 
+/** Subclass of pipe_shader_state */
+struct lp_geometry_shader {
+   struct pipe_shader_state shader;
+   struct draw_geometry_shader *draw_data;
+};
 
 /** Vertex element state */
 struct lp_velems_state
 {
    unsigned count;
    struct pipe_vertex_element velem[PIPE_MAX_ATTRIBS];
+};
+
+struct lp_so_state {
+   struct pipe_stream_output_state base;
 };
 
 
@@ -109,7 +122,14 @@ void
 llvmpipe_init_vs_funcs(struct llvmpipe_context *llvmpipe);
 
 void
+llvmpipe_init_gs_funcs(struct llvmpipe_context *llvmpipe);
+
+void
 llvmpipe_init_rasterizer_funcs(struct llvmpipe_context *llvmpipe);
+
+void
+llvmpipe_init_so_funcs(struct llvmpipe_context *llvmpipe);
+
 
 
 #endif

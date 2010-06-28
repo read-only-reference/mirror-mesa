@@ -462,6 +462,8 @@ xxlib|xdri|xosmesa)
     ;;
 esac
 
+PKG_CHECK_MODULES([TALLOC], [talloc])
+
 dnl
 dnl Driver specific build directories
 dnl
@@ -469,7 +471,7 @@ dnl
 dnl this variable will be prepended to SRC_DIRS and is not exported
 CORE_DIRS="mapi/glapi glsl mesa"
 
-SRC_DIRS="glew"
+SRC_DIRS=""
 GLU_DIRS="sgi"
 GALLIUM_DIRS="auxiliary drivers state_trackers"
 GALLIUM_TARGET_DIRS=""
@@ -501,40 +503,6 @@ AC_SUBST([GALLIUM_WINSYS_DIRS])
 AC_SUBST([GALLIUM_DRIVERS_DIRS])
 AC_SUBST([GALLIUM_STATE_TRACKERS_DIRS])
 AC_SUBST([MESA_LLVM])
-
-dnl
-dnl User supplied program configuration
-dnl
-if test -d "$srcdir/progs/demos"; then
-    default_demos=yes
-else
-    default_demos=no
-fi
-AC_ARG_WITH([demos],
-    [AS_HELP_STRING([--with-demos@<:@=DIRS...@:>@],
-        [optional comma delimited demo directories to build
-        @<:@default=auto if source available@:>@])],
-    [with_demos="$withval"],
-    [with_demos="$default_demos"])
-if test "x$with_demos" = x; then
-    with_demos=no
-fi
-
-dnl If $with_demos is yes, directories will be added as libs available
-PROGRAM_DIRS=""
-case "$with_demos" in
-no) ;;
-yes) ;;
-*)
-    # verify the requested demos directories exist
-    demos=`IFS=,; echo $with_demos`
-    for demo in $demos; do
-        test -d "$srcdir/progs/$demo" || \
-            AC_MSG_ERROR([Program directory '$demo' doesn't exist])
-    done
-    PROGRAM_DIRS="$demos"
-    ;;
-esac
 
 dnl
 dnl Find out if X is available. The variable have_x is set if libX11 is
@@ -886,7 +854,7 @@ if test "$mesa_driver" = dri; then
         [AC_MSG_ERROR([Expat required for DRI.])])
 
     # put all the necessary libs together
-    DRI_LIB_DEPS="$SELINUX_LIBS $LIBDRM_LIBS $EXPAT_LIB -lm -lpthread $DLOPEN_LIBS"
+    DRI_LIB_DEPS="$SELINUX_LIBS $LIBDRM_LIBS $EXPAT_LIB -lm -lpthread $DLOPEN_LIBS $TALLOC_LIBS"
 fi
 AC_SUBST([DRI_DIRS])
 AC_SUBST([EXPAT_INCLUDES])
@@ -894,7 +862,7 @@ AC_SUBST([DRI_LIB_DEPS])
 
 case $DRI_DIRS in
 *i915*|*i965*)
-    PKG_CHECK_MODULES([INTEL], [libdrm_intel >= 2.4.19])
+    PKG_CHECK_MODULES([INTEL], [libdrm_intel >= 2.4.21])
     ;;
 esac
 
@@ -925,7 +893,7 @@ else
 fi
 AC_ARG_ENABLE([gl-osmesa],
     [AS_HELP_STRING([--enable-gl-osmesa],
-        [enable OSMesa on libGL @<:@default=enabled for xlib driver@:>@])],
+        [enable OSMesa with libGL @<:@default=enabled for xlib driver@:>@])],
     [gl_osmesa="$enableval"],
     [gl_osmesa="$default_gl_osmesa"])
 if test "x$gl_osmesa" = xyes; then
@@ -960,8 +928,8 @@ x16|x32)
 esac
 AC_SUBST([OSMESA_LIB])
 
-case "$mesa_driver" in
-osmesa)
+case "$DRIVER_DIRS" in
+*osmesa*)
     # only link libraries with osmesa if shared
     if test "$enable_static" = no; then
         OSMESA_LIB_DEPS="-lm -lpthread $SELINUX_LIBS $DLOPEN_LIBS"
@@ -971,19 +939,7 @@ osmesa)
     OSMESA_MESA_DEPS=""
     OSMESA_PC_LIB_PRIV="-lm -lpthread $SELINUX_LIBS $DLOPEN_LIBS"
     ;;
-*)
-    # Link OSMesa to libGL otherwise
-    OSMESA_LIB_DEPS=""
-    # only link libraries with osmesa if shared
-    if test "$enable_static" = no; then
-        OSMESA_MESA_DEPS='-l$(GL_LIB)'
-    else
-        OSMESA_MESA_DEPS=""
-    fi
-    OSMESA_PC_REQ="gl"
-    ;;
 esac
-OSMESA_PC_LIB_PRIV="$OSMESA_PC_LIB_PRIV"
 AC_SUBST([OSMESA_LIB_DEPS])
 AC_SUBST([OSMESA_MESA_DEPS])
 AC_SUBST([OSMESA_PC_REQ])
@@ -1013,10 +969,6 @@ if test "x$enable_egl" = xyes; then
         if test "$have_xcb_dri2" = yes; then
             EGL_DRIVERS_DIRS="$EGL_DRIVERS_DIRS dri2"
         fi
-    fi
-
-    if test "$with_demos" = yes; then
-        PROGRAM_DIRS="$PROGRAM_DIRS egl/eglut"
     fi
 fi
 AC_SUBST([EGL_LIB_DEPS])
@@ -1351,18 +1303,22 @@ if test "x$HAVE_ST_XORG" = xyes; then
         HAVE_XEXTPROTO_71="no")
 fi
 
+AC_ARG_WITH([egl-platforms],
+    [AS_HELP_STRING([--with-egl-platforms@<:@=DIRS...@:>@],
+        [comma delimited native platforms libEGL supports, e.g.
+        "x11,kms" @<:@default=auto@:>@])],
+    [with_egl_platforms="$withval"],
+    [with_egl_platforms=yes])
 AC_ARG_WITH([egl-displays],
     [AS_HELP_STRING([--with-egl-displays@<:@=DIRS...@:>@],
-        [comma delimited native displays libEGL supports, e.g.
-        "x11,kms" @<:@default=auto@:>@])],
-    [with_egl_displays="$withval"],
-    [with_egl_displays=yes])
+        [DEPRECATED.  Use --with-egl-platforms instead])],
+    [with_egl_platforms="$withval"])
 
-EGL_DISPLAYS=""
-case "$with_egl_displays" in
+EGL_PLATFORMS=""
+case "$with_egl_platforms" in
 yes)
     if test "x$enable_egl" = xyes && test "x$mesa_driver" != xosmesa; then
-        EGL_DISPLAYS="x11"
+        EGL_PLATFORMS="x11"
     fi
     ;;
 *)
@@ -1370,15 +1326,18 @@ yes)
         AC_MSG_ERROR([cannot build egl state tracker without EGL library])
     fi
     # verify the requested driver directories exist
-    egl_displays=`IFS=', '; echo $with_egl_displays`
-    for dpy in $egl_displays; do
-        test -d "$srcdir/src/gallium/state_trackers/egl/$dpy" || \
-            AC_MSG_ERROR([EGL display '$dpy' does't exist])
+    egl_platforms=`IFS=', '; echo $with_egl_platforms`
+    for plat in $egl_platforms; do
+        test -d "$srcdir/src/gallium/state_trackers/egl/$plat" || \
+            AC_MSG_ERROR([EGL platform '$plat' does't exist])
+        if test "$plat" = "fbdev"; then
+                GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS sw/fbdev"
+        fi
     done
-    EGL_DISPLAYS="$egl_displays"
+    EGL_PLATFORMS="$egl_platforms"
     ;;
 esac
-AC_SUBST([EGL_DISPLAYS])
+AC_SUBST([EGL_PLATFORMS])
 
 AC_ARG_WITH([egl-driver-dir],
     [AS_HELP_STRING([--with-egl-driver-dir=DIR],
@@ -1626,22 +1585,13 @@ echo "        Shared libs:     $enable_shared"
 echo "        Static libs:     $enable_static"
 if test "$enable_egl" = yes; then
     echo "        EGL:             $EGL_DRIVERS_DIRS"
-    echo "        EGL displays:    $EGL_DISPLAYS"
+    echo "        EGL platforms:   $EGL_PLATFORMS"
 else
     echo "        EGL:             no"
 fi
 echo "        GLU:             $enable_glu"
 echo "        GLw:             $enable_glw (Motif: $enable_motif)"
 echo "        glut:            $enable_glut"
-
-dnl Programs
-# cleanup the programs var for display
-program_dirs=`echo $PROGRAM_DIRS | $SED 's/^ *//;s/  */ /;s/ *$//'`
-if test "x$program_dirs" = x; then
-    echo "        Demos:           no"
-else
-    echo "        Demos:           $program_dirs"
-fi
 
 dnl Compiler options
 # cleanup the CFLAGS/CXXFLAGS/DEFINES vars

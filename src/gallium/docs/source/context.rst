@@ -1,3 +1,5 @@
+.. _context:
+
 Context
 =======
 
@@ -102,14 +104,29 @@ the LOD range the texture is going to be constrained to.
 Clearing
 ^^^^^^^^
 
+Clear is one of the most difficult concepts to nail down to a single
+interface (due to both different requirements from APIs and also driver/hw
+specific differences).
+
 ``clear`` initializes some or all of the surfaces currently bound to
 the framebuffer to particular RGBA, depth, or stencil values.
+Currently, this does not take into account color or stencil write masks (as
+used by GL), and always clears the whole surfaces (no scissoring as used by
+GL clear or explicit rectangles like d3d9 uses). It can, however, also clear
+only depth or stencil in a combined depth/stencil surface, if the driver
+supports PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE.
+If a surface includes several layers/slices (XXX: not yet...) then all layers
+will be cleared.
 
-Clear is one of the most difficult concepts to nail down to a single
-interface and it seems likely that we will want to add additional
-clear paths, for instance clearing surfaces not bound to the
-framebuffer, or read-modify-write clears such as depth-only or
-stencil-only clears of packed depth-stencil buffers.  
+``clear_render_target`` clears a single color rendertarget with the specified
+color value. While it is only possible to clear one surface at a time (which can
+include several layers), this surface need not be bound to the framebuffer.
+
+``clear_depth_stencil`` clears a single depth, stencil or depth/stencil surface
+with the specified depth and stencil values (for combined depth/stencil buffers,
+is is also possible to only clear one or the other part). While it is only
+possible to clear one surface at a time (which can include several layers),
+this surface need not be bound to the framebuffer.
 
 
 Drawing
@@ -266,8 +283,6 @@ These methods operate directly on ``pipe_resource`` objects, and stand
 apart from any 3D state in the context.  Blitting functionality may be
 moved to a separate abstraction at some point in the future.
 
-``resource_fill_region`` performs a fill operation on a section of a resource.
-
 ``resource_copy_region`` blits a region of a subresource of a resource to a
 region of another subresource of a resource, provided that both resources have the
 same format. The source and destination may be the same resource, but overlapping
@@ -280,6 +295,23 @@ supports multisampling.
 The interfaces to these calls are likely to change to make it easier
 for a driver to batch multiple blits with the same source and
 destination.
+
+
+Stream Output
+^^^^^^^^^^^^^
+
+Stream output, also known as transform feedback allows writing the results of the
+vertex pipeline (after the geometry shader or vertex shader if no geometry shader
+is present) to be written to a buffer created with a ``PIPE_BIND_STREAM_OUTPUT``
+flag.
+
+First a stream output state needs to be created with the
+``create_stream_output_state`` call. It specific the details of what's being written,
+to which buffer and with what kind of a writemask.
+
+Then target buffers needs to be set with the call to ``set_stream_output_buffers``
+which sets the buffers and the offsets from the start of those buffer to where
+the data will be written to.
 
 
 Transfers

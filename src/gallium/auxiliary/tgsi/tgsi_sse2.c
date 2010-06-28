@@ -1244,16 +1244,9 @@ emit_sub(
       make_xmm( xmm_src ) );
 }
 
-
-
-
-
-
-
 /**
  * Register fetch.
  */
-
 static void
 emit_fetch(
    struct x86_function *func,
@@ -1338,7 +1331,6 @@ emit_fetch(
 /**
  * Register store.
  */
-
 static void
 emit_store(
    struct x86_function *func,
@@ -1455,7 +1447,6 @@ fetch_texel( struct tgsi_sampler **sampler,
 /**
  * High-level instruction translators.
  */
-
 static void
 emit_tex( struct x86_function *func,
           const struct tgsi_full_instruction *inst,
@@ -1507,7 +1498,6 @@ emit_tex( struct x86_function *func,
                get_temp( TEMP_R0, 3 ),
                make_xmm( 3 ) );
 
-   
    if (projected) {
       FETCH( func, *inst, 3, 0, 3 );
 
@@ -1534,7 +1524,6 @@ emit_tex( struct x86_function *func,
 
    args[0] = get_temp( TEMP_R0, 0 );
    args[1] = get_sampler_ptr( unit );
-
 
    emit_func_call( func,
                    0,
@@ -1569,7 +1558,8 @@ emit_kil(
 
    /* This mask stores component bits that were already tested. Note that
     * we test if the value is less than zero, so 1.0 and 0.0 need not to be
-    * tested. */
+    * tested.
+    */
    uniquemask = 0;
 
    FOR_EACH_CHANNEL( chan_index ) {
@@ -1715,22 +1705,26 @@ emit_cmp(
 
 
 /**
- * Check if inst src/dest regs use indirect addressing into temporary
- * register file.
+ * Check if inst src/dest regs use indirect addressing into temporary,
+ * input or output register files.
  */
 static boolean
-indirect_temp_reference(const struct tgsi_full_instruction *inst)
+indirect_reg_reference(const struct tgsi_full_instruction *inst)
 {
    uint i;
    for (i = 0; i < inst->Instruction.NumSrcRegs; i++) {
       const struct tgsi_full_src_register *reg = &inst->Src[i];
-      if (reg->Register.File == TGSI_FILE_TEMPORARY &&
+      if ((reg->Register.File == TGSI_FILE_TEMPORARY ||
+           reg->Register.File == TGSI_FILE_INPUT ||
+           reg->Register.File == TGSI_FILE_OUTPUT) &&
           reg->Register.Indirect)
          return TRUE;
    }
    for (i = 0; i < inst->Instruction.NumDstRegs; i++) {
       const struct tgsi_full_dst_register *reg = &inst->Dst[i];
-      if (reg->Register.File == TGSI_FILE_TEMPORARY &&
+      if ((reg->Register.File == TGSI_FILE_TEMPORARY ||
+           reg->Register.File == TGSI_FILE_INPUT ||
+           reg->Register.File == TGSI_FILE_OUTPUT) &&
           reg->Register.Indirect)
          return TRUE;
    }
@@ -1746,7 +1740,7 @@ emit_instruction(
    unsigned chan_index;
 
    /* we can't handle indirect addressing into temp register file yet */
-   if (indirect_temp_reference(inst))
+   if (indirect_reg_reference(inst))
       return FALSE;
 
    switch (inst->Instruction.Opcode) {
@@ -2931,7 +2925,6 @@ tgsi_emit_sse2(
       x86_make_disp( get_machine_base(),
                      Offset( struct tgsi_exec_machine, Samplers ) ) );
 
-
    while( !tgsi_parse_end_of_tokens( &parse ) && ok ) {
       tgsi_parse_token( &parse );
 
@@ -3015,4 +3008,3 @@ tgsi_emit_sse2(
 }
 
 #endif /* PIPE_ARCH_X86 */
-

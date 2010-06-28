@@ -1575,6 +1575,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #       define R500_TX_FORMAT_Y10X10                0x3
 #       define R500_TX_FORMAT_W10Z10Y10X10          0x4
 #       define R500_TX_FORMAT_ATI1N                 0x5
+#       define R500_TX_FORMAT_Y8X24                 0x6
 
 
 #       define R300_TX_FORMAT_SIGNED_W             (1 << 5)
@@ -1628,6 +1629,40 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #       define R300_TX_FORMAT_GAMMA               (1 << 21)
 #       define R300_TX_FORMAT_YUV_TO_RGB          (1 << 22)
+
+#       define R300_TX_CACHE(x)                 ((x) << 27)
+#       define R300_TX_CACHE_WHOLE              0
+/* reserved */
+#       define R300_TX_CACHE_HALF_0             2
+#       define R300_TX_CACHE_HALF_1             3
+#       define R300_TX_CACHE_FOURTH_0           4
+#       define R300_TX_CACHE_FOURTH_1           5
+#       define R300_TX_CACHE_FOURTH_2           6
+#       define R300_TX_CACHE_FOURTH_3           7
+#       define R300_TX_CACHE_EIGHTH_0           8
+#       define R300_TX_CACHE_EIGHTH_1           9
+#       define R300_TX_CACHE_EIGHTH_2           10
+#       define R300_TX_CACHE_EIGHTH_3           11
+#       define R300_TX_CACHE_EIGHTH_4           12
+#       define R300_TX_CACHE_EIGHTH_5           13
+#       define R300_TX_CACHE_EIGHTH_6           14
+#       define R300_TX_CACHE_EIGHTH_7           15
+#       define R300_TX_CACHE_SIXTEENTH_0        16
+#       define R300_TX_CACHE_SIXTEENTH_1        17
+#       define R300_TX_CACHE_SIXTEENTH_2        18
+#       define R300_TX_CACHE_SIXTEENTH_3        19
+#       define R300_TX_CACHE_SIXTEENTH_4        20
+#       define R300_TX_CACHE_SIXTEENTH_5        21
+#       define R300_TX_CACHE_SIXTEENTH_6        22
+#       define R300_TX_CACHE_SIXTEENTH_7        23
+#       define R300_TX_CACHE_SIXTEENTH_8        24
+#       define R300_TX_CACHE_SIXTEENTH_9        25
+#       define R300_TX_CACHE_SIXTEENTH_10       26
+#       define R300_TX_CACHE_SIXTEENTH_11       27
+#       define R300_TX_CACHE_SIXTEENTH_12       28
+#       define R300_TX_CACHE_SIXTEENTH_13       29
+#       define R300_TX_CACHE_SIXTEENTH_14       30
+#       define R300_TX_CACHE_SIXTEENTH_15       31
 
 #define R300_TX_FORMAT2_0		    0x4500 /* obvious missing in gap */
 #       define R300_TX_PITCHMASK_SHIFT           0
@@ -3436,9 +3471,18 @@ enum {
 #       define RADEON_WAIT_3D_IDLECLEAN     (1 << 17)
 #       define RADEON_WAIT_HOST_IDLECLEAN   (1 << 18)
 
+#define R200_3D_DRAW_IMMD_2      0xC0003500
+
+#define RADEON_CP_PACKET0 0x0 /* XXX stolen from radeon_reg.h */
 #define RADEON_CP_PACKET3                           0xC0000000
 
-#define R200_3D_DRAW_IMMD_2      0xC0003500
+#define RADEON_ONE_REG_WR        (1 << 15)
+
+#define CP_PACKET0(register, count) \
+    (RADEON_CP_PACKET0 | ((count) << 16) | ((register) >> 2))
+
+#define CP_PACKET3(op, count) \
+    (RADEON_CP_PACKET3 | (op) | ((count) << 16))
 
 #endif /* _R300_REG_H */
 
