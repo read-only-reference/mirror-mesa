@@ -75,7 +75,6 @@ compute_depth_max(struct gl_framebuffer *fb)
    fb->_MRD = (GLfloat)1.0 / fb->_DepthMaxF;
 }
 
-
 /**
  * Create and initialize a gl_framebuffer object.
  * This is intended for creating _window_system_ framebuffers, not generic
@@ -879,6 +878,7 @@ _mesa_source_buffer_exists(GLcontext *ctx, GLenum format)
          return GL_FALSE;
       }
       ASSERT(_mesa_get_format_bits(ctx->ReadBuffer->_ColorReadBuffer->Format, GL_RED_BITS) > 0 ||
+             _mesa_get_format_bits(ctx->ReadBuffer->_ColorReadBuffer->Format, GL_ALPHA_BITS) > 0 ||
              _mesa_get_format_bits(ctx->ReadBuffer->_ColorReadBuffer->Format, GL_INDEX_BITS) > 0);
       break;
    case GL_DEPTH:

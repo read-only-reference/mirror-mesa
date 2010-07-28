@@ -61,8 +61,8 @@ extern "C" {
 #define PIPE_MAX_SAMPLERS         16
 #define PIPE_MAX_VERTEX_SAMPLERS  16
 #define PIPE_MAX_GEOMETRY_SAMPLERS  16
-#define PIPE_MAX_SHADER_INPUTS    16
-#define PIPE_MAX_SHADER_OUTPUTS   16
+#define PIPE_MAX_SHADER_INPUTS    32
+#define PIPE_MAX_SHADER_OUTPUTS   32
 #define PIPE_MAX_TEXTURE_LEVELS   16
 #define PIPE_MAX_SO_BUFFERS        4
 
@@ -155,6 +155,7 @@ struct pipe_clip_state
 {
    float ucp[PIPE_MAX_CLIP_PLANES][4];
    unsigned nr;
+   unsigned depth_clamp:1;
 };
 
 
@@ -419,9 +420,44 @@ struct pipe_vertex_element
    /** Which vertex_buffer (as given to pipe->set_vertex_buffer()) does
     * this attribute live in?
     */
-   unsigned vertex_buffer_index:8;
+   unsigned vertex_buffer_index;
  
    enum pipe_format src_format;
+};
+
+
+/**
+ * An index buffer.  When an index buffer is bound, all indices to vertices
+ * will be looked up in the buffer.
+ */
+struct pipe_index_buffer
+{
+   unsigned index_size;  /**< size of an index, in bytes */
+   unsigned offset;  /**< offset to start of data in buffer, in bytes */
+   struct pipe_resource *buffer; /**< the actual buffer */
+};
+
+
+/**
+ * Information to describe a draw_vbo call.
+ */
+struct pipe_draw_info
+{
+   boolean indexed;  /**< use index buffer */
+
+   unsigned mode;  /**< the mode of the primitive */
+   unsigned start;  /**< the index of the first vertex */
+   unsigned count;  /**< number of vertices */
+
+   unsigned start_instance; /**< first instance id */
+   unsigned instance_count; /**< number of instances */
+
+   /**
+    * For indexed drawing, these fields apply after index lookup.
+    */
+   int index_bias; /**< a bias to be added to each index */
+   unsigned min_index; /**< the min index */
+   unsigned max_index; /**< the max index */
 };
 
 

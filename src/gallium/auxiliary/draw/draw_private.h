@@ -48,6 +48,7 @@
 
 #ifdef HAVE_LLVM
 #include <llvm-c/ExecutionEngine.h>
+struct draw_llvm;
 #endif
 
 
@@ -80,6 +81,9 @@ struct vertex_header {
 /* NOTE: It should match vertex_id size above */
 #define UNDEFINED_VERTEX_ID 0xffff
 
+
+/* maximum number of shader variants we can cache */
+#define DRAW_MAX_SHADER_VARIANTS 1024
 
 /**
  * Private context for the drawing module.
@@ -159,9 +163,11 @@ struct draw_context
          /** vertex arrays */
          const void *vbuffer[PIPE_MAX_ATTRIBS];
          
-         /** constant buffer (for vertex/geometry shader) */
+         /** constant buffers (for vertex/geometry shader) */
          const void *vs_constants[PIPE_MAX_CONSTANT_BUFFERS];
+         unsigned vs_constants_size[PIPE_MAX_CONSTANT_BUFFERS];
          const void *gs_constants[PIPE_MAX_CONSTANT_BUFFERS];
+         unsigned gs_constants_size[PIPE_MAX_CONSTANT_BUFFERS];
       } user;
 
       boolean test_fse;         /* enable FSE even though its not correct (eg for softpipe) */
@@ -194,6 +200,7 @@ struct draw_context
    struct pipe_viewport_state viewport;
    boolean identity_viewport;
 
+   /** Vertex shader state */
    struct {
       struct draw_vertex_shader *vertex_shader;
       uint num_vs_outputs;  /**< convenience, from vertex_shader */
@@ -223,6 +230,7 @@ struct draw_context
       struct translate_cache *emit_cache;
    } vs;
 
+   /** Geometry shader state */
    struct {
       struct draw_geometry_shader *geometry_shader;
       uint num_gs_outputs;  /**< convenience, from geometry_shader */
@@ -235,6 +243,7 @@ struct draw_context
       struct tgsi_sampler **samplers;
    } gs;
 
+   /** Stream output (vertex feedback) state */
    struct {
       struct pipe_stream_output_state state;
       void *buffers[PIPE_MAX_SO_BUFFERS];
@@ -245,6 +254,7 @@ struct draw_context
     */
    float plane[12][4];
    unsigned nr_planes;
+   boolean depth_clamp;
 
    /* If a prim stage introduces new vertex attributes, they'll be stored here
     */
@@ -259,8 +269,14 @@ struct draw_context
    unsigned instance_id;
 
 #ifdef HAVE_LLVM
+   struct draw_llvm *llvm;
    LLVMExecutionEngineRef engine;
 #endif
+
+   struct pipe_sampler_view *sampler_views[PIPE_MAX_VERTEX_SAMPLERS];
+   unsigned num_sampler_views;
+   const struct pipe_sampler_state *samplers[PIPE_MAX_VERTEX_SAMPLERS];
+   unsigned num_samplers;
 
    void *driver_private;
 };

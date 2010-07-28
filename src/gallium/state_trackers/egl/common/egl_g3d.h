@@ -41,18 +41,18 @@
 
 #include "native.h"
 #include "egl_g3d_st.h"
+#include "egl_g3d_loader.h"
 
 struct egl_g3d_driver {
    _EGLDriver base;
-   struct st_api *stapis[ST_API_COUNT];
-   EGLint api_mask;
-
-   EGLint probe_key;
+   const struct egl_g3d_loader *loader;
+   const struct native_platform *platforms[_EGL_NUM_PLATFORMS];
 };
 
 struct egl_g3d_display {
    struct native_display *native;
 
+   const struct egl_g3d_loader *loader;
    struct st_manager *smapi;
    struct pipe_context *pipe;
 };
@@ -95,15 +95,19 @@ struct egl_g3d_image {
    unsigned zslice;
 };
 
+/* standard typecasts */
+_EGL_DRIVER_STANDARD_TYPECASTS(egl_g3d)
+_EGL_DRIVER_TYPECAST(egl_g3d_image, _EGLImage, obj)
+
+#ifdef EGL_MESA_screen_surface
+
 struct egl_g3d_screen {
    _EGLScreen base;
    const struct native_connector *native;
    const struct native_mode **native_modes;
 };
-
-/* standard typecasts */
-_EGL_DRIVER_STANDARD_TYPECASTS(egl_g3d)
 _EGL_DRIVER_TYPECAST(egl_g3d_screen, _EGLScreen, obj)
-_EGL_DRIVER_TYPECAST(egl_g3d_image, _EGLImage, obj)
+
+#endif /* EGL_MESA_screen_surface */
 
 #endif /* _EGL_G3D_H_ */

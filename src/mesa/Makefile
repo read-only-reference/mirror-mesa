@@ -20,6 +20,13 @@ MESA_CPPFLAGS := $(API_DEFINES)
 ES1_CPPFLAGS := -DFEATURE_ES1=1
 ES2_CPPFLAGS := -DFEATURE_ES2=1
 
+ifeq ($(MESA_LLVM),1)
+MESA_CPPFLAGS += $(LLVM_CFLAGS)
+ES1_CPPFLAGS += $(LLVM_CFLAGS)
+ES2_CPPFLAGS += $(LLVM_CFLAGS)
+endif
+
+
 include sources.mak
 
 # adjust object dirs
@@ -35,25 +42,15 @@ MESA_GALLIUM_OBJECTS := $(addprefix $(MESA_OBJ_DIR)/, $(MESA_GALLIUM_OBJECTS))
 MESA_INCLUDES := $(INCLUDE_DIRS)
 ES1_INCLUDES := -I$(TOP)/src/mapi/es1api $(INCLUDE_DIRS)
 ES2_INCLUDES := -I$(TOP)/src/mapi/es2api $(INCLUDE_DIRS)
-MESA_INCLUDES := -I$(TOP)/src/glsl $(MESA_INCLUDES)
-# For symbol_table.h in glsl compiler headers.
-MESA_INCLUDES := -I$(TOP)/src/mesa/shader $(MESA_INCLUDES)
+
 
 define mesa-cc-c
 	@mkdir -p $(dir $@)
 	$(CC) -c -o $@ $< $($(1)_CPPFLAGS) $($(1)_INCLUDES) $(CFLAGS)
 endef
 
-define mesa-cxx-c
-	@mkdir -p $(dir $@)
-	$(CXX) -c -o $@ $< $($(1)_CPPFLAGS) $($(1)_INCLUDES) $(CXXFLAGS)
-endef
-
 $(MESA_OBJ_DIR)/%.o: %.c
 	$(call mesa-cc-c,MESA)
-
-$(MESA_OBJ_DIR)/%.o: %.cpp
-	$(call mesa-cxx-c,MESA)
 
 $(MESA_OBJ_DIR)/%.o: %.S
 	$(call mesa-cc-c,MESA)
@@ -73,7 +70,7 @@ $(ES2_OBJ_DIR)/%.o: %.S
 
 # Default: build dependencies, then asm_subdirs, GLSL built-in lib,
 # then convenience libs (.a) and finally the device drivers:
-default: $(DEPENDS) asm_subdirs \
+default: $(DEPENDS) asm_subdirs glsl_builtin \
 	$(MESA_LIBS) $(ES1_LIBS) $(ES2_LIBS) driver_subdirs
 
 main/api_exec_es1.c: main/APIspec.xml main/es_generator.py main/APIspecutil.py main/APIspec.py
@@ -121,6 +118,12 @@ asm_subdirs:
 		(cd x86 && $(MAKE)) || exit 1 ; \
 		(cd x86-64 && $(MAKE)) || exit 1 ; \
 	fi
+
+
+######################################################################
+# GLSL built-in library
+glsl_builtin:
+	(cd slang/library && $(MAKE)) || exit 1 ;
 
 
 ######################################################################
@@ -238,6 +241,7 @@ clean: clean-es1 clean-es2
 	-rm -f depend depend.bak libmesa.a libmesagallium.a
 	-rm -f drivers/*/*.o
 	-rm -f *.pc
+	-rm -f slang/library/*_gc.h
 	-@cd drivers/dri && $(MAKE) clean
 	-@cd drivers/x11 && $(MAKE) clean
 	-@cd drivers/osmesa && $(MAKE) clean

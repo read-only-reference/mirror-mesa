@@ -14,10 +14,9 @@
 
 #include "main/imports.h"
 #include "main/image.h"
-#include "main/bufferobj.h"
 #include "main/macros.h"
-#include "shader/program.h"
-#include "shader/prog_print.h"
+#include "program/program.h"
+#include "program/prog_print.h"
 
 #include "st_context.h"
 #include "st_atom.h"

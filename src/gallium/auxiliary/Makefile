@@ -124,6 +124,7 @@ C_SOURCES = \
 	util/u_linear.c \
 	util/u_network.c \
 	util/u_math.c \
+	util/u_mempool.c \
 	util/u_mm.c \
 	util/u_rect.c \
 	util/u_ringbuffer.c \
@@ -148,12 +149,15 @@ C_SOURCES = \
 
 GALLIVM_SOURCES = \
         gallivm/lp_bld_arit.c \
+        gallivm/lp_bld_assert.c \
         gallivm/lp_bld_const.c \
         gallivm/lp_bld_conv.c \
         gallivm/lp_bld_debug.c \
         gallivm/lp_bld_flow.c \
         gallivm/lp_bld_format_aos.c \
         gallivm/lp_bld_format_soa.c \
+        gallivm/lp_bld_format_yuv.c \
+        gallivm/lp_bld_gather.c \
         gallivm/lp_bld_init.c \
         gallivm/lp_bld_intr.c \
         gallivm/lp_bld_logic.c \
@@ -167,8 +171,10 @@ GALLIVM_SOURCES = \
         gallivm/lp_bld_tgsi_soa.c \
         gallivm/lp_bld_type.c \
         draw/draw_llvm.c \
+        draw/draw_vs_llvm.c \
         draw/draw_pt_fetch_shade_pipeline_llvm.c \
-        draw/draw_llvm_translate.c
+        draw/draw_llvm_translate.c \
+        draw/draw_llvm_sample.c
 
 GALLIVM_CPP_SOURCES = \
     gallivm/lp_bld_misc.cpp

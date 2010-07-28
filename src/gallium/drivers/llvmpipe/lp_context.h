@@ -77,12 +77,14 @@ struct llvmpipe_context {
    struct pipe_sampler_view *vertex_sampler_views[PIPE_MAX_VERTEX_SAMPLERS];
    struct pipe_viewport_state viewport;
    struct pipe_vertex_buffer vertex_buffer[PIPE_MAX_ATTRIBS];
+   struct pipe_index_buffer index_buffer;
    struct {
       struct llvmpipe_resource *buffer[PIPE_MAX_SO_BUFFERS];
       int offset[PIPE_MAX_SO_BUFFERS];
       int so_count[PIPE_MAX_SO_BUFFERS];
       int num_buffers;
    } so_target;
+   struct pipe_resource *mapped_vs_tex[PIPE_MAX_VERTEX_SAMPLERS];
 
    unsigned num_samplers;
    unsigned num_fragment_sampler_views;

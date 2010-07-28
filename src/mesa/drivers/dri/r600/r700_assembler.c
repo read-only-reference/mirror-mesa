@@ -32,7 +32,7 @@
 
 #include "main/mtypes.h"
 #include "main/imports.h"
-#include "shader/prog_parameter.h"
+#include "program/prog_parameter.h"
 
 #include "radeon_debug.h"
 #include "r600_context.h"
@@ -293,7 +293,9 @@ GLuint GetSurfaceFormat(GLenum eType, GLuint nChannels, GLuint * pClient_size)
                 case 2:
                     format = FMT_16_16; break;
                 case 3:
-                    format = FMT_16_16_16; break;
+                    /* 3 comp GL_SHORT vertex format doesnt work on r700
+                       4 somehow works, test - sauerbraten  */
+                    format = FMT_16_16_16_16; break;
                 case 4:
                     format = FMT_16_16_16_16; break;
                 default:
@@ -1262,7 +1264,7 @@ GLboolean checkop3(r700_AssemblerBase* pAsm)
 	    {
             if( GL_FALSE == mov_temp(pAsm, 1) )
             {
-                return 1;
+                return GL_FALSE;
             }
         }
 
@@ -6471,7 +6473,7 @@ GLboolean Process_Fragment_Exports(r700_AssemblerBase *pR700AsmCode,
      * results are undefined anyway */
     if(export_count == 0)
     {
-        Process_Export(pR700AsmCode, SQ_EXPORT_PIXEL, 0, 1, 0, GL_FALSE);
+        Process_Export(pR700AsmCode, SQ_EXPORT_PIXEL, 0, 1, pR700AsmCode->starting_export_register_number, GL_FALSE);
     }
     
     if(pR700AsmCode->cf_last_export_ptr != NULL) 

@@ -38,11 +38,20 @@
 #include "tgsi/tgsi_ureg.h"
 #include "st_mesa_to_tgsi.h"
 #include "st_context.h"
-#include "shader/prog_instruction.h"
-#include "shader/prog_parameter.h"
+#include "program/prog_instruction.h"
+#include "program/prog_parameter.h"
 #include "util/u_debug.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
+
+
+#define PROGRAM_ANY_CONST ((1 << PROGRAM_LOCAL_PARAM) |  \
+                           (1 << PROGRAM_ENV_PARAM) |    \
+                           (1 << PROGRAM_STATE_VAR) |    \
+                           (1 << PROGRAM_NAMED_PARAM) |  \
+                           (1 << PROGRAM_CONSTANT) |     \
+                           (1 << PROGRAM_UNIFORM))
+
 
 struct label {
    unsigned branch_target;
@@ -176,7 +185,7 @@ dst_register( struct st_translate *t,
       else if (t->procType == TGSI_PROCESSOR_FRAGMENT)
          assert(index < FRAG_RESULT_MAX);
       else
-         assert(0 && "geom shaders not handled in dst_register() yet");
+         assert(index < GEOM_RESULT_MAX);
 
       assert(t->outputMapping[index] < Elements(t->outputs));
 
@@ -304,6 +313,15 @@ translate_src( struct st_translate *t,
                const struct prog_src_register *SrcReg )
 {
    struct ureg_src src = src_register( t, SrcReg->File, SrcReg->Index );
+
+   if (t->procType == TGSI_PROCESSOR_GEOMETRY && SrcReg->HasIndex2) {
+      src = src_register( t, SrcReg->File, SrcReg->Index2 );
+      if (SrcReg->RelAddr2)
+         src = ureg_src_dimension_indirect( src, ureg_src(t->address[0]),
+                                            SrcReg->Index);
+      else
+         src = ureg_src_dimension( src, SrcReg->Index);
+   }
 
    src = ureg_swizzle( src,
                        GET_SWZ( SrcReg->Swizzle, 0 ) & 0x3,
@@ -522,6 +540,10 @@ translate_opcode( unsigned op )
       return TGSI_OPCODE_DST;
    case OPCODE_ELSE:
       return TGSI_OPCODE_ELSE;
+   case OPCODE_EMIT_VERTEX:
+      return TGSI_OPCODE_EMIT;
+   case OPCODE_END_PRIMITIVE:
+      return TGSI_OPCODE_ENDPRIM;
    case OPCODE_ENDIF:
       return TGSI_OPCODE_ENDIF;
    case OPCODE_ENDLOOP:
@@ -725,9 +747,11 @@ emit_adjusted_wpos( struct st_translate *t,
    struct ureg_dst wpos_temp = ureg_DECL_temporary(ureg);
    struct ureg_src wpos_input = t->inputs[t->inputMapping[FRAG_ATTRIB_WPOS]];
 
-   ureg_ADD(ureg,
-            ureg_writemask(wpos_temp, TGSI_WRITEMASK_X | TGSI_WRITEMASK_Y),
-            wpos_input, ureg_imm1f(ureg, value));
+   /* Note that we bias X and Y and pass Z and W through unchanged.
+    * The shader might also use gl_FragCoord.w and .z.
+    */
+   ureg_ADD(ureg, wpos_temp, wpos_input,
+            ureg_imm4f(ureg, value, value, 0.0f, 0.0f));
 
    t->inputs[t->inputMapping[FRAG_ATTRIB_WPOS]] = ureg_src(wpos_temp);
 }
@@ -918,6 +942,9 @@ st_translate_mesa_program(
    unsigned i;
    enum pipe_error ret = PIPE_OK;
 
+   assert(numInputs <= Elements(t->inputs));
+   assert(numOutputs <= Elements(t->outputs));
+
    t = &translate;
    memset(t, 0, sizeof *t);
 
@@ -985,7 +1012,23 @@ st_translate_mesa_program(
          }
       }
    }
+   else if (procType == TGSI_PROCESSOR_GEOMETRY) {
+      for (i = 0; i < numInputs; i++) {
+         t->inputs[i] = ureg_DECL_gs_input(ureg,
+                                           i,
+                                           inputSemanticName[i],
+                                           inputSemanticIndex[i]);
+      }
+
+      for (i = 0; i < numOutputs; i++) {
+         t->outputs[i] = ureg_DECL_output( ureg,
+                                           outputSemanticName[i],
+                                           outputSemanticIndex[i] );
+      }
+   }
    else {
+      assert(procType == TGSI_PROCESSOR_VERTEX);
+
       for (i = 0; i < numInputs; i++) {
          t->inputs[i] = ureg_DECL_vs_input(ureg, i);
       }
@@ -1025,6 +1068,16 @@ st_translate_mesa_program(
       t->address[0] = ureg_DECL_address( ureg );
    }
 
+   if (program->IndirectRegisterFiles & (1 << PROGRAM_TEMPORARY)) {
+      /* If temps are accessed with indirect addressing, declare temporaries
+       * in sequential order.  Else, we declare them on demand elsewhere.
+       */
+      for (i = 0; i < program->NumTemporaries; i++) {
+         /* XXX use TGSI_FILE_TEMPORARY_ARRAY when it's supported by ureg */
+         t->temps[i] = ureg_DECL_temporary( t->ureg );
+      }
+   }
+
    /* Emit constants and immediates.  Mesa uses a single index space
     * for these, so we put all the translated regs in t->constants.
     */
@@ -1035,7 +1088,7 @@ st_translate_mesa_program(
          ret = PIPE_ERROR_OUT_OF_MEMORY;
          goto out;
       }
-      
+
       for (i = 0; i < program->Parameters->NumParameters; i++) {
          switch (program->Parameters->Parameters[i].Type) {
          case PROGRAM_ENV_PARAM:
@@ -1046,13 +1099,14 @@ st_translate_mesa_program(
             t->constants[i] = ureg_DECL_constant( ureg, i );
             break;
 
-            /* Emit immediates only when there is no address register
-             * in use.  FIXME: Be smarter and recognize param arrays:
+            /* Emit immediates only when there's no indirect addressing of
+             * the const buffer.
+             * FIXME: Be smarter and recognize param arrays:
              * indirect addressing is only valid within the referenced
              * array.
              */
          case PROGRAM_CONSTANT:
-            if (program->NumAddressRegs > 0) 
+            if (program->IndirectRegisterFiles & PROGRAM_ANY_CONST)
                t->constants[i] = ureg_DECL_constant( ureg, i );
             else
                t->constants[i] = 
