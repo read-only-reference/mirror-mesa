@@ -25,13 +25,13 @@
  * 
  **************************************************************************/
 
+#include <stdio.h>
+
 #include "st_context.h"
 #include "st_format.h"
 #include "st_texture.h"
 #include "st_cb_fbo.h"
 #include "main/enums.h"
-
-#undef Elements  /* fix re-defined macro warning */
 
 #include "pipe/p_state.h"
 #include "pipe/p_context.h"
@@ -64,7 +64,7 @@ st_texture_create(struct st_context *st,
    struct pipe_resource pt, *newtex;
    struct pipe_screen *screen = st->pipe->screen;
 
-   assert(target <= PIPE_TEXTURE_CUBE);
+   assert(target < PIPE_MAX_TEXTURE_TYPES);
    assert(width0 > 0);
    assert(height0 > 0);
    assert(depth0 > 0);

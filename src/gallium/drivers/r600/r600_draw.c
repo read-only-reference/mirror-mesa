@@ -34,7 +34,7 @@
 #include "r600_screen.h"
 #include "r600_context.h"
 #include "r600_resource.h"
-#include "r600d.h"
+#include "r600_state_inlines.h"
 
 struct r600_draw {
 	struct pipe_context	*ctx;
@@ -58,7 +58,7 @@ static int r600_draw_common(struct r600_draw *draw)
 	struct pipe_vertex_buffer *vertex_buffer;
 	int r;
 
-	r = r600_context_hw_states(rctx);
+	r = r600_context_hw_states(draw->ctx);
 	if (r)
 		return r;
 	switch (draw->index_size) {
@@ -100,16 +100,14 @@ static int r600_draw_common(struct r600_draw *draw)
 		vertex_buffer = &rctx->vertex_buffer[j];
 		rbuffer = (struct r600_resource*)vertex_buffer->buffer;
 		offset = rctx->vertex_elements->elements[i].src_offset + vertex_buffer->buffer_offset;
-		r = r600_conv_pipe_format(rctx->vertex_elements->elements[i].src_format, &format);
-		if (r)
-			return r;
-		vs_resource = radeon_state(rscreen->rw, R600_VS_RESOURCE_TYPE, R600_VS_RESOURCE + i);
+		format = r600_translate_colorformat(rctx->vertex_elements->elements[i].src_format);
+		vs_resource = radeon_state_shader(rscreen->rw, R600_STATE_RESOURCE, i, R600_SHADER_VS);
 		if (vs_resource == NULL)
 			return -ENOMEM;
 		vs_resource->bo[0] = radeon_bo_incref(rscreen->rw, rbuffer->bo);
 		vs_resource->nbo = 1;
 		vs_resource->states[R600_PS_RESOURCE__RESOURCE0_WORD0] = offset;
-		vs_resource->states[R600_PS_RESOURCE__RESOURCE0_WORD1] = rbuffer->bo->size - offset;
+		vs_resource->states[R600_PS_RESOURCE__RESOURCE0_WORD1] = rbuffer->bo->size - offset - 1;
 		vs_resource->states[R600_PS_RESOURCE__RESOURCE0_WORD2] = S_038008_STRIDE(vertex_buffer->stride) |
 								S_038008_DATA_FORMAT(format);
 		vs_resource->states[R600_PS_RESOURCE__RESOURCE0_WORD3] = 0x00000000;
@@ -122,27 +120,14 @@ static int r600_draw_common(struct r600_draw *draw)
 		if (r)
 			return r;
 	}
-#if 0
-	/* setup texture sampler & resource */
-	for (i = 0 ; i < rctx->ps_nsampler; i++) {
-		r = radeon_draw_set_new(rctx->draw, rctx->ps_sampler[i]->rstate);
-		if (r)
-			return r;
-	}
-	for (i = 0 ; i < rctx->ps_nsampler_view; i++) {
-		r = radeon_draw_set_new(rctx->draw, rctx->ps_sampler_view[i]->rstate);
-		if (r)
-			return r;
-	}
-#endif
 	/* FIXME start need to change winsys */
-	draw->draw = radeon_state(rscreen->rw, R600_DRAW_TYPE, R600_DRAW);
+	draw->draw = radeon_state(rscreen->rw, R600_STATE_DRAW, 0);
 	if (draw->draw == NULL)
 		return -ENOMEM;
 	draw->draw->states[R600_DRAW__VGT_NUM_INDICES] = draw->count;
 	draw->draw->states[R600_DRAW__VGT_DRAW_INITIATOR] = vgt_draw_initiator;
 	if (draw->index_buffer) {
-		rbuffer = (struct r600_buffer*)draw->index_buffer;
+		rbuffer = (struct r600_resource*)draw->index_buffer;
 		draw->draw->bo[0] = radeon_bo_incref(rscreen->rw, rbuffer->bo);
 		draw->draw->placement[0] = RADEON_GEM_DOMAIN_GTT;
 		draw->draw->placement[1] = RADEON_GEM_DOMAIN_GTT;
@@ -151,7 +136,7 @@ static int r600_draw_common(struct r600_draw *draw)
 	r = radeon_draw_set_new(rctx->draw, draw->draw);
 	if (r)
 		return r;
-	draw->vgt = radeon_state(rscreen->rw, R600_VGT_TYPE, R600_VGT);
+	draw->vgt = radeon_state(rscreen->rw, R600_STATE_VGT, 0);
 	if (draw->vgt == NULL)
 		return -ENOMEM;
 	draw->vgt->states[R600_VGT__VGT_PRIMITIVE_TYPE] = prim;
@@ -170,6 +155,10 @@ static int r600_draw_common(struct r600_draw *draw)
 		return r;
 	/* FIXME */
 	r = radeon_ctx_set_draw_new(rctx->ctx, rctx->draw);
+	if (r == -EBUSY) {
+		r600_flush(draw->ctx, 0, NULL);
+		r = radeon_ctx_set_draw_new(rctx->ctx, rctx->draw);
+	}
 	if (r)
 		return r;
 	rctx->draw = radeon_draw_duplicate(rctx->draw);
@@ -180,6 +169,7 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 {
 	struct r600_context *rctx = r600_context(ctx);
 	struct r600_draw draw;
+	int r;
 
 	assert(info->index_bias == 0);
 
@@ -200,5 +190,7 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		draw.index_size = 0;
 		draw.index_buffer = NULL;
 	}
-	r600_draw_common(&draw);
+	r = r600_draw_common(&draw);
+	if (r)
+	  fprintf(stderr,"draw common failed %d\n", r);
 }

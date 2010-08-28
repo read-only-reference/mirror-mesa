@@ -43,6 +43,12 @@ struct instruction_state {
 	unsigned char SrcReg[3];
 };
 
+struct loopinfo {
+	struct updatemask_state * Breaks;
+	unsigned int BreakCount;
+	unsigned int BreaksReserved;
+};
+
 struct branchinfo {
 	unsigned int HaveElse:1;
 
@@ -59,6 +65,10 @@ struct deadcode_state {
 	struct branchinfo * BranchStack;
 	unsigned int BranchStackSize;
 	unsigned int BranchStackReserved;
+
+	struct loopinfo * LoopStack;
+	unsigned int LoopStackSize;
+	unsigned int LoopStackReserved;
 };
 
 
@@ -76,6 +86,22 @@ static void or_updatemasks(
 		dst->Special[i] = a->Special[i] | b->Special[i];
 
 	dst->Address = a->Address | b->Address;
+}
+
+static void push_break(struct deadcode_state *s)
+{
+	struct loopinfo * loop = &s->LoopStack[s->LoopStackSize - 1];
+	memory_pool_array_reserve(&s->C->Pool, struct updatemask_state,
+		loop->Breaks, loop->BreakCount, loop->BreaksReserved, 1);
+
+	memcpy(&loop->Breaks[loop->BreakCount++], &s->R, sizeof(s->R));
+}
+
+static void push_loop(struct deadcode_state * s)
+{
+	memory_pool_array_reserve(&s->C->Pool, struct loopinfo, s->LoopStack,
+			s->LoopStackSize, s->LoopStackReserved, 1);
+	memset(&s->LoopStack[s->LoopStackSize++], 0, sizeof(struct loopinfo));
 }
 
 static void push_branch(struct deadcode_state * s)
@@ -131,8 +157,12 @@ static void update_instruction(struct deadcode_state * s, struct rc_instruction 
 		unsigned char * pused = get_used_ptr(s, inst->U.I.DstReg.File, inst->U.I.DstReg.Index);
 		if (pused) {
 			usedmask = *pused & inst->U.I.DstReg.WriteMask;
-			*pused &= ~usedmask;
+			if (!inst->U.I.DstReg.RelAddr)
+				*pused &= ~usedmask;
 		}
+
+		if (inst->U.I.DstReg.RelAddr)
+			mark_used(s, RC_FILE_ADDRESS, 0, RC_MASK_X);
 	}
 
 	insts->WriteMask |= usedmask;
@@ -187,6 +217,7 @@ void rc_dataflow_deadcode(struct radeon_compiler * c, rc_dataflow_mark_outputs_f
 {
 	struct deadcode_state s;
 	unsigned int nr_instructions;
+	unsigned has_temp_reladdr_src = 0;
 
 	memset(&s, 0, sizeof(s));
 	s.C = c;
@@ -233,11 +264,22 @@ void rc_dataflow_deadcode(struct radeon_compiler * c, rc_dataflow_mark_outputs_f
 					}
 				}
 			}
+			push_loop(&s);
 			break;
 		}
-		case RC_OPCODE_CONTINUE:
 		case RC_OPCODE_BRK:
+			push_break(&s);
+			break;
 		case RC_OPCODE_BGNLOOP:
+		{
+			unsigned int i;
+			struct loopinfo * loop = &s.LoopStack[s.LoopStackSize-1];
+			for(i = 0; i < loop->BreakCount; i++) {
+				or_updatemasks(&s.R, &s.R, &loop->Breaks[i]);
+			}
+			break;
+		}
+		case RC_OPCODE_CONT:
 			break;
 		case RC_OPCODE_ENDIF:
 			push_branch(&s);
@@ -261,6 +303,30 @@ void rc_dataflow_deadcode(struct radeon_compiler * c, rc_dataflow_mark_outputs_f
 					}
 				} else {
 					rc_error(c, "%s: Unhandled control flow instruction %s\n", __FUNCTION__, opcode->Name);
+				}
+			}
+
+			if (!has_temp_reladdr_src) {
+				for (unsigned i = 0; i < opcode->NumSrcRegs; i++) {
+					if (inst->U.I.SrcReg[i].File == RC_FILE_TEMPORARY &&
+					    inst->U.I.SrcReg[i].RelAddr) {
+						/* If there is a register read from a temporary file with relative addressing,
+						 * mark all preceding written registers as used. */
+						for (struct rc_instruction *ptr = inst->Prev;
+						     ptr != &c->Program.Instructions;
+						     ptr = ptr->Prev) {
+							if (opcode->HasDstReg &&
+							    ptr->U.I.DstReg.File == RC_FILE_TEMPORARY &&
+							    ptr->U.I.DstReg.WriteMask) {
+								mark_used(&s,
+									  ptr->U.I.DstReg.File,
+									  ptr->U.I.DstReg.Index,
+									  ptr->U.I.DstReg.WriteMask);
+							}
+						}
+
+						has_temp_reladdr_src = 1;
+					}
 				}
 			}
 		}

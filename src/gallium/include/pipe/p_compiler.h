@@ -79,6 +79,14 @@ typedef unsigned char boolean;
 #define FALSE false
 #endif
 
+#ifndef va_copy
+#ifdef __va_copy
+#define va_copy(dest, src) __va_copy((dest), (src))
+#else
+#define va_copy(dest, src) (dest) = (src)
+#endif
+#endif
+
 /* Function inlining */
 #ifndef INLINE
 #  ifdef __cplusplus
@@ -102,6 +110,16 @@ typedef unsigned char boolean;
 #  endif
 #endif
 
+/* Forced function inlining */
+#ifndef ALWAYS_INLINE
+#  ifdef __GNUC__
+#    define ALWAYS_INLINE inline __attribute__((always_inline))
+#  elif defined(_MSC_VER)
+#    define ALWAYS_INLINE __forceinline
+#  else
+#    define ALWAYS_INLINE INLINE
+#  endif
+#endif
 
 /* Function visibility */
 #ifndef PUBLIC

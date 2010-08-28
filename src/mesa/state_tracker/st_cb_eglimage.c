@@ -33,6 +33,7 @@
 #include "util/u_format.h"
 #include "st_cb_eglimage.h"
 #include "st_cb_fbo.h"
+#include "st_context.h"
 #include "st_texture.h"
 #include "st_format.h"
 #include "st_manager.h"
@@ -127,7 +128,8 @@ st_bind_surface(GLcontext *ctx, GLenum target,
    _mesa_set_fetch_functions(texImage, 2);
 
    /* FIXME create a non-default sampler view from the pipe_surface? */
-   pipe_resource_reference(&stImage->pt, ps->texture);
+   pipe_resource_reference(&stObj->pt, ps->texture);
+   pipe_resource_reference(&stImage->pt, stObj->pt);
 
    stObj->width0 = ps->width;
    stObj->height0 = ps->height;

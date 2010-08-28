@@ -439,7 +439,7 @@ dri2FlushFrontBuffer(__DRIdrawable *driDrawable, void *loaderPrivate)
 
    /* Old servers don't send invalidate events */
    if (!pdp->invalidateAvailable)
-       dri2InvalidateBuffers(priv->dpy, pdraw->base.drawable);
+       dri2InvalidateBuffers(priv->dpy, pdraw->base.xDrawable);
 
    dri2_wait_gl(gc);
 }
@@ -507,7 +507,7 @@ dri2SwapBuffers(__GLXDRIdrawable *pdraw, int64_t target_msc, int64_t divisor,
 
     /* Old servers don't send invalidate events */
     if (!pdp->invalidateAvailable)
-       dri2InvalidateBuffers(dpyPriv->dpy, pdraw->drawable);
+       dri2InvalidateBuffers(dpyPriv->dpy, pdraw->xDrawable);
 
     /* Old servers can't handle swapbuffers */
     if (!pdp->swapAvailable) {
@@ -657,9 +657,10 @@ dri2_bind_tex_image(Display * dpy,
    struct dri2_drawable *pdraw = (struct dri2_drawable *) base;
    struct dri2_display *pdp =
       (struct dri2_display *) dpyPriv->dri2Display;
-   struct dri2_screen *psc = (struct dri2_screen *) base->psc;
+   struct dri2_screen *psc;
 
    if (pdraw != NULL) {
+      psc = (struct dri2_screen *) base->psc;
 
 #if __DRI2_FLUSH_VERSION >= 3
       if (!pdp->invalidateAvailable && psc->f)

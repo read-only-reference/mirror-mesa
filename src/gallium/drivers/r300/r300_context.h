@@ -106,13 +106,19 @@ struct r300_dsa_state {
 };
 
 struct r300_hyperz_state {
+    int current_func; /* -1 after a clear before first op */
+    int flush;
     /* This is actually a command buffer with named dwords. */
+    uint32_t cb_flush_begin;
+    uint32_t zb_zcache_ctlstat;     /* R300_ZB_CACHE_CNTL */
     uint32_t cb_begin;
     uint32_t zb_bw_cntl;            /* R300_ZB_BW_CNTL */
     uint32_t cb_reg1;
     uint32_t zb_depthclearvalue;    /* R300_ZB_DEPTHCLEARVALUE */
     uint32_t cb_reg2;
     uint32_t sc_hyperz;             /* R300_SC_HYPERZ */
+    uint32_t cb_reg3;
+    uint32_t gb_z_peq_config;       /* R300_GB_Z_PEQ_CONFIG: 0x4028 */
 };
 
 struct r300_gpu_flush {
@@ -248,8 +254,8 @@ struct r300_ztop_state {
 struct r300_constant_buffer {
     /* Buffer of constants */
     uint32_t *ptr;
-    /* Total number of vec4s */
-    unsigned count;
+    /* Remapping table. */
+    unsigned *remap_table;
 };
 
 /* Query object.
@@ -321,6 +327,7 @@ struct r300_surface {
 
     /* Whether the CBZB clear is allowed on the surface. */
     boolean cbzb_allowed;
+
 };
 
 struct r300_texture_desc {
@@ -387,6 +394,12 @@ struct r300_texture {
     /* All bits should be filled in. */
     struct r300_texture_fb_state fb_state;
 
+    /* hyper-z memory allocs */
+    struct mem_block *hiz_mem[R300_MAX_TEXTURE_LEVELS];
+    struct mem_block *zmask_mem[R300_MAX_TEXTURE_LEVELS];
+    boolean zmask_in_use[R300_MAX_TEXTURE_LEVELS];
+    boolean hiz_in_use[R300_MAX_TEXTURE_LEVELS];
+
     /* This is the level tiling flags were last time set for.
      * It's used to prevent redundant tiling-flags changes from happening.*/
     unsigned surface_level;
@@ -436,6 +449,7 @@ struct r300_context {
     struct r300_screen *screen;
     /* Draw module. Used mostly for SW TCL. */
     struct draw_context* draw;
+    size_t draw_vbo_size;
     /* Accelerated blit support. */
     struct blitter_context* blitter;
     /* Stencil two-sided reference value fallback. */
@@ -512,6 +526,10 @@ struct r300_context {
     struct r300_atom texture_cache_inval;
     /* GPU flush. */
     struct r300_atom gpu_flush;
+    /* HiZ clear */
+    struct r300_atom hiz_clear;
+    /* zmask clear */
+    struct r300_atom zmask_clear;
 
     /* Invariant state. This must be emitted to get the engine started. */
     struct r300_atom invariant_state;
@@ -549,8 +567,16 @@ struct r300_context {
     boolean two_sided_color;
     /* Incompatible vertex buffer layout? (misaligned stride or buffer_offset) */
     boolean incompatible_vb_layout;
-
+#define R300_Z_COMPRESS_44 1
+#define RV350_Z_COMPRESS_88 2
+    int z_compression;
     boolean cbzb_clear;
+    boolean z_decomp_rd;
+
+    /* two mem block managers for hiz/zmask ram space */
+    struct mem_block *hiz_mm;
+    struct mem_block *zmask_mm;
+
     /* upload managers */
     struct u_upload_mgr *upload_vb;
     struct u_upload_mgr *upload_ib;
@@ -602,6 +628,12 @@ void r300_init_render_functions(struct r300_context *r300);
 void r300_init_state_functions(struct r300_context* r300);
 void r300_init_resource_functions(struct r300_context* r300);
 
+/* r300_blit.c */
+void r300_flush_depth_stencil(struct pipe_context *pipe,
+                              struct pipe_resource *dst,
+                              struct pipe_subresource subdst,
+                              unsigned zslice);
+
 /* r300_query.c */
 void r300_resume_query(struct r300_context *r300,
                        struct r300_query *query);
@@ -618,10 +650,16 @@ void r300_translate_index_buffer(struct r300_context *r300,
 /* r300_render_stencilref.c */
 void r300_plug_in_stencil_ref_fallback(struct r300_context *r300);
 
+/* r300_render.c */
+void r300_draw_flush_vbuf(struct r300_context *r300);
+boolean r500_index_bias_supported(struct r300_context *r300);
+void r500_emit_index_bias(struct r300_context *r300, int index_bias);
+
 /* r300_state.c */
 enum r300_fb_state_change {
     R300_CHANGED_FB_STATE = 0,
-    R300_CHANGED_CBZB_FLAG
+    R300_CHANGED_CBZB_FLAG,
+    R300_CHANGED_ZCLEAR_FLAG
 };
 
 void r300_mark_fb_state_dirty(struct r300_context *r300,

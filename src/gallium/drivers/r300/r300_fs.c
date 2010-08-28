@@ -72,6 +72,11 @@ void r300_shader_read_fs_inputs(struct tgsi_shader_info* info,
                 fs_inputs->wpos = i;
                 break;
 
+            case TGSI_SEMANTIC_FACE:
+                assert(index == 0);
+                fs_inputs->face = i;
+                break;
+
             default:
                 fprintf(stderr, "r300: FP: Unknown input semantic: %i\n",
                         info->input_semantic_name[i]);
@@ -119,6 +124,9 @@ static void allocate_hardware_inputs(
         if (inputs->color[i] != ATTR_UNUSED) {
             allocate(mydata, inputs->color[i], reg++);
         }
+    }
+    if (inputs->face != ATTR_UNUSED) {
+        allocate(mydata, inputs->face, reg++);
     }
     for (i = 0; i < ATTR_GENERIC_COUNT; i++) {
         if (inputs->generic[i] != ATTR_UNUSED) {
@@ -248,12 +256,17 @@ static void r300_emit_fs_code_to_buffer(
 
         shader->cb_code_size = 19 +
                                ((code->inst_end + 1) * 6) +
-                               imm_count * 7;
+                               imm_count * 7 +
+                               code->int_constant_count * 2;
 
         NEW_CB(shader->cb_code, shader->cb_code_size);
         OUT_CB_REG(R500_US_CONFIG, R500_ZERO_TIMES_ANYTHING_EQUALS_ZERO);
         OUT_CB_REG(R500_US_PIXSIZE, code->max_temp_idx);
         OUT_CB_REG(R500_US_FC_CTRL, code->us_fc_ctrl);
+        for(i = 0; i < code->int_constant_count; i++){
+                OUT_CB_REG(R500_US_FC_INT_CONST_0 + (i * 4),
+                                                code->int_constants[i]);
+        }
         OUT_CB_REG(R500_US_CODE_RANGE,
                    R500_US_CODE_RANGE_ADDR(0) | R500_US_CODE_RANGE_SIZE(code->inst_end));
         OUT_CB_REG(R500_US_CODE_OFFSET, 0);
@@ -355,13 +368,14 @@ static void r300_translate_fragment_shader(
 {
     struct r300_fragment_program_compiler compiler;
     struct tgsi_to_rc ttr;
-    int wpos;
+    int wpos, face;
     unsigned i;
 
     tgsi_scan_shader(tokens, &shader->info);
     r300_shader_read_fs_inputs(&shader->info, &shader->inputs);
 
     wpos = shader->inputs.wpos;
+    face = shader->inputs.face;
 
     /* Setup the compiler. */
     memset(&compiler, 0, sizeof(compiler));
@@ -372,13 +386,14 @@ static void r300_translate_fragment_shader(
     compiler.state = shader->compare_state;
     compiler.Base.is_r500 = r300->screen->caps.is_r500;
     compiler.Base.max_temp_regs = compiler.Base.is_r500 ? 128 : 32;
+    compiler.Base.remove_unused_constants = TRUE;
     compiler.AllocateHwInputs = &allocate_hardware_inputs;
     compiler.UserData = &shader->inputs;
 
     find_output_registers(&compiler, shader);
 
     if (compiler.Base.Debug) {
-        debug_printf("r300: Initial fragment program\n");
+        DBG(r300, DBG_FP, "r300: Initial fragment program\n");
         tgsi_dump(tokens, 0);
     }
 
@@ -401,6 +416,10 @@ static void r300_translate_fragment_shader(
         rc_transform_fragment_wpos(&compiler.Base, wpos, wpos, TRUE);
     }
 
+    if (face != ATTR_UNUSED) {
+        rc_transform_fragment_face(&compiler.Base, face);
+    }
+
     /* Invoke the compiler */
     r3xx_compile_fragment_program(&compiler);
 
@@ -414,8 +433,7 @@ static void r300_translate_fragment_shader(
 
     if (compiler.Base.Error) {
         fprintf(stderr, "r300 FP: Compiler Error:\n%sUsing a dummy shader"
-                " instead.\nIf there's an 'unknown opcode' message, please"
-                " file a bug report and attach this log.\n", compiler.Base.ErrorMsg);
+                " instead.\n", compiler.Base.ErrorMsg);
 
         if (shader->dummy) {
             fprintf(stderr, "r300 FP: Cannot compile the dummy shader! "
@@ -429,7 +447,12 @@ static void r300_translate_fragment_shader(
     }
 
     /* Initialize numbers of constants for each type. */
-    shader->externals_count = ttr.immediate_offset;
+    shader->externals_count = 0;
+    for (i = 0;
+         i < shader->code.constants.Count &&
+         shader->code.constants.Constants[i].Type == RC_CONSTANT_EXTERNAL; i++) {
+        shader->externals_count = i+1;
+    }
     shader->immediates_count = 0;
     shader->rc_state_count = 0;
 

@@ -26,6 +26,16 @@
 #ifndef PROG_PRINT_H
 #define PROG_PRINT_H
 
+#include <stdio.h>
+
+#include "main/glheader.h"
+#include "main/mtypes.h"
+
+struct gl_program;
+struct gl_program_parameter_list;
+struct gl_shader;
+struct prog_instruction;
+
 
 /**
  * The output style to use when printing programs.
@@ -54,6 +64,13 @@ _mesa_writemask_string(GLuint writeMask);
 
 extern void
 _mesa_print_swizzle(GLuint swizzle);
+
+extern void
+_mesa_fprint_alu_instruction(FILE *f,
+			     const struct prog_instruction *inst,
+			     const char *opcode_string, GLuint numRegs,
+			     gl_prog_print_mode mode,
+			     const struct gl_program *prog);
 
 extern void
 _mesa_print_alu_instruction(const struct prog_instruction *inst,

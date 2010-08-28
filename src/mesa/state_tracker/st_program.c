@@ -41,6 +41,7 @@
 #include "pipe/p_shader_tokens.h"
 #include "draw/draw_context.h"
 #include "tgsi/tgsi_dump.h"
+#include "tgsi/tgsi_ureg.h"
 
 #include "st_debug.h"
 #include "st_context.h"
@@ -206,6 +207,9 @@ st_translate_vertex_program(struct st_context *st,
    enum pipe_error error;
    unsigned num_outputs;
 
+   _mesa_remove_output_reads(&stvp->Base.Base, PROGRAM_OUTPUT);
+   _mesa_remove_output_reads(&stvp->Base.Base, PROGRAM_VARYING);
+
    ureg = ureg_create( TGSI_PROCESSOR_VERTEX );
    if (ureg == NULL) {
       FREE(vpv);
@@ -296,6 +300,8 @@ st_translate_fragment_program(struct st_context *st,
    ubyte fs_output_semantic_name[PIPE_MAX_SHADER_OUTPUTS];
    ubyte fs_output_semantic_index[PIPE_MAX_SHADER_OUTPUTS];
    uint fs_num_outputs = 0;
+
+   _mesa_remove_output_reads(&stfp->Base.Base, PROGRAM_OUTPUT);
 
    /*
     * Convert Mesa program inputs to TGSI input register semantics.
@@ -483,6 +489,9 @@ st_translate_geometry_program(struct st_context *st,
    GLint i;
    GLuint maxSlot = 0;
    struct ureg_program *ureg;
+
+   _mesa_remove_output_reads(&stgp->Base.Base, PROGRAM_OUTPUT);
+   _mesa_remove_output_reads(&stgp->Base.Base, PROGRAM_VARYING);
 
    ureg = ureg_create( TGSI_PROCESSOR_GEOMETRY );
    if (ureg == NULL) {

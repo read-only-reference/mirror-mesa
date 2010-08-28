@@ -32,9 +32,10 @@
  */
 
 #include "pipe/p_compiler.h"
+#include "pipe/p_context.h"
+#include "pipe/p_screen.h"
 #include "pipe/p_shader_tokens.h"
 #include "pipe/p_state.h"
-#include "pipe/p_context.h"
 #include "tgsi/tgsi_ureg.h"
 #include "st_mesa_to_tgsi.h"
 #include "st_context.h"
@@ -214,7 +215,7 @@ src_register( struct st_translate *t,
       return ureg_src_undef();
 
    case PROGRAM_TEMPORARY:
-      ASSERT(index >= 0);
+      assert(index >= 0);
       if (ureg_dst_is_undef(t->temps[index]))
          t->temps[index] = ureg_DECL_temporary( t->ureg );
       assert(index < Elements(t->temps));
@@ -224,7 +225,7 @@ src_register( struct st_translate *t,
    case PROGRAM_ENV_PARAM:
    case PROGRAM_LOCAL_PARAM:
    case PROGRAM_UNIFORM:
-      ASSERT(index >= 0);
+      assert(index >= 0);
       return t->constants[index];
    case PROGRAM_STATE_VAR:
    case PROGRAM_CONSTANT:       /* ie, immediate */

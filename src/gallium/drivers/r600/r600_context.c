@@ -34,6 +34,7 @@
 #include "r600_resource.h"
 #include "r600d.h"
 
+
 static void r600_destroy_context(struct pipe_context *context)
 {
 	struct r600_context *rctx = r600_context(context);
@@ -41,26 +42,41 @@ static void r600_destroy_context(struct pipe_context *context)
 	FREE(rctx);
 }
 
-static void r600_flush(struct pipe_context *ctx, unsigned flags,
+void r600_flush(struct pipe_context *ctx, unsigned flags,
 			struct pipe_fence_handle **fence)
 {
 	struct r600_context *rctx = r600_context(ctx);
 	struct r600_screen *rscreen = rctx->screen;
+	struct r600_query *rquery;
 	static int dc = 0;
+	char dname[256];
 
+	/* suspend queries */
+	r600_queries_suspend(ctx);
 	if (radeon_ctx_pm4(rctx->ctx))
-		return;
+		goto out;
 	/* FIXME dumping should be removed once shader support instructions
 	 * without throwing bad code
 	 */
-	if (!dc)
-		radeon_ctx_dump_bof(rctx->ctx, "gallium.bof");
+	if (!rctx->ctx->cpm4)
+		goto out;
+	sprintf(dname, "gallium-%08d.bof", dc);
+	if (dc < 2) {
+		radeon_ctx_dump_bof(rctx->ctx, dname);
+		R600_ERR("dumped %s\n", dname);
+	}
 #if 1
 	radeon_ctx_submit(rctx->ctx);
 #endif
+	LIST_FOR_EACH_ENTRY(rquery, &rctx->query_list, list) {
+		rquery->flushed = true;
+	}
+	dc++;
+out:
 	rctx->ctx = radeon_ctx_decref(rctx->ctx);
 	rctx->ctx = radeon_ctx(rscreen->rw);
-	dc++;
+	/* resume queries */
+	r600_queries_resume(ctx);
 }
 
 static void r600_init_config(struct r600_context *rctx)
@@ -202,25 +218,7 @@ static void r600_init_config(struct r600_context *rctx)
 		num_es_stack_entries = 0;
 		break;
 	}
-	printf("ps_prio : %d\n", ps_prio);
-	printf("vs_prio : %d\n", vs_prio);
-	printf("gs_prio : %d\n", gs_prio);
-	printf("es_prio : %d\n", es_prio);
-	printf("num_ps_gprs : %d\n", num_ps_gprs);
-	printf("num_vs_gprs : %d\n", num_vs_gprs);
-	printf("num_gs_gprs : %d\n", num_gs_gprs);
-	printf("num_es_gprs : %d\n", num_es_gprs);
-	printf("num_temp_gprs : %d\n", num_temp_gprs);
-	printf("num_ps_threads : %d\n", num_ps_threads);
-	printf("num_vs_threads : %d\n", num_vs_threads);
-	printf("num_gs_threads : %d\n", num_gs_threads);
-	printf("num_es_threads : %d\n", num_es_threads);
-	printf("num_ps_stack_entries : %d\n", num_ps_stack_entries);
-	printf("num_vs_stack_entries : %d\n", num_vs_stack_entries);
-	printf("num_gs_stack_entries : %d\n", num_gs_stack_entries);
-	printf("num_es_stack_entries : %d\n", num_es_stack_entries);
-
-	rctx->hw_states.config = radeon_state(rctx->rw, R600_CONFIG_TYPE, R600_CONFIG);
+	rctx->hw_states.config = radeon_state(rctx->rw, R600_STATE_CONFIG, 0);
 
 	rctx->hw_states.config->states[R600_CONFIG__SQ_CONFIG] = 0x00000000;
 	switch (family) {
@@ -330,20 +328,6 @@ struct pipe_context *r600_create_context(struct pipe_screen *screen, void *priv)
 		FREE(rctx);
 		return NULL;
 	}
-
-	rctx->hw_states.cb_cntl = radeon_state(rscreen->rw, R600_CB_CNTL_TYPE, R600_CB_CNTL);
-	rctx->hw_states.cb_cntl->states[R600_CB_CNTL__CB_SHADER_MASK] = 0x0000000F;
-	rctx->hw_states.cb_cntl->states[R600_CB_CNTL__CB_TARGET_MASK] = 0x0000000F;
-	rctx->hw_states.cb_cntl->states[R600_CB_CNTL__CB_COLOR_CONTROL] = 0x00CC0000;
-	rctx->hw_states.cb_cntl->states[R600_CB_CNTL__PA_SC_AA_CONFIG] = 0x00000000;
-	rctx->hw_states.cb_cntl->states[R600_CB_CNTL__PA_SC_AA_SAMPLE_LOCS_MCTX] = 0x00000000;
-	rctx->hw_states.cb_cntl->states[R600_CB_CNTL__PA_SC_AA_SAMPLE_LOCS_8S_WD1_MCTX] = 0x00000000;
-	rctx->hw_states.cb_cntl->states[R600_CB_CNTL__CB_CLRCMP_CONTROL] = 0x01000000;
-	rctx->hw_states.cb_cntl->states[R600_CB_CNTL__CB_CLRCMP_SRC] = 0x00000000;
-	rctx->hw_states.cb_cntl->states[R600_CB_CNTL__CB_CLRCMP_DST] = 0x000000FF;
-	rctx->hw_states.cb_cntl->states[R600_CB_CNTL__CB_CLRCMP_MSK] = 0xFFFFFFFF;
-	rctx->hw_states.cb_cntl->states[R600_CB_CNTL__PA_SC_AA_MASK] = 0xFFFFFFFF;
-	radeon_state_pm4(rctx->hw_states.cb_cntl);
 
 	r600_init_config(rctx);
 

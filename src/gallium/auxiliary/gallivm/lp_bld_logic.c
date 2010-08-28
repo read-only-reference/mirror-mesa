@@ -83,6 +83,8 @@ lp_build_compare(LLVMBuilderRef builder,
 
    assert(func >= PIPE_FUNC_NEVER);
    assert(func <= PIPE_FUNC_ALWAYS);
+   assert(lp_check_value(type, a));
+   assert(lp_check_value(type, b));
 
    if(func == PIPE_FUNC_NEVER)
       return zeros;
@@ -374,6 +376,9 @@ lp_build_select_bitwise(struct lp_build_context *bld,
    struct lp_type type = bld->type;
    LLVMValueRef res;
 
+   assert(lp_check_value(type, a));
+   assert(lp_check_value(type, b));
+
    if (a == b) {
       return a;
    }
@@ -418,6 +423,9 @@ lp_build_select(struct lp_build_context *bld,
 {
    struct lp_type type = bld->type;
    LLVMValueRef res;
+
+   assert(lp_check_value(type, a));
+   assert(lp_check_value(type, b));
 
    if(a == b)
       return a;
@@ -484,6 +492,9 @@ lp_build_select_aos(struct lp_build_context *bld,
    const unsigned n = type.length;
    unsigned i, j;
 
+   assert(lp_check_value(type, a));
+   assert(lp_check_value(type, b));
+
    if(a == b)
       return a;
    if(cond[0] && cond[1] && cond[2] && cond[3])
@@ -539,7 +550,22 @@ lp_build_select_aos(struct lp_build_context *bld,
 LLVMValueRef
 lp_build_andc(struct lp_build_context *bld, LLVMValueRef a, LLVMValueRef b)
 {
+   const struct lp_type type = bld->type;
+
+   assert(lp_check_value(type, a));
+   assert(lp_check_value(type, b));
+
+   /* can't do bitwise ops on floating-point values */
+   if(type.floating) {
+      a = LLVMBuildBitCast(bld->builder, a, bld->int_vec_type, "");
+      b = LLVMBuildBitCast(bld->builder, b, bld->int_vec_type, "");
+   }
+
    b = LLVMBuildNot(bld->builder, b, "");
    b = LLVMBuildAnd(bld->builder, a, b, "");
+
+   if(type.floating) {
+      b = LLVMBuildBitCast(bld->builder, b, bld->vec_type, "");
+   }
    return b;
 }

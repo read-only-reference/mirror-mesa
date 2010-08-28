@@ -485,8 +485,6 @@ driCreateScreen(int screen, struct glx_display *priv)
       goto handle_error;
    }
 
-   extensions = psc->core->getExtensions(psc->driScreen);
-
    psc->base.configs =
       driConvertConfigs(psc->core, psc->base.configs, driver_configs);
    psc->base.visuals =
@@ -504,10 +502,9 @@ driCreateScreen(int screen, struct glx_display *priv)
    return &psc->base;
 
  handle_error:
-   Xfree(psc);
-
    if (psc->driver)
       dlclose(psc->driver);
+   Xfree(psc);
 
    ErrorMessageF("reverting to indirect rendering\n");
 

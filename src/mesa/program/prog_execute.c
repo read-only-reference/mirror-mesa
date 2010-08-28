@@ -1679,6 +1679,22 @@ _mesa_execute_program(GLcontext * ctx,
             store_vector4(inst, machine, color);
          }
          break;
+      case OPCODE_TXL:
+         /* Texel lookup with explicit LOD */
+         {
+            GLfloat texcoord[4], color[4], lod;
+
+            fetch_vector4(&inst->SrcReg[0], machine, texcoord);
+
+            /* texcoord[3] is the LOD */
+            lod = texcoord[3];
+
+	    machine->FetchTexelLod(ctx, texcoord, lod,
+				   machine->Samplers[inst->TexSrcUnit], color);
+
+            store_vector4(inst, machine, color);
+         }
+         break;
       case OPCODE_TXP:         /* GL_ARB_fragment_program only */
          /* Texture lookup w/ projective divide */
          {
@@ -1842,7 +1858,11 @@ _mesa_execute_program(GLcontext * ctx,
 
       numExec++;
       if (numExec > maxExec) {
-         _mesa_problem(ctx, "Infinite loop detected in fragment program");
+	 static GLboolean reported = GL_FALSE;
+	 if (!reported) {
+	    _mesa_problem(ctx, "Infinite loop detected in fragment program");
+	    reported = GL_TRUE;
+	 }
          return GL_TRUE;
       }
 

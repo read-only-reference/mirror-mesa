@@ -140,6 +140,10 @@
 #include "sparc/sparc.h"
 #endif
 
+#include "glsl_parser_extras.h"
+
+
+
 #ifndef MESA_VERBOSE
 int MESA_VERBOSE = 0;
 #endif
@@ -339,16 +343,16 @@ _mesa_destroy_visual( GLvisual *vis )
 static void
 dummy_enum_func(void)
 {
-   gl_buffer_index bi;
-   gl_colortable_index ci;
-   gl_face_index fi;
-   gl_frag_attrib fa;
-   gl_frag_result fr;
-   gl_texture_index ti;
-   gl_vert_attrib va;
-   gl_vert_result vr;
-   gl_geom_attrib ga;
-   gl_geom_result gr;
+   gl_buffer_index bi = BUFFER_FRONT_LEFT;
+   gl_colortable_index ci = COLORTABLE_PRECONVOLUTION;
+   gl_face_index fi = FACE_POS_X;
+   gl_frag_attrib fa = FRAG_ATTRIB_WPOS;
+   gl_frag_result fr = FRAG_RESULT_DEPTH;
+   gl_texture_index ti = TEXTURE_2D_ARRAY_INDEX;
+   gl_vert_attrib va = VERT_ATTRIB_POS;
+   gl_vert_result vr = VERT_RESULT_HPOS;
+   gl_geom_attrib ga = GEOM_ATTRIB_POSITION;
+   gl_geom_result gr = GEOM_RESULT_POS;
 
    (void) bi;
    (void) ci;
@@ -434,6 +438,11 @@ one_time_init( GLcontext *ctx )
    }
    _glthread_UNLOCK_MUTEX(OneTimeLock);
 
+   /* Hopefully atexit() is widely available.  If not, we may need some
+    * #ifdef tests here.
+    */
+   atexit(_mesa_destroy_shader_compiler);
+
    dummy_enum_func();
 }
 
@@ -462,7 +471,7 @@ _mesa_init_current(GLcontext *ctx)
 
 
 /**
- * Init vertex/fragment program limits.
+ * Init vertex/fragment/geometry program limits.
  * Important: drivers should override these with actual limits.
  */
 static void
@@ -477,16 +486,18 @@ init_program_limits(GLenum type, struct gl_program_constants *prog)
    prog->MaxLocalParams = MAX_PROGRAM_LOCAL_PARAMS;
    prog->MaxUniformComponents = 4 * MAX_UNIFORMS;
 
-   if (type == GL_VERTEX_PROGRAM_ARB) {
+   switch (type) {
+   case GL_VERTEX_PROGRAM_ARB:
       prog->MaxParameters = MAX_VERTEX_PROGRAM_PARAMS;
       prog->MaxAttribs = MAX_NV_VERTEX_PROGRAM_INPUTS;
       prog->MaxAddressRegs = MAX_VERTEX_PROGRAM_ADDRESS_REGS;
-   }
-   else if (type == GL_FRAGMENT_PROGRAM_ARB) {
+      break;
+   case GL_FRAGMENT_PROGRAM_ARB:
       prog->MaxParameters = MAX_NV_FRAGMENT_PROGRAM_PARAMS;
       prog->MaxAttribs = MAX_NV_FRAGMENT_PROGRAM_INPUTS;
       prog->MaxAddressRegs = MAX_FRAGMENT_PROGRAM_ADDRESS_REGS;
-   } else {
+      break;
+   case MESA_GEOMETRY_PROGRAM:
       prog->MaxParameters = MAX_NV_VERTEX_PROGRAM_PARAMS;
       prog->MaxAttribs = MAX_NV_VERTEX_PROGRAM_INPUTS;
       prog->MaxAddressRegs = MAX_VERTEX_PROGRAM_ADDRESS_REGS;
@@ -497,6 +508,9 @@ init_program_limits(GLenum type, struct gl_program_constants *prog)
       prog->MaxGeometryUniformComponents = MAX_GEOMETRY_UNIFORM_COMPONENTS;
       prog->MaxGeometryOutputVertices = MAX_GEOMETRY_OUTPUT_VERTICES;
       prog->MaxGeometryTotalOutputComponents = MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS;
+      break;
+   default:
+      assert(0 && "Bad program type in init_program_limits()");
    }
 
    /* Set the native limits to zero.  This implies that there is no native

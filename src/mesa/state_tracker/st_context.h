@@ -1,3 +1,4 @@
+//struct dd_function_table;
 /**************************************************************************
  * 
  * Copyright 2003 Tungsten Graphics, Inc., Cedar Park, Texas.
@@ -29,21 +30,17 @@
 #define ST_CONTEXT_H
 
 #include "main/mtypes.h"
-#include "program/prog_cache.h"
 #include "pipe/p_state.h"
 #include "state_tracker/st_api.h"
 
-
-struct st_context;
-struct st_texture_object;
-struct st_fragment_program;
+struct bitmap_cache;
+struct blit_state;
+struct dd_function_table;
 struct draw_context;
 struct draw_stage;
-struct cso_cache;
-struct cso_blend;
 struct gen_mipmap_state;
-struct blit_state;
-struct bitmap_cache;
+struct st_context;
+struct st_fragment_program;
 
 
 #define ST_NEW_MESA                    0x1 /* Mesa state has changed */
@@ -152,7 +149,7 @@ struct st_context
    /** for glBitmap */
    struct {
       struct pipe_rasterizer_state rasterizer;
-      struct pipe_sampler_state sampler;
+      struct pipe_sampler_state samplers[2];
       enum pipe_format tex_format;
       void *vs;
       float vertices[4][3][4];  /**< vertex pos + color + texcoord */
@@ -185,6 +182,7 @@ struct st_context
 
    void *passthrough_fs;  /**< simple pass-through frag shader */
 
+   enum pipe_texture_target internal_target;
    struct gen_mipmap_state *gen_mipmap;
    struct blit_state *blit;
 

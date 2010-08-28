@@ -37,52 +37,6 @@
 #include "lp_tile_soa.h"
 
 
-/**
- * Map an index in [0,15] to an x,y position, multiplied by 4.
- * This is used to get the position of each subtile in a 4x4
- * grid of edge step values.
- * Note: we can use some bit twiddling to compute these values instead
- * of using a look-up table, but there's no measurable performance
- * difference.
- */
-static const int pos_table4[16][2] = {
-   { 0, 0 },
-   { 4, 0 },
-   { 0, 4 },
-   { 4, 4 },
-   { 8, 0 },
-   { 12, 0 },
-   { 8, 4 },
-   { 12, 4 },
-   { 0, 8 },
-   { 4, 8 },
-   { 0, 12 },
-   { 4, 12 },
-   { 8, 8 },
-   { 12, 8 },
-   { 8, 12 },
-   { 12, 12 }
-};
-
-
-static const int pos_table16[16][2] = {
-   { 0, 0 },
-   { 16, 0 },
-   { 0, 16 },
-   { 16, 16 },
-   { 32, 0 },
-   { 48, 0 },
-   { 32, 16 },
-   { 48, 16 },
-   { 0, 32 },
-   { 16, 32 },
-   { 0, 48 },
-   { 16, 48 },
-   { 32, 32 },
-   { 48, 32 },
-   { 32, 48 },
-   { 48, 48 }
-};
 
 
 /**
@@ -113,6 +67,200 @@ block_full_16(struct lp_rasterizer_task *task,
 	 block_full_4(task, tri, x + ix, y + iy);
 }
 
+#if !defined(PIPE_ARCH_SSE)
+static INLINE unsigned
+build_mask(int c, int dcdx, int dcdy)
+{
+   int mask = 0;
+
+   int c0 = c;
+   int c1 = c0 + dcdx;
+   int c2 = c1 + dcdx;
+   int c3 = c2 + dcdx;
+
+   mask |= ((c0 + 0 * dcdy) >> 31) & (1 << 0);
+   mask |= ((c0 + 1 * dcdy) >> 31) & (1 << 2);
+   mask |= ((c0 + 2 * dcdy) >> 31) & (1 << 8);
+   mask |= ((c0 + 3 * dcdy) >> 31) & (1 << 10);
+   mask |= ((c1 + 0 * dcdy) >> 31) & (1 << 1);
+   mask |= ((c1 + 1 * dcdy) >> 31) & (1 << 3);
+   mask |= ((c1 + 2 * dcdy) >> 31) & (1 << 9);
+   mask |= ((c1 + 3 * dcdy) >> 31) & (1 << 11); 
+   mask |= ((c2 + 0 * dcdy) >> 31) & (1 << 4);
+   mask |= ((c2 + 1 * dcdy) >> 31) & (1 << 6);
+   mask |= ((c2 + 2 * dcdy) >> 31) & (1 << 12);
+   mask |= ((c2 + 3 * dcdy) >> 31) & (1 << 14);
+   mask |= ((c3 + 0 * dcdy) >> 31) & (1 << 5);
+   mask |= ((c3 + 1 * dcdy) >> 31) & (1 << 7);
+   mask |= ((c3 + 2 * dcdy) >> 31) & (1 << 13);
+   mask |= ((c3 + 3 * dcdy) >> 31) & (1 << 15);
+  
+   return mask;
+}
+
+
+static INLINE unsigned
+build_mask_linear(int c, int dcdx, int dcdy)
+{
+   int mask = 0;
+
+   int c0 = c;
+   int c1 = c0 + dcdy;
+   int c2 = c1 + dcdy;
+   int c3 = c2 + dcdy;
+
+   mask |= ((c0 + 0 * dcdx) >> 31) & (1 << 0);
+   mask |= ((c0 + 1 * dcdx) >> 31) & (1 << 1);
+   mask |= ((c0 + 2 * dcdx) >> 31) & (1 << 2);
+   mask |= ((c0 + 3 * dcdx) >> 31) & (1 << 3);
+   mask |= ((c1 + 0 * dcdx) >> 31) & (1 << 4);
+   mask |= ((c1 + 1 * dcdx) >> 31) & (1 << 5);
+   mask |= ((c1 + 2 * dcdx) >> 31) & (1 << 6);
+   mask |= ((c1 + 3 * dcdx) >> 31) & (1 << 7); 
+   mask |= ((c2 + 0 * dcdx) >> 31) & (1 << 8);
+   mask |= ((c2 + 1 * dcdx) >> 31) & (1 << 9);
+   mask |= ((c2 + 2 * dcdx) >> 31) & (1 << 10);
+   mask |= ((c2 + 3 * dcdx) >> 31) & (1 << 11);
+   mask |= ((c3 + 0 * dcdx) >> 31) & (1 << 12);
+   mask |= ((c3 + 1 * dcdx) >> 31) & (1 << 13);
+   mask |= ((c3 + 2 * dcdx) >> 31) & (1 << 14);
+   mask |= ((c3 + 3 * dcdx) >> 31) & (1 << 15);
+  
+   return mask;
+}
+
+
+static INLINE void
+build_masks(int c, 
+	    int cdiff,
+	    int dcdx,
+	    int dcdy,
+	    unsigned *outmask,
+	    unsigned *partmask)
+{
+   *outmask |= build_mask_linear(c, dcdx, dcdy);
+   *partmask |= build_mask_linear(c + cdiff, dcdx, dcdy);
+}
+
+#else
+#include <emmintrin.h>
+#include "util/u_sse.h"
+
+
+static INLINE void
+build_masks(int c, 
+	    int cdiff,
+	    int dcdx,
+	    int dcdy,
+	    unsigned *outmask,
+	    unsigned *partmask)
+{
+   __m128i cstep0 = _mm_setr_epi32(c, c+dcdx, c+dcdx*2, c+dcdx*3);
+   __m128i xdcdy = _mm_set1_epi32(dcdy);
+
+   /* Get values across the quad
+    */
+   __m128i cstep1 = _mm_add_epi32(cstep0, xdcdy);
+   __m128i cstep2 = _mm_add_epi32(cstep1, xdcdy);
+   __m128i cstep3 = _mm_add_epi32(cstep2, xdcdy);
+
+   {
+      __m128i cstep01, cstep23, result;
+
+      cstep01 = _mm_packs_epi32(cstep0, cstep1);
+      cstep23 = _mm_packs_epi32(cstep2, cstep3);
+      result = _mm_packs_epi16(cstep01, cstep23);
+
+      *outmask |= _mm_movemask_epi8(result);
+   }
+
+
+   {
+      __m128i cio4 = _mm_set1_epi32(cdiff);
+      __m128i cstep01, cstep23, result;
+
+      cstep0 = _mm_add_epi32(cstep0, cio4);
+      cstep1 = _mm_add_epi32(cstep1, cio4);
+      cstep2 = _mm_add_epi32(cstep2, cio4);
+      cstep3 = _mm_add_epi32(cstep3, cio4);
+
+      cstep01 = _mm_packs_epi32(cstep0, cstep1);
+      cstep23 = _mm_packs_epi32(cstep2, cstep3);
+      result = _mm_packs_epi16(cstep01, cstep23);
+
+      *partmask |= _mm_movemask_epi8(result);
+   }
+}
+
+
+static INLINE unsigned
+build_mask_linear(int c, int dcdx, int dcdy)
+{
+   __m128i cstep0 = _mm_setr_epi32(c, c+dcdx, c+dcdx*2, c+dcdx*3);
+   __m128i xdcdy = _mm_set1_epi32(dcdy);
+
+   /* Get values across the quad
+    */
+   __m128i cstep1 = _mm_add_epi32(cstep0, xdcdy);
+   __m128i cstep2 = _mm_add_epi32(cstep1, xdcdy);
+   __m128i cstep3 = _mm_add_epi32(cstep2, xdcdy);
+
+   /* pack pairs of results into epi16
+    */
+   __m128i cstep01 = _mm_packs_epi32(cstep0, cstep1);
+   __m128i cstep23 = _mm_packs_epi32(cstep2, cstep3);
+
+   /* pack into epi8, preserving sign bits
+    */
+   __m128i result = _mm_packs_epi16(cstep01, cstep23);
+
+   /* extract sign bits to create mask
+    */
+   return _mm_movemask_epi8(result);
+}
+
+static INLINE unsigned
+build_mask(int c, int dcdx, int dcdy)
+{
+   __m128i step = _mm_setr_epi32(0, dcdx, dcdy, dcdx + dcdy);
+   __m128i c0 = _mm_set1_epi32(c);
+
+   /* Get values across the quad
+    */
+   __m128i cstep0 = _mm_add_epi32(c0, step);
+
+   /* Scale up step for moving between quads.
+    */
+   __m128i step4 = _mm_add_epi32(step, step);
+
+   /* Get values for the remaining quads:
+    */
+   __m128i cstep1 = _mm_add_epi32(cstep0, 
+				  _mm_shuffle_epi32(step4, _MM_SHUFFLE(1,1,1,1)));
+   __m128i cstep2 = _mm_add_epi32(cstep0,
+				  _mm_shuffle_epi32(step4, _MM_SHUFFLE(2,2,2,2)));
+   __m128i cstep3 = _mm_add_epi32(cstep2,
+				  _mm_shuffle_epi32(step4, _MM_SHUFFLE(1,1,1,1)));
+
+   /* pack pairs of results into epi16
+    */
+   __m128i cstep01 = _mm_packs_epi32(cstep0, cstep1);
+   __m128i cstep23 = _mm_packs_epi32(cstep2, cstep3);
+
+   /* pack into epi8, preserving sign bits
+    */
+   __m128i result = _mm_packs_epi16(cstep01, cstep23);
+
+   /* extract sign bits to create mask
+    */
+   return _mm_movemask_epi8(result);
+}
+
+#endif
+
+
+
+
 #define TAG(x) x##_1
 #define NR_PLANES 1
 #include "lp_rast_tri_tmp.h"
@@ -141,3 +289,92 @@ block_full_16(struct lp_rasterizer_task *task,
 #define NR_PLANES 7
 #include "lp_rast_tri_tmp.h"
 
+#define TAG(x) x##_8
+#define NR_PLANES 8
+#include "lp_rast_tri_tmp.h"
+
+
+/* Special case for 3 plane triangle which is contained entirely
+ * within a 16x16 block.
+ */
+void
+lp_rast_triangle_3_16(struct lp_rasterizer_task *task,
+                      const union lp_rast_cmd_arg arg)
+{
+   const struct lp_rast_triangle *tri = arg.triangle.tri;
+   const struct lp_rast_plane *plane = tri->plane;
+   unsigned mask = arg.triangle.plane_mask;
+   const int x = task->x + (mask & 0xf) * 16;
+   const int y = task->y + (mask >> 4) * 16;
+   unsigned outmask, inmask, partmask, partial_mask;
+   unsigned j;
+   int c[3];
+
+   outmask = 0;                 /* outside one or more trivial reject planes */
+   partmask = 0;                /* outside one or more trivial accept planes */
+
+   for (j = 0; j < 3; j++) {
+      c[j] = plane[j].c + plane[j].dcdy * y - plane[j].dcdx * x;
+
+      {
+	 const int dcdx = -plane[j].dcdx * 4;
+	 const int dcdy = plane[j].dcdy * 4;
+	 const int cox = plane[j].eo * 4;
+	 const int cio = plane[j].ei * 4 - 1;
+
+	 build_masks(c[j] + cox,
+		     cio - cox,
+		     dcdx, dcdy, 
+		     &outmask,   /* sign bits from c[i][0..15] + cox */
+		     &partmask); /* sign bits from c[i][0..15] + cio */
+      }
+   }
+
+   if (outmask == 0xffff)
+      return;
+
+   /* Mask of sub-blocks which are inside all trivial accept planes:
+    */
+   inmask = ~partmask & 0xffff;
+
+   /* Mask of sub-blocks which are inside all trivial reject planes,
+    * but outside at least one trivial accept plane:
+    */
+   partial_mask = partmask & ~outmask;
+
+   assert((partial_mask & inmask) == 0);
+
+   /* Iterate over partials:
+    */
+   while (partial_mask) {
+      int i = ffs(partial_mask) - 1;
+      int ix = (i & 3) * 4;
+      int iy = (i >> 2) * 4;
+      int px = x + ix;
+      int py = y + iy; 
+      int cx[3];
+
+      partial_mask &= ~(1 << i);
+
+      for (j = 0; j < 3; j++)
+         cx[j] = (c[j] 
+		  - plane[j].dcdx * ix
+		  + plane[j].dcdy * iy);
+
+      do_block_4_3(task, tri, plane, px, py, cx);
+   }
+
+   /* Iterate over fulls: 
+    */
+   while (inmask) {
+      int i = ffs(inmask) - 1;
+      int ix = (i & 3) * 4;
+      int iy = (i >> 2) * 4;
+      int px = x + ix;
+      int py = y + iy; 
+
+      inmask &= ~(1 << i);
+
+      block_full_4(task, tri, px, py);
+   }
+}

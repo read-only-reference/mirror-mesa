@@ -112,6 +112,7 @@ struct radeon_ctx *radeon_ctx_decref(struct radeon_ctx *ctx)
 		ctx->bo[i] = radeon_bo_decref(ctx->radeon, ctx->bo[i]);
 	}
 	ctx->radeon = radeon_decref(ctx->radeon);
+	free(ctx->state);
 	free(ctx->draw);
 	free(ctx->bo);
 	free(ctx->pm4);
@@ -151,6 +152,8 @@ int radeon_ctx_submit(struct radeon_ctx *ctx)
 	uint64_t chunk_array[2];
 	int r = 0;
 
+	if (!ctx->cpm4)
+		return 0;
 #if 0
 	for (r = 0; r < ctx->cpm4; r++) {
 		fprintf(stderr, "0x%08X\n", ctx->pm4[r]);
@@ -213,11 +216,46 @@ static int radeon_ctx_state_schedule(struct radeon_ctx *ctx, struct radeon_state
 		r = radeon_ctx_reloc(ctx, state->bo[bid], cid,
 					&state->placement[bid * 2]);
 		if (r) {
-			fprintf(stderr, "%s state %d failed to reloc\n", __func__, state->type);
+			fprintf(stderr, "%s state %d failed to reloc\n", __func__, state->stype->stype);
 			return r;
 		}
 	}
 	ctx->id += state->cpm4;
+	return 0;
+}
+
+int radeon_ctx_set_query_state(struct radeon_ctx *ctx, struct radeon_state *state)
+{
+	void *tmp;
+	int r = 0;
+
+	/* !!! ONLY ACCEPT QUERY STATE HERE !!! */
+	if (state->stype->stype != R600_STATE_QUERY_BEGIN && state->stype->stype != R600_STATE_QUERY_END) {
+		return -EINVAL;
+	}
+	r = radeon_state_pm4(state);
+	if (r)
+		return r;
+	if ((ctx->draw_cpm4 + state->cpm4) > RADEON_CTX_MAX_PM4) {
+		/* need to flush */
+		return -EBUSY;
+	}
+	if (state->cpm4 >= RADEON_CTX_MAX_PM4) {
+		fprintf(stderr, "%s single state too big %d, max %d\n",
+			__func__, state->cpm4, RADEON_CTX_MAX_PM4);
+		return -EINVAL;
+	}
+	tmp = realloc(ctx->state, (ctx->nstate + 1) * sizeof(void*));
+	if (tmp == NULL)
+		return -ENOMEM;
+	ctx->state = tmp;
+	ctx->state[ctx->nstate++] = radeon_state_incref(state);
+	/* BEGIN/END query are balanced in the same cs so account for END
+	 * END query when scheduling BEGIN query
+	 */
+	if (state->stype->stype == R600_STATE_QUERY_BEGIN) {
+		ctx->draw_cpm4 += state->cpm4 * 2;
+	}
 	return 0;
 }
 
@@ -363,7 +401,6 @@ printf("%d pm4\n", ctx->cpm4);
 		if (bo == NULL)
 			goto out_err;
 		size = bof_int32(ctx->bo[i]->size);
-printf("[%d] %d bo\n", i, size);
 		if (size == NULL)
 			goto out_err;
 		if (bof_object_set(bo, "size", size))

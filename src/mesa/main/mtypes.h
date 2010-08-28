@@ -36,7 +36,6 @@
 
 #include "main/glheader.h"
 #include "main/config.h"
-#include "main/compiler.h"
 #include "main/mfeatures.h"
 #include "glapi/glapi.h"
 #include "math/m_matrix.h"	/* GLmatrix */
@@ -1633,10 +1632,9 @@ struct gl_array_attrib
 
    GLbitfield NewState;		/**< mask of _NEW_ARRAY_* values */
 
-#if FEATURE_ARB_vertex_buffer_object
+   /* GL_ARB_vertex_buffer_object */
    struct gl_buffer_object *ArrayBufferObj;
    struct gl_buffer_object *ElementArrayBufferObj;
-#endif
 };
 
 
@@ -2085,6 +2083,15 @@ struct gl_shader
    struct gl_program *Program;  /**< Post-compile assembly code */
    GLchar *InfoLog;
    struct gl_sl_pragmas Pragmas;
+
+   unsigned Version;       /**< GLSL version used for linking */
+
+   struct exec_list *ir;
+   struct glsl_symbol_table *symbols;
+
+   /** Shaders containing built-in functions that are used for linking. */
+   struct gl_shader *builtins_to_link[16];
+   unsigned num_builtins_to_link;
 };
 
 
@@ -2130,6 +2137,16 @@ struct gl_shader_program
    GLboolean Validated;
    GLboolean _Used;        /**< Ever used for drawing? */
    GLchar *InfoLog;
+
+   unsigned Version;       /**< GLSL version used for linking */
+
+   /**
+    * Per-stage shaders resulting from the first stage of linking.
+    */
+   /*@{*/
+   GLuint _NumLinkedShaders;
+   struct gl_shader *_LinkedShaders[2];
+   /*@}*/
 };   
 
 
@@ -2155,6 +2172,11 @@ struct gl_shader_state
    GLboolean EmitCondCodes;             /**< Use condition codes? */
    GLboolean EmitComments;              /**< Annotated instructions */
    GLboolean EmitNVTempInitialization;  /**< 0-fill NV temp registers */
+   /**
+    * Attempts to flatten all ir_if (OPCODE_IF) for GPUs that can't
+    * support control flow.
+    */
+   GLboolean EmitNoIfs;
    void *MemPool;
    GLbitfield Flags;                    /**< Mask of GLSL_x flags */
    struct gl_sl_pragmas DefaultPragmas; /**< Default #pragma settings */
@@ -2241,39 +2263,26 @@ struct gl_shared_state
     */
    /*@{*/
    struct _mesa_HashTable *Programs; /**< All vertex/fragment programs */
-#if FEATURE_ARB_vertex_program
    struct gl_vertex_program *DefaultVertexProgram;
-#endif
-#if FEATURE_ARB_fragment_program
    struct gl_fragment_program *DefaultFragmentProgram;
-#endif
-#if FEATURE_ARB_geometry_shader4
    struct gl_geometry_program *DefaultGeometryProgram;
-#endif
    /*@}*/
 
-#if FEATURE_ATI_fragment_shader
+   /* GL_ATI_fragment_shader */
    struct _mesa_HashTable *ATIShaders;
    struct ati_fragment_shader *DefaultFragmentShader;
-#endif
 
-#if FEATURE_ARB_vertex_buffer_object || FEATURE_ARB_pixel_buffer_object
    struct _mesa_HashTable *BufferObjects;
-#endif
 
-#if FEATURE_ARB_shader_objects
    /** Table of both gl_shader and gl_shader_program objects */
    struct _mesa_HashTable *ShaderObjects;
-#endif
 
-#if FEATURE_EXT_framebuffer_object
+   /* GL_EXT_framebuffer_object */
    struct _mesa_HashTable *RenderBuffers;
    struct _mesa_HashTable *FrameBuffers;
-#endif
 
-#if FEATURE_ARB_sync
+   /* GL_ARB_sync */
    struct simple_node SyncObjects;
-#endif
 
    void *DriverData;  /**< Device driver shared state */
 };
@@ -2482,40 +2491,39 @@ struct gl_framebuffer
 
 
 /**
- * Limits for vertex and fragment programs.
+ * Limits for vertex and fragment programs/shaders.
  */
 struct gl_program_constants
 {
    /* logical limits */
    GLuint MaxInstructions;
-   GLuint MaxAluInstructions; /* fragment programs only, for now */
-   GLuint MaxTexInstructions; /* fragment programs only, for now */
-   GLuint MaxTexIndirections; /* fragment programs only, for now */
+   GLuint MaxAluInstructions;
+   GLuint MaxTexInstructions;
+   GLuint MaxTexIndirections;
    GLuint MaxAttribs;
    GLuint MaxTemps;
-   GLuint MaxAddressRegs; /* vertex program only, for now */
+   GLuint MaxAddressRegs;
    GLuint MaxParameters;
    GLuint MaxLocalParams;
    GLuint MaxEnvParams;
    /* native/hardware limits */
    GLuint MaxNativeInstructions;
-   GLuint MaxNativeAluInstructions; /* fragment programs only, for now */
-   GLuint MaxNativeTexInstructions; /* fragment programs only, for now */
-   GLuint MaxNativeTexIndirections; /* fragment programs only, for now */
+   GLuint MaxNativeAluInstructions;
+   GLuint MaxNativeTexInstructions;
+   GLuint MaxNativeTexIndirections;
    GLuint MaxNativeAttribs;
    GLuint MaxNativeTemps;
-   GLuint MaxNativeAddressRegs; /* vertex program only, for now */
+   GLuint MaxNativeAddressRegs;
    GLuint MaxNativeParameters;
    /* For shaders */
    GLuint MaxUniformComponents;
-#if FEATURE_ARB_geometry_shader4
+   /* GL_ARB_geometry_shader4 */
    GLuint MaxGeometryTextureImageUnits;
    GLuint MaxGeometryVaryingComponents;
    GLuint MaxVertexVaryingComponents;
    GLuint MaxGeometryUniformComponents;
    GLuint MaxGeometryOutputVertices;
    GLuint MaxGeometryTotalOutputComponents;
-#endif
 };
 
 
@@ -2763,12 +2771,8 @@ struct gl_extensions
    GLboolean SGIS_texture_lod;
    GLboolean TDFX_texture_compression_FXT1;
    GLboolean S3_s3tc;
-#if FEATURE_OES_EGL_image
    GLboolean OES_EGL_image;
-#endif
-#if FEATURE_OES_draw_texture
    GLboolean OES_draw_texture;
-#endif /* FEATURE_OES_draw_texture */
    /** The extension string */
    const GLubyte *String;
    /** Number of supported extensions */
@@ -3209,9 +3213,8 @@ struct __GLcontextRec
 
    struct gl_meta_state *Meta;  /**< for "meta" operations */
 
-#if FEATURE_EXT_framebuffer_object
+   /* GL_EXT_framebuffer_object */
    struct gl_renderbuffer *CurrentRenderbuffer;
-#endif
 
    GLenum ErrorValue;        /**< Last error code */
 
