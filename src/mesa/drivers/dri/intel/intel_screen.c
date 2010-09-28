@@ -123,12 +123,12 @@ static const struct __DRI2flushExtensionRec intelFlushExtension = {
 };
 
 static __DRIimage *
-intel_create_image_from_name(__DRIcontext *context,
+intel_create_image_from_name(__DRIscreen *screen,
 			     int width, int height, int format,
 			     int name, int pitch, void *loaderPrivate)
 {
+    struct intel_screen *intelScreen = screen->private;
     __DRIimage *image;
-    struct intel_context *intel = context->driverPrivate;
     int cpp;
 
     image = CALLOC(sizeof *image);
@@ -159,7 +159,7 @@ intel_create_image_from_name(__DRIcontext *context,
     image->data = loaderPrivate;
     cpp = _mesa_get_format_bytes(image->format);
 
-    image->region = intel_region_alloc_for_handle(intel->intelScreen,
+    image->region = intel_region_alloc_for_handle(intelScreen,
 						  cpp, width, height,
 						  pitch, name, "image");
     if (image->region == NULL) {
@@ -465,7 +465,6 @@ intel_init_bufmgr(struct intel_screen *intelScreen)
    intelScreen->no_hw = getenv("INTEL_NO_HW") != NULL;
 
    intelScreen->bufmgr = intel_bufmgr_gem_init(spriv->fd, BATCH_SZ);
-   /* Otherwise, use the classic buffer manager. */
    if (intelScreen->bufmgr == NULL) {
       fprintf(stderr, "[%s:%u] Error initializing buffer manager.\n",
 	      __func__, __LINE__);

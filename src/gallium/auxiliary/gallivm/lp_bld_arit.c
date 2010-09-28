@@ -56,6 +56,7 @@
 #include "lp_bld_intr.h"
 #include "lp_bld_logic.h"
 #include "lp_bld_pack.h"
+#include "lp_bld_debug.h"
 #include "lp_bld_arit.h"
 
 
@@ -613,17 +614,15 @@ lp_build_div(struct lp_build_context *bld,
 
 
 /**
- * Linear interpolation.
- *
- * This also works for integer values with a few caveats.
+ * Linear interpolation -- without any checks.
  *
  * @sa http://www.stereopsis.com/doubleblend.html
  */
-LLVMValueRef
-lp_build_lerp(struct lp_build_context *bld,
-              LLVMValueRef x,
-              LLVMValueRef v0,
-              LLVMValueRef v1)
+static INLINE LLVMValueRef
+lp_build_lerp_simple(struct lp_build_context *bld,
+                     LLVMValueRef x,
+                     LLVMValueRef v0,
+                     LLVMValueRef v1)
 {
    LLVMValueRef delta;
    LLVMValueRef res;
@@ -638,12 +637,80 @@ lp_build_lerp(struct lp_build_context *bld,
 
    res = lp_build_add(bld, v0, res);
 
-   if(bld->type.fixed)
+   if (bld->type.fixed) {
       /* XXX: This step is necessary for lerping 8bit colors stored on 16bits,
        * but it will be wrong for other uses. Basically we need a more
        * powerful lp_type, capable of further distinguishing the values
        * interpretation from the value storage. */
       res = LLVMBuildAnd(bld->builder, res, lp_build_const_int_vec(bld->type, (1 << bld->type.width/2) - 1), "");
+   }
+
+   return res;
+}
+
+
+/**
+ * Linear interpolation.
+ */
+LLVMValueRef
+lp_build_lerp(struct lp_build_context *bld,
+              LLVMValueRef x,
+              LLVMValueRef v0,
+              LLVMValueRef v1)
+{
+   const struct lp_type type = bld->type;
+   LLVMValueRef res;
+
+   assert(lp_check_value(type, x));
+   assert(lp_check_value(type, v0));
+   assert(lp_check_value(type, v1));
+
+   if (type.norm) {
+      struct lp_type wide_type;
+      struct lp_build_context wide_bld;
+      LLVMValueRef xl, xh, v0l, v0h, v1l, v1h, resl, resh;
+      LLVMValueRef shift;
+
+      assert(type.length >= 2);
+      assert(!type.sign);
+
+      /*
+       * Create a wider type, enough to hold the intermediate result of the
+       * multiplication.
+       */
+      memset(&wide_type, 0, sizeof wide_type);
+      wide_type.fixed  = TRUE;
+      wide_type.width  = type.width*2;
+      wide_type.length = type.length/2;
+
+      lp_build_context_init(&wide_bld, bld->builder, wide_type);
+
+      lp_build_unpack2(bld->builder, type, wide_type, x,  &xl,  &xh);
+      lp_build_unpack2(bld->builder, type, wide_type, v0, &v0l, &v0h);
+      lp_build_unpack2(bld->builder, type, wide_type, v1, &v1l, &v1h);
+
+      /*
+       * Scale x from [0, 255] to [0, 256]
+       */
+
+      shift = lp_build_const_int_vec(wide_type, type.width - 1);
+
+      xl = lp_build_add(&wide_bld, xl,
+                        LLVMBuildAShr(bld->builder, xl, shift, ""));
+      xh = lp_build_add(&wide_bld, xh,
+                        LLVMBuildAShr(bld->builder, xh, shift, ""));
+
+      /*
+       * Lerp both halves.
+       */
+
+      resl = lp_build_lerp_simple(&wide_bld, xl, v0l, v1l);
+      resh = lp_build_lerp_simple(&wide_bld, xh, v0h, v1h);
+
+      res = lp_build_pack2(bld->builder, wide_type, type, resl, resh);
+   } else {
+      res = lp_build_lerp_simple(bld, x, v0, v1);
+   }
 
    return res;
 }
@@ -922,28 +989,67 @@ lp_build_round_sse41(struct lp_build_context *bld,
                      enum lp_build_round_sse41_mode mode)
 {
    const struct lp_type type = bld->type;
-   LLVMTypeRef vec_type = lp_build_vec_type(type);
+   LLVMTypeRef i32t = LLVMInt32Type();
    const char *intrinsic;
+   LLVMValueRef res;
 
    assert(type.floating);
-   assert(type.width*type.length == 128);
+
    assert(lp_check_value(type, a));
    assert(util_cpu_caps.has_sse4_1);
 
-   switch(type.width) {
-   case 32:
-      intrinsic = "llvm.x86.sse41.round.ps";
-      break;
-   case 64:
-      intrinsic = "llvm.x86.sse41.round.pd";
-      break;
-   default:
-      assert(0);
-      return bld->undef;
+   if (type.length == 1) {
+      LLVMTypeRef vec_type;
+      LLVMValueRef undef;
+      LLVMValueRef args[3];
+      LLVMValueRef index0 = LLVMConstInt(i32t, 0, 0);
+
+      switch(type.width) {
+      case 32:
+         intrinsic = "llvm.x86.sse41.round.ss";
+         break;
+      case 64:
+         intrinsic = "llvm.x86.sse41.round.sd";
+         break;
+      default:
+         assert(0);
+         return bld->undef;
+      }
+
+      vec_type = LLVMVectorType(bld->elem_type, 4);
+
+      undef = LLVMGetUndef(vec_type);
+
+      args[0] = undef;
+      args[1] = LLVMBuildInsertElement(bld->builder, undef, a, index0, "");
+      args[2] = LLVMConstInt(i32t, mode, 0);
+
+      res = lp_build_intrinsic(bld->builder, intrinsic,
+                               vec_type, args, Elements(args));
+
+      res = LLVMBuildExtractElement(bld->builder, res, index0, "");
+   }
+   else {
+      assert(type.width*type.length == 128);
+
+      switch(type.width) {
+      case 32:
+         intrinsic = "llvm.x86.sse41.round.ps";
+         break;
+      case 64:
+         intrinsic = "llvm.x86.sse41.round.pd";
+         break;
+      default:
+         assert(0);
+         return bld->undef;
+      }
+
+      res = lp_build_intrinsic_binary(bld->builder, intrinsic,
+                                      bld->vec_type, a,
+                                      LLVMConstInt(i32t, mode, 0));
    }
 
-   return lp_build_intrinsic_binary(bld->builder, intrinsic, vec_type, a,
-                                    LLVMConstInt(LLVMInt32Type(), mode, 0));
+   return res;
 }
 
 
@@ -961,8 +1067,10 @@ lp_build_trunc(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (util_cpu_caps.has_sse4_1 && type.width*type.length == 128)
+   if (util_cpu_caps.has_sse4_1 &&
+       (type.length == 1 || type.width*type.length == 128)) {
       return lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_TRUNCATE);
+   }
    else {
       LLVMTypeRef vec_type = lp_build_vec_type(type);
       LLVMTypeRef int_vec_type = lp_build_int_vec_type(type);
@@ -989,8 +1097,10 @@ lp_build_round(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (util_cpu_caps.has_sse4_1 && type.width*type.length == 128)
+   if (util_cpu_caps.has_sse4_1 &&
+       (type.length == 1 || type.width*type.length == 128)) {
       return lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_NEAREST);
+   }
    else {
       LLVMTypeRef vec_type = lp_build_vec_type(type);
       LLVMValueRef res;
@@ -1015,8 +1125,10 @@ lp_build_floor(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (util_cpu_caps.has_sse4_1 && type.width*type.length == 128)
+   if (util_cpu_caps.has_sse4_1 &&
+       (type.length == 1 || type.width*type.length == 128)) {
       return lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_FLOOR);
+   }
    else {
       LLVMTypeRef vec_type = lp_build_vec_type(type);
       LLVMValueRef res;
@@ -1041,8 +1153,10 @@ lp_build_ceil(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (util_cpu_caps.has_sse4_1 && type.width*type.length == 128)
+   if (util_cpu_caps.has_sse4_1 &&
+       (type.length == 1 || type.width*type.length == 128)) {
       return lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_CEIL);
+   }
    else {
       LLVMTypeRef vec_type = lp_build_vec_type(type);
       LLVMValueRef res;
@@ -1103,7 +1217,8 @@ lp_build_iround(struct lp_build_context *bld,
 
    assert(lp_check_value(type, a));
 
-   if (util_cpu_caps.has_sse4_1 && type.width*type.length == 128) {
+   if (util_cpu_caps.has_sse4_1 &&
+       (type.length == 1 || type.width*type.length == 128)) {
       res = lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_NEAREST);
    }
    else {
@@ -1147,7 +1262,8 @@ lp_build_ifloor(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (util_cpu_caps.has_sse4_1 && type.width*type.length == 128) {
+   if (util_cpu_caps.has_sse4_1 &&
+       (type.length == 1 || type.width*type.length == 128)) {
       res = lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_FLOOR);
    }
    else {
@@ -1197,7 +1313,8 @@ lp_build_iceil(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (util_cpu_caps.has_sse4_1 && type.width*type.length == 128) {
+   if (util_cpu_caps.has_sse4_1 &&
+       (type.length == 1 || type.width*type.length == 128)) {
       res = lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_CEIL);
    }
    else {
@@ -1850,9 +1967,11 @@ lp_build_pow(struct lp_build_context *bld,
              LLVMValueRef y)
 {
    /* TODO: optimize the constant case */
-   if(LLVMIsConstant(x) && LLVMIsConstant(y))
+   if (gallivm_debug & GALLIVM_DEBUG_PERF &&
+       LLVMIsConstant(x) && LLVMIsConstant(y)) {
       debug_printf("%s: inefficient/imprecise constant arithmetic\n",
                    __FUNCTION__);
+   }
 
    return lp_build_exp2(bld, lp_build_mul(bld, lp_build_log2(bld, x), y));
 }
@@ -1907,9 +2026,11 @@ lp_build_polynomial(struct lp_build_context *bld,
    assert(lp_check_value(bld->type, x));
 
    /* TODO: optimize the constant case */
-   if(LLVMIsConstant(x))
+   if (gallivm_debug & GALLIVM_DEBUG_PERF &&
+       LLVMIsConstant(x)) {
       debug_printf("%s: inefficient/imprecise constant arithmetic\n",
                    __FUNCTION__);
+   }
 
    for (i = num_coeffs; i--; ) {
       LLVMValueRef coeff;
@@ -1981,9 +2102,11 @@ lp_build_exp2_approx(struct lp_build_context *bld,
 
    if(p_exp2_int_part || p_frac_part || p_exp2) {
       /* TODO: optimize the constant case */
-      if(LLVMIsConstant(x))
+      if (gallivm_debug & GALLIVM_DEBUG_PERF &&
+          LLVMIsConstant(x)) {
          debug_printf("%s: inefficient/imprecise constant arithmetic\n",
                       __FUNCTION__);
+      }
 
       assert(type.floating && type.width == 32);
 
@@ -2096,9 +2219,11 @@ lp_build_log2_approx(struct lp_build_context *bld,
 
    if(p_exp || p_floor_log2 || p_log2) {
       /* TODO: optimize the constant case */
-      if(LLVMIsConstant(x))
+      if (gallivm_debug & GALLIVM_DEBUG_PERF &&
+          LLVMIsConstant(x)) {
          debug_printf("%s: inefficient/imprecise constant arithmetic\n",
                       __FUNCTION__);
+      }
 
       assert(type.floating && type.width == 32);
 

@@ -44,6 +44,7 @@
 #include "tgsi/tgsi_dump.h"
 
 #include "util/u_cpu_detect.h"
+#include "util/u_math.h"
 #include "util/u_pointer.h"
 #include "util/u_string.h"
 
@@ -77,6 +78,11 @@ init_globals(struct draw_llvm *llvm)
       elem_types[DRAW_JIT_TEXTURE_DATA] =
          LLVMArrayType(LLVMPointerType(LLVMInt8Type(), 0),
                        DRAW_MAX_TEXTURE_LEVELS);
+      elem_types[DRAW_JIT_TEXTURE_MIN_LOD] = LLVMFloatType();
+      elem_types[DRAW_JIT_TEXTURE_MAX_LOD] = LLVMFloatType();
+      elem_types[DRAW_JIT_TEXTURE_LOD_BIAS] = LLVMFloatType();
+      elem_types[DRAW_JIT_TEXTURE_BORDER_COLOR] = 
+         LLVMArrayType(LLVMFloatType(), 4);
 
       texture_type = LLVMStructType(elem_types, Elements(elem_types), 0);
 
@@ -101,6 +107,18 @@ init_globals(struct draw_llvm *llvm)
       LP_CHECK_MEMBER_OFFSET(struct draw_jit_texture, data,
                              llvm->target, texture_type,
                              DRAW_JIT_TEXTURE_DATA);
+      LP_CHECK_MEMBER_OFFSET(struct draw_jit_texture, min_lod,
+                             llvm->target, texture_type,
+                             DRAW_JIT_TEXTURE_MIN_LOD);
+      LP_CHECK_MEMBER_OFFSET(struct draw_jit_texture, max_lod,
+                             llvm->target, texture_type,
+                             DRAW_JIT_TEXTURE_MAX_LOD);
+      LP_CHECK_MEMBER_OFFSET(struct draw_jit_texture, lod_bias,
+                             llvm->target, texture_type,
+                             DRAW_JIT_TEXTURE_LOD_BIAS);
+      LP_CHECK_MEMBER_OFFSET(struct draw_jit_texture, border_color,
+                             llvm->target, texture_type,
+                             DRAW_JIT_TEXTURE_BORDER_COLOR);
       LP_CHECK_STRUCT_SIZE(struct draw_jit_texture,
                            llvm->target, texture_type);
 
@@ -1071,6 +1089,25 @@ draw_llvm_set_mapped_texture(struct draw_context *draw,
       jit_tex->img_stride[j] = img_stride[j];
    }
 }
+
+
+void
+draw_llvm_set_sampler_state(struct draw_context *draw)
+{
+   unsigned i;
+
+   for (i = 0; i < draw->num_samplers; i++) {
+      struct draw_jit_texture *jit_tex = &draw->llvm->jit_context.textures[i];
+
+      if (draw->samplers[i]) {
+         jit_tex->min_lod = draw->samplers[i]->min_lod;
+         jit_tex->max_lod = draw->samplers[i]->max_lod;
+         jit_tex->lod_bias = draw->samplers[i]->lod_bias;
+         COPY_4V(jit_tex->border_color, draw->samplers[i]->border_color);
+      }
+   }
+}
+
 
 void
 draw_llvm_destroy_variant(struct draw_llvm_variant *variant)

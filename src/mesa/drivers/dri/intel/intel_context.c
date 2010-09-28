@@ -163,6 +163,19 @@ intelGetString(GLcontext * ctx, GLenum name)
       case PCI_CHIP_ILM_G:
          chipset = "Intel(R) Ironlake Mobile";
          break;
+      case PCI_CHIP_SANDYBRIDGE_GT1:
+      case PCI_CHIP_SANDYBRIDGE_GT2:
+      case PCI_CHIP_SANDYBRIDGE_GT2_PLUS:
+	 chipset = "Intel(R) Sandybridge Desktop";
+	 break;
+      case PCI_CHIP_SANDYBRIDGE_M_GT1:
+      case PCI_CHIP_SANDYBRIDGE_M_GT2:
+      case PCI_CHIP_SANDYBRIDGE_M_GT2_PLUS:
+	 chipset = "Intel(R) Sandybridge Mobile";
+	 break;
+      case PCI_CHIP_SANDYBRIDGE_S:
+	 chipset = "Intel(R) Sandybridge Server";
+	 break;
       default:
          chipset = "Unknown Intel Chipset";
          break;
@@ -354,7 +367,7 @@ intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
        case __DRI_BUFFER_ACCUM:
        default:
 	   fprintf(stderr,
-		   "unhandled buffer attach event, attacment type %d\n",
+		   "unhandled buffer attach event, attachment type %d\n",
 		   buffers[i].attachment);
 	   return;
        }
@@ -786,6 +799,11 @@ intelInitContext(struct intel_context *intel,
    if (INTEL_DEBUG & DEBUG_BUFMGR)
       dri_bufmgr_set_debug(intel->bufmgr, GL_TRUE);
 
+   /* XXX force SIMD8 kernel for Sandybridge before we fixed
+      SIMD16 interpolation. */
+   if (intel->gen == 6)
+       INTEL_DEBUG |= DEBUG_GLSL_FORCE;
+
    intel->batch = intel_batchbuffer_alloc(intel);
 
    intel_fbo_init(intel);
@@ -873,6 +891,9 @@ intelDestroyContext(__DRIcontext * driContextPriv)
 GLboolean
 intelUnbindContext(__DRIcontext * driContextPriv)
 {
+   /* Unset current context and dispath table */
+   _mesa_make_current(NULL, NULL, NULL);
+
    return GL_TRUE;
 }
 

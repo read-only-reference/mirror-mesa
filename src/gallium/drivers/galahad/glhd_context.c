@@ -54,6 +54,10 @@ galahad_draw_vbo(struct pipe_context *_pipe,
    struct galahad_context *glhd_pipe = galahad_context(_pipe);
    struct pipe_context *pipe = glhd_pipe->pipe;
 
+   /* XXX we should check that all bound resources are unmapped
+    * before drawing.
+    */
+
    pipe->draw_vbo(pipe, info);
 }
 
@@ -465,11 +469,11 @@ galahad_set_constant_buffer(struct pipe_context *_pipe,
 
    if (index &&
       index >=
-         pipe->screen->get_param(pipe->screen, PIPE_CAP_MAX_CONST_BUFFERS)) {
+         pipe->screen->get_shader_param(pipe->screen, shader, PIPE_SHADER_CAP_MAX_CONST_BUFFERS)) {
       glhd_error("Access to constant buffer %u requested, "
          "but only %d are supported",
          index,
-         pipe->screen->get_param(pipe->screen, PIPE_CAP_MAX_CONST_BUFFERS));
+         pipe->screen->get_shader_param(pipe->screen, shader, PIPE_SHADER_CAP_MAX_CONST_BUFFERS));
    }
 
    /* XXX hmm? unwrap the input state */
@@ -860,6 +864,10 @@ galahad_context_transfer_map(struct pipe_context *_context,
    struct pipe_context *context = glhd_context->pipe;
    struct pipe_transfer *transfer = glhd_transfer->transfer;
 
+   struct galahad_resource *glhd_resource = galahad_resource(_transfer->resource);
+
+   glhd_resource->map_count++;
+
    return context->transfer_map(context,
                                 transfer);
 }
@@ -890,6 +898,14 @@ galahad_context_transfer_unmap(struct pipe_context *_context,
    struct galahad_transfer *glhd_transfer = galahad_transfer(_transfer);
    struct pipe_context *context = glhd_context->pipe;
    struct pipe_transfer *transfer = glhd_transfer->transfer;
+   struct galahad_resource *glhd_resource = galahad_resource(_transfer->resource);
+
+   if (glhd_resource->map_count < 1) {
+      glhd_warn("context::transfer_unmap() called too many times"
+                " (count = %d)\n", glhd_resource->map_count);      
+   }
+
+   glhd_resource->map_count--;
 
    context->transfer_unmap(context,
                            transfer);

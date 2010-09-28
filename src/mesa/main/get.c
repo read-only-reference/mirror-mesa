@@ -128,6 +128,7 @@ enum value_extra {
    EXTRA_VERSION_30,
    EXTRA_VERSION_31,
    EXTRA_VERSION_32,
+   EXTRA_VERSION_ES2,
    EXTRA_NEW_BUFFERS, 
    EXTRA_VALID_DRAW_BUFFER,
    EXTRA_VALID_TEXTURE_UNIT,
@@ -275,9 +276,6 @@ EXTRA_EXT(NV_fragment_program);
 EXTRA_EXT(NV_texture_rectangle);
 EXTRA_EXT(EXT_stencil_two_side);
 EXTRA_EXT(NV_light_max_exponent);
-EXTRA_EXT(EXT_convolution);
-EXTRA_EXT(EXT_histogram);
-EXTRA_EXT(SGI_color_table);
 EXTRA_EXT(SGI_texture_color_table);
 EXTRA_EXT(EXT_depth_bounds_test);
 EXTRA_EXT(ARB_depth_clamp);
@@ -325,6 +323,13 @@ extra_NV_vertex_program_ARB_vertex_program_ARB_fragment_program_NV_vertex_progra
 static const int extra_version_30[] = { EXTRA_VERSION_30, EXTRA_END };
 static const int extra_version_31[] = { EXTRA_VERSION_31, EXTRA_END };
 static const int extra_version_32[] = { EXTRA_VERSION_32, EXTRA_END };
+
+static const int
+extra_ARB_vertex_program_version_es2[] = {
+   EXT(ARB_vertex_program),
+   EXTRA_VERSION_ES2,
+   EXTRA_END
+};
 
 #define API_OPENGL_BIT (1 << API_OPENGL)
 #define API_OPENGLES_BIT (1 << API_OPENGLES)
@@ -661,7 +666,8 @@ static const struct value_desc values[] = {
    { GL_STENCIL_BACK_PASS_DEPTH_PASS, CONTEXT_ENUM(Stencil.ZPassFunc[1]), NO_EXTRA },
 
    { GL_MAX_VERTEX_ATTRIBS_ARB,
-     CONTEXT_INT(Const.VertexProgram.MaxAttribs), extra_ARB_vertex_program },
+     CONTEXT_INT(Const.VertexProgram.MaxAttribs),
+     extra_ARB_vertex_program_version_es2 },
 
    /* OES_texture_3D */
    { GL_TEXTURE_BINDING_3D, LOC_CUSTOM, TYPE_INT, TEXTURE_3D_INDEX, NO_EXTRA },
@@ -867,83 +873,11 @@ static const struct value_desc values[] = {
      extra_EXT_compiled_vertex_array },
 
    /* GL_ARB_transpose_matrix */
-   { GL_TRANSPOSE_COLOR_MATRIX_ARB, CONTEXT_MATRIX_T(ColorMatrixStack.Top), NO_EXTRA },
    { GL_TRANSPOSE_MODELVIEW_MATRIX_ARB,
      CONTEXT_MATRIX_T(ModelviewMatrixStack), NO_EXTRA },
    { GL_TRANSPOSE_PROJECTION_MATRIX_ARB,
      CONTEXT_MATRIX_T(ProjectionMatrixStack.Top), NO_EXTRA },
    { GL_TRANSPOSE_TEXTURE_MATRIX_ARB, CONTEXT_MATRIX_T(TextureMatrixStack), NO_EXTRA },
-
-   /* GL_SGI_color_matrix (also in 1.2 imaging) */
-   { GL_COLOR_MATRIX_SGI, CONTEXT_MATRIX(ColorMatrixStack.Top), NO_EXTRA },
-   { GL_COLOR_MATRIX_STACK_DEPTH_SGI, LOC_CUSTOM, TYPE_INT,
-     offsetof(GLcontext, ColorMatrixStack.Depth), NO_EXTRA },
-   { GL_MAX_COLOR_MATRIX_STACK_DEPTH_SGI,
-     CONST(MAX_COLOR_STACK_DEPTH), NO_EXTRA },
-   { GL_POST_COLOR_MATRIX_RED_SCALE_SGI,
-     CONTEXT_FLOAT(Pixel.PostColorMatrixScale[0]), NO_EXTRA },
-   { GL_POST_COLOR_MATRIX_GREEN_SCALE_SGI,
-     CONTEXT_FLOAT(Pixel.PostColorMatrixScale[1]), NO_EXTRA },
-   { GL_POST_COLOR_MATRIX_BLUE_SCALE_SGI,
-     CONTEXT_FLOAT(Pixel.PostColorMatrixScale[2]), NO_EXTRA },
-   { GL_POST_COLOR_MATRIX_ALPHA_SCALE_SGI,
-     CONTEXT_FLOAT(Pixel.PostColorMatrixScale[3]), NO_EXTRA },
-   { GL_POST_COLOR_MATRIX_RED_BIAS_SGI,
-     CONTEXT_FLOAT(Pixel.PostColorMatrixBias[0]), NO_EXTRA },
-   { GL_POST_COLOR_MATRIX_GREEN_BIAS_SGI,
-     CONTEXT_FLOAT(Pixel.PostColorMatrixBias[1]), NO_EXTRA },
-   { GL_POST_COLOR_MATRIX_BLUE_BIAS_SGI,
-     CONTEXT_FLOAT(Pixel.PostColorMatrixBias[2]), NO_EXTRA },
-   { GL_POST_COLOR_MATRIX_ALPHA_BIAS_SGI,
-     CONTEXT_FLOAT(Pixel.PostColorMatrixBias[3]), NO_EXTRA },
-
-   /* GL_EXT_convolution (also in 1.2 imaging) */
-   { GL_CONVOLUTION_1D_EXT, CONTEXT_BOOL(Pixel.Convolution1DEnabled),
-     extra_EXT_convolution },
-   { GL_CONVOLUTION_2D_EXT, CONTEXT_BOOL(Pixel.Convolution2DEnabled),
-     extra_EXT_convolution },
-   { GL_SEPARABLE_2D_EXT, CONTEXT_BOOL(Pixel.Separable2DEnabled),
-     extra_EXT_convolution },
-   { GL_POST_CONVOLUTION_RED_SCALE_EXT,
-     CONTEXT_FLOAT(Pixel.PostConvolutionScale[0]),
-     extra_EXT_convolution },
-   { GL_POST_CONVOLUTION_GREEN_SCALE_EXT,
-     CONTEXT_FLOAT(Pixel.PostConvolutionScale[1]),
-     extra_EXT_convolution },
-   { GL_POST_CONVOLUTION_BLUE_SCALE_EXT,
-     CONTEXT_FLOAT(Pixel.PostConvolutionScale[2]),
-     extra_EXT_convolution },
-   { GL_POST_CONVOLUTION_ALPHA_SCALE_EXT,
-     CONTEXT_FLOAT(Pixel.PostConvolutionScale[3]),
-     extra_EXT_convolution },
-   { GL_POST_CONVOLUTION_RED_BIAS_EXT,
-     CONTEXT_FLOAT(Pixel.PostConvolutionBias[0]),
-     extra_EXT_convolution },
-   { GL_POST_CONVOLUTION_GREEN_BIAS_EXT,
-     CONTEXT_FLOAT(Pixel.PostConvolutionBias[1]),
-     extra_EXT_convolution },
-   { GL_POST_CONVOLUTION_BLUE_BIAS_EXT,
-     CONTEXT_FLOAT(Pixel.PostConvolutionBias[2]),
-     extra_EXT_convolution },
-   { GL_POST_CONVOLUTION_ALPHA_BIAS_EXT,
-     CONTEXT_FLOAT(Pixel.PostConvolutionBias[3]),
-     extra_EXT_convolution },
-
-   /* GL_EXT_histogram / GL_ARB_imaging */
-   { GL_HISTOGRAM, CONTEXT_BOOL(Pixel.HistogramEnabled),
-     extra_EXT_histogram },
-   { GL_MINMAX, CONTEXT_BOOL(Pixel.MinMaxEnabled), extra_EXT_histogram },
-
-   /* GL_SGI_color_table / GL_ARB_imaging */
-   { GL_COLOR_TABLE_SGI,
-     CONTEXT_BOOL(Pixel.ColorTableEnabled[COLORTABLE_PRECONVOLUTION]),
-     extra_SGI_color_table },
-   { GL_POST_CONVOLUTION_COLOR_TABLE_SGI,
-     CONTEXT_BOOL(Pixel.ColorTableEnabled[COLORTABLE_POSTCONVOLUTION]),
-     extra_SGI_color_table },
-   { GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI,
-     CONTEXT_BOOL(Pixel.ColorTableEnabled[COLORTABLE_POSTCOLORMATRIX]),
-     extra_SGI_color_table },
 
    /* GL_SGI_texture_color_table */
    { GL_TEXTURE_COLOR_TABLE_SGI, LOC_TEXUNIT, TYPE_BOOLEAN,
@@ -1458,7 +1392,6 @@ find_custom_value(GLcontext *ctx, const struct value_desc *d, union value *v)
 
    case GL_MODELVIEW_STACK_DEPTH:
    case GL_PROJECTION_STACK_DEPTH:
-   case GL_COLOR_MATRIX_STACK_DEPTH_SGI:
       v->value_int = *(GLint *) ((char *) ctx + d->offset) + 1;
       break;
 
@@ -1674,6 +1607,12 @@ check_extra(GLcontext *ctx, const char *func, const struct value_desc *d)
 	 break;
       case EXTRA_VERSION_32:
 	 if (version >= 32) {
+	    total++;
+	    enabled++;
+	 }
+	 break;
+      case EXTRA_VERSION_ES2:
+	 if (ctx->API == API_OPENGLES2) {
 	    total++;
 	    enabled++;
 	 }

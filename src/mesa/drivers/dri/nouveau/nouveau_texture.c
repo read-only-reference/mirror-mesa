@@ -183,10 +183,15 @@ teximage_fits(struct gl_texture_object *t, int level)
 	struct nouveau_surface *s = &to_nouveau_texture(t)->surfaces[level];
 	struct gl_texture_image *ti = t->Image[0][level];
 
-	return ti && to_nouveau_teximage(ti)->surface.bo &&
-		(t->Target == GL_TEXTURE_RECTANGLE ||
-		 (s->bo && s->format == ti->TexFormat &&
-		  s->width == ti->Width && s->height == ti->Height));
+	if (!ti || !to_nouveau_teximage(ti)->surface.bo)
+		return GL_FALSE;
+
+	if (level == t->BaseLevel && (s->offset & 0x7f))
+		return GL_FALSE;
+
+	return t->Target == GL_TEXTURE_RECTANGLE ||
+		(s->bo && s->format == ti->TexFormat &&
+		 s->width == ti->Width && s->height == ti->Height);
 }
 
 static GLboolean
@@ -598,7 +603,7 @@ store_mipmap(GLcontext *ctx, GLenum target, int first, int last,
 		.BufferObj = ctx->Shared->NullBufferObj,
 		.Alignment = 1
 	};
-	GLenum format = t->Image[0][first]->TexFormat;
+	GLenum format = t->Image[0][t->BaseLevel]->TexFormat;
 	unsigned base_format, type, comps;
 	int i;
 

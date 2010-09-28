@@ -8,6 +8,7 @@ C_SOURCES = \
 	cso_cache/cso_context.c \
 	cso_cache/cso_hash.c \
 	draw/draw_context.c \
+	draw/draw_fs.c \
 	draw/draw_gs.c \
 	draw/draw_pipe.c \
 	draw/draw_pipe_aaline.c \
@@ -121,6 +122,7 @@ C_SOURCES = \
 	util/u_handle_table.c \
 	util/u_hash.c \
 	util/u_hash_table.c \
+	util/u_index_modify.c \
 	util/u_keymap.c \
 	util/u_linear.c \
 	util/u_linkage.c \
@@ -153,6 +155,7 @@ C_SOURCES = \
 GALLIVM_SOURCES = \
         gallivm/lp_bld_arit.c \
         gallivm/lp_bld_assert.c \
+        gallivm/lp_bld_bitarit.c \
         gallivm/lp_bld_const.c \
         gallivm/lp_bld_conv.c \
         gallivm/lp_bld_debug.c \
@@ -168,9 +171,11 @@ GALLIVM_SOURCES = \
         gallivm/lp_bld_printf.c \
         gallivm/lp_bld_quad.c \
         gallivm/lp_bld_sample.c \
+        gallivm/lp_bld_sample_aos.c \
         gallivm/lp_bld_sample_soa.c \
         gallivm/lp_bld_struct.c \
         gallivm/lp_bld_swizzle.c \
+        gallivm/lp_bld_tgsi_aos.c \
         gallivm/lp_bld_tgsi_soa.c \
         gallivm/lp_bld_type.c \
         draw/draw_llvm.c \

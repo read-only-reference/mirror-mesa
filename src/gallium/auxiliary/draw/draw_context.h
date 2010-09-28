@@ -39,12 +39,14 @@
 
 
 #include "pipe/p_state.h"
+#include "tgsi/tgsi_exec.h"
 
 struct pipe_context;
 struct draw_context;
 struct draw_stage;
 struct draw_vertex_shader;
 struct draw_geometry_shader;
+struct draw_fragment_shader;
 struct tgsi_sampler;
 
 #define DRAW_MAX_TEXTURE_LEVELS 13  /* 4K x 4K for now */
@@ -137,6 +139,17 @@ void draw_delete_vertex_shader(struct draw_context *draw,
 
 
 /*
+ * Fragment shader functions
+ */
+struct draw_fragment_shader *
+draw_create_fragment_shader(struct draw_context *draw,
+                            const struct pipe_shader_state *shader);
+void draw_bind_fragment_shader(struct draw_context *draw,
+                               struct draw_fragment_shader *dvs);
+void draw_delete_fragment_shader(struct draw_context *draw,
+                                 struct draw_fragment_shader *dvs);
+
+/*
  * Geometry shader functions
  */
 struct draw_geometry_shader *
@@ -224,5 +237,17 @@ void draw_set_force_passthrough( struct draw_context *draw,
 boolean draw_need_pipeline(const struct draw_context *draw,
                            const struct pipe_rasterizer_state *rasterizer,
                            unsigned prim );
+
+static INLINE int
+draw_get_shader_param(unsigned shader, enum pipe_cap param)
+{
+   switch(shader) {
+   case PIPE_SHADER_VERTEX:
+   case PIPE_SHADER_GEOMETRY:
+      return tgsi_exec_get_shader_param(param);
+   default:
+      return 0;
+   }
+}
 
 #endif /* DRAW_CONTEXT_H */

@@ -4,14 +4,12 @@
 #include "main/mtypes.h"
 #include "main/enums.h"
 #include "main/bufferobj.h"
-#include "main/convolve.h"
 #include "main/context.h"
 #include "main/formats.h"
 #include "main/texcompress.h"
 #include "main/texstore.h"
 #include "main/texgetimage.h"
 #include "main/texobj.h"
-#include "main/texstore.h"
 #include "main/teximage.h"
 
 #include "intel_context.h"
@@ -74,10 +72,7 @@ guess_and_alloc_mipmap_tree(struct intel_context *intel,
 
    DBG("%s\n", __FUNCTION__);
 
-   if (intelImage->base.Border ||
-       ((intelImage->base._BaseFormat == GL_DEPTH_COMPONENT) && 
-        ((intelObj->base.WrapS == GL_CLAMP_TO_BORDER) ||
-         (intelObj->base.WrapT == GL_CLAMP_TO_BORDER))))
+   if (intelImage->base.Border)
       return;
 
    if (intelImage->level > intelObj->base.BaseLevel &&
@@ -320,8 +315,6 @@ intelTexImage(GLcontext * ctx,
    struct intel_context *intel = intel_context(ctx);
    struct intel_texture_object *intelObj = intel_texture_object(texObj);
    struct intel_texture_image *intelImage = intel_texture_image(texImage);
-   GLint postConvWidth = width;
-   GLint postConvHeight = height;
    GLint texelBytes, sizeInBytes;
    GLuint dstRowStride = 0, srcRowStride = texImage->RowStride;
 
@@ -331,25 +324,14 @@ intelTexImage(GLcontext * ctx,
    intelImage->face = target_to_face(target);
    intelImage->level = level;
 
-   if (ctx->_ImageTransferState & IMAGE_CONVOLUTION_BIT) {
-      _mesa_adjust_image_for_convolution(ctx, dims, &postConvWidth,
-                                         &postConvHeight);
-   }
-
    if (_mesa_is_format_compressed(texImage->TexFormat)) {
       texelBytes = 0;
    }
    else {
       texelBytes = _mesa_get_format_bytes(texImage->TexFormat);
-      
-      /* Minimum pitch of 32 bytes */
-      if (postConvWidth * texelBytes < 32) {
-	 postConvWidth = 32 / texelBytes;
-	 texImage->RowStride = postConvWidth;
-      }
 
       if (!intelImage->mt) {      
-	  assert(texImage->RowStride == postConvWidth);
+	  assert(texImage->RowStride == width);
       }
    }
 
@@ -502,8 +484,8 @@ intelTexImage(GLcontext * ctx,
          assert(dims != 3);
       }
       else {
-         dstRowStride = postConvWidth * texelBytes;
-         sizeInBytes = depth * dstRowStride * postConvHeight;
+         dstRowStride = width * texelBytes;
+         sizeInBytes = depth * dstRowStride * height;
       }
 
       texImage->Data = _mesa_alloc_texmemory(sizeInBytes);
@@ -805,8 +787,8 @@ intel_image_target_texture_2d(GLcontext *ctx, GLenum target,
    __DRIimage *image;
 
    screen = intel->intelScreen->driScrnPriv;
-   image = screen->dri2.image->lookupEGLImage(intel->driContext, image_handle,
-					      intel->driContext->loaderPrivate);
+   image = screen->dri2.image->lookupEGLImage(screen, image_handle,
+					      screen->loaderPrivate);
    if (image == NULL)
       return;
 

@@ -55,6 +55,10 @@ struct draw_jit_texture
    uint32_t row_stride[DRAW_MAX_TEXTURE_LEVELS];
    uint32_t img_stride[DRAW_MAX_TEXTURE_LEVELS];
    const void *data[DRAW_MAX_TEXTURE_LEVELS];
+   float min_lod;
+   float max_lod;
+   float lod_bias;
+   float border_color[4];
 };
 
 enum {
@@ -65,6 +69,10 @@ enum {
    DRAW_JIT_TEXTURE_ROW_STRIDE,
    DRAW_JIT_TEXTURE_IMG_STRIDE,
    DRAW_JIT_TEXTURE_DATA,
+   DRAW_JIT_TEXTURE_MIN_LOD,
+   DRAW_JIT_TEXTURE_MAX_LOD,
+   DRAW_JIT_TEXTURE_LOD_BIAS,
+   DRAW_JIT_TEXTURE_BORDER_COLOR,
    DRAW_JIT_TEXTURE_NUM_FIELDS  /* number of fields above */
 };
 
@@ -273,6 +281,9 @@ draw_llvm_translate_from(LLVMBuilderRef builder,
 struct lp_build_sampler_soa *
 draw_llvm_sampler_soa_create(const struct lp_sampler_static_state *static_state,
                              LLVMValueRef context_ptr);
+
+void
+draw_llvm_set_sampler_state(struct draw_context *draw);
 
 void
 draw_llvm_set_mapped_texture(struct draw_context *draw,

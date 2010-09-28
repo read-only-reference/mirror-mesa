@@ -254,7 +254,7 @@ static void brw_vs_alloc_regs( struct brw_vs_compile *c )
    c->first_overflow_output = 0;
 
    if (intel->gen >= 6)
-      mrf = 4;
+      mrf = 3; /* no more pos store in attribute */
    else if (intel->gen == 5)
       mrf = 8;
    else
@@ -954,7 +954,7 @@ get_reladdr_constant(struct brw_vs_compile *c,
    struct brw_compile *p = &c->func;
    struct brw_reg const_reg = c->current_const[argIndex].reg;
    struct brw_reg addrReg = c->regs[PROGRAM_ADDRESS][0];
-   struct brw_reg byte_addr_reg = get_tmp(c);
+   struct brw_reg byte_addr_reg = retype(get_tmp(c), BRW_REGISTER_TYPE_D);
 
    assert(argIndex < 3);
 
@@ -1068,6 +1068,12 @@ move_to_reladdr_dst(struct brw_vs_compile *c,
    GLuint byte_offset = base.nr * 32 + base.subnr;
    struct brw_reg indirect = brw_vec4_indirect(0,0);
    struct brw_reg acc = retype(vec1(get_tmp(c)), BRW_REGISTER_TYPE_UW);
+
+   /* Because destination register indirect addressing can only use
+    * one index, we'll write each vertex's vec4 value separately.
+    */
+   val.width = BRW_WIDTH_4;
+   val.vstride = BRW_VERTICAL_STRIDE_4;
 
    brw_push_insn_state(p);
    brw_set_access_mode(p, BRW_ALIGN_1);
@@ -1386,8 +1392,11 @@ static void emit_vertex_write( struct brw_vs_compile *c)
 
       if (c->prog_data.outputs_written & BITFIELD64_BIT(VERT_RESULT_PSIZ)) {
 	 struct brw_reg psiz = c->regs[PROGRAM_OUTPUT][VERT_RESULT_PSIZ];
-	 brw_MUL(p, brw_writemask(header1, WRITEMASK_W), brw_swizzle1(psiz, 0), brw_imm_f(1<<11));
-	 brw_AND(p, brw_writemask(header1, WRITEMASK_W), header1, brw_imm_ud(0x7ff<<8));
+	 if (intel->gen < 6) {
+	     brw_MUL(p, brw_writemask(header1, WRITEMASK_W), brw_swizzle1(psiz, 0), brw_imm_f(1<<11));
+	     brw_AND(p, brw_writemask(header1, WRITEMASK_W), header1, brw_imm_ud(0x7ff<<8));
+	 } else
+	     brw_MOV(p, brw_writemask(header1, WRITEMASK_W), brw_swizzle1(psiz, 0));
       }
 
       for (i = 0; i < c->key.nr_userclip; i++) {
@@ -1445,8 +1454,7 @@ static void emit_vertex_write( struct brw_vs_compile *c)
        * position.
        */
       brw_MOV(p, brw_message_reg(2), pos);
-      brw_MOV(p, brw_message_reg(3), pos);
-      len_vertex_header = 2;
+      len_vertex_header = 1;
    } else if (intel->gen == 5) {
       /* There are 20 DWs (D0-D19) in VUE header on Ironlake:
        * dword 0-3 (m1) of the header is indices, point width, clip flags.
@@ -1626,6 +1634,10 @@ void brw_vs_emit(struct brw_vs_compile *c )
 			       GL_TRUE);
       printf("\n");
    }
+
+   /* FIXME Need to fix conditional instruction to remove this */
+   if (intel->gen >= 6)
+       p->single_program_flow = GL_TRUE;
 
    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
    brw_set_access_mode(p, BRW_ALIGN_16);

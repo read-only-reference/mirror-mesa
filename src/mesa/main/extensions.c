@@ -45,7 +45,7 @@ static const struct {
    int flag_offset;
 } default_extensions[] = {
    { OFF, "GL_ARB_blend_func_extended",        F(ARB_blend_func_extended) },
-   { OFF, "GL_ARB_copy_buffer",                F(ARB_copy_buffer) },
+   { ON,  "GL_ARB_copy_buffer",                F(ARB_copy_buffer) },
    { OFF, "GL_ARB_depth_buffer_float",         F(ARB_depth_buffer_float) },
    { OFF, "GL_ARB_depth_clamp",                F(ARB_depth_clamp) },
    { OFF, "GL_ARB_depth_texture",              F(ARB_depth_texture) },
@@ -58,10 +58,10 @@ static const struct {
    { OFF, "GL_ARB_fragment_shader",            F(ARB_fragment_shader) },
    { OFF, "GL_ARB_framebuffer_object",         F(ARB_framebuffer_object) },
    { OFF, "GL_ARB_explicit_attrib_location",   F(ARB_explicit_attrib_location) },
-   { OFF, "GL_ARB_geometry_shader4",           F(ARB_geometry_shader4) },
+   /* TODO: reenable this when the new GLSL compiler actually supports them */
+   /* { OFF, "GL_ARB_geometry_shader4",           F(ARB_geometry_shader4) }, */
    { OFF, "GL_ARB_half_float_pixel",           F(ARB_half_float_pixel) },
    { OFF, "GL_ARB_half_float_vertex",          F(ARB_half_float_vertex) },
-   { OFF, "GL_ARB_imaging",                    F(ARB_imaging) },
    { OFF, "GL_ARB_instanced_arrays",           F(ARB_instanced_arrays) },
    { OFF, "GL_ARB_map_buffer_range",           F(ARB_map_buffer_range) },
    { ON,  "GL_ARB_multisample",                F(ARB_multisample) },
@@ -76,7 +76,6 @@ static const struct {
    { OFF, "GL_ARB_seamless_cube_map",          F(ARB_seamless_cube_map) },
    { OFF, "GL_ARB_shader_objects",             F(ARB_shader_objects) },
    { OFF, "GL_ARB_shading_language_100",       F(ARB_shading_language_100) },
-   { OFF, "GL_ARB_shading_language_120",       F(ARB_shading_language_120) },
    { OFF, "GL_ARB_shadow",                     F(ARB_shadow) },
    { OFF, "GL_ARB_shadow_ambient",             F(ARB_shadow_ambient) },
    { OFF, "GL_ARB_sync",                       F(ARB_sync) },
@@ -115,9 +114,7 @@ static const struct {
    { OFF, "GL_EXT_blend_minmax",               F(EXT_blend_minmax) },
    { OFF, "GL_EXT_blend_subtract",             F(EXT_blend_subtract) },
    { OFF, "GL_EXT_clip_volume_hint",           F(EXT_clip_volume_hint) },
-   { OFF, "GL_EXT_cull_vertex",                F(EXT_cull_vertex) },
    { ON,  "GL_EXT_compiled_vertex_array",      F(EXT_compiled_vertex_array) },
-   { OFF, "GL_EXT_convolution",                F(EXT_convolution) },
    { ON,  "GL_EXT_copy_texture",               F(EXT_copy_texture) },
    { OFF, "GL_EXT_depth_bounds_test",          F(EXT_depth_bounds_test) },
    { OFF, "GL_EXT_draw_buffers2",              F(EXT_draw_buffers2) },
@@ -129,7 +126,6 @@ static const struct {
    { OFF, "GL_EXT_framebuffer_sRGB",           F(EXT_framebuffer_sRGB) },
    { OFF, "GL_EXT_fog_coord",                  F(EXT_fog_coord) },
    { OFF, "GL_EXT_gpu_program_parameters",     F(EXT_gpu_program_parameters) },
-   { OFF, "GL_EXT_histogram",                  F(EXT_histogram) },
    { ON,  "GL_EXT_multi_draw_arrays",          F(EXT_multi_draw_arrays) },
    { OFF, "GL_EXT_packed_depth_stencil",       F(EXT_packed_depth_stencil) },
    { OFF, "GL_EXT_packed_float",               F(EXT_packed_float) },
@@ -187,7 +183,6 @@ static const struct {
    { OFF, "GL_IBM_texture_mirrored_repeat",    F(ARB_texture_mirrored_repeat)},
    { OFF, "GL_INGR_blend_func_separate",       F(EXT_blend_func_separate) },
    { OFF, "GL_MESA_pack_invert",               F(MESA_pack_invert) },
-   { OFF, "GL_MESA_packed_depth_stencil",      F(MESA_packed_depth_stencil) },
    { OFF, "GL_MESA_resize_buffers",            F(MESA_resize_buffers) },
    { OFF, "GL_MESA_texture_array",             F(MESA_texture_array) },
    { OFF, "GL_MESA_texture_signed_rgba",       F(MESA_texture_signed_rgba) },
@@ -208,10 +203,8 @@ static const struct {
    { OFF, "GL_NV_vertex_program",              F(NV_vertex_program) },
    { OFF, "GL_NV_vertex_program1_1",           F(NV_vertex_program1_1) },
    { ON,  "GL_OES_read_format",                F(OES_read_format) },
-   { OFF, "GL_SGI_color_matrix",               F(SGI_color_matrix) },
-   { OFF, "GL_SGI_color_table",                F(SGI_color_table) },
    { OFF, "GL_SGI_texture_color_table",        F(SGI_texture_color_table) },
-   { OFF, "GL_SGIS_generate_mipmap",           F(SGIS_generate_mipmap) },
+   { ON,  "GL_SGIS_generate_mipmap",           F(SGIS_generate_mipmap) },
    { OFF, "GL_SGIS_texture_border_clamp",      F(ARB_texture_border_clamp) },
    { ON,  "GL_SGIS_texture_edge_clamp",        F(SGIS_texture_edge_clamp) },
    { ON,  "GL_SGIS_texture_lod",               F(SGIS_texture_lod) },
@@ -234,7 +227,7 @@ static const struct {
 void
 _mesa_enable_sw_extensions(GLcontext *ctx)
 {
-   ctx->Extensions.ARB_copy_buffer = GL_TRUE;
+   /*ctx->Extensions.ARB_copy_buffer = GL_TRUE;*/
    ctx->Extensions.ARB_depth_clamp = GL_TRUE;
    ctx->Extensions.ARB_depth_texture = GL_TRUE;
    /*ctx->Extensions.ARB_draw_buffers = GL_TRUE;*/
@@ -255,7 +248,6 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
 #endif
    ctx->Extensions.ARB_half_float_pixel = GL_TRUE;
    ctx->Extensions.ARB_half_float_vertex = GL_TRUE;
-   ctx->Extensions.ARB_imaging = GL_TRUE;
    ctx->Extensions.ARB_map_buffer_range = GL_TRUE;
    ctx->Extensions.ARB_multitexture = GL_TRUE;
 #if FEATURE_queryobj
@@ -267,9 +259,6 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
 #endif
 #if FEATURE_ARB_shading_language_100
    ctx->Extensions.ARB_shading_language_100 = GL_TRUE;
-#endif
-#if FEATURE_ARB_shading_language_120
-   ctx->Extensions.ARB_shading_language_120 = GL_TRUE;
 #endif
    ctx->Extensions.ARB_shadow = GL_TRUE;
    ctx->Extensions.ARB_shadow_ambient = GL_TRUE;
@@ -311,7 +300,6 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
    ctx->Extensions.EXT_blend_logic_op = GL_TRUE;
    ctx->Extensions.EXT_blend_minmax = GL_TRUE;
    ctx->Extensions.EXT_blend_subtract = GL_TRUE;
-   ctx->Extensions.EXT_convolution = GL_TRUE;
    ctx->Extensions.EXT_depth_bounds_test = GL_TRUE;
    ctx->Extensions.EXT_draw_buffers2 = GL_TRUE;
    ctx->Extensions.EXT_fog_coord = GL_TRUE;
@@ -324,7 +312,6 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
 #if FEATURE_ARB_framebuffer_object
    ctx->Extensions.EXT_framebuffer_multisample = GL_TRUE;
 #endif
-   ctx->Extensions.EXT_histogram = GL_TRUE;
    /*ctx->Extensions.EXT_multi_draw_arrays = GL_TRUE;*/
    ctx->Extensions.EXT_packed_depth_stencil = GL_TRUE;
    ctx->Extensions.EXT_paletted_texture = GL_TRUE;
@@ -374,10 +361,8 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
 #if FEATURE_NV_fragment_program && FEATURE_ARB_fragment_program
    ctx->Extensions.NV_fragment_program_option = GL_TRUE;
 #endif
-   ctx->Extensions.SGI_color_matrix = GL_TRUE;
-   ctx->Extensions.SGI_color_table = GL_TRUE;
    ctx->Extensions.SGI_texture_color_table = GL_TRUE;
-   ctx->Extensions.SGIS_generate_mipmap = GL_TRUE;
+   /*ctx->Extensions.SGIS_generate_mipmap = GL_TRUE;*/
    ctx->Extensions.SGIS_texture_edge_clamp = GL_TRUE;
 #if FEATURE_ARB_vertex_program || FEATURE_ARB_fragment_program
    ctx->Extensions.EXT_gpu_program_parameters = GL_TRUE;
@@ -395,20 +380,15 @@ _mesa_enable_sw_extensions(GLcontext *ctx)
 
 
 /**
- * Enable GL_ARB_imaging and all the EXT extensions that are subsets of it.
+ * Enable common EXT extensions in the ARB_imaging subset.
  */
 void
 _mesa_enable_imaging_extensions(GLcontext *ctx)
 {
-   ctx->Extensions.ARB_imaging = GL_TRUE;
    ctx->Extensions.EXT_blend_color = GL_TRUE;
    ctx->Extensions.EXT_blend_logic_op = GL_TRUE;
    ctx->Extensions.EXT_blend_minmax = GL_TRUE;
    ctx->Extensions.EXT_blend_subtract = GL_TRUE;
-   ctx->Extensions.EXT_convolution = GL_TRUE;
-   ctx->Extensions.EXT_histogram = GL_TRUE;
-   ctx->Extensions.SGI_color_matrix = GL_TRUE;
-   ctx->Extensions.SGI_color_table = GL_TRUE;
 }
 
 
@@ -455,7 +435,7 @@ _mesa_enable_1_4_extensions(GLcontext *ctx)
    ctx->Extensions.EXT_secondary_color = GL_TRUE;
    ctx->Extensions.EXT_stencil_wrap = GL_TRUE;
    ctx->Extensions.EXT_texture_lod_bias = GL_TRUE;
-   ctx->Extensions.SGIS_generate_mipmap = GL_TRUE;
+   /*ctx->Extensions.SGIS_generate_mipmap = GL_TRUE;*/
 }
 
 
@@ -511,9 +491,6 @@ _mesa_enable_2_1_extensions(GLcontext *ctx)
 #endif
 #if FEATURE_EXT_texture_sRGB
    ctx->Extensions.EXT_texture_sRGB = GL_TRUE;
-#endif
-#if FEATURE_ARB_shading_language_120
-   ctx->Extensions.ARB_shading_language_120 = GL_TRUE;
 #endif
 }
 
@@ -969,7 +946,7 @@ _mesa_get_extension_count(GLcontext *ctx)
 
    if (0)
       _mesa_debug(ctx, "%u of %d extensions enabled\n", ctx->Extensions.Count,
-                  Elements(default_extensions));
+                  (int) Elements(default_extensions));
 
    return ctx->Extensions.Count;
 }

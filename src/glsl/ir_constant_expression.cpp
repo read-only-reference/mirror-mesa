@@ -89,9 +89,9 @@ ir_expression::constant_expression_value()
    if (op[0]->type->is_array()) {
       assert(op[1] != NULL && op[1]->type->is_array());
       switch (this->operation) {
-      case ir_binop_equal:
+      case ir_binop_all_equal:
 	 return new(ctx) ir_constant(op[0]->has_value(op[1]));
-      case ir_binop_nequal:
+      case ir_binop_any_nequal:
 	 return new(ctx) ir_constant(!op[0]->has_value(op[1]));
       default:
 	 break;
@@ -622,11 +622,46 @@ ir_expression::constant_expression_value()
 	 assert(0);
       }
       break;
-
    case ir_binop_equal:
-      data.b[0] = op[0]->has_value(op[1]);
+      assert(op[0]->type == op[1]->type);
+      for (unsigned c = 0; c < components; c++) {
+	 switch (op[0]->type->base_type) {
+	 case GLSL_TYPE_UINT:
+	    data.b[c] = op[0]->value.u[c] == op[1]->value.u[c];
+	    break;
+	 case GLSL_TYPE_INT:
+	    data.b[c] = op[0]->value.i[c] == op[1]->value.i[c];
+	    break;
+	 case GLSL_TYPE_FLOAT:
+	    data.b[c] = op[0]->value.f[c] == op[1]->value.f[c];
+	    break;
+	 default:
+	    assert(0);
+	 }
+      }
       break;
    case ir_binop_nequal:
+      assert(op[0]->type != op[1]->type);
+      for (unsigned c = 0; c < components; c++) {
+	 switch (op[0]->type->base_type) {
+	 case GLSL_TYPE_UINT:
+	    data.b[c] = op[0]->value.u[c] != op[1]->value.u[c];
+	    break;
+	 case GLSL_TYPE_INT:
+	    data.b[c] = op[0]->value.i[c] != op[1]->value.i[c];
+	    break;
+	 case GLSL_TYPE_FLOAT:
+	    data.b[c] = op[0]->value.f[c] != op[1]->value.f[c];
+	    break;
+	 default:
+	    assert(0);
+	 }
+      }
+      break;
+   case ir_binop_all_equal:
+      data.b[0] = op[0]->has_value(op[1]);
+      break;
+   case ir_binop_any_nequal:
       data.b[0] = !op[0]->has_value(op[1]);
       break;
 
@@ -785,7 +820,7 @@ ir_call::constant_expression_value()
     * "Function calls to user-defined functions (non-built-in functions)
     *  cannot be used to form constant expressions."
     */
-   if (!this->callee->function()->is_builtin)
+   if (!this->callee->is_builtin)
       return NULL;
 
    unsigned num_parameters = 0;

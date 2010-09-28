@@ -40,7 +40,6 @@
 #include "i915_reg.h"
 #include "i915_program.h"
 
-#include "intel_tris.h"
 #include "intel_span.h"
 
 /***************************************
@@ -108,9 +107,6 @@ i915CreateContext(int api,
    if (!i915)
       return GL_FALSE;
 
-   if (0)
-      printf("\ntexmem-0-3 branch\n\n");
-
    i915InitVtbl(i915);
 
    i915InitDriverFunctions(&functions);
@@ -174,7 +170,12 @@ i915CreateContext(int api,
 
    ctx->FragmentProgram._MaintainTexEnvProgram = GL_TRUE;
 
-   ctx->Shader.EmitNoIfs = GL_TRUE;
+   /* FINISHME: Are there other options that should be enabled for software
+    * FINISHME: vertex shaders?
+    */
+   ctx->ShaderCompilerOptions[MESA_SHADER_VERTEX].EmitCondCodes = GL_TRUE;
+   ctx->ShaderCompilerOptions[MESA_SHADER_FRAGMENT].EmitNoIfs = GL_TRUE;
+   ctx->ShaderCompilerOptions[MESA_SHADER_FRAGMENT].EmitNoNoise = GL_TRUE;
 
    ctx->Const.MaxDrawBuffers = 1;
 

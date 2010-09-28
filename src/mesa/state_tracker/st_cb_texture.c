@@ -240,6 +240,12 @@ get_texture_dims(GLenum target)
       return 1;
    case GL_TEXTURE_2D:
    case GL_TEXTURE_CUBE_MAP_ARB:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_X_ARB:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_Y_ARB:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y_ARB:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_Z_ARB:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB:
    case GL_TEXTURE_RECTANGLE_NV:
    case GL_TEXTURE_2D_ARRAY_EXT:
       return 2;
@@ -538,12 +544,6 @@ st_TexImage(GLcontext * ctx,
 
    DBG("%s target %s level %d %dx%dx%d border %d\n", __FUNCTION__,
        _mesa_lookup_enum_by_nr(target), level, width, height, depth, border);
-
-   /* The Mesa/Gallium state tracker does not implement the imaging extensions
-    * such as convolution.
-    */
-   assert(!ctx->Extensions.ARB_imaging);
-   assert(!ctx->Extensions.EXT_convolution);
 
    /* switch to "normal" */
    if (stObj->surface_based) {
@@ -995,6 +995,8 @@ st_get_tex_image(GLcontext * ctx, GLenum target, GLint level,
    texImage->Depth = 1;
 
    dest = (GLubyte *) pixels;
+
+   _mesa_set_fetch_functions(texImage, get_texture_dims(target));
 
    for (i = 0; i < depth; i++) {
       if (compressed_dst) {
@@ -1996,7 +1998,6 @@ st_init_texture_functions(struct dd_function_table *functions)
    functions->NewTextureImage = st_NewTextureImage;
    functions->DeleteTexture = st_DeleteTextureObject;
    functions->FreeTexImageData = st_FreeTextureImageData;
-   functions->UpdateTexturePalette = 0;
 
    functions->TextureMemCpy = do_memcpy;
 

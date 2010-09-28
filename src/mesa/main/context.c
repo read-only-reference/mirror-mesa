@@ -86,7 +86,6 @@
 #include "blend.h"
 #include "buffers.h"
 #include "bufferobj.h"
-#include "colortab.h"
 #include "context.h"
 #include "cpuinfo.h"
 #include "debug.h"
@@ -98,7 +97,6 @@
 #include "feedback.h"
 #include "fog.h"
 #include "framebuffer.h"
-#include "histogram.h"
 #include "hint.h"
 #include "hash.h"
 #include "light.h"
@@ -111,9 +109,7 @@
 #include "points.h"
 #include "polygon.h"
 #include "queryobj.h"
-#if FEATURE_ARB_sync
 #include "syncobj.h"
-#endif
 #include "rastpos.h"
 #include "remap.h"
 #include "scissor.h"
@@ -344,7 +340,6 @@ static void
 dummy_enum_func(void)
 {
    gl_buffer_index bi = BUFFER_FRONT_LEFT;
-   gl_colortable_index ci = COLORTABLE_PRECONVOLUTION;
    gl_face_index fi = FACE_POS_X;
    gl_frag_attrib fa = FRAG_ATTRIB_WPOS;
    gl_frag_result fr = FRAG_RESULT_DEPTH;
@@ -355,7 +350,6 @@ dummy_enum_func(void)
    gl_geom_result gr = GEOM_RESULT_POS;
 
    (void) bi;
-   (void) ci;
    (void) fi;
    (void) fa;
    (void) fr;
@@ -562,8 +556,6 @@ _mesa_init_constants(GLcontext *ctx)
    ctx->Const.MaxLineWidthAA = MAX_LINE_WIDTH;
    ctx->Const.LineWidthGranularity = (GLfloat) LINE_WIDTH_GRANULARITY;
    ctx->Const.MaxColorTableSize = MAX_COLOR_TABLE_SIZE;
-   ctx->Const.MaxConvolutionWidth = MAX_CONVOLUTION_WIDTH;
-   ctx->Const.MaxConvolutionHeight = MAX_CONVOLUTION_HEIGHT;
    ctx->Const.MaxClipPlanes = MAX_CLIP_PLANES;
    ctx->Const.MaxLights = MAX_LIGHTS;
    ctx->Const.MaxShininess = 128.0;
@@ -598,6 +590,21 @@ _mesa_init_constants(GLcontext *ctx)
    ctx->Const.MaxCombinedTextureImageUnits = MAX_COMBINED_TEXTURE_IMAGE_UNITS;
    ctx->Const.MaxVarying = MAX_VARYING;
 #endif
+
+   /* Shading language version */
+   if (ctx->API == API_OPENGL) {
+#if FEATURE_ARB_shading_language_120
+      ctx->Const.GLSLVersion = 120;
+#else
+      ctx->Const.GLSLVersion = 110;
+#endif
+   }
+   else if (ctx->API == API_OPENGLES2) {
+      ctx->Const.GLSLVersion = 100;
+   }
+   else if (ctx->API == API_OPENGLES) {
+      ctx->Const.GLSLVersion = 0; /* GLSL not supported */
+   }
 
    /* GL_ARB_framebuffer_object */
    ctx->Const.MaxSamples = 0;
@@ -716,7 +723,6 @@ init_attrib_groups(GLcontext *ctx)
    _mesa_init_attrib( ctx );
    _mesa_init_buffer_objects( ctx );
    _mesa_init_color( ctx );
-   _mesa_init_colortables( ctx );
    _mesa_init_current( ctx );
    _mesa_init_depth( ctx );
    _mesa_init_debug( ctx );
@@ -725,7 +731,6 @@ init_attrib_groups(GLcontext *ctx)
    _mesa_init_fbobjects( ctx );
    _mesa_init_feedback( ctx );
    _mesa_init_fog( ctx );
-   _mesa_init_histogram( ctx );
    _mesa_init_hint( ctx );
    _mesa_init_line( ctx );
    _mesa_init_lighting( ctx );
@@ -737,9 +742,7 @@ init_attrib_groups(GLcontext *ctx)
    _mesa_init_polygon( ctx );
    _mesa_init_program( ctx );
    _mesa_init_queryobj( ctx );
-#if FEATURE_ARB_sync
    _mesa_init_sync( ctx );
-#endif
    _mesa_init_rastpos( ctx );
    _mesa_init_scissor( ctx );
    _mesa_init_shader_state( ctx );
@@ -1096,13 +1099,10 @@ _mesa_free_context_data( GLcontext *ctx )
    _mesa_free_texture_data( ctx );
    _mesa_free_matrix_data( ctx );
    _mesa_free_viewport_data( ctx );
-   _mesa_free_colortables_data( ctx );
    _mesa_free_program_data(ctx);
    _mesa_free_shader_state(ctx);
    _mesa_free_queryobj_data(ctx);
-#if FEATURE_ARB_sync
    _mesa_free_sync_data(ctx);
-#endif
    _mesa_free_varray_data(ctx);
    _mesa_free_transform_feedback(ctx);
 
@@ -1298,6 +1298,9 @@ check_compatible(const GLcontext *ctx, const GLframebuffer *buffer)
    const GLvisual *bufvis = &buffer->Visual;
 
    if (ctxvis == bufvis)
+      return GL_TRUE;
+
+   if (buffer == _mesa_get_incomplete_framebuffer())
       return GL_TRUE;
 
 #if 0
@@ -1704,7 +1707,7 @@ _mesa_valid_to_render(GLcontext *ctx, const char *where)
       /* using shaders */
       if (!ctx->Shader.CurrentProgram->LinkStatus) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
-                     "%s(shader not linked), where");
+                     "%s(shader not linked)", where);
          return GL_FALSE;
       }
 #if 0 /* not normally enabled */

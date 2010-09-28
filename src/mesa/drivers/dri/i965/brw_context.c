@@ -41,7 +41,6 @@
 #include "intel_span.h"
 #include "tnl/t_pipeline.h"
 
-
 /***************************************
  * Mesa's Driver Functions
  ***************************************/
@@ -66,6 +65,7 @@ GLboolean brwCreateContext( int api,
    struct brw_context *brw = (struct brw_context *) CALLOC_STRUCT(brw_context);
    struct intel_context *intel = &brw->intel;
    GLcontext *ctx = &intel->ctx;
+   unsigned i;
 
    if (!brw) {
       printf("%s: failed to alloc context\n", __FUNCTION__);
@@ -110,8 +110,19 @@ GLboolean brwCreateContext( int api,
    ctx->Const.MaxPointSizeAA = 255.0;
 
    /* We want the GLSL compiler to emit code that uses condition codes */
-   ctx->Shader.EmitCondCodes = GL_TRUE;
-   ctx->Shader.EmitNVTempInitialization = GL_TRUE;
+   for (i = 0; i <= MESA_SHADER_FRAGMENT; i++) {
+      ctx->ShaderCompilerOptions[i].EmitCondCodes = GL_TRUE;
+      ctx->ShaderCompilerOptions[i].EmitNVTempInitialization = GL_TRUE;
+      ctx->ShaderCompilerOptions[i].EmitNoNoise = GL_TRUE;
+      ctx->ShaderCompilerOptions[i].EmitNoMainReturn = GL_TRUE;
+      ctx->ShaderCompilerOptions[i].EmitNoIndirectInput = GL_TRUE;
+      ctx->ShaderCompilerOptions[i].EmitNoIndirectOutput = GL_TRUE;
+
+      ctx->ShaderCompilerOptions[i].EmitNoIndirectUniform =
+	 (i == MESA_SHADER_FRAGMENT);
+      ctx->ShaderCompilerOptions[i].EmitNoIndirectTemp =
+	 (i == MESA_SHADER_FRAGMENT);
+   }
 
    ctx->Const.VertexProgram.MaxNativeInstructions = (16 * 1024);
    ctx->Const.VertexProgram.MaxAluInstructions = 0;

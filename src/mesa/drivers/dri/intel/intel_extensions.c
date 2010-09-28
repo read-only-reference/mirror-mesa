@@ -31,7 +31,6 @@
 #include "utils.h"
 
 
-#define need_GL_ARB_copy_buffer
 #define need_GL_ARB_draw_elements_base_vertex
 #define need_GL_ARB_framebuffer_object
 #define need_GL_ARB_map_buffer_range
@@ -47,7 +46,6 @@
 #define need_GL_EXT_blend_equation_separate
 #define need_GL_EXT_blend_func_separate
 #define need_GL_EXT_blend_minmax
-#define need_GL_EXT_cull_vertex
 #define need_GL_EXT_draw_buffers2
 #define need_GL_EXT_fog_coord
 #define need_GL_EXT_framebuffer_blit
@@ -79,7 +77,6 @@
  * i965_dri.
  */
 static const struct dri_extension card_extensions[] = {
-   { "GL_ARB_copy_buffer",                GL_ARB_copy_buffer_functions },
    { "GL_ARB_draw_elements_base_vertex",  GL_ARB_draw_elements_base_vertex_functions },
    { "GL_ARB_half_float_pixel",           NULL },
    { "GL_ARB_map_buffer_range",           GL_ARB_map_buffer_range_functions },
@@ -89,7 +86,6 @@ static const struct dri_extension card_extensions[] = {
    { "GL_ARB_point_sprite",               NULL },
    { "GL_ARB_shader_objects",             GL_ARB_shader_objects_functions },
    { "GL_ARB_shading_language_100",       GL_VERSION_2_0_functions },
-   { "GL_ARB_shading_language_120",       GL_VERSION_2_1_functions },
    { "GL_ARB_sync",                       GL_ARB_sync_functions },
    { "GL_ARB_texture_border_clamp",       NULL },
    { "GL_ARB_texture_cube_map",           NULL },
@@ -109,7 +105,6 @@ static const struct dri_extension card_extensions[] = {
    { "GL_EXT_blend_minmax",               GL_EXT_blend_minmax_functions },
    { "GL_EXT_blend_logic_op",             NULL },
    { "GL_EXT_blend_subtract",             NULL },
-   { "GL_EXT_cull_vertex",                GL_EXT_cull_vertex_functions },
    { "GL_EXT_framebuffer_blit",         GL_EXT_framebuffer_blit_functions },
    { "GL_EXT_framebuffer_object",       GL_EXT_framebuffer_object_functions },
    { "GL_EXT_framebuffer_multisample",    GL_EXT_framebuffer_multisample_functions },
@@ -133,7 +128,6 @@ static const struct dri_extension card_extensions[] = {
    { "GL_NV_blend_square",                NULL },
    { "GL_NV_vertex_program",              GL_NV_vertex_program_functions },
    { "GL_NV_vertex_program1_1",           NULL },
-   { "GL_SGIS_generate_mipmap",           NULL },
 #if FEATURE_OES_EGL_image
    { "GL_OES_EGL_image",                  GL_OES_EGL_image_functions },
 #endif
@@ -209,9 +203,10 @@ intelInitExtensions(GLcontext *ctx)
 {
    struct intel_context *intel = intel_context(ctx);
 
-   /* Disable imaging extension until convolution is working in teximage paths.
-    */
    driInitExtensions(ctx, card_extensions, GL_FALSE);
+
+   _mesa_map_function_array(GL_VERSION_2_1_functions);
+   ctx->Const.GLSLVersion = 120;
 
    if (intel->gen >= 5)
       driInitExtensions(ctx, ironlake_extensions, GL_FALSE);

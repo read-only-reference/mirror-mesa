@@ -457,7 +457,7 @@ cross_validate_outputs_to_inputs(struct gl_shader_program *prog,
 	  */
 	 if (input->type != output->type) {
 	    linker_error_printf(prog,
-				"%s shader output `%s' delcared as "
+				"%s shader output `%s' declared as "
 				"type `%s', but %s shader input declared "
 				"as type `%s'\n",
 				producer_stage, output->name,
@@ -740,14 +740,14 @@ link_intrastage_shaders(GLcontext *ctx,
 	       ir_function_signature *sig =
 		  (ir_function_signature *) iter.get();
 
-	       if (!sig->is_defined || f->is_builtin)
+	       if (!sig->is_defined || sig->is_builtin)
 		  continue;
 
 	       ir_function_signature *other_sig =
 		  other->exact_matching_signature(& sig->parameters);
 
 	       if ((other_sig != NULL) && other_sig->is_defined
-		   && !other_sig->function()->is_builtin) {
+		   && !other_sig->is_builtin) {
 		  linker_error_printf(prog,
 				      "function `%s' is multiply defined",
 				      f->name);
@@ -857,13 +857,15 @@ struct uniform_node {
 
  */
 static void
-update_uniform_array_sizes(struct gl_shader_program *prog)
+update_array_sizes(struct gl_shader_program *prog)
 {
    for (unsigned i = 0; i < prog->_NumLinkedShaders; i++) {
       foreach_list(node, prog->_LinkedShaders[i]->ir) {
 	 ir_variable *const var = ((ir_instruction *) node)->as_variable();
 
-	 if ((var == NULL) || (var->mode != ir_var_uniform) ||
+	 if ((var == NULL) || (var->mode != ir_var_uniform &&
+			       var->mode != ir_var_in &&
+			       var->mode != ir_var_out) ||
 	     !var->type->is_array())
 	    continue;
 
@@ -880,6 +882,7 @@ update_uniform_array_sizes(struct gl_shader_program *prog)
 	       }
 	    }
 	 }
+
 	 if (size + 1 != var->type->fields.array->length) {
 	    var->type = glsl_type::get_array_instance(var->type->fields.array,
 						      size + 1);
@@ -978,8 +981,6 @@ assign_uniform_locations(struct gl_shader_program *prog)
    hash_table *ht = hash_table_ctor(32, hash_table_string_hash,
 				    hash_table_string_compare);
    void *mem_ctx = talloc_new(NULL);
-
-   update_uniform_array_sizes(prog);
 
    for (unsigned i = 0; i < prog->_NumLinkedShaders; i++) {
       unsigned next_position = 0;
@@ -1402,9 +1403,10 @@ link_shaders(GLcontext *ctx, struct gl_shader_program *prog)
     * match shading language versions.  With GLSL 1.30 and later, the versions
     * of all shaders must match.
     */
-   assert(min_version >= 110);
+   assert(min_version >= 100);
    assert(max_version <= 130);
-   if ((max_version >= 130) && (min_version != max_version)) {
+   if ((max_version >= 130 || min_version == 100)
+       && min_version != max_version) {
       linker_error_printf(prog, "all shaders must use same shading "
 			  "language version\n");
       goto done;
@@ -1470,13 +1472,15 @@ link_shaders(GLcontext *ctx, struct gl_shader_program *prog)
     * some of that unused.
     */
    for (unsigned i = 0; i < prog->_NumLinkedShaders; i++) {
-      while (do_common_optimization(prog->_LinkedShaders[i]->ir, true))
+      while (do_common_optimization(prog->_LinkedShaders[i]->ir, true, 32))
 	 ;
    }
 
+   update_array_sizes(prog);
+
    assign_uniform_locations(prog);
 
-   if (prog->_LinkedShaders[0]->Type == GL_VERTEX_SHADER) {
+   if (prog->_NumLinkedShaders && prog->_LinkedShaders[0]->Type == GL_VERTEX_SHADER) {
       /* FINISHME: The value of the max_attribute_index parameter is
        * FINISHME: implementation dependent based on the value of
        * FINISHME: GL_MAX_VERTEX_ATTRIBS.  GL_MAX_VERTEX_ATTRIBS must be

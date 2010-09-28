@@ -134,12 +134,16 @@ ir_loop::clone(void *mem_ctx, struct hash_table *ht) const
       new_loop->body_instructions.push_tail(ir->clone(mem_ctx, ht));
    }
 
+   new_loop->cmp = this->cmp;
    return new_loop;
 }
 
 ir_call *
 ir_call::clone(void *mem_ctx, struct hash_table *ht) const
 {
+   if (this->type == glsl_type::error_type)
+      return ir_call::get_error_instruction(mem_ctx);
+
    exec_list new_parameters;
 
    foreach_iter(exec_list_iterator, iter, this->actual_parameters) {
@@ -249,8 +253,6 @@ ir_function::clone(void *mem_ctx, struct hash_table *ht) const
 {
    ir_function *copy = new(mem_ctx) ir_function(this->name);
 
-   copy->is_builtin = this->is_builtin;
-
    foreach_list_const(node, &this->signatures) {
       const ir_function_signature *const sig =
 	 (const ir_function_signature *const) node;
@@ -273,6 +275,7 @@ ir_function_signature::clone(void *mem_ctx, struct hash_table *ht) const
       new(mem_ctx) ir_function_signature(this->return_type);
 
    copy->is_defined = this->is_defined;
+   copy->is_builtin = this->is_builtin;
 
    /* Clone the parameter list.
     */

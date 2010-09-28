@@ -200,7 +200,6 @@ void evergreen_Map_Vertex_Program(GLcontext *ctx,
                         struct evergreen_vertex_program *vp,
 						struct gl_vertex_program   *mesa_vp)
 {
-    GLuint ui;
     r700_AssemblerBase *pAsm = &(vp->r700AsmCode);
 	unsigned int num_inputs;
 
@@ -225,13 +224,6 @@ void evergreen_Map_Vertex_Program(GLcontext *ctx,
 	pAsm->starting_export_register_number = pAsm->number_used_registers;
 
 	pAsm->number_used_registers += pAsm->number_of_exports;
-
-    pAsm->pucOutMask = (unsigned char*) MALLOC(pAsm->number_of_exports);
-
-    for(ui=0; ui<pAsm->number_of_exports; ui++)
-    {
-        pAsm->pucOutMask[ui] = 0x0;
-    }
 
     /* Map temporary registers (GPRs) */
     pAsm->starting_temp_register_number = pAsm->number_used_registers;
@@ -663,6 +655,7 @@ GLboolean evergreenSetupVPconstants(GLcontext * ctx)
     struct gl_program_parameter_list *paramList;
     unsigned int unNumParamData;
     unsigned int ui;
+    int alloc_size;
 
     /* sent out shader constants. */
     paramList = vp->mesa_program->Base.Parameters;
@@ -685,6 +678,9 @@ GLboolean evergreenSetupVPconstants(GLcontext * ctx)
 
 	    unNumParamData = paramList->NumParameters;
 
+	    /* alloc multiple of 16 constants */
+	    alloc_size = ((unNumParamData * 4 * 4) + 255) & ~255;
+
 	    for(ui=0; ui<unNumParamData; ui++) {
             if(paramList->Parameters[ui].Type == PROGRAM_UNIFORM) 
             {
@@ -705,7 +701,7 @@ GLboolean evergreenSetupVPconstants(GLcontext * ctx)
         radeonAllocDmaRegion(&context->radeon, 
                              &context->vp_Constbo, 
                              &context->vp_bo_offset, 
-                             256, 
+			     alloc_size,
                              256);        
         r600EmitShaderConsts(ctx,
                              context->vp_Constbo,
@@ -733,4 +729,7 @@ GLboolean evergreenSetupVPconstants(GLcontext * ctx)
         }
         unConstOffset += pCompiledSub->NumParameters;
     }
+
+    return GL_TRUE;
 }
+

@@ -65,6 +65,7 @@ struct pipe_framebuffer_state;
 struct lp_fragment_shader_variant;
 struct lp_jit_context;
 struct llvmpipe_query;
+struct pipe_fence_handle;
 
 
 struct lp_setup_context *
@@ -78,8 +79,6 @@ lp_setup_clear(struct lp_setup_context *setup,
                unsigned clear_stencil,
                unsigned flags);
 
-struct pipe_fence_handle *
-lp_setup_fence( struct lp_setup_context *setup );
 
 
 void
@@ -108,7 +107,8 @@ void
 lp_setup_set_point_state( struct lp_setup_context *setup,
                           float point_size,                          
                           boolean point_size_per_vertex,
-                          uint sprite);
+                          uint sprite_coord_enable,
+                          uint sprite_coord_origin);
 
 void
 lp_setup_set_fs_inputs( struct lp_setup_context *setup,
@@ -144,6 +144,11 @@ void
 lp_setup_set_fragment_sampler_views(struct lp_setup_context *setup,
                                     unsigned num,
                                     struct pipe_sampler_view **views);
+
+void
+lp_setup_set_fragment_sampler_state(struct lp_setup_context *setup,
+                                    unsigned num,
+                                    const struct pipe_sampler_state **samplers);
 
 unsigned
 lp_setup_is_resource_referenced( const struct lp_setup_context *setup,

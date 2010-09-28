@@ -43,6 +43,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/extensions.h"
 #include "main/bufferobj.h"
 #include "main/texobj.h"
+#include "main/points.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -145,7 +146,6 @@ static const struct dri_extension card_extensions[] = {
   {"GL_MESAX_texture_float",		NULL},
   {"GL_NV_blend_square",		NULL},
   {"GL_NV_vertex_program",		GL_NV_vertex_program_functions},
-  {"GL_SGIS_generate_mipmap",		NULL},
   {"GL_ARB_pixel_buffer_object",        NULL},
   {"GL_ARB_draw_elements_base_vertex",	GL_ARB_draw_elements_base_vertex_functions },
   {NULL,				NULL}
@@ -165,7 +165,6 @@ static const struct dri_extension mm_extensions[] = {
 static const struct dri_extension gl_20_extension[] = {
 #ifdef R600_ENABLE_GLSL_TEST
     {"GL_ARB_shading_language_100",			GL_VERSION_2_0_functions },
-    {"GL_ARB_shading_language_120",			GL_VERSION_2_1_functions },
 #else
   {"GL_VERSION_2_0",			GL_VERSION_2_0_functions },
 #endif /* R600_ENABLE_GLSL_TEST */
@@ -227,7 +226,7 @@ static void r600_emit_query_finish(radeonContextPtr radeon)
 
 	BEGIN_BATCH_NO_AUTOSTATE(4 + 2);
 	R600_OUT_BATCH(CP_PACKET3(R600_IT_EVENT_WRITE, 2));
-	R600_OUT_BATCH(ZPASS_DONE);
+	R600_OUT_BATCH(R600_EVENT_TYPE(ZPASS_DONE) | R600_EVENT_INDEX(1));
 	R600_OUT_BATCH(query->curr_offset + 8); /* hw writes qwords */
 	R600_OUT_BATCH(0x00000000);
 	R600_OUT_BATCH_RELOC(VGT_EVENT_INITIATOR, query->bo, 0, 0, RADEON_GEM_DOMAIN_GTT, 0);
@@ -264,6 +263,8 @@ static void r600InitConstValues(GLcontext *ctx, radeonScreenPtr screen)
     {
         r700->bShaderUseMemConstant = GL_FALSE;
     }
+
+        ctx->Const.GLSLVersion = 120;
 
 	ctx->Const.MaxTextureImageUnits = 16;
 	/* 8 per clause on r6xx, 16 on r7xx
@@ -337,6 +338,9 @@ static void r600ParseOptions(context_t *r600, radeonScreenPtr screen)
 static void r600InitGLExtensions(GLcontext *ctx)
 {
 	context_t *r600 = R700_CONTEXT(ctx);
+#ifdef R600_ENABLE_GLSL_TEST
+	unsigned i;
+#endif
 
 	driInitExtensions(ctx, card_extensions, GL_TRUE);
 	if (r600->radeon.radeonScreen->kernel_mm)
@@ -346,8 +350,9 @@ static void r600InitGLExtensions(GLcontext *ctx)
     driInitExtensions(ctx, gl_20_extension, GL_TRUE);
     _mesa_enable_2_0_extensions(ctx);
     
-    /* glsl compiler has problem if this is not GL_TRUE */
-    ctx->Shader.EmitCondCodes = GL_TRUE;
+	/* glsl compiler has problem if this is not GL_TRUE */
+	for (i = 0; i <= MESA_SHADER_FRAGMENT; i++)
+		ctx->ShaderCompilerOptions[i].EmitCondCodes = GL_TRUE;
 #endif /* R600_ENABLE_GLSL_TEST */
 
 	if (driQueryOptionb
@@ -454,6 +459,9 @@ GLboolean r600CreateContext(gl_api api,
 	ctx->FragmentProgram._MaintainTexEnvProgram = GL_TRUE;
 
 	r600InitConstValues(ctx, screen);
+
+	/* reinit, it depends on consts above */
+	_mesa_init_point(ctx);
 
 	_mesa_set_mvp_with_dp4( ctx, GL_TRUE );
 

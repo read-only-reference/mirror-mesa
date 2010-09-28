@@ -89,7 +89,7 @@ static const float * get_rc_constant_state(
 {
     struct r300_textures_state* texstate = r300->textures_state.state;
     static float vec[4] = { 0.0, 0.0, 0.0, 1.0 };
-    struct pipe_resource *tex;
+    struct r300_texture *tex;
 
     assert(constant->Type == RC_CONSTANT_STATE);
 
@@ -97,9 +97,17 @@ static const float * get_rc_constant_state(
         /* Factor for converting rectangle coords to
          * normalized coords. Should only show up on non-r500. */
         case RC_STATE_R300_TEXRECT_FACTOR:
-            tex = texstate->sampler_views[constant->u.State[1]]->base.texture;
-            vec[0] = 1.0 / tex->width0;
-            vec[1] = 1.0 / tex->height0;
+            tex = r300_texture(texstate->sampler_views[constant->u.State[1]]->base.texture);
+            vec[0] = 1.0 / tex->desc.width0;
+            vec[1] = 1.0 / tex->desc.height0;
+            break;
+
+        case RC_STATE_R300_TEXSCALE_FACTOR:
+            tex = r300_texture(texstate->sampler_views[constant->u.State[1]]->base.texture);
+            /* Add a small number to the texture size to work around rounding errors in hw. */
+            vec[0] = tex->desc.b.b.width0  / (tex->desc.width0  + 0.001f);
+            vec[1] = tex->desc.b.b.height0 / (tex->desc.height0 + 0.001f);
+            vec[2] = tex->desc.b.b.depth0  / (tex->desc.depth0  + 0.001f);
             break;
 
         case RC_STATE_R300_VIEWPORT_SCALE:
@@ -299,6 +307,10 @@ void r300_emit_gpu_flush(struct r300_context *r300, unsigned size, void *state)
         height = surf->cbzb_height;
         width = surf->cbzb_width;
     }
+
+    DBG(r300, DBG_SCISSOR,
+	"r300: Scissor width: %i, height: %i, CBZB clear: %s\n",
+	width, height, r300->cbzb_clear ? "YES" : "NO");
 
     BEGIN_CS(size);
 
@@ -663,7 +675,7 @@ void r300_emit_rs_state(struct r300_context* r300, unsigned size, void* state)
     CS_LOCALS(r300);
 
     BEGIN_CS(size);
-    OUT_CS_TABLE(rs->cb_main, 25);
+    OUT_CS_TABLE(rs->cb_main, RS_STATE_MAIN_SIZE);
     if (rs->polygon_offset_enable) {
         if (r300->zbuffer_bpp == 16) {
             OUT_CS_TABLE(rs->cb_poly_offset_zb16, 5);
@@ -705,6 +717,8 @@ void r300_emit_rs_block_state(struct r300_context* r300,
     OUT_CS_REG_SEQ(R300_VAP_OUTPUT_VTX_FMT_0, 2);
     OUT_CS(rs->vap_out_vtx_fmt[0]);
     OUT_CS(rs->vap_out_vtx_fmt[1]);
+    OUT_CS_REG_SEQ(R300_GB_ENABLE, 1);
+    OUT_CS(rs->gb_enable);
 
     if (r300->screen->caps.is_r500) {
         OUT_CS_REG_SEQ(R500_RS_IP_0, count);
@@ -843,7 +857,7 @@ void r300_emit_aos_swtcl(struct r300_context *r300, boolean indexed)
     OUT_CS(1 | (!indexed ? R300_VC_FORCE_PREFETCH : 0));
     OUT_CS(r300->vertex_info.size |
             (r300->vertex_info.size << 8));
-    OUT_CS(r300->vbo_offset);
+    OUT_CS(r300->draw_vbo_offset);
     OUT_CS_BUF_RELOC(r300->vbo, 0, r300_buffer(r300->vbo)->domain, 0);
     END_CS;
 }
@@ -1137,9 +1151,9 @@ void r300_emit_texture_cache_inval(struct r300_context* r300, unsigned size, voi
     END_CS;
 }
 
-void r300_emit_buffer_validate(struct r300_context *r300,
-                               boolean do_validate_vertex_buffers,
-                               struct pipe_resource *index_buffer)
+boolean r300_emit_buffer_validate(struct r300_context *r300,
+                                  boolean do_validate_vertex_buffers,
+                                  struct pipe_resource *index_buffer)
 {
     struct pipe_framebuffer_state* fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
@@ -1150,7 +1164,6 @@ void r300_emit_buffer_validate(struct r300_context *r300,
     struct pipe_vertex_element *velem = r300->velems->velem;
     struct pipe_resource *pbuf;
     unsigned i;
-    boolean invalid = FALSE;
 
     /* upload buffers first */
     if (r300->screen->caps.has_tcl && r300->any_user_vbs) {
@@ -1161,7 +1174,6 @@ void r300_emit_buffer_validate(struct r300_context *r300,
     /* Clean out BOs. */
     r300->rws->cs_reset_buffers(r300->cs);
 
-validate:
     /* Color buffers... */
     for (i = 0; i < fb->nr_cbufs; i++) {
         tex = r300_texture(fb->cbufs[i]->texture);
@@ -1208,15 +1220,10 @@ validate:
                                  r300_buffer(index_buffer)->domain, 0);
 
     if (!r300->rws->cs_validate(r300->cs)) {
-        r300->context.flush(&r300->context, 0, NULL);
-        if (invalid) {
-            /* Well, hell. */
-            fprintf(stderr, "r300: Stuck in validation loop, gonna quit now.\n");
-            abort();
-        }
-        invalid = TRUE;
-        goto validate;
+        return FALSE;
     }
+
+    return TRUE;
 }
 
 unsigned r300_get_num_dirty_dwords(struct r300_context *r300)

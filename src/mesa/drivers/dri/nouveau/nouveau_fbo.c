@@ -67,6 +67,7 @@ set_renderbuffer_format(struct gl_renderbuffer *rb, GLenum internalFormat)
 		rb->DataType = GL_UNSIGNED_SHORT;
 		s->cpp = 2;
 		break;
+	case GL_DEPTH_COMPONENT:
 	case GL_DEPTH_COMPONENT24:
 	case GL_STENCIL_INDEX8_EXT:
 	case GL_DEPTH24_STENCIL8_EXT:
@@ -188,6 +189,7 @@ nouveau_framebuffer_dri_new(const GLvisual *visual)
 		return NULL;
 
 	_mesa_initialize_window_framebuffer(&nfb->base, visual);
+	nfb->need_front = !visual->doubleBufferMode;
 
 	return &nfb->base;
 }

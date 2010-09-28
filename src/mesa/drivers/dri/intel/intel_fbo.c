@@ -102,7 +102,7 @@ intel_alloc_renderbuffer_storage(GLcontext * ctx, struct gl_renderbuffer *rb,
 {
    struct intel_context *intel = intel_context(ctx);
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
-   int cpp;
+   int cpp, tiling;
 
    ASSERT(rb->Name != 0);
 
@@ -176,7 +176,13 @@ intel_alloc_renderbuffer_storage(GLcontext * ctx, struct gl_renderbuffer *rb,
    /* alloc hardware renderbuffer */
    DBG("Allocating %d x %d Intel RBO\n", width, height);
 
-   irb->region = intel_region_alloc(intel->intelScreen, I915_TILING_NONE, cpp,
+   tiling = I915_TILING_NONE;
+
+   /* Gen6 requires depth must be tiling */
+   if (intel->gen >= 6 && rb->Format == MESA_FORMAT_S8_Z24)
+       tiling = I915_TILING_Y;
+
+   irb->region = intel_region_alloc(intel->intelScreen, tiling, cpp,
 				    width, height, GL_TRUE);
    if (!irb->region)
       return GL_FALSE;       /* out of memory? */
@@ -202,8 +208,8 @@ intel_image_target_renderbuffer_storage(GLcontext *ctx,
    __DRIimage *image;
 
    screen = intel->intelScreen->driScrnPriv;
-   image = screen->dri2.image->lookupEGLImage(intel->driContext, image_handle,
-					      intel->driContext->loaderPrivate);
+   image = screen->dri2.image->lookupEGLImage(screen, image_handle,
+					      screen->loaderPrivate);
    if (image == NULL)
       return;
 
@@ -433,6 +439,10 @@ intel_update_wrapper(GLcontext *ctx, struct intel_renderbuffer *irb,
       irb->Base.DataType = GL_UNSIGNED_BYTE;
       DBG("Render to XGBA8 texture OK\n");
    }
+   else if (texImage->TexFormat == MESA_FORMAT_SARGB8) {
+      irb->Base.DataType = GL_UNSIGNED_BYTE;
+      DBG("Render to SARGB8 texture OK\n");
+   }
    else if (texImage->TexFormat == MESA_FORMAT_RGB565) {
       irb->Base.DataType = GL_UNSIGNED_BYTE;
       DBG("Render to RGB5 texture OK\n");
@@ -599,6 +609,9 @@ intel_finish_render_texture(GLcontext * ctx,
       tex_obj->Image[att->CubeMapFace][att->TextureLevel];
    struct intel_texture_image *intel_image = intel_texture_image(image);
 
+   DBG("Finish render texture tid %lx tex=%u\n",
+       _glthread_GetID(), att->Texture->Name);
+
    /* Flag that this image may now be validated into the object's miptree. */
    intel_image->used_as_render_target = GL_FALSE;
 
@@ -655,6 +668,7 @@ intel_validate_framebuffer(GLcontext *ctx, struct gl_framebuffer *fb)
       switch (irb->Base.Format) {
       case MESA_FORMAT_ARGB8888:
       case MESA_FORMAT_XRGB8888:
+      case MESA_FORMAT_SARGB8:
       case MESA_FORMAT_RGB565:
       case MESA_FORMAT_ARGB1555:
       case MESA_FORMAT_ARGB4444:

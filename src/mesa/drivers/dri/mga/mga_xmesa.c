@@ -57,7 +57,6 @@
 #include "mgatris.h"
 #include "mgavb.h"
 #include "mgapixel.h"
-#include "mga_xmesa.h"
 #include "mga_dri.h"
 
 #include "utils.h"
@@ -394,7 +393,6 @@ static const struct dri_extension card_extensions[] =
    { "GL_EXT_stencil_wrap",           NULL },
    { "GL_APPLE_vertex_array_object",  GL_APPLE_vertex_array_object_functions },
    { "GL_MESA_ycbcr_texture",         NULL },
-   { "GL_SGIS_generate_mipmap",       NULL },
    { NULL,                            NULL }
 };
 

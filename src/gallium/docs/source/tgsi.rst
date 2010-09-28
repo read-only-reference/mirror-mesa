@@ -678,8 +678,6 @@ This instruction replicates its result.
 
   pc = pop()
 
-  Potential restrictions:  
-  * Only occurs at end of function.
 
 .. opcode:: SSG - Set Sign
 
@@ -726,7 +724,7 @@ This instruction replicates its result.
 
   dst.z = 0
 
-  dst.y = 1
+  dst.w = 1
 
 
 .. opcode:: TXB - Texture Lookup With Bias

@@ -16,6 +16,7 @@
 #include "nouveau/nouveau_winsys.h"
 #include "nouveau/nouveau_gldefs.h"
 #include "nouveau/nouveau_stateobj.h"
+#include "nv50_reg.h"
 
 #include "nv50_screen.h"
 #include "nv50_program.h"
@@ -156,6 +157,7 @@ struct nv50_context {
 	unsigned sampler_view_nr[3];
 
 	unsigned vbo_fifo;
+	unsigned req_lmem;
 };
 
 static INLINE struct nv50_context *

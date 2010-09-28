@@ -50,9 +50,9 @@ TAG(do_block_4)(struct lp_rasterizer_task *task,
    int j;
 
    for (j = 0; j < NR_PLANES; j++) {
-      mask &= ~build_mask(c[j] - 1, 
-			  -plane[j].dcdx,
-			  plane[j].dcdy);
+      mask &= ~build_mask_linear(c[j] - 1, 
+				 -plane[j].dcdx,
+				 plane[j].dcdy);
    }
 
    /* Now pass to the shader:
@@ -161,6 +161,11 @@ TAG(lp_rast_triangle)(struct lp_rasterizer_task *task,
    int c[NR_PLANES];
    unsigned outmask, inmask, partmask, partial_mask;
    unsigned j = 0;
+
+   if (tri->inputs.disable) {
+      /* This triangle was partially binned and has been disabled */
+      return;
+   }
 
    outmask = 0;                 /* outside one or more trivial reject planes */
    partmask = 0;                /* outside one or more trivial accept planes */

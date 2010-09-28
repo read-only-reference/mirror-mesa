@@ -52,7 +52,6 @@
 #include "hash.h"
 #include "image.h"
 #include "light.h"
-#include "dlist.h"
 #include "macros.h"
 #include "queryobj.h"
 #include "teximage.h"
@@ -1552,7 +1551,6 @@ save_ColorTableParameterfv(GLenum target, GLenum pname,
       n[3].f = params[0];
       if (pname == GL_COLOR_TABLE_SGI ||
           pname == GL_POST_CONVOLUTION_COLOR_TABLE_SGI ||
-          pname == GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI ||
           pname == GL_TEXTURE_COLOR_TABLE_SGI) {
          n[4].f = params[1];
          n[5].f = params[2];
@@ -1581,7 +1579,6 @@ save_ColorTableParameteriv(GLenum target, GLenum pname, const GLint *params)
       n[3].i = params[0];
       if (pname == GL_COLOR_TABLE_SGI ||
           pname == GL_POST_CONVOLUTION_COLOR_TABLE_SGI ||
-          pname == GL_POST_COLOR_MATRIX_COLOR_TABLE_SGI ||
           pname == GL_TEXTURE_COLOR_TABLE_SGI) {
          n[4].i = params[1];
          n[5].i = params[2];
@@ -6818,7 +6815,7 @@ _mesa_compile_error(GLcontext *ctx, GLenum error, const char *s)
    if (ctx->CompileFlag)
       save_error(ctx, error, s);
    if (ctx->ExecuteFlag)
-      _mesa_error(ctx, error, s);
+      _mesa_error(ctx, error, "%s", s);
 }
 
 
@@ -6885,7 +6882,7 @@ execute_list(GLcontext *ctx, GLuint list)
       else {
          switch (opcode) {
          case OPCODE_ERROR:
-            _mesa_error(ctx, n[1].e, (const char *) n[2].data);
+            _mesa_error(ctx, n[1].e, "%s", (const char *) n[2].data);
             break;
          case OPCODE_ACCUM:
             CALL_Accum(ctx->Exec, (n[1].e, n[2].f));
@@ -7917,7 +7914,7 @@ execute_list(GLcontext *ctx, GLuint list)
                char msg[1000];
                _mesa_snprintf(msg, sizeof(msg), "Error in execute_list: opcode=%d",
                              (int) opcode);
-               _mesa_problem(ctx, msg);
+               _mesa_problem(ctx, "%s", msg);
             }
             done = GL_TRUE;
          }
@@ -8892,8 +8889,8 @@ exec_FogCoordPointerEXT(GLenum type, GLsizei stride, const GLvoid *ptr)
 
 /* GL_EXT_multi_draw_arrays */
 static void GLAPIENTRY
-exec_MultiDrawArraysEXT(GLenum mode, GLint * first,
-                        GLsizei * count, GLsizei primcount)
+exec_MultiDrawArraysEXT(GLenum mode, const GLint *first,
+                        const GLsizei *count, GLsizei primcount)
 {
    GET_CURRENT_CONTEXT(ctx);
    FLUSH_VERTICES(ctx, 0);

@@ -208,6 +208,12 @@ static void setup_line_coefficients( struct lp_setup_context *setup,
          fragcoord_usage_mask |= usage_mask;
          break;
 
+      case LP_INTERP_FACING:
+         for (i = 0; i < NUM_CHANNELS; i++)
+            if (usage_mask & (1 << i))
+               constant_coef(setup, tri, slot+1, 1.0, i);
+         break;
+
       default:
          assert(0);
       }
@@ -263,12 +269,12 @@ static INLINE float fracf(float f)
 
 
 
-static void
-lp_setup_line( struct lp_setup_context *setup,
+static boolean
+try_setup_line( struct lp_setup_context *setup,
                const float (*v1)[4],
                const float (*v2)[4])
 {
-   struct lp_scene *scene = lp_setup_get_current_scene(setup);
+   struct lp_scene *scene = setup->scene;
    struct lp_rast_triangle *line;
    struct lp_line_info info;
    float width = MAX2(1.0, setup->line_width);
@@ -292,6 +298,7 @@ lp_setup_line( struct lp_setup_context *setup,
    float x2diff;
    float y2diff;
    float dx, dy;
+   float area;
 
    boolean draw_start;
    boolean draw_end;
@@ -311,6 +318,18 @@ lp_setup_line( struct lp_setup_context *setup,
 
    dx = v1[0][0] - v2[0][0];
    dy = v1[0][1] - v2[0][1];
+   area = (dx * dx  + dy * dy);
+   if (area == 0) {
+      LP_COUNT(nr_culled_tris);
+      return TRUE;
+   }
+
+   info.oneoverarea = 1.0f / area;
+   info.dx = dx;
+   info.dy = dy;
+   info.v1 = v1;
+   info.v2 = v2;
+
   
    /* X-MAJOR LINE */
    if (fabsf(dx) >= fabsf(dy)) {
@@ -536,13 +555,13 @@ lp_setup_line( struct lp_setup_context *setup,
        bbox.y1 < bbox.y0) {
       if (0) debug_printf("empty bounding box\n");
       LP_COUNT(nr_culled_tris);
-      return;
+      return TRUE;
    }
 
    if (!u_rect_test_intersection(&setup->draw_region, &bbox)) {
       if (0) debug_printf("offscreen\n");
       LP_COUNT(nr_culled_tris);
-      return;
+      return TRUE;
    }
 
    u_rect_find_intersection(&setup->draw_region, &bbox);
@@ -552,7 +571,7 @@ lp_setup_line( struct lp_setup_context *setup,
                                   nr_planes,
                                   &tri_bytes);
    if (!line)
-      return;
+      return FALSE;
 
 #ifdef DEBUG
    line->v[0][0] = v1[0][0];
@@ -573,18 +592,14 @@ lp_setup_line( struct lp_setup_context *setup,
    line->plane[3].dcdx = y[3] - y[0];
 
 
-   info.oneoverarea = 1.0f / (dx * dx  + dy * dy);    
-   info.dx = dx;
-   info.dy = dy;
-   info.v1 = v1;
-   info.v2 = v2;
-
    /* Setup parameter interpolants:
     */
    setup_line_coefficients( setup, line, &info); 
 
    line->inputs.facing = 1.0F;
    line->inputs.state = setup->fs.stored;
+   line->inputs.disable = FALSE;
+   line->inputs.opaque = FALSE;
 
    for (i = 0; i < 4; i++) {
       struct lp_rast_plane *plane = &line->plane[i];
@@ -687,9 +702,23 @@ lp_setup_line( struct lp_setup_context *setup,
       line->plane[7].eo = 0;
    }
 
-   lp_setup_bin_triangle(setup, line, &bbox, nr_planes);
+   return lp_setup_bin_triangle(setup, line, &bbox, nr_planes);
 }
-   
+
+
+static void lp_setup_line( struct lp_setup_context *setup,
+                           const float (*v0)[4],
+                           const float (*v1)[4] )
+{
+   if (!try_setup_line( setup, v0, v1 ))
+   {
+      lp_setup_flush_and_restart(setup);
+
+      if (!try_setup_line( setup, v0, v1 ))
+         assert(0);
+   }
+}
+
 
 void lp_setup_choose_line( struct lp_setup_context *setup ) 
 { 

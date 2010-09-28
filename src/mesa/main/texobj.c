@@ -331,6 +331,7 @@ _mesa_reference_texobj(struct gl_texture_object **ptr,
       struct gl_texture_object *oldTex = *ptr;
 
       ASSERT(valid_texture_object(oldTex));
+      (void) valid_texture_object; /* silence warning in release builds */
 
       _glthread_LOCK_MUTEX(oldTex->Mutex);
       ASSERT(oldTex->RefCount > 0);

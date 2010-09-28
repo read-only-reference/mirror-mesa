@@ -55,6 +55,9 @@ update_rhs_swizzle(ir_swizzle_mask &m, unsigned from, unsigned to)
 void
 ir_assignment::set_lhs(ir_rvalue *lhs)
 {
+   void *mem_ctx = this;
+   bool swizzled = false;
+
    while (lhs != NULL) {
       ir_swizzle *swiz = lhs->as_swizzle();
 
@@ -82,7 +85,21 @@ ir_assignment::set_lhs(ir_rvalue *lhs)
       this->write_mask = write_mask;
       lhs = swiz->val;
 
-      this->rhs = new(this) ir_swizzle(this->rhs, rhs_swiz);
+      this->rhs = new(mem_ctx) ir_swizzle(this->rhs, rhs_swiz);
+      swizzled = true;
+   }
+
+   if (swizzled) {
+      /* Now, RHS channels line up with the LHS writemask.  Collapse it
+       * to just the channels that will be written.
+       */
+      ir_swizzle_mask rhs_swiz = { 0, 0, 0, 0, 0, 0 };
+      int rhs_chan = 0;
+      for (int i = 0; i < 4; i++) {
+	 if (write_mask & (1 << i))
+	    update_rhs_swizzle(rhs_swiz, i, rhs_chan++);
+      }
+      this->rhs = new(mem_ctx) ir_swizzle(this->rhs, rhs_swiz);
    }
 
    assert((lhs == NULL) || lhs->as_dereference());
@@ -122,6 +139,16 @@ ir_assignment::ir_assignment(ir_dereference *lhs, ir_rvalue *rhs,
    this->rhs = rhs;
    this->lhs = lhs;
    this->write_mask = write_mask;
+
+   if (lhs->type->is_scalar() || lhs->type->is_vector()) {
+      int lhs_components = 0;
+      for (int i = 0; i < 4; i++) {
+	 if (write_mask & (1 << i))
+	    lhs_components++;
+      }
+
+      assert(lhs_components == this->rhs->type->vector_elements);
+   }
 }
 
 ir_assignment::ir_assignment(ir_rvalue *lhs, ir_rvalue *rhs,
@@ -196,6 +223,8 @@ ir_expression::get_num_operands(ir_expression_operation op)
       1, /* ir_unop_dFdx */
       1, /* ir_unop_dFdy */
 
+      1, /* ir_unop_noise */
+
       2, /* ir_binop_add */
       2, /* ir_binop_sub */
       2, /* ir_binop_mul */
@@ -208,6 +237,8 @@ ir_expression::get_num_operands(ir_expression_operation op)
       2, /* ir_binop_gequal */
       2, /* ir_binop_equal */
       2, /* ir_binop_nequal */
+      2, /* ir_binop_all_equal */
+      2, /* ir_binop_any_nequal */
 
       2, /* ir_binop_lshift */
       2, /* ir_binop_rshift */
@@ -261,6 +292,7 @@ static const char *const operator_strs[] = {
    "cos",
    "dFdx",
    "dFdy",
+   "noise",
    "+",
    "-",
    "*",
@@ -272,6 +304,8 @@ static const char *const operator_strs[] = {
    ">=",
    "==",
    "!=",
+   "all_equal",
+   "any_nequal",
    "<<",
    ">>",
    "&",
@@ -287,11 +321,16 @@ static const char *const operator_strs[] = {
    "pow",
 };
 
+const char *ir_expression::operator_string(ir_expression_operation op)
+{
+   assert((unsigned int) op < Elements(operator_strs));
+   assert(Elements(operator_strs) == (ir_binop_pow + 1));
+   return operator_strs[op];
+}
+
 const char *ir_expression::operator_string()
 {
-   assert((unsigned int) operation <=
-	  sizeof(operator_strs) / sizeof(operator_strs[0]));
-   return operator_strs[operation];
+   return operator_string(this->operation);
 }
 
 ir_expression_operation
@@ -415,6 +454,66 @@ ir_constant::ir_constant(const struct glsl_type *type, exec_list *value_list)
 
    ir_constant *value = (ir_constant *) (value_list->head);
 
+   /* Constructors with exactly one scalar argument are special for vectors
+    * and matrices.  For vectors, the scalar value is replicated to fill all
+    * the components.  For matrices, the scalar fills the components of the
+    * diagonal while the rest is filled with 0.
+    */
+   if (value->type->is_scalar() && value->next->is_tail_sentinel()) {
+      if (type->is_matrix()) {
+	 /* Matrix - fill diagonal (rest is already set to 0) */
+	 assert(type->base_type == GLSL_TYPE_FLOAT);
+	 for (unsigned i = 0; i < type->matrix_columns; i++)
+	    this->value.f[i * type->vector_elements + i] = value->value.f[0];
+      } else {
+	 /* Vector or scalar - fill all components */
+	 switch (type->base_type) {
+	 case GLSL_TYPE_UINT:
+	 case GLSL_TYPE_INT:
+	    for (unsigned i = 0; i < type->components(); i++)
+	       this->value.u[i] = value->value.u[0];
+	    break;
+	 case GLSL_TYPE_FLOAT:
+	    for (unsigned i = 0; i < type->components(); i++)
+	       this->value.f[i] = value->value.f[0];
+	    break;
+	 case GLSL_TYPE_BOOL:
+	    for (unsigned i = 0; i < type->components(); i++)
+	       this->value.b[i] = value->value.b[0];
+	    break;
+	 default:
+	    assert(!"Should not get here.");
+	    break;
+	 }
+      }
+      return;
+   }
+
+   if (type->is_matrix() && value->type->is_matrix()) {
+      assert(value->next->is_tail_sentinel());
+
+      /* From section 5.4.2 of the GLSL 1.20 spec:
+       * "If a matrix is constructed from a matrix, then each component
+       *  (column i, row j) in the result that has a corresponding component
+       *  (column i, row j) in the argument will be initialized from there."
+       */
+      unsigned cols = MIN2(type->matrix_columns, value->type->matrix_columns);
+      unsigned rows = MIN2(type->vector_elements, value->type->vector_elements);
+      for (unsigned i = 0; i < cols; i++) {
+	 for (unsigned j = 0; j < rows; j++) {
+	    const unsigned src = i * value->type->vector_elements + j;
+	    const unsigned dst = i * type->vector_elements + j;
+	    this->value.f[dst] = value->value.f[src];
+	 }
+      }
+
+      /* "All other components will be initialized to the identity matrix." */
+      for (unsigned i = cols; i < type->matrix_columns; i++)
+	 this->value.f[i * type->vector_elements + i] = 1.0;
+
+      return;
+   }
+
    /* Use each component from each entry in the value_list to initialize one
     * component of the constant being constructed.
     */
@@ -454,7 +553,7 @@ ir_constant::ir_constant(const struct glsl_type *type, exec_list *value_list)
 ir_constant *
 ir_constant::zero(void *mem_ctx, const glsl_type *type)
 {
-   assert(type->is_numeric());
+   assert(type->is_numeric() || type->is_boolean());
 
    ir_constant *c = new(mem_ctx) ir_constant;
    c->type = type;
@@ -640,6 +739,18 @@ ir_constant::has_value(const ir_constant *c) const
 
    return true;
 }
+
+
+ir_loop::ir_loop()
+{
+   this->ir_type = ir_type_loop;
+   this->cmp = ir_unop_neg;
+   this->from = NULL;
+   this->to = NULL;
+   this->increment = NULL;
+   this->counter = NULL;
+}
+
 
 ir_dereference_variable::ir_dereference_variable(ir_variable *var)
 {
@@ -997,6 +1108,7 @@ ir_function_signature::ir_function_signature(const glsl_type *return_type)
    : return_type(return_type), is_defined(false), _function(NULL)
 {
    this->ir_type = ir_type_function_signature;
+   this->is_builtin = false;
 }
 
 
@@ -1048,7 +1160,18 @@ ir_function::ir_function(const char *name)
 {
    this->ir_type = ir_type_function;
    this->name = talloc_strdup(this, name);
-   this->is_builtin = false;
+}
+
+
+bool
+ir_function::has_user_signature()
+{
+   foreach_list(n, &this->signatures) {
+      ir_function_signature *const sig = (ir_function_signature *) n;
+      if (!sig->is_builtin)
+	 return true;
+   }
+   return false;
 }
 
 
