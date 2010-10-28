@@ -44,6 +44,7 @@ static const struct debug_named_value lp_bld_debug_flags[] = {
    { "asm",    GALLIVM_DEBUG_ASM, NULL },
    { "nopt",   GALLIVM_DEBUG_NO_OPT, NULL },
    { "perf",   GALLIVM_DEBUG_PERF, NULL },
+   { "no_brilinear", GALLIVM_DEBUG_NO_BRILINEAR, NULL },
    DEBUG_NAMED_VALUE_END
 };
 
@@ -144,13 +145,7 @@ lp_build_init(void)
          LLVMAddCFGSimplificationPass(lp_build_pass);
          LLVMAddPromoteMemoryToRegisterPass(lp_build_pass);
          LLVMAddConstantPropagationPass(lp_build_pass);
-         if(util_cpu_caps.has_sse4_1) {
-            /* FIXME: There is a bug in this pass, whereby the combination of fptosi
-             * and sitofp (necessary for trunc/floor/ceil/round implementation)
-             * somehow becomes invalid code.
-             */
-            LLVMAddInstructionCombiningPass(lp_build_pass);
-         }
+         LLVMAddInstructionCombiningPass(lp_build_pass);
          LLVMAddGVNPass(lp_build_pass);
       } else {
          /* We need at least this pass to prevent the backends to fail in

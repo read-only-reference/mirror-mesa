@@ -36,11 +36,9 @@
 #include <util/u_memory.h>
 #include <util/u_inlines.h>
 #include <util/u_upload_mgr.h>
-#include <util/u_index_modify.h>
 #include <pipebuffer/pb_buffer.h>
 #include "r600.h"
 #include "r600d.h"
-#include "r700_sq.h"
 #include "r600_resource.h"
 #include "r600_shader.h"
 #include "r600_pipe.h"
@@ -49,44 +47,6 @@
 /*
  * pipe_context
  */
-static void *r600_create_db_flush_dsa(struct r600_pipe_context *rctx)
-{
-	struct pipe_depth_stencil_alpha_state dsa;
-	struct r600_pipe_state *rstate;
-	boolean quirk = false;
-
-	if (rctx->family == CHIP_RV610 || rctx->family == CHIP_RV630 ||
-		rctx->family == CHIP_RV620 || rctx->family == CHIP_RV635)
-		quirk = true;
-
-	memset(&dsa, 0, sizeof(dsa));
-
-	if (quirk) {
-		dsa.depth.enabled = 1;
-		dsa.depth.func = PIPE_FUNC_LEQUAL;
-		dsa.stencil[0].enabled = 1;
-		dsa.stencil[0].func = PIPE_FUNC_ALWAYS;
-		dsa.stencil[0].zpass_op = PIPE_STENCIL_OP_KEEP;
-		dsa.stencil[0].zfail_op = PIPE_STENCIL_OP_INCR;
-		dsa.stencil[0].writemask = 0xff;
-	}
-
-	rstate = rctx->context.create_depth_stencil_alpha_state(&rctx->context, &dsa);
-	r600_pipe_state_add_reg(rstate,
-				R_02880C_DB_SHADER_CONTROL,
-				0x0,
-				S_02880C_DUAL_EXPORT_ENABLE(1), NULL);
-	r600_pipe_state_add_reg(rstate,
-				R_028D0C_DB_RENDER_CONTROL,
-				S_028D0C_DEPTH_COPY_ENABLE(1) |
-				S_028D0C_STENCIL_COPY_ENABLE(1) |
-				S_028D0C_COPY_CENTROID(1),
-				S_028D0C_DEPTH_COPY_ENABLE(1) |
-				S_028D0C_STENCIL_COPY_ENABLE(1) |
-				S_028D0C_COPY_CENTROID(1), NULL);
-	return rstate;
-}
-
 static void r600_flush(struct pipe_context *ctx, unsigned flags,
 			struct pipe_fence_handle **fence)
 {
@@ -122,9 +82,16 @@ static void r600_destroy_context(struct pipe_context *context)
 		free(rctx->states[i]);
 	}
 
+	util_blitter_destroy(rctx->blitter);
+
 	u_upload_destroy(rctx->upload_vb);
 	u_upload_destroy(rctx->upload_ib);
 
+	if (rctx->tran.translate_cache)
+		translate_cache_destroy(rctx->tran.translate_cache);
+
+	FREE(rctx->ps_resource);
+	FREE(rctx->vs_resource);
 	FREE(rctx);
 }
 
@@ -132,6 +99,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 {
 	struct r600_pipe_context *rctx = CALLOC_STRUCT(r600_pipe_context);
 	struct r600_screen* rscreen = (struct r600_screen *)screen;
+	enum chip_class class;
 
 	if (rctx == NULL)
 		return NULL;
@@ -210,7 +178,29 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		return NULL;
 	}
 
-	rctx->custom_dsa_flush = r600_create_db_flush_dsa(rctx);
+	rctx->tran.translate_cache = translate_cache_create();
+	if (rctx->tran.translate_cache == NULL) {
+		FREE(rctx);
+		return NULL;
+	}
+	
+	rctx->vs_resource = CALLOC(R600_RESOURCE_ARRAY_SIZE, sizeof(struct r600_pipe_state));
+	if (!rctx->vs_resource) {
+		FREE(rctx);
+		return NULL;
+	}
+
+	rctx->ps_resource = CALLOC(R600_RESOURCE_ARRAY_SIZE, sizeof(struct r600_pipe_state));
+	if (!rctx->ps_resource) {
+		FREE(rctx);
+		return NULL;
+	}
+
+	class = r600_get_family_class(rctx->radeon);
+	if (class == R600 || class == R700)
+		rctx->custom_dsa_flush = r600_create_db_flush_dsa(rctx);
+	else
+		rctx->custom_dsa_flush = evergreen_create_db_flush_dsa(rctx);
 
 	r600_blit_uncompress_depth_ptr = r600_blit_uncompress_depth;
 
@@ -277,6 +267,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_INDEP_BLEND_ENABLE:
 	case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
 	case PIPE_CAP_DEPTH_CLAMP:
+	case PIPE_CAP_SHADER_STENCIL_EXPORT:
 		return 1;
 
 	/* Unsupported features (boolean caps). */
@@ -292,7 +283,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 14;
 	case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
 		/* FIXME allow this once infrastructure is there */
-		return 0;
+		return 16;
 	case PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS:
 	case PIPE_CAP_MAX_COMBINED_SAMPLERS:
 		return 16;
@@ -462,6 +453,8 @@ struct pipe_screen *r600_screen_create(struct radeon *radeon)
 	rscreen->screen.context_create = r600_create_context;
 	r600_init_screen_texture_functions(&rscreen->screen);
 	r600_init_screen_resource_functions(&rscreen->screen);
+
+	rscreen->tiling_info = r600_get_tiling_info(radeon);
 
 	return &rscreen->screen;
 }

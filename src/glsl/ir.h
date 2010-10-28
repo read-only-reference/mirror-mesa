@@ -37,10 +37,6 @@ extern "C" {
 #include "ir_visitor.h"
 #include "ir_hierarchical_visitor.h"
 
-#ifndef ARRAY_SIZE
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
-#endif
-
 /**
  * \defgroup IR Intermediate representation nodes
  *
@@ -287,6 +283,15 @@ public:
    unsigned origin_upper_left:1;
    unsigned pixel_center_integer:1;
    /*@}*/
+
+   /**
+    * Was the location explicitly set in the shader?
+    *
+    * If the location is explicitly set in the shader, it \b cannot be changed
+    * by the linker or by the API (e.g., calls to \c glBindAttribLocation have
+    * no effect).
+    */
+   unsigned explicit_location:1;
 
    /**
     * Storage location of the base of this variable
@@ -691,6 +696,7 @@ enum ir_expression_operation {
    ir_unop_ceil,
    ir_unop_floor,
    ir_unop_fract,
+   ir_unop_round_even,
    /*@}*/
 
    /**

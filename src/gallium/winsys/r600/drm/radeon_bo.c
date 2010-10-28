@@ -58,9 +58,7 @@ static int radeon_bo_fixed_map(struct radeon *radeon, struct radeon_bo *bo)
 	}
 	bo->data = ptr;
 
-success:
 	bo->map_count++;
-
 	return 0;
 }
 
@@ -84,6 +82,7 @@ struct radeon_bo *radeon_bo(struct radeon *radeon, unsigned handle,
 	bo->handle = handle;
 	pipe_reference_init(&bo->reference, 1);
 	bo->alignment = alignment;
+	LIST_INITHEAD(&bo->fencedlist);
 
 	if (handle) {
 		struct drm_gem_open open_arg;
@@ -97,6 +96,7 @@ struct radeon_bo *radeon_bo(struct radeon *radeon, unsigned handle,
 		}
 		bo->handle = open_arg.handle;
 		bo->size = open_arg.size;
+		bo->shared = TRUE;
 	} else {
 		struct drm_radeon_gem_create args;
 
@@ -127,11 +127,11 @@ struct radeon_bo *radeon_bo(struct radeon *radeon, unsigned handle,
 	return bo;
 }
 
-
 static void radeon_bo_destroy(struct radeon *radeon, struct radeon_bo *bo)
 {
 	struct drm_gem_close args;
 
+	LIST_DEL(&bo->fencedlist);
 	radeon_bo_fixed_unmap(radeon, bo);
 	memset(&args, 0, sizeof(args));
 	args.handle = bo->handle;
@@ -156,6 +156,15 @@ int radeon_bo_wait(struct radeon *radeon, struct radeon_bo *bo)
 	struct drm_radeon_gem_wait_idle args;
 	int ret;
 
+	if (!bo->fence && !bo->shared)
+		return 0;
+
+	if (bo->fence <= *bo->ctx->cfence) {
+		LIST_DELINIT(&bo->fencedlist);
+		bo->fence = 0;
+		return 0;
+	}
+
 	/* Zero out args to make valgrind happy */
 	memset(&args, 0, sizeof(args));
 	args.handle = bo->handle;
@@ -168,16 +177,45 @@ int radeon_bo_wait(struct radeon *radeon, struct radeon_bo *bo)
 
 int radeon_bo_busy(struct radeon *radeon, struct radeon_bo *bo, uint32_t *domain)
 {
-        struct drm_radeon_gem_busy args;
-        int ret;
+	struct drm_radeon_gem_busy args;
+	int ret;
 
-        memset(&args, 0, sizeof(args));
-        args.handle = bo->handle;
-        args.domain = 0;
+	if (!bo->shared) {
+		if (!bo->fence)
+			return 0;
+		if (bo->fence <= *bo->ctx->cfence) {
+			LIST_DELINIT(&bo->fencedlist);
+			bo->fence = 0;
+			return 0;
+		}
+	}
 
-        ret = drmCommandWriteRead(radeon->fd, DRM_RADEON_GEM_BUSY,
-                                  &args, sizeof(args));
+	memset(&args, 0, sizeof(args));
+	args.handle = bo->handle;
+	args.domain = 0;
 
-        *domain = args.domain;
-        return ret;
+	ret = drmCommandWriteRead(radeon->fd, DRM_RADEON_GEM_BUSY,
+			&args, sizeof(args));
+
+	*domain = args.domain;
+	return ret;
+}
+
+int radeon_bo_get_tiling_flags(struct radeon *radeon,
+			       struct radeon_bo *bo,
+			       uint32_t *tiling_flags,
+			       uint32_t *pitch)
+{
+	struct drm_radeon_gem_get_tiling args;
+	int ret;
+	
+	args.handle = bo->handle;
+	ret = drmCommandWriteRead(radeon->fd, DRM_RADEON_GEM_GET_TILING,
+				  &args, sizeof(args));
+	if (ret)
+		return ret;
+	
+	*tiling_flags = args.tiling_flags;
+	*pitch = args.pitch;
+	return ret;
 }

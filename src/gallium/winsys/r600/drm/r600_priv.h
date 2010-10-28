@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <pipebuffer/pb_bufmgr.h>
+#include "util/u_double_list.h"
 #include "r600.h"
 
 struct radeon {
@@ -39,10 +40,9 @@ struct radeon {
 	unsigned			device;
 	unsigned			family;
 	enum chip_class			chip_class;
-	boolean				use_mem_constant; /* true for evergreen */
-	struct pb_manager *mman; /* malloc manager */
 	struct pb_manager *kman; /* kernel bo manager */
 	struct pb_manager *cman; /* cached bo manager */
+	struct r600_tiling_info tiling_info;
 };
 
 struct radeon *r600_new(int fd, unsigned device);
@@ -54,6 +54,7 @@ struct r600_reg {
 	unsigned			offset;
 	unsigned			need_bo;
 	unsigned			flush_flags;
+	unsigned			flush_mask;
 };
 
 struct radeon_bo {
@@ -63,11 +64,21 @@ struct radeon_bo {
 	unsigned			alignment;
 	unsigned			map_count;
 	void				*data;
+	struct list_head		fencedlist;
+	unsigned			fence;
+	struct r600_context		*ctx;
+	boolean				shared;
+	struct r600_reloc		*reloc;
+	unsigned			reloc_id;
+	unsigned			last_flush;
 };
 
-struct radeon_ws_bo {
+struct r600_bo {
 	struct pipe_reference		reference;
 	struct pb_buffer		*pb;
+	unsigned			size;
+	unsigned			tiling_flags;
+	unsigned                        kernel_pitch;
 };
 
 
@@ -78,8 +89,6 @@ unsigned radeon_family_from_device(unsigned device);
 struct radeon *radeon_decref(struct radeon *radeon);
 
 /* radeon_bo.c */
-struct radeon_bo *radeon_bo_pb_get_bo(struct pb_buffer *_buf);
-void r600_context_bo_reloc(struct r600_context *ctx, u32 *pm4, struct radeon_bo *bo);
 struct radeon_bo *radeon_bo(struct radeon *radeon, unsigned handle,
 			    unsigned size, unsigned alignment, void *ptr);
 void radeon_bo_reference(struct radeon *radeon, struct radeon_bo **dst,
@@ -87,15 +96,33 @@ void radeon_bo_reference(struct radeon *radeon, struct radeon_bo **dst,
 int radeon_bo_wait(struct radeon *radeon, struct radeon_bo *bo);
 int radeon_bo_busy(struct radeon *radeon, struct radeon_bo *bo, uint32_t *domain);
 void radeon_bo_pbmgr_flush_maps(struct pb_manager *_mgr);
+int radeon_bo_fencelist(struct radeon *radeon, struct radeon_bo **bolist, uint32_t num_bo);
+int radeon_bo_get_tiling_flags(struct radeon *radeon,
+			       struct radeon_bo *bo,
+			       uint32_t *tiling_flags,
+			       uint32_t *pitch);
 
 /* radeon_bo_pb.c */
+struct radeon_bo *radeon_bo_pb_get_bo(struct pb_buffer *_buf);
 struct pb_manager *radeon_bo_pbmgr_create(struct radeon *radeon);
 struct pb_buffer *radeon_bo_pb_create_buffer_from_handle(struct pb_manager *_mgr,
 							 uint32_t handle);
 
-/* radeon_ws_bo.c */
-unsigned radeon_ws_bo_get_handle(struct radeon_ws_bo *bo);
-unsigned radeon_ws_bo_get_size(struct radeon_ws_bo *bo);
+/* r600_hw_context.c */
+int r600_context_init_fence(struct r600_context *ctx);
+void r600_context_bo_reloc(struct r600_context *ctx, u32 *pm4, struct r600_bo *rbo);
+void r600_context_bo_flush(struct r600_context *ctx, unsigned flush_flags,
+				unsigned flush_mask, struct r600_bo *rbo);
+struct r600_bo *r600_context_reg_bo(struct r600_context *ctx, unsigned offset);
+int r600_context_add_block(struct r600_context *ctx, const struct r600_reg *reg, unsigned nreg);
+
+/* r600_bo.c */
+unsigned r600_bo_get_handle(struct r600_bo *bo);
+unsigned r600_bo_get_size(struct r600_bo *bo);
+static INLINE struct radeon_bo *r600_bo_get_bo(struct r600_bo *bo)
+{
+	return radeon_bo_pb_get_bo(bo->pb);
+}
 
 #define CTX_RANGE_ID(ctx, offset) (((offset) >> (ctx)->hash_shift) & 255)
 #define CTX_BLOCK_ID(ctx, offset) ((offset) & ((1 << (ctx)->hash_shift) - 1))
@@ -117,34 +144,37 @@ static void inline r600_context_reg(struct r600_context *ctx,
 		ctx->pm4_dirty_cdwords += block->pm4_ndwords;
 		block->status |= R600_BLOCK_STATUS_ENABLED;
 		block->status |= R600_BLOCK_STATUS_DIRTY;
+		LIST_ADDTAIL(&block->list,&ctx->dirty);
 	}
 }
 
 static inline void r600_context_block_emit_dirty(struct r600_context *ctx, struct r600_block *block)
 {
-	struct radeon_bo *bo;
 	int id;
 
 	for (int j = 0; j < block->nreg; j++) {
 		if (block->pm4_bo_index[j]) {
 			/* find relocation */
 			id = block->pm4_bo_index[j];
-			bo = radeon_bo_pb_get_bo(block->reloc[id].bo->pb);
-			for (int k = 0; k < block->reloc[id].nreloc; k++) {
-				r600_context_bo_reloc(ctx,
-					&block->pm4[block->reloc[id].bo_pm4_index[k]],
-					bo);
-			}
+			r600_context_bo_reloc(ctx,
+					&block->pm4[block->reloc[id].bo_pm4_index],
+					block->reloc[id].bo);
+			r600_context_bo_flush(ctx,
+					block->reloc[id].flush_flags,
+					block->reloc[id].flush_mask,
+					block->reloc[id].bo);
 		}
 	}
 	memcpy(&ctx->pm4[ctx->pm4_cdwords], block->pm4, block->pm4_ndwords * 4);
 	ctx->pm4_cdwords += block->pm4_ndwords;
 	block->status ^= R600_BLOCK_STATUS_DIRTY;
+	LIST_DELINIT(&block->list);
 }
 
 static inline int radeon_bo_map(struct radeon *radeon, struct radeon_bo *bo)
 {
 	bo->map_count++;
+	return 0;
 }
 
 static inline void radeon_bo_unmap(struct radeon *radeon, struct radeon_bo *bo)

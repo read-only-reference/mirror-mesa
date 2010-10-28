@@ -39,6 +39,7 @@
 #include <util/u_pack_color.h>
 #include <util/u_memory.h>
 #include <util/u_inlines.h>
+#include <util/u_framebuffer.h>
 #include <pipebuffer/pb_buffer.h>
 #include "r600.h"
 #include "evergreend.h"
@@ -136,20 +137,6 @@ static void *evergreen_create_blend_state(struct pipe_context *ctx,
 	return rstate;
 }
 
-static void evergreen_bind_blend_state(struct pipe_context *ctx, void *state)
-{
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-	struct r600_pipe_blend *blend = (struct r600_pipe_blend *)state;
-	struct r600_pipe_state *rstate;
-
-	if (state == NULL)
-		return;
-	rstate = &blend->rstate;
-	rctx->states[rstate->id] = rstate;
-	rctx->cb_target_mask = blend->cb_target_mask;
-	r600_context_pipe_state_set(&rctx->ctx, rstate);
-}
-
 static void *evergreen_create_dsa_state(struct pipe_context *ctx,
 				   const struct pipe_depth_stencil_alpha_state *state)
 {
@@ -241,6 +228,7 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 	struct r600_pipe_state *rstate;
 	unsigned tmp;
 	unsigned prov_vtx = 1, polygon_dual_mode;
+	unsigned clip_rule;
 
 	if (rs == NULL) {
 		return NULL;
@@ -250,6 +238,8 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 	rs->flatshade = state->flatshade;
 	rs->sprite_coord_enable = state->sprite_coord_enable;
 
+	clip_rule = state->scissor ? 0xAAAA : 0xFFFF;
+
 	/* offset */
 	rs->offset_units = state->offset_units;
 	rs->offset_scale = state->offset_scale * 12.0f;
@@ -257,7 +247,7 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 	rstate->id = R600_PIPE_STATE_RASTERIZER;
 	if (state->flatshade_first)
 		prov_vtx = 0;
-	tmp = 0x00000001;
+	tmp = S_0286D4_FLAT_SHADE_ENA(1);
 	if (state->sprite_coord_enable) {
 		tmp |= S_0286D4_PNT_SPRITE_ENA(1) |
 			S_0286D4_PNT_SPRITE_OVRD_X(2) |
@@ -299,37 +289,8 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 	r600_pipe_state_add_reg(rstate, R_028C18_PA_CL_GB_HORZ_DISC_ADJ, 0x3F800000, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_028B7C_PA_SU_POLY_OFFSET_CLAMP, 0x0, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_028C08_PA_SU_VTX_CNTL, 0x00000005, 0xFFFFFFFF, NULL);
+	r600_pipe_state_add_reg(rstate, R_02820C_PA_SC_CLIPRECT_RULE, clip_rule, 0xFFFFFFFF, NULL);
 	return rstate;
-}
-
-static void evergreen_bind_rs_state(struct pipe_context *ctx, void *state)
-{
-	struct r600_pipe_rasterizer *rs = (struct r600_pipe_rasterizer *)state;
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-
-	if (state == NULL)
-		return;
-
-	rctx->flatshade = rs->flatshade;
-	rctx->sprite_coord_enable = rs->sprite_coord_enable;
-	rctx->rasterizer = rs;
-
-	rctx->states[rs->rstate.id] = &rs->rstate;
-	r600_context_pipe_state_set(&rctx->ctx, &rs->rstate);
-}
-
-static void evergreen_delete_rs_state(struct pipe_context *ctx, void *state)
-{
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-	struct r600_pipe_rasterizer *rs = (struct r600_pipe_rasterizer *)state;
-
-	if (rctx->rasterizer == rs) {
-		rctx->rasterizer = NULL;
-	}
-	if (rctx->states[rs->rstate.id] == &rs->rstate) {
-		rctx->states[rs->rstate.id] = NULL;
-	}
-	free(rs);
 }
 
 static void *evergreen_create_sampler_state(struct pipe_context *ctx,
@@ -372,28 +333,6 @@ static void *evergreen_create_sampler_state(struct pipe_context *ctx,
 	return rstate;
 }
 
-static void *evergreen_create_vertex_elements(struct pipe_context *ctx,
-				unsigned count,
-				const struct pipe_vertex_element *elements)
-{
-	struct r600_vertex_element *v = CALLOC_STRUCT(r600_vertex_element);
-
-	assert(count < 32);
-	v->count = count;
-	v->refcount = 1;
-	memcpy(v->elements, elements, count * sizeof(struct pipe_vertex_element));
-	return v;
-}
-
-static void evergreen_sampler_view_destroy(struct pipe_context *ctx,
-				      struct pipe_sampler_view *state)
-{
-	struct r600_pipe_sampler_view *resource = (struct r600_pipe_sampler_view *)state;
-
-	pipe_resource_reference(&state->texture, NULL);
-	FREE(resource);
-}
-
 static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_context *ctx,
 							struct pipe_resource *texture,
 							const struct pipe_sampler_view *state)
@@ -406,7 +345,7 @@ static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_conte
 	unsigned format;
 	uint32_t word4 = 0, yuv_format = 0, pitch = 0;
 	unsigned char swizzle[4];
-	struct radeon_ws_bo *bo[2];
+	struct r600_bo *bo[2];
 
 	if (resource == NULL)
 		return NULL;
@@ -424,15 +363,15 @@ static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_conte
 	swizzle[1] = state->swizzle_g;
 	swizzle[2] = state->swizzle_b;
 	swizzle[3] = state->swizzle_a;
-	format = r600_translate_texformat(texture->format,
+	format = r600_translate_texformat(state->format,
 					  swizzle,
 					  &word4, &yuv_format);
 	if (format == ~0) {
 		format = 0;
 	}
-	desc = util_format_description(texture->format);
+	desc = util_format_description(state->format);
 	if (desc == NULL) {
-		R600_ERR("unknow format %d\n", texture->format);
+		R600_ERR("unknow format %d\n", state->format);
 	}
 	tmp = (struct r600_resource_texture*)texture;
 	rbuffer = &tmp->resource;
@@ -440,16 +379,13 @@ static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_conte
 	bo[1] = rbuffer->bo;
 	/* FIXME depth texture decompression */
 	if (tmp->depth) {
-#if 0
-		r = evergreen_texture_from_depth(ctx, tmp, view->first_level);
-		if (r) {
-			return;
-		}
-		bo[0] = radeon_ws_bo_incref(rscreen->rw, tmp->uncompressed);
-		bo[1] = radeon_ws_bo_incref(rscreen->rw, tmp->uncompressed);
-#endif
+		r600_texture_depth_flush(ctx, texture);
+		tmp = (struct r600_resource_texture*)texture;
+		rbuffer = &tmp->flushed_depth_texture->resource;
+		bo[0] = rbuffer->bo;
+		bo[1] = rbuffer->bo;
 	}
-	pitch = align(tmp->pitch[0] / tmp->bpt, 8);
+	pitch = align(tmp->pitch_in_pixels[0], 8);
 
 	/* FIXME properly handle first level != 0 */
 	r600_pipe_state_add_reg(rstate, R_030000_RESOURCE0_WORD0,
@@ -461,13 +397,12 @@ static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_conte
 				S_030004_TEX_DEPTH(texture->depth0 - 1),
 				0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_030008_RESOURCE0_WORD2,
-				tmp->offset[0] >> 8, 0xFFFFFFFF, bo[0]);
+				(tmp->offset[0] + r600_bo_offset(bo[0])) >> 8, 0xFFFFFFFF, bo[0]);
 	r600_pipe_state_add_reg(rstate, R_03000C_RESOURCE0_WORD3,
-				tmp->offset[1] >> 8, 0xFFFFFFFF, bo[1]);
+				(tmp->offset[1] + r600_bo_offset(bo[1])) >> 8, 0xFFFFFFFF, bo[1]);
 	r600_pipe_state_add_reg(rstate, R_030010_RESOURCE0_WORD4,
 				word4 | S_030010_NUM_FORMAT_ALL(V_030010_SQ_NUM_FORMAT_NORM) |
 				S_030010_SRF_MODE_ALL(V_030010_SFR_MODE_NO_ZERO) |
-				S_030010_REQUEST_SIZE(1) |
 				S_030010_BASE_LEVEL(state->first_level), 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_030014_RESOURCE0_WORD5,
 				S_030014_LAST_LEVEL(state->last_level) |
@@ -484,8 +419,14 @@ static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_conte
 static void evergreen_set_vs_sampler_view(struct pipe_context *ctx, unsigned count,
 					struct pipe_sampler_view **views)
 {
-	/* TODO */
-	assert(1);
+	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
+	struct r600_pipe_sampler_view **resource = (struct r600_pipe_sampler_view **)views;
+
+	for (int i = 0; i < count; i++) {
+		if (resource[i]) {
+			evergreen_context_pipe_state_set_vs_resource(&rctx->ctx, &resource[i]->state, i + PIPE_MAX_ATTRIBS);
+		}
+	}
 }
 
 static void evergreen_set_ps_sampler_view(struct pipe_context *ctx, unsigned count,
@@ -493,29 +434,37 @@ static void evergreen_set_ps_sampler_view(struct pipe_context *ctx, unsigned cou
 {
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 	struct r600_pipe_sampler_view **resource = (struct r600_pipe_sampler_view **)views;
+	int i;
 
-	for (int i = 0; i < count; i++) {
-		if (resource[i]) {
-			evergreen_context_pipe_state_set_ps_resource(&rctx->ctx, &resource[i]->state, i);
+	for (i = 0; i < count; i++) {
+		if (&rctx->ps_samplers.views[i]->base != views[i]) {
+			if (resource[i])
+				evergreen_context_pipe_state_set_ps_resource(&rctx->ctx, &resource[i]->state, i);
+			else
+				evergreen_context_pipe_state_set_ps_resource(&rctx->ctx, NULL, i);
+
+			pipe_sampler_view_reference(
+				(struct pipe_sampler_view **)&rctx->ps_samplers.views[i],
+				views[i]);
 		}
 	}
-}
-
-static void evergreen_bind_state(struct pipe_context *ctx, void *state)
-{
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-	struct r600_pipe_state *rstate = (struct r600_pipe_state *)state;
-
-	if (state == NULL)
-		return;
-	rctx->states[rstate->id] = rstate;
-	r600_context_pipe_state_set(&rctx->ctx, rstate);
+	for (i = count; i < NUM_TEX_UNITS; i++) {
+		if (rctx->ps_samplers.views[i]) {
+			evergreen_context_pipe_state_set_ps_resource(&rctx->ctx, NULL, i);
+			pipe_sampler_view_reference((struct pipe_sampler_view **)&rctx->ps_samplers.views[i], NULL);
+		}
+	}
+	rctx->ps_samplers.n_views = count;
 }
 
 static void evergreen_bind_ps_sampler(struct pipe_context *ctx, unsigned count, void **states)
 {
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 	struct r600_pipe_state **rstates = (struct r600_pipe_state **)states;
+
+
+	memcpy(rctx->ps_samplers.samplers, states, sizeof(void*) * count);
+	rctx->ps_samplers.n_samplers = count;
 
 	for (int i = 0; i < count; i++) {
 		evergreen_context_pipe_state_set_ps_sampler(&rctx->ctx, rstates[i], i);
@@ -527,35 +476,9 @@ static void evergreen_bind_vs_sampler(struct pipe_context *ctx, unsigned count, 
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 	struct r600_pipe_state **rstates = (struct r600_pipe_state **)states;
 
-	/* TODO implement */
 	for (int i = 0; i < count; i++) {
 		evergreen_context_pipe_state_set_vs_sampler(&rctx->ctx, rstates[i], i);
 	}
-}
-
-static void evergreen_delete_state(struct pipe_context *ctx, void *state)
-{
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-	struct r600_pipe_state *rstate = (struct r600_pipe_state *)state;
-
-	if (rctx->states[rstate->id] == rstate) {
-		rctx->states[rstate->id] = NULL;
-	}
-	for (int i = 0; i < rstate->nregs; i++) {
-		radeon_ws_bo_reference(rctx->radeon, &rstate->regs[i].bo, NULL);
-	}
-	free(rstate);
-}
-
-static void evergreen_delete_vertex_element(struct pipe_context *ctx, void *state)
-{
-	struct r600_vertex_element *v = (struct r600_vertex_element*)state;
-
-	if (v == NULL)
-		return;
-	if (--v->refcount)
-		return;
-	free(v);
 }
 
 static void evergreen_set_clip_state(struct pipe_context *ctx,
@@ -593,19 +516,6 @@ static void evergreen_set_clip_state(struct pipe_context *ctx,
 	r600_context_pipe_state_set(&rctx->ctx, rstate);
 }
 
-static void evergreen_bind_vertex_elements(struct pipe_context *ctx, void *state)
-{
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-	struct r600_vertex_element *v = (struct r600_vertex_element*)state;
-
-	evergreen_delete_vertex_element(ctx, rctx->vertex_elements);
-	rctx->vertex_elements = v;
-	if (v) {
-		v->refcount++;
-//		rctx->vs_rebuild = TRUE;
-	}
-}
-
 static void evergreen_set_polygon_stipple(struct pipe_context *ctx,
 					 const struct pipe_poly_stipple *state)
 {
@@ -629,18 +539,6 @@ static void evergreen_set_scissor_state(struct pipe_context *ctx,
 	tl = S_028240_TL_X(state->minx) | S_028240_TL_Y(state->miny);
 	br = S_028244_BR_X(state->maxx) | S_028244_BR_Y(state->maxy);
 	r600_pipe_state_add_reg(rstate,
-				R_028030_PA_SC_SCREEN_SCISSOR_TL, tl,
-				0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate,
-				R_028034_PA_SC_SCREEN_SCISSOR_BR, br,
-				0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate,
-				R_028204_PA_SC_WINDOW_SCISSOR_TL, tl,
-				0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate,
-				R_028208_PA_SC_WINDOW_SCISSOR_BR, br,
-				0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate,
 				R_028210_PA_SC_CLIPRECT_0_TL, tl,
 				0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate,
@@ -663,15 +561,6 @@ static void evergreen_set_scissor_state(struct pipe_context *ctx,
 				0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate,
 				R_02822C_PA_SC_CLIPRECT_3_BR, br,
-				0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate,
-				R_028200_PA_SC_WINDOW_OFFSET, 0x00000000,
-				0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate,
-				R_02820C_PA_SC_CLIPRECT_RULE, 0x0000FFFF,
-				0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate,
-				R_028230_PA_SC_EDGERULE, 0xAAAAAAAA,
 				0xFFFFFFFF, NULL);
 
 	free(rctx->states[R600_PIPE_STATE_SCISSOR]);
@@ -736,21 +625,23 @@ static void evergreen_cb(struct r600_pipe_context *rctx, struct r600_pipe_state 
 {
 	struct r600_resource_texture *rtex;
 	struct r600_resource *rbuffer;
+	struct r600_surface *surf;
 	unsigned level = state->cbufs[cb]->level;
 	unsigned pitch, slice;
 	unsigned color_info;
 	unsigned format, swap, ntype;
 	const struct util_format_description *desc;
-	struct radeon_ws_bo *bo[3];
+	struct r600_bo *bo[3];
 
+	surf = (struct r600_surface *)state->cbufs[cb];
 	rtex = (struct r600_resource_texture*)state->cbufs[cb]->texture;
 	rbuffer = &rtex->resource;
 	bo[0] = rbuffer->bo;
 	bo[1] = rbuffer->bo;
 	bo[2] = rbuffer->bo;
 
-	pitch = (rtex->pitch[level] / rtex->bpt) / 8 - 1;
-	slice = (rtex->pitch[level] / rtex->bpt) * state->cbufs[cb]->height / 64 - 1;
+	pitch = rtex->pitch_in_pixels[level] / 8 - 1;
+	slice = rtex->pitch_in_pixels[level] * surf->aligned_height / 64 - 1;
 	ntype = 0;
 	desc = util_format_description(rtex->resource.base.b.format);
 	if (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB)
@@ -768,7 +659,7 @@ static void evergreen_cb(struct r600_pipe_context *rctx, struct r600_pipe_state 
 	/* FIXME handle enabling of CB beyond BASE8 which has different offset */
 	r600_pipe_state_add_reg(rstate,
 				R_028C60_CB_COLOR0_BASE + cb * 0x3C,
-				state->cbufs[cb]->offset >> 8, 0xFFFFFFFF, bo[0]);
+				(state->cbufs[cb]->offset +  r600_bo_offset(bo[0])) >> 8, 0xFFFFFFFF, bo[0]);
 	r600_pipe_state_add_reg(rstate,
 				R_028C78_CB_COLOR0_DIM + cb * 0x3C,
 				0x0, 0xFFFFFFFF, NULL);
@@ -789,7 +680,7 @@ static void evergreen_cb(struct r600_pipe_context *rctx, struct r600_pipe_state 
 	r600_pipe_state_add_reg(rstate,
 				R_028C74_CB_COLOR0_ATTRIB + cb * 0x3C,
 				S_028C74_NON_DISP_TILING_ORDER(1),
-				0xFFFFFFFF, NULL);
+				0xFFFFFFFF, bo[0]);
 }
 
 static void evergreen_db(struct r600_pipe_context *rctx, struct r600_pipe_state *rstate,
@@ -797,32 +688,49 @@ static void evergreen_db(struct r600_pipe_context *rctx, struct r600_pipe_state 
 {
 	struct r600_resource_texture *rtex;
 	struct r600_resource *rbuffer;
+	struct r600_surface *surf;
 	unsigned level;
-	unsigned pitch, slice, format;
+	unsigned pitch, slice, format, stencil_format;
 
 	if (state->zsbuf == NULL)
 		return;
 
+	level = state->zsbuf->level;
+
+	surf = (struct r600_surface *)state->zsbuf;
 	rtex = (struct r600_resource_texture*)state->zsbuf->texture;
 	rtex->tiled = 1;
-	rtex->array_mode = 2;
+	rtex->array_mode[level] = 2;
 	rtex->tile_type = 1;
 	rtex->depth = 1;
 	rbuffer = &rtex->resource;
 
-	level = state->zsbuf->level;
-	pitch = (rtex->pitch[level] / rtex->bpt) / 8 - 1;
-	slice = (rtex->pitch[level] / rtex->bpt) * state->zsbuf->height / 64 - 1;
+	pitch = rtex->pitch_in_pixels[level] / 8 - 1;
+	slice = rtex->pitch_in_pixels[level] * surf->aligned_height / 64 - 1;
 	format = r600_translate_dbformat(state->zsbuf->texture->format);
+	stencil_format = r600_translate_stencilformat(state->zsbuf->texture->format);
 
 	r600_pipe_state_add_reg(rstate, R_028048_DB_Z_READ_BASE,
-				state->zsbuf->offset >> 8, 0xFFFFFFFF, rbuffer->bo);
+				(state->zsbuf->offset + r600_bo_offset(rbuffer->bo)) >> 8, 0xFFFFFFFF, rbuffer->bo);
 	r600_pipe_state_add_reg(rstate, R_028050_DB_Z_WRITE_BASE,
-				state->zsbuf->offset >> 8, 0xFFFFFFFF, rbuffer->bo);
-//	r600_pipe_state_add_reg(rstate, R_028014_DB_HTILE_DATA_BASE, state->zsbuf->offset >> 8, 0xFFFFFFFF, rbuffer->bo);
+				(state->zsbuf->offset  + r600_bo_offset(rbuffer->bo)) >> 8, 0xFFFFFFFF, rbuffer->bo);
+
+	if (stencil_format) {
+		uint32_t stencil_offset;
+
+		stencil_offset = ((surf->aligned_height * rtex->pitch_in_bytes[level]) + 255) & ~255;
+		r600_pipe_state_add_reg(rstate, R_02804C_DB_STENCIL_READ_BASE,
+					(state->zsbuf->offset + stencil_offset + r600_bo_offset(rbuffer->bo)) >> 8, 0xFFFFFFFF, rbuffer->bo);
+		r600_pipe_state_add_reg(rstate, R_028054_DB_STENCIL_WRITE_BASE,
+					(state->zsbuf->offset + stencil_offset + r600_bo_offset(rbuffer->bo)) >> 8, 0xFFFFFFFF, rbuffer->bo);
+	}
+
 	r600_pipe_state_add_reg(rstate, R_028008_DB_DEPTH_VIEW, 0x00000000, 0xFFFFFFFF, NULL);
+	r600_pipe_state_add_reg(rstate, R_028044_DB_STENCIL_INFO,
+				S_028044_FORMAT(stencil_format), 0xFFFFFFFF, rbuffer->bo);
+
 	r600_pipe_state_add_reg(rstate, R_028040_DB_Z_INFO,
-				S_028040_ARRAY_MODE(rtex->array_mode) | S_028040_FORMAT(format),
+				S_028040_ARRAY_MODE(rtex->array_mode[level]) | S_028040_FORMAT(format),
 				0xFFFFFFFF, rbuffer->bo);
 	r600_pipe_state_add_reg(rstate, R_028058_DB_DEPTH_SIZE,
 				S_028058_PITCH_TILE_MAX(pitch),
@@ -844,14 +752,10 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 
 	/* unreference old buffer and reference new one */
 	rstate->id = R600_PIPE_STATE_FRAMEBUFFER;
-	for (int i = 0; i < rctx->framebuffer.nr_cbufs; i++) {
-		pipe_surface_reference(&rctx->framebuffer.cbufs[i], NULL);
-	}
-	for (int i = 0; i < state->nr_cbufs; i++) {
-		pipe_surface_reference(&rctx->framebuffer.cbufs[i], state->cbufs[i]);
-	}
-	pipe_surface_reference(&rctx->framebuffer.zsbuf, state->zsbuf);
-	rctx->framebuffer = *state;
+
+	util_copy_framebuffer_state(&rctx->framebuffer, state);
+
+	rctx->pframebuffer = &rctx->framebuffer;
 
 	/* build states */
 	for (int i = 0; i < state->nr_cbufs; i++) {
@@ -883,6 +787,24 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 	r600_pipe_state_add_reg(rstate,
 				R_028254_PA_SC_VPORT_SCISSOR_0_BR, br,
 				0xFFFFFFFF, NULL);
+	r600_pipe_state_add_reg(rstate,
+				R_028030_PA_SC_SCREEN_SCISSOR_TL, tl,
+				0xFFFFFFFF, NULL);
+	r600_pipe_state_add_reg(rstate,
+				R_028034_PA_SC_SCREEN_SCISSOR_BR, br,
+				0xFFFFFFFF, NULL);
+	r600_pipe_state_add_reg(rstate,
+				R_028204_PA_SC_WINDOW_SCISSOR_TL, tl,
+				0xFFFFFFFF, NULL);
+	r600_pipe_state_add_reg(rstate,
+				R_028208_PA_SC_WINDOW_SCISSOR_BR, br,
+				0xFFFFFFFF, NULL);
+	r600_pipe_state_add_reg(rstate,
+				R_028200_PA_SC_WINDOW_OFFSET, 0x00000000,
+				0xFFFFFFFF, NULL);
+	r600_pipe_state_add_reg(rstate,
+				R_028230_PA_SC_EDGERULE, 0xAAAAAAAA,
+				0xFFFFFFFF, NULL);
 
 	r600_pipe_state_add_reg(rstate, R_028238_CB_TARGET_MASK,
 				0x00000000, target_mask, NULL);
@@ -896,40 +818,6 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 	free(rctx->states[R600_PIPE_STATE_FRAMEBUFFER]);
 	rctx->states[R600_PIPE_STATE_FRAMEBUFFER] = rstate;
 	r600_context_pipe_state_set(&rctx->ctx, rstate);
-}
-
-static void evergreen_set_index_buffer(struct pipe_context *ctx,
-				  const struct pipe_index_buffer *ib)
-{
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-
-	if (ib) {
-		pipe_resource_reference(&rctx->index_buffer.buffer, ib->buffer);
-		memcpy(&rctx->index_buffer, ib, sizeof(rctx->index_buffer));
-	} else {
-		pipe_resource_reference(&rctx->index_buffer.buffer, NULL);
-		memset(&rctx->index_buffer, 0, sizeof(rctx->index_buffer));
-	}
-
-	/* TODO make this more like a state */
-}
-
-static void evergreen_set_vertex_buffers(struct pipe_context *ctx, unsigned count,
-					const struct pipe_vertex_buffer *buffers)
-{
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-
-	for (int i = 0; i < rctx->nvertex_buffer; i++) {
-		pipe_resource_reference(&rctx->vertex_buffer[i].buffer, NULL);
-	}
-	memcpy(rctx->vertex_buffer, buffers, sizeof(struct pipe_vertex_buffer) * count);
-	for (int i = 0; i < count; i++) {
-		rctx->vertex_buffer[i].buffer = NULL;
-		if (r600_buffer_is_user_buffer(buffers[i].buffer))
-			rctx->any_user_vbs = TRUE;
-		pipe_resource_reference(&rctx->vertex_buffer[i].buffer, buffers[i].buffer);
-	}
-	rctx->nvertex_buffer = count;
 }
 
 static void evergreen_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
@@ -947,7 +835,7 @@ static void evergreen_set_constant_buffer(struct pipe_context *ctx, uint shader,
 					0xFFFFFFFF, NULL);
 		r600_pipe_state_add_reg(&rctx->vs_const_buffer,
 					R_028980_ALU_CONST_CACHE_VS_0,
-					0, 0xFFFFFFFF, rbuffer->bo);
+					(r600_bo_offset(rbuffer->bo)) >> 8, 0xFFFFFFFF, rbuffer->bo);
 		r600_context_pipe_state_set(&rctx->ctx, &rctx->vs_const_buffer);
 		break;
 	case PIPE_SHADER_FRAGMENT:
@@ -958,7 +846,7 @@ static void evergreen_set_constant_buffer(struct pipe_context *ctx, uint shader,
 					0xFFFFFFFF, NULL);
 		r600_pipe_state_add_reg(&rctx->ps_const_buffer,
 					R_028940_ALU_CONST_CACHE_PS_0,
-					0, 0xFFFFFFFF, rbuffer->bo);
+					(r600_bo_offset(rbuffer->bo)) >> 8, 0xFFFFFFFF, rbuffer->bo);
 		r600_context_pipe_state_set(&rctx->ctx, &rctx->ps_const_buffer);
 		break;
 	default:
@@ -967,85 +855,31 @@ static void evergreen_set_constant_buffer(struct pipe_context *ctx, uint shader,
 	}
 }
 
-static void *evergreen_create_shader_state(struct pipe_context *ctx,
-					const struct pipe_shader_state *state)
-{
-	struct r600_pipe_shader *shader =  CALLOC_STRUCT(r600_pipe_shader);
-	int r;
-
-	shader->shader.use_mem_constant = TRUE;
-	r =  r600_pipe_shader_create(ctx, shader, state->tokens);
-	if (r) {
-		return NULL;
-	}
-	return shader;
-}
-
-static void evergreen_bind_ps_shader(struct pipe_context *ctx, void *state)
-{
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-
-	/* TODO delete old shader */
-	rctx->ps_shader = (struct r600_pipe_shader *)state;
-}
-
-static void evergreen_bind_vs_shader(struct pipe_context *ctx, void *state)
-{
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-
-	/* TODO delete old shader */
-	rctx->vs_shader = (struct r600_pipe_shader *)state;
-}
-
-static void evergreen_delete_ps_shader(struct pipe_context *ctx, void *state)
-{
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-	struct r600_pipe_shader *shader = (struct r600_pipe_shader *)state;
-
-	if (rctx->ps_shader == shader) {
-		rctx->ps_shader = NULL;
-	}
-	/* TODO proper delete */
-	free(shader);
-}
-
-static void evergreen_delete_vs_shader(struct pipe_context *ctx, void *state)
-{
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-	struct r600_pipe_shader *shader = (struct r600_pipe_shader *)state;
-
-	if (rctx->vs_shader == shader) {
-		rctx->vs_shader = NULL;
-	}
-	/* TODO proper delete */
-	free(shader);
-}
-
 void evergreen_init_state_functions(struct r600_pipe_context *rctx)
 {
 	rctx->context.create_blend_state = evergreen_create_blend_state;
 	rctx->context.create_depth_stencil_alpha_state = evergreen_create_dsa_state;
-	rctx->context.create_fs_state = evergreen_create_shader_state;
+	rctx->context.create_fs_state = r600_create_shader_state;
 	rctx->context.create_rasterizer_state = evergreen_create_rs_state;
 	rctx->context.create_sampler_state = evergreen_create_sampler_state;
 	rctx->context.create_sampler_view = evergreen_create_sampler_view;
-	rctx->context.create_vertex_elements_state = evergreen_create_vertex_elements;
-	rctx->context.create_vs_state = evergreen_create_shader_state;
-	rctx->context.bind_blend_state = evergreen_bind_blend_state;
-	rctx->context.bind_depth_stencil_alpha_state = evergreen_bind_state;
+	rctx->context.create_vertex_elements_state = r600_create_vertex_elements;
+	rctx->context.create_vs_state = r600_create_shader_state;
+	rctx->context.bind_blend_state = r600_bind_blend_state;
+	rctx->context.bind_depth_stencil_alpha_state = r600_bind_state;
 	rctx->context.bind_fragment_sampler_states = evergreen_bind_ps_sampler;
-	rctx->context.bind_fs_state = evergreen_bind_ps_shader;
-	rctx->context.bind_rasterizer_state = evergreen_bind_rs_state;
-	rctx->context.bind_vertex_elements_state = evergreen_bind_vertex_elements;
+	rctx->context.bind_fs_state = r600_bind_ps_shader;
+	rctx->context.bind_rasterizer_state = r600_bind_rs_state;
+	rctx->context.bind_vertex_elements_state = r600_bind_vertex_elements;
 	rctx->context.bind_vertex_sampler_states = evergreen_bind_vs_sampler;
-	rctx->context.bind_vs_state = evergreen_bind_vs_shader;
-	rctx->context.delete_blend_state = evergreen_delete_state;
-	rctx->context.delete_depth_stencil_alpha_state = evergreen_delete_state;
-	rctx->context.delete_fs_state = evergreen_delete_ps_shader;
-	rctx->context.delete_rasterizer_state = evergreen_delete_rs_state;
-	rctx->context.delete_sampler_state = evergreen_delete_state;
-	rctx->context.delete_vertex_elements_state = evergreen_delete_vertex_element;
-	rctx->context.delete_vs_state = evergreen_delete_vs_shader;
+	rctx->context.bind_vs_state = r600_bind_vs_shader;
+	rctx->context.delete_blend_state = r600_delete_state;
+	rctx->context.delete_depth_stencil_alpha_state = r600_delete_state;
+	rctx->context.delete_fs_state = r600_delete_ps_shader;
+	rctx->context.delete_rasterizer_state = r600_delete_rs_state;
+	rctx->context.delete_sampler_state = r600_delete_state;
+	rctx->context.delete_vertex_elements_state = r600_delete_vertex_element;
+	rctx->context.delete_vs_state = r600_delete_vs_shader;
 	rctx->context.set_blend_color = evergreen_set_blend_color;
 	rctx->context.set_clip_state = evergreen_set_clip_state;
 	rctx->context.set_constant_buffer = evergreen_set_constant_buffer;
@@ -1055,11 +889,11 @@ void evergreen_init_state_functions(struct r600_pipe_context *rctx)
 	rctx->context.set_sample_mask = evergreen_set_sample_mask;
 	rctx->context.set_scissor_state = evergreen_set_scissor_state;
 	rctx->context.set_stencil_ref = evergreen_set_stencil_ref;
-	rctx->context.set_vertex_buffers = evergreen_set_vertex_buffers;
-	rctx->context.set_index_buffer = evergreen_set_index_buffer;
+	rctx->context.set_vertex_buffers = r600_set_vertex_buffers;
+	rctx->context.set_index_buffer = r600_set_index_buffer;
 	rctx->context.set_vertex_sampler_views = evergreen_set_vs_sampler_view;
 	rctx->context.set_viewport_state = evergreen_set_viewport_state;
-	rctx->context.sampler_view_destroy = evergreen_sampler_view_destroy;
+	rctx->context.sampler_view_destroy = r600_sampler_view_destroy;
 }
 
 void evergreen_init_config(struct r600_pipe_context *rctx)
@@ -1336,14 +1170,18 @@ void evergreen_draw(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 	struct r600_pipe_state *rstate;
 	struct r600_resource *rbuffer;
-	unsigned i, j, offset, format, prim;
+	unsigned i, j, offset, prim;
 	u32 vgt_dma_index_type, vgt_draw_initiator, mask;
 	struct pipe_vertex_buffer *vertex_buffer;
 	struct r600_draw rdraw;
 	struct r600_pipe_state vgt;
 	struct r600_drawl draw;
+	boolean translate = FALSE;
 
-	assert(info->index_bias == 0);
+	if (rctx->vertex_elements->incompatible_layout) {
+		r600_begin_vertex_translate(rctx);
+		translate = TRUE;
+	}
 
 	if (rctx->any_user_vbs) {
 		r600_upload_user_buffers(rctx);
@@ -1351,6 +1189,7 @@ void evergreen_draw(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	}
 
 	memset(&draw, 0, sizeof(struct r600_drawl));
+	draw.ctx = ctx;
 	draw.mode = info->mode;
 	draw.start = info->start;
 	draw.count = info->count;
@@ -1366,7 +1205,7 @@ void evergreen_draw(struct pipe_context *ctx, const struct pipe_draw_info *info)
 					    info->count);
 
 		draw.index_size = rctx->index_buffer.index_size;
-		draw.index_buffer = rctx->index_buffer.buffer;
+		pipe_resource_reference(&draw.index_buffer, rctx->index_buffer.buffer);
 		draw.index_buffer_offset = draw.start * draw.index_size;
 		draw.start = 0;
 		r600_upload_index_buffer(rctx, &draw);
@@ -1405,34 +1244,30 @@ void evergreen_draw(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		return;
 
 	for (i = 0 ; i < rctx->vertex_elements->count; i++) {
-		unsigned num_format = 0, format_comp = 0;
-
+		uint32_t word3, word2;
+		uint32_t format;
 		rstate = &rctx->vs_resource[i];
-		j = rctx->vertex_elements->elements[i].vertex_buffer_index;
-		vertex_buffer = &rctx->vertex_buffer[j];
-		rbuffer = (struct r600_resource*)vertex_buffer->buffer;
-		offset = rctx->vertex_elements->elements[i].src_offset + vertex_buffer->buffer_offset;
-		format = r600_translate_colorformat(rctx->vertex_elements->elements[i].src_format);
+
 		rstate->id = R600_PIPE_STATE_RESOURCE;
 		rstate->nregs = 0;
 
-		r600_translate_vertex_num_format(rctx->vertex_elements->elements[i].src_format, &num_format, &format_comp);
+		j = rctx->vertex_elements->elements[i].vertex_buffer_index;
+		vertex_buffer = &rctx->vertex_buffer[j];
+		rbuffer = (struct r600_resource*)vertex_buffer->buffer;
+		offset = rctx->vertex_elements->elements[i].src_offset +
+			vertex_buffer->buffer_offset +
+			r600_bo_offset(rbuffer->bo);
+
+		format = r600_translate_vertex_data_type(rctx->vertex_elements->hw_format[i]);
+
+		word2 = format | S_030008_STRIDE(vertex_buffer->stride);
+
+		word3 = r600_translate_vertex_data_swizzle(rctx->vertex_elements->hw_format[i]);
+
 		r600_pipe_state_add_reg(rstate, R_030000_RESOURCE0_WORD0, offset, 0xFFFFFFFF, rbuffer->bo);
 		r600_pipe_state_add_reg(rstate, R_030004_RESOURCE0_WORD1, rbuffer->size - offset - 1, 0xFFFFFFFF, NULL);
-		r600_pipe_state_add_reg(rstate,
-					R_030008_RESOURCE0_WORD2,
-					S_030008_STRIDE(vertex_buffer->stride) |
-					S_030008_DATA_FORMAT(format) |
-					S_030008_NUM_FORMAT_ALL(num_format) |
-					S_030008_FORMAT_COMP_ALL(format_comp),
-					0xFFFFFFFF, NULL);
-		r600_pipe_state_add_reg(rstate,
-					R_03000C_RESOURCE0_WORD3,
-					S_03000C_DST_SEL_X(V_03000C_SQ_SEL_X) |
-					S_03000C_DST_SEL_Y(V_03000C_SQ_SEL_Y) |
-					S_03000C_DST_SEL_Z(V_03000C_SQ_SEL_Z) |
-					S_03000C_DST_SEL_W(V_03000C_SQ_SEL_W),
-					0xFFFFFFFF, NULL);
+		r600_pipe_state_add_reg(rstate, R_030008_RESOURCE0_WORD2, word2, 0xFFFFFFFF, NULL);
+		r600_pipe_state_add_reg(rstate, R_03000C_RESOURCE0_WORD3, word3, 0xFFFFFFFF, NULL);
 		r600_pipe_state_add_reg(rstate, R_030010_RESOURCE0_WORD4, 0x00000000, 0xFFFFFFFF, NULL);
 		r600_pipe_state_add_reg(rstate, R_030014_RESOURCE0_WORD5, 0x00000000, 0xFFFFFFFF, NULL);
 		r600_pipe_state_add_reg(rstate, R_030018_RESOURCE0_WORD6, 0x00000000, 0xFFFFFFFF, NULL);
@@ -1452,6 +1287,8 @@ void evergreen_draw(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	r600_pipe_state_add_reg(&vgt, R_028238_CB_TARGET_MASK, rctx->cb_target_mask & mask, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(&vgt, R_028400_VGT_MAX_VTX_INDX, draw.max_index, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(&vgt, R_028404_VGT_MIN_VTX_INDX, draw.min_index, 0xFFFFFFFF, NULL);
+	r600_pipe_state_add_reg(&vgt, R_03CFF0_SQ_VTX_BASE_VTX_LOC, 0, 0xFFFFFFFF, NULL);
+	r600_pipe_state_add_reg(&vgt, R_03CFF4_SQ_VTX_START_INST_LOC, 0, 0xFFFFFFFF, NULL);
 
 	if (rctx->rasterizer && rctx->framebuffer.zsbuf) {
 		float offset_units = rctx->rasterizer->offset_units;
@@ -1505,6 +1342,11 @@ void evergreen_draw(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		rdraw.indices_bo_offset = draw.index_buffer_offset;
 	}
 	evergreen_context_draw(&rctx->ctx, &rdraw);
+
+	if (translate)
+		r600_end_vertex_translate(rctx);
+
+	pipe_resource_reference(&draw.index_buffer, NULL);
 }
 
 void evergreen_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shader)
@@ -1512,23 +1354,39 @@ void evergreen_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader 
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 	struct r600_pipe_state *rstate = &shader->rstate;
 	struct r600_shader *rshader = &shader->shader;
-	unsigned i, tmp, exports_ps, num_cout, spi_ps_in_control_0, spi_input_z;
-	boolean have_pos = FALSE, have_face = FALSE;
+	unsigned i, tmp, exports_ps, num_cout, spi_ps_in_control_0, spi_input_z, spi_ps_in_control_1;
+	int pos_index = -1, face_index = -1;
+	int ninterp = 0;
+	boolean have_linear = FALSE, have_centroid = FALSE, have_perspective = FALSE;
+	unsigned spi_baryc_cntl;
 
 	/* clear previous register */
 	rstate->nregs = 0;
 
 	for (i = 0; i < rshader->ninput; i++) {
 		tmp = S_028644_SEMANTIC(r600_find_vs_semantic_index(&rctx->vs_shader->shader, rshader, i));
+		/* evergreen NUM_INTERP only contains values interpolated into the LDS,
+		   POSITION goes via GPRs from the SC so isn't counted */
 		if (rshader->input[i].name == TGSI_SEMANTIC_POSITION)
-			have_pos = TRUE;
+			pos_index = i;
+		else if (rshader->input[i].name == TGSI_SEMANTIC_FACE)
+			face_index = i;
+		else {
+			if (rshader->input[i].interpolate == TGSI_INTERPOLATE_LINEAR ||
+			    rshader->input[i].interpolate == TGSI_INTERPOLATE_PERSPECTIVE)
+				ninterp++;
+			if (rshader->input[i].interpolate == TGSI_INTERPOLATE_LINEAR)
+				have_linear = TRUE;
+			if (rshader->input[i].interpolate == TGSI_INTERPOLATE_PERSPECTIVE)
+				have_perspective = TRUE;
+			if (rshader->input[i].centroid)
+				have_centroid = TRUE;
+		}
 		if (rshader->input[i].name == TGSI_SEMANTIC_COLOR ||
 		    rshader->input[i].name == TGSI_SEMANTIC_BCOLOR ||
 		    rshader->input[i].name == TGSI_SEMANTIC_POSITION) {
 			tmp |= S_028644_FLAT_SHADE(rshader->flat_shade);
 		}
-		if (rshader->input[i].name == TGSI_SEMANTIC_FACE)
-			have_face = TRUE;
 		if (rshader->input[i].name == TGSI_SEMANTIC_GENERIC &&
 			rctx->sprite_coord_enable & (1 << rshader->input[i].sid)) {
 			tmp |= S_028644_PT_SPRITE_TEX(1);
@@ -1536,16 +1394,23 @@ void evergreen_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader 
 		r600_pipe_state_add_reg(rstate, R_028644_SPI_PS_INPUT_CNTL_0 + i * 4, tmp, 0xFFFFFFFF, NULL);
 	}
 	for (i = 0; i < rshader->noutput; i++) {
-		r600_pipe_state_add_reg(rstate,
-				R_02880C_DB_SHADER_CONTROL,
-				S_02880C_Z_EXPORT_ENABLE(1),
-				S_02880C_Z_EXPORT_ENABLE(1), NULL);
+		if (rshader->output[i].name == TGSI_SEMANTIC_POSITION)
+			r600_pipe_state_add_reg(rstate,
+						R_02880C_DB_SHADER_CONTROL,
+						S_02880C_Z_EXPORT_ENABLE(1),
+						S_02880C_Z_EXPORT_ENABLE(1), NULL);
+		if (rshader->output[i].name == TGSI_SEMANTIC_STENCIL)
+			r600_pipe_state_add_reg(rstate,
+						R_02880C_DB_SHADER_CONTROL,
+						S_02880C_STENCIL_EXPORT_ENABLE(1),
+						S_02880C_STENCIL_EXPORT_ENABLE(1), NULL);
 	}
 
 	exports_ps = 0;
 	num_cout = 0;
 	for (i = 0; i < rshader->noutput; i++) {
-		if (rshader->output[i].name == TGSI_SEMANTIC_POSITION)
+		if (rshader->output[i].name == TGSI_SEMANTIC_POSITION ||
+		    rshader->output[i].name == TGSI_SEMANTIC_STENCIL)
 			exports_ps |= 1;
 		else if (rshader->output[i].name == TGSI_SEMANTIC_COLOR) {
 			num_cout++;
@@ -1557,21 +1422,51 @@ void evergreen_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader 
 		exports_ps = 2;
 	}
 
-	spi_ps_in_control_0 = S_0286CC_NUM_INTERP(rshader->ninput) |
-				S_0286CC_PERSP_GRADIENT_ENA(1);
+	if (ninterp == 0) {
+		ninterp = 1;
+		have_perspective = TRUE;
+	}
+
+	spi_ps_in_control_0 = S_0286CC_NUM_INTERP(ninterp) |
+		              S_0286CC_PERSP_GRADIENT_ENA(have_perspective) |
+		              S_0286CC_LINEAR_GRADIENT_ENA(have_linear);
 	spi_input_z = 0;
-	if (have_pos) {
-		spi_ps_in_control_0 |=  S_0286CC_POSITION_ENA(1);
+	if (pos_index != -1) {
+		spi_ps_in_control_0 |=  S_0286CC_POSITION_ENA(1) |
+			S_0286CC_POSITION_CENTROID(rshader->input[pos_index].centroid) |
+			S_0286CC_POSITION_ADDR(rshader->input[pos_index].gpr);
 		spi_input_z |= 1;
 	}
+
+	spi_ps_in_control_1 = 0;
+	if (face_index != -1) {
+		spi_ps_in_control_1 |= S_0286D0_FRONT_FACE_ENA(1) |
+			S_0286D0_FRONT_FACE_ADDR(rshader->input[face_index].gpr);
+	}
+
+	spi_baryc_cntl = 0;
+	if (have_perspective)
+		spi_baryc_cntl |= S_0286E0_PERSP_CENTER_ENA(1) |
+				  S_0286E0_PERSP_CENTROID_ENA(have_centroid);
+	if (have_linear)
+		spi_baryc_cntl |= S_0286E0_LINEAR_CENTER_ENA(1) |
+			          S_0286E0_LINEAR_CENTROID_ENA(have_centroid);
+				
 	r600_pipe_state_add_reg(rstate, R_0286CC_SPI_PS_IN_CONTROL_0,
 				spi_ps_in_control_0, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_0286D0_SPI_PS_IN_CONTROL_1,
-				S_0286D0_FRONT_FACE_ENA(have_face), 0xFFFFFFFF, NULL);
+				spi_ps_in_control_1, 0xFFFFFFFF, NULL);
+	r600_pipe_state_add_reg(rstate, R_0286E4_SPI_PS_IN_CONTROL_2,
+				0, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_0286D8_SPI_INPUT_Z, spi_input_z, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate,
+				R_0286E0_SPI_BARYC_CNTL,
+				spi_baryc_cntl,
+				0xFFFFFFFF, NULL);
+
+	r600_pipe_state_add_reg(rstate,
 				R_028840_SQ_PGM_START_PS,
-				0x00000000, 0xFFFFFFFF, shader->bo);
+				(r600_bo_offset(shader->bo)) >> 8, 0xFFFFFFFF, shader->bo);
 	r600_pipe_state_add_reg(rstate,
 				R_028844_SQ_PGM_RESOURCES_PS,
 				S_028844_NUM_GPRS(rshader->bc.ngpr) |
@@ -1584,11 +1479,6 @@ void evergreen_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader 
 	r600_pipe_state_add_reg(rstate,
 				R_02884C_SQ_PGM_EXPORTS_PS,
 				exports_ps, 0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate,
-				R_0286E0_SPI_BARYC_CNTL,
-				S_0286E0_PERSP_CENTROID_ENA(1) |
-				S_0286E0_LINEAR_CENTROID_ENA(1),
-				0xFFFFFFFF, NULL);
 
 	if (rshader->uses_kill) {
 		/* only set some bits here, the other bits are set in the dsa state */
@@ -1597,6 +1487,10 @@ void evergreen_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader 
 					S_02880C_KILL_ENABLE(1),
 					S_02880C_KILL_ENABLE(1), NULL);
 	}
+
+	r600_pipe_state_add_reg(rstate,
+				R_03A200_SQ_LOOP_CONST_0, 0x01000FFF,
+				0xFFFFFFFF, NULL);
 }
 
 void evergreen_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader *shader)
@@ -1640,8 +1534,35 @@ void evergreen_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader 
 			0x00000000, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate,
 			R_02885C_SQ_PGM_START_VS,
-			0x00000000, 0xFFFFFFFF, shader->bo);
+			(r600_bo_offset(shader->bo)) >> 8, 0xFFFFFFFF, shader->bo);
 	r600_pipe_state_add_reg(rstate,
 			R_0288A4_SQ_PGM_START_FS,
-			0x00000000, 0xFFFFFFFF, shader->bo);
+			(r600_bo_offset(shader->bo)) >> 8, 0xFFFFFFFF, shader->bo);
+
+	r600_pipe_state_add_reg(rstate,
+				R_03A200_SQ_LOOP_CONST_0 + (32 * 4), 0x01000FFF,
+				0xFFFFFFFF, NULL);
+}
+
+void *evergreen_create_db_flush_dsa(struct r600_pipe_context *rctx)
+{
+	struct pipe_depth_stencil_alpha_state dsa;
+	struct r600_pipe_state *rstate;
+
+	memset(&dsa, 0, sizeof(dsa));
+
+	rstate = rctx->context.create_depth_stencil_alpha_state(&rctx->context, &dsa);
+	r600_pipe_state_add_reg(rstate,
+				R_02880C_DB_SHADER_CONTROL,
+				0x0,
+				S_02880C_DUAL_EXPORT_ENABLE(1), NULL);
+	r600_pipe_state_add_reg(rstate,
+				R_028000_DB_RENDER_CONTROL,
+				S_028000_DEPTH_COPY_ENABLE(1) |
+				S_028000_STENCIL_COPY_ENABLE(1) |
+				S_028000_COPY_CENTROID(1),
+				S_028000_DEPTH_COPY_ENABLE(1) |
+				S_028000_STENCIL_COPY_ENABLE(1) |
+				S_028000_COPY_CENTROID(1), NULL);
+	return rstate;
 }

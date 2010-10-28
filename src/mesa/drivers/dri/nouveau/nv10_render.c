@@ -32,7 +32,7 @@
 #define NUM_VERTEX_ATTRS 8
 
 static void
-nv10_emit_material(GLcontext *ctx, struct nouveau_array_state *a,
+nv10_emit_material(struct gl_context *ctx, struct nouveau_array *a,
 		   const void *v);
 
 /* Vertex attribute format. */
@@ -106,18 +106,16 @@ get_hw_format(int type)
 }
 
 static void
-nv10_render_set_format(GLcontext *ctx)
+nv10_render_set_format(struct gl_context *ctx)
 {
 	struct nouveau_render_state *render = to_render_state(ctx);
 	struct nouveau_channel *chan = context_chan(ctx);
 	struct nouveau_grobj *celsius = context_eng3d(ctx);
-	int i, hw_format;
+	int i, attr, hw_format;
 
-	for (i = 0; i < NUM_VERTEX_ATTRS; i++) {
-		int attr = render->map[i];
-
+	FOR_EACH_ATTR(render, i, attr) {
 		if (attr >= 0) {
-			struct nouveau_array_state *a = &render->attrs[attr];
+			struct nouveau_array *a = &render->attrs[attr];
 
 			hw_format = a->stride << 8 |
 				a->fields << 4 |
@@ -136,66 +134,62 @@ nv10_render_set_format(GLcontext *ctx)
 }
 
 static void
-nv10_render_bind_vertices(GLcontext *ctx)
+nv10_render_bind_vertices(struct gl_context *ctx)
 {
 	struct nouveau_render_state *render = to_render_state(ctx);
 	struct nouveau_bo_context *bctx = context_bctx(ctx, VERTEX);
-	struct nouveau_channel *chan = context_chan(ctx);
 	struct nouveau_grobj *celsius = context_eng3d(ctx);
-	int i;
+	int i, attr;
 
-	for (i = 0; i < NUM_VERTEX_ATTRS; i++) {
-		int attr = render->map[i];
+	FOR_EACH_BOUND_ATTR(render, i, attr) {
+		struct nouveau_array *a = &render->attrs[attr];
 
-		if (attr >= 0) {
-			struct nouveau_array_state *a = &render->attrs[attr];
-
-			nouveau_bo_markl(bctx, celsius,
-					 NV10TCL_VTXBUF_ADDRESS(i),
-					 a->bo, a->offset,
-					 NOUVEAU_BO_GART | NOUVEAU_BO_RD);
-		}
+		nouveau_bo_markl(bctx, celsius,
+				 NV10TCL_VTXBUF_ADDRESS(i),
+				 a->bo, a->offset,
+				 NOUVEAU_BO_GART | NOUVEAU_BO_RD);
 	}
-
-	BEGIN_RING(chan, celsius, NV10TCL_VERTEX_ARRAY_VALIDATE, 1);
-	OUT_RING(chan, 0);
 }
 
 /* Vertex array rendering defs. */
 #define RENDER_LOCALS(ctx)					\
 	struct nouveau_grobj *celsius = context_eng3d(ctx)
 
+#define BATCH_VALIDATE()						\
+	BEGIN_RING(chan, celsius, NV10TCL_VERTEX_ARRAY_VALIDATE, 1);	\
+	OUT_RING(chan, 0)
+
 #define BATCH_BEGIN(prim)						\
 	BEGIN_RING(chan, celsius, NV10TCL_VERTEX_BUFFER_BEGIN_END, 1);	\
-	OUT_RING(chan, prim);
+	OUT_RING(chan, prim)
 #define BATCH_END()							\
 	BEGIN_RING(chan, celsius, NV10TCL_VERTEX_BUFFER_BEGIN_END, 1);	\
-	OUT_RING(chan, 0);
+	OUT_RING(chan, 0)
 
 #define MAX_PACKET 0x400
 
 #define MAX_OUT_L 0x100
 #define BATCH_PACKET_L(n)						\
-	BEGIN_RING_NI(chan, celsius, NV10TCL_VERTEX_BUFFER_DRAW_ARRAYS, n);
+	BEGIN_RING_NI(chan, celsius, NV10TCL_VERTEX_BUFFER_DRAW_ARRAYS, n)
 #define BATCH_OUT_L(i, n)			\
-	OUT_RING(chan, ((n) - 1) << 24 | (i));
+	OUT_RING(chan, ((n) - 1) << 24 | (i))
 
 #define MAX_OUT_I16 0x2
 #define BATCH_PACKET_I16(n)						\
-	BEGIN_RING_NI(chan, celsius, NV10TCL_VB_ELEMENT_U16, n);
+	BEGIN_RING_NI(chan, celsius, NV10TCL_VB_ELEMENT_U16, n)
 #define BATCH_OUT_I16(i0, i1)			\
-	OUT_RING(chan, (i1) << 16 | (i0));
+	OUT_RING(chan, (i1) << 16 | (i0))
 
 #define MAX_OUT_I32 0x1
 #define BATCH_PACKET_I32(n)						\
-	BEGIN_RING_NI(chan, celsius, NV10TCL_VB_ELEMENT_U32, n);
+	BEGIN_RING_NI(chan, celsius, NV10TCL_VB_ELEMENT_U32, n)
 #define BATCH_OUT_I32(i)			\
-	OUT_RING(chan, i);
+	OUT_RING(chan, i)
 
 #define IMM_PACKET(m, n)			\
-	BEGIN_RING(chan, celsius, m, n);
+	BEGIN_RING(chan, celsius, m, n)
 #define IMM_OUT(x)				\
-	OUT_RINGf(chan, x);
+	OUT_RINGf(chan, x)
 
 #define TAG(x) nv10_##x
 #include "nouveau_render_t.c"

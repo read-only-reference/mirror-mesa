@@ -26,21 +26,22 @@
 #include <pipe/p_compiler.h>
 #include <pipe/p_screen.h>
 #include <pipebuffer/pb_bufmgr.h>
+#include "radeon_drm.h"
 #include "r600_priv.h"
+#include "r600d.h"
 
-struct radeon_ws_bo *radeon_ws_bo(struct radeon *radeon,
+struct r600_bo *r600_bo(struct radeon *radeon,
 				  unsigned size, unsigned alignment, unsigned usage)
 {
-	struct radeon_ws_bo *ws_bo = calloc(1, sizeof(struct radeon_ws_bo));
+	struct r600_bo *ws_bo = calloc(1, sizeof(struct r600_bo));
 	struct pb_desc desc;
 	struct pb_manager *man;
 
 	desc.alignment = alignment;
 	desc.usage = usage;
+	ws_bo->size = size;
 
-	if (!radeon->use_mem_constant && (usage & PIPE_BIND_CONSTANT_BUFFER)) {
-		man = radeon->mman;
-	} else if (usage & (PIPE_BIND_CONSTANT_BUFFER | PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER))
+	if (usage & (PIPE_BIND_CONSTANT_BUFFER | PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER))
 		man = radeon->cman;
 	else
 		man = radeon->kman;
@@ -55,49 +56,66 @@ struct radeon_ws_bo *radeon_ws_bo(struct radeon *radeon,
 	return ws_bo;
 }
 
-struct radeon_ws_bo *radeon_ws_bo_handle(struct radeon *radeon,
-					 unsigned handle)
+struct r600_bo *r600_bo_handle(struct radeon *radeon,
+			       unsigned handle, unsigned *array_mode)
 {
-	struct radeon_ws_bo *ws_bo = calloc(1, sizeof(struct radeon_ws_bo));
+	struct r600_bo *ws_bo = calloc(1, sizeof(struct r600_bo));
+	struct radeon_bo *bo;
 
 	ws_bo->pb = radeon_bo_pb_create_buffer_from_handle(radeon->kman, handle);
 	if (!ws_bo->pb) {
 		free(ws_bo);
 		return NULL;
 	}
+	bo = radeon_bo_pb_get_bo(ws_bo->pb);
+	ws_bo->size = bo->size;
 	pipe_reference_init(&ws_bo->reference, 1);
+
+	radeon_bo_get_tiling_flags(radeon, bo, &ws_bo->tiling_flags,
+				   &ws_bo->kernel_pitch);
+	if (array_mode) {
+		if (ws_bo->tiling_flags) {
+			if (ws_bo->tiling_flags & RADEON_TILING_MICRO)
+				*array_mode = V_0280A0_ARRAY_1D_TILED_THIN1;
+			if ((ws_bo->tiling_flags & (RADEON_TILING_MICRO | RADEON_TILING_MACRO)) ==
+			    (RADEON_TILING_MICRO | RADEON_TILING_MACRO))
+				*array_mode = V_0280A0_ARRAY_2D_TILED_THIN1;
+		} else {
+			*array_mode = 0;
+		}
+	}
 	return ws_bo;
 }
 
-void *radeon_ws_bo_map(struct radeon *radeon, struct radeon_ws_bo *bo, unsigned usage, void *ctx)
+void *r600_bo_map(struct radeon *radeon, struct r600_bo *bo, unsigned usage, void *ctx)
 {
 	return pb_map(bo->pb, usage, ctx);
 }
 
-void radeon_ws_bo_unmap(struct radeon *radeon, struct radeon_ws_bo *bo)
+void r600_bo_unmap(struct radeon *radeon, struct r600_bo *bo)
 {
 	pb_unmap(bo->pb);
 }
 
-static void radeon_ws_bo_destroy(struct radeon *radeon, struct radeon_ws_bo *bo)
+static void r600_bo_destroy(struct radeon *radeon, struct r600_bo *bo)
 {
 	if (bo->pb)
 		pb_reference(&bo->pb, NULL);
 	free(bo);
 }
 
-void radeon_ws_bo_reference(struct radeon *radeon, struct radeon_ws_bo **dst,
-			    struct radeon_ws_bo *src)
+void r600_bo_reference(struct radeon *radeon, struct r600_bo **dst,
+			    struct r600_bo *src)
 {
-	struct radeon_ws_bo *old = *dst;
+	struct r600_bo *old = *dst;
  		
 	if (pipe_reference(&(*dst)->reference, &src->reference)) {
-		radeon_ws_bo_destroy(radeon, old);
+		r600_bo_destroy(radeon, old);
 	}
 	*dst = src;
 }
 
-unsigned radeon_ws_bo_get_handle(struct radeon_ws_bo *pb_bo)
+unsigned r600_bo_get_handle(struct r600_bo *pb_bo)
 {
 	struct radeon_bo *bo;
 
@@ -108,7 +126,7 @@ unsigned radeon_ws_bo_get_handle(struct radeon_ws_bo *pb_bo)
 	return bo->handle;
 }
 
-unsigned radeon_ws_bo_get_size(struct radeon_ws_bo *pb_bo)
+unsigned r600_bo_get_size(struct r600_bo *pb_bo)
 {
 	struct radeon_bo *bo;
 
