@@ -104,6 +104,8 @@ struct save_state
 
    /** META_ALPHA_TEST */
    GLboolean AlphaEnabled;
+   GLenum AlphaFunc;
+   GLclampf AlphaRef;
 
    /** META_BLEND */
    GLbitfield BlendEnabled;
@@ -328,6 +330,8 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
 
    if (state & META_ALPHA_TEST) {
       save->AlphaEnabled = ctx->Color.AlphaEnabled;
+      save->AlphaFunc = ctx->Color.AlphaFunc;
+      save->AlphaRef = ctx->Color.AlphaRef;
       if (ctx->Color.AlphaEnabled)
          _mesa_set_enable(ctx, GL_ALPHA_TEST, GL_FALSE);
    }
@@ -474,7 +478,8 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
             _mesa_set_enable(ctx, GL_TEXTURE_1D, GL_FALSE);
             _mesa_set_enable(ctx, GL_TEXTURE_2D, GL_FALSE);
             _mesa_set_enable(ctx, GL_TEXTURE_3D, GL_FALSE);
-            _mesa_set_enable(ctx, GL_TEXTURE_CUBE_MAP, GL_FALSE);
+            if (ctx->Extensions.ARB_texture_cube_map)
+               _mesa_set_enable(ctx, GL_TEXTURE_CUBE_MAP, GL_FALSE);
             _mesa_set_enable(ctx, GL_TEXTURE_RECTANGLE, GL_FALSE);
             _mesa_set_enable(ctx, GL_TEXTURE_GEN_S, GL_FALSE);
             _mesa_set_enable(ctx, GL_TEXTURE_GEN_T, GL_FALSE);
@@ -576,6 +581,7 @@ _mesa_meta_end(struct gl_context *ctx)
    if (state & META_ALPHA_TEST) {
       if (ctx->Color.AlphaEnabled != save->AlphaEnabled)
          _mesa_set_enable(ctx, GL_ALPHA_TEST, save->AlphaEnabled);
+      _mesa_AlphaFunc(save->AlphaFunc, save->AlphaRef);
    }
 
    if (state & META_BLEND) {
@@ -1392,6 +1398,7 @@ _mesa_meta_Clear(struct gl_context *ctx, GLbitfield buffers)
    struct vertex verts[4];
    /* save all state but scissor, pixel pack/unpack */
    GLbitfield metaSave = META_ALL - META_SCISSOR - META_PIXEL_STORE;
+   const GLuint stencilMax = (1 << ctx->DrawBuffer->Visual.stencilBits) - 1;
 
    if (buffers & BUFFER_BITS_COLOR) {
       /* if clearing color buffers, don't save/restore colormask */
@@ -1447,7 +1454,7 @@ _mesa_meta_Clear(struct gl_context *ctx, GLbitfield buffers)
       _mesa_StencilOpSeparate(GL_FRONT_AND_BACK,
                               GL_REPLACE, GL_REPLACE, GL_REPLACE);
       _mesa_StencilFuncSeparate(GL_FRONT_AND_BACK, GL_ALWAYS,
-                                ctx->Stencil.Clear & 0x7fffffff,
+                                ctx->Stencil.Clear & stencilMax,
                                 ctx->Stencil.WriteMask[0]);
    }
    else {
@@ -1974,13 +1981,39 @@ _mesa_meta_DrawPixels(struct gl_context *ctx,
    _mesa_meta_end(ctx);
 }
 
+static GLboolean
+alpha_test_raster_color(struct gl_context *ctx)
+{
+   GLfloat alpha = ctx->Current.RasterColor[ACOMP];
+   GLfloat ref = ctx->Color.AlphaRef;
+
+   switch (ctx->Color.AlphaFunc) {
+      case GL_NEVER:
+	 return GL_FALSE;
+      case GL_LESS:
+	 return alpha < ref;
+      case GL_EQUAL:
+	 return alpha == ref;
+      case GL_LEQUAL:
+	 return alpha <= ref;
+      case GL_GREATER:
+	 return alpha > ref;
+      case GL_NOTEQUAL:
+	 return alpha != ref;
+      case GL_GEQUAL:
+	 return alpha >= ref;
+      case GL_ALWAYS:
+	 return GL_TRUE;
+      default:
+	 assert(0);
+	 return GL_FALSE;
+   }
+}
 
 /**
- * Do glBitmap with a alpha texture quad.  Use the alpha test to
- * cull the 'off' bits.  If alpha test is already enabled, fall back
- * to swrast (should be a rare case).
- * A bitmap cache as in the gallium/mesa state tracker would
- * improve performance a lot.
+ * Do glBitmap with a alpha texture quad.  Use the alpha test to cull
+ * the 'off' bits.  A bitmap cache as in the gallium/mesa state
+ * tracker would improve performance a lot.
  */
 void
 _mesa_meta_Bitmap(struct gl_context *ctx,
@@ -1992,6 +2025,7 @@ _mesa_meta_Bitmap(struct gl_context *ctx,
    struct temp_texture *tex = get_bitmap_temp_texture(ctx);
    const GLenum texIntFormat = GL_ALPHA;
    const struct gl_pixelstore_attrib unpackSave = *unpack;
+   GLubyte fg, bg;
    struct vertex {
       GLfloat x, y, z, s, t, r, g, b, a;
    };
@@ -2003,7 +2037,7 @@ _mesa_meta_Bitmap(struct gl_context *ctx,
     * Check if swrast fallback is needed.
     */
    if (ctx->_ImageTransferState ||
-       ctx->Color.AlphaEnabled ||
+       ctx->FragmentProgram._Enabled ||
        ctx->Fog.Enabled ||
        ctx->Texture._EnabledUnits ||
        width > tex->MaxSize ||
@@ -2011,6 +2045,9 @@ _mesa_meta_Bitmap(struct gl_context *ctx,
       _swrast_Bitmap(ctx, x, y, width, height, unpack, bitmap1);
       return;
    }
+
+   if (ctx->Color.AlphaEnabled && !alpha_test_raster_color(ctx))
+      return;
 
    /* Most GL state applies to glBitmap (like blending, stencil, etc),
     * but a there's a few things we need to override:
@@ -2093,21 +2130,26 @@ _mesa_meta_Bitmap(struct gl_context *ctx,
       _mesa_BufferSubDataARB(GL_ARRAY_BUFFER_ARB, 0, sizeof(verts), verts);
    }
 
+   /* choose different foreground/background alpha values */
+   CLAMPED_FLOAT_TO_UBYTE(fg, ctx->Current.RasterColor[ACOMP]);
+   bg = (fg > 127 ? 0 : 255);
+
    bitmap1 = _mesa_map_pbo_source(ctx, &unpackSave, bitmap1);
    if (!bitmap1) {
       _mesa_meta_end(ctx);
       return;
    }
 
-   bitmap8 = (GLubyte *) calloc(1, width * height);
+   bitmap8 = (GLubyte *) malloc(width * height);
    if (bitmap8) {
+      memset(bitmap8, bg, width * height);
       _mesa_expand_bitmap(width, height, &unpackSave, bitmap1,
-                          bitmap8, width, 0xff);
+                          bitmap8, width, fg);
 
       _mesa_set_enable(ctx, tex->Target, GL_TRUE);
 
       _mesa_set_enable(ctx, GL_ALPHA_TEST, GL_TRUE);
-      _mesa_AlphaFunc(GL_GREATER, 0.0);
+      _mesa_AlphaFunc(GL_NOTEQUAL, UBYTE_TO_FLOAT(bg));
 
       setup_drawpix_texture(ctx, tex, newTex, texIntFormat, width, height,
                             GL_ALPHA, GL_UNSIGNED_BYTE, bitmap8);
@@ -2552,7 +2594,6 @@ copy_tex_image(struct gl_context *ctx, GLuint dims, GLenum target, GLint level,
 {
    struct gl_texture_object *texObj;
    struct gl_texture_image *texImage;
-   GLsizei postConvWidth = width, postConvHeight = height;
    GLenum format, type;
    GLint bpp;
    void *buf;
@@ -2560,6 +2601,7 @@ copy_tex_image(struct gl_context *ctx, GLuint dims, GLenum target, GLint level,
    texObj = _mesa_get_current_tex_object(ctx, target);
    texImage = _mesa_get_tex_image(ctx, texObj, target, level);
 
+   /* Choose format/type for temporary image buffer */
    format = _mesa_base_tex_format(ctx, internalFormat);
    type = get_temp_image_type(ctx, format);
    bpp = _mesa_bytes_per_pixel(format, type);
@@ -2591,12 +2633,8 @@ copy_tex_image(struct gl_context *ctx, GLuint dims, GLenum target, GLint level,
       ctx->Driver.FreeTexImageData(ctx, texImage);
    }
 
-   _mesa_init_teximage_fields(ctx, target, texImage,
-                              postConvWidth, postConvHeight, 1,
-                              border, internalFormat);
-
-   _mesa_choose_texture_format(ctx, texObj, texImage, target, level,
-                               internalFormat, GL_NONE, GL_NONE);
+   /* The texture's format was already chosen in _mesa_CopyTexImage() */
+   ASSERT(texImage->TexFormat != MESA_FORMAT_NONE);
 
    /*
     * Store texture data (with pixel transfer ops)
@@ -2649,7 +2687,8 @@ _mesa_meta_CopyTexImage2D(struct gl_context *ctx, GLenum target, GLint level,
  * Have to be careful with locking and meta state for pixel transfer.
  */
 static void
-copy_tex_sub_image(struct gl_context *ctx, GLuint dims, GLenum target, GLint level,
+copy_tex_sub_image(struct gl_context *ctx,
+                   GLuint dims, GLenum target, GLint level,
                    GLint xoffset, GLint yoffset, GLint zoffset,
                    GLint x, GLint y,
                    GLsizei width, GLsizei height)
@@ -2663,6 +2702,7 @@ copy_tex_sub_image(struct gl_context *ctx, GLuint dims, GLenum target, GLint lev
    texObj = _mesa_get_current_tex_object(ctx, target);
    texImage = _mesa_select_tex_image(ctx, texObj, target, level);
 
+   /* Choose format/type for temporary image buffer */
    format = _mesa_get_format_base_format(texImage->TexFormat);
    type = get_temp_image_type(ctx, format);
    bpp = _mesa_bytes_per_pixel(format, type);

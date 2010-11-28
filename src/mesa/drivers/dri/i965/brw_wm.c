@@ -198,7 +198,7 @@ static void do_wm_prog( struct brw_context *brw,
       c->prog_data.total_scratch = 0;
    }
 
-   if (INTEL_DEBUG & DEBUG_WM)
+   if (unlikely(INTEL_DEBUG & DEBUG_WM))
       fprintf(stderr, "\n");
 
    /* get the program
@@ -423,6 +423,7 @@ static void brw_wm_populate_key( struct brw_context *brw,
     */
    if (fp->program.Base.InputsRead & FRAG_BIT_WPOS) {
       key->drawable_height = ctx->DrawBuffer->Height;
+      key->render_to_fbo = ctx->DrawBuffer->Name != 0;
    }
 
    key->nr_color_regions = brw->state.nr_color_regions;

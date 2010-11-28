@@ -41,14 +41,6 @@
 #include "math/m_matrix.h"	/* GLmatrix */
 #include "main/simple_list.h"	/* struct simple_node */
 
-/* Shader stages. Note that these will become 5 with tessellation.
- * These MUST have the same values as PIPE_SHADER_*
- */
-#define MESA_SHADER_VERTEX   0
-#define MESA_SHADER_FRAGMENT 1
-#define MESA_SHADER_GEOMETRY 2
-#define MESA_SHADER_TYPES    3
-
 
 /**
  * Color channel data type.
@@ -126,6 +118,20 @@ struct gl_texture_object;
 struct gl_context;
 struct st_context;
 /*@}*/
+
+
+
+/**
+ * Shader stages. Note that these will become 5 with tessellation.
+ * These MUST have the same values as gallium's PIPE_SHADER_*
+ */
+typedef enum
+{
+   MESA_SHADER_VERTEX = 0,
+   MESA_SHADER_FRAGMENT = 1,
+   MESA_SHADER_GEOMETRY = 2,
+   MESA_SHADER_TYPES = 3
+} gl_shader_type;
 
 
 
@@ -454,6 +460,68 @@ typedef enum
 
 
 /**
+ * Framebuffer configuration (aka visual / pixelformat)
+ * Note: some of these fields should be boolean, but it appears that
+ * code in drivers/dri/common/util.c requires int-sized fields.
+ */
+struct gl_config
+{
+   GLboolean rgbMode;
+   GLboolean floatMode;
+   GLboolean colorIndexMode;  /* XXX is this used anywhere? */
+   GLuint doubleBufferMode;
+   GLuint stereoMode;
+
+   GLboolean haveAccumBuffer;
+   GLboolean haveDepthBuffer;
+   GLboolean haveStencilBuffer;
+
+   GLint redBits, greenBits, blueBits, alphaBits;	/* bits per comp */
+   GLuint redMask, greenMask, blueMask, alphaMask;
+   GLint rgbBits;		/* total bits for rgb */
+   GLint indexBits;		/* total bits for colorindex */
+
+   GLint accumRedBits, accumGreenBits, accumBlueBits, accumAlphaBits;
+   GLint depthBits;
+   GLint stencilBits;
+
+   GLint numAuxBuffers;
+
+   GLint level;
+
+   /* EXT_visual_rating / GLX 1.2 */
+   GLint visualRating;
+
+   /* EXT_visual_info / GLX 1.2 */
+   GLint transparentPixel;
+   /*    colors are floats scaled to ints */
+   GLint transparentRed, transparentGreen, transparentBlue, transparentAlpha;
+   GLint transparentIndex;
+
+   /* ARB_multisample / SGIS_multisample */
+   GLint sampleBuffers;
+   GLint samples;
+
+   /* SGIX_pbuffer / GLX 1.3 */
+   GLint maxPbufferWidth;
+   GLint maxPbufferHeight;
+   GLint maxPbufferPixels;
+   GLint optimalPbufferWidth;   /* Only for SGIX_pbuffer. */
+   GLint optimalPbufferHeight;  /* Only for SGIX_pbuffer. */
+
+   /* OML_swap_method */
+   GLint swapMethod;
+
+   /* EXT_texture_from_pixmap */
+   GLint bindToTextureRgb;
+   GLint bindToTextureRgba;
+   GLint bindToMipmapTexture;
+   GLint bindToTextureTargets;
+   GLint yInverted;
+};
+
+
+/**
  * Data structure for color tables
  */
 struct gl_color_table
@@ -547,60 +615,6 @@ struct gl_shine_tab
    GLuint refcount;
 };
 
-struct gl_config {
-   GLboolean rgbMode;
-   GLboolean floatMode;
-   GLboolean colorIndexMode;
-   GLuint doubleBufferMode;
-   GLuint stereoMode;
-
-   GLboolean haveAccumBuffer;
-   GLboolean haveDepthBuffer;
-   GLboolean haveStencilBuffer;
-
-   GLint redBits, greenBits, blueBits, alphaBits;	/* bits per comp */
-   GLuint redMask, greenMask, blueMask, alphaMask;
-   GLint rgbBits;		/* total bits for rgb */
-   GLint indexBits;		/* total bits for colorindex */
-
-   GLint accumRedBits, accumGreenBits, accumBlueBits, accumAlphaBits;
-   GLint depthBits;
-   GLint stencilBits;
-
-   GLint numAuxBuffers;
-
-   GLint level;
-
-   /* EXT_visual_rating / GLX 1.2 */
-   GLint visualRating;
-
-   /* EXT_visual_info / GLX 1.2 */
-   GLint transparentPixel;
-   /*    colors are floats scaled to ints */
-   GLint transparentRed, transparentGreen, transparentBlue, transparentAlpha;
-   GLint transparentIndex;
-
-   /* ARB_multisample / SGIS_multisample */
-   GLint sampleBuffers;
-   GLint samples;
-
-   /* SGIX_pbuffer / GLX 1.3 */
-   GLint maxPbufferWidth;
-   GLint maxPbufferHeight;
-   GLint maxPbufferPixels;
-   GLint optimalPbufferWidth;   /* Only for SGIX_pbuffer. */
-   GLint optimalPbufferHeight;  /* Only for SGIX_pbuffer. */
-
-   /* OML_swap_method */
-   GLint swapMethod;
-
-   /* EXT_texture_from_pixmap */
-   GLint bindToTextureRgb;
-   GLint bindToTextureRgba;
-   GLint bindToMipmapTexture;
-   GLint bindToTextureTargets;
-   GLint yInverted;
-};
 
 /**
  * Light source state.
@@ -2917,11 +2931,9 @@ struct gl_matrix_stack
 #define DD_TRI_OFFSET               0x80
 #define DD_LINE_SMOOTH              0x100
 #define DD_LINE_STIPPLE             0x200
-#define DD_LINE_WIDTH               0x400
-#define DD_POINT_SMOOTH             0x800
-#define DD_POINT_SIZE               0x1000
-#define DD_POINT_ATTEN              0x2000
-#define DD_TRI_TWOSTENCIL           0x4000
+#define DD_POINT_SMOOTH             0x400
+#define DD_POINT_ATTEN              0x800
+#define DD_TRI_TWOSTENCIL           0x1000
 /*@}*/
 
 

@@ -109,7 +109,7 @@ static void r600_draw_common(struct r600_drawl *draw)
 		r600_pipe_state_add_reg(rstate, R_038010_RESOURCE0_WORD4, 0x00000000, 0xFFFFFFFF, NULL);
 		r600_pipe_state_add_reg(rstate, R_038014_RESOURCE0_WORD5, 0x00000000, 0xFFFFFFFF, NULL);
 		r600_pipe_state_add_reg(rstate, R_038018_RESOURCE0_WORD6, 0xC0000000, 0xFFFFFFFF, NULL);
-		r600_context_pipe_state_set_vs_resource(&rctx->ctx, rstate, i);
+		r600_context_pipe_state_set_fs_resource(&rctx->ctx, rstate, i);
 	}
 
 	mask = 0;
@@ -296,7 +296,7 @@ static void *r600_create_blend_state(struct pipe_context *ctx,
 		unsigned eqRGB = state->rt[i].rgb_func;
 		unsigned srcRGB = state->rt[i].rgb_src_factor;
 		unsigned dstRGB = state->rt[i].rgb_dst_factor;
-		
+
 		unsigned eqA = state->rt[i].alpha_func;
 		unsigned srcA = state->rt[i].alpha_src_factor;
 		unsigned dstA = state->rt[i].alpha_dst_factor;
@@ -469,12 +469,17 @@ static void *r600_create_rs_state(struct pipe_context *ctx,
 	r600_pipe_state_add_reg(rstate, R_028A00_PA_SU_POINT_SIZE, S_028A00_HEIGHT(tmp) | S_028A00_WIDTH(tmp), 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_028A04_PA_SU_POINT_MINMAX, 0x80000000, 0xFFFFFFFF, NULL);
 
-	tmp = (unsigned)(state->line_width * 8.0);
+	tmp = (unsigned)state->line_width * 8;
 	r600_pipe_state_add_reg(rstate, R_028A08_PA_SU_LINE_CNTL, S_028A08_WIDTH(tmp), 0xFFFFFFFF, NULL);
 
 	r600_pipe_state_add_reg(rstate, R_028A0C_PA_SC_LINE_STIPPLE, 0x00000005, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_028A48_PA_SC_MPASS_PS_CNTL, 0x00000000, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_028C00_PA_SC_LINE_CNTL, 0x00000400, 0xFFFFFFFF, NULL);
+
+	r600_pipe_state_add_reg(rstate, R_028C08_PA_SU_VTX_CNTL,
+				S_028C08_PIX_CENTER_HALF(state->gl_rasterization_rules),
+				0xFFFFFFFF, NULL);
+
 	r600_pipe_state_add_reg(rstate, R_028C0C_PA_CL_GB_VERT_CLIP_ADJ, 0x3F800000, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_028C10_PA_CL_GB_VERT_DISC_ADJ, 0x3F800000, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_028C14_PA_CL_GB_HORZ_CLIP_ADJ, 0x3F800000, 0xFFFFFFFF, NULL);
@@ -617,7 +622,7 @@ static void r600_set_vs_sampler_view(struct pipe_context *ctx, unsigned count,
 
 	for (int i = 0; i < count; i++) {
 		if (resource[i]) {
-			r600_context_pipe_state_set_vs_resource(&rctx->ctx, &resource[i]->state, i + PIPE_MAX_ATTRIBS);
+			r600_context_pipe_state_set_vs_resource(&rctx->ctx, &resource[i]->state, i);
 		}
 	}
 }
@@ -687,16 +692,16 @@ static void r600_set_clip_state(struct pipe_context *ctx,
 	rstate->id = R600_PIPE_STATE_CLIP;
 	for (int i = 0; i < state->nr; i++) {
 		r600_pipe_state_add_reg(rstate,
-					R_028E20_PA_CL_UCP0_X + i * 4,
+					R_028E20_PA_CL_UCP0_X + i * 16,
 					fui(state->ucp[i][0]), 0xFFFFFFFF, NULL);
 		r600_pipe_state_add_reg(rstate,
-					R_028E24_PA_CL_UCP0_Y + i * 4,
+					R_028E24_PA_CL_UCP0_Y + i * 16,
 					fui(state->ucp[i][1]) , 0xFFFFFFFF, NULL);
 		r600_pipe_state_add_reg(rstate,
-					R_028E28_PA_CL_UCP0_Z + i * 4,
+					R_028E28_PA_CL_UCP0_Z + i * 16,
 					fui(state->ucp[i][2]), 0xFFFFFFFF, NULL);
 		r600_pipe_state_add_reg(rstate,
-					R_028E2C_PA_CL_UCP0_W + i * 4,
+					R_028E2C_PA_CL_UCP0_W + i * 16,
 					fui(state->ucp[i][3]), 0xFFFFFFFF, NULL);
 	}
 	r600_pipe_state_add_reg(rstate, R_028810_PA_CL_CLIP_CNTL,
@@ -847,7 +852,7 @@ static void r600_cb(struct r600_pipe_context *rctx, struct r600_pipe_state *rsta
 		S_0280A0_ARRAY_MODE(rtex->array_mode[level]) |
 		S_0280A0_BLEND_CLAMP(1) |
 		S_0280A0_NUMBER_TYPE(ntype);
-	if (desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS) 
+	if (desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS)
 		color_info |= S_0280A0_SOURCE_FORMAT(1);
 
 	r600_pipe_state_add_reg(rstate,
@@ -928,7 +933,7 @@ static void r600_set_framebuffer_state(struct pipe_context *ctx,
 	rstate->id = R600_PIPE_STATE_FRAMEBUFFER;
 
 	util_copy_framebuffer_state(&rctx->framebuffer, state);
-	
+
 	rctx->pframebuffer = &rctx->framebuffer;
 
 	/* build states */
@@ -1017,6 +1022,13 @@ static void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint
 {
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 	struct r600_resource *rbuffer = (struct r600_resource*)buffer;
+
+	/* Note that the state tracker can unbind constant buffers by
+	 * passing NULL here.
+	 */
+	if (buffer == NULL) {
+		return;
+	}
 
 	switch (shader) {
 	case PIPE_SHADER_VERTEX:

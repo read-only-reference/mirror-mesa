@@ -37,7 +37,6 @@
 
 #include "pipe/p_context.h"
 #include "util/u_inlines.h"
-#include "pipe/p_shader_tokens.h"
 
 #include "cso_cache/cso_context.h"
 
@@ -128,6 +127,7 @@ struct vg_context * vg_create_context(struct pipe_context *pipe,
 
    ctx->mask.sampler.wrap_s = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
    ctx->mask.sampler.wrap_t = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
+   ctx->mask.sampler.wrap_r = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
    ctx->mask.sampler.min_mip_filter = PIPE_TEX_MIPFILTER_NONE;
    ctx->mask.sampler.min_img_filter = PIPE_TEX_FILTER_NEAREST;
    ctx->mask.sampler.mag_img_filter = PIPE_TEX_FILTER_NEAREST;
@@ -135,6 +135,7 @@ struct vg_context * vg_create_context(struct pipe_context *pipe,
 
    ctx->blend_sampler.wrap_s = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
    ctx->blend_sampler.wrap_t = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
+   ctx->blend_sampler.wrap_r = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
    ctx->blend_sampler.min_mip_filter = PIPE_TEX_MIPFILTER_NONE;
    ctx->blend_sampler.min_img_filter = PIPE_TEX_FILTER_NEAREST;
    ctx->blend_sampler.mag_img_filter = PIPE_TEX_FILTER_NEAREST;
@@ -488,11 +489,10 @@ void vg_prepare_blend_surface(struct vg_context *ctx)
                                                 stfb->blend_texture_view->texture,
                                                 0, 0, 0,
                                                 PIPE_BIND_RENDER_TARGET);
-   /* flip it, because we want to use it as a sampler */
    util_blit_pixels_tex(ctx->blit,
                         view,
-                        0, strb->height,
-                        strb->width, 0,
+                        0, 0,
+                        strb->width, strb->height,
                         dest_surface,
                         0, 0,
                         strb->width, strb->height,

@@ -1057,16 +1057,47 @@ _mesa_format_image_size(gl_format format, GLsizei width,
    const struct gl_format_info *info = _mesa_get_format_info(format);
    /* Strictly speaking, a conditional isn't needed here */
    if (info->BlockWidth > 1 || info->BlockHeight > 1) {
-      /* compressed format */
+      /* compressed format (2D only for now) */
       const GLuint bw = info->BlockWidth, bh = info->BlockHeight;
       const GLuint wblocks = (width + bw - 1) / bw;
       const GLuint hblocks = (height + bh - 1) / bh;
       const GLuint sz = wblocks * hblocks * info->BytesPerBlock;
+      assert(depth == 1);
       return sz;
    }
    else {
       /* non-compressed */
       const GLuint sz = width * height * depth * info->BytesPerBlock;
+      return sz;
+   }
+}
+
+
+/**
+ * Same as _mesa_format_image_size() but returns a 64-bit value to
+ * accomodate very large textures.
+ */
+uint64_t
+_mesa_format_image_size64(gl_format format, GLsizei width,
+                          GLsizei height, GLsizei depth)
+{
+   const struct gl_format_info *info = _mesa_get_format_info(format);
+   /* Strictly speaking, a conditional isn't needed here */
+   if (info->BlockWidth > 1 || info->BlockHeight > 1) {
+      /* compressed format (2D only for now) */
+      const uint64_t bw = info->BlockWidth, bh = info->BlockHeight;
+      const uint64_t wblocks = (width + bw - 1) / bw;
+      const uint64_t hblocks = (height + bh - 1) / bh;
+      const uint64_t sz = wblocks * hblocks * info->BytesPerBlock;
+      assert(depth == 1);
+      return sz;
+   }
+   else {
+      /* non-compressed */
+      const uint64_t sz = ((uint64_t) width *
+                           (uint64_t) height *
+                           (uint64_t) depth *
+                           info->BytesPerBlock);
       return sz;
    }
 }
@@ -1194,6 +1225,7 @@ _mesa_format_to_type_and_comps(gl_format format,
    case MESA_FORMAT_ARGB8888:
    case MESA_FORMAT_ARGB8888_REV:
    case MESA_FORMAT_XRGB8888:
+   case MESA_FORMAT_XRGB8888_REV:
       *datatype = GL_UNSIGNED_BYTE;
       *comps = 4;
       return;
@@ -1217,6 +1249,11 @@ _mesa_format_to_type_and_comps(gl_format format,
    case MESA_FORMAT_ARGB1555:
    case MESA_FORMAT_ARGB1555_REV:
       *datatype = GL_UNSIGNED_SHORT_1_5_5_5_REV;
+      *comps = 4;
+      return;
+
+   case MESA_FORMAT_RGBA5551:
+      *datatype = GL_UNSIGNED_SHORT_5_5_5_1;
       *comps = 4;
       return;
 
@@ -1251,6 +1288,7 @@ _mesa_format_to_type_and_comps(gl_format format,
    case MESA_FORMAT_I8:
    case MESA_FORMAT_CI8:
    case MESA_FORMAT_R8:
+   case MESA_FORMAT_S8:
       *datatype = GL_UNSIGNED_BYTE;
       *comps = 1;
       return;
@@ -1296,9 +1334,23 @@ _mesa_format_to_type_and_comps(gl_format format,
       *comps = 2;
       return;
 
+   case MESA_FORMAT_SIGNED_R8:
+      *datatype = GL_BYTE;
+      *comps = 1;
+      return;
+   case MESA_FORMAT_SIGNED_RG88:
+      *datatype = GL_BYTE;
+      *comps = 2;
+      return;
    case MESA_FORMAT_SIGNED_RGBA8888:
    case MESA_FORMAT_SIGNED_RGBA8888_REV:
+   case MESA_FORMAT_SIGNED_RGBX8888:
       *datatype = GL_BYTE;
+      *comps = 4;
+      return;
+
+   case MESA_FORMAT_RGBA_16:
+      *datatype = GL_UNSIGNED_SHORT;
       *comps = 4;
       return;
 
@@ -1426,9 +1478,14 @@ _mesa_format_to_type_and_comps(gl_format format,
       *comps = 4;
       return;
 
-
+   case MESA_FORMAT_NONE:
+   case MESA_FORMAT_COUNT:
+   /* For debug builds, warn if any formats are not handled */
+#ifndef DEBUG
    default:
-      _mesa_problem(NULL, "bad format in _mesa_format_to_type_and_comps");
+#endif
+      _mesa_problem(NULL, "bad format %s in _mesa_format_to_type_and_comps",
+                    _mesa_get_format_name(format));
       *datatype = 0;
       *comps = 1;
    }

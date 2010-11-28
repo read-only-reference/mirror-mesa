@@ -37,10 +37,8 @@
 #include "pipe/p_state.h"
 #include "util/u_inlines.h"
 #include "pipe/p_screen.h"
-#include "pipe/p_shader_tokens.h"
 
 #include "util/u_format.h"
-#include "util/u_memory.h"
 #include "util/u_sampler.h"
 #include "util/u_string.h"
 
@@ -797,6 +795,8 @@ void vegaLookupSingle(VGImage dst, VGImage src,
       vg_set_error(ctx, VG_ILLEGAL_ARGUMENT_ERROR);
       return;
    }
+
+   vg_validate_state(ctx);
 
    for (i = 0; i < 256; ++i) {
       VGuint rgba = lookupTable[i];

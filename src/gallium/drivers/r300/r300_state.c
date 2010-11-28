@@ -684,7 +684,7 @@ void r300_mark_fb_state_dirty(struct r300_context *r300,
                               enum r300_fb_state_change change)
 {
     struct pipe_framebuffer_state *state = r300->fb_state.state;
-    boolean has_hyperz = r300->rws->get_value(r300->rws, R300_CAN_HYPERZ);
+    boolean can_hyperz = r300->rws->get_value(r300->rws, R300_CAN_HYPERZ);
 
     /* What is marked as dirty depends on the enum r300_fb_state_change. */
     r300->gpu_flush.dirty = TRUE;
@@ -703,7 +703,7 @@ void r300_mark_fb_state_dirty(struct r300_context *r300,
         r300->fb_state.size += 10;
     else if (state->zsbuf) {
         r300->fb_state.size += 10;
-        if (has_hyperz)
+        if (can_hyperz)
             r300->fb_state.size += r300->screen->caps.hiz_ram ? 8 : 4;
     }
 
@@ -717,7 +717,7 @@ static void
     struct r300_context* r300 = r300_context(pipe);
     struct r300_aa_state *aa = (struct r300_aa_state*)r300->aa_state.state;
     struct pipe_framebuffer_state *old_state = r300->fb_state.state;
-    boolean has_hyperz = r300->rws->get_value(r300->rws, R300_CAN_HYPERZ);
+    boolean can_hyperz = r300->rws->get_value(r300->rws, R300_CAN_HYPERZ);
     unsigned max_width, max_height, i;
     uint32_t zbuffer_bpp = 0;
     int blocksize;
@@ -764,7 +764,7 @@ static void
             zbuffer_bpp = 24;
             break;
         }
-        if (has_hyperz) {
+        if (can_hyperz) {
             struct r300_surface *zs_surf = r300_surface(state->zsbuf);
             struct r300_texture *tex;
             int compress = r300->screen->caps.is_rv350 ? RV350_Z_COMPRESS_88 : R300_Z_COMPRESS_44;
@@ -1448,6 +1448,15 @@ static void r300_set_vertex_buffers(struct pipe_context* pipe,
     struct pipe_vertex_buffer *vbo;
     unsigned i, max_index = (1 << 24) - 1;
     boolean any_user_buffer = FALSE;
+    struct pipe_vertex_buffer dummy_vb = {0};
+
+    /* There must be at least one vertex buffer set, otherwise it locks up. */
+    if (!count) {
+        dummy_vb.buffer = r300->dummy_vb;
+        dummy_vb.max_index = r300->dummy_vb->width0 / 4;
+        buffers = &dummy_vb;
+        count = 1;
+    }
 
     if (count == r300->vertex_buffer_count &&
         memcmp(r300->vertex_buffer, buffers,
@@ -1601,6 +1610,14 @@ static void* r300_create_vertex_elements_state(struct pipe_context* pipe,
     struct r300_vertex_element_state *velems;
     unsigned i;
     enum pipe_format *format;
+    struct pipe_vertex_element dummy_attrib = {0};
+
+    /* R300 Programmable Stream Control (PSC) doesn't support 0 vertex elements. */
+    if (!count) {
+        dummy_attrib.src_format = PIPE_FORMAT_R8G8B8A8_UNORM;
+        attribs = &dummy_attrib;
+        count = 1;
+    }
 
     assert(count <= PIPE_MAX_ATTRIBS);
     velems = CALLOC_STRUCT(r300_vertex_element_state);
@@ -1667,7 +1684,8 @@ static void* r300_create_vertex_elements_state(struct pipe_context* pipe,
              * swizzles are already set up.
              * Also compute the vertex size. */
             for (i = 0; i < count; i++) {
-                /* This is OK because we check for aligned strides too. */
+                /* This is OK because we check for aligned strides too
+                 * elsewhere. */
                 velems->hw_format_size[i] =
                     align(util_format_get_blocksize(velems->hw_format[i]), 4);
                 velems->vertex_size_dwords += velems->hw_format_size[i] / 4;
@@ -1789,7 +1807,7 @@ static void r300_set_constant_buffer(struct pipe_context *pipe,
 {
     struct r300_context* r300 = r300_context(pipe);
     struct r300_constant_buffer *cbuf;
-    uint32_t *mapped = r300_buffer(buf)->user_buffer;
+    uint32_t *mapped;
 
     switch (shader) {
         case PIPE_SHADER_VERTEX:

@@ -281,7 +281,6 @@ static void brw_vs_alloc_regs( struct brw_vs_compile *c )
 	 else if (i == VERT_RESULT_PSIZ) {
 	    c->regs[PROGRAM_OUTPUT][i] = brw_vec8_grf(reg, 0);
 	    reg++;
-	    mrf++;		/* just a placeholder?  XXX fix later stages & remove this */
 	 }
 	 else {
 	    /* Two restrictions on our compute-to-MRF here.  The
@@ -394,7 +393,7 @@ static void brw_vs_alloc_regs( struct brw_vs_compile *c )
 
    c->prog_data.total_grf = reg;
 
-   if (INTEL_DEBUG & DEBUG_VS) {
+   if (unlikely(INTEL_DEBUG & DEBUG_VS)) {
       printf("%s NumAddrRegs %d\n", __FUNCTION__, c->vp->program.Base.NumAddressRegs);
       printf("%s NumTemps %d\n", __FUNCTION__, c->vp->program.Base.NumTemporaries);
       printf("%s reg = %d\n", __FUNCTION__, reg);
@@ -574,9 +573,18 @@ static void emit_max( struct brw_compile *p,
 		      struct brw_reg arg0,
 		      struct brw_reg arg1 )
 {
-   brw_CMP(p, brw_null_reg(), BRW_CONDITIONAL_GE, arg0, arg1);
-   brw_SEL(p, dst, arg0, arg1);
-   brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+   struct intel_context *intel = &p->brw->intel;
+
+   if (intel->gen >= 6) {
+      brw_set_conditionalmod(p, BRW_CONDITIONAL_GE);
+      brw_SEL(p, dst, arg0, arg1);
+      brw_set_conditionalmod(p, BRW_CONDITIONAL_NONE);
+      brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+   } else {
+      brw_CMP(p, brw_null_reg(), BRW_CONDITIONAL_GE, arg0, arg1);
+      brw_SEL(p, dst, arg0, arg1);
+      brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+   }
 }
 
 static void emit_min( struct brw_compile *p, 
@@ -584,17 +592,25 @@ static void emit_min( struct brw_compile *p,
 		      struct brw_reg arg0,
 		      struct brw_reg arg1 )
 {
-   brw_CMP(p, brw_null_reg(), BRW_CONDITIONAL_L, arg0, arg1);
-   brw_SEL(p, dst, arg0, arg1);
-   brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+   struct intel_context *intel = &p->brw->intel;
+
+   if (intel->gen >= 6) {
+      brw_set_conditionalmod(p, BRW_CONDITIONAL_L);
+      brw_SEL(p, dst, arg0, arg1);
+      brw_set_conditionalmod(p, BRW_CONDITIONAL_NONE);
+      brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+   } else {
+      brw_CMP(p, brw_null_reg(), BRW_CONDITIONAL_L, arg0, arg1);
+      brw_SEL(p, dst, arg0, arg1);
+      brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+   }
 }
 
-
-static void emit_math1( struct brw_vs_compile *c,
-			GLuint function,
-			struct brw_reg dst,
-			struct brw_reg arg0,
-			GLuint precision)
+static void emit_math1_gen4(struct brw_vs_compile *c,
+			    GLuint function,
+			    struct brw_reg dst,
+			    struct brw_reg arg0,
+			    GLuint precision)
 {
    /* There are various odd behaviours with SEND on the simulator.  In
     * addition there are documented issues with the fact that the GEN4
@@ -604,14 +620,11 @@ static void emit_math1( struct brw_vs_compile *c,
     * whether that turns out to be a simulator bug or not:
     */
    struct brw_compile *p = &c->func;
-   struct intel_context *intel = &p->brw->intel;
    struct brw_reg tmp = dst;
    GLboolean need_tmp = GL_FALSE;
 
-   if (dst.file != BRW_GENERAL_REGISTER_FILE)
-      need_tmp = GL_TRUE;
-
-   if (intel->gen < 6 && dst.dw1.bits.writemask != 0xf)
+   if (dst.file != BRW_GENERAL_REGISTER_FILE ||
+       dst.dw1.bits.writemask != 0xf)
       need_tmp = GL_TRUE;
 
    if (need_tmp)
@@ -632,6 +645,57 @@ static void emit_math1( struct brw_vs_compile *c,
    }
 }
 
+static void
+emit_math1_gen6(struct brw_vs_compile *c,
+		GLuint function,
+		struct brw_reg dst,
+		struct brw_reg arg0,
+		GLuint precision)
+{
+   struct brw_compile *p = &c->func;
+   struct brw_reg tmp_src, tmp_dst;
+
+   /* Something is strange on gen6 math in 16-wide mode, though the
+    * docs say it's supposed to work.  Punt to using align1 mode,
+    * which doesn't do writemasking and swizzles.
+    */
+   tmp_src = get_tmp(c);
+   tmp_dst = get_tmp(c);
+
+   brw_MOV(p, tmp_src, arg0);
+
+   brw_set_access_mode(p, BRW_ALIGN_1);
+   brw_math(p,
+	    tmp_dst,
+	    function,
+	    BRW_MATH_SATURATE_NONE,
+	    2,
+	    tmp_src,
+	    BRW_MATH_DATA_SCALAR,
+	    precision);
+   brw_set_access_mode(p, BRW_ALIGN_16);
+
+   brw_MOV(p, dst, tmp_dst);
+
+   release_tmp(c, tmp_src);
+   release_tmp(c, tmp_dst);
+}
+
+static void
+emit_math1(struct brw_vs_compile *c,
+	   GLuint function,
+	   struct brw_reg dst,
+	   struct brw_reg arg0,
+	   GLuint precision)
+{
+   struct brw_compile *p = &c->func;
+   struct intel_context *intel = &p->brw->intel;
+
+   if (intel->gen >= 6)
+      emit_math1_gen6(c, function, dst, arg0, precision);
+   else
+      emit_math1_gen4(c, function, dst, arg0, precision);
+}
 
 static void emit_math2( struct brw_vs_compile *c, 
 			GLuint function,
@@ -1538,6 +1602,8 @@ static void emit_vertex_write( struct brw_vs_compile *c)
 	 break;
       if (!(c->prog_data.outputs_written & BITFIELD64_BIT(i)))
 	 continue;
+      if (i == VERT_RESULT_PSIZ)
+	 continue;
 
       if (i >= VERT_RESULT_TEX0 &&
 	  c->regs[PROGRAM_OUTPUT][i].file == BRW_GENERAL_REGISTER_FILE) {
@@ -1678,16 +1744,12 @@ void brw_vs_emit(struct brw_vs_compile *c )
    GLuint index;
    GLuint file;
 
-   if (INTEL_DEBUG & DEBUG_VS) {
+   if (unlikely(INTEL_DEBUG & DEBUG_VS)) {
       printf("vs-mesa:\n");
       _mesa_fprint_program_opt(stdout, &c->vp->program.Base, PROG_PRINT_DEBUG,
 			       GL_TRUE);
       printf("\n");
    }
-
-   /* FIXME Need to fix conditional instruction to remove this */
-   if (intel->gen >= 6)
-       p->single_program_flow = GL_TRUE;
 
    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
    brw_set_access_mode(p, BRW_ALIGN_16);
@@ -2048,7 +2110,7 @@ void brw_vs_emit(struct brw_vs_compile *c )
 
    brw_optimize(p);
 
-   if (INTEL_DEBUG & DEBUG_VS) {
+   if (unlikely(INTEL_DEBUG & DEBUG_VS)) {
       int i;
 
       printf("vs-native:\n");

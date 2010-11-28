@@ -150,6 +150,7 @@ struct radeon *radeon_new(int fd, unsigned device)
 	case CHIP_JUNIPER:
 	case CHIP_CYPRESS:
 	case CHIP_HEMLOCK:
+	case CHIP_PALM:
 		break;
 	case CHIP_R100:
 	case CHIP_RV100:
@@ -195,19 +196,26 @@ struct radeon *radeon_new(int fd, unsigned device)
 	case CHIP_RS780:
 	case CHIP_RS880:
 		radeon->chip_class = R600;
+		/* set default group bytes, overridden by tiling info ioctl */
+		radeon->tiling_info.group_bytes = 256;
 		break;
 	case CHIP_RV770:
 	case CHIP_RV730:
 	case CHIP_RV710:
 	case CHIP_RV740:
 		radeon->chip_class = R700;
+		/* set default group bytes, overridden by tiling info ioctl */
+		radeon->tiling_info.group_bytes = 256;
 		break;
 	case CHIP_CEDAR:
 	case CHIP_REDWOOD:
 	case CHIP_JUNIPER:
 	case CHIP_CYPRESS:
 	case CHIP_HEMLOCK:
+	case CHIP_PALM:
 		radeon->chip_class = EVERGREEN;
+		/* set default group bytes, overridden by tiling info ioctl */
+		radeon->tiling_info.group_bytes = 512;
 		break;
 	default:
 		fprintf(stderr, "%s unknown or unsupported chipset 0x%04X\n",
@@ -222,7 +230,7 @@ struct radeon *radeon_new(int fd, unsigned device)
 	radeon->kman = radeon_bo_pbmgr_create(radeon);
 	if (!radeon->kman)
 		return NULL;
-	radeon->cman = pb_cache_manager_create(radeon->kman, 100000);
+	radeon->cman = pb_cache_manager_create(radeon->kman, 1000000);
 	if (!radeon->cman)
 		return NULL;
 	return radeon;

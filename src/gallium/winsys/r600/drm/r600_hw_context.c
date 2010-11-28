@@ -44,7 +44,7 @@
 int r600_context_init_fence(struct r600_context *ctx)
 {
 	ctx->fence = 1;
-	ctx->fence_bo = r600_bo(ctx->radeon, 4096, 0, 0);
+	ctx->fence_bo = r600_bo(ctx->radeon, 4096, 0, 0, 0);
 	if (ctx->fence_bo == NULL) {
 		return -ENOMEM;
 	}
@@ -384,6 +384,7 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{PKT3_SET_CONTEXT_REG, R600_CONTEXT_REG_OFFSET, R_028A0C_PA_SC_LINE_STIPPLE, 0, 0, 0},
 	{PKT3_SET_CONTEXT_REG, R600_CONTEXT_REG_OFFSET, R_028A48_PA_SC_MPASS_PS_CNTL, 0, 0, 0},
 	{PKT3_SET_CONTEXT_REG, R600_CONTEXT_REG_OFFSET, R_028C00_PA_SC_LINE_CNTL, 0, 0, 0},
+	{PKT3_SET_CONTEXT_REG, R600_CONTEXT_REG_OFFSET, R_028C08_PA_SU_VTX_CNTL, 0, 0, 0},
 	{PKT3_SET_CONTEXT_REG, R600_CONTEXT_REG_OFFSET, R_028C0C_PA_CL_GB_VERT_CLIP_ADJ, 0, 0, 0},
 	{PKT3_SET_CONTEXT_REG, R600_CONTEXT_REG_OFFSET, R_028C10_PA_CL_GB_VERT_DISC_ADJ, 0, 0, 0},
 	{PKT3_SET_CONTEXT_REG, R600_CONTEXT_REG_OFFSET, R_028C14_PA_CL_GB_HORZ_CLIP_ADJ, 0, 0, 0},
@@ -592,6 +593,17 @@ static int r600_loop_const_init(struct r600_context *ctx, u32 offset)
 	return r600_context_add_block(ctx, r600_loop_consts, nreg);
 }
 
+static void r600_context_clear_fenced_bo(struct r600_context *ctx)
+{
+	struct radeon_bo *bo, *tmp;
+
+	LIST_FOR_EACH_ENTRY_SAFE(bo, tmp, &ctx->fenced_bo, fencedlist) {
+		LIST_DELINIT(&bo->fencedlist);
+		bo->fence = 0;
+		bo->ctx = NULL;
+	}
+}
+
 /* initialize */
 void r600_context_fini(struct r600_context *ctx)
 {
@@ -611,8 +623,12 @@ void r600_context_fini(struct r600_context *ctx)
 		}
 		free(ctx->range[i].blocks);
 	}
+	free(ctx->blocks);
 	free(ctx->reloc);
+	free(ctx->bo);
 	free(ctx->pm4);
+
+	r600_context_clear_fenced_bo(ctx);
 	if (ctx->fence_bo) {
 		r600_bo_reference(ctx->radeon, &ctx->fence_bo, NULL);
 	}
@@ -686,6 +702,12 @@ int r600_context_init(struct r600_context *ctx, struct radeon *radeon)
 	}
 	/* VS RESOURCE */
 	for (int j = 0, offset = 0x1180; j < 160; j++, offset += 0x1C) {
+		r = r600_state_resource_init(ctx, offset);
+		if (r)
+			goto out_err;
+	}
+	/* FS RESOURCE */
+	for (int j = 0, offset = 0x2300; j < 16; j++, offset += 0x1C) {
 		r = r600_state_resource_init(ctx, offset);
 		if (r)
 			goto out_err;
@@ -785,8 +807,8 @@ void r600_context_bo_reloc(struct r600_context *ctx, u32 *pm4, struct r600_bo *r
 	bo->reloc = &ctx->reloc[ctx->creloc];
 	bo->reloc_id = ctx->creloc * sizeof(struct r600_reloc) / 4;
 	ctx->reloc[ctx->creloc].handle = bo->handle;
-	ctx->reloc[ctx->creloc].read_domain = RADEON_GEM_DOMAIN_GTT | RADEON_GEM_DOMAIN_VRAM;
-	ctx->reloc[ctx->creloc].write_domain = RADEON_GEM_DOMAIN_GTT | RADEON_GEM_DOMAIN_VRAM;
+	ctx->reloc[ctx->creloc].read_domain = rbo->domains & (RADEON_GEM_DOMAIN_GTT | RADEON_GEM_DOMAIN_VRAM);
+	ctx->reloc[ctx->creloc].write_domain = rbo->domains & (RADEON_GEM_DOMAIN_GTT | RADEON_GEM_DOMAIN_VRAM);
 	ctx->reloc[ctx->creloc].flags = 0;
 	radeon_bo_reference(ctx->radeon, &ctx->bo[ctx->creloc], bo);
 	ctx->creloc++;
@@ -873,6 +895,13 @@ void r600_context_pipe_state_set_ps_resource(struct r600_context *ctx, struct r6
 void r600_context_pipe_state_set_vs_resource(struct r600_context *ctx, struct r600_pipe_state *state, unsigned rid)
 {
 	unsigned offset = R_038000_SQ_TEX_RESOURCE_WORD0_0 + 0x1180 + 0x1C * rid;
+
+	r600_context_pipe_state_set_resource(ctx, state, offset);
+}
+
+void r600_context_pipe_state_set_fs_resource(struct r600_context *ctx, struct r600_pipe_state *state, unsigned rid)
+{
+	unsigned offset = R_038000_SQ_TEX_RESOURCE_WORD0_0 + 0x2300 + 0x1C * rid;
 
 	r600_context_pipe_state_set_resource(ctx, state, offset);
 }
@@ -1046,7 +1075,7 @@ void r600_context_draw(struct r600_context *ctx, const struct r600_draw *draw)
 		ctx->pm4[ctx->pm4_cdwords++] = draw->vgt_draw_initiator;
 	}
 	ctx->pm4[ctx->pm4_cdwords++] = PKT3(PKT3_EVENT_WRITE, 0);
-	ctx->pm4[ctx->pm4_cdwords++] = EVENT_TYPE_CACHE_FLUSH_AND_INV_EVENT;
+	ctx->pm4[ctx->pm4_cdwords++] = EVENT_TYPE(EVENT_TYPE_CACHE_FLUSH_AND_INV_EVENT) | EVENT_INDEX(0);
 
 	/* flush color buffer */
 	for (int i = 0; i < 8; i++) {
@@ -1083,7 +1112,7 @@ void r600_context_flush(struct r600_context *ctx)
 
 	/* emit fence */
 	ctx->pm4[ctx->pm4_cdwords++] = PKT3(PKT3_EVENT_WRITE_EOP, 4);
-	ctx->pm4[ctx->pm4_cdwords++] = EVENT_TYPE_CACHE_FLUSH_AND_INV_TS_EVENT | (5 << 8);
+	ctx->pm4[ctx->pm4_cdwords++] = EVENT_TYPE(EVENT_TYPE_CACHE_FLUSH_AND_INV_TS_EVENT) | EVENT_INDEX(5);
 	ctx->pm4[ctx->pm4_cdwords++] = 0;
 	ctx->pm4[ctx->pm4_cdwords++] = (1 << 29) | (0 << 24);
 	ctx->pm4[ctx->pm4_cdwords++] = ctx->fence;
@@ -1106,6 +1135,8 @@ void r600_context_flush(struct r600_context *ctx)
 	chunk_array[1] = (uint64_t)(uintptr_t)&chunks[1];
 	r = drmCommandWriteRead(ctx->radeon->fd, DRM_RADEON_CS, &drmib,
 				sizeof(struct drm_radeon_cs));
+#else
+	*ctx->cfence = ctx->fence;
 #endif
 
 	r600_context_update_fenced_list(ctx);
@@ -1261,7 +1292,7 @@ void r600_query_begin(struct r600_context *ctx, struct r600_query *query)
 
 	/* emit begin query */
 	ctx->pm4[ctx->pm4_cdwords++] = PKT3(PKT3_EVENT_WRITE, 2);
-	ctx->pm4[ctx->pm4_cdwords++] = EVENT_TYPE_ZPASS_DONE;
+	ctx->pm4[ctx->pm4_cdwords++] = EVENT_TYPE(EVENT_TYPE_ZPASS_DONE) | EVENT_INDEX(1);
 	ctx->pm4[ctx->pm4_cdwords++] = query->num_results + r600_bo_offset(query->buffer);
 	ctx->pm4[ctx->pm4_cdwords++] = 0;
 	ctx->pm4[ctx->pm4_cdwords++] = PKT3(PKT3_NOP, 0);
@@ -1277,7 +1308,7 @@ void r600_query_end(struct r600_context *ctx, struct r600_query *query)
 {
 	/* emit begin query */
 	ctx->pm4[ctx->pm4_cdwords++] = PKT3(PKT3_EVENT_WRITE, 2);
-	ctx->pm4[ctx->pm4_cdwords++] = EVENT_TYPE_ZPASS_DONE;
+	ctx->pm4[ctx->pm4_cdwords++] = EVENT_TYPE(EVENT_TYPE_ZPASS_DONE) | EVENT_INDEX(1);
 	ctx->pm4[ctx->pm4_cdwords++] = query->num_results + 8 + r600_bo_offset(query->buffer);
 	ctx->pm4[ctx->pm4_cdwords++] = 0;
 	ctx->pm4[ctx->pm4_cdwords++] = PKT3(PKT3_NOP, 0);
@@ -1304,7 +1335,12 @@ struct r600_query *r600_context_query_create(struct r600_context *ctx, unsigned 
 	query->type = query_type;
 	query->buffer_size = 4096;
 
-	query->buffer = r600_bo(ctx->radeon, query->buffer_size, 1, 0);
+	/* As of GL4, query buffers are normally read by the CPU after
+	 * being written by the gpu, hence staging is probably a good
+	 * usage pattern.
+	 */
+	query->buffer = r600_bo(ctx->radeon, query->buffer_size, 1, 0,
+				PIPE_USAGE_STAGING);
 	if (!query->buffer) {
 		free(query);
 		return NULL;
