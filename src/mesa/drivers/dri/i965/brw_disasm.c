@@ -899,7 +899,8 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
 	err |= dest (file, inst);
     } else if (gen >= 6 && (inst->header.opcode == BRW_OPCODE_IF ||
 			    inst->header.opcode == BRW_OPCODE_ELSE ||
-			    inst->header.opcode == BRW_OPCODE_ENDIF)) {
+			    inst->header.opcode == BRW_OPCODE_ENDIF ||
+			    inst->header.opcode == BRW_OPCODE_WHILE)) {
        format (file, " %d", inst->bits1.branch_gen6.jump_count);
     }
 
@@ -972,7 +973,7 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
 			inst->bits3.dp_render_cache.send_commit_msg,
 			inst->bits3.dp_render_cache.msg_length,
 			inst->bits3.dp_render_cache.response_length);
-	    } else if (gen >= 5) {
+	    } else if (gen >= 5 /* FINISHME: || is_g4x */) {
 		format (file, " (%d, %d, %d)",
 			inst->bits3.dp_read_gen5.binding_table_index,
 			inst->bits3.dp_read_gen5.msg_control,

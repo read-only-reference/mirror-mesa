@@ -1569,7 +1569,13 @@ ir_to_mesa_visitor::visit(ir_dereference_record *ir)
 	 break;
       offset += type_size(struct_type->fields.structure[i].type);
    }
-   this->result.swizzle = swizzle_for_size(ir->type->vector_elements);
+
+   /* If the type is smaller than a vec4, replicate the last channel out. */
+   if (ir->type->is_scalar() || ir->type->is_vector())
+      this->result.swizzle = swizzle_for_size(ir->type->vector_elements);
+   else
+      this->result.swizzle = SWIZZLE_NOOP;
+
    this->result.index += offset;
 }
 
@@ -2166,9 +2172,14 @@ ir_to_mesa_visitor::visit(ir_discard *ir)
 {
    struct gl_fragment_program *fp = (struct gl_fragment_program *)this->prog;
 
-   assert(ir->condition == NULL); /* FINISHME */
+   if (ir->condition) {
+      ir->condition->accept(this);
+      this->result.negate = ~this->result.negate;
+      ir_to_mesa_emit_op1(ir, OPCODE_KIL, ir_to_mesa_undef_dst, this->result);
+   } else {
+      ir_to_mesa_emit_op0(ir, OPCODE_KIL_NV);
+   }
 
-   ir_to_mesa_emit_op0(ir, OPCODE_KIL_NV);
    fp->UsesKill = GL_TRUE;
 }
 
@@ -2844,8 +2855,9 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 
 	 /* Lowering */
 	 do_mat_op_to_vec(ir);
-	 lower_instructions(ir, MOD_TO_FRACT | DIV_TO_MUL_RCP | EXP_TO_EXP2
-			      | LOG_TO_LOG2);
+	 lower_instructions(ir, (MOD_TO_FRACT | DIV_TO_MUL_RCP | EXP_TO_EXP2
+				 | LOG_TO_LOG2
+				 | ((options->EmitNoPow) ? POW_TO_EXP2 : 0)));
 
 	 progress = do_lower_jumps(ir, true, true, options->EmitNoMainReturn, options->EmitNoCont, options->EmitNoLoops) || progress;
 
@@ -2853,8 +2865,10 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 
 	 progress = lower_quadop_vector(ir, true) || progress;
 
-	 if (options->EmitNoIfs)
-	    progress = do_if_to_cond_assign(ir) || progress;
+	 if (options->EmitNoIfs) {
+	    progress = lower_discard(ir) || progress;
+	    progress = lower_if_to_cond_assign(ir) || progress;
+	 }
 
 	 if (options->EmitNoNoise)
 	    progress = lower_noise(ir) || progress;

@@ -30,7 +30,6 @@
 #include <sys/ioctl.h>
 #include "util/u_inlines.h"
 #include "util/u_debug.h"
-#include <pipebuffer/pb_bufmgr.h>
 #include "r600.h"
 #include "r600_priv.h"
 #include "r600_drm_public.h"
@@ -40,6 +39,24 @@
 #ifndef RADEON_INFO_TILING_CONFIG
 #define RADEON_INFO_TILING_CONFIG 0x6
 #endif
+
+static struct radeon *radeon_new(int fd, unsigned device);
+
+enum radeon_family r600_get_family(struct radeon *r600)
+{
+	return r600->family;
+}
+
+enum chip_class r600_get_family_class(struct radeon *radeon)
+{
+	return radeon->chip_class;
+}
+
+struct r600_tiling_info *r600_get_tiling_info(struct radeon *radeon)
+{
+	return &radeon->tiling_info;
+}
+
 static int radeon_get_device(struct radeon *radeon)
 {
 	struct drm_radeon_info info;
@@ -108,7 +125,7 @@ static int radeon_drm_get_tiling(struct radeon *radeon)
 	return 0;
 }
 
-struct radeon *radeon_new(int fd, unsigned device)
+static struct radeon *radeon_new(int fd, unsigned device)
 {
 	struct radeon *radeon;
 	int r;
@@ -132,59 +149,6 @@ struct radeon *radeon_new(int fd, unsigned device)
 		fprintf(stderr, "Unknown chipset 0x%04X\n", radeon->device);
 		return radeon_decref(radeon);
 	}
-	switch (radeon->family) {
-	case CHIP_R600:
-	case CHIP_RV610:
-	case CHIP_RV630:
-	case CHIP_RV670:
-	case CHIP_RV620:
-	case CHIP_RV635:
-	case CHIP_RS780:
-	case CHIP_RS880:
-	case CHIP_RV770:
-	case CHIP_RV730:
-	case CHIP_RV710:
-	case CHIP_RV740:
-	case CHIP_CEDAR:
-	case CHIP_REDWOOD:
-	case CHIP_JUNIPER:
-	case CHIP_CYPRESS:
-	case CHIP_HEMLOCK:
-	case CHIP_PALM:
-		break;
-	case CHIP_R100:
-	case CHIP_RV100:
-	case CHIP_RS100:
-	case CHIP_RV200:
-	case CHIP_RS200:
-	case CHIP_R200:
-	case CHIP_RV250:
-	case CHIP_RS300:
-	case CHIP_RV280:
-	case CHIP_R300:
-	case CHIP_R350:
-	case CHIP_RV350:
-	case CHIP_RV380:
-	case CHIP_R420:
-	case CHIP_R423:
-	case CHIP_RV410:
-	case CHIP_RS400:
-	case CHIP_RS480:
-	case CHIP_RS600:
-	case CHIP_RS690:
-	case CHIP_RS740:
-	case CHIP_RV515:
-	case CHIP_R520:
-	case CHIP_RV530:
-	case CHIP_RV560:
-	case CHIP_RV570:
-	case CHIP_R580:
-	default:
-		fprintf(stderr, "%s unknown or unsupported chipset 0x%04X\n",
-			__func__, radeon->device);
-		break;
-	}
-
 	/* setup class */
 	switch (radeon->family) {
 	case CHIP_R600:
@@ -227,12 +191,10 @@ struct radeon *radeon_new(int fd, unsigned device)
 		if (radeon_drm_get_tiling(radeon))
 			return NULL;
 	}
-	radeon->kman = radeon_bo_pbmgr_create(radeon);
-	if (!radeon->kman)
+	radeon->bomgr = r600_bomgr_create(radeon, 1000000);
+	if (radeon->bomgr == NULL) {
 		return NULL;
-	radeon->cman = pb_cache_manager_create(radeon->kman, 1000000);
-	if (!radeon->cman)
-		return NULL;
+	}
 	return radeon;
 }
 
@@ -249,14 +211,11 @@ struct radeon *radeon_decref(struct radeon *radeon)
 		return NULL;
 	}
 
-        if (radeon->cman)
-           radeon->cman->destroy(radeon->cman);
+	if (radeon->bomgr)
+		r600_bomgr_destroy(radeon->bomgr);
 
-        if (radeon->kman)
-           radeon->kman->destroy(radeon->kman);
-
-        if (radeon->fd >= 0)
-           drmClose(radeon->fd);
+	if (radeon->fd >= 0)
+		drmClose(radeon->fd);
 
 	free(radeon);
 	return NULL;

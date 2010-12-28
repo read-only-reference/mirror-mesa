@@ -43,7 +43,7 @@ unsigned r300_buffer_is_referenced(struct pipe_context *context,
     if (r300_buffer_is_user_buffer(buf))
  	return PIPE_UNREFERENCED;
 
-    if (r300->rws->cs_is_buffer_referenced(r300->cs, rbuf->buf, domain))
+    if (r300->rws->cs_is_buffer_referenced(r300->cs, rbuf->cs_buf, domain))
         return PIPE_REFERENCED_FOR_READ | PIPE_REFERENCED_FOR_WRITE;
 
     return PIPE_UNREFERENCED;
@@ -51,76 +51,48 @@ unsigned r300_buffer_is_referenced(struct pipe_context *context,
 
 static unsigned r300_buffer_is_referenced_by_cs(struct pipe_context *context,
                                                 struct pipe_resource *buf,
-                                                unsigned face, unsigned level)
+                                                unsigned level, int layer)
 {
     return r300_buffer_is_referenced(context, buf, R300_REF_CS);
 }
 
-/* External helper, not required to implent u_resource_vtbl:
- */
-int r300_upload_index_buffer(struct r300_context *r300,
-			     struct pipe_resource **index_buffer,
-			     unsigned index_size,
-			     unsigned start,
-			     unsigned count,
-			     unsigned *out_offset)
+void r300_upload_index_buffer(struct r300_context *r300,
+			      struct pipe_resource **index_buffer,
+			      unsigned index_size, unsigned *start,
+			      unsigned count)
 {
-   struct pipe_resource *upload_buffer = NULL;
-   unsigned index_offset = start * index_size;
-   int ret = 0;
+    unsigned index_offset;
+    uint8_t *ptr = r300_buffer(*index_buffer)->user_buffer;
 
-    if (r300_buffer_is_user_buffer(*index_buffer)) {
-	ret = u_upload_buffer(r300->upload_ib,
-			      index_offset,
-			      count * index_size,
-			      *index_buffer,
-			      &index_offset,
-			      &upload_buffer);
-	if (ret) {
-	    goto done;
-	}
-	*index_buffer = upload_buffer;
-	*out_offset = index_offset / index_size;
-    } else
-        *out_offset = start;
+    *index_buffer = NULL;
 
- done:
-    //    if (upload_buffer)
-    //	pipe_resource_reference(&upload_buffer, NULL);
-    return ret;
+    u_upload_data(r300->upload_ib,
+                  count * index_size,
+                  ptr + (*start * index_size),
+                  &index_offset,
+                  index_buffer);
+
+    *start = index_offset / index_size;
 }
 
-/* External helper, not required to implement u_resource_vtbl:
- */
-int r300_upload_user_buffers(struct r300_context *r300)
+void r300_upload_user_buffers(struct r300_context *r300)
 {
-    enum pipe_error ret = PIPE_OK;
-    int i, nr;
-
-    nr = r300->velems->count;
+    int i, nr = r300->velems->count;
 
     for (i = 0; i < nr; i++) {
         struct pipe_vertex_buffer *vb =
             &r300->vertex_buffer[r300->velems->velem[i].vertex_buffer_index];
 
         if (r300_buffer_is_user_buffer(vb->buffer)) {
-            struct pipe_resource *upload_buffer = NULL;
-            unsigned offset = 0; /*vb->buffer_offset * 4;*/
-            unsigned size = vb->buffer->width0;
-            unsigned upload_offset;
-            ret = u_upload_buffer(r300->upload_vb,
-                                  offset, size,
-                                  vb->buffer,
-                                  &upload_offset, &upload_buffer);
-            if (ret)
-                return ret;
+            u_upload_data(r300->upload_vb,
+                          vb->buffer->width0,
+                          r300_buffer(vb->buffer)->user_buffer,
+                          &vb->buffer_offset, &vb->buffer);
 
-            pipe_resource_reference(&vb->buffer, NULL);
-            vb->buffer = upload_buffer;
-            vb->buffer_offset = upload_offset;
+            r300->validate_buffers = TRUE;
+            r300->vertex_arrays_dirty = TRUE;
         }
     }
-    return ret;
 }
 
 static void r300_buffer_destroy(struct pipe_screen *screen,
@@ -140,22 +112,22 @@ static void r300_buffer_destroy(struct pipe_screen *screen,
 }
 
 static struct pipe_transfer*
-r300_default_get_transfer(struct pipe_context *context,
-                          struct pipe_resource *resource,
-                          struct pipe_subresource sr,
-                          unsigned usage,
-                          const struct pipe_box *box)
+r300_buffer_get_transfer(struct pipe_context *context,
+                         struct pipe_resource *resource,
+                         unsigned level,
+                         unsigned usage,
+                         const struct pipe_box *box)
 {
    struct r300_context *r300 = r300_context(context);
    struct pipe_transfer *transfer =
          util_slab_alloc(&r300->pool_transfers);
 
    transfer->resource = resource;
-   transfer->sr = sr;
+   transfer->level = level;
    transfer->usage = usage;
    transfer->box = *box;
    transfer->stride = 0;
-   transfer->slice_stride = 0;
+   transfer->layer_stride = 0;
    transfer->data = NULL;
 
    /* Note strides are zero, this is ok for buffers, but not for
@@ -164,8 +136,8 @@ r300_default_get_transfer(struct pipe_context *context,
    return transfer;
 }
 
-static void r300_default_transfer_destroy(struct pipe_context *pipe,
-                                          struct pipe_transfer *transfer)
+static void r300_buffer_transfer_destroy(struct pipe_context *pipe,
+                                         struct pipe_transfer *transfer)
 {
    struct r300_context *r300 = r300_context(pipe);
    util_slab_free(&r300->pool_transfers, transfer);
@@ -206,6 +178,9 @@ r300_buffer_transfer_map( struct pipe_context *pipe,
                                                    rbuf->b.b.bind,
                                                    rbuf->b.b.usage,
                                                    rbuf->domain);
+                rbuf->cs_buf =
+                    r300screen->rws->buffer_get_cs_handle(r300screen->rws,
+                                                          rbuf->buf);
 		break;
 	    }
 	}
@@ -265,17 +240,45 @@ static void r300_buffer_transfer_unmap( struct pipe_context *pipe,
     }
 }
 
-struct u_resource_vtbl r300_buffer_vtbl = 
+static void r300_buffer_transfer_inline_write(struct pipe_context *pipe,
+                                              struct pipe_resource *resource,
+                                              unsigned level,
+                                              unsigned usage,
+                                              const struct pipe_box *box,
+                                              const void *data,
+                                              unsigned stride,
+                                              unsigned layer_stride)
+{
+    struct r300_context *r300 = r300_context(pipe);
+    struct r300_winsys_screen *rws = r300->screen->rws;
+    struct r300_buffer *rbuf = r300_buffer(resource);
+    uint8_t *map = NULL;
+
+    if (rbuf->constant_buffer) {
+        memcpy(rbuf->constant_buffer + box->x, data, box->width);
+        return;
+    }
+    assert(rbuf->user_buffer == NULL);
+
+    map = rws->buffer_map(rws, rbuf->buf, r300->cs,
+                          PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD | usage);
+
+    memcpy(map + box->x, data, box->width);
+
+    rws->buffer_unmap(rws, rbuf->buf);
+}
+
+struct u_resource_vtbl r300_buffer_vtbl =
 {
    u_default_resource_get_handle,      /* get_handle */
    r300_buffer_destroy,                /* resource_destroy */
    r300_buffer_is_referenced_by_cs,    /* is_buffer_referenced */
-   r300_default_get_transfer,          /* get_transfer */
-   r300_default_transfer_destroy,      /* transfer_destroy */
+   r300_buffer_get_transfer,           /* get_transfer */
+   r300_buffer_transfer_destroy,       /* transfer_destroy */
    r300_buffer_transfer_map,           /* transfer_map */
    r300_buffer_transfer_flush_region,  /* transfer_flush_region */
    r300_buffer_transfer_unmap,         /* transfer_unmap */
-   u_default_transfer_inline_write     /* transfer_inline_write */
+   r300_buffer_transfer_inline_write   /* transfer_inline_write */
 };
 
 struct pipe_resource *r300_buffer_create(struct pipe_screen *screen,
@@ -310,6 +313,8 @@ struct pipe_resource *r300_buffer_create(struct pipe_screen *screen,
                                        rbuf->b.b.width0, alignment,
                                        rbuf->b.b.bind, rbuf->b.b.usage,
                                        rbuf->domain);
+    rbuf->cs_buf =
+        r300screen->rws->buffer_get_cs_handle(r300screen->rws, rbuf->buf);
 
     if (!rbuf->buf) {
         util_slab_free(&r300screen->pool_buffers, rbuf);
@@ -341,6 +346,7 @@ struct pipe_resource *r300_user_buffer_create(struct pipe_screen *screen,
     rbuf->b.b.width0 = bytes;
     rbuf->b.b.height0 = 1;
     rbuf->b.b.depth0 = 1;
+    rbuf->b.b.array_size = 1;
     rbuf->b.b.flags = 0;
     rbuf->domain = R300_DOMAIN_GTT;
     rbuf->num_ranges = 0;

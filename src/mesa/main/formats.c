@@ -222,6 +222,15 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
       1, 1, 2                      /* BlockWidth/Height,Bytes */
    },
    {
+      MESA_FORMAT_AL44,            /* Name */
+      "MESA_FORMAT_AL44",          /* StrName */
+      GL_LUMINANCE_ALPHA,          /* BaseFormat */
+      GL_UNSIGNED_NORMALIZED,      /* DataType */
+      0, 0, 0, 4,                  /* Red/Green/Blue/AlphaBits */
+      4, 0, 0, 0, 0,               /* Lum/Int/Index/Depth/StencilBits */
+      1, 1, 1                      /* BlockWidth/Height,Bytes */
+   },
+   {
       MESA_FORMAT_AL88,            /* Name */
       "MESA_FORMAT_AL88",          /* StrName */
       GL_LUMINANCE_ALPHA,          /* BaseFormat */
@@ -276,6 +285,15 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
       1, 1, 1                      /* BlockWidth/Height,Bytes */
    },
    {
+      MESA_FORMAT_A16,             /* Name */
+      "MESA_FORMAT_A16",           /* StrName */
+      GL_ALPHA,                    /* BaseFormat */
+      GL_UNSIGNED_NORMALIZED,      /* DataType */
+      0, 0, 0, 16,                 /* Red/Green/Blue/AlphaBits */
+      0, 0, 0, 0, 0,               /* Lum/Int/Index/Depth/StencilBits */
+      1, 1, 2                      /* BlockWidth/Height,Bytes */
+   },
+   {
       MESA_FORMAT_L8,              /* Name */
       "MESA_FORMAT_L8",            /* StrName */
       GL_LUMINANCE,                /* BaseFormat */
@@ -285,6 +303,15 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
       1, 1, 1                      /* BlockWidth/Height,Bytes */
    },
    {
+      MESA_FORMAT_L16,             /* Name */
+      "MESA_FORMAT_L16",           /* StrName */
+      GL_LUMINANCE,                /* BaseFormat */
+      GL_UNSIGNED_NORMALIZED,      /* DataType */
+      0, 0, 0, 0,                  /* Red/Green/Blue/AlphaBits */
+      16, 0, 0, 0, 0,              /* Lum/Int/Index/Depth/StencilBits */
+      1, 1, 2                      /* BlockWidth/Height,Bytes */
+   },
+   {
       MESA_FORMAT_I8,              /* Name */
       "MESA_FORMAT_I8",            /* StrName */
       GL_INTENSITY,                /* BaseFormat */
@@ -292,6 +319,15 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
       0, 0, 0, 0,                  /* Red/Green/Blue/AlphaBits */
       0, 8, 0, 0, 0,               /* Lum/Int/Index/Depth/StencilBits */
       1, 1, 1                      /* BlockWidth/Height,Bytes */
+   },
+   {
+      MESA_FORMAT_I16,             /* Name */
+      "MESA_FORMAT_I16",           /* StrName */
+      GL_INTENSITY,                /* BaseFormat */
+      GL_UNSIGNED_NORMALIZED,      /* DataType */
+      0, 0, 0, 0,                  /* Red/Green/Blue/AlphaBits */
+      0, 16, 0, 0, 0,              /* Lum/Int/Index/Depth/StencilBits */
+      1, 1, 2                      /* BlockWidth/Height,Bytes */
    },
    {
       MESA_FORMAT_CI8,             /* Name */
@@ -371,6 +407,15 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
       GL_RG,
       GL_UNSIGNED_NORMALIZED,
       16, 16, 0, 0,
+      0, 0, 0, 0, 0,
+      1, 1, 4
+   },
+   {
+      MESA_FORMAT_ARGB2101010,
+      "MESA_FORMAT_ARGB2101010",
+      GL_RGBA,
+      GL_UNSIGNED_NORMALIZED,
+      10, 10, 10, 2,
       0, 0, 0, 0, 0,
       1, 1, 4
    },
@@ -863,7 +908,6 @@ const char *
 _mesa_get_format_name(gl_format format)
 {
    const struct gl_format_info *info = _mesa_get_format_info(format);
-   ASSERT(info->BytesPerBlock);
    return info->StrName;
 }
 
@@ -1252,11 +1296,17 @@ _mesa_format_to_type_and_comps(gl_format format,
       *comps = 4;
       return;
 
+   case MESA_FORMAT_ARGB2101010:
+      *datatype = GL_UNSIGNED_INT_2_10_10_10_REV;
+      *comps = 4;
+      return;
+
    case MESA_FORMAT_RGBA5551:
       *datatype = GL_UNSIGNED_SHORT_5_5_5_1;
       *comps = 4;
       return;
 
+   case MESA_FORMAT_AL44: /* XXX this isn't plain GL_UNSIGNED_BYTE */
    case MESA_FORMAT_AL88:
    case MESA_FORMAT_AL88_REV:
    case MESA_FORMAT_RG88:
@@ -1274,6 +1324,9 @@ _mesa_format_to_type_and_comps(gl_format format,
       return;
 
    case MESA_FORMAT_R16:
+   case MESA_FORMAT_A16:
+   case MESA_FORMAT_L16:
+   case MESA_FORMAT_I16:
       *datatype = GL_UNSIGNED_SHORT;
       *comps = 1;
       return;
@@ -1478,10 +1531,13 @@ _mesa_format_to_type_and_comps(gl_format format,
       *comps = 4;
       return;
 
-   case MESA_FORMAT_NONE:
    case MESA_FORMAT_COUNT:
+      assert(0);
+      return;
+
+   case MESA_FORMAT_NONE:
    /* For debug builds, warn if any formats are not handled */
-#ifndef DEBUG
+#ifdef DEBUG
    default:
 #endif
       _mesa_problem(NULL, "bad format %s in _mesa_format_to_type_and_comps",

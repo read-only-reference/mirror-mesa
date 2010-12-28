@@ -128,12 +128,11 @@ void r300_begin_vertex_translate(struct r300_context *r300)
     /* Unmap all buffers. */
     for (i = 0; i < r300->vertex_buffer_count; i++) {
         if (vb_translated[i]) {
-            pipe_buffer_unmap(pipe, r300->vertex_buffer[i].buffer,
-                              vb_transfer[i]);
+            pipe_buffer_unmap(pipe, vb_transfer[i]);
         }
     }
 
-    pipe_buffer_unmap(pipe, out_buffer, out_transfer);
+    pipe_buffer_unmap(pipe, out_transfer);
 
     /* Setup the new vertex buffer in the first free slot. */
     for (i = 0; i < PIPE_MAX_ATTRIBS; i++) {
@@ -145,6 +144,7 @@ void r300_begin_vertex_translate(struct r300_context *r300)
             vb->max_index = num_verts - 1;
             vb->stride = key.output_stride;
             r300->tran.vb_slot = i;
+            r300->validate_buffers = TRUE;
             break;
         }
     }
@@ -199,12 +199,14 @@ void r300_translate_index_buffer(struct r300_context *r300,
             util_shorten_ubyte_elts(&r300->context, index_buffer, index_offset, *start, count);
             *index_size = 2;
             *start = 0;
+            r300->validate_buffers = TRUE;
             break;
 
         case 2:
-            if (*start % 2 != 0 || index_offset) {
+            if (index_offset) {
                 util_rebuild_ushort_elts(&r300->context, index_buffer, index_offset, *start, count);
                 *start = 0;
+                r300->validate_buffers = TRUE;
             }
             break;
 
@@ -212,6 +214,7 @@ void r300_translate_index_buffer(struct r300_context *r300,
             if (index_offset) {
                 util_rebuild_uint_elts(&r300->context, index_buffer, index_offset, *start, count);
                 *start = 0;
+                r300->validate_buffers = TRUE;
             }
             break;
     }

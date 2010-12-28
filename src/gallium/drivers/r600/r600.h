@@ -35,7 +35,7 @@
 #define RADEON_CTX_MAX_PM4	(64 * 1024 / 4)
 
 #define R600_ERR(fmt, args...) \
-	fprintf(stderr, "EE %s/%s:%d - "fmt, __FILE__, __func__, __LINE__, ##args)
+	fprintf(stderr, "EE %s:%d %s - "fmt, __FILE__, __LINE__, __func__, ##args)
 
 typedef uint64_t		u64;
 typedef uint32_t		u32;
@@ -284,14 +284,12 @@ void r600_context_queries_resume(struct r600_context *ctx);
 
 int evergreen_context_init(struct r600_context *ctx, struct radeon *radeon);
 void evergreen_context_draw(struct r600_context *ctx, const struct r600_draw *draw);
-void evergreen_ps_resource_set(struct r600_context *ctx, struct r600_pipe_state *state, unsigned rid);
-void evergreen_vs_resource_set(struct r600_context *ctx, struct r600_pipe_state *state, unsigned rid);
-void evergreen_fs_resource_set(struct r600_context *ctx, struct r600_pipe_state *state, unsigned rid);
-
 void evergreen_context_pipe_state_set_ps_resource(struct r600_context *ctx, struct r600_pipe_state *state, unsigned rid);
 void evergreen_context_pipe_state_set_vs_resource(struct r600_context *ctx, struct r600_pipe_state *state, unsigned rid);
 void evergreen_context_pipe_state_set_fs_resource(struct r600_context *ctx, struct r600_pipe_state *state, unsigned rid);
 void evergreen_context_pipe_state_set_ps_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id);
 void evergreen_context_pipe_state_set_vs_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id);
+
+struct radeon *radeon_decref(struct radeon *radeon);
 
 #endif

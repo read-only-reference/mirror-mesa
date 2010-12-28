@@ -89,6 +89,9 @@ brw_compile_shader(struct gl_context *ctx, struct gl_shader *shader)
 GLboolean
 brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 {
+   struct brw_context *brw = brw_context(ctx);
+   struct intel_context *intel = &brw->intel;
+
    struct brw_shader *shader =
       (struct brw_shader *)prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
    if (shader != NULL) {
@@ -107,7 +110,15 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 			 SUB_TO_ADD_NEG |
 			 EXP_TO_EXP2 |
 			 LOG_TO_LOG2);
+
+      /* Pre-gen6 HW can only nest if-statements 16 deep.  Beyond this,
+       * if-statements need to be flattened.
+       */
+      if (intel->gen < 6)
+	 lower_if_to_cond_assign(shader->ir, 16);
+
       do_lower_texture_projection(shader->ir);
+      do_vec_index_to_cond_assign(shader->ir);
       brw_do_cubemap_normalize(shader->ir);
 
       do {
@@ -474,8 +485,13 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
    wpos.reg_offset++;
 
    /* gl_FragCoord.z */
-   emit(fs_inst(FS_OPCODE_LINTERP, wpos, this->delta_x, this->delta_y,
-		interp_reg(FRAG_ATTRIB_WPOS, 2)));
+   if (intel->gen >= 6) {
+      emit(fs_inst(BRW_OPCODE_MOV, wpos,
+		   fs_reg(brw_vec8_grf(c->source_depth_reg, 0))));
+   } else {
+      emit(fs_inst(FS_OPCODE_LINTERP, wpos, this->delta_x, this->delta_y,
+		   interp_reg(FRAG_ATTRIB_WPOS, 2)));
+   }
    wpos.reg_offset++;
 
    /* gl_FragCoord.w: Already set up in emit_interpolation */
@@ -600,8 +616,13 @@ fs_visitor::emit_math(fs_opcodes opcode, fs_reg dst, fs_reg src)
     * might be able to do better by doing execsize = 1 math and then
     * expanding that result out, but we would need to be careful with
     * masking.
+    *
+    * The hardware ignores source modifiers (negate and abs) on math
+    * instructions, so we also move to a temp to set those up.
     */
-   if (intel->gen >= 6 && src.file == UNIFORM) {
+   if (intel->gen >= 6 && (src.file == UNIFORM ||
+			   src.abs ||
+			   src.negate)) {
       fs_reg expanded = fs_reg(this, glsl_type::float_type);
       emit(fs_inst(BRW_OPCODE_MOV, expanded, src));
       src = expanded;
@@ -765,6 +786,30 @@ fs_visitor::try_emit_saturate(ir_expression *ir)
    return true;
 }
 
+static uint32_t
+brw_conditional_for_comparison(unsigned int op)
+{
+   switch (op) {
+   case ir_binop_less:
+      return BRW_CONDITIONAL_L;
+   case ir_binop_greater:
+      return BRW_CONDITIONAL_G;
+   case ir_binop_lequal:
+      return BRW_CONDITIONAL_LE;
+   case ir_binop_gequal:
+      return BRW_CONDITIONAL_GE;
+   case ir_binop_equal:
+   case ir_binop_all_equal: /* same as equal for scalars */
+      return BRW_CONDITIONAL_Z;
+   case ir_binop_nequal:
+   case ir_binop_any_nequal: /* same as nequal for scalars */
+      return BRW_CONDITIONAL_NZ;
+   default:
+      assert(!"not reached: bad operation for comparison");
+      return BRW_CONDITIONAL_NZ;
+   }
+}
+
 void
 fs_visitor::visit(ir_expression *ir)
 {
@@ -880,35 +925,20 @@ fs_visitor::visit(ir_expression *ir)
       break;
 
    case ir_binop_less:
-      inst = emit(fs_inst(BRW_OPCODE_CMP, this->result, op[0], op[1]));
-      inst->conditional_mod = BRW_CONDITIONAL_L;
-      emit(fs_inst(BRW_OPCODE_AND, this->result, this->result, fs_reg(0x1)));
-      break;
    case ir_binop_greater:
-      inst = emit(fs_inst(BRW_OPCODE_CMP, this->result, op[0], op[1]));
-      inst->conditional_mod = BRW_CONDITIONAL_G;
-      emit(fs_inst(BRW_OPCODE_AND, this->result, this->result, fs_reg(0x1)));
-      break;
    case ir_binop_lequal:
-      inst = emit(fs_inst(BRW_OPCODE_CMP, this->result, op[0], op[1]));
-      inst->conditional_mod = BRW_CONDITIONAL_LE;
-      emit(fs_inst(BRW_OPCODE_AND, this->result, this->result, fs_reg(0x1)));
-      break;
    case ir_binop_gequal:
-      inst = emit(fs_inst(BRW_OPCODE_CMP, this->result, op[0], op[1]));
-      inst->conditional_mod = BRW_CONDITIONAL_GE;
-      emit(fs_inst(BRW_OPCODE_AND, this->result, this->result, fs_reg(0x1)));
-      break;
    case ir_binop_equal:
-   case ir_binop_all_equal: /* same as nequal for scalars */
-      inst = emit(fs_inst(BRW_OPCODE_CMP, this->result, op[0], op[1]));
-      inst->conditional_mod = BRW_CONDITIONAL_Z;
-      emit(fs_inst(BRW_OPCODE_AND, this->result, this->result, fs_reg(0x1)));
-      break;
+   case ir_binop_all_equal:
    case ir_binop_nequal:
-   case ir_binop_any_nequal: /* same as nequal for scalars */
-      inst = emit(fs_inst(BRW_OPCODE_CMP, this->result, op[0], op[1]));
-      inst->conditional_mod = BRW_CONDITIONAL_NZ;
+   case ir_binop_any_nequal:
+      temp = this->result;
+      /* original gen4 does implicit conversion before comparison. */
+      if (intel->gen < 5)
+	 temp.type = op[0].type;
+
+      inst = emit(fs_inst(BRW_OPCODE_CMP, temp, op[0], op[1]));
+      inst->conditional_mod = brw_conditional_for_comparison(ir->operation);
       emit(fs_inst(BRW_OPCODE_AND, this->result, this->result, fs_reg(0x1)));
       break;
 
@@ -933,6 +963,10 @@ fs_visitor::visit(ir_expression *ir)
       assert(!"not reached: should be handled by lower_noise");
       break;
 
+   case ir_quadop_vector:
+      assert(!"not reached: should be handled by lower_quadop_vector");
+      break;
+
    case ir_unop_sqrt:
       emit_math(FS_OPCODE_SQRT, this->result, op[0]);
       break;
@@ -949,7 +983,12 @@ fs_visitor::visit(ir_expression *ir)
       break;
    case ir_unop_f2b:
    case ir_unop_i2b:
-      inst = emit(fs_inst(BRW_OPCODE_CMP, this->result, op[0], fs_reg(0.0f)));
+      temp = this->result;
+      /* original gen4 does implicit conversion before comparison. */
+      if (intel->gen < 5)
+	 temp.type = op[0].type;
+
+      inst = emit(fs_inst(BRW_OPCODE_CMP, temp, op[0], fs_reg(0.0f)));
       inst->conditional_mod = BRW_CONDITIONAL_NZ;
       inst = emit(fs_inst(BRW_OPCODE_AND, this->result,
 			  this->result, fs_reg(1)));
@@ -1423,28 +1462,70 @@ fs_visitor::visit(ir_discard *ir)
 void
 fs_visitor::visit(ir_constant *ir)
 {
-   fs_reg reg(this, ir->type);
-   this->result = reg;
+   /* Set this->result to reg at the bottom of the function because some code
+    * paths will cause this visitor to be applied to other fields.  This will
+    * cause the value stored in this->result to be modified.
+    *
+    * Make reg constant so that it doesn't get accidentally modified along the
+    * way.  Yes, I actually had this problem. :(
+    */
+   const fs_reg reg(this, ir->type);
+   fs_reg dst_reg = reg;
 
-   for (unsigned int i = 0; i < ir->type->vector_elements; i++) {
-      switch (ir->type->base_type) {
-      case GLSL_TYPE_FLOAT:
-	 emit(fs_inst(BRW_OPCODE_MOV, reg, fs_reg(ir->value.f[i])));
-	 break;
-      case GLSL_TYPE_UINT:
-	 emit(fs_inst(BRW_OPCODE_MOV, reg, fs_reg(ir->value.u[i])));
-	 break;
-      case GLSL_TYPE_INT:
-	 emit(fs_inst(BRW_OPCODE_MOV, reg, fs_reg(ir->value.i[i])));
-	 break;
-      case GLSL_TYPE_BOOL:
-	 emit(fs_inst(BRW_OPCODE_MOV, reg, fs_reg((int)ir->value.b[i])));
-	 break;
-      default:
-	 assert(!"Non-float/uint/int/bool constant");
+   if (ir->type->is_array()) {
+      const unsigned size = type_size(ir->type->fields.array);
+
+      for (unsigned i = 0; i < ir->type->length; i++) {
+	 ir->array_elements[i]->accept(this);
+	 fs_reg src_reg = this->result;
+
+	 dst_reg.type = src_reg.type;
+	 for (unsigned j = 0; j < size; j++) {
+	    emit(fs_inst(BRW_OPCODE_MOV, dst_reg, src_reg));
+	    src_reg.reg_offset++;
+	    dst_reg.reg_offset++;
+	 }
       }
-      reg.reg_offset++;
+   } else if (ir->type->is_record()) {
+      foreach_list(node, &ir->components) {
+	 ir_instruction *const field = (ir_instruction *) node;
+	 const unsigned size = type_size(field->type);
+
+	 field->accept(this);
+	 fs_reg src_reg = this->result;
+
+	 dst_reg.type = src_reg.type;
+	 for (unsigned j = 0; j < size; j++) {
+	    emit(fs_inst(BRW_OPCODE_MOV, dst_reg, src_reg));
+	    src_reg.reg_offset++;
+	    dst_reg.reg_offset++;
+	 }
+      }
+   } else {
+      const unsigned size = type_size(ir->type);
+
+      for (unsigned i = 0; i < size; i++) {
+	 switch (ir->type->base_type) {
+	 case GLSL_TYPE_FLOAT:
+	    emit(fs_inst(BRW_OPCODE_MOV, dst_reg, fs_reg(ir->value.f[i])));
+	    break;
+	 case GLSL_TYPE_UINT:
+	    emit(fs_inst(BRW_OPCODE_MOV, dst_reg, fs_reg(ir->value.u[i])));
+	    break;
+	 case GLSL_TYPE_INT:
+	    emit(fs_inst(BRW_OPCODE_MOV, dst_reg, fs_reg(ir->value.i[i])));
+	    break;
+	 case GLSL_TYPE_BOOL:
+	    emit(fs_inst(BRW_OPCODE_MOV, dst_reg, fs_reg((int)ir->value.b[i])));
+	    break;
+	 default:
+	    assert(!"Non-float/uint/int/bool constant");
+	 }
+	 dst_reg.reg_offset++;
+      }
    }
+
+   this->result = reg;
 }
 
 void
@@ -1490,7 +1571,7 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
 	    inst = emit(fs_inst(BRW_OPCODE_CMP, reg_null_d,
 				op[0], fs_reg(0.0f)));
 	 } else {
-	    inst = emit(fs_inst(BRW_OPCODE_MOV, reg_null_d, op[0]));
+	    inst = emit(fs_inst(BRW_OPCODE_MOV, reg_null_f, op[0]));
 	 }
 	 inst->conditional_mod = BRW_CONDITIONAL_NZ;
 	 break;
@@ -1505,31 +1586,18 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
 	 break;
 
       case ir_binop_greater:
-	 inst = emit(fs_inst(BRW_OPCODE_CMP, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_G;
-	 break;
       case ir_binop_gequal:
-	 inst = emit(fs_inst(BRW_OPCODE_CMP, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_GE;
-	 break;
       case ir_binop_less:
-	 inst = emit(fs_inst(BRW_OPCODE_CMP, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_L;
-	 break;
       case ir_binop_lequal:
-	 inst = emit(fs_inst(BRW_OPCODE_CMP, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_LE;
-	 break;
       case ir_binop_equal:
       case ir_binop_all_equal:
-	 inst = emit(fs_inst(BRW_OPCODE_CMP, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_Z;
-	 break;
       case ir_binop_nequal:
       case ir_binop_any_nequal:
-	 inst = emit(fs_inst(BRW_OPCODE_CMP, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_NZ;
+	 inst = emit(fs_inst(BRW_OPCODE_CMP, reg_null_cmp, op[0], op[1]));
+	 inst->conditional_mod =
+	    brw_conditional_for_comparison(expr->operation);
 	 break;
+
       default:
 	 assert(!"not reached");
 	 this->fail = true;
@@ -1574,7 +1642,7 @@ fs_visitor::emit_if_gen6(ir_if *ir)
 
       switch (expr->operation) {
       case ir_unop_logic_not:
-	 inst = emit(fs_inst(BRW_OPCODE_IF, temp, op[0], fs_reg(1)));
+	 inst = emit(fs_inst(BRW_OPCODE_IF, temp, op[0], fs_reg(0)));
 	 inst->conditional_mod = BRW_CONDITIONAL_Z;
 	 return;
 
@@ -1608,30 +1676,16 @@ fs_visitor::emit_if_gen6(ir_if *ir)
 	 return;
 
       case ir_binop_greater:
-	 inst = emit(fs_inst(BRW_OPCODE_IF, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_G;
-	 return;
       case ir_binop_gequal:
-	 inst = emit(fs_inst(BRW_OPCODE_IF, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_GE;
-	 return;
       case ir_binop_less:
-	 inst = emit(fs_inst(BRW_OPCODE_IF, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_L;
-	 return;
       case ir_binop_lequal:
-	 inst = emit(fs_inst(BRW_OPCODE_IF, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_LE;
-	 return;
       case ir_binop_equal:
       case ir_binop_all_equal:
-	 inst = emit(fs_inst(BRW_OPCODE_IF, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_Z;
-	 return;
       case ir_binop_nequal:
       case ir_binop_any_nequal:
 	 inst = emit(fs_inst(BRW_OPCODE_IF, reg_null_d, op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_NZ;
+	 inst->conditional_mod =
+	    brw_conditional_for_comparison(expr->operation);
 	 return;
       default:
 	 assert(!"not reached");
@@ -1713,32 +1767,9 @@ fs_visitor::visit(ir_loop *ir)
       this->base_ir = ir->to;
       ir->to->accept(this);
 
-      fs_inst *inst = emit(fs_inst(BRW_OPCODE_CMP, reg_null_d,
+      fs_inst *inst = emit(fs_inst(BRW_OPCODE_CMP, reg_null_cmp,
 				   counter, this->result));
-      switch (ir->cmp) {
-      case ir_binop_equal:
-	 inst->conditional_mod = BRW_CONDITIONAL_Z;
-	 break;
-      case ir_binop_nequal:
-	 inst->conditional_mod = BRW_CONDITIONAL_NZ;
-	 break;
-      case ir_binop_gequal:
-	 inst->conditional_mod = BRW_CONDITIONAL_GE;
-	 break;
-      case ir_binop_lequal:
-	 inst->conditional_mod = BRW_CONDITIONAL_LE;
-	 break;
-      case ir_binop_greater:
-	 inst->conditional_mod = BRW_CONDITIONAL_G;
-	 break;
-      case ir_binop_less:
-	 inst->conditional_mod = BRW_CONDITIONAL_L;
-	 break;
-      default:
-	 assert(!"not reached: unknown loop condition");
-	 this->fail = true;
-	 break;
-      }
+      inst->conditional_mod = brw_conditional_for_comparison(ir->cmp);
 
       inst = emit(fs_inst(BRW_OPCODE_BREAK));
       inst->predicated = true;
@@ -1951,7 +1982,7 @@ fs_visitor::emit_interpolation_setup_gen6()
    emit(fs_inst(BRW_OPCODE_MOV, this->pixel_y, int_pixel_y));
 
    this->current_annotation = "compute 1/pos.w";
-   this->wpos_w = fs_reg(brw_vec8_grf(c->key.source_w_reg, 0));
+   this->wpos_w = fs_reg(brw_vec8_grf(c->source_w_reg, 0));
    this->pixel_w = fs_reg(this, glsl_type::float_type);
    emit_math(FS_OPCODE_RCP, this->pixel_w, wpos_w);
 
@@ -1979,17 +2010,17 @@ fs_visitor::emit_fb_writes()
       nr += 2;
    }
 
-   if (c->key.aa_dest_stencil_reg) {
+   if (c->aa_dest_stencil_reg) {
       emit(fs_inst(BRW_OPCODE_MOV, fs_reg(MRF, nr++),
-		   fs_reg(brw_vec8_grf(c->key.aa_dest_stencil_reg, 0))));
+		   fs_reg(brw_vec8_grf(c->aa_dest_stencil_reg, 0))));
    }
 
    /* Reserve space for color. It'll be filled in per MRT below. */
    int color_mrf = nr;
    nr += 4;
 
-   if (c->key.source_depth_to_render_target) {
-      if (c->key.computes_depth) {
+   if (c->source_depth_to_render_target) {
+      if (c->computes_depth) {
 	 /* Hand over gl_FragDepth. */
 	 assert(this->frag_depth);
 	 fs_reg depth = *(variable_storage(this->frag_depth));
@@ -1998,13 +2029,13 @@ fs_visitor::emit_fb_writes()
       } else {
 	 /* Pass through the payload depth. */
 	 emit(fs_inst(BRW_OPCODE_MOV, fs_reg(MRF, nr++),
-		      fs_reg(brw_vec8_grf(c->key.source_depth_reg, 0))));
+		      fs_reg(brw_vec8_grf(c->source_depth_reg, 0))));
       }
    }
 
-   if (c->key.dest_depth_reg) {
+   if (c->dest_depth_reg) {
       emit(fs_inst(BRW_OPCODE_MOV, fs_reg(MRF, nr++),
-		   fs_reg(brw_vec8_grf(c->key.dest_depth_reg, 0))));
+		   fs_reg(brw_vec8_grf(c->dest_depth_reg, 0))));
    }
 
    fs_reg color = reg_undef;
@@ -2107,7 +2138,8 @@ fs_visitor::generate_fb_write(fs_inst *inst)
 		inst->target,
 		inst->mlen,
 		0,
-		eot);
+		eot,
+		inst->header_present);
 }
 
 void
@@ -2454,7 +2486,7 @@ fs_visitor::generate_pull_constant_load(fs_inst *inst, struct brw_reg dst)
 void
 fs_visitor::assign_curb_setup()
 {
-   c->prog_data.first_curbe_grf = c->key.nr_payload_regs;
+   c->prog_data.first_curbe_grf = c->nr_payload_regs;
    c->prog_data.curb_read_length = ALIGN(c->prog_data.nr_params, 8) / 8;
 
    /* Map the offsets in the UNIFORM file to fixed HW regs. */
@@ -3229,6 +3261,7 @@ static struct brw_reg brw_reg_from_fs_reg(fs_reg *reg)
 	 break;
       default:
 	 assert(!"not reached");
+	 brw_reg = brw_null_reg();
 	 break;
       }
       break;
@@ -3240,6 +3273,10 @@ static struct brw_reg brw_reg_from_fs_reg(fs_reg *reg)
       brw_reg = brw_null_reg();
       break;
    case UNIFORM:
+      assert(!"not reached");
+      brw_reg = brw_null_reg();
+      break;
+   default:
       assert(!"not reached");
       brw_reg = brw_null_reg();
       break;
@@ -3375,10 +3412,6 @@ fs_visitor::generate_code()
 	 break;
 
       case BRW_OPCODE_DO:
-	 /* FINISHME: We need to write the loop instruction support still. */
-	 if (intel->gen >= 6)
-	    this->fail = true;
-
 	 loop_stack[loop_stack_depth++] = brw_DO(p, BRW_EXECUTE_8);
 	 if_depth_in_loop[loop_stack_depth] = 0;
 	 break;
@@ -3388,7 +3421,11 @@ fs_visitor::generate_code()
 	 brw_set_predicate_control(p, BRW_PREDICATE_NONE);
 	 break;
       case BRW_OPCODE_CONTINUE:
-	 brw_CONT(p, if_depth_in_loop[loop_stack_depth]);
+	 /* FINISHME: We need to write the loop instruction support still. */
+	 if (intel->gen >= 6)
+	    brw_CONT_gen6(p, loop_stack[loop_stack_depth - 1]);
+	 else
+	    brw_CONT(p, if_depth_in_loop[loop_stack_depth]);
 	 brw_set_predicate_control(p, BRW_PREDICATE_NONE);
 	 break;
 
@@ -3402,16 +3439,18 @@ fs_visitor::generate_code()
 	 assert(loop_stack_depth > 0);
 	 loop_stack_depth--;
 	 inst0 = inst1 = brw_WHILE(p, loop_stack[loop_stack_depth]);
-	 /* patch all the BREAK/CONT instructions from last BGNLOOP */
-	 while (inst0 > loop_stack[loop_stack_depth]) {
-	    inst0--;
-	    if (inst0->header.opcode == BRW_OPCODE_BREAK &&
-		inst0->bits3.if_else.jump_count == 0) {
-	       inst0->bits3.if_else.jump_count = br * (inst1 - inst0 + 1);
+	 if (intel->gen < 6) {
+	    /* patch all the BREAK/CONT instructions from last BGNLOOP */
+	    while (inst0 > loop_stack[loop_stack_depth]) {
+	       inst0--;
+	       if (inst0->header.opcode == BRW_OPCODE_BREAK &&
+		   inst0->bits3.if_else.jump_count == 0) {
+		  inst0->bits3.if_else.jump_count = br * (inst1 - inst0 + 1);
 	    }
-	    else if (inst0->header.opcode == BRW_OPCODE_CONTINUE &&
-		     inst0->bits3.if_else.jump_count == 0) {
-	       inst0->bits3.if_else.jump_count = br * (inst1 - inst0);
+	       else if (inst0->header.opcode == BRW_OPCODE_CONTINUE &&
+			inst0->bits3.if_else.jump_count == 0) {
+		  inst0->bits3.if_else.jump_count = br * (inst1 - inst0);
+	       }
 	    }
 	 }
       }
@@ -3487,6 +3526,26 @@ fs_visitor::generate_code()
       }
 
       last_native_inst = p->nr_insn;
+   }
+
+   brw_set_uip_jip(p);
+
+   /* OK, while the INTEL_DEBUG=wm above is very nice for debugging FS
+    * emit issues, it doesn't get the jump distances into the output,
+    * which is often something we want to debug.  So this is here in
+    * case you're doing that.
+    */
+   if (0) {
+      if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
+	 for (unsigned int i = 0; i < p->nr_insn; i++) {
+	    printf("0x%08x 0x%08x 0x%08x 0x%08x ",
+		   ((uint32_t *)&p->store[i])[3],
+		   ((uint32_t *)&p->store[i])[2],
+		   ((uint32_t *)&p->store[i])[1],
+		   ((uint32_t *)&p->store[i])[0]);
+	    brw_disasm(stdout, &p->store[i], intel->gen);
+	 }
+      }
    }
 }
 

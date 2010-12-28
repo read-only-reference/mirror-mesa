@@ -366,7 +366,7 @@ void r300_parse_chipset(struct r300_capabilities* caps)
             caps->family = CHIP_FAMILY_RV530;
             caps->num_vert_fpus = 5;
             caps->is_r500 = TRUE;
-            /*caps->hiz_ram = RV530_HIZ_LIMIT;*/
+            caps->hiz_ram = RV530_HIZ_LIMIT;
             caps->zmask_ram = PIPE_ZMASK_SIZE;
             break;
 
@@ -424,4 +424,5 @@ void r300_parse_chipset(struct r300_capabilities* caps)
     }
 
     caps->is_rv350 = caps->family >= CHIP_FAMILY_RV350;
+    caps->dxtc_swizzle = caps->is_r400 || caps->is_r500;
 }

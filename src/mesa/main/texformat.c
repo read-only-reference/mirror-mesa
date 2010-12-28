@@ -75,6 +75,8 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
 
       /* deep RGBA formats */
       case GL_RGB10_A2:
+         return MESA_FORMAT_ARGB2101010;
+
       case GL_RGBA12:
       case GL_RGBA16:
          return MESA_FORMAT_RGBA_16;
@@ -100,24 +102,30 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
       /* Alpha formats */
       case GL_ALPHA:
       case GL_ALPHA4:
-      case GL_ALPHA12:
-      case GL_ALPHA16:
       case GL_ALPHA8:
          return MESA_FORMAT_A8;
+
+      case GL_ALPHA12:
+      case GL_ALPHA16:
+         return MESA_FORMAT_A16;
 
       /* Luminance formats */
       case 1:
       case GL_LUMINANCE:
       case GL_LUMINANCE4:
-      case GL_LUMINANCE12:
-      case GL_LUMINANCE16:
       case GL_LUMINANCE8:
          return MESA_FORMAT_L8;
 
+      case GL_LUMINANCE12:
+      case GL_LUMINANCE16:
+         return MESA_FORMAT_L16;
+
       /* Luminance/Alpha formats */
+      case GL_LUMINANCE4_ALPHA4:
+         return MESA_FORMAT_AL44;
+
       case 2:
       case GL_LUMINANCE_ALPHA:
-      case GL_LUMINANCE4_ALPHA4:
       case GL_LUMINANCE6_ALPHA2:
       case GL_LUMINANCE8_ALPHA8:
          return MESA_FORMAT_AL88;
@@ -129,10 +137,12 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
 
       case GL_INTENSITY:
       case GL_INTENSITY4:
-      case GL_INTENSITY12:
-      case GL_INTENSITY16:
       case GL_INTENSITY8:
          return MESA_FORMAT_I8;
+
+      case GL_INTENSITY12:
+      case GL_INTENSITY16:
+         return MESA_FORMAT_I16;
 
       case GL_COLOR_INDEX:
       case GL_COLOR_INDEX1_EXT:

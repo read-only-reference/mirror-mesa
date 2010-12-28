@@ -122,8 +122,8 @@ nvfx_create_sampler_view(struct pipe_context *pipe,
 	}
 	else
 	{
-		sv->offset = nvfx_subresource_offset(pt, 0, sv->base.first_level, 0);
-		sv->npot_size = (u_minify(pt->width0, sv->base.first_level) << NV30_3D_TEX_NPOT_SIZE_W__SHIFT) | u_minify(pt->height0, sv->base.first_level);
+		sv->offset = nvfx_subresource_offset(pt, 0, sv->base.u.tex.first_level, 0);
+		sv->npot_size = (u_minify(pt->width0, sv->base.u.tex.first_level) << NV30_3D_TEX_NPOT_SIZE_W__SHIFT) | u_minify(pt->height0, sv->base.u.tex.first_level);
 
 		/* apparently, we need to ignore the t coordinate for 1D textures to fix piglit tex1d-2dborder */
 		if(pt->target == PIPE_TEXTURE_1D)
@@ -177,6 +177,7 @@ void
 nvfx_fragtex_validate(struct nvfx_context *nvfx)
 {
 	struct nouveau_channel* chan = nvfx->screen->base.channel;
+	struct nouveau_grobj *eng3d = nvfx->screen->eng3d;
 	unsigned samplers, unit;
 
 	samplers = nvfx->dirty_samplers;
@@ -197,9 +198,8 @@ nvfx_fragtex_validate(struct nvfx_context *nvfx)
 			else
 				nv40_fragtex_set(nvfx, unit);
 		} else {
-			WAIT_RING(chan, 2);
 			/* this is OK for nv40 too */
-			OUT_RING(chan, RING_3D(NV30_3D_TEX_ENABLE(unit), 1));
+			BEGIN_RING(chan, eng3d, NV30_3D_TEX_ENABLE(unit), 1);
 			OUT_RING(chan, 0);
 			nvfx->hw_samplers &= ~(1 << unit);
 		}

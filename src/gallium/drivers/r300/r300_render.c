@@ -118,12 +118,6 @@ static uint32_t r300_provoking_vertex_fixes(struct r300_context *r300,
     return color_control;
 }
 
-boolean r500_index_bias_supported(struct r300_context *r300)
-{
-    return r300->screen->caps.is_r500 &&
-           r300->rws->get_value(r300->rws, R300_VID_DRM_2_3_0);
-}
-
 void r500_emit_index_bias(struct r300_context *r300, int index_bias)
 {
     CS_LOCALS(r300);
@@ -136,7 +130,7 @@ void r500_emit_index_bias(struct r300_context *r300, int index_bias)
 
 /* This function splits the index bias value into two parts:
  * - buffer_offset: the value that can be safely added to buffer offsets
- *   in r300_emit_aos (it must yield a positive offset when added to
+ *   in r300_emit_vertex_arrays (it must yield a positive offset when added to
  *   a vertex buffer offset)
  * - index_offset: the value that must be manually subtracted from indices
  *   in an index buffer to achieve negative offsets. */
@@ -172,8 +166,8 @@ static void r300_split_index_bias(struct r300_context *r300, int index_bias,
 enum r300_prepare_flags {
     PREP_FIRST_DRAW     = (1 << 0), /* call emit_dirty_state and friends? */
     PREP_VALIDATE_VBOS  = (1 << 1), /* validate VBOs? */
-    PREP_EMIT_AOS       = (1 << 2), /* call emit_aos? */
-    PREP_EMIT_AOS_SWTCL = (1 << 3), /* call emit_aos_swtcl? */
+    PREP_EMIT_AOS       = (1 << 2), /* call emit_vertex_arrays? */
+    PREP_EMIT_AOS_SWTCL = (1 << 3), /* call emit_vertex_arrays_swtcl? */
     PREP_INDEXED        = (1 << 4)  /* is this draw_elements? */
 };
 
@@ -191,28 +185,27 @@ static boolean r300_reserve_cs_dwords(struct r300_context *r300,
 {
     boolean flushed        = FALSE;
     boolean first_draw     = flags & PREP_FIRST_DRAW;
-    boolean emit_aos       = flags & PREP_EMIT_AOS;
-    boolean emit_aos_swtcl = flags & PREP_EMIT_AOS_SWTCL;
-    boolean hw_index_bias  = r500_index_bias_supported(r300);
+    boolean emit_vertex_arrays       = flags & PREP_EMIT_AOS;
+    boolean emit_vertex_arrays_swtcl = flags & PREP_EMIT_AOS_SWTCL;
 
     /* Add dirty state, index offset, and AOS. */
     if (first_draw) {
         cs_dwords += r300_get_num_dirty_dwords(r300);
 
-        if (hw_index_bias)
+        if (r300->screen->caps.index_bias_supported)
             cs_dwords += 2; /* emit_index_offset */
 
-        if (emit_aos)
-            cs_dwords += 55; /* emit_aos */
+        if (emit_vertex_arrays)
+            cs_dwords += 55; /* emit_vertex_arrays */
 
-        if (emit_aos_swtcl)
-            cs_dwords += 7; /* emit_aos_swtcl */
+        if (emit_vertex_arrays_swtcl)
+            cs_dwords += 7; /* emit_vertex_arrays_swtcl */
     }
 
     cs_dwords += r300_get_num_cs_end_dwords(r300);
 
     /* Reserve requested CS space. */
-    if (cs_dwords > (r300->cs->ndw - r300->cs->cdw)) {
+    if (cs_dwords > (R300_MAX_CMDBUF_DWORDS - r300->cs->cdw)) {
         r300->context.flush(&r300->context, 0, NULL);
         flushed = TRUE;
     }
@@ -225,44 +218,57 @@ static boolean r300_reserve_cs_dwords(struct r300_context *r300,
  * \param r300          The context.
  * \param flags         See r300_prepare_flags.
  * \param index_buffer  The index buffer to validate. The parameter may be NULL.
- * \param aos_offset    The offset passed to emit_aos.
+ * \param buffer_offset The offset passed to emit_vertex_arrays.
  * \param index_bias    The index bias to emit.
  * \return TRUE if rendering should be skipped
  */
 static boolean r300_emit_states(struct r300_context *r300,
                                 enum r300_prepare_flags flags,
                                 struct pipe_resource *index_buffer,
-                                int aos_offset,
+                                int buffer_offset,
                                 int index_bias)
 {
     boolean first_draw     = flags & PREP_FIRST_DRAW;
-    boolean emit_aos       = flags & PREP_EMIT_AOS;
-    boolean emit_aos_swtcl = flags & PREP_EMIT_AOS_SWTCL;
+    boolean emit_vertex_arrays       = flags & PREP_EMIT_AOS;
+    boolean emit_vertex_arrays_swtcl = flags & PREP_EMIT_AOS_SWTCL;
     boolean indexed        = flags & PREP_INDEXED;
-    boolean hw_index_bias  = r500_index_bias_supported(r300);
+    boolean validate_vbos  = flags & PREP_VALIDATE_VBOS;
 
     /* Validate buffers and emit dirty state if needed. */
     if (first_draw) {
-        if (!r300_emit_buffer_validate(r300, flags & PREP_VALIDATE_VBOS,
-                                       index_buffer)) {
-            fprintf(stderr, "r300: CS space validation failed. "
-                    "(not enough memory?) Skipping rendering.\n");
-            return FALSE;
+        /* upload buffers first */
+        if (r300->screen->caps.has_tcl && r300->any_user_vbs) {
+            r300_upload_user_buffers(r300);
+            r300->any_user_vbs = false;
+        }
+
+        if (r300->validate_buffers) {
+            if (!r300_emit_buffer_validate(r300, validate_vbos,
+                                           index_buffer)) {
+                fprintf(stderr, "r300: CS space validation failed. "
+                        "(not enough memory?) Skipping rendering.\n");
+                return FALSE;
+            }
+
+            /* Consider the validation done only if everything was validated. */
+            if (validate_vbos) {
+                r300->validate_buffers = FALSE;
+            }
         }
 
         r300_emit_dirty_state(r300);
-        if (hw_index_bias) {
+        if (r300->screen->caps.index_bias_supported) {
             if (r300->screen->caps.has_tcl)
                 r500_emit_index_bias(r300, index_bias);
             else
                 r500_emit_index_bias(r300, 0);
         }
 
-        if (emit_aos)
-            r300_emit_aos(r300, aos_offset, indexed);
+        if (emit_vertex_arrays)
+            r300_emit_vertex_arrays(r300, buffer_offset, indexed);
 
-        if (emit_aos_swtcl)
-            r300_emit_aos_swtcl(r300, indexed);
+        if (emit_vertex_arrays_swtcl)
+            r300_emit_vertex_arrays_swtcl(r300, indexed);
     }
 
     return TRUE;
@@ -275,7 +281,7 @@ static boolean r300_emit_states(struct r300_context *r300,
  * \param flags         See r300_prepare_flags.
  * \param index_buffer  The index buffer to validate. The parameter may be NULL.
  * \param cs_dwords     The number of dwords to reserve in CS.
- * \param aos_offset    The offset passed to emit_aos.
+ * \param buffer_offset The offset passed to emit_vertex_arrays.
  * \param index_bias    The index bias to emit.
  * \return TRUE if rendering should be skipped
  */
@@ -283,13 +289,13 @@ static boolean r300_prepare_for_rendering(struct r300_context *r300,
                                           enum r300_prepare_flags flags,
                                           struct pipe_resource *index_buffer,
                                           unsigned cs_dwords,
-                                          int aos_offset,
+                                          int buffer_offset,
                                           int index_bias)
 {
     if (r300_reserve_cs_dwords(r300, flags, cs_dwords))
         flags |= PREP_FIRST_DRAW;
 
-    return r300_emit_states(r300, flags, index_buffer, aos_offset, index_bias);
+    return r300_emit_states(r300, flags, index_buffer, buffer_offset, index_bias);
 }
 
 static boolean immd_is_good_idea(struct r300_context *r300,
@@ -419,7 +425,7 @@ static void r300_emit_draw_arrays_immediate(struct r300_context *r300,
 
         if (transfer[vbi]) {
             vbuf = &r300->vertex_buffer[vbi];
-            pipe_buffer_unmap(&r300->context, vbuf->buffer, transfer[vbi]);
+            pipe_buffer_unmap(&r300->context, transfer[vbi]);
             transfer[vbi] = NULL;
         }
     }
@@ -461,10 +467,10 @@ static void r300_emit_draw_elements(struct r300_context *r300,
                                     unsigned maxIndex,
                                     unsigned mode,
                                     unsigned start,
-                                    unsigned count)
+                                    unsigned count,
+                                    uint16_t *imm_indices3)
 {
-    uint32_t count_dwords;
-    uint32_t offset_dwords = indexSize * start / sizeof(uint32_t);
+    uint32_t count_dwords, offset_dwords;
     boolean alt_num_verts = count > 65535;
     CS_LOCALS(r300);
 
@@ -479,15 +485,39 @@ static void r300_emit_draw_elements(struct r300_context *r300,
     DBG(r300, DBG_DRAW, "r300: Indexbuf of %u indices, min %u max %u\n",
         count, minIndex, maxIndex);
 
-    BEGIN_CS(13 + (alt_num_verts ? 2 : 0));
-    if (alt_num_verts) {
-        OUT_CS_REG(R500_VAP_ALT_NUM_VERTICES, count);
-    }
+    BEGIN_CS(5);
     OUT_CS_REG(R300_GA_COLOR_CONTROL,
             r300_provoking_vertex_fixes(r300, mode));
     OUT_CS_REG_SEQ(R300_VAP_VF_MAX_VTX_INDX, 2);
     OUT_CS(maxIndex);
     OUT_CS(minIndex);
+    END_CS;
+
+    /* If start is odd, render the first triangle with indices embedded
+     * in the command stream. This will increase start by 3 and make it
+     * even. We can then proceed without a fallback. */
+    if (indexSize == 2 && (start & 1) &&
+        mode == PIPE_PRIM_TRIANGLES) {
+        BEGIN_CS(4);
+        OUT_CS_PKT3(R300_PACKET3_3D_DRAW_INDX_2, 2);
+        OUT_CS(R300_VAP_VF_CNTL__PRIM_WALK_INDICES | (3 << 16) |
+               R300_VAP_VF_CNTL__PRIM_TRIANGLES);
+        OUT_CS(imm_indices3[1] << 16 | imm_indices3[0]);
+        OUT_CS(imm_indices3[2]);
+        END_CS;
+
+        start += 3;
+        count -= 3;
+        if (!count)
+           return;
+    }
+
+    offset_dwords = indexSize * start / sizeof(uint32_t);
+
+    BEGIN_CS(8 + (alt_num_verts ? 2 : 0));
+    if (alt_num_verts) {
+        OUT_CS_REG(R500_VAP_ALT_NUM_VERTICES, count);
+    }
     OUT_CS_PKT3(R300_PACKET3_3D_DRAW_INDX_2, 0);
     if (indexSize == 4) {
         count_dwords = count;
@@ -535,9 +565,9 @@ static void r300_draw_range_elements(struct pipe_context* pipe,
                             r300->rws->get_value(r300->rws, R300_VID_DRM_2_3_0);
     unsigned short_count;
     int buffer_offset = 0, index_offset = 0; /* for index bias emulation */
-    unsigned new_offset;
+    uint16_t indices3[3];
 
-    if (indexBias && !r500_index_bias_supported(r300)) {
+    if (indexBias && !r300->screen->caps.index_bias_supported) {
         r300_split_index_bias(r300, indexBias, &buffer_offset, &index_offset);
     }
 
@@ -545,25 +575,50 @@ static void r300_draw_range_elements(struct pipe_context* pipe,
                                 &start, count);
 
     r300_update_derived_state(r300);
-    r300_upload_index_buffer(r300, &indexBuffer, indexSize, start, count, &new_offset);
 
-    start = new_offset;
+    /* Fallback for misaligned ushort indices. */
+    if (indexSize == 2 && (start & 1) &&
+        !r300_buffer_is_user_buffer(indexBuffer)) {
+        struct pipe_transfer *transfer;
+        struct pipe_resource *userbuf;
 
-    /* 15 dwords for emit_draw_elements. Give up if the function fails. */
+        uint16_t *ptr = pipe_buffer_map(pipe, indexBuffer,
+                                        PIPE_TRANSFER_READ, &transfer);
+
+        if (mode == PIPE_PRIM_TRIANGLES) {
+           memcpy(indices3, ptr + start, 6);
+        } else {
+            /* Copy the mapped index buffer directly to the upload buffer.
+             * The start index will be aligned simply from the fact that
+             * every sub-buffer in u_upload_mgr is aligned. */
+            userbuf = pipe->screen->user_buffer_create(pipe->screen,
+                                                       ptr, count * 2,
+                                                       PIPE_BIND_INDEX_BUFFER);
+            indexBuffer = userbuf;
+            r300_upload_index_buffer(r300, &indexBuffer, indexSize, &start, count);
+            pipe_resource_reference(&userbuf, NULL);
+        }
+        pipe_buffer_unmap(pipe, transfer);
+    } else {
+        if (r300_buffer_is_user_buffer(indexBuffer))
+            r300_upload_index_buffer(r300, &indexBuffer, indexSize, &start, count);
+    }
+
+    /* 19 dwords for emit_draw_elements. Give up if the function fails. */
     if (!r300_prepare_for_rendering(r300,
             PREP_FIRST_DRAW | PREP_VALIDATE_VBOS | PREP_EMIT_AOS |
-            PREP_INDEXED, indexBuffer, 15, buffer_offset, indexBias))
+            PREP_INDEXED, indexBuffer, 19, buffer_offset, indexBias))
         goto done;
 
     if (alt_num_verts || count <= 65535) {
         r300_emit_draw_elements(r300, indexBuffer, indexSize,
-				minIndex, maxIndex, mode, start, count);
+				minIndex, maxIndex, mode, start, count, indices3);
     } else {
         do {
             short_count = MIN2(count, 65534);
             r300_emit_draw_elements(r300, indexBuffer, indexSize,
                                      minIndex, maxIndex,
-                                     mode, start, short_count);
+                                     mode, start, short_count, indices3);
 
             start += short_count;
             count -= short_count;
@@ -572,7 +627,7 @@ static void r300_draw_range_elements(struct pipe_context* pipe,
             if (count) {
                 if (!r300_prepare_for_rendering(r300,
                         PREP_VALIDATE_VBOS | PREP_EMIT_AOS | PREP_INDEXED,
-                        indexBuffer, 15, buffer_offset, indexBias))
+                        indexBuffer, 19, buffer_offset, indexBias))
                     goto done;
             }
         } while (count);
@@ -744,14 +799,13 @@ static void r300_swtcl_draw_vbo(struct pipe_context* pipe,
 
     for (i = 0; i < r300->vertex_buffer_count; i++) {
         if (r300->vertex_buffer[i].buffer) {
-            pipe_buffer_unmap(pipe, r300->vertex_buffer[i].buffer,
-                              vb_transfer[i]);
+            pipe_buffer_unmap(pipe, vb_transfer[i]);
             draw_set_mapped_vertex_buffer(r300->draw, i, NULL);
         }
     }
 
     if (indexed) {
-        pipe_buffer_unmap(pipe, r300->index_buffer.buffer, ib_transfer);
+        pipe_buffer_unmap(pipe, ib_transfer);
         draw_set_mapped_index_buffer(r300->draw, NULL);
     }
 }
@@ -810,6 +864,7 @@ static boolean r300_render_allocate_vertices(struct vbuf_render* render,
 				       R300_MAX_DRAW_VBO_SIZE);
         r300->draw_vbo_offset = 0;
         r300->draw_vbo_size = R300_MAX_DRAW_VBO_SIZE;
+        r300->validate_buffers = TRUE;
     }
 
     r300render->vertex_size = vertex_size;
@@ -850,7 +905,7 @@ static void r300_render_unmap_vertices(struct vbuf_render* render,
 
     r300render->vbo_max_used = MAX2(r300render->vbo_max_used,
                                     r300render->vertex_size * (max + 1));
-    pipe_buffer_unmap(context, r300->vbo, r300render->vbo_transfer);
+    pipe_buffer_unmap(context, r300render->vbo_transfer);
 
     r300render->vbo_transfer = NULL;
 }
@@ -967,7 +1022,7 @@ static void r300_render_draw_elements(struct vbuf_render* render,
     end_cs_dwords = r300_get_num_cs_end_dwords(r300);
 
     while (count) {
-        free_dwords = r300->cs->ndw - r300->cs->cdw;
+        free_dwords = R300_MAX_CMDBUF_DWORDS - r300->cs->cdw;
 
         short_count = MIN2(count, (free_dwords - end_cs_dwords - 6) * 2);
 
@@ -1015,8 +1070,7 @@ static struct vbuf_render* r300_render_create(struct r300_context* r300)
 
     r300render->r300 = r300;
 
-    /* XXX find real numbers plz */
-    r300render->base.max_vertex_buffer_bytes = 128 * 1024;
+    r300render->base.max_vertex_buffer_bytes = 1024 * 1024;
     r300render->base.max_indices = 16 * 1024;
 
     r300render->base.get_vertex_info = r300_render_get_vertex_info;
@@ -1088,6 +1142,8 @@ static void r300_blitter_draw_rectangle(struct blitter_context *blitter,
     const float zeros[4] = {0, 0, 0, 0};
     CS_LOCALS(r300);
 
+    r300->context.set_vertex_buffers(&r300->context, 0, NULL);
+
     if (type == UTIL_BLITTER_ATTRIB_TEXCOORD)
         r300->sprite_coord_enable = 1;
 
@@ -1144,37 +1200,45 @@ static void r300_blitter_draw_rectangle(struct blitter_context *blitter,
 
 done:
     /* Restore the state. */
-    r300->clip_state.dirty = TRUE;
-    r300->rs_state.dirty = TRUE;
-    r300->viewport_state.dirty = TRUE;
+    r300_mark_atom_dirty(r300, &r300->clip_state);
+    r300_mark_atom_dirty(r300, &r300->rs_state);
+    r300_mark_atom_dirty(r300, &r300->viewport_state);
 
     r300->sprite_coord_enable = last_sprite_coord_enable;
 }
 
 static void r300_resource_resolve(struct pipe_context* pipe,
                                   struct pipe_resource* dest,
-                                  struct pipe_subresource subdest,
+                                  unsigned dst_layer,
                                   struct pipe_resource* src,
-                                  struct pipe_subresource subsrc)
+                                  unsigned src_layer)
 {
     struct r300_context* r300 = r300_context(pipe);
+    struct pipe_surface* srcsurf, surf_tmpl;
     struct r300_aa_state *aa = (struct r300_aa_state*)r300->aa_state.state;
-    struct pipe_surface* srcsurf = src->screen->get_tex_surface(src->screen,
-            src, subsrc.face, subsrc.level, 0, 0);
     float color[] = {0, 0, 0, 0};
+
+    memset(&surf_tmpl, 0, sizeof(surf_tmpl));
+    surf_tmpl.format = src->format;
+    surf_tmpl.usage = 0; /* not really a surface hence no bind flags */
+    surf_tmpl.u.tex.level = 0; /* msaa resources cannot have mipmaps */
+    surf_tmpl.u.tex.first_layer = src_layer;
+    surf_tmpl.u.tex.last_layer = src_layer;
+    srcsurf = pipe->create_surface(pipe, src, &surf_tmpl);
+    surf_tmpl.format = dest->format;
+    surf_tmpl.u.tex.first_layer = dst_layer;
+    surf_tmpl.u.tex.last_layer = dst_layer;
 
     DBG(r300, DBG_DRAW, "r300: Resolving resource...\n");
 
     /* Enable AA resolve. */
-    aa->dest = r300_surface(
-            dest->screen->get_tex_surface(dest->screen, dest, subdest.face,
-                                          subdest.level, 0, 0));
+    aa->dest = r300_surface(pipe->create_surface(pipe, dest, &surf_tmpl));
 
     aa->aaresolve_ctl =
         R300_RB3D_AARESOLVE_CTL_AARESOLVE_MODE_RESOLVE |
         R300_RB3D_AARESOLVE_CTL_AARESOLVE_ALPHA_AVERAGE;
     r300->aa_state.size = 12;
-    r300->aa_state.dirty = TRUE;
+    r300_mark_atom_dirty(r300, &r300->aa_state);
 
     /* Resolve the surface. */
     r300->context.clear_render_target(pipe,
@@ -1183,7 +1247,7 @@ static void r300_resource_resolve(struct pipe_context* pipe,
     /* Disable AA resolve. */
     aa->aaresolve_ctl = 0;
     r300->aa_state.size = 4;
-    r300->aa_state.dirty = TRUE;
+    r300_mark_atom_dirty(r300, &r300->aa_state);
 
     pipe_surface_reference((struct pipe_surface**)&srcsurf, NULL);
     pipe_surface_reference((struct pipe_surface**)&aa->dest, NULL);

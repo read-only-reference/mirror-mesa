@@ -2197,6 +2197,7 @@ struct gl_shader_compiler_options
    GLboolean EmitNoCont;                  /**< Emit CONT opcode? */
    GLboolean EmitNoMainReturn;            /**< Emit CONT/RET opcodes? */
    GLboolean EmitNoNoise;                 /**< Emit NOISE opcodes? */
+   GLboolean EmitNoPow;                   /**< Emit POW opcodes? */
 
    /**
     * \name Forms of indirect addressing the driver cannot do.
@@ -2566,6 +2567,7 @@ struct gl_program_constants
  */
 struct gl_constants
 {
+   GLint MaxTextureMbytes;      /**< Max memory per image, in MB */
    GLint MaxTextureLevels;      /**< Max mipmap levels. */ 
    GLint Max3DTextureLevels;    /**< Max mipmap levels for 3D textures */
    GLint MaxCubeTextureLevels;  /**< Max mipmap levels for cube textures */

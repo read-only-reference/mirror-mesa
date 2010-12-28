@@ -37,12 +37,12 @@ nv30_sampler_view_init(struct pipe_context *pipe,
 	struct pipe_resource* pt = sv->base.texture;
 	struct nvfx_texture_format *tf = &nvfx_texture_formats[sv->base.format];
 	unsigned txf;
-	unsigned level = pt->target == PIPE_TEXTURE_CUBE ? 0 : sv->base.first_level;
+	unsigned level = pt->target == PIPE_TEXTURE_CUBE ? 0 : sv->base.u.tex.first_level;
 
 	assert(tf->fmt[0] >= 0);
 
 	txf = sv->u.init_fmt;
-	txf |= (level != sv->base.last_level ? NV30_3D_TEX_FORMAT_MIPMAP : 0);
+	txf |= (level != sv->base.u.tex.last_level ? NV30_3D_TEX_FORMAT_MIPMAP : 0);
 	txf |= util_logbase2(u_minify(pt->width0, level)) << NV30_3D_TEX_FORMAT_BASE_SIZE_U__SHIFT;
 	txf |= util_logbase2(u_minify(pt->height0, level)) << NV30_3D_TEX_FORMAT_BASE_SIZE_V__SHIFT;
 	txf |= util_logbase2(u_minify(pt->depth0, level)) << NV30_3D_TEX_FORMAT_BASE_SIZE_W__SHIFT;
@@ -60,8 +60,8 @@ nv30_sampler_view_init(struct pipe_context *pipe,
 	else
 		sv->u.nv30.rect = !!(pt->flags & NVFX_RESOURCE_FLAG_LINEAR);
 
-	sv->lod_offset = sv->base.first_level - level;
-	sv->max_lod_limit = sv->base.last_level - level;
+	sv->lod_offset = sv->base.u.tex.first_level - level;
+	sv->max_lod_limit = sv->base.u.tex.last_level - level;
 }
 
 void
@@ -71,6 +71,7 @@ nv30_fragtex_set(struct nvfx_context *nvfx, int unit)
 	struct nvfx_sampler_view* sv = (struct nvfx_sampler_view*)nvfx->fragment_sampler_views[unit];
 	struct nouveau_bo *bo = ((struct nvfx_miptree *)sv->base.texture)->base.bo;
 	struct nouveau_channel* chan = nvfx->screen->base.channel;
+	struct nouveau_grobj *eng3d = nvfx->screen->eng3d;
 	unsigned txf;
 	unsigned tex_flags = NOUVEAU_BO_VRAM | NOUVEAU_BO_GART | NOUVEAU_BO_RD;
 	unsigned use_rect;
@@ -102,7 +103,7 @@ nv30_fragtex_set(struct nvfx_context *nvfx, int unit)
 	txf = sv->u.nv30.fmt[ps->compare + (use_rect ? 2 : 0)];
 
 	MARK_RING(chan, 9, 2);
-	OUT_RING(chan, RING_3D(NV30_3D_TEX_OFFSET(unit), 8));
+	BEGIN_RING(chan, eng3d, NV30_3D_TEX_OFFSET(unit), 8);
 	OUT_RELOC(chan, bo, sv->offset, tex_flags | NOUVEAU_BO_LOW, 0, 0);
 	OUT_RELOC(chan, bo, txf,
 		tex_flags | NOUVEAU_BO_OR,

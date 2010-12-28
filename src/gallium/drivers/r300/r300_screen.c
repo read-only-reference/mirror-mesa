@@ -34,6 +34,10 @@
 
 #include "draw/draw_context.h"
 
+#ifdef HAVE_LLVM
+#include "gallivm/lp_bld_init.h"
+#endif
+
 /* Return the identifier behind whom the brave coders responsible for this
  * amalgamation of code, sweat, and duct tape, routinely obscure their names.
  *
@@ -116,8 +120,9 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
         case PIPE_CAP_TEXTURE_MIRROR_REPEAT:
         case PIPE_CAP_BLEND_EQUATION_SEPARATE:
-        case PIPE_CAP_TEXTURE_SWIZZLE:
             return 1;
+        case PIPE_CAP_TEXTURE_SWIZZLE:
+            return util_format_s3tc_enabled ? r300screen->caps.dxtc_swizzle : 1;
 
         /* Unsupported features (boolean caps). */
         case PIPE_CAP_TIMER_QUERY:
@@ -308,7 +313,9 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
                                         unsigned usage,
                                         unsigned geom_flags)
 {
+    struct r300_winsys_screen *rws = r300_screen(screen)->rws;
     uint32_t retval = 0;
+    boolean drm_2_8_0 = rws->get_value(rws, R300_VID_DRM_2_8_0);
     boolean is_r500 = r300_screen(screen)->caps.is_r500;
     boolean is_r400 = r300_screen(screen)->caps.is_r400;
     boolean is_color2101010 = format == PIPE_FORMAT_R10G10B10A2_UNORM ||
@@ -362,7 +369,7 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
                   PIPE_BIND_SCANOUT |
                   PIPE_BIND_SHARED)) &&
         /* 2101010 cannot be rendered to on non-r5xx. */
-        (is_r500 || !is_color2101010) &&
+        (!is_color2101010 || (is_r500 && drm_2_8_0)) &&
         r300_is_colorbuffer_format_supported(format)) {
         retval |= usage &
             (PIPE_BIND_RENDER_TARGET |
@@ -456,6 +463,10 @@ struct pipe_screen* r300_screen_create(struct r300_winsys_screen *rws)
     r300_init_debug(r300screen);
     r300_parse_chipset(&r300screen->caps);
 
+    r300screen->caps.index_bias_supported =
+            r300screen->caps.is_r500 &&
+            rws->get_value(rws, R300_VID_DRM_2_3_0);
+
     util_slab_create(&r300screen->pool_buffers,
                      sizeof(struct r300_buffer), 64,
                      UTIL_SLAB_SINGLETHREADED);
@@ -478,6 +489,10 @@ struct pipe_screen* r300_screen_create(struct r300_winsys_screen *rws)
     r300_init_screen_resource_functions(r300screen);
 
     util_format_s3tc_init();
+
+#ifdef HAVE_LLVM
+    lp_build_init();
+#endif
 
     return &r300screen->screen;
 }

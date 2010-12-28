@@ -33,6 +33,7 @@
 #ifndef BRW_EU_H
 #define BRW_EU_H
 
+#include <stdbool.h>
 #include "brw_structs.h"
 #include "brw_defines.h"
 #include "program/prog_instruction.h"
@@ -106,10 +107,12 @@ struct brw_compile {
    /* Allow clients to push/pop instruction state:
     */
    struct brw_instruction stack[BRW_EU_MAX_INSN_STACK];
+   bool compressed_stack[BRW_EU_MAX_INSN_STACK];
    struct brw_instruction *current;
 
    GLuint flag_value;
    GLboolean single_program_flow;
+   bool compressed;
    struct brw_context *brw;
 
    struct brw_glsl_label *first_label;  /**< linked list of labels */
@@ -858,7 +861,8 @@ void brw_fb_WRITE(struct brw_compile *p,
 		   GLuint binding_table_index,
 		   GLuint msg_length,
 		   GLuint response_length,
-		   GLboolean eot);
+		   GLboolean eot,
+		   GLboolean header_present);
 
 void brw_SAMPLE(struct brw_compile *p,
 		struct brw_reg dest,
@@ -954,6 +958,8 @@ struct brw_instruction *brw_WHILE(struct brw_compile *p,
 	       struct brw_instruction *patch_insn);
 
 struct brw_instruction *brw_BREAK(struct brw_compile *p, int pop_count);
+struct brw_instruction *brw_CONT_gen6(struct brw_compile *p,
+				      struct brw_instruction *do_insn);
 struct brw_instruction *brw_CONT(struct brw_compile *p, int pop_count);
 /* Forward jumps:
  */
@@ -1009,6 +1015,7 @@ void brw_math_invert( struct brw_compile *p,
 void brw_set_src1( struct brw_instruction *insn,
                           struct brw_reg reg );
 
+void brw_set_uip_jip(struct brw_compile *p);
 
 /* brw_optimize.c */
 void brw_optimize(struct brw_compile *p);

@@ -33,15 +33,17 @@
 
 #include "r300_defines.h"
 
+#define R300_MAX_CMDBUF_DWORDS (16 * 1024)
+
 struct winsys_handle;
 struct r300_winsys_screen;
 
-struct r300_winsys_buffer;
+struct r300_winsys_buffer;      /* for map/unmap etc. */
+struct r300_winsys_cs_buffer;   /* for write_reloc etc. */
 
 struct r300_winsys_cs {
-    uint32_t *ptr;      /* Pointer to the beginning of the CS. */
     unsigned cdw;       /* Number of used dwords. */
-    unsigned ndw;       /* Size of the CS in dwords. */
+    uint32_t *buf;      /* The command buffer. */
 };
 
 enum r300_value_id {
@@ -49,8 +51,9 @@ enum r300_value_id {
     R300_VID_GB_PIPES,
     R300_VID_Z_PIPES,
     R300_VID_SQUARE_TILING_SUPPORT,
-    R300_VID_DRM_2_3_0,
-    R300_VID_DRM_2_6_0,
+    R300_VID_DRM_2_3_0, /* R500 VAP regs, MSPOS regs, fixed tex3D size checking */
+    R300_VID_DRM_2_6_0, /* Hyper-Z, GB_Z_PEQ_CONFIG on rv350->r4xx, R500 FG_ALPHA_VALUE */
+    R300_VID_DRM_2_8_0, /* R500 US_FORMAT regs, R500 ARGB2101010 colorbuffer */
     R300_CAN_HYPERZ,
 };
 
@@ -101,6 +104,10 @@ struct r300_winsys_screen {
                                                 unsigned bind,
                                                 unsigned usage,
                                                 enum r300_buffer_domain domain);
+
+    struct r300_winsys_cs_buffer *(*buffer_get_cs_handle)(
+            struct r300_winsys_screen *ws,
+            struct r300_winsys_buffer *buf);
 
     /**
      * Reference a buffer object (assign with reference counting).
@@ -242,7 +249,7 @@ struct r300_winsys_screen {
      *                  of the R300_DOMAIN_* flags.
      */
     void (*cs_add_buffer)(struct r300_winsys_cs *cs,
-                          struct r300_winsys_buffer *buf,
+                          struct r300_winsys_cs_buffer *buf,
                           enum r300_buffer_domain rd,
                           enum r300_buffer_domain wd);
 
@@ -263,7 +270,7 @@ struct r300_winsys_screen {
      * \param wd        A write domain containing a bitmask of the R300_DOMAIN_* flags.
      */
     void (*cs_write_reloc)(struct r300_winsys_cs *cs,
-                           struct r300_winsys_buffer *buf,
+                           struct r300_winsys_cs_buffer *buf,
                            enum r300_buffer_domain rd,
                            enum r300_buffer_domain wd);
 
@@ -303,7 +310,7 @@ struct r300_winsys_screen {
      * \param domain    A bitmask of the R300_REF_* enums.
      */
     boolean (*cs_is_buffer_referenced)(struct r300_winsys_cs *cs,
-                                       struct r300_winsys_buffer *buf,
+                                       struct r300_winsys_cs_buffer *buf,
                                        enum r300_reference_domain domain);
 };
 
