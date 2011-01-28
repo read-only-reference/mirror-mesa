@@ -55,6 +55,24 @@ rc_swizzle get_swz(unsigned int swz, rc_swizzle idx)
 	return GET_SWZ(swz, idx);
 }
 
+/**
+ * The purpose of this function is to standardize the number channels used by
+ * swizzles.  All swizzles regardless of what instruction they are a part of
+ * should have 4 channels initialized with values.
+ * @param channels The number of channels in initial_value that have a
+ * meaningful value.
+ * @return An initialized swizzle that has all of the unused channels set to
+ * RC_SWIZZLE_UNUSED.
+ */
+unsigned int rc_init_swizzle(unsigned int initial_value, unsigned int channels)
+{
+	unsigned int i;
+	for (i = channels; i < 4; i++) {
+		SET_SWZ(initial_value, i, RC_SWIZZLE_UNUSED);
+	}
+	return initial_value;
+}
+
 unsigned int combine_swizzles4(unsigned int src,
 		rc_swizzle swz_x, rc_swizzle swz_y, rc_swizzle swz_z, rc_swizzle swz_w)
 {
@@ -147,13 +165,17 @@ unsigned int rc_src_reads_dst_mask(
 	return dst_mask & rc_swizzle_to_writemask(src_swz);
 }
 
-unsigned int rc_source_type_swz(unsigned int swizzle, unsigned int channels)
+/**
+ * @return A bit mask specifying whether this swizzle will select from an RGB
+ * source, an Alpha source, or both.
+ */
+unsigned int rc_source_type_swz(unsigned int swizzle)
 {
 	unsigned int chan;
 	unsigned int swz = RC_SWIZZLE_UNUSED;
 	unsigned int ret = RC_SOURCE_NONE;
 
-	for(chan = 0; chan < channels; chan++) {
+	for(chan = 0; chan < 4; chan++) {
 		swz = GET_SWZ(swizzle, chan);
 		if (swz == RC_SWIZZLE_W) {
 			ret |= RC_SOURCE_ALPHA;
@@ -202,7 +224,7 @@ static void can_use_presub_read_cb(
 		if (d->RemoveSrcs[i].File == file
 		    && d->RemoveSrcs[i].Index == index) {
 			src_type &=
-				~rc_source_type_swz(d->RemoveSrcs[i].Swizzle, 4);
+				~rc_source_type_swz(d->RemoveSrcs[i].Swizzle);
 		}
 	}
 
@@ -223,7 +245,6 @@ unsigned int rc_inst_can_use_presub(
 {
 	struct can_use_presub_data d;
 	unsigned int num_presub_srcs;
-	unsigned int presub_src_type = rc_source_type_mask(presub_writemask);
 	const struct rc_opcode_info * info =
 					rc_get_opcode_info(inst->U.I.Opcode);
 
@@ -253,13 +274,7 @@ unsigned int rc_inst_can_use_presub(
 
 	num_presub_srcs = rc_presubtract_src_reg_count(presub_op);
 
-	if ((presub_src_type & RC_SOURCE_RGB)
-					&& d.RGBCount + num_presub_srcs > 3) {
-		return 0;
-	}
-
-	if ((presub_src_type & RC_SOURCE_ALPHA)
-					&& d.AlphaCount + num_presub_srcs > 3) {
+	if (d.RGBCount + num_presub_srcs > 3 || d.AlphaCount + num_presub_srcs > 3) {
 		return 0;
 	}
 

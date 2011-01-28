@@ -35,10 +35,6 @@
 #include "r300_screen_buffer.h"
 #include "r300_winsys.h"
 
-#ifdef HAVE_LLVM
-#include "gallivm/lp_bld_init.h"
-#endif
-
 static void r300_update_num_contexts(struct r300_screen *r300screen,
                                      int diff)
 {
@@ -88,8 +84,9 @@ static void r300_release_referenced_objects(struct r300_context *r300)
     pipe_resource_reference(&r300->vbo, NULL);
 
     /* Vertex buffers. */
-    for (i = 0; i < r300->vertex_buffer_count; i++) {
+    for (i = 0; i < r300->real_vertex_buffer_count; i++) {
         pipe_resource_reference(&r300->vertex_buffer[i].buffer, NULL);
+        pipe_resource_reference(&r300->real_vertex_buffer[i], NULL);
     }
 
     /* If there are any queries pending or not destroyed, remove them now. */
@@ -97,6 +94,9 @@ static void r300_release_referenced_objects(struct r300_context *r300)
         remove_from_list(query);
         FREE(query);
     }
+
+    r300->context.delete_depth_stencil_alpha_state(&r300->context,
+                                                   r300->dsa_decompress_zmask);
 }
 
 static void r300_destroy_context(struct pipe_context* context)
@@ -105,13 +105,8 @@ static void r300_destroy_context(struct pipe_context* context)
 
     if (r300->blitter)
         util_blitter_destroy(r300->blitter);
-    if (r300->draw) {
+    if (r300->draw)
         draw_destroy(r300->draw);
-
-#ifdef HAVE_LLVM
-        gallivm_destroy(r300->gallivm);
-#endif
-    }
 
     if (r300->upload_vb)
         u_upload_destroy(r300->upload_vb);
@@ -123,9 +118,6 @@ static void r300_destroy_context(struct pipe_context* context)
 
     /* XXX: This function assumes r300->query_list was initialized */
     r300_release_referenced_objects(r300);
-
-    if (r300->zmask_mm)
-        r300_hyperz_destroy_mm(r300);
 
     if (r300->cs)
         r300->rws->cs_destroy(r300->cs);
@@ -246,7 +238,7 @@ static boolean r300_setup_atoms(struct r300_context* r300)
         if (has_hiz_ram)
             R300_INIT_ATOM(hiz_clear, 0);
         /* zmask clear */
-        R300_INIT_ATOM(zmask_clear, 0);
+        R300_INIT_ATOM(zmask_clear, 4);
     }
     /* ZB (unpipelined), SU. */
     R300_INIT_ATOM(query_start, 4);
@@ -431,12 +423,7 @@ struct pipe_context* r300_create_context(struct pipe_screen* screen,
 
     if (!r300screen->caps.has_tcl) {
         /* Create a Draw. This is used for SW TCL. */
-#ifdef HAVE_LLVM
-        r300->gallivm = gallivm_create();
-        r300->draw = draw_create_gallivm(&r300->context, r300->gallivm);
-#else
         r300->draw = draw_create(&r300->context);
-#endif
         if (r300->draw == NULL)
             goto fail;
         /* Enable our renderer. */
@@ -526,9 +513,43 @@ struct pipe_context* r300_create_context(struct pipe_screen* screen,
         r300->dummy_vb = screen->resource_create(screen, &vb);
     }
 
+    {
+        struct pipe_depth_stencil_alpha_state dsa = {};
+        dsa.depth.writemask = 1;
+
+        r300->dsa_decompress_zmask =
+            r300->context.create_depth_stencil_alpha_state(&r300->context,
+                                                           &dsa);
+    }
+
+    /* Print driver info. */
+#ifdef NDEBUG
+    if (DBG_ON(r300, DBG_INFO)) {
+#else
+    {
+#endif
+        fprintf(stderr,
+                "r300: DRM version: %d.%d.%d, Name: %s, ID: 0x%04x, GB: %d, Z: %d\n"
+                "r300: GART size: %d MB, VRAM size: %d MB\n"
+                "r300: AA compression: %s, Z compression: %s, HiZ: %s\n",
+                rws->get_value(rws, R300_VID_DRM_MAJOR),
+                rws->get_value(rws, R300_VID_DRM_MINOR),
+                rws->get_value(rws, R300_VID_DRM_PATCHLEVEL),
+                screen->get_name(screen),
+                rws->get_value(rws, R300_VID_PCI_ID),
+                rws->get_value(rws, R300_VID_GB_PIPES),
+                rws->get_value(rws, R300_VID_Z_PIPES),
+                rws->get_value(rws, R300_VID_GART_SIZE) >> 20,
+                rws->get_value(rws, R300_VID_VRAM_SIZE) >> 20,
+                rws->get_value(rws, R300_CAN_AACOMPRESS) ? "YES" : "NO",
+                rws->get_value(rws, R300_CAN_HYPERZ) ? "YES" : "NO",
+                rws->get_value(rws, R300_CAN_HYPERZ) &&
+                r300->screen->caps.hiz_ram ? "YES" : "NO");
+    }
+
     return &r300->context;
 
- fail:
+fail:
     r300_destroy_context(&r300->context);
     return NULL;
 }

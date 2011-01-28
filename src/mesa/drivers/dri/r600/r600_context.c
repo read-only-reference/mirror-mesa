@@ -44,6 +44,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/bufferobj.h"
 #include "main/texobj.h"
 #include "main/points.h"
+#include "main/mfeatures.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -259,7 +260,7 @@ static void r600InitConstValues(struct gl_context *ctx, radeonScreenPtr screen)
     R700_CHIP_CONTEXT *r700    = (R700_CHIP_CONTEXT*)(&context->hw);
 
     if(  (context->radeon.radeonScreen->chip_family >= CHIP_FAMILY_CEDAR)
-       &&(context->radeon.radeonScreen->chip_family <= CHIP_FAMILY_PALM) )
+       &&(context->radeon.radeonScreen->chip_family <= CHIP_FAMILY_CAICOS) )
     {
         r700->bShaderUseMemConstant = GL_TRUE;
     }

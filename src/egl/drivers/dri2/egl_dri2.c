@@ -47,7 +47,6 @@
 #include <libudev.h>
 #endif
 
-#include <glapi/glapi.h>
 #include "eglconfig.h"
 #include "eglcontext.h"
 #include "egldisplay.h"
@@ -63,6 +62,8 @@ struct dri2_egl_driver
 {
    _EGLDriver base;
 
+   void *handle;
+   _EGLProc (*get_proc_address)(const char *procname);
    void (*glFlush)(void);
 };
 
@@ -260,8 +261,8 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
          base.BindToTextureRGBA = bind_to_texture_rgba;
    }
 
-   base.RenderableType = disp->ClientAPIsMask;
-   base.Conformant = disp->ClientAPIsMask;
+   base.RenderableType = disp->ClientAPIs;
+   base.Conformant = disp->ClientAPIs;
 
    if (!_eglValidateConfig(&base, EGL_FALSE)) {
       _eglLog(_EGL_DEBUG, "DRI2: failed to validate config %d", id);
@@ -752,13 +753,13 @@ dri2_create_screen(_EGLDisplay *disp)
    else
       api_mask = 1 << __DRI_API_OPENGL;
 
-   disp->ClientAPIsMask = 0;
+   disp->ClientAPIs = 0;
    if (api_mask & (1 <<__DRI_API_OPENGL))
-      disp->ClientAPIsMask |= EGL_OPENGL_BIT;
+      disp->ClientAPIs |= EGL_OPENGL_BIT;
    if (api_mask & (1 <<__DRI_API_GLES))
-      disp->ClientAPIsMask |= EGL_OPENGL_ES_BIT;
+      disp->ClientAPIs |= EGL_OPENGL_ES_BIT;
    if (api_mask & (1 << __DRI_API_GLES2))
-      disp->ClientAPIsMask |= EGL_OPENGL_ES2_BIT;
+      disp->ClientAPIs |= EGL_OPENGL_ES2_BIT;
 
    if (dri2_dpy->dri2->base.version >= 2) {
       disp->Extensions.KHR_surfaceless_gles1 = EGL_TRUE;
@@ -775,8 +776,7 @@ dri2_create_screen(_EGLDisplay *disp)
 }
 
 static EGLBoolean
-dri2_initialize_x11(_EGLDriver *drv, _EGLDisplay *disp,
-		    EGLint *major, EGLint *minor)
+dri2_initialize_x11(_EGLDriver *drv, _EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy;
 
@@ -855,8 +855,8 @@ dri2_initialize_x11(_EGLDriver *drv, _EGLDisplay *disp,
    disp->Extensions.NOK_texture_from_pixmap = EGL_TRUE;
 
    /* we're supporting EGL 1.4 */
-   *major = 1;
-   *minor = 4;
+   disp->VersionMajor = 1;
+   disp->VersionMinor = 4;
 
    return EGL_TRUE;
 
@@ -1415,8 +1415,7 @@ dri2_get_driver_for_fd(int fd)
 }
 
 static EGLBoolean
-dri2_initialize_drm(_EGLDriver *drv, _EGLDisplay *disp,
-		    EGLint *major, EGLint *minor)
+dri2_initialize_drm(_EGLDriver *drv, _EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy;
    int i;
@@ -1451,8 +1450,8 @@ dri2_initialize_drm(_EGLDriver *drv, _EGLDisplay *disp,
    disp->Extensions.KHR_gl_texture_2D_image = EGL_TRUE;
 
    /* we're supporting EGL 1.4 */
-   *major = 1;
-   *minor = 4;
+   disp->VersionMajor = 1;
+   disp->VersionMinor = 4;
 
    return EGL_TRUE;
 
@@ -1470,16 +1469,23 @@ dri2_initialize_drm(_EGLDriver *drv, _EGLDisplay *disp,
  * Called via eglInitialize(), GLX_drv->API.Initialize().
  */
 static EGLBoolean
-dri2_initialize(_EGLDriver *drv, _EGLDisplay *disp,
-		EGLint *major, EGLint *minor)
+dri2_initialize(_EGLDriver *drv, _EGLDisplay *disp)
 {
+   /* not until swrast_dri is supported */
+   if (disp->Options.UseFallback)
+      return EGL_FALSE;
+
    switch (disp->Platform) {
    case _EGL_PLATFORM_X11:
-      return dri2_initialize_x11(drv, disp, major, minor);
+      if (disp->Options.TestOnly)
+         return EGL_TRUE;
+      return dri2_initialize_x11(drv, disp);
 
 #ifdef HAVE_LIBUDEV
    case _EGL_PLATFORM_DRM:
-      return dri2_initialize_drm(drv, disp, major, minor);
+      if (disp->Options.TestOnly)
+         return EGL_TRUE;
+      return dri2_initialize_drm(drv, disp);
 #endif
 
    default:
@@ -1867,11 +1873,9 @@ dri2_swap_buffers_region(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw,
 static _EGLProc
 dri2_get_proc_address(_EGLDriver *drv, const char *procname)
 {
-   (void) drv;
+   struct dri2_egl_driver *dri2_drv = dri2_egl_driver(drv);
 
-   /* FIXME: Do we need to support lookup of EGL symbols too? */
-
-   return (_EGLProc) _glapi_get_proc_address(procname);
+   return dri2_drv->get_proc_address(procname);
 }
 
 static EGLBoolean
@@ -1901,13 +1905,6 @@ dri2_wait_native(_EGLDriver *drv, _EGLDisplay *disp, EGLint engine)
    /* glXWaitX(); */
 
    return EGL_TRUE;
-}
-
-static void
-dri2_unload(_EGLDriver *drv)
-{
-   struct dri2_egl_driver *dri2_drv = dri2_egl_driver(drv);
-   free(dri2_drv);
 }
 
 static EGLBoolean
@@ -1983,10 +1980,31 @@ static EGLBoolean
 dri2_release_tex_image(_EGLDriver *drv,
 		       _EGLDisplay *disp, _EGLSurface *surf, EGLint buffer)
 {
-   (void) drv;
-   (void) disp;
-   (void) surf;
-   (void) buffer;
+#if __DRI_TEX_BUFFER_VERSION >= 3
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
+   struct dri2_egl_context *dri2_ctx;
+   _EGLContext *ctx;
+   GLint  target;
+
+   ctx = _eglGetCurrentContext();
+   dri2_ctx = dri2_egl_context(ctx);
+
+   if (!_eglReleaseTexImage(drv, disp, surf, buffer))
+      return EGL_FALSE;
+
+   switch (dri2_surf->base.TextureTarget) {
+   case EGL_TEXTURE_2D:
+      target = GL_TEXTURE_2D;
+      break;
+   default:
+      assert(0);
+   }
+   if (dri2_dpy->tex_buffer->releaseTexBuffer!=NULL)
+    (*dri2_dpy->tex_buffer->releaseTexBuffer)(dri2_ctx->dri_context,
+                                             target,
+                                             dri2_surf->dri_drawable);
+#endif
 
    return EGL_TRUE;
 }
@@ -2316,12 +2334,63 @@ dri2_export_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp, _EGLImage *img,
    return EGL_TRUE;
 }
 
+static void
+dri2_unload(_EGLDriver *drv)
+{
+   struct dri2_egl_driver *dri2_drv = dri2_egl_driver(drv);
+
+   if (dri2_drv->handle)
+      dlclose(dri2_drv->handle);
+   free(dri2_drv);
+}
+
+static EGLBoolean
+dri2_load(_EGLDriver *drv)
+{
+   struct dri2_egl_driver *dri2_drv = dri2_egl_driver(drv);
+#ifdef HAVE_SHARED_GLAPI
+   const char *libname = "libglapi.so.0";
+#else
+   /*
+    * Both libGL.so and libglapi.so are glapi providers.  There is no way to
+    * tell which one to load.
+    */
+   const char *libname = NULL;
+#endif
+   void *handle;
+
+   /* RTLD_GLOBAL to make sure glapi symbols are visible to DRI drivers */
+   handle = dlopen(libname, RTLD_LAZY | RTLD_GLOBAL);
+   if (handle) {
+      dri2_drv->get_proc_address = (_EGLProc (*)(const char *))
+         dlsym(handle, "_glapi_get_proc_address");
+      if (!dri2_drv->get_proc_address || !libname) {
+         /* no need to keep a reference */
+         dlclose(handle);
+         handle = NULL;
+      }
+   }
+
+   /* if glapi is not available, loading DRI drivers will fail */
+   if (!dri2_drv->get_proc_address) {
+      _eglLog(_EGL_WARNING, "DRI2: failed to find _glapi_get_proc_address");
+      return EGL_FALSE;
+   }
+
+   dri2_drv->glFlush = (void (*)(void))
+      dri2_drv->get_proc_address("glFlush");
+
+   dri2_drv->handle = handle;
+
+   return EGL_TRUE;
+}
+
 /**
  * This is the main entrypoint into the driver, called by libEGL.
  * Create a new _EGLDriver object and init its dispatch table.
  */
 _EGLDriver *
-_eglMain(const char *args)
+_EGL_MAIN(const char *args)
 {
    struct dri2_egl_driver *dri2_drv;
 
@@ -2332,6 +2401,10 @@ _eglMain(const char *args)
       return NULL;
 
    memset(dri2_drv, 0, sizeof *dri2_drv);
+
+   if (!dri2_load(&dri2_drv->base))
+      return NULL;
+
    _eglInitDriverFallbacks(&dri2_drv->base);
    dri2_drv->base.API.Initialize = dri2_initialize;
    dri2_drv->base.API.Terminate = dri2_terminate;
@@ -2356,9 +2429,6 @@ _eglMain(const char *args)
 
    dri2_drv->base.Name = "DRI2";
    dri2_drv->base.Unload = dri2_unload;
-
-   dri2_drv->glFlush =
-      (void (*)(void)) dri2_get_proc_address(&dri2_drv->base, "glFlush");
 
    return &dri2_drv->base;
 }

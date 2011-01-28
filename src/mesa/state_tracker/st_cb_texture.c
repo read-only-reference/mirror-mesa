@@ -74,19 +74,18 @@ gl_target_to_pipe(GLenum target)
    switch (target) {
    case GL_TEXTURE_1D:
       return PIPE_TEXTURE_1D;
-
    case GL_TEXTURE_2D:
       return PIPE_TEXTURE_2D;
-
    case GL_TEXTURE_RECTANGLE_NV:
       return PIPE_TEXTURE_RECT;
-
    case GL_TEXTURE_3D:
       return PIPE_TEXTURE_3D;
-
    case GL_TEXTURE_CUBE_MAP_ARB:
       return PIPE_TEXTURE_CUBE;
-
+   case GL_TEXTURE_1D_ARRAY_EXT:
+      return PIPE_TEXTURE_1D_ARRAY;
+   case GL_TEXTURE_2D_ARRAY_EXT:
+      return PIPE_TEXTURE_2D_ARRAY;
    default:
       assert(0);
       return 0;
@@ -276,6 +275,7 @@ guess_and_alloc_texture(struct st_context *st,
    const GLuint dims = get_texture_dims(stObj->base.Target);
    GLuint level, lastLevel, width, height, depth;
    GLuint bindings;
+   GLuint ptWidth, ptHeight, ptDepth, ptLayers;
    enum pipe_format fmt;
 
    DBG("%s\n", __FUNCTION__);
@@ -353,13 +353,18 @@ guess_and_alloc_texture(struct st_context *st,
 
    bindings = default_bindings(st, fmt);
 
+   st_gl_texture_dims_to_pipe_dims(stObj->base.Target,
+                                   width, height, depth,
+                                   &ptWidth, &ptHeight, &ptDepth, &ptLayers);
+
    stObj->pt = st_texture_create(st,
                                  gl_target_to_pipe(stObj->base.Target),
                                  fmt,
                                  lastLevel,
-                                 width,
-                                 height,
-                                 depth,
+                                 ptWidth,
+                                 ptHeight,
+                                 ptDepth,
+                                 ptLayers,
                                  bindings);
 
    DBG("%s returning %d\n", __FUNCTION__, (stObj->pt != NULL));
@@ -918,6 +923,7 @@ decompress_with_blit(struct gl_context * ctx, GLenum target, GLint level,
    else {
       /* format translation via floats */
       GLuint row;
+      enum pipe_format format = util_format_linear(dst_texture->format);
       for (row = 0; row < height; row++) {
          const GLbitfield transferOps = 0x0; /* bypassed for glGetTexImage() */
          GLfloat rgba[4 * MAX_WIDTH];
@@ -928,7 +934,8 @@ decompress_with_blit(struct gl_context * ctx, GLenum target, GLint level,
             debug_printf("%s: fallback format translation\n", __FUNCTION__);
 
          /* get float[4] rgba row from surface */
-         pipe_get_tile_rgba(pipe, tex_xfer, 0, row, width, 1, rgba);
+         pipe_get_tile_rgba_format(pipe, tex_xfer, 0, row, width, 1,
+                                   format, rgba);
 
          _mesa_pack_rgba_span_float(ctx, width, (GLfloat (*)[4]) rgba, format,
                                     type, dest, &ctx->Pack, transferOps);
@@ -1387,7 +1394,9 @@ fallback_copy_texsubimage(struct gl_context *ctx, GLenum target, GLint level,
          /* XXX this usually involves a lot of int/float conversion.
           * try to avoid that someday.
           */
-         pipe_get_tile_rgba(pipe, src_trans, 0, 0, width, height, tempSrc);
+         pipe_get_tile_rgba_format(pipe, src_trans, 0, 0, width, height,
+                                   util_format_linear(strb->texture->format),
+                                   tempSrc);
 
          /* Store into texture memory.
           * Note that this does some special things such as pixel transfer
@@ -1834,6 +1843,7 @@ st_finalize_texture(struct gl_context *ctx,
    GLuint face;
    struct st_texture_image *firstImage;
    enum pipe_format firstImageFormat;
+   GLuint ptWidth, ptHeight, ptDepth, ptLayers;
 
    if (stObj->base._Complete) {
       /* The texture is complete and we know exactly how many mipmap levels
@@ -1858,15 +1868,17 @@ st_finalize_texture(struct gl_context *ctx,
     * will match.
     */
    if (firstImage->pt &&
-       stObj->pt &&
        firstImage->pt != stObj->pt &&
-       firstImage->pt->last_level >= stObj->pt->last_level) {
+       (!stObj->pt || firstImage->pt->last_level >= stObj->pt->last_level)) {
       pipe_resource_reference(&stObj->pt, firstImage->pt);
       pipe_sampler_view_reference(&stObj->sampler_view, NULL);
    }
 
    /* Find gallium format for the Mesa texture */
    firstImageFormat = st_mesa_format_to_pipe_format(firstImage->base.TexFormat);
+   st_gl_texture_dims_to_pipe_dims(stObj->base.Target, stObj->width0,
+                                   stObj->height0, stObj->depth0,
+                                   &ptWidth, &ptHeight, &ptDepth, &ptLayers);
 
    /* If we already have a gallium texture, check that it matches the texture
     * object's format, target, size, num_levels, etc.
@@ -1875,9 +1887,10 @@ st_finalize_texture(struct gl_context *ctx,
       if (stObj->pt->target != gl_target_to_pipe(stObj->base.Target) ||
           !st_sampler_compat_formats(stObj->pt->format, firstImageFormat) ||
           stObj->pt->last_level < stObj->lastLevel ||
-          stObj->pt->width0 != stObj->width0 ||
-          stObj->pt->height0 != stObj->height0 ||
-          stObj->pt->depth0 != stObj->depth0)
+          stObj->pt->width0 != ptWidth ||
+          stObj->pt->height0 != ptHeight ||
+          stObj->pt->depth0 != ptDepth ||
+          stObj->pt->array_size != ptLayers)
       {
          /* The gallium texture does not match the Mesa texture so delete the
           * gallium texture now.  We'll make a new one below.
@@ -1897,9 +1910,10 @@ st_finalize_texture(struct gl_context *ctx,
                                     gl_target_to_pipe(stObj->base.Target),
                                     firstImageFormat,
                                     stObj->lastLevel,
-                                    stObj->width0,
-                                    stObj->height0,
-                                    stObj->depth0,
+                                    ptWidth,
+                                    ptHeight,
+                                    ptDepth,
+                                    ptLayers,
                                     bindings);
 
       if (!stObj->pt) {

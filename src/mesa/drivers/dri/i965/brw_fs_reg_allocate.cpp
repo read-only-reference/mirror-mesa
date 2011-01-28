@@ -41,7 +41,6 @@ extern "C" {
 #include "brw_context.h"
 #include "brw_eu.h"
 #include "brw_wm.h"
-#include "talloc.h"
 }
 #include "brw_fs.h"
 #include "../glsl/glsl_types.h"
@@ -93,6 +92,8 @@ fs_visitor::assign_regs()
    int class_sizes[base_reg_count];
    int class_count = 0;
    int aligned_pair_class = -1;
+
+   calculate_live_intervals();
 
    /* Set up the register classes.
     *
@@ -232,8 +233,8 @@ fs_visitor::assign_regs()
       }
 
 
-      talloc_free(g);
-      talloc_free(regs);
+      ralloc_free(g);
+      ralloc_free(regs);
 
       return false;
    }
@@ -271,8 +272,8 @@ fs_visitor::assign_regs()
 
    this->grf_used = last_grf + 1;
 
-   talloc_free(g);
-   talloc_free(regs);
+   ralloc_free(g);
+   ralloc_free(regs);
 
    return true;
 }
@@ -416,4 +417,6 @@ fs_visitor::spill_reg(int spill_reg)
 	 }
       }
    }
+
+   this->live_intervals_valid = false;
 }

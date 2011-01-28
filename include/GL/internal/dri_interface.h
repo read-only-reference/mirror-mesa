@@ -251,6 +251,15 @@ struct __DRItexBufferExtensionRec {
 			  GLint target,
 			  GLint format,
 			  __DRIdrawable *pDraw);
+    /**
+     * Method to release texture buffer in case some special platform
+     * need this.
+     *
+     * For GLX_EXT_texture_from_pixmap with AIGLX.
+     */
+    void (*releaseTexBuffer)(__DRIcontext *pDRICtx,
+			GLint target,
+			__DRIdrawable *pDraw);
 };
 
 /**
@@ -490,6 +499,7 @@ struct __DRIuseInvalidateExtensionRec {
 #define __DRI_ATTRIB_BIND_TO_MIPMAP_TEXTURE	45
 #define __DRI_ATTRIB_BIND_TO_TEXTURE_TARGETS	46
 #define __DRI_ATTRIB_YINVERTED			47
+#define __DRI_ATTRIB_FRAMEBUFFER_SRGB_CAPABLE	48
 
 /* __DRI_ATTRIB_RENDER_TYPE */
 #define __DRI_ATTRIB_RGBA_BIT			0x01	

@@ -721,17 +721,16 @@ nv50_set_constant_buffer(struct pipe_context *pipe, uint shader, uint index,
 	struct nv50_context *nv50 = nv50_context(pipe);
 
 	if (shader == PIPE_SHADER_VERTEX) {
-		nv50->constbuf[PIPE_SHADER_VERTEX] = buf;
 		nv50->dirty |= NV50_NEW_VERTPROG_CB;
 	} else
 	if (shader == PIPE_SHADER_FRAGMENT) {
-		nv50->constbuf[PIPE_SHADER_FRAGMENT] = buf;
 		nv50->dirty |= NV50_NEW_FRAGPROG_CB;
-	} else
-	if (shader == PIPE_SHADER_GEOMETRY) {
-		nv50->constbuf[PIPE_SHADER_GEOMETRY] = buf;
+	} else {
+		assert(shader == PIPE_SHADER_GEOMETRY);
 		nv50->dirty |= NV50_NEW_GEOMPROG_CB;
 	}
+
+	pipe_resource_reference(&nv50->constbuf[shader], buf);
 }
 
 static void
@@ -780,8 +779,9 @@ nv50_set_vertex_buffers(struct pipe_context *pipe, unsigned count,
 {
 	struct nv50_context *nv50 = nv50_context(pipe);
 
-	memcpy(nv50->vtxbuf, vb, sizeof(*vb) * count);
-	nv50->vtxbuf_nr = count;
+        util_copy_vertex_buffers(nv50->vtxbuf,
+                                 &nv50->vtxbuf_nr,
+                                 vb, count);
 
 	nv50->dirty |= NV50_NEW_ARRAYS;
 }

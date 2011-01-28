@@ -30,7 +30,7 @@
  * Graph-coloring register allocator.
  */
 
-#include <talloc.h>
+#include <ralloc.h>
 
 #include "main/imports.h"
 #include "main/macros.h"
@@ -38,8 +38,10 @@
 #include "register_allocate.h"
 
 struct ra_reg {
-   char *name;
    GLboolean *conflicts;
+   unsigned int *conflict_list;
+   unsigned int conflict_list_size;
+   unsigned int num_conflicts;
 };
 
 struct ra_regs {
@@ -68,6 +70,7 @@ struct ra_class {
 
 struct ra_node {
    GLboolean *adjacency;
+   unsigned int *adjacency_list;
    unsigned int class;
    unsigned int adjacency_count;
    unsigned int reg;
@@ -93,23 +96,44 @@ ra_alloc_reg_set(unsigned int count)
    unsigned int i;
    struct ra_regs *regs;
 
-   regs = talloc_zero(NULL, struct ra_regs);
+   regs = rzalloc(NULL, struct ra_regs);
    regs->count = count;
-   regs->regs = talloc_zero_array(regs, struct ra_reg, count);
+   regs->regs = rzalloc_array(regs, struct ra_reg, count);
 
    for (i = 0; i < count; i++) {
-      regs->regs[i].conflicts = talloc_zero_array(regs->regs, GLboolean, count);
+      regs->regs[i].conflicts = rzalloc_array(regs->regs, GLboolean, count);
       regs->regs[i].conflicts[i] = GL_TRUE;
+
+      regs->regs[i].conflict_list = ralloc_array(regs->regs, unsigned int, 4);
+      regs->regs[i].conflict_list_size = 4;
+      regs->regs[i].conflict_list[0] = i;
+      regs->regs[i].num_conflicts = 1;
    }
 
    return regs;
 }
 
+static void
+ra_add_conflict_list(struct ra_regs *regs, unsigned int r1, unsigned int r2)
+{
+   struct ra_reg *reg1 = &regs->regs[r1];
+
+   if (reg1->conflict_list_size == reg1->num_conflicts) {
+      reg1->conflict_list_size *= 2;
+      reg1->conflict_list = reralloc(regs->regs, reg1->conflict_list,
+				     unsigned int, reg1->conflict_list_size);
+   }
+   reg1->conflict_list[reg1->num_conflicts++] = r2;
+   reg1->conflicts[r2] = GL_TRUE;
+}
+
 void
 ra_add_reg_conflict(struct ra_regs *regs, unsigned int r1, unsigned int r2)
 {
-   regs->regs[r1].conflicts[r2] = GL_TRUE;
-   regs->regs[r2].conflicts[r1] = GL_TRUE;
+   if (!regs->regs[r1].conflicts[r2]) {
+      ra_add_conflict_list(regs, r1, r2);
+      ra_add_conflict_list(regs, r2, r1);
+   }
 }
 
 unsigned int
@@ -117,14 +141,13 @@ ra_alloc_reg_class(struct ra_regs *regs)
 {
    struct ra_class *class;
 
-   regs->classes = talloc_realloc(regs, regs->classes,
-				  struct ra_class *,
-				  regs->class_count + 1);
+   regs->classes = reralloc(regs->regs, regs->classes, struct ra_class *,
+			    regs->class_count + 1);
 
-   class = talloc_zero(regs, struct ra_class);
+   class = rzalloc(regs, struct ra_class);
    regs->classes[regs->class_count] = class;
 
-   class->regs = talloc_zero_array(class, GLboolean, regs->count);
+   class->regs = rzalloc_array(class, GLboolean, regs->count);
 
    return regs->class_count++;
 }
@@ -148,7 +171,7 @@ ra_set_finalize(struct ra_regs *regs)
    unsigned int b, c;
 
    for (b = 0; b < regs->class_count; b++) {
-      regs->classes[b]->q = talloc_array(regs, unsigned int, regs->class_count);
+      regs->classes[b]->q = ralloc_array(regs, unsigned int, regs->class_count);
    }
 
    /* Compute, for each class B and C, how many regs of B an
@@ -160,15 +183,15 @@ ra_set_finalize(struct ra_regs *regs)
 	 int max_conflicts = 0;
 
 	 for (rc = 0; rc < regs->count; rc++) {
-	    unsigned int rb;
 	    int conflicts = 0;
+	    int i;
 
 	    if (!regs->classes[c]->regs[rc])
 	       continue;
 
-	    for (rb = 0; rb < regs->count; rb++) {
-	       if (regs->classes[b]->regs[rb] &&
-		   regs->regs[rb].conflicts[rc])
+	    for (i = 0; i < regs->regs[rc].num_conflicts; i++) {
+	       unsigned int rb = regs->regs[rc].conflict_list[i];
+	       if (regs->classes[b]->regs[rb])
 		  conflicts++;
 	    }
 	    max_conflicts = MAX2(max_conflicts, conflicts);
@@ -178,22 +201,32 @@ ra_set_finalize(struct ra_regs *regs)
    }
 }
 
+static void
+ra_add_node_adjacency(struct ra_graph *g, unsigned int n1, unsigned int n2)
+{
+   g->nodes[n1].adjacency[n2] = GL_TRUE;
+   g->nodes[n1].adjacency_list[g->nodes[n1].adjacency_count] = n2;
+   g->nodes[n1].adjacency_count++;
+}
+
 struct ra_graph *
 ra_alloc_interference_graph(struct ra_regs *regs, unsigned int count)
 {
    struct ra_graph *g;
    unsigned int i;
 
-   g = talloc_zero(regs, struct ra_graph);
+   g = rzalloc(regs, struct ra_graph);
    g->regs = regs;
-   g->nodes = talloc_zero_array(g, struct ra_node, count);
+   g->nodes = rzalloc_array(g, struct ra_node, count);
    g->count = count;
 
-   g->stack = talloc_zero_array(g, unsigned int, count);
+   g->stack = rzalloc_array(g, unsigned int, count);
 
    for (i = 0; i < count; i++) {
-      g->nodes[i].adjacency = talloc_zero_array(g, GLboolean, count);
-      g->nodes[i].adjacency[i] = GL_TRUE;
+      g->nodes[i].adjacency = rzalloc_array(g, GLboolean, count);
+      g->nodes[i].adjacency_list = ralloc_array(g, unsigned int, count);
+      g->nodes[i].adjacency_count = 0;
+      ra_add_node_adjacency(g, i, i);
       g->nodes[i].reg = ~0;
    }
 
@@ -211,13 +244,10 @@ void
 ra_add_node_interference(struct ra_graph *g,
 			 unsigned int n1, unsigned int n2)
 {
-   if (g->nodes[n1].adjacency[n2])
-      return;
-
-   g->nodes[n1].adjacency[n2] = GL_TRUE;
-   g->nodes[n2].adjacency_count++;
-   g->nodes[n2].adjacency[n1] = GL_TRUE;
-   g->nodes[n2].adjacency_count++;
+   if (!g->nodes[n1].adjacency[n2]) {
+      ra_add_node_adjacency(g, n1, n2);
+      ra_add_node_adjacency(g, n2, n1);
+   }
 }
 
 static GLboolean pq_test(struct ra_graph *g, unsigned int n)
@@ -226,13 +256,12 @@ static GLboolean pq_test(struct ra_graph *g, unsigned int n)
    unsigned int q = 0;
    int n_class = g->nodes[n].class;
 
-   for (j = 0; j < g->count; j++) {
-      if (j == n || g->nodes[j].in_stack)
-	 continue;
+   for (j = 0; j < g->nodes[n].adjacency_count; j++) {
+      unsigned int n2 = g->nodes[n].adjacency_list[j];
+      unsigned int n2_class = g->nodes[n2].class;
 
-      if (g->nodes[n].adjacency[j]) {
-	 unsigned int j_class = g->nodes[j].class;
-	 q += g->regs->classes[n_class]->q[j_class];
+      if (n != n2 && !g->nodes[n2].in_stack) {
+	 q += g->regs->classes[n_class]->q[n2_class];
       }
    }
 
@@ -303,14 +332,15 @@ ra_select(struct ra_graph *g)
 	    continue;
 
 	 /* Check if any of our neighbors conflict with this register choice. */
-	 for (i = 0; i < g->count; i++) {
-	    if (g->nodes[n].adjacency[i] &&
-	       !g->nodes[i].in_stack &&
-		g->regs->regs[r].conflicts[g->nodes[i].reg]) {
+	 for (i = 0; i < g->nodes[n].adjacency_count; i++) {
+	    unsigned int n2 = g->nodes[n].adjacency_list[i];
+
+	    if (!g->nodes[n2].in_stack &&
+		g->regs->regs[r].conflicts[g->nodes[n2].reg]) {
 	       break;
 	    }
 	 }
-	 if (i == g->count)
+	 if (i == g->nodes[n].adjacency_count)
 	    break;
       }
       if (r == g->regs->count)
@@ -368,17 +398,17 @@ ra_get_spill_benefit(struct ra_graph *g, unsigned int n)
    float benefit = 0;
    int n_class = g->nodes[n].class;
 
-   /* Define the benefit of eliminating an interference between n, j
+   /* Define the benefit of eliminating an interference between n, n2
     * through spilling as q(C, B) / p(C).  This is similar to the
     * "count number of edges" approach of traditional graph coloring,
     * but takes classes into account.
     */
-   for (j = 0; j < g->count; j++) {
-      if (j != n && g->nodes[n].adjacency[j]) {
-	 unsigned int j_class = g->nodes[j].class;
-	 benefit += ((float)g->regs->classes[n_class]->q[j_class] /
+   for (j = 0; j < g->nodes[n].adjacency_count; j++) {
+      unsigned int n2 = g->nodes[n].adjacency_list[j];
+      if (n != n2) {
+	 unsigned int n2_class = g->nodes[n2].class;
+	 benefit += ((float)g->regs->classes[n_class]->q[n2_class] /
 		     g->regs->classes[n_class]->p);
-	 break;
       }
    }
 

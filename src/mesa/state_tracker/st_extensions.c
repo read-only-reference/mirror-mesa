@@ -29,6 +29,7 @@
 #include "main/imports.h"
 #include "main/context.h"
 #include "main/macros.h"
+#include "main/mfeatures.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
@@ -224,6 +225,7 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.ARB_draw_elements_base_vertex = GL_TRUE;
    ctx->Extensions.ARB_fragment_coord_conventions = GL_TRUE;
    ctx->Extensions.ARB_fragment_program = GL_TRUE;
+   ctx->Extensions.ARB_half_float_pixel = GL_TRUE;
    ctx->Extensions.ARB_map_buffer_range = GL_TRUE;
    ctx->Extensions.ARB_multisample = GL_TRUE;
    ctx->Extensions.ARB_texture_border_clamp = GL_TRUE; /* XXX temp */
@@ -258,6 +260,8 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.EXT_texture_env_dot3 = GL_TRUE;
    ctx->Extensions.EXT_texture_lod_bias = GL_TRUE;
    ctx->Extensions.EXT_vertex_array_bgra = GL_TRUE;
+   if (ctx->API == API_OPENGLES || ctx->API == API_OPENGLES2)
+	   ctx->Extensions.EXT_texture_format_BGRA8888 = GL_TRUE;
 
    ctx->Extensions.APPLE_vertex_array_object = GL_TRUE;
 
@@ -385,6 +389,7 @@ void st_init_extensions(struct st_context *st)
                                    PIPE_TEXTURE_2D, 0,
                                    PIPE_BIND_SAMPLER_VIEW, 0)) {
       ctx->Extensions.EXT_texture_sRGB = GL_TRUE;
+      ctx->Extensions.EXT_texture_sRGB_decode = GL_TRUE;
    }
 
    if (screen->is_format_supported(screen, PIPE_FORMAT_R8G8_UNORM,
@@ -415,6 +420,12 @@ void st_init_extensions(struct st_context *st)
       ctx->Extensions.MESA_ycbcr_texture = GL_TRUE;
    }
 
+   /* GL_EXT_texture_array */
+   if (screen->get_param(screen, PIPE_CAP_ARRAY_TEXTURES)) {
+      ctx->Extensions.EXT_texture_array = GL_TRUE;
+      ctx->Extensions.MESA_texture_array = GL_TRUE;
+   }
+
    /* GL_ARB_framebuffer_object */
    if (ctx->Extensions.EXT_packed_depth_stencil) {
       /* we support always support GL_EXT_framebuffer_blit */
@@ -429,18 +440,16 @@ void st_init_extensions(struct st_context *st)
       ctx->Extensions.EXT_draw_buffers2 = GL_TRUE;
    }
 
+   if (screen->get_param(screen, PIPE_CAP_INDEP_BLEND_FUNC)) {
+      ctx->Extensions.ARB_draw_buffers_blend = GL_TRUE;
+   }
+
    /* GL_ARB_half_float_vertex */
    if (screen->is_format_supported(screen, PIPE_FORMAT_R16G16B16A16_FLOAT,
                                    PIPE_BUFFER, 0,
                                    PIPE_BIND_VERTEX_BUFFER, 0)) {
       ctx->Extensions.ARB_half_float_vertex = GL_TRUE;
    }
-
-#if 0 /* not yet */
-   if (screen->get_param(screen, PIPE_CAP_INDEP_BLEND_FUNC)) {
-      ctx->Extensions.ARB_draw_buffers_blend = GL_TRUE;
-   }
-#endif
 
    if (screen->get_shader_param(screen, PIPE_SHADER_GEOMETRY, PIPE_SHADER_CAP_MAX_INSTRUCTIONS) > 0) {
 #if 0 /* XXX re-enable when GLSL compiler again supports geometry shaders */
@@ -458,5 +467,10 @@ void st_init_extensions(struct st_context *st)
 
    if (screen->get_param(screen, PIPE_CAP_SHADER_STENCIL_EXPORT)) {
       ctx->Extensions.ARB_shader_stencil_export = GL_TRUE;
+   }
+
+   if (screen->get_param(screen, PIPE_CAP_INSTANCED_DRAWING)) {
+      ctx->Extensions.ARB_draw_instanced = GL_TRUE;
+      ctx->Extensions.ARB_instanced_arrays = GL_TRUE;
    }
 }

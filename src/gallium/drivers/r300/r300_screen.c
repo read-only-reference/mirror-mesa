@@ -34,10 +34,6 @@
 
 #include "draw/draw_context.h"
 
-#ifdef HAVE_LLVM
-#include "gallivm/lp_bld_init.h"
-#endif
-
 /* Return the identifier behind whom the brave coders responsible for this
  * amalgamation of code, sweat, and duct tape, routinely obscure their names.
  *
@@ -87,11 +83,7 @@ static const char* r300_get_name(struct pipe_screen* pscreen)
 static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 {
     struct r300_screen* r300screen = r300_screen(pscreen);
-    boolean is_r400 = r300screen->caps.is_r400;
     boolean is_r500 = r300screen->caps.is_r500;
-
-    /* XXX extended shader capabilities of r400 unimplemented */
-    is_r400 = FALSE;
 
     switch (param) {
         /* Supported features (boolean caps). */
@@ -129,11 +121,13 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_DUAL_SOURCE_BLEND:
         case PIPE_CAP_INDEP_BLEND_ENABLE:
         case PIPE_CAP_INDEP_BLEND_FUNC:
-        case PIPE_CAP_DEPTH_CLAMP: /* XXX implemented, but breaks Regnum Online */
+        case PIPE_CAP_DEPTH_CLAMP:
         case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
         case PIPE_CAP_SHADER_STENCIL_EXPORT:
         case PIPE_CAP_STREAM_OUTPUT:
         case PIPE_CAP_PRIMITIVE_RESTART:
+        case PIPE_CAP_INSTANCED_DRAWING:
+        case PIPE_CAP_ARRAY_TEXTURES:
             return 0;
 
         /* Texturing. */
@@ -174,9 +168,6 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
    struct r300_screen* r300screen = r300_screen(pscreen);
    boolean is_r400 = r300screen->caps.is_r400;
    boolean is_r500 = r300screen->caps.is_r500;
-
-   /* XXX extended shader capabilities of r400 unimplemented */
-   is_r400 = FALSE;
 
    switch (shader)
     {
@@ -489,10 +480,6 @@ struct pipe_screen* r300_screen_create(struct r300_winsys_screen *rws)
     r300_init_screen_resource_functions(r300screen);
 
     util_format_s3tc_init();
-
-#ifdef HAVE_LLVM
-    lp_build_init();
-#endif
 
     return &r300screen->screen;
 }

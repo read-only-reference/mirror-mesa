@@ -96,6 +96,7 @@
 #include "fbobject.h"
 #include "feedback.h"
 #include "fog.h"
+#include "formats.h"
 #include "framebuffer.h"
 #include "hint.h"
 #include "hash.h"
@@ -417,6 +418,10 @@ one_time_init( struct gl_context *ctx )
 		     MESA_VERSION_STRING, __DATE__, __TIME__);
       }
 #endif
+
+#ifdef DEBUG
+      _mesa_test_formats();
+#endif
    }
 
    /* per-API one-time init */
@@ -521,6 +526,25 @@ init_program_limits(GLenum type, struct gl_program_constants *prog)
    prog->MaxNativeTemps = 0;
    prog->MaxNativeAddressRegs = 0;
    prog->MaxNativeParameters = 0;
+
+   /* Set GLSL datatype range/precision info assuming IEEE float values.
+    * Drivers should override these defaults as needed.
+    */
+   prog->MediumFloat.RangeMin = 127;
+   prog->MediumFloat.RangeMax = 127;
+   prog->MediumFloat.Precision = 23;
+   prog->LowFloat = prog->HighFloat = prog->MediumFloat;
+
+   /* Assume ints are stored as floats for now, since this is the least-common
+    * denominator.  The OpenGL ES spec implies (page 132) that the precision
+    * of integer types should be 0.  Practically speaking, IEEE
+    * single-precision floating point values can only store integers in the
+    * range [-0x01000000, 0x01000000] without loss of precision.
+    */
+   prog->MediumInt.RangeMin = 24;
+   prog->MediumInt.RangeMax = 24;
+   prog->MediumInt.Precision = 0;
+   prog->LowInt = prog->HighInt = prog->MediumInt;
 }
 
 
@@ -954,6 +978,14 @@ _mesa_initialize_context_for_api(struct gl_context *ctx,
       /* this is required... */
       ctx->FragmentProgram._MaintainTexEnvProgram = GL_TRUE;
    }
+
+   /* Mesa core handles all the formats that mesa core knows about.
+    * Drivers will want to override this list with just the formats
+    * they can handle, and confirm that appropriate fallbacks exist in
+    * _mesa_choose_tex_format().
+    */
+   memset(&ctx->TextureFormatSupported, GL_TRUE,
+	  sizeof(ctx->TextureFormatSupported));
 
    switch (ctx->API) {
    case API_OPENGL:

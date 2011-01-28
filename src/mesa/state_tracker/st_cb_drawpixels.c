@@ -34,6 +34,8 @@
 #include "main/image.h"
 #include "main/bufferobj.h"
 #include "main/macros.h"
+#include "main/mfeatures.h"
+#include "main/mtypes.h"
 #include "main/pack.h"
 #include "main/texformat.h"
 #include "main/texstore.h"
@@ -341,7 +343,7 @@ alloc_texture(struct st_context *st, GLsizei width, GLsizei height,
    struct pipe_resource *pt;
 
    pt = st_texture_create(st, st->internal_target, texFormat, 0,
-                          width, height, 1, PIPE_BIND_SAMPLER_VIEW);
+                          width, height, 1, 1, PIPE_BIND_SAMPLER_VIEW);
 
    return pt;
 }
@@ -1300,9 +1302,13 @@ st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
       if (type == GL_COLOR) {
          /* alternate path using get/put_tile() */
          GLfloat *buf = (GLfloat *) malloc(width * height * 4 * sizeof(GLfloat));
-         pipe_get_tile_rgba(pipe, ptRead, readX, readY, readW, readH, buf);
-         pipe_put_tile_rgba(pipe, ptTex, pack.SkipPixels, pack.SkipRows,
-                            readW, readH, buf);
+         enum pipe_format readFormat, drawFormat;
+         readFormat = util_format_linear(rbRead->texture->format);
+         drawFormat = util_format_linear(pt->format);
+         pipe_get_tile_rgba_format(pipe, ptRead, readX, readY, readW, readH,
+                                   readFormat, buf);
+         pipe_put_tile_rgba_format(pipe, ptTex, pack.SkipPixels, pack.SkipRows,
+                                   readW, readH, drawFormat, buf);
          free(buf);
       }
       else {

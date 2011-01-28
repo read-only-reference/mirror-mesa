@@ -18,11 +18,12 @@ AC_CONFIG_AUX_DIR([bin])
 AC_CANONICAL_HOST
 
 dnl Versions for external dependencies
-LIBDRM_REQUIRED=2.4.15
-LIBDRM_RADEON_REQUIRED=2.4.17
+LIBDRM_REQUIRED=2.4.23
+LIBDRM_RADEON_REQUIRED=2.4.23
+LIBDRM_INTEL_REQUIRED=2.4.23
 DRI2PROTO_REQUIRED=2.1
 GLPROTO_REQUIRED=1.4.11
-LIBDRM_XORG_REQUIRED=2.4.17
+LIBDRM_XORG_REQUIRED=2.4.23
 LIBKMS_XORG_REQUIRED=1.0.0
 
 dnl Check for progs
@@ -316,6 +317,7 @@ EGL_LIB_NAME='lib$(EGL_LIB).'${LIB_EXTENSION}
 GLESv1_CM_LIB_NAME='lib$(GLESv1_CM_LIB).'${LIB_EXTENSION}
 GLESv2_LIB_NAME='lib$(GLESv2_LIB).'${LIB_EXTENSION}
 VG_LIB_NAME='lib$(VG_LIB).'${LIB_EXTENSION}
+GLAPI_LIB_NAME='lib$(GLAPI_LIB).'${LIB_EXTENSION}
 
 GL_LIB_GLOB=${LIB_PREFIX_GLOB}'$(GL_LIB)'${LIB_VERSION_SEPARATOR}'*'${LIB_EXTENSION}'*'
 GLU_LIB_GLOB=${LIB_PREFIX_GLOB}'$(GLU_LIB)'${LIB_VERSION_SEPARATOR}'*'${LIB_EXTENSION}'*'
@@ -327,6 +329,7 @@ EGL_LIB_GLOB=${LIB_PREFIX_GLOB}'$(EGL_LIB)'${LIB_VERSION_SEPARATOR}'*'${LIB_EXTE
 GLESv1_CM_LIB_GLOB=${LIB_PREFIX_GLOB}'$(GLESv1_CM_LIB)'${LIB_VERSION_SEPARATOR}'*'${LIB_EXTENSION}'*'
 GLESv2_LIB_GLOB=${LIB_PREFIX_GLOB}'$(GLESv2_LIB)'${LIB_VERSION_SEPARATOR}'*'${LIB_EXTENSION}'*'
 VG_LIB_GLOB=${LIB_PREFIX_GLOB}'$(VG_LIB)'${LIB_VERSION_SEPARATOR}'*'${LIB_EXTENSION}'*'
+GLAPI_LIB_GLOB=${LIB_PREFIX_GLOB}'$(GLAPI_LIB)'${LIB_VERSION_SEPARATOR}'*'${LIB_EXTENSION}'*'
 
 AC_SUBST([GL_LIB_NAME])
 AC_SUBST([GLU_LIB_NAME])
@@ -337,6 +340,7 @@ AC_SUBST([EGL_LIB_NAME])
 AC_SUBST([GLESv1_CM_LIB_NAME])
 AC_SUBST([GLESv2_LIB_NAME])
 AC_SUBST([VG_LIB_NAME])
+AC_SUBST([GLAPI_LIB_NAME])
 
 AC_SUBST([GL_LIB_GLOB])
 AC_SUBST([GLU_LIB_GLOB])
@@ -347,6 +351,7 @@ AC_SUBST([EGL_LIB_GLOB])
 AC_SUBST([GLESv1_CM_LIB_GLOB])
 AC_SUBST([GLESv2_LIB_GLOB])
 AC_SUBST([VG_LIB_GLOB])
+AC_SUBST([GLAPI_LIB_GLOB])
 
 dnl
 dnl Arch/platform-specific settings
@@ -377,14 +382,14 @@ if test "x$enable_asm" = xyes; then
     case "$host_cpu" in
     i?86)
         case "$host_os" in
-        linux* | *freebsd* | dragonfly*)
+        linux* | *freebsd* | dragonfly* | *netbsd*)
             test "x$enable_64bit" = xyes && asm_arch=x86_64 || asm_arch=x86
             ;;
         esac
         ;;
     x86_64)
         case "$host_os" in
-        linux* | *freebsd* | dragonfly*)
+        linux* | *freebsd* | dragonfly* | *netbsd*)
             test "x$enable_32bit" = xyes && asm_arch=x86 || asm_arch=x86_64
             ;;
         esac
@@ -483,9 +488,9 @@ AC_ARG_ENABLE([gles2],
     [enable_gles2=no])
 AC_ARG_ENABLE([gles-overlay],
     [AS_HELP_STRING([--enable-gles-overlay],
-        [build separate OpenGL ES only libraries @<:@default=no@:>@])],
-    [enable_gles_overlay="$enableval"],
-    [enable_gles_overlay=no])
+        [DEPRECATED.  Same as --enable-gles1 and --enable-gles2])],
+    [enable_gles1="$enableval"; enable_gles2="$enableval"],
+    [])
 
 AC_ARG_ENABLE([openvg],
     [AS_HELP_STRING([--enable-openvg],
@@ -506,13 +511,11 @@ fi
 if test "x$enable_opengl" = xno -a \
         "x$enable_gles1" = xno -a \
         "x$enable_gles2" = xno -a \
-        "x$enable_gles_overlay" = xno -a \
         "x$enable_openvg" = xno; then
     AC_MSG_ERROR([at least one API should be enabled])
 fi
 
 API_DEFINES=""
-GLES_OVERLAY=0
 if test "x$enable_opengl" = xno; then
     API_DEFINES="$API_DEFINES -DFEATURE_GL=0"
 else
@@ -524,11 +527,19 @@ fi
 if test "x$enable_gles2" = xyes; then
     API_DEFINES="$API_DEFINES -DFEATURE_ES2=1"
 fi
-if test "x$enable_gles_overlay" = xyes; then
-    GLES_OVERLAY=1
-fi
 AC_SUBST([API_DEFINES])
-AC_SUBST([GLES_OVERLAY])
+
+AC_ARG_ENABLE([shared-glapi],
+    [AS_HELP_STRING([--enable-shared-glapi],
+        [EXPERIMENTAL.  Enable shared glapi for OpenGL @<:@default=no@:>@])],
+    [enable_shared_glapi="$enableval"],
+    [enable_shared_glapi=no])
+
+SHARED_GLAPI="0"
+if test "x$enable_shared_glapi" = xyes; then
+    SHARED_GLAPI="1"
+fi
+AC_SUBST([SHARED_GLAPI])
 
 dnl
 dnl Driver configuration. Options are xlib, dri and osmesa right now.
@@ -542,7 +553,7 @@ linux*)
     i*86|x86_64|powerpc*|sparc*) default_driver="dri";;
     esac
     ;;
-*freebsd* | dragonfly*)
+*freebsd* | dragonfly* | *netbsd*)
     case "$host_cpu" in
     i*86|x86_64|powerpc*|sparc*) default_driver="dri";;
     esac
@@ -572,10 +583,6 @@ xno)
     ;;
 esac
 
-PKG_CHECK_MODULES([TALLOC], [talloc])
-AC_SUBST([TALLOC_LIBS])
-AC_SUBST([TALLOC_CFLAGS])
-
 dnl
 dnl Driver specific build directories
 dnl
@@ -588,20 +595,30 @@ GLU_DIRS="sgi"
 GALLIUM_DIRS="auxiliary drivers state_trackers"
 GALLIUM_TARGET_DIRS=""
 GALLIUM_WINSYS_DIRS="sw"
-GALLIUM_DRIVERS_DIRS="softpipe failover galahad trace rbug identity"
+GALLIUM_DRIVERS_DIRS="softpipe failover galahad trace rbug noop identity"
 GALLIUM_STATE_TRACKERS_DIRS=""
+
+# build shared-glapi if enabled for OpenGL or if OpenGL ES is enabled
+case "x$enabled_shared_glapi$enable_gles1$enable_gles2" in
+x*yes*)
+    CORE_DIRS="$CORE_DIRS mapi/shared-glapi"
+    ;;
+esac
 
 # build glapi if OpenGL is enabled
 if test "x$enable_opengl" = xyes; then
     CORE_DIRS="$CORE_DIRS mapi/glapi"
 fi
 
-# build es1api and es2api if OpenGL ES is enabled
-case "x$enable_gles1$enable_gles2$enable_gles_overlay" in
-x*yes*)
-    CORE_DIRS="$CORE_DIRS mapi/es1api mapi/es2api"
-    ;;
-esac
+# build es1api if OpenGL ES 1.x is enabled
+if test "x$enable_gles1" = xyes; then
+    CORE_DIRS="$CORE_DIRS mapi/es1api"
+fi
+
+# build es2api if OpenGL ES 2.x is enabled
+if test "x$enable_gles2" = xyes; then
+    CORE_DIRS="$CORE_DIRS mapi/es2api"
+fi
 
 # build vgapi if OpenVG is enabled
 if test "x$enable_openvg" = xyes; then
@@ -609,7 +626,7 @@ if test "x$enable_openvg" = xyes; then
 fi
 
 # build glsl and mesa if OpenGL or OpenGL ES is enabled
-case "x$enable_opengl$enable_gles1$enable_gles2$enable_gles_overlay" in
+case "x$enable_opengl$enable_gles1$enable_gles2" in
 x*yes*)
     CORE_DIRS="$CORE_DIRS glsl mesa"
     ;;
@@ -714,8 +731,8 @@ xlib)
         GL_PC_LIB_PRIV="$GL_LIB_DEPS"
         GL_PC_CFLAGS="$X11_INCLUDES"
     fi
-    GL_LIB_DEPS="$GL_LIB_DEPS $SELINUX_LIBS -lm -lpthread $TALLOC_LIBS"
-    GL_PC_LIB_PRIV="$GL_PC_LIB_PRIV $SELINUX_LIBS -lm -lpthread $TALLOC_LIBS"
+    GL_LIB_DEPS="$GL_LIB_DEPS $SELINUX_LIBS -lm -lpthread"
+    GL_PC_LIB_PRIV="$GL_PC_LIB_PRIV $SELINUX_LIBS -lm -lpthread"
 
     # if static, move the external libraries to the programs
     # and empty the libraries for libGL
@@ -795,6 +812,8 @@ AC_SUBST([GLESv1_CM_PC_LIB_PRIV])
 AC_SUBST([GLESv2_LIB_DEPS])
 AC_SUBST([GLESv2_PC_LIB_PRIV])
 
+GLAPI_LIB_DEPS="-lpthread"
+AC_SUBST([GLAPI_LIB_DEPS])
 
 AC_SUBST([HAVE_XF86VIDMODE])
 
@@ -811,13 +830,19 @@ if test "$mesa_driver" = xlib; then
 fi
 
 dnl
-dnl More DRI setup
+dnl TLS detection
 dnl
+
 AC_ARG_ENABLE([glx-tls],
     [AS_HELP_STRING([--enable-glx-tls],
         [enable TLS support in GLX @<:@default=disabled@:>@])],
     [GLX_USE_TLS="$enableval"],
     [GLX_USE_TLS=no])
+AC_SUBST(GLX_TLS, ${GLX_USE_TLS})
+
+dnl
+dnl More DRI setup
+dnl
 dnl Directory for DRI drivers
 AC_ARG_WITH([dri-driverdir],
     [AS_HELP_STRING([--with-dri-driverdir=DIR],
@@ -909,15 +934,12 @@ if test "$mesa_driver" = dri -o "$mesa_driver" = no; then
             ;;
         esac
         ;;
-    freebsd* | dragonfly*)
+    freebsd* | dragonfly* | *netbsd*)
         DEFINES="$DEFINES -DPTHREADS -DUSE_EXTERNAL_DXTN_LIB=1"
         DEFINES="$DEFINES -DIN_DRI_DRIVER -DHAVE_ALIAS"
         DEFINES="$DEFINES -DGLX_INDIRECT_RENDERING"
         if test "x$driglx_direct" = xyes; then
             DEFINES="$DEFINES -DGLX_DIRECT_RENDERING"
-        fi
-        if test "x$GXX" = xyes; then
-            CXXFLAGS="$CXXFLAGS -ansi -pedantic"
         fi
 
         if test "x$DRI_DIRS" = "xyes"; then
@@ -964,7 +986,7 @@ if test "$mesa_driver" = dri -o "$mesa_driver" = no; then
     fi
 
     # put all the necessary libs together
-    DRI_LIB_DEPS="$SELINUX_LIBS $LIBDRM_LIBS $EXPAT_LIB -lm -lpthread $DLOPEN_LIBS $TALLOC_LIBS"
+    DRI_LIB_DEPS="$SELINUX_LIBS $LIBDRM_LIBS $EXPAT_LIB -lm -lpthread $DLOPEN_LIBS"
 fi
 AC_SUBST([DRI_DIRS])
 AC_SUBST([EXPAT_INCLUDES])
@@ -972,7 +994,7 @@ AC_SUBST([DRI_LIB_DEPS])
 
 case $DRI_DIRS in
 *i915*|*i965*)
-    PKG_CHECK_MODULES([INTEL], [libdrm_intel >= 2.4.21])
+    PKG_CHECK_MODULES([INTEL], [libdrm_intel >= $LIBDRM_INTEL_REQUIRED])
     ;;
 esac
 
@@ -1040,12 +1062,12 @@ case "$DRIVER_DIRS" in
 *osmesa*)
     # only link libraries with osmesa if shared
     if test "$enable_static" = no; then
-        OSMESA_LIB_DEPS="-lm -lpthread $SELINUX_LIBS $DLOPEN_LIBS $TALLOC_LIBS"
+        OSMESA_LIB_DEPS="-lm -lpthread $SELINUX_LIBS $DLOPEN_LIBS"
     else
         OSMESA_LIB_DEPS=""
     fi
     OSMESA_MESA_DEPS=""
-    OSMESA_PC_LIB_PRIV="-lm -lpthread $SELINUX_LIBS $DLOPEN_LIBS $TALLOC_LIBS"
+    OSMESA_PC_LIB_PRIV="-lm -lpthread $SELINUX_LIBS $DLOPEN_LIBS"
     ;;
 esac
 AC_SUBST([OSMESA_LIB_DEPS])
@@ -1352,7 +1374,7 @@ if test "x$enable_gallium_egl" = xauto; then
         enable_gallium_egl=$enable_egl
         ;;
     *)
-        enable_gallium_egl=no
+        enable_gallium_egl=$enable_openvg
         ;;
     esac
 fi
@@ -1428,6 +1450,7 @@ yes)
             if test "x$enable_openvg" != xyes; then
                 AC_MSG_ERROR([cannot build vega state tracker without --enable-openvg])
             fi
+            have_st_vega="yes"
             ;;
         esac
 
@@ -1442,6 +1465,14 @@ yes)
         fi
     done
     GALLIUM_STATE_TRACKERS_DIRS="$state_trackers"
+
+    # append --enable-openvg/--enable-gallium-egl to --with-state-trackers
+    if test "x$have_st_vega" != xyes -a "x$enable_openvg" = xyes; then
+        AC_MSG_ERROR([--with-state-trackers specified but vega is missing])
+    fi
+    if test "x$HAVE_ST_EGL" != xyes -a "x$enable_gallium_egl" = xyes; then
+        AC_MSG_ERROR([--with-state-trackers specified but egl is missing])
+    fi
     ;;
 esac
 
@@ -1454,9 +1485,6 @@ x*yes*)
     EGL_CLIENT_APIS="$EGL_CLIENT_APIS "'$(GL_LIB)'
     ;;
 esac
-if test "x$enable_gles_overlay" = xyes; then
-    EGL_CLIENT_APIS="$EGL_CLIENT_APIS "'$(GLESv1_CM_LIB) $(GLESv2_LIB)'
-fi
 if test "x$enable_openvg" = xyes; then
     EGL_CLIENT_APIS="$EGL_CLIENT_APIS "'$(VG_LIB)'
     VG_LIB_DEPS="$VG_LIB_DEPS -lpthread"
@@ -1467,10 +1495,6 @@ AC_SUBST([EGL_CLIENT_APIS])
 
 if test "x$HAVE_ST_EGL" = xyes; then
 	GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS egl"
-	# define GLX_DIRECT_RENDERING even when the driver is not dri
-	if test "x$mesa_driver" != xdri -a "x$driglx_direct" = xyes; then
-            DEFINES="$DEFINES -DGLX_DIRECT_RENDERING"
-	fi
 fi
 
 if test "x$HAVE_ST_XORG" = xyes; then
@@ -1690,7 +1714,7 @@ AC_ARG_ENABLE([gallium-nouveau],
     [enable_gallium_nouveau="$enableval"],
     [enable_gallium_nouveau=no])
 if test "x$enable_gallium_nouveau" = xyes; then
-    GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS nouveau nvfx nv50"
+    GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS nouveau nvfx nv50 nvc0"
     gallium_check_st "nouveau/drm" "dri-nouveau" "xorg-nouveau"
 fi
 
@@ -1706,19 +1730,6 @@ if test "x$enable_gallium_swrast" = xyes || test "x$enable_gallium_swrast" = xau
     if test "x$HAVE_ST_DRI" = xyes; then
         GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS dri-swrast"
     fi
-fi
-
-dnl
-dnl Gallium noop configuration
-dnl
-AC_ARG_ENABLE([gallium-noop],
-    [AS_HELP_STRING([--enable-gallium-noop],
-        [build gallium radeon @<:@default=disabled@:>@])],
-    [enable_gallium_noop="$enableval"],
-    [enable_gallium_noop=auto])
-if test "x$enable_gallium_noop" = xyes; then
-    GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS noop"
-    GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS dri-noop"
 fi
 
 dnl prepend CORE_DIRS to SRC_DIRS
@@ -1753,7 +1764,6 @@ echo "        includedir:      $includedir"
 dnl API info
 echo ""
 echo "        OpenGL:          $enable_opengl (ES1: $enable_gles1 ES2: $enable_gles2)"
-echo "        GLES overlay:    $enable_gles_overlay"
 echo "        OpenVG:          $enable_openvg"
 
 dnl Driver info
@@ -1790,7 +1800,7 @@ if test "$enable_egl" = yes; then
 
     egl_drivers=""
     for d in $EGL_DRIVERS_DIRS; do
-        egl_drivers="$egl_drivers egl_$d"
+        egl_drivers="$egl_drivers builtin:egl_$d"
     done
 
     if test "$enable_gallium" = yes -a "$HAVE_ST_EGL" = yes; then

@@ -37,6 +37,7 @@
 #include "main/texstore.h"
 #include "main/image.h"
 #include "main/macros.h"
+#include "main/mfeatures.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
@@ -507,6 +508,14 @@ st_choose_format(struct pipe_screen *screen, GLenum internalFormat,
    case 4:
    case GL_RGBA:
    case GL_RGBA8:
+      return default_rgba_format( screen, target, sample_count, bindings,
+                                  geom_flags );
+
+   case GL_BGRA:
+      if (screen->is_format_supported( screen, PIPE_FORMAT_B8G8R8A8_UNORM,
+                                       target, sample_count, bindings,
+                                       geom_flags ))
+         return PIPE_FORMAT_B8G8R8A8_UNORM;
       return default_rgba_format( screen, target, sample_count, bindings,
                                   geom_flags );
 
@@ -1031,7 +1040,8 @@ st_ChooseTextureFormat(struct gl_context *ctx, GLint internalFormat,
    boolean want_renderable =
       internalFormat == 3 || internalFormat == 4 ||
       internalFormat == GL_RGB || internalFormat == GL_RGBA ||
-      internalFormat == GL_RGB8 || internalFormat == GL_RGBA8;
+      internalFormat == GL_RGB8 || internalFormat == GL_RGBA8 ||
+      internalFormat == GL_BGRA;
 
    return st_ChooseTextureFormat_renderable(ctx, internalFormat,
 					    format, type, want_renderable);

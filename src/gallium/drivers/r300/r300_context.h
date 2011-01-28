@@ -387,6 +387,11 @@ struct r300_texture_desc {
 
     /* Whether CBZB fast color clear is allowed on the miplevel. */
     boolean cbzb_allowed[R300_MAX_TEXTURE_LEVELS];
+
+    /* Zbuffer compression info for each miplevel. */
+    boolean zcomp8x8[R300_MAX_TEXTURE_LEVELS];
+    /* If zero, then disable compression. */
+    unsigned zmask_dwords[R300_MAX_TEXTURE_LEVELS];
 };
 
 struct r300_texture {
@@ -406,8 +411,6 @@ struct r300_texture {
 
     /* hyper-z memory allocs */
     struct mem_block *hiz_mem[R300_MAX_TEXTURE_LEVELS];
-    struct mem_block *zmask_mem[R300_MAX_TEXTURE_LEVELS];
-    boolean zmask_in_use[R300_MAX_TEXTURE_LEVELS];
     boolean hiz_in_use[R300_MAX_TEXTURE_LEVELS];
 
     /* This is the level tiling flags were last time set for.
@@ -440,11 +443,9 @@ struct r300_translate_context {
     /* Translate cache for incompatible vertex offset/stride/format fallback. */
     struct translate_cache *translate_cache;
 
-    /* The vertex buffer slot containing the translated buffer. */
-    unsigned vb_slot;
-
     /* Saved and new vertex element state. */
     void *saved_velems, *new_velems;
+    unsigned vb_slot;
 };
 
 struct r300_context {
@@ -459,7 +460,6 @@ struct r300_context {
     struct r300_screen *screen;
 
     /* Draw module. Used mostly for SW TCL. */
-    struct gallivm_state *gallivm;
     struct draw_context* draw;
     /* Vertex buffer for SW TCL. */
     struct pipe_resource* vbo;
@@ -558,12 +558,16 @@ struct r300_context {
     struct r300_atom *first_dirty, *last_dirty;
 
     /* Vertex buffers for Gallium. */
+    /* May contain user buffers. */
     struct pipe_vertex_buffer vertex_buffer[PIPE_MAX_ATTRIBS];
+    /* Contains only non-user buffers. */
+    struct pipe_resource *real_vertex_buffer[PIPE_MAX_ATTRIBS];
     int vertex_buffer_count;
+    int real_vertex_buffer_count; /* with the translated buffer. */
     int vertex_buffer_max_index;
+    boolean any_user_vbs;
     /* Vertex elements for Gallium. */
     struct r300_vertex_element_state *velems;
-    bool any_user_vbs;
 
     struct pipe_index_buffer index_buffer;
 
@@ -590,15 +594,21 @@ struct r300_context {
     boolean two_sided_color;
     /* Incompatible vertex buffer layout? (misaligned stride or buffer_offset) */
     boolean incompatible_vb_layout;
-#define R300_Z_COMPRESS_44 1
-#define RV350_Z_COMPRESS_88 2
-    int z_compression;
+
     boolean cbzb_clear;
-    boolean z_decomp_rd;
+    /* Whether ZMASK is enabled. */
+    boolean zmask_in_use;
+    /* Whether ZMASK is being decompressed. */
+    boolean zmask_decompress;
+    /* Whether ZMASK is locked, i.e. should be disabled and cannot be taken over. */
+    boolean zmask_locked;
+    /* The zbuffer the ZMASK of which is locked. */
+    struct pipe_surface *locked_zbuffer;
+
+    void *dsa_decompress_zmask;
 
     /* two mem block managers for hiz/zmask ram space */
     struct mem_block *hiz_mm;
-    struct mem_block *zmask_mm;
 
     /* upload managers */
     struct u_upload_mgr *upload_vb;
@@ -619,6 +629,9 @@ struct r300_context {
     /* Whether any buffer (FB, textures, VBOs) has been set, but buffers
      * haven't been validated yet. */
     boolean validate_buffers;
+    /* Whether user buffers have been validated. */
+    boolean upload_vb_validated;
+    boolean upload_ib_validated;
 };
 
 #define foreach_atom(r300, atom) \
@@ -653,6 +666,22 @@ static INLINE struct r300_fragment_shader *r300_fs(struct r300_context *r300)
     return (struct r300_fragment_shader*)r300->fs.state;
 }
 
+static INLINE void r300_mark_atom_dirty(struct r300_context *r300,
+                                        struct r300_atom *atom)
+{
+    atom->dirty = TRUE;
+
+    if (!r300->first_dirty) {
+        r300->first_dirty = atom;
+        r300->last_dirty = atom+1;
+    } else {
+        if (atom < r300->first_dirty)
+            r300->first_dirty = atom;
+        else if (atom+1 > r300->last_dirty)
+            r300->last_dirty = atom+1;
+    }
+}
+
 struct pipe_context* r300_create_context(struct pipe_screen* screen,
                                          void *priv);
 
@@ -669,10 +698,9 @@ void r300_init_state_functions(struct r300_context* r300);
 void r300_init_resource_functions(struct r300_context* r300);
 
 /* r300_blit.c */
-void r300_flush_depth_stencil(struct pipe_context *pipe,
-                              struct pipe_resource *dst,
-                              unsigned level,
-                              unsigned layer);
+void r300_decompress_zmask(struct r300_context *r300);
+void r300_decompress_zmask_locked_unsafe(struct r300_context *r300);
+void r300_decompress_zmask_locked(struct r300_context *r300);
 
 /* r300_query.c */
 void r300_resume_query(struct r300_context *r300,
@@ -680,7 +708,8 @@ void r300_resume_query(struct r300_context *r300,
 void r300_stop_query(struct r300_context *r300);
 
 /* r300_render_translate.c */
-void r300_begin_vertex_translate(struct r300_context *r300);
+void r300_begin_vertex_translate(struct r300_context *r300,
+                                 int min_index, int max_index);
 void r300_end_vertex_translate(struct r300_context *r300);
 void r300_translate_index_buffer(struct r300_context *r300,
                                  struct pipe_resource **index_buffer,
@@ -697,8 +726,7 @@ void r500_emit_index_bias(struct r300_context *r300, int index_bias);
 /* r300_state.c */
 enum r300_fb_state_change {
     R300_CHANGED_FB_STATE = 0,
-    R300_CHANGED_CBZB_FLAG,
-    R300_CHANGED_ZCLEAR_FLAG,
+    R300_CHANGED_HYPERZ_FLAG,
     R300_CHANGED_MULTIWRITE
 };
 
@@ -706,21 +734,8 @@ void r300_mark_fb_state_dirty(struct r300_context *r300,
                               enum r300_fb_state_change change);
 void r300_mark_fs_code_dirty(struct r300_context *r300);
 
-static INLINE void r300_mark_atom_dirty(struct r300_context *r300,
-                                        struct r300_atom *atom)
-{
-    atom->dirty = TRUE;
-
-    if (!r300->first_dirty) {
-        r300->first_dirty = atom;
-        r300->last_dirty = atom+1;
-    } else {
-        if (atom < r300->first_dirty)
-            r300->first_dirty = atom;
-        if (atom+1 > r300->last_dirty)
-            r300->last_dirty = atom+1;
-    }
-}
+/* r300_state_derived.c */
+void r300_update_derived_state(struct r300_context* r300);
 
 /* r300_debug.c */
 void r500_dump_rs_block(struct r300_rs_block *rs);

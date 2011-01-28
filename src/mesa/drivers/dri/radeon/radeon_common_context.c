@@ -100,6 +100,9 @@ static const char* get_chip_family_name(int chip_family)
 	case CHIP_FAMILY_CYPRESS: return "CYPRESS";
 	case CHIP_FAMILY_HEMLOCK: return "HEMLOCK";
 	case CHIP_FAMILY_PALM: return "PALM";
+	case CHIP_FAMILY_BARTS: return "BARTS";
+	case CHIP_FAMILY_TURKS: return "TURKS";
+	case CHIP_FAMILY_CAICOS: return "CAICOS";
 	default: return "unknown";
 	}
 }
@@ -529,7 +532,7 @@ void radeon_prepare_render(radeonContextPtr radeon)
 
 	/* Intel driver does the equivalent of this, no clue if it is needed:*/
 	draw = drawable->driverPrivate;
-	radeon_draw_buffer(radeon->glCtx, &draw->base);
+	radeon_draw_buffer(radeon->glCtx, radeon->glCtx->DrawBuffer);
 
 	driContext->dri2.draw_stamp = drawable->dri2.stamp;
     }

@@ -33,6 +33,7 @@
 
 #include "main/imports.h"
 #include "main/hash.h"
+#include "main/mfeatures.h"
 #include "main/mtypes.h"
 #include "program/prog_parameter.h"
 #include "program/prog_print.h"
@@ -409,6 +410,7 @@ st_translate_fragment_program(struct st_context *st,
 
    assert(!(key->bitmap && key->drawpixels));
 
+#if FEATURE_drawpix
    if (key->bitmap) {
       /* glBitmap drawing */
       struct gl_fragment_program *fp;
@@ -434,6 +436,7 @@ st_translate_fragment_program(struct st_context *st,
       }
       stfp = st_fragment_program(fp);
    }
+#endif
 
    if (!stfp->tgsi.tokens) {
       /* need to translate Mesa instructions to TGSI now */

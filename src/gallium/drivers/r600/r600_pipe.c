@@ -35,6 +35,7 @@
 #include <util/u_pack_color.h>
 #include <util/u_memory.h>
 #include <util/u_inlines.h>
+#include "util/u_upload_mgr.h"
 #include <pipebuffer/pb_buffer.h>
 #include "r600.h"
 #include "r600d.h"
@@ -68,7 +69,8 @@ static void r600_flush(struct pipe_context *ctx, unsigned flags,
 #endif
 	r600_context_flush(&rctx->ctx);
 
-	r600_upload_flush(rctx->rupload_vb);
+	u_upload_flush(rctx->upload_vb);
+	u_upload_flush(rctx->upload_const);
 }
 
 static void r600_destroy_context(struct pipe_context *context)
@@ -87,7 +89,8 @@ static void r600_destroy_context(struct pipe_context *context)
 		free(rctx->states[i]);
 	}
 
-	r600_upload_destroy(rctx->rupload_vb);
+	u_upload_destroy(rctx->upload_vb);
+	u_upload_destroy(rctx->upload_const);
 
 	if (rctx->tran.translate_cache)
 		translate_cache_destroy(rctx->tran.translate_cache);
@@ -120,6 +123,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	r600_init_query_functions(rctx);
 	r600_init_context_resource_functions(rctx);
 	r600_init_surface_functions(rctx);
+	rctx->context.draw_vbo = r600_draw_vbo;
 
 	switch (r600_get_family(rctx->radeon)) {
 	case CHIP_R600:
@@ -134,7 +138,6 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	case CHIP_RV730:
 	case CHIP_RV710:
 	case CHIP_RV740:
-		rctx->context.draw_vbo = r600_draw_vbo;
 		r600_init_state_functions(rctx);
 		if (r600_context_init(&rctx->ctx, rctx->radeon)) {
 			r600_destroy_context(&rctx->context);
@@ -148,7 +151,9 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	case CHIP_CYPRESS:
 	case CHIP_HEMLOCK:
 	case CHIP_PALM:
-		rctx->context.draw_vbo = evergreen_draw;
+	case CHIP_BARTS:
+	case CHIP_TURKS:
+	case CHIP_CAICOS:
 		evergreen_init_state_functions(rctx);
 		if (evergreen_context_init(&rctx->ctx, rctx->radeon)) {
 			r600_destroy_context(&rctx->context);
@@ -162,8 +167,17 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		return NULL;
 	}
 
-	rctx->rupload_vb = r600_upload_create(rctx, 128 * 1024, 16);
-	if (rctx->rupload_vb == NULL) {
+	rctx->upload_vb = u_upload_create(&rctx->context, 1024 * 1024, 16,
+					  PIPE_BIND_VERTEX_BUFFER |
+					  PIPE_BIND_INDEX_BUFFER);
+	if (rctx->upload_vb == NULL) {
+		r600_destroy_context(&rctx->context);
+		return NULL;
+	}
+
+	rctx->upload_const = u_upload_create(&rctx->context, 1024 * 1024, 256,
+					     PIPE_BIND_CONSTANT_BUFFER);
+	if (rctx->upload_const == NULL) {
 		r600_destroy_context(&rctx->context);
 		return NULL;
 	}
@@ -230,6 +244,9 @@ static const char *r600_get_family_name(enum radeon_family family)
 	case CHIP_CYPRESS: return "AMD CYPRESS";
 	case CHIP_HEMLOCK: return "AMD HEMLOCK";
 	case CHIP_PALM: return "AMD PALM";
+	case CHIP_BARTS: return "AMD BARTS";
+	case CHIP_TURKS: return "AMD TURKS";
+	case CHIP_CAICOS: return "AMD CAICOS";
 	default: return "AMD unknown";
 	}
 }
@@ -269,10 +286,11 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 1;
 
 	/* Unsupported features (boolean caps). */
-	case PIPE_CAP_TIMER_QUERY:
 	case PIPE_CAP_STREAM_OUTPUT:
 	case PIPE_CAP_PRIMITIVE_RESTART:
 	case PIPE_CAP_INDEP_BLEND_FUNC: /* FIXME allow this */
+	case PIPE_CAP_INSTANCED_DRAWING:
+	case PIPE_CAP_ARRAY_TEXTURES:
 		return 0;
 
 	/* Texturing. */
@@ -302,6 +320,10 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
 		return 0;
+
+	/* Timer queries, present when the clock frequency is non zero. */
+	case PIPE_CAP_TIMER_QUERY:
+		return r600_get_clock_crystal_freq(rscreen->radeon) != 0;
 
 	default:
 		R600_ERR("r600: unknown param %d\n", param);

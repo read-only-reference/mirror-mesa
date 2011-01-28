@@ -156,7 +156,7 @@ int radeon_bo_wait(struct radeon *radeon, struct radeon_bo *bo)
         if (!bo->shared) {
                 if (!bo->fence)
 			return 0;
-		if (bo->fence <= *bo->ctx->cfence) {
+		if (bo->fence <= *radeon->cfence) {
 			LIST_DELINIT(&bo->fencedlist);
 			bo->fence = 0;
 			return 0;
@@ -181,7 +181,7 @@ int radeon_bo_busy(struct radeon *radeon, struct radeon_bo *bo, uint32_t *domain
 	if (!bo->shared) {
 		if (!bo->fence)
 			return 0;
-		if (bo->fence <= *bo->ctx->cfence) {
+		if (bo->fence <= *radeon->cfence) {
 			LIST_DELINIT(&bo->fencedlist);
 			bo->fence = 0;
 			return 0;
@@ -206,13 +206,13 @@ int radeon_bo_get_tiling_flags(struct radeon *radeon,
 {
 	struct drm_radeon_gem_get_tiling args;
 	int ret;
-	
+
 	args.handle = bo->handle;
 	ret = drmCommandWriteRead(radeon->fd, DRM_RADEON_GEM_GET_TILING,
 				  &args, sizeof(args));
 	if (ret)
 		return ret;
-	
+
 	*tiling_flags = args.tiling_flags;
 	*pitch = args.pitch;
 	return ret;

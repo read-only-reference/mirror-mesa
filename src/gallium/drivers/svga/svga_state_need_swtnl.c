@@ -118,6 +118,11 @@ static int update_need_pipeline( struct svga_context *svga,
                  __FUNCTION__,
                  svga->curr.rast->need_pipeline,
                  (1 << svga->curr.reduced_prim) );
+      SVGA_DBG(DEBUG_SWTNL, "%s: rast need_pipeline tris (%s), lines (%s), points (%s)\n",
+                 __FUNCTION__,
+                 svga->curr.rast->need_pipeline_tris_str,
+                 svga->curr.rast->need_pipeline_lines_str,
+                 svga->curr.rast->need_pipeline_points_str);
       need_pipeline = TRUE;
    }
 
@@ -174,6 +179,14 @@ static int update_need_swtnl( struct svga_context *svga,
    if (svga->debug.force_swtnl) {
       need_swtnl = 1;
    }
+
+   /*
+    * Some state changes the draw module does makes us belive we
+    * we don't need swtnl. This causes the vdecl code to pickup
+    * the wrong buffers and vertex formats. Try trivial/line-wide.
+    */
+   if (svga->state.sw.in_swtnl_draw)
+      need_swtnl = 1;
 
    if (need_swtnl != svga->state.sw.need_swtnl) {
       SVGA_DBG(DEBUG_SWTNL|DEBUG_PERF,

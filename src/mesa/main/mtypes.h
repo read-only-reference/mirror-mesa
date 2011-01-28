@@ -40,6 +40,7 @@
 #include "glapi/glapi.h"
 #include "math/m_matrix.h"	/* GLmatrix */
 #include "main/simple_list.h"	/* struct simple_node */
+#include "main/formats.h"       /* MESA_FORMAT_COUNT */
 
 
 /**
@@ -119,6 +120,11 @@ struct gl_context;
 struct st_context;
 /*@}*/
 
+
+/** Extra draw modes beyond GL_POINTS, GL_TRIANGLE_FAN, etc */
+#define PRIM_OUTSIDE_BEGIN_END   (GL_POLYGON+1)
+#define PRIM_INSIDE_UNKNOWN_PRIM (GL_POLYGON+2)
+#define PRIM_UNKNOWN             (GL_POLYGON+3)
 
 
 /**
@@ -295,8 +301,8 @@ typedef enum
 /**
  * Indexes for geometry program result attributes
  */
-/*@{*/
-typedef enum {
+typedef enum
+{
    GEOM_RESULT_POS  = 0,
    GEOM_RESULT_COL0  = 1,
    GEOM_RESULT_COL1  = 2,
@@ -319,7 +325,7 @@ typedef enum {
    /* ### we need to -2 because var0 is 18 instead 16 like in the others */
    GEOM_RESULT_MAX  =  (GEOM_RESULT_VAR0 + MAX_VARYING - 2)
 } gl_geom_result;
-/*@}*/
+
 
 /**
  * Indexes for fragment program input attributes.
@@ -518,6 +524,9 @@ struct gl_config
    GLint bindToMipmapTexture;
    GLint bindToTextureTargets;
    GLint yInverted;
+
+   /* EXT_framebuffer_sRGB */
+   GLint sRGBCapable;
 };
 
 
@@ -718,13 +727,20 @@ struct gl_colorbuffer_attrib
     */
    /*@{*/
    GLbitfield BlendEnabled;		/**< Per-buffer blend enable flags */
-   GLenum BlendSrcRGB;			/**< Blending source operator */
-   GLenum BlendDstRGB;			/**< Blending destination operator */
-   GLenum BlendSrcA;			/**< GL_INGR_blend_func_separate */
-   GLenum BlendDstA;			/**< GL_INGR_blend_func_separate */
-   GLenum BlendEquationRGB;		/**< Blending equation */
-   GLenum BlendEquationA;		/**< GL_EXT_blend_equation_separate */
    GLfloat BlendColor[4];		/**< Blending color */
+   struct
+   {
+      GLenum SrcRGB;             /**< RGB blend source term */
+      GLenum DstRGB;             /**< RGB blend dest term */
+      GLenum SrcA;               /**< Alpha blend source term */
+      GLenum DstA;               /**< Alpha blend dest term */
+      GLenum EquationRGB;        /**< GL_ADD, GL_SUBTRACT, etc. */
+      GLenum EquationA;          /**< GL_ADD, GL_SUBTRACT, etc. */
+   } Blend[MAX_DRAW_BUFFERS];
+   /** Are the blend func terms currently different for each buffer/target? */
+   GLboolean _BlendFuncPerBuffer;
+   /** Are the blend equations currently different for each buffer/target? */
+   GLboolean _BlendEquationPerBuffer;
    /*@}*/
 
    /** 
@@ -741,6 +757,8 @@ struct gl_colorbuffer_attrib
 
    GLenum ClampFragmentColor; /**< GL_TRUE, GL_FALSE or GL_FIXED_ONLY_ARB */
    GLenum ClampReadColor;     /**< GL_TRUE, GL_FALSE or GL_FIXED_ONLY_ARB */
+
+   GLboolean sRGBEnabled;	/**< Framebuffer sRGB blending/updating requested */
 };
 
 
@@ -846,6 +864,23 @@ struct gl_fog_attrib
    GLboolean ColorSumEnabled;
    GLenum FogCoordinateSource;  /**< GL_EXT_fog_coord */
    GLfloat _Scale;		/**< (End == Start) ? 1.0 : 1.0 / (End - Start) */
+};
+
+
+/**
+ * \brief Layout qualifiers for gl_FragDepth.
+ *
+ * Extension AMD_conservative_depth allows gl_FragDepth to be redeclared with
+ * a layout qualifier.
+ *
+ * \see enum ir_depth_layout
+ */
+enum gl_frag_depth_layout {
+    FRAG_DEPTH_LAYOUT_NONE, /**< No layout is specified. */
+    FRAG_DEPTH_LAYOUT_ANY,
+    FRAG_DEPTH_LAYOUT_GREATER,
+    FRAG_DEPTH_LAYOUT_LESS,
+    FRAG_DEPTH_LAYOUT_UNCHANGED
 };
 
 
@@ -1314,6 +1349,7 @@ struct gl_texture_object
    GLboolean _Complete;		/**< Is texture object complete? */
    GLboolean _RenderToTexture;  /**< Any rendering to this texture? */
    GLboolean Purgeable;         /**< Is the buffer purgeable under memory pressure? */
+   GLenum sRGBDecode;           /**< GL_DECODE_EXT or GL_SKIP_DECODE_EXT */
 
    /** Actual texture images, indexed by [cube face] and [mipmap level] */
    struct gl_texture_image *Image[MAX_FACES][MAX_TEXTURE_LEVELS];
@@ -1545,6 +1581,7 @@ struct gl_client_array
    GLboolean Enabled;		/**< Enabled flag is a boolean */
    GLboolean Normalized;        /**< GL_ARB_vertex_program */
    GLboolean Integer;           /**< Integer-valued? */
+   GLuint InstanceDivisor;      /**< GL_ARB_instanced_arrays */
    GLuint _ElementSize;         /**< size of each element in bytes */
 
    struct gl_buffer_object *BufferObj;/**< GL_ARB_vertex_buffer_object */
@@ -1747,9 +1784,22 @@ typedef enum
    PROGRAM_WRITE_ONLY,  /**< A dummy, write-only register */
    PROGRAM_ADDRESS,     /**< machine->AddressReg */
    PROGRAM_SAMPLER,     /**< for shader samplers, compile-time only */
+   PROGRAM_SYSTEM_VALUE,/**< InstanceId, PrimitiveID, etc. */
    PROGRAM_UNDEFINED,   /**< Invalid/TBD value */
    PROGRAM_FILE_MAX
 } gl_register_file;
+
+
+/**
+ * If the register file is PROGRAM_SYSTEM_VALUE, the register index will be
+ * one of these values.
+ */
+typedef enum
+{
+   SYSTEM_VALUE_FRONT_FACE,  /**< Fragment shader only (not done yet) */
+   SYSTEM_VALUE_INSTANCE_ID, /**< Vertex shader only */
+   SYSTEM_VALUE_MAX          /**< Number of values */
+} gl_system_value;
 
 
 /** Vertex and fragment instructions */
@@ -1774,6 +1824,7 @@ struct gl_program
 
    GLbitfield InputsRead;     /**< Bitmask of which input regs are read */
    GLbitfield64 OutputsWritten; /**< Bitmask of which output regs are written */
+   GLbitfield SystemValuesRead;   /**< Bitmask of SYSTEM_VALUE_x inputs used */
    GLbitfield InputFlags[MAX_PROGRAM_INPUTS];   /**< PROG_PARAM_BIT_x flags */
    GLbitfield OutputFlags[MAX_PROGRAM_OUTPUTS]; /**< PROG_PARAM_BIT_x flags */
    GLbitfield TexturesUsed[MAX_TEXTURE_UNITS];  /**< TEXTURE_x_BIT bitmask */
@@ -1855,6 +1906,7 @@ struct gl_fragment_program
    GLboolean UsesKill;          /**< shader uses KIL instruction */
    GLboolean OriginUpperLeft;
    GLboolean PixelCenterInteger;
+   enum gl_frag_depth_layout FragDepthLayout;
 };
 
 
@@ -2525,6 +2577,17 @@ struct gl_framebuffer
 
 
 /**
+ * Precision info for shader datatypes.  See glGetShaderPrecisionFormat().
+ */
+struct gl_precision
+{
+   GLushort RangeMin;   /**< min value exponent */
+   GLushort RangeMax;   /**< max value exponent */
+   GLushort Precision;  /**< number of mantissa bits */
+};
+
+
+/**
  * Limits for vertex and fragment programs/shaders.
  */
 struct gl_program_constants
@@ -2558,6 +2621,9 @@ struct gl_program_constants
    GLuint MaxGeometryUniformComponents;
    GLuint MaxGeometryOutputVertices;
    GLuint MaxGeometryTotalOutputComponents;
+   /* ES 2.0 and GL_ARB_ES2_compatibility */
+   struct gl_precision LowFloat, MediumFloat, HighFloat;
+   struct gl_precision LowInt, MediumInt, HighInt;
 };
 
 
@@ -2654,12 +2720,16 @@ struct gl_constants
 struct gl_extensions
 {
    GLboolean dummy;  /* don't remove this! */
+   GLboolean dummy_true;  /* Set true by _mesa_init_extensions(). */
+   GLboolean dummy_false; /* Set false by _mesa_init_extensions(). */
+   GLboolean ARB_ES2_compatibility;
    GLboolean ARB_blend_func_extended;
    GLboolean ARB_copy_buffer;
    GLboolean ARB_depth_buffer_float;
    GLboolean ARB_depth_clamp;
    GLboolean ARB_depth_texture;
    GLboolean ARB_draw_buffers;
+   GLboolean ARB_draw_buffers_blend;
    GLboolean ARB_draw_elements_base_vertex;
    GLboolean ARB_draw_instanced;
    GLboolean ARB_fragment_coord_conventions;
@@ -2763,13 +2833,16 @@ struct gl_extensions
    GLboolean EXT_texture_mirror_clamp;
    GLboolean EXT_texture_shared_exponent;
    GLboolean EXT_texture_sRGB;
+   GLboolean EXT_texture_sRGB_decode;
    GLboolean EXT_texture_swizzle;
    GLboolean EXT_transform_feedback;
    GLboolean EXT_timer_query;
    GLboolean EXT_vertex_array;
    GLboolean EXT_vertex_array_bgra;
    GLboolean EXT_vertex_array_set;
+   GLboolean OES_standard_derivatives;
    /* vendor extensions */
+   GLboolean AMD_conservative_depth;
    GLboolean APPLE_client_storage;
    GLboolean APPLE_packed_pixels;
    GLboolean APPLE_vertex_array_object;
@@ -2808,6 +2881,7 @@ struct gl_extensions
    GLboolean OES_EGL_image;
    GLboolean OES_draw_texture;
    GLboolean EXT_texture_format_BGRA8888;
+   GLboolean extension_sentinel;
    /** The extension string */
    const GLubyte *String;
    /** Number of supported extensions */
@@ -2846,40 +2920,37 @@ struct gl_matrix_stack
 
 /**
  * \name Bits to indicate what state has changed.  
- *
- * 4 unused flags.
  */
 /*@{*/
-#define _NEW_MODELVIEW		0x1        /**< __struct gl_contextRec::ModelView */
-#define _NEW_PROJECTION		0x2        /**< __struct gl_contextRec::Projection */
-#define _NEW_TEXTURE_MATRIX	0x4        /**< __struct gl_contextRec::TextureMatrix */
-#define _NEW_ACCUM		0x10       /**< __struct gl_contextRec::Accum */
-#define _NEW_COLOR		0x20       /**< __struct gl_contextRec::Color */
-#define _NEW_DEPTH		0x40       /**< __struct gl_contextRec::Depth */
-#define _NEW_EVAL		0x80       /**< __struct gl_contextRec::Eval, __struct gl_contextRec::EvalMap */
-#define _NEW_FOG		0x100      /**< __struct gl_contextRec::Fog */
-#define _NEW_HINT		0x200      /**< __struct gl_contextRec::Hint */
-#define _NEW_LIGHT		0x400      /**< __struct gl_contextRec::Light */
-#define _NEW_LINE		0x800      /**< __struct gl_contextRec::Line */
-#define _NEW_PIXEL		0x1000     /**< __struct gl_contextRec::Pixel */
-#define _NEW_POINT		0x2000     /**< __struct gl_contextRec::Point */
-#define _NEW_POLYGON		0x4000     /**< __struct gl_contextRec::Polygon */
-#define _NEW_POLYGONSTIPPLE	0x8000     /**< __struct gl_contextRec::PolygonStipple */
-#define _NEW_SCISSOR		0x10000    /**< __struct gl_contextRec::Scissor */
-#define _NEW_STENCIL		0x20000    /**< __struct gl_contextRec::Stencil */
-#define _NEW_TEXTURE		0x40000    /**< __struct gl_contextRec::Texture */
-#define _NEW_TRANSFORM		0x80000    /**< __struct gl_contextRec::Transform */
-#define _NEW_VIEWPORT		0x100000   /**< __struct gl_contextRec::Viewport */
-#define _NEW_PACKUNPACK		0x200000   /**< __struct gl_contextRec::Pack, __struct gl_contextRec::Unpack */
-#define _NEW_ARRAY	        0x400000   /**< __struct gl_contextRec::Array */
-#define _NEW_RENDERMODE		0x800000   /**< __struct gl_contextRec::RenderMode, __struct gl_contextRec::Feedback, __struct gl_contextRec::Select */
-#define _NEW_BUFFERS            0x1000000  /**< __struct gl_contextRec::Visual, __struct gl_contextRec::DrawBuffer, */
-#define _NEW_MULTISAMPLE        0x2000000  /**< __struct gl_contextRec::Multisample */
-#define _NEW_TRACK_MATRIX       0x4000000  /**< __struct gl_contextRec::VertexProgram */
-#define _NEW_PROGRAM            0x8000000  /**< __struct gl_contextRec::VertexProgram */
-#define _NEW_CURRENT_ATTRIB     0x10000000  /**< __struct gl_contextRec::Current */
-#define _NEW_PROGRAM_CONSTANTS  0x20000000
-#define _NEW_BUFFER_OBJECT      0x40000000
+#define _NEW_MODELVIEW         (1 << 0)   /**< gl_context::ModelView */
+#define _NEW_PROJECTION        (1 << 1)   /**< gl_context::Projection */
+#define _NEW_TEXTURE_MATRIX    (1 << 2)   /**< gl_context::TextureMatrix */
+#define _NEW_COLOR             (1 << 3)   /**< gl_context::Color */
+#define _NEW_DEPTH             (1 << 4)   /**< gl_context::Depth */
+#define _NEW_EVAL              (1 << 5)   /**< gl_context::Eval, EvalMap */
+#define _NEW_FOG               (1 << 6)   /**< gl_context::Fog */
+#define _NEW_HINT              (1 << 7)   /**< gl_context::Hint */
+#define _NEW_LIGHT             (1 << 8)   /**< gl_context::Light */
+#define _NEW_LINE              (1 << 9)   /**< gl_context::Line */
+#define _NEW_PIXEL             (1 << 10)  /**< gl_context::Pixel */
+#define _NEW_POINT             (1 << 11)  /**< gl_context::Point */
+#define _NEW_POLYGON           (1 << 12)  /**< gl_context::Polygon */
+#define _NEW_POLYGONSTIPPLE    (1 << 13)  /**< gl_context::PolygonStipple */
+#define _NEW_SCISSOR           (1 << 14)  /**< gl_context::Scissor */
+#define _NEW_STENCIL           (1 << 15)  /**< gl_context::Stencil */
+#define _NEW_TEXTURE           (1 << 16)  /**< gl_context::Texture */
+#define _NEW_TRANSFORM         (1 << 17)  /**< gl_context::Transform */
+#define _NEW_VIEWPORT          (1 << 18)  /**< gl_context::Viewport */
+#define _NEW_PACKUNPACK        (1 << 19)  /**< gl_context::Pack, Unpack */
+#define _NEW_ARRAY             (1 << 20)  /**< gl_context::Array */
+#define _NEW_RENDERMODE        (1 << 21)  /**< gl_context::RenderMode, etc */
+#define _NEW_BUFFERS           (1 << 22)  /**< gl_context::Visual, DrawBuffer, */
+#define _NEW_CURRENT_ATTRIB    (1 << 23)  /**< gl_context::Current */
+#define _NEW_MULTISAMPLE       (1 << 24)  /**< gl_context::Multisample */
+#define _NEW_TRACK_MATRIX      (1 << 25)  /**< gl_context::VertexProgram */
+#define _NEW_PROGRAM           (1 << 26)  /**< New program/shader state */
+#define _NEW_PROGRAM_CONSTANTS (1 << 27)
+#define _NEW_BUFFER_OBJECT     (1 << 28)
 #define _NEW_ALL ~0
 /*@}*/
 
@@ -3043,14 +3114,17 @@ struct gl_dlist_state
    } Current;
 };
 
+
 /**
  * Enum for the OpenGL APIs we know about and may support.
  */
-typedef enum {
+typedef enum
+{
    API_OPENGL,
    API_OPENGLES,
    API_OPENGLES2
 } gl_api;
+
 
 /**
  * Mesa rendering context.
@@ -3240,6 +3314,8 @@ struct gl_context
    /** software compression/decompression supported or not */
    GLboolean Mesa_DXTn;
 
+   GLboolean TextureFormatSupported[MESA_FORMAT_COUNT];
+
    /** 
     * Use dp4 (rather than mul/mad) instructions for position
     * transformation?
@@ -3260,10 +3336,6 @@ struct gl_context
    void *aelt_context;
    /*@}*/
 };
-
-
-/** The string names for GL_POINT, GL_LINE_LOOP, etc */
-extern const char *_mesa_prim_name[GL_POLYGON+4];
 
 
 #ifdef DEBUG

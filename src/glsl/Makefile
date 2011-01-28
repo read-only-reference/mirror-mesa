@@ -17,6 +17,7 @@ GLCPP_SOURCES = \
 
 C_SOURCES = \
 	strtod.c \
+	ralloc.c \
 	$(LIBGLCPP_SOURCES)
 
 CXX_SOURCES = \
@@ -24,7 +25,6 @@ CXX_SOURCES = \
 	ast_function.cpp \
 	ast_to_hir.cpp \
 	ast_type.cpp \
-	builtin_function.cpp \
 	glsl_lexer.cpp \
 	glsl_parser.cpp \
 	glsl_parser_extras.cpp \
@@ -83,8 +83,7 @@ CXX_SOURCES = \
 	s_expression.cpp
 
 LIBS = \
-	$(TOP)/src/glsl/libglsl.a \
-	$(TALLOC_LIBS)
+	$(TOP)/src/glsl/libglsl.a
 
 APPS = glsl_compiler glcpp/glcpp
 
@@ -113,7 +112,6 @@ OBJECTS = \
 	$(CXX_SOURCES:.cpp=.o)
 
 INCLUDES = \
-	$(TALLOC_CFLAGS) \
 	-I. \
 	-I../mesa \
 	-I../mapi \
@@ -130,8 +128,8 @@ ALL_SOURCES = \
 
 default: depend lib$(LIBNAME).a $(APPS)
 
-lib$(LIBNAME).a: $(OBJECTS) Makefile $(TOP)/src/glsl/Makefile.template
-	$(MKLIB) -cplusplus -o $(LIBNAME) -static $(OBJECTS)
+lib$(LIBNAME).a: $(OBJECTS) builtin_function.o Makefile $(TOP)/src/glsl/Makefile.template
+	$(MKLIB) -cplusplus -o $(LIBNAME) -static $(OBJECTS) builtin_function.o
 
 depend: $(ALL_SOURCES) Makefile
 	rm -f depend
@@ -140,7 +138,7 @@ depend: $(ALL_SOURCES) Makefile
 
 # Remove .o and backup files
 clean:
-	rm -f $(GLCPP_OBJECTS) $(GLSL2_OBJECTS) $(OBJECTS) lib$(LIBNAME).a depend depend.bak
+	rm -f $(GLCPP_OBJECTS) $(GLSL2_OBJECTS) $(OBJECTS) lib$(LIBNAME).a depend depend.bak builtin_function.cpp builtin_function.o builtin_stubs.o builtin_compiler
 	-rm -f $(APPS)
 
 # Dummy target
@@ -150,8 +148,8 @@ install:
 
 ##### RULES #####
 
-glsl_compiler: $(GLSL2_OBJECTS) libglsl.a
-	$(APP_CXX) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $(GLSL2_OBJECTS) $(LIBS) -o $@
+glsl_compiler: $(GLSL2_OBJECTS) libglsl.a builtin_stubs.o
+	$(APP_CXX) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $(GLSL2_OBJECTS) builtin_stubs.o $(LIBS) -o $@
 
 glcpp/glcpp: $(GLCPP_OBJECTS) libglsl.a
 	$(APP_CC) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $(GLCPP_OBJECTS) $(LIBS) -o $@
@@ -174,13 +172,11 @@ glcpp/glcpp-lex.c: glcpp/glcpp-lex.l
 glcpp/glcpp-parse.c: glcpp/glcpp-parse.y
 	bison -v -o "$@" --defines=glcpp/glcpp-parse.h $<
 
-builtins: builtin_function.cpp builtins/profiles/* builtins/ir/* builtins/tools/generate_builtins.py builtins/tools/texture_builtins.py
-	@echo Bootstrapping the compiler...
-	cp builtins/tools/builtin_function.cpp .
-	make glsl_compiler
+builtin_compiler: $(GLSL2_OBJECTS) $(OBJECTS) builtin_stubs.o
+	$(APP_CXX) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $(OBJECTS) $(GLSL2_OBJECTS) builtin_stubs.o -o $@
+
+builtin_function.cpp: builtins/profiles/* builtins/ir/* builtins/tools/generate_builtins.py builtins/tools/texture_builtins.py builtin_compiler
 	@echo Regenerating builtin_function.cpp...
-	$(PYTHON2) $(PYTHON_FLAGS) builtins/tools/generate_builtins.py > builtin_function.cpp
-	@echo Rebuilding the real compiler...
-	make glsl_compiler
+	$(PYTHON2) $(PYTHON_FLAGS) builtins/tools/generate_builtins.py $(PWD)/builtin_compiler > builtin_function.cpp
 
 -include depend

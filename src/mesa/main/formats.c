@@ -40,9 +40,10 @@ struct gl_format_info
    const char *StrName;
 
    /**
-    * Base format is one of GL_RGB, GL_RGBA, GL_ALPHA, GL_LUMINANCE,
-    * GL_LUMINANCE_ALPHA, GL_INTENSITY, GL_YCBCR_MESA, GL_COLOR_INDEX,
-    * GL_DEPTH_COMPONENT, GL_STENCIL_INDEX, GL_DEPTH_STENCIL.
+    * Base format is one of GL_RED, GL_RG, GL_RGB, GL_RGBA, GL_ALPHA,
+    * GL_LUMINANCE, GL_LUMINANCE_ALPHA, GL_INTENSITY, GL_YCBCR_MESA,
+    * GL_COLOR_INDEX, GL_DEPTH_COMPONENT, GL_STENCIL_INDEX,
+    * GL_DEPTH_STENCIL, GL_DUDV_ATI.
     */
    GLenum BaseFormat;
 
@@ -801,7 +802,7 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
    {
       MESA_FORMAT_SIGNED_R8,        /* Name */
       "MESA_FORMAT_SIGNED_R8",      /* StrName */
-      GL_RGBA,                      /* BaseFormat */
+      GL_RED,                       /* BaseFormat */
       GL_SIGNED_NORMALIZED,         /* DataType */
       8, 0, 0, 0,                   /* Red/Green/Blue/AlphaBits */
       0, 0, 0, 0, 0,                /* Lum/Int/Index/Depth/StencilBits */
@@ -810,7 +811,7 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
    {
       MESA_FORMAT_SIGNED_RG88,
       "MESA_FORMAT_SIGNED_RG88",
-      GL_RGBA,
+      GL_RG,
       GL_SIGNED_NORMALIZED,
       8, 8, 0, 0,
       0, 0, 0, 0, 0,
@@ -819,7 +820,7 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
    {
       MESA_FORMAT_SIGNED_RGBX8888,
       "MESA_FORMAT_SIGNED_RGBX8888",
-      GL_RGBA,
+      GL_RGB,
       GL_SIGNED_NORMALIZED,
       8, 8, 8, 0,
       0, 0, 0, 0, 0,
@@ -848,7 +849,7 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
    {
       MESA_FORMAT_SIGNED_R_16,
       "MESA_FORMAT_SIGNED_R_16",
-      GL_RGBA,
+      GL_RED,
       GL_SIGNED_NORMALIZED,
       16, 0, 0, 0,
       0, 0, 0, 0, 0,
@@ -857,7 +858,7 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
    {
       MESA_FORMAT_SIGNED_RG_16,
       "MESA_FORMAT_SIGNED_RG_16",
-      GL_RGBA,
+      GL_RG,
       GL_SIGNED_NORMALIZED,
       16, 16, 0, 0,
       0, 0, 0, 0, 0,
@@ -866,7 +867,7 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
    {
       MESA_FORMAT_SIGNED_RGB_16,
       "MESA_FORMAT_SIGNED_RGB_16",
-      GL_RGBA,
+      GL_RGB,
       GL_SIGNED_NORMALIZED,
       16, 16, 16, 0,
       0, 0, 0, 0, 0,
@@ -1091,6 +1092,48 @@ _mesa_get_format_color_encoding(gl_format format)
 
 
 /**
+ * For an sRGB format, return the corresponding linear color space format.
+ * For non-sRGB formats, return the format as-is.
+ */
+gl_format
+_mesa_get_srgb_format_linear(gl_format format)
+{
+   switch (format) {
+   case MESA_FORMAT_SRGB8:
+      format = MESA_FORMAT_RGB888;
+      break;
+   case MESA_FORMAT_SRGBA8:
+      format = MESA_FORMAT_RGBA8888;
+      break;
+   case MESA_FORMAT_SARGB8:
+      format = MESA_FORMAT_ARGB8888;
+      break;
+   case MESA_FORMAT_SL8:
+      format = MESA_FORMAT_L8;
+      break;
+   case MESA_FORMAT_SLA8:
+      format = MESA_FORMAT_AL88;
+      break;
+   case MESA_FORMAT_SRGB_DXT1:
+      format = MESA_FORMAT_RGB_DXT1;
+      break;
+   case MESA_FORMAT_SRGBA_DXT1:
+      format = MESA_FORMAT_RGBA_DXT1;
+      break;
+   case MESA_FORMAT_SRGBA_DXT3:
+      format = MESA_FORMAT_RGBA_DXT3;
+      break;
+   case MESA_FORMAT_SRGBA_DXT5:
+      format = MESA_FORMAT_RGBA_DXT5;
+      break;
+   default:
+      break;
+   }
+   return format;
+}
+
+
+/**
  * Return number of bytes needed to store an image of the given size
  * in the given format.
  */
@@ -1167,6 +1210,27 @@ _mesa_format_row_stride(gl_format format, GLsizei width)
 }
 
 
+/**
+ * Debug/test: check that all formats are handled in the
+ * _mesa_format_to_type_and_comps() function.  When new pixel formats
+ * are added to Mesa, that function needs to be updated.
+ * This is a no-op after the first call.
+ */
+static void
+check_format_to_type_and_comps(void)
+{
+   gl_format f;
+
+   for (f = MESA_FORMAT_NONE + 1; f < MESA_FORMAT_COUNT; f++) {
+      GLenum datatype = 0;
+      GLuint comps = 0;
+      /* This function will emit a problem/warning if the format is
+       * not handled.
+       */
+      _mesa_format_to_type_and_comps(f, &datatype, &comps);
+   }
+}
+
 
 /**
  * Do sanity checking of the format info table.
@@ -1191,7 +1255,7 @@ _mesa_test_formats(void)
          if (info->RedBits > 0) {
             GLuint t = info->RedBits + info->GreenBits
                + info->BlueBits + info->AlphaBits;
-            assert(t / 8 == info->BytesPerBlock);
+            assert(t / 8 <= info->BytesPerBlock);
             (void) t;
          }
       }
@@ -1199,6 +1263,7 @@ _mesa_test_formats(void)
       assert(info->DataType == GL_UNSIGNED_NORMALIZED ||
              info->DataType == GL_SIGNED_NORMALIZED ||
              info->DataType == GL_UNSIGNED_INT ||
+             info->DataType == GL_INT ||
              info->DataType == GL_FLOAT);
 
       if (info->BaseFormat == GL_RGB) {
@@ -1249,8 +1314,9 @@ _mesa_test_formats(void)
          assert(info->LuminanceBits == 0);
          assert(info->IntensityBits > 0);
       }
-
    }
+
+   check_format_to_type_and_comps();
 }
 
 

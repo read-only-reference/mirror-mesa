@@ -34,6 +34,7 @@
 #include "main/image.h"
 #include "main/bufferobj.h"
 #include "main/macros.h"
+#include "main/mfeatures.h"
 #include "program/program.h"
 #include "program/prog_print.h"
 
@@ -275,7 +276,7 @@ make_bitmap_texture(struct gl_context *ctx, GLsizei width, GLsizei height,
     * Create texture to hold bitmap pattern.
     */
    pt = st_texture_create(st, st->internal_target, st->bitmap.tex_format,
-                          0, width, height, 1,
+                          0, width, height, 1, 1,
                           PIPE_BIND_SAMPLER_VIEW);
    if (!pt) {
       _mesa_unmap_pbo_source(ctx, unpack);
@@ -558,7 +559,7 @@ reset_cache(struct st_context *st)
    cache->texture = st_texture_create(st, PIPE_TEXTURE_2D,
                                       st->bitmap.tex_format, 0,
                                       BITMAP_CACHE_WIDTH, BITMAP_CACHE_HEIGHT,
-                                      1,
+                                      1, 1,
 				      PIPE_BIND_SAMPLER_VIEW);
 }
 

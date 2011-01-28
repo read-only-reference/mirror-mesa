@@ -427,15 +427,6 @@
 #define   C_028800_STENCILZFAIL_BF                     0x1FFFFFFF
 
 #define R_028808_CB_COLOR_CONTROL                    0x028808
-#define   S_028808_FOG_ENABLE(x)                       (((x) & 0x1) << 0)
-#define   G_028808_FOG_ENABLE(x)                       (((x) >> 0) & 0x1)
-#define   C_028808_FOG_ENABLE                          0xFFFFFFFE
-#define   S_028808_MULTIWRITE_ENABLE(x)                (((x) & 0x1) << 1)
-#define   G_028808_MULTIWRITE_ENABLE(x)                (((x) >> 1) & 0x1)
-#define   C_028808_MULTIWRITE_ENABLE                   0xFFFFFFFD
-#define   S_028808_DITHER_ENABLE(x)                    (((x) & 0x1) << 2)
-#define   G_028808_DITHER_ENABLE(x)                    (((x) >> 2) & 0x1)
-#define   C_028808_DITHER_ENABLE                       0xFFFFFFFB
 #define   S_028808_DEGAMMA_ENABLE(x)                   (((x) & 0x1) << 3)
 #define   G_028808_DEGAMMA_ENABLE(x)                   (((x) >> 3) & 0x1)
 #define   C_028808_DEGAMMA_ENABLE                      0xFFFFFFF7
@@ -988,8 +979,8 @@
 #define   S_030010_SRF_MODE_ALL(x)                     (((x) & 0x1) << 10)
 #define   G_030010_SRF_MODE_ALL(x)                     (((x) >> 10) & 0x1)
 #define   C_030010_SRF_MODE_ALL                        0xFFFFFBFF
-#define     V_030010_SFR_MODE_ZERO_CLAMP_MINUS_ONE     0x00000000
-#define     V_030010_SFR_MODE_NO_ZERO                  0x00000001
+#define     V_030010_SRF_MODE_ZERO_CLAMP_MINUS_ONE     0x00000000
+#define     V_030010_SRF_MODE_NO_ZERO                  0x00000001
 #define   S_030010_FORCE_DEGAMMA(x)                    (((x) & 0x1) << 11)
 #define   G_030010_FORCE_DEGAMMA(x)                    (((x) >> 11) & 0x1)
 #define   C_030010_FORCE_DEGAMMA                       0xFFFFF7FF

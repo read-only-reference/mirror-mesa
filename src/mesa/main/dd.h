@@ -635,10 +635,15 @@ struct dd_function_table {
    void (*BlendColor)(struct gl_context *ctx, const GLfloat color[4]);
    /** Set the blend equation */
    void (*BlendEquationSeparate)(struct gl_context *ctx, GLenum modeRGB, GLenum modeA);
+   void (*BlendEquationSeparatei)(struct gl_context *ctx, GLuint buffer,
+                                  GLenum modeRGB, GLenum modeA);
    /** Specify pixel arithmetic */
    void (*BlendFuncSeparate)(struct gl_context *ctx,
                              GLenum sfactorRGB, GLenum dfactorRGB,
                              GLenum sfactorA, GLenum dfactorA);
+   void (*BlendFuncSeparatei)(struct gl_context *ctx, GLuint buffer,
+                              GLenum sfactorRGB, GLenum dfactorRGB,
+                              GLenum sfactorA, GLenum dfactorA);
    /** Specify clear values for the color buffers */
    void (*ClearColor)(struct gl_context *ctx, const GLfloat color[4]);
    /** Specify the clear value for the depth buffer */
@@ -875,11 +880,6 @@ struct dd_function_table {
     * the dd_function_table::NeedValidate bitmask, but may be NULL otherwise.
     */
    void (*ValidateTnlModule)( struct gl_context *ctx, GLuint new_state );
-
-
-#define PRIM_OUTSIDE_BEGIN_END   (GL_POLYGON+1)
-#define PRIM_INSIDE_UNKNOWN_PRIM (GL_POLYGON+2)
-#define PRIM_UNKNOWN             (GL_POLYGON+3)
 
    /**
     * Set by the driver-supplied T&L engine.  

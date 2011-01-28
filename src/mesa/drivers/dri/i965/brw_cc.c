@@ -141,12 +141,12 @@ static void upload_cc_unit(struct brw_context *brw)
       cc.cc2.logicop_enable = 1;
       cc.cc5.logicop_func = intel_translate_logic_op(ctx->Color.LogicOp);
    } else if (ctx->Color.BlendEnabled) {
-      GLenum eqRGB = ctx->Color.BlendEquationRGB;
-      GLenum eqA = ctx->Color.BlendEquationA;
-      GLenum srcRGB = ctx->Color.BlendSrcRGB;
-      GLenum dstRGB = ctx->Color.BlendDstRGB;
-      GLenum srcA = ctx->Color.BlendSrcA;
-      GLenum dstA = ctx->Color.BlendDstA;
+      GLenum eqRGB = ctx->Color.Blend[0].EquationRGB;
+      GLenum eqA = ctx->Color.Blend[0].EquationA;
+      GLenum srcRGB = ctx->Color.Blend[0].SrcRGB;
+      GLenum dstRGB = ctx->Color.Blend[0].DstRGB;
+      GLenum srcA = ctx->Color.Blend[0].SrcA;
+      GLenum dstA = ctx->Color.Blend[0].DstA;
 
       /* If the renderbuffer is XRGB, we have to frob the blend function to
        * force the destination alpha to 1.0.  This means replacing GL_DST_ALPHA
@@ -239,7 +239,7 @@ static void upload_blend_constant_color(struct brw_context *brw)
    struct brw_blend_constant_color bcc;
 
    memset(&bcc, 0, sizeof(bcc));
-   bcc.header.opcode = CMD_BLEND_CONSTANT_COLOR;
+   bcc.header.opcode = _3DSTATE_BLEND_CONSTANT_COLOR;
    bcc.header.length = sizeof(bcc)/4-2;
    bcc.blend_constant_color[0] = ctx->Color.BlendColor[0];
    bcc.blend_constant_color[1] = ctx->Color.BlendColor[1];

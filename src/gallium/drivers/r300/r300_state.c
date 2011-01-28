@@ -442,8 +442,7 @@ static void r300_set_clip_state(struct pipe_context* pipe,
            OUT_CB_TABLE(state->ucp, state->nr * 4);
         }
         OUT_CB_REG(R300_VAP_CLIP_CNTL, ((1 << state->nr) - 1) |
-                R300_PS_UCP_MODE_CLIP_AS_TRIFAN |
-                (state->depth_clamp ? R300_CLIP_DISABLE : 0));
+                   R300_PS_UCP_MODE_CLIP_AS_TRIFAN);
         END_CB;
 
         r300_mark_atom_dirty(r300, &r300->clip_state);
@@ -695,8 +694,7 @@ void r300_mark_fb_state_dirty(struct r300_context *r300,
     }
 
     if (change == R300_CHANGED_FB_STATE ||
-        change == R300_CHANGED_CBZB_FLAG ||
-        change == R300_CHANGED_ZCLEAR_FLAG) {
+        change == R300_CHANGED_HYPERZ_FLAG) {
         r300_mark_atom_dirty(r300, &r300->hyperz_state);
     }
 
@@ -720,8 +718,8 @@ void r300_mark_fb_state_dirty(struct r300_context *r300,
 }
 
 static void
-    r300_set_framebuffer_state(struct pipe_context* pipe,
-                               const struct pipe_framebuffer_state* state)
+r300_set_framebuffer_state(struct pipe_context* pipe,
+                           const struct pipe_framebuffer_state* state)
 {
     struct r300_context* r300 = r300_context(pipe);
     struct r300_aa_state *aa = (struct r300_aa_state*)r300->aa_state.state;
@@ -729,7 +727,6 @@ static void
     boolean can_hyperz = r300->rws->get_value(r300->rws, R300_CAN_HYPERZ);
     unsigned max_width, max_height, i;
     uint32_t zbuffer_bpp = 0;
-    int blocksize;
 
     if (r300->screen->caps.is_r500) {
         max_width = max_height = 4096;
@@ -743,6 +740,32 @@ static void
         fprintf(stderr, "r300: Implementation error: Render targets are too "
         "big in %s, refusing to bind framebuffer state!\n", __FUNCTION__);
         return;
+    }
+
+    if (old_state->zsbuf && r300->zmask_in_use && !r300->zmask_locked) {
+        /* There is a zmask in use, what are we gonna do? */
+        if (state->zsbuf) {
+            if (!pipe_surface_equal(old_state->zsbuf, state->zsbuf)) {
+                /* Decompress the currently bound zbuffer before we bind another one. */
+                r300_decompress_zmask(r300);
+            }
+        } else {
+            /* We don't bind another zbuffer, so lock the current one. */
+            r300->zmask_locked = TRUE;
+            pipe_surface_reference(&r300->locked_zbuffer, old_state->zsbuf);
+        }
+    } else if (r300->zmask_locked && r300->locked_zbuffer) {
+        /* We have a locked zbuffer now, what are we gonna do? */
+        if (state->zsbuf) {
+            if (!pipe_surface_equal(r300->locked_zbuffer, state->zsbuf)) {
+                /* We are binding some other zbuffer, so decompress the locked one,
+                 * it gets unlocked automatically. */
+                r300_decompress_zmask_locked_unsafe(r300);
+            } else {
+                /* We are binding the locked zbuffer again, so unlock it. */
+                r300->zmask_locked = FALSE;
+            }
+        }
     }
 
     /* If nr_cbufs is changed from zero to non-zero or vice versa... */
@@ -759,14 +782,15 @@ static void
 
     util_copy_framebuffer_state(r300->fb_state.state, state);
 
+    if (!r300->zmask_locked) {
+        pipe_surface_reference(&r300->locked_zbuffer, NULL);
+    }
+
     r300_mark_fb_state_dirty(r300, R300_CHANGED_FB_STATE);
     r300->validate_buffers = TRUE;
 
-    r300->z_compression = false;
-    
     if (state->zsbuf) {
-        blocksize = util_format_get_blocksize(state->zsbuf->texture->format);
-        switch (blocksize) {
+        switch (util_format_get_blocksize(state->zsbuf->texture->format)) {
         case 2:
             zbuffer_bpp = 16;
             break;
@@ -774,30 +798,19 @@ static void
             zbuffer_bpp = 24;
             break;
         }
+
+        /* Setup Hyper-Z. */
         if (can_hyperz) {
             struct r300_surface *zs_surf = r300_surface(state->zsbuf);
-            struct r300_texture *tex;
-            int compress = r300->screen->caps.is_rv350 ? RV350_Z_COMPRESS_88 : R300_Z_COMPRESS_44;
+            struct r300_texture *tex = r300_texture(zs_surf->base.texture);
             int level = zs_surf->base.u.tex.level;
-
-            tex = r300_texture(zs_surf->base.texture);
 
             /* work out whether we can support hiz on this buffer */
             r300_hiz_alloc_block(r300, zs_surf);
-        
-            /* work out whether we can support zmask features on this buffer */
-            r300_zmask_alloc_block(r300, zs_surf, compress);
 
-            if (tex->zmask_mem[level]) {
-                /* compression causes hangs on 16-bit */
-                if (zbuffer_bpp == 24)
-                    r300->z_compression = compress;
-            }
             DBG(r300, DBG_HYPERZ,
-                "hyper-z features: hiz: %d @ %08x z-compression: %d z-fastfill: %d @ %08x\n", tex->hiz_mem[level] ? 1 : 0,
-                tex->hiz_mem[level] ? tex->hiz_mem[level]->ofs : 0xdeadbeef,
-                r300->z_compression, tex->zmask_mem[level] ? 1 : 0,
-                tex->zmask_mem[level] ? tex->zmask_mem[level]->ofs : 0xdeadbeef);
+                "hyper-z features: hiz: %d @ %08x\n", tex->hiz_mem[level] ? 1 : 0,
+                tex->hiz_mem[level] ? tex->hiz_mem[level]->ofs : 0xdeadbeef);
         }
 
         /* Polygon offset depends on the zbuffer bit depth. */
@@ -1465,15 +1478,15 @@ static void r300_set_vertex_buffers(struct pipe_context* pipe,
                                     const struct pipe_vertex_buffer* buffers)
 {
     struct r300_context* r300 = r300_context(pipe);
-    struct pipe_vertex_buffer *vbo;
+    const struct pipe_vertex_buffer *vbo;
     unsigned i, max_index = (1 << 24) - 1;
     boolean any_user_buffer = FALSE;
+    boolean any_nonuser_buffer = FALSE;
     struct pipe_vertex_buffer dummy_vb = {0};
 
     /* There must be at least one vertex buffer set, otherwise it locks up. */
     if (!count) {
         dummy_vb.buffer = r300->dummy_vb;
-        dummy_vb.max_index = r300->dummy_vb->width0 / 4;
         buffers = &dummy_vb;
         count = 1;
     }
@@ -1500,35 +1513,41 @@ static void r300_set_vertex_buffers(struct pipe_context* pipe,
         }
 
         for (i = 0; i < count; i++) {
-            /* Why, yes, I AM casting away constness. How did you know? */
-            vbo = (struct pipe_vertex_buffer*)&buffers[i];
+            vbo = &buffers[i];
 
             /* Skip NULL buffers */
-            if (!buffers[i].buffer) {
+            if (!vbo->buffer) {
                 continue;
             }
 
-            if (r300_buffer_is_user_buffer(vbo->buffer)) {
+            /* User buffers have no info about maximum index,
+             * we will have to compute it in draw_vbo. */
+            if (r300_is_user_buffer(vbo->buffer)) {
                 any_user_buffer = TRUE;
+                continue;
             }
+            any_nonuser_buffer = TRUE;
 
             /* The stride of zero means we will be fetching only the first
              * vertex, so don't care about max_index. */
             if (!vbo->stride)
                 continue;
 
-            if (vbo->max_index == ~0) {
-                vbo->max_index =
-                        (vbo->buffer->width0 - vbo->buffer_offset) / vbo->stride;
+            /* Update the maximum index. */
+            {
+                unsigned vbo_max_index =
+                      (vbo->buffer->width0 - vbo->buffer_offset) / vbo->stride;
+                max_index = MIN2(max_index, vbo_max_index);
             }
-
-            max_index = MIN2(vbo->max_index, max_index);
         }
 
         r300->any_user_vbs = any_user_buffer;
         r300->vertex_buffer_max_index = max_index;
         r300->vertex_arrays_dirty = TRUE;
-        r300->validate_buffers = TRUE;
+        if (any_nonuser_buffer)
+            r300->validate_buffers = TRUE;
+        if (!any_user_buffer)
+            r300->upload_vb_validated = FALSE;
     } else {
         /* SW TCL. */
         draw_set_vertex_buffers(r300->draw, count, buffers);
@@ -1536,17 +1555,27 @@ static void r300_set_vertex_buffers(struct pipe_context* pipe,
 
     /* Common code. */
     for (i = 0; i < count; i++) {
+        vbo = &buffers[i];
+
         /* Reference our buffer. */
-        pipe_resource_reference(&r300->vertex_buffer[i].buffer, buffers[i].buffer);
+        pipe_resource_reference(&r300->vertex_buffer[i].buffer, vbo->buffer);
+        if (vbo->buffer && r300_is_user_buffer(vbo->buffer)) {
+            pipe_resource_reference(&r300->real_vertex_buffer[i], NULL);
+        } else {
+            pipe_resource_reference(&r300->real_vertex_buffer[i], vbo->buffer);
+        }
     }
-    for (; i < r300->vertex_buffer_count; i++) {
+    for (; i < r300->real_vertex_buffer_count; i++) {
         /* Dereference any old buffers. */
         pipe_resource_reference(&r300->vertex_buffer[i].buffer, NULL);
+        pipe_resource_reference(&r300->real_vertex_buffer[i], NULL);
     }
 
     memcpy(r300->vertex_buffer, buffers,
-        sizeof(struct pipe_vertex_buffer) * count);
+           sizeof(struct pipe_vertex_buffer) * count);
+
     r300->vertex_buffer_count = count;
+    r300->real_vertex_buffer_count = count;
 }
 
 static void r300_set_index_buffer(struct pipe_context* pipe,
@@ -1554,19 +1583,22 @@ static void r300_set_index_buffer(struct pipe_context* pipe,
 {
     struct r300_context* r300 = r300_context(pipe);
 
-    if (ib) {
+    if (ib && ib->buffer) {
         pipe_resource_reference(&r300->index_buffer.buffer, ib->buffer);
         memcpy(&r300->index_buffer, ib, sizeof(r300->index_buffer));
+
+        if (r300->screen->caps.has_tcl &&
+            !r300_is_user_buffer(ib->buffer)) {
+            r300->validate_buffers = TRUE;
+            r300->upload_ib_validated = FALSE;
+        }
     }
     else {
         pipe_resource_reference(&r300->index_buffer.buffer, NULL);
         memset(&r300->index_buffer, 0, sizeof(r300->index_buffer));
     }
 
-    if (r300->screen->caps.has_tcl) {
-        r300->validate_buffers = TRUE;
-    }
-    else {
+    if (!r300->screen->caps.has_tcl) {
         draw_set_index_buffer(r300->draw, ib);
     }
 }
@@ -1853,7 +1885,6 @@ static void r300_set_constant_buffer(struct pipe_context *pipe,
 
     if (shader == PIPE_SHADER_FRAGMENT ||
         (shader == PIPE_SHADER_VERTEX && r300->screen->caps.has_tcl)) {
-        assert((buf->width0 % (4 * sizeof(float))) == 0);
         cbuf->ptr = mapped;
     }
 

@@ -30,6 +30,7 @@
 #include <sys/ioctl.h>
 #include "util/u_inlines.h"
 #include "util/u_debug.h"
+#include <pipebuffer/pb_bufmgr.h>
 #include "r600.h"
 #include "r600_priv.h"
 #include "r600_drm_public.h"
@@ -40,7 +41,9 @@
 #define RADEON_INFO_TILING_CONFIG 0x6
 #endif
 
-static struct radeon *radeon_new(int fd, unsigned device);
+#ifndef RADEON_INFO_CLOCK_CRYSTAL_FREQ
+#define RADEON_INFO_CLOCK_CRYSTAL_FREQ 0x9
+#endif
 
 enum radeon_family r600_get_family(struct radeon *r600)
 {
@@ -55,6 +58,11 @@ enum chip_class r600_get_family_class(struct radeon *radeon)
 struct r600_tiling_info *r600_get_tiling_info(struct radeon *radeon)
 {
 	return &radeon->tiling_info;
+}
+
+unsigned r600_get_clock_crystal_freq(struct radeon *radeon)
+{
+	return radeon->clock_crystal_freq;
 }
 
 static int radeon_get_device(struct radeon *radeon)
@@ -74,7 +82,7 @@ static int radeon_drm_get_tiling(struct radeon *radeon)
 {
 	struct drm_radeon_info info;
 	int r;
-	uint32_t tiling_config;
+	uint32_t tiling_config = 0;
 
 	info.request = RADEON_INFO_TILING_CONFIG;
 	info.value = (uintptr_t)&tiling_config;
@@ -122,6 +130,36 @@ static int radeon_drm_get_tiling(struct radeon *radeon)
 	default:
 		return -EINVAL;
 	}
+	return 0;
+}
+
+static int radeon_get_clock_crystal_freq(struct radeon *radeon)
+{
+	struct drm_radeon_info info;
+	uint32_t clock_crystal_freq;
+	int r;
+
+	radeon->device = 0;
+	info.request = RADEON_INFO_CLOCK_CRYSTAL_FREQ;
+	info.value = (uintptr_t)&clock_crystal_freq;
+	r = drmCommandWriteRead(radeon->fd, DRM_RADEON_INFO, &info,
+			sizeof(struct drm_radeon_info));
+	if (r)
+		return r;
+
+	radeon->clock_crystal_freq = clock_crystal_freq;
+	return 0;
+}
+
+static int radeon_init_fence(struct radeon *radeon)
+{
+	radeon->fence = 1;
+	radeon->fence_bo = r600_bo(radeon, 4096, 0, 0, 0);
+	if (radeon->fence_bo == NULL) {
+		return -ENOMEM;
+	}
+	radeon->cfence = r600_bo_map(radeon, radeon->fence_bo, PB_USAGE_UNSYNCHRONIZED, NULL);
+	*radeon->cfence = 0;
 	return 0;
 }
 
@@ -177,6 +215,9 @@ static struct radeon *radeon_new(int fd, unsigned device)
 	case CHIP_CYPRESS:
 	case CHIP_HEMLOCK:
 	case CHIP_PALM:
+	case CHIP_BARTS:
+	case CHIP_TURKS:
+	case CHIP_CAICOS:
 		radeon->chip_class = EVERGREEN;
 		/* set default group bytes, overridden by tiling info ioctl */
 		radeon->tiling_info.group_bytes = 512;
@@ -191,8 +232,16 @@ static struct radeon *radeon_new(int fd, unsigned device)
 		if (radeon_drm_get_tiling(radeon))
 			return NULL;
 	}
+	/* get the GPU counter frequency, failure is non fatal */
+	radeon_get_clock_crystal_freq(radeon);
+
 	radeon->bomgr = r600_bomgr_create(radeon, 1000000);
 	if (radeon->bomgr == NULL) {
+		return NULL;
+	}
+	r = radeon_init_fence(radeon);
+	if (r) {
+		radeon_decref(radeon);
 		return NULL;
 	}
 	return radeon;
@@ -209,6 +258,10 @@ struct radeon *radeon_decref(struct radeon *radeon)
 		return NULL;
 	if (--radeon->refcount > 0) {
 		return NULL;
+	}
+
+	if (radeon->fence_bo) {
+		r600_bo_reference(radeon, &radeon->fence_bo, NULL);
 	}
 
 	if (radeon->bomgr)

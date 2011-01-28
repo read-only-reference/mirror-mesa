@@ -41,13 +41,13 @@ extern "C" {
 #include "brw_context.h"
 #include "brw_eu.h"
 #include "brw_wm.h"
-#include "talloc.h"
 }
 #include "brw_fs.h"
 #include "../glsl/glsl_types.h"
 #include "../glsl/ir_optimization.h"
 #include "../glsl/ir_print_visitor.h"
 
+#define MAX_INSTRUCTION (1 << 30)
 static struct brw_reg brw_reg_from_fs_reg(class fs_reg *reg);
 
 struct gl_shader *
@@ -55,7 +55,7 @@ brw_new_shader(struct gl_context *ctx, GLuint name, GLuint type)
 {
    struct brw_shader *shader;
 
-   shader = talloc_zero(NULL, struct brw_shader);
+   shader = rzalloc(NULL, struct brw_shader);
    if (shader) {
       shader->base.Type = type;
       shader->base.Name = name;
@@ -69,7 +69,7 @@ struct gl_shader_program *
 brw_new_shader_program(struct gl_context *ctx, GLuint name)
 {
    struct brw_shader_program *prog;
-   prog = talloc_zero(NULL, struct brw_shader_program);
+   prog = rzalloc(NULL, struct brw_shader_program);
    if (prog) {
       prog->base.Name = name;
       _mesa_init_shader_program(ctx, &prog->base);
@@ -95,11 +95,11 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
    struct brw_shader *shader =
       (struct brw_shader *)prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
    if (shader != NULL) {
-      void *mem_ctx = talloc_new(NULL);
+      void *mem_ctx = ralloc_context(NULL);
       bool progress;
 
       if (shader->ir)
-	 talloc_free(shader->ir);
+	 ralloc_free(shader->ir);
       shader->ir = new(shader) exec_list;
       clone_ir_list(mem_ctx, shader->ir, shader->base.ir);
 
@@ -149,7 +149,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       validate_ir_tree(shader->ir);
 
       reparent_ir(shader->ir, shader->ir);
-      talloc_free(mem_ctx);
+      ralloc_free(mem_ctx);
    }
 
    if (!_mesa_ir_link_shader(ctx, prog))
@@ -236,8 +236,8 @@ fs_visitor::virtual_grf_alloc(int size)
 	 virtual_grf_array_size = 16;
       else
 	 virtual_grf_array_size *= 2;
-      virtual_grf_sizes = talloc_realloc(mem_ctx, virtual_grf_sizes,
-					 int, virtual_grf_array_size);
+      virtual_grf_sizes = reralloc(mem_ctx, virtual_grf_sizes, int,
+				   virtual_grf_array_size);
 
       /* This slot is always unused. */
       virtual_grf_sizes[0] = 0;
@@ -315,7 +315,6 @@ int
 fs_visitor::setup_uniform_values(int loc, const glsl_type *type)
 {
    unsigned int offset = 0;
-   float *vec_values;
 
    if (type->is_matrix()) {
       const glsl_type *column = glsl_type::get_instance(GLSL_TYPE_FLOAT,
@@ -334,7 +333,6 @@ fs_visitor::setup_uniform_values(int loc, const glsl_type *type)
    case GLSL_TYPE_UINT:
    case GLSL_TYPE_INT:
    case GLSL_TYPE_BOOL:
-      vec_values = fp->Base.Parameters->ParameterValues[loc];
       for (unsigned int i = 0; i < type->vector_elements; i++) {
 	 unsigned int param = c->prog_data.nr_params++;
 
@@ -358,8 +356,8 @@ fs_visitor::setup_uniform_values(int loc, const glsl_type *type)
 	    c->prog_data.param_convert[param] = PARAM_NO_CONVERT;
 	    break;
 	 }
-
-	 c->prog_data.param[param] = &vec_values[i];
+	 this->param_index[param] = loc;
+	 this->param_offset[param] = i;
       }
       return 1;
 
@@ -430,7 +428,6 @@ fs_visitor::setup_builtin_uniform_values(ir_variable *ir)
 	  */
 	 int index = _mesa_add_state_reference(this->fp->Base.Parameters,
 					       (gl_state_index *)tokens);
-	 float *vec_values = this->fp->Base.Parameters->ParameterValues[index];
 
 	 /* Add each of the unique swizzles of the element as a
 	  * parameter.  This'll end up matching the expected layout of
@@ -445,7 +442,9 @@ fs_visitor::setup_builtin_uniform_values(ir_variable *ir)
 
 	    c->prog_data.param_convert[c->prog_data.nr_params] =
 	       PARAM_NO_CONVERT;
-	    c->prog_data.param[c->prog_data.nr_params++] = &vec_values[swiz];
+	    this->param_index[c->prog_data.nr_params] = index;
+	    this->param_offset[c->prog_data.nr_params] = swiz;
+	    c->prog_data.nr_params++;
 	 }
       }
    }
@@ -534,24 +533,39 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
 	    continue;
 	 }
 
-	 for (unsigned int c = 0; c < type->vector_elements; c++) {
-	    struct brw_reg interp = interp_reg(location, c);
-	    emit(fs_inst(FS_OPCODE_LINTERP,
-			 attr,
-			 this->delta_x,
-			 this->delta_y,
-			 fs_reg(interp)));
-	    attr.reg_offset++;
-	 }
-
-	 if (intel->gen < 6) {
-	    attr.reg_offset -= type->vector_elements;
+	 if (c->key.flat_shade && (location == FRAG_ATTRIB_COL0 ||
+				   location == FRAG_ATTRIB_COL1)) {
+	    /* Constant interpolation (flat shading) case. The SF has
+	     * handed us defined values in only the constant offset
+	     * field of the setup reg.
+	     */
 	    for (unsigned int c = 0; c < type->vector_elements; c++) {
-	       emit(fs_inst(BRW_OPCODE_MUL,
-			    attr,
-			    attr,
-			    this->pixel_w));
+	       struct brw_reg interp = interp_reg(location, c);
+	       interp = suboffset(interp, 3);
+	       emit(fs_inst(FS_OPCODE_CINTERP, attr, fs_reg(interp)));
 	       attr.reg_offset++;
+	    }
+	 } else {
+	    /* Perspective interpolation case. */
+	    for (unsigned int c = 0; c < type->vector_elements; c++) {
+	       struct brw_reg interp = interp_reg(location, c);
+	       emit(fs_inst(FS_OPCODE_LINTERP,
+			    attr,
+			    this->delta_x,
+			    this->delta_y,
+			    fs_reg(interp)));
+	       attr.reg_offset++;
+	    }
+
+	    if (intel->gen < 6) {
+	       attr.reg_offset -= type->vector_elements;
+	       for (unsigned int c = 0; c < type->vector_elements; c++) {
+		  emit(fs_inst(BRW_OPCODE_MUL,
+			       attr,
+			       attr,
+			       this->pixel_w));
+		  attr.reg_offset++;
+	       }
 	    }
 	 }
 	 location++;
@@ -859,6 +873,7 @@ fs_visitor::visit(ir_expression *ir)
       break;
    case ir_unop_abs:
       op[0].abs = true;
+      op[0].negate = false;
       this->result = op[0];
       break;
    case ir_unop_sign:
@@ -1322,6 +1337,37 @@ fs_visitor::visit(ir_texture *ir)
    ir->coordinate->accept(this);
    fs_reg coordinate = this->result;
 
+   if (ir->offset != NULL) {
+      ir_constant *offset = ir->offset->as_constant();
+      assert(offset != NULL);
+
+      signed char offsets[3];
+      for (unsigned i = 0; i < ir->offset->type->vector_elements; i++)
+	 offsets[i] = (signed char) offset->value.i[i];
+
+      /* Combine all three offsets into a single unsigned dword:
+       *
+       *    bits 11:8 - U Offset (X component)
+       *    bits  7:4 - V Offset (Y component)
+       *    bits  3:0 - R Offset (Z component)
+       */
+      unsigned offset_bits = 0;
+      for (unsigned i = 0; i < ir->offset->type->vector_elements; i++) {
+	 const unsigned shift = 4 * (2 - i);
+	 offset_bits |= (offsets[i] << shift) & (0xF << shift);
+      }
+
+      /* Explicitly set up the message header by copying g0 to msg reg m1. */
+      emit(fs_inst(BRW_OPCODE_MOV, fs_reg(MRF, 1, BRW_REGISTER_TYPE_UD),
+				   fs_reg(GRF, 0, BRW_REGISTER_TYPE_UD)));
+
+      /* Then set the offset bits in DWord 2 of the message header. */
+      emit(fs_inst(BRW_OPCODE_MOV,
+		   fs_reg(retype(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE, 1, 2),
+				 BRW_REGISTER_TYPE_UD)),
+		   fs_reg(brw_imm_uw(offset_bits))));
+   }
+
    /* Should be lowered by do_lower_texture_projection */
    assert(!ir->projector);
 
@@ -1353,10 +1399,13 @@ fs_visitor::visit(ir_texture *ir)
       fs_reg scale_y = fs_reg(UNIFORM, c->prog_data.nr_params + 1);
       GLuint index = _mesa_add_state_reference(params,
 					       (gl_state_index *)tokens);
-      float *vec_values = this->fp->Base.Parameters->ParameterValues[index];
 
-      c->prog_data.param[c->prog_data.nr_params++] = &vec_values[0];
-      c->prog_data.param[c->prog_data.nr_params++] = &vec_values[1];
+      this->param_index[c->prog_data.nr_params] = index;
+      this->param_offset[c->prog_data.nr_params] = 0;
+      c->prog_data.nr_params++;
+      this->param_index[c->prog_data.nr_params] = index;
+      this->param_offset[c->prog_data.nr_params] = 1;
+      c->prog_data.nr_params++;
 
       fs_reg dst = fs_reg(this, ir->coordinate->type);
       fs_reg src = coordinate;
@@ -1378,6 +1427,14 @@ fs_visitor::visit(ir_texture *ir)
    } else {
       inst = emit_texture_gen5(ir, dst, coordinate);
    }
+
+   /* If there's an offset, we already set up m1.  To avoid the implied move,
+    * use the null register.  Otherwise, we want an implied move from g0.
+    */
+   if (ir->offset != NULL)
+      inst->src[0] = fs_reg(brw_null_reg());
+   else
+      inst->src[0] = fs_reg(retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UW));
 
    inst->sampler = sampler;
 
@@ -2047,7 +2104,7 @@ fs_visitor::emit_fb_writes()
    }
 
    for (int target = 0; target < c->key.nr_color_regions; target++) {
-      this->current_annotation = talloc_asprintf(this->mem_ctx,
+      this->current_annotation = ralloc_asprintf(this->mem_ctx,
 						 "FB write target %d",
 						 target);
       if (this->frag_color || this->frag_data) {
@@ -2225,7 +2282,7 @@ fs_visitor::generate_math(fs_inst *inst,
 }
 
 void
-fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst)
+fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
 {
    int msg_type = -1;
    int rlen = 4;
@@ -2283,7 +2340,7 @@ fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst)
    brw_SAMPLE(p,
 	      retype(dst, BRW_REGISTER_TYPE_UW),
 	      inst->base_mrf,
-	      retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UW),
+	      src,
               SURF_INDEX_TEXTURE(inst->sampler),
 	      inst->sampler,
 	      WRITEMASK_XYZW,
@@ -2483,6 +2540,22 @@ fs_visitor::generate_pull_constant_load(fs_inst *inst, struct brw_reg dst)
    }
 }
 
+/**
+ * To be called after the last _mesa_add_state_reference() call, to
+ * set up prog_data.param[] for assign_curb_setup() and
+ * setup_pull_constants().
+ */
+void
+fs_visitor::setup_paramvalues_refs()
+{
+   /* Set up the pointers to ParamValues now that that array is finalized. */
+   for (unsigned int i = 0; i < c->prog_data.nr_params; i++) {
+      c->prog_data.param[i] =
+	 fp->Base.Parameters->ParameterValues[this->param_index[i]] +
+	 this->param_offset[i];
+   }
+}
+
 void
 fs_visitor::assign_curb_setup()
 {
@@ -2556,12 +2629,15 @@ fs_visitor::assign_urb_setup()
    foreach_iter(exec_list_iterator, iter, this->instructions) {
       fs_inst *inst = (fs_inst *)iter.get();
 
-      if (inst->opcode != FS_OPCODE_LINTERP)
-	 continue;
+      if (inst->opcode == FS_OPCODE_LINTERP) {
+	 assert(inst->src[2].file == FIXED_HW_REG);
+	 inst->src[2].fixed_hw_reg.nr += urb_start;
+      }
 
-      assert(inst->src[2].file == FIXED_HW_REG);
-
-      inst->src[2].fixed_hw_reg.nr += urb_start;
+      if (inst->opcode == FS_OPCODE_CINTERP) {
+	 assert(inst->src[0].file == FIXED_HW_REG);
+	 inst->src[0].fixed_hw_reg.nr += urb_start;
+      }
    }
 
    this->first_non_payload_grf = urb_start + c->prog_data.urb_read_length;
@@ -2609,10 +2685,7 @@ fs_visitor::split_virtual_grfs()
       fs_inst *inst = (fs_inst *)iter.get();
 
       /* Texturing produces 4 contiguous registers, so no splitting. */
-      if ((inst->opcode == FS_OPCODE_TEX ||
-	   inst->opcode == FS_OPCODE_TXB ||
-	   inst->opcode == FS_OPCODE_TXL) &&
-	  inst->dst.file == GRF) {
+      if (inst->is_tex()) {
 	 split_grf[inst->dst.reg] = false;
       }
    }
@@ -2652,6 +2725,7 @@ fs_visitor::split_virtual_grfs()
 	 }
       }
    }
+   this->live_intervals_valid = false;
 }
 
 /**
@@ -2720,14 +2794,17 @@ void
 fs_visitor::calculate_live_intervals()
 {
    int num_vars = this->virtual_grf_next;
-   int *def = talloc_array(mem_ctx, int, num_vars);
-   int *use = talloc_array(mem_ctx, int, num_vars);
+   int *def = ralloc_array(mem_ctx, int, num_vars);
+   int *use = ralloc_array(mem_ctx, int, num_vars);
    int loop_depth = 0;
    int loop_start = 0;
    int bb_header_ip = 0;
 
+   if (this->live_intervals_valid)
+      return;
+
    for (int i = 0; i < num_vars; i++) {
-      def[i] = 1 << 30;
+      def[i] = MAX_INSTRUCTION;
       use[i] = -1;
    }
 
@@ -2801,10 +2878,12 @@ fs_visitor::calculate_live_intervals()
       }
    }
 
-   talloc_free(this->virtual_grf_def);
-   talloc_free(this->virtual_grf_use);
+   ralloc_free(this->virtual_grf_def);
+   ralloc_free(this->virtual_grf_use);
    this->virtual_grf_def = def;
    this->virtual_grf_use = use;
+
+   this->live_intervals_valid = true;
 }
 
 /**
@@ -2819,6 +2898,8 @@ bool
 fs_visitor::propagate_constants()
 {
    bool progress = false;
+
+   calculate_live_intervals();
 
    foreach_iter(exec_list_iterator, iter, this->instructions) {
       fs_inst *inst = (fs_inst *)iter.get();
@@ -2877,6 +2958,7 @@ fs_visitor::propagate_constants()
 		  /* Fit this constant in by commuting the operands */
 		  scan_inst->src[0] = scan_inst->src[1];
 		  scan_inst->src[1] = inst->src[0];
+		  progress = true;
 	       }
 	       break;
 	    case BRW_OPCODE_CMP:
@@ -2891,11 +2973,14 @@ fs_visitor::propagate_constants()
 	 if (scan_inst->dst.file == GRF &&
 	     scan_inst->dst.reg == inst->dst.reg &&
 	     (scan_inst->dst.reg_offset == inst->dst.reg_offset ||
-	      scan_inst->opcode == FS_OPCODE_TEX)) {
+	      scan_inst->is_tex())) {
 	    break;
 	 }
       }
    }
+
+   if (progress)
+       this->live_intervals_valid = false;
 
    return progress;
 }
@@ -2911,6 +2996,8 @@ fs_visitor::dead_code_eliminate()
    bool progress = false;
    int pc = 0;
 
+   calculate_live_intervals();
+
    foreach_iter(exec_list_iterator, iter, this->instructions) {
       fs_inst *inst = (fs_inst *)iter.get();
 
@@ -2922,6 +3009,9 @@ fs_visitor::dead_code_eliminate()
       pc++;
    }
 
+   if (progress)
+      live_intervals_valid = false;
+
    return progress;
 }
 
@@ -2929,9 +3019,34 @@ bool
 fs_visitor::register_coalesce()
 {
    bool progress = false;
+   int if_depth = 0;
+   int loop_depth = 0;
 
    foreach_iter(exec_list_iterator, iter, this->instructions) {
       fs_inst *inst = (fs_inst *)iter.get();
+
+      /* Make sure that we dominate the instructions we're going to
+       * scan for interfering with our coalescing, or we won't have
+       * scanned enough to see if anything interferes with our
+       * coalescing.  We don't dominate the following instructions if
+       * we're in a loop or an if block.
+       */
+      switch (inst->opcode) {
+      case BRW_OPCODE_DO:
+	 loop_depth++;
+	 break;
+      case BRW_OPCODE_WHILE:
+	 loop_depth--;
+	 break;
+      case BRW_OPCODE_IF:
+	 if_depth++;
+	 break;
+      case BRW_OPCODE_ENDIF:
+	 if_depth--;
+	 break;
+      }
+      if (loop_depth || if_depth)
+	 continue;
 
       if (inst->opcode != BRW_OPCODE_MOV ||
 	  inst->predicated ||
@@ -2950,24 +3065,16 @@ fs_visitor::register_coalesce()
       for (; scan_iter.has_next(); scan_iter.next()) {
 	 fs_inst *scan_inst = (fs_inst *)scan_iter.get();
 
-	 if (scan_inst->opcode == BRW_OPCODE_DO ||
-	     scan_inst->opcode == BRW_OPCODE_WHILE ||
-	     scan_inst->opcode == BRW_OPCODE_ENDIF) {
-	    interfered = true;
-	    iter = scan_iter;
-	    break;
-	 }
-
 	 if (scan_inst->dst.file == GRF) {
 	    if (scan_inst->dst.reg == inst->dst.reg &&
 		(scan_inst->dst.reg_offset == inst->dst.reg_offset ||
-		 scan_inst->opcode == FS_OPCODE_TEX)) {
+		 scan_inst->is_tex())) {
 	       interfered = true;
 	       break;
 	    }
 	    if (scan_inst->dst.reg == inst->src[0].reg &&
 		(scan_inst->dst.reg_offset == inst->src[0].reg_offset ||
-		 scan_inst->opcode == FS_OPCODE_TEX)) {
+		 scan_inst->is_tex())) {
 	       interfered = true;
 	       break;
 	    }
@@ -2976,10 +3083,6 @@ fs_visitor::register_coalesce()
       if (interfered) {
 	 continue;
       }
-
-      /* Update live interval so we don't have to recalculate. */
-      this->virtual_grf_use[inst->src[0].reg] = MAX2(virtual_grf_use[inst->src[0].reg],
-						     virtual_grf_use[inst->dst.reg]);
 
       /* Rewrite the later usage to point at the source of the move to
        * be removed.
@@ -3005,6 +3108,9 @@ fs_visitor::register_coalesce()
       progress = true;
    }
 
+   if (progress)
+      live_intervals_valid = false;
+
    return progress;
 }
 
@@ -3014,6 +3120,8 @@ fs_visitor::compute_to_mrf()
 {
    bool progress = false;
    int next_ip = 0;
+
+   calculate_live_intervals();
 
    foreach_iter(exec_list_iterator, iter, this->instructions) {
       fs_inst *inst = (fs_inst *)iter.get();
@@ -3047,7 +3155,7 @@ fs_visitor::compute_to_mrf()
 	     * into a compute-to-MRF.
 	     */
 
-	    if (scan_inst->opcode == FS_OPCODE_TEX) {
+	    if (scan_inst->is_tex()) {
 	       /* texturing writes several continuous regs, so we can't
 		* compute-to-mrf that.
 		*/
@@ -3068,14 +3176,7 @@ fs_visitor::compute_to_mrf()
 	       /* gen6 math instructions must have the destination be
 		* GRF, so no compute-to-MRF for them.
 		*/
-	       if (scan_inst->opcode == FS_OPCODE_RCP ||
-		   scan_inst->opcode == FS_OPCODE_RSQ ||
-		   scan_inst->opcode == FS_OPCODE_SQRT ||
-		   scan_inst->opcode == FS_OPCODE_EXP2 ||
-		   scan_inst->opcode == FS_OPCODE_LOG2 ||
-		   scan_inst->opcode == FS_OPCODE_SIN ||
-		   scan_inst->opcode == FS_OPCODE_COS ||
-		   scan_inst->opcode == FS_OPCODE_POW) {
+	       if (scan_inst->is_math()) {
 		  break;
 	       }
 	    }
@@ -3097,6 +3198,7 @@ fs_visitor::compute_to_mrf()
 	  */
 	 if (scan_inst->opcode == BRW_OPCODE_DO ||
 	     scan_inst->opcode == BRW_OPCODE_WHILE ||
+	     scan_inst->opcode == BRW_OPCODE_ELSE ||
 	     scan_inst->opcode == BRW_OPCODE_ENDIF) {
 	    break;
 	 }
@@ -3183,7 +3285,7 @@ fs_visitor::remove_duplicate_mrf_writes()
       }
 
       if (inst->mlen > 0) {
-	 /* Found a SEND instruction, which will include two of fewer
+	 /* Found a SEND instruction, which will include two or fewer
 	  * implied MRF writes.  We could do better here.
 	  */
 	 for (int i = 0; i < implied_mrf_writes(inst); i++) {
@@ -3218,15 +3320,16 @@ fs_visitor::virtual_grf_interferes(int a, int b)
    int start = MAX2(this->virtual_grf_def[a], this->virtual_grf_def[b]);
    int end = MIN2(this->virtual_grf_use[a], this->virtual_grf_use[b]);
 
-   /* For dead code, just check if the def interferes with the other range. */
-   if (this->virtual_grf_use[a] == -1) {
-      return (this->virtual_grf_def[a] >= this->virtual_grf_def[b] &&
-	      this->virtual_grf_def[a] < this->virtual_grf_use[b]);
-   }
-   if (this->virtual_grf_use[b] == -1) {
-      return (this->virtual_grf_def[b] >= this->virtual_grf_def[a] &&
-	      this->virtual_grf_def[b] < this->virtual_grf_use[a]);
-   }
+   /* We can't handle dead register writes here, without iterating
+    * over the whole instruction stream to find every single dead
+    * write to that register to compare to the live interval of the
+    * other register.  Just assert that dead_code_eliminate() has been
+    * called.
+    */
+   assert((this->virtual_grf_use[a] != -1 ||
+	   this->virtual_grf_def[a] == MAX_INSTRUCTION) &&
+	  (this->virtual_grf_use[b] != -1 ||
+	   this->virtual_grf_def[b] == MAX_INSTRUCTION));
 
    return start < end;
 }
@@ -3466,13 +3569,16 @@ fs_visitor::generate_code()
       case FS_OPCODE_COS:
 	 generate_math(inst, dst, src);
 	 break;
+      case FS_OPCODE_CINTERP:
+	 brw_MOV(p, dst, src[0]);
+	 break;
       case FS_OPCODE_LINTERP:
 	 generate_linterp(inst, dst, src);
 	 break;
       case FS_OPCODE_TEX:
       case FS_OPCODE_TXB:
       case FS_OPCODE_TXL:
-	 generate_tex(inst, dst);
+	 generate_tex(inst, dst, src[0]);
 	 break;
       case FS_OPCODE_DISCARD_NOT:
 	 generate_discard_not(inst, dst);
@@ -3603,10 +3709,9 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c)
       v.emit_fb_writes();
 
       v.split_virtual_grfs();
-      v.setup_pull_constants();
 
-      v.assign_curb_setup();
-      v.assign_urb_setup();
+      v.setup_paramvalues_refs();
+      v.setup_pull_constants();
 
       bool progress;
       do {
@@ -3614,12 +3719,16 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c)
 
 	 progress = v.remove_duplicate_mrf_writes() || progress;
 
-	 v.calculate_live_intervals();
 	 progress = v.propagate_constants() || progress;
 	 progress = v.register_coalesce() || progress;
 	 progress = v.compute_to_mrf() || progress;
 	 progress = v.dead_code_eliminate() || progress;
       } while (progress);
+
+      v.schedule_instructions();
+
+      v.assign_curb_setup();
+      v.assign_urb_setup();
 
       if (0) {
 	 /* Debug of register spilling: Go spill everything. */
@@ -3627,7 +3736,6 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c)
 	 for (int i = 1; i < virtual_grf_count; i++) {
 	    v.spill_reg(i);
 	 }
-	 v.calculate_live_intervals();
       }
 
       if (0)
@@ -3636,8 +3744,6 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c)
 	 while (!v.assign_regs()) {
 	    if (v.fail)
 	       break;
-
-	    v.calculate_live_intervals();
 	 }
       }
    }

@@ -9,9 +9,11 @@ include $(TOP)/configs/current
 
 MESA_DIR = $(TOP)/src/mesa
 MESA_GLAPI_DIR = $(TOP)/src/mapi/glapi
+MESA_MAPI_DIR = $(TOP)/src/mapi/mapi
 MESA_GLX_DIR = $(TOP)/src/glx
 
 MESA_GLAPI_OUTPUTS = \
+	$(MESA_GLAPI_DIR)/glapi_mapi_tmp.h \
 	$(MESA_GLAPI_DIR)/glprocs.h \
 	$(MESA_GLAPI_DIR)/glapitemp.h \
 	$(MESA_GLAPI_DIR)/glapitable.h
@@ -72,10 +74,13 @@ API_XML = \
 	gl_API.xml \
 	ARB_copy_buffer.xml \
 	ARB_depth_clamp.xml \
+	ARB_draw_buffers_blend.xml \
 	ARB_draw_elements_base_vertex.xml \
 	ARB_draw_instanced.xml \
+	ARB_ES2_compatibility.xml \
 	ARB_framebuffer_object.xml \
 	ARB_geometry_shader4.xml \
+	ARB_instanced_arrays.xml \
 	ARB_map_buffer_range.xml \
 	ARB_seamless_cube_map.xml \
 	ARB_sync.xml \
@@ -98,6 +103,15 @@ API_XML = \
 
 
 COMMON = $(API_XML) gl_XML.py glX_XML.py license.py typeexpr.py
+
+COMMON_ES = \
+	$(COMMON) \
+	gl_and_es_API.xml \
+	es_EXT.xml \
+	ARB_ES2_compatibility.xml \
+	ARB_get_program_binary.xml \
+	OES_fixed_point.xml \
+	OES_single_precision.xml
 
 COMMON_GLX = $(COMMON) glX_API.xml glX_XML.py glX_proto_common.py
 
@@ -128,6 +142,10 @@ $(XORG_GLAPI_DIR)/%.h: $(MESA_GLAPI_DIR)/%.h
 	cp $< $@
 
 ######################################################################
+
+$(MESA_GLAPI_DIR)/glapi_mapi_tmp.h: $(MESA_MAPI_DIR)/mapi_abi.py $(COMMON_ES)
+	$(PYTHON2) $(PYTHON_FLAGS) $< \
+		--printer glapi --mode lib gl_and_es_API.xml > $@
 
 $(MESA_GLAPI_DIR)/glprocs.h: gl_procs.py $(COMMON)
 	$(PYTHON2) $(PYTHON_FLAGS) $< > $@

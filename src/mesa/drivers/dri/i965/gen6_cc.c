@@ -66,12 +66,12 @@ blend_state_populate_key(struct brw_context *brw,
    /* _NEW_COLOR */
    key->color_blend = ctx->Color.BlendEnabled;
    if (key->color_blend) {
-      key->blend_eq_rgb = ctx->Color.BlendEquationRGB;
-      key->blend_eq_a = ctx->Color.BlendEquationA;
-      key->blend_src_rgb = ctx->Color.BlendSrcRGB;
-      key->blend_dst_rgb = ctx->Color.BlendDstRGB;
-      key->blend_src_a = ctx->Color.BlendSrcA;
-      key->blend_dst_a = ctx->Color.BlendDstA;
+      key->blend_eq_rgb = ctx->Color.Blend[0].EquationRGB;
+      key->blend_eq_a = ctx->Color.Blend[0].EquationA;
+      key->blend_src_rgb = ctx->Color.Blend[0].SrcRGB;
+      key->blend_dst_rgb = ctx->Color.Blend[0].DstRGB;
+      key->blend_src_a = ctx->Color.Blend[0].SrcA;
+      key->blend_dst_a = ctx->Color.Blend[0].DstA;
    }
 
    /* _NEW_COLOR */
@@ -278,7 +278,7 @@ static void upload_cc_state_pointers(struct brw_context *brw)
    struct intel_context *intel = &brw->intel;
 
    BEGIN_BATCH(4);
-   OUT_BATCH(CMD_3D_CC_STATE_POINTERS << 16 | (4 - 2));
+   OUT_BATCH(_3DSTATE_CC_STATE_POINTERS << 16 | (4 - 2));
    OUT_RELOC(brw->cc.blend_state_bo, I915_GEM_DOMAIN_INSTRUCTION, 0, 1);
    OUT_RELOC(brw->cc.depth_stencil_state_bo, I915_GEM_DOMAIN_INSTRUCTION, 0, 1);
    OUT_RELOC(brw->cc.state_bo, I915_GEM_DOMAIN_INSTRUCTION, 0, 1);

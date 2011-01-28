@@ -30,6 +30,11 @@ static void generate_ARB_draw_buffers_variables(exec_list *,
 						struct _mesa_glsl_parse_state *,
 						bool, _mesa_glsl_parser_targets);
 
+static void
+generate_ARB_draw_instanced_variables(exec_list *,
+                                      struct _mesa_glsl_parse_state *,
+                                      bool, _mesa_glsl_parser_targets);
+
 static ir_variable *
 add_variable(const char *name, enum ir_variable_mode mode, int slot,
 	     const glsl_type *type, exec_list *instructions,
@@ -40,7 +45,9 @@ add_variable(const char *name, enum ir_variable_mode mode, int slot,
    switch (var->mode) {
    case ir_var_auto:
    case ir_var_in:
+   case ir_var_const_in:
    case ir_var_uniform:
+   case ir_var_system_value:
       var->read_only = true;
       break;
    case ir_var_inout:
@@ -324,7 +331,12 @@ initialize_vs_variables(exec_list *instructions,
       generate_130_vs_variables(instructions, state);
       break;
    }
+
+   if (state->ARB_draw_instanced_enable)
+      generate_ARB_draw_instanced_variables(instructions, state, false,
+                                            vertex_shader);
 }
+
 
 /* This function should only be called for ES, not desktop GL. */
 static void
@@ -421,6 +433,27 @@ generate_ARB_draw_buffers_variables(exec_list *instructions,
 	 fd->warn_extension = "GL_ARB_draw_buffers";
    }
 }
+
+
+static void
+generate_ARB_draw_instanced_variables(exec_list *instructions,
+                                      struct _mesa_glsl_parse_state *state,
+                                      bool warn,
+                                      _mesa_glsl_parser_targets target)
+{
+   /* gl_InstanceIDARB is only available in the vertex shader.
+    */
+   if (target == vertex_shader) {
+      ir_variable *const inst =
+         add_variable("gl_InstanceIDARB", ir_var_system_value,
+                      SYSTEM_VALUE_INSTANCE_ID,
+                      glsl_type::int_type, instructions, state->symbols);
+
+      if (warn)
+         inst->warn_extension = "GL_ARB_draw_instanced";
+   }
+}
+
 
 static void
 generate_ARB_shader_stencil_export_variables(exec_list *instructions,

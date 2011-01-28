@@ -184,6 +184,7 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->RenderTexture = _mesa_render_texture;
    driver->FinishRenderTexture = _mesa_finish_render_texture;
    driver->FramebufferRenderbuffer = _mesa_framebuffer_renderbuffer;
+   driver->ValidateFramebuffer = _mesa_validate_framebuffer;
 
    driver->BlitFramebuffer = _swrast_BlitFramebuffer;
 
@@ -231,13 +232,14 @@ _mesa_init_driver_state(struct gl_context *ctx)
    ctx->Driver.BlendColor(ctx, ctx->Color.BlendColor);
 
    ctx->Driver.BlendEquationSeparate(ctx,
-                                     ctx->Color.BlendEquationRGB,
-                                     ctx->Color.BlendEquationA);
+                                     ctx->Color.Blend[0].EquationRGB,
+                                     ctx->Color.Blend[0].EquationA);
 
    ctx->Driver.BlendFuncSeparate(ctx,
-                                 ctx->Color.BlendSrcRGB,
-                                 ctx->Color.BlendDstRGB,
-                                 ctx->Color.BlendSrcA, ctx->Color.BlendDstA);
+                                 ctx->Color.Blend[0].SrcRGB,
+                                 ctx->Color.Blend[0].DstRGB,
+                                 ctx->Color.Blend[0].SrcA,
+                                 ctx->Color.Blend[0].DstA);
 
    if (ctx->Driver.ColorMaskIndexed) {
       GLuint i;

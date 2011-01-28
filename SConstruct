@@ -56,6 +56,12 @@ else:
 
 Help(opts.GenerateHelpText(env))
 
+# fail early for a common error on windows
+if env['gles']:
+    try:
+        import libxml2
+    except ImportError:
+        raise SCons.Errors.UserError, "GLES requires libxml2-python to build"
 
 #######################################################################
 # Environment setup
@@ -116,6 +122,39 @@ if env['platform'] in ('posix', 'linux', 'freebsd', 'darwin'):
 #print env.Dump()
 
 Export('env')
+
+
+#######################################################################
+# Invoke host SConscripts 
+# 
+# For things that are meant to be run on the native host build machine, instead
+# of the target machine.
+#
+
+# Create host environent
+if env['platform'] != common.host_platform:
+    host_env = Environment(
+        options = opts,
+        # no tool used
+        tools = [],
+        toolpath = ['#scons'],
+        ENV = os.environ,
+    )
+
+    # Override options
+    host_env['platform'] = common.host_platform
+    host_env['machine'] = common.host_machine
+    host_env['toolchain'] = 'default'
+    host_env['llvm'] = False
+
+    host_env.Tool('gallium')
+
+    SConscript(
+        'src/glsl/SConscript',
+        variant_dir = host_env['build_dir'],
+        duplicate = 0, # http://www.scons.org/doc/0.97/HTML/scons-user/x2261.html
+        exports={'env':host_env},
+    )
 
 
 #######################################################################

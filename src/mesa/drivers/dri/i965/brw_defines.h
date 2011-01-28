@@ -35,28 +35,6 @@
 
 /* 3D state:
  */
-#define _3DOP_3DSTATE_PIPELINED       0x0
-#define _3DOP_3DSTATE_NONPIPELINED    0x1
-#define _3DOP_3DCONTROL               0x2
-#define _3DOP_3DPRIMITIVE             0x3
-
-#define _3DSTATE_PIPELINED_POINTERS       0x00
-#define _3DSTATE_BINDING_TABLE_POINTERS   0x01
-#define _3DSTATE_VERTEX_BUFFERS           0x08
-#define _3DSTATE_VERTEX_ELEMENTS          0x09
-#define _3DSTATE_INDEX_BUFFER             0x0A
-#define _3DSTATE_VF_STATISTICS            0x0B
-#define _3DSTATE_DRAWING_RECTANGLE            0x00
-#define _3DSTATE_CONSTANT_COLOR               0x01
-#define _3DSTATE_SAMPLER_PALETTE_LOAD         0x02
-#define _3DSTATE_CHROMA_KEY                   0x04
-#define _3DSTATE_DEPTH_BUFFER                 0x05
-#define _3DSTATE_POLY_STIPPLE_OFFSET          0x06
-#define _3DSTATE_POLY_STIPPLE_PATTERN         0x07
-#define _3DSTATE_LINE_STIPPLE                 0x08
-#define _3DSTATE_GLOBAL_DEPTH_OFFSET_CLAMP    0x09
-#define _3DCONTROL    0x00
-
 #define PIPE_CONTROL_NOWRITE          0x00
 #define PIPE_CONTROL_WRITEIMMEDIATE   0x01
 #define PIPE_CONTROL_WRITEDEPTH       0x02
@@ -389,6 +367,7 @@
 #define BRW_SURFACEFORMAT_R8_SSCALED                     0x149
 #define BRW_SURFACEFORMAT_R8_USCALED                     0x14A
 #define BRW_SURFACEFORMAT_L8_UNORM_SRGB                  0x14C
+#define BRW_SURFACEFORMAT_DXT1_RGB_SRGB                  0x180
 #define BRW_SURFACEFORMAT_R1_UINT                        0x181 
 #define BRW_SURFACEFORMAT_YCRCB_NORMAL                   0x182 
 #define BRW_SURFACEFORMAT_YCRCB_SWAPUVY                  0x183 
@@ -844,7 +823,7 @@
 # define GEN6_BINDING_TABLE_MODIFY_GS	(1 << 9)
 # define GEN6_BINDING_TABLE_MODIFY_PS	(1 << 12)
 
-#define CMD_3D_SAMPLER_STATE_POINTERS			0x7802 /* SNB+ */
+#define _3DSTATE_SAMPLER_STATE_POINTERS		0x7802 /* GEN6+ */
 # define PS_SAMPLER_STATE_CHANGE				(1 << 12)
 # define GS_SAMPLER_STATE_CHANGE				(1 << 9)
 # define VS_SAMPLER_STATE_CHANGE				(1 << 8)
@@ -885,22 +864,22 @@
 #define CMD_INDEX_BUFFER              0x780a
 #define CMD_VF_STATISTICS_965          0x780b
 #define CMD_VF_STATISTICS_GM45        0x680b
-#define CMD_3D_CC_STATE_POINTERS      0x780e /* GEN6+ */
+#define _3DSTATE_CC_STATE_POINTERS		0x780e /* GEN6+ */
 
-#define CMD_URB					0x7805 /* GEN6+ */
+#define _3DSTATE_URB				0x7805 /* GEN6+ */
 # define GEN6_URB_VS_SIZE_SHIFT				16
 # define GEN6_URB_VS_ENTRIES_SHIFT			0
 # define GEN6_URB_GS_ENTRIES_SHIFT			8
 # define GEN6_URB_GS_SIZE_SHIFT				0
 
-#define CMD_VIEWPORT_STATE_POINTERS			0x780d /* GEN6+ */
+#define _3DSTATE_VIEWPORT_STATE_POINTERS	0x780d /* GEN6+ */
 # define GEN6_CC_VIEWPORT_MODIFY			(1 << 12)
 # define GEN6_SF_VIEWPORT_MODIFY			(1 << 11)
 # define GEN6_CLIP_VIEWPORT_MODIFY			(1 << 10)
 
-#define CMD_3D_SCISSOR_STATE_POINTERS		0x780f /* GEN6+ */
+#define _3DSTATE_SCISSOR_STATE_POINTERS		0x780f /* GEN6+ */
 
-#define CMD_3D_VS_STATE		      0x7810 /* GEN6+ */
+#define _3DSTATE_VS				0x7810 /* GEN6+ */
 /* DW2 */
 # define GEN6_VS_SPF_MODE				(1 << 31)
 # define GEN6_VS_VECTOR_MASK_ENABLE			(1 << 30)
@@ -918,7 +897,7 @@
 # define GEN6_VS_CACHE_DISABLE				(1 << 1)
 # define GEN6_VS_ENABLE					(1 << 0)
 
-#define CMD_3D_GS_STATE		      0x7811 /* GEN6+ */
+#define _3DSTATE_GS		      		0x7811 /* GEN6+ */
 /* DW2 */
 # define GEN6_GS_SPF_MODE				(1 << 31)
 # define GEN6_GS_VECTOR_MASK_ENABLE			(1 << 30)
@@ -936,7 +915,7 @@
 /* DW6 */
 # define GEN6_GS_ENABLE					(1 << 15)
 
-#define CMD_3D_CLIP_STATE		      0x7812 /* GEN6+ */
+#define _3DSTATE_CLIP				0x7812 /* GEN6+ */
 /* DW1 */
 # define GEN6_CLIP_STATISTICS_ENABLE			(1 << 10)
 /**
@@ -966,7 +945,7 @@
 # define GEN6_CLIP_MAX_POINT_WIDTH_SHIFT		6
 # define GEN6_CLIP_FORCE_ZERO_RTAINDEX			(1 << 5)
 
-#define CMD_3D_SF_STATE				0x7813 /* GEN6+ */
+#define _3DSTATE_SF				0x7813 /* GEN6+ */
 /* DW1 */
 # define GEN6_SF_NUM_OUTPUTS_SHIFT			22
 # define GEN6_SF_SWIZZLE_ENABLE				(1 << 21)
@@ -1043,7 +1022,7 @@
 /* DW18: attr 0-7 wrap shortest enables */
 /* DW19: attr 8-16 wrap shortest enables */
 
-#define CMD_3D_WM_STATE		      0x7814 /* GEN6+ */
+#define _3DSTATE_WM				0x7814 /* GEN6+ */
 /* DW1: kernel pointer */
 /* DW2 */
 # define GEN6_WM_SPF_MODE				(1 << 31)
@@ -1106,34 +1085,34 @@
 /* DW7: kernel 1 pointer */
 /* DW8: kernel 2 pointer */
 
-#define CMD_3D_CONSTANT_VS_STATE	      0x7815 /* GEN6+ */
-#define CMD_3D_CONSTANT_GS_STATE	      0x7816 /* GEN6+ */
-#define CMD_3D_CONSTANT_PS_STATE	      0x7817 /* GEN6+ */
+#define _3DSTATE_CONSTANT_VS		      0x7815 /* GEN6+ */
+#define _3DSTATE_CONSTANT_GS		      0x7816 /* GEN6+ */
+#define _3DSTATE_CONSTANT_PS		      0x7817 /* GEN6+ */
 # define GEN6_CONSTANT_BUFFER_3_ENABLE			(1 << 15)
 # define GEN6_CONSTANT_BUFFER_2_ENABLE			(1 << 14)
 # define GEN6_CONSTANT_BUFFER_1_ENABLE			(1 << 13)
 # define GEN6_CONSTANT_BUFFER_0_ENABLE			(1 << 12)
 
-#define CMD_3D_SAMPLE_MASK			0x7818 /* GEN6+ */
+#define _3DSTATE_SAMPLE_MASK			0x7818 /* GEN6+ */
 
-#define CMD_DRAW_RECT                 0x7900
-#define CMD_BLEND_CONSTANT_COLOR      0x7901
-#define CMD_CHROMA_KEY                0x7904
-#define CMD_DEPTH_BUFFER              0x7905
-#define CMD_POLY_STIPPLE_OFFSET       0x7906
-#define CMD_POLY_STIPPLE_PATTERN      0x7907
-#define CMD_LINE_STIPPLE_PATTERN      0x7908
-#define CMD_GLOBAL_DEPTH_OFFSET_CLAMP 0x7909
-#define CMD_AA_LINE_PARAMETERS        0x790a
+#define _3DSTATE_DRAWING_RECTANGLE		0x7900
+#define _3DSTATE_BLEND_CONSTANT_COLOR		0x7901
+#define _3DSTATE_CHROMA_KEY			0x7904
+#define _3DSTATE_DEPTH_BUFFER			0x7905
+#define _3DSTATE_POLY_STIPPLE_OFFSET		0x7906
+#define _3DSTATE_POLY_STIPPLE_PATTERN		0x7907
+#define _3DSTATE_LINE_STIPPLE_PATTERN		0x7908
+#define _3DSTATE_GLOBAL_DEPTH_OFFSET_CLAMP	0x7909
+#define _3DSTATE_AA_LINE_PARAMETERS		0x790a /* G45+ */
 
-#define CMD_GS_SVB_INDEX			0x790b /* CTG+ */
+#define _3DSTATE_GS_SVB_INDEX			0x790b /* CTG+ */
 /* DW1 */
 # define SVB_INDEX_SHIFT				29
 # define SVB_LOAD_INTERNAL_VERTEX_COUNT			(1 << 0) /* SNB+ */
 /* DW2: SVB index */
 /* DW3: SVB maximum index */
 
-#define CMD_3D_MULTISAMPLE			0x790d /* SNB+ */
+#define _3DSTATE_MULTISAMPLE			0x790d /* GEN6+ */
 /* DW1 */
 # define MS_PIXEL_LOCATION_CENTER			(0 << 4)
 # define MS_PIXEL_LOCATION_UPPER_LEFT			(1 << 4)
@@ -1141,7 +1120,10 @@
 # define MS_NUMSAMPLES_4				(2 << 1)
 # define MS_NUMSAMPLES_8				(3 << 1)
 
-#define CMD_3D_CLEAR_PARAMS			0x7910 /* ILK+ */
+#define _3DSTATE_STENCIL_BUFFER			0x790e /* ILK, SNB */
+#define _3DSTATE_HIER_DEPTH_BUFFER		0x790f /* ILK, SNB */
+
+#define _3DSTATE_CLEAR_PARAMS			0x7910 /* ILK+ */
 # define DEPTH_CLEAR_VALID				(1 << 15)
 /* DW1: depth clear value */
 

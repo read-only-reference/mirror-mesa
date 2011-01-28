@@ -38,6 +38,7 @@
 
 #include "main/mtypes.h"
 #include "main/context.h"
+#include "main/mfeatures.h"
 #include "main/texobj.h"
 #include "main/teximage.h"
 #include "main/texstate.h"
@@ -513,7 +514,8 @@ st_context_flush(struct st_context_iface *stctxi, unsigned flags,
 }
 
 static boolean
-st_context_teximage(struct st_context_iface *stctxi, enum st_texture_type target,
+st_context_teximage(struct st_context_iface *stctxi,
+                    enum st_texture_type target,
                     int level, enum pipe_format internal_format,
                     struct pipe_resource *tex, boolean mipmap)
 {
@@ -865,7 +867,8 @@ st_manager_validate_framebuffers(struct st_context *st)
  * Add a color renderbuffer on demand.
  */
 boolean
-st_manager_add_color_renderbuffer(struct st_context *st, struct gl_framebuffer *fb,
+st_manager_add_color_renderbuffer(struct st_context *st,
+                                  struct gl_framebuffer *fb,
                                   gl_buffer_index idx)
 {
    struct st_framebuffer *stfb = st_ws_framebuffer(fb);

@@ -43,6 +43,12 @@
 #include "svga_debug.h"
 #include "svga_state.h"
 
+DEBUG_GET_ONCE_BOOL_OPTION(no_swtnl, "SVGA_NO_SWTNL", FALSE)
+DEBUG_GET_ONCE_BOOL_OPTION(force_swtnl, "SVGA_FORCE_SWTNL", FALSE);
+DEBUG_GET_ONCE_BOOL_OPTION(use_min_mipmap, "SVGA_USE_MIN_MIPMAP", FALSE);
+DEBUG_GET_ONCE_NUM_OPTION(disable_shader, "SVGA_DISABLE_SHADER", ~0);
+DEBUG_GET_ONCE_BOOL_OPTION(no_line_width, "SVGA_NO_LINE_WIDTH", FALSE);
+DEBUG_GET_ONCE_BOOL_OPTION(force_hw_line_stipple, "SVGA_FORCE_HW_LINE_STIPPLE", FALSE);
 
 static void svga_destroy( struct pipe_context *pipe )
 {
@@ -113,10 +119,12 @@ struct pipe_context *svga_context_create( struct pipe_screen *screen,
 
 
    /* debug */
-   svga->debug.no_swtnl = debug_get_bool_option("SVGA_NO_SWTNL", FALSE);
-   svga->debug.force_swtnl = debug_get_bool_option("SVGA_FORCE_SWTNL", FALSE);
-   svga->debug.use_min_mipmap = debug_get_bool_option("SVGA_USE_MIN_MIPMAP", FALSE);
-   svga->debug.disable_shader = debug_get_num_option("SVGA_DISABLE_SHADER", ~0);
+   svga->debug.no_swtnl = debug_get_option_no_swtnl();
+   svga->debug.force_swtnl = debug_get_option_force_swtnl();
+   svga->debug.use_min_mipmap = debug_get_option_use_min_mipmap();
+   svga->debug.disable_shader = debug_get_option_disable_shader();
+   svga->debug.no_line_width = debug_get_option_no_line_width();
+   svga->debug.force_hw_line_stipple = debug_get_option_force_hw_line_stipple();
 
    if (!svga_init_swtnl(svga))
       goto no_swtnl;

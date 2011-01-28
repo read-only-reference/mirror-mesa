@@ -232,9 +232,16 @@ The most common type of query is the occlusion query,
 ``PIPE_QUERY_OCCLUSION_COUNTER``, which counts the number of fragments which
 are written to the framebuffer without being culled by
 :ref:`Depth, Stencil, & Alpha` testing or shader KILL instructions.
+The result is an unsigned 64-bit integer.
+In cases where a boolean result of an occlusion query is enough,
+``PIPE_QUERY_OCCLUSION_PREDICATE`` should be used. It is just like
+``PIPE_QUERY_OCCLUSION_COUNTER`` except that the result is a boolean
+value of FALSE for cases where COUNTER would result in 0 and TRUE
+for all other cases.
 
 Another type of query, ``PIPE_QUERY_TIME_ELAPSED``, returns the amount of
 time, in nanoseconds, the context takes to perform operations.
+The result is an unsigned 64-bit integer.
 
 Gallium does not guarantee the availability of any query types; one must
 always check the capabilities of the :ref:`Screen` first.
@@ -346,6 +353,22 @@ Any pointers into the map should be considered invalid and discarded.
 ``transfer_inline_write`` performs a simplified transfer for simple writes.
 Basically get_transfer, transfer_map, data write, transfer_unmap, and
 transfer_destroy all in one.
+
+
+The box parameter to some of these functions defines a 1D, 2D or 3D
+region of pixels.  This is self-explanatory for 1D, 2D and 3D texture
+targets.
+
+For PIPE_TEXTURE_1D_ARRAY, the box::y and box::height fields refer to the
+array dimension of the texture.
+
+For PIPE_TEXTURE_2D_ARRAY, the box::z and box::depth fields refer to the
+array dimension of the texture.
+
+For PIPE_TEXTURE_CUBE, the box:z and box::depth fields refer to the
+faces of the cube map (z + depth <= 6).
+
+
 
 .. _transfer_flush_region:
 

@@ -145,6 +145,10 @@ HASH		^{SPC}#{SPC}
 				  BEGIN PP;
 				  return PRAGMA_OPTIMIZE_OFF;
 				}
+^{SPC}#{SPC}pragma{SPCP}STDGL{SPCP}invariant{SPC}\({SPC}all{SPC}\) {
+				  BEGIN PP;
+				  return PRAGMA_INVARIANT_ALL;
+				}
 ^{SPC}#{SPC}pragma{SPCP}	{ BEGIN PRAGMA; }
 
 <PRAGMA>\n			{ BEGIN 0; yylineno++; yycolumn = 0; }
@@ -248,8 +252,9 @@ void		return VOID_TOK;
 
 layout		{
 		  if ((yyextra->language_version >= 140)
+		      || yyextra->AMD_conservative_depth_enable
 		      || yyextra->ARB_explicit_attrib_location_enable
-		      || (yyextra->ARB_fragment_coord_conventions_enable)){
+		      || yyextra->ARB_fragment_coord_conventions_enable) {
 		      return LAYOUT_TOK;
 		   } else {
 		      yylval->identifier = strdup(yytext);
@@ -413,7 +418,7 @@ row_major	KEYWORD(130, 999, ROW_MAJOR);
 [_a-zA-Z][_a-zA-Z0-9]*	{
 			    struct _mesa_glsl_parse_state *state = yyextra;
 			    void *ctx = state;	
-			    yylval->identifier = talloc_strdup(ctx, yytext);
+			    yylval->identifier = ralloc_strdup(ctx, yytext);
 			    return IDENTIFIER;
 			}
 

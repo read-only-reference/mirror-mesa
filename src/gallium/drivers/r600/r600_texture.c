@@ -302,6 +302,9 @@ r600_texture_create_object(struct pipe_screen *screen,
 	resource->bo = bo;
 	rtex->pitch_override = pitch_in_bytes_override;
 
+	if (util_format_is_depth_or_stencil(base->format))
+		rtex->depth = 1;
+
 	if (array_mode)
 		rtex->tiled = 1;
 	r600_setup_miptree(screen, rtex, array_mode);
@@ -321,6 +324,45 @@ r600_texture_create_object(struct pipe_screen *screen,
 	return rtex;
 }
 
+/* Figure out whether u_blitter will fallback to a transfer operation.
+ * If so, don't use a staging resource.
+ */
+static boolean permit_hardware_blit(struct pipe_screen *screen,
+					const struct pipe_resource *res)
+{
+	unsigned bind;
+
+	if (util_format_is_depth_or_stencil(res->format))
+		bind = PIPE_BIND_DEPTH_STENCIL;
+	else
+		bind = PIPE_BIND_RENDER_TARGET;
+
+	/* See r600_resource_copy_region: there is something wrong
+	 * with depth resource copies at the moment so avoid them for
+	 * now.
+	 */
+	if (util_format_get_component_bits(res->format,
+				UTIL_FORMAT_COLORSPACE_ZS,
+				0) != 0)
+		return FALSE;
+
+	if (!screen->is_format_supported(screen,
+				res->format,
+				res->target,
+				res->nr_samples,
+				bind, 0))
+		return FALSE;
+
+	if (!screen->is_format_supported(screen,
+				res->format,
+				res->target,
+				res->nr_samples,
+				PIPE_BIND_SAMPLER_VIEW, 0))
+		return FALSE;
+
+	return TRUE;
+}
+
 struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 						const struct pipe_resource *templ)
 {
@@ -332,7 +374,7 @@ struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 	if (force_tiling == -1)
 		force_tiling = debug_get_bool_option("R600_FORCE_TILING", FALSE);
 
-	if (force_tiling) {
+	if (force_tiling && permit_hardware_blit(screen, templ)) {
 		if (!(templ->flags & R600_RESOURCE_FLAG_TRANSFER) &&
 		    !(templ->bind & PIPE_BIND_SCANOUT)) {
 			array_mode = V_038000_ARRAY_2D_TILED_THIN1;
@@ -485,46 +527,6 @@ static INLINE unsigned u_box_volume( const struct pipe_box *box )
 	return box->width * box->depth * box->height;
 };
 
-
-/* Figure out whether u_blitter will fallback to a transfer operation.
- * If so, don't use a staging resource.
- */
-static boolean permit_hardware_blit(struct pipe_screen *screen,
-					struct pipe_resource *res)
-{
-	unsigned bind;
-
-	if (util_format_is_depth_or_stencil(res->format))
-		bind = PIPE_BIND_DEPTH_STENCIL;
-	else
-		bind = PIPE_BIND_RENDER_TARGET;
-
-	/* See r600_resource_copy_region: there is something wrong
-	 * with depth resource copies at the moment so avoid them for
-	 * now.
-	 */
-	if (util_format_get_component_bits(res->format,
-				UTIL_FORMAT_COLORSPACE_ZS,
-				0) != 0)
-		return FALSE;
-
-	if (!screen->is_format_supported(screen,
-				res->format,
-				res->target,
-				res->nr_samples,
-				bind, 0))
-		return FALSE;
-
-	if (!screen->is_format_supported(screen,
-				res->format,
-				res->target,
-				res->nr_samples,
-				PIPE_BIND_SAMPLER_VIEW, 0))
-		return FALSE;
-
-	return TRUE;
-}
-
 struct pipe_transfer* r600_texture_get_transfer(struct pipe_context *ctx,
 						struct pipe_resource *texture,
 						unsigned level,
@@ -633,16 +635,12 @@ void r600_texture_transfer_destroy(struct pipe_context *ctx,
 				   struct pipe_transfer *transfer)
 {
 	struct r600_transfer *rtransfer = (struct r600_transfer*)transfer;
-	struct r600_resource_texture *rtex = (struct r600_resource_texture*)transfer->resource;
 
 	if (rtransfer->staging_texture) {
 		if (transfer->usage & PIPE_TRANSFER_WRITE) {
 			r600_copy_from_staging_texture(ctx, rtransfer);
 		}
 		pipe_resource_reference(&rtransfer->staging_texture, NULL);
-	}
-	if (rtex->flushed_depth_texture) {
-		pipe_resource_reference((struct pipe_resource **)&rtex->flushed_depth_texture, NULL);
 	}
 	pipe_resource_reference(&transfer->resource, NULL);
 	FREE(transfer);
@@ -794,7 +792,7 @@ static unsigned r600_get_swizzle_combined(const unsigned char *swizzle_format,
 
 /* texture format translate */
 uint32_t r600_translate_texformat(enum pipe_format format,
-				  const unsigned char *swizzle_view, 
+				  const unsigned char *swizzle_view,
 				  uint32_t *word4_p, uint32_t *yuv_format_p)
 {
 	uint32_t result = 0, word4 = 0, yuv_format = 0;
@@ -848,7 +846,7 @@ uint32_t r600_translate_texformat(enum pipe_format format,
 			break;
 		}
 		goto out_unknown; /* TODO */
-		
+
 	case UTIL_FORMAT_COLORSPACE_SRGB:
 		word4 |= S_038010_FORCE_DEGAMMA(1);
 		if (format == PIPE_FORMAT_L8A8_SRGB || format == PIPE_FORMAT_L8_SRGB)
@@ -864,7 +862,7 @@ uint32_t r600_translate_texformat(enum pipe_format format,
 		static int r600_enable_s3tc = -1;
 
 		if (r600_enable_s3tc == -1)
-			r600_enable_s3tc = 
+			r600_enable_s3tc =
 				debug_get_bool_option("R600_ENABLE_S3TC", FALSE);
 
 		if (!r600_enable_s3tc)
@@ -887,7 +885,7 @@ uint32_t r600_translate_texformat(enum pipe_format format,
 	}
 
 
-	for (i = 0; i < desc->nr_channels; i++) {	
+	for (i = 0; i < desc->nr_channels; i++) {
 		if (desc->channel[i].type == UTIL_FORMAT_TYPE_SIGNED) {
 			word4 |= sign_bit[i];
 		}
@@ -901,7 +899,7 @@ uint32_t r600_translate_texformat(enum pipe_format format,
 	for (i = 1; i < desc->nr_channels; i++) {
 		uniform = uniform && desc->channel[0].size == desc->channel[i].size;
 	}
-	
+
 	/* Non-uniform formats. */
 	if (!uniform) {
 		switch(desc->nr_channels) {
@@ -925,7 +923,7 @@ uint32_t r600_translate_texformat(enum pipe_format format,
 			    desc->channel[1].size == 10 &&
 			    desc->channel[2].size == 10 &&
 			    desc->channel[3].size == 2) {
-				result = FMT_10_10_10_2;
+				result = FMT_2_10_10_10;
 				goto out_word4;
 			}
 			goto out_unknown;
@@ -1019,7 +1017,7 @@ uint32_t r600_translate_texformat(enum pipe_format format,
 				goto out_word4;
 			}
 		}
-		
+
 	}
 out_word4:
 	if (word4_p)

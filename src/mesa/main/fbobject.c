@@ -40,6 +40,8 @@
 #include "framebuffer.h"
 #include "hash.h"
 #include "macros.h"
+#include "mfeatures.h"
+#include "mtypes.h"
 #include "renderbuffer.h"
 #include "state.h"
 #include "teximage.h"
@@ -371,6 +373,37 @@ _mesa_framebuffer_renderbuffer(struct gl_context *ctx,
 
 
 /**
+ * Fallback for ctx->Driver.ValidateFramebuffer()
+ * Check if the renderbuffer's formats are supported by the software
+ * renderer.
+ * Drivers should probably override this.
+ */
+void
+_mesa_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
+{
+   gl_buffer_index buf;
+   for (buf = 0; buf < BUFFER_COUNT; buf++) {
+      const struct gl_renderbuffer *rb = fb->Attachment[buf].Renderbuffer;
+      if (rb) {
+         switch (rb->_BaseFormat) {
+         case GL_ALPHA:
+         case GL_LUMINANCE_ALPHA:
+         case GL_LUMINANCE:
+         case GL_INTENSITY:
+         case GL_RED:
+         case GL_RG:
+            fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED;
+            return;
+         default:
+            /* render buffer format is supported by software rendering */
+            ;
+         }
+      }
+   }
+}
+
+
+/**
  * For debug only.
  */
 static void
@@ -402,8 +435,8 @@ fbo_incomplete(const char *msg, int index)
 /**
  * Is the given base format a legal format for a color renderbuffer?
  */
-static GLboolean
-is_legal_color_format(const struct gl_context *ctx, GLenum baseFormat)
+GLboolean
+_mesa_is_legal_color_format(const struct gl_context *ctx, GLenum baseFormat)
 {
    switch (baseFormat) {
    case GL_RGB:
@@ -488,7 +521,7 @@ test_attachment_completeness(const struct gl_context *ctx, GLenum format,
       baseFormat = _mesa_get_format_base_format(texImage->TexFormat);
 
       if (format == GL_COLOR) {
-         if (!is_legal_color_format(ctx, baseFormat)) {
+         if (!_mesa_is_legal_color_format(ctx, baseFormat)) {
             att_incomplete("bad format");
             att->Complete = GL_FALSE;
             return;
@@ -542,8 +575,7 @@ test_attachment_completeness(const struct gl_context *ctx, GLenum format,
          return;
       }
       if (format == GL_COLOR) {
-         if (baseFormat != GL_RGB &&
-             baseFormat != GL_RGBA) {
+         if (!_mesa_is_legal_color_format(ctx, baseFormat)) {
             att_incomplete("bad renderbuffer color format");
             att->Complete = GL_FALSE;
             return;
@@ -669,7 +701,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
          f = texImg->_BaseFormat;
          mesaFormat = texImg->TexFormat;
          numImages++;
-         if (!is_legal_color_format(ctx, f) &&
+         if (!_mesa_is_legal_color_format(ctx, f) &&
              !is_legal_depth_format(ctx, f)) {
             fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_FORMATS_EXT;
             fbo_incomplete("texture attachment incomplete", -1);
@@ -793,7 +825,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
       fb->Height = minHeight;
 
       /* finally, update the visual info for the framebuffer */
-      _mesa_update_framebuffer_visual(fb);
+      _mesa_update_framebuffer_visual(ctx, fb);
    }
 }
 
@@ -960,26 +992,53 @@ _mesa_GenRenderbuffersEXT(GLsizei n, GLuint *renderbuffers)
 
 /**
  * Given an internal format token for a render buffer, return the
- * corresponding base format.
- * This is very similar to _mesa_base_tex_format() but the set of valid
- * internal formats is somewhat different.
+ * corresponding base format (one of GL_RGB, GL_RGBA, GL_STENCIL_INDEX,
+ * GL_DEPTH_COMPONENT, GL_DEPTH_STENCIL_EXT, GL_ALPHA, GL_LUMINANCE,
+ * GL_LUMINANCE_ALPHA, GL_INTENSITY, etc).
  *
- * \return one of GL_RGB, GL_RGBA, GL_STENCIL_INDEX, GL_DEPTH_COMPONENT
- *  GL_DEPTH_STENCIL_EXT or zero if error.
+ * This is similar to _mesa_base_tex_format() but the set of valid
+ * internal formats is different.
  *
- * XXX in the future when we support red-only and red-green formats
- * we'll also return GL_RED and GL_RG.
+ * Note that even if a format is determined to be legal here, validation
+ * of the FBO may fail if the format is not supported by the driver/GPU.
+ *
+ * \param internalFormat  as passed to glRenderbufferStorage()
+ * \return the base internal format, or 0 if internalFormat is illegal
  */
 GLenum
 _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
 {
+   /*
+    * Notes: some formats such as alpha, luminance, etc. were added
+    * with GL_ARB_framebuffer_object.
+    */
    switch (internalFormat) {
    case GL_ALPHA:
    case GL_ALPHA4:
    case GL_ALPHA8:
    case GL_ALPHA12:
    case GL_ALPHA16:
-      return GL_ALPHA;
+      return ctx->Extensions.ARB_framebuffer_object ? GL_ALPHA : 0;
+   case GL_LUMINANCE:
+   case GL_LUMINANCE4:
+   case GL_LUMINANCE8:
+   case GL_LUMINANCE12:
+   case GL_LUMINANCE16:
+      return ctx->Extensions.ARB_framebuffer_object ? GL_LUMINANCE : 0;
+   case GL_LUMINANCE_ALPHA:
+   case GL_LUMINANCE4_ALPHA4:
+   case GL_LUMINANCE6_ALPHA2:
+   case GL_LUMINANCE8_ALPHA8:
+   case GL_LUMINANCE12_ALPHA4:
+   case GL_LUMINANCE12_ALPHA12:
+   case GL_LUMINANCE16_ALPHA16:
+      return ctx->Extensions.ARB_framebuffer_object ? GL_LUMINANCE_ALPHA : 0;
+   case GL_INTENSITY:
+   case GL_INTENSITY4:
+   case GL_INTENSITY8:
+   case GL_INTENSITY12:
+   case GL_INTENSITY16:
+      return ctx->Extensions.ARB_framebuffer_object ? GL_INTENSITY : 0;
    case GL_RGB:
    case GL_R3_G3_B2:
    case GL_RGB4:
@@ -988,6 +1047,7 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
    case GL_RGB10:
    case GL_RGB12:
    case GL_RGB16:
+   case GL_SRGB8_EXT:
       return GL_RGB;
    case GL_RGBA:
    case GL_RGBA2:
@@ -998,6 +1058,7 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
    case GL_RGBA12:
    case GL_RGBA16:
    case GL_RGBA16_SNORM:
+   case GL_SRGB8_ALPHA8_EXT:
       return GL_RGBA;
    case GL_STENCIL_INDEX:
    case GL_STENCIL_INDEX1_EXT:
@@ -1016,7 +1077,15 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
          return GL_DEPTH_STENCIL_EXT;
       else
          return 0;
-   /* XXX add floating point formats eventually */
+   case GL_RED:
+   case GL_R8:
+   case GL_R16:
+      return ctx->Extensions.ARB_texture_rg ? GL_RED : 0;
+   case GL_RG:
+   case GL_RG8:
+   case GL_RG16:
+      return ctx->Extensions.ARB_texture_rg ? GL_RG : 0;
+   /* XXX add floating point and integer formats eventually */
    default:
       return 0;
    }
@@ -1172,8 +1241,17 @@ get_component_bits(GLenum pname, GLenum baseFormat, gl_format format)
    switch (pname) {
    case GL_RENDERBUFFER_RED_SIZE_EXT:
    case GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE:
+      if (baseFormat == GL_RGB || baseFormat == GL_RGBA ||
+	  baseFormat == GL_RG || baseFormat == GL_RED)
+         return _mesa_get_format_bits(format, pname);
+      else
+         return 0;
    case GL_RENDERBUFFER_GREEN_SIZE_EXT:
    case GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE:
+      if (baseFormat == GL_RGB || baseFormat == GL_RGBA || baseFormat == GL_RG)
+         return _mesa_get_format_bits(format, pname);
+      else
+         return 0;
    case GL_RENDERBUFFER_BLUE_SIZE_EXT:
    case GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE:
       if (baseFormat == GL_RGB || baseFormat == GL_RGBA)
@@ -1182,7 +1260,8 @@ get_component_bits(GLenum pname, GLenum baseFormat, gl_format format)
          return 0;
    case GL_RENDERBUFFER_ALPHA_SIZE_EXT:
    case GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE:
-      if (baseFormat == GL_RGBA || baseFormat == GL_ALPHA)
+      if (baseFormat == GL_RGBA || baseFormat == GL_ALPHA ||
+	  baseFormat == GL_LUMINANCE_ALPHA)
          return _mesa_get_format_bits(format, pname);
       else
          return 0;
@@ -1913,6 +1992,13 @@ _mesa_FramebufferRenderbufferEXT(GLenum target, GLenum attachment,
                      " renderbuffer %u)", renderbuffer);
 	 return;
       }
+      else if (rb == &DummyRenderbuffer) {
+         /* This is what NVIDIA does */
+	 _mesa_error(ctx, GL_INVALID_VALUE,
+		     "glFramebufferRenderbufferEXT(renderbuffer %u)",
+                     renderbuffer);
+	 return;
+      }
    }
    else {
       /* remove renderbuffer attachment */
@@ -1940,7 +2026,7 @@ _mesa_FramebufferRenderbufferEXT(GLenum target, GLenum attachment,
    /* Some subsequent GL commands may depend on the framebuffer's visual
     * after the binding is updated.  Update visual info now.
     */
-   _mesa_update_framebuffer_visual(fb);
+   _mesa_update_framebuffer_visual(ctx, fb);
 }
 
 
@@ -2071,7 +2157,14 @@ _mesa_GetFramebufferAttachmentParameterivEXT(GLenum target, GLenum attachment,
                      "glGetFramebufferAttachmentParameterivEXT(pname)");
       }
       else {
-         *params = _mesa_get_format_color_encoding(att->Renderbuffer->Format);
+         if (ctx->Extensions.EXT_framebuffer_sRGB) {
+            *params = _mesa_get_format_color_encoding(att->Renderbuffer->Format);
+         }
+         else {
+            /* According to ARB_framebuffer_sRGB, we should return LINEAR
+             * if the sRGB conversion is unsupported. */
+            *params = GL_LINEAR;
+         }
       }
       return;
    case GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE:
@@ -2183,7 +2276,8 @@ _mesa_GenerateMipmapEXT(GLenum target)
 #if FEATURE_EXT_framebuffer_blit
 
 static const struct gl_renderbuffer_attachment *
-find_attachment(const struct gl_framebuffer *fb, const struct gl_renderbuffer *rb)
+find_attachment(const struct gl_framebuffer *fb,
+                const struct gl_renderbuffer *rb)
 {
    GLuint i;
    for (i = 0; i < Elements(fb->Attachment); i++) {

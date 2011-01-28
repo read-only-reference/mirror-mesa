@@ -380,7 +380,8 @@ enum pipe_transfer_usage {
 #define PIPE_QUERY_SO_STATISTICS         5
 #define PIPE_QUERY_GPU_FINISHED          6
 #define PIPE_QUERY_TIMESTAMP_DISJOINT    7
-#define PIPE_QUERY_TYPES                 8
+#define PIPE_QUERY_OCCLUSION_PREDICATE   8
+#define PIPE_QUERY_TYPES                 9
 
 
 /**
@@ -462,6 +463,7 @@ enum pipe_cap {
    PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER,
    PIPE_CAP_DEPTH_CLAMP,
    PIPE_CAP_SHADER_STENCIL_EXPORT,
+   PIPE_CAP_INSTANCED_DRAWING,
 };
 
 /* Shader caps not specific to any single stage */
