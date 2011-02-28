@@ -31,7 +31,7 @@
 #ifdef __cplusplus
 
 
-#include <cstdlib>
+#include <stdlib.h>
 #include "glsl_symbol_table.h"
 
 enum _mesa_glsl_parser_targets {
@@ -172,6 +172,8 @@ struct _mesa_glsl_parse_state {
    unsigned ARB_shader_stencil_export_warn:1;
    unsigned AMD_conservative_depth_enable:1;
    unsigned AMD_conservative_depth_warn:1;
+   unsigned OES_texture_3D_enable:1;
+   unsigned OES_texture_3D_warn:1;
    /*@}*/
 
    /** Extensions supported by the OpenGL implementation. */

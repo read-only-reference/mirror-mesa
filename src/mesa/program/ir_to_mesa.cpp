@@ -2670,6 +2670,8 @@ ir_to_mesa_visitor::copy_propagate(void)
    ir_to_mesa_instruction **acp = rzalloc_array(mem_ctx,
 						    ir_to_mesa_instruction *,
 						    this->next_temp * 4);
+   int *acp_level = rzalloc_array(mem_ctx, int, this->next_temp * 4);
+   int level = 0;
 
    foreach_iter(exec_list_iterator, iter, this->instructions) {
       ir_to_mesa_instruction *inst = (ir_to_mesa_instruction *)iter.get();
@@ -2699,6 +2701,8 @@ ir_to_mesa_visitor::copy_propagate(void)
 	       good = false;
 	       break;
 	    }
+
+	    assert(acp_level[acp_base + src_chan] <= level);
 
 	    if (!first) {
 	       first = copy_chan;
@@ -2732,23 +2736,79 @@ ir_to_mesa_visitor::copy_propagate(void)
       switch (inst->op) {
       case OPCODE_BGNLOOP:
       case OPCODE_ENDLOOP:
-      case OPCODE_ELSE:
-      case OPCODE_ENDIF:
 	 /* End of a basic block, clear the ACP entirely. */
 	 memset(acp, 0, sizeof(*acp) * this->next_temp * 4);
+	 break;
+
+      case OPCODE_IF:
+	 ++level;
+	 break;
+
+      case OPCODE_ENDIF:
+      case OPCODE_ELSE:
+	 /* Clear all channels written inside the block from the ACP, but
+	  * leaving those that were not touched.
+	  */
+	 for (int r = 0; r < this->next_temp; r++) {
+	    for (int c = 0; c < 4; c++) {
+	       if (!acp[4 * r + c])
+		  continue;
+
+	       if (acp_level[4 * r + c] >= level)
+		  acp[4 * r + c] = NULL;
+	    }
+	 }
+	 if (inst->op == OPCODE_ENDIF)
+	    --level;
 	 break;
 
       default:
 	 /* Continuing the block, clear any written channels from
 	  * the ACP.
 	  */
-	 if (inst->dst_reg.file == PROGRAM_TEMPORARY) {
-	    if (inst->dst_reg.reladdr) {
-	       memset(acp, 0, sizeof(*acp) * this->next_temp * 4);
-	    } else {
-	       for (int i = 0; i < 4; i++) {
-		  if (inst->dst_reg.writemask & (1 << i)) {
-		     acp[4 * inst->dst_reg.index + i] = NULL;
+	 if (inst->dst_reg.file == PROGRAM_TEMPORARY && inst->dst_reg.reladdr) {
+	    /* Any temporary might be written, so no copy propagation
+	     * across this instruction.
+	     */
+	    memset(acp, 0, sizeof(*acp) * this->next_temp * 4);
+	 } else if (inst->dst_reg.file == PROGRAM_OUTPUT &&
+		    inst->dst_reg.reladdr) {
+	    /* Any output might be written, so no copy propagation
+	     * from outputs across this instruction.
+	     */
+	    for (int r = 0; r < this->next_temp; r++) {
+	       for (int c = 0; c < 4; c++) {
+		  if (!acp[4 * r + c])
+		     continue;
+
+		  if (acp[4 * r + c]->src_reg[0].file == PROGRAM_OUTPUT)
+		     acp[4 * r + c] = NULL;
+	       }
+	    }
+	 } else if (inst->dst_reg.file == PROGRAM_TEMPORARY ||
+		    inst->dst_reg.file == PROGRAM_OUTPUT) {
+	    /* Clear where it's used as dst. */
+	    if (inst->dst_reg.file == PROGRAM_TEMPORARY) {
+	       for (int c = 0; c < 4; c++) {
+		  if (inst->dst_reg.writemask & (1 << c)) {
+		     acp[4 * inst->dst_reg.index + c] = NULL;
+		  }
+	       }
+	    }
+
+	    /* Clear where it's used as src. */
+	    for (int r = 0; r < this->next_temp; r++) {
+	       for (int c = 0; c < 4; c++) {
+		  if (!acp[4 * r + c])
+		     continue;
+
+		  int src_chan = GET_SWZ(acp[4 * r + c]->src_reg[0].swizzle, c);
+
+		  if (acp[4 * r + c]->src_reg[0].file == inst->dst_reg.file &&
+		      acp[4 * r + c]->src_reg[0].index == inst->dst_reg.index &&
+		      inst->dst_reg.writemask & (1 << src_chan))
+		  {
+		     acp[4 * r + c] = NULL;
 		  }
 	       }
 	    }
@@ -2766,11 +2826,13 @@ ir_to_mesa_visitor::copy_propagate(void)
 	 for (int i = 0; i < 4; i++) {
 	    if (inst->dst_reg.writemask & (1 << i)) {
 	       acp[4 * inst->dst_reg.index + i] = inst;
+	       acp_level[4 * inst->dst_reg.index + i] = level;
 	    }
 	 }
       }
    }
 
+   ralloc_free(acp_level);
    ralloc_free(acp);
 }
 

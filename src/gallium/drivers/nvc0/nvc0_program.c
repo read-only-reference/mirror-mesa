@@ -301,9 +301,11 @@ prog_decl(struct nvc0_translation_info *ti,
       ti->sysval_loc[i] = nvc0_system_value_location(sn, si, &ti->sysval_in[i]);
       assert(first == last);
       break;
+   case TGSI_FILE_TEMPORARY:
+      ti->temp128_nr = MAX2(ti->temp128_nr, last + 1);
+      break;
    case TGSI_FILE_NULL:
    case TGSI_FILE_CONSTANT:
-   case TGSI_FILE_TEMPORARY:
    case TGSI_FILE_SAMPLER:
    case TGSI_FILE_ADDRESS:
    case TGSI_FILE_IMMEDIATE:
@@ -533,8 +535,11 @@ nvc0_fp_gen_header(struct nvc0_program *fp, struct nvc0_translation_info *ti)
          a = ti->input_loc[i][c] / 2;
          if (ti->input_loc[i][c] >= 0x2c0)
             a -= 32;
-         if ((a & ~7) == 0x70/2)
-            fp->hdr[5] |= 1 << (28 + (a & 7) / 2); /* FRAG_COORD_UMASK */
+         if (ti->input_loc[i][0] == 0x70)
+            fp->hdr[5] |= 1 << (28 + c); /* FRAG_COORD_UMASK */
+         else
+         if (ti->input_loc[i][0] == 0x2e0)
+            fp->hdr[14] |= 1 << (24 + c); /* POINT_COORD */
          else
             fp->hdr[4 + a / 32] |= m << (a % 32);
       }
@@ -633,7 +638,7 @@ nvc0_prog_scan(struct nvc0_translation_info *ti)
       if (ti->scan.writes_z)
          prog->flags[0] = 0x11; /* ? */
       else
-      if (!ti->global_stores)
+      if (!ti->scan.uses_kill && !ti->global_stores)
          prog->fp.early_z = 1;
 
       ret = nvc0_fp_gen_header(prog, ti);
@@ -642,6 +647,11 @@ nvc0_prog_scan(struct nvc0_translation_info *ti)
       assert(!"unsupported program type");
       ret = -1;
       break;
+   }
+
+   if (ti->require_stores) {
+      prog->hdr[0] |= 1 << 26;
+      prog->hdr[1] |= ti->temp128_nr * 16; /* l[] size */
    }
 
    assert(!ret);

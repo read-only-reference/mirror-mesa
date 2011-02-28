@@ -351,7 +351,7 @@ static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_conte
 	struct r600_resource *rbuffer;
 	unsigned format;
 	uint32_t word4 = 0, yuv_format = 0, pitch = 0;
-	unsigned char swizzle[4];
+	unsigned char swizzle[4], array_mode = 0, tile_type = 0;
 	struct r600_bo *bo[2];
 
 	if (resource == NULL)
@@ -380,35 +380,42 @@ static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_conte
 	if (desc == NULL) {
 		R600_ERR("unknow format %d\n", state->format);
 	}
-	tmp = (struct r600_resource_texture*)texture;
+	tmp = (struct r600_resource_texture *)texture;
+	if (tmp->depth && !tmp->is_flushing_texture) {
+		r600_texture_depth_flush(ctx, texture, TRUE);
+		tmp = tmp->flushed_depth_texture;
+	}
+
+	if (tmp->force_int_type) {
+		word4 &= C_030010_NUM_FORMAT_ALL;
+		word4 |= S_030010_NUM_FORMAT_ALL(V_030010_SQ_NUM_FORMAT_INT);
+	}
+
 	rbuffer = &tmp->resource;
 	bo[0] = rbuffer->bo;
 	bo[1] = rbuffer->bo;
-	/* FIXME depth texture decompression */
-	if (tmp->depth) {
-		r600_texture_depth_flush(ctx, texture);
-		tmp = (struct r600_resource_texture*)texture;
-		rbuffer = &tmp->flushed_depth_texture->resource;
-		bo[0] = rbuffer->bo;
-		bo[1] = rbuffer->bo;
-	}
-	pitch = align(tmp->pitch_in_pixels[0], 8);
+
+	pitch = align(tmp->pitch_in_blocks[0] * util_format_get_blockwidth(state->format), 8);
+	array_mode = tmp->array_mode[0];
+	tile_type = tmp->tile_type;
 
 	/* FIXME properly handle first level != 0 */
 	r600_pipe_state_add_reg(rstate, R_030000_RESOURCE0_WORD0,
 				S_030000_DIM(r600_tex_dim(texture->target)) |
 				S_030000_PITCH((pitch / 8) - 1) |
+				S_030000_NON_DISP_TILING_ORDER(tile_type) |
 				S_030000_TEX_WIDTH(texture->width0 - 1), 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_030004_RESOURCE0_WORD1,
 				S_030004_TEX_HEIGHT(texture->height0 - 1) |
-				S_030004_TEX_DEPTH(texture->depth0 - 1),
+				S_030004_TEX_DEPTH(texture->depth0 - 1) |
+				S_030004_ARRAY_MODE(array_mode),
 				0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_030008_RESOURCE0_WORD2,
 				(tmp->offset[0] + r600_bo_offset(bo[0])) >> 8, 0xFFFFFFFF, bo[0]);
 	r600_pipe_state_add_reg(rstate, R_03000C_RESOURCE0_WORD3,
 				(tmp->offset[1] + r600_bo_offset(bo[1])) >> 8, 0xFFFFFFFF, bo[1]);
 	r600_pipe_state_add_reg(rstate, R_030010_RESOURCE0_WORD4,
-				word4 | S_030010_NUM_FORMAT_ALL(V_030010_SQ_NUM_FORMAT_NORM) |
+				word4 |
 				S_030010_SRF_MODE_ALL(V_030010_SRF_MODE_NO_ZERO) |
 				S_030010_BASE_LEVEL(state->u.tex.first_level), 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_030014_RESOURCE0_WORD5,
@@ -431,7 +438,8 @@ static void evergreen_set_vs_sampler_view(struct pipe_context *ctx, unsigned cou
 
 	for (int i = 0; i < count; i++) {
 		if (resource[i]) {
-			evergreen_context_pipe_state_set_vs_resource(&rctx->ctx, &resource[i]->state, i);
+			evergreen_context_pipe_state_set_vs_resource(&rctx->ctx, &resource[i]->state,
+								     i + R600_MAX_CONST_BUFFERS);
 		}
 	}
 }
@@ -446,9 +454,11 @@ static void evergreen_set_ps_sampler_view(struct pipe_context *ctx, unsigned cou
 	for (i = 0; i < count; i++) {
 		if (&rctx->ps_samplers.views[i]->base != views[i]) {
 			if (resource[i])
-				evergreen_context_pipe_state_set_ps_resource(&rctx->ctx, &resource[i]->state, i);
+				evergreen_context_pipe_state_set_ps_resource(&rctx->ctx, &resource[i]->state,
+									     i + R600_MAX_CONST_BUFFERS);
 			else
-				evergreen_context_pipe_state_set_ps_resource(&rctx->ctx, NULL, i);
+				evergreen_context_pipe_state_set_ps_resource(&rctx->ctx, NULL,
+									     i + R600_MAX_CONST_BUFFERS);
 
 			pipe_sampler_view_reference(
 				(struct pipe_sampler_view **)&rctx->ps_samplers.views[i],
@@ -457,7 +467,8 @@ static void evergreen_set_ps_sampler_view(struct pipe_context *ctx, unsigned cou
 	}
 	for (i = count; i < NUM_TEX_UNITS; i++) {
 		if (rctx->ps_samplers.views[i]) {
-			evergreen_context_pipe_state_set_ps_resource(&rctx->ctx, NULL, i);
+			evergreen_context_pipe_state_set_ps_resource(&rctx->ctx, NULL,
+								     i + R600_MAX_CONST_BUFFERS);
 			pipe_sampler_view_reference((struct pipe_sampler_view **)&rctx->ps_samplers.views[i], NULL);
 		}
 	}
@@ -638,11 +649,19 @@ static void evergreen_cb(struct r600_pipe_context *rctx, struct r600_pipe_state 
 	unsigned color_info;
 	unsigned format, swap, ntype;
 	unsigned offset;
+	unsigned tile_type;
 	const struct util_format_description *desc;
 	struct r600_bo *bo[3];
+	int i;
 
 	surf = (struct r600_surface *)state->cbufs[cb];
 	rtex = (struct r600_resource_texture*)state->cbufs[cb]->texture;
+
+	if (rtex->depth && !rtex->is_flushing_texture) {
+	        r600_texture_depth_flush(&rctx->context, state->cbufs[cb]->texture, TRUE);
+		rtex = rtex->flushed_depth_texture;
+	}
+
 	rbuffer = &rtex->resource;
 	bo[0] = rbuffer->bo;
 	bo[1] = rbuffer->bo;
@@ -651,21 +670,43 @@ static void evergreen_cb(struct r600_pipe_context *rctx, struct r600_pipe_state 
 	/* XXX quite sure for dx10+ hw don't need any offset hacks */
 	offset = r600_texture_get_offset((struct r600_resource_texture *)state->cbufs[cb]->texture,
 					 level, state->cbufs[cb]->u.tex.first_layer);
-	pitch = rtex->pitch_in_pixels[level] / 8 - 1;
-	slice = rtex->pitch_in_pixels[level] * surf->aligned_height / 64 - 1;
+	pitch = rtex->pitch_in_blocks[level] / 8 - 1;
+	slice = rtex->pitch_in_blocks[level] * surf->aligned_height / 64 - 1;
 	ntype = 0;
-	desc = util_format_description(rtex->resource.base.b.format);
+	desc = util_format_description(surf->base.format);
 	if (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB)
 		ntype = V_028C70_NUMBER_SRGB;
 
-	format = r600_translate_colorformat(rtex->resource.base.b.format);
-	swap = r600_translate_colorswap(rtex->resource.base.b.format);
+	format = r600_translate_colorformat(surf->base.format);
+	swap = r600_translate_colorswap(surf->base.format);
+
+	/* disable when gallium grows int textures */
+	if ((format == FMT_32_32_32_32 || format == FMT_16_16_16_16) && rtex->force_int_type)
+		ntype = 4;
+
 	color_info = S_028C70_FORMAT(format) |
 		S_028C70_COMP_SWAP(swap) |
+		S_028C70_ARRAY_MODE(rtex->array_mode[level]) |
 		S_028C70_BLEND_CLAMP(1) |
 		S_028C70_NUMBER_TYPE(ntype);
-	if (desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS)
-		color_info |= S_028C70_SOURCE_FORMAT(1);
+
+	for (i = 0; i < 4; i++) {
+		if (desc->channel[i].type != UTIL_FORMAT_TYPE_VOID) {
+			break;
+		}
+	}
+
+	/* we can only set the export size if any thing is snorm/unorm component is > 11 bits,
+	   if we aren't a float, sint or uint */
+	if (desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS &&
+	    desc->channel[i].size < 12 && desc->channel[i].type != UTIL_FORMAT_TYPE_FLOAT &&
+	    ntype != 4 && ntype != 5)
+		color_info |= S_028C70_SOURCE_FORMAT(V_028C70_EXPORT_4C_16BPC);
+
+	if (rtex->array_mode[level] > V_028C70_ARRAY_LINEAR_ALIGNED) {
+		tile_type = rtex->tile_type;
+	} else /* workaround for linear buffers */
+		tile_type = 1;
 
 	/* FIXME handle enabling of CB beyond BASE8 which has different offset */
 	r600_pipe_state_add_reg(rstate,
@@ -690,7 +731,7 @@ static void evergreen_cb(struct r600_pipe_context *rctx, struct r600_pipe_state 
 				0x00000000, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate,
 				R_028C74_CB_COLOR0_ATTRIB + cb * 0x3C,
-				S_028C74_NON_DISP_TILING_ORDER(1),
+				S_028C74_NON_DISP_TILING_ORDER(tile_type),
 				0xFFFFFFFF, bo[0]);
 }
 
@@ -711,17 +752,14 @@ static void evergreen_db(struct r600_pipe_context *rctx, struct r600_pipe_state 
 
 	surf = (struct r600_surface *)state->zsbuf;
 	rtex = (struct r600_resource_texture*)state->zsbuf->texture;
-	rtex->tiled = 1;
-	rtex->array_mode[level] = 2;
-	rtex->tile_type = 1;
-	rtex->depth = 1;
+
 	rbuffer = &rtex->resource;
 
 	/* XXX quite sure for dx10+ hw don't need any offset hacks */
 	offset = r600_texture_get_offset((struct r600_resource_texture *)state->zsbuf->texture,
 					 level, state->zsbuf->u.tex.first_layer);
-	pitch = rtex->pitch_in_pixels[level] / 8 - 1;
-	slice = rtex->pitch_in_pixels[level] * surf->aligned_height / 64 - 1;
+	pitch = rtex->pitch_in_blocks[level] / 8 - 1;
+	slice = rtex->pitch_in_blocks[level] * surf->aligned_height / 64 - 1;
 	format = r600_translate_dbformat(state->zsbuf->texture->format);
 	stencil_format = r600_translate_stencilformat(state->zsbuf->texture->format);
 
@@ -876,6 +914,7 @@ void evergreen_init_state_functions(struct r600_pipe_context *rctx)
 	rctx->context.set_vertex_sampler_views = evergreen_set_vs_sampler_view;
 	rctx->context.set_viewport_state = evergreen_set_viewport_state;
 	rctx->context.sampler_view_destroy = r600_sampler_view_destroy;
+	rctx->context.redefine_user_buffer = u_default_redefine_user_buffer;
 }
 
 void evergreen_init_config(struct r600_pipe_context *rctx)
@@ -1479,11 +1518,10 @@ void *evergreen_create_db_flush_dsa(struct r600_pipe_context *rctx)
 	return rstate;
 }
 
-void evergreen_pipe_add_vertex_attrib(struct r600_pipe_context *rctx,
-				      struct r600_pipe_state *rstate,
-				      unsigned index,
-				      struct r600_resource *rbuffer,
-				      unsigned offset, unsigned stride)
+void evergreen_pipe_set_buffer_resource(struct r600_pipe_context *rctx,
+					struct r600_pipe_state *rstate,
+					struct r600_resource *rbuffer,
+					unsigned offset, unsigned stride)
 {
 	r600_pipe_state_add_reg(rstate, R_030000_RESOURCE0_WORD0,
 				offset, 0xFFFFFFFF, rbuffer->bo);
@@ -1506,5 +1544,4 @@ void evergreen_pipe_add_vertex_attrib(struct r600_pipe_context *rctx,
 				0x00000000, 0xFFFFFFFF, NULL);
 	r600_pipe_state_add_reg(rstate, R_03001C_RESOURCE0_WORD7,
 				0xC0000000, 0xFFFFFFFF, NULL);
-	evergreen_context_pipe_state_set_fs_resource(&rctx->ctx, rstate, index);
 }

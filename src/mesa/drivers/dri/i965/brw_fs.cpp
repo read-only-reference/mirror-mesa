@@ -213,6 +213,7 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
       return 2;
    case FS_OPCODE_TEX:
    case FS_OPCODE_TXB:
+   case FS_OPCODE_TXD:
    case FS_OPCODE_TXL:
       return 1;
    case FS_OPCODE_FB_WRITE:
@@ -494,7 +495,7 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
    wpos.reg_offset++;
 
    /* gl_FragCoord.w: Already set up in emit_interpolation */
-   emit(fs_inst(BRW_OPCODE_MOV, wpos, this->wpos_w));
+   emit(fs_inst(BRW_OPCODE_MOV, wpos, this->pixel_w));
 
    return reg;
 }
@@ -661,14 +662,18 @@ fs_visitor::emit_math(fs_opcodes opcode, fs_reg dst, fs_reg src0, fs_reg src1)
    assert(opcode == FS_OPCODE_POW);
 
    if (intel->gen >= 6) {
-      /* Can't do hstride == 0 args to gen6 math, so expand it out. */
-      if (src0.file == UNIFORM) {
+      /* Can't do hstride == 0 args to gen6 math, so expand it out.
+       *
+       * The hardware ignores source modifiers (negate and abs) on math
+       * instructions, so we also move to a temp to set those up.
+       */
+      if (src0.file == UNIFORM || src0.abs || src0.negate) {
 	 fs_reg expanded = fs_reg(this, glsl_type::float_type);
 	 emit(fs_inst(BRW_OPCODE_MOV, expanded, src0));
 	 src0 = expanded;
       }
 
-      if (src1.file == UNIFORM) {
+      if (src1.file == UNIFORM || src1.abs || src1.negate) {
 	 fs_reg expanded = fs_reg(this, glsl_type::float_type);
 	 emit(fs_inst(BRW_OPCODE_MOV, expanded, src1));
 	 src1 = expanded;
@@ -1196,6 +1201,8 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate)
       }
       /* gen4's SIMD8 sampler always has the slots for u,v,r present. */
       mlen += 3;
+   } else if (ir->op == ir_txd) {
+      assert(!"TXD isn't supported on gen4 yet.");
    } else {
       /* Oh joy.  gen4 doesn't have SIMD8 non-shadow-compare bias/lod
        * instructions.  We'll need to do SIMD16 here.
@@ -1249,6 +1256,8 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate)
       inst = emit(fs_inst(FS_OPCODE_TXL, dst));
       break;
    case ir_txd:
+      inst = emit(fs_inst(FS_OPCODE_TXD, dst));
+      break;
    case ir_txf:
       assert(!"GLSL 1.30 features unsupported");
       break;
@@ -2304,6 +2313,16 @@ fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
 	    msg_type = BRW_SAMPLER_MESSAGE_SAMPLE_BIAS_GEN5;
 	 }
 	 break;
+      case FS_OPCODE_TXL:
+	 if (inst->shadow_compare) {
+	    msg_type = BRW_SAMPLER_MESSAGE_SAMPLE_LOD_COMPARE_GEN5;
+	 } else {
+	    msg_type = BRW_SAMPLER_MESSAGE_SAMPLE_LOD_GEN5;
+	 }
+	 break;
+      case FS_OPCODE_TXD:
+	 assert(!"TXD isn't supported on gen5+ yet.");
+	 break;
       }
    } else {
       switch (inst->opcode) {
@@ -2321,12 +2340,25 @@ fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
       case FS_OPCODE_TXB:
 	 if (inst->shadow_compare) {
 	    assert(inst->mlen == 6);
-	    msg_type = BRW_SAMPLER_MESSAGE_SIMD8_SAMPLE;
+	    msg_type = BRW_SAMPLER_MESSAGE_SIMD8_SAMPLE_BIAS_COMPARE;
 	 } else {
 	    assert(inst->mlen == 9);
 	    msg_type = BRW_SAMPLER_MESSAGE_SIMD16_SAMPLE_BIAS;
 	    simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD16;
 	 }
+	 break;
+      case FS_OPCODE_TXL:
+	 if (inst->shadow_compare) {
+	    assert(inst->mlen == 6);
+	    msg_type = BRW_SAMPLER_MESSAGE_SIMD8_SAMPLE_LOD_COMPARE;
+	 } else {
+	    assert(inst->mlen == 9);
+	    msg_type = BRW_SAMPLER_MESSAGE_SIMD16_SAMPLE_LOD;
+	    simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD16;
+	 }
+	 break;
+      case FS_OPCODE_TXD:
+	 assert(!"TXD isn't supported on gen4 yet.");
 	 break;
       }
    }
@@ -3055,6 +3087,8 @@ fs_visitor::register_coalesce()
 	  inst->dst.type != inst->src[0].type)
 	 continue;
 
+      bool has_source_modifiers = inst->src[0].abs || inst->src[0].negate;
+
       /* Found a move of a GRF to a GRF.  Let's see if we can coalesce
        * them: check for no writes to either one until the exit of the
        * program.
@@ -3078,6 +3112,14 @@ fs_visitor::register_coalesce()
 	       interfered = true;
 	       break;
 	    }
+	 }
+
+	 /* The gen6 MATH instruction can't handle source modifiers, so avoid
+	  * coalescing those for now.  We should do something more specific.
+	  */
+	 if (intel->gen == 6 && scan_inst->is_math() && has_source_modifiers) {
+	    interfered = true;
+	    break;
 	 }
       }
       if (interfered) {
@@ -3396,20 +3438,25 @@ void
 fs_visitor::generate_code()
 {
    int last_native_inst = 0;
-   struct brw_instruction *if_stack[16], *loop_stack[16];
-   int if_stack_depth = 0, loop_stack_depth = 0;
-   int if_depth_in_loop[16];
    const char *last_annotation_string = NULL;
    ir_instruction *last_annotation_ir = NULL;
+
+   int if_stack_array_size = 16;
+   int loop_stack_array_size = 16;
+   int if_stack_depth = 0, loop_stack_depth = 0;
+   brw_instruction **if_stack =
+      rzalloc_array(this->mem_ctx, brw_instruction *, if_stack_array_size);
+   brw_instruction **loop_stack =
+      rzalloc_array(this->mem_ctx, brw_instruction *, loop_stack_array_size);
+   int *if_depth_in_loop =
+      rzalloc_array(this->mem_ctx, int, loop_stack_array_size);
+
 
    if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
       printf("Native code for fragment shader %d:\n",
 	     ctx->Shader.CurrentFragmentProgram->Name);
    }
 
-   if_depth_in_loop[loop_stack_depth] = 0;
-
-   memset(&if_stack, 0, sizeof(if_stack));
    foreach_iter(exec_list_iterator, iter, this->instructions) {
       fs_inst *inst = (fs_inst *)iter.get();
       struct brw_reg src[3], dst;
@@ -3493,7 +3540,6 @@ fs_visitor::generate_code()
 	 break;
 
       case BRW_OPCODE_IF:
-	 assert(if_stack_depth < 16);
 	 if (inst->src[0].file != BAD_FILE) {
 	    assert(intel->gen >= 6);
 	    if_stack[if_stack_depth] = brw_IF_gen6(p, inst->conditional_mod, src[0], src[1]);
@@ -3502,6 +3548,11 @@ fs_visitor::generate_code()
 	 }
 	 if_depth_in_loop[loop_stack_depth]++;
 	 if_stack_depth++;
+	 if (if_stack_array_size <= if_stack_depth) {
+	    if_stack_array_size *= 2;
+	    if_stack = reralloc(this->mem_ctx, if_stack, brw_instruction *,
+			        if_stack_array_size);
+	 }
 	 break;
 
       case BRW_OPCODE_ELSE:
@@ -3516,6 +3567,13 @@ fs_visitor::generate_code()
 
       case BRW_OPCODE_DO:
 	 loop_stack[loop_stack_depth++] = brw_DO(p, BRW_EXECUTE_8);
+	 if (loop_stack_array_size <= loop_stack_depth) {
+	    loop_stack_array_size *= 2;
+	    loop_stack = reralloc(this->mem_ctx, loop_stack, brw_instruction *,
+				  loop_stack_array_size);
+	    if_depth_in_loop = reralloc(this->mem_ctx, if_depth_in_loop, int,
+				        loop_stack_array_size);
+	 }
 	 if_depth_in_loop[loop_stack_depth] = 0;
 	 break;
 
@@ -3577,6 +3635,7 @@ fs_visitor::generate_code()
 	 break;
       case FS_OPCODE_TEX:
       case FS_OPCODE_TXB:
+      case FS_OPCODE_TXD:
       case FS_OPCODE_TXL:
 	 generate_tex(inst, dst, src[0]);
 	 break;
@@ -3633,6 +3692,10 @@ fs_visitor::generate_code()
 
       last_native_inst = p->nr_insn;
    }
+
+   ralloc_free(if_stack);
+   ralloc_free(loop_stack);
+   ralloc_free(if_depth_in_loop);
 
    brw_set_uip_jip(p);
 

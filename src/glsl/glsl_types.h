@@ -26,8 +26,8 @@
 #ifndef GLSL_TYPES_H
 #define GLSL_TYPES_H
 
-#include <cstring>
-#include <cassert>
+#include <string.h>
+#include <assert.h>
 
 extern "C" {
 #include "GL/gl.h"
@@ -427,6 +427,7 @@ private:
    /*@{*/
    static const glsl_type _error_type;
    static const glsl_type _void_type;
+   static const glsl_type _sampler3D_type;
    static const glsl_type builtin_core_types[];
    static const glsl_type builtin_structure_types[];
    static const glsl_type builtin_110_deprecated_structure_types[];
@@ -453,6 +454,7 @@ private:
    static void generate_130_types(glsl_symbol_table *);
    static void generate_ARB_texture_rectangle_types(glsl_symbol_table *, bool);
    static void generate_EXT_texture_array_types(glsl_symbol_table *, bool);
+   static void generate_OES_texture_3D_types(glsl_symbol_table *, bool);
    /*@}*/
 
    /**

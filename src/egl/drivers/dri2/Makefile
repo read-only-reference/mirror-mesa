@@ -4,7 +4,7 @@ TOP = ../../../..
 include $(TOP)/configs/current
 
 EGL_DRIVER = egl_dri2
-EGL_SOURCES = egl_dri2.c
+EGL_SOURCES = egl_dri2.c platform_x11.c platform_drm.c
 
 EGL_INCLUDES = \
 	-I$(TOP)/include \
@@ -22,6 +22,13 @@ EGL_BUILTIN = true
 
 ifeq ($(SHARED_GLAPI),1)
 EGL_CFLAGS += -DHAVE_SHARED_GLAPI
+endif
+
+ifneq ($(findstring wayland, $(EGL_PLATFORMS)),)
+EGL_SOURCES += platform_wayland.c
+EGL_INCLUDES += -DHAVE_WAYLAND_PLATFORM $(WAYLAND_CFLAGS) \
+		-I$(TOP)/src/egl/wayland
+EGL_LIBS += $(WAYLAND_LIBS)
 endif
 
 include ../Makefile.template

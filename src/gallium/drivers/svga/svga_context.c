@@ -34,6 +34,7 @@
 
 #include "svga_context.h"
 #include "svga_screen.h"
+#include "svga_surface.h"
 #include "svga_resource_texture.h"
 #include "svga_resource_buffer.h"
 #include "svga_resource.h"
@@ -126,9 +127,6 @@ struct pipe_context *svga_context_create( struct pipe_screen *screen,
    svga->debug.no_line_width = debug_get_option_no_line_width();
    svga->debug.force_hw_line_stipple = debug_get_option_force_hw_line_stipple();
 
-   if (!svga_init_swtnl(svga))
-      goto no_swtnl;
-
    svga->fs_bm = util_bitmask_create();
    if (svga->fs_bm == NULL)
       goto no_fs_bm;
@@ -157,6 +155,8 @@ struct pipe_context *svga_context_create( struct pipe_screen *screen,
    if (svga->hwtnl == NULL)
       goto no_hwtnl;
 
+   if (!svga_init_swtnl(svga))
+      goto no_swtnl;
 
    ret = svga_emit_initial_state( svga );
    if (ret)
@@ -179,6 +179,8 @@ struct pipe_context *svga_context_create( struct pipe_screen *screen,
    return &svga->pipe;
 
 no_state:
+   svga_destroy_swtnl(svga);
+no_swtnl:
    svga_hwtnl_destroy( svga->hwtnl );
 no_hwtnl:
    u_upload_destroy( svga->upload_vb );
@@ -189,8 +191,6 @@ no_upload_ib:
 no_vs_bm:
    util_bitmask_destroy( svga->fs_bm );
 no_fs_bm:
-   svga_destroy_swtnl(svga);
-no_swtnl:
    svga->swc->destroy(svga->swc);
 no_swc:
    FREE(svga);
@@ -204,13 +204,9 @@ void svga_context_flush( struct svga_context *svga,
 {
    struct svga_screen *svgascreen = svga_screen(svga->pipe.screen);
    struct pipe_fence_handle *fence = NULL;
+   enum pipe_error ret;
 
    svga->curr.nr_fbs = 0;
-
-   /* Unmap upload manager buffers: 
-    */
-   u_upload_flush(svga->upload_vb);
-   u_upload_flush(svga->upload_ib);
 
    /* Ensure that texture dma uploads are processed
     * before submitting commands.
@@ -227,6 +223,21 @@ void svga_context_flush( struct svga_context *svga,
     * the beginning of every command buffer.
     */
    svga->dirty |= SVGA_NEW_COMMAND_BUFFER;
+
+   /*
+    * We must reemit the surface bindings here, because svga_update_state
+    * will always flush the primitives before processing the
+    * SVGA_NEW_COMMAND_BUFFER state change.
+    *
+    * TODO: Refactor this.
+    */
+   ret = svga_reemit_framebuffer_bindings(svga);
+   assert(ret == PIPE_OK);
+
+   ret = svga_reemit_tss_bindings(svga);
+   assert(ret == PIPE_OK);
+
+   svga->dirty &= ~SVGA_NEW_COMMAND_BUFFER;
 
    if (SVGA_DEBUG & DEBUG_SYNC) {
       if (fence)
@@ -252,6 +263,30 @@ void svga_hwtnl_flush_retry( struct svga_context *svga )
 
    assert(ret == 0);
 }
+
+
+/* Emit all operations pending on host surfaces.
+ */ 
+void svga_surfaces_flush(struct svga_context *svga)
+{
+   unsigned i;
+
+   /* Emit buffered drawing commands.
+    */
+   svga_hwtnl_flush_retry( svga );
+
+   /* Emit back-copy from render target view to texture.
+    */
+   for (i = 0; i < PIPE_MAX_COLOR_BUFS; i++) {
+      if (svga->curr.framebuffer.cbufs[i])
+         svga_propagate_surface(svga, svga->curr.framebuffer.cbufs[i]);
+   }
+
+   if (svga->curr.framebuffer.zsbuf)
+      svga_propagate_surface(svga, svga->curr.framebuffer.zsbuf);
+
+}
+
 
 struct svga_winsys_context *
 svga_winsys_context( struct pipe_context *pipe )

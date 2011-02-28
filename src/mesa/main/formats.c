@@ -890,7 +890,43 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
       16, 16, 16, 16,
       0, 0, 0, 0, 0,
       1, 1, 8
-   }
+   },
+   {
+     MESA_FORMAT_RED_RGTC1,
+     "MESA_FORMAT_RED_RGTC1",
+     GL_RED,
+     GL_UNSIGNED_NORMALIZED,
+     4, 0, 0, 0,
+     0, 0, 0, 0, 0,
+     4, 4, 8                     /* 8 bytes per 4x4 block */
+   },
+   {
+     MESA_FORMAT_SIGNED_RED_RGTC1,
+     "MESA_FORMAT_SIGNED_RED_RGTC1",
+     GL_RED,
+     GL_SIGNED_NORMALIZED,
+     4, 0, 0, 0,
+     0, 0, 0, 0, 0,
+     4, 4, 8                     /* 8 bytes per 4x4 block */
+   },
+   {
+     MESA_FORMAT_RG_RGTC2,
+     "MESA_FORMAT_RG_RGTC2",
+     GL_RG,
+     GL_UNSIGNED_NORMALIZED,
+     4, 4, 0, 0,
+     0, 0, 0, 0, 0,
+     4, 4, 16                     /* 16 bytes per 4x4 block */
+   },
+   {
+     MESA_FORMAT_SIGNED_RG_RGTC2,
+     "MESA_FORMAT_SIGNED_RG_RGTC2",
+     GL_RG,
+     GL_SIGNED_NORMALIZED,
+     4, 4, 0, 0,
+     0, 0, 0, 0, 0,
+     4, 4, 16                     /* 16 bytes per 4x4 block */
+   },
 };
 
 
@@ -1372,7 +1408,11 @@ _mesa_format_to_type_and_comps(gl_format format,
       *comps = 4;
       return;
 
-   case MESA_FORMAT_AL44: /* XXX this isn't plain GL_UNSIGNED_BYTE */
+   case MESA_FORMAT_AL44:
+      *datatype = MESA_UNSIGNED_BYTE_4_4;
+      *comps = 2;
+      return;
+
    case MESA_FORMAT_AL88:
    case MESA_FORMAT_AL88_REV:
    case MESA_FORMAT_RG88:
@@ -1526,6 +1566,10 @@ _mesa_format_to_type_and_comps(gl_format format,
    case MESA_FORMAT_SRGBA_DXT5:
 #endif
 #endif
+   case MESA_FORMAT_RED_RGTC1:
+   case MESA_FORMAT_SIGNED_RED_RGTC1:
+   case MESA_FORMAT_RG_RGTC2:
+   case MESA_FORMAT_SIGNED_RG_RGTC2:
       /* XXX generate error instead? */
       *datatype = GL_UNSIGNED_BYTE;
       *comps = 0;

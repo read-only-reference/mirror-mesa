@@ -35,6 +35,9 @@
 
 #include <GL/gl.h>
 
+/* OpenGL doesn't have GL_UNSIGNED_BYTE_4_4, so we must define our own type
+ * for GL_LUMINANCE4_ALPHA4. */
+#define MESA_UNSIGNED_BYTE_4_4 (GL_UNSIGNED_BYTE<<1)
 
 
 /**
@@ -176,6 +179,12 @@ typedef enum
    MESA_FORMAT_RGBA_16,           /* ... */
    /*@}*/
 
+   /*@{*/
+   MESA_FORMAT_RED_RGTC1,
+   MESA_FORMAT_SIGNED_RED_RGTC1,
+   MESA_FORMAT_RG_RGTC2,
+   MESA_FORMAT_SIGNED_RG_RGTC2,
+   /*@}*/
    MESA_FORMAT_COUNT
 } gl_format;
 

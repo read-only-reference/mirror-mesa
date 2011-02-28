@@ -81,6 +81,7 @@ struct nvc0_context {
       uint8_t num_vtxelts;
       uint8_t num_textures[5];
       uint8_t num_samplers[5];
+      uint8_t tls_required; /* bitmask of shader types using l[] */
       uint16_t scissor;
       uint32_t uniform_buffer_bound[5];
    } state;
@@ -155,6 +156,8 @@ nvc0_surface(struct pipe_surface *ps)
 
 /* nvc0_context.c */
 struct pipe_context *nvc0_create(struct pipe_screen *, void *);
+
+void nvc0_default_flush_notify(struct nouveau_channel *);
 
 void nvc0_bufctx_emit_relocs(struct nvc0_context *);
 void nvc0_bufctx_add_resident(struct nvc0_context *, int ctx,

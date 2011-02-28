@@ -22,7 +22,6 @@
 
 #include "r300_context.h"
 #include "r300_emit.h"
-#include "r300_hyperz.h"
 #include "r300_texture.h"
 #include "r300_winsys.h"
 
@@ -55,8 +54,8 @@ static void r300_blitter_begin(struct r300_context* r300, enum r300_blitter_op o
     util_blitter_save_viewport(r300->blitter, &r300->viewport);
     util_blitter_save_clip(r300->blitter, (struct pipe_clip_state*)r300->clip_state.state);
     util_blitter_save_vertex_elements(r300->blitter, r300->velems);
-    util_blitter_save_vertex_buffers(r300->blitter, r300->vertex_buffer_count,
-                                     r300->vertex_buffer);
+    util_blitter_save_vertex_buffers(r300->blitter, r300->vbuf_mgr->nr_vertex_buffers,
+                                     r300->vbuf_mgr->vertex_buffer);
 
     if (op & (R300_CLEAR_SURFACE | R300_COPY)) {
         util_blitter_save_framebuffer(r300->blitter, r300->fb_state.state);
@@ -114,7 +113,15 @@ static boolean r300_fast_zclear_allowed(struct r300_context *r300)
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
 
-    return r300_texture(fb->zsbuf->texture)->desc.zmask_dwords[fb->zsbuf->u.tex.level];
+    return r300_resource(fb->zsbuf->texture)->tex.zmask_dwords[fb->zsbuf->u.tex.level];
+}
+
+static boolean r300_hiz_clear_allowed(struct r300_context *r300)
+{
+    struct pipe_framebuffer_state *fb =
+        (struct pipe_framebuffer_state*)r300->fb_state.state;
+
+    return r300_resource(fb->zsbuf->texture)->tex.hiz_dwords[fb->zsbuf->u.tex.level];
 }
 
 static uint32_t r300_depth_clear_value(enum pipe_format format,
@@ -190,8 +197,6 @@ static void r300_clear(struct pipe_context* pipe,
         (struct pipe_framebuffer_state*)r300->fb_state.state;
     struct r300_hyperz_state *hyperz =
         (struct r300_hyperz_state*)r300->hyperz_state.state;
-    struct r300_texture *zstex =
-            fb->zsbuf ? r300_texture(fb->zsbuf->texture) : NULL;
     uint32_t width = fb->width;
     uint32_t height = fb->height;
     boolean can_hyperz = r300->rws->get_value(r300->rws, R300_CAN_HYPERZ);
@@ -200,20 +205,17 @@ static void r300_clear(struct pipe_context* pipe,
     /* Enable fast Z clear.
      * The zbuffer must be in micro-tiled mode, otherwise it locks up. */
     if ((buffers & PIPE_CLEAR_DEPTHSTENCIL) && can_hyperz) {
-        hyperz_dcv = hyperz->zb_depthclearvalue =
-            r300_depth_clear_value(fb->zsbuf->format, depth, stencil);
-
         if (r300_fast_zclear_allowed(r300)) {
+            hyperz_dcv = hyperz->zb_depthclearvalue =
+                r300_depth_clear_value(fb->zsbuf->format, depth, stencil);
+
             r300_mark_atom_dirty(r300, &r300->zmask_clear);
             buffers &= ~PIPE_CLEAR_DEPTHSTENCIL;
         }
 
-        if (zstex->hiz_mem[fb->zsbuf->u.tex.level])
+        if (r300_hiz_clear_allowed(r300)) {
             r300_mark_atom_dirty(r300, &r300->hiz_clear);
-
-        /* XXX Change this to r300_mark_atom_dirty(r300, &r300->hyperz_state);
-         * once hiz offset is constant. */
-        r300_mark_fb_state_dirty(r300, R300_CHANGED_HYPERZ_FLAG);
+        }
     }
 
     /* Enable CBZB clear. */
@@ -240,14 +242,14 @@ static void r300_clear(struct pipe_context* pipe,
                            fb->nr_cbufs,
                            buffers, rgba, depth, stencil);
         r300_blitter_end(r300);
-    } else if (r300->zmask_clear.dirty) {
+    } else if (r300->zmask_clear.dirty || r300->hiz_clear.dirty) {
         /* Just clear zmask and hiz now, this does not use the standard draw
          * procedure. */
         unsigned dwords;
 
         /* Calculate zmask_clear and hiz_clear atom sizes. */
         r300_update_hyperz_state(r300);
-        dwords = r300->zmask_clear.size +
+        dwords = (r300->zmask_clear.dirty ? r300->zmask_clear.size : 0) +
                  (r300->hiz_clear.dirty ? r300->hiz_clear.size : 0) +
                  r300_get_num_cs_end_dwords(r300);
 
@@ -257,9 +259,11 @@ static void r300_clear(struct pipe_context* pipe,
         }
 
         /* Emit clear packets. */
-        r300_emit_zmask_clear(r300, r300->zmask_clear.size,
-                              r300->zmask_clear.state);
-        r300->zmask_clear.dirty = FALSE;
+        if (r300->zmask_clear.dirty) {
+            r300_emit_zmask_clear(r300, r300->zmask_clear.size,
+                                  r300->zmask_clear.state);
+            r300->zmask_clear.dirty = FALSE;
+        }
         if (r300->hiz_clear.dirty) {
             r300_emit_hiz_clear(r300, r300->hiz_clear.size,
                                 r300->hiz_clear.state);
@@ -279,9 +283,8 @@ static void r300_clear(struct pipe_context* pipe,
     /* Enable fastfill and/or hiz.
      *
      * If we cleared zmask/hiz, it's in use now. The Hyper-Z state update
-     * looks if zmask/hiz is in use and enables fastfill accordingly. */
-    if (r300->zmask_in_use ||
-        (zstex && zstex->hiz_in_use[fb->zsbuf->u.tex.level])) {
+     * looks if zmask/hiz is in use and programs hardware accordingly. */
+    if (r300->zmask_in_use || r300->hiz_in_use) {
         r300_mark_atom_dirty(r300, &r300->hyperz_state);
     }
 }
@@ -295,7 +298,7 @@ static void r300_clear_render_target(struct pipe_context *pipe,
 {
     struct r300_context *r300 = r300_context(pipe);
 
-    r300->zmask_locked = TRUE;
+    r300->hyperz_locked = TRUE;
     r300_mark_atom_dirty(r300, &r300->hyperz_state);
 
     r300_blitter_begin(r300, R300_CLEAR_SURFACE);
@@ -303,7 +306,7 @@ static void r300_clear_render_target(struct pipe_context *pipe,
                                      dstx, dsty, width, height);
     r300_blitter_end(r300);
 
-    r300->zmask_locked = FALSE;
+    r300->hyperz_locked = FALSE;
     r300_mark_atom_dirty(r300, &r300->hyperz_state);
 }
 
@@ -320,11 +323,11 @@ static void r300_clear_depth_stencil(struct pipe_context *pipe,
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
 
-    if (r300->zmask_in_use && !r300->zmask_locked) {
+    if (r300->zmask_in_use && !r300->hyperz_locked) {
         if (fb->zsbuf->texture == dst->texture) {
             r300_decompress_zmask(r300);
         } else {
-            r300->zmask_locked = TRUE;
+            r300->hyperz_locked = TRUE;
             r300_mark_atom_dirty(r300, &r300->hyperz_state);
         }
     }
@@ -334,8 +337,8 @@ static void r300_clear_depth_stencil(struct pipe_context *pipe,
                                      dstx, dsty, width, height);
     r300_blitter_end(r300);
 
-    if (r300->zmask_locked) {
-        r300->zmask_locked = FALSE;
+    if (r300->hyperz_locked) {
+        r300->hyperz_locked = FALSE;
         r300_mark_atom_dirty(r300, &r300->hyperz_state);
     }
 }
@@ -345,7 +348,7 @@ void r300_decompress_zmask(struct r300_context *r300)
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
 
-    if (!r300->zmask_in_use || r300->zmask_locked)
+    if (!r300->zmask_in_use || r300->hyperz_locked)
         return;
 
     r300->zmask_decompress = TRUE;
@@ -412,66 +415,98 @@ static void r300_resource_copy_region(struct pipe_context *pipe,
     struct r300_context *r300 = r300_context(pipe);
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
-    enum pipe_format old_format = dst->format;
-    enum pipe_format new_format = old_format;
-    const struct util_format_description *desc = util_format_description(old_format);
+    struct pipe_resource old_src = *src;
+    struct pipe_resource old_dst = *dst;
+    struct pipe_resource new_src = old_src;
+    struct pipe_resource new_dst = old_dst;
+    const struct util_format_description *desc =
+            util_format_description(dst->format);
+    struct pipe_box box;
 
-    if (r300->zmask_in_use && !r300->zmask_locked) {
+    if (r300->zmask_in_use && !r300->hyperz_locked) {
         if (fb->zsbuf->texture == src ||
             fb->zsbuf->texture == dst) {
             r300_decompress_zmask(r300);
         } else {
-            r300->zmask_locked = TRUE;
+            r300->hyperz_locked = TRUE;
             r300_mark_atom_dirty(r300, &r300->hyperz_state);
         }
     }
 
+    /* Handle non-renderable plain formats. */
     if (desc->layout == UTIL_FORMAT_LAYOUT_PLAIN &&
         (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB ||
          !pipe->screen->is_format_supported(pipe->screen,
-                                            old_format, src->target,
+                                            src->format, src->target,
                                             src->nr_samples,
-                                            PIPE_BIND_RENDER_TARGET |
-                                            PIPE_BIND_SAMPLER_VIEW, 0))) {
-        switch (util_format_get_blocksize(old_format)) {
+                                            PIPE_BIND_SAMPLER_VIEW, 0) ||
+         !pipe->screen->is_format_supported(pipe->screen,
+                                            dst->format, dst->target,
+                                            dst->nr_samples,
+                                            PIPE_BIND_RENDER_TARGET, 0))) {
+        switch (util_format_get_blocksize(old_dst.format)) {
             case 1:
-                new_format = PIPE_FORMAT_I8_UNORM;
+                new_dst.format = PIPE_FORMAT_I8_UNORM;
                 break;
             case 2:
-                new_format = PIPE_FORMAT_B4G4R4A4_UNORM;
+                new_dst.format = PIPE_FORMAT_B4G4R4A4_UNORM;
                 break;
             case 4:
-                new_format = PIPE_FORMAT_B8G8R8A8_UNORM;
+                new_dst.format = PIPE_FORMAT_B8G8R8A8_UNORM;
                 break;
             case 8:
-                new_format = PIPE_FORMAT_R16G16B16A16_UNORM;
+                new_dst.format = PIPE_FORMAT_R16G16B16A16_UNORM;
                 break;
             default:
                 debug_printf("r300: surface_copy: Unhandled format: %s. Falling back to software.\n"
                              "r300: surface_copy: Software fallback doesn't work for tiled textures.\n",
-                             util_format_short_name(old_format));
+                             util_format_short_name(dst->format));
         }
+        new_src.format = new_dst.format;
     }
 
-    if (old_format != new_format) {
-        r300_texture_reinterpret_format(pipe->screen,
-                                        dst, new_format);
-        r300_texture_reinterpret_format(pipe->screen,
-                                        src, new_format);
+    /* Handle compressed formats. */
+    if (desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
+        switch (util_format_get_blocksize(old_dst.format)) {
+        case 8:
+            /* 1 pixel = 4 bits,
+             * we set 1 pixel = 2 bytes ===> 4 times larger pixels. */
+            new_dst.format = PIPE_FORMAT_B4G4R4A4_UNORM;
+            break;
+        case 16:
+            /* 1 pixel = 8 bits,
+             * we set 1 pixel = 4 bytes ===> 4 times larger pixels. */
+            new_dst.format = PIPE_FORMAT_B8G8R8A8_UNORM;
+            break;
+        }
+
+        /* Since the pixels are 4 times larger, we must decrease
+         * the image size and the coordinates 4 times. */
+        new_src.format = new_dst.format;
+        new_dst.height0 = (new_dst.height0 + 3) / 4;
+        new_src.height0 = (new_src.height0 + 3) / 4;
+        dsty /= 4;
+        box = *src_box;
+        box.y /= 4;
+        box.height = (box.height + 3) / 4;
+        src_box = &box;
     }
+
+    if (old_src.format != new_src.format)
+        r300_resource_set_properties(pipe->screen, src, 0, &new_src);
+    if (old_dst.format != new_dst.format)
+        r300_resource_set_properties(pipe->screen, dst, 0, &new_dst);
 
     r300_hw_copy_region(pipe, dst, dst_level, dstx, dsty, dstz,
                         src, src_level, src_box);
 
-    if (old_format != new_format) {
-        r300_texture_reinterpret_format(pipe->screen,
-                                        dst, old_format);
-        r300_texture_reinterpret_format(pipe->screen,
-                                        src, old_format);
-    }
+    if (old_src.format != new_src.format)
+        r300_resource_set_properties(pipe->screen, src, 0, &old_src);
+    if (old_dst.format != new_dst.format)
+        r300_resource_set_properties(pipe->screen, dst, 0, &old_dst);
 
-    if (r300->zmask_locked) {
-        r300->zmask_locked = FALSE;
+    if (r300->hyperz_locked) {
+        r300->hyperz_locked = FALSE;
         r300_mark_atom_dirty(r300, &r300->hyperz_state);
     }
 }

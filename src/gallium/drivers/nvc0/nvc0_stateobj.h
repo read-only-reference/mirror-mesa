@@ -4,8 +4,6 @@
 
 #include "pipe/p_state.h"
 
-#define NVC0_SCISSORS_CLIPPING
-
 #define SB_BEGIN_3D(so, m, s)                                                  \
    (so)->state[(so)->size++] =                                                 \
       (0x2 << 28) | ((s) << 16) | (NVC0_SUBCH_3D << 13) | ((NVC0_3D_##m) >> 2)
@@ -67,6 +65,7 @@ struct nvc0_vertex_stateobj {
    unsigned num_elements;
    uint32_t instance_elts;
    uint32_t instance_bufs;
+   boolean need_conversion; /* e.g. VFETCH cannot convert f64 to f32 */
    unsigned vtx_size;
    unsigned vtx_per_packet_max;
    struct nvc0_vertex_element element[0];

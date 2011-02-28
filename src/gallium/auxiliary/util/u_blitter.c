@@ -104,8 +104,6 @@ struct blitter_context_priv
    /* Destination surface dimensions. */
    unsigned dst_width;
    unsigned dst_height;
-
-   boolean running;
 };
 
 static void blitter_draw_rectangle(struct blitter_context *blitter,
@@ -269,11 +267,11 @@ void util_blitter_destroy(struct blitter_context *blitter)
 
 static void blitter_check_saved_CSOs(struct blitter_context_priv *ctx)
 {
-   if (ctx->running) {
+   if (ctx->base.running) {
       _debug_printf("u_blitter: Caught recursion on save. "
                     "This is a driver bug.\n");
    }
-   ctx->running = TRUE;
+   ctx->base.running = TRUE;
 
    /* make sure these CSOs have been saved */
    assert(ctx->base.saved_blend_state != INVALID_PTR &&
@@ -349,11 +347,11 @@ static void blitter_restore_CSOs(struct blitter_context_priv *ctx)
       ctx->base.saved_num_vertex_buffers = ~0;
    }
 
-   if (!ctx->running) {
+   if (!ctx->base.running) {
       _debug_printf("u_blitter: Caught recursion on restore. "
                     "This is a driver bug.\n");
    }
-   ctx->running = FALSE;
+   ctx->base.running = FALSE;
 }
 
 static void blitter_set_rectangle(struct blitter_context_priv *ctx,
@@ -641,7 +639,9 @@ static void blitter_draw_rectangle(struct blitter_context *blitter,
    }
 
    blitter_set_rectangle(ctx, x1, y1, x2, y2, depth);
-   util_draw_vertex_buffer(ctx->base.pipe, ctx->vbuf, 0,
+   ctx->base.pipe->redefine_user_buffer(ctx->base.pipe, ctx->vbuf,
+                                        0, ctx->vbuf->width0);
+   util_draw_vertex_buffer(ctx->base.pipe, NULL, ctx->vbuf, 0,
                            PIPE_PRIM_TRIANGLE_FAN, 4, 2);
 }
 
@@ -775,8 +775,10 @@ void util_blitter_copy_region(struct blitter_context *blitter,
                                     dst->nr_samples, bind, 0) ||
        !screen->is_format_supported(screen, src->format, src->target,
                                     src->nr_samples, PIPE_BIND_SAMPLER_VIEW, 0)) {
+      ctx->base.running = TRUE;
       util_resource_copy_region(pipe, dst, dstlevel, dstx, dsty, dstz,
                                 src, srclevel, srcbox);
+      ctx->base.running = FALSE;
       return;
    }
 
@@ -867,7 +869,9 @@ void util_blitter_copy_region(struct blitter_context *blitter,
 
          /* Draw. */
          blitter_set_rectangle(ctx, dstx, dsty, dstx+width, dsty+height, 0);
-         util_draw_vertex_buffer(ctx->base.pipe, ctx->vbuf, 0,
+         ctx->base.pipe->redefine_user_buffer(ctx->base.pipe, ctx->vbuf,
+                                              0, ctx->vbuf->width0);
+         util_draw_vertex_buffer(ctx->base.pipe, NULL, ctx->vbuf, 0,
                                  PIPE_PRIM_TRIANGLE_FAN, 4, 2);
          break;
 

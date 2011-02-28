@@ -284,6 +284,41 @@ static void reset_temp_regs( struct svga_shader_emitter *emit )
 }
    
 
+/* Replace the src with the temporary specified in the dst, but copying
+ * only the necessary channels, and preserving the original swizzle (which is
+ * important given that several opcodes have constraints in the allowed
+ * swizzles).
+ */
+static boolean emit_repl( struct svga_shader_emitter *emit,
+                          SVGA3dShaderDestToken dst,
+                          struct src_register *src0)
+{
+   unsigned src0_swizzle;
+   unsigned chan;
+
+   assert(SVGA3dShaderGetRegType(dst.value) == SVGA3DREG_TEMP);
+
+   src0_swizzle = src0->base.swizzle;
+
+   dst.mask = 0;
+   for (chan = 0; chan < 4; ++chan) {
+      unsigned swizzle = (src0_swizzle >> (chan *2)) & 0x3;
+      dst.mask |= 1 << swizzle;
+   }
+   assert(dst.mask);
+
+   src0->base.swizzle = SVGA3DSWIZZLE_NONE;
+
+   if (!emit_op1( emit, inst_token( SVGA3DOP_MOV ), dst, *src0 ))
+      return FALSE;
+
+   *src0 = src( dst );
+   src0->base.swizzle = src0_swizzle;
+
+   return TRUE;
+}
+
+
 static boolean submit_op0( struct svga_shader_emitter *emit,
                            SVGA3dShaderInstToken inst,
                            SVGA3dShaderDestToken dest )
@@ -332,14 +367,11 @@ static boolean submit_op2( struct svga_shader_emitter *emit,
        src0.base.num != src1.base.num)
       need_temp = TRUE;
 
-   if (need_temp)
-   {
+   if (need_temp) {
       temp = get_temp( emit );
 
-      if (!emit_op1( emit, inst_token( SVGA3DOP_MOV ), temp, src0 ))
+      if (!emit_repl( emit, temp, &src0 ))
          return FALSE;
-
-      src0 = src( temp );
    }
 
    if (!emit_op2( emit, inst, dest, src0, src1 ))
@@ -395,24 +427,18 @@ static boolean submit_op3( struct svga_shader_emitter *emit,
        (type2 == SVGA3DREG_INPUT && src1.base.num != src2.base.num))
       need_temp1 = TRUE;
 
-   if (need_temp0)
-   {
+   if (need_temp0) {
       temp0 = get_temp( emit );
  
-      if (!emit_op1( emit, inst_token( SVGA3DOP_MOV ), temp0, src0 ))
+      if (!emit_repl( emit, temp0, &src0 ))
          return FALSE;
-         
-      src0 = src( temp0 );
    }
 
-   if (need_temp1)
-   {
+   if (need_temp1) {
       temp1 = get_temp( emit );
 
-      if (!emit_op1( emit, inst_token( SVGA3DOP_MOV ), temp1, src1 ))
+      if (!emit_repl( emit, temp1, &src1 ))
          return FALSE;
-
-      src1 = src( temp1 );
    }
 
    if (!emit_op3( emit, inst, dest, src0, src1, src2 ))
@@ -477,24 +503,18 @@ static boolean submit_op4( struct svga_shader_emitter *emit,
        (type2 == SVGA3DREG_INPUT && src3.base.num != src2.base.num))
       need_temp3 = TRUE;
 
-   if (need_temp0)
-   {
+   if (need_temp0) {
       temp0 = get_temp( emit );
  
-      if (!emit_op1( emit, inst_token( SVGA3DOP_MOV ), temp0, src0 ))
+      if (!emit_repl( emit, temp0, &src0 ))
          return FALSE;
-         
-      src0 = src( temp0 );
    }
 
-   if (need_temp3)
-   {
+   if (need_temp3) {
       temp3 = get_temp( emit );
 
-      if (!emit_op1( emit, inst_token( SVGA3DOP_MOV ), temp3, src3 ))
+      if (!emit_repl( emit, temp3, &src3 ))
          return FALSE;
-
-      src3 = src( temp3 );
    }
 
    if (!emit_op4( emit, inst, dest, src0, src1, src2, src3 ))
@@ -504,6 +524,55 @@ static boolean submit_op4( struct svga_shader_emitter *emit,
       release_temp( emit, temp3 );
    if (need_temp0)
       release_temp( emit, temp0 );
+   return TRUE;
+}
+
+
+static boolean alias_src_dst( struct src_register src,
+                              SVGA3dShaderDestToken dst )
+{
+   if (src.base.num != dst.num)
+      return FALSE;
+
+   if (SVGA3dShaderGetRegType(dst.value) !=
+       SVGA3dShaderGetRegType(src.base.value))
+      return FALSE;
+
+   return TRUE;
+}
+
+
+static boolean submit_lrp(struct svga_shader_emitter *emit,
+                          SVGA3dShaderDestToken dst,
+                          struct src_register src0,
+                          struct src_register src1,
+                          struct src_register src2)
+{
+   SVGA3dShaderDestToken tmp;
+   boolean need_dst_tmp = FALSE;
+
+   /* The dst reg must be a temporary, and not be the same as src0 or src2 */
+   if (SVGA3dShaderGetRegType(dst.value) != SVGA3DREG_TEMP ||
+       alias_src_dst(src0, dst) ||
+       alias_src_dst(src2, dst))
+      need_dst_tmp = TRUE;
+
+   if (need_dst_tmp) {
+      tmp = get_temp( emit );
+      tmp.mask = dst.mask;
+   }
+   else {
+      tmp = dst;
+   }
+
+   if (!submit_op3(emit, inst_token( SVGA3DOP_LRP ), tmp, src0, src1, src2))
+      return FALSE;
+
+   if (need_dst_tmp) {
+      if (!submit_op1(emit, inst_token( SVGA3DOP_MOV ), dst, src( tmp )))
+         return FALSE;
+   }
+
    return TRUE;
 }
 
@@ -746,7 +815,7 @@ static boolean emit_fake_arl(struct svga_shader_emitter *emit,
 static boolean emit_if(struct svga_shader_emitter *emit,
                        const struct tgsi_full_instruction *insn)
 {
-   const struct src_register src = translate_src_register(
+   struct src_register src0 = translate_src_register(
       emit, &insn->Src[0] );
    struct src_register zero = get_zero_immediate( emit );
    SVGA3dShaderInstToken if_token = inst_token( SVGA3DOP_IFC );
@@ -754,10 +823,23 @@ static boolean emit_if(struct svga_shader_emitter *emit,
    if_token.control = SVGA3DOPCOMPC_NE;
    zero = scalar(zero, TGSI_SWIZZLE_X);
 
+   if (SVGA3dShaderGetRegType(src0.base.value) == SVGA3DREG_CONST) {
+      /*
+       * Max different constant registers readable per IFC instruction is 1.
+       */
+
+      SVGA3dShaderDestToken tmp = get_temp( emit );
+
+      if (!submit_op1(emit, inst_token( SVGA3DOP_MOV ), tmp, src0))
+         return FALSE;
+
+      src0 = scalar(src( tmp ), TGSI_SWIZZLE_X);
+   }
+
    emit->dynamic_branching_level++;
 
    return (emit_instruction( emit, if_token ) &&
-           emit_src( emit, src ) &&
+           emit_src( emit, src0 ) &&
            emit_src( emit, zero ) );
 }
 
@@ -831,7 +913,7 @@ static boolean emit_cmp(struct svga_shader_emitter *emit,
        */
       if (!submit_op2(emit, inst_token(SVGA3DOP_SLT), temp, src0, zero))
          return FALSE;
-      return submit_op3(emit, inst_token(SVGA3DOP_LRP), dst, src(temp), src1, src2);
+      return submit_lrp(emit, dst, src(temp), src1, src2);
    }
 
    /* CMP  DST, SRC0, SRC2, SRC1 */
@@ -1622,6 +1704,10 @@ static boolean emit_deriv(struct svga_shader_emitter *emit,
    }
    else {
       unsigned opcode;
+      const struct tgsi_full_src_register *reg = &insn->Src[0];
+      SVGA3dShaderInstToken inst;
+      SVGA3dShaderDestToken dst;
+      struct src_register src0;
 
       switch (insn->Instruction.Opcode) {
       case TGSI_OPCODE_DDX:
@@ -1634,7 +1720,21 @@ static boolean emit_deriv(struct svga_shader_emitter *emit,
          return FALSE;
       }
 
-      return emit_simple_instruction( emit, opcode, insn );
+      inst = inst_token( opcode );
+      dst = translate_dst_register( emit, insn, 0 );
+      src0 = translate_src_register( emit, reg );
+
+      /* We cannot use negate or abs on source to dsx/dsy instruction.
+       */
+      if (reg->Register.Absolute ||
+          reg->Register.Negate) {
+         SVGA3dShaderDestToken temp = get_temp( emit );
+
+         if (!emit_repl( emit, temp, &src0 ))
+            return FALSE;
+      }
+
+      return submit_op1( emit, inst, dst, src0 );
    }
 }
 
@@ -1656,19 +1756,6 @@ static boolean emit_arl(struct svga_shader_emitter *emit,
       /* no need to adjust, just emit straight arl */
       return emit_simple_instruction(emit, SVGA3DOP_MOVA, insn);
    }
-}
-
-static boolean alias_src_dst( struct src_register src,
-                              SVGA3dShaderDestToken dst )
-{
-   if (src.base.num != dst.num)
-      return FALSE;
-
-   if (SVGA3dShaderGetRegType(dst.value) != 
-       SVGA3dShaderGetRegType(src.base.value))
-      return FALSE;
-
-   return TRUE;
 }
 
 static boolean emit_pow(struct svga_shader_emitter *emit,
@@ -1763,37 +1850,14 @@ static boolean emit_lrp(struct svga_shader_emitter *emit,
                         const struct tgsi_full_instruction *insn)
 {
    SVGA3dShaderDestToken dst = translate_dst_register( emit, insn, 0 );
-   SVGA3dShaderDestToken tmp;
    const struct src_register src0 = translate_src_register(
       emit, &insn->Src[0] );
    const struct src_register src1 = translate_src_register(
       emit, &insn->Src[1] );
    const struct src_register src2 = translate_src_register(
       emit, &insn->Src[2] );
-   boolean need_dst_tmp = FALSE;
 
-   /* The dst reg must not be the same as src0 or src2 */
-   if (alias_src_dst(src0, dst) ||
-       alias_src_dst(src2, dst))
-      need_dst_tmp = TRUE;
-
-   if (need_dst_tmp) {
-      tmp = get_temp( emit );
-      tmp.mask = dst.mask;
-   }
-   else {
-      tmp = dst;
-   }
-
-   if (!submit_op3(emit, inst_token( SVGA3DOP_LRP ), tmp, src0, src1, src2))
-      return FALSE;
-
-   if (need_dst_tmp) {
-      if (!submit_op1(emit, inst_token( SVGA3DOP_MOV ), dst, src( tmp )))
-         return FALSE;      
-   } 
-
-   return TRUE;
+   return submit_lrp(emit, dst, src0, src1, src2);
 }
 
 

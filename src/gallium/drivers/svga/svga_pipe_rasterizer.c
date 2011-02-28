@@ -77,7 +77,6 @@ svga_create_rasterizer_state(struct pipe_context *pipe,
    /* point_quad_rasterization - ? */
    /* point_size_per_vertex  - ? */
    /* sprite_coord_mode      - ??? */
-   /* bypass_vs_viewport_and_clip        - handled by viewport setup */
    /* flatshade_first        - handled by index translation */
    /* gl_rasterization_rules - XXX - viewport code */
    /* line_width             - draw module */
@@ -100,15 +99,15 @@ svga_create_rasterizer_state(struct pipe_context *pipe,
       rast->need_pipeline_tris_str = "poly stipple";
    }
 
-   if (templ->line_width != 1.0 &&
-       templ->line_width != 0.0 &&
+   if (templ->line_width >= 1.5f &&
        !svga->debug.no_line_width) {
       rast->need_pipeline |= SVGA_PIPELINE_FLAG_LINES;
       rast->need_pipeline_lines_str = "line width";
    }
 
    if (templ->line_stipple_enable) {
-      /* LinePattern not implemented on all backends. 
+      /* XXX: LinePattern not implemented on all backends, and there is no
+       * mechanism to query it.
        */
       if (!svga->debug.force_hw_line_stipple) {
          SVGA3dLinePattern lp;
@@ -125,6 +124,11 @@ svga_create_rasterizer_state(struct pipe_context *pipe,
    if (templ->point_smooth) {
       rast->need_pipeline |= SVGA_PIPELINE_FLAG_POINTS;
       rast->need_pipeline_points_str = "smooth points";
+   }
+
+   if (templ->line_smooth) {
+      rast->need_pipeline |= SVGA_PIPELINE_FLAG_LINES;
+      rast->need_pipeline_lines_str = "smooth lines";
    }
 
    {
@@ -214,9 +218,6 @@ svga_create_rasterizer_state(struct pipe_context *pipe,
 
       rast->hw_unfilled = fill;
    }
-
-
-
 
    if (rast->need_pipeline & SVGA_PIPELINE_FLAG_TRIS) {
       /* Turn off stuff which will get done in the draw module:

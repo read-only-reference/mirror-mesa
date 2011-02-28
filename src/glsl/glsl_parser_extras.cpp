@@ -97,7 +97,7 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *ctx,
       ? 100 : 110;
    const unsigned highest_version =
       (ctx->API == API_OPENGL) ? ctx->Const.GLSLVersion : 100;
-   char *supported = (char *) ralloc_context(this);
+   char *supported = ralloc_strdup(this, "");
 
    for (unsigned ver = lowest_version; ver <= highest_version; ver += 10) {
       const char *const prefix = (ver == lowest_version)
@@ -256,6 +256,11 @@ _mesa_glsl_process_extension(const char *name, YYLTYPE *name_locp,
       state->AMD_conservative_depth_enable = (ext_mode != extension_disable);
       state->AMD_conservative_depth_warn = (ext_mode == extension_warn);
       unsupported = !state->extensions->AMD_conservative_depth;
+   } else if (strcmp(name, "GL_OES_texture_3D") == 0 && state->es_shader) {
+      state->OES_texture_3D_enable = (ext_mode != extension_disable);
+      state->OES_texture_3D_warn = (ext_mode == extension_warn);
+
+      unsupported = !state->extensions->EXT_texture3D;
    } else {
       unsupported = true;
    }
@@ -764,6 +769,7 @@ do_common_optimization(exec_list *ir, bool linked, unsigned max_unroll_iteration
    progress = do_if_simplification(ir) || progress;
    progress = do_discard_simplification(ir) || progress;
    progress = do_copy_propagation(ir) || progress;
+   /*progress = do_copy_propagation_elements(ir) || progress;*/
    if (linked)
       progress = do_dead_code(ir) || progress;
    else

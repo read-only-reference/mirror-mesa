@@ -14,13 +14,9 @@ import SCons.Script.SConscript
 #######################################################################
 # Defaults
 
-_platform_map = {
-	'linux2': 'linux',
-	'win32': 'windows',
-}
-
-host_platform = sys.platform
-host_platform = _platform_map.get(host_platform, host_platform)
+host_platform = _platform.system().lower()
+if host_platform.startswith('cygwin'):
+    host_platform = 'cygwin'
 
 # Search sys.argv[] for a "platform=foo" argument since we don't have
 # an 'env' variable at this point.
@@ -29,8 +25,6 @@ if 'platform' in SCons.Script.ARGUMENTS:
 else:
     target_platform = host_platform
 
-cross_compiling = target_platform != host_platform
-
 _machine_map = {
 	'x86': 'x86',
 	'i386': 'x86',
@@ -38,6 +32,7 @@ _machine_map = {
 	'i586': 'x86',
 	'i686': 'x86',
 	'ppc' : 'ppc',
+	'AMD64': 'x86_64',
 	'x86_64': 'x86_64',
 }
 
@@ -52,7 +47,7 @@ host_machine = _machine_map.get(host_machine, 'generic')
 default_machine = host_machine
 default_toolchain = 'default'
 
-if target_platform == 'windows' and cross_compiling:
+if target_platform == 'windows' and host_platform != 'windows':
     default_machine = 'x86'
     default_toolchain = 'crossmingw'
 

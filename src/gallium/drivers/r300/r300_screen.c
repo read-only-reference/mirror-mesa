@@ -398,6 +398,7 @@ static void r300_destroy_screen(struct pipe_screen* pscreen)
     struct r300_winsys_screen *rws = r300_winsys_screen(pscreen);
 
     util_slab_destroy(&r300screen->pool_buffers);
+    pipe_mutex_destroy(r300screen->num_contexts_mutex);
 
     if (rws)
       rws->destroy(rws);
@@ -409,32 +410,28 @@ static void r300_fence_reference(struct pipe_screen *screen,
                                  struct pipe_fence_handle **ptr,
                                  struct pipe_fence_handle *fence)
 {
-    struct r300_fence **oldf = (struct r300_fence**)ptr;
-    struct r300_fence *newf = (struct r300_fence*)fence;
-
-    if (pipe_reference(&(*oldf)->reference, &newf->reference))
-        FREE(*oldf);
-
-    *ptr = fence;
+    r300_winsys_bo_reference((struct r300_winsys_bo**)ptr,
+                             (struct r300_winsys_bo*)fence);
 }
 
 static int r300_fence_signalled(struct pipe_screen *screen,
                                 struct pipe_fence_handle *fence,
                                 unsigned flags)
 {
-    struct r300_fence *rfence = (struct r300_fence*)fence;
+    struct r300_winsys_screen *rws = r300_screen(screen)->rws;
+    struct r300_winsys_bo *rfence = (struct r300_winsys_bo*)fence;
 
-    return rfence->signalled ? 0 : 1; /* 0 == success */
+    return !rws->buffer_is_busy(rfence) ? 0 : 1; /* 0 == success */
 }
 
 static int r300_fence_finish(struct pipe_screen *screen,
                              struct pipe_fence_handle *fence,
                              unsigned flags)
 {
-    struct r300_fence *rfence = (struct r300_fence*)fence;
+    struct r300_winsys_screen *rws = r300_screen(screen)->rws;
+    struct r300_winsys_bo *rfence = (struct r300_winsys_bo*)fence;
 
-    r300_finish(rfence->ctx);
-    rfence->signalled = TRUE;
+    rws->buffer_wait(rfence);
     return 0; /* 0 == success */
 }
 
@@ -454,12 +451,19 @@ struct pipe_screen* r300_screen_create(struct r300_winsys_screen *rws)
     r300_init_debug(r300screen);
     r300_parse_chipset(&r300screen->caps);
 
+    if (SCREEN_DBG_ON(r300screen, DBG_NO_ZMASK))
+        r300screen->caps.zmask_ram = 0;
+    if (SCREEN_DBG_ON(r300screen, DBG_NO_HIZ))
+        r300screen->caps.hiz_ram = 0;
+
     r300screen->caps.index_bias_supported =
             r300screen->caps.is_r500 &&
             rws->get_value(rws, R300_VID_DRM_2_3_0);
 
+    pipe_mutex_init(r300screen->num_contexts_mutex);
+
     util_slab_create(&r300screen->pool_buffers,
-                     sizeof(struct r300_buffer), 64,
+                     sizeof(struct r300_resource), 64,
                      UTIL_SLAB_SINGLETHREADED);
 
     r300screen->rws = rws;

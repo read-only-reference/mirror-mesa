@@ -27,13 +27,13 @@ Non-normalized Integer texture/framebuffer formats    ~50% done
 1D/2D Texture arrays                                  core Mesa, swrast done
 Packed depth/stencil formats                          DONE
 Per-buffer blend and masks (GL_EXT_draw_buffers2)     DONE
-GL_EXT_texture_compression_rgtc                       not started
+GL_EXT_texture_compression_rgtc                       DONE (swrast, gallium r600)
 Red and red/green texture formats                     DONE (swrast, i965, gallium)
 Transform feedback (GL_EXT_transform_feedback)        ~50% done
    glBindFragDataLocation, glGetFragDataLocation,
    glBindBufferRange, glBindBufferBase commands
 Vertex array objects (GL_APPLE_vertex_array_object)   DONE
-sRGB framebuffer format (GL_EXT_framebuffer_sRGB)     some infrastructure done
+sRGB framebuffer format (GL_EXT_framebuffer_sRGB)     core GL done (i965, gallium), GLX todo
 glClearBuffer commands                                DONE
 glGetStringi command                                  DONE
 glTexParameterI, glGetTexParameterI commands          DONE

@@ -84,23 +84,8 @@
 /*@{*/
 typedef GLuint64 GLbitfield64;
 
-#define BITFIELD64_ONE         1ULL
-#define BITFIELD64_ALLONES     ~0ULL
-
 /** Set a single bit */
-#define BITFIELD64_BIT(b)      (BITFIELD64_ONE << (b))
-
-/** Set a mask of the least significant \c b bits */
-#define BITFIELD64_MASK(b)     (((b) >= 64) ? BITFIELD64_ALLONES : \
-				(BITFIELD64_BIT(b) - 1))
-
-/**
- * Set all bits from l (low bit) to h (high bit), inclusive.
- *
- * \note \C BITFIELD_64_RANGE(0, 63) return 64 set bits.
- */
-#define BITFIELD64_RANGE(l, h) (BITFIELD64_MASK((h) + 1) & ~BITFIELD64_MASK(l))
-/*@}*/
+#define BITFIELD64_BIT(b)      (1ULL << (b))
 
 
 /**
@@ -1255,7 +1240,7 @@ struct gl_texture_image
 				 *   GL_DEPTH_COMPONENT or GL_DEPTH_STENCIL_EXT
                                  *   only. Used for choosing TexEnv arithmetic.
 				 */
-   GLuint TexFormat;            /**< The actual format: MESA_FORMAT_x */
+   gl_format TexFormat;         /**< The actual texture memory format */
 
    GLuint Border;		/**< 0 or 1 */
    GLuint Width;		/**< = 2^WidthLog2 + 2*Border */
@@ -1658,6 +1643,7 @@ struct gl_array_attrib
    GLuint RestartIndex;
 
    GLbitfield NewState;		/**< mask of _NEW_ARRAY_* values */
+   GLboolean RebindArrays; /**< whether the VBO module should rebind arrays */
 
    /* GL_ARB_vertex_buffer_object */
    struct gl_buffer_object *ArrayBufferObj;
@@ -2118,8 +2104,6 @@ struct gl_shader
    GLint RefCount;  /**< Reference count */
    GLboolean DeletePending;
    GLboolean CompileStatus;
-   GLboolean Main;  /**< shader defines main() */
-   GLboolean UnresolvedRefs;
    const GLchar *Source;  /**< Source code string */
    GLuint SourceChecksum;       /**< for debug/logging purposes */
    struct gl_program *Program;  /**< Post-compile assembly code */
@@ -2396,7 +2380,7 @@ struct gl_renderbuffer
    GLenum InternalFormat; /**< The user-specified format */
    GLenum _BaseFormat;    /**< Either GL_RGB, GL_RGBA, GL_DEPTH_COMPONENT or
                                GL_STENCIL_INDEX. */
-   GLuint Format;         /**< The actual format: MESA_FORMAT_x */
+   gl_format Format;      /**< The actual renderbuffer memory format */
 
    GLubyte NumSamples;
 
@@ -2710,6 +2694,9 @@ struct gl_constants
 
    /** GL_EXT_gpu_shader4 */
    GLint MinProgramTexelOffset, MaxProgramTexelOffset;
+
+   /* GL_EXT_framebuffer_sRGB */
+   GLboolean sRGBCapable; /* can enable sRGB blend/update on FBOs */
 };
 
 
@@ -3307,9 +3294,6 @@ struct gl_context
    /*@{*/
    GLboolean FirstTimeCurrent;
    /*@}*/
-
-   /** Dither disable via MESA_NO_DITHER env var */
-   GLboolean NoDither;
 
    /** software compression/decompression supported or not */
    GLboolean Mesa_DXTn;

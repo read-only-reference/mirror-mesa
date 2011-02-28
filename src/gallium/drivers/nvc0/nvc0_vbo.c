@@ -60,6 +60,7 @@ nvc0_vertex_state_create(struct pipe_context *pipe,
     so->num_elements = num_elements;
     so->instance_elts = 0;
     so->instance_bufs = 0;
+    so->need_conversion = FALSE;
 
     transkey.nr_elements = 0;
     transkey.output_stride = 0;
@@ -83,6 +84,7 @@ nvc0_vertex_state_create(struct pipe_context *pipe,
                 return NULL;
             }
             so->element[i].state = nvc0_format_table[fmt].vtx;
+            so->need_conversion = TRUE;
         }
         so->element[i].state |= i;
 
@@ -152,7 +154,7 @@ nvc0_vbuf_range(struct nvc0_context *nvc0, int vbi,
    if (unlikely(nvc0->vertex->instance_bufs & (1 << vbi))) {
       /* TODO: use min and max instance divisor to get a proper range */
       *base = 0;
-      *size = (nvc0->vtxbuf[vbi].max_index + 1) * nvc0->vtxbuf[vbi].stride;
+      *size = nvc0->vtxbuf[vbi].buffer->width0;
    } else {
       assert(nvc0->vbo_max_index != ~0);
       *base = nvc0->vbo_min_index * nvc0->vtxbuf[vbi].stride;
@@ -171,12 +173,15 @@ nvc0_prevalidate_vbufs(struct nvc0_context *nvc0)
 
    nvc0->vbo_fifo = nvc0->vbo_user = 0;
 
+   nvc0_bufctx_reset(nvc0, NVC0_BUFCTX_VERTEX);
+
    for (i = 0; i < nvc0->num_vtxbufs; ++i) {
       vb = &nvc0->vtxbuf[i];
       if (!vb->stride)
          continue;
       buf = nvc0_resource(vb->buffer);
 
+      /* NOTE: user buffers with temporary storage count as mapped by GPU */
       if (!nvc0_resource_mapped_by_gpu(vb->buffer)) {
          if (nvc0->vbo_push_hint) {
             nvc0->vbo_fifo = ~0;
@@ -230,12 +235,25 @@ nvc0_update_user_vbufs(struct nvc0_context *nvc0)
       MARK_RING (chan, 6, 4);
       BEGIN_RING_1I(chan, RING_3D(VERTEX_ARRAY_SELECT), 5);
       OUT_RING  (chan, i);
-      OUT_RESRCh(chan, buf, size - 1, NOUVEAU_BO_RD);
-      OUT_RESRCl(chan, buf, size - 1, NOUVEAU_BO_RD);
+      OUT_RESRCh(chan, buf, base + size - 1, NOUVEAU_BO_RD);
+      OUT_RESRCl(chan, buf, base + size - 1, NOUVEAU_BO_RD);
       OUT_RESRCh(chan, buf, offset, NOUVEAU_BO_RD);
       OUT_RESRCl(chan, buf, offset, NOUVEAU_BO_RD);
    }
    nvc0->vbo_dirty = TRUE;
+}
+
+static INLINE void
+nvc0_release_user_vbufs(struct nvc0_context *nvc0)
+{
+   uint32_t vbo_user = nvc0->vbo_user;
+
+   while (vbo_user) {
+      int i = ffs(vbo_user) - 1;
+      vbo_user &= ~(1 << i);
+
+      nvc0_buffer_release_gpu_storage(nvc0_resource(nvc0->vtxbuf[i].buffer));
+   }
 }
 
 void
@@ -247,7 +265,12 @@ nvc0_vertex_arrays_validate(struct nvc0_context *nvc0)
    struct nvc0_vertex_element *ve;
    unsigned i;
 
-   nvc0_prevalidate_vbufs(nvc0);
+   if (unlikely(vertex->need_conversion)) {
+      nvc0->vbo_fifo = ~0;
+      nvc0->vbo_user = 0;
+   } else {
+      nvc0_prevalidate_vbufs(nvc0);
+   }
 
    BEGIN_RING(chan, RING_3D(VERTEX_ATTRIB_FORMAT(0)), vertex->num_elements);
    for (i = 0; i < vertex->num_elements; ++i) {
@@ -348,6 +371,8 @@ nvc0_draw_vbo_flush_notify(struct nouveau_channel *chan)
 {
    struct nvc0_context *nvc0 = chan->user_private;
 
+   nvc0_screen_fence_update(nvc0->screen, TRUE);
+
    nvc0_bufctx_emit_relocs(nvc0);
 }
 
@@ -375,7 +400,7 @@ nvc0_draw_arrays(struct nvc0_context *nvc0,
       prim |= NVC0_3D_VERTEX_BEGIN_GL_INSTANCE_NEXT;
    }
 
-   chan->flush_notify = NULL;
+   chan->flush_notify = nvc0_default_flush_notify;
 }
 
 static void
@@ -545,7 +570,7 @@ nvc0_draw_elements(struct nvc0_context *nvc0, boolean shorten,
       }
    }
 
-   chan->flush_notify = NULL;
+   chan->flush_notify = nvc0_default_flush_notify;
 }
 
 void
@@ -563,6 +588,9 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
 
    nvc0->vbo_min_index = info->min_index;
    nvc0->vbo_max_index = info->max_index;
+
+   if (nvc0->vbo_push_hint != !!nvc0->vbo_fifo)
+      nvc0->dirty |= NVC0_NEW_ARRAYS;
 
    if (nvc0->vbo_user && !(nvc0->dirty & (NVC0_NEW_VERTEX | NVC0_NEW_ARRAYS)))
       nvc0_update_user_vbufs(nvc0);
@@ -621,4 +649,6 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
                          info->mode, info->start, info->count,
                          info->instance_count, info->index_bias);
    }
+
+   nvc0_release_user_vbufs(nvc0);
 }

@@ -39,6 +39,9 @@
 #include "pipe/p_screen.h"
 
 
+DEBUG_GET_ONCE_BOOL_OPTION(i915_no_vbuf, "I915_NO_VBUF", FALSE);
+
+
 /*
  * Draw functions
  */
@@ -70,10 +73,13 @@ i915_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
    draw_set_mapped_index_buffer(draw, mapped_indices);
 
    if (cbuf_dirty) {
-      draw_set_mapped_constant_buffer(draw, PIPE_SHADER_VERTEX, 0,
-                                      i915_buffer(i915->constants[PIPE_SHADER_VERTEX])->data,
-                                      (i915->current.num_user_constants[PIPE_SHADER_VERTEX] * 
+      if (i915->constants[PIPE_SHADER_VERTEX])
+         draw_set_mapped_constant_buffer(draw, PIPE_SHADER_VERTEX, 0,
+                                         i915_buffer(i915->constants[PIPE_SHADER_VERTEX])->data,
+                                         (i915->current.num_user_constants[PIPE_SHADER_VERTEX] * 
                                          4 * sizeof(float)));
+      else
+         draw_set_mapped_constant_buffer(draw, PIPE_SHADER_VERTEX, 0, NULL, 0);
    }
 
    /*
@@ -144,7 +150,7 @@ i915_create_context(struct pipe_screen *screen, void *priv)
     */
    i915->draw = draw_create(&i915->base);
    assert(i915->draw);
-   if (!debug_get_bool_option("I915_NO_VBUF", FALSE)) {
+   if (!debug_get_option_i915_no_vbuf()) {
       draw_set_rasterize_stage(i915->draw, i915_draw_vbuf_stage(i915));
    } else {
       draw_set_rasterize_stage(i915->draw, i915_draw_render_stage(i915));
@@ -160,6 +166,9 @@ i915_create_context(struct pipe_screen *screen, void *priv)
 
    i915->dirty = ~0;
    i915->hardware_dirty = ~0;
+   i915->immediate_dirty = ~0;
+   i915->dynamic_dirty = ~0;
+   i915->flush_dirty = 0;
 
    /* Batch stream debugging is a bit hacked up at the moment:
     */

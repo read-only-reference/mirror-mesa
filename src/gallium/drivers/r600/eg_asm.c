@@ -62,7 +62,8 @@ int eg_bc_cf_build(struct r600_bc *bc, struct r600_bc_cf *cf)
 			S_SQ_CF_ALLOC_EXPORT_WORD0_ELEM_SIZE(cf->output.elem_size) |
 			S_SQ_CF_ALLOC_EXPORT_WORD0_ARRAY_BASE(cf->output.array_base) |
 			S_SQ_CF_ALLOC_EXPORT_WORD0_TYPE(cf->output.type);
-		bc->bytecode[id++] = S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_X(cf->output.swizzle_x) |
+		bc->bytecode[id++] = S_SQ_CF_ALLOC_EXPORT_WORD1_BURST_COUNT(cf->output.burst_count - 1) |
+			S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_X(cf->output.swizzle_x) |
 			S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_Y(cf->output.swizzle_y) |
 			S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_Z(cf->output.swizzle_z) |
 			S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_W(cf->output.swizzle_w) |
@@ -93,31 +94,9 @@ int eg_bc_cf_build(struct r600_bc *bc, struct r600_bc_cf *cf)
 	return 0;
 }
 
-void eg_cf_vtx(struct r600_vertex_element *ve, u32 *bytecode, unsigned count)
+void eg_cf_vtx(struct r600_vertex_element *ve)
 {
-	struct r600_pipe_state *rstate;
-	unsigned i = 0;
-
-	if (count > 8) {
-		bytecode[i++] = S_SQ_CF_WORD0_ADDR(8 >> 1);
-		bytecode[i++] = S_SQ_CF_WORD1_CF_INST(EG_V_SQ_CF_WORD1_SQ_CF_INST_VTX) |
-				S_SQ_CF_WORD1_BARRIER(1) |
-				S_SQ_CF_WORD1_COUNT(8 - 1);
-		bytecode[i++] = S_SQ_CF_WORD0_ADDR(40 >> 1);
-		bytecode[i++] = S_SQ_CF_WORD1_CF_INST(EG_V_SQ_CF_WORD1_SQ_CF_INST_VTX) |
-				S_SQ_CF_WORD1_BARRIER(1) |
-				S_SQ_CF_WORD1_COUNT(count - 8 - 1);
-	} else {
-		bytecode[i++] = S_SQ_CF_WORD0_ADDR(8 >> 1);
-		bytecode[i++] = S_SQ_CF_WORD1_CF_INST(EG_V_SQ_CF_WORD1_SQ_CF_INST_VTX) |
-				S_SQ_CF_WORD1_BARRIER(1) |
-				S_SQ_CF_WORD1_COUNT(count - 1);
-	}
-	bytecode[i++] = S_SQ_CF_WORD0_ADDR(0);
-	bytecode[i++] = S_SQ_CF_WORD1_CF_INST(EG_V_SQ_CF_WORD1_SQ_CF_INST_RETURN) |
-			S_SQ_CF_WORD1_BARRIER(1);
-
-	rstate = &ve->rstate;
+	struct r600_pipe_state *rstate = &ve->rstate;
 	rstate->id = R600_PIPE_STATE_FETCH_SHADER;
 	rstate->nregs = 0;
 	r600_pipe_state_add_reg(rstate, R_0288A8_SQ_PGM_RESOURCES_FS,

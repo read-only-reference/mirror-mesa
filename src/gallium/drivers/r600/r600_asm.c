@@ -47,6 +47,7 @@ static inline unsigned int r600_bc_get_num_operands(struct r600_bc *bc, struct r
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_NOP:
 			return 0;
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ADD:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ADD_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGE:
@@ -82,6 +83,7 @@ static inline unsigned int r600_bc_get_num_operands(struct r600_bc *bc, struct r
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIPSQRT_CLAMPED:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIPSQRT_IEEE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SIN:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_COS:
 			return 1;
@@ -94,6 +96,7 @@ static inline unsigned int r600_bc_get_num_operands(struct r600_bc *bc, struct r
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_NOP:
 			return 0;
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ADD:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ADD_INT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGE:
@@ -130,6 +133,7 @@ static inline unsigned int r600_bc_get_num_operands(struct r600_bc *bc, struct r
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIPSQRT_IEEE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT_FLOOR:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SIN:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_COS:
 			return 1;
@@ -245,6 +249,37 @@ static int r600_bc_add_cf(struct r600_bc *bc)
 int r600_bc_add_output(struct r600_bc *bc, const struct r600_bc_output *output)
 {
 	int r;
+
+	if (bc->cf_last && (bc->cf_last->inst == output->inst ||
+		(bc->cf_last->inst == BC_INST(bc, V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT) &&
+		output->inst == BC_INST(bc, V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE))) &&
+		output->type == bc->cf_last->output.type &&
+		output->elem_size == bc->cf_last->output.elem_size &&
+		output->swizzle_x == bc->cf_last->output.swizzle_x &&
+		output->swizzle_y == bc->cf_last->output.swizzle_y &&
+		output->swizzle_z == bc->cf_last->output.swizzle_z &&
+		output->swizzle_w == bc->cf_last->output.swizzle_w &&
+		(output->burst_count + bc->cf_last->output.burst_count) <= 16) {
+
+		if ((output->gpr + output->burst_count) == bc->cf_last->output.gpr &&
+			(output->array_base + output->burst_count) == bc->cf_last->output.array_base) {
+
+			bc->cf_last->output.end_of_program |= output->end_of_program;
+			bc->cf_last->output.inst = output->inst;
+			bc->cf_last->output.gpr = output->gpr;
+			bc->cf_last->output.array_base = output->array_base;
+			bc->cf_last->output.burst_count += output->burst_count;
+			return 0;
+
+		} else if (output->gpr == (bc->cf_last->output.gpr + bc->cf_last->output.burst_count) &&
+			output->array_base == (bc->cf_last->output.array_base + bc->cf_last->output.burst_count)) {
+
+			bc->cf_last->output.end_of_program |= output->end_of_program;
+			bc->cf_last->output.inst = output->inst;
+			bc->cf_last->output.burst_count += output->burst_count;
+			return 0;
+		}
+	}
 
 	r = r600_bc_add_cf(bc);
 	if (r)
@@ -514,7 +549,7 @@ struct alu_bank_swizzle {
 	int	hw_cfile_elem[4];
 };
 
-const unsigned cycle_for_bank_swizzle_vec[][3] = {
+static const unsigned cycle_for_bank_swizzle_vec[][3] = {
 	[SQ_ALU_VEC_012] = { 0, 1, 2 },
 	[SQ_ALU_VEC_021] = { 0, 2, 1 },
 	[SQ_ALU_VEC_120] = { 1, 2, 0 },
@@ -523,7 +558,7 @@ const unsigned cycle_for_bank_swizzle_vec[][3] = {
 	[SQ_ALU_VEC_210] = { 2, 1, 0 }
 };
 
-const unsigned cycle_for_bank_swizzle_scl[][3] = {
+static const unsigned cycle_for_bank_swizzle_scl[][3] = {
 	[SQ_ALU_SCL_210] = { 2, 1, 0 },
 	[SQ_ALU_SCL_122] = { 1, 2, 2 },
 	[SQ_ALU_SCL_212] = { 2, 1, 2 },
@@ -817,7 +852,7 @@ static int r600_bc_alu_nliterals(struct r600_bc *bc, struct r600_bc_alu *alu,
 
 	for (i = 0; i < num_src; ++i) {
 		if (alu->src[i].sel == V_SQ_ALU_SRC_LITERAL) {
-			uint32_t value = alu->src[i].value[alu->src[i].chan];
+			uint32_t value = alu->src[i].value;
 			unsigned found = 0;
 			for (j = 0; j < *nliteral; ++j) {
 				if (literal[j] == value) {
@@ -844,7 +879,7 @@ static void r600_bc_alu_adjust_literals(struct r600_bc *bc,
 
 	for (i = 0; i < num_src; ++i) {
 		if (alu->src[i].sel == V_SQ_ALU_SRC_LITERAL) {
-			uint32_t value = alu->src[i].value[alu->src[i].chan];
+			uint32_t value = alu->src[i].value;
 			for (j = 0; j < nliteral; ++j) {
 				if (literal[j] == value) {
 					alu->src[i].chan = j;
@@ -1147,8 +1182,7 @@ int r600_bc_add_alu_type(struct r600_bc *bc, const struct r600_bc_alu *alu, int 
 			bc->ngpr = nalu->src[i].sel + 1;
 		}
 		if (nalu->src[i].sel == V_SQ_ALU_SRC_LITERAL)
-			r600_bc_special_constants(
-				nalu->src[i].value[nalu->src[i].chan],
+			r600_bc_special_constants(nalu->src[i].value,
 				&nalu->src[i].sel, &nalu->src[i].neg);
 	}
 	if (nalu->dst.sel >= bc->ngpr) {
@@ -1250,6 +1284,18 @@ int r600_bc_add_tex(struct r600_bc *bc, const struct r600_bc_tex *tex)
 		return -ENOMEM;
 	memcpy(ntex, tex, sizeof(struct r600_bc_tex));
 
+	/* we can't fetch data und use it as texture lookup address in the same TEX clause */
+	if (bc->cf_last != NULL &&
+		bc->cf_last->inst == V_SQ_CF_WORD1_SQ_CF_INST_TEX) {
+		struct r600_bc_tex *ttex;
+		LIST_FOR_EACH_ENTRY(ttex, &bc->cf_last->tex, list) {
+			if (ttex->dst_gpr == ntex->src_gpr) {
+				bc->force_add_cf = 1;
+				break;
+			}
+		}
+	}
+
 	/* cf can contains only alu or only vtx or only tex */
 	if (bc->cf_last == NULL ||
 		bc->cf_last->inst != V_SQ_CF_WORD1_SQ_CF_INST_TEX ||
@@ -1316,6 +1362,7 @@ static int r600_bc_vtx_build(struct r600_bc *bc, struct r600_bc_vtx *vtx, unsign
 		}
 	}
 	bc->bytecode[id++] = S_SQ_VTX_WORD0_BUFFER_ID(vtx->buffer_id + fetch_resource_start) |
+			S_SQ_VTX_WORD0_FETCH_TYPE(vtx->fetch_type) |
 			S_SQ_VTX_WORD0_SRC_GPR(vtx->src_gpr) |
 			S_SQ_VTX_WORD0_SRC_SEL_X(vtx->src_sel_x) |
 			S_SQ_VTX_WORD0_MEGA_FETCH_COUNT(vtx->mega_fetch_count);
@@ -1329,7 +1376,8 @@ static int r600_bc_vtx_build(struct r600_bc *bc, struct r600_bc_vtx *vtx, unsign
 				S_SQ_VTX_WORD1_FORMAT_COMP_ALL(vtx->format_comp_all) |
 				S_SQ_VTX_WORD1_SRF_MODE_ALL(vtx->srf_mode_all) |
 				S_SQ_VTX_WORD1_GPR_DST_GPR(vtx->dst_gpr);
-	bc->bytecode[id++] = S_SQ_VTX_WORD2_MEGA_FETCH(1);
+	bc->bytecode[id++] = S_SQ_VTX_WORD2_OFFSET(vtx->offset) |
+				S_SQ_VTX_WORD2_MEGA_FETCH(1);
 	bc->bytecode[id++] = 0;
 	return 0;
 }
@@ -1443,7 +1491,8 @@ static int r600_bc_cf_build(struct r600_bc *bc, struct r600_bc_cf *cf)
 			S_SQ_CF_ALLOC_EXPORT_WORD0_ELEM_SIZE(cf->output.elem_size) |
 			S_SQ_CF_ALLOC_EXPORT_WORD0_ARRAY_BASE(cf->output.array_base) |
 			S_SQ_CF_ALLOC_EXPORT_WORD0_TYPE(cf->output.type);
-		bc->bytecode[id++] = S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_X(cf->output.swizzle_x) |
+		bc->bytecode[id++] = S_SQ_CF_ALLOC_EXPORT_WORD1_BURST_COUNT(cf->output.burst_count - 1) |
+			S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_X(cf->output.swizzle_x) |
 			S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_Y(cf->output.swizzle_y) |
 			S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_Z(cf->output.swizzle_z) |
 			S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_W(cf->output.swizzle_w) |
@@ -1725,9 +1774,9 @@ void r600_bc_dump(struct r600_bc *bc)
 			fprintf(stderr, "SWIZ_Y:%X ", cf->output.swizzle_y);
 			fprintf(stderr, "SWIZ_Z:%X ", cf->output.swizzle_z);
 			fprintf(stderr, "SWIZ_W:%X ", cf->output.swizzle_w);
-			fprintf(stderr, "SWIZ_W:%X ", cf->output.swizzle_w);
 			fprintf(stderr, "BARRIER:%X ", cf->output.barrier);
 			fprintf(stderr, "INST:%d ", cf->output.inst);
+			fprintf(stderr, "BURST_COUNT:%d ", cf->output.burst_count);
 			fprintf(stderr, "EOP:%X\n", cf->output.end_of_program);
 			break;
 		case V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
@@ -1798,76 +1847,76 @@ void r600_bc_dump(struct r600_bc *bc)
 		}
 
 		LIST_FOR_EACH_ENTRY(tex, &cf->tex, list) {
-			//TODO
+			fprintf(stderr, "%04d %08X   ", id, bc->bytecode[id]);
+			fprintf(stderr, "INST:%d ", tex->inst);
+			fprintf(stderr, "RESOURCE_ID:%d ", tex->resource_id);
+			fprintf(stderr, "SRC(GPR:%d ", tex->src_gpr);
+			fprintf(stderr, "REL:%d)\n", tex->src_rel);
+			id++;
+			fprintf(stderr, "%04d %08X   ", id, bc->bytecode[id]);
+			fprintf(stderr, "DST(GPR:%d ", tex->dst_gpr);
+			fprintf(stderr, "REL:%d ", tex->dst_rel);
+			fprintf(stderr, "SEL_X:%d ", tex->dst_sel_x);
+			fprintf(stderr, "SEL_Y:%d ", tex->dst_sel_y);
+			fprintf(stderr, "SEL_Z:%d ", tex->dst_sel_z);
+			fprintf(stderr, "SEL_W:%d) ", tex->dst_sel_w);
+			fprintf(stderr, "LOD_BIAS:%d ", tex->lod_bias);
+			fprintf(stderr, "COORD_TYPE_X:%d ", tex->coord_type_x);
+			fprintf(stderr, "COORD_TYPE_Y:%d ", tex->coord_type_y);
+			fprintf(stderr, "COORD_TYPE_Z:%d ", tex->coord_type_z);
+			fprintf(stderr, "COORD_TYPE_W:%d\n", tex->coord_type_w);
+			id++;
+			fprintf(stderr, "%04d %08X   ", id, bc->bytecode[id]);
+			fprintf(stderr, "OFFSET_X:%d ", tex->offset_x);
+			fprintf(stderr, "OFFSET_Y:%d ", tex->offset_y);
+			fprintf(stderr, "OFFSET_Z:%d ", tex->offset_z);
+			fprintf(stderr, "SAMPLER_ID:%d ", tex->sampler_id);
+			fprintf(stderr, "SRC(SEL_X:%d ", tex->src_sel_x);
+			fprintf(stderr, "SEL_Y:%d ", tex->src_sel_y);
+			fprintf(stderr, "SEL_Z:%d ", tex->src_sel_z);
+			fprintf(stderr, "SEL_W:%d)\n", tex->src_sel_w);
+			id++;
+			fprintf(stderr, "%04d %08X   \n", id, bc->bytecode[id]);
+			id++;
 		}
 
 		LIST_FOR_EACH_ENTRY(vtx, &cf->vtx, list) {
+			fprintf(stderr, "%04d %08X   ", id, bc->bytecode[id]);
+			fprintf(stderr, "INST:%d ", vtx->inst);
+			fprintf(stderr, "FETCH_TYPE:%d ", vtx->fetch_type);
+			fprintf(stderr, "BUFFER_ID:%d\n", vtx->buffer_id);
+			id++;
+			/* This assumes that no semantic fetches exist */
+			fprintf(stderr, "%04d %08X   ", id, bc->bytecode[id]);
+			fprintf(stderr, "SRC(GPR:%d ", vtx->src_gpr);
+			fprintf(stderr, "SEL_X:%d) ", vtx->src_sel_x);
+			fprintf(stderr, "MEGA_FETCH_COUNT:%d ", vtx->mega_fetch_count);
+			fprintf(stderr, "DST(GPR:%d ", vtx->dst_gpr);
+			fprintf(stderr, "SEL_X:%d ", vtx->dst_sel_x);
+			fprintf(stderr, "SEL_Y:%d ", vtx->dst_sel_y);
+			fprintf(stderr, "SEL_Z:%d ", vtx->dst_sel_z);
+			fprintf(stderr, "SEL_W:%d) ", vtx->dst_sel_w);
+			fprintf(stderr, "USE_CONST_FIELDS:%d ", vtx->use_const_fields);
+			fprintf(stderr, "FORMAT(DATA:%d ", vtx->data_format);
+			fprintf(stderr, "NUM:%d ", vtx->num_format_all);
+			fprintf(stderr, "COMP:%d ", vtx->format_comp_all);
+			fprintf(stderr, "MODE:%d)\n", vtx->srf_mode_all);
+			id++;
+			fprintf(stderr, "%04d %08X   ", id, bc->bytecode[id]);
+			fprintf(stderr, "OFFSET:%d\n", vtx->offset);
 			//TODO
+			id++;
+			fprintf(stderr, "%04d %08X   \n", id, bc->bytecode[id]);
+			id++;
 		}
 	}
 
 	fprintf(stderr, "--------------------------------------\n");
 }
 
-void r600_cf_vtx(struct r600_vertex_element *ve, u32 *bytecode, unsigned count)
+static void r600_cf_vtx(struct r600_vertex_element *ve)
 {
 	struct r600_pipe_state *rstate;
-	unsigned i = 0;
-
-	if (count > 8) {
-		bytecode[i++] = S_SQ_CF_WORD0_ADDR(8 >> 1);
-		bytecode[i++] = S_SQ_CF_WORD1_CF_INST(V_SQ_CF_WORD1_SQ_CF_INST_VTX) |
-						S_SQ_CF_WORD1_BARRIER(1) |
-						S_SQ_CF_WORD1_COUNT(8 - 1);
-		bytecode[i++] = S_SQ_CF_WORD0_ADDR(40 >> 1);
-		bytecode[i++] = S_SQ_CF_WORD1_CF_INST(V_SQ_CF_WORD1_SQ_CF_INST_VTX) |
-						S_SQ_CF_WORD1_BARRIER(1) |
-						S_SQ_CF_WORD1_COUNT(count - 8 - 1);
-	} else {
-		bytecode[i++] = S_SQ_CF_WORD0_ADDR(8 >> 1);
-		bytecode[i++] = S_SQ_CF_WORD1_CF_INST(V_SQ_CF_WORD1_SQ_CF_INST_VTX) |
-						S_SQ_CF_WORD1_BARRIER(1) |
-						S_SQ_CF_WORD1_COUNT(count - 1);
-	}
-	bytecode[i++] = S_SQ_CF_WORD0_ADDR(0);
-	bytecode[i++] = S_SQ_CF_WORD1_CF_INST(V_SQ_CF_WORD1_SQ_CF_INST_RETURN) |
-			S_SQ_CF_WORD1_BARRIER(1);
-
-	rstate = &ve->rstate;
-	rstate->id = R600_PIPE_STATE_FETCH_SHADER;
-	rstate->nregs = 0;
-	r600_pipe_state_add_reg(rstate, R_0288A4_SQ_PGM_RESOURCES_FS,
-				0x00000000, 0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate, R_0288DC_SQ_PGM_CF_OFFSET_FS,
-				0x00000000, 0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate, R_028894_SQ_PGM_START_FS,
-				r600_bo_offset(ve->fetch_shader) >> 8,
-				0xFFFFFFFF, ve->fetch_shader);
-}
-
-void r600_cf_vtx_tc(struct r600_vertex_element *ve, u32 *bytecode, unsigned count)
-{
-	struct r600_pipe_state *rstate;
-	unsigned i = 0;
-
-	if (count > 8) {
-		bytecode[i++] = S_SQ_CF_WORD0_ADDR(8 >> 1);
-		bytecode[i++] = S_SQ_CF_WORD1_CF_INST(V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC) |
-						S_SQ_CF_WORD1_BARRIER(1) |
-						S_SQ_CF_WORD1_COUNT(8 - 1);
-		bytecode[i++] = S_SQ_CF_WORD0_ADDR(40 >> 1);
-		bytecode[i++] = S_SQ_CF_WORD1_CF_INST(V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC) |
-						S_SQ_CF_WORD1_BARRIER(1) |
-						S_SQ_CF_WORD1_COUNT((count - 8) - 1);
-	} else {
-		bytecode[i++] = S_SQ_CF_WORD0_ADDR(8 >> 1);
-		bytecode[i++] = S_SQ_CF_WORD1_CF_INST(V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC) |
-						S_SQ_CF_WORD1_BARRIER(1) |
-						S_SQ_CF_WORD1_COUNT(count - 1);
-	}
-	bytecode[i++] = S_SQ_CF_WORD0_ADDR(0);
-	bytecode[i++] = S_SQ_CF_WORD1_CF_INST(V_SQ_CF_WORD1_SQ_CF_INST_RETURN) |
-			S_SQ_CF_WORD1_BARRIER(1);
 
 	rstate = &ve->rstate;
 	rstate->id = R600_PIPE_STATE_FETCH_SHADER;
@@ -2013,37 +2062,19 @@ out_unknown:
 
 int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, struct r600_vertex_element *ve)
 {
-	unsigned ndw, i;
-	u32 *bytecode;
-	unsigned fetch_resource_start = 0, format, num_format, format_comp;
+	static int dump_shaders = -1;
+
+	struct r600_bc bc;
+	struct r600_bc_vtx vtx;
 	struct pipe_vertex_element *elements = ve->elements;
 	const struct util_format_description *desc;
-
-	/* 2 dwords for cf aligned to 4 + 4 dwords per input */
-	ndw = 8 + ve->count * 4;
-	ve->fs_size = ndw * 4;
-
-	/* use PIPE_BIND_VERTEX_BUFFER so we use the cache buffer manager */
-	ve->fetch_shader = r600_bo(rctx->radeon, ndw*4, 256, PIPE_BIND_VERTEX_BUFFER, 0);
-	if (ve->fetch_shader == NULL) {
-		return -ENOMEM;
-	}
-
-	bytecode = r600_bo_map(rctx->radeon, ve->fetch_shader, 0, NULL);
-	if (bytecode == NULL) {
-		r600_bo_reference(rctx->radeon, &ve->fetch_shader, NULL);
-		return -ENOMEM;
-	}
-
-	if (rctx->family >= CHIP_CEDAR) {
-		eg_cf_vtx(ve, &bytecode[0], (ndw - 8) / 4);
-	} else {
-		r600_cf_vtx(ve, &bytecode[0], (ndw - 8) / 4);
-		fetch_resource_start = 160;
-	}
+	unsigned fetch_resource_start = rctx->family >= CHIP_CEDAR ? 0 : 160;
+	unsigned format, num_format, format_comp;
+	u32 *bytecode;
+	int i, r;
 
 	/* vertex elements offset need special handling, if offset is bigger
-	 * than what we can put in fetch instruction then we need to alterate
+	+ * than what we can put in fetch instruction then we need to alterate
 	 * the vertex resource offset. In such case in order to simplify code
 	 * we will bound one resource per elements. It's a worst case scenario.
 	 */
@@ -2054,40 +2085,155 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 		}
 	}
 
+	memset(&bc, 0, sizeof(bc));
+	r = r600_bc_init(&bc, r600_get_family(rctx->radeon));
+	if (r)
+		return r;
+
+	for (i = 0; i < ve->count; i++) {
+		if (elements[i].instance_divisor > 1) {
+			struct r600_bc_alu alu;
+
+			memset(&alu, 0, sizeof(alu));
+			alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT);
+			alu.src[0].sel = 0;
+			alu.src[0].chan = 3;
+
+			alu.dst.sel = i + 1;
+			alu.dst.chan = 3;
+			alu.dst.write = 1;
+			alu.last = 1;
+
+			if ((r = r600_bc_add_alu(&bc, &alu))) {
+				r600_bc_clear(&bc);
+				return r;
+			}
+
+			memset(&alu, 0, sizeof(alu));
+			alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MUL);
+			alu.src[0].sel = i + 1;
+			alu.src[0].chan = 3;
+
+			alu.src[1].sel = V_SQ_ALU_SRC_LITERAL;
+			alu.src[1].value = fui(1.0f / (float)elements[i].instance_divisor);
+
+			alu.dst.sel = i + 1;
+			alu.dst.chan = 3;
+			alu.dst.write = 1;
+			alu.last = 1;
+
+			if ((r = r600_bc_add_alu(&bc, &alu))) {
+				r600_bc_clear(&bc);
+				return r;
+			}
+
+			memset(&alu, 0, sizeof(alu));
+			alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_TRUNC);
+			alu.src[0].sel = i + 1;
+			alu.src[0].chan = 3;
+
+			alu.dst.sel = i + 1;
+			alu.dst.chan = 3;
+			alu.dst.write = 1;
+			alu.last = 1;
+
+			if ((r = r600_bc_add_alu(&bc, &alu))) {
+				r600_bc_clear(&bc);
+				return r;
+			}
+
+			memset(&alu, 0, sizeof(alu));
+			alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT);
+			alu.src[0].sel = i + 1;
+			alu.src[0].chan = 3;
+
+			alu.dst.sel = i + 1;
+			alu.dst.chan = 3;
+			alu.dst.write = 1;
+			alu.last = 1;
+
+			if ((r = r600_bc_add_alu(&bc, &alu))) {
+				r600_bc_clear(&bc);
+				return r;
+			}
+		}
+	}
+
 	for (i = 0; i < ve->count; i++) {
 		unsigned vbuffer_index;
-		r600_vertex_data_type(ve->hw_format[i], &format, &num_format, &format_comp);
-		desc = util_format_description(ve->hw_format[i]);
+		r600_vertex_data_type(ve->elements[i].src_format, &format, &num_format, &format_comp);
+		desc = util_format_description(ve->elements[i].src_format);
 		if (desc == NULL) {
-			R600_ERR("unknown format %d\n", ve->hw_format[i]);
-			r600_bo_reference(rctx->radeon, &ve->fetch_shader, NULL);
+			r600_bc_clear(&bc);
+			R600_ERR("unknown format %d\n", ve->elements[i].src_format);
 			return -EINVAL;
 		}
 
 		/* see above for vbuffer_need_offset explanation */
 		vbuffer_index = elements[i].vertex_buffer_index;
-		if (ve->vbuffer_need_offset) {
-			bytecode[8 + i * 4 + 0] = S_SQ_VTX_WORD0_BUFFER_ID(i + fetch_resource_start);
-		} else {
-			bytecode[8 + i * 4 + 0] = S_SQ_VTX_WORD0_BUFFER_ID(vbuffer_index + fetch_resource_start);
+		memset(&vtx, 0, sizeof(vtx));
+		vtx.buffer_id = (ve->vbuffer_need_offset ? i : vbuffer_index) + fetch_resource_start;
+		vtx.fetch_type = elements[i].instance_divisor ? 1 : 0;
+		vtx.src_gpr = elements[i].instance_divisor > 1 ? i + 1 : 0;
+		vtx.src_sel_x = elements[i].instance_divisor ? 3 : 0;
+		vtx.mega_fetch_count = 16;
+		vtx.dst_gpr = i + 1;
+		vtx.dst_sel_x = desc->swizzle[0];
+		vtx.dst_sel_y = desc->swizzle[1];
+		vtx.dst_sel_z = desc->swizzle[2];
+		vtx.dst_sel_w = desc->swizzle[3];
+		vtx.data_format = format;
+		vtx.num_format_all = num_format;
+		vtx.format_comp_all = format_comp;
+		vtx.srf_mode_all = 1;
+		vtx.offset = elements[i].src_offset;
+
+		if ((r = r600_bc_add_vtx(&bc, &vtx))) {
+			r600_bc_clear(&bc);
+			return r;
 		}
-		bytecode[8 + i * 4 + 0] |= S_SQ_VTX_WORD0_SRC_GPR(0) |
-					S_SQ_VTX_WORD0_SRC_SEL_X(0) |
-					S_SQ_VTX_WORD0_MEGA_FETCH_COUNT(0x1F);
-		bytecode[8 + i * 4 + 1] = S_SQ_VTX_WORD1_DST_SEL_X(desc->swizzle[0]) |
-					S_SQ_VTX_WORD1_DST_SEL_Y(desc->swizzle[1]) |
-					S_SQ_VTX_WORD1_DST_SEL_Z(desc->swizzle[2]) |
-					S_SQ_VTX_WORD1_DST_SEL_W(desc->swizzle[3]) |
-					S_SQ_VTX_WORD1_USE_CONST_FIELDS(0) |
-					S_SQ_VTX_WORD1_DATA_FORMAT(format) |
-					S_SQ_VTX_WORD1_NUM_FORMAT_ALL(num_format) |
-					S_SQ_VTX_WORD1_FORMAT_COMP_ALL(format_comp) |
-					S_SQ_VTX_WORD1_SRF_MODE_ALL(1) |
-					S_SQ_VTX_WORD1_GPR_DST_GPR(i + 1);
-		bytecode[8 + i * 4 + 2] = S_SQ_VTX_WORD2_OFFSET(elements[i].src_offset) |
-					S_SQ_VTX_WORD2_MEGA_FETCH(1);
-		bytecode[8 + i * 4 + 3] = 0;
 	}
+
+	r600_bc_add_cfinst(&bc, BC_INST(&bc, V_SQ_CF_WORD1_SQ_CF_INST_RETURN));
+
+	/* use PIPE_BIND_VERTEX_BUFFER so we use the cache buffer manager */
+	ve->fetch_shader = r600_bo(rctx->radeon, bc.ndw*4, 256, PIPE_BIND_VERTEX_BUFFER, 0);
+	if (ve->fetch_shader == NULL) {
+		r600_bc_clear(&bc);
+		return -ENOMEM;
+	}
+
+	ve->fs_size = bc.ndw*4;
+	if ((r = r600_bc_build(&bc))) {
+		r600_bc_clear(&bc);
+		return r;
+	}
+
+	if (dump_shaders == -1)
+		dump_shaders = debug_get_bool_option("R600_DUMP_SHADERS", FALSE);
+
+	if (dump_shaders) {
+		fprintf(stderr, "--------------------------------------------------------------\n");
+		r600_bc_dump(&bc);
+		fprintf(stderr, "______________________________________________________________\n");
+	}
+
+	bytecode = r600_bo_map(rctx->radeon, ve->fetch_shader, 0, NULL);
+	if (bytecode == NULL) {
+		r600_bc_clear(&bc);
+		r600_bo_reference(rctx->radeon, &ve->fetch_shader, NULL);
+		return -ENOMEM;
+	}
+
+	memcpy(bytecode, bc.bytecode, ve->fs_size);
+
 	r600_bo_unmap(rctx->radeon, ve->fetch_shader);
+	r600_bc_clear(&bc);
+
+	if (rctx->family >= CHIP_CEDAR)
+		eg_cf_vtx(ve);
+	else
+		r600_cf_vtx(ve);
+
 	return 0;
 }
