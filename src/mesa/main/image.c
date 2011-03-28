@@ -743,9 +743,11 @@ _mesa_is_color_format(GLenum format)
       case GL_COMPRESSED_SIGNED_RED_RGTC1:
       case GL_COMPRESSED_RG_RGTC2:
       case GL_COMPRESSED_SIGNED_RG_RGTC2:
-      /* signed, normalized texture formats */
-      case GL_RGBA_SNORM:
-      case GL_RGBA8_SNORM:
+      case GL_COMPRESSED_LUMINANCE_LATC1_EXT:
+      case GL_COMPRESSED_SIGNED_LUMINANCE_LATC1_EXT:
+      case GL_COMPRESSED_LUMINANCE_ALPHA_LATC2_EXT:
+      case GL_COMPRESSED_SIGNED_LUMINANCE_ALPHA_LATC2_EXT:
+      case GL_COMPRESSED_LUMINANCE_ALPHA_3DC_ATI:
       /* generic integer formats */
       case GL_RED_INTEGER_EXT:
       case GL_GREEN_INTEGER_EXT:
@@ -794,6 +796,31 @@ _mesa_is_color_format(GLenum format)
       case GL_INTENSITY8I_EXT:
       case GL_LUMINANCE8I_EXT:
       case GL_LUMINANCE_ALPHA8I_EXT:
+      /* signed, normalized texture formats */
+      case GL_RED_SNORM:
+      case GL_R8_SNORM:
+      case GL_R16_SNORM:
+      case GL_RG_SNORM:
+      case GL_RG8_SNORM:
+      case GL_RG16_SNORM:
+      case GL_RGB_SNORM:
+      case GL_RGB8_SNORM:
+      case GL_RGB16_SNORM:
+      case GL_RGBA_SNORM:
+      case GL_RGBA8_SNORM:
+      case GL_RGBA16_SNORM:
+      case GL_ALPHA_SNORM:
+      case GL_ALPHA8_SNORM:
+      case GL_ALPHA16_SNORM:
+      case GL_LUMINANCE_SNORM:
+      case GL_LUMINANCE8_SNORM:
+      case GL_LUMINANCE16_SNORM:
+      case GL_LUMINANCE_ALPHA_SNORM:
+      case GL_LUMINANCE8_ALPHA8_SNORM:
+      case GL_LUMINANCE16_ALPHA16_SNORM:
+      case GL_INTENSITY_SNORM:
+      case GL_INTENSITY8_SNORM:
+      case GL_INTENSITY16_SNORM:
          return GL_TRUE;
       case GL_YCBCR_MESA:  /* not considered to be RGB */
          /* fall-through */
@@ -1025,6 +1052,13 @@ _mesa_is_compressed_format(struct gl_context *ctx, GLenum format)
    case GL_COMPRESSED_RG_RGTC2:
    case GL_COMPRESSED_SIGNED_RG_RGTC2:
       return ctx->Extensions.ARB_texture_compression_rgtc;
+   case GL_COMPRESSED_LUMINANCE_LATC1_EXT:
+   case GL_COMPRESSED_SIGNED_LUMINANCE_LATC1_EXT:
+   case GL_COMPRESSED_LUMINANCE_ALPHA_LATC2_EXT:
+   case GL_COMPRESSED_SIGNED_LUMINANCE_ALPHA_LATC2_EXT:
+      return ctx->Extensions.EXT_texture_compression_latc;
+   case GL_COMPRESSED_LUMINANCE_ALPHA_3DC_ATI:
+      return ctx->Extensions.ATI_texture_compression_3dc;
    default:
       return GL_FALSE;
    }

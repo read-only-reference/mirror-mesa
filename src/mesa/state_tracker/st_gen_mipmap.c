@@ -87,7 +87,7 @@ st_render_mipmap(struct st_context *st,
    /* XXX should probably kill this and always use util_gen_mipmap
       since this implements a sw fallback as well */
    if (!screen->is_format_supported(screen, psv->format, psv->texture->target,
-                                    0, PIPE_BIND_RENDER_TARGET, 0)) {
+                                    0, PIPE_BIND_RENDER_TARGET)) {
       return FALSE;
    }
 
@@ -103,52 +103,78 @@ st_render_mipmap(struct st_context *st,
  * image with stride==width.
  */
 static void
-decompress_image(enum pipe_format format,
-                 const uint8_t *src, uint8_t *dst,
+decompress_image(enum pipe_format format, int datatype,
+                 const uint8_t *src, void *dst,
                  unsigned width, unsigned height, unsigned src_stride)
 {
    const struct util_format_description *desc = util_format_description(format);
    const uint bw = util_format_get_blockwidth(format);
    const uint bh = util_format_get_blockheight(format);
-   const uint dst_stride = 4 * MAX2(width, bw);
+   uint dst_stride = 4 * MAX2(width, bw);
 
-   desc->unpack_rgba_8unorm(dst, dst_stride, src, src_stride, width, height);
-
-   if (width < bw || height < bh) {
-      /* We're decompressing an image smaller than the compression
-       * block size.  We don't want garbage pixel values in the region
-       * outside (width x height) so replicate pixels from the (width
-       * x height) region to fill out the (bw x bh) block size.
-       */
-      uint x, y;
-      for (y = 0; y < bh; y++) {
-         for (x = 0; x < bw; x++) {
-            if (x >= width || y >= height) {
-               uint p = (y * bw + x) * 4;
-               dst[p + 0] = dst[0];
-               dst[p + 1] = dst[1];
-               dst[p + 2] = dst[2];
-               dst[p + 3] = dst[3];
-            }
-         }
+   if (datatype == GL_FLOAT) {
+      desc->unpack_rgba_float((float *)dst, dst_stride * sizeof(GLfloat), src, src_stride, width, height);
+      if (width < bw || height < bh) {
+	 float *dst_p = (float *)dst;
+	 /* We're decompressing an image smaller than the compression
+	  * block size.  We don't want garbage pixel values in the region
+	  * outside (width x height) so replicate pixels from the (width
+	  * x height) region to fill out the (bw x bh) block size.
+	  */
+	 uint x, y;
+	 for (y = 0; y < bh; y++) {
+	    for (x = 0; x < bw; x++) {
+	       if (x >= width || y >= height) {
+		  uint p = (y * bw + x) * 4;
+		  dst_p[p + 0] = dst_p[0];
+		  dst_p[p + 1] = dst_p[1];
+		  dst_p[p + 2] = dst_p[2];
+		  dst_p[p + 3] = dst_p[3];
+	       }
+	    }
+	 }
+      }
+   } else {
+      desc->unpack_rgba_8unorm((uint8_t *)dst, dst_stride, src, src_stride, width, height);
+      if (width < bw || height < bh) {
+	 uint8_t *dst_p = (uint8_t *)dst;
+	 /* We're decompressing an image smaller than the compression
+	  * block size.  We don't want garbage pixel values in the region
+	  * outside (width x height) so replicate pixels from the (width
+	  * x height) region to fill out the (bw x bh) block size.
+	  */
+	 uint x, y;
+	 for (y = 0; y < bh; y++) {
+	    for (x = 0; x < bw; x++) {
+	       if (x >= width || y >= height) {
+		  uint p = (y * bw + x) * 4;
+		  dst_p[p + 0] = dst_p[0];
+		  dst_p[p + 1] = dst_p[1];
+		  dst_p[p + 2] = dst_p[2];
+		  dst_p[p + 3] = dst_p[3];
+	       }
+	    }
+	 }
       }
    }
 }
-
 
 /**
  * Helper function to compress an image.  The source is a 32-bpp RGBA image
  * with stride==width.
  */
 static void
-compress_image(enum pipe_format format,
-               const uint8_t *src, uint8_t *dst,
+compress_image(enum pipe_format format, int datatype,
+               const void *src, uint8_t *dst,
                unsigned width, unsigned height, unsigned dst_stride)
 {
    const struct util_format_description *desc = util_format_description(format);
    const uint src_stride = 4 * width;
 
-   desc->pack_rgba_8unorm(dst, dst_stride, src, src_stride, width, height);
+   if (datatype == GL_FLOAT)
+      desc->pack_rgba_float(dst, dst_stride, (GLfloat *)src, src_stride * sizeof(GLfloat), width, height);
+   else
+      desc->pack_rgba_8unorm(dst, dst_stride, (uint8_t *)src, src_stride, width, height);
 }
 
 
@@ -178,7 +204,10 @@ fallback_generate_mipmap(struct gl_context *ctx, GLenum target,
       _mesa_is_format_compressed(texObj->Image[face][baseLevel]->TexFormat);
 
    if (compressed) {
-      datatype = GL_UNSIGNED_BYTE;
+      GLenum type =
+         _mesa_get_format_datatype(texObj->Image[face][baseLevel]->TexFormat);
+
+      datatype = type == GL_UNSIGNED_NORMALIZED ? GL_UNSIGNED_BYTE : GL_FLOAT;
       comps = 4;
    }
    else {
@@ -230,11 +259,11 @@ fallback_generate_mipmap(struct gl_context *ctx, GLenum target,
 
          assert(comps == 4);
 
-         srcTemp = malloc(srcWidth2 * srcHeight2 * comps + 000);
-         dstTemp = malloc(dstWidth2 * dstHeight2 * comps + 000);
+         srcTemp = malloc(srcWidth2 * srcHeight2 * comps * (datatype == GL_FLOAT ? 4 : 1));
+         dstTemp = malloc(dstWidth2 * dstHeight2 * comps * (datatype == GL_FLOAT ? 4 : 1));
 
          /* decompress the src image: srcData -> srcTemp */
-         decompress_image(format, srcData, srcTemp, srcWidth, srcHeight, srcTrans->stride);
+         decompress_image(format, datatype, srcData, srcTemp, srcWidth2, srcHeight2, srcTrans->stride);
 
          _mesa_generate_mipmap_level(target, datatype, comps,
                                      0 /*border*/,
@@ -246,7 +275,7 @@ fallback_generate_mipmap(struct gl_context *ctx, GLenum target,
                                      dstWidth2); /* stride in texels */
 
          /* compress the new image: dstTemp -> dstData */
-         compress_image(format, dstTemp, dstData, dstWidth, dstHeight, dstTrans->stride);
+         compress_image(format, datatype, dstTemp, dstData, dstWidth2, dstHeight2, dstTrans->stride);
 
          free(srcTemp);
          free(dstTemp);

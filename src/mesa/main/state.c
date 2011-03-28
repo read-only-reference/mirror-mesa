@@ -53,7 +53,7 @@
 static void
 update_separate_specular(struct gl_context *ctx)
 {
-   if (NEED_SECONDARY_COLOR(ctx))
+   if (_mesa_need_secondary_color(ctx))
       ctx->_TriangleCaps |= DD_SEPARATE_SPECULAR;
    else
       ctx->_TriangleCaps &= ~DD_SEPARATE_SPECULAR;
@@ -442,8 +442,37 @@ update_color(struct gl_context *ctx)
    /* This is needed to support 1.1's RGB logic ops AND
     * 1.0's blending logicops.
     */
-   ctx->Color._LogicOpEnabled = RGBA_LOGICOP_ENABLED(ctx);
+   ctx->Color._LogicOpEnabled = _mesa_rgba_logicop_enabled(ctx);
 }
+
+static void
+update_clamp_fragment_color(struct gl_context *ctx)
+{
+   if(ctx->Color.ClampFragmentColor == GL_FIXED_ONLY_ARB)
+      ctx->Color._ClampFragmentColor = !ctx->DrawBuffer || !ctx->DrawBuffer->Visual.floatMode;
+   else
+      ctx->Color._ClampFragmentColor = ctx->Color.ClampFragmentColor;
+}
+
+static void
+update_clamp_vertex_color(struct gl_context *ctx)
+{
+   if(ctx->Light.ClampVertexColor == GL_FIXED_ONLY_ARB)
+      ctx->Light._ClampVertexColor = !ctx->DrawBuffer || !ctx->DrawBuffer->Visual.floatMode;
+   else
+      ctx->Light._ClampVertexColor = ctx->Light.ClampVertexColor;
+}
+
+static void
+update_clamp_read_color(struct gl_context *ctx)
+{
+   if(ctx->Color.ClampReadColor == GL_FIXED_ONLY_ARB)
+      ctx->Color._ClampReadColor = !ctx->ReadBuffer || !ctx->ReadBuffer->Visual.floatMode;
+   else
+      ctx->Color._ClampReadColor = ctx->Color.ClampReadColor;
+}
+
+
 
 
 /*
@@ -524,7 +553,7 @@ update_tricaps(struct gl_context *ctx, GLbitfield new_state)
       ctx->_TriangleCaps |= DD_TRI_LIGHT_TWOSIDE;
    if (ctx->Light.ShadeModel == GL_FLAT)
       ctx->_TriangleCaps |= DD_FLATSHADE;
-   if (NEED_SECONDARY_COLOR(ctx))
+   if (_mesa_need_secondary_color(ctx))
       ctx->_TriangleCaps |= DD_SEPARATE_SPECULAR;
 
    /*
@@ -565,7 +594,7 @@ _mesa_update_state_locked( struct gl_context *ctx )
    if (ctx->FragmentProgram._MaintainTexEnvProgram) {
       prog_flags |= (_NEW_BUFFERS | _NEW_TEXTURE | _NEW_FOG |
 		     _NEW_ARRAY | _NEW_LIGHT | _NEW_POINT | _NEW_RENDERMODE |
-		     _NEW_PROGRAM);
+		     _NEW_PROGRAM | _NEW_FRAG_CLAMP);
    }
    if (ctx->VertexProgram._MaintainTnlProgram) {
       prog_flags |= (_NEW_ARRAY | _NEW_TEXTURE | _NEW_TEXTURE_MATRIX |
@@ -599,10 +628,13 @@ _mesa_update_state_locked( struct gl_context *ctx )
    if (new_state & _NEW_LIGHT)
       _mesa_update_lighting( ctx );
 
+   if (new_state & (_NEW_LIGHT | _NEW_BUFFERS))
+      update_clamp_vertex_color(ctx);
+
    if (new_state & (_NEW_STENCIL | _NEW_BUFFERS))
       _mesa_update_stencil( ctx );
 
-   if (new_state & _MESA_NEW_TRANSFER_STATE)
+   if (new_state & _NEW_PIXEL)
       _mesa_update_pixel( ctx, new_state );
 
    if (new_state & _DD_NEW_SEPARATE_SPECULAR)
@@ -616,6 +648,12 @@ _mesa_update_state_locked( struct gl_context *ctx )
 
    if (new_state & _NEW_COLOR)
       update_color( ctx );
+
+   if (new_state & (_NEW_COLOR | _NEW_BUFFERS))
+      update_clamp_read_color(ctx);
+
+   if(new_state & (_NEW_FRAG_CLAMP | _NEW_BUFFERS))
+      update_clamp_fragment_color(ctx);
 
 #if 0
    if (new_state & (_NEW_POINT | _NEW_LINE | _NEW_POLYGON | _NEW_LIGHT

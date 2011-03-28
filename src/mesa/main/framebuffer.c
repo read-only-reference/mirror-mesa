@@ -794,9 +794,6 @@ update_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
          _mesa_drawbuffers(ctx, ctx->Const.MaxDrawBuffers,
                            ctx->Color.DrawBuffer, NULL);
       }
-      if (fb->ColorReadBuffer != ctx->Pixel.ReadBuffer) {
-         
-      }
    }
    else {
       /* This is a user-created framebuffer.
@@ -892,6 +889,8 @@ _mesa_source_buffer_exists(struct gl_context *ctx, GLenum format)
       }
       ASSERT(_mesa_get_format_bits(ctx->ReadBuffer->_ColorReadBuffer->Format, GL_RED_BITS) > 0 ||
              _mesa_get_format_bits(ctx->ReadBuffer->_ColorReadBuffer->Format, GL_ALPHA_BITS) > 0 ||
+             _mesa_get_format_bits(ctx->ReadBuffer->_ColorReadBuffer->Format, GL_TEXTURE_LUMINANCE_SIZE) > 0 ||
+             _mesa_get_format_bits(ctx->ReadBuffer->_ColorReadBuffer->Format, GL_TEXTURE_INTENSITY_SIZE) > 0 ||
              _mesa_get_format_bits(ctx->ReadBuffer->_ColorReadBuffer->Format, GL_INDEX_BITS) > 0);
       break;
    case GL_DEPTH:

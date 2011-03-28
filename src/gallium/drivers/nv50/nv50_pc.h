@@ -23,6 +23,8 @@
 #ifndef __NV50_COMPILER_H__
 #define __NV50_COMPILER_H__
 
+#define NV50PC_DEBUG
+
 #ifdef NV50PC_DEBUG
 # define NV50_DBGMSG(args...) debug_printf(args)
 #else
@@ -226,6 +228,8 @@ struct nv_ref {
    ubyte flags; /* not used yet */
 };
 
+#define NV_REF_FLAG_REGALLOC_PRIV (1 << 0)
+
 struct nv_basic_block;
 
 struct nv_instruction {
@@ -260,6 +264,15 @@ struct nv_instruction {
    /* */
    ubyte quadop;
 };
+
+static INLINE int
+nvi_vector_size(struct nv_instruction *nvi)
+{
+   int i;
+   assert(nvi);
+   for (i = 0; i < 4 && nvi->def[i]; ++i);
+   return i;
+}
 
 #define CFG_EDGE_FORWARD     0
 #define CFG_EDGE_BACK        1

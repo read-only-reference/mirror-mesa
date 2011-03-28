@@ -43,7 +43,7 @@ drm_display_is_format_supported(struct native_display *ndpy,
    return ndpy->screen->is_format_supported(ndpy->screen,
          fmt, PIPE_TEXTURE_2D, 0,
          (is_color) ? PIPE_BIND_RENDER_TARGET :
-         PIPE_BIND_DEPTH_STENCIL, 0);
+         PIPE_BIND_DEPTH_STENCIL);
 }
 
 static const struct native_config **
@@ -124,8 +124,7 @@ drm_display_destroy(struct native_display *ndpy)
 
    drm_display_fini_modeset(&drmdpy->base);
 
-   if (drmdpy->base.screen)
-      drmdpy->base.screen->destroy(drmdpy->base.screen);
+   ndpy_uninit(ndpy);
 
    if (drmdpy->fd >= 0)
       close(drmdpy->fd);

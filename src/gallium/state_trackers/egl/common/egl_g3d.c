@@ -368,7 +368,7 @@ egl_g3d_fill_depth_stencil_formats(_EGLDisplay *dpy,
       /* pick the first supported format */
       for (i = 0; i < n; i++) {
          if (screen->is_format_supported(screen, fmt[i],
-                  PIPE_TEXTURE_2D, 0, PIPE_BIND_DEPTH_STENCIL, 0)) {
+                  PIPE_TEXTURE_2D, 0, PIPE_BIND_DEPTH_STENCIL)) {
             formats[count++] = fmt[i];
             break;
          }
@@ -454,9 +454,6 @@ egl_g3d_terminate(_EGLDriver *drv, _EGLDisplay *dpy)
    struct egl_g3d_display *gdpy = egl_g3d_display(dpy);
 
    _eglReleaseDisplayResources(drv, dpy);
-
-   if (gdpy->pipe)
-      gdpy->pipe->destroy(gdpy->pipe);
 
    if (dpy->Configs) {
       _eglDestroyArray(dpy->Configs, egl_g3d_free_config);

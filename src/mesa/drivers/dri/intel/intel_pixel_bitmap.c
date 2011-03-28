@@ -31,6 +31,7 @@
 #include "main/colormac.h"
 #include "main/mtypes.h"
 #include "main/macros.h"
+#include "main/pbo.h"
 #include "main/bufferobj.h"
 #include "main/state.h"
 #include "main/texobj.h"
@@ -207,7 +208,7 @@ do_blit_bitmap( struct gl_context *ctx,
 
    COPY_4V(tmpColor, ctx->Current.RasterColor);
 
-   if (NEED_SECONDARY_COLOR(ctx)) {
+   if (_mesa_need_secondary_color(ctx)) {
        ADD_3V(tmpColor, tmpColor, ctx->Current.RasterSecondaryColor);
    }
 

@@ -87,6 +87,7 @@
 #include "texobj.h"
 #include "texparam.h"
 #include "texstate.h"
+#include "texturebarrier.h"
 #include "transformfeedback.h"
 #include "mtypes.h"
 #include "varray.h"
@@ -690,6 +691,8 @@ _mesa_create_exec_table(void)
    SET_FramebufferTextureFaceARB(exec, _mesa_FramebufferTextureFaceARB);
 #endif
 
+   SET_ClampColorARB(exec, _mesa_ClampColorARB);
+
    /* GL_EXT_texture_integer */
    SET_ClearColorIiEXT(exec, _mesa_ClearColorIiEXT);
    SET_ClearColorIuiEXT(exec, _mesa_ClearColorIuiEXT);
@@ -719,6 +722,9 @@ _mesa_create_exec_table(void)
    SET_BlendFuncSeparateiARB(exec, _mesa_BlendFuncSeparatei);
    SET_BlendEquationiARB(exec, _mesa_BlendEquationi);
    SET_BlendEquationSeparateiARB(exec, _mesa_BlendEquationSeparatei);
+
+   /* GL_NV_texture_barrier */
+   SET_TextureBarrierNV(exec, _mesa_TextureBarrierNV);
  
    return exec;
 }

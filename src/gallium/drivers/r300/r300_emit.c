@@ -45,7 +45,10 @@ void r300_emit_blend_state(struct r300_context* r300,
     CS_LOCALS(r300);
 
     if (fb->nr_cbufs) {
-        WRITE_CS_TABLE(blend->cb, size);
+        if (fb->cbufs[0]->format == PIPE_FORMAT_R16G16B16A16_FLOAT)
+            WRITE_CS_TABLE(blend->cb_noclamp, size);
+        else
+            WRITE_CS_TABLE(blend->cb_clamp, size);
     } else {
         WRITE_CS_TABLE(blend->cb_no_readwrite, size);
     }
@@ -77,9 +80,15 @@ void r300_emit_dsa_state(struct r300_context* r300, unsigned size, void* state)
     CS_LOCALS(r300);
 
     if (fb->zsbuf) {
-        WRITE_CS_TABLE(&dsa->cb_begin, size);
+        if (fb->nr_cbufs && fb->cbufs[0]->format == PIPE_FORMAT_R16G16B16A16_FLOAT)
+            WRITE_CS_TABLE(&dsa->cb_begin_fp16, size);
+        else
+            WRITE_CS_TABLE(&dsa->cb_begin, size);
     } else {
-        WRITE_CS_TABLE(dsa->cb_no_readwrite, size);
+        if (fb->nr_cbufs && fb->cbufs[0]->format == PIPE_FORMAT_R16G16B16A16_FLOAT)
+            WRITE_CS_TABLE(dsa->cb_fp16_zb_no_readwrite, size);
+        else
+            WRITE_CS_TABLE(dsa->cb_zb_no_readwrite, size);
     }
 }
 
@@ -469,6 +478,7 @@ void r300_emit_fb_state_pipelined(struct r300_context *r300,
     struct pipe_framebuffer_state* fb =
             (struct pipe_framebuffer_state*)r300->fb_state.state;
     unsigned i, num_cbufs = fb->nr_cbufs;
+    unsigned mspos0, mspos1;
     CS_LOCALS(r300);
 
     /* If we use the multiwrite feature, the colorbuffers 2,3,4 must be
@@ -485,6 +495,11 @@ void r300_emit_fb_state_pipelined(struct r300_context *r300,
     for (i = 0; i < num_cbufs; i++) {
         OUT_CS(r300_surface(fb->cbufs[i])->format);
     }
+    for (; i < 1; i++) {
+        OUT_CS(R300_US_OUT_FMT_C4_8 |
+               R300_C0_SEL_B | R300_C1_SEL_G |
+               R300_C2_SEL_R | R300_C3_SEL_A);
+    }
     for (; i < 4; i++) {
         OUT_CS(R300_US_OUT_FMT_UNUSED);
     }
@@ -492,38 +507,36 @@ void r300_emit_fb_state_pipelined(struct r300_context *r300,
     /* Multisampling. Depends on framebuffer sample count.
      * These are pipelined regs and as such cannot be moved
      * to the AA state. */
-    if (r300->rws->get_value(r300->rws, R300_VID_DRM_2_3_0)) {
-        unsigned mspos0 = 0x66666666;
-        unsigned mspos1 = 0x6666666;
+    mspos0 = 0x66666666;
+    mspos1 = 0x6666666;
 
-        if (fb->nr_cbufs && fb->cbufs[0]->texture->nr_samples > 1) {
-            /* Subsample placement. These may not be optimal. */
-            switch (fb->cbufs[0]->texture->nr_samples) {
-                case 2:
-                    mspos0 = 0x33996633;
-                    mspos1 = 0x6666663;
-                    break;
-                case 3:
-                    mspos0 = 0x33936933;
-                    mspos1 = 0x6666663;
-                    break;
-                case 4:
-                    mspos0 = 0x33939933;
-                    mspos1 = 0x3966663;
-                    break;
-                case 6:
-                    mspos0 = 0x22a2aa22;
-                    mspos1 = 0x2a65672;
-                    break;
-                default:
-                    debug_printf("r300: Bad number of multisamples!\n");
-            }
+    if (fb->nr_cbufs && fb->cbufs[0]->texture->nr_samples > 1) {
+        /* Subsample placement. These may not be optimal. */
+        switch (fb->cbufs[0]->texture->nr_samples) {
+        case 2:
+            mspos0 = 0x33996633;
+            mspos1 = 0x6666663;
+            break;
+        case 3:
+            mspos0 = 0x33936933;
+            mspos1 = 0x6666663;
+            break;
+        case 4:
+            mspos0 = 0x33939933;
+            mspos1 = 0x3966663;
+            break;
+        case 6:
+            mspos0 = 0x22a2aa22;
+            mspos1 = 0x2a65672;
+            break;
+        default:
+            debug_printf("r300: Bad number of multisamples!\n");
         }
-
-        OUT_CS_REG_SEQ(R300_GB_MSPOS0, 2);
-        OUT_CS(mspos0);
-        OUT_CS(mspos1);
     }
+
+    OUT_CS_REG_SEQ(R300_GB_MSPOS0, 2);
+    OUT_CS(mspos0);
+    OUT_CS(mspos1);
     END_CS;
 }
 
@@ -789,7 +802,8 @@ void r300_emit_textures_state(struct r300_context *r300,
     END_CS;
 }
 
-void r300_emit_vertex_arrays(struct r300_context* r300, int offset, boolean indexed)
+void r300_emit_vertex_arrays(struct r300_context* r300, int offset,
+                             boolean indexed, int instance_id)
 {
     struct pipe_vertex_buffer *vbuf = r300->vbuf_mgr->vertex_buffer;
     struct pipe_resource **valid_vbuf = r300->vbuf_mgr->real_vertex_buffer;
@@ -799,39 +813,92 @@ void r300_emit_vertex_arrays(struct r300_context* r300, int offset, boolean inde
     unsigned vertex_array_count = r300->velems->count;
     unsigned packet_size = (vertex_array_count * 3 + 1) / 2;
     struct pipe_vertex_buffer *vb1, *vb2;
-    unsigned *hw_format_size;
-    unsigned size1, size2;
+    unsigned *hw_format_size = r300->velems->format_size;
+    unsigned size1, size2, offset1, offset2, stride1, stride2;
     CS_LOCALS(r300);
 
     BEGIN_CS(2 + packet_size + vertex_array_count * 2);
     OUT_CS_PKT3(R300_PACKET3_3D_LOAD_VBPNTR, packet_size);
     OUT_CS(vertex_array_count | (!indexed ? R300_VC_FORCE_PREFETCH : 0));
 
-    hw_format_size = r300->velems->format_size;
+    if (instance_id == -1) {
+        /* Non-instanced arrays. This ignores instance_divisor and instance_id. */
+        for (i = 0; i < vertex_array_count - 1; i += 2) {
+            vb1 = &vbuf[velem[i].vertex_buffer_index];
+            vb2 = &vbuf[velem[i+1].vertex_buffer_index];
+            size1 = hw_format_size[i];
+            size2 = hw_format_size[i+1];
 
-    for (i = 0; i < vertex_array_count - 1; i += 2) {
-        vb1 = &vbuf[velem[i].vertex_buffer_index];
-        vb2 = &vbuf[velem[i+1].vertex_buffer_index];
-        size1 = hw_format_size[i];
-        size2 = hw_format_size[i+1];
+            OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(vb1->stride) |
+                   R300_VBPNTR_SIZE1(size2) | R300_VBPNTR_STRIDE1(vb2->stride));
+            OUT_CS(vb1->buffer_offset + velem[i].src_offset   + offset * vb1->stride);
+            OUT_CS(vb2->buffer_offset + velem[i+1].src_offset + offset * vb2->stride);
+        }
 
-        OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(vb1->stride) |
-               R300_VBPNTR_SIZE1(size2) | R300_VBPNTR_STRIDE1(vb2->stride));
-        OUT_CS(vb1->buffer_offset + velem[i].src_offset   + offset * vb1->stride);
-        OUT_CS(vb2->buffer_offset + velem[i+1].src_offset + offset * vb2->stride);
-    }
+        if (vertex_array_count & 1) {
+            vb1 = &vbuf[velem[i].vertex_buffer_index];
+            size1 = hw_format_size[i];
 
-    if (vertex_array_count & 1) {
-        vb1 = &vbuf[velem[i].vertex_buffer_index];
-        size1 = hw_format_size[i];
+            OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(vb1->stride));
+            OUT_CS(vb1->buffer_offset + velem[i].src_offset + offset * vb1->stride);
+        }
 
-        OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(vb1->stride));
-        OUT_CS(vb1->buffer_offset + velem[i].src_offset + offset * vb1->stride);
-    }
+        for (i = 0; i < vertex_array_count; i++) {
+            buf = r300_resource(valid_vbuf[velem[i].vertex_buffer_index]);
+            OUT_CS_RELOC(buf);
+        }
+    } else {
+        /* Instanced arrays. */
+        for (i = 0; i < vertex_array_count - 1; i += 2) {
+            vb1 = &vbuf[velem[i].vertex_buffer_index];
+            vb2 = &vbuf[velem[i+1].vertex_buffer_index];
+            size1 = hw_format_size[i];
+            size2 = hw_format_size[i+1];
 
-    for (i = 0; i < vertex_array_count; i++) {
-        buf = r300_resource(valid_vbuf[velem[i].vertex_buffer_index]);
-        OUT_CS_RELOC(buf);
+            if (velem[i].instance_divisor) {
+                stride1 = 0;
+                offset1 = vb1->buffer_offset + velem[i].src_offset +
+                          (instance_id / velem[i].instance_divisor) * vb1->stride;
+            } else {
+                stride1 = vb1->stride;
+                offset1 = vb1->buffer_offset + velem[i].src_offset + offset * vb1->stride;
+            }
+            if (velem[i+1].instance_divisor) {
+                stride2 = 0;
+                offset2 = vb2->buffer_offset + velem[i+1].src_offset +
+                          (instance_id / velem[i+1].instance_divisor) * vb2->stride;
+            } else {
+                stride2 = vb2->stride;
+                offset2 = vb2->buffer_offset + velem[i+1].src_offset + offset * vb2->stride;
+            }
+
+            OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(stride1) |
+                   R300_VBPNTR_SIZE1(size2) | R300_VBPNTR_STRIDE1(stride2));
+            OUT_CS(offset1);
+            OUT_CS(offset2);
+        }
+
+        if (vertex_array_count & 1) {
+            vb1 = &vbuf[velem[i].vertex_buffer_index];
+            size1 = hw_format_size[i];
+
+            if (velem[i].instance_divisor) {
+                stride1 = 0;
+                offset1 = vb1->buffer_offset + velem[i].src_offset +
+                          (instance_id / velem[i].instance_divisor) * vb1->stride;
+            } else {
+                stride1 = vb1->stride;
+                offset1 = vb1->buffer_offset + velem[i].src_offset + offset * vb1->stride;
+            }
+
+            OUT_CS(R300_VBPNTR_SIZE0(size1) | R300_VBPNTR_STRIDE0(stride1));
+            OUT_CS(offset1);
+        }
+
+        for (i = 0; i < vertex_array_count; i++) {
+            buf = r300_resource(valid_vbuf[velem[i].vertex_buffer_index]);
+            OUT_CS_RELOC(buf);
+        }
     }
     END_CS;
 }
@@ -1037,7 +1104,7 @@ void r300_emit_hiz_clear(struct r300_context *r300, unsigned size, void *state)
     OUT_CS_PKT3(R300_PACKET3_3D_CLEAR_HIZ, 2);
     OUT_CS(0);
     OUT_CS(tex->tex.hiz_dwords[fb->zsbuf->u.tex.level]);
-    OUT_CS(0xffffffff);
+    OUT_CS(r300->hiz_clear_value);
     END_CS;
 
     /* Mark the current zbuffer's hiz ram as in use. */
@@ -1159,7 +1226,7 @@ validate:
         if (flushed)
             return FALSE;
 
-        r300->context.flush(&r300->context, 0, NULL);
+        r300_flush(&r300->context, R300_FLUSH_ASYNC, NULL);
         flushed = TRUE;
         goto validate;
     }
@@ -1191,7 +1258,7 @@ unsigned r300_get_num_cs_end_dwords(struct r300_context *r300)
     /* Emitted in flush. */
     dwords += 26; /* emit_query_end */
     dwords += r300->hyperz_state.size + 2; /* emit_hyperz_end + zcache flush */
-    if (r300->screen->caps.index_bias_supported)
+    if (r300->screen->caps.is_r500)
         dwords += 2;
 
     return dwords;

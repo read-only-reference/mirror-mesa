@@ -52,6 +52,35 @@ static void guess_execution_size(struct brw_compile *p,
 }
 
 
+/**
+ * Prior to Sandybridge, the SEND instruction accepted non-MRF source
+ * registers, implicitly moving the operand to a message register.
+ *
+ * On Sandybridge, this is no longer the case.  This function performs the
+ * explicit move; it should be called before emitting a SEND instruction.
+ */
+static void
+gen6_resolve_implied_move(struct brw_compile *p,
+			  struct brw_reg *src,
+			  GLuint msg_reg_nr)
+{
+   struct intel_context *intel = &p->brw->intel;
+   if (intel->gen != 6)
+      return;
+
+   if (src->file == BRW_ARCHITECTURE_REGISTER_FILE && src->nr == BRW_ARF_NULL)
+      return;
+
+   brw_push_insn_state(p);
+   brw_set_mask_control(p, BRW_MASK_DISABLE);
+   brw_set_compression_control(p, BRW_COMPRESSION_NONE);
+   brw_MOV(p, retype(brw_message_reg(msg_reg_nr), BRW_REGISTER_TYPE_UD),
+	   retype(*src, BRW_REGISTER_TYPE_UD));
+   brw_pop_insn_state(p);
+   *src = brw_message_reg(msg_reg_nr);
+}
+
+
 static void brw_set_dest(struct brw_compile *p,
 			 struct brw_instruction *insn,
 			 struct brw_reg dest)
@@ -874,8 +903,8 @@ struct brw_instruction *brw_IF(struct brw_compile *p, GLuint execute_size)
 }
 
 struct brw_instruction *
-brw_IF_gen6(struct brw_compile *p, uint32_t conditional,
-	    struct brw_reg src0, struct brw_reg src1)
+gen6_IF(struct brw_compile *p, uint32_t conditional,
+	struct brw_reg src0, struct brw_reg src1)
 {
    struct brw_instruction *insn;
 
@@ -1061,8 +1090,8 @@ struct brw_instruction *brw_BREAK(struct brw_compile *p, int pop_count)
    return insn;
 }
 
-struct brw_instruction *brw_CONT_gen6(struct brw_compile *p,
-				      struct brw_instruction *do_insn)
+struct brw_instruction *gen6_CONT(struct brw_compile *p,
+				  struct brw_instruction *do_insn)
 {
    struct brw_instruction *insn;
    int br = 2;
@@ -1771,6 +1800,7 @@ void brw_dp_READ_4_vs_relative(struct brw_compile *p,
 			       GLuint bind_table_index)
 {
    struct intel_context *intel = &p->brw->intel;
+   struct brw_reg src = brw_vec8_grf(0, 0);
    int msg_type;
 
    /* Setup MRF[1] with offset into const buffer */
@@ -1787,6 +1817,7 @@ void brw_dp_READ_4_vs_relative(struct brw_compile *p,
 	   addr_reg, brw_imm_d(offset));
    brw_pop_insn_state(p);
 
+   gen6_resolve_implied_move(p, &src, 0);
    struct brw_instruction *insn = next_insn(p, BRW_OPCODE_SEND);
 
    insn->header.predicate_control = BRW_PREDICATE_NONE;
@@ -1795,7 +1826,7 @@ void brw_dp_READ_4_vs_relative(struct brw_compile *p,
    insn->header.mask_control = BRW_MASK_DISABLE;
 
    brw_set_dest(p, insn, dest);
-   brw_set_src0(insn, brw_vec8_grf(0, 0));
+   brw_set_src0(insn, src);
 
    if (intel->gen == 6)
       msg_type = GEN6_DATAPORT_READ_MESSAGE_OWORD_DUAL_BLOCK_READ;
@@ -1844,7 +1875,7 @@ void brw_fb_WRITE(struct brw_compile *p,
        /* headerless version, just submit color payload */
        src0 = brw_message_reg(msg_reg_nr);
 
-       msg_type = BRW_DATAPORT_WRITE_MESSAGE_RENDER_TARGET_WRITE_GEN6;
+       msg_type = GEN6_DATAPORT_WRITE_MESSAGE_RENDER_TARGET_WRITE;
    } else {
       insn->header.destreg__conditionalmod = msg_reg_nr;
 
@@ -1966,20 +1997,7 @@ void brw_SAMPLE(struct brw_compile *p,
    {
       struct brw_instruction *insn;
    
-      /* Sandybridge doesn't have the implied move for SENDs,
-       * and the first message register index comes from src0.
-       */
-      if (intel->gen >= 6) {
-	 if (src0.file != BRW_ARCHITECTURE_REGISTER_FILE ||
-	     src0.nr != BRW_ARF_NULL) {
-	    brw_push_insn_state(p);
-	    brw_set_mask_control( p, BRW_MASK_DISABLE );
-	    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
-	    brw_MOV(p, retype(brw_message_reg(msg_reg_nr), src0.type), src0);
-	    brw_pop_insn_state(p);
-	 }
-	 src0 = brw_message_reg(msg_reg_nr);
-      }
+      gen6_resolve_implied_move(p, &src0, msg_reg_nr);
 
       insn = next_insn(p, BRW_OPCODE_SEND);
       insn->header.predicate_control = 0; /* XXX */
@@ -2034,17 +2052,7 @@ void brw_urb_WRITE(struct brw_compile *p,
    struct intel_context *intel = &p->brw->intel;
    struct brw_instruction *insn;
 
-   /* Sandybridge doesn't have the implied move for SENDs,
-    * and the first message register index comes from src0.
-    */
-   if (intel->gen >= 6) {
-      brw_push_insn_state(p);
-      brw_set_mask_control( p, BRW_MASK_DISABLE );
-      brw_MOV(p, retype(brw_message_reg(msg_reg_nr), BRW_REGISTER_TYPE_UD),
-	      retype(src0, BRW_REGISTER_TYPE_UD));
-      brw_pop_insn_state(p);
-      src0 = brw_message_reg(msg_reg_nr);
-   }
+   gen6_resolve_implied_move(p, &src0, msg_reg_nr);
 
    insn = next_insn(p, BRW_OPCODE_SEND);
 
@@ -2154,17 +2162,7 @@ void brw_ff_sync(struct brw_compile *p,
    struct intel_context *intel = &p->brw->intel;
    struct brw_instruction *insn;
 
-   /* Sandybridge doesn't have the implied move for SENDs,
-    * and the first message register index comes from src0.
-    */
-   if (intel->gen >= 6) {
-      brw_push_insn_state(p);
-      brw_set_mask_control( p, BRW_MASK_DISABLE );
-      brw_MOV(p, retype(brw_message_reg(msg_reg_nr), BRW_REGISTER_TYPE_UD),
-	      retype(src0, BRW_REGISTER_TYPE_UD));
-      brw_pop_insn_state(p);
-      src0 = brw_message_reg(msg_reg_nr);
-   }
+   gen6_resolve_implied_move(p, &src0, msg_reg_nr);
 
    insn = next_insn(p, BRW_OPCODE_SEND);
    brw_set_dest(p, insn, dest);

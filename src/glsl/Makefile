@@ -191,10 +191,10 @@ $(DRICORE_OBJ_DIR)/%.o : %.c
 	@mkdir -p $(dir $@)
 	$(CC) -c $(INCLUDES) $(DRI_CFLAGS) $(DEFINES) $< -o $@
 
-glsl_lexer.cpp: glsl_lexer.lpp
+glsl_lexer.cpp: glsl_lexer.ll
 	flex --nounistd -o$@  $<
 
-glsl_parser.cpp: glsl_parser.ypp
+glsl_parser.cpp: glsl_parser.yy
 	bison -v -o "$@" -p "_mesa_glsl_" --defines=glsl_parser.h $<
 
 glcpp/glcpp-lex.c: glcpp/glcpp-lex.l
@@ -204,7 +204,7 @@ glcpp/glcpp-parse.c: glcpp/glcpp-parse.y
 	bison -v -o "$@" --defines=glcpp/glcpp-parse.h $<
 
 builtin_compiler: $(GLSL2_OBJECTS) $(OBJECTS) builtin_stubs.o
-	$(APP_CXX) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $(OBJECTS) $(GLSL2_OBJECTS) builtin_stubs.o -o $@
+	$(APP_CXX) $(INCLUDES) $(CXXFLAGS) $(LDFLAGS) $(OBJECTS) $(GLSL2_OBJECTS) builtin_stubs.o -o $@
 
 builtin_function.cpp: builtins/profiles/* builtins/ir/* builtins/tools/generate_builtins.py builtins/tools/texture_builtins.py builtin_compiler
 	@echo Regenerating builtin_function.cpp...

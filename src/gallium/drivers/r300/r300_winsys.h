@@ -35,6 +35,7 @@
 #include "pipe/p_state.h"
 
 #define R300_MAX_CMDBUF_DWORDS (16 * 1024)
+#define R300_FLUSH_ASYNC       (1 << 0)
 
 struct winsys_handle;
 struct r300_winsys_screen;
@@ -60,10 +61,8 @@ enum r300_value_id {
     R300_VID_DRM_PATCHLEVEL,
 
     /* These should probably go away: */
-    R300_VID_DRM_2_1_0,  /* Square tiling. */
-    R300_VID_DRM_2_3_0,  /* R500 VAP regs, MSPOS regs, fixed tex3D size checking */
     R300_VID_DRM_2_6_0,  /* Hyper-Z, GB_Z_PEQ_CONFIG on rv350->r4xx, R500 FG_ALPHA_VALUE */
-    R300_VID_DRM_2_8_0,  /* R500 US_FORMAT regs, R500 ARGB2101010 colorbuffer, CMask */
+    R300_VID_DRM_2_8_0,  /* R500 US_FORMAT regs, R500 ARGB2101010 colorbuffer, CMask, R16F/RG16F */
 
     R300_CAN_HYPERZ,     /* ZMask + HiZ */
     R300_CAN_AACOMPRESS, /* CMask */
@@ -267,15 +266,9 @@ struct r300_winsys_screen {
      * Flush a command stream.
      *
      * \param cs        A command stream to flush.
+     * \param flags,    R300_FLUSH_ASYNC or 0.
      */
-    void (*cs_flush)(struct r300_winsys_cs *cs);
-
-    /**
-     * Wait until the last flush is completed.
-     *
-     * \param cs        A command stream.
-     */
-    void (*cs_sync_flush)(struct r300_winsys_cs *cs);
+    void (*cs_flush)(struct r300_winsys_cs *cs, unsigned flags);
 
     /**
      * Set a flush callback which is called from winsys when flush is
@@ -286,7 +279,7 @@ struct r300_winsys_screen {
      * \param user      A user pointer that will be passed to the flush callback.
      */
     void (*cs_set_flush)(struct r300_winsys_cs *cs,
-                         void (*flush)(void *),
+                         void (*flush)(void *ctx, unsigned flags),
                          void *user);
 
     /**

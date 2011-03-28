@@ -131,6 +131,7 @@ enum value_extra {
    EXTRA_VERSION_32,
    EXTRA_VERSION_ES2,
    EXTRA_NEW_BUFFERS, 
+   EXTRA_NEW_FRAG_CLAMP,
    EXTRA_VALID_DRAW_BUFFER,
    EXTRA_VALID_TEXTURE_UNIT,
    EXTRA_FLUSH_CURRENT,
@@ -223,6 +224,11 @@ static const int extra_new_buffers[] = {
    EXTRA_END
 };
 
+static const int extra_new_frag_clamp[] = {
+   EXTRA_NEW_FRAG_CLAMP,
+   EXTRA_END
+};
+
 static const int extra_valid_draw_buffer[] = {
    EXTRA_VALID_DRAW_BUFFER,
    EXTRA_END
@@ -290,7 +296,6 @@ EXTRA_EXT(NV_fragment_program);
 EXTRA_EXT(NV_texture_rectangle);
 EXTRA_EXT(EXT_stencil_two_side);
 EXTRA_EXT(NV_light_max_exponent);
-EXTRA_EXT(SGI_texture_color_table);
 EXTRA_EXT(EXT_depth_bounds_test);
 EXTRA_EXT(ARB_depth_clamp);
 EXTRA_EXT(ATI_fragment_shader);
@@ -375,7 +380,7 @@ static const struct value_desc values[] = {
    { GL_BLEND, CONTEXT_BIT0(Color.BlendEnabled), NO_EXTRA },
    { GL_BLEND_SRC, CONTEXT_ENUM(Color.Blend[0].SrcRGB), NO_EXTRA },
    { GL_BLUE_BITS, BUFFER_INT(Visual.blueBits), extra_new_buffers },
-   { GL_COLOR_CLEAR_VALUE, CONTEXT_FIELD(Color.ClearColor[0], TYPE_FLOATN_4), NO_EXTRA },
+   { GL_COLOR_CLEAR_VALUE, LOC_CUSTOM, TYPE_FLOATN_4, 0, extra_new_frag_clamp },
    { GL_COLOR_WRITEMASK, LOC_CUSTOM, TYPE_INT_4, 0, NO_EXTRA },
    { GL_CULL_FACE, CONTEXT_BOOL(Polygon.CullFlag), NO_EXTRA },
    { GL_CULL_FACE_MODE, CONTEXT_ENUM(Polygon.CullFaceMode), NO_EXTRA },
@@ -512,7 +517,7 @@ static const struct value_desc values[] = {
    { GL_LIGHT_MODEL_TWO_SIDE, CONTEXT_BOOL(Light.Model.TwoSide), NO_EXTRA },
    { GL_ALPHA_TEST, CONTEXT_BOOL(Color.AlphaEnabled), NO_EXTRA },
    { GL_ALPHA_TEST_FUNC, CONTEXT_ENUM(Color.AlphaFunc), NO_EXTRA },
-   { GL_ALPHA_TEST_REF, CONTEXT_FIELD(Color.AlphaRef, TYPE_FLOATN), NO_EXTRA },
+   { GL_ALPHA_TEST_REF, LOC_CUSTOM, TYPE_FLOATN, 0, extra_new_frag_clamp },
    { GL_BLEND_DST, CONTEXT_ENUM(Color.Blend[0].DstRGB), NO_EXTRA },
    { GL_CLIP_PLANE0, CONTEXT_BIT0(Transform.ClipPlanesEnabled), NO_EXTRA },
    { GL_CLIP_PLANE1, CONTEXT_BIT1(Transform.ClipPlanesEnabled), NO_EXTRA },
@@ -531,7 +536,7 @@ static const struct value_desc values[] = {
      extra_flush_current_valid_texture_unit },
    { GL_DISTANCE_ATTENUATION_EXT, CONTEXT_FLOAT3(Point.Params[0]), NO_EXTRA },
    { GL_FOG, CONTEXT_BOOL(Fog.Enabled), NO_EXTRA },
-   { GL_FOG_COLOR, CONTEXT_FIELD(Fog.Color[0], TYPE_FLOATN_4), NO_EXTRA },
+   { GL_FOG_COLOR, LOC_CUSTOM, TYPE_FLOATN_4, 0, extra_new_frag_clamp },
    { GL_FOG_DENSITY, CONTEXT_FLOAT(Fog.Density), NO_EXTRA },
    { GL_FOG_END, CONTEXT_FLOAT(Fog.End), NO_EXTRA },
    { GL_FOG_HINT, CONTEXT_ENUM(Hint.Fog), NO_EXTRA },
@@ -573,7 +578,7 @@ static const struct value_desc values[] = {
    { GL_VERTEX_ARRAY_SIZE, ARRAY_INT(Vertex.Size), NO_EXTRA },
    { GL_VERTEX_ARRAY_TYPE, ARRAY_ENUM(Vertex.Type), NO_EXTRA },
    { GL_VERTEX_ARRAY_STRIDE, ARRAY_INT(Vertex.Stride), NO_EXTRA },
-   { GL_NORMAL_ARRAY, ARRAY_ENUM(Normal.Enabled), NO_EXTRA },
+   { GL_NORMAL_ARRAY, ARRAY_BOOL(Normal.Enabled), NO_EXTRA },
    { GL_NORMAL_ARRAY_TYPE, ARRAY_ENUM(Normal.Type), NO_EXTRA },
    { GL_NORMAL_ARRAY_STRIDE, ARRAY_INT(Normal.Stride), NO_EXTRA },
    { GL_COLOR_ARRAY, ARRAY_BOOL(Color.Enabled), NO_EXTRA },
@@ -583,11 +588,11 @@ static const struct value_desc values[] = {
    { GL_TEXTURE_COORD_ARRAY,
      LOC_CUSTOM, TYPE_BOOLEAN, offsetof(struct gl_client_array, Enabled), NO_EXTRA },
    { GL_TEXTURE_COORD_ARRAY_SIZE,
-     LOC_CUSTOM, TYPE_BOOLEAN, offsetof(struct gl_client_array, Size), NO_EXTRA },
+     LOC_CUSTOM, TYPE_INT, offsetof(struct gl_client_array, Size), NO_EXTRA },
    { GL_TEXTURE_COORD_ARRAY_TYPE,
-     LOC_CUSTOM, TYPE_BOOLEAN, offsetof(struct gl_client_array, Type), NO_EXTRA },
+     LOC_CUSTOM, TYPE_ENUM, offsetof(struct gl_client_array, Type), NO_EXTRA },
    { GL_TEXTURE_COORD_ARRAY_STRIDE,
-     LOC_CUSTOM, TYPE_BOOLEAN, offsetof(struct gl_client_array, Stride), NO_EXTRA },
+     LOC_CUSTOM, TYPE_INT, offsetof(struct gl_client_array, Stride), NO_EXTRA },
 
    /* GL_ARB_ES2_compatibility */
    { GL_SHADER_COMPILER, CONST(1), extra_ARB_ES2_compatibility },
@@ -675,7 +680,7 @@ static const struct value_desc values[] = {
    /* GL_ARB_draw_buffers */
    { GL_MAX_DRAW_BUFFERS_ARB, CONTEXT_INT(Const.MaxDrawBuffers), NO_EXTRA },
 
-   { GL_BLEND_COLOR_EXT, CONTEXT_FIELD(Color.BlendColor[0], TYPE_FLOATN_4), NO_EXTRA },
+   { GL_BLEND_COLOR_EXT, LOC_CUSTOM, TYPE_FLOATN_4, 0, extra_new_frag_clamp },
    /* GL_ARB_fragment_program */
    { GL_MAX_TEXTURE_IMAGE_UNITS_ARB, /* == GL_MAX_TEXTURE_IMAGE_UNITS_NV */
      CONTEXT_INT(Const.MaxTextureImageUnits),
@@ -910,11 +915,6 @@ static const struct value_desc values[] = {
    { GL_TRANSPOSE_PROJECTION_MATRIX_ARB,
      CONTEXT_MATRIX_T(ProjectionMatrixStack.Top), NO_EXTRA },
    { GL_TRANSPOSE_TEXTURE_MATRIX_ARB, CONTEXT_MATRIX_T(TextureMatrixStack), NO_EXTRA },
-
-   /* GL_SGI_texture_color_table */
-   { GL_TEXTURE_COLOR_TABLE_SGI, LOC_TEXUNIT, TYPE_BOOLEAN,
-     offsetof(struct gl_texture_unit, ColorTableEnabled),
-     extra_SGI_texture_color_table },
 
    /* GL_EXT_secondary_color */
    { GL_COLOR_SUM_EXT, CONTEXT_BOOL(Fog.ColorSumEnabled),
@@ -1207,23 +1207,26 @@ static const struct value_desc values[] = {
 
    /* GL_ARB_geometry_shader4 */
    { GL_MAX_GEOMETRY_TEXTURE_IMAGE_UNITS_ARB,
-     CONTEXT_INT(Const.GeometryProgram.MaxGeometryTextureImageUnits),
+     CONTEXT_INT(Const.MaxGeometryTextureImageUnits),
      extra_ARB_geometry_shader4 },
    { GL_MAX_GEOMETRY_OUTPUT_VERTICES_ARB,
-     CONTEXT_INT(Const.GeometryProgram.MaxGeometryOutputVertices),
+     CONTEXT_INT(Const.MaxGeometryOutputVertices),
      extra_ARB_geometry_shader4 },
    { GL_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS_ARB,
-     CONTEXT_INT(Const.GeometryProgram.MaxGeometryTotalOutputComponents),
+     CONTEXT_INT(Const.MaxGeometryTotalOutputComponents),
      extra_ARB_geometry_shader4 },
    { GL_MAX_GEOMETRY_UNIFORM_COMPONENTS_ARB,
-     CONTEXT_INT(Const.GeometryProgram.MaxGeometryUniformComponents),
+     CONTEXT_INT(Const.GeometryProgram.MaxUniformComponents),
      extra_ARB_geometry_shader4 },
    { GL_MAX_GEOMETRY_VARYING_COMPONENTS_ARB,
-     CONTEXT_INT(Const.GeometryProgram.MaxGeometryVaryingComponents),
+     CONTEXT_INT(Const.MaxGeometryVaryingComponents),
      extra_ARB_geometry_shader4 },
    { GL_MAX_VERTEX_VARYING_COMPONENTS_ARB,
-     CONTEXT_INT(Const.GeometryProgram.MaxVertexVaryingComponents),
+     CONTEXT_INT(Const.MaxVertexVaryingComponents),
      extra_ARB_geometry_shader4 },
+
+   /* GL_ARB_color_buffer_float */
+   { GL_RGBA_FLOAT_MODE_ARB, BUFFER_FIELD(Visual.floatMode, TYPE_BOOLEAN), 0 },
 
    /* GL_EXT_gpu_shader4 / GL 3.0 */
    { GL_MIN_PROGRAM_TEXEL_OFFSET,
@@ -1373,7 +1376,7 @@ void _mesa_init_get_hash(struct gl_context *ctx)
 static void
 find_custom_value(struct gl_context *ctx, const struct value_desc *d, union value *v)
 {
-   struct gl_buffer_object *buffer_obj;
+   struct gl_buffer_object **buffer_obj;
    struct gl_client_array *array;
    GLuint unit, *p;
 
@@ -1575,9 +1578,9 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
    case GL_EDGE_FLAG_ARRAY_BUFFER_BINDING_ARB:
    case GL_SECONDARY_COLOR_ARRAY_BUFFER_BINDING_ARB:
    case GL_FOG_COORDINATE_ARRAY_BUFFER_BINDING_ARB:
-      buffer_obj = (struct gl_buffer_object *)
+      buffer_obj = (struct gl_buffer_object **)
 	 ((char *) ctx->Array.ArrayObj + d->offset);
-      v->value_int = buffer_obj->Name;
+      v->value_int = (*buffer_obj)->Name;
       break;
    case GL_ARRAY_BUFFER_BINDING_ARB:
       v->value_int = ctx->Array.ArrayBufferObj->Name;
@@ -1639,6 +1642,30 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
       v->value_int = ctx->Array.ArrayObj->PointSize.BufferObj->Name;
       break;
 
+   case GL_FOG_COLOR:
+      if(ctx->Color._ClampFragmentColor)
+         COPY_4FV(v->value_float_4, ctx->Fog.Color);
+      else
+         COPY_4FV(v->value_float_4, ctx->Fog.ColorUnclamped);
+      break;
+   case GL_COLOR_CLEAR_VALUE:
+      if(ctx->Color._ClampFragmentColor)
+         COPY_4FV(v->value_float_4, ctx->Color.ClearColor);
+      else
+         COPY_4FV(v->value_float_4, ctx->Color.ClearColorUnclamped);
+      break;
+   case GL_BLEND_COLOR_EXT:
+      if(ctx->Color._ClampFragmentColor)
+         COPY_4FV(v->value_float_4, ctx->Color.BlendColor);
+      else
+         COPY_4FV(v->value_float_4, ctx->Color.BlendColorUnclamped);
+      break;
+   case GL_ALPHA_TEST_REF:
+      if(ctx->Color._ClampFragmentColor)
+         v->value_float = ctx->Color.AlphaRef;
+      else
+         v->value_float = ctx->Color.AlphaRefUnclamped;
+      break;
    case GL_MAX_VERTEX_UNIFORM_VECTORS:
       v->value_int = ctx->Const.VertexProgram.MaxUniformComponents / 4;
       break;
@@ -1693,6 +1720,10 @@ check_extra(struct gl_context *ctx, const char *func, const struct value_desc *d
 	    enabled++;
 	 }
 	 break;
+      case EXTRA_NEW_FRAG_CLAMP:
+         if (ctx->NewState & (_NEW_BUFFERS | _NEW_FRAG_CLAMP))
+            _mesa_update_state(ctx);
+         break;
       case EXTRA_VERSION_ES2:
 	 if (ctx->API == API_OPENGLES2) {
 	    total++;

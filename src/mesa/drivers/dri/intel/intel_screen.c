@@ -25,6 +25,7 @@
  * 
  **************************************************************************/
 
+#include <errno.h>
 #include "main/glheader.h"
 #include "main/context.h"
 #include "main/framebuffer.h"
@@ -302,11 +303,19 @@ intel_get_param(__DRIscreen *psp, int param, int *value)
 
    ret = drmCommandWriteRead(psp->fd, DRM_I915_GETPARAM, &gp, sizeof(gp));
    if (ret) {
-      _mesa_warning(NULL, "drm_i915_getparam: %d", ret);
+      if (ret != -EINVAL)
+	 _mesa_warning(NULL, "drm_i915_getparam: %d", ret);
       return GL_FALSE;
    }
 
    return GL_TRUE;
+}
+
+static GLboolean
+intel_get_boolean(__DRIscreen *psp, int param)
+{
+   int value = 0;
+   return intel_get_param(psp, param, &value) && value;
 }
 
 static void
@@ -481,6 +490,10 @@ intel_init_bufmgr(struct intel_screen *intelScreen)
    drm_intel_bufmgr_gem_enable_fenced_relocs(intelScreen->bufmgr);
 
    intelScreen->named_regions = _mesa_NewHashTable();
+
+   intelScreen->relaxed_relocations = 0;
+   intelScreen->relaxed_relocations |=
+      intel_get_boolean(spriv, I915_PARAM_HAS_RELAXED_DELTA) << 0;
 
    return GL_TRUE;
 }

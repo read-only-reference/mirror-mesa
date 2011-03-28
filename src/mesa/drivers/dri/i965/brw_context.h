@@ -424,8 +424,6 @@ struct brw_vertex_element {
    gl_vert_attrib attrib;
    /** Size of a complete element */
    GLuint element_size;
-   /** Number of uploaded elements for this input. */
-   GLuint count;
    /** Offset of the first element within the buffer object */
    unsigned int offset;
 };
@@ -462,7 +460,7 @@ struct brw_context
    GLboolean has_negative_rhw_bug;
    GLboolean has_aa_line_parameters;
    GLboolean has_pln;
-;
+
    struct {
       struct brw_state_flags dirty;
 
@@ -519,9 +517,9 @@ struct brw_context
        */
       const struct _mesa_index_buffer *ib;
 
-      /* Updates to these fields are signaled by BRW_NEW_INDEX_BUFFER. */
+      /* Updates are signaled by BRW_NEW_INDEX_BUFFER. */
       drm_intel_bo *bo;
-      unsigned int offset;
+      GLuint type;
 
       /* Offset to index buffer index to use in CMD_3D_PRIM so that we can
        * avoid re-uploading the IB packet over and over if we're actually
@@ -703,6 +701,9 @@ struct brw_context
    /* Used to give every program string a unique id
     */
    GLuint program_id;
+
+   int num_prepare_atoms, num_emit_atoms;
+   struct brw_tracked_state prepare_atoms[64], emit_atoms[64];
 };
 
 

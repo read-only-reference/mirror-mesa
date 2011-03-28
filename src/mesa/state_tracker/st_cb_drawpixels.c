@@ -37,6 +37,7 @@
 #include "main/mfeatures.h"
 #include "main/mtypes.h"
 #include "main/pack.h"
+#include "main/pbo.h"
 #include "main/texformat.h"
 #include "main/texstore.h"
 #include "program/program.h"
@@ -212,9 +213,9 @@ st_make_drawpix_z_stencil_program(struct st_context *st,
    p->InputsRead = FRAG_BIT_TEX0 | FRAG_BIT_COL0;
    p->OutputsWritten = 0;
    if (write_depth)
-      p->OutputsWritten |= (1 << FRAG_RESULT_DEPTH);
+      p->OutputsWritten |= BITFIELD64_BIT(FRAG_RESULT_DEPTH);
    if (write_stencil)
-      p->OutputsWritten |= (1 << FRAG_RESULT_STENCIL);
+      p->OutputsWritten |= BITFIELD64_BIT(FRAG_RESULT_STENCIL);
 
    p->SamplersUsed =  0x1;  /* sampler 0 (bit 0) is used */
    if (write_stencil)
@@ -295,7 +296,7 @@ base_format(GLenum format)
  * of the given format and type.
  */
 static GLenum
-internal_format(GLenum format, GLenum type)
+internal_format(struct gl_context *ctx, GLenum format, GLenum type)
 {
    switch (format) {
    case GL_DEPTH_COMPONENT:
@@ -325,7 +326,53 @@ internal_format(GLenum format, GLenum type)
          }
       }
       else {
-         return GL_RGBA;
+         switch (type) {
+         case GL_UNSIGNED_BYTE:
+         case GL_UNSIGNED_INT_8_8_8_8:
+         case GL_UNSIGNED_INT_8_8_8_8_REV:
+         default:
+            return GL_RGBA8;
+
+         case GL_UNSIGNED_BYTE_3_3_2:
+         case GL_UNSIGNED_BYTE_2_3_3_REV:
+         case GL_UNSIGNED_SHORT_4_4_4_4:
+         case GL_UNSIGNED_SHORT_4_4_4_4_REV:
+            return GL_RGBA4;
+
+         case GL_UNSIGNED_SHORT_5_6_5:
+         case GL_UNSIGNED_SHORT_5_6_5_REV:
+         case GL_UNSIGNED_SHORT_5_5_5_1:
+         case GL_UNSIGNED_SHORT_1_5_5_5_REV:
+            return GL_RGB5_A1;
+
+         case GL_UNSIGNED_INT_10_10_10_2:
+         case GL_UNSIGNED_INT_2_10_10_10_REV:
+            return GL_RGB10_A2;
+
+         case GL_UNSIGNED_SHORT:
+         case GL_UNSIGNED_INT:
+            return GL_RGBA16;
+
+         case GL_BYTE:
+            return
+               ctx->Extensions.EXT_texture_snorm ? GL_RGBA8_SNORM : GL_RGBA8;
+
+         case GL_SHORT:
+         case GL_INT:
+            return
+               ctx->Extensions.EXT_texture_snorm ? GL_RGBA16_SNORM : GL_RGBA16;
+
+         case GL_HALF_FLOAT_ARB:
+            return
+               ctx->Extensions.ARB_texture_float ? GL_RGBA16F :
+               ctx->Extensions.EXT_texture_snorm ? GL_RGBA16_SNORM : GL_RGBA16;
+
+         case GL_FLOAT:
+         case GL_DOUBLE:
+            return
+               ctx->Extensions.ARB_texture_float ? GL_RGBA32F :
+               ctx->Extensions.EXT_texture_snorm ? GL_RGBA16_SNORM : GL_RGBA16;
+         }
       }
    }
 }
@@ -368,7 +415,7 @@ make_texture(struct st_context *st,
    GLenum baseFormat, intFormat;
 
    baseFormat = base_format(format);
-   intFormat = internal_format(format, type);
+   intFormat = internal_format(ctx, format, type);
 
    mformat = st_ChooseTextureFormat_renderable(ctx, intFormat,
                                                format, type, GL_FALSE);
@@ -581,6 +628,7 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
    {
       struct pipe_rasterizer_state rasterizer;
       memset(&rasterizer, 0, sizeof(rasterizer));
+      rasterizer.clamp_fragment_color = ctx->Color._ClampFragmentColor;
       rasterizer.gl_rasterization_rules = 1;
       rasterizer.scissor = ctx->Scissor.Enabled;
       cso_set_rasterizer(cso, &rasterizer);
@@ -1331,7 +1379,7 @@ st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
 
    if (screen->is_format_supported(screen, srcFormat, st->internal_target,
                                    sample_count,
-                                   PIPE_BIND_SAMPLER_VIEW, 0)) {
+                                   PIPE_BIND_SAMPLER_VIEW)) {
       texFormat = srcFormat;
    }
    else {

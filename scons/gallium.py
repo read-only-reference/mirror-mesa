@@ -598,9 +598,10 @@ def generate(env):
     env.Append(LIBS = [])
 
     # Load tools
+    env.Tool('lex')
+    env.Tool('yacc')
     if env['llvm']:
         env.Tool('llvm')
-        env.Tool('udis86')
     
     pkg_config_modules(env, 'x11', ['x11', 'xext'])
     pkg_config_modules(env, 'drm', ['libdrm'])

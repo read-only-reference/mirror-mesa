@@ -32,6 +32,7 @@
 #include <assert.h>
 #include <util/u_double_list.h>
 #include <util/u_inlines.h>
+#include "util/u_hash_table.h"
 #include <os/os_thread.h>
 #include "r600.h"
 
@@ -50,6 +51,12 @@ struct radeon {
 	unsigned			*cfence;
 	struct r600_bo			*fence_bo;
 	unsigned			clock_crystal_freq;
+	unsigned			num_backends;
+	unsigned                        minor_version;
+
+        /* List of buffer handles and its mutex. */
+	struct util_hash_table          *bo_handles;
+	pipe_mutex bo_handles_mutex;
 };
 
 struct r600_reg {
@@ -75,6 +82,7 @@ struct radeon_bo {
 	struct r600_reloc		*reloc;
 	unsigned			reloc_id;
 	unsigned			last_flush;
+	unsigned                        name;
 };
 
 struct r600_bo {

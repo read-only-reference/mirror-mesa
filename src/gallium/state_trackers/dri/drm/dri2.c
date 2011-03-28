@@ -270,7 +270,7 @@ dri2_allocate_buffer(__DRIscreen *sPriv,
    struct pipe_resource templ;
    enum st_attachment_type statt;
    enum pipe_format pf;
-   unsigned bind;
+   unsigned bind = 0;
    struct winsys_handle whandle;
 
    switch (attachment) {
@@ -317,6 +317,7 @@ dri2_allocate_buffer(__DRIscreen *sPriv,
    templ.width0 = width;
    templ.height0 = height;
    templ.depth0 = 1;
+   templ.array_size = 1;
 
    buffer->resource =
       screen->base.screen->resource_create(screen->base.screen, &templ);
@@ -510,6 +511,7 @@ dri2_create_image(__DRIscreen *_screen,
    templ.width0 = width;
    templ.height0 = height;
    templ.depth0 = 1;
+   templ.array_size = 1;
 
    img->texture = screen->base.screen->resource_create(screen->base.screen, &templ);
    if (!img->texture) {

@@ -34,19 +34,26 @@
 static void
 prepare_urb( struct brw_context *brw )
 {
-   brw->urb.nr_vs_entries = 24;
-   if (brw->gs.prog_bo)
-      brw->urb.nr_gs_entries = 4;
-   else
-      brw->urb.nr_gs_entries = 0;
+   int urb_size, max_urb_entry;
+   struct intel_context *intel = &brw->intel;
+
+   if (IS_GT1(intel->intelScreen->deviceID)) {
+	urb_size = 32 * 1024;
+	max_urb_entry = 128;
+   } else {
+	urb_size = 64 * 1024;
+	max_urb_entry = 256;
+   }
+
+   brw->urb.nr_vs_entries = max_urb_entry;
+   brw->urb.nr_gs_entries = max_urb_entry;
+
    /* CACHE_NEW_VS_PROG */
    brw->urb.vs_size = MAX2(brw->vs.prog_data->urb_entry_size, 1);
 
-   /* Check that the number of URB rows (8 floats each) allocated is less
-    * than the URB space.
-    */
-   assert((brw->urb.nr_vs_entries +
-	   brw->urb.nr_gs_entries) * brw->urb.vs_size * 8 < 64 * 1024);
+   if (2 * brw->urb.vs_size > urb_size)
+	   brw->urb.nr_vs_entries = brw->urb.nr_gs_entries = 
+		(urb_size ) / (2 * brw->urb.vs_size);
 }
 
 static void

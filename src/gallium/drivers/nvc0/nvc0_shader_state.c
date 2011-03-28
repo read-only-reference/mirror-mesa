@@ -59,11 +59,11 @@ nvc0_program_validate(struct nvc0_context *nvc0, struct nvc0_program *prog)
 
    prog->code_base = prog->res->start;
 
-   nvc0_m2mf_push_linear(nvc0, nvc0->screen->text, NOUVEAU_BO_VRAM,
-                         prog->code_base, NVC0_SHADER_HEADER_SIZE, prog->hdr);
-   nvc0_m2mf_push_linear(nvc0, nvc0->screen->text, NOUVEAU_BO_VRAM,
+   nvc0_m2mf_push_linear(&nvc0->base, nvc0->screen->text, prog->code_base,
+                         NOUVEAU_BO_VRAM, NVC0_SHADER_HEADER_SIZE, prog->hdr);
+   nvc0_m2mf_push_linear(&nvc0->base, nvc0->screen->text,
                          prog->code_base + NVC0_SHADER_HEADER_SIZE,
-                         prog->code_size, prog->code);
+                         NOUVEAU_BO_VRAM, prog->code_size, prog->code);
 
    BEGIN_RING(nvc0->screen->base.channel, RING_3D(MEM_BARRIER), 1);
    OUT_RING  (nvc0->screen->base.channel, 0x1111);
@@ -97,8 +97,6 @@ nvc0_vertprog_validate(struct nvc0_context *nvc0)
 
    // BEGIN_RING(chan, RING_3D_(0x163c), 1);
    // OUT_RING  (chan, 0);
-   BEGIN_RING(chan, RING_3D(VERT_COLOR_CLAMP_EN), 1);
-   OUT_RING  (chan, 1);
 }
 
 void
@@ -111,8 +109,6 @@ nvc0_fragprog_validate(struct nvc0_context *nvc0)
          return;
    nvc0_program_update_context_state(nvc0, fp, 4);
 
-   BEGIN_RING(chan, RING_3D(EARLY_FRAGMENT_TESTS), 1);
-   OUT_RING  (chan, fp->fp.early_z);
    BEGIN_RING(chan, RING_3D(SP_SELECT(5)), 2);
    OUT_RING  (chan, 0x51);
    OUT_RING  (chan, fp->code_base);
@@ -217,7 +213,7 @@ nvc0_tfb_validate(struct nvc0_context *nvc0)
    for (b = 0; b < nvc0->num_tfbbufs; ++b) {
       uint8_t idx, var[128];
       int i, n;
-      struct nvc0_resource *buf = nvc0_resource(nvc0->tfbbuf[b]);
+      struct nv04_resource *buf = nv04_resource(nvc0->tfbbuf[b]);
 
       BEGIN_RING(chan, RING_3D(TFB_BUFFER_ENABLE(b)), 5);
       OUT_RING  (chan, 1);

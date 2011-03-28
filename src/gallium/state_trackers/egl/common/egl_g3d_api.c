@@ -528,8 +528,7 @@ egl_g3d_make_current(_EGLDriver *drv, _EGLDisplay *dpy,
    old_gctx = egl_g3d_context(old_ctx);
    if (old_gctx) {
       /* flush old context */
-      old_gctx->stctxi->flush(old_gctx->stctxi,
-            PIPE_FLUSH_RENDER_CACHE | PIPE_FLUSH_FRAME, NULL);
+      old_gctx->stctxi->flush(old_gctx->stctxi, ST_FLUSH_FRONT, NULL);
    }
 
    if (gctx) {
@@ -606,8 +605,7 @@ egl_g3d_swap_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf)
 
    /* flush if the surface is current */
    if (gctx) {
-      gctx->stctxi->flush(gctx->stctxi,
-            PIPE_FLUSH_RENDER_CACHE | PIPE_FLUSH_FRAME, NULL);
+      gctx->stctxi->flush(gctx->stctxi, ST_FLUSH_FRONT, NULL);
    }
 
    return gsurf->native->present(gsurf->native,
@@ -640,6 +638,7 @@ egl_g3d_copy_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf,
    _EGLContext *ctx = _eglGetCurrentContext();
    struct native_surface *nsurf;
    struct pipe_resource *ptex;
+   struct pipe_context *pipe;
 
    if (!gsurf->render_texture)
       return EGL_TRUE;
@@ -651,26 +650,21 @@ egl_g3d_copy_buffers(_EGLDriver *drv, _EGLDisplay *dpy, _EGLSurface *surf,
    /* flush if the surface is current */
    if (ctx && ctx->DrawSurface == &gsurf->base) {
       struct egl_g3d_context *gctx = egl_g3d_context(ctx);
-      gctx->stctxi->flush(gctx->stctxi,
-            PIPE_FLUSH_RENDER_CACHE | PIPE_FLUSH_FRAME, NULL);
+      gctx->stctxi->flush(gctx->stctxi, ST_FLUSH_FRONT, NULL);
    }
 
-   /* create a pipe context to copy surfaces */
-   if (!gdpy->pipe) {
-      gdpy->pipe =
-         gdpy->native->screen->context_create(gdpy->native->screen, NULL);
-      if (!gdpy->pipe)
-         return EGL_FALSE;
-   }
+   pipe = ndpy_get_copy_context(gdpy->native);
+   if (!pipe)
+      return EGL_FALSE;
 
    ptex = get_pipe_resource(gdpy->native, nsurf, NATIVE_ATTACHMENT_FRONT_LEFT);
    if (ptex) {
       struct pipe_box src_box;
 
       u_box_origin_2d(ptex->width0, ptex->height0, &src_box);
-      gdpy->pipe->resource_copy_region(gdpy->pipe, ptex, 0, 0, 0, 0,
+      pipe->resource_copy_region(pipe, ptex, 0, 0, 0, 0,
             gsurf->render_texture, 0, &src_box);
-      gdpy->pipe->flush(gdpy->pipe, PIPE_FLUSH_RENDER_CACHE, NULL);
+      pipe->flush(pipe, NULL);
       nsurf->present(nsurf, NATIVE_ATTACHMENT_FRONT_LEFT, FALSE, 0);
 
       pipe_resource_reference(&ptex, NULL);
@@ -689,10 +683,9 @@ egl_g3d_wait_client(_EGLDriver *drv, _EGLDisplay *dpy, _EGLContext *ctx)
    struct pipe_screen *screen = gdpy->native->screen;
    struct pipe_fence_handle *fence = NULL;
 
-   gctx->stctxi->flush(gctx->stctxi,
-         PIPE_FLUSH_RENDER_CACHE | PIPE_FLUSH_FRAME, &fence);
+   gctx->stctxi->flush(gctx->stctxi, ST_FLUSH_FRONT, &fence);
    if (fence) {
-      screen->fence_finish(screen, fence, 0);
+      screen->fence_finish(screen, fence, PIPE_TIMEOUT_INFINITE);
       screen->fence_reference(screen, &fence, NULL);
    }
 
@@ -761,8 +754,7 @@ egl_g3d_bind_tex_image(_EGLDriver *drv, _EGLDisplay *dpy,
    /* flush properly if the surface is bound */
    if (gsurf->base.CurrentContext) {
       gctx = egl_g3d_context(gsurf->base.CurrentContext);
-      gctx->stctxi->flush(gctx->stctxi,
-            PIPE_FLUSH_RENDER_CACHE | PIPE_FLUSH_FRAME, NULL);
+      gctx->stctxi->flush(gctx->stctxi, ST_FLUSH_FRONT, NULL);
    }
 
    gctx = egl_g3d_context(es1);

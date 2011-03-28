@@ -1561,6 +1561,7 @@ static void emit_vertex_write( struct brw_vs_compile *c)
    int eot;
    GLuint len_vertex_header = 2;
    int next_mrf, i;
+   int msg_len;
 
    if (c->key.copy_edgeflag) {
       brw_MOV(p, 
@@ -1727,13 +1728,20 @@ static void emit_vertex_write( struct brw_vs_compile *c)
 
    eot = (c->first_overflow_output == 0);
 
+   msg_len = c->nr_outputs + 2 + len_vertex_header; 
+   if (intel->gen >= 6) {
+	   /* interleaved urb write message length for gen6 should be multiple of 2 */
+	   if ((msg_len % 2) != 0)
+		msg_len++;
+   }
+
    brw_urb_WRITE(p, 
 		 brw_null_reg(), /* dest */
 		 0,		/* starting mrf reg nr */
 		 c->r0,		/* src */
 		 0,		/* allocate */
 		 1,		/* used */
-		 MIN2(c->nr_outputs + 1 + len_vertex_header, (BRW_MAX_MRF-1)), /* msg len */
+		 MIN2(msg_len - 1, (BRW_MAX_MRF - 1)), /* msg len */
 		 0,		/* response len */
 		 eot, 		/* eot */
 		 eot, 		/* writes complete */
@@ -2101,7 +2109,7 @@ void brw_vs_emit(struct brw_vs_compile *c )
       case OPCODE_CONT:
 	 brw_set_predicate_control(p, get_predicate(inst));
 	 if (intel->gen >= 6) {
-	    brw_CONT_gen6(p, loop_inst[loop_depth - 1]);
+	    gen6_CONT(p, loop_inst[loop_depth - 1]);
 	 } else {
 	    brw_CONT(p, if_depth_in_loop[loop_depth]);
 	 }

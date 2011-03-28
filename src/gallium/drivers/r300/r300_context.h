@@ -65,11 +65,15 @@ struct r300_aa_state {
 };
 
 struct r300_blend_state {
-    uint32_t cb[8];
+    struct pipe_blend_state state;
+
+    uint32_t cb_clamp[8];
+    uint32_t cb_noclamp[8];
     uint32_t cb_no_readwrite[8];
 };
 
 struct r300_blend_color_state {
+    struct pipe_blend_color state;
     uint32_t cb[3];
 };
 
@@ -91,9 +95,24 @@ struct r300_dsa_state {
     uint32_t stencil_ref_mask;  /* R300_ZB_STENCILREFMASK: 0x4f08 */
     uint32_t cb_reg;
     uint32_t stencil_ref_bf;    /* R500_ZB_STENCILREFMASK_BF: 0x4fd4 */
+    uint32_t cb_reg1;
+    uint32_t alpha_value;       /* R500_FG_ALPHA_VALUE: 0x4be0 */
+
+    /* The same, but for FP16 alpha test. */
+    uint32_t cb_begin_fp16;
+    uint32_t alpha_function_fp16;    /* R300_FG_ALPHA_FUNC: 0x4bd4 */
+    uint32_t cb_reg_seq_fp16;
+    uint32_t z_buffer_control_fp16;  /* R300_ZB_CNTL: 0x4f00 */
+    uint32_t z_stencil_control_fp16; /* R300_ZB_ZSTENCILCNTL: 0x4f04 */
+    uint32_t stencil_ref_mask_fp16;  /* R300_ZB_STENCILREFMASK: 0x4f08 */
+    uint32_t cb_reg_fp16;
+    uint32_t stencil_ref_bf_fp16;    /* R500_ZB_STENCILREFMASK_BF: 0x4fd4 */
+    uint32_t cb_reg1_fp16;
+    uint32_t alpha_value_fp16;       /* R500_FG_ALPHA_VALUE: 0x4be0 */
 
     /* The second command buffer disables zbuffer reads and writes. */
-    uint32_t cb_no_readwrite[8];
+    uint32_t cb_zb_no_readwrite[10];
+    uint32_t cb_fp16_zb_no_readwrite[10];
 
     /* Whether a two-sided stencil is enabled. */
     boolean two_sided;
@@ -120,7 +139,7 @@ struct r300_gpu_flush {
     uint32_t cb_flush_clean[6];
 };
 
-#define RS_STATE_MAIN_SIZE 23
+#define RS_STATE_MAIN_SIZE 25
 
 struct r300_rs_state {
     /* Original rasterizer state. */
@@ -219,11 +238,11 @@ struct r300_vertex_stream_state {
 };
 
 struct r300_invariant_state {
-    uint32_t cb[22];
+    uint32_t cb[24];
 };
 
 struct r300_vap_invariant_state {
-    uint32_t cb[9];
+    uint32_t cb[11];
 };
 
 struct r300_viewport_state {
@@ -561,6 +580,8 @@ struct r300_context {
     int sprite_coord_enable;
     /* Whether two-sided color selection is enabled (AKA light_twoside). */
     boolean two_sided_color;
+    /* Whether fragment color clamping is enabled. */
+    boolean frag_clamp;
     /* Whether fast color clear is enabled. */
     boolean cbzb_clear;
     /* Whether ZMASK is enabled. */
@@ -575,6 +596,8 @@ struct r300_context {
     boolean hiz_in_use;
     /* HiZ function. Can be either MIN or MAX. */
     enum r300_hiz_func hiz_func;
+    /* HiZ clear value. */
+    uint32_t hiz_clear_value;
 
     void *dsa_decompress_zmask;
 
@@ -592,6 +615,8 @@ struct r300_context {
     boolean vertex_arrays_dirty;
     boolean vertex_arrays_indexed;
     int vertex_arrays_offset;
+    int vertex_arrays_instance_id;
+    boolean instancing_enabled;
 };
 
 #define foreach_atom(r300, atom) \
@@ -645,8 +670,6 @@ static INLINE void r300_mark_atom_dirty(struct r300_context *r300,
 struct pipe_context* r300_create_context(struct pipe_screen* screen,
                                          void *priv);
 
-void r300_flush_cb(void *data);
-
 /* Context initialization. */
 struct draw_stage* r300_draw_stage(struct r300_context* r300);
 void r300_init_blit_functions(struct r300_context *r300);
@@ -660,6 +683,11 @@ void r300_init_resource_functions(struct r300_context* r300);
 void r300_decompress_zmask(struct r300_context *r300);
 void r300_decompress_zmask_locked_unsafe(struct r300_context *r300);
 void r300_decompress_zmask_locked(struct r300_context *r300);
+
+/* r300_flush.c */
+void r300_flush(struct pipe_context *pipe,
+                unsigned flags,
+                struct pipe_fence_handle **fence);
 
 /* r300_hyperz.c */
 void r300_update_hyperz_state(struct r300_context* r300);

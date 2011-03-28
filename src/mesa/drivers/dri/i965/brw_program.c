@@ -135,7 +135,7 @@ static GLboolean brwProgramStringNotify( struct gl_context *ctx,
       struct gl_shader_program *shader_program;
 
       if (fprog->FogOption) {
-         _mesa_append_fog_code(ctx, fprog);
+         _mesa_append_fog_code(ctx, fprog, GL_TRUE);
          fprog->FogOption = GL_NONE;
       }
 
@@ -243,7 +243,6 @@ void brwInitFragProgFuncs( struct dd_function_table *functions )
 
    functions->NewShader = brw_new_shader;
    functions->NewShaderProgram = brw_new_shader_program;
-   functions->CompileShader = brw_compile_shader;
    functions->LinkShader = brw_link_shader;
 }
 

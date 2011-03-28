@@ -68,7 +68,7 @@ static void r600_copy_from_staging_texture(struct pipe_context *ctx, struct r600
 				  rtransfer->staging_texture,
 				  0, &sbox);
 
-	ctx->flush(ctx, 0, NULL);
+        ctx->flush(ctx, NULL);
 }
 
 unsigned r600_texture_get_offset(struct r600_resource_texture *rtex,
@@ -226,7 +226,7 @@ static void r600_texture_set_array_mode(struct pipe_screen *screen,
 
 		w = mip_minify(ptex->width0, level);
 		h = mip_minify(ptex->height0, level);
-		if (w < tile_width || h < tile_height)
+		if (w <= tile_width || h <= tile_height)
 			rtex->array_mode[level] = V_0280A0_ARRAY_1D_TILED_THIN1;
 		else
 			rtex->array_mode[level] = array_mode;
@@ -299,14 +299,14 @@ static boolean permit_hardware_blit(struct pipe_screen *screen,
 				res->format,
 				res->target,
 				res->nr_samples,
-				bind, 0))
+                                bind))
 		return FALSE;
 
 	if (!screen->is_format_supported(screen,
 				res->format,
 				res->target,
 				res->nr_samples,
-				PIPE_BIND_SAMPLER_VIEW, 0))
+                                PIPE_BIND_SAMPLER_VIEW))
 		return FALSE;
 
 	return TRUE;
@@ -340,19 +340,10 @@ static void r600_texture_destroy(struct pipe_screen *screen,
 	FREE(rtex);
 }
 
-static unsigned int r600_texture_is_referenced(struct pipe_context *context,
-						struct pipe_resource *texture,
-						unsigned level, int layer)
-{
-	/* FIXME */
-	return PIPE_REFERENCED_FOR_READ | PIPE_REFERENCED_FOR_WRITE;
-}
-
 static const struct u_resource_vtbl r600_texture_vtbl =
 {
 	r600_texture_get_handle,	/* get_handle */
 	r600_texture_destroy,		/* resource_destroy */
-	r600_texture_is_referenced,	/* is_resource_referenced */
 	r600_texture_get_transfer,	/* get_transfer */
 	r600_texture_transfer_destroy,	/* transfer_destroy */
 	r600_texture_transfer_map,	/* transfer_map */
@@ -413,8 +404,15 @@ struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 
 	/* Would like some magic "get_bool_option_once" routine.
 	 */
-	if (force_tiling == -1)
-		force_tiling = debug_get_bool_option("R600_FORCE_TILING", FALSE);
+	if (force_tiling == -1) {
+#if 0
+		/* reenable when 2D tiling is fixed better */
+		struct r600_screen *rscreen = (struct r600_screen *)screen;
+		if (r600_get_minor_version(rscreen->radeon) >= 9)
+			force_tiling = debug_get_bool_option("R600_TILING", TRUE);
+#endif
+		force_tiling = debug_get_bool_option("R600_TILING", FALSE);
+	}
 
 	if (force_tiling && permit_hardware_blit(screen, templ)) {
 		if (!(templ->flags & R600_RESOURCE_FLAG_TRANSFER) &&
@@ -639,7 +637,7 @@ struct pipe_transfer* r600_texture_get_transfer(struct pipe_context *ctx,
 		if (usage & PIPE_TRANSFER_READ) {
 			r600_copy_to_staging_texture(ctx, trans);
 			/* Always referenced in the blit. */
-			ctx->flush(ctx, 0, NULL);
+                        ctx->flush(ctx, NULL);
 		}
 		return &trans->transfer;
 	}
@@ -804,7 +802,8 @@ static unsigned r600_get_swizzle_combined(const unsigned char *swizzle_format,
 }
 
 /* texture format translate */
-uint32_t r600_translate_texformat(enum pipe_format format,
+uint32_t r600_translate_texformat(struct pipe_screen *screen,
+				  enum pipe_format format,
 				  const unsigned char *swizzle_view,
 				  uint32_t *word4_p, uint32_t *yuv_format_p)
 {
@@ -870,8 +869,13 @@ uint32_t r600_translate_texformat(enum pipe_format format,
 		break;
 	}
 
-	if (r600_enable_s3tc == -1)
-		r600_enable_s3tc = debug_get_bool_option("R600_ENABLE_S3TC", FALSE);
+	if (r600_enable_s3tc == -1) {
+		struct r600_screen *rscreen = (struct r600_screen *)screen;
+		if (r600_get_minor_version(rscreen->radeon) >= 9)
+			r600_enable_s3tc = 1;
+		else
+			r600_enable_s3tc = debug_get_bool_option("R600_ENABLE_S3TC", FALSE);
+	}
 
 	if (desc->layout == UTIL_FORMAT_LAYOUT_RGTC) {
 		if (!r600_enable_s3tc)

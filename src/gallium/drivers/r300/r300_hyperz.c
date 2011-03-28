@@ -61,6 +61,10 @@ static enum r300_hiz_func r300_get_hiz_func(struct r300_context *r300)
     case PIPE_FUNC_GREATER:
     case PIPE_FUNC_GEQUAL:
         return HIZ_FUNC_MIN;
+
+    default:
+        assert(0);
+        return HIZ_FUNC_NONE;
     }
 }
 
@@ -187,8 +191,7 @@ static void r300_update_hyperz(struct r300_context* r300)
                             r300_get_sc_hz_max(r300);
 
             if (r300->screen->caps.is_r500) {
-                z->zb_bw_cntl |= R500_HIZ_FP_EXP_BITS_3 |
-                                 R500_HIZ_EQUAL_REJECT_ENABLE;
+                z->zb_bw_cntl |= R500_HIZ_EQUAL_REJECT_ENABLE;
             }
         }
     }

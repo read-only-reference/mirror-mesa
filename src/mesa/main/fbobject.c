@@ -160,6 +160,29 @@ invalidate_framebuffer(struct gl_framebuffer *fb)
 
 
 /**
+ * Return the gl_framebuffer object which corresponds to the given
+ * framebuffer target, such as GL_DRAW_FRAMEBUFFER.
+ * Check support for GL_EXT_framebuffer_blit to determine if certain
+ * targets are legal.
+ * \return gl_framebuffer pointer or NULL if target is illegal
+ */
+static struct gl_framebuffer *
+get_framebuffer_target(struct gl_context *ctx, GLenum target)
+{
+   switch (target) {
+   case GL_DRAW_FRAMEBUFFER:
+      return ctx->Extensions.EXT_framebuffer_blit ? ctx->DrawBuffer : NULL;
+   case GL_READ_FRAMEBUFFER:
+      return ctx->Extensions.EXT_framebuffer_blit ? ctx->ReadBuffer : NULL;
+   case GL_FRAMEBUFFER_EXT:
+      return ctx->DrawBuffer;
+   default:
+      return NULL;
+   }
+}
+
+
+/**
  * Given a GL_*_ATTACHMENTn token, return a pointer to the corresponding
  * gl_renderbuffer_attachment object.
  * This function is only used for user-created FB objects, not the
@@ -361,6 +384,7 @@ _mesa_framebuffer_renderbuffer(struct gl_context *ctx,
          assert(att);
          _mesa_set_renderbuffer_attachment(ctx, att, rb);
       }
+      rb->AttachedAnytime = GL_TRUE;
    }
    else {
       _mesa_remove_attachment(ctx, att);
@@ -652,7 +676,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
    for (i = -2; i < (GLint) ctx->Const.MaxColorAttachments; i++) {
       struct gl_renderbuffer_attachment *att;
       GLenum f;
-      gl_format mesaFormat;
+      gl_format attFormat;
 
       /*
        * XXX for ARB_fbo, only check color buffers that are named by
@@ -699,7 +723,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
          minHeight = MIN2(minHeight, texImg->Height);
          maxHeight = MAX2(maxHeight, texImg->Height);
          f = texImg->_BaseFormat;
-         mesaFormat = texImg->TexFormat;
+         attFormat = texImg->TexFormat;
          numImages++;
          if (!_mesa_is_legal_color_format(ctx, f) &&
              !is_legal_depth_format(ctx, f)) {
@@ -714,7 +738,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
          minHeight = MIN2(minHeight, att->Renderbuffer->Height);
          maxHeight = MAX2(minHeight, att->Renderbuffer->Height);
          f = att->Renderbuffer->InternalFormat;
-         mesaFormat = att->Renderbuffer->Format;
+         attFormat = att->Renderbuffer->Format;
          numImages++;
       }
       else {
@@ -728,7 +752,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
       }
 
       /* check if integer color */
-      fb->_IntegerColor = _mesa_is_format_integer_color(mesaFormat);
+      fb->_IntegerColor = _mesa_is_format_integer_color(attFormat);
 
       /* Error-check width, height, format, samples
        */
@@ -1057,7 +1081,6 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
    case GL_RGB10_A2:
    case GL_RGBA12:
    case GL_RGBA16:
-   case GL_RGBA16_SNORM:
    case GL_SRGB8_ALPHA8_EXT:
       return GL_RGBA;
    case GL_STENCIL_INDEX:
@@ -1085,9 +1108,71 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
    case GL_RG8:
    case GL_RG16:
       return ctx->Extensions.ARB_texture_rg ? GL_RG : 0;
+   /* signed normalized texture formats */
+   case GL_RED_SNORM:
+   case GL_R8_SNORM:
+   case GL_R16_SNORM:
+      return ctx->Extensions.EXT_texture_snorm ? GL_RED : 0;
+   case GL_RG_SNORM:
+   case GL_RG8_SNORM:
+   case GL_RG16_SNORM:
+      return ctx->Extensions.EXT_texture_snorm ? GL_RG : 0;
+   case GL_RGB_SNORM:
+   case GL_RGB8_SNORM:
+   case GL_RGB16_SNORM:
+      return ctx->Extensions.EXT_texture_snorm ? GL_RGB : 0;
+   case GL_RGBA_SNORM:
+   case GL_RGBA8_SNORM:
+   case GL_RGBA16_SNORM:
+      return ctx->Extensions.EXT_texture_snorm ? GL_RGBA : 0;
+   case GL_ALPHA_SNORM:
+   case GL_ALPHA8_SNORM:
+   case GL_ALPHA16_SNORM:
+      return ctx->Extensions.EXT_texture_snorm &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_ALPHA : 0;
+   case GL_LUMINANCE_SNORM:
+   case GL_LUMINANCE8_SNORM:
+   case GL_LUMINANCE16_SNORM:
+      return ctx->Extensions.EXT_texture_snorm &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_LUMINANCE : 0;
+   case GL_LUMINANCE_ALPHA_SNORM:
+   case GL_LUMINANCE8_ALPHA8_SNORM:
+   case GL_LUMINANCE16_ALPHA16_SNORM:
+      return ctx->Extensions.EXT_texture_snorm &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_LUMINANCE_ALPHA : 0;
+   case GL_INTENSITY_SNORM:
+   case GL_INTENSITY8_SNORM:
+   case GL_INTENSITY16_SNORM:
+      return ctx->Extensions.EXT_texture_snorm &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_INTENSITY : 0;
    /* XXX add floating point and integer formats eventually */
    default:
       return 0;
+   }
+}
+
+
+/**
+ * Invalidate a renderbuffer attachment.  Called from _mesa_HashWalk().
+ */
+static void
+invalidate_rb(GLuint key, void *data, void *userData)
+{
+   struct gl_framebuffer *fb = (struct gl_framebuffer *) data;
+   struct gl_renderbuffer *rb = (struct gl_renderbuffer *) userData;
+
+   /* If this is a user-created FBO */
+   if (fb->Name) {
+      GLuint i;
+      for (i = 0; i < BUFFER_COUNT; i++) {
+         struct gl_renderbuffer_attachment *att = fb->Attachment + i;
+         if (att->Type == GL_RENDERBUFFER &&
+             att->Renderbuffer == rb) {
+            /* Mark fb status as indeterminate to force re-validation */
+            fb->_Status = 0;
+            return;
+         }
+      }
    }
 }
 
@@ -1184,12 +1269,10 @@ renderbuffer_storage(GLenum target, GLenum internalFormat,
       rb->NumSamples = 0;
    }
 
-   /*
-   test_framebuffer_completeness(ctx, fb);
-   */
-   /* XXX if this renderbuffer is attached anywhere, invalidate attachment
-    * points???
-    */
+   /* Invalidate the framebuffers the renderbuffer is attached in. */
+   if (rb->AttachedAnytime) {
+      _mesa_HashWalk(ctx->Shared->FrameBuffers, invalidate_rb, rb);
+   }
 }
 
 
@@ -1677,29 +1760,10 @@ _mesa_CheckFramebufferStatusEXT(GLenum target)
 
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, 0);
 
-   switch (target) {
-#if FEATURE_EXT_framebuffer_blit
-   case GL_DRAW_FRAMEBUFFER_EXT:
-      if (!ctx->Extensions.EXT_framebuffer_blit) {
-         _mesa_error(ctx, GL_INVALID_ENUM, "glCheckFramebufferStatus(target)");
-         return 0;
-      }
-      buffer = ctx->DrawBuffer;
-      break;
-   case GL_READ_FRAMEBUFFER_EXT:
-      if (!ctx->Extensions.EXT_framebuffer_blit) {
-         _mesa_error(ctx, GL_INVALID_ENUM, "glCheckFramebufferStatus(target)");
-         return 0;
-      }
-      buffer = ctx->ReadBuffer;
-      break;
-#endif
-   case GL_FRAMEBUFFER_EXT:
-      buffer = ctx->DrawBuffer;
-      break;
-   default:
+   buffer = get_framebuffer_target(ctx, target);
+   if (!buffer) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glCheckFramebufferStatus(target)");
-      return 0; /* formerly GL_FRAMEBUFFER_STATUS_ERROR_EXT */
+      return 0;
    }
 
    if (buffer->Name == 0) {
@@ -1729,32 +1793,15 @@ framebuffer_texture(struct gl_context *ctx, const char *caller, GLenum target,
    struct gl_renderbuffer_attachment *att;
    struct gl_texture_object *texObj = NULL;
    struct gl_framebuffer *fb;
-   GLboolean error = GL_FALSE;
 
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   switch (target) {
-   case GL_READ_FRAMEBUFFER_EXT:
-      error = !ctx->Extensions.EXT_framebuffer_blit;
-      fb = ctx->ReadBuffer;
-      break;
-   case GL_DRAW_FRAMEBUFFER_EXT:
-      error = !ctx->Extensions.EXT_framebuffer_blit;
-      /* fall-through */
-   case GL_FRAMEBUFFER_EXT:
-      fb = ctx->DrawBuffer;
-      break;
-   default:
-      error = GL_TRUE;
-   }
-
-   if (error) {
+   fb = get_framebuffer_target(ctx, target);
+   if (!fb) {
       _mesa_error(ctx, GL_INVALID_ENUM,
                   "glFramebufferTexture%sEXT(target=0x%x)", caller, target);
       return;
    }
-
-   ASSERT(fb);
 
    /* check framebuffer binding */
    if (fb->Name == 0) {
@@ -1936,31 +1983,9 @@ _mesa_FramebufferRenderbufferEXT(GLenum target, GLenum attachment,
 
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   switch (target) {
-#if FEATURE_EXT_framebuffer_blit
-   case GL_DRAW_FRAMEBUFFER_EXT:
-      if (!ctx->Extensions.EXT_framebuffer_blit) {
-         _mesa_error(ctx, GL_INVALID_ENUM,
-                     "glFramebufferRenderbufferEXT(target)");
-         return;
-      }
-      fb = ctx->DrawBuffer;
-      break;
-   case GL_READ_FRAMEBUFFER_EXT:
-      if (!ctx->Extensions.EXT_framebuffer_blit) {
-         _mesa_error(ctx, GL_INVALID_ENUM,
-                     "glFramebufferRenderbufferEXT(target)");
-         return;
-      }
-      fb = ctx->ReadBuffer;
-      break;
-#endif
-   case GL_FRAMEBUFFER_EXT:
-      fb = ctx->DrawBuffer;
-      break;
-   default:
-      _mesa_error(ctx, GL_INVALID_ENUM,
-                  "glFramebufferRenderbufferEXT(target)");
+   fb = get_framebuffer_target(ctx, target);
+   if (!fb) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glFramebufferRenderbufferEXT(target)");
       return;
    }
 
@@ -2040,29 +2065,8 @@ _mesa_GetFramebufferAttachmentParameterivEXT(GLenum target, GLenum attachment,
 
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
-   switch (target) {
-#if FEATURE_EXT_framebuffer_blit
-   case GL_DRAW_FRAMEBUFFER_EXT:
-      if (!ctx->Extensions.EXT_framebuffer_blit) {
-         _mesa_error(ctx, GL_INVALID_ENUM,
-                     "glGetFramebufferAttachmentParameterivEXT(target)");
-         return;
-      }
-      buffer = ctx->DrawBuffer;
-      break;
-   case GL_READ_FRAMEBUFFER_EXT:
-      if (!ctx->Extensions.EXT_framebuffer_blit) {
-         _mesa_error(ctx, GL_INVALID_ENUM,
-                     "glGetFramebufferAttachmentParameterivEXT(target)");
-         return;
-      }
-      buffer = ctx->ReadBuffer;
-      break;
-#endif
-   case GL_FRAMEBUFFER_EXT:
-      buffer = ctx->DrawBuffer;
-      break;
-   default:
+   buffer = get_framebuffer_target(ctx, target);
+   if (!buffer) {
       _mesa_error(ctx, GL_INVALID_ENUM,
                   "glGetFramebufferAttachmentParameterivEXT(target)");
       return;
@@ -2353,7 +2357,7 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
    if ((mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT))
         && filter != GL_NEAREST) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
-             "glBlitFramebufferEXT(depth/stencil requires GL_NEAREST filter");
+             "glBlitFramebufferEXT(depth/stencil requires GL_NEAREST filter)");
       return;
    }
 
@@ -2374,7 +2378,7 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
           _mesa_get_format_bits(readRb->Format, GL_STENCIL_BITS) != 
           _mesa_get_format_bits(drawRb->Format, GL_STENCIL_BITS)) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
-                     "glBlitFramebufferEXT(stencil buffer size mismatch");
+                     "glBlitFramebufferEXT(stencil buffer size mismatch)");
          return;
       }
    }
@@ -2387,7 +2391,7 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
           _mesa_get_format_bits(readRb->Format, GL_DEPTH_BITS) != 
           _mesa_get_format_bits(drawRb->Format, GL_DEPTH_BITS)) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
-                     "glBlitFramebufferEXT(depth buffer size mismatch");
+                     "glBlitFramebufferEXT(depth buffer size mismatch)");
          return;
       }
    }
@@ -2406,7 +2410,7 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
       if (srcX1 - srcX0 != dstX1 - dstX0 ||
           srcY1 - srcY0 != dstY1 - dstY0) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
-                "glBlitFramebufferEXT(bad src/dst multisample region sizes");
+                "glBlitFramebufferEXT(bad src/dst multisample region sizes)");
          return;
       }
 
@@ -2415,7 +2419,7 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
           colorDrawRb &&
           colorReadRb->Format != colorDrawRb->Format) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
-                "glBlitFramebufferEXT(bad src/dst multisample pixel formats");
+                "glBlitFramebufferEXT(bad src/dst multisample pixel formats)");
          return;
       }
    }

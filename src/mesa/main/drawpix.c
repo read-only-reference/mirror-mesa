@@ -31,6 +31,7 @@
 #include "feedback.h"
 #include "framebuffer.h"
 #include "mfeatures.h"
+#include "pbo.h"
 #include "readpix.h"
 #include "state.h"
 #include "dispatch.h"
@@ -135,8 +136,6 @@ _mesa_CopyPixels( GLint srcx, GLint srcy, GLsizei width, GLsizei height,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   _mesa_finish(ctx);
-
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx,
                   "glCopyPixels(%d, %d, %d, %d, %s) // from %s to %s at %d, %d\n",
@@ -189,7 +188,7 @@ _mesa_CopyPixels( GLint srcx, GLint srcy, GLsizei width, GLsizei height,
       goto end;
    }
 
-   if (!ctx->Current.RasterPosValid || width ==0 || height == 0) {
+   if (!ctx->Current.RasterPosValid || width == 0 || height == 0) {
       goto end; /* no-op, not an error */
    }
 

@@ -23,7 +23,6 @@
 #include "util/u_format_s3tc.h"
 #include "pipe/p_screen.h"
 
-#include "nvc0_fence.h"
 #include "nvc0_context.h"
 #include "nvc0_screen.h"
 
@@ -35,7 +34,7 @@ nvc0_screen_is_format_supported(struct pipe_screen *pscreen,
                                 enum pipe_format format,
                                 enum pipe_texture_target target,
                                 unsigned sample_count,
-                                unsigned bindings, unsigned geom_flags)
+                                unsigned bindings)
 {
    if (sample_count > 1)
       return FALSE;
@@ -94,6 +93,8 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_MAX_RENDER_TARGETS:
       return 8;
+   case PIPE_CAP_FRAGMENT_COLOR_CLAMP_CONTROL:
+      return 1;
    case PIPE_CAP_TIMER_QUERY:
    case PIPE_CAP_OCCLUSION_QUERY:
       return 1;
@@ -112,7 +113,8 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_SHADER_STENCIL_EXPORT:
       return 0;
    case PIPE_CAP_PRIMITIVE_RESTART:
-   case PIPE_CAP_INSTANCED_DRAWING:
+   case PIPE_CAP_TGSI_INSTANCEID:
+   case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
       return 1;
    default:
       NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);
@@ -200,23 +202,21 @@ nvc0_screen_destroy(struct pipe_screen *pscreen)
 {
    struct nvc0_screen *screen = nvc0_screen(pscreen);
 
-   nvc0_fence_wait(screen->fence.current);
-   nvc0_fence_reference(&screen->fence.current, NULL);
+   nouveau_fence_wait(screen->base.fence.current);
+   nouveau_fence_ref(NULL, &screen->base.fence.current);
 
    nouveau_bo_ref(NULL, &screen->text);
    nouveau_bo_ref(NULL, &screen->tls);
    nouveau_bo_ref(NULL, &screen->txc);
    nouveau_bo_ref(NULL, &screen->fence.bo);
-   nouveau_bo_ref(NULL, &screen->mp_stack_bo);
+   nouveau_bo_ref(NULL, &screen->vfetch_cache);
 
    nouveau_resource_destroy(&screen->text_heap);
 
    if (screen->tic.entries)
       FREE(screen->tic.entries);
 
-   nvc0_mm_destroy(screen->mm_GART);
-   nvc0_mm_destroy(screen->mm_VRAM);
-   nvc0_mm_destroy(screen->mm_VRAM_fe0);
+   nouveau_mm_destroy(screen->mm_VRAM_fe0);
 
    nouveau_grobj_free(&screen->fermi);
    nouveau_grobj_free(&screen->eng2d);
@@ -243,30 +243,6 @@ nvc0_graph_set_macro(struct nvc0_screen *screen, uint32_t m, unsigned pos,
    OUT_RINGp (chan, data, size);
 
    return pos + size;
-}
-
-static void
-nvc0_screen_fence_reference(struct pipe_screen *pscreen,
-                            struct pipe_fence_handle **ptr,
-                            struct pipe_fence_handle *fence)
-{
-   nvc0_fence_reference((struct nvc0_fence **)ptr, nvc0_fence(fence));
-}
-
-static int
-nvc0_screen_fence_signalled(struct pipe_screen *pscreen,
-                            struct pipe_fence_handle *fence,
-                            unsigned flags)
-{
-   return !(nvc0_fence_signalled(nvc0_fence(fence)));
-}
-
-static int
-nvc0_screen_fence_finish(struct pipe_screen *pscreen,
-                         struct pipe_fence_handle *fence,
-                         unsigned flags)
-{
-   return nvc0_fence_wait((struct nvc0_fence *)fence) != TRUE;
 }
 
 static void
@@ -342,6 +318,28 @@ nvc0_magic_3d_init(struct nouveau_channel *chan)
    OUT_RING  (chan, 0);
 }
 
+static void
+nvc0_screen_fence_emit(struct pipe_screen *pscreen, u32 sequence)
+{
+   struct nvc0_screen *screen = nvc0_screen(pscreen);
+   struct nouveau_channel *chan = screen->base.channel;
+
+   MARK_RING (chan, 5, 2);
+   BEGIN_RING(chan, RING_3D(QUERY_ADDRESS_HIGH), 4);
+   OUT_RELOCh(chan, screen->fence.bo, 0, NOUVEAU_BO_WR);
+   OUT_RELOCl(chan, screen->fence.bo, 0, NOUVEAU_BO_WR);
+   OUT_RING  (chan, sequence);
+   OUT_RING  (chan, NVC0_3D_QUERY_GET_FENCE | NVC0_3D_QUERY_GET_SHORT |
+              (0xf << NVC0_3D_QUERY_GET_UNIT__SHIFT));
+}
+
+static u32
+nvc0_screen_fence_update(struct pipe_screen *pscreen)
+{
+   struct nvc0_screen *screen = nvc0_screen(pscreen);
+   return screen->fence.map[0];
+}
+
 #define FAIL_SCREEN_INIT(str, err)                    \
    do {                                               \
       NOUVEAU_ERR(str, err);                          \
@@ -363,6 +361,8 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
       return NULL;
    pscreen = &screen->base.base;
 
+   screen->base.sysmem_bindings = PIPE_BIND_CONSTANT_BUFFER;
+
    ret = nouveau_screen_init(&screen->base, dev);
    if (ret) {
       nvc0_screen_destroy(pscreen);
@@ -377,14 +377,8 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    pscreen->get_param = nvc0_screen_get_param;
    pscreen->get_shader_param = nvc0_screen_get_shader_param;
    pscreen->get_paramf = nvc0_screen_get_paramf;
-   pscreen->fence_reference = nvc0_screen_fence_reference;
-   pscreen->fence_signalled = nvc0_screen_fence_signalled;
-   pscreen->fence_finish = nvc0_screen_fence_finish;
 
    nvc0_screen_init_resource_functions(pscreen);
-
-   screen->base.vertex_buffer_flags = NOUVEAU_BO_GART;
-   screen->base.index_buffer_flags = 0;
 
    ret = nouveau_bo_new(dev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP, 0, 4096,
                         &screen->fence.bo);
@@ -393,6 +387,8 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    nouveau_bo_map(screen->fence.bo, NOUVEAU_BO_RDWR);
    screen->fence.map = screen->fence.bo->map;
    nouveau_bo_unmap(screen->fence.bo);
+   screen->base.fence.emit = nvc0_screen_fence_emit;
+   screen->base.fence.update = nvc0_screen_fence_update;
 
    for (i = 0; i < NVC0_SCRATCH_NR_BUFFERS; ++i) {
       ret = nouveau_bo_new(dev, NOUVEAU_BO_GART, 0, NVC0_SCRATCH_SIZE,
@@ -502,14 +498,14 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    OUT_RING  (chan, 0);
 
    ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 1 << 17, 1 << 20,
-                        &screen->mp_stack_bo);
+                        &screen->vfetch_cache);
    if (ret)
       goto fail;
 
-   BEGIN_RING(chan, RING_3D_(0x17bc), 3);
-   OUT_RELOCh(chan, screen->mp_stack_bo, 0, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
-   OUT_RELOCl(chan, screen->mp_stack_bo, 0, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
-   OUT_RING  (chan, 1);
+   BEGIN_RING(chan, RING_3D(VERTEX_QUARANTINE_ADDRESS_HIGH), 3);
+   OUT_RELOCh(chan, screen->vfetch_cache, 0, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
+   OUT_RELOCl(chan, screen->vfetch_cache, 0, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
+   OUT_RING  (chan, 3);
 
    ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 1 << 17, 1 << 17, &screen->txc);
    if (ret)
@@ -589,7 +585,7 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    OUT_RING  (chan, 1);
    BEGIN_RING(chan, RING_3D(GP_SELECT), 1);
    OUT_RING  (chan, 0x40);
-   BEGIN_RING(chan, RING_3D(GP_BUILTIN_RESULT_EN), 1);
+   BEGIN_RING(chan, RING_3D(LAYER), 1);
    OUT_RING  (chan, 0);
    BEGIN_RING(chan, RING_3D(TEP_SELECT), 1);
    OUT_RING  (chan, 0x30);
@@ -605,8 +601,6 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    BEGIN_RING(chan, RING_3D(POINT_RASTER_RULES), 1);
    OUT_RING  (chan, NVC0_3D_POINT_RASTER_RULES_OGL);
 
-   BEGIN_RING(chan, RING_3D(FRAG_COLOR_CLAMP_EN), 1);
-   OUT_RING  (chan, 0x11111111);
    BEGIN_RING(chan, RING_3D(EDGEFLAG_ENABLE), 1);
    OUT_RING  (chan, 1);
 
@@ -619,12 +613,9 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    screen->tic.entries = CALLOC(4096, sizeof(void *));
    screen->tsc.entries = screen->tic.entries + 2048;
 
-   screen->mm_GART = nvc0_mm_create(dev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP,
-                                    0x000);
-   screen->mm_VRAM = nvc0_mm_create(dev, NOUVEAU_BO_VRAM, 0x000);
-   screen->mm_VRAM_fe0 = nvc0_mm_create(dev, NOUVEAU_BO_VRAM, 0xfe0);
+   screen->mm_VRAM_fe0 = nouveau_mm_create(dev, NOUVEAU_BO_VRAM, 0xfe0);
 
-   nvc0_screen_fence_new(screen, &screen->fence.current, FALSE);
+   nouveau_fence_new(&screen->base, &screen->base.fence.current, FALSE);
 
    return pscreen;
 
@@ -644,7 +635,7 @@ nvc0_screen_make_buffers_resident(struct nvc0_screen *screen)
    nouveau_bo_validate(chan, screen->text, flags);
    nouveau_bo_validate(chan, screen->uniforms, flags);
    nouveau_bo_validate(chan, screen->txc, flags);
-   nouveau_bo_validate(chan, screen->mp_stack_bo, flags);
+   nouveau_bo_validate(chan, screen->vfetch_cache, flags);
 
    if (screen->cur_ctx && screen->cur_ctx->state.tls_required)
       nouveau_bo_validate(chan, screen->tls, flags);
@@ -661,7 +652,7 @@ nvc0_screen_tic_alloc(struct nvc0_screen *screen, void *entry)
    screen->tic.next = (i + 1) & (NVC0_TIC_MAX_ENTRIES - 1);
 
    if (screen->tic.entries[i])
-      nvc0_tic_entry(screen->tic.entries[i])->id = -1;
+      nv50_tic_entry(screen->tic.entries[i])->id = -1;
 
    screen->tic.entries[i] = entry;
    return i;
@@ -678,7 +669,7 @@ nvc0_screen_tsc_alloc(struct nvc0_screen *screen, void *entry)
    screen->tsc.next = (i + 1) & (NVC0_TSC_MAX_ENTRIES - 1);
 
    if (screen->tsc.entries[i])
-      nvc0_tsc_entry(screen->tsc.entries[i])->id = -1;
+      nv50_tsc_entry(screen->tsc.entries[i])->id = -1;
 
    screen->tsc.entries[i] = entry;
    return i;

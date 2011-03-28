@@ -68,6 +68,7 @@ main_sources = [
     'main/extensions.c',
     'main/fbobject.c',
     'main/feedback.c',
+    'main/ff_fragment_shader.cpp',
     'main/ffvertex_prog.c',
     'main/fog.c',
     'main/formats.c',
@@ -87,6 +88,7 @@ main_sources = [
     'main/multisample.c',
     'main/nvprogram.c',
     'main/pack.c',
+    'main/pbo.c',
     'main/pixel.c',
     'main/pixelstore.c',
     'main/pixeltransfer.c',
@@ -110,7 +112,6 @@ main_sources = [
     'main/texcompress_s3tc.c',
     'main/texcompress_fxt1.c',
     'main/texenv.c',
-    'main/texenvprogram.c',
     'main/texfetch.c',
     'main/texformat.c',
     'main/texgen.c',
@@ -122,6 +123,7 @@ main_sources = [
     'main/texrender.c',
     'main/texstate.c',
     'main/texstore.c',
+    'main/texturebarrier.c',
     'main/transformfeedback.c',
     'main/uniforms.c',
     'main/varray.c',
@@ -196,8 +198,10 @@ statetracker_sources = [
     'state_tracker/st_cb_queryobj.c',
     'state_tracker/st_cb_rasterpos.c',
     'state_tracker/st_cb_readpixels.c',
+    'state_tracker/st_cb_syncobj.c',
     'state_tracker/st_cb_strings.c',
     'state_tracker/st_cb_texture.c',
+    'state_tracker/st_cb_texturebarrier.c',
     'state_tracker/st_cb_viewport.c',
     'state_tracker/st_cb_xformfb.c',
     'state_tracker/st_context.c',
@@ -213,15 +217,21 @@ statetracker_sources = [
     'state_tracker/st_texture.c',
 ]
 
+env.Append(YACCFLAGS = '-d')
+program_lex = env.CFile('program/lex.yy.c', 'program/program_lexer.l')
+program_parse = env.CFile('program/program_parse.tab.c',
+                          'program/program_parse.y')
+
+# Make program/program_parse.tab.h reacheable from the include path
+env.Append(CPPPATH = [Dir('.').abspath])
+
 program_sources = [
     'program/arbprogparse.c',
     'program/hash_table.c',
     'program/ir_to_mesa.cpp',
-    'program/lex.yy.c',
     'program/nvfragparse.c',
     'program/nvvertparse.c',
     'program/program.c',
-    'program/program_parse.tab.c',
     'program/program_parse_extra.c',
     'program/prog_cache.c',
     'program/prog_execute.c',
@@ -236,6 +246,8 @@ program_sources = [
     'program/programopt.c',
     'program/sampler.cpp',
     'program/symbol_table.c',
+    program_lex,
+    program_parse[0],
 ]
 
 mesa_sources = (

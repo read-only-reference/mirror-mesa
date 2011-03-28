@@ -7,6 +7,7 @@
 #include "main/bufferobj.h"
 #include "main/context.h"
 #include "main/formats.h"
+#include "main/pbo.h"
 #include "main/texcompress.h"
 #include "main/texstore.h"
 #include "main/texgetimage.h"
@@ -236,7 +237,8 @@ try_pbo_upload(struct intel_context *intel,
 
    {
       GLuint offset;
-      drm_intel_bo *src_buffer = intel_bufferobj_source(intel, pbo, &offset);
+      drm_intel_bo *src_buffer =
+	      intel_bufferobj_source(intel, pbo, 64, &offset);
 
       if (!intelEmitCopyBlit(intel,
 			     intelImage->mt->cpp,
@@ -368,8 +370,10 @@ intelTexImage(struct gl_context * ctx,
        * whole object since our level didn't fit what was there
        * before, and any lower levels would fit into our miptree.
        */
-      if (intelImage->mt)
+      if (intelImage->mt) {
+	 intel_miptree_release(intel, &intelObj->mt);
 	 intel_miptree_reference(&intelObj->mt, intelImage->mt);
+      }
    }
 
    /* PBO fastpaths:

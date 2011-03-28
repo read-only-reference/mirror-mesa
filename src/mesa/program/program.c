@@ -71,6 +71,9 @@ _mesa_init_program(struct gl_context *ctx)
    ASSERT(ctx->Const.VertexProgram.MaxUniformComponents <= 4 * MAX_UNIFORMS);
    ASSERT(ctx->Const.FragmentProgram.MaxUniformComponents <= 4 * MAX_UNIFORMS);
 
+   ASSERT(ctx->Const.VertexProgram.MaxAddressOffset <= (1 << INST_INDEX_BITS));
+   ASSERT(ctx->Const.FragmentProgram.MaxAddressOffset <= (1 << INST_INDEX_BITS));
+
    /* If this fails, increase prog_instruction::TexSrcUnit size */
    ASSERT(MAX_TEXTURE_UNITS < (1 << 5));
 
@@ -808,7 +811,7 @@ _mesa_combine_programs(struct gl_context *ctx,
       /* Connect color outputs of fprogA to color inputs of fprogB, via a
        * new temporary register.
        */
-      if ((progA->OutputsWritten & (1 << FRAG_RESULT_COLOR)) &&
+      if ((progA->OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_COLOR)) &&
           (progB_inputsRead & FRAG_BIT_COL0)) {
          GLint tempReg = _mesa_find_free_register(usedTemps, MAX_PROGRAM_TEMPS,
                                                   firstTemp);
@@ -831,7 +834,7 @@ _mesa_combine_programs(struct gl_context *ctx,
 
       /* compute combined program's InputsRead */
       inputsB = progB_inputsRead;
-      if (progA->OutputsWritten & (1 << FRAG_RESULT_COLOR)) {
+      if (progA->OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_COLOR)) {
          inputsB &= ~(1 << FRAG_ATTRIB_COL0);
       }
       newProg->InputsRead = progA->InputsRead | inputsB;

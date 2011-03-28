@@ -43,7 +43,7 @@ endef
 
 define mesa-cxx-c
 	@mkdir -p $(dir $@)
-	$(CXX) -c -o $@ $< $($(1)_CPPFLAGS) $($(1)_CFLAGS) $($(1)_CXXFLAGS)
+	$(CXX) -c -o $@ $< $($(1)_CPPFLAGS) $($(1)_CXXFLAGS)
 endef
 
 $(MESA_OBJ_DIR)/%.o: %.c
@@ -73,6 +73,12 @@ main/api_exec_es1.c: main/APIspec.xml main/es_generator.py main/APIspecutil.py m
 
 main/api_exec_es2.c: main/APIspec.xml main/es_generator.py main/APIspecutil.py main/APIspec.py
 	$(PYTHON2) $(PYTHON_FLAGS) main/es_generator.py -S main/APIspec.xml -V GLES2.0 > $@
+
+program/program_parse.tab.c program/program_parse.tab.h: program/program_parse.y
+	bison -v -d --output=program/program_parse.tab.c $<
+
+program/lex.yy.c: program/program_lexer.l
+	flex --never-interactive --outfile=$@ $<
 
 ######################################################################
 # Helper libraries used by many drivers:

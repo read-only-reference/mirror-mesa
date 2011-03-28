@@ -55,9 +55,7 @@
  * In particular, we care about pixel transfer state and buffer state
  * (such as glReadBuffer to make sure we read from the right renderbuffer).
  */
-#define NEW_COPY_TEX_STATE (_MESA_NEW_TRANSFER_STATE | \
-                            _NEW_BUFFERS | \
-                            _NEW_PIXEL)
+#define NEW_COPY_TEX_STATE (_NEW_BUFFERS | _NEW_PIXEL)
 
 
 
@@ -313,11 +311,40 @@ _mesa_base_tex_format( struct gl_context *ctx, GLint internalFormat )
       }
    }
 
-   if (ctx->Extensions.MESA_texture_signed_rgba) {
+   if (ctx->Extensions.EXT_texture_snorm) {
       switch (internalFormat) {
+         case GL_RED_SNORM:
+         case GL_R8_SNORM:
+         case GL_R16_SNORM:
+            return GL_RED;
+         case GL_RG_SNORM:
+         case GL_RG8_SNORM:
+         case GL_RG16_SNORM:
+            return GL_RG;
+         case GL_RGB_SNORM:
+         case GL_RGB8_SNORM:
+         case GL_RGB16_SNORM:
+            return GL_RGB;
          case GL_RGBA_SNORM:
          case GL_RGBA8_SNORM:
+         case GL_RGBA16_SNORM:
             return GL_RGBA;
+         case GL_ALPHA_SNORM:
+         case GL_ALPHA8_SNORM:
+         case GL_ALPHA16_SNORM:
+            return GL_ALPHA;
+         case GL_LUMINANCE_SNORM:
+         case GL_LUMINANCE8_SNORM:
+         case GL_LUMINANCE16_SNORM:
+            return GL_LUMINANCE;
+         case GL_LUMINANCE_ALPHA_SNORM:
+         case GL_LUMINANCE8_ALPHA8_SNORM:
+         case GL_LUMINANCE16_ALPHA16_SNORM:
+            return GL_LUMINANCE_ALPHA;
+         case GL_INTENSITY_SNORM:
+         case GL_INTENSITY8_SNORM:
+         case GL_INTENSITY16_SNORM:
+            return GL_INTENSITY;
          default:
             ; /* fallthrough */
       }
@@ -504,6 +531,28 @@ _mesa_base_tex_format( struct gl_context *ctx, GLint internalFormat )
       case GL_COMPRESSED_RG_RGTC2:
       case GL_COMPRESSED_SIGNED_RG_RGTC2:
          return GL_RG;
+      default:
+         ; /* fallthrough */
+      }
+   }
+
+   if (ctx->Extensions.EXT_texture_compression_latc) {
+      switch (internalFormat) {
+      case GL_COMPRESSED_LUMINANCE_LATC1_EXT:
+      case GL_COMPRESSED_SIGNED_LUMINANCE_LATC1_EXT:
+         return GL_LUMINANCE;
+      case GL_COMPRESSED_LUMINANCE_ALPHA_LATC2_EXT:
+      case GL_COMPRESSED_SIGNED_LUMINANCE_ALPHA_LATC2_EXT:
+         return GL_LUMINANCE_ALPHA;
+      default:
+         ; /* fallthrough */
+      }
+   }
+
+   if (ctx->Extensions.ATI_texture_compression_3dc) {
+      switch (internalFormat) {
+      case GL_COMPRESSED_LUMINANCE_ALPHA_3DC_ATI:
+         return GL_LUMINANCE_ALPHA;
       default:
          ; /* fallthrough */
       }
@@ -1898,7 +1947,9 @@ copytexture_error_check( struct gl_context *ctx, GLuint dimensions,
 
    /* Check that the source buffer is complete */
    if (ctx->ReadBuffer->Name) {
-      _mesa_test_framebuffer_completeness(ctx, ctx->ReadBuffer);
+      if (ctx->ReadBuffer->_Status == 0) {
+         _mesa_test_framebuffer_completeness(ctx, ctx->ReadBuffer);
+      }
       if (ctx->ReadBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
          _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
                      "glCopyTexImage%dD(invalid readbuffer)", dimensions);
@@ -2000,7 +2051,9 @@ copytexsubimage_error_check1( struct gl_context *ctx, GLuint dimensions,
 {
    /* Check that the source buffer is complete */
    if (ctx->ReadBuffer->Name) {
-      _mesa_test_framebuffer_completeness(ctx, ctx->ReadBuffer);
+      if (ctx->ReadBuffer->_Status == 0) {
+         _mesa_test_framebuffer_completeness(ctx, ctx->ReadBuffer);
+      }
       if (ctx->ReadBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
          _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
                      "glCopyTexImage%dD(invalid readbuffer)", dimensions);
@@ -2408,7 +2461,7 @@ teximage(struct gl_context *ctx, GLuint dims,
          return;   /* error was recorded */
       }
 
-      if (ctx->NewState & _MESA_NEW_TRANSFER_STATE)
+      if (ctx->NewState & _NEW_PIXEL)
 	 _mesa_update_state(ctx);
 
       texObj = _mesa_get_current_tex_object(ctx, target);
@@ -2554,7 +2607,7 @@ _mesa_EGLImageTargetTexture2DOES (GLenum target, GLeglImageOES image)
       return;
    }
 
-   if (ctx->NewState & _MESA_NEW_TRANSFER_STATE)
+   if (ctx->NewState & _NEW_PIXEL)
       _mesa_update_state(ctx);
 
    texObj = _mesa_get_current_tex_object(ctx, target);
@@ -2611,7 +2664,7 @@ texsubimage(struct gl_context *ctx, GLuint dims, GLenum target, GLint level,
       return;
    }       
 
-   if (ctx->NewState & _MESA_NEW_TRANSFER_STATE)
+   if (ctx->NewState & _NEW_PIXEL)
       _mesa_update_state(ctx);
 
    if (subtexture_error_check(ctx, dims, target, level, xoffset, yoffset, zoffset,

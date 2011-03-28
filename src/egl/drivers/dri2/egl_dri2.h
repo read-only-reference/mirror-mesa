@@ -35,6 +35,7 @@
 
 #ifdef HAVE_WAYLAND_PLATFORM
 #include <wayland-client.h>
+#include "wayland-drm.h"
 #include "wayland-egl-priv.h"
 #endif
 
@@ -85,7 +86,10 @@ struct dri2_egl_display
    const __DRIextension     *extensions[3];
 #ifdef HAVE_WAYLAND_PLATFORM
    struct wl_egl_display    *wl_dpy;
+   struct wl_drm            *wl_server_drm;
 #endif
+
+   int (*authenticate) (_EGLDisplay *disp, uint32_t id);
 };
 
 struct dri2_egl_context

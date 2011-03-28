@@ -38,6 +38,7 @@
 #include "mfeatures.h"
 #include "mtypes.h"
 #include "pack.h"
+#include "pbo.h"
 #include "texgetimage.h"
 #include "teximage.h"
 
@@ -73,6 +74,7 @@ get_tex_color_index(struct gl_context *ctx, GLuint dimensions,
    const GLint width = texImage->Width;
    const GLint height = texImage->Height;
    const GLint depth = texImage->Depth;
+   const GLint rowstride = texImage->RowStride;
    const GLuint indexBits =
       _mesa_get_format_bits(texImage->TexFormat, GL_TEXTURE_INDEX_SIZE_EXT);
    const GLbitfield transferOps = 0x0;
@@ -88,14 +90,14 @@ get_tex_color_index(struct gl_context *ctx, GLuint dimensions,
 
          if (indexBits == 8) {
             const GLubyte *src = (const GLubyte *) texImage->Data;
-            src += width * (img * texImage->Height + row);
+            src += rowstride * (img * height + row);
             for (col = 0; col < width; col++) {
                indexRow[col] = src[col];
             }
          }
          else if (indexBits == 16) {
             const GLushort *src = (const GLushort *) texImage->Data;
-            src += width * (img * texImage->Height + row);
+            src += rowstride * (img * height + row);
             for (col = 0; col < width; col++) {
                indexRow[col] = src[col];
             }
@@ -158,6 +160,7 @@ get_tex_depth_stencil(struct gl_context *ctx, GLuint dimensions,
    const GLint width = texImage->Width;
    const GLint height = texImage->Height;
    const GLint depth = texImage->Depth;
+   const GLint rowstride = texImage->RowStride;
    const GLuint *src = (const GLuint *) texImage->Data;
    GLint img, row;
 
@@ -171,7 +174,7 @@ get_tex_depth_stencil(struct gl_context *ctx, GLuint dimensions,
             _mesa_swap4((GLuint *) dest, width);
          }
 
-         src += width * row + width * height * img;
+         src += rowstride;
       }
    }
 }

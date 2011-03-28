@@ -141,6 +141,13 @@ static uint32_t r300_depth_clear_value(enum pipe_format format,
     }
 }
 
+static uint32_t r300_hiz_clear_value(double depth)
+{
+    uint32_t r = (uint32_t)(CLAMP(depth, 0, 1) * 255.5);
+    assert(r <= 255);
+    return r | (r << 8) | (r << 16) | (r << 24);
+}
+
 /* Clear currently bound buffers. */
 static void r300_clear(struct pipe_context* pipe,
                        unsigned buffers,
@@ -214,6 +221,7 @@ static void r300_clear(struct pipe_context* pipe,
         }
 
         if (r300_hiz_clear_allowed(r300)) {
+            r300->hiz_clear_value = r300_hiz_clear_value(depth);
             r300_mark_atom_dirty(r300, &r300->hiz_clear);
         }
     }
@@ -255,7 +263,7 @@ static void r300_clear(struct pipe_context* pipe,
 
         /* Reserve CS space. */
         if (dwords > (R300_MAX_CMDBUF_DWORDS - r300->cs->cdw)) {
-            r300->context.flush(&r300->context, 0, NULL);
+            r300_flush(&r300->context, R300_FLUSH_ASYNC, NULL);
         }
 
         /* Emit clear packets. */
@@ -439,11 +447,11 @@ static void r300_resource_copy_region(struct pipe_context *pipe,
          !pipe->screen->is_format_supported(pipe->screen,
                                             src->format, src->target,
                                             src->nr_samples,
-                                            PIPE_BIND_SAMPLER_VIEW, 0) ||
+                                            PIPE_BIND_SAMPLER_VIEW) ||
          !pipe->screen->is_format_supported(pipe->screen,
                                             dst->format, dst->target,
                                             dst->nr_samples,
-                                            PIPE_BIND_RENDER_TARGET, 0))) {
+                                            PIPE_BIND_RENDER_TARGET))) {
         switch (util_format_get_blocksize(old_dst.format)) {
             case 1:
                 new_dst.format = PIPE_FORMAT_I8_UNORM;
@@ -466,7 +474,8 @@ static void r300_resource_copy_region(struct pipe_context *pipe,
     }
 
     /* Handle compressed formats. */
-    if (desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
+    if (desc->layout == UTIL_FORMAT_LAYOUT_S3TC ||
+        desc->layout == UTIL_FORMAT_LAYOUT_RGTC) {
         switch (util_format_get_blocksize(old_dst.format)) {
         case 8:
             /* 1 pixel = 4 bits,

@@ -35,6 +35,7 @@
 #include "macros.h"
 #include "mfeatures.h"
 #include "pixel.h"
+#include "pbo.h"
 #include "mtypes.h"
 #include "main/dispatch.h"
 
@@ -616,7 +617,7 @@ update_image_transfer_state(struct gl_context *ctx)
  */
 void _mesa_update_pixel( struct gl_context *ctx, GLuint new_state )
 {
-   if (new_state & _MESA_NEW_TRANSFER_STATE)
+   if (new_state & _NEW_PIXEL)
       update_image_transfer_state(ctx);
 }
 
@@ -685,9 +686,6 @@ _mesa_init_pixel( struct gl_context *ctx )
    init_pixelmap(&ctx->PixelMaps.GtoG);
    init_pixelmap(&ctx->PixelMaps.BtoB);
    init_pixelmap(&ctx->PixelMaps.AtoA);
-   /* GL_SGI_texture_color_table */
-   ASSIGN_4V(ctx->Pixel.TextureColorTableScale, 1.0, 1.0, 1.0, 1.0);
-   ASSIGN_4V(ctx->Pixel.TextureColorTableBias, 0.0, 0.0, 0.0, 0.0);
 
    if (ctx->Visual.doubleBufferMode) {
       ctx->Pixel.ReadBuffer = GL_BACK;

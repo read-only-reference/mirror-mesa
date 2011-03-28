@@ -253,6 +253,16 @@ enum ir_depth_layout {
 const char*
 depth_layout_string(ir_depth_layout layout);
 
+/**
+ * Description of built-in state associated with a uniform
+ *
+ * \sa ir_variable::state_slots
+ */
+struct ir_state_slot {
+   int tokens[5];
+   int swizzle;
+};
+
 class ir_variable : public ir_instruction {
 public:
    ir_variable(const struct glsl_type *, const char *, ir_variable_mode);
@@ -384,6 +394,22 @@ public:
     * slot has not been assigned, the value will be -1.
     */
    int location;
+
+   /**
+    * Built-in state that backs this uniform
+    *
+    * Once set at variable creation, \c state_slots must remain invariant.
+    * This is because, ideally, this array would be shared by all clones of
+    * this variable in the IR tree.  In other words, we'd really like for it
+    * to be a fly-weight.
+    *
+    * If the variable is not a uniform, \c num_state_slots will be zero and
+    * \c state_slots will be \c NULL.
+    */
+   /*@{*/
+   unsigned num_state_slots;    /**< Number of state slots used */
+   ir_state_slot *state_slots;  /**< State descriptors. */
+   /*@}*/
 
    /**
     * Emit a warning if this variable is accessed.
@@ -1191,16 +1217,16 @@ enum ir_texture_opcode {
  * selected from \c ir_texture_opcodes.  In the printed IR, these will
  * appear as:
  *
- *                             Texel offset (0 or an expression)
- *                             | Projection divisor
- *                             | |  Shadow comparitor
- *                             | |  |
- *                             v v  v
- * (tex <sampler> <coordinate> 0 1 ( ))
- * (txb <sampler> <coordinate> 0 1 ( ) <bias>)
- * (txl <sampler> <coordinate> 0 1 ( ) <lod>)
- * (txd <sampler> <coordinate> 0 1 ( ) (dPdx dPdy))
- * (txf <sampler> <coordinate> 0       <lod>)
+ *                                    Texel offset (0 or an expression)
+ *                                    | Projection divisor
+ *                                    | |  Shadow comparitor
+ *                                    | |  |
+ *                                    v v  v
+ * (tex <type> <sampler> <coordinate> 0 1 ( ))
+ * (txb <type> <sampler> <coordinate> 0 1 ( ) <bias>)
+ * (txl <type> <sampler> <coordinate> 0 1 ( ) <lod>)
+ * (txd <type> <sampler> <coordinate> 0 1 ( ) (dPdx dPdy))
+ * (txf <type> <sampler> <coordinate> 0       <lod>)
  */
 class ir_texture : public ir_rvalue {
 public:
@@ -1226,8 +1252,8 @@ public:
     */
    const char *opcode_string();
 
-   /** Set the sampler and infer the type. */
-   void set_sampler(ir_dereference *sampler);
+   /** Set the sampler and type. */
+   void set_sampler(ir_dereference *sampler, const glsl_type *type);
 
    /**
     * Do a reverse-lookup to translate a string into an ir_texture_opcode.

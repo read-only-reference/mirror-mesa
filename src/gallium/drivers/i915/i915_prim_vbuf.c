@@ -465,16 +465,15 @@ draw_arrays_fallback(struct vbuf_render *render,
    if (i915->hardware_dirty)
       i915_emit_hardware_state(i915);
 
-   if (!BEGIN_BATCH(1 + (nr_indices + 1)/2, 1)) {
+   if (!BEGIN_BATCH(1 + (nr_indices + 1)/2)) {
       FLUSH_BATCH(NULL);
 
       /* Make sure state is re-emitted after a flush:
        */
-      i915_update_derived(i915);
       i915_emit_hardware_state(i915);
       i915->vbo_flushed = 1;
 
-      if (!BEGIN_BATCH(1 + (nr_indices + 1)/2, 1)) {
+      if (!BEGIN_BATCH(1 + (nr_indices + 1)/2)) {
          assert(0);
          goto out;
       }
@@ -514,16 +513,15 @@ i915_vbuf_render_draw_arrays(struct vbuf_render *render,
    if (i915->hardware_dirty)
       i915_emit_hardware_state(i915);
 
-   if (!BEGIN_BATCH(2, 0)) {
+   if (!BEGIN_BATCH(2)) {
       FLUSH_BATCH(NULL);
 
       /* Make sure state is re-emitted after a flush:
        */
-      i915_update_derived(i915);
       i915_emit_hardware_state(i915);
       i915->vbo_flushed = 1;
 
-      if (!BEGIN_BATCH(2, 0)) {
+      if (!BEGIN_BATCH(2)) {
          assert(0);
          goto out;
       }
@@ -635,16 +633,15 @@ i915_vbuf_render_draw_elements(struct vbuf_render *render,
    if (i915->hardware_dirty)
       i915_emit_hardware_state(i915);
 
-   if (!BEGIN_BATCH(1 + (nr_indices + 1)/2, 1)) {
+   if (!BEGIN_BATCH(1 + (nr_indices + 1)/2)) {
       FLUSH_BATCH(NULL);
 
       /* Make sure state is re-emitted after a flush: 
        */
-      i915_update_derived(i915);
       i915_emit_hardware_state(i915);
       i915->vbo_flushed = 1;
 
-      if (!BEGIN_BATCH(1 + (nr_indices + 1)/2, 1)) {
+      if (!BEGIN_BATCH(1 + (nr_indices + 1)/2)) {
          assert(0);
          goto out;
       }

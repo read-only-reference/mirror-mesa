@@ -94,6 +94,7 @@ EGLint dri2_to_egl_attribute_map[] = {
    0,				/* __DRI_ATTRIB_BIND_TO_MIPMAP_TEXTURE */
    0,				/* __DRI_ATTRIB_BIND_TO_TEXTURE_TARGETS */
    EGL_Y_INVERTED_NOK,		/* __DRI_ATTRIB_YINVERTED */
+   0,				/* __DRI_ATTRIB_FRAMEBUFFER_SRGB_CAPABLE */
 };
 
 struct dri2_egl_config *
@@ -459,6 +460,12 @@ dri2_create_screen(_EGLDisplay *disp)
          disp->Extensions.KHR_surfaceless_gles2 = EGL_TRUE;
          disp->Extensions.KHR_surfaceless_opengl = EGL_TRUE;
       }
+   }
+
+   if (dri2_dpy->image) {
+      disp->Extensions.MESA_drm_image = EGL_TRUE;
+      disp->Extensions.KHR_image_base = EGL_TRUE;
+      disp->Extensions.KHR_gl_renderbuffer_image = EGL_TRUE;
    }
 
    return EGL_TRUE;
@@ -915,6 +922,51 @@ dri2_create_image_mesa_drm_buffer(_EGLDisplay *disp, _EGLContext *ctx,
    return &dri2_img->base;
 }
 
+static EGLBoolean
+dri2_export_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp, _EGLImage *img,
+			  EGLint *name, EGLint *handle, EGLint *stride);
+
+static _EGLImage *
+dri2_reference_drm_image(_EGLDisplay *disp, _EGLContext *ctx,
+			 _EGLImage *image, EGLint width, EGLint height)
+{
+   EGLint attr_list[] = {
+		EGL_WIDTH,		0,
+		EGL_HEIGHT,		0,
+		EGL_DRM_BUFFER_STRIDE_MESA,	0,
+		EGL_DRM_BUFFER_FORMAT_MESA,	EGL_DRM_BUFFER_FORMAT_ARGB32_MESA,
+		EGL_NONE
+   };
+   EGLint name, stride;
+   
+   dri2_export_drm_image_mesa(disp->Driver, disp, image,
+			      &name, NULL, &stride);
+
+   attr_list[1] = width;
+   attr_list[3] = height;
+   attr_list[5] = stride / 4;
+
+   return dri2_create_image_mesa_drm_buffer(disp, ctx,
+					    (EGLClientBuffer)(intptr_t) name,
+					    attr_list);
+}
+
+#ifdef HAVE_WAYLAND_PLATFORM
+static _EGLImage *
+dri2_create_image_wayland_wl_buffer(_EGLDisplay *disp, _EGLContext *ctx,
+				    EGLClientBuffer buffer,
+				    const EGLint *attr_list)
+{
+	struct wl_drm_buffer *wl_drm_buffer = (struct wl_drm_buffer *) buffer;
+
+        (void) attr_list;
+
+	return dri2_reference_drm_image(disp, ctx, wl_drm_buffer->image,
+					wl_drm_buffer->buffer.width,
+					wl_drm_buffer->buffer.height);
+}
+#endif
+
 _EGLImage *
 dri2_create_image_khr(_EGLDriver *drv, _EGLDisplay *disp,
 		      _EGLContext *ctx, EGLenum target,
@@ -927,6 +979,10 @@ dri2_create_image_khr(_EGLDriver *drv, _EGLDisplay *disp,
       return dri2_create_image_khr_renderbuffer(disp, ctx, buffer, attr_list);
    case EGL_DRM_BUFFER_MESA:
       return dri2_create_image_mesa_drm_buffer(disp, ctx, buffer, attr_list);
+#ifdef HAVE_WAYLAND_PLATFORM
+   case EGL_WAYLAND_BUFFER_WL:
+      return dri2_create_image_wayland_wl_buffer(disp, ctx, buffer, attr_list);
+#endif
    default:
       _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
       return EGL_NO_IMAGE_KHR;
@@ -1055,6 +1111,47 @@ dri2_export_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp, _EGLImage *img,
    return EGL_TRUE;
 }
 
+#ifdef HAVE_WAYLAND_PLATFORM
+static EGLBoolean
+dri2_bind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
+			     struct wl_display *wl_dpy)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+
+   (void) drv;
+
+   if (dri2_dpy->wl_server_drm)
+	   return EGL_FALSE;
+
+   dri2_dpy->wl_server_drm =
+	   wayland_drm_init(wl_dpy, disp,
+			    dri2_dpy->authenticate,
+			    dri2_dpy->device_name);
+
+   if (!dri2_dpy->wl_server_drm)
+	   return EGL_FALSE;
+
+   return EGL_TRUE;
+}
+
+static EGLBoolean
+dri2_unbind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
+			       struct wl_display *wl_dpy)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+
+   (void) drv;
+
+   if (!dri2_dpy->wl_server_drm)
+	   return EGL_FALSE;
+
+   wayland_drm_destroy(dri2_dpy->wl_server_drm);
+   dri2_dpy->wl_server_drm = NULL;
+
+   return EGL_TRUE;
+}
+#endif
+
 static void
 dri2_unload(_EGLDriver *drv)
 {
@@ -1140,6 +1237,10 @@ _EGL_MAIN(const char *args)
    dri2_drv->base.API.DestroyImageKHR = dri2_destroy_image_khr;
    dri2_drv->base.API.CreateDRMImageMESA = dri2_create_drm_image_mesa;
    dri2_drv->base.API.ExportDRMImageMESA = dri2_export_drm_image_mesa;
+#ifdef HAVE_WAYLAND_PLATFORM
+   dri2_drv->base.API.BindWaylandDisplayWL = dri2_bind_wayland_display_wl;
+   dri2_drv->base.API.UnbindWaylandDisplayWL = dri2_unbind_wayland_display_wl;
+#endif
 
    dri2_drv->base.Name = "DRI2";
    dri2_drv->base.Unload = dri2_unload;

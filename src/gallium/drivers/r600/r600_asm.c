@@ -53,6 +53,7 @@ static inline unsigned int r600_bc_get_num_operands(struct r600_bc *bc, struct r
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLNE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MUL:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_UINT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MAX:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MIN:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETE:
@@ -102,6 +103,7 @@ static inline unsigned int r600_bc_get_num_operands(struct r600_bc *bc, struct r
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLNE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MUL:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_UINT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MAX:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MIN:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETE:
@@ -424,7 +426,9 @@ static int is_alu_mova_inst(struct r600_bc *bc, struct r600_bc_alu *alu)
 static int is_alu_vec_unit_inst(struct r600_bc *bc, struct r600_bc_alu *alu)
 {
 	return is_alu_reduction_inst(bc, alu) ||
-		is_alu_mova_inst(bc, alu);
+		is_alu_mova_inst(bc, alu) ||
+		(bc->chiprev == CHIPREV_EVERGREEN &&
+		alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT_FLOOR);
 }
 
 /* alu instructions that can only execute on the trans unit */
@@ -466,8 +470,9 @@ static int is_alu_trans_unit_inst(struct r600_bc *bc, struct r600_bc_alu *alu)
 	case CHIPREV_EVERGREEN:
 	default:
 		if (!alu->is_op3)
-			/* Note that FLT_TO_INT* instructions are vector instructions
-			 * on Evergreen, despite what the documentation says. */
+			/* Note that FLT_TO_INT_* instructions are vector-only instructions
+			 * on Evergreen, despite what the documentation says. FLT_TO_INT
+			 * can do both vector and scalar. */
 			return alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ASHR_INT ||
 				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT ||
 				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHL_INT ||
@@ -948,10 +953,17 @@ static int merge_inst_groups(struct r600_bc *bc, struct r600_bc_alu *slots[5],
 		} else
 			result[i] = slots[i];
 
-		// let's check source gprs
 		alu = slots[i];
 		num_once_inst += is_alu_once_inst(bc, alu);
 
+		// let's check dst gpr
+		if (alu->dst.rel) {
+			if (have_mova)
+				return 0;
+			have_rel = 1;
+		}
+
+		// let's check source gprs
 		num_src = r600_bc_get_num_operands(bc, alu);
 		for (src = 0; src < num_src; ++src) {
 			if (alu->src[src].rel) {
@@ -1245,6 +1257,24 @@ int r600_bc_add_alu(struct r600_bc *bc, const struct r600_bc_alu *alu)
 	return r600_bc_add_alu_type(bc, alu, BC_INST(bc, V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU));
 }
 
+static unsigned r600_bc_num_tex_and_vtx_instructions(const struct r600_bc *bc)
+{
+	switch (bc->chiprev) {
+	case CHIPREV_R600:
+		return 8;
+
+	case CHIPREV_R700:
+		return 16;
+
+	case CHIPREV_EVERGREEN:
+		return 64;
+
+	default:
+		R600_ERR("Unknown chiprev %d.\n", bc->chiprev);
+		return 8;
+	}
+}
+
 int r600_bc_add_vtx(struct r600_bc *bc, const struct r600_bc_vtx *vtx)
 {
 	struct r600_bc_vtx *nvtx = r600_bc_vtx();
@@ -1270,7 +1300,7 @@ int r600_bc_add_vtx(struct r600_bc *bc, const struct r600_bc_vtx *vtx)
 	/* each fetch use 4 dwords */
 	bc->cf_last->ndw += 4;
 	bc->ndw += 4;
-	if ((bc->cf_last->ndw / 4) > 7)
+	if ((bc->cf_last->ndw / 4) >= r600_bc_num_tex_and_vtx_instructions(bc))
 		bc->force_add_cf = 1;
 	return 0;
 }
@@ -1317,7 +1347,7 @@ int r600_bc_add_tex(struct r600_bc *bc, const struct r600_bc_tex *tex)
 	/* each texture fetch use 4 dwords */
 	bc->cf_last->ndw += 4;
 	bc->ndw += 4;
-	if ((bc->cf_last->ndw / 4) > 7)
+	if ((bc->cf_last->ndw / 4) >= r600_bc_num_tex_and_vtx_instructions(bc))
 		bc->force_add_cf = 1;
 	return 0;
 }
@@ -1337,31 +1367,7 @@ int r600_bc_add_cfinst(struct r600_bc *bc, int inst)
 /* common to all 3 families */
 static int r600_bc_vtx_build(struct r600_bc *bc, struct r600_bc_vtx *vtx, unsigned id)
 {
-	unsigned fetch_resource_start = 0;
-
-	/* check if we are fetch shader */
-			/* fetch shader can also access vertex resource,
-			 * first fetch shader resource is at 160
-			 */
-	if (bc->type == -1) {
-		switch (bc->chiprev) {
-		/* r600 */
-		case CHIPREV_R600:
-		/* r700 */
-		case CHIPREV_R700:
-			fetch_resource_start = 160;
-			break;
-		/* evergreen */
-		case CHIPREV_EVERGREEN:
-			fetch_resource_start = 0;
-			break;
-		default:
-			fprintf(stderr,  "%s:%s:%d unknown chiprev %d\n",
-				__FILE__, __func__, __LINE__, bc->chiprev);
-			break;
-		}
-	}
-	bc->bytecode[id++] = S_SQ_VTX_WORD0_BUFFER_ID(vtx->buffer_id + fetch_resource_start) |
+	bc->bytecode[id++] = S_SQ_VTX_WORD0_BUFFER_ID(vtx->buffer_id) |
 			S_SQ_VTX_WORD0_FETCH_TYPE(vtx->fetch_type) |
 			S_SQ_VTX_WORD0_SRC_GPR(vtx->src_gpr) |
 			S_SQ_VTX_WORD0_SRC_SEL_X(vtx->src_sel_x) |
@@ -1454,6 +1460,14 @@ static int r600_bc_alu_build(struct r600_bc *bc, struct r600_bc_alu *alu, unsign
 	return 0;
 }
 
+static void r600_bc_cf_vtx_build(uint32_t *bytecode, const struct r600_bc_cf *cf)
+{
+	*bytecode++ = S_SQ_CF_WORD0_ADDR(cf->addr >> 1);
+	*bytecode++ = S_SQ_CF_WORD1_CF_INST(cf->inst) |
+			S_SQ_CF_WORD1_BARRIER(1) |
+			S_SQ_CF_WORD1_COUNT((cf->ndw / 4) - 1);
+}
+
 /* common for r600/r700 - eg in eg_asm.c */
 static int r600_bc_cf_build(struct r600_bc *bc, struct r600_bc_cf *cf)
 {
@@ -1480,10 +1494,10 @@ static int r600_bc_cf_build(struct r600_bc *bc, struct r600_bc_cf *cf)
 	case V_SQ_CF_WORD1_SQ_CF_INST_TEX:
 	case V_SQ_CF_WORD1_SQ_CF_INST_VTX:
 	case V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC:
-		bc->bytecode[id++] = S_SQ_CF_WORD0_ADDR(cf->addr >> 1);
-		bc->bytecode[id++] = S_SQ_CF_WORD1_CF_INST(cf->inst) |
-					S_SQ_CF_WORD1_BARRIER(1) |
-					S_SQ_CF_WORD1_COUNT((cf->ndw / 4) - 1);
+		if (bc->chiprev == CHIPREV_R700)
+			r700_bc_cf_vtx_build(&bc->bytecode[id], cf);
+		else
+			r600_bc_cf_vtx_build(&bc->bytecode[id], cf);
 		break;
 	case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
 	case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
@@ -1914,22 +1928,6 @@ void r600_bc_dump(struct r600_bc *bc)
 	fprintf(stderr, "--------------------------------------\n");
 }
 
-static void r600_cf_vtx(struct r600_vertex_element *ve)
-{
-	struct r600_pipe_state *rstate;
-
-	rstate = &ve->rstate;
-	rstate->id = R600_PIPE_STATE_FETCH_SHADER;
-	rstate->nregs = 0;
-	r600_pipe_state_add_reg(rstate, R_0288A4_SQ_PGM_RESOURCES_FS,
-				0x00000000, 0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate, R_0288DC_SQ_PGM_CF_OFFSET_FS,
-				0x00000000, 0xFFFFFFFF, NULL);
-	r600_pipe_state_add_reg(rstate, R_028894_SQ_PGM_START_FS,
-				r600_bo_offset(ve->fetch_shader) >> 8,
-				0xFFFFFFFF, ve->fetch_shader);
-}
-
 static void r600_vertex_data_type(enum pipe_format pformat, unsigned *format,
 				unsigned *num_format, unsigned *format_comp)
 {
@@ -2095,57 +2093,12 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 			struct r600_bc_alu alu;
 
 			memset(&alu, 0, sizeof(alu));
-			alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT);
+			alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_UINT);
 			alu.src[0].sel = 0;
 			alu.src[0].chan = 3;
 
-			alu.dst.sel = i + 1;
-			alu.dst.chan = 3;
-			alu.dst.write = 1;
-			alu.last = 1;
-
-			if ((r = r600_bc_add_alu(&bc, &alu))) {
-				r600_bc_clear(&bc);
-				return r;
-			}
-
-			memset(&alu, 0, sizeof(alu));
-			alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MUL);
-			alu.src[0].sel = i + 1;
-			alu.src[0].chan = 3;
-
 			alu.src[1].sel = V_SQ_ALU_SRC_LITERAL;
-			alu.src[1].value = fui(1.0f / (float)elements[i].instance_divisor);
-
-			alu.dst.sel = i + 1;
-			alu.dst.chan = 3;
-			alu.dst.write = 1;
-			alu.last = 1;
-
-			if ((r = r600_bc_add_alu(&bc, &alu))) {
-				r600_bc_clear(&bc);
-				return r;
-			}
-
-			memset(&alu, 0, sizeof(alu));
-			alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_TRUNC);
-			alu.src[0].sel = i + 1;
-			alu.src[0].chan = 3;
-
-			alu.dst.sel = i + 1;
-			alu.dst.chan = 3;
-			alu.dst.write = 1;
-			alu.last = 1;
-
-			if ((r = r600_bc_add_alu(&bc, &alu))) {
-				r600_bc_clear(&bc);
-				return r;
-			}
-
-			memset(&alu, 0, sizeof(alu));
-			alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT);
-			alu.src[0].sel = i + 1;
-			alu.src[0].chan = 3;
+			alu.src[1].value = (1ll << 32) / elements[i].instance_divisor + 1;
 
 			alu.dst.sel = i + 1;
 			alu.dst.chan = 3;
@@ -2176,7 +2129,7 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 		vtx.fetch_type = elements[i].instance_divisor ? 1 : 0;
 		vtx.src_gpr = elements[i].instance_divisor > 1 ? i + 1 : 0;
 		vtx.src_sel_x = elements[i].instance_divisor ? 3 : 0;
-		vtx.mega_fetch_count = 16;
+		vtx.mega_fetch_count = 0x1F;
 		vtx.dst_gpr = i + 1;
 		vtx.dst_sel_x = desc->swizzle[0];
 		vtx.dst_sel_y = desc->swizzle[1];
@@ -2196,14 +2149,6 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 
 	r600_bc_add_cfinst(&bc, BC_INST(&bc, V_SQ_CF_WORD1_SQ_CF_INST_RETURN));
 
-	/* use PIPE_BIND_VERTEX_BUFFER so we use the cache buffer manager */
-	ve->fetch_shader = r600_bo(rctx->radeon, bc.ndw*4, 256, PIPE_BIND_VERTEX_BUFFER, 0);
-	if (ve->fetch_shader == NULL) {
-		r600_bc_clear(&bc);
-		return -ENOMEM;
-	}
-
-	ve->fs_size = bc.ndw*4;
 	if ((r = r600_bc_build(&bc))) {
 		r600_bc_clear(&bc);
 		return r;
@@ -2216,6 +2161,15 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 		fprintf(stderr, "--------------------------------------------------------------\n");
 		r600_bc_dump(&bc);
 		fprintf(stderr, "______________________________________________________________\n");
+	}
+
+	ve->fs_size = bc.ndw*4;
+
+	/* use PIPE_BIND_VERTEX_BUFFER so we use the cache buffer manager */
+	ve->fetch_shader = r600_bo(rctx->radeon, ve->fs_size, 256, PIPE_BIND_VERTEX_BUFFER, 0);
+	if (ve->fetch_shader == NULL) {
+		r600_bc_clear(&bc);
+		return -ENOMEM;
 	}
 
 	bytecode = r600_bo_map(rctx->radeon, ve->fetch_shader, 0, NULL);
@@ -2231,9 +2185,9 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 	r600_bc_clear(&bc);
 
 	if (rctx->family >= CHIP_CEDAR)
-		eg_cf_vtx(ve);
+		evergreen_fetch_shader(ve);
 	else
-		r600_cf_vtx(ve);
+		r600_fetch_shader(ve);
 
 	return 0;
 }
