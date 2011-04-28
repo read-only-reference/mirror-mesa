@@ -31,6 +31,7 @@
                    
 
 #include "main/mtypes.h"
+#include "main/samplerobj.h"
 #include "main/texstore.h"
 #include "program/prog_parameter.h"
 
@@ -100,17 +101,40 @@ static uint32_t brw_format_for_mesa_format[MESA_FORMAT_COUNT] =
    [MESA_FORMAT_SLA8] = BRW_SURFACEFORMAT_L8A8_UNORM_SRGB,
    [MESA_FORMAT_SL8] = BRW_SURFACEFORMAT_L8_UNORM_SRGB,
    [MESA_FORMAT_DUDV8] = BRW_SURFACEFORMAT_R8G8_SNORM,
+   [MESA_FORMAT_SIGNED_R8] = BRW_SURFACEFORMAT_R8_SNORM,
+   [MESA_FORMAT_SIGNED_RG88_REV] = BRW_SURFACEFORMAT_R8G8_SNORM,
    [MESA_FORMAT_SIGNED_RGBA8888_REV] = BRW_SURFACEFORMAT_R8G8B8A8_SNORM,
+   [MESA_FORMAT_SIGNED_R16] = BRW_SURFACEFORMAT_R16_SNORM,
+   [MESA_FORMAT_SIGNED_GR1616] = BRW_SURFACEFORMAT_R16G16_SNORM,
+   [MESA_FORMAT_RGBA_FLOAT32] = BRW_SURFACEFORMAT_R32G32B32A32_FLOAT,
+   [MESA_FORMAT_RG_FLOAT32] = BRW_SURFACEFORMAT_R32G32_FLOAT,
+   [MESA_FORMAT_R_FLOAT32] = BRW_SURFACEFORMAT_R32_FLOAT,
+   [MESA_FORMAT_INTENSITY_FLOAT32] = BRW_SURFACEFORMAT_I32_FLOAT,
+   [MESA_FORMAT_LUMINANCE_FLOAT32] = BRW_SURFACEFORMAT_L32_FLOAT,
+   [MESA_FORMAT_ALPHA_FLOAT32] = BRW_SURFACEFORMAT_A32_FLOAT,
+   [MESA_FORMAT_LUMINANCE_ALPHA_FLOAT32] = BRW_SURFACEFORMAT_L32A32_FLOAT,
+   [MESA_FORMAT_RED_RGTC1] = BRW_SURFACEFORMAT_BC4_UNORM,
+   [MESA_FORMAT_SIGNED_RED_RGTC1] = BRW_SURFACEFORMAT_BC4_SNORM,
+   [MESA_FORMAT_RG_RGTC2] = BRW_SURFACEFORMAT_BC5_UNORM,
+   [MESA_FORMAT_SIGNED_RG_RGTC2] = BRW_SURFACEFORMAT_BC5_SNORM,
 };
 
 bool
 brw_render_target_supported(gl_format format)
 {
+   /* These are not color render targets like the table holds, but we
+    * ask the question for FBO completeness.
+    */
    if (format == MESA_FORMAT_S8_Z24 ||
        format == MESA_FORMAT_X8_Z24 ||
        format == MESA_FORMAT_Z16) {
       return true;
    }
+
+   /* The value of this BRW_SURFACEFORMAT is 0, so hardcode it.
+    */
+   if (format == MESA_FORMAT_RGBA_FLOAT32)
+      return true;
 
    /* Not exactly true, as some of those formats are not renderable.
     * But at least we know how to translate them.
@@ -155,6 +179,13 @@ static GLuint translate_tex_format( gl_format mesa_format,
 	 return brw_format_for_mesa_format[mesa_format];
       else if (srgb_decode == GL_SKIP_DECODE_EXT)
 	 return brw_format_for_mesa_format[_mesa_get_srgb_format_linear(mesa_format)];
+
+   case MESA_FORMAT_RGBA_FLOAT32:
+      /* The value of this BRW_SURFACEFORMAT is 0, which tricks the
+       * assertion below.
+       */
+      return BRW_SURFACEFORMAT_R32G32B32A32_FLOAT;
+
    default:
       assert(brw_format_for_mesa_format[mesa_format] != 0);
       return brw_format_for_mesa_format[mesa_format];
@@ -187,6 +218,7 @@ brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
    struct intel_texture_object *intelObj = intel_texture_object(tObj);
    struct gl_texture_image *firstImage = tObj->Image[0][tObj->BaseLevel];
+   struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
    const GLuint surf_index = SURF_INDEX_TEXTURE(unit);
    struct brw_surface_state *surf;
 
@@ -197,8 +229,9 @@ brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
    surf->ss0.mipmap_layout_mode = BRW_SURFACE_MIPMAPLAYOUT_BELOW;
    surf->ss0.surface_type = translate_tex_target(tObj->Target);
    surf->ss0.surface_format = translate_tex_format(firstImage->TexFormat,
-						  firstImage->InternalFormat,
-						  tObj->DepthMode, tObj->sRGBDecode);
+                                                   firstImage->InternalFormat,
+                                                   sampler->DepthMode,
+                                                   sampler->sRGBDecode);
 
    /* This is ok for all textures with channel width 8bit or less:
     */
@@ -282,7 +315,7 @@ brw_create_constant_surface(struct brw_context *brw,
  * state atom.
  */
 static void
-prepare_wm_constants(struct brw_context *brw)
+prepare_wm_pull_constants(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->intel.ctx;
    struct intel_context *intel = &brw->intel;
@@ -326,7 +359,7 @@ const struct brw_tracked_state brw_wm_constants = {
       .brw = (BRW_NEW_FRAGMENT_PROGRAM),
       .cache = 0
    },
-   .prepare = prepare_wm_constants,
+   .prepare = prepare_wm_pull_constants,
 };
 
 /**
@@ -425,6 +458,14 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
        */
       surf->ss0.surface_format = BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
       break;
+   case MESA_FORMAT_INTENSITY_FLOAT32:
+   case MESA_FORMAT_LUMINANCE_FLOAT32:
+      /* For these formats, we just need to read/write the first
+       * channel into R, which is to say that we just treat them as
+       * GL_RED.
+       */
+      surf->ss0.surface_format = BRW_SURFACEFORMAT_R32_FLOAT;
+      break;
    case MESA_FORMAT_SARGB8:
       /* without GL_EXT_framebuffer_sRGB we shouldn't bind sRGB
 	 surfaces to the blend/update as sRGB */
@@ -434,8 +475,8 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 	 surf->ss0.surface_format = BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
       break;
    default:
+      assert(brw_render_target_supported(irb->Base.Format));
       surf->ss0.surface_format = brw_format_for_mesa_format[irb->Base.Format];
-      assert(surf->ss0.surface_format != 0);
    }
 
    surf->ss0.surface_type = BRW_SURFACE_2D;

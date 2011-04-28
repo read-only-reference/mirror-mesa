@@ -144,6 +144,7 @@ static void copy_propagate(struct radeon_compiler * c, struct rc_instruction * i
 		return;
 
 	/* Get a list of all the readers of this MOV instruction. */
+	reader_data.ExitOnAbort = 1;
 	rc_get_readers(c, inst_mov, &reader_data,
 		       copy_propagate_scan_read, NULL,
 		       is_src_clobbered_scan_write);
@@ -154,7 +155,7 @@ static void copy_propagate(struct radeon_compiler * c, struct rc_instruction * i
 	/* Propagate the MOV instruction. */
 	for (i = 0; i < reader_data.ReaderCount; i++) {
 		struct rc_instruction * inst = reader_data.Readers[i].Inst;
-		*reader_data.Readers[i].U.Src = chain_srcregs(*reader_data.Readers[i].U.Src, inst_mov->U.I.SrcReg[0]);
+		*reader_data.Readers[i].U.I.Src = chain_srcregs(*reader_data.Readers[i].U.I.Src, inst_mov->U.I.SrcReg[0]);
 
 		if (inst_mov->U.I.SrcReg[0].File == RC_FILE_PRESUB)
 			inst->U.I.PreSub = inst_mov->U.I.PreSub;
@@ -453,6 +454,7 @@ static int presub_helper(
 	rc_presubtract_op cb_op = presub_opcode;
 
 	reader_data.CbData = &cb_op;
+	reader_data.ExitOnAbort = 1;
 	rc_get_readers(c, inst_add, &reader_data, presub_scan_read, NULL,
 						is_src_clobbered_scan_write);
 
@@ -466,7 +468,7 @@ static int presub_helper(
 				rc_get_opcode_info(reader.Inst->U.I.Opcode);
 
 		for (src_index = 0; src_index < info->NumSrcRegs; src_index++) {
-			if (&reader.Inst->U.I.SrcReg[src_index] == reader.U.Src)
+			if (&reader.Inst->U.I.SrcReg[src_index] == reader.U.I.Src)
 				presub_replace(inst_add, reader.Inst, src_index);
 		}
 	}
@@ -509,8 +511,32 @@ static int is_presub_candidate(
 {
 	const struct rc_opcode_info * info = rc_get_opcode_info(inst->U.I.Opcode);
 	unsigned int i;
+	unsigned int is_constant[2] = {0, 0};
+
+	assert(inst->U.I.Opcode == RC_OPCODE_ADD);
 
 	if (inst->U.I.PreSub.Opcode != RC_PRESUB_NONE || inst->U.I.SaturateMode)
+		return 0;
+
+	/* If both sources use a constant swizzle, then we can't convert it to
+	 * a presubtract operation.  In fact for the ADD and SUB presubtract
+	 * operations neither source can contain a constant swizzle.  This
+	 * specific case is checked in peephole_add_presub_add() when
+	 * we make sure the swizzles for both sources are equal, so we
+	 * don't need to worry about it here. */
+	for (i = 0; i < 2; i++) {
+		int chan;
+		for (chan = 0; chan < 4; chan++) {
+			rc_swizzle swz =
+				get_swz(inst->U.I.SrcReg[i].Swizzle, chan);
+			if (swz == RC_SWIZZLE_ONE
+					|| swz == RC_SWIZZLE_ZERO
+					|| swz == RC_SWIZZLE_HALF) {
+				is_constant[i] = 1;
+			}
+		}
+	}
+	if (is_constant[0] && is_constant[1])
 		return 0;
 
 	for(i = 0; i < info->NumSrcRegs; i++) {

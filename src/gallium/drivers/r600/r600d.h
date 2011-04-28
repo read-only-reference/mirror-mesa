@@ -3460,4 +3460,5 @@
 #define SQ_TEX_INST_SAMPLE 0x10
 #define SQ_TEX_INST_SAMPLE_L 0x11
 #define SQ_TEX_INST_SAMPLE_C 0x18
+
 #endif

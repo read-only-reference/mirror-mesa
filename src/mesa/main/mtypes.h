@@ -376,7 +376,15 @@ typedef enum
 {
    FRAG_RESULT_DEPTH = 0,
    FRAG_RESULT_STENCIL = 1,
+   /* If a single color should be written to all render targets, this
+    * register is written.  No FRAG_RESULT_DATAn will be written.
+    */
    FRAG_RESULT_COLOR = 2,
+
+   /* FRAG_RESULT_DATAn are the per-render-target (GLSL gl_FragData[n]
+    * or ARB_fragment_program fragment.color[n]) color results.  If
+    * any are written, FRAG_RESULT_COLOR will not be written.
+    */
    FRAG_RESULT_DATA0 = 3,
    FRAG_RESULT_MAX = (FRAG_RESULT_DATA0 + MAX_DRAW_BUFFERS)
 } gl_frag_result;
@@ -1139,6 +1147,7 @@ struct gl_stencil_attrib
  */
 typedef enum
 {
+   TEXTURE_BUFFER_INDEX,
    TEXTURE_2D_ARRAY_INDEX,
    TEXTURE_1D_ARRAY_INDEX,
    TEXTURE_CUBE_INDEX,
@@ -1155,6 +1164,7 @@ typedef enum
  * Used for Texture.Unit[]._ReallyEnabled flags.
  */
 /*@{*/
+#define TEXTURE_BUFFER_BIT   (1 << TEXTURE_BUFFER_INDEX)
 #define TEXTURE_2D_ARRAY_BIT (1 << TEXTURE_2D_ARRAY_INDEX)
 #define TEXTURE_1D_ARRAY_BIT (1 << TEXTURE_1D_ARRAY_INDEX)
 #define TEXTURE_CUBE_BIT     (1 << TEXTURE_CUBE_INDEX)
@@ -1303,6 +1313,42 @@ typedef enum
 
 
 /**
+ * Sampler object state.  These objects are new with GL_ARB_sampler_objects
+ * and OpenGL 3.3.  Legacy texture objects also contain a sampler object.
+ */
+struct gl_sampler_object
+{
+   GLuint Name;
+   GLint RefCount;
+
+   GLenum WrapS;		/**< S-axis texture image wrap mode */
+   GLenum WrapT;		/**< T-axis texture image wrap mode */
+   GLenum WrapR;		/**< R-axis texture image wrap mode */
+   GLenum MinFilter;		/**< minification filter */
+   GLenum MagFilter;		/**< magnification filter */
+   union {
+      GLfloat f[4];
+      GLuint ui[4];
+      GLint i[4];
+   } BorderColor;               /**< Interpreted according to texture format */
+   GLfloat MinLod;		/**< min lambda, OpenGL 1.2 */
+   GLfloat MaxLod;		/**< max lambda, OpenGL 1.2 */
+   GLfloat LodBias;		/**< OpenGL 1.4 */
+   GLfloat MaxAnisotropy;	/**< GL_EXT_texture_filter_anisotropic */
+   GLenum CompareMode;		/**< GL_ARB_shadow */
+   GLenum CompareFunc;		/**< GL_ARB_shadow */
+   GLfloat CompareFailValue;    /**< GL_ARB_shadow_ambient */
+   GLenum sRGBDecode;           /**< GL_DECODE_EXT or GL_SKIP_DECODE_EXT */
+
+   /* deprecated sampler state */
+   GLenum DepthMode;		/**< GL_ARB_depth_texture */
+
+   /** Is the texture object complete with respect to this sampler? */
+   GLboolean _CompleteTexture;
+};
+
+
+/**
  * Texture object state.  Contains the array of mipmap images, border color,
  * wrap modes, filter modes, shadow/texcompare state, and the per-texture
  * color palette.
@@ -1313,27 +1359,12 @@ struct gl_texture_object
    GLint RefCount;		/**< reference count */
    GLuint Name;			/**< the user-visible texture object ID */
    GLenum Target;               /**< GL_TEXTURE_1D, GL_TEXTURE_2D, etc. */
+
+   struct gl_sampler_object Sampler;
+
    GLfloat Priority;		/**< in [0,1] */
-   union {
-      GLfloat f[4];
-      GLuint ui[4];
-      GLint i[4];
-   } BorderColor;               /**< Interpreted according to texture format */
-   GLenum WrapS;		/**< S-axis texture image wrap mode */
-   GLenum WrapT;		/**< T-axis texture image wrap mode */
-   GLenum WrapR;		/**< R-axis texture image wrap mode */
-   GLenum MinFilter;		/**< minification filter */
-   GLenum MagFilter;		/**< magnification filter */
-   GLfloat MinLod;		/**< min lambda, OpenGL 1.2 */
-   GLfloat MaxLod;		/**< max lambda, OpenGL 1.2 */
-   GLfloat LodBias;		/**< OpenGL 1.4 */
    GLint BaseLevel;		/**< min mipmap level, OpenGL 1.2 */
    GLint MaxLevel;		/**< max mipmap level, OpenGL 1.2 */
-   GLfloat MaxAnisotropy;	/**< GL_EXT_texture_filter_anisotropic */
-   GLenum CompareMode;		/**< GL_ARB_shadow */
-   GLenum CompareFunc;		/**< GL_ARB_shadow */
-   GLfloat CompareFailValue;    /**< GL_ARB_shadow_ambient */
-   GLenum DepthMode;		/**< GL_ARB_depth_texture */
    GLint _MaxLevel;		/**< actual max mipmap level (q in the spec) */
    GLfloat _MaxLambda;		/**< = _MaxLevel - BaseLevel (q - b in spec) */
    GLint CropRect[4];           /**< GL_OES_draw_texture */
@@ -1343,10 +1374,13 @@ struct gl_texture_object
    GLboolean _Complete;		/**< Is texture object complete? */
    GLboolean _RenderToTexture;  /**< Any rendering to this texture? */
    GLboolean Purgeable;         /**< Is the buffer purgeable under memory pressure? */
-   GLenum sRGBDecode;           /**< GL_DECODE_EXT or GL_SKIP_DECODE_EXT */
 
    /** Actual texture images, indexed by [cube face] and [mipmap level] */
    struct gl_texture_image *Image[MAX_FACES][MAX_TEXTURE_LEVELS];
+
+   /** GL_ARB_texture_buffer_object */
+   struct gl_buffer_object *BufferObject;
+   GLenum BufferObjectFormat;
 
    /** GL_EXT_paletted_texture */
    struct gl_color_table Palette;
@@ -1423,6 +1457,9 @@ struct gl_texture_unit
    GLenum BumpTarget;
    GLfloat RotMatrix[4]; /* 2x2 matrix */
 
+   /** Current sampler object (GL_ARB_sampler_objects) */
+   struct gl_sampler_object *Sampler;
+
    /** 
     * \name GL_EXT_texture_env_combine 
     */
@@ -1457,6 +1494,9 @@ struct gl_texture_attrib
    struct gl_texture_unit Unit[MAX_COMBINED_TEXTURE_IMAGE_UNITS];
 
    struct gl_texture_object *ProxyTex[NUM_TEXTURE_TARGETS];
+
+   /** GL_ARB_texture_buffer_object */
+   struct gl_buffer_object *BufferObject;
 
    /** GL_ARB_seamless_cubemap */
    GLboolean CubeMapSeamless;
@@ -1891,7 +1931,6 @@ struct gl_geometry_program
 struct gl_fragment_program
 {
    struct gl_program Base;   /**< base class */
-   GLenum FogOption;
    GLboolean UsesKill;          /**< shader uses KIL instruction */
    GLboolean OriginUpperLeft;
    GLboolean PixelCenterInteger;
@@ -2354,6 +2393,9 @@ struct gl_shared_state
    /* GL_ARB_sync */
    struct simple_node SyncObjects;
 
+   /** GL_ARB_sampler_objects */
+   struct _mesa_HashTable *SamplerObjects;
+
    void *DriverData;  /**< Device driver shared state */
 };
 
@@ -2371,26 +2413,25 @@ struct gl_shared_state
  */
 struct gl_renderbuffer
 {
-#define RB_MAGIC 0xaabbccdd
-   int Magic; /** XXX TEMPORARY DEBUG INFO */
    _glthread_Mutex Mutex;		   /**< for thread safety */
    GLuint ClassID;        /**< Useful for drivers */
    GLuint Name;
    GLint RefCount;
    GLuint Width, Height;
+   GLint RowStride;       /**< Padded width in units of pixels */
    GLboolean Purgeable;   /**< Is the buffer purgeable under memory pressure? */
+
+   GLboolean AttachedAnytime; /**< TRUE if it was attached to a framebuffer */
+
+   GLubyte NumSamples;
 
    GLenum InternalFormat; /**< The user-specified format */
    GLenum _BaseFormat;    /**< Either GL_RGB, GL_RGBA, GL_DEPTH_COMPONENT or
                                GL_STENCIL_INDEX. */
    gl_format Format;      /**< The actual renderbuffer memory format */
 
-   GLubyte NumSamples;
-
    GLenum DataType;      /**< Type of values passed to the Get/Put functions */
    GLvoid *Data;        /**< This may not be used by some kinds of RBs */
-
-   GLboolean AttachedAnytime; /**< TRUE if it was attached to a framebuffer */
 
    /* Used to wrap one renderbuffer around another: */
    struct gl_renderbuffer *Wrapped;
@@ -2630,6 +2671,7 @@ struct gl_constants
    GLuint MaxTextureUnits;           /**< = MIN(CoordUnits, ImageUnits) */
    GLfloat MaxTextureMaxAnisotropy;  /**< GL_EXT_texture_filter_anisotropic */
    GLfloat MaxTextureLodBias;        /**< GL_EXT_texture_lod_bias */
+   GLuint MaxTextureBufferSize;      /**< GL_ARB_texture_buffer_object */
 
    GLuint MaxArrayLockSize;
 
@@ -2704,6 +2746,9 @@ struct gl_constants
 
    /* GL_EXT_framebuffer_sRGB */
    GLboolean sRGBCapable; /* can enable sRGB blend/update on FBOs */
+
+   /* GL_ARB_robustness */
+   GLenum ResetStrategy;
 };
 
 
@@ -3262,6 +3307,9 @@ struct gl_context
    struct gl_renderbuffer *CurrentRenderbuffer;
 
    GLenum ErrorValue;        /**< Last error code */
+
+   /* GL_ARB_robustness */
+   GLenum ResetStatus;
 
    /**
     * Recognize and silence repeated error debug messages in buggy apps.

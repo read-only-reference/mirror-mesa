@@ -28,8 +28,48 @@
 #include <util/u_format.h>
 #include <pipebuffer/pb_buffer.h>
 #include "pipe/p_shader_tokens.h"
+#include "r600_formats.h"
 #include "r600_pipe.h"
 #include "r600d.h"
+
+static int r600_conv_pipe_prim(unsigned pprim, unsigned *prim)
+{
+	switch (pprim) {
+	case PIPE_PRIM_POINTS:
+		*prim = V_008958_DI_PT_POINTLIST;
+		return 0;
+	case PIPE_PRIM_LINES:
+		*prim = V_008958_DI_PT_LINELIST;
+		return 0;
+	case PIPE_PRIM_LINE_STRIP:
+		*prim = V_008958_DI_PT_LINESTRIP;
+		return 0;
+	case PIPE_PRIM_LINE_LOOP:
+		*prim = V_008958_DI_PT_LINELOOP;
+		return 0;
+	case PIPE_PRIM_TRIANGLES:
+		*prim = V_008958_DI_PT_TRILIST;
+		return 0;
+	case PIPE_PRIM_TRIANGLE_STRIP:
+		*prim = V_008958_DI_PT_TRISTRIP;
+		return 0;
+	case PIPE_PRIM_TRIANGLE_FAN:
+		*prim = V_008958_DI_PT_TRIFAN;
+		return 0;
+	case PIPE_PRIM_POLYGON:
+		*prim = V_008958_DI_PT_POLYGON;
+		return 0;
+	case PIPE_PRIM_QUADS:
+		*prim = V_008958_DI_PT_QUADLIST;
+		return 0;
+	case PIPE_PRIM_QUAD_STRIP:
+		*prim = V_008958_DI_PT_QUADSTRIP;
+		return 0;
+	default:
+		fprintf(stderr, "%s:%d unsupported %d\n", __func__, __LINE__, pprim);
+		return -1;
+	}
+}
 
 /* common state between evergreen and r600 */
 void r600_bind_blend_state(struct pipe_context *ctx, void *state)
@@ -277,7 +317,7 @@ void r600_delete_vs_shader(struct pipe_context *ctx, void *state)
 }
 
 /* FIXME optimize away spi update when it's not needed */
-void r600_spi_update(struct r600_pipe_context *rctx)
+static void r600_spi_update(struct r600_pipe_context *rctx, unsigned prim)
 {
 	struct r600_pipe_shader *shader = rctx->ps_shader;
 	struct r600_pipe_state rstate;
@@ -308,6 +348,12 @@ void r600_spi_update(struct r600_pipe_context *rctx)
 		}
 
 		r600_pipe_state_add_reg(&rstate, R_028644_SPI_PS_INPUT_CNTL_0 + i * 4, tmp, 0xFFFFFFFF, NULL);
+	}
+
+	if (prim == PIPE_PRIM_QUADS || prim == PIPE_PRIM_QUAD_STRIP || prim == PIPE_PRIM_POLYGON) {
+		r600_pipe_state_add_reg(&rstate, R_028814_PA_SU_SC_MODE_CNTL,
+					S_028814_PROVOKING_VTX_LAST(1),
+					S_028814_PROVOKING_VTX_LAST(1), NULL);
 	}
 	r600_context_pipe_state_set(&rctx->ctx, &rstate);
 }
@@ -435,7 +481,7 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 {
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 	struct r600_resource *rbuffer;
-	u32 vgt_dma_index_type, vgt_draw_initiator, mask;
+	u32 vgt_dma_index_type, vgt_dma_swap_mode, vgt_draw_initiator, mask;
 	struct r600_draw rdraw;
 	struct r600_pipe_state vgt;
 	struct r600_drawl draw = {};
@@ -467,14 +513,21 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		draw.info.index_bias = info->start;
 	}
 
+	vgt_dma_swap_mode = 0;
 	switch (draw.index_size) {
 	case 2:
 		vgt_draw_initiator = 0;
 		vgt_dma_index_type = 0;
+		if (R600_BIG_ENDIAN) {
+			vgt_dma_swap_mode = ENDIAN_8IN16;
+		}
 		break;
 	case 4:
 		vgt_draw_initiator = 0;
 		vgt_dma_index_type = 1;
+		if (R600_BIG_ENDIAN) {
+			vgt_dma_swap_mode = ENDIAN_8IN32;
+		}
 		break;
 	case 0:
 		vgt_draw_initiator = 2;
@@ -501,7 +554,7 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		return;
 	}
 
-	r600_spi_update(rctx);
+	r600_spi_update(rctx, draw.info.mode);
 
 	mask = 0;
 	for (int i = 0; i < rctx->framebuffer.nr_cbufs; i++) {
@@ -521,7 +574,7 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 
 	rdraw.vgt_num_indices = draw.info.count;
 	rdraw.vgt_num_instances = draw.info.instance_count;
-	rdraw.vgt_index_type = vgt_dma_index_type;
+	rdraw.vgt_index_type = vgt_dma_index_type | (vgt_dma_swap_mode << 2);
 	rdraw.vgt_draw_initiator = vgt_draw_initiator;
 	rdraw.indices = NULL;
 	if (draw.index_buffer) {

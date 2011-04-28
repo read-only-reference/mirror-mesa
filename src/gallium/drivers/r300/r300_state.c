@@ -45,7 +45,6 @@
 #include "r300_fs.h"
 #include "r300_texture.h"
 #include "r300_vs.h"
-#include "r300_winsys.h"
 
 /* r300_state: Functions used to intialize state context by translating
  * Gallium state objects into semi-native r300 state objects. */
@@ -769,7 +768,7 @@ void r300_mark_fb_state_dirty(struct r300_context *r300,
                               enum r300_fb_state_change change)
 {
     struct pipe_framebuffer_state *state = r300->fb_state.state;
-    boolean can_hyperz = r300->rws->get_value(r300->rws, R300_CAN_HYPERZ);
+    boolean can_hyperz = r300->rws->get_value(r300->rws, RADEON_VID_CAN_HYPERZ);
 
     r300_mark_atom_dirty(r300, &r300->gpu_flush);
     r300_mark_atom_dirty(r300, &r300->fb_state);
@@ -856,6 +855,7 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
             }
         }
     }
+    assert(state->zsbuf || r300->hyperz_locked || !r300->zmask_in_use);
 
     /* Need to reset clamping or colormask. */
     r300_mark_atom_dirty(r300, &r300->blend_state);
@@ -969,24 +969,14 @@ static void r300_bind_fs_state(struct pipe_context* pipe, void* shader)
 {
     struct r300_context* r300 = r300_context(pipe);
     struct r300_fragment_shader* fs = (struct r300_fragment_shader*)shader;
-    struct pipe_framebuffer_state *fb = r300->fb_state.state;
-    boolean last_multi_write;
 
     if (fs == NULL) {
         r300->fs.state = NULL;
         return;
     }
 
-    last_multi_write = r300_fragment_shader_writes_all(r300_fs(r300));
-
     r300->fs.state = fs;
-    r300_pick_fragment_shader(r300);
-    r300_mark_fs_code_dirty(r300);
-
-    if (fb->nr_cbufs > 1 &&
-        last_multi_write != r300_fragment_shader_writes_all(fs)) {
-        r300_mark_fb_state_dirty(r300, R300_CHANGED_MULTIWRITE);
-    }
+    r300->fs_status = FRAGMENT_SHADER_DIRTY;
 
     r300_mark_atom_dirty(r300, &r300->rs_block_state); /* Will be updated before the emission. */
 }
@@ -1256,8 +1246,8 @@ static void r300_bind_rs_state(struct pipe_context* pipe, void* state)
     }
 
     if (last_frag_clamp != r300->frag_clamp &&
-        r300->fs.state && r300_pick_fragment_shader(r300)) {
-        r300_mark_fs_code_dirty(r300);
+        r300->fs_status == FRAGMENT_SHADER_VALID) {
+        r300->fs_status = FRAGMENT_SHADER_MAYBE_DIRTY;
     }
 }
 
@@ -1555,7 +1545,8 @@ static void r300_set_viewport_state(struct pipe_context* pipe,
     }
 
     r300_mark_atom_dirty(r300, &r300->viewport_state);
-    if (r300->fs.state && r300_fs(r300)->shader->inputs.wpos != ATTR_UNUSED) {
+    if (r300->fs.state && r300_fs(r300)->shader &&
+        r300_fs(r300)->shader->inputs.wpos != ATTR_UNUSED) {
         r300_mark_atom_dirty(r300, &r300->fs_rc_constant_state);
     }
 }

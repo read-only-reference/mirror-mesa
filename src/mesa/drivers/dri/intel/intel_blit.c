@@ -146,6 +146,17 @@ intelEmitCopyBlit(struct intel_context *intel,
    src_pitch *= cpp;
    dst_pitch *= cpp;
 
+   /* For big formats (such as floating point), do the copy using 32bpp and
+    * multiply the coordinates.
+    */
+   if (cpp > 4) {
+      assert(cpp % 4 == 0);
+      dst_x *= cpp / 4;
+      dst_x2 *= cpp / 4;
+      src_x *= cpp / 4;
+      cpp = 4;
+   }
+
    BR13 = br13_for_cpp(cpp) | translate_raster_op(logic_op) << 16;
 
    switch (cpp) {
@@ -282,7 +293,7 @@ intelClearWithBlit(struct gl_context *ctx, GLbitfield mask)
 	  irb->region->buffer, (pitch * cpp),
 	  x1, y1, x2 - x1, y2 - y1);
 
-      BR13 = br13_for_cpp(cpp) | 0xf0 << 16;
+      BR13 = 0xf0 << 16;
       CMD = XY_COLOR_BLT_CMD;
 
       /* Setup the blit command */
@@ -342,6 +353,8 @@ intelClearWithBlit(struct gl_context *ctx, GLbitfield mask)
 	    continue;
 	 }
       }
+
+      BR13 |= br13_for_cpp(cpp);
 
       assert(x1 < x2);
       assert(y1 < y2);

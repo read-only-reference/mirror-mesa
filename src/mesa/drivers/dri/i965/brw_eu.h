@@ -293,6 +293,14 @@ static INLINE struct brw_reg retype( struct brw_reg reg,
    return reg;
 }
 
+static inline struct brw_reg
+sechalf(struct brw_reg reg)
+{
+   if (reg.vstride)
+      reg.nr++;
+   return reg;
+}
+
 static INLINE struct brw_reg suboffset( struct brw_reg reg,
 					  GLuint delta )
 {   
@@ -772,6 +780,7 @@ void brw_set_access_mode( struct brw_compile *p, GLuint access_mode );
 void brw_set_compression_control( struct brw_compile *p, GLboolean control );
 void brw_set_predicate_control_flag_value( struct brw_compile *p, GLuint value );
 void brw_set_predicate_control( struct brw_compile *p, GLuint pc );
+void brw_set_predicate_inverse(struct brw_compile *p, bool predicate_inverse);
 void brw_set_conditionalmod( struct brw_compile *p, GLuint conditional );
 void brw_set_acc_write_control(struct brw_compile *p, GLuint value);
 
@@ -855,7 +864,6 @@ void brw_ff_sync(struct brw_compile *p,
 
 void brw_fb_WRITE(struct brw_compile *p,
 		  int dispatch_width,
-		   struct brw_reg dest,
 		   GLuint msg_reg_nr,
 		   struct brw_reg src0,
 		   GLuint binding_table_index,
@@ -1016,6 +1024,8 @@ void brw_set_src1( struct brw_instruction *insn,
                           struct brw_reg reg );
 
 void brw_set_uip_jip(struct brw_compile *p);
+
+uint32_t brw_swap_cmod(uint32_t cmod);
 
 /* brw_optimize.c */
 void brw_optimize(struct brw_compile *p);

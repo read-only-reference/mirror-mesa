@@ -20,11 +20,11 @@
  * SOFTWARE.
  */
 
-/* #define NV50PC_DEBUG */
-
-/* #define NV50_RA_DEBUG_LIVEI */
-/* #define NV50_RA_DEBUG_LIVE_SETS */
-/* #define NV50_RA_DEBUG_JOIN */
+#if NV50_DEBUG & NV50_DEBUG_PROG_RA
+# define NV50_RA_DEBUG_LIVEI
+# define NV50_RA_DEBUG_LIVE_SETS
+# define NV50_RA_DEBUG_JOIN
+#endif
 
 #include "nv50_context.h"
 #include "nv50_pc.h"
@@ -516,7 +516,9 @@ pass_generate_phi_movs(struct nv_pc_pass *ctx, struct nv_basic_block *b)
       }
 
       if (pn != p && pn->exit) {
-         ctx->pc->current_block = b->in[n ? 0 : 1];
+         assert(!b->in[!n]->exit || b->in[!n]->exit->is_terminator);
+         /* insert terminator (branch to ENDIF) in new else block */
+         ctx->pc->current_block = pn;
          ni = new_instruction(ctx->pc, NV_OP_BRA);
          ni->target = b;
          ni->is_terminator = 1;
@@ -1011,7 +1013,7 @@ nv_pc_pass1(struct nv_pc *pc, struct nv_basic_block *root)
    struct nv_pc_pass *ctx;
    int i, ret;
 
-   NV50_DBGMSG("REGISTER ALLOCATION - entering\n");
+   NV50_DBGMSG(PROG_RA, "REGISTER ALLOCATION - entering\n");
 
    ctx = CALLOC_STRUCT(nv_pc_pass);
    if (!ctx)
@@ -1073,7 +1075,7 @@ nv_pc_pass1(struct nv_pc *pc, struct nv_basic_block *root)
    for (i = 0; i < pc->num_values; ++i)
       livei_release(&pc->values[i]);
 
-   NV50_DBGMSG("REGISTER ALLOCATION - leaving\n");
+   NV50_DBGMSG(PROG_RA, "REGISTER ALLOCATION - leaving\n");
 
 out:
    FREE(ctx->insns);

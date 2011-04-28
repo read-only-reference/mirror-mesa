@@ -107,6 +107,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_point_parameters",                    o(EXT_point_parameters),                    GL,             1997 },
    { "GL_ARB_point_sprite",                        o(ARB_point_sprite),                        GL,             2003 },
    { "GL_ARB_provoking_vertex",                    o(EXT_provoking_vertex),                    GL,             2009 },
+   { "GL_ARB_robustness",                          o(dummy_true),                              GL,             2010 },
    { "GL_ARB_sampler_objects",                     o(ARB_sampler_objects),                     GL,             2009 },
    { "GL_ARB_seamless_cube_map",                   o(ARB_seamless_cube_map),                   GL,             2009 },
    { "GL_ARB_shader_objects",                      o(ARB_shader_objects),                      GL,             2002 },
@@ -124,6 +125,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_texture_env_combine",                 o(ARB_texture_env_combine),                 GL,             2001 },
    { "GL_ARB_texture_env_crossbar",                o(ARB_texture_env_crossbar),                GL,             2001 },
    { "GL_ARB_texture_env_dot3",                    o(ARB_texture_env_dot3),                    GL,             2001 },
+   { "GL_ARB_texture_float",                       o(ARB_texture_float),                       GL,             2004 },
    { "GL_ARB_texture_mirrored_repeat",             o(ARB_texture_mirrored_repeat),             GL,             2001 },
    { "GL_ARB_texture_multisample",                 o(ARB_texture_multisample),                 GL,             2009 },
    { "GL_ARB_texture_non_power_of_two",            o(ARB_texture_non_power_of_two),            GL,             2003 },
@@ -262,11 +264,13 @@ static const struct extension extension_table[] = {
    { "GL_APPLE_packed_pixels",                     o(APPLE_packed_pixels),                     GL,             2002 },
    { "GL_APPLE_vertex_array_object",               o(APPLE_vertex_array_object),               GL,             2002 },
    { "GL_ATI_blend_equation_separate",             o(EXT_blend_equation_separate),             GL,             2003 },
+   { "GL_ATI_draw_buffers",                        o(ARB_draw_buffers),                        GL,             2002 },
    { "GL_ATI_envmap_bumpmap",                      o(ATI_envmap_bumpmap),                      GL,             2001 },
    { "GL_ATI_fragment_shader",                     o(ATI_fragment_shader),                     GL,             2001 },
    { "GL_ATI_separate_stencil",                    o(ATI_separate_stencil),                    GL,             2006 },
    { "GL_ATI_texture_compression_3dc",             o(ATI_texture_compression_3dc),             GL,             2004 },
    { "GL_ATI_texture_env_combine3",                o(ATI_texture_env_combine3),                GL,             2002 },
+   { "GL_ATI_texture_float",                       o(ARB_texture_float),                       GL,             2002 },
    { "GL_ATI_texture_mirror_once",                 o(ATI_texture_mirror_once),                 GL,             2006 },
    { "GL_IBM_multimode_draw_arrays",               o(IBM_multimode_draw_arrays),               GL,             1998 },
    { "GL_IBM_rasterpos_clip",                      o(IBM_rasterpos_clip),                      GL,             1996 },
@@ -277,7 +281,6 @@ static const struct extension extension_table[] = {
    { "GL_MESA_texture_array",                      o(MESA_texture_array),                      GL,             2007 },
    { "GL_MESA_texture_signed_rgba",                o(EXT_texture_snorm),                       GL,             2009 },
    { "GL_MESA_window_pos",                         o(ARB_window_pos),                          GL,             2000 },
-   { "GL_MESAX_texture_float",                     o(ARB_texture_float),                       GL,             2009 },
    { "GL_MESA_ycbcr_texture",                      o(MESA_ycbcr_texture),                      GL,             2002 },
    { "GL_NV_blend_square",                         o(NV_blend_square),                         GL,             1999 },
    { "GL_NV_conditional_render",                   o(NV_conditional_render),                   GL,             2008 },
@@ -499,6 +502,7 @@ _mesa_enable_sw_extensions(struct gl_context *ctx)
    ctx->Extensions.EXT_texture_env_dot3 = GL_TRUE;
    ctx->Extensions.EXT_texture_mirror_clamp = GL_TRUE;
    ctx->Extensions.EXT_texture_lod_bias = GL_TRUE;
+   ctx->Extensions.EXT_texture_shared_exponent = GL_TRUE;
 #if FEATURE_EXT_texture_sRGB
    ctx->Extensions.EXT_texture_sRGB = GL_TRUE;
    ctx->Extensions.EXT_texture_sRGB_decode = GL_TRUE;
@@ -908,7 +912,7 @@ _mesa_make_extension_string(struct gl_context *ctx)
       return NULL;
    }
 
-   extension_indices = malloc(count * sizeof extension_indices);
+   extension_indices = malloc(count * sizeof(extension_index));
    if (extension_indices == NULL) {
       free(exts);
       free(extra_extensions);

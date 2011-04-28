@@ -96,6 +96,14 @@ PIPE_FORMAT_A16_SNORM             , plain, 1, 1, sn16,     ,     ,     , 000x, r
 PIPE_FORMAT_L16_SNORM             , plain, 1, 1, sn16,     ,     ,     , xxx1, rgb
 PIPE_FORMAT_L16A16_SNORM          , plain, 1, 1, sn16, sn16,     ,     , xxxy, rgb
 PIPE_FORMAT_I16_SNORM             , plain, 1, 1, sn16,     ,     ,     , xxxx, rgb
+PIPE_FORMAT_A16_FLOAT             , plain, 1, 1, f16 ,     ,     ,     , 000x, rgb
+PIPE_FORMAT_L16_FLOAT             , plain, 1, 1, f16 ,     ,     ,     , xxx1, rgb
+PIPE_FORMAT_L16A16_FLOAT          , plain, 1, 1, f16 , f16 ,     ,     , xxxy, rgb
+PIPE_FORMAT_I16_FLOAT             , plain, 1, 1, f16 ,     ,     ,     , xxxx, rgb
+PIPE_FORMAT_A32_FLOAT             , plain, 1, 1, f32 ,     ,     ,     , 000x, rgb
+PIPE_FORMAT_L32_FLOAT             , plain, 1, 1, f32 ,     ,     ,     , xxx1, rgb
+PIPE_FORMAT_L32A32_FLOAT          , plain, 1, 1, f32 , f32 ,     ,     , xxxy, rgb
+PIPE_FORMAT_I32_FLOAT             , plain, 1, 1, f32 ,     ,     ,     , xxxx, rgb
 
 # SRGB formats
 PIPE_FORMAT_L8_SRGB               , plain, 1, 1, un8 ,     ,     ,     , xxx1, srgb 
@@ -139,7 +147,7 @@ PIPE_FORMAT_G8R8_G8B8_UNORM      , subsampled, 2, 1, x32 ,     ,     ,     , xyz
 
 # some special formats not fitting anywhere else
 PIPE_FORMAT_R10G10B10A2_USCALED   , plain,      1,  1, u10 , u10 , u10 , u2  , xyzw, rgb
-PIPE_FORMAT_R11G11B10_FLOAT       , plain,      1,  1, f11 , f11 , f10 ,     , xyz1, rgb
+PIPE_FORMAT_R11G11B10_FLOAT       , other,      1,  1, x32 ,     ,     ,     , xyz1, rgb
 PIPE_FORMAT_R9G9B9E5_FLOAT        , other,      1,  1, x32 ,     ,     ,     , xyz1, rgb
 PIPE_FORMAT_R1_UNORM              , other,      8,  1, x8  ,     ,     ,     , x001, rgb
 # A.k.a. D3DFMT_CxV8U8

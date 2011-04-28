@@ -335,7 +335,7 @@ _mesa_set_texture_attachment(struct gl_context *ctx,
    att->Zoffset = zoffset;
    att->Complete = GL_FALSE;
 
-   if (att->Texture->Image[att->CubeMapFace][att->TextureLevel]) {
+   if (_mesa_get_attachment_teximage(att)) {
       ctx->Driver.RenderTexture(ctx, fb, att);
    }
 
@@ -418,6 +418,15 @@ _mesa_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
          case GL_RG:
             fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED;
             return;
+         case GL_RGB:
+            switch (rb->Format) {
+            case MESA_FORMAT_RGB9_E5_FLOAT:
+               fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED;
+               return;
+            default:;
+            }
+            break;
+
          default:
             /* render buffer format is supported by software rendering */
             ;
@@ -716,8 +725,8 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
       /* get width, height, format of the renderbuffer/texture
        */
       if (att->Type == GL_TEXTURE) {
-         const struct gl_texture_image *texImg
-            = att->Texture->Image[att->CubeMapFace][att->TextureLevel];
+         const struct gl_texture_image *texImg =
+            _mesa_get_attachment_teximage(att);
          minWidth = MIN2(minWidth, texImg->Width);
          maxWidth = MAX2(maxWidth, texImg->Width);
          minHeight = MIN2(minHeight, texImg->Height);
@@ -746,7 +755,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
          continue;
       }
 
-      if (numSamples < 0) {
+      if (att->Renderbuffer && numSamples < 0) {
          /* first buffer */
          numSamples = att->Renderbuffer->NumSamples;
       }
@@ -1145,7 +1154,41 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
    case GL_INTENSITY16_SNORM:
       return ctx->Extensions.EXT_texture_snorm &&
              ctx->Extensions.ARB_framebuffer_object ? GL_INTENSITY : 0;
-   /* XXX add floating point and integer formats eventually */
+   case GL_R16F:
+   case GL_R32F:
+      return ctx->Extensions.ARB_texture_rg &&
+             ctx->Extensions.ARB_texture_float ? GL_RED : 0;
+   case GL_RG16F:
+   case GL_RG32F:
+      return ctx->Extensions.ARB_texture_rg &&
+             ctx->Extensions.ARB_texture_float ? GL_RG : 0;
+   case GL_RGB16F:
+   case GL_RGB32F:
+      return ctx->Extensions.ARB_texture_float ? GL_RGB : 0;
+   case GL_RGBA16F:
+   case GL_RGBA32F:
+      return ctx->Extensions.ARB_texture_float ? GL_RGBA : 0;
+   case GL_ALPHA16F_ARB:
+   case GL_ALPHA32F_ARB:
+      return ctx->Extensions.ARB_texture_float &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_ALPHA : 0;
+   case GL_LUMINANCE16F_ARB:
+   case GL_LUMINANCE32F_ARB:
+      return ctx->Extensions.ARB_texture_float &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_LUMINANCE : 0;
+   case GL_LUMINANCE_ALPHA16F_ARB:
+   case GL_LUMINANCE_ALPHA32F_ARB:
+      return ctx->Extensions.ARB_texture_float &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_LUMINANCE_ALPHA : 0;
+   case GL_INTENSITY16F_ARB:
+   case GL_INTENSITY32F_ARB:
+      return ctx->Extensions.ARB_texture_float &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_INTENSITY : 0;
+   case GL_RGB9_E5:
+      return ctx->Extensions.EXT_texture_shared_exponent ? GL_RGB : 0;
+   case GL_R11F_G11F_B10F:
+      return ctx->Extensions.EXT_packed_float ? GL_RGB : 0;
+   /* XXX add integer formats eventually */
    default:
       return 0;
    }
@@ -1496,9 +1539,7 @@ check_begin_texture_render(struct gl_context *ctx, struct gl_framebuffer *fb)
 
    for (i = 0; i < BUFFER_COUNT; i++) {
       struct gl_renderbuffer_attachment *att = fb->Attachment + i;
-      struct gl_texture_object *texObj = att->Texture;
-      if (texObj
-          && texObj->Image[att->CubeMapFace][att->TextureLevel]) {
+      if (att->Texture && _mesa_get_attachment_teximage(att)) {
          ctx->Driver.RenderTexture(ctx, fb, att);
       }
    }

@@ -278,6 +278,11 @@ static const int extra_EXT_gpu_shader4[] = {
    EXTRA_END
 };
 
+static const int extra_ARB_sampler_objects[] = {
+   EXT(ARB_sampler_objects),
+   EXTRA_END
+};
+
 
 EXTRA_EXT(ARB_ES2_compatibility);
 EXTRA_EXT(ARB_multitexture);
@@ -323,6 +328,7 @@ EXTRA_EXT(ARB_vertex_buffer_object);
 EXTRA_EXT(ARB_geometry_shader4);
 EXTRA_EXT(ARB_copy_buffer);
 EXTRA_EXT(EXT_framebuffer_sRGB);
+EXTRA_EXT(ARB_texture_buffer_object);
 
 static const int
 extra_ARB_vertex_program_ARB_fragment_program_NV_vertex_program[] = {
@@ -1157,7 +1163,7 @@ static const struct value_desc values[] = {
 
    /* GL_EXT_provoking_vertex */
    { GL_PROVOKING_VERTEX_EXT,
-     CONTEXT_BOOL(Light.ProvokingVertex), extra_EXT_provoking_vertex },
+     CONTEXT_ENUM(Light.ProvokingVertex), extra_EXT_provoking_vertex },
    { GL_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION_EXT,
      CONTEXT_BOOL(Const.QuadsFollowProvokingVertexConvention),
      extra_EXT_provoking_vertex },
@@ -1236,6 +1242,22 @@ static const struct value_desc values[] = {
      CONTEXT_INT(Const.MaxProgramTexelOffset),
      extra_EXT_gpu_shader4 },
 
+   /* GL_ARB_texture_buffer_object */
+   { GL_MAX_TEXTURE_BUFFER_SIZE_ARB, CONTEXT_INT(Const.MaxTextureBufferSize),
+     extra_ARB_texture_buffer_object },
+   { GL_TEXTURE_BINDING_BUFFER_ARB, LOC_CUSTOM, TYPE_INT, 0,
+     extra_ARB_texture_buffer_object },
+   { GL_TEXTURE_BUFFER_DATA_STORE_BINDING_ARB, LOC_CUSTOM, TYPE_INT,
+     TEXTURE_BUFFER_INDEX, extra_ARB_texture_buffer_object },
+   { GL_TEXTURE_BUFFER_FORMAT_ARB, LOC_CUSTOM, TYPE_INT, 0,
+     extra_ARB_texture_buffer_object },
+   { GL_TEXTURE_BUFFER_ARB, LOC_CUSTOM, TYPE_INT, 0,
+     extra_ARB_texture_buffer_object },
+
+   /* GL_ARB_sampler_objects / GL 3.3 */
+   { GL_SAMPLER_BINDING,
+     LOC_CUSTOM, TYPE_INT, GL_SAMPLER_BINDING, extra_ARB_sampler_objects },
+
    /* GL 3.0 */
    { GL_NUM_EXTENSIONS, LOC_CUSTOM, TYPE_INT, 0, extra_version_30 },
    { GL_MAJOR_VERSION, CONTEXT_INT(VersionMajor), extra_version_30 },
@@ -1259,6 +1281,9 @@ static const struct value_desc values[] = {
    /* GL 3.2 */
    { GL_CONTEXT_PROFILE_MASK, CONTEXT_INT(Const.ProfileMask),
      extra_version_32 },
+
+   /* GL_ARB_robustness */
+   { GL_RESET_NOTIFICATION_STRATEGY_ARB, CONTEXT_ENUM(Const.ResetStrategy), NO_EXTRA },
 #endif /* FEATURE_GL */
 };
 
@@ -1672,6 +1697,37 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
 
    case GL_MAX_FRAGMENT_UNIFORM_VECTORS:
       v->value_int = ctx->Const.FragmentProgram.MaxUniformComponents / 4;
+      break;
+
+   /* GL_ARB_texture_buffer_object */
+   case GL_TEXTURE_BUFFER_ARB:
+      v->value_int = ctx->Texture.BufferObject->Name;
+      break;
+   case GL_TEXTURE_BINDING_BUFFER_ARB:
+      unit = ctx->Texture.CurrentUnit;
+      v->value_int =
+         ctx->Texture.Unit[unit].CurrentTex[TEXTURE_BUFFER_INDEX]->Name;
+      break;
+   case GL_TEXTURE_BUFFER_DATA_STORE_BINDING_ARB:
+      {
+         struct gl_buffer_object *buf =
+            ctx->Texture.Unit[ctx->Texture.CurrentUnit]
+            .CurrentTex[TEXTURE_BUFFER_INDEX]->BufferObject;
+         v->value_int = buf ? buf->Name : 0;
+      }
+      break;
+   case GL_TEXTURE_BUFFER_FORMAT_ARB:
+      v->value_int = ctx->Texture.Unit[ctx->Texture.CurrentUnit]
+         .CurrentTex[TEXTURE_BUFFER_INDEX]->BufferObjectFormat;
+      break;
+
+   /* GL_ARB_sampler_objects */
+   case GL_SAMPLER_BINDING:
+      {
+         struct gl_sampler_object *samp =
+            ctx->Texture.Unit[ctx->Texture.CurrentUnit].Sampler;
+         v->value_int = samp ? samp->Name : 0;
+      }
       break;
    }   
 }

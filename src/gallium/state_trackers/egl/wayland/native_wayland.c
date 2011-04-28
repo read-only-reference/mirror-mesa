@@ -31,20 +31,9 @@
 #include "pipe/p_context.h"
 #include "pipe/p_state.h"
 #include "state_tracker/drm_driver.h"
-
 #include "egllog.h"
 
 #include "native_wayland.h"
-
-/* see get_drm_screen_name */
-#include <radeon_drm.h>
-#include "radeon/drm/radeon_drm_public.h"
-
-#include <wayland-client.h>
-#include "wayland-drm-client-protocol.h"
-#include "wayland-egl-priv.h"
-
-#include <xf86drm.h>
 
 static struct native_event_handler *wayland_event_handler;
 
@@ -109,12 +98,12 @@ wayland_display_get_param(struct native_display *ndpy,
    int val;
 
    switch (param) {
-      case NATIVE_PARAM_USE_NATIVE_BUFFER:
-      case NATIVE_PARAM_PRESERVE_BUFFER:
-      case NATIVE_PARAM_MAX_SWAP_INTERVAL:
-      default:
-         val = 0;
-         break;
+   case NATIVE_PARAM_USE_NATIVE_BUFFER:
+   case NATIVE_PARAM_PRESERVE_BUFFER:
+   case NATIVE_PARAM_MAX_SWAP_INTERVAL:
+   default:
+      val = 0;
+      break;
    }
 
    return val;
@@ -130,42 +119,6 @@ wayland_display_is_pixmap_supported(struct native_display *ndpy,
    return TRUE;
 }
 
-static void 
-wayland_display_destroy(struct native_display *ndpy)
-{
-   struct wayland_display *display = wayland_display(ndpy);
-
-   if (display->config)
-      FREE(display->config);
-
-   ndpy_uninit(ndpy);
-
-   FREE(display);
-}
-
-
-static struct wl_buffer *
-wayland_create_buffer(struct wayland_surface *surface,
-                      enum native_attachment attachment)
-{
-   struct wayland_display *display = surface->display;
-   struct pipe_resource *resource;
-   struct winsys_handle wsh;
-   uint width, height;
-
-   resource = resource_surface_get_single_resource(surface->rsurf, attachment);
-   resource_surface_get_size(surface->rsurf, &width, &height);
-
-   wsh.type = DRM_API_HANDLE_TYPE_SHARED;
-   display->base.screen->resource_get_handle(display->base.screen, resource, &wsh);
-
-   pipe_resource_reference(&resource, NULL);
-
-   return wl_drm_create_buffer(display->dpy->drm, wsh.handle,
-                               width, height,
-                               wsh.stride, surface->win->visual);
-}
-
 static void
 wayland_pixmap_destroy(struct wl_egl_pixmap *egl_pixmap)
 {
@@ -174,32 +127,28 @@ wayland_pixmap_destroy(struct wl_egl_pixmap *egl_pixmap)
    assert(resource);
 
    pipe_resource_reference(&resource, NULL);
-   
+   if (egl_pixmap->buffer) {
+      wl_buffer_destroy(egl_pixmap->buffer);
+      egl_pixmap->buffer = NULL;
+   }
+
    egl_pixmap->driver_private = NULL;
    egl_pixmap->destroy = NULL;
-   egl_pixmap->name = 0;
 }
 
 static void
-wayland_pixmap_surface_intialize(struct wayland_surface *surface)
+wayland_pixmap_surface_initialize(struct wayland_surface *surface)
 {
-   struct native_display *ndpy = &surface->display->base;
-   struct pipe_resource *resource;
-   struct winsys_handle wsh;
+   struct wayland_display *display = wayland_display(&surface->display->base);
    const enum native_attachment front_natt = NATIVE_ATTACHMENT_FRONT_LEFT;
 
-   if (surface->pix->name > 0)
+   if (surface->pix->buffer != NULL)
       return;
 
-   resource = resource_surface_get_single_resource(surface->rsurf, front_natt);
-
-   wsh.type = DRM_API_HANDLE_TYPE_SHARED;
-   ndpy->screen->resource_get_handle(ndpy->screen, resource, &wsh);
-
-   surface->pix->name           = wsh.handle;
-   surface->pix->stride         = wsh.stride;
-   surface->pix->destroy        = wayland_pixmap_destroy;
-   surface->pix->driver_private = resource;
+   surface->pix->buffer  = display->create_buffer(display, surface, front_natt);
+   surface->pix->destroy = wayland_pixmap_destroy;
+   surface->pix->driver_private =
+      resource_surface_get_single_resource(surface->rsurf, front_natt);
 }
 
 static void
@@ -221,19 +170,19 @@ wayland_window_surface_handle_resize(struct wayland_surface *surface)
    struct pipe_resource *front_resource;
    const enum native_attachment front_natt = NATIVE_ATTACHMENT_FRONT_LEFT;
    int i;
-   
+
    front_resource = resource_surface_get_single_resource(surface->rsurf,
                                                          front_natt);
    if (resource_surface_set_size(surface->rsurf,
-       surface->win->width, surface->win->height)) {
+                                 surface->win->width, surface->win->height)) {
 
       if (surface->pending_resource)
-         force_roundtrip(display->dpy->display);
+         force_roundtrip(display->dpy);
 
       if (front_resource) {
          surface->pending_resource = front_resource;
          front_resource = NULL;
-         wl_display_sync_callback(display->dpy->display,
+         wl_display_sync_callback(display->dpy,
                                   wayland_release_pending_resource, surface);
       }
 
@@ -274,13 +223,13 @@ wayland_surface_validate(struct native_surface *nsurf, uint attachment_mask,
    resource_surface_get_size(surface->rsurf, (uint *) width, (uint *) height);
 
    if (surface->type == WL_PIXMAP_SURFACE)
-      wayland_pixmap_surface_intialize(surface);
+      wayland_pixmap_surface_initialize(surface);
 
    return TRUE;
 }
 
 static void
-wayland_frame_callback(void *data, uint32_t time)
+wayland_frame_callback(struct wl_surface *surf, void *data, uint32_t time)
 {
    struct wayland_surface *surface = data;
 
@@ -304,25 +253,27 @@ wayland_surface_swap_buffers(struct native_surface *nsurf)
    struct wayland_display *display = surface->display;
 
    while (surface->block_swap_buffers)
-      wl_display_iterate(display->dpy->display, WL_DISPLAY_READABLE);
+      wl_display_iterate(display->dpy, WL_DISPLAY_READABLE);
 
    surface->block_swap_buffers = TRUE;
-   wl_display_frame_callback(display->dpy->display, wayland_frame_callback,
-                             surface);
+   wl_display_frame_callback(display->dpy, surface->win->surface,
+                             wayland_frame_callback, surface);
 
    if (surface->type == WL_WINDOW_SURFACE) {
       resource_surface_swap_buffers(surface->rsurf,
-       NATIVE_ATTACHMENT_FRONT_LEFT, NATIVE_ATTACHMENT_BACK_LEFT, FALSE);
+                                    NATIVE_ATTACHMENT_FRONT_LEFT,
+                                    NATIVE_ATTACHMENT_BACK_LEFT, FALSE);
 
       wayland_buffers_swap(surface->buffer, WL_BUFFER_FRONT, WL_BUFFER_BACK);
 
       if (surface->buffer[WL_BUFFER_FRONT] == NULL)
          surface->buffer[WL_BUFFER_FRONT] =
-       wayland_create_buffer(surface, NATIVE_ATTACHMENT_FRONT_LEFT);
+            display->create_buffer(display, surface,
+                                   NATIVE_ATTACHMENT_FRONT_LEFT);
 
       wl_surface_attach(surface->win->surface, surface->buffer[WL_BUFFER_FRONT],
                         surface->dx, surface->dy);
-     
+
       resource_surface_get_size(surface->rsurf,
                                 (uint *) &surface->win->attached_width,
                                 (uint *) &surface->win->attached_height);
@@ -332,7 +283,8 @@ wayland_surface_swap_buffers(struct native_surface *nsurf)
 
    surface->sequence_number++;
    wayland_event_handler->invalid_surface(&display->base,
-        &surface->base, surface->sequence_number);
+                                          &surface->base,
+                                          surface->sequence_number);
 
    return TRUE;
 }
@@ -364,6 +316,7 @@ wayland_surface_present(struct native_surface *nsurf,
 
    if (surface->type == WL_WINDOW_SURFACE) {
       resource_surface_get_size(surface->rsurf, &width, &height);
+      wl_buffer_damage(surface->buffer[WL_BUFFER_FRONT], 0, 0, width, height);
       wl_surface_damage(surface->win->surface, 0, 0, width, height);
    }
 
@@ -391,16 +344,19 @@ wayland_surface_destroy(struct native_surface *nsurf)
    FREE(surface);
 }
 
+
+
 static struct native_surface *
 wayland_create_pixmap_surface(struct native_display *ndpy,
                               EGLNativePixmapType pix,
                               const struct native_config *nconf)
 {
    struct wayland_display *display = wayland_display(ndpy);
-   struct wayland_config *config = wayland_config(nconf);
    struct wayland_surface *surface;
    struct wl_egl_pixmap *egl_pixmap = (struct wl_egl_pixmap *) pix;
    enum native_attachment natt = NATIVE_ATTACHMENT_FRONT_LEFT;
+   uint bind = PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW |
+      PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT;
 
    surface = CALLOC_STRUCT(wayland_surface);
    if (!surface)
@@ -412,28 +368,26 @@ wayland_create_pixmap_surface(struct native_display *ndpy,
    surface->type = WL_PIXMAP_SURFACE;
    surface->pix = egl_pixmap;
 
-   if (surface->pix->visual == wl_display_get_rgb_visual(display->dpy->display))
+   if (surface->pix->visual == wl_display_get_rgb_visual(display->dpy))
       surface->color_format = PIPE_FORMAT_B8G8R8X8_UNORM;
    else
       surface->color_format = PIPE_FORMAT_B8G8R8A8_UNORM;
 
    surface->attachment_mask = (1 << NATIVE_ATTACHMENT_FRONT_LEFT);
-   
+
    surface->rsurf = resource_surface_create(display->base.screen,
-           surface->color_format,
-           PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW |
-           PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT);
+                                            surface->color_format, bind);
 
    if (!surface->rsurf) {
-       FREE(surface);
-       return NULL;
+      FREE(surface);
+      return NULL;
    }
 
    resource_surface_set_size(surface->rsurf,
                              egl_pixmap->width, egl_pixmap->height);
 
    /* the pixmap is already allocated, so import it */
-   if (surface->pix->name > 0)
+   if (surface->pix->buffer != NULL)
       resource_surface_import_resource(surface->rsurf, natt,
                                        surface->pix->driver_private);
 
@@ -445,6 +399,7 @@ wayland_create_pixmap_surface(struct native_display *ndpy,
    return &surface->base;
 }
 
+
 static struct native_surface *
 wayland_create_window_surface(struct native_display *ndpy,
                               EGLNativeWindowType win,
@@ -453,6 +408,8 @@ wayland_create_window_surface(struct native_display *ndpy,
    struct wayland_display *display = wayland_display(ndpy);
    struct wayland_config *config = wayland_config(nconf);
    struct wayland_surface *surface;
+   uint bind = PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW |
+      PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT;
 
    surface = CALLOC_STRUCT(wayland_surface);
    if (!surface)
@@ -470,16 +427,14 @@ wayland_create_window_surface(struct native_display *ndpy,
    surface->buffer[WL_BUFFER_FRONT] = NULL;
    surface->buffer[WL_BUFFER_BACK] = NULL;
    surface->attachment_mask = (1 << NATIVE_ATTACHMENT_FRONT_LEFT) |
-                              (1 << NATIVE_ATTACHMENT_BACK_LEFT);
+      (1 << NATIVE_ATTACHMENT_BACK_LEFT);
 
    surface->rsurf = resource_surface_create(display->base.screen,
-           surface->color_format,
-           PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW |
-           PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_SCANOUT);
+                                            surface->color_format, bind);
 
    if (!surface->rsurf) {
-       FREE(surface);
-       return NULL;
+      FREE(surface);
+      return NULL;
    }
 
    surface->base.destroy = wayland_surface_destroy;
@@ -490,133 +445,46 @@ wayland_create_window_surface(struct native_display *ndpy,
    return &surface->base;
 }
 
-static const char *
-get_drm_screen_name(int fd, drmVersionPtr version)
-{
-   const char *name = version->name;
-
-   if (name && !strcmp(name, "radeon")) {
-      int chip_id;
-      struct drm_radeon_info info;
-
-      memset(&info, 0, sizeof(info));
-      info.request = RADEON_INFO_DEVICE_ID;
-      info.value = pointer_to_intptr(&chip_id);
-      if (drmCommandWriteRead(fd, DRM_RADEON_INFO, &info, sizeof(info)) != 0)
-         return NULL;
-
-      name = is_r3xx(chip_id) ? "r300" : "r600";
-   }
-
-   return name;
-}
-
-static boolean
-wayland_display_init_screen(struct native_display *ndpy)
-{
-   struct wayland_display *display = wayland_display(ndpy);
-   drmVersionPtr version;
-   const char *driver_name;
-
-   if (display->dpy->fd == -1)
-	   force_roundtrip(display->dpy->display);
-   if (display->dpy->fd == -1)
-	   return FALSE;
-
-   if (!display->dpy->authenticated)
-	   force_roundtrip(display->dpy->display);
-   if (!display->dpy->authenticated)
-	   return FALSE;
-
-   version = drmGetVersion(display->dpy->fd);
-   if (!version) {
-      _eglLog(_EGL_WARNING, "invalid fd %d", display->dpy->fd);
-      return FALSE;
-   }
-
-   /* FIXME: share this with native_drm or egl_dri2 */
-   driver_name = get_drm_screen_name(display->dpy->fd, version);
-
-   display->base.screen =
-      wayland_event_handler->new_drm_screen(&display->base,
-            driver_name, display->dpy->fd);
-   drmFreeVersion(version);
-
-   if (!display->base.screen) {
-      _eglLog(_EGL_WARNING, "failed to create DRM screen");
-      return FALSE;
-   }
-
-   return TRUE;
-}
-
-
 static void
-wayland_set_event_handler(struct native_event_handler *event_handler)
+native_set_event_handler(struct native_event_handler *event_handler)
 {
    wayland_event_handler = event_handler;
 }
 
-static struct pipe_resource *
-wayland_display_import_buffer(struct native_display *ndpy,
-                              const struct pipe_resource *templ,
-                              void *buf)
-{
-   return ndpy->screen->resource_from_handle(ndpy->screen,
-         templ, (struct winsys_handle *) buf);
-}
-
-static boolean
-wayland_display_export_buffer(struct native_display *ndpy,
-                              struct pipe_resource *res,
-                              void *buf)
-{
-   return ndpy->screen->resource_get_handle(ndpy->screen,
-         res, (struct winsys_handle *) buf);
-}
-
-static struct native_display_buffer wayland_display_buffer = {
-   wayland_display_import_buffer,
-   wayland_display_export_buffer
-};
-
 static struct native_display *
-wayland_display_create(void *dpy, boolean use_sw, void *user_data)
+native_create_display(void *dpy, boolean use_sw, void *user_data)
 {
-   struct wayland_display *display;
+   struct wayland_display *display = NULL;
 
-   display = CALLOC_STRUCT(wayland_display);
+   use_sw = use_sw || debug_get_bool_option("EGL_SOFTWARE", FALSE);
+
+   if (use_sw) {
+      _eglLog(_EGL_INFO, "use software fallback");
+      display = wayland_create_shm_display((struct wl_display *) dpy,
+                                           wayland_event_handler,
+                                           user_data);
+   } else {
+      display = wayland_create_drm_display((struct wl_display *) dpy,
+                                           wayland_event_handler,
+                                           user_data);
+   }
+
    if (!display)
       return NULL;
 
-   display->base.user_data = user_data;
-
-   display->dpy = dpy;
-   if (!display->dpy->display) {
-      wayland_display_destroy(&display->base);
-      return NULL;
-   }
-
-   if (!wayland_display_init_screen(&display->base)) {
-      wayland_display_destroy(&display->base);
-      return NULL;
-   }
-
-   display->base.destroy = wayland_display_destroy;
    display->base.get_param = wayland_display_get_param;
    display->base.get_configs = wayland_display_get_configs;
    display->base.is_pixmap_supported = wayland_display_is_pixmap_supported;
    display->base.create_window_surface = wayland_create_window_surface;
    display->base.create_pixmap_surface = wayland_create_pixmap_surface;
-   display->base.buffer = &wayland_display_buffer;
 
    return &display->base;
 }
 
 static const struct native_platform wayland_platform = {
    "wayland", /* name */
-   wayland_set_event_handler,
-   wayland_display_create
+   native_set_event_handler,
+   native_create_display
 };
 
 const struct native_platform *
@@ -624,3 +492,5 @@ native_get_wayland_platform(void)
 {
    return &wayland_platform;
 }
+
+/* vim: set sw=3 ts=8 sts=3 expandtab: */

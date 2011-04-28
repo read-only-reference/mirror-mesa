@@ -103,13 +103,11 @@ static void do_vs_prog( struct brw_context *brw,
    aux_size += c.vp->program.Base.Parameters->NumParameters;
 
    drm_intel_bo_unreference(brw->vs.prog_bo);
-   brw->vs.prog_bo = brw_upload_cache_with_auxdata(&brw->cache, BRW_VS_PROG,
-						   &c.key, sizeof(c.key),
-						   NULL, 0,
-						   program, program_size,
-						   &c.prog_data,
-						   aux_size,
-						   &brw->vs.prog_data);
+   brw->vs.prog_bo = brw_upload_cache(&brw->cache, BRW_VS_PROG,
+				      &c.key, sizeof(c.key),
+				      program, program_size,
+				      &c.prog_data, aux_size,
+				      &brw->vs.prog_data);
 }
 
 
@@ -132,6 +130,9 @@ static void brw_upload_vs_prog(struct brw_context *brw)
 			ctx->Polygon.BackMode != GL_FILL);
    key.two_side_color = (ctx->Light.Enabled && ctx->Light.Model.TwoSide);
 
+   /* _NEW_LIGHT | _NEW_BUFFERS */
+   key.clamp_vertex_color = ctx->Light._ClampVertexColor;
+
    /* _NEW_POINT */
    if (ctx->Point.PointSprite) {
       for (i = 0; i < 8; i++) {
@@ -145,7 +146,6 @@ static void brw_upload_vs_prog(struct brw_context *brw)
    drm_intel_bo_unreference(brw->vs.prog_bo);
    brw->vs.prog_bo = brw_search_cache(&brw->cache, BRW_VS_PROG,
 				      &key, sizeof(key),
-				      NULL, 0,
 				      &brw->vs.prog_data);
    if (brw->vs.prog_bo == NULL)
       do_vs_prog(brw, vp, &key);
@@ -158,7 +158,8 @@ static void brw_upload_vs_prog(struct brw_context *brw)
  */
 const struct brw_tracked_state brw_vs_prog = {
    .dirty = {
-      .mesa  = _NEW_TRANSFORM | _NEW_POLYGON | _NEW_POINT | _NEW_LIGHT,
+      .mesa  = (_NEW_TRANSFORM | _NEW_POLYGON | _NEW_POINT | _NEW_LIGHT |
+		_NEW_BUFFERS),
       .brw   = BRW_NEW_VERTEX_PROGRAM,
       .cache = 0
    },

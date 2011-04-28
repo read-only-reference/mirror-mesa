@@ -51,16 +51,6 @@ static GLboolean can_do_pln(struct intel_context *intel,
    return GL_TRUE;
 }
 
-/* Not quite sure how correct this is - need to understand horiz
- * vs. vertical strides a little better.
- */
-static INLINE struct brw_reg sechalf( struct brw_reg reg )
-{
-   if (reg.vstride)
-      reg.nr++;
-   return reg;
-}
-
 /* Return the SrcReg index of the channels that can be immediate float operands
  * instead of usage of PROGRAM_CONSTANT values through push/pull.
  */
@@ -1325,12 +1315,6 @@ static void fire_fb_write( struct brw_wm_compile *c,
 {
    struct brw_compile *p = &c->func;
    struct intel_context *intel = &p->brw->intel;
-   struct brw_reg dst;
-
-   if (c->dispatch_width == 16)
-      dst = retype(vec16(brw_null_reg()), BRW_REGISTER_TYPE_UW);
-   else
-      dst = retype(vec8(brw_null_reg()), BRW_REGISTER_TYPE_UW);
 
    /* Pass through control information:
     * 
@@ -1352,7 +1336,6 @@ static void fire_fb_write( struct brw_wm_compile *c,
 /*  send (16) null.0<1>:uw m0               r0.0<8;8,1>:uw   0x85a04000:ud    { Align1 EOT } */
    brw_fb_WRITE(p,
 		c->dispatch_width,
-		dst,
 		base_reg,
 		retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UW),
 		target,		
@@ -1408,6 +1391,9 @@ void emit_fb_write(struct brw_wm_compile *c,
     */
    brw_push_insn_state(p);
 
+   if (c->key.clamp_fragment_color)
+      brw_set_saturate(p, 1);
+
    for (channel = 0; channel < 4; channel++) {
       if (intel->gen >= 6) {
 	 /* gen6 SIMD16 single source DP write looks like:
@@ -1459,6 +1445,9 @@ void emit_fb_write(struct brw_wm_compile *c,
 	 }
       }
    }
+
+   brw_set_saturate(p, 0);
+
    /* skip over the regs populated above:
     */
    if (c->dispatch_width == 16)

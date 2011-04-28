@@ -40,6 +40,12 @@
 #define R600_MAX_CONST_BUFFERS 1
 #define R600_MAX_CONST_BUFFER_SIZE 4096
 
+#ifdef PIPE_ARCH_BIG_ENDIAN
+#define R600_BIG_ENDIAN 1
+#else
+#define R600_BIG_ENDIAN 0
+#endif
+
 enum r600_pipe_state_id {
 	R600_PIPE_STATE_BLEND = 0,
 	R600_PIPE_STATE_BLEND_COLOR,
@@ -241,7 +247,6 @@ int r600_find_vs_semantic_index(struct r600_shader *vs,
 
 /* r600_state.c */
 void r600_init_state_functions(struct r600_pipe_context *rctx);
-void r600_spi_update(struct r600_pipe_context *rctx);
 void r600_init_config(struct r600_pipe_context *rctx);
 void r600_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shader);
 void r600_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader *shader);
@@ -252,9 +257,6 @@ void r600_pipe_set_buffer_resource(struct r600_pipe_context *rctx,
 				   struct r600_pipe_state *rstate,
 				   struct r600_resource *rbuffer,
 				   unsigned offset, unsigned stride);
-
-/* r600_helper.h */
-int r600_conv_pipe_prim(unsigned pprim, unsigned *prim);
 
 /* r600_texture.c */
 void r600_init_screen_texture_functions(struct pipe_screen *screen);
@@ -297,8 +299,6 @@ void r600_delete_vs_shader(struct pipe_context *ctx, void *state);
 void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
 			      struct pipe_resource *buffer);
 void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info);
-
-void r600_texture_barrier(struct pipe_context *ctx);
 
 /*
  * common helpers

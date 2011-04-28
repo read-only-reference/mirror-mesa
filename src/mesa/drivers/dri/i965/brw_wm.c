@@ -33,6 +33,7 @@
 #include "brw_wm.h"
 #include "brw_state.h"
 #include "main/formats.h"
+#include "main/samplerobj.h"
 
 /** Return number of src args for given instruction */
 GLuint brw_wm_nr_args( GLuint opcode )
@@ -119,7 +120,7 @@ brw_wm_non_glsl_emit(struct brw_context *brw, struct brw_wm_compile *c)
    brw_wm_emit(c);
 }
 
-static void
+void
 brw_wm_payload_setup(struct brw_context *brw,
 		     struct brw_wm_compile *c)
 {
@@ -185,6 +186,7 @@ static void do_wm_prog( struct brw_context *brw,
 			struct brw_fragment_program *fp, 
 			struct brw_wm_prog_key *key)
 {
+   struct intel_context *intel = &brw->intel;
    struct brw_wm_compile *c;
    const GLuint *program;
    GLuint program_size;
@@ -223,26 +225,35 @@ static void do_wm_prog( struct brw_context *brw,
 
    brw_init_compile(brw, &c->func);
 
-   brw_wm_payload_setup(brw, c);
-
    if (!brw_wm_fs_emit(brw, c)) {
-      /*
-       * Shader which use GLSL features such as flow control are handled
-       * differently from "simple" shaders.
-       */
+      /* Fallback for fixed function and ARB_fp shaders. */
       c->dispatch_width = 16;
       brw_wm_payload_setup(brw, c);
       brw_wm_non_glsl_emit(brw, c);
+      c->prog_data.dispatch_width = 16;
    }
-   c->prog_data.dispatch_width = c->dispatch_width;
 
    /* Scratch space is used for register spilling */
    if (c->last_scratch) {
+      uint32_t total_scratch;
+
       /* Per-thread scratch space is power-of-two sized. */
       for (c->prog_data.total_scratch = 1024;
 	   c->prog_data.total_scratch <= c->last_scratch;
 	   c->prog_data.total_scratch *= 2) {
 	 /* empty */
+      }
+      total_scratch = c->prog_data.total_scratch * brw->wm_max_threads;
+
+      if (brw->wm.scratch_bo && total_scratch > brw->wm.scratch_bo->size) {
+	 drm_intel_bo_unreference(brw->wm.scratch_bo);
+	 brw->wm.scratch_bo = NULL;
+      }
+      if (brw->wm.scratch_bo == NULL) {
+	 brw->wm.scratch_bo = drm_intel_bo_alloc(intel->bufmgr,
+						 "wm scratch",
+						 total_scratch,
+						 4096);
       }
    }
    else {
@@ -257,13 +268,11 @@ static void do_wm_prog( struct brw_context *brw,
    program = brw_get_program(&c->func, &program_size);
 
    drm_intel_bo_unreference(brw->wm.prog_bo);
-   brw->wm.prog_bo = brw_upload_cache_with_auxdata(&brw->cache, BRW_WM_PROG,
-						   &c->key, sizeof(c->key),
-						   NULL, 0,
-						   program, program_size,
-						   &c->prog_data,
-						   sizeof(c->prog_data),
-						   &brw->wm.prog_data);
+   brw->wm.prog_bo = brw_upload_cache(&brw->cache, BRW_WM_PROG,
+				      &c->key, sizeof(c->key),
+				      program, program_size,
+				      &c->prog_data, sizeof(c->prog_data),
+				      &brw->wm.prog_data);
 }
 
 
@@ -348,6 +357,9 @@ static void brw_wm_populate_key( struct brw_context *brw,
    /* _NEW_HINT */
    key->linear_color = (ctx->Hint.PerspectiveCorrection == GL_FASTEST);
 
+   /* _NEW_FRAG_CLAMP | _NEW_BUFFERS */
+   key->clamp_fragment_color = ctx->Color._ClampFragmentColor;
+
    /* _NEW_TEXTURE */
    for (i = 0; i < BRW_MAX_TEX_UNIT; i++) {
       const struct gl_texture_unit *unit = &ctx->Texture.Unit[i];
@@ -355,6 +367,7 @@ static void brw_wm_populate_key( struct brw_context *brw,
       if (unit->_ReallyEnabled) {
          const struct gl_texture_object *t = unit->_Current;
          const struct gl_texture_image *img = t->Image[0][t->BaseLevel];
+	 struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, i);
 	 int swizzles[SWIZZLE_NIL + 1] = {
 	    SWIZZLE_X,
 	    SWIZZLE_Y,
@@ -370,14 +383,14 @@ static void brw_wm_populate_key( struct brw_context *brw,
 	  * well and our shadow compares always return the result in
 	  * all 4 channels.
 	  */
-	 if (t->CompareMode == GL_COMPARE_R_TO_TEXTURE_ARB) {
-	    if (t->DepthMode == GL_ALPHA) {
+	 if (sampler->CompareMode == GL_COMPARE_R_TO_TEXTURE_ARB) {
+	    if (sampler->DepthMode == GL_ALPHA) {
 	       swizzles[0] = SWIZZLE_ZERO;
 	       swizzles[1] = SWIZZLE_ZERO;
 	       swizzles[2] = SWIZZLE_ZERO;
-	    } else if (t->DepthMode == GL_LUMINANCE) {
+	    } else if (sampler->DepthMode == GL_LUMINANCE) {
 	       swizzles[3] = SWIZZLE_ONE;
-	    } else if (t->DepthMode == GL_RED) {
+	    } else if (sampler->DepthMode == GL_RED) {
 	       /* See table 3.23 of the GL 3.0 spec. */
 	       swizzles[1] = SWIZZLE_ZERO;
 	       swizzles[2] = SWIZZLE_ZERO;
@@ -447,7 +460,7 @@ static void brw_prepare_wm_prog(struct brw_context *brw)
    struct brw_wm_prog_key key;
    struct brw_fragment_program *fp = (struct brw_fragment_program *)
       brw->fragment_program;
-     
+
    brw_wm_populate_key(brw, &key);
 
    /* Make an early check for the key.
@@ -455,7 +468,6 @@ static void brw_prepare_wm_prog(struct brw_context *brw)
    drm_intel_bo_unreference(brw->wm.prog_bo);
    brw->wm.prog_bo = brw_search_cache(&brw->cache, BRW_WM_PROG,
 				      &key, sizeof(key),
-				      NULL, 0,
 				      &brw->wm.prog_data);
    if (brw->wm.prog_bo == NULL)
       do_wm_prog(brw, fp, &key);
@@ -471,6 +483,7 @@ const struct brw_tracked_state brw_wm_prog = {
 		_NEW_POLYGON |
 		_NEW_LINE |
 		_NEW_LIGHT |
+		_NEW_FRAG_CLAMP |
 		_NEW_BUFFERS |
 		_NEW_TEXTURE),
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |

@@ -139,7 +139,7 @@ struct brw_context;
  * by any 3D rendering.
  */
 #define BRW_NEW_BATCH			0x10000
-/** brw->depth_region updated */
+/** \see brw.state.depth_region */
 #define BRW_NEW_DEPTH_BUFFER		0x20000
 #define BRW_NEW_NR_WM_SURFACES		0x40000
 #define BRW_NEW_NR_VS_SURFACES		0x80000
@@ -204,13 +204,16 @@ struct brw_wm_prog_data {
    GLuint urb_read_length;
 
    GLuint first_curbe_grf;
+   GLuint first_curbe_grf_16;
    GLuint total_grf;
+   GLuint total_grf_16;
    GLuint total_scratch;
 
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
    GLboolean error;
    int dispatch_width;
+   uint32_t prog_offset_16;
 
    /* Pointer to tracked values (only valid once
     * _mesa_load_state_parameters has been called at runtime).
@@ -308,7 +311,6 @@ enum brw_cache_id {
    BRW_CC_VP,
    BRW_CC_UNIT,
    BRW_WM_PROG,
-   BRW_SAMPLER_DEFAULT_COLOR,
    BRW_SAMPLER,
    BRW_WM_UNIT,
    BRW_SF_PROG,
@@ -336,8 +338,6 @@ struct brw_cache_item {
    GLuint hash;
    GLuint key_size;		/* for variable-sized keys */
    const void *key;
-   drm_intel_bo **reloc_bufs;
-   GLuint nr_reloc_bufs;
 
    drm_intel_bo *bo;
 
@@ -381,7 +381,6 @@ struct brw_tracked_state {
 #define CACHE_NEW_CC_VP                  (1<<BRW_CC_VP)
 #define CACHE_NEW_CC_UNIT                (1<<BRW_CC_UNIT)
 #define CACHE_NEW_WM_PROG                (1<<BRW_WM_PROG)
-#define CACHE_NEW_SAMPLER_DEFAULT_COLOR  (1<<BRW_SAMPLER_DEFAULT_COLOR)
 #define CACHE_NEW_SAMPLER                (1<<BRW_SAMPLER)
 #define CACHE_NEW_WM_UNIT                (1<<BRW_WM_UNIT)
 #define CACHE_NEW_SF_PROG                (1<<BRW_SF_PROG)
@@ -464,7 +463,26 @@ struct brw_context
    struct {
       struct brw_state_flags dirty;
 
+      /**
+       * \name Cached region pointers
+       *
+       * When the draw buffer is updated, often the depth buffer is not
+       * changed. Caching the pointer to the buffer's region allows us to
+       * detect when the buffer has in fact changed, and allows us to avoid
+       * updating the buffer's GPU state when it has not.
+       *
+       * The original of each cached pointer is an instance of
+       * \c intel_renderbuffer.region.
+       *
+       * \see brw_set_draw_region()
+       *
+       * \{
+       */
+
+      /** \see struct brw_tracked_state brw_depthbuffer */
       struct intel_region *depth_region;
+
+      /** \} */
 
       /**
        * List of buffers accumulated in brw_validate_state to receive
@@ -549,18 +567,21 @@ struct brw_context
 
       GLboolean constrained;
 
+      GLuint max_vs_handles;	/* Maximum number of VS handles */
+      GLuint max_gs_handles;	/* Maximum number of GS handles */
+
       GLuint nr_vs_entries;
       GLuint nr_gs_entries;
       GLuint nr_clip_entries;
       GLuint nr_sf_entries;
       GLuint nr_cs_entries;
 
-      /* gen6 */
+      /* gen6:
+       * The length of each URB entry owned by the VS (or GS), as
+       * a number of 1024-bit (128-byte) rows.  Should be >= 1.
+       */
       GLuint vs_size;
-/*       GLuint gs_size; */
-/*       GLuint clip_size; */
-/*       GLuint sf_size; */
-/*       GLuint cs_size; */
+      GLuint gs_size;
 
       GLuint vs_start;
       GLuint gs_start;
@@ -608,29 +629,38 @@ struct brw_context
       int8_t *constant_map; /* variable array following prog_data */
 
       drm_intel_bo *prog_bo;
-      drm_intel_bo *state_bo;
       drm_intel_bo *const_bo;
+      uint32_t state_offset;
 
       /** Binding table of pointers to surf_bo entries */
       uint32_t bind_bo_offset;
       uint32_t surf_offset[BRW_VS_MAX_SURF];
       GLuint nr_surfaces;      
+
+      uint32_t push_const_offset; /* Offset in the batchbuffer */
+      int push_const_size; /* in 256-bit register increments */
    } vs;
 
    struct {
       struct brw_gs_prog_data *prog_data;
 
       GLboolean prog_active;
+      uint32_t state_offset;
       drm_intel_bo *prog_bo;
-      drm_intel_bo *state_bo;
    } gs;
 
    struct {
       struct brw_clip_prog_data *prog_data;
 
       drm_intel_bo *prog_bo;
-      drm_intel_bo *state_bo;
-      drm_intel_bo *vp_bo;
+
+      /* Offset in the batch to the CLIP state on pre-gen6. */
+      uint32_t state_offset;
+
+      /* As of gen6, this is the offset in the batch to the CLIP VP,
+       * instead of vp_bo.
+       */
+      uint32_t vp_offset;
    } clip;
 
 
@@ -638,8 +668,8 @@ struct brw_context
       struct brw_sf_prog_data *prog_data;
 
       drm_intel_bo *prog_bo;
-      drm_intel_bo *state_bo;
-      drm_intel_bo *vp_bo;
+      uint32_t state_offset;
+      uint32_t vp_offset;
    } sf;
 
    struct {
@@ -651,8 +681,9 @@ struct brw_context
        */
       GLbitfield input_size_masks[4];
 
-      /** Array of surface default colors (texture border color) */
-      drm_intel_bo *sdc_bo[BRW_MAX_TEX_UNIT];
+      /** offsets in the batch to sampler default colors (texture border color)
+       */
+      uint32_t sdc_offset[BRW_MAX_TEX_UNIT];
 
       GLuint render_surf;
       GLuint nr_surfaces;      
@@ -661,35 +692,32 @@ struct brw_context
       drm_intel_bo *scratch_bo;
 
       GLuint sampler_count;
-      drm_intel_bo *sampler_bo;
+      uint32_t sampler_offset;
 
       /** Binding table of pointers to surf_bo entries */
       uint32_t bind_bo_offset;
       uint32_t surf_offset[BRW_WM_MAX_SURF];
+      uint32_t state_offset; /* offset in batchbuffer to pre-gen6 WM state */
 
       drm_intel_bo *prog_bo;
-      drm_intel_bo *state_bo;
       drm_intel_bo *const_bo; /* pull constant buffer. */
       /**
-       *  This is the push constant BO on gen6.
+       * This is offset in the batch to the push constants on gen6.
        *
        * Pre-gen6, push constants live in the CURBE.
        */
-      drm_intel_bo *push_const_bo;
+      uint32_t push_const_offset;
    } wm;
 
 
    struct {
       /* gen4 */
       drm_intel_bo *prog_bo;
-      drm_intel_bo *vp_bo;
-
-      /* gen6 */
-      drm_intel_bo *blend_state_bo;
-      drm_intel_bo *depth_stencil_state_bo;
-      drm_intel_bo *color_calc_state_bo;
 
       uint32_t state_offset;
+      uint32_t blend_state_offset;
+      uint32_t depth_stencil_state_offset;
+      uint32_t vp_offset;
    } cc;
 
    struct {
@@ -759,19 +787,12 @@ void brwInitFragProgFuncs( struct dd_function_table *functions );
  */
 void brw_upload_urb_fence(struct brw_context *brw);
 
-/* brw_cc.c */
-void brw_update_cc_vp(struct brw_context *brw);
-
 /* brw_curbe.c
  */
 void brw_upload_cs_urb_state(struct brw_context *brw);
 
 /* brw_disasm.c */
 int brw_disasm (FILE *file, struct brw_instruction *inst, int gen);
-
-/* brw_state.c */
-void brw_enable(struct gl_context * ctx, GLenum cap, GLboolean state);
-void brw_depth_range(struct gl_context *ctx, GLclampd nearval, GLclampd farval);
 
 /*======================================================================
  * Inline conversion functions.  These are better-typed than the

@@ -28,6 +28,8 @@
 
 #include "main/glheader.h"
 #include "main/context.h"
+#include "main/condrender.h"
+#include "main/samplerobj.h"
 #include "main/state.h"
 #include "main/enums.h"
 #include "tnl/tnl.h"
@@ -129,30 +131,31 @@ static void brw_emit_prim(struct brw_context *brw,
 			  const struct _mesa_prim *prim,
 			  uint32_t hw_prim)
 {
-   struct brw_3d_primitive prim_packet;
    struct intel_context *intel = &brw->intel;
+   int verts_per_instance;
+   int vertex_access_type;
+   int start_vertex_location;
+   int base_vertex_location;
 
    DBG("PRIM: %s %d %d\n", _mesa_lookup_enum_by_nr(prim->mode),
        prim->start, prim->count);
 
-   prim_packet.header.opcode = CMD_3D_PRIM;
-   prim_packet.header.length = sizeof(prim_packet)/4 - 2;
-   prim_packet.header.pad = 0;
-   prim_packet.header.topology = hw_prim;
-   prim_packet.header.indexed = prim->indexed;
+   start_vertex_location = prim->start;
+   base_vertex_location = prim->basevertex;
+   if (prim->indexed) {
+      vertex_access_type = GEN4_3DPRIM_VERTEXBUFFER_ACCESS_RANDOM;
+      start_vertex_location += brw->ib.start_vertex_offset;
+      base_vertex_location += brw->vb.start_vertex_bias;
+   } else {
+      vertex_access_type = GEN4_3DPRIM_VERTEXBUFFER_ACCESS_SEQUENTIAL;
+      start_vertex_location += brw->vb.start_vertex_bias;
+   }
 
-   prim_packet.verts_per_instance = trim(prim->mode, prim->count);
-   prim_packet.start_vert_location = prim->start;
-   if (prim->indexed)
-      prim_packet.start_vert_location += brw->ib.start_vertex_offset;
-   else
-      prim_packet.start_vert_location += brw->vb.start_vertex_bias;
-   prim_packet.instance_count = 1;
-   prim_packet.start_instance_location = 0;
-   prim_packet.base_vert_location = prim->basevertex;
-   if (prim->indexed)
-      prim_packet.base_vert_location += brw->vb.start_vertex_bias;
+   verts_per_instance = trim(prim->mode, prim->count);
 
+   /* If nothing to emit, just return. */
+   if (verts_per_instance == 0)
+      return;
 
    /* If we're set to always flush, do it before and after the primitive emit.
     * We want to catch both missed flushes that hurt instruction/state cache
@@ -162,10 +165,18 @@ static void brw_emit_prim(struct brw_context *brw,
    if (intel->always_flush_cache) {
       intel_batchbuffer_emit_mi_flush(intel);
    }
-   if (prim_packet.verts_per_instance) {
-      intel_batchbuffer_data(&brw->intel, &prim_packet,
-			      sizeof(prim_packet), false);
-   }
+
+   BEGIN_BATCH(6);
+   OUT_BATCH(CMD_3D_PRIM << 16 | (6 - 2) |
+	     hw_prim << GEN4_3DPRIM_TOPOLOGY_TYPE_SHIFT |
+	     vertex_access_type);
+   OUT_BATCH(verts_per_instance);
+   OUT_BATCH(start_vertex_location);
+   OUT_BATCH(1); // instance count
+   OUT_BATCH(0); // start instance location
+   OUT_BATCH(base_vertex_location);
+   ADVANCE_BATCH();
+
    if (intel->always_flush_cache) {
       intel_batchbuffer_emit_mi_flush(intel);
    }
@@ -269,22 +280,25 @@ static GLboolean check_fallbacks( struct brw_context *brw,
       int u;
       for (u = 0; u < ctx->Const.MaxTextureCoordUnits; u++) {
          struct gl_texture_unit *texUnit = &ctx->Texture.Unit[u];
+
          if (texUnit->Enabled) {
+	    struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, u);
+
             if (texUnit->Enabled & TEXTURE_1D_BIT) {
-               if (texUnit->CurrentTex[TEXTURE_1D_INDEX]->WrapS == GL_CLAMP) {
+               if (sampler->WrapS == GL_CLAMP) {
                    return GL_TRUE;
                }
             }
             if (texUnit->Enabled & TEXTURE_2D_BIT) {
-               if (texUnit->CurrentTex[TEXTURE_2D_INDEX]->WrapS == GL_CLAMP ||
-                   texUnit->CurrentTex[TEXTURE_2D_INDEX]->WrapT == GL_CLAMP) {
+               if (sampler->WrapS == GL_CLAMP ||
+                   sampler->WrapT == GL_CLAMP) {
                    return GL_TRUE;
                }
             }
             if (texUnit->Enabled & TEXTURE_3D_BIT) {
-               if (texUnit->CurrentTex[TEXTURE_3D_INDEX]->WrapS == GL_CLAMP ||
-                   texUnit->CurrentTex[TEXTURE_3D_INDEX]->WrapT == GL_CLAMP ||
-                   texUnit->CurrentTex[TEXTURE_3D_INDEX]->WrapR == GL_CLAMP) {
+               if (sampler->WrapS == GL_CLAMP ||
+                   sampler->WrapT == GL_CLAMP ||
+                   sampler->WrapR == GL_CLAMP) {
                    return GL_TRUE;
                }
             }
@@ -350,15 +364,21 @@ static GLboolean brw_try_draw_prims( struct gl_context *ctx,
 
    for (i = 0; i < nr_prims; i++) {
       uint32_t hw_prim;
+      int estimated_max_prim_size;
+
+      estimated_max_prim_size = 512; /* batchbuffer commands */
+      estimated_max_prim_size += (BRW_MAX_TEX_UNIT *
+				  (sizeof(struct brw_sampler_state) +
+				   sizeof(struct gen5_sampler_default_color)));
+      estimated_max_prim_size += 1024; /* gen6 VS push constants */
+      estimated_max_prim_size += 1024; /* gen6 WM push constants */
+      estimated_max_prim_size += 512; /* misc. pad */
 
       /* Flush the batch if it's approaching full, so that we don't wrap while
        * we've got validated state that needs to be in the same batch as the
-       * primitives.  This fraction is just a guess (minimal full state plus
-       * a primitive is around 512 bytes), and would be better if we had
-       * an upper bound of how much we might emit in a single
-       * brw_try_draw_prims().
+       * primitives.
        */
-      intel_batchbuffer_require_space(intel, 1024, false);
+      intel_batchbuffer_require_space(intel, estimated_max_prim_size, false);
 
       hw_prim = brw_set_prim(brw, &prim[i]);
       if (brw->state.dirty.brw) {
@@ -428,6 +448,9 @@ void brw_draw_prims( struct gl_context *ctx,
 		     GLuint max_index )
 {
    GLboolean retval;
+
+   if (!_mesa_check_conditional_render(ctx))
+      return;
 
    if (!vbo_all_varyings_in_vbos(arrays)) {
       if (!index_bounds_valid)

@@ -30,6 +30,7 @@
 #include <tgsi/tgsi_util.h>
 #include <util/u_blitter.h>
 #include <util/u_double_list.h>
+#include "util/u_format.h"
 #include <util/u_format_s3tc.h>
 #include <util/u_transfer.h>
 #include <util/u_surface.h>
@@ -168,6 +169,7 @@ static void r600_destroy_context(struct pipe_context *context)
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)context;
 
 	rctx->context.delete_depth_stencil_alpha_state(&rctx->context, rctx->custom_dsa_flush);
+	util_unreference_framebuffer_state(&rctx->framebuffer);
 
 	r600_context_fini(&rctx->ctx);
 
@@ -369,24 +371,24 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
 	case PIPE_CAP_DEPTH_CLAMP:
 	case PIPE_CAP_SHADER_STENCIL_EXPORT:
-	case PIPE_CAP_TGSI_INSTANCEID:
 	case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
+	case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
 		return 1;
 	case PIPE_CAP_INDEP_BLEND_ENABLE:
+	case PIPE_CAP_INDEP_BLEND_FUNC:
 		/* R600 doesn't support per-MRT blends */
 		if (family == CHIP_R600)
 			return 0;
 		else
 			return 1;
 
+	case PIPE_CAP_TGSI_INSTANCEID:
+		return 0;
+
 	/* Unsupported features (boolean caps). */
 	case PIPE_CAP_STREAM_OUTPUT:
 	case PIPE_CAP_PRIMITIVE_RESTART:
-	case PIPE_CAP_INDEP_BLEND_FUNC: /* FIXME allow this */
-		/* R600 doesn't support per-MRT blends */
-		if (family == CHIP_R600)
-			return 0;
-		else
+	case PIPE_CAP_FRAGMENT_COLOR_CLAMP_CONTROL:
 			return 0;
 
 	case PIPE_CAP_ARRAY_TEXTURES:
@@ -485,9 +487,10 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		else
 			return 16;
 	case PIPE_SHADER_CAP_MAX_TEMPS:
-		return 256; //max native temporaries
+		return 256; /* Max native temporaries. */
 	case PIPE_SHADER_CAP_MAX_ADDRS:
-		return 1; //max native address registers/* FIXME Isn't this equal to TEMPS? */
+		/* FIXME Isn't this equal to TEMPS? */
+		return 1; /* Max native address registers */
 	case PIPE_SHADER_CAP_MAX_CONSTS:
 		return R600_MAX_CONST_BUFFER_SIZE;
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
@@ -519,6 +522,9 @@ static boolean r600_is_format_supported(struct pipe_screen* screen,
 		R600_ERR("r600: unsupported texture type %d\n", target);
 		return FALSE;
 	}
+
+        if (!util_format_is_supported(format, usage))
+                return FALSE;
 
 	/* Multisample */
 	if (sample_count > 1)

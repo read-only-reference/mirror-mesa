@@ -24,6 +24,8 @@
  *      Jerome Glisse
  *      Corbin Simpson <MostAwesomeDude@gmail.com>
  */
+#include <byteswap.h>
+
 #include <pipe/p_screen.h>
 #include <util/u_format.h>
 #include <util/u_math.h>
@@ -85,9 +87,6 @@ static void *r600_buffer_transfer_map(struct pipe_context *pipe,
 	if (rbuffer->r.b.user_ptr)
 		return (uint8_t*)rbuffer->r.b.user_ptr + transfer->box.x;
 
-	if (transfer->usage & PIPE_TRANSFER_DONTBLOCK) {
-		/* FIXME */
-	}
 	if (transfer->usage & PIPE_TRANSFER_WRITE) {
 		write = 1;
 	}
@@ -269,8 +268,27 @@ void r600_upload_const_buffer(struct r600_pipe_context *rctx, struct r600_resour
 
 		*rbuffer = NULL;
 
-		u_upload_data(rctx->vbuf_mgr->uploader, 0, size, ptr, const_offset,
-			      (struct pipe_resource**)rbuffer, &flushed);
+		if (R600_BIG_ENDIAN) {
+			uint32_t *tmpPtr;
+			unsigned i;
+
+			if (!(tmpPtr = malloc(size))) {
+				R600_ERR("Failed to allocate BE swap buffer.\n");
+				return;
+			}
+
+			for (i = 0; i < size / 4; ++i) {
+				tmpPtr[i] = bswap_32(((uint32_t *)ptr)[i]);
+			}
+
+			u_upload_data(rctx->vbuf_mgr->uploader, 0, size, tmpPtr, const_offset,
+				      (struct pipe_resource**)rbuffer, &flushed);
+
+			free(tmpPtr);
+		} else {
+			u_upload_data(rctx->vbuf_mgr->uploader, 0, size, ptr, const_offset,
+				      (struct pipe_resource**)rbuffer, &flushed);
+		}
 	} else {
 		*const_offset = 0;
 	}

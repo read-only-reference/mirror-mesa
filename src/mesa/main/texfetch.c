@@ -41,6 +41,8 @@
 #include "texcompress_rgtc.h"
 #include "texfetch.h"
 #include "teximage.h"
+#include "../../gallium/auxiliary/util/u_format_rgb9e5.h"
+#include "../../gallium/auxiliary/util/u_format_r11g11b10f.h"
 
 
 /**
@@ -631,6 +633,34 @@ texfetch_funcs[MESA_FORMAT_COUNT] =
       fetch_texel_3d_f_intensity_f16,
       store_texel_intensity_f16
    },
+   {
+      MESA_FORMAT_R_FLOAT32,
+      fetch_texel_1d_f_r_f32,
+      fetch_texel_2d_f_r_f32,
+      fetch_texel_3d_f_r_f32,
+      store_texel_r_f32
+   },
+   {
+      MESA_FORMAT_R_FLOAT16,
+      fetch_texel_1d_f_r_f16,
+      fetch_texel_2d_f_r_f16,
+      fetch_texel_3d_f_r_f16,
+      store_texel_r_f16
+   },
+   {
+      MESA_FORMAT_RG_FLOAT32,
+      fetch_texel_1d_f_rg_f32,
+      fetch_texel_2d_f_rg_f32,
+      fetch_texel_3d_f_rg_f32,
+      store_texel_rg_f32
+   },
+   {
+      MESA_FORMAT_RG_FLOAT16,
+      fetch_texel_1d_f_rg_f16,
+      fetch_texel_2d_f_rg_f16,
+      fetch_texel_3d_f_rg_f16,
+      store_texel_rg_f16
+   },
 
    /* non-normalized, signed int */
    {
@@ -870,6 +900,20 @@ texfetch_funcs[MESA_FORMAT_COUNT] =
       fetch_texel_3d_signed_i16,
       store_texel_signed_i16
    },
+   {
+      MESA_FORMAT_RGB9_E5_FLOAT,
+      fetch_texel_1d_rgb9_e5,
+      fetch_texel_2d_rgb9_e5,
+      fetch_texel_3d_rgb9_e5,
+      store_texel_rgb9_e5
+   },
+   {
+      MESA_FORMAT_R11_G11_B10_FLOAT,
+      fetch_texel_1d_r11_g11_b10f,
+      fetch_texel_2d_r11_g11_b10f,
+      fetch_texel_3d_r11_g11_b10f,
+      store_texel_r11_g11_b10f
+   }
 };
 
 
@@ -975,7 +1019,7 @@ _mesa_set_fetch_functions(struct gl_texture_image *texImage, GLuint dims)
 
    ASSERT(dims == 1 || dims == 2 || dims == 3);
 
-   if (texImage->TexObject->sRGBDecode == GL_SKIP_DECODE_EXT &&
+   if (texImage->TexObject->Sampler.sRGBDecode == GL_SKIP_DECODE_EXT &&
        _mesa_get_format_color_encoding(format) == GL_SRGB) {
       format = _mesa_get_srgb_format_linear(format);
    }
