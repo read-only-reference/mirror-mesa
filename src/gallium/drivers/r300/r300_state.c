@@ -549,6 +549,10 @@ static void*
         dsa->z_stencil_control |=
             (r300_translate_depth_stencil_function(state->depth.func) <<
                 R300_Z_FUNC_SHIFT);
+    } else {
+        /* We must enable depth test, otherwise occlusion queries won't work. */
+        dsa->z_buffer_control |= R300_Z_ENABLE;
+        dsa->z_stencil_control |= R300_ZS_ALWAYS;
     }
 
     /* Stencil buffer setup. */
@@ -632,11 +636,13 @@ static void*
     OUT_CB_REG(R500_FG_ALPHA_VALUE, dsa->alpha_value);
     END_CB;
 
+    /* We must enable depth test, otherwise occlusion queries won't work.
+     * We setup a dummy zbuffer to silent the CS checker, see emit_fb_state. */
     BEGIN_CB(dsa->cb_zb_no_readwrite, 10);
     OUT_CB_REG(R300_FG_ALPHA_FUNC, dsa->alpha_function);
     OUT_CB_REG_SEQ(R300_ZB_CNTL, 3);
-    OUT_CB(0);
-    OUT_CB(0);
+    OUT_CB(R300_Z_ENABLE);
+    OUT_CB(R300_ZS_ALWAYS);
     OUT_CB(0);
     OUT_CB_REG(R500_ZB_STENCILREFMASK_BF, 0);
     OUT_CB_REG(R500_FG_ALPHA_VALUE, dsa->alpha_value);
@@ -645,8 +651,8 @@ static void*
     BEGIN_CB(dsa->cb_fp16_zb_no_readwrite, 10);
     OUT_CB_REG(R300_FG_ALPHA_FUNC, dsa->alpha_function_fp16);
     OUT_CB_REG_SEQ(R300_ZB_CNTL, 3);
-    OUT_CB(0);
-    OUT_CB(0);
+    OUT_CB(R300_Z_ENABLE);
+    OUT_CB(R300_ZS_ALWAYS);
     OUT_CB(0);
     OUT_CB_REG(R500_ZB_STENCILREFMASK_BF, 0);
     OUT_CB_REG(R500_FG_ALPHA_VALUE, dsa->alpha_value);
@@ -768,7 +774,6 @@ void r300_mark_fb_state_dirty(struct r300_context *r300,
                               enum r300_fb_state_change change)
 {
     struct pipe_framebuffer_state *state = r300->fb_state.state;
-    boolean can_hyperz = r300->rws->get_value(r300->rws, RADEON_VID_CAN_HYPERZ);
 
     r300_mark_atom_dirty(r300, &r300->gpu_flush);
     r300_mark_atom_dirty(r300, &r300->fb_state);
@@ -793,12 +798,14 @@ void r300_mark_fb_state_dirty(struct r300_context *r300,
     /* Now compute the fb_state atom size. */
     r300->fb_state.size = 2 + (8 * state->nr_cbufs);
 
-    if (r300->cbzb_clear)
+    if (r300->cbzb_clear) {
         r300->fb_state.size += 10;
-    else if (state->zsbuf) {
+    } else if (state->zsbuf) {
         r300->fb_state.size += 10;
-        if (can_hyperz)
+        if (r300->hyperz_enabled)
             r300->fb_state.size += 8;
+    } else if (state->nr_cbufs) {
+        r300->fb_state.size += 10;
     }
 
     /* The size of the rest of atoms stays the same. */
@@ -813,6 +820,7 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
     struct pipe_framebuffer_state *old_state = r300->fb_state.state;
     unsigned max_width, max_height, i;
     uint32_t zbuffer_bpp = 0;
+    boolean unlock_zbuffer = FALSE;
 
     if (r300->screen->caps.is_r500) {
         max_width = max_height = 4096;
@@ -828,7 +836,7 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
         return;
     }
 
-    if (old_state->zsbuf && r300->zmask_in_use && !r300->hyperz_locked) {
+    if (old_state->zsbuf && r300->zmask_in_use && !r300->locked_zbuffer) {
         /* There is a zmask in use, what are we gonna do? */
         if (state->zsbuf) {
             if (!pipe_surface_equal(old_state->zsbuf, state->zsbuf)) {
@@ -838,10 +846,9 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
             }
         } else {
             /* We don't bind another zbuffer, so lock the current one. */
-            r300->hyperz_locked = TRUE;
             pipe_surface_reference(&r300->locked_zbuffer, old_state->zsbuf);
         }
-    } else if (r300->hyperz_locked && r300->locked_zbuffer) {
+    } else if (r300->locked_zbuffer) {
         /* We have a locked zbuffer now, what are we gonna do? */
         if (state->zsbuf) {
             if (!pipe_surface_equal(r300->locked_zbuffer, state->zsbuf)) {
@@ -851,11 +858,11 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
                 r300->hiz_in_use = FALSE;
             } else {
                 /* We are binding the locked zbuffer again, so unlock it. */
-                r300->hyperz_locked = FALSE;
+                unlock_zbuffer = TRUE;
             }
         }
     }
-    assert(state->zsbuf || r300->hyperz_locked || !r300->zmask_in_use);
+    assert(state->zsbuf || (r300->locked_zbuffer && !unlock_zbuffer) || !r300->zmask_in_use);
 
     /* Need to reset clamping or colormask. */
     r300_mark_atom_dirty(r300, &r300->blend_state);
@@ -870,7 +877,7 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
 
     util_copy_framebuffer_state(r300->fb_state.state, state);
 
-    if (!r300->hyperz_locked) {
+    if (unlock_zbuffer) {
         pipe_surface_reference(&r300->locked_zbuffer, NULL);
     }
 
@@ -1458,6 +1465,8 @@ r300_create_sampler_view(struct pipe_context *pipe,
     boolean dxtc_swizzle = r300_screen(pipe->screen)->caps.dxtc_swizzle;
 
     if (view) {
+        unsigned hwformat;
+
         view->base = *templ;
         view->base.reference.count = 1;
         view->base.context = pipe;
@@ -1469,11 +1478,19 @@ r300_create_sampler_view(struct pipe_context *pipe,
         view->swizzle[2] = templ->swizzle_b;
         view->swizzle[3] = templ->swizzle_a;
 
+        hwformat = r300_translate_texformat(templ->format,
+                                            view->swizzle,
+                                            is_r500,
+                                            dxtc_swizzle);
+
+        if (hwformat == ~0) {
+            fprintf(stderr, "r300: Ooops. Got unsupported format %s in %s.\n",
+                    util_format_short_name(templ->format), __func__);
+        }
+        assert(hwformat != ~0);
+
         view->format = tex->tx_format;
-        view->format.format1 |= r300_translate_texformat(templ->format,
-                                                         view->swizzle,
-                                                         is_r500,
-                                                         dxtc_swizzle);
+        view->format.format1 |= hwformat;
         if (is_r500) {
             view->format.format2 |= r500_tx_format_msb_bit(templ->format);
         }

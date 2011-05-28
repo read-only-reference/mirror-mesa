@@ -432,7 +432,16 @@ static void brw_vs_alloc_regs( struct brw_vs_compile *c )
    /* See emit_vertex_write() for where the VUE's overhead on top of the
     * attributes comes from.
     */
-   if (intel->gen >= 6) {
+   if (intel->gen >= 7) {
+      int header_regs = 2;
+      if (c->key.nr_userclip)
+	 header_regs += 2;
+
+      /* Each attribute is 16 bytes (1 vec4), so dividing by 4 gives us the
+       * number of 64-byte (512-bit) units.
+       */
+      c->prog_data.urb_entry_size = (attributes_in_vue + header_regs + 3) / 4;
+   } else if (intel->gen == 6) {
       int header_regs = 2;
       if (c->key.nr_userclip)
 	 header_regs += 2;
@@ -1039,7 +1048,6 @@ static void emit_lit_noalias( struct brw_vs_compile *c,
 			      struct brw_reg arg0 )
 {
    struct brw_compile *p = &c->func;
-   struct brw_instruction *if_insn;
    struct brw_reg tmp = dst;
    GLboolean need_tmp = (dst.file != BRW_GENERAL_REGISTER_FILE);
 
@@ -1055,7 +1063,7 @@ static void emit_lit_noalias( struct brw_vs_compile *c,
     * BRW_EXECUTE_1 for all comparisions.
     */
    brw_CMP(p, brw_null_reg(), BRW_CONDITIONAL_G, brw_swizzle1(arg0,0), brw_imm_f(0));
-   if_insn = brw_IF(p, BRW_EXECUTE_8);
+   brw_IF(p, BRW_EXECUTE_8);
    {
       brw_MOV(p, brw_writemask(dst, WRITEMASK_Y), brw_swizzle1(arg0,0));
 
@@ -1070,8 +1078,7 @@ static void emit_lit_noalias( struct brw_vs_compile *c,
 		 brw_swizzle1(arg0, 3),
 		 BRW_MATH_PRECISION_PARTIAL);      
    }
-
-   brw_ENDIF(p, if_insn);
+   brw_ENDIF(p);
 
    release_tmp(c, tmp);
 }
@@ -1553,6 +1560,26 @@ static void emit_swz( struct brw_vs_compile *c,
    }
 }
 
+static int
+align_interleaved_urb_mlen(struct brw_context *brw, int mlen)
+{
+   struct intel_context *intel = &brw->intel;
+
+   if (intel->gen >= 6) {
+      /* URB data written (does not include the message header reg) must
+       * be a multiple of 256 bits, or 2 VS registers.  See vol5c.5,
+       * section 5.4.3.2.2: URB_INTERLEAVED.
+       *
+       * URB entries are allocated on a multiple of 1024 bits, so an
+       * extra 128 bits written here to make the end align to 256 is
+       * no problem.
+       */
+      if ((mlen % 2) != 1)
+	 mlen++;
+   }
+
+   return mlen;
+}
 
 /**
  * Post-vertex-program processing.  Send the results to the URB.
@@ -1734,12 +1761,11 @@ static void emit_vertex_write( struct brw_vs_compile *c)
 
    eot = (c->first_overflow_output == 0);
 
-   msg_len = c->nr_outputs + 2 + len_vertex_header; 
-   if (intel->gen >= 6) {
-	   /* interleaved urb write message length for gen6 should be multiple of 2 */
-	   if ((msg_len % 2) != 0)
-		msg_len++;
-   }
+   /* Message header, plus VUE header, plus the (first set of) outputs. */
+   msg_len = 1 + len_vertex_header + c->nr_outputs;
+   msg_len = align_interleaved_urb_mlen(brw, msg_len);
+   /* Any outputs beyond BRW_MAX_MRF should be past first_overflow_output */
+   msg_len = MIN2(msg_len, (BRW_MAX_MRF - 1)),
 
    brw_urb_WRITE(p, 
 		 brw_null_reg(), /* dest */
@@ -1747,7 +1773,7 @@ static void emit_vertex_write( struct brw_vs_compile *c)
 		 c->r0,		/* src */
 		 0,		/* allocate */
 		 1,		/* used */
-		 MIN2(msg_len - 1, (BRW_MAX_MRF - 1)), /* msg len */
+		 msg_len,
 		 0,		/* response len */
 		 eot, 		/* eot */
 		 eot, 		/* writes complete */
@@ -1774,7 +1800,7 @@ static void emit_vertex_write( struct brw_vs_compile *c)
                     c->r0,          /* src */
                     0,              /* allocate */
                     1,              /* used */
-                    mrf,            /* msg len */
+                    align_interleaved_urb_mlen(brw, mrf),
                     0,              /* response len */
                     1,              /* eot */
                     1,              /* writes complete */
@@ -1862,8 +1888,8 @@ void brw_vs_emit(struct brw_vs_compile *c )
    struct brw_context *brw = p->brw;
    struct intel_context *intel = &brw->intel;
    const GLuint nr_insns = c->vp->program.Base.NumInstructions;
-   GLuint insn, if_depth = 0, loop_depth = 0;
-   struct brw_instruction *if_inst[MAX_IF_DEPTH], *loop_inst[MAX_LOOP_DEPTH] = { 0 };
+   GLuint insn, loop_depth = 0;
+   struct brw_instruction *loop_inst[MAX_LOOP_DEPTH] = { 0 };
    int if_depth_in_loop[MAX_LOOP_DEPTH];
    const struct brw_indirect stack_index = brw_indirect(0, 0);   
    GLuint index;
@@ -2083,23 +2109,20 @@ void brw_vs_emit(struct brw_vs_compile *c )
       case OPCODE_XPD:
 	 emit_xpd(p, dst, args[0], args[1]);
 	 break;
-      case OPCODE_IF:
-	 assert(if_depth < MAX_IF_DEPTH);
-	 if_inst[if_depth] = brw_IF(p, BRW_EXECUTE_8);
+      case OPCODE_IF: {
+	 struct brw_instruction *if_inst = brw_IF(p, BRW_EXECUTE_8);
 	 /* Note that brw_IF smashes the predicate_control field. */
-	 if_inst[if_depth]->header.predicate_control = get_predicate(inst);
+	 if_inst->header.predicate_control = get_predicate(inst);
 	 if_depth_in_loop[loop_depth]++;
-	 if_depth++;
 	 break;
+      }
       case OPCODE_ELSE:
 	 clear_current_const(c);
-	 assert(if_depth > 0);
-	 if_inst[if_depth-1] = brw_ELSE(p, if_inst[if_depth-1]);
+	 brw_ELSE(p);
 	 break;
       case OPCODE_ENDIF:
 	 clear_current_const(c);
-         assert(if_depth > 0);
-	 brw_ENDIF(p, if_inst[--if_depth]);
+	 brw_ENDIF(p);
 	 if_depth_in_loop[loop_depth]--;
 	 break;			
       case OPCODE_BGNLOOP:

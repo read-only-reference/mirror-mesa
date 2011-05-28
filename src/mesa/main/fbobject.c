@@ -418,18 +418,16 @@ _mesa_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
          case GL_RG:
             fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED;
             return;
-         case GL_RGB:
+
+         default:
             switch (rb->Format) {
+            /* XXX This list is likely incomplete. */
             case MESA_FORMAT_RGB9_E5_FLOAT:
                fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED;
                return;
             default:;
+               /* render buffer format is supported by software rendering */
             }
-            break;
-
-         default:
-            /* render buffer format is supported by software rendering */
-            ;
          }
       }
    }
@@ -797,7 +795,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
    }
 
 #if FEATURE_GL
-   if (ctx->API == API_OPENGL) {
+   if (ctx->API == API_OPENGL && !ctx->Extensions.ARB_ES2_compatibility) {
       /* Check that all DrawBuffers are present */
       for (j = 0; j < ctx->Const.MaxDrawBuffers; j++) {
 	 if (fb->ColorDrawBuffer[j] != GL_NONE) {

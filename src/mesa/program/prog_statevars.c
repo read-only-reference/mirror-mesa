@@ -459,7 +459,7 @@ _mesa_fetch_state(struct gl_context *ctx, const gl_state_index state[],
          value[0] = (ctx->Fog.End == ctx->Fog.Start)
             ? 1.0f : (GLfloat)(-1.0F / (ctx->Fog.End - ctx->Fog.Start));
          value[1] = ctx->Fog.End * -value[0];
-         value[2] = (GLfloat)(ctx->Fog.Density * ONE_DIV_LN2);
+         value[2] = (GLfloat)(ctx->Fog.Density * M_LOG2E); /* M_LOG2E == 1/ln(2) */
          value[3] = (GLfloat)(ctx->Fog.Density * ONE_DIV_SQRT_LN2);
          return;
 
@@ -602,11 +602,11 @@ _mesa_fetch_state(struct gl_context *ctx, const gl_state_index state[],
             value[0] = 1.0F;
             value[1] = 0.0F;
             value[2] = -1.0F;
-            value[3] = (GLfloat) (ctx->DrawBuffer->Height - 1);
+            value[3] = (GLfloat) ctx->DrawBuffer->Height;
          } else {
             /* Flipping Y upside down (XY) followed by identity (ZW). */
             value[0] = -1.0F;
-            value[1] = (GLfloat) (ctx->DrawBuffer->Height - 1);
+            value[1] = (GLfloat) ctx->DrawBuffer->Height;
             value[2] = 1.0F;
             value[3] = 0.0F;
          }

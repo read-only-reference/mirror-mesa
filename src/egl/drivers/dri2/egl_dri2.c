@@ -200,13 +200,10 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
       else if (!double_buffer && !conf->dri_single_config)
          conf->dri_single_config = dri_config;
       else
-         /* a similar config type is already added
-          * => attach it as new config
-          */
-         num_configs = 0;
+         /* a similar config type is already added (unlikely) => discard */
+         return NULL;
    }
-
-   if (num_configs == 0) {
+   else if (num_configs == 0) {
       conf = malloc(sizeof *conf);
       if (conf == NULL)
          return NULL;
@@ -223,6 +220,10 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
       conf->base.ConfigID = config_id;
 
       _eglLinkConfig(&conf->base);
+   }
+   else {
+      assert(0);
+      return NULL;
    }
 
    conf->base.SurfaceType |= surface_type & (!double_buffer ? EGL_PIXMAP_BIT:
@@ -487,10 +488,12 @@ dri2_initialize(_EGLDriver *drv, _EGLDisplay *disp)
       return EGL_FALSE;
 
    switch (disp->Platform) {
+#ifdef HAVE_X11_PLATFORM
    case _EGL_PLATFORM_X11:
       if (disp->Options.TestOnly)
          return EGL_TRUE;
       return dri2_initialize_x11(drv, disp);
+#endif
 
 #ifdef HAVE_LIBUDEV
    case _EGL_PLATFORM_DRM:
@@ -525,8 +528,10 @@ dri2_terminate(_EGLDriver *drv, _EGLDisplay *disp)
    if (dri2_dpy->fd)
       close(dri2_dpy->fd);
    dlclose(dri2_dpy->driver);
+#ifdef HAVE_X11_PLATFORM
    if (disp->PlatformDisplay == NULL)
       xcb_disconnect(dri2_dpy->conn);
+#endif
    free(dri2_dpy);
    disp->DriverData = NULL;
 
@@ -835,7 +840,7 @@ dri2_create_image_khr_renderbuffer(_EGLDisplay *disp, _EGLContext *ctx,
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri2_egl_context *dri2_ctx = dri2_egl_context(ctx);
    struct dri2_egl_image *dri2_img;
-   GLuint renderbuffer = (GLuint) buffer;
+   GLuint renderbuffer = (GLuint) (uintptr_t) buffer;
 
    if (renderbuffer == 0) {
       _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
@@ -870,7 +875,7 @@ dri2_create_image_mesa_drm_buffer(_EGLDisplay *disp, _EGLContext *ctx,
 
    (void) ctx;
 
-   name = (EGLint) buffer;
+   name = (EGLint) (uintptr_t) buffer;
 
    err = _eglParseImageAttribList(&attrs, disp, attr_list);
    if (err != EGL_SUCCESS)
@@ -922,14 +927,12 @@ dri2_create_image_mesa_drm_buffer(_EGLDisplay *disp, _EGLContext *ctx,
    return &dri2_img->base;
 }
 
-static EGLBoolean
-dri2_export_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp, _EGLImage *img,
-			  EGLint *name, EGLint *handle, EGLint *stride);
-
+#ifdef HAVE_WAYLAND_PLATFORM
 static _EGLImage *
 dri2_reference_drm_image(_EGLDisplay *disp, _EGLContext *ctx,
-			 _EGLImage *image, EGLint width, EGLint height)
+			 __DRIimage *dri_image, EGLint width, EGLint height)
 {
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    EGLint attr_list[] = {
 		EGL_WIDTH,		0,
 		EGL_HEIGHT,		0,
@@ -939,8 +942,8 @@ dri2_reference_drm_image(_EGLDisplay *disp, _EGLContext *ctx,
    };
    EGLint name, stride;
    
-   dri2_export_drm_image_mesa(disp->Driver, disp, image,
-			      &name, NULL, &stride);
+   dri2_dpy->image->queryImage(dri_image, __DRI_IMAGE_ATTRIB_NAME, &name);
+   dri2_dpy->image->queryImage(dri_image, __DRI_IMAGE_ATTRIB_STRIDE, &stride);
 
    attr_list[1] = width;
    attr_list[3] = height;
@@ -951,19 +954,21 @@ dri2_reference_drm_image(_EGLDisplay *disp, _EGLContext *ctx,
 					    attr_list);
 }
 
-#ifdef HAVE_WAYLAND_PLATFORM
 static _EGLImage *
 dri2_create_image_wayland_wl_buffer(_EGLDisplay *disp, _EGLContext *ctx,
-				    EGLClientBuffer buffer,
+				    EGLClientBuffer _buffer,
 				    const EGLint *attr_list)
 {
-	struct wl_drm_buffer *wl_drm_buffer = (struct wl_drm_buffer *) buffer;
+   struct wl_buffer *buffer = (struct wl_buffer *) _buffer;
+   (void) attr_list;
 
-        (void) attr_list;
+   if (!wayland_buffer_is_drm(buffer))
+       return NULL;
 
-	return dri2_reference_drm_image(disp, ctx, wl_drm_buffer->image,
-					wl_drm_buffer->buffer.width,
-					wl_drm_buffer->buffer.height);
+   return dri2_reference_drm_image(disp, ctx,
+                                   wayland_drm_buffer_get_buffer(buffer),
+                                   buffer->width,
+                                   buffer->height);
 }
 #endif
 
@@ -1054,7 +1059,8 @@ dri2_create_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp,
 
    valid_mask =
       EGL_DRM_BUFFER_USE_SCANOUT_MESA |
-      EGL_DRM_BUFFER_USE_SHARE_MESA; 
+      EGL_DRM_BUFFER_USE_SHARE_MESA |
+      EGL_DRM_BUFFER_USE_CURSOR_MESA;
    if (attrs.DRMBufferUseMESA & ~valid_mask) {
       _eglLog(_EGL_WARNING, "bad image use bit 0x%04x",
             attrs.DRMBufferUseMESA & ~valid_mask);
@@ -1066,6 +1072,8 @@ dri2_create_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp,
       dri_use |= __DRI_IMAGE_USE_SHARE;
    if (attrs.DRMBufferUseMESA & EGL_DRM_BUFFER_USE_SCANOUT_MESA)
       dri_use |= __DRI_IMAGE_USE_SCANOUT;
+   if (attrs.DRMBufferUseMESA & EGL_DRM_BUFFER_USE_CURSOR_MESA)
+      dri_use |= __DRI_IMAGE_USE_CURSOR;
 
    dri2_img->dri_image = 
       dri2_dpy->image->createImage(dri2_dpy->dri_screen,
@@ -1112,6 +1120,41 @@ dri2_export_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp, _EGLImage *img,
 }
 
 #ifdef HAVE_WAYLAND_PLATFORM
+
+static void *
+dri2_wl_reference_buffer(void *user_data, uint32_t name,
+			 int32_t width, int32_t height,
+			 uint32_t stride, struct wl_visual *visual)
+{
+   _EGLDisplay *disp = user_data;
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   __DRIimage *image;
+
+   image = dri2_dpy->image->createImageFromName(dri2_dpy->dri_screen,
+						width, height, 
+						__DRI_IMAGE_FORMAT_ARGB8888,
+						name, stride / 4,
+						NULL);
+
+   return image;
+}
+
+static void
+dri2_wl_release_buffer(void *user_data, void *buffer)
+{
+   _EGLDisplay *disp = user_data;
+   __DRIimage *image = buffer;
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+
+   dri2_dpy->image->destroyImage(image);
+}
+
+static struct wayland_drm_callbacks wl_drm_callbacks = {
+	.authenticate = NULL,
+	.reference_buffer = dri2_wl_reference_buffer,
+	.release_buffer = dri2_wl_release_buffer
+};
+
 static EGLBoolean
 dri2_bind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
 			     struct wl_display *wl_dpy)
@@ -1123,10 +1166,12 @@ dri2_bind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
    if (dri2_dpy->wl_server_drm)
 	   return EGL_FALSE;
 
+   wl_drm_callbacks.authenticate =
+      (int(*)(void *, uint32_t)) dri2_dpy->authenticate;
+
    dri2_dpy->wl_server_drm =
-	   wayland_drm_init(wl_dpy, disp,
-			    dri2_dpy->authenticate,
-			    dri2_dpy->device_name);
+	   wayland_drm_init(wl_dpy, dri2_dpy->device_name,
+                            &wl_drm_callbacks, disp);
 
    if (!dri2_dpy->wl_server_drm)
 	   return EGL_FALSE;
@@ -1145,7 +1190,7 @@ dri2_unbind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
    if (!dri2_dpy->wl_server_drm)
 	   return EGL_FALSE;
 
-   wayland_drm_destroy(dri2_dpy->wl_server_drm);
+   wayland_drm_uninit(dri2_dpy->wl_server_drm);
    dri2_dpy->wl_server_drm = NULL;
 
    return EGL_TRUE;

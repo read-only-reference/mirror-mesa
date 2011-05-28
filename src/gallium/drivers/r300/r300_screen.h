@@ -88,7 +88,7 @@ radeon_winsys(struct pipe_screen *screen) {
 #define DBG_TEX         (1 << 5)
 #define DBG_TEXALLOC    (1 << 6)
 #define DBG_RS          (1 << 7)
-#define DBG_FALL        (1 << 8)
+/* gap - fill it */
 #define DBG_FB          (1 << 9)
 #define DBG_RS_BLOCK    (1 << 10)
 #define DBG_CBZB        (1 << 11)
@@ -100,7 +100,7 @@ radeon_winsys(struct pipe_screen *screen) {
 #define DBG_ANISOHQ     (1 << 16)
 #define DBG_NO_TILING   (1 << 17)
 #define DBG_NO_IMMD     (1 << 18)
-#define DBG_FAKE_OCC    (1 << 19)
+/* gap - fill it */
 #define DBG_NO_OPT      (1 << 20)
 #define DBG_NO_CBZB     (1 << 21)
 #define DBG_NO_ZMASK    (1 << 22)

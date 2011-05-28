@@ -240,6 +240,14 @@ _mesa_glsl_process_extension(const char *name, YYLTYPE *name_locp,
       state->EXT_texture_array_warn = (ext_mode == extension_warn);
 
       unsupported = !state->extensions->EXT_texture_array;
+   } else if (strcmp(name, "GL_ARB_shader_texture_lod") == 0) {
+      /* Force ARB_texture_rectangle to be on so sampler2DRects are defined */
+      state->ARB_texture_rectangle_enable = true;
+
+      state->ARB_shader_texture_lod_enable = (ext_mode != extension_disable);
+      state->ARB_shader_texture_lod_warn = (ext_mode == extension_warn);
+
+      unsupported = !state->extensions->ARB_shader_texture_lod;
    } else if (strcmp(name, "GL_ARB_shader_stencil_export") == 0) {
       state->ARB_shader_stencil_export_enable = (ext_mode != extension_disable);
       state->ARB_shader_stencil_export_warn = (ext_mode == extension_warn);
@@ -255,6 +263,16 @@ _mesa_glsl_process_extension(const char *name, YYLTYPE *name_locp,
       state->AMD_conservative_depth_enable = (ext_mode != extension_disable);
       state->AMD_conservative_depth_warn = (ext_mode == extension_warn);
       unsupported = !state->extensions->AMD_conservative_depth;
+   } else if (strcmp(name, "GL_AMD_shader_stencil_export") == 0) {
+      state->AMD_shader_stencil_export_enable = (ext_mode != extension_disable);
+      state->AMD_shader_stencil_export_warn = (ext_mode == extension_warn);
+
+      /* This extension is only supported in fragment shaders.
+       * Both the ARB and AMD variants share the same ARB flag
+       * in gl_extensions.
+       */
+      unsupported = (state->target != fragment_shader)
+	 || !state->extensions->ARB_shader_stencil_export;
    } else if (strcmp(name, "GL_OES_texture_3D") == 0 && state->es_shader) {
       state->OES_texture_3D_enable = (ext_mode != extension_disable);
       state->OES_texture_3D_warn = (ext_mode == extension_warn);

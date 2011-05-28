@@ -70,9 +70,9 @@ static void copy_propagate_scan_read(void * data, struct rc_instruction * inst,
 	if(!rc_inst_can_use_presub(inst,
 				reader_data->Writer->U.I.PreSub.Opcode,
 				rc_swizzle_to_writemask(src->Swizzle),
-				*src,
-				reader_data->Writer->U.I.PreSub.SrcReg[0],
-				reader_data->Writer->U.I.PreSub.SrcReg[1])) {
+				src,
+				&reader_data->Writer->U.I.PreSub.SrcReg[0],
+				&reader_data->Writer->U.I.PreSub.SrcReg[1])) {
 		reader_data->Abort = 1;
 		return;
 	}
@@ -91,6 +91,8 @@ static void copy_propagate_scan_read(void * data, struct rc_instruction * inst,
 				(inst->U.I.Opcode == RC_OPCODE_TEX ||
 				inst->U.I.Opcode == RC_OPCODE_TXB ||
 				inst->U.I.Opcode == RC_OPCODE_TXP ||
+				inst->U.I.Opcode == RC_OPCODE_TXD ||
+				inst->U.I.Opcode == RC_OPCODE_TXL ||
 				inst->U.I.Opcode == RC_OPCODE_KIL)){
 		reader_data->Abort = 1;
 		return;
@@ -435,9 +437,9 @@ static void presub_scan_read(
 
 	if (!rc_inst_can_use_presub(inst, *presub_opcode,
 			reader_data->Writer->U.I.DstReg.WriteMask,
-			*src,
-			reader_data->Writer->U.I.SrcReg[0],
-			reader_data->Writer->U.I.SrcReg[1])) {
+			src,
+			&reader_data->Writer->U.I.SrcReg[0],
+			&reader_data->Writer->U.I.SrcReg[1])) {
 		reader_data->Abort = 1;
 		return;
 	}
@@ -515,8 +517,11 @@ static int is_presub_candidate(
 
 	assert(inst->U.I.Opcode == RC_OPCODE_ADD);
 
-	if (inst->U.I.PreSub.Opcode != RC_PRESUB_NONE || inst->U.I.SaturateMode)
+	if (inst->U.I.PreSub.Opcode != RC_PRESUB_NONE
+			|| inst->U.I.SaturateMode
+			|| inst->U.I.WriteALUResult) {
 		return 0;
+	}
 
 	/* If both sources use a constant swizzle, then we can't convert it to
 	 * a presubtract operation.  In fact for the ADD and SUB presubtract
@@ -621,12 +626,10 @@ static int peephole_add_presub_inv(
 	struct radeon_compiler * c,
 	struct rc_instruction * inst_add)
 {
-	unsigned int i, swz, mask;
+	unsigned int i, swz;
 
 	if (!is_presub_candidate(c, inst_add))
 		return 0;
-
-	mask = inst_add->U.I.DstReg.WriteMask;
 
 	/* Check if src0 is 1. */
 	/* XXX It would be nice to use is_src_uniform_constant here, but that

@@ -195,6 +195,10 @@ print """
 #include "main/api_exec.h"
 
 #if FEATURE_%s
+
+#ifndef GLAPIENTRYP
+#define GLAPIENTRYP GL_APIENTRYP
+#endif
 """ % (versionHeader, versionExtHeader, shortname.upper())
 
 # Everyone needs these types.
@@ -682,10 +686,6 @@ print """
 
 #define need_MESA_remap_table
 #include "%sapi/main/remap_helper.h"
-
-/* force SET_* macros to use the local remap table */
-#define driDispatchRemapTable remap_table
-static int remap_table[driDispatchRemapTable_size];
 
 static void
 init_remap_table(void)

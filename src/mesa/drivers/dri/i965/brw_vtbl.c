@@ -46,6 +46,8 @@
 #include "brw_vs.h"
 #include "brw_wm.h"
 
+#include "../glsl/ralloc.h"
+
 static void
 dri_bo_release(drm_intel_bo **bo)
 {
@@ -64,15 +66,7 @@ static void brw_destroy_context( struct intel_context *intel )
    brw_destroy_state(brw);
    brw_draw_destroy( brw );
    brw_clear_validated_bos(brw);
-   if (brw->wm.compile_data) {
-      free(brw->wm.compile_data->instruction);
-      free(brw->wm.compile_data->vreg);
-      free(brw->wm.compile_data->refs);
-      free(brw->wm.compile_data->prog_instructions);
-      free(brw->wm.compile_data);
-   }
-
-   intel_region_release(&brw->state.depth_region);
+   ralloc_free(brw->wm.compile_data);
 
    dri_bo_release(&brw->curbe.curbe_bo);
    dri_bo_release(&brw->vs.prog_bo);
@@ -97,13 +91,6 @@ static void brw_set_draw_region( struct intel_context *intel,
                                  struct intel_region *depth_region,
                                  GLuint num_color_regions)
 {
-   struct brw_context *brw = brw_context(&intel->ctx);
-
-   if (brw->state.depth_region != depth_region) {
-      brw->state.dirty.brw |= BRW_NEW_DEPTH_BUFFER;
-      intel_region_release(&brw->state.depth_region);
-      intel_region_reference(&brw->state.depth_region, depth_region);
-   }
 }
 
 
@@ -149,6 +136,16 @@ static void brw_invalidate_state( struct intel_context *intel, GLuint new_state 
    /* nothing */
 }
 
+/**
+ * \see intel_context.vtbl.is_hiz_depth_format
+ */
+static bool brw_is_hiz_depth_format(struct intel_context *intel,
+                                    gl_format format)
+{
+   /* In the future, this will support Z_FLOAT32. */
+   return intel->has_hiz && (format == MESA_FORMAT_X8_Z24);
+}
+
 
 void brwInitVtbl( struct brw_context *brw )
 {
@@ -165,4 +162,5 @@ void brwInitVtbl( struct brw_context *brw )
    brw->intel.vtbl.set_draw_region = brw_set_draw_region;
    brw->intel.vtbl.debug_batch = brw_debug_batch;
    brw->intel.vtbl.render_target_supported = brw_render_target_supported;
+   brw->intel.vtbl.is_hiz_depth_format = brw_is_hiz_depth_format;
 }

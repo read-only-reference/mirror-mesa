@@ -1106,6 +1106,7 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
     case PCI_CHIP_CEDAR_68E8:
     case PCI_CHIP_CEDAR_68E9:
     case PCI_CHIP_CEDAR_68F1:
+    case PCI_CHIP_CEDAR_68F2:
     case PCI_CHIP_CEDAR_68F8:
     case PCI_CHIP_CEDAR_68F9:
     case PCI_CHIP_CEDAR_68FE:
@@ -1132,7 +1133,9 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
     case PCI_CHIP_JUNIPER_68B0:
     case PCI_CHIP_JUNIPER_68B8:
     case PCI_CHIP_JUNIPER_68B9:
+    case PCI_CHIP_JUNIPER_68BA:
     case PCI_CHIP_JUNIPER_68BE:
+    case PCI_CHIP_JUNIPER_68BF:
        screen->chip_family = CHIP_FAMILY_JUNIPER;
        screen->chip_flags = RADEON_CHIPSET_TCL;
        break;
@@ -1143,6 +1146,7 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
     case PCI_CHIP_CYPRESS_688A:
     case PCI_CHIP_CYPRESS_6898:
     case PCI_CHIP_CYPRESS_6899:
+    case PCI_CHIP_CYPRESS_689B:
     case PCI_CHIP_CYPRESS_689E:
        screen->chip_family = CHIP_FAMILY_CYPRESS;
        screen->chip_flags = RADEON_CHIPSET_TCL;
@@ -1164,6 +1168,25 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
        screen->chip_flags = RADEON_CHIPSET_TCL;
        break;
 
+    case PCI_CHIP_SUMO_9640:
+    case PCI_CHIP_SUMO_9641:
+    case PCI_CHIP_SUMO_9647:
+    case PCI_CHIP_SUMO_9648:
+    case PCI_CHIP_SUMO_964A:
+    case PCI_CHIP_SUMO_964E:
+    case PCI_CHIP_SUMO_964F:
+       screen->chip_family = CHIP_FAMILY_SUMO;
+       screen->chip_flags = RADEON_CHIPSET_TCL;
+       break;
+
+    case PCI_CHIP_SUMO2_9642:
+    case PCI_CHIP_SUMO2_9643:
+    case PCI_CHIP_SUMO2_9644:
+    case PCI_CHIP_SUMO2_9645:
+       screen->chip_family = CHIP_FAMILY_SUMO2;
+       screen->chip_flags = RADEON_CHIPSET_TCL;
+       break;
+
    case PCI_CHIP_BARTS_6720:
    case PCI_CHIP_BARTS_6721:
    case PCI_CHIP_BARTS_6722:
@@ -1176,6 +1199,7 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
    case PCI_CHIP_BARTS_6729:
    case PCI_CHIP_BARTS_6738:
    case PCI_CHIP_BARTS_6739:
+   case PCI_CHIP_BARTS_673E:
        screen->chip_family = CHIP_FAMILY_BARTS;
        screen->chip_flags = RADEON_CHIPSET_TCL;
        break;

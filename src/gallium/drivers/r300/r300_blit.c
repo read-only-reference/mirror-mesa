@@ -30,14 +30,24 @@
 
 enum r300_blitter_op /* bitmask */
 {
-    R300_CLEAR         = 1,
-    R300_CLEAR_SURFACE = 2,
-    R300_COPY          = 4
+    R300_STOP_QUERY         = 1,
+    R300_SAVE_TEXTURES      = 2,
+    R300_SAVE_FRAMEBUFFER   = 4,
+    R300_IGNORE_RENDER_COND = 8,
+
+    R300_CLEAR         = R300_STOP_QUERY,
+
+    R300_CLEAR_SURFACE = R300_STOP_QUERY | R300_SAVE_FRAMEBUFFER,
+
+    R300_COPY          = R300_STOP_QUERY | R300_SAVE_FRAMEBUFFER |
+                         R300_SAVE_TEXTURES | R300_IGNORE_RENDER_COND,
+
+    R300_DECOMPRESS    = R300_STOP_QUERY | R300_IGNORE_RENDER_COND,
 };
 
 static void r300_blitter_begin(struct r300_context* r300, enum r300_blitter_op op)
 {
-    if (r300->query_current) {
+    if ((op & R300_STOP_QUERY) && r300->query_current) {
         r300->blitter_saved_query = r300->query_current;
         r300_stop_query(r300);
     }
@@ -57,11 +67,11 @@ static void r300_blitter_begin(struct r300_context* r300, enum r300_blitter_op o
     util_blitter_save_vertex_buffers(r300->blitter, r300->vbuf_mgr->nr_vertex_buffers,
                                      r300->vbuf_mgr->vertex_buffer);
 
-    if (op & (R300_CLEAR_SURFACE | R300_COPY)) {
+    if (op & R300_SAVE_FRAMEBUFFER) {
         util_blitter_save_framebuffer(r300->blitter, r300->fb_state.state);
     }
 
-    if (op & R300_COPY) {
+    if (op & R300_SAVE_TEXTURES) {
         struct r300_textures_state* state =
             (struct r300_textures_state*)r300->textures_state.state;
 
@@ -73,6 +83,14 @@ static void r300_blitter_begin(struct r300_context* r300, enum r300_blitter_op o
             r300->blitter, state->sampler_view_count,
             (struct pipe_sampler_view**)state->sampler_views);
     }
+
+    if (op & R300_IGNORE_RENDER_COND) {
+        /* Save the flag. */
+        r300->blitter_saved_skip_rendering = r300->skip_rendering+1;
+        r300->skip_rendering = FALSE;
+    } else {
+        r300->blitter_saved_skip_rendering = 0;
+    }
 }
 
 static void r300_blitter_end(struct r300_context *r300)
@@ -80,6 +98,11 @@ static void r300_blitter_end(struct r300_context *r300)
     if (r300->blitter_saved_query) {
         r300_resume_query(r300, r300->blitter_saved_query);
         r300->blitter_saved_query = NULL;
+    }
+
+    if (r300->blitter_saved_skip_rendering) {
+        /* Restore the flag. */
+        r300->skip_rendering = r300->blitter_saved_skip_rendering-1;
     }
 }
 
@@ -113,7 +136,7 @@ static boolean r300_fast_zclear_allowed(struct r300_context *r300)
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
 
-    return r300_resource(fb->zsbuf->texture)->tex.zmask_dwords[fb->zsbuf->u.tex.level];
+    return r300_resource(fb->zsbuf->texture)->tex.zmask_dwords[fb->zsbuf->u.tex.level] != 0;
 }
 
 static boolean r300_hiz_clear_allowed(struct r300_context *r300)
@@ -121,7 +144,7 @@ static boolean r300_hiz_clear_allowed(struct r300_context *r300)
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
 
-    return r300_resource(fb->zsbuf->texture)->tex.hiz_dwords[fb->zsbuf->u.tex.level];
+    return r300_resource(fb->zsbuf->texture)->tex.hiz_dwords[fb->zsbuf->u.tex.level] != 0;
 }
 
 static uint32_t r300_depth_clear_value(enum pipe_format format,
@@ -206,23 +229,50 @@ static void r300_clear(struct pipe_context* pipe,
         (struct r300_hyperz_state*)r300->hyperz_state.state;
     uint32_t width = fb->width;
     uint32_t height = fb->height;
-    boolean can_hyperz = r300->rws->get_value(r300->rws, RADEON_VID_CAN_HYPERZ);
     uint32_t hyperz_dcv = hyperz->zb_depthclearvalue;
 
     /* Enable fast Z clear.
      * The zbuffer must be in micro-tiled mode, otherwise it locks up. */
-    if ((buffers & PIPE_CLEAR_DEPTHSTENCIL) && can_hyperz) {
-        if (r300_fast_zclear_allowed(r300)) {
-            hyperz_dcv = hyperz->zb_depthclearvalue =
-                r300_depth_clear_value(fb->zsbuf->format, depth, stencil);
+    if (buffers & PIPE_CLEAR_DEPTHSTENCIL) {
+        boolean zmask_clear, hiz_clear;
 
-            r300_mark_atom_dirty(r300, &r300->zmask_clear);
-            buffers &= ~PIPE_CLEAR_DEPTHSTENCIL;
-        }
+        zmask_clear = r300_fast_zclear_allowed(r300);
+        hiz_clear = r300_hiz_clear_allowed(r300);
 
-        if (r300_hiz_clear_allowed(r300)) {
-            r300->hiz_clear_value = r300_hiz_clear_value(depth);
-            r300_mark_atom_dirty(r300, &r300->hiz_clear);
+        /* If we need Hyper-Z. */
+        if (zmask_clear || hiz_clear) {
+            r300->num_z_clears++;
+
+            /* Try to obtain the access to Hyper-Z buffers if we don't have one. */
+            if (!r300->hyperz_enabled) {
+                r300->hyperz_enabled =
+                    r300->rws->cs_request_feature(r300->cs,
+                                                RADEON_FID_HYPERZ_RAM_ACCESS,
+                                                TRUE);
+                if (r300->hyperz_enabled) {
+                   /* Need to emit HyperZ buffer regs for the first time. */
+                   r300_mark_fb_state_dirty(r300, R300_CHANGED_HYPERZ_FLAG);
+                }
+            }
+
+            /* Setup Hyper-Z clears. */
+            if (r300->hyperz_enabled) {
+                DBG(r300, DBG_HYPERZ, "r300: Clear memory: %s%s\n",
+                    zmask_clear ? "ZMASK " : "", hiz_clear ? "HIZ" : "");
+
+                if (zmask_clear) {
+                    hyperz_dcv = hyperz->zb_depthclearvalue =
+                        r300_depth_clear_value(fb->zsbuf->format, depth, stencil);
+
+                    r300_mark_atom_dirty(r300, &r300->zmask_clear);
+                    buffers &= ~PIPE_CLEAR_DEPTHSTENCIL;
+                }
+
+                if (hiz_clear) {
+                    r300->hiz_clear_value = r300_hiz_clear_value(depth);
+                    r300_mark_atom_dirty(r300, &r300->hiz_clear);
+                }
+            }
         }
     }
 
@@ -323,7 +373,7 @@ static void r300_clear_depth_stencil(struct pipe_context *pipe,
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
 
-    if (r300->zmask_in_use && !r300->hyperz_locked) {
+    if (r300->zmask_in_use && !r300->locked_zbuffer) {
         if (fb->zsbuf->texture == dst->texture) {
             r300_decompress_zmask(r300);
         }
@@ -341,13 +391,13 @@ void r300_decompress_zmask(struct r300_context *r300)
     struct pipe_framebuffer_state *fb =
         (struct pipe_framebuffer_state*)r300->fb_state.state;
 
-    if (!r300->zmask_in_use || r300->hyperz_locked)
+    if (!r300->zmask_in_use || r300->locked_zbuffer)
         return;
 
     r300->zmask_decompress = TRUE;
     r300_mark_atom_dirty(r300, &r300->hyperz_state);
 
-    r300_blitter_begin(r300, R300_CLEAR);
+    r300_blitter_begin(r300, R300_DECOMPRESS);
     util_blitter_clear_depth_custom(r300->blitter, fb->width, fb->height, 0,
                                     r300->dsa_decompress_zmask);
     r300_blitter_end(r300);
@@ -377,6 +427,8 @@ void r300_decompress_zmask_locked(struct r300_context *r300)
     r300_decompress_zmask_locked_unsafe(r300);
     r300->context.set_framebuffer_state(&r300->context, &saved_fb);
     util_unreference_framebuffer_state(&saved_fb);
+
+    pipe_surface_reference(&r300->locked_zbuffer, NULL);
 }
 
 /* Copy a block of pixels from one surface to another using HW. */
@@ -423,7 +475,7 @@ static void r300_resource_copy_region(struct pipe_context *pipe,
         return;
     }
 
-    if (r300->zmask_in_use && !r300->hyperz_locked) {
+    if (r300->zmask_in_use && !r300->locked_zbuffer) {
         if (fb->zsbuf->texture == src ||
             fb->zsbuf->texture == dst) {
             r300_decompress_zmask(r300);

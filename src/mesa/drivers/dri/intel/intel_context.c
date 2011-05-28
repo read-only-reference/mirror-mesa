@@ -173,6 +173,17 @@ intelGetString(struct gl_context * ctx, GLenum name)
       case PCI_CHIP_SANDYBRIDGE_S:
 	 chipset = "Intel(R) Sandybridge Server";
 	 break;
+      case PCI_CHIP_IVYBRIDGE_GT1:
+      case PCI_CHIP_IVYBRIDGE_GT2:
+	 chipset = "Intel(R) Ivybridge Desktop";
+	 break;
+      case PCI_CHIP_IVYBRIDGE_M_GT1:
+      case PCI_CHIP_IVYBRIDGE_M_GT2:
+	 chipset = "Intel(R) Ivybridge Mobile";
+	 break;
+      case PCI_CHIP_IVYBRIDGE_S_GT1:
+	 chipset = "Intel(R) Ivybridge Server";
+	 break;
       default:
          chipset = "Unknown Intel Chipset";
          break;
@@ -609,6 +620,53 @@ intelInitDriverFunctions(struct dd_function_table *functions)
    intel_init_syncobj_functions(functions);
 }
 
+/**
+ * Override intel->has_hiz with environment variable INTEL_HIZ.
+ *
+ * Valid values for INTEL_HIZ are "0" and "1". If an invalid valid value is
+ * encountered, a warning is emitted and INTEL_HIZ is ignored.
+ */
+static void
+intel_override_hiz(struct intel_context *intel)
+{
+   const char *s = getenv("INTEL_HIZ");
+   if (!s) {
+      return;
+   } else if (!strncmp("0", s, 2)) {
+      intel->has_hiz = false;
+   } else if (!strncmp("1", s, 2)) {
+      intel->has_hiz = true;
+   } else {
+      _mesa_warning(&intel->ctx,
+                    "env variable INTEL_HIZ=\"%s\" has invalid value and "
+                    "is ignored", s);
+   }
+}
+
+/**
+ * Override intel->has_separate_stencil with environment variable
+ * INTEL_SEPARATE_STENCIL.
+ *
+ * Valid values for INTEL_SEPARATE_STENCIL are "0" and "1". If an invalid
+ * value is encountered, a warning is emitted and INTEL_SEPARATE_STENCIL is
+ * ignored.
+ */
+static void
+intel_override_separate_stencil(struct intel_context *intel)
+{
+   const char *s = getenv("INTEL_SEPARATE_STENCIL");
+   if (!s) {
+      return;
+   } else if (!strncmp("0", s, 2)) {
+      intel->has_separate_stencil = false;
+   } else if (!strncmp("1", s, 2)) {
+      intel->has_separate_stencil = true;
+   } else {
+      _mesa_warning(&intel->ctx,
+                    "env variable INTEL_SEPARATE_STENCIL=\"%s\" has invalid "
+                    "value and is ignored", s);
+   }
+}
 
 GLboolean
 intelInitContext(struct intel_context *intel,
@@ -653,9 +711,17 @@ intelInitContext(struct intel_context *intel,
 
    intel->has_xrgb_textures = GL_TRUE;
    intel->gen = intelScreen->gen;
-   if (IS_GEN6(intel->intelScreen->deviceID)) {
+   if (IS_GEN7(intel->intelScreen->deviceID)) {
       intel->needs_ff_sync = GL_TRUE;
       intel->has_luminance_srgb = GL_TRUE;
+      /* FINISHME: Enable intel->has_separate_stencil on Gen7. */
+      /* FINISHME: Enable intel->must_use_separate_stencil on Gen7. */
+      /* FINISHME: Enable intel->has_hiz on Gen7. */
+   } else if (IS_GEN6(intel->intelScreen->deviceID)) {
+      intel->needs_ff_sync = GL_TRUE;
+      intel->has_luminance_srgb = GL_TRUE;
+      /* FINISHME: Enable intel->has_separate_stencil on Gen6. */
+      /* FINISHME: Enable intel->has_hiz on Gen6. */
    } else if (IS_GEN5(intel->intelScreen->deviceID)) {
       intel->needs_ff_sync = GL_TRUE;
       intel->has_luminance_srgb = GL_TRUE;
@@ -675,6 +741,9 @@ intelInitContext(struct intel_context *intel,
       }
    }
 
+   intel_override_hiz(intel);
+   intel_override_separate_stencil(intel);
+
    memset(&ctx->TextureFormatSupported, 0,
 	  sizeof(ctx->TextureFormatSupported));
    ctx->TextureFormatSupported[MESA_FORMAT_ARGB8888] = GL_TRUE;
@@ -689,7 +758,12 @@ intelInitContext(struct intel_context *intel,
    ctx->TextureFormatSupported[MESA_FORMAT_AL88] = GL_TRUE;
    if (intel->gen >= 4)
       ctx->TextureFormatSupported[MESA_FORMAT_AL1616] = GL_TRUE;
-   ctx->TextureFormatSupported[MESA_FORMAT_S8_Z24] = GL_TRUE;
+
+   /* Depth and stencil */
+   ctx->TextureFormatSupported[MESA_FORMAT_S8_Z24] = !intel->must_use_separate_stencil;
+   ctx->TextureFormatSupported[MESA_FORMAT_X8_Z24] = intel->has_separate_stencil;
+   ctx->TextureFormatSupported[MESA_FORMAT_S8] = intel->has_separate_stencil;
+
    /*
     * This was disabled in initial FBO enabling to avoid combinations
     * of depth+stencil that wouldn't work together.  We since decided

@@ -362,7 +362,7 @@ bind_attrib_location(struct gl_context *ctx, GLuint program, GLuint index,
 {
    struct gl_shader_program *shProg;
    const GLint size = -1; /* unknown size */
-   GLint i, oldIndex;
+   GLint i;
    GLenum datatype = GL_FLOAT_VEC4;
 
    shProg = _mesa_lookup_shader_program_err(ctx, program,
@@ -383,14 +383,6 @@ bind_attrib_location(struct gl_context *ctx, GLuint program, GLuint index,
    if (index >= ctx->Const.VertexProgram.MaxAttribs) {
       _mesa_error(ctx, GL_INVALID_VALUE, "glBindAttribLocation(index)");
       return;
-   }
-
-   if (shProg->LinkStatus) {
-      /* get current index/location for the attribute */
-      oldIndex = get_attrib_location(ctx, program, name);
-   }
-   else {
-      oldIndex = -1;
    }
 
    /* this will replace the current value if it's already in the list */
@@ -1527,7 +1519,8 @@ _mesa_ShaderSourceARB(GLhandleARB shaderObj, GLsizei count,
    for (i = 0; i < count; i++) {
       if (string[i] == NULL) {
          free((GLvoid *) offsets);
-         _mesa_error(ctx, GL_INVALID_OPERATION, "glShaderSourceARB(null string)");
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glShaderSourceARB(null string)");
          return;
       }
       if (length == NULL || length[i] < 0)
@@ -1578,7 +1571,7 @@ _mesa_ShaderSourceARB(GLhandleARB shaderObj, GLsizei count,
          free(source);
          source = newSource;
       }
-   }      
+   }
 
    shader_source(ctx, shaderObj, source);
 
@@ -1599,6 +1592,8 @@ _mesa_UseProgramObjectARB(GLhandleARB program)
    struct gl_shader_program *shProg;
    struct gl_transform_feedback_object *obj =
       ctx->TransformFeedback.CurrentObject;
+
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (obj->Active) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
@@ -1717,8 +1712,7 @@ _mesa_ShaderBinary(GLint n, const GLuint* shaders, GLenum binaryformat,
 #if FEATURE_ARB_geometry_shader4
 
 void GLAPIENTRY
-_mesa_ProgramParameteriARB(GLuint program, GLenum pname,
-                           GLint value)
+_mesa_ProgramParameteriARB(GLuint program, GLenum pname, GLint value)
 {
    struct gl_shader_program *shProg;
    GET_CURRENT_CONTEXT(ctx);

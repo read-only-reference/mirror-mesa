@@ -81,6 +81,11 @@ const int i965_chip_ids[] = {
    0x0116, /* PCI_CHIP_SANDYBRIDGE_M_GT2 */
    0x0122, /* PCI_CHIP_SANDYBRIDGE_GT2_PLUS */
    0x0126, /* PCI_CHIP_SANDYBRIDGE_M_GT2_PLUS */
+   0x0152, /* PCI_CHIP_IVYBRIDGE_GT1 */
+   0x0162, /* PCI_CHIP_IVYBRIDGE_GT2 */
+   0x0156, /* PCI_CHIP_IVYBRIDGE_M_GT1 */
+   0x0166, /* PCI_CHIP_IVYBRIDGE_M_GT2 */
+   0x015a, /* PCI_CHIP_IVYBRIDGE_S_GT1 */
    0x29a2, /* PCI_CHIP_I965_G */
    0x2992, /* PCI_CHIP_I965_Q */
    0x2982, /* PCI_CHIP_I965_G_1 */
@@ -488,6 +493,7 @@ const int r600_chip_ids[] = {
    0x68E8, /* PCI_CHIP_CEDAR_68E8 */
    0x68E9, /* PCI_CHIP_CEDAR_68E9 */
    0x68F1, /* PCI_CHIP_CEDAR_68F1 */
+   0x68F2, /* PCI_CHIP_CEDAR_68F2 */
    0x68F8, /* PCI_CHIP_CEDAR_68F8 */
    0x68F9, /* PCI_CHIP_CEDAR_68F9 */
    0x68FE, /* PCI_CHIP_CEDAR_68FE */
@@ -506,13 +512,16 @@ const int r600_chip_ids[] = {
    0x68B0, /* PCI_CHIP_JUNIPER_68B0 */
    0x68B8, /* PCI_CHIP_JUNIPER_68B8 */
    0x68B9, /* PCI_CHIP_JUNIPER_68B9 */
+   0x68BA, /* PCI_CHIP_JUNIPER_68BA */
    0x68BE, /* PCI_CHIP_JUNIPER_68BE */
+   0x68BF, /* PCI_CHIP_JUNIPER_68BF */
    0x6880, /* PCI_CHIP_CYPRESS_6880 */
    0x6888, /* PCI_CHIP_CYPRESS_6888 */
    0x6889, /* PCI_CHIP_CYPRESS_6889 */
    0x688A, /* PCI_CHIP_CYPRESS_688A */
    0x6898, /* PCI_CHIP_CYPRESS_6898 */
    0x6899, /* PCI_CHIP_CYPRESS_6899 */
+   0x689B, /* PCI_CHIP_CYPRESS_689B */
    0x689E, /* PCI_CHIP_CYPRESS_689E */
    0x689C, /* PCI_CHIP_HEMLOCK_689C */
    0x689D, /* PCI_CHIP_HEMLOCK_689D */
@@ -520,6 +529,23 @@ const int r600_chip_ids[] = {
    0x9803, /* PCI_CHIP_PALM_9803 */
    0x9804, /* PCI_CHIP_PALM_9804 */
    0x9805, /* PCI_CHIP_PALM_9805 */
+   0x9806, /* PCI_CHIP_PALM_9806 */
+   0x9807, /* PCI_CHIP_PALM_9807 */
+   0x6700, /* PCI_CHIP_CAYMAN_6700 */
+   0x6701, /* PCI_CHIP_CAYMAN_6701 */
+   0x6702, /* PCI_CHIP_CAYMAN_6702 */
+   0x6703, /* PCI_CHIP_CAYMAN_6703 */
+   0x6704, /* PCI_CHIP_CAYMAN_6704 */
+   0x6705, /* PCI_CHIP_CAYMAN_6705 */
+   0x6706, /* PCI_CHIP_CAYMAN_6706 */
+   0x6707, /* PCI_CHIP_CAYMAN_6707 */
+   0x6708, /* PCI_CHIP_CAYMAN_6708 */
+   0x6709, /* PCI_CHIP_CAYMAN_6709 */
+   0x6718, /* PCI_CHIP_CAYMAN_6718 */
+   0x6719, /* PCI_CHIP_CAYMAN_6719 */
+   0x671C, /* PCI_CHIP_CAYMAN_671C */
+   0x671D, /* PCI_CHIP_CAYMAN_671D */
+   0x671F, /* PCI_CHIP_CAYMAN_671F */
    0x6720, /* PCI_CHIP_BARTS_6720 */
    0x6721, /* PCI_CHIP_BARTS_6721 */
    0x6722, /* PCI_CHIP_BARTS_6722 */
@@ -532,6 +558,7 @@ const int r600_chip_ids[] = {
    0x6729, /* PCI_CHIP_BARTS_6729 */
    0x6738, /* PCI_CHIP_BARTS_6738 */
    0x6739, /* PCI_CHIP_BARTS_6738 */
+   0x673E, /* PCI_CHIP_BARTS_673E */
    0x6740, /* PCI_CHIP_TURKS_6740 */
    0x6741, /* PCI_CHIP_TURKS_6741 */
    0x6742, /* PCI_CHIP_TURKS_6742 */
@@ -574,7 +601,8 @@ dri2_get_device_name(int fd)
    struct udev *udev;
    struct udev_device *device;
    struct stat buf;
-   char *device_name;
+   const char *const_device_name;
+   char *device_name = NULL;
 
    udev = udev_new();
    if (fstat(fd, &buf) < 0) {
@@ -589,10 +617,11 @@ dri2_get_device_name(int fd)
       goto out;
    }
 
-   device_name = udev_device_get_devnode(device);
-   if (!device_name)
-	   goto out;
-   device_name = strdup(device_name);
+   const_device_name = udev_device_get_devnode(device);
+   if (!const_device_name) {
+      goto out;
+   }
+   device_name = strdup(const_device_name);
 
  out:
    udev_device_unref(device);
@@ -683,7 +712,7 @@ dri2_initialize_drm(_EGLDriver *drv, _EGLDisplay *disp)
    memset(dri2_dpy, 0, sizeof *dri2_dpy);
 
    disp->DriverData = (void *) dri2_dpy;
-   dri2_dpy->fd = (int) disp->PlatformDisplay;
+   dri2_dpy->fd = (int) (intptr_t) disp->PlatformDisplay;
 
    dri2_dpy->driver_name = dri2_get_driver_for_fd(dri2_dpy->fd);
    if (dri2_dpy->driver_name == NULL)

@@ -92,9 +92,12 @@ enum radeon_family {
 	CHIP_CYPRESS,
 	CHIP_HEMLOCK,
 	CHIP_PALM,
+	CHIP_SUMO,
+	CHIP_SUMO2,
 	CHIP_BARTS,
 	CHIP_TURKS,
 	CHIP_CAICOS,
+	CHIP_CAYMAN,
 	CHIP_LAST,
 };
 
@@ -102,6 +105,7 @@ enum chip_class {
 	R600,
 	R700,
 	EVERGREEN,
+	CAYMAN,
 };
 
 struct r600_tiling_info {
@@ -193,8 +197,6 @@ struct r600_block {
 };
 
 struct r600_range {
-	unsigned		start_offset;
-	unsigned		end_offset;
 	struct r600_block	**blocks;
 };
 
@@ -235,12 +237,11 @@ struct r600_query {
 
 #define R600_CONTEXT_DRAW_PENDING	(1 << 0)
 #define R600_CONTEXT_DST_CACHES_DIRTY	(1 << 1)
+#define R600_CONTEXT_CHECK_EVENT_FLUSH	(1 << 2)
 
 struct r600_context {
 	struct radeon		*radeon;
-	unsigned		hash_size;
-	unsigned		hash_shift;
-	struct r600_range	range[256];
+	struct r600_range	*range;
 	unsigned		nblocks;
 	struct r600_block	**blocks;
 	struct list_head	dirty;

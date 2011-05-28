@@ -216,7 +216,15 @@ intel_create_image(__DRIscreen *screen,
 {
    __DRIimage *image;
    struct intel_screen *intelScreen = screen->private;
+   uint32_t tiling;
    int cpp;
+
+   tiling = I915_TILING_X;
+   if (use & __DRI_IMAGE_USE_CURSOR) {
+      if (width != 64 || height != 64)
+	 return NULL;
+      tiling = I915_TILING_NONE;
+   }
 
    image = CALLOC(sizeof *image);
    if (image == NULL)
@@ -247,7 +255,7 @@ intel_create_image(__DRIscreen *screen,
    cpp = _mesa_get_format_bytes(image->format);
 
    image->region =
-      intel_region_alloc(intelScreen, I915_TILING_X,
+      intel_region_alloc(intelScreen, tiling,
 			 cpp, width, height, GL_TRUE);
    if (image->region == NULL) {
       FREE(image);
@@ -548,7 +556,9 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
       intelScreen->deviceID = strtod(devid_override, NULL);
    }
 
-   if (IS_GEN6(intelScreen->deviceID)) {
+   if (IS_GEN7(intelScreen->deviceID)) {
+      intelScreen->gen = 7;
+   } else if (IS_GEN6(intelScreen->deviceID)) {
       intelScreen->gen = 6;
    } else if (IS_GEN5(intelScreen->deviceID)) {
       intelScreen->gen = 5;

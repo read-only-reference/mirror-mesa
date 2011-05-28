@@ -34,6 +34,9 @@
 #include "brw_state.h"
 #include "main/formats.h"
 #include "main/samplerobj.h"
+#include "program/prog_parameter.h"
+
+#include "../glsl/ralloc.h"
 
 /** Return number of src args for given instruction */
 GLuint brw_wm_nr_args( GLuint opcode )
@@ -113,7 +116,7 @@ brw_wm_non_glsl_emit(struct brw_context *brw, struct brw_wm_compile *c)
    brw_wm_pass2(c);
 
    /* how many general-purpose registers are used */
-   c->prog_data.total_grf = c->max_wm_grf;
+   c->prog_data.reg_blocks = brw_register_blocks(c->max_wm_grf);
 
    /* Emit GEN4 code.
     */
@@ -182,9 +185,10 @@ brw_wm_payload_setup(struct brw_context *brw,
  * Depending on the instructions used (i.e. flow control instructions)
  * we'll use one of two code generators.
  */
-static void do_wm_prog( struct brw_context *brw,
-			struct brw_fragment_program *fp, 
-			struct brw_wm_prog_key *key)
+bool do_wm_prog(struct brw_context *brw,
+		struct gl_shader_program *prog,
+		struct brw_fragment_program *fp,
+		struct brw_wm_prog_key *key)
 {
    struct intel_context *intel = &brw->intel;
    struct brw_wm_compile *c;
@@ -193,20 +197,19 @@ static void do_wm_prog( struct brw_context *brw,
 
    c = brw->wm.compile_data;
    if (c == NULL) {
-      brw->wm.compile_data = calloc(1, sizeof(*brw->wm.compile_data));
+      brw->wm.compile_data = rzalloc(NULL, struct brw_wm_compile);
       c = brw->wm.compile_data;
       if (c == NULL) {
          /* Ouch - big out of memory problem.  Can't continue
           * without triggering a segfault, no way to signal,
           * so just return.
           */
-         return;
+         return false;
       }
-      c->instruction = calloc(1, BRW_WM_MAX_INSN * sizeof(*c->instruction));
-      c->prog_instructions = calloc(1, BRW_WM_MAX_INSN *
-					  sizeof(*c->prog_instructions));
-      c->vreg = calloc(1, BRW_WM_MAX_VREG * sizeof(*c->vreg));
-      c->refs = calloc(1, BRW_WM_MAX_REF * sizeof(*c->refs));
+      c->instruction = rzalloc_array(c, struct brw_wm_instruction, BRW_WM_MAX_INSN);
+      c->prog_instructions = rzalloc_array(c, struct prog_instruction, BRW_WM_MAX_INSN);
+      c->vreg = rzalloc_array(c, struct brw_wm_value, BRW_WM_MAX_VREG);
+      c->refs = rzalloc_array(c, struct brw_wm_ref, BRW_WM_MAX_REF);
    } else {
       void *instruction = c->instruction;
       void *prog_instructions = c->prog_instructions;
@@ -223,9 +226,12 @@ static void do_wm_prog( struct brw_context *brw,
    c->fp = fp;
    c->env_param = brw->intel.ctx.FragmentProgram.Parameters;
 
-   brw_init_compile(brw, &c->func);
+   brw_init_compile(brw, &c->func, c);
 
-   if (!brw_wm_fs_emit(brw, c)) {
+   if (prog && prog->FragmentProgram) {
+      if (!brw_wm_fs_emit(brw, c, prog))
+	 return false;
+   } else {
       /* Fallback for fixed function and ARB_fp shaders. */
       c->dispatch_width = 16;
       brw_wm_payload_setup(brw, c);
@@ -273,6 +279,8 @@ static void do_wm_prog( struct brw_context *brw,
 				      program, program_size,
 				      &c->prog_data, sizeof(c->prog_data),
 				      &brw->wm.prog_data);
+
+   return true;
 }
 
 
@@ -354,9 +362,6 @@ static void brw_wm_populate_key( struct brw_context *brw,
    /* _NEW_LIGHT */
    key->flat_shade = (ctx->Light.ShadeModel == GL_FLAT);
 
-   /* _NEW_HINT */
-   key->linear_color = (ctx->Hint.PerspectiveCorrection == GL_FASTEST);
-
    /* _NEW_FRAG_CLAMP | _NEW_BUFFERS */
    key->clamp_fragment_color = ctx->Color._ClampFragmentColor;
 
@@ -409,14 +414,21 @@ static void brw_wm_populate_key( struct brw_context *brw,
 			  swizzles[GET_SWZ(t->_Swizzle, 1)],
 			  swizzles[GET_SWZ(t->_Swizzle, 2)],
 			  swizzles[GET_SWZ(t->_Swizzle, 3)]);
+
+	 if (sampler->MinFilter != GL_NEAREST &&
+	     sampler->MagFilter != GL_NEAREST) {
+	    if (sampler->WrapS == GL_CLAMP)
+	       key->gl_clamp_mask[0] |= 1 << i;
+	    if (sampler->WrapT == GL_CLAMP)
+	       key->gl_clamp_mask[1] |= 1 << i;
+	    if (sampler->WrapR == GL_CLAMP)
+	       key->gl_clamp_mask[2] |= 1 << i;
+	 }
       }
       else {
          key->tex_swizzles[i] = SWIZZLE_NOOP;
       }
    }
-
-   /* Shadow */
-   key->shadowtex_mask = fp->program.Base.ShadowSamplers;
 
    /* _NEW_BUFFERS */
    /*
@@ -457,6 +469,8 @@ static void brw_wm_populate_key( struct brw_context *brw,
 
 static void brw_prepare_wm_prog(struct brw_context *brw)
 {
+   struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &intel->ctx;
    struct brw_wm_prog_key key;
    struct brw_fragment_program *fp = (struct brw_fragment_program *)
       brw->fragment_program;
@@ -469,8 +483,11 @@ static void brw_prepare_wm_prog(struct brw_context *brw)
    brw->wm.prog_bo = brw_search_cache(&brw->cache, BRW_WM_PROG,
 				      &key, sizeof(key),
 				      &brw->wm.prog_data);
-   if (brw->wm.prog_bo == NULL)
-      do_wm_prog(brw, fp, &key);
+   if (brw->wm.prog_bo == NULL) {
+      bool success = do_wm_prog(brw, ctx->Shader.CurrentFragmentProgram, fp,
+				&key);
+      assert(success);
+   }
 }
 
 
@@ -478,7 +495,6 @@ const struct brw_tracked_state brw_wm_prog = {
    .dirty = {
       .mesa  = (_NEW_COLOR |
 		_NEW_DEPTH |
-                _NEW_HINT |
 		_NEW_STENCIL |
 		_NEW_POLYGON |
 		_NEW_LINE |

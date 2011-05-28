@@ -406,6 +406,7 @@
 #define PCI_CHIP_CEDAR_68E8             0x68E8
 #define PCI_CHIP_CEDAR_68E9             0x68E9
 #define PCI_CHIP_CEDAR_68F1             0x68F1
+#define PCI_CHIP_CEDAR_68F2             0x68F2
 #define PCI_CHIP_CEDAR_68F8             0x68F8
 #define PCI_CHIP_CEDAR_68F9             0x68F9
 #define PCI_CHIP_CEDAR_68FE             0x68FE
@@ -426,7 +427,9 @@
 #define PCI_CHIP_JUNIPER_68B0           0x68B0
 #define PCI_CHIP_JUNIPER_68B8           0x68B8
 #define PCI_CHIP_JUNIPER_68B9           0x68B9
+#define PCI_CHIP_JUNIPER_68BA           0x68BA
 #define PCI_CHIP_JUNIPER_68BE           0x68BE
+#define PCI_CHIP_JUNIPER_68BF           0x68BF
 
 #define PCI_CHIP_CYPRESS_6880           0x6880
 #define PCI_CHIP_CYPRESS_6888           0x6888
@@ -434,6 +437,7 @@
 #define PCI_CHIP_CYPRESS_688A           0x688A
 #define PCI_CHIP_CYPRESS_6898           0x6898
 #define PCI_CHIP_CYPRESS_6899           0x6899
+#define PCI_CHIP_CYPRESS_689B           0x689B
 #define PCI_CHIP_CYPRESS_689E           0x689E
 
 #define PCI_CHIP_HEMLOCK_689C           0x689C
@@ -445,6 +449,18 @@
 #define PCI_CHIP_PALM_9805              0x9805
 #define PCI_CHIP_PALM_9806              0x9806
 #define PCI_CHIP_PALM_9807              0x9807
+
+#define PCI_CHIP_SUMO_9640              0x9640
+#define PCI_CHIP_SUMO_9641              0x9641
+#define PCI_CHIP_SUMO2_9642             0x9642
+#define PCI_CHIP_SUMO2_9643             0x9643
+#define PCI_CHIP_SUMO2_9644             0x9644
+#define PCI_CHIP_SUMO2_9645             0x9645
+#define PCI_CHIP_SUMO_9647              0x9647
+#define PCI_CHIP_SUMO_9648              0x9648
+#define PCI_CHIP_SUMO_964A              0x964a
+#define PCI_CHIP_SUMO_964E              0x964e
+#define PCI_CHIP_SUMO_964F              0x964f
 
 #define PCI_CHIP_BARTS_6720             0x6720
 #define PCI_CHIP_BARTS_6721             0x6721
@@ -458,6 +474,7 @@
 #define PCI_CHIP_BARTS_6729             0x6729
 #define PCI_CHIP_BARTS_6738             0x6738
 #define PCI_CHIP_BARTS_6739             0x6739
+#define PCI_CHIP_BARTS_673E             0x673E
 
 #define PCI_CHIP_TURKS_6740             0x6740
 #define PCI_CHIP_TURKS_6741             0x6741
@@ -529,6 +546,8 @@ enum {
    CHIP_FAMILY_CYPRESS,
    CHIP_FAMILY_HEMLOCK,
    CHIP_FAMILY_PALM,
+   CHIP_FAMILY_SUMO,
+   CHIP_FAMILY_SUMO2,
    CHIP_FAMILY_BARTS,
    CHIP_FAMILY_TURKS,
    CHIP_FAMILY_CAICOS,

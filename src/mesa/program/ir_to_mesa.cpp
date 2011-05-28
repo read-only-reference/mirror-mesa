@@ -1481,7 +1481,6 @@ ir_to_mesa_visitor::visit(ir_dereference_array *ir)
    if (index) {
       src.index += index->value.i[0] * element_size;
    } else {
-      src_reg array_base = this->result;
       /* Variable index array dereference.  It eats the "vec4" of the
        * base of the array and an index that offsets the Mesa register
        * index.
@@ -1967,7 +1966,7 @@ ir_to_mesa_visitor::visit(ir_call *ir)
 void
 ir_to_mesa_visitor::visit(ir_texture *ir)
 {
-   src_reg result_src, coord, lod_info, projector;
+   src_reg result_src, coord, lod_info, projector, dx, dy;
    dst_reg result_dst, coord_dst;
    ir_to_mesa_instruction *inst = NULL;
    prog_opcode opcode = OPCODE_NOP;
@@ -2009,6 +2008,12 @@ ir_to_mesa_visitor::visit(ir_texture *ir)
       lod_info = this->result;
       break;
    case ir_txd:
+      opcode = OPCODE_TXD;
+      ir->lod_info.grad.dPdx->accept(this);
+      dx = this->result;
+      ir->lod_info.grad.dPdy->accept(this);
+      dy = this->result;
+      break;
    case ir_txf:
       assert(!"GLSL 1.30 features unsupported");
       break;
@@ -2081,7 +2086,10 @@ ir_to_mesa_visitor::visit(ir_texture *ir)
       coord_dst.writemask = WRITEMASK_XYZW;
    }
 
-   inst = emit(ir, opcode, result_dst, coord);
+   if (opcode == OPCODE_TXD)
+      inst = emit(ir, opcode, result_dst, coord, dx, dy);
+   else
+      inst = emit(ir, opcode, result_dst, coord);
 
    if (ir->shadow_comparitor)
       inst->tex_shadow = GL_TRUE;
@@ -2163,7 +2171,7 @@ ir_to_mesa_visitor::visit(ir_discard *ir)
 void
 ir_to_mesa_visitor::visit(ir_if *ir)
 {
-   ir_to_mesa_instruction *cond_inst, *if_inst, *else_inst = NULL;
+   ir_to_mesa_instruction *cond_inst, *if_inst;
    ir_to_mesa_instruction *prev_inst;
 
    prev_inst = (ir_to_mesa_instruction *)this->instructions.get_tail();
@@ -2195,7 +2203,7 @@ ir_to_mesa_visitor::visit(ir_if *ir)
    visit_exec_list(&ir->then_instructions, this);
 
    if (!ir->else_instructions.is_empty()) {
-      else_inst = emit(ir->condition, OPCODE_ELSE);
+      emit(ir->condition, OPCODE_ELSE);
       visit_exec_list(&ir->else_instructions, this);
    }
 
@@ -3164,7 +3172,8 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader)
 			     &ctx->Extensions, ctx->API);
 
    if (ctx->Shader.Flags & GLSL_DUMP) {
-      printf("GLSL source for shader %d:\n", shader->Name);
+      printf("GLSL source for %s shader %d:\n",
+	     _mesa_glsl_shader_target_name(state->target), shader->Name);
       printf("%s\n", shader->Source);
    }
 
