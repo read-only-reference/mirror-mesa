@@ -183,7 +183,7 @@ ultrix-gcc:
 
 # Rules for making release tarballs
 
-VERSION=7.11-devel
+VERSION=7.12-devel
 DIRECTORY = Mesa-$(VERSION)
 LIB_NAME = MesaLib-$(VERSION)
 GLUT_NAME = MesaGLUT-$(VERSION)
@@ -230,6 +230,8 @@ MAIN_FILES = \
 	$(DIRECTORY)/include/GL/vms_x_fix.h				\
 	$(DIRECTORY)/include/GL/wglext.h				\
 	$(DIRECTORY)/include/GL/wmesa.h					\
+	$(DIRECTORY)/include/pci_ids/*.h				\
+	$(DIRECTORY)/include/c99/*.h					\
 	$(DIRECTORY)/src/getopt/SConscript				\
 	$(DIRECTORY)/src/getopt/getopt*.[ch]				\
 	$(DIRECTORY)/src/glsl/Makefile					\
@@ -343,6 +345,16 @@ EGL_FILES = \
 	$(DIRECTORY)/src/egl/main/*.pc.in				\
 	$(DIRECTORY)/src/egl/main/*.def
 
+GBM_FILES = \
+	$(DIRECTORY)/src/gbm/Makefile					\
+	$(DIRECTORY)/src/gbm/main/*.pc.in				\
+	$(DIRECTORY)/src/gbm/main/*.[ch]				\
+	$(DIRECTORY)/src/gbm/main/Makefile				\
+	$(DIRECTORY)/src/gbm/backends/Makefile				\
+	$(DIRECTORY)/src/gbm/backends/Makefile.template			\
+	$(DIRECTORY)/src/gbm/backends/*/*.[ch]				\
+	$(DIRECTORY)/src/gbm/backends/*/Makefile			\
+
 GALLIUM_FILES = \
 	$(DIRECTORY)/src/mesa/state_tracker/*[ch]			\
 	$(DIRECTORY)/src/gallium/Makefile				\
@@ -364,14 +376,17 @@ GALLIUM_FILES = \
 	$(DIRECTORY)/src/gallium/*/*/*/*.[ch]				\
 	$(DIRECTORY)/src/gallium/*/*/*/*.py
 
+APPLE_DRI_FILES = \
+	$(DIRECTORY)/src/glx/apple/Makefile 				\
+	$(DIRECTORY)/src/glx/apple/*.[ch]
 
 DRI_FILES = \
 	$(DIRECTORY)/include/GL/internal/dri_interface.h		\
 	$(DIRECTORY)/include/GL/internal/sarea.h			\
 	$(DIRECTORY)/src/glx/Makefile					\
 	$(DIRECTORY)/src/glx/*.[ch]					\
-	$(DIRECTORY)/src/mesa/drivers/dri/Makefile			\
-	$(DIRECTORY)/src/mesa/drivers/dri/Makefile.template		\
+	$(APPLE_DRI_FILES)						\
+	$(DIRECTORY)/src/mesa/drivers/dri/Makefile*			\
 	$(DIRECTORY)/src/mesa/drivers/dri/dri.pc.in			\
 	$(DIRECTORY)/src/mesa/drivers/dri/common/xmlpool/*.po		\
 	$(DIRECTORY)/src/mesa/drivers/dri/*/*.[chS]			\
@@ -437,6 +452,7 @@ LIB_FILES = \
 	$(MAPI_FILES)		\
 	$(ES_FILES)		\
 	$(EGL_FILES)		\
+	$(GBM_FILES)		\
 	$(GALLIUM_FILES)	\
 	$(DRI_FILES)		\
 	$(SGI_GLU_FILES)	\

@@ -80,36 +80,6 @@ _mesa_free_texmemory(void *m)
 }
 
 
-/*
- * Compute floor(log_base_2(n)).
- * If n < 0 return -1.
- */
-static int
-logbase2( int n )
-{
-   GLint i = 1;
-   GLint log2 = 0;
-
-   if (n < 0)
-      return -1;
-
-   if (n == 0)
-      return 0;
-
-   while ( n > i ) {
-      i *= 2;
-      log2++;
-   }
-   if (i != n) {
-      return log2 - 1;
-   }
-   else {
-      return log2;
-   }
-}
-
-
-
 /**
  * Return the simple base format for a given internal texture format.
  * For example, given GL_LUMINANCE12_ALPHA4, return GL_LUMINANCE_ALPHA.
@@ -1168,7 +1138,7 @@ _mesa_init_teximage_fields(struct gl_context *ctx, GLenum target,
    img->Depth = depth;
 
    img->Width2 = width - 2 * border;   /* == 1 << img->WidthLog2; */
-   img->WidthLog2 = logbase2(img->Width2);
+   img->WidthLog2 = _mesa_logbase2(img->Width2);
 
    if (height == 1) { /* 1-D texture */
       img->Height2 = 1;
@@ -1176,7 +1146,7 @@ _mesa_init_teximage_fields(struct gl_context *ctx, GLenum target,
    }
    else {
       img->Height2 = height - 2 * border; /* == 1 << img->HeightLog2; */
-      img->HeightLog2 = logbase2(img->Height2);
+      img->HeightLog2 = _mesa_logbase2(img->Height2);
    }
 
    if (depth == 1) {  /* 2-D texture */
@@ -1185,7 +1155,7 @@ _mesa_init_teximage_fields(struct gl_context *ctx, GLenum target,
    }
    else {
       img->Depth2 = depth - 2 * border;   /* == 1 << img->DepthLog2; */
-      img->DepthLog2 = logbase2(img->Depth2);
+      img->DepthLog2 = _mesa_logbase2(img->Depth2);
    }
 
    img->MaxLog2 = MAX2(img->WidthLog2, img->HeightLog2);
@@ -1715,11 +1685,15 @@ texture_error_check( struct gl_context *ctx,
 
    /* additional checks for depth textures */
    if (_mesa_base_tex_format(ctx, internalFormat) == GL_DEPTH_COMPONENT) {
-      /* Only 1D, 2D and rectangular textures supported, not 3D or cubes */
+      /* Only 1D, 2D, rect and array textures supported, not 3D or cubes */
       if (target != GL_TEXTURE_1D &&
           target != GL_PROXY_TEXTURE_1D &&
           target != GL_TEXTURE_2D &&
           target != GL_PROXY_TEXTURE_2D &&
+          target != GL_TEXTURE_1D_ARRAY &&
+          target != GL_PROXY_TEXTURE_1D_ARRAY &&
+          target != GL_TEXTURE_2D_ARRAY &&
+          target != GL_PROXY_TEXTURE_2D_ARRAY &&
           target != GL_TEXTURE_RECTANGLE_ARB &&
           target != GL_PROXY_TEXTURE_RECTANGLE_ARB) {
          if (!isProxy)
@@ -3300,7 +3274,7 @@ compressedteximage(struct gl_context *ctx, GLuint dims,
                                           border, imageSize, &reason);
 
    if (error) {
-      _mesa_error(ctx, error, "glTexImage2D(%s)", reason);
+      _mesa_error(ctx, error, "glCompressedTexImage%uD(%s)", dims, reason);
       return;
    }
 

@@ -1088,7 +1088,7 @@ static int r600_bc_alloc_kcache_lines(struct r600_bc *bc, struct r600_bc_alu *al
 
 	/* Collect required cache lines. */
 	for (i = 0; i < 3; ++i) {
-		bool found = false;
+		boolean found = false;
 		unsigned int line;
 
 		if (alu->src[i].sel < 512)
@@ -1140,7 +1140,7 @@ static int r600_bc_alloc_kcache_lines(struct r600_bc *bc, struct r600_bc_alu *al
 
 	/* Setup the kcache lines. */
 	for (i = 0; i < count; ++i) {
-		bool found = false;
+		boolean found = false;
 
 		for (j = 0; j < 2; ++j) {
 			if (kcache[j].mode == V_SQ_CF_KCACHE_LOCK_2 &&
@@ -1383,6 +1383,9 @@ int r600_bc_add_tex(struct r600_bc *bc, const struct r600_bc_tex *tex)
 				break;
 			}
 		}
+		/* slight hack to make gradients always go into same cf */
+		if (ntex->inst == SQ_TEX_INST_SET_GRADIENTS_H)
+			bc->force_add_cf = 1;
 	}
 
 	/* cf can contains only alu or only vtx or only tex */
@@ -1860,6 +1863,8 @@ void r600_bc_dump(struct r600_bc *bc)
 			break;
 		case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
 		case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
+		case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
+		case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
 			fprintf(stderr, "%04d %08X EXPORT ", id, bc->bytecode[id]);
 			fprintf(stderr, "GPR:%X ", cf->output.gpr);
 			fprintf(stderr, "ELEM_SIZE:%X ", cf->output.elem_size);
@@ -2258,7 +2263,7 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 	ve->fs_size = bc.ndw*4;
 
 	/* use PIPE_BIND_VERTEX_BUFFER so we use the cache buffer manager */
-	ve->fetch_shader = r600_bo(rctx->radeon, ve->fs_size, 256, PIPE_BIND_VERTEX_BUFFER, 0);
+	ve->fetch_shader = r600_bo(rctx->radeon, ve->fs_size, 256, PIPE_BIND_VERTEX_BUFFER, PIPE_USAGE_IMMUTABLE);
 	if (ve->fetch_shader == NULL) {
 		r600_bc_clear(&bc);
 		return -ENOMEM;
@@ -2283,9 +2288,9 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 	r600_bc_clear(&bc);
 
 	if (rctx->family >= CHIP_CEDAR)
-		evergreen_fetch_shader(ve);
+		evergreen_fetch_shader(&rctx->context, ve);
 	else
-		r600_fetch_shader(ve);
+		r600_fetch_shader(&rctx->context, ve);
 
 	return 0;
 }

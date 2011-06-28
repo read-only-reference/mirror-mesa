@@ -1186,6 +1186,8 @@ blitframebuffer_texture(struct gl_context *ctx,
          const GLint maxLevelSave = texObj->MaxLevel;
          const GLenum wrapSSave = texObj->Sampler.WrapS;
          const GLenum wrapTSave = texObj->Sampler.WrapT;
+         const GLenum srgbSave = texObj->Sampler.sRGBDecode;
+         const GLenum fbo_srgb_save = ctx->Color.sRGBEnabled;
          const GLenum target = texObj->Target;
 
          if (drawAtt->Texture == readAtt->Texture) {
@@ -1217,6 +1219,14 @@ blitframebuffer_texture(struct gl_context *ctx,
          }
          _mesa_TexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
          _mesa_TexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+	 /* Always do our blits with no sRGB decode or encode.*/
+	 if (ctx->Extensions.EXT_texture_sRGB_decode) {
+	    _mesa_TexParameteri(target, GL_TEXTURE_SRGB_DECODE_EXT,
+				GL_SKIP_DECODE_EXT);
+	 }
+	 _mesa_Disable(GL_FRAMEBUFFER_SRGB_EXT);
+
          _mesa_TexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
          _mesa_set_enable(ctx, target, GL_TRUE);
 
@@ -1278,6 +1288,12 @@ blitframebuffer_texture(struct gl_context *ctx,
          }
          _mesa_TexParameteri(target, GL_TEXTURE_WRAP_S, wrapSSave);
          _mesa_TexParameteri(target, GL_TEXTURE_WRAP_T, wrapTSave);
+	 if (ctx->Extensions.EXT_texture_sRGB_decode) {
+	    _mesa_TexParameteri(target, GL_TEXTURE_SRGB_DECODE_EXT, srgbSave);
+	 }
+	 if (ctx->Extensions.EXT_texture_sRGB_decode && fbo_srgb_save) {
+	    _mesa_Enable(GL_FRAMEBUFFER_SRGB_EXT);
+	 }
 
          /* Done with color buffer */
          mask &= ~GL_COLOR_BUFFER_BIT;
@@ -2675,12 +2691,26 @@ copy_tex_image(struct gl_context *ctx, GLuint dims, GLenum target, GLint level,
    GLenum format, type;
    GLint bpp;
    void *buf;
+   struct gl_renderbuffer *read_rb = ctx->ReadBuffer->_ColorReadBuffer;
 
    texObj = _mesa_get_current_tex_object(ctx, target);
    texImage = _mesa_get_tex_image(ctx, texObj, target, level);
 
    /* Choose format/type for temporary image buffer */
    format = _mesa_base_tex_format(ctx, internalFormat);
+
+   if (format == GL_LUMINANCE &&
+       _mesa_get_format_base_format(read_rb->Format) != GL_LUMINANCE) {
+      /* The glReadPixels() path will convert RGB to luminance by
+       * summing R+G+B.  glCopyTexImage() is supposed to behave as
+       * glCopyPixels, which doesn't do that change, and instead
+       * leaves it up to glTexImage which converts RGB to luminance by
+       * just taking the R channel.  To avoid glReadPixels() trashing
+       * our data, use RGBA for our temporary image.
+       */
+      format = GL_RGBA;
+   }
+
    type = get_temp_image_type(ctx, format);
    bpp = _mesa_bytes_per_pixel(format, type);
    if (bpp <= 0) {

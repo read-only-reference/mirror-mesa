@@ -62,10 +62,14 @@ struct radeon {
 	pipe_mutex bo_handles_mutex;
 };
 
+/* these flags are used in register flags and added into block flags */
 #define REG_FLAG_NEED_BO 1
 #define REG_FLAG_DIRTY_ALWAYS 2
 #define REG_FLAG_RV6XX_SBU 4
 #define REG_FLAG_NOT_R600 8
+#define REG_FLAG_ENABLE_ALWAYS 16
+#define BLOCK_FLAG_RESOURCE 32
+#define REG_FLAG_FLUSH_CHANGE 64
 
 struct r600_reg {
 	unsigned			offset;
@@ -94,7 +98,8 @@ struct radeon_bo {
 };
 
 struct r600_bo {
-	struct pipe_reference		reference;
+	struct pipe_reference		reference; /* this must be the first member for the r600_bo_reference inline to work */
+	/* DO NOT MOVE THIS ^ */
 	unsigned			size;
 	unsigned			tiling_flags;
 	unsigned			kernel_pitch;
@@ -152,14 +157,15 @@ int radeon_bo_fixed_map(struct radeon *radeon, struct radeon_bo *bo);
  * r600_hw_context.c
  */
 int r600_context_init_fence(struct r600_context *ctx);
-void r600_context_bo_reloc(struct r600_context *ctx, u32 *pm4, struct r600_bo *rbo);
+void r600_context_get_reloc(struct r600_context *ctx, struct r600_bo *rbo);
 void r600_context_bo_flush(struct r600_context *ctx, unsigned flush_flags,
 				unsigned flush_mask, struct r600_bo *rbo);
 struct r600_bo *r600_context_reg_bo(struct r600_context *ctx, unsigned offset);
 int r600_context_add_block(struct r600_context *ctx, const struct r600_reg *reg, unsigned nreg,
 			   unsigned opcode, unsigned offset_base);
-void r600_context_pipe_state_set_resource(struct r600_context *ctx, struct r600_pipe_state *state, unsigned offset);
+void r600_context_pipe_state_set_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, struct r600_block *block);
 void r600_context_block_emit_dirty(struct r600_context *ctx, struct r600_block *block);
+void r600_context_block_resource_emit_dirty(struct r600_context *ctx, struct r600_block *block);
 void r600_context_dirty_block(struct r600_context *ctx, struct r600_block *block,
 			      int dirty, int index);
 int r600_setup_block_table(struct r600_context *ctx);
@@ -167,6 +173,21 @@ void r600_context_reg(struct r600_context *ctx,
 		      unsigned offset, unsigned value,
 		      unsigned mask);
 void r600_init_cs(struct r600_context *ctx);
+int r600_resource_init(struct r600_context *ctx, struct r600_range *range, unsigned offset, unsigned nblocks, unsigned stride, struct r600_reg *reg, int nreg, unsigned offset_base);
+
+static INLINE void r600_context_bo_reloc(struct r600_context *ctx, u32 *pm4, struct r600_bo *rbo)
+{
+	struct radeon_bo *bo = rbo->bo;
+
+	assert(bo != NULL);
+
+	if (!bo->reloc)
+		r600_context_get_reloc(ctx, rbo);
+
+	/* set PKT3 to point to proper reloc */
+	*pm4 = bo->reloc_id;
+}
+
 /*
  * r600_bo.c
  */
@@ -177,7 +198,7 @@ void r600_bo_destroy(struct radeon *radeon, struct r600_bo *bo);
  */
 struct r600_bomgr *r600_bomgr_create(struct radeon *radeon, unsigned usecs);
 void r600_bomgr_destroy(struct r600_bomgr *mgr);
-bool r600_bomgr_bo_destroy(struct r600_bomgr *mgr, struct r600_bo *bo);
+boolean r600_bomgr_bo_destroy(struct r600_bomgr *mgr, struct r600_bo *bo);
 void r600_bomgr_bo_init(struct r600_bomgr *mgr, struct r600_bo *bo);
 struct r600_bo *r600_bomgr_bo_create(struct r600_bomgr *mgr,
 					unsigned size,
@@ -189,16 +210,6 @@ struct r600_bo *r600_bomgr_bo_create(struct r600_bomgr *mgr,
  * helpers
  */
 
-/* each range covers 9 bits of dword space = 512 dwords = 2k bytes */
-/* there is a block entry for each register so 512 blocks */
-/* we have no registers to read/write below 0x8000 (0x2000 in dw space) */
-/* we use some fake offsets at 0x40000 to do evergreen sampler borders so take 0x42000 as a max bound*/
-#define RANGE_OFFSET_START 0x8000
-#define HASH_SHIFT 9
-#define NUM_RANGES (0x42000 - RANGE_OFFSET_START) / (4 << HASH_SHIFT) /* 128 << 9 = 64k */
-
-#define CTX_RANGE_ID(ctx, offset) ((((offset - RANGE_OFFSET_START) >> 2) >> HASH_SHIFT) & 255)
-#define CTX_BLOCK_ID(ctx, offset) (((offset - RANGE_OFFSET_START) >> 2) & ((1 << HASH_SHIFT) - 1))
 
 /*
  * radeon_bo.c
@@ -220,7 +231,7 @@ static inline void radeon_bo_unmap(struct radeon *radeon, struct radeon_bo *bo)
 /*
  * fence
  */
-static inline bool fence_is_after(unsigned fence, unsigned ofence)
+static inline boolean fence_is_after(unsigned fence, unsigned ofence)
 {
 	/* handle wrap around */
 	if (fence < 0x80000000 && ofence > 0x80000000)

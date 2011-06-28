@@ -102,6 +102,8 @@ struct i915_fragment_shader
 
    struct tgsi_shader_info info;
 
+   struct draw_fragment_shader *draw_data;
+
    uint *program;
    uint program_len;
 
@@ -124,6 +126,12 @@ struct i915_fragment_shader
     * Else, the bitmask indicates which components are occupied by immediates.
     */
    ubyte constant_flags[I915_MAX_CONSTANT];
+
+   /**
+    * The mapping between generics and hw texture coords.
+    * We need to share this between the vertex and fragment stages.
+    **/
+   int generic_mapping[I915_TEX_UNITS];
 };
 
 
@@ -254,6 +262,7 @@ struct i915_context {
    int num_validation_buffers;
 
    struct util_slab_mempool transfer_pool;
+   struct util_slab_mempool texture_transfer_pool;
 
    /** blitter/hw-clear */
    struct blitter_context* blitter;

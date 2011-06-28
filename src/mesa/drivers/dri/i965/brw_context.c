@@ -94,9 +94,9 @@ GLboolean brwCreateContext( int api,
       ctx->Const.MaxVertexTextureImageUnits +
       ctx->Const.MaxTextureImageUnits;
 
-   /* Mesa limits textures to 4kx4k; it would be nice to fix that someday
-    */
-   ctx->Const.MaxTextureLevels = 13;
+   ctx->Const.MaxTextureLevels = 14; /* 8192 */
+   if (ctx->Const.MaxTextureLevels > MAX_TEXTURE_LEVELS)
+	   ctx->Const.MaxTextureLevels = MAX_TEXTURE_LEVELS;
    ctx->Const.Max3DTextureLevels = 9;
    ctx->Const.MaxCubeTextureLevels = 12;
    ctx->Const.MaxTextureRectSize = (1<<12);
@@ -203,12 +203,12 @@ GLboolean brwCreateContext( int api,
 	 brw->wm_max_threads = 40;
 	 brw->vs_max_threads = 60;
 	 brw->urb.size = 64;            /* volume 5c.5 section 5.1 */
-	 brw->urb.max_vs_entries = 128; /* volume 2a (see 3DSTATE_URB) */
+	 brw->urb.max_vs_entries = 256; /* volume 2a (see 3DSTATE_URB) */
       } else {
 	 brw->wm_max_threads = 40;
 	 brw->vs_max_threads = 24;
 	 brw->urb.size = 32;            /* volume 5c.5 section 5.1 */
-	 brw->urb.max_vs_entries = 256; /* volume 2a (see 3DSTATE_URB) */
+	 brw->urb.max_vs_entries = 128; /* volume 2a (see 3DSTATE_URB) */
       }
    } else if (intel->gen == 5) {
       brw->urb.size = 1024;
@@ -239,6 +239,8 @@ GLboolean brwCreateContext( int api,
    brw->state.dirty.brw = ~0;
 
    brw->emit_state_always = 0;
+
+   intel->batch.need_workaround_flush = true;
 
    ctx->VertexProgram._MaintainTnlProgram = GL_TRUE;
    ctx->FragmentProgram._MaintainTexEnvProgram = GL_TRUE;

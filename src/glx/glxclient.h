@@ -138,6 +138,7 @@ struct __GLXDRIdrawableRec
    GLenum textureTarget;
    GLenum textureFormat;        /* EXT_texture_from_pixmap support */
    unsigned long eventMask;
+   int refcount;
 };
 
 /*
@@ -223,7 +224,7 @@ struct glx_context_vtable {
 			  GLXDrawable drawable,
 			  int buffer, const int *attrib_list);
    void (*release_tex_image)(Display * dpy, GLXDrawable drawable, int buffer);
-   
+   void * (*get_proc_address)(const char *symbol);
 };
 
 extern void
@@ -310,14 +311,6 @@ struct glx_context
    /*@} */
 
     /**
-     * This is \c GL_TRUE if the pixel unpack modes are such that an image
-     * can be unpacked from the clients memory by just copying.  It may
-     * still be true that the server will have to do some work.  This
-     * just promises that a straight copy will fetch the correct bytes.
-     */
-   GLboolean fastImageUnpack;
-
-    /**
      * Fill newImage with the unpacked form of \c oldImage getting it
      * ready for transport to the server.
      */
@@ -340,6 +333,10 @@ struct glx_context
      * Whether this context does direct rendering.
      */
    Bool isDirect;
+
+#if defined(GLX_DIRECT_RENDERING) && defined(GLX_USE_APPLEGL)
+   void *driContext;
+#endif
 
     /**
      * \c dpy of current display for this context.  Will be \c NULL if not
@@ -772,7 +769,19 @@ GarbageCollectDRIDrawables(struct glx_screen *psc);
 
 extern __GLXDRIdrawable *
 GetGLXDRIDrawable(Display *dpy, GLXDrawable drawable);
+#endif
 
+#ifdef GLX_USE_APPLEGL
+extern struct glx_screen *
+applegl_create_screen(int screen, struct glx_display * priv);
+
+extern struct glx_context *
+applegl_create_context(struct glx_screen *psc,
+			struct glx_config *mode,
+			struct glx_context *shareList, int renderType);
+
+extern int
+applegl_create_display(struct glx_display *display);
 #endif
 
 extern struct glx_context dummyContext;

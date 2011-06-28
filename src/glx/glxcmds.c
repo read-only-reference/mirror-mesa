@@ -224,10 +224,14 @@ CreateContext(Display *dpy, int generic_id, struct glx_config *config,
       return NULL;
 
    gc = NULL;
+#ifdef GLX_USE_APPLEGL
+   gc = applegl_create_context(psc, config, shareList, renderType);
+#else
    if (allowDirect && psc->vtable->create_context)
       gc = psc->vtable->create_context(psc, config, shareList, renderType);
    if (!gc)
       gc = indirect_create_context(psc, config, shareList, renderType);
+#endif
    if (!gc)
       return NULL;
 
@@ -350,8 +354,9 @@ glx_send_destroy_context(Display *dpy, XID xid)
 /*
 ** Destroy the named context
 */
-static void
-DestroyContext(Display * dpy, GLXContext ctx)
+
+_X_EXPORT void
+glXDestroyContext(Display * dpy, GLXContext ctx)
 {
    struct glx_context *gc = (struct glx_context *) ctx;
 
@@ -373,14 +378,7 @@ DestroyContext(Display * dpy, GLXContext ctx)
    }
    __glXUnlock();
 
-   if (gc->vtable->destroy)
-      gc->vtable->destroy(gc);
-}
-
-_X_EXPORT void
-glXDestroyContext(Display * dpy, GLXContext gc)
-{
-   DestroyContext(dpy, gc);
+   gc->vtable->destroy(gc);
 }
 
 /*
@@ -602,7 +600,7 @@ glXCreateGLXPixmap(Display * dpy, XVisualInfo * vis, Pixmap pixmap)
    struct glx_screen *const psc = GetGLXScreenConfigs(dpy, screen);
    const struct glx_config *config;
 
-   config = _gl_context_modes_find_visual(psc->visuals, vis->visualid);
+   config = glx_config_find_visual(psc->visuals, vis->visualid);
    
    if(apple_glx_pixmap_create(dpy, vis->screen, pixmap, config))
       return None;
@@ -642,19 +640,33 @@ glXCreateGLXPixmap(Display * dpy, XVisualInfo * vis, Pixmap pixmap)
 
       psc = priv->screens[vis->screen];
       if (psc->driScreen == NULL)
-         break;
+         return xid;
+
       config = glx_config_find_visual(psc->visuals, vis->visualid);
-      pdraw = psc->driScreen->createDrawable(psc, pixmap, req->glxpixmap, config);
+      pdraw = psc->driScreen->createDrawable(psc, pixmap, xid, config);
       if (pdraw == NULL) {
          fprintf(stderr, "failed to create pixmap\n");
+         xid = None;
          break;
       }
 
-      if (__glxHashInsert(priv->drawHash, req->glxpixmap, pdraw)) {
+      if (__glxHashInsert(priv->drawHash, xid, pdraw)) {
          (*pdraw->destroyDrawable) (pdraw);
-         return None;           /* FIXME: Check what we're supposed to do here... */
+         xid = None;
+         break;
       }
    } while (0);
+
+   if (xid == None) {
+      xGLXDestroyGLXPixmapReq *dreq;
+      LockDisplay(dpy);
+      GetReq(GLXDestroyGLXPixmap, dreq);
+      dreq->reqType = opcode;
+      dreq->glxCode = X_GLXDestroyGLXPixmap;
+      dreq->glxpixmap = xid;
+      UnlockDisplay(dpy);
+      SyncHandle();
+   }
 #endif
 
    return xid;
@@ -706,7 +718,7 @@ _X_EXPORT void
 glXSwapBuffers(Display * dpy, GLXDrawable drawable)
 {
 #ifdef GLX_USE_APPLEGL
-   GLXContext gc = glXGetCurrentContext();
+   struct glx_context * gc = __glXGetCurrentContext();
    if(gc && apple_glx_is_current_drawable(dpy, gc->driContext, drawable)) {
       apple_glx_swap_buffers(gc->driContext);
    } else {
@@ -1476,12 +1488,9 @@ _X_EXPORT GLXContextID glXGetContextIDEXT(const GLXContext ctx_user)
    return ctx->xid;
 }
 
-_X_EXPORT void
-glXFreeContextEXT(Display * dpy, GLXContext ctx)
-{
-   DestroyContext(dpy, ctx);
-}
-
+_X_EXPORT
+GLX_ALIAS_VOID(glXFreeContextEXT, (Display *dpy, GLXContext ctx), (dpy, ctx),
+	       glXDestroyContext);
 
 _X_EXPORT GLXFBConfig *
 glXChooseFBConfig(Display * dpy, int screen,
@@ -2475,7 +2484,6 @@ static const struct name_address_pair GLX_functions[] = {
    {NULL, NULL}                 /* end of list */
 };
 
-#ifndef GLX_USE_APPLEGL
 static const GLvoid *
 get_glx_proc_address(const char *funcName)
 {
@@ -2489,7 +2497,6 @@ get_glx_proc_address(const char *funcName)
 
    return NULL;
 }
-#endif
 
 /**
  * Get the address of a named GL function.  This is the pre-GLX 1.4 name for
@@ -2512,9 +2519,6 @@ _X_EXPORT void (*glXGetProcAddressARB(const GLubyte * procName)) (void)
     * DRI based drivers from searching the core GL function table for
     * internal API functions.
     */
-#ifdef GLX_USE_APPLEGL
-   f = (gl_function) apple_glx_get_proc_address(procName);
-#else
    f = (gl_function) get_glx_proc_address((const char *) procName);
    if ((f == NULL) && (procName[0] == 'g') && (procName[1] == 'l')
        && (procName[2] != 'X')) {
@@ -2523,8 +2527,13 @@ _X_EXPORT void (*glXGetProcAddressARB(const GLubyte * procName)) (void)
 #endif
       if (!f)
          f = (gl_function) _glapi_get_proc_address((const char *) procName);
+      if (!f) {
+         struct glx_context *gc = __glXGetCurrentContext();
+      
+         if (gc != NULL && gc->vtable->get_proc_address != NULL)
+            f = gc->vtable->get_proc_address((const char *) procName);
+      }
    }
-#endif
    return f;
 }
 

@@ -438,7 +438,7 @@ static void r300_update_rs_block(struct r300_context *r300)
 
     /* Rasterize texture coordinates. */
     for (i = 0; i < ATTR_GENERIC_COUNT && tex_count < 8; i++) {
-	bool sprite_coord = false;
+	boolean sprite_coord = false;
 
 	if (fs_inputs->generic[i] != ATTR_UNUSED) {
 	    sprite_coord = !!(r300->sprite_coord_enable & (1 << i));
@@ -852,6 +852,12 @@ static void r300_merge_textures_and_samplers(struct r300_context* r300)
             if (tex->b.b.b.target == PIPE_TEXTURE_1D) {
                 texstate->filter0 &= ~R300_TX_WRAP_T_MASK;
                 texstate->filter0 |= R300_TX_WRAP_T(R300_TX_CLAMP_TO_EDGE);
+            }
+
+            /* The hardware doesn't like CLAMP and CLAMP_TO_BORDER
+             * for the 3rd coordinate if the texture isn't 3D. */
+            if (tex->b.b.b.target != PIPE_TEXTURE_3D) {
+                texstate->filter0 &= ~R300_TX_WRAP_R_MASK;
             }
 
             if (tex->tex.is_npot) {

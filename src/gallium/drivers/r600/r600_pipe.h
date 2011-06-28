@@ -50,6 +50,7 @@ enum r600_pipe_state_id {
 	R600_PIPE_STATE_BLEND = 0,
 	R600_PIPE_STATE_BLEND_COLOR,
 	R600_PIPE_STATE_CONFIG,
+	R600_PIPE_STATE_SEAMLESS_CUBEMAP,
 	R600_PIPE_STATE_CLIP,
 	R600_PIPE_STATE_SCISSOR,
 	R600_PIPE_STATE_VIEWPORT,
@@ -65,6 +66,7 @@ enum r600_pipe_state_id {
 	R600_PIPE_STATE_RESOURCE,
 	R600_PIPE_STATE_POLYGON_OFFSET,
 	R600_PIPE_STATE_FETCH_SHADER,
+	R600_PIPE_STATE_SPI,
 	R600_PIPE_NSTATES
 };
 
@@ -81,12 +83,14 @@ struct r600_screen {
 
 struct r600_pipe_sampler_view {
 	struct pipe_sampler_view	base;
-	struct r600_pipe_state		state;
+	struct r600_pipe_resource_state		state;
 };
 
 struct r600_pipe_rasterizer {
 	struct r600_pipe_state		rstate;
-	bool				flatshade;
+	boolean				clamp_vertex_color;
+	boolean				clamp_fragment_color;
+	boolean				flatshade;
 	unsigned			sprite_coord_enable;
 	float				offset_units;
 	float				offset_scale;
@@ -123,6 +127,12 @@ struct r600_pipe_shader {
 	struct r600_bo			*bo;
 	struct r600_bo			*bo_fetch;
 	struct r600_vertex_element	vertex_elements;
+	struct tgsi_token		*tokens;
+};
+
+struct r600_pipe_sampler_state {
+	struct r600_pipe_state		rstate;
+	boolean seamless_cube_map;
 };
 
 /* needed for blitter save */
@@ -172,7 +182,7 @@ struct r600_pipe_context {
 	struct r600_pipe_state		*states[R600_PIPE_NSTATES];
 	struct r600_context		ctx;
 	struct r600_vertex_element	*vertex_elements;
-	struct r600_pipe_state		fs_resource[PIPE_MAX_ATTRIBS];
+	struct r600_pipe_resource_state		fs_resource[PIPE_MAX_ATTRIBS];
 	struct pipe_framebuffer_state	framebuffer;
 	struct pipe_index_buffer	index_buffer;
 	unsigned			cb_target_mask;
@@ -184,24 +194,36 @@ struct r600_pipe_context {
 	struct r600_pipe_shader 	*ps_shader;
 	struct r600_pipe_shader 	*vs_shader;
 	struct r600_pipe_state		vs_const_buffer;
-	struct r600_pipe_state		vs_const_buffer_resource[R600_MAX_CONST_BUFFERS];
+	struct r600_pipe_resource_state		vs_const_buffer_resource[R600_MAX_CONST_BUFFERS];
 	struct r600_pipe_state		ps_const_buffer;
-	struct r600_pipe_state		ps_const_buffer_resource[R600_MAX_CONST_BUFFERS];
+	struct r600_pipe_resource_state		ps_const_buffer_resource[R600_MAX_CONST_BUFFERS];
 	struct r600_pipe_rasterizer	*rasterizer;
+	struct r600_pipe_state          vgt;
+	struct r600_pipe_state          spi;
+	struct pipe_query		*current_render_cond;
+	unsigned			current_render_cond_mode;
+	struct pipe_query		*saved_render_cond;
+	unsigned			saved_render_cond_mode;
 	/* shader information */
+	boolean				clamp_vertex_color;
+	boolean				clamp_fragment_color;
+	boolean				spi_dirty;
 	unsigned			sprite_coord_enable;
-	bool				flatshade;
-	bool				export_16bpc;
+	boolean				flatshade;
+	boolean				export_16bpc;
 	unsigned			alpha_ref;
-	bool				alpha_ref_dirty;
+	boolean				alpha_ref_dirty;
+	unsigned			nr_cbufs;
 	struct r600_textures_info	ps_samplers;
 
 	struct r600_pipe_fences		fences;
 
 	struct u_vbuf_mgr		*vbuf_mgr;
 	struct util_slab_mempool	pool_transfers;
-	bool				blit;
+	boolean				blit;
+	boolean				have_depth_texture, have_depth_fb;
 
+	unsigned default_ps_gprs, default_vs_gprs;
 };
 
 struct r600_drawl {
@@ -217,11 +239,12 @@ void evergreen_init_state_functions(struct r600_pipe_context *rctx);
 void evergreen_init_config(struct r600_pipe_context *rctx);
 void evergreen_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shader);
 void evergreen_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader *shader);
-void evergreen_fetch_shader(struct r600_vertex_element *ve);
+void evergreen_fetch_shader(struct pipe_context *ctx, struct r600_vertex_element *ve);
 void *evergreen_create_db_flush_dsa(struct r600_pipe_context *rctx);
 void evergreen_polygon_offset_update(struct r600_pipe_context *rctx);
-void evergreen_pipe_set_buffer_resource(struct r600_pipe_context *rctx,
-					struct r600_pipe_state *rstate,
+void evergreen_pipe_init_buffer_resource(struct r600_pipe_context *rctx,
+					 struct r600_pipe_resource_state *rstate);
+void evergreen_pipe_mod_buffer_resource(struct r600_pipe_resource_state *rstate,
 					struct r600_resource *rbuffer,
 					unsigned offset, unsigned stride);
 
@@ -248,7 +271,7 @@ void r600_init_query_functions(struct r600_pipe_context *rctx);
 void r600_init_context_resource_functions(struct r600_pipe_context *r600);
 
 /* r600_shader.c */
-int r600_pipe_shader_create(struct pipe_context *ctx, struct r600_pipe_shader *shader, const struct tgsi_token *tokens);
+int r600_pipe_shader_create(struct pipe_context *ctx, struct r600_pipe_shader *shader);
 void r600_pipe_shader_destroy(struct pipe_context *ctx, struct r600_pipe_shader *shader);
 int r600_find_vs_semantic_index(struct r600_shader *vs,
 				struct r600_shader *ps, int id);
@@ -258,13 +281,15 @@ void r600_init_state_functions(struct r600_pipe_context *rctx);
 void r600_init_config(struct r600_pipe_context *rctx);
 void r600_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shader);
 void r600_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader *shader);
-void r600_fetch_shader(struct r600_vertex_element *ve);
+void r600_fetch_shader(struct pipe_context *ctx, struct r600_vertex_element *ve);
 void *r600_create_db_flush_dsa(struct r600_pipe_context *rctx);
 void r600_polygon_offset_update(struct r600_pipe_context *rctx);
-void r600_pipe_set_buffer_resource(struct r600_pipe_context *rctx,
-				   struct r600_pipe_state *rstate,
+void r600_pipe_init_buffer_resource(struct r600_pipe_context *rctx,
+				    struct r600_pipe_resource_state *rstate);
+void r600_pipe_mod_buffer_resource(struct r600_pipe_resource_state *rstate,
 				   struct r600_resource *rbuffer,
 				   unsigned offset, unsigned stride);
+void r600_adjust_gprs(struct r600_pipe_context *rctx);
 
 /* r600_texture.c */
 void r600_init_screen_texture_functions(struct pipe_screen *screen);

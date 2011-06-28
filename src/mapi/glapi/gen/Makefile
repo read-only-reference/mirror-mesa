@@ -16,7 +16,8 @@ MESA_GLAPI_OUTPUTS = \
 	$(MESA_GLAPI_DIR)/glapi_mapi_tmp.h \
 	$(MESA_GLAPI_DIR)/glprocs.h \
 	$(MESA_GLAPI_DIR)/glapitemp.h \
-	$(MESA_GLAPI_DIR)/glapitable.h
+	$(MESA_GLAPI_DIR)/glapitable.h \
+	$(MESA_GLAPI_DIR)/glapi_gentable.c
 
 MESA_GLAPI_ASM_OUTPUTS = \
 	$(MESA_GLAPI_DIR)/glapi_x86.S \
@@ -27,7 +28,7 @@ MESA_OUTPUTS = \
 	$(MESA_GLAPI_OUTPUTS) \
 	$(MESA_GLAPI_ASM_OUTPUTS) \
 	$(MESA_DIR)/main/enums.c \
-	$(MESA_DIR)/main/glapidispatch.h \
+	$(MESA_DIR)/main/dispatch.h \
 	$(MESA_DIR)/main/remap_helper.h \
 	$(MESA_GLX_DIR)/indirect.c \
 	$(MESA_GLX_DIR)/indirect.h \
@@ -50,7 +51,8 @@ XORG_GLAPI_OUTPUTS = \
 	$(XORG_GLAPI_DIR)/glprocs.h \
 	$(XORG_GLAPI_DIR)/glapioffsets.h \
 	$(XORG_GLAPI_DIR)/glapitable.h \
-	$(XORG_GLAPI_DIR)/glapidispatch.h
+	$(XORG_GLAPI_DIR)/glapidispatch.h \
+	$(XORG_GLAPI_DIR)/glapi_gentable.c
 
 XORG_OUTPUTS = \
 	$(XORG_GLAPI_FILES) \
@@ -128,7 +130,10 @@ xorg: check-xorg-source $(XORG_OUTPUTS)
 
 check-xorg-source:
 	@if ! test -d $(XORG_GLX_DIR); then \
-		echo "ERROR: Must specify path to xserver/GL/ checkout; set XORG_BASE env var."; \
+		echo "ERROR: Must specify path to xserver/ checkout. Set XORG_BASE env var."; \
+		if test x$(XORG_BASE) != x; then \
+			echo "'$(XORG_GLX_DIR)' does not exist."; \
+		fi; \
 		exit 1; \
 	fi
 
@@ -159,6 +164,9 @@ $(MESA_GLAPI_DIR)/glapitemp.h: gl_apitemp.py $(COMMON)
 $(MESA_GLAPI_DIR)/glapitable.h: gl_table.py $(COMMON)
 	$(PYTHON2) $(PYTHON_FLAGS) $< > $@
 
+$(MESA_GLAPI_DIR)/glapi_gentable.c: gl_gentable.py $(COMMON)
+	$(PYTHON2) $(PYTHON_FLAGS) $< > $@
+
 ######################################################################
 
 $(MESA_GLAPI_DIR)/glapi_x86.S: gl_x86_asm.py $(COMMON)
@@ -177,7 +185,7 @@ $(MESA_DIR)/main/enums.c: gl_enums.py $(COMMON) $(ES_API)
 		-f $(MESA_GLAPI_DIR)/gen-es/es1_API.xml \
 		-f $(MESA_GLAPI_DIR)/gen-es/es2_API.xml > $@
 
-$(MESA_DIR)/main/glapidispatch.h: gl_table.py $(COMMON)
+$(MESA_DIR)/main/dispatch.h: gl_table.py $(COMMON)
 	$(PYTHON2) $(PYTHON_FLAGS) $< -m remap_table > $@
 
 $(MESA_DIR)/main/remap_helper.h: remap_helper.py $(COMMON)

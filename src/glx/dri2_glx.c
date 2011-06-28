@@ -143,6 +143,8 @@ dri2_bind_context(struct glx_context *context, struct glx_context *old,
    pdraw = (struct dri2_drawable *) driFetchDrawable(context, draw);
    pread = (struct dri2_drawable *) driFetchDrawable(context, read);
 
+   driReleaseDrawables(&pcp->base);
+
    if (pdraw == NULL || pread == NULL)
       return GLXBadDrawable;
 
@@ -170,9 +172,6 @@ dri2_unbind_context(struct glx_context *context, struct glx_context *new)
    struct dri2_screen *psc = (struct dri2_screen *) pcp->base.psc;
 
    (*psc->core->unbindContext) (pcp->driContext);
-
-   if (context == new)
-      driReleaseDrawables(&pcp->base);
 }
 
 static struct glx_context *
@@ -457,6 +456,12 @@ static void
 dri2FlushFrontBuffer(__DRIdrawable *driDrawable, void *loaderPrivate)
 {
    struct dri2_drawable *pdraw = loaderPrivate;
+   if (!pdraw)
+      return;
+
+   if (!pdraw->base.psc)
+      return;
+
    struct glx_display *priv = __glXInitialize(pdraw->base.psc->dpy);
    struct dri2_display *pdp = (struct dri2_display *)priv->dri2Display;
    struct glx_context *gc = __glXGetCurrentContext();
@@ -675,8 +680,13 @@ dri2InvalidateBuffers(Display *dpy, XID drawable)
 {
    __GLXDRIdrawable *pdraw =
       dri2GetGlxDrawableFromXDrawableId(dpy, drawable);
-   struct dri2_screen *psc = (struct dri2_screen *) pdraw->psc;
+   struct dri2_screen *psc;
    struct dri2_drawable *pdp = (struct dri2_drawable *) pdraw;
+
+   if (!pdraw)
+      return;
+
+   psc = (struct dri2_screen *) pdraw->psc;
 
 #if __DRI2_FLUSH_VERSION >= 3
    if (pdraw && psc->f && psc->f->base.version >= 3 && psc->f->invalidate)
@@ -757,6 +767,7 @@ static const struct glx_context_vtable dri2_context_vtable = {
    DRI_glXUseXFont,
    dri2_bind_tex_image,
    dri2_release_tex_image,
+   NULL, /* get_proc_address */
 };
 
 static void
