@@ -587,7 +587,7 @@ st_context_teximage(struct st_context_iface *stctxi,
          internalFormat = GL_RGB;
 
       texFormat = st_ChooseTextureFormat(ctx, internalFormat,
-                                         GL_RGBA, GL_UNSIGNED_BYTE);
+                                         GL_BGRA, GL_UNSIGNED_BYTE);
 
       _mesa_init_teximage_fields(ctx, target, texImage,
                                  tex->width0, tex->height0, 1, 0,
@@ -918,6 +918,15 @@ st_manager_add_color_renderbuffer(struct st_context *st,
       return FALSE;
 
    st_framebuffer_update_attachments(stfb);
+
+   /*
+    * Force a call to the state tracker manager to validate the
+    * new renderbuffer. It might be that there is a window system
+    * renderbuffer available.
+    */
+   if(stfb->iface)
+      stfb->iface_stamp = p_atomic_read(&stfb->iface->stamp) - 1;
+
    st_invalidate_state(st->ctx, _NEW_BUFFERS);
 
    return TRUE;

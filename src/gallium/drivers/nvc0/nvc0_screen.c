@@ -24,6 +24,9 @@
 #include "util/u_format_s3tc.h"
 #include "pipe/p_screen.h"
 
+#include "vl/vl_decoder.h"
+#include "vl/vl_video_buffer.h"
+
 #include "nvc0_context.h"
 #include "nvc0_screen.h"
 
@@ -37,7 +40,7 @@ nvc0_screen_is_format_supported(struct pipe_screen *pscreen,
                                 unsigned sample_count,
                                 unsigned bindings)
 {
-   if (sample_count > 1)
+   if (sample_count > 2 && sample_count != 4 && sample_count != 8)
       return FALSE;
 
    if (!util_format_is_supported(format, bindings))
@@ -198,8 +201,11 @@ nvc0_screen_destroy(struct pipe_screen *pscreen)
 {
    struct nvc0_screen *screen = nvc0_screen(pscreen);
 
-   nouveau_fence_wait(screen->base.fence.current);
-   nouveau_fence_ref(NULL, &screen->base.fence.current);
+   if (screen->base.fence.current) {
+      nouveau_fence_wait(screen->base.fence.current);
+      nouveau_fence_ref(NULL, &screen->base.fence.current);
+   }
+   screen->base.channel->user_private = NULL;
 
    nouveau_bo_ref(NULL, &screen->text);
    nouveau_bo_ref(NULL, &screen->tls);
@@ -358,6 +364,7 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
       return NULL;
    }
    chan = screen->base.channel;
+   chan->user_private = screen;
 
    pscreen->winsys = ws;
    pscreen->destroy = nvc0_screen_destroy;
@@ -368,6 +375,8 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    pscreen->get_paramf = nvc0_screen_get_paramf;
 
    nvc0_screen_init_resource_functions(pscreen);
+
+   nouveau_screen_init_vdec(&screen->base);
 
    ret = nouveau_bo_new(dev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP, 0, 4096,
                         &screen->fence.bo);
@@ -433,7 +442,7 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    BEGIN_RING(chan, RING_3D(MULTISAMPLE_ENABLE), 1);
    OUT_RING  (chan, 0);
    BEGIN_RING(chan, RING_3D(MULTISAMPLE_MODE), 1);
-   OUT_RING  (chan, NVC0_3D_MULTISAMPLE_MODE_1X);
+   OUT_RING  (chan, NVC0_3D_MULTISAMPLE_MODE_MS1);
    BEGIN_RING(chan, RING_3D(MULTISAMPLE_CTRL), 1);
    OUT_RING  (chan, 0);
    BEGIN_RING(chan, RING_3D(LINE_WIDTH_SEPARATE), 1);

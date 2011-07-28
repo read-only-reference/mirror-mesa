@@ -603,9 +603,11 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       /* gen4's SIMD8 sampler always has the slots for u,v,r present. */
       mlen += 3;
    } else if (ir->op == ir_txd) {
+      this->result = reg_undef;
       ir->lod_info.grad.dPdx->accept(this);
       fs_reg dPdx = this->result;
 
+      this->result = reg_undef;
       ir->lod_info.grad.dPdy->accept(this);
       fs_reg dPdy = this->result;
 
@@ -620,6 +622,8 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
        * dPdx = dudx, dvdx, drdx
        * dPdy = dudy, dvdy, drdy
        *
+       * 1-arg: Does not exist.
+       *
        * 2-arg: dudx   dvdx   dudy   dvdy
        *        dPdx.x dPdx.y dPdy.x dPdy.y
        *        m4     m5     m6     m7
@@ -631,14 +635,14 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       for (int i = 0; i < ir->lod_info.grad.dPdx->type->vector_elements; i++) {
 	 emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen), dPdx);
 	 dPdx.reg_offset++;
-	 mlen++;
       }
+      mlen += MAX2(ir->lod_info.grad.dPdx->type->vector_elements, 2);
 
       for (int i = 0; i < ir->lod_info.grad.dPdy->type->vector_elements; i++) {
 	 emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen), dPdy);
 	 dPdy.reg_offset++;
-	 mlen++;
       }
+      mlen += MAX2(ir->lod_info.grad.dPdy->type->vector_elements, 2);
    } else {
       /* Oh joy.  gen4 doesn't have SIMD8 non-shadow-compare bias/lod
        * instructions.  We'll need to do SIMD16 here.
@@ -786,9 +790,11 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       inst = emit(FS_OPCODE_TXL, dst);
       break;
    case ir_txd: {
+      this->result = reg_undef;
       ir->lod_info.grad.dPdx->accept(this);
       fs_reg dPdx = this->result;
 
+      this->result = reg_undef;
       ir->lod_info.grad.dPdy->accept(this);
       fs_reg dPdy = this->result;
 
@@ -850,6 +856,7 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    }
 
    if (ir->shadow_comparitor && ir->op != ir_txd) {
+      this->result = reg_undef;
       ir->shadow_comparitor->accept(this);
       emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen), this->result);
       mlen += reg_width;
@@ -860,11 +867,13 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    case ir_tex:
       break;
    case ir_txb:
+      this->result = reg_undef;
       ir->lod_info.bias->accept(this);
       emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen), this->result);
       mlen += reg_width;
       break;
    case ir_txl:
+      this->result = reg_undef;
       ir->lod_info.lod->accept(this);
       emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen), this->result);
       mlen += reg_width;
@@ -873,9 +882,11 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       if (c->dispatch_width == 16)
 	 fail("Gen7 does not support sample_d/sample_d_c in SIMD16 mode.");
 
+      this->result = reg_undef;
       ir->lod_info.grad.dPdx->accept(this);
       fs_reg dPdx = this->result;
 
+      this->result = reg_undef;
       ir->lod_info.grad.dPdy->accept(this);
       fs_reg dPdy = this->result;
 
@@ -1070,6 +1081,7 @@ fs_visitor::visit(ir_texture *ir)
       if (hw_compare_supported) {
 	 inst->shadow_compare = true;
       } else {
+	 this->result = reg_undef;
 	 ir->shadow_comparitor->accept(this);
 	 fs_reg ref = this->result;
 
@@ -1465,8 +1477,8 @@ fs_visitor::visit(ir_if *ir)
       inst->predicated = true;
    }
 
-   foreach_iter(exec_list_iterator, iter, ir->then_instructions) {
-      ir_instruction *ir = (ir_instruction *)iter.get();
+   foreach_list(node, &ir->then_instructions) {
+      ir_instruction *ir = (ir_instruction *)node;
       this->base_ir = ir;
       this->result = reg_undef;
       ir->accept(this);
@@ -1475,8 +1487,8 @@ fs_visitor::visit(ir_if *ir)
    if (!ir->else_instructions.is_empty()) {
       emit(BRW_OPCODE_ELSE);
 
-      foreach_iter(exec_list_iterator, iter, ir->else_instructions) {
-	 ir_instruction *ir = (ir_instruction *)iter.get();
+      foreach_list(node, &ir->else_instructions) {
+	 ir_instruction *ir = (ir_instruction *)node;
 	 this->base_ir = ir;
 	 this->result = reg_undef;
 	 ir->accept(this);
@@ -1526,8 +1538,8 @@ fs_visitor::visit(ir_loop *ir)
       inst->predicated = true;
    }
 
-   foreach_iter(exec_list_iterator, iter, ir->body_instructions) {
-      ir_instruction *ir = (ir_instruction *)iter.get();
+   foreach_list(node, &ir->body_instructions) {
+      ir_instruction *ir = (ir_instruction *)node;
 
       this->base_ir = ir;
       this->result = reg_undef;
@@ -1583,8 +1595,8 @@ fs_visitor::visit(ir_function *ir)
 
       assert(sig);
 
-      foreach_iter(exec_list_iterator, iter, sig->body) {
-	 ir_instruction *ir = (ir_instruction *)iter.get();
+      foreach_list(node, &sig->body) {
+	 ir_instruction *ir = (ir_instruction *)node;
 	 this->base_ir = ir;
 	 this->result = reg_undef;
 	 ir->accept(this);
@@ -1733,6 +1745,7 @@ void
 fs_visitor::emit_color_write(int index, int first_color_mrf, fs_reg color)
 {
    int reg_width = c->dispatch_width / 8;
+   fs_inst *inst;
 
    if (c->dispatch_width == 8 || intel->gen == 6) {
       /* SIMD8 write looks like:
@@ -1751,8 +1764,10 @@ fs_visitor::emit_color_write(int index, int first_color_mrf, fs_reg color)
        * m + 6: a0
        * m + 7: a1
        */
-      emit(BRW_OPCODE_MOV, fs_reg(MRF, first_color_mrf + index * reg_width),
-	   color);
+      inst = emit(BRW_OPCODE_MOV,
+		  fs_reg(MRF, first_color_mrf + index * reg_width),
+		  color);
+      inst->saturate = c->key.clamp_fragment_color;
    } else {
       /* pre-gen6 SIMD16 single source DP write looks like:
        * m + 0: r0
@@ -1770,16 +1785,22 @@ fs_visitor::emit_color_write(int index, int first_color_mrf, fs_reg color)
 	  * usual destination + 1 for the second half we get
 	  * destination + 4.
 	  */
-	 emit(BRW_OPCODE_MOV,
-	      fs_reg(MRF, BRW_MRF_COMPR4 + first_color_mrf + index), color);
+	 inst = emit(BRW_OPCODE_MOV,
+		     fs_reg(MRF, BRW_MRF_COMPR4 + first_color_mrf + index),
+		     color);
+	 inst->saturate = c->key.clamp_fragment_color;
       } else {
 	 push_force_uncompressed();
-	 emit(BRW_OPCODE_MOV, fs_reg(MRF, first_color_mrf + index), color);
+	 inst = emit(BRW_OPCODE_MOV, fs_reg(MRF, first_color_mrf + index),
+		     color);
+	 inst->saturate = c->key.clamp_fragment_color;
 	 pop_force_uncompressed();
 
 	 push_force_sechalf();
 	 color.sechalf = true;
-	 emit(BRW_OPCODE_MOV, fs_reg(MRF, first_color_mrf + index + 4), color);
+	 inst = emit(BRW_OPCODE_MOV, fs_reg(MRF, first_color_mrf + index + 4),
+		     color);
+	 inst->saturate = c->key.clamp_fragment_color;
 	 pop_force_sechalf();
 	 color.sechalf = false;
       }
@@ -1791,7 +1812,8 @@ fs_visitor::emit_fb_writes()
 {
    this->current_annotation = "FB write header";
    GLboolean header_present = GL_TRUE;
-   int nr = 2;
+   int base_mrf = 2;
+   int nr = base_mrf;
    int reg_width = c->dispatch_width / 8;
 
    if (intel->gen >= 6 &&
@@ -1870,8 +1892,8 @@ fs_visitor::emit_fb_writes()
 
       fs_inst *inst = emit(FS_OPCODE_FB_WRITE);
       inst->target = target;
-      inst->base_mrf = 2;
-      inst->mlen = nr;
+      inst->base_mrf = base_mrf;
+      inst->mlen = nr - base_mrf;
       if (target == c->key.nr_color_regions - 1)
 	 inst->eot = true;
       inst->header_present = header_present;
@@ -1888,8 +1910,8 @@ fs_visitor::emit_fb_writes()
       }
 
       fs_inst *inst = emit(FS_OPCODE_FB_WRITE);
-      inst->base_mrf = 2;
-      inst->mlen = nr;
+      inst->base_mrf = base_mrf;
+      inst->mlen = nr - base_mrf;
       inst->eot = true;
       inst->header_present = header_present;
    }

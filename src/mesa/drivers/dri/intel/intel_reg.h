@@ -49,7 +49,6 @@
 #define I1_LOAD_S(n)                      (1<<(4+n))
 
 #define _3DSTATE_DRAWRECT_INFO		(CMD_3D | (0x1d<<24) | (0x80<<16) | 0x3)
-#define _3DSTATE_DRAWRECT_INFO_I965	(CMD_3D | (3 << 27) | (1 << 24) | 0x2)
 
 /** @{
  *
@@ -76,6 +75,7 @@
 #define PIPE_CONTROL_VF_CACHE_INVALIDATE	(1 << 4)
 #define PIPE_CONTROL_CONST_CACHE_INVALIDATE	(1 << 3)
 #define PIPE_CONTROL_STATE_CACHE_INVALIDATE	(1 << 2)
+#define PIPE_CONTROL_STALL_AT_SCOREBOARD	(1 << 1)
 #define PIPE_CONTROL_DEPTH_CACHE_FLUSH		(1 << 0)
 #define PIPE_CONTROL_PPGTT_WRITE	(0 << 2)
 #define PIPE_CONTROL_GLOBAL_GTT_WRITE	(1 << 2)

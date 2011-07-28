@@ -25,6 +25,8 @@
 #include "util/u_format_s3tc.h"
 #include "util/u_memory.h"
 #include "os/os_time.h"
+#include "vl/vl_decoder.h"
+#include "vl/vl_video_buffer.h"
 
 #include "r300_context.h"
 #include "r300_texture.h"
@@ -302,15 +304,31 @@ static float r300_get_paramf(struct pipe_screen* pscreen, enum pipe_cap param)
     }
 }
 
+static int r300_get_video_param(struct pipe_screen *screen,
+				enum pipe_video_profile profile,
+				enum pipe_video_cap param)
+{
+   switch (param) {
+      case PIPE_VIDEO_CAP_SUPPORTED:
+         return vl_profile_supported(screen, profile);
+      case PIPE_VIDEO_CAP_NPOT_TEXTURES:
+         return 0;
+      case PIPE_VIDEO_CAP_MAX_WIDTH:
+      case PIPE_VIDEO_CAP_MAX_HEIGHT:
+         return vl_video_buffer_max_size(screen);
+      default:
+         return 0;
+   }
+}
+
 static boolean r300_is_format_supported(struct pipe_screen* screen,
                                         enum pipe_format format,
                                         enum pipe_texture_target target,
                                         unsigned sample_count,
                                         unsigned usage)
 {
-    struct radeon_winsys *rws = r300_screen(screen)->rws;
     uint32_t retval = 0;
-    boolean drm_2_8_0 = rws->get_value(rws, RADEON_VID_DRM_2_8_0);
+    boolean drm_2_8_0 = r300_screen(screen)->info.drm_minor >= 8;
     boolean is_r500 = r300_screen(screen)->caps.is_r500;
     boolean is_r400 = r300_screen(screen)->caps.is_r400;
     boolean is_color2101010 = format == PIPE_FORMAT_R10G10B10A2_UNORM ||
@@ -478,19 +496,17 @@ struct pipe_screen* r300_screen_create(struct radeon_winsys *rws)
         return NULL;
     }
 
-    r300screen->caps.pci_id = rws->get_value(rws, RADEON_VID_PCI_ID);
-    r300screen->caps.num_frag_pipes = rws->get_value(rws, RADEON_VID_R300_GB_PIPES);
-    r300screen->caps.num_z_pipes = rws->get_value(rws, RADEON_VID_R300_Z_PIPES);
+    rws->query_info(rws, &r300screen->info);
 
     r300_init_debug(r300screen);
-    r300_parse_chipset(&r300screen->caps);
+    r300_parse_chipset(r300screen->info.pci_id, &r300screen->caps);
 
     if (SCREEN_DBG_ON(r300screen, DBG_NO_ZMASK))
         r300screen->caps.zmask_ram = 0;
     if (SCREEN_DBG_ON(r300screen, DBG_NO_HIZ))
         r300screen->caps.hiz_ram = 0;
 
-    if (!rws->get_value(rws, RADEON_VID_DRM_2_8_0))
+    if (r300screen->info.drm_minor < 8)
         r300screen->caps.has_us_format = FALSE;
 
     pipe_mutex_init(r300screen->num_contexts_mutex);
@@ -507,9 +523,10 @@ struct pipe_screen* r300_screen_create(struct radeon_winsys *rws)
     r300screen->screen.get_param = r300_get_param;
     r300screen->screen.get_shader_param = r300_get_shader_param;
     r300screen->screen.get_paramf = r300_get_paramf;
+    r300screen->screen.get_video_param = r300_get_video_param;
     r300screen->screen.is_format_supported = r300_is_format_supported;
+    r300screen->screen.is_video_format_supported = vl_video_buffer_is_format_supported;
     r300screen->screen.context_create = r300_create_context;
-
     r300screen->screen.fence_reference = r300_fence_reference;
     r300screen->screen.fence_signalled = r300_fence_signalled;
     r300screen->screen.fence_finish = r300_fence_finish;

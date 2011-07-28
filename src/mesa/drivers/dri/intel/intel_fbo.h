@@ -58,7 +58,6 @@ struct intel_renderbuffer
 
    /** \} */
 
-   GLuint draw_offset; /**< Offset of drawing address within the region */
    GLuint draw_x, draw_y; /**< Offset of drawing within the region */
 };
 
@@ -154,18 +153,6 @@ intel_framebuffer_has_hiz(struct gl_framebuffer *fb)
 {
    return intel_framebuffer_get_hiz_region(fb) != NULL;
 }
-
-
-extern void
-intel_renderbuffer_set_region(struct intel_context *intel,
-			      struct intel_renderbuffer *irb,
-			      struct intel_region *region);
-
-extern void
-intel_renderbuffer_set_hiz_region(struct intel_context *intel,
-				  struct intel_renderbuffer *rb,
-				  struct intel_region *region);
-
 
 extern struct intel_renderbuffer *
 intel_create_renderbuffer(gl_format format);

@@ -232,17 +232,13 @@ _mesa_free_framebuffer_data(struct gl_framebuffer *fb)
 
 /**
  * Set *ptr to point to fb, with refcounting and locking.
+ * This is normally only called from the _mesa_reference_framebuffer() macro
+ * when there's a real pointer change.
  */
 void
-_mesa_reference_framebuffer(struct gl_framebuffer **ptr,
-                            struct gl_framebuffer *fb)
+_mesa_reference_framebuffer_(struct gl_framebuffer **ptr,
+                             struct gl_framebuffer *fb)
 {
-   assert(ptr);
-   if (*ptr == fb) {
-      /* no change */
-      return;
-   }
-
    if (*ptr) {
       /* unreference old renderbuffer */
       GLboolean deleteFlag = GL_FALSE;
@@ -552,6 +548,7 @@ _mesa_update_framebuffer_visual(struct gl_context *ctx,
             fb->Visual.rgbBits = fb->Visual.redBits
                + fb->Visual.greenBits + fb->Visual.blueBits;
             fb->Visual.samples = rb->NumSamples;
+            fb->Visual.sampleBuffers = rb->NumSamples > 0 ? 1 : 0;
             if (_mesa_get_format_color_encoding(fmt) == GL_SRGB)
                 fb->Visual.sRGBCapable = ctx->Const.sRGBCapable;
             break;
@@ -631,8 +628,14 @@ _mesa_update_depth_buffer(struct gl_context *ctx,
           || fb->_DepthBuffer->Wrapped != depthRb
           || _mesa_get_format_base_format(fb->_DepthBuffer->Format) != GL_DEPTH_COMPONENT) {
          /* need to update wrapper */
-         struct gl_renderbuffer *wrapper
-            = _mesa_new_z24_renderbuffer_wrapper(ctx, depthRb);
+         struct gl_renderbuffer *wrapper;
+
+         if (depthRb->Format == MESA_FORMAT_Z32_FLOAT_X24S8) {
+            wrapper = _mesa_new_z32f_renderbuffer_wrapper(ctx, depthRb);
+         }
+         else {
+            wrapper = _mesa_new_z24_renderbuffer_wrapper(ctx, depthRb);
+         }
          _mesa_reference_renderbuffer(&fb->_DepthBuffer, wrapper);
          ASSERT(fb->_DepthBuffer->Wrapped == depthRb);
       }

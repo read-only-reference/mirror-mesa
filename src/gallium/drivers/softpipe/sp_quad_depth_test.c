@@ -189,7 +189,8 @@ convert_quad_depth( struct depth_data *data,
 
 
 /**
- * Compute the depth_data::shader_stencil_refs[] values from the float fragment stencil values.
+ * Compute the depth_data::shader_stencil_refs[] values from the float
+ * fragment stencil values.
  */
 static void
 convert_quad_stencil( struct depth_data *data, 
@@ -205,16 +206,16 @@ convert_quad_stencil( struct depth_data *data,
    case PIPE_FORMAT_Z24_UNORM_S8_USCALED:
    case PIPE_FORMAT_X8Z24_UNORM:
    case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
-      {
-         for (j = 0; j < QUAD_SIZE; j++) {
-            data->shader_stencil_refs[j] = ((unsigned)(quad->output.stencil[j]));
-         }
+   case PIPE_FORMAT_S8_USCALED:
+      for (j = 0; j < QUAD_SIZE; j++) {
+         data->shader_stencil_refs[j] = ((unsigned)(quad->output.stencil[j]));
       }
       break;
    default:
       assert(0);
    }
 }
+
 
 /**
  * Write data->bzzzz[] values and data->stencilVals into the Z/stencil buffer.
@@ -726,9 +727,9 @@ depth_test_quads_fallback(struct quad_stage *qs,
                           unsigned nr)
 {
    unsigned i, pass = 0;
-   const struct sp_fragment_shader *fs = qs->softpipe->fs;
-   boolean interp_depth = !fs->info.writes_z;
-   boolean shader_stencil_ref = fs->info.writes_stencil;
+   const struct tgsi_shader_info *fsInfo = &qs->softpipe->fs_variant->info;
+   boolean interp_depth = !fsInfo->writes_z;
+   boolean shader_stencil_ref = fsInfo->writes_stencil;
    struct depth_data data;
 
    data.use_shader_stencil_refs = FALSE;
@@ -837,7 +838,9 @@ choose_depth_test(struct quad_stage *qs,
                   struct quad_header *quads[],
                   unsigned nr)
 {
-   boolean interp_depth = !qs->softpipe->fs->info.writes_z;
+   const struct tgsi_shader_info *fsInfo = &qs->softpipe->fs_variant->info;
+
+   boolean interp_depth = !fsInfo->writes_z;
 
    boolean alpha = qs->softpipe->depth_stencil->alpha.enabled;
 

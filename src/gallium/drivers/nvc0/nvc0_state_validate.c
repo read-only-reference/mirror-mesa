@@ -8,8 +8,8 @@ nvc0_validate_zcull(struct nvc0_context *nvc0)
 {
     struct nouveau_channel *chan = nvc0->screen->base.channel;
     struct pipe_framebuffer_state *fb = &nvc0->framebuffer;
-    struct nvc0_surface *sf = nvc0_surface(fb->zsbuf);
-    struct nvc0_miptree *mt = nvc0_miptree(sf->base.texture);
+    struct nv50_surface *sf = nv50_surface(fb->zsbuf);
+    struct nv50_miptree *mt = nv50_miptree(sf->base.texture);
     struct nouveau_bo *bo = mt->base.bo;
     uint32_t size;
     uint32_t offset = align(mt->total_size, 1 << 17);
@@ -59,6 +59,7 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
     struct nouveau_channel *chan = nvc0->screen->base.channel;
     struct pipe_framebuffer_state *fb = &nvc0->framebuffer;
     unsigned i;
+    unsigned ms_mode = NVC0_3D_MULTISAMPLE_MODE_MS1;
     boolean serialize = FALSE;
 
     nvc0_bufctx_reset(nvc0, NVC0_BUFCTX_FRAME);
@@ -72,8 +73,8 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
     MARK_RING(chan, 9 * fb->nr_cbufs, 2 * fb->nr_cbufs);
 
     for (i = 0; i < fb->nr_cbufs; ++i) {
-        struct nvc0_miptree *mt = nvc0_miptree(fb->cbufs[i]->texture);
-        struct nvc0_surface *sf = nvc0_surface(fb->cbufs[i]);
+        struct nv50_miptree *mt = nv50_miptree(fb->cbufs[i]->texture);
+        struct nv50_surface *sf = nv50_surface(fb->cbufs[i]);
         struct nouveau_bo *bo = mt->base.bo;
         uint32_t offset = sf->offset;
 
@@ -89,6 +90,8 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
         OUT_RING  (chan, mt->layer_stride >> 2);
         OUT_RING  (chan, sf->base.u.tex.first_layer);
 
+        ms_mode = mt->ms_mode;
+
         if (mt->base.status & NOUVEAU_BUFFER_STATUS_GPU_READING)
            serialize = TRUE;
         mt->base.status |=  NOUVEAU_BUFFER_STATUS_GPU_WRITING;
@@ -100,8 +103,8 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
     }
 
     if (fb->zsbuf) {
-        struct nvc0_miptree *mt = nvc0_miptree(fb->zsbuf->texture);
-        struct nvc0_surface *sf = nvc0_surface(fb->zsbuf);
+        struct nv50_miptree *mt = nv50_miptree(fb->zsbuf->texture);
+        struct nv50_surface *sf = nv50_surface(fb->zsbuf);
         struct nouveau_bo *bo = mt->base.bo;
         int unk = mt->base.base.target == PIPE_TEXTURE_2D;
         uint32_t offset = sf->offset;
@@ -123,6 +126,8 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
         BEGIN_RING(chan, RING_3D(ZETA_BASE_LAYER), 1);
         OUT_RING  (chan, sf->base.u.tex.first_layer);
 
+        ms_mode = mt->ms_mode;
+
         if (mt->base.status & NOUVEAU_BUFFER_STATUS_GPU_READING)
            serialize = TRUE;
         mt->base.status |=  NOUVEAU_BUFFER_STATUS_GPU_WRITING;
@@ -134,6 +139,8 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
         BEGIN_RING(chan, RING_3D(ZETA_ENABLE), 1);
         OUT_RING  (chan, 0);
     }
+
+    IMMED_RING(chan, RING_3D(MULTISAMPLE_MODE), ms_mode);
 
     if (serialize) {
        BEGIN_RING(chan, RING_3D(SERIALIZE), 1);
@@ -390,6 +397,28 @@ nvc0_constbufs_validate(struct nvc0_context *nvc0)
 }
 
 static void
+nvc0_validate_sample_mask(struct nvc0_context *nvc0)
+{
+   struct nouveau_channel *chan = nvc0->screen->base.channel;
+
+   unsigned mask[4] =
+   {
+      nvc0->sample_mask & 0xffff,
+      nvc0->sample_mask & 0xffff,
+      nvc0->sample_mask & 0xffff,
+      nvc0->sample_mask & 0xffff
+   };
+
+   BEGIN_RING(chan, RING_3D(MSAA_MASK(0)), 4);
+   OUT_RING  (chan, mask[0]);
+   OUT_RING  (chan, mask[1]);
+   OUT_RING  (chan, mask[2]);
+   OUT_RING  (chan, mask[3]);
+   BEGIN_RING(chan, RING_3D(SAMPLE_SHADING), 1);
+   OUT_RING  (chan, 0x01);
+}
+
+static void
 nvc0_validate_derived_1(struct nvc0_context *nvc0)
 {
    struct nouveau_channel *chan = nvc0->screen->base.channel;
@@ -428,8 +457,7 @@ nvc0_switch_pipe_context(struct nvc0_context *ctx_to)
    if (!ctx_to->zsa)
       ctx_to->dirty &= ~NVC0_NEW_ZSA;
 
-   ctx_to->screen->base.channel->user_private = ctx_to->screen->cur_ctx =
-      ctx_to;
+   ctx_to->screen->cur_ctx = ctx_to;
 }
 
 static struct state_validate {
@@ -439,6 +467,7 @@ static struct state_validate {
     { nvc0_validate_fb,            NVC0_NEW_FRAMEBUFFER },
     { nvc0_validate_blend,         NVC0_NEW_BLEND },
     { nvc0_validate_zsa,           NVC0_NEW_ZSA },
+    { nvc0_validate_sample_mask,   NVC0_NEW_SAMPLE_MASK },
     { nvc0_validate_rasterizer,    NVC0_NEW_RASTERIZER },
     { nvc0_validate_blend_colour,  NVC0_NEW_BLEND_COLOUR },
     { nvc0_validate_stencil_ref,   NVC0_NEW_STENCIL_REF },

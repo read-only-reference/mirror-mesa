@@ -18,6 +18,7 @@
 #include "nv50_screen.h"
 #include "nv50_program.h"
 #include "nv50_resource.h"
+#include "nv50_transfer.h"
 
 #include "nouveau/nouveau_context.h"
 #include "nouveau/nv_object.xml.h"
@@ -130,20 +131,6 @@ nv50_context(struct pipe_context *pipe)
    return (struct nv50_context *)pipe;
 }
 
-struct nv50_surface {
-   struct pipe_surface base;
-   uint32_t offset;
-   uint32_t width;
-   uint16_t height;
-   uint16_t depth;
-};
-
-static INLINE struct nv50_surface *
-nv50_surface(struct pipe_surface *ps)
-{
-   return (struct nv50_surface *)ps;
-}
-
 /* nv50_context.c */
 struct pipe_context *nv50_create(struct pipe_screen *, void *);
 
@@ -201,6 +188,11 @@ nv50_create_sampler_view(struct pipe_context *,
                          const struct pipe_sampler_view *);
 
 /* nv50_transfer.c */
+void
+nv50_m2mf_transfer_rect(struct pipe_screen *pscreen,
+                        const struct nv50_m2mf_rect *dst,
+                        const struct nv50_m2mf_rect *src,
+                        uint32_t nblocksx, uint32_t nblocksy);
 void
 nv50_sifc_linear_u8(struct nouveau_context *pipe,
                     struct nouveau_bo *dst, unsigned offset, unsigned domain,

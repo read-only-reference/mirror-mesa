@@ -208,6 +208,15 @@ void st_init_limits(struct st_context *st)
 }
 
 
+static GLboolean st_get_s3tc_override(void)
+{
+   const char *override = _mesa_getenv("force_s3tc_enable");
+   if (override && !strcmp(override, "true"))
+      return GL_TRUE;
+   return GL_FALSE;
+}
+
+
 /**
  * Use pipe_screen::get_param() to query PIPE_CAP_ values to determine
  * which GL extensions are supported.
@@ -426,7 +435,7 @@ void st_init_extensions(struct st_context *st)
    if (screen->is_format_supported(screen, PIPE_FORMAT_DXT5_RGBA,
                                    PIPE_TEXTURE_2D, 0,
                                    PIPE_BIND_SAMPLER_VIEW) &&
-       ctx->Mesa_DXTn) {
+       (ctx->Mesa_DXTn || st_get_s3tc_override())) {
       ctx->Extensions.EXT_texture_compression_s3tc = GL_TRUE;
       ctx->Extensions.S3_s3tc = GL_TRUE;
    }
@@ -606,5 +615,16 @@ void st_init_extensions(struct st_context *st)
 
    if (screen->get_param(screen, PIPE_CAP_SM3)) {
       ctx->Extensions.ARB_shader_texture_lod = GL_TRUE;
+   }
+
+   if (screen->is_format_supported(screen, PIPE_FORMAT_Z32_FLOAT,
+                                   PIPE_TEXTURE_2D, 0,
+                                   PIPE_BIND_DEPTH_STENCIL |
+                                   PIPE_BIND_SAMPLER_VIEW) &&
+       screen->is_format_supported(screen, PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED,
+                                   PIPE_TEXTURE_2D, 0,
+                                   PIPE_BIND_DEPTH_STENCIL |
+                                   PIPE_BIND_SAMPLER_VIEW)) {
+      ctx->Extensions.ARB_depth_buffer_float = GL_TRUE;
    }
 }

@@ -508,6 +508,7 @@ struct pipe_query_data_timestamp_disjoint
    boolean  disjoint;
 };
 
+
 #ifdef __cplusplus
 }
 #endif

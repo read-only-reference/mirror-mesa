@@ -35,7 +35,6 @@
 #include "pipebuffer/pb_buffer.h"
 #include "r600_pipe.h"
 #include "r600_resource.h"
-#include "r600_state_inlines.h"
 #include "r600d.h"
 #include "r600_formats.h"
 
@@ -314,7 +313,14 @@ static boolean permit_hardware_blit(struct pipe_screen *screen,
                                 PIPE_BIND_SAMPLER_VIEW))
 		return FALSE;
 
-	return TRUE;
+	switch (res->usage) {
+	case PIPE_USAGE_STREAM:
+	case PIPE_USAGE_STAGING:
+		return FALSE;
+
+	default:
+		return TRUE;
+	}
 }
 
 static boolean r600_texture_get_handle(struct pipe_screen* screen,
@@ -683,7 +689,6 @@ void* r600_texture_transfer_map(struct pipe_context *ctx,
 	enum pipe_format format = transfer->resource->format;
 	struct radeon *radeon = (struct radeon *)ctx->screen->winsys;
 	unsigned offset = 0;
-	unsigned usage = 0;
 	char *map;
 
 	if (rtransfer->staging_texture) {
@@ -701,30 +706,7 @@ void* r600_texture_transfer_map(struct pipe_context *ctx,
 			transfer->box.x / util_format_get_blockwidth(format) * util_format_get_blocksize(format);
 	}
 
-	if (transfer->usage & PIPE_TRANSFER_WRITE) {
-		usage |= PB_USAGE_CPU_WRITE;
-
-		if (transfer->usage & PIPE_TRANSFER_DISCARD) {
-		}
-
-		if (transfer->usage & PIPE_TRANSFER_FLUSH_EXPLICIT) {
-		}
-	}
-
-	if (transfer->usage & PIPE_TRANSFER_READ) {
-		usage |= PB_USAGE_CPU_READ;
-	}
-
-	if (transfer->usage & PIPE_TRANSFER_DONTBLOCK) {
-		usage |= PB_USAGE_DONTBLOCK;
-	}
-
-	if (transfer->usage & PIPE_TRANSFER_UNSYNCHRONIZED) {
-		usage |= PB_USAGE_UNSYNCHRONIZED;
-	}
-
-	map = r600_bo_map(radeon, bo, usage, ctx);
-	if (!map) {
+	if (!(map = r600_bo_map(radeon, bo, transfer->usage, ctx))) {
 		return NULL;
 	}
 
@@ -851,6 +833,12 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 		case PIPE_FORMAT_S8_USCALED:
 			result = FMT_8;
 			word4 |= S_038010_NUM_FORMAT_ALL(V_038010_SQ_NUM_FORMAT_INT);
+			goto out_word4;
+		case PIPE_FORMAT_Z32_FLOAT:
+			result = FMT_32_FLOAT;
+			goto out_word4;
+		case PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED:
+			result = FMT_X24_8_32_FLOAT;
 			goto out_word4;
 		default:
 			goto out_unknown;

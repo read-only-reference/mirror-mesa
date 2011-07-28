@@ -416,11 +416,6 @@ dri2_load_driver_swrast(_EGLDisplay *disp)
 
    dri2_dpy->driver_name = "swrast";
    extensions = dri2_open_driver(disp);
-   if (!extensions) {
-      /* try again with swrastg */
-      dri2_dpy->driver_name = "swrastg";
-      extensions = dri2_open_driver(disp);
-   }
 
    if (!extensions)
       return EGL_FALSE;
@@ -923,8 +918,10 @@ dri2_create_image_khr_renderbuffer(_EGLDisplay *disp, _EGLContext *ctx,
       return EGL_NO_IMAGE_KHR;
    }
 
-   if (!_eglInitImage(&dri2_img->base, disp))
+   if (!_eglInitImage(&dri2_img->base, disp)) {
+      free(dri2_img);
       return EGL_NO_IMAGE_KHR;
+   }
 
    dri2_img->dri_image = 
       dri2_dpy->image->createImageFromRenderbuffer(dri2_ctx->dri_context,
@@ -1335,8 +1332,10 @@ _EGL_MAIN(const char *args)
 
    memset(dri2_drv, 0, sizeof *dri2_drv);
 
-   if (!dri2_load(&dri2_drv->base))
+   if (!dri2_load(&dri2_drv->base)) {
+      free(dri2_drv);
       return NULL;
+   }
 
    _eglInitDriverFallbacks(&dri2_drv->base);
    dri2_drv->base.API.Initialize = dri2_initialize;

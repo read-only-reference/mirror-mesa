@@ -62,8 +62,10 @@ process_parameters(exec_list *instructions, exec_list *actual_parameters,
  *
  * \param return_type Return type of the function.  May be \c NULL.
  * \param name        Name of the function.
- * \param parameters  Parameter list for the function.  This may be either a
- *                    formal or actual parameter list.  Only the type is used.
+ * \param parameters  List of \c ir_instruction nodes representing the
+ *                    parameter list for the function.  This may be either a
+ *                    formal (\c ir_variable) or actual (\c ir_rvalue)
+ *                    parameter list.  Only the type is used.
  *
  * \return
  * A ralloced string representing the prototype of the function.
@@ -440,13 +442,21 @@ process_array_constructor(exec_list *instructions,
       ir_rvalue *ir = (ir_rvalue *) n;
       ir_rvalue *result = ir;
 
-      /* Apply implicit conversions (not the scalar constructor rules!) */
+      /* Apply implicit conversions (not the scalar constructor rules!). See
+       * the spec quote above. */
       if (constructor_type->element_type()->is_float()) {
 	 const glsl_type *desired_type =
 	    glsl_type::get_instance(GLSL_TYPE_FLOAT,
 				    ir->type->vector_elements,
 				    ir->type->matrix_columns);
-	 result = convert_component(ir, desired_type);
+	 if (result->type->can_implicitly_convert_to(desired_type)) {
+	    /* Even though convert_component() implements the constructor
+	     * conversion rules (not the implicit conversion rules), its safe
+	     * to use it here because we already checked that the implicit
+	     * conversion is legal.
+	     */
+	    result = convert_component(ir, desired_type);
+	 }
       }
 
       if (result->type != constructor_type->element_type()) {

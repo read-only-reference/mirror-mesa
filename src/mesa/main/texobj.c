@@ -325,16 +325,14 @@ valid_texture_object(const struct gl_texture_object *tex)
  * Reference (or unreference) a texture object.
  * If '*ptr', decrement *ptr's refcount (and delete if it becomes zero).
  * If 'tex' is non-null, increment its refcount.
+ * This is normally only called from the _mesa_reference_texobj() macro
+ * when there's a real pointer change.
  */
 void
-_mesa_reference_texobj(struct gl_texture_object **ptr,
-                       struct gl_texture_object *tex)
+_mesa_reference_texobj_(struct gl_texture_object **ptr,
+                        struct gl_texture_object *tex)
 {
    assert(ptr);
-   if (*ptr == tex) {
-      /* no change */
-      return;
-   }
 
    if (*ptr) {
       /* Unreference the old texture */
@@ -899,7 +897,7 @@ unbind_texobj_from_texunits(struct gl_context *ctx,
 {
    GLuint u, tex;
 
-   for (u = 0; u < MAX_TEXTURE_IMAGE_UNITS; u++) {
+   for (u = 0; u < Elements(ctx->Texture.Unit); u++) {
       struct gl_texture_unit *unit = &ctx->Texture.Unit[u];
       for (tex = 0; tex < NUM_TEXTURE_TARGETS; tex++) {
          if (texObj == unit->CurrentTex[tex]) {

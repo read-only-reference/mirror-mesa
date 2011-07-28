@@ -32,6 +32,8 @@
 #include "main/imports.h"
 #include "main/macros.h"
 #include "main/colormac.h"
+#include "main/renderbuffer.h"
+#include "main/framebuffer.h"
 
 #include "tnl/tnl.h"
 #include "tnl/t_context.h"
@@ -42,6 +44,7 @@
 #include "intel_regions.h"
 #include "intel_tris.h"
 #include "intel_fbo.h"
+#include "intel_buffers.h"
 
 #include "i915_reg.h"
 #include "i915_context.h"
@@ -315,7 +318,8 @@ i915_emit_state(struct intel_context *intel)
 
    aper_array[aper_count++] = intel->batch.bo;
    if (dirty & I915_UPLOAD_BUFFERS) {
-      aper_array[aper_count++] = state->draw_region->buffer;
+      if (state->draw_region)
+	 aper_array[aper_count++] = state->draw_region->buffer;
       if (state->depth_region)
 	 aper_array[aper_count++] = state->depth_region->buffer;
    }
@@ -385,23 +389,27 @@ i915_emit_state(struct intel_context *intel)
       if (INTEL_DEBUG & DEBUG_STATE)
          fprintf(stderr, "I915_UPLOAD_BUFFERS:\n");
 
-      count = 14;
+      count = 17;
       if (state->Buffer[I915_DESTREG_DRAWRECT0] != MI_NOOP)
          count++;
-      if (state->depth_region)
-         count += 3;
 
       BEGIN_BATCH(count);
       OUT_BATCH(state->Buffer[I915_DESTREG_CBUFADDR0]);
       OUT_BATCH(state->Buffer[I915_DESTREG_CBUFADDR1]);
-      OUT_RELOC(state->draw_region->buffer,
-		I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+      if (state->draw_region) {
+	 OUT_RELOC(state->draw_region->buffer,
+		   I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+      } else {
+	 OUT_BATCH(0);
+      }
 
+      OUT_BATCH(state->Buffer[I915_DESTREG_DBUFADDR0]);
+      OUT_BATCH(state->Buffer[I915_DESTREG_DBUFADDR1]);
       if (state->depth_region) {
-         OUT_BATCH(state->Buffer[I915_DESTREG_DBUFADDR0]);
-         OUT_BATCH(state->Buffer[I915_DESTREG_DBUFADDR1]);
          OUT_RELOC(state->depth_region->buffer,
 		   I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+      } else {
+	 OUT_BATCH(0);
       }
 
       OUT_BATCH(state->Buffer[I915_DESTREG_DV0]);
@@ -529,6 +537,12 @@ i915_set_buf_info_for_region(uint32_t *state, struct intel_region *region,
 	 if (region->tiling == I915_TILING_Y)
 	    state[1] |= BUF_3D_TILE_WALK_Y;
       }
+   } else {
+      /* Fill in a default pitch, since 0 is invalid.  We'll be
+       * setting the buffer offset to 0 and not referencing the
+       * buffer, so the pitch could really be any valid value.
+       */
+      state[1] |= BUF_3D_PITCH(4096);
    }
 }
 
@@ -570,11 +584,9 @@ i915_set_draw_region(struct intel_context *intel,
    uint32_t draw_x, draw_y, draw_offset;
 
    if (state->draw_region != color_regions[0]) {
-      intel_region_release(&state->draw_region);
       intel_region_reference(&state->draw_region, color_regions[0]);
    }
    if (state->depth_region != depth_region) {
-      intel_region_release(&state->depth_region);
       intel_region_reference(&state->depth_region, depth_region);
    }
 
@@ -595,6 +607,8 @@ i915_set_draw_region(struct intel_context *intel,
             LOD_PRECLAMP_OGL | TEX_DEFAULT_COLOR_OGL);
    if (irb != NULL) {
       value |= i915_render_target_format_for_mesa_format[irb->Base.Format];
+   } else {
+      value |= DV_PF_8888;
    }
 
    /* This isn't quite safe, thus being hidden behind an option.  When changing
@@ -669,7 +683,142 @@ i915_set_draw_region(struct intel_context *intel,
    I915_STATECHANGE(i915, I915_UPLOAD_BUFFERS);
 }
 
+static void
+i915_update_color_write_enable(struct i915_context *i915, bool enable)
+{
+   uint32_t dw = i915->state.Ctx[I915_CTXREG_LIS6];
+   if (enable)
+      dw |= S6_COLOR_WRITE_ENABLE;
+   else
+      dw &= ~S6_COLOR_WRITE_ENABLE;
+   if (dw != i915->state.Ctx[I915_CTXREG_LIS6]) {
+      I915_STATECHANGE(i915, I915_UPLOAD_CTX);
+      i915->state.Ctx[I915_CTXREG_LIS6] = dw;
+   }
+}
 
+/**
+ * Update the hardware state for drawing into a window or framebuffer object.
+ *
+ * Called by glDrawBuffer, glBindFramebufferEXT, MakeCurrent, and other
+ * places within the driver.
+ *
+ * Basically, this needs to be called any time the current framebuffer
+ * changes, the renderbuffers change, or we need to draw into different
+ * color buffers.
+ */
+static void
+i915_update_draw_buffer(struct intel_context *intel)
+{
+   struct i915_context *i915 = (struct i915_context *)intel;
+   struct gl_context *ctx = &intel->ctx;
+   struct gl_framebuffer *fb = ctx->DrawBuffer;
+   struct intel_region *colorRegion = NULL, *depthRegion = NULL;
+   struct intel_renderbuffer *irbDepth = NULL, *irbStencil = NULL;
+   bool fb_has_hiz = intel_framebuffer_has_hiz(fb);
+
+   if (!fb) {
+      /* this can happen during the initial context initialization */
+      return;
+   }
+
+   irbDepth = intel_get_renderbuffer(fb, BUFFER_DEPTH);
+   irbStencil = intel_get_renderbuffer(fb, BUFFER_STENCIL);
+
+   /* Do this here, not core Mesa, since this function is called from
+    * many places within the driver.
+    */
+   if (ctx->NewState & _NEW_BUFFERS) {
+      /* this updates the DrawBuffer->_NumColorDrawBuffers fields, etc */
+      _mesa_update_framebuffer(ctx);
+      /* this updates the DrawBuffer's Width/Height if it's a FBO */
+      _mesa_update_draw_buffer_bounds(ctx);
+   }
+
+   if (fb->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      /* this may occur when we're called by glBindFrameBuffer() during
+       * the process of someone setting up renderbuffers, etc.
+       */
+      /*_mesa_debug(ctx, "DrawBuffer: incomplete user FBO\n");*/
+      return;
+   }
+
+   /* How many color buffers are we drawing into?
+    *
+    * If there is more than one drawbuffer (GL_FRONT_AND_BACK), or the
+    * drawbuffers are too big, we have to fallback to software.
+    */
+   if ((fb->Width > ctx->Const.MaxRenderbufferSize)
+       || (fb->Height > ctx->Const.MaxRenderbufferSize)) {
+      FALLBACK(intel, INTEL_FALLBACK_DRAW_BUFFER, true);
+   } else if (fb->_NumColorDrawBuffers > 1) {
+      FALLBACK(intel, INTEL_FALLBACK_DRAW_BUFFER, true);
+   } else {
+      struct intel_renderbuffer *irb;
+      irb = intel_renderbuffer(fb->_ColorDrawBuffers[0]);
+      colorRegion = irb ? irb->region : NULL;
+      FALLBACK(intel, INTEL_FALLBACK_DRAW_BUFFER, false);
+   }
+
+   /* Check for depth fallback. */
+   if (irbDepth && irbDepth->region) {
+      assert(!fb_has_hiz || irbDepth->Base.Format != MESA_FORMAT_S8_Z24);
+      FALLBACK(intel, INTEL_FALLBACK_DEPTH_BUFFER, GL_FALSE);
+      depthRegion = irbDepth->region;
+   } else if (irbDepth && !irbDepth->region) {
+      FALLBACK(intel, INTEL_FALLBACK_DEPTH_BUFFER, GL_TRUE);
+      depthRegion = NULL;
+   } else { /* !irbDepth */
+      /* No fallback is needed because there is no depth buffer. */
+      FALLBACK(intel, INTEL_FALLBACK_DEPTH_BUFFER, GL_FALSE);
+      depthRegion = NULL;
+   }
+
+   /* Check for stencil fallback. */
+   if (irbStencil && irbStencil->region) {
+      assert(irbStencil->Base.Format == MESA_FORMAT_S8_Z24);
+      FALLBACK(intel, INTEL_FALLBACK_STENCIL_BUFFER, GL_FALSE);
+   } else if (irbStencil && !irbStencil->region) {
+      FALLBACK(intel, INTEL_FALLBACK_STENCIL_BUFFER, GL_TRUE);
+   } else { /* !irbStencil */
+      /* No fallback is needed because there is no stencil buffer. */
+      FALLBACK(intel, INTEL_FALLBACK_STENCIL_BUFFER, GL_FALSE);
+   }
+
+   /* If we have a (packed) stencil buffer attached but no depth buffer,
+    * we still need to set up the shared depth/stencil state so we can use it.
+    */
+   if (depthRegion == NULL && irbStencil && irbStencil->region
+       && irbStencil->Base.Format == MESA_FORMAT_S8_Z24) {
+      depthRegion = irbStencil->region;
+   }
+
+   /*
+    * Update depth and stencil test state
+    */
+   ctx->Driver.Enable(ctx, GL_DEPTH_TEST, ctx->Depth.Test);
+   ctx->Driver.Enable(ctx, GL_STENCIL_TEST, ctx->Stencil.Enabled);
+
+   i915_update_color_write_enable(i915, colorRegion != NULL);
+
+   intel->vtbl.set_draw_region(intel, &colorRegion, depthRegion,
+                               fb->_NumColorDrawBuffers);
+   intel->NewGLState |= _NEW_BUFFERS;
+
+   /* update viewport since it depends on window size */
+   intelCalcViewport(ctx);
+
+   /* Set state we know depends on drawable parameters:
+    */
+   ctx->Driver.Scissor(ctx, ctx->Scissor.X, ctx->Scissor.Y,
+		       ctx->Scissor.Width, ctx->Scissor.Height);
+   ctx->Driver.DepthRange(ctx, ctx->Viewport.Near, ctx->Viewport.Far);
+
+   /* Update culling direction which changes depending on the
+    * orientation of the buffer:
+    */
+   ctx->Driver.FrontFace(ctx, ctx->Polygon.FrontFace);
+}
 
 static void
 i915_new_batch(struct intel_context *intel)
@@ -726,6 +875,7 @@ i915InitVtbl(struct i915_context *i915)
    i915->intel.vtbl.render_start = i915_render_start;
    i915->intel.vtbl.render_prevalidate = i915_render_prevalidate;
    i915->intel.vtbl.set_draw_region = i915_set_draw_region;
+   i915->intel.vtbl.update_draw_buffer = i915_update_draw_buffer;
    i915->intel.vtbl.update_texture_state = i915UpdateTextureState;
    i915->intel.vtbl.assert_not_dirty = i915_assert_not_dirty;
    i915->intel.vtbl.finish_batch = intel_finish_vb;

@@ -43,7 +43,9 @@ nv50_screen_is_format_supported(struct pipe_screen *pscreen,
                                 unsigned sample_count,
                                 unsigned bindings)
 {
-   if (sample_count > 1)
+   if (sample_count > 2 && sample_count != 4 && sample_count != 8)
+      return FALSE;
+   if (sample_count == 8 && util_format_get_blocksizebits(format) >= 128)
       return FALSE;
 
    if (!util_format_is_supported(format, bindings))
@@ -215,6 +217,7 @@ nv50_screen_destroy(struct pipe_screen *pscreen)
       nouveau_fence_wait(screen->base.fence.current);
       nouveau_fence_ref (NULL, &screen->base.fence.current);
    }
+   screen->base.channel->user_private = NULL;
 
    nouveau_bo_ref(NULL, &screen->code);
    nouveau_bo_ref(NULL, &screen->tls_bo);
@@ -300,6 +303,7 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
       FAIL_SCREEN_INIT("nouveau_screen_init failed: %d\n", ret);
 
    chan = screen->base.channel;
+   chan->user_private = screen;
 
    pscreen->winsys = ws;
    pscreen->destroy = nv50_screen_destroy;
@@ -310,6 +314,8 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    pscreen->get_paramf = nv50_screen_get_paramf;
 
    nv50_screen_init_resource_functions(pscreen);
+
+   nouveau_screen_init_vdec(&screen->base);
 
    ret = nouveau_bo_new(dev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP, 0, 4096,
                         &screen->fence.bo);

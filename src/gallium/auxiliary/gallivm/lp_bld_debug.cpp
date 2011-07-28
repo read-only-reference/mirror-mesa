@@ -193,7 +193,11 @@ lp_disassemble(const void* func)
 
    InitializeAllDisassemblers();
 
+#if HAVE_LLVM >= 0x0300
+   OwningPtr<const MCAsmInfo> AsmInfo(T->createMCAsmInfo(Triple));
+#else
    OwningPtr<const MCAsmInfo> AsmInfo(T->createAsmInfo(Triple));
+#endif
 
    if (!AsmInfo) {
       debug_printf("error: no assembly info for target %s\n", Triple.c_str());
@@ -207,21 +211,13 @@ lp_disassemble(const void* func)
    }
 
    raw_debug_ostream Out;
-#if HAVE_LLVM >= 0x0300
-   TargetMachine *TM = T->createTargetMachine(Triple, sys::getHostCPUName(), "");
-#else
-   TargetMachine *TM = T->createTargetMachine(Triple, "");
-#endif
 
 #if HAVE_LLVM >= 0x0300
    unsigned int AsmPrinterVariant = AsmInfo->getAssemblerDialect();
 #else
    int AsmPrinterVariant = AsmInfo->getAssemblerDialect();
 #endif
-#if HAVE_LLVM >= 0x0300
-   OwningPtr<MCInstPrinter> Printer(
-         T->createMCInstPrinter(*TM, AsmPrinterVariant, *AsmInfo));
-#elif HAVE_LLVM >= 0x0208
+#if HAVE_LLVM >= 0x0208
    OwningPtr<MCInstPrinter> Printer(
          T->createMCInstPrinter(AsmPrinterVariant, *AsmInfo));
 #else
@@ -232,6 +228,12 @@ lp_disassemble(const void* func)
       debug_printf("error: no instruction printer for target %s\n", Triple.c_str());
       return;
    }
+
+#if HAVE_LLVM >= 0x0300
+   TargetMachine *TM = T->createTargetMachine(Triple, sys::getHostCPUName(), "");
+#else
+   TargetMachine *TM = T->createTargetMachine(Triple, "");
+#endif
 
    const TargetInstrInfo *TII = TM->getInstrInfo();
 

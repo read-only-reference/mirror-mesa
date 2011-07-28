@@ -56,7 +56,7 @@
 
 #include "drirenderbuffer.h"
 #include "utils.h"
-
+#include "../glsl/ralloc.h"
 
 #ifndef INTEL_DEBUG
 int INTEL_DEBUG = (0);
@@ -661,7 +661,7 @@ intelInitContext(struct intel_context *intel,
 
    /* Depth and stencil */
    ctx->TextureFormatSupported[MESA_FORMAT_S8_Z24] = GL_TRUE;
-   ctx->TextureFormatSupported[MESA_FORMAT_X8_Z24] = intel->has_separate_stencil;
+   ctx->TextureFormatSupported[MESA_FORMAT_X8_Z24] = GL_TRUE;
    ctx->TextureFormatSupported[MESA_FORMAT_S8] = intel->has_separate_stencil;
 
    /*
@@ -922,7 +922,9 @@ intelDestroyContext(__DRIcontext * driContextPriv)
       /* free the Mesa context */
       _mesa_free_context_data(&intel->ctx);
 
-      FREE(intel);
+      _math_matrix_dtr(&intel->ViewportMatrix);
+
+      ralloc_free(intel);
       driContextPriv->driverPrivate = NULL;
    }
 }
@@ -1112,7 +1114,6 @@ intel_query_dri2_buffers_no_separate_stencil(struct intel_context *intel,
  *
  * \see intel_update_renderbuffers()
  * \see intel_region_alloc_for_handle()
- * \see intel_renderbuffer_set_region()
  */
 static void
 intel_process_dri2_buffer_no_separate_stencil(struct intel_context *intel,
@@ -1124,7 +1125,6 @@ intel_process_dri2_buffer_no_separate_stencil(struct intel_context *intel,
    assert(!intel->must_use_separate_stencil);
 
    struct gl_framebuffer *fb = drawable->driverPrivate;
-   struct intel_region *region = NULL;
    struct intel_renderbuffer *depth_rb = NULL;
 
    if (!rb)
@@ -1151,19 +1151,17 @@ intel_process_dri2_buffer_no_separate_stencil(struct intel_context *intel,
       if (unlikely(INTEL_DEBUG & DEBUG_DRI)) {
 	 fprintf(stderr, "(reusing depth buffer as stencil)\n");
       }
-      intel_region_reference(&region, depth_rb->region);
+      intel_region_reference(&rb->region, depth_rb->region);
    } else {
-      region = intel_region_alloc_for_handle(intel->intelScreen,
-					     buffer->cpp,
-					     drawable->w,
-					     drawable->h,
-					     buffer->pitch / buffer->cpp,
-					     buffer->name,
-					     buffer_name);
+      intel_region_release(&rb->region);
+      rb->region = intel_region_alloc_for_handle(intel->intelScreen,
+						 buffer->cpp,
+						 drawable->w,
+						 drawable->h,
+						 buffer->pitch / buffer->cpp,
+						 buffer->name,
+						 buffer_name);
    }
-
-   intel_renderbuffer_set_region(intel, rb, region);
-   intel_region_release(&region);
 
    if (buffer->attachment == __DRI_BUFFER_DEPTH_STENCIL) {
       struct intel_renderbuffer *stencil_rb =
@@ -1172,10 +1170,10 @@ intel_process_dri2_buffer_no_separate_stencil(struct intel_context *intel,
       if (!stencil_rb)
 	 return;
 
-      if (stencil_rb->region && stencil_rb->region->name == buffer->name)
-	 return;
-
-      intel_renderbuffer_set_region(intel, stencil_rb, region);
+      /* The rb passed in is the BUFFER_DEPTH attachment, and we need
+       * to associate this region to BUFFER_STENCIL as well.
+       */
+      intel_region_reference(&stencil_rb->region, rb->region);
    }
 }
 
@@ -1300,7 +1298,6 @@ intel_query_dri2_buffers_with_separate_stencil(struct intel_context *intel,
  *
  * \see intel_update_renderbuffers()
  * \see intel_region_alloc_for_handle()
- * \see intel_renderbuffer_set_region()
  * \see enum intel_dri2_has_hiz
  */
 static void
@@ -1360,9 +1357,9 @@ intel_process_dri2_buffer_with_separate_stencil(struct intel_context *intel,
 				    buffer_name);
 
    if (buffer->attachment == __DRI_BUFFER_HIZ) {
-      intel_renderbuffer_set_hiz_region(intel, rb, region);
+      intel_region_reference(&rb->hiz_region, region);
    } else {
-      intel_renderbuffer_set_region(intel, rb, region);
+      intel_region_reference(&rb->region, region);
    }
 
    intel_region_release(&region);
@@ -1442,7 +1439,12 @@ intel_verify_dri2_has_hiz(struct intel_context *intel,
       assert(stencil_rb->Base.Format == MESA_FORMAT_S8);
       assert(depth_rb && depth_rb->Base.Format == MESA_FORMAT_X8_Z24);
 
-      if (stencil_rb->region->tiling == I915_TILING_Y) {
+      if (stencil_rb->region->tiling == I915_TILING_NONE) {
+	 /*
+	  * The stencil buffer is actually W tiled. The region's tiling is
+	  * I915_TILING_NONE, however, because the GTT is incapable of W
+	  * fencing.
+	  */
 	 intel->intelScreen->dri2_has_hiz = INTEL_DRI2_HAS_HIZ_TRUE;
 	 return;
       } else {
@@ -1511,12 +1513,10 @@ intel_verify_dri2_has_hiz(struct intel_context *intel,
 					     / depth_stencil_buffer->cpp,
 					  depth_stencil_buffer->name,
 					  "dri2 depth / stencil buffer");
-	 intel_renderbuffer_set_region(intel,
-				       intel_get_renderbuffer(fb, BUFFER_DEPTH),
-				       region);
-	 intel_renderbuffer_set_region(intel,
-				       intel_get_renderbuffer(fb, BUFFER_STENCIL),
-				       region);
+	 intel_region_reference(&intel_get_renderbuffer(fb, BUFFER_DEPTH)->region,
+				region);
+	 intel_region_reference(&intel_get_renderbuffer(fb, BUFFER_STENCIL)->region,
+				region);
 	 intel_region_release(&region);
       }
    }
@@ -1532,7 +1532,7 @@ intel_verify_dri2_has_hiz(struct intel_context *intel,
        * Presently, however, no verification or clean up is necessary, and
        * execution should not reach here. If the framebuffer still has a hiz
        * region, then we have already set dri2_has_hiz to true after
-       * confirming above that the stencil buffer is Y tiled.
+       * confirming above that the stencil buffer is W tiled.
        */
       assert(0);
    }
