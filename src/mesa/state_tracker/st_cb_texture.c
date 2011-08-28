@@ -142,9 +142,9 @@ st_DeleteTextureObject(struct gl_context *ctx,
 }
 
 
-/** called via ctx->Driver.FreeTexImageData() */
+/** called via ctx->Driver.FreeTextureImageBuffer() */
 static void
-st_FreeTextureImageData(struct gl_context * ctx, struct gl_texture_image *texImage)
+st_FreeTextureImageBuffer(struct gl_context * ctx, struct gl_texture_image *texImage)
 {
    struct st_texture_image *stImage = st_texture_image(texImage);
 
@@ -158,6 +158,49 @@ st_FreeTextureImageData(struct gl_context * ctx, struct gl_texture_image *texIma
       _mesa_align_free(texImage->Data);
       texImage->Data = NULL;
    }
+}
+
+
+/** called via ctx->Driver.MapTextureImage() */
+static void
+st_MapTextureImage(struct gl_context *ctx,
+                   struct gl_texture_image *texImage,
+                   GLuint slice, GLuint x, GLuint y, GLuint w, GLuint h,
+                   GLbitfield mode,
+                   GLubyte **mapOut, GLint *rowStrideOut)
+{
+   struct st_context *st = st_context(ctx);
+   struct st_texture_image *stImage = st_texture_image(texImage);
+   unsigned pipeMode;
+   GLubyte *map;
+
+   pipeMode = 0x0;
+   if (mode & GL_MAP_READ_BIT)
+      pipeMode |= PIPE_TRANSFER_READ;
+   if (mode & GL_MAP_WRITE_BIT)
+      pipeMode |= PIPE_TRANSFER_WRITE;
+
+   map = st_texture_image_map(st, stImage, slice, pipeMode, x, y, w, h);
+   if (map) {
+      *mapOut = map;
+      *rowStrideOut = stImage->transfer->stride;
+   }
+   else {
+      *mapOut = NULL;
+      *rowStrideOut = 0;
+   }
+}
+
+
+/** called via ctx->Driver.UnmapTextureImage() */
+static void
+st_UnmapTextureImage(struct gl_context *ctx,
+                     struct gl_texture_image *texImage,
+                     GLuint slice)
+{
+   struct st_context *st = st_context(ctx);
+   struct st_texture_image *stImage  = st_texture_image(texImage);
+   st_texture_image_unmap(st, stImage);
 }
 
 
@@ -344,7 +387,7 @@ guess_and_alloc_texture(struct st_context *st,
                               stImage->base.Width2,
                               stImage->base.Height2,
                               stImage->base.Depth2,
-                              stImage->level,
+                              stImage->base.Level,
                               &width, &height, &depth)) {
       /* we can't determine the image size at level=0 */
       stObj->width0 = stObj->height0 = stObj->depth0 = 0;
@@ -367,7 +410,7 @@ guess_and_alloc_texture(struct st_context *st,
         stImage->base._BaseFormat == GL_DEPTH_COMPONENT ||
         stImage->base._BaseFormat == GL_DEPTH_STENCIL_EXT) &&
        !stObj->base.GenerateMipmap &&
-       stImage->level == 0) {
+       stImage->base.Level == 0) {
       /* only alloc space for a single mipmap level */
       lastLevel = 0;
    }
@@ -506,8 +549,8 @@ st_TexImage(struct gl_context * ctx,
       assert(texImage->Depth == depth);
    }
 
-   stImage->face = _mesa_tex_target_to_face(target);
-   stImage->level = level;
+   stImage->base.Face = _mesa_tex_target_to_face(target);
+   stImage->base.Level = level;
 
    _mesa_set_fetch_functions(texImage, dims);
 
@@ -529,7 +572,7 @@ st_TexImage(struct gl_context * ctx,
    if (stObj->pt) {
       if (level > (GLint) stObj->pt->last_level ||
           !st_texture_match_image(stObj->pt, &stImage->base,
-                                  stImage->face, stImage->level)) {
+                                  stImage->base.Face, stImage->base.Level)) {
          DBG("release it\n");
          pipe_resource_reference(&stObj->pt, NULL);
          assert(!stObj->pt);
@@ -563,7 +606,7 @@ st_TexImage(struct gl_context * ctx,
     */
    if (stObj->pt &&
        st_texture_match_image(stObj->pt, &stImage->base,
-                              stImage->face, stImage->level)) {
+                              stImage->base.Face, stImage->base.Level)) {
 
       pipe_resource_reference(&stImage->pt, stObj->pt);
       assert(stImage->pt);
@@ -1501,8 +1544,8 @@ st_copy_texsubimage(struct gl_context *ctx,
          pipe->resource_copy_region(pipe,
                                     /* dest */
                                     stImage->pt,
-                                    stImage->level,
-                                    destX, destY, destZ + stImage->face,
+                                    stImage->base.Level,
+                                    destX, destY, destZ + stImage->base.Face,
                                     /* src */
                                     strb->texture,
                                     strb->surface->u.tex.level,
@@ -1524,9 +1567,9 @@ st_copy_texsubimage(struct gl_context *ctx,
          memset(&surf_tmpl, 0, sizeof(surf_tmpl));
          surf_tmpl.format = util_format_linear(stImage->pt->format);
          surf_tmpl.usage = PIPE_BIND_RENDER_TARGET;
-         surf_tmpl.u.tex.level = stImage->level;
-         surf_tmpl.u.tex.first_layer = stImage->face + destZ;
-         surf_tmpl.u.tex.last_layer = stImage->face + destZ;
+         surf_tmpl.u.tex.level = stImage->base.Level;
+         surf_tmpl.u.tex.first_layer = stImage->base.Face + destZ;
+         surf_tmpl.u.tex.last_layer = stImage->base.Face + destZ;
 
          dest_surface = pipe->create_surface(pipe, stImage->pt,
                                              &surf_tmpl);
@@ -1629,7 +1672,7 @@ copy_image_data_to_texture(struct st_context *st,
    /* debug checks */
    {
       const struct gl_texture_image *dstImage =
-         stObj->base.Image[stImage->face][dstLevel];
+         stObj->base.Image[stImage->base.Face][dstLevel];
       assert(dstImage);
       assert(dstImage->Width == stImage->base.Width);
       assert(dstImage->Height == stImage->base.Height);
@@ -1641,15 +1684,15 @@ copy_image_data_to_texture(struct st_context *st,
        */
       st_texture_image_copy(st->pipe,
                             stObj->pt, dstLevel,  /* dest texture, level */
-                            stImage->pt, stImage->level, /* src texture, level */
-                            stImage->face);
+                            stImage->pt, stImage->base.Level, /* src texture, level */
+                            stImage->base.Face);
 
       pipe_resource_reference(&stImage->pt, NULL);
    }
    else if (stImage->base.Data) {
       st_texture_image_data(st,
                             stObj->pt,
-                            stImage->face,
+                            stImage->base.Face,
                             dstLevel,
                             stImage->base.Data,
                             stImage->base.RowStride * 
@@ -1880,7 +1923,9 @@ st_init_texture_functions(struct dd_function_table *functions)
    functions->NewTextureObject = st_NewTextureObject;
    functions->NewTextureImage = st_NewTextureImage;
    functions->DeleteTexture = st_DeleteTextureObject;
-   functions->FreeTexImageData = st_FreeTextureImageData;
+   functions->FreeTextureImageBuffer = st_FreeTextureImageBuffer;
+   functions->MapTextureImage = st_MapTextureImage;
+   functions->UnmapTextureImage = st_UnmapTextureImage;
 
    functions->TextureMemCpy = do_memcpy;
 

@@ -31,13 +31,13 @@
 #include <X11/Xlib.h>
 #include <X11/extensions/XvMClib.h>
 
-#include <pipe/p_video_state.h>
+#include "pipe/p_video_state.h"
 
-#include <util/u_debug.h>
-#include <util/u_math.h>
+#include "util/u_debug.h"
+#include "util/u_math.h"
 
-#include <vl/vl_csc.h>
-#include <vl/vl_compositor.h>
+#include "vl/vl_csc.h"
+#include "vl/vl_compositor.h"
 
 #define BLOCK_SIZE_SAMPLES 64
 #define BLOCK_SIZE_BYTES (BLOCK_SIZE_SAMPLES * 2)
@@ -45,7 +45,6 @@
 struct vl_context;
 
 struct pipe_video_decoder;
-struct pipe_video_decode_buffer;
 struct pipe_video_buffer;
 
 struct pipe_sampler_view;
@@ -70,22 +69,13 @@ typedef struct
 
 typedef struct
 {
-   struct pipe_video_decode_buffer *decode_buffer;
+   void *decode_buffer;
    struct pipe_video_buffer *video_buffer;
 
-   bool mapped; // are we still mapped to memory?
+   // have we allready told the decoder to start a frame
+   bool frame_started;
 
-   struct {
-      unsigned num_blocks_added;
-      struct pipe_ycbcr_block *stream;
-      short *buffer;
-   } ycbcr[3];
-
-   unsigned mv_stride;
-   struct {
-      XvMCSurface *surface;
-      struct pipe_motionvector *mv;
-   } ref[2];
+   XvMCSurface *ref[2];
 
    struct pipe_fence_handle *fence;
 

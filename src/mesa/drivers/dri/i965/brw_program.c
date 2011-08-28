@@ -36,7 +36,7 @@
 #include "program/program.h"
 #include "program/programopt.h"
 #include "tnl/tnl.h"
-#include "../glsl/ralloc.h"
+#include "glsl/ralloc.h"
 
 #include "brw_context.h"
 #include "brw_wm.h"
@@ -224,6 +224,34 @@ static GLboolean brwProgramStringNotify( struct gl_context *ctx,
    }
 
    return GL_TRUE;
+}
+
+/* Per-thread scratch space is a power-of-two multiple of 1KB. */
+int
+brw_get_scratch_size(int size)
+{
+   int i;
+
+   for (i = 1024; i < size; i *= 2)
+      ;
+
+   return i;
+}
+
+void
+brw_get_scratch_bo(struct intel_context *intel,
+		   drm_intel_bo **scratch_bo, int size)
+{
+   drm_intel_bo *old_bo = *scratch_bo;
+
+   if (old_bo && old_bo->size < size) {
+      drm_intel_bo_unreference(old_bo);
+      old_bo = NULL;
+   }
+
+   if (!old_bo) {
+      *scratch_bo = drm_intel_bo_alloc(intel->bufmgr, "scratch bo", size, 4096);
+   }
 }
 
 void brwInitFragProgFuncs( struct dd_function_table *functions )

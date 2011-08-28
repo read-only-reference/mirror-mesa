@@ -27,16 +27,8 @@
 typedef enum {
    PARAMETER_LIST_NO_MATCH,
    PARAMETER_LIST_EXACT_MATCH,
-   PARAMETER_LIST_INEXACT_MATCH, /*< Match requires implicit conversion. */
+   PARAMETER_LIST_INEXACT_MATCH /*< Match requires implicit conversion. */
 } parameter_list_match_t;
-
-/**
- * \brief Check if two parameter lists match.
- *
- * \param list_a Parameters of the function definition.
- * \param list_b Actual parameters passed to the function.
- * \see matching_signature()
- */
 
 /**
  * \brief Check if two parameter lists match.

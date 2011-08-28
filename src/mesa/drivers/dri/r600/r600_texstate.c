@@ -490,7 +490,6 @@ static GLboolean r600GetTexFormat(struct gl_texture_object *tObj, gl_format mesa
 			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_W_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_W_mask);
 		break;
 	case MESA_FORMAT_I8: /* X, X, X, X */
-	case MESA_FORMAT_CI8:
 		SETfield(t->SQ_TEX_RESOURCE1, FMT_8,
 			 SQ_TEX_RESOURCE_WORD1_0__DATA_FORMAT_shift, SQ_TEX_RESOURCE_WORD1_0__DATA_FORMAT_mask);
 
@@ -1141,12 +1140,7 @@ void r600SetTexBuffer2(__DRIcontext *pDRICtx, GLint target, GLint glx_texture_fo
 	struct radeon_framebuffer *rfb;
 	radeonTexObjPtr t;
 	uint32_t pitch_val;
-	uint32_t internalFormat, type, format;
         gl_format texFormat;
-
-	type = GL_BGRA;
-	format = GL_UNSIGNED_BYTE;
-	internalFormat = (glx_texture_format == __DRI_TEXTURE_FORMAT_RGB ? 3 : 4);
 
 	radeon = pDRICtx->driverPrivate;
 	rmesa = pDRICtx->driverPrivate;

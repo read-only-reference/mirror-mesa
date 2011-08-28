@@ -40,7 +40,7 @@
 #include "brw_state.h"
 #include "intel_span.h"
 #include "tnl/t_pipeline.h"
-#include "../glsl/ralloc.h"
+#include "glsl/ralloc.h"
 
 /***************************************
  * Mesa's Driver Functions
@@ -247,6 +247,14 @@ GLboolean brwCreateContext( int api,
    ctx->FragmentProgram._MaintainTexEnvProgram = GL_TRUE;
 
    brw_draw_init( brw );
+
+   brw->new_vs_backend = (getenv("INTEL_NEW_VS") != NULL);
+
+   /* If we're using the new shader backend, we require integer uniforms
+    * stored as actual integers.
+    */
+   if (brw->new_vs_backend)
+      ctx->Const.NativeIntegers = true;
 
    return GL_TRUE;
 }

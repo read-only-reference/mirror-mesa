@@ -55,17 +55,24 @@ static GLenum
 base_uniform_type(GLenum type)
 {
    switch (type) {
-#if 0 /* not needed, for now */
    case GL_BOOL:
    case GL_BOOL_VEC2:
    case GL_BOOL_VEC3:
    case GL_BOOL_VEC4:
       return GL_BOOL;
-#endif
    case GL_FLOAT:
    case GL_FLOAT_VEC2:
    case GL_FLOAT_VEC3:
    case GL_FLOAT_VEC4:
+   case GL_FLOAT_MAT2:
+   case GL_FLOAT_MAT2x3:
+   case GL_FLOAT_MAT2x4:
+   case GL_FLOAT_MAT3x2:
+   case GL_FLOAT_MAT3:
+   case GL_FLOAT_MAT3x4:
+   case GL_FLOAT_MAT4x2:
+   case GL_FLOAT_MAT4x3:
+   case GL_FLOAT_MAT4:
       return GL_FLOAT;
    case GL_UNSIGNED_INT:
    case GL_UNSIGNED_INT_VEC2:
@@ -408,8 +415,12 @@ get_uniform(struct gl_context *ctx, GLuint program, GLint location,
    else {
       const struct gl_program_parameter *p =
          &prog->Parameters->Parameters[paramPos];
+      gl_constant_value (*values)[4];
       GLint rows, cols, i, j, k;
       GLsizei numBytes;
+      GLenum storage_type;
+
+      values = prog->Parameters->ParameterValues + paramPos + offset;
 
       get_uniform_rows_cols(p, &rows, &cols);
 
@@ -421,60 +432,72 @@ get_uniform(struct gl_context *ctx, GLuint program, GLint location,
          return;
       }
 
-      switch (returnType) {
-      case GL_FLOAT:
-         {
-            GLfloat *params = (GLfloat *) paramsOut;
-            k = 0;
-            for (i = 0; i < rows; i++) {
-               const int base = paramPos + offset + i;
-               for (j = 0; j < cols; j++ ) {
-                  params[k++] = prog->Parameters->ParameterValues[base][j];
-               }
-            }
-         }
-         break;
-      case GL_DOUBLE:
-         {
-            GLfloat *params = (GLfloat *) paramsOut;
-            k = 0;
-            for (i = 0; i < rows; i++) {
-               const int base = paramPos + offset + i;
-               for (j = 0; j < cols; j++ ) {
-                  params[k++] = (GLdouble)
-                     prog->Parameters->ParameterValues[base][j];
-               }
-            }
-         }
-         break;
-      case GL_INT:
-         {
-            GLint *params = (GLint *) paramsOut;
-            k = 0;
-            for (i = 0; i < rows; i++) {
-               const int base = paramPos + offset + i;
-               for (j = 0; j < cols; j++ ) {
-                  params[k++] = (GLint)
-                     prog->Parameters->ParameterValues[base][j];
-               }
-            }
-         }
-         break;
-      case GL_UNSIGNED_INT:
-         {
-            GLuint *params = (GLuint *) paramsOut;
-            k = 0;
-            for (i = 0; i < rows; i++) {
-               const int base = paramPos + offset + i;
-               for (j = 0; j < cols; j++ ) {
-                  params[k++] = (GLuint)
-                     prog->Parameters->ParameterValues[base][j];
-               }
-            }
-         }
-         break;
-      default:
-         _mesa_problem(ctx, "bad returnType in get_uniform()");
+      if (ctx->Const.NativeIntegers) {
+	 storage_type = base_uniform_type(p->DataType);
+      } else {
+	 storage_type = GL_FLOAT;
+      }
+
+      k = 0;
+      for (i = 0; i < rows; i++) {
+	 for (j = 0; j < cols; j++ ) {
+	    void *out = (char *)paramsOut + 4 * k;
+
+	    switch (returnType) {
+	    case GL_FLOAT:
+	       switch (storage_type) {
+	       case GL_FLOAT:
+		  *(float *)out = values[i][j].f;
+		  break;
+	       case GL_INT:
+	       case GL_BOOL: /* boolean is just an integer 1 or 0. */
+		  *(float *)out = values[i][j].i;
+		  break;
+	       case GL_UNSIGNED_INT:
+		  *(float *)out = values[i][j].u;
+		  break;
+	       }
+	       break;
+
+	    case GL_INT:
+	    case GL_UNSIGNED_INT:
+	       switch (storage_type) {
+	       case GL_FLOAT:
+		  /* While the GL 3.2 core spec doesn't explicitly
+		   * state how conversion of float uniforms to integer
+		   * values works, in section 6.2 "State Tables" on
+		   * page 267 it says:
+		   *
+		   *     "Unless otherwise specified, when floating
+		   *      point state is returned as integer values or
+		   *      integer state is returned as floating-point
+		   *      values it is converted in the fashion
+		   *      described in section 6.1.2"
+		   *
+		   * That section, on page 248, says:
+		   *
+		   *     "If GetIntegerv or GetInteger64v are called,
+		   *      a floating-point value is rounded to the
+		   *      nearest integer..."
+		   */
+		  *(int *)out = IROUND(values[i][j].f);
+		  break;
+
+	       case GL_INT:
+	       case GL_UNSIGNED_INT:
+	       case GL_BOOL:
+		  /* type conversions for these to int/uint are just
+		   * copying the data.
+		   */
+		  *(int *)out = values[i][j].i;
+		  break;
+		  break;
+	       }
+	       break;
+	    }
+
+	    k++;
+	 }
       }
    }
 }
@@ -670,7 +693,7 @@ set_program_uniform(struct gl_context *ctx, struct gl_program *program,
       /* loop over number of samplers to change */
       for (i = 0; i < count; i++) {
          GLuint sampler = (GLuint)
-            program->Parameters->ParameterValues[index + offset + i][0];
+            program->Parameters->ParameterValues[index+offset + i][0].f;
          GLuint texUnit = ((GLuint *) values)[i];
 
          /* check that the sampler (tex unit index) is legal */
@@ -735,42 +758,52 @@ set_program_uniform(struct gl_context *ctx, struct gl_program *program,
 
       /* loop over number of array elements */
       for (k = 0; k < count; k++) {
-         GLfloat *uniformVal;
+         gl_constant_value *uniformVal;
 
          if (offset + k >= slots) {
             /* Extra array data is ignored */
             break;
          }
 
-         /* uniformVal (the destination) is always float[4] */
+         /* uniformVal (the destination) is always gl_constant_value[4] */
          uniformVal = program->Parameters->ParameterValues[index + offset + k];
 
          if (basicType == GL_INT) {
-            /* convert user's ints to floats */
             const GLint *iValues = ((const GLint *) values) + k * elems;
             for (i = 0; i < elems; i++) {
-               uniformVal[i] = (GLfloat) iValues[i];
+               if (!ctx->Const.NativeIntegers)
+                  uniformVal[i].f = (GLfloat) iValues[i];
+               else
+                  uniformVal[i].i = iValues[i];
             }
          }
          else if (basicType == GL_UNSIGNED_INT) {
-            /* convert user's uints to floats */
             const GLuint *iValues = ((const GLuint *) values) + k * elems;
             for (i = 0; i < elems; i++) {
-               uniformVal[i] = (GLfloat) iValues[i];
+               if (!ctx->Const.NativeIntegers)
+                  uniformVal[i].f = (GLfloat)(GLuint) iValues[i];
+               else
+                  uniformVal[i].u = iValues[i];
             }
          }
          else {
             const GLfloat *fValues = ((const GLfloat *) values) + k * elems;
             assert(basicType == GL_FLOAT);
             for (i = 0; i < elems; i++) {
-               uniformVal[i] = fValues[i];
+               uniformVal[i].f = fValues[i];
             }
          }
 
-         /* if the uniform is bool-valued, convert to 1.0 or 0.0 */
+         /* if the uniform is bool-valued, convert to 1 or 0 */
          if (isUniformBool) {
             for (i = 0; i < elems; i++) {
-               uniformVal[i] = uniformVal[i] ? 1.0f : 0.0f;
+               if (basicType == GL_FLOAT)
+                  uniformVal[i].b = uniformVal[i].f != 0.0f ? 1 : 0;
+               else
+                  uniformVal[i].b = uniformVal[i].u ? 1 : 0;
+               
+               if (!ctx->Const.NativeIntegers)
+                  uniformVal[i].f = uniformVal[i].b ? 1.0f : 0.0f;
             }
          }
       }
@@ -936,7 +969,7 @@ set_program_uniform_matrix(struct gl_context *ctx, struct gl_program *program,
             /* Ignore writes beyond the end of (the used part of) an array */
             return;
          }
-         v = program->Parameters->ParameterValues[index + offset];
+         v = (GLfloat *) program->Parameters->ParameterValues[index + offset];
          for (row = 0; row < rows; row++) {
             if (transpose) {
                v[row] = values[src + row * cols + col];

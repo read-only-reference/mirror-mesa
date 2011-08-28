@@ -205,6 +205,7 @@ nvc0_resource_copy_region(struct pipe_context *pipe,
 {
    struct nvc0_screen *screen = nvc0_context(pipe)->screen;
    int ret;
+   boolean m2mf;
    unsigned dst_layer = dstz, src_layer = src_box->z;
 
    /* Fallback for buffers. */
@@ -214,9 +215,15 @@ nvc0_resource_copy_region(struct pipe_context *pipe,
       return;
    }
 
+   assert(src->nr_samples == dst->nr_samples);
+
+   m2mf = (src->format == dst->format) ||
+      (util_format_get_blocksizebits(src->format) ==
+       util_format_get_blocksizebits(dst->format));
+
    nv04_resource(dst)->status |= NOUVEAU_BUFFER_STATUS_GPU_WRITING;
 
-   if (src->format == dst->format && src->nr_samples == dst->nr_samples) {
+   if (m2mf) {
       struct nv50_m2mf_rect drect, srect;
       unsigned i;
       unsigned nx = util_format_get_nblocksx(src->format, src_box->width);
@@ -376,12 +383,10 @@ nvc0_clear(struct pipe_context *pipe, unsigned buffers,
    struct nouveau_channel *chan = nvc0->screen->base.channel;
    struct pipe_framebuffer_state *fb = &nvc0->framebuffer;
    unsigned i;
-   const unsigned dirty = nvc0->dirty;
    uint32_t mode = 0;
 
    /* don't need NEW_BLEND, COLOR_MASK doesn't affect CLEAR_BUFFERS */
-   nvc0->dirty &= NVC0_NEW_FRAMEBUFFER;
-   if (!nvc0_state_validate(nvc0))
+   if (!nvc0_state_validate(nvc0, NVC0_NEW_FRAMEBUFFER, 9 + (fb->nr_cbufs * 2)))
       return;
 
    if (buffers & PIPE_CLEAR_COLOR && fb->nr_cbufs) {
@@ -414,8 +419,6 @@ nvc0_clear(struct pipe_context *pipe, unsigned buffers,
       BEGIN_RING(chan, RING_3D(CLEAR_BUFFERS), 1);
       OUT_RING  (chan, (i << 6) | 0x3c);
    }
-
-   nvc0->dirty = dirty & ~NVC0_NEW_FRAMEBUFFER;
 }
 
 void

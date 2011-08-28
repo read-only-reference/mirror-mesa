@@ -43,7 +43,7 @@ nv50_screen_is_format_supported(struct pipe_screen *pscreen,
                                 unsigned sample_count,
                                 unsigned bindings)
 {
-   if (sample_count > 2 && sample_count != 4 && sample_count != 8)
+   if (!(0x117 & (1 << sample_count))) /* 0, 1, 2, 4 or 8 */
       return FALSE;
    if (sample_count == 8 && util_format_get_blocksizebits(format) >= 128)
       return FALSE;
@@ -56,6 +56,11 @@ nv50_screen_is_format_supported(struct pipe_screen *pscreen,
       if (nv50_screen(pscreen)->tesla->grclass < NVA0_3D)
          return FALSE;
       break;
+   case PIPE_FORMAT_R8G8B8A8_UNORM:
+   case PIPE_FORMAT_R8G8B8X8_UNORM:
+      /* HACK: GL requires equal formats for MS resolve and window is BGRA */
+      if (bindings & PIPE_BIND_RENDER_TARGET)
+         return FALSE;
    default:
       break;
    }
@@ -91,6 +96,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_SHADOW_MAP:
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_ANISOTROPIC_FILTER:
+   case PIPE_CAP_SCALED_RESOLVE:
       return 1;
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
       return nv50_screen(pscreen)->tesla->grclass >= NVA0_3D;
@@ -182,6 +188,8 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
       return 1;
    case PIPE_SHADER_CAP_SUBROUTINES:
       return 0; /* please inline, or provide function declarations */
+   case PIPE_SHADER_CAP_INTEGERS:
+      return 0;
    default:
       NOUVEAU_ERR("unknown PIPE_SHADER_CAP %d\n", param);
       return 0;
@@ -484,7 +492,7 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 
    screen->tls_size = tls_space * max_warps * 32;
 
-   debug_printf("max_warps = %i, tls_size = %llu KiB\n",
+   debug_printf("max_warps = %i, tls_size = %"PRIu64" KiB\n",
                 max_warps, screen->tls_size >> 10);
 
    ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 1 << 16, screen->tls_size,
@@ -603,6 +611,9 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    screen->tsc.entries = screen->tic.entries + 2048;
 
    screen->mm_VRAM_fe0 = nouveau_mm_create(dev, NOUVEAU_BO_VRAM, 0xfe0);
+
+   if (!nv50_blitctx_create(screen))
+      goto fail;
 
    nouveau_fence_new(&screen->base, &screen->base.fence.current, FALSE);
 

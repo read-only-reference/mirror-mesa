@@ -41,6 +41,7 @@ struct radeon_cs_context {
     /* Relocs. */
     unsigned                    nrelocs;
     unsigned                    crelocs;
+    unsigned			validated_crelocs;
     struct radeon_bo            **relocs_bo;
     struct drm_radeon_cs_reloc  *relocs;
 
@@ -74,6 +75,8 @@ struct radeon_drm_cs {
     void *flush_data;
 
     pipe_thread thread;
+    int flush_started, kill_thread;
+    pipe_semaphore flush_queued, flush_completed;
 };
 
 int radeon_get_reloc(struct radeon_cs_context *csc, struct radeon_bo *bo);

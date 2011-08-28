@@ -97,7 +97,6 @@ static const struct tx_table tx_table_be[] =
    _ALPHA(A8),
    _COLOR(L8),
    _ALPHA(I8),
-   _INVALID(CI8),
    _YUV(YCBCR),
    _YUV(YCBCR_REV),
    _INVALID(RGB_FXT1),
@@ -126,7 +125,6 @@ static const struct tx_table tx_table_le[] =
    _ALPHA(A8),
    _COLOR(L8),
    _ALPHA(I8),
-   _INVALID(CI8),
    _YUV(YCBCR),
    _YUV(YCBCR_REV),
    _INVALID(RGB_FXT1),
@@ -773,18 +771,12 @@ void r200SetTexBuffer2(__DRIcontext *pDRICtx, GLint target, GLint texture_format
 	struct radeon_renderbuffer *rb;
 	radeon_texture_image *rImage;
 	radeonContextPtr radeon;
-	r200ContextPtr rmesa;
 	struct radeon_framebuffer *rfb;
 	radeonTexObjPtr t;
 	uint32_t pitch_val;
-	uint32_t internalFormat, format;
 	gl_format texFormat;
 
-	format = GL_UNSIGNED_BYTE;
-	internalFormat = (texture_format == __DRI_TEXTURE_FORMAT_RGB ? 3 : 4);
-
 	radeon = pDRICtx->driverPrivate;
-	rmesa = pDRICtx->driverPrivate;
 
 	rfb = dPriv->driverPrivate;
         texUnit = &radeon->glCtx->Texture.Unit[radeon->glCtx->Texture.CurrentUnit];

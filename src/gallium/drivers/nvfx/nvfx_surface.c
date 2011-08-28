@@ -102,7 +102,7 @@ nvfx_region_init_for_surface(struct nv04_region* rgn, struct nvfx_surface* surf,
 		rgn->bo = ((struct nvfx_resource*)surf->base.base.texture)->bo;
 		rgn->offset = surf->offset;
 
-		if(surf->base.base.texture->flags & NVFX_RESOURCE_FLAG_LINEAR)
+		if(surf->base.base.texture->flags & NOUVEAU_RESOURCE_FLAG_LINEAR)
 			rgn->pitch = surf->pitch;
 	        else
 	        {
@@ -137,7 +137,7 @@ nvfx_region_init_for_subresource(struct nv04_region* rgn, struct pipe_resource* 
 	rgn->x = x;
 	rgn->y = y;
 
-	if(pt->flags & NVFX_RESOURCE_FLAG_LINEAR)
+	if(pt->flags & NOUVEAU_RESOURCE_FLAG_LINEAR)
 	{
 		rgn->pitch = nvfx_subresource_pitch(pt, level);
 		rgn->z = 0;
@@ -288,7 +288,7 @@ nvfx_resource_copy_region(struct pipe_context *pipe,
 		 * TODO: perhaps support reinterpreting the formats
 		 */
 		struct blitter_context* blitter = nvfx_get_blitter(pipe, 1);
-		util_blitter_copy_region(blitter, dstr, dst_level, dstx, dsty, dstz, srcr, src_level, src_box, TRUE);
+		util_blitter_copy_texture(blitter, dstr, dst_level, dstx, dsty, dstz, srcr, src_level, src_box, TRUE);
 		nvfx_put_blitter(pipe, blitter);
 	}
 	else
@@ -438,7 +438,7 @@ nvfx_surface_create_temp(struct pipe_context* pipe, struct pipe_surface* surf)
 	template.height0 = surf->height;
 	template.depth0 = 1;
 	template.nr_samples = surf->texture->nr_samples;
-	template.flags = NVFX_RESOURCE_FLAG_LINEAR;
+	template.flags = NOUVEAU_RESOURCE_FLAG_LINEAR;
 
 	assert(!ns->temp && !util_dirty_surface_is_dirty(&ns->base));
 

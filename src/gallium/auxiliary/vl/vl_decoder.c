@@ -25,9 +25,9 @@
  *
  **************************************************************************/
 
-#include <pipe/p_video_decoder.h>
+#include "pipe/p_video_decoder.h"
 
-#include <util/u_video.h>
+#include "util/u_video.h"
 
 #include "vl_decoder.h"
 #include "vl_mpeg12_decoder.h"
@@ -41,6 +41,19 @@ vl_profile_supported(struct pipe_screen *screen, enum pipe_video_profile profile
          return true;
       default:
          return false;
+   }
+}
+
+unsigned
+vl_num_buffers_desired(struct pipe_screen *screen, enum pipe_video_profile profile)
+{
+   assert(screen);
+   switch (u_reduce_video_profile(profile)) {
+      case PIPE_VIDEO_CODEC_MPEG12:
+         return 4;
+
+      default:
+         return 1;
    }
 }
 

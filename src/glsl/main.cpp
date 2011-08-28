@@ -24,7 +24,6 @@
 
 #include "ast.h"
 #include "glsl_parser_extras.h"
-#include "glsl_parser.h"
 #include "ir_optimization.h"
 #include "ir_print_visitor.h"
 #include "program.h"
@@ -221,6 +220,7 @@ main(int argc, char **argv)
 
    whole_program = rzalloc (NULL, struct gl_shader_program);
    assert(whole_program != NULL);
+   whole_program->InfoLog = ralloc_strdup(whole_program, "");
 
    for (/* empty */; argc > optind; optind++) {
       whole_program->Shaders =

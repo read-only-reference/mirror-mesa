@@ -28,9 +28,9 @@
 #ifndef vl_compositor_h
 #define vl_compositor_h
 
-#include <pipe/p_state.h>
-#include <pipe/p_video_decoder.h>
-#include <pipe/p_video_state.h>
+#include "pipe/p_state.h"
+#include "pipe/p_video_decoder.h"
+#include "pipe/p_video_state.h"
 
 #include "vl_types.h"
 
@@ -156,7 +156,6 @@ vl_compositor_set_rgba_layer(struct vl_compositor *compositor,
  */
 void
 vl_compositor_render(struct vl_compositor          *compositor,
-                     enum pipe_mpeg12_picture_type picture_type,
                      struct pipe_surface           *dst_surface,
                      struct pipe_video_rect        *dst_area,
                      struct pipe_video_rect        *dst_clip);

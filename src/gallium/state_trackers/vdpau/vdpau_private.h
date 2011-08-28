@@ -33,20 +33,19 @@
 #include <vdpau/vdpau.h>
 #include <vdpau/vdpau_x11.h>
 
-#include <pipe/p_compiler.h>
-#include <pipe/p_video_decoder.h>
+#include "pipe/p_compiler.h"
+#include "pipe/p_video_decoder.h"
 
-#include <util/u_debug.h>
-#include <vl/vl_compositor.h>
+#include "util/u_debug.h"
+#include "vl/vl_compositor.h"
 
-#include <vl_winsys.h>
+#include "vl_winsys.h"
 
 #define INFORMATION G3DVL VDPAU Driver Shared Library version VER_MAJOR.VER_MINOR
 #define QUOTEME(x) #x
 #define TOSTRING(x) QUOTEME(x)
 #define INFORMATION_STRING TOSTRING(INFORMATION)
 #define VL_HANDLES
-#define VL_NUM_DECODE_BUFFERS 4
 
 static inline enum pipe_video_chroma_format
 ChromaToPipe(VdpChromaType vdpau_type)
@@ -256,7 +255,8 @@ typedef struct
 {
    vlVdpDevice *device;
    struct pipe_video_decoder *decoder;
-   struct pipe_video_decode_buffer *buffer[VL_NUM_DECODE_BUFFERS];
+   unsigned num_buffers;
+   void **buffers;
    unsigned cur_buffer;
 } vlVdpDecoder;
 

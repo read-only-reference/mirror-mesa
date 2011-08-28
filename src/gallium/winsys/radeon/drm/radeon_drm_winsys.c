@@ -41,11 +41,32 @@
 #include <xf86drm.h>
 #include <stdio.h>
 
+#ifndef RADEON_INFO_TILING_CONFIG
+#define RADEON_INFO_TILING_CONFIG 6
+#endif
+
 #ifndef RADEON_INFO_WANT_HYPERZ
 #define RADEON_INFO_WANT_HYPERZ 7
 #endif
+
 #ifndef RADEON_INFO_WANT_CMASK
 #define RADEON_INFO_WANT_CMASK 8
+#endif
+
+#ifndef RADEON_INFO_CLOCK_CRYSTAL_FREQ
+#define RADEON_INFO_CLOCK_CRYSTAL_FREQ 9
+#endif
+
+#ifndef RADEON_INFO_NUM_BACKENDS
+#define RADEON_INFO_NUM_BACKENDS 0xa
+#endif
+
+#ifndef RADEON_INFO_NUM_TILE_PIPES
+#define RADEON_INFO_NUM_TILE_PIPES 0xb
+#endif
+
+#ifndef RADEON_INFO_BACKEND_MAP
+#define RADEON_INFO_BACKEND_MAP 0xd
 #endif
 
 /* Enable/disable feature access for one command stream.
@@ -104,7 +125,7 @@ static boolean radeon_set_fd_access(struct radeon_drm_cs *applier,
 }
 
 static boolean radeon_get_drm_value(int fd, unsigned request,
-                                    const char *name, uint32_t *out)
+                                    const char *errname, uint32_t *out)
 {
     struct drm_radeon_info info = {0};
     int retval;
@@ -113,9 +134,9 @@ static boolean radeon_get_drm_value(int fd, unsigned request,
     info.request = request;
 
     retval = drmCommandWriteRead(fd, DRM_RADEON_INFO, &info, sizeof(info));
-    if (retval) {
-        fprintf(stderr, "%s: Failed to get %s, error number %d\n",
-                __func__, name, retval);
+    if (retval && errname) {
+        fprintf(stderr, "radeon: Failed to get %s, error number %d\n",
+                errname, retval);
         return FALSE;
     }
     return TRUE;
@@ -175,6 +196,13 @@ static boolean do_winsys_init(struct radeon_drm_winsys *ws)
 #define CHIPSET(pci_id, name, family) case pci_id:
 #include "pci_ids/r300_pci_ids.h"
 #undef CHIPSET
+        ws->gen = R300;
+        break;
+
+#define CHIPSET(pci_id, name, family) case pci_id:
+#include "pci_ids/r600_pci_ids.h"
+#undef CHIPSET
+        ws->gen = R600;
         break;
 
     default:
@@ -186,8 +214,8 @@ static boolean do_winsys_init(struct radeon_drm_winsys *ws)
     retval = drmCommandWriteRead(ws->fd, DRM_RADEON_GEM_INFO,
             &gem_info, sizeof(gem_info));
     if (retval) {
-        fprintf(stderr, "%s: Failed to get MM info, error number %d\n",
-                __FUNCTION__, retval);
+        fprintf(stderr, "radeon: Failed to get MM info, error number %d\n",
+                retval);
         return FALSE;
     }
     ws->info.gart_size = gem_info.gart_size;
@@ -196,15 +224,40 @@ static boolean do_winsys_init(struct radeon_drm_winsys *ws)
     ws->num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
 
     /* Generation-specific queries. */
-    if (!radeon_get_drm_value(ws->fd, RADEON_INFO_NUM_GB_PIPES,
-                              "GB pipe count",
-                              &ws->info.r300_num_gb_pipes))
-        return FALSE;
+    if (ws->gen == R300) {
+        if (!radeon_get_drm_value(ws->fd, RADEON_INFO_NUM_GB_PIPES,
+                                  "GB pipe count",
+                                  &ws->info.r300_num_gb_pipes))
+            return FALSE;
 
-    if (!radeon_get_drm_value(ws->fd, RADEON_INFO_NUM_Z_PIPES,
-                              "Z pipe count",
-                              &ws->info.r300_num_z_pipes))
-        return FALSE;
+        if (!radeon_get_drm_value(ws->fd, RADEON_INFO_NUM_Z_PIPES,
+                                  "Z pipe count",
+                                  &ws->info.r300_num_z_pipes))
+            return FALSE;
+    }
+    else if (ws->gen == R600) {
+        if (ws->info.drm_minor >= 9 &&
+            !radeon_get_drm_value(ws->fd, RADEON_INFO_NUM_BACKENDS,
+                                  "num backends",
+                                  &ws->info.r600_num_backends))
+            return FALSE;
+
+        /* get the GPU counter frequency, failure is not fatal */
+        radeon_get_drm_value(ws->fd, RADEON_INFO_CLOCK_CRYSTAL_FREQ, NULL,
+                             &ws->info.r600_clock_crystal_freq);
+
+        radeon_get_drm_value(ws->fd, RADEON_INFO_TILING_CONFIG, NULL,
+                             &ws->info.r600_tiling_config);
+
+        if (ws->info.drm_minor >= 11) {
+            radeon_get_drm_value(ws->fd, RADEON_INFO_NUM_TILE_PIPES, NULL,
+                                 &ws->info.r600_num_tile_pipes);
+
+            if (radeon_get_drm_value(ws->fd, RADEON_INFO_BACKEND_MAP, NULL,
+                                      &ws->info.r600_backend_map))
+                ws->info.r600_backend_map_valid = TRUE;
+        }
+    }
 
     return TRUE;
 }

@@ -111,13 +111,15 @@ dri2_match_config(const _EGLConfig *conf, const _EGLConfig *criteria)
 
 struct dri2_egl_config *
 dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
-		int depth, EGLint surface_type, const EGLint *attr_list)
+		int depth, EGLint surface_type, const EGLint *attr_list,
+		const unsigned int *rgba_masks)
 {
    struct dri2_egl_config *conf;
    struct dri2_egl_display *dri2_dpy;
    _EGLConfig base;
    unsigned int attrib, value, double_buffer;
    EGLint key, bind_to_texture_rgb, bind_to_texture_rgba;
+   unsigned int dri_masks[4] = { 0, 0, 0, 0 };
    _EGLConfig *matching_config;
    EGLint num_configs = 0;
    EGLint config_id;
@@ -165,6 +167,22 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
 	 double_buffer = value;
 	 break;
 
+      case __DRI_ATTRIB_RED_MASK:
+         dri_masks[0] = value;
+         break;
+
+      case __DRI_ATTRIB_GREEN_MASK:
+         dri_masks[1] = value;
+         break;
+
+      case __DRI_ATTRIB_BLUE_MASK:
+         dri_masks[2] = value;
+         break;
+
+      case __DRI_ATTRIB_ALPHA_MASK:
+         dri_masks[3] = value;
+         break;
+
       default:
 	 key = dri2_to_egl_attribute_map[attrib];
 	 if (key != 0)
@@ -178,6 +196,9 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
          _eglSetConfigKey(&base, attr_list[i], attr_list[i+1]);
 
    if (depth > 0 && depth != base.BufferSize)
+      return NULL;
+
+   if (rgba_masks && memcmp(rgba_masks, dri_masks, sizeof(dri_masks)))
       return NULL;
 
    base.NativeRenderable = EGL_TRUE;
@@ -238,8 +259,10 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
       return NULL;
    }
 
-   conf->base.SurfaceType |= surface_type & (!double_buffer ? EGL_PIXMAP_BIT:
-         (EGL_WINDOW_BIT | EGL_PBUFFER_BIT | EGL_SWAP_BEHAVIOR_PRESERVED_BIT));
+   if (double_buffer)
+      surface_type &= ~EGL_PIXMAP_BIT;
+
+   conf->base.SurfaceType |= surface_type;
 
    return conf;
 }
@@ -556,6 +579,12 @@ dri2_initialize(_EGLDriver *drv, _EGLDisplay *disp)
       return dri2_initialize_wayland(drv, disp);
 #endif
 #endif
+#ifdef HAVE_ANDROID_PLATFORM
+   case _EGL_PLATFORM_ANDROID:
+      if (disp->Options.TestOnly)
+         return EGL_TRUE;
+      return dri2_initialize_android(drv, disp);
+#endif
 
    default:
       return EGL_FALSE;
@@ -590,6 +619,13 @@ dri2_terminate(_EGLDriver *drv, _EGLDisplay *disp)
 #ifdef HAVE_WAYLAND_PLATFORM
       case _EGL_PLATFORM_WAYLAND:
          wl_display_destroy(dri2_dpy->wl_dpy);
+         break;
+#endif
+#ifdef HAVE_DRM_PLATFORM
+      case _EGL_PLATFORM_DRM:
+         if (dri2_dpy->own_gbm_device) {
+            gbm_device_destroy(&dri2_dpy->gbm_dri->base.base);
+         }
          break;
 #endif
       default:
@@ -663,6 +699,12 @@ dri2_create_context(_EGLDriver *drv, _EGLDisplay *disp, _EGLConfig *conf,
          dri_config = dri2_config->dri_double_config;
       else
          dri_config = dri2_config->dri_single_config;
+
+      /* EGL_WINDOW_BIT is set only when there is a dri_double_config.  This
+       * makes sure the back buffer will always be used.
+       */
+      if (conf->SurfaceType & EGL_WINDOW_BIT)
+         dri2_ctx->base.WindowRenderBuffer = EGL_BACK_BUFFER;
    }
    else
       dri_config = NULL;
@@ -719,6 +761,23 @@ dri2_create_context(_EGLDriver *drv, _EGLDisplay *disp, _EGLConfig *conf,
 }
 
 /**
+ * Called via eglDestroyContext(), drv->API.DestroyContext().
+ */
+static EGLBoolean
+dri2_destroy_context(_EGLDriver *drv, _EGLDisplay *disp, _EGLContext *ctx)
+{
+   struct dri2_egl_context *dri2_ctx = dri2_egl_context(ctx);
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+
+   if (_eglPutContext(ctx)) {
+      dri2_dpy->core->destroyContext(dri2_ctx->dri_context);
+      free(dri2_ctx);
+   }
+
+   return EGL_TRUE;
+}
+
+/**
  * Called via eglMakeCurrent(), drv->API.MakeCurrent().
  */
 static EGLBoolean
@@ -758,9 +817,8 @@ dri2_make_current(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *dsurf,
          drv->API.DestroySurface(drv, disp, old_dsurf);
       if (old_rsurf)
          drv->API.DestroySurface(drv, disp, old_rsurf);
-      /* no destroy? */
       if (old_ctx)
-         _eglPutContext(old_ctx);
+         drv->API.DestroyContext(drv, disp, old_ctx);
 
       return EGL_TRUE;
    } else {
@@ -1191,16 +1249,28 @@ dri2_export_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp, _EGLImage *img,
 static void *
 dri2_wl_reference_buffer(void *user_data, uint32_t name,
 			 int32_t width, int32_t height,
-			 uint32_t stride, struct wl_visual *visual)
+			 uint32_t stride, uint32_t format)
 {
    _EGLDisplay *disp = user_data;
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    __DRIimage *image;
+   int dri_format;
+
+   switch (format) {
+   case WL_DRM_FORMAT_ARGB32:
+   case WL_DRM_FORMAT_PREMULTIPLIED_ARGB32:
+      dri_format =__DRI_IMAGE_FORMAT_ARGB8888;
+      break;
+   case WL_DRM_FORMAT_XRGB32:
+      dri_format = __DRI_IMAGE_FORMAT_XRGB8888;
+      break;
+   default:
+      return NULL;	   
+   }
 
    image = dri2_dpy->image->createImageFromName(dri2_dpy->dri_screen,
 						width, height, 
-						__DRI_IMAGE_FORMAT_ARGB8888,
-						name, stride / 4,
+						dri_format, name, stride / 4,
 						NULL);
 
    return image;
@@ -1279,7 +1349,11 @@ dri2_load(_EGLDriver *drv)
 {
    struct dri2_egl_driver *dri2_drv = dri2_egl_driver(drv);
 #ifdef HAVE_SHARED_GLAPI
+#ifdef HAVE_ANDROID_PLATFORM
+   const char *libname = "libglapi.so";
+#else
    const char *libname = "libglapi.so.0";
+#endif
 #else
    /*
     * Both libGL.so and libglapi.so are glapi providers.  There is no way to
@@ -1341,6 +1415,7 @@ _EGL_MAIN(const char *args)
    dri2_drv->base.API.Initialize = dri2_initialize;
    dri2_drv->base.API.Terminate = dri2_terminate;
    dri2_drv->base.API.CreateContext = dri2_create_context;
+   dri2_drv->base.API.DestroyContext = dri2_destroy_context;
    dri2_drv->base.API.MakeCurrent = dri2_make_current;
    dri2_drv->base.API.GetProcAddress = dri2_get_proc_address;
    dri2_drv->base.API.WaitClient = dri2_wait_client;

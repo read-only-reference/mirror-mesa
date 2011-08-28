@@ -194,7 +194,7 @@ struct dd_function_table {
     * cases, srcFormat and srcType can be GL_NONE.
     * Called by glTexImage(), etc.
     */
-   GLuint (*ChooseTextureFormat)( struct gl_context *ctx, GLint internalFormat,
+   gl_format (*ChooseTextureFormat)( struct gl_context *ctx, GLint internalFormat,
                                      GLenum srcFormat, GLenum srcType );
 
    /**
@@ -479,7 +479,26 @@ struct dd_function_table {
    /** 
     * Called to free tImage->Data.
     */
-   void (*FreeTexImageData)( struct gl_context *ctx, struct gl_texture_image *tImage );
+   void (*FreeTextureImageBuffer)( struct gl_context *ctx, struct gl_texture_image *tImage );
+
+   /** Map a slice of a texture image into user space.
+    * \param texImage  the texture image
+    * \param slice  the 3D image slice or array texture slice
+    * \param x, y, w, h  region of interest
+    * \param mode  bitmask of GL_MAP_READ_BIT, GL_MAP_WRITE_BIT
+    * \param mapOut  returns start of mapping of region of interest
+    * \param rowStrideOut  returns row stride (in bytes)
+    */
+   void (*MapTextureImage)(struct gl_context *ctx,
+			   struct gl_texture_image *texImage,
+			   GLuint slice,
+			   GLuint x, GLuint y, GLuint w, GLuint h,
+			   GLbitfield mode,
+			   GLubyte **mapOut, GLint *rowStrideOut);
+
+   void (*UnmapTextureImage)(struct gl_context *ctx,
+			     struct gl_texture_image *texImage,
+			     GLuint slice);
 
    /** Map texture image data into user space */
    void (*MapTexture)( struct gl_context *ctx, struct gl_texture_object *tObj );
@@ -698,16 +717,13 @@ struct dd_function_table {
                             const GLvoid *data, GLenum usage,
                             struct gl_buffer_object *obj );
 
-   void (*BufferSubData)( struct gl_context *ctx, GLenum target, GLintptrARB offset,
+   void (*BufferSubData)( struct gl_context *ctx, GLintptrARB offset,
 			  GLsizeiptrARB size, const GLvoid *data,
 			  struct gl_buffer_object *obj );
 
-   void (*GetBufferSubData)( struct gl_context *ctx, GLenum target,
+   void (*GetBufferSubData)( struct gl_context *ctx,
 			     GLintptrARB offset, GLsizeiptrARB size,
 			     GLvoid *data, struct gl_buffer_object *obj );
-
-   void * (*MapBuffer)( struct gl_context *ctx, GLenum target, GLenum access,
-			struct gl_buffer_object *obj );
 
    void (*CopyBufferSubData)( struct gl_context *ctx,
                               struct gl_buffer_object *src,
@@ -717,15 +733,15 @@ struct dd_function_table {
 
    /* May return NULL if MESA_MAP_NOWAIT_BIT is set in access:
     */
-   void * (*MapBufferRange)( struct gl_context *ctx, GLenum target, GLintptr offset,
+   void * (*MapBufferRange)( struct gl_context *ctx, GLintptr offset,
                              GLsizeiptr length, GLbitfield access,
                              struct gl_buffer_object *obj);
 
-   void (*FlushMappedBufferRange)(struct gl_context *ctx, GLenum target, 
+   void (*FlushMappedBufferRange)(struct gl_context *ctx,
                                   GLintptr offset, GLsizeiptr length,
                                   struct gl_buffer_object *obj);
 
-   GLboolean (*UnmapBuffer)( struct gl_context *ctx, GLenum target,
+   GLboolean (*UnmapBuffer)( struct gl_context *ctx,
 			     struct gl_buffer_object *obj );
    /*@}*/
 

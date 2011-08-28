@@ -31,13 +31,26 @@ nv50_validate_fb(struct nv50_context *nv50)
       OUT_RELOCh(chan, bo, offset, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
       OUT_RELOCl(chan, bo, offset, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
       OUT_RING  (chan, nv50_format_table[sf->base.format].rt);
-      OUT_RING  (chan, mt->level[sf->base.u.tex.level].tile_mode << 4);
-      OUT_RING  (chan, mt->layer_stride >> 2);
-      BEGIN_RING(chan, RING_3D(RT_HORIZ(i)), 2);
-      OUT_RING  (chan, sf->width);
-      OUT_RING  (chan, sf->height);
-      BEGIN_RING(chan, RING_3D(RT_ARRAY_MODE), 1);
-      OUT_RING  (chan, sf->depth);
+      if (likely(nouveau_bo_tile_layout(bo))) {
+         OUT_RING  (chan, mt->level[sf->base.u.tex.level].tile_mode << 4);
+         OUT_RING  (chan, mt->layer_stride >> 2);
+         BEGIN_RING(chan, RING_3D(RT_HORIZ(i)), 2);
+         OUT_RING  (chan, sf->width);
+         OUT_RING  (chan, sf->height);
+         BEGIN_RING(chan, RING_3D(RT_ARRAY_MODE), 1);
+         OUT_RING  (chan, sf->depth);
+      } else {
+         OUT_RING  (chan, 0);
+         OUT_RING  (chan, 0);
+         BEGIN_RING(chan, RING_3D(RT_HORIZ(i)), 2);
+         OUT_RING  (chan, NV50_3D_RT_HORIZ_LINEAR | mt->level[0].pitch);
+         OUT_RING  (chan, sf->height);
+         BEGIN_RING(chan, RING_3D(RT_ARRAY_MODE), 1);
+         OUT_RING  (chan, 0);
+
+         assert(!fb->zsbuf);
+         assert(!mt->ms_mode);
+      }
 
       ms_mode = mt->ms_mode;
 
@@ -306,7 +319,11 @@ nv50_switch_pipe_context(struct nv50_context *ctx_to)
    if (!ctx_to->blend)
       ctx_to->dirty &= ~NV50_NEW_BLEND;
    if (!ctx_to->rast)
+#ifdef NV50_SCISSORS_CLIPPING
+      ctx_to->dirty &= ~(NV50_NEW_RASTERIZER | NV50_NEW_SCISSOR);
+#else
       ctx_to->dirty &= ~NV50_NEW_RASTERIZER;
+#endif
    if (!ctx_to->zsa)
       ctx_to->dirty &= ~NV50_NEW_ZSA;
 
@@ -350,22 +367,27 @@ static struct state_validate {
 #define validate_list_len (sizeof(validate_list) / sizeof(validate_list[0]))
 
 boolean
-nv50_state_validate(struct nv50_context *nv50)
+nv50_state_validate(struct nv50_context *nv50, uint32_t mask, unsigned words)
 {
+   uint32_t state_mask;
    unsigned i;
 
    if (nv50->screen->cur_ctx != nv50)
       nv50_switch_pipe_context(nv50);
 
-   if (nv50->dirty) {
+   state_mask = nv50->dirty & mask;
+
+   if (state_mask) {
       for (i = 0; i < validate_list_len; ++i) {
          struct state_validate *validate = &validate_list[i];
 
-         if (nv50->dirty & validate->states)
+         if (state_mask & validate->states)
             validate->func(nv50);
       }
-      nv50->dirty = 0;
+      nv50->dirty &= ~state_mask;
    }
+
+   MARK_RING(nv50->screen->base.channel, words, 0);
 
    nv50_bufctx_emit_relocs(nv50);
 

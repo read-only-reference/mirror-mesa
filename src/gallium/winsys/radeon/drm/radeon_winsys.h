@@ -61,6 +61,12 @@ enum radeon_bo_domain { /* bitfield */
     RADEON_DOMAIN_VRAM = 4
 };
 
+enum radeon_bo_usage { /* bitfield */
+    RADEON_USAGE_READ = 2,
+    RADEON_USAGE_WRITE = 4,
+    RADEON_USAGE_READWRITE = RADEON_USAGE_READ | RADEON_USAGE_WRITE
+};
+
 struct winsys_handle;
 struct radeon_winsys_cs_handle;   /* for write_reloc etc. */
 
@@ -80,6 +86,13 @@ struct radeon_info {
 
     uint32_t r300_num_gb_pipes;
     uint32_t r300_num_z_pipes;
+
+    uint32_t r600_num_backends;
+    uint32_t r600_clock_crystal_freq;
+    uint32_t r600_tiling_config;
+    uint32_t r600_num_tile_pipes;
+    uint32_t r600_backend_map;
+    boolean r600_backend_map_valid;
 };
 
 enum radeon_feature_id {
@@ -155,8 +168,10 @@ struct radeon_winsys {
      * Return TRUE if a buffer object is being used by the GPU.
      *
      * \param buf       A winsys buffer object.
+     * \param usage     Only check whether the buffer is busy for the given usage.
      */
-    boolean (*buffer_is_busy)(struct pb_buffer *buf);
+    boolean (*buffer_is_busy)(struct pb_buffer *buf,
+                              enum radeon_bo_usage usage);
 
     /**
      * Wait for a buffer object until it is not used by a GPU. This is
@@ -164,8 +179,10 @@ struct radeon_winsys {
      * and synchronizing to the fence.
      *
      * \param buf       A winsys buffer object to wait for.
+     * \param usage     Only wait until the buffer is idle for the given usage,
+     *                  but may still be busy for some other usage.
      */
-    void (*buffer_wait)(struct pb_buffer *buf);
+    void (*buffer_wait)(struct pb_buffer *buf, enum radeon_bo_usage usage);
 
     /**
      * Return tiling flags describing a memory layout of a buffer object.
@@ -254,15 +271,18 @@ struct radeon_winsys {
      * \param buf A winsys buffer to validate.
      * \param rd  A read domain containing a bitmask of the RADEON_DOMAIN_* flags.
      * \param wd  A write domain containing a bitmask of the RADEON_DOMAIN_* flags.
+     * \return Relocation index.
      */
-    void (*cs_add_reloc)(struct radeon_winsys_cs *cs,
-                         struct radeon_winsys_cs_handle *buf,
-                         enum radeon_bo_domain rd,
-                         enum radeon_bo_domain wd);
+    unsigned (*cs_add_reloc)(struct radeon_winsys_cs *cs,
+                             struct radeon_winsys_cs_handle *buf,
+                             enum radeon_bo_domain rd,
+                             enum radeon_bo_domain wd);
 
     /**
      * Return TRUE if there is enough memory in VRAM and GTT for the relocs
-     * added so far.
+     * added so far. If the validation fails, all the relocations which have
+     * been added since the last call of cs_validate will be removed and
+     * the CS will be flushed (provided there are still any relocations).
      *
      * \param cs        A command stream to validate.
      */
@@ -295,9 +315,9 @@ struct radeon_winsys {
      * \param flush     A flush callback function associated with the command stream.
      * \param user      A user pointer that will be passed to the flush callback.
      */
-    void (*cs_set_flush)(struct radeon_winsys_cs *cs,
-                         void (*flush)(void *ctx, unsigned flags),
-                         void *ctx);
+    void (*cs_set_flush_callback)(struct radeon_winsys_cs *cs,
+                                  void (*flush)(void *ctx, unsigned flags),
+                                  void *ctx);
 
     /**
      * Return TRUE if a buffer is referenced by a command stream.

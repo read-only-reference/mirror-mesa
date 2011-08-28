@@ -29,13 +29,19 @@
 #ifndef vl_decoder_h
 #define vl_decoder_h
 
-#include <pipe/p_video_decoder.h>
+#include "pipe/p_video_decoder.h"
 
 /**
  * check if a given profile is supported with shader based decoding
  */
 bool
 vl_profile_supported(struct pipe_screen *screen, enum pipe_video_profile profile);
+
+/**
+ * the desired number of buffers for optimal operation
+ */
+unsigned
+vl_num_buffers_desired(struct pipe_screen *screen, enum pipe_video_profile profile);
 
 /**
  * standard implementation of pipe->create_video_decoder

@@ -27,14 +27,14 @@
 
 #include <assert.h>
 
-#include <pipe/p_compiler.h>
-#include <pipe/p_context.h>
+#include "pipe/p_compiler.h"
+#include "pipe/p_context.h"
 
-#include <util/u_memory.h>
-#include <util/u_draw.h>
-#include <util/u_surface.h>
+#include "util/u_memory.h"
+#include "util/u_draw.h"
+#include "util/u_surface.h"
 
-#include <tgsi/tgsi_ureg.h>
+#include "tgsi/tgsi_ureg.h"
 
 #include "vl_csc.h"
 #include "vl_types.h"
@@ -673,7 +673,6 @@ vl_compositor_set_rgba_layer(struct vl_compositor *c,
 
 void
 vl_compositor_render(struct vl_compositor *c,
-                     enum pipe_mpeg12_picture_type picture_type,
                      struct pipe_surface           *dst_surface,
                      struct pipe_video_rect        *dst_area,
                      struct pipe_video_rect        *dst_clip)

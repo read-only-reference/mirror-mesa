@@ -145,6 +145,7 @@ SWRAST_SOURCES = \
 	swrast/s_texcombine.c \
 	swrast/s_texfilter.c \
 	swrast/s_texrender.c \
+	swrast/s_texture.c \
 	swrast/s_triangle.c \
 	swrast/s_zoom.c
 
@@ -251,6 +252,7 @@ PROGRAM_SOURCES = \
 	program/prog_instruction.c \
 	program/prog_noise.c \
 	program/prog_optimize.c \
+	program/prog_opt_constant_fold.c \
 	program/prog_parameter.c \
 	program/prog_parameter_layout.c \
 	program/prog_print.c \
@@ -336,7 +338,8 @@ MESA_GALLIUM_SOURCES = \
 
 MESA_GALLIUM_CXX_SOURCES = \
 	$(MAIN_CXX_SOURCES) \
-	$(SHADER_CXX_SOURCES)
+	$(SHADER_CXX_SOURCES) \
+	state_tracker/st_glsl_to_tgsi.cpp
 
 # All the core C sources, for dependency checking
 ALL_SOURCES = \

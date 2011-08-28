@@ -496,7 +496,6 @@ static GLboolean evergreenGetTexFormat(struct gl_texture_object *tObj, gl_format
 			 SQ_TEX_RESOURCE_WORD4_0__DST_SEL_W_shift, SQ_TEX_RESOURCE_WORD4_0__DST_SEL_W_mask);
 		break;
 	case MESA_FORMAT_I8: /* X, X, X, X */
-	case MESA_FORMAT_CI8:
 		SETfield(t->SQ_TEX_RESOURCE7, FMT_8,
 			     EG_SQ_TEX_RESOURCE_WORD7_0__DATA_FORMAT_shift, 
                  EG_SQ_TEX_RESOURCE_WORD7_0__DATA_FORMAT_mask);
@@ -1288,19 +1287,12 @@ void evergreenSetTexBuffer(__DRIcontext *pDRICtx, GLint target, GLint glx_textur
 	struct radeon_renderbuffer *rb;
 	radeon_texture_image *rImage;
 	radeonContextPtr radeon;
-	context_t *rmesa;
 	struct radeon_framebuffer *rfb;
 	radeonTexObjPtr t;
 	uint32_t pitch_val;
-	uint32_t internalFormat, type, format;
 	gl_format texFormat;
 
-	type = GL_BGRA;
-	format = GL_UNSIGNED_BYTE;
-	internalFormat = (glx_texture_format == __DRI_TEXTURE_FORMAT_RGB ? 3 : 4);
-
 	radeon = pDRICtx->driverPrivate;
-	rmesa = pDRICtx->driverPrivate;
 
 	rfb = dPriv->driverPrivate;
         texUnit = &radeon->glCtx->Texture.Unit[radeon->glCtx->Texture.CurrentUnit];
@@ -1664,34 +1656,12 @@ void evergreenInitTextureFuncs(radeonContextPtr radeon, struct dd_function_table
 	/* Note: we only plug in the functions we implement in the driver
 	 * since _mesa_init_driver_functions() was already called.
 	 */
-	functions->NewTextureImage = radeonNewTextureImage;
-	functions->FreeTexImageData = radeonFreeTexImageData;
-	functions->MapTexture = radeonMapTexture;
-	functions->UnmapTexture = radeonUnmapTexture;
 
-	functions->ChooseTextureFormat = radeonChooseTextureFormat_mesa;
-	functions->TexImage1D = radeonTexImage1D;
-	functions->TexImage2D = radeonTexImage2D;
-	functions->TexImage3D = radeonTexImage3D;
-	functions->TexSubImage1D = radeonTexSubImage1D;
-	functions->TexSubImage2D = radeonTexSubImage2D;
-	functions->TexSubImage3D = radeonTexSubImage3D;
-	functions->GetTexImage = radeonGetTexImage;
-	functions->GetCompressedTexImage = radeonGetCompressedTexImage;
+	radeon_init_common_texture_funcs(radeon, functions);
+
 	functions->NewTextureObject = evergreenNewTextureObject;
 	functions->DeleteTexture = evergreenDeleteTexture;
 	functions->IsTextureResident = driIsTextureResident;
 
 	functions->TexParameter = evergreenTexParameter;
-
-	functions->CompressedTexImage2D = radeonCompressedTexImage2D;
-	functions->CompressedTexSubImage2D = radeonCompressedTexSubImage2D;
-
-	if (radeon->radeonScreen->kernel_mm) {
-		functions->CopyTexSubImage2D = radeonCopyTexSubImage2D;
-	}
-
-	functions->GenerateMipmap = radeonGenerateMipmap;
-
-	driInitTextureFormats();
 }

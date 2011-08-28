@@ -2,6 +2,8 @@
 #define NOUVEAU_WINSYS_H
 
 #include <stdint.h>
+#include <inttypes.h>
+
 #include "pipe/p_defines.h"
 
 #include "nouveau/nouveau_bo.h"
@@ -16,6 +18,9 @@
 #ifndef NV04_PFIFO_MAX_PACKET_LEN
 #define NV04_PFIFO_MAX_PACKET_LEN 2047
 #endif
+
+#define NOUVEAU_RESOURCE_FLAG_LINEAR   (PIPE_RESOURCE_FLAG_DRV_PRIV << 0)
+#define NOUVEAU_RESOURCE_FLAG_DRV_PRIV (PIPE_RESOURCE_FLAG_DRV_PRIV << 1)
 
 static INLINE uint32_t
 nouveau_screen_transfer_flags(unsigned pipe)

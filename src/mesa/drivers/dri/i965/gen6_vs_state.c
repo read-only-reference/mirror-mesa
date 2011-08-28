@@ -81,12 +81,20 @@ gen6_prepare_vs_push_constants(struct brw_context *brw)
 	 params_uploaded++;
       }
 
-      for (i = 0; i < vp->program.Base.Parameters->NumParameters; i++) {
-	 if (brw->vs.constant_map[i] != -1) {
-	    memcpy(param + brw->vs.constant_map[i] * 4,
-		   vp->program.Base.Parameters->ParameterValues[i],
-		   4 * sizeof(float));
-	    params_uploaded++;
+      if (brw->vs.prog_data->uses_new_param_layout) {
+	 for (i = 0; i < brw->vs.prog_data->nr_params; i++) {
+	    *param = *brw->vs.prog_data->param[i];
+	    param++;
+	 }
+	 params_uploaded += brw->vs.prog_data->nr_params / 4;
+      } else {
+	 for (i = 0; i < vp->program.Base.Parameters->NumParameters; i++) {
+	    if (brw->vs.constant_map[i] != -1) {
+	       memcpy(param + brw->vs.constant_map[i] * 4,
+		      vp->program.Base.Parameters->ParameterValues[i],
+		      4 * sizeof(float));
+	       params_uploaded++;
+	    }
 	 }
       }
 
@@ -151,7 +159,15 @@ upload_vs_state(struct brw_context *brw)
    OUT_BATCH((0 << GEN6_VS_SAMPLER_COUNT_SHIFT) |
 	     GEN6_VS_FLOATING_POINT_MODE_ALT |
 	     (brw->vs.nr_surfaces << GEN6_VS_BINDING_TABLE_ENTRY_COUNT_SHIFT));
-   OUT_BATCH(0); /* scratch space base offset */
+
+   if (brw->vs.prog_data->total_scratch) {
+      OUT_RELOC(brw->vs.scratch_bo,
+		I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
+		ffs(brw->vs.prog_data->total_scratch) - 11);
+   } else {
+      OUT_BATCH(0);
+   }
+
    OUT_BATCH((1 << GEN6_VS_DISPATCH_START_GRF_SHIFT) |
 	     (brw->vs.prog_data->urb_read_length << GEN6_VS_URB_READ_LENGTH_SHIFT) |
 	     (0 << GEN6_VS_URB_ENTRY_READ_OFFSET_SHIFT));

@@ -111,7 +111,9 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->NewTextureObject = _mesa_new_texture_object;
    driver->DeleteTexture = _mesa_delete_texture_object;
    driver->NewTextureImage = _mesa_new_texture_image;
-   driver->FreeTexImageData = _mesa_free_texture_image_data; 
+   driver->FreeTextureImageBuffer = _mesa_free_texture_image_data;
+   driver->MapTextureImage = _swrast_map_teximage;
+   driver->UnmapTextureImage = _swrast_unmap_teximage;
    driver->MapTexture = NULL;
    driver->UnmapTexture = NULL;
    driver->TextureMemCpy = memcpy;
@@ -248,10 +250,10 @@ _mesa_init_driver_state(struct gl_context *ctx)
       GLuint i;
       for (i = 0; i < ctx->Const.MaxDrawBuffers; i++) {
          ctx->Driver.ColorMaskIndexed(ctx, i,
-                                      ctx->Color.ColorMask[0][RCOMP],
-                                      ctx->Color.ColorMask[0][GCOMP],
-                                      ctx->Color.ColorMask[0][BCOMP],
-                                      ctx->Color.ColorMask[0][ACOMP]);
+                                      ctx->Color.ColorMask[i][RCOMP],
+                                      ctx->Color.ColorMask[i][GCOMP],
+                                      ctx->Color.ColorMask[i][BCOMP],
+                                      ctx->Color.ColorMask[i][ACOMP]);
       }
    }
    else {
@@ -286,7 +288,10 @@ _mesa_init_driver_state(struct gl_context *ctx)
    ctx->Driver.Enable(ctx, GL_TEXTURE_CUBE_MAP, GL_FALSE);
 
    ctx->Driver.Fogfv(ctx, GL_FOG_COLOR, ctx->Fog.Color);
-   ctx->Driver.Fogfv(ctx, GL_FOG_MODE, 0);
+   {
+      GLfloat mode = (GLfloat) ctx->Fog.Mode;
+      ctx->Driver.Fogfv(ctx, GL_FOG_MODE, &mode);
+   }
    ctx->Driver.Fogfv(ctx, GL_FOG_DENSITY, &ctx->Fog.Density);
    ctx->Driver.Fogfv(ctx, GL_FOG_START, &ctx->Fog.Start);
    ctx->Driver.Fogfv(ctx, GL_FOG_END, &ctx->Fog.End);

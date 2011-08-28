@@ -142,6 +142,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
         case PIPE_CAP_SEAMLESS_CUBE_MAP:
         case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
+        case PIPE_CAP_SCALED_RESOLVE:
             return 0;
 
         /* SWTCL-only features. */
@@ -211,13 +212,12 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         case PIPE_SHADER_CAP_MAX_PREDS:
             return is_r500 ? 1 : 0;
         case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
-            return 0;
         case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
         case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
         case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
         case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
-            return 0;
         case PIPE_SHADER_CAP_SUBROUTINES:
+        case PIPE_SHADER_CAP_INTEGERS:
             return 0;
         }
         break;
@@ -248,18 +248,15 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
             return 1; /* XXX guessed */
         case PIPE_SHADER_CAP_MAX_PREDS:
             return is_r500 ? 4 : 0; /* XXX guessed. */
+        case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
+            return 1;
         case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
-            return 0;
         case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
         case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
         case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
-            return 0;
-        case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
-            return 1;
         case PIPE_SHADER_CAP_SUBROUTINES:
+        case PIPE_SHADER_CAP_INTEGERS:
             return 0;
-        default:
-            break;
         }
         break;
     default:
@@ -316,6 +313,8 @@ static int r300_get_video_param(struct pipe_screen *screen,
       case PIPE_VIDEO_CAP_MAX_WIDTH:
       case PIPE_VIDEO_CAP_MAX_HEIGHT:
          return vl_video_buffer_max_size(screen);
+      case PIPE_VIDEO_CAP_NUM_BUFFERS_DESIRED:
+         return vl_num_buffers_desired(screen, profile);
       default:
          return 0;
    }
@@ -457,7 +456,7 @@ static boolean r300_fence_signalled(struct pipe_screen *screen,
     struct radeon_winsys *rws = r300_screen(screen)->rws;
     struct pb_buffer *rfence = (struct pb_buffer*)fence;
 
-    return !rws->buffer_is_busy(rfence);
+    return !rws->buffer_is_busy(rfence, RADEON_USAGE_READWRITE);
 }
 
 static boolean r300_fence_finish(struct pipe_screen *screen,
@@ -474,7 +473,7 @@ static boolean r300_fence_finish(struct pipe_screen *screen,
         timeout /= 1000;
 
         /* Wait in a loop. */
-        while (rws->buffer_is_busy(rfence)) {
+        while (rws->buffer_is_busy(rfence, RADEON_USAGE_READWRITE)) {
             if (os_time_get() - start_time >= timeout) {
                 return FALSE;
             }
@@ -483,7 +482,7 @@ static boolean r300_fence_finish(struct pipe_screen *screen,
         return TRUE;
     }
 
-    rws->buffer_wait(rfence);
+    rws->buffer_wait(rfence, RADEON_USAGE_READWRITE);
     return TRUE;
 }
 

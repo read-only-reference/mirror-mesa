@@ -109,8 +109,6 @@ int32_t r300TranslateTexFormat(gl_format mesaFormat)
 			return R300_EASY_TX_FORMAT(X, X, X, ONE, X8);
 		case MESA_FORMAT_I8:
 			return R300_EASY_TX_FORMAT(X, X, X, X, X8);
-		case MESA_FORMAT_CI8:
-			return R300_EASY_TX_FORMAT(X, X, X, X, X8);
 		case MESA_FORMAT_YCBCR:
 			return R300_EASY_TX_FORMAT(X, Y, Z, ONE, G8R8_G8B8) | R300_TX_FORMAT_YUV_MODE;
 		case MESA_FORMAT_YCBCR_REV:
@@ -427,12 +425,7 @@ void r300SetTexBuffer2(__DRIcontext *pDRICtx, GLint target, GLint texture_format
 	struct radeon_framebuffer *rfb;
 	radeonTexObjPtr t;
 	uint32_t pitch_val;
-	uint32_t internalFormat, type, format;
 	gl_format texFormat;
-
-	type = GL_BGRA;
-	format = GL_UNSIGNED_BYTE;
-	internalFormat = (texture_format == __DRI_TEXTURE_FORMAT_RGB ? 3 : 4);
 
 	radeon = pDRICtx->driverPrivate;
 	rmesa = pDRICtx->driverPrivate;

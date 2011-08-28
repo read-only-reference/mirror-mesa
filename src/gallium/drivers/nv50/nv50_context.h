@@ -171,7 +171,9 @@ void nv50_validate_derived_rs(struct nv50_context *);
 extern void nv50_init_state_functions(struct nv50_context *);
 
 /* nv50_state_validate.c */
-extern boolean nv50_state_validate(struct nv50_context *);
+/* @words: check for space before emitting relocs */
+extern boolean nv50_state_validate(struct nv50_context *, uint32_t state_mask,
+                                   unsigned space_words);
 
 /* nv50_surface.c */
 extern void nv50_clear(struct pipe_context *, unsigned buffers,

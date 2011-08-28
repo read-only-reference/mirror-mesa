@@ -444,8 +444,7 @@ st_generate_mipmap(struct gl_context *ctx, GLenum target,
       }
 
       /* Free old image data */
-      if (dstImage->Data)
-         ctx->Driver.FreeTexImageData(ctx, dstImage);
+      ctx->Driver.FreeTextureImageBuffer(ctx, dstImage);
 
       /* initialize new image */
       _mesa_init_teximage_fields(ctx, target, dstImage, dstWidth, dstHeight,
@@ -453,7 +452,6 @@ st_generate_mipmap(struct gl_context *ctx, GLenum target,
                                  srcImage->TexFormat);
 
       stImage = st_texture_image(dstImage);
-      stImage->level = dstLevel;
 
       pipe_resource_reference(&stImage->pt, pt);
    }
