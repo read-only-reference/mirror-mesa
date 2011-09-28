@@ -407,19 +407,6 @@ update_multisample(struct gl_context *ctx)
 
 
 /**
- * Update derived color/blend/logicop state.
- */
-static void
-update_color(struct gl_context *ctx)
-{
-   /* This is needed to support 1.1's RGB logic ops AND
-    * 1.0's blending logicops.
-    */
-   ctx->Color._LogicOpEnabled = _mesa_rgba_logicop_enabled(ctx);
-}
-
-
-/**
  * Update the ctx->Color._ClampFragmentColor field
  */
 static void
@@ -460,7 +447,20 @@ update_clamp_read_color(struct gl_context *ctx)
       ctx->Color._ClampReadColor = ctx->Color.ClampReadColor;
 }
 
-
+/**
+ * Update the ctx->VertexProgram._TwoSideEnabled flag.
+ */
+static void
+update_twoside(struct gl_context *ctx)
+{
+   if (ctx->Shader.CurrentVertexProgram ||
+       ctx->VertexProgram.Current) {
+      ctx->VertexProgram._TwoSideEnabled = ctx->VertexProgram.TwoSideEnabled;
+   } else {
+      ctx->VertexProgram._TwoSideEnabled = (ctx->Light.Enabled &&
+					    ctx->Light.Model.TwoSide);
+   }
+}
 
 
 /*
@@ -616,6 +616,9 @@ _mesa_update_state_locked( struct gl_context *ctx )
    if (new_state & _NEW_LIGHT)
       _mesa_update_lighting( ctx );
 
+   if (new_state & (_NEW_LIGHT | _NEW_PROGRAM))
+      update_twoside( ctx );
+
    if (new_state & (_NEW_LIGHT | _NEW_BUFFERS))
       update_clamp_vertex_color(ctx);
 
@@ -633,9 +636,6 @@ _mesa_update_state_locked( struct gl_context *ctx )
 
    if (new_state & (_NEW_MULTISAMPLE | _NEW_BUFFERS))
       update_multisample( ctx );
-
-   if (new_state & _NEW_COLOR)
-      update_color( ctx );
 
    if (new_state & (_NEW_COLOR | _NEW_BUFFERS))
       update_clamp_read_color(ctx);

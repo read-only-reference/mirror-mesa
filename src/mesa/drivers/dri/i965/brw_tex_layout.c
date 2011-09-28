@@ -39,9 +39,8 @@
 
 #define FILE_DEBUG_FLAG DEBUG_MIPTREE
 
-GLboolean brw_miptree_layout(struct intel_context *intel,
-			     struct intel_mipmap_tree *mt,
-			     uint32_t tiling)
+void
+brw_miptree_layout(struct intel_context *intel, struct intel_mipmap_tree *mt)
 {
    /* XXX: these vary depending on image format: */
    /* GLint align_w = 4; */
@@ -49,10 +48,13 @@ GLboolean brw_miptree_layout(struct intel_context *intel,
    switch (mt->target) {
    case GL_TEXTURE_CUBE_MAP:
       if (intel->gen >= 5) {
-          GLuint align_h = 2;
+          GLuint align_w;
+          GLuint align_h;
           GLuint level;
           GLuint qpitch = 0;
 	  int h0, h1, q;
+
+	  intel_get_texture_alignment_unit(mt->format, &align_w, &align_h);
 
 	  /* On Ironlake, cube maps are finally represented as just a series
 	   * of MIPLAYOUT_BELOW 2D textures (like 2D texture arrays), separated
@@ -65,7 +67,7 @@ GLboolean brw_miptree_layout(struct intel_context *intel,
           if (mt->compressed)
 	     qpitch /= 4;
 
-	  i945_miptree_layout_2d(intel, mt, tiling, 6);
+	  i945_miptree_layout_2d(mt, 6);
 
           for (level = mt->first_level; level <= mt->last_level; level++) {
 	     for (q = 0; q < 6; q++) {
@@ -159,12 +161,10 @@ GLboolean brw_miptree_layout(struct intel_context *intel,
    }
 
    default:
-      i945_miptree_layout_2d(intel, mt, tiling, 1);
+      i945_miptree_layout_2d(mt, 1);
       break;
    }
    DBG("%s: %dx%dx%d\n", __FUNCTION__,
        mt->total_width, mt->total_height, mt->cpp);
-
-   return GL_TRUE;
 }
 

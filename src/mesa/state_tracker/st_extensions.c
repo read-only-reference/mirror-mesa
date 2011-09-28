@@ -30,6 +30,7 @@
 #include "main/context.h"
 #include "main/macros.h"
 #include "main/mfeatures.h"
+#include "main/version.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
@@ -85,12 +86,17 @@ void st_init_limits(struct st_context *st)
    c->MaxTextureRectSize
       = _min(1 << (c->MaxTextureLevels - 1), MAX_TEXTURE_RECT_SIZE);
 
+   c->MaxArrayTextureLayers
+      = screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS);
+
    c->MaxTextureImageUnits
-      = _min(screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS),
+      = _min(screen->get_shader_param(screen, PIPE_SHADER_FRAGMENT,
+                                      PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS),
             MAX_TEXTURE_IMAGE_UNITS);
 
    c->MaxVertexTextureImageUnits
-      = _min(screen->get_param(screen, PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS),
+      = _min(screen->get_shader_param(screen, PIPE_SHADER_VERTEX,
+                                      PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS),
              MAX_VERTEX_TEXTURE_IMAGE_UNITS);
 
    c->MaxCombinedTextureImageUnits
@@ -170,10 +176,16 @@ void st_init_limits(struct st_context *st)
       /* raise MaxParameters if native support is higher */
       pc->MaxParameters            = MAX2(pc->MaxParameters, pc->MaxNativeParameters);
 
+      /* Gallium doesn't really care about local vs. env parameters so use the
+       * same limits.
+       */
+      pc->MaxLocalParams = MIN2(pc->MaxParameters, MAX_PROGRAM_LOCAL_PARAMS);
+      pc->MaxEnvParams = MIN2(pc->MaxParameters, MAX_PROGRAM_ENV_PARAMS);
+
       options->EmitNoNoise = TRUE;
 
       /* TODO: make these more fine-grained if anyone needs it */
-      options->EmitNoIfs = !screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH);
+      options->MaxIfDepth = screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH);
       options->EmitNoLoops = !screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH);
       options->EmitNoFunctions = !screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_SUBROUTINES);
       options->EmitNoMainReturn = !screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_SUBROUTINES);
@@ -203,7 +215,12 @@ void st_init_limits(struct st_context *st)
 
    /* XXX we'll need a better query here someday */
    if (screen->get_param(screen, PIPE_CAP_GLSL)) {
+      c->MinProgramTexelOffset = screen->get_param(screen, PIPE_CAP_MIN_TEXEL_OFFSET);
+      c->MaxProgramTexelOffset = screen->get_param(screen, PIPE_CAP_MAX_TEXEL_OFFSET);
+
       c->GLSLVersion = 120;
+      _mesa_override_glsl_version(st->ctx);
+      c->UniformBooleanTrue = ~0;
    }
 }
 
@@ -239,42 +256,30 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.ARB_fragment_program = GL_TRUE;
    ctx->Extensions.ARB_half_float_pixel = GL_TRUE;
    ctx->Extensions.ARB_map_buffer_range = GL_TRUE;
-   ctx->Extensions.ARB_multisample = GL_TRUE;
    ctx->Extensions.ARB_sampler_objects = GL_TRUE;
    ctx->Extensions.ARB_texture_border_clamp = GL_TRUE; /* XXX temp */
-   ctx->Extensions.ARB_texture_compression = GL_TRUE;
    ctx->Extensions.ARB_texture_cube_map = GL_TRUE;
    ctx->Extensions.ARB_texture_env_combine = GL_TRUE;
    ctx->Extensions.ARB_texture_env_crossbar = GL_TRUE;
    ctx->Extensions.ARB_texture_env_dot3 = GL_TRUE;
    ctx->Extensions.ARB_vertex_array_object = GL_TRUE;
-   ctx->Extensions.ARB_vertex_buffer_object = GL_TRUE;
    ctx->Extensions.ARB_vertex_program = GL_TRUE;
    ctx->Extensions.ARB_window_pos = GL_TRUE;
 
    ctx->Extensions.EXT_blend_color = GL_TRUE;
    ctx->Extensions.EXT_blend_func_separate = GL_TRUE;
-   ctx->Extensions.EXT_blend_logic_op = GL_TRUE;
    ctx->Extensions.EXT_blend_minmax = GL_TRUE;
-   ctx->Extensions.EXT_blend_subtract = GL_TRUE;
    ctx->Extensions.EXT_framebuffer_blit = GL_TRUE;
    ctx->Extensions.EXT_framebuffer_object = GL_TRUE;
    ctx->Extensions.EXT_framebuffer_multisample = GL_TRUE;
    ctx->Extensions.EXT_fog_coord = GL_TRUE;
    ctx->Extensions.EXT_gpu_program_parameters = GL_TRUE;
-   ctx->Extensions.EXT_multi_draw_arrays = GL_TRUE;
    ctx->Extensions.EXT_pixel_buffer_object = GL_TRUE;
    ctx->Extensions.EXT_point_parameters = GL_TRUE;
    ctx->Extensions.EXT_provoking_vertex = GL_TRUE;
    ctx->Extensions.EXT_secondary_color = GL_TRUE;
-   ctx->Extensions.EXT_stencil_wrap = GL_TRUE;
-   ctx->Extensions.EXT_texture_env_add = GL_TRUE;
-   ctx->Extensions.EXT_texture_env_combine = GL_TRUE;
    ctx->Extensions.EXT_texture_env_dot3 = GL_TRUE;
-   ctx->Extensions.EXT_texture_lod_bias = GL_TRUE;
    ctx->Extensions.EXT_vertex_array_bgra = GL_TRUE;
-   if (ctx->API == API_OPENGLES || ctx->API == API_OPENGLES2)
-	   ctx->Extensions.EXT_texture_format_BGRA8888 = GL_TRUE;
 
    ctx->Extensions.APPLE_vertex_array_object = GL_TRUE;
 
@@ -299,8 +304,6 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.OES_draw_texture = GL_TRUE;
 #endif
 
-   ctx->Extensions.SGIS_generate_mipmap = GL_TRUE;
-
    /*
     * Extensions that depend on the driver/hardware:
     */
@@ -321,10 +324,6 @@ void st_init_extensions(struct st_context *st)
       ctx->Extensions.EXT_separate_shader_objects = GL_TRUE;
    }
 
-   if (screen->get_param(screen, PIPE_CAP_TEXTURE_MIRROR_REPEAT) > 0) {
-      ctx->Extensions.ARB_texture_mirrored_repeat = GL_TRUE;
-   }
-
    if (screen->get_param(screen, PIPE_CAP_BLEND_EQUATION_SEPARATE)) {
       ctx->Extensions.EXT_blend_equation_separate = GL_TRUE;
    }
@@ -336,10 +335,6 @@ void st_init_extensions(struct st_context *st)
 
    if (screen->get_param(screen, PIPE_CAP_NPOT_TEXTURES)) {
       ctx->Extensions.ARB_texture_non_power_of_two = GL_TRUE;
-   }
-
-   if (screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS) > 1) {
-      ctx->Extensions.ARB_multitexture = GL_TRUE;
    }
 
    if (screen->get_param(screen, PIPE_CAP_TWO_SIDED_STENCIL)) {
@@ -495,7 +490,7 @@ void st_init_extensions(struct st_context *st)
    }
 
    /* GL_EXT_texture_array */
-   if (screen->get_param(screen, PIPE_CAP_ARRAY_TEXTURES)) {
+   if (screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS) > 1) {
       ctx->Extensions.EXT_texture_array = GL_TRUE;
       ctx->Extensions.MESA_texture_array = GL_TRUE;
    }
@@ -506,7 +501,7 @@ void st_init_extensions(struct st_context *st)
       ctx->Extensions.ARB_framebuffer_object = GL_TRUE;
    }
 
-   if (st->pipe->render_condition) {
+   if (screen->get_param(screen, PIPE_CAP_CONDITIONAL_RENDER)) {
       ctx->Extensions.NV_conditional_render = GL_TRUE;
    }
 
@@ -529,6 +524,33 @@ void st_init_extensions(struct st_context *st)
                                    PIPE_BUFFER, 0,
                                    PIPE_BIND_VERTEX_BUFFER)) {
       ctx->Extensions.ARB_ES2_compatibility = GL_TRUE;
+   }
+
+   if (screen->is_format_supported(screen, PIPE_FORMAT_R10G10B10A2_UNORM,
+                                   PIPE_BUFFER, 0,
+                                   PIPE_BIND_VERTEX_BUFFER) &&
+       screen->is_format_supported(screen, PIPE_FORMAT_B10G10R10A2_UNORM,
+                                   PIPE_BUFFER, 0,
+                                   PIPE_BIND_VERTEX_BUFFER) &&
+       screen->is_format_supported(screen, PIPE_FORMAT_R10G10B10A2_SNORM,
+                                   PIPE_BUFFER, 0,
+                                   PIPE_BIND_VERTEX_BUFFER) &&
+       screen->is_format_supported(screen, PIPE_FORMAT_B10G10R10A2_SNORM,
+                                   PIPE_BUFFER, 0,
+                                   PIPE_BIND_VERTEX_BUFFER) &&
+       screen->is_format_supported(screen, PIPE_FORMAT_R10G10B10A2_USCALED,
+                                   PIPE_BUFFER, 0,
+                                   PIPE_BIND_VERTEX_BUFFER) &&
+       screen->is_format_supported(screen, PIPE_FORMAT_B10G10R10A2_USCALED,
+                                   PIPE_BUFFER, 0,
+                                   PIPE_BIND_VERTEX_BUFFER) &&
+       screen->is_format_supported(screen, PIPE_FORMAT_R10G10B10A2_SSCALED,
+                                   PIPE_BUFFER, 0,
+                                   PIPE_BIND_VERTEX_BUFFER) &&
+       screen->is_format_supported(screen, PIPE_FORMAT_B10G10R10A2_SSCALED,
+                                   PIPE_BUFFER, 0,
+                                   PIPE_BIND_VERTEX_BUFFER)) {
+      ctx->Extensions.ARB_vertex_type_2_10_10_10_rev = GL_TRUE;
    }
 
    if (screen->get_shader_param(screen, PIPE_SHADER_GEOMETRY, PIPE_SHADER_CAP_MAX_INSTRUCTIONS) > 0) {
@@ -589,7 +611,7 @@ void st_init_extensions(struct st_context *st)
       ctx->Extensions.ARB_sync = GL_TRUE;
    }
 
-   if (st->pipe->texture_barrier) {
+   if (screen->get_param(screen, PIPE_CAP_TEXTURE_BARRIER)) {
       ctx->Extensions.NV_texture_barrier = GL_TRUE;
    }
 

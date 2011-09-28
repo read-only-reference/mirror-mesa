@@ -284,9 +284,8 @@ struct dd_function_table {
    /**
     * Called by glGetTexImage().
     */
-   void (*GetTexImage)( struct gl_context *ctx, GLenum target, GLint level,
+   void (*GetTexImage)( struct gl_context *ctx,
                         GLenum format, GLenum type, GLvoid *pixels,
-                        struct gl_texture_object *texObj,
                         struct gl_texture_image *texImage );
 
    /**
@@ -476,6 +475,16 @@ struct dd_function_table {
     */
    struct gl_texture_image * (*NewTextureImage)( struct gl_context *ctx );
 
+   /** Called to free a texture image object returned by NewTextureImage() */
+   void (*DeleteTextureImage)(struct gl_context *ctx,
+                              struct gl_texture_image *);
+
+   /** Called to allocate memory for a single texture image */
+   GLboolean (*AllocTextureImageBuffer)(struct gl_context *ctx,
+                                        struct gl_texture_image *texImage,
+                                        gl_format format, GLsizei width,
+                                        GLsizei height, GLsizei depth);
+
    /** 
     * Called to free tImage->Data.
     */
@@ -523,29 +532,6 @@ struct dd_function_table {
     */
    GLboolean (*IsTextureResident)( struct gl_context *ctx,
                                    struct gl_texture_object *t );
-
-   /**
-    * Called when the texture's color lookup table is changed.
-    * 
-    * If \p tObj is NULL then the shared texture palette
-    * gl_texture_object::Palette is to be updated.
-    */
-   void (*UpdateTexturePalette)( struct gl_context *ctx,
-                                 struct gl_texture_object *tObj );
-   /*@}*/
-
-   
-   /**
-    * \name Imaging functionality
-    */
-   /*@{*/
-   void (*CopyColorTable)( struct gl_context *ctx,
-			   GLenum target, GLenum internalformat,
-			   GLint x, GLint y, GLsizei width );
-
-   void (*CopyColorSubTable)( struct gl_context *ctx,
-			      GLenum target, GLsizei start,
-			      GLint x, GLint y, GLsizei width );
    /*@}*/
 
 
@@ -612,7 +598,8 @@ struct dd_function_table {
                               GLenum sfactorRGB, GLenum dfactorRGB,
                               GLenum sfactorA, GLenum dfactorA);
    /** Specify clear values for the color buffers */
-   void (*ClearColor)(struct gl_context *ctx, const GLfloat color[4]);
+   void (*ClearColor)(struct gl_context *ctx,
+                      const union gl_color_union color);
    /** Specify the clear value for the depth buffer */
    void (*ClearDepth)(struct gl_context *ctx, GLclampd d);
    /** Specify the clear value for the stencil buffer */
@@ -825,25 +812,6 @@ struct dd_function_table {
     * \name Support for multiple T&L engines
     */
    /*@{*/
-
-   /**
-    * Bitmask of state changes that require the current T&L module to be
-    * validated, using ValidateTnlModule() below.
-    */
-   GLuint NeedValidate;
-
-   /**
-    * Validate the current T&L module. 
-    *
-    * This is called directly after UpdateState() when a state change that has
-    * occurred matches the dd_function_table::NeedValidate bitmask above.  This
-    * ensures all computed values are up to date, thus allowing the driver to
-    * decide if the current T&L module needs to be swapped out.
-    *
-    * This must be non-NULL if a driver installs a custom T&L module and sets
-    * the dd_function_table::NeedValidate bitmask, but may be NULL otherwise.
-    */
-   void (*ValidateTnlModule)( struct gl_context *ctx, GLuint new_state );
 
    /**
     * Set by the driver-supplied T&L engine.  
@@ -1111,6 +1079,70 @@ typedef struct {
    void (GLAPIENTRYP VertexAttribI2uiv)( GLuint index, const GLuint *v);
    void (GLAPIENTRYP VertexAttribI3uiv)( GLuint index, const GLuint *v);
    void (GLAPIENTRYP VertexAttribI4uiv)( GLuint index, const GLuint *v);
+
+   /* GL_ARB_vertex_type_10_10_10_2_rev / GL3.3 */
+   void (GLAPIENTRYP VertexP2ui)( GLenum type, GLuint value );
+   void (GLAPIENTRYP VertexP2uiv)( GLenum type, const GLuint *value);
+
+   void (GLAPIENTRYP VertexP3ui)( GLenum type, GLuint value );
+   void (GLAPIENTRYP VertexP3uiv)( GLenum type, const GLuint *value);
+
+   void (GLAPIENTRYP VertexP4ui)( GLenum type, GLuint value );
+   void (GLAPIENTRYP VertexP4uiv)( GLenum type, const GLuint *value);
+
+   void (GLAPIENTRYP TexCoordP1ui)( GLenum type, GLuint coords );
+   void (GLAPIENTRYP TexCoordP1uiv)( GLenum type, const GLuint *coords );
+
+   void (GLAPIENTRYP TexCoordP2ui)( GLenum type, GLuint coords );
+   void (GLAPIENTRYP TexCoordP2uiv)( GLenum type, const GLuint *coords );
+
+   void (GLAPIENTRYP TexCoordP3ui)( GLenum type, GLuint coords );
+   void (GLAPIENTRYP TexCoordP3uiv)( GLenum type, const GLuint *coords );
+
+   void (GLAPIENTRYP TexCoordP4ui)( GLenum type, GLuint coords );
+   void (GLAPIENTRYP TexCoordP4uiv)( GLenum type, const GLuint *coords );
+
+   void (GLAPIENTRYP MultiTexCoordP1ui)( GLenum texture, GLenum type, GLuint coords );
+   void (GLAPIENTRYP MultiTexCoordP1uiv)( GLenum texture, GLenum type, const GLuint *coords );
+   void (GLAPIENTRYP MultiTexCoordP2ui)( GLenum texture, GLenum type, GLuint coords );
+   void (GLAPIENTRYP MultiTexCoordP2uiv)( GLenum texture, GLenum type, const GLuint *coords );
+   void (GLAPIENTRYP MultiTexCoordP3ui)( GLenum texture, GLenum type, GLuint coords );
+   void (GLAPIENTRYP MultiTexCoordP3uiv)( GLenum texture, GLenum type, const GLuint *coords );
+   void (GLAPIENTRYP MultiTexCoordP4ui)( GLenum texture, GLenum type, GLuint coords );
+   void (GLAPIENTRYP MultiTexCoordP4uiv)( GLenum texture, GLenum type, const GLuint *coords );
+
+   void (GLAPIENTRYP NormalP3ui)( GLenum type, GLuint coords );
+   void (GLAPIENTRYP NormalP3uiv)( GLenum type, const GLuint *coords );
+
+   void (GLAPIENTRYP ColorP3ui)( GLenum type, GLuint color );
+   void (GLAPIENTRYP ColorP3uiv)( GLenum type, const GLuint *color );
+
+   void (GLAPIENTRYP ColorP4ui)( GLenum type, GLuint color );
+   void (GLAPIENTRYP ColorP4uiv)( GLenum type, const GLuint *color );
+
+   void (GLAPIENTRYP SecondaryColorP3ui)( GLenum type, GLuint color );
+   void (GLAPIENTRYP SecondaryColorP3uiv)( GLenum type, const GLuint *color );
+
+   void (GLAPIENTRYP VertexAttribP1ui)( GLuint index, GLenum type,
+					GLboolean normalized, GLuint value);
+   void (GLAPIENTRYP VertexAttribP2ui)( GLuint index, GLenum type,
+					GLboolean normalized, GLuint value);
+   void (GLAPIENTRYP VertexAttribP3ui)( GLuint index, GLenum type,
+					GLboolean normalized, GLuint value);
+   void (GLAPIENTRYP VertexAttribP4ui)( GLuint index, GLenum type,
+					GLboolean normalized, GLuint value);
+   void (GLAPIENTRYP VertexAttribP1uiv)( GLuint index, GLenum type,
+					GLboolean normalized,
+					 const GLuint *value);
+   void (GLAPIENTRYP VertexAttribP2uiv)( GLuint index, GLenum type,
+					GLboolean normalized,
+					 const GLuint *value);
+   void (GLAPIENTRYP VertexAttribP3uiv)( GLuint index, GLenum type,
+					GLboolean normalized,
+					 const GLuint *value);
+   void (GLAPIENTRYP VertexAttribP4uiv)( GLuint index, GLenum type,
+					 GLboolean normalized,
+					 const GLuint *value);
 
    /*@}*/
 

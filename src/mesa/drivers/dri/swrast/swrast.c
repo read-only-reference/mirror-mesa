@@ -135,6 +135,9 @@ swrastFillInModes(__DRIscreen *psp,
     uint8_t stencil_bits_array[4];
     uint8_t msaa_samples_array[1];
 
+    (void) psp;
+    (void) have_back_buffer;
+
     depth_bits_array[0] = 0;
     depth_bits_array[1] = 0;
     depth_bits_array[2] = depth_bits;
@@ -215,6 +218,7 @@ static void
 dri_destroy_screen(__DRIscreen * sPriv)
 {
     TRACE;
+    (void) sPriv;
 }
 
 
@@ -277,6 +281,9 @@ swrast_alloc_front_storage(struct gl_context *ctx, struct gl_renderbuffer *rb,
     struct swrast_renderbuffer *xrb = swrast_renderbuffer(rb);
 
     TRACE;
+
+    (void) ctx;
+    (void) internalFormat;
 
     rb->Data = NULL;
     rb->Width = width;
@@ -375,6 +382,9 @@ dri_create_buffer(__DRIscreen * sPriv,
     struct swrast_renderbuffer *frontrb, *backrb;
 
     TRACE;
+
+    (void) sPriv;
+    (void) isPixmap;
 
     drawable = CALLOC_STRUCT(dri_drawable);
     if (drawable == NULL)
@@ -537,6 +547,10 @@ viewport(struct gl_context *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
     struct gl_framebuffer *draw = ctx->WinSysDrawBuffer;
     struct gl_framebuffer *read = ctx->WinSysReadBuffer;
 
+    (void) x;
+    (void) y;
+    (void) w;
+    (void) h;
     swrast_check_and_update_window_size(ctx, draw);
     swrast_check_and_update_window_size(ctx, read);
 }
@@ -564,18 +578,11 @@ swrast_init_driver_functions(struct dd_function_table *driver)
 static const char *es2_extensions[] = {
    /* Used by mesa internally (cf all_mesa_extensions in ../common/utils.c) */
    "GL_ARB_draw_buffers",
-   "GL_ARB_multisample",
-   "GL_ARB_texture_compression",
    "GL_ARB_transpose_matrix",
-   "GL_ARB_vertex_buffer_object",
    "GL_ARB_window_pos",
    "GL_EXT_blend_func_separate",
    "GL_EXT_compiled_vertex_array",
    "GL_EXT_framebuffer_blit",
-   "GL_EXT_multi_draw_arrays",
-   "GL_EXT_polygon_offset",
-   "GL_EXT_texture_object",
-   "GL_EXT_vertex_array",
    "GL_IBM_multimode_draw_arrays",
    "GL_MESA_window_pos",
    "GL_NV_vertex_program",
@@ -583,17 +590,13 @@ static const char *es2_extensions[] = {
    /* Required by GLES2 */
    "GL_ARB_fragment_program",
    "GL_ARB_fragment_shader",
-   "GL_ARB_multitexture",
    "GL_ARB_shader_objects",
    "GL_ARB_texture_cube_map",
-   "GL_ARB_texture_mirrored_repeat",
    "GL_ARB_texture_non_power_of_two",
    "GL_ARB_vertex_shader",
    "GL_EXT_blend_color",
    "GL_EXT_blend_equation_separate",
    "GL_EXT_blend_minmax",
-   "GL_EXT_blend_subtract",
-   "GL_EXT_stencil_wrap",
 
    /* Optional GLES2 */
    "GL_ARB_framebuffer_object",
@@ -608,9 +611,6 @@ static void
 InitExtensionsES2(struct gl_context *ctx)
 {
    int i;
-
-   /* Can't use driInitExtensions() since it uses extensions from
-    * main/remap_helper.h when called the first time. */
 
    for (i = 0; es2_extensions[i]; i++)
       _mesa_enable_extension(ctx, es2_extensions[i]);
@@ -681,8 +681,6 @@ dri_create_context(gl_api api,
         _mesa_enable_1_5_extensions(mesaCtx);
         _mesa_enable_2_0_extensions(mesaCtx);
         _mesa_enable_2_1_extensions(mesaCtx);
-
-        driInitExtensions( mesaCtx, NULL, GL_FALSE );
         break;
     case API_OPENGLES:
         _mesa_enable_1_3_extensions(mesaCtx);

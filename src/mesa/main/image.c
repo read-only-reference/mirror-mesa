@@ -249,12 +249,6 @@ _mesa_components_in_format( GLenum format )
 {
    switch (format) {
       case GL_COLOR_INDEX:
-      case GL_COLOR_INDEX1_EXT:
-      case GL_COLOR_INDEX2_EXT:
-      case GL_COLOR_INDEX4_EXT:
-      case GL_COLOR_INDEX8_EXT:
-      case GL_COLOR_INDEX12_EXT:
-      case GL_COLOR_INDEX16_EXT:
       case GL_STENCIL_INDEX:
       case GL_DEPTH_COMPONENT:
       case GL_RED:
@@ -863,27 +857,6 @@ _mesa_is_color_format(GLenum format)
 
 
 /**
- * Test if the given image format is a color index format.
- */
-GLboolean
-_mesa_is_index_format(GLenum format)
-{
-   switch (format) {
-      case GL_COLOR_INDEX:
-      case GL_COLOR_INDEX1_EXT:
-      case GL_COLOR_INDEX2_EXT:
-      case GL_COLOR_INDEX4_EXT:
-      case GL_COLOR_INDEX8_EXT:
-      case GL_COLOR_INDEX12_EXT:
-      case GL_COLOR_INDEX16_EXT:
-         return GL_TRUE;
-      default:
-         return GL_FALSE;
-   }
-}
-
-
-/**
  * Test if the given image format is a depth component format.
  */
 GLboolean
@@ -1095,6 +1068,19 @@ _mesa_is_compressed_format(struct gl_context *ctx, GLenum format)
       return ctx->Extensions.EXT_texture_compression_latc;
    case GL_COMPRESSED_LUMINANCE_ALPHA_3DC_ATI:
       return ctx->Extensions.ATI_texture_compression_3dc;
+#if FEATURE_ES
+   case GL_PALETTE4_RGB8_OES:
+   case GL_PALETTE4_RGBA8_OES:
+   case GL_PALETTE4_R5_G6_B5_OES:
+   case GL_PALETTE4_RGBA4_OES:
+   case GL_PALETTE4_RGB5_A1_OES:
+   case GL_PALETTE8_RGB8_OES:
+   case GL_PALETTE8_RGBA8_OES:
+   case GL_PALETTE8_R5_G6_B5_OES:
+   case GL_PALETTE8_RGBA4_OES:
+   case GL_PALETTE8_RGB5_A1_OES:
+      return ctx->API == API_OPENGLES;
+#endif
    default:
       return GL_FALSE;
    }
@@ -1540,12 +1526,8 @@ _mesa_convert_colors(GLenum srcType, const GLvoid *src,
          GLubyte (*dst1)[4] = (GLubyte (*)[4]) (useTemp ? tempBuffer : dst);
          GLuint i;
          for (i = 0; i < count; i++) {
-            if (!mask || mask[i]) {
-               UNCLAMPED_FLOAT_TO_UBYTE(dst1[i][RCOMP], src4[i][RCOMP]);
-               UNCLAMPED_FLOAT_TO_UBYTE(dst1[i][GCOMP], src4[i][GCOMP]);
-               UNCLAMPED_FLOAT_TO_UBYTE(dst1[i][BCOMP], src4[i][BCOMP]);
-               UNCLAMPED_FLOAT_TO_UBYTE(dst1[i][ACOMP], src4[i][ACOMP]);
-            }
+            if (!mask || mask[i])
+               _mesa_unclamped_float_rgba_to_ubyte(dst1[i], src4[i]);
          }
          if (useTemp)
             memcpy(dst, tempBuffer, count * 4 * sizeof(GLubyte));

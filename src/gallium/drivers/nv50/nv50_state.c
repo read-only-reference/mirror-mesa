@@ -308,6 +308,8 @@ nv50_rasterizer_state_create(struct pipe_context *pipe,
       SB_DATA    (so, fui(cso->offset_scale));
       SB_BEGIN_3D(so, POLYGON_OFFSET_UNITS, 1);
       SB_DATA    (so, fui(cso->offset_units * 2.0f));
+      SB_BEGIN_3D(so, POLYGON_OFFSET_CLAMP, 1);
+      SB_DATA    (so, fui(cso->offset_clamp));
    }
 
    assert(so->size <= (sizeof(so->state) / sizeof(so->state[0])));
@@ -508,10 +510,10 @@ nv50_sampler_state_create(struct pipe_context *pipe,
    so->tsc[2] |=
       (((int)(f[1] * 256.0f) & 0xfff) << 12) | ((int)(f[0] * 256.0f) & 0xfff);
 
-   so->tsc[4] = fui(cso->border_color[0]);
-   so->tsc[5] = fui(cso->border_color[1]);
-   so->tsc[6] = fui(cso->border_color[2]);
-   so->tsc[7] = fui(cso->border_color[3]);
+   so->tsc[4] = fui(cso->border_color.f[0]);
+   so->tsc[5] = fui(cso->border_color.f[1]);
+   so->tsc[6] = fui(cso->border_color.f[2]);
+   so->tsc[7] = fui(cso->border_color.f[3]);
 
    return (void *)so;
 }

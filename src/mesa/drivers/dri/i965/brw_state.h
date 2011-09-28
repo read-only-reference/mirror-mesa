@@ -206,10 +206,16 @@ void upload_default_color(struct brw_context *brw,
 
 /* gen6_sf_state.c */
 uint32_t
-get_attr_override(struct brw_context *brw, int fs_attr, int two_side_color);
+get_attr_override(struct brw_vue_map *vue_map, int urb_entry_read_offset,
+                  int fs_attr, bool two_side_color);
 
 /* gen7_misc_state.c */
 unsigned int
 gen7_depth_format(struct brw_context *brw);
+
+/* gen6_clip_state.c */
+uint32_t
+brw_compute_userclip_flags(bool uses_clip_distance,
+                           GLbitfield clip_planes_enabled);
 
 #endif

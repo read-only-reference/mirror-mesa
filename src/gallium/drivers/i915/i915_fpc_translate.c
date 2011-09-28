@@ -49,24 +49,24 @@
  * Simple pass-through fragment shader to use when we don't have
  * a real shader (or it fails to compile for some reason).
  */
-static unsigned passthrough[] = 
+static unsigned passthrough[] =
 {
    _3DSTATE_PIXEL_SHADER_PROGRAM | ((2*3)-1),
 
    /* declare input color:
     */
-   (D0_DCL | 
-    (REG_TYPE_T << D0_TYPE_SHIFT) | 
-    (T_DIFFUSE << D0_NR_SHIFT) | 
+   (D0_DCL |
+    (REG_TYPE_T << D0_TYPE_SHIFT) |
+    (T_DIFFUSE << D0_NR_SHIFT) |
     D0_CHANNEL_ALL),
    0,
    0,
 
    /* move to output color:
     */
-   (A0_MOV | 
-    (REG_TYPE_OC << A0_DEST_TYPE_SHIFT) | 
-    A0_DEST_CHANNEL_ALL | 
+   (A0_MOV |
+    (REG_TYPE_OC << A0_DEST_TYPE_SHIFT) |
+    A0_DEST_CHANNEL_ALL |
     (REG_TYPE_T << A0_SRC0_TYPE_SHIFT) |
     (T_DIFFUSE << A0_SRC0_NR_SHIFT)),
    0x01230000,			/* .xyzw */
@@ -372,6 +372,33 @@ translate_tex_src_target(struct i915_fp_compile *p, uint tex)
    }
 }
 
+/**
+ * Convert TGSI_TEXTURE_x token to DO_SAMPLE_TYPE_x token
+ */
+static uint
+texture_num_coords(struct i915_fp_compile *p, uint tex)
+{
+   switch (tex) {
+   case TGSI_TEXTURE_SHADOW1D:
+   case TGSI_TEXTURE_1D:
+      return 1;
+
+   case TGSI_TEXTURE_SHADOW2D:
+   case TGSI_TEXTURE_2D:
+   case TGSI_TEXTURE_SHADOWRECT:
+   case TGSI_TEXTURE_RECT:
+      return 2;
+
+   case TGSI_TEXTURE_3D:
+   case TGSI_TEXTURE_CUBE:
+      return 3;
+
+   default:
+      i915_program_error(p, "Num coords");
+      return 2;
+   }
+}
+
 
 /**
  * Generate texel lookup instruction.
@@ -393,7 +420,8 @@ emit_tex(struct i915_fp_compile *p,
                     get_result_flags( inst ),
                     sampler,
                     coord,
-                    opcode);
+                    opcode,
+                    texture_num_coords(p, texture) );
 }
 
 
@@ -454,7 +482,7 @@ emit_simple_arith_swap2(struct i915_fp_compile *p,
  * SIN, COS -- could use another taylor step?
  * LIT      -- results seem a little different to sw mesa
  * LOG      -- different to mesa on negative numbers, but this is conformant.
- */ 
+ */
 static void
 i915_translate_instruction(struct i915_fp_compile *p,
                            const struct i915_full_instruction *inst,
@@ -622,7 +650,8 @@ i915_translate_instruction(struct i915_fp_compile *p,
                       A0_DEST_CHANNEL_ALL,   /* dest writemask */
                       0,                     /* sampler */
                       src0,                  /* coord*/
-                      T0_TEXKILL);           /* opcode */
+                      T0_TEXKILL,            /* opcode */
+                      1);                    /* num_coord */
       break;
 
    case TGSI_OPCODE_KILP:
@@ -751,11 +780,11 @@ i915_translate_instruction(struct i915_fp_compile *p,
                       get_result_vector(p, &inst->Dst[0]),
                       flags, 0, swizzle(tmp, X, X, X, X), 0, 0);
       break;
-      
+
    case TGSI_OPCODE_RET:
       /* XXX: no-op? */
       break;
-      
+
    case TGSI_OPCODE_RCP:
       src0 = src_vector(p, &inst->Src[0], fs);
 
@@ -1244,11 +1273,11 @@ i915_fini_compile(struct i915_context *i915, struct i915_fp_compile *p)
          ifs->program_len = program_size + decl_size;
 
          memcpy(ifs->program,
-                p->declarations, 
+                p->declarations,
                 decl_size * sizeof(uint));
 
-         memcpy(ifs->program + decl_size, 
-                p->program, 
+         memcpy(ifs->program + decl_size,
+                p->program,
                 program_size * sizeof(uint));
       }
    }
@@ -1313,4 +1342,8 @@ i915_translate_fragment_program( struct i915_context *i915,
 
    i915_fini_compile(i915, p);
    i915_optimize_free(i_tokens);
+
+#if 0
+   i915_disassemble_program(NULL, fs->program, fs->program_len);
+#endif
 }

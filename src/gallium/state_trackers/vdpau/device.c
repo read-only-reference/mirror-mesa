@@ -34,6 +34,9 @@
 
 #include "vdpau_private.h"
 
+/**
+ * Create a VdpDevice object for use with X11.
+ */
 PUBLIC VdpStatus
 vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device,
                           VdpGetProcAddress **get_proc_address)
@@ -73,6 +76,8 @@ vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device,
       goto no_handle;
    }
 
+   vl_compositor_init(&dev->compositor, dev->context->pipe);
+
    *get_proc_address = &vlVdpGetProcAddress;
    VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Device created succesfully\n");
 
@@ -90,6 +95,9 @@ no_htab:
    return ret;
 }
 
+/**
+ * Create a VdpPresentationQueueTarget for use with X11.
+ */
 PUBLIC VdpStatus
 vlVdpPresentationQueueTargetCreateX11(VdpDevice device, Drawable drawable,
                                       VdpPresentationQueueTarget *target)
@@ -126,6 +134,9 @@ no_handle:
    return ret;
 }
 
+/**
+ * Destroy a VdpPresentationQueueTarget.
+ */
 VdpStatus
 vlVdpPresentationQueueTargetDestroy(VdpPresentationQueueTarget presentation_queue_target)
 {
@@ -143,26 +154,33 @@ vlVdpPresentationQueueTargetDestroy(VdpPresentationQueueTarget presentation_queu
    return VDP_STATUS_OK;
 }
 
+/**
+ * Destroy a VdpDevice.
+ */
 VdpStatus
 vlVdpDeviceDestroy(VdpDevice device)
 {
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Destroying destroy\n");
+   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Destroying device\n");
 
    vlVdpDevice *dev = vlGetDataHTAB(device);
    if (!dev)
       return VDP_STATUS_INVALID_HANDLE;
       
+   vl_compositor_cleanup(&dev->compositor);
    vl_video_destroy(dev->context);
    vl_screen_destroy(dev->vscreen);
 
    FREE(dev);
    vlDestroyHTAB();
 
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Device destroyed succesfully\n");
+   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Device destroyed successfully\n");
 
    return VDP_STATUS_OK;
 }
 
+/**
+ * Retrieve a VDPAU function pointer.
+ */
 VdpStatus
 vlVdpGetProcAddress(VdpDevice device, VdpFuncId function_id, void **function_pointer)
 {
@@ -183,6 +201,9 @@ vlVdpGetProcAddress(VdpDevice device, VdpFuncId function_id, void **function_poi
 
 #define _ERROR_TYPE(TYPE,STRING) case TYPE: return STRING;
 
+/**
+ * Retrieve a string describing an error code.
+ */
 char const *
 vlVdpGetErrorString (VdpStatus status)
 {
@@ -191,8 +212,8 @@ vlVdpGetErrorString (VdpStatus status)
    _ERROR_TYPE(VDP_STATUS_NO_IMPLEMENTATION,"No backend implementation could be loaded.");
    _ERROR_TYPE(VDP_STATUS_DISPLAY_PREEMPTED,"The display was preempted, or a fatal error occurred. The application must re-initialize VDPAU.");
    _ERROR_TYPE(VDP_STATUS_INVALID_HANDLE,"An invalid handle value was provided. Either the handle does not exist at all, or refers to an object of an incorrect type.");
-   _ERROR_TYPE(VDP_STATUS_INVALID_POINTER ,"An invalid pointer was provided. Typically, this means that a NULL pointer was provided for an 'output' parameter.");
-   _ERROR_TYPE(VDP_STATUS_INVALID_CHROMA_TYPE ,"An invalid/unsupported VdpChromaType value was supplied.");
+   _ERROR_TYPE(VDP_STATUS_INVALID_POINTER,"An invalid pointer was provided. Typically, this means that a NULL pointer was provided for an 'output' parameter.");
+   _ERROR_TYPE(VDP_STATUS_INVALID_CHROMA_TYPE,"An invalid/unsupported VdpChromaType value was supplied.");
    _ERROR_TYPE(VDP_STATUS_INVALID_Y_CB_CR_FORMAT,"An invalid/unsupported VdpYCbCrFormat value was supplied.");
    _ERROR_TYPE(VDP_STATUS_INVALID_RGBA_FORMAT,"An invalid/unsupported VdpRGBAFormat value was supplied.");
    _ERROR_TYPE(VDP_STATUS_INVALID_INDEXED_FORMAT,"An invalid/unsupported VdpIndexedFormat value was supplied.");
@@ -203,7 +224,7 @@ vlVdpGetErrorString (VdpStatus status)
    _ERROR_TYPE(VDP_STATUS_INVALID_FLAG,"An invalid/unsupported flag value/combination was supplied.");
    _ERROR_TYPE(VDP_STATUS_INVALID_DECODER_PROFILE,"An invalid/unsupported VdpDecoderProfile value was supplied.");
    _ERROR_TYPE(VDP_STATUS_INVALID_VIDEO_MIXER_FEATURE,"An invalid/unsupported VdpVideoMixerFeature value was supplied.");
-   _ERROR_TYPE(VDP_STATUS_INVALID_VIDEO_MIXER_PARAMETER ,"An invalid/unsupported VdpVideoMixerParameter value was supplied.");
+   _ERROR_TYPE(VDP_STATUS_INVALID_VIDEO_MIXER_PARAMETER,"An invalid/unsupported VdpVideoMixerParameter value was supplied.");
    _ERROR_TYPE(VDP_STATUS_INVALID_VIDEO_MIXER_ATTRIBUTE,"An invalid/unsupported VdpVideoMixerAttribute value was supplied.");
    _ERROR_TYPE(VDP_STATUS_INVALID_VIDEO_MIXER_PICTURE_STRUCTURE,"An invalid/unsupported VdpVideoMixerPictureStructure value was supplied.");
    _ERROR_TYPE(VDP_STATUS_INVALID_FUNC_ID,"An invalid/unsupported VdpFuncId value was supplied.");

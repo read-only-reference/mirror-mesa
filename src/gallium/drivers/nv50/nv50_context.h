@@ -153,6 +153,7 @@ extern struct draw_stage *nv50_draw_render_stage(struct nv50_context *);
 
 /* nv50_program.c */
 boolean nv50_program_translate(struct nv50_program *);
+boolean nv50_program_translate_new(struct nv50_program *);
 void nv50_program_destroy(struct nv50_context *, struct nv50_program *);
 
 /* nv50_query.c */
@@ -177,7 +178,8 @@ extern boolean nv50_state_validate(struct nv50_context *, uint32_t state_mask,
 
 /* nv50_surface.c */
 extern void nv50_clear(struct pipe_context *, unsigned buffers,
-                       const float *rgba, double depth, unsigned stencil);
+                       const union pipe_color_union *color,
+                       double depth, unsigned stencil);
 extern void nv50_init_surface_functions(struct nv50_context *);
 
 /* nv50_tex.c */
@@ -198,7 +200,7 @@ nv50_m2mf_transfer_rect(struct pipe_screen *pscreen,
 void
 nv50_sifc_linear_u8(struct nouveau_context *pipe,
                     struct nouveau_bo *dst, unsigned offset, unsigned domain,
-                    unsigned size, void *data);
+                    unsigned size, const void *data);
 void
 nv50_m2mf_copy_linear(struct nouveau_context *pipe,
                       struct nouveau_bo *dst, unsigned dstoff, unsigned dstdom,

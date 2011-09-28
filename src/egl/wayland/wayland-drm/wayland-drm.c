@@ -103,7 +103,7 @@ drm_create_buffer(struct wl_client *client, struct wl_resource *resource,
 
 	buffer = calloc(1, sizeof *buffer);
 	if (buffer == NULL) {
-		wl_client_post_no_memory(resource->client);
+		wl_resource_post_no_memory(resource);
 		return;
 	}
 

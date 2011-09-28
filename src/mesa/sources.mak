@@ -43,6 +43,7 @@ MAIN_SOURCES = \
 	main/ffvertex_prog.c \
 	main/fog.c \
 	main/formats.c \
+	main/format_unpack.c \
 	main/framebuffer.c \
 	main/get.c \
 	main/getstring.c \
@@ -84,7 +85,6 @@ MAIN_SOURCES = \
 	main/texcompress_s3tc.c \
 	main/texcompress_fxt1.c \
 	main/texenv.c \
-	main/texfetch.c \
 	main/texformat.c \
 	main/texgen.c \
 	main/texgetimage.c \
@@ -143,6 +143,7 @@ SWRAST_SOURCES = \
 	swrast/s_span.c \
 	swrast/s_stencil.c \
 	swrast/s_texcombine.c \
+	swrast/s_texfetch.c \
 	swrast/s_texfilter.c \
 	swrast/s_texrender.c \
 	swrast/s_texture.c \
@@ -337,14 +338,13 @@ MESA_GALLIUM_SOURCES = \
 	x86/common_x86.c
 
 MESA_GALLIUM_CXX_SOURCES = \
-	$(MAIN_CXX_SOURCES) \
-	$(SHADER_CXX_SOURCES) \
+	$(MESA_CXX_SOURCES) \
 	state_tracker/st_glsl_to_tgsi.cpp
 
 # All the core C sources, for dependency checking
 ALL_SOURCES = \
 	$(MESA_SOURCES)		\
-	$(MESA_CXX_SOURCES)	\
+	$(MESA_GALLIUM_CXX_SOURCES) \
 	$(MESA_ASM_SOURCES)	\
 	$(STATETRACKER_SOURCES)
 

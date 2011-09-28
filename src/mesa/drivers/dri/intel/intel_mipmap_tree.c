@@ -61,10 +61,8 @@ intel_miptree_create_internal(struct intel_context *intel,
 			      GLuint last_level,
 			      GLuint width0,
 			      GLuint height0,
-			      GLuint depth0,
-			      uint32_t tiling)
+			      GLuint depth0)
 {
-   GLboolean ok;
    struct intel_mipmap_tree *mt = calloc(sizeof(*mt), 1);
    int compress_byte = 0;
 
@@ -88,19 +86,14 @@ intel_miptree_create_internal(struct intel_context *intel,
    mt->refcount = 1; 
 
 #ifdef I915
+   (void) intel;
    if (intel->is_945)
-      ok = i945_miptree_layout(intel, mt, tiling);
+      i945_miptree_layout(mt);
    else
-      ok = i915_miptree_layout(intel, mt, tiling);
+      i915_miptree_layout(mt);
 #else
-   ok = brw_miptree_layout(intel, mt, tiling);
+   brw_miptree_layout(intel, mt);
 #endif
-
-   if (!ok) {
-      free(mt);
-      DBG("%s not okay - returning NULL\n", __FUNCTION__);
-      return NULL;
-   }
 
    return mt;
 }
@@ -132,12 +125,11 @@ intel_miptree_create(struct intel_context *intel,
 
    mt = intel_miptree_create_internal(intel, target, format,
 				      first_level, last_level, width0,
-				      height0, depth0,
-				      tiling);
+				      height0, depth0);
    /*
     * pitch == 0 || height == 0  indicates the null texture
     */
-   if (!mt || !mt->total_height) {
+   if (!mt || !mt->total_width || !mt->total_height) {
       free(mt);
       return NULL;
    }
@@ -162,15 +154,13 @@ struct intel_mipmap_tree *
 intel_miptree_create_for_region(struct intel_context *intel,
 				GLenum target,
 				gl_format format,
-				struct intel_region *region,
-				GLuint depth0)
+				struct intel_region *region)
 {
    struct intel_mipmap_tree *mt;
 
    mt = intel_miptree_create_internal(intel, target, format,
 				      0, 0,
-				      region->width, region->height, 1,
-				      I915_TILING_NONE);
+				      region->width, region->height, 1);
    if (!mt)
       return mt;
 
@@ -183,15 +173,22 @@ void
 intel_miptree_reference(struct intel_mipmap_tree **dst,
                         struct intel_mipmap_tree *src)
 {
-   src->refcount++;
+   if (*dst == src)
+      return;
+
+   intel_miptree_release(dst);
+
+   if (src) {
+      src->refcount++;
+      DBG("%s %p refcount now %d\n", __FUNCTION__, src, src->refcount);
+   }
+
    *dst = src;
-   DBG("%s %p refcount now %d\n", __FUNCTION__, src, src->refcount);
 }
 
 
 void
-intel_miptree_release(struct intel_context *intel,
-                      struct intel_mipmap_tree **mt)
+intel_miptree_release(struct intel_mipmap_tree **mt)
 {
    if (!*mt)
       return;
@@ -227,7 +224,7 @@ intel_miptree_match_image(struct intel_mipmap_tree *mt,
                           struct gl_texture_image *image)
 {
    struct intel_texture_image *intelImage = intel_texture_image(image);
-   GLuint level = intelImage->base.Level;
+   GLuint level = intelImage->base.Base.Level;
 
    /* Images with borders are never pulled into mipmap trees. */
    if (image->Border)

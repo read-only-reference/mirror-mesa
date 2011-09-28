@@ -297,9 +297,12 @@ static void get_variable_helper(
 {
 	struct rc_list * list_ptr;
 	for (list_ptr = *variable_list; list_ptr; list_ptr = list_ptr->Next) {
-		if (readers_intersect(variable, list_ptr->Item)) {
-			rc_variable_add_friend(list_ptr->Item, variable);
-			return;
+		struct rc_variable * var;
+		for (var = list_ptr->Item; var; var = var->Friend) {
+			if (readers_intersect(var, variable)) {
+				rc_variable_add_friend(var, variable);
+				return;
+			}
 		}
 	}
 	rc_list_add(variable_list, rc_list(&variable->C->Pool, variable));
@@ -496,6 +499,22 @@ struct rc_list * rc_variable_list_get_writers(
 		}
 	}
 	return writer_list;
+}
+
+struct rc_list * rc_variable_list_get_writers_one_reader(
+	struct rc_list * var_list,
+	unsigned int src_type,
+	void * src)
+{
+	struct rc_list * writer_list =
+		rc_variable_list_get_writers(var_list, src_type, src);
+	struct rc_list * reader_list =
+		rc_variable_readers_union(writer_list->Item);
+	if (rc_list_count(reader_list) > 1) {
+		return NULL;
+	} else {
+		return writer_list;
+	}
 }
 
 void rc_variable_print(struct rc_variable * var)

@@ -37,59 +37,59 @@
 
 static const struct native_event_handler *wayland_event_handler;
 
-static void
-sync_callback(void *data)
-{
-   int *done = data;
-
-   *done = 1;
-}
-
-static void
-force_roundtrip(struct wl_display *display)
-{
-   int done = 0;
-
-   wl_display_sync_callback(display, sync_callback, &done);
-   wl_display_iterate(display, WL_DISPLAY_WRITABLE);
-   while (!done)
-      wl_display_iterate(display, WL_DISPLAY_READABLE);
-}
+const static struct {
+   enum pipe_format format;
+   enum wayland_format_flag flag;
+} wayland_formats[] = {
+   /*
+    * HAS_PREMUL_ARGB32 is ignored here.  For the case that HAS_PREMUL_ARGB32
+    * is set but HAS_ARGB32 isn't, we should not claim
+    * PIPE_FORMAT_B8G8R8A8_UNORM support because we will not be able to present
+    * a surface with non-premultiplied alpha.
+    */
+   { PIPE_FORMAT_B8G8R8A8_UNORM, HAS_ARGB32 },
+   { PIPE_FORMAT_B8G8R8X8_UNORM, HAS_XRGB32 },
+};
 
 static const struct native_config **
-wayland_display_get_configs (struct native_display *ndpy, int *num_configs)
+wayland_display_get_configs(struct native_display *ndpy, int *num_configs)
 {
    struct wayland_display *display = wayland_display(ndpy);
    const struct native_config **configs;
    int i;
 
-   if (!display->config) {
+   if (!display->configs) {
       struct native_config *nconf;
-      display->config = CALLOC(2, sizeof(*display->config));
-      if (!display->config)
+
+      display->num_configs = 0;
+      display->configs = CALLOC(Elements(wayland_formats),
+                                sizeof(*display->configs));
+      if (!display->configs)
          return NULL;
 
-      for (i = 0; i < 2; ++i) {
-         nconf = &display->config[i].base;
-         
+      for (i = 0; i < Elements(wayland_formats); ++i) {
+         if (!(display->formats & wayland_formats[i].flag))
+            continue;
+
+         nconf = &display->configs[display->num_configs].base;
          nconf->buffer_mask =
             (1 << NATIVE_ATTACHMENT_FRONT_LEFT) |
             (1 << NATIVE_ATTACHMENT_BACK_LEFT);
          
          nconf->window_bit = TRUE;
          nconf->pixmap_bit = TRUE;
+         
+         nconf->color_format = wayland_formats[i].format;
+         display->num_configs++;
       }
-
-      display->config[0].base.color_format = PIPE_FORMAT_B8G8R8A8_UNORM;
-      display->config[1].base.color_format = PIPE_FORMAT_B8G8R8X8_UNORM;
    }
 
-   configs = MALLOC(2 * sizeof(*configs));
+   configs = MALLOC(display->num_configs * sizeof(*configs));
    if (configs) {
-      configs[0] = &display->config[0].base;
-      configs[1] = &display->config[1].base;
+      for (i = 0; i < display->num_configs; ++i)
+         configs[i] = &display->configs[i].base;
       if (num_configs)
-         *num_configs = 2;
+         *num_configs = display->num_configs;
    }
 
    return configs;
@@ -99,9 +99,14 @@ static int
 wayland_display_get_param(struct native_display *ndpy,
                           enum native_param_type param)
 {
+   struct wayland_display *display = wayland_display(ndpy);
    int val;
 
    switch (param) {
+   case NATIVE_PARAM_PREMULTIPLIED_ALPHA:
+      val = ((display->formats & HAS_ARGB32) &&
+             (display->formats & HAS_PREMUL_ARGB32));
+      break;
    case NATIVE_PARAM_USE_NATIVE_BUFFER:
    case NATIVE_PARAM_PRESERVE_BUFFER:
    case NATIVE_PARAM_MAX_SWAP_INTERVAL:
@@ -157,9 +162,13 @@ wayland_pixmap_surface_initialize(struct wayland_surface *surface)
 }
 
 static void
-wayland_release_pending_resource(void *data)
+wayland_release_pending_resource(void *data,
+                                 struct wl_callback *callback,
+                                 uint32_t time)
 {
    struct wayland_surface *surface = data;
+
+   wl_callback_destroy(callback);
 
    /* FIXME: print internal error */
    if (!surface->pending_resource)
@@ -167,6 +176,10 @@ wayland_release_pending_resource(void *data)
 
    pipe_resource_reference(&surface->pending_resource, NULL);
 }
+
+static const struct wl_callback_listener release_buffer_listener = {
+   wayland_release_pending_resource
+};
 
 static void
 wayland_window_surface_handle_resize(struct wayland_surface *surface)
@@ -182,13 +195,16 @@ wayland_window_surface_handle_resize(struct wayland_surface *surface)
                                  surface->win->width, surface->win->height)) {
 
       if (surface->pending_resource)
-         force_roundtrip(display->dpy);
+         wl_display_roundtrip(display->dpy);
 
       if (front_resource) {
+         struct wl_callback *callback;
+
          surface->pending_resource = front_resource;
          front_resource = NULL;
-         wl_display_sync_callback(display->dpy,
-                                  wayland_release_pending_resource, surface);
+
+         callback = wl_display_sync(display->dpy);
+         wl_callback_add_listener(callback, &release_buffer_listener, surface);
       }
 
       for (i = 0; i < WL_BUFFER_COUNT; ++i) {
@@ -232,12 +248,18 @@ wayland_surface_validate(struct native_surface *nsurf, uint attachment_mask,
 }
 
 static void
-wayland_frame_callback(struct wl_surface *surf, void *data, uint32_t time)
+wayland_frame_callback(void *data, struct wl_callback *callback, uint32_t time)
 {
    struct wayland_surface *surface = data;
 
    surface->block_swap_buffers = FALSE;
+
+   wl_callback_destroy(callback);
 }
+
+static const struct wl_callback_listener frame_listener = {
+   wayland_frame_callback
+};
 
 static INLINE void
 wayland_buffers_swap(struct wl_buffer **buffer,
@@ -254,13 +276,15 @@ wayland_surface_swap_buffers(struct native_surface *nsurf)
 {
    struct wayland_surface *surface = wayland_surface(nsurf);
    struct wayland_display *display = surface->display;
+   struct wl_callback *callback;
 
    while (surface->block_swap_buffers)
       wl_display_iterate(display->dpy, WL_DISPLAY_READABLE);
 
    surface->block_swap_buffers = TRUE;
-   wl_display_frame_callback(display->dpy, surface->win->surface,
-                             wayland_frame_callback, surface);
+
+   callback = wl_surface_frame(surface->win->surface);
+   wl_callback_add_listener(callback, &frame_listener, surface);
 
    if (surface->type == WL_WINDOW_SURFACE) {
       resource_surface_swap_buffers(surface->rsurf,
@@ -294,18 +318,30 @@ wayland_surface_swap_buffers(struct native_surface *nsurf)
 
 static boolean
 wayland_surface_present(struct native_surface *nsurf,
-                        enum native_attachment natt,
-                        boolean preserve,
-                        uint swap_interval)
+                        const struct native_present_control *ctrl)
 {
    struct wayland_surface *surface = wayland_surface(nsurf);
    uint width, height;
    boolean ret;
 
-   if (preserve || swap_interval)
+   if (ctrl->preserve || ctrl->swap_interval)
       return FALSE;
 
-   switch (natt) {
+   /* force buffers to be re-created if they will be presented differently */
+   if (surface->premultiplied_alpha != ctrl->premultiplied_alpha) {
+      enum wayland_buffer_type buffer;
+
+      for (buffer = 0; buffer < WL_BUFFER_COUNT; ++buffer) {
+         if (surface->buffer[buffer]) {
+            wl_buffer_destroy(surface->buffer[buffer]);
+            surface->buffer[buffer] = NULL;
+         }
+      }
+
+      surface->premultiplied_alpha = ctrl->premultiplied_alpha;
+   }
+
+   switch (ctrl->natt) {
    case NATIVE_ATTACHMENT_FRONT_LEFT:
       ret = TRUE;
       break;

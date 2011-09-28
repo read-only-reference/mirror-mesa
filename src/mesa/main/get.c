@@ -102,6 +102,8 @@ enum value_type {
    TYPE_BIT_3,
    TYPE_BIT_4,
    TYPE_BIT_5,
+   TYPE_BIT_6,
+   TYPE_BIT_7,
    TYPE_FLOAT,
    TYPE_FLOAT_2,
    TYPE_FLOAT_3,
@@ -134,6 +136,7 @@ enum value_extra {
    EXTRA_NEW_FRAG_CLAMP,
    EXTRA_VALID_DRAW_BUFFER,
    EXTRA_VALID_TEXTURE_UNIT,
+   EXTRA_VALID_CLIP_DISTANCE,
    EXTRA_FLUSH_CURRENT,
 };
 
@@ -189,6 +192,8 @@ union value {
 #define CONTEXT_BIT3(field) CONTEXT_FIELD(field, TYPE_BIT_3)
 #define CONTEXT_BIT4(field) CONTEXT_FIELD(field, TYPE_BIT_4)
 #define CONTEXT_BIT5(field) CONTEXT_FIELD(field, TYPE_BIT_5)
+#define CONTEXT_BIT6(field) CONTEXT_FIELD(field, TYPE_BIT_6)
+#define CONTEXT_BIT7(field) CONTEXT_FIELD(field, TYPE_BIT_7)
 #define CONTEXT_FLOAT(field) CONTEXT_FIELD(field, TYPE_FLOAT)
 #define CONTEXT_FLOAT2(field) CONTEXT_FIELD(field, TYPE_FLOAT_2)
 #define CONTEXT_FLOAT3(field) CONTEXT_FIELD(field, TYPE_FLOAT_3)
@@ -239,6 +244,11 @@ static const int extra_valid_texture_unit[] = {
    EXTRA_END
 };
 
+static const int extra_valid_clip_distance[] = {
+   EXTRA_VALID_CLIP_DISTANCE,
+   EXTRA_END
+};
+
 static const int extra_flush_current_valid_texture_unit[] = {
    EXTRA_FLUSH_CURRENT,
    EXTRA_VALID_TEXTURE_UNIT,
@@ -247,12 +257,6 @@ static const int extra_flush_current_valid_texture_unit[] = {
 
 static const int extra_flush_current[] = {
    EXTRA_FLUSH_CURRENT,
-   EXTRA_END
-};
-
-static const int extra_new_buffers_OES_read_format[] = {
-   EXTRA_NEW_BUFFERS,
-   EXT(OES_read_format),
    EXTRA_END
 };
 
@@ -285,17 +289,14 @@ static const int extra_ARB_sampler_objects[] = {
 
 
 EXTRA_EXT(ARB_ES2_compatibility);
-EXTRA_EXT(ARB_multitexture);
 EXTRA_EXT(ARB_texture_cube_map);
 EXTRA_EXT(MESA_texture_array);
 EXTRA_EXT2(EXT_secondary_color, ARB_vertex_program);
 EXTRA_EXT(EXT_secondary_color);
 EXTRA_EXT(EXT_fog_coord);
-EXTRA_EXT(EXT_texture_lod_bias);
 EXTRA_EXT(EXT_texture_filter_anisotropic);
 EXTRA_EXT(IBM_rasterpos_clip);
 EXTRA_EXT(NV_point_sprite);
-EXTRA_EXT(SGIS_generate_mipmap);
 EXTRA_EXT(NV_vertex_program);
 EXTRA_EXT(NV_fragment_program);
 EXTRA_EXT(NV_texture_rectangle);
@@ -324,7 +325,6 @@ EXTRA_EXT2(NV_point_sprite, ARB_point_sprite);
 EXTRA_EXT2(ARB_fragment_program, NV_fragment_program);
 EXTRA_EXT2(ARB_vertex_program, NV_vertex_program);
 EXTRA_EXT2(ARB_vertex_program, ARB_fragment_program);
-EXTRA_EXT(ARB_vertex_buffer_object);
 EXTRA_EXT(ARB_geometry_shader4);
 EXTRA_EXT(ARB_copy_buffer);
 EXTRA_EXT(EXT_framebuffer_sRGB);
@@ -430,8 +430,7 @@ static const struct value_desc values[] = {
    { GL_VIEWPORT, LOC_CUSTOM, TYPE_INT_4, 0, NO_EXTRA },
 
    /* GL_ARB_multitexture */
-   { GL_ACTIVE_TEXTURE_ARB,
-     LOC_CUSTOM, TYPE_INT, 0, extra_ARB_multitexture },
+   { GL_ACTIVE_TEXTURE, LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA },
 
    /* Note that all the OES_* extensions require that the Mesa "struct
     * gl_extensions" include a member with the name of the extension.
@@ -473,16 +472,14 @@ static const struct value_desc values[] = {
    { GL_SAMPLES_ARB, BUFFER_INT(Visual.samples), NO_EXTRA },
 
    /* GL_SGIS_generate_mipmap */
-   { GL_GENERATE_MIPMAP_HINT_SGIS, CONTEXT_ENUM(Hint.GenerateMipmap),
-     extra_SGIS_generate_mipmap },
+   { GL_GENERATE_MIPMAP_HINT_SGIS, CONTEXT_ENUM(Hint.GenerateMipmap), NO_EXTRA },
 
    /* GL_ARB_vertex_buffer_object */
    { GL_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA },
 
    /* GL_ARB_vertex_buffer_object */
    /* GL_WEIGHT_ARRAY_BUFFER_BINDING_ARB - not supported */
-   { GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT, 0,
-     extra_ARB_vertex_buffer_object },
+   { GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA },
 
    /* GL_ARB_copy_buffer */
    { GL_COPY_READ_BUFFER, LOC_CUSTOM, TYPE_INT, 0, extra_ARB_copy_buffer },
@@ -490,9 +487,9 @@ static const struct value_desc values[] = {
 
    /* GL_OES_read_format */
    { GL_IMPLEMENTATION_COLOR_READ_TYPE_OES, LOC_CUSTOM, TYPE_INT, 0,
-     extra_new_buffers_OES_read_format },
+     extra_new_buffers },
    { GL_IMPLEMENTATION_COLOR_READ_FORMAT_OES, LOC_CUSTOM, TYPE_INT, 0,
-     extra_new_buffers_OES_read_format },
+     extra_new_buffers },
 
    /* GL_EXT_framebuffer_object */
    { GL_FRAMEBUFFER_BINDING_EXT, BUFFER_INT(Name),
@@ -525,12 +522,14 @@ static const struct value_desc values[] = {
    { GL_ALPHA_TEST_FUNC, CONTEXT_ENUM(Color.AlphaFunc), NO_EXTRA },
    { GL_ALPHA_TEST_REF, LOC_CUSTOM, TYPE_FLOATN, 0, extra_new_frag_clamp },
    { GL_BLEND_DST, CONTEXT_ENUM(Color.Blend[0].DstRGB), NO_EXTRA },
-   { GL_CLIP_PLANE0, CONTEXT_BIT0(Transform.ClipPlanesEnabled), NO_EXTRA },
-   { GL_CLIP_PLANE1, CONTEXT_BIT1(Transform.ClipPlanesEnabled), NO_EXTRA },
-   { GL_CLIP_PLANE2, CONTEXT_BIT2(Transform.ClipPlanesEnabled), NO_EXTRA },
-   { GL_CLIP_PLANE3, CONTEXT_BIT3(Transform.ClipPlanesEnabled), NO_EXTRA },
-   { GL_CLIP_PLANE4, CONTEXT_BIT4(Transform.ClipPlanesEnabled), NO_EXTRA },
-   { GL_CLIP_PLANE5, CONTEXT_BIT5(Transform.ClipPlanesEnabled), NO_EXTRA },
+   { GL_CLIP_DISTANCE0, CONTEXT_BIT0(Transform.ClipPlanesEnabled), extra_valid_clip_distance },
+   { GL_CLIP_DISTANCE1, CONTEXT_BIT1(Transform.ClipPlanesEnabled), extra_valid_clip_distance },
+   { GL_CLIP_DISTANCE2, CONTEXT_BIT2(Transform.ClipPlanesEnabled), extra_valid_clip_distance },
+   { GL_CLIP_DISTANCE3, CONTEXT_BIT3(Transform.ClipPlanesEnabled), extra_valid_clip_distance },
+   { GL_CLIP_DISTANCE4, CONTEXT_BIT4(Transform.ClipPlanesEnabled), extra_valid_clip_distance },
+   { GL_CLIP_DISTANCE5, CONTEXT_BIT5(Transform.ClipPlanesEnabled), extra_valid_clip_distance },
+   { GL_CLIP_DISTANCE6, CONTEXT_BIT6(Transform.ClipPlanesEnabled), extra_valid_clip_distance },
+   { GL_CLIP_DISTANCE7, CONTEXT_BIT7(Transform.ClipPlanesEnabled), extra_valid_clip_distance },
    { GL_COLOR_MATERIAL, CONTEXT_BOOL(Light.ColorMaterialEnabled), NO_EXTRA },
    { GL_CURRENT_COLOR,
      CONTEXT_FIELD(Current.Attrib[VERT_ATTRIB_COLOR0][0], TYPE_FLOATN_4),
@@ -610,10 +609,8 @@ static const struct value_desc values[] = {
      extra_ARB_ES2_compatibility },
 
    /* GL_ARB_multitexture */
-   { GL_MAX_TEXTURE_UNITS_ARB,
-     CONTEXT_INT(Const.MaxTextureUnits), extra_ARB_multitexture },
-   { GL_CLIENT_ACTIVE_TEXTURE_ARB,
-     LOC_CUSTOM, TYPE_INT, 0, extra_ARB_multitexture },
+   { GL_MAX_TEXTURE_UNITS, CONTEXT_INT(Const.MaxTextureUnits), NO_EXTRA },
+   { GL_CLIENT_ACTIVE_TEXTURE, LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA },
 
    /* GL_ARB_texture_cube_map */
    { GL_TEXTURE_CUBE_MAP_ARB, LOC_CUSTOM, TYPE_BOOLEAN, 0, NO_EXTRA },
@@ -653,7 +650,7 @@ static const struct value_desc values[] = {
 
    /* GL_EXT_texture_lod_bias */
    { GL_MAX_TEXTURE_LOD_BIAS_EXT, CONTEXT_FLOAT(Const.MaxTextureLodBias),
-	 extra_EXT_texture_lod_bias },
+     NO_EXTRA },
 
    /* GL_EXT_texture_filter_anisotropic */
    { GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT,
@@ -857,7 +854,6 @@ static const struct value_desc values[] = {
    { GL_RENDER_MODE, CONTEXT_ENUM(RenderMode), NO_EXTRA },
    { GL_RGBA_MODE, CONST(1), NO_EXTRA },
    { GL_SELECTION_BUFFER_SIZE, CONTEXT_INT(Select.BufferSize), NO_EXTRA },
-   { GL_SHARED_TEXTURE_PALETTE_EXT, CONTEXT_BOOL(Texture.SharedPalette), NO_EXTRA },
 
    { GL_STEREO, BUFFER_INT(Visual.stereoMode), NO_EXTRA },
 
@@ -889,7 +885,6 @@ static const struct value_desc values[] = {
    { GL_UNPACK_SWAP_BYTES, CONTEXT_BOOL(Unpack.SwapBytes), NO_EXTRA },
    { GL_UNPACK_SKIP_IMAGES_EXT, CONTEXT_INT(Unpack.SkipImages), NO_EXTRA },
    { GL_UNPACK_IMAGE_HEIGHT_EXT, CONTEXT_INT(Unpack.ImageHeight), NO_EXTRA },
-   { GL_UNPACK_CLIENT_STORAGE_APPLE, CONTEXT_BOOL(Unpack.ClientStorage), NO_EXTRA },
    { GL_ZOOM_X, CONTEXT_FLOAT(Pixel.ZoomX), NO_EXTRA },
    { GL_ZOOM_Y, CONTEXT_FLOAT(Pixel.ZoomY), NO_EXTRA },
 
@@ -1674,10 +1669,13 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
          COPY_4FV(v->value_float_4, ctx->Fog.ColorUnclamped);
       break;
    case GL_COLOR_CLEAR_VALUE:
-      if(ctx->Color._ClampFragmentColor)
-         COPY_4FV(v->value_float_4, ctx->Color.ClearColor);
-      else
-         COPY_4FV(v->value_float_4, ctx->Color.ClearColorUnclamped);
+      if(ctx->Color._ClampFragmentColor) {
+         v->value_float_4[0] = CLAMP(ctx->Color.ClearColor.f[0], 0.0F, 1.0F);
+         v->value_float_4[1] = CLAMP(ctx->Color.ClearColor.f[1], 0.0F, 1.0F);
+         v->value_float_4[2] = CLAMP(ctx->Color.ClearColor.f[2], 0.0F, 1.0F);
+         v->value_float_4[3] = CLAMP(ctx->Color.ClearColor.f[3], 0.0F, 1.0F);
+      } else
+         COPY_4FV(v->value_float_4, ctx->Color.ClearColor.f);
       break;
    case GL_BLEND_COLOR_EXT:
       if(ctx->Color._ClampFragmentColor)
@@ -1807,6 +1805,13 @@ check_extra(struct gl_context *ctx, const char *func, const struct value_desc *d
 	    return GL_FALSE;
 	 }
 	 break;
+      case EXTRA_VALID_CLIP_DISTANCE:
+	 if (d->pname - GL_CLIP_DISTANCE0 >= ctx->Const.MaxClipPlanes) {
+	    _mesa_error(ctx, GL_INVALID_ENUM, "%s(clip distance %u)",
+			func, d->pname - GL_CLIP_DISTANCE0);
+	    return GL_FALSE;
+	 }
+	 break;
       case EXTRA_END:
 	 break;
       default: /* *e is a offset into the extension struct */
@@ -1922,6 +1927,9 @@ _mesa_GetBooleanv(GLenum pname, GLboolean *params)
    GLmatrix *m;
    int shift, i;
    void *p;
+   GET_CURRENT_CONTEXT(ctx);
+
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    d = find_value("glGetBooleanv", pname, &p, &v);
    switch (d->type) {
@@ -1992,6 +2000,8 @@ _mesa_GetBooleanv(GLenum pname, GLboolean *params)
    case TYPE_BIT_3:
    case TYPE_BIT_4:
    case TYPE_BIT_5:
+   case TYPE_BIT_6:
+   case TYPE_BIT_7:
       shift = d->type - TYPE_BIT_0;
       params[0] = (*(GLbitfield *) p >> shift) & 1;
       break;
@@ -2006,6 +2016,9 @@ _mesa_GetFloatv(GLenum pname, GLfloat *params)
    GLmatrix *m;
    int shift, i;
    void *p;
+   GET_CURRENT_CONTEXT(ctx);
+
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    d = find_value("glGetFloatv", pname, &p, &v);
    switch (d->type) {
@@ -2076,6 +2089,8 @@ _mesa_GetFloatv(GLenum pname, GLfloat *params)
    case TYPE_BIT_3:
    case TYPE_BIT_4:
    case TYPE_BIT_5:
+   case TYPE_BIT_6:
+   case TYPE_BIT_7:
       shift = d->type - TYPE_BIT_0;
       params[0] = BOOLEAN_TO_FLOAT((*(GLbitfield *) p >> shift) & 1);
       break;
@@ -2090,6 +2105,9 @@ _mesa_GetIntegerv(GLenum pname, GLint *params)
    GLmatrix *m;
    int shift, i;
    void *p;
+   GET_CURRENT_CONTEXT(ctx);
+
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    d = find_value("glGetIntegerv", pname, &p, &v);
    switch (d->type) {
@@ -2166,6 +2184,8 @@ _mesa_GetIntegerv(GLenum pname, GLint *params)
    case TYPE_BIT_3:
    case TYPE_BIT_4:
    case TYPE_BIT_5:
+   case TYPE_BIT_6:
+   case TYPE_BIT_7:
       shift = d->type - TYPE_BIT_0;
       params[0] = (*(GLbitfield *) p >> shift) & 1;
       break;
@@ -2181,6 +2201,9 @@ _mesa_GetInteger64v(GLenum pname, GLint64 *params)
    GLmatrix *m;
    int shift, i;
    void *p;
+   GET_CURRENT_CONTEXT(ctx);
+
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    d = find_value("glGetInteger64v", pname, &p, &v);
    switch (d->type) {
@@ -2257,6 +2280,8 @@ _mesa_GetInteger64v(GLenum pname, GLint64 *params)
    case TYPE_BIT_3:
    case TYPE_BIT_4:
    case TYPE_BIT_5:
+   case TYPE_BIT_6:
+   case TYPE_BIT_7:
       shift = d->type - TYPE_BIT_0;
       params[0] = (*(GLbitfield *) p >> shift) & 1;
       break;
@@ -2272,6 +2297,9 @@ _mesa_GetDoublev(GLenum pname, GLdouble *params)
    GLmatrix *m;
    int shift, i;
    void *p;
+   GET_CURRENT_CONTEXT(ctx);
+
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    d = find_value("glGetDoublev", pname, &p, &v);
    switch (d->type) {
@@ -2342,6 +2370,8 @@ _mesa_GetDoublev(GLenum pname, GLdouble *params)
    case TYPE_BIT_3:
    case TYPE_BIT_4:
    case TYPE_BIT_5:
+   case TYPE_BIT_6:
+   case TYPE_BIT_7:
       shift = d->type - TYPE_BIT_0;
       params[0] = (*(GLbitfield *) p >> shift) & 1;
       break;
@@ -2612,6 +2642,8 @@ _mesa_GetFixedv(GLenum pname, GLfixed *params)
    case TYPE_BIT_3:
    case TYPE_BIT_4:
    case TYPE_BIT_5:
+   case TYPE_BIT_6:
+   case TYPE_BIT_7:
       shift = d->type - TYPE_BIT_0;
       params[0] = BOOLEAN_TO_FIXED((*(GLbitfield *) p >> shift) & 1);
       break;

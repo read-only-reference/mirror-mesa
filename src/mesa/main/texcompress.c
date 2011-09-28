@@ -37,6 +37,10 @@
 #include "mfeatures.h"
 #include "mtypes.h"
 #include "texcompress.h"
+#include "texcompress_fxt1.h"
+#include "texcompress_rgtc.h"
+#include "texcompress_s3tc.h"
+#include "swrast/s_context.h"
 
 
 /**
@@ -259,25 +263,28 @@ _mesa_get_compressed_formats(struct gl_context *ctx, GLint *formats)
          n += 4;
       }
    }
-   return n;
 
-#if FEATURE_ES1 || FEATURE_ES2
-   if (formats) {
-      formats[n++] = GL_PALETTE4_RGB8_OES;
-      formats[n++] = GL_PALETTE4_RGBA8_OES;
-      formats[n++] = GL_PALETTE4_R5_G6_B5_OES;
-      formats[n++] = GL_PALETTE4_RGBA4_OES;
-      formats[n++] = GL_PALETTE4_RGB5_A1_OES;
-      formats[n++] = GL_PALETTE8_RGB8_OES;
-      formats[n++] = GL_PALETTE8_RGBA8_OES;
-      formats[n++] = GL_PALETTE8_R5_G6_B5_OES;
-      formats[n++] = GL_PALETTE8_RGBA4_OES;
-      formats[n++] = GL_PALETTE8_RGB5_A1_OES;
-   }
-   else {
-      n += 10;
+#if FEATURE_ES1
+   if (ctx->API == API_OPENGLES) {
+      if (formats) {
+	 formats[n++] = GL_PALETTE4_RGB8_OES;
+	 formats[n++] = GL_PALETTE4_RGBA8_OES;
+	 formats[n++] = GL_PALETTE4_R5_G6_B5_OES;
+	 formats[n++] = GL_PALETTE4_RGBA4_OES;
+	 formats[n++] = GL_PALETTE4_RGB5_A1_OES;
+	 formats[n++] = GL_PALETTE8_RGB8_OES;
+	 formats[n++] = GL_PALETTE8_RGBA8_OES;
+	 formats[n++] = GL_PALETTE8_R5_G6_B5_OES;
+	 formats[n++] = GL_PALETTE8_RGBA4_OES;
+	 formats[n++] = GL_PALETTE8_RGB5_A1_OES;
+      }
+      else {
+	 n += 10;
+      }
    }
 #endif
+
+   return n;
 }
 
 
@@ -436,4 +443,87 @@ _mesa_compressed_image_address(GLint col, GLint row, GLint img,
    offset *= blockSize;
 
    return (GLubyte *) image + offset;
+}
+
+
+/**
+ * Decompress a compressed texture image, returning a GL_RGBA/GL_FLOAT image.
+ */
+void
+_mesa_decompress_image(gl_format format, GLuint width, GLuint height,
+                       const GLubyte *src, GLint srcRowStride,
+                       GLfloat *dest)
+{
+   void (*fetch)(const struct swrast_texture_image *texImage,
+                 GLint i, GLint j, GLint k, GLfloat *texel);
+   struct swrast_texture_image texImage;  /* dummy teximage */
+   GLuint i, j;
+
+   /* setup dummy texture image info */
+   memset(&texImage, 0, sizeof(texImage));
+   texImage.Base.Data = (void *) src;
+   texImage.Base.RowStride = srcRowStride;
+
+   switch (format) {
+   /* DXT formats */
+   case MESA_FORMAT_RGB_DXT1:
+      fetch = _mesa_fetch_texel_2d_f_rgb_dxt1;
+      break;
+   case MESA_FORMAT_RGBA_DXT1:
+      fetch = _mesa_fetch_texel_2d_f_rgba_dxt1;
+      break;
+   case MESA_FORMAT_RGBA_DXT3:
+      fetch = _mesa_fetch_texel_2d_f_rgba_dxt3;
+      break;
+   case MESA_FORMAT_RGBA_DXT5:
+      fetch = _mesa_fetch_texel_2d_f_rgba_dxt5;
+      break;
+
+   /* FXT1 formats */
+   case MESA_FORMAT_RGB_FXT1:
+      fetch = _mesa_fetch_texel_2d_f_rgb_fxt1;
+      break;
+   case MESA_FORMAT_RGBA_FXT1:
+      fetch = _mesa_fetch_texel_2d_f_rgba_fxt1;
+      break;
+
+   /* Red/RG formats */
+   case MESA_FORMAT_RED_RGTC1:
+      fetch = _mesa_fetch_texel_2d_f_red_rgtc1;
+      break;
+   case MESA_FORMAT_SIGNED_RED_RGTC1:
+      fetch = _mesa_fetch_texel_2d_f_signed_red_rgtc1;
+      break;
+   case MESA_FORMAT_RG_RGTC2:
+      fetch = _mesa_fetch_texel_2d_f_rg_rgtc2;
+      break;
+   case MESA_FORMAT_SIGNED_RG_RGTC2:
+      fetch = _mesa_fetch_texel_2d_f_signed_rg_rgtc2;
+      break;
+
+   /* L/LA formats */
+   case MESA_FORMAT_L_LATC1:
+      fetch = _mesa_fetch_texel_2d_f_l_latc1;
+      break;
+   case MESA_FORMAT_SIGNED_L_LATC1:
+      fetch = _mesa_fetch_texel_2d_f_signed_l_latc1;
+      break;
+   case MESA_FORMAT_LA_LATC2:
+      fetch = _mesa_fetch_texel_2d_f_la_latc2;
+      break;
+   case MESA_FORMAT_SIGNED_LA_LATC2:
+      fetch = _mesa_fetch_texel_2d_f_signed_la_latc2;
+      break;
+
+   default:
+      _mesa_problem(NULL, "Unexpected format in _mesa_decompress_image()");
+      return;
+   }
+
+   for (j = 0; j < height; j++) {
+      for (i = 0; i < width; i++) {
+         fetch(&texImage, i, j, 0, dest);
+         dest += 4;
+      }
+   }
 }

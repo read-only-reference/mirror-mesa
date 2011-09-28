@@ -77,9 +77,6 @@ static int
 nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 {
    switch (param) {
-   case PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS:
-   case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
-      return 32;
    case PIPE_CAP_MAX_COMBINED_SAMPLERS:
       return 64;
    case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -88,10 +85,13 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 10;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
       return 13;
-   case PIPE_CAP_ARRAY_TEXTURES: /* shader support missing */
+   case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS: /* shader support missing */
       return 0;
+   case PIPE_CAP_MIN_TEXEL_OFFSET:
+      return 0 /* -8, TODO */;
+   case PIPE_CAP_MAX_TEXEL_OFFSET:
+      return 0 /* +7, TODO */;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
-   case PIPE_CAP_TEXTURE_MIRROR_REPEAT:
    case PIPE_CAP_TEXTURE_SWIZZLE:
    case PIPE_CAP_TEXTURE_SHADOW_MAP:
    case PIPE_CAP_NPOT_TEXTURES:
@@ -136,6 +136,8 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_INSTANCEID:
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
+   case PIPE_CAP_CONDITIONAL_RENDER:
+   case PIPE_CAP_TEXTURE_BARRIER:
       return 1;
    default:
       NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);
@@ -190,6 +192,8 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
       return 0; /* please inline, or provide function declarations */
    case PIPE_SHADER_CAP_INTEGERS:
       return 0;
+   case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+      return 32;
    default:
       NOUVEAU_ERR("unknown PIPE_SHADER_CAP %d\n", param);
       return 0;
@@ -226,6 +230,8 @@ nv50_screen_destroy(struct pipe_screen *pscreen)
       nouveau_fence_ref (NULL, &screen->base.fence.current);
    }
    screen->base.channel->user_private = NULL;
+   if (screen->blitctx)
+      FREE(screen->blitctx);
 
    nouveau_bo_ref(NULL, &screen->code);
    nouveau_bo_ref(NULL, &screen->tls_bo);

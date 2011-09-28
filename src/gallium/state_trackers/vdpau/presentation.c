@@ -26,6 +26,8 @@
  **************************************************************************/
 
 #include <stdio.h>
+#include <time.h>
+#include <sys/timeb.h>
 
 #include <vdpau/vdpau.h>
 
@@ -34,6 +36,9 @@
 
 #include "vdpau_private.h"
 
+/**
+ * Create a VdpPresentationQueue.
+ */
 VdpStatus
 vlVdpPresentationQueueCreate(VdpDevice device,
                              VdpPresentationQueueTarget presentation_queue_target,
@@ -64,7 +69,7 @@ vlVdpPresentationQueueCreate(VdpDevice device,
 
    pq->device = dev;
    pq->drawable = pqt->drawable;
-   
+
    if (!vl_compositor_init(&pq->compositor, dev->context->pipe)) {
       ret = VDP_STATUS_ERROR;
       goto no_compositor;
@@ -77,12 +82,16 @@ vlVdpPresentationQueueCreate(VdpDevice device,
    }
 
    return VDP_STATUS_OK;
+
 no_handle:
 no_compositor:
    FREE(pq);
    return ret;
 }
 
+/**
+ * Destroy a VdpPresentationQueue.
+ */
 VdpStatus
 vlVdpPresentationQueueDestroy(VdpPresentationQueue presentation_queue)
 {
@@ -102,13 +111,17 @@ vlVdpPresentationQueueDestroy(VdpPresentationQueue presentation_queue)
    return VDP_STATUS_OK;
 }
 
+/**
+ * Configure the background color setting.
+ */
 VdpStatus
 vlVdpPresentationQueueSetBackgroundColor(VdpPresentationQueue presentation_queue,
                                          VdpColor *const background_color)
 {
    vlVdpPresentationQueue *pq;
+   union pipe_color_union color;
 
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Setting Background Color\n");
+   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Setting background color\n");
 
    if (!background_color)
       return VDP_STATUS_INVALID_POINTER;
@@ -117,31 +130,73 @@ vlVdpPresentationQueueSetBackgroundColor(VdpPresentationQueue presentation_queue
    if (!pq)
       return VDP_STATUS_INVALID_HANDLE;
 
-   vl_compositor_set_clear_color(&pq->compositor, (float*)background_color);
+   color.f[0] = background_color->red;
+   color.f[1] = background_color->green;
+   color.f[2] = background_color->blue;
+   color.f[3] = background_color->alpha;
+
+   vl_compositor_set_clear_color(&pq->compositor, &color);
 
    return VDP_STATUS_OK;
 }
 
+/**
+ * Retrieve the current background color setting.
+ */
 VdpStatus
 vlVdpPresentationQueueGetBackgroundColor(VdpPresentationQueue presentation_queue,
                                          VdpColor *const background_color)
 {
+   vlVdpPresentationQueue *pq;
+   union pipe_color_union color;
+
+   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Getting background color\n");
+
    if (!background_color)
       return VDP_STATUS_INVALID_POINTER;
 
-   return VDP_STATUS_NO_IMPLEMENTATION;
+   pq = vlGetDataHTAB(presentation_queue);
+   if (!pq)
+      return VDP_STATUS_INVALID_HANDLE;
+
+   vl_compositor_get_clear_color(&pq->compositor, &color);
+
+   background_color->red = color.f[0];
+   background_color->green = color.f[1];
+   background_color->blue = color.f[2];
+   background_color->alpha = color.f[3];
+
+   return VDP_STATUS_OK;
 }
 
+/**
+ * Retrieve the presentation queue's "current" time.
+ */
 VdpStatus
 vlVdpPresentationQueueGetTime(VdpPresentationQueue presentation_queue,
                               VdpTime *current_time)
 {
+   vlVdpPresentationQueue *pq;
+   struct timespec ts;
+
+   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Getting queue time\n");
+
    if (!current_time)
       return VDP_STATUS_INVALID_POINTER;
 
-   return VDP_STATUS_NO_IMPLEMENTATION;
+   pq = vlGetDataHTAB(presentation_queue);
+   if (!pq)
+      return VDP_STATUS_INVALID_HANDLE;
+
+   clock_gettime(CLOCK_REALTIME, &ts);
+   *current_time = (uint64_t)ts.tv_sec * 1000000000LL + (uint64_t)ts.tv_nsec;
+
+   return VDP_STATUS_OK;
 }
 
+/**
+ * Enter a surface into the presentation queue.
+ */
 VdpStatus
 vlVdpPresentationQueueDisplay(VdpPresentationQueue presentation_queue,
                               VdpOutputSurface surface,
@@ -153,7 +208,10 @@ vlVdpPresentationQueueDisplay(VdpPresentationQueue presentation_queue,
 
    vlVdpPresentationQueue *pq;
    vlVdpOutputSurface *surf;
+
+   struct pipe_context *pipe;
    struct pipe_surface *drawable_surface;
+   struct pipe_video_rect vo_rect;
 
    pq = vlGetDataHTAB(presentation_queue);
    if (!pq)
@@ -167,23 +225,35 @@ vlVdpPresentationQueueDisplay(VdpPresentationQueue presentation_queue,
    if (!surf)
       return VDP_STATUS_INVALID_HANDLE;
 
+   surf->timestamp = (vlVdpTime)earliest_presentation_time;
+
+   vo_rect.x = 0;
+   vo_rect.y = 0;
+   vo_rect.w = clip_width;
+   vo_rect.h = clip_height;
+
    vl_compositor_clear_layers(&pq->compositor);
    vl_compositor_set_rgba_layer(&pq->compositor, 0, surf->sampler_view, NULL, NULL);
-   vl_compositor_render(&pq->compositor, drawable_surface, NULL, NULL);
+   vl_compositor_render(&pq->compositor, drawable_surface, NULL, &vo_rect, true);
 
-   pq->device->context->pipe->screen->flush_frontbuffer
+   pipe = pq->device->context->pipe;
+
+   pipe->screen->flush_frontbuffer
    (
-      pq->device->context->pipe->screen,
+      pipe->screen,
       drawable_surface->texture,
       0, 0,
       vl_contextprivate_get(pq->device->context, drawable_surface)
    );
 
-   if(dump_window == -1) {
+   pipe->screen->fence_reference(pipe->screen, &surf->fence, NULL);
+   pipe->flush(pipe, &surf->fence);
+
+   if (dump_window == -1) {
       dump_window = debug_get_num_option("VDPAU_DUMP", 0);
    }
 
-   if(dump_window) {
+   if (dump_window) {
       static unsigned int framenum = 0;
       char cmd[256];
 
@@ -191,32 +261,87 @@ vlVdpPresentationQueueDisplay(VdpPresentationQueue presentation_queue,
       if (system(cmd) != 0)
          VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Dumping surface %d failed.\n", surface);
    }
-   
+
    pipe_surface_reference(&drawable_surface, NULL);
 
    return VDP_STATUS_OK;
 }
 
+/**
+ * Wait for a surface to finish being displayed.
+ */
 VdpStatus
 vlVdpPresentationQueueBlockUntilSurfaceIdle(VdpPresentationQueue presentation_queue,
                                             VdpOutputSurface surface,
                                             VdpTime *first_presentation_time)
 {
+   vlVdpPresentationQueue *pq;
+   vlVdpOutputSurface *surf;
+   struct pipe_screen *screen;
+
    if (!first_presentation_time)
       return VDP_STATUS_INVALID_POINTER;
 
-   //return VDP_STATUS_NO_IMPLEMENTATION;
+   pq = vlGetDataHTAB(presentation_queue);
+   if (!pq)
+      return VDP_STATUS_INVALID_HANDLE;
+
+   surf = vlGetDataHTAB(surface);
+   if (!surf)
+      return VDP_STATUS_INVALID_HANDLE;
+
+   if (surf->fence) {
+      screen = pq->device->context->pipe->screen;
+      screen->fence_finish(screen, surf->fence, 0);
+   }
+
+   // We actually need to query the timestamp of the last VSYNC event from the hardware
+   vlVdpPresentationQueueGetTime(presentation_queue, first_presentation_time);
+
    return VDP_STATUS_OK;
 }
 
+/**
+ * Poll the current queue status of a surface.
+ */
 VdpStatus
 vlVdpPresentationQueueQuerySurfaceStatus(VdpPresentationQueue presentation_queue,
                                          VdpOutputSurface surface,
                                          VdpPresentationQueueStatus *status,
                                          VdpTime *first_presentation_time)
 {
+   vlVdpPresentationQueue *pq;
+   vlVdpOutputSurface *surf;
+   struct pipe_screen *screen;
+
    if (!(status && first_presentation_time))
       return VDP_STATUS_INVALID_POINTER;
 
-   return VDP_STATUS_NO_IMPLEMENTATION;
+   pq = vlGetDataHTAB(presentation_queue);
+   if (!pq)
+      return VDP_STATUS_INVALID_HANDLE;
+
+   surf = vlGetDataHTAB(surface);
+   if (!surf)
+      return VDP_STATUS_INVALID_HANDLE;
+
+   *first_presentation_time = 0;
+
+   if (!surf->fence) {
+      *status = VDP_PRESENTATION_QUEUE_STATUS_IDLE;
+   } else {
+      screen = pq->device->context->pipe->screen;
+      if (screen->fence_signalled(screen, surf->fence)) {
+         screen->fence_reference(screen, &surf->fence, NULL);
+         *status = VDP_PRESENTATION_QUEUE_STATUS_VISIBLE;
+
+         // We actually need to query the timestamp of the last VSYNC event from the hardware
+         vlVdpPresentationQueueGetTime(presentation_queue, first_presentation_time);
+         *first_presentation_time += 1;
+      } else {
+         *status = VDP_PRESENTATION_QUEUE_STATUS_QUEUED;
+      }
+   }
+
+   return VDP_STATUS_OK;
 }

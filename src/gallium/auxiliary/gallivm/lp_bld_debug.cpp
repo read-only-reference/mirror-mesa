@@ -27,17 +27,23 @@
 
 #include <llvm-c/Core.h>
 #include <llvm/Target/TargetMachine.h>
-#include <llvm/Target/TargetRegistry.h>
-#include <llvm/Target/TargetSelect.h>
 #include <llvm/Target/TargetInstrInfo.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/MemoryObject.h>
 
+#if HAVE_LLVM >= 0x0300
+#include <llvm/Support/TargetRegistry.h>
+#include <llvm/Support/TargetSelect.h>
+#else /* HAVE_LLVM < 0x0300 */
+#include <llvm/Target/TargetRegistry.h>
+#include <llvm/Target/TargetSelect.h>
+#endif /* HAVE_LLVM < 0x0300 */
+
 #if HAVE_LLVM >= 0x0209
 #include <llvm/Support/Host.h>
-#else
+#else /* HAVE_LLVM < 0x0209 */
 #include <llvm/System/Host.h>
-#endif
+#endif /* HAVE_LLVM < 0x0209 */
 
 #if HAVE_LLVM >= 0x0207
 #include <llvm/MC/MCDisassembler.h>
@@ -204,7 +210,12 @@ lp_disassemble(const void* func)
       return;
    }
 
+#if HAVE_LLVM >= 0x0300
+   const MCSubtargetInfo *STI = T->createMCSubtargetInfo(Triple, sys::getHostCPUName(), "");
+   OwningPtr<const MCDisassembler> DisAsm(T->createMCDisassembler(*STI));
+#else 
    OwningPtr<const MCDisassembler> DisAsm(T->createMCDisassembler());
+#endif 
    if (!DisAsm) {
       debug_printf("error: no disassembler for target %s\n", Triple.c_str());
       return;
@@ -217,7 +228,11 @@ lp_disassemble(const void* func)
 #else
    int AsmPrinterVariant = AsmInfo->getAssemblerDialect();
 #endif
-#if HAVE_LLVM >= 0x0208
+
+#if HAVE_LLVM >= 0x0300
+   OwningPtr<MCInstPrinter> Printer(
+         T->createMCInstPrinter(AsmPrinterVariant, *AsmInfo, *STI));
+#elif HAVE_LLVM >= 0x0208
    OwningPtr<MCInstPrinter> Printer(
          T->createMCInstPrinter(AsmPrinterVariant, *AsmInfo));
 #else
@@ -257,7 +272,11 @@ lp_disassemble(const void* func)
 
       if (!DisAsm->getInstruction(Inst, Size, memoryObject,
                                  pc,
-                                 nulls())) {
+#if HAVE_LLVM >= 0x0300
+				  nulls(), nulls())) {
+#else
+				  nulls())) {
+#endif
          debug_printf("invalid\n");
          pc += 1;
       }
@@ -280,7 +299,9 @@ lp_disassemble(const void* func)
        * Print the instruction.
        */
 
-#if HAVE_LLVM >= 0x208
+#if HAVE_LLVM >= 0x0300
+      Printer->printInst(&Inst, Out, "");
+#elif HAVE_LLVM >= 0x208
       Printer->printInst(&Inst, Out);
 #else
       Printer->printInst(&Inst);

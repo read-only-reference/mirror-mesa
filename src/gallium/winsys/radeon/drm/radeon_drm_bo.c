@@ -160,7 +160,7 @@ static void radeon_bo_destroy(struct pb_buffer *_buf)
     }
 
     if (bo->ptr)
-        os_munmap(bo->ptr, bo->size);
+        os_munmap(bo->ptr, bo->base.size);
 
     /* Close object. */
     args.handle = bo->handle;
@@ -267,7 +267,7 @@ static void *radeon_bo_map_internal(struct pb_buffer *_buf,
     }
     args.handle = bo->handle;
     args.offset = 0;
-    args.size = (uint64_t)bo->size;
+    args.size = (uint64_t)bo->base.size;
     if (drmCommandWriteRead(bo->rws->fd,
                             DRM_RADEON_GEM_MMAP,
                             &args,
@@ -334,14 +334,17 @@ static struct pb_buffer *radeon_bomgr_create_bo(struct pb_manager *_mgr,
     struct radeon_drm_winsys *rws = mgr->rws;
     struct radeon_bo *bo;
     struct drm_radeon_gem_create args = {};
+    struct radeon_bo_desc *rdesc = (struct radeon_bo_desc*)desc;
+
+    assert(rdesc->initial_domains && rdesc->reloc_domains);
+    assert((rdesc->initial_domains &
+            ~(RADEON_GEM_DOMAIN_GTT | RADEON_GEM_DOMAIN_VRAM)) == 0);
+    assert((rdesc->reloc_domains &
+            ~(RADEON_GEM_DOMAIN_GTT | RADEON_GEM_DOMAIN_VRAM)) == 0);
 
     args.size = size;
     args.alignment = desc->alignment;
-    args.initial_domain =
-        (desc->usage & RADEON_PB_USAGE_DOMAIN_GTT  ?
-         RADEON_GEM_DOMAIN_GTT  : 0) |
-        (desc->usage & RADEON_PB_USAGE_DOMAIN_VRAM ?
-         RADEON_GEM_DOMAIN_VRAM : 0);
+    args.initial_domain = rdesc->initial_domains;
 
     if (drmCommandWriteRead(rws->fd, DRM_RADEON_GEM_CREATE,
                             &args, sizeof(args))) {
@@ -356,15 +359,15 @@ static struct pb_buffer *radeon_bomgr_create_bo(struct pb_manager *_mgr,
     if (!bo)
 	return NULL;
 
-    pipe_reference_init(&bo->base.base.reference, 1);
-    bo->base.base.alignment = desc->alignment;
-    bo->base.base.usage = desc->usage;
-    bo->base.base.size = size;
+    pipe_reference_init(&bo->base.reference, 1);
+    bo->base.alignment = desc->alignment;
+    bo->base.usage = desc->usage;
+    bo->base.size = size;
     bo->base.vtbl = &radeon_bo_vtbl;
     bo->mgr = mgr;
     bo->rws = mgr->rws;
     bo->handle = args.handle;
-    bo->size = size;
+    bo->reloc_domains = rdesc->reloc_domains;
     pipe_mutex_init(bo->map_mutex);
 
     return &bo->base;
@@ -505,43 +508,49 @@ static struct radeon_winsys_cs_handle *radeon_drm_get_cs_handle(
     return (struct radeon_winsys_cs_handle*)get_radeon_bo(_buf);
 }
 
-static unsigned get_pb_usage_from_create_flags(enum radeon_bo_domain domain)
-{
-    unsigned res = 0;
-
-    if (domain & RADEON_DOMAIN_GTT)
-        res |= RADEON_PB_USAGE_DOMAIN_GTT;
-
-    if (domain & RADEON_DOMAIN_VRAM)
-        res |= RADEON_PB_USAGE_DOMAIN_VRAM;
-
-    return res;
-}
-
 static struct pb_buffer *
 radeon_winsys_bo_create(struct radeon_winsys *rws,
                         unsigned size,
                         unsigned alignment,
-                        unsigned bind,
-                        enum radeon_bo_domain domain)
+                        unsigned bind, unsigned usage)
 {
     struct radeon_drm_winsys *ws = radeon_drm_winsys(rws);
-    struct pb_desc desc;
+    struct radeon_bo_desc desc;
     struct pb_manager *provider;
     struct pb_buffer *buffer;
 
     memset(&desc, 0, sizeof(desc));
-    desc.alignment = alignment;
-    desc.usage = get_pb_usage_from_create_flags(domain);
+    desc.base.alignment = alignment;
+
+    /* Determine the memory domains. */
+    switch (usage) {
+    case PIPE_USAGE_STAGING:
+    case PIPE_USAGE_STREAM:
+    case PIPE_USAGE_DYNAMIC:
+            desc.initial_domains = RADEON_GEM_DOMAIN_GTT;
+            desc.reloc_domains = RADEON_GEM_DOMAIN_GTT;
+            break;
+    default:
+            if (bind & (PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER |
+                        PIPE_BIND_CONSTANT_BUFFER)) {
+                desc.initial_domains = RADEON_GEM_DOMAIN_GTT;
+            } else {
+                desc.initial_domains = RADEON_GEM_DOMAIN_VRAM;
+            }
+            desc.reloc_domains = RADEON_GEM_DOMAIN_GTT | RADEON_GEM_DOMAIN_VRAM;
+    }
+
+    /* Additional criteria for the cache manager. */
+    desc.base.usage = desc.initial_domains;
 
     /* Assign a buffer manager. */
     if (bind & (PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER |
-                PIPE_BIND_CONSTANT_BUFFER))
+                PIPE_BIND_CONSTANT_BUFFER | PIPE_BIND_CUSTOM))
 	provider = ws->cman;
     else
         provider = ws->kman;
 
-    buffer = provider->create_buffer(provider, size, &desc);
+    buffer = provider->create_buffer(provider, size, &desc.base);
     if (!buffer)
 	return NULL;
 
@@ -549,9 +558,8 @@ radeon_winsys_bo_create(struct radeon_winsys *rws,
 }
 
 static struct pb_buffer *radeon_winsys_bo_from_handle(struct radeon_winsys *rws,
-                                                           struct winsys_handle *whandle,
-                                                           unsigned *stride,
-                                                           unsigned *size)
+                                                      struct winsys_handle *whandle,
+                                                      unsigned *stride)
 {
     struct radeon_drm_winsys *ws = radeon_drm_winsys(rws);
     struct radeon_bo *bo;
@@ -588,14 +596,14 @@ static struct pb_buffer *radeon_winsys_bo_from_handle(struct radeon_winsys *rws,
         goto fail;
     }
     bo->handle = open_arg.handle;
-    bo->size = open_arg.size;
     bo->name = whandle->handle;
+    bo->reloc_domains = RADEON_GEM_DOMAIN_GTT | RADEON_GEM_DOMAIN_VRAM;
 
     /* Initialize it. */
-    pipe_reference_init(&bo->base.base.reference, 1);
-    bo->base.base.alignment = 0;
-    bo->base.base.usage = PB_USAGE_GPU_WRITE | PB_USAGE_GPU_READ;
-    bo->base.base.size = bo->size;
+    pipe_reference_init(&bo->base.reference, 1);
+    bo->base.alignment = 0;
+    bo->base.usage = PB_USAGE_GPU_WRITE | PB_USAGE_GPU_READ;
+    bo->base.size = open_arg.size;
     bo->base.vtbl = &radeon_bo_vtbl;
     bo->mgr = mgr;
     bo->rws = mgr->rws;
@@ -608,8 +616,6 @@ done:
 
     if (stride)
         *stride = whandle->stride;
-    if (size)
-        *size = bo->base.base.size;
 
     return (struct pb_buffer*)bo;
 

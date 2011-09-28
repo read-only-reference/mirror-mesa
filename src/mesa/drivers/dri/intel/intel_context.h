@@ -166,11 +166,10 @@ struct intel_context
     * Generation number of the hardware: 2 is 8xx, 3 is 9xx pre-965, 4 is 965.
     */
    int gen;
+   int gt;
    GLboolean needs_ff_sync;
    GLboolean is_g4x;
    GLboolean is_945;
-   GLboolean has_luminance_srgb;
-   GLboolean has_xrgb_textures;
    GLboolean has_separate_stencil;
    GLboolean must_use_separate_stencil;
    GLboolean has_hiz;

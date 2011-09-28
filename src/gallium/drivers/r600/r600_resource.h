@@ -39,17 +39,6 @@ struct r600_transfer {
 	struct pipe_resource		*staging_texture;
 };
 
-/* This gets further specialized into either buffer or texture
- * structures. Use the vtbl struct to choose between the two
- * underlying implementations.
- */
-struct r600_resource {
-	struct u_vbuf_resource		b;
-	struct r600_bo			*bo;
-	u32				size;
-	unsigned			bo_size;
-};
-
 struct r600_resource_texture {
 	struct r600_resource		resource;
 
@@ -79,14 +68,6 @@ struct r600_resource_texture {
 
 #define R600_TEX_IS_TILED(tex, level) ((tex)->array_mode[level] != V_038000_ARRAY_LINEAR_GENERAL && (tex)->array_mode[level] != V_038000_ARRAY_LINEAR_ALIGNED)
 
-#define R600_BUFFER_MAGIC 0xabcd1600
-
-/* XXX this could be removed */
-struct r600_resource_buffer {
-	struct r600_resource		r;
-	uint32_t			magic;
-};
-
 struct r600_surface {
 	struct pipe_surface		base;
 	unsigned			aligned_height;
@@ -101,14 +82,9 @@ struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen,
 						const struct pipe_resource *base,
 						struct winsys_handle *whandle);
 
-/* r600_buffer */
-static INLINE struct r600_resource_buffer *r600_buffer(struct pipe_resource *buffer)
+static INLINE struct r600_resource *r600_resource(struct pipe_resource *r)
 {
-	if (buffer) {
-		assert(((struct r600_resource_buffer *)buffer)->magic == R600_BUFFER_MAGIC);
-		return (struct r600_resource_buffer *)buffer;
-	}
-	return NULL;
+	return (struct r600_resource*)r;
 }
 
 int r600_texture_depth_flush(struct pipe_context *ctx, struct pipe_resource *texture, boolean just_create);
@@ -128,6 +104,6 @@ void r600_texture_transfer_unmap(struct pipe_context *ctx,
 
 struct r600_pipe_context;
 
-void r600_upload_const_buffer(struct r600_pipe_context *rctx, struct r600_resource_buffer **rbuffer, uint32_t *offset);
+void r600_upload_const_buffer(struct r600_pipe_context *rctx, struct r600_resource **rbuffer, uint32_t *offset);
 
 #endif

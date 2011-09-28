@@ -33,6 +33,7 @@
 #include "util/u_math.h"
 #include "util/u_memory.h"
 
+#include "svga_format.h"
 #include "svga_screen.h"
 #include "svga_context.h"
 #include "svga_resource_texture.h"
@@ -46,85 +47,6 @@
  * know about primary surfaces. Find a better way to accomplish this.
  */
 #define SVGA3D_SURFACE_HINT_SCANOUT (1 << 9)
-
-
-/*
- * Helper function and arrays
- */
-
-SVGA3dSurfaceFormat
-svga_translate_format(enum pipe_format format)
-{
-   switch(format) {
-   
-   case PIPE_FORMAT_B8G8R8A8_UNORM:
-      return SVGA3D_A8R8G8B8;
-   case PIPE_FORMAT_B8G8R8X8_UNORM:
-      return SVGA3D_X8R8G8B8;
-
-      /* Required for GL2.1:
-       */
-   case PIPE_FORMAT_B8G8R8A8_SRGB:
-      return SVGA3D_A8R8G8B8;
-
-   case PIPE_FORMAT_B5G6R5_UNORM:
-      return SVGA3D_R5G6B5;
-   case PIPE_FORMAT_B5G5R5A1_UNORM:
-      return SVGA3D_A1R5G5B5;
-   case PIPE_FORMAT_B4G4R4A4_UNORM:
-      return SVGA3D_A4R4G4B4;
-
-      
-   /* XXX: Doesn't seem to work properly.
-   case PIPE_FORMAT_Z32_UNORM:
-      return SVGA3D_Z_D32;
-    */
-   case PIPE_FORMAT_Z16_UNORM:
-      return SVGA3D_Z_D16;
-   case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
-      return SVGA3D_Z_D24S8;
-   case PIPE_FORMAT_X8Z24_UNORM:
-      return SVGA3D_Z_D24X8;
-
-   case PIPE_FORMAT_A8_UNORM:
-      return SVGA3D_ALPHA8;
-   case PIPE_FORMAT_L8_UNORM:
-      return SVGA3D_LUMINANCE8;
-
-   case PIPE_FORMAT_DXT1_RGB:
-   case PIPE_FORMAT_DXT1_RGBA:
-      return SVGA3D_DXT1;
-   case PIPE_FORMAT_DXT3_RGBA:
-      return SVGA3D_DXT3;
-   case PIPE_FORMAT_DXT5_RGBA:
-      return SVGA3D_DXT5;
-
-   default:
-      return SVGA3D_FORMAT_INVALID;
-   }
-}
-
-
-SVGA3dSurfaceFormat
-svga_translate_format_render(enum pipe_format format)
-{
-   switch(format) { 
-   case PIPE_FORMAT_B8G8R8A8_UNORM:
-   case PIPE_FORMAT_B8G8R8X8_UNORM:
-   case PIPE_FORMAT_B5G5R5A1_UNORM:
-   case PIPE_FORMAT_B4G4R4A4_UNORM:
-   case PIPE_FORMAT_B5G6R5_UNORM:
-   case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
-   case PIPE_FORMAT_X8Z24_UNORM:
-   case PIPE_FORMAT_Z32_UNORM:
-   case PIPE_FORMAT_Z16_UNORM:
-   case PIPE_FORMAT_L8_UNORM:
-      return svga_translate_format(format);
-
-   default:
-      return SVGA3D_FORMAT_INVALID;
-   }
-}
 
 
 static INLINE void
@@ -560,7 +482,7 @@ svga_texture_create(struct pipe_screen *screen,
    
    tex->key.numMipLevels = template->last_level + 1;
    
-   tex->key.format = svga_translate_format(template->format);
+   tex->key.format = svga_translate_format(svgascreen, template->format, template->bind);
    if(tex->key.format == SVGA3D_FORMAT_INVALID)
       goto error2;
 
@@ -607,14 +529,15 @@ svga_texture_from_handle(struct pipe_screen *screen,
    if (!srf)
       return NULL;
 
-   if (svga_translate_format(template->format) != format) {
-      unsigned f1 = svga_translate_format(template->format);
+   if (svga_translate_format(svga_screen(screen), template->format, template->bind) != format) {
+      unsigned f1 = svga_translate_format(svga_screen(screen), template->format, template->bind);
       unsigned f2 = format;
 
       /* It's okay for XRGB and ARGB or depth with/out stencil to get mixed up */
       if ( !( (f1 == SVGA3D_X8R8G8B8 && f2 == SVGA3D_A8R8G8B8) ||
               (f1 == SVGA3D_A8R8G8B8 && f2 == SVGA3D_X8R8G8B8) ||
-              (f1 == SVGA3D_Z_D24X8 && f2 == SVGA3D_Z_D24S8) ) ) {
+              (f1 == SVGA3D_Z_D24X8 && f2 == SVGA3D_Z_D24S8) ||
+              (f1 == SVGA3D_Z_DF24 && f2 == SVGA3D_Z_D24S8_INT) ) ) {
          debug_printf("%s wrong format %u != %u\n", __FUNCTION__, f1, f2);
          return NULL;
       }

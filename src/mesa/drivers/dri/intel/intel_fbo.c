@@ -269,6 +269,17 @@ intel_image_target_renderbuffer_storage(struct gl_context *ctx,
    if (image == NULL)
       return;
 
+   /* __DRIimage is opaque to the core so it has to be checked here */
+   switch (image->format) {
+   case MESA_FORMAT_RGBA8888_REV:
+      _mesa_error(&intel->ctx, GL_INVALID_OPERATION,
+            "glEGLImageTargetRenderbufferStorage(unsupported image format");
+      return;
+      break;
+   default:
+      break;
+   }
+
    irb = intel_renderbuffer(rb);
    intel_region_reference(&irb->region, image->region);
 
@@ -437,7 +448,7 @@ intel_bind_framebuffer(struct gl_context * ctx, GLenum target,
                        struct gl_framebuffer *fb, struct gl_framebuffer *fbread)
 {
    if (target == GL_FRAMEBUFFER_EXT || target == GL_DRAW_FRAMEBUFFER_EXT) {
-      intel_draw_buffer(ctx, fb);
+      intel_draw_buffer(ctx);
    }
    else {
       /* don't need to do anything if target == GL_READ_FRAMEBUFFER_EXT */
@@ -458,7 +469,7 @@ intel_framebuffer_renderbuffer(struct gl_context * ctx,
    intel_flush(ctx);
 
    _mesa_framebuffer_renderbuffer(ctx, fb, attachment, rb);
-   intel_draw_buffer(ctx, fb);
+   intel_draw_buffer(ctx);
 }
 
 static bool
@@ -507,17 +518,12 @@ intel_update_wrapper(struct gl_context *ctx, struct intel_renderbuffer *irb,
 
       /* The tex image shares its embedded depth and stencil renderbuffers with
        * the renderbuffer wrapper. */
-      if (irb->wrapped_depth != intel_image->depth_rb) {
-	 _mesa_reference_renderbuffer(&irb->wrapped_depth,
-				      intel_image->depth_rb);
-      }
-      if (irb->wrapped_stencil != intel_image->stencil_rb) {
-	 _mesa_reference_renderbuffer(&irb->wrapped_stencil,
-				      intel_image->stencil_rb);
-      }
+      _mesa_reference_renderbuffer(&irb->wrapped_depth,
+				   intel_image->depth_rb);
+      _mesa_reference_renderbuffer(&irb->wrapped_stencil,
+				   intel_image->stencil_rb);
 
       return true;
-
    } else {
       return intel_update_tex_wrapper_regions(intel, irb, intel_image);
    }
@@ -600,8 +606,8 @@ intel_renderbuffer_set_draw_offset(struct intel_renderbuffer *irb,
 
    /* compute offset of the particular 2D image within the texture region */
    intel_miptree_get_image_offset(intel_image->mt,
-				  intel_image->base.Level,
-				  intel_image->base.Face,
+				  intel_image->base.Base.Level,
+				  intel_image->base.Base.Face,
 				  zoffset,
 				  &dst_x, &dst_y);
 
@@ -727,21 +733,21 @@ intel_render_texture(struct gl_context * ctx,
       struct intel_mipmap_tree *new_mt;
 
       new_mt = intel_miptree_create(intel, image->TexObject->Target,
-				    intel_image->base.TexFormat,
-				    intel_image->base.Level,
-				    intel_image->base.Level,
-				    intel_image->base.Width,
-				    intel_image->base.Height,
-				    intel_image->base.Depth,
+				    intel_image->base.Base.TexFormat,
+				    intel_image->base.Base.Level,
+				    intel_image->base.Base.Level,
+				    intel_image->base.Base.Width,
+				    intel_image->base.Base.Height,
+				    intel_image->base.Base.Depth,
 				    GL_TRUE);
 
       intel_miptree_image_copy(intel,
                                new_mt,
-			       intel_image->base.Face,
-			       intel_image->base.Level,
+			       intel_image->base.Base.Face,
+			       intel_image->base.Base.Level,
 			       old_mt);
 
-      intel_miptree_release(intel, &intel_image->mt);
+      intel_miptree_release(&intel_image->mt);
       intel_image->mt = new_mt;
       intel_renderbuffer_set_draw_offset(irb, intel_image, att->Zoffset);
 
@@ -749,7 +755,7 @@ intel_render_texture(struct gl_context * ctx,
    }
 #endif
    /* update drawing region, etc */
-   intel_draw_buffer(ctx, fb);
+   intel_draw_buffer(ctx);
 }
 
 
@@ -892,11 +898,9 @@ intel_blit_framebuffer_copy_tex_sub_image(struct gl_context *ctx,
 
          struct gl_texture_image *texImage =
             _mesa_select_tex_image(ctx, texObj, target, dstLevel);
-         GLenum internalFormat = texImage->InternalFormat;
 
-         if (intel_copy_texsubimage(intel_context(ctx), target,
+         if (intel_copy_texsubimage(intel_context(ctx),
                                     intel_texture_image(texImage),
-                                    internalFormat,
                                     dstX0, dstY0,
                                     srcX0, srcY0,
                                     srcX1 - srcX0, /* width */

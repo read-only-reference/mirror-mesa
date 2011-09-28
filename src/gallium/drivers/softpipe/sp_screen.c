@@ -64,15 +64,6 @@ static int
 softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
 {
    switch (param) {
-   case PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS:
-      return PIPE_MAX_SAMPLERS;
-   case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
-#ifdef HAVE_LLVM
-      /* Softpipe doesn't yet know how to tell draw/llvm about textures */
-      return 0;
-#else
-      return PIPE_MAX_VERTEX_SAMPLERS;
-#endif
    case PIPE_CAP_MAX_COMBINED_SAMPLERS:
       return PIPE_MAX_SAMPLERS + PIPE_MAX_VERTEX_SAMPLERS;
    case PIPE_CAP_NPOT_TEXTURES:
@@ -94,8 +85,6 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TIMER_QUERY:
       return 1;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
-      return 1;
-   case PIPE_CAP_TEXTURE_MIRROR_REPEAT:
       return 1;
    case PIPE_CAP_TEXTURE_SHADOW_MAP:
       return 1;
@@ -129,7 +118,13 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_INSTANCEID:
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
       return 1;
-   case PIPE_CAP_ARRAY_TEXTURES:
+   case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
+      return 64; /* matches core Mesa defaults */
+   case PIPE_CAP_MIN_TEXEL_OFFSET:
+      return -8;
+   case PIPE_CAP_MAX_TEXEL_OFFSET:
+      return 7;
+   case PIPE_CAP_CONDITIONAL_RENDER:
       return 1;
    default:
       return 0;
@@ -145,7 +140,17 @@ softpipe_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe
       return tgsi_exec_get_shader_param(param);
    case PIPE_SHADER_VERTEX:
    case PIPE_SHADER_GEOMETRY:
-      return draw_get_shader_param(shader, param);
+      switch (param) {
+      case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+#ifdef HAVE_LLVM
+         /* Softpipe doesn't yet know how to tell draw/llvm about textures */
+         return 0;
+#else
+         return PIPE_MAX_VERTEX_SAMPLERS;
+#endif
+      default:
+         return draw_get_shader_param(shader, param);
+      }
    default:
       return 0;
    }

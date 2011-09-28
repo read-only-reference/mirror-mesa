@@ -47,25 +47,25 @@
 #include "r600_resource.h"
 #include "r600_shader.h"
 #include "r600_pipe.h"
-#include "../../winsys/r600/drm/r600_drm_public.h"
 
 /*
  * pipe_context
  */
 static struct r600_fence *r600_create_fence(struct r600_pipe_context *ctx)
 {
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 	struct r600_fence *fence = NULL;
 
 	if (!ctx->fences.bo) {
 		/* Create the shared buffer object */
-		ctx->fences.bo = r600_bo(ctx->radeon, 4096, 0, 0, 0);
+		ctx->fences.bo = (struct r600_resource*)
+			pipe_buffer_create(&ctx->screen->screen, PIPE_BIND_CUSTOM,
+					   PIPE_USAGE_STAGING, 4096);
 		if (!ctx->fences.bo) {
 			R600_ERR("r600: failed to create bo for fence objects\n");
 			return NULL;
 		}
-		ctx->fences.data = r600_bo_map(ctx->radeon, ctx->fences.bo, rctx->ctx.cs,
-					       PIPE_TRANSFER_UNSYNCHRONIZED | PIPE_TRANSFER_WRITE);
+		ctx->fences.data = ctx->ws->buffer_map(ctx->fences.bo->buf, ctx->ctx.cs,
+						       PIPE_TRANSFER_WRITE);
 	}
 
 	if (!LIST_IS_EMPTY(&ctx->fences.pool)) {
@@ -174,7 +174,7 @@ static void r600_destroy_context(struct pipe_context *context)
 		free(rctx->states[i]);
 	}
 
-	u_vbuf_mgr_destroy(rctx->vbuf_mgr);
+	u_vbuf_destroy(rctx->vbuf_mgr);
 	util_slab_destroy(&rctx->pool_transfers);
 
 	if (rctx->fences.bo) {
@@ -185,8 +185,8 @@ static void r600_destroy_context(struct pipe_context *context)
 			FREE(entry);
 		}
 
-		r600_bo_unmap(rctx->radeon, rctx->fences.bo);
-		r600_bo_reference(&rctx->fences.bo, NULL);
+		rctx->ws->buffer_unmap(rctx->fences.bo->buf);
+		pipe_resource_reference((struct pipe_resource**)&rctx->fences.bo, NULL);
 	}
 
 	r600_update_num_contexts(rctx->screen, -1);
@@ -212,9 +212,9 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 
 	/* Easy accessing of screen/winsys. */
 	rctx->screen = rscreen;
-	rctx->radeon = rscreen->radeon;
-	rctx->family = r600_get_family(rctx->radeon);
-	rctx->chip_class = r600_get_family_class(rctx->radeon);
+	rctx->ws = rscreen->ws;
+	rctx->family = rscreen->family;
+	rctx->chip_class = rscreen->chip_class;
 
 	rctx->fences.bo = NULL;
 	rctx->fences.data = NULL;
@@ -235,7 +235,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	case R600:
 	case R700:
 		r600_init_state_functions(rctx);
-		if (r600_context_init(&rctx->ctx, rctx->radeon)) {
+		if (r600_context_init(&rctx->ctx, rctx->screen)) {
 			r600_destroy_context(&rctx->context);
 			return NULL;
 		}
@@ -245,7 +245,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	case EVERGREEN:
 	case CAYMAN:
 		evergreen_init_state_functions(rctx);
-		if (evergreen_context_init(&rctx->ctx, rctx->radeon)) {
+		if (evergreen_context_init(&rctx->ctx, rctx->screen)) {
 			r600_destroy_context(&rctx->context);
 			return NULL;
 		}
@@ -264,7 +264,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 			 sizeof(struct pipe_transfer), 64,
 			 UTIL_SLAB_SINGLETHREADED);
 
-	rctx->vbuf_mgr = u_vbuf_mgr_create(&rctx->context, 1024 * 1024, 256,
+	rctx->vbuf_mgr = u_vbuf_create(&rctx->context, 1024 * 1024, 256,
 					   PIPE_BIND_VERTEX_BUFFER |
 					   PIPE_BIND_INDEX_BUFFER |
 					   PIPE_BIND_CONSTANT_BUFFER,
@@ -326,15 +326,14 @@ static const char *r600_get_family_name(enum radeon_family family)
 static const char* r600_get_name(struct pipe_screen* pscreen)
 {
 	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
-	enum radeon_family family = r600_get_family(rscreen->radeon);
 
-	return r600_get_family_name(family);
+	return r600_get_family_name(rscreen->family);
 }
 
 static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 {
 	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
-	enum radeon_family family = r600_get_family(rscreen->radeon);
+	enum radeon_family family = rscreen->family;
 
 	switch (param) {
 	/* Supported features (boolean caps). */
@@ -347,7 +346,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_OCCLUSION_QUERY:
 	case PIPE_CAP_TEXTURE_SHADOW_MAP:
 	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
-	case PIPE_CAP_TEXTURE_MIRROR_REPEAT:
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 	case PIPE_CAP_TEXTURE_SWIZZLE:
 	case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
@@ -361,6 +359,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_SEAMLESS_CUBE_MAP:
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMP_CONTROL:
 	case PIPE_CAP_PRIMITIVE_RESTART:
+	case PIPE_CAP_CONDITIONAL_RENDER:
+	case PIPE_CAP_TEXTURE_BARRIER:
 		return 1;
 
 	/* Supported except the original R600. */
@@ -380,10 +380,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
 		return 0;
 
-	case PIPE_CAP_ARRAY_TEXTURES:
-		/* fix once the CS checker upstream is fixed */
-		return debug_get_bool_option("R600_ARRAY_TEXTURE", FALSE);
-
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
 	case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
@@ -392,9 +388,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 			return 15;
 		else
 			return 14;
-	case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
-	case PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS:
-		return 16;
+	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
+		return rscreen->info.drm_minor >= 9 ?
+			(family >= CHIP_CEDAR ? 16384 : 8192) : 0;
 	case PIPE_CAP_MAX_COMBINED_SAMPLERS:
 		return 32;
 
@@ -405,7 +401,13 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	/* Timer queries, present when the clock frequency is non zero. */
 	case PIPE_CAP_TIMER_QUERY:
-		return r600_get_clock_crystal_freq(rscreen->radeon) != 0;
+		return rscreen->info.r600_clock_crystal_freq != 0;
+
+	case PIPE_CAP_MIN_TEXEL_OFFSET:
+		return -8;
+
+	case PIPE_CAP_MAX_TEXEL_OFFSET:
+		return 7;
 
 	default:
 		R600_ERR("r600: unknown param %d\n", param);
@@ -416,7 +418,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 static float r600_get_paramf(struct pipe_screen* pscreen, enum pipe_cap param)
 {
 	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
-	enum radeon_family family = r600_get_family(rscreen->radeon);
+	enum radeon_family family = rscreen->family;
 
 	switch (param) {
 	case PIPE_CAP_MAX_LINE_WIDTH:
@@ -488,6 +490,8 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		return 0;
 	case PIPE_SHADER_CAP_INTEGERS:
 		return 0;
+	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+		return 16;
 	default:
 		return 0;
 	}
@@ -519,7 +523,6 @@ static void r600_destroy_screen(struct pipe_screen* pscreen)
 	if (rscreen == NULL)
 		return;
 
-	radeon_destroy(rscreen->radeon);
 	rscreen->ws->destroy(rscreen->ws);
 
 	util_slab_destroy(&rscreen->pool_buffers);
@@ -584,18 +587,160 @@ static boolean r600_fence_finish(struct pipe_screen *pscreen,
 	return TRUE;
 }
 
+static int r600_interpret_tiling(struct r600_screen *rscreen, uint32_t tiling_config)
+{
+	switch ((tiling_config & 0xe) >> 1) {
+	case 0:
+		rscreen->tiling_info.num_channels = 1;
+		break;
+	case 1:
+		rscreen->tiling_info.num_channels = 2;
+		break;
+	case 2:
+		rscreen->tiling_info.num_channels = 4;
+		break;
+	case 3:
+		rscreen->tiling_info.num_channels = 8;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	switch ((tiling_config & 0x30) >> 4) {
+	case 0:
+		rscreen->tiling_info.num_banks = 4;
+		break;
+	case 1:
+		rscreen->tiling_info.num_banks = 8;
+		break;
+	default:
+		return -EINVAL;
+
+	}
+	switch ((tiling_config & 0xc0) >> 6) {
+	case 0:
+		rscreen->tiling_info.group_bytes = 256;
+		break;
+	case 1:
+		rscreen->tiling_info.group_bytes = 512;
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int evergreen_interpret_tiling(struct r600_screen *rscreen, uint32_t tiling_config)
+{
+	switch (tiling_config & 0xf) {
+	case 0:
+		rscreen->tiling_info.num_channels = 1;
+		break;
+	case 1:
+		rscreen->tiling_info.num_channels = 2;
+		break;
+	case 2:
+		rscreen->tiling_info.num_channels = 4;
+		break;
+	case 3:
+		rscreen->tiling_info.num_channels = 8;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	switch ((tiling_config & 0xf0) >> 4) {
+	case 0:
+		rscreen->tiling_info.num_banks = 4;
+		break;
+	case 1:
+		rscreen->tiling_info.num_banks = 8;
+		break;
+	case 2:
+		rscreen->tiling_info.num_banks = 16;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	switch ((tiling_config & 0xf00) >> 8) {
+	case 0:
+		rscreen->tiling_info.group_bytes = 256;
+		break;
+	case 1:
+		rscreen->tiling_info.group_bytes = 512;
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int r600_init_tiling(struct r600_screen *rscreen)
+{
+	uint32_t tiling_config = rscreen->info.r600_tiling_config;
+
+	/* set default group bytes, overridden by tiling info ioctl */
+	if (rscreen->chip_class <= R700) {
+		rscreen->tiling_info.group_bytes = 256;
+	} else {
+		rscreen->tiling_info.group_bytes = 512;
+	}
+
+	if (!tiling_config)
+		return 0;
+
+	if (rscreen->chip_class <= R700) {
+		return r600_interpret_tiling(rscreen, tiling_config);
+	} else {
+		return evergreen_interpret_tiling(rscreen, tiling_config);
+	}
+}
+
+static unsigned radeon_family_from_device(unsigned device)
+{
+	switch (device) {
+#define CHIPSET(pciid, name, family) case pciid: return CHIP_##family;
+#include "pci_ids/r600_pci_ids.h"
+#undef CHIPSET
+	default:
+		return CHIP_UNKNOWN;
+	}
+}
+
 struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 {
-	struct r600_screen *rscreen;
-	struct radeon *radeon = radeon_create(ws);
-
-	rscreen = CALLOC_STRUCT(r600_screen);
+	struct r600_screen *rscreen = CALLOC_STRUCT(r600_screen);
 	if (rscreen == NULL) {
 		return NULL;
 	}
 
 	rscreen->ws = ws;
-	rscreen->radeon = radeon;
+	ws->query_info(ws, &rscreen->info);
+
+	rscreen->family = radeon_family_from_device(rscreen->info.pci_id);
+	if (rscreen->family == CHIP_UNKNOWN) {
+		fprintf(stderr, "r600: Unknown chipset 0x%04X\n", rscreen->info.pci_id);
+		FREE(rscreen);
+		return NULL;
+	}
+
+	/* setup class */
+	if (rscreen->family == CHIP_CAYMAN) {
+		rscreen->chip_class = CAYMAN;
+	} else if (rscreen->family >= CHIP_CEDAR) {
+		rscreen->chip_class = EVERGREEN;
+	} else if (rscreen->family >= CHIP_RV770) {
+		rscreen->chip_class = R700;
+	} else {
+		rscreen->chip_class = R600;
+	}
+
+	if (r600_init_tiling(rscreen)) {
+		FREE(rscreen);
+		return NULL;
+	}
+
 	rscreen->screen.winsys = (struct pipe_winsys*)ws;
 	rscreen->screen.destroy = r600_destroy_screen;
 	rscreen->screen.get_name = r600_get_name;
@@ -604,7 +749,7 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	rscreen->screen.get_shader_param = r600_get_shader_param;
 	rscreen->screen.get_paramf = r600_get_paramf;
 	rscreen->screen.get_video_param = r600_get_video_param;
-	if (r600_get_family_class(radeon) >= EVERGREEN) {
+	if (rscreen->chip_class >= EVERGREEN) {
 		rscreen->screen.is_format_supported = evergreen_is_format_supported;
 	} else {
 		rscreen->screen.is_format_supported = r600_is_format_supported;
@@ -616,11 +761,10 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	rscreen->screen.fence_finish = r600_fence_finish;
 	r600_init_screen_resource_functions(&rscreen->screen);
 
-	rscreen->tiling_info = r600_get_tiling_info(radeon);
 	util_format_s3tc_init();
 
 	util_slab_create(&rscreen->pool_buffers,
-			 sizeof(struct r600_resource_buffer), 64,
+			 sizeof(struct r600_resource), 64,
 			 UTIL_SLAB_SINGLETHREADED);
 
 	pipe_mutex_init(rscreen->mutex_num_contexts);

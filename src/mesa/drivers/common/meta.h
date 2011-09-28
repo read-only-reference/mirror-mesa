@@ -26,6 +26,8 @@
 #ifndef META_H
 #define META_H
 
+#include "main/mtypes.h"
+
 /**
  * \name Flags for meta operations
  * \{
@@ -122,23 +124,9 @@ _mesa_meta_CopyTexSubImage3D(struct gl_context *ctx, GLenum target, GLint level,
                              GLsizei width, GLsizei height);
 
 extern void
-_mesa_meta_CopyColorTable(struct gl_context *ctx,
-                          GLenum target, GLenum internalformat,
-                          GLint x, GLint y, GLsizei width);
-
-extern void
-_mesa_meta_CopyColorSubTable(struct gl_context *ctx,GLenum target, GLsizei start,
-                             GLint x, GLint y, GLsizei width);
-
-extern void
-_mesa_meta_CopyConvolutionFilter1D(struct gl_context *ctx, GLenum target,
-                                   GLenum internalFormat,
-                                   GLint x, GLint y, GLsizei width);
-
-extern void
-_mesa_meta_CopyConvolutionFilter2D(struct gl_context *ctx, GLenum target,
-                                   GLenum internalFormat, GLint x, GLint y,
-                                   GLsizei width, GLsizei height);
+_mesa_meta_GetTexImage(struct gl_context *ctx,
+                       GLenum format, GLenum type, GLvoid *pixels,
+                       struct gl_texture_image *texImage);
 
 
 #endif /* META_H */

@@ -148,8 +148,7 @@ struct intel_mipmap_tree *
 intel_miptree_create_for_region(struct intel_context *intel,
 				GLenum target,
 				gl_format format,
-				struct intel_region *region,
-				GLuint depth0);
+				struct intel_region *region);
 
 int intel_miptree_pitch_align (struct intel_context *intel,
 			       struct intel_mipmap_tree *mt,
@@ -159,8 +158,7 @@ int intel_miptree_pitch_align (struct intel_context *intel,
 void intel_miptree_reference(struct intel_mipmap_tree **dst,
                              struct intel_mipmap_tree *src);
 
-void intel_miptree_release(struct intel_context *intel,
-                           struct intel_mipmap_tree **mt);
+void intel_miptree_release(struct intel_mipmap_tree **mt);
 
 /* Check if an image fits an existing mipmap tree layout
  */
@@ -212,14 +210,9 @@ void intel_miptree_image_copy(struct intel_context *intel,
 
 /* i915_mipmap_tree.c:
  */
-GLboolean i915_miptree_layout(struct intel_context *intel,
-			      struct intel_mipmap_tree *mt,
-			      uint32_t tiling);
-GLboolean i945_miptree_layout(struct intel_context *intel,
-			      struct intel_mipmap_tree *mt,
-			      uint32_t tiling);
-GLboolean brw_miptree_layout(struct intel_context *intel,
-			     struct intel_mipmap_tree *mt,
-			     uint32_t tiling);
+void i915_miptree_layout(struct intel_mipmap_tree *mt);
+void i945_miptree_layout(struct intel_mipmap_tree *mt);
+void brw_miptree_layout(struct intel_context *intel,
+			struct intel_mipmap_tree *mt);
 
 #endif

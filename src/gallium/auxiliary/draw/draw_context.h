@@ -96,6 +96,9 @@ boolean
 draw_install_pstipple_stage(struct draw_context *draw, struct pipe_context *pipe);
 
 
+struct tgsi_shader_info *
+draw_get_shader_info(const struct draw_context *draw);
+
 int
 draw_find_shader_output(const struct draw_context *draw,
                         uint semantic_name, uint semantic_index);
@@ -230,7 +233,8 @@ void draw_set_render( struct draw_context *draw,
 
 void draw_set_driver_clipping( struct draw_context *draw,
                                boolean bypass_clip_xy,
-                               boolean bypass_clip_z );
+                               boolean bypass_clip_z,
+                               boolean guard_band_xy);
 
 void draw_set_force_passthrough( struct draw_context *draw, 
                                  boolean enable );

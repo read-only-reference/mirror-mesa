@@ -105,7 +105,8 @@ enum util_format_swizzle {
    UTIL_FORMAT_SWIZZLE_W = 3,
    UTIL_FORMAT_SWIZZLE_0 = 4,
    UTIL_FORMAT_SWIZZLE_1 = 5,
-   UTIL_FORMAT_SWIZZLE_NONE = 6
+   UTIL_FORMAT_SWIZZLE_NONE = 6,
+   UTIL_FORMAT_SWIZZLE_MAX = 7  /**< Number of enums counter (must be last) */
 };
 
 
@@ -119,9 +120,9 @@ enum util_format_colorspace {
 
 struct util_format_channel_description
 {
-   unsigned type:6;
+   unsigned type:6;        /**< UTIL_FORMAT_TYPE_x */
    unsigned normalized:1;
-   unsigned size:9;
+   unsigned size:9;        /**< bits per channel */
 };
 
 
@@ -410,6 +411,27 @@ util_format_is_s3tc(enum pipe_format format)
 }
 
 static INLINE boolean 
+util_format_is_srgb(enum pipe_format format)
+{
+   const struct util_format_description *desc = util_format_description(format);
+   return desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB;
+}
+
+static INLINE boolean
+util_format_has_depth(const struct util_format_description *desc)
+{
+   return desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS &&
+          desc->swizzle[0] != UTIL_FORMAT_SWIZZLE_NONE;
+}
+
+static INLINE boolean
+util_format_has_stencil(const struct util_format_description *desc)
+{
+   return desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS &&
+          desc->swizzle[1] != UTIL_FORMAT_SWIZZLE_NONE;
+}
+
+static INLINE boolean
 util_format_is_depth_or_stencil(enum pipe_format format)
 {
    const struct util_format_description *desc = util_format_description(format);
@@ -419,10 +441,11 @@ util_format_is_depth_or_stencil(enum pipe_format format)
       return FALSE;
    }
 
-   return desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS ? TRUE : FALSE;
+   return util_format_has_depth(desc) ||
+          util_format_has_stencil(desc);
 }
 
-static INLINE boolean 
+static INLINE boolean
 util_format_is_depth_and_stencil(enum pipe_format format)
 {
    const struct util_format_description *desc = util_format_description(format);
@@ -432,12 +455,8 @@ util_format_is_depth_and_stencil(enum pipe_format format)
       return FALSE;
    }
 
-   if (desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS) {
-      return FALSE;
-   }
-
-   return (desc->swizzle[0] != UTIL_FORMAT_SWIZZLE_NONE &&
-           desc->swizzle[1] != UTIL_FORMAT_SWIZZLE_NONE) ? TRUE : FALSE;
+   return util_format_has_depth(desc) &&
+          util_format_has_stencil(desc);
 }
 
 
@@ -475,6 +494,22 @@ util_format_colormask(const struct util_format_description *desc)
 
 boolean
 util_format_is_float(enum pipe_format format);
+
+
+boolean
+util_format_is_rgb_no_alpha(enum pipe_format format);
+
+
+boolean
+util_format_is_luminance(enum pipe_format format);
+
+
+boolean
+util_format_is_luminance_alpha(enum pipe_format format);
+
+
+boolean
+util_format_is_intensity(enum pipe_format format);
 
 
 /**

@@ -169,7 +169,10 @@ extern void i915_release_utemps(struct i915_fp_compile *p);
 extern uint i915_emit_texld(struct i915_fp_compile *p,
                               uint dest,
                               uint destmask,
-                              uint sampler, uint coord, uint op);
+                              uint sampler,
+                              uint coord,
+                              uint op,
+                              uint num_coord);
 
 extern uint i915_emit_arith(struct i915_fp_compile *p,
                               uint op,
@@ -193,12 +196,6 @@ extern uint i915_emit_const4fv(struct i915_fp_compile *p,
 extern uint i915_emit_const4f(struct i915_fp_compile *p,
                                 float c0, float c1,
                                 float c2, float c3);
-
-
-/*======================================================================
- * i915_fpc_debug.c
- */
-extern void i915_disassemble_program(const uint * program, uint sz);
 
 
 /*======================================================================

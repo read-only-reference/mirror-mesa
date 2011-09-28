@@ -49,8 +49,8 @@ struct format_config {
 };
 
 static const struct format_config bitstream_format_config[] = {
-   { PIPE_FORMAT_R16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, PIPE_FORMAT_R16G16B16A16_FLOAT, 1.0f, SCALE_FACTOR_SSCALED },
-   { PIPE_FORMAT_R16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, 1.0f, SCALE_FACTOR_SSCALED },
+//   { PIPE_FORMAT_R16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, PIPE_FORMAT_R16G16B16A16_FLOAT, 1.0f, SCALE_FACTOR_SSCALED },
+//   { PIPE_FORMAT_R16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, 1.0f, SCALE_FACTOR_SSCALED },
    { PIPE_FORMAT_R16_SNORM, PIPE_FORMAT_R16G16B16A16_SNORM, PIPE_FORMAT_R16G16B16A16_FLOAT, 1.0f, SCALE_FACTOR_SNORM },
    { PIPE_FORMAT_R16_SNORM, PIPE_FORMAT_R16G16B16A16_SNORM, PIPE_FORMAT_R16G16B16A16_SNORM, 1.0f, SCALE_FACTOR_SNORM }
 };
@@ -59,8 +59,8 @@ static const unsigned num_bitstream_format_configs =
    sizeof(bitstream_format_config) / sizeof(struct format_config);
 
 static const struct format_config idct_format_config[] = {
-   { PIPE_FORMAT_R16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, PIPE_FORMAT_R16G16B16A16_FLOAT, 1.0f, SCALE_FACTOR_SSCALED },
-   { PIPE_FORMAT_R16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, 1.0f, SCALE_FACTOR_SSCALED },
+//   { PIPE_FORMAT_R16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, PIPE_FORMAT_R16G16B16A16_FLOAT, 1.0f, SCALE_FACTOR_SSCALED },
+//   { PIPE_FORMAT_R16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, PIPE_FORMAT_R16G16B16A16_SSCALED, 1.0f, SCALE_FACTOR_SSCALED },
    { PIPE_FORMAT_R16_SNORM, PIPE_FORMAT_R16G16B16A16_SNORM, PIPE_FORMAT_R16G16B16A16_FLOAT, 1.0f, SCALE_FACTOR_SNORM },
    { PIPE_FORMAT_R16_SNORM, PIPE_FORMAT_R16G16B16A16_SNORM, PIPE_FORMAT_R16G16B16A16_SNORM, 1.0f, SCALE_FACTOR_SNORM }
 };
@@ -1035,7 +1035,7 @@ vl_create_mpeg12_decoder(struct pipe_context *context,
                          enum pipe_video_profile profile,
                          enum pipe_video_entrypoint entrypoint,
                          enum pipe_video_chroma_format chroma_format,
-                         unsigned width, unsigned height)
+                         unsigned width, unsigned height, unsigned max_references)
 {
    const unsigned block_size_pixels = BLOCK_WIDTH * BLOCK_HEIGHT;
    const struct format_config *format_config;
@@ -1054,6 +1054,7 @@ vl_create_mpeg12_decoder(struct pipe_context *context,
    dec->base.chroma_format = chroma_format;
    dec->base.width = width;
    dec->base.height = height;
+   dec->base.max_references = max_references;
 
    dec->base.destroy = vl_mpeg12_destroy;
    dec->base.create_buffer = vl_mpeg12_create_buffer;

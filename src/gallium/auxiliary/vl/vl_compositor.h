@@ -48,6 +48,7 @@ struct vl_compositor_layer
 
    void *fs;
    void *samplers[3];
+   void *blend;
 
    struct pipe_sampler_view *sampler_views[3];
    struct {
@@ -66,17 +67,21 @@ struct vl_compositor
 
    void *sampler_linear;
    void *sampler_nearest;
-   void *blend;
+   void *blend_clear, *blend_add;
    void *rast;
    void *dsa;
    void *vertex_elems_state;
 
    void *vs;
    void *fs_video_buffer;
-   void *fs_palette;
    void *fs_rgba;
 
-   float clear_color[4];
+   struct {
+      void *rgb;
+      void *yuv;
+   } fs_palette;
+
+   union pipe_color_union clear_color;
    struct vertex2f dirty_tl, dirty_br;
 
    unsigned used_layers:VL_COMPOSITOR_MAX_LAYERS;
@@ -105,7 +110,13 @@ vl_compositor_reset_dirty_area(struct vl_compositor *compositor);
  * set the clear color
  */
 void
-vl_compositor_set_clear_color(struct vl_compositor *compositor, float color[4]);
+vl_compositor_set_clear_color(struct vl_compositor *compositor, union pipe_color_union *color);
+
+/**
+ * get the clear color
+ */
+void
+vl_compositor_get_clear_color(struct vl_compositor *compositor, union pipe_color_union *color);
 
 /**
  * set overlay samplers
@@ -117,6 +128,13 @@ vl_compositor_set_clear_color(struct vl_compositor *compositor, float color[4]);
  */
 void
 vl_compositor_clear_layers(struct vl_compositor *compositor);
+
+/**
+ * set the blender used to render a layer
+ */
+void
+vl_compositor_set_layer_blend(struct vl_compositor *compositor,
+                              unsigned layer, void *blend, bool is_clearing);
 
 /**
  * set a video buffer as a layer to render
@@ -137,7 +155,8 @@ vl_compositor_set_palette_layer(struct vl_compositor *compositor,
                                 struct pipe_sampler_view *indexes,
                                 struct pipe_sampler_view *palette,
                                 struct pipe_video_rect *src_rect,
-                                struct pipe_video_rect *dst_rect);
+                                struct pipe_video_rect *dst_rect,
+                                bool include_color_conversion);
 
 /**
  * set a rgba sampler as a layer to render
@@ -155,14 +174,15 @@ vl_compositor_set_rgba_layer(struct vl_compositor *compositor,
  * render the layers to the frontbuffer
  */
 void
-vl_compositor_render(struct vl_compositor          *compositor,
-                     struct pipe_surface           *dst_surface,
-                     struct pipe_video_rect        *dst_area,
-                     struct pipe_video_rect        *dst_clip);
+vl_compositor_render(struct vl_compositor   *compositor,
+                     struct pipe_surface    *dst_surface,
+                     struct pipe_video_rect *dst_area,
+                     struct pipe_video_rect *dst_clip,
+                     bool clear_dirty_area);
 
 /**
-* destroy this compositor
-*/
+ * destroy this compositor
+ */
 void
 vl_compositor_cleanup(struct vl_compositor *compositor);
 

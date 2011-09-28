@@ -823,8 +823,7 @@ void r300_emit_textures_state(struct r300_context *r300,
 void r300_emit_vertex_arrays(struct r300_context* r300, int offset,
                              boolean indexed, int instance_id)
 {
-    struct pipe_vertex_buffer *vbuf = r300->vbuf_mgr->vertex_buffer;
-    struct pipe_resource **valid_vbuf = r300->vbuf_mgr->real_vertex_buffer;
+    struct pipe_vertex_buffer *vbuf = r300->vbuf_mgr->real_vertex_buffer;
     struct pipe_vertex_element *velem = r300->velems->velem;
     struct r300_resource *buf;
     int i;
@@ -862,7 +861,7 @@ void r300_emit_vertex_arrays(struct r300_context* r300, int offset,
         }
 
         for (i = 0; i < vertex_array_count; i++) {
-            buf = r300_resource(valid_vbuf[velem[i].vertex_buffer_index]);
+            buf = r300_resource(vbuf[velem[i].vertex_buffer_index].buffer);
             OUT_CS_RELOC(buf);
         }
     } else {
@@ -914,7 +913,7 @@ void r300_emit_vertex_arrays(struct r300_context* r300, int offset,
         }
 
         for (i = 0; i < vertex_array_count; i++) {
-            buf = r300_resource(valid_vbuf[velem[i].vertex_buffer_index]);
+            buf = r300_resource(vbuf[velem[i].vertex_buffer_index].buffer);
             OUT_CS_RELOC(buf);
         }
     }
@@ -1190,15 +1189,15 @@ validate:
         for (i = 0; i < fb->nr_cbufs; i++) {
             tex = r300_resource(fb->cbufs[i]->texture);
             assert(tex && tex->buf && "cbuf is marked, but NULL!");
-            r300->rws->cs_add_reloc(r300->cs, tex->cs_buf, 0,
-                                    r300_surface(fb->cbufs[i])->domain);
+            r300->rws->cs_add_reloc(r300->cs, tex->cs_buf,
+                                    RADEON_USAGE_READWRITE);
         }
         /* ...depth buffer... */
         if (fb->zsbuf) {
             tex = r300_resource(fb->zsbuf->texture);
             assert(tex && tex->buf && "zsbuf is marked, but NULL!");
-            r300->rws->cs_add_reloc(r300->cs, tex->cs_buf, 0,
-                                    r300_surface(fb->zsbuf)->domain);
+            r300->rws->cs_add_reloc(r300->cs, tex->cs_buf,
+                                    RADEON_USAGE_READWRITE);
         }
     }
     if (r300->textures_state.dirty) {
@@ -1209,34 +1208,36 @@ validate:
             }
 
             tex = r300_resource(texstate->sampler_views[i]->base.texture);
-            r300->rws->cs_add_reloc(r300->cs, tex->cs_buf, tex->domain, 0);
+            r300->rws->cs_add_reloc(r300->cs, tex->cs_buf, RADEON_USAGE_READ);
         }
     }
     /* ...occlusion query buffer... */
     if (r300->query_current)
         r300->rws->cs_add_reloc(r300->cs, r300->query_current->cs_buf,
-                                0, r300->query_current->domain);
+                                RADEON_USAGE_WRITE);
     /* ...vertex buffer for SWTCL path... */
     if (r300->vbo)
         r300->rws->cs_add_reloc(r300->cs, r300_resource(r300->vbo)->cs_buf,
-                                r300_resource(r300->vbo)->domain, 0);
+                                RADEON_USAGE_READ);
     /* ...vertex buffers for HWTCL path... */
     if (do_validate_vertex_buffers && r300->vertex_arrays_dirty) {
-        struct pipe_resource **buf = r300->vbuf_mgr->real_vertex_buffer;
-        struct pipe_resource **last = r300->vbuf_mgr->real_vertex_buffer +
+        struct pipe_vertex_buffer *vbuf = r300->vbuf_mgr->real_vertex_buffer;
+        struct pipe_vertex_buffer *last = r300->vbuf_mgr->real_vertex_buffer +
                                       r300->vbuf_mgr->nr_real_vertex_buffers;
-        for (; buf != last; buf++) {
-            if (!*buf)
+        struct pipe_resource *buf;
+        for (; vbuf != last; vbuf++) {
+            buf = vbuf->buffer;
+            if (!buf)
                 continue;
 
-            r300->rws->cs_add_reloc(r300->cs, r300_resource(*buf)->cs_buf,
-                                    r300_resource(*buf)->domain, 0);
+            r300->rws->cs_add_reloc(r300->cs, r300_resource(buf)->cs_buf,
+                                    RADEON_USAGE_READ);
         }
     }
     /* ...and index buffer for HWTCL path. */
     if (index_buffer)
         r300->rws->cs_add_reloc(r300->cs, r300_resource(index_buffer)->cs_buf,
-                                r300_resource(index_buffer)->domain, 0);
+                                RADEON_USAGE_READ);
 
     /* Now do the validation (flush is called inside cs_validate on failure). */
     if (!r300->rws->cs_validate(r300->cs)) {

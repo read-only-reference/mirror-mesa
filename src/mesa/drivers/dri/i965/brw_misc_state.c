@@ -205,11 +205,11 @@ static void prepare_depthbuffer(struct brw_context *brw)
    struct intel_renderbuffer *srb = intel_get_renderbuffer(fb, BUFFER_STENCIL);
 
    if (drb)
-      brw_add_validated_bo(brw, drb->region->buffer);
+      brw_add_validated_bo(brw, drb->region->bo);
    if (drb && drb->hiz_region)
-      brw_add_validated_bo(brw, drb->hiz_region->buffer);
+      brw_add_validated_bo(brw, drb->hiz_region->bo);
    if (srb)
-      brw_add_validated_bo(brw, srb->region->buffer);
+      brw_add_validated_bo(brw, srb->region->bo);
 }
 
 static void emit_depthbuffer(struct brw_context *brw)
@@ -226,8 +226,10 @@ static void emit_depthbuffer(struct brw_context *brw)
    /* 3DSTATE_DEPTH_BUFFER, 3DSTATE_STENCIL_BUFFER are both
     * non-pipelined state that will need the PIPE_CONTROL workaround.
     */
-   if (intel->gen == 6)
+   if (intel->gen == 6) {
       intel_emit_post_sync_nonzero_flush(intel);
+      intel_emit_depth_stall_flushes(intel);
+   }
 
    /*
     * If either depth or stencil buffer has packed depth/stencil format,
@@ -346,7 +348,7 @@ static void emit_depthbuffer(struct brw_context *brw)
 		(BRW_TILEWALK_YMAJOR << 26) |
 		((region->tiling != I915_TILING_NONE) << 27) |
 		(BRW_SURFACE_2D << 29));
-      OUT_RELOC(region->buffer,
+      OUT_RELOC(region->bo,
 		I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
 		offset);
       OUT_BATCH((BRW_SURFACE_MIPMAPLAYOUT_BELOW << 1) |
@@ -379,7 +381,7 @@ static void emit_depthbuffer(struct brw_context *brw)
 	 BEGIN_BATCH(3);
 	 OUT_BATCH((_3DSTATE_HIER_DEPTH_BUFFER << 16) | (3 - 2));
 	 OUT_BATCH(hiz_region->pitch * hiz_region->cpp - 1);
-	 OUT_RELOC(hiz_region->buffer,
+	 OUT_RELOC(hiz_region->bo,
 		   I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
 		   0);
 	 ADVANCE_BATCH();
@@ -396,7 +398,7 @@ static void emit_depthbuffer(struct brw_context *brw)
 	 BEGIN_BATCH(3);
 	 OUT_BATCH((_3DSTATE_STENCIL_BUFFER << 16) | (3 - 2));
 	 OUT_BATCH(stencil_irb->region->pitch * stencil_irb->region->cpp - 1);
-	 OUT_RELOC(stencil_irb->region->buffer,
+	 OUT_RELOC(stencil_irb->region->bo,
 		   I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
 		   0);
 	 ADVANCE_BATCH();
@@ -450,6 +452,7 @@ static void upload_polygon_stipple(struct brw_context *brw)
    struct gl_context *ctx = &brw->intel.ctx;
    GLuint i;
 
+   /* _NEW_POLYGON */
    if (!ctx->Polygon.StippleFlag)
       return;
 
@@ -479,7 +482,8 @@ static void upload_polygon_stipple(struct brw_context *brw)
 
 const struct brw_tracked_state brw_polygon_stipple = {
    .dirty = {
-      .mesa = _NEW_POLYGONSTIPPLE,
+      .mesa = (_NEW_POLYGONSTIPPLE |
+	       _NEW_POLYGON),
       .brw = BRW_NEW_CONTEXT,
       .cache = 0
    },
@@ -496,6 +500,7 @@ static void upload_polygon_stipple_offset(struct brw_context *brw)
    struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &brw->intel.ctx;
 
+   /* _NEW_POLYGON */
    if (!ctx->Polygon.StippleFlag)
       return;
 
@@ -505,7 +510,9 @@ static void upload_polygon_stipple_offset(struct brw_context *brw)
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_POLY_STIPPLE_OFFSET << 16 | (2-2));
 
-   /* If we're drawing to a system window (ctx->DrawBuffer->Name == 0),
+   /* _NEW_BUFFERS
+    *
+    * If we're drawing to a system window (ctx->DrawBuffer->Name == 0),
     * we have to invert the Y axis in order to match the OpenGL
     * pixel coordinate system, and our offset must be matched
     * to the window position.  If we're drawing to a FBO
@@ -520,11 +527,10 @@ static void upload_polygon_stipple_offset(struct brw_context *brw)
    CACHED_BATCH();
 }
 
-#define _NEW_WINDOW_POS 0x40000000
-
 const struct brw_tracked_state brw_polygon_stipple_offset = {
    .dirty = {
-      .mesa = _NEW_WINDOW_POS | _NEW_POLYGONSTIPPLE,
+      .mesa = (_NEW_BUFFERS |
+	       _NEW_POLYGON),
       .brw = BRW_NEW_CONTEXT,
       .cache = 0
    },

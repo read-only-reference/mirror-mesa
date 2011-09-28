@@ -56,6 +56,7 @@ CXX_SOURCES = \
 	loop_analysis.cpp \
 	loop_controls.cpp \
 	loop_unroll.cpp \
+	lower_clip_distance.cpp \
 	lower_discard.cpp \
 	lower_if_to_cond_assign.cpp \
 	lower_instructions.cpp \
@@ -188,11 +189,11 @@ install-dricore: default
 
 ##### RULES #####
 
-glsl_compiler: $(GLSL2_OBJECTS) libglsl.a builtin_stubs.o
-	$(APP_CXX) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $(GLSL2_OBJECTS) builtin_stubs.o $(LIBS) -o $@
+glsl_compiler: $(GLSL2_OBJECTS) libglsl.a
+	$(APP_CXX) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $(GLSL2_OBJECTS) $(LIBS) -o $@
 
-glsl_test: $(TEST_OBJECTS) libglsl.a builtin_stubs.o
-	$(APP_CXX) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $(TEST_OBJECTS) builtin_stubs.o $(LIBS) -o $@
+glsl_test: $(TEST_OBJECTS) libglsl.a
+	$(APP_CXX) $(INCLUDES) $(CFLAGS) $(LDFLAGS) $(TEST_OBJECTS) $(LIBS) -o $@
 
 glcpp: glcpp/glcpp
 glcpp/glcpp: $(GLCPP_OBJECTS)

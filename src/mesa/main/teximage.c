@@ -42,7 +42,6 @@
 #include "mfeatures.h"
 #include "state.h"
 #include "texcompress.h"
-#include "texfetch.h"
 #include "teximage.h"
 #include "texstate.h"
 #include "texpal.h"
@@ -150,25 +149,12 @@ _mesa_base_tex_format( struct gl_context *ctx, GLint internalFormat )
          ; /* fallthrough */
    }
 
-   if (ctx->Extensions.EXT_texture_format_BGRA8888) {
+   /* GL_BGRA can be an internal format *only* in OpenGL ES (1.x or 2.0).
+    */
+   if (ctx->API != API_OPENGL) {
       switch (internalFormat) {
-         case GL_BGRA_EXT:
+         case GL_BGRA:
             return GL_RGBA;
-         default:
-            ; /* fallthrough */
-      }
-   }
-
-   if (ctx->Extensions.EXT_paletted_texture) {
-      switch (internalFormat) {
-         case GL_COLOR_INDEX:
-         case GL_COLOR_INDEX1_EXT:
-         case GL_COLOR_INDEX2_EXT:
-         case GL_COLOR_INDEX4_EXT:
-         case GL_COLOR_INDEX8_EXT:
-         case GL_COLOR_INDEX12_EXT:
-         case GL_COLOR_INDEX16_EXT:
-            return GL_COLOR_INDEX;
          default:
             ; /* fallthrough */
       }
@@ -527,6 +513,25 @@ _mesa_base_tex_format( struct gl_context *ctx, GLint internalFormat )
       }
    }
 
+   if (ctx->API == API_OPENGLES) {
+      switch (internalFormat) {
+      case GL_PALETTE4_RGB8_OES:
+      case GL_PALETTE4_R5_G6_B5_OES:
+      case GL_PALETTE8_RGB8_OES:
+      case GL_PALETTE8_R5_G6_B5_OES:
+	 return GL_RGB;
+      case GL_PALETTE4_RGBA8_OES:
+      case GL_PALETTE8_RGB5_A1_OES:
+      case GL_PALETTE4_RGBA4_OES:
+      case GL_PALETTE4_RGB5_A1_OES:
+      case GL_PALETTE8_RGBA8_OES:
+      case GL_PALETTE8_RGBA4_OES:
+	 return GL_RGBA;
+      default:
+         ; /* fallthrough */
+      }
+   }
+
    return -1; /* error */
 }
 
@@ -607,7 +612,7 @@ _mesa_free_texture_image_data(struct gl_context *ctx,
 {
    (void) ctx;
 
-   if (texImage->Data && !texImage->IsClientData) {
+   if (texImage->Data) {
       /* free the old texture data */
       _mesa_free_texmemory(texImage->Data);
    }
@@ -617,7 +622,8 @@ _mesa_free_texture_image_data(struct gl_context *ctx,
 
 
 /**
- * Free texture image.
+ * Free a gl_texture_image and associated data.
+ * This function is a fallback called via ctx->Driver.DeleteTextureImage().
  *
  * \param texImage texture image.
  *
@@ -1091,8 +1097,6 @@ clear_teximage_fields(struct gl_texture_image *img)
    img->DepthLog2 = 0;
    img->Data = NULL;
    img->TexFormat = MESA_FORMAT_NONE;
-   img->FetchTexelc = NULL;
-   img->FetchTexelf = NULL;
 }
 
 
@@ -1119,7 +1123,7 @@ _mesa_init_teximage_fields(struct gl_context *ctx, GLenum target,
                            GLint border, GLenum internalFormat,
                            gl_format format)
 {
-   GLint i, dims;
+   GLint i;
 
    ASSERT(img);
    ASSERT(width >= 0);
@@ -1157,13 +1161,6 @@ _mesa_init_teximage_fields(struct gl_context *ctx, GLenum target,
 
    img->MaxLog2 = MAX2(img->WidthLog2, img->HeightLog2);
 
-   if ((width == 1 || _mesa_is_pow_two(img->Width2)) &&
-       (height == 1 || _mesa_is_pow_two(img->Height2)) &&
-       (depth == 1 || _mesa_is_pow_two(img->Depth2)))
-      img->_IsPowerOfTwo = GL_TRUE;
-   else
-      img->_IsPowerOfTwo = GL_FALSE;
-
    /* RowStride and ImageOffsets[] describe how to address texels in 'Data' */
    img->RowStride = width;
    /* Allocate the ImageOffsets array and initialize to typical values.
@@ -1177,24 +1174,7 @@ _mesa_init_teximage_fields(struct gl_context *ctx, GLenum target,
       img->ImageOffsets[i] = i * width * height;
    }
 
-   /* Compute Width/Height/DepthScale for mipmap lod computation */
-   if (target == GL_TEXTURE_RECTANGLE_NV) {
-      /* scale = 1.0 since texture coords directly map to texels */
-      img->WidthScale = 1.0;
-      img->HeightScale = 1.0;
-      img->DepthScale = 1.0;
-   }
-   else {
-      img->WidthScale = (GLfloat) img->Width;
-      img->HeightScale = (GLfloat) img->Height;
-      img->DepthScale = (GLfloat) img->Depth;
-   }
-
    img->TexFormat = format;
-
-   dims = _mesa_get_texture_dimensions(target);
-
-   _mesa_set_fetch_functions(img, dims);
 }
 
 
@@ -1554,7 +1534,13 @@ texture_error_check( struct gl_context *ctx,
    const GLenum proxyTarget = get_proxy_target(target);
    const GLboolean isProxy = target == proxyTarget;
    GLboolean sizeOK = GL_TRUE;
-   GLboolean colorFormat, indexFormat;
+   GLboolean colorFormat;
+
+   /* Even though there are no color-index textures, we still have to support
+    * uploading color-index data and remapping it to RGB via the
+    * GL_PIXEL_MAP_I_TO_[RGBA] tables.
+    */
+   const GLboolean indexFormat = (format == GL_COLOR_INDEX);
 
    /* Basic level check (more checking in ctx->Driver.TestProxyTexImage) */
    if (level < 0 || level >= MAX_TEXTURE_LEVELS) {
@@ -1635,9 +1621,7 @@ texture_error_check( struct gl_context *ctx,
 
    /* make sure internal format and format basically agree */
    colorFormat = _mesa_is_color_format(format);
-   indexFormat = _mesa_is_index_format(format);
    if ((_mesa_is_color_format(internalFormat) && !colorFormat && !indexFormat) ||
-       (_mesa_is_index_format(internalFormat) && !indexFormat) ||
        (_mesa_is_depth_format(internalFormat) != _mesa_is_depth_format(format)) ||
        (_mesa_is_ycbcr_format(internalFormat) != _mesa_is_ycbcr_format(format)) ||
        (_mesa_is_depthstencil_format(internalFormat) != _mesa_is_depthstencil_format(format)) ||
@@ -3029,14 +3013,11 @@ compressed_texture_error_check(struct gl_context *ctx, GLint dimensions,
    const GLenum proxyTarget = get_proxy_target(target);
    const GLint maxLevels = _mesa_max_texture_levels(ctx, target);
    GLint expectedSize;
+   GLenum choose_format;
+   GLenum choose_type;
+   GLenum proxy_format;
 
    *reason = ""; /* no error */
-
-   /* check level */
-   if (level < 0 || level >= maxLevels) {
-      *reason = "level";
-      return GL_INVALID_VALUE;
-   }
 
    if (!target_can_be_compressed(ctx, target, internalFormat)) {
       *reason = "target";
@@ -3047,6 +3028,68 @@ compressed_texture_error_check(struct gl_context *ctx, GLint dimensions,
    if (!_mesa_is_compressed_format(ctx, internalFormat)) {
       *reason = "internalFormat";
       return GL_INVALID_ENUM;
+   }
+
+   switch (internalFormat) {
+#if FEATURE_ES
+   case GL_PALETTE4_RGB8_OES:
+   case GL_PALETTE4_RGBA8_OES:
+   case GL_PALETTE4_R5_G6_B5_OES:
+   case GL_PALETTE4_RGBA4_OES:
+   case GL_PALETTE4_RGB5_A1_OES:
+   case GL_PALETTE8_RGB8_OES:
+   case GL_PALETTE8_RGBA8_OES:
+   case GL_PALETTE8_R5_G6_B5_OES:
+   case GL_PALETTE8_RGBA4_OES:
+   case GL_PALETTE8_RGB5_A1_OES:
+      _mesa_cpal_compressed_format_type(internalFormat, &choose_format,
+					&choose_type);
+      proxy_format = choose_format;
+
+      /* check level */
+      if (level > 0 || level < -maxLevels) {
+	 *reason = "level";
+	 return GL_INVALID_VALUE;
+      }
+
+      if (dimensions != 2) {
+	 *reason = "compressed paletted textures must be 2D";
+	 return GL_INVALID_OPERATION;
+      }
+
+      /* Figure out the expected texture size (in bytes).  This will be
+       * checked against the actual size later.
+       */
+      expectedSize = _mesa_cpal_compressed_size(level, internalFormat,
+						width, height);
+
+      /* This is for the benefit of the TestProxyTexImage below.  It expects
+       * level to be non-negative.  OES_compressed_paletted_texture uses a
+       * weird mechanism where the level specified to glCompressedTexImage2D
+       * is -(n-1) number of levels in the texture, and the data specifies the
+       * complete mipmap stack.  This is done to ensure the palette is the
+       * same for all levels.
+       */
+      level = -level;
+      break;
+#endif
+
+   default:
+      choose_format = GL_NONE;
+      choose_type = GL_NONE;
+      proxy_format = internalFormat;
+
+      /* check level */
+      if (level < 0 || level >= maxLevels) {
+	 *reason = "level";
+	 return GL_INVALID_VALUE;
+      }
+
+      /* Figure out the expected texture size (in bytes).  This will be
+       * checked against the actual size later.
+       */
+      expectedSize = compressed_tex_size(width, height, depth, internalFormat);
+      break;
    }
 
    /* This should really never fail */
@@ -3071,8 +3114,8 @@ compressed_texture_error_check(struct gl_context *ctx, GLint dimensions,
    /* check image size against compression block size */
    {
       gl_format texFormat =
-         ctx->Driver.ChooseTextureFormat(ctx, internalFormat,
-                                         GL_NONE, GL_NONE);
+         ctx->Driver.ChooseTextureFormat(ctx, proxy_format,
+					 choose_format, choose_type);
       GLuint bw, bh;
 
       _mesa_get_format_block_size(texFormat, &bw, &bh);
@@ -3090,15 +3133,15 @@ compressed_texture_error_check(struct gl_context *ctx, GLint dimensions,
 
    /* check image sizes */
    if (!ctx->Driver.TestProxyTexImage(ctx, proxyTarget, level,
-                                      internalFormat, GL_NONE, GL_NONE,
-                                      width, height, depth, border)) {
+				      proxy_format, choose_format,
+				      choose_type,
+				      width, height, depth, border)) {
       /* See error comment above */
       *reason = "invalid width, height or format";
       return GL_INVALID_OPERATION;
    }
 
    /* check image size in bytes */
-   expectedSize = compressed_tex_size(width, height, depth, internalFormat);
    if (expectedSize != imageSize) {
       /* Per GL_ARB_texture_compression:  GL_INVALID_VALUE is generated [...]
        * if <imageSize> is not consistent with the format, dimensions, and

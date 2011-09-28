@@ -111,20 +111,14 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_POINT_SPRITE:
    case PIPE_CAP_PRIMITIVE_RESTART: /* draw module */
-   case PIPE_CAP_TEXTURE_MIRROR_REPEAT:
    case PIPE_CAP_TEXTURE_SHADOW_MAP:
    case PIPE_CAP_TWO_SIDED_STENCIL:
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
+   case PIPE_CAP_BLEND_EQUATION_SEPARATE:
       return 1;
 
-   /* Features that should be supported (boolean caps). */
-   /* XXX: Just test the code */
-   case PIPE_CAP_BLEND_EQUATION_SEPARATE:
-      /* Also lie about these when asked to (needed for GLSL / GL 2.0) */
-      return is->debug.lie ? 1 : 0;
-
    /* Unsupported features (boolean caps). */
-   case PIPE_CAP_ARRAY_TEXTURES:
+   case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
    case PIPE_CAP_DEPTH_CLAMP:
    case PIPE_CAP_INDEP_BLEND_ENABLE:
    case PIPE_CAP_INDEP_BLEND_FUNC:
@@ -146,17 +140,17 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
       return is->debug.lie ? 1 : 0;
 
    /* Texturing. */
-   case PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS:
    case PIPE_CAP_MAX_COMBINED_SAMPLERS:
       return 8;
-   case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
-      return 0;
    case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
       return I915_MAX_TEXTURE_2D_LEVELS;
    case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
       return I915_MAX_TEXTURE_3D_LEVELS;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
       return I915_MAX_TEXTURE_2D_LEVELS;
+   case PIPE_CAP_MIN_TEXEL_OFFSET:
+   case PIPE_CAP_MAX_TEXEL_OFFSET:
+      return 0;
 
    /* Render targets. */
    case PIPE_CAP_MAX_RENDER_TARGETS:
@@ -181,7 +175,12 @@ i915_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_sha
 {
    switch(shader) {
    case PIPE_SHADER_VERTEX:
-      return draw_get_shader_param(shader, cap);
+      switch (cap) {
+      case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+         return 0;
+      default:
+         return draw_get_shader_param(shader, cap);
+      }
    case PIPE_SHADER_FRAGMENT:
       break;
    default:
@@ -223,6 +222,8 @@ i915_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_sha
          return 0;
       case PIPE_SHADER_CAP_INTEGERS:
          return 0;
+      case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+         return 8;
       default:
          debug_printf("%s: Unknown cap %u.\n", __FUNCTION__, cap);
          return 0;

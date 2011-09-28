@@ -490,6 +490,9 @@ interpolate_texcoords(struct gl_context *ctx, SWspan *span)
 
          if (obj) {
             const struct gl_texture_image *img = obj->Image[0][obj->BaseLevel];
+            const struct swrast_texture_image *swImg =
+               swrast_texture_image_const(img);
+
             needLambda = (obj->Sampler.MinFilter != obj->Sampler.MagFilter)
                || ctx->FragmentProgram._Current;
             /* LOD is calculated directly in the ansiotropic filter, we can
@@ -499,8 +502,8 @@ interpolate_texcoords(struct gl_context *ctx, SWspan *span)
                 obj->Sampler.MinFilter == GL_LINEAR_MIPMAP_LINEAR) {
                needLambda = GL_FALSE;
             }
-            texW = img->WidthScale;
-            texH = img->HeightScale;
+            texW = swImg->WidthScale;
+            texH = swImg->HeightScale;
          }
          else {
             /* using a fragment program */
@@ -1248,7 +1251,7 @@ _swrast_write_rgba_span( struct gl_context *ctx, SWspan *span)
             ASSERT(rb->_BaseFormat == GL_RGBA || rb->_BaseFormat == GL_RGB ||
 		   rb->_BaseFormat == GL_ALPHA);
 
-            if (ctx->Color._LogicOpEnabled) {
+            if (ctx->Color.ColorLogicOpEnabled) {
                _swrast_logicop_rgba_span(ctx, rb, span);
             }
             else if ((ctx->Color.BlendEnabled >> buf) & 1) {

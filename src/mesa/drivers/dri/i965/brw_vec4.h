@@ -83,9 +83,7 @@ public:
    int reg_offset;
    /** Register type.  BRW_REGISTER_TYPE_* */
    int type;
-   bool sechalf;
    struct brw_reg fixed_hw_reg;
-   int smear; /* -1, or a channel of the reg to smear to all channels. */
 
    /** Value for file == BRW_IMMMEDIATE_FILE */
    union {
@@ -150,7 +148,7 @@ public:
 
       this->file = IMM;
       this->type = BRW_REGISTER_TYPE_UD;
-      this->imm.f = u;
+      this->imm.u = u;
    }
 
    src_reg(int32_t i)
@@ -161,6 +159,10 @@ public:
       this->type = BRW_REGISTER_TYPE_D;
       this->imm.i = i;
    }
+
+   bool equals(src_reg *r);
+   bool is_zero() const;
+   bool is_one() const;
 
    src_reg(class vec4_visitor *v, const struct glsl_type *type);
 
@@ -273,6 +275,8 @@ public:
     */
    ir_instruction *ir;
    const char *annotation;
+
+   bool is_math();
 };
 
 class vec4_visitor : public ir_visitor
@@ -320,6 +324,16 @@ public:
    int first_non_payload_grf;
    int *virtual_grf_def;
    int *virtual_grf_use;
+   dst_reg userplane[MAX_CLIP_PLANES];
+
+   /**
+    * This is the size to be used for an array with an element per
+    * reg_offset
+    */
+   int virtual_grf_reg_count;
+   /** Per-virtual-grf indices into an array of size virtual_grf_reg_count */
+   int *virtual_grf_reg_map;
+
    bool live_intervals_valid;
 
    dst_reg *variable_storage(ir_variable *var);
@@ -360,7 +374,8 @@ public:
    /* Regs for vertex results.  Generated at ir_variable visiting time
     * for the ir->location's used.
     */
-   dst_reg output_reg[VERT_RESULT_MAX];
+   dst_reg output_reg[BRW_VERT_RESULT_MAX];
+   const char *output_reg_annotation[BRW_VERT_RESULT_MAX];
    int uniform_size[MAX_UNIFORMS];
    int uniform_vector_size[MAX_UNIFORMS];
    int uniforms;
@@ -371,6 +386,7 @@ public:
    void fail(const char *msg, ...);
 
    int virtual_grf_alloc(int size);
+   void setup_uniform_clipplane_values();
    int setup_uniform_values(int loc, const glsl_type *type);
    void setup_builtin_uniform_values(ir_variable *ir);
    int setup_attributes(int payload_reg);
@@ -380,11 +396,15 @@ public:
    void reg_allocate();
    void move_grf_array_access_to_scratch();
    void move_uniform_array_access_to_pull_constants();
+   void move_push_constants_to_pull_constants();
    void split_uniform_registers();
    void pack_uniform_registers();
    void calculate_live_intervals();
    bool dead_code_eliminate();
    bool virtual_grf_interferes(int a, int b);
+   bool opt_copy_propagation();
+   bool opt_algebraic();
+   bool opt_compute_to_mrf();
 
    vec4_instruction *emit(vec4_instruction *inst);
 
@@ -424,6 +444,8 @@ public:
    vec4_instruction *SCRATCH_READ(dst_reg dst, src_reg index);
    vec4_instruction *SCRATCH_WRITE(dst_reg dst, src_reg src, src_reg index);
 
+   int implied_mrf_writes(vec4_instruction *inst);
+
    bool try_rewrite_rhs_to_dst(ir_assignment *ir,
 			       dst_reg dst,
 			       src_reg src,
@@ -433,12 +455,12 @@ public:
    /** Walks an exec_list of ir_instruction and sends it through this visitor. */
    void visit_instructions(const exec_list *list);
 
-   void emit_bool_to_cond_code(ir_rvalue *ir);
+   void emit_bool_to_cond_code(ir_rvalue *ir, uint32_t *predicate);
    void emit_bool_comparison(unsigned int op, dst_reg dst, src_reg src0, src_reg src1);
    void emit_if_gen6(ir_if *ir);
 
    void emit_block_move(dst_reg *dst, src_reg *src,
-			const struct glsl_type *type, bool predicated);
+			const struct glsl_type *type, uint32_t predicate);
 
    void emit_constant_values(dst_reg *dst, ir_constant *value);
 
@@ -463,8 +485,11 @@ public:
    void emit_math2_gen4(enum opcode opcode, dst_reg dst, src_reg src0, src_reg src1);
    void emit_math(enum opcode opcode, dst_reg dst, src_reg src0, src_reg src1);
 
-   int emit_vue_header_gen6(int header_mrf);
-   int emit_vue_header_gen4(int header_mrf);
+   void emit_ndc_computation();
+   void emit_psiz_and_flags(struct brw_reg reg);
+   void emit_clip_distances(struct brw_reg reg, int offset);
+   void emit_generic_urb_slot(dst_reg reg, int vert_result);
+   void emit_urb_slot(int mrf, int vert_result);
    void emit_urb_writes(void);
 
    src_reg get_scratch_offset(vec4_instruction *inst,

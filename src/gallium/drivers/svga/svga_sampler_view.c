@@ -34,6 +34,7 @@
 #include "util/u_memory.h"
 #include "util/u_string.h"
 
+#include "svga_format.h"
 #include "svga_screen.h"
 #include "svga_context.h"
 #include "svga_resource_texture.h"
@@ -60,7 +61,7 @@ svga_get_tex_sampler_view(struct pipe_context *pipe,
    struct svga_texture *tex = svga_texture(pt); 
    struct svga_sampler_view *sv = NULL;
    SVGA3dSurfaceFlags flags = SVGA3D_SURFACE_HINT_TEXTURE;
-   SVGA3dSurfaceFormat format = svga_translate_format(pt->format);
+   SVGA3dSurfaceFormat format = svga_translate_format(ss, pt->format, PIPE_BIND_SAMPLER_VIEW);
    boolean view = TRUE;
 
    assert(pt);

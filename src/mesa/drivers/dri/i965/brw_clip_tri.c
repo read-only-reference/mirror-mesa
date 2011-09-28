@@ -74,9 +74,12 @@ void brw_clip_tri_alloc_regs( struct brw_clip_compile *c,
       i += c->nr_regs;
    }
 
-   if (c->nr_attrs & 1) {
+   if (c->vue_map.num_slots % 2) {
+      /* The VUE has an odd number of slots so the last register is only half
+       * used.  Fill the second half with zero.
+       */
       for (j = 0; j < 3; j++) {
-	 GLuint delta = c->offset[c->idx_to_attr[c->nr_attrs - 1]] + ATTR_SIZE;
+	 GLuint delta = brw_vue_slot_to_offset(c->vue_map.num_slots);
 
 	 brw_MOV(&c->func, byte_offset(c->reg.vertex[j], delta), brw_imm_f(0));
       }
@@ -231,6 +234,8 @@ void brw_clip_tri( struct brw_clip_compile *c )
    struct brw_indirect freelist_ptr = brw_indirect(6, 0);
    struct brw_instruction *plane_loop;
    struct brw_instruction *vertex_loop;
+   GLuint hpos_offset = brw_vert_result_to_offset(&c->vue_map,
+                                                  VERT_RESULT_HPOS);
    
    brw_MOV(p, get_addr_reg(vtxPrev),     brw_address(c->reg.vertex[2]) );
    brw_MOV(p, get_addr_reg(plane_ptr),   brw_clip_plane0_address(c));
@@ -269,13 +274,13 @@ void brw_clip_tri( struct brw_clip_compile *c )
 
 	    /* IS_NEGATIVE(prev) */
 	    brw_set_conditionalmod(p, BRW_CONDITIONAL_L);
-	    brw_DP4(p, vec4(c->reg.dpPrev), deref_4f(vtxPrev, c->offset[VERT_RESULT_HPOS]), c->reg.plane_equation);
+	    brw_DP4(p, vec4(c->reg.dpPrev), deref_4f(vtxPrev, hpos_offset), c->reg.plane_equation);
 	    brw_IF(p, BRW_EXECUTE_1);
 	    {
 	       /* IS_POSITIVE(next)
 		*/
 	       brw_set_conditionalmod(p, BRW_CONDITIONAL_GE);
-	       brw_DP4(p, vec4(c->reg.dp), deref_4f(vtx, c->offset[VERT_RESULT_HPOS]), c->reg.plane_equation);
+	       brw_DP4(p, vec4(c->reg.dp), deref_4f(vtx, hpos_offset), c->reg.plane_equation);
 	       brw_IF(p, BRW_EXECUTE_1);
 	       {
 
@@ -317,7 +322,7 @@ void brw_clip_tri( struct brw_clip_compile *c )
 	       /* IS_NEGATIVE(next)
 		*/
 	       brw_set_conditionalmod(p, BRW_CONDITIONAL_L);
-	       brw_DP4(p, vec4(c->reg.dp), deref_4f(vtx, c->offset[VERT_RESULT_HPOS]), c->reg.plane_equation);
+	       brw_DP4(p, vec4(c->reg.dp), deref_4f(vtx, hpos_offset), c->reg.plane_equation);
 	       brw_IF(p, BRW_EXECUTE_1);
 	       {
 		  /* Going out of bounds.  Avoid division by zero as we
@@ -477,12 +482,15 @@ static void brw_clip_test( struct brw_clip_compile *c )
     struct brw_compile *p = &c->func;
     struct brw_reg tmp0 = c->reg.loopcount; /* handy temporary */
 
+    GLuint hpos_offset = brw_vert_result_to_offset(&c->vue_map,
+                                                   VERT_RESULT_HPOS);
+
     brw_MOV(p, get_addr_reg(vt0), brw_address(c->reg.vertex[0]));
     brw_MOV(p, get_addr_reg(vt1), brw_address(c->reg.vertex[1]));
     brw_MOV(p, get_addr_reg(vt2), brw_address(c->reg.vertex[2]));
-    brw_MOV(p, v0, deref_4f(vt0, c->offset[VERT_RESULT_HPOS]));
-    brw_MOV(p, v1, deref_4f(vt1, c->offset[VERT_RESULT_HPOS]));
-    brw_MOV(p, v2, deref_4f(vt2, c->offset[VERT_RESULT_HPOS]));
+    brw_MOV(p, v0, deref_4f(vt0, hpos_offset));
+    brw_MOV(p, v1, deref_4f(vt1, hpos_offset));
+    brw_MOV(p, v2, deref_4f(vt2, hpos_offset));
     brw_AND(p, c->reg.planemask, c->reg.planemask, brw_imm_ud(~0x3f));
 
     /* test nearz, xmin, ymin plane */

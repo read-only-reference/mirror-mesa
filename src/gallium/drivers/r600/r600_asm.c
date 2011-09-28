@@ -49,6 +49,7 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 			return 0;
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ADD:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ADD_INT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SUB_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGE:
@@ -68,6 +69,7 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_DOT4:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_DOT4_IEEE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_CUBE:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_XOR_INT:
 			return 2;
 
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOV:
@@ -101,18 +103,34 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 			return 0;
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ADD:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ADD_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SUB_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_AND_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_OR_INT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLNE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MUL:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULLO_INT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_UINT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULLO_UINT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MAX:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MIN:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MAX_UINT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MIN_UINT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MAX_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MIN_INT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETE:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETE_INT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETNE:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETNE_INT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGT_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGT_UINT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGE:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGE_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGE_UINT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETGT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETGE:
@@ -122,6 +140,7 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_CUBE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INTERP_XY:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INTERP_ZW:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_XOR_INT:
 			return 2;
 
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOV:
@@ -142,6 +161,8 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SIN:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_COS:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RNDNE:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_NOT_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INTERP_LOAD_P0:
 			return 1;
 		default: R600_ERR(
 			"Need instruction operand number for 0x%x.\n", alu->inst);
@@ -403,7 +424,8 @@ static int is_alu_vec_unit_inst(struct r600_bytecode *bc, struct r600_bytecode_a
 	return is_alu_reduction_inst(bc, alu) ||
 		is_alu_mova_inst(bc, alu) ||
 		(bc->chip_class == EVERGREEN &&
-		alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT_FLOOR);
+		(alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT ||
+		alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT_FLOOR));
 }
 
 /* alu instructions that can only execute on the trans unit */
@@ -450,7 +472,7 @@ static int is_alu_trans_unit_inst(struct r600_bytecode *bc, struct r600_bytecode
 			 * on Evergreen, despite what the documentation says. FLT_TO_INT
 			 * can do both vector and scalar. */
 			return alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ASHR_INT ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT ||
+			        alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT ||
 				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHL_INT ||
 				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHR_INT ||
 				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_INT ||
@@ -2077,6 +2099,12 @@ static void r600_vertex_data_type(enum pipe_format pformat, unsigned *format,
 				break;
 			}
 			break;
+		case 10:
+			if (desc->nr_channels != 4)
+				goto out_unknown;
+
+			*format = FMT_2_10_10_10;
+			break;
 		case 16:
 			switch (desc->nr_channels) {
 			case 1:
@@ -2234,17 +2262,19 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 
 	ve->fs_size = bc.ndw*4;
 
-	/* use PIPE_BIND_VERTEX_BUFFER so we use the cache buffer manager */
-	ve->fetch_shader = r600_bo(rctx->radeon, ve->fs_size, 256, PIPE_BIND_VERTEX_BUFFER, PIPE_USAGE_IMMUTABLE);
+	ve->fetch_shader = (struct r600_resource*)
+			pipe_buffer_create(rctx->context.screen,
+					   PIPE_BIND_CUSTOM,
+					   PIPE_USAGE_IMMUTABLE, ve->fs_size);
 	if (ve->fetch_shader == NULL) {
 		r600_bytecode_clear(&bc);
 		return -ENOMEM;
 	}
 
-	bytecode = r600_bo_map(rctx->radeon, ve->fetch_shader, rctx->ctx.cs, PIPE_TRANSFER_WRITE);
+	bytecode = rctx->ws->buffer_map(ve->fetch_shader->buf, rctx->ctx.cs, PIPE_TRANSFER_WRITE);
 	if (bytecode == NULL) {
 		r600_bytecode_clear(&bc);
-		r600_bo_reference(&ve->fetch_shader, NULL);
+		pipe_resource_reference((struct pipe_resource**)&ve->fetch_shader, NULL);
 		return -ENOMEM;
 	}
 
@@ -2256,7 +2286,7 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 		memcpy(bytecode, bc.bytecode, ve->fs_size);
 	}
 
-	r600_bo_unmap(rctx->radeon, ve->fetch_shader);
+	rctx->ws->buffer_unmap(ve->fetch_shader->buf);
 	r600_bytecode_clear(&bc);
 
 	if (rctx->chip_class >= EVERGREEN)

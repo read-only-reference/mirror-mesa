@@ -102,7 +102,7 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		}
 
 		screen_caps.stages_with_sampling = (1 << screen_caps.stages) - 1;
-		if(!screen->get_param(screen, PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS))
+		if(!screen->get_shader_param(screen, PIPE_SHADER_VERTEX, PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS))
 			screen_caps.stages_with_sampling &=~ (1 << PIPE_SHADER_VERTEX);
 
 		memset(format_support, 0xff, sizeof(format_support));
@@ -504,14 +504,16 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		else
 			state.cull_face = PIPE_FACE_NONE;
 		state.front_ccw = !!rasterizer_desc->FrontCounterClockwise;
-		/* TODO: is this correct? */
-		/* TODO: we are ignoring depthBiasClamp! */
 		state.offset_tri = state.offset_line = state.offset_point = rasterizer_desc->SlopeScaledDepthBias || rasterizer_desc->DepthBias;
 		state.offset_scale = rasterizer_desc->SlopeScaledDepthBias;
 		state.offset_units = rasterizer_desc->DepthBias;
+		state.offset_clamp = rasterizer_desc->DepthBiasClamp;
 		state.scissor = !!rasterizer_desc->ScissorEnable;
 		state.multisample = !!rasterizer_desc->MultisampleEnable;
 		state.line_smooth = !!rasterizer_desc->AntialiasedLineEnable;
+		state.flatshade_first = 1;
+		state.line_width = 1.0f;
+		state.point_size = 1.0f;
 
 		/* TODO: is this correct? */
 		state.point_quad_rasterization = 1;
@@ -550,7 +552,7 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		state.wrap_t = d3d11_to_pipe_wrap[sampler_desc->AddressV];
 		state.wrap_r = d3d11_to_pipe_wrap[sampler_desc->AddressW];
 		state.lod_bias = sampler_desc->MipLODBias;
-		memcpy(state.border_color, sampler_desc->BorderColor, sizeof(state.border_color));
+		memcpy(state.border_color.f, sampler_desc->BorderColor, sizeof(state.border_color));
 		state.min_lod = sampler_desc->MinLOD;
 		state.max_lod = sampler_desc->MaxLOD;
 

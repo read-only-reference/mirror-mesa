@@ -1013,6 +1013,25 @@ XXX so let's discuss it, yeah?
   dst.w = src0.w \oplus src1.w
 
 
+.. opcode:: UCMP - Integer Conditional Move
+
+.. math::
+
+  dst.x = src0.x ? src1.x : src2.x
+
+  dst.y = src0.y ? src1.y : src2.y
+
+  dst.z = src0.z ? src1.z : src2.z
+
+  dst.w = src0.w ? src1.w : src2.w
+
+
+.. opcode:: UARL - Integer Address Register Load
+
+  Moves the contents of the source register, assumed to be an integer, into the
+  destination register, which is assumed to be an address (ADDR) register.
+
+
 .. opcode:: SAD - Sum Of Absolute Differences
 
 .. math::
@@ -1026,9 +1045,16 @@ XXX so let's discuss it, yeah?
   dst.w = |src0.w - src1.w| + src2.w
 
 
-.. opcode:: TXF - Texel Fetch
-
-  TBD
+.. opcode:: TXF - Texel Fetch (as per NV_gpu_shader4), extract a single texel
+                  from a specified texture image. The source sampler may
+		  not be a CUBE or SHADOW.
+                  src 0 is a four-component signed integer vector used to
+		  identify the single texel accessed. 3 components + level.
+		  src 1 is a 3 component constant signed integer vector,
+		  with each component only have a range of
+		  -8..+8 (hw only seems to deal with this range, interface
+		  allows for up to unsigned int).
+		  TXF(uint_vec coord, int_vec offset).
 
 
 .. opcode:: TXQ - Texture Size Query (as per NV_gpu_program4)

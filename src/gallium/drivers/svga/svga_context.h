@@ -141,6 +141,7 @@ struct svga_rasterizer_state {
    unsigned multisampleantialias:1;
    unsigned antialiasedlineenable:1;
    unsigned lastpixel:1;
+   unsigned pointsprite:1;
 
    unsigned linepattern;
 
@@ -414,7 +415,7 @@ struct svga_context
  */
 void svga_clear(struct pipe_context *pipe, 
                 unsigned buffers,
-                const float *rgba,
+                const union pipe_color_union *color,
                 double depth,
                 unsigned stencil);
 

@@ -672,7 +672,7 @@ get_texel_2d(const struct sp_sampler_variant *samp,
 
    if (x < 0 || x >= (int) u_minify(texture->width0, level) ||
        y < 0 || y >= (int) u_minify(texture->height0, level)) {
-      return samp->sampler->border_color;
+      return samp->sampler->border_color.f;
    }
    else {
       return get_texel_2d_no_border( samp, addr, x, y );
@@ -766,7 +766,7 @@ get_texel_3d(const struct sp_sampler_variant *samp,
    if (x < 0 || x >= (int) u_minify(texture->width0, level) ||
        y < 0 || y >= (int) u_minify(texture->height0, level) ||
        z < 0 || z >= (int) u_minify(texture->depth0, level)) {
-      return samp->sampler->border_color;
+      return samp->sampler->border_color.f;
    }
    else {
       return get_texel_3d_no_border( samp, addr, x, y, z );
@@ -783,7 +783,7 @@ get_texel_1d_array(const struct sp_sampler_variant *samp,
    unsigned level = addr.bits.level;
 
    if (x < 0 || x >= (int) u_minify(texture->width0, level)) {
-      return samp->sampler->border_color;
+      return samp->sampler->border_color.f;
    }
    else {
       return get_texel_2d_no_border(samp, addr, x, y);
@@ -803,7 +803,7 @@ get_texel_2d_array(const struct sp_sampler_variant *samp,
 
    if (x < 0 || x >= (int) u_minify(texture->width0, level) ||
        y < 0 || y >= (int) u_minify(texture->height0, level)) {
-      return samp->sampler->border_color;
+      return samp->sampler->border_color.f;
    }
    else {
       return get_texel_3d_no_border(samp, addr, x, y, layer);
@@ -1722,7 +1722,7 @@ create_filter_table(void)
 {
    unsigned i;
    if (!weightLut) {
-      weightLut = (float *) malloc(WEIGHT_LUT_SIZE * sizeof(float));
+      weightLut = (float *) MALLOC(WEIGHT_LUT_SIZE * sizeof(float));
 
       for (i = 0; i < WEIGHT_LUT_SIZE; ++i) {
          float alpha = 2;
@@ -2614,6 +2614,7 @@ sample_get_texels(struct tgsi_sampler *tgsi_sampler,
 	   const int v_j[QUAD_SIZE],
 	   const int v_k[QUAD_SIZE],
 	   const int lod[QUAD_SIZE],
+	   const int8_t offset[3],
 	   float rgba[NUM_CHANNELS][QUAD_SIZE])
 {
    const struct sp_sampler_variant *samp = sp_sampler_variant(tgsi_sampler);
@@ -2629,7 +2630,7 @@ sample_get_texels(struct tgsi_sampler *tgsi_sampler,
    switch(texture->target) {
    case PIPE_TEXTURE_1D:
       for (j = 0; j < QUAD_SIZE; j++) {
-	 tx = get_texel_2d(samp, addr, v_i[j], 0);
+	 tx = get_texel_2d(samp, addr, v_i[j] + offset[0], 0);
 	 for (c = 0; c < 4; c++) {
 	    rgba[c][j] = tx[c];
 	 }
@@ -2637,7 +2638,8 @@ sample_get_texels(struct tgsi_sampler *tgsi_sampler,
       break;
    case PIPE_TEXTURE_1D_ARRAY:
       for (j = 0; j < QUAD_SIZE; j++) {
-	 tx = get_texel_1d_array(samp, addr, v_i[j], v_j[j]);
+	 tx = get_texel_1d_array(samp, addr, v_i[j] + offset[0],
+				 v_j[j] + offset[1]);
 	 for (c = 0; c < 4; c++) {
 	    rgba[c][j] = tx[c];
 	 }
@@ -2646,7 +2648,8 @@ sample_get_texels(struct tgsi_sampler *tgsi_sampler,
    case PIPE_TEXTURE_2D:
    case PIPE_TEXTURE_RECT:
       for (j = 0; j < QUAD_SIZE; j++) {
-	 tx = get_texel_2d(samp, addr, v_i[j], v_j[j]);
+	 tx = get_texel_2d(samp, addr, v_i[j] + offset[0],
+			   v_j[j] + offset[1]);
 	 for (c = 0; c < 4; c++) {
 	    rgba[c][j] = tx[c];
 	 }
@@ -2654,7 +2657,9 @@ sample_get_texels(struct tgsi_sampler *tgsi_sampler,
       break;
    case PIPE_TEXTURE_2D_ARRAY:
       for (j = 0; j < QUAD_SIZE; j++) {
-	 tx = get_texel_2d_array(samp, addr, v_i[j], v_j[j], v_k[j]);
+	 tx = get_texel_2d_array(samp, addr, v_i[j] + offset[0],
+				 v_j[j] + offset[1],
+				 v_k[j] + offset[2]);
 	 for (c = 0; c < 4; c++) {
 	    rgba[c][j] = tx[c];
 	 }
@@ -2662,7 +2667,9 @@ sample_get_texels(struct tgsi_sampler *tgsi_sampler,
       break;
    case PIPE_TEXTURE_3D:
       for (j = 0; j < QUAD_SIZE; j++) {
-	 tx = get_texel_3d(samp, addr, v_i[j], v_j[j], v_k[j]);
+	 tx = get_texel_3d(samp, addr, v_i[j] + offset[0], 
+			   v_j[j] + offset[1],
+			   v_k[j] + offset[2]);
 	 for (c = 0; c < 4; c++) {
 	    rgba[c][j] = tx[c];
 	 }

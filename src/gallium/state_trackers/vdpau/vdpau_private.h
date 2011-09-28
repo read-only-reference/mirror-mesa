@@ -41,6 +41,9 @@
 
 #include "vl_winsys.h"
 
+/* Full VDPAU API documentation available at :
+ * ftp://download.nvidia.com/XFree86/vdpau/doxygen/html/index.html */
+
 #define INFORMATION G3DVL VDPAU Driver Shared Library version VER_MAJOR.VER_MINOR
 #define QUOTEME(x) #x
 #define TOSTRING(x) QUOTEME(x)
@@ -81,7 +84,6 @@ PipeToChroma(enum pipe_video_chroma_format pipe_type)
    return -1;
 }
 
-
 static inline enum pipe_format
 FormatYCBCRToPipe(VdpYCbCrFormat vdpau_format)
 {
@@ -95,14 +97,14 @@ FormatYCBCRToPipe(VdpYCbCrFormat vdpau_format)
       case VDP_YCBCR_FORMAT_YUYV:
          return PIPE_FORMAT_YUYV;
       case VDP_YCBCR_FORMAT_Y8U8V8A8: /* Not defined in p_format.h */
-         return 0;
+         return PIPE_FORMAT_NONE;
       case VDP_YCBCR_FORMAT_V8U8Y8A8:
 	     return PIPE_FORMAT_VUYA;
       default:
          assert(0);
    }
 
-   return -1;
+   return PIPE_FORMAT_NONE;
 }
 
 static inline VdpYCbCrFormat
@@ -120,7 +122,7 @@ PipeToFormatYCBCR(enum pipe_format p_format)
       //case PIPE_FORMAT_YUVA:
         // return VDP_YCBCR_FORMAT_Y8U8V8A8;
       case PIPE_FORMAT_VUYA:
-	 return VDP_YCBCR_FORMAT_V8U8Y8A8;
+         return VDP_YCBCR_FORMAT_V8U8Y8A8;
       default:
          assert(0);
    }
@@ -146,7 +148,7 @@ FormatRGBAToPipe(VdpRGBAFormat vdpau_format)
          assert(0);
    }
 
-   return -1;
+   return PIPE_FORMAT_NONE;
 }
 
 static inline VdpRGBAFormat
@@ -170,6 +172,38 @@ PipeToFormatRGBA(enum pipe_format p_format)
    return -1;
 }
 
+static inline enum pipe_format
+FormatIndexedToPipe(VdpRGBAFormat vdpau_format)
+{
+   switch (vdpau_format) {
+      case VDP_INDEXED_FORMAT_A4I4:
+         return PIPE_FORMAT_A4R4_UNORM;
+      case VDP_INDEXED_FORMAT_I4A4:
+         return PIPE_FORMAT_R4A4_UNORM;
+      case VDP_INDEXED_FORMAT_A8I8:
+         return PIPE_FORMAT_A8R8_UNORM;
+      case VDP_INDEXED_FORMAT_I8A8:
+         return PIPE_FORMAT_R8A8_UNORM;
+      default:
+         assert(0);
+   }
+
+   return PIPE_FORMAT_NONE;
+}
+
+static inline enum pipe_format
+FormatColorTableToPipe(VdpColorTableFormat vdpau_format)
+{
+   switch(vdpau_format) {
+      case VDP_COLOR_TABLE_FORMAT_B8G8R8X8:
+         return PIPE_FORMAT_B8G8R8X8_UNORM;
+      default:
+         assert(0);
+   }
+
+   return PIPE_FORMAT_NONE;
+}
+
 static inline enum pipe_video_profile
 ProfileToPipe(VdpDecoderProfile vdpau_profile)
 {
@@ -182,10 +216,10 @@ ProfileToPipe(VdpDecoderProfile vdpau_profile)
          return PIPE_VIDEO_PROFILE_MPEG2_MAIN;
       case VDP_DECODER_PROFILE_H264_BASELINE:
          return PIPE_VIDEO_PROFILE_MPEG4_AVC_BASELINE;
-      case VDP_DECODER_PROFILE_H264_MAIN: /* Not defined in p_format.h */
+      case VDP_DECODER_PROFILE_H264_MAIN:
          return PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN;
       case VDP_DECODER_PROFILE_H264_HIGH:
-	     return PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH;
+         return PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH;
       default:
          return PIPE_VIDEO_PROFILE_UNKNOWN;
    }
@@ -203,20 +237,34 @@ PipeToProfile(enum pipe_video_profile p_profile)
          return VDP_DECODER_PROFILE_MPEG2_MAIN;
       case PIPE_VIDEO_PROFILE_MPEG4_AVC_BASELINE:
          return VDP_DECODER_PROFILE_H264_BASELINE;
-      case PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN: /* Not defined in p_format.h */
+      case PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN:
          return VDP_DECODER_PROFILE_H264_MAIN;
       case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH:
-	     return VDP_DECODER_PROFILE_H264_HIGH;
+         return VDP_DECODER_PROFILE_H264_HIGH;
       default:
          assert(0);
          return -1;
    }
 }
 
+static inline struct pipe_video_rect *
+RectToPipe(const VdpRect *src, struct pipe_video_rect *dst)
+{
+   if (src) {
+      dst->x = MIN2(src->x1, src->x0);
+      dst->y = MIN2(src->y1, src->y0);
+      dst->w = abs(src->x1 - src->x0);
+      dst->h = abs(src->y1 - src->y0);
+      return dst;
+   }
+   return NULL;
+}
+
 typedef struct
 {
    struct vl_screen *vscreen;
    struct vl_context *context;
+   struct vl_compositor compositor;
 } vlVdpDevice;
 
 typedef struct
@@ -244,11 +292,15 @@ typedef struct
    struct pipe_video_buffer *video_buffer;
 } vlVdpSurface;
 
+typedef uint64_t vlVdpTime;
+
 typedef struct
 {
+   vlVdpTime timestamp;
    vlVdpDevice *device;
    struct pipe_surface *surface;
    struct pipe_sampler_view *sampler_view;
+   struct pipe_fence_handle *fence;
 } vlVdpOutputSurface;
 
 typedef struct
@@ -358,4 +410,4 @@ static inline void VDPAU_MSG(unsigned int level, const char *fmt, ...)
    }
 }
 
-#endif // VDPAU_PRIVATE_H
+#endif /* VDPAU_PRIVATE_H */

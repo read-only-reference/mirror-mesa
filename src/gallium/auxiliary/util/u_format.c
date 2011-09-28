@@ -67,6 +67,100 @@ util_format_is_float(enum pipe_format format)
 }
 
 
+/**
+ * Return the number of logical channels in the given format by
+ * examining swizzles.
+ * XXX this could be made into a public function if useful elsewhere.
+ */
+static unsigned
+nr_logical_channels(const struct util_format_description *desc)
+{
+   boolean swizzle_used[UTIL_FORMAT_SWIZZLE_MAX];
+
+   memset(swizzle_used, 0, sizeof(swizzle_used));
+
+   swizzle_used[desc->swizzle[0]] = TRUE;
+   swizzle_used[desc->swizzle[1]] = TRUE;
+   swizzle_used[desc->swizzle[2]] = TRUE;
+   swizzle_used[desc->swizzle[3]] = TRUE;
+
+   return (swizzle_used[UTIL_FORMAT_SWIZZLE_X] +
+           swizzle_used[UTIL_FORMAT_SWIZZLE_Y] +
+           swizzle_used[UTIL_FORMAT_SWIZZLE_Z] +
+           swizzle_used[UTIL_FORMAT_SWIZZLE_W]);
+}
+
+
+/** Test if the format contains RGB, but not alpha */
+boolean
+util_format_is_rgb_no_alpha(enum pipe_format format)
+{
+   const struct util_format_description *desc =
+      util_format_description(format);
+
+   if ((desc->colorspace == UTIL_FORMAT_COLORSPACE_RGB ||
+        desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB) &&
+       nr_logical_channels(desc) == 3) {
+      return TRUE;
+   }
+   return FALSE;
+}
+
+
+boolean
+util_format_is_luminance(enum pipe_format format)
+{
+   const struct util_format_description *desc =
+      util_format_description(format);
+
+   if ((desc->colorspace == UTIL_FORMAT_COLORSPACE_RGB ||
+        desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB) &&
+       desc->swizzle[0] == UTIL_FORMAT_SWIZZLE_X &&
+       desc->swizzle[1] == UTIL_FORMAT_SWIZZLE_X &&
+       desc->swizzle[2] == UTIL_FORMAT_SWIZZLE_X &&
+       desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_1) {
+      return TRUE;
+   }
+   return FALSE;
+}
+
+
+boolean
+util_format_is_luminance_alpha(enum pipe_format format)
+{
+   const struct util_format_description *desc =
+      util_format_description(format);
+
+   if ((desc->colorspace == UTIL_FORMAT_COLORSPACE_RGB ||
+        desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB) &&
+       desc->swizzle[0] == UTIL_FORMAT_SWIZZLE_X &&
+       desc->swizzle[1] == UTIL_FORMAT_SWIZZLE_X &&
+       desc->swizzle[2] == UTIL_FORMAT_SWIZZLE_X &&
+       desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_Y) {
+      return TRUE;
+   }
+   return FALSE;
+}
+
+
+boolean
+util_format_is_intensity(enum pipe_format format)
+{
+   const struct util_format_description *desc =
+      util_format_description(format);
+
+   if ((desc->colorspace == UTIL_FORMAT_COLORSPACE_RGB ||
+        desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB) &&
+       desc->swizzle[0] == UTIL_FORMAT_SWIZZLE_X &&
+       desc->swizzle[1] == UTIL_FORMAT_SWIZZLE_X &&
+       desc->swizzle[2] == UTIL_FORMAT_SWIZZLE_X &&
+       desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_X) {
+      return TRUE;
+   }
+   return FALSE;
+}
+
+
 boolean
 util_format_is_supported(enum pipe_format format, unsigned bind)
 {
@@ -337,6 +431,50 @@ util_format_translate(enum pipe_format dst_format,
     * TODO: double formats will loose precision
     * TODO: Add a special case for formats that are mere swizzles of each other
     */
+
+   if (src_format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS ||
+       dst_format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS) {
+      float *tmp_z = NULL;
+      uint8_t *tmp_s = NULL;
+
+      assert(x_step == 1);
+      assert(y_step == 1);
+
+      if (src_format_desc->unpack_z_float &&
+          dst_format_desc->pack_z_float) {
+         tmp_z = MALLOC(width * sizeof *tmp_z);
+      }
+
+      if (src_format_desc->unpack_s_8uscaled &&
+          dst_format_desc->pack_s_8uscaled) {
+         tmp_s = MALLOC(width * sizeof *tmp_s);
+      }
+
+      while (height--) {
+         if (tmp_z) {
+            src_format_desc->unpack_z_float(tmp_z, 0, src_row, src_stride, width, 1);
+            dst_format_desc->pack_z_float(dst_row, dst_stride, tmp_z, 0, width, 1);
+         }
+
+         if (tmp_s) {
+            src_format_desc->unpack_s_8uscaled(tmp_s, 0, src_row, src_stride, width, 1);
+            dst_format_desc->pack_s_8uscaled(dst_row, dst_stride, tmp_s, 0, width, 1);
+         }
+
+         dst_row += dst_step;
+         src_row += src_step;
+      }
+
+      if (tmp_s) {
+         FREE(tmp_s);
+      }
+
+      if (tmp_z) {
+         FREE(tmp_z);
+      }
+
+      return;
+   }
 
    if (util_format_fits_8unorm(src_format_desc) ||
        util_format_fits_8unorm(dst_format_desc)) {

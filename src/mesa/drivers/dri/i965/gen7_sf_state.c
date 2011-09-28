@@ -33,38 +33,42 @@ upload_sbe_state(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &intel->ctx;
+   struct brw_vue_map vue_map;
+   uint32_t urb_entry_read_length;
    /* CACHE_NEW_VS_PROG */
-   uint32_t num_inputs = brw_count_bits(brw->vs.prog_data->outputs_written);
+   GLbitfield64 vs_outputs_written = brw->vs.prog_data->outputs_written;
    /* BRW_NEW_FRAGMENT_PROGRAM */
    uint32_t num_outputs = brw_count_bits(brw->fragment_program->Base.InputsRead);
    uint32_t dw1, dw10, dw11;
    int i;
    int attr = 0, input_index = 0;
    /* _NEW_TRANSFORM */
-   int urb_start = ctx->Transform.ClipPlanesEnabled ? 2 : 1;
-   /* _NEW_LIGHT */
-   int two_side_color = (ctx->Light.Enabled && ctx->Light.Model.TwoSide);
+   int urb_entry_read_offset = 1;
+   int nr_userclip = brw_count_bits(ctx->Transform.ClipPlanesEnabled);
    uint16_t attr_overrides[FRAG_ATTRIB_MAX];
+
+   brw_compute_vue_map(&vue_map, intel, nr_userclip, vs_outputs_written);
+   urb_entry_read_length = (vue_map.num_slots + 1)/2 - urb_entry_read_offset;
+   if (urb_entry_read_length == 0) {
+      /* Setting the URB entry read length to 0 causes undefined behavior, so
+       * if we have no URB data to read, set it to 1.
+       */
+      urb_entry_read_length = 1;
+   }
 
    /* FINISHME: Attribute Swizzle Control Mode? */
    dw1 =
       GEN7_SBE_SWIZZLE_ENABLE |
       num_outputs << GEN7_SBE_NUM_OUTPUTS_SHIFT |
-      (num_inputs + 1) / 2 << GEN7_SBE_URB_ENTRY_READ_LENGTH_SHIFT |
-      urb_start << GEN7_SBE_URB_ENTRY_READ_OFFSET_SHIFT;
+      urb_entry_read_length << GEN7_SBE_URB_ENTRY_READ_LENGTH_SHIFT |
+      urb_entry_read_offset << GEN7_SBE_URB_ENTRY_READ_OFFSET_SHIFT;
 
    /* _NEW_POINT */
    if (ctx->Point.SpriteOrigin == GL_LOWER_LEFT)
       dw1 |= GEN6_SF_POINT_SPRITE_LOWERLEFT;
 
    dw10 = 0;
-
-   /* _NEW_LIGHT (flat shading) */
    dw11 = 0;
-   if (ctx->Light.ShadeModel == GL_FLAT) {
-       dw11 |= ((brw->fragment_program->Base.InputsRead & (FRAG_BIT_COL0 | FRAG_BIT_COL1)) >>
-                ((brw->fragment_program->Base.InputsRead & FRAG_BIT_WPOS) ? 0 : 1));
-   }
 
    /* Create the mapping from the FS inputs we produce to the VS outputs
     * they source from.
@@ -82,6 +86,19 @@ upload_sbe_state(struct brw_context *brw)
       if (attr == FRAG_ATTRIB_PNTC)
 	 dw10 |= (1 << input_index);
 
+      /* flat shading */
+      if (ctx->Light.ShadeModel == GL_FLAT) {
+         /*
+          * Setup the Constant Interpolation Enable bit mask for each
+          * corresponding attribute(currently, we only care two attrs:
+          * FRAG_BIT_COL0 and FRAG_BIT_COL1).
+          *
+          * FIXME: should we care other attributes?
+          */
+	  if (attr == FRAG_ATTRIB_COL0 || attr == FRAG_ATTRIB_COL1)
+             dw11 |= (1 << input_index);
+      }
+
       /* The hardware can only do the overrides on 16 overrides at a
        * time, and the other up to 16 have to be lined up so that the
        * input index = the output index.  We'll need to do some
@@ -89,8 +106,9 @@ upload_sbe_state(struct brw_context *brw)
        */
       assert(input_index < 16 || attr == input_index);
 
-      attr_overrides[input_index++] = get_attr_override(brw, attr,
-							two_side_color);
+      attr_overrides[input_index++] =
+         get_attr_override(&vue_map, urb_entry_read_offset, attr,
+                           ctx->VertexProgram._TwoSideEnabled);
    }
 
    for (; attr < FRAG_ATTRIB_MAX; attr++)
@@ -262,6 +280,7 @@ upload_sf_state(struct brw_context *brw)
 const struct brw_tracked_state gen7_sf_state = {
    .dirty = {
       .mesa  = (_NEW_LIGHT |
+		_NEW_PROGRAM |
 		_NEW_POLYGON |
 		_NEW_LINE |
 		_NEW_SCISSOR |

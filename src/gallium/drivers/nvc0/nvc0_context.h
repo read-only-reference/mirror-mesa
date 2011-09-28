@@ -79,6 +79,7 @@ struct nvc0_context {
       uint8_t num_textures[5];
       uint8_t num_samplers[5];
       uint8_t tls_required; /* bitmask of shader types using l[] */
+      uint8_t c14_bound; /* whether immediate array constbuf is bound */
       uint16_t scissor;
       uint32_t uniform_buffer_bound[5];
    } state;
@@ -161,7 +162,9 @@ extern struct draw_stage *nvc0_draw_render_stage(struct nvc0_context *);
 
 /* nvc0_program.c */
 boolean nvc0_program_translate(struct nvc0_program *);
+boolean nvc0_program_upload_code(struct nvc0_context *, struct nvc0_program *);
 void nvc0_program_destroy(struct nvc0_context *, struct nvc0_program *);
+void nvc0_program_library_upload(struct nvc0_context *);
 
 /* nvc0_query.c */
 void nvc0_init_query_functions(struct nvc0_context *);
@@ -184,7 +187,8 @@ extern boolean nvc0_state_validate(struct nvc0_context *, uint32_t state_mask,
 
 /* nvc0_surface.c */
 extern void nvc0_clear(struct pipe_context *, unsigned buffers,
-                       const float *rgba, double depth, unsigned stencil);
+                       const union pipe_color_union *color,
+                       double depth, unsigned stencil);
 extern void nvc0_init_surface_functions(struct nvc0_context *);
 
 /* nvc0_tex.c */
@@ -204,8 +208,8 @@ nvc0_m2mf_transfer_rect(struct pipe_screen *pscreen,
                         uint32_t nblocksx, uint32_t nblocksy);
 void
 nvc0_m2mf_push_linear(struct nouveau_context *nv,
-		      struct nouveau_bo *dst, unsigned offset, unsigned domain,
-		      unsigned size, void *data);
+                      struct nouveau_bo *dst, unsigned offset, unsigned domain,
+                      unsigned size, const void *data);
 void
 nvc0_m2mf_copy_linear(struct nouveau_context *nv,
 		      struct nouveau_bo *dst, unsigned dstoff, unsigned dstdom,

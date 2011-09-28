@@ -205,6 +205,7 @@ vec4_visitor::reg_allocate()
    if (!ra_allocate_no_spills(g)) {
       ralloc_free(g);
       fail("No register spilling support yet\n");
+      return;
    }
 
    /* Get the chosen virtual registers for each node, and map virtual
@@ -216,7 +217,8 @@ vec4_visitor::reg_allocate()
       int reg = ra_get_node_reg(g, i);
 
       hw_reg_mapping[i] = first_assigned_grf + brw->vs.ra_reg_to_grf[reg];
-      prog_data->total_grf = MAX2(prog_data->total_grf, hw_reg_mapping[i] + 1);
+      prog_data->total_grf = MAX2(prog_data->total_grf,
+				  hw_reg_mapping[i] + virtual_grf_sizes[i]);
    }
 
    foreach_list(node, &this->instructions) {

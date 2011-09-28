@@ -115,14 +115,11 @@ intel_region_map(struct intel_context *intel, struct intel_region *region)
 
    _DBG("%s %p\n", __FUNCTION__, region);
    if (!region->map_refcount++) {
-      if (region->pbo)
-         intel_region_cow(intel, region);
-
       if (region->tiling != I915_TILING_NONE)
-	 drm_intel_gem_bo_map_gtt(region->buffer);
+	 drm_intel_gem_bo_map_gtt(region->bo);
       else
-	 drm_intel_bo_map(region->buffer, GL_TRUE);
-      region->map = region->buffer->virtual;
+	 drm_intel_bo_map(region->bo, GL_TRUE);
+      region->map = region->bo->virtual;
    }
 
    return region->map;
@@ -134,9 +131,9 @@ intel_region_unmap(struct intel_context *intel, struct intel_region *region)
    _DBG("%s %p\n", __FUNCTION__, region);
    if (!--region->map_refcount) {
       if (region->tiling != I915_TILING_NONE)
-	 drm_intel_gem_bo_unmap_gtt(region->buffer);
+	 drm_intel_gem_bo_unmap_gtt(region->bo);
       else
-	 drm_intel_bo_unmap(region->buffer);
+	 drm_intel_bo_unmap(region->bo);
       region->map = NULL;
    }
 }
@@ -158,7 +155,7 @@ intel_region_alloc_internal(struct intel_screen *screen,
    region->height = height;
    region->pitch = pitch;
    region->refcount = 1;
-   region->buffer = buffer;
+   region->bo = buffer;
    region->tiling = tiling;
    region->screen = screen;
 
@@ -200,7 +197,7 @@ GLboolean
 intel_region_flink(struct intel_region *region, uint32_t *name)
 {
    if (region->name == 0) {
-      if (drm_intel_bo_flink(region->buffer, &region->name))
+      if (drm_intel_bo_flink(region->bo, &region->name))
 	 return GL_FALSE;
       
       _mesa_HashInsert(region->screen->named_regions,
@@ -295,10 +292,7 @@ intel_region_release(struct intel_region **region_handle)
    if (region->refcount == 0) {
       assert(region->map_refcount == 0);
 
-      if (region->pbo)
-	 region->pbo->region = NULL;
-      region->pbo = NULL;
-      drm_intel_bo_unreference(region->buffer);
+      drm_intel_bo_unreference(region->bo);
 
       if (region->name > 0)
 	 _mesa_HashRemove(region->screen->named_regions, region->name);
@@ -364,14 +358,6 @@ intel_region_data(struct intel_context *intel,
    if (intel == NULL)
       return;
 
-   if (dst->pbo) {
-      if (dstx == 0 &&
-          dsty == 0 && width == dst->pitch && height == dst->height)
-         intel_region_release_pbo(intel, dst);
-      else
-         intel_region_cow(intel, dst);
-   }
-
    intel_prepare_render(intel);
 
    _mesa_copy_rect(intel_region_map(intel, dst) + dst_offset,
@@ -403,14 +389,6 @@ intel_region_copy(struct intel_context *intel,
    if (intel == NULL)
       return GL_FALSE;
 
-   if (dst->pbo) {
-      if (dstx == 0 &&
-          dsty == 0 && width == dst->pitch && height == dst->height)
-         intel_region_release_pbo(intel, dst);
-      else
-         intel_region_cow(intel, dst);
-   }
-
    assert(src->cpp == dst->cpp);
 
    if (flip)
@@ -418,112 +396,8 @@ intel_region_copy(struct intel_context *intel,
 
    return intelEmitCopyBlit(intel,
 			    dst->cpp,
-			    src_pitch, src->buffer, src_offset, src->tiling,
-			    dst->pitch, dst->buffer, dst_offset, dst->tiling,
+			    src_pitch, src->bo, src_offset, src->tiling,
+			    dst->pitch, dst->bo, dst_offset, dst->tiling,
 			    srcx, srcy, dstx, dsty, width, height,
 			    logicop);
-}
-
-/* Attach to a pbo, discarding our data.  Effectively zero-copy upload
- * the pbo's data.
- */
-void
-intel_region_attach_pbo(struct intel_context *intel,
-                        struct intel_region *region,
-                        struct intel_buffer_object *pbo)
-{
-   drm_intel_bo *buffer;
-
-   if (region->pbo == pbo)
-      return;
-
-   _DBG("%s %p %p\n", __FUNCTION__, region, pbo);
-
-   /* If there is already a pbo attached, break the cow tie now.
-    * Don't call intel_region_release_pbo() as that would
-    * unnecessarily allocate a new buffer we would have to immediately
-    * discard.
-    */
-   if (region->pbo) {
-      region->pbo->region = NULL;
-      region->pbo = NULL;
-   }
-
-   if (region->buffer) {
-      drm_intel_bo_unreference(region->buffer);
-      region->buffer = NULL;
-   }
-
-   /* make sure pbo has a buffer of its own */
-   buffer = intel_bufferobj_buffer(intel, pbo, INTEL_WRITE_FULL);
-
-   region->pbo = pbo;
-   region->pbo->region = region;
-   drm_intel_bo_reference(buffer);
-   region->buffer = buffer;
-   region->tiling = I915_TILING_NONE;
-}
-
-
-/* Break the COW tie to the pbo and allocate a new buffer.
- * The pbo gets to keep the data.
- */
-void
-intel_region_release_pbo(struct intel_context *intel,
-                         struct intel_region *region)
-{
-   _DBG("%s %p\n", __FUNCTION__, region);
-   assert(region->buffer == region->pbo->buffer);
-   region->pbo->region = NULL;
-   region->pbo = NULL;
-   drm_intel_bo_unreference(region->buffer);
-   region->buffer = NULL;
-
-   region->buffer = drm_intel_bo_alloc(intel->bufmgr, "region",
-				       region->pitch * region->cpp *
-				       region->height,
-				       64);
-}
-
-/* Break the COW tie to the pbo.  Both the pbo and the region end up
- * with a copy of the data.
- */
-void
-intel_region_cow(struct intel_context *intel, struct intel_region *region)
-{
-   struct intel_buffer_object *pbo = region->pbo;
-   GLboolean ok;
-
-   intel_region_release_pbo(intel, region);
-
-   assert(region->cpp * region->pitch * region->height == pbo->Base.Size);
-
-   _DBG("%s %p (%d bytes)\n", __FUNCTION__, region, (int)pbo->Base.Size);
-
-   /* Now blit from the texture buffer to the new buffer: 
-    */
-
-   intel_prepare_render(intel);
-   ok = intelEmitCopyBlit(intel,
-                          region->cpp,
-                          region->pitch, pbo->buffer, 0, region->tiling,
-                          region->pitch, region->buffer, 0, region->tiling,
-                          0, 0, 0, 0,
-                          region->pitch, region->height,
-                          GL_COPY);
-   assert(ok);
-}
-
-drm_intel_bo *
-intel_region_buffer(struct intel_context *intel,
-                    struct intel_region *region, GLuint flag)
-{
-   if (region->pbo) {
-      if (flag == INTEL_WRITE_PART)
-         intel_region_cow(intel, region);
-      else if (flag == INTEL_WRITE_FULL)
-         intel_region_release_pbo(intel, region);
-   }
-
-   return region->buffer;
 }

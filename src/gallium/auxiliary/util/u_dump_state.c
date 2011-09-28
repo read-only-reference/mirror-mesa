@@ -332,6 +332,7 @@ util_dump_rasterizer_state(struct os_stream *stream, const struct pipe_rasterize
    util_dump_member(stream, float, state, point_size);
    util_dump_member(stream, float, state, offset_units);
    util_dump_member(stream, float, state, offset_scale);
+   util_dump_member(stream, float, state, offset_clamp);
 
    util_dump_struct_end(stream);
 }
@@ -617,7 +618,7 @@ util_dump_sampler_state(struct os_stream *stream, const struct pipe_sampler_stat
    util_dump_member(stream, float, state, lod_bias);
    util_dump_member(stream, float, state, min_lod);
    util_dump_member(stream, float, state, max_lod);
-   util_dump_member_array(stream, float, state, border_color);
+   util_dump_member_array(stream, float, state, border_color.f);
 
    util_dump_struct_end(stream);
 }

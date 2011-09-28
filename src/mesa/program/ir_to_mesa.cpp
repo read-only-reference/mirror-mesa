@@ -1456,14 +1456,22 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
       emit_scalar(ir, OPCODE_POW, result_dst, op[0], op[1]);
       break;
 
-   case ir_unop_bit_not:
+      /* GLSL 1.30 integer ops are unsupported in Mesa IR, but since
+       * hardware backends have no way to avoid Mesa IR generation
+       * even if they don't use it, we need to emit "something" and
+       * continue.
+       */
    case ir_binop_lshift:
    case ir_binop_rshift:
    case ir_binop_bit_and:
    case ir_binop_bit_xor:
    case ir_binop_bit_or:
+      emit(ir, OPCODE_ADD, result_dst, op[0], op[1]);
+      break;
+
+   case ir_unop_bit_not:
    case ir_unop_round_even:
-      assert(!"GLSL 1.30 features unsupported");
+      emit(ir, OPCODE_MOV, result_dst, op[0]);
       break;
 
    case ir_quadop_vector:
@@ -2139,6 +2147,8 @@ ir_to_mesa_visitor::visit(ir_texture *ir)
       ir->lod_info.bias->accept(this);
       lod_info = this->result;
       break;
+   case ir_txf:
+      /* Pretend to be TXL so the sampler, coordinate, lod are available */
    case ir_txl:
       opcode = OPCODE_TXL;
       ir->lod_info.lod->accept(this);
@@ -2151,10 +2161,9 @@ ir_to_mesa_visitor::visit(ir_texture *ir)
       ir->lod_info.grad.dPdy->accept(this);
       dy = this->result;
       break;
-   case ir_txf:
-      assert(!"GLSL 1.30 features unsupported");
-      break;
    }
+
+   const glsl_type *sampler_type = ir->sampler->type;
 
    if (ir->projector) {
       if (opcode == OPCODE_TEX) {
@@ -2187,6 +2196,9 @@ ir_to_mesa_visitor::visit(ir_texture *ir)
 	    tmp_src = get_temp(glsl_type::vec4_type);
 	    dst_reg tmp_dst = dst_reg(tmp_src);
 
+	    /* Projective division not allowed for array samplers. */
+	    assert(!sampler_type->sampler_array);
+
 	    tmp_dst.writemask = WRITEMASK_Z;
 	    emit(ir, OPCODE_MOV, tmp_dst, this->result);
 
@@ -2211,7 +2223,15 @@ ir_to_mesa_visitor::visit(ir_texture *ir)
        * coord.
        */
       ir->shadow_comparitor->accept(this);
-      coord_dst.writemask = WRITEMASK_Z;
+
+      /* XXX This will need to be updated for cubemap array samplers. */
+      if (sampler_type->sampler_dimensionality == GLSL_SAMPLER_DIM_2D &&
+          sampler_type->sampler_array) {
+         coord_dst.writemask = WRITEMASK_W;
+      } else {
+         coord_dst.writemask = WRITEMASK_Z;
+      }
+
       emit(ir, OPCODE_MOV, coord_dst, this->result);
       coord_dst.writemask = WRITEMASK_XYZW;
    }
@@ -2234,8 +2254,6 @@ ir_to_mesa_visitor::visit(ir_texture *ir)
    inst->sampler = _mesa_get_sampler_uniform_value(ir->sampler,
 						   this->shader_program,
 						   this->prog);
-
-   const glsl_type *sampler_type = ir->sampler->type;
 
    switch (sampler_type->sampler_dimensionality) {
    case GLSL_SAMPLER_DIM_1D:
@@ -3027,7 +3045,6 @@ get_mesa_program(struct gl_context *ctx,
    if (!prog)
       return NULL;
    prog->Parameters = _mesa_new_parameter_list();
-   prog->Varying = _mesa_new_parameter_list();
    prog->Attributes = _mesa_new_parameter_list();
    v.ctx = ctx;
    v.prog = prog;
@@ -3119,7 +3136,7 @@ get_mesa_program(struct gl_context *ctx,
 
       switch (mesa_inst->Opcode) {
       case OPCODE_IF:
-	 if (options->EmitNoIfs) {
+	 if (options->MaxIfDepth == 0) {
 	    linker_warning(shader_program,
 			   "Couldn't flatten if-statement.  "
 			   "This will likely result in software "
@@ -3241,10 +3258,10 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 
 	 progress = lower_quadop_vector(ir, true) || progress;
 
-	 if (options->EmitNoIfs) {
+	 if (options->MaxIfDepth == 0)
 	    progress = lower_discard(ir) || progress;
-	    progress = lower_if_to_cond_assign(ir) || progress;
-	 }
+
+	 progress = lower_if_to_cond_assign(ir, options->MaxIfDepth) || progress;
 
 	 if (options->EmitNoNoise)
 	    progress = lower_noise(ir) || progress;
@@ -3281,6 +3298,8 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 
          switch (prog->_LinkedShaders[i]->Type) {
          case GL_VERTEX_SHADER:
+            ((struct gl_vertex_program *)linked_prog)->UsesClipDistance
+               = prog->Vert.UsesClipDistance;
             _mesa_reference_vertprog(ctx, &prog->VertexProgram,
                                      (struct gl_vertex_program *)linked_prog);
             ok = ctx->Driver.ProgramStringNotify(ctx, GL_VERTEX_PROGRAM_ARB,
@@ -3414,7 +3433,6 @@ _mesa_glsl_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       }
    }
 
-   prog->Varying = _mesa_new_parameter_list();
    _mesa_reference_vertprog(ctx, &prog->VertexProgram, NULL);
    _mesa_reference_fragprog(ctx, &prog->FragmentProgram, NULL);
    _mesa_reference_geomprog(ctx, &prog->GeometryProgram, NULL);

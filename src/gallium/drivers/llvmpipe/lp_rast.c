@@ -334,8 +334,8 @@ lp_rast_shade_tile(struct lp_rasterizer_task *task,
 {
    const struct lp_scene *scene = task->scene;
    const struct lp_rast_shader_inputs *inputs = arg.shade_tile;
-   const struct lp_rast_state *state = task->state;
-   struct lp_fragment_shader_variant *variant = state->variant;
+   const struct lp_rast_state *state;
+   struct lp_fragment_shader_variant *variant;
    const unsigned tile_x = task->x, tile_y = task->y;
    unsigned x, y;
 
@@ -345,6 +345,13 @@ lp_rast_shade_tile(struct lp_rasterizer_task *task,
    }
 
    LP_DBG(DEBUG_RAST, "%s\n", __FUNCTION__);
+
+   state = task->state;
+   assert(state);
+   if (!state) {
+      return;
+   }
+   variant = state->variant;
 
    /* render the whole 64x64 tile in 4x4 chunks */
    for (y = 0; y < TILE_SIZE; y += 4){
@@ -392,6 +399,11 @@ lp_rast_shade_tile_opaque(struct lp_rasterizer_task *task,
    unsigned i;
 
    LP_DBG(DEBUG_RAST, "%s\n", __FUNCTION__);
+
+   assert(task->state);
+   if (!task->state) {
+      return;
+   }
 
    /* this will prevent converting the layout from tiled to linear */
    for (i = 0; i < scene->fb.nr_cbufs; i++) {

@@ -48,8 +48,8 @@ struct brw_vs_prog_key {
    GLuint nr_userclip:4;
    GLuint copy_edgeflag:1;
    GLuint point_coord_replace:8;
-   GLuint two_side_color: 1;
    GLuint clamp_vertex_color:1;
+   GLuint uses_clip_distance:1;
 };
 
 
@@ -63,9 +63,8 @@ struct brw_vs_compile {
 
    GLuint nr_inputs;
 
+   struct brw_vue_map vue_map;
    GLuint first_output;
-   GLuint nr_outputs;
-   GLuint first_overflow_output; /**< VERT_ATTRIB_x */
    GLuint last_scratch;
 
    GLuint first_tmp;
@@ -82,7 +81,7 @@ struct brw_vs_compile {
        struct brw_reg reg;
    } output_regs[128];
 
-   struct brw_reg userplane[6];
+   struct brw_reg userplane[MAX_CLIP_PLANES];
 
    /** we may need up to 3 constants per instruction (if use_const_buffer) */
    struct {

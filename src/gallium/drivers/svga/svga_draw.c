@@ -260,7 +260,7 @@ enum pipe_error svga_hwtnl_prim( struct svga_hwtnl *hwtnl,
                                  unsigned max_index,
                                  struct pipe_resource *ib )
 {
-   int ret = PIPE_OK;
+   enum pipe_error ret = PIPE_OK;
 
 #ifdef DEBUG
    {
@@ -280,7 +280,7 @@ enum pipe_error svga_hwtnl_prim( struct svga_hwtnl *hwtnl,
          if (index_bias >= 0) {
             assert(offset + index_bias*stride < size);
          }
-         if (min_index != ~0) {
+         if (min_index != ~0 && index_bias >= 0) {
             assert(offset + (index_bias + min_index) * stride < size);
          }
 

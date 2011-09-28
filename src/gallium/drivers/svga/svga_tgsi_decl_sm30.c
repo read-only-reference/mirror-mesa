@@ -58,7 +58,7 @@ static boolean translate_vs_ps_semantic( struct tgsi_declaration_semantic semant
       *usage = SVGA3D_DECLUSAGE_PSIZE;
       break;
    case TGSI_SEMANTIC_GENERIC:   
-      *idx = semantic.Index + 1; /* texcoord[0] is reserved for fog */
+      *idx = semantic.Index + 1; /* texcoord[0] is reserved for fog & position */
       *usage = SVGA3D_DECLUSAGE_TEXCOORD;
       break;
    case TGSI_SEMANTIC_NORMAL:    
@@ -112,6 +112,31 @@ static boolean emit_vface_decl( struct svga_shader_emitter *emit )
    return TRUE;
 }
 
+static boolean
+ps30_input_emit_depth_fog( struct svga_shader_emitter *emit,
+                           struct src_register *out )
+{
+   struct src_register reg;
+
+
+   if (emit->emitted_depth_fog) {
+      *out = emit->ps_depth_fog;
+      return TRUE;
+   }
+
+   if (emit->ps30_input_count >= SVGA3D_INPUTREG_MAX)
+      return FALSE;
+
+   reg = src_register( SVGA3DREG_INPUT,
+                       emit->ps30_input_count++ );
+
+   *out = emit->ps_depth_fog = reg;
+
+   emit->emitted_depth_fog = TRUE;
+
+   return emit_decl( emit, dst( reg ), SVGA3D_DECLUSAGE_TEXCOORD, 0 );
+}
+
 static boolean ps30_input( struct svga_shader_emitter *emit,
                            struct tgsi_declaration_semantic semantic,
                            unsigned idx )
@@ -120,16 +145,36 @@ static boolean ps30_input( struct svga_shader_emitter *emit,
    SVGA3dShaderDestToken reg;
 
    if (semantic.Name == TGSI_SEMANTIC_POSITION) {
-      emit->input_map[idx] = src_register( SVGA3DREG_MISCTYPE,
-                                           SVGA3DMISCREG_POSITION );
 
-      emit->input_map[idx].base.swizzle = TRANSLATE_SWIZZLE( TGSI_SWIZZLE_X,
-                                                             TGSI_SWIZZLE_Y,
-                                                             TGSI_SWIZZLE_Y,
-                                                             TGSI_SWIZZLE_Y );
-
-      reg = writemask( dst(emit->input_map[idx]),
+      emit->ps_true_pos = src_register( SVGA3DREG_MISCTYPE,
+                                        SVGA3DMISCREG_POSITION );
+      emit->ps_true_pos.base.swizzle = TRANSLATE_SWIZZLE( TGSI_SWIZZLE_X,
+                                                          TGSI_SWIZZLE_Y,
+                                                          TGSI_SWIZZLE_Y,
+                                                          TGSI_SWIZZLE_Y );
+      reg = writemask( dst(emit->ps_true_pos),
                        TGSI_WRITEMASK_XY );
+      emit->ps_reads_pos = TRUE;
+
+      if (emit->info.reads_z) {
+         emit->ps_temp_pos = dst_register( SVGA3DREG_TEMP,
+                                           emit->nr_hw_temp );
+
+         emit->input_map[idx] = src_register( SVGA3DREG_TEMP,
+                                              emit->nr_hw_temp );
+         emit->nr_hw_temp++;
+
+         if (!ps30_input_emit_depth_fog( emit, &emit->ps_depth_pos ))
+            return FALSE;
+
+         emit->ps_depth_pos.base.swizzle = TRANSLATE_SWIZZLE( TGSI_SWIZZLE_Z,
+                                                              TGSI_SWIZZLE_Z,
+                                                              TGSI_SWIZZLE_Z,
+                                                              TGSI_SWIZZLE_W );
+      }
+      else {
+         emit->input_map[idx] = emit->ps_true_pos;
+      }
 
       return emit_decl( emit, reg, 0, 0 );
    }
@@ -153,6 +198,9 @@ static boolean ps30_input( struct svga_shader_emitter *emit,
       if (!translate_vs_ps_semantic( semantic, &usage, &index ))
          return FALSE;
 
+      if (emit->ps30_input_count >= SVGA3D_INPUTREG_MAX)
+         return FALSE;
+
       reg = dst_register( SVGA3DREG_INPUT, emit->ps30_input_count++ );
 
       if (!emit_decl( emit, reg, usage, index ))
@@ -170,15 +218,61 @@ static boolean ps30_input( struct svga_shader_emitter *emit,
       emit->internal_frontface_idx = idx;
       return TRUE;
    }
+   else if (semantic.Name == TGSI_SEMANTIC_FOG) {
+
+      assert(semantic.Index == 0);
+
+      if (!ps30_input_emit_depth_fog( emit, &emit->input_map[idx] ))
+         return FALSE;
+
+      emit->input_map[idx].base.swizzle = TRANSLATE_SWIZZLE( TGSI_SWIZZLE_X,
+                                                             TGSI_SWIZZLE_X,
+                                                             TGSI_SWIZZLE_X,
+                                                             TGSI_SWIZZLE_X );
+
+      return TRUE;
+   }
    else {
 
       if (!translate_vs_ps_semantic( semantic, &usage, &index ))
          return FALSE;
 
+      if (emit->ps30_input_count >= SVGA3D_INPUTREG_MAX)
+         return FALSE;
+
       emit->input_map[idx] = src_register( SVGA3DREG_INPUT, emit->ps30_input_count++ );
       reg = dst( emit->input_map[idx] );
 
-      return emit_decl( emit, reg, usage, index );
+      if (!emit_decl( emit, reg, usage, index ))
+         return FALSE;
+
+      if (semantic.Name == TGSI_SEMANTIC_GENERIC &&
+          emit->key.fkey.sprite_origin_lower_left &&
+          index >= 1 &&
+          emit->key.fkey.tex[index - 1].sprite_texgen) {
+         /* This is a sprite texture coord with lower-left origin.
+          * We need to invert the texture T coordinate since the SVGA3D
+          * device only supports an upper-left origin.
+          */
+         unsigned unit = index - 1;
+
+         emit->inverted_texcoords |= (1 << unit);
+
+         /* save original texcoord reg */
+         emit->ps_true_texcoord[unit] = emit->input_map[idx];
+
+         /* this temp register will be the results of the MAD instruction */
+         emit->ps_inverted_texcoord[unit] =
+            src_register(SVGA3DREG_TEMP, emit->nr_hw_temp);
+         emit->nr_hw_temp++;
+
+         emit->ps_inverted_texcoord_input[unit] = idx;
+
+         /* replace input_map entry with the temp register */
+         emit->input_map[idx] = emit->ps_inverted_texcoord[unit];
+      }
+
+      return TRUE;
    }
 
 }
@@ -270,6 +364,25 @@ static boolean vs30_input( struct svga_shader_emitter *emit,
    return TRUE;
 }
 
+static boolean vs30_output_emit_depth_fog( struct svga_shader_emitter *emit,
+                                           SVGA3dShaderDestToken *out )
+{
+   SVGA3dShaderDestToken reg;
+
+   if (emit->emitted_depth_fog) {
+      *out = emit->vs_depth_fog;
+      return TRUE;
+   }
+
+   reg = dst_register( SVGA3DREG_OUTPUT, emit->vs30_output_count++ );
+
+   *out = emit->vs_depth_fog = reg;
+
+   emit->emitted_depth_fog = TRUE;
+
+   return emit_decl( emit, reg, SVGA3D_DECLUSAGE_TEXCOORD, 0 );
+}
+
 /* VS3.0 outputs have proper declarations and semantic info for
  * matching against PS inputs.
  */
@@ -288,7 +401,10 @@ static boolean vs30_output( struct svga_shader_emitter *emit,
    if (!translate_vs_ps_semantic( semantic, &usage, &index ))
       return FALSE;
 
-   dcl.dst = dst_register( SVGA3DREG_OUTPUT, idx );
+   if (emit->vs30_output_count >= SVGA3D_OUTPUTREG_MAX)
+      return FALSE;
+
+   dcl.dst = dst_register( SVGA3DREG_OUTPUT, emit->vs30_output_count++ );
    dcl.usage = usage;
    dcl.index = index;
    dcl.values[0] |= 1<<31;
@@ -299,6 +415,11 @@ static boolean vs30_output( struct svga_shader_emitter *emit,
                                             emit->nr_hw_temp++ );
       emit->temp_pos = emit->output_map[idx];
       emit->true_pos = dcl.dst;
+
+      /* Grab an extra output for the depth output */
+      if (!vs30_output_emit_depth_fog( emit, &emit->depth_pos ))
+         return FALSE;
+
    }
    else if (semantic.Name == TGSI_SEMANTIC_PSIZE) {
       emit->output_map[idx] = dst_register( SVGA3DREG_TEMP,
@@ -312,6 +433,18 @@ static boolean vs30_output( struct svga_shader_emitter *emit,
          return TRUE;
 
       emit->true_psiz = dcl.dst;
+   }
+   else if (semantic.Name == TGSI_SEMANTIC_FOG) {
+      /*
+       * Fog is shared with depth.
+       * So we need to decrement out_count since emit_depth_fog will increment it.
+       */
+      emit->vs30_output_count--;
+
+      if (!vs30_output_emit_depth_fog( emit, &emit->output_map[idx] ))
+         return FALSE;
+
+      return TRUE;
    }
    else {
       emit->output_map[idx] = dcl.dst;

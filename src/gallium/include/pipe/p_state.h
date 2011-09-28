@@ -54,7 +54,7 @@ extern "C" {
  * Implementation limits
  */
 #define PIPE_MAX_ATTRIBS          32
-#define PIPE_MAX_CLIP_PLANES       6
+#define PIPE_MAX_CLIP_PLANES       8
 #define PIPE_MAX_COLOR_BUFS        8
 #define PIPE_MAX_CONSTANT_BUFFERS 32
 #define PIPE_MAX_SAMPLERS         16
@@ -130,6 +130,7 @@ struct pipe_rasterizer_state
    float point_size;           /**< used when no per-vertex size */
    float offset_units;
    float offset_scale;
+   float offset_clamp;
 };
 
 
@@ -272,7 +273,7 @@ struct pipe_sampler_state
    unsigned seamless_cube_map:1;
    float lod_bias;               /**< LOD/lambda bias */
    float min_lod, max_lod;       /**< LOD clamp range, after bias */
-   float border_color[4];
+   union pipe_color_union border_color;
 };
 
 

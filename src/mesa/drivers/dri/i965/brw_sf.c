@@ -53,7 +53,7 @@ static void compile_sf_prog( struct brw_context *brw,
    const GLuint *program;
    void *mem_ctx;
    GLuint program_size;
-   GLuint i, idx;
+   GLuint i;
 
    memset(&c, 0, sizeof(c));
 
@@ -63,23 +63,13 @@ static void compile_sf_prog( struct brw_context *brw,
    brw_init_compile(brw, &c.func, mem_ctx);
 
    c.key = *key;
-   c.nr_attrs = brw_count_bits(c.key.attrs);
-   c.nr_attr_regs = (c.nr_attrs+1)/2;
-   c.nr_setup_attrs = brw_count_bits(c.key.attrs);
-   c.nr_setup_regs = (c.nr_setup_attrs+1)/2;
+   brw_compute_vue_map(&c.vue_map, intel, c.key.nr_userclip, c.key.attrs);
+   c.urb_entry_read_offset = brw_sf_compute_urb_entry_read_offset(intel);
+   c.nr_attr_regs = (c.vue_map.num_slots + 1)/2 - c.urb_entry_read_offset;
+   c.nr_setup_regs = c.nr_attr_regs;
 
    c.prog_data.urb_read_length = c.nr_attr_regs;
    c.prog_data.urb_entry_size = c.nr_setup_regs * 2;
-
-   /* Construct map from attribute number to position in the vertex.
-    */
-   for (i = idx = 0; i < VERT_RESULT_MAX; i++) {
-      if (c.key.attrs & BITFIELD64_BIT(i)) {
-	 c.attr_to_idx[i] = idx;
-	 c.idx_to_attr[idx] = i;
-	 idx++;
-      }
-   }
 
    /* Which primitive?  Or all three? 
     */
@@ -163,6 +153,9 @@ static void upload_sf_prog(struct brw_context *brw)
       break;
    }
 
+   /* _NEW_TRANSFORM */
+   key.nr_userclip = brw_count_bits(ctx->Transform.ClipPlanesEnabled);
+
    /* _NEW_POINT */
    key.do_point_sprite = ctx->Point.PointSprite;
    if (key.do_point_sprite) {
@@ -198,7 +191,7 @@ static void upload_sf_prog(struct brw_context *brw)
 
 const struct brw_tracked_state brw_sf_prog = {
    .dirty = {
-      .mesa  = (_NEW_HINT | _NEW_LIGHT | _NEW_POLYGON | _NEW_POINT),
+      .mesa  = (_NEW_HINT | _NEW_LIGHT | _NEW_POLYGON | _NEW_POINT | _NEW_TRANSFORM),
       .brw   = (BRW_NEW_REDUCED_PRIMITIVE),
       .cache = CACHE_NEW_VS_PROG
    },

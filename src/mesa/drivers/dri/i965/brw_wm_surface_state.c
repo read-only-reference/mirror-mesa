@@ -121,6 +121,8 @@ brw_format_for_mesa_format(gl_format mesa_format)
       [MESA_FORMAT_SIGNED_RED_RGTC1] = BRW_SURFACEFORMAT_BC4_SNORM,
       [MESA_FORMAT_RG_RGTC2] = BRW_SURFACEFORMAT_BC5_UNORM,
       [MESA_FORMAT_SIGNED_RG_RGTC2] = BRW_SURFACEFORMAT_BC5_SNORM,
+      [MESA_FORMAT_RGB9_E5_FLOAT] = BRW_SURFACEFORMAT_R9G9B9E5_SHAREDEXP,
+      [MESA_FORMAT_R11_G11_B10_FLOAT] = BRW_SURFACEFORMAT_R11G11B10_FLOAT,
    };
    assert(mesa_format < MESA_FORMAT_COUNT);
    return table[mesa_format];
@@ -190,6 +192,10 @@ translate_tex_format(gl_format mesa_format,
       else if (srgb_decode == GL_SKIP_DECODE_EXT)
 	 return brw_format_for_mesa_format(_mesa_get_srgb_format_linear(mesa_format));
 
+   case MESA_FORMAT_RGBA8888_REV:
+      /* This format is not renderable? */
+      return BRW_SURFACEFORMAT_R8G8B8A8_UNORM;
+
    case MESA_FORMAT_RGBA_FLOAT32:
       /* The value of this BRW_SURFACEFORMAT is 0, which tricks the
        * assertion below.
@@ -238,7 +244,7 @@ brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
 				    sampler->sRGBDecode) <<
 	       BRW_SURFACE_FORMAT_SHIFT));
 
-   surf[1] = intelObj->mt->region->buffer->offset; /* reloc */
+   surf[1] = intelObj->mt->region->bo->offset; /* reloc */
 
    surf[2] = ((intelObj->_MaxLevel - tObj->BaseLevel) << BRW_SURFACE_LOD_SHIFT |
 	      (firstImage->Width - 1) << BRW_SURFACE_WIDTH_SHIFT |
@@ -255,7 +261,7 @@ brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
    /* Emit relocation to surface contents */
    drm_intel_bo_emit_reloc(brw->intel.batch.bo,
 			   brw->wm.surf_offset[surf_index] + 4,
-			   intelObj->mt->region->buffer, 0,
+			   intelObj->mt->region->bo, 0,
 			   I915_GEM_DOMAIN_SAMPLER, 0);
 }
 
@@ -482,7 +488,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 
    /* reloc */
    surf[1] = (intel_renderbuffer_tile_offsets(irb, &tile_x, &tile_y) +
-	      region->buffer->offset);
+	      region->bo->offset);
 
    surf[2] = ((rb->Width - 1) << BRW_SURFACE_WIDTH_SHIFT |
 	      (rb->Height - 1) << BRW_SURFACE_HEIGHT_SHIFT);
@@ -503,7 +509,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 
    if (intel->gen < 6) {
       /* _NEW_COLOR */
-      if (!ctx->Color._LogicOpEnabled &&
+      if (!ctx->Color.ColorLogicOpEnabled &&
 	  (ctx->Color.BlendEnabled & (1 << unit)))
 	 surf[0] |= BRW_SURFACE_BLEND_ENABLED;
 
@@ -525,8 +531,8 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 
    drm_intel_bo_emit_reloc(brw->intel.batch.bo,
 			   brw->wm.surf_offset[unit] + 4,
-			   region->buffer,
-			   surf[1] - region->buffer->offset,
+			   region->bo,
+			   surf[1] - region->bo->offset,
 			   I915_GEM_DOMAIN_RENDER,
 			   I915_GEM_DOMAIN_RENDER);
 }
@@ -544,7 +550,7 @@ prepare_wm_surfaces(struct brw_context *brw)
       struct intel_region *region = irb ? irb->region : NULL;
 
       if (region)
-	 brw_add_validated_bo(brw, region->buffer);
+	 brw_add_validated_bo(brw, region->bo);
       nr_surfaces = SURF_INDEX_DRAW(i) + 1;
    }
 
@@ -560,7 +566,7 @@ prepare_wm_surfaces(struct brw_context *brw)
 	 struct gl_texture_object *tObj = texUnit->_Current;
 	 struct intel_texture_object *intelObj = intel_texture_object(tObj);
 
-	 brw_add_validated_bo(brw, intelObj->mt->region->buffer);
+	 brw_add_validated_bo(brw, intelObj->mt->region->bo);
 	 nr_surfaces = SURF_INDEX_TEXTURE(i) + 1;
       }
    }

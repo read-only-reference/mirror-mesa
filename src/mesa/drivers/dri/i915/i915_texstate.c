@@ -60,6 +60,8 @@ translate_texture_format(gl_format mesa_format, GLenum DepthMode)
       return MAPSURF_32BIT | MT_32BIT_ARGB8888;
    case MESA_FORMAT_XRGB8888:
       return MAPSURF_32BIT | MT_32BIT_XRGB8888;
+   case MESA_FORMAT_RGBA8888_REV:
+      return MAPSURF_32BIT | MT_32BIT_ABGR8888;
    case MESA_FORMAT_YCBCR_REV:
       return (MAPSURF_422 | MT_422_YCRCB_NORMAL);
    case MESA_FORMAT_YCBCR:
@@ -161,8 +163,8 @@ i915_update_tex_unit(struct intel_context *intel, GLuint unit, GLuint ss3)
     */
    firstImage = tObj->Image[0][tObj->BaseLevel];
 
-   drm_intel_bo_reference(intelObj->mt->region->buffer);
-   i915->state.tex_buffer[unit] = intelObj->mt->region->buffer;
+   drm_intel_bo_reference(intelObj->mt->region->bo);
+   i915->state.tex_buffer[unit] = intelObj->mt->region->bo;
    i915->state.tex_offset[unit] = 0; /* Always the origin of the miptree */
 
    format = translate_texture_format(firstImage->TexFormat,

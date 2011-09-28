@@ -1106,7 +1106,7 @@ struct GalliumDXGISwapChain : public GalliumDXGIObject<IDXGISwapChain, GalliumDX
 		struct pipe_resource* dst;
 		struct pipe_resource* src;
 		struct pipe_surface* dst_surface;
-		enum native_attachment att;
+		struct native_present_control ctrl;
 
 		void* present_cookie;
 		hr = parent->backend->BeginPresent(desc.OutputWindow, &present_cookie, &cur_window, &rect, &rgndata, &preserve_aspect_ratio);
@@ -1162,7 +1162,7 @@ struct GalliumDXGISwapChain : public GalliumDXGIObject<IDXGISwapChain, GalliumDX
 		if(1)
 		{
 			unsigned blit_x, blit_y, blit_w, blit_h;
-			float black[4] = {0, 0, 0, 0};
+			static const union pipe_color_union black = { { 0, 0, 0, 0 } };
 
 			if(!formats_compatible || src->width0 != dst_w || src->height0 != dst_h) {
 				struct pipe_surface templat;
@@ -1205,9 +1205,9 @@ struct GalliumDXGISwapChain : public GalliumDXGIObject<IDXGISwapChain, GalliumDX
 			}
 
 			if(blit_x)
-				pipe->clear_render_target(pipe, dst_surface, black, rect.left, rect.top, blit_x, dst_h);
+				pipe->clear_render_target(pipe, dst_surface, &black, rect.left, rect.top, blit_x, dst_h);
 			if(blit_y)
-				pipe->clear_render_target(pipe, dst_surface, black, rect.left, rect.top, dst_w, blit_y);
+				pipe->clear_render_target(pipe, dst_surface, &black, rect.left, rect.top, dst_w, blit_y);
 
 			if(formats_compatible && blit_w == src->width0 && blit_h == src->height0)
 			{
@@ -1226,9 +1226,9 @@ struct GalliumDXGISwapChain : public GalliumDXGIObject<IDXGISwapChain, GalliumDX
 			}
 
 			if(blit_w != dst_w)
-				pipe->clear_render_target(pipe, dst_surface, black, rect.left + blit_x + blit_w, rect.top, dst_w - blit_x - blit_w, dst_h);
+				pipe->clear_render_target(pipe, dst_surface, &black, rect.left + blit_x + blit_w, rect.top, dst_w - blit_x - blit_w, dst_h);
 			if(blit_h != dst_h)
-				pipe->clear_render_target(pipe, dst_surface, black, rect.left, rect.top + blit_y + blit_h, dst_w, dst_h - blit_y - blit_h);
+				pipe->clear_render_target(pipe, dst_surface, &black, rect.left, rect.top + blit_y + blit_h, dst_w, dst_h - blit_y - blit_h);
 		}
 
 		if(dst_surface)
@@ -1236,8 +1236,9 @@ struct GalliumDXGISwapChain : public GalliumDXGIObject<IDXGISwapChain, GalliumDX
 
                 pipe->flush(pipe, 0);
 
-		att = (db) ? NATIVE_ATTACHMENT_BACK_LEFT : NATIVE_ATTACHMENT_FRONT_LEFT;
-		if(!surface->present(surface, att, FALSE, 0))
+		memset(&ctrl, 0, sizeof(ctrl));
+		ctrl.natt = (db) ? NATIVE_ATTACHMENT_BACK_LEFT : NATIVE_ATTACHMENT_FRONT_LEFT;
+		if(!surface->present(surface, &ctrl))
 			return DXGI_ERROR_DEVICE_REMOVED;
 
 end_present:

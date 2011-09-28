@@ -75,8 +75,10 @@ enum r600_pipe_state_id {
 struct r600_screen {
 	struct pipe_screen		screen;
 	struct radeon_winsys		*ws;
-	struct radeon			*radeon;
-	struct r600_tiling_info		*tiling_info;
+	unsigned			family;
+	enum chip_class			chip_class;
+	struct radeon_info		info;
+	struct r600_tiling_info		tiling_info;
 	struct util_slab_mempool	pool_buffers;
 	unsigned			num_contexts;
 
@@ -113,8 +115,8 @@ struct r600_vertex_element
 {
 	unsigned			count;
 	struct pipe_vertex_element	elements[PIPE_MAX_ATTRIBS];
-	struct u_vbuf_mgr_elements	*vmgr_elements;
-	struct r600_bo			*fetch_shader;
+	struct u_vbuf_elements		*vmgr_elements;
+	struct r600_resource		*fetch_shader;
 	unsigned			fs_size;
 	struct r600_pipe_state		rstate;
 	/* if offset is to big for fetch instructio we need to alterate
@@ -127,8 +129,8 @@ struct r600_vertex_element
 struct r600_pipe_shader {
 	struct r600_shader		shader;
 	struct r600_pipe_state		rstate;
-	struct r600_bo			*bo;
-	struct r600_bo			*bo_fetch;
+	struct r600_resource		*bo;
+	struct r600_resource		*bo_fetch;
 	struct r600_vertex_element	vertex_elements;
 	struct tgsi_token		*tokens;
 };
@@ -143,9 +145,11 @@ struct r600_pipe_sampler_state {
 
 struct r600_textures_info {
 	struct r600_pipe_sampler_view	*views[NUM_TEX_UNITS];
+	struct r600_pipe_sampler_state	*samplers[NUM_TEX_UNITS];
 	unsigned			n_views;
-	void				*samplers[NUM_TEX_UNITS];
 	unsigned			n_samplers;
+	bool				samplers_dirty;
+	bool				is_array_sampler[NUM_TEX_UNITS];
 };
 
 struct r600_fence {
@@ -163,7 +167,7 @@ struct r600_fence_block {
 };
 
 struct r600_pipe_fences {
-	struct r600_bo			*bo;
+	struct r600_resource		*bo;
 	unsigned			*data;
 	unsigned			next_index;
 	/* linked list of preallocated blocks */
@@ -182,7 +186,7 @@ struct r600_pipe_context {
 	enum chip_class			chip_class;
 	void				*custom_dsa_flush;
 	struct r600_screen		*screen;
-	struct radeon			*radeon;
+	struct radeon_winsys		*ws;
 	struct r600_pipe_state		*states[R600_PIPE_NSTATES];
 	struct r600_context		ctx;
 	struct r600_vertex_element	*vertex_elements;
@@ -218,6 +222,7 @@ struct r600_pipe_context {
 	unsigned			alpha_ref;
 	boolean				alpha_ref_dirty;
 	unsigned			nr_cbufs;
+	struct r600_textures_info	vs_samplers;
 	struct r600_textures_info	ps_samplers;
 
 	struct r600_pipe_fences		fences;
@@ -265,13 +270,15 @@ void r600_blit_push_depth(struct pipe_context *ctx, struct r600_resource_texture
 void r600_flush_depth_textures(struct r600_pipe_context *rctx);
 
 /* r600_buffer.c */
+bool r600_init_resource(struct r600_screen *rscreen,
+			struct r600_resource *res,
+			unsigned size, unsigned alignment,
+			unsigned bind, unsigned usage);
 struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 					 const struct pipe_resource *templ);
 struct pipe_resource *r600_user_buffer_create(struct pipe_screen *screen,
 					      void *ptr, unsigned bytes,
 					      unsigned bind);
-struct pipe_resource *r600_buffer_from_handle(struct pipe_screen *screen,
-					      struct winsys_handle *whandle);
 void r600_upload_index_buffer(struct r600_pipe_context *rctx, struct r600_drawl *draw);
 
 
@@ -292,6 +299,7 @@ int r600_find_vs_semantic_index(struct r600_shader *vs,
 				struct r600_shader *ps, int id);
 
 /* r600_state.c */
+void r600_update_sampler_states(struct r600_pipe_context *rctx);
 void r600_init_state_functions(struct r600_pipe_context *rctx);
 void r600_init_config(struct r600_pipe_context *rctx);
 void r600_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shader);

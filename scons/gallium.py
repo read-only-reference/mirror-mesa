@@ -279,6 +279,8 @@ def generate(env):
             ('_WIN32_WINNT', '0x0601'),
             ('WINVER', '0x0601'),
         ]
+        if gcc:
+            cppdefines += [('__MSVCRT_VERSION__', '0x0700')]
         if msvc and env['toolchain'] != 'winddk':
             cppdefines += [
                 'VC_EXTRALEAN',
@@ -361,7 +363,7 @@ def generate(env):
             ccflags += ['-O3']
         # Work around aliasing bugs - developers should comment this out
         ccflags += ['-fno-strict-aliasing']
-        ccflags += ['-g3']
+        ccflags += ['-g']
         if env['build'] in ('checked', 'profile'):
             # See http://code.google.com/p/jrfonseca/wiki/Gprof2Dot#Which_options_should_I_pass_to_gcc_when_compiling_for_profiling?
             ccflags += [
@@ -532,6 +534,14 @@ def generate(env):
             pass
         else:
             env['_LIBFLAGS'] = '-Wl,--start-group ' + env['_LIBFLAGS'] + ' -Wl,--end-group'
+        if env['platform'] == 'windows':
+            # Avoid depending on gcc runtime DLLs
+            linkflags += ['-static-libgcc']
+            if env['machine'] == 'x86_64':
+                linkflags += ['-static-libstdc++']
+            # Handle the @xx symbol munging of DLL exports
+            shlinkflags += ['-Wl,--enable-stdcall-fixup']
+            #shlinkflags += ['-Wl,--kill-at']
     if msvc:
         if env['build'] == 'release':
             # enable Link-time Code Generation

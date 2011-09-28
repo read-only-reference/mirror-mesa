@@ -43,7 +43,6 @@
 #include "main/texparam.h"
 #include "main/teximage.h"
 #include "main/texstate.h"
-#include "main/texfetch.h"
 #include "program/prog_instruction.h"
 
 
@@ -63,8 +62,7 @@ validate_texture_wrap_mode(struct gl_context * ctx, GLenum target, GLenum wrap)
    }
    else if (target != GL_TEXTURE_RECTANGLE_NV &&
 	    (wrap == GL_REPEAT ||
-	     (wrap == GL_MIRRORED_REPEAT &&
-	      e->ARB_texture_mirrored_repeat) ||
+	     wrap == GL_MIRRORED_REPEAT ||
 	     (wrap == GL_MIRROR_CLAMP_EXT &&
 	      (e->ATI_texture_mirror_once || e->EXT_texture_mirror_clamp)) ||
 	     (wrap == GL_MIRROR_CLAMP_TO_EDGE_EXT &&
@@ -432,7 +430,6 @@ set_tex_parameteri(struct gl_context *ctx,
 	    if (texObj->Sampler.sRGBDecode != decode) {
 	       flush(ctx);
 	       texObj->Sampler.sRGBDecode = decode;
-	       _mesa_update_fetch_functions(texObj);
 	    }
 	    return GL_TRUE;
 	 }
@@ -536,13 +533,10 @@ set_tex_parameterf(struct gl_context *ctx,
 
    case GL_TEXTURE_LOD_BIAS:
       /* NOTE: this is really part of OpenGL 1.4, not EXT_texture_lod_bias */
-      if (ctx->Extensions.EXT_texture_lod_bias) {
-         if (texObj->Sampler.LodBias != params[0]) {
-            flush(ctx);
-            texObj->Sampler.LodBias = params[0];
-            return GL_TRUE;
-         }
-         return GL_FALSE;
+      if (texObj->Sampler.LodBias != params[0]) {
+	 flush(ctx);
+	 texObj->Sampler.LodBias = params[0];
+	 return GL_TRUE;
       }
       break;
 
@@ -987,12 +981,6 @@ _mesa_GetTexLevelParameteriv( GLenum target, GLint level,
             }
          }
          break;
-      case GL_TEXTURE_INDEX_SIZE_EXT:
-         if (img->_BaseFormat == GL_COLOR_INDEX)
-            *params = _mesa_get_format_bits(texFormat, pname);
-         else
-            *params = 0;
-         break;
       case GL_TEXTURE_DEPTH_SIZE_ARB:
          if (!ctx->Extensions.ARB_depth_texture)
             goto invalid_pname;
@@ -1178,8 +1166,6 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
          *params = (GLfloat) obj->Sampler.DepthMode;
          break;
       case GL_TEXTURE_LOD_BIAS:
-         if (!ctx->Extensions.EXT_texture_lod_bias)
-            goto invalid_pname;
          *params = obj->Sampler.LodBias;
          break;
 #if FEATURE_OES_draw_texture
@@ -1321,8 +1307,6 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
          *params = (GLint) obj->Sampler.DepthMode;
          break;
       case GL_TEXTURE_LOD_BIAS:
-         if (!ctx->Extensions.EXT_texture_lod_bias)
-            goto invalid_pname;
          *params = (GLint) obj->Sampler.LodBias;
          break;
 #if FEATURE_OES_draw_texture

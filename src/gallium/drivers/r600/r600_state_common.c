@@ -150,7 +150,7 @@ void r600_delete_state(struct pipe_context *ctx, void *state)
 		rctx->states[rstate->id] = NULL;
 	}
 	for (int i = 0; i < rstate->nregs; i++) {
-		r600_bo_reference(&rstate->regs[i].bo, NULL);
+		pipe_resource_reference((struct pipe_resource**)&rstate->regs[i].bo, NULL);
 	}
 	free(rstate);
 }
@@ -162,7 +162,7 @@ void r600_bind_vertex_elements(struct pipe_context *ctx, void *state)
 
 	rctx->vertex_elements = v;
 	if (v) {
-		u_vbuf_mgr_bind_vertex_elements(rctx->vbuf_mgr, state,
+		u_vbuf_bind_vertex_elements(rctx->vbuf_mgr, state,
 						v->vmgr_elements);
 
 		rctx->states[v->rstate.id] = &v->rstate;
@@ -181,8 +181,8 @@ void r600_delete_vertex_element(struct pipe_context *ctx, void *state)
 	if (rctx->vertex_elements == state)
 		rctx->vertex_elements = NULL;
 
-	r600_bo_reference(&v->fetch_shader, NULL);
-	u_vbuf_mgr_destroy_vertex_elements(rctx->vbuf_mgr, v->vmgr_elements);
+	pipe_resource_reference((struct pipe_resource**)&v->fetch_shader, NULL);
+	u_vbuf_destroy_vertex_elements(rctx->vbuf_mgr, v->vmgr_elements);
 	FREE(state);
 }
 
@@ -227,7 +227,7 @@ void r600_set_vertex_buffers(struct pipe_context *ctx, unsigned count,
 		}
 	}
 
-	u_vbuf_mgr_set_vertex_buffers(rctx->vbuf_mgr, count, buffers);
+	u_vbuf_set_vertex_buffers(rctx->vbuf_mgr, count, buffers);
 }
 
 void *r600_create_vertex_elements(struct pipe_context *ctx,
@@ -243,7 +243,7 @@ void *r600_create_vertex_elements(struct pipe_context *ctx,
 
 	v->count = count;
 	v->vmgr_elements =
-		u_vbuf_mgr_create_vertex_elements(rctx->vbuf_mgr, count,
+		u_vbuf_create_vertex_elements(rctx->vbuf_mgr, count,
 						  elements, v->elements);
 
 	if (r600_vertex_elements_build_fetch_shader(rctx, v)) {
@@ -406,7 +406,7 @@ void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
 			      struct pipe_resource *buffer)
 {
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
-	struct r600_resource_buffer *rbuffer = r600_buffer(buffer);
+	struct r600_resource *rbuffer = r600_resource(buffer);
 	struct r600_pipe_resource_state *rstate;
 	uint32_t offset;
 
@@ -428,7 +428,7 @@ void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
 					0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(&rctx->vs_const_buffer,
 					R_028980_ALU_CONST_CACHE_VS_0,
-					offset >> 8, 0xFFFFFFFF, rbuffer->r.bo, RADEON_USAGE_READ);
+					offset >> 8, 0xFFFFFFFF, rbuffer, RADEON_USAGE_READ);
 		r600_context_pipe_state_set(&rctx->ctx, &rctx->vs_const_buffer);
 
 		rstate = &rctx->vs_const_buffer_resource[index];
@@ -441,10 +441,10 @@ void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
 		}
 
 		if (rctx->chip_class >= EVERGREEN) {
-			evergreen_pipe_mod_buffer_resource(rstate, &rbuffer->r, offset, 16, RADEON_USAGE_READ);
+			evergreen_pipe_mod_buffer_resource(rstate, rbuffer, offset, 16, RADEON_USAGE_READ);
 			evergreen_context_pipe_state_set_vs_resource(&rctx->ctx, rstate, index);
 		} else {
-			r600_pipe_mod_buffer_resource(rstate, &rbuffer->r, offset, 16, RADEON_USAGE_READ);
+			r600_pipe_mod_buffer_resource(rstate, rbuffer, offset, 16, RADEON_USAGE_READ);
 			r600_context_pipe_state_set_vs_resource(&rctx->ctx, rstate, index);
 		}
 		break;
@@ -456,7 +456,7 @@ void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
 					0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(&rctx->ps_const_buffer,
 					R_028940_ALU_CONST_CACHE_PS_0,
-					offset >> 8, 0xFFFFFFFF, rbuffer->r.bo, RADEON_USAGE_READ);
+					offset >> 8, 0xFFFFFFFF, rbuffer, RADEON_USAGE_READ);
 		r600_context_pipe_state_set(&rctx->ctx, &rctx->ps_const_buffer);
 
 		rstate = &rctx->ps_const_buffer_resource[index];
@@ -468,10 +468,10 @@ void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
 			}
 		}
 		if (rctx->chip_class >= EVERGREEN) {
-			evergreen_pipe_mod_buffer_resource(rstate, &rbuffer->r, offset, 16, RADEON_USAGE_READ);
+			evergreen_pipe_mod_buffer_resource(rstate, rbuffer, offset, 16, RADEON_USAGE_READ);
 			evergreen_context_pipe_state_set_ps_resource(&rctx->ctx, rstate, index);
 		} else {
-			r600_pipe_mod_buffer_resource(rstate, &rbuffer->r, offset, 16, RADEON_USAGE_READ);
+			r600_pipe_mod_buffer_resource(rstate, rbuffer, offset, 16, RADEON_USAGE_READ);
 			r600_context_pipe_state_set_ps_resource(&rctx->ctx, rstate, index);
 		}
 		break;
@@ -480,7 +480,7 @@ void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
 		return;
 	}
 
-	if (buffer != &rbuffer->r.b.b.b)
+	if (buffer != &rbuffer->b.b.b)
 		pipe_resource_reference((struct pipe_resource**)&rbuffer, NULL);
 }
 
@@ -506,13 +506,13 @@ static void r600_vertex_buffer_update(struct r600_pipe_context *rctx)
 			/* one resource per vertex elements */
 			unsigned vbuffer_index;
 			vbuffer_index = rctx->vertex_elements->elements[i].vertex_buffer_index;
-			vertex_buffer = &rctx->vbuf_mgr->vertex_buffer[vbuffer_index];
-			rbuffer = (struct r600_resource*)rctx->vbuf_mgr->real_vertex_buffer[vbuffer_index];
+			vertex_buffer = &rctx->vbuf_mgr->real_vertex_buffer[vbuffer_index];
+			rbuffer = (struct r600_resource*)vertex_buffer->buffer;
 			offset = rctx->vertex_elements->vbuffer_offset[i];
 		} else {
 			/* bind vertex buffer once */
-			vertex_buffer = &rctx->vbuf_mgr->vertex_buffer[i];
-			rbuffer = (struct r600_resource*)rctx->vbuf_mgr->real_vertex_buffer[i];
+			vertex_buffer = &rctx->vbuf_mgr->real_vertex_buffer[i];
+			rbuffer = (struct r600_resource*)vertex_buffer->buffer;
 			offset = 0;
 		}
 		if (vertex_buffer == NULL || rbuffer == NULL)
@@ -564,10 +564,19 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		if (rctx->have_depth_fb || rctx->have_depth_texture)
 			r600_flush_depth_textures(rctx);
 	}
-	u_vbuf_mgr_draw_begin(rctx->vbuf_mgr, info);
+
+	if (rctx->chip_class < EVERGREEN)
+		r600_update_sampler_states(rctx);
+
+	u_vbuf_draw_begin(rctx->vbuf_mgr, info);
 	r600_vertex_buffer_update(rctx);
 
 	draw.info = *info;
+	if (draw.info.max_index != ~0) {
+		draw.info.min_index += info->index_bias;
+		draw.info.max_index += info->index_bias;
+	}
+
 	draw.ctx = ctx;
 	draw.index_buffer = NULL;
 	if (info->indexed && rctx->index_buffer.buffer) {
@@ -654,7 +663,7 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	rdraw.indices = NULL;
 	if (draw.index_buffer) {
 		rbuffer = (struct r600_resource*)draw.index_buffer;
-		rdraw.indices = rbuffer->bo;
+		rdraw.indices = rbuffer;
 		rdraw.indices_bo_offset = draw.index_buffer_offset;
 	}
 
@@ -672,14 +681,14 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 
 	pipe_resource_reference(&draw.index_buffer, NULL);
 
-	u_vbuf_mgr_draw_end(rctx->vbuf_mgr);
+	u_vbuf_draw_end(rctx->vbuf_mgr);
 }
 
 void _r600_pipe_state_add_reg(struct r600_context *ctx,
 			      struct r600_pipe_state *state,
 			      u32 offset, u32 value, u32 mask,
 			      u32 range_id, u32 block_id,
-			      struct r600_bo *bo,
+			      struct r600_resource *bo,
 			      enum radeon_bo_usage usage)
 {
 	struct r600_range *range;
@@ -703,7 +712,7 @@ void _r600_pipe_state_add_reg(struct r600_context *ctx,
 
 void r600_pipe_state_add_reg_noblock(struct r600_pipe_state *state,
 				     u32 offset, u32 value, u32 mask,
-				     struct r600_bo *bo,
+				     struct r600_resource *bo,
 				     enum radeon_bo_usage usage)
 {
 	if (bo) assert(usage);

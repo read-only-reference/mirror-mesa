@@ -160,7 +160,9 @@ tgsi_texture_names[TGSI_TEXTURE_COUNT] =
    "SHADOW2D",
    "SHADOWRECT",
    "1DARRAY",
-   "2DARRAY"
+   "2DARRAY",
+   "SHADOW1DARRAY",
+   "SHADOW2DARRAY",
 };
 
 const char *tgsi_property_names[TGSI_PROPERTY_COUNT] =
@@ -693,6 +695,17 @@ iter_instruction(
    if (inst->Instruction.Texture) {
       TXT( ", " );
       ENM( inst->Texture.Texture, tgsi_texture_names );
+      for (i = 0; i < inst->Texture.NumOffsets; i++) {
+         TXT( ", " );
+         ENM( inst->TexOffsets[i].File, tgsi_file_names);
+         CHR( '[' );
+         SID( inst->TexOffsets[i].Index );
+         CHR( ']' );
+         CHR( '.' );
+         ENM( inst->TexOffsets[i].SwizzleX, tgsi_swizzle_names);
+         ENM( inst->TexOffsets[i].SwizzleY, tgsi_swizzle_names);
+         ENM( inst->TexOffsets[i].SwizzleZ, tgsi_swizzle_names);
+      }
    }
 
    switch (inst->Instruction.Opcode) {

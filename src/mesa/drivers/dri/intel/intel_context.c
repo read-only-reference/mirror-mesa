@@ -409,7 +409,7 @@ intel_prepare_render(struct intel_context *intel)
    if (drawable && drawable->dri2.stamp != driContext->dri2.draw_stamp) {
       if (drawable->lastStamp != drawable->dri2.stamp)
 	 intel_update_renderbuffers(driContext, drawable);
-      intel_draw_buffer(&intel->ctx, intel->ctx.DrawBuffer);
+      intel_draw_buffer(&intel->ctx);
       driContext->dri2.draw_stamp = drawable->dri2.stamp;
    }
 
@@ -613,31 +613,25 @@ intelInitContext(struct intel_context *intel,
    intel->driContext = driContextPriv;
    intel->driFd = sPriv->fd;
 
-   intel->has_xrgb_textures = GL_TRUE;
    intel->gen = intelScreen->gen;
-   if (IS_GEN7(intel->intelScreen->deviceID)) {
-      intel->needs_ff_sync = GL_TRUE;
-      intel->has_luminance_srgb = GL_TRUE;
-   } else if (IS_GEN6(intel->intelScreen->deviceID)) {
-      intel->needs_ff_sync = GL_TRUE;
-      intel->has_luminance_srgb = GL_TRUE;
-   } else if (IS_GEN5(intel->intelScreen->deviceID)) {
-      intel->needs_ff_sync = GL_TRUE;
-      intel->has_luminance_srgb = GL_TRUE;
-   } else if (IS_965(intel->intelScreen->deviceID)) {
-      if (IS_G4X(intel->intelScreen->deviceID)) {
-	  intel->has_luminance_srgb = GL_TRUE;
-	  intel->is_g4x = GL_TRUE;
-      }
-   } else if (IS_9XX(intel->intelScreen->deviceID)) {
-      if (IS_945(intel->intelScreen->deviceID)) {
-	 intel->is_945 = GL_TRUE;
-      }
-   } else {
-      if (intel->intelScreen->deviceID == PCI_CHIP_I830_M ||
-	  intel->intelScreen->deviceID == PCI_CHIP_845_G) {
-	 intel->has_xrgb_textures = GL_FALSE;
-      }
+
+   const int devID = intelScreen->deviceID;
+
+   if (IS_SNB_GT1(devID) || IS_IVB_GT1(devID))
+      intel->gt = 1;
+   else if (IS_SNB_GT2(devID) || IS_IVB_GT2(devID))
+      intel->gt = 2;
+   else
+      intel->gt = 0;
+
+   if (IS_G4X(devID)) {
+      intel->is_g4x = true;
+   } else if (IS_945(devID)) {
+      intel->is_945 = true;
+   }
+
+   if (intel->gen >= 5) {
+      intel->needs_ff_sync = true;
    }
 
    intel->has_separate_stencil = intel->intelScreen->hw_has_separate_stencil;
@@ -647,7 +641,7 @@ intelInitContext(struct intel_context *intel,
    memset(&ctx->TextureFormatSupported, 0,
 	  sizeof(ctx->TextureFormatSupported));
    ctx->TextureFormatSupported[MESA_FORMAT_ARGB8888] = GL_TRUE;
-   if (intel->has_xrgb_textures)
+   if (devID != PCI_CHIP_I830_M && devID != PCI_CHIP_845_G)
       ctx->TextureFormatSupported[MESA_FORMAT_XRGB8888] = GL_TRUE;
    ctx->TextureFormatSupported[MESA_FORMAT_ARGB4444] = GL_TRUE;
    ctx->TextureFormatSupported[MESA_FORMAT_ARGB1555] = GL_TRUE;
@@ -717,7 +711,7 @@ intelInitContext(struct intel_context *intel,
    ctx->TextureFormatSupported[MESA_FORMAT_SRGBA_DXT1] = GL_TRUE;
    ctx->TextureFormatSupported[MESA_FORMAT_SRGBA_DXT3] = GL_TRUE;
    ctx->TextureFormatSupported[MESA_FORMAT_SRGBA_DXT5] = GL_TRUE;
-   if (intel->has_luminance_srgb) {
+   if (intel->gen >= 5 || intel->is_g4x) {
       ctx->TextureFormatSupported[MESA_FORMAT_SL8] = GL_TRUE;
       ctx->TextureFormatSupported[MESA_FORMAT_SLA8] = GL_TRUE;
    }
@@ -730,6 +724,12 @@ intelInitContext(struct intel_context *intel,
    ctx->TextureFormatSupported[MESA_FORMAT_LUMINANCE_FLOAT32] = GL_TRUE;
    ctx->TextureFormatSupported[MESA_FORMAT_ALPHA_FLOAT32] = GL_TRUE;
    ctx->TextureFormatSupported[MESA_FORMAT_LUMINANCE_ALPHA_FLOAT32] = GL_TRUE;
+
+   /* GL_EXT_texture_shared_exponent */
+   ctx->TextureFormatSupported[MESA_FORMAT_RGB9_E5_FLOAT] = GL_TRUE;
+
+   /* GL_EXT_packed_float */
+   ctx->TextureFormatSupported[MESA_FORMAT_R11_G11_B10_FLOAT] = GL_TRUE;
 #endif
 
 #endif /* !I915 */
@@ -788,6 +788,9 @@ intelInitContext(struct intel_context *intel,
 
    ctx->Const.MaxSamples = 1.0;
 
+   if (intel->gen >= 6)
+      ctx->Const.MaxClipPlanes = 8;
+
    /* reinitialize the context point state.
     * It depend on constants in __struct gl_contextRec::Const
     */
@@ -841,6 +844,7 @@ intelInitContext(struct intel_context *intel,
       intelInitExtensions(ctx);
       break;
    case API_OPENGLES:
+      intelInitExtensionsES1(ctx);
       break;
    case API_OPENGLES2:
       intelInitExtensionsES2(ctx);
@@ -855,13 +859,6 @@ intelInitContext(struct intel_context *intel,
 
    intel_fbo_init(intel);
 
-   if (intel->ctx.Mesa_DXTn) {
-      _mesa_enable_extension(ctx, "GL_EXT_texture_compression_s3tc");
-      _mesa_enable_extension(ctx, "GL_S3_s3tc");
-   }
-   else if (driQueryOptionb(&intel->optionCache, "force_s3tc_enable")) {
-      _mesa_enable_extension(ctx, "GL_EXT_texture_compression_s3tc");
-   }
    intel->use_texture_tiling = driQueryOptionb(&intel->optionCache,
 					       "texture_tiling");
    intel->use_early_z = driQueryOptionb(&intel->optionCache, "early_z");
@@ -979,7 +976,7 @@ intelMakeCurrent(__DRIcontext * driContextPriv,
        * is NULL at that point.  We can't call _mesa_makecurrent()
        * first, since we need the buffer size for the initial
        * viewport.  So just call intel_draw_buffer() again here. */
-      intel_draw_buffer(&intel->ctx, intel->ctx.DrawBuffer);
+      intel_draw_buffer(&intel->ctx);
    }
    else {
       _mesa_make_current(NULL, NULL, NULL);

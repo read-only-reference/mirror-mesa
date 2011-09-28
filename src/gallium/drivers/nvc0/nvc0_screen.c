@@ -68,9 +68,6 @@ static int
 nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 {
    switch (param) {
-   case PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS:
-   case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
-      return 32;
    case PIPE_CAP_MAX_COMBINED_SAMPLERS:
       return 64;
    case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -79,10 +76,13 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 10;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
       return 13;
-   case PIPE_CAP_ARRAY_TEXTURES:
-      return 1;
+   case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
+      return 8192;
+   case PIPE_CAP_MIN_TEXEL_OFFSET:
+      return -8;
+   case PIPE_CAP_MAX_TEXEL_OFFSET:
+      return 7;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
-   case PIPE_CAP_TEXTURE_MIRROR_REPEAT:
    case PIPE_CAP_TEXTURE_SWIZZLE:
    case PIPE_CAP_TEXTURE_SHADOW_MAP:
    case PIPE_CAP_NPOT_TEXTURES:
@@ -124,6 +124,8 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_INSTANCEID:
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
+   case PIPE_CAP_CONDITIONAL_RENDER:
+   case PIPE_CAP_TEXTURE_BARRIER:
       return 1;
    default:
       NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);
@@ -155,7 +157,7 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_CAP_MAX_TEX_INDIRECTIONS:
       return 16384;
    case PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH:
-      return 4;
+      return 16;
    case PIPE_SHADER_CAP_MAX_INPUTS:
       if (shader == PIPE_SHADER_VERTEX)
          return 32;
@@ -179,9 +181,11 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
       return 1;
    case PIPE_SHADER_CAP_SUBROUTINES:
-      return 0; /* please inline, or provide function declarations */
+      return 1; /* but inlining everything, we need function declarations */
    case PIPE_SHADER_CAP_INTEGERS:
-      return 0;
+      return 1;
+   case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+      return 32;
    default:
       NOUVEAU_ERR("unknown PIPE_SHADER_CAP %d\n", param);
       return 0;
@@ -219,12 +223,16 @@ nvc0_screen_destroy(struct pipe_screen *pscreen)
    }
    screen->base.channel->user_private = NULL;
 
+   if (screen->blitctx)
+      FREE(screen->blitctx);
+
    nouveau_bo_ref(NULL, &screen->text);
    nouveau_bo_ref(NULL, &screen->tls);
    nouveau_bo_ref(NULL, &screen->txc);
    nouveau_bo_ref(NULL, &screen->fence.bo);
    nouveau_bo_ref(NULL, &screen->vfetch_cache);
 
+   nouveau_resource_destroy(&screen->lib_code);
    nouveau_resource_destroy(&screen->text_heap);
 
    if (screen->tic.entries)
@@ -627,6 +635,9 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    screen->tsc.entries = screen->tic.entries + 2048;
 
    screen->mm_VRAM_fe0 = nouveau_mm_create(dev, NOUVEAU_BO_VRAM, 0xfe0);
+
+   if (!nvc0_blitctx_create(screen))
+      goto fail;
 
    nouveau_fence_new(&screen->base, &screen->base.fence.current, FALSE);
 

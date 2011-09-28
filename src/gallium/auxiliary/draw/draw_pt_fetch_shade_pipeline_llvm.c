@@ -110,6 +110,7 @@ llvm_middle_end_prepare( struct draw_pt_middle_end *middle,
 			    draw->clip_xy,
 			    draw->clip_z,
 			    draw->clip_user,
+                            draw->guard_band_xy,
 			    draw->identity_viewport,
 			    (boolean)draw->rasterizer->gl_rasterization_rules,
 			    (draw->vs.edgeflag_output ? TRUE : FALSE) );
@@ -429,7 +430,7 @@ draw_pt_fetch_pipeline_or_emit_llvm(struct draw_context *draw)
 {
    struct llvm_middle_end *fpme = 0;
 
-   if (!draw->llvm->gallivm->engine)
+   if (!draw->llvm || !draw->llvm->gallivm->engine)
       return NULL;
 
    fpme = CALLOC_STRUCT( llvm_middle_end );

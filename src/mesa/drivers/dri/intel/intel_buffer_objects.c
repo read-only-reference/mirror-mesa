@@ -79,31 +79,6 @@ intel_bufferobj_alloc(struct gl_context * ctx, GLuint name, GLenum target)
    return &obj->Base;
 }
 
-/* Break the COW tie to the region.  The region gets to keep the data.
- */
-void
-intel_bufferobj_release_region(struct intel_context *intel,
-                               struct intel_buffer_object *intel_obj)
-{
-   assert(intel_obj->region->buffer == intel_obj->buffer);
-   intel_obj->region->pbo = NULL;
-   intel_obj->region = NULL;
-
-   release_buffer(intel_obj);
-}
-
-/* Break the COW tie to the region.  Both the pbo and the region end
- * up with a copy of the data.
- */
-void
-intel_bufferobj_cow(struct intel_context *intel,
-                    struct intel_buffer_object *intel_obj)
-{
-   assert(intel_obj->region);
-   intel_region_cow(intel, intel_obj->region);
-}
-
-
 /**
  * Deallocate/free a vertex/pixel buffer object.
  * Called via glDeleteBuffersARB().
@@ -111,7 +86,6 @@ intel_bufferobj_cow(struct intel_context *intel,
 static void
 intel_bufferobj_free(struct gl_context * ctx, struct gl_buffer_object *obj)
 {
-   struct intel_context *intel = intel_context(ctx);
    struct intel_buffer_object *intel_obj = intel_buffer_object(obj);
 
    assert(intel_obj);
@@ -124,9 +98,6 @@ intel_bufferobj_free(struct gl_context * ctx, struct gl_buffer_object *obj)
       intel_bufferobj_unmap(ctx, obj);
 
    free(intel_obj->sys_buffer);
-   if (intel_obj->region) {
-      intel_bufferobj_release_region(intel, intel_obj);
-   }
 
    drm_intel_bo_unreference(intel_obj->buffer);
    free(intel_obj);
@@ -151,13 +122,16 @@ intel_bufferobj_data(struct gl_context * ctx,
    struct intel_context *intel = intel_context(ctx);
    struct intel_buffer_object *intel_obj = intel_buffer_object(obj);
 
+   /* Part of the ABI, but this function doesn't use it.
+    */
+#ifndef I915
+   (void) target;
+#endif
+
    intel_obj->Base.Size = size;
    intel_obj->Base.Usage = usage;
 
    assert(!obj->Pointer); /* Mesa should have unmapped it */
-
-   if (intel_obj->region)
-      intel_bufferobj_release_region(intel, intel_obj);
 
    if (intel_obj->buffer != NULL)
       release_buffer(intel_obj);
@@ -214,9 +188,6 @@ intel_bufferobj_subdata(struct gl_context * ctx,
       return;
 
    assert(intel_obj);
-
-   if (intel_obj->region)
-      intel_bufferobj_cow(intel, intel_obj);
 
    /* If we have a single copy in system memory, update that */
    if (intel_obj->sys_buffer) {
@@ -342,9 +313,6 @@ intel_bufferobj_map_range(struct gl_context * ctx,
       free(intel_obj->sys_buffer);
       intel_obj->sys_buffer = NULL;
    }
-
-   if (intel_obj->region)
-      intel_bufferobj_cow(intel, intel_obj);
 
    /* If the mapping is synchronized with other GL operations, flush
     * the batchbuffer so that GEM knows about the buffer access for later
@@ -506,15 +474,6 @@ intel_bufferobj_buffer(struct intel_context *intel,
                        struct intel_buffer_object *intel_obj,
 		       GLuint flag)
 {
-   if (intel_obj->region) {
-      if (flag == INTEL_WRITE_PART)
-         intel_bufferobj_cow(intel, intel_obj);
-      else if (flag == INTEL_WRITE_FULL) {
-         intel_bufferobj_release_region(intel, intel_obj);
-	 intel_bufferobj_alloc_buffer(intel, intel_obj);
-      }
-   }
-
    if (intel_obj->source)
       release_buffer(intel_obj);
 
@@ -743,9 +702,7 @@ intel_bufferobj_copy_subdata(struct gl_context *ctx,
 
 #if FEATURE_APPLE_object_purgeable
 static GLenum
-intel_buffer_purgeable(struct gl_context * ctx,
-                       drm_intel_bo *buffer,
-                       GLenum option)
+intel_buffer_purgeable(drm_intel_bo *buffer)
 {
    int retained = 0;
 
@@ -760,25 +717,24 @@ intel_buffer_object_purgeable(struct gl_context * ctx,
                               struct gl_buffer_object *obj,
                               GLenum option)
 {
-   struct intel_buffer_object *intel;
+   struct intel_buffer_object *intel_obj = intel_buffer_object (obj);
 
-   intel = intel_buffer_object (obj);
-   if (intel->buffer != NULL)
-      return intel_buffer_purgeable (ctx, intel->buffer, option);
+   if (intel_obj->buffer != NULL)
+      return intel_buffer_purgeable(intel_obj->buffer);
 
    if (option == GL_RELEASED_APPLE) {
-      if (intel->sys_buffer != NULL) {
-         free(intel->sys_buffer);
-         intel->sys_buffer = NULL;
+      if (intel_obj->sys_buffer != NULL) {
+         free(intel_obj->sys_buffer);
+         intel_obj->sys_buffer = NULL;
       }
 
       return GL_RELEASED_APPLE;
    } else {
       /* XXX Create the buffer and madvise(MADV_DONTNEED)? */
-      return intel_buffer_purgeable (ctx,
-                                     intel_bufferobj_buffer(intel_context(ctx),
-                                                            intel, INTEL_READ),
-                                     option);
+      struct intel_context *intel = intel_context(ctx);
+      drm_intel_bo *bo = intel_bufferobj_buffer(intel, intel_obj, INTEL_READ);
+
+      return intel_buffer_purgeable(bo);
    }
 }
 
@@ -789,11 +745,14 @@ intel_texture_object_purgeable(struct gl_context * ctx,
 {
    struct intel_texture_object *intel;
 
+   (void) ctx;
+   (void) option;
+
    intel = intel_texture_object(obj);
    if (intel->mt == NULL || intel->mt->region == NULL)
       return GL_RELEASED_APPLE;
 
-   return intel_buffer_purgeable (ctx, intel->mt->region->buffer, option);
+   return intel_buffer_purgeable(intel->mt->region->bo);
 }
 
 static GLenum
@@ -803,17 +762,18 @@ intel_render_object_purgeable(struct gl_context * ctx,
 {
    struct intel_renderbuffer *intel;
 
+   (void) ctx;
+   (void) option;
+
    intel = intel_renderbuffer(obj);
    if (intel->region == NULL)
       return GL_RELEASED_APPLE;
 
-   return intel_buffer_purgeable (ctx, intel->region->buffer, option);
+   return intel_buffer_purgeable(intel->region->bo);
 }
 
 static GLenum
-intel_buffer_unpurgeable(struct gl_context * ctx,
-                         drm_intel_bo *buffer,
-                         GLenum option)
+intel_buffer_unpurgeable(drm_intel_bo *buffer)
 {
    int retained;
 
@@ -829,7 +789,10 @@ intel_buffer_object_unpurgeable(struct gl_context * ctx,
                                 struct gl_buffer_object *obj,
                                 GLenum option)
 {
-   return intel_buffer_unpurgeable (ctx, intel_buffer_object (obj)->buffer, option);
+   (void) ctx;
+   (void) option;
+
+   return intel_buffer_unpurgeable(intel_buffer_object (obj)->buffer);
 }
 
 static GLenum
@@ -839,11 +802,14 @@ intel_texture_object_unpurgeable(struct gl_context * ctx,
 {
    struct intel_texture_object *intel;
 
+   (void) ctx;
+   (void) option;
+
    intel = intel_texture_object(obj);
    if (intel->mt == NULL || intel->mt->region == NULL)
       return GL_UNDEFINED_APPLE;
 
-   return intel_buffer_unpurgeable (ctx, intel->mt->region->buffer, option);
+   return intel_buffer_unpurgeable(intel->mt->region->bo);
 }
 
 static GLenum
@@ -853,11 +819,14 @@ intel_render_object_unpurgeable(struct gl_context * ctx,
 {
    struct intel_renderbuffer *intel;
 
+   (void) ctx;
+   (void) option;
+
    intel = intel_renderbuffer(obj);
    if (intel->region == NULL)
       return GL_UNDEFINED_APPLE;
 
-   return intel_buffer_unpurgeable (ctx, intel->region->buffer, option);
+   return intel_buffer_unpurgeable(intel->region->bo);
 }
 #endif
 

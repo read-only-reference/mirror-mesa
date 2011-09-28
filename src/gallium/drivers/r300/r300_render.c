@@ -146,7 +146,7 @@ static void r300_emit_draw_init(struct r300_context *r300, unsigned mode,
 static void r300_split_index_bias(struct r300_context *r300, int index_bias,
                                   int *buffer_offset, int *index_offset)
 {
-    struct pipe_vertex_buffer *vb, *vbufs = r300->vbuf_mgr->vertex_buffer;
+    struct pipe_vertex_buffer *vb, *vbufs = r300->vbuf_mgr->real_vertex_buffer;
     struct pipe_vertex_element *velem = r300->velems->velem;
     unsigned i, size;
     int max_neg_bias;
@@ -313,17 +313,7 @@ static boolean r300_prepare_for_rendering(struct r300_context *r300,
 static boolean immd_is_good_idea(struct r300_context *r300,
                                  unsigned count)
 {
-    struct pipe_vertex_element* velem;
-    struct pipe_resource *buf;
-    boolean checked[PIPE_MAX_ATTRIBS] = {0};
-    unsigned vertex_element_count = r300->velems->count;
-    unsigned i, vbi;
-
     if (DBG_ON(r300, DBG_NO_IMMD)) {
-        return FALSE;
-    }
-
-    if (r300->draw) {
         return FALSE;
     }
 
@@ -331,22 +321,8 @@ static boolean immd_is_good_idea(struct r300_context *r300,
         return FALSE;
     }
 
-    /* We shouldn't map buffers referenced by CS, busy buffers,
-     * and ones placed in VRAM. */
-    for (i = 0; i < vertex_element_count; i++) {
-        velem = &r300->velems->velem[i];
-        vbi = velem->vertex_buffer_index;
-
-        if (!checked[vbi]) {
-            buf = r300->vbuf_mgr->real_vertex_buffer[vbi];
-
-            if ((r300_resource(buf)->domain != RADEON_DOMAIN_GTT)) {
-                return FALSE;
-            }
-
-            checked[vbi] = TRUE;
-        }
-    }
+    /* Buffers can only be used for read by r300 (except query buffers, but
+     * those can't be bound by a state tracker as vertex buffers). */
     return TRUE;
 }
 
@@ -389,13 +365,13 @@ static void r300_draw_arrays_immediate(struct r300_context *r300,
         velem = &r300->velems->velem[i];
         size[i] = r300->velems->format_size[i] / 4;
         vbi = velem->vertex_buffer_index;
-        vbuf = &r300->vbuf_mgr->vertex_buffer[vbi];
+        vbuf = &r300->vbuf_mgr->real_vertex_buffer[vbi];
         stride[i] = vbuf->stride / 4;
 
         /* Map the buffer. */
         if (!map[vbi]) {
             map[vbi] = (uint32_t*)r300->rws->buffer_map(
-                r300_resource(r300->vbuf_mgr->real_vertex_buffer[vbi])->buf,
+                r300_resource(vbuf->buffer)->buf,
                 r300->cs, PIPE_TRANSFER_READ | PIPE_TRANSFER_UNSYNCHRONIZED);
             map[vbi] += (vbuf->buffer_offset / 4) + stride[i] * info->start;
         }
@@ -423,7 +399,7 @@ static void r300_draw_arrays_immediate(struct r300_context *r300,
         vbi = r300->velems->velem[i].vertex_buffer_index;
 
         if (map[vbi]) {
-            r300->rws->buffer_unmap(r300_resource(r300->vbuf_mgr->real_vertex_buffer[vbi])->buf);
+            r300->rws->buffer_unmap(r300_resource(r300->vbuf_mgr->real_vertex_buffer[vbi].buffer)->buf);
             map[vbi] = NULL;
         }
     }
@@ -779,7 +755,7 @@ static void r300_draw_vbo(struct pipe_context* pipe,
     r300_update_derived_state(r300);
 
     /* Start the vbuf manager and update buffers if needed. */
-    if (u_vbuf_mgr_draw_begin(r300->vbuf_mgr, &info) & U_VBUF_BUFFERS_UPDATED) {
+    if (u_vbuf_draw_begin(r300->vbuf_mgr, &info) & U_VBUF_BUFFERS_UPDATED) {
         r300->vertex_arrays_dirty = TRUE;
     }
 
@@ -810,7 +786,7 @@ static void r300_draw_vbo(struct pipe_context* pipe,
         }
     }
 
-    u_vbuf_mgr_draw_end(r300->vbuf_mgr);
+    u_vbuf_draw_end(r300->vbuf_mgr);
 }
 
 /****************************************************************************
@@ -1186,7 +1162,7 @@ static void r300_blitter_draw_rectangle(struct blitter_context *blitter,
                                         unsigned x2, unsigned y2,
                                         float depth,
                                         enum blitter_attrib_type type,
-                                        const float attrib[4])
+                                        const union pipe_color_union *attrib)
 {
     struct r300_context *r300 = r300_context(util_blitter_get_pipe(blitter));
     unsigned last_sprite_coord_enable = r300->sprite_coord_enable;
@@ -1196,7 +1172,7 @@ static void r300_blitter_draw_rectangle(struct blitter_context *blitter,
             type == UTIL_BLITTER_ATTRIB_COLOR || !r300->draw ? 8 : 4;
     unsigned dwords = 13 + vertex_size +
                       (type == UTIL_BLITTER_ATTRIB_TEXCOORD ? 7 : 0);
-    const float zeros[4] = {0, 0, 0, 0};
+    static const union pipe_color_union zeros;
     CS_LOCALS(r300);
 
     if (r300->skip_rendering)
@@ -1227,10 +1203,10 @@ static void r300_blitter_draw_rectangle(struct blitter_context *blitter,
         OUT_CS_REG(R300_GB_ENABLE, R300_GB_POINT_STUFF_ENABLE |
                    (R300_GB_TEX_STR << R300_GB_TEX0_SOURCE_SHIFT));
         OUT_CS_REG_SEQ(R300_GA_POINT_S0, 4);
-        OUT_CS_32F(attrib[0]);
-        OUT_CS_32F(attrib[3]);
-        OUT_CS_32F(attrib[2]);
-        OUT_CS_32F(attrib[1]);
+        OUT_CS_32F(attrib->f[0]);
+        OUT_CS_32F(attrib->f[3]);
+        OUT_CS_32F(attrib->f[2]);
+        OUT_CS_32F(attrib->f[1]);
     }
 
     /* Set up VAP controls. */
@@ -1253,8 +1229,8 @@ static void r300_blitter_draw_rectangle(struct blitter_context *blitter,
 
     if (vertex_size == 8) {
         if (!attrib)
-            attrib = zeros;
-        OUT_CS_TABLE(attrib, 4);
+            attrib = &zeros;
+        OUT_CS_TABLE(attrib->f, 4);
     }
     END_CS;
 
@@ -1273,7 +1249,7 @@ static void r300_resource_resolve(struct pipe_context *pipe,
     struct r300_context *r300 = r300_context(pipe);
     struct pipe_surface *srcsurf, *dstsurf, surf_tmpl;
     struct r300_aa_state *aa = (struct r300_aa_state*)r300->aa_state.state;
-    float color[] = {0, 0, 0, 0};
+    static const union pipe_color_union color;
 
     memset(&surf_tmpl, 0, sizeof(surf_tmpl));
     surf_tmpl.format = info->src.res->format;
@@ -1301,7 +1277,7 @@ static void r300_resource_resolve(struct pipe_context *pipe,
     /* Resolve the surface. */
     /* XXX: y1 < 0 ==> Y flip */
     r300->context.clear_render_target(pipe,
-                                      srcsurf, color, 0, 0,
+                                      srcsurf, &color, 0, 0,
                                       info->dst.x1 - info->dst.x0,
                                       info->dst.y1 - info->dst.y0);
 

@@ -493,7 +493,7 @@ pop_enable_group(struct gl_context *ctx, const struct gl_enable_attrib *enable)
       }
    }
 
-   for (i=0;i<MAX_CLIP_PLANES;i++) {
+   for (i=0;i<ctx->Const.MaxClipPlanes;i++) {
       const GLuint mask = 1 << i;
       if ((ctx->Transform.ClipPlanesEnabled & mask) != (enable->ClipPlanes & mask))
 	  _mesa_set_enable(ctx, (GLenum) (GL_CLIP_PLANE0 + i),
@@ -727,45 +727,40 @@ pop_texture_group(struct gl_context *ctx, struct texture_state *texstate)
                        ((unit->TexGenEnabled & R_BIT) ? GL_TRUE : GL_FALSE));
       _mesa_set_enable(ctx, GL_TEXTURE_GEN_Q,
                        ((unit->TexGenEnabled & Q_BIT) ? GL_TRUE : GL_FALSE));
-      if (ctx->Extensions.EXT_texture_lod_bias) {
-         _mesa_TexEnvf(GL_TEXTURE_FILTER_CONTROL_EXT,
-                       GL_TEXTURE_LOD_BIAS_EXT, unit->LodBias);
-      }
-      if (ctx->Extensions.EXT_texture_env_combine ||
-          ctx->Extensions.ARB_texture_env_combine) {
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB,
-                       unit->Combine.ModeRGB);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA,
-                       unit->Combine.ModeA);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB,
-                       unit->Combine.SourceRGB[0]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB,
-                       unit->Combine.SourceRGB[1]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_RGB,
-                       unit->Combine.SourceRGB[2]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA,
-                       unit->Combine.SourceA[0]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_ALPHA,
-                       unit->Combine.SourceA[1]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_ALPHA,
-                       unit->Combine.SourceA[2]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB,
-                       unit->Combine.OperandRGB[0]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB,
-                       unit->Combine.OperandRGB[1]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB,
-                       unit->Combine.OperandRGB[2]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_ALPHA,
-                       unit->Combine.OperandA[0]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_ALPHA,
-                       unit->Combine.OperandA[1]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_ALPHA,
-                       unit->Combine.OperandA[2]);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_RGB_SCALE,
-                       1 << unit->Combine.ScaleShiftRGB);
-         _mesa_TexEnvi(GL_TEXTURE_ENV, GL_ALPHA_SCALE,
-                       1 << unit->Combine.ScaleShiftA);
-      }
+      _mesa_TexEnvf(GL_TEXTURE_FILTER_CONTROL, GL_TEXTURE_LOD_BIAS,
+		    unit->LodBias);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB,
+		    unit->Combine.ModeRGB);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA,
+		    unit->Combine.ModeA);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB,
+		    unit->Combine.SourceRGB[0]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB,
+		    unit->Combine.SourceRGB[1]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_RGB,
+		    unit->Combine.SourceRGB[2]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA,
+		    unit->Combine.SourceA[0]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_ALPHA,
+		    unit->Combine.SourceA[1]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_ALPHA,
+		    unit->Combine.SourceA[2]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB,
+		    unit->Combine.OperandRGB[0]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB,
+		    unit->Combine.OperandRGB[1]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB,
+		    unit->Combine.OperandRGB[2]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_ALPHA,
+		    unit->Combine.OperandA[0]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_ALPHA,
+		    unit->Combine.OperandA[1]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_ALPHA,
+		    unit->Combine.OperandA[2]);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_RGB_SCALE,
+		    1 << unit->Combine.ScaleShiftRGB);
+      _mesa_TexEnvi(GL_TEXTURE_ENV, GL_ALPHA_SCALE,
+		    1 << unit->Combine.ScaleShiftA);
 
       /* Restore texture object state for each target */
       for (tgt = 0; tgt < NUM_TEXTURE_TARGETS; tgt++) {
@@ -884,10 +879,10 @@ _mesa_PopAttrib(void)
 
                color = (const struct gl_colorbuffer_attrib *) attr->data;
                _mesa_ClearIndex((GLfloat) color->ClearIndex);
-               _mesa_ClearColor(color->ClearColorUnclamped[0],
-                                color->ClearColorUnclamped[1],
-                                color->ClearColorUnclamped[2],
-                                color->ClearColorUnclamped[3]);
+               _mesa_ClearColor(color->ClearColor.f[0],
+                                color->ClearColor.f[1],
+                                color->ClearColor.f[2],
+                                color->ClearColor.f[3]);
                _mesa_IndexMask(color->IndexMask);
                if (!ctx->Extensions.EXT_draw_buffers2) {
                   _mesa_ColorMask((GLboolean) (color->ColorMask[0][0] != 0),
@@ -1247,7 +1242,7 @@ _mesa_PopAttrib(void)
                   _math_matrix_analyse( ctx->ProjectionMatrixStack.Top );
 
                /* restore clip planes */
-               for (i = 0; i < MAX_CLIP_PLANES; i++) {
+               for (i = 0; i < ctx->Const.MaxClipPlanes; i++) {
                   const GLuint mask = 1 << i;
                   const GLfloat *eyePlane = xform->EyeUserPlane[i];
                   COPY_4V(ctx->Transform.EyeUserPlane[i], eyePlane);
@@ -1352,7 +1347,6 @@ copy_pixelstore(struct gl_context *ctx,
    dst->SkipImages = src->SkipImages;
    dst->SwapBytes = src->SwapBytes;
    dst->LsbFirst = src->LsbFirst;
-   dst->ClientStorage = src->ClientStorage;
    dst->Invert = src->Invert;
    _mesa_reference_buffer_object(ctx, &dst->BufferObj, src->BufferObj);
 }

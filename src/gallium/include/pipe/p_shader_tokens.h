@@ -363,7 +363,10 @@ struct tgsi_property_data {
 #define TGSI_OPCODE_SAMPLE_POS          155
 #define TGSI_OPCODE_SAMPLE_INFO         156
 
-#define TGSI_OPCODE_LAST                157
+#define TGSI_OPCODE_UARL                157
+#define TGSI_OPCODE_UCMP                158
+
+#define TGSI_OPCODE_LAST                159
 
 #define TGSI_SAT_NONE            0  /* do not saturate */
 #define TGSI_SAT_ZERO_ONE        1  /* clamp to [0,1] */
@@ -401,6 +404,8 @@ struct tgsi_instruction
  * If tgsi_instruction::Label is TRUE, tgsi_instruction_label follows.
  *
  * If tgsi_instruction::Texture is TRUE, tgsi_instruction_texture follows.
+ *   if texture instruction has a number of offsets,
+ *   then tgsi_instruction::Texture::NumOffset of tgsi_texture_offset follow.
  * 
  * Then, tgsi_instruction::NumDstRegs of tgsi_dst_register follow.
  * 
@@ -431,13 +436,31 @@ struct tgsi_instruction_label
 #define TGSI_TEXTURE_SHADOW2D       7
 #define TGSI_TEXTURE_SHADOWRECT     8
 #define TGSI_TEXTURE_1D_ARRAY       9
-#define TGSI_TEXTURE_2D_ARRAY      10
-#define TGSI_TEXTURE_COUNT         11
+#define TGSI_TEXTURE_2D_ARRAY       10
+#define TGSI_TEXTURE_SHADOW1D_ARRAY 11
+#define TGSI_TEXTURE_SHADOW2D_ARRAY 12
+#define TGSI_TEXTURE_COUNT          13
 
 struct tgsi_instruction_texture
 {
    unsigned Texture  : 8;    /* TGSI_TEXTURE_ */
-   unsigned Padding  : 24;
+   unsigned NumOffsets : 4;
+   unsigned Padding : 20;
+};
+
+/* for texture offsets in GLSL and DirectX.
+ * Generally these always come from TGSI_FILE_IMMEDIATE,
+ * however DX11 appears to have the capability to do
+ * non-constant texture offsets.
+ */
+struct tgsi_texture_offset
+{
+   int      Index    : 16;
+   unsigned File     : 4;  /**< one of TGSI_FILE_x */
+   unsigned SwizzleX : 2;  /* TGSI_SWIZZLE_x */
+   unsigned SwizzleY : 2;  /* TGSI_SWIZZLE_x */
+   unsigned SwizzleZ : 2;  /* TGSI_SWIZZLE_x */
+   unsigned Padding  : 6;
 };
 
 /*

@@ -144,14 +144,10 @@ static void calc_sizes( struct tracker *t )
     * which describes the fragment program input sizes.
     */
    for (vertRes = VERT_RESULT_TEX0; vertRes < VERT_RESULT_MAX; vertRes++) {
-      GLint fragAttrib;
 
       /* map vertex program output index to fragment program input index */
-      if (vertRes <= VERT_RESULT_TEX7)
-         fragAttrib = FRAG_ATTRIB_TEX0 + vertRes - VERT_RESULT_TEX0;
-      else if (vertRes >= VERT_RESULT_VAR0)
-         fragAttrib = FRAG_ATTRIB_VAR0 + vertRes - VERT_RESULT_VAR0;
-      else
+      GLint fragAttrib = _mesa_vert_result_to_frag_attrib(vertRes);
+      if (fragAttrib < 0)
          continue;
       assert(fragAttrib >= FRAG_ATTRIB_TEX0);
       assert(fragAttrib <= FRAG_ATTRIB_MAX);
@@ -201,8 +197,8 @@ static void calc_wm_input_sizes( struct brw_context *brw )
 
    memset(&t, 0, sizeof(t));
 
-   /* _NEW_LIGHT */
-   if (ctx->Light.Model.TwoSide)
+   /* _NEW_LIGHT | _NEW_PROGRAM */
+   if (ctx->VertexProgram._TwoSideEnabled)
       t.twoside = 1;
 
    for (i = 0; i < VERT_ATTRIB_MAX; i++) 
@@ -237,7 +233,7 @@ static void calc_wm_input_sizes( struct brw_context *brw )
 
 const struct brw_tracked_state brw_wm_input_sizes = {
    .dirty = {
-      .mesa  = _NEW_LIGHT,
+      .mesa  = _NEW_LIGHT | _NEW_PROGRAM,
       .brw   = BRW_NEW_VERTEX_PROGRAM | BRW_NEW_INPUT_DIMENSIONS,
       .cache = 0
    },

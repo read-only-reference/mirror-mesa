@@ -94,7 +94,7 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->TexSubImage1D = _mesa_store_texsubimage1d;
    driver->TexSubImage2D = _mesa_store_texsubimage2d;
    driver->TexSubImage3D = _mesa_store_texsubimage3d;
-   driver->GetTexImage = _mesa_get_teximage;
+   driver->GetTexImage = _mesa_meta_GetTexImage;
    driver->CopyTexSubImage1D = _mesa_meta_CopyTexSubImage1D;
    driver->CopyTexSubImage2D = _mesa_meta_CopyTexSubImage2D;
    driver->CopyTexSubImage3D = _mesa_meta_CopyTexSubImage3D;
@@ -110,19 +110,16 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->BindTexture = NULL;
    driver->NewTextureObject = _mesa_new_texture_object;
    driver->DeleteTexture = _mesa_delete_texture_object;
-   driver->NewTextureImage = _mesa_new_texture_image;
-   driver->FreeTextureImageBuffer = _mesa_free_texture_image_data;
+   driver->NewTextureImage = _swrast_new_texture_image;
+   driver->DeleteTextureImage = _swrast_delete_texture_image;
+   driver->AllocTextureImageBuffer = _swrast_alloc_texture_image_buffer;
+   driver->FreeTextureImageBuffer = _swrast_free_texture_image_buffer;
    driver->MapTextureImage = _swrast_map_teximage;
    driver->UnmapTextureImage = _swrast_unmap_teximage;
    driver->MapTexture = NULL;
    driver->UnmapTexture = NULL;
    driver->TextureMemCpy = memcpy;
    driver->IsTextureResident = NULL;
-   driver->UpdateTexturePalette = NULL;
-
-   /* imaging */
-   driver->CopyColorTable = _mesa_meta_CopyColorTable;
-   driver->CopyColorSubTable = _mesa_meta_CopyColorSubTable;
 
    /* Vertex/fragment programs */
    driver->BindProgram = NULL;
@@ -203,8 +200,6 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    _mesa_init_sampler_object_functions(driver);
 
    /* T&L stuff */
-   driver->NeedValidate = GL_FALSE;
-   driver->ValidateTnlModule = NULL;
    driver->CurrentExecPrimitive = 0;
    driver->CurrentSavePrimitive = 0;
    driver->NeedFlush = 0;

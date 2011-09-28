@@ -34,6 +34,9 @@
 
 #include "vdpau_private.h"
 
+/**
+ * Create a VdpVideoMixer.
+ */
 VdpStatus
 vlVdpVideoMixerCreate(VdpDevice device,
                       uint32_t feature_count,
@@ -70,7 +73,7 @@ vlVdpVideoMixerCreate(VdpDevice device,
 
    /*
     * TODO: Handle features and parameters
-    * */
+    */
 
    *mixer = vlAddDataHTAB(vmixer);
    if (*mixer == 0) {
@@ -79,10 +82,14 @@ vlVdpVideoMixerCreate(VdpDevice device,
    }
 
    return VDP_STATUS_OK;
+
 no_handle:
    return ret;
 }
 
+/**
+ * Destroy a VdpVideoMixer.
+ */
 VdpStatus
 vlVdpVideoMixerDestroy(VdpVideoMixer mixer)
 {
@@ -101,6 +108,9 @@ vlVdpVideoMixerDestroy(VdpVideoMixer mixer)
    return VDP_STATUS_OK;
 }
 
+/**
+ * Enable or disable features.
+ */
 VdpStatus
 vlVdpVideoMixerSetFeatureEnables(VdpVideoMixer mixer,
                                  uint32_t feature_count,
@@ -118,11 +128,14 @@ vlVdpVideoMixerSetFeatureEnables(VdpVideoMixer mixer,
 
    /*
     * TODO: Set features
-    * */
+    */
 
    return VDP_STATUS_OK;
 }
 
+/**
+ * Perform a video post-processing and compositing operation.
+ */
 VdpStatus vlVdpVideoMixerRender(VdpVideoMixer mixer,
                                 VdpOutputSurface background_surface,
                                 VdpRect const *background_source_rect,
@@ -139,7 +152,7 @@ VdpStatus vlVdpVideoMixerRender(VdpVideoMixer mixer,
                                 uint32_t layer_count,
                                 VdpLayer const *layers)
 {
-   struct pipe_video_rect src_rect, *p_src_rect = NULL;
+   struct pipe_video_rect src_rect;
 
    vlVdpVideoMixer *vmixer;
    vlVdpSurface *surf;
@@ -157,21 +170,17 @@ VdpStatus vlVdpVideoMixerRender(VdpVideoMixer mixer,
    if (!dst)
       return VDP_STATUS_INVALID_HANDLE;
 
-   if (video_source_rect) {
-      src_rect.x = MIN2(video_source_rect->x1, video_source_rect->x0);
-      src_rect.y = MIN2(video_source_rect->y1, video_source_rect->y0);
-      src_rect.w = abs(video_source_rect->x1 - video_source_rect->x0);
-      src_rect.h = abs(video_source_rect->y1 - video_source_rect->y0);
-      p_src_rect = &src_rect;
-   }
-
    vl_compositor_clear_layers(&vmixer->compositor);
-   vl_compositor_set_buffer_layer(&vmixer->compositor, 0, surf->video_buffer, p_src_rect, NULL);
-   vl_compositor_render(&vmixer->compositor, dst->surface, NULL, NULL);
+   vl_compositor_set_buffer_layer(&vmixer->compositor, 0, surf->video_buffer,
+                                  RectToPipe(video_source_rect, &src_rect), NULL);
+   vl_compositor_render(&vmixer->compositor, dst->surface, NULL, NULL, false);
 
    return VDP_STATUS_OK;
 }
 
+/**
+ * Set attribute values.
+ */
 VdpStatus
 vlVdpVideoMixerSetAttributeValues(VdpVideoMixer mixer,
                                   uint32_t attribute_count,
@@ -187,12 +196,14 @@ vlVdpVideoMixerSetAttributeValues(VdpVideoMixer mixer,
 
    /*
     * TODO: Implement the function
-    *
-    * */
+    */
 
    return VDP_STATUS_OK;
 }
 
+/**
+ * Retrieve whether features were requested at creation time.
+ */
 VdpStatus
 vlVdpVideoMixerGetFeatureSupport(VdpVideoMixer mixer,
                                  uint32_t feature_count,
@@ -202,6 +213,9 @@ vlVdpVideoMixerGetFeatureSupport(VdpVideoMixer mixer,
    return VDP_STATUS_NO_IMPLEMENTATION;
 }
 
+/**
+ * Retrieve whether features are enabled.
+ */
 VdpStatus
 vlVdpVideoMixerGetFeatureEnables(VdpVideoMixer mixer,
                                  uint32_t feature_count,
@@ -211,6 +225,9 @@ vlVdpVideoMixerGetFeatureEnables(VdpVideoMixer mixer,
    return VDP_STATUS_NO_IMPLEMENTATION;
 }
 
+/**
+ * Retrieve parameter values given at creation time.
+ */
 VdpStatus
 vlVdpVideoMixerGetParameterValues(VdpVideoMixer mixer,
                                   uint32_t parameter_count,
@@ -220,6 +237,9 @@ vlVdpVideoMixerGetParameterValues(VdpVideoMixer mixer,
    return VDP_STATUS_NO_IMPLEMENTATION;
 }
 
+/**
+ * Retrieve current attribute values.
+ */
 VdpStatus
 vlVdpVideoMixerGetAttributeValues(VdpVideoMixer mixer,
                                   uint32_t attribute_count,
@@ -229,6 +249,9 @@ vlVdpVideoMixerGetAttributeValues(VdpVideoMixer mixer,
    return VDP_STATUS_NO_IMPLEMENTATION;
 }
 
+/**
+ * Generate a color space conversion matrix.
+ */
 VdpStatus
 vlVdpGenerateCSCMatrix(VdpProcamp *procamp,
                        VdpColorStandard standard,

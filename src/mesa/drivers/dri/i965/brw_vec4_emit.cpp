@@ -91,24 +91,6 @@ vec4_visitor::setup_attributes(int payload_reg)
 int
 vec4_visitor::setup_uniforms(int reg)
 {
-   /* User clip planes from curbe:
-    */
-   if (c->key.nr_userclip) {
-      if (intel->gen >= 6) {
-	 for (int i = 0; i < c->key.nr_userclip; i++) {
-	    c->userplane[i] = stride(brw_vec4_grf(reg + i / 2,
-						  (i % 2) * 4), 0, 4, 1);
-	 }
-	 reg += ALIGN(c->key.nr_userclip, 2) / 2;
-      } else {
-	 for (int i = 0; i < c->key.nr_userclip; i++) {
-	    c->userplane[i] = stride(brw_vec4_grf(reg + (6 + i) / 2,
-						  (i % 2) * 4), 0, 4, 1);
-	 }
-	 reg += (ALIGN(6 + c->key.nr_userclip, 4) / 4) * 2;
-      }
-   }
-
    /* The pre-gen6 VS requires that some push constants get loaded no
     * matter what, or the GPU would hang.
     */
@@ -117,8 +99,8 @@ vec4_visitor::setup_uniforms(int reg)
 
       for (unsigned int i = 0; i < 4; i++) {
 	 unsigned int slot = this->uniforms * 4 + i;
-
-	 c->prog_data.param[slot] = NULL;
+	 static float zero = 0.0;
+	 c->prog_data.param[slot] = &zero;
       }
 
       this->uniforms++;
@@ -161,6 +143,12 @@ vec4_instruction::get_dst(void)
    switch (dst.file) {
    case GRF:
       brw_reg = brw_vec8_grf(dst.reg + dst.reg_offset, 0);
+      brw_reg = retype(brw_reg, dst.type);
+      brw_reg.dw1.bits.writemask = dst.writemask;
+      break;
+
+   case MRF:
+      brw_reg = brw_message_reg(dst.reg + dst.reg_offset);
       brw_reg = retype(brw_reg, dst.type);
       brw_reg.dw1.bits.writemask = dst.writemask;
       break;
@@ -259,7 +247,7 @@ vec4_visitor::generate_math1_gen4(vec4_instruction *inst,
 	    BRW_MATH_SATURATE_NONE,
 	    inst->base_mrf,
 	    src,
-	    BRW_MATH_DATA_SCALAR,
+	    BRW_MATH_DATA_VECTOR,
 	    BRW_MATH_PRECISION_FULL);
 }
 
@@ -269,7 +257,7 @@ check_gen6_math_src_arg(struct brw_reg src)
    /* Source swizzles are ignored. */
    assert(!src.abs);
    assert(!src.negate);
-   assert(src.dw1.bits.swizzle = BRW_SWIZZLE_XYZW);
+   assert(src.dw1.bits.swizzle == BRW_SWIZZLE_XYZW);
 }
 
 void
@@ -319,12 +307,8 @@ vec4_visitor::generate_math2_gen4(vec4_instruction *inst,
 				  struct brw_reg src0,
 				  struct brw_reg src1)
 {
-   /* Can't do writemask because math can't be align16. */
-   assert(dst.dw1.bits.writemask == WRITEMASK_XYZW);
-
    brw_MOV(p, brw_message_reg(inst->base_mrf + 1), src1);
 
-   brw_set_access_mode(p, BRW_ALIGN_1);
    brw_math(p,
 	    dst,
 	    brw_math_function(inst->opcode),
@@ -333,7 +317,6 @@ vec4_visitor::generate_math2_gen4(vec4_instruction *inst,
 	    src0,
 	    BRW_MATH_DATA_VECTOR,
 	    BRW_MATH_PRECISION_FULL);
-   brw_set_access_mode(p, BRW_ALIGN_16);
 }
 
 void
@@ -382,7 +365,7 @@ vec4_visitor::generate_oword_dual_block_offsets(struct brw_reg m1,
 
    brw_set_predicate_inverse(p, true);
    if (index.file == BRW_IMMEDIATE_VALUE) {
-      index_4.dw1.ud++;
+      index_4.dw1.ud += second_vertex_offset;
       brw_MOV(p, m1_4, index_4);
    } else {
       brw_ADD(p, m1_4, index_4, brw_imm_d(second_vertex_offset));
@@ -396,14 +379,9 @@ vec4_visitor::generate_scratch_read(vec4_instruction *inst,
 				    struct brw_reg dst,
 				    struct brw_reg index)
 {
-   if (intel->gen >= 6) {
-      brw_push_insn_state(p);
-      brw_set_mask_control(p, BRW_MASK_DISABLE);
-      brw_MOV(p,
-	      retype(brw_message_reg(inst->base_mrf), BRW_REGISTER_TYPE_D),
-	      retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_D));
-      brw_pop_insn_state(p);
-   }
+   struct brw_reg header = brw_vec8_grf(0, 0);
+
+   gen6_resolve_implied_move(p, &header, inst->base_mrf);
 
    generate_oword_dual_block_offsets(brw_message_reg(inst->base_mrf + 1),
 				     index);
@@ -422,7 +400,9 @@ vec4_visitor::generate_scratch_read(vec4_instruction *inst,
     */
    struct brw_instruction *send = brw_next_insn(p, BRW_OPCODE_SEND);
    brw_set_dest(p, send, dst);
-   brw_set_src0(p, send, brw_message_reg(inst->base_mrf));
+   brw_set_src0(p, send, header);
+   if (intel->gen < 6)
+      send->header.destreg__conditionalmod = inst->base_mrf;
    brw_set_dp_read_message(p, send,
 			   255, /* binding table index: stateless access */
 			   BRW_DATAPORT_OWORD_DUAL_BLOCK_1OWORD,
@@ -438,19 +418,15 @@ vec4_visitor::generate_scratch_write(vec4_instruction *inst,
 				     struct brw_reg src,
 				     struct brw_reg index)
 {
+   struct brw_reg header = brw_vec8_grf(0, 0);
+   bool write_commit;
+
    /* If the instruction is predicated, we'll predicate the send, not
     * the header setup.
     */
    brw_set_predicate_control(p, false);
 
-   if (intel->gen >= 6) {
-      brw_push_insn_state(p);
-      brw_set_mask_control(p, BRW_MASK_DISABLE);
-      brw_MOV(p,
-	      retype(brw_message_reg(inst->base_mrf), BRW_REGISTER_TYPE_D),
-	      retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_D));
-      brw_pop_insn_state(p);
-   }
+   gen6_resolve_implied_move(p, &header, inst->base_mrf);
 
    generate_oword_dual_block_offsets(brw_message_reg(inst->base_mrf + 1),
 				     index);
@@ -468,12 +444,33 @@ vec4_visitor::generate_scratch_write(vec4_instruction *inst,
 
    brw_set_predicate_control(p, inst->predicate);
 
+   /* Pre-gen6, we have to specify write commits to ensure ordering
+    * between reads and writes within a thread.  Afterwards, that's
+    * guaranteed and write commits only matter for inter-thread
+    * synchronization.
+    */
+   if (intel->gen >= 6) {
+      write_commit = false;
+   } else {
+      /* The visitor set up our destination register to be g0.  This
+       * means that when the next read comes along, we will end up
+       * reading from g0 and causing a block on the write commit.  For
+       * write-after-read, we are relying on the value of the previous
+       * read being used (and thus blocking on completion) before our
+       * write is executed.  This means we have to be careful in
+       * instruction scheduling to not violate this assumption.
+       */
+      write_commit = true;
+   }
+
    /* Each of the 8 channel enables is considered for whether each
     * dword is written.
     */
    struct brw_instruction *send = brw_next_insn(p, BRW_OPCODE_SEND);
    brw_set_dest(p, send, dst);
-   brw_set_src0(p, send, brw_message_reg(inst->base_mrf));
+   brw_set_src0(p, send, header);
+   if (intel->gen < 6)
+      send->header.destreg__conditionalmod = inst->base_mrf;
    brw_set_dp_write_message(p, send,
 			    255, /* binding table index: stateless access */
 			    BRW_DATAPORT_OWORD_DUAL_BLOCK_1OWORD,
@@ -481,9 +478,9 @@ vec4_visitor::generate_scratch_write(vec4_instruction *inst,
 			    3, /* mlen */
 			    true, /* header present */
 			    false, /* pixel scoreboard */
-			    0, /* rlen */
+			    write_commit, /* rlen */
 			    false, /* eot */
-			    false /* commit */);
+			    write_commit);
 }
 
 void
@@ -513,6 +510,8 @@ vec4_visitor::generate_pull_constant_load(vec4_instruction *inst,
    struct brw_instruction *send = brw_next_insn(p, BRW_OPCODE_SEND);
    brw_set_dest(p, send, dst);
    brw_set_src0(p, send, header);
+   if (intel->gen < 6)
+      send->header.destreg__conditionalmod = inst->base_mrf;
    brw_set_dp_read_message(p, send,
 			   SURF_INDEX_VERT_CONST_BUFFER,
 			   BRW_DATAPORT_OWORD_DUAL_BLOCK_1OWORD,
@@ -581,6 +580,9 @@ vec4_visitor::generate_vs_instruction(vec4_instruction *instruction,
 bool
 vec4_visitor::run()
 {
+   if (c->key.nr_userclip && !c->key.uses_clip_distance)
+      setup_uniform_clipplane_values();
+
    /* Generate VS IR for main().  (the visitor only descends into
     * functions called "main").
     */
@@ -596,14 +598,18 @@ vec4_visitor::run()
     */
    move_grf_array_access_to_scratch();
    move_uniform_array_access_to_pull_constants();
+   pack_uniform_registers();
+   move_push_constants_to_pull_constants();
 
    bool progress;
    do {
       progress = false;
       progress = dead_code_eliminate() || progress;
+      progress = opt_copy_propagation() || progress;
+      progress = opt_algebraic() || progress;
+      progress = opt_compute_to_mrf() || progress;
    } while (progress);
 
-   pack_uniform_registers();
 
    if (failed)
       return false;

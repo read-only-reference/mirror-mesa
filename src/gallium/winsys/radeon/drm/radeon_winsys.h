@@ -56,11 +56,6 @@ enum radeon_bo_layout {
     RADEON_LAYOUT_UNKNOWN
 };
 
-enum radeon_bo_domain { /* bitfield */
-    RADEON_DOMAIN_GTT  = 2,
-    RADEON_DOMAIN_VRAM = 4
-};
-
 enum radeon_bo_usage { /* bitfield */
     RADEON_USAGE_READ = 2,
     RADEON_USAGE_WRITE = 4,
@@ -68,7 +63,15 @@ enum radeon_bo_usage { /* bitfield */
 };
 
 struct winsys_handle;
-struct radeon_winsys_cs_handle;   /* for write_reloc etc. */
+
+struct radeon_winsys_cs_handle {   /* for write_reloc etc. */
+    struct {
+        struct pb_buffer base;
+    } _private;
+
+    unsigned last_flush;
+    unsigned binding;
+};
 
 struct radeon_winsys_cs {
     unsigned cdw;  /* Number of used dwords. */
@@ -132,14 +135,13 @@ struct radeon_winsys {
      * \param size      The size to allocate.
      * \param alignment An alignment of the buffer in memory.
      * \param bind      A bitmask of the PIPE_BIND_* flags.
-     * \param domain    A bitmask of the RADEON_DOMAIN_* flags.
+     * \param usage     A bitmask of the PIPE_USAGE_* flags.
      * \return          The created buffer object.
      */
     struct pb_buffer *(*buffer_create)(struct radeon_winsys *ws,
                                        unsigned size,
                                        unsigned alignment,
-                                       unsigned bind,
-                                       enum radeon_bo_domain domain);
+                                       unsigned bind, unsigned usage);
 
     struct radeon_winsys_cs_handle *(*buffer_get_cs_handle)(
             struct pb_buffer *buf);
@@ -222,12 +224,10 @@ struct radeon_winsys {
      * \param whandle   A winsys handle pointer as was received from a state
      *                  tracker.
      * \param stride    The returned buffer stride in bytes.
-     * \param size      The returned buffer size.
      */
     struct pb_buffer *(*buffer_from_handle)(struct radeon_winsys *ws,
                                             struct winsys_handle *whandle,
-                                            unsigned *stride,
-                                            unsigned *size);
+                                            unsigned *stride);
 
     /**
      * Get a winsys handle from a winsys buffer. The internal structure
@@ -269,14 +269,12 @@ struct radeon_winsys {
      *
      * \param cs  A command stream to add buffer for validation against.
      * \param buf A winsys buffer to validate.
-     * \param rd  A read domain containing a bitmask of the RADEON_DOMAIN_* flags.
-     * \param wd  A write domain containing a bitmask of the RADEON_DOMAIN_* flags.
+     * \param usage  Whether the buffer is used for read and/or write.
      * \return Relocation index.
      */
     unsigned (*cs_add_reloc)(struct radeon_winsys_cs *cs,
                              struct radeon_winsys_cs_handle *buf,
-                             enum radeon_bo_domain rd,
-                             enum radeon_bo_domain wd);
+                             enum radeon_bo_usage usage);
 
     /**
      * Return TRUE if there is enough memory in VRAM and GTT for the relocs
@@ -293,8 +291,6 @@ struct radeon_winsys {
      *
      * \param cs        A command stream the relocation is written to.
      * \param buf       A winsys buffer to write the relocation for.
-     * \param rd        A read domain containing a bitmask of the RADEON_DOMAIN_* flags.
-     * \param wd        A write domain containing a bitmask of the RADEON_DOMAIN_* flags.
      */
     void (*cs_write_reloc)(struct radeon_winsys_cs *cs,
                            struct radeon_winsys_cs_handle *buf);

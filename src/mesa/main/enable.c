@@ -295,14 +295,19 @@ _mesa_set_enable(struct gl_context *ctx, GLenum cap, GLboolean state)
          }
          break;
 #if FEATURE_userclip
-      case GL_CLIP_PLANE0:
-      case GL_CLIP_PLANE1:
-      case GL_CLIP_PLANE2:
-      case GL_CLIP_PLANE3:
-      case GL_CLIP_PLANE4:
-      case GL_CLIP_PLANE5:
+      case GL_CLIP_DISTANCE0:
+      case GL_CLIP_DISTANCE1:
+      case GL_CLIP_DISTANCE2:
+      case GL_CLIP_DISTANCE3:
+      case GL_CLIP_DISTANCE4:
+      case GL_CLIP_DISTANCE5:
+      case GL_CLIP_DISTANCE6:
+      case GL_CLIP_DISTANCE7:
          {
-            const GLuint p = cap - GL_CLIP_PLANE0;
+            const GLuint p = cap - GL_CLIP_DISTANCE0;
+
+            if (p >= ctx->Const.MaxClipPlanes)
+               goto invalid_enum_error;
 
             if ((ctx->Transform.ClipPlanesEnabled & (1 << p))
                 == ((GLuint) state << p))
@@ -575,12 +580,6 @@ _mesa_set_enable(struct gl_context *ctx, GLenum cap, GLboolean state)
             return;
          FLUSH_VERTICES(ctx, _NEW_SCISSOR);
          ctx->Scissor.Enabled = state;
-         break;
-      case GL_SHARED_TEXTURE_PALETTE_EXT:
-         if (ctx->Texture.SharedPalette == state)
-            return;
-         FLUSH_VERTICES(ctx, _NEW_TEXTURE);
-         ctx->Texture.SharedPalette = state;
          break;
       case GL_STENCIL_TEST:
          if (ctx->Stencil.Enabled == state)
@@ -1022,6 +1021,7 @@ GLboolean GLAPIENTRY
 _mesa_IsEnabledIndexed( GLenum cap, GLuint index )
 {
    GET_CURRENT_CONTEXT(ctx);
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, 0);
    switch (cap) {
    case GL_BLEND:
       if (index >= ctx->Const.MaxDrawBuffers) {
@@ -1078,6 +1078,8 @@ GLboolean GLAPIENTRY
 _mesa_IsEnabled( GLenum cap )
 {
    GET_CURRENT_CONTEXT(ctx);
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, 0);
+
    switch (cap) {
       case GL_ALPHA_TEST:
          return ctx->Color.AlphaEnabled;
@@ -1085,13 +1087,21 @@ _mesa_IsEnabled( GLenum cap )
 	 return ctx->Eval.AutoNormal;
       case GL_BLEND:
          return ctx->Color.BlendEnabled & 1;  /* return state for buffer[0] */
-      case GL_CLIP_PLANE0:
-      case GL_CLIP_PLANE1:
-      case GL_CLIP_PLANE2:
-      case GL_CLIP_PLANE3:
-      case GL_CLIP_PLANE4:
-      case GL_CLIP_PLANE5:
-	 return (ctx->Transform.ClipPlanesEnabled >> (cap - GL_CLIP_PLANE0)) & 1;
+      case GL_CLIP_DISTANCE0:
+      case GL_CLIP_DISTANCE1:
+      case GL_CLIP_DISTANCE2:
+      case GL_CLIP_DISTANCE3:
+      case GL_CLIP_DISTANCE4:
+      case GL_CLIP_DISTANCE5:
+      case GL_CLIP_DISTANCE6:
+      case GL_CLIP_DISTANCE7: {
+         const GLuint p = cap - GL_CLIP_DISTANCE0;
+
+         if (p >= ctx->Const.MaxClipPlanes)
+            goto invalid_enum_error;
+
+	 return (ctx->Transform.ClipPlanesEnabled >> p) & 1;
+      }
       case GL_COLOR_MATERIAL:
 	 return ctx->Light.ColorMaterialEnabled;
       case GL_CULL_FACE:
@@ -1175,8 +1185,6 @@ _mesa_IsEnabled( GLenum cap )
          return ctx->Transform.RescaleNormals;
       case GL_SCISSOR_TEST:
 	 return ctx->Scissor.Enabled;
-      case GL_SHARED_TEXTURE_PALETTE_EXT:
-         return ctx->Texture.SharedPalette;
       case GL_STENCIL_TEST:
 	 return ctx->Stencil.Enabled;
       case GL_TEXTURE_1D:

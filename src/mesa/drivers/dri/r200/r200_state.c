@@ -414,7 +414,7 @@ static void r200Fogfv( struct gl_context *ctx, GLenum pname, const GLfloat *para
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
    union { int i; float f; } c, d;
-   GLchan col[4];
+   GLubyte col[4];
    GLuint i;
 
    c.i = rmesa->hw.fog.cmd[FOG_C];
@@ -480,7 +480,7 @@ static void r200Fogfv( struct gl_context *ctx, GLenum pname, const GLfloat *para
       break;
    case GL_FOG_COLOR:
       R200_STATECHANGE( rmesa, ctx );
-      UNCLAMPED_FLOAT_TO_RGB_CHAN( col, ctx->Fog.Color );
+      _mesa_unclamped_float_rgba_to_ubyte(col, ctx->Fog.Color );
       i = radeonPackColor( 4, col[0], col[1], col[2], 0 );
       rmesa->hw.ctx.cmd[CTX_PP_FOG_COLOR] &= ~R200_FOG_COLOR_MASK;
       rmesa->hw.ctx.cmd[CTX_PP_FOG_COLOR] |= i;
@@ -1724,7 +1724,8 @@ void r200UpdateViewportOffset( struct gl_context *ctx )
  * Miscellaneous
  */
 
-static void r200ClearColor( struct gl_context *ctx, const GLfloat c[4] )
+static void r200ClearColor( struct gl_context *ctx,
+                            const union gl_color_union c )
 {
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
    GLubyte color[4];
@@ -1733,10 +1734,7 @@ static void r200ClearColor( struct gl_context *ctx, const GLfloat c[4] )
    rrb = radeon_get_colorbuffer(&rmesa->radeon);
    if (!rrb)
      return;
-   CLAMPED_FLOAT_TO_UBYTE(color[0], c[0]);
-   CLAMPED_FLOAT_TO_UBYTE(color[1], c[1]);
-   CLAMPED_FLOAT_TO_UBYTE(color[2], c[2]);
-   CLAMPED_FLOAT_TO_UBYTE(color[3], c[3]);
+   _mesa_unclamped_float_rgba_to_ubyte(color, c.f);
    rmesa->radeon.state.color.clear = radeonPackColor( rrb->cpp,
                                              color[0], color[1],
                                              color[2], color[3] );

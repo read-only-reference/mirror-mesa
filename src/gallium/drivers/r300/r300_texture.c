@@ -878,7 +878,6 @@ r300_texture_create_object(struct r300_screen *rscreen,
                            enum radeon_bo_layout microtile,
                            enum radeon_bo_layout macrotile,
                            unsigned stride_in_bytes_override,
-                           unsigned max_buffer_size,
                            struct pb_buffer *buffer)
 {
     struct radeon_winsys *rws = rscreen->rws;
@@ -898,10 +897,7 @@ r300_texture_create_object(struct r300_screen *rscreen,
     tex->tex.microtile = microtile;
     tex->tex.macrotile[0] = macrotile;
     tex->tex.stride_in_bytes_override = stride_in_bytes_override;
-    tex->domain = base->flags & R300_RESOURCE_FLAG_TRANSFER ?
-                  RADEON_DOMAIN_GTT :
-                  RADEON_DOMAIN_VRAM | RADEON_DOMAIN_GTT;
-    tex->buf_size = max_buffer_size;
+    tex->buf = buffer;
 
     if (!r300_resource_set_properties(&rscreen->screen, &tex->b.b.b, 0, base)) {
         if (buffer)
@@ -911,17 +907,14 @@ r300_texture_create_object(struct r300_screen *rscreen,
     }
 
     /* Create the backing buffer if needed. */
-    if (!buffer) {
-        tex->buf_size = tex->tex.size_in_bytes;
+    if (!tex->buf) {
         tex->buf = rws->buffer_create(rws, tex->tex.size_in_bytes, 2048,
-                                      base->bind, tex->domain);
+                                      base->bind, base->usage);
 
         if (!tex->buf) {
             FREE(tex);
             return NULL;
         }
-    } else {
-        tex->buf = buffer;
     }
 
     tex->cs_buf = rws->buffer_get_cs_handle(tex->buf);
@@ -952,7 +945,7 @@ struct pipe_resource *r300_texture_create(struct pipe_screen *screen,
 
     return (struct pipe_resource*)
            r300_texture_create_object(rscreen, base, microtile, macrotile,
-                                      0, 0, NULL);
+                                      0, NULL);
 }
 
 struct pipe_resource *r300_texture_from_handle(struct pipe_screen *screen,
@@ -963,7 +956,7 @@ struct pipe_resource *r300_texture_from_handle(struct pipe_screen *screen,
     struct r300_screen *rscreen = r300_screen(screen);
     struct pb_buffer *buffer;
     enum radeon_bo_layout microtile, macrotile;
-    unsigned stride, size;
+    unsigned stride;
 
     /* Support only 2D textures without mipmaps */
     if ((base->target != PIPE_TEXTURE_2D &&
@@ -973,7 +966,7 @@ struct pipe_resource *r300_texture_from_handle(struct pipe_screen *screen,
         return NULL;
     }
 
-    buffer = rws->buffer_from_handle(rws, whandle, &stride, &size);
+    buffer = rws->buffer_from_handle(rws, whandle, &stride);
     if (!buffer)
         return NULL;
 
@@ -995,7 +988,7 @@ struct pipe_resource *r300_texture_from_handle(struct pipe_screen *screen,
 
     return (struct pipe_resource*)
            r300_texture_create_object(rscreen, base, microtile, macrotile,
-                                      stride, size, buffer);
+                                      stride, buffer);
 }
 
 /* Not required to implement u_resource_vtbl, consider moving to another file:
@@ -1026,11 +1019,6 @@ struct pipe_surface* r300_create_surface(struct pipe_context * ctx,
 
         surface->buf = tex->buf;
         surface->cs_buf = tex->cs_buf;
-
-        /* Prefer VRAM if there are multiple domains to choose from. */
-        surface->domain = tex->domain;
-        if (surface->domain & RADEON_DOMAIN_VRAM)
-            surface->domain &= ~RADEON_DOMAIN_GTT;
 
         surface->offset = r300_texture_get_offset(tex, level,
                                                   surf_tmpl->u.tex.first_layer);

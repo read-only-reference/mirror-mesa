@@ -49,6 +49,7 @@
 #include "main/macros.h"
 #include "main/matrix.h"
 #include "main/mipmap.h"
+#include "main/pixel.h"
 #include "main/pbo.h"
 #include "main/polygon.h"
 #include "main/readpix.h"
@@ -59,6 +60,7 @@
 #include "main/stencil.h"
 #include "main/texobj.h"
 #include "main/texenv.h"
+#include "main/texgetimage.h"
 #include "main/teximage.h"
 #include "main/texparam.h"
 #include "main/texstate.h"
@@ -259,6 +261,18 @@ struct gen_mipmap_state
    GLuint FBO;
 };
 
+
+/**
+ * State for texture decompression
+ */
+struct decompress_state
+{
+   GLuint ArrayObj;
+   GLuint VBO, FBO, RBO;
+   GLint Width, Height;
+};
+
+
 #define MAX_META_OPS_DEPTH      2
 /**
  * All per-context meta state.
@@ -278,6 +292,7 @@ struct gl_meta_state
    struct drawpix_state DrawPix;  /**< For _mesa_meta_DrawPixels() */
    struct bitmap_state Bitmap;    /**< For _mesa_meta_Bitmap() */
    struct gen_mipmap_state Mipmap;    /**< For _mesa_meta_GenerateMipmap() */
+   struct decompress_state Decompress;  /**< For texture decompression */
 };
 
 
@@ -726,6 +741,11 @@ _mesa_meta_end(struct gl_context *ctx)
 
       _mesa_reference_shader_program(ctx, &ctx->Shader.ActiveProgram,
 				     save->ActiveShader);
+
+      _mesa_reference_shader_program(ctx, &save->VertexShader, NULL);
+      _mesa_reference_shader_program(ctx, &save->GeometryShader, NULL);
+      _mesa_reference_shader_program(ctx, &save->FragmentShader, NULL);
+      _mesa_reference_shader_program(ctx, &save->ActiveShader, NULL);
    }
 
    if (state & MESA_META_STENCIL_TEST) {
@@ -1208,7 +1228,9 @@ blitframebuffer_texture(struct gl_context *ctx,
 	    _mesa_TexParameteri(target, GL_TEXTURE_SRGB_DECODE_EXT,
 				GL_SKIP_DECODE_EXT);
 	 }
-	 _mesa_Disable(GL_FRAMEBUFFER_SRGB_EXT);
+         if (ctx->Extensions.EXT_framebuffer_sRGB) {
+            _mesa_set_enable(ctx, GL_FRAMEBUFFER_SRGB_EXT, GL_FALSE);
+         }
 
          _mesa_TexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
          _mesa_set_enable(ctx, target, GL_TRUE);
@@ -1274,8 +1296,8 @@ blitframebuffer_texture(struct gl_context *ctx,
 	 if (ctx->Extensions.EXT_texture_sRGB_decode) {
 	    _mesa_TexParameteri(target, GL_TEXTURE_SRGB_DECODE_EXT, srgbSave);
 	 }
-	 if (ctx->Extensions.EXT_texture_sRGB_decode && fbo_srgb_save) {
-	    _mesa_Enable(GL_FRAMEBUFFER_SRGB_EXT);
+	 if (ctx->Extensions.EXT_framebuffer_sRGB && fbo_srgb_save) {
+	    _mesa_set_enable(ctx, GL_FRAMEBUFFER_SRGB_EXT, GL_TRUE);
 	 }
 
          /* Done with color buffer */
@@ -1555,10 +1577,10 @@ _mesa_meta_Clear(struct gl_context *ctx, GLbitfield buffers)
 
       /* vertex colors */
       for (i = 0; i < 4; i++) {
-         verts[i].r = ctx->Color.ClearColorUnclamped[0];
-         verts[i].g = ctx->Color.ClearColorUnclamped[1];
-         verts[i].b = ctx->Color.ClearColorUnclamped[2];
-         verts[i].a = ctx->Color.ClearColorUnclamped[3];
+         verts[i].r = ctx->Color.ClearColor.f[0];
+         verts[i].g = ctx->Color.ClearColor.f[1];
+         verts[i].b = ctx->Color.ClearColor.f[2];
+         verts[i].a = ctx->Color.ClearColor.f[3];
       }
 
       /* upload new vertex data */
@@ -1665,7 +1687,7 @@ _mesa_meta_glsl_Clear(struct gl_context *ctx, GLbitfield buffers)
 
    _mesa_UseProgramObjectARB(clear->ShaderProg);
    _mesa_Uniform4fvARB(clear->ColorLocation, 1,
-		       ctx->Color.ClearColorUnclamped);
+		       ctx->Color.ClearColor.f);
 
    _mesa_BindVertexArray(clear->ArrayObj);
    _mesa_BindBufferARB(GL_ARRAY_BUFFER_ARB, clear->VBO);
@@ -2436,6 +2458,15 @@ _mesa_meta_check_generate_mipmap_fallback(struct gl_context *ctx, GLenum target,
       return GL_TRUE;
    }
 
+   if (_mesa_get_format_color_encoding(baseImage->TexFormat) == GL_SRGB &&
+       !ctx->Extensions.EXT_texture_sRGB_decode) {
+      /* The texture format is sRGB but we can't turn off sRGB->linear
+       * texture sample conversion.  So we won't be able to generate the
+       * right colors when rendering.  Need to use a fallback.
+       */
+      return GL_TRUE;
+   }
+
    /*
     * Test that we can actually render in the texture's format.
     */
@@ -2477,6 +2508,160 @@ _mesa_meta_check_generate_mipmap_fallback(struct gl_context *ctx, GLenum target,
 
 
 /**
+ * Compute the texture coordinates for the four vertices of a quad for
+ * drawing a 2D texture image or slice of a cube/3D texture.
+ * \param faceTarget  GL_TEXTURE_1D/2D/3D or cube face name
+ * \param slice  slice of a 1D/2D array texture or 3D texture
+ * \param width  width of the texture image
+ * \param height  height of the texture image
+ * \param coords0/1/2/3  returns the computed texcoords
+ */
+static void
+setup_texture_coords(GLenum faceTarget,
+                     GLint slice,
+                     GLint width,
+                     GLint height,
+                     GLfloat coords0[3],
+                     GLfloat coords1[3],
+                     GLfloat coords2[3],
+                     GLfloat coords3[3])
+{
+   static const GLfloat st[4][2] = {
+      {0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}
+   };
+   GLuint i;
+   GLfloat r;
+
+   switch (faceTarget) {
+   case GL_TEXTURE_1D:
+   case GL_TEXTURE_2D:
+   case GL_TEXTURE_3D:
+   case GL_TEXTURE_2D_ARRAY:
+      if (faceTarget == GL_TEXTURE_3D)
+         r = 1.0F / slice;
+      else if (faceTarget == GL_TEXTURE_2D_ARRAY)
+         r = slice;
+      else
+         r = 0.0F;
+      coords0[0] = 0.0F; /* s */
+      coords0[1] = 0.0F; /* t */
+      coords0[2] = r; /* r */
+      coords1[0] = 1.0F;
+      coords1[1] = 0.0F;
+      coords1[2] = r;
+      coords2[0] = 1.0F;
+      coords2[1] = 1.0F;
+      coords2[2] = r;
+      coords3[0] = 0.0F;
+      coords3[1] = 1.0F;
+      coords3[2] = r;
+      break;
+   case GL_TEXTURE_RECTANGLE_ARB:
+      coords0[0] = 0.0F; /* s */
+      coords0[1] = 0.0F; /* t */
+      coords0[2] = 0.0F; /* r */
+      coords1[0] = width;
+      coords1[1] = 0.0F;
+      coords1[2] = 0.0F;
+      coords2[0] = width;
+      coords2[1] = height;
+      coords2[2] = 0.0F;
+      coords3[0] = 0.0F;
+      coords3[1] = height;
+      coords3[2] = 0.0F;
+      break;
+   case GL_TEXTURE_1D_ARRAY:
+      coords0[0] = 0.0F; /* s */
+      coords0[1] = slice; /* t */
+      coords0[2] = 0.0F; /* r */
+      coords1[0] = 1.0f;
+      coords1[1] = slice;
+      coords1[2] = 0.0F;
+      coords2[0] = 1.0F;
+      coords2[1] = slice;
+      coords2[2] = 0.0F;
+      coords3[0] = 0.0F;
+      coords3[1] = slice;
+      coords3[2] = 0.0F;
+      break;
+
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
+      /* loop over quad verts */
+      for (i = 0; i < 4; i++) {
+         /* Compute sc = +/-scale and tc = +/-scale.
+          * Not +/-1 to avoid cube face selection ambiguity near the edges,
+          * though that can still sometimes happen with this scale factor...
+          */
+         const GLfloat scale = 0.9999f;
+         const GLfloat sc = (2.0f * st[i][0] - 1.0f) * scale;
+         const GLfloat tc = (2.0f * st[i][1] - 1.0f) * scale;
+         GLfloat *coord;
+
+         switch (i) {
+         case 0:
+            coord = coords0;
+            break;
+         case 1:
+            coord = coords1;
+            break;
+         case 2:
+            coord = coords2;
+            break;
+         case 3:
+            coord = coords3;
+            break;
+         default:
+            assert(0);
+         }
+
+         switch (faceTarget) {
+         case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
+            coord[0] = 1.0f;
+            coord[1] = -tc;
+            coord[2] = -sc;
+            break;
+         case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
+            coord[0] = -1.0f;
+            coord[1] = -tc;
+            coord[2] = sc;
+            break;
+         case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
+            coord[0] = sc;
+            coord[1] = 1.0f;
+            coord[2] = tc;
+            break;
+         case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+            coord[0] = sc;
+            coord[1] = -1.0f;
+            coord[2] = -tc;
+            break;
+         case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+            coord[0] = sc;
+            coord[1] = -tc;
+            coord[2] = 1.0f;
+            break;
+         case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
+            coord[0] = -sc;
+            coord[1] = -tc;
+            coord[2] = -1.0f;
+            break;
+         default:
+            assert(0);
+         }
+      }
+      break;
+   default:
+      assert(0 && "unexpected target in meta setup_texture_coords()");
+   }
+}
+
+
+/**
  * Called via ctx->Driver.GenerateMipmap()
  * Note: We don't yet support 3D textures, 1D/2D array textures or texture
  * borders.
@@ -2487,7 +2672,7 @@ _mesa_meta_GenerateMipmap(struct gl_context *ctx, GLenum target,
 {
    struct gen_mipmap_state *mipmap = &ctx->Meta->Mipmap;
    struct vertex {
-      GLfloat x, y, s, t, r;
+      GLfloat x, y, tex[3];
    };
    struct vertex verts[4];
    const GLuint baseLevel = texObj->BaseLevel;
@@ -2499,11 +2684,14 @@ _mesa_meta_GenerateMipmap(struct gl_context *ctx, GLenum target,
    const GLenum wrapSSave = texObj->Sampler.WrapS;
    const GLenum wrapTSave = texObj->Sampler.WrapT;
    const GLenum wrapRSave = texObj->Sampler.WrapR;
+   const GLenum srgbDecodeSave = texObj->Sampler.sRGBDecode;
+   const GLenum srgbBufferSave = ctx->Color.sRGBEnabled;
    const GLuint fboSave = ctx->DrawBuffer->Name;
    const GLuint original_active_unit = ctx->Texture.CurrentUnit;
    GLenum faceTarget;
    GLuint dstLevel;
-   GLuint border = 0;
+   const GLuint border = 0;
+   const GLint slice = 0;
 
    if (_mesa_meta_check_generate_mipmap_fallback(ctx, target, texObj)) {
       _mesa_generate_mipmap(ctx, target, texObj);
@@ -2539,7 +2727,7 @@ _mesa_meta_GenerateMipmap(struct gl_context *ctx, GLenum target,
 
       /* setup vertex arrays */
       _mesa_VertexPointer(2, GL_FLOAT, sizeof(struct vertex), OFFSET(x));
-      _mesa_TexCoordPointer(3, GL_FLOAT, sizeof(struct vertex), OFFSET(s));
+      _mesa_TexCoordPointer(3, GL_FLOAT, sizeof(struct vertex), OFFSET(tex));
       _mesa_EnableClientState(GL_VERTEX_ARRAY);
       _mesa_EnableClientState(GL_TEXTURE_COORD_ARRAY);
    }
@@ -2560,100 +2748,38 @@ _mesa_meta_GenerateMipmap(struct gl_context *ctx, GLenum target,
    _mesa_TexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
    _mesa_TexParameteri(target, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
 
-   _mesa_set_enable(ctx, target, GL_TRUE);
-
-   /* setup texcoords once (XXX what about border?) */
-   switch (faceTarget) {
-   case GL_TEXTURE_1D:
-   case GL_TEXTURE_2D:
-      verts[0].s = 0.0F;
-      verts[0].t = 0.0F;
-      verts[0].r = 0.0F;
-      verts[1].s = 1.0F;
-      verts[1].t = 0.0F;
-      verts[1].r = 0.0F;
-      verts[2].s = 1.0F;
-      verts[2].t = 1.0F;
-      verts[2].r = 0.0F;
-      verts[3].s = 0.0F;
-      verts[3].t = 1.0F;
-      verts[3].r = 0.0F;
-      break;
-   case GL_TEXTURE_3D:
-      abort();
-      break;
-   default:
-      /* cube face */
-      {
-         static const GLfloat st[4][2] = {
-            {0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}
-         };
-         GLuint i;
-
-         /* loop over quad verts */
-         for (i = 0; i < 4; i++) {
-            /* Compute sc = +/-scale and tc = +/-scale.
-             * Not +/-1 to avoid cube face selection ambiguity near the edges,
-             * though that can still sometimes happen with this scale factor...
-             */
-            const GLfloat scale = 0.9999f;
-            const GLfloat sc = (2.0f * st[i][0] - 1.0f) * scale;
-            const GLfloat tc = (2.0f * st[i][1] - 1.0f) * scale;
-
-            switch (faceTarget) {
-            case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
-               verts[i].s = 1.0f;
-               verts[i].t = -tc;
-               verts[i].r = -sc;
-               break;
-            case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
-               verts[i].s = -1.0f;
-               verts[i].t = -tc;
-               verts[i].r = sc;
-               break;
-            case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
-               verts[i].s = sc;
-               verts[i].t = 1.0f;
-               verts[i].r = tc;
-               break;
-            case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
-               verts[i].s = sc;
-               verts[i].t = -1.0f;
-               verts[i].r = -tc;
-               break;
-            case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
-               verts[i].s = sc;
-               verts[i].t = -tc;
-               verts[i].r = 1.0f;
-               break;
-            case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
-               verts[i].s = -sc;
-               verts[i].t = -tc;
-               verts[i].r = -1.0f;
-               break;
-            default:
-               assert(0);
-            }
-         }
-      }
+   /* We don't want to encode or decode sRGB values; treat them as linear */
+   if (ctx->Extensions.EXT_texture_sRGB_decode) {
+      _mesa_TexParameteri(target, GL_TEXTURE_SRGB_DECODE_EXT,
+                          GL_SKIP_DECODE_EXT);
+   }
+   if (ctx->Extensions.EXT_framebuffer_sRGB) {
+      _mesa_set_enable(ctx, GL_FRAMEBUFFER_SRGB_EXT, GL_FALSE);
    }
 
    _mesa_set_enable(ctx, target, GL_TRUE);
+
+   /* setup texcoords (XXX what about border?) */
+   setup_texture_coords(faceTarget,
+                        0.0, 0.0, /* width, height never used here */
+                        slice,
+                        verts[0].tex,
+                        verts[1].tex,
+                        verts[2].tex,
+                        verts[3].tex);
 
    /* setup vertex positions */
-   {
-      verts[0].x = 0.0F;
-      verts[0].y = 0.0F;
-      verts[1].x = 1.0F;
-      verts[1].y = 0.0F;
-      verts[2].x = 1.0F;
-      verts[2].y = 1.0F;
-      verts[3].x = 0.0F;
-      verts[3].y = 1.0F;
+   verts[0].x = 0.0F;
+   verts[0].y = 0.0F;
+   verts[1].x = 1.0F;
+   verts[1].y = 0.0F;
+   verts[2].x = 1.0F;
+   verts[2].y = 1.0F;
+   verts[3].x = 0.0F;
+   verts[3].y = 1.0F;
       
-      /* upload new vertex data */
-      _mesa_BufferSubDataARB(GL_ARRAY_BUFFER_ARB, 0, sizeof(verts), verts);
-   }
+   /* upload new vertex data */
+   _mesa_BufferSubDataARB(GL_ARRAY_BUFFER_ARB, 0, sizeof(verts), verts);
 
    /* setup projection matrix */
    _mesa_MatrixMode(GL_PROJECTION);
@@ -2773,6 +2899,14 @@ _mesa_meta_GenerateMipmap(struct gl_context *ctx, GLenum target,
       _mesa_set_viewport(ctx, 0, 0, dstWidth, dstHeight);
 
       _mesa_DrawArrays(GL_TRIANGLE_FAN, 0, 4);
+   }
+
+   if (ctx->Extensions.EXT_texture_sRGB_decode) {
+      _mesa_TexParameteri(target, GL_TEXTURE_SRGB_DECODE_EXT,
+                          srgbDecodeSave);
+   }
+   if (ctx->Extensions.EXT_framebuffer_sRGB && srgbBufferSave) {
+      _mesa_set_enable(ctx, GL_FRAMEBUFFER_SRGB_EXT, GL_TRUE);
    }
 
    _mesa_lock_texture(ctx, texObj); /* relock */
@@ -2941,56 +3075,232 @@ _mesa_meta_CopyTexSubImage3D(struct gl_context *ctx, GLenum target, GLint level,
 }
 
 
-void
-_mesa_meta_CopyColorTable(struct gl_context *ctx,
-                          GLenum target, GLenum internalformat,
-                          GLint x, GLint y, GLsizei width)
+/**
+ * Decompress a texture image by drawing a quad with the compressed
+ * texture and reading the pixels out of the color buffer.
+ * \param slice  which slice of a 3D texture or layer of a 1D/2D texture
+ * \param destFormat  format, ala glReadPixels
+ * \param destType  type, ala glReadPixels
+ * \param dest  destination buffer
+ * \param destRowLength  dest image rowLength (ala GL_PACK_ROW_LENGTH)
+ */
+static void
+decompress_texture_image(struct gl_context *ctx,
+                         struct gl_texture_image *texImage,
+                         GLuint slice,
+                         GLenum destFormat, GLenum destType,
+                         GLvoid *dest, GLint destRowLength)
 {
-   GLfloat *buf;
+   struct decompress_state *decompress = &ctx->Meta->Decompress;
+   struct gl_texture_object *texObj = texImage->TexObject;
+   const GLint width = texImage->Width;
+   const GLint height = texImage->Height;
+   const GLenum target = texObj->Target;
+   GLenum faceTarget;
+   struct vertex {
+      GLfloat x, y, tex[3];
+   };
+   struct vertex verts[4];
+   GLuint fboDrawSave, fboReadSave;
 
-   buf = (GLfloat *) malloc(width * 4 * sizeof(GLfloat));
-   if (!buf) {
-      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyColorTable");
-      return;
+   if (slice > 0) {
+      assert(target == GL_TEXTURE_3D ||
+             target == GL_TEXTURE_2D_ARRAY);
    }
 
-   /*
-    * Read image from framebuffer (disable pixel transfer ops)
-    */
-   _mesa_meta_begin(ctx, MESA_META_PIXEL_STORE | MESA_META_PIXEL_TRANSFER);
-   ctx->Driver.ReadPixels(ctx, x, y, width, 1,
-                          GL_RGBA, GL_FLOAT, &ctx->Pack, buf);
+   if (target == GL_TEXTURE_CUBE_MAP) {
+      faceTarget = GL_TEXTURE_CUBE_MAP_POSITIVE_X + texImage->Face;
+   }
+   else {
+      faceTarget = target;
+   }
 
-   _mesa_ColorTable(target, internalformat, width, GL_RGBA, GL_FLOAT, buf);
+   /* save fbo bindings (not saved by _mesa_meta_begin()) */
+   fboDrawSave = ctx->DrawBuffer->Name;
+   fboReadSave = ctx->ReadBuffer->Name;
+
+   _mesa_meta_begin(ctx, MESA_META_ALL);
+
+   /* Create/bind FBO/renderbuffer */
+   if (decompress->FBO == 0) {
+      _mesa_GenFramebuffersEXT(1, &decompress->FBO);
+      _mesa_GenRenderbuffersEXT(1, &decompress->RBO);
+      _mesa_BindFramebufferEXT(GL_FRAMEBUFFER_EXT, decompress->FBO);
+      _mesa_BindRenderbufferEXT(GL_RENDERBUFFER_EXT, decompress->RBO);
+      _mesa_FramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT,
+                                       GL_COLOR_ATTACHMENT0_EXT,
+                                       GL_RENDERBUFFER_EXT,
+                                       decompress->RBO);
+   }
+   else {
+      _mesa_BindFramebufferEXT(GL_FRAMEBUFFER_EXT, decompress->FBO);
+   }
+
+   /* alloc dest surface */
+   if (width != decompress->Width || height != decompress->Height) {
+      _mesa_RenderbufferStorageEXT(GL_RENDERBUFFER_EXT, GL_RGBA,
+                                   width, height);
+      decompress->Width = width;
+      decompress->Height = height;
+   }
+
+   /* setup VBO data */
+   if (decompress->ArrayObj == 0) {
+      /* create vertex array object */
+      _mesa_GenVertexArrays(1, &decompress->ArrayObj);
+      _mesa_BindVertexArray(decompress->ArrayObj);
+
+      /* create vertex array buffer */
+      _mesa_GenBuffersARB(1, &decompress->VBO);
+      _mesa_BindBufferARB(GL_ARRAY_BUFFER_ARB, decompress->VBO);
+      _mesa_BufferDataARB(GL_ARRAY_BUFFER_ARB, sizeof(verts),
+                          NULL, GL_DYNAMIC_DRAW_ARB);
+
+      /* setup vertex arrays */
+      _mesa_VertexPointer(2, GL_FLOAT, sizeof(struct vertex), OFFSET(x));
+      _mesa_TexCoordPointer(3, GL_FLOAT, sizeof(struct vertex), OFFSET(tex));
+      _mesa_EnableClientState(GL_VERTEX_ARRAY);
+      _mesa_EnableClientState(GL_TEXTURE_COORD_ARRAY);
+   }
+   else {
+      _mesa_BindVertexArray(decompress->ArrayObj);
+      _mesa_BindBufferARB(GL_ARRAY_BUFFER_ARB, decompress->VBO);
+   }
+
+   setup_texture_coords(faceTarget, slice, width, height,
+                        verts[0].tex,
+                        verts[1].tex,
+                        verts[2].tex,
+                        verts[3].tex);
+
+   /* setup vertex positions */
+   verts[0].x = 0.0F;
+   verts[0].y = 0.0F;
+   verts[1].x = width;
+   verts[1].y = 0.0F;
+   verts[2].x = width;
+   verts[2].y = height;
+   verts[3].x = 0.0F;
+   verts[3].y = height;
+
+   /* upload new vertex data */
+   _mesa_BufferSubDataARB(GL_ARRAY_BUFFER_ARB, 0, sizeof(verts), verts);
+
+   /* setup texture state */
+   _mesa_BindTexture(target, texObj->Name);
+   _mesa_set_enable(ctx, target, GL_TRUE);
+
+   {
+      /* save texture object state */
+      const GLenum minFilterSave = texObj->Sampler.MinFilter;
+      const GLenum magFilterSave = texObj->Sampler.MagFilter;
+      const GLint baseLevelSave = texObj->BaseLevel;
+      const GLint maxLevelSave = texObj->MaxLevel;
+      const GLenum wrapSSave = texObj->Sampler.WrapS;
+      const GLenum wrapTSave = texObj->Sampler.WrapT;
+      const GLenum srgbSave = texObj->Sampler.sRGBDecode;
+
+      /* restrict sampling to the texture level of interest */
+      _mesa_TexParameteri(target, GL_TEXTURE_BASE_LEVEL, texImage->Level);
+      _mesa_TexParameteri(target, GL_TEXTURE_MAX_LEVEL, texImage->Level);
+      /* nearest filtering */
+      _mesa_TexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      _mesa_TexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+      /* No sRGB decode or encode.*/
+      if (ctx->Extensions.EXT_texture_sRGB_decode) {
+         _mesa_TexParameteri(target, GL_TEXTURE_SRGB_DECODE_EXT,
+                             GL_SKIP_DECODE_EXT);
+      }
+      if (ctx->Extensions.EXT_framebuffer_sRGB) {
+         _mesa_set_enable(ctx, GL_FRAMEBUFFER_SRGB_EXT, GL_FALSE);
+      }
+
+      /* render quad w/ texture into renderbuffer */
+      _mesa_DrawArrays(GL_TRIANGLE_FAN, 0, 4);
+      
+      /* Restore texture object state, the texture binding will
+       * be restored by _mesa_meta_end().
+       */
+      _mesa_TexParameteri(target, GL_TEXTURE_MIN_FILTER, minFilterSave);
+      _mesa_TexParameteri(target, GL_TEXTURE_MAG_FILTER, magFilterSave);
+      if (target != GL_TEXTURE_RECTANGLE_ARB) {
+         _mesa_TexParameteri(target, GL_TEXTURE_BASE_LEVEL, baseLevelSave);
+         _mesa_TexParameteri(target, GL_TEXTURE_MAX_LEVEL, maxLevelSave);
+      }
+      _mesa_TexParameteri(target, GL_TEXTURE_WRAP_S, wrapSSave);
+      _mesa_TexParameteri(target, GL_TEXTURE_WRAP_T, wrapTSave);
+      if (ctx->Extensions.EXT_texture_sRGB_decode) {
+         _mesa_TexParameteri(target, GL_TEXTURE_SRGB_DECODE_EXT, srgbSave);
+      }
+   }
+
+   /* read pixels from renderbuffer */
+   {
+      GLenum baseTexFormat = texImage->_BaseFormat;
+
+      /* The pixel transfer state will be set to default values at this point
+       * (see MESA_META_PIXEL_TRANSFER) so pixel transfer ops are effectively
+       * turned off (as required by glGetTexImage) but we need to handle some
+       * special cases.  In particular, single-channel texture values are
+       * returned as red and two-channel texture values are returned as
+       * red/alpha.
+       */
+      if (baseTexFormat == GL_LUMINANCE ||
+          baseTexFormat == GL_LUMINANCE_ALPHA ||
+          baseTexFormat == GL_INTENSITY) {
+         /* Green and blue must be zero */
+         _mesa_PixelTransferf(GL_GREEN_SCALE, 0.0f);
+         _mesa_PixelTransferf(GL_BLUE_SCALE, 0.0f);
+      }
+
+      ctx->Pack.RowLength = destRowLength;
+      _mesa_ReadPixels(0, 0, width, height, destFormat, destType, dest);
+   }
+
+   /* disable texture unit */
+   _mesa_set_enable(ctx, target, GL_FALSE);
 
    _mesa_meta_end(ctx);
 
-   free(buf);
+   /* restore fbo bindings */
+   if (fboDrawSave == fboReadSave) {
+      _mesa_BindFramebufferEXT(GL_FRAMEBUFFER_EXT, fboDrawSave);
+   }
+   else {
+      _mesa_BindFramebufferEXT(GL_DRAW_FRAMEBUFFER_EXT, fboDrawSave);
+      _mesa_BindFramebufferEXT(GL_READ_FRAMEBUFFER_EXT, fboReadSave);
+   }
 }
 
 
+/**
+ * This is just a wrapper around _mesa_get_tex_image() and
+ * decompress_texture_image().  Meta functions should not be directly called
+ * from core Mesa.
+ */
 void
-_mesa_meta_CopyColorSubTable(struct gl_context *ctx,GLenum target, GLsizei start,
-                             GLint x, GLint y, GLsizei width)
+_mesa_meta_GetTexImage(struct gl_context *ctx,
+                       GLenum format, GLenum type, GLvoid *pixels,
+                       struct gl_texture_image *texImage)
 {
-   GLfloat *buf;
-
-   buf = (GLfloat *) malloc(width * 4 * sizeof(GLfloat));
-   if (!buf) {
-      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyColorSubTable");
-      return;
-   }
-
-   /*
-    * Read image from framebuffer (disable pixel transfer ops)
+   /* We can only use the decompress-with-blit method here if the texels are
+    * unsigned, normalized values.  We could handle signed and unnormalized 
+    * with floating point renderbuffers...
     */
-   _mesa_meta_begin(ctx, MESA_META_PIXEL_STORE | MESA_META_PIXEL_TRANSFER);
-   ctx->Driver.ReadPixels(ctx, x, y, width, 1,
-                          GL_RGBA, GL_FLOAT, &ctx->Pack, buf);
-
-   _mesa_ColorSubTable(target, start, width, GL_RGBA, GL_FLOAT, buf);
-
-   _mesa_meta_end(ctx);
-
-   free(buf);
+   if (_mesa_is_format_compressed(texImage->TexFormat) &&
+       _mesa_get_format_datatype(texImage->TexFormat)
+       == GL_UNSIGNED_NORMALIZED) {
+      struct gl_texture_object *texObj = texImage->TexObject;
+      const GLuint slice = 0; /* only 2D compressed textures for now */
+      /* Need to unlock the texture here to prevent deadlock... */
+      _mesa_unlock_texture(ctx, texObj);
+      decompress_texture_image(ctx, texImage, slice, format, type, pixels,
+                               ctx->Pack.RowLength);
+      /* ... and relock it */
+      _mesa_lock_texture(ctx, texObj);
+   }
+   else {
+      _mesa_get_teximage(ctx, format, type, pixels, texImage);
+   }
 }

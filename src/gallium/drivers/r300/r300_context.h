@@ -295,8 +295,6 @@ struct r300_query {
     struct radeon_winsys_cs_handle *cs_buf;
     /* The size of the buffer. */
     unsigned buffer_size;
-    /* The domain of the buffer. */
-    enum radeon_bo_domain domain;
 
     /* Linked list members. */
     struct r300_query* prev;
@@ -309,8 +307,6 @@ struct r300_surface {
     /* Winsys buffer backing the texture. */
     struct pb_buffer *buf;
     struct radeon_winsys_cs_handle *cs_buf;
-
-    enum radeon_bo_domain domain;
 
     uint32_t offset;    /* COLOROFFSET or DEPTHOFFSET. */
     uint32_t pitch;     /* COLORPITCH or DEPTHPITCH. */
@@ -357,10 +353,6 @@ struct r300_texture_desc {
      * derived from the texture properties. */
     unsigned size_in_bytes;
 
-    /* Total size of the buffer backing this texture, in bytes.
-     * It must be >= size. */
-    unsigned buffer_size_in_bytes;
-
     /**
      * If non-zero, override the natural texture layout with
      * a custom stride (in bytes).
@@ -399,8 +391,6 @@ struct r300_resource
     /* Winsys buffer backing this resource. */
     struct pb_buffer *buf;
     struct radeon_winsys_cs_handle *cs_buf;
-    enum radeon_bo_domain domain;
-    unsigned buf_size;
 
     /* Constant buffers are in user memory. */
     uint8_t *constant_buffer;
@@ -425,7 +415,7 @@ struct r300_vertex_element_state {
     struct pipe_vertex_element velem[PIPE_MAX_ATTRIBS];
     unsigned format_size[PIPE_MAX_ATTRIBS];
 
-    struct u_vbuf_mgr_elements *vmgr_elements;
+    struct u_vbuf_elements *vmgr_elements;
 
     /* The size of the vertex, in dwords. */
     unsigned vertex_size_dwords;

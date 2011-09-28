@@ -72,9 +72,8 @@ st_texture_create(struct st_context *st,
    if (target == PIPE_TEXTURE_CUBE)
       assert(layers == 6);
 
-   DBG("%s target %s format %s last_level %d\n", __FUNCTION__,
-       _mesa_lookup_enum_by_nr(target),
-       _mesa_lookup_enum_by_nr(format), last_level);
+   DBG("%s target %d format %s last_level %d\n", __FUNCTION__,
+       (int) target, util_format_name(format), last_level);
 
    assert(format);
    assert(screen->is_format_supported(screen, format, target, 0,
@@ -171,8 +170,7 @@ st_gl_texture_dims_to_pipe_dims(GLenum texture,
  */
 GLboolean
 st_texture_match_image(const struct pipe_resource *pt,
-                       const struct gl_texture_image *image,
-                       GLuint face, GLuint level)
+                       const struct gl_texture_image *image)
 {
    GLuint ptWidth, ptHeight, ptDepth, ptLayers;
 
@@ -193,9 +191,9 @@ st_texture_match_image(const struct pipe_resource *pt,
    /* Test if this image's size matches what's expected in the
     * established texture.
     */
-   if (ptWidth != u_minify(pt->width0, level) ||
-       ptHeight != u_minify(pt->height0, level) ||
-       ptDepth != u_minify(pt->depth0, level) ||
+   if (ptWidth != u_minify(pt->width0, image->Level) ||
+       ptHeight != u_minify(pt->height0, image->Level) ||
+       ptDepth != u_minify(pt->depth0, image->Level) ||
        ptLayers != pt->array_size)
       return GL_FALSE;
 
@@ -367,9 +365,15 @@ st_texture_image_copy(struct pipe_context *pipe,
    struct pipe_box src_box;
    GLuint i;
 
-   assert(u_minify(src->width0, srcLevel) == width);
-   assert(u_minify(src->height0, srcLevel) == height);
-   assert(u_minify(src->depth0, srcLevel) == depth);
+   if (u_minify(src->width0, srcLevel) != width ||
+       u_minify(src->height0, srcLevel) != height ||
+       u_minify(src->depth0, srcLevel) != depth) {
+      /* The source image size doesn't match the destination image size.
+       * This can happen in some degenerate situations such as rendering to a
+       * cube map face which was set up with mismatched texture sizes.
+       */
+      return;
+   }
 
    src_box.x = 0;
    src_box.y = 0;

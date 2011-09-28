@@ -53,7 +53,8 @@ struct brw_sf_prog_key {
    GLuint frontface_ccw:1;
    GLuint do_point_sprite:1;
    GLuint sprite_origin_lower_left:1;
-   GLuint pad:24;
+   GLuint nr_userclip:4;
+   GLuint pad:20;
 };
 
 struct brw_sf_compile {
@@ -89,13 +90,11 @@ struct brw_sf_compile {
    struct brw_reg m3C0;
 
    GLuint nr_verts;
-   GLuint nr_attrs;
    GLuint nr_attr_regs;
-   GLuint nr_setup_attrs;
    GLuint nr_setup_regs;
+   int urb_entry_read_offset;
 
-   GLubyte attr_to_idx[VERT_RESULT_MAX];   
-   GLubyte idx_to_attr[VERT_RESULT_MAX];   
+   struct brw_vue_map vue_map;
 };
 
  
@@ -104,5 +103,6 @@ void brw_emit_line_setup( struct brw_sf_compile *c, GLboolean allocate );
 void brw_emit_point_setup( struct brw_sf_compile *c, GLboolean allocate );
 void brw_emit_point_sprite_setup( struct brw_sf_compile *c, GLboolean allocate );
 void brw_emit_anyprim_setup( struct brw_sf_compile *c );
+int brw_sf_compute_urb_entry_read_offset(struct intel_context *intel);
 
 #endif

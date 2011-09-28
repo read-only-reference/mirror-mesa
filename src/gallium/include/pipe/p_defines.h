@@ -418,7 +418,6 @@ enum pipe_transfer_usage {
  * pipe_screen::get_param() and pipe_screen::get_paramf().
  */
 enum pipe_cap {
-   PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS = 0,
    PIPE_CAP_NPOT_TEXTURES = 1,
    PIPE_CAP_TWO_SIDED_STENCIL = 2,
    PIPE_CAP_GLSL = 3,  /* XXX need something better */
@@ -444,8 +443,6 @@ enum pipe_cap {
    PIPE_CAP_GUARD_BAND_RIGHT = 23,  /*< float */
    PIPE_CAP_GUARD_BAND_BOTTOM = 24,  /*< float */
    PIPE_CAP_TEXTURE_MIRROR_CLAMP = 25,
-   PIPE_CAP_TEXTURE_MIRROR_REPEAT = 26,
-   PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS = 27,
    PIPE_CAP_BLEND_EQUATION_SEPARATE = 28,
    PIPE_CAP_SM3 = 29,  /*< Shader Model, supported */
    PIPE_CAP_STREAM_OUTPUT = 30,
@@ -458,7 +455,7 @@ enum pipe_cap {
    /** different blend funcs per rendertarget */
    PIPE_CAP_INDEP_BLEND_FUNC = 34,
    PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE = 35,
-   PIPE_CAP_ARRAY_TEXTURES = 36,
+   PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS = 36,
    PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT = 37,
    PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT = 38,
    PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER = 39,
@@ -471,7 +468,11 @@ enum pipe_cap {
    PIPE_CAP_MIXED_COLORBUFFER_FORMATS = 46,
    PIPE_CAP_SEAMLESS_CUBE_MAP = 47,
    PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE = 48,
-   PIPE_CAP_SCALED_RESOLVE = 49
+   PIPE_CAP_SCALED_RESOLVE = 49,
+   PIPE_CAP_MIN_TEXEL_OFFSET = 50,
+   PIPE_CAP_MAX_TEXEL_OFFSET = 51,
+   PIPE_CAP_CONDITIONAL_RENDER = 52,
+   PIPE_CAP_TEXTURE_BARRIER = 53
 };
 
 /* Shader caps not specific to any single stage */
@@ -495,7 +496,8 @@ enum pipe_shader_cap
    PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR = 14,
    PIPE_SHADER_CAP_INDIRECT_CONST_ADDR = 15,
    PIPE_SHADER_CAP_SUBROUTINES = 16, /* BGNSUB, ENDSUB, CAL, RET */
-   PIPE_SHADER_CAP_INTEGERS = 17
+   PIPE_SHADER_CAP_INTEGERS = 17,
+   PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS = 18
 };
 
 
@@ -513,6 +515,12 @@ struct pipe_query_data_timestamp_disjoint
    boolean  disjoint;
 };
 
+union pipe_color_union
+{
+   float f[4];
+   int i[4];
+   unsigned int ui[4];
+};
 
 #ifdef __cplusplus
 }

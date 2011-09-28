@@ -27,8 +27,6 @@ nvfx_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	struct nvfx_screen *screen = nvfx_screen(pscreen);
 
 	switch (param) {
-	case PIPE_CAP_MAX_TEXTURE_IMAGE_UNITS:
-		return 16;
 	case PIPE_CAP_NPOT_TEXTURES:
 		return screen->advertise_npot;
 	case PIPE_CAP_TWO_SIDED_STENCIL:
@@ -60,10 +58,6 @@ nvfx_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return 13;
 	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
 		return !!screen->use_nv4x;
-	case PIPE_CAP_TEXTURE_MIRROR_REPEAT:
-		return 1;
-	case PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS:
-		return 0; /* We have 4 on nv40 - but unsupported currently */
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 		return screen->advertise_blend_equation_separate;
 	case PIPE_CAP_MAX_COMBINED_SAMPLERS:
@@ -85,7 +79,7 @@ nvfx_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return 0; // TODO: implement depth clamp
 	case PIPE_CAP_PRIMITIVE_RESTART:
 		return 0; // TODO: implement primitive restart
-	case PIPE_CAP_ARRAY_TEXTURES:
+	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
 	case PIPE_CAP_TGSI_INSTANCEID:
 	case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMP_CONTROL:
@@ -139,6 +133,8 @@ nvfx_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader, enum 
 			return 0;
 		case PIPE_SHADER_CAP_SUBROUTINES:
 			return screen->use_nv4x ? 1 : 0;
+		case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+			return 16;
 		default:
 			break;
 		}
@@ -181,6 +177,8 @@ nvfx_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader, enum 
 			return 1;
 		case PIPE_SHADER_CAP_INTEGERS:
 			return 0;
+		case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+			return 0; /* We have 4 on nv40 - but unsupported currently */
 		default:
 			break;
 		}

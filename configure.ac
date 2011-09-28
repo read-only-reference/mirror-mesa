@@ -949,13 +949,6 @@ xyesyes)
     fi
     GL_LIB_DEPS="$GL_LIB_DEPS $SELINUX_LIBS -lm -lpthread $DLOPEN_LIBS"
     GL_PC_LIB_PRIV="$GL_PC_LIB_PRIV $SELINUX_LIBS -lm -lpthread"
-
-    # if static, move the external libraries to the programs
-    # and empty the libraries for libGL
-    if test "$enable_static" = yes; then
-        APP_LIB_DEPS="$APP_LIB_DEPS $GL_LIB_DEPS"
-        GL_LIB_DEPS=""
-    fi
     ;;
 xyesno)
     # DRI-based GLX
@@ -1578,7 +1571,6 @@ if test "x$enable_glu" = xyes; then
         else
             GLU_LIB_DEPS=""
             GLU_MESA_DEPS=""
-            APP_LIB_DEPS="$APP_LIB_DEPS -lstdc++"
         fi
     fi
 fi
@@ -1593,25 +1585,6 @@ AC_SUBST([GLU_PC_REQ_PRIV])
 AC_SUBST([GLU_PC_LIB_PRIV])
 AC_SUBST([GLU_PC_CFLAGS])
 
-dnl
-dnl Program library dependencies
-dnl    Only libm is added here if necessary as the libraries should
-dnl    be pulled in by the linker
-dnl
-if test "x$APP_LIB_DEPS" = x; then
-    case "$host_os" in
-    solaris*)
-        APP_LIB_DEPS="-lX11 -lsocket -lnsl -lm"
-        ;;
-    cygwin*)
-        APP_LIB_DEPS="-lX11"
-        ;;
-    *)
-        APP_LIB_DEPS="-lm"
-        ;;
-    esac
-fi
-AC_SUBST([APP_LIB_DEPS])
 AC_SUBST([PROGRAM_DIRS])
 
 dnl
@@ -1662,6 +1635,9 @@ yes)
             AC_MSG_ERROR([EGL platform '$plat' doesn't exist])
         if test "$plat" = "fbdev"; then
                 GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS sw/fbdev"
+        fi
+        if test "$plat" = "null"; then
+                GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS sw/null"
         fi
 	if test "$plat" = "wayland"; then
 		PKG_CHECK_MODULES([WAYLAND], [wayland-client wayland-server],, \
@@ -1822,7 +1798,7 @@ if test "x$with_gallium_drivers" != x; then
         case "x$driver" in
         xsvga)
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS svga softpipe"
-            gallium_check_st "svga/drm" "dri-vmwgfx" "xorg-vmwgfx" "xa-vmwgfx"
+            gallium_check_st "svga/drm" "dri-vmwgfx" "" "xa-vmwgfx"
             ;;
         xi915)
             PKG_CHECK_MODULES([INTEL], [libdrm_intel >= $LIBDRM_INTEL_REQUIRED])
@@ -1848,7 +1824,7 @@ if test "x$with_gallium_drivers" != x; then
             ;;
         xr600)
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS r600"
-            gallium_check_st "r600/drm radeon/drm" "dri-r600" "xorg-r600" "" "xvmc-r600" "vdpau-r600" "va-r600"
+            gallium_check_st "radeon/drm" "dri-r600" "xorg-r600" "" "xvmc-r600" "vdpau-r600" "va-r600"
             ;;
         xnouveau)
             PKG_CHECK_MODULES([NOUVEAU], [libdrm_nouveau >= $LIBDRM_NOUVEAU_REQUIRED])
@@ -1915,10 +1891,10 @@ ln -s autoconf configs/current
 ])
 
 dnl Sort the dirs alphabetically
-GALLIUM_TARGET_DIRS=`echo $GALLIUM_TARGET_DIRS|tr " " "\n"|sort|tr "\n" " "`
-GALLIUM_WINSYS_DIRS=`echo $GALLIUM_WINSYS_DIRS|tr " " "\n"|sort|tr "\n" " "`
-GALLIUM_DRIVERS_DIRS=`echo $GALLIUM_DRIVERS_DIRS|tr " " "\n"|sort|tr "\n" " "`
-GALLIUM_STATE_TRACKERS_DIRS=`echo $GALLIUM_STATE_TRACKERS_DIRS|tr " " "\n"|sort|tr "\n" " "`
+GALLIUM_TARGET_DIRS=`echo $GALLIUM_TARGET_DIRS|tr " " "\n"|sort -u|tr "\n" " "`
+GALLIUM_WINSYS_DIRS=`echo $GALLIUM_WINSYS_DIRS|tr " " "\n"|sort -u|tr "\n" " "`
+GALLIUM_DRIVERS_DIRS=`echo $GALLIUM_DRIVERS_DIRS|tr " " "\n"|sort -u|tr "\n" " "`
+GALLIUM_STATE_TRACKERS_DIRS=`echo $GALLIUM_STATE_TRACKERS_DIRS|tr " " "\n"|sort -u|tr "\n" " "`
 
 AC_OUTPUT
 

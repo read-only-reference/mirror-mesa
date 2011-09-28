@@ -34,6 +34,7 @@
 #include "api_arrayelt.h"
 #include "api_exec.h"
 #include "api_loopback.h"
+#include "api_validate.h"
 #if FEATURE_ATI_fragment_shader
 #include "atifragshader.h"
 #endif
@@ -459,6 +460,10 @@ typedef enum
    /* GL_ARB_sync */
    OPCODE_WAIT_SYNC,
 
+   /* GL_NV_conditional_render */
+   OPCODE_BEGIN_CONDITIONAL_RENDER,
+   OPCODE_END_CONDITIONAL_RENDER,
+
    /* The following three are meta instructions */
    OPCODE_ERROR,                /* raise compiled-in error */
    OPCODE_CONTINUE,
@@ -871,7 +876,11 @@ translate_id(GLsizei n, GLenum type, const GLvoid * list)
 
 /**
  * Wrapper for _mesa_unpack_image() that handles pixel buffer objects.
- * If we run out of memory, GL_OUT_OF_MEMORY will be recorded.
+ * If width < 0 or height < 0 or format or type are invalid we'll just
+ * return NULL.  We will not generate an error since OpenGL command
+ * arguments aren't error-checked until the command is actually executed
+ * (not when they're compiled).
+ * But if we run out of memory, GL_OUT_OF_MEMORY will be recorded.
  */
 static GLvoid *
 unpack_image(struct gl_context *ctx, GLuint dimensions,
@@ -879,6 +888,15 @@ unpack_image(struct gl_context *ctx, GLuint dimensions,
              GLenum format, GLenum type, const GLvoid * pixels,
              const struct gl_pixelstore_attrib *unpack)
 {
+   if (width <= 0 || height <= 0) {
+      return NULL;
+   }
+
+   if (_mesa_bytes_per_pixel(format, type) < 0) {
+      /* bad format and/or type */
+      return NULL;
+   }
+
    if (!_mesa_is_bufferobj(unpack->BufferObj)) {
       /* no PBO */
       GLvoid *image = _mesa_unpack_image(dimensions, width, height, depth,
@@ -5745,8 +5763,8 @@ save_Begin(GLenum mode)
    Node *n;
    GLboolean error = GL_FALSE;
 
-   if ( /*mode < GL_POINTS || */ mode > GL_POLYGON) {
-      _mesa_compile_error(ctx, GL_INVALID_ENUM, "Begin (mode)");
+   if (!_mesa_valid_prim_mode(ctx, mode)) {
+      _mesa_compile_error(ctx, GL_INVALID_ENUM, "glBegin(mode)");
       error = GL_TRUE;
    }
    else if (ctx->Driver.CurrentSavePrimitive == PRIM_UNKNOWN) {
@@ -7371,6 +7389,35 @@ save_WaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout)
 }
 
 
+/** GL_NV_conditional_render */
+static void GLAPIENTRY
+save_BeginConditionalRender(GLuint queryId, GLenum mode)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = alloc_instruction(ctx, OPCODE_BEGIN_CONDITIONAL_RENDER, 2);
+   if (n) {
+      n[1].i = queryId;
+      n[2].e = mode;
+   }
+   if (ctx->ExecuteFlag) {
+      CALL_BeginConditionalRenderNV(ctx->Exec, (queryId, mode));
+   }
+}
+
+static void GLAPIENTRY
+save_EndConditionalRender()
+{
+   GET_CURRENT_CONTEXT(ctx);
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   alloc_instruction(ctx, OPCODE_END_CONDITIONAL_RENDER, 0);
+   if (ctx->ExecuteFlag) {
+      CALL_EndConditionalRenderNV(ctx->Exec, ());
+   }
+}
+
+
 /**
  * Save an error-generating command into display list.
  *
@@ -8634,6 +8681,14 @@ execute_list(struct gl_context *ctx, GLuint list)
                p.uint32[1] = n[4].ui;
                CALL_WaitSync(ctx->Exec, (n[1].data, n[2].bf, p.uint64));
             }
+            break;
+
+         /* GL_NV_conditional_render */
+         case OPCODE_BEGIN_CONDITIONAL_RENDER:
+            CALL_BeginConditionalRenderNV(ctx->Exec, (n[1].i, n[2].e));
+            break;
+         case OPCODE_END_CONDITIONAL_RENDER:
+            CALL_EndConditionalRenderNV(ctx->Exec, ());
             break;
 
          case OPCODE_CONTINUE:
@@ -10339,6 +10394,10 @@ _mesa_create_save_table(void)
    SET_ProgramParameteriARB(table, save_ProgramParameteri);
    SET_FramebufferTextureARB(table, save_FramebufferTexture);
    SET_FramebufferTextureFaceARB(table, save_FramebufferTextureFace);
+
+   /* GL_NV_conditional_render */
+   SET_BeginConditionalRenderNV(table, save_BeginConditionalRender);
+   SET_EndConditionalRenderNV(table, save_EndConditionalRender);
 
    /* GL_ARB_sync */
    _mesa_init_sync_dispatch(table);

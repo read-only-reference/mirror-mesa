@@ -238,7 +238,8 @@ nvfx_create(struct pipe_screen *pscreen, void *priv);
 
 /* nvfx_clear.c */
 extern void nvfx_clear(struct pipe_context *pipe, unsigned buffers,
-		       const float *rgba, double depth, unsigned stencil);
+                       const union pipe_color_union *color,
+                       double depth, unsigned stencil);
 
 /* nvfx_draw.c */
 extern struct draw_stage *nvfx_draw_render_stage(struct nvfx_context *nvfx);
@@ -339,6 +340,8 @@ extern void nvfx_init_vertprog_functions(struct nvfx_context *nvfx);
 
 /* nvfx_push.c */
 extern void nvfx_push_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info);
+
+extern void nvfx_context_init_vdec(struct nvfx_context *);
 
 static inline void nvfx_emit_vtx_attr(struct nouveau_channel* chan,
 		struct nouveau_grobj *eng3d, unsigned attrib, const float* v,

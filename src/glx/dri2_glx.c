@@ -34,7 +34,6 @@
 
 #include <X11/Xlib.h>
 #include <X11/extensions/Xfixes.h>
-#include <X11/extensions/Xdamage.h>
 #include "glapi.h"
 #include "glxclient.h"
 #include <X11/extensions/dri2proto.h>
@@ -543,6 +542,10 @@ dri2SwapBuffers(__GLXDRIdrawable *pdraw, int64_t target_msc, int64_t divisor,
 	(struct dri2_display *)dpyPriv->dri2Display;
     CARD64 ret = 0;
 
+    /* Check we have the right attachments */
+    if (!priv->have_back)
+	return ret;
+
     /* Old servers can't handle swapbuffers */
     if (!pdp->swapAvailable) {
        dri2CopySubBuffer(pdraw, 0, 0, priv->width, priv->height);
@@ -835,6 +838,7 @@ dri2CreateScreen(int screen, struct glx_display * priv)
 		    &driverName, &deviceName)) {
       glx_screen_cleanup(&psc->base);
       XFree(psc);
+      InfoMessageF("screen %d does not appear to be DRI2 capable\n", screen);
       return NULL;
    }
 

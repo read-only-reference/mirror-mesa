@@ -47,6 +47,7 @@
 #include "st_context.h"
 #include "st_cb_fbo.h"
 #include "st_cb_flush.h"
+#include "st_cb_texture.h"
 #include "st_format.h"
 #include "st_texture.h"
 #include "st_manager.h"
@@ -112,7 +113,6 @@ st_renderbuffer_alloc_storage(struct gl_context * ctx,
        */
       pipe_surface_reference( &strb->surface, NULL );
       pipe_resource_reference( &strb->texture, NULL );
-      pipe_sampler_view_reference(&strb->sampler_view, NULL);
 
       /* Setup new texture template.
        */
@@ -165,7 +165,6 @@ st_renderbuffer_delete(struct gl_renderbuffer *rb)
    ASSERT(strb);
    pipe_surface_reference(&strb->surface, NULL);
    pipe_resource_reference(&strb->texture, NULL);
-   pipe_sampler_view_reference(&strb->sampler_view, NULL);
    free(strb->data);
    free(strb);
 }
@@ -342,14 +341,16 @@ st_render_texture(struct gl_context *ctx,
    struct pipe_context *pipe = st->pipe;
    struct st_renderbuffer *strb;
    struct gl_renderbuffer *rb;
-   struct pipe_resource *pt = st_get_texobj_resource(att->Texture);
+   struct pipe_resource *pt;
    struct st_texture_object *stObj;
    const struct gl_texture_image *texImage;
    struct pipe_surface surf_tmpl;
 
-   /* When would this fail?  Perhaps assert? */
-   if (!pt) 
+   if (!st_finalize_texture(ctx, pipe, att->Texture))
       return;
+
+   pt = st_get_texobj_resource(att->Texture);
+   assert(pt);
 
    /* get pointer to texture image we're rendeing to */
    texImage = _mesa_get_attachment_teximage(att);
@@ -380,6 +381,7 @@ st_render_texture(struct gl_context *ctx,
    rb->Width = texImage->Width2;
    rb->Height = texImage->Height2;
    rb->_BaseFormat = texImage->_BaseFormat;
+   rb->InternalFormat = texImage->InternalFormat;
    /*printf("***** render to texture level %d: %d x %d\n", att->TextureLevel, rb->Width, rb->Height);*/
 
    /*printf("***** pipe texture %d x %d\n", pt->width0, pt->height0);*/
@@ -387,9 +389,6 @@ st_render_texture(struct gl_context *ctx,
    pipe_resource_reference( &strb->texture, pt );
 
    pipe_surface_reference(&strb->surface, NULL);
-
-   pipe_sampler_view_reference(&strb->sampler_view,
-                               st_get_texture_sampler_view(stObj, pipe));
 
    assert(strb->rtt_level <= strb->texture->last_level);
 
@@ -650,14 +649,4 @@ void st_init_fbo_functions(struct dd_function_table *functions)
    functions->ReadBuffer = st_ReadBuffer;
 }
 
-/* XXX unused ? */
-struct pipe_sampler_view *
-st_get_renderbuffer_sampler_view(struct st_renderbuffer *rb,
-                                 struct pipe_context *pipe)
-{
-   if (!rb->sampler_view) {
-      rb->sampler_view = st_create_texture_sampler_view(pipe, rb->texture);
-   }
 
-   return rb->sampler_view;
-}

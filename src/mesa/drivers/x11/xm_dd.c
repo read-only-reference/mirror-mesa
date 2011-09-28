@@ -104,16 +104,14 @@ finish_or_flush( struct gl_context *ctx )
 
 
 static void
-clear_color( struct gl_context *ctx, const GLfloat color[4] )
+clear_color( struct gl_context *ctx,
+             const union gl_color_union color )
 {
    if (ctx->DrawBuffer->Name == 0) {
       const XMesaContext xmesa = XMESA_CONTEXT(ctx);
       XMesaBuffer xmbuf = XMESA_BUFFER(ctx->DrawBuffer);
 
-      CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[0], color[0]);
-      CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[1], color[1]);
-      CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[2], color[2]);
-      CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[3], color[3]);
+      _mesa_unclamped_float_rgba_to_ubyte(xmesa->clearcolor, color.f);
       xmesa->clearpixel = xmesa_color_to_pixel( ctx,
                                                 xmesa->clearcolor[0],
                                                 xmesa->clearcolor[1],
@@ -770,17 +768,15 @@ enable( struct gl_context *ctx, GLenum pname, GLboolean state )
 
 
 static void
-clear_color_HPCR_ximage( struct gl_context *ctx, const GLfloat color[4] )
+clear_color_HPCR_ximage( struct gl_context *ctx,
+                         const union gl_color_union color )
 {
    int i;
    const XMesaContext xmesa = XMESA_CONTEXT(ctx);
 
-   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[0], color[0]);
-   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[1], color[1]);
-   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[2], color[2]);
-   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[3], color[3]);
+   _mesa_unclamped_float_rgba_to_ubyte(xmesa->clearcolor, color.f);
 
-   if (color[0] == 0.0 && color[1] == 0.0 && color[2] == 0.0) {
+   if (color.f[0] == 0.0 && color.f[1] == 0.0 && color.f[2] == 0.0) {
       /* black is black */
       memset( xmesa->xm_visual->hpcr_clear_ximage_pattern, 0x0 ,
               sizeof(xmesa->xm_visual->hpcr_clear_ximage_pattern));
@@ -804,17 +800,15 @@ clear_color_HPCR_ximage( struct gl_context *ctx, const GLfloat color[4] )
 
 
 static void
-clear_color_HPCR_pixmap( struct gl_context *ctx, const GLfloat color[4] )
+clear_color_HPCR_pixmap( struct gl_context *ctx,
+                         const union gl_color_union color )
 {
    int i;
    const XMesaContext xmesa = XMESA_CONTEXT(ctx);
 
-   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[0], color[0]);
-   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[1], color[1]);
-   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[2], color[2]);
-   CLAMPED_FLOAT_TO_UBYTE(xmesa->clearcolor[3], color[3]);
+   _mesa_unclamped_float_rgba_to_ubyte(xmesa->clearcolor, color.f);
 
-   if (color[0] == 0.0 && color[1] == 0.0 && color[2] == 0.0) {
+   if (color.f[0] == 0.0 && color.f[1] == 0.0 && color.f[2] == 0.0) {
       /* black is black */
       for (i=0; i<16; i++) {
          XMesaPutPixel(xmesa->xm_visual->hpcr_clear_ximage, i, 0, 0);

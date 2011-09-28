@@ -1791,6 +1791,7 @@ exec_tex(struct tgsi_exec_machine *mach,
       break;
 
    case TGSI_TEXTURE_1D_ARRAY:
+   case TGSI_TEXTURE_SHADOW1D_ARRAY:
       FETCH(&r[0], 0, CHAN_X);
       FETCH(&r[1], 0, CHAN_Y);
 
@@ -1805,6 +1806,7 @@ exec_tex(struct tgsi_exec_machine *mach,
       break;
 
    case TGSI_TEXTURE_2D_ARRAY:
+   case TGSI_TEXTURE_SHADOW2D_ARRAY:
       FETCH(&r[0], 0, CHAN_X);
       FETCH(&r[1], 0, CHAN_Y);
       FETCH(&r[2], 0, CHAN_Z);
@@ -1884,8 +1886,10 @@ exec_txd(struct tgsi_exec_machine *mach,
                   &r[0], &r[1], &r[2], &r[3]);           /* R, G, B, A */
       break;
 
+   case TGSI_TEXTURE_1D_ARRAY:
    case TGSI_TEXTURE_2D:
    case TGSI_TEXTURE_RECT:
+   case TGSI_TEXTURE_SHADOW1D_ARRAY:
    case TGSI_TEXTURE_SHADOW2D:
    case TGSI_TEXTURE_SHADOWRECT:
 
@@ -1899,6 +1903,7 @@ exec_txd(struct tgsi_exec_machine *mach,
                   &r[0], &r[1], &r[2], &r[3]);     /* outputs */
       break;
 
+   case TGSI_TEXTURE_2D_ARRAY:
    case TGSI_TEXTURE_3D:
    case TGSI_TEXTURE_CUBE:
 
@@ -1908,6 +1913,19 @@ exec_txd(struct tgsi_exec_machine *mach,
 
       fetch_texel(mach->Samplers[unit],
                   &r[0], &r[1], &r[2], &ZeroVec,
+                  tgsi_sampler_lod_bias,
+                  &r[0], &r[1], &r[2], &r[3]);
+      break;
+
+   case TGSI_TEXTURE_SHADOW2D_ARRAY:
+
+      FETCH(&r[0], 0, CHAN_X);
+      FETCH(&r[1], 0, CHAN_Y);
+      FETCH(&r[2], 0, CHAN_Z);
+      FETCH(&r[3], 0, CHAN_W);
+
+      fetch_texel(mach->Samplers[unit],
+                  &r[0], &r[1], &r[2], &r[3],
                   tgsi_sampler_lod_bias,
                   &r[0], &r[1], &r[2], &r[3]);
       break;
@@ -1929,21 +1947,40 @@ exec_txf(struct tgsi_exec_machine *mach,
 	 const struct tgsi_full_instruction *inst)
 {
    struct tgsi_sampler *sampler;
-   const uint unit = inst->Src[1].Register.Index;
+   const uint unit = inst->Src[2].Register.Index;
    union tgsi_exec_channel r[4];
+   union tgsi_exec_channel offset[3];
    uint chan;
    float rgba[NUM_CHANNELS][QUAD_SIZE];
    int j;
+   int8_t offsets[3];
+
+   if (inst->Texture.NumOffsets == 1) {
+      union tgsi_exec_channel index;
+      index.i[0] = index.i[1] = index.i[2] = index.i[3] = inst->TexOffsets[0].Index;
+      fetch_src_file_channel(mach, inst->TexOffsets[0].File,
+                             inst->TexOffsets[0].SwizzleX, &index, &ZeroVec, &offset[0]);
+      fetch_src_file_channel(mach, inst->TexOffsets[0].File,
+                             inst->TexOffsets[0].SwizzleY, &index, &ZeroVec, &offset[1]);
+      fetch_src_file_channel(mach, inst->TexOffsets[0].File,
+                             inst->TexOffsets[0].SwizzleZ, &index, &ZeroVec, &offset[2]);
+     offsets[0] = offset[0].i[0];
+     offsets[1] = offset[1].i[0];
+     offsets[2] = offset[2].i[0];
+   } else
+     offsets[0] = offsets[1] = offsets[2] = 0;
 
    IFETCH(&r[3], 0, CHAN_W);
 
    switch(inst->Texture.Texture) {
    case TGSI_TEXTURE_3D:
    case TGSI_TEXTURE_2D_ARRAY:
+   case TGSI_TEXTURE_SHADOW2D_ARRAY:
       IFETCH(&r[2], 0, CHAN_Z);
       /* fallthrough */
    case TGSI_TEXTURE_2D:
    case TGSI_TEXTURE_RECT:
+   case TGSI_TEXTURE_SHADOW1D_ARRAY:
    case TGSI_TEXTURE_SHADOW2D:
    case TGSI_TEXTURE_SHADOWRECT:
    case TGSI_TEXTURE_1D_ARRAY:
@@ -1959,7 +1996,8 @@ exec_txf(struct tgsi_exec_machine *mach,
    }      
 
    sampler = mach->Samplers[unit];
-   sampler->get_texel(sampler, r[0].i, r[1].i, r[2].i, r[3].i, rgba);
+   sampler->get_texel(sampler, r[0].i, r[1].i, r[2].i, r[3].i,
+		      offsets, rgba);
 
    for (j = 0; j < QUAD_SIZE; j++) {
       r[0].f[j] = rgba[0][j];
@@ -2049,8 +2087,10 @@ exec_sample(struct tgsi_exec_machine *mach,
                   &r[0], &r[1], &r[2], &r[3]);     /* R, G, B, A */
       break;
 
+   case TGSI_TEXTURE_1D_ARRAY:
    case TGSI_TEXTURE_2D:
    case TGSI_TEXTURE_RECT:
+   case TGSI_TEXTURE_SHADOW1D_ARRAY:
    case TGSI_TEXTURE_SHADOW2D:
    case TGSI_TEXTURE_SHADOWRECT:
       FETCH(&r[0], 0, CHAN_X);
@@ -2069,6 +2109,7 @@ exec_sample(struct tgsi_exec_machine *mach,
                   &r[0], &r[1], &r[2], &r[3]);  /* outputs */
       break;
 
+   case TGSI_TEXTURE_2D_ARRAY:
    case TGSI_TEXTURE_3D:
    case TGSI_TEXTURE_CUBE:
       FETCH(&r[0], 0, CHAN_X);
@@ -2083,6 +2124,20 @@ exec_sample(struct tgsi_exec_machine *mach,
 
       fetch_texel(mach->Samplers[sampler_unit],
                   &r[0], &r[1], &r[2], lod,
+                  control,
+                  &r[0], &r[1], &r[2], &r[3]);
+      break;
+
+   case TGSI_TEXTURE_SHADOW2D_ARRAY:
+      FETCH(&r[0], 0, CHAN_X);
+      FETCH(&r[1], 0, CHAN_Y);
+      FETCH(&r[2], 0, CHAN_Z);
+      FETCH(&r[3], 0, CHAN_W);
+
+      assert(modifier != TEX_MODIFIER_PROJECTED);
+
+      fetch_texel(mach->Samplers[sampler_unit],
+                  &r[0], &r[1], &r[2], &r[3],
                   control,
                   &r[0], &r[1], &r[2], &r[3]);
       break;
@@ -3312,6 +3367,28 @@ micro_usne(union tgsi_exec_channel *dst,
 }
 
 static void
+micro_uarl(union tgsi_exec_channel *dst,
+           const union tgsi_exec_channel *src)
+{
+   dst->i[0] = src->u[0];
+   dst->i[1] = src->u[1];
+   dst->i[2] = src->u[2];
+   dst->i[3] = src->u[3];
+}
+
+static void
+micro_ucmp(union tgsi_exec_channel *dst,
+           const union tgsi_exec_channel *src0,
+           const union tgsi_exec_channel *src1,
+           const union tgsi_exec_channel *src2)
+{
+   dst->u[0] = src0->u[0] ? src1->u[0] : src2->u[0];
+   dst->u[1] = src0->u[1] ? src1->u[1] : src2->u[1];
+   dst->u[2] = src0->u[2] ? src1->u[2] : src2->u[2];
+   dst->u[3] = src0->u[3] ? src1->u[3] : src2->u[3];
+}
+
+static void
 exec_instruction(
    struct tgsi_exec_machine *mach,
    const struct tgsi_full_instruction *inst,
@@ -4069,6 +4146,14 @@ exec_instruction(
 
    case TGSI_OPCODE_SAMPLE_INFO:
       assert(0);
+      break;
+
+   case TGSI_OPCODE_UARL:
+      exec_vector_unary(mach, inst, micro_uarl, TGSI_EXEC_DATA_INT, TGSI_EXEC_DATA_UINT);
+      break;
+
+   case TGSI_OPCODE_UCMP:
+      exec_vector_trinary(mach, inst, micro_ucmp, TGSI_EXEC_DATA_UINT, TGSI_EXEC_DATA_UINT);
       break;
 
    default:

@@ -360,6 +360,7 @@ fs_visitor::visit(ir_expression *ir)
       this->result = op[0];
       break;
    case ir_unop_i2f:
+   case ir_unop_u2f:
    case ir_unop_b2f:
    case ir_unop_b2i:
    case ir_unop_f2i:
@@ -443,10 +444,15 @@ fs_visitor::visit(ir_expression *ir)
       inst = emit(BRW_OPCODE_OR, this->result, op[0], op[1]);
       break;
 
-   case ir_unop_u2f:
    case ir_binop_lshift:
+      inst = emit(BRW_OPCODE_SHL, this->result, op[0], op[1]);
+      break;
+
    case ir_binop_rshift:
-      assert(!"GLSL 1.30 features unsupported");
+      if (ir->type->base_type == GLSL_TYPE_INT)
+	 inst = emit(BRW_OPCODE_ASR, this->result, op[0], op[1]);
+      else
+	 inst = emit(BRW_OPCODE_SHR, this->result, op[0], op[1]);
       break;
    }
 }
@@ -678,15 +684,23 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
        * instructions.  We'll need to do SIMD16 here.
        */
       simd16 = true;
-      assert(ir->op == ir_txb || ir->op == ir_txl);
+      assert(ir->op == ir_txb || ir->op == ir_txl || ir->op == ir_txf);
 
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
 	 fs_inst *inst = emit(BRW_OPCODE_MOV, fs_reg(MRF,
-						     base_mrf + mlen + i * 2),
+						     base_mrf + mlen + i * 2,
+						     coordinate.type),
 			      coordinate);
 	 if (i < 3 && c->key.gl_clamp_mask[i] & (1 << sampler))
 	    inst->saturate = true;
 	 coordinate.reg_offset++;
+      }
+
+      /* Initialize the rest of u/v/r with 0.0.  Empirically, this seems to
+       * be necessary for TXF (ld), but seems wise to do for all messages.
+       */
+      for (int i = ir->coordinate->type->vector_elements; i < 3; i++) {
+	 emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen + i * 2), fs_reg(0.0f));
       }
 
       /* lod/bias appears after u/v/r. */
@@ -698,7 +712,8 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
 	 mlen++;
       } else {
 	 ir->lod_info.lod->accept(this);
-	 emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen), this->result);
+	 emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen, this->result.type),
+			      this->result);
 	 mlen++;
       }
 
@@ -737,7 +752,7 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       inst = emit(FS_OPCODE_TXS, dst);
       break;
    case ir_txf:
-      assert(!"GLSL 1.30 features unsupported");
+      inst = emit(FS_OPCODE_TXF, dst);
       break;
    }
    inst->base_mrf = base_mrf;
@@ -785,7 +800,8 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
 
    for (int i = 0; i < vector_elements; i++) {
       fs_inst *inst = emit(BRW_OPCODE_MOV,
-			   fs_reg(MRF, base_mrf + mlen + i * reg_width),
+			   fs_reg(MRF, base_mrf + mlen + i * reg_width,
+				  coordinate.type),
 			   coordinate);
       if (i < 3 && c->key.gl_clamp_mask[i] & (1 << sampler))
 	 inst->saturate = true;
@@ -861,7 +877,13 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       inst = emit(FS_OPCODE_TXS, dst);
       break;
    case ir_txf:
-      assert(!"GLSL 1.30 features unsupported");
+      mlen = header_present + 4 * reg_width;
+
+      ir->lod_info.lod->accept(this);
+      emit(BRW_OPCODE_MOV,
+	   fs_reg(MRF, base_mrf + mlen - reg_width, BRW_REGISTER_TYPE_UD),
+	   this->result);
+      inst = emit(FS_OPCODE_TXF, dst);
       break;
    }
    inst->base_mrf = base_mrf;
@@ -950,12 +972,27 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       mlen += reg_width;
       break;
    case ir_txf:
-      assert(!"GLSL 1.30 features unsupported");
+      /* Unfortunately, the parameters for LD are intermixed: u, lod, v, r. */
+      emit(BRW_OPCODE_MOV,
+	   fs_reg(MRF, base_mrf + mlen, BRW_REGISTER_TYPE_D), coordinate);
+      coordinate.reg_offset++;
+      mlen += reg_width;
+
+      ir->lod_info.lod->accept(this);
+      emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen, BRW_REGISTER_TYPE_D), this->result);
+      mlen += reg_width;
+
+      for (int i = 1; i < ir->coordinate->type->vector_elements; i++) {
+	 emit(BRW_OPCODE_MOV,
+	      fs_reg(MRF, base_mrf + mlen, BRW_REGISTER_TYPE_D), coordinate);
+	 coordinate.reg_offset++;
+	 mlen += reg_width;
+      }
       break;
    }
 
-   /* Set up the coordinate (except for TXD where it was done earlier) */
-   if (ir->op != ir_txd && ir->op != ir_txs) {
+   /* Set up the coordinate (except for cases where it was done above) */
+   if (ir->op != ir_txd && ir->op != ir_txs && ir->op != ir_txf) {
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
 	 fs_inst *inst = emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen),
 			      coordinate);
@@ -973,7 +1010,7 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    case ir_txb: inst = emit(FS_OPCODE_TXB, dst); break;
    case ir_txl: inst = emit(FS_OPCODE_TXL, dst); break;
    case ir_txd: inst = emit(FS_OPCODE_TXD, dst); break;
-   case ir_txf: assert(!"TXF unsupported."); break;
+   case ir_txf: inst = emit(FS_OPCODE_TXF, dst); break;
    case ir_txs: inst = emit(FS_OPCODE_TXS, dst); break;
    }
    inst->base_mrf = base_mrf;
@@ -1491,7 +1528,7 @@ fs_visitor::visit(ir_if *ir)
 {
    fs_inst *inst;
 
-   if (intel->gen != 6 && c->dispatch_width == 16) {
+   if (intel->gen < 6 && c->dispatch_width == 16) {
       fail("Can't support (non-uniform) control flow on 16-wide\n");
    }
 
@@ -1772,7 +1809,7 @@ fs_visitor::emit_color_write(int index, int first_color_mrf, fs_reg color)
    int reg_width = c->dispatch_width / 8;
    fs_inst *inst;
 
-   if (c->dispatch_width == 8 || intel->gen == 6) {
+   if (c->dispatch_width == 8 || intel->gen >= 6) {
       /* SIMD8 write looks like:
        * m + 0: r0
        * m + 1: r1

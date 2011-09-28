@@ -268,9 +268,7 @@ write_texture_image(struct gl_texture_object *texObj,
       store = ctx->Pack; /* save */
       ctx->Pack = ctx->DefaultPacking;
 
-      ctx->Driver.GetTexImage(ctx, texObj->Target, level,
-                              GL_RGBA, GL_UNSIGNED_BYTE,
-                              buffer, texObj, img);
+      ctx->Driver.GetTexImage(ctx, GL_RGBA, GL_UNSIGNED_BYTE, buffer, img);
 
       /* make filename */
       _mesa_snprintf(s, sizeof(s), "/tmp/tex%u.l%u.f%u.ppm", texObj->Name, level, face);
@@ -567,9 +565,6 @@ _mesa_dump_image(const char *filename, const void *image, GLuint w, GLuint h,
 void
 _mesa_print_texture(struct gl_context *ctx, struct gl_texture_image *img)
 {
-#if CHAN_TYPE != GL_UNSIGNED_BYTE
-   _mesa_problem(NULL, "PrintTexture not supported");
-#else
    const GLint slice = 0;
    GLint srcRowStride;
    GLuint i, j, c;
@@ -626,5 +621,4 @@ _mesa_print_texture(struct gl_context *ctx, struct gl_texture_image *img)
    }
 
    ctx->Driver.UnmapTextureImage(ctx, img, slice);
-#endif
 }
